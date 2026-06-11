@@ -48,6 +48,19 @@ PixelMorpher 的核心理念是**“万物皆可模块化”**。通过将角色
 
 ---
 
+## 📚 详细文档 (Wiki)
+
+为了帮助你更深入地使用 PixelMorpher，我们准备了详细的分类指南：
+
+1.  **[用户指南](./wiki/UserGuide_CN.md)**：从导入资产到导出动画的全流程操作。
+2.  **[修改器详解](./wiki/ModifierReference_CN.md)**：全部 30+ 种修改器的参数说明与应用场景。
+3.  **[木偶系统指南](./wiki/PuppetSystem_CN.md)**：如何构建多视角、可换装的复杂角色。
+4.  **[瓦片工作流指南](./wiki/TileWorkflow_CN.md)**：自动平铺与关卡设计的高效方案。
+5.  **[插件开发指南](./wiki/PluginDevelopment_CN.md)**：使用 JavaScript 扩展你自己的工具。
+6.  **[技术架构详解](./wiki/Architecture_CN.md)**：深入了解渲染管线、状态管理与 AI 集成。
+
+---
+
 ## 🏗 技术架构
 
 ### 技术栈
