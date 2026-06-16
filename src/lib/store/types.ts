@@ -85,6 +85,13 @@ import type {
 import type { PuppetSlice } from './puppet-slice';
 import type { DccPipelineSlice } from './dcc-pipeline-slice';
 import type { UnifiedSlice } from './unified-slice';
+import type {
+  TimelineZoom, SnapConfig, DEFAULT_SNAP_CONFIG,
+  TrackTimelineDisplay, createDefaultTrackTimelineDisplay,
+  OnionTransformFilterConfig, DEFAULT_ONION_FILTER_CONFIG,
+  OnionSkinState, DEFAULT_ONION_SKIN_STATE,
+  SelectionFrameStep,
+} from '../v15-types';
 
 export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, PuppetSlice, DccPipelineSlice, UnifiedSlice {
   // Project actions
@@ -407,6 +414,54 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, Pup
   setActiveCostume: (characterId: string, costumeId: string) => void;
   /** Create an animation clip from a character (adds all character parts with tracks) */
   createClipFromCharacter: (characterId: string, clipName: string) => AnimationClip;
+
+  // ---- V15: Visual Magnetic Timeline ----
+  /** Current timeline zoom level (pixels per frame) */
+  timelineZoom: TimelineZoom;
+  /** Smart snap configuration */
+  snapConfig: SnapConfig;
+  /** Per-track timeline display settings (trackId → config) */
+  trackTimelineDisplays: Record<string, TrackTimelineDisplay>;
+  /** Timeline thumbnail rendering quality */
+  timelineThumbnailQuality: 'off' | 'low' | 'medium' | 'high';
+  /** Set timeline zoom */
+  setTimelineZoom: (zoom: TimelineZoom) => void;
+  /** Update snap config */
+  updateSnapConfig: (updates: Partial<SnapConfig>) => void;
+  /** Update a track's timeline display */
+  updateTrackTimelineDisplay: (trackId: string, updates: Partial<TrackTimelineDisplay>) => void;
+  /** Set timeline thumbnail quality */
+  setTimelineThumbnailQuality: (quality: 'off' | 'low' | 'medium' | 'high') => void;
+
+  // ---- V15: Transform Filter Onion Skin ----
+  /** Onion skin transform filter configuration */
+  onionTransformFilter: OnionTransformFilterConfig;
+  /** Per-axis onion skin ghost visibility flags */
+  onionSkinState: OnionSkinState;
+  /** Update onion transform filter config */
+  updateOnionTransformFilter: (updates: Partial<OnionTransformFilterConfig>) => void;
+  /** Update onion skin state */
+  updateOnionSkinState: (updates: Partial<OnionSkinState>) => void;
+
+  // ---- V15: Mixed Frame Rate Rhythm Control ----
+  /** Per-track frame step settings (trackId → steps) */
+  trackFrameSteps: Record<string, number>;
+  /** Per-segment frame step overrides: \"startFrame-endFrame\" → step value */
+  trackSegmentSteps: Record<string, Record<string, number>>;
+  /** Per-selection frame step overrides */
+  selectionFrameSteps: SelectionFrameStep[];
+  /** Set frame step for a track */
+  setTrackFrameStep: (trackId: string, step: number) => void;
+  /** Set frame step for a segment on a track */
+  setTrackSegmentStep: (trackId: string, segmentKey: string, step: number) => void;
+  /** Add a selection frame step override */
+  addSelectionFrameStep: (selection: SelectionFrameStep) => void;
+  /** Remove a selection frame step override */
+  removeSelectionFrameStep: (id: string) => void;
+  /** Update a selection frame step override */
+  updateSelectionFrameStep: (id: string, updates: Partial<SelectionFrameStep>) => void;
+  /** Get effective frame step for a track at a given frame */
+  getEffectiveFrameStep: (trackId: string, frame: number) => number;
 }
 
 // Re-export StateCreator for convenience

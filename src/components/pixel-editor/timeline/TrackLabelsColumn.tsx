@@ -12,12 +12,13 @@ import {
   DropdownMenuGroup,
 } from '@/components/ui/dropdown-menu';
 import {
-  Eye, EyeOff, Lock, Unlock, ChevronDown, ChevronRight, Plus, Circle, Diamond,
+  Eye, EyeOff, Lock, Unlock, ChevronDown, ChevronRight, Plus, Circle, Diamond, Palette,
 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store';
 import type { Track, Part, EffectTrack, CanvasModifierTrack, Keyframe, EffectType, PuppetNode, PuppetNodeKeyframe } from '@/lib/types';
 import { ANIMATION_MODIFIER_TYPES, MODIFIER_DEFINITIONS } from '@/lib/types';
-import { RULER_HEIGHT, TRACK_HEIGHT, SUB_TRACK_HEIGHT, LABEL_WIDTH, EFFECT_CONFIG, CATEGORY_COLOR_MAP, PUPPET_COLOR } from './constants';
+import type { TrackTimelineDisplay } from '@/lib/v15-types';
+import { RULER_HEIGHT, TRACK_HEIGHT, SUB_TRACK_HEIGHT, LABEL_WIDTH, EFFECT_CONFIG, CATEGORY_COLOR_MAP, PUPPET_COLOR, TRACK_COLOR_HUES } from './constants';
 
 // ---- Left: Track Labels Column ----
 interface TrackLabelsColumnProps {
@@ -36,6 +37,11 @@ interface TrackLabelsColumnProps {
   isPuppetClip: boolean;
   puppetNodes: PuppetNode[];
   labelScrollRef: React.RefObject<HTMLDivElement | null>;
+  // V15: Track colors and frame step
+  trackTimelineDisplays?: Record<string, TrackTimelineDisplay>;
+  trackFrameSteps?: Record<string, number>;
+  onUpdateTrackTimelineDisplay?: (trackId: string, updates: Partial<TrackTimelineDisplay>) => void;
+  onSetTrackFrameStep?: (trackId: string, step: number) => void;
 }
 
 export default function TrackLabelsColumn({
@@ -43,7 +49,25 @@ export default function TrackLabelsColumn({
   visibleRange, rowOffsets, rowHeights, totalHeight,
   getPartName, selectedEffectTrackId, onSelectEffectTrack,
   isPuppetClip, puppetNodes, labelScrollRef,
+  trackTimelineDisplays, trackFrameSteps,
+  onUpdateTrackTimelineDisplay, onSetTrackFrameStep,
 }: TrackLabelsColumnProps) {
+  // Get track color hue
+  const getTrackColor = (trackIndex: number, trackId: string): string => {
+    const display = trackTimelineDisplays?.[trackId];
+    if (display && display.colorHue >= 0) {
+      return `hsl(${display.colorHue}, 50%, 45%)`;
+    }
+    const hue = TRACK_COLOR_HUES[trackIndex % TRACK_COLOR_HUES.length];
+    return `hsl(${hue}, 50%, 45%)`;
+  };
+
+  // Cycle track color
+  const cycleTrackColor = (trackId: string, currentHue: number) => {
+    const nextHue = currentHue < 0 ? 0 : (currentHue + 30) % 360;
+    onUpdateTrackTimelineDisplay?.(trackId, { colorHue: nextHue });
+  };
+
   return (
     <div className="shrink-0 flex flex-col border-r border-[#1e1e3a]" style={{ width: LABEL_WIDTH }}>
       {/* Ruler label area */}
@@ -72,16 +96,38 @@ export default function TrackLabelsColumn({
             trackKeyframes.flatMap((kf) => kf.modifiers.map((m) => m.type))
           )].filter((t) => !ANIMATION_MODIFIER_TYPES.includes(t));
 
+          const trackColor = getTrackColor(idx, track.id);
+          const display = trackTimelineDisplays?.[track.id];
+          const frameStep = trackFrameSteps?.[track.partId] ?? 1;
+          const colorHue = display?.colorHue ?? -1;
+
           return (
             <React.Fragment key={track.id}>
               <div
                 className="flex items-center gap-1 px-2 border-b border-[#1e1e2e] hover:bg-[#1a1a30] transition-colors"
                 style={{ height: TRACK_HEIGHT, background: track.locked ? '#0e0e20' : '#12122a' }}
               >
+                {/* V15: Track color indicator */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    cycleTrackColor(track.id, colorHue);
+                  }}
+                  className="p-0.5 hover:bg-white/10 rounded transition-colors"
+                  title="Click to cycle track color"
+                >
+                  <span className="block size-2.5 rounded-sm" style={{ backgroundColor: trackColor }} />
+                </button>
                 <button onClick={() => useProjectStore.getState().toggleTrackExpanded(track.id)} className="p-0.5 hover:bg-white/10 rounded transition-colors">
                   {track.expanded ? <ChevronDown className="size-3 text-gray-400" /> : <ChevronRight className="size-3 text-gray-400" />}
                 </button>
                 <span className="text-xs text-gray-300 truncate flex-1 select-none" title={partName}>{partName}</span>
+                {/* V15: Frame step indicator */}
+                {frameStep > 1 && (
+                  <span className="text-[8px] font-mono text-amber-500/70 select-none px-0.5" title={`Frame step: ${frameStep}`}>
+                    x{frameStep}
+                  </span>
+                )}
                 <button onClick={() => useProjectStore.getState().toggleTrackVisibility(track.id)} className="p-0.5 hover:bg-white/10 rounded transition-colors" title={track.visible ? 'Hide track' : 'Show track'}>
                   {track.visible ? <Eye className="size-3 text-gray-400" /> : <EyeOff className="size-3 text-gray-600" />}
                 </button>

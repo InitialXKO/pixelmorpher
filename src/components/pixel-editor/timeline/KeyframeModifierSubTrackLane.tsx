@@ -12,7 +12,7 @@ import { Trash2 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store';
 import type { Keyframe, ModifierType, ModifierInstance, ModifierParamKeyframe, ModifierParamValue } from '@/lib/types';
 import { MODIFIER_DEFINITIONS } from '@/lib/types';
-import { FRAME_WIDTH, SUB_TRACK_HEIGHT, CATEGORY_COLOR_MAP } from './constants';
+import { FRAME_WIDTH as STATIC_FRAME_WIDTH, SUB_TRACK_HEIGHT, CATEGORY_COLOR_MAP } from './constants';
 
 // ---- Keyframe Modifier Sub-Track Lane ----
 const KeyframeModifierSubTrackLane = React.memo(function KeyframeModifierSubTrackLane({
@@ -22,6 +22,7 @@ const KeyframeModifierSubTrackLane = React.memo(function KeyframeModifierSubTrac
   onAddParamKeyframe,
   onEditModifierParams,
   onEditParamKeyframe,
+  frameWidth,
 }: {
   modifierType: ModifierType;
   partKeyframes: Keyframe[];
@@ -29,8 +30,10 @@ const KeyframeModifierSubTrackLane = React.memo(function KeyframeModifierSubTrac
   onAddParamKeyframe: (keyframeId: string, modifierId: string, frame: number) => void;
   onEditModifierParams: (keyframeId: string, modifierId: string) => void;
   onEditParamKeyframe: (keyframeId: string, modifierId: string, paramKfId: string) => void;
+  frameWidth?: number;
 }) {
   const { updateModifierRange, removeModifierParamKeyframe, updateModifierParamKeyframe } = useProjectStore();
+  const FRAME_WIDTH = frameWidth ?? STATIC_FRAME_WIDTH;
   const width = totalFrames * FRAME_WIDTH;
   const def = MODIFIER_DEFINITIONS.find((d) => d.type === modifierType);
 
