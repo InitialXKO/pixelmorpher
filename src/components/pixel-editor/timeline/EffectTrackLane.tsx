@@ -90,6 +90,7 @@ export default function EffectTrackLane({
           onDelete={() => onDeleteEffectKeyframe(effectTrack.id, kf.id)}
           onEditParams={() => onEditEffectKeyframe(effectTrack.id, kf.id)}
           frameWidth={FRAME_WIDTH}
+        />
       ))}
     </div>
   );
