@@ -15,7 +15,8 @@ import {
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { startPlayback, stopPlayback } from '@/lib/playback-scheduler';
 import type { InterpolationMode, ModifierType, ModifierParamValue, PuppetNodeKeyframe } from '@/lib/types';
-import { FRAME_WIDTH } from './timeline/constants';
+import type { SnapTarget } from '@/lib/v15-types';
+import { DEFAULT_FRAME_WIDTH, getFrameWidth, FRAME_WIDTH as STATIC_FRAME_WIDTH, TRACK_COLOR_HUES } from './timeline/constants';
 import TimelineControls from './timeline/TimelineControls';
 import TrackLabelsColumn from './timeline/TrackLabelsColumn';
 import TrackLanesColumn from './timeline/TrackLanesColumn';
@@ -53,6 +54,17 @@ export default function Timeline() {
   const canvasModifierTracks = useProjectStore((s) => s.canvasModifierTracks);
   const addModifierParamKeyframe = useProjectStore((s) => s.addModifierParamKeyframe);
   const addParamDriver = useProjectStore((s) => s.addParamDriver);
+
+  // ---- V15: Timeline zoom & snap ----
+  const timelineZoom = useProjectStore((s) => s.timelineZoom);
+  const setTimelineZoom = useProjectStore((s) => s.setTimelineZoom);
+  const snapConfig = useProjectStore((s) => s.snapConfig);
+  const updateSnapConfig = useProjectStore((s) => s.updateSnapConfig);
+  const trackTimelineDisplays = useProjectStore((s) => s.trackTimelineDisplays);
+  const updateTrackTimelineDisplay = useProjectStore((s) => s.updateTrackTimelineDisplay);
+  const trackFrameSteps = useProjectStore((s) => s.trackFrameSteps);
+  const setTrackFrameStep = useProjectStore((s) => s.setTrackFrameStep);
+  const getEffectiveFrameStep = useProjectStore((s) => s.getEffectiveFrameStep);
 
   // ---- Puppet data from store ----
   const activeAnimationClipId = useProjectStore((s) => s.activeAnimationClipId);
@@ -144,24 +156,28 @@ export default function Timeline() {
   const editMode = useEditorStore((s) => s.editMode);
   const partEditPartId = useEditorStore((s) => s.partEditPartId);
 
+  // ---- Dynamic frame width from zoom ----
+  const FRAME_WIDTH = useMemo(() => getFrameWidth(timelineZoom), [timelineZoom]);
+
   // P5-2: Subscribe to currentFrame changes via ref
   useEffect(() => {
     const unsub = useProjectStore.subscribe((state, prevState) => {
       if (state.currentFrame !== prevState.currentFrame) {
         currentFrameRef.current = state.currentFrame;
         const f = state.currentFrame;
+        const fw = getFrameWidth(state.timelineZoom);
         if (playheadLineRef.current) {
-          playheadLineRef.current.style.left = `${f * 24 + 12 - 1}px`;
+          playheadLineRef.current.style.left = `${f * fw + fw / 2 - 1}px`;
         }
         if (frameDisplayRef.current) {
           frameDisplayRef.current.textContent = String(f);
         }
         if (rulerHighlightRef.current) {
-          rulerHighlightRef.current.setAttribute('x', String(f * 24));
+          rulerHighlightRef.current.setAttribute('x', String(f * fw));
         }
         if (scrollContainerRef.current) {
           const container = scrollContainerRef.current;
-          const playheadX = f * 24;
+          const playheadX = f * fw;
           const scrollLeft = container.scrollLeft;
           const viewWidth = container.clientWidth;
           if (playheadX < scrollLeft + 40 || playheadX > scrollLeft + viewWidth - 40) {
@@ -244,11 +260,25 @@ export default function Timeline() {
         case 'ArrowRight': { e.preventDefault(); setPlayState('paused'); setCurrentFrame(Math.min(totalFrames - 1, currentFrameRef.current + 1)); break; }
         case 'Home': { e.preventDefault(); setCurrentFrame(0); break; }
         case 'End': { e.preventDefault(); setCurrentFrame(totalFrames - 1); break; }
+        // V15: Timeline zoom shortcuts
+        case '=':
+        case '+': {
+          if (e.ctrlKey || e.metaKey) { e.preventDefault(); setTimelineZoom(Math.min(100, timelineZoom + 2)); }
+          break;
+        }
+        case '-': {
+          if (e.ctrlKey || e.metaKey) { e.preventDefault(); setTimelineZoom(Math.max(1, timelineZoom - 2)); }
+          break;
+        }
+        case '0': {
+          if (e.ctrlKey || e.metaKey) { e.preventDefault(); setTimelineZoom(DEFAULT_FRAME_WIDTH); }
+          break;
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedKeyframeId, playState, totalFrames, removeKeyframe, selectKeyframe, setPlayState, setCurrentFrame]);
+  }, [selectedKeyframeId, playState, totalFrames, removeKeyframe, selectKeyframe, setPlayState, setCurrentFrame, timelineZoom, setTimelineZoom]);
 
   // ---- Scroll sync ----
   const handleTrackScroll = useCallback(() => {
@@ -417,7 +447,7 @@ export default function Timeline() {
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
     return () => { window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp); };
-  }, [isDraggingPlayhead, totalFrames, setCurrentFrame]);
+  }, [isDraggingPlayhead, totalFrames, setCurrentFrame, FRAME_WIDTH]);
 
   // ---- Computed ----
   const currentFrame = currentFrameRef.current;
@@ -434,6 +464,53 @@ export default function Timeline() {
   // Selected keyframe interpolation mode
   const selectedKf = keyframes.find((k) => k.id === selectedKeyframeId);
   const selectedKfInterpolationMode = selectedKeyframeId ? (selectedKf?.interpolationMode ?? 'linear') : undefined;
+
+  // ---- V15: Smart snap helper (returns frame with snap applied) ----
+  const snapFrame = useCallback(
+    (rawFrame: number, excludeKeyframeId?: string): number => {
+      if (!snapConfig.enabled) return rawFrame;
+
+      const fw = getFrameWidth(timelineZoom);
+      const threshold = snapConfig.threshold / fw; // Convert pixel threshold to frame distance
+      let bestFrame = rawFrame;
+      let bestDist = threshold;
+
+      // Snap to frame markers (every 5th frame)
+      if (snapConfig.snapToFrameMarkers) {
+        for (let f = 0; f < totalFrames; f += 5) {
+          const dist = Math.abs(rawFrame - f);
+          if (dist < bestDist) { bestDist = dist; bestFrame = f; }
+        }
+        // Also snap to 0 and totalFrames-1
+        const dist0 = Math.abs(rawFrame - 0);
+        if (dist0 < bestDist) { bestDist = dist0; bestFrame = 0; }
+        const distEnd = Math.abs(rawFrame - (totalFrames - 1));
+        if (distEnd < bestDist) { bestDist = distEnd; bestFrame = totalFrames - 1; }
+      }
+
+      // Snap to other keyframes
+      if (snapConfig.snapToKeyframes) {
+        for (const kf of keyframes) {
+          if (excludeKeyframeId && kf.id === excludeKeyframeId) continue;
+          const dist = Math.abs(rawFrame - kf.frame);
+          if (dist < bestDist) { bestDist = dist; bestFrame = kf.frame; }
+        }
+      }
+
+      // Snap to segment boundaries (0, mid, end)
+      if (snapConfig.snapToSegmentBoundaries) {
+        const mid = Math.floor(totalFrames / 2);
+        const boundaries = [0, mid, totalFrames - 1];
+        for (const f of boundaries) {
+          const dist = Math.abs(rawFrame - f);
+          if (dist < bestDist) { bestDist = dist; bestFrame = f; }
+        }
+      }
+
+      return bestFrame;
+    },
+    [snapConfig, timelineZoom, totalFrames, keyframes]
+  );
 
   return (
     <div
@@ -486,6 +563,13 @@ export default function Timeline() {
         onEditFpsCancel={() => { setFpsInput(String(frameRate)); setIsEditingFps(false); }}
         onEditFramesCancel={() => { setFramesInput(String(totalFrames)); setIsEditingFrames(false); }}
         frameDisplayRef={frameDisplayRef}
+        // V15: Pass zoom and snap props
+        timelineZoom={timelineZoom}
+        onZoomIn={() => setTimelineZoom(Math.min(100, timelineZoom + 2))}
+        onZoomOut={() => setTimelineZoom(Math.max(1, timelineZoom - 2))}
+        onZoomReset={() => setTimelineZoom(DEFAULT_FRAME_WIDTH)}
+        snapConfig={snapConfig}
+        onToggleSnap={() => updateSnapConfig({ enabled: !snapConfig.enabled })}
       />
 
       {/* Timeline Body */}
@@ -507,6 +591,11 @@ export default function Timeline() {
           isPuppetClip={isPuppetClip}
           puppetNodes={puppetNodes}
           labelScrollRef={labelScrollRef}
+          // V15: Pass track colors and frame step info
+          trackTimelineDisplays={trackTimelineDisplays}
+          trackFrameSteps={trackFrameSteps}
+          onUpdateTrackTimelineDisplay={updateTrackTimelineDisplay}
+          onSetTrackFrameStep={setTrackFrameStep}
         />
 
         {/* Right: Ruler + Keyframe Lanes */}
@@ -556,6 +645,13 @@ export default function Timeline() {
           onDeletePuppetKeyframe={handleDeletePuppetKeyframe}
           onMovePuppetKeyframeToFrame={handleMovePuppetKeyframeToFrame}
           onUpdatePuppetKeyframe={handleUpdatePuppetKeyframe}
+          // V15: Pass zoom, snap, and frame step props
+          FRAME_WIDTH={FRAME_WIDTH}
+          snapConfig={snapConfig}
+          snapFrame={snapFrame}
+          trackTimelineDisplays={trackTimelineDisplays}
+          getEffectiveFrameStep={getEffectiveFrameStep}
+          timelineThumbnailQuality={useProjectStore.getState().timelineThumbnailQuality}
         />
       </div>
 

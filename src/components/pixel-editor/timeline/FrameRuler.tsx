@@ -1,25 +1,46 @@
 'use client';
 
-import React from 'react';
-import { FRAME_WIDTH, RULER_HEIGHT } from './constants';
+import React, { useMemo } from 'react';
+import { RULER_HEIGHT } from './constants';
+import { getFrameWidth } from './constants';
+import { useProjectStore } from '@/lib/store';
 
-// ---- Frame Ruler ----
+// ---- Frame Ruler with dynamic zoom ----
 export default function FrameRuler({
   totalFrames,
   currentFrame,
   onRulerClick,
+  timelineZoom,
 }: {
   totalFrames: number;
   currentFrame: number;
   onRulerClick: (frame: number) => void;
+  timelineZoom?: number;
 }) {
+  const zoom = useProjectStore((s) => s.timelineZoom);
+  const effectiveZoom = timelineZoom ?? zoom;
+  const FRAME_WIDTH = getFrameWidth(effectiveZoom);
   const width = totalFrames * FRAME_WIDTH;
+
+  // Determine tick interval based on zoom level
+  // At low zoom (1-8px/frame): show every 10th, 20th, 50th frame
+  // At medium zoom (8-24px/frame): show every 5th frame
+  // At high zoom (24-100px/frame): show every frame
+  const majorTickInterval = useMemo(() => {
+    if (FRAME_WIDTH < 4) return 20;
+    if (FRAME_WIDTH < 8) return 10;
+    if (FRAME_WIDTH < 16) return 5;
+    return 5; // Keep 5 as standard, label every 5th
+  }, [FRAME_WIDTH]);
+
+  const showAllLabels = FRAME_WIDTH >= 16;
+  const labelInterval = showAllLabels ? 5 : majorTickInterval;
 
   return (
     <svg
       width={width}
       height={RULER_HEIGHT}
-      className="block"
+      className="block shrink-0"
       style={{ minWidth: width }}
       onClick={(e) => {
         const rect = e.currentTarget.getBoundingClientRect();
@@ -43,7 +64,11 @@ export default function FrameRuler({
       {/* Tick marks and frame numbers */}
       {Array.from({ length: totalFrames }, (_, i) => {
         const x = i * FRAME_WIDTH;
-        const isMajor = i % 5 === 0;
+        const isMajor = i % majorTickInterval === 0;
+        const isMinor = i % 5 === 0;
+        // Show a tick if major, minor, or zoomed in enough
+        const shouldShowTick = isMajor || isMinor || FRAME_WIDTH >= 10;
+        if (!shouldShowTick) return null;
         return (
           <g key={i}>
             <line
@@ -54,12 +79,13 @@ export default function FrameRuler({
               stroke={isMajor ? '#6b7280' : '#3f3f5a'}
               strokeWidth={isMajor ? 1 : 0.5}
             />
-            {isMajor && (
+            {/* Show label for major ticks or when zoomed in enough */}
+            {(i % labelInterval === 0) && (
               <text
                 x={x + 2}
                 y={13}
                 fill="#9ca3af"
-                fontSize={9}
+                fontSize={Math.max(7, Math.min(10, FRAME_WIDTH * 0.4))}
                 fontFamily="monospace"
               >
                 {i}

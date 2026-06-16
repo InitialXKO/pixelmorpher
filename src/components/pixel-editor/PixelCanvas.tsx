@@ -58,10 +58,26 @@ export default function PixelCanvas() {
     offscreen.height = s.canvasHeight;
     const offCtx = offscreen.getContext('2d')!;
 
-    // 1. Onion skin
+    // 1. Onion skin with transform filtering
     // Determine onion quality based on play state — use 'low' during playback for 60-80% frame time reduction
     const isPlaying = s.playStateRef.current === 'playing';
     const onionQuality: 'low' | 'medium' = isPlaying ? 'low' : 'medium';
+    // V15: Read onion skin transform filter settings from store
+    const storeState = useProjectStore.getState();
+    const onionFilterMode = storeState.onionTransformFilter?.filterMode ?? 'all';
+    const showDisplacement = storeState.onionSkinState?.showDisplacement ?? true;
+    const showRotation = storeState.onionSkinState?.showRotation ?? true;
+    const showStretch = storeState.onionSkinState?.showStretch ?? true;
+    const displacementColor = storeState.onionSkinState?.displacementColor ?? 'rgba(60,120,255,0.3)';
+    const rotationColor = storeState.onionSkinState?.rotationColor ?? 'rgba(255,120,40,0.3)';
+    const stretchColor = storeState.onionSkinState?.stretchColor ?? 'rgba(40,255,120,0.3)';
+    // Compute tint color based on filter mode
+    const getTintColor = (isPrev: boolean): string => {
+      if (onionFilterMode === 'displacement') return 'rgba(60,120,255,0.35)';
+      if (onionFilterMode === 'rotation') return 'rgba(255,120,40,0.35)';
+      if (onionFilterMode === 'stretch') return 'rgba(40,255,120,0.35)';
+      return isPrev ? 'rgba(60,120,255,0.3)' : 'rgba(255,120,40,0.3)';
+    };
     if (s.onionSkinEnabled && s.onionSkinFrames > 0) {
       offCtx.save();
       offCtx.clearRect(0, 0, s.canvasWidth, s.canvasHeight);
@@ -86,7 +102,7 @@ export default function PixelCanvas() {
           }
           offCtx.drawImage(s.onionCacheRef.current.get(prevFrame)!.canvas, 0, 0);
           offCtx.globalCompositeOperation = 'source-atop';
-          offCtx.fillStyle = 'rgba(60,120,255,0.3)';
+          offCtx.fillStyle = getTintColor(true);
           offCtx.fillRect(0, 0, s.canvasWidth, s.canvasHeight);
           offCtx.restore();
         }
@@ -104,7 +120,7 @@ export default function PixelCanvas() {
           }
           offCtx.drawImage(s.onionCacheRef.current.get(nextFrame)!.canvas, 0, 0);
           offCtx.globalCompositeOperation = 'source-atop';
-          offCtx.fillStyle = 'rgba(255,120,40,0.3)';
+          offCtx.fillStyle = getTintColor(false);
           offCtx.fillRect(0, 0, s.canvasWidth, s.canvasHeight);
           offCtx.restore();
         }
@@ -203,14 +219,14 @@ export default function PixelCanvas() {
           onionCtx.save(); onionCtx.globalAlpha = Math.max(0.05, 0.3 / offset);
           const cached = s.onionCacheRef.current.get(prevFrame);
           if (cached) onionCtx.drawImage(cached.canvas, 0, 0);
-          onionCtx.globalCompositeOperation = 'source-atop'; onionCtx.fillStyle = 'rgba(60,120,255,0.35)';
+          onionCtx.globalCompositeOperation = 'source-atop'; onionCtx.fillStyle = getTintColor(true);
           onionCtx.fillRect(0, 0, s.canvasWidth, s.canvasHeight); onionCtx.restore();
         }
         if (nextFrame < useProjectStore.getState().totalFrames) {
           onionCtx.save(); onionCtx.globalAlpha = Math.max(0.05, 0.3 / offset);
           const cached = s.onionCacheRef.current.get(nextFrame);
           if (cached) onionCtx.drawImage(cached.canvas, 0, 0);
-          onionCtx.globalCompositeOperation = 'source-atop'; onionCtx.fillStyle = 'rgba(255,120,40,0.35)';
+          onionCtx.globalCompositeOperation = 'source-atop'; onionCtx.fillStyle = getTintColor(false);
           onionCtx.fillRect(0, 0, s.canvasWidth, s.canvasHeight); onionCtx.restore();
         }
       }

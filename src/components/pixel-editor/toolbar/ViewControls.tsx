@@ -217,6 +217,11 @@ export function OnionSkinToggle() {
   const onionSkinFrames = useProjectStore((s) => s.onionSkinFrames);
   const toggleProjectOnionSkin = useProjectStore((s) => s.toggleOnionSkin);
   const setOnionSkinFrames = useProjectStore((s) => s.setOnionSkinFrames);
+  // V15: Transform filter onion skin
+  const onionTransformFilter = useProjectStore((s) => s.onionTransformFilter);
+  const updateOnionTransformFilter = useProjectStore((s) => s.updateOnionTransformFilter);
+  const onionSkinState = useProjectStore((s) => s.onionSkinState);
+  const updateOnionSkinState = useProjectStore((s) => s.updateOnionSkinState);
 
   const handleOnionSkinToggle = useCallback(() => {
     toggleProjectOnionSkin();
@@ -240,7 +245,7 @@ export function OnionSkinToggle() {
         </TooltipTrigger>
         <TooltipContent side="bottom" className="text-xs">Onion Skin</TooltipContent>
       </Tooltip>
-      <PopoverContent className="w-48 bg-[#1a1a2e] border-white/10 text-gray-200" side="bottom">
+      <PopoverContent className="w-56 bg-[#1a1a2e] border-white/10 text-gray-200" side="bottom">
         <div className="space-y-3">
           <div className="text-xs font-medium text-gray-300">Onion Skin Settings</div>
           <div className="flex items-center gap-2">
@@ -256,6 +261,67 @@ export function OnionSkinToggle() {
               }}
               className="h-6 w-12 text-xs text-center bg-white/5 border-white/10 text-gray-300 px-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
             />
+          </div>
+
+          {/* V15: Transform Filter Mode */}
+          <div className="text-xs text-gray-400">Transform Filter</div>
+          <div className="flex gap-1">
+            {(['all', 'displacement', 'rotation', 'stretch'] as const).map((mode) => (
+              <button
+                key={mode}
+                className={`px-2 py-0.5 rounded text-[9px] font-medium transition-colors ${
+                  onionTransformFilter.filterMode === mode
+                    ? 'bg-purple-600/30 text-purple-300'
+                    : 'bg-white/5 text-gray-500 hover:bg-white/10'
+                }`}
+                onClick={() => updateOnionTransformFilter({ filterMode: mode })}
+              >
+                {mode === 'all' ? 'All' : mode === 'displacement' ? 'Disp' : mode === 'rotation' ? 'Rot' : 'Str'}
+              </button>
+            ))}
+          </div>
+
+          {/* V15: Per-axis toggles (only shown when filter is 'all') */}
+          {onionTransformFilter.filterMode === 'all' && (
+            <div className="space-y-1.5">
+              <div className="text-[9px] text-gray-500">Per-Axis Visibility</div>
+              <div className="flex gap-2">
+                <label className="flex items-center gap-1 text-[10px] text-gray-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={onionSkinState.showDisplacement}
+                    onChange={(e) => updateOnionSkinState({ showDisplacement: e.target.checked })}
+                    className="accent-purple-500 size-3"
+                  />
+                  Disp
+                </label>
+                <label className="flex items-center gap-1 text-[10px] text-gray-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={onionSkinState.showRotation}
+                    onChange={(e) => updateOnionSkinState({ showRotation: e.target.checked })}
+                    className="accent-purple-500 size-3"
+                  />
+                  Rot
+                </label>
+                <label className="flex items-center gap-1 text-[10px] text-gray-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={onionSkinState.showStretch}
+                    onChange={(e) => updateOnionSkinState({ showStretch: e.target.checked })}
+                    className="accent-purple-500 size-3"
+                  />
+                  Str
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* V15: Color indicators for each filter mode */}
+          <div className="flex gap-2 text-[8px] text-gray-500">
+            <span className="flex items-center gap-1"><span className="size-2 rounded-full" style={{background: 'rgba(60,120,255,0.7)'}} /> Disp</span>
+            <span className="flex items-center gap-1"><span className="size-2 rounded-full" style={{background: 'rgba(255,120,40,0.7)'}} /> Rot</span>
+            <span className="flex items-center gap-1"><span className="size-2 rounded-full" style={{background: 'rgba(40,255,120,0.7)'}} /> Str</span>
           </div>
         </div>
       </PopoverContent>

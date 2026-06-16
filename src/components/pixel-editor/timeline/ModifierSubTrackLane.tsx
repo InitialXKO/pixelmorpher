@@ -4,7 +4,7 @@ import React, { useCallback, useRef, useState } from 'react';
 import { useProjectStore } from '@/lib/store';
 import type { PartAnimationModifier } from '@/lib/types';
 import { MODIFIER_DEFINITIONS } from '@/lib/types';
-import { FRAME_WIDTH, SUB_TRACK_HEIGHT, CATEGORY_COLOR_MAP } from './constants';
+import { FRAME_WIDTH as STATIC_FRAME_WIDTH, SUB_TRACK_HEIGHT, CATEGORY_COLOR_MAP } from './constants';
 
 // ---- Modifier Sub-Track Lane ----
 // Renders an animation modifier's effective range as a colored bar within the timeline
@@ -13,13 +13,16 @@ const ModifierSubTrackLane = React.memo(function ModifierSubTrackLane({
   totalFrames,
   partId,
   onEditParams,
+  frameWidth,
 }: {
   modifier: PartAnimationModifier;
   totalFrames: number;
   partId: string;
   onEditParams: (partId: string, modifierId: string) => void;
+  frameWidth?: number;
 }) {
   const { updatePartAnimationModifierRange } = useProjectStore();
+  const FRAME_WIDTH = frameWidth ?? STATIC_FRAME_WIDTH;
   const width = totalFrames * FRAME_WIDTH;
   const def = MODIFIER_DEFINITIONS.find((d) => d.type === modifier.type);
 

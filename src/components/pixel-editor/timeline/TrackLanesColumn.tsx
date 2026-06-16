@@ -1,9 +1,10 @@
 'use client';
 
-import React from 'react';
+import React, { useCallback, useRef, useMemo } from 'react';
 import type { Track, Part, EffectTrack, CanvasModifierTrack, Keyframe, PuppetNode, PuppetNodeKeyframe } from '@/lib/types';
 import { ANIMATION_MODIFIER_TYPES } from '@/lib/types';
-import { FRAME_WIDTH, TRACK_HEIGHT, RULER_HEIGHT } from './constants';
+import type { SnapConfig, TrackTimelineDisplay } from '@/lib/v15-types';
+import { getFrameWidth, TRACK_HEIGHT, RULER_HEIGHT, TRACK_COLOR_HUES } from './constants';
 import FrameRuler from './FrameRuler';
 import TrackLane from './TrackLane';
 import ModifierSubTrackLane from './ModifierSubTrackLane';
@@ -12,6 +13,7 @@ import KeyframeModifierSubTrackLane from './KeyframeModifierSubTrackLane';
 import EffectTrackLane from './EffectTrackLane';
 import CanvasModifierTrackLane from './CanvasModifierTrackLane';
 import PuppetNodeTrackLane from './PuppetNodeTrackLane';
+import { useProjectStore } from '@/lib/store';
 
 // ---- Right: Ruler + Keyframe Lanes (scrollable) ----
 interface TrackLanesColumnProps {
@@ -60,6 +62,13 @@ interface TrackLanesColumnProps {
   onDeletePuppetKeyframe: (keyframeId: string) => void;
   onMovePuppetKeyframeToFrame: (keyframeId: string) => void;
   onUpdatePuppetKeyframe: (keyframeId: string, updates: Partial<PuppetNodeKeyframe>) => void;
+  // V15: Dynamic zoom, snap, colors, thumbnails, frame step
+  FRAME_WIDTH?: number;
+  snapConfig?: SnapConfig;
+  snapFrame?: (rawFrame: number, excludeKeyframeId?: string) => number;
+  trackTimelineDisplays?: Record<string, TrackTimelineDisplay>;
+  getEffectiveFrameStep?: (trackId: string, frame: number) => number;
+  timelineThumbnailQuality?: 'off' | 'low' | 'medium' | 'high';
 }
 
 export default function TrackLanesColumn({
@@ -76,12 +85,30 @@ export default function TrackLanesColumn({
   isPuppetClip, puppetNodes, puppetNodeKeyframes, selectedPuppetKeyframeId,
   onSelectPuppetKeyframe, onAddPuppetKeyframe, onDeletePuppetKeyframe,
   onMovePuppetKeyframeToFrame, onUpdatePuppetKeyframe,
+  // V15
+  FRAME_WIDTH: propFrameWidth,
+  snapConfig, snapFrame,
+  trackTimelineDisplays, getEffectiveFrameStep, timelineThumbnailQuality,
 }: TrackLanesColumnProps) {
+  const timelineZoom = useProjectStore((s) => s.timelineZoom);
+  const fw = propFrameWidth ?? getFrameWidth(timelineZoom);
+  const rulerWidth = totalFrames * fw;
+
+  // Get track color hue based on index
+  const getTrackColor = useCallback((trackIndex: number, trackId: string): string => {
+    const display = trackTimelineDisplays?.[trackId];
+    if (display && display.colorHue >= 0) {
+      return `hsl(${display.colorHue}, 50%, 45%)`;
+    }
+    const hue = TRACK_COLOR_HUES[trackIndex % TRACK_COLOR_HUES.length];
+    return `hsl(${hue}, 50%, 45%)`;
+  }, [trackTimelineDisplays]);
+
   return (
     <div className="flex-1 overflow-hidden flex flex-col relative">
       {/* Ruler row (fixed) */}
       <div className="shrink-0 overflow-hidden border-b border-[#1e1e3a]" style={{ height: RULER_HEIGHT }}>
-        <FrameRuler totalFrames={totalFrames} currentFrame={currentFrame} onRulerClick={onRulerClick} />
+        <FrameRuler totalFrames={totalFrames} currentFrame={currentFrame} onRulerClick={onRulerClick} timelineZoom={timelineZoom} />
       </div>
 
       {/* Track lanes (scrollable) */}
@@ -92,7 +119,7 @@ export default function TrackLanesColumn({
         onScroll={onScroll}
         onClick={() => { onSelectKeyframe(''); onSelectEffectTrack(null); }}
       >
-        <div style={{ width: timelineWidth, minWidth: timelineWidth, height: totalHeight, position: 'relative' }}>
+        <div style={{ width: rulerWidth, minWidth: rulerWidth, height: totalHeight, position: 'relative' }}>
           {tracks.length === 0 && effectTracks.length === 0 && (
             <div className="flex items-center justify-center h-32 text-xs text-gray-600">
               Double-click on a track lane to add a keyframe
@@ -111,6 +138,11 @@ export default function TrackLanesColumn({
               trackKeyframes.flatMap((kf) => kf.modifiers.map((m) => m.type))
             )].filter((t) => !ANIMATION_MODIFIER_TYPES.includes(t));
 
+            const trackColor = getTrackColor(idx, track.id);
+            const display = trackTimelineDisplays?.[track.id];
+            const showThumbnails = display?.showThumbnails ?? true;
+            const effectiveStep = getEffectiveFrameStep ? getEffectiveFrameStep(track.partId, currentFrame) : 1;
+
             return (
               <React.Fragment key={track.id}>
                 <TrackLane
@@ -118,24 +150,35 @@ export default function TrackLanesColumn({
                   totalFrames={totalFrames} onSelectKeyframe={onSelectKeyframe} onAddKeyframe={onAddKeyframe}
                   onDeleteKeyframe={onDeleteKeyframe} onDuplicateKeyframe={onDuplicateKeyframe}
                   onMoveKeyframeToFrame={onMoveKeyframeToFrame} onUpdateKeyframe={onUpdateKeyframe}
+                  // V15 props
+                  frameWidth={fw}
+                  trackColor={trackColor}
+                  snapConfig={snapConfig}
+                  snapFrame={snapFrame}
+                  showThumbnail={showThumbnails}
+                  timelineThumbnailQuality={timelineThumbnailQuality}
+                  part={part}
+                  frameStep={effectiveStep}
                 />
                 {track.expanded && animModifiers.map((mod) => (
-                  <ModifierSubTrackLane key={mod.id} modifier={mod} totalFrames={totalFrames} partId={track.partId} onEditParams={onEditAnimModifierParams} />
+                  <ModifierSubTrackLane key={mod.id} modifier={mod} totalFrames={totalFrames} partId={track.partId} onEditParams={onEditAnimModifierParams} frameWidth={fw} />
                 ))}
                 {track.expanded && animModifiers.map((mod) => (
-                  <AnimModifierParamDriverSubTrackLane key={`anim-pd-${mod.id}`} modifier={mod} partId={track.partId} totalFrames={totalFrames} onEditAnimParamDriver={onEditAnimParamDriver} />
+                  <AnimModifierParamDriverSubTrackLane key={`anim-pd-${mod.id}`} modifier={mod} partId={track.partId} totalFrames={totalFrames} onEditAnimParamDriver={onEditAnimParamDriver} frameWidth={fw} />
                 ))}
                 {track.expanded && kfModifierTypes.map((modType) => (
                   <KeyframeModifierSubTrackLane
                     key={`kf-mod-${modType}`} modifierType={modType} partKeyframes={trackKeyframes}
                     totalFrames={totalFrames} onAddParamKeyframe={onAddModifierParamKeyframe}
                     onEditModifierParams={onEditKfModifierParams} onEditParamKeyframe={onEditParamKeyframe}
+                    frameWidth={fw}
                   />
                 ))}
                 {track.expanded && kfModifierTypes.map((modType) => (
                   <ParamDriverSubTrackLane
                     key={`pd-${modType}`} modifierType={modType} partKeyframes={trackKeyframes}
                     totalFrames={totalFrames} onEditParamDriver={onEditParamDriver}
+                    frameWidth={fw}
                   />
                 ))}
               </React.Fragment>
@@ -159,6 +202,7 @@ export default function TrackLanesColumn({
                 selectedEffectTrackId={selectedEffectTrackId}
                 onAddEffectKeyframe={onAddEffectKeyframe} onDeleteEffectKeyframe={onDeleteEffectKeyframe}
                 onEditEffectKeyframe={onEditEffectKeyframe} onSelectEffectTrack={onSelectEffectTrack}
+                frameWidth={fw}
               />
             );
           })}
@@ -183,7 +227,7 @@ export default function TrackLanesColumn({
             let cmRowIdx = tracks.length + (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
             if (canvasModifierTracks.length > 0) cmRowIdx += 1 + cmIdx;
             if (cmRowIdx < visibleRange.startIndex || cmRowIdx > visibleRange.endIndex) return null;
-            return <CanvasModifierTrackLane key={cmTrack.id} track={cmTrack} totalFrames={totalFrames} currentFrame={currentFrame} />;
+            return <CanvasModifierTrackLane key={cmTrack.id} track={cmTrack} totalFrames={totalFrames} currentFrame={currentFrame} frameWidth={fw} />;
           })}
 
           {/* Canvas modifier add spacer */}
@@ -208,6 +252,7 @@ export default function TrackLanesColumn({
                     onSelectPuppetKeyframe={onSelectPuppetKeyframe} onAddPuppetKeyframe={onAddPuppetKeyframe}
                     onDeletePuppetKeyframe={onDeletePuppetKeyframe} onMovePuppetKeyframeToFrame={onMovePuppetKeyframeToFrame}
                     onUpdatePuppetKeyframe={onUpdatePuppetKeyframe}
+                    frameWidth={fw}
                   />
                 );
               })}
