@@ -64,7 +64,7 @@ export default function PerformPanel() {
     [puppetSkeletons, character]
   );
   const clip = useMemo(
-    () => animationClips.find((c) => c.isPuppetClip && c.puppetCharacterId === performCharacterId) ?? null,
+    () => animationClips.find((c) => c.puppetCharacterId === performCharacterId) ?? null,
     [animationClips, performCharacterId]
   );
 

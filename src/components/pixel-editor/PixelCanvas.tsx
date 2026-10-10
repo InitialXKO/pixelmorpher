@@ -97,7 +97,7 @@ export default function PixelCanvas() {
         if (skeletons.length === 0 || characters.length === 0) return;
         for (const character of characters) {
           const skel = skeletons.find(sk => sk.id === character.puppetSkeletonId);
-          const clip = clips.find(c => c.isPuppetClip && c.puppetCharacterId === character.id);
+          const clip = clips.find(c => true && c.puppetCharacterId === character.id);
           if (!skel || !clip) continue;
           try {
             renderPuppetNodes(
@@ -171,24 +171,7 @@ export default function PixelCanvas() {
     }
 
     // 2. Render current frame
-    if (s.isTileMode) {
-      const tileState = s.tileStore.getState();
-      const target = tileState.editingTarget;
-      offCtx.fillStyle = s.backgroundColor || '#1a1a2e';
-      offCtx.fillRect(0, 0, s.canvasWidth, s.canvasHeight);
-      if (target) {
-        const { width: tileW, height: tileH } = tileState.getEditingTargetSize();
-        const pixels = tileState.getEditingTargetPixels();
-        if (pixels && pixels.length > 0) {
-          const offsetX = Math.floor((s.canvasWidth - tileW) / 2);
-          const offsetY = Math.floor((s.canvasHeight - tileH) / 2);
-          drawTileGridToCanvas(offCtx, pixels, offsetX, offsetY, 1, '#1a1a2e');
-        }
-      } else {
-        offCtx.fillStyle = '#3f3f5a'; offCtx.font = '12px sans-serif'; offCtx.textAlign = 'center';
-        offCtx.fillText('在左面板选择要编辑的瓦片资产', s.canvasWidth / 2, s.canvasHeight / 2);
-      }
-    } else if (s.editMode === 'part_edit' && s.partEditPartId) {
+    if (s.editMode === 'part_edit' && s.partEditPartId) {
       const part = s.parts.find(p => p.id === s.partEditPartId);
       if (part) {
         let effectiveMods = s.partEditModifiers;

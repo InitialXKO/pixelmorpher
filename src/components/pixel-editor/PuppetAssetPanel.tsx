@@ -53,7 +53,7 @@ export default function PuppetAssetPanel() {
   });
 
   const puppetClips = useMemo(
-    () => animationClips.filter((c) => c.isPuppetClip),
+    () => animationClips.filter((c) => true),
     [animationClips]
   );
 

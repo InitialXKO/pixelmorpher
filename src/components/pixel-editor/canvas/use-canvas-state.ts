@@ -8,7 +8,6 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { useProjectStore } from '@/lib/store';
 import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
-import { useTileWorkflowStore } from '@/lib/tile-workflow-store';
 import { invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
 import { computePuppetSpritePartIds } from '@/lib/unified-pipeline-bridge';
 import {
@@ -117,7 +116,7 @@ export function useCanvasState() {
     const clips = s.animationClips;
     let v = 0;
     for (const c of clips) {
-      if (c.isPuppetClip && c.puppetNodeKeyframes) {
+      if (c.puppetNodeKeyframes) {
         for (const kf of c.puppetNodeKeyframes) {
           v = v * 31 + kf.frame * 7 + Math.round((kf.angle ?? 0) * 10) +
               Math.round((kf.offsetX ?? 0) * 10) + Math.round((kf.offsetY ?? 0) * 10) +
@@ -144,17 +143,11 @@ export function useCanvasState() {
         dirtyRef.current = true;
       }
     });
-    const unsub3 = useTileWorkflowStore.subscribe(() => {
-      if (useWorkspaceStore.getState().mode === 'map_tile') dirtyRef.current = true;
-    });
-    return () => { unsub1(); unsub2(); unsub3(); };
+    return () => { unsub1(); unsub2(); };
   }, []);
 
-  // ---- Tile / puppet mode state ----
+  // ---- Puppet mode state ----
   const { mode: workspaceMode } = useWorkspaceStore();
-  const tileStore = useTileWorkflowStore;
-  const tileEditingTarget = useTileWorkflowStore((s) => s.editingTarget);
-  const isTileMode = workspaceMode === 'map_tile';
   const isPuppetMode = workspaceMode === 'puppet';
 
   // ---- Editor store selectors ----
@@ -428,7 +421,7 @@ export function useCanvasState() {
   const computePivotWorldPosition = useCallback(
     (node: PuppetNode, skeleton: PuppetSkeleton, canvasW: number, canvasH: number): { x: number; y: number } => {
       const state = useProjectStore.getState();
-      const clip = state.animationClips.find(c => c.isPuppetClip && c.puppetCharacterId === state.puppetCharacters.find(ch => ch.puppetSkeletonId === skeleton.id)?.id);
+      const clip = state.animationClips.find(c => c.puppetCharacterId === state.puppetCharacters.find(ch => ch.puppetSkeletonId === skeleton.id)?.id);
       const keyframes = clip?.puppetNodeKeyframes ?? [];
       const kfByNode = new Map<string, PuppetNodeKeyframe[]>();
       for (const kf of keyframes) { const arr = kfByNode.get(kf.nodeId) || []; arr.push(kf); kfByNode.set(kf.nodeId, arr); }
@@ -502,7 +495,7 @@ export function useCanvasState() {
         const skeleton = skeletons.find(s => s.id === character.puppetSkeletonId);
         if (!skeleton) continue;
         const skel = skeleton;
-        const clip = clips.find(c => c.isPuppetClip && c.puppetCharacterId === character.id);
+        const clip = clips.find(c => c.puppetCharacterId === character.id);
         const keyframes = clip?.puppetNodeKeyframes ?? [];
         const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
         const centerX = canvasWidth / 2;
@@ -744,7 +737,7 @@ export function useCanvasState() {
     globalModifiers, puppetSkeletons, puppetCharacters, puppetSpritePartIds,
     nonPuppetParts, puppetClipsVersion,
     // Tile/puppet
-    workspaceMode, tileStore, tileEditingTarget, isTileMode, isPuppetMode,
+    workspaceMode, isPuppetMode,
     // Editor
     tool, brushSize, brushColor, zoom, panX, panY, showGrid, showTrajectories,
     editMode, selectedPartId, setZoom, setPan,

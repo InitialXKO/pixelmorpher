@@ -6,17 +6,16 @@ import {
   ArrowRight,
   Users,
   CheckCircle2,
+  Box,
 } from 'lucide-react';
 import PuppetCreationWizard from './PuppetCreationWizard';
 import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { WORKFLOW_STEPS } from './puppet/types';
 import type { PuppetPhase } from './puppet/types';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { useProjectStore } from '@/lib/store';
-import SkeletonModePanel from './puppet/SkeletonModePanel';
-import { CostumeManager } from './CostumeManager';
-import { useCostumeManagerAdapter } from './puppet/useCostumeManagerAdapter';
+import RigPanel from './puppet/RigPanel';
+import DressPanel from './puppet/DressPanel';
 import PerformPanel from './puppet/PerformPanel';
 import type { PuppetDirection } from '@/lib/types';
 
@@ -56,17 +55,6 @@ export default function PuppetPanel() {
     }
   }, [selectedSkeletonId]);
   const selectedCharacter = puppetCharacters.find((c) => c.id === selectedCharacterId) ?? null;
-
-  const costumeAdapter = useCostumeManagerAdapter({
-    puppetCharacters,
-    puppetSkeletons,
-    parts,
-    selectedCharacterId,
-    selectedCostumeId,
-    selectedCharacter,
-    setSelectedCharacterId,
-    setSelectedCostumeId,
-  });
 
   // ---- 画布 → 面板：单向同步选中节点 ----
   // 画布点击节点只写 ProjectStore.selectedPuppetNodeId，
@@ -111,7 +99,7 @@ export default function PuppetPanel() {
 
   const hasSkeletons = puppetSkeletons.length > 0;
   const hasCharacters = puppetCharacters.length > 0;
-  const hasClips = animationClips.some((c) => c.isPuppetClip);
+  const hasClips = animationClips.some((c) => true);
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#0d0d1a]">
@@ -131,6 +119,18 @@ export default function PuppetPanel() {
             title="创建木偶角色"
           >
             <Plus className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6 text-amber-400 hover:text-amber-300"
+            onClick={() => {
+              const store = useProjectStore.getState();
+              store.addPropCharacter(`道具${store.puppetCharacters.length + 1}`);
+            }}
+            title="新建道具（单节点木偶，用于背景/道具/UI 动画）"
+          >
+            <Box className="size-3.5" />
           </Button>
         </div>
 
@@ -195,52 +195,40 @@ export default function PuppetPanel() {
 
       {/* Phase content */}
       {(hasSkeletons || phase !== 'rig') && (
-        <ScrollArea className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
           <div className="p-2">
             {/* ============ RIG ============ */}
             {phase === 'rig' && hasSkeletons && (
-              <SkeletonModePanel
+              <RigPanel
                 puppetSkeletons={puppetSkeletons}
-                puppetCharacters={puppetCharacters}
-                parts={parts}
                 selectedSkeletonId={selectedSkeletonId}
                 setSelectedSkeletonId={setSelectedSkeletonId}
                 selectedNodeId={selectedNodeId}
                 selectedSkeleton={selectedSkeleton}
                 selectedNode={selectedNode}
-                direction={direction}
-                setDirection={setDirection}
-                latitude={latitude}
-                setLatitude={handleSetLatitude}
                 handleSelectNodeWithSync={handleSelectNodeWithSync}
               />
             )}
 
             {/* ============ DRESS ============ */}
             {phase === 'dress' && (
-              <CostumeManager
-                characters={costumeAdapter.characters}
-                selectedCharacterId={costumeAdapter.selectedCharacterId}
-                onCharacterSelect={costumeAdapter.handleCharacterSelect}
-                onCharacterDelete={costumeAdapter.handleCharacterDelete}
-                costumeSets={costumeAdapter.costumeSets}
-                selectedCostumeId={costumeAdapter.selectedCostumeId}
-                onCostumeSelect={costumeAdapter.handleCostumeSelect}
-                onCostumeAdd={costumeAdapter.handleCostumeAdd}
-                onCostumeDelete={costumeAdapter.handleCostumeDelete}
-                activeCostumeSetId={costumeAdapter.activeCostumeSetId}
-                onActiveCostumeSetChange={costumeAdapter.handleActiveCostumeSetChange}
-                nodes={costumeAdapter.nodes}
-                parts={costumeAdapter.parts}
-                onSpriteAssign={costumeAdapter.handleSpriteAssign}
-                onSpriteRemove={costumeAdapter.handleSpriteRemove}
+              <DressPanel
+                puppetCharacters={puppetCharacters}
+                puppetSkeletons={puppetSkeletons}
+                parts={parts}
+                selectedCharacterId={selectedCharacterId}
+                setSelectedCharacterId={setSelectedCharacterId}
+                selectedCostumeId={selectedCostumeId}
+                setSelectedCostumeId={setSelectedCostumeId}
+                selectedNodeId={selectedNodeId}
+                handleSelectNodeWithSync={handleSelectNodeWithSync}
               />
             )}
 
             {/* ============ PERFORM ============ */}
             {phase === 'perform' && <PerformPanel />}
           </div>
-        </ScrollArea>
+        </div>
       )}
     </div>
   );

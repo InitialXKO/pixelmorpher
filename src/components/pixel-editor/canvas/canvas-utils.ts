@@ -79,8 +79,8 @@ export function isPixelInPart(
   translateOffsetX: number = 0,
   translateOffsetY: number = 0,
 ): boolean {
-  const left = offsetX - part.pivotX + (part.offsetX || 0) + translateOffsetX;
-  const top = offsetY - part.pivotY + (part.offsetY || 0) + translateOffsetY;
+  const left = offsetX - part.pivotX + 0 + translateOffsetX;
+  const top = offsetY - part.pivotY + 0 + translateOffsetY;
   return px >= left && px < left + part.width && py >= top && py < top + part.height;
 }
 
@@ -141,8 +141,8 @@ export function getPixelAt(
   translateOffsetX: number = 0,
   translateOffsetY: number = 0,
 ): PixelColor {
-  const localX = px - (offsetX - part.pivotX + (part.offsetX || 0) + translateOffsetX);
-  const localY = py - (offsetY - part.pivotY + (part.offsetY || 0) + translateOffsetY);
+  const localX = px - (offsetX - part.pivotX + 0 + translateOffsetX);
+  const localY = py - (offsetY - part.pivotY + 0 + translateOffsetY);
   if (localX < 0 || localX >= part.width || localY < 0 || localY >= part.height) return null;
   return part.pixels[localY]?.[localX] ?? null;
 }

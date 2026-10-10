@@ -93,7 +93,7 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
     const character = (project.puppetCharacters ?? []).find((c) => c.id === characterId);
     if (!character) return null;
     const existing = project.animationClips.find(
-      (c) => c.isPuppetClip && c.puppetCharacterId === characterId
+      (c) => true && c.puppetCharacterId === characterId
     );
     if (existing) {
       if (project.activeAnimationClipId !== existing.id) {
@@ -103,7 +103,6 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
     }
     const clip = project.addAnimationClip(`${character.name}动画`);
     project.updateAnimationClip(clip.id, {
-      isPuppetClip: true,
       puppetCharacterId: characterId,
       frameRate: 12,
       totalFrames: 24,
@@ -200,7 +199,7 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
     const character = (project.puppetCharacters ?? []).find((c) => c.id === performCharacterId);
     const skeleton = (project.puppetSkeletons ?? []).find((s) => s.id === character?.puppetSkeletonId);
     const clip = project.animationClips.find(
-      (c) => c.isPuppetClip && c.puppetCharacterId === performCharacterId
+      (c) => true && c.puppetCharacterId === performCharacterId
     );
     if (!skeleton || !clip) return;
 

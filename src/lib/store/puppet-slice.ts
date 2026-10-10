@@ -4,7 +4,7 @@
 // ============================================================
 
 import { generateDefaultCostumeSprite } from '../engine/default-costume-sprites';
-import { applyJointOpenings, type JointOpeningSpec } from '../engine/render-helpers/puppet-joint-color';
+import { applyJointOpenings, getPlugJointWidth, type JointOpeningSpec } from '../engine/render-helpers/puppet-joint-color';
 import type { StateCreator } from 'zustand';
 import type { ProjectStore } from './types';
 import type {
@@ -28,6 +28,8 @@ export interface PuppetNodeTree {
 export type PuppetSlice = {
   // ---- Puppet Skeleton CRUD ----
   addPuppetSkeleton: (name: string) => PuppetSkeleton;
+  /** 创建单节点道具角色（用于背景/道具/UI 等简单动画，走统一木偶模型） */
+  addPropCharacter: (name: string) => PuppetCharacter;
   removePuppetSkeleton: (id: string) => void;
   updatePuppetSkeleton: (id: string, updates: Partial<PuppetSkeleton>) => void;
   setPuppetDirection: (skeletonId: string, direction: PuppetDirection) => void;
@@ -157,6 +159,22 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
     return skeleton;
   },
 
+  addPropCharacter: (name) => {
+    const state = get();
+    // 单节点骨骼：无 socket/plug，就是一个可动精灵
+    const skeleton = state.addPuppetSkeleton(`${name}骨骼`);
+    state.addPuppetNode(skeleton.id, name, {
+      angle: 0,
+      stretch: 1,
+      offsetX: 0,
+      offsetY: 0,
+      zIndex: 0,
+      visible: true,
+    });
+    // 创建角色（自动建默认服装集）
+    return state.addPuppetCharacter(name, skeleton.id);
+  },
+
   removePuppetSkeleton: (id) => {
     const state = get();
     state.pushUndo('删除木偶骨骼');
@@ -198,20 +216,28 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
 
     // Auto-generate a default costume sprite if no spritePartId is provided
     let resolvedSpritePartId = opts?.spritePartId ?? null;
+    let computedJointWidth: number | null = null;
     if (!resolvedSpritePartId) {
       try {
         const skeleton = state.puppetSkeletons.find(sk => sk.id === skeletonId);
         const templateName = skeleton ? 'humanoid' : 'humanoid'; // Default to humanoid
         const spriteResult = generateDefaultCostumeSprite(name, templateName, opts?.color ?? '#888888');
-        // 关节开口约定：默认精灵在 plug / socket 对应的轮廓处留开口
+        // 关节开口约定：默认精灵在 plug / socket 对应的轮廓处留开口。
+        // jointWidth 写入 plug，供两侧渲染共用（= 关节盘直径）。
         {
           const openings: JointOpeningSpec[] = [];
           if (opts?.plug) {
             const px = spriteResult.pivotX + opts.plug.localX;
             const py = spriteResult.pivotY + opts.plug.localY;
-            const w = py < spriteResult.height / 2
-              ? (opts.crossSectionTop ?? 4)
-              : (opts.crossSectionBottom ?? 4);
+            const w = getPlugJointWidth(
+              {
+                plug: { localX: opts.plug.localX, localY: opts.plug.localY },
+                crossSectionTop: opts.crossSectionTop ?? 4,
+                crossSectionBottom: opts.crossSectionBottom ?? 4,
+              },
+              { width: spriteResult.width, height: spriteResult.height, pivotX: spriteResult.pivotX, pivotY: spriteResult.pivotY },
+            );
+            computedJointWidth = w;
             openings.push({ x: px, y: py, width: w });
           }
           for (const s of opts?.sockets ?? []) {
@@ -236,7 +262,9 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
       id: crypto.randomUUID(),
       name,
       sockets: opts?.sockets ?? [],
-      plug: opts?.plug ?? null,
+      plug: opts?.plug
+        ? { ...opts.plug, jointWidth: computedJointWidth ?? opts.plug.jointWidth ?? null }
+        : null,
       spritePartId: resolvedSpritePartId,
       directionSprites: {},
       mirrorFrom: opts?.mirrorFrom ?? false,

@@ -876,13 +876,11 @@ export interface AnimationClip {
   /** Total number of frames in this clip */
   totalFrames: number;
 
-  // ---- Per-clip timeline data ----
-  /** One track per participating part — controls visibility, lock, z-order */
-  tracks: Track[];
-  /** Keyframe data — flat array, linked by partId */
-  keyframes: Keyframe[];
-  /** Per-part animation data within this clip */
-  clipPartData: ClipPartData[];
+  // ---- Per-clip timeline data（统一为木偶模型）----
+  // 旧部件关键帧（tracks/keyframes/clipPartData）已删除。
+  // 动画只走 puppetNodeKeyframes；Part 退化为纯精灵数据。
+  /** Per-node keyframes for puppet animation — 唯一的动画数据源 */
+  puppetNodeKeyframes: PuppetNodeKeyframe[];
 
   // ---- Per-clip effects ----
   effectTracks: EffectTrack[];
@@ -898,12 +896,8 @@ export interface AnimationClip {
   updatedAt: number;
 
   // ---- Concrete Puppet ----
-  /** Whether this is a puppet animation clip */
-  isPuppetClip?: boolean;
   /** Linked puppet character ID */
   puppetCharacterId?: string;
-  /** Per-node keyframes for puppet animation */
-  puppetNodeKeyframes?: PuppetNodeKeyframe[];
 
   // ---- DCC Pipeline ----
   /** Animation events for game logic */
@@ -948,6 +942,12 @@ export interface PuppetPlug {
    * 约定：不限制为预设枚举，可任意自定义颜色。
    */
   discColor?: string | null;
+  /**
+   * 关节开口宽度（两侧开口与关节盘直径的统一依据）。
+   * 创建节点时由向导/addPuppetNode 按 plug 位置与 crossSection 计算并写入；
+   * 为空时渲染器按 plug 位置回退估算。
+   */
+  jointWidth?: number | null;
 }
 
 /** PuppetNode: a single node in the puppet skeleton hierarchy */
@@ -3230,7 +3230,7 @@ export function createDefaultCanvasModifier(type: CanvasModifierType): CanvasMod
 // ---- Workspace Mode System ----
 
 /** Top-level workspace mode that determines the overall layout and workflow */
-export type WorkspaceMode = 'project_home' | 'animation' | 'map_tile' | 'puppet';
+export type WorkspaceMode = 'project_home' | 'puppet';
 
 /** Stages in the blob tile creation workflow */
 export type TileWorkflowStage = 'base_materials' | 'template_3x3' | 'autotiles_47';

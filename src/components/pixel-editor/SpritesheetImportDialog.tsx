@@ -328,20 +328,10 @@ export default function SpritesheetImportDialog({ open, onOpenChange }: Spritesh
       createdPartIds.push(part.id);
     }
 
-    // Optionally create animation clip
+    // Optionally create animation clip（统一为木偶模型，不再创建部件轨道）
     if (createClip && createdPartIds.length > 0) {
       const name = clipName || `${prefix}动画`;
-      const clip = addAnimationClip(name);
-      // Add tracks for each part
-      const tracks = createdPartIds.map((partId, idx) => ({
-        id: crypto.randomUUID(),
-        partId,
-        visible: true,
-        locked: false,
-        expanded: false,
-        zIndex: idx,
-      }));
-      updateAnimationClip(clip.id, { tracks });
+      addAnimationClip(name);
     }
 
     onOpenChange(false);

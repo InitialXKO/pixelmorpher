@@ -149,6 +149,7 @@ function puppetNodeToNode(
       parentSocketId: pNode.plug.socketId,
       plug: { x: pxToSub(pNode.plug.localX), y: pxToSub(pNode.plug.localY) },
       discColor: pNode.plug.discColor ?? null,
+      jointWidth: pNode.plug.jointWidth ?? null,
     };
   } else {
     node.attachment = createDefaultAttachment();
@@ -260,6 +261,7 @@ function puppetToCharacter(
           parentSocketId: pNode.plug.socketId,
           plug: { x: pxToSub(pNode.plug.localX), y: pxToSub(pNode.plug.localY) },
           discColor: pNode.plug.discColor ?? null,
+          jointWidth: pNode.plug.jointWidth ?? null,
         };
       }
     }

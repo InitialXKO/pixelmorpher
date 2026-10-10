@@ -870,7 +870,7 @@ function renderPuppetFrame(
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
   // Step 1: Find linked PuppetCharacter
-  if (!clip.isPuppetClip || !clip.puppetCharacterId) return;
+  if (!true || !clip.puppetCharacterId) return;
   const character = puppetCharacters.find(c => c.id === clip.puppetCharacterId);
   if (!character) return;
 

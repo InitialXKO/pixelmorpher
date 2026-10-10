@@ -60,8 +60,8 @@ export default function AnimationClipPanel() {
       <div className="flex-1 min-h-0 overflow-y-auto">
         {animationClips.map(clip => {
           const isActive = clip.id === activeAnimationClipId;
-          const keyframeCount = clip.keyframes.length;
-          const partCount = clip.tracks.length;
+          const keyframeCount = clip.puppetNodeKeyframes.length;
+          const partCount = 0; // 旧部件轨道已删除，统一为木偶节点关键帧
 
           return (
             <div

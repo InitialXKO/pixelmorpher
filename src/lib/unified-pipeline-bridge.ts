@@ -195,7 +195,7 @@ function renderPuppetViaUnifiedPipeline(
 
     // Find puppet keyframes from animation clip
     const puppetClip = animationClips.find(
-      c => c.isPuppetClip && c.puppetCharacterId === character.id
+      c => true && c.puppetCharacterId === character.id
     );
     const nodeKeyframes = puppetClip?.puppetNodeKeyframes ?? [];
 
@@ -256,7 +256,7 @@ function renderPuppetViaOldPipeline(
     if (!skeleton) continue;
 
     const puppetClip = animationClips.find(
-      c => c.isPuppetClip && c.puppetCharacterId === character.id
+      c => true && c.puppetCharacterId === character.id
     );
 
     if (!puppetClip) {

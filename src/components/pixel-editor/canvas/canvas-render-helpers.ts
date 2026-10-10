@@ -406,8 +406,8 @@ export function renderWeightPaintOverlay(rc: RenderContext, params: WeightPaintP
       const offsetY = canvasHeight / 2;
       const { offsetX: partOffsetX, offsetY: partOffsetY } = getInterpolatedTranslateOffset(part.id, currentFrame);
 
-      const partScreenX = panX + (offsetX - part.pivotX + (part.offsetX || 0) + partOffsetX) * zoom;
-      const partScreenY = panY + (offsetY - part.pivotY + (part.offsetY || 0) + partOffsetY) * zoom;
+      const partScreenX = panX + (offsetX - part.pivotX + 0 + partOffsetX) * zoom;
+      const partScreenY = panY + (offsetY - part.pivotY + 0 + partOffsetY) * zoom;
       const partScreenW = part.width * zoom;
       const partScreenH = part.height * zoom;
 

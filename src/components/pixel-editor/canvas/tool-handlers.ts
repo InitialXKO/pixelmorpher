@@ -45,76 +45,7 @@ export const panningHandler: ToolHandler = {};
 // Tile Mode Handler (brush/eraser/fill/eyedropper in tile mode)
 // ---------------------------------------------------------------------------
 
-export const tileModeHandler: ToolHandler = {
-  onMouseDown(s, e, px, py) {
-    const tileState = s.tileStore.getState();
-    const target = tileState.editingTarget;
-    if (!target) return;
-    const { width: tileW, height: tileH } = tileState.getEditingTargetSize();
-    const tileOffsetX = Math.floor((s.canvasWidth - tileW) / 2);
-    const tileOffsetY = Math.floor((s.canvasHeight - tileH) / 2);
-    const localX = px - tileOffsetX;
-    const localY = py - tileOffsetY;
-    if (localX < 0 || localX >= tileW || localY < 0 || localY >= tileH) return;
 
-    if (s.tool === 'eyedropper') {
-      const pixels = tileState.getEditingTargetPixels();
-      if (pixels && pixels[localY]?.[localX]) s.editorStore.getState().setBrushColor(pixels[localY][localX]!);
-      return;
-    }
-    if (s.tool === 'fill') {
-      const pixels = tileState.getEditingTargetPixels();
-      if (!pixels) return;
-      const filled = floodFill(pixels, localX, localY, s.brushColor);
-      tileState.setEditingTargetPixels(filled);
-      s.markDirty(); return;
-    }
-    s.isDrawingRef.current = true; s.markDirty();
-    s.lastPixelRef.current = { x: localX, y: localY };
-    s.lastDrawnPixelsRef.current.clear();
-    const color = s.tool === 'eraser' ? null : s.brushColor;
-    const halfBrush = Math.floor(s.brushSize / 2);
-    const pixels = tileState.getEditingTargetPixels();
-    if (!pixels) return;
-    const gridH = pixels.length; const gridW = gridH > 0 ? pixels[0].length : 0;
-    const newPixels = pixels.map(row => [...row]);
-    for (let dy = -halfBrush; dy < s.brushSize - halfBrush; dy++) {
-      for (let dx = -halfBrush; dx < s.brushSize - halfBrush; dx++) {
-        const tx = localX + dx; const ty = localY + dy;
-        if (tx >= 0 && tx < gridW && ty >= 0 && ty < gridH) {
-          const key = `${tx},${ty}`;
-          if (!s.lastDrawnPixelsRef.current.has(key)) { newPixels[ty][tx] = color; s.lastDrawnPixelsRef.current.add(key); }
-        }
-      }
-    }
-    tileState.setEditingTargetPixels(newPixels);
-  },
-
-  onMouseMove(s, e, px, py) {
-    if (!s.isDrawingRef.current) return;
-    if (s.tool !== 'brush' && s.tool !== 'eraser') return;
-    const tileState = s.tileStore.getState(); const target = tileState.editingTarget;
-    if (!target) return;
-    const { width: tileW, height: tileH } = tileState.getEditingTargetSize();
-    const tileOffsetX = Math.floor((s.canvasWidth - tileW) / 2); const tileOffsetY = Math.floor((s.canvasHeight - tileH) / 2);
-    const localX = px - tileOffsetX; const localY = py - tileOffsetY;
-    if (localX < 0 || localX >= tileW || localY < 0 || localY >= tileH) return;
-    const color = s.tool === 'eraser' ? null : s.brushColor;
-    const halfBrush = Math.floor(s.brushSize / 2);
-    const pixels = tileState.getEditingTargetPixels(); if (!pixels) return;
-    const gridH = pixels.length; const gridW = gridH > 0 ? pixels[0].length : 0;
-    if (s.lastPixelRef.current) {
-      const linePixels = getLinePixels(s.lastPixelRef.current.x, s.lastPixelRef.current.y, localX, localY);
-      const newPixels = pixels.map(row => [...row]);
-      for (const point of linePixels) for (let dy2 = -halfBrush; dy2 < s.brushSize - halfBrush; dy2++) for (let dx2 = -halfBrush; dx2 < s.brushSize - halfBrush; dx2++) {
-        const tx = point.x + dx2; const ty = point.y + dy2;
-        if (tx >= 0 && tx < gridW && ty >= 0 && ty < gridH) { const key = `${tx},${ty}`; if (!s.lastDrawnPixelsRef.current.has(key)) { newPixels[ty][tx] = color; s.lastDrawnPixelsRef.current.add(key); } }
-      }
-      tileState.setEditingTargetPixels(newPixels);
-    }
-    s.lastPixelRef.current = { x: localX, y: localY };
-  },
-};
 
 // ---------------------------------------------------------------------------
 // Move Tool Handler
@@ -916,17 +847,11 @@ export const weightPaintHandler: ToolHandler = {
 // Dispatch: getToolHandler
 // ---------------------------------------------------------------------------
 
-const TILE_TOOLS = new Set(['brush', 'eraser', 'fill', 'eyedropper']);
-
 export function getToolHandler(
   tool: string,
-  isTileMode: boolean,
   isPuppetMode: boolean,
   isPartEdit: boolean = false,
 ): ToolHandler | null {
-  // Tile mode takes priority for brush/eraser/fill/eyedropper
-  if (isTileMode && TILE_TOOLS.has(tool)) return tileModeHandler;
-
   // Part-edit mode: pixel tools edit the part directly even inside puppet workspace
   // (puppetHandler would otherwise swallow brush/eraser/fill events)
   if (isPartEdit) {

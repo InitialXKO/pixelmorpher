@@ -8,13 +8,13 @@
  * 关节盘约定（与 unified 管线一致）：
  * - 调用方应在精灵绘制之前调用本函数，使关节盘被两侧精灵遮挡（透过轮廓开口可见）
  * - 颜色：plug.discColor 自定义 > 子节点精灵开口处众数颜色 > 父节点 color
- * - 大小：(parent.crossSectionBottom + child.crossSectionTop) / 2（= 两侧开口平均值）
+ * - 大小：子节点 plug 侧开口宽度（getPlugJointWidth，与 carve 开口同源）
  */
 
 import type { PuppetSkeleton, Part } from '../../types';
 import { snapToPixel } from '../../store/puppet-slice';
 import type { WorldTransform } from './types';
-import { sampleJointDiscColor } from './puppet-joint-color';
+import { sampleJointDiscColor, getPlugJointWidth } from './puppet-joint-color';
 
 /**
  * Render joint discs for all plug-socket connections in the skeleton.
@@ -66,8 +66,14 @@ function renderSingleJointDisc(
     parentWt.worldY + (socket.localX * sinA + socket.localY * cosA)
   );
 
-  // Joint disc diameter = average of parent's bottom cross-section and child's top
-  const diameter = Math.max(1, (parentNode.crossSectionBottom + childNode.crossSectionTop) / 2);
+  // 关节盘直径 = 子节点 plug 侧开口宽度（= carve 开口宽度，不再与 parent bottom 求平均）
+  const childPart = parts.find((p) => p.id === childNode.spritePartId);
+  const diameter = Math.max(
+    1,
+    getPlugJointWidth(childNode, childPart
+      ? { width: childPart.width, height: childPart.height, pivotX: childPart.pivotX, pivotY: childPart.pivotY }
+      : null),
+  );
   if (diameter <= 0) return;
 
   // Latitude scaling: flatten discs into ellipses at higher latitudes

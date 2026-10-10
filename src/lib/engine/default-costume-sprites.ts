@@ -486,149 +486,345 @@ const MECHA = {
 };
 
 /** Mecha head (12×14), pivot at neck bottom */
-function generateMechaHeadSprite(): PixelGrid {
-  const O = PALETTE.outline;
-  const { M, MS, MD, E, ED, ACC } = MECHA;
-  return rowsToPixelGrid([
-    [null, ACC,  null, O,   O,   O,   O,   O,   O,   null, null, null],
-    [null, O,   null, O,   M,   M,   M,   M,   M,   O,   null, null],
-    [null, O,   O,    O,   M,   M,   M,   M,   M,   M,   O,   null],
-    [null, O,   M,    M,   MS,  MS,  MS,  MS,  M,   M,   O,   null],
-    [null, O,   M,    ED,  E,   E,   E,   E,   ED,  M,   O,   null],
-    [null, O,   M,    ED,  E,   E,   E,   E,   ED,  M,   O,   null],
-    [null, O,   MS,   M,   M,   M,   M,   M,   M,   MS,  O,   null],
-    [null, null, O,   M,   MS,  MS,  MS,  M,   M,   O,   null, null],
-    [null, null, O,   MS,  M,   MD,  MD,  M,   MS,  O,   null, null],
-    [null, null, null, O,  M,   MD,  MD,  M,   O,   null, null, null],
-    [null, null, null, O,  MS,  M,   M,   MS,  O,   null, null, null],
-    [null, null, null, null, O, M,   M,   O,   null, null, null, null],
-    [null, null, null, null, O, MS,  M,   O,   null, null, null, null],
-    [null, null, null, null, O, O,   O,   null, null, null, null, null],
-  ]);
-}
-
-/** Mecha torso (16×20), pivot at shoulder line */
-function generateMechaTorsoSprite(): PixelGrid {
-  const O = PALETTE.outline;
-  const { M, MS, MD, E, ACC, ACD } = MECHA;
-  return rowsToPixelGrid([
-    [null, null, null, null, null, O,   O,   O,   O,   O,   O,   null, null, null, null, null],
-    [null, null, null, O,   O,   M,   M,   M,   M,   M,   M,   O,   O,   null, null, null],
-    [null, null, O,   M,   M,   M,   M,   M,   M,   M,   M,   M,   M,   O,   null, null],
-    [null, null, O,   M,   MS,  MS,  M,   M,   M,   M,   MS,  MS,  M,   O,   null, null],
-    [null, null, O,   M,   M,   M,   MS,  MS,  MS,  MS,  M,   M,   M,   O,   null, null],
-    [null, O,   M,   M,   MS,  ACC, ACC, ACC, ACC, MS,  M,   M,   M,   O,   null, null],
-    [null, O,   M,   MS,  ACC, ACD, ACD, ACC, ACC, MS,  M,   M,   M,   O,   null, null],
-    [null, O,   M,   M,   MS,  ACC, ACC, ACC, ACC, MS,  M,   M,   M,   O,   null, null],
-    [null, O,   M,   MS,  M,   MS,  MS,  MS,  MS,  M,   MS,  M,   M,   O,   null, null],
-    [null, null, O,  M,   M,   M,   M,   M,   M,   M,   M,   M,   M,   O,   null, null],
-    [null, null, O,  MS,  M,   M,   E,   E,   M,   M,   M,   MS,  O,   null, null, null],
-    [null, null, O,  MD,  MD,  MD,  MD,  MD,  MD,  MD,  MD,  MD,  O,   null, null, null],
-    [null, null, O,  MS,  M,   M,   M,   M,   M,   M,   M,   MS,  O,   null, null, null],
-    [null, null, O,  M,   MS,  M,   M,   M,   M,   M,   MS,  M,   O,   null, null, null],
-    [null, null, O,  MS,  M,   MS,  M,   M,   M,   MS,  M,   MS,  O,   null, null, null],
-    [null, null, O,  M,   M,   M,   MS,  MS,  M,   M,   M,   O,   null, null, null, null],
-    [null, null, null, O, M,   M,   M,   M,   M,   M,   O,   null, null, null, null, null],
-    [null, null, null, O, MS,  MS,  M,   M,   MS,  MS,  O,   null, null, null, null, null],
-    [null, null, null, null, O, O,  O,   O,   O,   O,   O,   O,   null, null, null, null],
-    [null, null, null, null, null, O, O,  O,   O,   O,   O,   null, null, null, null, null],
-  ]);
-}
-
-/** Mecha upper arm (6×14), pivot at shoulder cap */
-function generateMechaUpperArmSprite(): PixelGrid {
-  const O = PALETTE.outline;
-  const { M, MS, E } = MECHA;
-  return rowsToPixelGrid([
-    [null, O,  O,  O,  O,  null],
-    [O,   M,  M,  M,  M,  O],
-    [O,   M,  MS, MS, M,  O],
-    [O,   MS, M,  M,  MS, O],
-    [O,   M,  M,  E,  M,  O],
-    [O,   MS, M,  E,  MS, O],
-    [O,   M,  MS, M,  M,  O],
-    [O,   O,  O,  O,  O,  O],
-    [null, O,  M,  M,  O,  null],
-    [null, O,  MS, M,  O,  null],
-    [null, O,  M,  MS, O,  null],
-    [null, O,  MS, O,  null, null],
-    [null, O,  M,  O,  null, null],
-    [null, null, O,  null, null, null],
-  ]);
-}
-
-/** Mecha lower arm (4×10), pivot at elbow */
-function generateMechaLowerArmSprite(): PixelGrid {
-  const O = PALETTE.outline;
-  const { M, MS, E } = MECHA;
-  return rowsToPixelGrid([
-    [null, O,  O,  null],
-    [O,   M,  MS, O],
-    [O,   MS, M,  O],
-    [O,   M,  E,  O],
-    [O,   MS, M,  O],
-    [null, O,  M,  O],
-    [O,   M,  MS, O],
-    [O,   MS, O,  O],
-    [O,   M,  O,  null],
-    [null, O,  O,  null],
-  ]);
-}
-
-/** Mecha upper leg (6×14), pivot at hip */
-function generateMechaUpperLegSprite(): PixelGrid {
-  const O = PALETTE.outline;
-  const { M, MS, E } = MECHA;
-  return rowsToPixelGrid([
-    [null, null, O,  O,  null, null],
-    [null, O,   M,  M,  O,   null],
-    [O,   M,   M,  MS, M,   O],
-    [O,   MS,  M,  M,  MS,  O],
-    [O,   M,   E,  M,  M,   O],
-    [O,   MS,  M,  MS, M,   O],
-    [O,   M,   MS, M,  MS,  O],
-    [O,   MS,  M,  M,  M,   O],
-    [O,   M,   M,  MS, M,   O],
-    [O,   O,   O,  O,  O,   O],
-    [null, O,   M,  MS, O,   null],
-    [null, O,   MS, O,  null, null],
-    [null, null, O,  null, null, null],
-    [null, null, O,  null, null, null],
-  ]);
-}
-
-/** Mecha lower leg (5×12), pivot at knee */
-function generateMechaLowerLegSprite(): PixelGrid {
-  const O = PALETTE.outline;
-  const { M, MS, E } = MECHA;
-  return rowsToPixelGrid([
-    [null, O,  O,  O,  null],
-    [O,   M,  MS, M,  O],
-    [O,   MS, M,  MS, O],
-    [O,   M,  E,  M,  O],
-    [O,   MS, M,  MS, O],
-    [null, O,  M,  O,  null],
-    [null, O,  MS, O,  null],
-    [O,   M,  M,  MS, O],
-    [O,   MS, M,  M,  O],
-    [O,   M,  MS, M,  O],
-    [O,   O,  O,  O,  O],
-    [null, O,  O,  O,  null],
-  ]);
-}
-
+/** Mecha template sprites (redrawn: front + side) */
 // ============================================================
-// Dog template sprites (templateName === 'dog')
-// 9 nodes: body, head, ear_L/R, tail, front/back legs
+// 机甲模板默认精灵（重绘版）
+// 依赖：PALETTE（含 outline '#1a1a2e'）、rowsToPixelGrid、DefaultSpriteResult
+// 设计语言：浅灰白装甲 + 深色机械关节 + 蓝色点缀 + 青色发光件，
+//          板件刻线、铆钉、散热格栅，拼装感。
+// 铁律：每行列数一致、闭合轮廓（carve 由向导程序化处理）、pivot 在关节上。
 // ============================================================
 
-const DOGC = {
-  F: '#c68b4e',  // fur
-  FL: '#e0aa6e', // fur light
-  FD: '#9a6a38', // fur dark
-  C: '#f0d5a8',  // cream
-  NOSE: '#2a1a12',
-};
+// ---------- 正面 ----------
+
+function generateMechaHeadSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const A = '#c8ccd4'; // 浅灰白装甲
+  const AS = '#9aa3b5'; // 装甲阴影
+  const J = '#3a3f4a'; // 深色机械关节
+  const JD = '#2a2e38'; // 关节暗部
+  const C = '#22d3ee'; // 青色发光 visor
+  const CD = '#0e7490'; // 发光暗部
+  const Y = '#f5c518'; // 金色 V 字天线
+  const AD = '#7a8090'; // 刻线
+  const pixels = rowsToPixelGrid([
+    [null, null, Y, null, null, null, null, null, null, Y, null, null],
+    [null, null, Y, null, null, null, null, null, null, Y, null, null],
+    [null, null, null, Y, O, O, O, O, Y, null, null, null],
+    [null, null, null, null, O, A, A, A, A, O, null, null],
+    [null, null, null, O, A, A, AS, AS, A, A, O, null],
+    [null, null, O, A, O, C, C, C, C, O, A, O],
+    [null, null, O, A, O, CD, CD, CD, CD, O, A, O],
+    [null, null, O, AS, A, A, A, A, A, AS, O, null],
+    [null, null, null, O, A, AD, AD, AD, AD, A, O, null],
+    [null, null, null, O, AS, J, J, J, J, AS, O, null],
+    [null, null, null, null, O, J, JD, JD, J, O, null, null],
+    [null, null, null, null, null, O, J, J, O, null, null, null],
+    [null, null, null, null, null, O, J, J, O, null, null, null],
+    [null, null, null, null, null, O, O, O, O, null, null, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 6, pivotY: 13, partName: '机甲头' };
+}
+
+function generateMechaTorsoSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const A = '#c8ccd4';
+  const AS = '#9aa3b5';
+  const AD = '#7a8090';
+  const J = '#3a3f4a';
+  const JD = '#2a2e38';
+  const B = '#2a7fff'; // 蓝色点缀（驾驶舱盖）
+  const C = '#22d3ee'; // 腰部发光件
+  const pixels = rowsToPixelGrid([
+    [null, null, null, null, null, O, O, O, O, O, O, null, null, null, null, null],
+    [null, O, A, A, O, O, A, A, A, A, O, O, A, A, O, null],
+    [null, O, AS, A, O, O, A, AS, AS, A, O, O, A, AS, O, null],
+    [null, O, A, AD, O, O, A, B, B, A, O, O, A, AD, O, null],
+    [null, O, AS, A, O, O, J, J, J, J, O, O, A, AS, O, null],
+    [null, O, A, A, O, O, J, JD, JD, J, O, O, A, A, O, null],
+    [null, null, O, A, A, A, AD, AD, A, A, AD, AD, A, A, O, null],
+    [null, null, O, AS, A, A, A, A, A, A, A, A, AS, O, null, null],
+    [null, null, O, A, AD, A, A, A, A, A, A, AD, A, O, null, null],
+    [null, null, O, AS, A, A, A, A, A, A, A, A, AS, O, null, null],
+    [null, null, null, null, O, J, JD, J, J, JD, J, O, null, null, null, null],
+    [null, null, null, null, O, JD, C, J, J, C, JD, O, null, null, null, null],
+    [null, null, null, null, O, J, J, J, J, J, J, O, null, null, null, null],
+    [null, null, null, null, O, O, J, J, J, J, O, O, null, null, null, null],
+    [null, null, null, O, A, A, A, A, A, A, A, A, A, O, null, null],
+    [null, null, null, O, AS, A, AD, A, A, AD, A, AS, O, null, null, null],
+    [null, null, null, O, A, A, A, A, A, A, A, A, A, O, null, null],
+    [null, null, null, null, O, A, A, A, A, A, A, O, null, null, null, null],
+    [null, null, null, null, O, J, O, null, null, O, J, O, null, null, null, null],
+    [null, null, null, null, O, O, O, null, null, O, O, O, null, null, null, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 8, pivotY: 2, partName: '机甲躯干' };
+}
+
+function generateMechaUpperArmSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const A = '#c8ccd4';
+  const AS = '#9aa3b5';
+  const AD = '#7a8090';
+  const J = '#3a3f4a';
+  const JD = '#2a2e38';
+  const B = '#2a7fff';
+  const pixels = rowsToPixelGrid([
+    [null, O, O, O, O, null],
+    [O, A, A, A, A, O],
+    [O, A, AD, A, A, O],
+    [O, AS, A, A, AS, O],
+    [O, A, A, A, A, O],
+    [O, A, AD, AD, A, O],
+    [O, AS, A, A, AS, O],
+    [O, A, A, B, A, O],
+    [null, O, J, J, O, null],
+    [null, O, JD, J, O, null],
+    [null, O, J, JD, O, null],
+    [null, O, J, J, O, null],
+    [null, O, JD, J, O, null],
+    [null, O, O, O, O, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 3, pivotY: 0, partName: '机甲上臂' };
+}
+
+function generateMechaLowerArmSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const A = '#c8ccd4';
+  const AS = '#9aa3b5';
+  const AD = '#7a8090';
+  const J = '#3a3f4a';
+  const B = '#2a7fff';
+  const pixels = rowsToPixelGrid([
+    [O, O, O, O],
+    [O, A, A, O],
+    [O, A, AD, O],
+    [O, AS, A, O],
+    [O, A, A, O],
+    [O, A, B, O],
+    [O, AS, A, O],
+    [O, A, A, O],
+    [O, J, J, O],
+    [O, O, O, O],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 2, pivotY: 0, partName: '机甲前臂' };
+}
+
+function generateMechaUpperLegSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const A = '#c8ccd4';
+  const AS = '#9aa3b5';
+  const AD = '#7a8090';
+  const J = '#3a3f4a';
+  const JD = '#2a2e38';
+  const B = '#2a7fff';
+  const C = '#22d3ee';
+  const pixels = rowsToPixelGrid([
+    [null, O, O, O, O, null],
+    [O, A, A, A, A, O],
+    [O, A, AD, A, A, O],
+    [O, AS, A, A, AS, O],
+    [O, A, A, A, A, O],
+    [O, A, AD, AD, A, O],
+    [O, AS, A, A, AS, O],
+    [O, A, A, B, A, O],
+    [null, O, J, J, O, null],
+    [null, O, JD, C, O, null],
+    [null, O, J, JD, O, null],
+    [null, O, O, O, O, null],
+    [null, O, J, J, O, null],
+    [null, O, O, O, O, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 3, pivotY: 0, partName: '机甲大腿' };
+}
+
+function generateMechaLowerLegSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const A = '#c8ccd4';
+  const AS = '#9aa3b5';
+  const AD = '#7a8090';
+  const J = '#3a3f4a';
+  const B = '#2a7fff';
+  const pixels = rowsToPixelGrid([
+    [null, O, O, O, null],
+    [O, A, A, A, O],
+    [O, A, AD, A, O],
+    [O, AS, A, AS, O],
+    [O, A, A, A, O],
+    [O, A, B, A, O],
+    [O, AS, A, AS, O],
+    [O, A, A, A, O],
+    [null, O, J, O, null],
+    [O, A, A, A, O],
+    [O, AS, A, AS, O],
+    [O, O, O, O, O],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 2, pivotY: 0, partName: '机甲小腿' };
+}
+
+// ---------- 侧面（E 方向，朝右 profile） ----------
+
+function generateMechaSideHeadSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const A = '#c8ccd4';
+  const AS = '#9aa3b5';
+  const AD = '#7a8090';
+  const J = '#3a3f4a';
+  const JD = '#2a2e38';
+  const C = '#22d3ee';
+  const CD = '#0e7490';
+  const Y = '#f5c518';
+  const pixels = rowsToPixelGrid([
+    [null, null, null, null, null, Y, null, null, null, null, null, null],
+    [null, null, null, null, null, Y, null, null, null, null, null, null],
+    [null, null, null, null, O, Y, O, null, null, null, null, null],
+    [null, null, null, O, A, A, A, O, null, null, null, null],
+    [null, null, O, A, A, AS, A, A, O, null, null, null],
+    [null, null, O, AS, A, O, C, C, O, O, null, null],
+    [null, null, O, A, A, A, CD, CD, A, O, O, null],
+    [null, null, O, AS, A, A, A, A, A, A, O, null],
+    [null, null, null, O, A, AD, AD, A, A, O, null, null],
+    [null, null, null, O, AS, J, J, J, AS, O, null, null],
+    [null, null, null, null, O, J, JD, J, O, null, null, null],
+    [null, null, null, null, O, J, J, O, null, null, null, null],
+    [null, null, null, null, O, J, J, O, null, null, null, null],
+    [null, null, null, null, O, O, O, O, null, null, null, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 6, pivotY: 13, partName: '机甲侧面头' };
+}
+
+function generateMechaSideTorsoSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const A = '#c8ccd4';
+  const AS = '#9aa3b5';
+  const AD = '#7a8090';
+  const J = '#3a3f4a';
+  const JD = '#2a2e38';
+  const B = '#2a7fff';
+  const pixels = rowsToPixelGrid([
+    [null, null, null, null, null, null, O, O, O, null, null, null, null, null, null, null],
+    [null, null, null, O, O, O, A, A, A, A, O, null, null, null, null, null],
+    [null, null, O, J, J, O, A, AS, A, A, A, O, null, null, null, null],
+    [null, null, O, J, JD, O, A, B, B, A, A, O, null, null, null, null],
+    [null, null, O, J, J, O, A, A, A, A, A, O, null, null, null, null],
+    [null, null, O, JD, J, O, AD, A, A, AD, A, O, null, null, null, null],
+    [null, null, null, O, O, O, A, AS, AS, A, A, O, null, null, null, null],
+    [null, null, null, null, O, A, A, A, A, A, A, O, null, null, null, null],
+    [null, null, null, null, O, AS, A, A, A, AS, A, O, null, null, null, null],
+    [null, null, null, null, null, O, A, AD, AD, A, A, O, null, null, null, null],
+    [null, null, null, null, null, O, J, JD, J, J, O, null, null, null, null, null],
+    [null, null, null, null, null, O, JD, J, J, JD, O, null, null, null, null, null],
+    [null, null, null, null, null, O, J, J, J, J, O, null, null, null, null, null],
+    [null, null, null, null, null, O, O, J, J, O, O, null, null, null, null, null],
+    [null, null, null, null, O, A, A, A, A, A, A, O, null, null, null, null],
+    [null, null, null, null, O, AS, A, AD, A, AS, A, O, null, null, null, null],
+    [null, null, null, null, O, A, A, A, A, A, A, O, null, null, null, null],
+    [null, null, null, null, null, O, A, A, A, A, O, null, null, null, null, null],
+    [null, null, null, null, null, O, J, J, J, O, null, null, null, null, null, null],
+    [null, null, null, null, null, O, O, O, O, O, null, null, null, null, null, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 8, pivotY: 2, partName: '机甲侧面躯干' };
+}
+
+function generateMechaSideUpperArmSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const A = '#c8ccd4';
+  const AS = '#9aa3b5';
+  const AD = '#7a8090';
+  const J = '#3a3f4a';
+  const JD = '#2a2e38';
+  const B = '#2a7fff';
+  const pixels = rowsToPixelGrid([
+    [null, null, O, O, null, null],
+    [null, O, A, A, O, null],
+    [O, A, A, AS, A, O],
+    [O, A, AD, A, AS, O],
+    [O, AS, A, A, A, O],
+    [O, A, A, AD, A, O],
+    [null, O, A, A, O, null],
+    [null, O, AS, B, O, null],
+    [null, O, J, J, O, null],
+    [null, O, JD, J, O, null],
+    [null, O, J, JD, O, null],
+    [null, O, O, O, O, null],
+    [null, null, O, J, O, null],
+    [null, null, O, O, O, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 3, pivotY: 0, partName: '机甲侧面上臂' };
+}
+
+function generateMechaSideLowerArmSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const A = '#c8ccd4';
+  const AS = '#9aa3b5';
+  const AD = '#7a8090';
+  const J = '#3a3f4a';
+  const B = '#2a7fff';
+  const pixels = rowsToPixelGrid([
+    [O, O, O, O],
+    [O, A, A, O],
+    [O, A, AD, O],
+    [O, AS, A, O],
+    [O, A, A, O],
+    [O, A, B, O],
+    [O, AS, A, O],
+    [O, A, A, O],
+    [O, J, J, O],
+    [O, O, O, O],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 2, pivotY: 0, partName: '机甲侧面前臂' };
+}
+
+function generateMechaSideUpperLegSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const A = '#c8ccd4';
+  const AS = '#9aa3b5';
+  const AD = '#7a8090';
+  const J = '#3a3f4a';
+  const JD = '#2a2e38';
+  const B = '#2a7fff';
+  const C = '#22d3ee';
+  const pixels = rowsToPixelGrid([
+    [null, O, O, O, O, null],
+    [O, A, A, A, A, O],
+    [O, A, AD, A, AS, O],
+    [O, AS, A, A, A, O],
+    [O, A, A, A, AS, O],
+    [O, A, AD, A, A, O],
+    [null, O, A, A, O, null],
+    [null, O, AS, B, O, null],
+    [null, O, J, J, O, null],
+    [null, O, JD, C, O, null],
+    [null, O, J, JD, O, null],
+    [null, O, O, O, O, null],
+    [null, null, O, J, O, null],
+    [null, null, O, O, O, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 3, pivotY: 0, partName: '机甲侧面大腿' };
+}
+
+function generateMechaSideLowerLegSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const A = '#c8ccd4';
+  const AS = '#9aa3b5';
+  const AD = '#7a8090';
+  const J = '#3a3f4a';
+  const B = '#2a7fff';
+  const pixels = rowsToPixelGrid([
+    [null, O, O, O, null],
+    [O, A, A, A, O],
+    [O, A, AD, A, O],
+    [O, AS, A, AS, O],
+    [O, A, A, A, O],
+    [O, A, B, A, O],
+    [null, O, A, O, null],
+    [null, O, J, O, null],
+    [O, A, A, A, O],
+    [O, AS, A, A, O],
+    [O, O, A, A, O],
+    [null, O, O, O, O],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 2, pivotY: 0, partName: '机甲侧面小腿' };
+}
 
 /** Dog body (20×12), pivot at center */
 function generateDogBodySprite(): PixelGrid {
@@ -922,31 +1118,26 @@ function generateKnightSwordSprite(): PixelGrid {
 
 // ---- Template sprite dispatch ----
 
-/** Mecha template: same node names as humanoid, armored variants */
+/** Mecha template dispatcher (redrawn) */
 function generateMechaSprite(name: string): DefaultSpriteResult {
-  if (name === 'head') {
-    const pixels = generateMechaHeadSprite();
-    return { pixels, width: 12, height: 14, pivotX: 5, pivotY: 13, partName: '机甲头' };
-  }
-  if (name === 'torso') {
-    const pixels = generateMechaTorsoSprite();
-    return { pixels, width: 16, height: 20, pivotX: 8, pivotY: 2, partName: '机甲躯干' };
-  }
+  // 新版函数直接返回 DefaultSpriteResult；L/R 只调整 partName
+  if (name === 'head') return generateMechaHeadSprite();
+  if (name === 'torso') return generateMechaTorsoSprite();
   if (name.startsWith('upper_arm')) {
-    const pixels = generateMechaUpperArmSprite();
-    return { pixels, width: 6, height: 14, pivotX: 3, pivotY: 0, partName: name.endsWith('l') ? '机甲左上臂' : '机甲右上臂' };
+    const r = generateMechaUpperArmSprite();
+    return { ...r, partName: name.endsWith('l') ? '机甲左上臂' : '机甲右上臂' };
   }
   if (name.startsWith('lower_arm')) {
-    const pixels = generateMechaLowerArmSprite();
-    return { pixels, width: 4, height: 10, pivotX: 2, pivotY: 0, partName: name.endsWith('l') ? '机甲左前臂' : '机甲右前臂' };
+    const r = generateMechaLowerArmSprite();
+    return { ...r, partName: name.endsWith('l') ? '机甲左前臂' : '机甲右前臂' };
   }
   if (name.startsWith('upper_leg')) {
-    const pixels = generateMechaUpperLegSprite();
-    return { pixels, width: 6, height: 14, pivotX: 3, pivotY: 0, partName: name.endsWith('l') ? '机甲左大腿' : '机甲右大腿' };
+    const r = generateMechaUpperLegSprite();
+    return { ...r, partName: name.endsWith('l') ? '机甲左大腿' : '机甲右大腿' };
   }
   if (name.startsWith('lower_leg')) {
-    const pixels = generateMechaLowerLegSprite();
-    return { pixels, width: 5, height: 12, pivotX: 2, pivotY: 0, partName: name.endsWith('l') ? '机甲左小腿' : '机甲右小腿' };
+    const r = generateMechaLowerLegSprite();
+    return { ...r, partName: name.endsWith('l') ? '机甲左小腿' : '机甲右小腿' };
   }
   const pixels = generateGenericSprite('#9aa3b5', 8, 8);
   return { pixels, width: 8, height: 8, pivotX: 4, pivotY: 4, partName: name };
@@ -969,6 +1160,23 @@ function generateDogSprite(name: string): DefaultSpriteResult {
   if (name === 'tail') {
     const pixels = generateDogTailSprite();
     return { pixels, width: 4, height: 8, pivotX: 2, pivotY: 0, partName: '狗尾巴' };
+  }
+  // 两段式腿：front_upper_leg_L / front_lower_leg_L / back_upper_leg_R ……
+  if (name.includes('front_upper_leg')) {
+    const r = generateDogFrontUpperLegSprite();
+    return { ...r, partName: name.endsWith('l') ? '狗左前大腿' : '狗右前大腿' };
+  }
+  if (name.includes('front_lower_leg')) {
+    const r = generateDogFrontLowerLegSprite();
+    return { ...r, partName: name.endsWith('l') ? '狗左前小腿' : '狗右前小腿' };
+  }
+  if (name.includes('back_upper_leg')) {
+    const r = generateDogBackUpperLegSprite();
+    return { ...r, partName: name.endsWith('l') ? '狗左后大腿' : '狗右后大腿' };
+  }
+  if (name.includes('back_lower_leg')) {
+    const r = generateDogBackLowerLegSprite();
+    return { ...r, partName: name.endsWith('l') ? '狗左后小腿' : '狗右后小腿' };
   }
   if (name.includes('leg')) {
     const pixels = generateDogLegSprite();
@@ -1181,4 +1389,658 @@ function generateAllDefaultSprites(
     result.set(nodeNames[i], generateDefaultCostumeSprite(nodeNames[i], templateName, color));
   }
   return result;
+}
+
+
+/** Dog two-segment legs */
+// 小狗两段式四肢精灵（正面版）
+// 依赖：PALETTE / rowsToPixelGrid / DefaultSpriteResult / PixelGrid（见 default-costume-sprites.ts）
+// 配色沿用小狗模板：皮毛 #c68b4e / 浅 #e0aa6e / 深 #9a6a38，奶油 #f0d5a8，轮廓 #1a1a2e
+// 铁律：闭合轮廓（向导会程序化 carve 关节开口），pivot 在顶部关节。
+
+const DOGC = {
+  F: '#c68b4e',  // fur
+  FL: '#e0aa6e', // fur light
+  FD: '#9a6a38', // fur dark
+  C: '#f0d5a8',  // cream（爪子）
+  NOSE: '#2a1a12',
+};
+
+/** 狗前大腿 (4×8)，pivot 在顶部髋关节，上粗下细 */
+function generateDogFrontUpperLegSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const { F, FL, FD } = DOGC;
+  const n = null;
+  const pixels = rowsToPixelGrid([
+    [n, O,  O,  n ],  // 4
+    [O, FL, F,  O ],  // 4
+    [O, F,  FD, O ],  // 4
+    [O, FD, F,  O ],  // 4
+    [O, F,  FD, O ],  // 4
+    [n, O,  F,  O ],  // 4
+    [n, O,  FD, O ],  // 4
+    [n, O,  O,  n ],  // 4
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 2, pivotY: 0, partName: '狗前大腿' };
+}
+
+/** 狗前小腿+爪子 (3×8)，pivot 在顶部膝关节，爪子奶油色 */
+function generateDogFrontLowerLegSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const { F, FD, C } = DOGC;
+  const n = null;
+  const pixels = rowsToPixelGrid([
+    [n, O,  n ],  // 3
+    [O, F,  O ],  // 3
+    [O, FD, O ],  // 3
+    [O, F,  O ],  // 3
+    [O, FD, O ],  // 3
+    [O, C,  O ],  // 3
+    [O, C,  O ],  // 3
+    [n, O,  n ],  // 3
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 1, pivotY: 0, partName: '狗前小腿' };
+}
+
+/** 狗后大腿 (5×8)，pivot 在顶部髋关节；比前腿粗，外侧保留腓肠肌弧度 */
+function generateDogBackUpperLegSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const { F, FL, FD } = DOGC;
+  const n = null;
+  const pixels = rowsToPixelGrid([
+    [n, O,  O,  O,  n ],  // 5
+    [O, FL, F,  F,  O ],  // 5
+    [O, F,  FD, FD, O ],  // 5
+    [O, FD, F,  F,  O ],  // 5
+    [O, F,  FD, FD, O ],  // 5
+    [n, O,  F,  F,  O ],  // 5，左侧收细、右侧保持肌肉弧度
+    [n, O,  FD, FD, O ],  // 5
+    [n, O,  O,  O,  n ],  // 5，底部圆角收口
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 2, pivotY: 0, partName: '狗后大腿' };
+}
+
+/** 狗后小腿+爪子 (3×8)，pivot 在顶部膝关节，爪子奶油色 */
+function generateDogBackLowerLegSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const { F, FD, C } = DOGC;
+  const n = null;
+  const pixels = rowsToPixelGrid([
+    [n, O,  n ],  // 3
+    [O, F,  O ],  // 3
+    [O, FD, O ],  // 3
+    [O, F,  O ],  // 3
+    [O, FD, O ],  // 3
+    [O, C,  O ],  // 3
+    [O, C,  O ],  // 3
+    [n, O,  n ],  // 3
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 1, pivotY: 0, partName: '狗后小腿' };
+}
+
+/** Humanoid/Simple side views (E) */
+// ============================================================
+// PixelMorpher - 人形 / 简单模板侧面（E 方向，朝右 profile）精灵
+// 依赖（集成时由 default-costume-sprites.ts 提供）：
+//   PALETTE, rowsToPixelGrid, DefaultSpriteResult, PixelGrid
+// 铁律：每行列数一致、闭合轮廓（向导会程序化 carve 关节开口）、
+// pivot 与正面版一致（头=颈部，躯干=(8,2)，四肢=顶部关节）。
+// L/R 共用一套。
+// ============================================================
+
+/** 侧面头（12×14）：侧脸 profile，一只眼、鼻子朝右，pivot 在颈部 (6,13) */
+function generateHumanoidSideHeadSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const S = PALETTE.skinMid;
+  const SL = PALETTE.skinLight;
+  const H = PALETTE.hairPrimary;
+  const HS = PALETTE.hairShadow;
+  const HH = PALETTE.hairHighlight;
+  const E = '#1a1a2e'; // eye
+  const EW = '#ffffff'; // eye white
+
+  const pixels = rowsToPixelGrid([
+    // Row 0: hair top
+    [null, null, null, O,  O,  O,  O,  O,  O,  null, null, null],
+    // Row 1: hair
+    [null, null, O,  H,  H,  HH, HH, H,  H,  O,  null, null],
+    // Row 2: hair back
+    [null, O,  H,  H,  HS, H,  H,  H,  H,  O,  null, null],
+    // Row 3: forehead
+    [null, O,  H,  HS, S,  S,  S,  S,  S,  O,  null, null],
+    // Row 4: brow
+    [null, O,  HS, S,  SL, S,  S,  S,  S,  O,  null, null],
+    // Row 5: eye (single, side profile)
+    [null, O,  HS, S,  EW, E,  S,  S,  S,  O,  null, null],
+    // Row 6: nose bridge -> tip
+    [null, O,  HS, S,  S,  S,  S,  S,  S,  O,  O,  null],
+    // Row 7: nose (protrudes right)
+    [null, O,  HS, SL, S,  S,  S,  S,  S,  S,  O,  null],
+    // Row 8: under nose / upper lip
+    [null, null, O,  S,  SL, S,  S,  S,  O,  O,  null, null],
+    // Row 9: mouth
+    [null, null, O,  S,  S,  O,  O,  S,  O,  null, null, null],
+    // Row 10: chin
+    [null, null, null, O,  S,  S,  S,  O,  null, null, null, null],
+    // Row 11: chin bottom
+    [null, null, null, null, O,  SL, O,  null, null, null, null, null],
+    // Row 12: neck start
+    [null, null, null, null, O,  S,  O,  null, null, null, null, null],
+    // Row 13: neck (pivot)
+    [null, null, null, null, O,  S,  O,  null, null, null, null, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 6, pivotY: 13, partName: '侧面头' };
+}
+
+/** 侧面躯干（16×20）：侧面轮廓，胸部朝右微凸，pivot 在颈部 (8,2) */
+function generateHumanoidSideTorsoSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const T = PALETTE.shirtPrimary;
+  const TS = PALETTE.shirtShadow;
+  const TH = PALETTE.shirtHighlight;
+  const S = PALETTE.skinMid;
+  const BL = '#8b7355'; // belt leather
+  const BD = '#6b5540'; // belt shadow
+
+  const pixels = rowsToPixelGrid([
+    // Row 0: neck opening
+    [null, null, null, null, null, O,  O,  O,  O,  O,  O,  null, null, null, null, null],
+    // Row 1: shoulders top
+    [null, null, null, null, O,  S,  TH, TH, TH, TH, S,  O,  null, null, null, null],
+    // Row 2: shoulders
+    [null, null, null, O,  S,  TH, TH, TH, TH, TH, TH, S,  O,  null, null, null],
+    // Row 3: upper chest
+    [null, null, O,  TH, TH, TH, TH, TS, TH, TH, TH, O,  null, null, null, null],
+    // Row 4: chest (protrudes right)
+    [null, null, O,  TH, T,  T,  TS, T,  T,  TH, T,  T,  O,  null, null, null],
+    // Row 5: chest mid
+    [null, O,  TH, T,  TS, T,  T,  T,  T,  TH, T,  T,  O,  null, null, null],
+    // Row 6: chest detail
+    [null, O,  T,  TS, T,  T,  TH, T,  T,  TS, T,  O,  null, null, null, null],
+    // Row 7: mid torso
+    [null, O,  T,  T,  T,  TH, TH, T,  T,  T,  T,  O,  null, null, null, null],
+    // Row 8: mid torso detail
+    [null, O,  T,  TH, T,  T,  T,  TH, T,  T,  T,  O,  null, null, null, null],
+    // Row 9: waist
+    [null, null, O,  T,  T,  T,  TH, T,  T,  T,  T,  O,  null, null, null, null],
+    // Row 10: waist detail
+    [null, null, O,  T,  TS, T,  T,  T,  T,  TS, T,  O,  null, null, null, null],
+    // Row 11: belt area
+    [null, null, O,  TS, TS, TS, TS, TS, TS, TS, TS, O,  null, null, null, null],
+    // Row 12: belt
+    [null, null, O,  BL, BL, BL, BL, BL, BL, BL, BL, O,  null, null, null, null],
+    // Row 13: belt bottom
+    [null, null, O,  BD, BD, BD, BD, BD, BD, BD, BD, O,  null, null, null, null],
+    // Row 14: lower torso
+    [null, null, O,  T,  T,  T,  T,  T,  T,  T,  T,  O,  null, null, null, null],
+    // Row 15: hip
+    [null, null, O,  TS, T,  T,  T,  T,  T,  TS, T,  O,  null, null, null, null],
+    // Row 16: hip detail
+    [null, null, null, O,  T,  T,  T,  T,  T,  T,  O,  null, null, null, null, null],
+    // Row 17: lower hip
+    [null, null, null, O,  TS, T,  T,  T,  TS, T,  O,  null, null, null, null, null],
+    // Row 18: bottom edge
+    [null, null, null, null, O,  O,  O,  O,  O,  O,  O,  null, null, null, null, null],
+    // Row 19: bottom
+    [null, null, null, null, null, O,  O,  O,  O,  O,  null, null, null, null, null, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 8, pivotY: 2, partName: '侧面躯干' };
+}
+
+/** 侧面上臂（6×14）：pivot 在肩部关节 (3,0) */
+function generateHumanoidSideUpperArmSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const T = PALETTE.shirtPrimary;
+  const TS = PALETTE.shirtShadow;
+  const TH = PALETTE.shirtHighlight;
+  const S = PALETTE.skinMid;
+  const SL = PALETTE.skinLight;
+
+  const pixels = rowsToPixelGrid([
+    // Row 0: shoulder cap
+    [null, O,  O,  O,  O,  null],
+    // Row 1: top
+    [O,  TH, TH, TH, TH, O],
+    // Row 2: upper arm
+    [O,  TH, T,  T,  TS, O],
+    // Row 3: upper arm
+    [O,  T,  T,  TS, TS, O],
+    // Row 4: mid arm
+    [O,  T,  TS, TS, T,  O],
+    // Row 5: mid arm
+    [O,  T,  TS, T,  T,  O],
+    // Row 6: lower sleeve
+    [O,  TH, T,  T,  TS, O],
+    // Row 7: sleeve end
+    [O,  TH, TH, TH, TS, O],
+    // Row 8: sleeve cuff
+    [O,  O,  O,  O,  O,  O],
+    // Row 9: forearm skin
+    [null, O,  SL, S,  O,  null],
+    // Row 10: forearm
+    [null, O,  S,  SL, O,  null],
+    // Row 11: forearm
+    [null, O,  SL, S,  O,  null],
+    // Row 12: elbow
+    [null, O,  S,  O,  null, null],
+    // Row 13: elbow joint
+    [null, null, O,  null, null, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 3, pivotY: 0, partName: '侧面上臂' };
+}
+
+/** 侧面前臂（4×10）：pivot 在肘部关节 (2,0) */
+function generateHumanoidSideLowerArmSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const S = PALETTE.skinMid;
+  const SL = PALETTE.skinLight;
+  const SD = PALETTE.skinDark;
+
+  const pixels = rowsToPixelGrid([
+    // Row 0: elbow joint
+    [null, O,  O,  null],
+    // Row 1: upper forearm
+    [O,  SL, S,  O],
+    // Row 2: forearm
+    [O,  S,  SL, O],
+    // Row 3: forearm mid
+    [O,  SL, S,  O],
+    // Row 4: wrist
+    [O,  S,  SD, O],
+    // Row 5: wrist narrow
+    [null, O,  O,  null],
+    // Row 6: hand top
+    [O,  SL, SL, O],
+    // Row 7: hand
+    [O,  S,  SL, O],
+    // Row 8: fingers
+    [O,  SD, SD, O],
+    // Row 9: finger tips
+    [null, O,  O,  null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 2, pivotY: 0, partName: '侧面前臂' };
+}
+
+/** 侧面大腿（6×14）：pivot 在髋部关节 (3,0) */
+function generateHumanoidSideUpperLegSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const P = PALETTE.pantsPrimary;
+  const PS = PALETTE.pantsShadow;
+  const PH = PALETTE.pantsHighlight;
+
+  const pixels = rowsToPixelGrid([
+    // Row 0: hip joint
+    [null, null, O,  O,  null, null],
+    // Row 1: top of thigh
+    [null, O,  PH, PH, O,  null],
+    // Row 2: upper thigh
+    [O,  PH, P,  P,  PS, O],
+    // Row 3: upper thigh
+    [O,  P,  P,  PS, PS, O],
+    // Row 4: mid thigh
+    [O,  PH, P,  PS, P,  O],
+    // Row 5: mid thigh
+    [O,  P,  PS, P,  PH, O],
+    // Row 6: lower thigh
+    [O,  PH, P,  P,  PS, O],
+    // Row 7: knee area
+    [O,  P,  P,  PS, P,  O],
+    // Row 8: knee
+    [O,  PH, PH, P,  PS, O],
+    // Row 9: knee detail
+    [O,  PH, P,  PS, P,  O],
+    // Row 10: below knee
+    [null, O,  P,  PS, O,  null],
+    // Row 11: knee joint
+    [null, O,  PS, O,  null, null],
+    // Row 12: knee bottom
+    [null, null, O,  null, null, null],
+    // Row 13: joint
+    [null, null, O,  null, null, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 3, pivotY: 0, partName: '侧面大腿' };
+}
+
+/** 侧面小腿（5×12）：鞋尖朝右，pivot 在膝部关节 (2,0) */
+function generateHumanoidSideLowerLegSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const P = PALETTE.pantsPrimary;
+  const PS = PALETTE.pantsShadow;
+  const SH = PALETTE.shoePrimary;
+  const SS = PALETTE.shoeShadow;
+
+  const pixels = rowsToPixelGrid([
+    // Row 0: knee joint
+    [null, O,  O,  O,  null],
+    // Row 1: shin top
+    [O,  P,  PS, P,  O],
+    // Row 2: shin
+    [O,  PS, P,  PS, O],
+    // Row 3: shin mid
+    [O,  P,  PS, P,  O],
+    // Row 4: ankle area
+    [O,  PS, P,  P,  O],
+    // Row 5: ankle
+    [null, O,  P,  O,  null],
+    // Row 6: shoe top
+    [null, O,  SH, O,  null],
+    // Row 7: shoe upper
+    [O,  SH, SH, SS, O],
+    // Row 8: shoe mid
+    [O,  SH, SS, SH, O],
+    // Row 9: shoe sole
+    [O,  SS, SH, SS, O],
+    // Row 10: shoe bottom
+    [O,  O,  O,  O,  O],
+    // Row 11: toe pointing right
+    [null, O,  O,  O,  O],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 2, pivotY: 0, partName: '侧面小腿' };
+}
+
+/** 简单头侧面（11×10）：紫色 blob 的侧脸，一只眼、鼻子朝右，pivot 在颈部 (5,9) */
+function generateSimpleSideHeadSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const B = '#6a5acd';
+  const BS = '#4a3aaa';
+  const BH = '#8a7aee';
+  const E = '#1a1a2e';
+  const EW = '#ffffff';
+
+  const pixels = rowsToPixelGrid([
+    [null, null, O,  O,  O,  O,  O,  O,  null, null, null],
+    [null, O,  BH, BH, BH, BH, BH, BH, O,  null, null],
+    [null, O,  BH, B,  BS, B,  BH, BH, O,  null, null],
+    [O,  BH, B,  EW, E,  B,  BS, B,  BH, O,  null],
+    [O,  B,  BS, B,  B,  BS, B,  B,  O,  O,  null],
+    [O,  BH, B,  BS, B,  B,  BH, B,  B,  O,  null],
+    [null, O,  BH, B,  B,  B,  BH, B,  O,  null, null],
+    [null, O,  B,  BS, BS, BS, BS, B,  O,  null, null],
+    [null, null, O,  B,  B,  B,  B,  O,  null, null, null],
+    [null, null, null, O,  O,  O,  O,  null, null, null, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 5, pivotY: 9, partName: '简单侧面头' };
+}
+
+/** 简单身体侧面（13×14）：紫色 blob 侧面，pivot 在颈部 (6,2) */
+function generateSimpleSideBodySprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const B = '#6a5acd';
+  const BS = '#4a3aaa';
+  const BH = '#8a7aee';
+
+  const pixels = rowsToPixelGrid([
+    [null, null, null, null, O,  O,  O,  O,  null, null, null, null, null],
+    [null, null, null, O,  BH, BH, BH, BH, O,  null, null, null, null],
+    [null, null, O,  BH, B,  BS, BS, B,  BH, O,  null, null, null],
+    [null, O,  BH, B,  BS, B,  B,  BS, B,  BH, O,  null, null],
+    [null, O,  B,  BS, B,  BH, BH, B,  BS, B,  B,  O,  null],
+    [null, O,  BH, B,  B,  B,  B,  B,  B,  B,  BH, O,  null],
+    [O,  BH, B,  BS, B,  B,  BH, BH, B,  BS, B,  BH, O],
+    [O,  B,  B,  B,  BH, BH, B,  B,  BH, B,  B,  B,  O],
+    [O,  BH, BS, B,  B,  B,  BS, BS, B,  B,  BS, BH, O],
+    [O,  B,  B,  B,  BS, B,  B,  B,  BS, B,  B,  B,  O],
+    [null, O,  BH, B,  B,  B,  B,  B,  B,  BH, B,  O,  null],
+    [null, O,  B,  BS, BS, B,  B,  BS, BS, B,  B,  O,  null],
+    [null, null, O,  B,  B,  BS, BS, B,  B,  B,  O,  null, null],
+    [null, null, null, O,  O,  O,  O,  O,  O,  O,  null, null, null],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 6, pivotY: 2, partName: '简单侧面身体' };
+}
+
+/** Knight side views (E) */
+// 骑士模板侧面（E 方向，朝右 profile）精灵
+// 配色与正面版统一：钢甲 #b8c0cc / 钢影 #7d8590 / 金 #e8b64c / 红缨 #e63946 / 蓝罩袍 #3b4a6b / 绛红披风 #8b1e2d
+// 铁律：每行列数一致、闭合轮廓（向导程序化 carve 关节开口）、pivot 与正面版一致
+
+
+
+
+
+
+
+
+
+/** 骑士头盔侧面 (12x14)：红缨朝后（左）、单眼 visor 缝、鼻部朝右，pivot 在颈部 */
+function generateKnightSideHeadSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const { ST, STS, STD, G, PL, PLD } = KNIGHT;
+  const n = null;
+  const pixels = rowsToPixelGrid([
+    [n, n, n, n, n, n, n, n, n, n, n, n],
+    [n, PL, PL, PL, n, n, n, n, n, n, n, n],
+    [n, PLD, PLD, O, O, O, O, O, n, n, n, n],
+    [n, PLD, O, ST, ST, ST, ST, ST, O, n, n, n],
+    [n, n, O, ST, STS, ST, ST, ST, ST, O, n, n],
+    [n, n, O, STS, ST, ST, ST, ST, ST, ST, O, n],
+    [n, n, O, ST, ST, G, G, ST, ST, ST, ST, O],
+    [n, n, O, STD, STD, STD, STD, STD, STD, STD, STD, O],
+    [n, n, O, ST, STS, ST, ST, ST, ST, ST, ST, O],
+    [n, n, O, STS, ST, ST, ST, ST, ST, ST, ST, O],
+    [n, n, n, O, ST, STS, STS, ST, ST, ST, O, n],
+    [n, n, n, O, STS, ST, ST, ST, ST, O, n, n],
+    [n, n, n, n, O, STS, STS, ST, O, n, n, n],
+    [n, n, n, n, n, O, O, O, n, n, n, n],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 5, pivotY: 13, partName: '侧面头盔' };
+}
+
+/** 骑士胸甲侧面 (16x20)：胸前罩袍竖条（十字竖臂）+ 金腰带，pivot 在颈部顶部 */
+function generateKnightSideTorsoSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const { ST, STS, G, GD, TU } = KNIGHT;
+  const n = null;
+  const pixels = rowsToPixelGrid([
+    [n, n, n, n, n, n, O, O, O, O, n, n, n, n, n, n],
+    [n, n, n, n, n, O, ST, ST, ST, ST, O, n, n, n, n, n],
+    [n, n, n, n, O, ST, ST, ST, ST, ST, ST, O, n, n, n, n],
+    [n, n, n, O, ST, ST, ST, ST, ST, ST, ST, ST, O, n, n, n],
+    [n, n, n, O, STS, ST, ST, ST, ST, ST, G, TU, ST, O, n, n],
+    [n, n, O, ST, STS, ST, ST, ST, ST, TU, G, TU, ST, O, n, n],
+    [n, n, O, ST, ST, ST, ST, ST, TU, G, TU, ST, ST, O, n, n],
+    [n, n, O, STS, ST, ST, ST, TU, G, TU, TU, ST, ST, O, n, n],
+    [n, n, O, ST, ST, ST, ST, TU, G, TU, TU, ST, ST, O, n, n],
+    [n, n, n, O, ST, ST, ST, TU, TU, TU, ST, ST, ST, O, n, n],
+    [n, n, n, O, STS, ST, TU, TU, TU, TU, ST, ST, ST, O, n, n],
+    [n, n, n, O, GD, GD, GD, GD, GD, GD, GD, GD, GD, O, n, n],
+    [n, n, n, O, ST, ST, TU, TU, TU, TU, ST, ST, ST, O, n, n],
+    [n, n, n, O, STS, ST, TU, TU, TU, TU, ST, ST, O, n, n, n],
+    [n, n, n, O, ST, STS, TU, TU, TU, TU, STS, ST, O, n, n, n],
+    [n, n, n, O, STS, ST, TU, TU, TU, TU, ST, O, n, n, n, n],
+    [n, n, n, n, O, ST, ST, TU, TU, ST, ST, O, n, n, n, n],
+    [n, n, n, n, O, STS, STS, TU, TU, STS, O, n, n, n, n, n],
+    [n, n, n, n, n, O, O, O, O, O, O, O, n, n, n, n],
+    [n, n, n, n, n, n, O, O, O, O, O, O, n, n, n, n],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 8, pivotY: 2, partName: '侧面胸甲' };
+}
+
+/** 骑士侧面上臂甲 (6x14)：肩甲 + 背侧（左）加重阴影，pivot 在肩部 */
+function generateKnightSideUpperArmSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const { ST, STS, G } = KNIGHT;
+  const n = null;
+  const pixels = rowsToPixelGrid([
+    [n, O, O, O, O, n],
+    [O, G, G, G, G, O],
+    [O, STS, ST, ST, ST, O],
+    [O, STS, STS, ST, ST, O],
+    [O, STS, ST, STS, ST, O],
+    [O, STS, STS, ST, STS, O],
+    [O, STS, ST, ST, ST, O],
+    [O, O, O, O, O, O],
+    [n, O, STS, ST, O, n],
+    [n, O, STS, STS, O, n],
+    [n, O, STS, ST, O, n],
+    [n, O, STS, O, n, n],
+    [n, O, STS, O, n, n],
+    [n, n, O, n, n, n],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 3, pivotY: 0, partName: '侧面上臂甲' };
+}
+
+/** 骑士侧面臂铠 (4x10)：拳甲 profile，pivot 在肘部 */
+function generateKnightSideLowerArmSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const { ST, STS } = KNIGHT;
+  const n = null;
+  const pixels = rowsToPixelGrid([
+    [n, O, O, n],
+    [O, STS, ST, O],
+    [O, STS, STS, O],
+    [O, STS, ST, O],
+    [O, STS, STS, O],
+    [n, O, STS, O],
+    [O, STS, ST, O],
+    [O, STS, O, O],
+    [O, STS, O, n],
+    [n, O, O, n],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 2, pivotY: 0, partName: '侧面臂铠' };
+}
+
+/** 骑士侧面大腿甲 (6x14)：腿甲 + 束腰布，pivot 在髋部 */
+function generateKnightSideUpperLegSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const { ST, STS, TU, TUD } = KNIGHT;
+  const n = null;
+  const pixels = rowsToPixelGrid([
+    [n, n, O, O, n, n],
+    [n, O, TU, TU, O, n],
+    [O, TU, TU, TUD, TU, O],
+    [O, STS, ST, ST, ST, O],
+    [O, STS, STS, ST, ST, O],
+    [O, STS, ST, STS, ST, O],
+    [O, STS, STS, ST, STS, O],
+    [O, STS, ST, ST, ST, O],
+    [O, STS, STS, ST, STS, O],
+    [O, O, O, O, O, O],
+    [n, O, STS, STS, O, n],
+    [n, O, STS, O, n, n],
+    [n, n, O, n, n, n],
+    [n, n, O, n, n, n],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 3, pivotY: 0, partName: '侧面大腿甲' };
+}
+
+/** 骑士侧面胫甲 (5x12)：胫甲 + 朝右的足甲，pivot 在膝部 */
+function generateKnightSideLowerLegSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const { ST, STS } = KNIGHT;
+  const n = null;
+  const pixels = rowsToPixelGrid([
+    [n, O, O, O, n],
+    [O, STS, ST, ST, O],
+    [O, STS, STS, ST, O],
+    [O, STS, ST, STS, O],
+    [O, STS, STS, ST, O],
+    [n, O, STS, O, n],
+    [n, O, STS, O, n],
+    [O, STS, ST, STS, O],
+    [O, STS, STS, ST, O],
+    [O, ST, ST, ST, O],
+    [n, O, O, O, O],
+    [n, n, O, O, O],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 2, pivotY: 0, partName: '侧面胫甲' };
+}
+
+/** 骑士披风侧面 (10x18)：颈扣系于顶部、向后（左）飘，pivot 在颈扣 */
+function generateKnightSideCapeSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const { CA, CAD, CAL } = KNIGHT;
+  const n = null;
+  const pixels = rowsToPixelGrid([
+    [n, n, n, n, O, O, n, n, n, n],
+    [n, n, n, O, CA, CA, O, n, n, n],
+    [n, n, O, CA, CA, CA, O, n, n, n],
+    [n, O, CA, CAL, CA, CAD, O, n, n, n],
+    [n, O, CAL, CA, CAD, CA, O, n, n, n],
+    [O, CA, CAL, CAD, CA, CAL, O, n, n, n],
+    [O, CAL, CA, CAD, CAL, CA, O, n, n, n],
+    [O, CA, CAD, CAL, CAD, CAL, O, n, n, n],
+    [O, CAL, CAD, CA, CAD, CAL, O, n, n, n],
+    [O, CA, CAD, CAL, CAD, CAL, O, n, n, n],
+    [O, CAD, CAL, CA, CAL, CAD, O, n, n, n],
+    [O, CA, CAD, CAL, CAD, CAL, O, n, n, n],
+    [O, CAD, CAL, CA, CAL, CAD, O, n, n, n],
+    [O, CA, CAD, CAL, CAD, CAL, O, n, n, n],
+    [n, O, CAD, CAL, CA, CAD, O, n, n, n],
+    [n, O, CA, CAD, CAL, CAD, O, n, n, n],
+    [n, n, O, CAD, CAD, CAD, O, n, n, n],
+    [n, n, n, O, O, O, O, n, n, n],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 5, pivotY: 0, partName: '侧面披风' };
+}
+
+/** 骑士长剑侧面 (4x14)：剑身 profile，pivot 在剑柄 */
+function generateKnightSideSwordSprite(): DefaultSpriteResult {
+  const O = PALETTE.outline;
+  const { ST, STS, G, GD, LE } = KNIGHT;
+  const n = null;
+  const pixels = rowsToPixelGrid([
+    [n, n, O, n],
+    [n, O, ST, O],
+    [n, O, ST, O],
+    [n, O, STS, O],
+    [n, O, ST, O],
+    [n, O, STS, O],
+    [n, O, ST, O],
+    [n, O, STS, O],
+    [n, O, ST, O],
+    [O, G, G, O],
+    [n, O, LE, O],
+    [n, O, LE, O],
+    [n, O, GD, O],
+    [n, n, O, n],
+  ]);
+  return { pixels, width: pixels[0].length, height: pixels.length, pivotX: 2, pivotY: 11, partName: '侧面长剑' };
+}
+
+/**
+ * 侧面版（E 方向）默认精灵分发。W 方向由 DIRECTION_MIRROR 自动镜像 E。
+ * 尚无侧面设计的节点返回 null（调用方回退到正面）。
+ */
+export function generateDefaultCostumeSideSprite(
+  nodeName: string,
+  templateName: string,
+  nodeColor: string = '#888888',
+): DefaultSpriteResult | null {
+  const name = nodeName.toLowerCase();
+  if (templateName === 'mecha') {
+    if (name === 'head') return generateMechaSideHeadSprite();
+    if (name === 'torso') return generateMechaSideTorsoSprite();
+    if (name.startsWith('upper_arm')) return generateMechaSideUpperArmSprite();
+    if (name.startsWith('lower_arm')) return generateMechaSideLowerArmSprite();
+    if (name.startsWith('upper_leg')) return generateMechaSideUpperLegSprite();
+    if (name.startsWith('lower_leg')) return generateMechaSideLowerLegSprite();
+    return null;
+  }
+  if (templateName === 'knight') {
+    if (name === 'head') return generateKnightSideHeadSprite();
+    if (name === 'torso') return generateKnightSideTorsoSprite();
+    if (name.startsWith('upper_arm')) return generateKnightSideUpperArmSprite();
+    if (name.startsWith('lower_arm')) return generateKnightSideLowerArmSprite();
+    if (name.startsWith('upper_leg')) return generateKnightSideUpperLegSprite();
+    if (name.startsWith('lower_leg')) return generateKnightSideLowerLegSprite();
+    if (name === 'cape') return generateKnightSideCapeSprite();
+    if (name === 'sword') return generateKnightSideSwordSprite();
+    return null;
+  }
+  if (templateName === 'humanoid') {
+    if (name === 'head') return generateHumanoidSideHeadSprite();
+    if (name === 'torso') return generateHumanoidSideTorsoSprite();
+    if (name.startsWith('upper_arm')) return generateHumanoidSideUpperArmSprite();
+    if (name.startsWith('lower_arm')) return generateHumanoidSideLowerArmSprite();
+    if (name.startsWith('upper_leg')) return generateHumanoidSideUpperLegSprite();
+    if (name.startsWith('lower_leg')) return generateHumanoidSideLowerLegSprite();
+    return null;
+  }
+  if (templateName === 'simple') {
+    if (name === 'head') return generateSimpleSideHeadSprite();
+    if (name === 'body') return generateSimpleSideBodySprite();
+    return null;
+  }
+  void nodeColor;
+  return null;
 }

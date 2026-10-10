@@ -177,6 +177,11 @@ export interface Attachment {
    * 由 LiveAdapter 从 PuppetPlug.discColor 透传。
    */
   discColor?: string | null;
+  /**
+   * 关节开口宽度（= 关节盘直径）。由 LiveAdapter 从 PuppetPlug.jointWidth 透传；
+   * 为空时按 plug 位置回退估算。
+   */
+  jointWidth?: number | null;
 }
 
 // ---- Transform ----

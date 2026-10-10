@@ -25,7 +25,7 @@ import {
 } from './unified-types';
 import { renderPixelPerfectRotation } from './engine/puppet-render';
 import { releaseCanvas } from './engine/canvas-pool';
-import { sampleJointDiscColor } from './engine/render-helpers/puppet-joint-color';
+import { sampleJointDiscColor, getPlugJointWidth } from './engine/render-helpers/puppet-joint-color';
 import {
   getDiscCacheKey, getCachedDisc, setCachedDisc,
   clearRenderCaches,
@@ -558,8 +558,10 @@ function resolveSprite(
  * Step 4 (partial): Generate disc render instructions for nodes
  * with `generated` configuration.
  *
- * Disc diameter is computed the same way as the old pipeline:
- *   diameter = (parent.crossSectionBottom + child.crossSectionTop) / 2
+ * Disc diameter = the joint opening width (plug-side), via getPlugJointWidth:
+ *   plug.jointWidth (written at creation) > plug position → crossSectionTop/Bottom > 4.
+ * No longer averaged with parent bottom (that made discs a ring too big at
+ * non-bottom sockets like shoulders).
  *
  * The disc is positioned at the socket world position (the connection
  * point between parent and child), NOT at the child node's world position.
@@ -580,22 +582,35 @@ function generateDiscInstructions(
     // Find parent node to get its crossSectionBottom
     const parentNode = node.parentId ? character.nodes[node.parentId] : undefined;
 
-    // Child's crossSectionTop (stored as id='plug' crossSection in costumePiece)
-    const childPiece = node.costumePiece;
-    const childCrossSection = childPiece?.crossSections.find(
-      cs => cs.id === node.generated!.crossSectionId
-    );
-    const childDiameter = childCrossSection?.diameter ?? 0;
-
-    // Parent's crossSectionBottom (stored as id='bottom' crossSection in costumePiece)
-    const parentPiece = parentNode?.costumePiece;
-    const parentCrossSection = parentPiece?.crossSections.find(
-      cs => cs.id === 'bottom'
-    );
-    const parentDiameter = parentCrossSection?.diameter ?? 0;
-
-    // Diameter = average of parent bottom + child top (matches old pipeline logic)
-    const diameter = Math.max(1, (parentDiameter + childDiameter) / 2);
+    // 关节盘直径 = plug 侧开口宽度（与 carve 同源，不再与 parent bottom 求平均）。
+    // 优先用 attachment.jointWidth（创建时写入），否则按 plug 位置回退估算。
+    const storedJointWidth = node.attachment?.jointWidth;
+    let diameter: number;
+    if (typeof storedJointWidth === 'number' && storedJointWidth > 0) {
+      diameter = storedJointWidth;
+    } else {
+      const childPiece = node.costumePiece;
+      const plugCS = childPiece?.crossSections.find(cs => cs.id === node.generated!.crossSectionId);
+      const bottomCS = childPiece?.crossSections.find(cs => cs.id === 'bottom');
+      diameter = getPlugJointWidth(
+        {
+          plug: node.attachment?.plug
+            ? { localX: subToPx(node.attachment.plug.x), localY: subToPx(node.attachment.plug.y) }
+            : null,
+          crossSectionTop: plugCS?.diameter,
+          crossSectionBottom: bottomCS?.diameter,
+        },
+        node.sprite
+          ? {
+              width: node.sprite.width,
+              height: node.sprite.height,
+              pivotX: subToPx(node.sprite.plug?.x ?? 0),
+              pivotY: subToPx(node.sprite.plug?.y ?? 0),
+            }
+          : null,
+      );
+    }
+    diameter = Math.max(1, diameter);
 
     // Position the disc at the socket world position (connection point),
     // not at the child node's world position.
@@ -626,11 +641,12 @@ function generateDiscInstructions(
 
     // 关节盘颜色约定：plug.discColor 自定义 > 子节点精灵开口处众数颜色 > 旧 fallback。
     // 开口中心 = 精灵 pivot（sprite.plug）+ plug 本地坐标（attachment.plug）。
+    const childPiece = node.costumePiece;
     let fillColor: string = childPiece?.fillColor ?? node.sprite?.data?.[0]?.[0] ?? '#808080';
     const customDiscColor = node.attachment?.discColor;
     if (typeof customDiscColor === 'string' && customDiscColor) {
       fillColor = customDiscColor;
-    } else if (node.sprite?.data && node.sprite.plug) {
+    } else if (node.sprite?.data && node.sprite?.plug) {
       const pivotX = subToPx(node.sprite.plug.x);
       const pivotY = subToPx(node.sprite.plug.y);
       const plugLocalX = node.attachment?.plug ? subToPx(node.attachment.plug.x) : 0;

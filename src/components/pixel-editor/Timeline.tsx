@@ -80,7 +80,7 @@ export default function Timeline() {
     () => animationClips.find((c) => c.id === activeAnimationClipId) ?? null,
     [animationClips, activeAnimationClipId]
   );
-  const isPuppetClip = activeClip?.isPuppetClip === true;
+  const isPuppetClip = true; // 所有 clip 统一为木偶模型
   const puppetCharacter = useMemo(() => {
     if (!isPuppetClip || !activeClip?.puppetCharacterId) return null;
     return puppetCharacters.find((c) => c.id === activeClip.puppetCharacterId) ?? null;

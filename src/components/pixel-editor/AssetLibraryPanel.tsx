@@ -41,8 +41,6 @@ import {
 } from '@/components/ui/context-menu';
 import { useAssetStore } from '@/lib/asset-store';
 import { useProjectStore, useEditorStore } from '@/lib/store';
-import { useTileWorkflowStore } from '@/lib/tile-workflow-store';
-import { useMapStore } from '@/lib/map-store';
 import type { LibraryAsset, LibraryAssetType } from '@/lib/asset-types';
 import PartPanel from '@/components/pixel-editor/PartPanel';
 
@@ -546,8 +544,6 @@ export default function AssetLibraryPanel() {
   } = useAssetStore();
 
   const { parts, skeletons, keyframes, removePart, updatePart, addPart, setPartPixels } = useProjectStore();
-  const { tiles, materialA, materialB, currentStep } = useTileWorkflowStore();
-  const { currentMap } = useMapStore();
 
   const [searchText, setSearchText] = useState('');
 
@@ -889,50 +885,7 @@ export default function AssetLibraryPanel() {
         {/* ---- Layer 3: Workflow Assets ---- */}
         <TabsContent value="workflow" className="flex-1 min-h-0 m-0">
           <div className="flex flex-col h-full overflow-auto py-1 px-2">
-            {/* Tile Workflow */}
-            <div className="py-1">
-              <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                <Grid3x3 className="size-2.5" />
-                瓦片工作流
-              </div>
-              <div className="space-y-1 pl-2">
-                <div className="flex items-center gap-2 text-[10px]">
-                  <span className={`size-1.5 rounded-full ${materialA.pixels ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                  材质A: {materialA.pixels ? '✓' : '未生成'}
-                </div>
-                <div className="flex items-center gap-2 text-[10px]">
-                  <span className={`size-1.5 rounded-full ${materialB.pixels ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                  材质B: {materialB.pixels ? '✓' : '未生成'}
-                </div>
-                <div className="flex items-center gap-2 text-[10px]">
-                  <span className={`size-1.5 rounded-full ${tiles.length > 0 ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                  已生成瓦片: {tiles.length}
-                </div>
-                <div className="text-[9px] text-zinc-600 mt-1">
-                  当前步骤: {currentStep}/3
-                </div>
-                {tiles.length > 0 && (
-                  <SaveTilesetToLibrarySection />
-                )}
-              </div>
-            </div>
-
-            {/* Map Editing */}
-            <div className="py-1 mt-2 border-t border-zinc-800/50">
-              <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                <Grid3x3 className="size-2.5" />
-                地图编辑
-              </div>
-              {currentMap ? (
-                <div className="space-y-1 pl-2 text-[10px]">
-                  <div>地图: {currentMap.name}</div>
-                  <div>图层: {currentMap.layers.length}</div>
-                  <div>动态对象: {currentMap.dynamicObjects.length}</div>
-                </div>
-              ) : (
-                <p className="text-[9px] text-zinc-600 pl-2">未创建地图</p>
-              )}
-            </div>
+            <p className="text-[9px] text-zinc-600 pl-2 py-2">暂无工作流资产</p>
           </div>
         </TabsContent>
       </Tabs>
@@ -1013,95 +966,6 @@ function SaveToLibrarySection() {
       >
         <Plus className="size-3" />
       </Button>
-    </div>
-  );
-}
-
-// ============================================================
-// Sub-component: Save tileset to library
-// ============================================================
-
-function SaveTilesetToLibrarySection() {
-  const [name, setName] = useState('');
-
-  const handleSave = useCallback(async () => {
-    const tileStore = useTileWorkflowStore.getState();
-    if (tileStore.tiles.length === 0) return;
-
-    const tilesetName = name.trim() || '瓦片集';
-    const tileW = tileStore.tileWidth;
-    const tileH = tileStore.tileHeight;
-
-    // Generate thumbnail from first tile
-    const firstTile = tileStore.tiles[0];
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.min(tileW * 3, 64);
-    canvas.height = Math.min(tileH * 3, 64);
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.imageSmoothingEnabled = false;
-      // Draw first few tiles in a grid
-      const cols = Math.ceil(Math.sqrt(tileStore.tiles.length));
-      const scale = Math.min(canvas.width / (tileW * cols), canvas.height / (tileH * Math.ceil(tileStore.tiles.length / cols)));
-      ctx.save();
-      ctx.scale(scale, scale);
-      for (let i = 0; i < Math.min(tileStore.tiles.length, 9); i++) {
-        const tile = tileStore.tiles[i];
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        const ox = col * tileW;
-        const oy = row * tileH;
-        for (let y = 0; y < tileH && y < tile.pixels.length; y++) {
-          for (let x = 0; x < tileW && x < tile.pixels[y].length; x++) {
-            const c = tile.pixels[y][x];
-            if (c) {
-              ctx.fillStyle = c;
-              ctx.fillRect(ox + x, oy + y, 1, 1);
-            }
-          }
-        }
-      }
-      ctx.restore();
-    }
-
-    const thumbnail = canvas.toDataURL();
-
-    await useAssetStore.getState().saveTilesetToLibrary(
-      tilesetName,
-      tileW,
-      tileH,
-      tileStore.tiles.map((t) => ({
-        pixels: t.pixels.map((r) => [...r] as string[]),
-        animModifiers: t.animModifiers,
-        tags: t.tags.map((tag) => String(tag)),
-      })),
-      thumbnail,
-    );
-
-    setName('');
-  }, [name]);
-
-  return (
-    <div className="mt-1.5 pt-1.5 border-t border-zinc-800/50">
-      <p className="text-[9px] text-zinc-600 mb-1">保存瓦片集到资产库</p>
-      <div className="flex gap-1">
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="瓦片集名称"
-          className="h-5 text-[9px] bg-zinc-900 border-zinc-800 flex-1"
-          onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
-        />
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-5 w-5 p-0 text-zinc-500 hover:text-emerald-400"
-          onClick={handleSave}
-          title="保存瓦片集"
-        >
-          <Plus className="size-3" />
-        </Button>
-      </div>
     </div>
   );
 }

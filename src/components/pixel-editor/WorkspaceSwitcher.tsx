@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Film, Grid3x3, Home, Users } from 'lucide-react';
+import { Home, Users } from 'lucide-react';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { useWorkspaceStore } from '@/lib/workspace-store';
 import { useEditorStore } from '@/lib/store';
@@ -25,25 +25,11 @@ const MODE_CONFIG: { value: WorkspaceMode; icon: React.ReactNode; label: string;
     activeBg: 'bg-amber-600/30',
   },
   {
-    value: 'animation',
-    icon: <Film className="size-3.5" />,
-    label: '动画模式',
-    activeColor: 'text-purple-300',
-    activeBg: 'bg-purple-600/30',
-  },
-  {
     value: 'puppet',
     icon: <Users className="size-3.5" />,
     label: '木偶模式',
     activeColor: 'text-cyan-300',
     activeBg: 'bg-cyan-600/30',
-  },
-  {
-    value: 'map_tile',
-    icon: <Grid3x3 className="size-3.5" />,
-    label: '地图瓦片模式',
-    activeColor: 'text-emerald-300',
-    activeBg: 'bg-emerald-600/30',
   },
 ];
 
@@ -54,14 +40,6 @@ export default function WorkspaceSwitcher() {
     if (newMode === mode) return;
 
     // Clean up mode-specific state when switching
-    if (newMode === 'map_tile') {
-      // Exit part_edit mode when entering tile mode
-      const editorState = useEditorStore.getState();
-      if (editorState.editMode === 'part_edit') {
-        editorState.exitPartEditMode(true); // cancel, don't save
-      }
-    }
-
     if (newMode === 'puppet') {
       // Exit part_edit mode when entering puppet mode
       const editorState = useEditorStore.getState();

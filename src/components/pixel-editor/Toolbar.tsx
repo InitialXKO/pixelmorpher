@@ -332,11 +332,9 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
             }
 
             // Auto-enter part_edit mode when switching to brush/eraser/fill in non-correction mode
-            const wsMode = useWorkspaceStore.getState().mode;
             if ((val === 'brush' || val === 'eraser' || val === 'fill') &&
                 state.editMode !== 'correction' &&
-                state.editMode !== 'part_edit' &&
-                wsMode !== 'map_tile') {
+                state.editMode !== 'part_edit') {
               const projectStore = useProjectStore.getState();
               const selectedPartId = state.selectedPartId;
               const part = selectedPartId ? projectStore.parts.find(p => p.id === selectedPartId) : null;

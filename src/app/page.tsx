@@ -16,9 +16,6 @@ import PluginPanel from '@/components/pixel-editor/PluginPanel';
 import CanvasModifierPanel from '@/components/pixel-editor/CanvasModifierPanel';
 import AnimationClipPanel from '@/components/pixel-editor/AnimationClipPanel';
 import GlobalModifierPanel from '@/components/pixel-editor/GlobalModifierPanel';
-import TilePreviewPanel from '@/components/pixel-editor/TilePreviewPanel';
-import TileWorkflowPanel from '@/components/pixel-editor/TileWorkflowPanel';
-import TileAssetPanel from '@/components/pixel-editor/TileAssetPanel';
 import AssetLibraryPanel from '@/components/pixel-editor/AssetLibraryPanel';
 import ProjectHomeScreen from '@/components/pixel-editor/ProjectHomeScreen';
 import Timeline from '@/components/pixel-editor/Timeline';
@@ -27,7 +24,6 @@ import ExportDialog from '@/components/pixel-editor/ExportDialog';
 import { useProjectStore } from '@/lib/store';
 import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
-import { useTileWorkflowStore } from '@/lib/tile-workflow-store';
 import { useAssetStore } from '@/lib/asset-store';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -47,7 +43,6 @@ export default function Home() {
   const { parts, animationClips, activeAnimationClipId, setActiveAnimationClip } = useProjectStore();
   const { selectPart, editMode, exitPartEditMode, partEditPartId } = useEditorStore();
   const { mode, layouts, updateLayout } = useWorkspaceStore();
-  const { editingTarget, setEditingTarget } = useTileWorkflowStore();
   const [exportOpen, setExportOpen] = useState(false);
   const initializedRef = useRef(false);
   const { showProjectHome, setShowProjectHome, loadProjectList, loadLibrary } = useAssetStore();
@@ -382,44 +377,10 @@ export default function Home() {
 
     // V3.0: Migrate legacy data into the active animation clip
     // After all parts, keyframes, and modifiers are created at the Project level,
-    // move them into the active AnimationClip for the new asset-based model.
-    const activeClipId = useProjectStore.getState().activeAnimationClipId;
-    if (activeClipId) {
-      useProjectStore.getState().migrateLegacyToClip(activeClipId);
-    }
   }, [parts.length]);
 
   // ---- Right panel content based on workspace mode ----
   const renderRightPanel = () => {
-    if (mode === 'map_tile') {
-      return (
-        <Tabs defaultValue="tile_workflow" className="flex flex-col h-full">
-          <TabsList className="w-full justify-start rounded-none border-b border-zinc-800 bg-zinc-950 h-auto min-h-8 px-0.5 py-0.5">
-            <TabsTrigger
-              value="tile_workflow"
-              className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-            >
-              <Grid3x3 className="size-3 mr-0.5" />
-              瓦片工作流
-            </TabsTrigger>
-            <TabsTrigger
-              value="tile_preview"
-              className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-            >
-              <Eye className="size-3 mr-0.5" />
-              平铺预览
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="tile_workflow" className="flex-1 min-h-0 m-0">
-            <TileWorkflowPanel />
-          </TabsContent>
-          <TabsContent value="tile_preview" className="flex-1 min-h-0 m-0">
-            <TilePreviewPanel />
-          </TabsContent>
-        </Tabs>
-      );
-    }
-
     // Puppet mode: single focused workflow panel (rig → dress → perform).
     // Modifier/canvas-effect tabs were removed here — they live in animation mode.
     if (mode === 'puppet') {
@@ -560,7 +521,7 @@ export default function Home() {
                 order={1}
                 className="transition-all duration-300"
               >
-                {mode === 'map_tile' ? <TileAssetPanel /> : mode === 'puppet' ? (
+                {mode === 'puppet' ? (
                   <div className="flex flex-col h-full">
                     <PuppetAssetPanel />
                     <div className="border-t border-zinc-800/50">
@@ -595,7 +556,7 @@ export default function Home() {
               >
                 <div className="flex flex-col h-full">
                   {/* Part Edit Mode banner — only in animation mode */}
-                  {editMode === 'part_edit' && mode !== 'map_tile' && (
+                  {editMode === 'part_edit' && (
                     <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-500/15 border-b border-cyan-500/30 shrink-0">
                       <Pencil className="size-3.5 text-cyan-400" />
                       <span className="text-xs font-medium text-cyan-300">
@@ -626,28 +587,6 @@ export default function Home() {
                   {/* Puppet Mode banner — phase-aware hints */}
                   {mode === 'puppet' && (
                     <PuppetModeBanner />
-                  )}
-                  {/* Tile Editing Mode banner */}
-                  {mode === 'map_tile' && editingTarget && (
-                    <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/15 border-b border-emerald-500/30 shrink-0">
-                      <Paintbrush className="size-3.5 text-emerald-400" />
-                      <span className="text-xs font-medium text-emerald-300">
-                        瓦片编辑
-                      </span>
-                      <span className="text-[10px] text-emerald-400/60">
-                        — {editingTarget.label}
-                      </span>
-                      <div className="ml-auto flex gap-1.5">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 text-[10px] text-zinc-400 hover:text-zinc-200 px-2"
-                          onClick={() => setEditingTarget(null)}
-                        >
-                          退出编辑
-                        </Button>
-                      </div>
-                    </div>
                   )}
                   <PixelCanvas />
                 </div>

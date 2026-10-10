@@ -84,6 +84,41 @@ export function applyJointOpenings(
   }
 }
 
+/** 计算 plug 侧关节开口宽度所需的最精简节点/精灵信息 */
+export interface PlugJointWidthInput {
+  plug?: { localX: number; localY: number; jointWidth?: number | null } | null;
+  crossSectionTop?: number | null;
+  crossSectionBottom?: number | null;
+}
+
+export interface PlugJointWidthSprite {
+  width: number;
+  height: number;
+  pivotX: number;
+  pivotY: number;
+}
+
+/**
+ * 计算关节开口宽度（= 关节盘直径）。
+ * 规则：plug.jointWidth（创建时写入）> 按 plug 在精灵上的上下位置取 crossSectionTop/Bottom > 4。
+ *
+ * 注意：不再与 parent.crossSectionBottom 求平均——parent 的 bottom（如躯干的髋宽）
+ * 与当前 socket（如肩）无关，求平均会让关节盘比开口大一圈。
+ */
+export function getPlugJointWidth(
+  node: PlugJointWidthInput,
+  sprite?: PlugJointWidthSprite | null,
+): number {
+  const stored = node.plug?.jointWidth;
+  if (typeof stored === 'number' && stored > 0) return stored;
+  if (node.plug && sprite && sprite.height > 0) {
+    const plugY = sprite.pivotY + node.plug.localY;
+    const w = plugY >= sprite.height / 2 ? node.crossSectionBottom : node.crossSectionTop;
+    if (typeof w === 'number' && w > 0) return w;
+  }
+  return 4;
+}
+
 /**
  * 在精灵轮廓上为关节连接处 carve 一个开口（notch）。
  * 只清除轮廓色的像素，不动填充色；若该处没有轮廓像素则无操作。
