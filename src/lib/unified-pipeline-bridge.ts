@@ -112,27 +112,14 @@ export function renderUnified(
 
   // ---- Step 2: Render puppet parts ----
   if (puppetSkeletons && puppetCharacters && puppetSkeletons.length > 0) {
-    // 有程序化修改器或蓝图的骨架走老管线（unified pipeline 不调 interpolateNodeKeyframes，
-    // 修改器和蓝图都不生效）。注意：不能只看 modifiers，蓝图也在老管线里求值。
-    const hasPuppetProcedural = puppetSkeletons.some(sk =>
-      sk.nodes.some(n => (n.modifiers ?? []).length > 0 || !!n.blueprint)
+    // 木偶统一走 renderPuppetNodes（老管线）：它调 interpolateNodeKeyframes，
+    // 支持蓝图和节点修改器。原先的 unified pipeline（liveAdapter + render plan）
+    // 不调 interpolateNodeKeyframes，蓝图/修改器都不生效，属未完成半成品，已移除分流。
+    renderPuppetViaOldPipeline(
+      ctx, parts, puppetSkeletons, puppetCharacters,
+      animationClips, currentFrame, canvasWidth, canvasHeight, frameRate,
+      keyframes,
     );
-    if (useUnifiedPipeline && !hasPuppetProcedural) {
-      // NEW: Unified pipeline path
-      renderPuppetViaUnifiedPipeline(
-        ctx, canvasWidth, canvasHeight,
-        puppetSkeletons, puppetCharacters, parts,
-        animationClips, currentFrame, frameRate,
-        globalModifiers, animationVariables, canvasModifierTracks,
-      );
-    } else {
-      // OLD: Direct renderPuppetNodes() path (fallback) — 支持节点修改器
-      renderPuppetViaOldPipeline(
-        ctx, parts, puppetSkeletons, puppetCharacters,
-        animationClips, currentFrame, canvasWidth, canvasHeight, frameRate,
-        keyframes,
-      );
-    }
   }
 
   // ---- Step 3: Canvas modifiers — 全帧后处理，只应用一次（H10）
@@ -174,75 +161,7 @@ function applyGlobalTransformWrapper(
   return has;
 }
 
-function renderPuppetViaUnifiedPipeline(
-  ctx: CanvasRenderingContext2D,
-  canvasWidth: number,
-  canvasHeight: number,
-  puppetSkeletons: PuppetSkeleton[],
-  puppetCharacters: PuppetCharacter[],
-  parts: Part[],
-  animationClips: AnimationClip[],
-  currentFrame: number,
-  frameRate: number,
-  globalModifiers?: GlobalModifier[],
-  animationVariables?: AnimationVariable[],
-  canvasModifierTracks?: CanvasModifierTrack[],
-): void {
-  // Apply global modifier transform (camera/world transform)
-  // This matches the old pipeline's behavior in renderPuppetFrame().
-  const hasGlobalTransform = applyGlobalTransformWrapper(
-    ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate,
-  );
-
-  for (const character of puppetCharacters) {
-    const skeleton = puppetSkeletons.find(s => s.id === character.puppetSkeletonId);
-    if (!skeleton) continue;
-
-    // Find puppet keyframes from animation clip
-    const puppetClip = animationClips.find(
-      c => true && c.puppetCharacterId === character.id
-    );
-    const nodeKeyframes = puppetClip?.puppetNodeKeyframes ?? [];
-
-    // Convert old data to unified Character via LiveAdapter
-    const unifiedCharacter = liveAdapter.getCharacter(
-      skeleton,
-      [character],
-      parts,
-      nodeKeyframes,
-      character.costumeSets ?? [],
-    );
-
-    // Generate and execute render plan
-    // Convert old AnimationVariable format to unified format
-    const unifiedVars: UnifiedAnimationVariable[] | undefined = animationVariables?.map(v => ({
-      id: v.id,
-      name: v.name,
-      value: v.defaultValue ?? 0,
-      min: 0,
-      max: 100,
-      // H6: 透传 writer，供变量驱动求值
-      writerDriverId: v.writerDriverId,
-      defaultValue: v.defaultValue ?? 0,
-    }));
-    const plan = generateRenderPlan(
-      unifiedCharacter,
-      currentFrame,
-      canvasWidth,
-      canvasHeight,
-      'pixel-perfect',
-      frameRate,
-      unifiedVars,
-    );
-    executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
-  }
-
-  if (hasGlobalTransform) {
-    ctx.restore();
-  }
-}
-
-// ---- Old Pipeline Path (Fallback) ----
+// ---- Old Pipeline Path ----
 
 function renderPuppetViaOldPipeline(
   ctx: CanvasRenderingContext2D,
