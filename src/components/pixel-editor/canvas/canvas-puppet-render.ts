@@ -32,7 +32,7 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
     const isActive = skeleton.id === activePuppetSkeletonId;
 
     const character = puppetCharacters.find(c => c.puppetSkeletonId === skeleton.id);
-    const clip = character ? animationClips.find(c => c.isPuppetClip && c.puppetCharacterId === character.id) : null;
+    const clip = character ? animationClips.find(c => c.puppetCharacterId === character.id) : null;
     const keyframes = clip?.puppetNodeKeyframes ?? [];
 
     // Pre-index keyframes by nodeId
@@ -305,8 +305,8 @@ export function renderPivotCrosshair(
   ctx.restore();
 
   // Part bounding box highlight
-  const partScreenX = panX + (offsetX - selectedPart.pivotX + (selectedPart.offsetX || 0)) * zoom;
-  const partScreenY = panY + (offsetY - selectedPart.pivotY + (selectedPart.offsetY || 0)) * zoom;
+  const partScreenX = panX + (offsetX - selectedPart.pivotX + 0) * zoom;
+  const partScreenY = panY + (offsetY - selectedPart.pivotY + 0) * zoom;
   const partScreenW = selectedPart.width * zoom;
   const partScreenH = selectedPart.height * zoom;
 

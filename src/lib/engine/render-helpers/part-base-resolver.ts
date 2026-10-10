@@ -2,7 +2,7 @@
  * Helper: compute the effective part base pixels by resolving edit modifiers.
  * Extracted from createPartCanvasInner to reduce cyclomatic complexity.
  *
- * Applies part.editModifiers (or resolvedEditModifiers) to part.pixels,
+ * Applies (([] as import('../../types').ModifierInstance[]) ?? []) (or resolvedEditModifiers) to part.pixels,
  * handling pixel-modifying modifiers and translate shifts.
  */
 
@@ -33,7 +33,7 @@ export function computePartBasePixels(
   currentFrame: number,
   resolvedEditModifiers?: ModifierInstance[],
 ): PartBaseResult {
-  const rawEditMods = resolvedEditModifiers ?? part.editModifiers;
+  const rawEditMods = resolvedEditModifiers ?? (([] as import('../../types').ModifierInstance[]) );
 
   // Resolve paramKeyframes/paramDrivers on part-level edit modifiers
   const effectiveEditMods = shouldResolveEditMods(rawEditMods)

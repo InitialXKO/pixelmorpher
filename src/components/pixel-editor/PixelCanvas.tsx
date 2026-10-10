@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useCallback, useEffect } from 'react';
-import { useProjectStore } from '@/lib/store';
+import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
-import { renderFrame, renderPartEditMode } from '@/lib/engine';
+import { renderFrame, renderPartEditMode, renderPuppetNodes } from '@/lib/engine';
+import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
 import { useCanvasState } from './canvas/use-canvas-state';
 import { useCanvasInteraction } from './canvas/use-canvas-interaction';
@@ -33,18 +34,47 @@ import { getCursorStyle, isStrokeToolCheck } from './canvas/canvas-utils';
 // PixelCanvas - Central canvas for PixelMorpher pixel animation
 // ============================================================
 
+/**
+ * 角色显示过滤：互斥模式下只返回选中角色。
+ * - perform 阶段且 showAllCharacters=true → 全部
+ * - 否则若 performCharacterId 有值 → 仅该角色
+ * - 否则 → 全部（无选中时的回退）
+ */
+function filterVisibleCharacters<T extends { id: string }>(
+  characters: T[],
+  session: { phase: string; showAllCharacters: boolean; performCharacterId: string | null },
+): T[] {
+  if (session.phase === 'perform' && session.showAllCharacters) {
+    return characters;
+  }
+  if (session.performCharacterId) {
+    const selected = characters.filter((c) => c.id === session.performCharacterId);
+    // 选中角色不在列表里时回退到全部（避免画布空白）
+    return selected.length > 0 ? selected : characters;
+  }
+  return characters;
+}
+
 export default function PixelCanvas() {
   const s = useCanvasState();
   const interaction = useCanvasInteraction(s);
+
+  // 订阅角色显示状态，变化时触发重渲染
+  const showAllCharacters = usePuppetSessionStore((st) => st.showAllCharacters);
+  const performCharacterId = usePuppetSessionStore((st) => st.performCharacterId);
+  const puppetPhase = usePuppetSessionStore((st) => st.phase);
+  const performArmed = usePuppetSessionStore((st) => st.performArmed);
+  // 订阅当前帧，播放时触发 render 回调更新（否则闭包里的 currentFrame 是旧的）
+  const storeCurrentFrame = useProjectStore((st) => st.currentFrame);
 
   // ---- Render loop ----
   const render = useCallback(() => {
     const canvas = s.canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
 
-    const currentFrame = s.currentFrameRef.current;
+    const currentFrame = storeCurrentFrame;
     const zoom = s.zoomRef.current;
     const panX = s.panRef.current.x;
     const panY = s.panRef.current.y;
@@ -82,7 +112,35 @@ export default function PixelCanvas() {
       offCtx.save();
       offCtx.clearRect(0, 0, s.canvasWidth, s.canvasHeight);
       const curVersion = s.onionDataVersionRef.current;
-      const kfHash = s.keyframes.map(kf => `${kf.id}:${kf.frame}:${kf.modifiers.length}`).join('|');
+      const puppetOnionOn = usePuppetSessionStore.getState().puppetOnionSkin;
+      const kfHash = s.keyframes.map(kf => `${kf.id}:${kf.frame}:${kf.modifiers.length}`).join('|')
+        + `|puppet:${s.puppetClipsVersion}:ponion:${puppetOnionOn ? 1 : 0}`;
+
+      // 木偶洋葱皮：把指定帧的木偶角色渲染进洋葱缓存画布
+      const renderPuppetOnionFrame = (cacheCtx: CanvasRenderingContext2D, frame: number) => {
+        if (!puppetOnionOn) return;
+        const pst = useProjectStore.getState();
+        const clips = pst.animationClips;
+        const skeletons = pst.puppetSkeletons ?? [];
+        const allCharacters = pst.puppetCharacters ?? [];
+        if (skeletons.length === 0 || allCharacters.length === 0) return;
+        // 角色显示互斥：非 perform 或未开启"显示全部"时，只渲染选中角色
+        const session = usePuppetSessionStore.getState();
+        const characters = filterVisibleCharacters(allCharacters, session);
+        for (const character of characters) {
+          const skel = skeletons.find(sk => sk.id === character.puppetSkeletonId);
+          const clip = clips.find(c => true && c.puppetCharacterId === character.id);
+          if (!skel || !clip) continue;
+          try {
+            renderPuppetNodes(
+              cacheCtx, pst.parts, skel, character,
+              clip.puppetNodeKeyframes ?? [], frame,
+              s.canvasWidth, s.canvasHeight, s.frameRate, onionQuality,
+              s.globalModifiers, pst.keyframes
+            );
+          } catch { /* 单个角色渲染失败不影响其它 */ }
+        }
+      };
 
       for (let offset = 1; offset <= s.onionSkinFrames; offset++) {
         const prevFrame = currentFrame - offset;
@@ -98,6 +156,7 @@ export default function PixelCanvas() {
             const cacheCanvas = acquireCanvas(s.canvasWidth, s.canvasHeight);
             const cacheCtx = cacheCanvas.getContext('2d')!;
             renderFrame(cacheCtx, s.canvasWidth, s.canvasHeight, s.nonPuppetParts, s.keyframes, prevFrame, 'rgba(0,0,0,0)', s.effectTracks, undefined, undefined, false, 0.5, undefined, undefined, undefined, s.frameRate, onionQuality, undefined, s.globalModifiers);
+            renderPuppetOnionFrame(cacheCtx, prevFrame);
             s.onionCacheRef.current.set(prevFrame, { canvas: cacheCanvas, version: curVersion, keyframeHash: kfHash });
           }
           offCtx.drawImage(s.onionCacheRef.current.get(prevFrame)!.canvas, 0, 0);
@@ -116,6 +175,7 @@ export default function PixelCanvas() {
             const cacheCanvas = acquireCanvas(s.canvasWidth, s.canvasHeight);
             const cacheCtx = cacheCanvas.getContext('2d')!;
             renderFrame(cacheCtx, s.canvasWidth, s.canvasHeight, s.nonPuppetParts, s.keyframes, nextFrame, 'rgba(0,0,0,0)', s.effectTracks, undefined, undefined, false, 0.5, undefined, undefined, undefined, s.frameRate, onionQuality, undefined, s.globalModifiers);
+            renderPuppetOnionFrame(cacheCtx, nextFrame);
             s.onionCacheRef.current.set(nextFrame, { canvas: cacheCanvas, version: curVersion, keyframeHash: kfHash });
           }
           offCtx.drawImage(s.onionCacheRef.current.get(nextFrame)!.canvas, 0, 0);
@@ -143,24 +203,7 @@ export default function PixelCanvas() {
     }
 
     // 2. Render current frame
-    if (s.isTileMode) {
-      const tileState = s.tileStore.getState();
-      const target = tileState.editingTarget;
-      offCtx.fillStyle = s.backgroundColor || '#1a1a2e';
-      offCtx.fillRect(0, 0, s.canvasWidth, s.canvasHeight);
-      if (target) {
-        const { width: tileW, height: tileH } = tileState.getEditingTargetSize();
-        const pixels = tileState.getEditingTargetPixels();
-        if (pixels && pixels.length > 0) {
-          const offsetX = Math.floor((s.canvasWidth - tileW) / 2);
-          const offsetY = Math.floor((s.canvasHeight - tileH) / 2);
-          drawTileGridToCanvas(offCtx, pixels, offsetX, offsetY, 1, '#1a1a2e');
-        }
-      } else {
-        offCtx.fillStyle = '#3f3f5a'; offCtx.font = '12px sans-serif'; offCtx.textAlign = 'center';
-        offCtx.fillText('在左面板选择要编辑的瓦片资产', s.canvasWidth / 2, s.canvasHeight / 2);
-      }
-    } else if (s.editMode === 'part_edit' && s.partEditPartId) {
+    if (s.editMode === 'part_edit' && s.partEditPartId) {
       const part = s.parts.find(p => p.id === s.partEditPartId);
       if (part) {
         let effectiveMods = s.partEditModifiers;
@@ -184,10 +227,17 @@ export default function PixelCanvas() {
       }
     } else {
       const animationClips = useProjectStore.getState().animationClips;
+      // 角色显示互斥过滤
+      const puppetSession = usePuppetSessionStore.getState();
+      // 必须从 store 直接读最新的 characters 和 skeletons：闭包里的 s.puppetCharacters/s.puppetSkeletons
+      // 在蓝图挂载后可能还是旧引用，导致播放时读不到 blueprint
+      const freshStore = useProjectStore.getState();
+      const freshSkeletons = freshStore.puppetSkeletons;
+      const visibleCharacters = filterVisibleCharacters(freshStore.puppetCharacters ?? [], puppetSession);
       renderUnified(offCtx, s.canvasWidth, s.canvasHeight, s.parts, s.keyframes, currentFrame, s.backgroundColor,
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
-        s.animationVariables, s.globalModifiers, s.puppetSkeletons, s.puppetCharacters, animationClips, true);
+        s.animationVariables, s.globalModifiers, freshSkeletons, visibleCharacters, animationClips, true);
     }
 
     // 3. Stroke preview
@@ -287,21 +337,27 @@ export default function PixelCanvas() {
     s.showWeightPaint, s.weightPaintBoneId, s.puppetSkeletons, s.puppetCharacters, s.puppetClipsVersion,
     s.canvasModifierTracks, s.partEditPartId, s.partEditModifiers,
     interaction.renderStrokePreview, s.getInterpolatedTranslateOffset,
+    showAllCharacters, performCharacterId, puppetPhase, storeCurrentFrame,
   ]);
+
+  // 用 ref 存最新 render，避免 effect 反复重建导致旧闭包执行
+  const renderRef = React.useRef(render);
+  renderRef.current = render;
 
   // Animation loop
   useEffect(() => {
     s.dirtyRef.current = true;
     const unregisterScheduler = registerRenderCallback(() => { s.dirtyRef.current = true; });
     const loop = () => {
-      if (s.dirtyRef.current) { s.dirtyRef.current = false; render(); }
+      const isPlaying = useEditorStore.getState().playState === 'playing';
+      if (s.dirtyRef.current || isPlaying) { s.dirtyRef.current = false; renderRef.current(); }
       s.rafRef.current = requestAnimationFrame(loop);
     };
     s.rafRef.current = requestAnimationFrame(loop);
     return () => { unregisterScheduler(); if (s.rafRef.current) cancelAnimationFrame(s.rafRef.current); };
-  }, [render]);
+  }, []); // 不依赖 render，用 ref 拿最新的
 
-  const cursorStyle = s.editMode === 'correction' ? 'crosshair' : getCursorStyle(s.tool, s.spaceHeldRef.current);
+  const cursorStyle = s.editMode === 'correction' ? 'crosshair' : getCursorStyle(s.tool, s.spaceHeldRef.current, performArmed);
 
   return (
     <div ref={s.containerRef} className="relative w-full h-full overflow-hidden" style={{ background: '#0f0f1a' }}>
@@ -319,14 +375,26 @@ export default function PixelCanvas() {
         onMouseUp={interaction.handleMouseUp}
         onMouseLeave={interaction.handleMouseUp}
         onDoubleClick={interaction.handleDoubleClick}
-        onWheel={interaction.handleWheel}
-        onContextMenu={(e) => e.preventDefault()}
       />
 
       {/* Correction mode badge */}
       {s.editMode === 'correction' && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(34, 211, 238, 0.2)', color: '#22d3ee', border: '1px solid rgba(34, 211, 238, 0.4)', backdropFilter: 'blur(4px)' }}>
           修正模式 · 笔画记录为 PixelEdit 修改器
+        </div>
+      )}
+
+      {/* Phase badge (rig/dress/perform) */}
+      {s.isPuppetMode && puppetPhase && (
+        <div className="absolute top-3 left-3 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(139, 92, 246, 0.2)', color: '#a78bfa', border: '1px solid rgba(139, 92, 246, 0.4)', backdropFilter: 'blur(4px)' }}>
+          {puppetPhase === 'rig' ? '搭建' : puppetPhase === 'dress' ? '穿衣' : '表演'}
+        </div>
+      )}
+
+      {/* Unarmed badge */}
+      {s.isPuppetMode && puppetPhase === 'perform' && !performArmed && (
+        <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.4)', backdropFilter: 'blur(4px)' }}>
+          未武装
         </div>
       )}
 

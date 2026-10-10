@@ -5,6 +5,7 @@
 
 import type { StateCreator } from 'zustand';
 import type { ProjectStore } from './types';
+import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '../engine';
 import {
   Keyframe,
   ANIMATION_MODIFIER_TYPES,
@@ -23,7 +24,9 @@ export type KeyframeSlice = {
 export const createKeyframeSlice: StateCreator<ProjectStore, [], [], KeyframeSlice> = (set, get) => ({
   addKeyframe: (partId, frame) => {
     get().pushUndo('添加关键帧');
-    const id = crypto.randomUUID();
+    // H8/H9: 关键帧数据变更，插值缓存与 driver 求值缓存失效
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();    const id = crypto.randomUUID();
     const keyframe: Keyframe = {
       id,
       partId,
@@ -55,21 +58,27 @@ export const createKeyframeSlice: StateCreator<ProjectStore, [], [], KeyframeSli
 
   removeKeyframe: (keyframeId) => {
     get().pushUndo('删除关键帧');
-    set((s) => ({
+    // H8/H9: 关键帧数据变更，插值缓存与 driver 求值缓存失效
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();    set((s) => ({
     keyframes: s.keyframes.filter((k) => k.id !== keyframeId),
     }));
   },
 
   updateKeyframe: (keyframeId, updates) => {
     get().pushUndo('更新关键帧', 'updateKeyframe');
-    set((s) => ({
+    // H8/H9: 关键帧数据变更，插值缓存与 driver 求值缓存失效
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();    set((s) => ({
     keyframes: s.keyframes.map((k) => (k.id === keyframeId ? { ...k, ...updates } : k)),
     }));
   },
 
   duplicateKeyframe: (keyframeId, toFrame) => {
     get().pushUndo('复制关键帧');
-    const source = get().keyframes.find((k) => k.id === keyframeId);
+    // H8/H9: 关键帧数据变更，插值缓存与 driver 求值缓存失效
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();    const source = get().keyframes.find((k) => k.id === keyframeId);
     if (!source) return {} as Keyframe;
     const newKf: Keyframe = {
       id: crypto.randomUUID(),

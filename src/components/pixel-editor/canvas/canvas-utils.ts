@@ -79,8 +79,8 @@ export function isPixelInPart(
   translateOffsetX: number = 0,
   translateOffsetY: number = 0,
 ): boolean {
-  const left = offsetX - part.pivotX + (part.offsetX || 0) + translateOffsetX;
-  const top = offsetY - part.pivotY + (part.offsetY || 0) + translateOffsetY;
+  const left = offsetX - part.pivotX + 0 + translateOffsetX;
+  const top = offsetY - part.pivotY + 0 + translateOffsetY;
   return px >= left && px < left + part.width && py >= top && py < top + part.height;
 }
 
@@ -141,8 +141,8 @@ export function getPixelAt(
   translateOffsetX: number = 0,
   translateOffsetY: number = 0,
 ): PixelColor {
-  const localX = px - (offsetX - part.pivotX + (part.offsetX || 0) + translateOffsetX);
-  const localY = py - (offsetY - part.pivotY + (part.offsetY || 0) + translateOffsetY);
+  const localX = px - (offsetX - part.pivotX + 0 + translateOffsetX);
+  const localY = py - (offsetY - part.pivotY + 0 + translateOffsetY);
   if (localX < 0 || localX >= part.width || localY < 0 || localY >= part.height) return null;
   return part.pixels[localY]?.[localX] ?? null;
 }
@@ -221,7 +221,7 @@ export function isStrokeToolCheck(tool: string): boolean {
 }
 
 /** Get cursor style based on current tool */
-export function getCursorStyle(tool: string, spaceHeld: boolean): string {
+export function getCursorStyle(tool: string, spaceHeld: boolean, puppetArmed: boolean = true): string {
   if (spaceHeld) return 'grab';
   switch (tool) {
     case 'select': return 'default';
@@ -240,10 +240,12 @@ export function getCursorStyle(tool: string, spaceHeld: boolean): string {
     case 'weight_paint':
     case 'lasso':
     case 'magic_wand':
-    case 'puppet':
     case 'smart_select':
     case 'inpaint':
       return 'crosshair';
+    case 'puppet':
+      // 未武装时用默认光标，武装后用十字
+      return puppetArmed ? 'crosshair' : 'default';
     case 'move': return 'move';
     default: return 'default';
   }

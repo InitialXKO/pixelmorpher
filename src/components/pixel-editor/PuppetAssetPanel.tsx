@@ -52,10 +52,7 @@ export default function PuppetAssetPanel() {
     clips: true,
   });
 
-  const puppetClips = useMemo(
-    () => animationClips.filter((c) => c.isPuppetClip),
-    [animationClips]
-  );
+  const puppetClips = animationClips;
 
   const toggleCharExpand = (id: string) => {
     setExpandedChars((prev) => {
@@ -138,7 +135,7 @@ export default function PuppetAssetPanel() {
                     return (
                       <div key={char.id}>
                         <div
-                          className={`flex items-center gap-1 px-1.5 py-1 rounded cursor-pointer transition-colors ${
+                          className={`group flex items-center gap-1 px-1.5 py-1 rounded cursor-pointer transition-colors ${
                             isActive
                               ? 'bg-cyan-500/15 text-cyan-300'
                               : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
@@ -146,7 +143,10 @@ export default function PuppetAssetPanel() {
                           onClick={() => {
                             if (skeleton) {
                               setActivePuppetSkeletonId(skeleton.id);
-                              togglePuppetSkeleton();
+                              // 只开不关：避免点另一个角色时把骨骼显示关掉
+                              if (!useEditorStore.getState().showPuppetSkeleton) {
+                                togglePuppetSkeleton();
+                              }
                             }
                             toggleCharExpand(char.id);
                           }}
@@ -157,12 +157,24 @@ export default function PuppetAssetPanel() {
                             <ChevronRight className="size-2.5 flex-shrink-0" />
                           )}
                           <Shirt className="size-2.5 text-cyan-500/70 flex-shrink-0" />
-                          <span className="text-[10px] truncate flex-1">
+                          <span className="text-[10px] truncate flex-1 min-w-0">
                             {char.name}
                           </span>
                           <span className="text-[8px] text-gray-600">
                             {skeleton?.nodes.length ?? 0} 节点
                           </span>
+                          <button
+                            className="opacity-0 group-hover:opacity-100 hover:text-red-400 text-gray-600 transition-opacity"
+                            title="删除角色"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm(`确定删除角色「${char.name}」吗？其骨架、服装和动画片段将一并删除，此操作不可撤销。`)) {
+                                useProjectStore.getState().removePuppetCharacter(char.id);
+                              }
+                            }}
+                          >
+                            <Trash2 className="size-2.5" />
+                          </button>
                         </div>
 
                         {isExpanded && (
@@ -237,7 +249,7 @@ export default function PuppetAssetPanel() {
                     className="flex items-center gap-1.5 px-1.5 py-0.5 text-[9px] text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded cursor-pointer transition-colors"
                   >
                     <div className="size-2 rounded-sm border border-gray-700 bg-gray-800 flex-shrink-0" />
-                    <span className="truncate flex-1">{part.name}</span>
+                    <span className="truncate flex-1 min-w-0">{part.name}</span>
                     <span className="text-gray-700">
                       {part.width}x{part.height}
                     </span>
@@ -286,7 +298,7 @@ export default function PuppetAssetPanel() {
                         onClick={() => setActiveAnimationClip(clip.id)}
                       >
                         <Film className="size-2.5 text-amber-500/70 flex-shrink-0" />
-                        <span className="text-[10px] truncate flex-1">
+                        <span className="text-[10px] truncate flex-1 min-w-0">
                           {clip.name}
                         </span>
                         <span className="text-[8px] text-gray-600">

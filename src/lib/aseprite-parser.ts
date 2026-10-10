@@ -61,6 +61,10 @@ export async function parseAsepriteFile(buffer: ArrayBuffer): Promise<AsepriteFr
 
   const result: AsepriteFrame[] = [];
 
+  // H18: linked cel 需要二遍解析——先存每帧的 cel，全部解析完再补链接、再合成
+  const pendingLinks: Array<{ frame: number; layerIndex: number; linkedFrame: number; x: number; y: number; opacity: number }> = [];
+  const frameCels: Array<{ duration: number; celData: Map<number, { x: number; y: number; opacity: number; pixels: PixelGrid }> }> = [];
+
   for (let f = 0; f < frames; f++) {
     if (offset + 16 > buffer.byteLength) break;
 
@@ -104,7 +108,18 @@ export async function parseAsepriteFile(buffer: ArrayBuffer): Promise<AsepriteFr
 
       try {
         if (chunkType === 0x2004) {
-          // Old palette chunk (legacy)
+          // Old palette chunk (legacy): 256 RGB triplets.
+          // H18: 之前被整体跳过，导致老文件索引色无调色板可用。
+          // 只有在还没有调色板时才填充（0x2018 新调色板优先）。
+          if (palette.length === 0) {
+            const count = Math.min(256, Math.floor((chunkSize - 6) / 3));
+            for (let i = 0; i < count; i++) {
+              const r = view.getUint8(chunkStart + 6 + i * 3);
+              const g = view.getUint8(chunkStart + 6 + i * 3 + 1);
+              const b = view.getUint8(chunkStart + 6 + i * 3 + 2);
+              palette.push([r, g, b, 255]);
+            }
+          }
           offset = chunkStart + chunkSize;
           continue;
         }
@@ -152,19 +167,28 @@ export async function parseAsepriteFile(buffer: ArrayBuffer): Promise<AsepriteFr
           const celType = view.getUint16(offset, true); offset += 2;
           offset += 7; // padding
 
+          // H18: 规范里 type 0/2 在 padding 之后还有 w(2)+h(2)。
+          // 之前按画布尺寸推进 offset，cel 小于画布时字节流错位、后续 chunk 全错。
+          let celW = width;
+          let celH = height;
+          if (celType === 0 || celType === 2) {
+            celW = view.getUint16(offset, true); offset += 2;
+            celH = view.getUint16(offset, true); offset += 2;
+          }
+
           if (celType === 0) {
             // Raw cel data
             const celPixels = parseCelPixelData(
-              view, offset, width, height, celX, celY,
+              view, offset, width, height, celW, celH, celX, celY,
               bytesPerPixel, colorDepth, palette
             );
             celData.set(layerIndex, { x: celX, y: celY, opacity, pixels: celPixels });
-            offset += width * height * bytesPerPixel;
+            offset += celW * celH * bytesPerPixel;
           } else if (celType === 1) {
             // Linked cel — references another frame's cel
             const linkedFrame = view.getUint16(offset, true); offset += 2;
-            // We can't easily reference another frame's cel during parsing,
-            // so we'll handle it after all frames are parsed
+            // H18: 记录下来，所有帧解析完后二遍补齐（之前直接丢弃，该帧渲染为空）
+            pendingLinks.push({ frame: f, layerIndex, linkedFrame, x: celX, y: celY, opacity });
           } else if (celType === 2) {
             // Zlib-compressed cel data
             const compressedSize = view.getUint32(offset, true); offset += 4;
@@ -178,7 +202,7 @@ export async function parseAsepriteFile(buffer: ArrayBuffer): Promise<AsepriteFr
               const compressedData = new Uint8Array(buffer, offset, compressedSize);
               const decompressed = await inflateData(compressedData);
               const celPixels = parseDecompressedCelData(
-                decompressed, width, height, celX, celY,
+                decompressed, width, height, celW, celH, celX, celY,
                 bytesPerPixel, colorDepth, palette
               );
               celData.set(layerIndex, { x: celX, y: celY, opacity, pixels: celPixels });
@@ -199,30 +223,40 @@ export async function parseAsepriteFile(buffer: ArrayBuffer): Promise<AsepriteFr
       offset = chunkStart + chunkSize;
     }
 
-    // Composite all cel layers onto the frame (bottom to top by layer index)
+    frameCels.push({ duration: duration || 100, celData });
+  }
+
+  // ---- H18: 二遍——解析 linked cel ----
+  for (const link of pendingLinks) {
+    const src = frameCels[link.linkedFrame]?.celData.get(link.layerIndex);
+    if (src) {
+      frameCels[link.frame]?.celData.set(link.layerIndex, {
+        x: link.x, y: link.y, opacity: link.opacity, pixels: src.pixels,
+      });
+    } else {
+      console.warn(`Aseprite: linked cel references missing frame ${link.linkedFrame} layer ${link.layerIndex}`);
+    }
+  }
+
+  // ---- 合成每一帧（按 layer index 从下到上）----
+  for (const { duration, celData } of frameCels) {
+    const framePixels: PixelGrid = Array.from({ length: height }, () =>
+      Array<string | null>(width).fill(null)
+    );
     for (const [_layerIdx, cel] of Array.from(celData.entries()).sort((a, b) => a[0] - b[0])) {
       for (let py = 0; py < height; py++) {
         for (let px = 0; px < width; px++) {
-          const drawX = px;
-          const drawY = py;
-          if (drawX < 0 || drawX >= width || drawY < 0 || drawY >= height) continue;
-
           const pixelVal = cel.pixels[py]?.[px];
           if (pixelVal !== null && pixelVal !== undefined) {
             // Simple over compositing — later layers overwrite
-            framePixels[drawY][drawX] = pixelVal;
+            framePixels[py][px] = pixelVal;
           }
         }
       }
     }
-
-    result.push({
-      duration: duration || 100,
-      pixels: framePixels,
-    });
+    result.push({ duration, pixels: framePixels });
   }
 
-  // Handle linked cels (type 1) — not fully supported, just use what we have
   return result;
 }
 
@@ -234,6 +268,8 @@ function parseCelPixelData(
   offset: number,
   canvasWidth: number,
   canvasHeight: number,
+  celW: number,
+  celH: number,
   celX: number,
   celY: number,
   bytesPerPixel: number,
@@ -246,8 +282,9 @@ function parseCelPixelData(
 
   let readOffset = offset;
 
-  for (let py = 0; py < canvasHeight; py++) {
-    for (let px = 0; px < canvasWidth; px++) {
+  // H18: 按 cel 自身宽高读取（之前按画布尺寸，cel 更小时字节流错位）
+  for (let py = 0; py < celH; py++) {
+    for (let px = 0; px < celW; px++) {
       if (readOffset + bytesPerPixel > view.byteLength) break;
 
       const drawX = px + celX;
@@ -277,6 +314,8 @@ function parseDecompressedCelData(
   data: Uint8Array,
   canvasWidth: number,
   canvasHeight: number,
+  celW: number,
+  celH: number,
   celX: number,
   celY: number,
   bytesPerPixel: number,
@@ -290,8 +329,9 @@ function parseDecompressedCelData(
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   let readOffset = 0;
 
-  for (let py = 0; py < canvasHeight; py++) {
-    for (let px = 0; px < canvasWidth; px++) {
+  // H18: 按 cel 自身宽高读取
+  for (let py = 0; py < celH; py++) {
+    for (let px = 0; px < celW; px++) {
       if (readOffset + bytesPerPixel > data.length) break;
 
       const drawX = px + celX;

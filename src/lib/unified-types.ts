@@ -172,6 +172,16 @@ export interface Attachment {
   // socket mode
   parentSocketId?: string;       // Which socket on the parent to attach to
   plug?: Point;                  // Child's plug local coordinates (relative to node anchor)
+  /**
+   * 关节盘颜色覆盖（null/undefined = 自动：取子节点精灵开口处众数颜色）。
+   * 由 LiveAdapter 从 PuppetPlug.discColor 透传。
+   */
+  discColor?: string | null;
+  /**
+   * 关节开口宽度（= 关节盘直径）。由 LiveAdapter 从 PuppetPlug.jointWidth 透传；
+   * 为空时按 plug 位置回退估算。
+   */
+  jointWidth?: number | null;
 }
 
 // ---- Transform ----
@@ -574,6 +584,9 @@ export interface AnimationVariable {
   value: number;
   min: number;
   max: number;
+  // H6: 透传 store 侧的 writer 信息，供 buildVariableContext 做完整求值
+  writerDriverId?: string;
+  defaultValue?: number;
 }
 
 export interface Palette {
@@ -618,7 +631,7 @@ export interface DiscRenderInstruction {
   diameter: number;
   fillColor: string;
   outlineColor: string;
-  zIndex: number;                // parent Z - 0.5
+  zIndex: number;                // min(parent Z, child Z) - 50: occluded by sprites on both sides
 }
 
 /** Complete render plan for a frame */

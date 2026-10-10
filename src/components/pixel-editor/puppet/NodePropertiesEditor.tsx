@@ -5,6 +5,10 @@ import {
   Trash2,
   Palette,
   Pencil,
+  ArrowUpToLine,
+  ArrowDownToLine,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-render';
@@ -21,7 +25,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
-import NodeModifierSection from './NodeModifierSection';
 import PlugConnectionEditor from './PlugConnectionEditor';
 import { updateSkeletonNode } from './updateSkeletonNode';
 import { NODE_COLOR_PRESETS } from './types';
@@ -94,7 +97,7 @@ export default function NodePropertiesEditor({
                 spritePartId: e.target.value || null,
               })
             }
-            className="flex-1 h-6 text-[9px] bg-[#0d0d1a] border border-[#1e1e3a] rounded px-1 text-gray-300"
+            className="flex-1 min-w-0 h-6 text-[9px] bg-[#0d0d1a] border border-[#1e1e3a] rounded px-1 text-gray-300"
           >
             <option value="">— 无 —</option>
             {parts.map((p) => (
@@ -201,17 +204,47 @@ export default function NodePropertiesEditor({
           </div>
         </div>
 
-        {/* Z-Index */}
-        <div className="flex items-center gap-2">
-          <Label className="text-[9px] text-gray-600 w-14">Z顺序</Label>
-          <Input
-            type="number"
-            value={selectedNode.zIndex}
-            onChange={(e) =>
-              handleUpdateNode(selectedNode.id, { zIndex: Number(e.target.value) })
-            }
-            className="h-6 text-[9px] bg-[#0d0d1a] border-[#1e1e3a] w-16"
-          />
+        {/* Z-order（Word 式相对操作） */}
+        <div className="space-y-1">
+          <Label className="text-[9px] text-gray-600">图层顺序</Label>
+          <div className="grid grid-cols-4 gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-[9px] px-1 bg-[#0d0d1a] border-[#1e1e3a]"
+              onClick={() => useProjectStore.getState().bringNodeToFront(selectedSkeleton.id, selectedNode.id)}
+              title="置于顶层"
+            >
+              <ArrowUpToLine className="size-3" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-[9px] px-1 bg-[#0d0d1a] border-[#1e1e3a]"
+              onClick={() => useProjectStore.getState().bringNodeForward(selectedSkeleton.id, selectedNode.id)}
+              title="上移一层"
+            >
+              <ArrowUp className="size-3" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-[9px] px-1 bg-[#0d0d1a] border-[#1e1e3a]"
+              onClick={() => useProjectStore.getState().sendNodeBackward(selectedSkeleton.id, selectedNode.id)}
+              title="下移一层"
+            >
+              <ArrowDown className="size-3" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-[9px] px-1 bg-[#0d0d1a] border-[#1e1e3a]"
+              onClick={() => useProjectStore.getState().sendNodeToBack(selectedSkeleton.id, selectedNode.id)}
+              title="置于底层"
+            >
+              <ArrowDownToLine className="size-3" />
+            </Button>
+          </div>
         </div>
 
         {/* Cross sections */}
@@ -324,38 +357,6 @@ export default function NodePropertiesEditor({
           selectedNode={selectedNode}
           selectedSkeleton={selectedSkeleton}
         />
-
-        {/* Modifiers for Puppet Limb */}
-        {(() => {
-          const char = puppetCharacters.find((c) =>
-            c.puppetSkeletonId === selectedSkeletonId
-          );
-          const activeCostume = char?.activeCostumeSetId
-            ? char.costumeSets.find((cs) => cs.id === char.activeCostumeSetId) ?? null
-            : null;
-          const skeleton = puppetSkeletons.find((s) => s.id === selectedSkeletonId);
-          const dir = skeleton?.currentDirection ?? 'S';
-          const spritePart = selectedNode
-            ? resolvePuppetNodeSprite(selectedNode, dir, activeCostume, parts)
-            : null;
-
-          if (!spritePart) return null;
-
-          const editMods = spritePart.editModifiers ?? [];
-          const animMods = spritePart.animationModifiers ?? [];
-          const globalMods = spritePart.globalModifiers ?? [];
-          const allModsCount = editMods.length + animMods.length + globalMods.length;
-
-          return (
-            <NodeModifierSection
-              part={spritePart}
-              editMods={editMods}
-              animMods={animMods}
-              globalMods={globalMods}
-              allModsCount={allModsCount}
-            />
-          );
-        })()}
       </div>
     </div>
   );

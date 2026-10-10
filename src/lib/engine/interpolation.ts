@@ -20,7 +20,7 @@ const _interpolationCache = new Map<string, ModifierInstance[]>();
 const _INTERPOLATION_CACHE_MAX = 512;
 
 /** Invalidate the interpolation cache. Call when keyframe data changes. */
-function invalidateInterpolationCache(): void {
+export function invalidateInterpolationCache(): void {
   _interpolationCache.clear();
 }
 

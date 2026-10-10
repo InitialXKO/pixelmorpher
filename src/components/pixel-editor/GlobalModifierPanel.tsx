@@ -91,7 +91,7 @@ function GlobalModifierCard({ modifier }: { modifier: GlobalModifier }) {
             <span className="text-purple-400">
               {TYPE_ICONS[modifier.type] || <Globe className="size-3" />}
             </span>
-            <span className="text-[10px] font-medium text-zinc-200 flex-1 truncate">
+            <span className="text-[10px] font-medium text-zinc-200 flex-1 truncate min-w-0">
               {modifier.name}
             </span>
             <div className="flex items-center gap-0.5">
@@ -128,7 +128,7 @@ function GlobalModifierCard({ modifier }: { modifier: GlobalModifier }) {
                     <select
                       value={String(modifier.params[param.name] ?? param.default)}
                       onChange={(e) => handleParamChange(param.name, e.target.value)}
-                      className="h-5 text-[9px] bg-zinc-800 border border-zinc-700 rounded px-1 flex-1 text-zinc-300"
+                      className="h-5 text-[9px] bg-zinc-800 border border-zinc-700 rounded px-1 flex-1 min-w-0 text-zinc-300"
                     >
                       {param.options?.map((opt) => (
                         <option key={String(opt.value)} value={String(opt.value)}>
@@ -232,7 +232,9 @@ function GlobalModifierCard({ modifier }: { modifier: GlobalModifier }) {
         <ContextMenuItem
           className="text-[11px] text-red-400 focus:bg-red-600/20 focus:text-red-300 py-1.5 cursor-pointer"
           variant="destructive"
-          onClick={() => removeGlobalModifier(modifier.id)}
+          onClick={() => {
+            if (confirm('删除这个全局修改器？')) removeGlobalModifier(modifier.id);
+          }}
         >
           <Trash2 className="size-3 mr-1.5" />
           删除

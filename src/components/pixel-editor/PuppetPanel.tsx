@@ -1,28 +1,106 @@
 'use client';
 
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Plus,
   ArrowRight,
   Users,
   CheckCircle2,
+  Box,
+  Dog,
 } from 'lucide-react';
 import PuppetCreationWizard from './PuppetCreationWizard';
 import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { WORKFLOW_STEPS } from './puppet/types';
-import type { PuppetWorkspaceMode } from './puppet/types';
-import { usePuppetPanelState } from './puppet/usePuppetPanelState';
-import SkeletonModePanel from './puppet/SkeletonModePanel';
-import { CostumeManager } from './CostumeManager';
-import { useCostumeManagerAdapter } from './puppet/useCostumeManagerAdapter';
-import AnimateModePanel from './puppet/AnimateModePanel';
+import type { PuppetPhase } from './puppet/types';
+import { usePuppetSessionStore } from '@/lib/puppet-session-store';
+import { useProjectStore } from '@/lib/store';
+import RigPanel from './puppet/RigPanel';
+import DressPanel from './puppet/DressPanel';
+import PerformPanel from './puppet/PerformPanel';
+import type { PuppetDirection } from '@/lib/types';
 
 // ---- Main Component ----
 
 export default function PuppetPanel() {
-  const state = usePuppetPanelState();
-  const costumeAdapter = useCostumeManagerAdapter(state);
+  const phase = usePuppetSessionStore((s) => s.phase);
+  const setPhase = usePuppetSessionStore((s) => s.setPhase);
+
+  const puppetSkeletons = useProjectStore((s) => s.puppetSkeletons) ?? [];
+  const puppetCharacters = useProjectStore((s) => s.puppetCharacters) ?? [];
+  const animationClips = useProjectStore((s) => s.animationClips);
+  const parts = useProjectStore((s) => s.parts);
+  const canvasSelectedNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
+  const setSelectedPuppetNodeId = useProjectStore((s) => s.setSelectedPuppetNodeId);
+
+  // ---- rig 阶段本地状态 ----
+  const [selectedSkeletonId, setSelectedSkeletonId] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [direction, setDirection] = useState<PuppetDirection>('S');
+  const [latitude, setLatitude] = useState(0);
+
+  // ---- dress 阶段本地状态 ----
+  const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
+  const [selectedCostumeId, setSelectedCostumeId] = useState<string | null>(null);
+
+  const [wizardOpen, setWizardOpen] = useState(false);
+
+  const selectedSkeleton = puppetSkeletons.find((s) => s.id === selectedSkeletonId) ?? null;
+  const selectedNode = selectedSkeleton?.nodes.find((n) => n.id === selectedNodeId) ?? null;
+
+  // M1: 切换骨骼时用骨骼实际的方向/纬度回填，否则方向盘显示与骨骼脱节
+  useEffect(() => {
+    if (selectedSkeleton) {
+      setDirection(selectedSkeleton.currentDirection ?? 'S');
+      setLatitude(selectedSkeleton.viewLatitude ?? 0);
+    }
+  }, [selectedSkeletonId]);
+  const selectedCharacter = puppetCharacters.find((c) => c.id === selectedCharacterId) ?? null;
+
+  // ---- 画布 → 面板：单向同步选中节点 ----
+  // 画布点击节点只写 ProjectStore.selectedPuppetNodeId，
+  // 这里按当前阶段分发：perform 阶段进 session，其它阶段进本地 rig 状态。
+  useEffect(() => {
+    if (!canvasSelectedNodeId) return;
+    const st = useProjectStore.getState();
+    const skel = (st.puppetSkeletons ?? []).find((sk) =>
+      sk.nodes.some((n) => n.id === canvasSelectedNodeId)
+    );
+    if (!skel) return;
+    const currentPhase = usePuppetSessionStore.getState().phase;
+    if (currentPhase === 'perform') {
+      const sess = usePuppetSessionStore.getState();
+      if (sess.performNodeId !== canvasSelectedNodeId) {
+        usePuppetSessionStore.setState({ performNodeId: canvasSelectedNodeId });
+      }
+    } else if (currentPhase === 'rig' || currentPhase === 'dress') {
+      if (selectedSkeletonId !== skel.id) setSelectedSkeletonId(skel.id);
+      if (selectedNodeId !== canvasSelectedNodeId) setSelectedNodeId(canvasSelectedNodeId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasSelectedNodeId]);
+
+  const handleSelectNodeWithSync = (nodeId: string | null) => {
+    setSelectedNodeId(nodeId);
+    setSelectedPuppetNodeId(nodeId);
+  };
+
+  // M1: rig 阶段纬度写入 store，渲染端读的是 skeleton.viewLatitude
+  const handleSetLatitude = useCallback((lat: number) => {
+    setLatitude(lat);
+    if (selectedSkeletonId) {
+      useProjectStore.getState().setPuppetLatitude(selectedSkeletonId, lat);
+    }
+  }, [selectedSkeletonId]);
+
+  const handleStepClick = (key: PuppetPhase) => {
+    setPhase(key);
+    // 进入操控阶段但还没有角色时，保持面板让用户先选角色
+  };
+
+  const hasSkeletons = puppetSkeletons.length > 0;
+  const hasCharacters = puppetCharacters.length > 0;
+  const hasClips = animationClips.some((c) => true);
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#0d0d1a]">
@@ -38,21 +116,33 @@ export default function PuppetPanel() {
             variant="ghost"
             size="icon"
             className="size-6 text-cyan-400 hover:text-cyan-300"
-            onClick={() => state.setWizardOpen(true)}
+            onClick={() => setWizardOpen(true)}
             title="创建木偶角色"
           >
             <Plus className="size-3.5" />
           </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6 text-amber-400 hover:text-amber-300"
+            onClick={() => {
+              const store = useProjectStore.getState();
+              store.addPropCharacter(`道具${store.puppetCharacters.length + 1}`);
+            }}
+            title="新建道具（单节点木偶，用于背景/道具/UI 动画）"
+          >
+            <Box className="size-3.5" />
+          </Button>
         </div>
 
         {/* Step stepper */}
-        <div className="flex items-center gap-0.5">
+        <div className="flex items-center gap-0.5 flex-wrap">
           {WORKFLOW_STEPS.map((step, i) => {
-            const isActive = state.mode === step.key;
+            const isActive = phase === step.key;
             const isComplete =
-              (step.key === 'skeleton' && state.hasSkeletons) ||
-              (step.key === 'costume' && state.hasCharacters) ||
-              (step.key === 'animate' && state.hasClips);
+              (step.key === 'rig' && hasSkeletons) ||
+              (step.key === 'dress' && hasCharacters) ||
+              (step.key === 'perform' && hasClips);
             return (
               <React.Fragment key={step.key}>
                 {i > 0 && <ArrowRight className="size-2 text-gray-700 mx-0.5" />}
@@ -64,7 +154,7 @@ export default function PuppetPanel() {
                       ? 'text-emerald-400/70 hover:text-emerald-400 border border-transparent'
                       : 'text-gray-600 hover:text-gray-400 hover:bg-white/5 border border-transparent'
                   }`}
-                  onClick={() => state.setMode(step.key)}
+                  onClick={() => handleStepClick(step.key)}
                   title={step.desc}
                 >
                   {isComplete && !isActive ? (
@@ -80,97 +170,84 @@ export default function PuppetPanel() {
         </div>
       </div>
 
-      <PuppetCreationWizard open={state.wizardOpen} onClose={() => state.setWizardOpen(false)} />
+      <PuppetCreationWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
 
-      {/* Empty state when no mode selected */}
-      {state.mode === 'none' && (
+      {/* Empty state when nothing exists yet */}
+      {!hasSkeletons && phase === 'rig' && (
         <div className="flex-1 flex items-center justify-center p-4">
           <div className="text-center space-y-3">
             <Users className="size-8 text-cyan-500/30 mx-auto" />
             <div>
               <p className="text-[11px] text-gray-400 mb-1">开始创建木偶角色</p>
               <p className="text-[9px] text-gray-600 leading-relaxed">
-                点击右上角 + 创建新角色，或选择上方工作流步骤开始编辑
+                点击右上角 + 创建新角色，或使用创建向导
               </p>
             </div>
-            <Button
-              size="sm"
-              className="text-[10px] bg-cyan-600 hover:bg-cyan-500"
-              onClick={() => state.setWizardOpen(true)}
-            >
-              <Plus className="size-3 mr-1" /> 创建角色
-            </Button>
+            <div className="flex gap-2 justify-center">
+              <Button
+                size="sm"
+                className="text-[10px] bg-cyan-600 hover:bg-cyan-500"
+                onClick={() => setWizardOpen(true)}
+              >
+                <Plus className="size-3 mr-1" /> 创建角色
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-[10px] border-[#2a2a4a] text-gray-300"
+                onClick={() => {
+                  import('@/lib/blueprint/examples/quadruped-run').then((m) => {
+                    const sessionStore = usePuppetSessionStore.getState();
+                    const id = m.createPuppyRunExampleCharacter(useProjectStore, sessionStore);
+                    if (!id) {
+                      alert('小狗创建失败，请看控制台');
+                    }
+                  });
+                }}
+              >
+                <Dog className="size-3 mr-1" /> 小狗奔跑示例
+              </Button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Mode content */}
-      {state.mode !== 'none' && (
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="p-2">
-          {/* ============ SKELETON MODE ============ */}
-          {state.mode === 'skeleton' && (
-            <SkeletonModePanel
-              puppetSkeletons={state.puppetSkeletons}
-              puppetCharacters={state.puppetCharacters}
-              parts={state.parts}
-              selectedSkeletonId={state.selectedSkeletonId}
-              setSelectedSkeletonId={state.setSelectedSkeletonId}
-              selectedNodeId={state.selectedNodeId}
-              selectedSkeleton={state.selectedSkeleton}
-              selectedNode={state.selectedNode}
-              direction={state.direction}
-              setDirection={state.setDirection}
-              latitude={state.latitude}
-              setLatitude={state.setLatitude}
-              handleSelectNodeWithSync={state.handleSelectNodeWithSync}
-            />
-          )}
+      {/* Phase content */}
+      {(hasSkeletons || phase !== 'rig') && (
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+          <div className="p-2">
+            {/* ============ RIG ============ */}
+            {phase === 'rig' && hasSkeletons && (
+              <RigPanel
+                puppetSkeletons={puppetSkeletons}
+                selectedSkeletonId={selectedSkeletonId}
+                setSelectedSkeletonId={setSelectedSkeletonId}
+                selectedNodeId={selectedNodeId}
+                selectedSkeleton={selectedSkeleton}
+                selectedNode={selectedNode}
+                handleSelectNodeWithSync={handleSelectNodeWithSync}
+              />
+            )}
 
-          {/* ============ COSTUME MODE ============ */}
-          {state.mode === 'costume' && (
-            <CostumeManager
-              characters={costumeAdapter.characters}
-              selectedCharacterId={costumeAdapter.selectedCharacterId}
-              onCharacterSelect={costumeAdapter.handleCharacterSelect}
-              onCharacterDelete={costumeAdapter.handleCharacterDelete}
-              costumeSets={costumeAdapter.costumeSets}
-              selectedCostumeId={costumeAdapter.selectedCostumeId}
-              onCostumeSelect={costumeAdapter.handleCostumeSelect}
-              onCostumeAdd={costumeAdapter.handleCostumeAdd}
-              onCostumeDelete={costumeAdapter.handleCostumeDelete}
-              activeCostumeSetId={costumeAdapter.activeCostumeSetId}
-              onActiveCostumeSetChange={costumeAdapter.handleActiveCostumeSetChange}
-              nodes={costumeAdapter.nodes}
-              parts={costumeAdapter.parts}
-              onSpriteAssign={costumeAdapter.handleSpriteAssign}
-              onSpriteRemove={costumeAdapter.handleSpriteRemove}
-            />
-          )}
+            {/* ============ DRESS ============ */}
+            {phase === 'dress' && (
+              <DressPanel
+                puppetCharacters={puppetCharacters}
+                puppetSkeletons={puppetSkeletons}
+                parts={parts}
+                selectedCharacterId={selectedCharacterId}
+                setSelectedCharacterId={setSelectedCharacterId}
+                selectedCostumeId={selectedCostumeId}
+                setSelectedCostumeId={setSelectedCostumeId}
+                selectedNodeId={selectedNodeId}
+                handleSelectNodeWithSync={handleSelectNodeWithSync}
+              />
+            )}
 
-          {/* ============ ANIMATE MODE ============ */}
-          {state.mode === 'animate' && (
-            <AnimateModePanel
-              puppetCharacters={state.puppetCharacters}
-              animationClips={state.animationClips}
-              currentFrame={state.currentFrame}
-              animateCharacterId={state.animateCharacterId}
-              setAnimateCharacterId={state.setAnimateCharacterId}
-              animateDirection={state.animateDirection}
-              setAnimateDirection={state.setAnimateDirection}
-              animateSelectedNodeId={state.animateSelectedNodeId}
-              animateCharacter={state.animateCharacter}
-              animateSkeleton={state.animateSkeleton}
-              animateSelectedNode={state.animateSelectedNode}
-              activePuppetClip={state.activePuppetClip}
-              latitude={state.latitude}
-              setLatitude={state.setLatitude}
-              autoCreatedRef={state.autoCreatedRef}
-              handleSelectAnimateNodeWithSync={state.handleSelectAnimateNodeWithSync}
-            />
-          )}
+            {/* ============ PERFORM ============ */}
+            {phase === 'perform' && <PerformPanel />}
+          </div>
         </div>
-      </ScrollArea>
       )}
     </div>
   );

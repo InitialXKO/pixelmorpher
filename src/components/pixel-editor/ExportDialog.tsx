@@ -178,7 +178,7 @@ function generateLottieJSON(
   const layers: LottieLayer[] = [];
 
   // Sort parts by zIndex for layer ordering
-  const sortedParts = [...parts].sort((a, b) => b.zIndex - a.zIndex);
+  const sortedParts = [...parts]; // Part 无 zIndex
 
   for (let i = 0; i < sortedParts.length; i++) {
     const part = sortedParts[i];
@@ -377,7 +377,7 @@ function generateLottieJSON(
         ...shapes,
         {
           ty: 'tr',
-          p: { a: 0, k: [(-part.pivotX + (part.offsetX || 0)) * scale, (-part.pivotY + (part.offsetY || 0)) * scale] },
+          p: { a: 0, k: [(-part.pivotX + 0) * scale, (-part.pivotY + 0) * scale] },
           a: { a: 0, k: [0, 0] },
           s: { a: 0, k: [100, 100] },
           r: { a: 0, k: 0 },
@@ -445,7 +445,7 @@ function collectPuppetNodeKeyframes(
   const allKeyframes: PuppetNodeKeyframe[] = [];
   for (const character of puppetCharacters) {
     const puppetClip = animationClips.find(
-      c => c.isPuppetClip && c.puppetCharacterId === character.id
+      c => c.puppetCharacterId === character.id
     );
     if (puppetClip?.puppetNodeKeyframes) {
       allKeyframes.push(...puppetClip.puppetNodeKeyframes);

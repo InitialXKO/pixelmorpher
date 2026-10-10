@@ -4,6 +4,7 @@
 // ============================================================
 
 import { generateDefaultCostumeSprite } from '../engine/default-costume-sprites';
+import { applyJointOpenings, getPlugJointWidth, type JointOpeningSpec } from '../engine/render-helpers/puppet-joint-color';
 import type { StateCreator } from 'zustand';
 import type { ProjectStore } from './types';
 import type {
@@ -15,6 +16,8 @@ import type {
   CostumeSet,
   PuppetDirection,
   PuppetNodeKeyframe,
+  PartAnimationModifier,
+  ModifierParamValue,
 } from '../types';
 import { PUPPET_DIRECTIONS, DIRECTION_MIRROR } from '../types';
 
@@ -27,6 +30,8 @@ export interface PuppetNodeTree {
 export type PuppetSlice = {
   // ---- Puppet Skeleton CRUD ----
   addPuppetSkeleton: (name: string) => PuppetSkeleton;
+  /** 创建单节点道具角色（用于背景/道具/UI 等简单动画，走统一木偶模型） */
+  addPropCharacter: (name: string) => PuppetCharacter;
   removePuppetSkeleton: (id: string) => void;
   updatePuppetSkeleton: (id: string, updates: Partial<PuppetSkeleton>) => void;
   setPuppetDirection: (skeletonId: string, direction: PuppetDirection) => void;
@@ -36,14 +41,25 @@ export type PuppetSlice = {
   addPuppetNode: (skeletonId: string, name: string, opts?: Partial<Pick<PuppetNode, 'plug' | 'sockets' | 'spritePartId' | 'angle' | 'stretch' | 'offsetX' | 'offsetY' | 'zIndex' | 'crossSectionTop' | 'crossSectionBottom' | 'color' | 'visible' | 'mirrorFrom'>>) => PuppetNode;
   removePuppetNode: (skeletonId: string, nodeId: string) => void;
   updatePuppetNode: (skeletonId: string, nodeId: string, updates: Partial<PuppetNode>) => void;
+  // ---- Z-order（Word 式相对操作） ----
+  bringNodeToFront: (skeletonId: string, nodeId: string) => void;
+  sendNodeToBack: (skeletonId: string, nodeId: string) => void;
+  bringNodeForward: (skeletonId: string, nodeId: string) => void;
+  sendNodeBackward: (skeletonId: string, nodeId: string) => void;
   addPuppetSocket: (skeletonId: string, nodeId: string, name: string, localX: number, localY: number) => PuppetSocket;
   removePuppetSocket: (skeletonId: string, nodeId: string, socketId: string) => void;
   setPuppetNodeSprite: (skeletonId: string, nodeId: string, partId: string | null, direction?: PuppetDirection) => void;
 
   // ---- Puppet Node Keyframes ----
-  addPuppetNodeKeyframe: (clipId: string, nodeId: string, frame: number, values: Partial<Pick<PuppetNodeKeyframe, 'angle' | 'stretch' | 'offsetX' | 'offsetY' | 'direction' | 'viewLatitude'>>) => PuppetNodeKeyframe;
+  addPuppetNodeKeyframe: (clipId: string, nodeId: string, frame: number, values: Partial<Pick<PuppetNodeKeyframe, 'angle' | 'stretch' | 'offsetX' | 'offsetY' | 'direction' | 'viewLatitude' | 'zIndex'>>) => PuppetNodeKeyframe;
   removePuppetNodeKeyframe: (clipId: string, keyframeId: string) => void;
   updatePuppetNodeKeyframe: (clipId: string, keyframeId: string, updates: Partial<PuppetNodeKeyframe>) => void;
+
+  // ---- Puppet Node Modifiers（程序化动画） ----
+  addPuppetNodeModifier: (skeletonId: string, nodeId: string, type: PartAnimationModifier['type']) => PartAnimationModifier;
+  removePuppetNodeModifier: (skeletonId: string, nodeId: string, modifierId: string) => void;
+  updatePuppetNodeModifier: (skeletonId: string, nodeId: string, modifierId: string, params: Record<string, ModifierParamValue>) => void;
+  togglePuppetNodeModifier: (skeletonId: string, nodeId: string, modifierId: string) => void;
 
   // ---- Puppet Character CRUD ----
   addPuppetCharacter: (name: string, skeletonId: string) => PuppetCharacter;
@@ -114,22 +130,26 @@ export function buildPuppetNodeTree(skeleton: PuppetSkeleton): PuppetNodeTree[] 
 }
 
 /** Direction-dependent draw order for 8-direction puppet rendering */
-export function computeDirectionDrawOrder(skeleton: PuppetSkeleton): PuppetNode[] {
+export function computeDirectionDrawOrder(
+  skeleton: PuppetSkeleton,
+  interpolatedZIndex?: Map<string, number>,
+): PuppetNode[] {
   const direction = skeleton.currentDirection;
   const nodes = [...skeleton.nodes];
 
-  // Base z-index ordering
-  const sorted = nodes.sort((a, b) => a.zIndex - b.zIndex);
+  // Base z-index ordering (use interpolated keyframe zIndex if available)
+  const getZ = (n: PuppetNode) => interpolatedZIndex?.get(n.id) ?? n.zIndex;
+  const sorted = nodes.sort((a, b) => getZ(a) - getZ(b));
 
   // Direction-dependent adjustments
   const isLeft = direction === 'NW' || direction === 'W' || direction === 'SW';
 
   return sorted.map(node => {
     // Flip z-index for mirrored limbs in left-facing directions
-    let adjustedZ = node.zIndex;
+    let adjustedZ = getZ(node);
     if (isLeft && node.mirrorFrom) {
       // Swap left/right z-ordering for mirrored nodes
-      adjustedZ = 1000 - node.zIndex;
+      adjustedZ = 1000 - adjustedZ;
     }
     return { ...node, zIndex: adjustedZ };
   }).sort((a, b) => a.zIndex - b.zIndex);
@@ -156,6 +176,22 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
     return skeleton;
   },
 
+  addPropCharacter: (name) => {
+    const state = get();
+    // 单节点骨骼：无 socket/plug，就是一个可动精灵
+    const skeleton = state.addPuppetSkeleton(`${name}骨骼`);
+    state.addPuppetNode(skeleton.id, name, {
+      angle: 0,
+      stretch: 1,
+      offsetX: 0,
+      offsetY: 0,
+      zIndex: 0,
+      visible: true,
+    });
+    // 创建角色（自动建默认服装集）
+    return state.addPuppetCharacter(name, skeleton.id);
+  },
+
   removePuppetSkeleton: (id) => {
     const state = get();
     state.pushUndo('删除木偶骨骼');
@@ -171,41 +207,15 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
   },
 
   setPuppetDirection: (skeletonId, direction) => {
-    set(s => {
-      // Update the skeleton's current direction
-      const updatedSkeletons = s.puppetSkeletons.map(sk =>
+    // 注意：不要重写已有关键帧的 direction。
+    // 渲染器在解析精灵/镜像时使用 skeleton.currentDirection（实时方向），
+    // 关键帧里记录的 direction 只是录制时的快照。历史上这里曾重写全部
+    // 关键帧，会静默销毁用户的逐帧方向数据，已移除。
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk =>
         sk.id === skeletonId ? { ...sk, currentDirection: direction } : sk
-      );
-
-      // CRITICAL FIX: Sync all existing puppet keyframes to the new direction.
-      // Without this, keyframes retain stale direction values from when they were
-      // created, causing shouldMirrorDirection() to make incorrect mirror decisions
-      // based on the old direction. This is the root cause of the bug where paired
-      // limbs' sprites suddenly change when their rotation angles match — the
-      // interpolated direction from an old keyframe triggers wrong mirroring.
-      const updatedClips = s.animationClips.map(clip => {
-        if (!clip.puppetNodeKeyframes || clip.puppetNodeKeyframes.length === 0) return clip;
-        // Only update keyframes for clips that belong to a character using this skeleton
-        const character = s.puppetCharacters.find(c =>
-          c.puppetSkeletonId === skeletonId &&
-          c.id === clip.puppetCharacterId
-        );
-        if (!character) return clip;
-
-        return {
-          ...clip,
-          puppetNodeKeyframes: clip.puppetNodeKeyframes.map(kf => ({
-            ...kf,
-            direction,
-          })),
-        };
-      });
-
-      return {
-        puppetSkeletons: updatedSkeletons,
-        animationClips: updatedClips,
-      };
-    });
+      ),
+    }));
   },
 
   setPuppetLatitude: (skeletonId, latitude) => {
@@ -223,11 +233,39 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
 
     // Auto-generate a default costume sprite if no spritePartId is provided
     let resolvedSpritePartId = opts?.spritePartId ?? null;
+    let computedJointWidth: number | null = null;
     if (!resolvedSpritePartId) {
       try {
         const skeleton = state.puppetSkeletons.find(sk => sk.id === skeletonId);
         const templateName = skeleton ? 'humanoid' : 'humanoid'; // Default to humanoid
         const spriteResult = generateDefaultCostumeSprite(name, templateName, opts?.color ?? '#888888');
+        // 关节开口约定：默认精灵在 plug / socket 对应的轮廓处留开口。
+        // jointWidth 写入 plug，供两侧渲染共用（= 关节盘直径）。
+        {
+          const openings: JointOpeningSpec[] = [];
+          if (opts?.plug) {
+            const px = spriteResult.pivotX + opts.plug.localX;
+            const py = spriteResult.pivotY + opts.plug.localY;
+            const w = getPlugJointWidth(
+              {
+                plug: { localX: opts.plug.localX, localY: opts.plug.localY },
+                crossSectionTop: opts.crossSectionTop ?? 4,
+                crossSectionBottom: opts.crossSectionBottom ?? 4,
+              },
+              { width: spriteResult.width, height: spriteResult.height, pivotX: spriteResult.pivotX, pivotY: spriteResult.pivotY },
+            );
+            computedJointWidth = w;
+            openings.push({ x: px, y: py, width: w });
+          }
+          for (const s of opts?.sockets ?? []) {
+            openings.push({
+              x: spriteResult.pivotX + s.localX,
+              y: spriteResult.pivotY + s.localY,
+              width: opts?.crossSectionBottom ?? 4,
+            });
+          }
+          applyJointOpenings(spriteResult.pixels, openings);
+        }
         const part = state.addPart(`${name}_${spriteResult.partName}`, spriteResult.width, spriteResult.height, { pivotX: spriteResult.pivotX, pivotY: spriteResult.pivotY });
         state.setPartPixels(part.id, spriteResult.pixels);
         resolvedSpritePartId = part.id;
@@ -241,7 +279,9 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
       id: crypto.randomUUID(),
       name,
       sockets: opts?.sockets ?? [],
-      plug: opts?.plug ?? null,
+      plug: opts?.plug
+        ? { ...opts.plug, jointWidth: computedJointWidth ?? opts.plug.jointWidth ?? null }
+        : null,
       spritePartId: resolvedSpritePartId,
       directionSprites: {},
       mirrorFrom: opts?.mirrorFrom ?? false,
@@ -254,6 +294,7 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
       zIndex: opts?.zIndex ?? 10,
       visible: opts?.visible ?? true,
       color: opts?.color ?? '#888888',
+      modifiers: [],
     };
     set(s => ({
       puppetSkeletons: s.puppetSkeletons.map(sk =>
@@ -302,6 +343,83 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
         sk.id === skeletonId
           ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, ...updates } : n) }
           : sk
+      ),
+    }));
+  },
+
+  // ---- Z-order（Word 式相对操作，不暴露数字） ----
+  bringNodeToFront: (skeletonId, nodeId) => {
+    const state = get();
+    state.pushUndo('节点置于顶层');
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk => {
+        if (sk.id !== skeletonId) return sk;
+        const maxZ = Math.max(0, ...sk.nodes.map(n => n.zIndex));
+        return { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, zIndex: maxZ + 1 } : n) };
+      }),
+    }));
+  },
+
+  sendNodeToBack: (skeletonId, nodeId) => {
+    const state = get();
+    state.pushUndo('节点置于底层');
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk => {
+        if (sk.id !== skeletonId) return sk;
+        const minZ = Math.min(0, ...sk.nodes.map(n => n.zIndex));
+        return { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, zIndex: minZ - 1 } : n) };
+      }),
+    }));
+  },
+
+  bringNodeForward: (skeletonId, nodeId) => {
+    const state = get();
+    const sk = state.puppetSkeletons.find(x => x.id === skeletonId);
+    const node = sk?.nodes.find(n => n.id === nodeId);
+    if (!sk || !node) return;
+    const higher = sk.nodes
+      .filter(n => n.zIndex > node.zIndex)
+      .sort((a, b) => a.zIndex - b.zIndex)[0];
+    if (!higher) return; // 已在最上
+    state.pushUndo('节点上移一层');
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(x =>
+        x.id === skeletonId
+          ? {
+              ...x,
+              nodes: x.nodes.map(n =>
+                n.id === nodeId ? { ...n, zIndex: higher.zIndex }
+                : n.id === higher.id ? { ...n, zIndex: node.zIndex }
+                : n
+              ),
+            }
+          : x
+      ),
+    }));
+  },
+
+  sendNodeBackward: (skeletonId, nodeId) => {
+    const state = get();
+    const sk = state.puppetSkeletons.find(x => x.id === skeletonId);
+    const node = sk?.nodes.find(n => n.id === nodeId);
+    if (!sk || !node) return;
+    const lower = sk.nodes
+      .filter(n => n.zIndex < node.zIndex)
+      .sort((a, b) => b.zIndex - a.zIndex)[0];
+    if (!lower) return; // 已在最下
+    state.pushUndo('节点下移一层');
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(x =>
+        x.id === skeletonId
+          ? {
+              ...x,
+              nodes: x.nodes.map(n =>
+                n.id === nodeId ? { ...n, zIndex: lower.zIndex }
+                : n.id === lower.id ? { ...n, zIndex: node.zIndex }
+                : n
+              ),
+            }
+          : x
       ),
     }));
   },
@@ -388,6 +506,61 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
         c.id === clipId
           ? { ...c, puppetNodeKeyframes: (c.puppetNodeKeyframes ?? []).map(k => k.id === keyframeId ? { ...k, ...updates } : k) }
           : c
+      ),
+    }));
+  },
+
+  // ---- Puppet Node Modifiers（程序化动画） ----
+  addPuppetNodeModifier: (skeletonId, nodeId, type) => {
+    const modifier: PartAnimationModifier = {
+      id: crypto.randomUUID(),
+      type,
+      enabled: true,
+      collapsed: false,
+      params: {},
+      startFrame: -1,
+      endFrame: -1,
+      fadeInFrames: 0,
+      fadeOutFrames: 0,
+      blendMode: 'add',
+      groupId: null,
+    };
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk =>
+        sk.id === skeletonId
+          ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, modifiers: [...(n.modifiers ?? []), modifier] } : n) }
+          : sk
+      ),
+    }));
+    return modifier;
+  },
+
+  removePuppetNodeModifier: (skeletonId, nodeId, modifierId) => {
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk =>
+        sk.id === skeletonId
+          ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, modifiers: (n.modifiers ?? []).filter(m => m.id !== modifierId) } : n) }
+          : sk
+      ),
+    }));
+  },
+
+  updatePuppetNodeModifier: (skeletonId, nodeId, modifierId, params) => {
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk =>
+        sk.id === skeletonId
+          ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, modifiers: (n.modifiers ?? []).map(m => m.id === modifierId ? { ...m, params: { ...m.params, ...params } } : m) } : n) }
+          : sk
+      ),
+    }));
+  },
+
+  togglePuppetNodeModifier: (skeletonId, nodeId, modifierId) => {
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk =>
+        sk.id === skeletonId
+          ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, modifiers: (n.modifiers ?? []).map(m => m.id === modifierId ? { ...m, enabled: !m.enabled } : m) } : n) }
+          : sk
       ),
     }));
   },

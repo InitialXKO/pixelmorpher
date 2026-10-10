@@ -154,5 +154,25 @@ export default function ParamControl({
     );
   }
 
+  // M17: 'string' 类型之前直接 return null，导致 expression 修改器的 4 个表达式参数
+  // 在面板上完全空白、无法编辑
+  if (param.type === 'string') {
+    const strVal = typeof value === 'string' ? value : String(value ?? '');
+    return (
+      <div className="flex items-center gap-2 py-1">
+        <span className="text-[11px] text-muted-foreground w-14 shrink-0 truncate">
+          {param.label}
+        </span>
+        <Input
+          value={strVal}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={param.label}
+          className="h-6 text-[11px] font-mono flex-1 min-w-0"
+        />
+      </div>
+    );
+  }
+
   return null;
 }

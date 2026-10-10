@@ -83,11 +83,10 @@ const bounceHandler: RealtimeTransformHandler = (mod, ctx) => {
   const period = Math.max(2, Number(mod.params.period) || 12);
   const bounces = Math.max(1, Number(mod.params.bounces) || 3);
   const damping = Number(mod.params.damping) || 0.5;
-  // Derive bounce index and within-bounce progress from accumulated phase
-  const fullPhase = bouncePhaseVal; // already includes phaseRad offset
-  const cyclesCompleted = fullPhase / (2 * Math.PI); // may be fractional
-  const bounceIndex = Math.floor(cyclesCompleted * bounces);
-  const withinBounce = (cyclesCompleted * bounces) - Math.floor(cyclesCompleted * bounces);
+  // 与 bake 对齐：每周期内重置 bounceIndex，保证每周期看起来一样
+  const bounceTNorm = (ctx.relativeFrame % period) / (period / bounces);
+  const bounceIndex = Math.floor((ctx.relativeFrame % period) / (period / bounces));
+  const withinBounce = bounceTNorm - Math.floor(bounceTNorm);
   const decayFactor = Math.pow(1 - damping, bounceIndex);
   return {
     translateY: -height * decayFactor * Math.pow(Math.sin(Math.PI * withinBounce), 2) * effectiveWeight,
@@ -304,12 +303,13 @@ const springHandler: RealtimeTransformHandler = (mod, ctx) => {
   const damping = Number(mod.params.damping) || 0.3;
   const mass = Number(mod.params.mass) || 1;
   const restLength = Number(mod.params.restLength) || 0;
+  const amplitude = Number(mod.params.amplitude) || 10;
   const targetProperty = String(mod.params.targetProperty || 'translateY');
   const omega = Math.sqrt(stiffness / mass);
   const gamma = damping / (2 * mass);
   const dampedOmega = Math.sqrt(Math.max(0, omega * omega - gamma * gamma));
-  const timeSec = rf / 60;
-  const value = (restLength > 0 ? restLength : 1) * Math.exp(-gamma * timeSec) * Math.cos(dampedOmega * timeSec) + restLength;
+  const timeSec = rf / (ctx.frameRate || 12);
+  const value = (restLength > 0 ? restLength : amplitude) * Math.exp(-gamma * timeSec) * Math.cos(dampedOmega * timeSec) + restLength;
   applyProceduralToResult(result, targetProperty, value * effectiveWeight);
   return { ...result, weight: effectiveWeight };
 };

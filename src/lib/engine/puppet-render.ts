@@ -20,6 +20,8 @@ import type {
   GlobalModifier,
   AnimationVariable,
   ParamDriver,
+  ModifierInstance,
+  PartAnimationModifier,
 } from '../types';
 import { PUPPET_DIRECTIONS, DIRECTION_MIRROR } from '../types';
 import { hexToRgbCached } from './color-utils';
@@ -177,11 +179,15 @@ export function renderPixelPerfectRotation(
   }
 
   // ---- Cache lookup ----
+  // H13: 缓存里存的是独立 canvas（非池化），命中时再拷一份池化 canvas 返回，
+  // 这样调用方沿用既有的 release 语义永远安全，不会污染缓存。
   const cacheKey = getRotationCacheKey(spriteCanvas, angle, stretchY, pivotX, pivotY);
   const cached = getCachedRotation(cacheKey);
   if (cached) {
+    const copy = acquireCanvas(cached.canvas.width, cached.canvas.height);
+    copy.getContext('2d')!.drawImage(cached.canvas, 0, 0);
     return {
-      canvas: cached.canvas,
+      canvas: copy,
       resultPivotX: cached.resultPivotX,
       resultPivotY: cached.resultPivotY,
     };
@@ -207,11 +213,14 @@ export function renderPixelPerfectRotation(
 
   // If no rotation (stretch only), pivot position is preserved
   if (angle === 0) {
-    const result = downsample4x(upCanvas, sw, sh);
+    // H12: 下采样目标必须按拉伸缩放，否则拉伸被静默擦除
+    const stretchedH = Math.max(1, Math.round(sh * stretchY));
+    const result = downsample4x(upCanvas, sw, stretchedH);
     releaseCanvas(upCanvas);
+    const resultPivotY = pivotY * stretchY;
     // Store in cache
-    setCachedRotation(cacheKey, { canvas: result, resultPivotX: pivotX, resultPivotY: pivotY });
-    return { canvas: result, resultPivotX: pivotX, resultPivotY: pivotY };
+    setCachedRotation(cacheKey, { canvas: cloneCanvasForCache(result), resultPivotX: pivotX, resultPivotY });
+    return { canvas: result, resultPivotX: pivotX, resultPivotY };
   }
 
   // Step 2: Calculate bounding box after rotation on the upscaled canvas
@@ -278,7 +287,7 @@ export function renderPixelPerfectRotation(
   releaseCanvas(rotCanvas);
 
   // Store in cache
-  setCachedRotation(cacheKey, { canvas: result, resultPivotX, resultPivotY });
+  setCachedRotation(cacheKey, { canvas: cloneCanvasForCache(result), resultPivotX, resultPivotY });
   return { canvas: result, resultPivotX, resultPivotY };
 }
 
@@ -306,6 +315,18 @@ function downsample4x(
   return result;
 }
 
+/**
+ * H13: 把池化 canvas 拷成独立 canvas 再存入旋转缓存。
+ * 缓存持有独立副本，调用方 release 自己的池化 canvas 时不会污染缓存。
+ */
+function cloneCanvasForCache(src: HTMLCanvasElement): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = src.width;
+  c.height = src.height;
+  c.getContext('2d')!.drawImage(src, 0, 0);
+  return c;
+}
+
 // ============================================================
 // Puppet Node World Transforms
 // ============================================================
@@ -327,6 +348,8 @@ export interface PuppetNodeWorldTransform {
   node: PuppetNode;
   /** Computed direction at this frame */
   direction: PuppetDirection;
+  /** Interpolated zIndex at this frame (keyframe override or base) */
+  zIndex: number;
 }
 
 /**
@@ -426,6 +449,7 @@ function computePuppetNodeWorldTransforms(
       depth,
       node,
       direction: interpolated.direction,
+      zIndex: interpolated.zIndex,
     };
     result.push(transform);
 
@@ -476,6 +500,7 @@ function interpolateNodeKeyframes(
   offsetX: number;
   offsetY: number;
   direction: PuppetDirection;
+  zIndex: number;
 } {
   if (keyframes.length === 0) {
     return {
@@ -484,6 +509,7 @@ function interpolateNodeKeyframes(
       offsetX: node.offsetX,
       offsetY: node.offsetY,
       direction: fallbackDirection,
+      zIndex: node.zIndex,
     };
   }
 
@@ -506,6 +532,7 @@ function interpolateNodeKeyframes(
       offsetX: prevKf.offsetX ?? node.offsetX,
       offsetY: prevKf.offsetY ?? node.offsetY,
       direction: prevKf.direction ?? fallbackDirection,
+      zIndex: prevKf.zIndex ?? node.zIndex,
     };
   }
 
@@ -517,15 +544,17 @@ function interpolateNodeKeyframes(
       offsetX: node.offsetX,
       offsetY: node.offsetY,
       direction: fallbackDirection,
+      zIndex: node.zIndex,
     };
   }
 
   // Interpolate between prev and next
   const t = (currentFrame - prevKf.frame) / (nextKf!.frame - prevKf.frame);
 
-  // HOLD (step) for angle and direction
+  // HOLD (step) for angle, direction, and zIndex
   const angle = prevKf.angle ?? node.angle;
   const direction = prevKf.direction ?? fallbackDirection;
+  const zIndex = prevKf.zIndex ?? node.zIndex;
 
   // LERP for stretch and offset
   const prevStretch = prevKf.stretch ?? node.stretch;
@@ -540,7 +569,7 @@ function interpolateNodeKeyframes(
   const nextOffY = nextKf!.offsetY ?? prevOffY;
   const offsetY = prevOffY + (nextOffY - prevOffY) * t;
 
-  return { angle, stretchY, offsetX, offsetY, direction };
+  return { angle, stretchY, offsetX, offsetY, direction, zIndex };
 }
 
 // ============================================================
@@ -851,7 +880,7 @@ function renderPuppetFrame(
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
   // Step 1: Find linked PuppetCharacter
-  if (!clip.isPuppetClip || !clip.puppetCharacterId) return;
+  if (!true || !clip.puppetCharacterId) return;
   const character = puppetCharacters.find(c => c.id === clip.puppetCharacterId);
   if (!character) return;
 
@@ -932,7 +961,7 @@ function renderPuppetFrame(
     const mirrored = shouldMirrorDirection(node, nodeDirection);
 
     const sortKey = computeRenderSortKey(
-      node.zIndex,
+      wt.zIndex,
       drawOrderIndex,
       wt.worldY,
       minY,
@@ -1085,10 +1114,8 @@ function createPartCanvasFromPart(
   let modOffsetX = 0;
   let modOffsetY = 0;
 
-  const activePixelMods = part.editModifiers?.filter(m =>
-    m.enabled && ['color_replace', 'outline', 'dither', 'pixel_displace',
-      'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip', 'pixel_edit'].includes(m.type)
-  ) || [];
+  // Part 不再有 editModifiers（死代码，仅为编译通过）
+  const activePixelMods: ModifierInstance[] = [];
 
   if (activePixelMods.length > 0) {
     // Resolve ParamDrivers/ParamKeyframes before rendering
@@ -1104,8 +1131,8 @@ function createPartCanvasFromPart(
     pixels = part.pixels;
   }
 
-  // Apply translate shift from part edit modifiers
-  const translateMod = part.editModifiers?.find(m => m.type === 'translate' && m.enabled);
+  // Apply translate shift from part edit modifiers (Part 不再有 editModifiers)
+  const translateMod = (undefined as unknown as ModifierInstance | undefined);
   if (translateMod) {
     const dx = Math.round(Number(translateMod.params.offsetX) || 0);
     const dy = Math.round(Number(translateMod.params.offsetY) || 0);
@@ -1150,8 +1177,9 @@ function createPartCanvasFromPart(
 
   // ---- Step 3: Apply pixel-level deformation animation modifiers ----
   // (wave_deform, texture_scroll, contour_scroll, etc.)
-  if (part.animationModifiers && part.animationModifiers.length > 0) {
-    const animMods = part.animationModifiers.filter(m => m.enabled && isPixelDeformModifier(m.type));
+  // Part 不再有 animationModifiers（死代码，仅为编译通过）
+  if (false) {
+    const animMods: PartAnimationModifier[] = [];
     if (animMods.length > 0) {
       // Compute padding for overflow
       const animPadding = computeTotalAnimPadding(animMods, currentFrame, frameRate);

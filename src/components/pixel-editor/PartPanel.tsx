@@ -262,7 +262,7 @@ function PartItem({
               onToggleVisibility();
             }}
           >
-            {part.visible ? (
+            {true ? (
               <Eye className="size-3" />
             ) : (
               <EyeOff className="size-3 text-muted-foreground" />
@@ -270,7 +270,7 @@ function PartItem({
           </Button>
         </TooltipTrigger>
         <TooltipContent side="left">
-          {part.visible ? '隐藏' : '显示'}
+          {true ? '隐藏' : '显示'}
         </TooltipContent>
       </Tooltip>
 
@@ -328,8 +328,7 @@ function PartItem({
 function PartProperties({ part }: { part: Part }) {
   const updatePart = useProjectStore((s) => s.updatePart);
   const autoEstimatePivot = useProjectStore((s) => s.autoEstimatePivot);
-  const setPartParent = useProjectStore((s) => s.setPartParent);
-  const parts = useProjectStore((s) => s.parts);
+    const parts = useProjectStore((s) => s.parts);
   const [resizeOpen, setResizeOpen] = useState(false);
 
   const handlePivotChange = useCallback(
@@ -362,25 +361,14 @@ function PartProperties({ part }: { part: Part }) {
     const collectDescendants = (id: string) => {
       descendantIds.add(id);
       for (const p of parts) {
-        if (p.parentId === id) collectDescendants(p.id);
       }
     };
     collectDescendants(part.id);
     return parts.filter((p) => !descendantIds.has(p.id));
   }, [parts, part.id]);
 
-  const handleSetParent = useCallback(
-    (value: string) => {
-      if (value === '__none__') {
-        setPartParent(part.id, null);
-      } else {
-        setPartParent(part.id, value);
-      }
-    },
-    [part.id, setPartParent]
-  );
 
-  const parentPart = part.parentId ? parts.find((p) => p.id === part.parentId) : null;
+  const parentPart = null; // Part 无 parentId
 
   return (
     <div className="space-y-2">
@@ -414,7 +402,7 @@ function PartProperties({ part }: { part: Part }) {
           <Label className="text-[10px] text-muted-foreground">偏移 X</Label>
           <Input
             type="number"
-            value={part.offsetX || 0}
+            value={0 || 0}
             onChange={(e) => handleOffsetChange('offsetX', e.target.value)}
             className="h-7 text-xs px-2"
           />
@@ -423,7 +411,7 @@ function PartProperties({ part }: { part: Part }) {
           <Label className="text-[10px] text-muted-foreground">偏移 Y</Label>
           <Input
             type="number"
-            value={part.offsetY || 0}
+            value={0 || 0}
             onChange={(e) => handleOffsetChange('offsetY', e.target.value)}
             className="h-7 text-xs px-2"
           />
@@ -456,7 +444,7 @@ function PartProperties({ part }: { part: Part }) {
         </div>
       </div>
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground/70">
-        <span>Z-Index: {part.zIndex}</span>
+        <span>Z-Index: {0}</span>
         <span>|</span>
         <span>{part.width} x {part.height} px</span>
         <Button
@@ -484,8 +472,8 @@ function PartProperties({ part }: { part: Part }) {
           父级部件
         </Label>
         <Select
-          value={part.parentId ?? '__none__'}
-          onValueChange={handleSetParent}
+          value={'__none__'}
+          onValueChange={() => {}} // Part 无 parentId
         >
           <SelectTrigger className="h-7 text-xs px-2">
             <SelectValue placeholder="无 (根级)" />
@@ -503,7 +491,7 @@ function PartProperties({ part }: { part: Part }) {
         </Select>
         {parentPart && (
           <div className="text-[10px] text-muted-foreground/70">
-            子部件变换将相对于父级「{parentPart.name}」进行
+            Part 无父级
           </div>
         )}
       </div>
@@ -522,294 +510,6 @@ function PartProperties({ part }: { part: Part }) {
 }
 
 // ---- Part Global Modifier Card ----
-
-function PartGlobalModifierCard({ partId, modifier }: { partId: string; modifier: GlobalModifier }) {
-  const {
-    updatePartGlobalModifier,
-    updatePartGlobalModifierParams,
-    togglePartGlobalModifier,
-    removePartGlobalModifier,
-    reorderPartGlobalModifier,
-  } = useProjectStore();
-
-  const [collapsed, setCollapsed] = useState(!modifier.enabled);
-  const def = GLOBAL_MODIFIER_DEFINITIONS.find((d) => d.type === modifier.type);
-
-  const handleParamChange = useCallback((paramName: string, value: ModifierParamValue) => {
-    updatePartGlobalModifierParams(partId, modifier.id, { [paramName]: value });
-  }, [partId, modifier.id, updatePartGlobalModifierParams]);
-
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div className={`group border rounded-md transition-colors ${
-          modifier.enabled
-            ? 'bg-zinc-900/80 border-zinc-800'
-            : 'bg-zinc-950/50 border-zinc-800/50 opacity-60'
-        }`}>
-          {/* Header */}
-          <div
-            className="flex items-center gap-1.5 px-2 py-1.5 cursor-pointer select-none"
-            onClick={() => setCollapsed(!collapsed)}
-          >
-            <span className="text-zinc-500">
-              {collapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
-            </span>
-            <span className="text-cyan-400">
-              {TYPE_ICONS[modifier.type] || <Globe className="size-3" />}
-            </span>
-            <span className="text-[10px] font-medium text-zinc-200 flex-1 truncate">
-              {modifier.name}
-            </span>
-            <div className="flex items-center gap-0.5">
-              <Button
-                variant="ghost"
-                size="sm"
-                className={`h-4 w-4 p-0 ${modifier.enabled ? 'text-cyan-400' : 'text-zinc-600'}`}
-                onClick={(e) => { e.stopPropagation(); togglePartGlobalModifier(partId, modifier.id); }}
-                title={modifier.enabled ? '禁用' : '启用'}
-              >
-                {modifier.enabled ? <Eye className="size-2.5" /> : <EyeOff className="size-2.5" />}
-              </Button>
-            </div>
-          </div>
-
-          {/* Parameters */}
-          {!collapsed && def && (
-            <div className="px-2 pb-2 space-y-1.5 border-t border-zinc-800/50 pt-1.5">
-              {def.params.map((param) => (
-                <div key={param.name} className="flex items-center gap-2">
-                  <label className="text-[9px] text-zinc-500 w-16 shrink-0 truncate" title={param.label}>
-                    {param.label}
-                  </label>
-                  {param.type === 'boolean' ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className={`h-5 text-[9px] px-2 ${modifier.params[param.name] ? 'text-cyan-400' : 'text-zinc-600'}`}
-                      onClick={() => handleParamChange(param.name, !modifier.params[param.name])}
-                    >
-                      {modifier.params[param.name] ? '开' : '关'}
-                    </Button>
-                  ) : param.type === 'select' ? (
-                    <select
-                      value={String(modifier.params[param.name] ?? param.default)}
-                      onChange={(e) => handleParamChange(param.name, e.target.value)}
-                      className="h-5 text-[9px] bg-zinc-800 border border-zinc-700 rounded px-1 flex-1 text-zinc-300"
-                    >
-                      {param.options?.map((opt) => (
-                        <option key={String(opt.value)} value={String(opt.value)}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  ) : param.type === 'color' ? (
-                    <input
-                      type="color"
-                      value={String(modifier.params[param.name] ?? param.default)}
-                      onChange={(e) => handleParamChange(param.name, e.target.value)}
-                      className="h-5 w-8 bg-transparent border-0 cursor-pointer"
-                    />
-                  ) : (
-                    <div className="flex items-center gap-1 flex-1">
-                      <Input
-                        type="number"
-                        value={Number(modifier.params[param.name] ?? param.default)}
-                        onChange={(e) => handleParamChange(param.name, Number(e.target.value))}
-                        step={param.step ?? 1}
-                        min={param.min}
-                        max={param.max}
-                        className="h-5 text-[9px] bg-zinc-800 border-zinc-700 flex-1"
-                      />
-                      {param.min !== undefined && param.max !== undefined && (
-                        <input
-                          type="range"
-                          value={Number(modifier.params[param.name] ?? param.default)}
-                          onChange={(e) => handleParamChange(param.name, Number(e.target.value))}
-                          min={param.min}
-                          max={param.max}
-                          step={param.step ?? 1}
-                          className="flex-1 h-1 accent-cyan-500"
-                        />
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              {/* Effective range */}
-              <div className="flex items-center gap-2 pt-1 border-t border-zinc-800/30">
-                <label className="text-[9px] text-zinc-600 w-16 shrink-0">起始帧</label>
-                <Input
-                  type="number"
-                  value={modifier.startFrame === -1 ? '' : modifier.startFrame}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    updatePartGlobalModifier(partId, modifier.id, { startFrame: v === '' ? -1 : Number(v) });
-                  }}
-                  placeholder="始终"
-                  className="h-5 text-[9px] bg-zinc-800 border-zinc-700 flex-1"
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="text-[9px] text-zinc-600 w-16 shrink-0">结束帧</label>
-                <Input
-                  type="number"
-                  value={modifier.endFrame === -1 ? '' : modifier.endFrame}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    updatePartGlobalModifier(partId, modifier.id, { endFrame: v === '' ? -1 : Number(v) });
-                  }}
-                  placeholder="始终"
-                  className="h-5 text-[9px] bg-zinc-800 border-zinc-700 flex-1"
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      </ContextMenuTrigger>
-
-      <ContextMenuContent className="bg-zinc-900 border-zinc-700 min-w-[140px]">
-        <ContextMenuLabel className="text-[10px] text-zinc-400 py-1.5">
-          {modifier.name}
-        </ContextMenuLabel>
-        <ContextMenuSeparator className="bg-zinc-800" />
-        <ContextMenuItem
-          className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 py-1.5 cursor-pointer"
-          onClick={() => togglePartGlobalModifier(partId, modifier.id)}
-        >
-          {modifier.enabled ? <EyeOff className="size-3 mr-1.5 text-zinc-400" /> : <Eye className="size-3 mr-1.5 text-zinc-400" />}
-          {modifier.enabled ? '禁用' : '启用'}
-        </ContextMenuItem>
-        <ContextMenuItem
-          className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 py-1.5 cursor-pointer"
-          onClick={() => reorderPartGlobalModifier(partId, modifier.id, 'up')}
-        >
-          <ArrowUp className="size-3 mr-1.5 text-zinc-400" />
-          上移
-        </ContextMenuItem>
-        <ContextMenuItem
-          className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 py-1.5 cursor-pointer"
-          onClick={() => reorderPartGlobalModifier(partId, modifier.id, 'down')}
-        >
-          <ArrowDown className="size-3 mr-1.5 text-zinc-400" />
-          下移
-        </ContextMenuItem>
-        <ContextMenuSeparator className="bg-zinc-800" />
-        <ContextMenuItem
-          className="text-[11px] text-red-400 focus:bg-red-600/20 focus:text-red-300 py-1.5 cursor-pointer"
-          variant="destructive"
-          onClick={() => removePartGlobalModifier(partId, modifier.id)}
-        >
-          <Trash2 className="size-3 mr-1.5" />
-          删除
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-}
-
-// ---- Part Global Modifiers Section ----
-
-function PartGlobalModifiers({ part }: { part: Part }) {
-  const addPartGlobalModifier = useProjectStore((s) => s.addPartGlobalModifier);
-  const [showAddMenu, setShowAddMenu] = useState(false);
-  const [sectionCollapsed, setSectionCollapsed] = useState(false);
-
-  const handleAdd = useCallback((type: GlobalModifierType) => {
-    addPartGlobalModifier(part.id, type);
-    setShowAddMenu(false);
-  }, [part.id, addPartGlobalModifier]);
-
-  const transformTypes = GLOBAL_MODIFIER_DEFINITIONS.filter((d) => d.category === 'transform');
-  const animTypes = GLOBAL_MODIFIER_DEFINITIONS.filter((d) => d.category === 'animation');
-  const modifiers = part.globalModifiers || [];
-
-  return (
-    <div className="space-y-2">
-      {/* Section header */}
-      <div
-        className="flex items-center gap-1.5 cursor-pointer select-none"
-        onClick={() => setSectionCollapsed(!sectionCollapsed)}
-      >
-        <span className="text-muted-foreground">
-          {sectionCollapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
-        </span>
-        <Globe className="size-3 text-cyan-400" />
-        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex-1">
-          部件全局修改器
-        </span>
-        <span className="text-[9px] text-muted-foreground/60">
-          {modifiers.length}
-        </span>
-        <div className="relative">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-5 w-5 p-0 text-zinc-500 hover:text-cyan-400"
-            onClick={(e) => { e.stopPropagation(); setShowAddMenu(!showAddMenu); }}
-            title="添加部件全局修改器"
-          >
-            <Plus className="size-3" />
-          </Button>
-          {showAddMenu && (
-            <div className="absolute right-0 top-6 z-50 bg-zinc-900 border border-zinc-700 rounded-md shadow-lg min-w-[140px] py-1">
-              <div className="px-2 py-1 text-[9px] text-zinc-500 uppercase tracking-wider">变换</div>
-              {transformTypes.map((def) => (
-                <button
-                  key={def.type}
-                  className="flex items-center gap-1.5 w-full px-2 py-1 text-[10px] text-zinc-300 hover:bg-zinc-800 transition-colors"
-                  onClick={() => handleAdd(def.type)}
-                >
-                  {TYPE_ICONS[def.type]}
-                  {def.label}
-                </button>
-              ))}
-              <div className="px-2 py-1 mt-1 text-[9px] text-zinc-500 uppercase tracking-wider border-t border-zinc-800">动画</div>
-              {animTypes.map((def) => (
-                <button
-                  key={def.type}
-                  className="flex items-center gap-1.5 w-full px-2 py-1 text-[10px] text-zinc-300 hover:bg-zinc-800 transition-colors"
-                  onClick={() => handleAdd(def.type)}
-                >
-                  {TYPE_ICONS[def.type]}
-                  {def.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Modifier list */}
-      {!sectionCollapsed && (
-        <div className="space-y-1 pl-1">
-          {modifiers.length === 0 ? (
-            <div className="text-center py-3">
-              <Globe className="size-5 text-zinc-800 mx-auto mb-1" />
-              <p className="text-[9px] text-zinc-600">暂无部件全局修改器</p>
-              <p className="text-[8px] text-zinc-700 mt-0.5">始终生效的变换/动画</p>
-            </div>
-          ) : (
-            modifiers.map((mod) => (
-              <PartGlobalModifierCard key={mod.id} partId={part.id} modifier={mod} />
-            ))
-          )}
-        </div>
-      )}
-
-      {/* Click outside to close add menu */}
-      {showAddMenu && (
-        <div
-          className="fixed inset-0 z-40"
-          onClick={() => setShowAddMenu(false)}
-        />
-      )}
-    </div>
-  );
-}
-
-// ---- Expandable Part Detail (click to expand) ----
 
 function ExpandablePartDetail({ part, onEdit }: { part: Part; onEdit: () => void }) {
   const [expanded, setExpanded] = useState(true);
@@ -850,8 +550,6 @@ function ExpandablePartDetail({ part, onEdit }: { part: Part; onEdit: () => void
       {expanded && (
         <div className="px-3 pb-3 space-y-3">
           <PartProperties part={part} />
-          <Separator />
-          <PartGlobalModifiers part={part} />
         </div>
       )}
     </div>
@@ -887,7 +585,7 @@ export default function PartPanel() {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
-  const sortedParts = [...parts].sort((a, b) => a.zIndex - b.zIndex);
+  const sortedParts = [...parts].sort((a, b) => 0);
   const selectedPart = parts.find((p) => p.id === selectedPartId) ?? null;
 
   // ---- Handlers ----
@@ -906,7 +604,7 @@ export default function PartPanel() {
 
   const handleDeletePart = useCallback(() => {
     if (!selectedPartId) return;
-    const currentSorted = [...parts].sort((a, b) => a.zIndex - b.zIndex);
+    const currentSorted = [...parts].sort((a, b) => 0);
     const currentIndex = currentSorted.findIndex((p) => p.id === selectedPartId);
     removePart(selectedPartId);
     // Select adjacent part
@@ -996,7 +694,7 @@ export default function PartPanel() {
 
       // Update zIndex for all affected parts
       reordered.forEach((part, idx) => {
-        if (part.zIndex !== idx) {
+        if (0 !== idx) {
           reorderPart(part.id, idx);
         }
       });
@@ -1258,9 +956,7 @@ export default function PartPanel() {
                   part={part}
                   isSelected={part.id === selectedPartId}
                   onSelect={() => selectPart(part.id)}
-                  onToggleVisibility={() =>
-                    updatePart(part.id, { visible: !part.visible })
-                  }
+                  onToggleVisibility={() => {}}
                   onToggleLock={() =>
                     updatePart(part.id, { locked: !part.locked })
                   }

@@ -38,8 +38,8 @@ import { clearRenderCaches } from './engine/render-cache';
 
 // ---- Singleton LiveAdapter ----
 // NOTE: The LiveAdapter is retained as a fallback for render paths that
-// don't go through the store (e.g., export, testing). The store's
-// UnifiedSlice.getUnifiedProject() is preferred for main rendering.
+// don't go through the store (e.g., export, testing). The old UnifiedSlice
+// was removed (H21: zombie code); LiveAdapter is the only unified-model path.
 
 const liveAdapter = new LiveAdapter();
 
@@ -98,19 +98,25 @@ export function renderUnified(
 
   // ---- Step 1: Render non-puppet parts using the EXISTING pipeline ----
   // The existing renderFrame() handles all modifier stacks, effects,
-  // canvas modifiers, motion blur, etc. for non-puppet parts.
+  // motion blur, etc. for non-puppet parts.
   // This is NOT yet migrated to the unified pipeline.
+  // H10: canvas modifiers 是全帧后处理，只在函数末尾应用一次。
+  // 这里传 undefined，避免 renderFrame 内部先应用一次造成叠加两次。
   renderFrame(
     ctx, canvasWidth, canvasHeight, nonPuppetParts, keyframes, currentFrame,
     backgroundColor, effectTracks, motionBlurStrokes, effectStrokes,
     autoMotionBlur, autoMotionBlurIntensity, skeletons, proceduralAnimations,
-    canvasModifierTracks, frameRate, previewQuality, animationVariables,
+    undefined, frameRate, previewQuality, animationVariables,
     globalModifiers,
   );
 
   // ---- Step 2: Render puppet parts ----
   if (puppetSkeletons && puppetCharacters && puppetSkeletons.length > 0) {
-    if (useUnifiedPipeline) {
+    // 有程序化修改器的骨架走老管线（unified pipeline 不调 interpolateNodeKeyframes，修改器不生效）
+    const hasPuppetModifiers = puppetSkeletons.some(sk =>
+      sk.nodes.some(n => (n.modifiers ?? []).length > 0)
+    );
+    if (useUnifiedPipeline && !hasPuppetModifiers) {
       // NEW: Unified pipeline path
       renderPuppetViaUnifiedPipeline(
         ctx, canvasWidth, canvasHeight,
@@ -119,7 +125,7 @@ export function renderUnified(
         globalModifiers, animationVariables, canvasModifierTracks,
       );
     } else {
-      // OLD: Direct renderPuppetNodes() path (fallback)
+      // OLD: Direct renderPuppetNodes() path (fallback) — 支持节点修改器
       renderPuppetViaOldPipeline(
         ctx, parts, puppetSkeletons, puppetCharacters,
         animationClips, currentFrame, canvasWidth, canvasHeight, frameRate,
@@ -127,9 +133,45 @@ export function renderUnified(
       );
     }
   }
+
+  // ---- Step 3: Canvas modifiers — 全帧后处理，只应用一次（H10）
+  // 必须在木偶叠加之后，否则木偶不受后处理影响；renderFrame 内部已不再应用。
+  if (canvasModifierTracks && canvasModifierTracks.length > 0) {
+    applyCanvasModifiers(ctx, canvasModifierTracks, currentFrame, canvasWidth, canvasHeight);
+  }
 }
 
 // ---- New Unified Pipeline Path ----
+
+/**
+ * H11: 全局变换（镜头/世界）包装抽成共享函数——实时预览与导出两条路径复用，
+ * 保证存在 globalModifiers 时导出图与预览一致。
+ * 返回是否应用了变换（调用方据此决定是否 ctx.restore()）。
+ */
+function applyGlobalTransformWrapper(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  globalModifiers: GlobalModifier[] | undefined,
+  frame: number,
+  frameRate: number,
+): boolean {
+  let globalTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
+  if (globalModifiers && globalModifiers.length > 0) {
+    globalTransform = computeGlobalModifierTransform(globalModifiers, frame, frameRate);
+  }
+  const has = globalTransform.translateX !== 0 || globalTransform.translateY !== 0 ||
+    globalTransform.rotation !== 0 || globalTransform.scaleX !== 1 || globalTransform.scaleY !== 1;
+  if (has) {
+    ctx.save();
+    ctx.translate(canvasWidth / 2, canvasHeight / 2);
+    ctx.translate(globalTransform.translateX, globalTransform.translateY);
+    ctx.rotate((globalTransform.rotation * Math.PI) / 180);
+    ctx.scale(globalTransform.scaleX, globalTransform.scaleY);
+    ctx.translate(-canvasWidth / 2, -canvasHeight / 2);
+  }
+  return has;
+}
 
 function renderPuppetViaUnifiedPipeline(
   ctx: CanvasRenderingContext2D,
@@ -147,22 +189,9 @@ function renderPuppetViaUnifiedPipeline(
 ): void {
   // Apply global modifier transform (camera/world transform)
   // This matches the old pipeline's behavior in renderPuppetFrame().
-  let globalTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
-  if (globalModifiers && globalModifiers.length > 0) {
-    globalTransform = computeGlobalModifierTransform(globalModifiers, currentFrame, frameRate);
-  }
-
-  const hasGlobalTransform = globalTransform.translateX !== 0 || globalTransform.translateY !== 0 ||
-    globalTransform.rotation !== 0 || globalTransform.scaleX !== 1 || globalTransform.scaleY !== 1;
-
-  if (hasGlobalTransform) {
-    ctx.save();
-    ctx.translate(canvasWidth / 2, canvasHeight / 2);
-    ctx.translate(globalTransform.translateX, globalTransform.translateY);
-    ctx.rotate((globalTransform.rotation * Math.PI) / 180);
-    ctx.scale(globalTransform.scaleX, globalTransform.scaleY);
-    ctx.translate(-canvasWidth / 2, -canvasHeight / 2);
-  }
+  const hasGlobalTransform = applyGlobalTransformWrapper(
+    ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate,
+  );
 
   for (const character of puppetCharacters) {
     const skeleton = puppetSkeletons.find(s => s.id === character.puppetSkeletonId);
@@ -170,7 +199,7 @@ function renderPuppetViaUnifiedPipeline(
 
     // Find puppet keyframes from animation clip
     const puppetClip = animationClips.find(
-      c => c.isPuppetClip && c.puppetCharacterId === character.id
+      c => true && c.puppetCharacterId === character.id
     );
     const nodeKeyframes = puppetClip?.puppetNodeKeyframes ?? [];
 
@@ -191,6 +220,9 @@ function renderPuppetViaUnifiedPipeline(
       value: v.defaultValue ?? 0,
       min: 0,
       max: 100,
+      // H6: 透传 writer，供变量驱动求值
+      writerDriverId: v.writerDriverId,
+      defaultValue: v.defaultValue ?? 0,
     }));
     const plan = generateRenderPlan(
       unifiedCharacter,
@@ -206,11 +238,6 @@ function renderPuppetViaUnifiedPipeline(
 
   if (hasGlobalTransform) {
     ctx.restore();
-  }
-
-  // Apply canvas modifier post-processing (outline_emphasis, color_lut, bloom, scanlines, etc.)
-  if (canvasModifierTracks && canvasModifierTracks.length > 0) {
-    applyCanvasModifiers(ctx, canvasModifierTracks, currentFrame, canvasWidth, canvasHeight);
   }
 }
 
@@ -233,7 +260,7 @@ function renderPuppetViaOldPipeline(
     if (!skeleton) continue;
 
     const puppetClip = animationClips.find(
-      c => c.isPuppetClip && c.puppetCharacterId === character.id
+      c => true && c.puppetCharacterId === character.id
     );
 
     if (!puppetClip) {
@@ -327,15 +354,20 @@ export function renderUnifiedToCanvas(
     : parts;
 
   // Render non-puppet parts
+  // H10: canvas modifiers 只在函数末尾应用一次，这里传 undefined 避免叠加两次
   renderFrame(
     ctx, canvasWidth, canvasHeight, nonPuppetParts, keyframes, frame,
     backgroundColor, effectTracks, motionBlurStrokes, effectStrokes,
     autoMotionBlur, autoMotionBlurIntensity, skeletons, proceduralAnimations,
-    canvasModifierTracks, frameRate, previewQuality, animationVariables,
+    undefined, frameRate, previewQuality, animationVariables,
     globalModifiers,
   );
 
   // Render puppet parts via unified pipeline
+  // H11: 与实时预览一致，木偶渲染包裹全局变换
+  const hasGlobalTransform = applyGlobalTransformWrapper(
+    ctx, canvasWidth, canvasHeight, globalModifiers, frame, frameRate,
+  );
   if (puppetSkeletons && puppetCharacters && puppetSkeletons.length > 0) {
     // Build animation clips lookup for puppet keyframes
     for (const character of puppetCharacters) {
@@ -362,6 +394,9 @@ export function renderUnifiedToCanvas(
         value: v.defaultValue ?? 0,
         min: 0,
         max: 100,
+        // H6: 透传 writer，供变量驱动求值
+        writerDriverId: v.writerDriverId,
+        defaultValue: v.defaultValue ?? 0,
       }));
       const plan = generateRenderPlan(
         unifiedCharacter,
@@ -374,6 +409,10 @@ export function renderUnifiedToCanvas(
       );
       executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
     }
+  }
+
+  if (hasGlobalTransform) {
+    ctx.restore();
   }
 
   // Apply canvas modifier post-processing

@@ -12,6 +12,8 @@ import {
   User,
   Dog,
   Box,
+  Bot,
+  Shield,
   Check,
   X,
   ArrowRight,
@@ -28,11 +30,11 @@ import type {
   PuppetDirection,
 } from '@/lib/types';
 import { PUPPET_DIRECTIONS } from '@/lib/types';
-import { generateDefaultCostumeSprite } from '@/lib/engine/default-costume-sprites';
+import { generateDefaultCostumeSprite, generateDefaultCostumeSideSprite, type DefaultSpriteResult } from '@/lib/engine/default-costume-sprites';
+import { applyJointOpenings, type JointOpeningSpec } from '@/lib/engine/render-helpers/puppet-joint-color';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ScrollArea } from '@/components/ui/scroll-area';
 
 // ---- Template Definitions ----
 
@@ -49,12 +51,16 @@ interface TemplateNodeDef {
   zIndex: number;
 }
 
+export type { TemplateNodeDef };
+
 interface PuppetTemplate {
   name: string;
   label: string;
   icon: React.ReactNode;
   nodes: TemplateNodeDef[];
 }
+
+export type { PuppetTemplate };
 
 const HUMANOID_TEMPLATE: PuppetTemplate = {
   name: 'humanoid',
@@ -202,7 +208,173 @@ const SIMPLE_TEMPLATE: PuppetTemplate = {
   ],
 };
 
-const TEMPLATES: PuppetTemplate[] = [HUMANOID_TEMPLATE, QUADRUPED_TEMPLATE, SIMPLE_TEMPLATE];
+// ---- Additional character templates (full sprite sets) ----
+
+/** Shallow-copy node defs so templates never share mutable arrays */
+function cloneNodes(nodes: TemplateNodeDef[]): TemplateNodeDef[] {
+  return nodes.map((n) => ({ ...n, sockets: n.sockets.map((s) => ({ ...s })) }));
+}
+
+/**
+ * 机甲：与人形相同的 10 节点骨骼，机甲风精灵（装甲 + 反应堆 + 能量条纹）。
+ * 精灵分发见 generateDefaultCostumeSprite(templateName='mecha')。
+ */
+const MECHA_TEMPLATE: PuppetTemplate = {
+  ...HUMANOID_TEMPLATE,
+  name: 'mecha',
+  label: '机甲',
+  icon: <Bot className="size-4" />,
+  nodes: cloneNodes(HUMANOID_TEMPLATE.nodes),
+};
+
+/**
+ * 小狗：13 节点。四肢为两段式（大腿+小腿，膝关节可动）+ 独立耳朵。
+ */
+export const DOG_TEMPLATE: PuppetTemplate = {
+  name: 'dog',
+  label: '小狗',
+  icon: <Dog className="size-4" />,
+  nodes: [
+    {
+      name: 'body', sockets: [
+        { name: 'head_attach', localX: 0, localY: -4 },
+        { name: 'tail_attach', localX: 3, localY: 2 },
+        { name: 'front_leg_L', localX: -7, localY: 3 },
+        { name: 'front_leg_R', localX: -3, localY: 3 },
+        { name: 'back_leg_L', localX: 2, localY: 3 },
+        { name: 'back_leg_R', localX: 5, localY: 3 },
+      ], plug: null, defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 8, crossSectionBottom: 8, zIndex: 5,
+    },
+    {
+      name: 'head', sockets: [
+        { name: 'ear_L', localX: -3, localY: -7 },
+        { name: 'ear_R', localX: 3, localY: -7 },
+      ],
+      plug: { socketName: 'head_attach', localX: 0, localY: 0 },
+      defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 5, crossSectionBottom: 4, zIndex: 10,
+    },
+    {
+      name: 'ear_L', sockets: [],
+      plug: { socketName: 'ear_L', localX: 0, localY: 0 },
+      defaultAngle: -8, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 2, crossSectionBottom: 1, zIndex: 11,
+    },
+    {
+      name: 'ear_R', sockets: [],
+      plug: { socketName: 'ear_R', localX: 0, localY: 0 },
+      defaultAngle: 8, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 2, crossSectionBottom: 1, zIndex: 11,
+    },
+    {
+      name: 'tail', sockets: [],
+      plug: { socketName: 'tail_attach', localX: 0, localY: 0 },
+      defaultAngle: -15, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 2, crossSectionBottom: 1, zIndex: 4,
+    },
+    // ---- 前腿（两段） ----
+    {
+      name: 'front_upper_leg_L', sockets: [
+        { name: 'knee_FL', localX: 0, localY: 7 },
+      ],
+      plug: { socketName: 'front_leg_L', localX: 0, localY: 0 },
+      defaultAngle: 5, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 3, crossSectionBottom: 2, zIndex: 3,
+    },
+    {
+      name: 'front_lower_leg_L', sockets: [],
+      plug: { socketName: 'knee_FL', localX: 0, localY: 0 },
+      defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 2, crossSectionBottom: 2, zIndex: 3,
+    },
+    {
+      name: 'front_upper_leg_R', sockets: [
+        { name: 'knee_FR', localX: 0, localY: 7 },
+      ],
+      plug: { socketName: 'front_leg_R', localX: 0, localY: 0 },
+      defaultAngle: -5, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 3, crossSectionBottom: 2, zIndex: 2,
+    },
+    {
+      name: 'front_lower_leg_R', sockets: [],
+      plug: { socketName: 'knee_FR', localX: 0, localY: 0 },
+      defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 2, crossSectionBottom: 2, zIndex: 2,
+    },
+    // ---- 后腿（两段） ----
+    {
+      name: 'back_upper_leg_L', sockets: [
+        { name: 'knee_BL', localX: 0, localY: 7 },
+      ],
+      plug: { socketName: 'back_leg_L', localX: 0, localY: 0 },
+      defaultAngle: 5, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 3, crossSectionBottom: 2, zIndex: 3,
+    },
+    {
+      name: 'back_lower_leg_L', sockets: [],
+      plug: { socketName: 'knee_BL', localX: 0, localY: 0 },
+      defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 2, crossSectionBottom: 2, zIndex: 3,
+    },
+    {
+      name: 'back_upper_leg_R', sockets: [
+        { name: 'knee_BR', localX: 0, localY: 7 },
+      ],
+      plug: { socketName: 'back_leg_R', localX: 0, localY: 0 },
+      defaultAngle: -5, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 3, crossSectionBottom: 2, zIndex: 2,
+    },
+    {
+      name: 'back_lower_leg_R', sockets: [],
+      plug: { socketName: 'knee_BR', localX: 0, localY: 0 },
+      defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 2, crossSectionBottom: 2, zIndex: 2,
+    },
+  ],
+};
+
+/**
+ * 骑士：人形 10 节点 + 披风（躯干背后）+ 长剑（右手）。
+ * torso 增加 cape_attach 插口，lower_arm_R 增加 hand_R 插口。
+ */
+const KNIGHT_TEMPLATE: PuppetTemplate = {
+  name: 'knight',
+  label: '骑士',
+  icon: <Shield className="size-4" />,
+  nodes: [
+    ...cloneNodes(HUMANOID_TEMPLATE.nodes).map((n) => {
+      if (n.name === 'torso') {
+        return { ...n, sockets: [...n.sockets, { name: 'cape_attach', localX: 0, localY: -1 }] };
+      }
+      if (n.name === 'lower_arm_R') {
+        return { ...n, sockets: [...n.sockets, { name: 'hand_R', localX: 0, localY: 9 }] };
+      }
+      return n;
+    }),
+    {
+      name: 'cape', sockets: [],
+      plug: { socketName: 'cape_attach', localX: 0, localY: 0 },
+      defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 6, crossSectionBottom: 4, zIndex: 1,
+    },
+    {
+      name: 'sword', sockets: [],
+      plug: { socketName: 'hand_R', localX: 0, localY: 0 },
+      defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 2, crossSectionBottom: 1, zIndex: 8,
+    },
+  ],
+};
+
+const ALL_TEMPLATES: PuppetTemplate[] = [
+  HUMANOID_TEMPLATE,
+  MECHA_TEMPLATE,
+  KNIGHT_TEMPLATE,
+  QUADRUPED_TEMPLATE,
+  DOG_TEMPLATE,
+  SIMPLE_TEMPLATE,
+];
 
 // ---- Node Colors ----
 const NODE_COLORS = [
@@ -255,24 +427,77 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
     const store = useProjectStore.getState();
     store.pushUndo('创建木偶角色');
 
-    // ---- Generate default costume sprites for nodes without manual assignments ----
-    // For each template node that has no user-assigned sprite, auto-create a Part
-    // with a prefabricated default pixel art sprite.
-    const autoGeneratedPartIds: Record<string, string> = {};
+    // ---- Pass 1: 生成默认精灵（正面 + 侧面），计算每根 plug 的 jointWidth ----
+    // jointWidth = 关节开口宽度（= 关节盘直径），两侧开口与 disc 共用，不再与 parent bottom 求平均。
+    const spriteResults: Record<string, DefaultSpriteResult> = {};
+    const sideSpriteResults: Record<string, DefaultSpriteResult> = {};
+    const jointWidths: Record<string, number> = {};
     for (const def of selectedTemplate.nodes) {
-      if (!spriteAssignments[def.name]) {
-        const nodeColor = NODE_COLORS[selectedTemplate.nodes.indexOf(def) % NODE_COLORS.length];
-        const spriteResult = generateDefaultCostumeSprite(def.name, selectedTemplate.name, nodeColor);
-        // Create the Part in the store with correct pivot (at the attachment point, not center)
-        const part = store.addPart(
-          `${characterName || '角色'}_${spriteResult.partName}`,
-          spriteResult.width,
-          spriteResult.height,
-          { pivotX: spriteResult.pivotX, pivotY: spriteResult.pivotY },
+      if (spriteAssignments[def.name]) continue;
+      const nodeColor = NODE_COLORS[selectedTemplate.nodes.indexOf(def) % NODE_COLORS.length];
+      const r = generateDefaultCostumeSprite(def.name, selectedTemplate.name, nodeColor);
+      spriteResults[def.name] = r;
+      if (def.plug) {
+        const plugY = r.pivotY + def.plug.localY;
+        jointWidths[def.name] = plugY >= r.height / 2 ? def.crossSectionBottom : def.crossSectionTop;
+      }
+      const side = generateDefaultCostumeSideSprite(def.name, selectedTemplate.name, nodeColor);
+      if (side) sideSpriteResults[def.name] = side;
+    }
+
+    // ---- Pass 2: 建 Part 并 carve 关节开口 ----
+    const autoGeneratedPartIds: Record<string, string> = {};
+    const autoGeneratedSidePartIds: Record<string, string> = {};
+    const carveFor = (
+      sr: DefaultSpriteResult,
+      def: TemplateNodeDef,
+    ) => {
+      const openings: JointOpeningSpec[] = [];
+      if (def.plug) {
+        openings.push({
+          x: sr.pivotX + def.plug.localX,
+          y: sr.pivotY + def.plug.localY,
+          width: jointWidths[def.name] ?? 4,
+        });
+      }
+      for (const sock of def.sockets) {
+        // socket 侧开口宽度 = 接入子节点的 jointWidth（两侧一致）
+        const childDef = selectedTemplate.nodes.find((n) => n.plug?.socketName === sock.name);
+        openings.push({
+          x: sr.pivotX + sock.localX,
+          y: sr.pivotY + sock.localY,
+          width: (childDef ? jointWidths[childDef.name] : null) ?? 4,
+        });
+      }
+      applyJointOpenings(sr.pixels, openings);
+    };
+    for (const def of selectedTemplate.nodes) {
+      const r = spriteResults[def.name];
+      if (!r) continue;
+      carveFor(r, def);
+      // Create the Part in the store with correct pivot (at the attachment point, not center)
+      const part = store.addPart(
+        `${characterName || '角色'}_${r.partName}`,
+        r.width,
+        r.height,
+        { pivotX: r.pivotX, pivotY: r.pivotY },
+      );
+      // Paint the default sprite pixels onto the part
+      store.setPartPixels(part.id, r.pixels);
+      autoGeneratedPartIds[def.name] = part.id;
+
+      // 侧面版（E 方向；W 自动镜像）
+      const side = sideSpriteResults[def.name];
+      if (side) {
+        carveFor(side, def);
+        const sidePart = store.addPart(
+          `${characterName || '角色'}_${side.partName}_侧面`,
+          side.width,
+          side.height,
+          { pivotX: side.pivotX, pivotY: side.pivotY },
         );
-        // Paint the default sprite pixels onto the part
-        store.setPartPixels(part.id, spriteResult.pixels);
-        autoGeneratedPartIds[def.name] = part.id;
+        store.setPartPixels(sidePart.id, side.pixels);
+        autoGeneratedSidePartIds[def.name] = sidePart.id;
       }
     }
 
@@ -309,12 +534,16 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
             socketId,
             localX: def.plug.localX,
             localY: def.plug.localY,
+            // 关节开口宽度（= 关节盘直径），创建时写入，两侧渲染共用
+            jointWidth: jointWidths[def.name] ?? null,
           };
         }
       }
 
       // Resolve sprite: user assignment > auto-generated default
       const assignedPartId = spriteAssignments[def.name] ?? autoGeneratedPartIds[def.name] ?? null;
+      // 侧面版（E 方向精灵；W 方向由 DIRECTION_MIRROR 自动镜像 E）
+      const sidePartId = autoGeneratedSidePartIds[def.name] ?? null;
 
       // mirrorFrom should only be true for LEFT-side limbs that mirror from right-side.
       // Convention: node names ending with '_L' are left-side limbs.
@@ -326,7 +555,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
         sockets,
         plug,
         spritePartId: assignedPartId,
-        directionSprites: {},
+        directionSprites: sidePartId ? { E: sidePartId } : {},
         mirrorFrom: isLeftLimb,
         angle: def.defaultAngle,
         stretch: def.defaultStretch,
@@ -337,6 +566,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
         zIndex: def.zIndex,
         visible: true,
         color: NODE_COLORS[idx % NODE_COLORS.length],
+        modifiers: [],
       };
     });
 
@@ -364,8 +594,12 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
       if (partId) {
         const node = builtNodes.find((n) => n.name === nodeName);
         if (node) {
+          // 侧面精灵（E/W）用专门生成的侧面版；W 留空走镜像回退太隐晦，
+          // 直接填侧面精灵更直观，dress 里用户也能单独改
+          const sidePartId = autoGeneratedSidePartIds[nodeName] ?? null;
           for (const dir of PUPPET_DIRECTIONS) {
-            costumeSet.spriteMap[`${node.id}:${dir}`] = partId;
+            const isSideDir = dir === 'E' || dir === 'W' || dir === 'NE' || dir === 'SE' || dir === 'NW' || dir === 'SW';
+            costumeSet.spriteMap[`${node.id}:${dir}`] = (isSideDir && sidePartId) ? sidePartId : partId;
           }
         }
       }
@@ -410,7 +644,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-[#0d0d1a] border border-[#1e1e3a] rounded-lg shadow-2xl w-[520px] max-h-[80vh] flex flex-col">
+      <div className="bg-[#0d0d1a] border border-[#1e1e3a] rounded-lg shadow-2xl w-[520px] max-w-[calc(100vw-2rem)] max-h-[80vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e1e3a]">
           <h3 className="text-sm font-semibold text-gray-200">创建木偶角色</h3>
@@ -420,7 +654,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
         </div>
 
         {/* Step indicator */}
-        <div className="flex items-center gap-2 px-4 py-2 border-b border-[#1e1e3a]/50">
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-[#1e1e3a]/50 flex-wrap">
           {[
             { label: '名称与模板', icon: <Bone className="size-3" /> },
             { label: '分配精灵', icon: <Shirt className="size-3" /> },
@@ -444,8 +678,8 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
           ))}
         </div>
 
-        {/* Content */}
-        <ScrollArea className="flex-1 min-h-0">
+        {/* Content：原生滚动（Radix ScrollArea 在 flex 布局下高度约束不可靠，改用原生 overflow） */}
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
           <div className="p-4">
             {/* Step 0: Name & Template */}
             {step === 0 && (
@@ -462,7 +696,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
                 <div className="space-y-2">
                   <Label className="text-xs text-gray-400">选择模板</Label>
                   <div className="grid grid-cols-3 gap-2">
-                    {TEMPLATES.map((tmpl) => (
+                    {ALL_TEMPLATES.map((tmpl) => (
                       <button
                         key={tmpl.name}
                         className={`flex flex-col items-center gap-1.5 p-3 rounded-md border transition-colors ${
@@ -517,7 +751,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
                       onChange={(e) =>
                         handleAssignSprite(nodeDef.name, e.target.value || null)
                       }
-                      className="flex-1 h-7 text-[10px] bg-[#0d0d1a] border border-[#1e1e3a] rounded px-2 text-gray-300"
+                      className="flex-1 min-w-0 h-7 text-[10px] bg-[#0d0d1a] border border-[#1e1e3a] rounded px-2 text-gray-300"
                     >
                       <option value="">— 未分配 —</option>
                       {parts.map((p) => (
@@ -537,9 +771,9 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
                 <div className="space-y-2">
                   <Label className="text-xs text-gray-400">创建摘要</Label>
                   <div className="bg-[#080818] rounded border border-[#1e1e3a] p-3 space-y-1.5">
-                    <div className="flex justify-between text-[11px]">
-                      <span className="text-gray-500">角色名称</span>
-                      <span className="text-gray-300">{characterName || '未命名'}</span>
+                    <div className="flex justify-between gap-2 text-[11px]">
+                      <span className="text-gray-500 flex-shrink-0">角色名称</span>
+                      <span className="text-gray-300 truncate min-w-0 text-right">{characterName || '未命名'}</span>
                     </div>
                     <div className="flex justify-between text-[11px]">
                       <span className="text-gray-500">模板</span>
@@ -595,8 +829,8 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
                             className="size-2 rounded-full"
                             style={{ backgroundColor: NODE_COLORS[idx % NODE_COLORS.length] }}
                           />
-                          <span className="text-[10px] text-gray-300 flex-1">{nodeDef.name}</span>
-                          <span className={`text-[9px] ${willAutoGenerate ? 'text-cyan-500' : 'text-gray-500'}`}>
+                          <span className="text-[10px] text-gray-300 flex-1 truncate min-w-0">{nodeDef.name}</span>
+                          <span className={`text-[9px] truncate min-w-0 max-w-[50%] text-right flex-shrink-0 ${willAutoGenerate ? 'text-cyan-500' : 'text-gray-500'}`}>
                             {assignedPart ? assignedPart.name : '自动生成默认精灵'}
                           </span>
                         </div>
@@ -607,7 +841,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
               </div>
             )}
           </div>
-        </ScrollArea>
+        </div>
 
         {/* Footer */}
         <div className="flex items-center justify-between px-4 py-3 border-t border-[#1e1e3a]">

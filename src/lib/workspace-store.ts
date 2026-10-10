@@ -61,24 +61,6 @@ const DEFAULT_LAYOUTS: Record<WorkspaceMode, WorkspaceLayout> = {
     timelineCollapsed: true,
     rightPanelDefaultTab: '',
   },
-  animation: {
-    leftPanelWidth: 240,
-    leftPanelVisible: true,
-    rightPanelWidth: 280,
-    rightPanelVisible: true,
-    timelineHeight: 200,
-    timelineCollapsed: false,
-    rightPanelDefaultTab: 'modifiers',
-  },
-  map_tile: {
-    leftPanelWidth: 180,
-    leftPanelVisible: true,
-    rightPanelWidth: 360,
-    rightPanelVisible: true,
-    timelineHeight: 120,
-    timelineCollapsed: true,
-    rightPanelDefaultTab: 'tile_workflow',
-  },
   puppet: {
     leftPanelWidth: 240,
     leftPanelVisible: true,
@@ -106,7 +88,7 @@ const DEFAULT_TILE_WORKFLOW: TileWorkflowSettings = {
 };
 
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
-  mode: 'animation',
+  mode: 'puppet',
   layouts: { ...DEFAULT_LAYOUTS },
   tilePreview: { ...DEFAULT_TILE_PREVIEW },
   tileWorkflow: { ...DEFAULT_TILE_WORKFLOW },

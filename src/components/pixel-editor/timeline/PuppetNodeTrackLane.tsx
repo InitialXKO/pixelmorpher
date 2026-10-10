@@ -125,6 +125,7 @@ const PuppetNodeTrackLane = React.memo(function PuppetNodeTrackLane({
   if (prevProps.nodeKeyframes !== nextProps.nodeKeyframes) return false;
   if (prevProps.selectedPuppetKeyframeId !== nextProps.selectedPuppetKeyframeId) return false;
   if (prevProps.totalFrames !== nextProps.totalFrames) return false;
+  if (prevProps.frameWidth !== nextProps.frameWidth) return false;
   return true;
 });
 

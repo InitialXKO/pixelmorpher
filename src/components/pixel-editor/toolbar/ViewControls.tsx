@@ -17,8 +17,11 @@ import {
   Bone,
   Paintbrush,
   Eye,
+  Magnet,
+  Users,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
+import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 
 // ============================================================
 // View Controls - Zoom, Grid, Toggles, etc.
@@ -157,7 +160,7 @@ export function TrajectorySnapToggle() {
           aria-label="Trajectory Snap"
           className="h-7 w-7 p-0 data-[state=on]:bg-cyan-600/30 data-[state=on]:text-cyan-300 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded"
         >
-          <Grid3x3 className="size-3.5" />
+          <Magnet className="size-3.5" />
         </Toggle>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="text-xs">Trajectory Snap to Pixels</TooltipContent>
@@ -187,6 +190,40 @@ export function SkeletonsToggle() {
   );
 }
 
+// ---- Show All Characters Toggle ----
+// rig/dress 阶段强制互斥（只显示选中角色）；perform 阶段可切换
+export function ShowAllCharactersToggle() {
+  const showAllCharacters = usePuppetSessionStore((s) => s.showAllCharacters);
+  const setShowAllCharacters = usePuppetSessionStore((s) => s.setShowAllCharacters);
+  const phase = usePuppetSessionStore((s) => s.phase);
+
+  // 非 perform 阶段禁用（强制互斥）
+  const disabled = phase !== 'perform';
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Toggle
+          pressed={showAllCharacters}
+          onPressedChange={setShowAllCharacters}
+          disabled={disabled}
+          aria-label={showAllCharacters ? '仅显示选中角色' : '显示全部角色'}
+          className="h-7 w-7 p-0 data-[state=on]:bg-cyan-600/30 data-[state=on]:text-cyan-300 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded disabled:opacity-40"
+        >
+          <Users className="size-3.5" />
+        </Toggle>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="text-xs">
+        {disabled
+          ? '当前阶段只显示选中角色'
+          : showAllCharacters
+            ? '显示全部角色（点击仅显示选中）'
+            : '仅显示选中角色（点击显示全部）'}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 // ---- Weight Paint Toggle ----
 export function WeightPaintToggle() {
   const showWeightPaint = useEditorStore((s) => s.showWeightPaint);
@@ -211,8 +248,8 @@ export function WeightPaintToggle() {
 
 // ---- Onion Skin Toggle ----
 export function OnionSkinToggle() {
-  const showOnionSkin = useEditorStore((s) => s.showOnionSkin);
-  const toggleEditorOnionSkin = useEditorStore((s) => s.toggleOnionSkin);
+  // H22: 洋葱皮开关以 project-store 的 onionSkinEnabled 为唯一真相源
+  //（之前 editor-store 还有一份 showOnionSkin 被迫双写同步，undo 后还会失步）
   const onionSkinEnabled = useProjectStore((s) => s.onionSkinEnabled);
   const onionSkinFrames = useProjectStore((s) => s.onionSkinFrames);
   const toggleProjectOnionSkin = useProjectStore((s) => s.toggleOnionSkin);
@@ -225,8 +262,7 @@ export function OnionSkinToggle() {
 
   const handleOnionSkinToggle = useCallback(() => {
     toggleProjectOnionSkin();
-    toggleEditorOnionSkin();
-  }, [toggleProjectOnionSkin, toggleEditorOnionSkin]);
+  }, [toggleProjectOnionSkin]);
 
   return (
     <Popover>
@@ -234,7 +270,7 @@ export function OnionSkinToggle() {
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
             <Toggle
-              pressed={showOnionSkin || onionSkinEnabled}
+              pressed={onionSkinEnabled}
               onPressedChange={handleOnionSkinToggle}
               aria-label="Toggle Onion Skin"
               className="h-7 w-7 p-0 data-[state=on]:bg-purple-600/30 data-[state=on]:text-purple-300 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded"

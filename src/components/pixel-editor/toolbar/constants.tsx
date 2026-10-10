@@ -12,10 +12,10 @@ import {
   Sun,
   Sparkles,
   Ghost,
-  Bone,
   Target,
   Lasso,
   Wand2,
+  WandSparkles,
   Scan,
 } from 'lucide-react';
 import type { ToolType } from '@/lib/types';
@@ -25,32 +25,28 @@ import type { ToolType } from '@/lib/types';
 // ============================================================
 
 export const TOOL_CONFIG: { value: ToolType; icon: React.ReactNode; label: string; group?: string }[] = [
-  { value: 'select', icon: <MousePointer2 className="size-3.5" />, label: 'Select (V)' },
-  { value: 'brush', icon: <Paintbrush className="size-3.5" />, label: 'Brush (B)' },
-  { value: 'eraser', icon: <Eraser className="size-3.5" />, label: 'Eraser (E)' },
-  { value: 'fill', icon: <PaintBucket className="size-3.5" />, label: 'Fill (G)' },
-  { value: 'eyedropper', icon: <Pipette className="size-3.5" />, label: 'Eyedropper (I)' },
-  { value: 'move', icon: <Move className="size-3.5" />, label: 'Move (M)' },
-  { value: 'trajectory', icon: <Route className="size-3.5" />, label: 'Trajectory (T)', group: 'trajectory' },
-  { value: 'crop', icon: <Crop className="size-3.5" />, label: 'Crop (C)' },
+  { value: 'select', icon: <MousePointer2 className="size-3.5" />, label: '选择' },
+  { value: 'brush', icon: <Paintbrush className="size-3.5" />, label: '画笔' },
+  { value: 'eraser', icon: <Eraser className="size-3.5" />, label: '橡皮擦' },
+  { value: 'fill', icon: <PaintBucket className="size-3.5" />, label: '填充' },
+  { value: 'eyedropper', icon: <Pipette className="size-3.5" />, label: '取色器' },
+  { value: 'move', icon: <Move className="size-3.5" />, label: '移动' },
+  { value: 'trajectory', icon: <Route className="size-3.5" />, label: '轨迹', group: 'trajectory' },
+  { value: 'crop', icon: <Crop className="size-3.5" />, label: '裁剪' },
   // Motion blur brush
-  { value: 'motion_blur_brush', icon: <Wind className="size-3.5" />, label: 'Motion Blur Brush', group: 'blur' },
+  { value: 'motion_blur_brush', icon: <Wind className="size-3.5" />, label: '动态模糊笔', group: 'blur' },
   // Effect brushes
-  { value: 'glow_brush', icon: <Sun className="size-3.5" />, label: 'Glow Brush', group: 'effect' },
-  { value: 'particle_brush', icon: <Sparkles className="size-3.5" />, label: 'Particle Brush', group: 'effect' },
-  { value: 'afterimage_brush', icon: <Ghost className="size-3.5" />, label: 'Afterimage Brush', group: 'effect' },
-  // V2.0: Skeleton tools
-  { value: 'bone', icon: <Bone className="size-3.5" />, label: '骨骼', group: 'skeleton' },
-  { value: 'ik', icon: <Target className="size-3.5" />, label: 'IK', group: 'skeleton' },
-  { value: 'weight_paint', icon: <Paintbrush className="size-3.5" />, label: '权重', group: 'skeleton' },
+  { value: 'glow_brush', icon: <Sun className="size-3.5" />, label: '辉光笔', group: 'effect' },
+  { value: 'particle_brush', icon: <Sparkles className="size-3.5" />, label: '粒子笔', group: 'effect' },
+  { value: 'afterimage_brush', icon: <Ghost className="size-3.5" />, label: '残影笔', group: 'effect' },
   // Selection tools
-  { value: 'lasso', icon: <Lasso className="size-3.5" />, label: '套索 (L)' },
-  { value: 'magic_wand', icon: <Wand2 className="size-3.5" />, label: '魔棒 (M)' },
+  { value: 'lasso', icon: <Lasso className="size-3.5" />, label: '套索' },
+  { value: 'magic_wand', icon: <Wand2 className="size-3.5" />, label: '魔棒' },
   // AI tools
-  { value: 'smart_select', icon: <Scan className="size-3.5" />, label: 'AI选区 (S)' },
-  { value: 'inpaint', icon: <Eraser className="size-3.5" />, label: '修复 (I)' },
+  { value: 'smart_select', icon: <Scan className="size-3.5" />, label: 'AI选区' },
+  { value: 'inpaint', icon: <WandSparkles className="size-3.5" />, label: '修复' },
   // Puppet tool
-  { value: 'puppet', icon: <Target className="size-3.5" />, label: '木偶 (P) - 拖动旋转/Shift拖动移动', group: 'puppet' },
+  { value: 'puppet', icon: <Target className="size-3.5" />, label: '木偶 - 拖动旋转/Shift拖动移动', group: 'puppet' },
 ];
 
 export const MAX_RECENT_COLORS = 8;

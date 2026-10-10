@@ -29,12 +29,13 @@ export {
 export {
   invalidateVariableContextCache,
   invalidatePhaseCache,
+  invalidateParamDriverEvalCache,
   validateVariableGraph,
   bakeParamDriverToKeyframes,
 } from './param-driver';
 
 // Interpolation
-export { interpolateModifiers } from './interpolation';
+export { interpolateModifiers, invalidateInterpolationCache } from './interpolation';
 
 // Skeleton
 export { computeBoneTransforms } from './skeleton';

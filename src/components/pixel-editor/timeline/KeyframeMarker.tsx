@@ -545,5 +545,6 @@ export const PuppetKeyframeMarker = React.memo(function PuppetKeyframeMarker({
   if (prevProps.keyframe.frame !== nextProps.keyframe.frame) return false;
   if (prevProps.isSelected !== nextProps.isSelected) return false;
   if (prevProps.totalFrames !== nextProps.totalFrames) return false;
+  if (prevProps.frameWidth !== nextProps.frameWidth) return false;
   return true;
 });

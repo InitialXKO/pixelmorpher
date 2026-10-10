@@ -10,6 +10,7 @@ import type { ProjectStore } from './types';
 import type { Project, HistoryEntry, ProjectFile, BrushPreset, AnimationClip, ClipPartData, Character, Costume, Track } from '../types';
 import { MODIFIER_DEFINITIONS } from '../types';
 import { _isDragActive, _dragPostStackLen, _pendingTrajectoryPartIds, setDragActive, setDragPostStackLen, resetDragState } from './shared';
+import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '../engine';
 
 const defaultProject: Project = {
   id: crypto.randomUUID(),
@@ -184,6 +185,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       brushPresets: s.brushPresets,
       maxUndoLevels: s.maxUndoLevels,
       globalModifiers: s.globalModifiers,
+      animationVariables: s.animationVariables,
       // Concrete Puppet (first-class project data)
       puppetSkeletons: s.puppetSkeletons,
       puppetCharacters: s.puppetCharacters,
@@ -300,6 +302,9 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       undoStack: undoStack.slice(0, -1),
       redoStack: [...redoStack, currentSnapshot],
     }));
+    // H8/H9: undo 恢复了历史快照，缓存必须失效
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();
   },
 
   redo: () => {
@@ -322,6 +327,9 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       undoStack: [...undoStack, currentSnapshot],
       redoStack: redoStack.slice(0, -1),
     }));
+    // H8/H9: redo 恢复了历史快照，缓存必须失效
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();
   },
 
   canUndo: () => get().undoStack.length > 0 && !_isDragActive,
@@ -348,6 +356,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         onionSkinEnabled: state.onionSkinEnabled,
         onionSkinFrames: state.onionSkinFrames,
         globalModifiers: state.globalModifiers,
+        animationVariables: state.animationVariables,
         // Legacy fields for backward compatibility
         tracks: state.tracks,
         keyframes: state.keyframes,
@@ -414,21 +423,14 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     let animationClips = file.project.animationClips || [];
     let activeAnimationClipId = file.project.activeAnimationClipId ?? null;
 
-    if (animationClips.length === 0 && (file.project.tracks?.length > 0 || file.project.keyframes?.length > 0)) {
-      // Migrate legacy project → create a default animation clip from project-level data
+    if (animationClips.length === 0) {
+      // 创建默认木偶动画 clip（旧部件关键帧系统已统一为木偶模型，不再迁移）
       const migratedClip: AnimationClip = {
         id: crypto.randomUUID(),
         name: file.project.name || '默认动画',
         frameRate: file.project.frameRate ?? 12,
         totalFrames: file.project.totalFrames ?? 24,
-        tracks: file.project.tracks || [],
-        keyframes: processedKeyframes,
-        clipPartData: processedParts.map((p: any) => ({
-          partId: p.id,
-          animationModifiers: p.animationModifiers || [],
-          modifierGroups: p.modifierGroups || [],
-          partKeyframes: p.partKeyframes || [],
-        })),
+        puppetNodeKeyframes: [],
         effectTracks: file.project.effectTracks || [],
         canvasModifierTracks: file.project.canvasModifierTracks || [],
         trajectories: file.project.trajectories || [],
@@ -455,6 +457,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       proceduralAnimations: file.proceduralAnimations || [],
       weightMaps: file.weightMaps || [],
       globalModifiers: file.project.globalModifiers || [],
+      animationVariables: file.project.animationVariables || [],
       // Concrete Puppet (first-class project data)
       puppetSkeletons: file.project.puppetSkeletons || [],
       puppetCharacters: file.project.puppetCharacters || [],
@@ -468,7 +471,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
 
     // Sync legacy fields from the active clip
     if (activeAnimationClipId) {
-      get().syncLegacyFromActiveClip();
     }
   },
 
@@ -627,9 +629,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       name,
       frameRate: s.frameRate,
       totalFrames: s.totalFrames,
-      tracks: [],
-      keyframes: [],
-      clipPartData: [],
+      puppetNodeKeyframes: [],
       effectTracks: [],
       canvasModifierTracks: [],
       trajectories: [],
@@ -659,7 +659,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     });
     // Sync legacy fields if active clip changed
     if (newActiveId) {
-      get().syncLegacyFromActiveClip();
     }
   },
 
@@ -671,14 +670,12 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     }));
     // Sync legacy fields if this is the active clip
     if (get().activeAnimationClipId === clipId) {
-      get().syncLegacyFromActiveClip();
     }
   },
 
   setActiveAnimationClip: (clipId: string | null) => {
     set({ activeAnimationClipId: clipId });
     if (clipId) {
-      get().syncLegacyFromActiveClip();
     }
   },
 
@@ -688,95 +685,9 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     return s.animationClips.find(c => c.id === s.activeAnimationClipId) ?? null;
   },
 
-  getClipPartData: (partId: string) => {
-    const clip = get().getActiveAnimationClip();
-    if (!clip) return null;
-    return clip.clipPartData.find(d => d.partId === partId) ?? null;
-  },
 
-  ensureClipPartData: (partId: string) => {
-    const clip = get().getActiveAnimationClip();
-    if (!clip) {
-      // No active clip — return empty data (shouldn't happen in normal flow)
-      return { partId, animationModifiers: [], modifierGroups: [], partKeyframes: [] } as ClipPartData;
-    }
-    const existing = clip.clipPartData.find(d => d.partId === partId);
-    if (existing) return existing;
 
-    // Create new ClipPartData, migrating from Part's legacy fields if they exist
-    const part = get().parts.find(p => p.id === partId);
-    const newData: ClipPartData = {
-      partId,
-      animationModifiers: part?.animationModifiers ? [...part.animationModifiers] : [],
-      modifierGroups: part?.modifierGroups ? [...part.modifierGroups] : [],
-      partKeyframes: part?.partKeyframes ? [...part.partKeyframes] : [],
-    };
 
-    get().updateAnimationClip(clip.id, {
-      clipPartData: [...clip.clipPartData, newData],
-    });
-
-    return newData;
-  },
-
-  migrateLegacyToClip: (clipId: string) => {
-    const s = get();
-    const clip = s.animationClips.find(c => c.id === clipId);
-    if (!clip) return;
-
-    // Build ClipPartData from Parts' legacy animation fields
-    const clipPartData: ClipPartData[] = s.parts.map(part => ({
-      partId: part.id,
-      animationModifiers: [...part.animationModifiers],
-      modifierGroups: [...part.modifierGroups],
-      partKeyframes: [...part.partKeyframes],
-    }));
-
-    get().updateAnimationClip(clipId, {
-      tracks: [...s.tracks],
-      keyframes: [...s.keyframes],
-      clipPartData,
-      effectTracks: [...s.effectTracks],
-      canvasModifierTracks: [...s.canvasModifierTracks],
-      trajectories: [...s.trajectories],
-      motionBlurStrokes: [...s.motionBlurStrokes],
-      effectStrokes: [...s.effectStrokes],
-      frameRate: s.frameRate,
-      totalFrames: s.totalFrames,
-    });
-  },
-
-  syncLegacyFromActiveClip: () => {
-    const clip = get().getActiveAnimationClip();
-    if (!clip) return;
-
-    // Sync clip data to legacy Project-level fields so existing components work
-    set({
-      tracks: clip.tracks,
-      keyframes: clip.keyframes,
-      effectTracks: clip.effectTracks,
-      canvasModifierTracks: clip.canvasModifierTracks,
-      trajectories: clip.trajectories,
-      motionBlurStrokes: clip.motionBlurStrokes,
-      effectStrokes: clip.effectStrokes,
-      frameRate: clip.frameRate,
-      totalFrames: clip.totalFrames,
-    });
-
-    // Sync ClipPartData back to Part legacy fields
-    set((s) => ({
-      parts: s.parts.map(part => {
-        const cpd = clip.clipPartData.find(d => d.partId === part.id);
-        if (!cpd) return part;
-        return {
-          ...part,
-          animationModifiers: cpd.animationModifiers,
-          modifierGroups: cpd.modifierGroups,
-          partKeyframes: cpd.partKeyframes,
-        };
-      }),
-    }));
-  },
 
   // ============================================================
   // V3.0: Character CRUD
@@ -871,43 +782,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
   },
 
   createClipFromCharacter: (characterId: string, clipName: string): AnimationClip => {
-    const s = get();
-    const character = s.characters.find(c => c.id === characterId);
-    if (!character) {
-      // Fallback: create empty clip
-      return s.addAnimationClip(clipName);
-    }
-
-    const clip = s.addAnimationClip(clipName);
-
-    // Create tracks for each part in the character
-    const newTracks: Track[] = character.partIds.map((partId: string, index: number) => {
-      return {
-        id: crypto.randomUUID(),
-        partId: partId,
-        visible: true,
-        locked: false,
-        expanded: true,
-        zIndex: index,
-      };
-    });
-
-    // Create ClipPartData for each part
-    const newClipPartData: ClipPartData[] = character.partIds.map((partId: string) => {
-      const part = s.parts.find(p => p.id === partId);
-      return {
-        partId: partId,
-        animationModifiers: part?.animationModifiers ? [...part.animationModifiers] : [],
-        modifierGroups: part?.modifierGroups ? [...part.modifierGroups] : [],
-        partKeyframes: part?.partKeyframes ? [...part.partKeyframes] : [],
-      };
-    });
-
-    get().updateAnimationClip(clip.id, {
-      tracks: newTracks,
-      clipPartData: newClipPartData,
-    });
-
-    return { ...clip, tracks: newTracks, clipPartData: newClipPartData } as AnimationClip;
+    // 统一为木偶模型：直接创建空木偶 clip（旧部件轨道系统已删除）
+    return get().addAnimationClip(clipName);
   },
 });

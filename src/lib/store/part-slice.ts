@@ -45,17 +45,7 @@ export const createPartSlice: StateCreator<ProjectStore, [], [], PartSlice> = (s
       pixels,
       pivotX: opts?.pivotX ?? Math.floor(width / 2),
       pivotY: opts?.pivotY ?? Math.floor(height / 2),
-      offsetX: 0,
-      offsetY: 0,
-      zIndex: get().parts.length,
-      visible: true,
       locked: false,
-      animationModifiers: [],
-      modifierGroups: [],
-      parentId: null,
-      editModifiers: [],
-      partKeyframes: [],
-      globalModifiers: [],
     };
     const track: Track = {
       id: crypto.randomUUID(),
@@ -73,18 +63,8 @@ export const createPartSlice: StateCreator<ProjectStore, [], [], PartSlice> = (s
 
   removePart: (id) => {
     get().pushUndo('删除部件');
-    // V3.1: Clean up animation modifier caches for this part
-    const part = get().parts.find(p => p.id === id);
-    if (part && part.animationModifiers) {
-      for (const am of part.animationModifiers) {
-        invalidateAnimModifierCache(am.id);
-      }
-    }
     set((s) => ({
-      parts: s.parts.filter((p) => p.id !== id).map((p) =>
-        // V3.7: Clear parentId references to the deleted part
-        p.parentId === id ? { ...p, parentId: null } : p
-      ),
+      parts: s.parts.filter((p) => p.id !== id),
       tracks: s.tracks.filter((t) => t.partId !== id),
       keyframes: s.keyframes.filter((k) => k.partId !== id),
       trajectories: s.trajectories.filter((t) => t.partId !== id),
@@ -120,52 +100,8 @@ export const createPartSlice: StateCreator<ProjectStore, [], [], PartSlice> = (s
       ...part,
       id: newId,
       name: `${part.name} (副本)`,
-      zIndex: get().parts.length,
       pixels: part.pixels.map((row) => [...row]),
-      animationModifiers: (part.animationModifiers || []).map((am) => ({
-        ...am,
-        id: crypto.randomUUID(),
-        params: { ...am.params },
-        // M7: Deep-copy paramKeyframes and paramDrivers with new IDs
-        paramKeyframes: (am.paramKeyframes ?? []).map(pk => ({ ...pk, id: crypto.randomUUID() })),
-        paramDrivers: (am.paramDrivers ?? []).map(pd => ({ ...pd, id: crypto.randomUUID() })),
-      })),
-      modifierGroups: (part.modifierGroups || []).map((g) => ({
-        ...g,
-        id: crypto.randomUUID(),
-      })),
-      // V4.1: Deep-copy part keyframes
-      partKeyframes: (part.partKeyframes || []).map((pkf) => ({
-        ...pkf,
-        id: crypto.randomUUID(),
-        editModifiers: pkf.editModifiers.map((m) => ({
-          ...m,
-          id: crypto.randomUUID(),
-          params: {
-            ...m.params,
-            ...(m.params.brushCommands ? { brushCommands: JSON.parse(JSON.stringify(m.params.brushCommands)) } : {}),
-          },
-        })),
-      })),
-      // V13: Deep-copy part global modifiers with new IDs
-      globalModifiers: (part.globalModifiers || []).map((gm) => ({
-        ...gm,
-        id: crypto.randomUUID(),
-        params: { ...gm.params },
-        paramKeyframes: (gm.paramKeyframes ?? []).map(pk => ({ ...pk, id: crypto.randomUUID() })),
-        paramDrivers: (gm.paramDrivers ?? []).map(pd => ({ ...pd, id: crypto.randomUUID() })),
-      })),
     };
-    // Update animation modifier groupIds to point to new group IDs
-    const oldToNewGroupId = new Map<string, string>();
-    (part.modifierGroups || []).forEach((oldG, i) => {
-      const newG = newPart.modifierGroups[i];
-      if (oldG.id && newG) oldToNewGroupId.set(oldG.id, newG.id);
-    });
-    newPart.animationModifiers = newPart.animationModifiers.map((am) => ({
-      ...am,
-      groupId: am.groupId ? (oldToNewGroupId.get(am.groupId) ?? null) : null,
-    }));
     const track: Track = {
       id: crypto.randomUUID(),
       partId: newId,
@@ -230,17 +166,7 @@ export const createPartSlice: StateCreator<ProjectStore, [], [], PartSlice> = (s
       pixels,
       pivotX: Math.floor(width / 2),
       pivotY: Math.floor(height / 2),
-      offsetX: 0,
-      offsetY: 0,
-      zIndex: get().parts.length,
-      visible: true,
       locked: false,
-      animationModifiers: [],
-      modifierGroups: [],
-      parentId: null,
-      editModifiers: [],
-      partKeyframes: [],
-      globalModifiers: [],
     };
     const track: Track = {
       id: crypto.randomUUID(),
@@ -354,17 +280,7 @@ export const createPartSlice: StateCreator<ProjectStore, [], [], PartSlice> = (s
         pixels,
         pivotX,
         pivotY,
-        offsetX: 0,
-        offsetY: 0,
-        zIndex: get().parts.length + createdParts.length,
-        visible: true,
         locked: false,
-        animationModifiers: [],
-        modifierGroups: [],
-        parentId: null,
-        editModifiers: [],
-        partKeyframes: [],
-        globalModifiers: [],
       };
       createdParts.push(part);
     }

@@ -2,12 +2,10 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import PixelCanvas from '@/components/pixel-editor/PixelCanvas';
-import PartPanel from '@/components/pixel-editor/PartPanel';
-import ModifierPanel from '@/components/pixel-editor/ModifierPanel';
 import TrajectoryPanel from '@/components/pixel-editor/TrajectoryPanel';
-import SkeletonPanel from '@/components/pixel-editor/SkeletonPanel';
 import PuppetPanel from '@/components/pixel-editor/PuppetPanel';
 import PuppetAssetPanel from '@/components/pixel-editor/PuppetAssetPanel';
+import PuppetModeBanner from '@/components/pixel-editor/puppet/PuppetModeBanner';
 import DccPipelinePanel from '@/components/pixel-editor/DccPipelinePanel';
 import ProceduralPanel from '@/components/pixel-editor/ProceduralPanel';
 import ScriptPanel from '@/components/pixel-editor/ScriptPanel';
@@ -15,9 +13,6 @@ import PluginPanel from '@/components/pixel-editor/PluginPanel';
 import CanvasModifierPanel from '@/components/pixel-editor/CanvasModifierPanel';
 import AnimationClipPanel from '@/components/pixel-editor/AnimationClipPanel';
 import GlobalModifierPanel from '@/components/pixel-editor/GlobalModifierPanel';
-import TilePreviewPanel from '@/components/pixel-editor/TilePreviewPanel';
-import TileWorkflowPanel from '@/components/pixel-editor/TileWorkflowPanel';
-import TileAssetPanel from '@/components/pixel-editor/TileAssetPanel';
 import AssetLibraryPanel from '@/components/pixel-editor/AssetLibraryPanel';
 import ProjectHomeScreen from '@/components/pixel-editor/ProjectHomeScreen';
 import Timeline from '@/components/pixel-editor/Timeline';
@@ -26,12 +21,11 @@ import ExportDialog from '@/components/pixel-editor/ExportDialog';
 import { useProjectStore } from '@/lib/store';
 import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
-import { useTileWorkflowStore } from '@/lib/tile-workflow-store';
 import { useAssetStore } from '@/lib/asset-store';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
-import { Settings, Route, Bone, Activity, Terminal, Puzzle, Layers, Pencil, ChevronDown, ChevronUp, Grid3x3, Eye, Paintbrush, Globe, Film, Shirt, Zap, Users } from 'lucide-react';
+import { Settings, Route, Activity, Terminal, Puzzle, Layers, Pencil, ChevronDown, ChevronUp, Grid3x3, Eye, Paintbrush, Globe, Film, Shirt, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -46,7 +40,6 @@ export default function Home() {
   const { parts, animationClips, activeAnimationClipId, setActiveAnimationClip } = useProjectStore();
   const { selectPart, editMode, exitPartEditMode, partEditPartId } = useEditorStore();
   const { mode, layouts, updateLayout } = useWorkspaceStore();
-  const { editingTarget, setEditingTarget } = useTileWorkflowStore();
   const [exportOpen, setExportOpen] = useState(false);
   const initializedRef = useRef(false);
   const { showProjectHome, setShowProjectHome, loadProjectList, loadLibrary } = useAssetStore();
@@ -257,11 +250,6 @@ export default function Home() {
     // ============================================================
     // Z-order: far arm < far foot < body < near foot < near arm
     // ============================================================
-    store.updatePart(leftArm.id, { zIndex: 0 });
-    store.updatePart(leftFoot.id, { zIndex: 1 });
-    store.updatePart(body.id, { zIndex: 2 });
-    store.updatePart(rightFoot.id, { zIndex: 3 });
-    store.updatePart(rightArm.id, { zIndex: 4 });
 
     // ============================================================
     // Walking Animation — Using Animation Modifiers
@@ -300,26 +288,10 @@ export default function Home() {
     addKf(rightFoot.id,0,   2,   2);
 
     // Add pendulum to arms
-    const leftArmPendulum = store.addPartAnimationModifier(leftArm.id, 'pendulum');
-    store.updatePartAnimationModifier(leftArm.id, leftArmPendulum.id,
-      { amplitude: 25, period: 16, phase: 180, damping: 0 }
-    );
 
-    const rightArmPendulum = store.addPartAnimationModifier(rightArm.id, 'pendulum');
-    store.updatePartAnimationModifier(rightArm.id, rightArmPendulum.id,
-      { amplitude: 25, period: 16, phase: 0, damping: 0 }
-    );
 
     // Add gait to feet
-    const leftFootGait = store.addPartAnimationModifier(leftFoot.id, 'gait');
-    store.updatePartAnimationModifier(leftFoot.id, leftFootGait.id,
-      { strideLength: 16, liftHeight: 8, period: 16, phase: 180, stanceRatio: 0.6, direction: 'forward' }
-    );
 
-    const rightFootGait = store.addPartAnimationModifier(rightFoot.id, 'gait');
-    store.updatePartAnimationModifier(rightFoot.id, rightFootGait.id,
-      { strideLength: 16, liftHeight: 8, period: 16, phase: 0, stanceRatio: 0.6, direction: 'forward' }
-    );
 
     // ---- Frame 4: Passing ----
     addKf(body.id,     4,   0, -12);
@@ -381,95 +353,20 @@ export default function Home() {
 
     // V3.0: Migrate legacy data into the active animation clip
     // After all parts, keyframes, and modifiers are created at the Project level,
-    // move them into the active AnimationClip for the new asset-based model.
-    const activeClipId = useProjectStore.getState().activeAnimationClipId;
-    if (activeClipId) {
-      useProjectStore.getState().migrateLegacyToClip(activeClipId);
-    }
   }, [parts.length]);
 
   // ---- Right panel content based on workspace mode ----
   const renderRightPanel = () => {
-    if (mode === 'map_tile') {
-      return (
-        <Tabs defaultValue="tile_workflow" className="flex flex-col h-full">
-          <TabsList className="w-full justify-start rounded-none border-b border-zinc-800 bg-zinc-950 h-auto min-h-8 px-0.5 py-0.5">
-            <TabsTrigger
-              value="tile_workflow"
-              className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-            >
-              <Grid3x3 className="size-3 mr-0.5" />
-              瓦片工作流
-            </TabsTrigger>
-            <TabsTrigger
-              value="tile_preview"
-              className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-            >
-              <Eye className="size-3 mr-0.5" />
-              平铺预览
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="tile_workflow" className="flex-1 min-h-0 m-0">
-            <TileWorkflowPanel />
-          </TabsContent>
-          <TabsContent value="tile_preview" className="flex-1 min-h-0 m-0">
-            <TilePreviewPanel />
-          </TabsContent>
-        </Tabs>
-      );
-    }
-
-    // Puppet mode: dedicated right panel for puppet workflow
+    // Puppet mode: single focused workflow panel (rig → dress → perform).
+    // Modifier/canvas-effect tabs were removed here — they live in animation mode.
     if (mode === 'puppet') {
-      return (
-        <Tabs defaultValue="puppet_workflow" className="flex flex-col h-full">
-          <TabsList className="w-full justify-start rounded-none border-b border-zinc-800 bg-zinc-950 h-auto min-h-8 px-0.5 py-0.5">
-            <TabsTrigger
-              value="puppet_workflow"
-              className="text-[10px] data-[state=active]:bg-cyan-900/40 data-[state=active]:text-cyan-300 text-zinc-500 px-1.5 py-1 h-6"
-            >
-              <Shirt className="size-3 mr-0.5" />
-              木偶工作流
-            </TabsTrigger>
-            <TabsTrigger
-              value="puppet_modifiers"
-              className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-            >
-              <Settings className="size-3 mr-0.5" />
-              修改器
-            </TabsTrigger>
-            <TabsTrigger
-              value="puppet_canvas"
-              className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-            >
-              <Layers className="size-3 mr-0.5" />
-              画布效果
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="puppet_workflow" className="flex-1 min-h-0 m-0">
-            <PuppetPanel />
-          </TabsContent>
-          <TabsContent value="puppet_modifiers" className="flex-1 min-h-0 m-0">
-            <ModifierPanel />
-          </TabsContent>
-          <TabsContent value="puppet_canvas" className="flex-1 min-h-0 m-0">
-            <CanvasModifierPanel />
-          </TabsContent>
-        </Tabs>
-      );
+      return <PuppetPanel />;
     }
 
     // Animation mode: tabbed panel with all the existing tabs
     return (
       <Tabs defaultValue={currentLayout.rightPanelDefaultTab} className="flex flex-col h-full">
         <TabsList className="w-full justify-start rounded-none border-b border-zinc-800 bg-zinc-950 h-auto min-h-8 px-0.5 py-0.5 flex-wrap">
-          <TabsTrigger
-            value="modifiers"
-            className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-          >
-            <Settings className="size-3 mr-0.5" />
-            修改器
-          </TabsTrigger>
           <TabsTrigger
             value="canvas"
             className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
@@ -483,13 +380,6 @@ export default function Home() {
           >
             <Route className="size-3 mr-0.5" />
             轨迹
-          </TabsTrigger>
-          <TabsTrigger
-            value="skeleton"
-            className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-          >
-            <Bone className="size-3 mr-0.5" />
-            骨骼
           </TabsTrigger>
           <TabsTrigger
             value="procedural"
@@ -534,17 +424,11 @@ export default function Home() {
             DCC管线
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="modifiers" className="flex-1 min-h-0 m-0">
-          <ModifierPanel />
-        </TabsContent>
         <TabsContent value="canvas" className="flex-1 min-h-0 m-0">
           <CanvasModifierPanel />
         </TabsContent>
         <TabsContent value="trajectory" className="flex-1 min-h-0 m-0">
           <TrajectoryPanel />
-        </TabsContent>
-        <TabsContent value="skeleton" className="flex-1 min-h-0 m-0">
-          <SkeletonPanel />
         </TabsContent>
         <TabsContent value="procedural" className="flex-1 min-h-0 m-0">
           <ProceduralPanel />
@@ -593,7 +477,7 @@ export default function Home() {
                 order={1}
                 className="transition-all duration-300"
               >
-                {mode === 'map_tile' ? <TileAssetPanel /> : mode === 'puppet' ? (
+                {mode === 'puppet' ? (
                   <div className="flex flex-col h-full">
                     <PuppetAssetPanel />
                     <div className="border-t border-zinc-800/50">
@@ -628,7 +512,7 @@ export default function Home() {
               >
                 <div className="flex flex-col h-full">
                   {/* Part Edit Mode banner — only in animation mode */}
-                  {editMode === 'part_edit' && mode !== 'map_tile' && (
+                  {editMode === 'part_edit' && (
                     <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-500/15 border-b border-cyan-500/30 shrink-0">
                       <Pencil className="size-3.5 text-cyan-400" />
                       <span className="text-xs font-medium text-cyan-300">
@@ -656,39 +540,9 @@ export default function Home() {
                       </div>
                     </div>
                   )}
-                  {/* Puppet Mode banner */}
+                  {/* Puppet Mode banner — phase-aware hints */}
                   {mode === 'puppet' && (
-                    <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-500/10 border-b border-cyan-500/20 shrink-0">
-                      <Users className="size-3.5 text-cyan-400" />
-                      <span className="text-xs font-medium text-cyan-300">
-                        木偶制作模式
-                      </span>
-                      <span className="text-[10px] text-cyan-400/50">
-                        — 在右侧面板中创建和编辑木偶角色
-                      </span>
-                    </div>
-                  )}
-                  {/* Tile Editing Mode banner */}
-                  {mode === 'map_tile' && editingTarget && (
-                    <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/15 border-b border-emerald-500/30 shrink-0">
-                      <Paintbrush className="size-3.5 text-emerald-400" />
-                      <span className="text-xs font-medium text-emerald-300">
-                        瓦片编辑
-                      </span>
-                      <span className="text-[10px] text-emerald-400/60">
-                        — {editingTarget.label}
-                      </span>
-                      <div className="ml-auto flex gap-1.5">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 text-[10px] text-zinc-400 hover:text-zinc-200 px-2"
-                          onClick={() => setEditingTarget(null)}
-                        >
-                          退出编辑
-                        </Button>
-                      </div>
-                    </div>
+                    <PuppetModeBanner />
                   )}
                   <PixelCanvas />
                 </div>

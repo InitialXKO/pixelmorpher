@@ -489,35 +489,10 @@ export interface Part {
   pixels: PixelGrid;
   pivotX: number;
   pivotY: number;
-  /** Default position offset. Can be overridden per-animation-clip via ClipPartData. */
-  offsetX: number;
-  offsetY: number;
-  /** Default z-index. Can be overridden per-animation-clip via ClipPartData. */
-  zIndex: number;
-  /** Default visibility. Can be overridden per-animation-clip via Track. */
-  visible: boolean;
   locked: boolean;
   thumbnail?: string; // base64 data URL
-  /** V3.7: Parent part ID (null = no parent, root level) */
-  parentId: string | null;
-  /** Persistent part-level edit modifiers. Applied before keyframe modifiers in the render pipeline.
-   *  These are intrinsic to the asset — they define the part's base visual state.
-   *  Can be manually baked into part.pixels. */
-  editModifiers: ModifierInstance[];
-  /** V13: Part-level global modifiers — persistent transform/animation modifiers
-   *  that always apply to this part across all frames and all animations.
-   *  These are intrinsic to the asset (e.g., permanent rotation offset, persistent scale factor).
-   *  For animation-specific always-on transforms, use ClipPartData.animationModifiers instead. */
-  globalModifiers: GlobalModifier[];
-  // V3.1: Part-level animation modifiers.
-  // When activeAnimationClipId is set and ClipPartData exists, ClipPartData takes precedence.
-  animationModifiers: PartAnimationModifier[];
-  /** V3.2: Modifier groups for organizing animation modifiers */
-  modifierGroups: ModifierGroup[];
-  /** V4.1: Part-level keyframes for per-frame modifier stack state.
-   *  When activeAnimationClipId is set and ClipPartData exists, ClipPartData takes precedence.
-   *  When present, these override editModifiers at their respective frames (step interpolation). */
-  partKeyframes: PartKeyframe[];
+  // 木偶统一模型：Part 是纯精灵数据，不再承载动画状态。
+  // 位置/层级/可见性/修改器全部由 PuppetNode 驱动。
 }
 
 // ---- Part Keyframe ----
@@ -876,13 +851,11 @@ export interface AnimationClip {
   /** Total number of frames in this clip */
   totalFrames: number;
 
-  // ---- Per-clip timeline data ----
-  /** One track per participating part — controls visibility, lock, z-order */
-  tracks: Track[];
-  /** Keyframe data — flat array, linked by partId */
-  keyframes: Keyframe[];
-  /** Per-part animation data within this clip */
-  clipPartData: ClipPartData[];
+  // ---- Per-clip timeline data（统一为木偶模型）----
+  // 旧部件关键帧（tracks/keyframes/clipPartData）已删除。
+  // 动画只走 puppetNodeKeyframes；Part 退化为纯精灵数据。
+  /** Per-node keyframes for puppet animation — 唯一的动画数据源 */
+  puppetNodeKeyframes: PuppetNodeKeyframe[];
 
   // ---- Per-clip effects ----
   effectTracks: EffectTrack[];
@@ -898,12 +871,8 @@ export interface AnimationClip {
   updatedAt: number;
 
   // ---- Concrete Puppet ----
-  /** Whether this is a puppet animation clip */
-  isPuppetClip?: boolean;
   /** Linked puppet character ID */
   puppetCharacterId?: string;
-  /** Per-node keyframes for puppet animation */
-  puppetNodeKeyframes?: PuppetNodeKeyframe[];
 
   // ---- DCC Pipeline ----
   /** Animation events for game logic */
@@ -943,6 +912,17 @@ export interface PuppetPlug {
   socketId: string;
   localX: number;
   localY: number;
+  /**
+   * 关节盘颜色覆盖（null/undefined = 自动：取子节点精灵开口处众数颜色）。
+   * 约定：不限制为预设枚举，可任意自定义颜色。
+   */
+  discColor?: string | null;
+  /**
+   * 关节开口宽度（两侧开口与关节盘直径的统一依据）。
+   * 创建节点时由向导/addPuppetNode 按 plug 位置与 crossSection 计算并写入；
+   * 为空时渲染器按 plug 位置回退估算。
+   */
+  jointWidth?: number | null;
 }
 
 /** PuppetNode: a single node in the puppet skeleton hierarchy */
@@ -977,6 +957,11 @@ export interface PuppetNode {
   visible: boolean;
   /** Color for joint disc rendering */
   color: string;
+  /** Procedural animation modifiers (pendulum, breath, etc.) — evaluated on top of keyframes */
+  modifiers: PartAnimationModifier[];
+  /** Blueprint 程序化动画图（DSL/IR）。如果存在，优先于 modifiers 求值。
+   *  modifiers 可通过 modifiersToBlueprint() 转成蓝图。 */
+  blueprint?: import('./blueprint/ir').BlueprintGraph | null;
 }
 
 /** Keyframe data for a single puppet node at a specific frame */
@@ -990,6 +975,8 @@ export interface PuppetNodeKeyframe {
   offsetY?: number;
   direction?: PuppetDirection;
   viewLatitude?: number;
+  /** zIndex 覆盖（step 插值，到帧直接跳变） */
+  zIndex?: number;
 }
 
 /** Joint disc render data (computed, not stored) */
@@ -1720,7 +1707,6 @@ export interface EditorState {
   selectedModifierId: string | null;
   selectedEffectTrackId: string | null;
   showGrid: boolean;
-  showOnionSkin: boolean;
   showTrajectories: boolean;
   isDirty: boolean;
   // Motion blur
@@ -1735,6 +1721,7 @@ export interface EditorState {
   effectBrushIntensity: number;
   effectBrushDensity: number;
   effectBrushSpread: number;
+  strokeBlendMode: 'normal' | 'lighter' | 'overlay' | 'screen';
   // Effect coordinate mode
   effectCoordinateMode: CoordinateMode;
   // Selection tools
@@ -1777,7 +1764,6 @@ export interface EditorState {
   // ---- Concrete Puppet ----
   showPuppetSkeleton: boolean;
   activePuppetSkeletonId: string | null;
-  puppetInteractionMode: 'move' | 'manipulate';
   // ---- Hitbox editor ----
   selectedHitboxId: string | null;
   // ---- Palette constraint drawing ----
@@ -2643,6 +2629,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'MoveHorizontal',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'scrollDirection', label: '滚动方向', type: 'select', default: 'horizontal', options: [
         { label: '水平', value: 'horizontal' },
         { label: '垂直', value: 'vertical' },
@@ -2668,6 +2656,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Waves',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'directionType', label: '方向类型', type: 'select', default: 'horizontal', options: [
         { label: '水平', value: 'horizontal' },
         { label: '垂直', value: 'vertical' },
@@ -2725,6 +2715,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'RotateCw',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'scrollSpeed', label: '滚动速度(px/s)', type: 'number', default: 40, min: -200, max: 200, step: 1 },
       { name: 'scrollDirection', label: '滚动方向', type: 'select', default: 'cw', options: [
         { label: '顺时针', value: 'cw' },
@@ -2744,6 +2736,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Eye',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'mode', label: '模式', type: 'select', default: 'reveal', options: [
         { label: '显形(逐渐出现)', value: 'reveal' },
         { label: '隐形(逐渐消失)', value: 'hide' },
@@ -2776,6 +2770,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Sparkles',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'fragmentSize', label: '碎片大小', type: 'number', default: 4, min: 2, max: 16, step: 1 },
       { name: 'shatterDuration', label: '碎裂持续帧数', type: 'number', default: 10, min: 2, max: 60, step: 1 },
       { name: 'dissolveDuration', label: '消散持续帧数', type: 'number', default: 20, min: 2, max: 120, step: 1 },
@@ -2798,6 +2794,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Zap',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'implosionDuration', label: '内爆持续帧数', type: 'number', default: 8, min: 2, max: 60, step: 1 },
       { name: 'flashDuration', label: '闪光持续帧数', type: 'number', default: 4, min: 1, max: 30, step: 1 },
       { name: 'flashColor', label: '闪光颜色', type: 'color', default: '#ffffff' },
@@ -2816,6 +2814,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Wifi',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'mode', label: '传送方向', type: 'select', default: 'teleport_in', options: [
         { label: '传送进入', value: 'teleport_in' },
         { label: '传送离开', value: 'teleport_out' },
@@ -2836,6 +2836,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Monitor',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'shrinkDuration', label: '收缩持续帧数', type: 'number', default: 12, min: 2, max: 60, step: 1 },
       { name: 'flashDuration', label: '白闪帧数', type: 'number', default: 3, min: 1, max: 15, step: 1 },
       { name: 'lineDuration', label: '横线持续帧数', type: 'number', default: 8, min: 2, max: 30, step: 1 },
@@ -2853,6 +2855,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Spline',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'direction', label: '弯曲方向', type: 'select', default: 'horizontal', options: [
         { label: '水平弯曲', value: 'horizontal' },
         { label: '垂直弯曲', value: 'vertical' },
@@ -2881,6 +2885,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Circle',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'compressAxis', label: '压缩轴', type: 'select', default: 'y', options: [
         { label: '纵向压缩(变扁)', value: 'y' },
         { label: '横向压缩(变窄)', value: 'x' },
@@ -2906,6 +2912,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'StretchHorizontal',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'direction', label: '拉伸方向', type: 'select', default: 'horizontal', options: [
         { label: '水平拉伸', value: 'horizontal' },
         { label: '垂直拉伸', value: 'vertical' },
@@ -2931,6 +2939,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Square',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'bulgeAmount', label: '膨胀量', type: 'number', default: 0.4, min: -1, max: 1.5, step: 0.01 },
       { name: 'centerX', label: '中心X偏移', type: 'number', default: 0, min: -100, max: 100, step: 1 },
       { name: 'centerY', label: '中心Y偏移', type: 'number', default: 0, min: -100, max: 100, step: 1 },
@@ -2957,6 +2967,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'TrendingUp',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'intensity', label: '拉伸强度', type: 'number', default: 0.5, min: 0, max: 2, step: 0.01 },
       { name: 'direction', label: '拉伸方向', type: 'select', default: 'radial', options: [
         { label: '径向', value: 'radial' },
@@ -2982,6 +2994,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Target',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'amplitude', label: '振幅', type: 'number', default: 3, min: 0, max: 20, step: 0.5 },
       { name: 'frequency', label: '空间频率', type: 'number', default: 0.15, min: 0.01, max: 1, step: 0.01 },
       { name: 'speed', label: '传播速度', type: 'number', default: 6.28, min: -20, max: 20, step: 0.1 },
@@ -3226,7 +3240,7 @@ export function createDefaultCanvasModifier(type: CanvasModifierType): CanvasMod
 // ---- Workspace Mode System ----
 
 /** Top-level workspace mode that determines the overall layout and workflow */
-export type WorkspaceMode = 'project_home' | 'animation' | 'map_tile' | 'puppet';
+export type WorkspaceMode = 'project_home' | 'puppet';
 
 /** Stages in the blob tile creation workflow */
 export type TileWorkflowStage = 'base_materials' | 'template_3x3' | 'autotiles_47';

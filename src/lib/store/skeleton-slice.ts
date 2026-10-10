@@ -67,7 +67,7 @@ export const createSkeletonSlice: StateCreator<ProjectStore, [], [], SkeletonSli
     }));
   },
 
-  addBone: (skeletonId, name, parentId, headX, headY, tailX, tailY) => {
+  addBone: (skeletonId, name, parentId, headX, headY, tailX, tailY, color) => {
     get().pushUndo('添加骨头');
     const dx = tailX - headX;
     const dy = tailY - headY;
@@ -89,7 +89,7 @@ export const createSkeletonSlice: StateCreator<ProjectStore, [], [], SkeletonSli
       constraints: [],
       visible: true,
       locked: false,
-      color: '#ff6644',
+      color: color ?? '#ff6644',
     };
 
     set((s) => ({

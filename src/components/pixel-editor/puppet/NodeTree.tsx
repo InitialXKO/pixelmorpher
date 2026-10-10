@@ -18,6 +18,7 @@ function NodeTreeItem({
   depth,
   selectedNodeId,
   onSelect,
+  onSelectNode,
   onToggleExpand,
   expanded,
   childNodes,
@@ -28,6 +29,8 @@ function NodeTreeItem({
   depth: number;
   selectedNodeId: string | null;
   onSelect: () => void;
+  /** H14: 未绑定的原始 dispatcher，透传给子节点（不能把已绑定的 onSelect 复用给子节点） */
+  onSelectNode: (id: string) => void;
   onToggleExpand: () => void;
   expanded: boolean;
   childNodes: PuppetNode[];
@@ -66,7 +69,7 @@ function NodeTreeItem({
           style={{ backgroundColor: node.color || '#888' }}
         />
         {node.plug && <Plug className="size-2.5 text-yellow-500/70" />}
-        <span className="text-[10px] truncate flex-1">{node.name}</span>
+        <span className="text-[10px] truncate flex-1 min-w-0">{node.name}</span>
         {node.sockets.length > 0 && (
           <span className="text-[8px] text-gray-600 flex items-center gap-0.5">
             <Link2 className="size-2" /> {node.sockets.length}
@@ -87,7 +90,7 @@ function NodeTreeItem({
               node={child}
               depth={depth + 1}
               selectedNodeId={selectedNodeId}
-              onSelect={onSelect}
+              onSelect={onSelectNode}
               allNodes={allNodes}
               onToggleVisibility={onToggleVisibility}
             />
@@ -123,6 +126,7 @@ function NodeTreeItemWrapper({
       depth={depth}
       selectedNodeId={selectedNodeId}
       onSelect={() => onSelect(node.id)}
+      onSelectNode={onSelect}
       onToggleExpand={() => setExpanded(!expanded)}
       expanded={expanded}
       childNodes={childNodes}

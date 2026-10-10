@@ -35,8 +35,11 @@ export default function AnimationClipPanel() {
 
   const handleDeleteClip = useCallback((clipId: string) => {
     if (animationClips.length <= 1) return; // Don't delete the last clip
+    const clip = animationClips.find((c) => c.id === clipId);
+    const name = clip?.name ?? '该片段';
+    if (!confirm(`确定删除动画片段「${name}」吗？其中的关键帧将一并删除，此操作不可撤销。`)) return;
     removeAnimationClip(clipId);
-  }, [removeAnimationClip, animationClips.length]);
+  }, [removeAnimationClip, animationClips]);
 
   const handleRenameClip = useCallback((clipId: string, name: string) => {
     updateAnimationClip(clipId, { name });
@@ -60,8 +63,7 @@ export default function AnimationClipPanel() {
       <div className="flex-1 min-h-0 overflow-y-auto">
         {animationClips.map(clip => {
           const isActive = clip.id === activeAnimationClipId;
-          const keyframeCount = clip.keyframes.length;
-          const partCount = clip.tracks.length;
+          const keyframeCount = clip.puppetNodeKeyframes.length;
 
           return (
             <div
@@ -94,7 +96,7 @@ export default function AnimationClipPanel() {
                     onClick={(e) => e.stopPropagation()}
                   />
                 ) : (
-                  <span className={`text-[11px] flex-1 truncate ${
+                  <span className={`text-[11px] flex-1 truncate min-w-0 ${
                     isActive ? 'text-amber-200 font-medium' : 'text-zinc-300'
                   }`}>
                     {clip.name}
@@ -137,7 +139,7 @@ export default function AnimationClipPanel() {
                     {clip.frameRate}fps · {clip.totalFrames}帧
                   </span>
                   <span className="text-[9px] text-zinc-500">
-                    {partCount}部件 · {keyframeCount}关键帧
+                    {keyframeCount}关键帧
                   </span>
                 </div>
               )}

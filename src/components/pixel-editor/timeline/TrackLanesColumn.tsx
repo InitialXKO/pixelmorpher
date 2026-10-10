@@ -7,7 +7,6 @@ import type { SnapConfig, TrackTimelineDisplay } from '@/lib/v15-types';
 import { getFrameWidth, TRACK_HEIGHT, RULER_HEIGHT, TRACK_COLOR_HUES } from './constants';
 import FrameRuler from './FrameRuler';
 import TrackLane from './TrackLane';
-import ModifierSubTrackLane from './ModifierSubTrackLane';
 import { AnimModifierParamDriverSubTrackLane, ParamDriverSubTrackLane } from './ParamDriverSubTrackLane';
 import KeyframeModifierSubTrackLane from './KeyframeModifierSubTrackLane';
 import EffectTrackLane from './EffectTrackLane';
@@ -133,7 +132,7 @@ export default function TrackLanesColumn({
             if (idx < visibleRange.startIndex || idx > visibleRange.endIndex) return null;
             const trackKeyframes = getKeyframesForPart(track.partId);
             const part = parts.find((p) => p.id === track.partId);
-            const animModifiers = part?.animationModifiers ?? [];
+            const animModifiers: import('@/lib/types').PartAnimationModifier[] = []; // Part 无 animationModifiers
             const kfModifierTypes = [...new Set(
               trackKeyframes.flatMap((kf) => kf.modifiers.map((m) => m.type))
             )].filter((t) => !ANIMATION_MODIFIER_TYPES.includes(t));
@@ -160,12 +159,6 @@ export default function TrackLanesColumn({
                   part={part}
                   frameStep={effectiveStep}
                 />
-                {track.expanded && animModifiers.map((mod) => (
-                  <ModifierSubTrackLane key={mod.id} modifier={mod} totalFrames={totalFrames} partId={track.partId} onEditParams={onEditAnimModifierParams} frameWidth={fw} />
-                ))}
-                {track.expanded && animModifiers.map((mod) => (
-                  <AnimModifierParamDriverSubTrackLane key={`anim-pd-${mod.id}`} modifier={mod} partId={track.partId} totalFrames={totalFrames} onEditAnimParamDriver={onEditAnimParamDriver} frameWidth={fw} />
-                ))}
                 {track.expanded && kfModifierTypes.map((modType) => (
                   <KeyframeModifierSubTrackLane
                     key={`kf-mod-${modType}`} modifierType={modType} partKeyframes={trackKeyframes}

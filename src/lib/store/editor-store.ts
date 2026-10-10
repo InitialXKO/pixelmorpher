@@ -43,7 +43,6 @@ interface EditorStore extends EditorState {
   selectModifier: (id: string | null) => void;
   selectEffectTrack: (id: string | null) => void;
   toggleGrid: () => void;
-  toggleOnionSkin: () => void;
   toggleTrajectories: () => void;
   // Motion blur
   setAutoMotionBlur: (enabled: boolean) => void;
@@ -57,14 +56,13 @@ interface EditorStore extends EditorState {
   setEffectBrushIntensity: (intensity: number) => void;
   setEffectBrushDensity: (density: number) => void;
   setEffectBrushSpread: (spread: number) => void;
+  setStrokeBlendMode: (m: 'normal' | 'lighter' | 'overlay' | 'screen') => void;
   setEffectCoordinateMode: (mode: CoordinateMode) => void;
   setTrajectorySnap: (enabled: boolean) => void;
   setPreviewQuality: (quality: 'low' | 'medium' | 'high') => void;
   magicWandTolerance: number;
   setMagicWandTolerance: (tolerance: number) => void;
   // V2.0: Skeleton / Bone editor state
-  selectedBoneId: string | null;
-  setSelectedBoneId: (id: string | null) => void;
   activeSkeletonId: string | null;
   setActiveSkeletonId: (id: string | null) => void;
   showSkeletons: boolean;
@@ -73,8 +71,6 @@ interface EditorStore extends EditorState {
   toggleWeightPaint: () => void;
   weightPaintBoneId: string | null;
   setWeightPaintBoneId: (id: string | null) => void;
-  weightPaintRadius: number;
-  setWeightPaintRadius: (r: number) => void;
   showProcedural: boolean;
   toggleProcedural: () => void;
   // SAM / Smart Selection
@@ -143,9 +139,6 @@ interface EditorStore extends EditorState {
   // Puppet skeleton overlay
   togglePuppetSkeleton: () => void;
   setActivePuppetSkeletonId: (id: string | null) => void;
-  // Puppet interaction mode
-  puppetInteractionMode: 'move' | 'manipulate';
-  setPuppetInteractionMode: (mode: 'move' | 'manipulate') => void;
 }
 
 const defaultEditor: EditorState = {
@@ -162,7 +155,6 @@ const defaultEditor: EditorState = {
   selectedModifierId: null,
   selectedEffectTrackId: null,
   showGrid: true,
-  showOnionSkin: false,
   showTrajectories: false,
   isDirty: false,
   autoMotionBlur: false,
@@ -175,6 +167,7 @@ const defaultEditor: EditorState = {
   effectBrushIntensity: 0.5,
   effectBrushDensity: 10,
   effectBrushSpread: 5,
+  strokeBlendMode: 'normal' as const,
   effectCoordinateMode: 'follow_part',
   previewQuality: 'high' as const,
   magicWandTolerance: 32,
@@ -203,7 +196,6 @@ const defaultEditor: EditorState = {
   moveTargetLevel: 'keyframe',
   showPuppetSkeleton: false,
   activePuppetSkeletonId: null,
-  puppetInteractionMode: 'move' as const,
   selectedHitboxId: null,
   paletteConstrained: false,
   selectedPaletteSlot: null,
@@ -221,12 +213,10 @@ function getProjectStore() {
 export const useEditorStore = create<EditorStore>((set, get) => ({
   ...defaultEditor,
   moveTargetLevel: 'keyframe' as const,
-  selectedBoneId: null,
   activeSkeletonId: null,
   showSkeletons: false,
   showWeightPaint: false,
   weightPaintBoneId: null,
-  weightPaintRadius: 3,
   showProcedural: false,
 
   samState: {
@@ -251,7 +241,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   selectModifier: (id) => set({ selectedModifierId: id }),
   selectEffectTrack: (id) => set({ selectedEffectTrackId: id }),
   toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
-  toggleOnionSkin: () => set((s) => ({ showOnionSkin: !s.showOnionSkin })),
   toggleTrajectories: () => set((s) => ({ showTrajectories: !s.showTrajectories })),
   setAutoMotionBlur: (enabled) => set({ autoMotionBlur: enabled }),
   setAutoMotionBlurIntensity: (intensity) => set({ autoMotionBlurIntensity: intensity }),
@@ -263,15 +252,14 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setEffectBrushIntensity: (intensity) => set({ effectBrushIntensity: intensity }),
   setEffectBrushDensity: (density) => set({ effectBrushDensity: density }),
   setEffectBrushSpread: (spread) => set({ effectBrushSpread: spread }),
+  setStrokeBlendMode: (m) => set({ strokeBlendMode: m }),
   setEffectCoordinateMode: (mode) => set({ effectCoordinateMode: mode }),
   setTrajectorySnap: (enabled) => set({ trajectorySnap: enabled }),
   setPreviewQuality: (quality) => set({ previewQuality: quality }),
-  setSelectedBoneId: (id) => set({ selectedBoneId: id }),
   setActiveSkeletonId: (id) => set({ activeSkeletonId: id }),
   toggleSkeletons: () => set((s) => ({ showSkeletons: !s.showSkeletons })),
   toggleWeightPaint: () => set((s) => ({ showWeightPaint: !s.showWeightPaint })),
   setWeightPaintBoneId: (id) => set({ weightPaintBoneId: id }),
-  setWeightPaintRadius: (r) => set({ weightPaintRadius: r }),
   toggleProcedural: () => set((s) => ({ showProcedural: !s.showProcedural })),
   setMagicWandTolerance: (tolerance) => set({ magicWandTolerance: tolerance }),
   setMoveTargetLevel: (level) => set({ moveTargetLevel: level }),
@@ -280,8 +268,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setSelectedHitboxId: (id) => set({ selectedHitboxId: id }),
   togglePuppetSkeleton: () => set((s) => ({ showPuppetSkeleton: !s.showPuppetSkeleton })),
   setActivePuppetSkeletonId: (id) => set({ activePuppetSkeletonId: id }),
-  puppetInteractionMode: 'move' as const,
-  setPuppetInteractionMode: (mode) => set({ puppetInteractionMode: mode }),
 
   initSAMModel: async (model?: SAMModelType) => {
     const { disposeSAMModel } = get();
@@ -414,7 +400,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
     if (canvasMask.size === 0) return null;
 
-    const sorted = [...parts].filter((p) => p.visible).sort((a, b) => b.zIndex - a.zIndex);
+    const sorted = [...parts].filter((p) => (p.visible ?? true)).sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
     const selectedPixels: { x: number; y: number; color: string }[] = [];
 
     for (const key of canvasMask) {

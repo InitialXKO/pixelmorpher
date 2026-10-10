@@ -36,11 +36,11 @@ export function useCanvasInteraction(s: CanvasState) {
     const frame = currentFrame;
 
     if (s.tool === 'motion_blur_brush') {
-      const stroke: Omit<MotionBlurStroke, 'id'> = { frame, partId, points, brushType: s.motionBlurBrushType, intensity: s.motionBlurIntensity, direction: s.motionBlurDirection };
+      const stroke: Omit<MotionBlurStroke, 'id'> = { frame, partId, points, brushType: s.motionBlurBrushType, intensity: s.motionBlurIntensity, direction: s.motionBlurDirection, blendMode: s.strokeBlendMode };
       useProjectStore.getState().addMotionBlurStroke(stroke);
     } else if (s.tool === 'glow_brush' || s.tool === 'particle_brush' || s.tool === 'afterimage_brush') {
       const effectType = s.tool === 'glow_brush' ? 'glow_brush' : s.tool === 'particle_brush' ? 'particle_brush' : 'afterimage_brush';
-      const stroke: Omit<EffectStroke, 'id'> = { frame, partId, type: effectType, points, color: s.effectBrushColor, radius: s.effectBrushRadius, intensity: s.effectBrushIntensity, density: s.effectBrushDensity, spread: s.effectBrushSpread };
+      const stroke: Omit<EffectStroke, 'id'> = { frame, partId, type: effectType, points, color: s.effectBrushColor, radius: s.effectBrushRadius, intensity: s.effectBrushIntensity, density: s.effectBrushDensity, spread: s.effectBrushSpread, blendMode: s.strokeBlendMode };
       useProjectStore.getState().addEffectStroke(stroke);
     }
     s.currentStrokePointsRef.current = [];
@@ -54,11 +54,11 @@ export function useCanvasInteraction(s: CanvasState) {
       if (points.length < 2) return;
 
       if (s.tool === 'motion_blur_brush') {
-        const previewStroke: MotionBlurStroke = { id: '__preview__', frame: currentFrame, partId: s.selectedPartId || '', points, brushType: s.motionBlurBrushType, intensity: s.motionBlurIntensity, direction: s.motionBlurDirection };
+        const previewStroke: MotionBlurStroke = { id: '__preview__', frame: currentFrame, partId: s.selectedPartId || '', points, brushType: s.motionBlurBrushType, intensity: s.motionBlurIntensity, direction: s.motionBlurDirection, blendMode: s.strokeBlendMode };
         renderMotionBlurStroke(offCtx, previewStroke);
       } else if (s.tool === 'glow_brush' || s.tool === 'particle_brush' || s.tool === 'afterimage_brush') {
         const effectType = s.tool === 'glow_brush' ? 'glow_brush' : s.tool === 'particle_brush' ? 'particle_brush' : 'afterimage_brush';
-        const previewStroke: EffectStroke = { id: '__preview__', frame: currentFrame, partId: s.selectedPartId || '', type: effectType, points, color: s.effectBrushColor, radius: s.effectBrushRadius, intensity: s.effectBrushIntensity, density: s.effectBrushDensity, spread: s.effectBrushSpread };
+        const previewStroke: EffectStroke = { id: '__preview__', frame: currentFrame, partId: s.selectedPartId || '', type: effectType, points, color: s.effectBrushColor, radius: s.effectBrushRadius, intensity: s.effectBrushIntensity, density: s.effectBrushDensity, spread: s.effectBrushSpread, blendMode: s.strokeBlendMode };
         renderEffectStroke(offCtx, previewStroke);
       }
     }, [s.tool, s.selectedPartId, s.motionBlurBrushType, s.motionBlurIntensity, s.motionBlurDirection, s.effectBrushColor, s.effectBrushRadius, s.effectBrushIntensity, s.effectBrushDensity, s.effectBrushSpread],
@@ -79,7 +79,7 @@ export function useCanvasInteraction(s: CanvasState) {
       const { px, py } = s.screenToPixel(e.clientX, e.clientY);
 
       // Delegate to tool handler
-      const handler = getToolHandler(s.tool, s.isTileMode, s.isPuppetMode);
+      const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'part_edit');
       if (handler?.onMouseDown) handler.onMouseDown(s, e, px, py);
     },
     [s],
@@ -99,7 +99,7 @@ export function useCanvasInteraction(s: CanvasState) {
       const { px, py } = s.screenToPixel(e.clientX, e.clientY);
 
       // Delegate to tool handler
-      const handler = getToolHandler(s.tool, s.isTileMode, s.isPuppetMode);
+      const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'part_edit');
       if (handler?.onMouseMove) handler.onMouseMove(s, e, px, py);
     },
     [s],
@@ -111,7 +111,7 @@ export function useCanvasInteraction(s: CanvasState) {
     if (s.isDrawingRef.current && isStrokeTool()) commitStroke();
 
     // Delegate to tool handler for tool-specific mouseUp logic
-    const handler = getToolHandler(s.tool, s.isTileMode, s.isPuppetMode);
+    const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'part_edit');
     if (handler?.onMouseUp) handler.onMouseUp(s);
 
     // General cleanup (always runs)
@@ -139,22 +139,28 @@ export function useCanvasInteraction(s: CanvasState) {
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       if (s.selectionMaskRef.current.size > 0) { setShowExtractDialog(true); return; }
-      if (s.isPuppetMode || s.tool === 'puppet' || s.showPuppetSkeleton) {
-        const { px, py } = s.screenToPixel(e.clientX, e.clientY);
-        const hit = s.findPuppetNodeAtPixel(px, py);
-        if (hit) {
-          const { node, character, skeleton } = hit;
-          const activeCostume = character.activeCostumeSetId ? character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId) ?? null : null;
-          const direction = skeleton.currentDirection || 'S';
-          const state = useProjectStore.getState();
-          const resolvedPart = resolvePuppetNodeSprite(node, direction, activeCostume, state.parts);
-          if (resolvedPart) { useWorkspaceStore.getState().setMode('animation'); s.editorStore.getState().selectPart(resolvedPart.id); s.editorStore.getState().enterPartEditMode(resolvedPart.id); return; }
-        }
-      }
+      // 木偶模式下双击不再进部件编辑（避免误触），用 Ctrl+点击进入
     }, [s.tool, s.showPuppetSkeleton, s.screenToPixel, s.findPuppetNodeAtPixel, s.isPuppetMode, s.editorStore],
   );
 
   // ---- Keyboard handlers ----
+  // 原生 wheel 监听（passive: false），React onWheel 默认 passive 调 preventDefault 会警告
+  useEffect(() => {
+    const canvas = s.canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left; const mouseY = e.clientY - rect.top;
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const newZoom = Math.max(1, Math.min(32, Math.round(s.zoom * zoomFactor * 10) / 10));
+      const worldX = (mouseX - s.panX) / s.zoom; const worldY = (mouseY - s.panY) / s.zoom;
+      s.setZoom(newZoom); s.setPan(mouseX - worldX * newZoom, mouseY - worldY * newZoom);
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [s.canvasRef, s.zoom, s.panX, s.panY, s.setZoom, s.setPan]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // General keyboard shortcuts (not tool-specific)
@@ -163,12 +169,32 @@ export function useCanvasInteraction(s: CanvasState) {
         const editorState = s.editorStore.getState();
         if (editorState.tool === 'move' && !s.altToggleBackupRef.current) { s.altToggleBackupRef.current = editorState.moveTargetLevel; s.editorStore.getState().setMoveTargetLevel(editorState.moveTargetLevel === 'keyframe' ? 'part_global' : 'keyframe'); }
       }
-      if (e.code === 'Enter' || e.code === 'Delete') { if (s.selectionMaskRef.current.size > 0) { e.preventDefault(); setShowExtractDialog(true); } }
+      if (e.code === 'Enter') { if (s.selectionMaskRef.current.size > 0) { e.preventDefault(); setShowExtractDialog(true); } }
+      if (e.code === 'Delete' || e.code === 'Backspace') {
+        if (s.selectionMaskRef.current.size > 0) {
+          e.preventDefault();
+          // 删除选区像素
+          const state = useProjectStore.getState();
+          const part = state.parts.find((p) => p.id === s.editorStore.getState().selectedPartId);
+          if (part) {
+            const newPixels = part.pixels.map((row) => [...row]);
+            for (const key of s.selectionMaskRef.current) {
+              const [x, y] = key.split(',').map(Number);
+              if (newPixels[y] && newPixels[y][x] !== undefined) {
+                newPixels[y][x] = null;
+              }
+            }
+            state.setPartPixels(part.id, newPixels);
+            s.selectionMaskRef.current.clear();
+            s.markDirty();
+          }
+        }
+      }
       if (e.code === 'KeyE' && e.shiftKey) { const samSt = s.editorStore.getState().samState; if (samSt.currentMask && samSt.maskShape) { e.preventDefault(); s.editorStore.getState().extractSAMMaskAsPart(); } }
       if (e.code === 'KeyP' && !e.ctrlKey && !e.metaKey && !e.shiftKey) s.editorStore.getState().setTool('puppet');
 
       // Delegate tool-specific keyboard handling
-      const handler = getToolHandler(s.tool, s.isTileMode, s.isPuppetMode);
+      const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'part_edit');
       if (handler?.onKeyDown) handler.onKeyDown(s, e);
 
       // Escape handler (general, runs after tool-specific handlers)

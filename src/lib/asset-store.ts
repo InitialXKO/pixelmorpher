@@ -332,7 +332,7 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
       // Switch workspace mode to animation editor
       try {
         const { useWorkspaceStore } = await import('./workspace-store');
-        useWorkspaceStore.getState().setMode('animation');
+        useWorkspaceStore.getState().setMode('puppet');
       } catch {}
 
       set({ currentProjectId: id, showProjectHome: false });
@@ -460,7 +460,7 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
       // Switch workspace mode to animation editor
       try {
         const { useWorkspaceStore } = await import('./workspace-store');
-        useWorkspaceStore.getState().setMode('animation');
+        useWorkspaceStore.getState().setMode('puppet');
       } catch {}
 
       set((s) => ({
@@ -516,31 +516,14 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
   refreshWorkflowSummary: () => {
     const { useWorkspaceStore } = require('./workspace-store') as { useWorkspaceStore: any };
     const { useProjectStore } = require('./store') as { useProjectStore: any };
-    const { useTileWorkflowStore } = require('./tile-workflow-store') as { useTileWorkflowStore: any };
-    const { useMapStore } = require('./map-store') as { useMapStore: any };
 
     const workspaceMode = useWorkspaceStore.getState().mode;
     const projectStore = useProjectStore.getState();
-    const tileStore = useTileWorkflowStore.getState();
 
     let type: WorkflowType = 'none';
     const summary: Partial<WorkflowSummary> = {};
 
-    if (workspaceMode === 'map_tile') {
-      const mapStore = useMapStore.getState();
-      if (tileStore.tiles.length > 0) {
-        type = 'tile_creation';
-        summary.tileStep = tileStore.currentStep;
-        summary.tileMaterialAReady = !!tileStore.materialA.pixels;
-        summary.tileMaterialBReady = !!tileStore.materialB.pixels;
-        summary.tileGeneratedCount = tileStore.tiles.length;
-      } else if (mapStore.currentMap) {
-        type = 'map_editing';
-        summary.mapName = mapStore.currentMap.name;
-        summary.mapLayerCount = mapStore.currentMap.layers.length;
-        summary.mapDynamicObjectCount = mapStore.currentMap.dynamicObjects.length;
-      }
-    } else {
+    {
       type = 'animation_editing';
       summary.animPartCount = projectStore.parts.length;
       summary.animKeyframeCount = projectStore.keyframes.length;

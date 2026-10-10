@@ -517,7 +517,11 @@ export function applyPixelModifiers(
     if (!mod.enabled) continue;
     const renderer = modifierRegistry.get(mod.type);
     if (renderer) {
-      pixels = renderer(mod.params, pixels, currentFrame);
+      // speed/phase：speed=0 时动画冻结，可当静态用
+      const speed = Number(mod.params.speed ?? 1);
+      const phase = Number(mod.params.phase ?? 0);
+      const effectiveFrame = currentFrame * speed + phase;
+      pixels = renderer(mod.params, pixels, effectiveFrame);
     }
   }
 

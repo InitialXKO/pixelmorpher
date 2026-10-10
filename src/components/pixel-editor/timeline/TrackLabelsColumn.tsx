@@ -90,7 +90,7 @@ export default function TrackLabelsColumn({
           if (idx < visibleRange.startIndex || idx > visibleRange.endIndex) return null;
           const partName = getPartName(track.partId);
           const part = parts.find((p) => p.id === track.partId);
-          const animModifiers = part?.animationModifiers ?? [];
+          const animModifiers = ([] as import('@/lib/types').PartAnimationModifier[]) ;
           const trackKeyframes = getKeyframesForPart(track.partId);
           const kfModifierTypes = [...new Set(
             trackKeyframes.flatMap((kf) => kf.modifiers.map((m) => m.type))
@@ -121,7 +121,7 @@ export default function TrackLabelsColumn({
                 <button onClick={() => useProjectStore.getState().toggleTrackExpanded(track.id)} className="p-0.5 hover:bg-white/10 rounded transition-colors">
                   {track.expanded ? <ChevronDown className="size-3 text-gray-400" /> : <ChevronRight className="size-3 text-gray-400" />}
                 </button>
-                <span className="text-xs text-gray-300 truncate flex-1 select-none" title={partName}>{partName}</span>
+                <span className="text-xs text-gray-300 truncate flex-1 min-w-0 select-none" title={partName}>{partName}</span>
                 {/* V15: Frame step indicator */}
                 {frameStep > 1 && (
                   <span className="text-[8px] font-mono text-amber-500/70 select-none px-0.5" title={`Frame step: ${frameStep}`}>
@@ -144,7 +144,7 @@ export default function TrackLabelsColumn({
                 return (
                   <div key={mod.id} className="flex items-center gap-1 px-2 border-b border-[#1a1a2e]" style={{ height: SUB_TRACK_HEIGHT, background: '#0c0c1e' }}>
                     <span className="size-2 rounded-sm shrink-0" style={{ backgroundColor: mod.enabled ? modColor : '#4b5563', opacity: mod.enabled ? 0.8 : 0.4 }} />
-                    <span className="text-[10px] truncate flex-1 select-none" style={{ color: mod.enabled ? '#9ca3af' : '#4b5563' }} title={modLabel}>{modLabel}</span>
+                    <span className="text-[10px] truncate flex-1 min-w-0 select-none" style={{ color: mod.enabled ? '#9ca3af' : '#4b5563' }} title={modLabel}>{modLabel}</span>
                   </div>
                 );
               })}
@@ -168,7 +168,7 @@ export default function TrackLabelsColumn({
                 return (
                   <div key={`kf-mod-${modType}`} className="flex items-center gap-1 px-2 border-b border-[#1a1a2e]" style={{ height: SUB_TRACK_HEIGHT, background: '#0a0a1a' }}>
                     <Diamond className="size-2 shrink-0" style={{ color: anyEnabled ? modColor : '#4b5563', opacity: anyEnabled ? 0.8 : 0.4 }} />
-                    <span className="text-[10px] truncate flex-1 select-none" style={{ color: anyEnabled ? '#9ca3af' : '#4b5563' }} title={`${modLabel}${paramKfCount > 0 ? ` (${paramKfCount} keyframes)` : ''}`}>{modLabel}</span>
+                    <span className="text-[10px] truncate flex-1 min-w-0 select-none" style={{ color: anyEnabled ? '#9ca3af' : '#4b5563' }} title={`${modLabel}${paramKfCount > 0 ? ` (${paramKfCount} keyframes)` : ''}`}>{modLabel}</span>
                     {paramKfCount > 0 && <span className="text-[8px] text-gray-600 select-none">{paramKfCount}k</span>}
                   </div>
                 );
@@ -211,7 +211,7 @@ export default function TrackLabelsColumn({
               onClick={() => onSelectEffectTrack(effectTrack.id)}
             >
               <span style={{ color: config?.color ?? '#a78bfa' }}>{config?.icon ?? <Circle className="size-3" />}</span>
-              <span className="text-xs truncate flex-1 select-none" style={{ color: config?.color ?? '#a78bfa' }} title={effectTrack.name}>{effectTrack.name}</span>
+              <span className="text-xs truncate flex-1 min-w-0 select-none" style={{ color: config?.color ?? '#a78bfa' }} title={effectTrack.name}>{effectTrack.name}</span>
               <button onClick={(e) => { e.stopPropagation(); useProjectStore.getState().toggleEffectTrackVisibility(effectTrack.id); }} className="p-0.5 hover:bg-white/10 rounded transition-colors" title={effectTrack.visible ? 'Hide effect track' : 'Show effect track'}>
                 {effectTrack.visible ? <Eye className="size-3 text-gray-500" /> : <EyeOff className="size-3 text-gray-600" />}
               </button>
@@ -267,7 +267,7 @@ export default function TrackLabelsColumn({
             <div key={cmTrack.id} className="flex items-center gap-1 px-2 border-b border-[#1a1a2e] hover:bg-[#141428] transition-colors"
               style={{ height: TRACK_HEIGHT, background: cmTrack.enabled ? '#0d0d22' : '#09091a', opacity: cmTrack.enabled ? 1 : 0.5 }}>
               <span className="text-cyan-400"><Circle className="size-3" /></span>
-              <span className="text-xs text-cyan-300 truncate flex-1 select-none" title={cmTrack.name}>{cmTrack.name}</span>
+              <span className="text-xs text-cyan-300 truncate flex-1 min-w-0 select-none" title={cmTrack.name}>{cmTrack.name}</span>
               <button onClick={(e) => { e.stopPropagation(); useProjectStore.getState().toggleCanvasModifierTrackVisibility(cmTrack.id); }} className="p-0.5 hover:bg-white/10 rounded transition-colors" title={cmTrack.visible ? '隐藏' : '显示'}>
                 {cmTrack.visible ? <Eye className="size-3 text-gray-500" /> : <EyeOff className="size-3 text-gray-600" />}
               </button>
@@ -317,7 +317,7 @@ export default function TrackLabelsColumn({
               <div key={`puppet-label-${node.id}`} className="flex items-center gap-1 px-2 border-b border-[#1a1a2e] hover:bg-[#141428] transition-colors"
                 style={{ height: TRACK_HEIGHT, background: '#0e1028' }}>
                 <span className="size-2.5 rounded-full shrink-0" style={{ backgroundColor: node.color || PUPPET_COLOR }} />
-                <span className="text-xs text-cyan-300 truncate flex-1 select-none" title={node.name}>{node.name}</span>
+                <span className="text-xs text-cyan-300 truncate flex-1 min-w-0 select-none" title={node.name}>{node.name}</span>
               </div>
             ))}
           </React.Fragment>

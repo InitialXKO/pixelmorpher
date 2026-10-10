@@ -31,7 +31,6 @@ export type DccPipelineSlice = {
   updateHitboxShape: (clipId: string, keyframeId: string, hitboxId: string, updates: Partial<HitboxShape>) => void;
   toggleHitboxShape: (clipId: string, keyframeId: string, hitboxId: string) => void;
   getHitboxShapes: (clipId: string, keyframeId: string) => HitboxShape[];
-  getHitboxesAtFrame: (clipId: string, frame: number) => { keyframeId: string; hitboxes: HitboxShape[] }[];
   addPalette: (name: string, colors?: PaletteColor[], opts?: Partial<Pick<Palette, 'swappableIndices' | 'isDefault' | 'tags'>>) => Palette;
   removePalette: (paletteId: string) => void;
   updatePalette: (paletteId: string, updates: Partial<Palette>) => void;
@@ -172,23 +171,7 @@ export const createDccPipelineSlice: StateCreator<ProjectStore, [], [], DccPipel
     if (!clip?.hitboxMap) return [];
     return clip.hitboxMap[keyframeId] || [];
   },
-  getHitboxesAtFrame: (clipId, frame) => {
-    const clip = findClip(get(), clipId);
-    if (!clip?.hitboxMap) return [];
-    const result: { keyframeId: string; hitboxes: HitboxShape[] }[] = [];
-    const sortedKfs = [...clip.keyframes].sort((a, b) => a.frame - b.frame);
-    const kfByPart = new Map<string, typeof sortedKfs[number]>();
-    for (const kf of sortedKfs) {
-      if (kf.frame <= frame) kfByPart.set(kf.partId, kf);
-    }
-    for (const [, kf] of kfByPart) {
-      const hitboxes = clip.hitboxMap?.[kf.id];
-      if (hitboxes && hitboxes.length > 0) {
-        result.push({ keyframeId: kf.id, hitboxes: hitboxes.filter(h => h.active) });
-      }
-    }
-    return result;
-  },
+  // getHitboxesAtFrame 已删除：旧部件关键帧系统已统一为木偶节点关键帧
 
   // ---- Palettes ----
   addPalette: (name, colors, opts) => {

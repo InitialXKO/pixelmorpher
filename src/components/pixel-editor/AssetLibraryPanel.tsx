@@ -18,8 +18,6 @@ import {
   Edit3,
   Check,
   X,
-  Eye,
-  EyeOff,
   Lock,
   Unlock,
   ChevronRight,
@@ -41,8 +39,6 @@ import {
 } from '@/components/ui/context-menu';
 import { useAssetStore } from '@/lib/asset-store';
 import { useProjectStore, useEditorStore } from '@/lib/store';
-import { useTileWorkflowStore } from '@/lib/tile-workflow-store';
-import { useMapStore } from '@/lib/map-store';
 import type { LibraryAsset, LibraryAssetType } from '@/lib/asset-types';
 import PartPanel from '@/components/pixel-editor/PartPanel';
 
@@ -308,10 +304,8 @@ interface PartCardProps {
     id: string;
     name: string;
     pixels: (string | null)[][];
-    visible: boolean;
-    locked: boolean;
-    zIndex: number;
-    width: number;
+        locked: boolean;
+        width: number;
     height: number;
     pivotX: number;
     pivotY: number;
@@ -320,7 +314,6 @@ interface PartCardProps {
   onSelect: () => void;
   onDelete: () => void;
   onRename: (newName: string) => void;
-  onToggleVisibility: () => void;
   onToggleLock: () => void;
   onDuplicate: () => void;
   onSaveToLibrary: () => void;
@@ -332,7 +325,6 @@ function PartCard({
   onSelect,
   onDelete,
   onRename,
-  onToggleVisibility,
   onToggleLock,
   onDuplicate,
   onSaveToLibrary,
@@ -368,19 +360,10 @@ function PartCard({
           <div className="size-5 bg-zinc-900 rounded border border-zinc-800 overflow-hidden flex-shrink-0 flex items-center justify-center">
             <span className="text-[8px] text-zinc-600">{part.name.charAt(0)}</span>
           </div>
-          <span className="text-[10px] text-zinc-300 truncate flex-1">{part.name}</span>
+          <span className="text-[10px] text-zinc-300 truncate flex-1 min-w-0">{part.name}</span>
           <span className="text-[9px] text-zinc-600">{w}×{h}</span>
           {/* Quick visibility/lock toggles */}
           <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-            <Button
-              variant="ghost"
-              size="sm"
-              className={`h-4 w-4 p-0 ${part.visible ? 'text-zinc-500' : 'text-zinc-700'}`}
-              onClick={(e) => { e.stopPropagation(); onToggleVisibility(); }}
-              title={part.visible ? '隐藏' : '显示'}
-            >
-              {part.visible ? <Eye className="size-2" /> : <EyeOff className="size-2" />}
-            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -418,16 +401,6 @@ function PartCard({
 
         <ContextMenuItem
           className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 py-1.5 cursor-pointer"
-          onClick={onToggleVisibility}
-        >
-          {part.visible
-            ? <EyeOff className="size-3 mr-1.5 text-zinc-400" />
-            : <Eye className="size-3 mr-1.5 text-zinc-400" />}
-          {part.visible ? '隐藏部件' : '显示部件'}
-        </ContextMenuItem>
-
-        <ContextMenuItem
-          className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 py-1.5 cursor-pointer"
           onClick={onToggleLock}
         >
           {part.locked
@@ -460,71 +433,6 @@ function PartCard({
 }
 
 // ============================================================
-// Skeleton Card with Context Menu
-// ============================================================
-
-interface SkeletonCardProps {
-  skeleton: {
-    id: string;
-    name: string;
-    bones: unknown[];
-  };
-  onSelect: () => void;
-  onDelete: () => void;
-  onRename: (newName: string) => void;
-  isSelected: boolean;
-}
-
-function SkeletonCard({ skeleton, onSelect, onDelete, onRename, isSelected }: SkeletonCardProps) {
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          className={`group flex items-center gap-1.5 px-2 py-0.5 rounded cursor-pointer transition-colors ${
-            isSelected
-              ? 'bg-purple-600/20 border border-purple-500/40'
-              : 'hover:bg-zinc-800/50 border border-transparent'
-          }`}
-          onClick={onSelect}
-        >
-          <Bone className="size-2.5 text-zinc-500 flex-shrink-0" />
-          <span className="text-[10px] text-zinc-300 truncate flex-1">{skeleton.name}</span>
-          <span className="text-[9px] text-zinc-600">{skeleton.bones.length}骨骼</span>
-        </div>
-      </ContextMenuTrigger>
-
-      <ContextMenuContent className="bg-zinc-900 border-zinc-700 min-w-[160px]">
-        <ContextMenuLabel className="text-[10px] text-zinc-400 py-1.5">
-          {skeleton.name}
-        </ContextMenuLabel>
-        <ContextMenuSeparator className="bg-zinc-800" />
-
-        <ContextMenuItem
-          className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 py-1.5 cursor-pointer"
-          onClick={() => {
-            const newName = prompt('重命名骨骼:', skeleton.name);
-            if (newName?.trim()) onRename(newName.trim());
-          }}
-        >
-          <Edit3 className="size-3 mr-1.5 text-zinc-400" />
-          重命名
-        </ContextMenuItem>
-
-        <ContextMenuSeparator className="bg-zinc-800" />
-
-        <ContextMenuItem
-          className="text-[11px] text-red-400 focus:bg-red-600/20 focus:text-red-300 py-1.5 cursor-pointer"
-          variant="destructive"
-          onClick={onDelete}
-        >
-          <Trash2 className="size-3 mr-1.5" />
-          删除骨骼
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-}
-
 // ============================================================
 // Main Panel
 // ============================================================
@@ -545,16 +453,13 @@ export default function AssetLibraryPanel() {
     setSelectedAssetId,
   } = useAssetStore();
 
-  const { parts, skeletons, keyframes, removePart, updatePart, addPart, setPartPixels } = useProjectStore();
-  const { tiles, materialA, materialB, currentStep } = useTileWorkflowStore();
-  const { currentMap } = useMapStore();
+  const { parts, keyframes, removePart, updatePart, addPart, setPartPixels } = useProjectStore();
 
   const [searchText, setSearchText] = useState('');
 
   // Selected part from editor store (lazy read to avoid re-render loop)
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
-  const [selectedSkeletonId, setSelectedSkeletonId] = useState<string | null>(null);
-
+  
   useEffect(() => {
     if (!libraryLoaded) loadLibrary();
   }, [libraryLoaded, loadLibrary]);
@@ -577,8 +482,11 @@ export default function AssetLibraryPanel() {
   }, [importAssetToProject]);
 
   const handleDeleteAsset = useCallback(async (assetId: string) => {
+    const asset = libraryAssets.find((a) => a.id === assetId);
+    const name = asset?.name ?? '该资产';
+    if (!confirm(`确定删除资产「${name}」吗？此操作不可撤销。`)) return;
     await removeAssetFromLibrary(assetId);
-  }, [removeAssetFromLibrary]);
+  }, [removeAssetFromLibrary, libraryAssets]);
 
   const handleRenameAsset = useCallback(async (assetId: string, newName: string) => {
     await updateAssetInLibrary(assetId, { name: newName });
@@ -621,14 +529,6 @@ export default function AssetLibraryPanel() {
     store.updatePart(partId, { name: newName });
   }, []);
 
-  const handleTogglePartVisibility = useCallback((partId: string) => {
-    const store = useProjectStore.getState();
-    const part = store.parts.find((p) => p.id === partId);
-    if (part) {
-      store.updatePart(partId, { visible: !part.visible });
-    }
-  }, []);
-
   const handleTogglePartLock = useCallback((partId: string) => {
     const store = useProjectStore.getState();
     const part = store.parts.find((p) => p.id === partId);
@@ -647,8 +547,7 @@ export default function AssetLibraryPanel() {
     store.updatePart(newPart.id, {
       pivotX: part.pivotX,
       pivotY: part.pivotY,
-      zIndex: part.zIndex + 1,
-    });
+          });
   }, []);
 
   const handleSavePartToLibrary = useCallback(async (partId: string) => {
@@ -693,29 +592,11 @@ export default function AssetLibraryPanel() {
 
   // ---- Skeleton Actions ----
 
-  const handleSelectSkeleton = useCallback((skeletonId: string) => {
-    setSelectedSkeletonId(skeletonId);
-    try {
-      const { useEditorStore } = require('@/lib/store') as { useEditorStore: any };
-      useEditorStore.getState().setActiveSkeletonId(skeletonId);
-    } catch {}
-  }, []);
+  
 
-  const handleDeleteSkeleton = useCallback((skeletonId: string) => {
-    const store = useProjectStore.getState();
-    store.pushUndo('删除骨骼');
-    store.removeSkeleton(skeletonId);
-  }, []);
+  
 
-  const handleRenameSkeleton = useCallback((skeletonId: string, newName: string) => {
-    const store = useProjectStore.getState();
-    store.pushUndo('重命名骨骼');
-    // Update skeleton name directly in state
-    const skeletons = store.skeletons.map((s) =>
-      s.id === skeletonId ? { ...s, name: newName } : s
-    );
-    useProjectStore.setState({ skeletons });
-  }, []);
+  
 
   return (
     <div className="flex flex-col h-full">
@@ -843,7 +724,6 @@ export default function AssetLibraryPanel() {
                       onSelect={() => handleSelectPart(part.id)}
                       onDelete={() => handleDeletePart(part.id)}
                       onRename={(newName) => handleRenamePart(part.id, newName)}
-                      onToggleVisibility={() => handleTogglePartVisibility(part.id)}
                       onToggleLock={() => handleTogglePartLock(part.id)}
                       onDuplicate={() => handleDuplicatePart(part.id)}
                       onSaveToLibrary={() => handleSavePartToLibrary(part.id)}
@@ -851,28 +731,6 @@ export default function AssetLibraryPanel() {
                     />
                   ))}
                 </div>
-              )}
-            </div>
-
-            {/* Skeletons */}
-            <div className="px-2 py-1 mt-2">
-              <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1 flex items-center gap-1">
-                <Bone className="size-2.5" />
-                骨骼 ({skeletons.length})
-              </div>
-              {skeletons.length === 0 ? (
-                <p className="text-[9px] text-zinc-600 pl-3">暂无骨骼</p>
-              ) : (
-                skeletons.map((skel) => (
-                  <SkeletonCard
-                    key={skel.id}
-                    skeleton={skel}
-                    onSelect={() => handleSelectSkeleton(skel.id)}
-                    onDelete={() => handleDeleteSkeleton(skel.id)}
-                    onRename={(newName) => handleRenameSkeleton(skel.id, newName)}
-                    isSelected={selectedSkeletonId === skel.id}
-                  />
-                ))
               )}
             </div>
 
@@ -889,50 +747,7 @@ export default function AssetLibraryPanel() {
         {/* ---- Layer 3: Workflow Assets ---- */}
         <TabsContent value="workflow" className="flex-1 min-h-0 m-0">
           <div className="flex flex-col h-full overflow-auto py-1 px-2">
-            {/* Tile Workflow */}
-            <div className="py-1">
-              <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                <Grid3x3 className="size-2.5" />
-                瓦片工作流
-              </div>
-              <div className="space-y-1 pl-2">
-                <div className="flex items-center gap-2 text-[10px]">
-                  <span className={`size-1.5 rounded-full ${materialA.pixels ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                  材质A: {materialA.pixels ? '✓' : '未生成'}
-                </div>
-                <div className="flex items-center gap-2 text-[10px]">
-                  <span className={`size-1.5 rounded-full ${materialB.pixels ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                  材质B: {materialB.pixels ? '✓' : '未生成'}
-                </div>
-                <div className="flex items-center gap-2 text-[10px]">
-                  <span className={`size-1.5 rounded-full ${tiles.length > 0 ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
-                  已生成瓦片: {tiles.length}
-                </div>
-                <div className="text-[9px] text-zinc-600 mt-1">
-                  当前步骤: {currentStep}/3
-                </div>
-                {tiles.length > 0 && (
-                  <SaveTilesetToLibrarySection />
-                )}
-              </div>
-            </div>
-
-            {/* Map Editing */}
-            <div className="py-1 mt-2 border-t border-zinc-800/50">
-              <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                <Grid3x3 className="size-2.5" />
-                地图编辑
-              </div>
-              {currentMap ? (
-                <div className="space-y-1 pl-2 text-[10px]">
-                  <div>地图: {currentMap.name}</div>
-                  <div>图层: {currentMap.layers.length}</div>
-                  <div>动态对象: {currentMap.dynamicObjects.length}</div>
-                </div>
-              ) : (
-                <p className="text-[9px] text-zinc-600 pl-2">未创建地图</p>
-              )}
-            </div>
+            <p className="text-[9px] text-zinc-600 pl-2 py-2">暂无工作流资产</p>
           </div>
         </TabsContent>
       </Tabs>
@@ -1013,95 +828,6 @@ function SaveToLibrarySection() {
       >
         <Plus className="size-3" />
       </Button>
-    </div>
-  );
-}
-
-// ============================================================
-// Sub-component: Save tileset to library
-// ============================================================
-
-function SaveTilesetToLibrarySection() {
-  const [name, setName] = useState('');
-
-  const handleSave = useCallback(async () => {
-    const tileStore = useTileWorkflowStore.getState();
-    if (tileStore.tiles.length === 0) return;
-
-    const tilesetName = name.trim() || '瓦片集';
-    const tileW = tileStore.tileWidth;
-    const tileH = tileStore.tileHeight;
-
-    // Generate thumbnail from first tile
-    const firstTile = tileStore.tiles[0];
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.min(tileW * 3, 64);
-    canvas.height = Math.min(tileH * 3, 64);
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.imageSmoothingEnabled = false;
-      // Draw first few tiles in a grid
-      const cols = Math.ceil(Math.sqrt(tileStore.tiles.length));
-      const scale = Math.min(canvas.width / (tileW * cols), canvas.height / (tileH * Math.ceil(tileStore.tiles.length / cols)));
-      ctx.save();
-      ctx.scale(scale, scale);
-      for (let i = 0; i < Math.min(tileStore.tiles.length, 9); i++) {
-        const tile = tileStore.tiles[i];
-        const col = i % cols;
-        const row = Math.floor(i / cols);
-        const ox = col * tileW;
-        const oy = row * tileH;
-        for (let y = 0; y < tileH && y < tile.pixels.length; y++) {
-          for (let x = 0; x < tileW && x < tile.pixels[y].length; x++) {
-            const c = tile.pixels[y][x];
-            if (c) {
-              ctx.fillStyle = c;
-              ctx.fillRect(ox + x, oy + y, 1, 1);
-            }
-          }
-        }
-      }
-      ctx.restore();
-    }
-
-    const thumbnail = canvas.toDataURL();
-
-    await useAssetStore.getState().saveTilesetToLibrary(
-      tilesetName,
-      tileW,
-      tileH,
-      tileStore.tiles.map((t) => ({
-        pixels: t.pixels.map((r) => [...r] as string[]),
-        animModifiers: t.animModifiers,
-        tags: t.tags.map((tag) => String(tag)),
-      })),
-      thumbnail,
-    );
-
-    setName('');
-  }, [name]);
-
-  return (
-    <div className="mt-1.5 pt-1.5 border-t border-zinc-800/50">
-      <p className="text-[9px] text-zinc-600 mb-1">保存瓦片集到资产库</p>
-      <div className="flex gap-1">
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="瓦片集名称"
-          className="h-5 text-[9px] bg-zinc-900 border-zinc-800 flex-1"
-          onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
-        />
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-5 w-5 p-0 text-zinc-500 hover:text-emerald-400"
-          onClick={handleSave}
-          title="保存瓦片集"
-        >
-          <Plus className="size-3" />
-        </Button>
-      </div>
     </div>
   );
 }
