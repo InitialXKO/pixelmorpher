@@ -22,6 +22,7 @@ import type {
   PuppetDirection,
 } from '@/lib/types';
 import PuppetCreationWizard from './PuppetCreationWizard';
+import RefAssemblyWizard from './puppet/RefAssemblyWizard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -45,6 +46,8 @@ export default function PuppetAssetPanel() {
   const setActivePuppetSkeletonId = useEditorStore((s) => s.setActivePuppetSkeletonId);
 
   const [wizardOpen, setWizardOpen] = useState(false);
+  const refWizardOpen = useEditorStore((s) => s.refWizardOpen);
+  const setRefWizardOpen = useEditorStore((s) => s.setRefWizardOpen);
   const [expandedChars, setExpandedChars] = useState<Set<string>>(new Set());
   const [sectionExpanded, setSectionExpanded] = useState({
     characters: true,
@@ -84,9 +87,21 @@ export default function PuppetAssetPanel() {
         >
           <Plus className="size-3" />
         </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-5 text-amber-400 hover:text-amber-300"
+          onClick={() => setRefWizardOpen(true)}
+          title="从参考图装配"
+        >
+          <Image className="size-3" />
+        </Button>
       </div>
 
       <PuppetCreationWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
+      {<div style={{ display: refWizardOpen ? 'block' : 'none' }}>
+        <RefAssemblyWizard onClose={() => setRefWizardOpen(false)} />
+      </div>}
 
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-2 space-y-1">

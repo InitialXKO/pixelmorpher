@@ -9,6 +9,7 @@ import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
 import { useCanvasState } from './canvas/use-canvas-state';
 import { useCanvasInteraction } from './canvas/use-canvas-interaction';
+import MaskBrushOverlay from './MaskBrushOverlay';
 import {
   renderGridOverlay,
   renderCanvasBorder,
@@ -361,6 +362,26 @@ export default function PixelCanvas() {
 
   return (
     <div ref={s.containerRef} className="relative w-full h-full overflow-hidden" style={{ background: '#0f0f1a' }}>
+      {/* 参考图层（装配向导用）：DOM 展示，不进 canvas 导出 */}
+      {s.referenceImageUrl && s.referenceImageVisible && (
+        <img
+          src={s.referenceImageUrl}
+          className="absolute inset-0 w-full h-full pointer-events-none"
+          style={{ opacity: s.referenceImageOpacity, imageRendering: 'pixelated', objectFit: 'contain' }}
+          alt=""
+          draggable={false}
+        />
+      )}
+      {/* 遮罩模式：专用遮罩笔刷覆盖层 */}
+      {s.editMode === 'mask' && s.maskNodeId && (
+        <MaskBrushOverlay
+          canvasWidth={s.canvasWidth}
+          canvasHeight={s.canvasHeight}
+          zoom={s.zoomRef.current}
+          panX={s.panRef.current.x}
+          panY={s.panRef.current.y}
+        />
+      )}
       {/* Correction mode border */}
       {s.editMode === 'correction' && (
         <div className="absolute inset-0 pointer-events-none z-50" style={{ boxShadow: 'inset 0 0 0 3px rgba(34, 211, 238, 0.6)', borderRadius: '4px' }} />
