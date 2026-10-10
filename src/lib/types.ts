@@ -489,35 +489,28 @@ export interface Part {
   pixels: PixelGrid;
   pivotX: number;
   pivotY: number;
-  /** Default position offset. Can be overridden per-animation-clip via ClipPartData. */
-  offsetX: number;
-  offsetY: number;
-  /** Default z-index. Can be overridden per-animation-clip via ClipPartData. */
-  zIndex: number;
-  /** Default visibility. Can be overridden per-animation-clip via Track. */
-  visible: boolean;
+  /** @deprecated 木偶统一模型：位置由 PuppetNode.offsetX/offsetY 驱动，Part 只存像素 */
+  offsetX?: number;
+  /** @deprecated */
+  offsetY?: number;
+  /** @deprecated 由 PuppetNode.zIndex 驱动 */
+  zIndex?: number;
+  /** @deprecated 由 PuppetNode.visible 驱动 */
+  visible?: boolean;
   locked: boolean;
   thumbnail?: string; // base64 data URL
-  /** V3.7: Parent part ID (null = no parent, root level) */
-  parentId: string | null;
-  /** Persistent part-level edit modifiers. Applied before keyframe modifiers in the render pipeline.
-   *  These are intrinsic to the asset — they define the part's base visual state.
-   *  Can be manually baked into part.pixels. */
-  editModifiers: ModifierInstance[];
-  /** V13: Part-level global modifiers — persistent transform/animation modifiers
-   *  that always apply to this part across all frames and all animations.
-   *  These are intrinsic to the asset (e.g., permanent rotation offset, persistent scale factor).
-   *  For animation-specific always-on transforms, use ClipPartData.animationModifiers instead. */
-  globalModifiers: GlobalModifier[];
-  // V3.1: Part-level animation modifiers.
-  // When activeAnimationClipId is set and ClipPartData exists, ClipPartData takes precedence.
-  animationModifiers: PartAnimationModifier[];
-  /** V3.2: Modifier groups for organizing animation modifiers */
-  modifierGroups: ModifierGroup[];
-  /** V4.1: Part-level keyframes for per-frame modifier stack state.
-   *  When activeAnimationClipId is set and ClipPartData exists, ClipPartData takes precedence.
-   *  When present, these override editModifiers at their respective frames (step interpolation). */
-  partKeyframes: PartKeyframe[];
+  /** @deprecated 层级由 PuppetNode plug/socket 驱动 */
+  parentId?: string | null;
+  /** @deprecated */
+  editModifiers?: ModifierInstance[];
+  /** @deprecated */
+  globalModifiers?: GlobalModifier[];
+  /** @deprecated 由 PuppetNode.modifiers 驱动 */
+  animationModifiers?: PartAnimationModifier[];
+  /** @deprecated */
+  modifierGroups?: ModifierGroup[];
+  /** @deprecated */
+  partKeyframes?: PartKeyframe[];
 }
 
 // ---- Part Keyframe ----
@@ -984,6 +977,9 @@ export interface PuppetNode {
   color: string;
   /** Procedural animation modifiers (pendulum, breath, etc.) — evaluated on top of keyframes */
   modifiers: PartAnimationModifier[];
+  /** Blueprint 程序化动画图（DSL/IR）。如果存在，优先于 modifiers 求值。
+   *  modifiers 可通过 modifiersToBlueprint() 转成蓝图。 */
+  blueprint?: import('./blueprint/ir').BlueprintGraph | null;
 }
 
 /** Keyframe data for a single puppet node at a specific frame */
