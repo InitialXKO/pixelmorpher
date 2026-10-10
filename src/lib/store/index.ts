@@ -43,3 +43,8 @@ export const useProjectStore = create<ProjectStore>()(
     ...createV15Slice(...a),
   }) as ProjectStore
 );
+
+// 调试用：浏览器控制台可访问
+if (typeof window !== 'undefined') {
+  (window as any).__useProjectStore = useProjectStore;
+}
