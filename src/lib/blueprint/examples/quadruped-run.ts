@@ -360,7 +360,7 @@ export function createPuppyRunExampleCharacter(
   }
 
   // 4. 修正 plug 的 socketId（指向父节点上对应的 socket）
-  const allNodes: any[] = store.getState().puppetSkeletons
+  const allNodes: any[] = store.puppetSkeletons
     .find((sk: any) => sk.id === skeleton.id)?.nodes ?? [];
   for (const def of defs) {
     if (!def.parent || !def.socketName) continue;
