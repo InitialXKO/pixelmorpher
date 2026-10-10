@@ -31,7 +31,7 @@ import { computeDirectionDrawOrder } from '../store/puppet-slice';
 import { renderPixelPerfectRotation, shouldMirrorDirection } from './puppet-render';
 import { hexToRgbCached } from './color-utils';
 import { acquireCanvas, releaseCanvas, canCachePartPixels, getPartPixelCache } from './canvas-pool';
-import { applyPixelModifiers } from './pixel-modifiers';
+import { applyPixelModifiers, isPixelDeformModifier } from './pixel-modifiers';
 import { computeKeyframeBaseTransform, combineTransformsComponentLevel } from './animation-state';
 import { computePartAnimationTransform, computeAnimModifierVelocity, computeGlobalModifierTransform } from './animation-dispatch';
 import { resolveKeyframeModifierParams, buildVariableContext, collectActiveParamDrivers, VariableContext, EMPTY_VARIABLE_CONTEXT, cachedVariableContext, cachedVariableContextFrame, cachedVariableContextHash, setCachedVariableContext } from './param-driver';
@@ -1233,7 +1233,12 @@ export function renderPuppetNodes(
 
     // Create part canvas with pixel-level modifiers for puppet sprites
     const spriteKf = partKfByPartId.get(part.id) ?? null;
-    const partCanvasResult = createPartCanvas(part, spriteKf, true, currentFrame, frameRate);
+    // 木偶节点的像素层修改器：临时挂到 part 上让 createPartCanvas 应用
+    const nodePixelMods = (node.modifiers ?? []).filter(m => m.enabled && isPixelDeformModifier(m.type));
+    const partForRender = nodePixelMods.length > 0
+      ? { ...part, animationModifiers: [...(part.animationModifiers ?? []), ...nodePixelMods] }
+      : part;
+    const partCanvasResult = createPartCanvas(partForRender, spriteKf, true, currentFrame, frameRate);
     let partCanvas = partCanvasResult.canvas;
     let partPivotX = part.pivotX + partCanvasResult.offsetX;
     let partPivotY = part.pivotY + partCanvasResult.offsetY;
