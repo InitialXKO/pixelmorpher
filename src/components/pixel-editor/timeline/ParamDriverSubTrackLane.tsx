@@ -12,7 +12,7 @@ import { Trash2 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store';
 import type { Keyframe, ModifierType, PartAnimationModifier, ParamDriver, ParamDriverWaveform, ModifierParamValue } from '@/lib/types';
 import { MODIFIER_DEFINITIONS, PARAM_DRIVER_WAVEFORM_LABELS, evaluateParamDriver } from '@/lib/types';
-import { FRAME_WIDTH, SUB_TRACK_HEIGHT, CATEGORY_COLOR_MAP } from './constants';
+import { FRAME_WIDTH as STATIC_FRAME_WIDTH, SUB_TRACK_HEIGHT, CATEGORY_COLOR_MAP } from './constants';
 
 // ---- ParamDriver Sub-Track Lane ----
 // Renders ParamDriver wave preview and bake/unbake controls for a modifier's param drivers
@@ -21,13 +21,16 @@ export function ParamDriverSubTrackLane({
   partKeyframes,
   totalFrames,
   onEditParamDriver,
+  frameWidth,
 }: {
   modifierType: ModifierType;
   partKeyframes: Keyframe[];
   totalFrames: number;
   onEditParamDriver: (keyframeId: string, modifierId: string, driverId: string) => void;
+  frameWidth?: number;
 }) {
   const { updateParamDriver, removeParamDriver, toggleParamDriver, bakeParamDriver, unbakeParamDriver } = useProjectStore();
+  const FRAME_WIDTH = frameWidth ?? STATIC_FRAME_WIDTH;
   const width = totalFrames * FRAME_WIDTH;
 
   const driverEntries = useMemo(() => {
@@ -73,14 +76,17 @@ export function AnimModifierParamDriverSubTrackLane({
   partId,
   totalFrames,
   onEditAnimParamDriver,
+  frameWidth,
 }: {
   modifier: PartAnimationModifier;
   partId: string;
   totalFrames: number;
   onEditAnimParamDriver: (partId: string, modifierId: string, driverId: string) => void;
+  frameWidth?: number;
 }) {
   const { updateAnimParamDriver, removeAnimParamDriver, toggleAnimParamDriver, bakeAnimParamDriver, unbakeAnimParamDriver } = useProjectStore();
-  const width = totalFrames * FRAME_WIDTH;
+  const FW = frameWidth ?? STATIC_FRAME_WIDTH;
+  const width = totalFrames * FW;
 
   const drivers = modifier.paramDrivers ?? [];
   if (drivers.length === 0) return null;

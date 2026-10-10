@@ -10,8 +10,10 @@ import {
 } from '@/components/ui/tooltip';
 import {
   Play, Pause, Square, SkipBack, SkipForward, Diamond, Trash2,
+  ZoomIn, ZoomOut, Magnet,
 } from 'lucide-react';
 import type { InterpolationMode } from '@/lib/types';
+import type { SnapConfig } from '@/lib/v15-types';
 
 // ---- Top Controls Bar ----
 export default function TimelineControls({
@@ -41,6 +43,13 @@ export default function TimelineControls({
   onEditFpsCancel,
   onEditFramesCancel,
   frameDisplayRef,
+  // V15: Zoom & Snap props
+  timelineZoom,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
+  snapConfig,
+  onToggleSnap,
 }: {
   playState: string;
   currentFrame: number;
@@ -68,6 +77,13 @@ export default function TimelineControls({
   onEditFpsCancel: () => void;
   onEditFramesCancel: () => void;
   frameDisplayRef: React.RefObject<HTMLSpanElement | null>;
+  // V15
+  timelineZoom?: number;
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onZoomReset?: () => void;
+  snapConfig?: SnapConfig;
+  onToggleSnap?: () => void;
 }) {
   return (
     <div
@@ -206,6 +222,61 @@ export default function TimelineControls({
         </TooltipTrigger>
         <TooltipContent side="top">Delete selected keyframe (Del)</TooltipContent>
       </Tooltip>
+
+      <div className="w-px h-5 bg-[#2a2a4a] mx-1" />
+
+      {/* V15: Timeline Zoom Controls */}
+      {onZoomIn && onZoomOut && timelineZoom !== undefined && (
+        <>
+          <div className="flex items-center gap-0.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="size-6 text-gray-400 hover:text-white hover:bg-white/10" onClick={onZoomOut}>
+                  <ZoomIn className="size-3 -scale-x-100" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Zoom Out (Ctrl+-)</TooltipContent>
+            </Tooltip>
+            <button
+              className="text-[9px] font-mono text-gray-500 hover:text-gray-300 min-w-[3ch] text-center cursor-pointer"
+              onClick={onZoomReset}
+              title="Reset Zoom (Ctrl+0)"
+            >
+              {timelineZoom}px
+            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="size-6 text-gray-400 hover:text-white hover:bg-white/10" onClick={onZoomIn}>
+                  <ZoomIn className="size-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Zoom In (Ctrl+=)</TooltipContent>
+            </Tooltip>
+          </div>
+          <div className="w-px h-5 bg-[#2a2a4a] mx-1" />
+        </>
+      )}
+
+      {/* V15: Snap Toggle */}
+      {onToggleSnap && snapConfig && (
+        <>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`size-7 ${snapConfig.enabled ? 'text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10' : 'text-gray-600 hover:text-gray-400'}`}
+                onClick={onToggleSnap}
+              >
+                <Magnet className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              {snapConfig.enabled ? 'Snap On (click to disable)' : 'Snap Off (click to enable)'}
+            </TooltipContent>
+          </Tooltip>
+        </>
+      )}
 
       <div className="flex-1" />
 

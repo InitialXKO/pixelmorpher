@@ -3,7 +3,7 @@
 import React, { useCallback, useMemo } from 'react';
 import type { PuppetNode, PuppetNodeKeyframe } from '@/lib/types';
 import { PuppetKeyframeMarker } from './KeyframeMarker';
-import { FRAME_WIDTH, TRACK_HEIGHT } from './constants';
+import { FRAME_WIDTH as STATIC_FRAME_WIDTH, TRACK_HEIGHT } from './constants';
 
 // ---- Puppet Node Track Lane ----
 const PuppetNodeTrackLane = React.memo(function PuppetNodeTrackLane({
@@ -16,6 +16,7 @@ const PuppetNodeTrackLane = React.memo(function PuppetNodeTrackLane({
   onDeletePuppetKeyframe,
   onMovePuppetKeyframeToFrame,
   onUpdatePuppetKeyframe,
+  frameWidth,
 }: {
   node: PuppetNode;
   nodeKeyframes: PuppetNodeKeyframe[];
@@ -26,7 +27,9 @@ const PuppetNodeTrackLane = React.memo(function PuppetNodeTrackLane({
   onDeletePuppetKeyframe: (keyframeId: string) => void;
   onMovePuppetKeyframeToFrame: (keyframeId: string) => void;
   onUpdatePuppetKeyframe: (keyframeId: string, updates: Partial<PuppetNodeKeyframe>) => void;
+  frameWidth?: number;
 }) {
+  const FRAME_WIDTH = frameWidth ?? STATIC_FRAME_WIDTH;
   const width = totalFrames * FRAME_WIDTH;
   const sortedKeyframes = useMemo(
     () => [...nodeKeyframes].sort((a, b) => a.frame - b.frame),
@@ -112,6 +115,7 @@ const PuppetNodeTrackLane = React.memo(function PuppetNodeTrackLane({
           totalFrames={totalFrames}
           siblingKeyframes={sortedKeyframes}
           onUpdatePuppetKeyframe={onUpdatePuppetKeyframe}
+          frameWidth={FRAME_WIDTH}
         />
       ))}
     </div>

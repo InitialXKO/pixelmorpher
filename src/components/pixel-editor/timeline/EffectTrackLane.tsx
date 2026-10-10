@@ -3,7 +3,7 @@
 import React, { useCallback } from 'react';
 import type { EffectTrack } from '@/lib/types';
 import { EffectKeyframeMarker } from './KeyframeMarker';
-import { FRAME_WIDTH, TRACK_HEIGHT, EFFECT_CONFIG } from './constants';
+import { FRAME_WIDTH as STATIC_FRAME_WIDTH, TRACK_HEIGHT, EFFECT_CONFIG } from './constants';
 
 // ---- Effect Track Lane ----
 export default function EffectTrackLane({
@@ -14,6 +14,7 @@ export default function EffectTrackLane({
   onDeleteEffectKeyframe,
   onEditEffectKeyframe,
   onSelectEffectTrack,
+  frameWidth,
 }: {
   effectTrack: EffectTrack;
   totalFrames: number;
@@ -22,7 +23,9 @@ export default function EffectTrackLane({
   onDeleteEffectKeyframe: (trackId: string, keyframeId: string) => void;
   onEditEffectKeyframe: (trackId: string, keyframeId: string) => void;
   onSelectEffectTrack: (id: string | null) => void;
+  frameWidth?: number;
 }) {
+  const FRAME_WIDTH = frameWidth ?? STATIC_FRAME_WIDTH;
   const width = totalFrames * FRAME_WIDTH;
   const config = EFFECT_CONFIG[effectTrack.type];
   const isSelected = selectedEffectTrackId === effectTrack.id;
@@ -86,6 +89,7 @@ export default function EffectTrackLane({
           onSelect={() => onSelectEffectTrack(effectTrack.id)}
           onDelete={() => onDeleteEffectKeyframe(effectTrack.id, kf.id)}
           onEditParams={() => onEditEffectKeyframe(effectTrack.id, kf.id)}
+          frameWidth={FRAME_WIDTH}
         />
       ))}
     </div>

@@ -10,14 +10,66 @@ import {
 } from '@/components/ui/context-menu';
 import { Plus, Trash2, SkipForward } from 'lucide-react';
 import type { Keyframe, PuppetNodeKeyframe } from '@/lib/types';
+import type { SnapConfig } from '@/lib/v15-types';
 import {
-  FRAME_WIDTH,
+  DEFAULT_FRAME_WIDTH,
   TRACK_HEIGHT,
   KEYFRAME_SIZE,
   EFFECT_KEYFRAME_SIZE,
   PUPPET_KEYFRAME_SIZE,
   PUPPET_COLOR,
+  SNAP_PIXEL_THRESHOLD,
 } from './constants';
+
+/** Compute smart snap: snap to nearest snap target */
+function computeSnapFrame(
+  rawFrame: number,
+  totalFrames: number,
+  excludeKeyframeId: string | undefined,
+  siblingKeyframes: { id: string; frame: number }[],
+  snapConfig?: SnapConfig,
+  fw?: number,
+): number {
+  if (!snapConfig?.enabled) return rawFrame;
+
+  const threshold = (snapConfig.threshold ?? SNAP_PIXEL_THRESHOLD) / (fw ?? DEFAULT_FRAME_WIDTH);
+  let bestFrame = rawFrame;
+  let bestDist = threshold;
+
+  // Snap to frame markers (every 5th frame)
+  if (snapConfig.snapToFrameMarkers) {
+    for (let f = 0; f < totalFrames; f += 5) {
+      const dist = Math.abs(rawFrame - f);
+      if (dist < bestDist) { bestDist = dist; bestFrame = f; }
+    }
+    // Also snap to frame 0 and last frame
+    const dist0 = Math.abs(rawFrame - 0);
+    if (dist0 < bestDist) { bestDist = dist0; bestFrame = 0; }
+    const distEnd = Math.abs(rawFrame - (totalFrames - 1));
+    if (distEnd < bestDist) { bestDist = distEnd; bestFrame = totalFrames - 1; }
+  }
+
+  // Snap to other keyframes
+  if (snapConfig.snapToKeyframes) {
+    for (const kf of siblingKeyframes) {
+      if (excludeKeyframeId && kf.id === excludeKeyframeId) continue;
+      const dist = Math.abs(rawFrame - kf.frame);
+      if (dist < bestDist) { bestDist = dist; bestFrame = kf.frame; }
+    }
+  }
+
+  // Snap to segment boundaries
+  if (snapConfig.snapToSegmentBoundaries) {
+    const mid = Math.floor(totalFrames / 2);
+    const boundaries = [0, mid, totalFrames - 1];
+    for (const f of boundaries) {
+      const dist = Math.abs(rawFrame - f);
+      if (dist < bestDist) { bestDist = dist; bestFrame = f; }
+    }
+  }
+
+  return bestFrame;
+}
 
 // ---- Keyframe Marker (HTML-based for ContextMenu support) ----
 const KeyframeMarker = React.memo(function KeyframeMarker({
@@ -30,6 +82,11 @@ const KeyframeMarker = React.memo(function KeyframeMarker({
   totalFrames,
   siblingKeyframes,
   onUpdateKeyframe,
+  // V15: Dynamic frame width, track color, smart snap
+  frameWidth,
+  trackColor,
+  snapConfig,
+  snapFrame,
 }: {
   keyframe: Keyframe;
   isSelected: boolean;
@@ -40,7 +97,15 @@ const KeyframeMarker = React.memo(function KeyframeMarker({
   totalFrames: number;
   siblingKeyframes: Keyframe[];
   onUpdateKeyframe: (id: string, updates: Partial<Keyframe>) => void;
+  // V15
+  frameWidth?: number;
+  trackColor?: string;
+  snapConfig?: SnapConfig;
+  snapFrame?: (rawFrame: number, excludeKeyframeId?: string) => number;
 }) {
+  const fw = frameWidth ?? DEFAULT_FRAME_WIDTH;
+  const color = trackColor ?? '#f59e0b';
+
   // ---- Drag state ----
   const [isDragging, setIsDragging] = useState(false);
   const [dragFrame, setDragFrame] = useState(keyframe.frame);
@@ -49,13 +114,14 @@ const KeyframeMarker = React.memo(function KeyframeMarker({
   const dragFrameRef = useRef(keyframe.frame);
   const trackLaneRef = useRef<Element | null>(null);
   const didDragRef = useRef(false);
+  const lastSnappedFrameRef = useRef(keyframe.frame);
 
   // Use dragFrame for position while dragging, otherwise keyframe.frame
   const displayFrame = isDragging ? dragFrame : keyframe.frame;
-  const left = displayFrame * FRAME_WIDTH + FRAME_WIDTH / 2 - KEYFRAME_SIZE / 2;
+  const left = displayFrame * fw + fw / 2 - KEYFRAME_SIZE / 2;
   const top = TRACK_HEIGHT / 2 - KEYFRAME_SIZE / 2;
 
-  // ---- Pointer handlers for drag-to-move ----
+  // ---- Pointer handlers for drag-to-move with snapping ----
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLButtonElement>) => {
       if (e.button !== 0) return;
@@ -69,6 +135,7 @@ const KeyframeMarker = React.memo(function KeyframeMarker({
       setIsDragging(true);
       setDragFrame(keyframe.frame);
       dragFrameRef.current = keyframe.frame;
+      lastSnappedFrameRef.current = keyframe.frame;
       onSelect();
     },
     [keyframe.frame, onSelect]
@@ -81,8 +148,17 @@ const KeyframeMarker = React.memo(function KeyframeMarker({
       if (!trackLane) return;
       const rect = trackLane.getBoundingClientRect();
       const x = e.clientX - rect.left;
-      let frame = Math.round((x - FRAME_WIDTH / 2) / FRAME_WIDTH);
-      frame = Math.max(0, Math.min(frame, totalFrames - 1));
+      let rawFrame = Math.round((x - fw / 2) / fw);
+      rawFrame = Math.max(0, Math.min(rawFrame, totalFrames - 1));
+
+      // Apply smart snapping
+      let frame = rawFrame;
+      if (snapConfig?.enabled) {
+        // Try snap to nearest keyframe
+        const snapped = computeSnapFrame(rawFrame, totalFrames, keyframe.id, siblingKeyframes, snapConfig, fw);
+        frame = snapped;
+      }
+
       const hasCollision = siblingKeyframes.some(
         (kf) => kf.id !== keyframe.id && kf.frame === frame
       );
@@ -90,9 +166,10 @@ const KeyframeMarker = React.memo(function KeyframeMarker({
         didDragRef.current = true;
         setDragFrame(frame);
         dragFrameRef.current = frame;
+        lastSnappedFrameRef.current = frame;
       }
     },
-    [totalFrames, siblingKeyframes, keyframe.id]
+    [totalFrames, siblingKeyframes, keyframe.id, fw, snapConfig]
   );
 
   const handlePointerUp = useCallback(
@@ -146,17 +223,17 @@ const KeyframeMarker = React.memo(function KeyframeMarker({
               isDragging ? 'scale-[1.4]' : ''
             }`}
             style={{
-              background: isDragging ? '#fbbf24' : isSelected ? '#ffffff' : '#f59e0b',
+              background: isDragging ? color : isSelected ? '#ffffff' : color,
               boxShadow: isDragging
-                ? '0 0 10px rgba(251,191,36,0.7)'
+                ? `0 0 10px ${color}70`
                 : isSelected
                   ? '0 0 6px rgba(255,255,255,0.5)'
-                  : '0 0 3px rgba(245,158,11,0.3)',
+                  : `0 0 3px ${color}40`,
               border: isDragging
-                ? '1.5px solid #f59e0b'
+                ? `1.5px solid ${color}`
                 : isSelected
                   ? '1.5px solid #ffffff'
-                  : '1px solid #d97706',
+                  : `1px solid ${color}`,
               transition: isDragging ? 'none' : 'all 0.1s',
             }}
           />
@@ -220,6 +297,8 @@ const KeyframeMarker = React.memo(function KeyframeMarker({
   if (prevProps.keyframe.frame !== nextProps.keyframe.frame) return false;
   if (prevProps.isSelected !== nextProps.isSelected) return false;
   if (prevProps.totalFrames !== nextProps.totalFrames) return false;
+  if (prevProps.frameWidth !== nextProps.frameWidth) return false;
+  if (prevProps.trackColor !== nextProps.trackColor) return false;
   if (prevProps.keyframe !== nextProps.keyframe) {
     if (prevProps.keyframe.interpolationMode !== nextProps.keyframe.interpolationMode) return false;
   }
@@ -236,6 +315,7 @@ export const EffectKeyframeMarker = React.memo(function EffectKeyframeMarker({
   onSelect,
   onDelete,
   onEditParams,
+  frameWidth,
 }: {
   keyframe: { id: string; frame: number };
   effectColor: string;
@@ -243,8 +323,10 @@ export const EffectKeyframeMarker = React.memo(function EffectKeyframeMarker({
   onSelect: () => void;
   onDelete: () => void;
   onEditParams: () => void;
+  frameWidth?: number;
 }) {
-  const left = keyframe.frame * FRAME_WIDTH + FRAME_WIDTH / 2 - EFFECT_KEYFRAME_SIZE / 2;
+  const fw = frameWidth ?? DEFAULT_FRAME_WIDTH;
+  const left = keyframe.frame * fw + fw / 2 - EFFECT_KEYFRAME_SIZE / 2;
   const top = TRACK_HEIGHT / 2 - EFFECT_KEYFRAME_SIZE / 2;
 
   return (
@@ -310,6 +392,7 @@ export const PuppetKeyframeMarker = React.memo(function PuppetKeyframeMarker({
   totalFrames,
   siblingKeyframes,
   onUpdatePuppetKeyframe,
+  frameWidth,
 }: {
   keyframe: PuppetNodeKeyframe;
   isSelected: boolean;
@@ -319,7 +402,9 @@ export const PuppetKeyframeMarker = React.memo(function PuppetKeyframeMarker({
   totalFrames: number;
   siblingKeyframes: PuppetNodeKeyframe[];
   onUpdatePuppetKeyframe: (id: string, updates: Partial<PuppetNodeKeyframe>) => void;
+  frameWidth?: number;
 }) {
+  const fw = frameWidth ?? DEFAULT_FRAME_WIDTH;
   const [isDragging, setIsDragging] = useState(false);
   const [dragFrame, setDragFrame] = useState(keyframe.frame);
   const isDraggingRef = useRef(false);
@@ -328,7 +413,7 @@ export const PuppetKeyframeMarker = React.memo(function PuppetKeyframeMarker({
   const didDragRef = useRef(false);
 
   const displayFrame = isDragging ? dragFrame : keyframe.frame;
-  const left = displayFrame * FRAME_WIDTH + FRAME_WIDTH / 2 - PUPPET_KEYFRAME_SIZE / 2;
+  const left = displayFrame * fw + fw / 2 - PUPPET_KEYFRAME_SIZE / 2;
   const top = TRACK_HEIGHT / 2 - PUPPET_KEYFRAME_SIZE / 2;
 
   const handlePointerDown = useCallback(
@@ -356,7 +441,7 @@ export const PuppetKeyframeMarker = React.memo(function PuppetKeyframeMarker({
       if (!trackLane) return;
       const rect = trackLane.getBoundingClientRect();
       const x = e.clientX - rect.left;
-      let frame = Math.round((x - FRAME_WIDTH / 2) / FRAME_WIDTH);
+      let frame = Math.round((x - fw / 2) / fw);
       frame = Math.max(0, Math.min(frame, totalFrames - 1));
       const hasCollision = siblingKeyframes.some(
         (kf) => kf.id !== keyframe.id && kf.frame === frame
@@ -367,7 +452,7 @@ export const PuppetKeyframeMarker = React.memo(function PuppetKeyframeMarker({
         dragFrameRef.current = frame;
       }
     },
-    [totalFrames, siblingKeyframes, keyframe.id]
+    [totalFrames, siblingKeyframes, keyframe.id, fw]
   );
 
   const handlePointerUp = useCallback(

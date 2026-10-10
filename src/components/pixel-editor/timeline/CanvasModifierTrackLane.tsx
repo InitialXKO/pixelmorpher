@@ -2,18 +2,21 @@
 
 import React from 'react';
 import type { CanvasModifierTrack } from '@/lib/types';
-import { FRAME_WIDTH, TRACK_HEIGHT, EFFECT_KEYFRAME_SIZE } from './constants';
+import { FRAME_WIDTH as STATIC_FRAME_WIDTH, TRACK_HEIGHT, EFFECT_KEYFRAME_SIZE } from './constants';
 
 // ---- Canvas Modifier Track Lane ----
 export default function CanvasModifierTrackLane({
   track,
   totalFrames,
   currentFrame,
+  frameWidth,
 }: {
   track: CanvasModifierTrack;
   totalFrames: number;
   currentFrame: number;
+  frameWidth?: number;
 }) {
+  const FRAME_WIDTH = frameWidth ?? STATIC_FRAME_WIDTH;
   const width = totalFrames * FRAME_WIDTH;
 
   return (
