@@ -112,7 +112,11 @@ export function renderUnified(
 
   // ---- Step 2: Render puppet parts ----
   if (puppetSkeletons && puppetCharacters && puppetSkeletons.length > 0) {
-    if (useUnifiedPipeline) {
+    // 有程序化修改器的骨架走老管线（unified pipeline 不调 interpolateNodeKeyframes，修改器不生效）
+    const hasPuppetModifiers = puppetSkeletons.some(sk =>
+      sk.nodes.some(n => (n.modifiers ?? []).length > 0)
+    );
+    if (useUnifiedPipeline && !hasPuppetModifiers) {
       // NEW: Unified pipeline path
       renderPuppetViaUnifiedPipeline(
         ctx, canvasWidth, canvasHeight,
@@ -121,7 +125,7 @@ export function renderUnified(
         globalModifiers, animationVariables, canvasModifierTracks,
       );
     } else {
-      // OLD: Direct renderPuppetNodes() path (fallback)
+      // OLD: Direct renderPuppetNodes() path (fallback) — 支持节点修改器
       renderPuppetViaOldPipeline(
         ctx, parts, puppetSkeletons, puppetCharacters,
         animationClips, currentFrame, canvasWidth, canvasHeight, frameRate,
