@@ -182,6 +182,10 @@ export function useCanvasState() {
   const showPuppetSkeleton = useEditorStore((s) => s.showPuppetSkeleton);
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const selectedPuppetNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
+  const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
+  const referenceImageOpacity = useEditorStore((s) => s.referenceImageOpacity);
+  const referenceImageVisible = useEditorStore((s) => s.referenceImageVisible);
+  const maskNodeId = useEditorStore((s) => s.maskNodeId);
   const magicWandTolerance = useEditorStore((s) => s.magicWandTolerance);
   const trajectorySnap = useEditorStore((s) => s.trajectorySnap);
   const partEditPartId = useEditorStore((s) => s.partEditPartId);
@@ -737,6 +741,7 @@ export function useCanvasState() {
     effectBrushColor, effectBrushRadius, effectBrushIntensity, effectBrushDensity, effectBrushSpread, strokeBlendMode,
     showSkeletons, selectedBoneId, activeSkeletonId, showWeightPaint, weightPaintBoneId,
     showPuppetSkeleton, activePuppetSkeletonId, selectedPuppetNodeId,
+    referenceImageUrl, referenceImageOpacity, referenceImageVisible, maskNodeId,
     magicWandTolerance, trajectorySnap, partEditPartId, partEditModifiers,
     brushStyle, brushStyleParams, compositingMode, styleAspects, strokeDrivers, editorStore,
     // Derived
