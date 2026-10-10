@@ -348,6 +348,8 @@ export interface PuppetNodeWorldTransform {
   node: PuppetNode;
   /** Computed direction at this frame */
   direction: PuppetDirection;
+  /** Interpolated zIndex at this frame (keyframe override or base) */
+  zIndex: number;
 }
 
 /**
@@ -447,6 +449,7 @@ function computePuppetNodeWorldTransforms(
       depth,
       node,
       direction: interpolated.direction,
+      zIndex: interpolated.zIndex,
     };
     result.push(transform);
 
@@ -497,6 +500,7 @@ function interpolateNodeKeyframes(
   offsetX: number;
   offsetY: number;
   direction: PuppetDirection;
+  zIndex: number;
 } {
   if (keyframes.length === 0) {
     return {
@@ -505,6 +509,7 @@ function interpolateNodeKeyframes(
       offsetX: node.offsetX,
       offsetY: node.offsetY,
       direction: fallbackDirection,
+      zIndex: node.zIndex,
     };
   }
 
@@ -527,6 +532,7 @@ function interpolateNodeKeyframes(
       offsetX: prevKf.offsetX ?? node.offsetX,
       offsetY: prevKf.offsetY ?? node.offsetY,
       direction: prevKf.direction ?? fallbackDirection,
+      zIndex: prevKf.zIndex ?? node.zIndex,
     };
   }
 
@@ -538,15 +544,17 @@ function interpolateNodeKeyframes(
       offsetX: node.offsetX,
       offsetY: node.offsetY,
       direction: fallbackDirection,
+      zIndex: node.zIndex,
     };
   }
 
   // Interpolate between prev and next
   const t = (currentFrame - prevKf.frame) / (nextKf!.frame - prevKf.frame);
 
-  // HOLD (step) for angle and direction
+  // HOLD (step) for angle, direction, and zIndex
   const angle = prevKf.angle ?? node.angle;
   const direction = prevKf.direction ?? fallbackDirection;
+  const zIndex = prevKf.zIndex ?? node.zIndex;
 
   // LERP for stretch and offset
   const prevStretch = prevKf.stretch ?? node.stretch;
@@ -561,7 +569,7 @@ function interpolateNodeKeyframes(
   const nextOffY = nextKf!.offsetY ?? prevOffY;
   const offsetY = prevOffY + (nextOffY - prevOffY) * t;
 
-  return { angle, stretchY, offsetX, offsetY, direction };
+  return { angle, stretchY, offsetX, offsetY, direction, zIndex };
 }
 
 // ============================================================
@@ -953,7 +961,7 @@ function renderPuppetFrame(
     const mirrored = shouldMirrorDirection(node, nodeDirection);
 
     const sortKey = computeRenderSortKey(
-      node.zIndex,
+      wt.zIndex,
       drawOrderIndex,
       wt.worldY,
       minY,

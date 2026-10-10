@@ -975,6 +975,8 @@ export interface PuppetNodeKeyframe {
   offsetY?: number;
   direction?: PuppetDirection;
   viewLatitude?: number;
+  /** zIndex 覆盖（step 插值，到帧直接跳变） */
+  zIndex?: number;
 }
 
 /** Joint disc render data (computed, not stored) */

@@ -3,7 +3,7 @@
  * Extracted from renderPuppetNodes to reduce cyclomatic complexity.
  *
  * For each node, finds surrounding PuppetNodeKeyframes and interpolates:
- * - angle/direction/viewLatitude: hold (step) interpolation
+ * - angle/direction/viewLatitude/zIndex: hold (step) interpolation
  * - offsetX/offsetY/stretch: linear lerp
  */
 
@@ -103,7 +103,7 @@ export function interpolateNodeKeyframes(
 // ── Internal helpers ──────────────────────────────────────────
 
 function interpolateSingleNode(
-  node: { id: string; angle: number; stretch: number; offsetX: number; offsetY: number },
+  node: { id: string; angle: number; stretch: number; offsetX: number; offsetY: number; zIndex: number },
   nodeKfs: PuppetNodeKeyframe[],
   currentFrame: number,
   fallbackDirection: PuppetDirection,
@@ -118,6 +118,7 @@ function interpolateSingleNode(
       offsetY: node.offsetY,
       direction: fallbackDirection,
       viewLatitude: fallbackLatitude,
+      zIndex: node.zIndex,
     };
   }
 
@@ -139,6 +140,7 @@ function interpolateSingleNode(
       offsetY: first.offsetY ?? node.offsetY,
       direction: first.direction ?? fallbackDirection,
       viewLatitude: first.viewLatitude ?? fallbackLatitude,
+      zIndex: first.zIndex ?? node.zIndex,
     };
   }
 
@@ -152,6 +154,8 @@ function interpolateSingleNode(
       offsetY: lerp(prevKf.offsetY ?? node.offsetY, nextKf.offsetY ?? node.offsetY, t),
       direction: prevKf.direction ?? fallbackDirection,
       viewLatitude: prevKf.viewLatitude ?? fallbackLatitude,
+      // zIndex: step 插值，不 lerp，到帧直接跳变
+      zIndex: prevKf.zIndex ?? node.zIndex,
     };
   }
 
@@ -163,6 +167,7 @@ function interpolateSingleNode(
     offsetY: prevKf.offsetY ?? node.offsetY,
     direction: prevKf.direction ?? fallbackDirection,
     viewLatitude: prevKf.viewLatitude ?? fallbackLatitude,
+    zIndex: prevKf.zIndex ?? node.zIndex,
   };
 }
 

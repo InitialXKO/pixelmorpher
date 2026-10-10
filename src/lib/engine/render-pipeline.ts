@@ -1174,7 +1174,12 @@ export function renderPuppetNodes(
   const worldTransforms = computePuppetWorldTransforms(skeleton, interpolatedValues, canvasWidth, canvasHeight, latitude);
 
   // ---- Step 4: Direction-dependent draw order ----
-  const drawOrderedNodes = computeDirectionDrawOrder(skeleton);
+  // 传入插值后的 zIndex（关键帧可覆盖基础值）
+  const zIndexMap = new Map<string, number>();
+  for (const [nodeId, values] of interpolatedValues) {
+    zIndexMap.set(nodeId, values.zIndex);
+  }
+  const drawOrderedNodes = computeDirectionDrawOrder(skeleton, zIndexMap);
 
   // ---- Step 4.5: Apply global modifier transform (camera/scene shake/pan/zoom) ----
   let globalTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };

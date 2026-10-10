@@ -21,6 +21,10 @@ import {
   Ghost,
   Magnet,
   Keyboard,
+  ArrowUpToLine,
+  ArrowUp,
+  ArrowDown,
+  ArrowDownToLine,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
@@ -288,6 +292,55 @@ export default function PerformPanel() {
               </Button>
             </div>
           </div>
+
+          {/* ---- 图层顺序（关键帧，step 插值） ---- */}
+          {performNodeId && skeleton && clip && (
+            <div className="space-y-1.5">
+              <Label className="text-[10px] text-gray-500 uppercase tracking-wider">
+                图层顺序 <span className="normal-case text-[9px]">(当前帧关键帧)</span>
+              </Label>
+              <div className="grid grid-cols-4 gap-1">
+                {([
+                  { label: '置于顶层', icon: 'ArrowUpToLine', getZ: (cur: number, zs: number[]) => Math.max(...zs) + 1 },
+                  { label: '上移一层', icon: 'ArrowUp', getZ: (cur: number) => cur + 1 },
+                  { label: '下移一层', icon: 'ArrowDown', getZ: (cur: number) => cur - 1 },
+                  { label: '置于底层', icon: 'ArrowDownToLine', getZ: (cur: number, zs: number[]) => Math.min(...zs) - 1 },
+                ] as const).map(({ label, icon, getZ }) => {
+                  const Icon = { ArrowUpToLine, ArrowUp, ArrowDown, ArrowDownToLine }[icon];
+                  return (
+                    <Button
+                      key={label}
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-[9px] px-1 bg-[#0d0d1a] border-[#1e1e3a]"
+                      title={`${label}（在当前帧打关键帧）`}
+                      onClick={() => {
+                        const node = skeleton.nodes.find((n) => n.id === performNodeId);
+                        if (!node) return;
+                        // 当前插值后的 zIndex
+                        const iv = interpolated.get(performNodeId);
+                        const curZ = iv?.zIndex ?? node.zIndex;
+                        const allZ = skeleton.nodes.map((n) => interpolated.get(n.id)?.zIndex ?? n.zIndex);
+                        const newZ = getZ(curZ, allZ);
+                        const store = useProjectStore.getState();
+                        // 找当前帧已有关键帧则更新，否则新建
+                        const existing = (clip.puppetNodeKeyframes ?? []).find(
+                          (kf) => kf.nodeId === performNodeId && kf.frame === currentFrame
+                        );
+                        if (existing) {
+                          store.updatePuppetNodeKeyframe(clip.id, existing.id, { zIndex: newZ });
+                        } else {
+                          store.addPuppetNodeKeyframe(clip.id, performNodeId, currentFrame, { zIndex: newZ });
+                        }
+                      }}
+                    >
+                      <Icon className="size-3" />
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* ---- 播放 ---- */}
           <div className="space-y-1.5">

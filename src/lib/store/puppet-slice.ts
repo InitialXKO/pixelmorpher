@@ -51,7 +51,7 @@ export type PuppetSlice = {
   setPuppetNodeSprite: (skeletonId: string, nodeId: string, partId: string | null, direction?: PuppetDirection) => void;
 
   // ---- Puppet Node Keyframes ----
-  addPuppetNodeKeyframe: (clipId: string, nodeId: string, frame: number, values: Partial<Pick<PuppetNodeKeyframe, 'angle' | 'stretch' | 'offsetX' | 'offsetY' | 'direction' | 'viewLatitude'>>) => PuppetNodeKeyframe;
+  addPuppetNodeKeyframe: (clipId: string, nodeId: string, frame: number, values: Partial<Pick<PuppetNodeKeyframe, 'angle' | 'stretch' | 'offsetX' | 'offsetY' | 'direction' | 'viewLatitude' | 'zIndex'>>) => PuppetNodeKeyframe;
   removePuppetNodeKeyframe: (clipId: string, keyframeId: string) => void;
   updatePuppetNodeKeyframe: (clipId: string, keyframeId: string, updates: Partial<PuppetNodeKeyframe>) => void;
 
@@ -130,22 +130,26 @@ export function buildPuppetNodeTree(skeleton: PuppetSkeleton): PuppetNodeTree[] 
 }
 
 /** Direction-dependent draw order for 8-direction puppet rendering */
-export function computeDirectionDrawOrder(skeleton: PuppetSkeleton): PuppetNode[] {
+export function computeDirectionDrawOrder(
+  skeleton: PuppetSkeleton,
+  interpolatedZIndex?: Map<string, number>,
+): PuppetNode[] {
   const direction = skeleton.currentDirection;
   const nodes = [...skeleton.nodes];
 
-  // Base z-index ordering
-  const sorted = nodes.sort((a, b) => a.zIndex - b.zIndex);
+  // Base z-index ordering (use interpolated keyframe zIndex if available)
+  const getZ = (n: PuppetNode) => interpolatedZIndex?.get(n.id) ?? n.zIndex;
+  const sorted = nodes.sort((a, b) => getZ(a) - getZ(b));
 
   // Direction-dependent adjustments
   const isLeft = direction === 'NW' || direction === 'W' || direction === 'SW';
 
   return sorted.map(node => {
     // Flip z-index for mirrored limbs in left-facing directions
-    let adjustedZ = node.zIndex;
+    let adjustedZ = getZ(node);
     if (isLeft && node.mirrorFrom) {
       // Swap left/right z-ordering for mirrored nodes
-      adjustedZ = 1000 - node.zIndex;
+      adjustedZ = 1000 - adjustedZ;
     }
     return { ...node, zIndex: adjustedZ };
   }).sort((a, b) => a.zIndex - b.zIndex);
