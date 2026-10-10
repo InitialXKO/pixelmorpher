@@ -300,6 +300,7 @@ export function createPuppyRunExampleCharacter(
   for (const [nodeId, graph] of blueprints) {
     store.updatePuppetNode(skeleton.id, nodeId, { blueprint: graph });
   }
+  console.log('[一键小狗] 蓝图已挂载:', blueprints.size, '个节点');
 
   // 7. 切到 perform
   sessionStore.enterPerform(character.id);
