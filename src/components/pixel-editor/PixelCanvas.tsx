@@ -340,9 +340,15 @@ export default function PixelCanvas() {
   useEffect(() => {
     s.dirtyRef.current = true;
     const unregisterScheduler = registerRenderCallback(() => { s.dirtyRef.current = true; });
+    let lastLoggedFrame = -1;
     const loop = () => {
-      // 播放时强制每帧渲染（绕过 dirty 标记，避免闭包 stale 导致不动）
+      // 诊断：播放时每 12 帧打一次日志
       const isPlaying = useEditorStore.getState().playState === 'playing';
+      const sf = useProjectStore.getState().currentFrame;
+      if (isPlaying && sf !== lastLoggedFrame && sf % 12 === 0) {
+        lastLoggedFrame = sf;
+        console.log(`[诊断] 播放中 storeFrame=${sf} subscriptionFrame=${storeCurrentFrame} dirty=${s.dirtyRef.current}`);
+      }
       if (s.dirtyRef.current || isPlaying) { s.dirtyRef.current = false; render(); }
       s.rafRef.current = requestAnimationFrame(loop);
     };
