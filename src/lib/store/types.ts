@@ -393,14 +393,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, Pup
   setActiveAnimationClip: (clipId: string | null) => void;
   /** Get the currently active animation clip (null if none selected) */
   getActiveAnimationClip: () => AnimationClip | null;
-  /** Get ClipPartData for a specific part in the active clip */
-  getClipPartData: (partId: string) => ClipPartData | null;
-  /** Ensure a ClipPartData entry exists for a part in the active clip */
-  ensureClipPartData: (partId: string) => ClipPartData;
-  /** Migrate legacy project data (tracks, keyframes, etc.) from Project level into AnimationClip */
-  migrateLegacyToClip: (clipId: string) => void;
-  /** Sync legacy fields from active clip (for backward compatibility) */
-  syncLegacyFromActiveClip: () => void;
 
   // ---- V3.0: Character CRUD ----
   addCharacter: (name: string, partIds?: string[]) => Character;

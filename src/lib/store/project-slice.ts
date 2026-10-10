@@ -643,9 +643,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       animationClips: [...s.animationClips, clip],
       activeAnimationClipId: clip.id,
     }));
-    // H3: 与 remove/update/setActive 保持一致，同步 legacy 字段，否则 UI 读到的
-    // 仍是上一个 clip 的数据
-    get().syncLegacyFromActiveClip();
     return clip;
   },
 
