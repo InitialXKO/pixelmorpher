@@ -230,10 +230,13 @@ export default function PixelCanvas() {
       // 角色显示互斥过滤
       const puppetSession = usePuppetSessionStore.getState();
       const visibleCharacters = filterVisibleCharacters(s.puppetCharacters ?? [], puppetSession);
+      // 必须从 store 直接读最新 skeleton：useCallback 闭包里的 s.puppetSkeletons
+      // 在蓝图挂载后可能还是旧引用（蓝图已写进 store 但闭包没更新），导致播放时读不到 blueprint
+      const freshSkeletons = useProjectStore.getState().puppetSkeletons;
       renderUnified(offCtx, s.canvasWidth, s.canvasHeight, s.parts, s.keyframes, currentFrame, s.backgroundColor,
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
-        s.animationVariables, s.globalModifiers, s.puppetSkeletons, visibleCharacters, animationClips, true);
+        s.animationVariables, s.globalModifiers, freshSkeletons, visibleCharacters, animationClips, true);
     }
 
     // 3. Stroke preview
