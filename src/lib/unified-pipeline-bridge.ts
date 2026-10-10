@@ -216,6 +216,9 @@ function renderPuppetViaUnifiedPipeline(
     };
 
     // Convert old data to unified Character via LiveAdapter
+    // 注意：bakedSkeleton 每帧的角度都不同，但 skeleton.id 相同，
+    // LiveAdapter 按 id 缓存 Character，必须先 invalidate，否则拿到的是旧缓存。
+    liveAdapter.invalidate();
     const unifiedCharacter = liveAdapter.getCharacter(
       bakedSkeleton,
       [character],
