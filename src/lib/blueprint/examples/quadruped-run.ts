@@ -235,6 +235,7 @@ export function createPuppyRunExampleCharacter(
 
   // 3. 为每个节点生成精灵 → 建 Part → 建节点（spritePartId 直接写入）
   const nodeIds: Record<string, string> = {};
+  console.log('[一键小狗] 开始创建节点，共', defs.length, '个:', defs.map(d => d.name));
   for (const def of defs) {
     const sprite = generateDefaultCostumeSprite(def.name, 'dog');
     const part = store.addPart(sprite.partName, sprite.width, sprite.height, {
