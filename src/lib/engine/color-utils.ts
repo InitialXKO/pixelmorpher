@@ -68,9 +68,10 @@ export function adjustSaturation(hex: string, targetSat: number): string {
 /** Dim a hex color by a factor (0 = black, 1 = original) */
 export function dimColor(hex: string, factor: number): string {
   const [r, g, b] = hexToRgb(hex);
-  const nr = Math.round(r * factor);
-  const ng = Math.round(g * factor);
-  const nb = Math.round(b * factor);
+  // M19: 钳制到 [0,255]，factor>1 时不再产生非法 hex
+  const nr = Math.min(255, Math.max(0, Math.round(r * factor)));
+  const ng = Math.min(255, Math.max(0, Math.round(g * factor)));
+  const nb = Math.min(255, Math.max(0, Math.round(b * factor)));
   return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`;
 }
 
@@ -95,9 +96,10 @@ export function colorDistance(c1: string, c2: string): number {
 
 export function darkenColor(hex: string, factor: number): string {
   const [r, g, b] = hexToRgb(hex);
-  const nr = Math.round(r * factor);
-  const ng = Math.round(g * factor);
-  const nb = Math.round(b * factor);
+  // M19: 钳制到 [0,255]，factor>1 时不再产生非法 hex
+  const nr = Math.min(255, Math.max(0, Math.round(r * factor)));
+  const ng = Math.min(255, Math.max(0, Math.round(g * factor)));
+  const nb = Math.min(255, Math.max(0, Math.round(b * factor)));
   return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`;
 }
 

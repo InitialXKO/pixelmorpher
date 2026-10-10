@@ -33,6 +33,13 @@ import type {
   Point,
 } from './unified-types';
 
+// H4/H5: 复用主路径的真实 dispatch（animation-dispatch.ts），而不是在这里
+// 维护第二套参数名/公式。之前这里读 frequency/decay/speed 等错误参数名，
+// 且只实现了 7 种 modifier，其余静默无效果。
+import { computeAnimationModifierTransform as computeRealAnimationModifierTransform } from './engine/animation-dispatch';
+import { buildVariableContext as buildRealVariableContext } from './engine/param-driver';
+import type { ModifierInstance as StoreModifierInstance } from './types';
+
 // ============================================================
 // 1. Modifier Parameter Keyframe Resolution
 // ============================================================
@@ -474,37 +481,31 @@ const EMPTY_VARIABLE_CONTEXT: VariableContext = { values: {} };
 export function buildVariableContext(
   variables: AnimationVariable[],
   frame: number,
+  allActiveDrivers: ParamDriver[] = [],
 ): VariableContext {
   if (variables.length === 0) return EMPTY_VARIABLE_CONTEXT;
 
+  // H6: 委托给主路径的真实实现（拓扑排序 + writer 求值 + accumulator 支持）。
+  // 之前这里三遍循环都只写 v.value，ParamDriver 驱动的变量恒为默认值且静默失效。
+  // LiveAdapter 透传的 paramDrivers 在运行时就是 store 形状，直接可用。
+  const storeVars = variables.map((v) => ({
+    id: v.id,
+    name: v.name,
+    scope: 'global' as const,
+    writerDriverId: v.writerDriverId ?? '',
+    defaultValue: v.defaultValue ?? v.value,
+    mode: 'value' as const,
+  }));
+  const realCtx = buildRealVariableContext(
+    storeVars,
+    allActiveDrivers as unknown as import('./types').ParamDriver[],
+    frame,
+  );
   const values: Record<string, number> = {};
-
-  // Simple evaluation: set default values first
   for (const v of variables) {
-    values[v.name] = v.value;
+    const val = realCtx.get(v.id);
+    values[v.name] = val ?? v.value;
   }
-
-  // Topological sort is needed when variables depend on each other.
-  // For now, we do a simple iterative evaluation (2 passes to handle
-  // simple dependency chains). Full topological sort can be added later
-  // if complex dependency graphs are needed.
-
-  // Pass 1: Evaluate all variables
-  for (const v of variables) {
-    values[v.name] = v.value;
-  }
-
-  // Pass 2: Re-evaluate with resolved dependencies
-  // (This handles cases where variable A depends on variable B,
-  //  and B was already evaluated in pass 1)
-  for (const v of variables) {
-    // If the variable has a writer that produces a value at this frame,
-    // it would be resolved here. For now, keep the default value.
-    // Full writer resolution requires the driver system to be integrated
-    // with the variable evaluation pipeline.
-    values[v.name] = v.value;
-  }
-
   return { values };
 }
 
@@ -641,104 +642,20 @@ export function computeAnimationModifierTransform(
   frame: number,
   frameRate: number = 12,
 ): { translateX: number; translateY: number; rotation: number; scaleX: number; scaleY: number } {
-  let translateX = 0;
-  let translateY = 0;
-  let rotation = 0;
-  let scaleX = 1;
-  let scaleY = 1;
-
+  // H4/H5: 委托给主路径的真实实现。puppet 路径与非木偶路径行为完全一致：
+  // 参数名（period/amplitude/radiusX…）、周期制时间基准、全部 ANIMATION_MODIFIER_TYPES。
+  const acc = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
   for (const mod of modifiers) {
-    const p = mod.params;
-    const t = frame / frameRate; // Time in seconds
-
-    switch (mod.type) {
-      case 'pendulum': {
-        const amplitude = (p.amplitude as number) ?? 15;
-        const frequency = (p.frequency as number) ?? 1;
-        const phase = (p.phase as number) ?? 0;
-        const decay = (p.decay as number) ?? 1;
-        rotation += amplitude * Math.sin(2 * Math.PI * frequency * t + phase) * decay;
-        break;
-      }
-
-      case 'wheel': {
-        const speed = (p.speed as number) ?? 1;
-        const radius = (p.radius as number) ?? 10;
-        const trajectory = (p.trajectory as string) ?? 'circular';
-        if (trajectory === 'circular') {
-          translateX += radius * Math.cos(2 * Math.PI * speed * t);
-          translateY += radius * Math.sin(2 * Math.PI * speed * t);
-        } else if (trajectory === 'independent_spin') {
-          rotation += 360 * speed * t;
-        } else {
-          // Default: circular trajectory
-          translateX += radius * Math.cos(2 * Math.PI * speed * t);
-          translateY += radius * Math.sin(2 * Math.PI * speed * t);
-        }
-        break;
-      }
-
-      case 'bounce': {
-        const height = (p.height as number) ?? 10;
-        const frequency = (p.frequency as number) ?? 1;
-        const bouncePhase = (2 * Math.PI * frequency * t) % (2 * Math.PI);
-        const bounceVal = Math.abs(Math.sin(bouncePhase));
-        translateY -= height * bounceVal;
-        break;
-      }
-
-      case 'breath': {
-        const amplitude = (p.amplitude as number) ?? 0.1;
-        const frequency = (p.frequency as number) ?? 0.5;
-        const scale = 1 + amplitude * Math.sin(2 * Math.PI * frequency * t);
-        scaleX *= scale;
-        scaleY *= scale;
-        break;
-      }
-
-      case 'wobble': {
-        const amplitude = (p.amplitude as number) ?? 5;
-        const frequency = (p.frequency as number) ?? 2;
-        rotation += amplitude * Math.sin(2 * Math.PI * frequency * t);
-        translateX += (amplitude * 0.3) * Math.cos(2 * Math.PI * frequency * t * 1.3);
-        break;
-      }
-
-      case 'gait': {
-        const stride = (p.stride as number) ?? 20;
-        const frequency = (p.frequency as number) ?? 1;
-        const gaitPhase = (2 * Math.PI * frequency * t) % (2 * Math.PI);
-        // Semicircle trajectory
-        translateX += stride * Math.cos(gaitPhase);
-        translateY -= stride * 0.5 * Math.abs(Math.sin(gaitPhase));
-        break;
-      }
-
-      case 'custom_wave': {
-        const amplitude = (p.amplitude as number) ?? 10;
-        const frequency = (p.frequency as number) ?? 1;
-        const axis = (p.axis as string) ?? 'y';
-        const offset = amplitude * Math.sin(2 * Math.PI * frequency * t);
-        if (axis === 'x') translateX += offset;
-        else if (axis === 'rotation') rotation += offset;
-        else translateY += offset;
-        break;
-      }
-
-      case 'elliptical_compress': {
-        const amplitude = (p.amplitude as number) ?? 0.2;
-        const frequency = (p.frequency as number) ?? 0.5;
-        const compress = 1 + amplitude * Math.sin(2 * Math.PI * frequency * t);
-        scaleX *= compress;
-        scaleY /= compress;
-        break;
-      }
-
-      default:
-        // Unknown animation modifier: no transform contribution
-        break;
-    }
+    const partial = computeRealAnimationModifierTransform(
+      mod as unknown as StoreModifierInstance,
+      frame,
+      frameRate,
+    );
+    acc.translateX += partial.translateX;
+    acc.translateY += partial.translateY;
+    acc.rotation += partial.rotation;
+    acc.scaleX *= partial.scaleX;
+    acc.scaleY *= partial.scaleY;
   }
-
-  return { translateX, translateY, rotation, scaleX, scaleY };
+  return acc;
 }

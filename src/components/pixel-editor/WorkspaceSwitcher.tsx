@@ -91,6 +91,12 @@ export default function WorkspaceSwitcher() {
       const { useAssetStore } = require('@/lib/asset-store') as { useAssetStore: any };
       useAssetStore.getState().saveCurrentProject();
       useAssetStore.getState().setShowProjectHome(true);
+    } else {
+      // 离开项目主页：必须同时清除 showProjectHome，否则主页会一直盖住编辑器
+      const { useAssetStore } = require('@/lib/asset-store') as { useAssetStore: any };
+      if (useAssetStore.getState().showProjectHome) {
+        useAssetStore.getState().setShowProjectHome(false);
+      }
     }
 
     setMode(newMode);

@@ -294,7 +294,7 @@ export function CostumeManager({
             onChange={(e) => {
               onCharacterSelect(e.target.value || null);
             }}
-            className="flex-1 h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
+            className="flex-1 min-w-0 h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
             disabled={disabled}
           >
             <option value="">— 选择角色 —</option>
@@ -338,7 +338,7 @@ export function CostumeManager({
             <select
               value={selectedCostumeId ?? ''}
               onChange={(e) => onCostumeSelect(e.target.value || null)}
-              className="flex-1 h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
+              className="flex-1 min-w-0 h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
               disabled={disabled}
             >
               <option value="">— 选择服装 —</option>

@@ -943,6 +943,11 @@ export interface PuppetPlug {
   socketId: string;
   localX: number;
   localY: number;
+  /**
+   * 关节盘颜色覆盖（null/undefined = 自动：取子节点精灵开口处众数颜色）。
+   * 约定：不限制为预设枚举，可任意自定义颜色。
+   */
+  discColor?: string | null;
 }
 
 /** PuppetNode: a single node in the puppet skeleton hierarchy */
@@ -1720,7 +1725,6 @@ export interface EditorState {
   selectedModifierId: string | null;
   selectedEffectTrackId: string | null;
   showGrid: boolean;
-  showOnionSkin: boolean;
   showTrajectories: boolean;
   isDirty: boolean;
   // Motion blur
@@ -1735,6 +1739,7 @@ export interface EditorState {
   effectBrushIntensity: number;
   effectBrushDensity: number;
   effectBrushSpread: number;
+  strokeBlendMode: 'normal' | 'lighter' | 'overlay' | 'screen';
   // Effect coordinate mode
   effectCoordinateMode: CoordinateMode;
   // Selection tools
@@ -1777,7 +1782,6 @@ export interface EditorState {
   // ---- Concrete Puppet ----
   showPuppetSkeleton: boolean;
   activePuppetSkeletonId: string | null;
-  puppetInteractionMode: 'move' | 'manipulate';
   // ---- Hitbox editor ----
   selectedHitboxId: string | null;
   // ---- Palette constraint drawing ----

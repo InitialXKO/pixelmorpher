@@ -378,28 +378,30 @@ export function applyProceduralAnimations(
 
     switch (pa.config.targetProperty) {
       case 'translateX': {
-        const translateMod = result.find(m => m.type === 'translate');
+        // M3: 只找启用的修改器，否则值会加到被禁用的修改器上而视觉无效果
+        const translateMod = result.find(m => m.type === 'translate' && m.enabled);
         if (translateMod) {
           translateMod.params = { ...translateMod.params, offsetX: (Number(translateMod.params.offsetX) || 0) + value };
         }
         break;
       }
       case 'translateY': {
-        const translateMod = result.find(m => m.type === 'translate');
+        // M3: 只找启用的修改器，否则值会加到被禁用的修改器上而视觉无效果
+        const translateMod = result.find(m => m.type === 'translate' && m.enabled);
         if (translateMod) {
           translateMod.params = { ...translateMod.params, offsetY: (Number(translateMod.params.offsetY) || 0) + value };
         }
         break;
       }
       case 'rotation': {
-        const rotateMod = result.find(m => m.type === 'rotate');
+        const rotateMod = result.find(m => m.type === 'rotate' && m.enabled);
         if (rotateMod) {
           rotateMod.params = { ...rotateMod.params, angle: (Number(rotateMod.params.angle) || 0) + value };
         }
         break;
       }
       case 'scale': {
-        const scaleMod = result.find(m => m.type === 'uniform_scale');
+        const scaleMod = result.find(m => m.type === 'uniform_scale' && m.enabled);
         if (scaleMod) {
           scaleMod.params = { ...scaleMod.params, scale: Math.max(0.1, (Number(scaleMod.params.scale) || 1) + value / 10) };
         }

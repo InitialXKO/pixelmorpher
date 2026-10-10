@@ -127,7 +127,7 @@ export default function CostumeModePanel({
               setSelectedCharacterId(e.target.value || null);
               setSelectedCostumeId(null);
             }}
-            className="flex-1 h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
+            className="flex-1 min-w-0 h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
           >
             <option value="">— 选择角色 —</option>
             {puppetCharacters.map((c) => (
@@ -165,7 +165,7 @@ export default function CostumeModePanel({
             <select
               value={selectedCostumeId ?? ''}
               onChange={(e) => setSelectedCostumeId(e.target.value || null)}
-              className="flex-1 h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
+              className="flex-1 min-w-0 h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
             >
               <option value="">— 选择服装 —</option>
               {selectedCharacter.costumeSets.map((cs) => (

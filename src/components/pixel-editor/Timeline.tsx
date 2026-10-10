@@ -244,6 +244,9 @@ export default function Timeline() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      // 木偶操控时方向键归木偶 handler（画布拖动/微调），Timeline 不抢
+      const activeTool = useEditorStore.getState().tool;
+      const puppetOwnsArrows = activeTool === 'puppet';
       switch (e.key) {
         case 'Delete':
         case 'Backspace': {
@@ -256,10 +259,10 @@ export default function Timeline() {
           else { if (currentFrameRef.current >= totalFrames - 1) setCurrentFrame(0); setPlayState('playing'); }
           break;
         }
-        case 'ArrowLeft': { e.preventDefault(); setPlayState('paused'); setCurrentFrame(Math.max(0, currentFrameRef.current - 1)); break; }
-        case 'ArrowRight': { e.preventDefault(); setPlayState('paused'); setCurrentFrame(Math.min(totalFrames - 1, currentFrameRef.current + 1)); break; }
-        case 'Home': { e.preventDefault(); setCurrentFrame(0); break; }
-        case 'End': { e.preventDefault(); setCurrentFrame(totalFrames - 1); break; }
+        case 'ArrowLeft': { if (puppetOwnsArrows) break; e.preventDefault(); setPlayState('paused'); setCurrentFrame(Math.max(0, currentFrameRef.current - 1)); break; }
+        case 'ArrowRight': { if (puppetOwnsArrows) break; e.preventDefault(); setPlayState('paused'); setCurrentFrame(Math.min(totalFrames - 1, currentFrameRef.current + 1)); break; }
+        case 'Home': { if (puppetOwnsArrows) break; e.preventDefault(); setCurrentFrame(0); break; }
+        case 'End': { if (puppetOwnsArrows) break; e.preventDefault(); setCurrentFrame(totalFrames - 1); break; }
         // V15: Timeline zoom shortcuts
         case '=':
         case '+': {

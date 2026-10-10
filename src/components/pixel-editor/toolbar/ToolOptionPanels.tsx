@@ -33,9 +33,9 @@ export function BoneToolControls() {
     if (skeletonId) {
       const cx = canvasWidth / 2;
       const cy = canvasHeight / 2;
-      state.addBone(skeletonId, `Bone ${state.skeletons.find(s => s.id === skeletonId)?.bones.length ?? 0 + 1}`, null, cx, cy - 20, cx, cy + 20);
+      state.addBone(skeletonId, `Bone ${state.skeletons.find(s => s.id === skeletonId)?.bones.length ?? 0 + 1}`, null, cx, cy - 20, cx, cy + 20, boneColor);
     }
-  }, [canvasWidth, canvasHeight]);
+  }, [canvasWidth, canvasHeight, boneColor]);
 
   return (
     <div className="flex items-center gap-1.5 mx-1 shrink-0">
@@ -61,9 +61,39 @@ export function BoneToolControls() {
 }
 
 // ---- IK Tool Controls ----
+// 直接读写选中骨骼的 ik_solver 约束参数（之前是摆设：局部 state 从未写入求解器）。
 export function IKToolControls() {
-  const [ikChainLength, setIkChainLength] = useState(2);
-  const [ikIterations, setIkIterations] = useState(10);
+  const selectedBoneId = useProjectStore((s) => s.selectedBoneId);
+  const skeletons = useProjectStore((s) => s.skeletons);
+
+  const bone = skeletons.flatMap((sk) => sk.bones.map((b) => ({ sk, b }))).find(({ b }) => b.id === selectedBoneId);
+  const skeletonId = bone?.sk.id ?? null;
+  const ikConstraint = bone?.b.constraints.find((c) => c.type === 'ik_solver');
+
+  const updateConstraint = useCallback((patch: { chainLength?: number; iterations?: number }) => {
+    if (!skeletonId || !bone) return;
+    const state = useProjectStore.getState();
+    const next = { chainLength: ikConstraint?.chainLength ?? 2, iterations: ikConstraint?.iterations ?? 10, ...patch };
+    if (ikConstraint) {
+      const constraints = bone.b.constraints.map((c) =>
+        c.type === 'ik_solver' ? { ...c, ...next } : c
+      );
+      state.updateBone(skeletonId, bone.b.id, { constraints });
+    } else {
+      // 选中骨骼还没有 IK 约束：用当前参数创建一个（目标点默认为骨骼尾端）
+      state.addBoneConstraint(skeletonId, bone.b.id, {
+        type: 'ik_solver',
+        targetX: bone.b.tailX,
+        targetY: bone.b.tailY,
+        chainLength: next.chainLength,
+        iterations: next.iterations,
+        poleAngle: 0,
+      });
+    }
+  }, [skeletonId, bone, ikConstraint]);
+
+  const chainLength = ikConstraint?.chainLength ?? 2;
+  const iterations = ikConstraint?.iterations ?? 10;
 
   return (
     <div className="flex items-center gap-1.5 mx-1 shrink-0">
@@ -72,45 +102,44 @@ export function IKToolControls() {
         type="number"
         min={1}
         max={10}
-        value={ikChainLength}
-        onChange={(e) => setIkChainLength(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
-        className="h-5 w-10 text-[10px] text-center bg-white/5 border-white/10 text-gray-300 px-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+        value={chainLength}
+        disabled={!selectedBoneId}
+        onChange={(e) => updateConstraint({ chainLength: Math.max(1, Math.min(10, parseInt(e.target.value) || 1)) })}
+        title={selectedBoneId ? (ikConstraint ? '写入选中骨骼的 IK 约束' : '将为选中骨骼创建 IK 约束') : '先在画布上选中一根骨骼'}
+        className="h-5 w-10 text-[10px] text-center bg-white/5 border-white/10 text-gray-300 px-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:opacity-40"
       />
       <span className="text-[10px] text-gray-500 uppercase tracking-wide ml-1">迭代</span>
       <Input
         type="number"
         min={1}
         max={20}
-        value={ikIterations}
-        onChange={(e) => setIkIterations(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
-        className="h-5 w-10 text-[10px] text-center bg-white/5 border-white/10 text-gray-300 px-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+        value={iterations}
+        disabled={!selectedBoneId}
+        onChange={(e) => updateConstraint({ iterations: Math.max(1, Math.min(20, parseInt(e.target.value) || 1)) })}
+        title={selectedBoneId ? (ikConstraint ? '写入选中骨骼的 IK 约束' : '将为选中骨骼创建 IK 约束') : '先在画布上选中一根骨骼'}
+        className="h-5 w-10 text-[10px] text-center bg-white/5 border-white/10 text-gray-300 px-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none disabled:opacity-40"
       />
+      {!ikConstraint && selectedBoneId && (
+        <span className="text-[9px] text-amber-500/80">将新建 IK 约束</span>
+      )}
     </div>
   );
 }
 
 // ---- Weight Paint Tool Controls ----
+// 骨骼选择直接写入 editor store（之前是摆设：局部 state 从未同步，权重绘制因
+// weightPaintBoneId 恒为 null 而完全无响应）。半径滑块已移除：绑定模型是按部件
+// 整体权重，没有逐像素半径衰减的消费者，留着只是装饰。
 export function WeightPaintToolControls() {
-  const [weightPaintRadius, setWeightPaintRadius] = useState(5);
-  const [selectedBoneForWeight, setSelectedBoneForWeight] = useState<string>('');
+  const weightPaintBoneId = useEditorStore((s) => s.weightPaintBoneId);
+  const setWeightPaintBoneId = useEditorStore((s) => s.setWeightPaintBoneId);
   const skeletons = useProjectStore((s) => s.skeletons);
   const allBones = skeletons.flatMap((sk) => sk.bones);
 
   return (
     <div className="flex items-center gap-1.5 mx-1 shrink-0">
-      <span className="text-[10px] text-gray-500 uppercase tracking-wide">半径</span>
-      <Slider
-        className="w-14"
-        value={[weightPaintRadius]}
-        min={1}
-        max={20}
-        step={1}
-        onValueChange={([v]) => setWeightPaintRadius(v)}
-      />
-      <span className="text-[10px] text-gray-400 w-4">{weightPaintRadius}</span>
-
-      <span className="text-[10px] text-gray-500 uppercase tracking-wide ml-1">骨骼</span>
-      <Select value={selectedBoneForWeight} onValueChange={setSelectedBoneForWeight}>
+      <span className="text-[10px] text-gray-500 uppercase tracking-wide">骨骼</span>
+      <Select value={weightPaintBoneId ?? ''} onValueChange={(v) => setWeightPaintBoneId(v || null)}>
         <SelectTrigger className="h-5 w-24 text-[9px] bg-white/5 border-white/10 text-gray-300 px-1 py-0">
           <SelectValue placeholder="选择骨骼" />
         </SelectTrigger>
@@ -126,6 +155,9 @@ export function WeightPaintToolControls() {
           )}
         </SelectContent>
       </Select>
+      {!weightPaintBoneId && (
+        <span className="text-[9px] text-amber-500/80">先选择骨骼，再在画布点击部件绑定</span>
+      )}
     </div>
   );
 }

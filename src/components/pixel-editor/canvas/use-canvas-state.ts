@@ -63,8 +63,8 @@ export function useCanvasState() {
   const boneDragRef = useRef<{ boneId: string; skeletonId: string; endpoint: 'head' | 'tail' | 'ik_target'; startX: number; startY: number; origHeadX: number; origHeadY: number; origTailX: number; origTailY: number; origTargetX: number; origTargetY: number } | null>(null);
   const puppetNodeDragRef = useRef<{
     nodeId: string; skeletonId: string; characterId: string; clipId: string;
-    startX: number; startY: number; origAngle: number; origOffsetX: number; origOffsetY: number;
-    mode: 'rotate' | 'move'; pivotWorldX: number; pivotWorldY: number; startMouseAngle: number;
+    startX: number; startY: number; origAngle: number; origStretch: number; origOffsetX: number; origOffsetY: number;
+    mode: 'rotate' | 'move' | 'moveAll'; pivotWorldX: number; pivotWorldY: number; startMouseAngle: number;
     dragStarted: boolean; moveTargetNodeId?: string;
   } | null>(null);
   const pixelEditCommandRef = useRef<{ commandId: string; modifierId: string; keyframeId: string; points: { x: number; y: number }[] } | null>(null);
@@ -180,12 +180,12 @@ export function useCanvasState() {
   const effectBrushIntensity = useEditorStore((s) => s.effectBrushIntensity);
   const effectBrushDensity = useEditorStore((s) => s.effectBrushDensity);
   const effectBrushSpread = useEditorStore((s) => s.effectBrushSpread);
+  const strokeBlendMode = useEditorStore((s) => s.strokeBlendMode);
   const showSkeletons = useEditorStore((s) => s.showSkeletons);
-  const selectedBoneId = useEditorStore((s) => s.selectedBoneId);
+  const selectedBoneId = useProjectStore((s) => s.selectedBoneId);
   const activeSkeletonId = useEditorStore((s) => s.activeSkeletonId);
   const showWeightPaint = useEditorStore((s) => s.showWeightPaint);
   const weightPaintBoneId = useEditorStore((s) => s.weightPaintBoneId);
-  const weightPaintRadius = useEditorStore((s) => s.weightPaintRadius);
   const showPuppetSkeleton = useEditorStore((s) => s.showPuppetSkeleton);
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const selectedPuppetNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
@@ -749,8 +749,8 @@ export function useCanvasState() {
     tool, brushSize, brushColor, zoom, panX, panY, showGrid, showTrajectories,
     editMode, selectedPartId, setZoom, setPan,
     autoMotionBlur, autoMotionBlurIntensity, motionBlurBrushType, motionBlurIntensity, motionBlurDirection,
-    effectBrushColor, effectBrushRadius, effectBrushIntensity, effectBrushDensity, effectBrushSpread,
-    showSkeletons, selectedBoneId, activeSkeletonId, showWeightPaint, weightPaintBoneId, weightPaintRadius,
+    effectBrushColor, effectBrushRadius, effectBrushIntensity, effectBrushDensity, effectBrushSpread, strokeBlendMode,
+    showSkeletons, selectedBoneId, activeSkeletonId, showWeightPaint, weightPaintBoneId,
     showPuppetSkeleton, activePuppetSkeletonId, selectedPuppetNodeId,
     magicWandTolerance, trajectorySnap, partEditPartId, partEditModifiers,
     brushStyle, brushStyleParams, compositingMode, styleAspects, strokeDrivers, editorStore,

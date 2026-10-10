@@ -18,12 +18,14 @@ import type {
   SubPixel, Point, Sprite, RotationStrategy, CostumePiece,
   NodeRenderInstruction, DiscRenderInstruction, RenderPlan,
   KeyframeTrack, KeyframePoint, InterpolationMode,
-  ModifierInstance, GeneratedItem, AnimationVariable,
+  ModifierInstance, GeneratedItem, AnimationVariable, ParamDriver,
 } from './unified-types';
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP,
 } from './unified-types';
 import { renderPixelPerfectRotation } from './engine/puppet-render';
+import { releaseCanvas } from './engine/canvas-pool';
+import { sampleJointDiscColor } from './engine/render-helpers/puppet-joint-color';
 import {
   getDiscCacheKey, getCachedDisc, setCachedDisc,
   clearRenderCaches,
@@ -474,10 +476,14 @@ function computeZOrder(
     nodeZ.set(nodeId, node.zIndex + zCounter);
     zCounter += 100; // Leave room for disc insertion
 
-    // If this node has a generated disc, its Z = parent Z - 0.5
-    // (We use parent Z - 50 to place it between parent and children in the 100-step grid)
+    // If this node has a generated disc, its Z goes BELOW both parent and child
+    // (convention: joint discs are occluded by the sprites on both sides,
+    // visible only through the outline openings).
+    // We use -50 to place it below the parent in the 100-step grid.
     if (node.generated) {
-      discZ.set(`${nodeId}_disc`, (nodeZ.get(nodeId) ?? 0) - 50);
+      const ownZ = nodeZ.get(nodeId) ?? 0;
+      const parentZ = node.parentId ? nodeZ.get(node.parentId) ?? ownZ : ownZ;
+      discZ.set(`${nodeId}_disc`, Math.min(parentZ, ownZ) - 50);
     }
 
     // Process children
@@ -618,7 +624,20 @@ function generateDiscInstructions(
       }
     }
 
-    const fillColor = childPiece?.fillColor ?? node.sprite?.data?.[0]?.[0] ?? '#808080';
+    // 关节盘颜色约定：plug.discColor 自定义 > 子节点精灵开口处众数颜色 > 旧 fallback。
+    // 开口中心 = 精灵 pivot（sprite.plug）+ plug 本地坐标（attachment.plug）。
+    let fillColor: string = childPiece?.fillColor ?? node.sprite?.data?.[0]?.[0] ?? '#808080';
+    const customDiscColor = node.attachment?.discColor;
+    if (typeof customDiscColor === 'string' && customDiscColor) {
+      fillColor = customDiscColor;
+    } else if (node.sprite?.data && node.sprite.plug) {
+      const pivotX = subToPx(node.sprite.plug.x);
+      const pivotY = subToPx(node.sprite.plug.y);
+      const plugLocalX = node.attachment?.plug ? subToPx(node.attachment.plug.x) : 0;
+      const plugLocalY = node.attachment?.plug ? subToPx(node.attachment.plug.y) : 0;
+      const sampled = sampleJointDiscColor(node.sprite.data, pivotX + plugLocalX, pivotY + plugLocalY);
+      if (sampled) fillColor = sampled;
+    }
     const outlineColor = '#000000'; // From global palette in full implementation
 
     discs.push({
@@ -655,8 +674,19 @@ export function generateRenderPlan(
   animationVariables?: AnimationVariable[],
 ): RenderPlan {
   // Build variable context for ParamDriver resolution
+  // H6: 收集角色全部节点的 active param drivers，传入真实求值（之前恒为默认值）
+  const allActiveDrivers: ParamDriver[] = [];
+  if (animationVariables && animationVariables.length > 0) {
+    for (const node of Object.values(character.nodes)) {
+      for (const mod of node.modifiers ?? []) {
+        for (const d of mod.paramDrivers ?? []) {
+          if (d.enabled) allActiveDrivers.push(d);
+        }
+      }
+    }
+  }
   const variableContext = animationVariables && animationVariables.length > 0
-    ? buildVariableContext(animationVariables, frame)
+    ? buildVariableContext(animationVariables, frame, allActiveDrivers)
     : undefined;
 
   // Step 1: World transforms (includes animation modifier contributions)
@@ -736,8 +766,9 @@ export function executeRenderPlan(
   canvasWidth: number,
   canvasHeight: number,
 ): void {
-  // Clear canvas
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+  // NOTE: 不再在此清画布。调用方负责 clear/fill 背景（renderUnifiedFrame 自己清；
+  // unified-pipeline-bridge 的两处调用都是在 renderFrame 已画好非木偶部件之后叠加木偶，
+  // 若在此 clear 会擦掉同一画布上已有的全部内容——见 F1）。
 
   for (const instruction of plan.sortedInstructions) {
     if ('nodeId' in instruction) {
@@ -1127,6 +1158,12 @@ function renderNodeSprite(
     }
 
     ctx.drawImage(result.canvas, drawX, drawY);
+
+    // H13: 释放 pixel-perfect 旋转产生的池化 canvas（缓存命中返回的也是调用方拥有的
+    // 池化副本）。注意 angle=0&&stretch=1 时返回的是 workingCanvas 本身，不能释放。
+    if (result.canvas !== workingCanvas) {
+      releaseCanvas(result.canvas);
+    }
 
     // Render "on top" effects after the sprite for pixel-perfect rotation path
     const topEffectMods = modifiers.filter(m =>

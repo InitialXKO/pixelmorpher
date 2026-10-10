@@ -383,9 +383,10 @@ export function computePhysicsOffset(
   for (const mod of modifiers) {
     if (!mod.enabled || mod.type !== 'simple_physics') continue;
 
-    const gravityAngle = Number(mod.params.gravity) ?? 90;
-    const elasticity = Number(mod.params.elasticity) ?? 0.5;
-    const damping = Number(mod.params.damping) ?? 0.9;
+    // M20: Number(undefined) 是 NaN 而非 nullish，?? 永不触发；用 || 做 fallback
+    const gravityAngle = Number(mod.params.gravity) || 90;
+    const elasticity = Number(mod.params.elasticity) || 0.5;
+    const damping = Number(mod.params.damping) || 0.9;
 
     // Gravity direction: 0° = right, 90° = down
     const rad = (gravityAngle * Math.PI) / 180;

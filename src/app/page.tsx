@@ -8,6 +8,7 @@ import TrajectoryPanel from '@/components/pixel-editor/TrajectoryPanel';
 import SkeletonPanel from '@/components/pixel-editor/SkeletonPanel';
 import PuppetPanel from '@/components/pixel-editor/PuppetPanel';
 import PuppetAssetPanel from '@/components/pixel-editor/PuppetAssetPanel';
+import PuppetModeBanner from '@/components/pixel-editor/puppet/PuppetModeBanner';
 import DccPipelinePanel from '@/components/pixel-editor/DccPipelinePanel';
 import ProceduralPanel from '@/components/pixel-editor/ProceduralPanel';
 import ScriptPanel from '@/components/pixel-editor/ScriptPanel';
@@ -31,7 +32,7 @@ import { useAssetStore } from '@/lib/asset-store';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
-import { Settings, Route, Bone, Activity, Terminal, Puzzle, Layers, Pencil, ChevronDown, ChevronUp, Grid3x3, Eye, Paintbrush, Globe, Film, Shirt, Zap, Users } from 'lucide-react';
+import { Settings, Route, Bone, Activity, Terminal, Puzzle, Layers, Pencil, ChevronDown, ChevronUp, Grid3x3, Eye, Paintbrush, Globe, Film, Shirt, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -419,44 +420,10 @@ export default function Home() {
       );
     }
 
-    // Puppet mode: dedicated right panel for puppet workflow
+    // Puppet mode: single focused workflow panel (rig → dress → perform).
+    // Modifier/canvas-effect tabs were removed here — they live in animation mode.
     if (mode === 'puppet') {
-      return (
-        <Tabs defaultValue="puppet_workflow" className="flex flex-col h-full">
-          <TabsList className="w-full justify-start rounded-none border-b border-zinc-800 bg-zinc-950 h-auto min-h-8 px-0.5 py-0.5">
-            <TabsTrigger
-              value="puppet_workflow"
-              className="text-[10px] data-[state=active]:bg-cyan-900/40 data-[state=active]:text-cyan-300 text-zinc-500 px-1.5 py-1 h-6"
-            >
-              <Shirt className="size-3 mr-0.5" />
-              木偶工作流
-            </TabsTrigger>
-            <TabsTrigger
-              value="puppet_modifiers"
-              className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-            >
-              <Settings className="size-3 mr-0.5" />
-              修改器
-            </TabsTrigger>
-            <TabsTrigger
-              value="puppet_canvas"
-              className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-            >
-              <Layers className="size-3 mr-0.5" />
-              画布效果
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="puppet_workflow" className="flex-1 min-h-0 m-0">
-            <PuppetPanel />
-          </TabsContent>
-          <TabsContent value="puppet_modifiers" className="flex-1 min-h-0 m-0">
-            <ModifierPanel />
-          </TabsContent>
-          <TabsContent value="puppet_canvas" className="flex-1 min-h-0 m-0">
-            <CanvasModifierPanel />
-          </TabsContent>
-        </Tabs>
-      );
+      return <PuppetPanel />;
     }
 
     // Animation mode: tabbed panel with all the existing tabs
@@ -656,17 +623,9 @@ export default function Home() {
                       </div>
                     </div>
                   )}
-                  {/* Puppet Mode banner */}
+                  {/* Puppet Mode banner — phase-aware hints */}
                   {mode === 'puppet' && (
-                    <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-500/10 border-b border-cyan-500/20 shrink-0">
-                      <Users className="size-3.5 text-cyan-400" />
-                      <span className="text-xs font-medium text-cyan-300">
-                        木偶制作模式
-                      </span>
-                      <span className="text-[10px] text-cyan-400/50">
-                        — 在右侧面板中创建和编辑木偶角色
-                      </span>
-                    </div>
+                    <PuppetModeBanner />
                   )}
                   {/* Tile Editing Mode banner */}
                   {mode === 'map_tile' && editingTarget && (

@@ -414,20 +414,20 @@ function generateSimpleBodySprite(): PixelGrid {
   const BH = '#8a7aee';
 
   return rowsToPixelGrid([
-    [null, null, null, null, O,  O,  O,  O,  null, null, null, null],
-    [null, null, null, O,  BH, BH, BH, BH, O,  null, null, null],
-    [null, null, O,  BH, B,  BS, BS, B,  BH, O,  null, null],
-    [null, O,  BH, B,  BS, B,  B,  BS, B,  BH, O,  null],
-    [null, O,  B,  BS, B,  BH, BH, B,  BS, B,  O,  null],
-    [null, O,  BH, B,  B,  B,  B,  B,  B,  BH, O,  null],
+    [null, null, null, null, O,  O,  O,  O,  null, null, null, null, null],
+    [null, null, null, O,  BH, BH, BH, BH, O,  null, null, null, null],
+    [null, null, O,  BH, B,  BS, BS, B,  BH, O,  null, null, null],
+    [null, O,  BH, B,  BS, B,  B,  BS, B,  BH, O,  null, null],
+    [null, O,  B,  BS, B,  BH, BH, B,  BS, B,  O,  null, null],
+    [null, O,  BH, B,  B,  B,  B,  B,  B,  BH, O,  null, null],
     [O,  BH, B,  BS, B,  B,  BH, BH, B,  BS, B,  BH, O],
     [O,  B,  B,  B,  BH, BH, B,  B,  BH, B,  B,  B,  O],
     [O,  BH, BS, B,  B,  B,  BS, BS, B,  B,  BS, BH, O],
     [O,  B,  B,  B,  BS, B,  B,  B,  BS, B,  B,  B,  O],
-    [null, O,  BH, B,  B,  B,  B,  B,  B,  BH, O,  null],
-    [null, O,  B,  BS, BS, B,  B,  BS, BS, B,  O,  null],
-    [null, null, O,  B,  B,  BS, BS, B,  B,  O,  null, null],
-    [null, null, null, O,  O,  O,  O,  O,  O,  null, null, null],
+    [null, O,  BH, B,  B,  B,  B,  B,  B,  BH, O,  null, null],
+    [null, O,  B,  BS, BS, B,  B,  BS, BS, B,  O,  null, null],
+    [null, null, O,  B,  B,  BS, BS, B,  B,  O,  null, null, null],
+    [null, null, null, O,  O,  O,  O,  O,  O,  null, null, null, null],
   ]);
 }
 
@@ -441,9 +441,9 @@ function generateSimpleHeadSprite(): PixelGrid {
   const EW = '#ffffff';
 
   return rowsToPixelGrid([
-    [null, null, O,  O,  O,  O,  O,  O,  null, null],
-    [null, O,  BH, BH, BH, BH, BH, BH, O,  null],
-    [null, O,  BH, B,  BS, BS, B,  BH, O,  null],
+    [null, null, O,  O,  O,  O,  O,  O,  null, null, null],
+    [null, O,  BH, BH, BH, BH, BH, BH, O,  null, null],
+    [null, O,  BH, B,  BS, BS, B,  BH, O,  null, null],
     [O,  BH, B,  EW, E,  BS, E,  EW, B,  BH, O],
     [O,  B,  BS, B,  BS, B,  BS, B,  BS, B,  O],
     [O,  BH, B,  BS, B,  B,  B,  BS, B,  BH, O],
@@ -468,6 +468,557 @@ function generateGenericSprite(color: string, width: number = 6, height: number 
     }
   }
   return grid;
+}
+
+// ============================================================
+// Mecha template sprites (templateName === 'mecha')
+// Same 10-node humanoid rig, gunmetal armor + orange reactor + cyan energy lines
+// ============================================================
+
+const MECHA = {
+  M: '#9aa3b5',   // armor light
+  MS: '#6b7285',  // armor shadow
+  MD: '#454b5a',  // armor dark
+  ACC: '#ff9f1c', // reactor orange
+  ACD: '#c96f0a', // reactor dark
+  E: '#22d3ee',   // energy cyan
+  ED: '#0e7490',  // energy dark
+};
+
+/** Mecha head (12×14), pivot at neck bottom */
+function generateMechaHeadSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { M, MS, MD, E, ED, ACC } = MECHA;
+  return rowsToPixelGrid([
+    [null, ACC,  null, O,   O,   O,   O,   O,   O,   null, null, null],
+    [null, O,   null, O,   M,   M,   M,   M,   M,   O,   null, null],
+    [null, O,   O,    O,   M,   M,   M,   M,   M,   M,   O,   null],
+    [null, O,   M,    M,   MS,  MS,  MS,  MS,  M,   M,   O,   null],
+    [null, O,   M,    ED,  E,   E,   E,   E,   ED,  M,   O,   null],
+    [null, O,   M,    ED,  E,   E,   E,   E,   ED,  M,   O,   null],
+    [null, O,   MS,   M,   M,   M,   M,   M,   M,   MS,  O,   null],
+    [null, null, O,   M,   MS,  MS,  MS,  M,   M,   O,   null, null],
+    [null, null, O,   MS,  M,   MD,  MD,  M,   MS,  O,   null, null],
+    [null, null, null, O,  M,   MD,  MD,  M,   O,   null, null, null],
+    [null, null, null, O,  MS,  M,   M,   MS,  O,   null, null, null],
+    [null, null, null, null, O, M,   M,   O,   null, null, null, null],
+    [null, null, null, null, O, MS,  M,   O,   null, null, null, null],
+    [null, null, null, null, O, O,   O,   null, null, null, null, null],
+  ]);
+}
+
+/** Mecha torso (16×20), pivot at shoulder line */
+function generateMechaTorsoSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { M, MS, MD, E, ACC, ACD } = MECHA;
+  return rowsToPixelGrid([
+    [null, null, null, null, null, O,   O,   O,   O,   O,   O,   null, null, null, null, null],
+    [null, null, null, O,   O,   M,   M,   M,   M,   M,   M,   O,   O,   null, null, null],
+    [null, null, O,   M,   M,   M,   M,   M,   M,   M,   M,   M,   M,   O,   null, null],
+    [null, null, O,   M,   MS,  MS,  M,   M,   M,   M,   MS,  MS,  M,   O,   null, null],
+    [null, null, O,   M,   M,   M,   MS,  MS,  MS,  MS,  M,   M,   M,   O,   null, null],
+    [null, O,   M,   M,   MS,  ACC, ACC, ACC, ACC, MS,  M,   M,   M,   O,   null, null],
+    [null, O,   M,   MS,  ACC, ACD, ACD, ACC, ACC, MS,  M,   M,   M,   O,   null, null],
+    [null, O,   M,   M,   MS,  ACC, ACC, ACC, ACC, MS,  M,   M,   M,   O,   null, null],
+    [null, O,   M,   MS,  M,   MS,  MS,  MS,  MS,  M,   MS,  M,   M,   O,   null, null],
+    [null, null, O,  M,   M,   M,   M,   M,   M,   M,   M,   M,   M,   O,   null, null],
+    [null, null, O,  MS,  M,   M,   E,   E,   M,   M,   M,   MS,  O,   null, null, null],
+    [null, null, O,  MD,  MD,  MD,  MD,  MD,  MD,  MD,  MD,  MD,  O,   null, null, null],
+    [null, null, O,  MS,  M,   M,   M,   M,   M,   M,   M,   MS,  O,   null, null, null],
+    [null, null, O,  M,   MS,  M,   M,   M,   M,   M,   MS,  M,   O,   null, null, null],
+    [null, null, O,  MS,  M,   MS,  M,   M,   M,   MS,  M,   MS,  O,   null, null, null],
+    [null, null, O,  M,   M,   M,   MS,  MS,  M,   M,   M,   O,   null, null, null, null],
+    [null, null, null, O, M,   M,   M,   M,   M,   M,   O,   null, null, null, null, null],
+    [null, null, null, O, MS,  MS,  M,   M,   MS,  MS,  O,   null, null, null, null, null],
+    [null, null, null, null, O, O,  O,   O,   O,   O,   O,   O,   null, null, null, null],
+    [null, null, null, null, null, O, O,  O,   O,   O,   O,   null, null, null, null, null],
+  ]);
+}
+
+/** Mecha upper arm (6×14), pivot at shoulder cap */
+function generateMechaUpperArmSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { M, MS, E } = MECHA;
+  return rowsToPixelGrid([
+    [null, O,  O,  O,  O,  null],
+    [O,   M,  M,  M,  M,  O],
+    [O,   M,  MS, MS, M,  O],
+    [O,   MS, M,  M,  MS, O],
+    [O,   M,  M,  E,  M,  O],
+    [O,   MS, M,  E,  MS, O],
+    [O,   M,  MS, M,  M,  O],
+    [O,   O,  O,  O,  O,  O],
+    [null, O,  M,  M,  O,  null],
+    [null, O,  MS, M,  O,  null],
+    [null, O,  M,  MS, O,  null],
+    [null, O,  MS, O,  null, null],
+    [null, O,  M,  O,  null, null],
+    [null, null, O,  null, null, null],
+  ]);
+}
+
+/** Mecha lower arm (4×10), pivot at elbow */
+function generateMechaLowerArmSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { M, MS, E } = MECHA;
+  return rowsToPixelGrid([
+    [null, O,  O,  null],
+    [O,   M,  MS, O],
+    [O,   MS, M,  O],
+    [O,   M,  E,  O],
+    [O,   MS, M,  O],
+    [null, O,  M,  O],
+    [O,   M,  MS, O],
+    [O,   MS, O,  O],
+    [O,   M,  O,  null],
+    [null, O,  O,  null],
+  ]);
+}
+
+/** Mecha upper leg (6×14), pivot at hip */
+function generateMechaUpperLegSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { M, MS, E } = MECHA;
+  return rowsToPixelGrid([
+    [null, null, O,  O,  null, null],
+    [null, O,   M,  M,  O,   null],
+    [O,   M,   M,  MS, M,   O],
+    [O,   MS,  M,  M,  MS,  O],
+    [O,   M,   E,  M,  M,   O],
+    [O,   MS,  M,  MS, M,   O],
+    [O,   M,   MS, M,  MS,  O],
+    [O,   MS,  M,  M,  M,   O],
+    [O,   M,   M,  MS, M,   O],
+    [O,   O,   O,  O,  O,   O],
+    [null, O,   M,  MS, O,   null],
+    [null, O,   MS, O,  null, null],
+    [null, null, O,  null, null, null],
+    [null, null, O,  null, null, null],
+  ]);
+}
+
+/** Mecha lower leg (5×12), pivot at knee */
+function generateMechaLowerLegSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { M, MS, E } = MECHA;
+  return rowsToPixelGrid([
+    [null, O,  O,  O,  null],
+    [O,   M,  MS, M,  O],
+    [O,   MS, M,  MS, O],
+    [O,   M,  E,  M,  O],
+    [O,   MS, M,  MS, O],
+    [null, O,  M,  O,  null],
+    [null, O,  MS, O,  null],
+    [O,   M,  M,  MS, O],
+    [O,   MS, M,  M,  O],
+    [O,   M,  MS, M,  O],
+    [O,   O,  O,  O,  O],
+    [null, O,  O,  O,  null],
+  ]);
+}
+
+// ============================================================
+// Dog template sprites (templateName === 'dog')
+// 9 nodes: body, head, ear_L/R, tail, front/back legs
+// ============================================================
+
+const DOGC = {
+  F: '#c68b4e',  // fur
+  FL: '#e0aa6e', // fur light
+  FD: '#9a6a38', // fur dark
+  C: '#f0d5a8',  // cream
+  NOSE: '#2a1a12',
+};
+
+/** Dog body (20×12), pivot at center */
+function generateDogBodySprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { F, FL, FD } = DOGC;
+  const n = null;
+  return rowsToPixelGrid([
+    [n, n, n, O, O, O, O, O, O, O, O, O, O, O, O, O, n, n, n, n],
+    [n, n, O, FL, FL, FL, F, F, F, F, F, F, F, FL, FL, O, n, n, n, n],
+    [n, O, FL, F, F, F, FD, FD, F, F, FD, FD, F, F, F, FL, O, n, n, n],
+    [O, FL, F, FD, FD, F, F, F, F, F, F, F, F, FD, FD, F, FL, O, n, n],
+    [O, F, FD, F, F, F, FL, FL, FL, FL, FL, F, F, F, F, FD, F, O, n, n],
+    [O, FD, F, F, FL, FL, F, FD, FD, F, FL, FL, F, F, FL, F, FD, O, n, n],
+    [O, F, F, FL, F, FD, F, F, F, F, FD, F, F, FL, F, F, F, O, n, n],
+    [n, O, FD, F, F, F, FD, FD, F, FD, FD, F, F, F, FD, O, O, n, n, n],
+    [n, O, O, n, n, O, O, n, n, O, O, n, n, O, O, n, n, n, n, n],
+    [n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n],
+    [n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n],
+    [n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n],
+  ]);
+}
+
+/** Dog head (10×10), pivot at neck bottom */
+function generateDogHeadSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { F, FL, FD, C, NOSE } = DOGC;
+  const E = '#1a1a2e';
+  const EW = '#ffffff';
+  return rowsToPixelGrid([
+    [null, null, O,  O,  O,  O,  O,  O,  null, null],
+    [null, O,   FL, FL, F,  FL, F,  FL, O,   null],
+    [null, O,   F,  FD, F,  F,  FD, F,  O,   null],
+    [O,   FL,  F,  EW, E,  F,  FD, F,  FL,  O],
+    [O,   F,   FD, F,  F,  FD, F,  F,  F,   O],
+    [O,   FL,  F,  FD, F,  F,  FL, F,  F,   O],
+    [null, O,   F,  C,  C,  C,  C,  F,  O,   null],
+    [null, O,   FD, C,  NOSE, C, C, FD, O,   null],
+    [null, null, O,  C,  C,  C,  C,  O,  null, null],
+    [null, null, null, O, O,  O,  O,  null, null, null],
+  ]);
+}
+
+/** Dog ear (4×6), pivot at ear base */
+function generateDogEarSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { F, FD } = DOGC;
+  return rowsToPixelGrid([
+    [null, O,  O,  null],
+    [O,   F,  FD, O],
+    [O,   FD, F,  O],
+    [null, O,  FD, O],
+    [null, O,  F,  O],
+    [null, null, O,  null],
+  ]);
+}
+
+/** Dog tail (4×8), pivot at tail base */
+function generateDogTailSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { F, FD, C } = DOGC;
+  return rowsToPixelGrid([
+    [null, O,  O,  null],
+    [O,   F,  FD, O],
+    [O,   FD, F,  O],
+    [null, O,  F,  O],
+    [null, O,  FD, O],
+    [null, null, O,  C],
+    [null, null, O,  C],
+    [null, null, null, O],
+  ]);
+}
+
+/** Dog leg (4×10), pivot at top */
+function generateDogLegSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { F, FD, C } = DOGC;
+  return rowsToPixelGrid([
+    [null, O,  O,  null],
+    [O,   F,  FD, O],
+    [O,   FD, F,  O],
+    [O,   F,  FD, O],
+    [null, O,  F,  O],
+    [null, O,  FD, O],
+    [null, O,  C,  O],
+    [O,   C,  C,  O],
+    [O,   C,  C,  O],
+    [null, O,  O,  null],
+  ]);
+}
+
+// ============================================================
+// Knight template sprites (templateName === 'knight')
+// 12 nodes: 10-node humanoid rig + cape + sword
+// ============================================================
+
+const KNIGHT = {
+  ST: '#b8c0cc',  // steel
+  STS: '#7d8590', // steel shadow
+  STD: '#4a5058', // steel dark
+  G: '#e8b64c',   // gold
+  GD: '#a67c2e',  // gold dark
+  PL: '#e63946',  // plume red
+  PLD: '#a62633', // plume dark
+  TU: '#3b4a6b',  // tunic blue
+  TUD: '#2a3550', // tunic dark
+  LE: '#6b4a2f',  // leather
+  CA: '#8b1e2d',  // cape crimson
+  CAD: '#5e1420', // cape dark
+  CAL: '#b03040', // cape light
+};
+
+/** Knight helm (12×14) with visor slit and plume, pivot at neck bottom */
+function generateKnightHeadSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { ST, STS, G, PL, PLD } = KNIGHT;
+  return rowsToPixelGrid([
+    [null, null, null, null, null, PL, PL, null, null, null, null, null],
+    [null, null, null, null, null, PL, PL, null, null, null, null, null],
+    [null, null, null, O,   O,  O,  O,  O,  O,  null, null, null],
+    [null, null, O,   ST,  ST, PLD, PLD, ST, ST, O,   null, null],
+    [null, null, O,   ST,  STS, ST, ST, STS, ST, O,   null, null],
+    [null, null, O,   STS, O,  O,  O,  O,  O,  STS, O,  null],
+    [null, null, O,   ST,  STS, STS, STS, STS, ST, O,  null, null],
+    [null, null, O,   ST,  G,  ST, ST, G,  ST, O,  null, null],
+    [null, null, O,   STS, ST, ST, ST, ST, STS, O,  null, null],
+    [null, null, null, O,  ST, STS, STS, ST, O,  null, null, null],
+    [null, null, null, O,  STS, ST, ST, STS, O,  null, null, null],
+    [null, null, null, null, O, ST, ST, O,  null, null, null, null],
+    [null, null, null, null, O, STS, STS, O, null, null, null, null],
+    [null, null, null, null, O, O,  O,  O,  null, null, null, null],
+  ]);
+}
+
+/** Knight cuirass (16×20) with tabard, pivot at shoulder line */
+function generateKnightTorsoSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { ST, STS, G, GD, TU } = KNIGHT;
+  return rowsToPixelGrid([
+    [null, null, null, null, null, O,   O,   O,   O,   O,   O,   null, null, null, null, null],
+    [null, null, null, O,   O,   ST,  ST,  ST,  ST,  ST,  ST,  O,   O,   null, null, null],
+    [null, null, O,   ST,  ST,  ST,  ST,  ST,  ST,  ST,  ST,  ST,  ST,  O,   null, null],
+    [null, null, O,   STS, ST,  ST,  TU,  TU,  ST,  ST,  STS, ST,  ST,  O,   null, null],
+    [null, null, O,   ST,  STS, TU,  G,   TU,  TU,  STS, ST,  ST,  O,   null, null, null],
+    [null, O,   ST,  ST,  TU,  G,   G,   TU,  TU,  ST,  ST,  ST,  O,   null, null, null],
+    [null, O,   ST,  STS, TU,  G,   G,   TU,  TU,  STS, ST,  ST,  O,   null, null, null],
+    [null, O,   ST,  ST,  TU,  G,   G,   TU,  TU,  ST,  ST,  ST,  O,   null, null, null],
+    [null, O,   STS, ST,  TU,  TU,  TU,  TU,  TU,  ST,  STS, ST,  O,   null, null, null],
+    [null, null, O,  ST,  ST,  TU,  TU,  TU,  TU,  ST,  ST,  O,   null, null, null, null],
+    [null, null, O,  STS, ST,  TU,  TU,  TU,  TU,  ST,  STS, O,   null, null, null, null],
+    [null, null, O,  GD,  GD,  GD,  GD,  GD,  GD,  GD,  GD,  GD,  O,   null, null, null],
+    [null, null, O,  ST,  STS, ST,  ST,  ST,  ST,  ST,  STS, ST,  O,   null, null, null],
+    [null, null, O,  STS, ST,  TU,  TU,  TU,  TU,  ST,  STS, O,   null, null, null, null],
+    [null, null, O,  ST,  STS, TU,  TU,  TU,  TU,  STS, ST,  O,   null, null, null, null],
+    [null, null, O,  STS, ST,  TU,  TU,  TU,  TU,  ST,  STS, O,   null, null, null, null],
+    [null, null, null, O, ST,  ST,  TU,  TU,  ST,  ST,  O,   null, null, null, null, null],
+    [null, null, null, O, STS, STS, TU,  TU,  STS, STS, O,   null, null, null, null, null],
+    [null, null, null, null, O, O,  O,   O,   O,   O,   O,   O,   null, null, null, null],
+    [null, null, null, null, null, O, O,  O,   O,   O,   O,   null, null, null, null, null],
+  ]);
+}
+
+/** Knight pauldron arm (6×14), pivot at shoulder cap */
+function generateKnightUpperArmSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { ST, STS, G } = KNIGHT;
+  return rowsToPixelGrid([
+    [null, O,  O,  O,  O,  null],
+    [O,   G,  G,  G,  G,  O],
+    [O,   ST, ST, ST, ST, O],
+    [O,   STS, ST, ST, STS, O],
+    [O,   ST, STS, STS, ST, O],
+    [O,   STS, ST, ST, STS, O],
+    [O,   ST, ST, ST, ST, O],
+    [O,   O,  O,  O,  O,  O],
+    [null, O,  STS, ST, O,  null],
+    [null, O,  ST, STS, O,  null],
+    [null, O,  STS, ST, O,  null],
+    [null, O,  ST, O,  null, null],
+    [null, O,  STS, O,  null, null],
+    [null, null, O,  null, null, null],
+  ]);
+}
+
+/** Knight gauntlet (4×10), pivot at elbow */
+function generateKnightLowerArmSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { ST, STS } = KNIGHT;
+  return rowsToPixelGrid([
+    [null, O,  O,  null],
+    [O,   ST, STS, O],
+    [O,   STS, ST, O],
+    [O,   ST, STS, O],
+    [O,   STS, ST, O],
+    [null, O,  ST, O],
+    [O,   ST, STS, O],
+    [O,   STS, O,  O],
+    [O,   ST, O,  null],
+    [null, O,  O,  null],
+  ]);
+}
+
+/** Knight cuisse (6×14), pivot at hip */
+function generateKnightUpperLegSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { ST, STS, TU, TUD } = KNIGHT;
+  return rowsToPixelGrid([
+    [null, null, O,  O,  null, null],
+    [null, O,   TU, TU, O,   null],
+    [O,   TU,  TU, TUD, TU,  O],
+    [O,   ST,  ST, ST, ST,  O],
+    [O,   STS, ST, ST, STS, O],
+    [O,   ST, STS, STS, ST,  O],
+    [O,   STS, ST, ST, STS, O],
+    [O,   ST, ST, ST, ST,  O],
+    [O,   STS, STS, ST, STS, O],
+    [O,   O,   O,  O,  O,   O],
+    [null, O,   ST, STS, O,   null],
+    [null, O,   STS, O,  null, null],
+    [null, null, O,  null, null, null],
+    [null, null, O,  null, null, null],
+  ]);
+}
+
+/** Knight greave + sabaton (5×12), pivot at knee */
+function generateKnightLowerLegSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { ST, STS } = KNIGHT;
+  return rowsToPixelGrid([
+    [null, O,  O,  O,  null],
+    [O,   ST, STS, ST, O],
+    [O,   STS, ST, STS, O],
+    [O,   ST, STS, ST, O],
+    [O,   STS, ST, STS, O],
+    [null, O,  ST, O,  null],
+    [null, O,  STS, O,  null],
+    [O,   ST, ST, STS, O],
+    [O,   STS, ST, ST, O],
+    [O,   ST, STS, STS, O],
+    [O,   O,  O,  O,  O],
+    [O,   O,  O,  O,  null],
+  ]);
+}
+
+/** Knight cape (10×18), pivot at neck clasp */
+function generateKnightCapeSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { CA, CAD, CAL } = KNIGHT;
+  return rowsToPixelGrid([
+    [null, null, null, null, O,   O,   null, null, null, null],
+    [null, null, null, O,   CA,  CA,  O,   null, null, null],
+    [null, null, O,   CA,  CA,  CA,  CA,  O,   null, null],
+    [null, null, O,   CAL, CA,  CA,  CAD, O,   null, null],
+    [null, O,   CA,  CAL, CA,  CAD, CA,  CA,  O,   null],
+    [null, O,   CAL, CA,  CAD, CA,  CAL, CA,  O,   null],
+    [null, O,   CA,  CAD, CA,  CAL, CA,  CAD, O,   null],
+    [O,   CA,  CAL, CAD, CAL, CAD, CA,  CAL, O,   null],
+    [O,   CAL, CA,  CAD, CA,  CAD, CAL, CA,  O,   null],
+    [O,   CA,  CAD, CAL, CAD, CAL, CA,  CAD, O,   null],
+    [O,   CAL, CAD, CA,  CA,  CAD, CAL, CA,  O,   null],
+    [O,   CA,  CAL, CAD, CAD, CAL, CA,  CAL, O,   null],
+    [O,   CAD, CAL, CA,  CA,  CAL, CAD, CA,  O,   null],
+    [O,   CA,  CAD, CAL, CAL, CAD, CA,  CAD, O,   null],
+    [null, O,   CAD, CAL, CA,  CAL, CAD, CA,  O,   null],
+    [null, O,   CA,  CAD, CAL, CAD, CA,  CAD, O,   null],
+    [null, null, O,  CAD, CAD, CAD, CAD, CAD, O,   null],
+    [null, null, null, O,  O,   O,   O,   O,  O,   null],
+  ]);
+}
+
+/** Knight longsword (4×14), pivot at grip */
+function generateKnightSwordSprite(): PixelGrid {
+  const O = PALETTE.outline;
+  const { ST, STS, G, GD, LE } = KNIGHT;
+  return rowsToPixelGrid([
+    [null, null, O,  null],
+    [null, O,   ST, O],
+    [null, O,   ST, O],
+    [null, O,   STS, O],
+    [null, O,   ST, O],
+    [null, O,   STS, O],
+    [null, O,   ST, O],
+    [null, O,   STS, O],
+    [null, O,   ST, O],
+    [O,   G,   G,  O],
+    [null, O,   LE, O],
+    [null, O,   LE, O],
+    [null, O,   GD, O],
+    [null, null, O,  null],
+  ]);
+}
+
+// ---- Template sprite dispatch ----
+
+/** Mecha template: same node names as humanoid, armored variants */
+function generateMechaSprite(name: string): DefaultSpriteResult {
+  if (name === 'head') {
+    const pixels = generateMechaHeadSprite();
+    return { pixels, width: 12, height: 14, pivotX: 5, pivotY: 13, partName: '机甲头' };
+  }
+  if (name === 'torso') {
+    const pixels = generateMechaTorsoSprite();
+    return { pixels, width: 16, height: 20, pivotX: 8, pivotY: 2, partName: '机甲躯干' };
+  }
+  if (name.startsWith('upper_arm')) {
+    const pixels = generateMechaUpperArmSprite();
+    return { pixels, width: 6, height: 14, pivotX: 3, pivotY: 0, partName: name.endsWith('l') ? '机甲左上臂' : '机甲右上臂' };
+  }
+  if (name.startsWith('lower_arm')) {
+    const pixels = generateMechaLowerArmSprite();
+    return { pixels, width: 4, height: 10, pivotX: 2, pivotY: 0, partName: name.endsWith('l') ? '机甲左前臂' : '机甲右前臂' };
+  }
+  if (name.startsWith('upper_leg')) {
+    const pixels = generateMechaUpperLegSprite();
+    return { pixels, width: 6, height: 14, pivotX: 3, pivotY: 0, partName: name.endsWith('l') ? '机甲左大腿' : '机甲右大腿' };
+  }
+  if (name.startsWith('lower_leg')) {
+    const pixels = generateMechaLowerLegSprite();
+    return { pixels, width: 5, height: 12, pivotX: 2, pivotY: 0, partName: name.endsWith('l') ? '机甲左小腿' : '机甲右小腿' };
+  }
+  const pixels = generateGenericSprite('#9aa3b5', 8, 8);
+  return { pixels, width: 8, height: 8, pivotX: 4, pivotY: 4, partName: name };
+}
+
+/** Dog template sprites */
+function generateDogSprite(name: string): DefaultSpriteResult {
+  if (name === 'body') {
+    const pixels = generateDogBodySprite();
+    return { pixels, width: 20, height: 12, pivotX: 10, pivotY: 5, partName: '狗身体' };
+  }
+  if (name === 'head') {
+    const pixels = generateDogHeadSprite();
+    return { pixels, width: 10, height: 10, pivotX: 4, pivotY: 9, partName: '狗头' };
+  }
+  if (name === 'ear_l' || name === 'ear_r') {
+    const pixels = generateDogEarSprite();
+    return { pixels, width: 4, height: 6, pivotX: 2, pivotY: 0, partName: name === 'ear_l' ? '左耳' : '右耳' };
+  }
+  if (name === 'tail') {
+    const pixels = generateDogTailSprite();
+    return { pixels, width: 4, height: 8, pivotX: 2, pivotY: 0, partName: '狗尾巴' };
+  }
+  if (name.includes('leg')) {
+    const pixels = generateDogLegSprite();
+    const isLeft = name.endsWith('l');
+    const front = name.includes('front');
+    return {
+      pixels, width: 4, height: 10, pivotX: 2, pivotY: 0,
+      partName: front ? (isLeft ? '狗左前腿' : '狗右前腿') : (isLeft ? '狗左后腿' : '狗右后腿'),
+    };
+  }
+  const pixels = generateGenericSprite('#c68b4e', 8, 8);
+  return { pixels, width: 8, height: 8, pivotX: 4, pivotY: 4, partName: name };
+}
+
+/** Knight template: humanoid rig + cape + sword */
+function generateKnightSprite(name: string): DefaultSpriteResult {
+  if (name === 'head') {
+    const pixels = generateKnightHeadSprite();
+    return { pixels, width: 12, height: 14, pivotX: 5, pivotY: 13, partName: '骑士头盔' };
+  }
+  if (name === 'torso') {
+    const pixels = generateKnightTorsoSprite();
+    return { pixels, width: 16, height: 20, pivotX: 8, pivotY: 2, partName: '骑士胸甲' };
+  }
+  if (name.startsWith('upper_arm')) {
+    const pixels = generateKnightUpperArmSprite();
+    return { pixels, width: 6, height: 14, pivotX: 3, pivotY: 0, partName: name.endsWith('l') ? '骑士左上臂' : '骑士右上臂' };
+  }
+  if (name.startsWith('lower_arm')) {
+    const pixels = generateKnightLowerArmSprite();
+    return { pixels, width: 4, height: 10, pivotX: 2, pivotY: 0, partName: name.endsWith('l') ? '骑士左臂铠' : '骑士右臂铠' };
+  }
+  if (name.startsWith('upper_leg')) {
+    const pixels = generateKnightUpperLegSprite();
+    return { pixels, width: 6, height: 14, pivotX: 3, pivotY: 0, partName: name.endsWith('l') ? '骑士左大腿甲' : '骑士右大腿甲' };
+  }
+  if (name.startsWith('lower_leg')) {
+    const pixels = generateKnightLowerLegSprite();
+    return { pixels, width: 5, height: 12, pivotX: 2, pivotY: 0, partName: name.endsWith('l') ? '骑士左胫甲' : '骑士右胫甲' };
+  }
+  if (name === 'cape') {
+    const pixels = generateKnightCapeSprite();
+    return { pixels, width: 10, height: 18, pivotX: 5, pivotY: 0, partName: '披风' };
+  }
+  if (name === 'sword') {
+    const pixels = generateKnightSwordSprite();
+    return { pixels, width: 4, height: 14, pivotX: 2, pivotY: 11, partName: '长剑' };
+  }
+  const pixels = generateGenericSprite('#b8c0cc', 8, 8);
+  return { pixels, width: 8, height: 8, pivotX: 4, pivotY: 4, partName: name };
 }
 
 // ---- Public API ----
@@ -500,6 +1051,9 @@ export interface DefaultSpriteResult {
  * - "tail" → animal tail
  * - "body" → quadruped/simple body
  * - "front_leg_L/R", "back_leg_L/R" → quadruped leg
+ * - templateName 'mecha' → armored robot variants of the humanoid rig
+ * - templateName 'dog' → dog: body/head/ears/tail/legs
+ * - templateName 'knight' → armored knight variants + cape + sword
  * - Fallback: colored block based on node color
  */
 export function generateDefaultCostumeSprite(
@@ -508,6 +1062,11 @@ export function generateDefaultCostumeSprite(
   nodeColor: string = '#888888',
 ): DefaultSpriteResult {
   const name = nodeName.toLowerCase();
+
+  // Template-specific sprite sets (full art direction per template)
+  if (templateName === 'mecha') return generateMechaSprite(name);
+  if (templateName === 'dog') return generateDogSprite(name);
+  if (templateName === 'knight') return generateKnightSprite(name);
 
   // Humanoid template sprites
   if (name === 'head') {

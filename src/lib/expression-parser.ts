@@ -343,7 +343,9 @@ function evaluate(ast: ASTNode, vars: Record<string, number>): number {
       return ast.value;
 
     case 'variable': {
-      if (ast.name in vars) {
+      // M25: 用 Object.hasOwn 而不是 in——'constructor' in vars 恒为 true，
+      // 会返回非数字值参与运算得 NaN，而不是抛 Unknown variable
+      if (Object.hasOwn(vars, ast.name)) {
         return vars[ast.name];
       }
       throw new ParseError(`Unknown variable: '${ast.name}'`);

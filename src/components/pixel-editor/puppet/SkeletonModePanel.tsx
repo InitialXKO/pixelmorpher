@@ -199,7 +199,7 @@ export default function SkeletonModePanel({
                 useEditorStore.getState().setActivePuppetSkeletonId(e.target.value);
               }
             }}
-            className="flex-1 h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
+            className="flex-1 min-w-0 h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
           >
             <option value="">— 选择骨骼 —</option>
             {puppetSkeletons.map((s) => (

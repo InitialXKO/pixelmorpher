@@ -63,9 +63,11 @@ const shakeHandler: GlobalTransformHandler = (mod, ctx) => {
   const decay = Number(params.decay) || 0;
   const t = ctx.currentFrame / ctx.frameRate;
   const decayFactor = Math.exp(-decay * t);
+  // H7: 确定性随机（之前用 Math.random()，同一帧每次渲染结果不同，破坏缓存/洋葱皮/导出一致性）
+  const seedBase = ctx.currentFrame * 7919 + frequency * 131;
   return {
-    translateX: (Math.random() * 2 - 1) * amplitude * decayFactor * ctx.weight,
-    translateY: (Math.random() * 2 - 1) * amplitude * decayFactor * ctx.weight,
+    translateX: (seededRandom(seedBase)() * 2 - 1) * amplitude * decayFactor * ctx.weight,
+    translateY: (seededRandom(seedBase + 1)() * 2 - 1) * amplitude * decayFactor * ctx.weight,
   };
 };
 
@@ -199,7 +201,8 @@ const springHandler: GlobalTransformHandler = (mod, ctx) => {
   const t = relFrame / ctx.frameRate;
   // Damped harmonic oscillator
   const omega = Math.sqrt(stiffness) * 10;
-  const zeta = springDamping;
+  // M14: damping≥1 时 sqrt(1-zeta²) 为 NaN，钳制到 [0, 1) 保持欠阻尼公式有效
+  const zeta = Math.min(0.999, Math.max(0, springDamping));
   const envelope = Math.exp(-zeta * omega * t);
   const displacement = amplitude * envelope * Math.cos(omega * Math.sqrt(1 - zeta * zeta) * t);
   return { translateY: displacement * ctx.weight };

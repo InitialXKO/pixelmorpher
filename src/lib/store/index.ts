@@ -19,7 +19,6 @@ import { createGlobalModifierSlice } from './global-modifier-slice';
 import { createPartGlobalModifierSlice } from './part-global-modifier-slice';
 import { createPuppetSlice } from './puppet-slice';
 import { createDccPipelineSlice } from './dcc-pipeline-slice';
-import { createUnifiedSlice } from './unified-slice';
 import { createV15Slice } from './v15-slice';
 
 // NOTE: useEditorStore is NOT re-exported here to avoid a circular dependency.
@@ -43,7 +42,6 @@ export const useProjectStore = create<ProjectStore>()(
     ...createPartGlobalModifierSlice(...a),
     ...createPuppetSlice(...a),
     ...createDccPipelineSlice(...a),
-    ...createUnifiedSlice(...a),
     ...createV15Slice(...a),
   }) as ProjectStore
 );

@@ -94,7 +94,7 @@ export default function AnimationClipPanel() {
                     onClick={(e) => e.stopPropagation()}
                   />
                 ) : (
-                  <span className={`text-[11px] flex-1 truncate ${
+                  <span className={`text-[11px] flex-1 truncate min-w-0 ${
                     isActive ? 'text-amber-200 font-medium' : 'text-zinc-300'
                   }`}>
                     {clip.name}

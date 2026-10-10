@@ -4,6 +4,7 @@
 // ============================================================
 
 import { generateDefaultCostumeSprite } from '../engine/default-costume-sprites';
+import { applyJointOpenings, type JointOpeningSpec } from '../engine/render-helpers/puppet-joint-color';
 import type { StateCreator } from 'zustand';
 import type { ProjectStore } from './types';
 import type {
@@ -171,41 +172,15 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
   },
 
   setPuppetDirection: (skeletonId, direction) => {
-    set(s => {
-      // Update the skeleton's current direction
-      const updatedSkeletons = s.puppetSkeletons.map(sk =>
+    // 注意：不要重写已有关键帧的 direction。
+    // 渲染器在解析精灵/镜像时使用 skeleton.currentDirection（实时方向），
+    // 关键帧里记录的 direction 只是录制时的快照。历史上这里曾重写全部
+    // 关键帧，会静默销毁用户的逐帧方向数据，已移除。
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk =>
         sk.id === skeletonId ? { ...sk, currentDirection: direction } : sk
-      );
-
-      // CRITICAL FIX: Sync all existing puppet keyframes to the new direction.
-      // Without this, keyframes retain stale direction values from when they were
-      // created, causing shouldMirrorDirection() to make incorrect mirror decisions
-      // based on the old direction. This is the root cause of the bug where paired
-      // limbs' sprites suddenly change when their rotation angles match — the
-      // interpolated direction from an old keyframe triggers wrong mirroring.
-      const updatedClips = s.animationClips.map(clip => {
-        if (!clip.puppetNodeKeyframes || clip.puppetNodeKeyframes.length === 0) return clip;
-        // Only update keyframes for clips that belong to a character using this skeleton
-        const character = s.puppetCharacters.find(c =>
-          c.puppetSkeletonId === skeletonId &&
-          c.id === clip.puppetCharacterId
-        );
-        if (!character) return clip;
-
-        return {
-          ...clip,
-          puppetNodeKeyframes: clip.puppetNodeKeyframes.map(kf => ({
-            ...kf,
-            direction,
-          })),
-        };
-      });
-
-      return {
-        puppetSkeletons: updatedSkeletons,
-        animationClips: updatedClips,
-      };
-    });
+      ),
+    }));
   },
 
   setPuppetLatitude: (skeletonId, latitude) => {
@@ -228,6 +203,26 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
         const skeleton = state.puppetSkeletons.find(sk => sk.id === skeletonId);
         const templateName = skeleton ? 'humanoid' : 'humanoid'; // Default to humanoid
         const spriteResult = generateDefaultCostumeSprite(name, templateName, opts?.color ?? '#888888');
+        // 关节开口约定：默认精灵在 plug / socket 对应的轮廓处留开口
+        {
+          const openings: JointOpeningSpec[] = [];
+          if (opts?.plug) {
+            const px = spriteResult.pivotX + opts.plug.localX;
+            const py = spriteResult.pivotY + opts.plug.localY;
+            const w = py < spriteResult.height / 2
+              ? (opts.crossSectionTop ?? 4)
+              : (opts.crossSectionBottom ?? 4);
+            openings.push({ x: px, y: py, width: w });
+          }
+          for (const s of opts?.sockets ?? []) {
+            openings.push({
+              x: spriteResult.pivotX + s.localX,
+              y: spriteResult.pivotY + s.localY,
+              width: opts?.crossSectionBottom ?? 4,
+            });
+          }
+          applyJointOpenings(spriteResult.pixels, openings);
+        }
         const part = state.addPart(`${name}_${spriteResult.partName}`, spriteResult.width, spriteResult.height, { pivotX: spriteResult.pivotX, pivotY: spriteResult.pivotY });
         state.setPartPixels(part.id, spriteResult.pixels);
         resolvedSpritePartId = part.id;

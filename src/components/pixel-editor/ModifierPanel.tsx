@@ -3749,7 +3749,7 @@ function ModifierPanelContent({ isPlaying }: { isPlaying: boolean }) {
                           onClick={() => handleAddModifier(preset.type)}
                         >
                           <Bookmark className="size-3 text-amber-400" />
-                          <span className="flex-1 truncate">{preset.name}</span>
+                          <span className="flex-1 truncate min-w-0">{preset.name}</span>
                           <span className="text-[9px] text-zinc-600">{preset.category}</span>
                           <button
                             type="button"

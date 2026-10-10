@@ -1210,6 +1210,10 @@ export function renderPuppetNodes(
   // ---- Step 4.7: Build Part keyframe index for sprite modifier resolution ----
   const partKfByPartId = buildPartKfIndex(partKeyframes, currentFrame);
 
+  // ---- Step 4.8: Render joint discs BEFORE sprites ----
+  // 约定：关节盘被父子两侧精灵遮挡，透过轮廓开口可见。
+  renderJointDiscs(ctx, skeleton, worldTransforms, latitude, parts);
+
   // ---- Step 5: Render each node's sprite ----
   for (const node of drawOrderedNodes) {
     if (!node.visible) continue;
@@ -1224,7 +1228,8 @@ export function renderPuppetNodes(
     const shouldMirror = shouldMirrorDirection(node, mirrorDirection);
 
     ctx.save();
-    ctx.translate(wt.worldX, wt.worldY);
+    // NOTE: 不要在此 translate——drawX/drawY 已是画布绝对坐标（computePuppetWorldTransforms
+    // 返回绝对坐标），再 translate 会造成双重偏移（见 F3）。
 
     // Create part canvas with pixel-level modifiers for puppet sprites
     const spriteKf = partKfByPartId.get(part.id) ?? null;
@@ -1254,8 +1259,8 @@ export function renderPuppetNodes(
     ctx.restore();
   }
 
-  // ---- Step 6: Render joint discs ----
-  renderJointDiscs(ctx, skeleton, worldTransforms, latitude);
+  // (Step 6 removed: joint discs now render in Step 4.8, before sprites,
+  // so they are occluded by the sprites on both sides per the joint convention.)
 
   // Restore global modifier transform
   if (hasGlobalTransform) {

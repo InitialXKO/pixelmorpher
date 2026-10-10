@@ -94,7 +94,7 @@ export default function NodePropertiesEditor({
                 spritePartId: e.target.value || null,
               })
             }
-            className="flex-1 h-6 text-[9px] bg-[#0d0d1a] border border-[#1e1e3a] rounded px-1 text-gray-300"
+            className="flex-1 min-w-0 h-6 text-[9px] bg-[#0d0d1a] border border-[#1e1e3a] rounded px-1 text-gray-300"
           >
             <option value="">— 无 —</option>
             {parts.map((p) => (

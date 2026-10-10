@@ -18,6 +18,8 @@ import {
 } from '../types';
 import {
   invalidateAnimModifierCache,
+  invalidateInterpolationCache,
+  invalidateParamDriverEvalCache,
   applyPixelModifiers,
   computeKeyframeBaseTransform,
   computePartAnimationTransform,
@@ -107,6 +109,9 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
 
   updateModifier: (keyframeId, modifierId, params) => {
     get().pushUndo('更新修改器', 'updateModifier');
+    // H8/H9: 修改器数据变更后，插值缓存与 param driver 求值缓存必须失效
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();
     const { blendMode, coordinateMode, ...restParams } = params as any;
     const actualParams = restParams as Record<string, ModifierParamValue>;
 
@@ -956,7 +961,8 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
 
   updateModifierParamKeyframe: (keyframeId, modifierId, paramKfId, params) => {
     get().pushUndo('更新参数关键帧');
-    invalidateAnimModifierCache(modifierId);
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();    invalidateAnimModifierCache(modifierId);
     set((s) => ({
       keyframes: s.keyframes.map((k) => {
         if (k.id !== keyframeId) return k;
@@ -990,7 +996,8 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
 
   addParamDriver: (keyframeId, modifierId, paramName, startFrame, endFrame) => {
     get().pushUndo('添加参数驱动器');
-    invalidateAnimModifierCache(modifierId);
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();    invalidateAnimModifierCache(modifierId);
     set((s) => ({
       keyframes: s.keyframes.map((k) => {
         if (k.id !== keyframeId) return k;
@@ -1018,7 +1025,8 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
 
   removeParamDriver: (keyframeId, modifierId, driverId) => {
     get().pushUndo('删除参数驱动器');
-    invalidateAnimModifierCache(modifierId);
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();    invalidateAnimModifierCache(modifierId);
     set((s) => ({
       keyframes: s.keyframes.map((k) => {
         if (k.id !== keyframeId) return k;
@@ -1038,6 +1046,8 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
 
   updateParamDriver: (keyframeId, modifierId, driverId, updates) => {
     get().pushUndo('更新参数驱动器');
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();
     invalidateAnimModifierCache(modifierId);
     const { invalidatePhaseCache } = require('../engine');
     invalidatePhaseCache(driverId);

@@ -24,6 +24,9 @@ export function UndoRedoControls() {
   const maxUndoLevels = useProjectStore((s) => s.maxUndoLevels);
   const setMaxUndoLevels = useProjectStore((s) => s.setMaxUndoLevels);
   const [showUndoSettings, setShowUndoSettings] = useState(false);
+  // M16: 订阅栈长度，disabled 状态和历史菜单才能随 undo/redo 更新
+  const undoStack = useProjectStore((s) => s.undoStack);
+  const redoStack = useProjectStore((s) => s.redoStack);
 
   return (
     <>
@@ -34,16 +37,16 @@ export function UndoRedoControls() {
             variant="ghost"
             size="icon"
             className="h-7 w-7 text-gray-500 hover:bg-white/5 hover:text-gray-300 disabled:opacity-30"
-            disabled={useProjectStore.getState().undoStack.length === 0}
+            disabled={undoStack.length === 0}
             onClick={() => useProjectStore.getState().undo()}
           >
             <Undo2 className="size-3.5" />
           </Button>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-64 bg-[#1a1a2e] border-white/10 text-gray-200 max-h-80 overflow-y-auto">
-          <ContextMenuLabel className="text-xs text-gray-400">撤销历史 ({useProjectStore.getState().undoStack.length})</ContextMenuLabel>
+          <ContextMenuLabel className="text-xs text-gray-400">撤销历史 ({undoStack.length})</ContextMenuLabel>
           <ContextMenuSeparator className="bg-white/10" />
-          {useProjectStore.getState().undoStack.slice().reverse().slice(0, 20).map((entry, idx) => (
+          {undoStack.slice().reverse().slice(0, 20).map((entry, idx) => (
             <ContextMenuItem
               key={idx}
               className="text-[11px] text-gray-300 focus:bg-white/10 focus:text-gray-100 cursor-default"
@@ -55,14 +58,14 @@ export function UndoRedoControls() {
                 }
               }}
             >
-              <span className="truncate flex-1">{entry.description}</span>
+              <span className="truncate flex-1 min-w-0">{entry.description}</span>
               <span className="text-[9px] text-gray-500 ml-2 shrink-0">
                 {new Date(entry.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
             </ContextMenuItem>
           ))}
-          {useProjectStore.getState().undoStack.length > 20 && (
-            <ContextMenuLabel className="text-[10px] text-gray-500 text-center">... 还有 {useProjectStore.getState().undoStack.length - 20} 条</ContextMenuLabel>
+          {undoStack.length > 20 && (
+            <ContextMenuLabel className="text-[10px] text-gray-500 text-center">... 还有 {undoStack.length - 20} 条</ContextMenuLabel>
           )}
         </ContextMenuContent>
       </ContextMenu>
@@ -74,16 +77,16 @@ export function UndoRedoControls() {
             variant="ghost"
             size="icon"
             className="h-7 w-7 text-gray-500 hover:bg-white/5 hover:text-gray-300 disabled:opacity-30"
-            disabled={useProjectStore.getState().redoStack.length === 0}
+            disabled={redoStack.length === 0}
             onClick={() => useProjectStore.getState().redo()}
           >
             <Redo2 className="size-3.5" />
           </Button>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-64 bg-[#1a1a2e] border-white/10 text-gray-200 max-h-80 overflow-y-auto">
-          <ContextMenuLabel className="text-xs text-gray-400">重做历史 ({useProjectStore.getState().redoStack.length})</ContextMenuLabel>
+          <ContextMenuLabel className="text-xs text-gray-400">重做历史 ({redoStack.length})</ContextMenuLabel>
           <ContextMenuSeparator className="bg-white/10" />
-          {useProjectStore.getState().redoStack.slice().reverse().slice(0, 20).map((entry, idx) => (
+          {redoStack.slice().reverse().slice(0, 20).map((entry, idx) => (
             <ContextMenuItem
               key={idx}
               className="text-[11px] text-gray-300 focus:bg-white/10 focus:text-gray-100 cursor-default"
@@ -95,14 +98,14 @@ export function UndoRedoControls() {
                 }
               }}
             >
-              <span className="truncate flex-1">{entry.description}</span>
+              <span className="truncate flex-1 min-w-0">{entry.description}</span>
               <span className="text-[9px] text-gray-500 ml-2 shrink-0">
                 {new Date(entry.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
             </ContextMenuItem>
           ))}
-          {useProjectStore.getState().redoStack.length > 20 && (
-            <ContextMenuLabel className="text-[10px] text-gray-500 text-center">... 还有 {useProjectStore.getState().redoStack.length - 20} 条</ContextMenuLabel>
+          {redoStack.length > 20 && (
+            <ContextMenuLabel className="text-[10px] text-gray-500 text-center">... 还有 {redoStack.length - 20} 条</ContextMenuLabel>
           )}
         </ContextMenuContent>
       </ContextMenu>

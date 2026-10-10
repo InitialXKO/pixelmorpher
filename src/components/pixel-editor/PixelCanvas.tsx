@@ -4,7 +4,8 @@ import React, { useCallback, useEffect } from 'react';
 import { useProjectStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
-import { renderFrame, renderPartEditMode } from '@/lib/engine';
+import { renderFrame, renderPartEditMode, renderPuppetNodes } from '@/lib/engine';
+import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
 import { useCanvasState } from './canvas/use-canvas-state';
 import { useCanvasInteraction } from './canvas/use-canvas-interaction';
@@ -82,7 +83,32 @@ export default function PixelCanvas() {
       offCtx.save();
       offCtx.clearRect(0, 0, s.canvasWidth, s.canvasHeight);
       const curVersion = s.onionDataVersionRef.current;
-      const kfHash = s.keyframes.map(kf => `${kf.id}:${kf.frame}:${kf.modifiers.length}`).join('|');
+      const puppetOnionOn = usePuppetSessionStore.getState().puppetOnionSkin;
+      const kfHash = s.keyframes.map(kf => `${kf.id}:${kf.frame}:${kf.modifiers.length}`).join('|')
+        + `|puppet:${s.puppetClipsVersion}:ponion:${puppetOnionOn ? 1 : 0}`;
+
+      // 木偶洋葱皮：把指定帧的木偶角色渲染进洋葱缓存画布
+      const renderPuppetOnionFrame = (cacheCtx: CanvasRenderingContext2D, frame: number) => {
+        if (!puppetOnionOn) return;
+        const pst = useProjectStore.getState();
+        const clips = pst.animationClips;
+        const skeletons = pst.puppetSkeletons ?? [];
+        const characters = pst.puppetCharacters ?? [];
+        if (skeletons.length === 0 || characters.length === 0) return;
+        for (const character of characters) {
+          const skel = skeletons.find(sk => sk.id === character.puppetSkeletonId);
+          const clip = clips.find(c => c.isPuppetClip && c.puppetCharacterId === character.id);
+          if (!skel || !clip) continue;
+          try {
+            renderPuppetNodes(
+              cacheCtx, pst.parts, skel, character,
+              clip.puppetNodeKeyframes ?? [], frame,
+              s.canvasWidth, s.canvasHeight, s.frameRate, onionQuality,
+              s.globalModifiers, pst.keyframes
+            );
+          } catch { /* 单个角色渲染失败不影响其它 */ }
+        }
+      };
 
       for (let offset = 1; offset <= s.onionSkinFrames; offset++) {
         const prevFrame = currentFrame - offset;
@@ -98,6 +124,7 @@ export default function PixelCanvas() {
             const cacheCanvas = acquireCanvas(s.canvasWidth, s.canvasHeight);
             const cacheCtx = cacheCanvas.getContext('2d')!;
             renderFrame(cacheCtx, s.canvasWidth, s.canvasHeight, s.nonPuppetParts, s.keyframes, prevFrame, 'rgba(0,0,0,0)', s.effectTracks, undefined, undefined, false, 0.5, undefined, undefined, undefined, s.frameRate, onionQuality, undefined, s.globalModifiers);
+            renderPuppetOnionFrame(cacheCtx, prevFrame);
             s.onionCacheRef.current.set(prevFrame, { canvas: cacheCanvas, version: curVersion, keyframeHash: kfHash });
           }
           offCtx.drawImage(s.onionCacheRef.current.get(prevFrame)!.canvas, 0, 0);
@@ -116,6 +143,7 @@ export default function PixelCanvas() {
             const cacheCanvas = acquireCanvas(s.canvasWidth, s.canvasHeight);
             const cacheCtx = cacheCanvas.getContext('2d')!;
             renderFrame(cacheCtx, s.canvasWidth, s.canvasHeight, s.nonPuppetParts, s.keyframes, nextFrame, 'rgba(0,0,0,0)', s.effectTracks, undefined, undefined, false, 0.5, undefined, undefined, undefined, s.frameRate, onionQuality, undefined, s.globalModifiers);
+            renderPuppetOnionFrame(cacheCtx, nextFrame);
             s.onionCacheRef.current.set(nextFrame, { canvas: cacheCanvas, version: curVersion, keyframeHash: kfHash });
           }
           offCtx.drawImage(s.onionCacheRef.current.get(nextFrame)!.canvas, 0, 0);

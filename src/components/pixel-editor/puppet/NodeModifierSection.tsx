@@ -208,7 +208,7 @@ function NodeModifierSection({
                   <Eye className={`size-2 ${mod.enabled ? 'text-cyan-400' : 'text-gray-600'}`} />
                 </button>
                 <span className="text-gray-500 flex-shrink-0">{def?.icon || '○'}</span>
-                <span className="truncate flex-1">{def?.label || mod.type}</span>
+                <span className="truncate flex-1 min-w-0">{def?.label || mod.type}</span>
                 <button
                   className="size-3 flex items-center justify-center text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                   onClick={() => handleRemoveEditMod(mod.id)}
@@ -236,7 +236,7 @@ function NodeModifierSection({
                   <Eye className={`size-2 ${mod.enabled ? 'text-purple-400' : 'text-gray-600'}`} />
                 </button>
                 <span className="text-purple-500 flex-shrink-0">~</span>
-                <span className="truncate flex-1">{def?.label || mod.type}</span>
+                <span className="truncate flex-1 min-w-0">{def?.label || mod.type}</span>
                 <span className="text-[7px] text-gray-600">
                   F{mod.startFrame ?? 0}{mod.endFrame >= 0 ? `→${mod.endFrame}` : ''}
                 </span>
@@ -265,7 +265,7 @@ function NodeModifierSection({
                 <Eye className={`size-2 ${mod.enabled !== false ? 'text-amber-400' : 'text-gray-600'}`} />
               </button>
               <span className="text-amber-500 flex-shrink-0">★</span>
-              <span className="truncate flex-1">{mod.type}</span>
+              <span className="truncate flex-1 min-w-0">{mod.type}</span>
               <button
                 className="size-3 flex items-center justify-center text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                 onClick={() => handleRemoveGlobalMod(mod.id)}

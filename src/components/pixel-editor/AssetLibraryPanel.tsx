@@ -368,7 +368,7 @@ function PartCard({
           <div className="size-5 bg-zinc-900 rounded border border-zinc-800 overflow-hidden flex-shrink-0 flex items-center justify-center">
             <span className="text-[8px] text-zinc-600">{part.name.charAt(0)}</span>
           </div>
-          <span className="text-[10px] text-zinc-300 truncate flex-1">{part.name}</span>
+          <span className="text-[10px] text-zinc-300 truncate flex-1 min-w-0">{part.name}</span>
           <span className="text-[9px] text-zinc-600">{w}×{h}</span>
           {/* Quick visibility/lock toggles */}
           <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -488,7 +488,7 @@ function SkeletonCard({ skeleton, onSelect, onDelete, onRename, isSelected }: Sk
           onClick={onSelect}
         >
           <Bone className="size-2.5 text-zinc-500 flex-shrink-0" />
-          <span className="text-[10px] text-zinc-300 truncate flex-1">{skeleton.name}</span>
+          <span className="text-[10px] text-zinc-300 truncate flex-1 min-w-0">{skeleton.name}</span>
           <span className="text-[9px] text-zinc-600">{skeleton.bones.length}骨骼</span>
         </div>
       </ContextMenuTrigger>

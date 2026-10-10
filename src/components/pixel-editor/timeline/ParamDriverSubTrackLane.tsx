@@ -58,6 +58,7 @@ export function ParamDriverSubTrackLane({
           modifierId={modifierId}
           totalFrames={totalFrames}
           width={width}
+          frameWidth={frameWidth}
           onEdit={() => onEditParamDriver(keyframeId, modifierId, driver.id)}
           onUpdate={(updates) => updateParamDriver(keyframeId, modifierId, driver.id, updates)}
           onRemove={() => removeParamDriver(keyframeId, modifierId, driver.id)}
@@ -101,6 +102,7 @@ export function AnimModifierParamDriverSubTrackLane({
           modifierId={modifier.id}
           totalFrames={totalFrames}
           width={width}
+          frameWidth={frameWidth}
           onEdit={() => onEditAnimParamDriver(partId, modifier.id, driver.id)}
           onUpdate={(updates) => updateAnimParamDriver(partId, modifier.id, driver.id, updates)}
           onRemove={() => removeAnimParamDriver(partId, modifier.id, driver.id)}
@@ -115,7 +117,7 @@ export function AnimModifierParamDriverSubTrackLane({
 
 // ---- Single row for one ParamDriver ----
 function ParamDriverLaneRow({
-  driver, keyframeId, modifierId, totalFrames, width,
+  driver, keyframeId, modifierId, totalFrames, width, frameWidth,
   onEdit, onUpdate, onRemove, onToggle, onBake, onUnbake,
 }: {
   driver: ParamDriver;
@@ -123,6 +125,7 @@ function ParamDriverLaneRow({
   modifierId: string;
   totalFrames: number;
   width: number;
+  frameWidth?: number;
   onEdit: () => void;
   onUpdate: (updates: Partial<ParamDriver>) => void;
   onRemove: () => void;
@@ -130,6 +133,7 @@ function ParamDriverLaneRow({
   onBake: () => void;
   onUnbake: () => void;
 }) {
+  const FRAME_WIDTH = frameWidth ?? STATIC_FRAME_WIDTH;
   const DRIVER_LANE_HEIGHT = 22;
   const startFrame = driver.startFrame;
   const endFrame = driver.endFrame >= 0 ? driver.endFrame : totalFrames - 1;

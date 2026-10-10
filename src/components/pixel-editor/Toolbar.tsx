@@ -105,8 +105,10 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
   const [nameInput, setNameInput] = useState(name);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
-  // Blend mode state for motion blur / effect brushes
-  const [blendMode, setBlendMode] = useState<'normal' | 'lighter' | 'overlay' | 'screen'>('normal');
+  // Blend mode for motion blur / effect brushes — lives in the editor store so the
+  // canvas commit path can read it (previously local state that never reached strokes)
+  const blendMode = useEditorStore((s) => s.strokeBlendMode);
+  const setBlendMode = useEditorStore((s) => s.setStrokeBlendMode);
 
   // Brush preset dropdown state
   const [showBrushPresets, setShowBrushPresets] = useState(false);

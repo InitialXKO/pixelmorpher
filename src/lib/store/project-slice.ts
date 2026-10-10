@@ -10,6 +10,7 @@ import type { ProjectStore } from './types';
 import type { Project, HistoryEntry, ProjectFile, BrushPreset, AnimationClip, ClipPartData, Character, Costume, Track } from '../types';
 import { MODIFIER_DEFINITIONS } from '../types';
 import { _isDragActive, _dragPostStackLen, _pendingTrajectoryPartIds, setDragActive, setDragPostStackLen, resetDragState } from './shared';
+import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '../engine';
 
 const defaultProject: Project = {
   id: crypto.randomUUID(),
@@ -184,6 +185,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       brushPresets: s.brushPresets,
       maxUndoLevels: s.maxUndoLevels,
       globalModifiers: s.globalModifiers,
+      animationVariables: s.animationVariables,
       // Concrete Puppet (first-class project data)
       puppetSkeletons: s.puppetSkeletons,
       puppetCharacters: s.puppetCharacters,
@@ -300,6 +302,9 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       undoStack: undoStack.slice(0, -1),
       redoStack: [...redoStack, currentSnapshot],
     }));
+    // H8/H9: undo 恢复了历史快照，缓存必须失效
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();
   },
 
   redo: () => {
@@ -322,6 +327,9 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       undoStack: [...undoStack, currentSnapshot],
       redoStack: redoStack.slice(0, -1),
     }));
+    // H8/H9: redo 恢复了历史快照，缓存必须失效
+    invalidateInterpolationCache();
+    invalidateParamDriverEvalCache();
   },
 
   canUndo: () => get().undoStack.length > 0 && !_isDragActive,
@@ -348,6 +356,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         onionSkinEnabled: state.onionSkinEnabled,
         onionSkinFrames: state.onionSkinFrames,
         globalModifiers: state.globalModifiers,
+        animationVariables: state.animationVariables,
         // Legacy fields for backward compatibility
         tracks: state.tracks,
         keyframes: state.keyframes,
@@ -455,6 +464,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       proceduralAnimations: file.proceduralAnimations || [],
       weightMaps: file.weightMaps || [],
       globalModifiers: file.project.globalModifiers || [],
+      animationVariables: file.project.animationVariables || [],
       // Concrete Puppet (first-class project data)
       puppetSkeletons: file.project.puppetSkeletons || [],
       puppetCharacters: file.project.puppetCharacters || [],
@@ -643,6 +653,9 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       animationClips: [...s.animationClips, clip],
       activeAnimationClipId: clip.id,
     }));
+    // H3: 与 remove/update/setActive 保持一致，同步 legacy 字段，否则 UI 读到的
+    // 仍是上一个 clip 的数据
+    get().syncLegacyFromActiveClip();
     return clip;
   },
 

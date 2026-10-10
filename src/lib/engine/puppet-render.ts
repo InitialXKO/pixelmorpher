@@ -177,11 +177,15 @@ export function renderPixelPerfectRotation(
   }
 
   // ---- Cache lookup ----
+  // H13: 缓存里存的是独立 canvas（非池化），命中时再拷一份池化 canvas 返回，
+  // 这样调用方沿用既有的 release 语义永远安全，不会污染缓存。
   const cacheKey = getRotationCacheKey(spriteCanvas, angle, stretchY, pivotX, pivotY);
   const cached = getCachedRotation(cacheKey);
   if (cached) {
+    const copy = acquireCanvas(cached.canvas.width, cached.canvas.height);
+    copy.getContext('2d')!.drawImage(cached.canvas, 0, 0);
     return {
-      canvas: cached.canvas,
+      canvas: copy,
       resultPivotX: cached.resultPivotX,
       resultPivotY: cached.resultPivotY,
     };
@@ -207,11 +211,14 @@ export function renderPixelPerfectRotation(
 
   // If no rotation (stretch only), pivot position is preserved
   if (angle === 0) {
-    const result = downsample4x(upCanvas, sw, sh);
+    // H12: 下采样目标必须按拉伸缩放，否则拉伸被静默擦除
+    const stretchedH = Math.max(1, Math.round(sh * stretchY));
+    const result = downsample4x(upCanvas, sw, stretchedH);
     releaseCanvas(upCanvas);
+    const resultPivotY = pivotY * stretchY;
     // Store in cache
-    setCachedRotation(cacheKey, { canvas: result, resultPivotX: pivotX, resultPivotY: pivotY });
-    return { canvas: result, resultPivotX: pivotX, resultPivotY: pivotY };
+    setCachedRotation(cacheKey, { canvas: cloneCanvasForCache(result), resultPivotX: pivotX, resultPivotY });
+    return { canvas: result, resultPivotX: pivotX, resultPivotY };
   }
 
   // Step 2: Calculate bounding box after rotation on the upscaled canvas
@@ -278,7 +285,7 @@ export function renderPixelPerfectRotation(
   releaseCanvas(rotCanvas);
 
   // Store in cache
-  setCachedRotation(cacheKey, { canvas: result, resultPivotX, resultPivotY });
+  setCachedRotation(cacheKey, { canvas: cloneCanvasForCache(result), resultPivotX, resultPivotY });
   return { canvas: result, resultPivotX, resultPivotY };
 }
 
@@ -304,6 +311,18 @@ function downsample4x(
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(srcCanvas, 0, 0, srcCanvas.width, srcCanvas.height, 0, 0, targetW, targetH);
   return result;
+}
+
+/**
+ * H13: 把池化 canvas 拷成独立 canvas 再存入旋转缓存。
+ * 缓存持有独立副本，调用方 release 自己的池化 canvas 时不会污染缓存。
+ */
+function cloneCanvasForCache(src: HTMLCanvasElement): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = src.width;
+  c.height = src.height;
+  c.getContext('2d')!.drawImage(src, 0, 0);
+  return c;
 }
 
 // ============================================================

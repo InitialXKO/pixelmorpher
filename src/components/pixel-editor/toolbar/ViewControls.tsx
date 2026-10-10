@@ -211,8 +211,8 @@ export function WeightPaintToggle() {
 
 // ---- Onion Skin Toggle ----
 export function OnionSkinToggle() {
-  const showOnionSkin = useEditorStore((s) => s.showOnionSkin);
-  const toggleEditorOnionSkin = useEditorStore((s) => s.toggleOnionSkin);
+  // H22: 洋葱皮开关以 project-store 的 onionSkinEnabled 为唯一真相源
+  //（之前 editor-store 还有一份 showOnionSkin 被迫双写同步，undo 后还会失步）
   const onionSkinEnabled = useProjectStore((s) => s.onionSkinEnabled);
   const onionSkinFrames = useProjectStore((s) => s.onionSkinFrames);
   const toggleProjectOnionSkin = useProjectStore((s) => s.toggleOnionSkin);
@@ -225,8 +225,7 @@ export function OnionSkinToggle() {
 
   const handleOnionSkinToggle = useCallback(() => {
     toggleProjectOnionSkin();
-    toggleEditorOnionSkin();
-  }, [toggleProjectOnionSkin, toggleEditorOnionSkin]);
+  }, [toggleProjectOnionSkin]);
 
   return (
     <Popover>
@@ -234,7 +233,7 @@ export function OnionSkinToggle() {
         <TooltipTrigger asChild>
           <PopoverTrigger asChild>
             <Toggle
-              pressed={showOnionSkin || onionSkinEnabled}
+              pressed={onionSkinEnabled}
               onPressedChange={handleOnionSkinToggle}
               aria-label="Toggle Onion Skin"
               className="h-7 w-7 p-0 data-[state=on]:bg-purple-600/30 data-[state=on]:text-purple-300 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded"

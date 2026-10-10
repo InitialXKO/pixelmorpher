@@ -157,7 +157,7 @@ export default function PuppetAssetPanel() {
                             <ChevronRight className="size-2.5 flex-shrink-0" />
                           )}
                           <Shirt className="size-2.5 text-cyan-500/70 flex-shrink-0" />
-                          <span className="text-[10px] truncate flex-1">
+                          <span className="text-[10px] truncate flex-1 min-w-0">
                             {char.name}
                           </span>
                           <span className="text-[8px] text-gray-600">
@@ -237,7 +237,7 @@ export default function PuppetAssetPanel() {
                     className="flex items-center gap-1.5 px-1.5 py-0.5 text-[9px] text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded cursor-pointer transition-colors"
                   >
                     <div className="size-2 rounded-sm border border-gray-700 bg-gray-800 flex-shrink-0" />
-                    <span className="truncate flex-1">{part.name}</span>
+                    <span className="truncate flex-1 min-w-0">{part.name}</span>
                     <span className="text-gray-700">
                       {part.width}x{part.height}
                     </span>
@@ -286,7 +286,7 @@ export default function PuppetAssetPanel() {
                         onClick={() => setActiveAnimationClip(clip.id)}
                       >
                         <Film className="size-2.5 text-amber-500/70 flex-shrink-0" />
-                        <span className="text-[10px] truncate flex-1">
+                        <span className="text-[10px] truncate flex-1 min-w-0">
                           {clip.name}
                         </span>
                         <span className="text-[8px] text-gray-600">

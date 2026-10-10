@@ -42,21 +42,25 @@ export function computeModifierWeight(mod: ModifierInstance | PartAnimationModif
   }
 
   let weight = 1;
+  let inShortFade = false;
 
   // Fade-in: from effectiveStart to effectiveStart + fadeInFrames
   if (fadeInFrames > 0 && currentFrame < effectiveStart + fadeInFrames) {
     const fadeProgress = (currentFrame - effectiveStart) / fadeInFrames;
     weight = Math.min(weight, fadeProgress);
+    // M15: 只有实际处于短淡入时才取整——长淡入中段 weight=0.6 不应被 round 成 1
+    if (fadeInFrames <= 1) inShortFade = true;
   }
 
   // Fade-out: from effectiveEnd - fadeOutFrames to effectiveEnd
   if (fadeOutFrames > 0 && effectiveEnd !== Infinity && currentFrame > effectiveEnd - fadeOutFrames) {
     const fadeProgress = (effectiveEnd - currentFrame) / fadeOutFrames;
     weight = Math.min(weight, Math.max(0, fadeProgress));
+    if (fadeOutFrames <= 1) inShortFade = true;
   }
 
   // Clamp and round for very short fades (avoid sub-pixel flicker)
-  if (weight >= 0.5 && weight < 1 && (fadeInFrames <= 1 || fadeOutFrames <= 1)) {
+  if (weight >= 0.5 && weight < 1 && inShortFade) {
     weight = Math.round(weight);
   }
 

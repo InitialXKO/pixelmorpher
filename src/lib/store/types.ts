@@ -84,7 +84,6 @@ import type {
 } from '../types';
 import type { PuppetSlice } from './puppet-slice';
 import type { DccPipelineSlice } from './dcc-pipeline-slice';
-import type { UnifiedSlice } from './unified-slice';
 import type {
   TimelineZoom, SnapConfig, DEFAULT_SNAP_CONFIG,
   TrackTimelineDisplay, createDefaultTrackTimelineDisplay,
@@ -93,7 +92,7 @@ import type {
   SelectionFrameStep,
 } from '../v15-types';
 
-export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, PuppetSlice, DccPipelineSlice, UnifiedSlice {
+export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, PuppetSlice, DccPipelineSlice {
   // Project actions
   setProjectName: (name: string) => void;
   setCanvasSize: (w: number, h: number) => void;
@@ -218,7 +217,7 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, Pup
   // V2.0: Skeleton / Bone actions
   addSkeleton: (name: string) => Skeleton;
   removeSkeleton: (id: string) => void;
-  addBone: (skeletonId: string, name: string, parentId: string | null, headX: number, headY: number, tailX: number, tailY: number) => Bone;
+  addBone: (skeletonId: string, name: string, parentId: string | null, headX: number, headY: number, tailX: number, tailY: number, color?: string) => Bone;
   removeBone: (skeletonId: string, boneId: string) => void;
   updateBone: (skeletonId: string, boneId: string, updates: Partial<Bone>) => void;
   bindPartToBone: (skeletonId: string, boneId: string, partId: string, weight: number) => void;
