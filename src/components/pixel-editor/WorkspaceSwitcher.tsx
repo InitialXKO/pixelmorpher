@@ -8,11 +8,9 @@ import { useEditorStore } from '@/lib/store';
 import type { WorkspaceMode } from '@/lib/workspace-store';
 
 // ============================================================
-// WorkspaceSwitcher - Toggle between project_home, animation,
-// and map_tile modes
+// WorkspaceSwitcher - Toggle between project_home and puppet modes
 // When switching modes, properly clean up mode-specific state:
-//   - Switching to map_tile: exit part_edit mode
-//   - Switching to animation: clear tile editing target
+//   - Switching to puppet: exit part_edit mode, enable skeleton overlay
 //   - Switching to project_home: save current project
 // ============================================================
 
