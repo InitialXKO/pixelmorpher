@@ -31,7 +31,8 @@ import {
   generateRenderPlan,
   executeRenderPlan,
 } from './unified-render';
-import { renderFrame, renderPuppetNodes } from './engine';
+import { renderFrame } from './engine';
+import { interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 import { clearRenderCaches } from './engine/render-cache';
@@ -111,27 +112,15 @@ export function renderUnified(
   );
 
   // ---- Step 2: Render puppet parts ----
+  // 统一走 unified pipeline：renderPuppetViaUnifiedPipeline 内部已调
+  // interpolateNodeKeyframes，蓝图/修改器/关键帧都在烘焙阶段求值。
   if (puppetSkeletons && puppetCharacters && puppetSkeletons.length > 0) {
-    // 有程序化修改器的骨架走老管线（unified pipeline 不调 interpolateNodeKeyframes，修改器不生效）
-    const hasPuppetModifiers = puppetSkeletons.some(sk =>
-      sk.nodes.some(n => (n.modifiers ?? []).length > 0)
+    renderPuppetViaUnifiedPipeline(
+      ctx, canvasWidth, canvasHeight,
+      puppetSkeletons, puppetCharacters, parts,
+      animationClips, currentFrame, frameRate,
+      globalModifiers, animationVariables, canvasModifierTracks,
     );
-    if (useUnifiedPipeline && !hasPuppetModifiers) {
-      // NEW: Unified pipeline path
-      renderPuppetViaUnifiedPipeline(
-        ctx, canvasWidth, canvasHeight,
-        puppetSkeletons, puppetCharacters, parts,
-        animationClips, currentFrame, frameRate,
-        globalModifiers, animationVariables, canvasModifierTracks,
-      );
-    } else {
-      // OLD: Direct renderPuppetNodes() path (fallback) — 支持节点修改器
-      renderPuppetViaOldPipeline(
-        ctx, parts, puppetSkeletons, puppetCharacters,
-        animationClips, currentFrame, canvasWidth, canvasHeight, frameRate,
-        keyframes,
-      );
-    }
   }
 
   // ---- Step 3: Canvas modifiers — 全帧后处理，只应用一次（H10）
@@ -203,12 +192,38 @@ function renderPuppetViaUnifiedPipeline(
     );
     const nodeKeyframes = puppetClip?.puppetNodeKeyframes ?? [];
 
+    // 蓝图/修改器求值：unified pipeline 的 LiveAdapter 不调 interpolateNodeKeyframes，
+    // 这里先求出完整插值（含关键帧+蓝图+修改器），烘焙进 skeleton 副本，
+    // 再喂给 adapter（传空关键帧，避免 adapter 重复插值）。
+    const interpValues = interpolateNodeKeyframes(skeleton, nodeKeyframes, currentFrame);
+    const bakedSkeleton: PuppetSkeleton = {
+      ...skeleton,
+      nodes: skeleton.nodes.map(n => {
+        const v = interpValues.get(n.id);
+        if (!v) return n;
+        return {
+          ...n,
+          angle: v.angle,
+          offsetX: v.offsetX,
+          offsetY: v.offsetY,
+          stretch: v.stretch,
+          zIndex: v.zIndex,
+          // 已烘焙，清空防重复计算
+          blueprint: undefined,
+          modifiers: [],
+        };
+      }),
+    };
+
     // Convert old data to unified Character via LiveAdapter
+    // 注意：bakedSkeleton 每帧的角度都不同，但 skeleton.id 相同，
+    // LiveAdapter 按 id 缓存 Character，必须先 invalidate，否则拿到的是旧缓存。
+    liveAdapter.invalidate();
     const unifiedCharacter = liveAdapter.getCharacter(
-      skeleton,
+      bakedSkeleton,
       [character],
       parts,
-      nodeKeyframes,
+      [], // 关键帧已烘焙，传空
       character.costumeSets ?? [],
     );
 
@@ -242,42 +257,6 @@ function renderPuppetViaUnifiedPipeline(
 }
 
 // ---- Old Pipeline Path (Fallback) ----
-
-function renderPuppetViaOldPipeline(
-  ctx: CanvasRenderingContext2D,
-  parts: Part[],
-  puppetSkeletons: PuppetSkeleton[],
-  puppetCharacters: PuppetCharacter[],
-  animationClips: AnimationClip[],
-  currentFrame: number,
-  canvasWidth: number,
-  canvasHeight: number,
-  frameRate: number,
-  keyframes?: Keyframe[],
-): void {
-  for (const character of puppetCharacters) {
-    const skeleton = puppetSkeletons.find(s => s.id === character.puppetSkeletonId);
-    if (!skeleton) continue;
-
-    const puppetClip = animationClips.find(
-      c => true && c.puppetCharacterId === character.id
-    );
-
-    if (!puppetClip) {
-      renderPuppetNodes(
-        ctx, parts, skeleton, character,
-        [], currentFrame, canvasWidth, canvasHeight, frameRate,
-        'high', undefined, keyframes,
-      );
-    } else {
-      renderPuppetNodes(
-        ctx, parts, skeleton, character,
-        puppetClip.puppetNodeKeyframes ?? [], currentFrame, canvasWidth, canvasHeight, frameRate,
-        'high', undefined, keyframes,
-      );
-    }
-  }
-}
 
 // ---- Shared Utility ----
 
