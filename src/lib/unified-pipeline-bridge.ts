@@ -31,7 +31,8 @@ import {
   generateRenderPlan,
   executeRenderPlan,
 } from './unified-render';
-import { renderFrame, renderPuppetNodes } from './engine';
+import { renderFrame } from './engine';
+import { interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 import { clearRenderCaches } from './engine/render-cache';
@@ -111,14 +112,14 @@ export function renderUnified(
   );
 
   // ---- Step 2: Render puppet parts ----
+  // 统一走 unified pipeline：renderPuppetViaUnifiedPipeline 内部已调
+  // interpolateNodeKeyframes，蓝图/修改器/关键帧都在烘焙阶段求值。
   if (puppetSkeletons && puppetCharacters && puppetSkeletons.length > 0) {
-    // 木偶统一走 renderPuppetNodes（老管线）：它调 interpolateNodeKeyframes，
-    // 支持蓝图和节点修改器。原先的 unified pipeline（liveAdapter + render plan）
-    // 不调 interpolateNodeKeyframes，蓝图/修改器都不生效，属未完成半成品，已移除分流。
-    renderPuppetViaOldPipeline(
-      ctx, parts, puppetSkeletons, puppetCharacters,
-      animationClips, currentFrame, canvasWidth, canvasHeight, frameRate,
-      keyframes,
+    renderPuppetViaUnifiedPipeline(
+      ctx, canvasWidth, canvasHeight,
+      puppetSkeletons, puppetCharacters, parts,
+      animationClips, currentFrame, frameRate,
+      globalModifiers, animationVariables, canvasModifierTracks,
     );
   }
 
@@ -161,43 +162,98 @@ function applyGlobalTransformWrapper(
   return has;
 }
 
-// ---- Old Pipeline Path ----
-
-function renderPuppetViaOldPipeline(
+function renderPuppetViaUnifiedPipeline(
   ctx: CanvasRenderingContext2D,
-  parts: Part[],
-  puppetSkeletons: PuppetSkeleton[],
-  puppetCharacters: PuppetCharacter[],
-  animationClips: AnimationClip[],
-  currentFrame: number,
   canvasWidth: number,
   canvasHeight: number,
+  puppetSkeletons: PuppetSkeleton[],
+  puppetCharacters: PuppetCharacter[],
+  parts: Part[],
+  animationClips: AnimationClip[],
+  currentFrame: number,
   frameRate: number,
-  keyframes?: Keyframe[],
+  globalModifiers?: GlobalModifier[],
+  animationVariables?: AnimationVariable[],
+  canvasModifierTracks?: CanvasModifierTrack[],
 ): void {
+  // Apply global modifier transform (camera/world transform)
+  // This matches the old pipeline's behavior in renderPuppetFrame().
+  const hasGlobalTransform = applyGlobalTransformWrapper(
+    ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate,
+  );
+
   for (const character of puppetCharacters) {
     const skeleton = puppetSkeletons.find(s => s.id === character.puppetSkeletonId);
     if (!skeleton) continue;
 
+    // Find puppet keyframes from animation clip
     const puppetClip = animationClips.find(
       c => true && c.puppetCharacterId === character.id
     );
+    const nodeKeyframes = puppetClip?.puppetNodeKeyframes ?? [];
 
-    if (!puppetClip) {
-      renderPuppetNodes(
-        ctx, parts, skeleton, character,
-        [], currentFrame, canvasWidth, canvasHeight, frameRate,
-        'high', undefined, keyframes,
-      );
-    } else {
-      renderPuppetNodes(
-        ctx, parts, skeleton, character,
-        puppetClip.puppetNodeKeyframes ?? [], currentFrame, canvasWidth, canvasHeight, frameRate,
-        'high', undefined, keyframes,
-      );
-    }
+    // 蓝图/修改器求值：unified pipeline 的 LiveAdapter 不调 interpolateNodeKeyframes，
+    // 这里先求出完整插值（含关键帧+蓝图+修改器），烘焙进 skeleton 副本，
+    // 再喂给 adapter（传空关键帧，避免 adapter 重复插值）。
+    const interpValues = interpolateNodeKeyframes(skeleton, nodeKeyframes, currentFrame);
+    const bakedSkeleton: PuppetSkeleton = {
+      ...skeleton,
+      nodes: skeleton.nodes.map(n => {
+        const v = interpValues.get(n.id);
+        if (!v) return n;
+        return {
+          ...n,
+          angle: v.angle,
+          offsetX: v.offsetX,
+          offsetY: v.offsetY,
+          stretch: v.stretch,
+          zIndex: v.zIndex,
+          // 已烘焙，清空防重复计算
+          blueprint: undefined,
+          modifiers: [],
+        };
+      }),
+    };
+
+    // Convert old data to unified Character via LiveAdapter
+    const unifiedCharacter = liveAdapter.getCharacter(
+      bakedSkeleton,
+      [character],
+      parts,
+      [], // 关键帧已烘焙，传空
+      character.costumeSets ?? [],
+    );
+
+    // Generate and execute render plan
+    // Convert old AnimationVariable format to unified format
+    const unifiedVars: UnifiedAnimationVariable[] | undefined = animationVariables?.map(v => ({
+      id: v.id,
+      name: v.name,
+      value: v.defaultValue ?? 0,
+      min: 0,
+      max: 100,
+      // H6: 透传 writer，供变量驱动求值
+      writerDriverId: v.writerDriverId,
+      defaultValue: v.defaultValue ?? 0,
+    }));
+    const plan = generateRenderPlan(
+      unifiedCharacter,
+      currentFrame,
+      canvasWidth,
+      canvasHeight,
+      'pixel-perfect',
+      frameRate,
+      unifiedVars,
+    );
+    executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
+  }
+
+  if (hasGlobalTransform) {
+    ctx.restore();
   }
 }
+
+// ---- Old Pipeline Path (Fallback) ----
 
 // ---- Shared Utility ----
 
