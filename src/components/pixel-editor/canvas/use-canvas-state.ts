@@ -209,19 +209,11 @@ export function useCanvasState() {
       const allModifiers = keyframe && !keyframe.isBaked ? keyframe.modifiers : [];
       const modifiers = allModifiers.filter(m => !m.collapsed);
       const kfBase = computeKeyframeBaseTransform(modifiers);
-      const animTransform = computePartAnimationTransform(part.animationModifiers || [], frame, store.frameRate);
+      const animTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1, weight: 0, blendMode: 'add' as const, convergeFactor: 1 }; // Part 无 animationModifiers
       const combined = combineTransformsComponentLevel(kfBase, animTransform, animTransform.blendMode, animTransform.convergeFactor);
 
-      let partGlobalOffsetX = 0;
-      let partGlobalOffsetY = 0;
-      if (part.globalModifiers) {
-        for (const mod of part.globalModifiers) {
-          if (mod.enabled && mod.type === 'translate') {
-            partGlobalOffsetX += Number(mod.params.offsetX) || 0;
-            partGlobalOffsetY += Number(mod.params.offsetY) || 0;
-          }
-        }
-      }
+      const partGlobalOffsetX = 0;
+      const partGlobalOffsetY = 0;
       return { offsetX: combined.translateX + partGlobalOffsetX, offsetY: combined.translateY + partGlobalOffsetY };
     }, [],
   );
@@ -294,8 +286,8 @@ export function useCanvasState() {
       }
       const offsetX = canvasWidth / 2;
       const offsetY = canvasHeight / 2;
-      const localX = px - (offsetX - part.pivotX + (part.offsetX || 0) + translateOffsetX);
-      const localY = py - (offsetY - part.pivotY + (part.offsetY || 0) + translateOffsetY);
+      const localX = px - (offsetX - part.pivotX + 0 + translateOffsetX);
+      const localY = py - (offsetY - part.pivotY + 0 + translateOffsetY);
       if (localX < 0 || localX >= part.width || localY < 0 || localY >= part.height) return null;
       return { lx: localX, ly: localY };
     }, [canvasWidth, canvasHeight, editMode, partEditPartId],
@@ -307,7 +299,7 @@ export function useCanvasState() {
       const offsetX = canvasWidth / 2;
       const offsetY = canvasHeight / 2;
       const frame = useProjectStore.getState().currentFrame;
-      const sorted = [...parts].filter((p) => (p.visible ?? true)).sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
+      const sorted = [...parts].sort((a, b) => 0);
       for (const part of sorted) {
         const { offsetX: txOff, offsetY: tyOff } = getInterpolatedTranslateOffset(part.id, frame);
         if (isPixelInPart(px, py, part, offsetX, offsetY, txOff, tyOff)) {
@@ -377,7 +369,7 @@ export function useCanvasState() {
       const offsetX = canvasWidth / 2;
       const offsetY = canvasHeight / 2;
       const frame = useProjectStore.getState().currentFrame;
-      const sorted = [...parts].filter((p) => (p.visible ?? true)).sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
+      const sorted = [...parts].sort((a, b) => 0);
       for (const part of sorted) {
         const { offsetX: txOff, offsetY: tyOff } = getInterpolatedTranslateOffset(part.id, frame);
         if (isPixelInPart(px, py, part, offsetX, offsetY, txOff, tyOff)) {
@@ -641,7 +633,7 @@ export function useCanvasState() {
     projectStore.performBatch('提取选区', () => {
       const { addPart, setPartPixels, updatePart } = projectStore;
       const offsetX = canvasWidth / 2; const offsetY = canvasHeight / 2;
-      const sorted = [...parts].filter((p) => (p.visible ?? true)).sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
+      const sorted = [...parts].sort((a, b) => 0);
       const selectedPixels: { x: number; y: number; color: string; partId: string; localX: number; localY: number }[] = [];
       for (const key of mask) {
         const [pxStr, pyStr] = key.split(',');

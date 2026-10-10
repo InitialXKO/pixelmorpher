@@ -26,6 +26,7 @@ import type {
   PuppetCharacter,
   PuppetNodeKeyframe,
   PuppetDirection,
+  PartAnimationModifier,
 } from '../types';
 import { computeDirectionDrawOrder } from '../store/puppet-slice';
 import { renderPixelPerfectRotation, shouldMirrorDirection } from './puppet-render';
@@ -84,8 +85,7 @@ function renderPartToCanvas(
   /** V4.1: Pre-resolved part edit modifiers for frame-accurate rendering */
   resolvedEditModifiers?: ModifierInstance[],
 ) {
-  if (!part.visible) return;
-
+  // Part 是纯精灵数据，visible 恒为 true
   const allModifiers = keyframe && !keyframe.isBaked ? keyframe.modifiers : [];
   // Skip collapsed modifiers — their effect is already baked into correctionMask
   const modifiers = allModifiers.filter(m => !m.collapsed);
@@ -99,13 +99,11 @@ function renderPartToCanvas(
   // 1. Compute keyframe base transform (non-animation modifiers only)
   const kfBase = computeKeyframeBaseTransform(modifiers);
 
-  // 2. Compute animation transform from part-level animation modifiers
-  const animTransform = computePartAnimationTransform(part.animationModifiers || [], currentFrame, frameRate);
+  // 2. Part 不再有 animationModifiers（由 PuppetNode.modifiers 驱动）
+  const animTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1, weight: 0, blendMode: 'add' as const, convergeFactor: 1 };
 
-  // 2.5 V13: Compute part-level global modifier transform (always-on modifiers for this part)
-  const partGlobalTransform = (part.globalModifiers && part.globalModifiers.length > 0)
-    ? computeGlobalModifierTransform(part.globalModifiers, currentFrame, frameRate)
-    : { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
+  // 2.5 Part 不再有 globalModifiers
+  const partGlobalTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
 
   // 3. Combine using component-level blending (V3.2: with blend mode support)
   let combined = combineTransformsComponentLevel(kfBase, animTransform, animTransform.blendMode, animTransform.convergeFactor);
@@ -125,7 +123,7 @@ function renderPartToCanvas(
   // Correct pivot-aware transform order:
   //   translate(offset) → translate(kf) → [rotate/scale happen around pivot] → translate(-pivot) → draw
   // This ensures rotation and scaling are centered on the pivot point.
-  ctx.translate(offsetX + (part.offsetX || 0), offsetY + (part.offsetY || 0));
+  ctx.translate(offsetX, offsetY);
   ctx.translate(combined.translateX, combined.translateY);
   ctx.rotate((combined.rotation * Math.PI) / 180);
   ctx.scale(combined.scaleX, combined.scaleY);
@@ -148,8 +146,8 @@ function renderPartToCanvas(
   // (wave_deform with coordinateSystem='world')
   // This is the approximate world position of the part's top-left corner,
   // ignoring rotation/scale (which don't affect wave phase in typical usage).
-  const worldOffX = offsetX + (part.offsetX || 0) + combined.translateX - effectivePivotX + physicsOffset.x;
-  const worldOffY = offsetY + (part.offsetY || 0) + combined.translateY - effectivePivotY + physicsOffset.y;
+  const worldOffX = offsetX + combined.translateX - effectivePivotX + physicsOffset.x;
+  const worldOffY = offsetY + combined.translateY - effectivePivotY + physicsOffset.y;
 
   // Create part canvas with pixel modifiers applied
   const partCanvasResult = perfTrack('createPartCanvas', () => createPartCanvas(part, keyframe, true, currentFrame, frameRate, worldOffX, worldOffY, resolvedEditModifiers));
@@ -188,7 +186,7 @@ function renderPartToCanvas(
   // === Auto motion blur (if enabled) ===
   // M5: Compute animation modifier velocity and pass to auto motion blur
   if (autoMotionBlur && allKeyframes.length > 0) {
-    const animVelocity = computeAnimModifierVelocity(part.animationModifiers || [], currentFrame, frameRate);
+    const animVelocity = computeAnimModifierVelocity([], currentFrame, frameRate);
     // Only pass animVelocity if it has significant magnitude (avoid noise from near-zero)
     const hasAnimVelocity = Math.abs(animVelocity.vx) > 0.01 || Math.abs(animVelocity.vy) > 0.01;
     applyAutoMotionBlur(
@@ -246,9 +244,11 @@ export function createPartCanvas(
   worldOffsetX: number = 0,
   worldOffsetY: number = 0,
   /** V4.1: Pre-resolved part edit modifiers (from resolvePartEditModifiers).
-   *  When provided, overrides part.editModifiers in the rendering pipeline.
+   *  When provided, overrides [] in the rendering pipeline.
    *  This allows frame-accurate part keyframe resolution without coupling engine to store. */
   resolvedEditModifiers?: ModifierInstance[],
+  /** 木偶节点的像素层动画修改器（Part 不再自带，由调用方传入） */
+  overrideAnimModifiers?: PartAnimationModifier[],
 ): PartCanvasResult {
   // P5-1: Try pixel canvas cache — skip expensive ImageData rebuild when pixels unchanged.
   // This is the single biggest optimization for playback: for parts without pixel-level
@@ -272,7 +272,7 @@ export function createPartCanvas(
       return { canvas: resultCanvas, offsetX: cached.offsetX, offsetY: cached.offsetY };
     }
     // Cache miss: build and cache
-    const result = createPartCanvasInner(part, keyframe, applyPixelMods, currentFrame, frameRate, worldOffsetX, worldOffsetY, resolvedEditModifiers);
+    const result = createPartCanvasInner(part, keyframe, applyPixelMods, currentFrame, frameRate, worldOffsetX, worldOffsetY, resolvedEditModifiers, overrideAnimModifiers);
     // Store a dedicated cache canvas (not from pool — pool canvases get recycled)
     const cacheCanvas = document.createElement('canvas');
     cacheCanvas.width = result.canvas.width;
@@ -297,7 +297,7 @@ export function createPartCanvas(
   }
 
   // Uncacheable path — always rebuild
-  return createPartCanvasInner(part, keyframe, applyPixelMods, currentFrame, frameRate, worldOffsetX, worldOffsetY, resolvedEditModifiers);
+  return createPartCanvasInner(part, keyframe, applyPixelMods, currentFrame, frameRate, worldOffsetX, worldOffsetY, resolvedEditModifiers, overrideAnimModifiers);
 }
 
 /** Inner implementation of createPartCanvas — the actual pixel→canvas conversion */
@@ -310,6 +310,7 @@ function createPartCanvasInner(
   worldOffsetX: number = 0,
   worldOffsetY: number = 0,
   resolvedEditModifiers?: ModifierInstance[],
+  overrideAnimModifiers?: PartAnimationModifier[],
 ): PartCanvasResult {
   const effectiveWidth = keyframe?.overrideWidth ?? part.width;
   const effectiveHeight = keyframe?.overrideHeight ?? part.height;
@@ -351,10 +352,12 @@ function createPartCanvasInner(
   }
 
   // Step 4: Apply pixel-level deformation animation modifiers
-  if (applyPixelMods && part.animationModifiers && part.animationModifiers.length > 0) {
+  // (Part 不再自带 animationModifiers；木偶节点通过 overrideModifiers 传入)
+  if (applyPixelMods) {
     const deformResult = applyPixelDeformAnimations(
       part, keyframe, pixels, currentFrame, frameRate,
       worldOffsetX, worldOffsetY, modOffsetX, modOffsetY,
+      overrideAnimModifiers ?? [],
     );
     pixels = deformResult.pixels;
     modOffsetX = deformResult.modOffsetX;
@@ -487,30 +490,14 @@ export function renderPartEditMode(
 
 /**
  * V4.1: Resolve the effective edit modifiers for a part at a given frame.
- * Uses step interpolation over part.partKeyframes: the most recent keyframe
+ * Uses step interpolation over []: the most recent keyframe
  * at or before the current frame determines the modifier stack.
- * Falls back to part.editModifiers when no part keyframe covers the frame.
+ * Falls back to [] when no part keyframe covers the frame.
  * This function is standalone (no store dependency) so it can be used in the engine.
  */
 function resolvePartEditModifiersForRender(part: Part, frame: number): ModifierInstance[] {
-  const pkfs = part.partKeyframes || [];
-  if (pkfs.length === 0) return part.editModifiers || [];
-  // Step interpolation: binary search for the last part keyframe at or before frame
-  // Sort only if needed (cache the sort on the first call per part edit session)
-  const sorted = pkfs.length > 1 && pkfs.some((k, i) => i > 0 && k.frame < pkfs[i - 1].frame)
-    ? [...pkfs].sort((a, b) => a.frame - b.frame)
-    : pkfs;
-  let lo = 0, hi = sorted.length - 1, prevIdx = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >>> 1;
-    if (sorted[mid].frame <= frame) {
-      prevIdx = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  return prevIdx >= 0 ? sorted[prevIdx].editModifiers : (part.editModifiers || []);
+  // Part 不再有 partKeyframes/editModifiers，返回空
+  return [];
 }
 
 // ============================================================
@@ -985,8 +972,8 @@ export function renderFrame(
   const partBoneBindings = buildPartBoneBindingsMap(skeletons);
 
   // Sort parts by z-index — P2-3: only sort if not already sorted
-  const sortedParts = parts.length > 1 && parts.some((p, i) => i > 0 && (p.zIndex ?? 0) < (parts[i - 1].zIndex ?? 0))
-    ? [...parts].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
+  const sortedParts = parts.length > 1 && false
+    ? [...parts]
     : parts;
 
   // B3: Use cached kfByPart — only rebuilds when keyframes reference changes.
@@ -999,8 +986,7 @@ export function renderFrame(
 
   perfTrack('renderFrame:partsLoop', () => {
   for (const part of sortedParts) {
-    if (!part.visible) continue;
-
+    // Part 是纯精灵数据，恒可见
     // Resolve the effective keyframe for this part
     let renderKf = resolvePartKeyframe(part, kfByPart, currentFrame, variableContext, keyframes, proceduralAnimations);
 
@@ -1233,12 +1219,9 @@ export function renderPuppetNodes(
 
     // Create part canvas with pixel-level modifiers for puppet sprites
     const spriteKf = partKfByPartId.get(part.id) ?? null;
-    // 木偶节点的像素层修改器：临时挂到 part 上让 createPartCanvas 应用
+    // 木偶节点的像素层修改器：通过 overrideAnimModifiers 传入
     const nodePixelMods = (node.modifiers ?? []).filter(m => m.enabled && isPixelDeformModifier(m.type));
-    const partForRender = nodePixelMods.length > 0
-      ? { ...part, animationModifiers: [...(part.animationModifiers ?? []), ...nodePixelMods] }
-      : part;
-    const partCanvasResult = createPartCanvas(partForRender, spriteKf, true, currentFrame, frameRate);
+    const partCanvasResult = createPartCanvas(part, spriteKf, true, currentFrame, frameRate, 0, 0, undefined, nodePixelMods);
     let partCanvas = partCanvasResult.canvas;
     let partPivotX = part.pivotX + partCanvasResult.offsetX;
     let partPivotY = part.pivotY + partCanvasResult.offsetY;

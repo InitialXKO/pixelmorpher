@@ -306,10 +306,8 @@ interface PartCardProps {
     id: string;
     name: string;
     pixels: (string | null)[][];
-    visible: boolean;
-    locked: boolean;
-    zIndex: number;
-    width: number;
+        locked: boolean;
+        width: number;
     height: number;
     pivotX: number;
     pivotY: number;
@@ -617,12 +615,8 @@ export default function AssetLibraryPanel() {
     store.updatePart(partId, { name: newName });
   }, []);
 
-  const handleTogglePartVisibility = useCallback((partId: string) => {
-    const store = useProjectStore.getState();
-    const part = store.parts.find((p) => p.id === partId);
-    if (part) {
-      store.updatePart(partId, { visible: !part.visible });
-    }
+  const handleTogglePartVisibility = useCallback((_partId: string) => {
+    // Part 恒可见，无需切换
   }, []);
 
   const handleTogglePartLock = useCallback((partId: string) => {
@@ -643,8 +637,7 @@ export default function AssetLibraryPanel() {
     store.updatePart(newPart.id, {
       pivotX: part.pivotX,
       pivotY: part.pivotY,
-      zIndex: (part.zIndex ?? 0) + 1,
-    });
+          });
   }, []);
 
   const handleSavePartToLibrary = useCallback(async (partId: string) => {

@@ -37,8 +37,11 @@ export function applyPixelDeformAnimations(
   worldOffsetY: number,
   modOffsetX: number,
   modOffsetY: number,
+  /** 覆盖的动画修改器（木偶节点用；Part 不再自带 animationModifiers） */
+  overrideModifiers?: PartAnimationModifier[],
 ): PixelDeformResult {
-  if (!part.animationModifiers || part.animationModifiers.length === 0) {
+  const animMods = overrideModifiers ?? [];
+  if (animMods.length === 0) {
     return { pixels, modOffsetX, modOffsetY };
   }
 
@@ -46,7 +49,7 @@ export function applyPixelDeformAnimations(
   const effectiveHeight = keyframe?.overrideHeight ?? part.height;
 
   // Compute required padding for animation modifiers that can produce overflow
-  const animPadding = computeTotalAnimPadding(part.animationModifiers, currentFrame, frameRate);
+  const animPadding = computeTotalAnimPadding(animMods, currentFrame, frameRate);
   if (animPadding.left > 0 || animPadding.top > 0 || animPadding.right > 0 || animPadding.bottom > 0) {
     pixels = padPixelGrid(pixels, animPadding.left, animPadding.top, animPadding.right, animPadding.bottom);
     modOffsetX += animPadding.left;
@@ -54,7 +57,7 @@ export function applyPixelDeformAnimations(
   }
 
   // Apply each enabled pixel-deform animation modifier
-  for (const rawAnimMod of part.animationModifiers) {
+  for (const rawAnimMod of animMods) {
     if (!rawAnimMod.enabled) continue;
     if (!isPixelDeformModifier(rawAnimMod.type)) continue;
 

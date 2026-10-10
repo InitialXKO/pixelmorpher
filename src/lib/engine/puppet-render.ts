@@ -20,6 +20,8 @@ import type {
   GlobalModifier,
   AnimationVariable,
   ParamDriver,
+  ModifierInstance,
+  PartAnimationModifier,
 } from '../types';
 import { PUPPET_DIRECTIONS, DIRECTION_MIRROR } from '../types';
 import { hexToRgbCached } from './color-utils';
@@ -1104,10 +1106,8 @@ function createPartCanvasFromPart(
   let modOffsetX = 0;
   let modOffsetY = 0;
 
-  const activePixelMods = part.editModifiers?.filter(m =>
-    m.enabled && ['color_replace', 'outline', 'dither', 'pixel_displace',
-      'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip', 'pixel_edit'].includes(m.type)
-  ) || [];
+  // Part 不再有 editModifiers（死代码，仅为编译通过）
+  const activePixelMods: ModifierInstance[] = [];
 
   if (activePixelMods.length > 0) {
     // Resolve ParamDrivers/ParamKeyframes before rendering
@@ -1123,8 +1123,8 @@ function createPartCanvasFromPart(
     pixels = part.pixels;
   }
 
-  // Apply translate shift from part edit modifiers
-  const translateMod = part.editModifiers?.find(m => m.type === 'translate' && m.enabled);
+  // Apply translate shift from part edit modifiers (Part 不再有 editModifiers)
+  const translateMod = (undefined as unknown as ModifierInstance | undefined);
   if (translateMod) {
     const dx = Math.round(Number(translateMod.params.offsetX) || 0);
     const dy = Math.round(Number(translateMod.params.offsetY) || 0);
@@ -1169,8 +1169,9 @@ function createPartCanvasFromPart(
 
   // ---- Step 3: Apply pixel-level deformation animation modifiers ----
   // (wave_deform, texture_scroll, contour_scroll, etc.)
-  if (part.animationModifiers && part.animationModifiers.length > 0) {
-    const animMods = part.animationModifiers.filter(m => m.enabled && isPixelDeformModifier(m.type));
+  // Part 不再有 animationModifiers（死代码，仅为编译通过）
+  if (false) {
+    const animMods: PartAnimationModifier[] = [];
     if (animMods.length > 0) {
       // Compute padding for overflow
       const animPadding = computeTotalAnimPadding(animMods, currentFrame, frameRate);

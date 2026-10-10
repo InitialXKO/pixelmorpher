@@ -3,7 +3,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import PixelCanvas from '@/components/pixel-editor/PixelCanvas';
 import PartPanel from '@/components/pixel-editor/PartPanel';
-import ModifierPanel from '@/components/pixel-editor/ModifierPanel';
 import TrajectoryPanel from '@/components/pixel-editor/TrajectoryPanel';
 import SkeletonPanel from '@/components/pixel-editor/SkeletonPanel';
 import PuppetPanel from '@/components/pixel-editor/PuppetPanel';
@@ -253,11 +252,6 @@ export default function Home() {
     // ============================================================
     // Z-order: far arm < far foot < body < near foot < near arm
     // ============================================================
-    store.updatePart(leftArm.id, { zIndex: 0 });
-    store.updatePart(leftFoot.id, { zIndex: 1 });
-    store.updatePart(body.id, { zIndex: 2 });
-    store.updatePart(rightFoot.id, { zIndex: 3 });
-    store.updatePart(rightArm.id, { zIndex: 4 });
 
     // ============================================================
     // Walking Animation — Using Animation Modifiers
@@ -296,26 +290,10 @@ export default function Home() {
     addKf(rightFoot.id,0,   2,   2);
 
     // Add pendulum to arms
-    const leftArmPendulum = store.addPartAnimationModifier(leftArm.id, 'pendulum');
-    store.updatePartAnimationModifier(leftArm.id, leftArmPendulum.id,
-      { amplitude: 25, period: 16, phase: 180, damping: 0 }
-    );
 
-    const rightArmPendulum = store.addPartAnimationModifier(rightArm.id, 'pendulum');
-    store.updatePartAnimationModifier(rightArm.id, rightArmPendulum.id,
-      { amplitude: 25, period: 16, phase: 0, damping: 0 }
-    );
 
     // Add gait to feet
-    const leftFootGait = store.addPartAnimationModifier(leftFoot.id, 'gait');
-    store.updatePartAnimationModifier(leftFoot.id, leftFootGait.id,
-      { strideLength: 16, liftHeight: 8, period: 16, phase: 180, stanceRatio: 0.6, direction: 'forward' }
-    );
 
-    const rightFootGait = store.addPartAnimationModifier(rightFoot.id, 'gait');
-    store.updatePartAnimationModifier(rightFoot.id, rightFootGait.id,
-      { strideLength: 16, liftHeight: 8, period: 16, phase: 0, stanceRatio: 0.6, direction: 'forward' }
-    );
 
     // ---- Frame 4: Passing ----
     addKf(body.id,     4,   0, -12);
@@ -392,13 +370,6 @@ export default function Home() {
       <Tabs defaultValue={currentLayout.rightPanelDefaultTab} className="flex flex-col h-full">
         <TabsList className="w-full justify-start rounded-none border-b border-zinc-800 bg-zinc-950 h-auto min-h-8 px-0.5 py-0.5 flex-wrap">
           <TabsTrigger
-            value="modifiers"
-            className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-          >
-            <Settings className="size-3 mr-0.5" />
-            修改器
-          </TabsTrigger>
-          <TabsTrigger
             value="canvas"
             className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
           >
@@ -462,9 +433,6 @@ export default function Home() {
             DCC管线
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="modifiers" className="flex-1 min-h-0 m-0">
-          <ModifierPanel />
-        </TabsContent>
         <TabsContent value="canvas" className="flex-1 min-h-0 m-0">
           <CanvasModifierPanel />
         </TabsContent>

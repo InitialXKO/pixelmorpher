@@ -57,13 +57,6 @@ export type ModifierSlice = {
 
 export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSlice> = (set, get) => ({
   addModifier: (keyframeId, type) => {
-    if (ANIMATION_MODIFIER_TYPES.includes(type)) {
-      const kf = get().keyframes.find((k) => k.id === keyframeId);
-      if (kf) {
-        get().addPartAnimationModifier(kf.partId, type as PartAnimationModifier['type']);
-      }
-      return;
-    }
     get().pushUndo('添加修改器');
     set((s) => ({
       keyframes: s.keyframes.map((k) => {
@@ -234,7 +227,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
     if (hasGeoMods || hasEffectMods) {
       const kfBase = computeKeyframeBaseTransform(modifiers);
       const animTransform = computePartAnimationTransform(
-        bakedPart.animationModifiers || [], keyframe.frame, s.frameRate,
+        [], keyframe.frame, s.frameRate,
       );
       const combined = combineTransformsComponentLevel(
         kfBase, animTransform, animTransform.blendMode, animTransform.convergeFactor,
@@ -489,7 +482,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
     if (geoMods.length > 0) {
       const kfBase = computeKeyframeBaseTransform(modifiers);
       const animTransform = computePartAnimationTransform(
-        bakedPart.animationModifiers || [], keyframe.frame, s.frameRate,
+        [], keyframe.frame, s.frameRate,
       );
       const combined = combineTransformsComponentLevel(
         kfBase, animTransform, animTransform.blendMode, animTransform.convergeFactor,
@@ -666,7 +659,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
       bakedPart.pivotY = s.canvasHeight / 2;
     }
 
-    const animMods = bakedPart.animationModifiers?.filter(m => m.enabled) || [];
+    const animMods = [];
     if (animMods.length > 0) {
       const animTransform = computePartAnimationTransform(
         animMods, keyframe.frame, s.frameRate,
@@ -704,7 +697,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
         bakedPart.pivotX = s.canvasWidth / 2;
         bakedPart.pivotY = s.canvasHeight / 2;
       }
-      bakedPart.animationModifiers = [];
+      // Part 不再有 animationModifiers
     }
 
     const isDimensionChanged = bakedPart.width !== part.width || bakedPart.height !== part.height
@@ -730,33 +723,17 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
   bakeToTimeline: (partId, startFrame, endFrame, step) => {
     get().pushUndo('烘焙到时间轴');
     const state = get();
-    const part = state.parts.find(p => p.id === partId);
 
-    const animMods = part?.animationModifiers?.filter(m => m.enabled) || [];
-
-    if (animMods.length === 0) {
-      const partKeyframes = state.keyframes
-        .filter((k) => k.partId === partId)
-        .sort((a, b) => a.frame - b.frame);
-      if (partKeyframes.length === 0) return;
-    }
+    const partKeyframes = state.keyframes
+      .filter((k) => k.partId === partId)
+      .sort((a, b) => a.frame - b.frame);
+    if (partKeyframes.length === 0) return;
 
     for (let frame = startFrame; frame <= endFrame; frame += step) {
       let totalTX = 0, totalTY = 0, totalRot = 0, totalSX = 1, totalSY = 1;
       let hasAnimMods = false;
 
-      if (animMods.length > 0) {
-        for (const animMod of animMods) {
-          const { computeAnimationModifierTransform } = require('../engine');
-          const transform = computeAnimationModifierTransform(animMod, frame, state.frameRate);
-          totalTX += transform.translateX;
-          totalTY += transform.translateY;
-          totalRot += transform.rotation;
-          totalSX *= transform.scaleX;
-          totalSY *= transform.scaleY;
-          hasAnimMods = true;
-        }
-      } else {
+      {
         const kf = state.keyframes.find((k) => k.partId === partId && k.frame === frame);
         if (!kf || kf.isBaked) continue;
         const kfAnimMods = kf.modifiers.filter((m) =>
@@ -827,13 +804,6 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
             get().updateModifier(targetKfId, stretchMod.id, { scaleX: totalSX, scaleY: totalSY });
           }
         }
-      }
-
-      if (part && animMods.length > 0) {
-        for (const am of [...animMods]) {
-          get().removePartAnimationModifier(partId, am.id);
-        }
-        break;
       }
 
       const currentKf = get().keyframes.find((k) => k.id === targetKfId);

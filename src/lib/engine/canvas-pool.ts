@@ -89,7 +89,7 @@ export function canCachePartPixels(
   if (keyframe?.correctionMask) return false;
 
   // Check part edit modifiers for pixel-modifying types
-  const editMods = resolvedEditModifiers ?? part.editModifiers;
+  const editMods = resolvedEditModifiers ?? ([] as import("../types").ModifierInstance[]);
   if (editMods && editMods.length > 0) {
     const pixelModTypes: ModifierType[] = [
       'color_replace', 'outline', 'dither', 'pixel_displace',
@@ -119,8 +119,8 @@ export function canCachePartPixels(
   }
 
   // Check animation deformation modifiers
-  if (part.animationModifiers && part.animationModifiers.length > 0) {
-    for (const am of part.animationModifiers) {
+  if (false) { // Part 无 animationModifiers
+    for (const am of ([] as import("../types").PartAnimationModifier[])) {
       if (am.enabled && isPixelDeformModifier(am.type)) return false;
     }
   }

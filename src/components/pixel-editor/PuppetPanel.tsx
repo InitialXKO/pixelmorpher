@@ -7,6 +7,7 @@ import {
   Users,
   CheckCircle2,
   Box,
+  Dog,
 } from 'lucide-react';
 import PuppetCreationWizard from './PuppetCreationWizard';
 import { Button } from '@/components/ui/button';
@@ -182,13 +183,27 @@ export default function PuppetPanel() {
                 点击右上角 + 创建新角色，或使用创建向导
               </p>
             </div>
-            <Button
-              size="sm"
-              className="text-[10px] bg-cyan-600 hover:bg-cyan-500"
-              onClick={() => setWizardOpen(true)}
-            >
-              <Plus className="size-3 mr-1" /> 创建角色
-            </Button>
+            <div className="flex gap-2 justify-center">
+              <Button
+                size="sm"
+                className="text-[10px] bg-cyan-600 hover:bg-cyan-500"
+                onClick={() => setWizardOpen(true)}
+              >
+                <Plus className="size-3 mr-1" /> 创建角色
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-[10px] border-[#2a2a4a] text-gray-300"
+                onClick={() => {
+                  import('@/lib/blueprint/examples/quadruped-run').then((m) => {
+                    m.createPuppyRunExampleCharacter();
+                  });
+                }}
+              >
+                <Dog className="size-3 mr-1" /> 小狗奔跑示例
+              </Button>
+            </div>
           </div>
         </div>
       )}

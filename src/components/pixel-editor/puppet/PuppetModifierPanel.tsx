@@ -7,7 +7,7 @@
 // ============================================================
 
 import React, { useMemo, useState } from 'react';
-import { Plus, Trash2, Eye, EyeOff, ChevronDown } from 'lucide-react';
+import { Plus, Trash2, Eye, EyeOff, ChevronDown, Network } from 'lucide-react';
 import { useProjectStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import {
@@ -18,6 +18,10 @@ import {
 } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import BlueprintEditor from './BlueprintEditor';
+import BlueprintTemplateLoader from './BlueprintTemplateLoader';
+import { modifiersToBlueprint } from '@/lib/blueprint/migrate';
+import type { BlueprintGraph } from '@/lib/blueprint/ir';
 
 // 收录的修改器：变换类 + 像素类（用户要求像素层程序化动画也要支持）
 const PUPPET_MODIFIER_TYPES: AnimationModifierType[] = [
@@ -44,6 +48,7 @@ export default function PuppetModifierPanel() {
 
   const [addingType, setAddingType] = useState<AnimationModifierType>('pendulum');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'modifiers' | 'blueprint' | 'templates'>('modifiers');
 
   const puppetCharacters = useProjectStore((s) => s.puppetCharacters) ?? [];
   const character = useMemo(
@@ -60,6 +65,20 @@ export default function PuppetModifierPanel() {
   );
   const modifiers = node?.modifiers ?? [];
 
+  // 蓝图：优先用节点自带的，没有则从 modifiers 即时转换
+  const blueprint: BlueprintGraph | null = useMemo(() => {
+    if (!node) return null;
+    if (node.blueprint) return node.blueprint;
+    if (modifiers.length > 0) return modifiersToBlueprint(modifiers);
+    return null;
+  }, [node, modifiers]);
+
+  const updateBlueprint = (g: BlueprintGraph) => {
+    if (!skeleton || !node) return;
+    // 保存蓝图到节点
+    useProjectStore.getState().updatePuppetNode(skeleton.id, node.id, { blueprint: g });
+  };
+
   if (phase !== 'perform' || !node || !skeleton) return null;
 
   const handleAdd = () => {
@@ -72,9 +91,57 @@ export default function PuppetModifierPanel() {
         <Label className="text-[10px] text-gray-400">
           程序化修改器 · {node.name}
         </Label>
-        <span className="text-[9px] text-gray-600">{modifiers.length} 个</span>
+        <div className="flex gap-1">
+          <button
+            onClick={() => setActiveTab('modifiers')}
+            className={`text-[9px] px-1.5 py-0.5 rounded ${
+              activeTab === 'modifiers'
+                ? 'bg-cyan-500/20 text-cyan-300'
+                : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            列表
+          </button>
+          <button
+            onClick={() => setActiveTab('blueprint')}
+            className={`text-[9px] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${
+              activeTab === 'blueprint'
+                ? 'bg-cyan-500/20 text-cyan-300'
+                : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            <Network className="size-2.5" />
+            蓝图
+          </button>
+          <button
+            onClick={() => setActiveTab('templates')}
+            className={`text-[9px] px-1.5 py-0.5 rounded ${
+              activeTab === 'templates'
+                ? 'bg-cyan-500/20 text-cyan-300'
+                : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            模板
+          </button>
+        </div>
       </div>
 
+      {activeTab === 'templates' ? (
+        <BlueprintTemplateLoader skeleton={skeleton} />
+      ) : activeTab === 'blueprint' ? (
+        blueprint ? (
+          <BlueprintEditor
+            graph={blueprint}
+            onChange={updateBlueprint}
+            title={`${node.name} 的蓝图`}
+          />
+        ) : (
+          <div className="text-[10px] text-gray-600 text-center py-4">
+            暂无蓝图。先在"列表"里加个修改器，会自动转成蓝图。
+          </div>
+        )
+      ) : (
+      <>
       {/* 添加 */}
       <div className="flex gap-1.5">
         <select
@@ -118,6 +185,8 @@ export default function PuppetModifierPanel() {
           />
         ))}
       </div>
+      </>
+      )}
     </div>
   );
 }

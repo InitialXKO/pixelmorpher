@@ -21,7 +21,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
-import NodeModifierSection from './NodeModifierSection';
 import PlugConnectionEditor from './PlugConnectionEditor';
 import { updateSkeletonNode } from './updateSkeletonNode';
 import { NODE_COLOR_PRESETS } from './types';
@@ -324,38 +323,6 @@ export default function NodePropertiesEditor({
           selectedNode={selectedNode}
           selectedSkeleton={selectedSkeleton}
         />
-
-        {/* Modifiers for Puppet Limb */}
-        {(() => {
-          const char = puppetCharacters.find((c) =>
-            c.puppetSkeletonId === selectedSkeletonId
-          );
-          const activeCostume = char?.activeCostumeSetId
-            ? char.costumeSets.find((cs) => cs.id === char.activeCostumeSetId) ?? null
-            : null;
-          const skeleton = puppetSkeletons.find((s) => s.id === selectedSkeletonId);
-          const dir = skeleton?.currentDirection ?? 'S';
-          const spritePart = selectedNode
-            ? resolvePuppetNodeSprite(selectedNode, dir, activeCostume, parts)
-            : null;
-
-          if (!spritePart) return null;
-
-          const editMods = spritePart.editModifiers ?? [];
-          const animMods = spritePart.animationModifiers ?? [];
-          const globalMods = spritePart.globalModifiers ?? [];
-          const allModsCount = editMods.length + animMods.length + globalMods.length;
-
-          return (
-            <NodeModifierSection
-              part={spritePart}
-              editMods={editMods}
-              animMods={animMods}
-              globalMods={globalMods}
-              allModsCount={allModsCount}
-            />
-          );
-        })()}
       </div>
     </div>
   );

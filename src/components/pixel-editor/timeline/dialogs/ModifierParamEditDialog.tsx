@@ -41,7 +41,7 @@ export default function ModifierParamEditDialog({
   keyframeId?: string;
   frame?: number;
 }) {
-  const { updatePartAnimationModifier, updateModifier } = useProjectStore();
+  const { updateModifier } = useProjectStore();
   const def = MODIFIER_DEFINITIONS.find((d) => d.type === modifierType);
 
   const [params, setParams] = useState<Record<string, ModifierParamValue>>(() => currentParams ? { ...currentParams } : {});
@@ -49,9 +49,8 @@ export default function ModifierParamEditDialog({
   if (!modifierType || !modifierId) return null;
 
   const handleSave = () => {
-    if (mode === 'animation' && partId) {
-      updatePartAnimationModifier(partId, modifierId, params);
-    } else if (mode === 'keyframe' && keyframeId) {
+    // Part animation modifiers 已删除
+    if (mode === 'keyframe' && keyframeId) {
       updateModifier(keyframeId, modifierId, params);
     }
     onOpenChange(false);

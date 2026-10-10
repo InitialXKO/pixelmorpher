@@ -60,15 +60,12 @@ export const moveToolHandler: ToolHandler = {
     const { offsetX: txOff, offsetY: tyOff } = s.getInterpolatedTranslateOffset(selPart.id, currentFrame);
     if (isPixelInPart(px, py, selPart, offsetX, offsetY, txOff, tyOff)) {
       const targetLevel = s.editorStore.getState().moveTargetLevel;
-      let partGlobalOffsetX = 0; let partGlobalOffsetY = 0;
-      const partGlobalTranslate = selPart.globalModifiers?.find(m => m.type === 'translate' && m.enabled);
-      if (partGlobalTranslate) { partGlobalOffsetX = Number(partGlobalTranslate.params.offsetX) || 0; partGlobalOffsetY = Number(partGlobalTranslate.params.offsetY) || 0; }
-      const kfOnlyOffsetX = txOff - partGlobalOffsetX; const kfOnlyOffsetY = tyOff - partGlobalOffsetY;
-      const startOffsetX = targetLevel === 'part_global' ? partGlobalOffsetX : kfOnlyOffsetX;
-      const startOffsetY = targetLevel === 'part_global' ? partGlobalOffsetY : kfOnlyOffsetY;
-      useProjectStore.getState().beginDrag(targetLevel === 'part_global' ? '移动部件(全局)' : '移动部件');
+      const kfOnlyOffsetX = txOff; const kfOnlyOffsetY = tyOff;
+      const startOffsetX = kfOnlyOffsetX;
+      const startOffsetY = kfOnlyOffsetY;
+      useProjectStore.getState().beginDrag('移动部件');
       s.isDrawingRef.current = true; s.markDirty();
-      s.moveStartRef.current = { x: px, y: py, offsetX: startOffsetX, offsetY: startOffsetY, targetLevel, partGlobalOffsetX, partGlobalOffsetY };
+      s.moveStartRef.current = { x: px, y: py, offsetX: startOffsetX, offsetY: startOffsetY, targetLevel, partGlobalOffsetX: 0, partGlobalOffsetY: 0 };
     }
   },
 
@@ -78,18 +75,12 @@ export const moveToolHandler: ToolHandler = {
     const selPart = s.selectedPart;
     const dx = px - s.moveStartRef.current.x; const dy = py - s.moveStartRef.current.y;
     const newOffsetX = s.moveStartRef.current.offsetX + dx; const newOffsetY = s.moveStartRef.current.offsetY + dy;
-    if (s.moveStartRef.current.targetLevel === 'part_global') {
-      const store = useProjectStore.getState();
-      const existingMod = selPart.globalModifiers?.find(m => m.type === 'translate' && m.enabled);
-      if (existingMod) store.updatePartGlobalModifierParams(selPart.id, existingMod.id, { offsetX: newOffsetX, offsetY: newOffsetY });
-      else { const newMod = store.addPartGlobalModifier(selPart.id, 'translate'); const updatedPart = store.parts.find(p => p.id === selPart.id); const addedMod = updatedPart?.globalModifiers?.find(m => m.id === newMod.id); if (addedMod) store.updatePartGlobalModifierParams(selPart.id, addedMod.id, { offsetX: newOffsetX, offsetY: newOffsetY }); }
-    } else {
-      let kf = s.keyframes.find(k => k.partId === selPart.id && k.frame === currentFrame);
-      if (!kf) kf = useProjectStore.getState().addKeyframe(selPart.id, currentFrame);
-      const translateMod = kf.modifiers.find(m => m.type === 'translate');
-      if (translateMod) useProjectStore.getState().updateModifier(kf.id, translateMod.id, { offsetX: newOffsetX, offsetY: newOffsetY });
-      else { useProjectStore.getState().addModifier(kf.id, 'translate'); const updatedKf = useProjectStore.getState().keyframes.find(k => k.id === kf!.id); if (updatedKf) { const newMod = updatedKf.modifiers.find(m => m.type === 'translate'); if (newMod) useProjectStore.getState().updateModifier(updatedKf.id, newMod.id, { offsetX: newOffsetX, offsetY: newOffsetY }); } }
-    }
+    // Part 是纯精灵数据，不再有 part_global 位移层级；统一走关键帧
+    let kf = s.keyframes.find(k => k.partId === selPart.id && k.frame === currentFrame);
+    if (!kf) kf = useProjectStore.getState().addKeyframe(selPart.id, currentFrame);
+    const translateMod = kf.modifiers.find(m => m.type === 'translate');
+    if (translateMod) useProjectStore.getState().updateModifier(kf.id, translateMod.id, { offsetX: newOffsetX, offsetY: newOffsetY });
+    else { useProjectStore.getState().addModifier(kf.id, 'translate'); const updatedKf = useProjectStore.getState().keyframes.find(k => k.id === kf!.id); if (updatedKf) { const newMod = updatedKf.modifiers.find(m => m.type === 'translate'); if (newMod) useProjectStore.getState().updateModifier(updatedKf.id, newMod.id, { offsetX: newOffsetX, offsetY: newOffsetY }); } }
   },
 };
 
@@ -488,7 +479,7 @@ export const cropHandler: ToolHandler = {
       const store = useProjectStore.getState(); const oldCenterX = s.canvasWidth / 2; const oldCenterY = s.canvasHeight / 2;
       const newCenterOffsetX = cropX + cropW / 2 - oldCenterX; const newCenterOffsetY = cropY + cropH / 2 - oldCenterY;
       store.performBatch('裁剪画布', () => {
-        for (const part of store.parts) store.updatePart(part.id, { pivotX: part.pivotX - newCenterOffsetX, pivotY: part.pivotY - newCenterOffsetY, offsetX: (part.offsetX || 0) - newCenterOffsetX, offsetY: (part.offsetY || 0) - newCenterOffsetY });
+        // Part 是纯精灵数据，无位置偏移；裁剪画布不再移动 Part
         for (const traj of store.trajectories) for (const pt of traj.points) store.updateTrajectoryPoint(traj.partId, pt.frame, { x: pt.x - newCenterOffsetX, y: pt.y - newCenterOffsetY });
         store.setCanvasSize(cropW, cropH);
       });
@@ -532,7 +523,7 @@ export const magicWandHandler: ToolHandler = {
     const shiftHeld = e.shiftKey; const ctrlHeld = e.ctrlKey || e.metaKey;
     if (!shiftHeld && !ctrlHeld) s.selectionMaskRef.current.clear();
     const offsetX = s.canvasWidth / 2; const offsetY = s.canvasHeight / 2;
-    const sortedParts = [...s.parts].filter((p) => p.visible).sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
+    const sortedParts = [...s.parts];
     let targetColor: string | null = null; let targetPart: import('@/lib/types').Part | null = null;
     for (const part of sortedParts) {
       const local = s.canvasToPartLocal(px, py, part);
@@ -545,8 +536,8 @@ export const magicWandHandler: ToolHandler = {
       const tR = parseInt(targetColor.slice(1, 3), 16); const tG = parseInt(targetColor.slice(3, 5), 16); const tB = parseInt(targetColor.slice(5, 7), 16);
       while (queue.length > 0) {
         const { lx, ly } = queue.shift()!;
-        const canvasX = (offsetX - targetPart.pivotX + (targetPart.offsetX || 0)) + lx;
-        const canvasY = (offsetY - targetPart.pivotY + (targetPart.offsetY || 0)) + ly;
+        const canvasX = (offsetX - targetPart.pivotX) + lx;
+        const canvasY = (offsetY - targetPart.pivotY) + ly;
         const maskKey = `${canvasX},${canvasY}`;
         if (ctrlHeld) s.selectionMaskRef.current.delete(maskKey); else s.selectionMaskRef.current.add(maskKey);
         for (const n of [{ lx: lx - 1, ly }, { lx: lx + 1, ly }, { lx, ly: ly - 1 }, { lx, ly: ly + 1 }]) {
@@ -599,8 +590,8 @@ export const inpaintHandler: ToolHandler = {
     else if (s.selectedPart) {
       const selPart = s.selectedPart;
       const offsetX = s.canvasWidth / 2; const offsetY = s.canvasHeight / 2;
-      const lx = px - (offsetX - selPart.pivotX + (selPart.offsetX || 0));
-      const ly = py - (offsetY - selPart.pivotY + (selPart.offsetY || 0));
+      const lx = px - (offsetX - selPart.pivotX + 0);
+      const ly = py - (offsetY - selPart.pivotY + 0);
       const radius = editor.inpaintRadius;
       const mask = new Set<string>();
       for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
@@ -678,7 +669,7 @@ export const brushEraserHandler: ToolHandler = {
       if (editorState.partEditStartFrame !== undefined && editorState.partEditStartFrame !== projectStore.currentFrame) {
         const partId = editorState.partEditPartId!;
         const prevFrame = editorState.partEditStartFrame;
-        const existingPkf = projectStore.getPartKeyframeAtFrame(partId, prevFrame);
+        const existingPkf = projectStore.getKeyframeAtFrame(partId, prevFrame);
         const mods = editorState.partEditModifiers.map(m => ({
           ...m,
           params: {
@@ -686,9 +677,8 @@ export const brushEraserHandler: ToolHandler = {
             ...(m.params.brushCommands ? { brushCommands: JSON.parse(JSON.stringify(m.params.brushCommands)) } : {}),
           },
         }));
-        if (existingPkf) projectStore.updatePartKeyframe(partId, existingPkf.id, { editModifiers: mods });
-        else { const pkfId = projectStore.addPartKeyframe(partId, prevFrame); projectStore.updatePartKeyframe(partId, pkfId, { editModifiers: mods }); }
-        const resolvedMods = projectStore.resolvePartEditModifiers(partId, projectStore.currentFrame);
+        // Part 不再有 editModifiers keyframe，直接使用当前编辑的 modifiers
+        const resolvedMods = editorState.partEditModifiers;
         s.editorStore.getState().setPartEditModifiers(resolvedMods.map(m => ({
           ...m,
           params: {

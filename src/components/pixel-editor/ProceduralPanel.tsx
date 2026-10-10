@@ -1035,9 +1035,8 @@ export default function ProceduralPanel() {
                   blendMode: 'add',
                   groupId: null,
                 };
-                store.updatePart(selectedPartId, {
-                  animationModifiers: [...(part.animationModifiers || []), newMod],
-                });
+                // Part 不再支持 animationModifiers，CSV 波形导入已禁用
+                console.warn('CSV waveform import disabled: Part no longer supports animationModifiers');
               } catch (err) {
                 console.error('Failed to parse CSV waveform:', err);
               }

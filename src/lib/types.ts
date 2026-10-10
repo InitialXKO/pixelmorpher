@@ -489,28 +489,10 @@ export interface Part {
   pixels: PixelGrid;
   pivotX: number;
   pivotY: number;
-  /** @deprecated 木偶统一模型：位置由 PuppetNode.offsetX/offsetY 驱动，Part 只存像素 */
-  offsetX?: number;
-  /** @deprecated */
-  offsetY?: number;
-  /** @deprecated 由 PuppetNode.zIndex 驱动 */
-  zIndex?: number;
-  /** @deprecated 由 PuppetNode.visible 驱动 */
-  visible?: boolean;
   locked: boolean;
   thumbnail?: string; // base64 data URL
-  /** @deprecated 层级由 PuppetNode plug/socket 驱动 */
-  parentId?: string | null;
-  /** @deprecated */
-  editModifiers?: ModifierInstance[];
-  /** @deprecated */
-  globalModifiers?: GlobalModifier[];
-  /** @deprecated 由 PuppetNode.modifiers 驱动 */
-  animationModifiers?: PartAnimationModifier[];
-  /** @deprecated */
-  modifierGroups?: ModifierGroup[];
-  /** @deprecated */
-  partKeyframes?: PartKeyframe[];
+  // 木偶统一模型：Part 是纯精灵数据，不再承载动画状态。
+  // 位置/层级/可见性/修改器全部由 PuppetNode 驱动。
 }
 
 // ---- Part Keyframe ----

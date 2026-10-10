@@ -90,7 +90,7 @@ export default function TrackLabelsColumn({
           if (idx < visibleRange.startIndex || idx > visibleRange.endIndex) return null;
           const partName = getPartName(track.partId);
           const part = parts.find((p) => p.id === track.partId);
-          const animModifiers = part?.animationModifiers ?? [];
+          const animModifiers = ([] as import('@/lib/types').PartAnimationModifier[]) ;
           const trackKeyframes = getKeyframesForPart(track.partId);
           const kfModifierTypes = [...new Set(
             trackKeyframes.flatMap((kf) => kf.modifiers.map((m) => m.type))

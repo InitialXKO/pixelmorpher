@@ -26,7 +26,7 @@ export default function useVirtualScroll(
 
     for (const track of tracks) {
       const part = parts.find((p) => p.id === track.partId);
-      const animModifiers = part?.animationModifiers ?? [];
+      const animModifiers = ([] as import('@/lib/types').PartAnimationModifier[]) ;
       const trackKeyframes = getKeyframesForPart(track.partId);
       const kfModifierTypes = [...new Set(
         trackKeyframes.flatMap((kf) => kf.modifiers.map((m) => m.type))

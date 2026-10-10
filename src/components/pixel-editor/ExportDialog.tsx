@@ -178,7 +178,7 @@ function generateLottieJSON(
   const layers: LottieLayer[] = [];
 
   // Sort parts by zIndex for layer ordering
-  const sortedParts = [...parts].sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
+  const sortedParts = [...parts]; // Part 无 zIndex
 
   for (let i = 0; i < sortedParts.length; i++) {
     const part = sortedParts[i];

@@ -61,11 +61,11 @@ function partToNode(part: Part, migrationMap?: MigrationMap): Node {
     };
   }
 
-  // Transform from Part offsets and pivot
+  // Transform from Part offsets and pivot (Part 是纯精灵数据，无偏移)
   node.transform = {
-    x: pxToSub(part.offsetX ?? 0),
-    y: pxToSub(part.offsetY ?? 0),
-    angle: 0,    // Part rotation was driven by modifiers, not stored directly
+    x: 0,
+    y: 0,
+    angle: 0,
     stretch: 1.0,
     variantIndex: 0,
   };
@@ -76,26 +76,19 @@ function partToNode(part: Part, migrationMap?: MigrationMap): Node {
     fixedOffset: { x: 0, y: 0 },
     inheritRotation: true,
   };
-  if (part.parentId) {
-    node.parentId = part.parentId;
-  }
 
-  // Copy edit modifiers and animation modifiers as node modifiers
-  node.modifiers = [
-    ...(part.editModifiers ?? []),
-    ...(part.animationModifiers ?? []),
-    ...(part.globalModifiers ?? []),
-  ].map(convertOldModifier);
+  // Part 不再有修改器
+  node.modifiers = [];
 
-  // Convert keyframes to tracks
-  node.tracks = convertPartKeyframesToTracks(part.partKeyframes ?? [], part.id);
+  // Part 不再有关键帧
+  node.tracks = {};
 
-  // Draw order
-  node.zIndex = part.zIndex ?? 0;
+  // Draw order (Part 无 zIndex，默认 0)
+  node.zIndex = 0;
   node.drawLayer = 'default';
 
-  // Visibility
-  node.visible = part.visible !== false;
+  // Visibility (Part 恒可见)
+  node.visible = true;
 
   return node;
 }
@@ -163,17 +156,9 @@ function puppetNodeToNode(
   node.drawLayer = 'default';
   node.visible = pNode.visible !== false;
 
-  // Copy modifiers from the sprite Part.
-  // PuppetNodes don't have their own modifier stacks — the modifiers live on the
-  // Part that provides the sprite. We need to bring them into the unified Node
-  // so the render pipeline can apply them (pixel edits, color replace, outline, etc.).
-  if (spritePart) {
-    node.modifiers = [
-      ...(spritePart.editModifiers ?? []),
-      ...(spritePart.animationModifiers ?? []),
-      ...(spritePart.globalModifiers ?? []),
-    ].map(convertOldModifier);
-  }
+  // Copy modifiers from the PuppetNode (not the Part — Part 是纯精灵数据)
+  // PuppetNode.modifiers 是 PartAnimationModifier[]，需要转成 ModifierInstance[]
+  node.modifiers = (pNode.modifiers ?? []).map(convertOldModifier);
 
   // Direction sprites → CostumePiece reference
   if (pNode.directionSprites && Object.keys(pNode.directionSprites).length > 0) {
@@ -700,17 +685,8 @@ export class LiveAdapter {
       nodes[part.id] = partToNode(part);
     }
 
-    // Build parent-child
-    for (const part of nonPuppetParts) {
-      if (part.parentId && nodes[part.parentId]) {
-        nodes[part.id].parentId = part.parentId;
-        if (!nodes[part.parentId].children.includes(part.id)) {
-          nodes[part.parentId].children.push(part.id);
-        }
-      }
-    }
-
-    const rootPart = nonPuppetParts.find(p => !p.parentId) ?? nonPuppetParts[0];
+    // Part 不再有 parentId 层级，全部作为根节点的子节点（扁平）
+    const rootPart = nonPuppetParts[0];
     if (rootPart) char.rootNodeId = rootPart.id;
     char.nodes = nodes;
 

@@ -16,7 +16,6 @@ import { createSkeletonSlice } from './skeleton-slice';
 import { createProjectSlice } from './project-slice';
 import { createCorrectionSlice } from './correction-slice';
 import { createGlobalModifierSlice } from './global-modifier-slice';
-import { createPartGlobalModifierSlice } from './part-global-modifier-slice';
 import { createPuppetSlice } from './puppet-slice';
 import { createDccPipelineSlice } from './dcc-pipeline-slice';
 import { createV15Slice } from './v15-slice';
@@ -39,7 +38,6 @@ export const useProjectStore = create<ProjectStore>()(
     ...createSkeletonSlice(...a),
     ...createCorrectionSlice(...a),
     ...createGlobalModifierSlice(...a),
-    ...createPartGlobalModifierSlice(...a),
     ...createPuppetSlice(...a),
     ...createDccPipelineSlice(...a),
     ...createV15Slice(...a),

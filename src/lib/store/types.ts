@@ -250,14 +250,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, Pup
   toggleGlobalModifier: (id: string) => void;
   reorderGlobalModifier: (id: string, direction: 'up' | 'down') => void;
 
-  // V13: Part-level global modifier actions
-  addPartGlobalModifier: (partId: string, type: GlobalModifierType) => GlobalModifier;
-  removePartGlobalModifier: (partId: string, modifierId: string) => void;
-  updatePartGlobalModifier: (partId: string, modifierId: string, updates: Partial<GlobalModifier>) => void;
-  updatePartGlobalModifierParams: (partId: string, modifierId: string, params: Record<string, ModifierParamValue>) => void;
-  togglePartGlobalModifier: (partId: string, modifierId: string) => void;
-  reorderPartGlobalModifier: (partId: string, modifierId: string, direction: 'up' | 'down') => void;
-
   // V2.0: Skeletons state
   skeletons: Skeleton[];
 
@@ -313,31 +305,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, Pup
   removeCanvasModifierKeyframe: (trackId: string, keyframeId: string) => void;
   updateCanvasModifierKeyframe: (trackId: string, keyframeId: string, params: Record<string, ModifierParamValue>) => void;
 
-  // V3.1: Part-level animation modifier actions
-  addPartAnimationModifier: (partId: string, type: PartAnimationModifier['type']) => PartAnimationModifier;
-  removePartAnimationModifier: (partId: string, modifierId: string) => void;
-  updatePartAnimationModifier: (partId: string, modifierId: string, params: Record<string, ModifierParamValue>) => void;
-  togglePartAnimationModifier: (partId: string, modifierId: string) => void;
-  togglePartAnimationModifierCollapsed: (partId: string, modifierId: string) => void;
-  updatePartAnimationModifierRange: (partId: string, modifierId: string, range: { startFrame?: number; endFrame?: number; fadeInFrames?: number; fadeOutFrames?: number }) => void;
-  reorderPartAnimationModifier: (partId: string, modifierId: string, newIndex: number) => void;
-
-  // V3.2: Modifier group actions
-  addModifierGroup: (partId: string, name: string) => ModifierGroup;
-  removeModifierGroup: (partId: string, groupId: string) => void;
-  updateModifierGroup: (partId: string, groupId: string, updates: Partial<ModifierGroup>) => void;
-  toggleModifierGroup: (partId: string, groupId: string) => void;
-  toggleModifierGroupCollapsed: (partId: string, groupId: string) => void;
-  reorderModifierGroup: (partId: string, groupId: string, newIndex: number) => void;
-  moveModifierToGroup: (partId: string, modifierId: string, groupId: string | null) => void;
-
-  // V3.3: Reset wheel angular velocity
-  resetWheelAngularVelocity: (partId: string, modifierId: string) => void;
-
-  // V3.7: Parent-child constraints
-  setPartParent: (partId: string, parentId: string | null) => void;
-  getPartWorldTransform: (partId: string, frame: number) => { translateX: number; translateY: number; rotation: number; scaleX: number; scaleY: number };
-
   // PixelEdit modifier actions
   createPixelEditModifier: (keyframeId: string) => string;
   addPixelEditCommand: (keyframeId: string, modifierId: string, command: BrushCommand) => void;
@@ -355,17 +322,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, Pup
   bakeStrokeDriverParamDriver: (keyframeId: string, modifierId: string, commandId: string, strokeDriverId: string, driverId: string) => void;
   /** Unbake: re-enable the driver and clear the baked paramKeyframes on a StrokeParamDriver */
   unbakeStrokeDriverParamDriver: (keyframeId: string, modifierId: string, commandId: string, strokeDriverId: string, driverId: string) => void;
-
-  // V4.1: Part keyframe actions (part-level timeline)
-  addPartKeyframe: (partId: string, frame: number) => string;
-  removePartKeyframe: (partId: string, partKeyframeId: string) => void;
-  updatePartKeyframe: (partId: string, partKeyframeId: string, updates: { frame?: number; editModifiers?: ModifierInstance[] }) => void;
-  getPartKeyframeAtFrame: (partId: string, frame: number) => PartKeyframe | undefined;
-  getSurroundingPartKeyframes: (partId: string, frame: number) => { prev: PartKeyframe | null; next: PartKeyframe | null };
-  /** Resolve the effective edit modifiers for a part at a given frame (step interpolation) */
-  resolvePartEditModifiers: (partId: string, frame: number) => ModifierInstance[];
-  /** Ensure a part keyframe exists at the current frame (create if needed), return its ID */
-  ensurePartKeyframe: (partId: string, frame: number) => string;
 
   // Motion analysis split (PRD 3.1.1)
   motionAnalysisSplit: (frames: PixelGrid[], options?: { blockSize?: number; searchRadius?: number; motionThreshold?: number; minRegionSize?: number }) => string[];

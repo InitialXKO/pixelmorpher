@@ -400,7 +400,7 @@ export function renderWeightPaintOverlay(rc: RenderContext, params: WeightPaintP
 
     for (const binding of bone.boundParts) {
       const part = parts.find(p => p.id === binding.partId);
-      if (!part || !part.visible) continue;
+      if (!part || !true) continue;
 
       const offsetX = canvasWidth / 2;
       const offsetY = canvasHeight / 2;
