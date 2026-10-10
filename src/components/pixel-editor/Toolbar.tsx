@@ -34,9 +34,6 @@ import BrushPresetThumbnail from './toolbar/BrushPresetThumbnail';
 import BrushStyleParamsEditor from './toolbar/BrushStyleParamsEditor';
 import ComposableStyleEditor from './toolbar/ComposableStyleEditor';
 import {
-  BoneToolControls,
-  IKToolControls,
-  WeightPaintToolControls,
   MagicWandControls,
   SmartSelectStatus,
   InpaintControls,
@@ -255,9 +252,6 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
   const showColorPicker = tool === 'brush';
   const isMotionBlurBrush = tool === 'motion_blur_brush';
   const isEffectBrush = tool === 'glow_brush' || tool === 'particle_brush' || tool === 'afterimage_brush';
-  const isBoneTool = tool === 'bone';
-  const isIKTool = tool === 'ik';
-  const isWeightPaintTool = tool === 'weight_paint';
   const isLassoTool = tool === 'lasso';
   const isMagicWandTool = tool === 'magic_wand';
   const isMoveTool = tool === 'move';
@@ -531,9 +525,6 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
       )}
 
       {/* ---- Tool-Specific Option Panels ---- */}
-      {isBoneTool && <BoneToolControls />}
-      {isIKTool && <IKToolControls />}
-      {isWeightPaintTool && <WeightPaintToolControls />}
       {isMagicWandTool && <MagicWandControls />}
       {tool === 'smart_select' && <SmartSelectStatus />}
       {tool === 'inpaint' && <InpaintControls />}
@@ -591,7 +582,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
       )}
 
       {/* ---- Conditional Separator ---- */}
-      {(showBrushOptions || isMotionBlurBrush || isEffectBrush || isBoneTool || isIKTool || isWeightPaintTool || isLassoTool || isMagicWandTool || isMoveTool) && <Separator orientation="vertical" className="h-5 bg-white/10" />}
+      {(showBrushOptions || isMotionBlurBrush || isEffectBrush || isLassoTool || isMagicWandTool || isMoveTool) && <Separator orientation="vertical" className="h-5 bg-white/10" />}
 
       {/* ---- View Controls ---- */}
       <ZoomControls />
