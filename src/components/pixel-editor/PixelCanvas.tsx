@@ -229,10 +229,11 @@ export default function PixelCanvas() {
       const animationClips = useProjectStore.getState().animationClips;
       // 角色显示互斥过滤
       const puppetSession = usePuppetSessionStore.getState();
-      const visibleCharacters = filterVisibleCharacters(s.puppetCharacters ?? [], puppetSession);
-      // 必须从 store 直接读最新 skeleton：useCallback 闭包里的 s.puppetSkeletons
-      // 在蓝图挂载后可能还是旧引用（蓝图已写进 store 但闭包没更新），导致播放时读不到 blueprint
-      const freshSkeletons = useProjectStore.getState().puppetSkeletons;
+      // 必须从 store 直接读最新的 characters 和 skeletons：闭包里的 s.puppetCharacters/s.puppetSkeletons
+      // 在蓝图挂载后可能还是旧引用，导致播放时读不到 blueprint
+      const freshStore = useProjectStore.getState();
+      const freshSkeletons = freshStore.puppetSkeletons;
+      const visibleCharacters = filterVisibleCharacters(freshStore.puppetCharacters ?? [], puppetSession);
       renderUnified(offCtx, s.canvasWidth, s.canvasHeight, s.parts, s.keyframes, currentFrame, s.backgroundColor,
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
