@@ -12,6 +12,7 @@
 // ============================================================
 
 import type { BlueprintGraph, BlueprintNode } from '../ir';
+import { generateDefaultCostumeSprite } from '@/lib/engine/default-costume-sprites';
 
 export interface QuadrupedRunSlots {
   frontLegs: string[];
@@ -253,17 +254,11 @@ export function createPuppyRunWestExample(): {
  * 在没有角色时调用，用户点一下就能看到小狗跑。
  * 精灵来自 src/lib/engine/default-costume-sprites.ts 的狗模板。
  */
-export function createPuppyRunExampleCharacter(): string | null {
-  // 动态 import 避免循环依赖
-  const storeModule = require('@/lib/store') as { useProjectStore: { getState: () => any } };
-  const sessionModule = require('@/lib/puppet-session-store') as { usePuppetSessionStore: { getState: () => any } };
-  const spriteModule = require('@/lib/engine/default-costume-sprites') as {
-    generateDefaultCostumeSprite: (nodeName: string, templateName: string) => {
-      pixels: (string | null)[][]; width: number; height: number;
-      pivotX: number; pivotY: number; partName: string;
-    };
-  };
-  const store = storeModule.useProjectStore.getState();
+export function createPuppyRunExampleCharacter(
+  store: any,
+  sessionStore: any,
+): string | null {
+  try {
 
   // 1. 建骨架
   const skeleton = store.addPuppetSkeleton('小狗（奔跑示例）');
@@ -342,7 +337,7 @@ export function createPuppyRunExampleCharacter(): string | null {
   // 3. 为每个节点生成精灵 → 建 Part → 建节点（spritePartId 直接写入）
   const nodeIds: Record<string, string> = {};
   for (const def of defs) {
-    const sprite = spriteModule.generateDefaultCostumeSprite(def.spriteKey, 'dog');
+    const sprite = generateDefaultCostumeSprite(def.spriteKey, 'dog');
     const part = store.addPart(sprite.partName, sprite.width, sprite.height, {
       pivotX: sprite.pivotX,
       pivotY: sprite.pivotY,
@@ -396,7 +391,11 @@ export function createPuppyRunExampleCharacter(): string | null {
   }
 
   // 7. 切到 perform
-  sessionModule.usePuppetSessionStore.getState().enterPerform(character.id);
+  sessionStore.enterPerform(character.id);
 
   return character.id;
+  } catch (e) {
+    console.error('[一键小狗] 创建失败:', e);
+    return null;
+  }
 }
