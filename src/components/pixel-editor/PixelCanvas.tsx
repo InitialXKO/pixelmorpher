@@ -336,25 +336,22 @@ export default function PixelCanvas() {
     showAllCharacters, performCharacterId, puppetPhase, storeCurrentFrame,
   ]);
 
+  // 用 ref 存最新 render，避免 effect 反复重建导致旧闭包执行
+  const renderRef = React.useRef(render);
+  renderRef.current = render;
+
   // Animation loop
   useEffect(() => {
     s.dirtyRef.current = true;
     const unregisterScheduler = registerRenderCallback(() => { s.dirtyRef.current = true; });
-    let lastLoggedFrame = -1;
     const loop = () => {
-      // 诊断：播放时每 12 帧打一次日志
       const isPlaying = useEditorStore.getState().playState === 'playing';
-      const sf = useProjectStore.getState().currentFrame;
-      if (isPlaying && sf !== lastLoggedFrame && sf % 12 === 0) {
-        lastLoggedFrame = sf;
-        console.log(`[诊断] 播放中 storeFrame=${sf} subscriptionFrame=${storeCurrentFrame} dirty=${s.dirtyRef.current}`);
-      }
-      if (s.dirtyRef.current || isPlaying) { s.dirtyRef.current = false; render(); }
+      if (s.dirtyRef.current || isPlaying) { s.dirtyRef.current = false; renderRef.current(); }
       s.rafRef.current = requestAnimationFrame(loop);
     };
     s.rafRef.current = requestAnimationFrame(loop);
     return () => { unregisterScheduler(); if (s.rafRef.current) cancelAnimationFrame(s.rafRef.current); };
-  }, [render]);
+  }, []); // 不依赖 render，用 ref 拿最新的
 
   const cursorStyle = s.editMode === 'correction' ? 'crosshair' : getCursorStyle(s.tool, s.spaceHeldRef.current, performArmed);
 
