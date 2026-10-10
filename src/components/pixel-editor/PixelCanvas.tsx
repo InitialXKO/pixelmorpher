@@ -64,6 +64,8 @@ export default function PixelCanvas() {
   const performCharacterId = usePuppetSessionStore((st) => st.performCharacterId);
   const puppetPhase = usePuppetSessionStore((st) => st.phase);
   const performArmed = usePuppetSessionStore((st) => st.performArmed);
+  // 订阅当前帧，播放时触发 render 回调更新（否则闭包里的 currentFrame 是旧的）
+  const storeCurrentFrame = useProjectStore((st) => st.currentFrame);
 
   // ---- Render loop ----
   const render = useCallback(() => {
@@ -72,7 +74,7 @@ export default function PixelCanvas() {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
 
-    const currentFrame = useProjectStore.getState().currentFrame;
+    const currentFrame = storeCurrentFrame;
     const zoom = s.zoomRef.current;
     const panX = s.panRef.current.x;
     const panY = s.panRef.current.y;
@@ -331,7 +333,7 @@ export default function PixelCanvas() {
     s.showWeightPaint, s.weightPaintBoneId, s.puppetSkeletons, s.puppetCharacters, s.puppetClipsVersion,
     s.canvasModifierTracks, s.partEditPartId, s.partEditModifiers,
     interaction.renderStrokePreview, s.getInterpolatedTranslateOffset,
-    showAllCharacters, performCharacterId, puppetPhase,
+    showAllCharacters, performCharacterId, puppetPhase, storeCurrentFrame,
   ]);
 
   // Animation loop
