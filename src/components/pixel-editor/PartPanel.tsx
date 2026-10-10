@@ -887,7 +887,7 @@ export default function PartPanel() {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
-  const sortedParts = [...parts].sort((a, b) => a.zIndex - b.zIndex);
+  const sortedParts = [...parts].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
   const selectedPart = parts.find((p) => p.id === selectedPartId) ?? null;
 
   // ---- Handlers ----
@@ -906,7 +906,7 @@ export default function PartPanel() {
 
   const handleDeletePart = useCallback(() => {
     if (!selectedPartId) return;
-    const currentSorted = [...parts].sort((a, b) => a.zIndex - b.zIndex);
+    const currentSorted = [...parts].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
     const currentIndex = currentSorted.findIndex((p) => p.id === selectedPartId);
     removePart(selectedPartId);
     // Select adjacent part

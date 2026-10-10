@@ -400,7 +400,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
     if (canvasMask.size === 0) return null;
 
-    const sorted = [...parts].filter((p) => p.visible).sort((a, b) => b.zIndex - a.zIndex);
+    const sorted = [...parts].filter((p) => (p.visible ?? true)).sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
     const selectedPixels: { x: number; y: number; color: string }[] = [];
 
     for (const key of canvasMask) {

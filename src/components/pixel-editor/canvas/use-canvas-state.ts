@@ -307,7 +307,7 @@ export function useCanvasState() {
       const offsetX = canvasWidth / 2;
       const offsetY = canvasHeight / 2;
       const frame = useProjectStore.getState().currentFrame;
-      const sorted = [...parts].filter((p) => p.visible).sort((a, b) => b.zIndex - a.zIndex);
+      const sorted = [...parts].filter((p) => (p.visible ?? true)).sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
       for (const part of sorted) {
         const { offsetX: txOff, offsetY: tyOff } = getInterpolatedTranslateOffset(part.id, frame);
         if (isPixelInPart(px, py, part, offsetX, offsetY, txOff, tyOff)) {
@@ -377,7 +377,7 @@ export function useCanvasState() {
       const offsetX = canvasWidth / 2;
       const offsetY = canvasHeight / 2;
       const frame = useProjectStore.getState().currentFrame;
-      const sorted = [...parts].filter((p) => p.visible).sort((a, b) => b.zIndex - a.zIndex);
+      const sorted = [...parts].filter((p) => (p.visible ?? true)).sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
       for (const part of sorted) {
         const { offsetX: txOff, offsetY: tyOff } = getInterpolatedTranslateOffset(part.id, frame);
         if (isPixelInPart(px, py, part, offsetX, offsetY, txOff, tyOff)) {
@@ -641,7 +641,7 @@ export function useCanvasState() {
     projectStore.performBatch('提取选区', () => {
       const { addPart, setPartPixels, updatePart } = projectStore;
       const offsetX = canvasWidth / 2; const offsetY = canvasHeight / 2;
-      const sorted = [...parts].filter((p) => p.visible).sort((a, b) => b.zIndex - a.zIndex);
+      const sorted = [...parts].filter((p) => (p.visible ?? true)).sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
       const selectedPixels: { x: number; y: number; color: string; partId: string; localX: number; localY: number }[] = [];
       for (const key of mask) {
         const [pxStr, pyStr] = key.split(',');

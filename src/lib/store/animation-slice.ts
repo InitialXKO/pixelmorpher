@@ -87,7 +87,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: [...(p.animationModifiers || []), mod],
+          animationModifiers: [...((p.animationModifiers ?? []) || []), mod],
         };
       }),
     }));
@@ -102,7 +102,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: (p.animationModifiers || []).filter((m) => m.id !== modifierId),
+          animationModifiers: ((p.animationModifiers ?? []) || []).filter((m) => m.id !== modifierId),
         };
       }),
     }));
@@ -119,7 +119,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: (p.animationModifiers || []).map((m) => {
+          animationModifiers: ((p.animationModifiers ?? []) || []).map((m) => {
             if (m.id !== modifierId) return m;
             return {
               ...m,
@@ -140,7 +140,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: (p.animationModifiers || []).map((m) => {
+          animationModifiers: ((p.animationModifiers ?? []) || []).map((m) => {
             if (m.id !== modifierId) return m;
             return { ...m, enabled: !m.enabled };
           }),
@@ -154,7 +154,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
       if (p.id !== partId) return p;
       return {
         ...p,
-        animationModifiers: (p.animationModifiers || []).map((m) => {
+        animationModifiers: ((p.animationModifiers ?? []) || []).map((m) => {
           if (m.id !== modifierId) return m;
           return { ...m, collapsed: !m.collapsed };
         }),
@@ -170,7 +170,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: (p.animationModifiers || []).map((m) => {
+          animationModifiers: ((p.animationModifiers ?? []) || []).map((m) => {
             if (m.id !== modifierId) return m;
             return {
               ...m,
@@ -190,7 +190,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
     set((s) => ({
     parts: s.parts.map((p) => {
       if (p.id !== partId) return p;
-      const mods = [...(p.animationModifiers || [])];
+      const mods = [...((p.animationModifiers ?? []) || [])];
       const oldIndex = mods.findIndex((m) => m.id === modifierId);
       if (oldIndex === -1) return p;
       const [removed] = mods.splice(oldIndex, 1);
@@ -233,7 +233,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         return {
           ...p,
           modifierGroups: (p.modifierGroups || []).filter(g => g.id !== groupId),
-          animationModifiers: (p.animationModifiers || []).map(m =>
+          animationModifiers: ((p.animationModifiers ?? []) || []).map(m =>
             m.groupId === groupId ? { ...m, groupId: null } : m
           ),
         };
@@ -270,7 +270,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
           modifierGroups: (p.modifierGroups || []).map(g =>
             g.id === groupId ? { ...g, enabled: newEnabled } : g
           ),
-          animationModifiers: (p.animationModifiers || []).map(m =>
+          animationModifiers: ((p.animationModifiers ?? []) || []).map(m =>
             m.groupId === groupId ? { ...m, enabled: newEnabled } : m
           ),
         };
@@ -315,7 +315,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: (p.animationModifiers || []).map(m =>
+          animationModifiers: ((p.animationModifiers ?? []) || []).map(m =>
             m.id === modifierId ? { ...m, groupId } : m
           ),
         };
@@ -331,7 +331,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: p.animationModifiers.map((m) => {
+          animationModifiers: (p.animationModifiers ?? []).map((m) => {
             if (m.id !== modifierId) return m;
             const existing = m.paramKeyframes ?? [];
             const existingIdx = existing.findIndex((pk) => pk.frame === frame);
@@ -360,7 +360,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: p.animationModifiers.map((m) => {
+          animationModifiers: (p.animationModifiers ?? []).map((m) => {
             if (m.id !== modifierId) return m;
             return {
               ...m,
@@ -380,7 +380,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: p.animationModifiers.map((m) => {
+          animationModifiers: (p.animationModifiers ?? []).map((m) => {
             if (m.id !== modifierId) return m;
             const baseVal = typeof m.params[paramName] === 'number' ? (m.params[paramName] as number) : 0;
             const { createDefaultParamDriver } = require('../types');
@@ -408,7 +408,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: p.animationModifiers.map((m) => {
+          animationModifiers: (p.animationModifiers ?? []).map((m) => {
             if (m.id !== modifierId) return m;
             return {
               ...m,
@@ -429,7 +429,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: p.animationModifiers.map((m) => {
+          animationModifiers: (p.animationModifiers ?? []).map((m) => {
             if (m.id !== modifierId) return m;
             return {
               ...m,
@@ -452,7 +452,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: p.animationModifiers.map((m) => {
+          animationModifiers: (p.animationModifiers ?? []).map((m) => {
             if (m.id !== modifierId) return m;
             return {
               ...m,
@@ -473,7 +473,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
     const s = get();
     const part = s.parts.find(p => p.id === partId);
     if (!part) return;
-    const mod = part.animationModifiers.find(m => m.id === modifierId);
+    const mod = (part.animationModifiers ?? []).find(m => m.id === modifierId);
     if (!mod) return;
     const driver = (mod.paramDrivers ?? []).find(d => d.id === driverId);
     if (!driver || driver.isBaked) return;
@@ -489,7 +489,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: p.animationModifiers.map((m) => {
+          animationModifiers: (p.animationModifiers ?? []).map((m) => {
             if (m.id !== modifierId) return m;
             return {
               ...m,
@@ -511,7 +511,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
     const s = get();
     const part = s.parts.find(p => p.id === partId);
     if (!part) return;
-    const mod = part.animationModifiers.find(m => m.id === modifierId);
+    const mod = (part.animationModifiers ?? []).find(m => m.id === modifierId);
     if (!mod) return;
     const driver = (mod.paramDrivers ?? []).find(d => d.id === driverId);
     if (!driver || !driver.isBaked) return;
@@ -521,7 +521,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: p.animationModifiers.map((m) => {
+          animationModifiers: (p.animationModifiers ?? []).map((m) => {
             if (m.id !== modifierId) return m;
             return {
               ...m,
@@ -545,7 +545,7 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
         if (p.id !== partId) return p;
         return {
           ...p,
-          animationModifiers: (p.animationModifiers || []).map((m) => {
+          animationModifiers: ((p.animationModifiers ?? []) || []).map((m) => {
             if (m.id !== modifierId) return m;
             return {
               ...m,

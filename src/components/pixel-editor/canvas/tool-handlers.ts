@@ -532,7 +532,7 @@ export const magicWandHandler: ToolHandler = {
     const shiftHeld = e.shiftKey; const ctrlHeld = e.ctrlKey || e.metaKey;
     if (!shiftHeld && !ctrlHeld) s.selectionMaskRef.current.clear();
     const offsetX = s.canvasWidth / 2; const offsetY = s.canvasHeight / 2;
-    const sortedParts = [...s.parts].filter((p) => p.visible).sort((a, b) => b.zIndex - a.zIndex);
+    const sortedParts = [...s.parts].filter((p) => p.visible).sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
     let targetColor: string | null = null; let targetPart: import('@/lib/types').Part | null = null;
     for (const part of sortedParts) {
       const local = s.canvasToPartLocal(px, py, part);

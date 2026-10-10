@@ -159,10 +159,10 @@ export const createPartSlice: StateCreator<ProjectStore, [], [], PartSlice> = (s
     // Update animation modifier groupIds to point to new group IDs
     const oldToNewGroupId = new Map<string, string>();
     (part.modifierGroups || []).forEach((oldG, i) => {
-      const newG = newPart.modifierGroups[i];
+      const newG = (newPart.modifierGroups ?? [])[i];
       if (oldG.id && newG) oldToNewGroupId.set(oldG.id, newG.id);
     });
-    newPart.animationModifiers = newPart.animationModifiers.map((am) => ({
+    newPart.animationModifiers = (newPart.animationModifiers ?? []).map((am) => ({
       ...am,
       groupId: am.groupId ? (oldToNewGroupId.get(am.groupId) ?? null) : null,
     }));

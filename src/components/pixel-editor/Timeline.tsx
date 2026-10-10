@@ -354,7 +354,7 @@ export default function Timeline() {
   const handleEditAnimModifierParams = useCallback(
     (partId: string, modifierId: string) => {
       const part = useProjectStore.getState().parts.find((p) => p.id === partId);
-      const mod = part?.animationModifiers.find((m) => m.id === modifierId);
+      const mod = part?.animationModifiers?.find((m) => m.id === modifierId);
       if (!mod) return;
       setModifierEditMode('animation');
       setModifierEditPartId(partId);

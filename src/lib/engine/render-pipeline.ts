@@ -985,8 +985,8 @@ export function renderFrame(
   const partBoneBindings = buildPartBoneBindingsMap(skeletons);
 
   // Sort parts by z-index — P2-3: only sort if not already sorted
-  const sortedParts = parts.length > 1 && parts.some((p, i) => i > 0 && p.zIndex < parts[i - 1].zIndex)
-    ? [...parts].sort((a, b) => a.zIndex - b.zIndex)
+  const sortedParts = parts.length > 1 && parts.some((p, i) => i > 0 && (p.zIndex ?? 0) < (parts[i - 1].zIndex ?? 0))
+    ? [...parts].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
     : parts;
 
   // B3: Use cached kfByPart — only rebuilds when keyframes reference changes.

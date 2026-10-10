@@ -48,7 +48,7 @@ export default function ParamDriverEditDialog({
     if (isAnim) {
       if (!partId) return null;
       const part = parts.find((p) => p.id === partId);
-      return part?.animationModifiers.find((m) => m.id === modifierId) ?? null;
+      return part?.animationModifiers?.find((m) => m.id === modifierId) ?? null;
     }
     if (!keyframeId) return null;
     const kf = keyframes.find((k) => k.id === keyframeId);

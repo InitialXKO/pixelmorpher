@@ -643,7 +643,7 @@ export default function AssetLibraryPanel() {
     store.updatePart(newPart.id, {
       pivotX: part.pivotX,
       pivotY: part.pivotY,
-      zIndex: part.zIndex + 1,
+      zIndex: (part.zIndex ?? 0) + 1,
     });
   }, []);
 
