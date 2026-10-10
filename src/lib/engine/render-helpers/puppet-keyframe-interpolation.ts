@@ -57,8 +57,6 @@ export function interpolateNodeKeyframes(
     const nodeKfs = kfByNodeId.get(node.id) || [];
     const values = interpolateSingleNode(node, nodeKfs, currentFrame, skeleton.currentDirection, skeleton.viewLatitude);
     // 程序化动画：优先用蓝图 IR，没有蓝图则用旧 modifiers 列表
-    const hasBp = !!node.blueprint;
-    const modLen = node.modifiers?.length ?? 0;
     const blueprint = node.blueprint ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers) : null);
     if (blueprint) {
       const t = evaluateBlueprint(blueprint, {
@@ -68,9 +66,6 @@ export function interpolateNodeKeyframes(
         nodeOutputs: pass === 1 ? nodeOutputs : undefined,
         nodeState: blueprintNodeState,
       });
-      if (currentFrame % 30 === 0 && pass === 0 && node.name?.includes('upper_leg')) {
-        console.log(`[蓝图求值] ${node.name} frame=${currentFrame} rotation=${t.rotation.toFixed(2)} hasBp=${hasBp} mods=${modLen}`);
-      }
       values.angle += t.rotation;
       values.offsetX += t.translateX;
       values.offsetY += t.translateY;

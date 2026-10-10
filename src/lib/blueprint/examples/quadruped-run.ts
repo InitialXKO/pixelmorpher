@@ -236,7 +236,6 @@ export function createPuppyRunExampleCharacter(
 
   // 3. 为每个节点生成精灵 → 建 Part → 建节点（spritePartId 直接写入）
   const nodeIds: Record<string, string> = {};
-  console.log('[一键小狗] 开始创建节点，共', defs.length, '个:', defs.map(d => d.name));
   for (const def of defs) {
     const sprite = generateDefaultCostumeSprite(def.name, 'dog');
     const part = store.addPart(sprite.partName, sprite.width, sprite.height, {
@@ -271,7 +270,6 @@ export function createPuppyRunExampleCharacter(
   const freshState = useProjectStoreHook.getState();
   const allNodes: any[] = freshState.puppetSkeletons
     .find((sk: any) => sk.id === skeleton.id)?.nodes ?? [];
-  console.log('[一键小狗] 修正plug，共', allNodes.length, '个节点');
   for (const def of defs) {
     if (!def.plug) continue;
     const parentNode = allNodes.find((n: any) =>
@@ -300,7 +298,6 @@ export function createPuppyRunExampleCharacter(
   for (const [nodeId, graph] of blueprints) {
     store.updatePuppetNode(skeleton.id, nodeId, { blueprint: graph });
   }
-  console.log('[一键小狗] 蓝图已挂载:', blueprints.size, '个节点');
 
   // 7. 切到 perform
   sessionStore.enterPerform(character.id);

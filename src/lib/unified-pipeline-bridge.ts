@@ -112,11 +112,12 @@ export function renderUnified(
 
   // ---- Step 2: Render puppet parts ----
   if (puppetSkeletons && puppetCharacters && puppetSkeletons.length > 0) {
-    // 有程序化修改器的骨架走老管线（unified pipeline 不调 interpolateNodeKeyframes，修改器不生效）
-    const hasPuppetModifiers = puppetSkeletons.some(sk =>
-      sk.nodes.some(n => (n.modifiers ?? []).length > 0)
+    // 有程序化修改器或蓝图的骨架走老管线（unified pipeline 不调 interpolateNodeKeyframes，
+    // 修改器和蓝图都不生效）。注意：不能只看 modifiers，蓝图也在老管线里求值。
+    const hasPuppetProcedural = puppetSkeletons.some(sk =>
+      sk.nodes.some(n => (n.modifiers ?? []).length > 0 || !!n.blueprint)
     );
-    if (useUnifiedPipeline && !hasPuppetModifiers) {
+    if (useUnifiedPipeline && !hasPuppetProcedural) {
       // NEW: Unified pipeline path
       renderPuppetViaUnifiedPipeline(
         ctx, canvasWidth, canvasHeight,
