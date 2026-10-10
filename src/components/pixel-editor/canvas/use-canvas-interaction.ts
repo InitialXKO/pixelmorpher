@@ -144,6 +144,23 @@ export function useCanvasInteraction(s: CanvasState) {
   );
 
   // ---- Keyboard handlers ----
+  // 原生 wheel 监听（passive: false），React onWheel 默认 passive 调 preventDefault 会警告
+  useEffect(() => {
+    const canvas = s.canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left; const mouseY = e.clientY - rect.top;
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const newZoom = Math.max(1, Math.min(32, Math.round(s.zoom * zoomFactor * 10) / 10));
+      const worldX = (mouseX - s.panX) / s.zoom; const worldY = (mouseY - s.panY) / s.zoom;
+      s.setZoom(newZoom); s.setPan(mouseX - worldX * newZoom, mouseY - worldY * newZoom);
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [s.canvasRef, s.zoom, s.panX, s.panY, s.setZoom, s.setPan]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // General keyboard shortcuts (not tool-specific)

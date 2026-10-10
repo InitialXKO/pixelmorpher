@@ -13,6 +13,8 @@
 
 import type { BlueprintGraph, BlueprintNode } from '../ir';
 import { generateDefaultCostumeSprite } from '@/lib/engine/default-costume-sprites';
+import { DOG_TEMPLATE } from '@/components/pixel-editor/PuppetCreationWizard';
+import type { TemplateNodeDef } from '@/components/pixel-editor/PuppetCreationWizard';
 
 export interface QuadrupedRunSlots {
   frontLegs: string[];
@@ -147,6 +149,40 @@ export function createQuadrupedRunBlueprint(
 // ---- 小狗专用预设（槽位映射示例） ----
 
 /**
+ * 侧向（朝西）小狗节点定义：复用 DOG_TEMPLATE 的 13 节点结构，
+ * 只把身体插口调成侧面布局（头接左上、尾巴接右上、四腿横向排布）。
+ * 其余属性（defaultAngle / crossSection / zIndex / plug 结构）全部沿用模板。
+ * 单一可信源：createPuppyRunWestExample 与 createPuppyRunExampleCharacter 共用。
+ */
+export function getSideViewDogNodes(): TemplateNodeDef[] {
+  const defs: TemplateNodeDef[] = DOG_TEMPLATE.nodes.map((n) => ({
+    ...n,
+    sockets: n.sockets.map((s) => ({ ...s })),
+    plug: n.plug ? { ...n.plug } : null,
+  }));
+  // 身体 20x12，pivot 在 (10,5)
+  const SIDE_VIEW_SOCKETS: Record<string, { localX: number; localY: number }> = {
+    head_attach: { localX: -8, localY: -3 }, // 头接身体左上
+    tail_attach: { localX: 7, localY: -1 },  // 尾巴接身体右上
+    front_leg_L: { localX: -5, localY: 3 },
+    front_leg_R: { localX: -3, localY: 3 },
+    back_leg_L: { localX: 3, localY: 3 },
+    back_leg_R: { localX: 5, localY: 3 },
+  };
+  const bodyDef = defs.find((d) => d.name === 'body');
+  if (bodyDef) {
+    for (const sock of bodyDef.sockets) {
+      const override = SIDE_VIEW_SOCKETS[sock.name];
+      if (override) {
+        sock.localX = override.localX;
+        sock.localY = override.localY;
+      }
+    }
+  }
+  return defs;
+}
+
+/**
  * 小狗向西奔跑：把通用模板映射到小狗的节点名。
  * 节点布局（侧面/W 向，13 节点）：
  * - 头接身体左上，尾巴接身体右上
@@ -158,89 +194,17 @@ export function createPuppyRunWestExample(): {
   blueprints: Map<string, BlueprintGraph>;
 } {
   // 节点定义（名称即 ID，实际使用时换成真实 node.id）
-  const nodes = [
-    {
-      name: 'body',
-      sockets: [
-        { name: 'head_attach', localX: -8, localY: -3 },
-        { name: 'tail_attach', localX: 7, localY: -1 },
-        { name: 'front_upper_leg_l', localX: -7.5, localY: 3 },
-        { name: 'front_upper_leg_r', localX: -4.5, localY: 3 },
-        { name: 'back_upper_leg_l', localX: -0.5, localY: 3 },
-        { name: 'back_upper_leg_r', localX: 3.5, localY: 3 },
-      ],
-      plug: null,
-    },
-    {
-      name: 'head',
-      sockets: [
-        { name: 'ear_l', localX: -2, localY: -9 },
-        { name: 'ear_r', localX: 3, localY: -9 },
-      ],
-      plug: { socketName: 'head_attach', localX: 0, localY: 0 },
-    },
-    {
-      name: 'ear_l',
-      sockets: [],
-      plug: { socketName: 'ear_l', localX: 0, localY: 0 },
-    },
-    {
-      name: 'ear_r',
-      sockets: [],
-      plug: { socketName: 'ear_r', localX: 0, localY: 0 },
-    },
-    {
-      name: 'tail',
-      sockets: [],
-      plug: { socketName: 'tail_attach', localX: 0, localY: 0 },
-    },
-    {
-      name: 'front_upper_leg_l',
-      sockets: [{ name: 'knee', localX: 0, localY: 8 }],
-      plug: { socketName: 'front_upper_leg_l', localX: 0, localY: 0 },
-    },
-    {
-      name: 'front_lower_leg_l',
-      sockets: [],
-      plug: { socketName: 'knee', localX: 0, localY: 0 },
-    },
-    {
-      name: 'front_upper_leg_r',
-      sockets: [{ name: 'knee', localX: 0, localY: 8 }],
-      plug: { socketName: 'front_upper_leg_r', localX: 0, localY: 0 },
-    },
-    {
-      name: 'front_lower_leg_r',
-      sockets: [],
-      plug: { socketName: 'knee', localX: 0, localY: 0 },
-    },
-    {
-      name: 'back_upper_leg_l',
-      sockets: [{ name: 'knee', localX: 0, localY: 8 }],
-      plug: { socketName: 'back_upper_leg_l', localX: 0, localY: 0 },
-    },
-    {
-      name: 'back_lower_leg_l',
-      sockets: [],
-      plug: { socketName: 'knee', localX: 0, localY: 0 },
-    },
-    {
-      name: 'back_upper_leg_r',
-      sockets: [{ name: 'knee', localX: 0, localY: 8 }],
-      plug: { socketName: 'back_upper_leg_r', localX: 0, localY: 0 },
-    },
-    {
-      name: 'back_lower_leg_r',
-      sockets: [],
-      plug: { socketName: 'knee', localX: 0, localY: 0 },
-    },
-  ];
+  const nodes = getSideViewDogNodes().map((d) => ({
+    name: d.name,
+    sockets: d.sockets,
+    plug: d.plug,
+  }));
 
   const blueprints = createQuadrupedRunBlueprint({
-    frontLegs: ['front_upper_leg_l', 'front_upper_leg_r'],
-    backLegs: ['back_upper_leg_l', 'back_upper_leg_r'],
-    frontLowerLegs: ['front_lower_leg_l', 'front_lower_leg_r'],
-    backLowerLegs: ['back_lower_leg_l', 'back_lower_leg_r'],
+    frontLegs: ['front_upper_leg_L', 'front_upper_leg_R'],
+    backLegs: ['back_upper_leg_L', 'back_upper_leg_R'],
+    frontLowerLegs: ['front_lower_leg_L', 'front_lower_leg_R'],
+    backLowerLegs: ['back_lower_leg_L', 'back_lower_leg_R'],
     tail: 'tail',
     body: 'body',
     head: 'head',
@@ -250,9 +214,12 @@ export function createPuppyRunWestExample(): {
 }
 
 /**
- * 一键创建小狗奔跑示例：建骨架 + 13 个节点 + 13 张精灵 + 建角色 + 挂蓝图。
+ * 一键创建小狗奔跑示例：复用 DOG_TEMPLATE 的 13 节点结构（侧向/W），
+ * 建骨架 + 13 张精灵 + 建角色 + 挂四足奔跑蓝图。
  * 在没有角色时调用，用户点一下就能看到小狗跑。
- * 精灵来自 src/lib/engine/default-costume-sprites.ts 的狗模板。
+ * 精灵来自 src/lib/engine/default-costume-sprites.ts 的狗模板
+ * （generateDefaultCostumeSprite 内部对节点名做 toLowerCase，
+ *  模板的大写 L/R 命名可直接当精灵 key 用）。
  */
 export function createPuppyRunExampleCharacter(
   store: any,
@@ -263,81 +230,13 @@ export function createPuppyRunExampleCharacter(
   // 1. 建骨架
   const skeleton = store.addPuppetSkeleton('小狗（奔跑示例）');
 
-  // 2. 节点定义：name / 精灵 key / 父节点 / 接入的 socket / 自有 sockets / zIndex
-  interface Def {
-    name: string;
-    spriteKey: string;
-    parent: string | null;
-    socketName: string | null;
-    sockets: { name: string; localX: number; localY: number }[];
-    zIndex: number;
-  }
-  const defs: Def[] = [
-    {
-      name: 'body', spriteKey: 'body', parent: null, socketName: null,
-      sockets: [
-        { name: 'head_attach', localX: -8, localY: -3 },
-        { name: 'tail_attach', localX: 7, localY: -1 },
-        { name: 'front_upper_leg_l', localX: -7.5, localY: 3 },
-        { name: 'front_upper_leg_r', localX: -4.5, localY: 3 },
-        { name: 'back_upper_leg_l', localX: -0.5, localY: 3 },
-        { name: 'back_upper_leg_r', localX: 3.5, localY: 3 },
-      ],
-      zIndex: 5,
-    },
-    {
-      name: 'head', spriteKey: 'head', parent: 'body', socketName: 'head_attach',
-      sockets: [
-        { name: 'ear_l', localX: -2, localY: -9 },
-        { name: 'ear_r', localX: 3, localY: -9 },
-      ],
-      zIndex: 10,
-    },
-    { name: 'ear_l', spriteKey: 'ear_l', parent: 'head', socketName: 'ear_l', sockets: [], zIndex: 11 },
-    { name: 'ear_r', spriteKey: 'ear_r', parent: 'head', socketName: 'ear_r', sockets: [], zIndex: 11 },
-    { name: 'tail', spriteKey: 'tail', parent: 'body', socketName: 'tail_attach', sockets: [], zIndex: 4 },
-    {
-      name: 'front_upper_leg_l', spriteKey: 'front_upper_leg_l',
-      parent: 'body', socketName: 'front_upper_leg_l',
-      sockets: [{ name: 'knee', localX: 0, localY: 8 }], zIndex: 3,
-    },
-    {
-      name: 'front_lower_leg_l', spriteKey: 'front_lower_leg_l',
-      parent: 'front_upper_leg_l', socketName: 'knee', sockets: [], zIndex: 2,
-    },
-    {
-      name: 'front_upper_leg_r', spriteKey: 'front_upper_leg_r',
-      parent: 'body', socketName: 'front_upper_leg_r',
-      sockets: [{ name: 'knee', localX: 0, localY: 8 }], zIndex: 3,
-    },
-    {
-      name: 'front_lower_leg_r', spriteKey: 'front_lower_leg_r',
-      parent: 'front_upper_leg_r', socketName: 'knee', sockets: [], zIndex: 2,
-    },
-    {
-      name: 'back_upper_leg_l', spriteKey: 'back_upper_leg_l',
-      parent: 'body', socketName: 'back_upper_leg_l',
-      sockets: [{ name: 'knee', localX: 0, localY: 8 }], zIndex: 3,
-    },
-    {
-      name: 'back_lower_leg_l', spriteKey: 'back_lower_leg_l',
-      parent: 'back_upper_leg_l', socketName: 'knee', sockets: [], zIndex: 2,
-    },
-    {
-      name: 'back_upper_leg_r', spriteKey: 'back_upper_leg_r',
-      parent: 'body', socketName: 'back_upper_leg_r',
-      sockets: [{ name: 'knee', localX: 0, localY: 8 }], zIndex: 3,
-    },
-    {
-      name: 'back_lower_leg_r', spriteKey: 'back_lower_leg_r',
-      parent: 'back_upper_leg_r', socketName: 'knee', sockets: [], zIndex: 2,
-    },
-  ];
+  // 2. 节点定义：复用 DOG_TEMPLATE（侧向版），配置全部来自模板
+  const defs = getSideViewDogNodes();
 
   // 3. 为每个节点生成精灵 → 建 Part → 建节点（spritePartId 直接写入）
   const nodeIds: Record<string, string> = {};
   for (const def of defs) {
-    const sprite = generateDefaultCostumeSprite(def.spriteKey, 'dog');
+    const sprite = generateDefaultCostumeSprite(def.name, 'dog');
     const part = store.addPart(sprite.partName, sprite.width, sprite.height, {
       pivotX: sprite.pivotX,
       pivotY: sprite.pivotY,
@@ -349,26 +248,33 @@ export function createPuppyRunExampleCharacter(
         id: `socket_${Math.random().toString(36).slice(2)}`,
         ...s,
       })),
-      // plug 先占位，socketId 在第 4 步修正
-      plug: def.parent
-        ? { socketName: def.socketName, socketId: '', localX: 0, localY: 0, jointWidth: null } as any
+      // plug 先占位，socketId 在第 4 步修正（模板只写了 socketName）
+      plug: def.plug
+        ? { socketName: def.plug.socketName, socketId: '', localX: def.plug.localX, localY: def.plug.localY, jointWidth: null } as any
         : null,
+      angle: def.defaultAngle,
+      stretch: def.defaultStretch,
+      offsetX: def.defaultOffsetX,
+      offsetY: def.defaultOffsetY,
+      crossSectionTop: def.crossSectionTop,
+      crossSectionBottom: def.crossSectionBottom,
       zIndex: def.zIndex,
       spritePartId: part.id,
     });
     nodeIds[def.name] = node.id;
   }
 
-  // 4. 修正 plug 的 socketId（指向父节点上对应的 socket）
+  // 4. 修正 plug 的 socketId（指向拥有该 socket 的父节点）
   const allNodes: any[] = store.puppetSkeletons
     .find((sk: any) => sk.id === skeleton.id)?.nodes ?? [];
   for (const def of defs) {
-    if (!def.parent || !def.socketName) continue;
-    const parentNode = allNodes.find((n: any) => n.name === def.parent);
-    const socket = parentNode?.sockets.find((s: any) => s.name === def.socketName);
+    if (!def.plug) continue;
+    const parentNode = allNodes.find((n: any) =>
+      n.sockets.some((s: any) => s.name === def.plug!.socketName));
+    const socket = parentNode?.sockets.find((s: any) => s.name === def.plug!.socketName);
     if (socket) {
       store.updatePuppetNode(skeleton.id, nodeIds[def.name], {
-        plug: { socketId: socket.id, localX: 0, localY: 0, jointWidth: null },
+        plug: { socketId: socket.id, localX: def.plug.localX, localY: def.plug.localY, jointWidth: null },
       } as any);
     }
   }
@@ -378,10 +284,10 @@ export function createPuppyRunExampleCharacter(
 
   // 6. 挂蓝图（大腿 + 小腿 + 尾巴 + 身体 + 头）
   const blueprints = createQuadrupedRunBlueprint({
-    frontLegs: [nodeIds['front_upper_leg_l']!, nodeIds['front_upper_leg_r']!],
-    backLegs: [nodeIds['back_upper_leg_l']!, nodeIds['back_upper_leg_r']!],
-    frontLowerLegs: [nodeIds['front_lower_leg_l']!, nodeIds['front_lower_leg_r']!],
-    backLowerLegs: [nodeIds['back_lower_leg_l']!, nodeIds['back_lower_leg_r']!],
+    frontLegs: [nodeIds['front_upper_leg_L']!, nodeIds['front_upper_leg_R']!],
+    backLegs: [nodeIds['back_upper_leg_L']!, nodeIds['back_upper_leg_R']!],
+    frontLowerLegs: [nodeIds['front_lower_leg_L']!, nodeIds['front_lower_leg_R']!],
+    backLowerLegs: [nodeIds['back_lower_leg_L']!, nodeIds['back_lower_leg_R']!],
     tail: nodeIds['tail'],
     body: nodeIds['body'],
     head: nodeIds['head'],

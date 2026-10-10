@@ -364,7 +364,6 @@ export default function PixelCanvas() {
         onMouseUp={interaction.handleMouseUp}
         onMouseLeave={interaction.handleMouseUp}
         onDoubleClick={interaction.handleDoubleClick}
-        onWheel={interaction.handleWheel}
       />
 
       {/* Correction mode badge */}

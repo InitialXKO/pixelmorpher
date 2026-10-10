@@ -51,12 +51,16 @@ interface TemplateNodeDef {
   zIndex: number;
 }
 
+export type { TemplateNodeDef };
+
 interface PuppetTemplate {
   name: string;
   label: string;
   icon: React.ReactNode;
   nodes: TemplateNodeDef[];
 }
+
+export type { PuppetTemplate };
 
 const HUMANOID_TEMPLATE: PuppetTemplate = {
   name: 'humanoid',
@@ -226,7 +230,7 @@ const MECHA_TEMPLATE: PuppetTemplate = {
 /**
  * 小狗：13 节点。四肢为两段式（大腿+小腿，膝关节可动）+ 独立耳朵。
  */
-const DOG_TEMPLATE: PuppetTemplate = {
+export const DOG_TEMPLATE: PuppetTemplate = {
   name: 'dog',
   label: '小狗',
   icon: <Dog className="size-4" />,
