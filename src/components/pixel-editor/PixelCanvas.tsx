@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect } from 'react';
-import { useProjectStore } from '@/lib/store';
+import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
 import { renderFrame, renderPartEditMode, renderPuppetNodes } from '@/lib/engine';
@@ -341,7 +341,9 @@ export default function PixelCanvas() {
     s.dirtyRef.current = true;
     const unregisterScheduler = registerRenderCallback(() => { s.dirtyRef.current = true; });
     const loop = () => {
-      if (s.dirtyRef.current) { s.dirtyRef.current = false; render(); }
+      // 播放时强制每帧渲染（绕过 dirty 标记，避免闭包 stale 导致不动）
+      const isPlaying = useEditorStore.getState().playState === 'playing';
+      if (s.dirtyRef.current || isPlaying) { s.dirtyRef.current = false; render(); }
       s.rafRef.current = requestAnimationFrame(loop);
     };
     s.rafRef.current = requestAnimationFrame(loop);
