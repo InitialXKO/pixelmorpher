@@ -66,6 +66,9 @@ export function interpolateNodeKeyframes(
         nodeOutputs: pass === 1 ? nodeOutputs : undefined,
         nodeState: blueprintNodeState,
       });
+      if (currentFrame % 12 === 0 && node.name?.includes('leg')) {
+        console.log(`[蓝图] ${node.name} frame=${currentFrame} rotation=${t.rotation.toFixed(1)}`);
+      }
       values.angle += t.rotation;
       values.offsetX += t.translateX;
       values.offsetY += t.translateY;
