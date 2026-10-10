@@ -26,6 +26,7 @@ import { useProjectStore, useEditorStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import DirectionWheel, { oldDirectionToIndex, directionIndexToOldDirection } from '../DirectionWheel';
+import PuppetModifierPanel from './PuppetModifierPanel';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -331,6 +332,9 @@ export default function PerformPanel() {
               <Switch checked={puppetOnionSkin} onCheckedChange={setPuppetOnionSkin} className="scale-75" />
             </div>
           </div>
+
+          {/* ---- 程序化修改器 ---- */}
+          <PuppetModifierPanel />
         </>
       )}
     </div>

@@ -16,6 +16,8 @@ import type {
   CostumeSet,
   PuppetDirection,
   PuppetNodeKeyframe,
+  PartAnimationModifier,
+  ModifierParamValue,
 } from '../types';
 import { PUPPET_DIRECTIONS, DIRECTION_MIRROR } from '../types';
 
@@ -47,6 +49,12 @@ export type PuppetSlice = {
   addPuppetNodeKeyframe: (clipId: string, nodeId: string, frame: number, values: Partial<Pick<PuppetNodeKeyframe, 'angle' | 'stretch' | 'offsetX' | 'offsetY' | 'direction' | 'viewLatitude'>>) => PuppetNodeKeyframe;
   removePuppetNodeKeyframe: (clipId: string, keyframeId: string) => void;
   updatePuppetNodeKeyframe: (clipId: string, keyframeId: string, updates: Partial<PuppetNodeKeyframe>) => void;
+
+  // ---- Puppet Node Modifiers（程序化动画） ----
+  addPuppetNodeModifier: (skeletonId: string, nodeId: string, type: PartAnimationModifier['type']) => PartAnimationModifier;
+  removePuppetNodeModifier: (skeletonId: string, nodeId: string, modifierId: string) => void;
+  updatePuppetNodeModifier: (skeletonId: string, nodeId: string, modifierId: string, params: Record<string, ModifierParamValue>) => void;
+  togglePuppetNodeModifier: (skeletonId: string, nodeId: string, modifierId: string) => void;
 
   // ---- Puppet Character CRUD ----
   addPuppetCharacter: (name: string, skeletonId: string) => PuppetCharacter;
@@ -277,6 +285,7 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
       zIndex: opts?.zIndex ?? 10,
       visible: opts?.visible ?? true,
       color: opts?.color ?? '#888888',
+      modifiers: [],
     };
     set(s => ({
       puppetSkeletons: s.puppetSkeletons.map(sk =>
@@ -411,6 +420,61 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
         c.id === clipId
           ? { ...c, puppetNodeKeyframes: (c.puppetNodeKeyframes ?? []).map(k => k.id === keyframeId ? { ...k, ...updates } : k) }
           : c
+      ),
+    }));
+  },
+
+  // ---- Puppet Node Modifiers（程序化动画） ----
+  addPuppetNodeModifier: (skeletonId, nodeId, type) => {
+    const modifier: PartAnimationModifier = {
+      id: crypto.randomUUID(),
+      type,
+      enabled: true,
+      collapsed: false,
+      params: {},
+      startFrame: -1,
+      endFrame: -1,
+      fadeInFrames: 0,
+      fadeOutFrames: 0,
+      blendMode: 'add',
+      groupId: null,
+    };
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk =>
+        sk.id === skeletonId
+          ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, modifiers: [...(n.modifiers ?? []), modifier] } : n) }
+          : sk
+      ),
+    }));
+    return modifier;
+  },
+
+  removePuppetNodeModifier: (skeletonId, nodeId, modifierId) => {
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk =>
+        sk.id === skeletonId
+          ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, modifiers: (n.modifiers ?? []).filter(m => m.id !== modifierId) } : n) }
+          : sk
+      ),
+    }));
+  },
+
+  updatePuppetNodeModifier: (skeletonId, nodeId, modifierId, params) => {
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk =>
+        sk.id === skeletonId
+          ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, modifiers: (n.modifiers ?? []).map(m => m.id === modifierId ? { ...m, params: { ...m.params, ...params } } : m) } : n) }
+          : sk
+      ),
+    }));
+  },
+
+  togglePuppetNodeModifier: (skeletonId, nodeId, modifierId) => {
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk =>
+        sk.id === skeletonId
+          ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, modifiers: (n.modifiers ?? []).map(m => m.id === modifierId ? { ...m, enabled: !m.enabled } : m) } : n) }
+          : sk
       ),
     }));
   },

@@ -9,6 +9,7 @@
 
 import type { PuppetSkeleton, PuppetNodeKeyframe, PuppetDirection } from '../../types';
 import type { InterpolatedNodeValues } from './types';
+import { computePartAnimationTransform } from '../animation-dispatch';
 
 /**
  * Compute interpolated values for every node in the skeleton.
@@ -36,6 +37,15 @@ export function interpolateNodeKeyframes(
   for (const node of skeleton.nodes) {
     const nodeKfs = kfByNodeId.get(node.id) || [];
     const values = interpolateSingleNode(node, nodeKfs, currentFrame, skeleton.currentDirection, skeleton.viewLatitude);
+    // 应用程序化修改器（pendulum/breath 等），叠加在关键帧插值之上
+    const mods = node.modifiers ?? [];
+    if (mods.length > 0) {
+      const t = computePartAnimationTransform(mods, currentFrame, 12);
+      values.angle += t.rotation;
+      values.offsetX += t.translateX;
+      values.offsetY += t.translateY;
+      values.stretch *= t.scaleY; // stretch 是 Y 轴拉伸
+    }
     result.set(node.id, values);
   }
 

@@ -982,6 +982,8 @@ export interface PuppetNode {
   visible: boolean;
   /** Color for joint disc rendering */
   color: string;
+  /** Procedural animation modifiers (pendulum, breath, etc.) — evaluated on top of keyframes */
+  modifiers: PartAnimationModifier[];
 }
 
 /** Keyframe data for a single puppet node at a specific frame */

@@ -562,6 +562,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
         zIndex: def.zIndex,
         visible: true,
         color: NODE_COLORS[idx % NODE_COLORS.length],
+        modifiers: [],
       };
     });
 
