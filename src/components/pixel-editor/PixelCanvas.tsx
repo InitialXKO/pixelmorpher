@@ -72,7 +72,7 @@ export default function PixelCanvas() {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
 
-    const currentFrame = s.currentFrameRef.current;
+    const currentFrame = useProjectStore.getState().currentFrame;
     const zoom = s.zoomRef.current;
     const panX = s.panRef.current.x;
     const panY = s.panRef.current.y;
