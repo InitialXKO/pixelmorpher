@@ -41,6 +41,10 @@ export function interpolateNodeKeyframes(
     const mods = node.modifiers ?? [];
     if (mods.length > 0) {
       const t = computePartAnimationTransform(mods, currentFrame, 12);
+      // DEBUG: 看修改器是否生效
+      if (typeof window !== 'undefined' && currentFrame % 12 === 0) {
+        console.log(`[PuppetModifier] node=${node.name} frame=${currentFrame} mods=${mods.length} rotation=${t.rotation.toFixed(2)}`);
+      }
       values.angle += t.rotation;
       values.offsetX += t.translateX;
       values.offsetY += t.translateY;
