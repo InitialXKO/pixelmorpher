@@ -222,10 +222,11 @@ export function createPuppyRunWestExample(): {
  *  模板的大写 L/R 命名可直接当精灵 key 用）。
  */
 export function createPuppyRunExampleCharacter(
-  store: any,
+  useProjectStoreHook: any,
   sessionStore: any,
 ): string | null {
   try {
+    const store = useProjectStoreHook.getState();
 
   // 1. 建骨架
   const skeleton = store.addPuppetSkeleton('小狗（奔跑示例）');
@@ -266,8 +267,11 @@ export function createPuppyRunExampleCharacter(
   }
 
   // 4. 修正 plug 的 socketId（指向拥有该 socket 的父节点）
-  const allNodes: any[] = store.puppetSkeletons
+  // 重新获取最新状态（addPuppetNode 后 store 已更新）
+  const freshState = useProjectStoreHook.getState();
+  const allNodes: any[] = freshState.puppetSkeletons
     .find((sk: any) => sk.id === skeleton.id)?.nodes ?? [];
+  console.log('[一键小狗] 修正plug，共', allNodes.length, '个节点');
   for (const def of defs) {
     if (!def.plug) continue;
     const parentNode = allNodes.find((n: any) =>

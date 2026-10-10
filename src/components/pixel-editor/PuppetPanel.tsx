@@ -197,9 +197,8 @@ export default function PuppetPanel() {
                 className="text-[10px] border-[#2a2a4a] text-gray-300"
                 onClick={() => {
                   import('@/lib/blueprint/examples/quadruped-run').then((m) => {
-                    const store = useProjectStore.getState();
                     const sessionStore = usePuppetSessionStore.getState();
-                    const id = m.createPuppyRunExampleCharacter(store, sessionStore);
+                    const id = m.createPuppyRunExampleCharacter(useProjectStore, sessionStore);
                     if (!id) {
                       alert('小狗创建失败，请看控制台');
                     }
