@@ -41,6 +41,11 @@ export type PuppetSlice = {
   addPuppetNode: (skeletonId: string, name: string, opts?: Partial<Pick<PuppetNode, 'plug' | 'sockets' | 'spritePartId' | 'angle' | 'stretch' | 'offsetX' | 'offsetY' | 'zIndex' | 'crossSectionTop' | 'crossSectionBottom' | 'color' | 'visible' | 'mirrorFrom'>>) => PuppetNode;
   removePuppetNode: (skeletonId: string, nodeId: string) => void;
   updatePuppetNode: (skeletonId: string, nodeId: string, updates: Partial<PuppetNode>) => void;
+  // ---- Z-order（Word 式相对操作） ----
+  bringNodeToFront: (skeletonId: string, nodeId: string) => void;
+  sendNodeToBack: (skeletonId: string, nodeId: string) => void;
+  bringNodeForward: (skeletonId: string, nodeId: string) => void;
+  sendNodeBackward: (skeletonId: string, nodeId: string) => void;
   addPuppetSocket: (skeletonId: string, nodeId: string, name: string, localX: number, localY: number) => PuppetSocket;
   removePuppetSocket: (skeletonId: string, nodeId: string, socketId: string) => void;
   setPuppetNodeSprite: (skeletonId: string, nodeId: string, partId: string | null, direction?: PuppetDirection) => void;
@@ -334,6 +339,83 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
         sk.id === skeletonId
           ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, ...updates } : n) }
           : sk
+      ),
+    }));
+  },
+
+  // ---- Z-order（Word 式相对操作，不暴露数字） ----
+  bringNodeToFront: (skeletonId, nodeId) => {
+    const state = get();
+    state.pushUndo('节点置于顶层');
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk => {
+        if (sk.id !== skeletonId) return sk;
+        const maxZ = Math.max(0, ...sk.nodes.map(n => n.zIndex));
+        return { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, zIndex: maxZ + 1 } : n) };
+      }),
+    }));
+  },
+
+  sendNodeToBack: (skeletonId, nodeId) => {
+    const state = get();
+    state.pushUndo('节点置于底层');
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(sk => {
+        if (sk.id !== skeletonId) return sk;
+        const minZ = Math.min(0, ...sk.nodes.map(n => n.zIndex));
+        return { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, zIndex: minZ - 1 } : n) };
+      }),
+    }));
+  },
+
+  bringNodeForward: (skeletonId, nodeId) => {
+    const state = get();
+    const sk = state.puppetSkeletons.find(x => x.id === skeletonId);
+    const node = sk?.nodes.find(n => n.id === nodeId);
+    if (!sk || !node) return;
+    const higher = sk.nodes
+      .filter(n => n.zIndex > node.zIndex)
+      .sort((a, b) => a.zIndex - b.zIndex)[0];
+    if (!higher) return; // 已在最上
+    state.pushUndo('节点上移一层');
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(x =>
+        x.id === skeletonId
+          ? {
+              ...x,
+              nodes: x.nodes.map(n =>
+                n.id === nodeId ? { ...n, zIndex: higher.zIndex }
+                : n.id === higher.id ? { ...n, zIndex: node.zIndex }
+                : n
+              ),
+            }
+          : x
+      ),
+    }));
+  },
+
+  sendNodeBackward: (skeletonId, nodeId) => {
+    const state = get();
+    const sk = state.puppetSkeletons.find(x => x.id === skeletonId);
+    const node = sk?.nodes.find(n => n.id === nodeId);
+    if (!sk || !node) return;
+    const lower = sk.nodes
+      .filter(n => n.zIndex < node.zIndex)
+      .sort((a, b) => b.zIndex - a.zIndex)[0];
+    if (!lower) return; // 已在最下
+    state.pushUndo('节点下移一层');
+    set(s => ({
+      puppetSkeletons: s.puppetSkeletons.map(x =>
+        x.id === skeletonId
+          ? {
+              ...x,
+              nodes: x.nodes.map(n =>
+                n.id === nodeId ? { ...n, zIndex: lower.zIndex }
+                : n.id === lower.id ? { ...n, zIndex: node.zIndex }
+                : n
+              ),
+            }
+          : x
       ),
     }));
   },

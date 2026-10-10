@@ -221,7 +221,7 @@ export function isStrokeToolCheck(tool: string): boolean {
 }
 
 /** Get cursor style based on current tool */
-export function getCursorStyle(tool: string, spaceHeld: boolean): string {
+export function getCursorStyle(tool: string, spaceHeld: boolean, puppetArmed: boolean = true): string {
   if (spaceHeld) return 'grab';
   switch (tool) {
     case 'select': return 'default';
@@ -240,10 +240,12 @@ export function getCursorStyle(tool: string, spaceHeld: boolean): string {
     case 'weight_paint':
     case 'lasso':
     case 'magic_wand':
-    case 'puppet':
     case 'smart_select':
     case 'inpaint':
       return 'crosshair';
+    case 'puppet':
+      // 未武装时用默认光标，武装后用十字
+      return puppetArmed ? 'crosshair' : 'default';
     case 'move': return 'move';
     default: return 'default';
   }

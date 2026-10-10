@@ -267,12 +267,13 @@ const springHandler: BakeTransformHandler = (mod, ctx) => {
   const damping = Number(mod.params.damping) || 0.3;
   const mass = Number(mod.params.mass) || 1;
   const restLength = Number(mod.params.restLength) || 0;
+  const amplitude = Number(mod.params.amplitude) || 10;
   const targetProperty = String(mod.params.targetProperty || 'translateY');
   const omega = Math.sqrt(stiffness / mass);
   const gamma = damping / (2 * mass);
   const dampedOmega = Math.sqrt(Math.max(0, omega * omega - gamma * gamma));
-  const timeSec = ctx.relativeFrame / 60;
-  const value = (restLength > 0 ? restLength : 1) * Math.exp(-gamma * timeSec) * Math.cos(dampedOmega * timeSec) + restLength;
+  const timeSec = ctx.relativeFrame / (ctx.frameRate || 12);
+  const value = (restLength > 0 ? restLength : amplitude) * Math.exp(-gamma * timeSec) * Math.cos(dampedOmega * timeSec) + restLength;
   applyProceduralToResult(result, targetProperty, value * ctx.effectiveWeight);
   return result;
 };

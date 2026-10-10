@@ -100,6 +100,10 @@ export default function DressPanel({
   const handleDeleteCostume = (costumeId: string) => {
     if (!selectedCharacterId) return;
     const store = useProjectStore.getState();
+    const cs = store.puppetCharacters
+      ?.find((c) => c.id === selectedCharacterId)
+      ?.costumeSets.find((s) => s.id === costumeId);
+    if (!confirm(`删除服装集「${cs?.name ?? ''}」（含全部方向精灵分配）？`)) return;
     store.pushUndo('删除服装集');
     useProjectStore.setState({
       puppetCharacters: (store.puppetCharacters ?? []).map((c) =>

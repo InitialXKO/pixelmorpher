@@ -54,6 +54,18 @@ export interface BlueprintEvalContext {
   frameRate: number;
   /** 用户可调参数（积木 UI 的滑块/输入框绑到这里） */
   vars: Record<string, number | string | boolean>;
+  /**
+   * 跨节点引用（可选）。
+   * key: PuppetNode.id，value: 该节点上一次求值的 transform 输出。
+   * 不用 nodeRef 节点时为空，不影响现有蓝图。
+   */
+  nodeOutputs?: Map<string, { rotation: number; translateX: number; translateY: number; scaleX: number; scaleY: number }>;
+  /**
+   * 有状态节点的存储（可选，如 hold 节点）。
+   * key: 蓝图节点 id，value: 该节点保存的状态。
+   * 跨帧保持，由调用方维护。
+   */
+  nodeState?: Map<string, any>;
 }
 
 // ---- 类型辅助 ----

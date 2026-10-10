@@ -27,6 +27,7 @@ import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import DirectionWheel, { oldDirectionToIndex, directionIndexToOldDirection } from '../DirectionWheel';
 import PuppetModifierPanel from './PuppetModifierPanel';
+import BlueprintTemplateLoader from './BlueprintTemplateLoader';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -278,7 +279,9 @@ export default function PerformPanel() {
                 variant="outline"
                 size="sm"
                 className="h-7 text-[10px] border-[#1e1e3a] text-gray-500 hover:text-red-300 px-2"
-                onClick={clearFramePose}
+                onClick={() => {
+                  if (confirm('清除当前帧全部节点的木偶关键帧？')) clearFramePose();
+                }}
                 title="清除当前帧的全部木偶关键帧"
               >
                 <Eraser className="size-3" />
@@ -332,6 +335,13 @@ export default function PerformPanel() {
               <Switch checked={puppetOnionSkin} onCheckedChange={setPuppetOnionSkin} className="scale-75" />
             </div>
           </div>
+
+          {/* ---- 蓝图模板（骨骼级，不依赖选中节点） ---- */}
+          {skeleton && (
+            <div className="mt-2 pt-2 border-t border-[#1e1e3a]">
+              <BlueprintTemplateLoader skeleton={skeleton} />
+            </div>
+          )}
 
           {/* ---- 程序化修改器 ---- */}
           <PuppetModifierPanel />

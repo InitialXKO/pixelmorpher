@@ -25,6 +25,7 @@ import type { ToolType, BrushStyleType } from '@/lib/types';
 import { BUILT_IN_BRUSH_PRESETS } from '@/lib/brush-presets';
 import { BRUSH_STYLE_LABELS } from '@/lib/brush-engine';
 import { applyTheme, loadTheme, type ThemeMode } from '@/lib/theme';
+import { useToast } from '@/hooks/use-toast';
 import WorkspaceSwitcher from '@/components/pixel-editor/WorkspaceSwitcher';
 
 // Sub-components
@@ -49,6 +50,7 @@ import {
   TrajectoryToggle,
   TrajectorySnapToggle,
   SkeletonsToggle,
+  ShowAllCharactersToggle,
   WeightPaintToggle,
   OnionSkinToggle,
   PreviewQualitySelect,
@@ -98,12 +100,21 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
   const brushPresets = useProjectStore((s) => s.brushPresets);
   const allBrushPresets = [...BUILT_IN_BRUSH_PRESETS, ...brushPresets];
 
+  // Parts (for export disabled state) and selection (for correction toggle guard)
+  const parts = useProjectStore((s) => s.parts);
+  const selectedPartId = useEditorStore((s) => s.selectedPartId);
+
+  // Toast for user-facing errors
+  const { toast } = useToast();
+
   // ---- Local state ----
   const [isDark, setIsDark] = useState<ThemeMode>('dark');
   const [recentColors, setRecentColors] = useState<string[]>(['#ffffff', '#ff4444', '#00aaff', '#ffcc88', '#000000']);
   const [isEditingName, setIsEditingName] = useState(false);
   const [nameInput, setNameInput] = useState(name);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  // Brush size text input (reverts to brushSize on invalid input/blur)
+  const [sizeText, setSizeText] = useState(String(brushSize));
 
   // Blend mode for motion blur / effect brushes — lives in the editor store so the
   // canvas commit path can read it (previously local state that never reached strokes)
@@ -120,6 +131,11 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
   useEffect(() => {
     setNameInput(name);
   }, [name]);
+
+  // Sync size text when brush size changes externally (e.g. preset applied)
+  useEffect(() => {
+    setSizeText(String(brushSize));
+  }, [brushSize]);
 
   // Load saved theme on mount
   useEffect(() => {
@@ -170,15 +186,24 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
   );
 
   // ---- Brush size validation ----
+  // Invalid input keeps the typed text while editing, reverts on blur
   const handleBrushSizeChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const val = parseInt(e.target.value, 10);
+      const raw = e.target.value;
+      setSizeText(raw);
+      const val = parseInt(raw, 10);
       if (!isNaN(val)) {
         setBrushSize(Math.max(1, Math.min(10, val)));
       }
     },
     [setBrushSize],
   );
+
+  const handleBrushSizeBlur = useCallback(() => {
+    if (isNaN(parseInt(sizeText, 10))) {
+      setSizeText(String(brushSize));
+    }
+  }, [sizeText, brushSize]);
 
   // ---- Save/Load handlers ----
   const handleSaveProject = useCallback(() => {
@@ -203,7 +228,11 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
-      if (!file.name.endsWith('.pxm')) return;
+      if (!file.name.endsWith('.pxm')) {
+        toast({ title: '无法加载', description: '请选择 .pxm 工程文件', variant: 'destructive' });
+        e.target.value = '';
+        return;
+      }
       const reader = new FileReader();
       reader.onload = (event) => {
         try {
@@ -211,13 +240,13 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
           const projectFile = JSON.parse(json);
           useProjectStore.getState().importProjectFile(projectFile);
         } catch {
-          // Invalid file format, ignore
+          toast({ title: '加载失败', description: '文件损坏或格式不正确', variant: 'destructive' });
         }
       };
       reader.readAsText(file);
       e.target.value = '';
     },
-    [],
+    [toast],
   );
 
   // ---- Tool conditional display ----
@@ -331,7 +360,8 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
               setEditMode('normal');
             }
 
-            // Auto-enter part_edit mode when switching to brush/eraser/fill in non-correction mode
+            // Auto-enter part_edit mode when switching to brush/eraser/fill in non-correction mode.
+            // Only auto-enter when a part is already selected; never silently pick the first part.
             if ((val === 'brush' || val === 'eraser' || val === 'fill') &&
                 state.editMode !== 'correction' &&
                 state.editMode !== 'part_edit') {
@@ -341,8 +371,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
               if (part) {
                 state.enterPartEditMode(selectedPartId!);
               } else if (projectStore.parts.length > 0) {
-                const firstPart = projectStore.parts[0];
-                state.enterPartEditMode(firstPart.id);
+                toast({ title: '请先选择部件', description: '在部件面板中选择一个部件后再绘画' });
               }
             }
           }
@@ -384,6 +413,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
               onPressedChange={(pressed) => {
                 setEditMode(pressed ? 'correction' : 'normal');
               }}
+              disabled={!selectedPartId}
               aria-label="修正模式"
               className="h-7 px-2 py-0 data-[state=on]:bg-cyan-600/30 data-[state=on]:text-cyan-300 data-[state=on]:ring-cyan-500/50 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded text-[10px] gap-1 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-500"
             >
@@ -392,7 +422,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
             </Toggle>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-xs">
-            {'修正模式: 笔画记录为 PixelEdit 修改器 (非破坏性)'}
+            {selectedPartId ? '修正模式: 笔画记录为 PixelEdit 修改器 (非破坏性)' : '修正模式: 请先选择一个部件'}
           </TooltipContent>
         </Tooltip>
       )}
@@ -407,8 +437,9 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
             type="number"
             min={1}
             max={10}
-            value={brushSize}
+            value={sizeText}
             onChange={handleBrushSizeChange}
+            onBlur={handleBrushSizeBlur}
             className="h-6 w-10 text-xs text-center bg-white/5 border-white/10 text-gray-300 px-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
           />
           {/* Brush Style Selector */}
@@ -577,6 +608,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
       )}
 
       <SkeletonsToggle />
+      <ShowAllCharactersToggle />
       <WeightPaintToggle />
       <OnionSkinToggle />
 
@@ -604,11 +636,11 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
               applyTheme(newMode);
             }}
           >
-            {isDark === 'dark' ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
+            {isDark === 'dark' ? <Moon className="size-3.5" /> : <Sun className="size-3.5" />}
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="text-xs">
-          {isDark === 'dark' ? 'Light Mode' : 'Dark Mode'}
+          {isDark === 'dark' ? '深色模式' : '浅色模式'}
         </TooltipContent>
       </Tooltip>
 
@@ -618,13 +650,16 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7 text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-400"
+            className="h-7 w-7 text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-400 disabled:opacity-30 disabled:cursor-not-allowed"
             onClick={onExportClick}
+            disabled={parts.length === 0}
           >
             <Download className="size-3.5" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">Export</TooltipContent>
+        <TooltipContent side="bottom" className="text-xs">
+          {parts.length === 0 ? '导出 (暂无部件)' : '导出'}
+        </TooltipContent>
       </Tooltip>
     </div>
   );

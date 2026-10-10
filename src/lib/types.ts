@@ -2627,6 +2627,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'MoveHorizontal',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'scrollDirection', label: '滚动方向', type: 'select', default: 'horizontal', options: [
         { label: '水平', value: 'horizontal' },
         { label: '垂直', value: 'vertical' },
@@ -2652,6 +2654,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Waves',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'directionType', label: '方向类型', type: 'select', default: 'horizontal', options: [
         { label: '水平', value: 'horizontal' },
         { label: '垂直', value: 'vertical' },
@@ -2709,6 +2713,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'RotateCw',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'scrollSpeed', label: '滚动速度(px/s)', type: 'number', default: 40, min: -200, max: 200, step: 1 },
       { name: 'scrollDirection', label: '滚动方向', type: 'select', default: 'cw', options: [
         { label: '顺时针', value: 'cw' },
@@ -2728,6 +2734,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Eye',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'mode', label: '模式', type: 'select', default: 'reveal', options: [
         { label: '显形(逐渐出现)', value: 'reveal' },
         { label: '隐形(逐渐消失)', value: 'hide' },
@@ -2760,6 +2768,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Sparkles',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'fragmentSize', label: '碎片大小', type: 'number', default: 4, min: 2, max: 16, step: 1 },
       { name: 'shatterDuration', label: '碎裂持续帧数', type: 'number', default: 10, min: 2, max: 60, step: 1 },
       { name: 'dissolveDuration', label: '消散持续帧数', type: 'number', default: 20, min: 2, max: 120, step: 1 },
@@ -2782,6 +2792,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Zap',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'implosionDuration', label: '内爆持续帧数', type: 'number', default: 8, min: 2, max: 60, step: 1 },
       { name: 'flashDuration', label: '闪光持续帧数', type: 'number', default: 4, min: 1, max: 30, step: 1 },
       { name: 'flashColor', label: '闪光颜色', type: 'color', default: '#ffffff' },
@@ -2800,6 +2812,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Wifi',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'mode', label: '传送方向', type: 'select', default: 'teleport_in', options: [
         { label: '传送进入', value: 'teleport_in' },
         { label: '传送离开', value: 'teleport_out' },
@@ -2820,6 +2834,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Monitor',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'shrinkDuration', label: '收缩持续帧数', type: 'number', default: 12, min: 2, max: 60, step: 1 },
       { name: 'flashDuration', label: '白闪帧数', type: 'number', default: 3, min: 1, max: 15, step: 1 },
       { name: 'lineDuration', label: '横线持续帧数', type: 'number', default: 8, min: 2, max: 30, step: 1 },
@@ -2837,6 +2853,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Spline',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'direction', label: '弯曲方向', type: 'select', default: 'horizontal', options: [
         { label: '水平弯曲', value: 'horizontal' },
         { label: '垂直弯曲', value: 'vertical' },
@@ -2865,6 +2883,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Circle',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'compressAxis', label: '压缩轴', type: 'select', default: 'y', options: [
         { label: '纵向压缩(变扁)', value: 'y' },
         { label: '横向压缩(变窄)', value: 'x' },
@@ -2890,6 +2910,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'StretchHorizontal',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'direction', label: '拉伸方向', type: 'select', default: 'horizontal', options: [
         { label: '水平拉伸', value: 'horizontal' },
         { label: '垂直拉伸', value: 'vertical' },
@@ -2915,6 +2937,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Square',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'bulgeAmount', label: '膨胀量', type: 'number', default: 0.4, min: -1, max: 1.5, step: 0.01 },
       { name: 'centerX', label: '中心X偏移', type: 'number', default: 0, min: -100, max: 100, step: 1 },
       { name: 'centerY', label: '中心Y偏移', type: 'number', default: 0, min: -100, max: 100, step: 1 },
@@ -2941,6 +2965,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'TrendingUp',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'intensity', label: '拉伸强度', type: 'number', default: 0.5, min: 0, max: 2, step: 0.01 },
       { name: 'direction', label: '拉伸方向', type: 'select', default: 'radial', options: [
         { label: '径向', value: 'radial' },
@@ -2966,6 +2992,8 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     icon: 'Target',
     category: 'animation',
     params: [
+      { name: 'speed', label: '速度', type: 'number', default: 1, min: 0, max: 5, step: 0.1 },
+      { name: 'phase', label: '相位(帧)', type: 'number', default: 0, min: -999, max: 999, step: 1 },
       { name: 'amplitude', label: '振幅', type: 'number', default: 3, min: 0, max: 20, step: 0.5 },
       { name: 'frequency', label: '空间频率', type: 'number', default: 0.15, min: 0.01, max: 1, step: 0.01 },
       { name: 'speed', label: '传播速度', type: 'number', default: 6.28, min: -20, max: 20, step: 0.1 },

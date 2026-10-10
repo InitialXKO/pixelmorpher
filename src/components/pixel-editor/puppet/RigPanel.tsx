@@ -47,6 +47,11 @@ export default function RigPanel({
   const handleDeleteSkeleton = useCallback(() => {
     if (!selectedSkeletonId) return;
     const store = useProjectStore.getState();
+    const affected = (store.puppetCharacters ?? []).filter(
+      (c) => c.puppetSkeletonId === selectedSkeletonId
+    );
+    const names = affected.map((c) => c.name).join('、');
+    if (!confirm(`删除骨骼会连带删除 ${affected.length} 个角色${names ? `（${names}）` : ''}，继续？`)) return;
     store.pushUndo('删除骨骼');
     useProjectStore.setState({
       puppetSkeletons: (store.puppetSkeletons ?? []).filter((s) => s.id !== selectedSkeletonId),
@@ -74,13 +79,45 @@ export default function RigPanel({
   const handleDeleteNode = useCallback(() => {
     if (!selectedSkeletonId || !selectedNodeId) return;
     const store = useProjectStore.getState();
+    const skeleton = (store.puppetSkeletons ?? []).find((s) => s.id === selectedSkeletonId);
+    const node = skeleton?.nodes.find((n) => n.id === selectedNodeId);
+    if (!node) return;
+    // 子节点：挂在被删节点上的
+    const children = (skeleton?.nodes ?? []).filter((n) => n.plug?.socketId && node.sockets?.some((s) => s.id === n.plug!.socketId));
+    // 检查其他节点蓝图里的 nodeRef 引用
+    const refBy = (skeleton?.nodes ?? []).filter((n) =>
+      n.id !== selectedNodeId &&
+      n.blueprint?.nodes.some((bn) => bn.type === 'nodeRef' && String(bn.params.nodeId) === selectedNodeId)
+    );
+    const warns: string[] = [];
+    if (children.length > 0) warns.push(`${children.length} 个子节点将被 detached（plug 置空）`);
+    if (refBy.length > 0) warns.push(`${refBy.length} 个节点的蓝图引用了它（nodeRef 将输出 0）：${refBy.map((n) => n.name).join('、')}`);
+    if (warns.length > 0 && !confirm(`删除节点「${node.name}」？\n${warns.join('\n')}`)) return;
     store.pushUndo('删除节点');
     useProjectStore.setState({
       puppetSkeletons: (store.puppetSkeletons ?? []).map((s) =>
         s.id === selectedSkeletonId
-          ? { ...s, nodes: s.nodes.filter((n) => n.id !== selectedNodeId) }
+          ? {
+              ...s,
+              nodes: s.nodes
+                .filter((n) => n.id !== selectedNodeId)
+                .map((n) =>
+                  n.plug?.socketId && node.sockets?.some((so) => so.id === n.plug!.socketId)
+                    ? { ...n, plug: null }
+                    : n
+                ),
+            }
           : s
       ),
+      // 删除该节点的全部关键帧（所有使用该骨骼的动画片段）
+      animationClips: (store.animationClips ?? []).map((c) => {
+        const char = (store.puppetCharacters ?? []).find((ch) => ch.id === c.puppetCharacterId);
+        if (char?.puppetSkeletonId !== selectedSkeletonId) return c;
+        return {
+          ...c,
+          puppetNodeKeyframes: (c.puppetNodeKeyframes ?? []).filter((k) => k.nodeId !== selectedNodeId),
+        };
+      }),
     });
     handleSelectNodeWithSync(null);
   }, [selectedSkeletonId, selectedNodeId, handleSelectNodeWithSync]);
@@ -127,11 +164,32 @@ export default function RigPanel({
   const handleRemoveSocket = useCallback(
     (socketId: string) => {
       if (!selectedSkeletonId || !selectedNodeId || !selectedNode) return;
-      handleUpdateNode(selectedNodeId, {
-        sockets: (selectedNode.sockets ?? []).filter((s) => s.id !== socketId),
+      const store = useProjectStore.getState();
+      const skeleton = (store.puppetSkeletons ?? []).find((s) => s.id === selectedSkeletonId);
+      const socket = (selectedNode.sockets ?? []).find((s) => s.id === socketId);
+      const attached = (skeleton?.nodes ?? []).filter((n) => n.plug?.socketId === socketId);
+      if (attached.length > 0 && !confirm(`删除插槽「${socket?.name ?? socketId}」会 detach ${attached.length} 个子节点（${attached.map((n) => n.name).join('、')}），继续？`)) return;
+      store.pushUndo('删除插槽');
+      useProjectStore.setState({
+        puppetSkeletons: (store.puppetSkeletons ?? []).map((s) =>
+          s.id === selectedSkeletonId
+            ? {
+                ...s,
+                nodes: s.nodes.map((n) => {
+                  if (n.id === selectedNodeId) {
+                    return { ...n, sockets: (n.sockets ?? []).filter((so) => so.id !== socketId) };
+                  }
+                  if (n.plug?.socketId === socketId) {
+                    return { ...n, plug: null };
+                  }
+                  return n;
+                }),
+              }
+            : s
+        ),
       });
     },
-    [selectedSkeletonId, selectedNodeId, selectedNode, handleUpdateNode]
+    [selectedSkeletonId, selectedNodeId, selectedNode]
   );
 
   return (

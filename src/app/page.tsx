@@ -2,9 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import PixelCanvas from '@/components/pixel-editor/PixelCanvas';
-import PartPanel from '@/components/pixel-editor/PartPanel';
 import TrajectoryPanel from '@/components/pixel-editor/TrajectoryPanel';
-import SkeletonPanel from '@/components/pixel-editor/SkeletonPanel';
 import PuppetPanel from '@/components/pixel-editor/PuppetPanel';
 import PuppetAssetPanel from '@/components/pixel-editor/PuppetAssetPanel';
 import PuppetModeBanner from '@/components/pixel-editor/puppet/PuppetModeBanner';
@@ -27,7 +25,7 @@ import { useAssetStore } from '@/lib/asset-store';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
-import { Settings, Route, Bone, Activity, Terminal, Puzzle, Layers, Pencil, ChevronDown, ChevronUp, Grid3x3, Eye, Paintbrush, Globe, Film, Shirt, Zap } from 'lucide-react';
+import { Settings, Route, Activity, Terminal, Puzzle, Layers, Pencil, ChevronDown, ChevronUp, Grid3x3, Eye, Paintbrush, Globe, Film, Shirt, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -384,13 +382,6 @@ export default function Home() {
             轨迹
           </TabsTrigger>
           <TabsTrigger
-            value="skeleton"
-            className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-          >
-            <Bone className="size-3 mr-0.5" />
-            骨骼
-          </TabsTrigger>
-          <TabsTrigger
             value="procedural"
             className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
           >
@@ -438,9 +429,6 @@ export default function Home() {
         </TabsContent>
         <TabsContent value="trajectory" className="flex-1 min-h-0 m-0">
           <TrajectoryPanel />
-        </TabsContent>
-        <TabsContent value="skeleton" className="flex-1 min-h-0 m-0">
-          <SkeletonPanel />
         </TabsContent>
         <TabsContent value="procedural" className="flex-1 min-h-0 m-0">
           <ProceduralPanel />

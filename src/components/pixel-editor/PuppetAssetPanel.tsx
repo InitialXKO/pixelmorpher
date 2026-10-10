@@ -52,10 +52,7 @@ export default function PuppetAssetPanel() {
     clips: true,
   });
 
-  const puppetClips = useMemo(
-    () => animationClips.filter((c) => true),
-    [animationClips]
-  );
+  const puppetClips = animationClips;
 
   const toggleCharExpand = (id: string) => {
     setExpandedChars((prev) => {
@@ -138,7 +135,7 @@ export default function PuppetAssetPanel() {
                     return (
                       <div key={char.id}>
                         <div
-                          className={`flex items-center gap-1 px-1.5 py-1 rounded cursor-pointer transition-colors ${
+                          className={`group flex items-center gap-1 px-1.5 py-1 rounded cursor-pointer transition-colors ${
                             isActive
                               ? 'bg-cyan-500/15 text-cyan-300'
                               : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
@@ -146,7 +143,10 @@ export default function PuppetAssetPanel() {
                           onClick={() => {
                             if (skeleton) {
                               setActivePuppetSkeletonId(skeleton.id);
-                              togglePuppetSkeleton();
+                              // 只开不关：避免点另一个角色时把骨骼显示关掉
+                              if (!useEditorStore.getState().showPuppetSkeleton) {
+                                togglePuppetSkeleton();
+                              }
                             }
                             toggleCharExpand(char.id);
                           }}
@@ -163,6 +163,18 @@ export default function PuppetAssetPanel() {
                           <span className="text-[8px] text-gray-600">
                             {skeleton?.nodes.length ?? 0} 节点
                           </span>
+                          <button
+                            className="opacity-0 group-hover:opacity-100 hover:text-red-400 text-gray-600 transition-opacity"
+                            title="删除角色"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm(`确定删除角色「${char.name}」吗？其骨架、服装和动画片段将一并删除，此操作不可撤销。`)) {
+                                useProjectStore.getState().removePuppetCharacter(char.id);
+                              }
+                            }}
+                          >
+                            <Trash2 className="size-2.5" />
+                          </button>
                         </div>
 
                         {isExpanded && (

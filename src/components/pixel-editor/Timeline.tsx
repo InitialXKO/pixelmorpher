@@ -24,6 +24,8 @@ import ParamDriverEditDialog from './timeline/dialogs/ParamDriverEditDialog';
 import EffectKeyframeEditDialog from './timeline/dialogs/EffectKeyframeEditDialog';
 import ModifierParamEditDialog from './timeline/dialogs/ModifierParamEditDialog';
 import useVirtualScroll from './timeline/useVirtualScroll';
+import { usePuppetSessionStore } from '@/lib/puppet-session-store';
+import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 
 // ---- Main Timeline Component ----
 export default function Timeline() {
@@ -32,7 +34,6 @@ export default function Timeline() {
   const playheadLineRef = useRef<HTMLDivElement>(null);
   const playheadTriangleRef = useRef<HTMLDivElement>(null);
   const frameDisplayRef = useRef<HTMLSpanElement>(null);
-  const rulerHighlightRef = useRef<SVGRectElement | null>(null);
 
   // ---- Store ----
   const tracks = useProjectStore((s) => s.tracks);
@@ -107,9 +108,26 @@ export default function Timeline() {
   const handleAddPuppetKeyframe = useCallback(
     (nodeId: string, frame: number) => {
       if (!activeClip) return;
-      addPuppetNodeKeyframe(activeClip.id, nodeId, frame, {});
+      // H2: 用当前帧的插值姿态填充，而不是空对象（避免节点弹回静止姿态）
+      const skeleton = puppetSkeletons.find((sk) =>
+        sk.nodes.some((n) => n.id === nodeId)
+      );
+      const node = skeleton?.nodes.find((n) => n.id === nodeId);
+      let values: Partial<Pick<PuppetNodeKeyframe, 'angle' | 'stretch' | 'offsetX' | 'offsetY' | 'direction' | 'viewLatitude'>> = {};
+      if (skeleton && node) {
+        const ivMap = interpolateNodeKeyframes(skeleton, activeClip.puppetNodeKeyframes ?? [], frame);
+        const iv = ivMap.get(nodeId);
+        values = {
+          angle: iv?.angle ?? node.angle,
+          stretch: iv?.stretch ?? node.stretch,
+          offsetX: iv?.offsetX ?? node.offsetX,
+          offsetY: iv?.offsetY ?? node.offsetY,
+          direction: skeleton.currentDirection || 'S',
+        };
+      }
+      addPuppetNodeKeyframe(activeClip.id, nodeId, frame, values);
     },
-    [activeClip, addPuppetNodeKeyframe]
+    [activeClip, addPuppetNodeKeyframe, puppetSkeletons]
   );
 
   const handleDeletePuppetKeyframe = useCallback(
@@ -156,6 +174,9 @@ export default function Timeline() {
   const editMode = useEditorStore((s) => s.editMode);
   const partEditPartId = useEditorStore((s) => s.partEditPartId);
 
+  // ---- Puppet session (for H1: Diamond button targets selected puppet node) ----
+  const performNodeId = usePuppetSessionStore((s) => s.performNodeId);
+
   // ---- Dynamic frame width from zoom ----
   const FRAME_WIDTH = useMemo(() => getFrameWidth(timelineZoom), [timelineZoom]);
 
@@ -171,9 +192,6 @@ export default function Timeline() {
         }
         if (frameDisplayRef.current) {
           frameDisplayRef.current.textContent = String(f);
-        }
-        if (rulerHighlightRef.current) {
-          rulerHighlightRef.current.setAttribute('x', String(f * fw));
         }
         if (scrollContainerRef.current) {
           const container = scrollContainerRef.current;
@@ -225,7 +243,8 @@ export default function Timeline() {
 
   // ---- Virtual Scroll ----
   const { visibleRange, rowOffsets, rowHeights, totalHeight, onScroll: handleVirtualScroll } = useVirtualScroll(
-    scrollContainerRef, tracks, parts, effectTracks, canvasModifierTracks, getKeyframesForPart
+    scrollContainerRef, tracks, parts, effectTracks, canvasModifierTracks, getKeyframesForPart,
+    puppetNodes.length, isPuppetClip
   );
 
   // ---- Playback Logic ----
@@ -251,6 +270,11 @@ export default function Timeline() {
         case 'Delete':
         case 'Backspace': {
           if (selectedKeyframeId) { e.preventDefault(); removeKeyframe(selectedKeyframeId); selectKeyframe(null); }
+          else if (selectedPuppetKeyframeId && activeClip) {
+            e.preventDefault();
+            removePuppetNodeKeyframe(activeClip.id, selectedPuppetKeyframeId);
+            setSelectedPuppetKeyframeId(null);
+          }
           break;
         }
         case ' ': {
@@ -434,8 +458,12 @@ export default function Timeline() {
   const handlePlayheadMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    // L5: 拖拽播放头时先暂停，避免与播放调度器打架抖动
+    if (useEditorStore.getState().playState === 'playing') {
+      setPlayState('paused');
+    }
     setIsDraggingPlayhead(true);
-  }, []);
+  }, [setPlayState]);
 
   useEffect(() => {
     if (!isDraggingPlayhead) return;
@@ -531,6 +559,7 @@ export default function Timeline() {
         displayFps={displayFps}
         displayFrames={displayFrames}
         selectedKeyframeId={selectedKeyframeId}
+        selectedPuppetKeyframeId={selectedPuppetKeyframeId}
         selectedKfInterpolationMode={selectedKfInterpolationMode}
         onPlay={handlePlay}
         onStop={handleStop}
@@ -541,6 +570,12 @@ export default function Timeline() {
         onFramesInput={setFramesInput}
         onFramesSubmit={handleFramesSubmit}
         onAddKeyframe={() => {
+          // H1: 木偶是唯一工作流，Diamond 按钮给选中的木偶节点打帧
+          if (isPuppetClip && activeClip && performNodeId) {
+            handleAddPuppetKeyframe(performNodeId, currentFrameRef.current);
+            return;
+          }
+          // 回退：旧 Part 路径（理论上走不到）
           let targetPartId: string | null = null;
           if (selectedPartId) {
             const track = tracks.find((t) => t.partId === selectedPartId);
@@ -557,6 +592,10 @@ export default function Timeline() {
         }}
         onDeleteKeyframe={() => {
           if (selectedKeyframeId) { removeKeyframe(selectedKeyframeId); selectKeyframe(null); }
+          else if (selectedPuppetKeyframeId && activeClip) {
+            removePuppetNodeKeyframe(activeClip.id, selectedPuppetKeyframeId);
+            setSelectedPuppetKeyframeId(null);
+          }
         }}
         onInterpolationChange={(mode: InterpolationMode) => {
           if (selectedKeyframeId) updateKeyframe(selectedKeyframeId, { interpolationMode: mode });

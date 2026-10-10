@@ -34,9 +34,36 @@ import { getCursorStyle, isStrokeToolCheck } from './canvas/canvas-utils';
 // PixelCanvas - Central canvas for PixelMorpher pixel animation
 // ============================================================
 
+/**
+ * 角色显示过滤：互斥模式下只返回选中角色。
+ * - perform 阶段且 showAllCharacters=true → 全部
+ * - 否则若 performCharacterId 有值 → 仅该角色
+ * - 否则 → 全部（无选中时的回退）
+ */
+function filterVisibleCharacters<T extends { id: string }>(
+  characters: T[],
+  session: { phase: string; showAllCharacters: boolean; performCharacterId: string | null },
+): T[] {
+  if (session.phase === 'perform' && session.showAllCharacters) {
+    return characters;
+  }
+  if (session.performCharacterId) {
+    const selected = characters.filter((c) => c.id === session.performCharacterId);
+    // 选中角色不在列表里时回退到全部（避免画布空白）
+    return selected.length > 0 ? selected : characters;
+  }
+  return characters;
+}
+
 export default function PixelCanvas() {
   const s = useCanvasState();
   const interaction = useCanvasInteraction(s);
+
+  // 订阅角色显示状态，变化时触发重渲染
+  const showAllCharacters = usePuppetSessionStore((st) => st.showAllCharacters);
+  const performCharacterId = usePuppetSessionStore((st) => st.performCharacterId);
+  const puppetPhase = usePuppetSessionStore((st) => st.phase);
+  const performArmed = usePuppetSessionStore((st) => st.performArmed);
 
   // ---- Render loop ----
   const render = useCallback(() => {
@@ -93,8 +120,11 @@ export default function PixelCanvas() {
         const pst = useProjectStore.getState();
         const clips = pst.animationClips;
         const skeletons = pst.puppetSkeletons ?? [];
-        const characters = pst.puppetCharacters ?? [];
-        if (skeletons.length === 0 || characters.length === 0) return;
+        const allCharacters = pst.puppetCharacters ?? [];
+        if (skeletons.length === 0 || allCharacters.length === 0) return;
+        // 角色显示互斥：非 perform 或未开启"显示全部"时，只渲染选中角色
+        const session = usePuppetSessionStore.getState();
+        const characters = filterVisibleCharacters(allCharacters, session);
         for (const character of characters) {
           const skel = skeletons.find(sk => sk.id === character.puppetSkeletonId);
           const clip = clips.find(c => true && c.puppetCharacterId === character.id);
@@ -195,10 +225,13 @@ export default function PixelCanvas() {
       }
     } else {
       const animationClips = useProjectStore.getState().animationClips;
+      // 角色显示互斥过滤
+      const puppetSession = usePuppetSessionStore.getState();
+      const visibleCharacters = filterVisibleCharacters(s.puppetCharacters ?? [], puppetSession);
       renderUnified(offCtx, s.canvasWidth, s.canvasHeight, s.parts, s.keyframes, currentFrame, s.backgroundColor,
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
-        s.animationVariables, s.globalModifiers, s.puppetSkeletons, s.puppetCharacters, animationClips, true);
+        s.animationVariables, s.globalModifiers, s.puppetSkeletons, visibleCharacters, animationClips, true);
     }
 
     // 3. Stroke preview
@@ -298,6 +331,7 @@ export default function PixelCanvas() {
     s.showWeightPaint, s.weightPaintBoneId, s.puppetSkeletons, s.puppetCharacters, s.puppetClipsVersion,
     s.canvasModifierTracks, s.partEditPartId, s.partEditModifiers,
     interaction.renderStrokePreview, s.getInterpolatedTranslateOffset,
+    showAllCharacters, performCharacterId, puppetPhase,
   ]);
 
   // Animation loop
@@ -312,7 +346,7 @@ export default function PixelCanvas() {
     return () => { unregisterScheduler(); if (s.rafRef.current) cancelAnimationFrame(s.rafRef.current); };
   }, [render]);
 
-  const cursorStyle = s.editMode === 'correction' ? 'crosshair' : getCursorStyle(s.tool, s.spaceHeldRef.current);
+  const cursorStyle = s.editMode === 'correction' ? 'crosshair' : getCursorStyle(s.tool, s.spaceHeldRef.current, performArmed);
 
   return (
     <div ref={s.containerRef} className="relative w-full h-full overflow-hidden" style={{ background: '#0f0f1a' }}>
@@ -331,13 +365,26 @@ export default function PixelCanvas() {
         onMouseLeave={interaction.handleMouseUp}
         onDoubleClick={interaction.handleDoubleClick}
         onWheel={interaction.handleWheel}
-        onContextMenu={(e) => e.preventDefault()}
       />
 
       {/* Correction mode badge */}
       {s.editMode === 'correction' && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(34, 211, 238, 0.2)', color: '#22d3ee', border: '1px solid rgba(34, 211, 238, 0.4)', backdropFilter: 'blur(4px)' }}>
           修正模式 · 笔画记录为 PixelEdit 修改器
+        </div>
+      )}
+
+      {/* Phase badge (rig/dress/perform) */}
+      {s.isPuppetMode && puppetPhase && (
+        <div className="absolute top-3 left-3 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(139, 92, 246, 0.2)', color: '#a78bfa', border: '1px solid rgba(139, 92, 246, 0.4)', backdropFilter: 'blur(4px)' }}>
+          {puppetPhase === 'rig' ? '搭建' : puppetPhase === 'dress' ? '穿衣' : '表演'}
+        </div>
+      )}
+
+      {/* Unarmed badge */}
+      {s.isPuppetMode && puppetPhase === 'perform' && !performArmed && (
+        <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.4)', backdropFilter: 'blur(4px)' }}>
+          未武装
         </div>
       )}
 

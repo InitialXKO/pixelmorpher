@@ -21,13 +21,14 @@ import { Label } from '@/components/ui/label';
 import BlueprintEditor from './BlueprintEditor';
 import BlueprintTemplateLoader from './BlueprintTemplateLoader';
 import { modifiersToBlueprint } from '@/lib/blueprint/migrate';
+import { isPixelDeformModifier } from '@/lib/engine/modifier-types';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 
 // 收录的修改器：变换类 + 像素类（用户要求像素层程序化动画也要支持）
 const PUPPET_MODIFIER_TYPES: AnimationModifierType[] = [
   // 变换类
   'pendulum', 'bounce', 'breath', 'wobble', 'float', 'shake', 'elastic',
-  'gait', 'noise', 'wave', 'spring', 'jitter', 'wheel',
+  'gait', 'noise', 'wave', 'spring', 'jitter', 'wheel', 'expression',
   // 像素类
   'texture_scroll', 'wave_deform', 'contour_scroll', 'reveal_hide',
   'shatter_dissolve', 'annihilate', 'teleport', 'crt_off',
@@ -129,19 +130,38 @@ export default function PuppetModifierPanel() {
       {activeTab === 'templates' ? (
         <BlueprintTemplateLoader skeleton={skeleton} />
       ) : activeTab === 'blueprint' ? (
-        blueprint ? (
-          <BlueprintEditor
-            graph={blueprint}
-            onChange={updateBlueprint}
-            title={`${node.name} 的蓝图`}
-          />
-        ) : (
-          <div className="text-[10px] text-gray-600 text-center py-4">
-            暂无蓝图。先在"列表"里加个修改器，会自动转成蓝图。
-          </div>
-        )
+        <>
+          {/* 像素修改器提示：不在蓝图里，走像素管线 */}
+          {(() => {
+            const pixelMods = modifiers.filter((m) => isPixelDeformModifier(m.type));
+            return pixelMods.length > 0 ? (
+              <div className="bg-purple-500/10 border border-purple-500/30 rounded px-2 py-1.5 text-[9px] text-purple-300/90 leading-relaxed mb-2">
+                🎨 该节点有 {pixelMods.length} 个像素修改器（{pixelMods.map((m) => getModifierDef(m.type)?.label ?? m.type).join('、')}），
+                在"列表" tab 编辑，不进蓝图。
+              </div>
+            ) : null;
+          })()}
+          {blueprint ? (
+            <BlueprintEditor
+              graph={blueprint}
+              onChange={updateBlueprint}
+              title={`${node.name} 的蓝图`}
+              skeleton={skeleton}
+            />
+          ) : (
+            <div className="text-[10px] text-gray-600 text-center py-4">
+              暂无蓝图。先在"列表"里加个变换类修改器（如钟摆），会自动转成蓝图。
+            </div>
+          )}
+        </>
       ) : (
       <>
+      {/* 蓝图存在时，列表修改器不生效，给出警告 */}
+      {node.blueprint && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded px-2 py-1.5 text-[9px] text-amber-300/90 leading-relaxed">
+          ⚠️ 该节点有蓝图，列表里的修改器不会生效。去"蓝图" tab 编辑，或删掉蓝图再用列表。
+        </div>
+      )}
       {/* 添加 */}
       <div className="flex gap-1.5">
         <select

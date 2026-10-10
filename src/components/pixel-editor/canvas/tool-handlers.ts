@@ -13,6 +13,7 @@ import { renderFrame, floodFill } from '@/lib/engine';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-render';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
+import { toast } from '@/hooks/use-toast';
 import {
   isPixelInPart,
   getLinePixels,
@@ -54,6 +55,12 @@ export const panningHandler: ToolHandler = {};
 export const moveToolHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
     const currentFrame = s.currentFrameRef.current;
+    const editorState = s.editorStore.getState();
+    // part_edit 模式下只能拖正在编辑的部位
+    if (editorState.editMode === 'part_edit') {
+      const editPartId = editorState.partEditPartId;
+      if (!editPartId || s.selectedPart?.id !== editPartId) return;
+    }
     if (!s.selectedPart) return;
     const selPart = s.selectedPart;
     const offsetX = s.canvasWidth / 2; const offsetY = s.canvasHeight / 2;
@@ -90,6 +97,9 @@ export const moveToolHandler: ToolHandler = {
 
 export const selectToolHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
+    // part_edit 模式下禁止切换选中部位
+    const editorState = s.editorStore.getState();
+    if (editorState.editMode === 'part_edit') return;
     s.editorStore.getState().selectPart(s.findPartAtPixel(px, py)?.id ?? null);
   },
 };
@@ -164,7 +174,12 @@ export const puppetHandler: ToolHandler = {
 
     const session = usePuppetSessionStore.getState();
     // 未武装或关闭自动关键帧时：只选中，不开始拖动
-    if (!session.performArmed || !session.autoKeyframe) return;
+    if (!session.performArmed || !session.autoKeyframe) {
+      if (!session.performArmed) {
+        toast({ title: '未武装', description: '请先在 Perform 面板点击武装按钮', variant: 'destructive' });
+      }
+      return;
+    }
 
     let dragMode: 'rotate' | 'move' | 'moveAll';
     if (e.altKey) dragMode = 'moveAll';
@@ -867,9 +882,6 @@ export function getToolHandler(
     case 'inpaint': return inpaintHandler;
     case 'brush':
     case 'eraser': return brushEraserHandler;
-    case 'bone': return boneHandler;
-    case 'ik': return ikHandler;
-    case 'weight_paint': return weightPaintHandler;
     default:
       // Stroke tools (motion_blur_brush, glow_brush, particle_brush, afterimage_brush)
       if (isStrokeToolCheck(tool)) return strokeToolHandler;

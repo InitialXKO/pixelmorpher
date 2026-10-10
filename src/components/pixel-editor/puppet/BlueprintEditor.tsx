@@ -7,24 +7,28 @@
 // ============================================================
 
 import React, { useMemo, useState, useCallback } from 'react';
-import { Plus, Trash2, X } from 'lucide-react';
+import { Plus, Trash2, X, Network, Blocks } from 'lucide-react';
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
-import { listBlueprintNodeTypes } from '@/lib/blueprint/eval';
+import { listBlueprintNodeTypes, getBlueprintNodeLabel } from '@/lib/blueprint/eval';
 import { Button } from '@/components/ui/button';
+import BlueprintBlockView from './BlueprintBlockView';
 
 interface BlueprintEditorProps {
   graph: BlueprintGraph;
   onChange: (graph: BlueprintGraph) => void;
   title?: string;
+  /** 传入后，nodeRef 节点的 nodeId 参数渲染为下拉选择 */
+  skeleton?: { nodes: { id: string; name: string }[] } | null;
 }
 
 const NODE_WIDTH = 140;
 const NODE_HEADER_H = 24;
 const PORT_H = 18;
 
-export default function BlueprintEditor({ graph, onChange, title }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton }: BlueprintEditorProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
+  const [viewMode, setViewMode] = useState<'graph' | 'blocks'>('graph');
 
   const nodeTypes = useMemo(() => listBlueprintNodeTypes(), []);
 
@@ -104,7 +108,45 @@ export default function BlueprintEditor({ graph, onChange, title }: BlueprintEdi
 
   return (
     <div className="space-y-2">
-      {title && <div className="text-[10px] text-gray-400 font-medium">{title}</div>}
+      {title && (
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] text-gray-400 font-medium">{title}</div>
+          <div className="flex gap-1">
+            <button
+              onClick={() => setViewMode('graph')}
+              className={`p-1 rounded ${viewMode === 'graph' ? 'bg-cyan-500/20 text-cyan-300' : 'text-gray-500 hover:text-gray-300'}`}
+              title="节点图"
+            >
+              <Network className="size-3" />
+            </button>
+            <button
+              onClick={() => setViewMode('blocks')}
+              className={`p-1 rounded ${viewMode === 'blocks' ? 'bg-cyan-500/20 text-cyan-300' : 'text-gray-500 hover:text-gray-300'}`}
+              title="积木"
+            >
+              <Blocks className="size-3" />
+            </button>
+          </div>
+        </div>
+      )}
+      {!title && (
+        <div className="flex justify-end gap-1">
+          <button
+            onClick={() => setViewMode('graph')}
+            className={`p-1 rounded ${viewMode === 'graph' ? 'bg-cyan-500/20 text-cyan-300' : 'text-gray-500 hover:text-gray-300'}`}
+            title="节点图"
+          >
+            <Network className="size-3" />
+          </button>
+          <button
+            onClick={() => setViewMode('blocks')}
+            className={`p-1 rounded ${viewMode === 'blocks' ? 'bg-cyan-500/20 text-cyan-300' : 'text-gray-500 hover:text-gray-300'}`}
+            title="积木"
+          >
+            <Blocks className="size-3" />
+          </button>
+        </div>
+      )}
 
       {/* 工具条 */}
       <div className="flex gap-1.5">
@@ -114,7 +156,7 @@ export default function BlueprintEditor({ graph, onChange, title }: BlueprintEdi
           className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1.5 py-1 text-[10px] text-gray-300"
         >
           {nodeTypes.map((t) => (
-            <option key={t} value={t}>{t}</option>
+            <option key={t} value={t}>{getBlueprintNodeLabel(t)}</option>
           ))}
         </select>
         <Button size="sm" onClick={addNode} className="h-7 px-2 text-[10px]">
@@ -122,6 +164,10 @@ export default function BlueprintEditor({ graph, onChange, title }: BlueprintEdi
         </Button>
       </div>
 
+      {viewMode === 'blocks' ? (
+        <BlueprintBlockView graph={graph} onChange={onChange} />
+      ) : (
+      <>
       {/* 画布 */}
       <div
         className="relative bg-[#080818] border border-[#1e1e3a] rounded overflow-auto"
@@ -163,8 +209,8 @@ export default function BlueprintEditor({ graph, onChange, title }: BlueprintEdi
               onClick={(e) => { e.stopPropagation(); setSelectedId(node.id); }}
             >
               <div className="flex items-center justify-between px-1.5 py-1 border-b border-[#1e1e3a]">
-                <span className="text-[10px] font-medium text-gray-200 truncate">
-                  {node.type}
+                <span className="text-[10px] font-medium text-gray-200 truncate" title={node.type}>
+                  {getBlueprintNodeLabel(node.type)}
                   {isOutput && <span className="text-[8px] text-emerald-400 ml-1">输出</span>}
                 </span>
                 {!isOutput && (
@@ -190,13 +236,15 @@ export default function BlueprintEditor({ graph, onChange, title }: BlueprintEdi
           );
         })}
       </div>
+      </>
+      )}
 
-      {/* 参数编辑 */}
-      {selected && (
+      {/* 参数编辑（仅节点图模式） */}
+      {viewMode === 'graph' && selected && (
         <div className="bg-[#080818] border border-[#1e1e3a] rounded p-2 space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-[10px] text-gray-300 font-medium">
-              {selected.type} 参数
+              {getBlueprintNodeLabel(selected.type)} 参数
             </span>
             <button
               onClick={() => setSelectedId(null)}
@@ -210,17 +258,48 @@ export default function BlueprintEditor({ graph, onChange, title }: BlueprintEdi
           {Object.entries(selected.params).map(([key, val]) => (
             <div key={key} className="flex items-center gap-1.5">
               <span className="text-[9px] text-gray-500 w-20 truncate">{key}</span>
-              <input
-                type={typeof val === 'number' ? 'number' : 'text'}
-                value={String(val)}
-                onChange={(e) => {
-                  const v = typeof val === 'number' ? Number(e.target.value) : e.target.value;
-                  updateNode(selected.id, {
-                    params: { ...selected.params, [key]: v },
-                  });
-                }}
-                className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300"
-              />
+              {selected.type === 'nodeRef' && key === 'nodeId' && skeleton ? (
+                <select
+                  value={String(val)}
+                  onChange={(e) => {
+                    updateNode(selected.id, {
+                      params: { ...selected.params, [key]: e.target.value },
+                    });
+                  }}
+                  className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300"
+                >
+                  <option value="">选择节点…</option>
+                  {skeleton.nodes.map((n) => (
+                    <option key={n.id} value={n.id}>{n.name}</option>
+                  ))}
+                </select>
+              ) : selected.type === 'nodeRef' && key === 'output' ? (
+                <select
+                  value={String(val)}
+                  onChange={(e) => {
+                    updateNode(selected.id, {
+                      params: { ...selected.params, [key]: e.target.value },
+                    });
+                  }}
+                  className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300"
+                >
+                  {['rotation', 'translateX', 'translateY', 'scaleX', 'scaleY'].map((o) => (
+                    <option key={o} value={o}>{o}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type={typeof val === 'number' ? 'number' : 'text'}
+                  value={String(val)}
+                  onChange={(e) => {
+                    const v = typeof val === 'number' ? Number(e.target.value) : e.target.value;
+                    updateNode(selected.id, {
+                      params: { ...selected.params, [key]: v },
+                    });
+                  }}
+                  className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300"
+                />
+              )}
             </div>
           ))}
 

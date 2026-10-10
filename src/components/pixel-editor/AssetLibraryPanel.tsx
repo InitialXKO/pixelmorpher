@@ -18,8 +18,6 @@ import {
   Edit3,
   Check,
   X,
-  Eye,
-  EyeOff,
   Lock,
   Unlock,
   ChevronRight,
@@ -316,7 +314,6 @@ interface PartCardProps {
   onSelect: () => void;
   onDelete: () => void;
   onRename: (newName: string) => void;
-  onToggleVisibility: () => void;
   onToggleLock: () => void;
   onDuplicate: () => void;
   onSaveToLibrary: () => void;
@@ -328,7 +325,6 @@ function PartCard({
   onSelect,
   onDelete,
   onRename,
-  onToggleVisibility,
   onToggleLock,
   onDuplicate,
   onSaveToLibrary,
@@ -371,15 +367,6 @@ function PartCard({
             <Button
               variant="ghost"
               size="sm"
-              className={`h-4 w-4 p-0 ${part.visible ? 'text-zinc-500' : 'text-zinc-700'}`}
-              onClick={(e) => { e.stopPropagation(); onToggleVisibility(); }}
-              title={part.visible ? '隐藏' : '显示'}
-            >
-              {part.visible ? <Eye className="size-2" /> : <EyeOff className="size-2" />}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
               className={`h-4 w-4 p-0 ${part.locked ? 'text-amber-500' : 'text-zinc-700'}`}
               onClick={(e) => { e.stopPropagation(); onToggleLock(); }}
               title={part.locked ? '解锁' : '锁定'}
@@ -410,16 +397,6 @@ function PartCard({
         >
           <Edit3 className="size-3 mr-1.5 text-zinc-400" />
           重命名
-        </ContextMenuItem>
-
-        <ContextMenuItem
-          className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 py-1.5 cursor-pointer"
-          onClick={onToggleVisibility}
-        >
-          {part.visible
-            ? <EyeOff className="size-3 mr-1.5 text-zinc-400" />
-            : <Eye className="size-3 mr-1.5 text-zinc-400" />}
-          {part.visible ? '隐藏部件' : '显示部件'}
         </ContextMenuItem>
 
         <ContextMenuItem
@@ -456,71 +433,6 @@ function PartCard({
 }
 
 // ============================================================
-// Skeleton Card with Context Menu
-// ============================================================
-
-interface SkeletonCardProps {
-  skeleton: {
-    id: string;
-    name: string;
-    bones: unknown[];
-  };
-  onSelect: () => void;
-  onDelete: () => void;
-  onRename: (newName: string) => void;
-  isSelected: boolean;
-}
-
-function SkeletonCard({ skeleton, onSelect, onDelete, onRename, isSelected }: SkeletonCardProps) {
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div
-          className={`group flex items-center gap-1.5 px-2 py-0.5 rounded cursor-pointer transition-colors ${
-            isSelected
-              ? 'bg-purple-600/20 border border-purple-500/40'
-              : 'hover:bg-zinc-800/50 border border-transparent'
-          }`}
-          onClick={onSelect}
-        >
-          <Bone className="size-2.5 text-zinc-500 flex-shrink-0" />
-          <span className="text-[10px] text-zinc-300 truncate flex-1 min-w-0">{skeleton.name}</span>
-          <span className="text-[9px] text-zinc-600">{skeleton.bones.length}骨骼</span>
-        </div>
-      </ContextMenuTrigger>
-
-      <ContextMenuContent className="bg-zinc-900 border-zinc-700 min-w-[160px]">
-        <ContextMenuLabel className="text-[10px] text-zinc-400 py-1.5">
-          {skeleton.name}
-        </ContextMenuLabel>
-        <ContextMenuSeparator className="bg-zinc-800" />
-
-        <ContextMenuItem
-          className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 py-1.5 cursor-pointer"
-          onClick={() => {
-            const newName = prompt('重命名骨骼:', skeleton.name);
-            if (newName?.trim()) onRename(newName.trim());
-          }}
-        >
-          <Edit3 className="size-3 mr-1.5 text-zinc-400" />
-          重命名
-        </ContextMenuItem>
-
-        <ContextMenuSeparator className="bg-zinc-800" />
-
-        <ContextMenuItem
-          className="text-[11px] text-red-400 focus:bg-red-600/20 focus:text-red-300 py-1.5 cursor-pointer"
-          variant="destructive"
-          onClick={onDelete}
-        >
-          <Trash2 className="size-3 mr-1.5" />
-          删除骨骼
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-}
-
 // ============================================================
 // Main Panel
 // ============================================================
@@ -541,14 +453,13 @@ export default function AssetLibraryPanel() {
     setSelectedAssetId,
   } = useAssetStore();
 
-  const { parts, skeletons, keyframes, removePart, updatePart, addPart, setPartPixels } = useProjectStore();
+  const { parts, keyframes, removePart, updatePart, addPart, setPartPixels } = useProjectStore();
 
   const [searchText, setSearchText] = useState('');
 
   // Selected part from editor store (lazy read to avoid re-render loop)
   const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
-  const [selectedSkeletonId, setSelectedSkeletonId] = useState<string | null>(null);
-
+  
   useEffect(() => {
     if (!libraryLoaded) loadLibrary();
   }, [libraryLoaded, loadLibrary]);
@@ -571,8 +482,11 @@ export default function AssetLibraryPanel() {
   }, [importAssetToProject]);
 
   const handleDeleteAsset = useCallback(async (assetId: string) => {
+    const asset = libraryAssets.find((a) => a.id === assetId);
+    const name = asset?.name ?? '该资产';
+    if (!confirm(`确定删除资产「${name}」吗？此操作不可撤销。`)) return;
     await removeAssetFromLibrary(assetId);
-  }, [removeAssetFromLibrary]);
+  }, [removeAssetFromLibrary, libraryAssets]);
 
   const handleRenameAsset = useCallback(async (assetId: string, newName: string) => {
     await updateAssetInLibrary(assetId, { name: newName });
@@ -613,10 +527,6 @@ export default function AssetLibraryPanel() {
     const store = useProjectStore.getState();
     store.pushUndo('重命名部件');
     store.updatePart(partId, { name: newName });
-  }, []);
-
-  const handleTogglePartVisibility = useCallback((_partId: string) => {
-    // Part 恒可见，无需切换
   }, []);
 
   const handleTogglePartLock = useCallback((partId: string) => {
@@ -682,29 +592,11 @@ export default function AssetLibraryPanel() {
 
   // ---- Skeleton Actions ----
 
-  const handleSelectSkeleton = useCallback((skeletonId: string) => {
-    setSelectedSkeletonId(skeletonId);
-    try {
-      const { useEditorStore } = require('@/lib/store') as { useEditorStore: any };
-      useEditorStore.getState().setActiveSkeletonId(skeletonId);
-    } catch {}
-  }, []);
+  
 
-  const handleDeleteSkeleton = useCallback((skeletonId: string) => {
-    const store = useProjectStore.getState();
-    store.pushUndo('删除骨骼');
-    store.removeSkeleton(skeletonId);
-  }, []);
+  
 
-  const handleRenameSkeleton = useCallback((skeletonId: string, newName: string) => {
-    const store = useProjectStore.getState();
-    store.pushUndo('重命名骨骼');
-    // Update skeleton name directly in state
-    const skeletons = store.skeletons.map((s) =>
-      s.id === skeletonId ? { ...s, name: newName } : s
-    );
-    useProjectStore.setState({ skeletons });
-  }, []);
+  
 
   return (
     <div className="flex flex-col h-full">
@@ -832,7 +724,6 @@ export default function AssetLibraryPanel() {
                       onSelect={() => handleSelectPart(part.id)}
                       onDelete={() => handleDeletePart(part.id)}
                       onRename={(newName) => handleRenamePart(part.id, newName)}
-                      onToggleVisibility={() => handleTogglePartVisibility(part.id)}
                       onToggleLock={() => handleTogglePartLock(part.id)}
                       onDuplicate={() => handleDuplicatePart(part.id)}
                       onSaveToLibrary={() => handleSavePartToLibrary(part.id)}
@@ -840,28 +731,6 @@ export default function AssetLibraryPanel() {
                     />
                   ))}
                 </div>
-              )}
-            </div>
-
-            {/* Skeletons */}
-            <div className="px-2 py-1 mt-2">
-              <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1 flex items-center gap-1">
-                <Bone className="size-2.5" />
-                骨骼 ({skeletons.length})
-              </div>
-              {skeletons.length === 0 ? (
-                <p className="text-[9px] text-zinc-600 pl-3">暂无骨骼</p>
-              ) : (
-                skeletons.map((skel) => (
-                  <SkeletonCard
-                    key={skel.id}
-                    skeleton={skel}
-                    onSelect={() => handleSelectSkeleton(skel.id)}
-                    onDelete={() => handleDeleteSkeleton(skel.id)}
-                    onRename={(newName) => handleRenameSkeleton(skel.id, newName)}
-                    isSelected={selectedSkeletonId === skel.id}
-                  />
-                ))
               )}
             </div>
 

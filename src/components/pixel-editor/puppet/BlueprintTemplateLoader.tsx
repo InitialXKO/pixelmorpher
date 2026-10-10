@@ -76,6 +76,24 @@ export default function BlueprintTemplateLoader({ skeleton }: BlueprintTemplateL
       return;
     }
 
+    // 检查是否会覆盖已有蓝图
+    const allNodeIds = [
+      ...slots.frontLegs,
+      ...slots.backLegs,
+      slots.tail,
+      slots.body,
+      slots.head,
+    ].filter(Boolean) as string[];
+    const hasExisting = allNodeIds.some((id) => {
+      const n = skeleton.nodes.find((nn) => nn.id === id);
+      return n?.blueprint;
+    });
+    if (hasExisting) {
+      if (!confirm('部分节点已有蓝图，应用模板会覆盖。继续？')) {
+        return;
+      }
+    }
+
     const blueprints = createQuadrupedRunBlueprint(slots);
     const updatePuppetNode = useProjectStore.getState().updatePuppetNode;
 

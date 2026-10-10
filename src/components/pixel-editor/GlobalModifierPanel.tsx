@@ -232,7 +232,9 @@ function GlobalModifierCard({ modifier }: { modifier: GlobalModifier }) {
         <ContextMenuItem
           className="text-[11px] text-red-400 focus:bg-red-600/20 focus:text-red-300 py-1.5 cursor-pointer"
           variant="destructive"
-          onClick={() => removeGlobalModifier(modifier.id)}
+          onClick={() => {
+            if (confirm('删除这个全局修改器？')) removeGlobalModifier(modifier.id);
+          }}
         >
           <Trash2 className="size-3 mr-1.5" />
           删除

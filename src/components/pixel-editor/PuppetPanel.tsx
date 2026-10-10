@@ -73,7 +73,7 @@ export default function PuppetPanel() {
       if (sess.performNodeId !== canvasSelectedNodeId) {
         usePuppetSessionStore.setState({ performNodeId: canvasSelectedNodeId });
       }
-    } else if (currentPhase === 'rig') {
+    } else if (currentPhase === 'rig' || currentPhase === 'dress') {
       if (selectedSkeletonId !== skel.id) setSelectedSkeletonId(skel.id);
       if (selectedNodeId !== canvasSelectedNodeId) setSelectedNodeId(canvasSelectedNodeId);
     }

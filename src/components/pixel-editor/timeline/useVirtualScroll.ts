@@ -13,6 +13,8 @@ export default function useVirtualScroll(
   effectTracks: EffectTrack[],
   canvasModifierTracks: CanvasModifierTrack[],
   getKeyframesForPart: (partId: string) => Keyframe[],
+  puppetNodeCount: number = 0,
+  isPuppetClip: boolean = false,
 ): {
   visibleRange: { startIndex: number; endIndex: number };
   rowOffsets: number[];
@@ -74,8 +76,16 @@ export default function useVirtualScroll(
       groups.push({ trackId: '__canvas_mod_add__', height: TRACK_HEIGHT + 4 });
     }
 
+    // H4: 木偶行计入总高度，否则播放头红线在木偶区被截断
+    if (isPuppetClip && puppetNodeCount > 0) {
+      groups.push({ trackId: '__puppet_sep__', height: 20 });
+      for (let i = 0; i < puppetNodeCount; i++) {
+        groups.push({ trackId: `__puppet__${i}`, height: TRACK_HEIGHT });
+      }
+    }
+
     return groups;
-  }, [tracks, parts, effectTracks, canvasModifierTracks, getKeyframesForPart]);
+  }, [tracks, parts, effectTracks, canvasModifierTracks, getKeyframesForPart, puppetNodeCount, isPuppetClip]);
 
   const { rowOffsets, rowHeights, totalHeight } = useMemo(() => {
     const offsets: number[] = [];

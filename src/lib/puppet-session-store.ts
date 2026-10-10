@@ -30,10 +30,16 @@ export interface PuppetSessionState {
   autoKeyframe: boolean;
   /** 木偶洋葱皮（默认开） */
   puppetOnionSkin: boolean;
+  /**
+   * 显示全部角色（默认关，即互斥只显示选中角色）。
+   * rig/dress 阶段强制互斥；perform 阶段用户可切换。
+   */
+  showAllCharacters: boolean;
 
   setPerformNodeId: (id: string | null) => void;
   setAutoKeyframe: (v: boolean) => void;
   setPuppetOnionSkin: (v: boolean) => void;
+  setShowAllCharacters: (v: boolean) => void;
 
   /**
    * 进入操控：一键完成全部准备工作
@@ -70,6 +76,7 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
   performArmed: false,
   autoKeyframe: true,
   puppetOnionSkin: true,
+  showAllCharacters: false,
 
   setPhase: (phase) => {
     // 离开操控阶段时自动解除武装
@@ -87,6 +94,7 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
 
   setAutoKeyframe: (v) => set({ autoKeyframe: v }),
   setPuppetOnionSkin: (v) => set({ puppetOnionSkin: v }),
+  setShowAllCharacters: (v) => set({ showAllCharacters: v }),
 
   ensurePuppetClip: (characterId) => {
     const project = useProjectStore.getState();

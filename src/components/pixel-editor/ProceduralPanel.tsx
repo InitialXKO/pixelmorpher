@@ -14,7 +14,6 @@ import {
   CircleDot,
   ChevronDown,
   ChevronRight,
-  FileUp,
 } from 'lucide-react';
 
 import { useProjectStore, useEditorStore } from '@/lib/store';
@@ -50,7 +49,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { parseCSVWaveform } from '@/lib/csv-waveform';
 
 // ============================================================
 // ProceduralPanel - Panel for procedural animation management
@@ -827,7 +825,6 @@ export default function ProceduralPanel() {
   const { selectedPartId } = useEditorStore();
 
   // Feature 5: CSV waveform import ref
-  const csvInputRef = useRef<HTMLInputElement>(null);
 
   // ---- Derived ----
   const partAnimations = useMemo(
@@ -992,70 +989,7 @@ export default function ProceduralPanel() {
         </div>
       )}
 
-      {/* Feature 5: CSV Waveform Import */}
-      <div className="border-t border-zinc-800 px-3 py-1.5 shrink-0">
-        <input
-          ref={csvInputRef}
-          type="file"
-          accept=".csv,.txt"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (!file || !selectedPartId) return;
-            const reader = new FileReader();
-            reader.onload = (event) => {
-              try {
-                const text = event.target?.result as string;
-                const values = parseCSVWaveform(text);
-                if (values.length === 0) return;
-                // Create an expression animation modifier with CSV waveform data
-                const store = useProjectStore.getState();
-                const part = store.parts.find(p => p.id === selectedPartId);
-                if (!part) return;
-                const newMod: any = {
-                  id: crypto.randomUUID(),
-                  type: 'expression' as const,
-                  enabled: true,
-                  collapsed: false,
-                  params: {
-                    expressionX: '0',
-                    expressionY: '0',
-                    expressionRotation: '0',
-                    expressionScale: '1',
-                    amplitude: 10,
-                    period: values.length,
-                    phase: 0,
-                    convergeSpeed: 0.5,
-                    csvWaveform: values,
-                  },
-                  startFrame: 0,
-                  endFrame: -1,
-                  fadeInFrames: 0,
-                  fadeOutFrames: 0,
-                  blendMode: 'add',
-                  groupId: null,
-                };
-                // Part 不再支持 animationModifiers，CSV 波形导入已禁用
-                console.warn('CSV waveform import disabled: Part no longer supports animationModifiers');
-              } catch (err) {
-                console.error('Failed to parse CSV waveform:', err);
-              }
-            };
-            reader.readAsText(file);
-            e.target.value = '';
-          }}
-        />
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-full h-6 text-[10px] text-violet-400/70 hover:text-violet-300 hover:bg-violet-400/5 border border-dashed border-violet-900/30"
-          onClick={() => csvInputRef.current?.click()}
-          disabled={!selectedPartId}
-        >
-          <FileUp className="size-3 mr-1" />
-          导入CSV波形
-        </Button>
-      </div>
+
     </div>
   );
 }

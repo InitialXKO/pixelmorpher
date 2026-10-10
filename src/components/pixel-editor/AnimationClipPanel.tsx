@@ -35,8 +35,11 @@ export default function AnimationClipPanel() {
 
   const handleDeleteClip = useCallback((clipId: string) => {
     if (animationClips.length <= 1) return; // Don't delete the last clip
+    const clip = animationClips.find((c) => c.id === clipId);
+    const name = clip?.name ?? '该片段';
+    if (!confirm(`确定删除动画片段「${name}」吗？其中的关键帧将一并删除，此操作不可撤销。`)) return;
     removeAnimationClip(clipId);
-  }, [removeAnimationClip, animationClips.length]);
+  }, [removeAnimationClip, animationClips]);
 
   const handleRenameClip = useCallback((clipId: string, name: string) => {
     updateAnimationClip(clipId, { name });
@@ -61,7 +64,6 @@ export default function AnimationClipPanel() {
         {animationClips.map(clip => {
           const isActive = clip.id === activeAnimationClipId;
           const keyframeCount = clip.puppetNodeKeyframes.length;
-          const partCount = 0; // 旧部件轨道已删除，统一为木偶节点关键帧
 
           return (
             <div
@@ -137,7 +139,7 @@ export default function AnimationClipPanel() {
                     {clip.frameRate}fps · {clip.totalFrames}帧
                   </span>
                   <span className="text-[9px] text-zinc-500">
-                    {partCount}部件 · {keyframeCount}关键帧
+                    {keyframeCount}关键帧
                   </span>
                 </div>
               )}

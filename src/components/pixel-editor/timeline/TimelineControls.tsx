@@ -26,6 +26,7 @@ export default function TimelineControls({
   displayFps,
   displayFrames,
   selectedKeyframeId,
+  selectedPuppetKeyframeId,
   selectedKfInterpolationMode,
   onPlay,
   onStop,
@@ -60,6 +61,7 @@ export default function TimelineControls({
   displayFps: string;
   displayFrames: string;
   selectedKeyframeId: string | null;
+  selectedPuppetKeyframeId?: string | null;
   selectedKfInterpolationMode?: InterpolationMode;
   onPlay: () => void;
   onStop: () => void;
@@ -98,7 +100,7 @@ export default function TimelineControls({
               <Square className="size-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="top">Stop (Home)</TooltipContent>
+          <TooltipContent side="top">Stop</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -213,8 +215,8 @@ export default function TimelineControls({
           <Button
             variant="ghost"
             size="icon"
-            className={`size-7 ${selectedKeyframeId ? 'text-red-400 hover:text-red-300 hover:bg-red-500/10' : 'text-gray-600 cursor-not-allowed'}`}
-            disabled={!selectedKeyframeId}
+            className={`size-7 ${(selectedKeyframeId || selectedPuppetKeyframeId) ? 'text-red-400 hover:text-red-300 hover:bg-red-500/10' : 'text-gray-600 cursor-not-allowed'}`}
+            disabled={!selectedKeyframeId && !selectedPuppetKeyframeId}
             onClick={onDeleteKeyframe}
           >
             <Trash2 className="size-3.5" />

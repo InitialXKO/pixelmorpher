@@ -139,19 +139,7 @@ export function useCanvasInteraction(s: CanvasState) {
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       if (s.selectionMaskRef.current.size > 0) { setShowExtractDialog(true); return; }
-      if (s.isPuppetMode || s.tool === 'puppet' || s.showPuppetSkeleton) {
-        const { px, py } = s.screenToPixel(e.clientX, e.clientY);
-        const hit = s.findPuppetNodeAtPixel(px, py);
-        if (hit) {
-          const { node, character, skeleton } = hit;
-          const activeCostume = character.activeCostumeSetId ? character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId) ?? null : null;
-          const direction = skeleton.currentDirection || 'S';
-          const state = useProjectStore.getState();
-          const resolvedPart = resolvePuppetNodeSprite(node, direction, activeCostume, state.parts);
-          // 留在木偶工作区内编辑精灵，不再跳去 animation 模式
-          if (resolvedPart) { s.editorStore.getState().selectPart(resolvedPart.id); s.editorStore.getState().enterPartEditMode(resolvedPart.id); return; }
-        }
-      }
+      // 木偶模式下双击不再进部件编辑（避免误触），用 Ctrl+点击进入
     }, [s.tool, s.showPuppetSkeleton, s.screenToPixel, s.findPuppetNodeAtPixel, s.isPuppetMode, s.editorStore],
   );
 
@@ -164,7 +152,27 @@ export function useCanvasInteraction(s: CanvasState) {
         const editorState = s.editorStore.getState();
         if (editorState.tool === 'move' && !s.altToggleBackupRef.current) { s.altToggleBackupRef.current = editorState.moveTargetLevel; s.editorStore.getState().setMoveTargetLevel(editorState.moveTargetLevel === 'keyframe' ? 'part_global' : 'keyframe'); }
       }
-      if (e.code === 'Enter' || e.code === 'Delete') { if (s.selectionMaskRef.current.size > 0) { e.preventDefault(); setShowExtractDialog(true); } }
+      if (e.code === 'Enter') { if (s.selectionMaskRef.current.size > 0) { e.preventDefault(); setShowExtractDialog(true); } }
+      if (e.code === 'Delete' || e.code === 'Backspace') {
+        if (s.selectionMaskRef.current.size > 0) {
+          e.preventDefault();
+          // 删除选区像素
+          const state = useProjectStore.getState();
+          const part = state.parts.find((p) => p.id === s.editorStore.getState().selectedPartId);
+          if (part) {
+            const newPixels = part.pixels.map((row) => [...row]);
+            for (const key of s.selectionMaskRef.current) {
+              const [x, y] = key.split(',').map(Number);
+              if (newPixels[y] && newPixels[y][x] !== undefined) {
+                newPixels[y][x] = null;
+              }
+            }
+            state.setPartPixels(part.id, newPixels);
+            s.selectionMaskRef.current.clear();
+            s.markDirty();
+          }
+        }
+      }
       if (e.code === 'KeyE' && e.shiftKey) { const samSt = s.editorStore.getState().samState; if (samSt.currentMask && samSt.maskShape) { e.preventDefault(); s.editorStore.getState().extractSAMMaskAsPart(); } }
       if (e.code === 'KeyP' && !e.ctrlKey && !e.metaKey && !e.shiftKey) s.editorStore.getState().setTool('puppet');
 

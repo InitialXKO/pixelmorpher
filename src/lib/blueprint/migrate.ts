@@ -6,6 +6,7 @@
 import type { PartAnimationModifier } from '../types';
 import type { BlueprintGraph, BlueprintNode } from './ir';
 import { num } from './ir';
+import { PIXEL_DEFORM_MODIFIER_TYPES } from '../engine/modifier-types';
 
 let idCounter = 0;
 function nid(prefix: string): string {
@@ -16,11 +17,16 @@ function nid(prefix: string): string {
  * 把一组旧修改器转成蓝图。
  * 每个修改器 → 一个对应类型的蓝图节点 → 连到 transform 的对应端口。
  * 多个修改器同端口时用 add 节点累加（对应老系统的 'add' 混合模式）。
+ *
+ * 像素类修改器不进蓝图（走像素管线），这里过滤掉。
  */
 export function modifiersToBlueprint(
   modifiers: PartAnimationModifier[],
 ): BlueprintGraph | null {
-  const enabled = modifiers.filter((m) => m.enabled);
+  // 像素类走像素管线，不进 transform 蓝图
+  const enabled = modifiers.filter(
+    (m) => m.enabled && !PIXEL_DEFORM_MODIFIER_TYPES.includes(m.type)
+  );
   if (enabled.length === 0) return null;
 
   const nodes: BlueprintNode[] = [];
@@ -71,8 +77,13 @@ export function modifiersToBlueprint(
     // （老系统里这些修改器产出 rotation/translate/scale）
     switch (mod.type) {
       case 'pendulum':
-      case 'wobble':
         connectToPort('rotation', modId, 'out');
+        break;
+      case 'wobble':
+        // wobble 输出 rotation + translateX + translateY
+        connectToPort('rotation', modId, 'outRotation');
+        connectToPort('translateX', modId, 'outX');
+        connectToPort('translateY', modId, 'outY');
         break;
       case 'breath':
         // breath 输出 scale，拆到 scaleX/scaleY
@@ -84,10 +95,55 @@ export function modifiersToBlueprint(
         connectToPort('translateY', modId, 'outY');
         break;
       case 'float':
-        connectToPort('translateY', modId, 'out');
+        // float 输出 translateY + rotation(tilt)
+        connectToPort('translateY', modId, 'outY');
+        connectToPort('rotation', modId, 'outRotation');
         break;
       case 'bounce':
         connectToPort('translateY', modId, 'out');
+        break;
+      case 'wheel':
+        connectToPort('translateX', modId, 'outX');
+        connectToPort('translateY', modId, 'outY');
+        connectToPort('rotation', modId, 'outRotation');
+        break;
+      case 'elastic': {
+        const axis = String(mod.params.axis ?? 'y');
+        if (axis === 'x') connectToPort('translateX', modId, 'outX');
+        else if (axis === 'rotation') connectToPort('rotation', modId, 'outRotation');
+        else if (axis === 'scale') {
+          connectToPort('scaleX', modId, 'outScaleX');
+          connectToPort('scaleY', modId, 'outScaleY');
+        } else connectToPort('translateY', modId, 'outY');
+        break;
+      }
+      case 'noise':
+      case 'wave':
+      case 'spring': {
+        const target = String(mod.params.targetProperty ?? 'translateY');
+        if (target === 'translateX') connectToPort('translateX', modId, 'outX');
+        else if (target === 'rotation') connectToPort('rotation', modId, 'outRotation');
+        else if (target === 'scaleX' || target === 'scaleY') connectToPort('scaleX', modId, 'outScale');
+        else connectToPort('translateY', modId, 'outY');
+        break;
+      }
+      case 'jitter':
+        connectToPort('translateX', modId, 'outX');
+        connectToPort('translateY', modId, 'outY');
+        break;
+      case 'gait':
+        connectToPort('translateX', modId, 'outX');
+        connectToPort('translateY', modId, 'outY');
+        connectToPort('rotation', modId, 'outRotation');
+        connectToPort('scaleX', modId, 'outScaleX');
+        connectToPort('scaleY', modId, 'outScaleY');
+        break;
+      case 'expression':
+        connectToPort('translateX', modId, 'outX');
+        connectToPort('translateY', modId, 'outY');
+        connectToPort('rotation', modId, 'outRotation');
+        connectToPort('scaleX', modId, 'outScaleX');
+        connectToPort('scaleY', modId, 'outScaleY');
         break;
       default:
         // 未知类型：尝试连 rotation（最通用）
