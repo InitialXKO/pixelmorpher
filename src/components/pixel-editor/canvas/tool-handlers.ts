@@ -181,8 +181,8 @@ export const puppetHandler: ToolHandler = {
       return;
     }
 
-    let dragMode: 'rotate' | 'move' | 'moveAll';
-    if (e.altKey) dragMode = 'moveAll';
+    let dragMode: 'rotate' | 'move' | 'ik';
+    if (e.altKey) dragMode = 'ik';
     else if (e.shiftKey) dragMode = 'move';
     else dragMode = 'rotate';
 
@@ -194,13 +194,32 @@ export const puppetHandler: ToolHandler = {
     // 以当前帧的插值姿态为拖动基准（所见即所得）
     const ivMap = interpolateNodeKeyframes(skeleton, clip?.puppetNodeKeyframes ?? [], frame);
     const rootNode = skeleton.nodes.find((n) => !n.plug);
-    const moveTarget = dragMode === 'moveAll' ? rootNode ?? node : node;
+    // IK 模式：不需要 moveTarget，改为记录骨骼链
+    const moveTarget = dragMode === 'move' ? node : node;
     const rotateIv = ivMap.get(node.id);
     const moveIv = ivMap.get(moveTarget.id);
 
     const pivotWorldX = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight).x;
     const pivotWorldY = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight).y;
     const startMouseAngle = Math.atan2(py - pivotWorldY, px - pivotWorldX);
+
+    // IK 模式：构建父链（最多 2 级：父、祖父）
+    let ikChain: string[] | null = null;
+    if (dragMode === 'ik') {
+      ikChain = [node.id];
+      let current = node;
+      for (let i = 0; i < 2; i++) {
+        if (!current.plug) break;
+        const parent = skeleton.nodes.find((pn) =>
+          pn.sockets.some((s) => s.id === current.plug!.socketId)
+        );
+        if (!parent) break;
+        ikChain.unshift(parent.id);
+        current = parent;
+      }
+      // 至少需要 2 个节点（父+子）才能做 IK
+      if (ikChain.length < 2) ikChain = null;
+    }
 
     s.puppetNodeDragRef.current = {
       nodeId: node.id,
@@ -219,6 +238,7 @@ export const puppetHandler: ToolHandler = {
       pivotWorldY,
       startMouseAngle,
       dragStarted: false,
+      ikChain,
     };
   },
 
@@ -231,7 +251,7 @@ export const puppetHandler: ToolHandler = {
       if (Math.sqrt(ddx * ddx + ddy * ddy) < 2) return;
       drag.dragStarted = true;
       useProjectStore.getState().beginDrag(
-        drag.mode === 'rotate' ? '旋转木偶节点' : drag.mode === 'moveAll' ? '移动整个木偶' : '移动木偶节点'
+        drag.mode === 'rotate' ? '旋转木偶节点' : drag.mode === 'ik' ? 'IK 拖动' : '移动木偶节点'
       );
       s.isDrawingRef.current = true;
       s.markDirty();
@@ -241,6 +261,9 @@ export const puppetHandler: ToolHandler = {
     const skeleton = store.puppetSkeletons.find((sk) => sk.id === drag.skeletonId);
     if (!skeleton) return;
     const direction = skeleton.currentDirection || 'S';
+    // IK 需要当前插值姿态
+    const clip = store.animationClips.find((c) => c.id === drag.clipId);
+    const ivMap = interpolateNodeKeyframes(skeleton, clip?.puppetNodeKeyframes ?? [], frame);
 
     if (drag.mode === 'rotate') {
       const currentMouseAngle = Math.atan2(py - drag.pivotWorldY, px - drag.pivotWorldX);
@@ -251,8 +274,127 @@ export const puppetHandler: ToolHandler = {
         offsetX: drag.origOffsetX,
         offsetY: drag.origOffsetY,
       }, direction);
+    } else if (drag.mode === 'ik' && drag.ikChain && drag.ikChain.length >= 2) {
+      // IK 拖动：2 骨骼解析解，世界角转本地角
+      const chain = drag.ikChain;
+      const endId = chain[chain.length - 1];
+      const midId = chain[chain.length - 2];
+      const rootId = chain.length >= 3 ? chain[chain.length - 3] : null;
+
+      const getWorld = (nodeId: string) => {
+        const n = skeleton.nodes.find((nn) => nn.id === nodeId);
+        if (!n) return null;
+        return s.computePivotWorldPosition(n, skeleton, s.canvasWidth, s.canvasHeight);
+      };
+      const getLocalAngle = (nodeId: string) => {
+        const iv = ivMap.get(nodeId);
+        const n = skeleton.nodes.find((nn) => nn.id === nodeId);
+        return iv?.angle ?? n?.angle ?? 0;
+      };
+
+      const endPos = getWorld(endId);
+      const midPos = getWorld(midId);
+      const rootPos = rootId ? getWorld(rootId) : null;
+      if (!endPos || !midPos) return;
+
+      const L1 = rootPos
+        ? Math.hypot(midPos.x - rootPos.x, midPos.y - rootPos.y)
+        : Math.hypot(midPos.x - endPos.x, midPos.y - endPos.y);
+      const L2 = Math.hypot(endPos.x - midPos.x, endPos.y - midPos.y);
+      if (L1 < 1 || L2 < 1) return;
+
+      // 目标在世界系（px,py 已是 canvas 像素 = 世界坐标）
+      const basePos = rootPos ?? midPos;
+      const dx0 = px - basePos.x;
+      const dy0 = py - basePos.y;
+      const dist0 = Math.hypot(dx0, dy0);
+      if (dist0 < 1) return;
+
+      // 拉伸：超距时等比拉伸
+      const maxReach = L1 + L2;
+      let stretch = 1;
+      let dist = dist0;
+      let dx = dx0;
+      let dy = dy0;
+      if (dist0 > maxReach) {
+        stretch = dist0 / maxReach;
+        dist = maxReach;
+        dx = (dx0 / dist0) * dist;
+        dy = (dy0 / dist0) * dist;
+      }
+
+      // 余弦定理：求期望的世界系骨骼角
+      const targetAngle = Math.atan2(dy, dx); // base → target
+      const cosA = Math.max(-1, Math.min(1, (L1 * L1 + dist * dist - L2 * L2) / (2 * L1 * dist)));
+      const angleA = Math.acos(cosA);
+      // 选弯曲方向：与当前肘部弯曲同侧（避免翻转）
+      // 当前世界角
+      const curW1 = Math.atan2(midPos.y - basePos.y, midPos.x - basePos.x);
+      const curW2 = Math.atan2(endPos.y - midPos.y, endPos.x - midPos.x);
+      // 叉积判断肘在目标线哪一侧
+      const cross = dx0 * (midPos.y - basePos.y) - dy0 * (midPos.x - basePos.x);
+      const bendSign = cross >= 0 ? 1 : -1;
+      const desW1 = targetAngle - bendSign * angleA; // bone1 世界角
+      const cosB = Math.max(-1, Math.min(1, (L1 * L1 + L2 * L2 - dist * dist) / (2 * L1 * L2)));
+      const angleB = Math.acos(cosB); // 肘内角
+      const desW2 = desW1 + bendSign * (Math.PI - angleB); // bone2 世界角
+
+      // 世界角 → 本地角：local = world - parentWorld
+      // 递归求某节点的世界角（累加本地角）
+      const getWorldAngle = (nodeId: string): number => {
+        const n = skeleton.nodes.find((nn) => nn.id === nodeId);
+        if (!n) return 0;
+        const local = (getLocalAngle(nodeId) * Math.PI) / 180;
+        if (!n.plug) return local; // 根：世界 = 本地
+        const parent = skeleton.nodes.find((pn) =>
+          pn.sockets.some((so) => so.id === n.plug!.socketId)
+        );
+        if (!parent) return local;
+        return getWorldAngle(parent.id) + local;
+      };
+
+      if (rootId) {
+        const parentWorldOfRoot = (() => {
+          const rootNode = skeleton.nodes.find((nn) => nn.id === rootId);
+          if (!rootNode?.plug) return 0;
+          const parent = skeleton.nodes.find((pn) =>
+            pn.sockets.some((so) => so.id === rootNode.plug!.socketId)
+          );
+          return parent ? getWorldAngle(parent.id) : 0;
+        })();
+        const rootLocalDeg = Math.round(((desW1 - parentWorldOfRoot) * 180) / Math.PI);
+        const midLocalDeg = Math.round(((desW2 - desW1) * 180) / Math.PI);
+        writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, rootId, frame, {
+          angle: rootLocalDeg,
+          stretch,
+          offsetX: drag.origOffsetX,
+          offsetY: drag.origOffsetY,
+        }, direction);
+        writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, midId, frame, {
+          angle: midLocalDeg,
+          stretch,
+          offsetX: drag.origOffsetX,
+          offsetY: drag.origOffsetY,
+        }, direction);
+      } else {
+        // 只有 2 节点：mid 是根
+        const midLocalDeg = Math.round(((desW1 - 0) * 180) / Math.PI);
+        const endLocalDeg = Math.round(((desW2 - desW1) * 180) / Math.PI);
+        writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, midId, frame, {
+          angle: midLocalDeg,
+          stretch,
+          offsetX: drag.origOffsetX,
+          offsetY: drag.origOffsetY,
+        }, direction);
+        writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, endId, frame, {
+          angle: endLocalDeg,
+          stretch,
+          offsetX: drag.origOffsetX,
+          offsetY: drag.origOffsetY,
+        }, direction);
+      }
     } else {
-      // move / moveAll：移动目标节点的 offset
+      // move：移动目标节点的 offset
       const ddx = px - drag.startX;
       const ddy = py - drag.startY;
       const newOffsetX = Math.round(drag.origOffsetX + ddx);

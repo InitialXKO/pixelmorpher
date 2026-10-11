@@ -139,6 +139,21 @@ interface EditorStore extends EditorState {
   // Puppet skeleton overlay
   togglePuppetSkeleton: () => void;
   setActivePuppetSkeletonId: (id: string | null) => void;
+  // 参考图装配
+  referenceImageUrl: string | null;
+  referenceImageOpacity: number;
+  referenceImageVisible: boolean;
+  setReferenceImageUrl: (url: string | null) => void;
+  setReferenceImageOpacity: (v: number) => void;
+  setReferenceImageVisible: (v: boolean) => void;
+  // 遮罩模式
+  maskNodeId: string | null;
+  setMaskNodeId: (id: string | null) => void;
+  // 参考图装配向导
+  refWizardOpen: boolean;
+  setRefWizardOpen: (v: boolean) => void;
+  isAligning: boolean;
+  setIsAligning: (v: boolean) => void;
 }
 
 const defaultEditor: EditorState = {
@@ -199,6 +214,15 @@ const defaultEditor: EditorState = {
   selectedHitboxId: null,
   paletteConstrained: false,
   selectedPaletteSlot: null,
+  // 参考图装配：底图 URL（DOM 层显示，不进 canvas 导出）
+  referenceImageUrl: null as string | null,
+  referenceImageOpacity: 0.5,
+  referenceImageVisible: true,
+  // 遮罩模式：当前正在抠图的节点 ID
+  maskNodeId: null as string | null,
+  // 参考图装配向导
+  refWizardOpen: false,
+  isAligning: false,
 };
 
 // Lazy import to avoid circular dependency
@@ -229,7 +253,13 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     maskBounds: null,
   },
 
-  setTool: (tool) => set({ tool }),
+  setTool: (tool) => {
+    // 对位中锁定为 puppet 工具，防止误切
+    if (get().isAligning && tool !== 'puppet') return;
+    // 遮罩中锁定工具（遮罩笔刷是独立 overlay，不走 tool）
+    if (get().editMode === 'mask') return;
+    set({ tool });
+  },
   setBrushSize: (size) => set({ brushSize: size }),
   setBrushColor: (color) => set({ brushColor: color }),
   setZoom: (zoom) => set({ zoom: Math.max(1, Math.min(32, zoom)) }),
@@ -268,6 +298,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setSelectedHitboxId: (id) => set({ selectedHitboxId: id }),
   togglePuppetSkeleton: () => set((s) => ({ showPuppetSkeleton: !s.showPuppetSkeleton })),
   setActivePuppetSkeletonId: (id) => set({ activePuppetSkeletonId: id }),
+  setReferenceImageUrl: (url) => set({ referenceImageUrl: url }),
+  setReferenceImageOpacity: (v) => set({ referenceImageOpacity: v }),
+  setReferenceImageVisible: (v) => set({ referenceImageVisible: v }),
+  setMaskNodeId: (id) => set({ maskNodeId: id }),
+  setRefWizardOpen: (v) => set({ refWizardOpen: v }),
+  setIsAligning: (v) => set({ isAligning: v }),
 
   initSAMModel: async (model?: SAMModelType) => {
     const { disposeSAMModel } = get();
