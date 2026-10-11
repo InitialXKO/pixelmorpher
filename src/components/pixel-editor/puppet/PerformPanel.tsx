@@ -133,6 +133,9 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
         {puppetCharacters.length === 0 && (
           <p className="text-[9px] text-amber-500/80">还没有角色 — 先去「搭建」阶段创建骨骼与角色</p>
         )}
+        {puppetCharacters.length > 0 && !activePuppetSkeletonId && (
+          <p className="text-[9px] text-amber-500/80">请在左侧面板选择骨架</p>
+        )}
         {!performArmed ? (
           <Button
             size="sm"
