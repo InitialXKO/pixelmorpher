@@ -269,7 +269,14 @@ export const puppetHandler: ToolHandler = {
       // 目标方向（鼠标 - 父位置）
       const dx = px - parentPos.x;
       const dy = py - parentPos.y;
-      if (Math.hypot(dx, dy) < 1) return;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 1) return;
+
+      // 骨长：父到子当前距离
+      const nodePos = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight);
+      const boneLen = Math.hypot(nodePos.x - parentPos.x, nodePos.y - parentPos.y);
+      // 拉伸：目标超距时拉伸父节点
+      const stretch = boneLen > 1 && dist > boneLen ? dist / boneLen : (ivMap.get(parent.id)?.stretch ?? parent.stretch);
 
       // socket 数学：父世界角 = 目标方向角 - socket 本地角
       const aSock = Math.atan2(parentSocket.localY, parentSocket.localX);
@@ -306,7 +313,7 @@ export const puppetHandler: ToolHandler = {
       const newLocalDeg = Math.round(((desiredWorld - grandparentWorld) * 180) / Math.PI);
       writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, parent.id, frame, {
         angle: newLocalDeg,
-        stretch: pIv?.stretch ?? parent.stretch,
+        stretch: Math.round(stretch * 100) / 100,
         offsetX: pIv?.offsetX ?? parent.offsetX,
         offsetY: pIv?.offsetY ?? parent.offsetY,
       }, direction);
