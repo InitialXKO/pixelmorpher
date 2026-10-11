@@ -953,9 +953,11 @@ export function renderFrame(
   animationVariables?: AnimationVariable[],
   globalModifiers?: GlobalModifier[],
 ) {
-  // Clear canvas
-  ctx.fillStyle = backgroundColor;
-  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  // Clear canvas (skip if transparent - used for reference image background)
+  if (backgroundColor !== 'transparent') {
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
 
   // M8: Build variable context for the current frame
   const variableContext = buildVariableContextForFrame(keyframes, animationVariables, currentFrame);
