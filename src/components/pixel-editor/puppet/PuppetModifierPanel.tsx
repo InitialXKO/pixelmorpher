@@ -43,7 +43,6 @@ export default function PuppetModifierPanel() {
   const updatePuppetNodeModifier = useProjectStore((s) => s.updatePuppetNodeModifier);
   const togglePuppetNodeModifier = useProjectStore((s) => s.togglePuppetNodeModifier);
 
-  const phase = usePuppetSessionStore((s) => s.phase);
   const performCharacterId = usePuppetSessionStore((s) => s.performCharacterId);
   const performNodeId = usePuppetSessionStore((s) => s.performNodeId);
 
@@ -80,7 +79,7 @@ export default function PuppetModifierPanel() {
     useProjectStore.getState().updatePuppetNode(skeleton.id, node.id, { blueprint: g });
   };
 
-  if (phase !== 'perform' || !node || !skeleton) return null;
+  if (!node || !skeleton) return null;
 
   const handleAdd = () => {
     addPuppetNodeModifier(skeleton.id, node.id, addingType);
