@@ -13,7 +13,6 @@ import { renderFrame, floodFill } from '@/lib/engine';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-render';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
-import { toast } from '@/hooks/use-toast';
 import {
   isPixelInPart,
   getLinePixels,
@@ -173,11 +172,12 @@ export const puppetHandler: ToolHandler = {
     }
 
     const session = usePuppetSessionStore.getState();
-    // 未武装或关闭自动关键帧时：只选中，不开始拖动
-    if (!session.performArmed || !session.autoKeyframe) {
-      if (!session.performArmed) {
-        toast({ title: '未武装', description: '请先在 Perform 面板点击武装按钮', variant: 'destructive' });
-      }
+    // 未武装时自动武装（不弹 toast）
+    if (!session.performArmed) {
+      usePuppetSessionStore.setState({ performArmed: true });
+    }
+    // 关闭自动关键帧时：只选中，不开始拖动
+    if (!usePuppetSessionStore.getState().autoKeyframe) {
       return;
     }
 
