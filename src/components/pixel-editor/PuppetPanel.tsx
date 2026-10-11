@@ -12,7 +12,7 @@ import {
 import PuppetCreationWizard from './PuppetCreationWizard';
 import { Button } from '@/components/ui/button';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
-import { useProjectStore } from '@/lib/store';
+import { useProjectStore, useEditorStore } from '@/lib/store';
 import RigPanel from './puppet/RigPanel';
 import DressPanel from './puppet/DressPanel';
 import PerformPanel from './puppet/PerformPanel';
@@ -38,6 +38,15 @@ export default function PuppetPanel() {
 
   // ---- dress 阶段本地状态 ----
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
+  const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
+  // 左侧树切换骨架时，右侧角色选择同步
+  React.useEffect(() => {
+    if (!activePuppetSkeletonId) return;
+    const char = puppetCharacters.find((c) => c.puppetSkeletonId === activePuppetSkeletonId);
+    if (char && char.id !== selectedCharacterId) {
+      setSelectedCharacterId(char.id);
+    }
+  }, [activePuppetSkeletonId, puppetCharacters]);
   const [selectedCostumeId, setSelectedCostumeId] = useState<string | null>(null);
 
   const [wizardOpen, setWizardOpen] = useState(false);
