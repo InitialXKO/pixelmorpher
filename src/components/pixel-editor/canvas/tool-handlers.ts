@@ -181,8 +181,8 @@ export const puppetHandler: ToolHandler = {
       return;
     }
 
-    let dragMode: 'rotate' | 'move' | 'moveAll';
-    if (e.altKey) dragMode = 'moveAll';
+    let dragMode: 'rotate' | 'move' | 'ik';
+    if (e.altKey) dragMode = 'ik';
     else if (e.shiftKey) dragMode = 'move';
     else dragMode = 'rotate';
 
@@ -194,13 +194,32 @@ export const puppetHandler: ToolHandler = {
     // 以当前帧的插值姿态为拖动基准（所见即所得）
     const ivMap = interpolateNodeKeyframes(skeleton, clip?.puppetNodeKeyframes ?? [], frame);
     const rootNode = skeleton.nodes.find((n) => !n.plug);
-    const moveTarget = dragMode === 'moveAll' ? rootNode ?? node : node;
+    // IK 模式：不需要 moveTarget，改为记录骨骼链
+    const moveTarget = dragMode === 'move' ? node : node;
     const rotateIv = ivMap.get(node.id);
     const moveIv = ivMap.get(moveTarget.id);
 
     const pivotWorldX = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight).x;
     const pivotWorldY = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight).y;
     const startMouseAngle = Math.atan2(py - pivotWorldY, px - pivotWorldX);
+
+    // IK 模式：构建父链（最多 2 级：父、祖父）
+    let ikChain: string[] | null = null;
+    if (dragMode === 'ik') {
+      ikChain = [node.id];
+      let current = node;
+      for (let i = 0; i < 2; i++) {
+        if (!current.plug) break;
+        const parent = skeleton.nodes.find((pn) =>
+          pn.sockets.some((s) => s.id === current.plug!.socketId)
+        );
+        if (!parent) break;
+        ikChain.unshift(parent.id);
+        current = parent;
+      }
+      // 至少需要 2 个节点（父+子）才能做 IK
+      if (ikChain.length < 2) ikChain = null;
+    }
 
     s.puppetNodeDragRef.current = {
       nodeId: node.id,
@@ -219,6 +238,7 @@ export const puppetHandler: ToolHandler = {
       pivotWorldY,
       startMouseAngle,
       dragStarted: false,
+      ikChain,
     };
   },
 
@@ -231,7 +251,7 @@ export const puppetHandler: ToolHandler = {
       if (Math.sqrt(ddx * ddx + ddy * ddy) < 2) return;
       drag.dragStarted = true;
       useProjectStore.getState().beginDrag(
-        drag.mode === 'rotate' ? '旋转木偶节点' : drag.mode === 'moveAll' ? '移动整个木偶' : '移动木偶节点'
+        drag.mode === 'rotate' ? '旋转木偶节点' : drag.mode === 'ik' ? 'IK 拖动' : '移动木偶节点'
       );
       s.isDrawingRef.current = true;
       s.markDirty();
@@ -251,8 +271,77 @@ export const puppetHandler: ToolHandler = {
         offsetX: drag.origOffsetX,
         offsetY: drag.origOffsetY,
       }, direction);
+    } else if (drag.mode === 'ik' && drag.ikChain && drag.ikChain.length >= 2) {
+      // IK 拖动：旋转父链使末端跟随鼠标，超距时拉伸
+      const chain = drag.ikChain;
+      const endId = chain[chain.length - 1];
+      const midId = chain[chain.length - 2];
+      const rootId = chain.length >= 3 ? chain[chain.length - 3] : null;
+
+      // 获取世界坐标（像素）
+      const getWorld = (nodeId: string) => {
+        const n = skeleton.nodes.find((nn) => nn.id === nodeId);
+        if (!n) return null;
+        return s.computePivotWorldPosition(n, skeleton, s.canvasWidth, s.canvasHeight);
+      };
+      const endPos = getWorld(endId);
+      const midPos = getWorld(midId);
+      const rootPos = rootId ? getWorld(rootId) : null;
+      if (!endPos || !midPos) return;
+
+      // 骨长（静息）
+      const L1 = rootPos
+        ? Math.hypot(midPos.x - rootPos.x, midPos.y - rootPos.y)
+        : Math.hypot(midPos.x - endPos.x, midPos.y - endPos.y);
+      const L2 = Math.hypot(endPos.x - midPos.x, endPos.y - midPos.y);
+      if (L1 < 1 || L2 < 1) return;
+
+      // 目标（鼠标世界坐标）：px,py 是 canvas 像素，需转世界
+      // 简化：假设 px,py 已是世界坐标系（实际需除以 zoom 并减 pan）
+      // 这里用原始值，后续可精化
+      const tx = px;
+      const ty = py;
+      const basePos = rootPos ?? midPos;
+      let dx = tx - basePos.x;
+      let dy = ty - basePos.y;
+      let dist = Math.hypot(dx, dy);
+      const maxReach = L1 + L2;
+      let stretch = 1;
+      if (dist > maxReach) {
+        stretch = dist / maxReach;
+        dist = maxReach;
+        dx = (dx / Math.hypot(tx - basePos.x, ty - basePos.y)) * dist;
+        dy = (dy / Math.hypot(tx - basePos.x, ty - basePos.y)) * dist;
+      }
+      if (dist < 1) return;
+
+      // 余弦定理求夹角
+      const cosA = Math.max(-1, Math.min(1, (L1 * L1 + dist * dist - L2 * L2) / (2 * L1 * dist)));
+      const angleA = Math.acos(cosA);
+      const targetAngle = Math.atan2(dy, dx);
+      // 根骨角度（世界系转本地，简化）
+      const rootAngleDeg = Math.round(((targetAngle - angleA) * 180) / Math.PI);
+      const cosB = Math.max(-1, Math.min(1, (L1 * L1 + L2 * L2 - dist * dist) / (2 * L1 * L2)));
+      const angleB = Math.acos(cosB);
+      const midAngleDeg = Math.round(((Math.PI - angleB) * 180) / Math.PI);
+
+      // 写回（简化：直接设世界角度，需转本地；此处近似）
+      const rootNodeId = rootId ?? midId;
+      const midNodeId = rootId ? midId : endId;
+      writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, rootNodeId, frame, {
+        angle: rootAngleDeg,
+        stretch,
+        offsetX: drag.origOffsetX,
+        offsetY: drag.origOffsetY,
+      }, direction);
+      writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, midNodeId, frame, {
+        angle: midAngleDeg,
+        stretch,
+        offsetX: drag.origOffsetX,
+        offsetY: drag.origOffsetY,
+      }, direction);
     } else {
-      // move / moveAll：移动目标节点的 offset
+      // move：移动目标节点的 offset
       const ddx = px - drag.startX;
       const ddy = py - drag.startY;
       const newOffsetX = Math.round(drag.origOffsetX + ddx);

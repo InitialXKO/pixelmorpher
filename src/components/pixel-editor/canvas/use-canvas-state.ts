@@ -28,6 +28,7 @@ export function useCanvasState() {
   // ---- Refs ----
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const offscreenRef = useRef<HTMLCanvasElement | null>(null);
+  const refImageRef = useRef<HTMLImageElement | null>(null);
   const rafRef = useRef<number>(0);
   const dirtyRef = useRef(true);
   const markDirty = useCallback(() => { dirtyRef.current = true; }, []);
@@ -63,8 +64,8 @@ export function useCanvasState() {
   const puppetNodeDragRef = useRef<{
     nodeId: string; skeletonId: string; characterId: string; clipId: string;
     startX: number; startY: number; origAngle: number; origStretch: number; origOffsetX: number; origOffsetY: number;
-    mode: 'rotate' | 'move' | 'moveAll'; pivotWorldX: number; pivotWorldY: number; startMouseAngle: number;
-    dragStarted: boolean; moveTargetNodeId?: string;
+    mode: 'rotate' | 'move' | 'ik'; pivotWorldX: number; pivotWorldY: number; startMouseAngle: number;
+    dragStarted: boolean; moveTargetNodeId?: string; ikChain?: string[] | null;
   } | null>(null);
   const pixelEditCommandRef = useRef<{ commandId: string; modifierId: string; keyframeId: string; points: { x: number; y: number }[] } | null>(null);
   const partEditBrushCmdRef = useRef<{ commandId: string; modifierId: string; points: { x: number; y: number }[] } | null>(null);
@@ -182,6 +183,12 @@ export function useCanvasState() {
   const showPuppetSkeleton = useEditorStore((s) => s.showPuppetSkeleton);
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const selectedPuppetNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
+  const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
+  const referenceImageOpacity = useEditorStore((s) => s.referenceImageOpacity);
+  const referenceImageVisible = useEditorStore((s) => s.referenceImageVisible);
+  const maskNodeId = useEditorStore((s) => s.maskNodeId);
+  const refWizardOpen = useEditorStore((s) => s.refWizardOpen);
+  const isAligning = useEditorStore((s) => s.isAligning);
   const magicWandTolerance = useEditorStore((s) => s.magicWandTolerance);
   const trajectorySnap = useEditorStore((s) => s.trajectorySnap);
   const partEditPartId = useEditorStore((s) => s.partEditPartId);
@@ -710,7 +717,7 @@ export function useCanvasState() {
 
   return {
     // Refs
-    containerRef, canvasRef, offscreenRef, rafRef, dirtyRef, markDirty,
+    containerRef, canvasRef, offscreenRef, refImageRef, rafRef, dirtyRef, markDirty,
     onionCacheRef, onionDataVersionRef, onionOverlayRef,
     isPanningRef, isDrawingRef, lastPixelRef, panStartRef, moveStartRef,
     spaceHeldRef, altToggleBackupRef, lastDrawnPixelsRef,
@@ -737,6 +744,8 @@ export function useCanvasState() {
     effectBrushColor, effectBrushRadius, effectBrushIntensity, effectBrushDensity, effectBrushSpread, strokeBlendMode,
     showSkeletons, selectedBoneId, activeSkeletonId, showWeightPaint, weightPaintBoneId,
     showPuppetSkeleton, activePuppetSkeletonId, selectedPuppetNodeId,
+    referenceImageUrl, referenceImageOpacity, referenceImageVisible, maskNodeId,
+    refWizardOpen, isAligning,
     magicWandTolerance, trajectorySnap, partEditPartId, partEditModifiers,
     brushStyle, brushStyleParams, compositingMode, styleAspects, strokeDrivers, editorStore,
     // Derived
