@@ -45,7 +45,6 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
   const currentFrame = useProjectStore((s) => s.currentFrame);
   const setCurrentFrame = useProjectStore((s) => s.setCurrentFrame);
 
-  const phase = usePuppetSessionStore((s) => s.phase);
   const performCharacterId = usePuppetSessionStore((s) => s.performCharacterId);
   const performNodeId = usePuppetSessionStore((s) => s.performNodeId);
   const performArmed = usePuppetSessionStore((s) => s.performArmed);
@@ -107,8 +106,6 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
       setPlayState('playing');
     }
   };
-
-  if (phase !== 'perform') return null;
 
   return (
     <div className="space-y-3">
