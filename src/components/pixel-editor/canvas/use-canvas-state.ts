@@ -64,7 +64,7 @@ export function useCanvasState() {
   const puppetNodeDragRef = useRef<{
     nodeId: string; skeletonId: string; characterId: string; clipId: string;
     startX: number; startY: number; origAngle: number; origStretch: number; origOffsetX: number; origOffsetY: number;
-    mode: 'rotate' | 'move' | 'ik'; pivotWorldX: number; pivotWorldY: number; startMouseAngle: number;
+    mode: 'rotate' | 'move' | 'moveAll'; pivotWorldX: number; pivotWorldY: number; startMouseAngle: number;
     dragStarted: boolean; moveTargetNodeId?: string;
   } | null>(null);
   const pixelEditCommandRef = useRef<{ commandId: string; modifierId: string; keyframeId: string; points: { x: number; y: number }[] } | null>(null);
