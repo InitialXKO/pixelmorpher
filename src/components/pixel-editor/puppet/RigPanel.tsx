@@ -26,6 +26,8 @@ interface RigPanelProps {
   selectedSkeleton: PuppetSkeleton | null;
   selectedNode: PuppetNode | null;
   handleSelectNodeWithSync: (nodeId: string | null) => void;
+  /** 隐藏节点树（用左侧共享树），只显示细节 */
+  hideNodeTree?: boolean;
 }
 
 /**
@@ -41,6 +43,7 @@ export default function RigPanel({
   selectedSkeleton,
   selectedNode,
   handleSelectNodeWithSync,
+  hideNodeTree = false,
 }: RigPanelProps) {
 
   // ---- Handlers ----
@@ -244,8 +247,8 @@ export default function RigPanel({
         </div>
       )}
 
-      {/* Node tree */}
-      {selectedSkeleton && (
+      {/* Node tree（hideNodeTree 时用左侧共享树） */}
+      {!hideNodeTree && selectedSkeleton && (
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <Label className="text-[10px] text-gray-500 uppercase tracking-wider">节点树</Label>

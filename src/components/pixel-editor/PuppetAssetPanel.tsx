@@ -259,18 +259,57 @@ export default function PuppetAssetPanel() {
 
           {/* ---- Node Tree Section (共享，右侧三段共用) ---- */}
           <div>
-            <button
-              className="flex items-center gap-1 w-full px-1 py-1 text-[10px] text-gray-500 uppercase tracking-wider hover:text-gray-300 transition-colors"
-              onClick={() => toggleSection('nodes')}
-            >
-              {sectionExpanded.nodes ? (
-                <ChevronDown className="size-2.5" />
-              ) : (
-                <ChevronRight className="size-2.5" />
+            <div className="flex items-center gap-1">
+              <button
+                className="flex items-center gap-1 flex-1 px-1 py-1 text-[10px] text-gray-500 uppercase tracking-wider hover:text-gray-300 transition-colors"
+                onClick={() => toggleSection('nodes')}
+              >
+                {sectionExpanded.nodes ? (
+                  <ChevronDown className="size-2.5" />
+                ) : (
+                  <ChevronRight className="size-2.5" />
+                )}
+                <Bone className="size-2.5" />
+                节点树
+              </button>
+              {/* 增删节点 */}
+              {activePuppetSkeletonId && (
+                <>
+                  <button
+                    className="size-5 flex items-center justify-center text-cyan-400 hover:text-cyan-300"
+                    title="添加节点"
+                    onClick={() => {
+                      const store = useProjectStore.getState();
+                      const skel = store.puppetSkeletons?.find((s) => s.id === activePuppetSkeletonId);
+                      const nodeName = `节点_${(skel?.nodes.length ?? 0) + 1}`;
+                      const newNode = store.addPuppetNode(activePuppetSkeletonId, nodeName, {
+                        mirrorFrom: false,
+                        crossSectionTop: 4,
+                        crossSectionBottom: 3,
+                        zIndex: 0,
+                      });
+                      store.setSelectedPuppetNodeId(newNode.id);
+                    }}
+                  >
+                    <Plus className="size-3" />
+                  </button>
+                  <button
+                    className="size-5 flex items-center justify-center text-red-400 hover:text-red-300"
+                    title="删除选中节点"
+                    onClick={() => {
+                      const store = useProjectStore.getState();
+                      const nodeId = store.selectedPuppetNodeId;
+                      if (!nodeId) return;
+                      if (!confirm('确定删除该节点吗？')) return;
+                      store.removePuppetNode(activePuppetSkeletonId, nodeId);
+                      store.setSelectedPuppetNodeId(null);
+                    }}
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                </>
               )}
-              <Bone className="size-2.5" />
-              节点树
-            </button>
+            </div>
             {sectionExpanded.nodes && (() => {
               const activeSkeleton = puppetSkeletons.find((sk) => sk.id === activePuppetSkeletonId);
               const selectedNodeId = useProjectStore.getState().selectedPuppetNodeId;

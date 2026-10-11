@@ -187,6 +187,7 @@ export default function PuppetPanel() {
                     selectedSkeleton={selectedSkeleton}
                     selectedNode={selectedNode}
                     handleSelectNodeWithSync={handleSelectNodeWithSync}
+                    hideNodeTree={true}
                   />
                 </div>
               </details>
