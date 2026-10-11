@@ -21,6 +21,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   const isDrawing = useRef(false);
   const [brushSize, setBrushSize] = useState(8);
   const [extractedPart, setExtractedPart] = useState<Part | null>(null);
+  const [lastUpdateInfo, setLastUpdateInfo] = useState<string | null>(null);
 
   const maskNodeId = useEditorStore((s) => s.maskNodeId);
   const setEditMode = useEditorStore((s) => s.setEditMode);
@@ -172,13 +173,16 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
           projectStore.updatePuppetNode(ownerSkeleton.id, maskNodeId, {
             spritePartId: part.id,
           });
-          // 验证更新是否成功
+          // 验证更新是否成功，显示在 UI
           const verify = useProjectStore.getState().puppetSkeletons
             .find((sk) => sk.id === ownerSkeleton.id)
             ?.nodes.find((n) => n.id === maskNodeId);
-          console.log('[MaskBrush] 更新后 spritePartId:', verify?.spritePartId, '期望:', part.id);
+          const ok = verify?.spritePartId === part.id;
+          setLastUpdateInfo(
+            `节点 ${maskNodeId.slice(0, 8)} → 骨架 ${ownerSkeleton.name} → Part ${part.id.slice(0, 8)} ${ok ? '✓成功' : '✗失败(实际:' + verify?.spritePartId?.slice(0, 8) + ')'}`
+          );
         } else {
-          console.warn('[MaskBrush] 找不到节点所在骨架:', maskNodeId);
+          setLastUpdateInfo(`✗找不到节点所在骨架: ${maskNodeId.slice(0, 8)}`);
         }
         console.log('[MaskBrush] 已关联到节点:', maskNodeId);
         // 通知向导更新进度
@@ -254,6 +258,15 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
         <Button size="sm" className="h-6 text-[11px]" onClick={handleConfirm}>确认</Button>
         <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={handleCancel}>取消</Button>
       </div>
+      {/* 更新状态显示 */}
+      {lastUpdateInfo && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded text-[11px] pointer-events-none z-50"
+          style={{ background: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.2)' }}>
+          <span className={lastUpdateInfo.includes('✓') ? 'text-green-400' : 'text-red-400'}>
+            {lastUpdateInfo}
+          </span>
+        </div>
+      )}
       {/* 轴心编辑器 */}
       {extractedPart && (
         <PivotEditor part={extractedPart} onClose={handlePivotClose} />
