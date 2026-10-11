@@ -102,17 +102,24 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     return () => window.removeEventListener('ref-assembly:align-done', handler);
   }, []);
 
-  // 监听遮罩完成事件，更新进度
+  // 监听遮罩完成事件，更新进度并自动推进到下一肢体
   useEffect(() => {
     const handler = (e: Event) => {
       const nodeId = (e as CustomEvent).detail?.nodeId;
       if (nodeId) {
         setProcessedNodes((m) => new Map(m).set(nodeId, 'mask'));
+        // 自动推进到下一个未处理的肢体
+        setFocusedNodeIndex((prev) => {
+          const next = Math.min(prev + 1, sortedNodes.length - 1);
+          // 延迟聚焦，确保状态更新后
+          setTimeout(() => focusNode(next), 100);
+          return next;
+        });
       }
     };
     window.addEventListener('ref-assembly:mask-done', handler);
     return () => window.removeEventListener('ref-assembly:mask-done', handler);
-  }, []);
+  }, [sortedNodes.length]);
 
   // 聚焦到指定索引的节点：发事件给 PixelCanvas（它有容器尺寸和世界坐标计算）
   const focusNode = (index: number) => {
