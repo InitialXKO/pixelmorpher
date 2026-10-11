@@ -15,6 +15,7 @@ import {
   Film,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
+import { NodeTreeItemWrapper } from './puppet/NodeTree';
 import type {
   PuppetSkeleton,
   PuppetCharacter,
@@ -51,6 +52,7 @@ export default function PuppetAssetPanel() {
   const [expandedChars, setExpandedChars] = useState<Set<string>>(new Set());
   const [sectionExpanded, setSectionExpanded] = useState({
     characters: true,
+    nodes: true,
     sprites: true,
     clips: true,
   });
@@ -251,6 +253,49 @@ export default function PuppetAssetPanel() {
                 )}
               </div>
             )}
+          </div>
+
+          <Separator className="bg-[#1e1e3a]" />
+
+          {/* ---- Node Tree Section (共享，右侧三段共用) ---- */}
+          <div>
+            <button
+              className="flex items-center gap-1 w-full px-1 py-1 text-[10px] text-gray-500 uppercase tracking-wider hover:text-gray-300 transition-colors"
+              onClick={() => toggleSection('nodes')}
+            >
+              {sectionExpanded.nodes ? (
+                <ChevronDown className="size-2.5" />
+              ) : (
+                <ChevronRight className="size-2.5" />
+              )}
+              <Bone className="size-2.5" />
+              节点树
+            </button>
+            {sectionExpanded.nodes && (() => {
+              const activeSkeleton = puppetSkeletons.find((sk) => sk.id === activePuppetSkeletonId);
+              const selectedNodeId = useProjectStore.getState().selectedPuppetNodeId;
+              if (!activeSkeleton) {
+                return <p className="text-[9px] text-gray-600 px-1 py-1">先选择骨架</p>;
+              }
+              return (
+                <div className="bg-[#080818] rounded border border-[#1e1e3a] p-1 max-h-64 overflow-y-auto mt-1">
+                  {activeSkeleton.nodes
+                    .filter((node) => !node.plug)
+                    .map((node) => (
+                      <NodeTreeItemWrapper
+                        key={node.id}
+                        node={node}
+                        depth={0}
+                        selectedNodeId={selectedNodeId}
+                        onSelect={(id) => {
+                          useProjectStore.getState().setSelectedPuppetNodeId(id);
+                        }}
+                        allNodes={activeSkeleton.nodes}
+                      />
+                    ))}
+                </div>
+              );
+            })()}
           </div>
 
           <Separator className="bg-[#1e1e3a]" />

@@ -30,7 +30,9 @@ export default function PuppetPanel() {
 
   // ---- rig 阶段本地状态 ----
   const [selectedSkeletonId, setSelectedSkeletonId] = useState<string | null>(null);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // 节点选择用 store（与左侧共享树同步），不再用本地 state
+  const selectedNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
+  const setSelectedNodeId = useProjectStore((s) => s.setSelectedPuppetNodeId);
   const [direction, setDirection] = useState<PuppetDirection>('S');
   const [latitude, setLatitude] = useState(0);
 
@@ -206,6 +208,7 @@ export default function PuppetPanel() {
                   setSelectedCostumeId={setSelectedCostumeId}
                   selectedNodeId={selectedNodeId}
                   handleSelectNodeWithSync={handleSelectNodeWithSync}
+                  hideNodeList={true}
                 />
               </div>
             </details>
@@ -216,7 +219,7 @@ export default function PuppetPanel() {
                 🎬 操控动画
               </summary>
               <div className="p-2 pt-0">
-                <PerformPanel />
+                <PerformPanel hideNodeList={true} />
               </div>
             </details>
           </div>

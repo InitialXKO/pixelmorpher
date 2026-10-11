@@ -37,7 +37,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import type { PuppetDirection } from '@/lib/types';
 
-export default function PerformPanel() {
+export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: boolean }) {
   const puppetCharacters = useProjectStore((s) => s.puppetCharacters) ?? [];
   const puppetSkeletons = useProjectStore((s) => s.puppetSkeletons) ?? [];
   const animationClips = useProjectStore((s) => s.animationClips);
@@ -200,7 +200,8 @@ export default function PerformPanel() {
             )}
           </div>
 
-          {/* ---- 肢体选择器 ---- */}
+          {/* ---- 肢体选择器（hideNodeList 时用共享树） ---- */}
+          {!hideNodeList && (
           <div className="space-y-1.5">
             <Label className="text-[10px] text-gray-500 uppercase tracking-wider">肢体</Label>
             <div className="bg-[#080818] rounded border border-[#1e1e3a] p-1 max-h-44 overflow-y-auto">
@@ -241,7 +242,7 @@ export default function PerformPanel() {
               })}
             </div>
           </div>
-
+          )}
           {/* ---- 关键帧操作 ---- */}
           <div className="space-y-1.5">
             <Label className="text-[10px] text-gray-500 uppercase tracking-wider">关键帧</Label>

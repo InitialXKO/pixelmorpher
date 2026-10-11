@@ -35,6 +35,8 @@ interface DressPanelProps {
   setSelectedCostumeId: (id: string | null) => void;
   selectedNodeId: string | null;
   handleSelectNodeWithSync: (nodeId: string | null) => void;
+  /** 隐藏内部节点列表（用共享树） */
+  hideNodeList?: boolean;
 }
 
 /**
@@ -52,6 +54,7 @@ export default function DressPanel({
   setSelectedCostumeId,
   selectedNodeId,
   handleSelectNodeWithSync,
+  hideNodeList = false,
 }: DressPanelProps) {
   const selectedCharacter = useMemo(
     () => puppetCharacters.find((c) => c.id === selectedCharacterId) ?? null,
@@ -218,8 +221,8 @@ export default function DressPanel({
         </div>
       )}
 
-      {/* 节点列表 */}
-      {skeleton && selectedCostume && (
+      {/* 节点列表（hideNodeList 时用共享树） */}
+      {!hideNodeList && skeleton && selectedCostume && (
         <div>
           <Label className="text-[10px] text-gray-500 uppercase tracking-wider">
             节点（{skeleton.nodes.length}）
