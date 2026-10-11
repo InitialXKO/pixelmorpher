@@ -605,8 +605,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
           <Button
             variant="ghost"
             size="sm"
-            disabled={stepIndex === 0}
-            onClick={() => setStep(STEPS[stepIndex - 1].id)}
+            disabled={stepIndex <= 0}
+            onClick={() => stepIndex > 0 && setStep(STEPS[stepIndex - 1].id)}
           >
             <ArrowLeft className="size-3.5 mr-1" /> 上一步
           </Button>
@@ -619,8 +619,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
               (step === 'align' && isAligning)
             }
             onClick={() => {
-              if (stepIndex < STEPS.length - 1) setStep(STEPS[stepIndex + 1].id);
-              else {
+              if (stepIndex >= 0 && stepIndex < STEPS.length - 1) setStep(STEPS[stepIndex + 1].id);
+              else if (stepIndex === STEPS.length - 1) {
                 // 完成：保留工作副本（不清），只关向导
                 // 清理工作副本 ID 状态，但不删除数据
                 setWorkingCharacterId(null);
