@@ -28,8 +28,8 @@ export default function PuppetPanel() {
   const canvasSelectedNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
   const setSelectedPuppetNodeId = useProjectStore((s) => s.setSelectedPuppetNodeId);
 
-  // ---- rig 阶段本地状态 ----
-  const [selectedSkeletonId, setSelectedSkeletonId] = useState<string | null>(null);
+  // ---- 骨架选择用左侧的 activePuppetSkeletonId，不再用本地 state ----
+  const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   // 节点选择用 store（与左侧共享树同步），不再用本地 state
   const selectedNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
   const setSelectedNodeId = useProjectStore((s) => s.setSelectedPuppetNodeId);
@@ -41,7 +41,7 @@ export default function PuppetPanel() {
 
   const [wizardOpen, setWizardOpen] = useState(false);
 
-  const selectedSkeleton = puppetSkeletons.find((s) => s.id === selectedSkeletonId) ?? null;
+  const selectedSkeleton = puppetSkeletons.find((s) => s.id === activePuppetSkeletonId) ?? null;
   const selectedNode = selectedSkeleton?.nodes.find((n) => n.id === selectedNodeId) ?? null;
 
   // M1: 切换骨骼时用骨骼实际的方向/纬度回填，否则方向盘显示与骨骼脱节
@@ -50,7 +50,7 @@ export default function PuppetPanel() {
       setDirection(selectedSkeleton.currentDirection ?? 'S');
       setLatitude(selectedSkeleton.viewLatitude ?? 0);
     }
-  }, [selectedSkeletonId]);
+  }, [activePuppetSkeletonId]);
 
   // ---- 画布 → 面板：单向同步选中节点 ----
   // 画布点击节点只写 ProjectStore.selectedPuppetNodeId，
@@ -67,7 +67,10 @@ export default function PuppetPanel() {
     if (sess.performNodeId !== canvasSelectedNodeId) {
       usePuppetSessionStore.setState({ performNodeId: canvasSelectedNodeId });
     }
-    if (selectedSkeletonId !== skel.id) setSelectedSkeletonId(skel.id);
+    const editorStore = useEditorStore.getState();
+    if (editorStore.activePuppetSkeletonId !== skel.id) {
+      editorStore.setActivePuppetSkeletonId(skel.id);
+    }
     if (selectedNodeId !== canvasSelectedNodeId) setSelectedNodeId(canvasSelectedNodeId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasSelectedNodeId]);
@@ -80,10 +83,11 @@ export default function PuppetPanel() {
   // M1: rig 阶段纬度写入 store，渲染端读的是 skeleton.viewLatitude
   const handleSetLatitude = useCallback((lat: number) => {
     setLatitude(lat);
-    if (selectedSkeletonId) {
-      useProjectStore.getState().setPuppetLatitude(selectedSkeletonId, lat);
+    const skelId = useEditorStore.getState().activePuppetSkeletonId;
+    if (skelId) {
+      useProjectStore.getState().setPuppetLatitude(skelId, lat);
     }
-  }, [selectedSkeletonId]);
+  }, [activePuppetSkeletonId]);
 
   const hasSkeletons = puppetSkeletons.length > 0;
   const hasCharacters = puppetCharacters.length > 0;
@@ -179,13 +183,10 @@ export default function PuppetPanel() {
                 <div className="p-2 pt-0">
                   <RigPanel
                     puppetSkeletons={puppetSkeletons}
-                    selectedSkeletonId={selectedSkeletonId}
-                    setSelectedSkeletonId={setSelectedSkeletonId}
                     selectedNodeId={selectedNodeId}
-                    selectedSkeleton={selectedSkeleton}
                     selectedNode={selectedNode}
                     handleSelectNodeWithSync={handleSelectNodeWithSync}
-                    hideNodeTree={true}
+                    
                   />
                 </div>
               </details>

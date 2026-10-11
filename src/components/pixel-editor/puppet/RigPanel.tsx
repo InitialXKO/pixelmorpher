@@ -20,14 +20,10 @@ import { updateSkeletonNode } from './updateSkeletonNode';
 
 interface RigPanelProps {
   puppetSkeletons: PuppetSkeleton[];
-  selectedSkeletonId: string | null;
-  setSelectedSkeletonId: (id: string | null) => void;
   selectedNodeId: string | null;
-  selectedSkeleton: PuppetSkeleton | null;
   selectedNode: PuppetNode | null;
   handleSelectNodeWithSync: (nodeId: string | null) => void;
   /** 隐藏节点树（用左侧共享树），只显示细节 */
-  hideNodeTree?: boolean;
 }
 
 /**
@@ -37,97 +33,21 @@ interface RigPanelProps {
  */
 export default function RigPanel({
   puppetSkeletons,
-  selectedSkeletonId,
-  setSelectedSkeletonId,
   selectedNodeId,
-  selectedSkeleton,
   selectedNode,
   handleSelectNodeWithSync,
-  hideNodeTree = false,
 }: RigPanelProps) {
+  // 骨架用左侧选中的，不再用 prop 传进来的
+  const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
+  const selectedSkeletonId = activePuppetSkeletonId;
+  const selectedSkeleton = puppetSkeletons.find((s) => s.id === selectedSkeletonId) ?? null;
 
   // ---- Handlers ----
-  const handleDeleteSkeleton = useCallback(() => {
-    if (!selectedSkeletonId) return;
-    const store = useProjectStore.getState();
-    const affected = (store.puppetCharacters ?? []).filter(
-      (c) => c.puppetSkeletonId === selectedSkeletonId
-    );
-    const names = affected.map((c) => c.name).join('、');
-    if (!confirm(`删除骨骼会连带删除 ${affected.length} 个角色${names ? `（${names}）` : ''}，继续？`)) return;
-    store.pushUndo('删除骨骼');
-    useProjectStore.setState({
-      puppetSkeletons: (store.puppetSkeletons ?? []).filter((s) => s.id !== selectedSkeletonId),
-      puppetCharacters: (store.puppetCharacters ?? []).filter(
-        (c) => c.puppetSkeletonId !== selectedSkeletonId
-      ),
-    });
-    setSelectedSkeletonId(null);
-    handleSelectNodeWithSync(null);
-  }, [selectedSkeletonId, handleSelectNodeWithSync, setSelectedSkeletonId]);
-
-  const handleAddNode = useCallback(() => {
-    if (!selectedSkeletonId) return;
-    const store = useProjectStore.getState();
-    const nodeName = `节点_${(selectedSkeleton?.nodes.length ?? 0) + 1}`;
-    const newNode = store.addPuppetNode(selectedSkeletonId, nodeName, {
-      mirrorFrom: false,
-      crossSectionTop: 4,
-      crossSectionBottom: 3,
-      zIndex: 0,
-    });
-    handleSelectNodeWithSync(newNode.id);
-  }, [selectedSkeletonId, selectedSkeleton, handleSelectNodeWithSync]);
-
-  const handleDeleteNode = useCallback(() => {
-    if (!selectedSkeletonId || !selectedNodeId) return;
-    const store = useProjectStore.getState();
-    const skeleton = (store.puppetSkeletons ?? []).find((s) => s.id === selectedSkeletonId);
-    const node = skeleton?.nodes.find((n) => n.id === selectedNodeId);
-    if (!node) return;
-    // 子节点：挂在被删节点上的
-    const children = (skeleton?.nodes ?? []).filter((n) => n.plug?.socketId && node.sockets?.some((s) => s.id === n.plug!.socketId));
-    // 检查其他节点蓝图里的 nodeRef 引用
-    const refBy = (skeleton?.nodes ?? []).filter((n) =>
-      n.id !== selectedNodeId &&
-      n.blueprint?.nodes.some((bn) => bn.type === 'nodeRef' && String(bn.params.nodeId) === selectedNodeId)
-    );
-    const warns: string[] = [];
-    if (children.length > 0) warns.push(`${children.length} 个子节点将被 detached（plug 置空）`);
-    if (refBy.length > 0) warns.push(`${refBy.length} 个节点的蓝图引用了它（nodeRef 将输出 0）：${refBy.map((n) => n.name).join('、')}`);
-    if (warns.length > 0 && !confirm(`删除节点「${node.name}」？\n${warns.join('\n')}`)) return;
-    store.pushUndo('删除节点');
-    useProjectStore.setState({
-      puppetSkeletons: (store.puppetSkeletons ?? []).map((s) =>
-        s.id === selectedSkeletonId
-          ? {
-              ...s,
-              nodes: s.nodes
-                .filter((n) => n.id !== selectedNodeId)
-                .map((n) =>
-                  n.plug?.socketId && node.sockets?.some((so) => so.id === n.plug!.socketId)
-                    ? { ...n, plug: null }
-                    : n
-                ),
-            }
-          : s
-      ),
-      // 删除该节点的全部关键帧（所有使用该骨骼的动画片段）
-      animationClips: (store.animationClips ?? []).map((c) => {
-        const char = (store.puppetCharacters ?? []).find((ch) => ch.id === c.puppetCharacterId);
-        if (char?.puppetSkeletonId !== selectedSkeletonId) return c;
-        return {
-          ...c,
-          puppetNodeKeyframes: (c.puppetNodeKeyframes ?? []).filter((k) => k.nodeId !== selectedNodeId),
-        };
-      }),
-    });
-    handleSelectNodeWithSync(null);
-  }, [selectedSkeletonId, selectedNodeId, handleSelectNodeWithSync]);
+  // (增删节点已移到左侧面板树，此处只保留细节编辑)
 
   const handleUpdateNode = useCallback(
     (nodeId: string, updates: Partial<PuppetNode>) => {
-      if (!selectedSkeletonId) return;
+      if (!activePuppetSkeletonId) return;
       const store = useProjectStore.getState();
       store.pushUndo('更新节点', 'updateNode');
       useProjectStore.setState({
@@ -197,35 +117,7 @@ export default function RigPanel({
 
   return (
     <div className="space-y-3">
-      {/* Skeleton selector */}
-      <div>
-        <Label className="text-[10px] text-gray-500 uppercase tracking-wider">骨骼</Label>
-        <div className="flex items-center gap-1.5 mt-1">
-          <select
-            value={selectedSkeletonId ?? ''}
-            onChange={(e) => {
-              const id = e.target.value || null;
-              setSelectedSkeletonId(id);
-              handleSelectNodeWithSync(null);
-            }}
-            className="flex-1 min-w-0 h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
-          >
-            <option value="">— 选择骨骼 —</option>
-            {puppetSkeletons.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-red-400 hover:text-red-300"
-            onClick={handleDeleteSkeleton}
-            disabled={!selectedSkeletonId}
-          >
-            <Trash2 className="size-3" />
-          </Button>
-        </div>
-      </div>
+      {/* 骨骼：用左侧选中的，不再重复选择 */}
 
       {/* Canvas interaction: Switch to puppet tool */}
       {selectedSkeletonId && (
@@ -247,52 +139,12 @@ export default function RigPanel({
         </div>
       )}
 
-      {/* Node tree（hideNodeTree 时用左侧共享树） */}
-      {!hideNodeTree && selectedSkeleton && (
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <Label className="text-[10px] text-gray-500 uppercase tracking-wider">节点树</Label>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-5 text-cyan-400 hover:text-cyan-300"
-              onClick={handleAddNode}
-              title="添加节点"
-            >
-              <Plus className="size-3" />
-            </Button>
-          </div>
-          <div className="bg-[#080818] rounded border border-[#1e1e3a] p-1 max-h-48 overflow-y-auto">
-            {selectedSkeleton.nodes.length === 0 ? (
-              <div className="text-center py-3">
-                <Bone className="size-4 text-gray-700 mx-auto mb-1" />
-                <p className="text-[9px] text-gray-600">暂无节点</p>
-              </div>
-            ) : (
-              selectedSkeleton.nodes
-                .filter((node) => !node.plug)
-                .map((node) => (
-                  <NodeTreeItemWrapper
-                    key={node.id}
-                    node={node}
-                    depth={0}
-                    selectedNodeId={selectedNodeId}
-                    onSelect={handleSelectNodeWithSync}
-                    allNodes={selectedSkeleton.nodes}
-                    onToggleVisibility={handleToggleNodeVisibility}
-                  />
-                ))
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Node properties: rest pose + joints */}
       {selectedNode && selectedSkeleton && (
         <RigNodeProperties
           node={selectedNode}
           onUpdate={(updates) => handleUpdateNode(selectedNode.id, updates)}
-          onDelete={handleDeleteNode}
           onAddSocket={handleAddSocket}
           onRemoveSocket={handleRemoveSocket}
         />
@@ -305,13 +157,11 @@ export default function RigPanel({
 function RigNodeProperties({
   node,
   onUpdate,
-  onDelete,
   onAddSocket,
   onRemoveSocket,
 }: {
   node: PuppetNode;
   onUpdate: (updates: Partial<PuppetNode>) => void;
-  onDelete: () => void;
   onAddSocket: () => void;
   onRemoveSocket: (socketId: string) => void;
 }) {
@@ -319,15 +169,6 @@ function RigNodeProperties({
     <div className="space-y-3 bg-[#080818] rounded border border-[#1e1e3a] p-2">
       <div className="flex items-center justify-between">
         <Label className="text-[10px] text-gray-500 uppercase tracking-wider">节点属性</Label>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-5 text-red-400 hover:text-red-300"
-          onClick={onDelete}
-          title="删除节点"
-        >
-          <Trash2 className="size-3" />
-        </Button>
       </div>
 
       {/* 名称 */}

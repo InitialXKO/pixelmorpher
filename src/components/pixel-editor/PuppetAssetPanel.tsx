@@ -273,14 +273,34 @@ export default function PuppetAssetPanel() {
                 节点树
               </button>
               {/* 增删节点 */}
-              {activePuppetSkeletonId && (
+              {activePuppetSkeletonId && (() => {
+                const skel = puppetSkeletons.find((s) => s.id === activePuppetSkeletonId);
+                const dir = skel?.currentDirection ?? 'S';
+                return (
                 <>
+                  {/* 方向选择 */}
+                  <select
+                    value={dir}
+                    onChange={(e) => {
+                      useProjectStore.getState().setPuppetDirection(activePuppetSkeletonId, e.target.value as any);
+                    }}
+                    className="h-5 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-1 text-gray-300"
+                    title="切换方向"
+                  >
+                    <option value="S">南</option>
+                    <option value="N">北</option>
+                    <option value="E">东</option>
+                    <option value="W">西</option>
+                    <option value="NE">东北</option>
+                    <option value="SE">东南</option>
+                    <option value="SW">西南</option>
+                    <option value="NW">西北</option>
+                  </select>
                   <button
                     className="size-5 flex items-center justify-center text-cyan-400 hover:text-cyan-300"
                     title="添加节点"
                     onClick={() => {
                       const store = useProjectStore.getState();
-                      const skel = store.puppetSkeletons?.find((s) => s.id === activePuppetSkeletonId);
                       const nodeName = `节点_${(skel?.nodes.length ?? 0) + 1}`;
                       const newNode = store.addPuppetNode(activePuppetSkeletonId, nodeName, {
                         mirrorFrom: false,
@@ -308,7 +328,8 @@ export default function PuppetAssetPanel() {
                     <Trash2 className="size-3" />
                   </button>
                 </>
-              )}
+                );
+              })()}
             </div>
             {sectionExpanded.nodes && (() => {
               const activeSkeleton = puppetSkeletons.find((sk) => sk.id === activePuppetSkeletonId);
