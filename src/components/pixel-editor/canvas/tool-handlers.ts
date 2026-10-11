@@ -296,12 +296,12 @@ export const puppetHandler: ToolHandler = {
       let D = Math.hypot(Dvec.x, Dvec.y);
       if (D < 1) return;
 
-      // 拉伸
-      const L1e = L1 > 0 ? L1 : L2; // 若无祖父，退化为单骨
+      // 拉伸：禁用，只做旋转，超距时钳制到最大臂展
+      // （stretch 会缩放整个子树，视觉错误）
+      const L1e = L1 > 0 ? L1 : L2;
       const maxReach = L1e + L2;
-      let stretch = 1;
+      const stretch = 1; // 不拉伸
       if (D > maxReach) {
-        stretch = D / maxReach;
         D = maxReach;
       }
       const dirT = { x: Dvec.x / Math.hypot(Dvec.x, Dvec.y), y: Dvec.y / Math.hypot(Dvec.x, Dvec.y) };
@@ -359,7 +359,7 @@ export const puppetHandler: ToolHandler = {
         const gLocalDeg = Math.round(((W_G - gParentW) * 180) / Math.PI);
         writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, grandparent.id, frame, {
           angle: gLocalDeg,
-          stretch,
+          stretch: stretch > 1.001 ? stretch : (gIv?.stretch ?? grandparent.stretch),
           offsetX: gIv?.offsetX ?? grandparent.offsetX,
           offsetY: gIv?.offsetY ?? grandparent.offsetY,
         }, direction);
@@ -373,7 +373,7 @@ export const puppetHandler: ToolHandler = {
       const pLocalDeg = Math.round(((W_P - W_G) * 180) / Math.PI);
       writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, parent.id, frame, {
         angle: pLocalDeg,
-        stretch,
+        stretch: stretch > 1.001 ? stretch : (pIv?.stretch ?? parent.stretch),
         offsetX: pIv?.offsetX ?? parent.offsetX,
         offsetY: pIv?.offsetY ?? parent.offsetY,
       }, direction);
