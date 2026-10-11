@@ -39,6 +39,7 @@ import {
 export default function Home() {
   const { parts, animationClips, activeAnimationClipId, setActiveAnimationClip } = useProjectStore();
   const { selectPart, editMode, exitPartEditMode, partEditPartId } = useEditorStore();
+  const isAligning = useEditorStore((s) => s.isAligning);
   const { mode, layouts, updateLayout } = useWorkspaceStore();
   const [exportOpen, setExportOpen] = useState(false);
   const initializedRef = useRef(false);
@@ -455,8 +456,10 @@ export default function Home() {
   return (
     <TooltipProvider delayDuration={300}>
       <div className="flex flex-col h-screen w-screen bg-[#0a0a16] text-gray-200 overflow-hidden">
-        {/* Toolbar - top */}
-        <Toolbar onExportClick={() => setExportOpen(true)} />
+        {/* Toolbar - top (对位中禁用) */}
+        <div className={isAligning ? 'pointer-events-none opacity-40' : ''}>
+          <Toolbar onExportClick={() => setExportOpen(true)} />
+        </div>
 
         {/* Project Home Screen (replaces editor when no project is open) */}
         {mode === 'project_home' || showProjectHome ? (
@@ -467,7 +470,7 @@ export default function Home() {
           direction="horizontal"
           className="flex-1 min-h-0"
         >
-          {/* Left panel - Parts */}
+          {/* Left panel - Parts (对位中禁用) */}
           {currentLayout.leftPanelVisible && (
             <>
               <ResizablePanel
@@ -477,6 +480,7 @@ export default function Home() {
                 order={1}
                 className="transition-all duration-300"
               >
+                <div className={isAligning ? 'pointer-events-none opacity-40 h-full' : 'h-full'}>
                 {mode === 'puppet' ? (
                   <div className="flex flex-col h-full">
                     <PuppetAssetPanel />
@@ -492,6 +496,7 @@ export default function Home() {
                     </div>
                   </div>
                 )}
+                </div>
               </ResizablePanel>
               <ResizableHandle className="bg-zinc-800/80 hover:bg-purple-600/30 transition-colors w-px" />
             </>
@@ -614,7 +619,7 @@ export default function Home() {
             </ResizablePanelGroup>
           </ResizablePanel>
 
-          {/* Right panel */}
+          {/* Right panel (对位中禁用) */}
           {currentLayout.rightPanelVisible && (
             <>
               <ResizableHandle className="bg-zinc-800/80 hover:bg-purple-600/30 transition-colors w-px" />
@@ -625,7 +630,9 @@ export default function Home() {
                 order={3}
                 className="border-l border-zinc-800 transition-all duration-300"
               >
-                {renderRightPanel()}
+                <div className={isAligning ? 'pointer-events-none opacity-40 h-full' : 'h-full'}>
+                  {renderRightPanel()}
+                </div>
               </ResizablePanel>
             </>
           )}
