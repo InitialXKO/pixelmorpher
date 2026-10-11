@@ -22,6 +22,7 @@ import type {
   PuppetDirection,
 } from '@/lib/types';
 import PuppetCreationWizard from './PuppetCreationWizard';
+import RefAssemblyWizard from './puppet/RefAssemblyWizard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -45,6 +46,8 @@ export default function PuppetAssetPanel() {
   const setActivePuppetSkeletonId = useEditorStore((s) => s.setActivePuppetSkeletonId);
 
   const [wizardOpen, setWizardOpen] = useState(false);
+  const refWizardOpen = useEditorStore((s) => s.refWizardOpen);
+  const setRefWizardOpen = useEditorStore((s) => s.setRefWizardOpen);
   const [expandedChars, setExpandedChars] = useState<Set<string>>(new Set());
   const [sectionExpanded, setSectionExpanded] = useState({
     characters: true,
@@ -84,10 +87,36 @@ export default function PuppetAssetPanel() {
         >
           <Plus className="size-3" />
         </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-5 text-amber-400 hover:text-amber-300"
+          onClick={() => setRefWizardOpen(true)}
+          title="从参考图装配"
+        >
+          <Image className="size-3" />
+        </Button>
       </div>
 
       <PuppetCreationWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
-
+      {refWizardOpen ? (
+        <div className="flex-1 min-h-0">
+          <RefAssemblyWizard
+            onClose={() => {
+              const store = useEditorStore.getState();
+              // 清理：退出对位/遮罩锁定，隐藏参考图
+              store.setIsAligning(false);
+              if (store.editMode === 'mask') {
+                store.setEditMode('normal');
+                store.setMaskNodeId(null);
+              }
+              // 不清除 referenceImageUrl，用户可能还想看；但隐藏
+              store.setReferenceImageVisible(false);
+              setRefWizardOpen(false);
+            }}
+          />
+        </div>
+      ) : (
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-2 space-y-1">
 
@@ -333,6 +362,7 @@ export default function PuppetAssetPanel() {
           </div>
         </div>
       </ScrollArea>
+      )}
     </div>
   );
 }

@@ -9,6 +9,7 @@ import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
 import { useCanvasState } from './canvas/use-canvas-state';
 import { useCanvasInteraction } from './canvas/use-canvas-interaction';
+import MaskBrushOverlay from './MaskBrushOverlay';
 import {
   renderGridOverlay,
   renderCanvasBorder,
@@ -87,6 +88,35 @@ export default function PixelCanvas() {
     offscreen.width = s.canvasWidth;
     offscreen.height = s.canvasHeight;
     const offCtx = offscreen.getContext('2d')!;
+
+    // 0. 参考图：直接画在离屏画布上（DOM <img> 方案废弃，会被不透明填充盖住）
+    if (s.referenceImageUrl && s.referenceImageVisible) {
+      // 注意：img.src 是绝对路径，不能直接和相对路径的 referenceImageUrl 比
+      // 用 dataset 存原始 URL 来比对
+      const cached = s.refImageRef.current;
+      if (!cached || cached.dataset.url !== s.referenceImageUrl) {
+        const img = new Image();
+        img.dataset.url = s.referenceImageUrl;
+        img.src = s.referenceImageUrl;
+        // 加载完成后触发重绘
+        img.onload = () => s.markDirty();
+        s.refImageRef.current = img;
+      }
+      const img = s.refImageRef.current;
+      if (img && img.complete && img.naturalWidth > 0) {
+        offCtx.save();
+        offCtx.globalAlpha = s.referenceImageOpacity;
+        // contain 模式居中绘制
+        const scale = Math.min(s.canvasWidth / img.naturalWidth, s.canvasHeight / img.naturalHeight);
+        const dw = img.naturalWidth * scale;
+        const dh = img.naturalHeight * scale;
+        const dx = (s.canvasWidth - dw) / 2;
+        const dy = (s.canvasHeight - dh) / 2;
+        offCtx.imageSmoothingEnabled = false;
+        offCtx.drawImage(img, dx, dy, dw, dh);
+        offCtx.restore();
+      }
+    }
 
     // 1. Onion skin with transform filtering
     // Determine onion quality based on play state — use 'low' during playback for 60-80% frame time reduction
@@ -344,6 +374,11 @@ export default function PixelCanvas() {
   const renderRef = React.useRef(render);
   renderRef.current = render;
 
+  // 参考图变化时标记重绘
+  useEffect(() => {
+    s.markDirty();
+  }, [s.referenceImageUrl, s.referenceImageVisible, s.referenceImageOpacity]);
+
   // Animation loop
   useEffect(() => {
     s.dirtyRef.current = true;
@@ -354,13 +389,67 @@ export default function PixelCanvas() {
       s.rafRef.current = requestAnimationFrame(loop);
     };
     s.rafRef.current = requestAnimationFrame(loop);
-    return () => { unregisterScheduler(); if (s.rafRef.current) cancelAnimationFrame(s.rafRef.current); };
+
+    // 参考图装配：聚焦到指定节点
+    const handleFocusNode = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const { nodeId, skeletonId } = detail;
+      const projectState = useProjectStore.getState();
+      const skeleton = projectState.puppetSkeletons.find((sk) => sk.id === skeletonId);
+      const node = skeleton?.nodes.find((n) => n.id === nodeId);
+      if (!skeleton || !node) return;
+      // 计算世界坐标
+      const worldPos = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight);
+      // 设置 zoom=3，平移使节点居中
+      const zoom = 3;
+      const editorStore = useEditorStore.getState();
+      editorStore.setZoom(zoom);
+      // 容器尺寸
+      const container = s.containerRef.current;
+      if (container) {
+        const rect = container.getBoundingClientRect();
+        const panX = rect.width / 2 - worldPos.x * zoom;
+        const panY = rect.height / 2 - worldPos.y * zoom;
+        editorStore.setPan(panX, panY);
+      }
+    };
+    window.addEventListener('ref-assembly:focus-node', handleFocusNode);
+
+    return () => {
+      unregisterScheduler();
+      if (s.rafRef.current) cancelAnimationFrame(s.rafRef.current);
+      window.removeEventListener('ref-assembly:focus-node', handleFocusNode);
+    };
   }, []); // 不依赖 render，用 ref 拿最新的
 
   const cursorStyle = s.editMode === 'correction' ? 'crosshair' : getCursorStyle(s.tool, s.spaceHeldRef.current, performArmed);
 
   return (
     <div ref={s.containerRef} className="relative w-full h-full overflow-hidden" style={{ background: '#0f0f1a' }}>
+      {/* 对位中：完成对位浮钮 */}
+      {s.isAligning && (
+        <button
+          onClick={() => {
+            const store = useEditorStore.getState();
+            store.setIsAligning(false);
+            // 通知向导跳到 mask 步骤（向导在侧边栏常驻，无需重开）
+            window.dispatchEvent(new CustomEvent('ref-assembly:align-done'));
+          }}
+          className="absolute top-4 left-1/2 -translate-x-1/2 z-[60] px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-sm rounded-lg shadow-lg"
+        >
+          完成对位 →
+        </button>
+      )}
+      {/* 遮罩模式：专用遮罩笔刷覆盖层 */}
+      {s.editMode === 'mask' && s.maskNodeId && (
+        <MaskBrushOverlay
+          canvasWidth={s.canvasWidth}
+          canvasHeight={s.canvasHeight}
+          zoom={s.zoomRef.current}
+          panX={s.panRef.current.x}
+          panY={s.panRef.current.y}
+        />
+      )}
       {/* Correction mode border */}
       {s.editMode === 'correction' && (
         <div className="absolute inset-0 pointer-events-none z-50" style={{ boxShadow: 'inset 0 0 0 3px rgba(34, 211, 238, 0.6)', borderRadius: '4px' }} />
