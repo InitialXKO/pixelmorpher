@@ -15,6 +15,12 @@ import type { PixelGrid, PixelColor } from '@/lib/types';
 
 type Step = 'upload' | 'align' | 'mask' | 'confirm';
 
+// 模块级持久化：防组件卸载导致 step 重置
+let persistedStep: Step = 'upload';
+export function resetRefWizardStep() {
+  persistedStep = 'upload';
+}
+
 const STEPS: { id: Step; label: string }[] = [
   { id: 'upload', label: '底图' },
   { id: 'align', label: '对位' },
@@ -43,9 +49,14 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
       setWorkingCharacterId(null);
       setWorkingSkeletonId(null);
     }
+    resetRefWizardStep();
     onClose();
   };
-  const [step, setStep] = useState<Step>('upload');
+  const [step, setStepState] = useState<Step>(persistedStep);
+  const setStep = (s: Step) => {
+    persistedStep = s;
+    setStepState(s);
+  };
   const [focusedNodeIndex, setFocusedNodeIndex] = useState(0);
   const [showAddLimb, setShowAddLimb] = useState(false);
   const [newLimbName, setNewLimbName] = useState('');
@@ -625,6 +636,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 // 清理工作副本 ID 状态，但不删除数据
                 setWorkingCharacterId(null);
                 setWorkingSkeletonId(null);
+                resetRefWizardStep();
                 onClose();
               }
             }}
