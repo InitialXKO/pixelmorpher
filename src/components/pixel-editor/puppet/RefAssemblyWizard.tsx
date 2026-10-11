@@ -15,10 +15,16 @@ import type { PixelGrid, PixelColor } from '@/lib/types';
 
 type Step = 'upload' | 'align' | 'mask' | 'confirm';
 
-// 模块级持久化：防组件卸载导致 step 重置
+// 模块级持久化：防组件卸载导致状态丢失
 let persistedStep: Step = 'upload';
+let persistedSelectedCharacterId: string | null = null;
+let persistedWorkingCharacterId: string | null = null;
+let persistedWorkingSkeletonId: string | null = null;
 export function resetRefWizardStep() {
   persistedStep = 'upload';
+  persistedSelectedCharacterId = null;
+  persistedWorkingCharacterId = null;
+  persistedWorkingSkeletonId = null;
 }
 
 const STEPS: { id: Step; label: string }[] = [
@@ -78,10 +84,22 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   // 获取当前角色及其骨架节点（按 zIndex 排序，从后往前）
   const puppetCharacters = useProjectStore((s) => s.puppetCharacters);
   const puppetSkeletons = useProjectStore((s) => s.puppetSkeletons);
-  const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
+  const [selectedCharacterId, setSelectedCharacterIdState] = useState<string | null>(persistedSelectedCharacterId);
+  const setSelectedCharacterId = (id: string | null) => {
+    persistedSelectedCharacterId = id;
+    setSelectedCharacterIdState(id);
+  };
   // 克隆的工作副本 ID（开始对位时创建，取消时删除）
-  const [workingCharacterId, setWorkingCharacterId] = useState<string | null>(null);
-  const [workingSkeletonId, setWorkingSkeletonId] = useState<string | null>(null);
+  const [workingCharacterId, setWorkingCharacterIdState] = useState<string | null>(persistedWorkingCharacterId);
+  const setWorkingCharacterId = (id: string | null) => {
+    persistedWorkingCharacterId = id;
+    setWorkingCharacterIdState(id);
+  };
+  const [workingSkeletonId, setWorkingSkeletonIdState] = useState<string | null>(persistedWorkingSkeletonId);
+  const setWorkingSkeletonId = (id: string | null) => {
+    persistedWorkingSkeletonId = id;
+    setWorkingSkeletonIdState(id);
+  };
   // 向导使用工作副本（若有），否则用选中的模板
   const effectiveCharacterId = workingCharacterId ?? selectedCharacterId;
   const selectedCharacter = puppetCharacters.find((c) => c.id === effectiveCharacterId);
