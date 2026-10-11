@@ -200,8 +200,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   const handleCancel = () => {
     setEditMode('normal');
     setMaskNodeId(null);
-    // 返回向导
-    useEditorStore.getState().setRefWizardOpen(true);
+    // 向导一直挂载，无需重新打开
   };
 
   return (

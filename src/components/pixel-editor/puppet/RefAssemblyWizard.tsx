@@ -527,9 +527,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                       const store = useEditorStore.getState();
                       store.setMaskNodeId(focusedNode.id);
                       store.setEditMode('mask');
-                      // 临时隐藏向导（不清理，mask 完成后会重新打开）
-                      // 参考图保持可见，mask 需要对照着画
-                      store.setRefWizardOpen(false);
+                      // 向导保持挂载（不卸载），mask 画布在主区域，侧边栏不冲突
                     }}
                   >
                     绘制遮罩
