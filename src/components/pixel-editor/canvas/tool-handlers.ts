@@ -254,146 +254,63 @@ export const puppetHandler: ToolHandler = {
         offsetY: drag.origOffsetY,
       }, direction);
     } else if (drag.mode === 'ik') {
-      // IK 2 骨骼：考虑 socket 本地偏移的正确解
+      // IK 单骨骼：只旋转直接父节点，不碰祖父
       const node = skeleton.nodes.find((n) => n.id === drag.nodeId);
       if (!node?.plug) return;
       const parent = skeleton.nodes.find((pn) =>
         pn.sockets.some((so) => so.id === node.plug!.socketId)
       );
       if (!parent) return;
-      // 找祖父
-      let grandparent: typeof parent | null = null;
-      let grandparentSocket: { localX: number; localY: number } | null = null;
-      if (parent.plug) {
-        const gp = skeleton.nodes.find((pn) =>
-          pn.sockets.some((so) => so.id === parent.plug!.socketId)
-        ) ?? null;
-        if (gp) {
-          grandparent = gp;
-          const gs = gp.sockets.find((s) => s.id === parent.plug!.socketId) ?? null;
-          if (gs) grandparentSocket = { localX: gs.localX, localY: gs.localY };
-        }
-      }
       const parentSocket = parent.sockets.find((s) => s.id === node.plug!.socketId);
       if (!parentSocket) return;
 
-      // 世界位置
-      const getW = (n: typeof node) =>
-        s.computePivotWorldPosition(n, skeleton, s.canvasWidth, s.canvasHeight);
-      const P_G = grandparent ? getW(grandparent) : null;
-      const P_P = getW(parent);
-      const P_N = getW(node);
+      // 父的世界位置
+      const parentPos = s.computePivotWorldPosition(parent, skeleton, s.canvasWidth, s.canvasHeight);
+      // 目标方向（鼠标 - 父位置）
+      const dx = px - parentPos.x;
+      const dy = py - parentPos.y;
+      if (Math.hypot(dx, dy) < 1) return;
 
-      // 骨长（pivot 间距）
-      const L1 = P_G ? Math.hypot(P_P.x - P_G.x, P_P.y - P_G.y) : 0;
-      const L2 = Math.hypot(P_N.x - P_P.x, P_N.y - P_P.y);
-      if (L2 < 1) return;
+      // socket 数学：父世界角 = 目标方向角 - socket 本地角
+      const aSock = Math.atan2(parentSocket.localY, parentSocket.localX);
+      const aDes = Math.atan2(dy, dx);
+      const desiredWorld = aDes - aSock; // radians
 
-      // 目标
-      const T = { x: px, y: py };
-      const base = P_G ?? P_P;
-      const Dvec = { x: T.x - base.x, y: T.y - base.y };
-      let D = Math.hypot(Dvec.x, Dvec.y);
-      if (D < 1) return;
-
-      // 拉伸
-      const L1e = L1 > 0 ? L1 : L2; // 若无祖父，退化为单骨
-      const maxReach = L1e + L2;
-      const stretch = 1; // 禁用拉伸：stretch 会缩放子树，只做旋转
-      if (D > maxReach) {
-        D = maxReach;
-      }
-      const dirT = { x: Dvec.x / Math.hypot(Dvec.x, Dvec.y), y: Dvec.y / Math.hypot(Dvec.x, Dvec.y) };
-
-      // 余弦定理求骨骼方向
-      let d1, d2; // 单位向量
-      if (L1 > 0 && P_G) {
-        const cosA = Math.max(-1, Math.min(1, (L1e * L1e + D * D - L2 * L2) / (2 * L1e * D)));
-        const angA = Math.acos(cosA);
-        const baseAng = Math.atan2(dirT.y, dirT.x);
-        // 弯曲方向：保持当前肘弯曲侧
-        const curMid = { x: P_P.x - P_G.x, y: P_P.y - P_G.y };
-        const cross = dirT.x * curMid.y - dirT.y * curMid.x;
-        const sgn = cross >= 0 ? 1 : -1;
-        const a1 = baseAng - sgn * angA;
-        d1 = { x: Math.cos(a1), y: Math.sin(a1) };
-        const cosB = Math.max(-1, Math.min(1, (L1e * L1e + L2 * L2 - D * D) / (2 * L1e * L2)));
-        const angB = Math.acos(cosB);
-        const a2 = a1 + sgn * (Math.PI - angB);
-        d2 = { x: Math.cos(a2), y: Math.sin(a2) };
-      } else {
-        // 单骨：直接指向目标
-        d1 = dirT;
-        d2 = dirT;
-      }
-
-      // socket 数学：求父世界角使 socket 指向 d
-      // socketLocal 角 α，期望方向角 β，则父世界角 = β - α
-      const angleForSocket = (
-        sx: number, sy: number,
-        dx: number, dy: number
-      ): number => {
-        const aSock = Math.atan2(sy, sx);
-        const aDes = Math.atan2(dy, dx);
-        return aDes - aSock; // radians
-      };
-
-      // 祖父的世界角（若有）
-      let W_G = 0;
-      if (grandparent && grandparentSocket && P_G) {
-        const w1 = angleForSocket(grandparentSocket.localX, grandparentSocket.localY, d1.x, d1.y);
-        W_G = w1;
-        // 祖父本地 = W_G - 曾祖父世界角（递归累加本地角）
-        const gIv = ivMap.get(grandparent.id);
-        const getWorldAngle = (nodeId: string): number => {
-          // 递归累加从根到该节点的本地角（弧度）
-          let world = 0;
-          let cur = skeleton.nodes.find((n) => n.id === nodeId) ?? null;
-          const chain: typeof cur[] = [];
-          while (cur) {
-            chain.unshift(cur);
-            if (!cur.plug) break;
-            const p = skeleton.nodes.find((pn) =>
-              pn.sockets.some((so) => so.id === cur!.plug!.socketId)
-            ) ?? null;
-            cur = p;
-          }
-          for (const n of chain) {
-            const iv = ivMap.get(n!.id);
-            world += ((iv?.angle ?? n!.angle) * Math.PI) / 180;
-          }
-          return world;
-        };
-        // 曾祖父的世界角
-        let gParentW = 0;
-        if (grandparent.plug) {
-          const gg = skeleton.nodes.find((pn) =>
-            pn.sockets.some((so) => so.id === grandparent.plug!.socketId)
-          );
-          if (gg) gParentW = getWorldAngle(gg.id);
+      // 转本地：父本地 = 父世界 - 祖父世界（只读不写祖父）
+      const getWorldAngle = (nodeId: string): number => {
+        let world = 0;
+        let cur = skeleton.nodes.find((n) => n.id === nodeId) ?? null;
+        const chain: typeof cur[] = [];
+        while (cur) {
+          chain.unshift(cur);
+          if (!cur.plug) break;
+          const p = skeleton.nodes.find((pn) =>
+            pn.sockets.some((so) => so.id === cur!.plug!.socketId)
+          ) ?? null;
+          cur = p;
         }
-        const gLocalDeg = Math.round(((W_G - gParentW) * 180) / Math.PI);
-        writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, grandparent.id, frame, {
-          angle: gLocalDeg,
-          stretch: gIv?.stretch ?? grandparent.stretch,
-          offsetX: gIv?.offsetX ?? grandparent.offsetX,
-          offsetY: gIv?.offsetY ?? grandparent.offsetY,
-        }, direction);
+        for (const n of chain) {
+          const iv = ivMap.get(n!.id);
+          world += ((iv?.angle ?? n!.angle) * Math.PI) / 180;
+        }
+        return world;
+      };
+      let grandparentWorld = 0;
+      if (parent.plug) {
+        const gp = skeleton.nodes.find((pn) =>
+          pn.sockets.some((so) => so.id === parent.plug!.socketId)
+        );
+        if (gp) grandparentWorld = getWorldAngle(gp.id);
       }
-
-      // 父的世界角
-      const w2 = angleForSocket(parentSocket.localX, parentSocket.localY, d2.x, d2.y);
-      const W_P = w2;
-      // 父本地 = W_P - W_G（若无祖父，W_G=0 即父为根）
       const pIv = ivMap.get(parent.id);
-      const pLocalDeg = Math.round(((W_P - W_G) * 180) / Math.PI);
+      const newLocalDeg = Math.round(((desiredWorld - grandparentWorld) * 180) / Math.PI);
       writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, parent.id, frame, {
-        angle: pLocalDeg,
+        angle: newLocalDeg,
         stretch: pIv?.stretch ?? parent.stretch,
         offsetX: pIv?.offsetX ?? parent.offsetX,
         offsetY: pIv?.offsetY ?? parent.offsetY,
       }, direction);
-      // 末端节点本身不旋转（保持原角度），位置由父链决定
+      // 注意：不修改祖父，不修改被拖节点（其位置由父旋转决定）
     } else {
       // move：移动目标节点的 offset
       const ddx = px - drag.startX;
