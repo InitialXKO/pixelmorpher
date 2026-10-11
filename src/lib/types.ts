@@ -1222,7 +1222,7 @@ export interface EffectStroke {
 
 export type ToolType = 'select' | 'brush' | 'eraser' | 'fill' | 'eyedropper' | 'move' | 'trajectory' | 'crop' | 'motion_blur_brush' | 'glow_brush' | 'particle_brush' | 'afterimage_brush' | 'bone' | 'ik' | 'weight_paint' | 'lasso' | 'magic_wand' | 'smart_select' | 'inpaint' | 'hitbox_drag' | 'puppet';
 export type PlayState = 'stopped' | 'playing' | 'paused';
-export type EditMode = 'normal' | 'correction' | 'trajectory_edit' | 'bone_edit' | 'weight_paint' | 'part_edit';
+export type EditMode = 'normal' | 'correction' | 'trajectory_edit' | 'bone_edit' | 'weight_paint' | 'part_edit' | 'mask';
 
 // ---- Brush Style System ----
 
@@ -1769,6 +1769,16 @@ export interface EditorState {
   // ---- Palette constraint drawing ----
   paletteConstrained: boolean;
   selectedPaletteSlot: number | null;
+  // ---- 参考图装配 ----
+  referenceImageUrl: string | null;
+  referenceImageOpacity: number;
+  referenceImageVisible: boolean;
+  // ---- 遮罩模式 ----
+  maskNodeId: string | null;
+  // ---- 参考图装配向导 ----
+  refWizardOpen: boolean;
+  // ---- 对位中 ----
+  isAligning: boolean;
 }
 
 // ---- SAM / Smart Selection ----
