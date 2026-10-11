@@ -172,6 +172,11 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
           projectStore.updatePuppetNode(ownerSkeleton.id, maskNodeId, {
             spritePartId: part.id,
           });
+          // 验证更新是否成功
+          const verify = useProjectStore.getState().puppetSkeletons
+            .find((sk) => sk.id === ownerSkeleton.id)
+            ?.nodes.find((n) => n.id === maskNodeId);
+          console.log('[MaskBrush] 更新后 spritePartId:', verify?.spritePartId, '期望:', part.id);
         } else {
           console.warn('[MaskBrush] 找不到节点所在骨架:', maskNodeId);
         }
