@@ -61,9 +61,10 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
   const playState = useEditorStore((s) => s.playState);
   const setPlayState = useEditorStore((s) => s.setPlayState);
 
+  const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const character = useMemo(
-    () => puppetCharacters.find((c) => c.id === performCharacterId) ?? null,
-    [puppetCharacters, performCharacterId]
+    () => puppetCharacters.find((c) => c.puppetSkeletonId === activePuppetSkeletonId) ?? null,
+    [puppetCharacters, activePuppetSkeletonId]
   );
   const skeleton = useMemo(
     () => puppetSkeletons.find((s) => s.id === character?.puppetSkeletonId) ?? null,
@@ -127,34 +128,19 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
         </span>
       </div>
 
-      {/* ---- 角色选择 + 进入/退出操控 ---- */}
+      {/* ---- 进入/退出操控（角色用左侧选中的） ---- */}
       <div className="space-y-1.5">
-        <Label className="text-[10px] text-gray-500 uppercase tracking-wider">操控角色</Label>
-        <select
-          value={performCharacterId ?? ''}
-          disabled={performArmed}
-          onChange={(e) => {
-            const id = e.target.value || null;
-            usePuppetSessionStore.setState({ performCharacterId: id, performNodeId: null });
-          }}
-          className="w-full h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300 disabled:opacity-60"
-        >
-          <option value="">— 选择角色 —</option>
-          {puppetCharacters.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
         {puppetCharacters.length === 0 && (
           <p className="text-[9px] text-amber-500/80">还没有角色 — 先去「搭建」阶段创建骨骼与角色</p>
         )}
         {!performArmed ? (
           <Button
             size="sm"
-            disabled={!performCharacterId}
+            disabled={!character}
             className="w-full text-xs bg-emerald-600 hover:bg-emerald-500 gap-1.5 h-8"
-            onClick={() => performCharacterId && enterPerform(performCharacterId)}
+            onClick={() => character && enterPerform(character.id)}
           >
-            <Grab className="size-3.5" /> 开始操控
+            <Grab className="size-3.5" /> 开始操控{character ? `（${character.name}）` : ''}
           </Button>
         ) : (
           <Button
