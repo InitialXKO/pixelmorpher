@@ -11,8 +11,6 @@ import {
 } from 'lucide-react';
 import PuppetCreationWizard from './PuppetCreationWizard';
 import { Button } from '@/components/ui/button';
-import { WORKFLOW_STEPS } from './puppet/types';
-import type { PuppetPhase } from './puppet/types';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { useProjectStore } from '@/lib/store';
 import RigPanel from './puppet/RigPanel';
@@ -23,9 +21,6 @@ import type { PuppetDirection } from '@/lib/types';
 // ---- Main Component ----
 
 export default function PuppetPanel() {
-  const phase = usePuppetSessionStore((s) => s.phase);
-  const setPhase = usePuppetSessionStore((s) => s.setPhase);
-
   const puppetSkeletons = useProjectStore((s) => s.puppetSkeletons) ?? [];
   const puppetCharacters = useProjectStore((s) => s.puppetCharacters) ?? [];
   const animationClips = useProjectStore((s) => s.animationClips);
@@ -67,16 +62,13 @@ export default function PuppetPanel() {
       sk.nodes.some((n) => n.id === canvasSelectedNodeId)
     );
     if (!skel) return;
-    const currentPhase = usePuppetSessionStore.getState().phase;
-    if (currentPhase === 'perform') {
-      const sess = usePuppetSessionStore.getState();
-      if (sess.performNodeId !== canvasSelectedNodeId) {
-        usePuppetSessionStore.setState({ performNodeId: canvasSelectedNodeId });
-      }
-    } else if (currentPhase === 'rig' || currentPhase === 'dress') {
-      if (selectedSkeletonId !== skel.id) setSelectedSkeletonId(skel.id);
-      if (selectedNodeId !== canvasSelectedNodeId) setSelectedNodeId(canvasSelectedNodeId);
+    // 合并后面板不再分 phase，统一同步选中
+    const sess = usePuppetSessionStore.getState();
+    if (sess.performNodeId !== canvasSelectedNodeId) {
+      usePuppetSessionStore.setState({ performNodeId: canvasSelectedNodeId });
     }
+    if (selectedSkeletonId !== skel.id) setSelectedSkeletonId(skel.id);
+    if (selectedNodeId !== canvasSelectedNodeId) setSelectedNodeId(canvasSelectedNodeId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvasSelectedNodeId]);
 
@@ -92,11 +84,6 @@ export default function PuppetPanel() {
       useProjectStore.getState().setPuppetLatitude(selectedSkeletonId, lat);
     }
   }, [selectedSkeletonId]);
-
-  const handleStepClick = (key: PuppetPhase) => {
-    setPhase(key);
-    // 进入操控阶段但还没有角色时，保持面板让用户先选角色
-  };
 
   const hasSkeletons = puppetSkeletons.length > 0;
   const hasCharacters = puppetCharacters.length > 0;
@@ -135,45 +122,12 @@ export default function PuppetPanel() {
           </Button>
         </div>
 
-        {/* Step stepper */}
-        <div className="flex items-center gap-0.5 flex-wrap">
-          {WORKFLOW_STEPS.map((step, i) => {
-            const isActive = phase === step.key;
-            const isComplete =
-              (step.key === 'rig' && hasSkeletons) ||
-              (step.key === 'dress' && hasCharacters) ||
-              (step.key === 'perform' && hasClips);
-            return (
-              <React.Fragment key={step.key}>
-                {i > 0 && <ArrowRight className="size-2 text-gray-700 mx-0.5" />}
-                <button
-                  className={`flex items-center gap-0.5 px-1.5 py-1 rounded text-[9px] font-medium transition-colors ${
-                    isActive
-                      ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
-                      : isComplete
-                      ? 'text-emerald-400/70 hover:text-emerald-400 border border-transparent'
-                      : 'text-gray-600 hover:text-gray-400 hover:bg-white/5 border border-transparent'
-                  }`}
-                  onClick={() => handleStepClick(step.key)}
-                  title={step.desc}
-                >
-                  {isComplete && !isActive ? (
-                    <CheckCircle2 className="size-2.5" />
-                  ) : (
-                    step.icon
-                  )}
-                  {step.label}
-                </button>
-              </React.Fragment>
-            );
-          })}
-        </div>
       </div>
 
       <PuppetCreationWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
 
       {/* Empty state when nothing exists yet */}
-      {!hasSkeletons && phase === 'rig' && (
+      {!hasSkeletons && !hasCharacters && (
         <div className="flex-1 flex items-center justify-center p-4">
           <div className="text-center space-y-3">
             <Users className="size-8 text-cyan-500/30 mx-auto" />
@@ -212,40 +166,59 @@ export default function PuppetPanel() {
         </div>
       )}
 
-      {/* Phase content */}
-      {(hasSkeletons || phase !== 'rig') && (
+      {/* Phase content - 三段合一，不再按 phase 切换 */}
+      {(hasSkeletons || hasCharacters) && (
         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-          <div className="p-2">
-            {/* ============ RIG ============ */}
-            {phase === 'rig' && hasSkeletons && (
-              <RigPanel
-                puppetSkeletons={puppetSkeletons}
-                selectedSkeletonId={selectedSkeletonId}
-                setSelectedSkeletonId={setSelectedSkeletonId}
-                selectedNodeId={selectedNodeId}
-                selectedSkeleton={selectedSkeleton}
-                selectedNode={selectedNode}
-                handleSelectNodeWithSync={handleSelectNodeWithSync}
-              />
+          <div className="p-2 space-y-2">
+            {/* ============ 搭建 RIG ============ */}
+            {hasSkeletons && (
+              <details open className="bg-white/[0.02] border border-white/10 rounded">
+                <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
+                  🦴 搭建骨架
+                </summary>
+                <div className="p-2 pt-0">
+                  <RigPanel
+                    puppetSkeletons={puppetSkeletons}
+                    selectedSkeletonId={selectedSkeletonId}
+                    setSelectedSkeletonId={setSelectedSkeletonId}
+                    selectedNodeId={selectedNodeId}
+                    selectedSkeleton={selectedSkeleton}
+                    selectedNode={selectedNode}
+                    handleSelectNodeWithSync={handleSelectNodeWithSync}
+                  />
+                </div>
+              </details>
             )}
 
-            {/* ============ DRESS ============ */}
-            {phase === 'dress' && (
-              <DressPanel
-                puppetCharacters={puppetCharacters}
-                puppetSkeletons={puppetSkeletons}
-                parts={parts}
-                selectedCharacterId={selectedCharacterId}
-                setSelectedCharacterId={setSelectedCharacterId}
-                selectedCostumeId={selectedCostumeId}
-                setSelectedCostumeId={setSelectedCostumeId}
-                selectedNodeId={selectedNodeId}
-                handleSelectNodeWithSync={handleSelectNodeWithSync}
-              />
-            )}
+            {/* ============ 换装 DRESS ============ */}
+            <details open className="bg-white/[0.02] border border-white/10 rounded">
+              <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
+                👗 换装
+              </summary>
+              <div className="p-2 pt-0">
+                <DressPanel
+                  puppetCharacters={puppetCharacters}
+                  puppetSkeletons={puppetSkeletons}
+                  parts={parts}
+                  selectedCharacterId={selectedCharacterId}
+                  setSelectedCharacterId={setSelectedCharacterId}
+                  selectedCostumeId={selectedCostumeId}
+                  setSelectedCostumeId={setSelectedCostumeId}
+                  selectedNodeId={selectedNodeId}
+                  handleSelectNodeWithSync={handleSelectNodeWithSync}
+                />
+              </div>
+            </details>
 
-            {/* ============ PERFORM ============ */}
-            {phase === 'perform' && <PerformPanel />}
+            {/* ============ 操控 PERFORM ============ */}
+            <details open className="bg-white/[0.02] border border-white/10 rounded">
+              <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
+                🎬 操控动画
+              </summary>
+              <div className="p-2 pt-0">
+                <PerformPanel />
+              </div>
+            </details>
           </div>
         </div>
       )}
