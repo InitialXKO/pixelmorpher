@@ -180,17 +180,18 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
               spritePartId: part.id,
             });
             // 找拥有该骨架的角色，更新其 costume spriteMap
+            // 只写骨架当前方向（对位时选择的方向），不写四个方向
             const character = (projectStore.puppetCharacters ?? []).find(
               (c) => c.puppetSkeletonId === owner.id
             );
             if (character) {
+              const dir = owner.currentDirection ?? 'S';
               const costumes = character.costumeSets ?? [];
-              // 更新所有 costume（或至少 active 的），所有方向
               for (const cs of costumes) {
-                const newSpriteMap = { ...cs.spriteMap };
-                for (const dir of ['front', 'back', 'left', 'right'] as const) {
-                  newSpriteMap[`${maskNodeId}:${dir}`] = part.id;
-                }
+                const newSpriteMap = {
+                  ...cs.spriteMap,
+                  [`${maskNodeId}:${dir}`]: part.id,
+                };
                 // 直接更新 store
                 useProjectStore.setState({
                   puppetCharacters: (useProjectStore.getState().puppetCharacters ?? []).map((c) =>

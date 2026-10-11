@@ -309,6 +309,27 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   直接在画布上拖动角色肢体（拖动旋转，Shift+拖动平移）对准底图。
                   完成后点画布顶部的"完成对位"继续。
                 </p>
+                {/* 方向选择：遮罩只应用于此方向 */}
+                <div>
+                  <label className="text-xs text-gray-500 block mb-1">对位方向（遮罩将应用于此方向）</label>
+                  <select
+                    value={activeSkeleton.currentDirection ?? 'S'}
+                    onChange={(e) => {
+                      const skId = activeSkeleton.id;
+                      useProjectStore.getState().setPuppetDirection(skId, e.target.value as any);
+                    }}
+                    className="w-full h-8 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
+                  >
+                    <option value="S">南 (S) - 正面</option>
+                    <option value="N">北 (N) - 背面</option>
+                    <option value="E">东 (E) - 右侧</option>
+                    <option value="W">西 (W) - 左侧</option>
+                    <option value="NE">东北 (NE)</option>
+                    <option value="SE">东南 (SE)</option>
+                    <option value="SW">西南 (SW)</option>
+                    <option value="NW">西北 (NW)</option>
+                  </select>
+                </div>
                 <Button
                   size="sm"
                   className="w-full"
