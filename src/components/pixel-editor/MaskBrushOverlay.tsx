@@ -162,12 +162,19 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       projectStore.setPartPixels(part.id, pixels);
       console.log('[MaskBrush] 已生成 Part:', part.id);
 
-      // 关联到节点
-      const activeSkeletonId = useEditorStore.getState().activePuppetSkeletonId;
-      if (activeSkeletonId && maskNodeId) {
-        projectStore.updatePuppetNode(activeSkeletonId, maskNodeId, {
-          spritePartId: part.id,
-        });
+      // 关联到节点：按 nodeId 反查骨架（不依赖 activePuppetSkeletonId，可能过期）
+      if (maskNodeId) {
+        const skeletons = projectStore.puppetSkeletons ?? [];
+        const ownerSkeleton = skeletons.find((sk) =>
+          sk.nodes.some((n) => n.id === maskNodeId)
+        );
+        if (ownerSkeleton) {
+          projectStore.updatePuppetNode(ownerSkeleton.id, maskNodeId, {
+            spritePartId: part.id,
+          });
+        } else {
+          console.warn('[MaskBrush] 找不到节点所在骨架:', maskNodeId);
+        }
         console.log('[MaskBrush] 已关联到节点:', maskNodeId);
         // 通知向导更新进度
         window.dispatchEvent(
