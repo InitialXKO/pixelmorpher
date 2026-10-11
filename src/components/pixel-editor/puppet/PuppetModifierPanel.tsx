@@ -8,8 +8,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { Plus, Trash2, Eye, EyeOff, ChevronDown, Network } from 'lucide-react';
-import { useProjectStore } from '@/lib/store';
-import { usePuppetSessionStore } from '@/lib/puppet-session-store';
+import { useProjectStore, useEditorStore } from '@/lib/store';
 import {
   ANIMATION_MODIFIER_TYPES,
   getModifierDef,
@@ -43,25 +42,20 @@ export default function PuppetModifierPanel() {
   const updatePuppetNodeModifier = useProjectStore((s) => s.updatePuppetNodeModifier);
   const togglePuppetNodeModifier = useProjectStore((s) => s.togglePuppetNodeModifier);
 
-  const performCharacterId = usePuppetSessionStore((s) => s.performCharacterId);
-  const performNodeId = usePuppetSessionStore((s) => s.performNodeId);
-
   const [addingType, setAddingType] = useState<AnimationModifierType>('pendulum');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'modifiers' | 'blueprint' | 'templates'>('modifiers');
 
-  const puppetCharacters = useProjectStore((s) => s.puppetCharacters) ?? [];
-  const character = useMemo(
-    () => puppetCharacters.find((c) => c.id === performCharacterId) ?? null,
-    [puppetCharacters, performCharacterId]
-  );
+  const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
+  const selectedPuppetNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
+
   const skeleton = useMemo(
-    () => puppetSkeletons.find((sk) => sk.id === character?.puppetSkeletonId) ?? null,
-    [puppetSkeletons, character]
+    () => puppetSkeletons.find((sk) => sk.id === activePuppetSkeletonId) ?? null,
+    [puppetSkeletons, activePuppetSkeletonId]
   );
   const node = useMemo(
-    () => skeleton?.nodes.find((n) => n.id === performNodeId) ?? null,
-    [skeleton, performNodeId]
+    () => skeleton?.nodes.find((n) => n.id === selectedPuppetNodeId) ?? null,
+    [skeleton, selectedPuppetNodeId]
   );
   const modifiers = node?.modifiers ?? [];
 
