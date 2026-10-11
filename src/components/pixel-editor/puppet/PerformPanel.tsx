@@ -18,6 +18,7 @@ import {
   ChevronRight,
   Grab,
   Square,
+  Plus,
   Ghost,
   Magnet,
   Keyboard,
@@ -67,8 +68,8 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
     [puppetCharacters, activePuppetSkeletonId]
   );
   const skeleton = useMemo(
-    () => puppetSkeletons.find((s) => s.id === character?.puppetSkeletonId) ?? null,
-    [puppetSkeletons, character]
+    () => puppetSkeletons.find((s) => s.id === activePuppetSkeletonId) ?? null,
+    [puppetSkeletons, activePuppetSkeletonId]
   );
   const clip = useMemo(
     () => animationClips.find((c) => c.puppetCharacterId === performCharacterId) ?? null,
@@ -135,6 +136,25 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
         )}
         {puppetCharacters.length > 0 && !activePuppetSkeletonId && (
           <p className="text-[9px] text-amber-500/80">请在左侧面板选择骨架</p>
+        )}
+        {activePuppetSkeletonId && skeleton && !character && (
+          <div className="space-y-1.5">
+            <p className="text-[9px] text-amber-500/80">
+              骨架「{skeleton.name}」还没有角色
+            </p>
+            <Button
+              size="sm"
+              className="w-full text-xs bg-cyan-600 hover:bg-cyan-500 gap-1.5 h-8"
+              onClick={() => {
+                const store = useProjectStore.getState();
+                const newChar = store.addPuppetCharacter(`角色_${skeleton.name}`, skeleton.id);
+                // 自动选中
+                useEditorStore.getState().setActivePuppetSkeletonId(skeleton.id);
+              }}
+            >
+              <Plus className="size-3.5" /> 为此骨架创建角色
+            </Button>
+          </div>
         )}
         {!performArmed ? (
           <Button
