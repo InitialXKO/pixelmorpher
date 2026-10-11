@@ -43,9 +43,9 @@ import { getCursorStyle, isStrokeToolCheck } from './canvas/canvas-utils';
  */
 function filterVisibleCharacters<T extends { id: string }>(
   characters: T[],
-  session: { phase: string; showAllCharacters: boolean; performCharacterId: string | null },
+  session: { showAllCharacters: boolean; performCharacterId: string | null },
 ): T[] {
-  if (session.phase === 'perform' && session.showAllCharacters) {
+  if (session.showAllCharacters) {
     return characters;
   }
   if (session.performCharacterId) {
@@ -63,7 +63,6 @@ export default function PixelCanvas() {
   // 订阅角色显示状态，变化时触发重渲染
   const showAllCharacters = usePuppetSessionStore((st) => st.showAllCharacters);
   const performCharacterId = usePuppetSessionStore((st) => st.performCharacterId);
-  const puppetPhase = usePuppetSessionStore((st) => st.phase);
   const performArmed = usePuppetSessionStore((st) => st.performArmed);
   // 订阅当前帧，播放时触发 render 回调更新（否则闭包里的 currentFrame 是旧的）
   const storeCurrentFrame = useProjectStore((st) => st.currentFrame);
@@ -369,7 +368,7 @@ export default function PixelCanvas() {
     s.showWeightPaint, s.weightPaintBoneId, s.puppetSkeletons, s.puppetCharacters, s.puppetClipsVersion,
     s.canvasModifierTracks, s.partEditPartId, s.partEditModifiers,
     interaction.renderStrokePreview, s.getInterpolatedTranslateOffset,
-    showAllCharacters, performCharacterId, puppetPhase, storeCurrentFrame,
+    showAllCharacters, performCharacterId, storeCurrentFrame,
     // 参考图：URL/可见性/不透明度变化时重建 render，否则闭包里是旧 s
     s.referenceImageUrl, s.referenceImageVisible, s.referenceImageOpacity,
   ]);
@@ -475,15 +474,8 @@ export default function PixelCanvas() {
         </div>
       )}
 
-      {/* Phase badge (rig/dress/perform) */}
-      {s.isPuppetMode && puppetPhase && (
-        <div className="absolute top-3 left-3 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(139, 92, 246, 0.2)', color: '#a78bfa', border: '1px solid rgba(139, 92, 246, 0.4)', backdropFilter: 'blur(4px)' }}>
-          {puppetPhase === 'rig' ? '搭建' : puppetPhase === 'dress' ? '穿衣' : '表演'}
-        </div>
-      )}
-
       {/* Unarmed badge */}
-      {s.isPuppetMode && puppetPhase === 'perform' && !performArmed && (
+      {s.isPuppetMode && !performArmed && (
         <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.4)', backdropFilter: 'blur(4px)' }}>
           未武装
         </div>

@@ -5,7 +5,6 @@ import PixelCanvas from '@/components/pixel-editor/PixelCanvas';
 import TrajectoryPanel from '@/components/pixel-editor/TrajectoryPanel';
 import PuppetPanel from '@/components/pixel-editor/PuppetPanel';
 import PuppetAssetPanel from '@/components/pixel-editor/PuppetAssetPanel';
-import PuppetModeBanner from '@/components/pixel-editor/puppet/PuppetModeBanner';
 import DccPipelinePanel from '@/components/pixel-editor/DccPipelinePanel';
 import ProceduralPanel from '@/components/pixel-editor/ProceduralPanel';
 import ScriptPanel from '@/components/pixel-editor/ScriptPanel';
@@ -547,10 +546,6 @@ export default function Home() {
                         </Button>
                       </div>
                     </div>
-                  )}
-                  {/* Puppet Mode banner — phase-aware hints */}
-                  {mode === 'puppet' && (
-                    <PuppetModeBanner />
                   )}
                   <PixelCanvas />
                 </div>
