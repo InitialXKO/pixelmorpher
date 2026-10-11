@@ -181,9 +181,9 @@ export const puppetHandler: ToolHandler = {
       return;
     }
 
-    let dragMode: 'rotate' | 'move' | 'ik';
-    if (e.altKey) dragMode = 'ik';
-    else if (e.shiftKey) dragMode = 'move';
+    let dragMode: 'rotate' | 'move' | 'moveAll';
+    // Alt+拖动（IK）已禁用：实现不可靠，待重做
+    if (e.shiftKey) dragMode = 'move';
     else dragMode = 'rotate';
 
     const resolvedClipId = clipId ?? session.ensurePuppetClip(character.id);
@@ -231,7 +231,7 @@ export const puppetHandler: ToolHandler = {
       if (Math.sqrt(ddx * ddx + ddy * ddy) < 2) return;
       drag.dragStarted = true;
       useProjectStore.getState().beginDrag(
-        drag.mode === 'rotate' ? '旋转木偶节点' : drag.mode === 'ik' ? 'IK 拖动' : '移动木偶节点'
+        drag.mode === 'rotate' ? '旋转木偶节点' : '移动木偶节点'
       );
       s.isDrawingRef.current = true;
       s.markDirty();
@@ -253,71 +253,6 @@ export const puppetHandler: ToolHandler = {
         offsetX: drag.origOffsetX,
         offsetY: drag.origOffsetY,
       }, direction);
-    } else if (drag.mode === 'ik') {
-      // IK 单骨骼：只旋转直接父节点，不碰祖父
-      const node = skeleton.nodes.find((n) => n.id === drag.nodeId);
-      if (!node?.plug) return;
-      const parent = skeleton.nodes.find((pn) =>
-        pn.sockets.some((so) => so.id === node.plug!.socketId)
-      );
-      if (!parent) return;
-      const parentSocket = parent.sockets.find((s) => s.id === node.plug!.socketId);
-      if (!parentSocket) return;
-
-      // 父的世界位置
-      const parentPos = s.computePivotWorldPosition(parent, skeleton, s.canvasWidth, s.canvasHeight);
-      // 目标方向（鼠标 - 父位置）
-      const dx = px - parentPos.x;
-      const dy = py - parentPos.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist < 1) return;
-
-      // 骨长：父到子当前距离
-      const nodePos = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight);
-      const boneLen = Math.hypot(nodePos.x - parentPos.x, nodePos.y - parentPos.y);
-      // 拉伸：目标超距时拉伸父节点
-      const stretch = boneLen > 1 && dist > boneLen ? dist / boneLen : (ivMap.get(parent.id)?.stretch ?? parent.stretch);
-
-      // socket 数学：父世界角 = 目标方向角 - socket 本地角
-      const aSock = Math.atan2(parentSocket.localY, parentSocket.localX);
-      const aDes = Math.atan2(dy, dx);
-      const desiredWorld = aDes - aSock; // radians
-
-      // 转本地：父本地 = 父世界 - 祖父世界（只读不写祖父）
-      const getWorldAngle = (nodeId: string): number => {
-        let world = 0;
-        let cur = skeleton.nodes.find((n) => n.id === nodeId) ?? null;
-        const chain: typeof cur[] = [];
-        while (cur) {
-          chain.unshift(cur);
-          if (!cur.plug) break;
-          const p = skeleton.nodes.find((pn) =>
-            pn.sockets.some((so) => so.id === cur!.plug!.socketId)
-          ) ?? null;
-          cur = p;
-        }
-        for (const n of chain) {
-          const iv = ivMap.get(n!.id);
-          world += ((iv?.angle ?? n!.angle) * Math.PI) / 180;
-        }
-        return world;
-      };
-      let grandparentWorld = 0;
-      if (parent.plug) {
-        const gp = skeleton.nodes.find((pn) =>
-          pn.sockets.some((so) => so.id === parent.plug!.socketId)
-        );
-        if (gp) grandparentWorld = getWorldAngle(gp.id);
-      }
-      const pIv = ivMap.get(parent.id);
-      const newLocalDeg = Math.round(((desiredWorld - grandparentWorld) * 180) / Math.PI);
-      writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, parent.id, frame, {
-        angle: newLocalDeg,
-        stretch: Math.round(stretch * 100) / 100,
-        offsetX: pIv?.offsetX ?? parent.offsetX,
-        offsetY: pIv?.offsetY ?? parent.offsetY,
-      }, direction);
-      // 注意：不修改祖父，不修改被拖节点（其位置由父旋转决定）
     } else {
       // move：移动目标节点的 offset
       const ddx = px - drag.startX;
