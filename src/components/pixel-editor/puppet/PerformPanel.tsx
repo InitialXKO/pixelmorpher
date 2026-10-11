@@ -30,7 +30,6 @@ import { useProjectStore, useEditorStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import DirectionWheel, { oldDirectionToIndex, directionIndexToOldDirection } from '../DirectionWheel';
-import PuppetModifierPanel from './PuppetModifierPanel';
 import BlueprintTemplateLoader from './BlueprintTemplateLoader';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -387,9 +386,6 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
               <BlueprintTemplateLoader skeleton={skeleton} />
             </div>
           )}
-
-          {/* ---- 程序化修改器 ---- */}
-          <PuppetModifierPanel />
         </>
       )}
     </div>

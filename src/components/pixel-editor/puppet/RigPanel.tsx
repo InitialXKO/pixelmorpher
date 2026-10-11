@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { NodeTreeItemWrapper } from './NodeTree';
 import { updateSkeletonNode } from './updateSkeletonNode';
+import PuppetModifierPanel from './PuppetModifierPanel';
 
 interface RigPanelProps {
   puppetSkeletons: PuppetSkeleton[];
@@ -334,6 +335,11 @@ function RigNodeProperties({
             </div>
           ))}
         </div>
+      </div>
+
+      {/* ---- 程序化修改器 / 蓝图 ---- */}
+      <div className="pt-2 border-t border-[#1e1e3a]">
+        <PuppetModifierPanel />
       </div>
     </div>
   );
