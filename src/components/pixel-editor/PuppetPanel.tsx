@@ -37,16 +37,6 @@ export default function PuppetPanel() {
   const [latitude, setLatitude] = useState(0);
 
   // ---- dress 阶段本地状态 ----
-  const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
-  const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
-  // 左侧树切换骨架时，右侧角色选择同步
-  React.useEffect(() => {
-    if (!activePuppetSkeletonId) return;
-    const char = puppetCharacters.find((c) => c.puppetSkeletonId === activePuppetSkeletonId);
-    if (char && char.id !== selectedCharacterId) {
-      setSelectedCharacterId(char.id);
-    }
-  }, [activePuppetSkeletonId, puppetCharacters]);
   const [selectedCostumeId, setSelectedCostumeId] = useState<string | null>(null);
 
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -61,7 +51,6 @@ export default function PuppetPanel() {
       setLatitude(selectedSkeleton.viewLatitude ?? 0);
     }
   }, [selectedSkeletonId]);
-  const selectedCharacter = puppetCharacters.find((c) => c.id === selectedCharacterId) ?? null;
 
   // ---- 画布 → 面板：单向同步选中节点 ----
   // 画布点击节点只写 ProjectStore.selectedPuppetNodeId，
@@ -212,8 +201,6 @@ export default function PuppetPanel() {
                   puppetCharacters={puppetCharacters}
                   puppetSkeletons={puppetSkeletons}
                   parts={parts}
-                  selectedCharacterId={selectedCharacterId}
-                  setSelectedCharacterId={setSelectedCharacterId}
                   selectedCostumeId={selectedCostumeId}
                   setSelectedCostumeId={setSelectedCostumeId}
                   selectedNodeId={selectedNodeId}

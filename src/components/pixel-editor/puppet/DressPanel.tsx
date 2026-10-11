@@ -7,7 +7,7 @@ import {
   Shirt,
   X,
 } from 'lucide-react';
-import { useProjectStore } from '@/lib/store';
+import { useProjectStore, useEditorStore } from '@/lib/store';
 import type {
   PuppetCharacter,
   PuppetSkeleton,
@@ -29,8 +29,6 @@ interface DressPanelProps {
   puppetCharacters: PuppetCharacter[];
   puppetSkeletons: PuppetSkeleton[];
   parts: Part[];
-  selectedCharacterId: string | null;
-  setSelectedCharacterId: (id: string | null) => void;
   selectedCostumeId: string | null;
   setSelectedCostumeId: (id: string | null) => void;
   selectedNodeId: string | null;
@@ -48,17 +46,17 @@ export default function DressPanel({
   puppetCharacters,
   puppetSkeletons,
   parts,
-  selectedCharacterId,
-  setSelectedCharacterId,
   selectedCostumeId,
   setSelectedCostumeId,
   selectedNodeId,
   handleSelectNodeWithSync,
   hideNodeList = false,
 }: DressPanelProps) {
+  // 角色从左侧选中的骨架反查，不再用右侧选择
+  const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const selectedCharacter = useMemo(
-    () => puppetCharacters.find((c) => c.id === selectedCharacterId) ?? null,
-    [puppetCharacters, selectedCharacterId]
+    () => puppetCharacters.find((c) => c.puppetSkeletonId === activePuppetSkeletonId) ?? null,
+    [puppetCharacters, activePuppetSkeletonId]
   );
 
   const skeleton = useMemo(
@@ -82,7 +80,7 @@ export default function DressPanel({
 
   // ---- Handlers ----
   const handleAddCostume = () => {
-    if (!selectedCharacterId) return;
+    if (!selectedCharacter?.id) return;
     const store = useProjectStore.getState();
     store.pushUndo('添加服装集');
     const newSet = {
@@ -92,7 +90,7 @@ export default function DressPanel({
     };
     useProjectStore.setState({
       puppetCharacters: (store.puppetCharacters ?? []).map((c) =>
-        c.id === selectedCharacterId
+        c.id === selectedCharacter?.id
           ? { ...c, costumeSets: [...c.costumeSets, newSet] }
           : c
       ),
@@ -101,16 +99,16 @@ export default function DressPanel({
   };
 
   const handleDeleteCostume = (costumeId: string) => {
-    if (!selectedCharacterId) return;
+    if (!selectedCharacter?.id) return;
     const store = useProjectStore.getState();
     const cs = store.puppetCharacters
-      ?.find((c) => c.id === selectedCharacterId)
+      ?.find((c) => c.id === selectedCharacter?.id)
       ?.costumeSets.find((s) => s.id === costumeId);
     if (!confirm(`删除服装集「${cs?.name ?? ''}」（含全部方向精灵分配）？`)) return;
     store.pushUndo('删除服装集');
     useProjectStore.setState({
       puppetCharacters: (store.puppetCharacters ?? []).map((c) =>
-        c.id === selectedCharacterId
+        c.id === selectedCharacter?.id
           ? { ...c, costumeSets: c.costumeSets.filter((cs) => cs.id !== costumeId) }
           : c
       ),
@@ -121,13 +119,13 @@ export default function DressPanel({
   };
 
   const handleSpriteAssign = (nodeId: string, direction: PuppetDirection, partId: string | null) => {
-    if (!selectedCharacterId || !selectedCostume) return;
+    if (!selectedCharacter?.id || !selectedCostume) return;
     const store = useProjectStore.getState();
     store.pushUndo('分配精灵', 'assignSprite');
     const key = `${nodeId}:${direction}`;
     useProjectStore.setState({
       puppetCharacters: (store.puppetCharacters ?? []).map((c) =>
-        c.id === selectedCharacterId
+        c.id === selectedCharacter?.id
           ? {
               ...c,
               costumeSets: c.costumeSets.map((cs) =>
@@ -157,25 +155,7 @@ export default function DressPanel({
 
   return (
     <div className="space-y-3">
-      {/* 角色选择 */}
-      <div>
-        <Label className="text-[10px] text-gray-500 uppercase tracking-wider">角色</Label>
-        <select
-          value={selectedCharacterId ?? ''}
-          onChange={(e) => {
-            setSelectedCharacterId(e.target.value || null);
-            setSelectedCostumeId(null);
-            handleSelectNodeWithSync(null);
-          }}
-          className="w-full h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300 mt-1"
-        >
-          <option value="">— 选择角色 —</option>
-          {puppetCharacters.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
-      </div>
-
+      {/* 角色：用左侧选中的骨架对应的角色，不再重复选择 */}
       {/* 服装集 */}
       {selectedCharacter && (
         <div>
