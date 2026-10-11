@@ -205,5 +205,5 @@ export const REPAIR_PATTERNS = [
   { id: 'noise', label: '噪点纹理', fn: patternNoiseTexture },
   { id: 'mirror-v', label: '镜像·垂直', fn: (p: PixelGrid) => patternMirror(p, 'v') },
   { id: 'mirror-h', label: '镜像·水平', fn: (p: PixelGrid) => patternMirror(p, 'h') },
-  { id: 'directional', label: '方向延伸', fn: null }, // 需用户拖方向，特殊处理
+  { id: 'directional', label: '方向延伸', fn: null }, // 需用户指定方向，面板特殊处理
 ] as const;

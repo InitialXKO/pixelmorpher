@@ -465,9 +465,6 @@ export default function PixelCanvas() {
         <MaskBrushOverlay
           canvasWidth={s.canvasWidth}
           canvasHeight={s.canvasHeight}
-          zoom={s.zoomRef.current}
-          panX={s.panRef.current.x}
-          panY={s.panRef.current.y}
         />
       )}
 

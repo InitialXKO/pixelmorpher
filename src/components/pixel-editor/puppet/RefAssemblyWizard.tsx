@@ -34,6 +34,17 @@ const BUILT_IN_REFS = [
 ];
 
 export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) {
+  // 内部关闭：先删工作副本，再调外部 onClose
+  const handleClose = () => {
+    if (workingCharacterId || workingSkeletonId) {
+      const ps = useProjectStore.getState();
+      if (workingCharacterId) ps.removePuppetCharacter(workingCharacterId);
+      if (workingSkeletonId) ps.removePuppetSkeleton(workingSkeletonId);
+      setWorkingCharacterId(null);
+      setWorkingSkeletonId(null);
+    }
+    onClose();
+  };
   const [step, setStep] = useState<Step>('upload');
   const [focusedNodeIndex, setFocusedNodeIndex] = useState(0);
   const [showAddLimb, setShowAddLimb] = useState(false);
@@ -57,7 +68,12 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const puppetCharacters = useProjectStore((s) => s.puppetCharacters);
   const puppetSkeletons = useProjectStore((s) => s.puppetSkeletons);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
-  const selectedCharacter = puppetCharacters.find((c) => c.id === selectedCharacterId);
+  // 克隆的工作副本 ID（开始对位时创建，取消时删除）
+  const [workingCharacterId, setWorkingCharacterId] = useState<string | null>(null);
+  const [workingSkeletonId, setWorkingSkeletonId] = useState<string | null>(null);
+  // 向导使用工作副本（若有），否则用选中的模板
+  const effectiveCharacterId = workingCharacterId ?? selectedCharacterId;
+  const selectedCharacter = puppetCharacters.find((c) => c.id === effectiveCharacterId);
   const activeSkeleton = selectedCharacter
     ? puppetSkeletons.find((sk) => sk.id === selectedCharacter.puppetSkeletonId)
     : null;
@@ -84,6 +100,18 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     const handler = () => setStep('mask');
     window.addEventListener('ref-assembly:align-done', handler);
     return () => window.removeEventListener('ref-assembly:align-done', handler);
+  }, []);
+
+  // 监听遮罩完成事件，更新进度
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const nodeId = (e as CustomEvent).detail?.nodeId;
+      if (nodeId) {
+        setProcessedNodes((m) => new Map(m).set(nodeId, 'mask'));
+      }
+    };
+    window.addEventListener('ref-assembly:mask-done', handler);
+    return () => window.removeEventListener('ref-assembly:mask-done', handler);
   }, []);
 
   // 聚焦到指定索引的节点：发事件给 PixelCanvas（它有容器尺寸和世界坐标计算）
@@ -155,7 +183,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
         {/* Header */}
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-gray-200">参考图装配</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300">
+          <button onClick={handleClose} className="text-gray-500 hover:text-gray-300">
             <X className="size-4" />
           </button>
         </div>
@@ -252,9 +280,17 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   onClick={() => {
                     if (!selectedCharacter) return;
                     const store = useEditorStore.getState();
-                    // 进入 Perform 模式并选中模板角色（只显示它）
-                    // enterPerform 会：setPhase, 设 performCharacterId, 切 puppet 工具, 显示骨架
-                    usePuppetSessionStore.getState().enterPerform(selectedCharacter.id);
+                    const projectStore = useProjectStore.getState();
+                    // 克隆模板：后续修改在副本上，不污染原模板
+                    const clone = projectStore.clonePuppetCharacter(
+                      selectedCharacter.id,
+                      `${selectedCharacter.name}（装配）`
+                    );
+                    if (!clone) return;
+                    setWorkingCharacterId(clone.id);
+                    setWorkingSkeletonId(clone.puppetSkeletonId);
+                    // 进入 Perform 模式并选中克隆角色（只显示它）
+                    usePuppetSessionStore.getState().enterPerform(clone.id);
                     // 标记对位中（锁定工具栏/侧边栏）
                     store.setIsAligning(true);
                     // 不关闭向导：侧边栏模式下可同时看到向导和画布
@@ -577,7 +613,13 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             }
             onClick={() => {
               if (stepIndex < STEPS.length - 1) setStep(STEPS[stepIndex + 1].id);
-              else onClose();
+              else {
+                // 完成：保留工作副本（不清），只关向导
+                // 清理工作副本 ID 状态，但不删除数据
+                setWorkingCharacterId(null);
+                setWorkingSkeletonId(null);
+                onClose();
+              }
             }}
           >
             {stepIndex === STEPS.length - 1 ? '完成' : '下一步'} <ArrowRight className="size-3.5 ml-1" />

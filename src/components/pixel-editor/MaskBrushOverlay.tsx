@@ -14,12 +14,9 @@ import type { Part } from '@/lib/types';
 interface Props {
   canvasWidth: number;
   canvasHeight: number;
-  zoom: number;
-  panX: number;
-  panY: number;
 }
 
-export default function MaskBrushOverlay({ canvasWidth, canvasHeight, zoom, panX, panY }: Props) {
+export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isDrawing = useRef(false);
   const [brushSize, setBrushSize] = useState(8);
@@ -29,6 +26,10 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight, zoom, panX
   const setEditMode = useEditorStore((s) => s.setEditMode);
   const setMaskNodeId = useEditorStore((s) => s.setMaskNodeId);
   const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
+  // 直接订阅，zoom/pan 变化时重渲染
+  const zoom = useEditorStore((s) => s.zoom);
+  const panX = useEditorStore((s) => s.panX);
+  const panY = useEditorStore((s) => s.panY);
 
   // 初始化：透明底
   useEffect(() => {
@@ -43,9 +44,10 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight, zoom, panX
   const getPos = (e: React.MouseEvent) => {
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
-    // 转为画布像素坐标
-    const x = (e.clientX - rect.left - panX) / zoom;
-    const y = (e.clientY - rect.top - panY) / zoom;
+    // overlay canvas 已按 pan/zoom 定位，rect 即图像区域
+    // 直接换算到内部像素坐标
+    const x = (e.clientX - rect.left) / (rect.width / canvasWidth);
+    const y = (e.clientY - rect.top) / (rect.height / canvasHeight);
     return { x: Math.floor(x), y: Math.floor(y) };
   };
 
@@ -167,6 +169,10 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight, zoom, panX
           spritePartId: part.id,
         });
         console.log('[MaskBrush] 已关联到节点:', maskNodeId);
+        // 通知向导更新进度
+        window.dispatchEvent(
+          new CustomEvent('ref-assembly:mask-done', { detail: { nodeId: maskNodeId } })
+        );
       }
 
       // 显示轴心编辑器
@@ -202,8 +208,15 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight, zoom, panX
     <>
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 z-40"
-        style={{ cursor: 'crosshair', imageRendering: 'pixelated' }}
+        className="absolute z-40"
+        style={{
+          cursor: 'crosshair',
+          imageRendering: 'pixelated',
+          left: panX,
+          top: panY,
+          width: canvasWidth * zoom,
+          height: canvasHeight * zoom,
+        }}
         onMouseDown={handleDown}
         onMouseMove={handleMove}
         onMouseUp={handleUp}
