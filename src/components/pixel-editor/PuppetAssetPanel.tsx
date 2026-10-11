@@ -56,6 +56,11 @@ export default function PuppetAssetPanel() {
     sprites: true,
     clips: true,
   });
+  // 添加节点对话框：选父节点+插槽
+  const [addNodeDialog, setAddNodeDialog] = useState<{
+    parentNodeId: string;
+    socketId: string;
+  } | null>(null);
 
   const puppetClips = animationClips;
 
@@ -298,17 +303,27 @@ export default function PuppetAssetPanel() {
                   </select>
                   <button
                     className="size-5 flex items-center justify-center text-cyan-400 hover:text-cyan-300"
-                    title="添加节点"
+                    title="添加节点（选择父节点插槽）"
                     onClick={() => {
-                      const store = useProjectStore.getState();
-                      const nodeName = `节点_${(skel?.nodes.length ?? 0) + 1}`;
-                      const newNode = store.addPuppetNode(activePuppetSkeletonId, nodeName, {
-                        mirrorFrom: false,
-                        crossSectionTop: 4,
-                        crossSectionBottom: 3,
-                        zIndex: 0,
+                      const skel = puppetSkeletons.find((s) => s.id === activePuppetSkeletonId);
+                      if (!skel || skel.nodes.length === 0) {
+                        // 没有节点时直接创建根节点
+                        const store = useProjectStore.getState();
+                        const newNode = store.addPuppetNode(activePuppetSkeletonId, `节点_1`, {
+                          mirrorFrom: false,
+                          crossSectionTop: 4,
+                          crossSectionBottom: 3,
+                          zIndex: 0,
+                        });
+                        store.setSelectedPuppetNodeId(newNode.id);
+                        return;
+                      }
+                      // 默认选第一个节点的第一个插槽
+                      const firstNode = skel.nodes[0];
+                      setAddNodeDialog({
+                        parentNodeId: firstNode.id,
+                        socketId: firstNode.sockets[0]?.id ?? '',
                       });
-                      store.setSelectedPuppetNodeId(newNode.id);
                     }}
                   >
                     <Plus className="size-3" />
@@ -357,6 +372,80 @@ export default function PuppetAssetPanel() {
               );
             })()}
           </div>
+
+          {/* 添加节点对话框 */}
+          {addNodeDialog && (() => {
+            const skel = puppetSkeletons.find((s) => s.id === activePuppetSkeletonId);
+            if (!skel) return null;
+            const parentNode = skel.nodes.find((n) => n.id === addNodeDialog.parentNodeId);
+            return (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setAddNodeDialog(null)}>
+                <div className="bg-[#0d0d1a] border border-[#1e1e3a] rounded p-4 w-64 space-y-3" onClick={(e) => e.stopPropagation()}>
+                  <h3 className="text-xs font-medium text-gray-200">添加节点</h3>
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-1">父节点</label>
+                    <select
+                      value={addNodeDialog.parentNodeId}
+                      onChange={(e) => {
+                        const pid = e.target.value;
+                        const pnode = skel.nodes.find((n) => n.id === pid);
+                        setAddNodeDialog({ parentNodeId: pid, socketId: pnode?.sockets[0]?.id ?? '' });
+                      }}
+                      className="w-full h-7 text-[11px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
+                    >
+                      {skel.nodes.map((n) => (
+                        <option key={n.id} value={n.id}>{n.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-1">插槽</label>
+                    <select
+                      value={addNodeDialog.socketId}
+                      onChange={(e) => setAddNodeDialog({ ...addNodeDialog, socketId: e.target.value })}
+                      className="w-full h-7 text-[11px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
+                    >
+                      {(parentNode?.sockets ?? []).map((s) => (
+                        <option key={s.id} value={s.id}>{s.name || s.id.slice(0, 8)}</option>
+                      ))}
+                      {(parentNode?.sockets ?? []).length === 0 && (
+                        <option value="">（无插槽，将创建为根节点）</option>
+                      )}
+                    </select>
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <button
+                      className="px-3 h-7 text-[11px] text-gray-400 hover:text-gray-200"
+                      onClick={() => setAddNodeDialog(null)}
+                    >
+                      取消
+                    </button>
+                    <button
+                      className="px-3 h-7 text-[11px] bg-cyan-600 hover:bg-cyan-500 text-white rounded"
+                      onClick={() => {
+                        const store = useProjectStore.getState();
+                        const nodeName = `节点_${skel.nodes.length + 1}`;
+                        const plug = addNodeDialog.socketId
+                          ? { socketId: addNodeDialog.socketId, localX: 0, localY: 0 }
+                          : undefined;
+                        const newNode = store.addPuppetNode(activePuppetSkeletonId!, nodeName, {
+                          mirrorFrom: false,
+                          crossSectionTop: 4,
+                          crossSectionBottom: 3,
+                          zIndex: 0,
+                          ...(plug ? { plug } : {}),
+                        });
+                        store.setSelectedPuppetNodeId(newNode.id);
+                        setAddNodeDialog(null);
+                      }}
+                    >
+                      添加
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           <Separator className="bg-[#1e1e3a]" />
 
