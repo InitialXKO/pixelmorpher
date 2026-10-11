@@ -135,7 +135,11 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       const w = maxX - minX + 1;
       const h = maxY - minY + 1;
       const projectStore = useProjectStore.getState();
-      const part = projectStore.addPart(`遮罩精灵`, w, h, {
+      // 找节点名用于 Part 命名
+      const nodeName = projectStore.puppetSkeletons
+        ?.flatMap((sk) => sk.nodes)
+        .find((n) => n.id === maskNodeId)?.name ?? '未知';
+      const part = projectStore.addPart(`遮罩_${nodeName}`, w, h, {
         pivotX: Math.floor(w / 2),
         pivotY: Math.floor(h / 2),
       });
@@ -163,23 +167,53 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       projectStore.setPartPixels(part.id, pixels);
       console.log('[MaskBrush] 已生成 Part:', part.id);
 
-      // 关联到节点：按 nodeId 反查骨架（不依赖 activePuppetSkeletonId，可能过期）
+      // 关联到节点：更新所有含该 nodeId 的骨架（防克隆后 ID 重复）
+      // 同时更新 costume.spriteMap（优先级高于 spritePartId，手动换装走的就是这个）
       if (maskNodeId) {
         const skeletons = projectStore.puppetSkeletons ?? [];
-        const ownerSkeleton = skeletons.find((sk) =>
+        const owners = skeletons.filter((sk) =>
           sk.nodes.some((n) => n.id === maskNodeId)
         );
-        if (ownerSkeleton) {
-          projectStore.updatePuppetNode(ownerSkeleton.id, maskNodeId, {
-            spritePartId: part.id,
-          });
-          // 验证更新是否成功，显示在 UI
+        if (owners.length > 0) {
+          for (const owner of owners) {
+            projectStore.updatePuppetNode(owner.id, maskNodeId, {
+              spritePartId: part.id,
+            });
+            // 找拥有该骨架的角色，更新其 costume spriteMap
+            const character = (projectStore.puppetCharacters ?? []).find(
+              (c) => c.puppetSkeletonId === owner.id
+            );
+            if (character) {
+              const costumes = character.costumeSets ?? [];
+              // 更新所有 costume（或至少 active 的），所有方向
+              for (const cs of costumes) {
+                const newSpriteMap = { ...cs.spriteMap };
+                for (const dir of ['front', 'back', 'left', 'right'] as const) {
+                  newSpriteMap[`${maskNodeId}:${dir}`] = part.id;
+                }
+                // 直接更新 store
+                useProjectStore.setState({
+                  puppetCharacters: (useProjectStore.getState().puppetCharacters ?? []).map((c) =>
+                    c.id === character.id
+                      ? {
+                          ...c,
+                          costumeSets: c.costumeSets.map((s) =>
+                            s.id === cs.id ? { ...s, spriteMap: newSpriteMap } : s
+                          ),
+                        }
+                      : c
+                  ),
+                });
+              }
+            }
+          }
+          // 验证（取第一个）
           const verify = useProjectStore.getState().puppetSkeletons
-            .find((sk) => sk.id === ownerSkeleton.id)
+            .find((sk) => sk.id === owners[0].id)
             ?.nodes.find((n) => n.id === maskNodeId);
           const ok = verify?.spritePartId === part.id;
           setLastUpdateInfo(
-            `节点 ${maskNodeId.slice(0, 8)} → 骨架 ${ownerSkeleton.name} → Part ${part.id.slice(0, 8)} ${ok ? '✓成功' : '✗失败(实际:' + verify?.spritePartId?.slice(0, 8) + ')'}`
+            `节点 ${maskNodeId.slice(0, 8)} → ${owners.length}个骨架 → Part ${part.id.slice(0, 8)} ${ok ? '✓成功' : '✗失败'}`
           );
         } else {
           setLastUpdateInfo(`✗找不到节点所在骨架: ${maskNodeId.slice(0, 8)}`);
