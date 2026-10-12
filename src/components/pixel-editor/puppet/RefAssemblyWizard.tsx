@@ -443,7 +443,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 </span>
               )}
             </p>
-            {/* 节点管理：删除 / 层级 */}
+            {/* 节点管理：删除 */}
             {targetNode && activeSkeleton && (
               <div className="flex gap-1.5">
                 <Button
@@ -457,32 +457,6 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   }}
                 >
                   删除节点
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="flex-1 text-[10px] h-6"
-                  onClick={() => {
-                    const s = useProjectStore.getState();
-                    s.updatePuppetNode(activeSkeleton.id, targetNode.id, {
-                      zIndex: (targetNode.zIndex ?? 0) + 1,
-                    });
-                  }}
-                >
-                  上移一层
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="flex-1 text-[10px] h-6"
-                  onClick={() => {
-                    const s = useProjectStore.getState();
-                    s.updatePuppetNode(activeSkeleton.id, targetNode.id, {
-                      zIndex: (targetNode.zIndex ?? 0) - 1,
-                    });
-                  }}
-                >
-                  下移一层
                 </Button>
               </div>
             )}
