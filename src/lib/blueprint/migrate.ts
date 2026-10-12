@@ -100,7 +100,7 @@ export function modifiersToBlueprint(
         connectToPort('rotation', modId, 'outRotation');
         break;
       case 'bounce':
-        connectToPort('translateY', modId, 'out');
+        connectToPort('translateY', modId, 'outY');
         break;
       case 'wheel':
         connectToPort('translateX', modId, 'outX');

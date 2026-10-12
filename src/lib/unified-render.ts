@@ -37,6 +37,7 @@ import {
   padPixelGrid,
   trimTransparentEdges,
 } from './engine/pixel-modifiers';
+import { applyPixelDeformAnimations } from './engine/render-helpers/pixel-deform-animations';
 import { resolveKeyframeModifierParams } from './engine/param-driver';
 import {
   applyTextureScroll,
@@ -928,6 +929,26 @@ function renderNodeSprite(
     effectivePixels = modResult.pixels;
     modOffsetX = modResult.offsetX;
     modOffsetY = modResult.offsetY;
+  }
+
+  // Apply pixel-deform animation modifiers (wave_deform, texture_scroll, etc.)
+  // These were prepared in pseudoPart.animationModifiers but never executed —
+  // the old render-pipeline called applyPixelDeformAnimations, unified-render did not.
+  const deformMods = (pseudoPart.animationModifiers as any[]) ?? [];
+  if (deformMods.length > 0) {
+    const deformResult = applyPixelDeformAnimations(
+      pseudoPart as any,
+      null,
+      effectivePixels,
+      frame,
+      frameRate,
+      0, 0,
+      modOffsetX, modOffsetY,
+      deformMods as any,
+    );
+    effectivePixels = deformResult.pixels;
+    modOffsetX = deformResult.modOffsetX;
+    modOffsetY = deformResult.modOffsetY;
   }
 
   // Apply translate modifier as pixel-level shift (internal shift, not position offset)
