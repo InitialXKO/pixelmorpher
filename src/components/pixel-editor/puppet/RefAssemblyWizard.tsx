@@ -108,7 +108,6 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     persistedStep = s;
     setStepState(s);
   };
-  const [focusedNodeIndex, setFocusedNodeIndex] = useState(0);
   const [showAddLimb, setShowAddLimb] = useState(false);
   const [newLimbName, setNewLimbName] = useState('');
   const [newLimbParentId, setNewLimbParentId] = useState('');
@@ -123,6 +122,9 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const setReferenceImageUrl = useEditorStore((s) => s.setReferenceImageUrl);
   const referenceImageOpacity = useEditorStore((s) => s.referenceImageOpacity);
   const setReferenceImageOpacity = useEditorStore((s) => s.setReferenceImageOpacity);
+  // 抠图目标：直接用画布全局当前选中的肢体
+  const selectedPuppetNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
+  const setSelectedPuppetNodeId = useProjectStore((s) => s.setSelectedPuppetNodeId);
   const setZoom = useEditorStore((s) => s.setZoom);
 
   // 获取当前角色及其骨架节点（按 zIndex 排序，从后往前）
@@ -152,7 +154,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const sortedNodes = activeSkeleton
     ? [...activeSkeleton.nodes].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
     : [];
-  const focusedNode = sortedNodes[focusedNodeIndex];
+  // 抠图目标节点：直接用画布全局选中的，不再用向导内部的 targetNodeIndex
+  const targetNode = activeSkeleton?.nodes.find((n) => n.id === selectedPuppetNodeId) ?? null;
   const addPuppetNode = useProjectStore((s) => s.addPuppetNode);
 
   // 选中模板：保存原始 transform，创建工作服装，直接进入对位
@@ -195,13 +198,6 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCharacterId]);
 
-  // 节点列表变化时，确保 focusedNodeIndex 不越界
-  useEffect(() => {
-    if (focusedNodeIndex >= sortedNodes.length && sortedNodes.length > 0) {
-      setFocusedNodeIndex(sortedNodes.length - 1);
-    }
-  }, [sortedNodes.length, focusedNodeIndex]);
-
   // 监听对位完成事件，跳到 mask 步骤
   useEffect(() => {
     const handler = () => setStep('mask');
@@ -215,29 +211,18 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
       const nodeId = (e as CustomEvent).detail?.nodeId;
       if (nodeId) {
         setProcessedNodes((m) => new Map(m).set(nodeId, 'mask'));
-        // 自动推进到下一个未处理的肢体
-        setFocusedNodeIndex((prev) => {
-          const next = Math.min(prev + 1, sortedNodes.length - 1);
-          // 延迟聚焦，确保状态更新后
-          setTimeout(() => focusNode(next), 100);
-          return next;
-        });
+        // 自动推进到下一个未处理的肢体（更新画布全局选中）
+        const idx = sortedNodes.findIndex((n) => n.id === nodeId);
+        const next = sortedNodes[Math.min(idx + 1, sortedNodes.length - 1)];
+        if (next && next.id !== nodeId) {
+          setSelectedPuppetNodeId(next.id);
+        }
       }
     };
     window.addEventListener('ref-assembly:mask-done', handler);
     return () => window.removeEventListener('ref-assembly:mask-done', handler);
-  }, [sortedNodes.length]);
+  }, [sortedNodes]);
 
-  // 聚焦到指定索引的节点：发事件给 PixelCanvas（它有容器尺寸和世界坐标计算）
-  const focusNode = (index: number) => {
-    const node = sortedNodes[index];
-    if (!node || !activeSkeleton) return;
-    window.dispatchEvent(
-      new CustomEvent('ref-assembly:focus-node', {
-        detail: { nodeId: node.id, skeletonId: activeSkeleton.id },
-      })
-    );
-  };
 
   const handleAddLimb = () => {
     if (!activeSkeleton || !newLimbName.trim()) return;
@@ -246,7 +231,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
       : null;
     addPuppetNode(activeSkeleton.id, newLimbName.trim(), {
       plug,
-      zIndex: (focusedNode?.zIndex ?? 0) + 1,
+      zIndex: (targetNode?.zIndex ?? 0) + 1,
     });
     setNewLimbName('');
     setNewLimbParentId('');
@@ -254,9 +239,14 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     setNewLimbPlugX(0);
     setNewLimbPlugY(0);
     setShowAddLimb(false);
-    // 新节点会出现在列表末尾（zIndex 最大），聚焦到它
-    // 注意：sortedNodes 是当前渲染的值，加 1 后对应新节点位置
-    setFocusedNodeIndex(sortedNodes.length);
+    // 新节点会出现在列表末尾，选中它（画布全局）
+    // 注意：这里需要新节点的 ID，暂时用 setTimeout 等待 store 更新后查找
+    setTimeout(() => {
+      const ps = useProjectStore.getState();
+      const sk = ps.puppetSkeletons.find((s) => s.id === activeSkeleton?.id);
+      const newNode = sk?.nodes[sk.nodes.length - 1];
+      if (newNode) setSelectedPuppetNodeId(newNode.id);
+    }, 100);
   };
 
   // 找镜像源：按名称匹配 left/right/L/R
@@ -367,7 +357,6 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 value={selectedCharacterId ?? ''}
                 onChange={(e) => {
                   setSelectedCharacterId(e.target.value || null);
-                  setFocusedNodeIndex(0);
                   setProcessedNodes(new Map());
                 }}
                 className="w-full h-8 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
@@ -436,54 +425,54 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
         {step === 'mask' && (
           <div className="space-y-3">
             <p className="text-xs text-gray-400">
-              逐肢体处理（{focusedNodeIndex + 1}/{sortedNodes.length}）：{focusedNode?.name ?? '无骨架'}
+              目标肢体（画布上点选）：{targetNode?.name ?? '未选中'}
             </p>
-            {/* 肢体导航 */}
+            {/* 肢体导航：切换画布全局选中 */}
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
                 variant="outline"
-                disabled={focusedNodeIndex === 0}
                 onClick={() => {
-                  const newIndex = Math.max(0, focusedNodeIndex - 1);
-                  setFocusedNodeIndex(newIndex);
-                  focusNode(newIndex);
+                  const idx = sortedNodes.findIndex((n) => n.id === selectedPuppetNodeId);
+                  const newIdx = Math.max(0, (idx < 0 ? 0 : idx) - 1);
+                  const node = sortedNodes[newIdx];
+                  if (node) setSelectedPuppetNodeId(node.id);
                 }}
               >
                 ← 上一肢体
               </Button>
               <div className="flex-1 text-center text-xs text-gray-300">
-                {focusedNode?.name ?? '—'}
-                {focusedNode && (
+                {targetNode?.name ?? '—'}
+                {targetNode && (
                   <span className="ml-2 text-[10px] text-gray-500">
-                    z:{focusedNode.zIndex ?? 0}
+                    z:{targetNode.zIndex ?? 0}
                   </span>
                 )}
               </div>
               <Button
                 size="sm"
                 variant="outline"
-                disabled={focusedNodeIndex >= sortedNodes.length - 1}
                 onClick={() => {
-                  const newIndex = Math.min(sortedNodes.length - 1, focusedNodeIndex + 1);
-                  setFocusedNodeIndex(newIndex);
-                  focusNode(newIndex);
+                  const idx = sortedNodes.findIndex((n) => n.id === selectedPuppetNodeId);
+                  const newIdx = Math.min(sortedNodes.length - 1, (idx < 0 ? 0 : idx) + 1);
+                  const node = sortedNodes[newIdx];
+                  if (node) setSelectedPuppetNodeId(node.id);
                 }}
               >
                 下一肢体 →
               </Button>
             </div>
             {/* 节点管理：删除 / 层级 */}
-            {focusedNode && activeSkeleton && (
+            {targetNode && activeSkeleton && (
               <div className="flex gap-1.5">
                 <Button
                   size="sm"
                   variant="ghost"
                   className="flex-1 text-[10px] h-6 text-red-400 hover:text-red-300"
                   onClick={() => {
-                    if (!confirm(`删除节点「${focusedNode.name}」？其子节点将一并删除。`)) return;
-                    useProjectStore.getState().removePuppetNode(activeSkeleton.id, focusedNode.id);
-                    setFocusedNodeIndex((i) => Math.max(0, i - 1));
+                    if (!confirm(`删除节点「${targetNode.name}」？其子节点将一并删除。`)) return;
+                    useProjectStore.getState().removePuppetNode(activeSkeleton.id, targetNode.id);
+                    setSelectedPuppetNodeId(null);
                   }}
                 >
                   删除节点
@@ -494,8 +483,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   className="flex-1 text-[10px] h-6"
                   onClick={() => {
                     const s = useProjectStore.getState();
-                    s.updatePuppetNode(activeSkeleton.id, focusedNode.id, {
-                      zIndex: (focusedNode.zIndex ?? 0) + 1,
+                    s.updatePuppetNode(activeSkeleton.id, targetNode.id, {
+                      zIndex: (targetNode.zIndex ?? 0) + 1,
                     });
                   }}
                 >
@@ -507,8 +496,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   className="flex-1 text-[10px] h-6"
                   onClick={() => {
                     const s = useProjectStore.getState();
-                    s.updatePuppetNode(activeSkeleton.id, focusedNode.id, {
-                      zIndex: (focusedNode.zIndex ?? 0) - 1,
+                    s.updatePuppetNode(activeSkeleton.id, targetNode.id, {
+                      zIndex: (targetNode.zIndex ?? 0) - 1,
                     });
                   }}
                 >
@@ -592,7 +581,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
               </div>
             )}
             {/* 操作选项 */}
-            {focusedNode && (
+            {targetNode && (
               <div className="space-y-2">
                 <div className="flex gap-2">
                   <Button
@@ -601,7 +590,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                     className="flex-1 text-[11px]"
                     onClick={() => {
                       const store = useEditorStore.getState();
-                      store.setMaskNodeId(focusedNode.id);
+                      store.setMaskNodeId(targetNode.id);
                       store.setEditMode('mask');
                       // 向导保持挂载（不卸载），mask 画布在主区域，侧边栏不冲突
                     }}
@@ -614,7 +603,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                     className="flex-1 text-[11px]"
                     onClick={() => {
                       // 用模板：标记为已处理，不替换精灵
-                      setProcessedNodes((m) => new Map(m).set(focusedNode.id, 'template'));
+                      setProcessedNodes((m) => new Map(m).set(targetNode.id, 'template'));
                     }}
                   >
                     用模板
@@ -623,9 +612,9 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                     size="sm"
                     variant="ghost"
                     className="flex-1 text-[11px]"
-                    disabled={!findMirrorSource(focusedNode)}
+                    disabled={!findMirrorSource(targetNode)}
                     onClick={() => {
-                      const src = findMirrorSource(focusedNode);
+                      const src = findMirrorSource(targetNode);
                       if (!src || !activeSkeleton) return;
                       const projectStore = useProjectStore.getState();
                       const srcNode = sortedNodes.find((n) => n.id === src);
@@ -645,7 +634,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                         flipped.push(row);
                       }
                       const newPart = projectStore.addPart(
-                        `${focusedNode.name}（镜像）`,
+                        `${targetNode.name}（镜像）`,
                         w,
                         h,
                         {
@@ -654,18 +643,18 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                         }
                       );
                       projectStore.setPartPixels(newPart.id, flipped);
-                      projectStore.updatePuppetNode(activeSkeleton.id, focusedNode.id, {
+                      projectStore.updatePuppetNode(activeSkeleton.id, targetNode.id, {
                         spritePartId: newPart.id,
                       });
-                      setProcessedNodes((m) => new Map(m).set(focusedNode.id, 'mirror'));
+                      setProcessedNodes((m) => new Map(m).set(targetNode.id, 'mirror'));
                     }}
                   >
                     镜像对侧
                   </Button>
                 </div>
-                {processedNodes.get(focusedNode.id) && (
+                {processedNodes.get(targetNode.id) && (
                   <div className="text-[10px] text-emerald-400">
-                    ✓ 已处理（{processedNodes.get(focusedNode.id) === 'mask' ? '遮罩' : processedNodes.get(focusedNode.id) === 'template' ? '模板' : '镜像'}）
+                    ✓ 已处理（{processedNodes.get(targetNode.id) === 'mask' ? '遮罩' : processedNodes.get(targetNode.id) === 'template' ? '模板' : '镜像'}）
                   </div>
                 )}
               </div>
