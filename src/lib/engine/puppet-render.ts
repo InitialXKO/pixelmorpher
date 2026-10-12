@@ -180,20 +180,11 @@ export function renderPixelPerfectRotation(
     return { canvas: spriteCanvas, resultPivotX: pivotX, resultPivotY: pivotY };
   }
 
-  // ---- Cache lookup ----
-  // H13: 缓存里存的是独立 canvas（非池化），命中时再拷一份池化 canvas 返回，
-  // 这样调用方沿用既有的 release 语义永远安全，不会污染缓存。
-  const cacheKey = getRotationCacheKey(spriteCanvas, angle, stretchY, pivotX, pivotY);
-  const cached = getCachedRotation(cacheKey);
-  if (cached) {
-    const copy = acquireCanvas(cached.canvas.width, cached.canvas.height);
-    copy.getContext('2d')!.drawImage(cached.canvas, 0, 0);
-    return {
-      canvas: copy,
-      resultPivotX: cached.resultPivotX,
-      resultPivotY: cached.resultPivotY,
-    };
-  }
+  // 缓存已禁用（排查翻转问题）
+  const cacheKey = '';
+  const cached = null;
+  void cacheKey;
+  void cached;
 
   const UPSCALE = 4;
 
@@ -221,7 +212,7 @@ export function renderPixelPerfectRotation(
     releaseCanvas(upCanvas);
     const resultPivotY = pivotY * stretchY;
     // Store in cache
-    setCachedRotation(cacheKey, { canvas: cloneCanvasForCache(result), resultPivotX: pivotX, resultPivotY });
+    // setCachedRotation(cacheKey, { canvas: cloneCanvasForCache(result), resultPivotX: pivotX, resultPivotY });
     return { canvas: result, resultPivotX: pivotX, resultPivotY };
   }
 
@@ -289,7 +280,7 @@ export function renderPixelPerfectRotation(
   releaseCanvas(rotCanvas);
 
   // Store in cache
-  setCachedRotation(cacheKey, { canvas: cloneCanvasForCache(result), resultPivotX, resultPivotY });
+  // setCachedRotation(cacheKey, { canvas: cloneCanvasForCache(result), resultPivotX, resultPivotY });
   return { canvas: result, resultPivotX, resultPivotY };
 }
 
