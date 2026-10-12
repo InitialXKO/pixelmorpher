@@ -149,6 +149,9 @@ interface EditorStore extends EditorState {
   // 遮罩模式
   maskNodeId: string | null;
   setMaskNodeId: (id: string | null) => void;
+  // 色键颜色（跨肢体共享，向导级）
+  chromaKeyColor: { r: number; g: number; b: number } | null;
+  setChromaKeyColor: (c: { r: number; g: number; b: number } | null) => void;
   // 参考图装配向导
   refWizardOpen: boolean;
   setRefWizardOpen: (v: boolean) => void;
@@ -218,6 +221,8 @@ const defaultEditor: EditorState = {
   referenceImageVisible: true,
   // 遮罩模式：当前正在抠图的节点 ID
   maskNodeId: null as string | null,
+  // 色键颜色（跨肢体共享）
+  chromaKeyColor: null as { r: number; g: number; b: number } | null,
   // 参考图装配向导
   refWizardOpen: false,
 };
@@ -297,6 +302,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setReferenceImageOpacity: (v) => set({ referenceImageOpacity: v }),
   setReferenceImageVisible: (v) => set({ referenceImageVisible: v }),
   setMaskNodeId: (id) => set({ maskNodeId: id }),
+  setChromaKeyColor: (c) => set({ chromaKeyColor: c }),
   setRefWizardOpen: (v) => set({ refWizardOpen: v }),
 
   initSAMModel: async (model?: SAMModelType) => {
