@@ -223,7 +223,7 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
     const bounceIndex = Math.floor((t % period) / (period / bounces));
     const withinBounce = bounceT - Math.floor(bounceT);
     const decay = Math.pow(1 - damping, bounceIndex);
-    return { out: num(-height * decay * Math.pow(Math.sin(Math.PI * withinBounce), 2)) };
+    return { outY: num(-height * decay * Math.pow(Math.sin(Math.PI * withinBounce), 2)) };
   },
   // elastic: 弹性过冲，与原 elasticHandler 对齐
   elastic: (n, i, ctx) => {

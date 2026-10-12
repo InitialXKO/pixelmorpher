@@ -96,7 +96,7 @@ export function createQuadrupedRunBlueprint(
       id: floatId,
       type: 'float',
       inputs: { t: { nodeId: timeId } },
-      params: { amplitude, period },
+      params: { height: amplitude, period },
     });
     const outId = nid('transform');
     nodes.push({

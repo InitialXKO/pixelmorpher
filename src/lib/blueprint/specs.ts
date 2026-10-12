@@ -38,7 +38,7 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   float: {
     inputs: ['t'],
     outputs: ['outY', 'outRotation'],
-    params: ['amplitude', 'period', 'height'],
+    params: ['height', 'period', 'tilt'],
   },
   // breath: 输出 out（scale 系数）
   breath: {
@@ -50,31 +50,31 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   shake: {
     inputs: ['t'],
     outputs: ['outX', 'outY'],
-    params: ['amplitude', 'period'],
+    params: ['amplitude'],
   },
   // wobble: 输出 outRotation + outX + outY
   wobble: {
     inputs: ['t'],
     outputs: ['outRotation', 'outX', 'outY'],
-    params: ['amplitude', 'period', 'phase'],
+    params: ['angleAmplitude', 'moveAmplitude', 'damping', 'period'],
   },
   // bounce: 输出 outY
   bounce: {
     inputs: ['t'],
     outputs: ['outY'],
-    params: ['amplitude', 'period'],
+    params: ['height', 'period', 'bounces', 'damping'],
   },
   // elastic: 输出取决于 axis 参数
   elastic: {
     inputs: ['t'],
     outputs: ['outX', 'outY', 'outRotation', 'outScaleX', 'outScaleY'],
-    params: ['amplitude', 'period', 'axis'],
+    params: ['period', 'axis', 'offset', 'overshoot', 'damping'],
   },
   // wheel: 输出 outX + outY + outRotation
   wheel: {
     inputs: ['t'],
     outputs: ['outX', 'outY', 'outRotation'],
-    params: ['amplitude', 'period'],
+    params: ['period', 'radiusX', 'radiusY', 'phase', 'direction'],
   },
 
   // ---- 输出 ----
