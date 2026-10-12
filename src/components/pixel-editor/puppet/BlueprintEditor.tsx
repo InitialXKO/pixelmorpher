@@ -10,7 +10,7 @@ import React, { useMemo, useState, useCallback } from 'react';
 import { Plus, Trash2, X, Network, Blocks } from 'lucide-react';
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { listBlueprintNodeTypes, getBlueprintNodeLabel } from '@/lib/blueprint/eval';
-import { getDefaultOutputForPort } from '@/lib/blueprint/specs';
+import { getDefaultOutputForPort, getNodeInputs } from '@/lib/blueprint/specs';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
 
@@ -117,6 +117,21 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     });
   }, [graph, onChange]);
 
+  const setSlotLiteral = useCallback((nodeId: string, port: string, value: number | null) => {
+    const node = graph.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const newInputs = { ...node.inputs };
+    if (value === null || isNaN(value)) {
+      delete newInputs[port];
+    } else {
+      newInputs[port] = { type: 'number', value };
+    }
+    onChange({
+      ...graph,
+      nodes: graph.nodes.map((n) => (n.id === nodeId ? { ...n, inputs: newInputs } : n)),
+    });
+  }, [graph, onChange]);
+
   // 连接：fromNode 输出 -> toNode 的 port 输入
   const connectPorts = useCallback((fromNodeId: string, toNodeId: string, port: string) => {
     if (fromNodeId === toNodeId) return; // 不自连
@@ -143,15 +158,19 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     for (const node of graph.nodes) {
       const toPos = positions.get(node.id);
       if (!toPos) continue;
+      // 与渲染一致：spec 输入 + 已有输入
+      const specInputs = getNodeInputs(node.type);
+      const allPorts = Array.from(new Set([...specInputs, ...Object.keys(node.inputs)]));
       let portIdx = 0;
-      for (const [port, input] of Object.entries(node.inputs)) {
-        if (typeof input === 'object' && 'nodeId' in input) {
-          const fromPos = positions.get(input.nodeId);
+      for (const port of allPorts) {
+        const input = node.inputs[port];
+        if (typeof input === 'object' && input !== null && 'nodeId' in input) {
+          const fromPos = positions.get((input as any).nodeId);
           if (fromPos) {
             list.push({
               from: { x: fromPos.x + NODE_WIDTH, y: fromPos.y + NODE_HEADER_H / 2 },
               to: { x: toPos.x, y: toPos.y + NODE_HEADER_H + portIdx * PORT_H + PORT_H / 2 },
-              key: `${input.nodeId}-${node.id}-${port}`,
+              key: `${(input as any).nodeId}-${node.id}-${port}`,
             });
           }
         }
@@ -368,48 +387,69 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                 )}
               </div>
               <div className="px-1.5 py-1">
-                {Object.keys(node.inputs).length === 0 && (
-                  <div className="text-[8px] text-gray-600">无输入</div>
-                )}
-                {Object.entries(node.inputs).map(([port, input]) => {
-                  const isConnected = typeof input === 'object' && input !== null && 'nodeId' in input;
-                  return (
-                    <div
-                      key={port}
-                      className="relative flex items-center gap-1 text-[9px] text-gray-400 truncate pl-2"
-                      onMouseUp={(e) => {
-                        e.stopPropagation();
-                        if (connecting) {
-                          connectPorts(connecting.fromNodeId, node.id, port);
-                          setConnecting(null);
-                        }
-                      }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        // 点击已连接的端口断开
-                        if (isConnected) {
-                          disconnectInput(node.id, port);
-                        }
-                      }}
-                      title={isConnected ? '点击断开' : '从输出端口拖到这里以连接'}
-                    >
-                      {/* 输入端口圆点 */}
+                {(() => {
+                  const specInputs = getNodeInputs(node.type);
+                  const allPorts = Array.from(new Set([...specInputs, ...Object.keys(node.inputs)]));
+                  if (allPorts.length === 0) {
+                    return <div className="text-[8px] text-gray-600">无输入</div>;
+                  }
+                  return allPorts.map((port) => {
+                    const input = node.inputs[port];
+                    const isConnected = typeof input === 'object' && input !== null && 'nodeId' in input;
+                    const literalVal = typeof input === 'object' && input !== null && 'type' in input && (input as any).type === 'number'
+                      ? (input as any).value
+                      : null;
+                    const isSpecDefined = specInputs.includes(port);
+                    return (
                       <div
-                        className={`absolute -left-1.5 top-1/2 -translate-y-1/2 size-2.5 rounded-full border cursor-crosshair ${
-                          isConnected
-                            ? 'bg-cyan-400 border-cyan-200'
-                            : 'bg-[#1e1e3a] border-gray-600 hover:border-cyan-400'
-                        }`}
-                      />
-                      ← {port}
-                      {isConnected && (
-                        <span className="text-[8px] text-cyan-400/70 truncate">
-                          {graph.nodes.find((n) => n.id === (input as any).nodeId)?.type ?? '?'}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
+                        key={port}
+                        className="relative flex items-center gap-1 text-[9px] text-gray-400 truncate pl-2"
+                        onMouseUp={(e) => {
+                          e.stopPropagation();
+                          if (connecting) {
+                            connectPorts(connecting.fromNodeId, node.id, port);
+                            setConnecting(null);
+                          }
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isConnected) {
+                            disconnectInput(node.id, port);
+                          }
+                        }}
+                        title={isConnected ? '点击断开' : '从输出端口拖到这里以连接，或直接输入数字'}
+                      >
+                        {/* 输入端口圆点 */}
+                        <div
+                          className={`absolute -left-1.5 top-1/2 -translate-y-1/2 size-2.5 rounded-full border cursor-crosshair ${
+                            isConnected
+                              ? 'bg-cyan-400 border-cyan-200'
+                              : 'bg-[#1e1e3a] border-gray-600 hover:border-cyan-400'
+                          }`}
+                        />
+                        <span className={isSpecDefined ? '' : 'text-amber-500/70'}>← {port}</span>
+                        {isConnected ? (
+                          <span className="text-[8px] text-cyan-400/70 truncate">
+                            {graph.nodes.find((n) => n.id === (input as any).nodeId)?.type ?? '?'}
+                          </span>
+                        ) : (
+                          <input
+                            type="number"
+                            value={literalVal ?? ''}
+                            placeholder="0"
+                            onChange={(e) => {
+                              const v = e.target.value === '' ? null : Number(e.target.value);
+                              setSlotLiteral(node.id, port, v);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseUp={(e) => e.stopPropagation()}
+                            className="w-12 h-4 px-0.5 text-[8px] text-gray-200 bg-black/40 border border-white/10 rounded text-center outline-none"
+                          />
+                        )}
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </div>
           );
