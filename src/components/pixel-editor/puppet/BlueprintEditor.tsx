@@ -12,7 +12,7 @@ import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { listBlueprintNodeTypes, getBlueprintNodeLabel } from '@/lib/blueprint/eval';
 import { getDefaultOutputForPort } from '@/lib/blueprint/specs';
 import { Button } from '@/components/ui/button';
-import BlueprintBlockView from './BlueprintBlockView';
+import BlueprintBlocksView from './BlueprintBlocksView';
 
 interface BlueprintEditorProps {
   graph: BlueprintGraph;
@@ -210,7 +210,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
       </div>
 
       {viewMode === 'blocks' ? (
-        <BlueprintBlockView graph={graph} onChange={onChange} />
+        <BlueprintBlocksView graph={graph} onChange={onChange} />
       ) : (
       <>
       {/* 画布 */}
