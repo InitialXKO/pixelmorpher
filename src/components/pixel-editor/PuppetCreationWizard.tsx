@@ -208,6 +208,38 @@ const SIMPLE_TEMPLATE: PuppetTemplate = {
   ],
 };
 
+// ---- 测试用纯上半身模板（全新编写，不抄老模板） ----
+const TEST_UPPER_BODY_TEMPLATE: PuppetTemplate = {
+  name: 'test_upper_body',
+  label: '测试上半身',
+  icon: <User className="size-4" />,
+  nodes: [
+    {
+      name: 'torso', sockets: [
+        { name: 'neck', localX: 0, localY: -2 },
+        { name: 'shoulder_L', localX: -5, localY: 0 },
+        { name: 'shoulder_R', localX: 5, localY: 0 },
+      ], plug: null, defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 8, crossSectionBottom: 6, zIndex: 5,
+    },
+    {
+      name: 'head', sockets: [], plug: { socketName: 'neck', localX: 0, localY: 0 },
+      defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 6, crossSectionBottom: 5, zIndex: 10,
+    },
+    {
+      name: 'upper_arm_L', sockets: [], plug: { socketName: 'shoulder_L', localX: 0, localY: 0 },
+      defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 3, crossSectionBottom: 3, zIndex: 6,
+    },
+    {
+      name: 'upper_arm_R', sockets: [], plug: { socketName: 'shoulder_R', localX: 0, localY: 0 },
+      defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
+      crossSectionTop: 3, crossSectionBottom: 3, zIndex: 4,
+    },
+  ],
+};
+
 // ---- Additional character templates (full sprite sets) ----
 
 /** Shallow-copy node defs so templates never share mutable arrays */
@@ -374,6 +406,7 @@ const ALL_TEMPLATES: PuppetTemplate[] = [
   QUADRUPED_TEMPLATE,
   DOG_TEMPLATE,
   SIMPLE_TEMPLATE,
+  TEST_UPPER_BODY_TEMPLATE,
 ];
 
 // ---- Node Colors ----
