@@ -553,9 +553,6 @@ function convertDirectionSprites(
   }
 
   // Mirror config
-  if (pNode.mirrorFrom) {
-    piece.mirrorMap = { ...DEFAULT_MIRROR_MAP };
-  }
 
   // Cross sections
   if (pNode.crossSectionTop) {

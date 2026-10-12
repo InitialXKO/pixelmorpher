@@ -599,9 +599,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                           dir,
                           newPart.id
                         );
-                        // 镜像后的像素已是对应侧正确的，关闭 mirrorFrom 避免渲染时再翻
                         projectStore.updatePuppetNode(activeSkeleton.id, targetNode.id, {
-                          mirrorFrom: false,
                         });
                       }
                       setProcessedNodes((m) => new Map(m).set(targetNode.id, 'mirror'));
