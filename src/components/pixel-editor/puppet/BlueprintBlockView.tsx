@@ -10,6 +10,7 @@ import React, { useMemo, useState } from 'react';
 import { X, Plus } from 'lucide-react';
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { getBlueprintNodeLabel, listBlueprintNodeTypes } from '@/lib/blueprint/eval';
+import { getDefaultOutputForPort } from '@/lib/blueprint/specs';
 import { Button } from '@/components/ui/button';
 
 interface BlueprintBlockViewProps {
@@ -113,7 +114,9 @@ export default function BlueprintBlockView({ graph, onChange }: BlueprintBlockVi
     if (!node) return;
     const newInputs = { ...node.inputs };
     if (srcNodeId) {
-      newInputs[port] = { nodeId: srcNodeId, output: 'out' };
+      const srcNode = graph.nodes.find((n) => n.id === srcNodeId);
+      const output = getDefaultOutputForPort(srcNode?.type ?? '', port);
+      newInputs[port] = { nodeId: srcNodeId, output };
     } else {
       delete newInputs[port];
     }
@@ -207,28 +210,36 @@ export default function BlueprintBlockView({ graph, onChange }: BlueprintBlockVi
             )}
 
             {/* 参数 */}
-            {Object.entries(node.params).length > 0 && (
-              <div className="grid grid-cols-2 gap-1">
-                {Object.entries(node.params).map(([key, val]) => (
-                  <div key={key} className="flex items-center gap-1">
-                    <span className="text-[8px] text-gray-500 truncate" title={key}>
-                      {key}
-                    </span>
-                    <input
-                      type={typeof val === 'number' ? 'number' : 'text'}
-                      value={String(val)}
-                      onChange={(e) => {
-                        const v = typeof val === 'number' ? Number(e.target.value) : e.target.value;
-                        updateNode(node.id, {
-                          params: { ...node.params, [key]: v },
-                        });
-                      }}
-                      className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded px-1 py-0.5 text-[9px] text-gray-200"
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
+            <div className="space-y-1">
+              {Object.entries(node.params).length > 0 && (
+                <div className="grid grid-cols-2 gap-1">
+                  {Object.entries(node.params).map(([key, val]) => (
+                    <div key={key} className="flex items-center gap-1">
+                      <span className="text-[8px] text-gray-500 truncate" title={key}>
+                        {key}
+                      </span>
+                      <input
+                        type={typeof val === 'number' ? 'number' : 'text'}
+                        value={String(val)}
+                        onChange={(e) => {
+                          const v = typeof val === 'number' ? Number(e.target.value) : e.target.value;
+                          updateNode(node.id, {
+                            params: { ...node.params, [key]: v },
+                          });
+                        }}
+                        className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded px-1 py-0.5 text-[9px] text-gray-200"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* 添加参数 */}
+              <AddParamRow
+                onAdd={(k, v) => updateNode(node.id, {
+                  params: { ...node.params, [k]: v },
+                })}
+              />
+            </div>
 
             {Object.entries(node.params).length === 0 &&
               Object.keys(node.inputs).length === 0 && (
@@ -241,6 +252,39 @@ export default function BlueprintBlockView({ graph, onChange }: BlueprintBlockVi
       {sortedNodes.length === 0 && (
         <div className="text-[10px] text-gray-600 text-center py-4">空蓝图</div>
       )}
+    </div>
+  );
+}
+
+function AddParamRow({ onAdd }: { onAdd: (k: string, v: number) => void }) {
+  const [key, setKey] = useState('');
+  const [val, setVal] = useState('0');
+  return (
+    <div className="flex gap-1">
+      <input
+        placeholder="参数名"
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
+        className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded px-1 py-0.5 text-[8px] text-gray-300"
+      />
+      <input
+        type="number"
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        className="w-14 bg-black/40 border border-white/10 rounded px-1 py-0.5 text-[8px] text-gray-300"
+      />
+      <button
+        onClick={() => {
+          if (key.trim()) {
+            onAdd(key.trim(), Number(val));
+            setKey('');
+            setVal('0');
+          }
+        }}
+        className="px-1.5 h-6 text-[8px] bg-white/10 hover:bg-white/20 rounded text-gray-300"
+      >
+        <Plus className="size-2.5" />
+      </button>
     </div>
   );
 }

@@ -10,6 +10,7 @@ import React, { useMemo, useState, useCallback } from 'react';
 import { Plus, Trash2, X, Network, Blocks } from 'lucide-react';
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { listBlueprintNodeTypes, getBlueprintNodeLabel } from '@/lib/blueprint/eval';
+import { getDefaultOutputForPort } from '@/lib/blueprint/specs';
 import { Button } from '@/components/ui/button';
 import BlueprintBlockView from './BlueprintBlockView';
 
@@ -106,13 +107,16 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
   // 连接：fromNode 输出 -> toNode 的 port 输入
   const connectPorts = useCallback((fromNodeId: string, toNodeId: string, port: string) => {
     if (fromNodeId === toNodeId) return; // 不自连
+    const fromNode = graph.nodes.find((n) => n.id === fromNodeId);
     const toNode = graph.nodes.find((n) => n.id === toNodeId);
-    if (!toNode) return;
+    if (!toNode || !fromNode) return;
+    // 从注册表取默认输出端口
+    const output = getDefaultOutputForPort(fromNode.type, port);
     onChange({
       ...graph,
       nodes: graph.nodes.map((n) =>
         n.id === toNodeId
-          ? { ...n, inputs: { ...n.inputs, [port]: { nodeId: fromNodeId, output: 'out' } } }
+          ? { ...n, inputs: { ...n.inputs, [port]: { nodeId: fromNodeId, output } } }
           : n
       ),
     });

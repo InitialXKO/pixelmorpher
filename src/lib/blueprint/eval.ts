@@ -157,7 +157,9 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
     const amplitude = asNumber(i.amplitude ?? num(Number(n.params.amplitude ?? 30)));
     const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 16))));
     const phase = ((Number(n.params.phase ?? 0) * Math.PI) / 180);
-    return { out: num(amplitude * Math.sin((2 * Math.PI * t) / period + phase)) };
+    const value = num(amplitude * Math.sin((2 * Math.PI * t) / period + phase));
+    // 同时返回 out (兼容旧蓝图) 和 outRotation (标准)
+    return { out: value, outRotation: value };
   },
   // breath: scale = 1 + amplitude * sin(2π * t / period)，与原 breathHandler 对齐
   breath: (n, i, ctx) => {
