@@ -18,10 +18,16 @@ interface Props {
 
 export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const barrierCanvasRef = useRef<HTMLCanvasElement>(null);
   const isDrawing = useRef(false);
+  const lastBarrierPos = useRef<{ x: number; y: number } | null>(null);
   const [brushSize, setBrushSize] = useState(8);
   const [extractedPart, setExtractedPart] = useState<Part | null>(null);
   const [lastUpdateInfo, setLastUpdateInfo] = useState<string | null>(null);
+  // 绘制模式：draw=绘制，erase=擦除，barrier=防溢出线
+  const [paintMode, setPaintMode] = useState<'draw' | 'erase' | 'barrier'>('draw');
+  // 光标位置（用于显示笔刷大小）
+  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
   // 色键取色（跨肢体共享，存 editor store）
   const [isPicking, setIsPicking] = useState(false);
   const keyColor = useEditorStore((s) => s.chromaKeyColor);
@@ -38,7 +44,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   const panX = useEditorStore((s) => s.panX);
   const panY = useEditorStore((s) => s.panY);
 
-  // 初始化：透明底
+  // 初始化：透明底（遮罩和防溢出线都清空）
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -46,6 +52,12 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
     canvas.height = canvasHeight;
     const ctx = canvas.getContext('2d')!;
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+    const bCanvas = barrierCanvasRef.current;
+    if (bCanvas) {
+      bCanvas.width = canvasWidth;
+      bCanvas.height = canvasHeight;
+      bCanvas.getContext('2d')!.clearRect(0, 0, canvasWidth, canvasHeight);
+    }
   }, [canvasWidth, canvasHeight, maskNodeId]);
 
   const getPos = (e: React.MouseEvent) => {
@@ -107,15 +119,92 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
     return Math.sqrt(dr * dr + dg * dg + db * db);
   };
 
-  const drawAt = (x: number, y: number, erase = false) => {
+  // 检查从 (cx,cy) 到 (x,y) 的射线是否穿过防溢出线
+  const rayCrossesBarrier = (
+    barrierData: ImageData,
+    cx: number, cy: number,
+    x: number, y: number
+  ): boolean => {
+    const dx = x - cx;
+    const dy = y - cy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 0.5) return false;
+    const steps = Math.ceil(dist);
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const px = Math.round(cx + dx * t);
+      const py = Math.round(cy + dy * t);
+      if (px < 0 || py < 0 || px >= canvasWidth || py >= canvasHeight) continue;
+      const idx = (py * canvasWidth + px) * 4;
+      if (barrierData.data[idx + 3] > 10) return true;
+    }
+    return false;
+  };
+
+  const drawAt = (x: number, y: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d')!;
-    ctx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
-    ctx.fillStyle = erase ? 'rgba(0,0,0,1)' : 'rgba(255,0,0,0.5)';
-    ctx.beginPath();
-    ctx.arc(x, y, brushSize / 2, 0, Math.PI * 2);
-    ctx.fill();
+
+    if (paintMode === 'barrier') {
+      // 防溢出线：1px 蓝色线条（画在独立 canvas）
+      const bCanvas = barrierCanvasRef.current;
+      if (!bCanvas) return;
+      const bCtx = bCanvas.getContext('2d')!;
+      bCtx.strokeStyle = 'rgba(0,150,255,1)';
+      bCtx.lineWidth = 1;
+      bCtx.lineCap = 'round';
+      const last = lastBarrierPos.current;
+      bCtx.beginPath();
+      if (last) {
+        bCtx.moveTo(last.x + 0.5, last.y + 0.5);
+        bCtx.lineTo(x + 0.5, y + 0.5);
+      } else {
+        bCtx.moveTo(x + 0.5, y + 0.5);
+        bCtx.lineTo(x + 0.5, y + 0.5);
+      }
+      bCtx.stroke();
+      lastBarrierPos.current = { x, y };
+      return;
+    }
+
+    const erase = paintMode === 'erase';
+    const radius = brushSize / 2;
+
+    // 获取防溢出线数据（用于约束）
+    let barrierData: ImageData | null = null;
+    const bCanvas = barrierCanvasRef.current;
+    if (bCanvas) {
+      barrierData = bCanvas.getContext('2d')!.getImageData(0, 0, canvasWidth, canvasHeight);
+    }
+
+    if (erase) {
+      // 擦除：不受防溢出线约束
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fillStyle = 'rgba(0,0,0,1)';
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+
+    // 绘制：逐像素检查防溢出线
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(255,0,0,0.5)';
+    const x0 = Math.max(0, Math.floor(x - radius));
+    const x1 = Math.min(canvasWidth - 1, Math.ceil(x + radius));
+    const y0 = Math.max(0, Math.floor(y - radius));
+    const y1 = Math.min(canvasHeight - 1, Math.ceil(y + radius));
+    for (let py = y0; py <= y1; py++) {
+      for (let px = x0; px <= x1; px++) {
+        const dx = px - x;
+        const dy = py - y;
+        if (dx * dx + dy * dy > radius * radius) continue;
+        // 防溢出：射线穿过线条则跳过（只保留笔刷中心一侧）
+        if (barrierData && rayCrossesBarrier(barrierData, x, y, px, py)) continue;
+        ctx.fillRect(px, py, 1, 1);
+      }
+    }
   };
 
   const handleDown = (e: React.MouseEvent) => {
@@ -125,17 +214,35 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       return;
     }
     isDrawing.current = true;
-    drawAt(x, y, e.shiftKey); // Shift+画 = 擦除
+    if (paintMode === 'barrier') {
+      lastBarrierPos.current = null; // 新笔画
+    }
+    drawAt(x, y);
   };
 
   const handleMove = (e: React.MouseEvent) => {
-    if (!isDrawing.current) return;
     const { x, y } = getPos(e);
-    drawAt(x, y, e.shiftKey);
+    // 更新光标位置（显示笔刷大小）
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (rect) {
+      setCursorPos({
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      });
+    }
+    if (!isDrawing.current) return;
+    drawAt(x, y);
   };
 
   const handleUp = () => {
     isDrawing.current = false;
+    lastBarrierPos.current = null;
+  };
+
+  const handleLeave = () => {
+    isDrawing.current = false;
+    lastBarrierPos.current = null;
+    setCursorPos(null);
   };
 
   const handleConfirm = async () => {
@@ -306,11 +413,23 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
 
   return (
     <>
+      {/* 防溢出线 canvas（蓝色 1px，z-39 在遮罩之下） */}
+      <canvas
+        ref={barrierCanvasRef}
+        className="absolute z-[39] pointer-events-none"
+        style={{
+          imageRendering: 'pixelated',
+          left: panX,
+          top: panY,
+          width: canvasWidth * zoom,
+          height: canvasHeight * zoom,
+        }}
+      />
       <canvas
         ref={canvasRef}
         className="absolute z-40"
         style={{
-          cursor: isPicking ? 'copy' : 'crosshair',
+          cursor: isPicking ? 'copy' : 'none',
           imageRendering: 'pixelated',
           left: panX,
           top: panY,
@@ -320,26 +439,87 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
         onMouseDown={handleDown}
         onMouseMove={handleMove}
         onMouseUp={handleUp}
-        onMouseLeave={handleUp}
+        onMouseLeave={handleLeave}
       />
+      {/* 笔刷大小光标 */}
+      {cursorPos && !isPicking && paintMode !== 'barrier' && (
+        <div
+          className="absolute z-[41] pointer-events-none rounded-full border-2"
+          style={{
+            left: panX + cursorPos.x - (brushSize * zoom) / 2,
+            top: panY + cursorPos.y - (brushSize * zoom) / 2,
+            width: brushSize * zoom,
+            height: brushSize * zoom,
+            borderColor: paintMode === 'erase' ? 'rgba(255,255,255,0.8)' : 'rgba(255,0,0,0.8)',
+          }}
+        />
+      )}
+      {cursorPos && !isPicking && paintMode === 'barrier' && (
+        <div
+          className="absolute z-[41] pointer-events-none rounded-full border-2 border-blue-400"
+          style={{
+            left: panX + cursorPos.x - 3,
+            top: panY + cursorPos.y - 3,
+            width: 6,
+            height: 6,
+          }}
+        />
+      )}
       {/* 遮罩模式工具条 */}
       <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs pointer-events-auto z-50"
         style={{ background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.4)', backdropFilter: 'blur(4px)' }}>
         <span className="text-purple-300 font-medium">遮罩绘制</span>
         <span className="text-gray-400">|</span>
-        <label className="text-gray-300 flex items-center gap-1">
-          笔刷
-          <input
-            type="range"
-            min={2}
-            max={32}
-            value={brushSize}
-            onChange={(e) => setBrushSize(Number(e.target.value))}
-            className="w-16"
-          />
-          {brushSize}px
-        </label>
-        <span className="text-gray-500 text-[10px]">Shift+画=擦除</span>
+        {/* 模式切换：绘制 / 擦除 / 防溢出线 */}
+        <div className="flex rounded overflow-hidden border border-white/20">
+          {([
+            { mode: 'draw' as const, label: '绘制' },
+            { mode: 'erase' as const, label: '擦除' },
+            { mode: 'barrier' as const, label: '防溢出线' },
+          ]).map(({ mode, label }) => (
+            <button
+              key={mode}
+              onClick={() => setPaintMode(mode)}
+              className={`px-2 h-6 text-[11px] transition-colors ${
+                paintMode === mode
+                  ? mode === 'barrier'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-red-600 text-white'
+                  : 'bg-transparent text-gray-300 hover:bg-white/10'
+              }`}
+              title={mode === 'barrier' ? '画1px蓝色线条，绘制时笔刷不会跨过线条' : undefined}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {paintMode !== 'barrier' && (
+          <label className="text-gray-300 flex items-center gap-1">
+            笔刷
+            <input
+              type="range"
+              min={2}
+              max={32}
+              value={brushSize}
+              onChange={(e) => setBrushSize(Number(e.target.value))}
+              className="w-16"
+            />
+            {brushSize}px
+          </label>
+        )}
+        {paintMode === 'barrier' && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 text-[11px] text-gray-400"
+            onClick={() => {
+              const bCanvas = barrierCanvasRef.current;
+              if (bCanvas) bCanvas.getContext('2d')!.clearRect(0, 0, canvasWidth, canvasHeight);
+            }}
+          >
+            清除线条
+          </Button>
+        )}
         <span className="text-gray-400">|</span>
         {/* 色键取色 */}
         <Button
