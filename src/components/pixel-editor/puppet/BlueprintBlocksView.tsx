@@ -168,6 +168,18 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
     updateNode(targetNodeId, { inputs: newInputs });
   };
 
+  const setSlotLiteral = (targetNodeId: string, port: string, value: number | null) => {
+    const target = nodeMap.get(targetNodeId);
+    if (!target) return;
+    const newInputs = { ...target.inputs };
+    if (value === null || isNaN(value)) {
+      delete newInputs[port];
+    } else {
+      newInputs[port] = { type: 'number', value };
+    }
+    updateNode(targetNodeId, { inputs: newInputs });
+  };
+
   // 递归渲染块（含嵌套）
   const renderBlock = (node: BlueprintNode, depth: number = 0): React.ReactNode => {
     const isOutput = node.id === graph.outputId;
@@ -203,10 +215,14 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
               />
             );
           }
-          // 输入槽：已连接则递归渲染源块，否则显示空槽
+          // 输入槽：已连接则递归渲染源块，否则显示可直接输入数字的槽
           const input = node.inputs[port];
           const srcId = typeof input === 'object' && input !== null && 'nodeId' in input ? (input as any).nodeId : null;
           const srcNode = srcId ? nodeMap.get(srcId) : null;
+          // 字面值（直接输入的数字）
+          const literalVal = typeof input === 'object' && input !== null && 'type' in input && (input as any).type === 'number'
+            ? (input as any).value
+            : null;
           const slotKey = `${node.id}:${port}`;
           const isHover = hoverSlot === slotKey;
 
@@ -252,12 +268,22 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
                 if (selectedSrcId) connectSlot(node.id, port, selectedSrcId);
               }}
               className={`
-                inline-flex items-center justify-center mx-0.5 h-5 min-w-[20px] px-1 rounded-full align-middle
-                ${isHover ? 'bg-amber-300 ring-2 ring-amber-200' : 'bg-black/25 border border-dashed border-white/50'}
+                inline-flex items-center mx-0.5 h-5 rounded-full align-middle overflow-hidden
+                ${isHover ? 'bg-amber-300 ring-2 ring-amber-200' : 'bg-white'}
               `}
-              title="拖入积木或点选后点击"
+              title="直接输入数字，或拖入积木"
             >
-              <span className="text-[9px] text-white/60">○</span>
+              <input
+                type="number"
+                value={literalVal ?? ''}
+                placeholder="0"
+                onChange={(e) => {
+                  const v = e.target.value === '' ? null : Number(e.target.value);
+                  setSlotLiteral(node.id, port, v);
+                }}
+                onClick={(e) => e.stopPropagation()}
+                className="w-10 h-5 px-1 text-[9px] text-black text-center outline-none bg-transparent"
+              />
             </span>
           );
         })}
@@ -276,6 +302,9 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
       const input = node.inputs[port];
       const srcId = typeof input === 'object' && input !== null && 'nodeId' in input ? (input as any).nodeId : null;
       const srcNode = srcId ? nodeMap.get(srcId) : null;
+      const literalVal = typeof input === 'object' && input !== null && 'type' in input && (input as any).type === 'number'
+        ? (input as any).value
+        : null;
       const slotKey = `${node.id}:${port}`;
       const isHover = hoverSlot === slotKey;
 
@@ -321,13 +350,23 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
             if (selectedSrcId) connectSlot(node.id, port, selectedSrcId);
           }}
           className={`
-            inline-flex items-center justify-center mx-0.5 h-5 min-w-[20px] px-1 rounded-full align-middle
-            ${isHover ? 'bg-amber-300 ring-2 ring-amber-200' : 'bg-black/25 border border-dashed border-white/50'}
+            inline-flex items-center mx-0.5 h-5 rounded-full align-middle overflow-hidden
+            ${isHover ? 'bg-amber-300 ring-2 ring-amber-200' : 'bg-white'}
           `}
-          title={`${port}：拖入积木或点选后点击`}
+          title={`${port}：直接输入数字，或拖入积木`}
         >
-          <span className="text-[9px] text-white/60 mr-0.5">{port}</span>
-          <span className="text-[9px] text-white/60">○</span>
+          <span className="text-[9px] text-black/60 pl-1.5">{port}</span>
+          <input
+            type="number"
+            value={literalVal ?? ''}
+            placeholder="0"
+            onChange={(e) => {
+              const v = e.target.value === '' ? null : Number(e.target.value);
+              setSlotLiteral(node.id, port, v);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            className="w-10 h-5 px-1 text-[9px] text-black text-center outline-none bg-transparent"
+          />
         </span>
       );
     };
