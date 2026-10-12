@@ -20,15 +20,15 @@ interface BlueprintEditorProps {
   title?: string;
   /** 传入后，nodeRef 节点的 nodeId 参数渲染为下拉选择 */
   skeleton?: { nodes: { id: string; name: string }[] } | null;
-  /** 禁用添加节点（全局编辑器用：新节点无归属，保存会丢） */
-  disableAdd?: boolean;
+  /** 新节点 ID 前缀（全局编辑器用：归属到指定部件） */
+  idPrefix?: string;
 }
 
 const NODE_WIDTH = 140;
 const NODE_HEADER_H = 24;
 const PORT_H = 18;
 
-export default function BlueprintEditor({ graph, onChange, title, skeleton, disableAdd }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix }: BlueprintEditorProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
   const [viewMode, setViewMode] = useState<'graph' | 'blocks'>('graph');
@@ -73,7 +73,9 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, disa
   }, [graph, onChange]);
 
   const addNode = useCallback(() => {
-    const id = `node_${Date.now().toString(36)}`;
+    const rawId = `node_${Date.now().toString(36)}`;
+    // 全局模式：加前缀归属到指定部件
+    const id = idPrefix ? `${idPrefix}__${rawId}` : rawId;
     const newNode: BlueprintNode = {
       id,
       type: addingType,
@@ -205,25 +207,29 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, disa
       )}
 
       {/* 工具条 */}
-      {!disableAdd && (
-        <div className="flex gap-1.5">
-          <select
-            value={addingType}
-            onChange={(e) => setAddingType(e.target.value)}
-            className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1.5 py-1 text-[10px] text-gray-300"
-          >
-            {nodeTypes.map((t) => (
-              <option key={t} value={t}>{getBlueprintNodeLabel(t)}</option>
-            ))}
-          </select>
-          <Button size="sm" onClick={addNode} className="h-7 px-2 text-[10px]">
-            <Plus className="size-3 mr-0.5" />节点
-          </Button>
-        </div>
-      )}
-      {disableAdd && (
+      <div className="flex gap-1.5">
+        <select
+          value={addingType}
+          onChange={(e) => setAddingType(e.target.value)}
+          className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1.5 py-1 text-[10px] text-gray-300"
+        >
+          {nodeTypes.map((t) => (
+            <option key={t} value={t}>{getBlueprintNodeLabel(t)}</option>
+          ))}
+        </select>
+        <Button
+          size="sm"
+          onClick={addNode}
+          disabled={!!idPrefix && !idPrefix}
+          className="h-7 px-2 text-[10px]"
+          title={idPrefix ? `将添加到部件 ${idPrefix}` : '添加节点'}
+        >
+          <Plus className="size-3 mr-0.5" />节点
+        </Button>
+      </div>
+      {idPrefix && (
         <div className="text-[9px] text-gray-500 px-1">
-          全局模式：新节点请在部件蓝图中添加
+          新节点将归属到部件 <span className="text-cyan-300">{idPrefix}</span>
         </div>
       )}
 

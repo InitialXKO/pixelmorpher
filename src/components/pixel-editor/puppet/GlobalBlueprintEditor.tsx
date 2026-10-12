@@ -22,6 +22,8 @@ export default function GlobalBlueprintEditor({ skeleton }: GlobalBlueprintEdito
   // 合并后的图（本地编辑状态）
   const [mergedGraph, setMergedGraph] = useState<BlueprintGraph | null>(null);
   const [outputMap, setOutputMap] = useState<Map<string, string>>(new Map());
+  // 当前选中的部件：新节点归属到它
+  const selectedPuppetNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
 
   // 从 skeleton 重新合并（打开编辑器时）
   const merged = useMemo(() => {
@@ -121,7 +123,7 @@ export default function GlobalBlueprintEditor({ skeleton }: GlobalBlueprintEdito
         graph={mergedGraph}
         onChange={setMergedGraph}
         skeleton={skeleton}
-        disableAdd
+        idPrefix={selectedPuppetNodeId ?? undefined}
       />
     </div>
   );
