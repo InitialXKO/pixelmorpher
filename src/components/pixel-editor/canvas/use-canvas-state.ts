@@ -121,7 +121,7 @@ export function useCanvasState() {
         for (const kf of c.puppetNodeKeyframes) {
           v = v * 31 + kf.frame * 7 + Math.round((kf.angle ?? 0) * 10) +
               Math.round((kf.offsetX ?? 0) * 10) + Math.round((kf.offsetY ?? 0) * 10) +
-              Math.round((kf.stretch ?? 1) * 100);
+              Math.round((kf.stretch ?? 1) * 100) + (kf.zIndex ?? 0) * 13;
         }
       }
     }
