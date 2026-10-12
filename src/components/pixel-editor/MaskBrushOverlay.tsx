@@ -338,6 +338,11 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
                   ...activeCs.spriteMap,
                   [`${maskNodeId}:${dir}`]: part.id,
                 };
+                // 提取的像素已是对应侧正确的，关闭节点的 mirrorFrom，
+                // 否则渲染时会再翻一次
+                projectStore.updatePuppetNode(owner.id, maskNodeId, {
+                  mirrorFrom: false,
+                });
                 // 直接更新 store
                 useProjectStore.setState({
                   puppetCharacters: (useProjectStore.getState().puppetCharacters ?? []).map((c) =>
