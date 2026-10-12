@@ -261,7 +261,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     else if (node.name.includes('左')) mirrorName = node.name.replace('左', '右');
     else if (node.name.includes('右')) mirrorName = node.name.replace('右', '左');
     if (!mirrorName) return null;
-    const src = sortedNodes.find((n) => n.name === mirrorName);
+    const src = sortedNodes.find((n) => n.name.toLowerCase() === mirrorName!.toLowerCase());
     // 源节点必须已有精灵（已遮罩或模板自带）
     if (src && (src.spritePartId || processedNodes.has(src.id))) return src.id;
     return null;
