@@ -303,6 +303,19 @@ function RigNodeProperties({
           </select>
         </div>
       </div>
+      <Button
+        size="sm"
+        variant="outline"
+        className="w-full h-6 text-[10px] mt-2"
+        onClick={() => {
+          const skeletonId = node ? useProjectStore.getState().puppetSkeletons.find(sk => sk.nodes.some(n => n.id === node.id))?.id : null;
+          if (!skeletonId) return;
+          const { tagged } = useProjectStore.getState().autoTagNodeDirections(skeletonId);
+          alert(`已标记 ${tagged} 个节点`);
+        }}
+      >
+        按命名自动标记全骨架
+      </Button>
 
       {/* Sockets */}
       <div>
