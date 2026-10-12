@@ -630,10 +630,7 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
         );
         if (parentNode) {
           const socketIdx = parentNode.sockets.findIndex((s) => s.id === n.plug!.socketId);
-          const newParentId = nodeIdMap.get(parentNode.id)!;
-          // 新父节点的 socket（按索引）
-          const newParentNode = clonedNodes.find((cn) => cn.id === newParentId);
-          // 注意：clonedNodes 还在构建中，先占位，后续修正
+          // 注意：clonedNodes 还在构建中，不能在这里查找，先占位，后续修正
           newPlug = {
             socketId: `__PENDING__${parentNode.id}:${socketIdx}`,
             localX: n.plug.localX,
