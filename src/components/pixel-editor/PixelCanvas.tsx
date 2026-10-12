@@ -4,7 +4,7 @@ import React, { useCallback, useEffect } from 'react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
-import { renderFrame, renderPartEditMode, renderPuppetNodes } from '@/lib/engine';
+import { renderPartEditMode, renderPuppetNodes } from '@/lib/engine';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
 import { useCanvasState } from './canvas/use-canvas-state';
@@ -186,7 +186,7 @@ export default function PixelCanvas() {
             // Use canvas pool instead of createElement to reduce GC pressure
             const cacheCanvas = acquireCanvas(s.canvasWidth, s.canvasHeight);
             const cacheCtx = cacheCanvas.getContext('2d')!;
-            renderFrame(cacheCtx, s.canvasWidth, s.canvasHeight, s.nonPuppetParts, s.keyframes, prevFrame, 'rgba(0,0,0,0)', s.effectTracks, undefined, undefined, false, 0.5, undefined, undefined, undefined, s.frameRate, onionQuality, undefined, s.globalModifiers);
+            // 重构后画布只画木偶，nonPuppetParts 死代码已删
             renderPuppetOnionFrame(cacheCtx, prevFrame);
             s.onionCacheRef.current.set(prevFrame, { canvas: cacheCanvas, version: curVersion, keyframeHash: kfHash });
           }
@@ -205,7 +205,7 @@ export default function PixelCanvas() {
           if (!cached || cached.version < curVersion || cached.keyframeHash !== kfHash) {
             const cacheCanvas = acquireCanvas(s.canvasWidth, s.canvasHeight);
             const cacheCtx = cacheCanvas.getContext('2d')!;
-            renderFrame(cacheCtx, s.canvasWidth, s.canvasHeight, s.nonPuppetParts, s.keyframes, nextFrame, 'rgba(0,0,0,0)', s.effectTracks, undefined, undefined, false, 0.5, undefined, undefined, undefined, s.frameRate, onionQuality, undefined, s.globalModifiers);
+            // 重构后画布只画木偶，nonPuppetParts 死代码已删
             renderPuppetOnionFrame(cacheCtx, nextFrame);
             s.onionCacheRef.current.set(nextFrame, { canvas: cacheCanvas, version: curVersion, keyframeHash: kfHash });
           }
