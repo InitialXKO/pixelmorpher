@@ -18,13 +18,9 @@ type Step = 'upload' | 'align' | 'mask' | 'confirm';
 // 模块级持久化：防组件卸载导致状态丢失
 let persistedStep: Step = 'upload';
 let persistedSelectedCharacterId: string | null = null;
-let persistedWorkingCharacterId: string | null = null;
-let persistedWorkingSkeletonId: string | null = null;
 export function resetRefWizardStep() {
   persistedStep = 'upload';
   persistedSelectedCharacterId = null;
-  persistedWorkingCharacterId = null;
-  persistedWorkingSkeletonId = null;
 }
 
 const STEPS: { id: Step; label: string }[] = [
@@ -46,15 +42,58 @@ const BUILT_IN_REFS = [
 ];
 
 export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) {
-  // 内部关闭：先删工作副本，清参考图，再调外部 onClose
-  const handleClose = () => {
-    if (workingCharacterId || workingSkeletonId) {
-      const ps = useProjectStore.getState();
-      if (workingCharacterId) ps.removePuppetCharacter(workingCharacterId);
-      if (workingSkeletonId) ps.removePuppetSkeleton(workingSkeletonId);
-      setWorkingCharacterId(null);
-      setWorkingSkeletonId(null);
+  // 恢复模板节点到原始 transform
+  const restoreTemplateNodes = () => {
+    const ps = useProjectStore.getState();
+    const char = ps.puppetCharacters.find((c) => c.id === selectedCharacterId);
+    if (!char) return;
+    const skeletonId = char.puppetSkeletonId;
+    originalTransformsRef.current.forEach((orig, nodeId) => {
+      ps.updatePuppetNode(skeletonId, nodeId, {
+        offsetX: orig.offsetX,
+        offsetY: orig.offsetY,
+        angle: orig.angle,
+      });
+    });
+    originalTransformsRef.current.clear();
+  };
+
+  // 计算对位偏移差值，存进服装，恢复模板节点
+  // 在离开 align 步骤时调用
+  const saveAlignmentToCostume = () => {
+    if (!workingCostumeId || !selectedCharacterId) return;
+    const ps = useProjectStore.getState();
+    const char = ps.puppetCharacters.find((c) => c.id === selectedCharacterId);
+    if (!char) return;
+    const skeleton = ps.puppetSkeletons.find((sk) => sk.id === char.puppetSkeletonId);
+    if (!skeleton) return;
+
+    const nodeOffsets: Record<string, { x: number; y: number; angle: number }> = {};
+    const originals = originalTransformsRef.current;
+    for (const n of skeleton.nodes) {
+      const orig = originals.get(n.id);
+      if (!orig) continue;
+      const dx = n.offsetX - orig.offsetX;
+      const dy = n.offsetY - orig.offsetY;
+      const da = n.angle - orig.angle;
+      // 只存非零偏移
+      if (dx !== 0 || dy !== 0 || da !== 0) {
+        nodeOffsets[n.id] = { x: dx, y: dy, angle: da };
+      }
     }
+    ps.updateCostumeSet(selectedCharacterId, workingCostumeId, { nodeOffsets });
+    // 恢复模板节点
+    restoreTemplateNodes();
+  };
+
+  // 内部关闭：恢复模板，删工作服装（取消时），清参考图
+  const handleClose = (keepCostume: boolean = false) => {
+    const ps = useProjectStore.getState();
+    if (!keepCostume && workingCostumeId && selectedCharacterId) {
+      ps.removeCostumeSet(selectedCharacterId, workingCostumeId);
+    }
+    setWorkingCostumeIdState(null);
+    restoreTemplateNodes();
     // 清参考图（否则第二次进入时残留旧 URL）
     const oldUrl = useEditorStore.getState().referenceImageUrl;
     if (oldUrl && oldUrl.startsWith('blob:')) {
@@ -94,19 +133,13 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     persistedSelectedCharacterId = id;
     setSelectedCharacterIdState(id);
   };
-  // 克隆的工作副本 ID（开始对位时创建，取消时删除）
-  const [workingCharacterId, setWorkingCharacterIdState] = useState<string | null>(persistedWorkingCharacterId);
-  const setWorkingCharacterId = (id: string | null) => {
-    persistedWorkingCharacterId = id;
-    setWorkingCharacterIdState(id);
-  };
-  const [workingSkeletonId, setWorkingSkeletonIdState] = useState<string | null>(persistedWorkingSkeletonId);
-  const setWorkingSkeletonId = (id: string | null) => {
-    persistedWorkingSkeletonId = id;
-    setWorkingSkeletonIdState(id);
-  };
-  // 向导使用工作副本（若有），否则用选中的模板
-  const effectiveCharacterId = workingCharacterId ?? selectedCharacterId;
+  // 工作服装 ID（选模板时创建）
+  const [workingCostumeId, setWorkingCostumeIdState] = useState<string | null>(null);
+  // 原始节点 transform（选模板时保存，用于计算偏移差值和恢复模板）
+  const originalTransformsRef = useRef<Map<string, { offsetX: number; offsetY: number; angle: number }>>(new Map());
+
+  // 向导直接使用选中的模板（不克隆）
+  const effectiveCharacterId = selectedCharacterId;
   const selectedCharacter = puppetCharacters.find((c) => c.id === effectiveCharacterId);
   const activeSkeleton = selectedCharacter
     ? puppetSkeletons.find((sk) => sk.id === selectedCharacter.puppetSkeletonId)
@@ -122,30 +155,43 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const focusedNode = sortedNodes[focusedNodeIndex];
   const addPuppetNode = useProjectStore((s) => s.addPuppetNode);
 
-  // 选中模板自动克隆（重选=重来，删旧克隆）
+  // 选中模板：保存原始 transform，创建工作服装，直接进入对位
   // 不需要"开始对位"按钮：选即开始，直接拖
+  // 不克隆：对位偏移最终存进服装的 nodeOffsets，模板节点在关闭时恢复
   useEffect(() => {
     if (!selectedCharacterId) return;
-    // 已有对应克隆则跳过（避免重复）
-    if (workingCharacterId) {
-      const wc = useProjectStore.getState().puppetCharacters.find((c) => c.id === workingCharacterId);
-      // 如果工作克隆对应的原模板就是当前选中，则不重克
-      // （简单判断：克隆名以选中角色名开头）
-      const sc = useProjectStore.getState().puppetCharacters.find((c) => c.id === selectedCharacterId);
-      if (wc && sc && wc.name.startsWith(sc.name)) return;
-      // 否则删旧克隆（重选=重来）
-      useProjectStore.getState().removePuppetCharacter(workingCharacterId);
-      const ws = workingSkeletonId;
-      if (ws) useProjectStore.getState().removePuppetSkeleton(ws);
-    }
-    const projectStore = useProjectStore.getState();
-    const sc = projectStore.puppetCharacters.find((c) => c.id === selectedCharacterId);
+    const ps = useProjectStore.getState();
+    const sc = ps.puppetCharacters.find((c) => c.id === selectedCharacterId);
     if (!sc) return;
-    const clone = projectStore.clonePuppetCharacter(selectedCharacterId, `${sc.name}（装配）`);
-    if (!clone) return;
-    setWorkingCharacterId(clone.id);
-    setWorkingSkeletonId(clone.puppetSkeletonId);
-    usePuppetSessionStore.getState().enterPerform(clone.id);
+    const skeleton = ps.puppetSkeletons.find((sk) => sk.id === sc.puppetSkeletonId);
+    if (!skeleton) return;
+
+    // 如果已有工作服装且对应当前模板，跳过（避免重复）
+    if (workingCostumeId) {
+      const existing = sc.costumeSets.find((cs) => cs.id === workingCostumeId);
+      if (existing) return;
+      // 否则是重选模板：恢复旧模板节点，删旧服装
+      restoreTemplateNodes();
+      ps.removeCostumeSet(selectedCharacterId, workingCostumeId);
+    }
+
+    // 保存原始 transform
+    originalTransformsRef.current.clear();
+    for (const n of skeleton.nodes) {
+      originalTransformsRef.current.set(n.id, {
+        offsetX: n.offsetX,
+        offsetY: n.offsetY,
+        angle: n.angle,
+      });
+    }
+
+    // 创建工作服装
+    const costume = ps.addCostumeSet(selectedCharacterId, `${sc.name}（装配）`);
+    setWorkingCostumeIdState(costume.id);
+    // 设为当前服装（渲染时应用）
+    ps.updatePuppetCharacter(selectedCharacterId, { activeCostumeSetId: costume.id });
+    // 进入操控（画布只显示该角色）
+    usePuppetSessionStore.getState().enterPerform(selectedCharacterId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCharacterId]);
 
@@ -251,7 +297,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
         {/* Header */}
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-gray-200">参考图装配</h2>
-          <button onClick={handleClose} className="text-gray-500 hover:text-gray-300">
+          <button onClick={() => handleClose(false)} className="text-gray-500 hover:text-gray-300">
             <X className="size-4" />
           </button>
         </div>
@@ -362,7 +408,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   </select>
                 </div>
                 <p className="text-[11px] text-gray-400">
-                  已自动克隆为「{selectedCharacter?.name}（装配）」，直接在画布上拖动肢体对位（拖动旋转，Shift+拖动平移）。
+                  已为「{selectedCharacter?.name}」创建新服装，直接在画布上拖动肢体对位（拖动旋转，Shift+拖动平移）。对位偏移将存入服装。
                 </p>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-500">底图不透明度</span>
@@ -674,12 +720,15 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
               (step === 'align' && !activeSkeleton)
             }
             onClick={() => {
-              if (stepIndex >= 0 && stepIndex < STEPS.length - 1) setStep(STEPS[stepIndex + 1].id);
-              else if (stepIndex === STEPS.length - 1) {
-                // 完成：保留工作副本（不清），只关向导
-                // 清理工作副本 ID 状态，但不删除数据
-                setWorkingCharacterId(null);
-                setWorkingSkeletonId(null);
+              if (stepIndex >= 0 && stepIndex < STEPS.length - 1) {
+                // 离开 align 步骤：保存对位偏移到服装，恢复模板
+                if (step === 'align') {
+                  saveAlignmentToCostume();
+                }
+                setStep(STEPS[stepIndex + 1].id);
+              } else if (stepIndex === STEPS.length - 1) {
+                // 完成：保留工作服装，只关向导
+                setWorkingCostumeIdState(null);
                 resetRefWizardStep();
                 onClose();
               }
