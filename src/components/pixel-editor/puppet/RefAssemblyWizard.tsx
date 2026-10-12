@@ -278,6 +278,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    // 清空 input，下次选同一文件也能触发 onChange
+    e.target.value = '';
     if (!file) return;
     const url = URL.createObjectURL(file);
     setReferenceImageUrl(url);
