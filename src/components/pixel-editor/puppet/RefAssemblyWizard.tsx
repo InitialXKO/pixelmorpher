@@ -283,6 +283,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     if (!file) return;
     const url = URL.createObjectURL(file);
     setReferenceImageUrl(url);
+    // 确保可见（上次关闭时被隐藏了）
+    useEditorStore.getState().setReferenceImageVisible(true);
     setStep('align');
   };
 
@@ -330,6 +332,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   key={ref.id}
                   onClick={() => {
                     setReferenceImageUrl(ref.url);
+                    useEditorStore.getState().setReferenceImageVisible(true);
                     setStep('align');
                   }}
                   className="group relative aspect-square rounded overflow-hidden border border-white/10 hover:border-purple-500/50 transition-colors"
