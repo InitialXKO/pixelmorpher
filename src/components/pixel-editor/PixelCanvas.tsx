@@ -373,6 +373,7 @@ export default function PixelCanvas() {
     showAllCharacters, performCharacterId, storeCurrentFrame,
     // 参考图：URL/可见性/不透明度变化时重建 render，否则闭包里是旧 s
     s.referenceImageUrl, s.referenceImageVisible, s.referenceImageOpacity,
+    puppetOnionSkin,
   ]);
 
   // 用 ref 存最新 render，避免 effect 反复重建导致旧闭包执行
