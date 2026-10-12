@@ -1,17 +1,15 @@
 'use client';
 
 // ============================================================
-// BlueprintBlocksView — 真正的积木块视图（Scratch 风格）
-// - Reporter（椭圆形）：输出值的节点，可拖拽
-// - Stack（矩形）：transform 输出节点
-// - 输入槽位：拖入连接，点击断开，显示输出端口
-// - 触屏：点选块再点槽位连接
+// BlueprintBlocksView — Scratch 风格积木
+// - 块文本描述性，输入内联
+// - Reporter 椭圆，Stack 矩形带拼图缺口
+// - 紧密堆叠
 // ============================================================
 
 import React, { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
-import { getBlueprintNodeLabel } from '@/lib/blueprint/eval';
 import { getNodeInputs, getNodeOutputs, getDefaultOutputForPort } from '@/lib/blueprint/specs';
 
 interface BlueprintBlocksViewProps {
@@ -19,38 +17,85 @@ interface BlueprintBlocksViewProps {
   onChange: (graph: BlueprintGraph) => void;
 }
 
+// Scratch 风格颜色
 const BLOCK_COLORS: Record<string, string> = {
-  time: 'bg-amber-500', const: 'bg-amber-500', var: 'bg-amber-500',
-  add: 'bg-blue-500', sub: 'bg-blue-500', mul: 'bg-blue-500', div: 'bg-blue-500',
-  sin: 'bg-blue-500', cos: 'bg-blue-500',
-  ease: 'bg-purple-500', timeRemap: 'bg-purple-500',
-  nodeRef: 'bg-cyan-600',
-  switch: 'bg-orange-500', step: 'bg-orange-500', hold: 'bg-orange-500',
-  pendulum: 'bg-green-500', breath: 'bg-green-500', shake: 'bg-green-500',
-  float: 'bg-green-500', wobble: 'bg-green-500', bounce: 'bg-green-500',
-  elastic: 'bg-green-500', wheel: 'bg-green-500', noise: 'bg-green-500',
-  wave: 'bg-green-500', spring: 'bg-green-500', jitter: 'bg-green-500',
-  gait: 'bg-green-500', expression: 'bg-green-500',
-  transform: 'bg-gray-700',
-  texture_scroll: 'bg-pink-500', wave_deform: 'bg-pink-500', contour_scroll: 'bg-pink-500',
-  reveal_hide: 'bg-pink-500', shatter_dissolve: 'bg-pink-500', annihilate: 'bg-pink-500',
-  teleport: 'bg-pink-500', crt_off: 'bg-pink-500', bend: 'bg-pink-500',
-  elliptical_compress: 'bg-pink-500', dumbbell_stretch: 'bg-pink-500',
-  pillow_stretch: 'bg-pink-500', hyperbolic_stretch: 'bg-pink-500', ring_ripple: 'bg-pink-500',
+  time: 'bg-[#F9A826]', const: 'bg-[#F9A826]', var: 'bg-[#F9A826]',
+  add: 'bg-[#4C97FF]', sub: 'bg-[#4C97FF]', mul: 'bg-[#4C97FF]', div: 'bg-[#4C97FF]',
+  sin: 'bg-[#4C97FF]', cos: 'bg-[#4C97FF]',
+  ease: 'bg-[#9966FF]', timeRemap: 'bg-[#9966FF]',
+  nodeRef: 'bg-[#5CB1D6]',
+  switch: 'bg-[#FFAB19]', step: 'bg-[#FFAB19]', hold: 'bg-[#FFAB19]',
+  pendulum: 'bg-[#59C059]', breath: 'bg-[#59C059]', shake: 'bg-[#59C059]',
+  float: 'bg-[#59C059]', wobble: 'bg-[#59C059]', bounce: 'bg-[#59C059]',
+  elastic: 'bg-[#59C059]', wheel: 'bg-[#59C059]', noise: 'bg-[#59C059]',
+  wave: 'bg-[#59C059]', spring: 'bg-[#59C059]', jitter: 'bg-[#59C059]',
+  gait: 'bg-[#59C059]', expression: 'bg-[#59C059]',
+  transform: 'bg-[#5B5B8A]',
+  texture_scroll: 'bg-[#FF6680]', wave_deform: 'bg-[#FF6680]', contour_scroll: 'bg-[#FF6680]',
+  reveal_hide: 'bg-[#FF6680]', shatter_dissolve: 'bg-[#FF6680]', annihilate: 'bg-[#FF6680]',
+  teleport: 'bg-[#FF6680]', crt_off: 'bg-[#FF6680]', bend: 'bg-[#FF6680]',
+  elliptical_compress: 'bg-[#FF6680]', dumbbell_stretch: 'bg-[#FF6680]',
+  pillow_stretch: 'bg-[#FF6680]', hyperbolic_stretch: 'bg-[#FF6680]', ring_ripple: 'bg-[#FF6680]',
+};
+
+// 块描述模板：{port} 会被替换为输入槽
+const BLOCK_TEMPLATES: Record<string, string> = {
+  time: '当前帧',
+  const: '常量 {value}',
+  var: '变量 {name}',
+  add: '{a} + {b}',
+  sub: '{a} - {b}',
+  mul: '{a} × {b}',
+  div: '{a} ÷ {b}',
+  sin: 'sin {x}',
+  cos: 'cos {x}',
+  ease: '缓动 {x}',
+  timeRemap: '时间重映射 {t}',
+  nodeRef: '引用节点 {nodeId}',
+  switch: '如果 {condition} 则 {a} 否则 {b}',
+  step: '阶跃 {x}',
+  hold: '保持 {input}',
+  pendulum: '摆动 幅度 {amplitude} 周期 {period}',
+  float: '浮动 高度 {height} 周期 {period}',
+  breath: '呼吸 幅度 {amplitude}',
+  shake: '抖动 幅度 {amplitude}',
+  wobble: '摇摆 幅度 {amplitude}',
+  bounce: '弹跳 高度 {amplitude}',
+  elastic: '弹性 幅度 {amplitude}',
+  wheel: '滚轮 幅度 {amplitude}',
+  noise: '噪声 幅度 {amplitude}',
+  wave: '波形 幅度 {amplitude}',
+  spring: '弹簧 刚度 {stiffness}',
+  jitter: ' jitter',
+  gait: '步态 周期 {period}',
+  expression: '表达式',
+  transform: '输出变换',
+  texture_scroll: '纹理滚动 速度 {scrollSpeed}',
+  wave_deform: '波形变形 幅度 {amplitude}',
+  contour_scroll: '轮廓滚动',
+  reveal_hide: '显现 进度 {progress}',
+  shatter_dissolve: '碎裂 进度 {progress}',
+  annihilate: '湮灭 进度 {progress}',
+  teleport: '传送 进度 {progress}',
+  crt_off: 'CRT 关闭 进度 {progress}',
+  bend: '弯曲 量 {bendAmount}',
+  elliptical_compress: '椭圆压缩',
+  dumbbell_stretch: '哑铃拉伸',
+  pillow_stretch: '枕形拉伸',
+  hyperbolic_stretch: '双曲拉伸',
+  ring_ripple: '波纹 幅度 {amplitude}',
 };
 
 function getBlockColor(type: string): string {
   return BLOCK_COLORS[type] ?? 'bg-gray-500';
 }
 
-function isReporter(type: string): boolean {
-  return type !== 'transform' && !getNodeOutputs(type).includes('pixels');
+function getTemplate(type: string): string {
+  return BLOCK_TEMPLATES[type] ?? type;
 }
 
 export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocksViewProps) {
-  // 触屏点选：选中的源块 ID
   const [selectedSrcId, setSelectedSrcId] = useState<string | null>(null);
-  // 拖拽高亮：正在悬停的槽位 key
   const [hoverSlot, setHoverSlot] = useState<string | null>(null);
 
   const sortedNodes = useMemo(() => {
@@ -103,148 +148,142 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
     updateNode(targetNodeId, { inputs: newInputs });
   };
 
-  const getInputInfo = (node: BlueprintNode, port: string): { srcId: string; output: string; label: string } | null => {
+  const getInputInfo = (node: BlueprintNode, port: string) => {
     const input = node.inputs[port];
     if (!input || typeof input !== 'object' || !('nodeId' in input)) return null;
     const src = graph.nodes.find((n) => n.id === (input as any).nodeId);
     return {
       srcId: (input as any).nodeId,
       output: (input as any).output ?? 'out',
-      label: src ? getBlueprintNodeLabel(src.type) : '?',
+      label: src ? getTemplate(src.type).split(' ')[0] : '?',
     };
   };
 
+  // 渲染块模板，把 {port} 替换为槽位
+  const renderBlockContent = (node: BlueprintNode) => {
+    const template = getTemplate(node.type);
+    const parts = template.split(/(\{\w+\})/g);
+    return (
+      <span className="text-[11px] font-medium text-white leading-6">
+        {parts.map((part, i) => {
+          const m = part.match(/\{(\w+)\}/);
+          if (!m) return <span key={i}>{part}</span>;
+          const port = m[1];
+          // 如果是 params，直接显示可编辑值
+          if (port in node.params) {
+            const val = node.params[port];
+            return (
+              <input
+                key={i}
+                type={typeof val === 'number' ? 'number' : 'text'}
+                value={String(val)}
+                onChange={(e) => {
+                  const v = typeof val === 'number' ? Number(e.target.value) : e.target.value;
+                  updateNode(node.id, { params: { ...node.params, [port]: v } });
+                }}
+                onClick={(e) => e.stopPropagation()}
+                onDragStart={(e) => e.stopPropagation()}
+                className="inline-block w-12 mx-0.5 bg-white rounded-full px-1.5 text-[10px] text-black text-center outline-none"
+              />
+            );
+          }
+          // 否则是输入槽
+          const info = getInputInfo(node, port);
+          const slotKey = `${node.id}:${port}`;
+          const isHover = hoverSlot === slotKey;
+          return (
+            <span
+              key={i}
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'link'; setHoverSlot(slotKey); }}
+              onDragLeave={() => setHoverSlot(null)}
+              onDrop={(e) => {
+                e.preventDefault();
+                const srcId = e.dataTransfer.getData('text/blueprint-node-id');
+                if (srcId) connectSlot(node.id, port, srcId);
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (selectedSrcId) connectSlot(node.id, port, selectedSrcId);
+              }}
+              className={`
+                inline-flex items-center gap-0.5 mx-0.5 h-6 px-1.5 rounded-full align-middle
+                ${isHover ? 'bg-amber-300 ring-2 ring-amber-200' : ''}
+                ${!isHover && info ? 'bg-white/90' : ''}
+                ${!isHover && !info ? 'bg-black/25 border border-dashed border-white/50 min-w-[24px] justify-center' : ''}
+              `}
+              title={info ? `${info.label}.${info.output}（点✕断开）` : '拖入积木'}
+            >
+              {info ? (
+                <>
+                  <span className="text-[9px] text-black font-medium max-w-[60px] truncate">{info.label}</span>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); disconnectSlot(node.id, port); }}
+                    className="text-black/50 hover:text-black"
+                  >
+                    <X className="size-2" />
+                  </button>
+                </>
+              ) : (
+                <span className="text-[9px] text-white/60">○</span>
+              )}
+            </span>
+          );
+        })}
+      </span>
+    );
+  };
+
   return (
-    <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1 p-1">
+    <div className="max-h-[400px] overflow-y-auto pr-1 py-1">
       {selectedSrcId && (
-        <div className="sticky top-0 z-10 bg-amber-500/20 border border-amber-500/50 rounded px-2 py-1 text-[10px] text-amber-200 flex items-center justify-between">
+        <div className="sticky top-0 z-10 bg-amber-500/20 border border-amber-500/50 rounded px-2 py-1 mb-1 text-[10px] text-amber-200 flex items-center justify-between">
           <span>已选中块，点击槽位连接</span>
-          <button onClick={() => setSelectedSrcId(null)} className="text-amber-200/70 hover:text-amber-200">
-            <X className="size-3" />
-          </button>
+          <button onClick={() => setSelectedSrcId(null)}><X className="size-3" /></button>
         </div>
       )}
 
-      {sortedNodes.map((node) => {
-        const isOutput = node.id === graph.outputId;
-        const color = getBlockColor(node.type);
-        const reporter = isReporter(node.type);
-        const specInputs = getNodeInputs(node.type);
-        const isSelected = selectedSrcId === node.id;
+      <div className="flex flex-col items-start gap-0">
+        {sortedNodes.map((node) => {
+          const isOutput = node.id === graph.outputId;
+          const color = getBlockColor(node.type);
+          const isReporter = getNodeOutputs(node.type).length > 0 && node.type !== 'transform';
+          const isSelected = selectedSrcId === node.id;
 
-        return (
-          <div key={node.id} className="flex justify-start">
+          return (
             <div
-              draggable={reporter && !isOutput}
+              key={node.id}
+              draggable={isReporter && !isOutput}
               onDragStart={(e) => {
-                if (!reporter || isOutput) return;
+                if (!isReporter || isOutput) return;
                 e.dataTransfer.setData('text/blueprint-node-id', node.id);
                 e.dataTransfer.effectAllowed = 'link';
               }}
               onClick={() => {
-                // 触屏点选：点 reporter 选中，再点槽位连接
-                if (reporter && !isOutput) {
-                  setSelectedSrcId(isSelected ? null : node.id);
-                }
+                if (isReporter && !isOutput) setSelectedSrcId(isSelected ? null : node.id);
               }}
               className={`
-                ${color} text-white shadow-md select-none
-                ${reporter ? 'rounded-full px-3 py-1.5 cursor-grab active:cursor-grabbing' : 'rounded-md px-3 py-2'}
+                ${color} shadow-md select-none relative
+                ${isReporter ? 'rounded-full cursor-grab active:cursor-grabbing' : 'rounded-[4px]'}
                 ${isOutput ? 'ring-2 ring-emerald-400' : ''}
                 ${isSelected ? 'ring-2 ring-amber-300' : ''}
-                min-w-[120px] max-w-full
+                px-3 py-1 my-0.5 max-w-full
               `}
             >
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <span className="text-[10px] font-bold whitespace-nowrap">
-                  {getBlueprintNodeLabel(node.type)}
-                  {isOutput && <span className="ml-1 text-[8px] opacity-75">输出</span>}
-                </span>
+              <div className="flex items-center gap-2">
+                {renderBlockContent(node)}
                 {!isOutput && (
-                  <button onClick={(e) => { e.stopPropagation(); removeNode(node.id); }} className="text-white/70 hover:text-white">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); removeNode(node.id); }}
+                    className="text-white/60 hover:text-white shrink-0"
+                  >
                     <X className="size-3" />
                   </button>
                 )}
               </div>
-
-              {specInputs.length > 0 && (
-                <div className="space-y-1 mb-1">
-                  {specInputs.map((port) => {
-                    const info = getInputInfo(node, port);
-                    const slotKey = `${node.id}:${port}`;
-                    const isHover = hoverSlot === slotKey;
-                    return (
-                      <div key={port} className="flex items-center gap-1">
-                        <span className="text-[8px] text-white/80 whitespace-nowrap">{port}</span>
-                        <div
-                          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'link'; setHoverSlot(slotKey); }}
-                          onDragLeave={() => setHoverSlot(null)}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            const srcId = e.dataTransfer.getData('text/blueprint-node-id');
-                            if (srcId) connectSlot(node.id, port, srcId);
-                          }}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            // 触屏：已选中源块 → 连接
-                            if (selectedSrcId) {
-                              connectSlot(node.id, port, selectedSrcId);
-                            }
-                          }}
-                          className={`
-                            flex-1 min-w-[60px] h-6 rounded-full px-2 flex items-center justify-between gap-1
-                            transition-colors
-                            ${isHover ? 'bg-amber-300/40 border-2 border-amber-300' : ''}
-                            ${!isHover && info ? 'bg-white/25' : ''}
-                            ${!isHover && !info ? 'bg-black/30 border border-dashed border-white/40 hover:border-white/70' : ''}
-                          `}
-                          title={info ? `来自: ${info.label}.${info.output}（点击断开）` : '拖入积木或点选后点击连接'}
-                        >
-                          {info ? (
-                            <>
-                              <span className="text-[8px] text-white truncate">
-                                {info.label}<span className="opacity-60">.{info.output}</span>
-                              </span>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); disconnectSlot(node.id, port); }}
-                                className="text-white/60 hover:text-white shrink-0"
-                                title="断开"
-                              >
-                                <X className="size-2.5" />
-                              </button>
-                            </>
-                          ) : (
-                            <span className="text-[8px] text-white/40">空</span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {Object.entries(node.params).length > 0 && (
-                <div className="flex flex-wrap gap-1" onClick={(e) => e.stopPropagation()}>
-                  {Object.entries(node.params).map(([key, val]) => (
-                    <div key={key} className="flex items-center gap-1 bg-white/20 rounded-full px-2 py-0.5">
-                      <span className="text-[8px] text-white/80">{key}</span>
-                      <input
-                        type={typeof val === 'number' ? 'number' : 'text'}
-                        value={String(val)}
-                        onChange={(e) => {
-                          const v = typeof val === 'number' ? Number(e.target.value) : e.target.value;
-                          updateNode(node.id, { params: { ...node.params, [key]: v } });
-                        }}
-                        className="w-12 bg-white/20 rounded px-1 text-[9px] text-white text-center outline-none"
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
 
       {sortedNodes.length === 0 && (
         <div className="text-[10px] text-gray-600 text-center py-4">空蓝图</div>
