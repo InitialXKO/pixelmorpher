@@ -2,9 +2,8 @@
 
 // ============================================================
 // BlueprintBlocksView — Scratch 风格积木
+// - 拖入槽位的是整个块（递归嵌套），不是名字
 // - 块文本描述性，输入内联
-// - Reporter 椭圆，Stack 矩形带拼图缺口
-// - 紧密堆叠
 // ============================================================
 
 import React, { useMemo, useState } from 'react';
@@ -17,7 +16,6 @@ interface BlueprintBlocksViewProps {
   onChange: (graph: BlueprintGraph) => void;
 }
 
-// Scratch 风格颜色
 const BLOCK_COLORS: Record<string, string> = {
   time: 'bg-[#F9A826]', const: 'bg-[#F9A826]', var: 'bg-[#F9A826]',
   add: 'bg-[#4C97FF]', sub: 'bg-[#4C97FF]', mul: 'bg-[#4C97FF]', div: 'bg-[#4C97FF]',
@@ -38,84 +36,77 @@ const BLOCK_COLORS: Record<string, string> = {
   pillow_stretch: 'bg-[#FF6680]', hyperbolic_stretch: 'bg-[#FF6680]', ring_ripple: 'bg-[#FF6680]',
 };
 
-// 块描述模板：{port} 会被替换为输入槽
 const BLOCK_TEMPLATES: Record<string, string> = {
-  time: '当前帧',
-  const: '常量 {value}',
-  var: '变量 {name}',
-  add: '{a} + {b}',
-  sub: '{a} - {b}',
-  mul: '{a} × {b}',
-  div: '{a} ÷ {b}',
-  sin: 'sin {x}',
-  cos: 'cos {x}',
-  ease: '缓动 {x}',
-  timeRemap: '时间重映射 {t}',
-  nodeRef: '引用节点 {nodeId}',
-  switch: '如果 {condition} 则 {a} 否则 {b}',
-  step: '阶跃 {x}',
-  hold: '保持 {input}',
+  time: '当前帧', const: '常量 {value}', var: '变量 {name}',
+  add: '{a} + {b}', sub: '{a} - {b}', mul: '{a} × {b}', div: '{a} ÷ {b}',
+  sin: 'sin {x}', cos: 'cos {x}',
+  ease: '缓动 {x}', timeRemap: '时间重映射 {t}',
+  nodeRef: '引用节点', switch: '如果 {condition} 则 {a} 否则 {b}',
+  step: '阶跃 {x}', hold: '保持 {input}',
   pendulum: '摆动 幅度 {amplitude} 周期 {period}',
   float: '浮动 高度 {height} 周期 {period}',
-  breath: '呼吸 幅度 {amplitude}',
-  shake: '抖动 幅度 {amplitude}',
-  wobble: '摇摆 幅度 {amplitude}',
-  bounce: '弹跳 高度 {amplitude}',
-  elastic: '弹性 幅度 {amplitude}',
-  wheel: '滚轮 幅度 {amplitude}',
-  noise: '噪声 幅度 {amplitude}',
-  wave: '波形 幅度 {amplitude}',
-  spring: '弹簧 刚度 {stiffness}',
-  jitter: ' jitter',
-  gait: '步态 周期 {period}',
-  expression: '表达式',
+  breath: '呼吸 幅度 {amplitude}', shake: '抖动 幅度 {amplitude}',
+  wobble: '摇摆 幅度 {amplitude}', bounce: '弹跳 高度 {amplitude}',
+  elastic: '弹性 幅度 {amplitude}', wheel: '滚轮 幅度 {amplitude}',
+  noise: '噪声 幅度 {amplitude}', wave: '波形 幅度 {amplitude}',
+  spring: '弹簧 刚度 {stiffness}', jitter: '抖动',
+  gait: '步态 周期 {period}', expression: '表达式',
   transform: '输出变换',
   texture_scroll: '纹理滚动 速度 {scrollSpeed}',
   wave_deform: '波形变形 幅度 {amplitude}',
-  contour_scroll: '轮廓滚动',
-  reveal_hide: '显现 进度 {progress}',
-  shatter_dissolve: '碎裂 进度 {progress}',
-  annihilate: '湮灭 进度 {progress}',
-  teleport: '传送 进度 {progress}',
-  crt_off: 'CRT 关闭 进度 {progress}',
-  bend: '弯曲 量 {bendAmount}',
-  elliptical_compress: '椭圆压缩',
-  dumbbell_stretch: '哑铃拉伸',
-  pillow_stretch: '枕形拉伸',
-  hyperbolic_stretch: '双曲拉伸',
-  ring_ripple: '波纹 幅度 {amplitude}',
+  contour_scroll: '轮廓滚动', reveal_hide: '显现 进度 {progress}',
+  shatter_dissolve: '碎裂 进度 {progress}', annihilate: '湮灭 进度 {progress}',
+  teleport: '传送 进度 {progress}', crt_off: 'CRT 关闭 进度 {progress}',
+  bend: '弯曲 量 {bendAmount}', elliptical_compress: '椭圆压缩',
+  dumbbell_stretch: '哑铃拉伸', pillow_stretch: '枕形拉伸',
+  hyperbolic_stretch: '双曲拉伸', ring_ripple: '波纹 幅度 {amplitude}',
 };
-
-function getBlockColor(type: string): string {
-  return BLOCK_COLORS[type] ?? 'bg-gray-500';
-}
-
-function getTemplate(type: string): string {
-  return BLOCK_TEMPLATES[type] ?? type;
-}
 
 export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocksViewProps) {
   const [selectedSrcId, setSelectedSrcId] = useState<string | null>(null);
   const [hoverSlot, setHoverSlot] = useState<string | null>(null);
 
-  const sortedNodes = useMemo(() => {
+  const nodeMap = useMemo(() => new Map(graph.nodes.map((n) => [n.id, n])), [graph]);
+
+  // 找出被嵌套的节点 ID（作为其他节点输入的）
+  const nestedIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const node of graph.nodes) {
+      for (const input of Object.values(node.inputs)) {
+        if (typeof input === 'object' && input !== null && 'nodeId' in input) {
+          s.add((input as any).nodeId);
+        }
+      }
+    }
+    return s;
+  }, [graph]);
+
+  // 顶层节点：未被嵌套的 + output
+  const topLevelNodes = useMemo(() => {
     const visited = new Set<string>();
     const result: BlueprintNode[] = [];
-    const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
     function visit(id: string) {
       if (visited.has(id)) return;
       visited.add(id);
       const node = nodeMap.get(id);
       if (!node) return;
+      // 先访问依赖（保证拓扑序）
       for (const input of Object.values(node.inputs)) {
-        if (typeof input === 'object' && 'nodeId' in input) visit(input.nodeId);
+        if (typeof input === 'object' && input !== null && 'nodeId' in input) {
+          const depId = (input as any).nodeId;
+          // 如果依赖未被嵌套（是顶层），则访问
+          if (!nestedIds.has(depId)) visit(depId);
+        }
       }
-      result.push(node);
+      // 只收顶层
+      if (!nestedIds.has(id) || id === graph.outputId) result.push(node);
     }
     visit(graph.outputId);
-    for (const n of graph.nodes) if (!visited.has(n.id)) result.push(n);
+    for (const n of graph.nodes) {
+      if (!nestedIds.has(n.id) && !visited.has(n.id)) result.push(n);
+    }
     return result;
-  }, [graph]);
+  }, [graph, nodeMap, nestedIds]);
 
   const updateNode = (id: string, updates: Partial<BlueprintNode>) => {
     onChange({ ...graph, nodes: graph.nodes.map((n) => (n.id === id ? { ...n, ...updates } : n)) });
@@ -123,15 +114,44 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
 
   const removeNode = (id: string) => {
     if (id === graph.outputId) return;
-    onChange({ ...graph, nodes: graph.nodes.filter((n) => n.id !== id) });
+    // 删除时，同时清除其他节点对它的引用
+    const newNodes = graph.nodes
+      .filter((n) => n.id !== id)
+      .map((n) => {
+        const newInputs = { ...n.inputs };
+        for (const [port, input] of Object.entries(newInputs)) {
+          if (typeof input === 'object' && input !== null && 'nodeId' in input && (input as any).nodeId === id) {
+            delete newInputs[port];
+          }
+        }
+        return { ...n, inputs: newInputs };
+      });
+    onChange({ ...graph, nodes: newNodes });
   };
 
   const connectSlot = (targetNodeId: string, port: string, srcId: string) => {
     if (srcId === targetNodeId) return;
-    const srcNode = graph.nodes.find((n) => n.id === srcId);
+    const srcNode = nodeMap.get(srcId);
     if (!srcNode) return;
+    // 防止循环：检查 src 是否依赖 target
+    const visited = new Set<string>();
+    function hasCycle(id: string): boolean {
+      if (id === targetNodeId) return true;
+      if (visited.has(id)) return false;
+      visited.add(id);
+      const n = nodeMap.get(id);
+      if (!n) return false;
+      for (const input of Object.values(n.inputs)) {
+        if (typeof input === 'object' && input !== null && 'nodeId' in input) {
+          if (hasCycle((input as any).nodeId)) return true;
+        }
+      }
+      return false;
+    }
+    if (hasCycle(srcId)) return;
+
     const output = getDefaultOutputForPort(srcNode.type, port);
-    const target = graph.nodes.find((n) => n.id === targetNodeId);
+    const target = nodeMap.get(targetNodeId);
     if (!target) return;
     updateNode(targetNodeId, {
       inputs: { ...target.inputs, [port]: { nodeId: srcId, output } },
@@ -141,35 +161,32 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
   };
 
   const disconnectSlot = (targetNodeId: string, port: string) => {
-    const target = graph.nodes.find((n) => n.id === targetNodeId);
+    const target = nodeMap.get(targetNodeId);
     if (!target) return;
     const newInputs = { ...target.inputs };
     delete newInputs[port];
     updateNode(targetNodeId, { inputs: newInputs });
   };
 
-  const getInputInfo = (node: BlueprintNode, port: string) => {
-    const input = node.inputs[port];
-    if (!input || typeof input !== 'object' || !('nodeId' in input)) return null;
-    const src = graph.nodes.find((n) => n.id === (input as any).nodeId);
-    return {
-      srcId: (input as any).nodeId,
-      output: (input as any).output ?? 'out',
-      label: src ? getTemplate(src.type).split(' ')[0] : '?',
-    };
-  };
+  // 递归渲染块（含嵌套）
+  const renderBlock = (node: BlueprintNode, depth: number = 0): React.ReactNode => {
+    const isOutput = node.id === graph.outputId;
+    const color = BLOCK_COLORS[node.type] ?? 'bg-gray-500';
+    const outputs = getNodeOutputs(node.type);
+    const isReporter = outputs.length > 0 && node.type !== 'transform';
+    const isSelected = selectedSrcId === node.id;
+    const template = BLOCK_TEMPLATES[node.type] ?? node.type;
 
-  // 渲染块模板，把 {port} 替换为槽位
-  const renderBlockContent = (node: BlueprintNode) => {
-    const template = getTemplate(node.type);
+    // 嵌套块更小
+    const scale = depth > 0 ? 'scale-90 origin-left' : '';
+
     const parts = template.split(/(\{\w+\})/g);
-    return (
-      <span className="text-[11px] font-medium text-white leading-6">
+    const content = (
+      <span className={`font-medium text-white leading-6 ${depth > 0 ? 'text-[10px]' : 'text-[11px]'}`}>
         {parts.map((part, i) => {
           const m = part.match(/\{(\w+)\}/);
           if (!m) return <span key={i}>{part}</span>;
           const port = m[1];
-          // 如果是 params，直接显示可编辑值
           if (port in node.params) {
             const val = node.params[port];
             return (
@@ -182,54 +199,104 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
                   updateNode(node.id, { params: { ...node.params, [port]: v } });
                 }}
                 onClick={(e) => e.stopPropagation()}
-                onDragStart={(e) => e.stopPropagation()}
-                className="inline-block w-12 mx-0.5 bg-white rounded-full px-1.5 text-[10px] text-black text-center outline-none"
+                className="inline-block w-10 mx-0.5 bg-white rounded-full px-1 text-[9px] text-black text-center outline-none"
               />
             );
           }
-          // 否则是输入槽
-          const info = getInputInfo(node, port);
+          // 输入槽：已连接则递归渲染源块，否则显示空槽
+          const input = node.inputs[port];
+          const srcId = typeof input === 'object' && input !== null && 'nodeId' in input ? (input as any).nodeId : null;
+          const srcNode = srcId ? nodeMap.get(srcId) : null;
           const slotKey = `${node.id}:${port}`;
           const isHover = hoverSlot === slotKey;
+
+          if (srcNode) {
+            // 递归嵌套整个块
+            return (
+              <span
+                key={i}
+                className="inline-flex items-center mx-0.5 align-middle"
+                onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'link'; setHoverSlot(slotKey); }}
+                onDragLeave={() => setHoverSlot(null)}
+                onDrop={(e) => {
+                  e.preventDefault(); e.stopPropagation();
+                  const newSrcId = e.dataTransfer.getData('text/blueprint-node-id');
+                  if (newSrcId) connectSlot(node.id, port, newSrcId);
+                }}
+                title="拖入替换，点击✕断开"
+              >
+                {renderBlock(srcNode, depth + 1)}
+                <button
+                  onClick={(e) => { e.stopPropagation(); disconnectSlot(node.id, port); }}
+                  className="ml-0.5 text-white/70 hover:text-white bg-black/30 rounded-full p-0.5"
+                  title="断开"
+                >
+                  <X className="size-2" />
+                </button>
+              </span>
+            );
+          }
+
           return (
             <span
               key={i}
               onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'link'; setHoverSlot(slotKey); }}
               onDragLeave={() => setHoverSlot(null)}
               onDrop={(e) => {
-                e.preventDefault();
-                const srcId = e.dataTransfer.getData('text/blueprint-node-id');
-                if (srcId) connectSlot(node.id, port, srcId);
+                e.preventDefault(); e.stopPropagation();
+                const newSrcId = e.dataTransfer.getData('text/blueprint-node-id');
+                if (newSrcId) connectSlot(node.id, port, newSrcId);
               }}
               onClick={(e) => {
                 e.stopPropagation();
                 if (selectedSrcId) connectSlot(node.id, port, selectedSrcId);
               }}
               className={`
-                inline-flex items-center gap-0.5 mx-0.5 h-6 px-1.5 rounded-full align-middle
-                ${isHover ? 'bg-amber-300 ring-2 ring-amber-200' : ''}
-                ${!isHover && info ? 'bg-white/90' : ''}
-                ${!isHover && !info ? 'bg-black/25 border border-dashed border-white/50 min-w-[24px] justify-center' : ''}
+                inline-flex items-center justify-center mx-0.5 h-5 min-w-[20px] px-1 rounded-full align-middle
+                ${isHover ? 'bg-amber-300 ring-2 ring-amber-200' : 'bg-black/25 border border-dashed border-white/50'}
               `}
-              title={info ? `${info.label}.${info.output}（点✕断开）` : '拖入积木'}
+              title="拖入积木或点选后点击"
             >
-              {info ? (
-                <>
-                  <span className="text-[9px] text-black font-medium max-w-[60px] truncate">{info.label}</span>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); disconnectSlot(node.id, port); }}
-                    className="text-black/50 hover:text-black"
-                  >
-                    <X className="size-2" />
-                  </button>
-                </>
-              ) : (
-                <span className="text-[9px] text-white/60">○</span>
-              )}
+              <span className="text-[9px] text-white/60">○</span>
             </span>
           );
         })}
       </span>
+    );
+
+    return (
+      <div
+        draggable={isReporter && !isOutput && depth === 0}
+        onDragStart={(e) => {
+          if (!isReporter || isOutput || depth > 0) return;
+          e.dataTransfer.setData('text/blueprint-node-id', node.id);
+          e.dataTransfer.effectAllowed = 'link';
+        }}
+        onClick={() => {
+          if (isReporter && !isOutput && depth === 0) {
+            setSelectedSrcId(isSelected ? null : node.id);
+          }
+        }}
+        className={`
+          ${color} shadow-md select-none ${scale}
+          ${isReporter ? 'rounded-full cursor-grab active:cursor-grabbing' : 'rounded-[4px]'}
+          ${isOutput ? 'ring-2 ring-emerald-400' : ''}
+          ${isSelected ? 'ring-2 ring-amber-300' : ''}
+          px-2.5 py-0.5 my-0.5 inline-block max-w-full
+        `}
+      >
+        <div className="flex items-center gap-1.5">
+          {content}
+          {depth === 0 && !isOutput && (
+            <button
+              onClick={(e) => { e.stopPropagation(); removeNode(node.id); }}
+              className="text-white/60 hover:text-white shrink-0"
+            >
+              <X className="size-3" />
+            </button>
+          )}
+        </div>
+      </div>
     );
   };
 
@@ -241,51 +308,12 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
           <button onClick={() => setSelectedSrcId(null)}><X className="size-3" /></button>
         </div>
       )}
-
-      <div className="flex flex-col items-start gap-0">
-        {sortedNodes.map((node) => {
-          const isOutput = node.id === graph.outputId;
-          const color = getBlockColor(node.type);
-          const isReporter = getNodeOutputs(node.type).length > 0 && node.type !== 'transform';
-          const isSelected = selectedSrcId === node.id;
-
-          return (
-            <div
-              key={node.id}
-              draggable={isReporter && !isOutput}
-              onDragStart={(e) => {
-                if (!isReporter || isOutput) return;
-                e.dataTransfer.setData('text/blueprint-node-id', node.id);
-                e.dataTransfer.effectAllowed = 'link';
-              }}
-              onClick={() => {
-                if (isReporter && !isOutput) setSelectedSrcId(isSelected ? null : node.id);
-              }}
-              className={`
-                ${color} shadow-md select-none relative
-                ${isReporter ? 'rounded-full cursor-grab active:cursor-grabbing' : 'rounded-[4px]'}
-                ${isOutput ? 'ring-2 ring-emerald-400' : ''}
-                ${isSelected ? 'ring-2 ring-amber-300' : ''}
-                px-3 py-1 my-0.5 max-w-full
-              `}
-            >
-              <div className="flex items-center gap-2">
-                {renderBlockContent(node)}
-                {!isOutput && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); removeNode(node.id); }}
-                    className="text-white/60 hover:text-white shrink-0"
-                  >
-                    <X className="size-3" />
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
+      <div className="flex flex-col items-start">
+        {topLevelNodes.map((node) => (
+          <div key={node.id}>{renderBlock(node, 0)}</div>
+        ))}
       </div>
-
-      {sortedNodes.length === 0 && (
+      {topLevelNodes.length === 0 && (
         <div className="text-[10px] text-gray-600 text-center py-4">空蓝图</div>
       )}
     </div>
