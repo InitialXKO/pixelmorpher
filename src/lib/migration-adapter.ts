@@ -289,6 +289,22 @@ function puppetToCharacter(
       convertOldCostumeSet(cs, skeleton, parts)
     );
     result.activeCostumeSetId = character.activeCostumeSetId ?? undefined;
+
+    // Sync active costume sprites to node.costumePiece:
+    // unified-render reads node.costumePiece.sprites, not costumeSet.pieces.
+    // Without this, spriteMap extractions never reach the renderer and it
+    // falls back to DEFAULT_MIRROR_MAP (causing S/W flip).
+    const activeCS = result.costumeSets.find(cs => cs.id === result.activeCostumeSetId);
+    if (activeCS) {
+      for (const [nodeId, node] of Object.entries(nodeMap)) {
+        const pieceSprites = (activeCS.pieces as Record<string, { sprites?: Record<number, unknown> }>)[nodeId]?.sprites;
+        if (pieceSprites && node.costumePiece) {
+          for (const [dirIndex, sprite] of Object.entries(pieceSprites)) {
+            (node.costumePiece.sprites as Record<string, unknown>)[dirIndex] = sprite;
+          }
+        }
+      }
+    }
   }
 
   // Latitude

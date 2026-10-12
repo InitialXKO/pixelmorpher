@@ -81,8 +81,9 @@ export type MirrorMap = Partial<Record<DirectionIndex, DirectionIndex>>;
 export const DEFAULT_MIRROR_MAP: MirrorMap = {
   4: 0,  // West → East
   5: 7,  // SW → SE
-  6: 2,  // South stays South (no mirror needed, but can be overridden)
   3: 1,  // NW → NE
+  // NOTE: South (6) intentionally NOT mirrored — S→N is visually wrong.
+  // The old entry `6: 2` contradicted its own comment ("South stays South").
 };
 
 /** Mapping from DirectionIndex (0–7) to PuppetDirection string ('E','NE',...) */

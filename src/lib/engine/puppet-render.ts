@@ -725,15 +725,6 @@ export function resolvePuppetNodeSprite(
   return parts.find(p => p.id === partId) ?? null;
 }
 
-/** 镜像功能已删除，恒返回 false */
-export function shouldMirrorDirection(
-  node: PuppetNode,
-  direction: PuppetDirection,
-): boolean {
-  // 镜像功能已删除
-  return false;
-}
-
 // ============================================================
 // Render Sort Key
 // ============================================================
@@ -784,7 +775,6 @@ interface PuppetRenderItem {
   part: Part | null;
   node: PuppetNode;
   direction: PuppetDirection;
-  mirrored: boolean;
   disc?: JointDiscRenderData;
   depth: number;
 }
@@ -927,7 +917,6 @@ function renderPuppetFrame(
     // This is the same fix applied in renderPuppetNodes (render-pipeline.ts).
     const nodeDirection = direction;
     const part = resolvePuppetNodeSprite(node, nodeDirection, activeCostumeSet, parts);
-    const mirrored = shouldMirrorDirection(node, nodeDirection);
 
     const sortKey = computeRenderSortKey(
       wt.zIndex,
@@ -948,7 +937,6 @@ function renderPuppetFrame(
       part,
       node,
       direction: nodeDirection,
-      mirrored,
       depth: wt.depth,
     });
 
@@ -976,7 +964,6 @@ function renderPuppetFrame(
       part: null,
       node: skeleton.nodes.find(n => n.id === disc.childNodeId)!,
       direction,
-      mirrored: false,
       disc,
       depth: 0,
     });
@@ -1030,18 +1017,7 @@ function renderPuppetFrame(
     // Static mirror: flip the sprite BEFORE rotation so that rotation direction
     // matches the bone/drag direction. Dynamic mirror (rotate-then-flip) reverses
     // the visual rotation direction.
-    if (item.mirrored) {
-      const flippedCanvas = acquireCanvas(partCanvas.width, partCanvas.height);
-      const flipCtx = flippedCanvas.getContext('2d')!;
-      flipCtx.clearRect(0, 0, flippedCanvas.width, flippedCanvas.height);
-      flipCtx.translate(flippedCanvas.width, 0);
-      flipCtx.scale(-1, 1);
-      flipCtx.drawImage(partCanvas, 0, 0);
-      releaseCanvas(partCanvas);
-      partCanvas = flippedCanvas;
-      // Flip pivot: pivotX measured from left edge becomes (width - pivotX) after horizontal flip
-      partPivotX = partCanvas.width - partPivotX;
-    }
+    // 镜像功能已彻底删除，不再翻转
 
     // Apply pixel-perfect rotation
     // IMPORTANT: After rotation, the pivot position in the output canvas changes

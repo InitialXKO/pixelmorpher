@@ -29,7 +29,7 @@ import type {
   PartAnimationModifier,
 } from '../types';
 import { computeDirectionDrawOrder } from '../store/puppet-slice';
-import { renderPixelPerfectRotation, shouldMirrorDirection } from './puppet-render';
+import { renderPixelPerfectRotation } from './puppet-render';
 import { hexToRgbCached } from './color-utils';
 import { acquireCanvas, releaseCanvas, canCachePartPixels, getPartPixelCache } from './canvas-pool';
 import { applyPixelModifiers, isPixelDeformModifier } from './pixel-modifiers';
@@ -1107,19 +1107,7 @@ function renderOnionSkin(
 // ============================================================
 
 /** Apply static horizontal mirror to a part canvas before rotation */
-function mirrorPartCanvas(
-  partCanvas: HTMLCanvasElement,
-  partPivotX: number,
-): { canvas: HTMLCanvasElement; pivotX: number } {
-  const flippedCanvas = acquireCanvas(partCanvas.width, partCanvas.height);
-  const flipCtx = flippedCanvas.getContext('2d')!;
-  flipCtx.clearRect(0, 0, flippedCanvas.width, flippedCanvas.height);
-  flipCtx.translate(flippedCanvas.width, 0);
-  flipCtx.scale(-1, 1);
-  flipCtx.drawImage(partCanvas, 0, 0);
-  releaseCanvas(partCanvas);
-  return { canvas: flippedCanvas, pivotX: flippedCanvas.width - partPivotX };
-}
+/** 镜像功能已彻底删除，此函数不再存在 */
 
 /** Build a part keyframe index for the current frame, keyed by partId */
 function buildPartKfIndex(partKeyframes: Keyframe[] | undefined, currentFrame: number): Map<string, Keyframe> {
@@ -1217,9 +1205,6 @@ export function renderPuppetNodes(
     const wt = worldTransforms.get(node.id);
     if (!wt) continue;
 
-    const mirrorDirection = skeleton.currentDirection;
-    const shouldMirror = shouldMirrorDirection(node, mirrorDirection);
-
     ctx.save();
     // NOTE: 不要在此 translate——drawX/drawY 已是画布绝对坐标（computePuppetWorldTransforms
     // 返回绝对坐标），再 translate 会造成双重偏移（见 F3）。
@@ -1234,11 +1219,7 @@ export function renderPuppetNodes(
     let partPivotY = part.pivotY + partCanvasResult.offsetY;
 
     // Static mirror: flip before rotation so rotation direction matches bone/drag
-    if (shouldMirror) {
-      const mirrored = mirrorPartCanvas(partCanvas, partPivotX);
-      partCanvas = mirrored.canvas;
-      partPivotX = mirrored.pivotX;
-    }
+    // 镜像功能已彻底删除，不再翻转
 
     // 4× upscale pixel-perfect rotation
     const rotResult = renderPixelPerfectRotation(partCanvas, wt.worldAngle, wt.worldStretch, partPivotX, partPivotY);
