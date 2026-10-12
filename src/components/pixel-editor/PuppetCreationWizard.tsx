@@ -217,8 +217,8 @@ const TEST_UPPER_BODY_TEMPLATE: PuppetTemplate = {
     {
       name: 'torso', sockets: [
         { name: 'neck', localX: 0, localY: -2 },
-        { name: 'shoulder_L', localX: -5, localY: 0 },
-        { name: 'shoulder_R', localX: 5, localY: 0 },
+        { name: 'shoulderA', localX: -5, localY: 0 },
+        { name: 'shoulderB', localX: 5, localY: 0 },
       ], plug: null, defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
       crossSectionTop: 8, crossSectionBottom: 6, zIndex: 5,
     },
@@ -228,12 +228,12 @@ const TEST_UPPER_BODY_TEMPLATE: PuppetTemplate = {
       crossSectionTop: 6, crossSectionBottom: 5, zIndex: 10,
     },
     {
-      name: 'upper_arm_L', sockets: [], plug: { socketName: 'shoulder_L', localX: 0, localY: 0 },
+      name: 'armA', sockets: [], plug: { socketName: 'shoulderA', localX: 0, localY: 0 },
       defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
       crossSectionTop: 3, crossSectionBottom: 3, zIndex: 6,
     },
     {
-      name: 'upper_arm_R', sockets: [], plug: { socketName: 'shoulder_R', localX: 0, localY: 0 },
+      name: 'armB', sockets: [], plug: { socketName: 'shoulderB', localX: 0, localY: 0 },
       defaultAngle: 0, defaultStretch: 1, defaultOffsetX: 0, defaultOffsetY: 0,
       crossSectionTop: 3, crossSectionBottom: 3, zIndex: 4,
     },
