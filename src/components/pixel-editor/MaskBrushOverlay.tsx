@@ -22,9 +22,10 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   const [brushSize, setBrushSize] = useState(8);
   const [extractedPart, setExtractedPart] = useState<Part | null>(null);
   const [lastUpdateInfo, setLastUpdateInfo] = useState<string | null>(null);
-  // 色键取色
+  // 色键取色（跨肢体共享，存 editor store）
   const [isPicking, setIsPicking] = useState(false);
-  const [keyColor, setKeyColor] = useState<{ r: number; g: number; b: number } | null>(null);
+  const keyColor = useEditorStore((s) => s.chromaKeyColor);
+  const setKeyColor = useEditorStore((s) => s.setChromaKeyColor);
   // 色键容差（固定值，无 UI）
   const CHROMA_TOLERANCE = 30;
 
