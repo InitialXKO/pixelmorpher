@@ -537,7 +537,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }));
 
     const currentFrame = projectStore.currentFrame;
-    const resolvedMods = projectStore.resolvePartEditModifiers(partId, currentFrame);
+    // Part 已退化为纯精灵数据，不再自带 editModifiers（重构时移除），
+    // resolvePartEditModifiers 已不存在，直接用空数组。
+    const resolvedMods: any[] = [];
 
     set({
       editMode: 'part_edit',
