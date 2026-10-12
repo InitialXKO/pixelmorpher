@@ -38,7 +38,7 @@ export type PuppetSlice = {
   setPuppetLatitude: (skeletonId: string, latitude: number) => void;
 
   // ---- Puppet Node CRUD ----
-  addPuppetNode: (skeletonId: string, name: string, opts?: Partial<Pick<PuppetNode, 'plug' | 'sockets' | 'spritePartId' | 'angle' | 'stretch' | 'offsetX' | 'offsetY' | 'zIndex' | 'crossSectionTop' | 'crossSectionBottom' | 'color' | 'visible'>>) => PuppetNode;
+  addPuppetNode: (skeletonId: string, name: string, opts?: Partial<Pick<PuppetNode, 'plug' | 'sockets' | 'spritePartId' | 'angle' | 'stretch' | 'offsetX' | 'offsetY' | 'zIndex' | 'crossSectionTop' | 'crossSectionBottom' | 'color' | 'visible' | 'mirrorFrom'>>) => PuppetNode;
   removePuppetNode: (skeletonId: string, nodeId: string) => void;
   updatePuppetNode: (skeletonId: string, nodeId: string, updates: Partial<PuppetNode>) => void;
   // ---- Z-order（Word 式相对操作） ----
@@ -138,14 +138,23 @@ export function computeDirectionDrawOrder(
   skeleton: PuppetSkeleton,
   interpolatedZIndex?: Map<string, number>,
 ): PuppetNode[] {
+  const direction = skeleton.currentDirection;
   const nodes = [...skeleton.nodes];
 
   // Base z-index ordering (use interpolated keyframe zIndex if available)
   const getZ = (n: PuppetNode) => interpolatedZIndex?.get(n.id) ?? n.zIndex;
   const sorted = nodes.sort((a, b) => getZ(a) - getZ(b));
 
+  // Direction-dependent adjustments
+  const isLeft = direction === 'NW' || direction === 'W' || direction === 'SW';
+
   return sorted.map(node => {
-    const adjustedZ = getZ(node);
+    // Flip z-index for mirrored limbs in left-facing directions
+    let adjustedZ = getZ(node);
+    if (isLeft && node.mirrorFrom) {
+      // Swap left/right z-ordering for mirrored nodes
+      adjustedZ = 1000 - adjustedZ;
+    }
     return { ...node, zIndex: adjustedZ };
   }).sort((a, b) => a.zIndex - b.zIndex);
 }
@@ -279,6 +288,7 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
         : null,
       spritePartId: resolvedSpritePartId,
       directionSprites: {},
+      mirrorFrom: opts?.mirrorFrom ?? false,
       angle: opts?.angle ?? 0,
       stretch: opts?.stretch ?? 1,
       offsetX: opts?.offsetX ?? 0,

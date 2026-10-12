@@ -937,6 +937,8 @@ export interface PuppetNode {
   spritePartId: string | null;
   /** Direction-specific sprite overrides: direction → partId */
   directionSprites: Partial<Record<PuppetDirection, string>>;
+  /** Mirror-from direction: if set, missing direction sprites mirror from the opposite side */
+  mirrorFrom: boolean;
   /** Current rotation angle (degrees) */
   angle: number;
   /** Current stretch factor along local Y axis */

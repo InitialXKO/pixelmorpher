@@ -279,6 +279,19 @@ export default function NodePropertiesEditor({
           </div>
         </div>
 
+        {/* Mirror toggle */}
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={selectedNode.mirrorFrom}
+            onChange={(e) =>
+              handleUpdateNode(selectedNode.id, { mirrorFrom: e.target.checked })
+            }
+            className="accent-cyan-500"
+          />
+          <Label className="text-[9px] text-gray-500">镜像方向精灵</Label>
+        </div>
+
         {/* Node Color */}
         <div className="flex items-center gap-2">
           <Palette className="size-2.5 text-gray-600" />

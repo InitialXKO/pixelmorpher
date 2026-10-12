@@ -23,6 +23,7 @@ import type {
   ModifierInstance,
   PartAnimationModifier,
 } from '../types';
+import { PUPPET_DIRECTIONS, DIRECTION_MIRROR } from '../types';
 import { hexToRgbCached } from './color-utils';
 import { acquireCanvas, releaseCanvas } from './canvas-pool';
 import { getRotationCacheKey, getCachedRotation, setCachedRotation } from './render-cache';
@@ -712,9 +713,17 @@ export function resolvePuppetNodeSprite(
   // Step 2: Check direction-specific sprite override
   if (!partId && node.directionSprites) {
     partId = node.directionSprites[direction] ?? null;
+
+    // Step 3: Mirror fallback
+    if (!partId && node.mirrorFrom) {
+      const mirrorDir = DIRECTION_MIRROR[direction];
+      if (mirrorDir !== direction) {
+        partId = node.directionSprites[mirrorDir] ?? null;
+      }
+    }
   }
 
-  // Step 3: Fall back to default sprite
+  // Step 4: Fall back to default sprite
   if (!partId) {
     partId = node.spritePartId;
   }
@@ -727,20 +736,47 @@ export function resolvePuppetNodeSprite(
 /**
  * Check if a direction should be mirrored for a given node.
  *
- * 镜像功能已彻底删除：恒返回 false。保留函数签名以免改动两处调用点
- * （puppet-render.ts 的精灵渲染、render-pipeline.ts 的统一管线），
- * 它们内部的 scale(-1, 1) 分支因此永远不会执行。
+ * Mirror logic:
+ * 1. mirrorFrom must be true (left-side limbs that should mirror the right side)
+ * 2. If directionSprites has an explicit entry for this direction, no mirror needed
+ *    (the user provided a dedicated sprite for this direction)
+ * 3. Otherwise, mirror — flip the resolved sprite horizontally
+ *
+ * IMPORTANT DESIGN NOTES:
+ * - mirrorFrom means "this node's sprite is derived from the opposite-side limb".
+ *   Therefore it should be horizontally flipped in ALL directions, not just left-facing ones.
+ *   The previous logic only mirrored in left-facing directions (NW, W, SW), which caused
+ *   sprites to appear un-flipped in S/N/E/SE/NE directions — making paired limbs like
+ *   left/right thighs show identical (non-mirrored) sprites when facing South, which
+ *   looked wrong when limbs were rotated to the same or symmetric world angles.
+ * - The costume set's spriteMap is NOT checked here because it typically maps
+ *   ALL directions to the same spritePartId (auto-generated default). The costume
+ *   set is about WHICH sprite to use, not WHETHER to mirror it. If a user wants
+ *   a per-direction non-mirrored sprite, they should set directionSprites.
+ * - This function is called AFTER resolvePuppetNodeSprite, which already handles
+ *   the costume set's mirror fallback for sprite SELECTION.
+ * - Draw order (z-index) is handled separately by computeDirectionDrawOrder(),
+ *   which swaps z-indices for mirrorFrom nodes in left-facing directions.
  *
  * @param node The puppet node
  * @param direction Current direction
- * @returns 恒为 false
+ * @returns True if this direction should be rendered as a mirror (horizontal flip)
  */
 export function shouldMirrorDirection(
   node: PuppetNode,
   direction: PuppetDirection,
 ): boolean {
-  // 镜像功能已彻底删除
-  return false;
+  if (!node.mirrorFrom) return false;
+
+  // If this direction has an explicit per-direction sprite override, no mirror needed
+  // (the user provided a dedicated sprite for this specific direction)
+  if (node.directionSprites && node.directionSprites[direction]) return false;
+
+  // For mirrorFrom nodes without a dedicated sprite for this direction,
+  // always mirror (horizontal flip) regardless of which direction the character faces.
+  // This ensures left-side limbs display the horizontally-flipped version of the
+  // right-side sprite in all directions (S, N, E, W, etc.).
+  return true;
 }
 
 // ============================================================

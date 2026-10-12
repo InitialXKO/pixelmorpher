@@ -6,7 +6,7 @@ import { Slider } from '@/components/ui/slider';
 import { ArrowLeft, ArrowRight, X, Upload } from 'lucide-react';
 import { useEditorStore, useProjectStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
-import type { PixelGrid } from '@/lib/types';
+import type { PixelGrid, PixelColor } from '@/lib/types';
 
 // ============================================================
 // RefAssemblyWizard - 参考图装配向导
@@ -116,7 +116,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const [newLimbSocketId, setNewLimbSocketId] = useState('');
   const [newLimbPlugX, setNewLimbPlugX] = useState(0);
   const [newLimbPlugY, setNewLimbPlugY] = useState(0);
-  // 已处理的节点 ID → 方式 ('mask' | 'copy')
+  // 已处理的节点 ID → 方式 ('mask' | 'mirror')
   const [processedNodes, setProcessedNodes] = useState<Map<string, string>>(new Map());
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -251,7 +251,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     }, 100);
   };
 
-  // 找对侧源：按名称匹配 left/right/L/R
+  // 找镜像源：按名称匹配 left/right/L/R
   const findMirrorSource = (node: { id: string; name: string }): string | null => {
     const name = node.name.toLowerCase();
     let mirrorName: string | null = null;
@@ -568,20 +568,27 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                         ? projectStore.parts.find((p) => p.id === srcNode.spritePartId)
                         : null;
                       if (!srcPart) return;
-                      // 复制对侧精灵：直接复制像素（镜像功能已删除，不翻转）
+                      // 真镜像：水平翻转像素，建新 Part
                       const w = srcPart.width;
                       const h = srcPart.height;
-                      const copied: PixelGrid = srcPart.pixels.map((row) => [...row]);
+                      const flipped: PixelGrid = [];
+                      for (let y = 0; y < h; y++) {
+                        const row: PixelColor[] = [];
+                        for (let x = 0; x < w; x++) {
+                          row.push(srcPart.pixels[y][w - 1 - x]);
+                        }
+                        flipped.push(row);
+                      }
                       const newPart = projectStore.addPart(
-                        `${targetNode.name}（复制）`,
+                        `${targetNode.name}（镜像）`,
                         w,
                         h,
                         {
-                          pivotX: srcPart.pivotX,
+                          pivotX: w - 1 - srcPart.pivotX,
                           pivotY: srcPart.pivotY,
                         }
                       );
-                      projectStore.setPartPixels(newPart.id, copied);
+                      projectStore.setPartPixels(newPart.id, flipped);
                       // 写进工作服装的 spriteMap，不改模板节点
                       if (workingCostumeId && selectedCharacterId) {
                         const dir = activeSkeleton.currentDirection ?? 'S';
@@ -592,16 +599,20 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                           dir,
                           newPart.id
                         );
+                        // 镜像后的像素已是对应侧正确的，关闭 mirrorFrom 避免渲染时再翻
+                        projectStore.updatePuppetNode(activeSkeleton.id, targetNode.id, {
+                          mirrorFrom: false,
+                        });
                       }
-                      setProcessedNodes((m) => new Map(m).set(targetNode.id, 'copy'));
+                      setProcessedNodes((m) => new Map(m).set(targetNode.id, 'mirror'));
                     }}
                   >
-                    复制对侧
+                    镜像对侧
                   </Button>
                 </div>
                 {processedNodes.get(targetNode.id) && (
                   <div className="text-[10px] text-emerald-400">
-                    ✓ 已处理（{processedNodes.get(targetNode.id) === 'mask' ? '遮罩' : '复制'}）
+                    ✓ 已处理（{processedNodes.get(targetNode.id) === 'mask' ? '遮罩' : '镜像'}）
                   </div>
                 )}
               </div>
@@ -624,7 +635,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   <div key={n.id} className="flex items-center gap-2 text-xs px-2 py-1 rounded bg-white/5">
                     <span className="flex-1 text-gray-300">{n.name}</span>
                     <span className={status ? 'text-emerald-400' : 'text-gray-600'}>
-                      {status === 'mask' ? '✓ 遮罩' : status === 'copy' ? '✓ 复制' : '○ 未处理'}
+                      {status === 'mask' ? '✓ 遮罩' : status === 'mirror' ? '✓ 镜像' : '○ 未处理'}
                     </span>
                   </div>
                 );

@@ -26,6 +26,8 @@ export function acquireCanvas(w: number, h: number): HTMLCanvasElement {
       c.width = w;
       c.height = h;
     }
+    // 重置 transform，防止复用的 canvas 残留翻转/旋转
+    c.getContext('2d')!.setTransform(1, 0, 0, 1, 0, 0);
     return c;
   }
   const nc = document.createElement('canvas');

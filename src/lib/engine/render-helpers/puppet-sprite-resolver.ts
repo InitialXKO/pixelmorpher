@@ -7,6 +7,7 @@
  */
 
 import type { Part, PuppetSkeleton, PuppetCharacter, PuppetDirection } from '../../types';
+import { DIRECTION_MIRROR } from '../../types';
 
 export interface SpriteMeta {
   partId: string | null;
@@ -36,7 +37,7 @@ export function resolveSpriteParts(
   const direction = skeleton.currentDirection;
 
   for (const node of skeleton.nodes) {
-    const resolved = resolveNodeSprite(node.id, direction, activeCostumeSet, node.directionSprites, node.spritePartId ?? undefined);
+    const resolved = resolveNodeSprite(node.id, direction, activeCostumeSet, node.directionSprites, node.spritePartId ?? undefined, node.mirrorFrom);
     spritePartMap.set(node.id, resolved.partId ? (partsById.get(resolved.partId) ?? null) : null);
     spriteMetaMap.set(node.id, { partId: resolved.partId, direction, source: resolved.source });
   }
@@ -57,6 +58,7 @@ function resolveNodeSprite(
   activeCostumeSet: { spriteMap: Record<string, string> } | null | undefined,
   directionSprites: Partial<Record<PuppetDirection, string>> | undefined,
   spritePartId: string | undefined,
+  mirrorFrom: boolean | undefined,
 ): SpriteResolution {
   // 1. Check costume set spriteMap first (nodeId:direction)
   if (activeCostumeSet) {
@@ -71,6 +73,37 @@ function resolveNodeSprite(
     return { partId: directionSprites[direction]!, source: `directionSprites:${direction}` };
   }
 
-  // 3. Fall back to node.spritePartId
+  // 3. Handle mirror direction fallback for sprite selection
+  if (mirrorFrom) {
+    const mirrorResult = tryMirrorFallback(nodeId, direction, activeCostumeSet, directionSprites);
+    if (mirrorResult) return mirrorResult;
+  }
+
+  // 4. Fall back to node.spritePartId
   return { partId: spritePartId ?? null, source: spritePartId ? 'spritePartId' : 'none' };
+}
+
+function tryMirrorFallback(
+  nodeId: string,
+  direction: PuppetDirection,
+  activeCostumeSet: { spriteMap: Record<string, string> } | null | undefined,
+  directionSprites: Partial<Record<PuppetDirection, string>> | undefined,
+): SpriteResolution | null {
+  const mirrorDir = DIRECTION_MIRROR[direction];
+  if (mirrorDir === direction) return null; // S and N mirror to themselves
+
+  // Check costume set for mirror direction
+  if (activeCostumeSet) {
+    const mirrorKey = `${nodeId}:${mirrorDir}`;
+    if (activeCostumeSet.spriteMap[mirrorKey]) {
+      return { partId: activeCostumeSet.spriteMap[mirrorKey], source: `costumeMirror:${mirrorKey}` };
+    }
+  }
+
+  // Check directionSprites for mirror direction
+  if (directionSprites && directionSprites[mirrorDir]) {
+    return { partId: directionSprites[mirrorDir]!, source: `directionSpritesMirror:${mirrorDir}` };
+  }
+
+  return null;
 }

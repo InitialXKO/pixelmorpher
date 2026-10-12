@@ -309,6 +309,7 @@ export default function PuppetAssetPanel() {
                         // 没有节点时直接创建根节点
                         const store = useProjectStore.getState();
                         const newNode = store.addPuppetNode(activePuppetSkeletonId, `节点_1`, {
+                          mirrorFrom: false,
                           crossSectionTop: 4,
                           crossSectionBottom: 3,
                           zIndex: 0,
@@ -427,6 +428,7 @@ export default function PuppetAssetPanel() {
                           ? { socketId: addNodeDialog.socketId, localX: 0, localY: 0 }
                           : undefined;
                         const newNode = store.addPuppetNode(activePuppetSkeletonId!, nodeName, {
+                          mirrorFrom: false,
                           crossSectionTop: 4,
                           crossSectionBottom: 3,
                           zIndex: 0,

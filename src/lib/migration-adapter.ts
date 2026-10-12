@@ -22,7 +22,7 @@ import type {
 import {
   createDefaultNode, createDefaultCharacter, createDefaultSocket,
   createDefaultAttachment, createDefaultCostumePiece, createDefaultCostumeSet,
-  pxToSub,
+  pxToSub, DEFAULT_MIRROR_MAP,
 } from './unified-types';
 
 // Import old types for conversion
@@ -550,6 +550,11 @@ function convertDirectionSprites(
         plug: { x: pxToSub(part.pivotX ?? 0), y: pxToSub(part.pivotY ?? 0) },
       };
     }
+  }
+
+  // Mirror config
+  if (pNode.mirrorFrom) {
+    piece.mirrorMap = { ...DEFAULT_MIRROR_MAP };
   }
 
   // Cross sections
