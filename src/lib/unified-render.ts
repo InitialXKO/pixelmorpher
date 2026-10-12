@@ -473,7 +473,8 @@ function computeZOrder(
     const node = character.nodes[nodeId];
     if (!node || !node.visible) return;
 
-    nodeZ.set(nodeId, node.zIndex + zCounter);
+    // zIndex 为主排序键（×1000），树顺序只用于同 zIndex 时的稳定排序
+    nodeZ.set(nodeId, (node.zIndex ?? 0) * 1000 + zCounter);
     zCounter += 100; // Leave room for disc insertion
 
     // If this node has a generated disc, its Z goes BELOW both parent and child
