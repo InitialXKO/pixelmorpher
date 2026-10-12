@@ -114,7 +114,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const [newLimbSocketId, setNewLimbSocketId] = useState('');
   const [newLimbPlugX, setNewLimbPlugX] = useState(0);
   const [newLimbPlugY, setNewLimbPlugY] = useState(0);
-  // 已处理的节点 ID → 方式 ('mask' | 'template' | 'mirror')
+  // 已处理的节点 ID → 方式 ('mask' | 'mirror')
   const [processedNodes, setProcessedNodes] = useState<Map<string, string>>(new Map());
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -604,17 +604,6 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                     size="sm"
                     variant="ghost"
                     className="flex-1 text-[11px]"
-                    onClick={() => {
-                      // 用模板：标记为已处理，不替换精灵
-                      setProcessedNodes((m) => new Map(m).set(targetNode.id, 'template'));
-                    }}
-                  >
-                    用模板
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="flex-1 text-[11px]"
                     disabled={!findMirrorSource(targetNode)}
                     onClick={() => {
                       const src = findMirrorSource(targetNode);
@@ -665,7 +654,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 </div>
                 {processedNodes.get(targetNode.id) && (
                   <div className="text-[10px] text-emerald-400">
-                    ✓ 已处理（{processedNodes.get(targetNode.id) === 'mask' ? '遮罩' : processedNodes.get(targetNode.id) === 'template' ? '模板' : '镜像'}）
+                    ✓ 已处理（{processedNodes.get(targetNode.id) === 'mask' ? '遮罩' : '镜像'}）
                   </div>
                 )}
               </div>
@@ -688,7 +677,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   <div key={n.id} className="flex items-center gap-2 text-xs px-2 py-1 rounded bg-white/5">
                     <span className="flex-1 text-gray-300">{n.name}</span>
                     <span className={status ? 'text-emerald-400' : 'text-gray-600'}>
-                      {status === 'mask' ? '✓ 遮罩' : status === 'template' ? '✓ 模板' : status === 'mirror' ? '✓ 镜像' : '○ 未处理'}
+                      {status === 'mask' ? '✓ 遮罩' : status === 'mirror' ? '✓ 镜像' : '○ 未处理'}
                     </span>
                   </div>
                 );
