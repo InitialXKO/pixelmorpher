@@ -50,7 +50,7 @@ export function interpolateNodeKeyframes(
 
   // 两遍求值：第一遍算出所有节点的 transform，第二遍让 nodeRef 能读到
   // （无 nodeRef 的蓝图两遍结果一致，有 nodeRef 的第二遍才拿到跨节点值）
-  const nodeOutputs = new Map<string, { rotation: number; translateX: number; translateY: number; scaleX: number; scaleY: number }>();
+  const nodeOutputs = new Map<string, { rotation: number; translateX: number; translateY: number; scaleX: number; scaleY: number; zIndex: number }>();
 
   for (let pass = 0; pass < 2; pass++) {
   for (const node of skeleton.nodes) {
@@ -75,6 +75,8 @@ export function interpolateNodeKeyframes(
       values.offsetX += t.translateX;
       values.offsetY += t.translateY;
       values.stretch *= t.scaleY;
+      // zIndex：蓝图输出直接覆盖（非累加）
+      if (t.zIndex !== 0) values.zIndex = t.zIndex;
       // 记录供第二遍的 nodeRef 读取
       if (pass === 0) {
         nodeOutputs.set(node.id, {
@@ -83,6 +85,7 @@ export function interpolateNodeKeyframes(
           translateY: t.translateY,
           scaleX: t.scaleX,
           scaleY: t.scaleY,
+          zIndex: t.zIndex,
         });
       }
     } else {
