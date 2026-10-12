@@ -13,6 +13,7 @@ import type {
 import { asNumber, isRef, num } from './ir';
 import { computeGaitTransform } from '../engine/animation-handlers/shared-helpers';
 import { evalExpression } from '../expression-parser';
+import type { ModifierParamValue, PartAnimationModifier } from '../types';
 
 /**
  * Cubic-bezier 缓动求值（借鉴 keyframe-engine）。
@@ -550,8 +551,109 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   expression: '表达式',
   // 输出
   transform: '变换输出',
+  // 像素修改器
+  texture_scroll: '纹理滚动',
+  wave_deform: '波形变形',
+  contour_scroll: '轮廓滚动',
+  reveal_hide: '显现/隐藏',
+  shatter_dissolve: '碎裂消散',
+  annihilate: '湮灭',
+  teleport: '传送',
+  crt_off: 'CRT 关闭',
+  bend: '弯曲',
+  elliptical_compress: '椭圆压缩',
+  dumbbell_stretch: '哑铃拉伸',
+  pillow_stretch: '枕形拉伸',
+  hyperbolic_stretch: '双曲拉伸',
+  ring_ripple: '环形波纹',
 };
 
 export function getBlueprintNodeLabel(type: string): string {
   return BLUEPRINT_NODE_LABELS[type] ?? type;
+}
+
+// ============================================================
+// 像素节点求值器 — 输入/输出 PixelGrid
+// 用于蓝图中的像素修改器节点（texture_scroll 等）
+// ============================================================
+
+// 像素节点类型集合（汇点：只接受数值输入，不输出）
+const PIXEL_NODE_TYPES = new Set([
+  'texture_scroll', 'wave_deform', 'contour_scroll', 'reveal_hide',
+  'shatter_dissolve', 'annihilate', 'teleport', 'crt_off',
+  'bend', 'elliptical_compress', 'dumbbell_stretch',
+  'pillow_stretch', 'hyperbolic_stretch', 'ring_ripple',
+]);
+
+
+/**
+ * 从蓝图中提取像素修改器配置
+ * 像素节点是汇点：接受数值输入（驱动 params），不输出
+ * 返回 PartAnimationModifier[]，供渲染管线应用
+ */
+export function extractPixelModifiers(
+  graph: BlueprintGraph,
+  ctx: BlueprintEvalContext,
+): PartAnimationModifier[] {
+  const sorted = topoSort(graph);
+  const values = new Map<string, Record<string, BlueprintValue>>();
+  const result: PartAnimationModifier[] = [];
+
+  // 先求值所有数值节点（复用主求值逻辑）
+  for (const node of sorted) {
+    const evaluator = EVALUATORS[node.type];
+    if (!evaluator) continue;
+    const resolvedInputs: Record<string, BlueprintValue> = {};
+    for (const [port, input] of Object.entries(node.inputs)) {
+      if (isRef(input)) {
+        const srcVals = values.get(input.nodeId);
+        const v = srcVals?.[input.output ?? 'out'];
+        if (v !== undefined) resolvedInputs[port] = v;
+      } else if (input !== undefined) {
+        resolvedInputs[port] = input as BlueprintValue;
+      }
+    }
+    try {
+      values.set(node.id, evaluator(node, resolvedInputs, ctx));
+    } catch {
+      // 忽略求值失败的节点
+    }
+  }
+
+  // 提取像素节点，合并 inputs 覆盖 params
+  for (const node of sorted) {
+    if (!isPixelBlueprintNode(node.type)) continue;
+    const nodeVals = values.get(node.id) ?? {};
+    const params: Record<string, ModifierParamValue> = { ...node.params };
+
+    // inputs 中的数值覆盖同名 params（实现 A：蓝图驱动像素参数）
+    for (const [port, input] of Object.entries(node.inputs)) {
+      if (port === 't') continue; // t 是时间，不覆盖
+      const v = isRef(input)
+        ? values.get(input.nodeId)?.[input.output ?? 'out']
+        : (input as BlueprintValue);
+      if (v !== undefined) {
+        params[port] = asNumber(v);
+      }
+    }
+
+    result.push({
+      id: node.id,
+      type: node.type as any,
+      enabled: true,
+      collapsed: false,
+      params,
+      startFrame: -1,
+      endFrame: -1,
+      fadeInFrames: 0,
+      fadeOutFrames: 0,
+    } as PartAnimationModifier);
+  }
+
+  return result;
+}
+
+/** 检查是否为像素节点类型 */
+export function isPixelBlueprintNode(type: string): boolean {
+  return PIXEL_NODE_TYPES.has(type);
 }

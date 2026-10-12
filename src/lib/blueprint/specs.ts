@@ -149,6 +149,79 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     outputs: ['outX', 'outY', 'outRotation', 'outScaleX', 'outScaleY'],
     params: ['amplitude', 'period', 'phase', 'expressionX', 'expressionY', 'expressionRotation', 'expressionScale'],
   },
+
+  // ---- 像素修改器（汇点：只接受数值输入，不输出） ----
+  // 这些节点直接作用于像素，params 可由其他节点驱动
+  texture_scroll: {
+    inputs: ['t', 'scrollSpeed'],
+    outputs: [],
+    params: ['scrollDirection', 'scrollSpeed', 'scrollMode'],
+  },
+  wave_deform: {
+    inputs: ['t', 'amplitude', 'frequency'],
+    outputs: [],
+    params: ['amplitude', 'frequency', 'phase', 'waveType'],
+  },
+  contour_scroll: {
+    inputs: ['t', 'scrollSpeed'],
+    outputs: [],
+    params: ['scrollSpeed', 'scrollDirection'],
+  },
+  reveal_hide: {
+    inputs: ['t', 'progress'],
+    outputs: [],
+    params: ['revealDirection', 'progress'],
+  },
+  shatter_dissolve: {
+    inputs: ['t', 'progress'],
+    outputs: [],
+    params: ['shatterSize', 'progress'],
+  },
+  annihilate: {
+    inputs: ['t', 'progress'],
+    outputs: [],
+    params: ['progress', 'direction'],
+  },
+  teleport: {
+    inputs: ['t', 'progress'],
+    outputs: [],
+    params: ['progress'],
+  },
+  crt_off: {
+    inputs: ['t', 'progress'],
+    outputs: [],
+    params: ['progress'],
+  },
+  bend: {
+    inputs: ['t', 'bendAmount'],
+    outputs: [],
+    params: ['bendAmount', 'bendDirection'],
+  },
+  elliptical_compress: {
+    inputs: ['t', 'compressAmount'],
+    outputs: [],
+    params: ['compressAmount'],
+  },
+  dumbbell_stretch: {
+    inputs: ['t', 'stretchAmount'],
+    outputs: [],
+    params: ['stretchAmount'],
+  },
+  pillow_stretch: {
+    inputs: ['t', 'stretchAmount'],
+    outputs: [],
+    params: ['stretchAmount'],
+  },
+  hyperbolic_stretch: {
+    inputs: ['t', 'stretchAmount'],
+    outputs: [],
+    params: ['stretchAmount'],
+  },
+  ring_ripple: {
+    inputs: ['t', 'amplitude', 'progress'],
+    outputs: [],
+    params: ['amplitude', 'frequency', 'progress'],
+  },
 };
 
 /**
