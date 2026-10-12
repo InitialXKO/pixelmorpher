@@ -111,9 +111,10 @@ export const selectToolHandler: ToolHandler = {
 //   拖动肢体         = 绕轴心旋转
 //   Shift + 拖动     = 移动该节点
 //   Alt + 拖动       = 移动该节点所插入的父节点插槽在父节点中的位置（rig）
+//   Ctrl + 拖动      = 移动该部件枢轴在该部件中的位置
+//   Ctrl + 点击      = 编辑该节点精灵像素
 //   Q / E            = 选中节点 ±15°
 //   WASD / 方向键    = 移动选中节点 1px（Alt+方向键 = 移动整体）
-//   Ctrl + 点击      = 编辑该节点精灵（留在木偶工作区）
 //
 // 关键语义：perform 阶段的所有操控只写 PuppetNodeKeyframe，
 // 永不修改节点的 rest pose（angle/offsetX/... 的静止值只在 rig 阶段编辑）。
@@ -157,17 +158,37 @@ export const puppetHandler: ToolHandler = {
     // 同步到操控会话（PerformPanel 肢体列表高亮用）
     try { usePuppetSessionStore.setState({ performNodeId: node.id }); } catch { /* noop */ }
 
-    // Ctrl+点击：编辑该节点精灵 —— 留在木偶工作区，不跳走
+    // Ctrl+点击/拖动：点击=编辑该节点精灵，拖动=移动部件枢轴在部件中的位置
     if (e.ctrlKey || e.metaKey) {
       const activeCostume = character.activeCostumeSetId
         ? character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId) ?? null
         : null;
       const direction = skeleton.currentDirection || 'S';
       const resolvedPart = resolvePuppetNodeSprite(node, direction, activeCostume, project.parts);
-      if (resolvedPart) {
-        s.editorStore.getState().selectPart(resolvedPart.id);
-        s.editorStore.getState().enterPartEditMode(resolvedPart.id);
-      }
+      if (!resolvedPart) return;
+      // 先记录，等 mouseup 时判断是点击还是拖动
+      s.puppetNodeDragRef.current = {
+        nodeId: node.id,
+        skeletonId: skeleton.id,
+        characterId: character.id,
+        clipId: clipId ?? '',
+        startX: px,
+        startY: py,
+        origAngle: 0,
+        origStretch: 1,
+        origOffsetX: 0,
+        origOffsetY: 0,
+        moveTargetNodeId: node.id,
+        mode: 'pivot' as const,
+        pivotWorldX: 0,
+        pivotWorldY: 0,
+        startMouseAngle: 0,
+        dragStarted: false,
+        // pivot 移动专用
+        pivotPartId: resolvedPart.id,
+        origPivotX: resolvedPart.pivotX ?? 0,
+        origPivotY: resolvedPart.pivotY ?? 0,
+      };
       return;
     }
 
@@ -310,6 +331,21 @@ export const puppetHandler: ToolHandler = {
         );
         store.updatePuppetNode(drag.skeletonId, drag.parentNodeId!, { sockets: newSockets });
       }
+    } else if (drag.mode === 'pivot') {
+      // pivot：移动部件枢轴在部件中的位置（直接改 Part）
+      const ddx = px - drag.startX;
+      const ddy = py - drag.startY;
+      // canvas 像素 → 部件像素（除以 zoom）
+      const zoom = s.zoom;
+      const part = store.parts.find((p) => p.id === drag.pivotPartId);
+      if (part) {
+        const newPivotX = Math.round((drag.origPivotX ?? 0) + ddx / zoom);
+        const newPivotY = Math.round((drag.origPivotY ?? 0) + ddy / zoom);
+        // 钳制到部件范围内
+        const clampedX = Math.max(0, Math.min(part.width - 1, newPivotX));
+        const clampedY = Math.max(0, Math.min(part.height - 1, newPivotY));
+        store.updatePart(drag.pivotPartId!, { pivotX: clampedX, pivotY: clampedY });
+      }
     } else {
       // move：移动目标节点的 offset
       const ddx = px - drag.startX;
@@ -389,6 +425,18 @@ export const puppetHandler: ToolHandler = {
         offsetX: (iv?.offsetX ?? node.offsetX) + dx,
         offsetY: (iv?.offsetY ?? node.offsetY) + dy,
       });
+    }
+  },
+
+  onMouseUp(s) {
+    const drag = s.puppetNodeDragRef.current;
+    // Ctrl+点击（未拖动）：进入部件像素编辑
+    if (drag && drag.mode === 'pivot' && !drag.dragStarted) {
+      const partId = drag.pivotPartId;
+      if (partId) {
+        s.editorStore.getState().selectPart(partId);
+        s.editorStore.getState().enterPartEditMode(partId);
+      }
     }
   },
 };
