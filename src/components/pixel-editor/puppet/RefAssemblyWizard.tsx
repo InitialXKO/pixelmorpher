@@ -435,42 +435,15 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             <p className="text-xs text-gray-400">
               目标肢体（画布上点选）：{targetNode?.name ?? '未选中'}
             </p>
-            {/* 肢体导航：切换画布全局选中 */}
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  const idx = sortedNodes.findIndex((n) => n.id === selectedPuppetNodeId);
-                  const newIdx = Math.max(0, (idx < 0 ? 0 : idx) - 1);
-                  const node = sortedNodes[newIdx];
-                  if (node) setSelectedPuppetNodeId(node.id);
-                }}
-              >
-                ← 上一肢体
-              </Button>
-              <div className="flex-1 text-center text-xs text-gray-300">
-                {targetNode?.name ?? '—'}
-                {targetNode && (
-                  <span className="ml-2 text-[10px] text-gray-500">
-                    z:{targetNode.zIndex ?? 0}
-                  </span>
-                )}
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  const idx = sortedNodes.findIndex((n) => n.id === selectedPuppetNodeId);
-                  const newIdx = Math.min(sortedNodes.length - 1, (idx < 0 ? 0 : idx) + 1);
-                  const node = sortedNodes[newIdx];
-                  if (node) setSelectedPuppetNodeId(node.id);
-                }}
-              >
-                下一肢体 →
-              </Button>
-            </div>
-            {/* 节点管理：删除 / 层级 */}
+            <p className="text-xs text-gray-400">
+              目标肢体（画布上点选）：{targetNode?.name ?? '未选中'}
+              {targetNode && (
+                <span className="ml-2 text-[10px] text-gray-500">
+                  z:{targetNode.zIndex ?? 0}
+                </span>
+              )}
+            </p>
+            {/* 节点管理：删除 */}
             {targetNode && activeSkeleton && (
               <div className="flex gap-1.5">
                 <Button
@@ -484,32 +457,6 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   }}
                 >
                   删除节点
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="flex-1 text-[10px] h-6"
-                  onClick={() => {
-                    const s = useProjectStore.getState();
-                    s.updatePuppetNode(activeSkeleton.id, targetNode.id, {
-                      zIndex: (targetNode.zIndex ?? 0) + 1,
-                    });
-                  }}
-                >
-                  上移一层
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="flex-1 text-[10px] h-6"
-                  onClick={() => {
-                    const s = useProjectStore.getState();
-                    s.updatePuppetNode(activeSkeleton.id, targetNode.id, {
-                      zIndex: (targetNode.zIndex ?? 0) - 1,
-                    });
-                  }}
-                >
-                  下移一层
                 </Button>
               </div>
             )}

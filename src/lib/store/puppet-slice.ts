@@ -46,6 +46,8 @@ export type PuppetSlice = {
   sendNodeToBack: (skeletonId: string, nodeId: string) => void;
   bringNodeForward: (skeletonId: string, nodeId: string) => void;
   sendNodeBackward: (skeletonId: string, nodeId: string) => void;
+  /** 按命名规则批量标记 side/isCore（用于方向默认遮挡排序） */
+  autoTagNodeDirections: (skeletonId: string) => { tagged: number };
   addPuppetSocket: (skeletonId: string, nodeId: string, name: string, localX: number, localY: number) => PuppetSocket;
   removePuppetSocket: (skeletonId: string, nodeId: string, socketId: string) => void;
   setPuppetNodeSprite: (skeletonId: string, nodeId: string, partId: string | null, direction?: PuppetDirection) => void;
@@ -424,6 +426,45 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
           : x
       ),
     }));
+  },
+
+  autoTagNodeDirections: (skeletonId) => {
+    const state = get();
+    const sk = state.puppetSkeletons.find(x => x.id === skeletonId);
+    if (!sk) return { tagged: 0 };
+
+    const inferSide = (name: string): 'L' | 'R' | 'C' => {
+      const n = name.toLowerCase();
+      if (/(^|[^a-z])_l([^a-z]|$)|left|左/.test(name) || n.includes('_l')) return 'L';
+      if (/(^|[^a-z])_r([^a-z]|$)|right|右/.test(name) || n.includes('_r')) return 'R';
+      return 'C';
+    };
+    const inferIsCore = (name: string, isRoot: boolean): boolean => {
+      if (isRoot) return true;
+      const n = name.toLowerCase();
+      return /body|torso|head|neck|pelvis|chest|waist|身体|躯干|头|颈|骨盆|胸|腰/.test(n);
+    };
+
+    let tagged = 0;
+    const newNodes = sk.nodes.map(node => {
+      const side = inferSide(node.name);
+      const isCore = inferIsCore(node.name, node.plug === null);
+      if (node.side !== side || node.isCore !== isCore) {
+        tagged++;
+        return { ...node, side, isCore };
+      }
+      return node;
+    });
+
+    if (tagged > 0) {
+      state.pushUndo('批量标记方向');
+      set(s => ({
+        puppetSkeletons: s.puppetSkeletons.map(x =>
+          x.id === skeletonId ? { ...x, nodes: newNodes } : x
+        ),
+      }));
+    }
+    return { tagged };
   },
 
   addPuppetSocket: (skeletonId, nodeId, name, localX, localY) => {

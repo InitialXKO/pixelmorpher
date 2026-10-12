@@ -386,6 +386,10 @@ export interface Node {
   // ---- Draw Order ----
   drawLayer: string;             // Occlusion layer name
   zIndex: number;                // Within-layer draw order
+  /** 左右标记：用于 E/W 朝向的默认遮挡排序 */
+  side?: 'L' | 'R' | 'C';
+  /** 是否为躯干核心：用于 S/N 朝向的默认遮挡排序 */
+  isCore?: boolean;
 
   // ---- Visibility ----
   visible: boolean;

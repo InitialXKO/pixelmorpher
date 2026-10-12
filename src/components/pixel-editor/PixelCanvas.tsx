@@ -382,6 +382,11 @@ export default function PixelCanvas() {
     s.markDirty();
   }, [s.referenceImageUrl, s.referenceImageVisible, s.referenceImageOpacity]);
 
+  // 木偶关键帧变化时标记重绘（puppetClipsVersion 含 zIndex）
+  useEffect(() => {
+    s.markDirty();
+  }, [s.puppetClipsVersion]);
+
   // Animation loop
   useEffect(() => {
     s.dirtyRef.current = true;

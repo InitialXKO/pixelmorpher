@@ -153,6 +153,8 @@ function puppetNodeToNode(
 
   // Draw order
   node.zIndex = pNode.zIndex ?? 0;
+  node.side = pNode.side;
+  node.isCore = pNode.isCore;
   node.drawLayer = 'default';
   node.visible = pNode.visible !== false;
 

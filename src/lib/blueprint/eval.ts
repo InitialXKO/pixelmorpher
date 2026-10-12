@@ -412,6 +412,7 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
     rotation: num(asNumber(i.rotation ?? num(0))),
     scaleX: num(asNumber(i.scaleX ?? num(1))),
     scaleY: num(asNumber(i.scaleY ?? num(1))),
+    zIndex: num(asNumber(i.zIndex ?? num(0))),
   }),
 };
 
@@ -464,6 +465,7 @@ export function evaluateBlueprint(
   rotation: number;
   scaleX: number;
   scaleY: number;
+  zIndex: number;
 } {
   const sorted = topoSort(graph);
   const values = new Map<string, Record<string, BlueprintValue>>();
@@ -498,6 +500,7 @@ export function evaluateBlueprint(
     rotation: out?.rotation ? asNumber(out.rotation) : 0,
     scaleX: out?.scaleX ? asNumber(out.scaleX) : 1,
     scaleY: out?.scaleY ? asNumber(out.scaleY) : 1,
+    zIndex: out?.zIndex ? asNumber(out.zIndex) : 0,
   };
 }
 

@@ -279,10 +279,15 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
           </div>
 
           {/* ---- 图层顺序（关键帧，step 插值） ---- */}
-          {performNodeId && skeleton && clip && (
+          {performNodeId && skeleton && clip && (() => {
+            const node = skeleton.nodes.find((n) => n.id === performNodeId);
+            const iv = interpolated.get(performNodeId);
+            const curZ = iv?.zIndex ?? node?.zIndex ?? 0;
+            return (
             <div className="space-y-1.5">
               <Label className="text-[10px] text-gray-500 uppercase tracking-wider">
                 图层顺序 <span className="normal-case text-[9px]">(当前帧关键帧)</span>
+                <span className="ml-2 text-cyan-300 font-mono">z={curZ}</span>
               </Label>
               <div className="grid grid-cols-4 gap-1">
                 {([
@@ -325,7 +330,8 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
                 })}
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* ---- 播放 ---- */}
           <div className="space-y-1.5">
