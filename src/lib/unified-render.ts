@@ -462,21 +462,67 @@ function computeZOrder(
   const nodeZ = new Map<string, number>();
   const discZ = new Map<string, number>();
 
-  // Get direction-dependent draw order if available
   const rootTransform = worldTransforms.get(character.rootNodeId);
   const currentDirection = rootTransform?.variantIndex ?? 0;
-  const directionOrder = character.directionDrawOrders[currentDirection];
+  const latitude = character.latitude ?? 0;
 
-  // Assign Z indices: zIndex 必须唯一，直接用 zIndex 排序，不允许相同
+  // 计算 worldY 范围，用于纬度归一化
+  let minY = Infinity, maxY = -Infinity;
+  for (const wt of worldTransforms.values()) {
+    if (wt.worldY < minY) minY = wt.worldY;
+    if (wt.worldY > maxY) maxY = wt.worldY;
+  }
+  const yRange = maxY - minY;
+
+  // 方向：variantIndex 0=S, 1=SE, 2=E, 3=NE, 4=N, 5=NW, 6=W, 7=SW（按 directionToVariantIndex）
+  const dirName = ['S', 'SE', 'E', 'NE', 'N', 'NW', 'W', 'SW'][currentDirection] ?? 'S';
+  const facingE = dirName.includes('E');
+  const facingW = dirName.includes('W');
+  const facingS = dirName === 'S' || dirName === 'SE' || dirName === 'SW';
+  const facingN = dirName === 'N' || dirName === 'NE' || dirName === 'NW';
+
+  const computeDefaultZ = (node: Node, worldY: number): number => {
+    let directionBias = 0;
+    const side = node.side ?? 'C';
+    const isCore = node.isCore ?? false;
+
+    if (facingE) {
+      if (side === 'L') directionBias = -0.1;
+      else if (side === 'R') directionBias = 0.1;
+    } else if (facingW) {
+      if (side === 'L') directionBias = 0.1;
+      else if (side === 'R') directionBias = -0.1;
+    }
+    // S/N：肢体 vs 身体
+    if (facingS) {
+      directionBias += isCore ? -0.2 : 0.2;
+    } else if (facingN) {
+      directionBias += isCore ? 0.2 : -0.2;
+    }
+
+    let latitudeBias = 0;
+    if (latitude > 0 && yRange > 0) {
+      const normalizedY = Math.max(0, Math.min(1, (worldY - minY) / yRange));
+      // 俯视时 worldY 小的（头/上部）在上层
+      latitudeBias = (0.5 - normalizedY) * 0.5 * (latitude / 90);
+    }
+
+    return 0.5 + directionBias + latitudeBias;
+  };
+
+  // Assign Z indices: sortKey = explicitZ * 1000 + defaultZ
   const assignZ = (nodeId: string) => {
     const node = character.nodes[nodeId];
     if (!node || !node.visible) return;
 
-    nodeZ.set(nodeId, node.zIndex ?? 0);
+    const wt = worldTransforms.get(nodeId);
+    const worldY = wt?.worldY ?? 0;
+    const defaultZ = computeDefaultZ(node, worldY);
+    const explicitZ = node.zIndex ?? 0;
+    const sortKey = explicitZ * 1000 + defaultZ;
+    nodeZ.set(nodeId, sortKey);
 
     // If this node has a generated disc, its Z goes BELOW both parent and child
-    // (convention: joint discs are occluded by the sprites on both sides,
-    // visible only through the outline openings).
     if (node.generated) {
       const ownZ = nodeZ.get(nodeId) ?? 0;
       const parentZ = node.parentId ? nodeZ.get(node.parentId) ?? ownZ : ownZ;

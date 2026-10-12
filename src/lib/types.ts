@@ -953,6 +953,10 @@ export interface PuppetNode {
   crossSectionBottom: number;
   /** Z-index for draw ordering */
   zIndex: number;
+  /** 左右标记：用于 E/W 朝向的默认遮挡排序。L=左，R=右，C=中间（无偏） */
+  side?: 'L' | 'R' | 'C';
+  /** 是否为躯干核心（躯干/头）：用于 S/N 朝向的默认遮挡排序。true=身体，false=四肢 */
+  isCore?: boolean;
   /** Whether this node is visible */
   visible: boolean;
   /** Color for joint disc rendering */

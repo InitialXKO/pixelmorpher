@@ -277,6 +277,33 @@ function RigNodeProperties({
         />
       </div>
 
+      {/* 方向排序标记 */}
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <Label className="text-[10px] text-gray-500">左右 (side)</Label>
+          <select
+            value={node.side ?? 'C'}
+            onChange={(e) => onUpdate({ side: e.target.value as 'L' | 'R' | 'C' })}
+            className="h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded mt-1 w-full"
+          >
+            <option value="C">中间</option>
+            <option value="L">左</option>
+            <option value="R">右</option>
+          </select>
+        </div>
+        <div>
+          <Label className="text-[10px] text-gray-500">躯干/四肢</Label>
+          <select
+            value={node.isCore ? 'core' : 'limb'}
+            onChange={(e) => onUpdate({ isCore: e.target.value === 'core' })}
+            className="h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded mt-1 w-full"
+          >
+            <option value="limb">四肢</option>
+            <option value="core">躯干</option>
+          </select>
+        </div>
+      </div>
+
       {/* Sockets */}
       <div>
         <div className="flex items-center justify-between">
