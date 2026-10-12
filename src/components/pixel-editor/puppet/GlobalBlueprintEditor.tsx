@@ -121,6 +121,7 @@ export default function GlobalBlueprintEditor({ skeleton }: GlobalBlueprintEdito
         graph={mergedGraph}
         onChange={setMergedGraph}
         skeleton={skeleton}
+        disableAdd
       />
     </div>
   );

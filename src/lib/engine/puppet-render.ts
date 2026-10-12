@@ -28,6 +28,8 @@ import { hexToRgbCached } from './color-utils';
 import { acquireCanvas, releaseCanvas } from './canvas-pool';
 import { getRotationCacheKey, getCachedRotation, setCachedRotation } from './render-cache';
 import { applyPixelModifiers, isPixelDeformModifier, padPixelGrid, trimTransparentEdges, computeTotalAnimPadding } from './pixel-modifiers';
+import { extractPixelModifiers } from '../blueprint/eval';
+import { modifiersToBlueprint } from '../blueprint/migrate';
 import { getAnimationFrameAndWeight } from './animation-state';
 import { resolveAnimModifierParams, resolveKeyframeModifierParams } from './param-driver';
 import {
@@ -1030,10 +1032,27 @@ function renderPuppetFrame(
     if (!item.part) continue;
 
     // Create part canvas
+    // 合并：节点的原始像素修改器 + 蓝图里的像素节点
+    let pixelMods = item.node?.modifiers ?? [];
+    const blueprint = item.node?.blueprint ?? (pixelMods.length ? modifiersToBlueprint(pixelMods) : null);
+    if (blueprint) {
+      const bpPixelMods = extractPixelModifiers(blueprint, {
+        frame: currentFrame,
+        frameRate: 12,
+        vars: {},
+        nodeOutputs: undefined,
+        nodeState: new Map(),
+      });
+      if (bpPixelMods.length > 0) {
+        // 蓝图像素节点优先（去重：同类型只保留蓝图的）
+        const bpTypes = new Set(bpPixelMods.map((m) => m.type));
+        pixelMods = [...bpPixelMods, ...pixelMods.filter((m) => !bpTypes.has(m.type))];
+      }
+    }
+
     const partCanvasResult = createPartCanvasFromPart(
       item.part, keyframes, currentFrame, frameRate,
-      // 传入节点的像素级动画修改器
-      item.node?.modifiers
+      pixelMods
     );
     if (!partCanvasResult) continue;
 

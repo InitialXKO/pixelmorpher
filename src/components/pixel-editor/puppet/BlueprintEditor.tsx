@@ -20,13 +20,15 @@ interface BlueprintEditorProps {
   title?: string;
   /** 传入后，nodeRef 节点的 nodeId 参数渲染为下拉选择 */
   skeleton?: { nodes: { id: string; name: string }[] } | null;
+  /** 禁用添加节点（全局编辑器用：新节点无归属，保存会丢） */
+  disableAdd?: boolean;
 }
 
 const NODE_WIDTH = 140;
 const NODE_HEADER_H = 24;
 const PORT_H = 18;
 
-export default function BlueprintEditor({ graph, onChange, title, skeleton }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton, disableAdd }: BlueprintEditorProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
   const [viewMode, setViewMode] = useState<'graph' | 'blocks'>('graph');
@@ -85,10 +87,19 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
 
   const removeNode = useCallback((id: string) => {
     if (id === graph.outputId) return; // 不能删输出节点
-    onChange({
-      ...graph,
-      nodes: graph.nodes.filter((n) => n.id !== id),
-    });
+    // 清除其他节点对它的引用，防止悬空
+    const newNodes = graph.nodes
+      .filter((n) => n.id !== id)
+      .map((n) => {
+        const newInputs = { ...n.inputs };
+        for (const [port, input] of Object.entries(newInputs)) {
+          if (typeof input === 'object' && input !== null && 'nodeId' in input && (input as any).nodeId === id) {
+            delete newInputs[port];
+          }
+        }
+        return { ...n, inputs: newInputs };
+      });
+    onChange({ ...graph, nodes: newNodes });
     if (selectedId === id) setSelectedId(null);
   }, [graph, onChange, selectedId]);
 
@@ -194,20 +205,27 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
       )}
 
       {/* 工具条 */}
-      <div className="flex gap-1.5">
-        <select
-          value={addingType}
-          onChange={(e) => setAddingType(e.target.value)}
-          className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1.5 py-1 text-[10px] text-gray-300"
-        >
-          {nodeTypes.map((t) => (
-            <option key={t} value={t}>{getBlueprintNodeLabel(t)}</option>
-          ))}
-        </select>
-        <Button size="sm" onClick={addNode} className="h-7 px-2 text-[10px]">
-          <Plus className="size-3 mr-0.5" />节点
-        </Button>
-      </div>
+      {!disableAdd && (
+        <div className="flex gap-1.5">
+          <select
+            value={addingType}
+            onChange={(e) => setAddingType(e.target.value)}
+            className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1.5 py-1 text-[10px] text-gray-300"
+          >
+            {nodeTypes.map((t) => (
+              <option key={t} value={t}>{getBlueprintNodeLabel(t)}</option>
+            ))}
+          </select>
+          <Button size="sm" onClick={addNode} className="h-7 px-2 text-[10px]">
+            <Plus className="size-3 mr-0.5" />节点
+          </Button>
+        </div>
+      )}
+      {disableAdd && (
+        <div className="text-[9px] text-gray-500 px-1">
+          全局模式：新节点请在部件蓝图中添加
+        </div>
+      )}
 
       {viewMode === 'blocks' ? (
         <BlueprintBlocksView graph={graph} onChange={onChange} />
