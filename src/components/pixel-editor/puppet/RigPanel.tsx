@@ -18,6 +18,7 @@ import { Label } from '@/components/ui/label';
 import { NodeTreeItemWrapper } from './NodeTree';
 import { updateSkeletonNode } from './updateSkeletonNode';
 import PuppetModifierPanel from './PuppetModifierPanel';
+import GlobalBlueprintEditor from './GlobalBlueprintEditor';
 
 interface RigPanelProps {
   puppetSkeletons: PuppetSkeleton[];
@@ -150,6 +151,11 @@ export default function RigPanel({
           onRemoveSocket={handleRemoveSocket}
         />
       )}
+
+      {/* ---- 全局蓝图 ---- */}
+      <div className="pt-2 border-t border-[#1e1e3a]">
+        <GlobalBlueprintEditor skeleton={selectedSkeleton} />
+      </div>
     </div>
   );
 }
@@ -338,7 +344,7 @@ function RigNodeProperties({
       </div>
 
       {/* ---- 程序化修改器 / 蓝图 ---- */}
-      <div className="pt-2 border-t border-[#1e1e3a]">
+      <div className="pt-2 border-t border-[#1e1e3a] space-y-2">
         <PuppetModifierPanel />
       </div>
     </div>
