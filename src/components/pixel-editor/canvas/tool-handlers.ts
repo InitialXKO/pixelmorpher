@@ -158,6 +158,30 @@ export const puppetHandler: ToolHandler = {
     // 同步到操控会话（PerformPanel 肢体列表高亮用）
     try { usePuppetSessionStore.setState({ performNodeId: node.id }); } catch { /* noop */ }
 
+    // 预计算插值（Ctrl/Alt 路径也需要世界角度）
+    const tmpClip = clipId ? project.animationClips.find((c) => c.id === clipId) : null;
+    const tmpFrame = project.currentFrame;
+    const tmpIvMap = interpolateNodeKeyframes(skeleton, tmpClip?.puppetNodeKeyframes ?? [], tmpFrame);
+
+    // 计算指定节点的世界角度（从根累加）
+    const computeWorldAngle = (targetNode: typeof node): number => {
+      const chain: typeof targetNode[] = [];
+      let cur: typeof targetNode | undefined = targetNode;
+      while (cur) {
+        chain.unshift(cur);
+        const p = cur.plug;
+        if (!p?.socketId) break;
+        cur = skeleton.nodes.find((n) =>
+          n.sockets?.some((s) => s.id === p.socketId)
+        );
+      }
+      let angle = 0;
+      for (const n of chain) {
+        angle += tmpIvMap.get(n.id)?.angle ?? n.angle;
+      }
+      return angle;
+    };
+
     // Ctrl+点击/拖动：点击=编辑该节点精灵，拖动=移动部件枢轴在部件中的位置
     if (e.ctrlKey || e.metaKey) {
       const activeCostume = character.activeCostumeSetId
@@ -188,6 +212,7 @@ export const puppetHandler: ToolHandler = {
         pivotPartId: resolvedPart.id,
         origPivotX: resolvedPart.pivotX ?? 0,
         origPivotY: resolvedPart.pivotY ?? 0,
+        nodeWorldAngle: computeWorldAngle(node),
       };
       return;
     }
@@ -212,8 +237,8 @@ export const puppetHandler: ToolHandler = {
       if (!parentNode) return;
       const socket = parentNode.sockets.find((s) => s.id === plug.socketId);
       if (!socket) return;
-      // 父节点角度（用 rest 值，rig 操作不考虑关键帧）
-      const parentAngle = parentNode.angle;
+      // 父节点世界角度（用当前插值姿态，保证视觉跟手）
+      const parentWorldAngle = computeWorldAngle(parentNode);
       s.puppetNodeDragRef.current = {
         nodeId: node.id,
         skeletonId: skeleton.id,
@@ -236,7 +261,7 @@ export const puppetHandler: ToolHandler = {
         parentNodeId: parentNode.id,
         origSocketX: socket.localX,
         origSocketY: socket.localY,
-        parentAngle,
+        parentAngle: parentWorldAngle,
       };
       return;
     }
@@ -269,20 +294,7 @@ export const puppetHandler: ToolHandler = {
         n.sockets?.some((s) => s.id === node.plug!.socketId)
       );
       if (parent) {
-        // 从根节点累加到父节点的角度
-        const chain: typeof parent[] = [];
-        let cur: typeof parent | undefined = parent;
-        while (cur) {
-          chain.unshift(cur);
-          const p = cur.plug;
-          if (!p?.socketId) break;
-          cur = skeleton.nodes.find((n) =>
-            n.sockets?.some((s) => s.id === p.socketId)
-          );
-        }
-        for (const n of chain) {
-          parentWorldAngle += ivMap.get(n.id)?.angle ?? n.angle;
-        }
+        parentWorldAngle = computeWorldAngle(parent);
       }
     }
 
@@ -358,14 +370,18 @@ export const puppetHandler: ToolHandler = {
       }
     } else if (drag.mode === 'pivot') {
       // pivot：移动部件枢轴在部件中的位置（直接改 Part）
+      // 部件在画布上按节点世界角度旋转，需逆旋转鼠标增量到部件局部空间
       const ddx = px - drag.startX;
       const ddy = py - drag.startY;
+      const angleRad = ((drag.nodeWorldAngle ?? 0) * Math.PI) / 180;
+      const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
+      const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
       // canvas 像素 → 部件像素（除以 zoom）
       const zoom = s.zoom;
       const part = store.parts.find((p) => p.id === drag.pivotPartId);
       if (part) {
-        const newPivotX = Math.round((drag.origPivotX ?? 0) + ddx / zoom);
-        const newPivotY = Math.round((drag.origPivotY ?? 0) + ddy / zoom);
+        const newPivotX = Math.round((drag.origPivotX ?? 0) + localDx / zoom);
+        const newPivotY = Math.round((drag.origPivotY ?? 0) + localDy / zoom);
         // 钳制到部件范围内
         const clampedX = Math.max(0, Math.min(part.width - 1, newPivotX));
         const clampedY = Math.max(0, Math.min(part.height - 1, newPivotY));
