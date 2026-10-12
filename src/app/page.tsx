@@ -38,10 +38,9 @@ import {
 export default function Home() {
   const { parts, animationClips, activeAnimationClipId, setActiveAnimationClip } = useProjectStore();
   const { selectPart, editMode, exitPartEditMode, partEditPartId } = useEditorStore();
-  const isAligning = useEditorStore((s) => s.isAligning);
   const isMasking = editMode === 'mask';
-  // 对位中或遮罩中：锁定不相干操作
-  const isLocked = isAligning || isMasking;
+  // 遮罩中：锁定不相干操作
+  const isLocked = isMasking;
   const { mode, layouts, updateLayout } = useWorkspaceStore();
   const [exportOpen, setExportOpen] = useState(false);
   const initializedRef = useRef(false);

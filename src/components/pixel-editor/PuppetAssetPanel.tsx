@@ -111,8 +111,7 @@ export default function PuppetAssetPanel() {
           <RefAssemblyWizard
             onClose={() => {
               const store = useEditorStore.getState();
-              // 清理：退出对位/遮罩锁定，隐藏参考图
-              store.setIsAligning(false);
+              // 清理：退出遮罩锁定，隐藏参考图
               if (store.editMode === 'mask') {
                 store.setEditMode('normal');
                 store.setMaskNodeId(null);

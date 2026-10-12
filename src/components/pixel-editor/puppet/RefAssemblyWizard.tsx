@@ -85,7 +85,6 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const referenceImageOpacity = useEditorStore((s) => s.referenceImageOpacity);
   const setReferenceImageOpacity = useEditorStore((s) => s.setReferenceImageOpacity);
   const setZoom = useEditorStore((s) => s.setZoom);
-  const isAligning = useEditorStore((s) => s.isAligning);
 
   // 获取当前角色及其骨架节点（按 zIndex 排序，从后往前）
   const puppetCharacters = useProjectStore((s) => s.puppetCharacters);
@@ -122,6 +121,33 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     : [];
   const focusedNode = sortedNodes[focusedNodeIndex];
   const addPuppetNode = useProjectStore((s) => s.addPuppetNode);
+
+  // 选中模板自动克隆（重选=重来，删旧克隆）
+  // 不需要"开始对位"按钮：选即开始，直接拖
+  useEffect(() => {
+    if (!selectedCharacterId) return;
+    // 已有对应克隆则跳过（避免重复）
+    if (workingCharacterId) {
+      const wc = useProjectStore.getState().puppetCharacters.find((c) => c.id === workingCharacterId);
+      // 如果工作克隆对应的原模板就是当前选中，则不重克
+      // （简单判断：克隆名以选中角色名开头）
+      const sc = useProjectStore.getState().puppetCharacters.find((c) => c.id === selectedCharacterId);
+      if (wc && sc && wc.name.startsWith(sc.name)) return;
+      // 否则删旧克隆（重选=重来）
+      useProjectStore.getState().removePuppetCharacter(workingCharacterId);
+      const ws = workingSkeletonId;
+      if (ws) useProjectStore.getState().removePuppetSkeleton(ws);
+    }
+    const projectStore = useProjectStore.getState();
+    const sc = projectStore.puppetCharacters.find((c) => c.id === selectedCharacterId);
+    if (!sc) return;
+    const clone = projectStore.clonePuppetCharacter(selectedCharacterId, `${sc.name}（装配）`);
+    if (!clone) return;
+    setWorkingCharacterId(clone.id);
+    setWorkingSkeletonId(clone.puppetSkeletonId);
+    usePuppetSessionStore.getState().enterPerform(clone.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCharacterId]);
 
   // 节点列表变化时，确保 focusedNodeIndex 不越界
   useEffect(() => {
@@ -311,9 +337,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             {activeSkeleton && selectedCharacter ? (
               <>
                 <p className="text-xs text-gray-400">
-                  模板角色「{selectedCharacter.name}」已覆盖在底图上。点"开始对位"，
+                  模板角色「{selectedCharacter.name}」已覆盖在底图上，
                   直接在画布上拖动角色肢体（拖动旋转，Shift+拖动平移）对准底图。
-                  完成后点画布顶部的"完成对位"继续。
                 </p>
                 {/* 方向选择：遮罩只应用于此方向 */}
                 <div>
@@ -336,31 +361,9 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                     <option value="NW">西北 (NW)</option>
                   </select>
                 </div>
-                <Button
-                  size="sm"
-                  className="w-full"
-                  disabled={isAligning}
-                  onClick={() => {
-                    if (!selectedCharacter) return;
-                    const store = useEditorStore.getState();
-                    const projectStore = useProjectStore.getState();
-                    // 克隆模板：后续修改在副本上，不污染原模板
-                    const clone = projectStore.clonePuppetCharacter(
-                      selectedCharacter.id,
-                      `${selectedCharacter.name}（装配）`
-                    );
-                    if (!clone) return;
-                    setWorkingCharacterId(clone.id);
-                    setWorkingSkeletonId(clone.puppetSkeletonId);
-                    // 进入 Perform 模式并选中克隆角色（只显示它）
-                    usePuppetSessionStore.getState().enterPerform(clone.id);
-                    // 标记对位中（锁定工具栏/侧边栏）
-                    store.setIsAligning(true);
-                    // 不关闭向导：侧边栏模式下可同时看到向导和画布
-                  }}
-                >
-                  {isAligning ? '对位中…（点画布顶部"完成对位"）' : '开始对位'}
-                </Button>
+                <p className="text-[11px] text-gray-400">
+                  已自动克隆为「{selectedCharacter?.name}（装配）」，直接在画布上拖动肢体对位（拖动旋转，Shift+拖动平移）。
+                </p>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-500">底图不透明度</span>
                   <Slider
@@ -668,9 +671,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             size="sm"
             disabled={
               (stepIndex === 0 && !referenceImageUrl) ||
-              (step === 'align' && !activeSkeleton) ||
-              // 对位中必须点画布上的"完成对位"，不能直接下一步
-              (step === 'align' && isAligning)
+              (step === 'align' && !activeSkeleton)
             }
             onClick={() => {
               if (stepIndex >= 0 && stepIndex < STEPS.length - 1) setStep(STEPS[stepIndex + 1].id);

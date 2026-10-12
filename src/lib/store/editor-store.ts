@@ -152,8 +152,6 @@ interface EditorStore extends EditorState {
   // 参考图装配向导
   refWizardOpen: boolean;
   setRefWizardOpen: (v: boolean) => void;
-  isAligning: boolean;
-  setIsAligning: (v: boolean) => void;
 }
 
 const defaultEditor: EditorState = {
@@ -222,7 +220,6 @@ const defaultEditor: EditorState = {
   maskNodeId: null as string | null,
   // 参考图装配向导
   refWizardOpen: false,
-  isAligning: false,
 };
 
 // Lazy import to avoid circular dependency
@@ -254,8 +251,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   },
 
   setTool: (tool) => {
-    // 对位中锁定为 puppet 工具，防止误切
-    if (get().isAligning && tool !== 'puppet') return;
     // 遮罩中锁定工具（遮罩笔刷是独立 overlay，不走 tool）
     if (get().editMode === 'mask') return;
     set({ tool });
@@ -303,7 +298,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setReferenceImageVisible: (v) => set({ referenceImageVisible: v }),
   setMaskNodeId: (id) => set({ maskNodeId: id }),
   setRefWizardOpen: (v) => set({ refWizardOpen: v }),
-  setIsAligning: (v) => set({ isAligning: v }),
 
   initSAMModel: async (model?: SAMModelType) => {
     const { disposeSAMModel } = get();

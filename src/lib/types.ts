@@ -1777,8 +1777,6 @@ export interface EditorState {
   maskNodeId: string | null;
   // ---- 参考图装配向导 ----
   refWizardOpen: boolean;
-  // ---- 对位中 ----
-  isAligning: boolean;
 }
 
 // ---- SAM / Smart Selection ----

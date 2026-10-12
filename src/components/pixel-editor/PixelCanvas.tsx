@@ -429,20 +429,6 @@ export default function PixelCanvas() {
 
   return (
     <div ref={s.containerRef} className="relative w-full h-full overflow-hidden" style={{ background: '#0f0f1a' }}>
-      {/* 对位中：完成对位浮钮 */}
-      {s.isAligning && (
-        <button
-          onClick={() => {
-            const store = useEditorStore.getState();
-            store.setIsAligning(false);
-            // 通知向导跳到 mask 步骤（向导在侧边栏常驻，无需重开）
-            window.dispatchEvent(new CustomEvent('ref-assembly:align-done'));
-          }}
-          className="absolute top-4 left-1/2 -translate-x-1/2 z-[60] px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-sm rounded-lg shadow-lg"
-        >
-          完成对位 →
-        </button>
-      )}
       {/* Correction mode border */}
       {s.editMode === 'correction' && (
         <div className="absolute inset-0 pointer-events-none z-50" style={{ boxShadow: 'inset 0 0 0 3px rgba(34, 211, 238, 0.6)', borderRadius: '4px' }} />
