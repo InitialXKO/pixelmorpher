@@ -149,6 +149,22 @@ function dispatchDeformModifier(
       return applyHyperbolicStretch(pixels, partWidth, partHeight, params, currentFrame, frameRate, effectiveWeight);
     case 'ring_ripple':
       return applyRingRipple(pixels, partWidth, partHeight, params, currentFrame, frameRate, effectiveWeight);
+    case 'pixel_edit': {
+      // Edit modifier as non-destructive pixel deform on PuppetNode.
+      // Applies brushCommands from params (same as old Part.editModifiers).
+      const brushCommands = (params.brushCommands as any[]) || [];
+      if (brushCommands.length === 0) return pixels;
+      // Import the brush application logic from pixel-modifiers
+      // For now, apply via the registry if available
+      try {
+        const { modifierRegistry } = require('../../pixel-modifiers');
+        const handler = modifierRegistry.get('pixel_edit');
+        if (handler) {
+          return handler(params, pixels, currentFrame);
+        }
+      } catch {}
+      return pixels;
+    }
     default:
       return pixels;
   }
