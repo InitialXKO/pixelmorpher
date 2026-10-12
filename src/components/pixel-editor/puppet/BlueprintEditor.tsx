@@ -29,6 +29,20 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
   const [viewMode, setViewMode] = useState<'graph' | 'blocks'>('graph');
+  // 拖拽节点
+  const [dragging, setDragging] = useState<{
+    nodeId: string;
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+  } | null>(null);
+  // 连线中：从输出端口拖到输入端口
+  const [connecting, setConnecting] = useState<{
+    fromNodeId: string;
+    mouseX: number;
+    mouseY: number;
+  } | null>(null);
 
   const nodeTypes = useMemo(() => listBlueprintNodeTypes(), []);
 
@@ -76,6 +90,33 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
     });
     if (selectedId === id) setSelectedId(null);
   }, [graph, onChange, selectedId]);
+
+  // 断开输入端口的连接
+  const disconnectInput = useCallback((nodeId: string, port: string) => {
+    const node = graph.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const newInputs = { ...node.inputs };
+    delete newInputs[port];
+    onChange({
+      ...graph,
+      nodes: graph.nodes.map((n) => (n.id === nodeId ? { ...n, inputs: newInputs } : n)),
+    });
+  }, [graph, onChange]);
+
+  // 连接：fromNode 输出 -> toNode 的 port 输入
+  const connectPorts = useCallback((fromNodeId: string, toNodeId: string, port: string) => {
+    if (fromNodeId === toNodeId) return; // 不自连
+    const toNode = graph.nodes.find((n) => n.id === toNodeId);
+    if (!toNode) return;
+    onChange({
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.id === toNodeId
+          ? { ...n, inputs: { ...n.inputs, [port]: { nodeId: fromNodeId, output: 'out' } } }
+          : n
+      ),
+    });
+  }, [graph, onChange]);
 
   const selected = graph.nodes.find((n) => n.id === selectedId) ?? null;
 
@@ -173,6 +214,34 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
         className="relative bg-[#080818] border border-[#1e1e3a] rounded overflow-auto"
         style={{ height: 300 }}
         onClick={() => setSelectedId(null)}
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const mx = e.clientX - rect.left;
+          const my = e.clientY - rect.top;
+          if (dragging) {
+            const dx = mx - dragging.startX;
+            const dy = my - dragging.startY;
+            const newX = Math.max(0, dragging.origX + dx);
+            const newY = Math.max(0, dragging.origY + dy);
+            onChange({
+              ...graph,
+              nodes: graph.nodes.map((n) =>
+                n.id === dragging.nodeId ? { ...n, ui: { x: newX, y: newY } } : n
+              ),
+            });
+          }
+          if (connecting) {
+            setConnecting({ ...connecting, mouseX: mx, mouseY: my });
+          }
+        }}
+        onMouseUp={() => {
+          setDragging(null);
+          setConnecting(null);
+        }}
+        onMouseLeave={() => {
+          setDragging(null);
+          setConnecting(null);
+        }}
       >
         <svg
           width={maxX}
@@ -189,6 +258,23 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
               opacity={0.6}
             />
           ))}
+          {/* 连线中的临时线 */}
+          {connecting && (() => {
+            const fromPos = positions.get(connecting.fromNodeId);
+            if (!fromPos) return null;
+            const fx = fromPos.x + NODE_WIDTH;
+            const fy = fromPos.y + NODE_HEADER_H / 2;
+            return (
+              <path
+                d={`M ${fx} ${fy} C ${fx + 40} ${fy}, ${connecting.mouseX - 40} ${connecting.mouseY}, ${connecting.mouseX} ${connecting.mouseY}`}
+                stroke="#22d3ee"
+                strokeWidth={1.5}
+                fill="none"
+                opacity={0.8}
+                strokeDasharray="4 2"
+              />
+            );
+          })()}
         </svg>
 
         {graph.nodes.map((node) => {
@@ -208,7 +294,38 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
               style={{ left: pos.x, top: pos.y, width: NODE_WIDTH }}
               onClick={(e) => { e.stopPropagation(); setSelectedId(node.id); }}
             >
-              <div className="flex items-center justify-between px-1.5 py-1 border-b border-[#1e1e3a]">
+              {/* 输出端口（右侧，可拖出连线） */}
+              <div
+                className="absolute -right-1.5 top-3 size-3 rounded-full bg-cyan-400 border border-cyan-200 cursor-crosshair hover:scale-125 transition-transform"
+                title="拖出以连接"
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  const rect = e.currentTarget.closest('.relative')?.getBoundingClientRect();
+                  if (!rect) return;
+                  setConnecting({
+                    fromNodeId: node.id,
+                    mouseX: e.clientX - rect.left,
+                    mouseY: e.clientY - rect.top,
+                  });
+                }}
+              />
+              <div
+                className="flex items-center justify-between px-1.5 py-1 border-b border-[#1e1e3a] cursor-move"
+                onMouseDown={(e) => {
+                  // 只有左键且不是从端口开始的才拖节点
+                  if (e.button !== 0) return;
+                  const rect = e.currentTarget.closest('.relative')?.getBoundingClientRect();
+                  if (!rect) return;
+                  setDragging({
+                    nodeId: node.id,
+                    startX: e.clientX - rect.left,
+                    startY: e.clientY - rect.top,
+                    origX: pos.x,
+                    origY: pos.y,
+                  });
+                  e.stopPropagation();
+                }}
+              >
                 <span className="text-[10px] font-medium text-gray-200 truncate" title={node.type}>
                   {getBlueprintNodeLabel(node.type)}
                   {isOutput && <span className="text-[8px] text-emerald-400 ml-1">输出</span>}
@@ -226,11 +343,45 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
                 {Object.keys(node.inputs).length === 0 && (
                   <div className="text-[8px] text-gray-600">无输入</div>
                 )}
-                {Object.entries(node.inputs).map(([port]) => (
-                  <div key={port} className="text-[9px] text-gray-400 truncate">
-                    ← {port}
-                  </div>
-                ))}
+                {Object.entries(node.inputs).map(([port, input]) => {
+                  const isConnected = typeof input === 'object' && input !== null && 'nodeId' in input;
+                  return (
+                    <div
+                      key={port}
+                      className="relative flex items-center gap-1 text-[9px] text-gray-400 truncate pl-2"
+                      onMouseUp={(e) => {
+                        e.stopPropagation();
+                        if (connecting) {
+                          connectPorts(connecting.fromNodeId, node.id, port);
+                          setConnecting(null);
+                        }
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // 点击已连接的端口断开
+                        if (isConnected) {
+                          disconnectInput(node.id, port);
+                        }
+                      }}
+                      title={isConnected ? '点击断开' : '从输出端口拖到这里以连接'}
+                    >
+                      {/* 输入端口圆点 */}
+                      <div
+                        className={`absolute -left-1.5 top-1/2 -translate-y-1/2 size-2.5 rounded-full border cursor-crosshair ${
+                          isConnected
+                            ? 'bg-cyan-400 border-cyan-200'
+                            : 'bg-[#1e1e3a] border-gray-600 hover:border-cyan-400'
+                        }`}
+                      />
+                      ← {port}
+                      {isConnected && (
+                        <span className="text-[8px] text-cyan-400/70 truncate">
+                          {graph.nodes.find((n) => n.id === (input as any).nodeId)?.type ?? '?'}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );

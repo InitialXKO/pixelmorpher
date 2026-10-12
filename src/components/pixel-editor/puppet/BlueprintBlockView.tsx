@@ -6,10 +6,10 @@
 // 与节点图视图数据互通（同一 BlueprintGraph）
 // ============================================================
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { X, Plus } from 'lucide-react';
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
-import { getBlueprintNodeLabel } from '@/lib/blueprint/eval';
+import { getBlueprintNodeLabel, listBlueprintNodeTypes } from '@/lib/blueprint/eval';
 import { Button } from '@/components/ui/button';
 
 interface BlueprintBlockViewProps {
@@ -97,8 +97,51 @@ export default function BlueprintBlockView({ graph, onChange }: BlueprintBlockVi
     return '';
   };
 
+  // 添加节点
+  const [addingType, setAddingType] = useState<string>('pendulum');
+  const addNode = () => {
+    const id = `node_${Date.now().toString(36)}`;
+    onChange({
+      ...graph,
+      nodes: [...graph.nodes, { id, type: addingType, inputs: {}, params: {} }],
+    });
+  };
+
+  // 修改输入连接：选源节点或断开
+  const setInputSource = (nodeId: string, port: string, srcNodeId: string | null) => {
+    const node = graph.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const newInputs = { ...node.inputs };
+    if (srcNodeId) {
+      newInputs[port] = { nodeId: srcNodeId, output: 'out' };
+    } else {
+      delete newInputs[port];
+    }
+    onChange({
+      ...graph,
+      nodes: graph.nodes.map((n) => (n.id === nodeId ? { ...n, inputs: newInputs } : n)),
+    });
+  };
+
+  const nodeTypes = useMemo(() => listBlueprintNodeTypes(), []);
+
   return (
     <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+      {/* 添加节点工具条 */}
+      <div className="flex gap-1.5 sticky top-0 bg-[#080818] py-1 z-10">
+        <select
+          value={addingType}
+          onChange={(e) => setAddingType(e.target.value)}
+          className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1.5 py-1 text-[10px] text-gray-300"
+        >
+          {nodeTypes.map((t) => (
+            <option key={t} value={t}>{getBlueprintNodeLabel(t)}</option>
+          ))}
+        </select>
+        <Button size="sm" onClick={addNode} className="h-7 px-2 text-[10px]">
+          <Plus className="size-3 mr-0.5" />节点
+        </Button>
+      </div>
       {sortedNodes.map((node, idx) => {
         const isOutput = node.id === graph.outputId;
         const color = getBlockColor(node.type);
@@ -132,17 +175,34 @@ export default function BlueprintBlockView({ graph, onChange }: BlueprintBlockVi
               )}
             </div>
 
-            {/* 输入连接 */}
+            {/* 输入连接（可编辑） */}
             {Object.keys(node.inputs).length > 0 && (
-              <div className="flex flex-wrap gap-1 mb-1">
-                {Object.keys(node.inputs).map((port) => (
-                  <span
-                    key={port}
-                    className="text-[8px] text-gray-400 bg-black/30 px-1 py-0.5 rounded"
-                  >
-                    {port} {getInputLabel(node, port)}
-                  </span>
-                ))}
+              <div className="flex flex-col gap-1 mb-1">
+                {Object.keys(node.inputs).map((port) => {
+                  const input = node.inputs[port];
+                  const srcId = typeof input === 'object' && input !== null && 'nodeId' in input
+                    ? (input as any).nodeId
+                    : '';
+                  return (
+                    <div key={port} className="flex items-center gap-1">
+                      <span className="text-[8px] text-gray-500 w-16 truncate">{port}</span>
+                      <select
+                        value={srcId}
+                        onChange={(e) => setInputSource(node.id, port, e.target.value || null)}
+                        className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded px-1 py-0.5 text-[8px] text-gray-300"
+                      >
+                        <option value="">— 断开 —</option>
+                        {graph.nodes
+                          .filter((n) => n.id !== node.id)
+                          .map((n) => (
+                            <option key={n.id} value={n.id}>
+                              {getBlueprintNodeLabel(n.type)}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
