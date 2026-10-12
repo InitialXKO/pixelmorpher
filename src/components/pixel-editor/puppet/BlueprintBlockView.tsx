@@ -10,7 +10,6 @@ import React, { useMemo, useState } from 'react';
 import { X, Plus } from 'lucide-react';
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { getBlueprintNodeLabel, listBlueprintNodeTypes } from '@/lib/blueprint/eval';
-import { getDefaultOutputForPort, getNodeInputs } from '@/lib/blueprint/specs';
 import { Button } from '@/components/ui/button';
 
 interface BlueprintBlockViewProps {
@@ -108,24 +107,6 @@ export default function BlueprintBlockView({ graph, onChange }: BlueprintBlockVi
     });
   };
 
-  // 修改输入连接：选源节点或断开
-  const setInputSource = (nodeId: string, port: string, srcNodeId: string | null) => {
-    const node = graph.nodes.find((n) => n.id === nodeId);
-    if (!node) return;
-    const newInputs = { ...node.inputs };
-    if (srcNodeId) {
-      const srcNode = graph.nodes.find((n) => n.id === srcNodeId);
-      const output = getDefaultOutputForPort(srcNode?.type ?? '', port);
-      newInputs[port] = { nodeId: srcNodeId, output };
-    } else {
-      delete newInputs[port];
-    }
-    onChange({
-      ...graph,
-      nodes: graph.nodes.map((n) => (n.id === nodeId ? { ...n, inputs: newInputs } : n)),
-    });
-  };
-
   const nodeTypes = useMemo(() => listBlueprintNodeTypes(), []);
 
   return (
@@ -178,53 +159,20 @@ export default function BlueprintBlockView({ graph, onChange }: BlueprintBlockVi
               )}
             </div>
 
-            {/* 输入连接（可编辑，显示注册表定义的全部端口） */}
-            {(() => {
-              const specInputs = getNodeInputs(node.type);
-              // 合并：spec 定义的 + 已有但 spec 没列的（兼容旧数据）
-              const allPorts = Array.from(new Set([
-                ...specInputs,
-                ...Object.keys(node.inputs),
-              ]));
-              if (allPorts.length === 0) return null;
-              return (
-                <div className="flex flex-col gap-1 mb-1">
-                  {allPorts.map((port) => {
-                    const input = node.inputs[port];
-                    const srcId = typeof input === 'object' && input !== null && 'nodeId' in input
-                      ? (input as any).nodeId
-                      : '';
-                    const isSpecDefined = specInputs.includes(port);
-                    return (
-                      <div key={port} className="flex items-center gap-1">
-                        <span
-                          className={`text-[8px] w-16 truncate ${
-                            isSpecDefined ? 'text-gray-500' : 'text-amber-500/70'
-                          }`}
-                          title={isSpecDefined ? port : `${port}（旧数据，spec 未定义）`}
-                        >
-                          {port}
-                        </span>
-                        <select
-                          value={srcId}
-                          onChange={(e) => setInputSource(node.id, port, e.target.value || null)}
-                          className="flex-1 min-w-0 bg-black/40 border border-white/10 rounded px-1 py-0.5 text-[8px] text-gray-300"
-                        >
-                          <option value="">— 断开 —</option>
-                          {graph.nodes
-                            .filter((n) => n.id !== node.id)
-                            .map((n) => (
-                              <option key={n.id} value={n.id}>
-                                {getBlueprintNodeLabel(n.type)}
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })()}
+            {/* 输入连接（只读显示，去节点图模式编辑） */}
+            {Object.keys(node.inputs).length > 0 && (
+              <div className="flex flex-wrap gap-1 mb-1">
+                {Object.keys(node.inputs).map((port) => (
+                  <span
+                    key={port}
+                    className="text-[8px] text-gray-400 bg-black/30 px-1 py-0.5 rounded"
+                    title="去节点图模式编辑连线"
+                  >
+                    {port} {getInputLabel(node, port)}
+                  </span>
+                ))}
+              </div>
+            )}
 
             {/* 参数 */}
             <div className="space-y-1">
