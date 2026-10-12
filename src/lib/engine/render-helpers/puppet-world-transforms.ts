@@ -120,9 +120,15 @@ function handleChildNode(
     computeSocketWorldPosition(node, values, parentWt, socket, latitude, depth, worldTransforms);
   } else {
     // Socket not found — place at parent's world position
-    const wx = snapToPixel(parentWt.worldX + values.offsetX);
+    // offset 在父节点局部空间，需按父节点角度旋转
+    const parentAngleRad = (parentWt.worldAngle * Math.PI) / 180;
+    const cosA = Math.cos(parentAngleRad);
+    const sinA = Math.sin(parentAngleRad);
+    const rotatedOffsetX = values.offsetX * cosA - values.offsetY * sinA;
+    const rotatedOffsetY = values.offsetX * sinA + values.offsetY * cosA;
+    const wx = snapToPixel(parentWt.worldX + rotatedOffsetX);
     const latitudeYOffset = computeLatitudeYOffset(latitude, depth);
-    const wy = snapToPixel(parentWt.worldY + values.offsetY + latitudeYOffset);
+    const wy = snapToPixel(parentWt.worldY + rotatedOffsetY + latitudeYOffset);
     const worldAngle = parentWt.worldAngle + values.angle;
     worldTransforms.set(node.id, { worldX: wx, worldY: wy, worldAngle, worldStretch: values.stretch });
   }
@@ -144,9 +150,12 @@ function computeSocketWorldPosition(
   const socketWorldX = parentWt.worldX + (socket.localX * cosA - socket.localY * sinA);
   const socketWorldY = parentWt.worldY + (socket.localX * sinA + socket.localY * cosA);
 
-  const wx = snapToPixel(socketWorldX + values.offsetX);
+  // offset 在父节点局部空间，需按父节点角度旋转
+  const rotatedOffsetX = values.offsetX * cosA - values.offsetY * sinA;
+  const rotatedOffsetY = values.offsetX * sinA + values.offsetY * cosA;
+  const wx = snapToPixel(socketWorldX + rotatedOffsetX);
   const latitudeYOffset = computeLatitudeYOffset(latitude, depth);
-  const wy = snapToPixel(socketWorldY + values.offsetY + latitudeYOffset);
+  const wy = snapToPixel(socketWorldY + rotatedOffsetY + latitudeYOffset);
   const worldAngle = parentWt.worldAngle + values.angle;
 
   worldTransforms.set(node.id, { worldX: wx, worldY: wy, worldAngle, worldStretch: values.stretch });

@@ -464,8 +464,10 @@ export function useCanvasState() {
               if (socket && parentNode) {
                 const parentAngleRad = (parentPos.angle * Math.PI) / 180;
                 const cosA = Math.cos(parentAngleRad); const sinA = Math.sin(parentAngleRad);
-                worldX = Math.round(parentPos.x + (socket.localX * cosA - socket.localY * sinA) + offsetX);
-                worldY = Math.round(parentPos.y + (socket.localX * sinA + socket.localY * cosA) + offsetY);
+                const rotatedOffsetX = offsetX * cosA - offsetY * sinA;
+                const rotatedOffsetY = offsetX * sinA + offsetY * cosA;
+                worldX = Math.round(parentPos.x + (socket.localX * cosA - socket.localY * sinA) + rotatedOffsetX);
+                worldY = Math.round(parentPos.y + (socket.localX * sinA + socket.localY * cosA) + rotatedOffsetY);
               } else { worldX = Math.round(parentPos.x + offsetX); worldY = Math.round(parentPos.y + offsetY); }
             } else { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
           } else { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
