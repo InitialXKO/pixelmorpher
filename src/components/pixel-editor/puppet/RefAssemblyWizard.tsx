@@ -100,6 +100,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
       URL.revokeObjectURL(oldUrl);
     }
     useEditorStore.getState().setReferenceImageUrl(null);
+    // 清色键（跨肢体共享，但不出向导）
+    useEditorStore.getState().setChromaKeyColor(null);
     resetRefWizardStep();
     onClose();
   };
