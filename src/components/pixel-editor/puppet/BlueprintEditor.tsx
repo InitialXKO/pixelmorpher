@@ -85,7 +85,59 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     };
     onChange({ ...graph, nodes: [...graph.nodes, newNode] });
     setSelectedId(id);
-  }, [graph, onChange, addingType]);
+  }, [graph, onChange, addingType, idPrefix]);
+
+  // 自动布局：按拓扑深度分层，左→右排列
+  const autoLayout = useCallback(() => {
+    const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
+    // 计算每个节点的深度（到输入的最长路径）
+    const depthCache = new Map<string, number>();
+    function getDepth(id: string, visiting = new Set<string>()): number {
+      if (depthCache.has(id)) return depthCache.get(id)!;
+      if (visiting.has(id)) return 0; // 环则返回 0
+      visiting.add(id);
+      const node = nodeMap.get(id);
+      if (!node) return 0;
+      let maxDep = 0;
+      for (const input of Object.values(node.inputs)) {
+        if (typeof input === 'object' && input !== null && 'nodeId' in input) {
+          maxDep = Math.max(maxDep, getDepth((input as any).nodeId, visiting) + 1);
+        }
+      }
+      visiting.delete(id);
+      depthCache.set(id, maxDep);
+      return maxDep;
+    }
+
+    // 按深度分组
+    const layers = new Map<number, BlueprintNode[]>();
+    for (const node of graph.nodes) {
+      const d = getDepth(node.id);
+      if (!layers.has(d)) layers.set(d, []);
+      layers.get(d)!.push(node);
+    }
+
+    // 布局常量（与渲染一致）
+    const NODE_W = 160;
+    const NODE_H = 80;
+    const H_GAP = 60;
+    const V_GAP = 20;
+
+    const newNodes = graph.nodes.map((node) => {
+      const d = getDepth(node.id);
+      const layer = layers.get(d)!;
+      const idx = layer.indexOf(node);
+      return {
+        ...node,
+        ui: {
+          ...node.ui,
+          x: 20 + d * (NODE_W + H_GAP),
+          y: 20 + idx * (NODE_H + V_GAP),
+        },
+      };
+    });
+    onChange({ ...graph, nodes: newNodes });
+  }, [graph, onChange]);
 
   const removeNode = useCallback((id: string) => {
     if (id === graph.outputId) return; // 不能删输出节点
@@ -245,6 +297,15 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
         >
           <Plus className="size-3 mr-0.5" />节点
         </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={autoLayout}
+          className="h-7 px-2 text-[10px]"
+          title="按依赖关系自动排列"
+        >
+          整理
+        </Button>
       </div>
       {idPrefix && (
         <div className="text-[9px] text-gray-500 px-1">
@@ -331,7 +392,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           return (
             <div
               key={node.id}
-              className={`absolute rounded border cursor-pointer ${
+              className={`absolute rounded border cursor-pointer select-none ${
                 isSelected
                   ? 'border-cyan-400 bg-[#0f1f2f]'
                   : isOutput
@@ -357,10 +418,11 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                 }}
               />
               <div
-                className="flex items-center justify-between px-1.5 py-1 border-b border-[#1e1e3a] cursor-move"
+                className="flex items-center justify-between px-1.5 py-1 border-b border-[#1e1e3a] cursor-move select-none"
                 onMouseDown={(e) => {
                   // 只有左键且不是从端口开始的才拖节点
                   if (e.button !== 0) return;
+                  e.preventDefault(); // 防止选中文字
                   const rect = e.currentTarget.closest('.relative')?.getBoundingClientRect();
                   if (!rect) return;
                   setDragging({
