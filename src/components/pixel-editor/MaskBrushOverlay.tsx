@@ -167,8 +167,8 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       projectStore.setPartPixels(part.id, pixels);
       console.log('[MaskBrush] 已生成 Part:', part.id);
 
-      // 关联到节点：更新所有含该 nodeId 的骨架（防克隆后 ID 重复）
-      // 同时更新 costume.spriteMap（优先级高于 spritePartId，手动换装走的就是这个）
+      // 关联到节点：只写当前激活服装的 spriteMap，不改模板节点的 spritePartId
+      // （模板是共享的，服装才是向导产物）
       if (maskNodeId) {
         const skeletons = projectStore.puppetSkeletons ?? [];
         const owners = skeletons.filter((sk) =>
@@ -176,20 +176,19 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
         );
         if (owners.length > 0) {
           for (const owner of owners) {
-            projectStore.updatePuppetNode(owner.id, maskNodeId, {
-              spritePartId: part.id,
-            });
-            // 找拥有该骨架的角色，更新其 costume spriteMap
+            // 找拥有该骨架的角色，只更新其当前激活服装的 spriteMap
             // 只写骨架当前方向（对位时选择的方向），不写四个方向
             const character = (projectStore.puppetCharacters ?? []).find(
               (c) => c.puppetSkeletonId === owner.id
             );
-            if (character) {
+            if (character && character.activeCostumeSetId) {
               const dir = owner.currentDirection ?? 'S';
-              const costumes = character.costumeSets ?? [];
-              for (const cs of costumes) {
+              const activeCs = (character.costumeSets ?? []).find(
+                (cs) => cs.id === character.activeCostumeSetId
+              );
+              if (activeCs) {
                 const newSpriteMap = {
-                  ...cs.spriteMap,
+                  ...activeCs.spriteMap,
                   [`${maskNodeId}:${dir}`]: part.id,
                 };
                 // 直接更新 store
@@ -199,7 +198,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
                       ? {
                           ...c,
                           costumeSets: c.costumeSets.map((s) =>
-                            s.id === cs.id ? { ...s, spriteMap: newSpriteMap } : s
+                            s.id === activeCs.id ? { ...s, spriteMap: newSpriteMap } : s
                           ),
                         }
                       : c

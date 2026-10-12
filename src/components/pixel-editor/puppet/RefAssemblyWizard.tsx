@@ -257,6 +257,9 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     else if (name.includes('right')) mirrorName = node.name.replace(/right/i, 'left');
     else if (name.includes('_l')) mirrorName = node.name.replace(/_l/i, '_r');
     else if (name.includes('_r')) mirrorName = node.name.replace(/_r/i, '_l');
+    // 中文：左/右
+    else if (node.name.includes('左')) mirrorName = node.name.replace('左', '右');
+    else if (node.name.includes('右')) mirrorName = node.name.replace('右', '左');
     if (!mirrorName) return null;
     const src = sortedNodes.find((n) => n.name === mirrorName);
     // 源节点必须已有精灵（已遮罩或模板自带）
@@ -643,9 +646,17 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                         }
                       );
                       projectStore.setPartPixels(newPart.id, flipped);
-                      projectStore.updatePuppetNode(activeSkeleton.id, targetNode.id, {
-                        spritePartId: newPart.id,
-                      });
+                      // 写进工作服装的 spriteMap，不改模板节点
+                      if (workingCostumeId && selectedCharacterId) {
+                        const dir = activeSkeleton.currentDirection ?? 'S';
+                        projectStore.setCostumeSprite(
+                          selectedCharacterId,
+                          workingCostumeId,
+                          targetNode.id,
+                          dir,
+                          newPart.id
+                        );
+                      }
                       setProcessedNodes((m) => new Map(m).set(targetNode.id, 'mirror'));
                     }}
                   >
