@@ -25,7 +25,8 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   // 色键取色
   const [isPicking, setIsPicking] = useState(false);
   const [keyColor, setKeyColor] = useState<{ r: number; g: number; b: number } | null>(null);
-  const [tolerance, setTolerance] = useState(30);
+  // 色键容差（固定值，无 UI）
+  const CHROMA_TOLERANCE = 30;
 
   const maskNodeId = useEditorStore((s) => s.maskNodeId);
   const setEditMode = useEditorStore((s) => s.setEditMode);
@@ -99,42 +100,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
     setLastUpdateInfo(`已取色键 rgb(${r},${g},${b})`);
   };
 
-  // 色键自动抠图：非色键像素填入遮罩
-  const handleChromaKey = async () => {
-    if (!keyColor) {
-      setLastUpdateInfo('请先取色');
-      return;
-    }
-    const refData = await getReferenceImageData();
-    if (!refData) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d')!;
-    const maskImage = ctx.createImageData(canvasWidth, canvasHeight);
-    // 容差 0-100 → 颜色距离 0-441
-    const maxDist = (tolerance / 100) * 441;
-    let count = 0;
-    for (let i = 0; i < canvasWidth * canvasHeight; i++) {
-      const idx = i * 4;
-      const a = refData.data[idx + 3];
-      if (a < 10) continue; // 参考图透明处跳过
-      const dr = refData.data[idx] - keyColor.r;
-      const dg = refData.data[idx + 1] - keyColor.g;
-      const db = refData.data[idx + 2] - keyColor.b;
-      const dist = Math.sqrt(dr * dr + dg * dg + db * db);
-      if (dist > maxDist) {
-        // 非色键 → 遮罩不透明
-        maskImage.data[idx] = 255;
-        maskImage.data[idx + 1] = 0;
-        maskImage.data[idx + 2] = 0;
-        maskImage.data[idx + 3] = 128;
-        count++;
-      }
-    }
-    ctx.putImageData(maskImage, 0, 0);
-    setLastUpdateInfo(`色键抠图完成：${count} 像素`);
-  };
-
+  // 色键自动抠图：非色键像素填入遮罩（已移除，只保留取色+提取过滤）
   const colorDist = (r1: number, g1: number, b1: number, r2: number, g2: number, b2: number) => {
     const dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
     return Math.sqrt(dr * dr + dg * dg + db * db);
@@ -222,7 +188,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       });
 
       const pixels: string[][] = [];
-      const maxDist = keyColor ? (tolerance / 100) * 441 : 0;
+      const maxDist = keyColor ? (CHROMA_TOLERANCE / 100) * 441 : 0;
       for (let y = 0; y < h; y++) {
         const row: string[] = [];
         for (let x = 0; x < w; x++) {
@@ -391,21 +357,6 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
               style={{ backgroundColor: `rgb(${keyColor.r},${keyColor.g},${keyColor.b})` }}
               title={`rgb(${keyColor.r},${keyColor.g},${keyColor.b})`}
             />
-            <label className="text-gray-300 flex items-center gap-1 text-[10px]">
-              容差
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={tolerance}
-                onChange={(e) => setTolerance(Number(e.target.value))}
-                className="w-14"
-              />
-              {tolerance}
-            </label>
-            <Button size="sm" variant="outline" className="h-6 text-[11px]" onClick={handleChromaKey} title="自动填充非色键像素到遮罩">
-              色键抠图
-            </Button>
             <Button size="sm" variant="ghost" className="h-6 text-[11px] text-gray-500" onClick={() => setKeyColor(null)}>
               清除
             </Button>
