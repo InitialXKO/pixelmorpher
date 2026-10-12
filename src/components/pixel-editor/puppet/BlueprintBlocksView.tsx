@@ -264,6 +264,74 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
       </span>
     );
 
+    // 模板中未提及的输入槽（如下 t），单独列出
+    const templatePorts = new Set(
+      [...template.matchAll(/\{(\w+)\}/g)].map((m) => m[1])
+    );
+    const extraInputs = getNodeInputs(node.type).filter(
+      (port) => !templatePorts.has(port) && !(port in node.params)
+    );
+
+    const renderSlot = (port: string) => {
+      const input = node.inputs[port];
+      const srcId = typeof input === 'object' && input !== null && 'nodeId' in input ? (input as any).nodeId : null;
+      const srcNode = srcId ? nodeMap.get(srcId) : null;
+      const slotKey = `${node.id}:${port}`;
+      const isHover = hoverSlot === slotKey;
+
+      if (srcNode) {
+        return (
+          <span
+            key={port}
+            className="inline-flex items-center mx-0.5 align-middle"
+            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'link'; setHoverSlot(slotKey); }}
+            onDragLeave={() => setHoverSlot(null)}
+            onDrop={(e) => {
+              e.preventDefault(); e.stopPropagation();
+              const newSrcId = e.dataTransfer.getData('text/blueprint-node-id');
+              if (newSrcId) connectSlot(node.id, port, newSrcId);
+            }}
+            title={`${port}：拖入替换，点击✕断开`}
+          >
+            <span className="text-[9px] text-white/70 mr-0.5">{port}</span>
+            {renderBlock(srcNode, depth + 1)}
+            <button
+              onClick={(e) => { e.stopPropagation(); disconnectSlot(node.id, port); }}
+              className="ml-0.5 text-white/70 hover:text-white bg-black/30 rounded-full p-0.5"
+              title="断开"
+            >
+              <X className="size-2" />
+            </button>
+          </span>
+        );
+      }
+
+      return (
+        <span
+          key={port}
+          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'link'; setHoverSlot(slotKey); }}
+          onDragLeave={() => setHoverSlot(null)}
+          onDrop={(e) => {
+            e.preventDefault(); e.stopPropagation();
+            const newSrcId = e.dataTransfer.getData('text/blueprint-node-id');
+            if (newSrcId) connectSlot(node.id, port, newSrcId);
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (selectedSrcId) connectSlot(node.id, port, selectedSrcId);
+          }}
+          className={`
+            inline-flex items-center justify-center mx-0.5 h-5 min-w-[20px] px-1 rounded-full align-middle
+            ${isHover ? 'bg-amber-300 ring-2 ring-amber-200' : 'bg-black/25 border border-dashed border-white/50'}
+          `}
+          title={`${port}：拖入积木或点选后点击`}
+        >
+          <span className="text-[9px] text-white/60 mr-0.5">{port}</span>
+          <span className="text-[9px] text-white/60">○</span>
+        </span>
+      );
+    };
+
     return (
       <div
         draggable={isReporter && !isOutput && depth === 0}
@@ -285,8 +353,9 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
           px-2.5 py-0.5 my-0.5 inline-block max-w-full
         `}
       >
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
           {content}
+          {extraInputs.map(renderSlot)}
           {depth === 0 && !isOutput && (
             <button
               onClick={(e) => { e.stopPropagation(); removeNode(node.id); }}
