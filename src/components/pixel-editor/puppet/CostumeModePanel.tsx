@@ -164,7 +164,16 @@ export default function CostumeModePanel({
           <div className="flex items-center gap-1">
             <select
               value={selectedCostumeId ?? ''}
-              onChange={(e) => setSelectedCostumeId(e.target.value || null)}
+              onChange={(e) => {
+                const id = e.target.value || null;
+                setSelectedCostumeId(id);
+                // 同步设为角色当前服装，画布才变化
+                if (selectedCharacterId && id) {
+                  useProjectStore.getState().updatePuppetCharacter(selectedCharacterId, {
+                    activeCostumeSetId: id,
+                  });
+                }
+              }}
               className="flex-1 min-w-0 h-7 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
             >
               <option value="">— 选择服装 —</option>
