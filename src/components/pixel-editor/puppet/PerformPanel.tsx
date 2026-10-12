@@ -46,10 +46,11 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
   const performNodeId = usePuppetSessionStore((s) => s.performNodeId);
   const performArmed = usePuppetSessionStore((s) => s.performArmed);
   const autoKeyframe = usePuppetSessionStore((s) => s.autoKeyframe);
-  const puppetOnionSkin = usePuppetSessionStore((s) => s.puppetOnionSkin);
+  // 木偶洋葱皮开关与顶端工具栏同构：直接读写 onionSkinEnabled，不再用独立的 puppetOnionSkin
+  const onionSkinEnabled = useProjectStore((s) => s.onionSkinEnabled);
+  const toggleOnionSkin = useProjectStore((s) => s.toggleOnionSkin);
   const setPerformNodeId = usePuppetSessionStore((s) => s.setPerformNodeId);
   const setAutoKeyframe = usePuppetSessionStore((s) => s.setAutoKeyframe);
-  const setPuppetOnionSkin = usePuppetSessionStore((s) => s.setPuppetOnionSkin);
   const enterPerform = usePuppetSessionStore((s) => s.enterPerform);
   const exitPerform = usePuppetSessionStore((s) => s.exitPerform);
   const recordFullPose = usePuppetSessionStore((s) => s.recordFullPose);
@@ -376,7 +377,7 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
               <span className="flex items-center gap-1.5 text-[10px] text-gray-400">
                 <Ghost className="size-3 text-purple-500/70" /> 木偶洋葱皮
               </span>
-              <Switch checked={puppetOnionSkin} onCheckedChange={setPuppetOnionSkin} className="scale-75" />
+              <Switch checked={onionSkinEnabled} onCheckedChange={toggleOnionSkin} className="scale-75" />
             </div>
           </div>
 

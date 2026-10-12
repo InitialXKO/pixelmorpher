@@ -64,8 +64,6 @@ export default function PixelCanvas() {
   const showAllCharacters = usePuppetSessionStore((st) => st.showAllCharacters);
   const performCharacterId = usePuppetSessionStore((st) => st.performCharacterId);
   const performArmed = usePuppetSessionStore((st) => st.performArmed);
-  // 订阅木偶洋葱皮开关，变化时触发重渲染（否则 getState 读到旧值，开关看似无效）
-  const puppetOnionSkin = usePuppetSessionStore((st) => st.puppetOnionSkin);
   // 订阅当前帧，播放时触发 render 回调更新（否则闭包里的 currentFrame 是旧的）
   const storeCurrentFrame = useProjectStore((st) => st.currentFrame);
 
@@ -143,13 +141,12 @@ export default function PixelCanvas() {
       offCtx.save();
       offCtx.clearRect(0, 0, s.canvasWidth, s.canvasHeight);
       const curVersion = s.onionDataVersionRef.current;
-      const puppetOnionOn = puppetOnionSkin;
       const kfHash = s.keyframes.map(kf => `${kf.id}:${kf.frame}:${kf.modifiers.length}`).join('|')
-        + `|puppet:${s.puppetClipsVersion}:ponion:${puppetOnionOn ? 1 : 0}`;
+        + `|puppet:${s.puppetClipsVersion}`;
 
       // 木偶洋葱皮：把指定帧的木偶角色渲染进洋葱缓存画布
+      // 与顶端开关同构：外层 s.onionSkinEnabled 已控制，此处不再单独检查
       const renderPuppetOnionFrame = (cacheCtx: CanvasRenderingContext2D, frame: number) => {
-        if (!puppetOnionOn) return;
         const pst = useProjectStore.getState();
         const clips = pst.animationClips;
         const skeletons = pst.puppetSkeletons ?? [];
@@ -373,7 +370,6 @@ export default function PixelCanvas() {
     showAllCharacters, performCharacterId, storeCurrentFrame,
     // 参考图：URL/可见性/不透明度变化时重建 render，否则闭包里是旧 s
     s.referenceImageUrl, s.referenceImageVisible, s.referenceImageOpacity,
-    puppetOnionSkin,
   ]);
 
   // 用 ref 存最新 render，避免 effect 反复重建导致旧闭包执行
