@@ -8,8 +8,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { Plus, Trash2, Eye, EyeOff, ChevronDown, Network } from 'lucide-react';
-import { useProjectStore } from '@/lib/store';
-import { usePuppetSessionStore } from '@/lib/puppet-session-store';
+import { useProjectStore, useEditorStore } from '@/lib/store';
 import {
   ANIMATION_MODIFIER_TYPES,
   getModifierDef,
@@ -43,26 +42,20 @@ export default function PuppetModifierPanel() {
   const updatePuppetNodeModifier = useProjectStore((s) => s.updatePuppetNodeModifier);
   const togglePuppetNodeModifier = useProjectStore((s) => s.togglePuppetNodeModifier);
 
-  const phase = usePuppetSessionStore((s) => s.phase);
-  const performCharacterId = usePuppetSessionStore((s) => s.performCharacterId);
-  const performNodeId = usePuppetSessionStore((s) => s.performNodeId);
-
   const [addingType, setAddingType] = useState<AnimationModifierType>('pendulum');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'modifiers' | 'blueprint' | 'templates'>('modifiers');
 
-  const puppetCharacters = useProjectStore((s) => s.puppetCharacters) ?? [];
-  const character = useMemo(
-    () => puppetCharacters.find((c) => c.id === performCharacterId) ?? null,
-    [puppetCharacters, performCharacterId]
-  );
+  const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
+  const selectedPuppetNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
+
   const skeleton = useMemo(
-    () => puppetSkeletons.find((sk) => sk.id === character?.puppetSkeletonId) ?? null,
-    [puppetSkeletons, character]
+    () => puppetSkeletons.find((sk) => sk.id === activePuppetSkeletonId) ?? null,
+    [puppetSkeletons, activePuppetSkeletonId]
   );
   const node = useMemo(
-    () => skeleton?.nodes.find((n) => n.id === performNodeId) ?? null,
-    [skeleton, performNodeId]
+    () => skeleton?.nodes.find((n) => n.id === selectedPuppetNodeId) ?? null,
+    [skeleton, selectedPuppetNodeId]
   );
   const modifiers = node?.modifiers ?? [];
 
@@ -80,7 +73,27 @@ export default function PuppetModifierPanel() {
     useProjectStore.getState().updatePuppetNode(skeleton.id, node.id, { blueprint: g });
   };
 
-  if (phase !== 'perform' || !node || !skeleton) return null;
+  // 创建空蓝图（含输出节点）
+  const createBlueprint = () => {
+    if (!skeleton || !node) return;
+    const outputId = `node_${Date.now().toString(36)}`;
+    const graph: BlueprintGraph = {
+      version: 1,
+      nodes: [
+        {
+          id: outputId,
+          type: 'transform',
+          inputs: {},
+          params: {},
+          ui: { x: 200, y: 100 },
+        },
+      ],
+      outputId,
+    };
+    useProjectStore.getState().updatePuppetNode(skeleton.id, node.id, { blueprint: graph });
+  };
+
+  if (!node || !skeleton) return null;
 
   const handleAdd = () => {
     addPuppetNodeModifier(skeleton.id, node.id, addingType);
@@ -149,8 +162,13 @@ export default function PuppetModifierPanel() {
               skeleton={skeleton}
             />
           ) : (
-            <div className="text-[10px] text-gray-600 text-center py-4">
-              暂无蓝图。先在"列表"里加个变换类修改器（如钟摆），会自动转成蓝图。
+            <div className="text-center py-4 space-y-2">
+              <div className="text-[10px] text-gray-600">
+                暂无蓝图
+              </div>
+              <Button size="sm" onClick={createBlueprint} className="h-7 px-3 text-[10px]">
+                <Plus className="size-3 mr-1" /> 创建蓝图
+              </Button>
             </div>
           )}
         </>

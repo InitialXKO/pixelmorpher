@@ -28,6 +28,8 @@ import { hexToRgbCached } from './color-utils';
 import { acquireCanvas, releaseCanvas } from './canvas-pool';
 import { getRotationCacheKey, getCachedRotation, setCachedRotation } from './render-cache';
 import { applyPixelModifiers, isPixelDeformModifier, padPixelGrid, trimTransparentEdges, computeTotalAnimPadding } from './pixel-modifiers';
+import { extractPixelModifiers } from '../blueprint/eval';
+import { modifiersToBlueprint } from '../blueprint/migrate';
 import { getAnimationFrameAndWeight } from './animation-state';
 import { resolveAnimModifierParams, resolveKeyframeModifierParams } from './param-driver';
 import {
@@ -926,6 +928,18 @@ function renderPuppetFrame(
     latitude,
   );
 
+  // Step 7b: Apply active costume's per-node offsets (from ref-assembly alignment)
+  if (activeCostumeSet?.nodeOffsets) {
+    for (const wt of worldTransforms) {
+      const off = activeCostumeSet.nodeOffsets[wt.node.id];
+      if (off) {
+        wt.worldX += off.x;
+        wt.worldY += off.y;
+        wt.worldAngle = (wt.worldAngle ?? 0) + off.angle;
+      }
+    }
+  }
+
   // Step 8: Generate joint discs
   const jointDiscs = generateJointDiscs(worldTransforms, skeleton, latitude);
 
@@ -1030,7 +1044,28 @@ function renderPuppetFrame(
     if (!item.part) continue;
 
     // Create part canvas
-    const partCanvasResult = createPartCanvasFromPart(item.part, keyframes, currentFrame, frameRate);
+    // 合并：节点的原始像素修改器 + 蓝图里的像素节点
+    let pixelMods = item.node?.modifiers ?? [];
+    const blueprint = item.node?.blueprint ?? (pixelMods.length ? modifiersToBlueprint(pixelMods) : null);
+    if (blueprint) {
+      const bpPixelMods = extractPixelModifiers(blueprint, {
+        frame: currentFrame,
+        frameRate: 12,
+        vars: {},
+        nodeOutputs: undefined,
+        nodeState: new Map(),
+      });
+      if (bpPixelMods.length > 0) {
+        // 蓝图像素节点优先（去重：同类型只保留蓝图的）
+        const bpTypes = new Set(bpPixelMods.map((m) => m.type));
+        pixelMods = [...bpPixelMods, ...pixelMods.filter((m) => !bpTypes.has(m.type))];
+      }
+    }
+
+    const partCanvasResult = createPartCanvasFromPart(
+      item.part, keyframes, currentFrame, frameRate,
+      pixelMods
+    );
     if (!partCanvasResult) continue;
 
     let partCanvas = partCanvasResult.canvas;
@@ -1103,6 +1138,8 @@ function createPartCanvasFromPart(
   keyframes: Keyframe[],
   currentFrame: number,
   frameRate: number = 12,
+  /** 木偶节点的动画修改器（像素级） */
+  animModifiers?: PartAnimationModifier[],
 ): { canvas: HTMLCanvasElement; offsetX: number; offsetY: number } | null {
   if (!part.pixels || part.pixels.length === 0) return null;
 
@@ -1177,9 +1214,9 @@ function createPartCanvasFromPart(
 
   // ---- Step 3: Apply pixel-level deformation animation modifiers ----
   // (wave_deform, texture_scroll, contour_scroll, etc.)
-  // Part 不再有 animationModifiers（死代码，仅为编译通过）
-  if (false) {
-    const animMods: PartAnimationModifier[] = [];
+  // 木偶节点通过 animModifiers 参数传入
+  if (animModifiers && animModifiers.length > 0) {
+    const animMods = animModifiers.filter((m) => m.enabled);
     if (animMods.length > 0) {
       // Compute padding for overflow
       const animPadding = computeTotalAnimPadding(animMods, currentFrame, frameRate);

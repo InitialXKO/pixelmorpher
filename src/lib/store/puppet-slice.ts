@@ -66,6 +66,8 @@ export type PuppetSlice = {
   removePuppetCharacter: (id: string) => void;
   updatePuppetCharacter: (id: string, updates: Partial<PuppetCharacter>) => void;
   setActiveCostumeSet: (characterId: string, costumeSetId: string | null) => void;
+  /** 克隆角色+骨骼（深拷贝节点，生成新 ID），返回新角色 */
+  clonePuppetCharacter: (characterId: string, newName: string) => PuppetCharacter | null;
 
   // ---- Costume Set CRUD ----
   addCostumeSet: (characterId: string, name: string) => CostumeSet;
@@ -600,6 +602,107 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
     };
     set(s => ({ puppetCharacters: [...s.puppetCharacters, character] }));
     return character;
+  },
+
+  clonePuppetCharacter: (characterId, newName) => {
+    const state = get();
+    const character = state.puppetCharacters.find((c) => c.id === characterId);
+    if (!character) return null;
+    const skeleton = state.puppetSkeletons.find((sk) => sk.id === character.puppetSkeletonId);
+    if (!skeleton) return null;
+
+    state.pushUndo('克隆木偶角色');
+
+    // 深拷贝骨骼：节点新 ID，socket/plug 引用更新
+    const nodeIdMap = new Map<string, string>();
+    for (const n of skeleton.nodes) {
+      nodeIdMap.set(n.id, crypto.randomUUID());
+    }
+    const clonedNodes = skeleton.nodes.map((n) => {
+      const newSockets = n.sockets.map((s) => ({ ...s, id: crypto.randomUUID() }));
+      // plug 的 socketId 需要映射到新 socket ID
+      // 简化：通过原 socket 在原节点中的索引找新 socket
+      let newPlug: { socketId: string; localX: number; localY: number } | null = null;
+      if (n.plug) {
+        // 找到父节点和原 socket
+        const parentNode = skeleton.nodes.find((pn) =>
+          pn.sockets.some((s) => s.id === n.plug!.socketId)
+        );
+        if (parentNode) {
+          const socketIdx = parentNode.sockets.findIndex((s) => s.id === n.plug!.socketId);
+          // 注意：clonedNodes 还在构建中，不能在这里查找，先占位，后续修正
+          newPlug = {
+            socketId: `__PENDING__${parentNode.id}:${socketIdx}`,
+            localX: n.plug.localX,
+            localY: n.plug.localY,
+          };
+        }
+      }
+      return {
+        ...n,
+        id: nodeIdMap.get(n.id)!,
+        sockets: newSockets,
+        plug: newPlug,
+        // 深拷贝 modifiers/blueprint（浅拷贝数组，元素引用不变，可接受）
+        modifiers: [...n.modifiers],
+      };
+    });
+    // 修正 plug 的 socketId
+    const socketIdMap = new Map<string, string>();
+    for (const origNode of skeleton.nodes) {
+      const newNodeId = nodeIdMap.get(origNode.id)!;
+      const newNode = clonedNodes.find((cn) => cn.id === newNodeId)!;
+      origNode.sockets.forEach((s, idx) => {
+        socketIdMap.set(s.id, newNode.sockets[idx].id);
+      });
+    }
+    for (const cn of clonedNodes) {
+      if (cn.plug && cn.plug.socketId.startsWith('__PENDING__')) {
+        const [, origParentId, idxStr] = cn.plug.socketId.split(':');
+        const origParent = skeleton.nodes.find((n) => n.id === origParentId);
+        const origSocketId = origParent?.sockets[Number(idxStr)]?.id;
+        const newSocketId = origSocketId ? socketIdMap.get(origSocketId) : null;
+        if (newSocketId) {
+          cn.plug.socketId = newSocketId;
+        } else {
+          cn.plug = null; // 找不到则断开
+        }
+      }
+    }
+
+    const newSkeleton: PuppetSkeleton = {
+      ...skeleton,
+      id: crypto.randomUUID(),
+      name: `${skeleton.name}（装配副本）`,
+      nodes: clonedNodes,
+    };
+    set((s) => ({ puppetSkeletons: [...s.puppetSkeletons, newSkeleton] }));
+
+    // 克隆角色（服装集浅拷贝，新 ID）
+    const newCharacter: PuppetCharacter = {
+      ...character,
+      id: crypto.randomUUID(),
+      name: newName,
+      puppetSkeletonId: newSkeleton.id,
+      costumeSets: character.costumeSets.map((cs) => ({
+        ...cs,
+        id: crypto.randomUUID(),
+      })),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    // 修正服装集的 spriteMap：key 是 `${nodeId}:${dir}`，需映射新 nodeId
+    for (const cs of newCharacter.costumeSets) {
+      const newMap: Record<string, string> = {};
+      for (const [key, partId] of Object.entries(cs.spriteMap)) {
+        const [oldNodeId, dir] = key.split(':');
+        const newNodeId = nodeIdMap.get(oldNodeId);
+        if (newNodeId) newMap[`${newNodeId}:${dir}`] = partId;
+      }
+      cs.spriteMap = newMap;
+    }
+    set((s) => ({ puppetCharacters: [...s.puppetCharacters, newCharacter] }));
+    return newCharacter;
   },
 
   removePuppetCharacter: (id) => {

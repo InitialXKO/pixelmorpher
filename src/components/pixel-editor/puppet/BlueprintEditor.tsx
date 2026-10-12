@@ -10,8 +10,9 @@ import React, { useMemo, useState, useCallback } from 'react';
 import { Plus, Trash2, X, Network, Blocks } from 'lucide-react';
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { listBlueprintNodeTypes, getBlueprintNodeLabel } from '@/lib/blueprint/eval';
+import { getDefaultOutputForPort, getNodeInputs } from '@/lib/blueprint/specs';
 import { Button } from '@/components/ui/button';
-import BlueprintBlockView from './BlueprintBlockView';
+import BlueprintBlocksView from './BlueprintBlocksView';
 
 interface BlueprintEditorProps {
   graph: BlueprintGraph;
@@ -19,16 +20,32 @@ interface BlueprintEditorProps {
   title?: string;
   /** 传入后，nodeRef 节点的 nodeId 参数渲染为下拉选择 */
   skeleton?: { nodes: { id: string; name: string }[] } | null;
+  /** 新节点 ID 前缀（全局编辑器用：归属到指定部件） */
+  idPrefix?: string;
 }
 
 const NODE_WIDTH = 140;
 const NODE_HEADER_H = 24;
 const PORT_H = 18;
 
-export default function BlueprintEditor({ graph, onChange, title, skeleton }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix }: BlueprintEditorProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
   const [viewMode, setViewMode] = useState<'graph' | 'blocks'>('graph');
+  // 拖拽节点
+  const [dragging, setDragging] = useState<{
+    nodeId: string;
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+  } | null>(null);
+  // 连线中：从输出端口拖到输入端口
+  const [connecting, setConnecting] = useState<{
+    fromNodeId: string;
+    mouseX: number;
+    mouseY: number;
+  } | null>(null);
 
   const nodeTypes = useMemo(() => listBlueprintNodeTypes(), []);
 
@@ -56,7 +73,9 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
   }, [graph, onChange]);
 
   const addNode = useCallback(() => {
-    const id = `node_${Date.now().toString(36)}`;
+    const rawId = `node_${Date.now().toString(36)}`;
+    // 全局模式：加前缀归属到指定部件
+    const id = idPrefix ? `${idPrefix}__${rawId}` : rawId;
     const newNode: BlueprintNode = {
       id,
       type: addingType,
@@ -66,16 +85,122 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
     };
     onChange({ ...graph, nodes: [...graph.nodes, newNode] });
     setSelectedId(id);
-  }, [graph, onChange, addingType]);
+  }, [graph, onChange, addingType, idPrefix]);
+
+  // 自动布局：按拓扑深度分层，左→右排列
+  const autoLayout = useCallback(() => {
+    const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
+    // 计算每个节点的深度（到输入的最长路径）
+    const depthCache = new Map<string, number>();
+    function getDepth(id: string, visiting = new Set<string>()): number {
+      if (depthCache.has(id)) return depthCache.get(id)!;
+      if (visiting.has(id)) return 0; // 环则返回 0
+      visiting.add(id);
+      const node = nodeMap.get(id);
+      if (!node) return 0;
+      let maxDep = 0;
+      for (const input of Object.values(node.inputs)) {
+        if (typeof input === 'object' && input !== null && 'nodeId' in input) {
+          maxDep = Math.max(maxDep, getDepth((input as any).nodeId, visiting) + 1);
+        }
+      }
+      visiting.delete(id);
+      depthCache.set(id, maxDep);
+      return maxDep;
+    }
+
+    // 按深度分组
+    const layers = new Map<number, BlueprintNode[]>();
+    for (const node of graph.nodes) {
+      const d = getDepth(node.id);
+      if (!layers.has(d)) layers.set(d, []);
+      layers.get(d)!.push(node);
+    }
+
+    // 布局常量（与渲染一致）
+    const NODE_W = 160;
+    const NODE_H = 80;
+    const H_GAP = 60;
+    const V_GAP = 20;
+
+    const newNodes = graph.nodes.map((node) => {
+      const d = getDepth(node.id);
+      const layer = layers.get(d)!;
+      const idx = layer.indexOf(node);
+      return {
+        ...node,
+        ui: {
+          ...node.ui,
+          x: 20 + d * (NODE_W + H_GAP),
+          y: 20 + idx * (NODE_H + V_GAP),
+        },
+      };
+    });
+    onChange({ ...graph, nodes: newNodes });
+  }, [graph, onChange]);
 
   const removeNode = useCallback((id: string) => {
     if (id === graph.outputId) return; // 不能删输出节点
-    onChange({
-      ...graph,
-      nodes: graph.nodes.filter((n) => n.id !== id),
-    });
+    // 清除其他节点对它的引用，防止悬空
+    const newNodes = graph.nodes
+      .filter((n) => n.id !== id)
+      .map((n) => {
+        const newInputs = { ...n.inputs };
+        for (const [port, input] of Object.entries(newInputs)) {
+          if (typeof input === 'object' && input !== null && 'nodeId' in input && (input as any).nodeId === id) {
+            delete newInputs[port];
+          }
+        }
+        return { ...n, inputs: newInputs };
+      });
+    onChange({ ...graph, nodes: newNodes });
     if (selectedId === id) setSelectedId(null);
   }, [graph, onChange, selectedId]);
+
+  // 断开输入端口的连接
+  const disconnectInput = useCallback((nodeId: string, port: string) => {
+    const node = graph.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const newInputs = { ...node.inputs };
+    delete newInputs[port];
+    onChange({
+      ...graph,
+      nodes: graph.nodes.map((n) => (n.id === nodeId ? { ...n, inputs: newInputs } : n)),
+    });
+  }, [graph, onChange]);
+
+  const setSlotLiteral = useCallback((nodeId: string, port: string, value: number | null) => {
+    const node = graph.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const newInputs = { ...node.inputs };
+    if (value === null || isNaN(value)) {
+      delete newInputs[port];
+    } else {
+      newInputs[port] = { type: 'number', value };
+    }
+    onChange({
+      ...graph,
+      nodes: graph.nodes.map((n) => (n.id === nodeId ? { ...n, inputs: newInputs } : n)),
+    });
+  }, [graph, onChange]);
+
+  // 连接：fromNode 输出 -> toNode 的 port 输入
+  const connectPorts = useCallback((fromNodeId: string, toNodeId: string, port: string) => {
+    if (fromNodeId === toNodeId) return; // 不自连
+    const fromNode = graph.nodes.find((n) => n.id === fromNodeId);
+    const toNode = graph.nodes.find((n) => n.id === toNodeId);
+    if (!toNode || !fromNode) return;
+    // 从注册表取默认输出端口
+    const output = getDefaultOutputForPort(fromNode.type, port);
+    onChange({
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        n.id === toNodeId
+          ? { ...n, inputs: { ...n.inputs, [port]: { nodeId: fromNodeId, output } } }
+          : n
+      ),
+    });
+  }, [graph, onChange]);
 
   const selected = graph.nodes.find((n) => n.id === selectedId) ?? null;
 
@@ -85,15 +210,19 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
     for (const node of graph.nodes) {
       const toPos = positions.get(node.id);
       if (!toPos) continue;
+      // 与渲染一致：spec 输入 + 已有输入
+      const specInputs = getNodeInputs(node.type);
+      const allPorts = Array.from(new Set([...specInputs, ...Object.keys(node.inputs)]));
       let portIdx = 0;
-      for (const [port, input] of Object.entries(node.inputs)) {
-        if (typeof input === 'object' && 'nodeId' in input) {
-          const fromPos = positions.get(input.nodeId);
+      for (const port of allPorts) {
+        const input = node.inputs[port];
+        if (typeof input === 'object' && input !== null && 'nodeId' in input) {
+          const fromPos = positions.get((input as any).nodeId);
           if (fromPos) {
             list.push({
               from: { x: fromPos.x + NODE_WIDTH, y: fromPos.y + NODE_HEADER_H / 2 },
               to: { x: toPos.x, y: toPos.y + NODE_HEADER_H + portIdx * PORT_H + PORT_H / 2 },
-              key: `${input.nodeId}-${node.id}-${port}`,
+              key: `${(input as any).nodeId}-${node.id}-${port}`,
             });
           }
         }
@@ -159,13 +288,33 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
             <option key={t} value={t}>{getBlueprintNodeLabel(t)}</option>
           ))}
         </select>
-        <Button size="sm" onClick={addNode} className="h-7 px-2 text-[10px]">
+        <Button
+          size="sm"
+          onClick={addNode}
+          disabled={!!idPrefix && !idPrefix}
+          className="h-7 px-2 text-[10px]"
+          title={idPrefix ? `将添加到部件 ${idPrefix}` : '添加节点'}
+        >
           <Plus className="size-3 mr-0.5" />节点
         </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={autoLayout}
+          className="h-7 px-2 text-[10px]"
+          title="按依赖关系自动排列"
+        >
+          整理
+        </Button>
       </div>
+      {idPrefix && (
+        <div className="text-[9px] text-gray-500 px-1">
+          新节点将归属到部件 <span className="text-cyan-300">{idPrefix}</span>
+        </div>
+      )}
 
       {viewMode === 'blocks' ? (
-        <BlueprintBlockView graph={graph} onChange={onChange} />
+        <BlueprintBlocksView graph={graph} onChange={onChange} />
       ) : (
       <>
       {/* 画布 */}
@@ -173,6 +322,34 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
         className="relative bg-[#080818] border border-[#1e1e3a] rounded overflow-auto"
         style={{ height: 300 }}
         onClick={() => setSelectedId(null)}
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const mx = e.clientX - rect.left;
+          const my = e.clientY - rect.top;
+          if (dragging) {
+            const dx = mx - dragging.startX;
+            const dy = my - dragging.startY;
+            const newX = Math.max(0, dragging.origX + dx);
+            const newY = Math.max(0, dragging.origY + dy);
+            onChange({
+              ...graph,
+              nodes: graph.nodes.map((n) =>
+                n.id === dragging.nodeId ? { ...n, ui: { x: newX, y: newY } } : n
+              ),
+            });
+          }
+          if (connecting) {
+            setConnecting({ ...connecting, mouseX: mx, mouseY: my });
+          }
+        }}
+        onMouseUp={() => {
+          setDragging(null);
+          setConnecting(null);
+        }}
+        onMouseLeave={() => {
+          setDragging(null);
+          setConnecting(null);
+        }}
       >
         <svg
           width={maxX}
@@ -189,6 +366,23 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
               opacity={0.6}
             />
           ))}
+          {/* 连线中的临时线 */}
+          {connecting && (() => {
+            const fromPos = positions.get(connecting.fromNodeId);
+            if (!fromPos) return null;
+            const fx = fromPos.x + NODE_WIDTH;
+            const fy = fromPos.y + NODE_HEADER_H / 2;
+            return (
+              <path
+                d={`M ${fx} ${fy} C ${fx + 40} ${fy}, ${connecting.mouseX - 40} ${connecting.mouseY}, ${connecting.mouseX} ${connecting.mouseY}`}
+                stroke="#22d3ee"
+                strokeWidth={1.5}
+                fill="none"
+                opacity={0.8}
+                strokeDasharray="4 2"
+              />
+            );
+          })()}
         </svg>
 
         {graph.nodes.map((node) => {
@@ -198,7 +392,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
           return (
             <div
               key={node.id}
-              className={`absolute rounded border cursor-pointer ${
+              className={`absolute rounded border cursor-pointer select-none ${
                 isSelected
                   ? 'border-cyan-400 bg-[#0f1f2f]'
                   : isOutput
@@ -208,7 +402,39 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
               style={{ left: pos.x, top: pos.y, width: NODE_WIDTH }}
               onClick={(e) => { e.stopPropagation(); setSelectedId(node.id); }}
             >
-              <div className="flex items-center justify-between px-1.5 py-1 border-b border-[#1e1e3a]">
+              {/* 输出端口（右侧，可拖出连线） */}
+              <div
+                className="absolute -right-1.5 top-3 size-3 rounded-full bg-cyan-400 border border-cyan-200 cursor-crosshair hover:scale-125 transition-transform"
+                title="拖出以连接"
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  const rect = e.currentTarget.closest('.relative')?.getBoundingClientRect();
+                  if (!rect) return;
+                  setConnecting({
+                    fromNodeId: node.id,
+                    mouseX: e.clientX - rect.left,
+                    mouseY: e.clientY - rect.top,
+                  });
+                }}
+              />
+              <div
+                className="flex items-center justify-between px-1.5 py-1 border-b border-[#1e1e3a] cursor-move select-none"
+                onMouseDown={(e) => {
+                  // 只有左键且不是从端口开始的才拖节点
+                  if (e.button !== 0) return;
+                  e.preventDefault(); // 防止选中文字
+                  const rect = e.currentTarget.closest('.relative')?.getBoundingClientRect();
+                  if (!rect) return;
+                  setDragging({
+                    nodeId: node.id,
+                    startX: e.clientX - rect.left,
+                    startY: e.clientY - rect.top,
+                    origX: pos.x,
+                    origY: pos.y,
+                  });
+                  e.stopPropagation();
+                }}
+              >
                 <span className="text-[10px] font-medium text-gray-200 truncate" title={node.type}>
                   {getBlueprintNodeLabel(node.type)}
                   {isOutput && <span className="text-[8px] text-emerald-400 ml-1">输出</span>}
@@ -223,14 +449,69 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton }: Bl
                 )}
               </div>
               <div className="px-1.5 py-1">
-                {Object.keys(node.inputs).length === 0 && (
-                  <div className="text-[8px] text-gray-600">无输入</div>
-                )}
-                {Object.entries(node.inputs).map(([port]) => (
-                  <div key={port} className="text-[9px] text-gray-400 truncate">
-                    ← {port}
-                  </div>
-                ))}
+                {(() => {
+                  const specInputs = getNodeInputs(node.type);
+                  const allPorts = Array.from(new Set([...specInputs, ...Object.keys(node.inputs)]));
+                  if (allPorts.length === 0) {
+                    return <div className="text-[8px] text-gray-600">无输入</div>;
+                  }
+                  return allPorts.map((port) => {
+                    const input = node.inputs[port];
+                    const isConnected = typeof input === 'object' && input !== null && 'nodeId' in input;
+                    const literalVal = typeof input === 'object' && input !== null && 'type' in input && (input as any).type === 'number'
+                      ? (input as any).value
+                      : null;
+                    const isSpecDefined = specInputs.includes(port);
+                    return (
+                      <div
+                        key={port}
+                        className="relative flex items-center gap-1 text-[9px] text-gray-400 truncate pl-2"
+                        onMouseUp={(e) => {
+                          e.stopPropagation();
+                          if (connecting) {
+                            connectPorts(connecting.fromNodeId, node.id, port);
+                            setConnecting(null);
+                          }
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isConnected) {
+                            disconnectInput(node.id, port);
+                          }
+                        }}
+                        title={isConnected ? '点击断开' : '从输出端口拖到这里以连接，或直接输入数字'}
+                      >
+                        {/* 输入端口圆点 */}
+                        <div
+                          className={`absolute -left-1.5 top-1/2 -translate-y-1/2 size-2.5 rounded-full border cursor-crosshair ${
+                            isConnected
+                              ? 'bg-cyan-400 border-cyan-200'
+                              : 'bg-[#1e1e3a] border-gray-600 hover:border-cyan-400'
+                          }`}
+                        />
+                        <span className={isSpecDefined ? '' : 'text-amber-500/70'}>← {port}</span>
+                        {isConnected ? (
+                          <span className="text-[8px] text-cyan-400/70 truncate">
+                            {graph.nodes.find((n) => n.id === (input as any).nodeId)?.type ?? '?'}
+                          </span>
+                        ) : (
+                          <input
+                            type="number"
+                            value={literalVal ?? ''}
+                            placeholder="0"
+                            onChange={(e) => {
+                              const v = e.target.value === '' ? null : Number(e.target.value);
+                              setSlotLiteral(node.id, port, v);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseUp={(e) => e.stopPropagation()}
+                            className="w-12 h-4 px-0.5 text-[8px] text-gray-200 bg-black/40 border border-white/10 rounded text-center outline-none"
+                          />
+                        )}
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </div>
           );

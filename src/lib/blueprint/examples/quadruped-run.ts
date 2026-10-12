@@ -81,7 +81,7 @@ export function createQuadrupedRunBlueprint(
     nodes.push({
       id: outId,
       type: 'transform',
-      inputs: { [outputPort]: { nodeId: pendId, output: 'out' } },
+      inputs: { [outputPort]: { nodeId: pendId, output: outputPort === 'rotation' ? 'outRotation' : 'outY' } },
       params: {},
     });
     return { version: 1, nodes, outputId: outId };
@@ -102,7 +102,7 @@ export function createQuadrupedRunBlueprint(
     nodes.push({
       id: outId,
       type: 'transform',
-      inputs: { translateY: { nodeId: floatId, output: 'out' } },
+      inputs: { translateY: { nodeId: floatId, output: 'outY' } },
       params: {},
     });
     return { version: 1, nodes, outputId: outId };

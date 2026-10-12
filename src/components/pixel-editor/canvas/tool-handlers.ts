@@ -13,7 +13,6 @@ import { renderFrame, floodFill } from '@/lib/engine';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-render';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
-import { toast } from '@/hooks/use-toast';
 import {
   isPixelInPart,
   getLinePixels,
@@ -173,17 +172,18 @@ export const puppetHandler: ToolHandler = {
     }
 
     const session = usePuppetSessionStore.getState();
-    // 未武装或关闭自动关键帧时：只选中，不开始拖动
-    if (!session.performArmed || !session.autoKeyframe) {
-      if (!session.performArmed) {
-        toast({ title: '未武装', description: '请先在 Perform 面板点击武装按钮', variant: 'destructive' });
-      }
+    // 未武装时自动武装（不弹 toast）
+    if (!session.performArmed) {
+      usePuppetSessionStore.setState({ performArmed: true });
+    }
+    // 关闭自动关键帧时：只选中，不开始拖动
+    if (!usePuppetSessionStore.getState().autoKeyframe) {
       return;
     }
 
     let dragMode: 'rotate' | 'move' | 'moveAll';
-    if (e.altKey) dragMode = 'moveAll';
-    else if (e.shiftKey) dragMode = 'move';
+    // Alt+拖动（IK）已禁用：实现不可靠，待重做
+    if (e.shiftKey) dragMode = 'move';
     else dragMode = 'rotate';
 
     const resolvedClipId = clipId ?? session.ensurePuppetClip(character.id);
@@ -194,7 +194,7 @@ export const puppetHandler: ToolHandler = {
     // 以当前帧的插值姿态为拖动基准（所见即所得）
     const ivMap = interpolateNodeKeyframes(skeleton, clip?.puppetNodeKeyframes ?? [], frame);
     const rootNode = skeleton.nodes.find((n) => !n.plug);
-    const moveTarget = dragMode === 'moveAll' ? rootNode ?? node : node;
+    const moveTarget = node;
     const rotateIv = ivMap.get(node.id);
     const moveIv = ivMap.get(moveTarget.id);
 
@@ -231,7 +231,7 @@ export const puppetHandler: ToolHandler = {
       if (Math.sqrt(ddx * ddx + ddy * ddy) < 2) return;
       drag.dragStarted = true;
       useProjectStore.getState().beginDrag(
-        drag.mode === 'rotate' ? '旋转木偶节点' : drag.mode === 'moveAll' ? '移动整个木偶' : '移动木偶节点'
+        drag.mode === 'rotate' ? '旋转木偶节点' : '移动木偶节点'
       );
       s.isDrawingRef.current = true;
       s.markDirty();
@@ -241,6 +241,8 @@ export const puppetHandler: ToolHandler = {
     const skeleton = store.puppetSkeletons.find((sk) => sk.id === drag.skeletonId);
     if (!skeleton) return;
     const direction = skeleton.currentDirection || 'S';
+    const clip = store.animationClips.find((c) => c.id === drag.clipId);
+    const ivMap = interpolateNodeKeyframes(skeleton, clip?.puppetNodeKeyframes ?? [], frame);
 
     if (drag.mode === 'rotate') {
       const currentMouseAngle = Math.atan2(py - drag.pivotWorldY, px - drag.pivotWorldX);
@@ -252,7 +254,7 @@ export const puppetHandler: ToolHandler = {
         offsetY: drag.origOffsetY,
       }, direction);
     } else {
-      // move / moveAll：移动目标节点的 offset
+      // move：移动目标节点的 offset
       const ddx = px - drag.startX;
       const ddy = py - drag.startY;
       const newOffsetX = Math.round(drag.origOffsetX + ddx);

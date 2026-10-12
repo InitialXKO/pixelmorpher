@@ -1,18 +1,7 @@
 import React from 'react';
-import { Bone, Shirt, Grab } from 'lucide-react';
 import type { PuppetDirection, ModifierType, AnimationModifierType } from '@/lib/types';
 
 // ---- Types ----
-
-/** 木偶工作流阶段：搭建 → 换装 → 操控（新工作流，会话状态见 @/lib/puppet-session-store） */
-export type PuppetPhase = 'rig' | 'dress' | 'perform';
-
-// ---- Workflow Step Definitions ----
-export const WORKFLOW_STEPS = [
-  { key: 'rig' as PuppetPhase, label: '搭建', icon: <Bone className="size-3" />, desc: '定义骨骼结构、节点层级与静止姿态（rest pose）' },
-  { key: 'dress' as PuppetPhase, label: '换装', icon: <Shirt className="size-3" />, desc: '为每个节点分配精灵与方向' },
-  { key: 'perform' as PuppetPhase, label: '操控', icon: <Grab className="size-3" />, desc: '在画布上直接拖动木偶，自动录制关键帧' },
-] as const;
 
 // ---- Node Color Presets ----
 export const NODE_COLOR_PRESETS = [

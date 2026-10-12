@@ -9,6 +9,7 @@ import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
 import { useCanvasState } from './canvas/use-canvas-state';
 import { useCanvasInteraction } from './canvas/use-canvas-interaction';
+import MaskBrushOverlay from './MaskBrushOverlay';
 import {
   renderGridOverlay,
   renderCanvasBorder,
@@ -42,9 +43,9 @@ import { getCursorStyle, isStrokeToolCheck } from './canvas/canvas-utils';
  */
 function filterVisibleCharacters<T extends { id: string }>(
   characters: T[],
-  session: { phase: string; showAllCharacters: boolean; performCharacterId: string | null },
+  session: { showAllCharacters: boolean; performCharacterId: string | null },
 ): T[] {
-  if (session.phase === 'perform' && session.showAllCharacters) {
+  if (session.showAllCharacters) {
     return characters;
   }
   if (session.performCharacterId) {
@@ -62,7 +63,6 @@ export default function PixelCanvas() {
   // 订阅角色显示状态，变化时触发重渲染
   const showAllCharacters = usePuppetSessionStore((st) => st.showAllCharacters);
   const performCharacterId = usePuppetSessionStore((st) => st.performCharacterId);
-  const puppetPhase = usePuppetSessionStore((st) => st.phase);
   const performArmed = usePuppetSessionStore((st) => st.performArmed);
   // 订阅当前帧，播放时触发 render 回调更新（否则闭包里的 currentFrame 是旧的）
   const storeCurrentFrame = useProjectStore((st) => st.currentFrame);
@@ -87,6 +87,35 @@ export default function PixelCanvas() {
     offscreen.width = s.canvasWidth;
     offscreen.height = s.canvasHeight;
     const offCtx = offscreen.getContext('2d')!;
+
+    // 0. 参考图：直接画在离屏画布上（DOM <img> 方案废弃，会被不透明填充盖住）
+    if (s.referenceImageUrl && s.referenceImageVisible) {
+      // 注意：img.src 是绝对路径，不能直接和相对路径的 referenceImageUrl 比
+      // 用 dataset 存原始 URL 来比对
+      const cached = s.refImageRef.current;
+      if (!cached || cached.dataset.url !== s.referenceImageUrl) {
+        const img = new Image();
+        img.dataset.url = s.referenceImageUrl;
+        img.src = s.referenceImageUrl;
+        // 加载完成后触发重绘
+        img.onload = () => s.markDirty();
+        s.refImageRef.current = img;
+      }
+      const img = s.refImageRef.current;
+      if (img && img.complete && img.naturalWidth > 0) {
+        offCtx.save();
+        offCtx.globalAlpha = s.referenceImageOpacity;
+        // contain 模式居中绘制
+        const scale = Math.min(s.canvasWidth / img.naturalWidth, s.canvasHeight / img.naturalHeight);
+        const dw = img.naturalWidth * scale;
+        const dh = img.naturalHeight * scale;
+        const dx = (s.canvasWidth - dw) / 2;
+        const dy = (s.canvasHeight - dh) / 2;
+        offCtx.imageSmoothingEnabled = false;
+        offCtx.drawImage(img, dx, dy, dw, dh);
+        offCtx.restore();
+      }
+    }
 
     // 1. Onion skin with transform filtering
     // Determine onion quality based on play state — use 'low' during playback for 60-80% frame time reduction
@@ -234,7 +263,9 @@ export default function PixelCanvas() {
       const freshStore = useProjectStore.getState();
       const freshSkeletons = freshStore.puppetSkeletons;
       const visibleCharacters = filterVisibleCharacters(freshStore.puppetCharacters ?? [], puppetSession);
-      renderUnified(offCtx, s.canvasWidth, s.canvasHeight, s.parts, s.keyframes, currentFrame, s.backgroundColor,
+      // 参考图可见时用透明背景，让参考图透出来做底
+      const bgColor = (s.referenceImageUrl && s.referenceImageVisible) ? 'transparent' : s.backgroundColor;
+      renderUnified(offCtx, s.canvasWidth, s.canvasHeight, freshStore.parts, s.keyframes, currentFrame, bgColor,
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
         s.animationVariables, s.globalModifiers, freshSkeletons, visibleCharacters, animationClips, true);
@@ -337,12 +368,19 @@ export default function PixelCanvas() {
     s.showWeightPaint, s.weightPaintBoneId, s.puppetSkeletons, s.puppetCharacters, s.puppetClipsVersion,
     s.canvasModifierTracks, s.partEditPartId, s.partEditModifiers,
     interaction.renderStrokePreview, s.getInterpolatedTranslateOffset,
-    showAllCharacters, performCharacterId, puppetPhase, storeCurrentFrame,
+    showAllCharacters, performCharacterId, storeCurrentFrame,
+    // 参考图：URL/可见性/不透明度变化时重建 render，否则闭包里是旧 s
+    s.referenceImageUrl, s.referenceImageVisible, s.referenceImageOpacity,
   ]);
 
   // 用 ref 存最新 render，避免 effect 反复重建导致旧闭包执行
   const renderRef = React.useRef(render);
   renderRef.current = render;
+
+  // 参考图变化时标记重绘
+  useEffect(() => {
+    s.markDirty();
+  }, [s.referenceImageUrl, s.referenceImageVisible, s.referenceImageOpacity]);
 
   // Animation loop
   useEffect(() => {
@@ -354,7 +392,37 @@ export default function PixelCanvas() {
       s.rafRef.current = requestAnimationFrame(loop);
     };
     s.rafRef.current = requestAnimationFrame(loop);
-    return () => { unregisterScheduler(); if (s.rafRef.current) cancelAnimationFrame(s.rafRef.current); };
+
+    // 参考图装配：聚焦到指定节点
+    const handleFocusNode = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const { nodeId, skeletonId } = detail;
+      const projectState = useProjectStore.getState();
+      const skeleton = projectState.puppetSkeletons.find((sk) => sk.id === skeletonId);
+      const node = skeleton?.nodes.find((n) => n.id === nodeId);
+      if (!skeleton || !node) return;
+      // 计算世界坐标
+      const worldPos = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight);
+      // 设置 zoom=3，平移使节点居中
+      const zoom = 3;
+      const editorStore = useEditorStore.getState();
+      editorStore.setZoom(zoom);
+      // 容器尺寸
+      const container = s.containerRef.current;
+      if (container) {
+        const rect = container.getBoundingClientRect();
+        const panX = rect.width / 2 - worldPos.x * zoom;
+        const panY = rect.height / 2 - worldPos.y * zoom;
+        editorStore.setPan(panX, panY);
+      }
+    };
+    window.addEventListener('ref-assembly:focus-node', handleFocusNode);
+
+    return () => {
+      unregisterScheduler();
+      if (s.rafRef.current) cancelAnimationFrame(s.rafRef.current);
+      window.removeEventListener('ref-assembly:focus-node', handleFocusNode);
+    };
   }, []); // 不依赖 render，用 ref 拿最新的
 
   const cursorStyle = s.editMode === 'correction' ? 'crosshair' : getCursorStyle(s.tool, s.spaceHeldRef.current, performArmed);
@@ -377,6 +445,14 @@ export default function PixelCanvas() {
         onDoubleClick={interaction.handleDoubleClick}
       />
 
+      {/* 遮罩模式：专用遮罩笔刷覆盖层（必须在主画布之后，否则收不到鼠标事件） */}
+      {s.editMode === 'mask' && s.maskNodeId && (
+        <MaskBrushOverlay
+          canvasWidth={s.canvasWidth}
+          canvasHeight={s.canvasHeight}
+        />
+      )}
+
       {/* Correction mode badge */}
       {s.editMode === 'correction' && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(34, 211, 238, 0.2)', color: '#22d3ee', border: '1px solid rgba(34, 211, 238, 0.4)', backdropFilter: 'blur(4px)' }}>
@@ -384,15 +460,8 @@ export default function PixelCanvas() {
         </div>
       )}
 
-      {/* Phase badge (rig/dress/perform) */}
-      {s.isPuppetMode && puppetPhase && (
-        <div className="absolute top-3 left-3 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(139, 92, 246, 0.2)', color: '#a78bfa', border: '1px solid rgba(139, 92, 246, 0.4)', backdropFilter: 'blur(4px)' }}>
-          {puppetPhase === 'rig' ? '搭建' : puppetPhase === 'dress' ? '穿衣' : '表演'}
-        </div>
-      )}
-
       {/* Unarmed badge */}
-      {s.isPuppetMode && puppetPhase === 'perform' && !performArmed && (
+      {s.isPuppetMode && !performArmed && (
         <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.4)', backdropFilter: 'blur(4px)' }}>
           未武装
         </div>

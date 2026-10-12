@@ -12,12 +12,7 @@ import { useProjectStore, useEditorStore } from './store';
 import { interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
 
 /** 木偶工作流阶段：搭建 → 换装 → 操控 */
-export type PuppetPhase = 'rig' | 'dress' | 'perform';
-
 export interface PuppetSessionState {
-  // ---- 当前阶段 ----
-  phase: PuppetPhase;
-  setPhase: (phase: PuppetPhase) => void;
 
   // ---- 操控会话 ----
   /** 正在操控的角色 id */
@@ -70,21 +65,12 @@ function getRootNodeId(skeletonId: string): string | null {
 }
 
 export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => ({
-  phase: 'rig',
   performCharacterId: null,
   performNodeId: null,
   performArmed: false,
   autoKeyframe: true,
   puppetOnionSkin: true,
   showAllCharacters: false,
-
-  setPhase: (phase) => {
-    // 离开操控阶段时自动解除武装
-    if (phase !== 'perform' && get().performArmed) {
-      get().exitPerform();
-    }
-    set({ phase });
-  },
 
   setPerformNodeId: (id) => {
     set({ performNodeId: id });
@@ -136,7 +122,6 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
     const rootId = getRootNodeId(character.puppetSkeletonId);
 
     set({
-      phase: 'perform',
       performCharacterId: characterId,
       performNodeId: rootId,
       performArmed: true,

@@ -195,10 +195,6 @@ export function SkeletonsToggle() {
 export function ShowAllCharactersToggle() {
   const showAllCharacters = usePuppetSessionStore((s) => s.showAllCharacters);
   const setShowAllCharacters = usePuppetSessionStore((s) => s.setShowAllCharacters);
-  const phase = usePuppetSessionStore((s) => s.phase);
-
-  // 非 perform 阶段禁用（强制互斥）
-  const disabled = phase !== 'perform';
 
   return (
     <Tooltip>
@@ -206,7 +202,6 @@ export function ShowAllCharactersToggle() {
         <Toggle
           pressed={showAllCharacters}
           onPressedChange={setShowAllCharacters}
-          disabled={disabled}
           aria-label={showAllCharacters ? '仅显示选中角色' : '显示全部角色'}
           className="h-7 w-7 p-0 data-[state=on]:bg-cyan-600/30 data-[state=on]:text-cyan-300 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded disabled:opacity-40"
         >
@@ -214,9 +209,7 @@ export function ShowAllCharactersToggle() {
         </Toggle>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="text-xs">
-        {disabled
-          ? '当前阶段只显示选中角色'
-          : showAllCharacters
+        {showAllCharacters
             ? '显示全部角色（点击仅显示选中）'
             : '仅显示选中角色（点击显示全部）'}
       </TooltipContent>
