@@ -928,6 +928,18 @@ function renderPuppetFrame(
     latitude,
   );
 
+  // Step 7b: Apply active costume's per-node offsets (from ref-assembly alignment)
+  if (activeCostumeSet?.nodeOffsets) {
+    for (const wt of worldTransforms) {
+      const off = activeCostumeSet.nodeOffsets[wt.node.id];
+      if (off) {
+        wt.worldX += off.x;
+        wt.worldY += off.y;
+        wt.worldAngle = (wt.worldAngle ?? 0) + off.angle;
+      }
+    }
+  }
+
   // Step 8: Generate joint discs
   const jointDiscs = generateJointDiscs(worldTransforms, skeleton, latitude);
 

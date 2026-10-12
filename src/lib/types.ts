@@ -1007,6 +1007,9 @@ export interface CostumeSet {
   name: string;
   /** Maps "nodeId:direction" to partId for sprite overrides */
   spriteMap: Record<string, string>;
+  /** Per-node transform offsets for this costume (from ref-assembly alignment).
+   *  Key: node ID. Value: offset applied on top of rest pose. */
+  nodeOffsets?: Record<string, { x: number; y: number; angle: number }>;
 }
 
 /** PuppetCharacter: a complete puppet character with skeleton and costumes */
@@ -1096,6 +1099,10 @@ export interface Costume {
    *  Example: { "head": "part-head-v2", "body": "part-body-armor" }
    *  Different costumes swap parts for the same logical slots. */
   slotMapping: Record<string, string>;
+  /** Per-node transform offsets for this costume (from ref-assembly alignment).
+   *  Key: node ID. Value: offset applied on top of rest pose.
+   *  Allows costumes to fine-tune node positions (e.g. bulkier armor). */
+  nodeOffsets?: Record<string, { x: number; y: number; angle: number }>;
 }
 
 export interface Character {
