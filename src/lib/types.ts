@@ -1786,6 +1786,8 @@ export interface EditorState {
   referenceImageVisible: boolean;
   // ---- 遮罩模式 ----
   maskNodeId: string | null;
+  // 色键颜色（跨肢体共享）
+  chromaKeyColor: { r: number; g: number; b: number } | null;
   // ---- 参考图装配向导 ----
   refWizardOpen: boolean;
 }

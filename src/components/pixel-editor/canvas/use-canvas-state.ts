@@ -64,8 +64,10 @@ export function useCanvasState() {
   const puppetNodeDragRef = useRef<{
     nodeId: string; skeletonId: string; characterId: string; clipId: string;
     startX: number; startY: number; origAngle: number; origStretch: number; origOffsetX: number; origOffsetY: number;
-    mode: 'rotate' | 'move' | 'moveAll'; pivotWorldX: number; pivotWorldY: number; startMouseAngle: number;
+    mode: 'rotate' | 'move' | 'moveAll' | 'socket'; pivotWorldX: number; pivotWorldY: number; startMouseAngle: number;
     dragStarted: boolean; moveTargetNodeId?: string;
+    // socket 模式专用
+    socketId?: string; parentNodeId?: string; origSocketX?: number; origSocketY?: number; parentAngle?: number;
   } | null>(null);
   const pixelEditCommandRef = useRef<{ commandId: string; modifierId: string; keyframeId: string; points: { x: number; y: number }[] } | null>(null);
   const partEditBrushCmdRef = useRef<{ commandId: string; modifierId: string; points: { x: number; y: number }[] } | null>(null);

@@ -110,7 +110,7 @@ export const selectToolHandler: ToolHandler = {
 // 单一操控模型（不再有 move/manipulate 双模式切换）：
 //   拖动肢体         = 绕轴心旋转
 //   Shift + 拖动     = 移动该节点
-//   Alt + 拖动       = 移动整个木偶（根节点）
+//   Alt + 拖动       = 移动该节点所插入的父节点插槽在父节点中的位置（rig）
 //   Q / E            = 选中节点 ±15°
 //   WASD / 方向键    = 移动选中节点 1px（Alt+方向键 = 移动整体）
 //   Ctrl + 点击      = 编辑该节点精灵（留在木偶工作区）
@@ -181,6 +181,45 @@ export const puppetHandler: ToolHandler = {
       return;
     }
 
+    // Alt+拖动：移动该节点所插入的父节点插槽在父节点中的位置（rig 操作，直接改骨架）
+    if (e.altKey) {
+      const plug = node.plug;
+      if (!plug?.socketId) return; // 根节点无插槽
+      const parentNode = skeleton.nodes.find((n) =>
+        n.sockets?.some((s) => s.id === plug.socketId)
+      );
+      if (!parentNode) return;
+      const socket = parentNode.sockets.find((s) => s.id === plug.socketId);
+      if (!socket) return;
+      // 父节点角度（用 rest 值，rig 操作不考虑关键帧）
+      const parentAngle = parentNode.angle;
+      s.puppetNodeDragRef.current = {
+        nodeId: node.id,
+        skeletonId: skeleton.id,
+        characterId: character.id,
+        clipId: clipId ?? '',
+        startX: px,
+        startY: py,
+        origAngle: 0,
+        origStretch: 1,
+        origOffsetX: 0,
+        origOffsetY: 0,
+        moveTargetNodeId: node.id,
+        mode: 'socket' as const,
+        pivotWorldX: 0,
+        pivotWorldY: 0,
+        startMouseAngle: 0,
+        dragStarted: false,
+        // socket 移动专用
+        socketId: socket.id,
+        parentNodeId: parentNode.id,
+        origSocketX: socket.localX,
+        origSocketY: socket.localY,
+        parentAngle,
+      };
+      return;
+    }
+
     let dragMode: 'rotate' | 'move' | 'moveAll';
     // Alt+拖动（IK）已禁用：实现不可靠，待重做
     if (e.shiftKey) dragMode = 'move';
@@ -231,7 +270,7 @@ export const puppetHandler: ToolHandler = {
       if (Math.sqrt(ddx * ddx + ddy * ddy) < 2) return;
       drag.dragStarted = true;
       useProjectStore.getState().beginDrag(
-        drag.mode === 'rotate' ? '旋转木偶节点' : '移动木偶节点'
+        drag.mode === 'rotate' ? '旋转木偶节点' : drag.mode === 'socket' ? '移动父节点插槽' : '移动木偶节点'
       );
       s.isDrawingRef.current = true;
       s.markDirty();
@@ -253,6 +292,24 @@ export const puppetHandler: ToolHandler = {
         offsetX: drag.origOffsetX,
         offsetY: drag.origOffsetY,
       }, direction);
+    } else if (drag.mode === 'socket') {
+      // socket：移动父节点插槽在父节点中的位置（rig 操作，直接改骨架）
+      const ddx = px - drag.startX;
+      const ddy = py - drag.startY;
+      // 逆旋转到父节点局部空间
+      const angleRad = ((drag.parentAngle ?? 0) * Math.PI) / 180;
+      const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
+      const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
+      const newSocketX = Math.round((drag.origSocketX ?? 0) + localDx);
+      const newSocketY = Math.round((drag.origSocketY ?? 0) + localDy);
+      const sk = store.puppetSkeletons.find((x) => x.id === drag.skeletonId);
+      const parentNode = sk?.nodes.find((n) => n.id === drag.parentNodeId);
+      if (sk && parentNode) {
+        const newSockets = parentNode.sockets.map((s) =>
+          s.id === drag.socketId ? { ...s, localX: newSocketX, localY: newSocketY } : s
+        );
+        store.updatePuppetNode(drag.skeletonId, drag.parentNodeId!, { sockets: newSockets });
+      }
     } else {
       // move：移动目标节点的 offset
       const ddx = px - drag.startX;

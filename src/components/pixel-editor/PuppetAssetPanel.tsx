@@ -468,13 +468,23 @@ export default function PuppetAssetPanel() {
                 {parts.map((part) => (
                   <div
                     key={part.id}
-                    className="flex items-center gap-1.5 px-1.5 py-0.5 text-[9px] text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded cursor-pointer transition-colors"
+                    className="group flex items-center gap-1.5 px-1.5 py-0.5 text-[9px] text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded cursor-pointer transition-colors"
                   >
                     <div className="size-2 rounded-sm border border-gray-700 bg-gray-800 flex-shrink-0" />
                     <span className="truncate flex-1 min-w-0">{part.name}</span>
                     <span className="text-gray-700">
                       {part.width}x{part.height}
                     </span>
+                    <button
+                      className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 hover:text-white"
+                      title="编辑像素"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        useEditorStore.getState().enterPartEditMode(part.id);
+                      }}
+                    >
+                      ✏️
+                    </button>
                   </div>
                 ))}
               </div>

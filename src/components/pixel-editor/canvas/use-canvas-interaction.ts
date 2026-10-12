@@ -139,8 +139,34 @@ export function useCanvasInteraction(s: CanvasState) {
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       if (s.selectionMaskRef.current.size > 0) { setShowExtractDialog(true); return; }
-      // 木偶模式下双击不再进部件编辑（避免误触），用 Ctrl+点击进入
-    }, [s.tool, s.showPuppetSkeleton, s.screenToPixel, s.findPuppetNodeAtPixel, s.isPuppetMode, s.editorStore],
+      // 木偶模式下双击进入该服装部件的像素编辑
+      if (s.isPuppetMode) {
+        const canvas = s.canvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const px = (e.clientX - rect.left - s.panX) / s.zoom;
+        const py = (e.clientY - rect.top - s.panY) / s.zoom;
+        const hit = s.findPuppetNodeAtPixel(px, py);
+        if (!hit) return;
+        const { node, skeleton, character } = hit;
+        const projectStore = useProjectStore.getState();
+        const activeCostume = character.activeCostumeSetId
+          ? character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId) ?? null
+          : null;
+        const dir = skeleton.currentDirection ?? 'S';
+        const resolvedPart = resolvePuppetNodeSprite(
+          node,
+          dir,
+          activeCostume,
+          projectStore.parts,
+        );
+        if (resolvedPart) {
+          useEditorStore.getState().selectPart(resolvedPart.id);
+          useEditorStore.getState().enterPartEditMode(resolvedPart.id);
+        }
+        return;
+      }
+    }, [s.selectionMaskRef, s.isPuppetMode, s.canvasRef, s.panX, s.panY, s.zoom, s.findPuppetNodeAtPixel],
   );
 
   // ---- Keyboard handlers ----
