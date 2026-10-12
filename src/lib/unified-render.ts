@@ -467,24 +467,20 @@ function computeZOrder(
   const currentDirection = rootTransform?.variantIndex ?? 0;
   const directionOrder = character.directionDrawOrders[currentDirection];
 
-  // Assign Z indices based on tree order and direction overrides
-  let zCounter = 0;
+  // Assign Z indices: zIndex 必须唯一，直接用 zIndex 排序，不允许相同
   const assignZ = (nodeId: string) => {
     const node = character.nodes[nodeId];
     if (!node || !node.visible) return;
 
-    // zIndex 为主排序键（×1000），树顺序只用于同 zIndex 时的稳定排序
-    nodeZ.set(nodeId, (node.zIndex ?? 0) * 1000 + zCounter);
-    zCounter += 100; // Leave room for disc insertion
+    nodeZ.set(nodeId, node.zIndex ?? 0);
 
     // If this node has a generated disc, its Z goes BELOW both parent and child
     // (convention: joint discs are occluded by the sprites on both sides,
     // visible only through the outline openings).
-    // We use -50 to place it below the parent in the 100-step grid.
     if (node.generated) {
       const ownZ = nodeZ.get(nodeId) ?? 0;
       const parentZ = node.parentId ? nodeZ.get(node.parentId) ?? ownZ : ownZ;
-      discZ.set(`${nodeId}_disc`, Math.min(parentZ, ownZ) - 50);
+      discZ.set(`${nodeId}_disc`, Math.min(parentZ, ownZ) - 0.5);
     }
 
     // Process children
