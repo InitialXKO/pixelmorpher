@@ -64,6 +64,8 @@ export default function PixelCanvas() {
   const showAllCharacters = usePuppetSessionStore((st) => st.showAllCharacters);
   const performCharacterId = usePuppetSessionStore((st) => st.performCharacterId);
   const performArmed = usePuppetSessionStore((st) => st.performArmed);
+  // 订阅木偶洋葱皮开关，变化时触发重渲染（否则 getState 读到旧值，开关看似无效）
+  const puppetOnionSkin = usePuppetSessionStore((st) => st.puppetOnionSkin);
   // 订阅当前帧，播放时触发 render 回调更新（否则闭包里的 currentFrame 是旧的）
   const storeCurrentFrame = useProjectStore((st) => st.currentFrame);
 
@@ -141,7 +143,7 @@ export default function PixelCanvas() {
       offCtx.save();
       offCtx.clearRect(0, 0, s.canvasWidth, s.canvasHeight);
       const curVersion = s.onionDataVersionRef.current;
-      const puppetOnionOn = usePuppetSessionStore.getState().puppetOnionSkin;
+      const puppetOnionOn = puppetOnionSkin;
       const kfHash = s.keyframes.map(kf => `${kf.id}:${kf.frame}:${kf.modifiers.length}`).join('|')
         + `|puppet:${s.puppetClipsVersion}:ponion:${puppetOnionOn ? 1 : 0}`;
 

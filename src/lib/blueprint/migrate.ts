@@ -68,6 +68,19 @@ export function modifiersToBlueprint(
       }
     }
 
+    // 参数名迁移：旧版存 amplitude，新求值器读 height/angleAmplitude
+    // - bounce/float: amplitude → height
+    // - wobble: amplitude → angleAmplitude（旧 wobble 的 amplitude 控制旋转角）
+    if (mod.type === 'bounce' || mod.type === 'float') {
+      if (params.amplitude !== undefined && params.height === undefined) {
+        params.height = params.amplitude;
+      }
+    } else if (mod.type === 'wobble') {
+      if (params.amplitude !== undefined && params.angleAmplitude === undefined) {
+        params.angleAmplitude = params.amplitude;
+      }
+    }
+
     // 时间输入默认连 time
     const inputs: BlueprintNode['inputs'] = { t: { nodeId: timeId } };
 
@@ -100,7 +113,7 @@ export function modifiersToBlueprint(
         connectToPort('rotation', modId, 'outRotation');
         break;
       case 'bounce':
-        connectToPort('translateY', modId, 'out');
+        connectToPort('translateY', modId, 'outY');
         break;
       case 'wheel':
         connectToPort('translateX', modId, 'outX');
