@@ -303,6 +303,19 @@ function RigNodeProperties({
           </select>
         </div>
       </div>
+      {/* 镜像标记 */}
+      <div className="mt-2">
+        <Label className="text-[10px] text-gray-500">镜像精灵 (mirrorFrom)</Label>
+        <select
+          value={node.mirrorFrom ? 'mirror' : 'normal'}
+          onChange={(e) => onUpdate({ mirrorFrom: e.target.value === 'mirror' })}
+          className="h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded mt-1 w-full"
+          title="mirrorFrom=true 时，精灵会水平翻转渲染（用于左肢复用右肢精灵）"
+        >
+          <option value="normal">不镜像</option>
+          <option value="mirror">镜像</option>
+        </select>
+      </div>
       <Button
         size="sm"
         variant="outline"
