@@ -110,10 +110,11 @@ export const selectToolHandler: ToolHandler = {
 // 单一操控模型（不再有 move/manipulate 双模式切换）：
 //   拖动肢体         = 绕轴心旋转
 //   Shift + 拖动     = 移动该节点
-//   Alt + 拖动       = 移动整个木偶（根节点）
+//   Alt + 拖动       = 移动该节点所插入的父节点插槽在父节点中的位置（rig）
+//   Ctrl + 拖动      = 移动该部件枢轴在该部件中的位置
+//   Ctrl + 点击      = 编辑该节点精灵像素
 //   Q / E            = 选中节点 ±15°
 //   WASD / 方向键    = 移动选中节点 1px（Alt+方向键 = 移动整体）
-//   Ctrl + 点击      = 编辑该节点精灵（留在木偶工作区）
 //
 // 关键语义：perform 阶段的所有操控只写 PuppetNodeKeyframe，
 // 永不修改节点的 rest pose（angle/offsetX/... 的静止值只在 rig 阶段编辑）。
@@ -157,17 +158,37 @@ export const puppetHandler: ToolHandler = {
     // 同步到操控会话（PerformPanel 肢体列表高亮用）
     try { usePuppetSessionStore.setState({ performNodeId: node.id }); } catch { /* noop */ }
 
-    // Ctrl+点击：编辑该节点精灵 —— 留在木偶工作区，不跳走
+    // Ctrl+点击/拖动：点击=编辑该节点精灵，拖动=移动部件枢轴在部件中的位置
     if (e.ctrlKey || e.metaKey) {
       const activeCostume = character.activeCostumeSetId
         ? character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId) ?? null
         : null;
       const direction = skeleton.currentDirection || 'S';
       const resolvedPart = resolvePuppetNodeSprite(node, direction, activeCostume, project.parts);
-      if (resolvedPart) {
-        s.editorStore.getState().selectPart(resolvedPart.id);
-        s.editorStore.getState().enterPartEditMode(resolvedPart.id);
-      }
+      if (!resolvedPart) return;
+      // 先记录，等 mouseup 时判断是点击还是拖动
+      s.puppetNodeDragRef.current = {
+        nodeId: node.id,
+        skeletonId: skeleton.id,
+        characterId: character.id,
+        clipId: clipId ?? '',
+        startX: px,
+        startY: py,
+        origAngle: 0,
+        origStretch: 1,
+        origOffsetX: 0,
+        origOffsetY: 0,
+        moveTargetNodeId: node.id,
+        mode: 'pivot' as const,
+        pivotWorldX: 0,
+        pivotWorldY: 0,
+        startMouseAngle: 0,
+        dragStarted: false,
+        // pivot 移动专用
+        pivotPartId: resolvedPart.id,
+        origPivotX: resolvedPart.pivotX ?? 0,
+        origPivotY: resolvedPart.pivotY ?? 0,
+      };
       return;
     }
 
@@ -178,6 +199,45 @@ export const puppetHandler: ToolHandler = {
     }
     // 关闭自动关键帧时：只选中，不开始拖动
     if (!usePuppetSessionStore.getState().autoKeyframe) {
+      return;
+    }
+
+    // Alt+拖动：移动该节点所插入的父节点插槽在父节点中的位置（rig 操作，直接改骨架）
+    if (e.altKey) {
+      const plug = node.plug;
+      if (!plug?.socketId) return; // 根节点无插槽
+      const parentNode = skeleton.nodes.find((n) =>
+        n.sockets?.some((s) => s.id === plug.socketId)
+      );
+      if (!parentNode) return;
+      const socket = parentNode.sockets.find((s) => s.id === plug.socketId);
+      if (!socket) return;
+      // 父节点角度（用 rest 值，rig 操作不考虑关键帧）
+      const parentAngle = parentNode.angle;
+      s.puppetNodeDragRef.current = {
+        nodeId: node.id,
+        skeletonId: skeleton.id,
+        characterId: character.id,
+        clipId: clipId ?? '',
+        startX: px,
+        startY: py,
+        origAngle: 0,
+        origStretch: 1,
+        origOffsetX: 0,
+        origOffsetY: 0,
+        moveTargetNodeId: node.id,
+        mode: 'socket' as const,
+        pivotWorldX: 0,
+        pivotWorldY: 0,
+        startMouseAngle: 0,
+        dragStarted: false,
+        // socket 移动专用
+        socketId: socket.id,
+        parentNodeId: parentNode.id,
+        origSocketX: socket.localX,
+        origSocketY: socket.localY,
+        parentAngle,
+      };
       return;
     }
 
@@ -202,6 +262,30 @@ export const puppetHandler: ToolHandler = {
     const pivotWorldY = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight).y;
     const startMouseAngle = Math.atan2(py - pivotWorldY, px - pivotWorldX);
 
+    // 计算父节点的世界角度（用于 move 模式的坐标转换）
+    let parentWorldAngle = 0;
+    if (dragMode === 'move' && node.plug?.socketId) {
+      const parent = skeleton.nodes.find((n) =>
+        n.sockets?.some((s) => s.id === node.plug!.socketId)
+      );
+      if (parent) {
+        // 从根节点累加到父节点的角度
+        const chain: typeof parent[] = [];
+        let cur: typeof parent | undefined = parent;
+        while (cur) {
+          chain.unshift(cur);
+          const p = cur.plug;
+          if (!p?.socketId) break;
+          cur = skeleton.nodes.find((n) =>
+            n.sockets?.some((s) => s.id === p.socketId)
+          );
+        }
+        for (const n of chain) {
+          parentWorldAngle += ivMap.get(n.id)?.angle ?? n.angle;
+        }
+      }
+    }
+
     s.puppetNodeDragRef.current = {
       nodeId: node.id,
       skeletonId: skeleton.id,
@@ -219,6 +303,7 @@ export const puppetHandler: ToolHandler = {
       pivotWorldY,
       startMouseAngle,
       dragStarted: false,
+      parentWorldAngle,
     };
   },
 
@@ -231,7 +316,7 @@ export const puppetHandler: ToolHandler = {
       if (Math.sqrt(ddx * ddx + ddy * ddy) < 2) return;
       drag.dragStarted = true;
       useProjectStore.getState().beginDrag(
-        drag.mode === 'rotate' ? '旋转木偶节点' : '移动木偶节点'
+        drag.mode === 'rotate' ? '旋转木偶节点' : drag.mode === 'socket' ? '移动父节点插槽' : '移动木偶节点'
       );
       s.isDrawingRef.current = true;
       s.markDirty();
@@ -253,12 +338,48 @@ export const puppetHandler: ToolHandler = {
         offsetX: drag.origOffsetX,
         offsetY: drag.origOffsetY,
       }, direction);
-    } else {
-      // move：移动目标节点的 offset
+    } else if (drag.mode === 'socket') {
+      // socket：移动父节点插槽在父节点中的位置（rig 操作，直接改骨架）
       const ddx = px - drag.startX;
       const ddy = py - drag.startY;
-      const newOffsetX = Math.round(drag.origOffsetX + ddx);
-      const newOffsetY = Math.round(drag.origOffsetY + ddy);
+      // 逆旋转到父节点局部空间
+      const angleRad = ((drag.parentAngle ?? 0) * Math.PI) / 180;
+      const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
+      const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
+      const newSocketX = Math.round((drag.origSocketX ?? 0) + localDx);
+      const newSocketY = Math.round((drag.origSocketY ?? 0) + localDy);
+      const sk = store.puppetSkeletons.find((x) => x.id === drag.skeletonId);
+      const parentNode = sk?.nodes.find((n) => n.id === drag.parentNodeId);
+      if (sk && parentNode) {
+        const newSockets = parentNode.sockets.map((s) =>
+          s.id === drag.socketId ? { ...s, localX: newSocketX, localY: newSocketY } : s
+        );
+        store.updatePuppetNode(drag.skeletonId, drag.parentNodeId!, { sockets: newSockets });
+      }
+    } else if (drag.mode === 'pivot') {
+      // pivot：移动部件枢轴在部件中的位置（直接改 Part）
+      const ddx = px - drag.startX;
+      const ddy = py - drag.startY;
+      // canvas 像素 → 部件像素（除以 zoom）
+      const zoom = s.zoom;
+      const part = store.parts.find((p) => p.id === drag.pivotPartId);
+      if (part) {
+        const newPivotX = Math.round((drag.origPivotX ?? 0) + ddx / zoom);
+        const newPivotY = Math.round((drag.origPivotY ?? 0) + ddy / zoom);
+        // 钳制到部件范围内
+        const clampedX = Math.max(0, Math.min(part.width - 1, newPivotX));
+        const clampedY = Math.max(0, Math.min(part.height - 1, newPivotY));
+        store.updatePart(drag.pivotPartId!, { pivotX: clampedX, pivotY: clampedY });
+      }
+    } else {
+      // move：移动目标节点的 offset（offset 在父节点局部空间，需逆旋转鼠标增量）
+      const ddx = px - drag.startX;
+      const ddy = py - drag.startY;
+      const angleRad = ((drag.parentWorldAngle ?? 0) * Math.PI) / 180;
+      const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
+      const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
+      const newOffsetX = Math.round(drag.origOffsetX + localDx);
+      const newOffsetY = Math.round(drag.origOffsetY + localDy);
       const targetNodeId = drag.moveTargetNodeId ?? drag.nodeId;
       writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, targetNodeId, frame, {
         angle: drag.origAngle,
@@ -332,6 +453,18 @@ export const puppetHandler: ToolHandler = {
         offsetX: (iv?.offsetX ?? node.offsetX) + dx,
         offsetY: (iv?.offsetY ?? node.offsetY) + dy,
       });
+    }
+  },
+
+  onMouseUp(s) {
+    const drag = s.puppetNodeDragRef.current;
+    // Ctrl+点击（未拖动）：进入部件像素编辑
+    if (drag && drag.mode === 'pivot' && !drag.dragStarted) {
+      const partId = drag.pivotPartId;
+      if (partId) {
+        s.editorStore.getState().selectPart(partId);
+        s.editorStore.getState().enterPartEditMode(partId);
+      }
     }
   },
 };
