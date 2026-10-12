@@ -1030,7 +1030,11 @@ function renderPuppetFrame(
     if (!item.part) continue;
 
     // Create part canvas
-    const partCanvasResult = createPartCanvasFromPart(item.part, keyframes, currentFrame, frameRate);
+    const partCanvasResult = createPartCanvasFromPart(
+      item.part, keyframes, currentFrame, frameRate,
+      // 传入节点的像素级动画修改器
+      item.node?.modifiers
+    );
     if (!partCanvasResult) continue;
 
     let partCanvas = partCanvasResult.canvas;
@@ -1103,6 +1107,8 @@ function createPartCanvasFromPart(
   keyframes: Keyframe[],
   currentFrame: number,
   frameRate: number = 12,
+  /** 木偶节点的动画修改器（像素级） */
+  animModifiers?: PartAnimationModifier[],
 ): { canvas: HTMLCanvasElement; offsetX: number; offsetY: number } | null {
   if (!part.pixels || part.pixels.length === 0) return null;
 
@@ -1177,9 +1183,9 @@ function createPartCanvasFromPart(
 
   // ---- Step 3: Apply pixel-level deformation animation modifiers ----
   // (wave_deform, texture_scroll, contour_scroll, etc.)
-  // Part 不再有 animationModifiers（死代码，仅为编译通过）
-  if (false) {
-    const animMods: PartAnimationModifier[] = [];
+  // 木偶节点通过 animModifiers 参数传入
+  if (animModifiers && animModifiers.length > 0) {
+    const animMods = animModifiers.filter((m) => m.enabled);
     if (animMods.length > 0) {
       // Compute padding for overflow
       const animPadding = computeTotalAnimPadding(animMods, currentFrame, frameRate);
