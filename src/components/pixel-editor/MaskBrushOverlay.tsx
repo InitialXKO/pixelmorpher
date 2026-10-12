@@ -32,8 +32,6 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   const [isPicking, setIsPicking] = useState(false);
   const keyColor = useEditorStore((s) => s.chromaKeyColor);
   const setKeyColor = useEditorStore((s) => s.setChromaKeyColor);
-  // 色键容差（固定值，无 UI）
-  const CHROMA_TOLERANCE = 30;
 
   const maskNodeId = useEditorStore((s) => s.maskNodeId);
   const setEditMode = useEditorStore((s) => s.setEditMode);
@@ -113,11 +111,6 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
     setLastUpdateInfo(`已取色键 rgb(${r},${g},${b})`);
   };
 
-  // 色键自动抠图：非色键像素填入遮罩（已移除，只保留取色+提取过滤）
-  const colorDist = (r1: number, g1: number, b1: number, r2: number, g2: number, b2: number) => {
-    const dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
-    return Math.sqrt(dr * dr + dg * dg + db * db);
-  };
 
   // 检查从 (cx,cy) 到 (x,y) 的射线是否穿过防溢出线
   const rayCrossesBarrier = (
@@ -296,7 +289,6 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       });
 
       const pixels: string[][] = [];
-      const maxDist = keyColor ? (CHROMA_TOLERANCE / 100) * 441 : 0;
       for (let y = 0; y < h; y++) {
         const row: string[] = [];
         for (let x = 0; x < w; x++) {
@@ -309,12 +301,9 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
             const g = refData.data[refIdx + 1];
             const b = refData.data[refIdx + 2];
             const a = refData.data[refIdx + 3];
-            // 色键过滤：匹配色键颜色的像素视为透明
-            let isKey = false;
-            if (keyColor && a >= 10) {
-              const dist = colorDist(r, g, b, keyColor.r, keyColor.g, keyColor.b);
-              isKey = dist <= maxDist;
-            }
+            // 色键过滤：精确匹配色键颜色的像素视为透明
+            const isKey = keyColor && a >= 10 &&
+              r === keyColor.r && g === keyColor.g && b === keyColor.b;
             row.push(a < 10 || isKey ? '' : `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`);
           } else {
             row.push('');
