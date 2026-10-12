@@ -283,18 +283,9 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       const nodeName = projectStore.puppetSkeletons
         ?.flatMap((sk) => sk.nodes)
         .find((n) => n.id === maskNodeId)?.name ?? '未知';
-      // 智能 pivot：头在底部（脖子），手臂在顶部（肩膀），否则中心
-      const lowerName = nodeName.toLowerCase();
-      let pivotX = Math.floor(w / 2);
-      let pivotY = Math.floor(h / 2);
-      if (lowerName.includes('head')) {
-        pivotY = h - 1;
-      } else if (lowerName.includes('arm')) {
-        pivotY = 0;
-      }
       const part = projectStore.addPart(`遮罩_${nodeName}`, w, h, {
-        pivotX,
-        pivotY,
+        pivotX: Math.floor(w / 2),
+        pivotY: Math.floor(h / 2),
       });
 
       const pixels: string[][] = [];
