@@ -46,7 +46,7 @@ const BUILT_IN_REFS = [
 ];
 
 export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) {
-  // 内部关闭：先删工作副本，再调外部 onClose
+  // 内部关闭：先删工作副本，清参考图，再调外部 onClose
   const handleClose = () => {
     if (workingCharacterId || workingSkeletonId) {
       const ps = useProjectStore.getState();
@@ -55,6 +55,12 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
       setWorkingCharacterId(null);
       setWorkingSkeletonId(null);
     }
+    // 清参考图（否则第二次进入时残留旧 URL）
+    const oldUrl = useEditorStore.getState().referenceImageUrl;
+    if (oldUrl && oldUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(oldUrl);
+    }
+    useEditorStore.getState().setReferenceImageUrl(null);
     resetRefWizardStep();
     onClose();
   };

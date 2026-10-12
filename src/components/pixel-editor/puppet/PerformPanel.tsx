@@ -6,7 +6,7 @@
 // 替代原来的 AnimateModePanel + AnimateControls。
 // ============================================================
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect } from 'react';
 import {
   Play,
   Pause,
@@ -16,7 +16,6 @@ import {
   Eraser,
   ChevronLeft,
   ChevronRight,
-  Grab,
   Square,
   Ghost,
   Magnet,
@@ -88,6 +87,13 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
 
   const totalFrames = clip?.totalFrames ?? 24;
 
+  // 选中角色时自动进入操控（无需"开始操控"按钮）
+  useEffect(() => {
+    if (character && !performArmed) {
+      enterPerform(character.id);
+    }
+  }, [character?.id]);
+
   const gotoPrevKeyframe = () => {
     const prev = [...keyframedFrames].reverse().find((f) => f < currentFrame);
     if (prev !== undefined) { setPlayState('paused'); setCurrentFrame(prev); }
@@ -109,15 +115,11 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
     <div className="space-y-3">
       {/* ---- 状态条 ---- */}
       <div
-        className={`flex items-center gap-2 px-2 py-1.5 rounded border ${
-          performArmed
-            ? 'bg-emerald-500/10 border-emerald-500/30'
-            : 'bg-[#111128] border-[#1e1e3a]'
-        }`}
+        className="flex items-center gap-2 px-2 py-1.5 rounded border bg-emerald-500/10 border-emerald-500/30"
       >
-        <span className={`size-2 rounded-full flex-shrink-0 ${performArmed ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600'}`} />
-        <span className={`text-[10px] font-medium truncate flex-1 min-w-0 ${performArmed ? 'text-emerald-300' : 'text-gray-500'}`}>
-          {performArmed ? `操控中 · ${character?.name ?? ''}` : '未进入操控'}
+        <span className="size-2 rounded-full flex-shrink-0 bg-emerald-400 animate-pulse" />
+        <span className="text-[10px] font-medium truncate flex-1 min-w-0 text-emerald-300">
+          {character ? `操控中 · ${character.name}` : '请选择角色'}
         </span>
         <span className="text-[10px] text-gray-500 tabular-nums">
           帧 {currentFrame}/{totalFrames - 1}
@@ -137,16 +139,8 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
             骨架「{skeleton.name}」没有关联角色（数据异常，裸骨架不应存在）
           </p>
         )}
-        {!performArmed ? (
-          <Button
-            size="sm"
-            disabled={!character}
-            className="w-full text-xs bg-emerald-600 hover:bg-emerald-500 gap-1.5 h-8"
-            onClick={() => character && enterPerform(character.id)}
-          >
-            <Grab className="size-3.5" /> 开始操控{character ? `（${character.name}）` : ''}
-          </Button>
-        ) : (
+        {/* 选中角色后自动进入操控，无需按钮 */}
+        {performArmed && (
           <Button
             size="sm"
             variant="outline"
