@@ -65,7 +65,7 @@ export function useCanvasState() {
     nodeId: string; skeletonId: string; characterId: string; clipId: string;
     startX: number; startY: number; origAngle: number; origStretch: number; origOffsetX: number; origOffsetY: number;
     mode: 'rotate' | 'move' | 'moveAll' | 'socket' | 'pivot'; pivotWorldX: number; pivotWorldY: number; startMouseAngle: number;
-    dragStarted: boolean; moveTargetNodeId?: string;
+    dragStarted: boolean; moveTargetNodeId?: string; parentWorldAngle?: number;
     // socket 模式专用
     socketId?: string; parentNodeId?: string; origSocketX?: number; origSocketY?: number; parentAngle?: number;
     // pivot 模式专用

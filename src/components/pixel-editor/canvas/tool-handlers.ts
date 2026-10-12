@@ -262,6 +262,30 @@ export const puppetHandler: ToolHandler = {
     const pivotWorldY = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight).y;
     const startMouseAngle = Math.atan2(py - pivotWorldY, px - pivotWorldX);
 
+    // 计算父节点的世界角度（用于 move 模式的坐标转换）
+    let parentWorldAngle = 0;
+    if (dragMode === 'move' && node.plug?.socketId) {
+      const parent = skeleton.nodes.find((n) =>
+        n.sockets?.some((s) => s.id === node.plug!.socketId)
+      );
+      if (parent) {
+        // 从根节点累加到父节点的角度
+        const chain: typeof parent[] = [];
+        let cur: typeof parent | undefined = parent;
+        while (cur) {
+          chain.unshift(cur);
+          const p = cur.plug;
+          if (!p?.socketId) break;
+          cur = skeleton.nodes.find((n) =>
+            n.sockets?.some((s) => s.id === p.socketId)
+          );
+        }
+        for (const n of chain) {
+          parentWorldAngle += ivMap.get(n.id)?.angle ?? n.angle;
+        }
+      }
+    }
+
     s.puppetNodeDragRef.current = {
       nodeId: node.id,
       skeletonId: skeleton.id,
@@ -279,6 +303,7 @@ export const puppetHandler: ToolHandler = {
       pivotWorldY,
       startMouseAngle,
       dragStarted: false,
+      parentWorldAngle,
     };
   },
 
@@ -347,11 +372,14 @@ export const puppetHandler: ToolHandler = {
         store.updatePart(drag.pivotPartId!, { pivotX: clampedX, pivotY: clampedY });
       }
     } else {
-      // move：移动目标节点的 offset
+      // move：移动目标节点的 offset（offset 在父节点局部空间，需逆旋转鼠标增量）
       const ddx = px - drag.startX;
       const ddy = py - drag.startY;
-      const newOffsetX = Math.round(drag.origOffsetX + ddx);
-      const newOffsetY = Math.round(drag.origOffsetY + ddy);
+      const angleRad = ((drag.parentWorldAngle ?? 0) * Math.PI) / 180;
+      const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
+      const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
+      const newOffsetX = Math.round(drag.origOffsetX + localDx);
+      const newOffsetY = Math.round(drag.origOffsetY + localDy);
       const targetNodeId = drag.moveTargetNodeId ?? drag.nodeId;
       writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, targetNodeId, frame, {
         angle: drag.origAngle,
