@@ -73,6 +73,26 @@ export default function PuppetModifierPanel() {
     useProjectStore.getState().updatePuppetNode(skeleton.id, node.id, { blueprint: g });
   };
 
+  // 创建空蓝图（含输出节点）
+  const createBlueprint = () => {
+    if (!skeleton || !node) return;
+    const outputId = `node_${Date.now().toString(36)}`;
+    const graph: BlueprintGraph = {
+      version: 1,
+      nodes: [
+        {
+          id: outputId,
+          type: 'transform',
+          inputs: {},
+          params: {},
+          ui: { x: 200, y: 100 },
+        },
+      ],
+      outputId,
+    };
+    useProjectStore.getState().updatePuppetNode(skeleton.id, node.id, { blueprint: graph });
+  };
+
   if (!node || !skeleton) return null;
 
   const handleAdd = () => {
@@ -142,8 +162,13 @@ export default function PuppetModifierPanel() {
               skeleton={skeleton}
             />
           ) : (
-            <div className="text-[10px] text-gray-600 text-center py-4">
-              暂无蓝图。先在"列表"里加个变换类修改器（如钟摆），会自动转成蓝图。
+            <div className="text-center py-4 space-y-2">
+              <div className="text-[10px] text-gray-600">
+                暂无蓝图
+              </div>
+              <Button size="sm" onClick={createBlueprint} className="h-7 px-3 text-[10px]">
+                <Plus className="size-3 mr-1" /> 创建蓝图
+              </Button>
             </div>
           )}
         </>
