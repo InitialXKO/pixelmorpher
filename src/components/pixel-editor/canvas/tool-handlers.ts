@@ -376,12 +376,11 @@ export const puppetHandler: ToolHandler = {
       const angleRad = ((drag.nodeWorldAngle ?? 0) * Math.PI) / 180;
       const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
       const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
-      // canvas 像素 → 部件像素（除以 zoom）
-      const zoom = s.zoom;
+      // px 已是画布像素（screenToPixel 里除过 zoom），精灵 1:1 绘制，画布像素 = 部件像素
       const part = store.parts.find((p) => p.id === drag.pivotPartId);
       if (part) {
-        const newPivotX = Math.round((drag.origPivotX ?? 0) + localDx / zoom);
-        const newPivotY = Math.round((drag.origPivotY ?? 0) + localDy / zoom);
+        const newPivotX = Math.round((drag.origPivotX ?? 0) + localDx);
+        const newPivotY = Math.round((drag.origPivotY ?? 0) + localDy);
         // 钳制到部件范围内
         const clampedX = Math.max(0, Math.min(part.width - 1, newPivotX));
         const clampedY = Math.max(0, Math.min(part.height - 1, newPivotY));
