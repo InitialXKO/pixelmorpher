@@ -13,6 +13,7 @@ import {
   createEmptyPixelGrid,
 } from '../types';
 import { markPartDirty, invalidateAnimModifierCache } from '../engine';
+import { invalidateUnifiedPipelineCache } from '../unified-pipeline-bridge';
 import { rgbaToHexOrNull } from '@/lib/engine/utils';
 
 export type PartSlice = {
@@ -86,6 +87,8 @@ export const createPartSlice: StateCreator<ProjectStore, [], [], PartSlice> = (s
     get().pushUndo('设置部件像素', 'setPartPixels');
     // B8: Mark part as dirty so canvas gets rebuilt
     markPartDirty(id);
+    // 统一管线：migration-adapter 拷贝 Part 像素进 Node，需失效重迁
+    invalidateUnifiedPipelineCache();
     set((s) => ({
     parts: s.parts.map((p) => (p.id === id ? { ...p, pixels } : p)),
     }));
