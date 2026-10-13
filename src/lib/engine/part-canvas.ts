@@ -4,8 +4,9 @@
 // ============================================================
 
 import type {
-  Part, Keyframe, ModifierInstance, PartAnimationModifier, PixelGrid,
+  Keyframe, ModifierInstance, PartAnimationModifier, PixelGrid,
 } from '../types';
+import type { Sprite } from '../unified-types';
 import { acquireCanvas, canCachePartPixels, getPartPixelCache } from './canvas-pool';
 import { applyPixelModifiers } from './pixel-modifiers';
 import { applyPixelDeformAnimations } from './render-helpers/pixel-deform-animations';
@@ -20,7 +21,8 @@ export interface PartCanvasResult {
 }
 
 export function createPartCanvas(
-  part: Part,
+  id: string,
+  sprite: Sprite,
   keyframe: Keyframe | null,
   applyPixelMods: boolean = false,
   currentFrame: number = 0,
@@ -38,16 +40,18 @@ export function createPartCanvas(
   // P5-1: Try pixel canvas cache — skip expensive ImageData rebuild when pixels unchanged.
   // This is the single biggest optimization for playback: for parts without pixel-level
   // modifiers or deformation animations, the pixel→canvas conversion is identical every frame.
-  if (canCachePartPixels(part, keyframe, applyPixelMods, resolvedEditModifiers)) {
+  // Legacy shim: canCachePartPixels expects Part, construct minimal object
+  const partShim = { id, pixels: sprite.data, width: sprite.width, height: sprite.height } as any;
+  if (canCachePartPixels(partShim, keyframe, applyPixelMods, resolvedEditModifiers)) {
     // Frame-level cache key: partId:keyframeId — different keyframes may have different
     // correctionMask/pixel data, so we must cache per-keyframe, not just per-part.
     // This reduces putImageData calls by 50-70% during playback.
     const kfId = keyframe?.id ?? '_default';
-    const cacheKey = `${part.id}:${kfId}`;
+    const cacheKey = `${id}:${kfId}`;
     const pixelCache = getPartPixelCache();
     const cached = pixelCache.get(cacheKey);
     // Cache hit: same pixels reference, same dimensions
-    if (cached && cached.pixelsRef === part.pixels && cached.width === part.width && cached.height === part.height) {
+    if (cached && cached.pixelsRef === sprite.data && cached.width === sprite.width && cached.height === sprite.height) {
       // Return a fresh pool canvas with the cached content drawn onto it
       // (We can't return the cached canvas itself since the caller may apply effects to it)
       const resultCanvas = acquireCanvas(cached.width, cached.height);
@@ -57,7 +61,7 @@ export function createPartCanvas(
       return { canvas: resultCanvas, offsetX: cached.offsetX, offsetY: cached.offsetY };
     }
     // Cache miss: build and cache
-    const result = createPartCanvasInner(part, keyframe, applyPixelMods, currentFrame, frameRate, worldOffsetX, worldOffsetY, resolvedEditModifiers, overrideAnimModifiers);
+    const result = createPartCanvasInner(id, sprite, keyframe, applyPixelMods, currentFrame, frameRate, worldOffsetX, worldOffsetY, resolvedEditModifiers, overrideAnimModifiers);
     // Store a dedicated cache canvas (not from pool — pool canvases get recycled)
     const cacheCanvas = document.createElement('canvas');
     cacheCanvas.width = result.canvas.width;
@@ -71,23 +75,24 @@ export function createPartCanvas(
     }
     pixelCache.set(cacheKey, {
       canvas: cacheCanvas,
-      width: part.width,
-      height: part.height,
+      width: sprite.width,
+      height: sprite.height,
       offsetX: result.offsetX,
       offsetY: result.offsetY,
-      pixelsRef: part.pixels,
+      pixelsRef: sprite.data,
       keyframeId: kfId,
     });
     return result;
   }
 
   // Uncacheable path — always rebuild
-  return createPartCanvasInner(part, keyframe, applyPixelMods, currentFrame, frameRate, worldOffsetX, worldOffsetY, resolvedEditModifiers, overrideAnimModifiers);
+  return createPartCanvasInner(id, sprite, keyframe, applyPixelMods, currentFrame, frameRate, worldOffsetX, worldOffsetY, resolvedEditModifiers, overrideAnimModifiers);
 }
 
 /** Inner implementation of createPartCanvas — the actual pixel→canvas conversion */
 function createPartCanvasInner(
-  part: Part,
+  id: string,
+  sprite: Sprite,
   keyframe: Keyframe | null,
   applyPixelMods: boolean = false,
   currentFrame: number = 0,
@@ -97,11 +102,13 @@ function createPartCanvasInner(
   resolvedEditModifiers?: ModifierInstance[],
   overrideAnimModifiers?: PartAnimationModifier[],
 ): PartCanvasResult {
-  const effectiveWidth = keyframe?.overrideWidth ?? part.width;
-  const effectiveHeight = keyframe?.overrideHeight ?? part.height;
+  const effectiveWidth = keyframe?.overrideWidth ?? sprite.width;
+  const effectiveHeight = keyframe?.overrideHeight ?? sprite.height;
 
   // Step 1: Compute effective part base pixels (edit modifiers applied)
-  const baseResult = computePartBasePixels(part, keyframe, currentFrame, resolvedEditModifiers);
+  // Legacy shim: computePartBasePixels expects Part
+  const partShim2 = { id, pixels: sprite.data, width: sprite.width, height: sprite.height } as any;
+  const baseResult = computePartBasePixels(partShim2, keyframe, currentFrame, resolvedEditModifiers);
 
   // Step 2: Determine base pixels (correctionMask overrides if present)
   let pixels: PixelGrid;
@@ -126,7 +133,7 @@ function createPartCanvasInner(
       (m.paramKeyframes && m.paramKeyframes.length > 0) ||
       (m.paramDrivers && m.paramDrivers.length > 0 && m.paramDrivers.some(d => d.enabled && !d.isBaked))
     ) ? resolveKeyframeModifierParams(rawMods, currentFrame) : rawMods;
-    const modResult = applyPixelModifiers(basePixels ?? part.pixels, activeMods, currentFrame);
+    const modResult = applyPixelModifiers(basePixels ?? sprite.data, activeMods, currentFrame);
     pixels = modResult.pixels;
     modOffsetX = modResult.offsetX;
     modOffsetY = modResult.offsetY;
@@ -140,7 +147,7 @@ function createPartCanvasInner(
   // (Part 不再自带 animationModifiers；木偶节点通过 overrideModifiers 传入)
   if (applyPixelMods) {
     const deformResult = applyPixelDeformAnimations(
-      part, keyframe, pixels, currentFrame, frameRate,
+      partShim2, keyframe, pixels, currentFrame, frameRate,
       worldOffsetX, worldOffsetY, modOffsetX, modOffsetY,
       overrideAnimModifiers ?? [],
     );
