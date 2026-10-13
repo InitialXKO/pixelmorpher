@@ -82,7 +82,6 @@ export function getPartPixelCache() {
  * every frame, so we can cache it and skip the expensive rebuild.
  */
 export function canCachePartPixels(
-  part: Part,
   keyframe: Keyframe | null,
   applyPixelMods: boolean,
   resolvedEditModifiers?: ModifierInstance[],

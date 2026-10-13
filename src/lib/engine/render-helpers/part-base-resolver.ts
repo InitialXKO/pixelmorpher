@@ -2,7 +2,7 @@
  * Helper: compute the effective part base pixels by resolving edit modifiers.
  * Extracted from createPartCanvasInner to reduce cyclomatic complexity.
  *
- * Applies (([] as import('../../types').ModifierInstance[]) ?? []) (or resolvedEditModifiers) to part.pixels,
+ * Applies (([] as import('../../types').ModifierInstance[]) ?? []) (or resolvedEditModifiers) to pixels,
  * handling pixel-modifying modifiers and translate shifts.
  */
 
@@ -24,11 +24,11 @@ const PIXEL_MOD_TYPES: ModifierType[] = [
 ];
 
 /**
- * Resolve edit modifiers and apply them to part.pixels.
+ * Resolve edit modifiers and apply them to pixels.
  * Returns the computed base pixels along with offset and uniqueness tracking.
  */
 export function computePartBasePixels(
-  part: Part,
+  pixels: PixelGrid,
   keyframe: Keyframe | null,
   currentFrame: number,
   resolvedEditModifiers?: ModifierInstance[],
@@ -43,7 +43,7 @@ export function computePartBasePixels(
   // No edit modifiers → reference original pixels without copy
   if (!effectiveEditMods || effectiveEditMods.length === 0) {
     return {
-      partBasePixels: part.pixels,
+      partBasePixels: pixels,
       partBaseOffsetX: 0,
       partBaseOffsetY: 0,
       partBaseIsUnique: false,
@@ -58,13 +58,13 @@ export function computePartBasePixels(
   let partBaseIsUnique = false;
 
   if (activePartMods.length > 0) {
-    const modResult = applyPixelModifiers(part.pixels, activePartMods, 0);
+    const modResult = applyPixelModifiers(pixels, activePartMods, 0);
     partBasePixels = modResult.pixels;
     partBaseOffsetX = modResult.offsetX;
     partBaseOffsetY = modResult.offsetY;
     partBaseIsUnique = true;
   } else {
-    partBasePixels = part.pixels;
+    partBasePixels = pixels;
     partBaseIsUnique = false;
   }
 

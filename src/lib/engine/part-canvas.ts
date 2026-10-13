@@ -40,9 +40,7 @@ export function createPartCanvas(
   // P5-1: Try pixel canvas cache — skip expensive ImageData rebuild when pixels unchanged.
   // This is the single biggest optimization for playback: for parts without pixel-level
   // modifiers or deformation animations, the pixel→canvas conversion is identical every frame.
-  // Legacy shim: canCachePartPixels expects Part, construct minimal object
-  const partShim = { id, pixels: sprite.data, width: sprite.width, height: sprite.height } as any;
-  if (canCachePartPixels(partShim, keyframe, applyPixelMods, resolvedEditModifiers)) {
+  if (canCachePartPixels(keyframe, applyPixelMods, resolvedEditModifiers)) {
     // Frame-level cache key: partId:keyframeId — different keyframes may have different
     // correctionMask/pixel data, so we must cache per-keyframe, not just per-part.
     // This reduces putImageData calls by 50-70% during playback.
@@ -106,9 +104,7 @@ function createPartCanvasInner(
   const effectiveHeight = keyframe?.overrideHeight ?? sprite.height;
 
   // Step 1: Compute effective part base pixels (edit modifiers applied)
-  // Legacy shim: computePartBasePixels expects Part
-  const partShim2 = { id, pixels: sprite.data, width: sprite.width, height: sprite.height } as any;
-  const baseResult = computePartBasePixels(partShim2, keyframe, currentFrame, resolvedEditModifiers);
+  const baseResult = computePartBasePixels(sprite.data, keyframe, currentFrame, resolvedEditModifiers);
 
   // Step 2: Determine base pixels (correctionMask overrides if present)
   let pixels: PixelGrid;
@@ -147,7 +143,7 @@ function createPartCanvasInner(
   // (Part 不再自带 animationModifiers；木偶节点通过 overrideModifiers 传入)
   if (applyPixelMods) {
     const deformResult = applyPixelDeformAnimations(
-      partShim2, keyframe, pixels, currentFrame, frameRate,
+      sprite.width, sprite.height, keyframe, pixels, currentFrame, frameRate,
       worldOffsetX, worldOffsetY, modOffsetX, modOffsetY,
       overrideAnimModifiers ?? [],
     );
