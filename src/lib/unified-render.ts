@@ -67,7 +67,7 @@ import {
 import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from './engine/brush-render';
 import { getAnimationFrameAndWeight, computeKeyframeBaseTransform } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
-import { computeBoneTransforms } from './engine/skeleton';
+import { computeBoneTransforms, applyProceduralAnimations } from './engine/skeleton';
 import { getKfByPart } from './engine/frame-cache';
 import {
   resolvePartKeyframe,
@@ -756,6 +756,7 @@ export function generateRenderPlan(
   effectStrokes?: any[],
   autoMotionBlur?: boolean,
   autoMotionBlurIntensity?: number,
+  proceduralAnimations?: any[],
 ): RenderPlan {
   // Build variable context for ParamDriver resolution
   // H6: 收集角色全部节点的 active param drivers，传入真实求值（之前恒为默认值）
@@ -802,6 +803,16 @@ export function generateRenderPlan(
     // Determine rotation strategy
     const strategy: RotationStrategy = rotationStrategy;
 
+    // Apply procedural animations to node modifiers (migrated from old renderFrame)
+    let nodeModifiers = node.modifiers;
+    if (proceduralAnimations && proceduralAnimations.length > 0) {
+      nodeModifiers = applyProceduralAnimations(
+        node.modifiers as any ?? [],
+        proceduralAnimations as any,
+        '', frame, nodeId,
+      ) as any;
+    }
+
     nodeInstructions.push({
       nodeId,
       sprite,
@@ -815,7 +826,7 @@ export function generateRenderPlan(
       zIndex: nodeZ.get(nodeId) ?? 0,
       drawLayer: node.drawLayer,
       generated: undefined, // Discs are handled separately
-      modifiers: node.modifiers,
+      modifiers: nodeModifiers,
       frame,
       frameRate,
     });

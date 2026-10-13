@@ -1936,6 +1936,7 @@ export interface ProceduralAnimation {
   id: string;
   name: string;
   partId: string;
+  nodeId?: string;  // 新增：节点级程序化动画（新管线用）
   config: ProceduralConfig;
   enabled: boolean;
   startFrame: number;

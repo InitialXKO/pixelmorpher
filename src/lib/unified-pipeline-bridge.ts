@@ -111,6 +111,7 @@ export function renderUnified(
       puppetSkeletons, puppetCharacters, parts,
       animationClips, currentFrame, frameRate,
       globalModifiers, animationVariables, canvasModifierTracks,
+      proceduralAnimations,
     );
   }
 
@@ -193,6 +194,7 @@ function renderPuppetViaUnifiedPipeline(
   globalModifiers?: GlobalModifier[],
   animationVariables?: AnimationVariable[],
   canvasModifierTracks?: CanvasModifierTrack[],
+  proceduralAnimations?: ProceduralAnimation[],
 ): void {
   // Apply global modifier transform (camera/world transform)
   // This matches the old pipeline's behavior in renderPuppetFrame().
@@ -265,6 +267,14 @@ function renderPuppetViaUnifiedPipeline(
       'pixel-perfect',
       frameRate,
       unifiedVars,
+      undefined, // backgroundColor
+      undefined, // previewQuality
+      undefined, // effectTracks
+      undefined, // motionBlurStrokes
+      undefined, // effectStrokes
+      undefined, // autoMotionBlur
+      undefined, // autoMotionBlurIntensity
+      proceduralAnimations,
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }
