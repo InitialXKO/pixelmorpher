@@ -631,7 +631,18 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const result = applyRingRipple(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
     return { pixels: pixelsVal(result) };
   },
-  pixel_edit: () => ({}),
+  pixel_edit: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    // 从 modifierRegistry 取 pixel_edit 处理器
+    const { modifierRegistry } = require('../engine/pixel-modifiers');
+    const handler = modifierRegistry.get('pixel_edit');
+    if (!handler) return {};
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    const result = handler(params, inputPixels, ctx.frame);
+    return { pixels: pixelsVal(result) };
+  },
   // 上屏终点：接收像素图和变换，渲染到画布
   // 实际绘制由渲染管线通过 ctx.renderTarget 完成，此处仅收集参数
   screen: (n, i, ctx): Record<string, BlueprintValue> => {
