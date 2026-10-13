@@ -579,9 +579,27 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         partKeyframes: partEditBackupPartKeyframes || [],
       });
     } else {
+      // 确认：将 partEditModifiers 中的 brushCommands 烘焙进 part.pixels
+      // （part_edit 模式笔刷只攒 commands 做预览，不实时写像素）
+      const part = projectStore.parts.find(p => p.id === partEditPartId);
+      if (part && partEditModifiers.length > 0) {
+        const { modifierRegistry } = require('../engine/pixel-modifiers');
+        const handler = modifierRegistry.get('pixel_edit');
+        if (handler) {
+          // 合并所有 brushCommands
+          const allCommands: any[] = [];
+          for (const m of partEditModifiers) {
+            const cmds = (m.params?.brushCommands as any[]) || [];
+            allCommands.push(...cmds);
+          }
+          if (allCommands.length > 0) {
+            const newPixels = part.pixels.map(row => [...row]);
+            handler({ brushCommands: allCommands, opacity: 1 }, newPixels, projectStore.currentFrame);
+            projectStore.setPartPixels(partEditPartId, newPixels);
+          }
+        }
+      }
       // Part 已退化为纯精灵数据，不再有 partKeyframes/editModifiers。
-      // 确认时像素已通过 setPartPixels 实时写入 part.pixels，无需额外保存。
-      // （旧的 keyframe 保存逻辑已删除：getPartKeyframeAtFrame/addPartKeyframe/updatePartKeyframe 不存在）
     }
     });
 
