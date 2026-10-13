@@ -678,6 +678,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // 上屏终点：接收像素图和变换，渲染到画布
   // 实际绘制由渲染管线通过 ctx.renderTarget 完成，此处仅收集参数
   screen: (n, i, ctx): Record<string, BlueprintValue> => {
+    const hasPixelsInput = i.pixels !== undefined;
     const px = asPixels(i.pixels as BlueprintValue);
     const translateX = asNumber((i.translateX as BlueprintValue) ?? num(0));
     const translateY = asNumber((i.translateY as BlueprintValue) ?? num(0));
@@ -692,9 +693,11 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
       scaleX: num(scaleX),
       scaleY: num(scaleY),
     };
-    if (!px) return result;
+    // 无像素输入：纯变换模式，不绘制
+    if (!hasPixelsInput) return result;
+    // 有像素输入：忠实绘制（即使为空像素也绘制）
     const cmd = {
-      pixels: px,
+      pixels: px ?? [],
       translateX, translateY, rotation, scaleX, scaleY,
     };
     // 若调用方提供了直接绘制回调，screen 即为绘制终点
