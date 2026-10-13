@@ -2,7 +2,6 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useProjectStore } from '@/lib/store';
-import { renderFrameToCanvas } from '@/lib/engine';
 import { renderUnifiedToCanvas } from '@/lib/unified-pipeline-bridge';
 import type { AnimationClip, PuppetCharacter, PuppetNodeKeyframe } from '@/lib/types';
 import GIF from 'gif.js';
