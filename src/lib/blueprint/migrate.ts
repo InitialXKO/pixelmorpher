@@ -34,14 +34,10 @@ export function modifiersToBlueprint(
   const timeId = nid('time');
   nodes.push({ id: timeId, type: 'time', inputs: {}, params: {} });
 
-  // 像素源（像素修改器需要）
-  const hasPixelMods = enabled.some(m => (PIXEL_DEFORM_MODIFIER_TYPES as string[]).includes(m.type));
-  let prevPixelsNodeId: string | null = null;
-  if (hasPixelMods) {
-    const sourceId = nid('sprite_source');
-    nodes.push({ id: sourceId, type: 'sprite_source', inputs: {}, params: {} });
-    prevPixelsNodeId = sourceId;
-  }
+  // 像素源（统一：所有蓝图都有 sprite_source，screen 统一绘制）
+  const sourceId = nid('sprite_source');
+  nodes.push({ id: sourceId, type: 'sprite_source', inputs: {}, params: {} });
+  let prevPixelsNodeId: string | null = sourceId;
 
   // 每个修改器一个节点
   // 端口累加器：port -> 已有节点输出（需要 add 时创建 add 节点）
