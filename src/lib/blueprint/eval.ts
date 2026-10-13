@@ -168,7 +168,8 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     // 同时返回 out (兼容旧蓝图) 和 outRotation (标准)
     const result: Record<string, BlueprintValue> = { out: value, outRotation: value };
     // 像素直通：若有像素输入，代表该变换应用于此像素流
-    if (i.pixels) result.pixels = i.pixels as BlueprintValue;
+    // 仅当 pixels 输出有后继连接时才输出（无连接不输出，避免浪费）
+    if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
     return result;
   },
   // breath: scale = 1 + amplitude * sin(2π * t / period)，与原 breathHandler 对齐
@@ -177,7 +178,8 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const amplitude = asNumber(i.amplitude ?? num(Number(n.params.amplitude ?? 0.1)));
     const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 48))));
     const result: Record<string, BlueprintValue> = { out: num(1 + amplitude * Math.sin((2 * Math.PI * t) / period)) };
-    if (i.pixels) result.pixels = i.pixels as BlueprintValue;
+    // 仅当 pixels 输出有后继连接时才输出（无连接不输出，避免浪费）
+    if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
     return result;
   },
   // shake: translate = amplitude * (noise)
@@ -206,7 +208,8 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
       outY: num(-height * (0.5 + 0.5 * Math.sin(phase))),
       outRotation: num(tilt * Math.sin(phase)),
     };
-    if (i.pixels) result.pixels = i.pixels as BlueprintValue;
+    // 仅当 pixels 输出有后继连接时才输出（无连接不输出，避免浪费）
+    if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
     return result;
   },
   // wobble: rotation + translateX/Y，与原 wobbleHandler 对齐
@@ -250,9 +253,8 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
           result.pixels = i.pixels as BlueprintValue;
         }
       }
-    } else if (i.pixels) {
-      result.pixels = i.pixels as BlueprintValue;
     }
+    // 无后继连接时不输出 pixels
     return result;
   },
 
@@ -268,7 +270,8 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const withinBounce = bounceT - Math.floor(bounceT);
     const decay = Math.pow(1 - damping, bounceIndex);
     const result: Record<string, BlueprintValue> = { outY: num(-height * decay * Math.pow(Math.sin(Math.PI * withinBounce), 2)) };
-    if (i.pixels) result.pixels = i.pixels as BlueprintValue;
+    // 仅当 pixels 输出有后继连接时才输出（无连接不输出，避免浪费）
+    if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
     return result;
   },
   // elastic: 弹性过冲，与原 elasticHandler 对齐
