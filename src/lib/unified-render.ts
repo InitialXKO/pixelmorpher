@@ -37,6 +37,7 @@ import {
   padPixelGrid,
   trimTransparentEdges,
 } from './engine/pixel-modifiers';
+import { applyPixelDeformAnimations } from './engine/render-helpers/pixel-deform-animations';
 import { resolveKeyframeModifierParams } from './engine/param-driver';
 import {
   applyTextureScroll,
@@ -894,9 +895,6 @@ function renderNodeSprite(
     parentId: null as string | null,
     editModifiers: [] as any[],
     globalModifiers: [] as any[],
-    animationModifiers: modifiers.filter(m =>
-      m.enabled && isPixelDeformModifier(m.type as ModifierType)
-    ) as any[],
     modifierGroups: [] as any[],
     partKeyframes: [] as any[],
   };
@@ -930,6 +928,9 @@ function renderNodeSprite(
     modOffsetY = modResult.offsetY;
   }
 
+  // 像素形变走蓝图，不再此处直接调用 applyPixelDeformAnimations
+  // （用户指令：extractPixelModifiers + applyPixelDeformAnimations 不用）
+
   // Apply translate modifier as pixel-level shift (internal shift, not position offset)
   // This matches the old pipeline's behavior in createPartCanvasInner()
   const translateMod = modifiers.find(m => m.type === 'translate' && m.enabled);
@@ -958,16 +959,14 @@ function renderNodeSprite(
   }
 
   // ========================================================================
-  // STEP 2: Apply pixel-deform ANIMATION modifiers
-  // (texture_scroll, wave_deform, contour_scroll, reveal_hide, etc.)
-  // These modify the pixel grid before canvas creation, after edit modifiers.
-  // This matches the old pipeline's createPartCanvasInner() V4.0 section.
+  // STEP 2: Apply pixel-deform ANIMATION modifiers - DISABLED
+  // User instruction: pixel processing should go through blueprint,
+  // not via direct node.modifiers filtering here.
   // ========================================================================
-  const activeDeformMods = modifiers.filter(m =>
-    m.enabled && isPixelDeformModifier(m.type as ModifierType)
-  );
+  const activeDeformMods: any[] = [];
+  // Original: modifiers.filter(m => m.enabled && isPixelDeformModifier(m.type as ModifierType))
 
-  if (activeDeformMods.length > 0) {
+  if (false && activeDeformMods.length > 0) {
     // Compute required padding for animation modifiers that can produce overflow
     const animPadding = computeTotalAnimPadding(activeDeformMods, frame, frameRate);
     if (animPadding.left > 0 || animPadding.top > 0 || animPadding.right > 0 || animPadding.bottom > 0) {

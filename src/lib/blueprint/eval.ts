@@ -414,6 +414,23 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
     scaleY: num(asNumber(i.scaleY ?? num(1))),
     zIndex: num(asNumber(i.zIndex ?? num(0))),
   }),
+
+  // ---- 像素形变（汇点：像素数据流由渲染管线处理，此处仅占位以便下拉框显示） ----
+  texture_scroll: () => ({}),
+  wave_deform: () => ({}),
+  contour_scroll: () => ({}),
+  reveal_hide: () => ({}),
+  shatter_dissolve: () => ({}),
+  annihilate: () => ({}),
+  teleport: () => ({}),
+  crt_off: () => ({}),
+  bend: () => ({}),
+  elliptical_compress: () => ({}),
+  dumbbell_stretch: () => ({}),
+  pillow_stretch: () => ({}),
+  hyperbolic_stretch: () => ({}),
+  ring_ripple: () => ({}),
+  pixel_edit: () => ({}),
 };
 
 /** 拓扑排序（Kahn 算法） */

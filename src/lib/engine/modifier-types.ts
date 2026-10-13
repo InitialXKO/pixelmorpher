@@ -24,6 +24,8 @@ export const PIXEL_DEFORM_MODIFIER_TYPES: ModifierType[] = [
   'pillow_stretch',
   'hyperbolic_stretch',
   'ring_ripple',
+  // Edit modifier: brush strokes as non-destructive pixel deform on PuppetNode
+  'pixel_edit',
 ];
 
 /** Check if a modifier type operates at the pixel-deformation level. */

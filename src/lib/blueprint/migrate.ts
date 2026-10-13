@@ -23,10 +23,8 @@ function nid(prefix: string): string {
 export function modifiersToBlueprint(
   modifiers: PartAnimationModifier[],
 ): BlueprintGraph | null {
-  // 像素类走像素管线，不进 transform 蓝图
-  const enabled = modifiers.filter(
-    (m) => m.enabled && !PIXEL_DEFORM_MODIFIER_TYPES.includes(m.type)
-  );
+  // 设计已改：像素形变也进蓝图（specs.ts 有定义），由像素管线执行
+  const enabled = modifiers.filter((m) => m.enabled);
   if (enabled.length === 0) return null;
 
   const nodes: BlueprintNode[] = [];
@@ -68,6 +66,19 @@ export function modifiersToBlueprint(
       }
     }
 
+    // 参数名迁移：旧版存 amplitude，新求值器读 height/angleAmplitude
+    // - bounce/float: amplitude → height
+    // - wobble: amplitude → angleAmplitude（旧 wobble 的 amplitude 控制旋转角）
+    if (mod.type === 'bounce' || mod.type === 'float') {
+      if (params.amplitude !== undefined && params.height === undefined) {
+        params.height = params.amplitude;
+      }
+    } else if (mod.type === 'wobble') {
+      if (params.amplitude !== undefined && params.angleAmplitude === undefined) {
+        params.angleAmplitude = params.amplitude;
+      }
+    }
+
     // 时间输入默认连 time
     const inputs: BlueprintNode['inputs'] = { t: { nodeId: timeId } };
 
@@ -100,7 +111,7 @@ export function modifiersToBlueprint(
         connectToPort('rotation', modId, 'outRotation');
         break;
       case 'bounce':
-        connectToPort('translateY', modId, 'out');
+        connectToPort('translateY', modId, 'outY');
         break;
       case 'wheel':
         connectToPort('translateX', modId, 'outX');

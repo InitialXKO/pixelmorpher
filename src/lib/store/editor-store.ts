@@ -537,7 +537,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }));
 
     const currentFrame = projectStore.currentFrame;
-    const resolvedMods = projectStore.resolvePartEditModifiers(partId, currentFrame);
+    // Part 已退化为纯精灵数据，不再自带 editModifiers（重构时移除），
+    // resolvePartEditModifiers 已不存在，直接用空数组。
+    const resolvedMods: any[] = [];
 
     set({
       editMode: 'part_edit',
@@ -577,30 +579,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         partKeyframes: partEditBackupPartKeyframes || [],
       });
     } else {
-      const frame = partEditStartFrame ?? projectStore.currentFrame;
-      const existingPkf = projectStore.getPartKeyframeAtFrame(partEditPartId, frame);
-      if (existingPkf) {
-        projectStore.updatePartKeyframe(partEditPartId, existingPkf.id, {
-          editModifiers: partEditModifiers.map(m => ({
-            ...m,
-            params: {
-              ...m.params,
-              ...(m.params.brushCommands ? { brushCommands: JSON.parse(JSON.stringify(m.params.brushCommands)) } : {}),
-            },
-          })),
-        });
-      } else {
-        const pkfId = projectStore.addPartKeyframe(partEditPartId, frame);
-        projectStore.updatePartKeyframe(partEditPartId, pkfId, {
-          editModifiers: partEditModifiers.map(m => ({
-            ...m,
-            params: {
-              ...m.params,
-              ...(m.params.brushCommands ? { brushCommands: JSON.parse(JSON.stringify(m.params.brushCommands)) } : {}),
-            },
-          })),
-        });
-      }
+      // Part 已退化为纯精灵数据，不再有 partKeyframes/editModifiers。
+      // 确认时像素已通过 setPartPixels 实时写入 part.pixels，无需额外保存。
+      // （旧的 keyframe 保存逻辑已删除：getPartKeyframeAtFrame/addPartKeyframe/updatePartKeyframe 不存在）
     }
     });
 
