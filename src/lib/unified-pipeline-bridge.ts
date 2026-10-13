@@ -34,7 +34,7 @@ import {
   renderPartsUnified,
   pixelsToCanvas,
 } from './unified-render';
-import { interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
+// (interpolateNodeKeyframes 已迁移：新管线内部 interpolateTransform 处理)
 import { applyPixelModifiers } from './engine/pixel-modifiers';
 import { resolveKeyframeModifierParams } from './engine/param-driver';
 import { renderEffectTrackFrame } from './engine/effect-render';
@@ -107,8 +107,7 @@ export function renderUnified(
   }
 
   // ---- Step 2: Render puppet parts ----
-  // 统一走 unified pipeline：renderPuppetViaUnifiedPipeline 内部已调
-  // interpolateNodeKeyframes，蓝图/修改器/关键帧都在烘焙阶段求值。
+  // 统一走 unified pipeline：新管线内部 interpolateTransform 处理关键帧。
   if (puppetSkeletons && puppetCharacters && puppetSkeletons.length > 0) {
     renderPuppetViaUnifiedPipeline(
       ctx, canvasWidth, canvasHeight,
@@ -216,38 +215,14 @@ function renderPuppetViaUnifiedPipeline(
     );
     const nodeKeyframes = puppetClip?.puppetNodeKeyframes ?? [];
 
-    // 蓝图/修改器求值：unified pipeline 的 LiveAdapter 不调 interpolateNodeKeyframes，
-    // 这里先求出完整插值（含关键帧+蓝图+修改器），烘焙进 skeleton 副本，
-    // 再喂给 adapter（传空关键帧，避免 adapter 重复插值）。
-    const interpValues = interpolateNodeKeyframes(skeleton, nodeKeyframes, currentFrame);
-    const bakedSkeleton: PuppetSkeleton = {
-      ...skeleton,
-      nodes: skeleton.nodes.map(n => {
-        const v = interpValues.get(n.id);
-        if (!v) return n;
-        return {
-          ...n,
-          angle: v.angle,
-          offsetX: v.offsetX,
-          offsetY: v.offsetY,
-          stretch: v.stretch,
-          zIndex: v.zIndex,
-          // 已烘焙，清空防重复计算
-          blueprint: undefined,
-          modifiers: [],
-        };
-      }),
-    };
-
     // Convert old data to unified Character via LiveAdapter
-    // 注意：bakedSkeleton 每帧的角度都不同，但 skeleton.id 相同，
-    // LiveAdapter 按 id 缓存 Character，必须先 invalidate，否则拿到的是旧缓存。
+    // 关键帧传给 adapter，由新管线内部 interpolateTransform 处理
     liveAdapter.invalidate();
     const unifiedCharacter = liveAdapter.getCharacter(
-      bakedSkeleton,
+      skeleton,
       [character],
       parts,
-      [], // 关键帧已烘焙，传空
+      nodeKeyframes,
       character.costumeSets ?? [],
     );
 
