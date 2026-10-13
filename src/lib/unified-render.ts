@@ -959,47 +959,67 @@ function renderNodeSprite(
   }
 
   // ========================================================================
-  // STEP 2: Apply pixel-deform via BLUEPRINT evaluators
-  // Modifiers are processed through the blueprint pipeline:
-  // sprite_source -> deform nodes -> (pixels flow through)
+  // STEP 2: Apply pixel-deform via BLUEPRINT graph (sprite_source -> mods -> screen)
   // ========================================================================
   const activeDeformMods = modifiers.filter(m =>
     m.enabled && isPixelDeformModifier(m.type as ModifierType)
   );
 
   if (activeDeformMods.length > 0) {
-    // Import blueprint evaluators (dynamic to avoid cycles)
-    const { EVALUATORS } = require('./blueprint/eval');
-    const { pixels: pixelsVal, asPixels, num } = require('./blueprint/ir');
-    
-    let currentPixels = effectivePixels;
-    const bpCtx: any = { frame, frameRate, vars: {} };
-    
+    const { evaluateBlueprint } = require('./blueprint/eval');
+    const { pixels: pixelsVal } = require('./blueprint/ir');
+
+    // 构建蓝图图
+    const bpNodes: any[] = [
+      { id: 'bp_time', type: 'time', inputs: {}, params: {} },
+      { id: 'bp_source', type: 'sprite_source', inputs: {}, params: {} },
+    ];
+
+    let prevPixelsNodeId = 'bp_source';
     for (const mod of activeDeformMods) {
-      const evaluator = EVALUATORS[mod.type];
-      if (!evaluator) continue;
-      
-      // 构造蓝图节点
-      const bpNode: any = {
-        id: `mod_${mod.id}`,
+      const nodeId = `bp_mod_${mod.id}`;
+      bpNodes.push({
+        id: nodeId,
         type: mod.type,
-        inputs: {},
+        inputs: {
+          pixels: { nodeId: prevPixelsNodeId, output: 'pixels' },
+          t: { nodeId: 'bp_time', output: 'out' },
+        },
         params: mod.params ?? {},
-      };
-      
-      // 输入：当前像素 + 时间
-      const bpInputs: any = {
-        pixels: pixelsVal(currentPixels),
-        t: num(frame),
-      };
-      
-      // 通过蓝图求值器处理
-      const result = evaluator(bpNode, bpInputs, bpCtx);
-      const outPixels = result.pixels ? asPixels(result.pixels) : null;
-      if (outPixels) currentPixels = outPixels;
+      });
+      prevPixelsNodeId = nodeId;
     }
-    
-    effectivePixels = currentPixels;
+
+    // 终点 screen 节点：接收最终像素 + 变换
+    bpNodes.push({
+      id: 'bp_screen',
+      type: 'screen',
+      inputs: {
+        pixels: { nodeId: prevPixelsNodeId, output: 'pixels' },
+        // 变换数值直接传字面量（worldX/worldY/angle 在指令里）
+        translateX: { type: 'number', value: 0 },
+        translateY: { type: 'number', value: 0 },
+        rotation: { type: 'number', value: 0 },
+        scaleX: { type: 'number', value: 1 },
+        scaleY: { type: 'number', value: 1 },
+      },
+      params: {},
+    });
+
+    const bpGraph = { nodes: bpNodes, edges: [] };
+    const bpCtx: any = {
+      frame, frameRate, vars: {},
+      spritePixels: effectivePixels,  // sprite_source 从这里取图
+      renderCommands: [],
+    };
+
+    evaluateBlueprint(bpGraph, bpCtx);
+
+    // 从 screen 节点取最终像素
+    const cmds = bpCtx.renderCommands ?? [];
+    if (cmds.length > 0 && cmds[0].pixels) {
+      effectivePixels = cmds[0].pixels;
+    }
   }
 
   // Create offscreen canvas from (possibly modified) sprite data
