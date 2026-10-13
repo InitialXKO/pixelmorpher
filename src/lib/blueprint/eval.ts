@@ -52,6 +52,12 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
     const v = ctx.vars[String(n.params.name ?? '')] ?? n.params.default ?? 0;
     return { out: num(Number(v)) };
   },
+  // 精灵源：从 eval 上下文取原始像素图（由渲染管线传入）
+  sprite_source: (_n, _i, ctx): Record<string, BlueprintValue> => {
+    const grid = (ctx as any).spritePixels;
+    if (!grid) return {};
+    return { pixels: pixelsVal(grid) };
+  },
 
   // ---- 数学 ----
   add: (_n, i) => ({ out: num(asNumber(i.a ?? num(0)) + asNumber(i.b ?? num(0))) }),
@@ -449,6 +455,23 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
   hyperbolic_stretch: () => ({}),
   ring_ripple: () => ({}),
   pixel_edit: () => ({}),
+  // 上屏终点：接收像素图和变换，渲染到画布
+  // 实际绘制由渲染管线通过 ctx.renderTarget 完成，此处仅收集参数
+  screen: (n, i, ctx): Record<string, BlueprintValue> => {
+    const px = asPixels(i.pixels as BlueprintValue);
+    if (!px) return {};
+    // 将渲染指令存入 ctx，供渲染管线读取
+    (ctx as any).renderCommands = (ctx as any).renderCommands ?? [];
+    (ctx as any).renderCommands.push({
+      pixels: px,
+      translateX: asNumber((i.translateX as BlueprintValue) ?? num(0)),
+      translateY: asNumber((i.translateY as BlueprintValue) ?? num(0)),
+      rotation: asNumber((i.rotation as BlueprintValue) ?? num(0)),
+      scaleX: asNumber((i.scaleX as BlueprintValue) ?? num(1)),
+      scaleY: asNumber((i.scaleY as BlueprintValue) ?? num(1)),
+    });
+    return {};
+  },
 };
 
 /** 拓扑排序（Kahn 算法） */

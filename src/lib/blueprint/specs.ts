@@ -18,6 +18,8 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   time: { inputs: [], outputs: ['out'], params: [] },
   const: { inputs: [], outputs: ['out'], params: ['value'] },
   var: { inputs: [], outputs: ['out'], params: ['name', 'default'] },
+  // 精灵源：输出原始像素图（管线起点）
+  sprite_source: { inputs: [], outputs: ['pixels'], params: ['spriteId'] },
 
   // ---- 数学 ----
   add: { inputs: ['a', 'b'], outputs: ['out'], params: [] },
@@ -226,6 +228,12 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     inputs: ['pixels'],
     outputs: ['pixels'],
     params: ['brushCommands', 'opacity'],
+  },
+  // 上屏终点：接收像素图和变换，渲染到画布（管线终点）
+  screen: {
+    inputs: ['pixels', 'translateX', 'translateY', 'rotation', 'scaleX', 'scaleY'],
+    outputs: [],
+    params: [],
   },
 };
 
