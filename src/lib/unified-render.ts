@@ -959,142 +959,47 @@ function renderNodeSprite(
   }
 
   // ========================================================================
-  // STEP 2: Apply pixel-deform ANIMATION modifiers - DISABLED
-  // User instruction: pixel processing should go through blueprint,
-  // not via direct node.modifiers filtering here.
+  // STEP 2: Apply pixel-deform via BLUEPRINT evaluators
+  // Modifiers are processed through the blueprint pipeline:
+  // sprite_source -> deform nodes -> (pixels flow through)
   // ========================================================================
-  const activeDeformMods: any[] = [];
-  // Original: modifiers.filter(m => m.enabled && isPixelDeformModifier(m.type as ModifierType))
+  const activeDeformMods = modifiers.filter(m =>
+    m.enabled && isPixelDeformModifier(m.type as ModifierType)
+  );
 
-  if (false && activeDeformMods.length > 0) {
-    // Compute required padding for animation modifiers that can produce overflow
-    const animPadding = computeTotalAnimPadding(activeDeformMods, frame, frameRate);
-    if (animPadding.left > 0 || animPadding.top > 0 || animPadding.right > 0 || animPadding.bottom > 0) {
-      effectivePixels = padPixelGrid(effectivePixels, animPadding.left, animPadding.top, animPadding.right, animPadding.bottom);
-      modOffsetX += animPadding.left;
-      modOffsetY += animPadding.top;
+  if (activeDeformMods.length > 0) {
+    // Import blueprint evaluators (dynamic to avoid cycles)
+    const { EVALUATORS } = require('./blueprint/eval');
+    const { pixels: pixelsVal, asPixels, num } = require('./blueprint/ir');
+    
+    let currentPixels = effectivePixels;
+    const bpCtx: any = { frame, frameRate, vars: {} };
+    
+    for (const mod of activeDeformMods) {
+      const evaluator = EVALUATORS[mod.type];
+      if (!evaluator) continue;
+      
+      // 构造蓝图节点
+      const bpNode: any = {
+        id: `mod_${mod.id}`,
+        type: mod.type,
+        inputs: {},
+        params: mod.params ?? {},
+      };
+      
+      // 输入：当前像素 + 时间
+      const bpInputs: any = {
+        pixels: pixelsVal(currentPixels),
+        t: num(frame),
+      };
+      
+      // 通过蓝图求值器处理
+      const result = evaluator(bpNode, bpInputs, bpCtx);
+      const outPixels = result.pixels ? asPixels(result.pixels) : null;
+      if (outPixels) currentPixels = outPixels;
     }
-
-    for (const rawAnimMod of activeDeformMods) {
-      // Resolve paramKeyframes/paramDrivers before applying
-      const resolvedMods = resolveNodeModifiers([rawAnimMod], frame);
-      if (resolvedMods.length === 0) continue;
-      const animMod = resolvedMods[0];
-
-      // Compute weight from effective range
-      const { weight } = getAnimationFrameAndWeight(rawAnimMod as any, frame);
-      if (weight <= 0) continue;
-
-      // V3.2: Apply converge factor
-      const blendMode = rawAnimMod.blendMode || 'add';
-      let convergeFactor = 1;
-      if (blendMode === 'converge') {
-        const convergeSpeed = Number(animMod.params.convergeSpeed) || 0.5;
-        const { relativeFrame: cRelFrame } = getAnimationFrameAndWeight(rawAnimMod as any, frame);
-        convergeFactor = Math.exp(-convergeSpeed * cRelFrame * 0.1);
-      }
-      const effectiveWeight = weight * convergeFactor;
-
-      const partWidth = sprite.width;
-      const partHeight = sprite.height;
-      const params = animMod.params;
-
-      switch (animMod.type) {
-        case 'texture_scroll':
-          effectivePixels = applyTextureScroll(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'wave_deform':
-          effectivePixels = applyWaveDeform(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-            0, 0, // worldOffsetX, worldOffsetY (approximation)
-          );
-          break;
-        case 'contour_scroll':
-          effectivePixels = applyContourScroll(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'reveal_hide':
-          effectivePixels = applyRevealHide(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'shatter_dissolve':
-          effectivePixels = applyShatterDissolve(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'annihilate':
-          effectivePixels = applyAnnihilate(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'teleport':
-          effectivePixels = applyTeleport(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'crt_off':
-          effectivePixels = applyCrtOff(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'bend':
-          effectivePixels = applyBend(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'elliptical_compress':
-          effectivePixels = applyEllipticalCompress(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'dumbbell_stretch':
-          effectivePixels = applyDumbbellStretch(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'pillow_stretch':
-          effectivePixels = applyPillowStretch(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'hyperbolic_stretch':
-          effectivePixels = applyHyperbolicStretch(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'ring_ripple':
-          effectivePixels = applyRingRipple(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-      }
-    }
-
-    // Trim transparent edges created by the animation padding
-    if (animPadding.left > 0 || animPadding.top > 0 || animPadding.right > 0 || animPadding.bottom > 0) {
-      const trimmed = trimTransparentEdges(effectivePixels);
-      effectivePixels = trimmed.pixels;
-      modOffsetX -= trimmed.trimLeft;
-      modOffsetY -= trimmed.trimTop;
-    }
+    
+    effectivePixels = currentPixels;
   }
 
   // Create offscreen canvas from (possibly modified) sprite data
@@ -1123,7 +1028,6 @@ function renderNodeSprite(
     pivotX = workingCanvas.width - pivotX;
   }
 
-  // ========================================================================
   // STEP 4: Set up canvas transform for this sprite's world position
   // (translate + rotate + scale around pivot), then render effects + sprite
   // ========================================================================

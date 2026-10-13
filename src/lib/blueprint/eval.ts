@@ -10,7 +10,7 @@ import type {
   BlueprintValue,
   BlueprintInput,
 } from './ir';
-import { asNumber, isRef, num } from './ir';
+import { asNumber, isRef, num, pixels as pixelsVal, asPixels } from './ir';
 import { computeGaitTransform } from '../engine/animation-handlers/shared-helpers';
 import { evalExpression } from '../expression-parser';
 import type { ModifierParamValue, PartAnimationModifier } from '../types';
@@ -44,13 +44,19 @@ type NodeEvaluator = (
 ) => Record<string, BlueprintValue>;
 
 /** 内置节点类型 */
-const EVALUATORS: Record<string, NodeEvaluator> = {
+export const EVALUATORS: Record<string, NodeEvaluator> = {
   // ---- 源 ----
   time: (_n, _i, ctx) => ({ out: num(ctx.frame) }),
   const: (n) => ({ out: num(Number(n.params.value ?? 0)) }),
   var: (n, _i, ctx) => {
     const v = ctx.vars[String(n.params.name ?? '')] ?? n.params.default ?? 0;
     return { out: num(Number(v)) };
+  },
+  // 精灵源：从 eval 上下文取原始像素图（由渲染管线传入）
+  sprite_source: (_n, _i, ctx): Record<string, BlueprintValue> => {
+    const grid = (ctx as any).spritePixels;
+    if (!grid) return {};
+    return { pixels: pixelsVal(grid) };
   },
 
   // ---- 数学 ----
@@ -153,21 +159,26 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
 
   // ---- 程序化动画（复用老修改器语义） ----
   // pendulum: rotation = amplitude * sin(2π * t / period + phase)
-  pendulum: (n, i, ctx) => {
+  pendulum: (n, i, ctx): Record<string, BlueprintValue> => {
     const t = asNumber(i.t ?? num(ctx.frame));
     const amplitude = asNumber(i.amplitude ?? num(Number(n.params.amplitude ?? 30)));
     const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 16))));
     const phase = ((Number(n.params.phase ?? 0) * Math.PI) / 180);
     const value = num(amplitude * Math.sin((2 * Math.PI * t) / period + phase));
     // 同时返回 out (兼容旧蓝图) 和 outRotation (标准)
-    return { out: value, outRotation: value };
+    const result: Record<string, BlueprintValue> = { out: value, outRotation: value };
+    // 像素直通：若有像素输入，代表该变换应用于此像素流
+    if (i.pixels) result.pixels = i.pixels as BlueprintValue;
+    return result;
   },
   // breath: scale = 1 + amplitude * sin(2π * t / period)，与原 breathHandler 对齐
-  breath: (n, i, ctx) => {
+  breath: (n, i, ctx): Record<string, BlueprintValue> => {
     const t = asNumber(i.t ?? num(ctx.frame));
     const amplitude = asNumber(i.amplitude ?? num(Number(n.params.amplitude ?? 0.1)));
     const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 48))));
-    return { out: num(1 + amplitude * Math.sin((2 * Math.PI * t) / period)) };
+    const result: Record<string, BlueprintValue> = { out: num(1 + amplitude * Math.sin((2 * Math.PI * t) / period)) };
+    if (i.pixels) result.pixels = i.pixels as BlueprintValue;
+    return result;
   },
   // shake: translate = amplitude * (noise)
   shake: (n, i, ctx) => {
@@ -185,19 +196,21 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
   },
   // float: translateY = -height * (0.5 + 0.5*sin), rotation = tilt * sin
   // 与原 floatHandler 对齐
-  float: (n, i, ctx) => {
+  float: (n, i, ctx): Record<string, BlueprintValue> => {
     const t = asNumber(i.t ?? num(ctx.frame));
     const height = asNumber(i.height ?? num(Number(n.params.height ?? 5)));
     const tilt = asNumber(i.tilt ?? num(Number(n.params.tilt ?? 3)));
     const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 32))));
     const phase = (2 * Math.PI * t) / period;
-    return {
+    const result: Record<string, BlueprintValue> = {
       outY: num(-height * (0.5 + 0.5 * Math.sin(phase))),
       outRotation: num(tilt * Math.sin(phase)),
     };
+    if (i.pixels) result.pixels = i.pixels as BlueprintValue;
+    return result;
   },
   // wobble: rotation + translateX/Y，与原 wobbleHandler 对齐
-  wobble: (n, i, ctx) => {
+  wobble: (n, i, ctx): Record<string, BlueprintValue> => {
     const t = asNumber(i.t ?? num(ctx.frame));
     const angleAmp = asNumber(i.angleAmplitude ?? num(Number(n.params.angleAmplitude ?? 5)));
     const moveAmp = asNumber(i.moveAmplitude ?? num(Number(n.params.moveAmplitude ?? 2)));
@@ -205,15 +218,17 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
     const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 16))));
     const phase = (2 * Math.PI * t) / period;
     const decay = Math.exp(-damping * t * 2 * Math.PI);
-    return {
+    const result: Record<string, BlueprintValue> = {
       outRotation: num(angleAmp * Math.sin(phase) * decay),
       outX: num(moveAmp * Math.sin(phase + Math.PI / 3) * decay),
       outY: num(moveAmp * Math.cos(phase + Math.PI / 3) * decay),
     };
+    if (i.pixels) result.pixels = i.pixels as BlueprintValue;
+    return result;
   },
 
   // bounce: translateY = -height * decay * sin²(π * withinBounce)，与原 bounceHandler 对齐
-  bounce: (n, i, ctx) => {
+  bounce: (n, i, ctx): Record<string, BlueprintValue> => {
     const t = asNumber(i.t ?? num(ctx.frame));
     const height = asNumber(i.height ?? num(Number(n.params.height ?? 20)));
     const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 12))));
@@ -223,7 +238,9 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
     const bounceIndex = Math.floor((t % period) / (period / bounces));
     const withinBounce = bounceT - Math.floor(bounceT);
     const decay = Math.pow(1 - damping, bounceIndex);
-    return { outY: num(-height * decay * Math.pow(Math.sin(Math.PI * withinBounce), 2)) };
+    const result: Record<string, BlueprintValue> = { outY: num(-height * decay * Math.pow(Math.sin(Math.PI * withinBounce), 2)) };
+    if (i.pixels) result.pixels = i.pixels as BlueprintValue;
+    return result;
   },
   // elastic: 弹性过冲，与原 elasticHandler 对齐
   elastic: (n, i, ctx) => {
@@ -415,22 +432,223 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
     zIndex: num(asNumber(i.zIndex ?? num(0))),
   }),
 
-  // ---- 像素形变（汇点：像素数据流由渲染管线处理，此处仅占位以便下拉框显示） ----
-  texture_scroll: () => ({}),
-  wave_deform: () => ({}),
-  contour_scroll: () => ({}),
-  reveal_hide: () => ({}),
-  shatter_dissolve: () => ({}),
-  annihilate: () => ({}),
-  teleport: () => ({}),
-  crt_off: () => ({}),
-  bend: () => ({}),
-  elliptical_compress: () => ({}),
-  dumbbell_stretch: () => ({}),
-  pillow_stretch: () => ({}),
-  hyperbolic_stretch: () => ({}),
-  ring_ripple: () => ({}),
+  // ---- 像素形变（蓝图内处理像素，由渲染管线传入像素并取回结果） ----
+  texture_scroll: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyTextureScroll } = require('../engine/modifier-renderers/texture-scroll');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyTextureScroll(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  wave_deform: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    // 动态导入避免循环依赖
+    const { applyWaveDeform } = require('../engine/modifier-renderers/wave-deform');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    // 从输入端口覆盖 params（蓝图连线优先）
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyWaveDeform(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1, 0, 0);
+    return { pixels: pixelsVal(result) };
+  },
+  contour_scroll: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyContourScroll } = require('../engine/modifier-renderers/contour-scroll');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyContourScroll(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  reveal_hide: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyRevealHide } = require('../engine/modifier-renderers/reveal-hide');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyRevealHide(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  shatter_dissolve: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyShatterDissolve } = require('../engine/modifier-renderers/shatter-dissolve');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyShatterDissolve(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  annihilate: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyAnnihilate } = require('../engine/modifier-renderers/annihilate');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyAnnihilate(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  teleport: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyTeleport } = require('../engine/modifier-renderers/teleport');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyTeleport(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  crt_off: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyCrtOff } = require('../engine/modifier-renderers/crt-off');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyCrtOff(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  bend: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyBend } = require('../engine/modifier-renderers/geometric');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyBend(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  elliptical_compress: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyEllipticalCompress } = require('../engine/modifier-renderers/geometric');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyEllipticalCompress(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  dumbbell_stretch: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyDumbbellStretch } = require('../engine/modifier-renderers/geometric');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyDumbbellStretch(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  pillow_stretch: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyPillowStretch } = require('../engine/modifier-renderers/geometric');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyPillowStretch(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  hyperbolic_stretch: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyHyperbolicStretch } = require('../engine/modifier-renderers/geometric');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyHyperbolicStretch(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  ring_ripple: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyRingRipple } = require('../engine/modifier-renderers/geometric');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyRingRipple(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
   pixel_edit: () => ({}),
+  // 上屏终点：接收像素图和变换，渲染到画布
+  // 实际绘制由渲染管线通过 ctx.renderTarget 完成，此处仅收集参数
+  screen: (n, i, ctx): Record<string, BlueprintValue> => {
+    const px = asPixels(i.pixels as BlueprintValue);
+    if (!px) return {};
+    // 将渲染指令存入 ctx，供渲染管线读取
+    (ctx as any).renderCommands = (ctx as any).renderCommands ?? [];
+    (ctx as any).renderCommands.push({
+      pixels: px,
+      translateX: asNumber((i.translateX as BlueprintValue) ?? num(0)),
+      translateY: asNumber((i.translateY as BlueprintValue) ?? num(0)),
+      rotation: asNumber((i.rotation as BlueprintValue) ?? num(0)),
+      scaleX: asNumber((i.scaleX as BlueprintValue) ?? num(1)),
+      scaleY: asNumber((i.scaleY as BlueprintValue) ?? num(1)),
+    });
+    return {};
+  },
 };
 
 /** 拓扑排序（Kahn 算法） */
