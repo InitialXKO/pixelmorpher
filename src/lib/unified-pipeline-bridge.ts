@@ -8,15 +8,15 @@
 // the old dual-path (renderFrame + renderPuppetNodes).
 //
 // Strategy:
-// - For non-puppet parts: delegate to the existing renderFrame()
-//   (these parts use modifier stacks, effects, etc. that the new
-//   pipeline doesn't fully replicate yet)
+// - For non-puppet parts: renderPartsUnified() in unified-render.ts
+//   (standalone Part + Keyframe[] → NodeRenderInstruction → executeRenderPlan;
+//   covers modifier stacks, effects, motion blur, bones, procedural anims)
 // - For puppet parts: use the new unified pipeline via LiveAdapter
 //   → Character → generateRenderPlan → executeRenderPlan
 // - Both render to the same canvas context, composited together
 //
-// This hybrid approach ensures zero regression while incrementally
-// migrating rendering to the unified pipeline.
+// The old renderFrame() dual-path is fully migrated; the bridge no longer
+// calls the old pipeline.
 // ============================================================
 
 import type {
@@ -24,15 +24,21 @@ import type {
   AnimationClip, Skeleton, ProceduralAnimation,
   EffectTrack, MotionBlurStroke, EffectStroke,
   CanvasModifierTrack, GlobalModifier, AnimationVariable,
+  PixelGrid, ModifierType,
 } from './types';
 import type { Character, RotationStrategy, AnimationVariable as UnifiedAnimationVariable } from './unified-types';
 import { LiveAdapter } from './migration-adapter';
 import {
   generateRenderPlan,
   executeRenderPlan,
+  renderPartsUnified,
+  pixelsToCanvas,
 } from './unified-render';
-import { renderFrame } from './engine';
 import { interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
+import { applyPixelModifiers } from './engine/pixel-modifiers';
+import { resolveKeyframeModifierParams } from './engine/param-driver';
+import { renderEffectTrackFrame } from './engine/effect-render';
+import { renderMotionBlurStroke, renderEffectStroke } from './engine/brush-render';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 import { clearRenderCaches } from './engine/render-cache';
@@ -55,8 +61,7 @@ export function invalidateUnifiedPipelineCache(): void {
 /**
  * Unified render function that replaces the dual renderFrame + renderPuppetNodes pattern.
  *
- * Phase 2 hybrid strategy:
- * - Non-puppet parts → existing renderFrame() (full modifier/effect pipeline)
+ * - Non-puppet parts → renderPartsUnified() (unified pipeline)
  * - Puppet parts → new unified pipeline (via LiveAdapter → Character → RenderPlan)
  *
  * The new unified pipeline handles:
@@ -92,24 +97,14 @@ export function renderUnified(
   useUnifiedPipeline: boolean = true,
 ): void {
   // ---- Compute puppet sprite part IDs (shared logic) ----
-  const puppetSpritePartIds = computePuppetSpritePartIds(puppetSkeletons, puppetCharacters);
-  const nonPuppetParts = puppetSpritePartIds.size > 0
-    ? parts.filter(p => !puppetSpritePartIds.has(p.id))
-    : parts;
+  // 注意：未被任何 Character 引用的 Part 不在主画布渲染（用户确认）。
+  // 精灵编辑在独立的编辑画布上渲染（renderPartEditUnified），不在这里。
 
-  // ---- Step 1: Render non-puppet parts using the EXISTING pipeline ----
-  // The existing renderFrame() handles all modifier stacks, effects,
-  // motion blur, etc. for non-puppet parts.
-  // This is NOT yet migrated to the unified pipeline.
-  // H10: canvas modifiers 是全帧后处理，只在函数末尾应用一次。
-  // 这里传 undefined，避免 renderFrame 内部先应用一次造成叠加两次。
-  renderFrame(
-    ctx, canvasWidth, canvasHeight, nonPuppetParts, keyframes, currentFrame,
-    backgroundColor, effectTracks, motionBlurStrokes, effectStrokes,
-    autoMotionBlur, autoMotionBlurIntensity, skeletons, proceduralAnimations,
-    undefined, frameRate, previewQuality, animationVariables,
-    globalModifiers,
-  );
+  // ---- Background ----
+  if (backgroundColor !== 'transparent') {
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
 
   // ---- Step 2: Render puppet parts ----
   // 统一走 unified pipeline：renderPuppetViaUnifiedPipeline 内部已调
@@ -120,10 +115,38 @@ export function renderUnified(
       puppetSkeletons, puppetCharacters, parts,
       animationClips, currentFrame, frameRate,
       globalModifiers, animationVariables, canvasModifierTracks,
+      proceduralAnimations,
     );
   }
 
-  // ---- Step 3: Canvas modifiers — 全帧后处理，只应用一次（H10）
+  // ---- Step 3: Effects (canvas-level overlays) ----
+  // 特效轨道、动态模糊笔触、特效笔触：画布级叠加，不绑定特定角色
+  if (effectTracks) {
+    for (const effectTrack of effectTracks) {
+      if (!effectTrack.visible) continue;
+      const kf = effectTrack.keyframes
+        ?.filter((k: any) => k.frame <= currentFrame)
+        ?.sort((a: any, b: any) => b.frame - a.frame)[0];
+      if (!kf) continue;
+      renderEffectTrackFrame(ctx, effectTrack, kf, currentFrame, canvasWidth, canvasHeight);
+    }
+  }
+  if (motionBlurStrokes) {
+    for (const stroke of motionBlurStrokes) {
+      if (stroke.frame === currentFrame) {
+        renderMotionBlurStroke(ctx, stroke);
+      }
+    }
+  }
+  if (effectStrokes) {
+    for (const stroke of effectStrokes) {
+      if (stroke.frame === currentFrame) {
+        renderEffectStroke(ctx, stroke);
+      }
+    }
+  }
+
+  // ---- Step 4: Canvas modifiers — 全帧后处理，只应用一次（H10）
   // 必须在木偶叠加之后，否则木偶不受后处理影响；renderFrame 内部已不再应用。
   if (canvasModifierTracks && canvasModifierTracks.length > 0) {
     applyCanvasModifiers(ctx, canvasModifierTracks, currentFrame, canvasWidth, canvasHeight);
@@ -175,6 +198,7 @@ function renderPuppetViaUnifiedPipeline(
   globalModifiers?: GlobalModifier[],
   animationVariables?: AnimationVariable[],
   canvasModifierTracks?: CanvasModifierTrack[],
+  proceduralAnimations?: ProceduralAnimation[],
 ): void {
   // Apply global modifier transform (camera/world transform)
   // This matches the old pipeline's behavior in renderPuppetFrame().
@@ -247,6 +271,14 @@ function renderPuppetViaUnifiedPipeline(
       'pixel-perfect',
       frameRate,
       unifiedVars,
+      undefined, // backgroundColor
+      undefined, // previewQuality
+      undefined, // effectTracks
+      undefined, // motionBlurStrokes
+      undefined, // effectStrokes
+      undefined, // autoMotionBlur
+      undefined, // autoMotionBlurIntensity
+      proceduralAnimations,
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }
@@ -332,14 +364,19 @@ export function renderUnifiedToCanvas(
     ? parts.filter(p => !puppetSpritePartIds.has(p.id))
     : parts;
 
-  // Render non-puppet parts
-  // H10: canvas modifiers 只在函数末尾应用一次，这里传 undefined 避免叠加两次
-  renderFrame(
-    ctx, canvasWidth, canvasHeight, nonPuppetParts, keyframes, frame,
-    backgroundColor, effectTracks, motionBlurStrokes, effectStrokes,
-    autoMotionBlur, autoMotionBlurIntensity, skeletons, proceduralAnimations,
-    undefined, frameRate, previewQuality, animationVariables,
-    globalModifiers,
+  // Render non-puppet parts via the unified pipeline
+  // (renderPartsUnified handles the full old renderFrame() feature set;
+  // canvas modifiers are applied once at the end of this function — H10)
+  renderPartsUnified(
+    ctx, nonPuppetParts, keyframes, frame,
+    canvasWidth, canvasHeight, backgroundColor,
+    {
+      skeletons, proceduralAnimations, animationVariables,
+      globalModifiers,
+      effectTracks, motionBlurStrokes, effectStrokes,
+      autoMotionBlur, autoMotionBlurIntensity,
+      previewQuality, frameRate,
+    },
   );
 
   // Render puppet parts via unified pipeline
@@ -400,4 +437,145 @@ export function renderUnifiedToCanvas(
   }
 
   return canvas;
+}
+
+/**
+ * Render a single character at a specific frame for onion skin.
+ * Uses the unified pipeline. Migrated from old renderPuppetNodes usage.
+ */
+export function renderCharacterOnionFrameUnified(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  skeleton: PuppetSkeleton,
+  character: PuppetCharacter,
+  parts: Part[],
+  nodeKeyframes: PuppetNodeKeyframe[],
+  frame: number,
+  frameRate: number,
+  globalModifiers?: GlobalModifier[],
+  animationVariables?: AnimationVariable[],
+): void {
+  // Use LiveAdapter to convert to unified Character
+  liveAdapter.invalidate();
+  const unifiedCharacter = liveAdapter.getCharacter(
+    skeleton,
+    [character],
+    parts,
+    nodeKeyframes,
+    character.costumeSets ?? [],
+  );
+
+  // Build animation variables
+  const unifiedVars = animationVariables?.map(v => ({
+    id: v.id,
+    name: v.name,
+    value: v.defaultValue ?? 0,
+    min: 0,
+    max: 100,
+    writerDriverId: v.writerDriverId,
+    defaultValue: v.defaultValue ?? 0,
+  }));
+
+  const plan = generateRenderPlan(
+    unifiedCharacter,
+    frame,
+    canvasWidth,
+    canvasHeight,
+    'pixel-perfect',
+    frameRate,
+    unifiedVars as any,
+  );
+  executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
+}
+
+// ---- Part Edit Mode (moved from unified-render.ts) ----
+// Transition function: renders old Part data for the sprite editor.
+// Lives in the bridge layer (not the new-pipeline core) by design.
+
+/**
+ * Render a single Part centered on canvas for sprite editing.
+ * Migrated from old `renderPartEditMode` in render-pipeline.ts.
+ * Applies pixel modifiers via the blueprint pixel pipeline, then draws.
+ */
+export function renderPartEditUnified(
+  ctx: CanvasRenderingContext2D,
+  part: Part,
+  partEditModifiers: any[],
+  canvasWidth: number,
+  canvasHeight: number,
+  currentFrame: number = 0,
+): void {
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+  // Center the part on the canvas
+  const centerX = Math.floor((canvasWidth - part.width) / 2);
+  const centerY = Math.floor((canvasHeight - part.height) / 2);
+
+  // Resolve paramKeyframes and paramDrivers before applying pixel modifiers
+  const resolvedMods = (partEditModifiers.some(m =>
+    (m.paramKeyframes && m.paramKeyframes.length > 0) ||
+    (m.paramDrivers && m.paramDrivers.length > 0 && m.paramDrivers.some((d: any) => d.enabled && !d.isBaked))
+  ))
+    ? resolveKeyframeModifierParams(partEditModifiers, currentFrame)
+    : partEditModifiers;
+
+  // Apply pixel-level modifiers via blueprint pipeline
+  const pixelModTypes: ModifierType[] = [
+    'color_replace', 'outline', 'dither', 'pixel_displace',
+    'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip', 'pixel_edit',
+  ];
+  const activePixelMods = resolvedMods.filter(m => pixelModTypes.includes(m.type) && m.enabled);
+
+  let pixels: PixelGrid;
+  let modOffsetX = 0;
+  let modOffsetY = 0;
+  if (activePixelMods.length > 0) {
+    const modResult = applyPixelModifiers(part.pixels, activePixelMods, currentFrame);
+    pixels = modResult.pixels;
+    modOffsetX = modResult.offsetX;
+    modOffsetY = modResult.offsetY;
+  } else {
+    pixels = part.pixels;
+  }
+
+  // Apply pixel shift from translate modifiers
+  const translateMod = resolvedMods.find(m => m.type === 'translate' && m.enabled);
+  let shiftX = 0, shiftY = 0;
+  if (translateMod) {
+    shiftX = Math.round(Number(translateMod.params.offsetX) || 0);
+    shiftY = Math.round(Number(translateMod.params.offsetY) || 0);
+  }
+
+  // Render pixels
+  const gridH = pixels.length;
+  const gridW = pixels[0]?.length || 0;
+  const originX = centerX - modOffsetX;
+  const originY = centerY - modOffsetY;
+
+  ctx.imageSmoothingEnabled = false;
+
+  // Use pixelsToCanvas helper if available, else manual ImageData
+  const spriteCanvas = pixelsToCanvas(pixels, gridW, gridH);
+  if (spriteCanvas) {
+    // Apply shift by drawing at offset
+    ctx.drawImage(spriteCanvas, originX + shiftX, originY + shiftY);
+  }
+
+  // Draw part boundary indicator
+  ctx.strokeStyle = 'rgba(100, 200, 255, 0.3)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(centerX - 0.5, centerY - 0.5, part.width + 1, part.height + 1);
+
+  // Draw pivot cross
+  ctx.strokeStyle = 'rgba(255, 200, 50, 0.5)';
+  ctx.lineWidth = 1;
+  const pivotScreenX = centerX + part.pivotX;
+  const pivotScreenY = centerY + part.pivotY;
+  ctx.beginPath();
+  ctx.moveTo(pivotScreenX - 4, pivotScreenY);
+  ctx.lineTo(pivotScreenX + 4, pivotScreenY);
+  ctx.moveTo(pivotScreenX, pivotScreenY - 4);
+  ctx.lineTo(pivotScreenX, pivotScreenY + 4);
+  ctx.stroke();
 }

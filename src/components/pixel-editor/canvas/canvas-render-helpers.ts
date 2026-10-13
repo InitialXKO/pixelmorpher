@@ -7,7 +7,7 @@
 import { drawDiamond, catmullRomToBezier, evaluateBezier, computeSpriteEndPoint } from './canvas-utils';
 import type { Part, Skeleton, Bone, TrajectoryCurvePoint, PuppetSkeleton, PuppetNode, PuppetNodeKeyframe, PuppetCharacter } from '@/lib/types';
 import { computeBoneTransforms } from '@/lib/engine';
-import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-render';
+import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 
 // ============================================================
 // Shared types for render parameters

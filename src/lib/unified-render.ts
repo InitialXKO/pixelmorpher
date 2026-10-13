@@ -23,7 +23,7 @@ import type {
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP,
 } from './unified-types';
-import { renderPixelPerfectRotation } from './engine/puppet-render';
+import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
 import { sampleJointDiscColor, getPlugJointWidth } from './engine/render-helpers/puppet-joint-color';
 import {
@@ -61,9 +61,26 @@ import {
   renderMotionBlurEffect,
   renderParticleEffect,
   getTranslateOffset,
+  computePhysicsOffset,
+  renderEffectTrackFrame,
 } from './engine/effect-render';
-import { getAnimationFrameAndWeight } from './engine/animation-state';
-import type { Part, PixelGrid, ModifierType } from './types';
+import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from './engine/brush-render';
+import { getAnimationFrameAndWeight, computeKeyframeBaseTransform } from './engine/animation-state';
+import { computeGlobalModifierTransform } from './engine/animation-dispatch';
+import { computeBoneTransforms, applyProceduralAnimations } from './engine/skeleton';
+import { getKfByPart } from './engine/frame-cache';
+import {
+  resolvePartKeyframe,
+  applyBoneDrivenTransforms,
+  buildPartBoneBindingsMap,
+  buildVariableContextForFrame,
+} from './engine/part-bone-utils';
+import type { VariableContext as EngineVariableContext } from './engine/param-driver';
+import type {
+  Part, PixelGrid, ModifierType, Keyframe, Skeleton, ProceduralAnimation,
+  EffectTrack, MotionBlurStroke, EffectStroke, GlobalModifier,
+  AnimationVariable as StoreAnimationVariable,
+} from './types';
 import {
   resolveNodeModifiers,
   computeAnimationModifierTransform,
@@ -732,6 +749,14 @@ export function generateRenderPlan(
   rotationStrategy: RotationStrategy = 'pixel-perfect',
   frameRate: number = 12,
   animationVariables?: AnimationVariable[],
+  backgroundColor?: string,
+  previewQuality?: 'low' | 'medium' | 'high',
+  effectTracks?: any[],
+  motionBlurStrokes?: any[],
+  effectStrokes?: any[],
+  autoMotionBlur?: boolean,
+  autoMotionBlurIntensity?: number,
+  proceduralAnimations?: any[],
 ): RenderPlan {
   // Build variable context for ParamDriver resolution
   // H6: 收集角色全部节点的 active param drivers，传入真实求值（之前恒为默认值）
@@ -778,6 +803,16 @@ export function generateRenderPlan(
     // Determine rotation strategy
     const strategy: RotationStrategy = rotationStrategy;
 
+    // Apply procedural animations to node modifiers (migrated from old renderFrame)
+    let nodeModifiers = node.modifiers;
+    if (proceduralAnimations && proceduralAnimations.length > 0) {
+      nodeModifiers = applyProceduralAnimations(
+        node.modifiers as any ?? [],
+        proceduralAnimations as any,
+        '', frame, nodeId,
+      ) as any;
+    }
+
     nodeInstructions.push({
       nodeId,
       sprite,
@@ -791,7 +826,7 @@ export function generateRenderPlan(
       zIndex: nodeZ.get(nodeId) ?? 0,
       drawLayer: node.drawLayer,
       generated: undefined, // Discs are handled separately
-      modifiers: node.modifiers,
+      modifiers: nodeModifiers,
       frame,
       frameRate,
     });
@@ -811,6 +846,14 @@ export function generateRenderPlan(
     nodeInstructions,
     discInstructions,
     sortedInstructions: allInstructions,
+    backgroundColor,
+    previewQuality,
+    effectTracks,
+    motionBlurStrokes,
+    effectStrokes,
+    autoMotionBlur,
+    autoMotionBlurIntensity,
+    frame,
   };
 }
 
@@ -835,6 +878,38 @@ export function executeRenderPlan(
       renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight);
     } else {
       renderDisc(ctx, instruction);
+    }
+  }
+
+  // Render effects (overlays, not tied to specific nodes)
+  // These are canvas-level effects from the old renderFrame pipeline
+  const currentFrame = plan.frame ?? 0;
+  if (plan.effectTracks) {
+    for (const effectTrack of plan.effectTracks) {
+      if (!effectTrack.visible) continue;
+      const kf = effectTrack.keyframes
+        ?.filter((k: any) => k.frame <= currentFrame)
+        ?.sort((a: any, b: any) => b.frame - a.frame)[0];
+      if (!kf) continue;
+      renderEffectTrackFrame(ctx, effectTrack, kf, currentFrame, canvasWidth, canvasHeight);
+    }
+  }
+
+  // Render motion blur strokes for this frame
+  if (plan.motionBlurStrokes) {
+    for (const stroke of plan.motionBlurStrokes) {
+      if ((stroke as any).frame === currentFrame) {
+        renderMotionBlurStroke(ctx, stroke as any);
+      }
+    }
+  }
+
+  // Render effect strokes for this frame
+  if (plan.effectStrokes) {
+    for (const stroke of plan.effectStrokes) {
+      if ((stroke as any).frame === currentFrame) {
+        renderEffectStroke(ctx, stroke as any);
+      }
     }
   }
 }
@@ -862,7 +937,10 @@ function renderNodeSprite(
   canvasWidth: number,
   canvasHeight: number,
 ): void {
-  const { sprite, worldX, worldY, angle, stretch, mirror, rotationStrategy, modifiers, frame, frameRate } = instruction;
+  const { nodeId, sprite, worldX, worldY, angle, stretch, mirror, rotationStrategy, modifiers, frame, frameRate } = instruction;
+  const scaleX = instruction.scaleX ?? 1;
+  const skews = instruction.skews ?? [];
+  const previewQuality = instruction.previewQuality ?? 'high';
 
   // ========================================================================
   // STEP 1: Apply pixel-level EDIT modifiers (color_replace, outline, dither, etc.)
@@ -876,28 +954,6 @@ function renderNodeSprite(
   const activePixelMods = modifiers.filter(m =>
     m.enabled && PIXEL_MOD_TYPES.includes(m.type as ModifierType)
   );
-
-  // Create a minimal Part-like object for compatibility with applyPixelModifiers,
-  // effect renderers, and animation-state functions that expect a Part.
-  const pseudoPart = {
-    id: instruction.nodeId,
-    name: instruction.nodeId,
-    width: sprite.width,
-    height: sprite.height,
-    pixels: sprite.data,
-    pivotX: 0,
-    pivotY: 0,
-    offsetX: 0,
-    offsetY: 0,
-    zIndex: 0,
-    visible: true,
-    locked: false,
-    parentId: null as string | null,
-    editModifiers: [] as any[],
-    globalModifiers: [] as any[],
-    modifierGroups: [] as any[],
-    partKeyframes: [] as any[],
-  };
 
   if (activePixelMods.length > 0) {
     // Convert ModifierInstance[] to old format for applyPixelModifiers
@@ -922,7 +978,7 @@ function renderNodeSprite(
       (m.paramKeyframes && m.paramKeyframes.length > 0) ||
       (m.paramDrivers && m.paramDrivers.length > 0 && m.paramDrivers.some((d: any) => d.enabled && !d.isBaked))
     ) ? resolveKeyframeModifierParams(oldFormatMods as any, frame) : oldFormatMods;
-    const modResult = applyPixelModifiers(pseudoPart, resolvedMods as any, frame);
+    const modResult = applyPixelModifiers(sprite.data, resolvedMods as any, frame);
     effectivePixels = modResult.pixels;
     modOffsetX = modResult.offsetX;
     modOffsetY = modResult.offsetY;
@@ -959,142 +1015,65 @@ function renderNodeSprite(
   }
 
   // ========================================================================
-  // STEP 2: Apply pixel-deform ANIMATION modifiers - DISABLED
-  // User instruction: pixel processing should go through blueprint,
-  // not via direct node.modifiers filtering here.
+  // STEP 2: Apply pixel-deform via BLUEPRINT graph (sprite_source -> mods -> screen)
   // ========================================================================
-  const activeDeformMods: any[] = [];
-  // Original: modifiers.filter(m => m.enabled && isPixelDeformModifier(m.type as ModifierType))
+  const activeDeformMods = modifiers.filter(m =>
+    m.enabled && isPixelDeformModifier(m.type as ModifierType)
+  );
 
-  if (false && activeDeformMods.length > 0) {
-    // Compute required padding for animation modifiers that can produce overflow
-    const animPadding = computeTotalAnimPadding(activeDeformMods, frame, frameRate);
-    if (animPadding.left > 0 || animPadding.top > 0 || animPadding.right > 0 || animPadding.bottom > 0) {
-      effectivePixels = padPixelGrid(effectivePixels, animPadding.left, animPadding.top, animPadding.right, animPadding.bottom);
-      modOffsetX += animPadding.left;
-      modOffsetY += animPadding.top;
+  if (activeDeformMods.length > 0) {
+    const { evaluateBlueprint } = require('./blueprint/eval');
+    const { pixels: pixelsVal } = require('./blueprint/ir');
+
+    // 构建蓝图图
+    const bpNodes: any[] = [
+      { id: 'bp_time', type: 'time', inputs: {}, params: {} },
+      { id: 'bp_source', type: 'sprite_source', inputs: {}, params: {} },
+    ];
+
+    let prevPixelsNodeId = 'bp_source';
+    for (const mod of activeDeformMods) {
+      const nodeId = `bp_mod_${mod.id}`;
+      bpNodes.push({
+        id: nodeId,
+        type: mod.type,
+        inputs: {
+          pixels: { nodeId: prevPixelsNodeId, output: 'pixels' },
+          t: { nodeId: 'bp_time', output: 'out' },
+        },
+        params: mod.params ?? {},
+      });
+      prevPixelsNodeId = nodeId;
     }
 
-    for (const rawAnimMod of activeDeformMods) {
-      // Resolve paramKeyframes/paramDrivers before applying
-      const resolvedMods = resolveNodeModifiers([rawAnimMod], frame);
-      if (resolvedMods.length === 0) continue;
-      const animMod = resolvedMods[0];
+    // 终点 screen 节点：接收最终像素 + 变换
+    bpNodes.push({
+      id: 'bp_screen',
+      type: 'screen',
+      inputs: {
+        pixels: { nodeId: prevPixelsNodeId, output: 'pixels' },
+        // 变换数值直接传字面量（worldX/worldY/angle 在指令里）
+        translateX: { type: 'number', value: 0 },
+        translateY: { type: 'number', value: 0 },
+        rotation: { type: 'number', value: 0 },
+        scaleX: { type: 'number', value: 1 },
+        scaleY: { type: 'number', value: 1 },
+      },
+      params: {},
+    });
 
-      // Compute weight from effective range
-      const { weight } = getAnimationFrameAndWeight(rawAnimMod as any, frame);
-      if (weight <= 0) continue;
+    const bpGraph = { nodes: bpNodes, edges: [] };
+    const bpCtx: any = {
+      frame, frameRate, vars: {},
+      spritePixels: effectivePixels,  // sprite_source 从这里取图
+      // screen 为绘制终点：直接回调更新 effectivePixels
+      drawToScreen: (cmd: { pixels: PixelGrid }) => {
+        if (cmd.pixels) effectivePixels = cmd.pixels;
+      },
+    };
 
-      // V3.2: Apply converge factor
-      const blendMode = rawAnimMod.blendMode || 'add';
-      let convergeFactor = 1;
-      if (blendMode === 'converge') {
-        const convergeSpeed = Number(animMod.params.convergeSpeed) || 0.5;
-        const { relativeFrame: cRelFrame } = getAnimationFrameAndWeight(rawAnimMod as any, frame);
-        convergeFactor = Math.exp(-convergeSpeed * cRelFrame * 0.1);
-      }
-      const effectiveWeight = weight * convergeFactor;
-
-      const partWidth = sprite.width;
-      const partHeight = sprite.height;
-      const params = animMod.params;
-
-      switch (animMod.type) {
-        case 'texture_scroll':
-          effectivePixels = applyTextureScroll(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'wave_deform':
-          effectivePixels = applyWaveDeform(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-            0, 0, // worldOffsetX, worldOffsetY (approximation)
-          );
-          break;
-        case 'contour_scroll':
-          effectivePixels = applyContourScroll(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'reveal_hide':
-          effectivePixels = applyRevealHide(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'shatter_dissolve':
-          effectivePixels = applyShatterDissolve(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'annihilate':
-          effectivePixels = applyAnnihilate(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'teleport':
-          effectivePixels = applyTeleport(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'crt_off':
-          effectivePixels = applyCrtOff(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'bend':
-          effectivePixels = applyBend(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'elliptical_compress':
-          effectivePixels = applyEllipticalCompress(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'dumbbell_stretch':
-          effectivePixels = applyDumbbellStretch(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'pillow_stretch':
-          effectivePixels = applyPillowStretch(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'hyperbolic_stretch':
-          effectivePixels = applyHyperbolicStretch(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-        case 'ring_ripple':
-          effectivePixels = applyRingRipple(
-            effectivePixels, partWidth, partHeight,
-            params, frame, frameRate, effectiveWeight,
-          );
-          break;
-      }
-    }
-
-    // Trim transparent edges created by the animation padding
-    if (animPadding.left > 0 || animPadding.top > 0 || animPadding.right > 0 || animPadding.bottom > 0) {
-      const trimmed = trimTransparentEdges(effectivePixels);
-      effectivePixels = trimmed.pixels;
-      modOffsetX -= trimmed.trimLeft;
-      modOffsetY -= trimmed.trimTop;
-    }
+    evaluateBlueprint(bpGraph, bpCtx);
+    // screen 已通过 drawToScreen 更新 effectivePixels，无需再读 renderCommands
   }
 
   // Create offscreen canvas from (possibly modified) sprite data
@@ -1123,7 +1102,6 @@ function renderNodeSprite(
     pivotX = workingCanvas.width - pivotX;
   }
 
-  // ========================================================================
   // STEP 4: Set up canvas transform for this sprite's world position
   // (translate + rotate + scale around pivot), then render effects + sprite
   // ========================================================================
@@ -1136,32 +1114,57 @@ function renderNodeSprite(
   ctx.save();
 
   // Apply the same transform chain as the old pipeline:
-  // translate(worldPosition) → rotate(angle) → scale(stretchY)
+  // translate(worldPosition) → rotate(angle) → scale(scaleX, stretchY) → skew
   // Then draw at (-pivotX, -pivotY) so the pivot aligns with world position
   ctx.translate(Math.round(drawPivotX), Math.round(drawPivotY));
   ctx.rotate((angle * Math.PI) / 180);
-  ctx.scale(1, stretch);
+  ctx.scale(scaleX, stretch);
+
+  // Apply skews (matches old pipeline's renderPartToCanvas order: after scale)
+  for (const { skewX, skewY } of skews) {
+    ctx.transform(1, Math.tan((skewY * Math.PI) / 180), Math.tan((skewX * Math.PI) / 180), 1, 0, 0);
+  }
 
   // ========================================================================
   // STEP 4a: Render "behind" effects (before the part itself)
   // glow, afterimage, motion_blur are drawn BEHIND the main sprite
   // This matches the old pipeline's renderPartToCanvas() behavior.
+  // Preview quality: skip effect modifiers in low quality mode (old parity).
   // ========================================================================
-  const behindEffectMods = modifiers.filter(m =>
+  const behindEffectMods = previewQuality === 'low' ? [] : modifiers.filter(m =>
     m.enabled && ['glow', 'afterimage', 'motion_blur'].includes(m.type)
   );
   for (const mod of behindEffectMods) {
     switch (mod.type) {
       case 'glow':
-        renderGlowEffect(ctx, pseudoPart as Part, mod as any, workingCanvas);
+        renderGlowEffect(ctx, mod as any, workingCanvas);
         break;
       case 'afterimage':
-        renderAfterimageEffect(ctx, pseudoPart as Part, mod as any, modifiers as any, workingCanvas);
+        renderAfterimageEffect(ctx, mod as any, modifiers as any, workingCanvas);
         break;
       case 'motion_blur':
-        renderMotionBlurEffect(ctx, pseudoPart as Part, mod as any, modifiers as any, workingCanvas);
+        renderMotionBlurEffect(ctx, mod as any, modifiers as any, workingCanvas);
         break;
     }
+  }
+
+  // === Auto motion blur (old pipeline parity) ===
+  // Rendered in the transformed space, after behind effects, before the sprite.
+  if (
+    instruction.autoMotionBlur &&
+    instruction.autoMotionBlurKeyframes &&
+    instruction.autoMotionBlurKeyframes.length > 0 &&
+    instruction.autoMotionBlurPartId
+  ) {
+    applyAutoMotionBlur(
+      ctx,
+      instruction.autoMotionBlurPartId ?? instruction.nodeId,
+      frame,
+      instruction.autoMotionBlurKeyframes,
+      instruction.autoMotionBlurIntensity ?? 0.5,
+      workingCanvas,
+      undefined,
+    );
   }
 
   // ========================================================================
@@ -1170,7 +1173,13 @@ function renderNodeSprite(
   // ========================================================================
   ctx.imageSmoothingEnabled = false;
 
-  if (rotationStrategy === 'pixel-perfect' && (angle !== 0 || stretch !== 1.0)) {
+  // Pixel-perfect rotation only handles rotate + Y-stretch. Parts with X-scale
+  // or skew fall back to the native canvas path (same as the old pipeline).
+  const usePixelPerfect = rotationStrategy === 'pixel-perfect'
+    && (angle !== 0 || stretch !== 1.0)
+    && scaleX === 1
+    && skews.length === 0;
+  if (usePixelPerfect) {
     // Use 4× upscale pixel-perfect rotation — this renders to an offscreen
     // canvas, then we draw that result at the world position.
     // Since we already applied the translate+rotate+scale transform above,
@@ -1189,31 +1198,9 @@ function renderNodeSprite(
     const drawX = Math.round(subToPx(worldX) - result.resultPivotX);
     const drawY = Math.round(subToPx(worldY) - result.resultPivotY);
 
-    // For pixel-perfect rotation, render effects separately without the rotation transform
-    // This is a simplification — in the full implementation, effects would need to account
-    // for the rotation. For now, effects + pixel-perfect rotation don't fully compose,
-    // but this matches the old pipeline's behavior where effects are rendered in the
-    // pre-rotation coordinate space.
-    if (behindEffectMods.length > 0) {
-      ctx.save();
-      ctx.translate(Math.round(drawPivotX), Math.round(drawPivotY));
-      ctx.rotate((angle * Math.PI) / 180);
-      ctx.scale(1, stretch);
-      for (const mod of behindEffectMods) {
-        switch (mod.type) {
-          case 'glow':
-            renderGlowEffect(ctx, pseudoPart as Part, mod as any, workingCanvas);
-            break;
-          case 'afterimage':
-            renderAfterimageEffect(ctx, pseudoPart as Part, mod as any, modifiers as any, workingCanvas);
-            break;
-          case 'motion_blur':
-            renderMotionBlurEffect(ctx, pseudoPart as Part, mod as any, modifiers as any, workingCanvas);
-            break;
-        }
-      }
-      ctx.restore();
-    }
+    // NOTE: behind effects (glow/afterimage/motion_blur) + auto motion blur were
+    // already rendered above in the transformed space before ctx.restore(),
+    // so they are NOT repeated here (old code rendered them twice — fixed).
 
     ctx.drawImage(result.canvas, drawX, drawY);
 
@@ -1224,16 +1211,20 @@ function renderNodeSprite(
     }
 
     // Render "on top" effects after the sprite for pixel-perfect rotation path
-    const topEffectMods = modifiers.filter(m =>
+    // Preview quality: skip particle effects in low quality mode (old parity).
+    const topEffectMods = previewQuality === 'low' ? [] : modifiers.filter(m =>
       m.enabled && m.type === 'particle'
     );
     if (topEffectMods.length > 0) {
       ctx.save();
       ctx.translate(Math.round(drawPivotX), Math.round(drawPivotY));
       ctx.rotate((angle * Math.PI) / 180);
-      ctx.scale(1, stretch);
+      ctx.scale(scaleX, stretch);
+      for (const { skewX, skewY } of skews) {
+        ctx.transform(1, Math.tan((skewY * Math.PI) / 180), Math.tan((skewX * Math.PI) / 180), 1, 0, 0);
+      }
       for (const mod of topEffectMods) {
-        renderParticleEffect(ctx, pseudoPart as Part, mod as any, frame);
+        renderParticleEffect(ctx, nodeId, sprite, mod as any, frame);
       }
       ctx.restore();
     }
@@ -1244,12 +1235,13 @@ function renderNodeSprite(
     // ========================================================================
     // STEP 4c: Render "on top" effects (after the part itself)
     // particle effects are drawn ON TOP of the main sprite
+    // Preview quality: skip particle effects in low quality mode (old parity).
     // ========================================================================
-    const topEffectMods = modifiers.filter(m =>
+    const topEffectMods = previewQuality === 'low' ? [] : modifiers.filter(m =>
       m.enabled && m.type === 'particle'
     );
     for (const mod of topEffectMods) {
-      renderParticleEffect(ctx, pseudoPart as Part, mod as any, frame);
+      renderParticleEffect(ctx, nodeId, sprite, mod as any, frame);
     }
 
     ctx.restore(); // Undo the transform we set up
@@ -1306,7 +1298,7 @@ function renderDisc(
  * Convert a PixelGrid to an offscreen HTMLCanvasElement.
  * This is the raw pixel→canvas conversion without modifier processing.
  */
-function pixelsToCanvas(pixels: PixelGrid, width: number, height: number): HTMLCanvasElement | null {
+export function pixelsToCanvas(pixels: PixelGrid, width: number, height: number): HTMLCanvasElement | null {
   if (!pixels || pixels.length === 0) return null;
   if (width <= 0 || height <= 0) return null;
 
@@ -1413,4 +1405,248 @@ function renderFrameViaUnifiedPipeline(
 // Helper: convert pixel value to sub-pixel units (imported from unified-types but also needed here)
 function pxToSub(v: number): SubPixel {
   return Math.round(v * 16);
+}
+
+// ---- Standalone Part Rendering (Unified) ----
+
+/**
+ * Modifier types consumed into the node transform (position/rotation/scale/skew).
+ * These are NOT passed through to renderNodeSprite's modifier pipeline —
+ * renderNodeSprite treats 'translate' as a pixel shift, so keeping them would
+ * double-apply the transform. Matches old renderPartToCanvas() semantics where
+ * computeKeyframeBaseTransform() extracts these before canvas drawing.
+ */
+const PART_TRANSFORM_MOD_TYPES = new Set<string>([
+  'translate', 'rotate', 'uniform_scale', 'non_uniform_stretch', 'skew',
+  'simple_physics', // consumed via computePhysicsOffset → position offset
+]);
+
+export interface PartsRenderOptions {
+  skeletons?: Skeleton[];
+  proceduralAnimations?: ProceduralAnimation[];
+  animationVariables?: StoreAnimationVariable[];
+  globalModifiers?: GlobalModifier[];
+  effectTracks?: EffectTrack[];
+  motionBlurStrokes?: MotionBlurStroke[];
+  effectStrokes?: EffectStroke[];
+  autoMotionBlur?: boolean;
+  autoMotionBlurIntensity?: number;
+  previewQuality?: 'low' | 'medium' | 'high';
+  frameRate?: number;
+}
+
+/**
+ * Render standalone (non-character) parts through the unified pipeline.
+ * Migrated from old `renderFrame()` in render-pipeline.ts.
+ *
+ * For each part:
+ * 1. Resolve the effective keyframe at `frame` (interpolation + param drivers
+ *    + procedural animations) — reuses the old resolution logic verbatim.
+ * 2. Apply bone-driven transforms (V2.0 skeletons).
+ * 3. Extract the base transform (translate/rotate/scale/skew) into a
+ *    NodeRenderInstruction; pixel/effect/deform modifiers stay on the node.
+ * 4. correctionMask (manual pixel override) becomes the sprite's base pixels.
+ *
+ * Canvas-level effects (effect tracks, brush strokes) are rendered after parts,
+ * matching the old pipeline order. Canvas modifiers and the global transform
+ * stay with the caller (bridge), as before.
+ */
+export function renderPartsUnified(
+  ctx: CanvasRenderingContext2D,
+  parts: Part[],
+  keyframes: Keyframe[],
+  frame: number,
+  canvasWidth: number,
+  canvasHeight: number,
+  backgroundColor: string,
+  options: PartsRenderOptions = {},
+): void {
+  const {
+    skeletons,
+    proceduralAnimations,
+    animationVariables,
+    globalModifiers,
+    effectTracks,
+    motionBlurStrokes,
+    effectStrokes,
+    autoMotionBlur = false,
+    autoMotionBlurIntensity = 0.5,
+    previewQuality = 'high',
+    frameRate = 12,
+  } = options;
+
+  // Clear canvas (skip if transparent - used for reference image background)
+  if (backgroundColor !== 'transparent') {
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
+
+  // V12: Apply global modifier transform (camera/world) around parts + effects.
+  // Matches old renderFrame(): the transform wraps everything except canvas
+  // modifiers (which the caller applies after).
+  const hasGlobalTransform = applyPartsGlobalTransform(
+    ctx, canvasWidth, canvasHeight, globalModifiers, frame, frameRate,
+  );
+
+  // M8: Build variable context for the current frame
+  const variableContext: EngineVariableContext = buildVariableContextForFrame(keyframes, animationVariables, frame);
+
+  // V2.0: Compute bone transforms for all skeletons
+  const boneTransforms = new Map<string, Map<string, { rotation: number; headX: number; headY: number; tailX: number; tailY: number }>>();
+  if (skeletons) {
+    for (const skeleton of skeletons) {
+      boneTransforms.set(skeleton.id, computeBoneTransforms(skeleton, frame));
+    }
+  }
+
+  // V2.0: Build part-to-bone binding lookup from skeletons
+  const partBoneBindings = buildPartBoneBindingsMap(skeletons);
+
+  // B3: Use cached kfByPart index
+  const kfByPart = getKfByPart(keyframes);
+
+  // Build one render instruction per part
+  const instructions: NodeRenderInstruction[] = [];
+  for (const part of parts) {
+    // Part 是纯精灵数据，恒可见
+    // Resolve the effective keyframe for this part (old logic, verbatim)
+    let renderKf = resolvePartKeyframe(part, kfByPart, frame, variableContext, keyframes, proceduralAnimations);
+
+    // Apply bone-driven transforms
+    if (renderKf) {
+      renderKf = applyBoneDrivenTransforms(renderKf, part.id, partBoneBindings, boneTransforms);
+    }
+
+    const allModifiers = renderKf && !renderKf.isBaked ? renderKf.modifiers : [];
+    // Skip collapsed modifiers — their effect is already baked into correctionMask
+    const modifiers = allModifiers.filter(m => !m.collapsed);
+
+    // Compute physics offset before canvas transforms
+    const physicsOffset = computePhysicsOffset(modifiers, frame);
+
+    // V3.1: keyframe base transform (non-animation modifiers only)
+    const kfBase = computeKeyframeBaseTransform(modifiers);
+
+    // Split: transform modifiers are consumed into the instruction transform.
+    // Everything else (pixel/effect/deform) stays for renderNodeSprite.
+    const nodeMods = modifiers.filter(m => !PART_TRANSFORM_MOD_TYPES.has(m.type));
+
+    // Sprite base pixels: correctionMask (manual frame) overrides part.pixels
+    const basePixels = renderKf?.correctionMask ?? part.pixels;
+    const spriteWidth = renderKf?.overrideWidth ?? part.width;
+    const spriteHeight = renderKf?.overrideHeight ?? part.height;
+    const pivotX = renderKf?.overridePivotX ?? part.pivotX;
+    const pivotY = renderKf?.overridePivotY ?? part.pivotY;
+
+    instructions.push({
+      nodeId: part.id,
+      sprite: {
+        width: spriteWidth,
+        height: spriteHeight,
+        data: basePixels,
+        // Preserve Part's pivot semantics: pivot = anchor point relative to
+        // sprite top-left; worldX/Y = where the pivot lands on canvas.
+        plug: { x: pxToSub(pivotX), y: pxToSub(pivotY) },
+      },
+      // Old pipeline drew parts at canvas center + keyframe offset.
+      worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2 + kfBase.translateX + physicsOffset.x)),
+      worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2 + kfBase.translateY + physicsOffset.y)),
+      angle: kfBase.rotation,
+      scaleX: kfBase.scaleX,
+      stretch: kfBase.scaleY,
+      skews: kfBase.skews,
+      variantIndex: 0,
+      rotationStrategy: 'pixel-perfect',
+      mirror: false,
+      // Parts render in array order (old pipeline's z-sort is disabled);
+      // stable sort below preserves insertion order for equal zIndex.
+      zIndex: 0,
+      drawLayer: 'default',
+      // Boundary cast: old ModifierInstance → unified ModifierInstance
+      // (structurally compatible; same pattern as renderNodeSprite's oldFormatMods).
+      modifiers: nodeMods as any,
+      frame,
+      frameRate,
+      previewQuality,
+      autoMotionBlur,
+      autoMotionBlurIntensity,
+      autoMotionBlurPartId: part.id,
+      autoMotionBlurKeyframes: keyframes,
+    });
+  }
+
+  // Execute through the unified plan executor
+  const plan: RenderPlan = {
+    nodeInstructions: instructions,
+    discInstructions: [],
+    sortedInstructions: [...instructions].sort((a, b) => a.zIndex - b.zIndex),
+    backgroundColor,
+    previewQuality,
+  };
+  executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
+
+  // Render effect tracks, motion blur strokes, effect strokes (old order)
+  if (effectTracks) {
+    for (const effectTrack of effectTracks) {
+      if (!effectTrack.visible) continue;
+      // Find the keyframe at or before the current frame
+      const kf = effectTrack.keyframes
+        .filter((k) => k.frame <= frame)
+        .sort((a, b) => b.frame - a.frame)[0];
+      if (!kf) continue;
+      renderEffectTrackFrame(ctx, effectTrack, kf, frame, canvasWidth, canvasHeight);
+    }
+  }
+
+  if (motionBlurStrokes) {
+    for (const stroke of motionBlurStrokes) {
+      if (stroke.frame === frame) {
+        renderMotionBlurStroke(ctx, stroke);
+      }
+    }
+  }
+
+  if (effectStrokes) {
+    for (const stroke of effectStrokes) {
+      if (stroke.frame === frame) {
+        renderEffectStroke(ctx, stroke);
+      }
+    }
+  }
+
+  // V12: Restore the global modifier transform
+  if (hasGlobalTransform) {
+    ctx.restore();
+  }
+}
+
+/**
+ * Apply the global modifier transform (camera/world) to the canvas.
+ * Matches old renderFrame()'s applyGlobalTransform: translate(canvas center)
+ * → translate → rotate → scale → translate(-center).
+ * Returns whether a transform was applied (caller must ctx.restore()).
+ */
+function applyPartsGlobalTransform(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  globalModifiers: GlobalModifier[] | undefined,
+  frame: number,
+  frameRate: number,
+): boolean {
+  let globalTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
+  if (globalModifiers && globalModifiers.length > 0) {
+    globalTransform = computeGlobalModifierTransform(globalModifiers, frame, frameRate);
+  }
+  const has = globalTransform.translateX !== 0 || globalTransform.translateY !== 0 ||
+    globalTransform.rotation !== 0 || globalTransform.scaleX !== 1 || globalTransform.scaleY !== 1;
+  if (has) {
+    ctx.save();
+    ctx.translate(canvasWidth / 2, canvasHeight / 2);
+    ctx.translate(globalTransform.translateX, globalTransform.translateY);
+    ctx.rotate((globalTransform.rotation * Math.PI) / 180);
+    ctx.scale(globalTransform.scaleX, globalTransform.scaleY);
+    ctx.translate(-canvasWidth / 2, -canvasHeight / 2);
+  }
+  return has;
 }

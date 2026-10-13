@@ -18,6 +18,8 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   time: { inputs: [], outputs: ['out'], params: [] },
   const: { inputs: [], outputs: ['out'], params: ['value'] },
   var: { inputs: [], outputs: ['out'], params: ['name', 'default'] },
+  // 精灵源：输出原始像素图（管线起点）
+  sprite_source: { inputs: [], outputs: ['pixels'], params: ['spriteId'] },
 
   // ---- 数学 ----
   add: { inputs: ['a', 'b'], outputs: ['out'], params: [] },
@@ -30,20 +32,20 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   // ---- 程序化动画 ----
   // pendulum: 输出 outRotation（主）+ out（兼容）
   pendulum: {
-    inputs: ['t'],
-    outputs: ['out', 'outRotation'],
+    inputs: ['t', 'pixels'],
+    outputs: ['out', 'outRotation', 'pixels'],
     params: ['amplitude', 'period', 'phase'],
   },
   // float: 输出 outY + outRotation
   float: {
-    inputs: ['t'],
-    outputs: ['outY', 'outRotation'],
+    inputs: ['t', 'pixels'],
+    outputs: ['outY', 'outRotation', 'pixels'],
     params: ['height', 'period', 'tilt'],
   },
   // breath: 输出 out（scale 系数）
   breath: {
-    inputs: ['t'],
-    outputs: ['out'],
+    inputs: ['t', 'pixels'],
+    outputs: ['out', 'pixels'],
     params: ['amplitude', 'period'],
   },
   // shake: 输出 outX + outY
@@ -54,14 +56,14 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   },
   // wobble: 输出 outRotation + outX + outY
   wobble: {
-    inputs: ['t'],
-    outputs: ['outRotation', 'outX', 'outY'],
+    inputs: ['t', 'pixels'],
+    outputs: ['outRotation', 'outX', 'outY', 'pixels'],
     params: ['angleAmplitude', 'moveAmplitude', 'damping', 'period'],
   },
   // bounce: 输出 outY
   bounce: {
-    inputs: ['t'],
-    outputs: ['outY'],
+    inputs: ['t', 'pixels'],
+    outputs: ['outY', 'pixels'],
     params: ['height', 'period', 'bounces', 'damping'],
   },
   // elastic: 输出取决于 axis 参数
@@ -226,6 +228,12 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     inputs: ['pixels'],
     outputs: ['pixels'],
     params: ['brushCommands', 'opacity'],
+  },
+  // 上屏终点：接收像素图和变换，渲染到画布（管线终点）
+  screen: {
+    inputs: ['pixels', 'translateX', 'translateY', 'rotation', 'scaleX', 'scaleY'],
+    outputs: [],
+    params: [],
   },
 };
 

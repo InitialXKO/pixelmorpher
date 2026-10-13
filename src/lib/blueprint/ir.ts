@@ -8,14 +8,15 @@
 // ============================================================
 
 /** 值类型：标量 | 向量2 | 布尔 | 字符串（枚举参数） */
-export type BlueprintValueType = 'number' | 'vec2' | 'boolean' | 'string';
+export type BlueprintValueType = 'number' | 'vec2' | 'boolean' | 'string' | 'pixels';
 
 /** IR 值（求值时的运行时值） */
 export type BlueprintValue =
   | { type: 'number'; value: number }
   | { type: 'vec2'; x: number; y: number }
   | { type: 'boolean'; value: boolean }
-  | { type: 'string'; value: string };
+  | { type: 'string'; value: string }
+  | { type: 'pixels'; grid: import('../types').PixelGrid };
 
 /** 输入连接：连到另一个节点的输出 */
 export interface BlueprintInputRef {
@@ -72,6 +73,15 @@ export interface BlueprintEvalContext {
 
 export function num(v: number): BlueprintValue {
   return { type: 'number', value: v };
+}
+
+export function pixels(grid: import('../types').PixelGrid): BlueprintValue {
+  return { type: 'pixels', grid };
+}
+
+export function asPixels(v: BlueprintValue): import('../types').PixelGrid | null {
+  if (v.type === 'pixels') return v.grid;
+  return null;
 }
 
 export function isRef(input: BlueprintInput): input is BlueprintInputRef {

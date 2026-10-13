@@ -9,8 +9,9 @@ import { useProjectStore } from '@/lib/store';
 import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
 import { inpaintPixels } from '@/lib/inpainting';
-import { renderFrame, floodFill } from '@/lib/engine';
-import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-render';
+import { floodFill } from '@/lib/engine';
+import { renderUnifiedToCanvas } from '@/lib/unified-pipeline-bridge';
+import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import {
@@ -729,10 +730,17 @@ export const smartSelectHandler: ToolHandler = {
     if (samState.status === 'ready') {
       if (!samState.currentMask) {
         try {
-          const samCanvas = document.createElement('canvas'); samCanvas.width = s.canvasWidth; samCanvas.height = s.canvasHeight;
-          const samCtx = samCanvas.getContext('2d');
-          if (samCtx && s.canvasWidth > 0 && s.canvasHeight > 0) {
-            renderFrame(samCtx, s.canvasWidth, s.canvasHeight, s.nonPuppetParts, s.keyframes, currentFrame, s.backgroundColor, s.effectTracks, undefined, undefined, false, 0.5, undefined, undefined, undefined, s.frameRate, 'low', undefined, s.globalModifiers);
+          const pst = useProjectStore.getState();
+          const samCanvas = renderUnifiedToCanvas(
+            s.canvasWidth, s.canvasHeight,
+            pst.parts, s.keyframes, currentFrame, s.backgroundColor,
+            s.effectTracks, undefined, undefined, false, 0.5,
+            undefined, undefined, undefined, 'low',
+            s.globalModifiers, undefined,
+            pst.puppetSkeletons, pst.puppetCharacters, undefined,
+            s.frameRate,
+          );
+          if (s.canvasWidth > 0 && s.canvasHeight > 0) {
             editor.setSAMImage(samCanvas).then(() => { editor.samSegmentAtPoint(px / s.canvasWidth, py / s.canvasHeight); });
           }
         } catch (err) { console.error('[SAM] Failed to encode image:', err); }

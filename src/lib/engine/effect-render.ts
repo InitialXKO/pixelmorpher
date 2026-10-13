@@ -14,6 +14,8 @@ import type {
   PixelGrid,
   ModifierParamValue,
 } from '../types';
+import type { Node } from '../unified-types';
+import { subToPx } from '../unified-types';
 import { hexToRgb, lerpColor, dimColor } from './color-utils';
 import { seededRandom, hashString } from './noise';
 import { acquireCanvas, releaseCanvas } from './canvas-pool';
@@ -104,7 +106,6 @@ export function boxBlurAlpha(imageData: ImageData, radius: number): ImageData {
 }
 export function renderGlowEffect(
   ctx: CanvasRenderingContext2D,
-  part: Part,
   mod: ModifierInstance,
   partCanvas: HTMLCanvasElement,
 ): void {
@@ -152,7 +153,8 @@ export function renderGlowEffect(
 }
 export function renderParticleEffect(
   ctx: CanvasRenderingContext2D,
-  part: Part,
+  nodeId: string,
+  sprite: { width: number; height: number; plug?: { x: number; y: number } },
   mod: ModifierInstance,
   currentFrame: number,
 ): void {
@@ -163,11 +165,14 @@ export function renderParticleEffect(
   const gravity = Number(mod.params.gravity) || 0.5;
 
   const [r, g, b] = hexToRgb(color);
-  const baseSeed = hashString(part.id);
+  const baseSeed = hashString(nodeId);
 
-  // Part center relative to pivot (origin is at pivot in current transform)
-  const cx = part.width / 2 - part.pivotX;
-  const cy = part.height / 2 - part.pivotY;
+  // Node center relative to pivot (origin is at pivot in current transform)
+  // pivot = sprite.plug (attachment.plug not available in instruction, use 0)
+  const pivotX = subToPx(sprite.plug?.x ?? 0);
+  const pivotY = subToPx(sprite.plug?.y ?? 0);
+  const cx = sprite.width / 2 - pivotX;
+  const cy = sprite.height / 2 - pivotY;
 
   ctx.save();
 
@@ -211,7 +216,6 @@ export function renderParticleEffect(
  */
 export function renderAfterimageEffect(
   ctx: CanvasRenderingContext2D,
-  part: Part,
   mod: ModifierInstance,
   modifiers: ModifierInstance[],
   partCanvas: HTMLCanvasElement,
@@ -254,7 +258,7 @@ export function renderAfterimageEffect(
 }
 
 /** Create a canvas containing only the edge pixels of a part */
-function createEdgeCanvas(part: Part, partCanvas: HTMLCanvasElement): HTMLCanvasElement {
+function createEdgeCanvas(partCanvas: HTMLCanvasElement): HTMLCanvasElement {
   const srcCtx = partCanvas.getContext('2d')!;
   const imageData = srcCtx.getImageData(0, 0, partCanvas.width, partCanvas.height);
   const edgeData = new Uint8ClampedArray(imageData.data);
@@ -304,7 +308,6 @@ function createEdgeCanvas(part: Part, partCanvas: HTMLCanvasElement): HTMLCanvas
  */
 export function renderMotionBlurEffect(
   ctx: CanvasRenderingContext2D,
-  part: Part,
   mod: ModifierInstance,
   modifiers: ModifierInstance[],
   partCanvas: HTMLCanvasElement,
@@ -330,7 +333,7 @@ export function renderMotionBlurEffect(
   }
 
   // Use edge-only canvas if requested
-  const blurCanvas = edgesOnly ? createEdgeCanvas(part, partCanvas) : partCanvas;
+  const blurCanvas = edgesOnly ? createEdgeCanvas(partCanvas) : partCanvas;
 
   // Draw blur trail with decreasing opacity
   ctx.save();

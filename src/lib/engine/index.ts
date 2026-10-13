@@ -49,14 +49,11 @@ export {
 // Brush/stroke rendering
 export { renderMotionBlurStroke, renderEffectStroke } from './brush-render';
 
-// Render pipeline
-export {
-  createPartCanvas,
-  renderPartEditMode,
-  renderFrame,
-  renderFrameToCanvas,
-  renderPuppetNodes,
-} from './render-pipeline';
+// Part canvas (moved from render-pipeline.ts, now deleted)
+export { createPartCanvas } from './part-canvas';
+
+// Puppet utils (moved from puppet-render.ts, now deleted)
+export { renderPixelPerfectRotation, resolvePuppetNodeSprite } from './puppet-utils';
 
 // Utilities
 export { imageDataToPixelGrid, floodFill } from './utils';

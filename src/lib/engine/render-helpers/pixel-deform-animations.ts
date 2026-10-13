@@ -28,7 +28,8 @@ export interface PixelDeformResult {
  * Returns the (potentially modified) pixel grid and adjusted offsets.
  */
 export function applyPixelDeformAnimations(
-  part: Part,
+  width: number,
+  height: number,
   keyframe: Keyframe | null,
   pixels: PixelGrid,
   currentFrame: number,
@@ -45,8 +46,8 @@ export function applyPixelDeformAnimations(
     return { pixels, modOffsetX, modOffsetY };
   }
 
-  const effectiveWidth = keyframe?.overrideWidth ?? part.width;
-  const effectiveHeight = keyframe?.overrideHeight ?? part.height;
+  const effectiveWidth = keyframe?.overrideWidth ?? width;
+  const effectiveHeight = keyframe?.overrideHeight ?? height;
 
   // Compute required padding for animation modifiers that can produce overflow
   const animPadding = computeTotalAnimPadding(animMods, currentFrame, frameRate);
@@ -67,7 +68,7 @@ export function applyPixelDeformAnimations(
 
     const effectiveWeight = computeEffectiveWeight(animMod, currentFrame);
     pixels = dispatchDeformModifier(
-      animMod, pixels, part.width, part.height,
+      animMod, pixels, width, height,
       effectiveWidth, effectiveHeight,
       currentFrame, frameRate, effectiveWeight,
       worldOffsetX, worldOffsetY,

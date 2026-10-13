@@ -579,9 +579,30 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         partKeyframes: partEditBackupPartKeyframes || [],
       });
     } else {
+      // 确认：将 partEditModifiers 中的 brushCommands 烘焙进 part.pixels
+      // （part_edit 模式笔刷只攒 commands 做预览，不实时写像素）
+      const part = projectStore.parts.find(p => p.id === partEditPartId);
+      if (part && partEditModifiers.length > 0) {
+        const { modifierRegistry } = require('../engine/pixel-modifiers');
+        const handler = modifierRegistry.get('pixel_edit');
+        if (handler) {
+          const newPixels = part.pixels.map(row => [...row]);
+          let applied = false;
+          // 逐个 modifier 应用，保留各自的 opacity
+          for (const m of partEditModifiers) {
+            const cmds = (m.params?.brushCommands as any[]) || [];
+            if (cmds.length > 0) {
+              const opacity = (m.params?.opacity as number) ?? 1;
+              handler({ brushCommands: cmds, opacity }, newPixels, projectStore.currentFrame);
+              applied = true;
+            }
+          }
+          if (applied) {
+            projectStore.setPartPixels(partEditPartId, newPixels);
+          }
+        }
+      }
       // Part 已退化为纯精灵数据，不再有 partKeyframes/editModifiers。
-      // 确认时像素已通过 setPartPixels 实时写入 part.pixels，无需额外保存。
-      // （旧的 keyframe 保存逻辑已删除：getPartKeyframeAtFrame/addPartKeyframe/updatePartKeyframe 不存在）
     }
     });
 
@@ -647,7 +668,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     let resultPixels = part.pixels.map(row => [...row]);
     if (pixelMods.length > 0) {
       const currentFrame = projectStore.currentFrame;
-      const modResult = applyPixelModifiers(part, pixelMods, currentFrame, resultPixels);
+      const modResult = applyPixelModifiers(resultPixels ?? part.pixels, pixelMods, currentFrame);
       resultPixels = modResult.pixels;
     }
 

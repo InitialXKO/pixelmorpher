@@ -360,6 +360,7 @@ export function applyProceduralAnimations(
   proceduralAnimations: ProceduralAnimation[],
   partId: string,
   frame: number,
+  nodeId?: string,
 ): ModifierInstance[] {
   // Deep-clone modifiers (shallow copy of each modifier + its params)
   // to prevent mutating the store's original modifier objects.
@@ -371,7 +372,10 @@ export function applyProceduralAnimations(
   }));
 
   for (const pa of proceduralAnimations) {
-    if (!pa.enabled || pa.partId !== partId) continue;
+    // 匹配 partId 或 nodeId（新管线节点级程序化动画用 nodeId）
+    const matchesPart = pa.partId === partId;
+    const matchesNode = nodeId && pa.nodeId === nodeId;
+    if (!pa.enabled || (!matchesPart && !matchesNode)) continue;
     if (frame < pa.startFrame || frame > pa.endFrame) continue;
 
     const value = computeProceduralValue(pa.config, frame);

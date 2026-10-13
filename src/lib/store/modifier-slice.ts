@@ -213,7 +213,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
     ];
     const pixelMods = modifiers.filter(m => pixelModTypes.includes(m.type));
     if (pixelMods.length > 0) {
-      const bakedResult = applyPixelModifiers(bakedPart, pixelMods, keyframe.frame, basePixels);
+      const bakedResult = applyPixelModifiers(basePixels ?? bakedPart.pixels, pixelMods, keyframe.frame);
       bakedPart.pixels = bakedResult.pixels;
     }
 
@@ -247,7 +247,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
         canvas.height = s.canvasHeight;
         const ctx = canvas.getContext('2d')!;
 
-        const partCanvas = createPartCanvas(bakedPart, null, false, keyframe.frame, s.frameRate).canvas;
+        const partCanvas = createPartCanvas(bakedPart.id, { width: bakedPart.width, height: bakedPart.height, data: bakedPart.pixels }, null, false, keyframe.frame, s.frameRate).canvas;
 
         ctx.save();
         ctx.imageSmoothingEnabled = false;
@@ -280,7 +280,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
       effectCanvas.height = s.canvasHeight;
       const ectx = effectCanvas.getContext('2d')!;
 
-      const partCanvas = createPartCanvas(bakedPart, null, false, keyframe.frame, s.frameRate).canvas;
+      const partCanvas = createPartCanvas(bakedPart.id, { width: bakedPart.width, height: bakedPart.height, data: bakedPart.pixels }, null, false, keyframe.frame, s.frameRate).canvas;
       const offsetX = s.canvasWidth / 2;
       const offsetY = s.canvasHeight / 2;
 
@@ -471,7 +471,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
     ];
     const pixelMods = modifiers.filter(m => pixelModTypes.includes(m.type));
     if (pixelMods.length > 0) {
-      const bakedResult = applyPixelModifiers(bakedPart, pixelMods, keyframe.frame, basePixels2);
+      const bakedResult = applyPixelModifiers(basePixels2 ?? bakedPart.pixels, pixelMods, keyframe.frame);
       bakedPart.pixels = bakedResult.pixels;
     }
 
@@ -502,7 +502,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
         canvas.height = s.canvasHeight;
         const ctx = canvas.getContext('2d')!;
 
-        const partCanvas = createPartCanvas(bakedPart, null, false, keyframe.frame, s.frameRate).canvas;
+        const partCanvas = createPartCanvas(bakedPart.id, { width: bakedPart.width, height: bakedPart.height, data: bakedPart.pixels }, null, false, keyframe.frame, s.frameRate).canvas;
 
         ctx.save();
         ctx.imageSmoothingEnabled = false;
@@ -536,7 +536,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
       effectCanvas.height = s.canvasHeight;
       const ectx = effectCanvas.getContext('2d')!;
 
-      const partCanvas = createPartCanvas(bakedPart, null, false, keyframe.frame, s.frameRate).canvas;
+      const partCanvas = createPartCanvas(bakedPart.id, { width: bakedPart.width, height: bakedPart.height, data: bakedPart.pixels }, null, false, keyframe.frame, s.frameRate).canvas;
       const offsetX = s.canvasWidth / 2;
       const offsetY = s.canvasHeight / 2;
 
@@ -676,7 +676,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
         animCanvas.width = s.canvasWidth;
         animCanvas.height = s.canvasHeight;
         const actx = animCanvas.getContext('2d')!;
-        const partCanvas = createPartCanvas(bakedPart, null, false, keyframe.frame, s.frameRate).canvas;
+        const partCanvas = createPartCanvas(bakedPart.id, { width: bakedPart.width, height: bakedPart.height, data: bakedPart.pixels }, null, false, keyframe.frame, s.frameRate).canvas;
         const offsetX = s.canvasWidth / 2;
         const offsetY = s.canvasHeight / 2;
 
