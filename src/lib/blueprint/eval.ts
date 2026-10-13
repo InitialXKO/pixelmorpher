@@ -153,14 +153,17 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
 
   // ---- 程序化动画（复用老修改器语义） ----
   // pendulum: rotation = amplitude * sin(2π * t / period + phase)
-  pendulum: (n, i, ctx) => {
+  pendulum: (n, i, ctx): Record<string, BlueprintValue> => {
     const t = asNumber(i.t ?? num(ctx.frame));
     const amplitude = asNumber(i.amplitude ?? num(Number(n.params.amplitude ?? 30)));
     const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 16))));
     const phase = ((Number(n.params.phase ?? 0) * Math.PI) / 180);
     const value = num(amplitude * Math.sin((2 * Math.PI * t) / period + phase));
     // 同时返回 out (兼容旧蓝图) 和 outRotation (标准)
-    return { out: value, outRotation: value };
+    const result: Record<string, BlueprintValue> = { out: value, outRotation: value };
+    // 像素直通：若有像素输入，代表该变换应用于此像素流
+    if (i.pixels) result.pixels = i.pixels as BlueprintValue;
+    return result;
   },
   // breath: scale = 1 + amplitude * sin(2π * t / period)，与原 breathHandler 对齐
   breath: (n, i, ctx) => {
