@@ -9,6 +9,8 @@
 // previous Part + PuppetNode dual-system architecture.
 // ============================================================
 
+import type { Keyframe } from './types';
+
 // ---- Primitive Types ----
 
 /** Sub-pixel coordinate unit: 1/16 pixel precision */
@@ -627,6 +629,18 @@ export interface NodeRenderInstruction {
   modifiers: ModifierInstance[];  // Pixel-level modifiers to apply before drawing
   frame: number;                 // Current frame (for modifier param resolution)
   frameRate: number;             // Frame rate (for modifier param resolution)
+  /** X-axis scale factor (default 1). `stretch` covers the Y axis. */
+  scaleX?: number;
+  /** Skew transforms in degrees, applied after scale (matches old pipeline order). */
+  skews?: Array<{ skewX: number; skewY: number }>;
+  /** Preview quality: expensive effects (glow/afterimage/motion_blur/particle) are skipped in 'low'. */
+  previewQuality?: 'low' | 'medium' | 'high';
+  /** Auto motion blur (old pipeline parity): blurred from keyframe velocity. */
+  autoMotionBlur?: boolean;
+  autoMotionBlurIntensity?: number;
+  /** Part identity + full keyframe list for auto-motion-blur lookup (nodeId = part.id). */
+  autoMotionBlurPartId?: string;
+  autoMotionBlurKeyframes?: Keyframe[];
 }
 
 /** Render instruction for a dynamically generated disc */
@@ -646,6 +660,12 @@ export interface RenderPlan {
   sortedInstructions: (NodeRenderInstruction | DiscRenderInstruction)[];
   backgroundColor?: string;
   previewQuality?: 'low' | 'medium' | 'high';
+  effectTracks?: any[];
+  motionBlurStrokes?: any[];
+  effectStrokes?: any[];
+  autoMotionBlur?: boolean;
+  autoMotionBlurIntensity?: number;
+  frame?: number;
 }
 
 // ---- Migration Types ----

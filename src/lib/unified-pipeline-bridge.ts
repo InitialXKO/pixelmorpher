@@ -33,6 +33,8 @@ import {
   renderPartsUnified,
 } from './unified-render';
 import { interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
+import { renderEffectTrackFrame } from './engine/effect-render';
+import { renderMotionBlurStroke, renderEffectStroke } from './engine/brush-render';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 import { clearRenderCaches } from './engine/render-cache';
@@ -112,7 +114,34 @@ export function renderUnified(
     );
   }
 
-  // ---- Step 3: Canvas modifiers — 全帧后处理，只应用一次（H10）
+  // ---- Step 3: Effects (canvas-level overlays) ----
+  // 特效轨道、动态模糊笔触、特效笔触：画布级叠加，不绑定特定角色
+  if (effectTracks) {
+    for (const effectTrack of effectTracks) {
+      if (!effectTrack.visible) continue;
+      const kf = effectTrack.keyframes
+        ?.filter((k: any) => k.frame <= currentFrame)
+        ?.sort((a: any, b: any) => b.frame - a.frame)[0];
+      if (!kf) continue;
+      renderEffectTrackFrame(ctx, effectTrack, kf, currentFrame, canvasWidth, canvasHeight);
+    }
+  }
+  if (motionBlurStrokes) {
+    for (const stroke of motionBlurStrokes) {
+      if (stroke.frame === currentFrame) {
+        renderMotionBlurStroke(ctx, stroke);
+      }
+    }
+  }
+  if (effectStrokes) {
+    for (const stroke of effectStrokes) {
+      if (stroke.frame === currentFrame) {
+        renderEffectStroke(ctx, stroke);
+      }
+    }
+  }
+
+  // ---- Step 4: Canvas modifiers — 全帧后处理，只应用一次（H10）
   // 必须在木偶叠加之后，否则木偶不受后处理影响；renderFrame 内部已不再应用。
   if (canvasModifierTracks && canvasModifierTracks.length > 0) {
     applyCanvasModifiers(ctx, canvasModifierTracks, currentFrame, canvasWidth, canvasHeight);
