@@ -12,7 +12,7 @@ import { inpaintPixels } from '@/lib/inpainting';
 import { floodFill } from '@/lib/engine';
 import { renderUnifiedToCanvas } from '@/lib/unified-pipeline-bridge';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
-import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { interpolateNodeKeyframesLegacy as interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import {
   isPixelInPart,

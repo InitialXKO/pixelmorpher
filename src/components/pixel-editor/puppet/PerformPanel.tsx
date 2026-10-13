@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
-import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { interpolateNodeKeyframesLegacy as interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import DirectionWheel, { oldDirectionToIndex, directionIndexToOldDirection } from '../DirectionWheel';
 import BlueprintTemplateLoader from './BlueprintTemplateLoader';
 import { Button } from '@/components/ui/button';

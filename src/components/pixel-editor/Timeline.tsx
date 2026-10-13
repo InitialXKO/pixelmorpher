@@ -25,7 +25,7 @@ import EffectKeyframeEditDialog from './timeline/dialogs/EffectKeyframeEditDialo
 import ModifierParamEditDialog from './timeline/dialogs/ModifierParamEditDialog';
 import useVirtualScroll from './timeline/useVirtualScroll';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
-import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { interpolateNodeKeyframesLegacy as interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 
 // ---- Main Timeline Component ----
 export default function Timeline() {

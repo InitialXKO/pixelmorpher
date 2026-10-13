@@ -9,7 +9,7 @@
 
 import { create } from 'zustand';
 import { useProjectStore, useEditorStore } from './store';
-import { interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
+import { interpolateNodeKeyframesLegacy as interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
 
 /** 木偶工作流阶段：搭建 → 换装 → 操控 */
 export interface PuppetSessionState {
