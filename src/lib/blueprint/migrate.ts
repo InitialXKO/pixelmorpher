@@ -1,6 +1,7 @@
 // ============================================================
 // 旧 PartAnimationModifier[] → BlueprintGraph 转换
-// 保证功能不弱：每个修改器变成一个蓝图节点，连到 transform 输出
+// 保证功能不弱：每个修改器变成一个蓝图节点，连到 screen 输出
+// 动画修改器 → 变换端口；像素修改器 → 像素链
 // ============================================================
 
 import type { PartAnimationModifier } from '../types';
@@ -32,6 +33,15 @@ export function modifiersToBlueprint(
   // time 源（所有时间相关节点共用）
   const timeId = nid('time');
   nodes.push({ id: timeId, type: 'time', inputs: {}, params: {} });
+
+  // 像素源（像素修改器需要）
+  const hasPixelMods = enabled.some(m => (PIXEL_DEFORM_MODIFIER_TYPES as string[]).includes(m.type));
+  let prevPixelsNodeId: string | null = null;
+  if (hasPixelMods) {
+    const sourceId = nid('sprite_source');
+    nodes.push({ id: sourceId, type: 'sprite_source', inputs: {}, params: {} });
+    prevPixelsNodeId = sourceId;
+  }
 
   // 每个修改器一个节点
   // 端口累加器：port -> 已有节点输出（需要 add 时创建 add 节点）
@@ -82,7 +92,19 @@ export function modifiersToBlueprint(
     // 时间输入默认连 time
     const inputs: BlueprintNode['inputs'] = { t: { nodeId: timeId } };
 
+    // 像素修改器：连 pixels 输入，形成像素链
+    const isPixelMod = (PIXEL_DEFORM_MODIFIER_TYPES as string[]).includes(mod.type);
+    if (isPixelMod && prevPixelsNodeId) {
+      inputs.pixels = { nodeId: prevPixelsNodeId, output: 'pixels' };
+    }
+
     nodes.push({ id: modId, type: mod.type, inputs, params });
+
+    // 像素修改器：更新像素链
+    if (isPixelMod) {
+      prevPixelsNodeId = modId;
+      continue; // 不连到 transform 端口
+    }
 
     // 按修改器类型连到 transform 的对应端口
     // （老系统里这些修改器产出 rotation/translate/scale）
@@ -169,6 +191,10 @@ export function modifiersToBlueprint(
   const screenInputs: BlueprintNode['inputs'] = {};
   for (const [port, src] of portSources) {
     screenInputs[port] = { nodeId: src.nodeId, output: src.output };
+  }
+  // 像素链：screen 接收最终像素
+  if (prevPixelsNodeId) {
+    screenInputs.pixels = { nodeId: prevPixelsNodeId, output: 'pixels' };
   }
   nodes.push({ id: screenId, type: 'screen', inputs: screenInputs, params: {} });
 
