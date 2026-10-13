@@ -23,10 +23,8 @@ function nid(prefix: string): string {
 export function modifiersToBlueprint(
   modifiers: PartAnimationModifier[],
 ): BlueprintGraph | null {
-  // 像素类走像素管线，不进 transform 蓝图
-  const enabled = modifiers.filter(
-    (m) => m.enabled && !PIXEL_DEFORM_MODIFIER_TYPES.includes(m.type)
-  );
+  // 设计已改：像素形变也进蓝图（specs.ts 有定义），由像素管线执行
+  const enabled = modifiers.filter((m) => m.enabled);
   if (enabled.length === 0) return null;
 
   const nodes: BlueprintNode[] = [];
