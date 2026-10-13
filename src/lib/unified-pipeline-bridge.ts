@@ -8,15 +8,15 @@
 // the old dual-path (renderFrame + renderPuppetNodes).
 //
 // Strategy:
-// - For non-puppet parts: delegate to the existing renderFrame()
-//   (these parts use modifier stacks, effects, etc. that the new
-//   pipeline doesn't fully replicate yet)
+// - For non-puppet parts: renderPartsUnified() in unified-render.ts
+//   (standalone Part + Keyframe[] → NodeRenderInstruction → executeRenderPlan;
+//   covers modifier stacks, effects, motion blur, bones, procedural anims)
 // - For puppet parts: use the new unified pipeline via LiveAdapter
 //   → Character → generateRenderPlan → executeRenderPlan
 // - Both render to the same canvas context, composited together
 //
-// This hybrid approach ensures zero regression while incrementally
-// migrating rendering to the unified pipeline.
+// The old renderFrame() dual-path is fully migrated; the bridge no longer
+// calls the old pipeline.
 // ============================================================
 
 import type {
@@ -30,8 +30,8 @@ import { LiveAdapter } from './migration-adapter';
 import {
   generateRenderPlan,
   executeRenderPlan,
+  renderPartsUnified,
 } from './unified-render';
-import { renderFrame } from './engine';
 import { interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
@@ -55,8 +55,7 @@ export function invalidateUnifiedPipelineCache(): void {
 /**
  * Unified render function that replaces the dual renderFrame + renderPuppetNodes pattern.
  *
- * Phase 2 hybrid strategy:
- * - Non-puppet parts → existing renderFrame() (full modifier/effect pipeline)
+ * - Non-puppet parts → renderPartsUnified() (unified pipeline)
  * - Puppet parts → new unified pipeline (via LiveAdapter → Character → RenderPlan)
  *
  * The new unified pipeline handles:
@@ -92,24 +91,14 @@ export function renderUnified(
   useUnifiedPipeline: boolean = true,
 ): void {
   // ---- Compute puppet sprite part IDs (shared logic) ----
-  const puppetSpritePartIds = computePuppetSpritePartIds(puppetSkeletons, puppetCharacters);
-  const nonPuppetParts = puppetSpritePartIds.size > 0
-    ? parts.filter(p => !puppetSpritePartIds.has(p.id))
-    : parts;
+  // 注意：未被任何 Character 引用的 Part 不在主画布渲染（用户确认）。
+  // 精灵编辑在独立的编辑画布上渲染（renderPartEditUnified），不在这里。
 
-  // ---- Step 1: Render non-puppet parts using the EXISTING pipeline ----
-  // The existing renderFrame() handles all modifier stacks, effects,
-  // motion blur, etc. for non-puppet parts.
-  // This is NOT yet migrated to the unified pipeline.
-  // H10: canvas modifiers 是全帧后处理，只在函数末尾应用一次。
-  // 这里传 undefined，避免 renderFrame 内部先应用一次造成叠加两次。
-  renderFrame(
-    ctx, canvasWidth, canvasHeight, nonPuppetParts, keyframes, currentFrame,
-    backgroundColor, effectTracks, motionBlurStrokes, effectStrokes,
-    autoMotionBlur, autoMotionBlurIntensity, skeletons, proceduralAnimations,
-    undefined, frameRate, previewQuality, animationVariables,
-    globalModifiers,
-  );
+  // ---- Background ----
+  if (backgroundColor !== 'transparent') {
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
 
   // ---- Step 2: Render puppet parts ----
   // 统一走 unified pipeline：renderPuppetViaUnifiedPipeline 内部已调
@@ -332,14 +321,19 @@ export function renderUnifiedToCanvas(
     ? parts.filter(p => !puppetSpritePartIds.has(p.id))
     : parts;
 
-  // Render non-puppet parts
-  // H10: canvas modifiers 只在函数末尾应用一次，这里传 undefined 避免叠加两次
-  renderFrame(
-    ctx, canvasWidth, canvasHeight, nonPuppetParts, keyframes, frame,
-    backgroundColor, effectTracks, motionBlurStrokes, effectStrokes,
-    autoMotionBlur, autoMotionBlurIntensity, skeletons, proceduralAnimations,
-    undefined, frameRate, previewQuality, animationVariables,
-    globalModifiers,
+  // Render non-puppet parts via the unified pipeline
+  // (renderPartsUnified handles the full old renderFrame() feature set;
+  // canvas modifiers are applied once at the end of this function — H10)
+  renderPartsUnified(
+    ctx, nonPuppetParts, keyframes, frame,
+    canvasWidth, canvasHeight, backgroundColor,
+    {
+      skeletons, proceduralAnimations, animationVariables,
+      globalModifiers,
+      effectTracks, motionBlurStrokes, effectStrokes,
+      autoMotionBlur, autoMotionBlurIntensity,
+      previewQuality, frameRate,
+    },
   );
 
   // Render puppet parts via unified pipeline
