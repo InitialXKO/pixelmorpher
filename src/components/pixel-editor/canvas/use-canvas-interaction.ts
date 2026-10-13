@@ -13,7 +13,7 @@ import { useProjectStore } from '@/lib/store';
 import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
 import { renderMotionBlurStroke, renderEffectStroke } from '@/lib/engine';
-import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-render';
+import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 import { isStrokeToolCheck } from './canvas-utils';
 import { getToolHandler } from './tool-handlers';
 import type { CanvasState } from './use-canvas-state';

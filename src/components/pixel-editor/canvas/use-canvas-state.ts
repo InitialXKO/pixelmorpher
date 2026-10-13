@@ -22,7 +22,7 @@ import { inpaintPixels } from '@/lib/inpainting';
 import { catmullRomToBezier, isPixelInPart, getPixelAt, computeSpriteEndPoint } from './canvas-utils';
 import type { PixelColor, PixelGrid, Part, Bone, PuppetNode, PuppetSkeleton, PuppetCharacter, PuppetNodeKeyframe, BrushCommand, ModifierInstance } from '@/lib/types';
 import { createEmptyPixelGrid } from '@/lib/types';
-import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-render';
+import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 
 export function useCanvasState() {
   // ---- Refs ----

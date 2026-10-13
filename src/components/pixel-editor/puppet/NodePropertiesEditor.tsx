@@ -11,7 +11,7 @@ import {
   ArrowDown,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
-import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-render';
+import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 import type {
   PuppetSkeleton,
   PuppetNode,

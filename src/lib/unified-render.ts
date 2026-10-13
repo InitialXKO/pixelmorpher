@@ -23,7 +23,7 @@ import type {
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP,
 } from './unified-types';
-import { renderPixelPerfectRotation } from './engine/puppet-render';
+import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
 import { sampleJointDiscColor, getPlugJointWidth } from './engine/render-helpers/puppet-joint-color';
 import {
@@ -74,7 +74,7 @@ import {
   applyBoneDrivenTransforms,
   buildPartBoneBindingsMap,
   buildVariableContextForFrame,
-} from './engine/render-pipeline';
+} from './engine/part-bone-utils';
 import type { VariableContext as EngineVariableContext } from './engine/param-driver';
 import type {
   Part, PixelGrid, ModifierType, Keyframe, Skeleton, ProceduralAnimation,

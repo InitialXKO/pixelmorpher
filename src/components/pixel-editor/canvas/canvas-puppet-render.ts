@@ -6,7 +6,7 @@
 import { computeSpriteEndPoint } from './canvas-utils';
 import type { RenderContext } from './canvas-render-helpers';
 import type { PuppetSkeleton, PuppetNode, PuppetNodeKeyframe, PuppetCharacter } from '@/lib/types';
-import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-render';
+import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 
 // ============================================================
 // Puppet skeleton overlay visualization
