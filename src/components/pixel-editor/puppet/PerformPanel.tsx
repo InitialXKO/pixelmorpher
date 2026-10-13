@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
-import { interpolateNodeKeyframesLegacy as interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import DirectionWheel, { oldDirectionToIndex, directionIndexToOldDirection } from '../DirectionWheel';
 import BlueprintTemplateLoader from './BlueprintTemplateLoader';
 import { Button } from '@/components/ui/button';
@@ -74,10 +74,12 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
   );
 
   // 每节点在当前帧的插值姿态（面板读数用，与画布一致）
+  // 从新 store 读 unifiedCharacters，用新签名
+  const unifiedCharacter = useProjectStore((s) => s.unifiedCharacters[performCharacterId ?? '']);
   const interpolated = useMemo(() => {
-    if (!skeleton) return new Map();
-    return interpolateNodeKeyframes(skeleton, clip?.puppetNodeKeyframes ?? [], currentFrame);
-  }, [skeleton, clip, currentFrame]);
+    if (!unifiedCharacter) return new Map();
+    return interpolateNodeKeyframes(unifiedCharacter, currentFrame);
+  }, [unifiedCharacter, currentFrame]);
 
   // 该角色全部关键帧所在帧（排序去重），用于上一/下一关键帧导航
   const keyframedFrames = useMemo(() => {

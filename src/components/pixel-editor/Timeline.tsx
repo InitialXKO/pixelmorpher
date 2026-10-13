@@ -25,7 +25,7 @@ import EffectKeyframeEditDialog from './timeline/dialogs/EffectKeyframeEditDialo
 import ModifierParamEditDialog from './timeline/dialogs/ModifierParamEditDialog';
 import useVirtualScroll from './timeline/useVirtualScroll';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
-import { interpolateNodeKeyframesLegacy as interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 
 // ---- Main Timeline Component ----
 export default function Timeline() {
@@ -114,15 +114,18 @@ export default function Timeline() {
       );
       const node = skeleton?.nodes.find((n) => n.id === nodeId);
       let values: Partial<Pick<PuppetNodeKeyframe, 'angle' | 'stretch' | 'offsetX' | 'offsetY' | 'direction' | 'viewLatitude'>> = {};
-      if (skeleton && node) {
-        const ivMap = interpolateNodeKeyframes(skeleton, activeClip.puppetNodeKeyframes ?? [], frame);
+      // 从新 store 获取 Character，用新签名
+      const unifiedCharacter = useProjectStore.getState().unifiedCharacters[activeClip.puppetCharacterId ?? ''];
+      if (unifiedCharacter) {
+        const ivMap = interpolateNodeKeyframes(unifiedCharacter, frame);
         const iv = ivMap.get(nodeId);
+        const uniNode = unifiedCharacter.nodes[nodeId];
         values = {
-          angle: iv?.angle ?? node.angle,
-          stretch: iv?.stretch ?? node.stretch,
-          offsetX: iv?.offsetX ?? node.offsetX,
-          offsetY: iv?.offsetY ?? node.offsetY,
-          direction: skeleton.currentDirection || 'S',
+          angle: iv?.angle ?? uniNode?.transform?.angle ?? 0,
+          stretch: iv?.stretch ?? 1,
+          offsetX: iv?.offsetX ?? 0,
+          offsetY: iv?.offsetY ?? 0,
+          direction: 'S',
         };
       }
       addPuppetNodeKeyframe(activeClip.id, nodeId, frame, values);

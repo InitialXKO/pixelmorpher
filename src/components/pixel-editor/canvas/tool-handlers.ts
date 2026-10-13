@@ -12,7 +12,7 @@ import { inpaintPixels } from '@/lib/inpainting';
 import { floodFill } from '@/lib/engine';
 import { renderUnifiedToCanvas } from '@/lib/unified-pipeline-bridge';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
-import { interpolateNodeKeyframesLegacy as interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import {
   isPixelInPart,
@@ -162,7 +162,8 @@ export const puppetHandler: ToolHandler = {
     // 预计算插值（Ctrl/Alt 路径也需要世界角度）
     const tmpClip = clipId ? project.animationClips.find((c) => c.id === clipId) : null;
     const tmpFrame = project.currentFrame;
-    const tmpIvMap = interpolateNodeKeyframes(skeleton, tmpClip?.puppetNodeKeyframes ?? [], tmpFrame);
+    const tmpChar = useProjectStore.getState().unifiedCharacters[skeleton.id];
+    const tmpIvMap = tmpChar ? interpolateNodeKeyframes(tmpChar, tmpFrame) : new Map();
 
     // 计算指定节点的世界角度（从根累加）
     const computeWorldAngle = (targetNode: typeof node): number => {
@@ -278,7 +279,8 @@ export const puppetHandler: ToolHandler = {
     const frame = project.currentFrame;
 
     // 以当前帧的插值姿态为拖动基准（所见即所得）
-    const ivMap = interpolateNodeKeyframes(skeleton, clip?.puppetNodeKeyframes ?? [], frame);
+    const _uc = useProjectStore.getState().unifiedCharacters[skeleton.id];
+    const ivMap = _uc ? interpolateNodeKeyframes(_uc, frame) : new Map();
     const rootNode = skeleton.nodes.find((n) => !n.plug);
     const moveTarget = node;
     const rotateIv = ivMap.get(node.id);
@@ -340,7 +342,8 @@ export const puppetHandler: ToolHandler = {
     if (!skeleton) return;
     const direction = skeleton.currentDirection || 'S';
     const clip = store.animationClips.find((c) => c.id === drag.clipId);
-    const ivMap = interpolateNodeKeyframes(skeleton, clip?.puppetNodeKeyframes ?? [], frame);
+    const _uc = useProjectStore.getState().unifiedCharacters[skeleton.id];
+    const ivMap = _uc ? interpolateNodeKeyframes(_uc, frame) : new Map();
 
     if (drag.mode === 'rotate') {
       const currentMouseAngle = Math.atan2(py - drag.pivotWorldY, px - drag.pivotWorldX);
@@ -424,7 +427,8 @@ export const puppetHandler: ToolHandler = {
     const clip = projectState.animationClips.find((c) => c.id === clipId);
     const frame = projectState.currentFrame;
     const direction = skeleton.currentDirection || 'S';
-    const ivMap = interpolateNodeKeyframes(skeleton, clip?.puppetNodeKeyframes ?? [], frame);
+    const _uc = useProjectStore.getState().unifiedCharacters[skeleton.id];
+    const ivMap = _uc ? interpolateNodeKeyframes(_uc, frame) : new Map();
 
     const ANGLE_STEP = 15;
     const MOVE_STEP = 1;

@@ -79,10 +79,10 @@ import type {
   // V3.0: Asset-based project model
   AnimationClip,
   ClipPartData,
-  Character,
   Costume,
 } from '../types';
 import type { PuppetSlice } from './puppet-slice';
+import type { CharacterSlice } from './character-slice';
 import type { DccPipelineSlice } from './dcc-pipeline-slice';
 import type {
   TimelineZoom, SnapConfig, DEFAULT_SNAP_CONFIG,
@@ -92,7 +92,7 @@ import type {
   SelectionFrameStep,
 } from '../v15-types';
 
-export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, PuppetSlice, DccPipelineSlice {
+export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, PuppetSlice, CharacterSlice, DccPipelineSlice {
   // Project actions
   setProjectName: (name: string) => void;
   setCanvasSize: (w: number, h: number) => void;
@@ -350,15 +350,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, Pup
   /** Get the currently active animation clip (null if none selected) */
   getActiveAnimationClip: () => AnimationClip | null;
 
-  // ---- V3.0: Character CRUD ----
-  addCharacter: (name: string, partIds?: string[]) => Character;
-  removeCharacter: (characterId: string) => void;
-  updateCharacter: (characterId: string, updates: Partial<Character>) => void;
-  addPartToCharacter: (characterId: string, partId: string) => void;
-  removePartFromCharacter: (characterId: string, partId: string) => void;
-  addCostume: (characterId: string, name: string, slotMapping?: Record<string, string>) => Costume;
-  removeCostume: (characterId: string, costumeId: string) => void;
-  setActiveCostume: (characterId: string, costumeId: string) => void;
   /** Create an animation clip from a character (adds all character parts with tracks) */
   createClipFromCharacter: (characterId: string, clipName: string) => AnimationClip;
 

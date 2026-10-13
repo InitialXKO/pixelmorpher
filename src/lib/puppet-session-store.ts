@@ -9,7 +9,7 @@
 
 import { create } from 'zustand';
 import { useProjectStore, useEditorStore } from './store';
-import { interpolateNodeKeyframesLegacy as interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
+import { interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
 
 /** 木偶工作流阶段：搭建 → 换装 → 操控 */
 export interface PuppetSessionState {
@@ -152,11 +152,8 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
     // 录制“当前可见姿态”：用关键帧插值求出每节点在当前帧的实际值，
     // 而不是 rest pose（perform 阶段拖动只写关键帧，不碰 rest pose）。
     const clip = project.animationClips.find((c) => c.id === clipId);
-    const interpolated = interpolateNodeKeyframes(
-      skeleton,
-      clip?.puppetNodeKeyframes ?? [],
-      frame
-    );
+    const _uc = project.unifiedCharacters[performCharacterId];
+    const interpolated = _uc ? interpolateNodeKeyframes(_uc, frame) : new Map();
 
     project.pushUndo('录制姿态');
     useProjectStore.setState((st) => ({

@@ -115,18 +115,3 @@ export function interpolateNodeKeyframes(
 ): Map<string, InterpolatedNodeValues> {
   return interpolateCharacterInternal(character, currentFrame);
 }
-
-/**
- * 兼容旧调用：(skeleton, keyframes, frame) → 内部转 Character。
- * 供尚未迁移的 UI 文件使用，新代码请直接用 (character, frame)。
- */
-export function interpolateNodeKeyframesLegacy(
-  skeleton: import('../../types').PuppetSkeleton,
-  puppetNodeKeyframes: import('../../types').PuppetNodeKeyframe[],
-  currentFrame: number,
-): Map<string, InterpolatedNodeValues> {
-  const { LiveAdapter } = require('../../migration-adapter');
-  const adapter = new LiveAdapter();
-  const character = adapter.getCharacter(skeleton, [], [], puppetNodeKeyframes, []);
-  return interpolateCharacterInternal(character, currentFrame);
-}
