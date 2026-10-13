@@ -586,15 +586,18 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         const { modifierRegistry } = require('../engine/pixel-modifiers');
         const handler = modifierRegistry.get('pixel_edit');
         if (handler) {
-          // 合并所有 brushCommands
-          const allCommands: any[] = [];
+          const newPixels = part.pixels.map(row => [...row]);
+          let applied = false;
+          // 逐个 modifier 应用，保留各自的 opacity
           for (const m of partEditModifiers) {
             const cmds = (m.params?.brushCommands as any[]) || [];
-            allCommands.push(...cmds);
+            if (cmds.length > 0) {
+              const opacity = (m.params?.opacity as number) ?? 1;
+              handler({ brushCommands: cmds, opacity }, newPixels, projectStore.currentFrame);
+              applied = true;
+            }
           }
-          if (allCommands.length > 0) {
-            const newPixels = part.pixels.map(row => [...row]);
-            handler({ brushCommands: allCommands, opacity: 1 }, newPixels, projectStore.currentFrame);
+          if (applied) {
             projectStore.setPartPixels(partEditPartId, newPixels);
           }
         }
