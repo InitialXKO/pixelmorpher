@@ -895,9 +895,6 @@ function renderNodeSprite(
     parentId: null as string | null,
     editModifiers: [] as any[],
     globalModifiers: [] as any[],
-    animationModifiers: modifiers.filter(m =>
-      m.enabled && isPixelDeformModifier(m.type as ModifierType)
-    ) as any[],
     modifierGroups: [] as any[],
     partKeyframes: [] as any[],
   };
@@ -931,25 +928,8 @@ function renderNodeSprite(
     modOffsetY = modResult.offsetY;
   }
 
-  // Apply pixel-deform animation modifiers (wave_deform, texture_scroll, etc.)
-  // These were prepared in pseudoPart.animationModifiers but never executed —
-  // the old render-pipeline called applyPixelDeformAnimations, unified-render did not.
-  const deformMods = (pseudoPart.animationModifiers as any[]) ?? [];
-  if (deformMods.length > 0) {
-    const deformResult = applyPixelDeformAnimations(
-      pseudoPart as any,
-      null,
-      effectivePixels,
-      frame,
-      frameRate,
-      0, 0,
-      modOffsetX, modOffsetY,
-      deformMods as any,
-    );
-    effectivePixels = deformResult.pixels;
-    modOffsetX = deformResult.modOffsetX;
-    modOffsetY = deformResult.modOffsetY;
-  }
+  // 像素形变走蓝图，不再此处直接调用 applyPixelDeformAnimations
+  // （用户指令：extractPixelModifiers + applyPixelDeformAnimations 不用）
 
   // Apply translate modifier as pixel-level shift (internal shift, not position offset)
   // This matches the old pipeline's behavior in createPartCanvasInner()
@@ -979,16 +959,14 @@ function renderNodeSprite(
   }
 
   // ========================================================================
-  // STEP 2: Apply pixel-deform ANIMATION modifiers
-  // (texture_scroll, wave_deform, contour_scroll, reveal_hide, etc.)
-  // These modify the pixel grid before canvas creation, after edit modifiers.
-  // This matches the old pipeline's createPartCanvasInner() V4.0 section.
+  // STEP 2: Apply pixel-deform ANIMATION modifiers - DISABLED
+  // User instruction: pixel processing should go through blueprint,
+  // not via direct node.modifiers filtering here.
   // ========================================================================
-  const activeDeformMods = modifiers.filter(m =>
-    m.enabled && isPixelDeformModifier(m.type as ModifierType)
-  );
+  const activeDeformMods: any[] = [];
+  // Original: modifiers.filter(m => m.enabled && isPixelDeformModifier(m.type as ModifierType))
 
-  if (activeDeformMods.length > 0) {
+  if (false && activeDeformMods.length > 0) {
     // Compute required padding for animation modifiers that can produce overflow
     const animPadding = computeTotalAnimPadding(activeDeformMods, frame, frameRate);
     if (animPadding.left > 0 || animPadding.top > 0 || animPadding.right > 0 || animPadding.bottom > 0) {
