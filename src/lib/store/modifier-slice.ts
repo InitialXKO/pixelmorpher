@@ -213,7 +213,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
     ];
     const pixelMods = modifiers.filter(m => pixelModTypes.includes(m.type));
     if (pixelMods.length > 0) {
-      const bakedResult = applyPixelModifiers(bakedPart, pixelMods, keyframe.frame, basePixels);
+      const bakedResult = applyPixelModifiers(basePixels ?? bakedPart.pixels, pixelMods, keyframe.frame);
       bakedPart.pixels = bakedResult.pixels;
     }
 
@@ -471,7 +471,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
     ];
     const pixelMods = modifiers.filter(m => pixelModTypes.includes(m.type));
     if (pixelMods.length > 0) {
-      const bakedResult = applyPixelModifiers(bakedPart, pixelMods, keyframe.frame, basePixels2);
+      const bakedResult = applyPixelModifiers(basePixels2 ?? bakedPart.pixels, pixelMods, keyframe.frame);
       bakedPart.pixels = bakedResult.pixels;
     }
 

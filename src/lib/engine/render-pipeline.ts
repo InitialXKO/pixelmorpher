@@ -342,7 +342,7 @@ function createPartCanvasInner(
       (m.paramKeyframes && m.paramKeyframes.length > 0) ||
       (m.paramDrivers && m.paramDrivers.length > 0 && m.paramDrivers.some(d => d.enabled && !d.isBaked))
     ) ? resolveKeyframeModifierParams(rawMods, currentFrame) : rawMods;
-    const modResult = applyPixelModifiers(part, activeMods, currentFrame, basePixels);
+    const modResult = applyPixelModifiers(basePixels ?? part.pixels, activeMods, currentFrame);
     pixels = modResult.pixels;
     modOffsetX = modResult.offsetX;
     modOffsetY = modResult.offsetY;
@@ -410,7 +410,7 @@ export function renderPartEditMode(
   let modOffsetX = 0;
   let modOffsetY = 0;
   if (activePixelMods.length > 0) {
-    const modResult = applyPixelModifiers(part, activePixelMods, currentFrame);
+    const modResult = applyPixelModifiers(part.pixels, activePixelMods, currentFrame);
     pixels = modResult.pixels;
     modOffsetX = modResult.offsetX;
     modOffsetY = modResult.offsetY;

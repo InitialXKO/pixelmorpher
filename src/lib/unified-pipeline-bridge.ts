@@ -24,6 +24,7 @@ import type {
   AnimationClip, Skeleton, ProceduralAnimation,
   EffectTrack, MotionBlurStroke, EffectStroke,
   CanvasModifierTrack, GlobalModifier, AnimationVariable,
+  PixelGrid, ModifierType,
 } from './types';
 import type { Character, RotationStrategy, AnimationVariable as UnifiedAnimationVariable } from './unified-types';
 import { LiveAdapter } from './migration-adapter';
@@ -31,8 +32,11 @@ import {
   generateRenderPlan,
   executeRenderPlan,
   renderPartsUnified,
+  pixelsToCanvas,
 } from './unified-render';
 import { interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
+import { applyPixelModifiers } from './engine/pixel-modifiers';
+import { resolveKeyframeModifierParams } from './engine/param-driver';
 import { renderEffectTrackFrame } from './engine/effect-render';
 import { renderMotionBlurStroke, renderEffectStroke } from './engine/brush-render';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
@@ -483,4 +487,95 @@ export function renderCharacterOnionFrameUnified(
     unifiedVars as any,
   );
   executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
+}
+
+// ---- Part Edit Mode (moved from unified-render.ts) ----
+// Transition function: renders old Part data for the sprite editor.
+// Lives in the bridge layer (not the new-pipeline core) by design.
+
+/**
+ * Render a single Part centered on canvas for sprite editing.
+ * Migrated from old `renderPartEditMode` in render-pipeline.ts.
+ * Applies pixel modifiers via the blueprint pixel pipeline, then draws.
+ */
+export function renderPartEditUnified(
+  ctx: CanvasRenderingContext2D,
+  part: Part,
+  partEditModifiers: any[],
+  canvasWidth: number,
+  canvasHeight: number,
+  currentFrame: number = 0,
+): void {
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+  // Center the part on the canvas
+  const centerX = Math.floor((canvasWidth - part.width) / 2);
+  const centerY = Math.floor((canvasHeight - part.height) / 2);
+
+  // Resolve paramKeyframes and paramDrivers before applying pixel modifiers
+  const resolvedMods = (partEditModifiers.some(m =>
+    (m.paramKeyframes && m.paramKeyframes.length > 0) ||
+    (m.paramDrivers && m.paramDrivers.length > 0 && m.paramDrivers.some((d: any) => d.enabled && !d.isBaked))
+  ))
+    ? resolveKeyframeModifierParams(partEditModifiers, currentFrame)
+    : partEditModifiers;
+
+  // Apply pixel-level modifiers via blueprint pipeline
+  const pixelModTypes: ModifierType[] = [
+    'color_replace', 'outline', 'dither', 'pixel_displace',
+    'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip', 'pixel_edit',
+  ];
+  const activePixelMods = resolvedMods.filter(m => pixelModTypes.includes(m.type) && m.enabled);
+
+  let pixels: PixelGrid;
+  let modOffsetX = 0;
+  let modOffsetY = 0;
+  if (activePixelMods.length > 0) {
+    const modResult = applyPixelModifiers(part.pixels, activePixelMods, currentFrame);
+    pixels = modResult.pixels;
+    modOffsetX = modResult.offsetX;
+    modOffsetY = modResult.offsetY;
+  } else {
+    pixels = part.pixels;
+  }
+
+  // Apply pixel shift from translate modifiers
+  const translateMod = resolvedMods.find(m => m.type === 'translate' && m.enabled);
+  let shiftX = 0, shiftY = 0;
+  if (translateMod) {
+    shiftX = Math.round(Number(translateMod.params.offsetX) || 0);
+    shiftY = Math.round(Number(translateMod.params.offsetY) || 0);
+  }
+
+  // Render pixels
+  const gridH = pixels.length;
+  const gridW = pixels[0]?.length || 0;
+  const originX = centerX - modOffsetX;
+  const originY = centerY - modOffsetY;
+
+  ctx.imageSmoothingEnabled = false;
+
+  // Use pixelsToCanvas helper if available, else manual ImageData
+  const spriteCanvas = pixelsToCanvas(pixels, gridW, gridH);
+  if (spriteCanvas) {
+    // Apply shift by drawing at offset
+    ctx.drawImage(spriteCanvas, originX + shiftX, originY + shiftY);
+  }
+
+  // Draw part boundary indicator
+  ctx.strokeStyle = 'rgba(100, 200, 255, 0.3)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(centerX - 0.5, centerY - 0.5, part.width + 1, part.height + 1);
+
+  // Draw pivot cross
+  ctx.strokeStyle = 'rgba(255, 200, 50, 0.5)';
+  ctx.lineWidth = 1;
+  const pivotScreenX = centerX + part.pivotX;
+  const pivotScreenY = centerY + part.pivotY;
+  ctx.beginPath();
+  ctx.moveTo(pivotScreenX - 4, pivotScreenY);
+  ctx.lineTo(pivotScreenX + 4, pivotScreenY);
+  ctx.moveTo(pivotScreenX, pivotScreenY - 4);
+  ctx.lineTo(pivotScreenX, pivotScreenY + 4);
+  ctx.stroke();
 }

@@ -1091,7 +1091,7 @@ function createPartCanvasFromPart(
       (m.paramKeyframes && m.paramKeyframes.length > 0) ||
       (m.paramDrivers && m.paramDrivers.length > 0 && m.paramDrivers.some(d => d.enabled && !d.isBaked))
     ) ? resolveKeyframeModifierParams(activePixelMods, currentFrame) : activePixelMods;
-    const modResult = applyPixelModifiers(part, resolvedPixelMods, currentFrame);
+    const modResult = applyPixelModifiers(part.pixels, resolvedPixelMods, currentFrame);
     pixels = modResult.pixels;
     modOffsetX = modResult.offsetX;
     modOffsetY = modResult.offsetY;
@@ -1136,7 +1136,7 @@ function createPartCanvasFromPart(
         (m.paramKeyframes && m.paramKeyframes.length > 0) ||
         (m.paramDrivers && m.paramDrivers.length > 0 && m.paramDrivers.some(d => d.enabled && !d.isBaked))
       ) ? resolveKeyframeModifierParams(activeKfMods, currentFrame) : activeKfMods;
-      const modResult = applyPixelModifiers(part, resolvedKfMods, currentFrame, pixels);
+      const modResult = applyPixelModifiers(pixels, resolvedKfMods, currentFrame);
       pixels = modResult.pixels;
       modOffsetX = modResult.offsetX;
       modOffsetY = modResult.offsetY;

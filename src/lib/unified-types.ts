@@ -9,9 +9,7 @@
 // previous Part + PuppetNode dual-system architecture.
 // ============================================================
 
-import type { Keyframe } from './types';
-
-// ---- Primitive Types ----
+ // ---- Primitive Types ----
 
 /** Sub-pixel coordinate unit: 1/16 pixel precision */
 export type SubPixel = number; // Stored as integer * 16 + fraction_0to15
@@ -640,7 +638,18 @@ export interface NodeRenderInstruction {
   autoMotionBlurIntensity?: number;
   /** Part identity + full keyframe list for auto-motion-blur lookup (nodeId = part.id). */
   autoMotionBlurPartId?: string;
-  autoMotionBlurKeyframes?: Keyframe[];
+  autoMotionBlurKeyframes?: UnifiedKeyframe[];
+}
+
+/**
+ * Unified keyframe (new pipeline).
+ * Minimal definition for auto-motion-blur lookup.
+ * TODO: Expand as needed, or remove if auto-motion-blur is deprecated.
+ */
+export interface UnifiedKeyframe {
+  id: string;
+  frame: number;
+  [key: string]: any;
 }
 
 /** Render instruction for a dynamically generated disc */
@@ -666,6 +675,36 @@ export interface RenderPlan {
   autoMotionBlur?: boolean;
   autoMotionBlurIntensity?: number;
   frame?: number;
+}
+
+// ---- Procedural Animation (Unified) ----
+
+/**
+ * Node-level procedural animation for the unified pipeline.
+ * Migrated from old ProceduralAnimation (which was partId-based).
+ * Uses nodeId to target Character nodes directly.
+ */
+export interface NodeProceduralAnimation {
+  id: string;
+  name: string;
+  nodeId: string;
+  config: ProceduralAnimationConfig;
+  enabled: boolean;
+  startFrame: number;
+  endFrame: number;
+}
+
+/**
+ * Procedural animation configuration.
+ * Defines the animation type and parameters.
+ */
+export interface ProceduralAnimationConfig {
+  type: 'wave' | 'bounce' | 'sway' | 'pulse' | string;
+  targetProperty: string;
+  amplitude?: number;
+  frequency?: number;
+  phase?: number;
+  [key: string]: any;
 }
 
 // ---- Migration Types ----

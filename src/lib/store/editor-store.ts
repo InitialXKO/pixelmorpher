@@ -668,7 +668,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     let resultPixels = part.pixels.map(row => [...row]);
     if (pixelMods.length > 0) {
       const currentFrame = projectStore.currentFrame;
-      const modResult = applyPixelModifiers(part, pixelMods, currentFrame, resultPixels);
+      const modResult = applyPixelModifiers(resultPixels ?? part.pixels, pixelMods, currentFrame);
       resultPixels = modResult.pixels;
     }
 

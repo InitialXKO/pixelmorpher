@@ -58,7 +58,7 @@ export function computePartBasePixels(
   let partBaseIsUnique = false;
 
   if (activePartMods.length > 0) {
-    const modResult = applyPixelModifiers(part, activePartMods, 0, part.pixels);
+    const modResult = applyPixelModifiers(part.pixels, activePartMods, 0);
     partBasePixels = modResult.pixels;
     partBaseOffsetX = modResult.offsetX;
     partBaseOffsetY = modResult.offsetY;

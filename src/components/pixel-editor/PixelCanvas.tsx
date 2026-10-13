@@ -5,7 +5,7 @@ import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
 import { renderCharacterOnionFrameUnified } from '@/lib/unified-pipeline-bridge';
-import { renderPartEditUnified } from '@/lib/unified-render';
+import { renderPartEditUnified } from '@/lib/unified-pipeline-bridge';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
 import { useCanvasState } from './canvas/use-canvas-state';

@@ -955,28 +955,6 @@ function renderNodeSprite(
     m.enabled && PIXEL_MOD_TYPES.includes(m.type as ModifierType)
   );
 
-  // Create a minimal Part-like object for compatibility with applyPixelModifiers,
-  // effect renderers, and animation-state functions that expect a Part.
-  const pseudoPart = {
-    id: instruction.nodeId,
-    name: instruction.nodeId,
-    width: sprite.width,
-    height: sprite.height,
-    pixels: sprite.data,
-    pivotX: 0,
-    pivotY: 0,
-    offsetX: 0,
-    offsetY: 0,
-    zIndex: 0,
-    visible: true,
-    locked: false,
-    parentId: null as string | null,
-    editModifiers: [] as any[],
-    globalModifiers: [] as any[],
-    modifierGroups: [] as any[],
-    partKeyframes: [] as any[],
-  };
-
   if (activePixelMods.length > 0) {
     // Convert ModifierInstance[] to old format for applyPixelModifiers
     // Preserve paramKeyframes/paramDrivers so time-domain resolution works
@@ -1000,7 +978,7 @@ function renderNodeSprite(
       (m.paramKeyframes && m.paramKeyframes.length > 0) ||
       (m.paramDrivers && m.paramDrivers.length > 0 && m.paramDrivers.some((d: any) => d.enabled && !d.isBaked))
     ) ? resolveKeyframeModifierParams(oldFormatMods as any, frame) : oldFormatMods;
-    const modResult = applyPixelModifiers(pseudoPart, resolvedMods as any, frame);
+    const modResult = applyPixelModifiers(sprite.data, resolvedMods as any, frame);
     effectivePixels = modResult.pixels;
     modOffsetX = modResult.offsetX;
     modOffsetY = modResult.offsetY;

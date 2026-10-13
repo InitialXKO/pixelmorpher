@@ -680,16 +680,23 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   screen: (n, i, ctx): Record<string, BlueprintValue> => {
     const px = asPixels(i.pixels as BlueprintValue);
     if (!px) return {};
-    // 将渲染指令存入 ctx，供渲染管线读取
-    (ctx as any).renderCommands = (ctx as any).renderCommands ?? [];
-    (ctx as any).renderCommands.push({
+    const cmd = {
       pixels: px,
       translateX: asNumber((i.translateX as BlueprintValue) ?? num(0)),
       translateY: asNumber((i.translateY as BlueprintValue) ?? num(0)),
       rotation: asNumber((i.rotation as BlueprintValue) ?? num(0)),
       scaleX: asNumber((i.scaleX as BlueprintValue) ?? num(1)),
       scaleY: asNumber((i.scaleY as BlueprintValue) ?? num(1)),
-    });
+    };
+    // 若调用方提供了直接绘制回调，screen 即为绘制终点
+    const drawToScreen = (ctx as any).drawToScreen as ((c: { pixels: import('../types').PixelGrid; translateX: number; translateY: number; rotation: number; scaleX: number; scaleY: number }) => void) | undefined;
+    if (drawToScreen) {
+      drawToScreen(cmd);
+    } else {
+      // 兼容：收集指令供调用方执行
+      (ctx as any).renderCommands = (ctx as any).renderCommands ?? [];
+      (ctx as any).renderCommands.push(cmd);
+    }
     return {};
   },
 };

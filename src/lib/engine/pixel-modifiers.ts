@@ -493,11 +493,9 @@ export function trimTransparentEdges(pixels: PixelGrid): { pixels: PixelGrid; tr
 }
 
 export function applyPixelModifiers(
-  part: Part,
+  inputPixels: PixelGrid,
   modifiers: ModifierInstance[],
   currentFrame: number = 0,
-  /** Optional base pixels to use instead of part.pixels (e.g. keyframe.correctionMask) */
-  basePixels?: PixelGrid,
 ): PixelModResult {
   const enabledMods = modifiers.filter(m => m.enabled);
 
@@ -505,7 +503,7 @@ export function applyPixelModifiers(
   const padding = computeTotalPadding(enabledMods);
 
   // Create padded input grid
-  const srcPixels = basePixels ?? part.pixels;
+  const srcPixels = inputPixels;
   let pixels: PixelGrid;
   if (padding.left > 0 || padding.top > 0 || padding.right > 0 || padding.bottom > 0) {
     pixels = padPixelGrid(srcPixels, padding.left, padding.top, padding.right, padding.bottom);

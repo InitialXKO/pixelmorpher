@@ -12,7 +12,6 @@ import {
   Sun,
   Sparkles,
   Ghost,
-  Target,
   Lasso,
   Wand2,
   WandSparkles,
@@ -45,8 +44,6 @@ export const TOOL_CONFIG: { value: ToolType; icon: React.ReactNode; label: strin
   // AI tools
   { value: 'smart_select', icon: <Scan className="size-3.5" />, label: 'AI选区' },
   { value: 'inpaint', icon: <WandSparkles className="size-3.5" />, label: '修复' },
-  // Puppet tool
-  { value: 'puppet', icon: <Target className="size-3.5" />, label: '木偶 - 拖动旋转/Shift拖动移动', group: 'puppet' },
 ];
 
 export const MAX_RECENT_COLORS = 8;
