@@ -218,12 +218,41 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 16))));
     const phase = (2 * Math.PI * t) / period;
     const decay = Math.exp(-damping * t * 2 * Math.PI);
+    const outX = moveAmp * Math.sin(phase + Math.PI / 3) * decay;
+    const outY = moveAmp * Math.cos(phase + Math.PI / 3) * decay;
     const result: Record<string, BlueprintValue> = {
       outRotation: num(angleAmp * Math.sin(phase) * decay),
-      outX: num(moveAmp * Math.sin(phase + Math.PI / 3) * decay),
-      outY: num(moveAmp * Math.cos(phase + Math.PI / 3) * decay),
+      outX: num(outX),
+      outY: num(outY),
     };
-    if (i.pixels) result.pixels = i.pixels as BlueprintValue;
+    // 像素输出有后继连接时，光栅化平移（旋转暂不光栅化，仍走 screen）
+    const connected = (ctx as any).pixelsOutputConnected?.has(n.id);
+    if (i.pixels && connected) {
+      const inputPixels = asPixels(i.pixels as BlueprintValue);
+      if (inputPixels) {
+        const dx = Math.round(outX);
+        const dy = Math.round(outY);
+        if (dx !== 0 || dy !== 0) {
+          const h = inputPixels.length;
+          const w = inputPixels[0]?.length ?? 0;
+          const shifted: import('../types').PixelGrid = [];
+          for (let y = 0; y < h; y++) {
+            const row: (string | null)[] = [];
+            for (let x = 0; x < w; x++) {
+              const sx = x - dx;
+              const sy = y - dy;
+              row.push((sx >= 0 && sx < w && sy >= 0 && sy < h) ? (inputPixels[sy]?.[sx] ?? null) : null);
+            }
+            shifted.push(row);
+          }
+          result.pixels = pixelsVal(shifted);
+        } else {
+          result.pixels = i.pixels as BlueprintValue;
+        }
+      }
+    } else if (i.pixels) {
+      result.pixels = i.pixels as BlueprintValue;
+    }
     return result;
   },
 
@@ -715,6 +744,18 @@ export function evaluateBlueprint(
 } {
   const sorted = topoSort(graph);
   const values = new Map<string, Record<string, BlueprintValue>>();
+
+  // 预计算：哪些节点的 pixels 输出有后继连接
+  // 变换节点仅在 pixels 输出被连接时才光栅化变换到像素
+  const pixelsOutputConnected = new Set<string>();
+  for (const node of graph.nodes) {
+    for (const input of Object.values(node.inputs)) {
+      if (isRef(input) && (input.output ?? 'out') === 'pixels') {
+        pixelsOutputConnected.add(input.nodeId);
+      }
+    }
+  }
+  (ctx as any).pixelsOutputConnected = pixelsOutputConnected;
 
   for (const node of sorted) {
     const evaluator = EVALUATORS[node.type];
