@@ -937,7 +937,7 @@ function renderNodeSprite(
   canvasWidth: number,
   canvasHeight: number,
 ): void {
-  const { sprite, worldX, worldY, angle, stretch, mirror, rotationStrategy, modifiers, frame, frameRate } = instruction;
+  const { nodeId, sprite, worldX, worldY, angle, stretch, mirror, rotationStrategy, modifiers, frame, frameRate } = instruction;
   const scaleX = instruction.scaleX ?? 1;
   const skews = instruction.skews ?? [];
   const previewQuality = instruction.previewQuality ?? 'high';
@@ -1159,13 +1159,13 @@ function renderNodeSprite(
   for (const mod of behindEffectMods) {
     switch (mod.type) {
       case 'glow':
-        renderGlowEffect(ctx, pseudoPart as Part, mod as any, workingCanvas);
+        renderGlowEffect(ctx, mod as any, workingCanvas);
         break;
       case 'afterimage':
-        renderAfterimageEffect(ctx, pseudoPart as Part, mod as any, modifiers as any, workingCanvas);
+        renderAfterimageEffect(ctx, mod as any, modifiers as any, workingCanvas);
         break;
       case 'motion_blur':
-        renderMotionBlurEffect(ctx, pseudoPart as Part, mod as any, modifiers as any, workingCanvas);
+        renderMotionBlurEffect(ctx, mod as any, modifiers as any, workingCanvas);
         break;
     }
   }
@@ -1180,7 +1180,7 @@ function renderNodeSprite(
   ) {
     applyAutoMotionBlur(
       ctx,
-      { ...pseudoPart, id: instruction.autoMotionBlurPartId } as Part,
+      instruction.autoMotionBlurPartId ?? instruction.nodeId,
       frame,
       instruction.autoMotionBlurKeyframes,
       instruction.autoMotionBlurIntensity ?? 0.5,
@@ -1246,7 +1246,7 @@ function renderNodeSprite(
         ctx.transform(1, Math.tan((skewY * Math.PI) / 180), Math.tan((skewX * Math.PI) / 180), 1, 0, 0);
       }
       for (const mod of topEffectMods) {
-        renderParticleEffect(ctx, pseudoPart as Part, mod as any, frame);
+        renderParticleEffect(ctx, nodeId, sprite, mod as any, frame);
       }
       ctx.restore();
     }
@@ -1263,7 +1263,7 @@ function renderNodeSprite(
       m.enabled && m.type === 'particle'
     );
     for (const mod of topEffectMods) {
-      renderParticleEffect(ctx, pseudoPart as Part, mod as any, frame);
+      renderParticleEffect(ctx, nodeId, sprite, mod as any, frame);
     }
 
     ctx.restore(); // Undo the transform we set up
@@ -1320,7 +1320,7 @@ function renderDisc(
  * Convert a PixelGrid to an offscreen HTMLCanvasElement.
  * This is the raw pixel→canvas conversion without modifier processing.
  */
-function pixelsToCanvas(pixels: PixelGrid, width: number, height: number): HTMLCanvasElement | null {
+export function pixelsToCanvas(pixels: PixelGrid, width: number, height: number): HTMLCanvasElement | null {
   if (!pixels || pixels.length === 0) return null;
   if (width <= 0 || height <= 0) return null;
 
@@ -1427,95 +1427,6 @@ function renderFrameViaUnifiedPipeline(
 // Helper: convert pixel value to sub-pixel units (imported from unified-types but also needed here)
 function pxToSub(v: number): SubPixel {
   return Math.round(v * 16);
-}
-
-// ---- Part Edit Mode (Unified) ----
-
-/**
- * Render a single Part centered on canvas for sprite editing.
- * Migrated from old `renderPartEditMode` in render-pipeline.ts.
- * Applies pixel modifiers via the blueprint pixel pipeline, then draws.
- */
-export function renderPartEditUnified(
-  ctx: CanvasRenderingContext2D,
-  part: Part,
-  partEditModifiers: any[],
-  canvasWidth: number,
-  canvasHeight: number,
-  currentFrame: number = 0,
-): void {
-  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-
-  // Center the part on the canvas
-  const centerX = Math.floor((canvasWidth - part.width) / 2);
-  const centerY = Math.floor((canvasHeight - part.height) / 2);
-
-  // Resolve paramKeyframes and paramDrivers before applying pixel modifiers
-  const resolvedMods = (partEditModifiers.some(m =>
-    (m.paramKeyframes && m.paramKeyframes.length > 0) ||
-    (m.paramDrivers && m.paramDrivers.length > 0 && m.paramDrivers.some((d: any) => d.enabled && !d.isBaked))
-  ))
-    ? resolveKeyframeModifierParams(partEditModifiers, currentFrame)
-    : partEditModifiers;
-
-  // Apply pixel-level modifiers via blueprint pipeline
-  const pixelModTypes: ModifierType[] = [
-    'color_replace', 'outline', 'dither', 'pixel_displace',
-    'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip', 'pixel_edit',
-  ];
-  const activePixelMods = resolvedMods.filter(m => pixelModTypes.includes(m.type) && m.enabled);
-
-  let pixels: PixelGrid;
-  let modOffsetX = 0;
-  let modOffsetY = 0;
-  if (activePixelMods.length > 0) {
-    const modResult = applyPixelModifiers(part, activePixelMods, currentFrame);
-    pixels = modResult.pixels;
-    modOffsetX = modResult.offsetX;
-    modOffsetY = modResult.offsetY;
-  } else {
-    pixels = part.pixels;
-  }
-
-  // Apply pixel shift from translate modifiers
-  const translateMod = resolvedMods.find(m => m.type === 'translate' && m.enabled);
-  let shiftX = 0, shiftY = 0;
-  if (translateMod) {
-    shiftX = Math.round(Number(translateMod.params.offsetX) || 0);
-    shiftY = Math.round(Number(translateMod.params.offsetY) || 0);
-  }
-
-  // Render pixels
-  const gridH = pixels.length;
-  const gridW = pixels[0]?.length || 0;
-  const originX = centerX - modOffsetX;
-  const originY = centerY - modOffsetY;
-
-  ctx.imageSmoothingEnabled = false;
-
-  // Use pixelsToCanvas helper if available, else manual ImageData
-  const spriteCanvas = pixelsToCanvas(pixels, gridW, gridH);
-  if (spriteCanvas) {
-    // Apply shift by drawing at offset
-    ctx.drawImage(spriteCanvas, originX + shiftX, originY + shiftY);
-  }
-
-  // Draw part boundary indicator
-  ctx.strokeStyle = 'rgba(100, 200, 255, 0.3)';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(centerX - 0.5, centerY - 0.5, part.width + 1, part.height + 1);
-
-  // Draw pivot cross
-  ctx.strokeStyle = 'rgba(255, 200, 50, 0.5)';
-  ctx.lineWidth = 1;
-  const pivotScreenX = centerX + part.pivotX;
-  const pivotScreenY = centerY + part.pivotY;
-  ctx.beginPath();
-  ctx.moveTo(pivotScreenX - 4, pivotScreenY);
-  ctx.lineTo(pivotScreenX + 4, pivotScreenY);
-  ctx.moveTo(pivotScreenX, pivotScreenY - 4);
-  ctx.lineTo(pivotScreenX, pivotScreenY + 4);
-  ctx.stroke();
 }
 
 // ---- Standalone Part Rendering (Unified) ----

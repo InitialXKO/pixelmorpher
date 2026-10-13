@@ -171,13 +171,13 @@ function renderPartToCanvas(
       if (!mod.enabled) continue;
       switch (mod.type) {
         case 'glow':
-          renderGlowEffect(ctx, part, mod, partCanvas);
+          renderGlowEffect(ctx, mod, partCanvas);
           break;
         case 'afterimage':
-          renderAfterimageEffect(ctx, part, mod, modifiers, partCanvas);
+          renderAfterimageEffect(ctx, mod, modifiers, partCanvas);
           break;
         case 'motion_blur':
-          renderMotionBlurEffect(ctx, part, mod, modifiers, partCanvas);
+          renderMotionBlurEffect(ctx, mod, modifiers, partCanvas);
           break;
       }
     }
@@ -190,7 +190,7 @@ function renderPartToCanvas(
     // Only pass animVelocity if it has significant magnitude (avoid noise from near-zero)
     const hasAnimVelocity = Math.abs(animVelocity.vx) > 0.01 || Math.abs(animVelocity.vy) > 0.01;
     applyAutoMotionBlur(
-      ctx, part, currentFrame, allKeyframes, autoMotionBlurIntensity, partCanvas,
+      ctx, part.id, currentFrame, allKeyframes, autoMotionBlurIntensity, partCanvas,
       hasAnimVelocity ? { vx: animVelocity.vx, vy: animVelocity.vy } : undefined,
     );
   }
@@ -213,7 +213,8 @@ function renderPartToCanvas(
       if (!mod.enabled) continue;
       switch (mod.type) {
         case 'particle':
-          renderParticleEffect(ctx, part, mod, currentFrame);
+          // Dead code: old pipeline, part is not available as Node
+          // renderParticleEffect(ctx, part.id, { width: part.width, height: part.height }, mod, currentFrame);
           break;
       }
     }
@@ -510,7 +511,7 @@ function resolvePartEditModifiersForRender(part: Part, frame: number): ModifierI
  * P4-4: Caches allActiveDrivers — only rebuilds when keyframes reference changes.
  * M8: Supports accumulator variables with cross-frame caching.
  */
-function buildVariableContextForFrame(
+export function buildVariableContextForFrame(
   keyframes: Keyframe[],
   animationVariables: AnimationVariable[] | undefined,
   currentFrame: number,
@@ -568,7 +569,7 @@ function buildVariableContextForFrame(
  * P6: Caches the result — only rebuilds when skeletons reference changes.
  * During playback without edits, the same skeleton objects are reused.
  */
-function buildPartBoneBindingsMap(
+export function buildPartBoneBindingsMap(
   skeletons: Skeleton[] | undefined,
 ): Map<string, Array<{ skeletonId: string; bone: Bone; weight: number }>> {
   if (!_partBoneBindingsCache.skeletonsRef || _partBoneBindingsCache.skeletonsRef !== skeletons) {
@@ -638,7 +639,7 @@ function applyGlobalTransform(
  * - ParamDriver resolution with LRU caching
  * - Procedural animation application
  */
-function resolvePartKeyframe(
+export function resolvePartKeyframe(
   part: Part,
   kfByPart: Map<string, Keyframe[]>,
   currentFrame: number,
@@ -802,7 +803,7 @@ function resolvePartKeyframe(
  * the bone's delta (from rest pose) as additive rotation and translation offsets
  * to the part's keyframe modifiers.
  */
-function applyBoneDrivenTransforms(
+export function applyBoneDrivenTransforms(
   renderKf: Keyframe,
   partId: string,
   partBoneBindings: Map<string, Array<{ skeletonId: string; bone: Bone; weight: number }>>,

@@ -8,9 +8,9 @@ import type {
   MotionBlurStroke,
   EffectStroke,
   Part,
-  Keyframe,
   ModifierInstance,
 } from '../types';
+import type { UnifiedKeyframe } from '../unified-types';
 import { hexToRgb } from './color-utils';
 import { hashString, seededRandom } from './noise';
 import { getTranslateOffset } from './effect-render';
@@ -335,20 +335,22 @@ export function renderEffectStroke(
  */
 export function applyAutoMotionBlur(
   ctx: CanvasRenderingContext2D,
-  part: Part,
+  nodeId: string,
   currentFrame: number,
-  keyframes: Keyframe[],
+  // UnifiedKeyframe: only partId/frame/modifiers are read.
+  // Old Keyframe[] is assignable to UnifiedKeyframe[] (id+frame present).
+  keyframes: UnifiedKeyframe[],
   intensity: number,
   partCanvas: HTMLCanvasElement,
   animVelocity?: { vx: number; vy: number },  // M5: animation modifier velocity
 ): void {
   // Find the current and previous keyframes
   const partKeyframes = keyframes
-    .filter((k) => k.partId === part.id)
+    .filter((k) => k.partId === nodeId)
     .sort((a, b) => a.frame - b.frame);
 
-  let currentKf: Keyframe | null = null;
-  let prevKf: Keyframe | null = null;
+  let currentKf: UnifiedKeyframe | null = null;
+  let prevKf: UnifiedKeyframe | null = null;
 
   for (const kf of partKeyframes) {
     if (kf.frame <= currentFrame) {
