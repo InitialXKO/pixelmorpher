@@ -10,7 +10,7 @@ import type {
   BlueprintValue,
   BlueprintInput,
 } from './ir';
-import { asNumber, isRef, num } from './ir';
+import { asNumber, isRef, num, pixels as pixelsVal, asPixels } from './ir';
 import { computeGaitTransform } from '../engine/animation-handlers/shared-helpers';
 import { evalExpression } from '../expression-parser';
 import type { ModifierParamValue, PartAnimationModifier } from '../types';
@@ -415,9 +415,24 @@ const EVALUATORS: Record<string, NodeEvaluator> = {
     zIndex: num(asNumber(i.zIndex ?? num(0))),
   }),
 
-  // ---- 像素形变（汇点：像素数据流由渲染管线处理，此处仅占位以便下拉框显示） ----
+  // ---- 像素形变（蓝图内处理像素，由渲染管线传入像素并取回结果） ----
   texture_scroll: () => ({}),
-  wave_deform: () => ({}),
+  wave_deform: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    // 动态导入避免循环依赖
+    const { applyWaveDeform } = require('../engine/modifier-renderers/wave-deform');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    // 从输入端口覆盖 params（蓝图连线优先）
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyWaveDeform(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1, 0, 0);
+    return { pixels: pixelsVal(result) };
+  },
   contour_scroll: () => ({}),
   reveal_hide: () => ({}),
   shatter_dissolve: () => ({}),
