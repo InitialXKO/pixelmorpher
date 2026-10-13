@@ -401,3 +401,53 @@ export function renderUnifiedToCanvas(
 
   return canvas;
 }
+
+/**
+ * Render a single character at a specific frame for onion skin.
+ * Uses the unified pipeline. Migrated from old renderPuppetNodes usage.
+ */
+export function renderCharacterOnionFrameUnified(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  skeleton: PuppetSkeleton,
+  character: PuppetCharacter,
+  parts: Part[],
+  nodeKeyframes: PuppetNodeKeyframe[],
+  frame: number,
+  frameRate: number,
+  globalModifiers?: GlobalModifier[],
+  animationVariables?: AnimationVariable[],
+): void {
+  // Use LiveAdapter to convert to unified Character
+  liveAdapter.invalidate();
+  const unifiedCharacter = liveAdapter.getCharacter(
+    skeleton,
+    [character],
+    parts,
+    nodeKeyframes,
+    character.costumeSets ?? [],
+  );
+
+  // Build animation variables
+  const unifiedVars = animationVariables?.map(v => ({
+    id: v.id,
+    name: v.name,
+    value: v.defaultValue ?? 0,
+    min: 0,
+    max: 100,
+    writerDriverId: v.writerDriverId,
+    defaultValue: v.defaultValue ?? 0,
+  }));
+
+  const plan = generateRenderPlan(
+    unifiedCharacter,
+    frame,
+    canvasWidth,
+    canvasHeight,
+    'pixel-perfect',
+    frameRate,
+    unifiedVars as any,
+  );
+  executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
+}

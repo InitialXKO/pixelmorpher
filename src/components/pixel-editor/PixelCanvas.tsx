@@ -4,7 +4,7 @@ import React, { useCallback, useEffect } from 'react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
-import { renderPuppetNodes } from '@/lib/engine';
+import { renderCharacterOnionFrameUnified } from '@/lib/unified-pipeline-bridge';
 import { renderPartEditUnified } from '@/lib/unified-render';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
@@ -161,11 +161,10 @@ export default function PixelCanvas() {
           const clip = clips.find(c => true && c.puppetCharacterId === character.id);
           if (!skel || !clip) continue;
           try {
-            renderPuppetNodes(
-              cacheCtx, pst.parts, skel, character,
-              clip.puppetNodeKeyframes ?? [], frame,
-              s.canvasWidth, s.canvasHeight, s.frameRate, onionQuality,
-              s.globalModifiers, pst.keyframes
+            renderCharacterOnionFrameUnified(
+              cacheCtx, s.canvasWidth, s.canvasHeight, skel, character,
+              pst.parts, clip.puppetNodeKeyframes ?? [], frame,
+              s.frameRate, s.globalModifiers, s.animationVariables
             );
           } catch { /* 单个角色渲染失败不影响其它 */ }
         }
