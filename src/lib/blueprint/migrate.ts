@@ -164,13 +164,13 @@ export function modifiersToBlueprint(
     }
   }
 
-  // transform 输出节点
-  const transformId = nid('transform');
-  const transformInputs: BlueprintNode['inputs'] = {};
+  // screen 输出节点（统一终点，返回变换数值）
+  const screenId = nid('screen');
+  const screenInputs: BlueprintNode['inputs'] = {};
   for (const [port, src] of portSources) {
-    transformInputs[port] = { nodeId: src.nodeId, output: src.output };
+    screenInputs[port] = { nodeId: src.nodeId, output: src.output };
   }
-  nodes.push({ id: transformId, type: 'transform', inputs: transformInputs, params: {} });
+  nodes.push({ id: screenId, type: 'screen', inputs: screenInputs, params: {} });
 
-  return { version: 1, nodes, outputId: transformId };
+  return { version: 1, nodes, outputId: screenId };
 }

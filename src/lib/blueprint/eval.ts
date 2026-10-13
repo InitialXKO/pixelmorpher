@@ -679,14 +679,23 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // 实际绘制由渲染管线通过 ctx.renderTarget 完成，此处仅收集参数
   screen: (n, i, ctx): Record<string, BlueprintValue> => {
     const px = asPixels(i.pixels as BlueprintValue);
-    if (!px) return {};
+    const translateX = asNumber((i.translateX as BlueprintValue) ?? num(0));
+    const translateY = asNumber((i.translateY as BlueprintValue) ?? num(0));
+    const rotation = asNumber((i.rotation as BlueprintValue) ?? num(0));
+    const scaleX = asNumber((i.scaleX as BlueprintValue) ?? num(1));
+    const scaleY = asNumber((i.scaleY as BlueprintValue) ?? num(1));
+    // 返回变换数值，供调用方读取（即使无像素也返回）
+    const result: Record<string, BlueprintValue> = {
+      translateX: num(translateX),
+      translateY: num(translateY),
+      rotation: num(rotation),
+      scaleX: num(scaleX),
+      scaleY: num(scaleY),
+    };
+    if (!px) return result;
     const cmd = {
       pixels: px,
-      translateX: asNumber((i.translateX as BlueprintValue) ?? num(0)),
-      translateY: asNumber((i.translateY as BlueprintValue) ?? num(0)),
-      rotation: asNumber((i.rotation as BlueprintValue) ?? num(0)),
-      scaleX: asNumber((i.scaleX as BlueprintValue) ?? num(1)),
-      scaleY: asNumber((i.scaleY as BlueprintValue) ?? num(1)),
+      translateX, translateY, rotation, scaleX, scaleY,
     };
     // 若调用方提供了直接绘制回调，screen 即为绘制终点
     const drawToScreen = (ctx as any).drawToScreen as ((c: { pixels: import('../types').PixelGrid; translateX: number; translateY: number; rotation: number; scaleX: number; scaleY: number }) => void) | undefined;
@@ -697,7 +706,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
       (ctx as any).renderCommands = (ctx as any).renderCommands ?? [];
       (ctx as any).renderCommands.push(cmd);
     }
-    return {};
+    return result;
   },
 };
 
