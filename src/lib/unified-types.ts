@@ -644,6 +644,8 @@ export interface RenderPlan {
   nodeInstructions: NodeRenderInstruction[];
   discInstructions: DiscRenderInstruction[];
   sortedInstructions: (NodeRenderInstruction | DiscRenderInstruction)[];
+  backgroundColor?: string;
+  previewQuality?: 'low' | 'medium' | 'high';
 }
 
 // ---- Migration Types ----

@@ -4,7 +4,8 @@ import React, { useCallback, useEffect } from 'react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
-import { renderPartEditMode, renderPuppetNodes } from '@/lib/engine';
+import { renderPuppetNodes } from '@/lib/engine';
+import { renderPartEditUnified } from '@/lib/unified-render';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
 import { useCanvasState } from './canvas/use-canvas-state';
@@ -251,7 +252,7 @@ export default function PixelCanvas() {
             });
           }
         }
-        renderPartEditMode(offCtx, part, effectiveMods, s.canvasWidth, s.canvasHeight, currentFrame);
+        renderPartEditUnified(offCtx, part, effectiveMods, s.canvasWidth, s.canvasHeight, currentFrame);
       }
     } else {
       const animationClips = useProjectStore.getState().animationClips;
