@@ -9,6 +9,8 @@
 // previous Part + PuppetNode dual-system architecture.
 // ============================================================
 
+import type { BlueprintGraph } from './blueprint/ir';
+
  // ---- Primitive Types ----
 
 /** Sub-pixel coordinate unit: 1/16 pixel precision */
@@ -198,6 +200,9 @@ export interface NodeTransform {
   angle: number;                // Rotation angle (degrees)
   stretch: number;              // Y-axis stretch factor (0.5 ~ 2.0)
   variantIndex: DirectionIndex; // Direction variant index (0-7)
+  scaleX?: number;               // X-axis scale factor (blueprint t.scaleX, default 1)
+  skewX?: number;               // Skew X in degrees (blueprint t.skewX, default 0)
+  skewY?: number;               // Skew Y in degrees (blueprint t.skewY, default 0)
 }
 
 /** Default transform values */
@@ -639,6 +644,8 @@ export interface NodeRenderInstruction {
   /** Part identity + full keyframe list for auto-motion-blur lookup (nodeId = part.id). */
   autoMotionBlurPartId?: string;
   autoMotionBlurKeyframes?: UnifiedKeyframe[];
+  /** Blueprint graph for this node (transform + pixel chain). Preferred over modifiers. */
+  blueprint?: BlueprintGraph | null;
 }
 
 /**

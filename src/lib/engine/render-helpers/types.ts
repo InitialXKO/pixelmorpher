@@ -15,6 +15,7 @@ export interface InterpolatedNodeValues {
   zIndex: number;
   skewX: number;
   skewY: number;
+  scaleX: number;
 }
 
 /** Computed world transform for a puppet node */

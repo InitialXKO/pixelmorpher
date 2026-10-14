@@ -45,6 +45,7 @@ function interpolateSingleNode(node: Node, currentFrame: number): InterpolatedNo
     zIndex: node.zIndex ?? 0,
     skewX: 0,
     skewY: 0,
+    scaleX: 1,
   };
 }
 
@@ -79,6 +80,7 @@ function interpolateCharacterInternal(
         values.offsetX += t.translateX;
         values.offsetY += t.translateY;
         values.stretch *= t.scaleY;
+        values.scaleX *= t.scaleX;
         values.skewX += t.skewX;
         values.skewY += t.skewY;
         if (t.zIndex !== 0) values.zIndex = t.zIndex;

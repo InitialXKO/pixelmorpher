@@ -68,6 +68,10 @@ import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from 
 import { getAnimationFrameAndWeight, computeKeyframeBaseTransform } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { computeBoneTransforms, applyProceduralAnimations } from './engine/skeleton';
+// Blueprint evaluation (path B: unified transform + pixel via blueprint)
+import { evaluateBlueprint } from './blueprint/eval';
+import { modifiersToBlueprint } from './blueprint/migrate';
+import type { BlueprintGraph } from './blueprint/ir';
 import { getKfByPart } from './engine/frame-cache';
 import {
   resolvePartKeyframe,
@@ -92,6 +96,84 @@ import {
 
 // ---- World Transform Computation ----
 
+/** Blueprint evaluation state (module-level, cleared on frame jumps) */
+const blueprintNodeState = new Map<string, unknown>();
+let blueprintLastFrame = -1;
+
+/** Pre-computed blueprint transform result for a node */
+export interface BlueprintTransformResult {
+  translateX: number;
+  translateY: number;
+  rotation: number;
+  scaleX: number;
+  scaleY: number;
+  skewX: number;
+  skewY: number;
+}
+
+/**
+ * Phase 0 (path B): Evaluate all node blueprints for transform values.
+ * Two-pass for cross-node references (nodeOutputs). Mirrors puppet-keyframe-interpolation.
+ */
+function evaluateBlueprintTransforms(
+  character: Character,
+  frame: number,
+  frameRate: number,
+): Map<string, BlueprintTransformResult> {
+  if (frame < blueprintLastFrame || frame > blueprintLastFrame + 5) {
+    blueprintNodeState.clear();
+  }
+  blueprintLastFrame = frame;
+
+  const result = new Map<string, BlueprintTransformResult>();
+  const nodeOutputs = new Map<string, {
+    rotation: number; translateX: number; translateY: number;
+    scaleX: number; scaleY: number; skewX: number; skewY: number; zIndex: number;
+  }>();
+
+  for (let pass = 0; pass < 2; pass++) {
+    for (const nodeId of Object.keys(character.nodes)) {
+      const node = character.nodes[nodeId]!;
+      const blueprint: BlueprintGraph | null =
+        (node as any).blueprint ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers as any) : null);
+      if (!blueprint) continue;
+      try {
+        const t = evaluateBlueprint(blueprint, {
+          frame,
+          frameRate,
+          vars: {},
+          nodeOutputs: pass === 1 ? nodeOutputs : undefined,
+          nodeState: blueprintNodeState,
+        } as any);
+        result.set(nodeId, {
+          translateX: t.translateX,
+          translateY: t.translateY,
+          rotation: t.rotation,
+          scaleX: t.scaleX,
+          scaleY: t.scaleY,
+          skewX: t.skewX,
+          skewY: t.skewY,
+        });
+        if (pass === 0) {
+          nodeOutputs.set(nodeId, {
+            rotation: t.rotation,
+            translateX: t.translateX,
+            translateY: t.translateY,
+            scaleX: t.scaleX,
+            scaleY: t.scaleY,
+            skewX: t.skewX,
+            skewY: t.skewY,
+            zIndex: (t as any).zIndex ?? 0,
+          });
+        }
+      } catch {
+        // Single node failure doesn't break the whole graph
+      }
+    }
+  }
+  return result;
+}
+
 /** Computed world transform for a node */
 export interface WorldTransform {
   nodeId: string;
@@ -101,6 +183,7 @@ export interface WorldTransform {
   worldStretch: number;    // Accumulated stretch factor
   variantIndex: DirectionIndex; // Current direction
   mirror: boolean;         // Whether this node is mirrored
+  scaleX?: number;          // X-axis scale factor (blueprint t.scaleX, default 1)
   skewX?: number;          // Local skew X in degrees (blueprint/legacy skew modifier)
   skewY?: number;          // Local skew Y in degrees (blueprint/legacy skew modifier)
 }
@@ -116,6 +199,7 @@ function computeWorldTransforms(
   canvasHeight: number,
   frameRate: number = 12,
   variableContext?: VariableContext,
+  blueprintTransforms?: Map<string, BlueprintTransformResult>,
 ): Map<string, WorldTransform> {
   const transforms = new Map<string, WorldTransform>();
 
@@ -123,7 +207,7 @@ function computeWorldTransforms(
   if (!rootNode) return transforms;
 
   // Root node: center of canvas + node's own offset
-  const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext);
+  const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext, blueprintTransforms);
   const rootWorld: WorldTransform = {
     nodeId: rootNode.id,
     worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + rootInterpolated.x),
@@ -132,11 +216,14 @@ function computeWorldTransforms(
     worldStretch: rootInterpolated.stretch,
     variantIndex: rootInterpolated.variantIndex,
     mirror: false,
+    scaleX: rootInterpolated.scaleX,
+    skewX: rootInterpolated.skewX,
+    skewY: rootInterpolated.skewY,
   };
   transforms.set(rootNode.id, rootWorld);
 
   // Recursively compute children
-  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext);
+  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms);
 
   return transforms;
 }
@@ -149,12 +236,13 @@ function computeChildTransforms(
   transforms: Map<string, WorldTransform>,
   frameRate: number = 12,
   variableContext?: VariableContext,
+  blueprintTransforms?: Map<string, BlueprintTransformResult>,
 ): void {
   for (const childId of parentNode.children) {
     const childNode = character.nodes[childId];
     if (!childNode) continue;
 
-    const childInterpolated = interpolateTransform(childNode, frame, frameRate, variableContext);
+    const childInterpolated = interpolateTransform(childNode, frame, frameRate, variableContext, blueprintTransforms);
     let childWorldX: SubPixel;
     let childWorldY: SubPixel;
     let childAngle = childInterpolated.angle;
@@ -240,11 +328,14 @@ function computeChildTransforms(
       worldStretch: childInterpolated.stretch * parentWorld.worldStretch,
       variantIndex: childInterpolated.variantIndex,
       mirror: childMirror,
+      scaleX: childInterpolated.scaleX,
+      skewX: childInterpolated.skewX,
+      skewY: childInterpolated.skewY,
     };
     transforms.set(childId, childWorld);
 
     // Recurse into children
-    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext);
+    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms);
   }
 }
 
@@ -271,6 +362,7 @@ function interpolateTransform(
   frame: number,
   frameRate: number = 12,
   variableContext?: VariableContext,
+  blueprintTransforms?: Map<string, BlueprintTransformResult>,
 ): NodeTransform {
   const base = node.transform;
 
@@ -281,7 +373,22 @@ function interpolateTransform(
   const kfStretch = interpolateTrack(node.tracks.stretch, frame, base.stretch);
   const kfVariant = interpolateTrack(node.tracks.variantIndex, frame, base.variantIndex) as DirectionIndex;
 
-  // Step 2: Resolve animation modifiers and compute their transform contributions
+  // Step 2 (path B): Blueprint-driven modifier contributions (preferred)
+  const bpT = blueprintTransforms?.get(node.id);
+  if (bpT) {
+    return {
+      x: kfX + pxToSub(bpT.translateX),
+      y: kfY + pxToSub(bpT.translateY),
+      angle: kfAngle + bpT.rotation,
+      stretch: kfStretch * bpT.scaleY,
+      scaleX: bpT.scaleX,
+      skewX: bpT.skewX,
+      skewY: bpT.skewY,
+      variantIndex: kfVariant,
+    };
+  }
+
+  // Step 2 (legacy fallback): Resolve animation modifiers via old resolver
   const animMods = resolveNodeModifiers(
     node.modifiers.filter(m => isAnimationModifier(m.type)),
     frame,
@@ -776,9 +883,12 @@ export function generateRenderPlan(
     ? buildVariableContext(animationVariables, frame, allActiveDrivers)
     : undefined;
 
-  // Step 1: World transforms (includes animation modifier contributions)
+  // Phase 0 (path B): Evaluate node blueprints for transform values (two-pass)
+  const blueprintTransforms = evaluateBlueprintTransforms(character, frame, frameRate);
+
+  // Step 1: World transforms (includes blueprint-evaluated modifier contributions)
   const worldTransforms = computeWorldTransforms(
-    character, frame, canvasWidth, canvasHeight, frameRate, variableContext,
+    character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
   );
 
   // Step 2: Z-order (includes disc Z computation)
@@ -831,8 +941,12 @@ export function generateRenderPlan(
       modifiers: nodeModifiers,
       frame,
       frameRate,
+      // t.scaleX 修复：蓝图 scaleX 独立 plumbing，不再平均吃掉
+      scaleX: worldTf.scaleX,
       // 蓝图 skew：有倾斜量时才填，避免空数组污染
       skews: (worldTf.skewX || worldTf.skewY) ? [{ skewX: worldTf.skewX ?? 0, skewY: worldTf.skewY ?? 0 }] : undefined,
+      // STEP2 合并：plumbing 蓝图给 renderNodeSprite，替代手拼像素链
+      blueprint: (node as any).blueprint ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers as any) : null),
     });
   }
 
@@ -1019,65 +1133,94 @@ function renderNodeSprite(
   }
 
   // ========================================================================
-  // STEP 2: Apply pixel-deform via BLUEPRINT graph (sprite_source -> mods -> screen)
+  // STEP 2: Apply pixel-deform via node's BLUEPRINT (unified graph)
+  // Path B + STEP2 merge: use instruction.blueprint instead of hand-built graph.
+  // The blueprint contains sprite_source -> pixel mods -> screen (from migrate.ts
+  // or manual editor wiring). Transform nodes in the graph are re-evaluated
+  // harmlessly; only pixels are consumed here.
   // ========================================================================
-  const activeDeformMods = modifiers.filter(m =>
-    m.enabled && isPixelDeformModifier(m.type as ModifierType)
-  );
+  const blueprint = (instruction as any).blueprint as BlueprintGraph | null | undefined;
 
-  if (activeDeformMods.length > 0) {
-    const { evaluateBlueprint } = require('./blueprint/eval');
-    const { pixels: pixelsVal } = require('./blueprint/ir');
+  if (blueprint) {
+    // Only evaluate if the blueprint has pixel-deform work to do.
+    // (Pure transform blueprints skip pixel evaluation.)
+    const hasPixelChain = blueprint.nodes.some(n =>
+      n.type === 'sprite_source' || (n.inputs as any)?.pixels
+    );
+    if (hasPixelChain) {
+      const bpCtx: any = {
+        frame, frameRate, vars: {},
+        spritePixels: effectivePixels,  // sprite_source 从这里取图
+        // screen 为绘制终点：直接回调更新 effectivePixels
+        drawToScreen: (cmd: { pixels: PixelGrid }) => {
+          if (cmd.pixels) effectivePixels = cmd.pixels;
+        },
+      };
+      try {
+        evaluateBlueprint(blueprint, bpCtx);
+      } catch {
+        // Blueprint pixel evaluation failure: keep original pixels
+      }
+      // screen 已通过 drawToScreen 更新 effectivePixels，无需再读 renderCommands
+    }
+  } else {
+    // Legacy fallback: no blueprint (should not happen for nodes with modifiers,
+    // but preserved for safety). Uses manual graph construction.
+    const activeDeformMods = modifiers.filter(m =>
+      m.enabled && isPixelDeformModifier(m.type as ModifierType)
+    );
 
-    // 构建蓝图图
-    const bpNodes: any[] = [
-      { id: 'bp_time', type: 'time', inputs: {}, params: {} },
-      { id: 'bp_source', type: 'sprite_source', inputs: {}, params: {} },
-    ];
+    if (activeDeformMods.length > 0) {
+      const { pixels: pixelsVal } = require('./blueprint/ir');
 
-    let prevPixelsNodeId = 'bp_source';
-    for (const mod of activeDeformMods) {
-      const nodeId = `bp_mod_${mod.id}`;
+      // 构建蓝图图
+      const bpNodes: any[] = [
+        { id: 'bp_time', type: 'time', inputs: {}, params: {} },
+        { id: 'bp_source', type: 'sprite_source', inputs: {}, params: {} },
+      ];
+
+      let prevPixelsNodeId = 'bp_source';
+      for (const mod of activeDeformMods) {
+        const nodeId = `bp_mod_${mod.id}`;
+        bpNodes.push({
+          id: nodeId,
+          type: mod.type,
+          inputs: {
+            pixels: { nodeId: prevPixelsNodeId, output: 'pixels' },
+            t: { nodeId: 'bp_time', output: 'out' },
+          },
+          params: mod.params ?? {},
+        });
+        prevPixelsNodeId = nodeId;
+      }
+
+      // 终点 screen 节点：接收最终像素 + 变换
       bpNodes.push({
-        id: nodeId,
-        type: mod.type,
+        id: 'bp_screen',
+        type: 'screen',
         inputs: {
           pixels: { nodeId: prevPixelsNodeId, output: 'pixels' },
-          t: { nodeId: 'bp_time', output: 'out' },
+          // 变换数值直接传字面量（worldX/worldY/angle 在指令里）
+          translateX: { type: 'number', value: 0 },
+          translateY: { type: 'number', value: 0 },
+          rotation: { type: 'number', value: 0 },
+          scaleX: { type: 'number', value: 1 },
+          scaleY: { type: 'number', value: 1 },
         },
-        params: mod.params ?? {},
+        params: {},
       });
-      prevPixelsNodeId = nodeId;
+
+      const bpGraph = { version: 1 as const, nodes: bpNodes, edges: [], outputId: 'bp_screen' };
+      const bpCtx: any = {
+        frame, frameRate, vars: {},
+        spritePixels: effectivePixels,
+        drawToScreen: (cmd: { pixels: PixelGrid }) => {
+          if (cmd.pixels) effectivePixels = cmd.pixels;
+        },
+      };
+
+      evaluateBlueprint(bpGraph, bpCtx);
     }
-
-    // 终点 screen 节点：接收最终像素 + 变换
-    bpNodes.push({
-      id: 'bp_screen',
-      type: 'screen',
-      inputs: {
-        pixels: { nodeId: prevPixelsNodeId, output: 'pixels' },
-        // 变换数值直接传字面量（worldX/worldY/angle 在指令里）
-        translateX: { type: 'number', value: 0 },
-        translateY: { type: 'number', value: 0 },
-        rotation: { type: 'number', value: 0 },
-        scaleX: { type: 'number', value: 1 },
-        scaleY: { type: 'number', value: 1 },
-      },
-      params: {},
-    });
-
-    const bpGraph = { nodes: bpNodes, edges: [] };
-    const bpCtx: any = {
-      frame, frameRate, vars: {},
-      spritePixels: effectivePixels,  // sprite_source 从这里取图
-      // screen 为绘制终点：直接回调更新 effectivePixels
-      drawToScreen: (cmd: { pixels: PixelGrid }) => {
-        if (cmd.pixels) effectivePixels = cmd.pixels;
-      },
-    };
-
-    evaluateBlueprint(bpGraph, bpCtx);
-    // screen 已通过 drawToScreen 更新 effectivePixels，无需再读 renderCommands
   }
 
   // Create offscreen canvas from (possibly modified) sprite data
