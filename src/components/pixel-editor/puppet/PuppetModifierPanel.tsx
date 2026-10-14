@@ -67,14 +67,31 @@ export default function PuppetModifierPanel() {
     return bp;
   }, [node, modifiers]);
 
-  // 整角色预览数据：所有节点的精灵和蓝图
+  // 整角色预览数据：所有节点的精灵和蓝图（含层级）
   const characterNodes = useMemo(() => {
     if (!skeleton) return undefined;
     const parts = useProjectStore.getState().parts ?? [];
     const partMap = new Map(parts.map((p: any) => [p.id, p]));
+    // 建 socket 位置映射：socketId -> {nodeId, x, y}
+    const socketMap = new Map<string, { x: number; y: number }>();
+    for (const n of skeleton.nodes) {
+      for (const s of (n.sockets ?? [])) {
+        socketMap.set(s.id, { x: s.localX ?? 0, y: s.localY ?? 0 });
+      }
+    }
+    // 建 parent 映射：通过 plug.socketId 找到父节点
+    const nodeBySocket = new Map<string, string>();
+    for (const n of skeleton.nodes) {
+      for (const s of (n.sockets ?? [])) {
+        nodeBySocket.set(s.id, n.id);
+      }
+    }
     return skeleton.nodes.map((n: any) => {
       const part = n.spritePartId ? partMap.get(n.spritePartId) : null;
       const bp = n.blueprint ?? (n.modifiers?.length ? modifiersToBlueprint(n.modifiers) : null);
+      const plug = n.plug;
+      const parentId = plug?.socketId ? nodeBySocket.get(plug.socketId) ?? null : null;
+      const sock = plug?.socketId ? socketMap.get(plug.socketId) : null;
       return {
         id: n.id,
         name: n.name,
@@ -82,6 +99,12 @@ export default function PuppetModifierPanel() {
         spritePixels: part?.pixels ?? null,
         spriteW: part?.width,
         spriteH: part?.height,
+        parentId,
+        socketId: plug?.socketId ?? null,
+        socketX: sock?.x ?? 0,
+        socketY: sock?.y ?? 0,
+        plugX: plug?.localX ?? 0,
+        plugY: plug?.localY ?? 0,
       };
     });
   }, [skeleton]);

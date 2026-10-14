@@ -32,6 +32,16 @@ interface BlueprintEditorProps {
     spritePixels?: import('@/lib/types').PixelGrid | null;
     spriteW?: number;
     spriteH?: number;
+    /** 父节点ID（null为根） */
+    parentId?: string | null;
+    /** 连接到父节点的socket ID */
+    socketId?: string | null;
+    /** 在父节点上的socket偏移（局部坐标） */
+    socketX?: number;
+    socketY?: number;
+    /** 自身plug偏移（局部坐标） */
+    plugX?: number;
+    plugY?: number;
   }>;
 }
 
@@ -48,6 +58,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
   const [previewPlaying, setPreviewPlaying] = useState(false);
   const [previewMode, setPreviewMode] = useState<'single' | 'character'>('single');
   const [animateOthers, setAnimateOthers] = useState(true);
+  const [previewPos, setPreviewPos] = useState<{ x: number; y: number } | null>(null);
+  const [previewDragging, setPreviewDragging] = useState<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const previewRef = useRef<HTMLCanvasElement>(null);
 
   // 预览播放计时器
@@ -72,7 +84,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
       ctx.fillRect(0, 0, W, H);
 
       if (previewMode === 'character' && characterNodes && characterNodes.length > 0) {
-        // 整角色模式：渲染所有精灵
+        // 整角色模式：层级定位，插头对准插槽
         // 背景网格
         ctx.strokeStyle = '#1a1a2e';
         ctx.lineWidth = 1;
@@ -83,31 +95,76 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
         }
         const cx = W / 2, cy = H / 2;
-        for (const cn of characterNodes) {
-          if (!cn.spritePixels) continue;
-          // 求变换：animateOthers 开时用各自蓝图，否则用静态（frame 0）
+        // 建索引
+        const nodeMap = new Map(characterNodes.map((n) => [n.id, n]));
+        const childrenMap = new Map<string, string[]>();
+        let rootId: string | null = null;
+        for (const n of characterNodes) {
+          if (!n.parentId) {
+            rootId = n.id;
+          } else {
+            const arr = childrenMap.get(n.parentId) ?? [];
+            arr.push(n.id);
+            childrenMap.set(n.parentId, arr);
+          }
+        }
+        if (!rootId && characterNodes.length > 0) rootId = characterNodes[0]!.id;
+        // BFS 计算世界变换
+        interface WT { x: number; y: number; angle: number; }
+        const world = new Map<string, WT>();
+        const getLocalT = (cn: typeof characterNodes[0], frame: number) => {
           let t = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
-          if (cn.blueprint && (animateOthers || cn.id === (graph as any)._nodeId)) {
+          const bp = (cn.id === (graph as any)._nodeId) ? graph : cn.blueprint;
+          if (bp && (animateOthers || cn.id === (graph as any)._nodeId)) {
             try {
-              const r = evaluateBlueprint(cn.blueprint, {
-                frame: animateOthers ? previewFrame : 0,
-                frameRate, vars: {},
-              } as any);
+              const r = evaluateBlueprint(bp, { frame: animateOthers ? frame : 0, frameRate, vars: {} } as any);
               t = r;
             } catch {}
           }
-          // 如果是当前编辑的节点，用主 graph 的求值结果
-          if ((graph as any)._nodeId === cn.id) {
-            try {
-              const r = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: {} } as any);
-              t = r;
-            } catch {}
+          return t;
+        };
+        // 根节点在中心
+        if (rootId) {
+          const root = nodeMap.get(rootId)!;
+          const rt = getLocalT(root, previewFrame);
+          world.set(rootId, { x: cx + rt.translateX, y: cy + rt.translateY, angle: rt.rotation });
+          // BFS
+          const queue = [rootId];
+          while (queue.length > 0) {
+            const pid = queue.shift()!;
+            const pw = world.get(pid)!;
+            const pNode = nodeMap.get(pid)!;
+            const pt = getLocalT(pNode, previewFrame);
+            const pAngleRad = ((pw.angle) * Math.PI) / 180;
+            const cosA = Math.cos(pAngleRad), sinA = Math.sin(pAngleRad);
+            for (const cid of (childrenMap.get(pid) ?? [])) {
+              const cn = nodeMap.get(cid)!;
+              const ct = getLocalT(cn, previewFrame);
+              // socket 偏移按父角度旋转
+              const sx = (cn.socketX ?? 0), sy = (cn.socketY ?? 0);
+              const rsx = sx * cosA - sy * sinA;
+              const rsy = sx * sinA + sy * cosA;
+              // 子节点本地偏移（plug对齐：减去plug偏移）
+              const px = (cn.plugX ?? 0), py = (cn.plugY ?? 0);
+              // 世界位置 = 父世界位置 + 旋转后的socket偏移 + 蓝图位移 - plug偏移（plug已在局部坐标系）
+              const wx = pw.x + rsx + ct.translateX - px;
+              const wy = pw.y + rsy + ct.translateY - py;
+              const wa = pw.angle + ct.rotation;
+              world.set(cid, { x: wx, y: wy, angle: wa });
+              queue.push(cid);
+            }
           }
+        }
+        // 绘制所有节点
+        for (const cn of characterNodes) {
+          const w = world.get(cn.id);
+          if (!w || !cn.spritePixels) continue;
+          const t = getLocalT(cn, previewFrame);
           const grid = cn.spritePixels;
           const gw = grid[0]?.length ?? 0;
           const gh = grid.length;
           if (gw === 0 || gh === 0) continue;
-          const scale = Math.min(3, 60 / Math.max(gw, gh));
+          const scale = Math.min(2.5, 50 / Math.max(gw, gh));
           const dw = gw * scale, dh = gh * scale;
           const tmp = document.createElement('canvas');
           tmp.width = gw; tmp.height = gh;
@@ -130,8 +187,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           tctx.putImageData(img, 0, 0);
           ctx.save();
           ctx.imageSmoothingEnabled = false;
-          ctx.translate(cx + t.translateX * scale, cy + t.translateY * scale);
-          ctx.rotate((t.rotation * Math.PI) / 180);
+          ctx.translate(w.x, w.y);
+          ctx.rotate((w.angle * Math.PI) / 180);
           ctx.scale(t.scaleX, t.scaleY);
           ctx.drawImage(tmp, -dw/2, -dh/2, dw, dh);
           ctx.restore();
@@ -809,9 +866,41 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
       <div className="fixed inset-0 z-50 bg-[#0a0a1a]/95 backdrop-blur-sm p-6 overflow-auto">
         <div className="max-w-6xl mx-auto relative">
           {editorContent}
-          {/* 预览小窗 */}
-          <div className="fixed top-6 right-6 bg-[#0a0a1a] border border-[#2a2a4a] rounded-lg p-2 shadow-xl">
-            <div className="flex items-center justify-between mb-1 px-1 gap-2">
+          {/* 预览小窗（可拖动） */}
+          <div
+            className="fixed bg-[#0a0a1a] border border-[#2a2a4a] rounded-lg p-2 shadow-xl"
+            style={previewPos ? { left: previewPos.x, top: previewPos.y } : { top: 24, right: 24 }}
+            onMouseMove={(e) => {
+              if (!previewDragging) return;
+              const dx = e.clientX - previewDragging.startX;
+              const dy = e.clientY - previewDragging.startY;
+              setPreviewPos({
+                x: Math.max(0, previewDragging.origX + dx),
+                y: Math.max(0, previewDragging.origY + dy),
+              });
+            }}
+            onMouseUp={() => setPreviewDragging(null)}
+            onMouseLeave={() => setPreviewDragging(null)}
+          >
+            <div
+              className="flex items-center justify-between mb-1 px-1 gap-2 cursor-move select-none"
+              onMouseDown={(e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                const rect = e.currentTarget.closest('.fixed') as HTMLElement;
+                const r = rect.getBoundingClientRect();
+                setPreviewDragging({
+                  startX: e.clientX,
+                  startY: e.clientY,
+                  origX: previewPos ? previewPos.x : r.left,
+                  origY: previewPos ? previewPos.y : r.top,
+                });
+                // 首次拖动时从 right 定位切换到 left/top 定位
+                if (!previewPos) {
+                  setPreviewPos({ x: r.left, y: r.top });
+                }
+              }}
+            >
               <div className="text-[9px] text-gray-500">动画预览 f{previewFrame}</div>
               <div className="flex items-center gap-1">
                 {characterNodes && characterNodes.length > 0 && (
