@@ -152,10 +152,12 @@ modifierRegistry.set('pixel_edit', (params, pixels, currentFrame) => {
             for (let dx = 0; dx < cmd.size; dx++) {
               const px = Math.round(pt.x) + dx - Math.floor(cmd.size / 2);
               const py = Math.round(pt.y) + dy - Math.floor(cmd.size / 2);
-              if (py >= 0 && py < pixels.length && px >= 0 && px < pixels[0].length) {
-                const prev = pixels[py][px];
+              const rowWidth = pixels[0]?.length ?? 0;
+              if (py >= 0 && py < pixels.length && px >= 0 && px < rowWidth) {
+                const prev = pixels[py]?.[px];
                 if (cmd.blendMode === 'normal') {
-                  pixels[py][px] = cmd.color;
+                  // normal 也应用 opacity（与 multiply/screen/overlay 一致）
+                  pixels[py]![px] = opacity < 1 && prev ? lerpColor(prev, cmd.color, opacity) : cmd.color;
                 } else if (cmd.blendMode === 'multiply' && prev) {
                   pixels[py][px] = blendColorsPixel(prev, cmd.color, 'multiply', opacity);
                 } else if (cmd.blendMode === 'screen' && prev) {
@@ -176,8 +178,9 @@ modifierRegistry.set('pixel_edit', (params, pixels, currentFrame) => {
           for (let dx = 0; dx < cmd.size; dx++) {
             const px = Math.round(pt.x) + dx - Math.floor(cmd.size / 2);
             const py = Math.round(pt.y) + dy - Math.floor(cmd.size / 2);
-            if (py >= 0 && py < pixels.length && px >= 0 && px < pixels[0].length) {
-              pixels[py][px] = null; // transparent
+            const rowWidth = pixels[0]?.length ?? 0;
+            if (py >= 0 && py < pixels.length && px >= 0 && px < rowWidth) {
+              pixels[py]![px] = null; // transparent
             }
           }
         }
@@ -186,10 +189,11 @@ modifierRegistry.set('pixel_edit', (params, pixels, currentFrame) => {
       // Flood fill from first point
       if (cmd.points.length > 0) {
         const startPt = cmd.points[0];
-        const sx = Math.round(startPt.x);
-        const sy = Math.round(startPt.y);
-        if (sy >= 0 && sy < pixels.length && sx >= 0 && sx < pixels[0].length) {
-          const targetColor = pixels[sy][sx];
+        const sx = Math.round(startPt!.x);
+        const sy = Math.round(startPt!.y);
+        const rowWidth = pixels[0]?.length ?? 0;
+        if (sy >= 0 && sy < pixels.length && sx >= 0 && sx < rowWidth) {
+          const targetColor = pixels[sy]?.[sx];
           if (targetColor !== cmd.color) {
             floodFillPixels(pixels, sx, sy, targetColor, cmd.color);
           }
@@ -1108,7 +1112,8 @@ function applySphereRotate(
 function floodFillPixels(pixels: PixelColor[][], startX: number, startY: number, targetColor: PixelColor, fillColor: string): void {
   if (targetColor === fillColor) return;
   const height = pixels.length;
-  const width = pixels[0].length;
+  const width = pixels[0]?.length ?? 0;
+  if (width === 0 || height === 0) return;
   const stack: [number, number][] = [[startX, startY]];
   const visited = new Set<string>();
   while (stack.length > 0) {

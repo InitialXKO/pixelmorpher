@@ -32,9 +32,39 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   // blend: 按 mode 混合（add/multiply/converge）
   blend: { inputs: ['a', 'b', 't'], outputs: ['out'], params: ['mode', 'convergeSpeed'] },
   sin: { inputs: ['x'], outputs: ['out'], params: [] },
+  // waveform: 参数驱动波形发生器
+  waveform: { inputs: ['t'], outputs: ['out'], params: ['waveform', 'amplitude', 'baseValue', 'endValue', 'period', 'phase', 'damping'] },
+  // keyframes: 参数关键帧插值
+  keyframes: { inputs: ['t'], outputs: ['out'], params: ['frames', 'values', 'interpolation'] },
   cos: { inputs: ['x'], outputs: ['out'], params: [] },
 
   // ---- 程序化动画 ----
+  // 基础变换
+  translate: {
+    inputs: ['t', 'pixels', 'gate'],
+    outputs: ['outX', 'outY', 'translateX', 'translateY', 'pixels'],
+    params: ['offsetX', 'offsetY'],
+  },
+  rotate: {
+    inputs: ['t', 'pixels', 'gate'],
+    outputs: ['out', 'outRotation', 'rotation', 'pixels'],
+    params: ['angle', 'pivotOffsetX', 'pivotOffsetY'],
+  },
+  uniform_scale: {
+    inputs: ['t', 'pixels', 'gate'],
+    outputs: ['out', 'outScaleX', 'outScaleY', 'scaleX', 'scaleY', 'pixels'],
+    params: ['scale', 'pivotOffsetX', 'pivotOffsetY'],
+  },
+  skew: {
+    inputs: ['t', 'pixels', 'gate'],
+    outputs: ['outX', 'outY', 'skewX', 'skewY', 'pixels'],
+    params: ['skewX', 'skewY'],
+  },
+  non_uniform_stretch: {
+    inputs: ['t', 'pixels', 'gate'],
+    outputs: ['outScaleX', 'outScaleY', 'scaleX', 'scaleY', 'pixels'],
+    params: ['scaleX', 'scaleY'],
+  },
   // pendulum: 输出 outRotation（主）+ out（兼容）
   pendulum: {
     inputs: ['t', 'pixels'],
@@ -234,6 +264,28 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     outputs: ['pixels'],
     params: ['brushCommands', 'opacity'],
   },
+  // 像素修改器（registry 委托）
+  color_replace: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  cylinder_rotate: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  dither: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  flip: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  mirror: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  outline: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  pixel_displace: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  sphere_rotate: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  // 像素特效（直通桩）
+  afterimage: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: ['count', 'opacity', 'spacing', 'angle'] },
+  bloom: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  glow: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  motion_blur: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: ['length', 'decay', 'angle'] },
+  outline_emphasis: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  scanlines: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  color_lut: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  canvas_mask: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  pixel_zoom: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
+  // 复杂系统（直通桩）
+  particle: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: ['rate', 'speed', 'angle', 'life', 'color', 'gravity'] },
+  simple_physics: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
   // 上屏终点：接收像素图和变换，渲染到画布（管线终点）
   screen: {
     inputs: ['pixels', 'translateX', 'translateY', 'rotation', 'scaleX', 'scaleY'],

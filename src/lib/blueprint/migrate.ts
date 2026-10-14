@@ -143,6 +143,64 @@ export function modifiersToBlueprint(
       inputs.gate = { nodeId: gateId, output: 'out' };
     }
 
+    // 参数驱动 → 波形节点：每个 paramDriver 生成一个 waveform 节点，连到对应参数输入
+    // （蓝图原生：驱动是节点，不是字段）
+    const paramDrivers = (mod as any).paramDrivers;
+    if (paramDrivers && paramDrivers.length > 0) {
+      for (const driver of paramDrivers) {
+        if (!driver.enabled) continue;
+        const driverId = `drv_${modId}_${driver.paramName}`;
+        nodes.push({
+          id: driverId,
+          type: 'waveform',
+          inputs: { t: { nodeId: timeId } },
+          params: {
+            waveform: driver.waveform ?? 'sine',
+            amplitude: Number(driver.amplitude ?? 1),
+            baseValue: Number(driver.baseValue ?? 0),
+            endValue: Number(driver.endValue ?? 1),
+            period: Number(driver.period ?? 30),
+            phase: Number(driver.phase ?? 0),
+            damping: Number(driver.damping ?? 0.1),
+          },
+        });
+        // 连到修改器节点的参数输入（覆盖静态 params）
+        inputs[driver.paramName] = { nodeId: driverId, output: 'out' };
+        // 从静态 params 删除（避免混淆）
+        delete params[driver.paramName];
+      }
+    }
+    // paramKeyframes → keyframes 节点：每个有关键帧的参数生成一个节点
+    const paramKeyframes = (mod as any).paramKeyframes;
+    if (paramKeyframes && paramKeyframes.length > 0) {
+      // 收集每个参数的关键帧轨道
+      const tracks = new Map<string, { frame: number; value: number }[]>();
+      for (const kf of paramKeyframes) {
+        for (const [paramName, value] of Object.entries(kf.params as Record<string, unknown>)) {
+          const numVal = Number(value);
+          if (Number.isNaN(numVal)) continue; // 只处理数值参数
+          if (!tracks.has(paramName)) tracks.set(paramName, []);
+          tracks.get(paramName)!.push({ frame: kf.frame, value: numVal });
+        }
+      }
+      for (const [paramName, track] of tracks) {
+        const kfId = `kf_${modId}_${paramName}`;
+        const frames = track.map(t => t.frame);
+        const values = track.map(t => t.value);
+        nodes.push({
+          id: kfId,
+          type: 'keyframes',
+          inputs: { t: { nodeId: timeId } },
+          params: {
+            frames: JSON.stringify(frames),
+            values: JSON.stringify(values),
+            interpolation: 'linear',
+          },
+        });
+        inputs[paramName] = { nodeId: kfId, output: 'out' };
+        delete params[paramName];
+      }
+    }
     nodes.push({ id: modId, type: mod.type, inputs, params });
 
     // 像素修改器：更新像素链
@@ -154,6 +212,25 @@ export function modifiersToBlueprint(
     // 按修改器类型连到 transform 的对应端口
     // （老系统里这些修改器产出 rotation/translate/scale）
     switch (mod.type) {
+      case 'translate':
+        connectToPort('translateX', modId, 'outX', mod.blendMode ?? 'add', mod.params, gateId);
+        connectToPort('translateY', modId, 'outY', mod.blendMode ?? 'add', mod.params, gateId);
+        break;
+      case 'rotate':
+        connectToPort('rotation', modId, 'outRotation', mod.blendMode ?? 'add', mod.params, gateId);
+        break;
+      case 'uniform_scale':
+        connectToPort('scaleX', modId, 'outScaleX', mod.blendMode ?? 'add', mod.params, gateId);
+        connectToPort('scaleY', modId, 'outScaleY', mod.blendMode ?? 'add', mod.params, gateId);
+        break;
+      case 'non_uniform_stretch':
+        connectToPort('scaleX', modId, 'outScaleX', mod.blendMode ?? 'add', mod.params, gateId);
+        connectToPort('scaleY', modId, 'outScaleY', mod.blendMode ?? 'add', mod.params, gateId);
+        break;
+      case 'skew':
+        // screen 暂不支持 skew，先连 rotation 近似（或等待渲染器扩展）
+        connectToPort('rotation', modId, 'outX', mod.blendMode ?? 'add', mod.params, gateId);
+        break;
       case 'pendulum':
         connectToPort('rotation', modId, 'out', mod.blendMode ?? 'add', mod.params, gateId);
         break;
@@ -326,7 +403,64 @@ export function addModifierNodeToBlueprint(
     if (prevNode) {
       inputs.pixels = { nodeId: prevNode.id, output: 'pixels' };
     }
-    nodes.push({ id: modId, type: mod.type, inputs, params });
+    // 参数驱动 → 波形节点
+    const pdr1 = (mod as any).paramDrivers;
+    if (pdr1 && pdr1.length > 0) {
+      for (const driver of pdr1) {
+        if (!driver.enabled) continue;
+        const driverId = `drv_${modId}_${driver.paramName}`;
+        if (!nodes.find(n => n.id === driverId)) {
+          nodes.push({
+            id: driverId,
+            type: 'waveform',
+            inputs: { t: { nodeId: timeId } },
+            params: {
+              waveform: driver.waveform ?? 'sine',
+              amplitude: Number(driver.amplitude ?? 1),
+              baseValue: Number(driver.baseValue ?? 0),
+              endValue: Number(driver.endValue ?? 1),
+              period: Number(driver.period ?? 30),
+              phase: Number(driver.phase ?? 0),
+              damping: Number(driver.damping ?? 0.1),
+            },
+          });
+        }
+        inputs[driver.paramName] = { nodeId: driverId, output: 'out' };
+        delete params[driver.paramName];
+      }
+    }
+    // paramKeyframes → keyframes 节点
+    const pkf1 = (mod as any).paramKeyframes;
+    if (pkf1 && pkf1.length > 0) {
+      const tracks = new Map<string, { frame: number; value: number }[]>();
+      for (const kf of pkf1) {
+        for (const [paramName, value] of Object.entries(kf.params as Record<string, unknown>)) {
+          const numVal = Number(value);
+          if (Number.isNaN(numVal)) continue;
+          if (!tracks.has(paramName)) tracks.set(paramName, []);
+          tracks.get(paramName)!.push({ frame: kf.frame, value: numVal });
+        }
+      }
+      for (const [paramName, track] of tracks) {
+        const kfId = `kf_${modId}_${paramName}`;
+        if (!nodes.find(n => n.id === kfId)) {
+          nodes.push({
+            id: kfId,
+            type: 'keyframes',
+            inputs: { t: { nodeId: timeId } },
+            params: {
+              frames: JSON.stringify(track.map(t => t.frame)),
+              values: JSON.stringify(track.map(t => t.value)),
+              interpolation: 'linear',
+            },
+          });
+        }
+        inputs[paramName] = { nodeId: kfId, output: 'out' };
+        delete params[paramName];
+      }
+    }
+    const pixelNodeDef: import('./ir').BlueprintNode = { id: modId, type: mod.type, inputs, params };
+    nodes.push(pixelNodeDef);
     // 更新 screen.pixels 指向新节点
     const newScreen = {
       ...screenNode,
@@ -336,7 +470,64 @@ export function addModifierNodeToBlueprint(
     nodes[si] = newScreen;
   } else {
     // 变换类：连到 screen 的对应端口（端口已有源则按 blendMode 建混合节点）
-    nodes.push({ id: modId, type: mod.type, inputs, params });
+    // 参数驱动 → 波形节点
+    const pdr2 = (mod as any).paramDrivers;
+    if (pdr2 && pdr2.length > 0) {
+      for (const driver of pdr2) {
+        if (!driver.enabled) continue;
+        const driverId = `drv_${modId}_${driver.paramName}`;
+        if (!nodes.find(n => n.id === driverId)) {
+          nodes.push({
+            id: driverId,
+            type: 'waveform',
+            inputs: { t: { nodeId: timeId } },
+            params: {
+              waveform: driver.waveform ?? 'sine',
+              amplitude: Number(driver.amplitude ?? 1),
+              baseValue: Number(driver.baseValue ?? 0),
+              endValue: Number(driver.endValue ?? 1),
+              period: Number(driver.period ?? 30),
+              phase: Number(driver.phase ?? 0),
+              damping: Number(driver.damping ?? 0.1),
+            },
+          });
+        }
+        inputs[driver.paramName] = { nodeId: driverId, output: 'out' };
+        delete params[driver.paramName];
+      }
+    }
+    // paramKeyframes → keyframes 节点
+    const pkf2 = (mod as any).paramKeyframes;
+    if (pkf2 && pkf2.length > 0) {
+      const tracks = new Map<string, { frame: number; value: number }[]>();
+      for (const kf of pkf2) {
+        for (const [paramName, value] of Object.entries(kf.params as Record<string, unknown>)) {
+          const numVal = Number(value);
+          if (Number.isNaN(numVal)) continue;
+          if (!tracks.has(paramName)) tracks.set(paramName, []);
+          tracks.get(paramName)!.push({ frame: kf.frame, value: numVal });
+        }
+      }
+      for (const [paramName, track] of tracks) {
+        const kfId = `kf_${modId}_${paramName}`;
+        if (!nodes.find(n => n.id === kfId)) {
+          nodes.push({
+            id: kfId,
+            type: 'keyframes',
+            inputs: { t: { nodeId: timeId } },
+            params: {
+              frames: JSON.stringify(track.map(t => t.frame)),
+              values: JSON.stringify(track.map(t => t.value)),
+              interpolation: 'linear',
+            },
+          });
+        }
+        inputs[paramName] = { nodeId: kfId, output: 'out' };
+        delete params[paramName];
+      }
+    }
+    const xformNodeDef: import('./ir').BlueprintNode = { id: modId, type: mod.type, inputs, params };
+    nodes.push(xformNodeDef);
     const newScreenInputs = { ...screenNode.inputs };
     const blendMode = (mod as any).blendMode ?? 'add';
     
@@ -389,6 +580,21 @@ export function addModifierNodeToBlueprint(
     
     // 按类型连端口（与 modifiersToBlueprint 的 switch 一致）
     switch (mod.type) {
+      case 'translate':
+        connectPort('translateX', 'outX');
+        connectPort('translateY', 'outY');
+        break;
+      case 'rotate':
+        connectPort('rotation', 'outRotation');
+        break;
+      case 'uniform_scale':
+      case 'non_uniform_stretch':
+        connectPort('scaleX', 'outScaleX');
+        connectPort('scaleY', 'outScaleY');
+        break;
+      case 'skew':
+        connectPort('rotation', 'outX');
+        break;
       case 'pendulum': connectPort('rotation', 'out'); break;
       case 'wobble':
         connectPort('rotation', 'outRotation');
@@ -434,9 +640,10 @@ export function removeModifierNodeFromBlueprint(
   let nodes = bp.nodes.filter(n => n.id !== targetId);
   // 删除相关的辅助节点（blend/mul/gate，加 add_ 兼容旧数据）
   nodes = nodes.filter(n => {
-    const isAux = n.type === 'blend' || n.type === 'add' || n.type === 'mul' || n.type === 'timeGate';
+    const isAux = n.type === 'blend' || n.type === 'add' || n.type === 'mul' || n.type === 'timeGate' || n.type === 'waveform' || n.type === 'keyframes';
     const matches = n.id.startsWith(`blend_${targetId}`) || n.id.startsWith(`add_${targetId}`) ||
-                    n.id.startsWith(`mul_${targetId}`) || n.id === `gate_${targetId}`;
+                    n.id.startsWith(`mul_${targetId}`) || n.id === `gate_${targetId}` ||
+                    n.id.startsWith(`drv_${targetId}_`) || n.id.startsWith(`kf_${targetId}_`);
     return !(isAux && matches);
   });
   

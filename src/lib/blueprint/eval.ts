@@ -43,6 +43,61 @@ type NodeEvaluator = (
   ctx: BlueprintEvalContext,
 ) => Record<string, BlueprintValue>;
 
+// ---- 像素颜色辅助函数 ----
+function parseHex(color: string): [number, number, number] | null {
+  const m = color.match(/^#([0-9a-f]{6})$/i);
+  if (!m || !m[1]) return null;
+  const hex = m[1];
+  return [
+    parseInt(hex.slice(0, 2), 16),
+    parseInt(hex.slice(2, 4), 16),
+    parseInt(hex.slice(4, 6), 16),
+  ];
+}
+
+function toHex(r: number, g: number, b: number): string {
+  const c = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+
+/** 颜色混合：mixColor(a, b, t) = a*(1-t) + b*t */
+function mixColor(a: string, b: string, t: number): string {
+  const ca = parseHex(a);
+  const cb = parseHex(b);
+  if (!ca || !cb) return a;
+  return toHex(
+    ca[0] * (1 - t) + cb[0] * t,
+    ca[1] * (1 - t) + cb[1] * t,
+    ca[2] * (1 - t) + cb[2] * t,
+  );
+}
+
+/** LUT 预设变换 */
+function applyLutPreset(color: string, preset: string): string {
+  const c = parseHex(color);
+  if (!c) return color;
+  let [r, g, b] = c;
+  switch (preset) {
+    case 'grayscale':
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      return toHex(lum, lum, lum);
+    case 'sepia':
+      return toHex(
+        Math.min(255, 0.393 * r + 0.769 * g + 0.189 * b),
+        Math.min(255, 0.349 * r + 0.686 * g + 0.168 * b),
+        Math.min(255, 0.272 * r + 0.534 * g + 0.131 * b),
+      );
+    case 'invert':
+      return toHex(255 - r, 255 - g, 255 - b);
+    case 'warm':
+      return toHex(Math.min(255, r * 1.1), g, Math.max(0, b * 0.9));
+    case 'cool':
+      return toHex(Math.max(0, r * 0.9), g, Math.min(255, b * 1.1));
+    default:
+      return color;
+  }
+}
+
 /** 内置节点类型 */
 export const EVALUATORS: Record<string, NodeEvaluator> = {
   // ---- 源 ----
@@ -113,7 +168,159 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     // default: add
     return { out: num(a + b) };
   },
+  // ---- 基础变换 ----
+  translate: (n, i, ctx): Record<string, BlueprintValue> => {
+    const offsetX = asNumber(i.offsetX ?? num(Number(n.params.offsetX ?? 0)));
+    const offsetY = asNumber(i.offsetY ?? num(Number(n.params.offsetY ?? 0)));
+    const result: Record<string, BlueprintValue> = {
+      outX: num(offsetX), outY: num(offsetY),
+      translateX: num(offsetX), translateY: num(offsetY),
+    };
+    if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
+    return result;
+  },
+  rotate: (n, i, ctx): Record<string, BlueprintValue> => {
+    const angle = asNumber(i.angle ?? num(Number(n.params.angle ?? 0)));
+    const result: Record<string, BlueprintValue> = {
+      out: num(angle), outRotation: num(angle), rotation: num(angle),
+    };
+    if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
+    return result;
+  },
+  uniform_scale: (n, i, ctx): Record<string, BlueprintValue> => {
+    const scale = asNumber(i.scale ?? num(Number(n.params.scale ?? 1)));
+    const result: Record<string, BlueprintValue> = {
+      out: num(scale), outScaleX: num(scale), outScaleY: num(scale),
+      scaleX: num(scale), scaleY: num(scale),
+    };
+    if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
+    return result;
+  },
+  skew: (n, i, ctx): Record<string, BlueprintValue> => {
+    const skewX = asNumber(i.skewX ?? num(Number(n.params.skewX ?? 0)));
+    const skewY = asNumber(i.skewY ?? num(Number(n.params.skewY ?? 0)));
+    // screen 暂不支持 skew，先输出数值（渲染器按需扩展）
+    const result: Record<string, BlueprintValue> = {
+      outX: num(skewX), outY: num(skewY), skewX: num(skewX), skewY: num(skewY),
+    };
+    if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
+    return result;
+  },
+  non_uniform_stretch: (n, i, ctx): Record<string, BlueprintValue> => {
+    const scaleX = asNumber(i.scaleX ?? num(Number(n.params.scaleX ?? 1)));
+    const scaleY = asNumber(i.scaleY ?? num(Number(n.params.scaleY ?? 1)));
+    const result: Record<string, BlueprintValue> = {
+      outScaleX: num(scaleX), outScaleY: num(scaleY),
+      scaleX: num(scaleX), scaleY: num(scaleY),
+    };
+    if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
+    return result;
+  },
   sin: (_n, i) => ({ out: num(Math.sin(asNumber(i.x ?? num(0)))) }),
+  // waveform: 参数驱动波形发生器
+  // params: waveform (sine/triangle/square/sawtooth/linear_ramp/exponential_decay/spring_oscillate/perlin_noise)
+  //         amplitude, baseValue, endValue, period, phase, damping
+  // keyframes: 参数关键帧插值
+  // params: frames (JSON 数组，如 "[0,30,60]"), values (JSON 数组，如 "[10,50,10]")
+  //         interpolation ('linear' | 'step')
+  // 输入 t，输出插值后的值
+  keyframes: (n, i, ctx): Record<string, BlueprintValue> => {
+    const t = asNumber(i.t ?? num(ctx.frame));
+    const interpolation = String(n.params.interpolation ?? 'linear');
+    let frames: number[] = [];
+    let values: number[] = [];
+    try {
+      frames = JSON.parse(String(n.params.frames ?? '[]'));
+      values = JSON.parse(String(n.params.values ?? '[]'));
+    } catch {
+      return { out: num(0) };
+    }
+    if (frames.length === 0 || values.length === 0) return { out: num(0) };
+    if (frames.length !== values.length) return { out: num(values[0] ?? 0) };
+    
+    // 排序（按帧）
+    const pairs = frames.map((f, idx) => ({ f, v: values[idx]! })).sort((a, b) => a.f - b.f);
+    
+    // 边界：t 在第一个之前 → 第一个值；t 在最后一个之后 → 最后一个值（hold）
+    if (t <= pairs[0]!.f) return { out: num(pairs[0]!.v) };
+    if (t >= pairs[pairs.length - 1]!.f) return { out: num(pairs[pairs.length - 1]!.v) };
+    
+    // 找包围区间
+    for (let k = 0; k < pairs.length - 1; k++) {
+      const a = pairs[k]!;
+      const b = pairs[k + 1]!;
+      if (t >= a.f && t <= b.f) {
+        if (interpolation === 'step' || b.f === a.f) {
+          return { out: num(a.v) };
+        }
+        // linear
+        const p = (t - a.f) / (b.f - a.f);
+        return { out: num(a.v + (b.v - a.v) * p) };
+      }
+    }
+    return { out: num(pairs[pairs.length - 1]!.v) };
+  },
+  waveform: (n, i, ctx): Record<string, BlueprintValue> => {
+    const t = asNumber(i.t ?? num(ctx.frame));
+    const waveform = String(n.params.waveform ?? 'sine');
+    const amplitude = Number(n.params.amplitude ?? 1);
+    const baseValue = Number(n.params.baseValue ?? 0);
+    const endValue = Number(n.params.endValue ?? 1);
+    const period = Math.max(1, Number(n.params.period ?? 30));
+    const phaseDeg = Number(n.params.phase ?? 0);
+    const phase = (phaseDeg * Math.PI) / 180;
+    const damping = Number(n.params.damping ?? 0.1);
+    
+    const phaseT = (2 * Math.PI * t) / period + phase;
+    let value = 0;
+    
+    switch (waveform) {
+      case 'sine':
+        value = baseValue + amplitude * Math.sin(phaseT);
+        break;
+      case 'triangle': {
+        const p = ((t / period + phaseDeg / 360) % 1 + 1) % 1;
+        value = baseValue + amplitude * (p < 0.5 ? 4 * p - 1 : 3 - 4 * p);
+        break;
+      }
+      case 'square':
+        value = baseValue + amplitude * (Math.sin(phaseT) >= 0 ? 1 : -1);
+        break;
+      case 'sawtooth': {
+        const p = ((t / period + phaseDeg / 360) % 1 + 1) % 1;
+        value = baseValue + amplitude * (2 * p - 1);
+        break;
+      }
+      case 'linear_ramp': {
+        // 从 baseValue 线性到 endValue，period 帧完成，之后保持 endValue
+        const p = Math.min(1, Math.max(0, t / period));
+        value = baseValue + (endValue - baseValue) * p;
+        break;
+      }
+      case 'exponential_decay': {
+        value = endValue + (baseValue - endValue) * Math.exp(-damping * t);
+        break;
+      }
+      case 'spring_oscillate': {
+        // 弹簧阻尼振荡
+        value = baseValue + amplitude * Math.exp(-damping * t) * Math.cos(phaseT);
+        break;
+      }
+      case 'perlin_noise': {
+        // 简化版：用正弦叠加近似 Perlin
+        value = baseValue + amplitude * (
+          0.5 * Math.sin(phaseT) +
+          0.3 * Math.sin(phaseT * 2.7 + 1.3) +
+          0.2 * Math.sin(phaseT * 6.1 + 2.1)
+        );
+        break;
+      }
+      default:
+        value = baseValue;
+    }
+    
+    return { out: num(value) };
+  },
   cos: (_n, i) => ({ out: num(Math.cos(asNumber(i.x ?? num(0)))) }),
 
   // ---- 缓动 ----
@@ -721,6 +928,389 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const result = handler(params, inputPixels, ctx.frame);
     return { pixels: pixelsVal(result) };
   },
+  // ---- 像素修改器（委托 modifierRegistry）----
+  // 通用模板：从 registry 取处理器，输入像素 → 输出像素
+  ...(['color_replace', 'cylinder_rotate', 'dither', 'flip', 'mirror', 'outline', 'pixel_displace', 'sphere_rotate'] as const).reduce((acc, type) => {
+    acc[type] = ((n, i, ctx): Record<string, BlueprintValue> => {
+      const inputPixels = asPixels(i.pixels as BlueprintValue);
+      if (!inputPixels) return {};
+      const { modifierRegistry } = require('../engine/pixel-modifiers');
+      const handler = modifierRegistry.get(type);
+      if (!handler) return { pixels: i.pixels as BlueprintValue }; // 无实现时直通
+      const params: Record<string, any> = {};
+      for (const [k, v] of Object.entries(n.params)) params[k] = v;
+      for (const [k, v] of Object.entries(i)) {
+        if (k !== 'pixels' && k !== 't' && k !== 'gate') {
+          try { params[k] = asNumber(v as BlueprintValue); } catch { /* 忽略非数值 */ }
+        }
+      }
+      const result = handler(params, inputPixels, ctx.frame);
+      return { pixels: pixelsVal(result) };
+    }) as NodeEvaluator;
+    return acc;
+  }, {} as Record<string, NodeEvaluator>),
+  // ---- 像素特效：真实实现 ----
+  // scanlines: 扫描线，每 lineSpacing 行压暗
+  scanlines: (n, i): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const spacing = Math.max(1, Math.round(Number(n.params.lineSpacing ?? 3)));
+    const opacity = Math.max(0, Math.min(1, Number(n.params.lineOpacity ?? 0.3)));
+    const result = inputPixels.map((row, y) => {
+      if (y % spacing !== 0) return [...row];
+      return row.map((px) => {
+        if (!px) return px;
+        // 压暗：与黑色按 opacity 混合
+        return mixColor(px, '#000000', opacity);
+      });
+    });
+    return { pixels: pixelsVal(result) };
+  },
+  // canvas_mask: 画布遮罩，按形状裁剪
+  canvas_mask: (n, i): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const shape = String(n.params.shape ?? 'rect');
+    const margin = Math.max(0, Number(n.params.margin ?? 0));
+    const feather = Math.max(0, Number(n.params.feather ?? 0));
+    const cx = w / 2, cy = h / 2;
+    const result = inputPixels.map((row, y) =>
+      row.map((px, x) => {
+        if (!px) return px;
+        let inside = true;
+        let dist = 0;
+        if (shape === 'circle' || shape === 'ellipse') {
+          const rx = w / 2 - margin, ry = h / 2 - margin;
+          const dx = (x - cx) / Math.max(1, rx);
+          const dy = (y - cy) / Math.max(1, ry);
+          const d = Math.sqrt(dx * dx + dy * dy);
+          inside = d <= 1;
+          dist = d;
+        } else {
+          // rect
+          inside = x >= margin && x < w - margin && y >= margin && y < h - margin;
+        }
+        if (!inside) return null;
+        // feather 羽化：边缘渐隐（简化：暂不实现透明度渐变，直接保留）
+        return px;
+      })
+    );
+    return { pixels: pixelsVal(result) };
+  },
+  // pixel_zoom: 像素化缩放（最近邻）
+  pixel_zoom: (n, i): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const scale = Math.max(0.1, Number(n.params.scale ?? 2));
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const nh = Math.max(1, Math.round(h * scale));
+    const nw = Math.max(1, Math.round(w * scale));
+    const result: import('../types').PixelGrid = [];
+    for (let y = 0; y < nh; y++) {
+      const row: import('../types').PixelColor[] = [];
+      const sy = Math.min(h - 1, Math.floor(y / scale));
+      for (let x = 0; x < nw; x++) {
+        const sx = Math.min(w - 1, Math.floor(x / scale));
+        row.push(inputPixels[sy]?.[sx] ?? null);
+      }
+      result.push(row);
+    }
+    return { pixels: pixelsVal(result) };
+  },
+  // color_lut: 全局颜色查找表（预设变换）
+  color_lut: (n, i): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const preset = String(n.params.preset ?? 'none');
+    const intensity = Math.max(0, Math.min(1, Number(n.params.intensity ?? 1)));
+    if (preset === 'none' || intensity === 0) return { pixels: i.pixels as BlueprintValue };
+    const result = inputPixels.map((row) =>
+      row.map((px) => {
+        if (!px) return px;
+        const transformed = applyLutPreset(px, preset);
+        return mixColor(px, transformed, intensity);
+      })
+    );
+    return { pixels: pixelsVal(result) };
+  },
+  // outline_emphasis: 轮廓强调，检测边缘并加粗/着色
+  outline_emphasis: (n, i): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const thickness = Math.max(1, Math.round(Number(n.params.thickness ?? 1)));
+    const color = String(n.params.color ?? '#000000');
+    // 找边缘：有像素但邻居无像素的位置
+    const isEdge: boolean[][] = [];
+    for (let y = 0; y < h; y++) {
+      isEdge[y] = [];
+      for (let x = 0; x < w; x++) {
+        if (!inputPixels[y]?.[x]) { isEdge[y]![x] = false; continue; }
+        let edge = false;
+        for (let dy = -1; dy <= 1 && !edge; dy++) {
+          for (let dx = -1; dx <= 1 && !edge; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h || !inputPixels[ny]?.[nx]) {
+              edge = true;
+            }
+          }
+        }
+        isEdge[y]![x] = edge;
+      }
+    }
+    const result = inputPixels.map((row, y) =>
+      row.map((px, x) => {
+        if (!px) return px;
+        // 边缘像素 → 混入轮廓色
+        if (isEdge[y]?.[x]) {
+          return mixColor(px, color, 0.7);
+        }
+        return px;
+      })
+    );
+    return { pixels: pixelsVal(result) };
+  },
+  // bloom: 泛光，亮部扩散
+  bloom: (n, i): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const threshold = Math.max(0, Math.min(255, Number(n.params.threshold ?? 200)));
+    const radius = Math.max(1, Math.round(Number(n.params.radius ?? 2)));
+    const intensity = Math.max(0, Math.min(1, Number(n.params.intensity ?? 0.5)));
+    // 提取亮部
+    const bright: boolean[][] = inputPixels.map((row) =>
+      row.map((px) => {
+        if (!px) return false;
+        const c = parseHex(px);
+        if (!c) return false;
+        const lum = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+        return lum >= threshold;
+      })
+    );
+    // 简单模糊扩散：亮部周围 radius 范围内加光
+    const result = inputPixels.map((row, y) =>
+      row.map((px, x) => {
+        if (!px) return px;
+        let glow = 0;
+        for (let dy = -radius; dy <= radius; dy++) {
+          for (let dx = -radius; dx <= radius; dx++) {
+            const nx = x + dx, ny = y + dy;
+            if (nx >= 0 && nx < w && ny >= 0 && ny < h && bright[ny]?.[nx]) {
+              const d = Math.sqrt(dx * dx + dy * dy);
+              if (d <= radius) glow = Math.max(glow, 1 - d / (radius + 1));
+            }
+          }
+        }
+        if (glow > 0) {
+          return mixColor(px, '#ffffff', glow * intensity);
+        }
+        return px;
+      })
+    );
+    return { pixels: pixelsVal(result) };
+  },
+  // glow: 光晕，像素周围加指定颜色的光
+  glow: (n, i): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const radius = Math.max(1, Math.round(Number(n.params.radius ?? 3)));
+    const color = String(n.params.color ?? '#ffff00');
+    const intensity = Math.max(0, Math.min(1, Number(n.params.intensity ?? 0.5)));
+    const result = inputPixels.map((row, y) =>
+      row.map((px, x) => {
+        // 只在透明像素上加光晕（已有像素保持）
+        if (px) return px;
+        let glow = 0;
+        for (let dy = -radius; dy <= radius; dy++) {
+          for (let dx = -radius; dx <= radius; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx >= 0 && nx < w && ny >= 0 && ny < h && inputPixels[ny]?.[nx]) {
+              const d = Math.sqrt(dx * dx + dy * dy);
+              if (d <= radius) glow = Math.max(glow, 1 - d / (radius + 1));
+            }
+          }
+        }
+        // 光晕强度足够则显示颜色（按强度调暗）
+        if (glow * intensity > 0.3) {
+          const c = parseHex(color);
+          if (c) {
+            const dim = glow * intensity;
+            return toHex(c[0] * dim, c[1] * dim, c[2] * dim);
+          }
+          return color;
+        }
+        return px;
+      })
+    );
+    return { pixels: pixelsVal(result) };
+  },
+  // ---- 复杂系统（暂未实现：直通）----
+  // afterimage: 残影，拖尾效果（按 angle 方向复制多份渐隐）
+  afterimage: (n, i): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const count = Math.max(1, Math.round(Number(n.params.count ?? 3)));
+    const opacity = Math.max(0, Math.min(1, Number(n.params.opacity ?? 0.5)));
+    const spacing = Math.round(Number(n.params.spacing ?? 4));
+    const angleDeg = Number(n.params.angle ?? 180);
+    const angleRad = (angleDeg * Math.PI) / 180;
+    const dx = Math.cos(angleRad);
+    const dy = Math.sin(angleRad);
+    // 结果画布扩大以容纳拖尾（按方向计算包围盒）
+    const maxOx = Math.abs(Math.round(dx * count * spacing));
+    const maxOy = Math.abs(Math.round(dy * count * spacing));
+    const nw = w + maxOx;
+    const nh = h + maxOy;
+    const offX = dx < 0 ? maxOx : 0;
+    const offY = dy < 0 ? maxOy : 0;
+    const result: import('../types').PixelGrid = [];
+    for (let y = 0; y < nh; y++) {
+      result.push(new Array(nw).fill(null));
+    }
+    // 原图 + 拖尾按角度方向渐隐
+    for (let c = count; c >= 0; c--) {
+      const ox = Math.round(dx * (count - c) * spacing) + offX;
+      const oy = Math.round(dy * (count - c) * spacing) + offY;
+      const fade = c === 0 ? 1 : opacity * (1 - c / (count + 1));
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const px = inputPixels[y]?.[x];
+          if (!px) continue;
+          const nx = x + ox;
+          const ny = y + oy;
+          if (nx >= 0 && nx < nw && ny >= 0 && ny < nh) {
+            if (c === 0) {
+              result[ny]![nx] = px;
+            } else {
+              const existing = result[ny]?.[nx];
+              if (!existing) {
+                result[ny]![nx] = mixColor(px, '#000000', 1 - fade);
+              }
+            }
+          }
+        }
+      }
+    }
+    return { pixels: pixelsVal(result) };
+  },
+  // motion_blur: 运动模糊，按 angle 方向模糊
+  motion_blur: (n, i): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const length = Math.max(1, Math.round(Number(n.params.length ?? 5)));
+    const decay = Math.max(0, Math.min(1, Number(n.params.decay ?? 0.5)));
+    const angleDeg = Number(n.params.angle ?? 180);
+    const angleRad = (angleDeg * Math.PI) / 180;
+    const dx = Math.cos(angleRad);
+    const dy = Math.sin(angleRad);
+    const result = inputPixels.map((row, y) =>
+      row.map((px, x) => {
+        if (!px) return px;
+        // 按角度方向取 length 个像素混合
+        let r = 0, g = 0, b = 0, total = 0;
+        const c0 = parseHex(px);
+        if (!c0) return px;
+        for (let k = 0; k < length; k++) {
+          const nx = Math.round(x - dx * k);
+          const ny = Math.round(y - dy * k);
+          if (nx < 0 || nx >= w || ny < 0 || ny >= h) break;
+          const npx = inputPixels[ny]?.[nx];
+          if (!npx) continue;
+          const nc = parseHex(npx);
+          if (!nc) continue;
+          const weight = Math.pow(decay, k);
+          r += nc[0] * weight;
+          g += nc[1] * weight;
+          b += nc[2] * weight;
+          total += weight;
+        }
+        if (total === 0) return px;
+        return toHex(r / total, g / total, b / total);
+      })
+    );
+    return { pixels: pixelsVal(result) };
+  },
+  // particle: 粒子，程序化生成粒子（按 angle 方向发射）
+  particle: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    const h = inputPixels?.length ?? 32;
+    const w = inputPixels?.[0]?.length ?? 32;
+    const rate = Math.max(0, Number(n.params.rate ?? 10));
+    const speed = Number(n.params.speed ?? 2);
+    const angleDeg = Number(n.params.angle ?? 270);
+    const angleRad = (angleDeg * Math.PI) / 180;
+    const dirX = Math.cos(angleRad);
+    const dirY = Math.sin(angleRad);
+    const life = Math.max(1, Number(n.params.life ?? 30));
+    const color = String(n.params.color ?? '#ffffff');
+    const gravity = Number(n.params.gravity ?? 0.1);
+    const frame = ctx.frame;
+    // 复制原图
+    const result: import('../types').PixelGrid = inputPixels
+      ? inputPixels.map((row) => [...row])
+      : Array.from({ length: h }, () => new Array(w).fill(null));
+    // 生成粒子：基于帧数的确定性伪随机，按 angle 方向发射
+    const numParticles = Math.round(rate);
+    for (let p = 0; p < numParticles; p++) {
+      const seed = (p * 997 + Math.floor(frame / life) * 571) % 1000;
+      const age = frame % life;
+      const px0 = (seed * 13) % w;
+      const py0 = (seed * 7) % h;
+      // 粒子运动：按 angle 方向 + 重力（向下）
+      // 扩散：垂直于发射方向加随机偏移
+      const spread = Math.sin(seed * 3.7) * 0.5;
+      const px = Math.round(px0 + (dirX * speed + -dirY * spread) * age * 0.3);
+      const py = Math.round(py0 + (dirY * speed + dirX * spread) * age * 0.3 + gravity * age * age * 0.01);
+      if (px >= 0 && px < result[0]!.length && py >= 0 && py < result.length) {
+        const fade = 1 - age / life;
+        if (fade > 0.3) {
+          result[py]![px] = color;
+        }
+      }
+    }
+    return { pixels: pixelsVal(result) };
+  },
+  // simple_physics: 简单物理，整体位移（重力/弹性/阻尼）
+  simple_physics: (n, i, ctx): Record<string, BlueprintValue> => {
+    const gravity = Number(n.params.gravity ?? 0.5);
+    const elasticity = Math.max(0, Math.min(1, Number(n.params.elasticity ?? 0.5)));
+    const damping = Math.max(0, Math.min(1, Number(n.params.damping ?? 0.9)));
+    const frame = ctx.frame;
+    // 简化：计算 Y 方向位移（自由落体 + 弹性碰撞地面）
+    // 假设地面在 y=100，初始 y=0
+    const groundY = 100;
+    let y = 0;
+    let vy = 0;
+    for (let f = 0; f < frame; f++) {
+      vy += gravity;
+      vy *= damping;
+      y += vy;
+      if (y >= groundY) {
+        y = groundY;
+        vy = -vy * elasticity;
+      }
+    }
+    const result: Record<string, BlueprintValue> = {
+      outY: num(y), translateY: num(y),
+      outX: num(0), translateX: num(0),
+    };
+    if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
+    return result;
+  },
   // 上屏终点：接收像素图和变换，渲染到画布
   // 实际绘制由渲染管线通过 ctx.renderTarget 完成，此处仅收集参数
   screen: (n, i, ctx): Record<string, BlueprintValue> => {
@@ -912,6 +1502,8 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   div: '除',
   blend: '混合',
   sin: '正弦',
+  waveform: '波形',
+  keyframes: '关键帧',
   cos: '余弦',
   // 缓动
   ease: '缓动',
@@ -924,6 +1516,11 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   step: '帧触发',
   hold: '冻结',
   // 程序化动画
+  translate: '平移',
+  rotate: '旋转',
+  uniform_scale: '均匀缩放',
+  skew: '倾斜',
+  non_uniform_stretch: '非均匀拉伸',
   pendulum: '钟摆',
   breath: '呼吸',
   shake: '抖动',
@@ -955,6 +1552,27 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   pillow_stretch: '枕形拉伸',
   hyperbolic_stretch: '双曲拉伸',
   ring_ripple: '环形波纹',
+  // 新增补全
+  color_replace: '颜色替换',
+  cylinder_rotate: '圆柱旋转',
+  dither: '抖动',
+  flip: '翻转',
+  mirror: '镜像',
+  outline: '轮廓',
+  pixel_displace: '像素位移',
+  sphere_rotate: '球面旋转',
+  pixel_edit: '像素编辑',
+  afterimage: '残影',
+  bloom: '泛光',
+  glow: '光晕',
+  motion_blur: '运动模糊',
+  outline_emphasis: '轮廓强调',
+  scanlines: '扫描线',
+  color_lut: '颜色查找表',
+  canvas_mask: '画布遮罩',
+  pixel_zoom: '像素缩放',
+  particle: '粒子',
+  simple_physics: '简单物理',
 };
 
 export function getBlueprintNodeLabel(type: string): string {

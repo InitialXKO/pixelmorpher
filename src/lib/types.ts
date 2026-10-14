@@ -2239,6 +2239,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     params: [
       { name: 'length', label: '模糊长度', type: 'number', default: 5, min: 1, max: 50, step: 1 },
       { name: 'decay', label: '衰减曲线', type: 'number', default: 0.5, min: 0, max: 1, step: 0.05 },
+      { name: 'angle', label: '方向(°)', type: 'number', default: 180, min: 0, max: 360, step: 1 },
       { name: 'edgesOnly', label: '仅边缘', type: 'boolean', default: false },
     ],
   },
@@ -2261,6 +2262,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     params: [
       { name: 'rate', label: '发射速率', type: 'number', default: 10, min: 1, max: 100, step: 1 },
       { name: 'speed', label: '速度', type: 'number', default: 2, min: 0.5, max: 10, step: 0.5 },
+      { name: 'angle', label: '发射方向(°)', type: 'number', default: 270, min: 0, max: 360, step: 1 },
       { name: 'life', label: '寿命(帧)', type: 'number', default: 10, min: 1, max: 60, step: 1 },
       { name: 'color', label: '颜色', type: 'color', default: '#ff8800' },
       { name: 'gravity', label: '重力', type: 'number', default: 0.5, min: 0, max: 5, step: 0.1 },
@@ -2275,6 +2277,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
       { name: 'count', label: '副本数', type: 'number', default: 3, min: 1, max: 10, step: 1 },
       { name: 'opacity', label: '透明度衰减', type: 'number', default: 0.3, min: 0.05, max: 1, step: 0.05 },
       { name: 'spacing', label: '间距(像素)', type: 'number', default: 5, min: 1, max: 30, step: 1 },
+      { name: 'angle', label: '方向(°)', type: 'number', default: 180, min: 0, max: 360, step: 1 },
     ],
   },
   {
