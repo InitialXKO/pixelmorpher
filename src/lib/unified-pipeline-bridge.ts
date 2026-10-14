@@ -31,10 +31,9 @@ import { LiveAdapter } from './migration-adapter';
 import {
   generateRenderPlan,
   executeRenderPlan,
-  renderPartsUnified,
   pixelsToCanvas,
 } from './unified-render';
-import { interpolateNodeKeyframes } from './engine/render-helpers/puppet-keyframe-interpolation';
+// (interpolateNodeKeyframes 已迁移：新管线内部 interpolateTransform 处理)
 import { applyPixelModifiers } from './engine/pixel-modifiers';
 import { resolveKeyframeModifierParams } from './engine/param-driver';
 import { renderEffectTrackFrame } from './engine/effect-render';
@@ -91,8 +90,7 @@ export function renderUnified(
   previewQuality: 'low' | 'medium' | 'high',
   animationVariables: AnimationVariable[] | undefined,
   globalModifiers: GlobalModifier[] | undefined,
-  puppetSkeletons: PuppetSkeleton[] | undefined,
-  puppetCharacters: PuppetCharacter[] | undefined,
+  unifiedCharacters: Record<string, Character> | undefined,
   animationClips: AnimationClip[],
   useUnifiedPipeline: boolean = true,
 ): void {
@@ -107,12 +105,12 @@ export function renderUnified(
   }
 
   // ---- Step 2: Render puppet parts ----
-  // 统一走 unified pipeline：renderPuppetViaUnifiedPipeline 内部已调
-  // interpolateNodeKeyframes，蓝图/修改器/关键帧都在烘焙阶段求值。
-  if (puppetSkeletons && puppetCharacters && puppetSkeletons.length > 0) {
+  // 统一走 unified pipeline：新管线内部 interpolateTransform 处理关键帧。
+  // 直接从新 store 读 unifiedCharacters，不再经 LiveAdapter 转换。
+  if (unifiedCharacters && Object.keys(unifiedCharacters).length > 0) {
     renderPuppetViaUnifiedPipeline(
       ctx, canvasWidth, canvasHeight,
-      puppetSkeletons, puppetCharacters, parts,
+      unifiedCharacters,
       animationClips, currentFrame, frameRate,
       globalModifiers, animationVariables, canvasModifierTracks,
       proceduralAnimations,
@@ -189,9 +187,7 @@ function renderPuppetViaUnifiedPipeline(
   ctx: CanvasRenderingContext2D,
   canvasWidth: number,
   canvasHeight: number,
-  puppetSkeletons: PuppetSkeleton[],
-  puppetCharacters: PuppetCharacter[],
-  parts: Part[],
+  unifiedCharacters: Record<string, Character>,
   animationClips: AnimationClip[],
   currentFrame: number,
   frameRate: number,
@@ -206,51 +202,7 @@ function renderPuppetViaUnifiedPipeline(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate,
   );
 
-  for (const character of puppetCharacters) {
-    const skeleton = puppetSkeletons.find(s => s.id === character.puppetSkeletonId);
-    if (!skeleton) continue;
-
-    // Find puppet keyframes from animation clip
-    const puppetClip = animationClips.find(
-      c => true && c.puppetCharacterId === character.id
-    );
-    const nodeKeyframes = puppetClip?.puppetNodeKeyframes ?? [];
-
-    // 蓝图/修改器求值：unified pipeline 的 LiveAdapter 不调 interpolateNodeKeyframes，
-    // 这里先求出完整插值（含关键帧+蓝图+修改器），烘焙进 skeleton 副本，
-    // 再喂给 adapter（传空关键帧，避免 adapter 重复插值）。
-    const interpValues = interpolateNodeKeyframes(skeleton, nodeKeyframes, currentFrame);
-    const bakedSkeleton: PuppetSkeleton = {
-      ...skeleton,
-      nodes: skeleton.nodes.map(n => {
-        const v = interpValues.get(n.id);
-        if (!v) return n;
-        return {
-          ...n,
-          angle: v.angle,
-          offsetX: v.offsetX,
-          offsetY: v.offsetY,
-          stretch: v.stretch,
-          zIndex: v.zIndex,
-          // 已烘焙，清空防重复计算
-          blueprint: undefined,
-          modifiers: [],
-        };
-      }),
-    };
-
-    // Convert old data to unified Character via LiveAdapter
-    // 注意：bakedSkeleton 每帧的角度都不同，但 skeleton.id 相同，
-    // LiveAdapter 按 id 缓存 Character，必须先 invalidate，否则拿到的是旧缓存。
-    liveAdapter.invalidate();
-    const unifiedCharacter = liveAdapter.getCharacter(
-      bakedSkeleton,
-      [character],
-      parts,
-      [], // 关键帧已烘焙，传空
-      character.costumeSets ?? [],
-    );
-
+  for (const unifiedCharacter of Object.values(unifiedCharacters)) {
     // Generate and execute render plan
     // Convert old AnimationVariable format to unified format
     const unifiedVars: UnifiedAnimationVariable[] | undefined = animationVariables?.map(v => ({
@@ -358,26 +310,8 @@ export function renderUnifiedToCanvas(
   canvas.height = canvasHeight;
   const ctx = canvas.getContext('2d')!;
 
-  // Compute puppet sprite part IDs
-  const puppetSpritePartIds = computePuppetSpritePartIds(puppetSkeletons, puppetCharacters);
-  const nonPuppetParts = puppetSpritePartIds.size > 0
-    ? parts.filter(p => !puppetSpritePartIds.has(p.id))
-    : parts;
-
-  // Render non-puppet parts via the unified pipeline
-  // (renderPartsUnified handles the full old renderFrame() feature set;
-  // canvas modifiers are applied once at the end of this function — H10)
-  renderPartsUnified(
-    ctx, nonPuppetParts, keyframes, frame,
-    canvasWidth, canvasHeight, backgroundColor,
-    {
-      skeletons, proceduralAnimations, animationVariables,
-      globalModifiers,
-      effectTracks, motionBlurStrokes, effectStrokes,
-      autoMotionBlur, autoMotionBlurIntensity,
-      previewQuality, frameRate,
-    },
-  );
+  // 注意：孤儿 Part（未被 Character 引用）主画布不渲染，只在编辑画布渲染。
+  // 这里不再调用 renderPartsUnified。
 
   // Render puppet parts via unified pipeline
   // H11: 与实时预览一致，木偶渲染包裹全局变换

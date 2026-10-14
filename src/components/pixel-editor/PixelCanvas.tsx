@@ -260,14 +260,16 @@ export default function PixelCanvas() {
       // 必须从 store 直接读最新的 characters 和 skeletons：闭包里的 s.puppetCharacters/s.puppetSkeletons
       // 在蓝图挂载后可能还是旧引用，导致播放时读不到 blueprint
       const freshStore = useProjectStore.getState();
-      const freshSkeletons = freshStore.puppetSkeletons;
-      const visibleCharacters = filterVisibleCharacters(freshStore.puppetCharacters ?? [], puppetSession);
+      // 同步旧数据到新 unifiedCharacters（替代 LiveAdapter 每帧转换）
+      const { syncUnifiedCharacters } = require('@/lib/store/sync-unified-characters');
+      syncUnifiedCharacters(useProjectStore.setState, useProjectStore.getState);
+      const unifiedCharacters = useProjectStore.getState().unifiedCharacters;
       // 参考图可见时用透明背景，让参考图透出来做底
       const bgColor = (s.referenceImageUrl && s.referenceImageVisible) ? 'transparent' : s.backgroundColor;
       renderUnified(offCtx, s.canvasWidth, s.canvasHeight, freshStore.parts, s.keyframes, currentFrame, bgColor,
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
-        s.animationVariables, s.globalModifiers, freshSkeletons, visibleCharacters, animationClips, true);
+        s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true);
     }
 
     // 3. Stroke preview

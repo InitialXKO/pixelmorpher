@@ -10,6 +10,7 @@ import type {
   CostumeSet,
   Part,
 } from '../types';
+import type { Node as UnifiedNode, Sprite } from '../unified-types';
 import { PUPPET_DIRECTIONS, DIRECTION_MIRROR } from '../types';
 import { acquireCanvas, releaseCanvas } from './canvas-pool';
 import { getRotationCacheKey, getCachedRotation, setCachedRotation } from './render-cache';
@@ -220,3 +221,11 @@ export function resolvePuppetNodeSprite(
   return parts.find(p => p.id === partId) ?? null;
 }
 
+
+/**
+ * Resolve the sprite for a new Node.
+ * New pipeline: Node.sprite is already resolved (no Part lookup needed).
+ */
+export function resolveNodeSprite(node: UnifiedNode): Sprite | null {
+  return node.sprite ?? null;
+}

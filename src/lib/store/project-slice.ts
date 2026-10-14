@@ -7,7 +7,7 @@
 
 import type { StateCreator } from 'zustand';
 import type { ProjectStore } from './types';
-import type { Project, HistoryEntry, ProjectFile, BrushPreset, AnimationClip, ClipPartData, Character, Costume, Track } from '../types';
+import type { Project, HistoryEntry, ProjectFile, BrushPreset, AnimationClip, ClipPartData, Costume, Track } from '../types';
 import { MODIFIER_DEFINITIONS } from '../types';
 import { _isDragActive, _dragPostStackLen, _pendingTrajectoryPartIds, setDragActive, setDragPostStackLen, resetDragState } from './shared';
 import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '../engine';
@@ -19,7 +19,6 @@ const defaultProject: Project = {
 
   // Asset Library
   parts: [],
-  characters: [],
   animationClips: [],
   activeAnimationClipId: null,
 
@@ -159,7 +158,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       name: s.name,
       description: s.description,
       parts: s.parts,
-      characters: s.characters,
       animationClips: s.animationClips,
       activeAnimationClipId: s.activeAnimationClipId,
       tracks: s.tracks,
@@ -344,7 +342,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         name: state.name,
         description: state.description,
         parts: state.parts,
-        characters: state.characters,
         animationClips: state.animationClips,
         activeAnimationClipId: state.activeAnimationClipId,
         canvasWidth: state.canvasWidth,
@@ -448,7 +445,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       ...file.project,
       keyframes: processedKeyframes,
       parts: processedParts,
-      characters: file.project.characters || file.characters || [],
       animationClips,
       activeAnimationClipId,
       id: file.project.id || crypto.randomUUID(),
@@ -688,98 +684,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
 
 
 
-
-  // ============================================================
-  // V3.0: Character CRUD
-  // ============================================================
-
-  addCharacter: (name: string, partIds?: string[]) => {
-    get().pushUndo('添加角色');
-    const character: Character = {
-      id: crypto.randomUUID(),
-      name,
-      partIds: partIds ?? [],
-      costumes: [],
-      tags: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    set((s) => ({
-      characters: [...s.characters, character],
-    }));
-    return character;
-  },
-
-  removeCharacter: (characterId: string) => {
-    get().pushUndo('删除角色');
-    set((s) => ({
-      characters: s.characters.filter(c => c.id !== characterId),
-    }));
-  },
-
-  updateCharacter: (characterId: string, updates: Partial<Character>) => {
-    set((s) => ({
-      characters: s.characters.map(c =>
-        c.id === characterId ? { ...c, ...updates, updatedAt: Date.now() } : c
-      ),
-    }));
-  },
-
-  addPartToCharacter: (characterId: string, partId: string) => {
-    set((s) => ({
-      characters: s.characters.map(c =>
-        c.id === characterId && !c.partIds.includes(partId)
-          ? { ...c, partIds: [...c.partIds, partId], updatedAt: Date.now() }
-          : c
-      ),
-    }));
-  },
-
-  removePartFromCharacter: (characterId: string, partId: string) => {
-    set((s) => ({
-      characters: s.characters.map(c =>
-        c.id === characterId
-          ? { ...c, partIds: c.partIds.filter(id => id !== partId), updatedAt: Date.now() }
-          : c
-      ),
-    }));
-  },
-
-  addCostume: (characterId: string, name: string, slotMapping?: Record<string, string>) => {
-    const costume: Costume = {
-      id: crypto.randomUUID(),
-      name,
-      slotMapping: slotMapping ?? {},
-    };
-    set((s) => ({
-      characters: s.characters.map(c =>
-        c.id === characterId
-          ? { ...c, costumes: [...c.costumes, costume], updatedAt: Date.now() }
-          : c
-      ),
-    }));
-    return costume;
-  },
-
-  removeCostume: (characterId: string, costumeId: string) => {
-    set((s) => ({
-      characters: s.characters.map(c =>
-        c.id === characterId
-          ? { ...c, costumes: c.costumes.filter(co => co.id !== costumeId), updatedAt: Date.now() }
-          : c
-      ),
-    }));
-  },
-
-  setActiveCostume: (characterId: string, costumeId: string) => {
-    set((s) => ({
-      characters: s.characters.map(c =>
-        c.id === characterId
-          ? { ...c, activeCostumeId: costumeId, updatedAt: Date.now() }
-          : c
-      ),
-    }));
-  },
 
   createClipFromCharacter: (characterId: string, clipName: string): AnimationClip => {
     // 统一为木偶模型：直接创建空木偶 clip（旧部件轨道系统已删除）

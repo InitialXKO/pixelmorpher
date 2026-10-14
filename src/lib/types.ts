@@ -1107,23 +1107,6 @@ export interface Costume {
   nodeOffsets?: Record<string, { x: number; y: number; angle: number }>;
 }
 
-export interface Character {
-  id: string;
-  name: string;
-  description?: string;
-  /** Ordered list of part IDs that make up this character */
-  partIds: string[];
-  /** Optional skeleton for bone-based animation */
-  skeletonId?: string;
-  /** Costume variants — different visual appearances for the same character */
-  costumes: Costume[];
-  activeCostumeId?: string;
-  thumbnail?: string;
-  tags: string[];
-  createdAt: number;
-  updatedAt: number;
-}
-
 // ---- Project (Asset Library) ----
 // A Project is a collection of reusable art assets — NOT a single animation container.
 // The project holds the shared asset library (Parts, Characters) and
@@ -1141,8 +1124,6 @@ export interface Project {
   // ---- Asset Library ----
   /** Shared pixel art parts — the fundamental visual unit */
   parts: Part[];
-  /** Character groupings — named collections of parts */
-  characters: Character[];
   /** Animation clips — independent animation resources */
   animationClips: AnimationClip[];
   /** The currently active animation clip being edited (null = no clip active) */
@@ -1960,8 +1941,6 @@ export interface ProjectFile {
   proceduralAnimations: ProceduralAnimation[];
   weightMaps: WeightMap[];
   history: HistoryEntry[];
-  /** V3.0: Characters data */
-  characters?: Character[];
 }
 
 // ---- M7: ParamDriver Helpers ----
