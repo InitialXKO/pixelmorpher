@@ -918,6 +918,228 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const result = applyRingRipple(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
     return { pixels: pixelsVal(result) };
   },
+  local_inflate: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyLocalInflate } = require('../engine/modifier-renderers/geometric');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyLocalInflate(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  // ---- 补齐的像素修改器：走 modifierRegistry ----
+  color_replace: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { modifierRegistry } = require('../engine/pixel-modifiers');
+    const handler = modifierRegistry.get('color_replace');
+    if (!handler) return {};
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't' && k !== 'gate') params[k] = v;
+    }
+    const result = handler(params, inputPixels, ctx.frame);
+    return { pixels: pixelsVal(result) };
+  },
+  outline: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { modifierRegistry } = require('../engine/pixel-modifiers');
+    const handler = modifierRegistry.get('outline');
+    if (!handler) return {};
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't' && k !== 'gate') params[k] = v;
+    }
+    const result = handler(params, inputPixels, ctx.frame);
+    return { pixels: pixelsVal(result) };
+  },
+  dither: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { modifierRegistry } = require('../engine/pixel-modifiers');
+    const handler = modifierRegistry.get('dither');
+    if (!handler) return {};
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't' && k !== 'gate') params[k] = v;
+    }
+    const result = handler(params, inputPixels, ctx.frame);
+    return { pixels: pixelsVal(result) };
+  },
+  pixel_displace: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { modifierRegistry } = require('../engine/pixel-modifiers');
+    const handler = modifierRegistry.get('pixel_displace');
+    if (!handler) return {};
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't' && k !== 'gate') params[k] = asNumber(v as BlueprintValue);
+    }
+    const result = handler(params, inputPixels, ctx.frame);
+    return { pixels: pixelsVal(result) };
+  },
+  mirror: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { modifierRegistry } = require('../engine/pixel-modifiers');
+    const handler = modifierRegistry.get('mirror');
+    if (!handler) return {};
+    const result = handler({}, inputPixels, ctx.frame);
+    return { pixels: pixelsVal(result) };
+  },
+  flip: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { modifierRegistry } = require('../engine/pixel-modifiers');
+    const handler = modifierRegistry.get('flip');
+    if (!handler) return {};
+    const result = handler({}, inputPixels, ctx.frame);
+    return { pixels: pixelsVal(result) };
+  },
+  cylinder_rotate: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { modifierRegistry } = require('../engine/pixel-modifiers');
+    const handler = modifierRegistry.get('cylinder_rotate');
+    if (!handler) return {};
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't' && k !== 'gate') params[k] = v;
+    }
+    const result = handler(params, inputPixels, ctx.frame);
+    return { pixels: pixelsVal(result) };
+  },
+  sphere_rotate: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { modifierRegistry } = require('../engine/pixel-modifiers');
+    const handler = modifierRegistry.get('sphere_rotate');
+    if (!handler) return {};
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't' && k !== 'gate') params[k] = v;
+    }
+    const result = handler(params, inputPixels, ctx.frame);
+    return { pixels: pixelsVal(result) };
+  },
+  path_follow: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyPathFollow } = require('../engine/modifier-renderers/geometric');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k === 'pixels' || k === 't' || k === 'gate') continue;
+      // path 是数组类型，直接传；其他转 number
+      if (k === 'path') {
+        const wired = v as BlueprintValue;
+        if (wired && wired.type === 'array') params.path = wired.value;
+      } else {
+        params[k] = asNumber(v as BlueprintValue);
+      }
+    }
+    // 静态 path 参数（数组）
+    if (!params.path && Array.isArray(n.params.path)) {
+      params.path = n.params.path;
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyPathFollow(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  path_move: (n, i, ctx): Record<string, BlueprintValue> => {
+    // 顺路径移动：输出位移和朝向（变换类，非像素）
+    const getNum = (key: string, def: number): number => {
+      const wired = i[key] as BlueprintValue | undefined;
+      if (wired !== undefined) return asNumber(wired);
+      const p = n.params[key];
+      return typeof p === 'number' ? p : def;
+    };
+    const getPath = (): Array<{ x: number; y: number }> | null => {
+      const wired = i.path as BlueprintValue | undefined;
+      if (wired && wired.type === 'array' && Array.isArray(wired.value)) {
+        return wired.value as Array<{ x: number; y: number }>;
+      }
+      const p = n.params.path;
+      if (Array.isArray(p)) return p as Array<{ x: number; y: number }>;
+      return null;
+    };
+    const path = getPath();
+    if (!path || path.length < 2) return { outX: num(0), outY: num(0), outRotation: num(0) };
+
+    const pathType = String(n.params.pathType ?? 'polyline');
+    let progress = getNum('progress', 0);
+    const mode = String(n.params.mode ?? 'orient');
+    const loop = Boolean(n.params.loop ?? false);
+
+    if (loop) {
+      progress = ((progress % 1) + 1) % 1;
+    } else {
+      progress = Math.max(0, Math.min(1, progress));
+    }
+
+    // 采样路径点和切线
+    const samplePath = (t: number): { x: number; y: number; tx: number; ty: number } => {
+      if (pathType === 'bezier' && path.length >= 4) {
+        // 找到对应的贝塞尔段
+        const numSegs = Math.floor(path.length / 4);
+        const segT = t * numSegs;
+        const segIdx = Math.min(numSegs - 1, Math.floor(segT));
+        const lt = segT - segIdx;
+        const p0 = path[segIdx * 4]!, p1 = path[segIdx * 4 + 1]!, p2 = path[segIdx * 4 + 2]!, p3 = path[segIdx * 4 + 3]!;
+        const mt = 1 - lt;
+        const x = mt*mt*mt*p0.x + 3*mt*mt*lt*p1.x + 3*mt*lt*lt*p2.x + lt*lt*lt*p3.x;
+        const y = mt*mt*mt*p0.y + 3*mt*mt*lt*p1.y + 3*mt*lt*lt*p2.y + lt*lt*lt*p3.y;
+        const tx = 3*mt*mt*(p1.x-p0.x) + 6*mt*lt*(p2.x-p1.x) + 3*lt*lt*(p3.x-p2.x);
+        const ty = 3*mt*mt*(p1.y-p0.y) + 6*mt*lt*(p2.y-p1.y) + 3*lt*lt*(p3.y-p2.y);
+        const len = Math.sqrt(tx*tx + ty*ty) || 1;
+        return { x, y, tx: tx/len, ty: ty/len };
+      } else {
+        // 多段线：按弧长
+        const cumLen: number[] = [0];
+        for (let k = 1; k < path.length; k++) {
+          const dx = path[k]!.x - path[k-1]!.x;
+          const dy = path[k]!.y - path[k-1]!.y;
+          cumLen.push(cumLen[k-1]! + Math.sqrt(dx*dx + dy*dy));
+        }
+        const totalLen = cumLen[cumLen.length - 1] || 1;
+        const targetLen = t * totalLen;
+        let seg = 0;
+        while (seg < cumLen.length - 2 && cumLen[seg + 1]! < targetLen) seg++;
+        const segLen = (cumLen[seg + 1]! - cumLen[seg]!) || 1;
+        const lt = (targetLen - cumLen[seg]!) / segLen;
+        const x = path[seg]!.x + (path[seg + 1]!.x - path[seg]!.x) * lt;
+        const y = path[seg]!.y + (path[seg + 1]!.y - path[seg]!.y) * lt;
+        const tx = path[seg + 1]!.x - path[seg]!.x;
+        const ty = path[seg + 1]!.y - path[seg]!.y;
+        const len = Math.sqrt(tx*tx + ty*ty) || 1;
+        return { x, y, tx: tx/len, ty: ty/len };
+      }
+    };
+
+    const s = samplePath(progress);
+    const outX = s.x;
+    const outY = s.y;
+    let outRotation = 0;
+    if (mode === 'orient') {
+      // 切线角度（度）
+      outRotation = (Math.atan2(s.ty, s.tx) * 180) / Math.PI;
+    }
+    return { outX: num(outX), outY: num(outY), outRotation: num(outRotation) };
+  },
   pixel_edit: (n, i, ctx): Record<string, BlueprintValue> => {
     const inputPixels = asPixels(i.pixels as BlueprintValue);
     if (!inputPixels) return {};

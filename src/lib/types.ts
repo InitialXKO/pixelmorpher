@@ -90,7 +90,10 @@ export type ModifierType =
   | 'pillow_stretch'        // Pillow/bulge stretch
   | 'hyperbolic_stretch'    // Hyperbolic curve stretch
   | 'ring_ripple'          // Ring ripple stretch
-  | 'gait';                  // V11: Gait animation (semicircle+chord trajectory)
+  | 'gait'                  // V11: Gait animation (semicircle+chord trajectory)
+  | 'local_inflate'          // V12: Local inflation/bulge (radial pixel displacement)
+  | 'path_follow'            // V12: Path following deformation (limb bends along path)
+  | 'path_move';             // V12: Move along path (translation or orient to tangent);
 
 /** Brush command shape for PixelEdit modifier */
 export type BrushCommandType = 'draw' | 'erase' | 'fill';
@@ -116,13 +119,13 @@ export interface BrushCommand {
 }
 
 /** Value types allowed in modifier params — includes primitives and structured data */
-export type ModifierParamValue = number | string | boolean | BrushCommand[] | StyleAspect[] | number[];
+export type ModifierParamValue = number | string | boolean | BrushCommand[] | StyleAspect[] | number[] | Array<{ x: number; y: number }>;
 
 export interface ModifierParam {
   name: string;
   label: string;
-  type: 'number' | 'color' | 'select' | 'boolean' | 'string';
-  default: number | string | boolean;
+  type: 'number' | 'color' | 'select' | 'boolean' | 'string' | 'path';
+  default: number | string | boolean | Array<{ x: number; y: number }>;
   min?: number;
   max?: number;
   step?: number;
@@ -360,6 +363,12 @@ export const ANIMATION_MODIFIER_TYPES: ModifierType[] = [
   'contour_scroll', 'reveal_hide', 'shatter_dissolve', 'annihilate', 'teleport', 'crt_off',
   // V10: Geometric deformation modifiers
   'bend', 'elliptical_compress', 'dumbbell_stretch', 'pillow_stretch', 'hyperbolic_stretch', 'ring_ripple',
+  // V12: Local inflation
+  'local_inflate',
+  // V12: Path following
+  'path_follow',
+  // V12: Move along path
+  'path_move',
   // V2.0 procedural modifiers also produce geometric transforms per-frame
   'noise', 'wave', 'spring', 'jitter',
 ];
@@ -3060,6 +3069,59 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
         { label: '循环纹理', value: 'cyclic' },
         { label: '同色延伸', value: 'extend' },
       ]},
+    ],
+  },
+  {
+    type: 'local_inflate',
+    label: '局部膨胀',
+    icon: 'Circle',
+    category: 'effect',
+    params: [
+      { name: 'centerX', label: '中心X', type: 'number', default: 16, min: 0, max: 500, step: 1 },
+      { name: 'centerY', label: '中心Y', type: 'number', default: 16, min: 0, max: 500, step: 1 },
+      { name: 'radius', label: '半径', type: 'number', default: 8, min: 1, max: 200, step: 1 },
+      { name: 'strength', label: '强度', type: 'number', default: 4, min: 0, max: 50, step: 0.5 },
+      { name: 'falloff', label: '衰减', type: 'number', default: 1, min: 0.1, max: 5, step: 0.1 },
+    ],
+  },
+  {
+    type: 'path_follow',
+    label: '路径跟随',
+    icon: 'Spline',
+    category: 'effect',
+    params: [
+      { name: 'path', label: '路径', type: 'path', default: [] },
+      { name: 'pathType', label: '路径类型', type: 'select', default: 'polyline', options: [
+        { label: '多段线', value: 'polyline' },
+        { label: '贝塞尔', value: 'bezier' },
+      ]},
+      { name: 'axis', label: '映射轴', type: 'select', default: 'y', options: [
+        { label: 'Y轴（竖直）', value: 'y' },
+        { label: 'X轴（水平）', value: 'x' },
+      ]},
+      { name: 'startT', label: '起始', type: 'number', default: 0, min: 0, max: 1, step: 0.01 },
+      { name: 'endT', label: '结束', type: 'number', default: 1, min: 0, max: 1, step: 0.01 },
+      { name: 'preserveLength', label: '保持弧长', type: 'boolean', default: true },
+      { name: 'samples', label: '采样数', type: 'number', default: 64, min: 8, max: 256, step: 8 },
+    ],
+  },
+  {
+    type: 'path_move',
+    label: '路径移动',
+    icon: 'Route',
+    category: 'animation',
+    params: [
+      { name: 'path', label: '路径', type: 'path', default: [] },
+      { name: 'pathType', label: '路径类型', type: 'select', default: 'polyline', options: [
+        { label: '多段线', value: 'polyline' },
+        { label: '贝塞尔', value: 'bezier' },
+      ]},
+      { name: 'progress', label: '进度', type: 'number', default: 0, min: 0, max: 1, step: 0.01 },
+      { name: 'mode', label: '模式', type: 'select', default: 'orient', options: [
+        { label: '跟随转向', value: 'orient' },
+        { label: '仅平移', value: 'translate' },
+      ]},
+      { name: 'loop', label: '循环', type: 'boolean', default: false },
     ],
   },
 ];

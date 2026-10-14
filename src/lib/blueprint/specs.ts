@@ -259,6 +259,21 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     outputs: ['pixels'],
     params: ['amplitude', 'frequency', 'progress'],
   },
+  local_inflate: {
+    inputs: ['pixels', 't', 'centerX', 'centerY', 'radius', 'strength'],
+    outputs: ['pixels'],
+    params: ['centerX', 'centerY', 'radius', 'strength', 'falloff'],
+  },
+  path_follow: {
+    inputs: ['pixels', 't', 'path', 'startT', 'endT'],
+    outputs: ['pixels'],
+    params: ['path', 'pathType', 'axis', 'startT', 'endT', 'preserveLength', 'samples'],
+  },
+  path_move: {
+    inputs: ['t', 'path', 'progress'],
+    outputs: ['outX', 'outY', 'outRotation'],
+    params: ['path', 'pathType', 'progress', 'mode', 'loop'],
+  },
   pixel_edit: {
     inputs: ['pixels', 'brushCommands'],
     outputs: ['pixels'],

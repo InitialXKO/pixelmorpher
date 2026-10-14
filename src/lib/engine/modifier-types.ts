@@ -24,8 +24,20 @@ export const PIXEL_DEFORM_MODIFIER_TYPES: ModifierType[] = [
   'pillow_stretch',
   'hyperbolic_stretch',
   'ring_ripple',
+  'local_inflate',
   // Edit modifier: brush strokes as non-destructive pixel deform on PuppetNode
   'pixel_edit',
+  // V12: 补齐的像素修改器（有旧实现，走 modifierRegistry）
+  'color_replace',
+  'outline',
+  'dither',
+  'pixel_displace',
+  'mirror',
+  'flip',
+  'cylinder_rotate',
+  'sphere_rotate',
+  // V12: 路径跟随
+  'path_follow',
 ];
 
 /** Check if a modifier type operates at the pixel-deformation level. */

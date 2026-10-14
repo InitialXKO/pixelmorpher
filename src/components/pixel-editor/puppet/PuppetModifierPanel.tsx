@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import BlueprintEditor from './BlueprintEditor';
 import BlueprintTemplateLoader from './BlueprintTemplateLoader';
+import PathEditor from './PathEditor';
 import { modifiersToBlueprint } from '@/lib/blueprint/migrate';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 
@@ -26,12 +27,12 @@ import type { BlueprintGraph } from '@/lib/blueprint/ir';
 const PUPPET_MODIFIER_TYPES: AnimationModifierType[] = [
   // 变换类
   'pendulum', 'bounce', 'breath', 'wobble', 'float', 'shake', 'elastic',
-  'gait', 'noise', 'wave', 'spring', 'jitter', 'wheel', 'expression',
+  'gait', 'noise', 'wave', 'spring', 'jitter', 'wheel', 'expression', 'path_move',
   // 像素类
   'texture_scroll', 'wave_deform', 'contour_scroll', 'reveal_hide',
   'shatter_dissolve', 'annihilate', 'teleport', 'crt_off',
   'bend', 'elliptical_compress', 'dumbbell_stretch', 'pillow_stretch',
-  'hyperbolic_stretch', 'ring_ripple',
+  'hyperbolic_stretch', 'ring_ripple', 'local_inflate', 'path_follow',
 ];
 
 export default function PuppetModifierPanel() {
@@ -380,7 +381,7 @@ function ModifierRow({
   onToggleExpand: () => void;
   onToggle: () => void;
   onRemove: () => void;
-  onUpdateParam: (name: string, value: number | string | boolean) => void;
+  onUpdateParam: (name: string, value: number | string | boolean | Array<{ x: number; y: number }>) => void;
   blueprintNode?: { inputs?: Record<string, any>; params?: Record<string, any> };
 }) {
   const def = getModifierDef(modifier.type);
@@ -480,6 +481,14 @@ function ModifierRow({
                     onChange={(e) => onUpdateParam(p.name, e.target.value)}
                     className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300"
                   />
+                ) : p.type === 'path' ? (
+                  <div className="flex-1 min-w-0">
+                    <PathEditor
+                      value={Array.isArray(val) ? (val as Array<{ x: number; y: number }>) : []}
+                      onChange={(path) => onUpdateParam(p.name, path)}
+                      pathType={String(modifier.params.pathType ?? 'polyline') as 'polyline' | 'bezier'}
+                    />
+                  </div>
                 ) : (
                   <input
                     type="number"

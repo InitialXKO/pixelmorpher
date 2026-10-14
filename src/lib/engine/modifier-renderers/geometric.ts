@@ -774,3 +774,187 @@ export function applyRingRipple(
 
   return result;
 }
+
+/**
+ * Local inflation/bulge: radially displace pixels outward from a center point.
+ * Pixels within `radius` are pushed away from (centerX, centerY) by
+ * `strength * (1 - d/radius)^falloff`.
+ */
+export function applyLocalInflate(
+  pixels: PixelGrid,
+  width: number,
+  height: number,
+  params: Record<string, ModifierParamValue>,
+  currentFrame: number,
+  frameRate: number,
+  weight: number,
+): PixelGrid {
+  const grid = modifierGuard(pixels, weight);
+  if (!grid) return pixels;
+  const { h, w } = grid;
+
+  const cx = Number(params.centerX ?? w / 2);
+  const cy = Number(params.centerY ?? h / 2);
+  const radius = Math.max(0.001, Number(params.radius ?? Math.min(w, h) / 4));
+  const strength = Number(params.strength ?? 4);
+  const falloff = Number(params.falloff ?? 1);
+
+  const result: PixelGrid = [];
+  for (let y = 0; y < h; y++) {
+    const row: (string | null)[] = [];
+    for (let x = 0; x < w; x++) {
+      const dx = x - cx;
+      const dy = y - cy;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < radius && d > 0.0001) {
+        const t = 1 - d / radius;
+        const disp = strength * Math.pow(t, falloff);
+        const sx = Math.round(x - (dx / d) * disp);
+        const sy = Math.round(y - (dy / d) * disp);
+        if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
+          row.push(pixels[sy]?.[sx] ?? null);
+        } else {
+          row.push(null);
+        }
+      } else {
+        row.push(pixels[y]?.[x] ?? null);
+      }
+    }
+    result.push(row);
+  }
+  return result;
+}
+
+/**
+ * Path following deformation: bend a sprite so its spine follows a path.
+ * - path: array of {x, y} points (polyline) or Bezier control points
+ * - pathType: 'polyline' | 'bezier' (every 4 points = one cubic segment)
+ * - axis: 'x' | 'y' — which sprite axis maps along the path
+ * - startT/endT: portion of path the sprite spans (0-1)
+ * - preserveLength: whether to preserve arc length
+ */
+export function applyPathFollow(
+  pixels: PixelGrid,
+  width: number,
+  height: number,
+  params: Record<string, ModifierParamValue>,
+  currentFrame: number,
+  frameRate: number,
+  weight: number,
+): PixelGrid {
+  const grid = modifierGuard(pixels, weight);
+  if (!grid) return pixels;
+  const { h, w } = grid;
+
+  const pathRaw = params.path as unknown as Array<{ x: number; y: number }> | undefined;
+  if (!pathRaw || !Array.isArray(pathRaw) || pathRaw.length < 2) return pixels;
+
+  const pathType = String(params.pathType ?? 'polyline');
+  const axis = String(params.axis ?? 'y');
+  const startT = Number(params.startT ?? 0);
+  const endT = Number(params.endT ?? 1);
+  const preserveLength = params.preserveLength !== false;
+  const samples = Math.max(8, Math.min(256, Math.round(Number(params.samples ?? 64))));
+
+  // 采样路径：返回点列和切线
+  interface Sample { x: number; y: number; tx: number; ty: number; }
+  const sampled: Sample[] = [];
+
+  if (pathType === 'bezier') {
+    // 每4点一段三次贝塞尔
+    for (let s = 0; s + 3 < pathRaw.length; s += 4) {
+      const p0 = pathRaw[s]!, p1 = pathRaw[s + 1]!, p2 = pathRaw[s + 2]!, p3 = pathRaw[s + 3]!;
+      const segs = Math.max(4, Math.floor(samples / Math.max(1, Math.floor(pathRaw.length / 4))));
+      for (let k = 0; k <= segs; k++) {
+        const t = k / segs;
+        const mt = 1 - t;
+        const x = mt*mt*mt*p0.x + 3*mt*mt*t*p1.x + 3*mt*t*t*p2.x + t*t*t*p3.x;
+        const y = mt*mt*mt*p0.y + 3*mt*mt*t*p1.y + 3*mt*t*t*p2.y + t*t*t*p3.y;
+        // 切线（导数）
+        const tx = 3*mt*mt*(p1.x-p0.x) + 6*mt*t*(p2.x-p1.x) + 3*t*t*(p3.x-p2.x);
+        const ty = 3*mt*mt*(p1.y-p0.y) + 6*mt*t*(p2.y-p1.y) + 3*t*t*(p3.y-p2.y);
+        const len = Math.sqrt(tx*tx + ty*ty) || 1;
+        sampled.push({ x, y, tx: tx/len, ty: ty/len });
+      }
+    }
+  } else {
+    // 多段线：按弧长均匀采样
+    const pts = pathRaw;
+    const cumLen: number[] = [0];
+    for (let k = 1; k < pts.length; k++) {
+      const dx = pts[k]!.x - pts[k-1]!.x;
+      const dy = pts[k]!.y - pts[k-1]!.y;
+      cumLen.push(cumLen[k-1]! + Math.sqrt(dx*dx + dy*dy));
+    }
+    const totalLen = cumLen[cumLen.length - 1] || 1;
+    let seg = 0;
+    for (let k = 0; k <= samples; k++) {
+      const targetLen = (k / samples) * totalLen;
+      while (seg < cumLen.length - 2 && cumLen[seg + 1]! < targetLen) seg++;
+      const segLen = (cumLen[seg + 1]! - cumLen[seg]!) || 1;
+      const t = (targetLen - cumLen[seg]!) / segLen;
+      const x = pts[seg]!.x + (pts[seg + 1]!.x - pts[seg]!.x) * t;
+      const y = pts[seg]!.y + (pts[seg + 1]!.y - pts[seg]!.y) * t;
+      const tx = pts[seg + 1]!.x - pts[seg]!.x;
+      const ty = pts[seg + 1]!.y - pts[seg]!.y;
+      const len = Math.sqrt(tx*tx + ty*ty) || 1;
+      sampled.push({ x, y, tx: tx/len, ty: ty/len });
+    }
+  }
+
+  if (sampled.length < 2) return pixels;
+
+  // 取 startT..endT 段
+  const s0 = Math.floor(startT * (sampled.length - 1));
+  const s1 = Math.ceil(endT * (sampled.length - 1));
+  const seg = sampled.slice(Math.max(0, s0), Math.min(sampled.length, s1 + 1));
+  if (seg.length < 2) return pixels;
+
+  // 精灵的"静止脊柱"：axis='y' 时为垂直中线，axis='x' 时为水平中线
+  const spineLen = axis === 'y' ? h : w;
+  const spineCross = axis === 'y' ? w / 2 : h / 2;
+
+  const result: PixelGrid = [];
+  for (let y = 0; y < h; y++) {
+    const row: (string | null)[] = [];
+    for (let x = 0; x < w; x++) {
+      // 找最近的路径采样点（暴力搜索，samples<=256 可接受）
+      let bestIdx = 0;
+      let bestDist = Infinity;
+      for (let k = 0; k < seg.length; k++) {
+        const dx = x - seg[k]!.x;
+        const dy = y - seg[k]!.y;
+        const d = dx*dx + dy*dy;
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = k;
+        }
+      }
+      const s = seg[bestIdx]!;
+      // 法线
+      const nx = -s.ty;
+      const ny = s.tx;
+      // 输出像素相对路径点的横向偏移
+      const lateral = (x - s.x) * nx + (y - s.y) * ny;
+      // 路径参数 t -> 精灵脊柱坐标
+      const pathT = bestIdx / (seg.length - 1);
+      const spinePos = pathT * spineLen;
+      // 映射回输入坐标
+      let sx: number, sy: number;
+      if (axis === 'y') {
+        sx = Math.round(spineCross + lateral);
+        sy = Math.round(spinePos);
+      } else {
+        sx = Math.round(spinePos);
+        sy = Math.round(spineCross + lateral);
+      }
+      if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
+        row.push(pixels[sy]?.[sx] ?? null);
+      } else {
+        row.push(null);
+      }
+    }
+    result.push(row);
+  }
+  return result;
+}

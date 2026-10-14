@@ -278,6 +278,11 @@ export function modifiersToBlueprint(
         connectToPort('scaleX', modId, 'outScaleX', mod.blendMode ?? 'add', mod.params, gateId);
         connectToPort('scaleY', modId, 'outScaleY', mod.blendMode ?? 'add', mod.params, gateId);
         break;
+      case 'path_move':
+        connectToPort('translateX', modId, 'outX', mod.blendMode ?? 'add', mod.params, gateId);
+        connectToPort('translateY', modId, 'outY', mod.blendMode ?? 'add', mod.params, gateId);
+        connectToPort('rotation', modId, 'outRotation', mod.blendMode ?? 'add', mod.params, gateId);
+        break;
       case 'expression':
         connectToPort('translateX', modId, 'outX', mod.blendMode ?? 'add', mod.params, gateId);
         connectToPort('translateY', modId, 'outY', mod.blendMode ?? 'add', mod.params, gateId);

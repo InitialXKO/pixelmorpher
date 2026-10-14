@@ -13,6 +13,7 @@ import { listBlueprintNodeTypes, getBlueprintNodeLabel, evaluateBlueprint, evalu
 import { getDefaultOutputForPort, getNodeInputs } from '@/lib/blueprint/specs';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
+import PathEditor from './PathEditor';
 
 interface BlueprintEditorProps {
   graph: BlueprintGraph;
@@ -844,10 +845,24 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           {/* params */}
           {Object.entries(selected.params).map(([key, val]) => {
             const isPrimitive = typeof val === 'number' || typeof val === 'string' || typeof val === 'boolean';
+            // path_follow 的 path 参数：用 PathEditor
+            const isPathParam = selected.type === 'path_follow' && key === 'path';
             return (
             <div key={key} className="flex items-center gap-1.5">
               <span className="text-[9px] text-gray-500 w-20 truncate" title={key}>{key}</span>
-              {!isPrimitive ? (
+              {isPathParam ? (
+                <div className="flex-1 min-w-0">
+                  <PathEditor
+                    value={Array.isArray(val) ? (val as Array<{ x: number; y: number }>) : []}
+                    onChange={(path) => {
+                      updateNode(selected.id, {
+                        params: { ...selected.params, [key]: path as import('@/lib/types').ModifierParamValue },
+                      });
+                    }}
+                    pathType={String(selected.params.pathType ?? 'polyline') as 'polyline' | 'bezier'}
+                  />
+                </div>
+              ) : !isPrimitive ? (
                 // 非 primitive（数组/对象）：只读显示，由列表 UI 管理
                 <span className="flex-1 min-w-0 text-[9px] text-gray-500 truncate" title={JSON.stringify(val)}>
                   {Array.isArray(val) ? `[${val.length} 项]` : '{对象}'}（列表管理）
