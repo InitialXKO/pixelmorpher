@@ -38,6 +38,9 @@ import {
 import { useProjectStore } from '@/lib/store';
 import { GLOBAL_MODIFIER_DEFINITIONS } from '@/lib/types';
 import type { GlobalModifierType, GlobalModifier, ModifierParamValue } from '@/lib/types';
+import type { BlueprintGraph } from '@/lib/blueprint/ir';
+import BlueprintEditor from './puppet/BlueprintEditor';
+import { modifiersToBlueprint } from '@/lib/blueprint/migrate';
 
 const TYPE_ICONS: Record<string, React.ReactNode> = {
   translate: <Move className="size-3" />,
@@ -245,13 +248,47 @@ function GlobalModifierCard({ modifier }: { modifier: GlobalModifier }) {
 }
 
 export default function GlobalModifierPanel() {
-  const { globalModifiers = [], addGlobalModifier } = useProjectStore();
+  const { globalModifiers = [], addGlobalModifier, globalBlueprint, setGlobalBlueprint } = useProjectStore();
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [activeTab, setActiveTab] = useState<'list' | 'blueprint'>('list');
 
   const handleAdd = useCallback((type: GlobalModifierType) => {
     addGlobalModifier(type);
     setShowAddMenu(false);
   }, [addGlobalModifier]);
+
+  // 蓝图变更 → 反向同步到 modifiers（简化版：更新params和enabled）
+  const handleBlueprintChange = useCallback((g: BlueprintGraph) => {
+    const st = useProjectStore.getState();
+    setGlobalBlueprint(g);
+    // 反向同步 params
+    const mods = st.globalModifiers || [];
+    let changed = false;
+    const newMods = mods.map((mod) => {
+      const targetId = `mod_${mod.id.replace(/-/g, '').slice(0, 12)}`;
+      const bpNode = g.nodes.find((n) => n.id === targetId);
+      if (!bpNode) return mod;
+      const bpParams = bpNode.params ?? {};
+      const updatedParams: Record<string, ModifierParamValue> = { ...(mod.params ?? {}) };
+      for (const [k, v] of Object.entries(bpParams)) {
+        if (k === 'enabled') continue;
+        if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') {
+          if (updatedParams[k] !== v) {
+            updatedParams[k] = v as ModifierParamValue;
+            changed = true;
+          }
+        }
+      }
+      if (changed) return { ...mod, params: updatedParams };
+      return mod;
+    });
+    if (changed) {
+      useProjectStore.setState({ globalModifiers: newMods });
+    }
+  }, [setGlobalBlueprint]);
+
+  // 确保蓝图存在（首次打开时生成）
+  const blueprint = globalBlueprint ?? (globalModifiers.length > 0 ? modifiersToBlueprint(globalModifiers as any) : null);
 
   const transformTypes = GLOBAL_MODIFIER_DEFINITIONS.filter((d) => d.category === 'transform');
   const animTypes = GLOBAL_MODIFIER_DEFINITIONS.filter((d) => d.category === 'animation');
@@ -264,6 +301,21 @@ export default function GlobalModifierPanel() {
           <Globe className="size-3 text-purple-400" />
           <span className="text-[10px] font-medium text-zinc-300">全局修改器</span>
           <span className="text-[9px] text-zinc-600">({globalModifiers.length})</span>
+          {/* Tabs */}
+          <div className="flex ml-2 bg-zinc-800/50 rounded p-0.5">
+            <button
+              className={`px-2 py-0.5 text-[9px] rounded ${activeTab === 'list' ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500'}`}
+              onClick={() => setActiveTab('list')}
+            >
+              列表
+            </button>
+            <button
+              className={`px-2 py-0.5 text-[9px] rounded ${activeTab === 'blueprint' ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500'}`}
+              onClick={() => setActiveTab('blueprint')}
+            >
+              蓝图
+            </button>
+          </div>
         </div>
         <div className="relative">
           <Button
@@ -304,6 +356,25 @@ export default function GlobalModifierPanel() {
         </div>
       </div>
 
+      {/* Content: list or blueprint */}
+      {activeTab === 'blueprint' ? (
+        <div className="flex-1 overflow-hidden">
+          {blueprint ? (
+            <BlueprintEditor
+              graph={blueprint}
+              onChange={handleBlueprintChange}
+              title="全局蓝图"
+              skeleton={null}
+            />
+          ) : (
+            <div className="text-center py-6">
+              <p className="text-[10px] text-zinc-600">暂无蓝图</p>
+              <p className="text-[9px] text-zinc-700 mt-0.5">添加全局修改器后自动生成</p>
+            </div>
+          )}
+        </div>
+      ) : (
+      <>
       {/* Modifier list */}
       <div className="flex-1 overflow-auto py-1 px-1">
         {globalModifiers.length === 0 ? (
@@ -320,6 +391,8 @@ export default function GlobalModifierPanel() {
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* Click outside to close add menu */}
       {showAddMenu && (

@@ -6,10 +6,10 @@
 // 与 IR 直接双向绑定（改 UI 即改 IR）
 // ============================================================
 
-import React, { useMemo, useState, useCallback } from 'react';
-import { Plus, Trash2, X, Network, Blocks } from 'lucide-react';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
+import { Plus, Trash2, X, Network, Blocks, Maximize2, Minimize2, Play, Pause } from 'lucide-react';
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
-import { listBlueprintNodeTypes, getBlueprintNodeLabel } from '@/lib/blueprint/eval';
+import { listBlueprintNodeTypes, getBlueprintNodeLabel, evaluateBlueprint, evaluateNodeOutput } from '@/lib/blueprint/eval';
 import { getDefaultOutputForPort, getNodeInputs } from '@/lib/blueprint/specs';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
@@ -22,16 +22,194 @@ interface BlueprintEditorProps {
   skeleton?: { nodes: { id: string; name: string }[] } | null;
   /** 新节点 ID 前缀（全局编辑器用：归属到指定部件） */
   idPrefix?: string;
+  /** 帧率（预览播放用） */
+  frameRate?: number;
+  /** 整角色预览用：所有节点及其精灵和蓝图 */
+  characterNodes?: Array<{
+    id: string;
+    name: string;
+    blueprint?: BlueprintGraph | null;
+    spritePixels?: import('@/lib/types').PixelGrid | null;
+    spriteW?: number;
+    spriteH?: number;
+  }>;
 }
 
 const NODE_WIDTH = 140;
 const NODE_HEADER_H = 24;
 const PORT_H = 18;
 
-export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, characterNodes }: BlueprintEditorProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
   const [viewMode, setViewMode] = useState<'graph' | 'blocks'>('graph');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [previewFrame, setPreviewFrame] = useState(0);
+  const [previewPlaying, setPreviewPlaying] = useState(false);
+  const [previewMode, setPreviewMode] = useState<'single' | 'character'>('single');
+  const [animateOthers, setAnimateOthers] = useState(true);
+  const previewRef = useRef<HTMLCanvasElement>(null);
+
+  // 预览播放计时器
+  useEffect(() => {
+    if (!previewPlaying || !isFullscreen) return;
+    const interval = setInterval(() => {
+      setPreviewFrame((f) => f + 1);
+    }, 1000 / frameRate);
+    return () => clearInterval(interval);
+  }, [previewPlaying, isFullscreen, frameRate]);
+
+  // 预览小窗：求值蓝图并绘制
+  useEffect(() => {
+    const canvas = previewRef.current;
+    if (!canvas || !isFullscreen) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    try {
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = '#0a0a1a';
+      ctx.fillRect(0, 0, W, H);
+
+      if (previewMode === 'character' && characterNodes && characterNodes.length > 0) {
+        // 整角色模式：渲染所有精灵
+        // 背景网格
+        ctx.strokeStyle = '#1a1a2e';
+        ctx.lineWidth = 1;
+        for (let x = 0; x <= W; x += 20) {
+          ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+        }
+        for (let y = 0; y <= H; y += 20) {
+          ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+        }
+        const cx = W / 2, cy = H / 2;
+        for (const cn of characterNodes) {
+          if (!cn.spritePixels) continue;
+          // 求变换：animateOthers 开时用各自蓝图，否则用静态（frame 0）
+          let t = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
+          if (cn.blueprint && (animateOthers || cn.id === (graph as any)._nodeId)) {
+            try {
+              const r = evaluateBlueprint(cn.blueprint, {
+                frame: animateOthers ? previewFrame : 0,
+                frameRate, vars: {},
+              } as any);
+              t = r;
+            } catch {}
+          }
+          // 如果是当前编辑的节点，用主 graph 的求值结果
+          if ((graph as any)._nodeId === cn.id) {
+            try {
+              const r = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: {} } as any);
+              t = r;
+            } catch {}
+          }
+          const grid = cn.spritePixels;
+          const gw = grid[0]?.length ?? 0;
+          const gh = grid.length;
+          if (gw === 0 || gh === 0) continue;
+          const scale = Math.min(3, 60 / Math.max(gw, gh));
+          const dw = gw * scale, dh = gh * scale;
+          const tmp = document.createElement('canvas');
+          tmp.width = gw; tmp.height = gh;
+          const tctx = tmp.getContext('2d');
+          if (!tctx) continue;
+          const img = tctx.createImageData(gw, gh);
+          for (let y = 0; y < gh; y++) {
+            for (let x = 0; x < gw; x++) {
+              const c = grid[y]?.[x];
+              const idx = (y * gw + x) * 4;
+              if (c && typeof c === 'string') {
+                const hex = c.replace('#', '');
+                img.data[idx] = parseInt(hex.slice(0, 2), 16) || 0;
+                img.data[idx+1] = parseInt(hex.slice(2, 4), 16) || 0;
+                img.data[idx+2] = parseInt(hex.slice(4, 6), 16) || 0;
+                img.data[idx+3] = hex.length >= 8 ? parseInt(hex.slice(6, 8), 16) : 255;
+              }
+            }
+          }
+          tctx.putImageData(img, 0, 0);
+          ctx.save();
+          ctx.imageSmoothingEnabled = false;
+          ctx.translate(cx + t.translateX * scale, cy + t.translateY * scale);
+          ctx.rotate((t.rotation * Math.PI) / 180);
+          ctx.scale(t.scaleX, t.scaleY);
+          ctx.drawImage(tmp, -dw/2, -dh/2, dw, dh);
+          ctx.restore();
+        }
+        // 标注
+        ctx.fillStyle = '#71717a';
+        ctx.font = '9px monospace';
+        ctx.fillText(`整角色 f${previewFrame}${animateOthers ? '' : '（他静态）'}`, 4, 12);
+        return;
+      }
+
+      // 单节点模式（原有逻辑）
+      const t = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: {} } as any);
+
+      if (t.pixels) {
+        // 有 pixels：绘制 screen 输出的像素
+        const grid = t.pixels;
+        const gw = grid[0]?.length ?? 0;
+        const gh = grid.length;
+        if (gw > 0 && gh > 0) {
+          // 计算缩放以适应预览窗
+          const scale = Math.min((W - 20) / gw, (H - 40) / gh, 4);
+          const dw = gw * scale, dh = gh * scale;
+          const dx = (W - dw) / 2, dy = 20 + (H - 40 - dh) / 2;
+          // 绘制像素（imageSmoothing 关闭保持像素风）
+          ctx.imageSmoothingEnabled = false;
+          // 创建临时 canvas 绘制像素网格
+          const tmp = document.createElement('canvas');
+          tmp.width = gw; tmp.height = gh;
+          const tctx = tmp.getContext('2d');
+          if (tctx) {
+            const img = tctx.createImageData(gw, gh);
+            for (let y = 0; y < gh; y++) {
+              for (let x = 0; x < gw; x++) {
+                const c = grid[y]?.[x];
+                const idx = (y * gw + x) * 4;
+                if (c && typeof c === 'string') {
+                  // 解析 #rrggbb 或 #rrggbbaa
+                  const hex = c.replace('#', '');
+                  img.data[idx] = parseInt(hex.slice(0, 2), 16) || 0;
+                  img.data[idx+1] = parseInt(hex.slice(2, 4), 16) || 0;
+                  img.data[idx+2] = parseInt(hex.slice(4, 6), 16) || 0;
+                  img.data[idx+3] = hex.length >= 8 ? parseInt(hex.slice(6, 8), 16) : 255;
+                }
+              }
+            }
+            tctx.putImageData(img, 0, 0);
+            // 应用变换绘制
+            ctx.save();
+            ctx.translate(W/2 + t.translateX * scale, H/2 + t.translateY * scale);
+            ctx.rotate((t.rotation * Math.PI) / 180);
+            ctx.scale(t.scaleX, t.scaleY);
+            ctx.drawImage(tmp, dx - W/2, dy - H/2, dw, dh);
+            ctx.restore();
+          }
+        }
+      } else {
+        // 无 pixels：显示变换数值（纯变换模式）
+        ctx.strokeStyle = '#1a1a2e';
+        for (let x = 0; x <= W; x += 20) {
+          ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+        }
+        ctx.save();
+        ctx.translate(W/2 + t.translateX, H/2 + t.translateY);
+        ctx.rotate((t.rotation * Math.PI) / 180);
+        ctx.scale(t.scaleX, t.scaleY);
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(-30, -20, 60, 40);
+        ctx.restore();
+      }
+      // 数值显示
+      ctx.fillStyle = '#71717a';
+      ctx.font = '9px monospace';
+      ctx.fillText(`f${previewFrame} r${t.rotation.toFixed(1)}°`, 4, 12);
+      ctx.fillText(`x${t.translateX.toFixed(1)} y${t.translateY.toFixed(1)}`, 4, 24);
+    } catch {}
+  }, [graph, previewFrame, frameRate, isFullscreen, previewMode, animateOthers, characterNodes]);
   // 拖拽节点
   const [dragging, setDragging] = useState<{
     nodeId: string;
@@ -235,7 +413,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
   const maxX = Math.max(...Array.from(positions.values()).map((p) => p.x), 0) + NODE_WIDTH + 40;
   const maxY = Math.max(...Array.from(positions.values()).map((p) => p.y), 0) + 120;
 
-  return (
+  const editorContent = (
     <div className="space-y-2">
       {title && (
         <div className="flex items-center justify-between">
@@ -255,6 +433,13 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
             >
               <Blocks className="size-3" />
             </button>
+            <button
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              className="p-1 rounded text-gray-500 hover:text-gray-300"
+              title={isFullscreen ? "退出全屏" : "全屏编辑"}
+            >
+              {isFullscreen ? <Minimize2 className="size-3" /> : <Maximize2 className="size-3" />}
+            </button>
           </div>
         </div>
       )}
@@ -273,6 +458,13 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
             title="积木"
           >
             <Blocks className="size-3" />
+          </button>
+          <button
+            onClick={() => setIsFullscreen(!isFullscreen)}
+            className="p-1 rounded text-gray-500 hover:text-gray-300"
+            title={isFullscreen ? "退出全屏" : "全屏编辑"}
+          >
+            {isFullscreen ? <Minimize2 className="size-3" /> : <Maximize2 className="size-3" />}
           </button>
         </div>
       )}
@@ -513,6 +705,10 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                   });
                 })()}
               </div>
+              {/* 节点输出预览（仅全屏模式） */}
+              {isFullscreen && (
+                <NodePreview graph={graph} nodeId={node.id} frame={previewFrame} frameRate={frameRate} />
+              )}
             </div>
           );
         })}
@@ -604,6 +800,147 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           )}
         </div>
       )}
+    </div>
+  );
+
+  // 全屏模式：覆盖层 + 预览小窗
+  if (isFullscreen) {
+    return (
+      <div className="fixed inset-0 z-50 bg-[#0a0a1a]/95 backdrop-blur-sm p-6 overflow-auto">
+        <div className="max-w-6xl mx-auto relative">
+          {editorContent}
+          {/* 预览小窗 */}
+          <div className="fixed top-6 right-6 bg-[#0a0a1a] border border-[#2a2a4a] rounded-lg p-2 shadow-xl">
+            <div className="flex items-center justify-between mb-1 px-1 gap-2">
+              <div className="text-[9px] text-gray-500">动画预览 f{previewFrame}</div>
+              <div className="flex items-center gap-1">
+                {characterNodes && characterNodes.length > 0 && (
+                  <>
+                    <button
+                      onClick={() => setPreviewMode(previewMode === 'single' ? 'character' : 'single')}
+                      className="px-1.5 py-0.5 text-[8px] rounded bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                      title="切换单节点/整角色"
+                    >
+                      {previewMode === 'single' ? '整角色' : '单节点'}
+                    </button>
+                    {previewMode === 'character' && (
+                      <button
+                        onClick={() => setAnimateOthers(!animateOthers)}
+                        className={`px-1.5 py-0.5 text-[8px] rounded ${animateOthers ? 'bg-cyan-900 text-cyan-300' : 'bg-zinc-800 text-zinc-500'}`}
+                        title="其他节点是否由各自蓝图驱动"
+                      >
+                        {animateOthers ? '他动' : '他静'}
+                      </button>
+                    )}
+                  </>
+                )}
+                <button
+                  onClick={() => setPreviewPlaying(!previewPlaying)}
+                  className="p-1 rounded text-gray-400 hover:text-cyan-300"
+                  title={previewPlaying ? "暂停" : "播放"}
+                >
+                  {previewPlaying ? <Pause className="size-3" /> : <Play className="size-3" />}
+                </button>
+              </div>
+            </div>
+            <canvas ref={previewRef} width={220} height={160} className="rounded bg-black/50" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return editorContent;
+}
+
+/** 单节点输出预览（无播放按钮，同步预览帧） */
+function NodePreview({ graph, nodeId, frame, frameRate }: {
+  graph: BlueprintGraph;
+  nodeId: string;
+  frame: number;
+  frameRate: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    try {
+      const out = evaluateNodeOutput(graph, nodeId, { frame, frameRate, vars: {} } as any);
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = '#080818';
+      ctx.fillRect(0, 0, W, H);
+      if (!out) {
+        ctx.fillStyle = '#52525b';
+        ctx.font = '8px monospace';
+        ctx.fillText('—', 4, 12);
+        return;
+      }
+      // 优先显示 pixels
+      const px = out.pixels;
+      if (px && px.type === 'pixels') {
+        const grid = px.grid;
+        const gw = grid[0]?.length ?? 0;
+        const gh = grid.length;
+        if (gw > 0 && gh > 0) {
+          const scale = Math.min(W / gw, H / gh, 3);
+          const dw = gw * scale, dh = gh * scale;
+          const tmp = document.createElement('canvas');
+          tmp.width = gw; tmp.height = gh;
+          const tctx = tmp.getContext('2d');
+          if (tctx) {
+            const img = tctx.createImageData(gw, gh);
+            for (let y = 0; y < gh; y++) {
+              for (let x = 0; x < gw; x++) {
+                const c = grid[y]?.[x];
+                const idx = (y * gw + x) * 4;
+                if (c && typeof c === 'string') {
+                  const hex = c.replace('#', '');
+                  img.data[idx] = parseInt(hex.slice(0, 2), 16) || 0;
+                  img.data[idx+1] = parseInt(hex.slice(2, 4), 16) || 0;
+                  img.data[idx+2] = parseInt(hex.slice(4, 6), 16) || 0;
+                  img.data[idx+3] = hex.length >= 8 ? parseInt(hex.slice(6, 8), 16) : 255;
+                }
+              }
+            }
+            tctx.putImageData(img, 0, 0);
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(tmp, (W - dw) / 2, (H - dh) / 2, dw, dh);
+          }
+          return;
+        }
+      }
+      // 显示数值输出（取第一个 number 类型的输出）
+      const entries = Object.entries(out);
+      const numEntry = entries.find(([_, v]) => v && (v as any).type === 'number');
+      if (numEntry) {
+        ctx.fillStyle = '#22d3ee';
+        ctx.font = '9px monospace';
+        const val = (numEntry[1] as any).value;
+        ctx.fillText(`${numEntry[0]}:${Number(val).toFixed(2)}`, 4, 14);
+      } else if (entries.length > 0) {
+        ctx.fillStyle = '#71717a';
+        ctx.font = '8px monospace';
+        ctx.fillText(Object.keys(out).join(','), 4, 12);
+      } else {
+        ctx.fillStyle = '#52525b';
+        ctx.font = '8px monospace';
+        ctx.fillText('∅', 4, 12);
+      }
+    } catch {}
+  }, [graph, nodeId, frame, frameRate]);
+
+  return (
+    <div className="px-1.5 pb-1">
+      <canvas
+        ref={canvasRef}
+        width={120}
+        height={36}
+        className="w-full rounded bg-black/40 border border-[#1e1e3a]"
+      />
     </div>
   );
 }

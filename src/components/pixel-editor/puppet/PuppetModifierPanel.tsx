@@ -61,10 +61,30 @@ export default function PuppetModifierPanel() {
   // 蓝图：优先用节点自带的，没有则从 modifiers 即时转换
   const blueprint: BlueprintGraph | null = useMemo(() => {
     if (!node) return null;
-    if (node.blueprint) return node.blueprint;
-    if (modifiers.length > 0) return modifiersToBlueprint(modifiers);
-    return null;
+    // 标记节点ID，供预览区分当前编辑节点
+    const bp = node.blueprint ?? (modifiers.length > 0 ? modifiersToBlueprint(modifiers) : null);
+    if (bp) (bp as any)._nodeId = node.id;
+    return bp;
   }, [node, modifiers]);
+
+  // 整角色预览数据：所有节点的精灵和蓝图
+  const characterNodes = useMemo(() => {
+    if (!skeleton) return undefined;
+    const parts = useProjectStore.getState().parts ?? [];
+    const partMap = new Map(parts.map((p: any) => [p.id, p]));
+    return skeleton.nodes.map((n: any) => {
+      const part = n.spritePartId ? partMap.get(n.spritePartId) : null;
+      const bp = n.blueprint ?? (n.modifiers?.length ? modifiersToBlueprint(n.modifiers) : null);
+      return {
+        id: n.id,
+        name: n.name,
+        blueprint: bp,
+        spritePixels: part?.pixels ?? null,
+        spriteW: part?.width,
+        spriteH: part?.height,
+      };
+    });
+  }, [skeleton]);
 
   const updateBlueprint = (g: BlueprintGraph) => {
     if (!skeleton || !node) return;
@@ -250,6 +270,7 @@ export default function PuppetModifierPanel() {
               onChange={updateBlueprint}
               title={`${node.name} 的蓝图`}
               skeleton={skeleton}
+              characterNodes={characterNodes}
             />
           ) : (
             <div className="text-center py-4 space-y-2">

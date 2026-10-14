@@ -260,7 +260,7 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     params: ['amplitude', 'frequency', 'progress'],
   },
   pixel_edit: {
-    inputs: ['pixels'],
+    inputs: ['pixels', 'brushCommands'],
     outputs: ['pixels'],
     params: ['brushCommands', 'opacity'],
   },

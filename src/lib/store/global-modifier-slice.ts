@@ -9,19 +9,24 @@ import type { ProjectStore } from './types';
 import type { GlobalModifier, GlobalModifierType, ModifierParamValue } from '../types';
 import { GLOBAL_MODIFIER_DEFINITIONS } from '../types';
 import { _isDragActive, setDragActive, setDragPostStackLen, _dragPostStackLen } from './shared';
+import { modifiersToBlueprint, addModifierNodeToBlueprint, removeModifierNodeFromBlueprint } from '../blueprint/migrate';
+import type { BlueprintGraph } from '../blueprint/ir';
 
 export interface GlobalModifierSlice {
   globalModifiers: GlobalModifier[];
+  globalBlueprint: import('../blueprint/ir').BlueprintGraph | null;
   addGlobalModifier: (type: GlobalModifierType) => GlobalModifier;
   removeGlobalModifier: (id: string) => void;
   updateGlobalModifier: (id: string, updates: Partial<GlobalModifier>) => void;
   updateGlobalModifierParams: (id: string, params: Record<string, ModifierParamValue>) => void;
   toggleGlobalModifier: (id: string) => void;
   reorderGlobalModifier: (id: string, direction: 'up' | 'down') => void;
+  setGlobalBlueprint: (g: import('../blueprint/ir').BlueprintGraph | null) => void;
 }
 
 export const createGlobalModifierSlice: StateCreator<ProjectStore, [], [], GlobalModifierSlice> = (set, get) => ({
   globalModifiers: [],
+  globalBlueprint: null,
 
   addGlobalModifier: (type) => {
     if (!_isDragActive) {
@@ -54,6 +59,16 @@ export const createGlobalModifierSlice: StateCreator<ProjectStore, [], [], Globa
       globalModifiers: [...(s.globalModifiers || []), modifier],
     }));
 
+    // 手术式同步蓝图
+    const st = get();
+    try {
+      const bp = st.globalBlueprint;
+      const newBp = bp
+        ? addModifierNodeToBlueprint(bp, modifier as any)
+        : modifiersToBlueprint([...(st.globalModifiers || []), modifier] as any);
+      if (newBp) set({ globalBlueprint: newBp });
+    } catch {}
+
     return modifier;
   },
 
@@ -64,6 +79,14 @@ export const createGlobalModifierSlice: StateCreator<ProjectStore, [], [], Globa
     set((s) => ({
       globalModifiers: (s.globalModifiers || []).filter((m) => m.id !== id),
     }));
+    // 手术式从蓝图移除
+    try {
+      const bp = get().globalBlueprint;
+      if (bp) {
+        const newBp = removeModifierNodeFromBlueprint(bp, id);
+        set({ globalBlueprint: newBp });
+      }
+    } catch {}
   },
 
   updateGlobalModifier: (id, updates) => {
@@ -100,5 +123,9 @@ export const createGlobalModifierSlice: StateCreator<ProjectStore, [], [], Globa
       [mods[idx], mods[newIdx]] = [mods[newIdx], mods[idx]];
       return { globalModifiers: mods };
     });
+  },
+
+  setGlobalBlueprint: (g) => {
+    set({ globalBlueprint: g });
   },
 });

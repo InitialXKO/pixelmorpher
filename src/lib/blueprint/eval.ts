@@ -927,6 +927,11 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     if (!handler) return {};
     const params: Record<string, any> = {};
     for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    // 接线优先：i.brushCommands 覆盖静态 params.brushCommands
+    if (i.brushCommands) {
+      const wired = i.brushCommands as BlueprintValue;
+      if (wired.type === 'array') params.brushCommands = wired.value;
+    }
     const result = handler(params, inputPixels, ctx.frame);
     return { pixels: pixelsVal(result) };
   },
@@ -1407,6 +1412,7 @@ export function evaluateBlueprint(
   skewX: number;
   skewY: number;
   zIndex: number;
+  pixels?: import('../types').PixelGrid;
 } {
   const sorted = topoSort(graph);
   const values = new Map<string, Record<string, BlueprintValue>>();
@@ -1476,6 +1482,7 @@ export function evaluateBlueprint(
   }
 
   const out = values.get(graph.outputId);
+  const pixelsOut = out?.pixels;
   return {
     translateX: out?.translateX ? asNumber(out.translateX) : 0,
     translateY: out?.translateY ? asNumber(out.translateY) : 0,
@@ -1485,12 +1492,84 @@ export function evaluateBlueprint(
     skewX: out?.skewX ? asNumber(out.skewX) : 0,
     skewY: out?.skewY ? asNumber(out.skewY) : 0,
     zIndex: out?.zIndex ? asNumber(out.zIndex) : 0,
+    // screen 节点的 pixels 输出（如果有）
+    pixels: pixelsOut && pixelsOut.type === 'pixels' ? pixelsOut.grid : undefined,
   };
 }
 
 /** 注册自定义节点类型（插件/扩展用） */
 export function registerBlueprintNodeType(type: string, evaluator: NodeEvaluator): void {
   EVALUATORS[type] = evaluator;
+}
+
+/**
+ * 求值指定节点的输出（用于节点预览）
+ * 返回该节点所有输出端口的值
+ */
+export function evaluateNodeOutput(
+  graph: BlueprintGraph,
+  nodeId: string,
+  ctx: BlueprintEvalContext,
+): Record<string, BlueprintValue> | null {
+  const sorted = topoSort(graph);
+  const values = new Map<string, Record<string, BlueprintValue>>();
+
+  const pixelsOutputConnected = new Set<string>();
+  for (const node of graph.nodes) {
+    for (const input of Object.values(node.inputs)) {
+      if (isRef(input) && (input.output ?? 'out') === 'pixels') {
+        pixelsOutputConnected.add(input.nodeId);
+      }
+    }
+  }
+  (ctx as any).pixelsOutputConnected = pixelsOutputConnected;
+
+  for (const node of sorted) {
+    const evaluator = EVALUATORS[node.type];
+    if (!evaluator) continue;
+    if (node.params.enabled === false) {
+      const pixelsInput = node.inputs.pixels;
+      if (pixelsInput && isRef(pixelsInput)) {
+        const src = values.get(pixelsInput.nodeId);
+        const pixels = src?.[pixelsInput.output ?? 'pixels'];
+        values.set(node.id, pixels !== undefined ? { pixels } : {});
+      } else {
+        values.set(node.id, {});
+      }
+      continue;
+    }
+    const resolvedInputs: Record<string, BlueprintValue> = {};
+    for (const [port, input] of Object.entries(node.inputs)) {
+      if (isRef(input)) {
+        const src = values.get(input.nodeId);
+        resolvedInputs[port] = src?.[input.output ?? 'out'] ?? num(0);
+      } else {
+        resolvedInputs[port] = input as BlueprintValue;
+      }
+    }
+    const gateVal = resolvedInputs.gate;
+    if (gateVal !== undefined && asNumber(gateVal) < 0.5) {
+      const pixelsInput = node.inputs.pixels;
+      if (pixelsInput && isRef(pixelsInput)) {
+        const src = values.get(pixelsInput.nodeId);
+        const pixels = src?.[pixelsInput.output ?? 'pixels'];
+        values.set(node.id, pixels !== undefined ? { pixels } : {});
+      } else {
+        values.set(node.id, {});
+      }
+      continue;
+    }
+    try {
+      values.set(node.id, evaluator(node, resolvedInputs, ctx));
+    } catch {
+      values.set(node.id, {});
+    }
+    // 找到目标节点就提前返回（后面的节点不需要算）
+    if (node.id === nodeId) {
+      return values.get(nodeId) ?? null;
+    }
+  }
+  return values.get(nodeId) ?? null;
 }
 
 /** 列出所有内置节点类型（UI  palette 用） */

@@ -84,6 +84,7 @@ import type {
 import type { PuppetSlice } from './puppet-slice';
 import type { CharacterSlice } from './character-slice';
 import type { DccPipelineSlice } from './dcc-pipeline-slice';
+import type { GlobalModifierSlice } from './global-modifier-slice';
 import type {
   TimelineZoom, SnapConfig, DEFAULT_SNAP_CONFIG,
   TrackTimelineDisplay, createDefaultTrackTimelineDisplay,
@@ -92,7 +93,7 @@ import type {
   SelectionFrameStep,
 } from '../v15-types';
 
-export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId'>, PuppetSlice, CharacterSlice, DccPipelineSlice {
+export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'globalModifiers'>, PuppetSlice, CharacterSlice, DccPipelineSlice, GlobalModifierSlice {
   // Project actions
   setProjectName: (name: string) => void;
   setCanvasSize: (w: number, h: number) => void;

@@ -264,12 +264,13 @@ export default function PixelCanvas() {
       const { syncUnifiedCharacters } = require('@/lib/store/sync-unified-characters');
       syncUnifiedCharacters(useProjectStore.setState, useProjectStore.getState);
       const unifiedCharacters = useProjectStore.getState().unifiedCharacters;
+      const globalBlueprint = useProjectStore.getState().globalBlueprint;
       // 参考图可见时用透明背景，让参考图透出来做底
       const bgColor = (s.referenceImageUrl && s.referenceImageVisible) ? 'transparent' : s.backgroundColor;
       renderUnified(offCtx, s.canvasWidth, s.canvasHeight, freshStore.parts, s.keyframes, currentFrame, bgColor,
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
-        s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true);
+        s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint);
     }
 
     // 3. Stroke preview

@@ -38,7 +38,8 @@ import { applyPixelModifiers } from './engine/pixel-modifiers';
 import { resolveKeyframeModifierParams } from './engine/param-driver';
 import { renderEffectTrackFrame } from './engine/effect-render';
 import { renderMotionBlurStroke, renderEffectStroke } from './engine/brush-render';
-import { computeGlobalModifierTransform } from './engine/animation-dispatch';
+import { evaluateBlueprint } from './blueprint/eval';
+import { modifiersToBlueprint } from './blueprint/migrate';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 import { clearRenderCaches } from './engine/render-cache';
 
@@ -93,6 +94,7 @@ export function renderUnified(
   unifiedCharacters: Record<string, Character> | undefined,
   animationClips: AnimationClip[],
   useUnifiedPipeline: boolean = true,
+  globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
 ): void {
   // ---- Compute puppet sprite part IDs (shared logic) ----
   // 注意：未被任何 Character 引用的 Part 不在主画布渲染（用户确认）。
@@ -113,7 +115,7 @@ export function renderUnified(
       unifiedCharacters,
       animationClips, currentFrame, frameRate,
       globalModifiers, animationVariables, canvasModifierTracks,
-      proceduralAnimations,
+      proceduralAnimations, globalBlueprint,
     );
   }
 
@@ -165,10 +167,26 @@ function applyGlobalTransformWrapper(
   globalModifiers: GlobalModifier[] | undefined,
   frame: number,
   frameRate: number,
+  globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
 ): boolean {
   let globalTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
   if (globalModifiers && globalModifiers.length > 0) {
-    globalTransform = computeGlobalModifierTransform(globalModifiers, frame, frameRate);
+    // 全局修改器走蓝图路径：优先用存储的蓝图（含手工接线），否则现场生成
+    const blueprint = globalBlueprint ?? modifiersToBlueprint(globalModifiers as any);
+    if (blueprint) {
+      const t = evaluateBlueprint(blueprint, {
+        frame,
+        frameRate,
+        vars: {},
+      } as any);
+      globalTransform = {
+        translateX: t.translateX,
+        translateY: t.translateY,
+        rotation: t.rotation,
+        scaleX: t.scaleX,
+        scaleY: t.scaleY,
+      };
+    }
   }
   const has = globalTransform.translateX !== 0 || globalTransform.translateY !== 0 ||
     globalTransform.rotation !== 0 || globalTransform.scaleX !== 1 || globalTransform.scaleY !== 1;
@@ -195,11 +213,12 @@ function renderPuppetViaUnifiedPipeline(
   animationVariables?: AnimationVariable[],
   canvasModifierTracks?: CanvasModifierTrack[],
   proceduralAnimations?: ProceduralAnimation[],
+  globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
 ): void {
   // Apply global modifier transform (camera/world transform)
   // This matches the old pipeline's behavior in renderPuppetFrame().
   const hasGlobalTransform = applyGlobalTransformWrapper(
-    ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate,
+    ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
   );
 
   for (const unifiedCharacter of Object.values(unifiedCharacters)) {
@@ -316,7 +335,7 @@ export function renderUnifiedToCanvas(
   // Render puppet parts via unified pipeline
   // H11: 与实时预览一致，木偶渲染包裹全局变换
   const hasGlobalTransform = applyGlobalTransformWrapper(
-    ctx, canvasWidth, canvasHeight, globalModifiers, frame, frameRate,
+    ctx, canvasWidth, canvasHeight, globalModifiers, frame, frameRate, undefined,
   );
   if (puppetSkeletons && puppetCharacters && puppetSkeletons.length > 0) {
     // Build animation clips lookup for puppet keyframes
