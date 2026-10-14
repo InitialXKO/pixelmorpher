@@ -47,6 +47,33 @@ type NodeEvaluator = (
 export const EVALUATORS: Record<string, NodeEvaluator> = {
   // ---- 源 ----
   time: (_n, _i, ctx) => ({ out: num(ctx.frame) }),
+  // timeGate: 时间范围门控
+  // start/end: 生效帧范围（-1 表示无限制）
+  // fadeIn/fadeOut: 淡入淡出帧数（smoothstep）
+  timeGate: (n, i) => {
+    const t = asNumber(i.t ?? num(0));
+    const start = Number(n.params.start ?? -1);
+    const end = Number(n.params.end ?? -1);
+    const fadeIn = Math.max(0, Number(n.params.fadeIn ?? 0));
+    const fadeOut = Math.max(0, Number(n.params.fadeOut ?? 0));
+    
+    // 范围外 → 0
+    if (start >= 0 && t < start) return { out: num(0) };
+    if (end >= 0 && t > end) return { out: num(0) };
+    
+    let w = 1;
+    // 淡入
+    if (start >= 0 && fadeIn > 0 && t < start + fadeIn) {
+      const x = (t - start) / fadeIn;
+      w *= x * x * (3 - 2 * x); // smoothstep
+    }
+    // 淡出
+    if (end >= 0 && fadeOut > 0 && t > end - fadeOut) {
+      const x = (end - t) / fadeOut;
+      w *= x * x * (3 - 2 * x);
+    }
+    return { out: num(Math.max(0, Math.min(1, w))) };
+  },
   const: (n) => ({ out: num(Number(n.params.value ?? 0)) }),
   var: (n, _i, ctx) => {
     const v = ctx.vars[String(n.params.name ?? '')] ?? n.params.default ?? 0;
@@ -66,6 +93,25 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   div: (_n, i) => {
     const b = asNumber(i.b ?? num(1));
     return { out: num(b !== 0 ? asNumber(i.a ?? num(0)) / b : 0) };
+  },
+  // blend: 按 mode 混合 a 和 b
+  // - add: out = a + b
+  // - multiply: out = a * b
+  // - converge: out = a + b * exp(-speed * t)，新贡献随时间衰减
+  blend: (n, i) => {
+    const mode = String(n.params.mode ?? 'add');
+    const a = asNumber(i.a ?? num(0));
+    const b = asNumber(i.b ?? num(0));
+    if (mode === 'multiply') {
+      return { out: num(a * b) };
+    } else if (mode === 'converge') {
+      const t = asNumber(i.t ?? num(0));
+      const speed = Number(n.params.convergeSpeed ?? 0.5);
+      const factor = Math.exp(-speed * t);
+      return { out: num(a + b * factor) };
+    }
+    // default: add
+    return { out: num(a + b) };
   },
   sin: (_n, i) => ({ out: num(Math.sin(asNumber(i.x ?? num(0)))) }),
   cos: (_n, i) => ({ out: num(Math.cos(asNumber(i.x ?? num(0)))) }),
@@ -783,6 +829,21 @@ export function evaluateBlueprint(
     const evaluator = EVALUATORS[node.type];
     if (!evaluator) continue;
 
+    // 短路开关：enabled=false 时跳过节点逻辑
+    // - 像素节点：直通输入像素（bypass）
+    // - 变换节点：输出空（不贡献变换）
+    if (node.params.enabled === false) {
+      const pixelsInput = node.inputs.pixels;
+      if (pixelsInput && isRef(pixelsInput)) {
+        const src = values.get(pixelsInput.nodeId);
+        const pixels = src?.[pixelsInput.output ?? 'pixels'];
+        values.set(node.id, pixels !== undefined ? { pixels } : {});
+      } else {
+        values.set(node.id, {});
+      }
+      continue;
+    }
+
     // 解析输入：字面值直接用，连边从已求值节点取
     const resolvedInputs: Record<string, BlueprintValue> = {};
     for (const [port, input] of Object.entries(node.inputs)) {
@@ -792,6 +853,20 @@ export function evaluateBlueprint(
       } else {
         resolvedInputs[port] = input as BlueprintValue;
       }
+    }
+
+    // 时间门控：gate 输入 < 0.5 时 bypass（像素节点直通，变换节点输出空）
+    const gateVal = resolvedInputs.gate;
+    if (gateVal !== undefined && asNumber(gateVal) < 0.5) {
+      const pixelsInput = node.inputs.pixels;
+      if (pixelsInput && isRef(pixelsInput)) {
+        const src = values.get(pixelsInput.nodeId);
+        const pixels = src?.[pixelsInput.output ?? 'pixels'];
+        values.set(node.id, pixels !== undefined ? { pixels } : {});
+      } else {
+        values.set(node.id, {});
+      }
+      continue;
     }
 
     try {
@@ -827,6 +902,7 @@ export function listBlueprintNodeTypes(): string[] {
 export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   // 源
   time: '时间',
+  timeGate: '时间门',
   const: '常量',
   var: '变量',
   // 数学
@@ -834,6 +910,7 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   sub: '减',
   mul: '乘',
   div: '除',
+  blend: '混合',
   sin: '正弦',
   cos: '余弦',
   // 缓动

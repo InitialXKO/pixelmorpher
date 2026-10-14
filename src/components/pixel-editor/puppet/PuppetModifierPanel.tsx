@@ -20,7 +20,6 @@ import { Label } from '@/components/ui/label';
 import BlueprintEditor from './BlueprintEditor';
 import BlueprintTemplateLoader from './BlueprintTemplateLoader';
 import { modifiersToBlueprint } from '@/lib/blueprint/migrate';
-import { isPixelDeformModifier } from '@/lib/engine/modifier-types';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 
 // 收录的修改器：变换类 + 像素类（用户要求像素层程序化动画也要支持）
@@ -69,8 +68,109 @@ export default function PuppetModifierPanel() {
 
   const updateBlueprint = (g: BlueprintGraph) => {
     if (!skeleton || !node) return;
-    // 保存蓝图到节点
-    useProjectStore.getState().updatePuppetNode(skeleton.id, node.id, { blueprint: g });
+    const store = useProjectStore.getState();
+    
+    // 反向同步：蓝图 → modifiers 列表
+    const modifiers = node.modifiers ?? [];
+    
+    // 3. 删节点 → 删 modifier：列表里有但蓝图里没 mod_* 节点的，收集待删除
+    const toDelete = new Set<string>();
+    for (const mod of modifiers) {
+      const targetId = `mod_${mod.id.replace(/-/g, '').slice(0, 12)}`;
+      const bpNode = g.nodes.find(n => n.id === targetId);
+      if (!bpNode) {
+        toDelete.add(mod.id);
+      }
+    }
+    
+    // 先保存蓝图 + 删除的 modifier（直接更新，不触发 sync，避免二次修改蓝图）
+    let newModifiers = modifiers.filter(m => !toDelete.has(m.id));
+    store.updatePuppetNode(skeleton.id, node.id, { 
+      blueprint: g,
+      modifiers: newModifiers,
+    } as any);
+    
+    // 2&1. 参数、blendMode、时间范围的反向同步
+    for (const mod of newModifiers) {
+      const targetId = `mod_${mod.id.replace(/-/g, '').slice(0, 12)}`;
+      const bpNode = g.nodes.find(n => n.id === targetId);
+      if (!bpNode) continue;
+      
+      // 1. 参数同步：bpNode.params → mod.params（跳过 enabled）
+      const bpParams = bpNode.params ?? {};
+      const modParams = mod.params ?? {};
+      let paramsChanged = false;
+      const updatedParams: Record<string, any> = { ...modParams };
+      
+      for (const [k, v] of Object.entries(bpParams)) {
+        if (k === 'enabled') continue; // enabled 单独处理（顶层字段）
+        if (updatedParams[k] !== v) {
+          updatedParams[k] = v;
+          paramsChanged = true;
+        }
+      }
+      
+      // enabled 短路开关回写：bpNode.params.enabled → mod.enabled
+      let enabledChanged = false;
+      let newEnabled = (mod as any).enabled !== false;
+      if ('enabled' in bpParams) {
+        const bpEnabled = Boolean(bpParams.enabled);
+        if (bpEnabled !== newEnabled) {
+          newEnabled = bpEnabled;
+          enabledChanged = true;
+        }
+      }
+      
+      // 2a. blendMode：找以该 modifier 为 b 输入的 blend 节点
+      let newBlendMode = (mod as any).blendMode;
+      let blendModeChanged = false;
+      for (const bn of g.nodes) {
+        if (bn.type !== 'blend') continue;
+        const bInput = bn.inputs?.b;
+        if (bInput && typeof bInput === 'object' && 'nodeId' in bInput && bInput.nodeId === targetId) {
+          const mode = String(bn.params?.mode ?? 'add');
+          if (mode !== newBlendMode && ['add', 'multiply', 'converge'].includes(mode)) {
+            newBlendMode = mode;
+            blendModeChanged = true;
+          }
+          break;
+        }
+      }
+      
+      // 2b. 时间范围：找 gate_<modId> 节点
+      const timeUpdates: Record<string, any> = {};
+      let timeChanged = false;
+      const gateNode = g.nodes.find(n => n.id === `gate_${targetId}` && n.type === 'timeGate');
+      if (gateNode) {
+        const gp = gateNode.params ?? {};
+        const start = Number(gp.start ?? -1);
+        const end = Number(gp.end ?? -1);
+        const fadeIn = Number(gp.fadeIn ?? 0);
+        const fadeOut = Number(gp.fadeOut ?? 0);
+        if ((mod as any).startFrame !== start) { timeUpdates.startFrame = start; timeChanged = true; }
+        if ((mod as any).endFrame !== end) { timeUpdates.endFrame = end; timeChanged = true; }
+        if ((mod as any).fadeInFrames !== fadeIn) { timeUpdates.fadeInFrames = fadeIn; timeChanged = true; }
+        if ((mod as any).fadeOutFrames !== fadeOut) { timeUpdates.fadeOutFrames = fadeOut; timeChanged = true; }
+      }
+      
+      // 写回（直接更新 modifiers 数组，不触发蓝图 sync）
+      if (paramsChanged || blendModeChanged || timeChanged || enabledChanged) {
+        const sk = useProjectStore.getState().puppetSkeletons.find(s => s.id === skeleton.id);
+        const nd = sk?.nodes.find(n => n.id === node.id);
+        if (nd) {
+          const updatedMods = (nd.modifiers ?? []).map((m: any) => {
+            if (m.id !== mod.id) return m;
+            const updated: any = { ...m };
+            if (paramsChanged) updated.params = updatedParams;
+            if (blendModeChanged) updated.blendMode = newBlendMode;
+            if (enabledChanged) updated.enabled = newEnabled;
+            if (timeChanged) Object.assign(updated, timeUpdates);
+            return updated;
+          });
+          useProjectStore.getState().updatePuppetNode(skeleton.id, node.id, { modifiers: updatedMods } as any);
+        }
+      }
+    }
   };
 
   // 创建空蓝图（含输出节点）
@@ -144,16 +244,6 @@ export default function PuppetModifierPanel() {
         <BlueprintTemplateLoader skeleton={skeleton} />
       ) : activeTab === 'blueprint' ? (
         <>
-          {/* 像素修改器提示：不在蓝图里，走像素管线 */}
-          {(() => {
-            const pixelMods = modifiers.filter((m) => isPixelDeformModifier(m.type));
-            return pixelMods.length > 0 ? (
-              <div className="bg-purple-500/10 border border-purple-500/30 rounded px-2 py-1.5 text-[9px] text-purple-300/90 leading-relaxed mb-2">
-                🎨 该节点有 {pixelMods.length} 个像素修改器（{pixelMods.map((m) => getModifierDef(m.type)?.label ?? m.type).join('、')}），
-                在"列表" tab 编辑，不进蓝图。
-              </div>
-            ) : null;
-          })()}
           {blueprint ? (
             <BlueprintEditor
               graph={blueprint}
@@ -220,6 +310,9 @@ export default function PuppetModifierPanel() {
             onUpdateParam={(name, value) =>
               updatePuppetNodeModifier(skeleton.id, node.id, m.id, { [name]: value })
             }
+            blueprintNode={node.blueprint?.nodes.find(
+              n => n.id === `mod_${m.id.replace(/-/g, '').slice(0, 12)}`
+            )}
           />
         ))}
       </div>
@@ -236,6 +329,7 @@ function ModifierRow({
   onToggle,
   onRemove,
   onUpdateParam,
+  blueprintNode,
 }: {
   modifier: PartAnimationModifier;
   expanded: boolean;
@@ -243,8 +337,19 @@ function ModifierRow({
   onToggle: () => void;
   onRemove: () => void;
   onUpdateParam: (name: string, value: number | string | boolean) => void;
+  blueprintNode?: { inputs?: Record<string, any>; params?: Record<string, any> };
 }) {
   const def = getModifierDef(modifier.type);
+
+  // 检查参数是否被蓝图表达式驱动（inputs 里有连接，而非静态 params）
+  const isParamDrivenByExpression = (paramName: string): string | null => {
+    if (!blueprintNode?.inputs) return null;
+    const input = blueprintNode.inputs[paramName];
+    if (input && typeof input === 'object' && 'nodeId' in input) {
+      return String(input.nodeId);
+    }
+    return null;
+  };
 
   return (
     <div
@@ -284,12 +389,21 @@ function ModifierRow({
         <div className="px-2 pb-2 space-y-1 border-t border-[#1e1e3a] pt-1.5">
           {def.params.map((p) => {
             const val = modifier.params[p.name] ?? p.default;
+            const exprNodeId = isParamDrivenByExpression(p.name);
             return (
               <div key={p.name} className="flex items-center gap-1.5">
                 <span className="text-[9px] text-gray-500 w-20 truncate flex-shrink-0" title={p.label}>
                   {p.label}
                 </span>
-                {p.type === 'boolean' ? (
+                {exprNodeId ? (
+                  // 参数被蓝图表达式驱动 → 显示表达式标识，不可直接编辑
+                  <div
+                    className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#3a3a6a] rounded px-1 py-0.5 text-[10px] text-purple-300 flex items-center gap-1"
+                    title={`由蓝图节点驱动: ${exprNodeId}\n去蓝图 tab 编辑，或断开连接恢复静态值`}
+                  >
+                    <span className="truncate">ƒ {exprNodeId.slice(0, 12)}</span>
+                  </div>
+                ) : p.type === 'boolean' ? (
                   <input
                     type="checkbox"
                     checked={Boolean(val)}
@@ -308,6 +422,20 @@ function ModifierRow({
                       </option>
                     ))}
                   </select>
+                ) : p.type === 'color' ? (
+                  <input
+                    type="color"
+                    value={String(val) || '#000000'}
+                    onChange={(e) => onUpdateParam(p.name, e.target.value)}
+                    className="flex-1 min-w-0 h-6 bg-[#0a0a1a] border border-[#2a2a4a] rounded cursor-pointer"
+                  />
+                ) : p.type === 'string' ? (
+                  <input
+                    type="text"
+                    value={String(val ?? '')}
+                    onChange={(e) => onUpdateParam(p.name, e.target.value)}
+                    className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300"
+                  />
                 ) : (
                   <input
                     type="number"

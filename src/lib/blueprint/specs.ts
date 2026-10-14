@@ -16,6 +16,9 @@ export interface BlueprintNodeSpec {
 export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   // ---- 源 ----
   time: { inputs: [], outputs: ['out'], params: [] },
+  // timeGate: 时间范围门控，输出 0~1 权重
+  // params: start, end, fadeIn, fadeOut（帧数）
+  timeGate: { inputs: ['t'], outputs: ['out'], params: ['start', 'end', 'fadeIn', 'fadeOut'] },
   const: { inputs: [], outputs: ['out'], params: ['value'] },
   var: { inputs: [], outputs: ['out'], params: ['name', 'default'] },
   // 精灵源：输出原始像素图（管线起点）
@@ -26,6 +29,8 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   sub: { inputs: ['a', 'b'], outputs: ['out'], params: [] },
   mul: { inputs: ['a', 'b'], outputs: ['out'], params: [] },
   div: { inputs: ['a', 'b'], outputs: ['out'], params: [] },
+  // blend: 按 mode 混合（add/multiply/converge）
+  blend: { inputs: ['a', 'b', 't'], outputs: ['out'], params: ['mode', 'convergeSpeed'] },
   sin: { inputs: ['x'], outputs: ['out'], params: [] },
   cos: { inputs: ['x'], outputs: ['out'], params: [] },
 

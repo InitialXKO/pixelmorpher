@@ -63,7 +63,8 @@ function interpolateCharacterInternal(
     for (const nodeId of Object.keys(character.nodes)) {
       const node = character.nodes[nodeId]!;
       const values = interpolateSingleNode(node, currentFrame);
-      const blueprint = node.modifiers?.length ? modifiersToBlueprint(node.modifiers as any) : null;
+      // 优先用 node.blueprint（已同步，含手动编辑）；无蓝图时从 modifiers 生成
+      const blueprint = (node as any).blueprint ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers as any) : null);
       if (blueprint) {
         const t = evaluateBlueprint(blueprint, {
           frame: currentFrame,

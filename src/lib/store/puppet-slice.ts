@@ -5,6 +5,7 @@
 
 import { generateDefaultCostumeSprite } from '../engine/default-costume-sprites';
 import { applyJointOpenings, getPlugJointWidth, type JointOpeningSpec } from '../engine/render-helpers/puppet-joint-color';
+import { modifiersToBlueprint, addModifierNodeToBlueprint, removeModifierNodeFromBlueprint } from '../blueprint/migrate';
 import type { StateCreator } from 'zustand';
 import type { ProjectStore } from './types';
 import type {
@@ -148,6 +149,74 @@ export function computeDirectionDrawOrder(
   return sorted.map(node => {
     return { ...node, zIndex: getZ(node) };
   }).sort((a, b) => a.zIndex - b.zIndex);
+}
+
+// ---- Blueprint 自动同步 helper ----
+// 手术式更新：保留图结构，只增量修改
+
+/** 新增修改器 → 手术式插入蓝图（串在 screen 之前） */
+function syncBlueprintAdd(node: any, mod: any): any {
+  if (!node.blueprint) {
+    // 无蓝图 → 全量生成
+    const mods = node.modifiers ?? [];
+    if (mods.length === 0) return { ...node, blueprint: null };
+    try {
+      return { ...node, blueprint: modifiersToBlueprint(mods) };
+    } catch { return node; }
+  }
+  try {
+    return { ...node, blueprint: addModifierNodeToBlueprint(node.blueprint, mod) };
+  } catch { return node; }
+}
+
+/** 删除修改器 → 手术式从蓝图移除并修复链 */
+function syncBlueprintRemove(node: any, modifierId: string): any {
+  if (!node.blueprint) {
+    const mods = node.modifiers ?? [];
+    if (mods.length === 0) return { ...node, blueprint: null };
+    try {
+      return { ...node, blueprint: modifiersToBlueprint(mods) };
+    } catch { return node; }
+  }
+  try {
+    return { ...node, blueprint: removeModifierNodeFromBlueprint(node.blueprint, modifierId) };
+  } catch { return node; }
+}
+
+// 手术式同步：只更新蓝图内对应节点的 params，保留图结构
+function syncBlueprintParams(node: any, modifierId: string, newParams: Record<string, any>): any {
+  if (!node.blueprint) {
+    // 无蓝图 → 全量生成
+    const mods = node.modifiers ?? [];
+    if (mods.length === 0) return { ...node, blueprint: null };
+    try {
+      return { ...node, blueprint: modifiersToBlueprint(mods) };
+    } catch { return node; }
+  }
+  const targetId = `mod_${modifierId.replace(/-/g, '').slice(0, 12)}`;
+  const bp = node.blueprint;
+  const nodes = bp.nodes.map((bn: any) => {
+    if (bn.id !== targetId) return bn;
+    // 参数名迁移与 migrate.ts 保持一致
+    const params = { ...bn.params };
+    for (const [k, v] of Object.entries(newParams)) {
+      if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') {
+        params[k] = v;
+      }
+    }
+    // amplitude → height / angleAmplitude 迁移
+    if (bn.type === 'bounce' || bn.type === 'float') {
+      if (params.amplitude !== undefined && params.height === undefined) {
+        params.height = params.amplitude;
+      }
+    } else if (bn.type === 'wobble') {
+      if (params.amplitude !== undefined && params.angleAmplitude === undefined) {
+        params.angleAmplitude = params.amplitude;
+      }
+    }
+    return { ...bn, params };
+  });
+  return { ...node, blueprint: { ...bp, nodes } };
 }
 
 // ---- Slice Implementation ----
@@ -561,7 +630,11 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
     set(s => ({
       puppetSkeletons: s.puppetSkeletons.map(sk =>
         sk.id === skeletonId
-          ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, modifiers: [...(n.modifiers ?? []), modifier] } : n) }
+          ? { ...sk, nodes: sk.nodes.map(n => {
+              if (n.id !== nodeId) return n;
+              const updated = { ...n, modifiers: [...(n.modifiers ?? []), modifier] };
+              return syncBlueprintAdd(updated, modifier);
+            }) }
           : sk
       ),
     }));
@@ -572,7 +645,11 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
     set(s => ({
       puppetSkeletons: s.puppetSkeletons.map(sk =>
         sk.id === skeletonId
-          ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, modifiers: (n.modifiers ?? []).filter(m => m.id !== modifierId) } : n) }
+          ? { ...sk, nodes: sk.nodes.map(n => {
+              if (n.id !== nodeId) return n;
+              const updated = { ...n, modifiers: (n.modifiers ?? []).filter(m => m.id !== modifierId) };
+              return syncBlueprintRemove(updated, modifierId);
+            }) }
           : sk
       ),
     }));
@@ -582,7 +659,12 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
     set(s => ({
       puppetSkeletons: s.puppetSkeletons.map(sk =>
         sk.id === skeletonId
-          ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, modifiers: (n.modifiers ?? []).map(m => m.id === modifierId ? { ...m, params: { ...m.params, ...params } } : m) } : n) }
+          ? { ...sk, nodes: sk.nodes.map(n => {
+              if (n.id !== nodeId) return n;
+              const updated = { ...n, modifiers: (n.modifiers ?? []).map(m => m.id === modifierId ? { ...m, params: { ...m.params, ...params } } : m) };
+              // 手术式同步：只更新蓝图内对应节点参数，保留图结构
+              return syncBlueprintParams(updated, modifierId, params);
+            }) }
           : sk
       ),
     }));
@@ -592,7 +674,14 @@ export const createPuppetSlice: StateCreator<ProjectStore, [], [], PuppetSlice> 
     set(s => ({
       puppetSkeletons: s.puppetSkeletons.map(sk =>
         sk.id === skeletonId
-          ? { ...sk, nodes: sk.nodes.map(n => n.id === nodeId ? { ...n, modifiers: (n.modifiers ?? []).map(m => m.id === modifierId ? { ...m, enabled: !m.enabled } : m) } : n) }
+          ? { ...sk, nodes: sk.nodes.map(n => {
+              if (n.id !== nodeId) return n;
+              const mod = (n.modifiers ?? []).find((m: any) => m.id === modifierId);
+              const newEnabled = mod ? !mod.enabled : false;
+              const updated = { ...n, modifiers: (n.modifiers ?? []).map((m: any) => m.id === modifierId ? { ...m, enabled: newEnabled } : m) };
+              // 开关 → 手术式更新节点 enabled 参数（短路，不增删节点）
+              return syncBlueprintParams(updated, modifierId, { enabled: newEnabled });
+            }) }
           : sk
       ),
     }));
