@@ -91,24 +91,9 @@ export function modifiersToBlueprint(
   for (const mod of enabled) {
     // 用 modifier.id 生成确定性节点 ID，方便参数同步时定位
     const modId = `mod_${mod.id.replace(/-/g, '').slice(0, 12)}`;
-    const params: Record<string, number | string | boolean> = {};
+    const params: Record<string, import('../types').ModifierParamValue> = {};
     for (const [k, v] of Object.entries(mod.params)) {
-      if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') {
-        params[k] = v;
-      }
-    }
-
-    // 参数名迁移：旧版存 amplitude，新求值器读 height/angleAmplitude
-    // - bounce/float: amplitude → height
-    // - wobble: amplitude → angleAmplitude（旧 wobble 的 amplitude 控制旋转角）
-    if (mod.type === 'bounce' || mod.type === 'float') {
-      if (params.amplitude !== undefined && params.height === undefined) {
-        params.height = params.amplitude;
-      }
-    } else if (mod.type === 'wobble') {
-      if (params.amplitude !== undefined && params.angleAmplitude === undefined) {
-        params.angleAmplitude = params.amplitude;
-      }
+      params[k] = v as import('../types').ModifierParamValue;
     }
 
     // 时间输入默认连 time
@@ -348,21 +333,9 @@ export function addModifierNodeToBlueprint(
   if (!timeNode || !screenNode) return bp;
   
   const timeId = timeNode.id;
-  const params: Record<string, number | string | boolean> = { enabled: mod.enabled !== false };
+  const params: Record<string, import('../types').ModifierParamValue> = { enabled: mod.enabled !== false };
   for (const [k, v] of Object.entries(mod.params)) {
-    if (typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean') {
-      params[k] = v;
-    }
-  }
-  // 参数名迁移
-  if (mod.type === 'bounce' || mod.type === 'float') {
-    if (params.amplitude !== undefined && params.height === undefined) {
-      params.height = params.amplitude as number;
-    }
-  } else if (mod.type === 'wobble') {
-    if (params.amplitude !== undefined && params.angleAmplitude === undefined) {
-      params.angleAmplitude = params.amplitude as number;
-    }
+    params[k] = v as import('../types').ModifierParamValue;
   }
 
   // 时间范围门控

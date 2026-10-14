@@ -449,16 +449,17 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
       outY: num(ny * amplitude),
     };
   },
-  // float: translateY = -height * (0.5 + 0.5*sin), rotation = tilt * sin
+  // float: translateY = -amplitude * (0.5 + 0.5*sin), rotation = tilt * sin
   // 与原 floatHandler 对齐
   float: (n, i, ctx): Record<string, BlueprintValue> => {
     const t = asNumber(i.t ?? num(ctx.frame));
-    const height = asNumber(i.height ?? num(Number(n.params.height ?? 5)));
+    // amplitude 为主，height 仅兼容旧蓝图
+    const amplitude = asNumber(i.height ?? i.amplitude ?? num(Number(n.params.height ?? n.params.amplitude ?? 5)));
     const tilt = asNumber(i.tilt ?? num(Number(n.params.tilt ?? 3)));
     const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 32))));
     const phase = (2 * Math.PI * t) / period;
     const result: Record<string, BlueprintValue> = {
-      outY: num(-height * (0.5 + 0.5 * Math.sin(phase))),
+      outY: num(-amplitude * (0.5 + 0.5 * Math.sin(phase))),
       outRotation: num(tilt * Math.sin(phase)),
     };
     // 仅当 pixels 输出有后继连接时才输出（无连接不输出，避免浪费）
@@ -468,7 +469,8 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // wobble: rotation + translateX/Y，与原 wobbleHandler 对齐
   wobble: (n, i, ctx): Record<string, BlueprintValue> => {
     const t = asNumber(i.t ?? num(ctx.frame));
-    const angleAmp = asNumber(i.angleAmplitude ?? num(Number(n.params.angleAmplitude ?? 5)));
+    // amplitude 为主，angleAmplitude 仅兼容旧蓝图
+    const angleAmp = asNumber(i.angleAmplitude ?? i.amplitude ?? num(Number(n.params.angleAmplitude ?? n.params.amplitude ?? 5)));
     const moveAmp = asNumber(i.moveAmplitude ?? num(Number(n.params.moveAmplitude ?? 2)));
     const damping = asNumber(i.damping ?? num(Number(n.params.damping ?? 0)));
     const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 16))));
@@ -511,10 +513,10 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     return result;
   },
 
-  // bounce: translateY = -height * decay * sin²(π * withinBounce)，与原 bounceHandler 对齐
+  // bounce: translateY = -amplitude * decay * sin²(π * withinBounce)，与原 bounceHandler 对齐
   bounce: (n, i, ctx): Record<string, BlueprintValue> => {
     const t = asNumber(i.t ?? num(ctx.frame));
-    const height = asNumber(i.height ?? num(Number(n.params.height ?? 20)));
+    const amplitude = asNumber(i.height ?? i.amplitude ?? num(Number(n.params.height ?? n.params.amplitude ?? 20)));
     const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 12))));
     const bounces = Math.max(1, asNumber(i.bounces ?? num(Number(n.params.bounces ?? 3))));
     const damping = asNumber(i.damping ?? num(Number(n.params.damping ?? 0.5)));
@@ -522,7 +524,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const bounceIndex = Math.floor((t % period) / (period / bounces));
     const withinBounce = bounceT - Math.floor(bounceT);
     const decay = Math.pow(1 - damping, bounceIndex);
-    const result: Record<string, BlueprintValue> = { outY: num(-height * decay * Math.pow(Math.sin(Math.PI * withinBounce), 2)) };
+    const result: Record<string, BlueprintValue> = { outY: num(-amplitude * decay * Math.pow(Math.sin(Math.PI * withinBounce), 2)) };
     // 仅当 pixels 输出有后继连接时才输出（无连接不输出，避免浪费）
     if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
     return result;

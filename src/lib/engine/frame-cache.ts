@@ -21,11 +21,6 @@ let _frameCacheKeyframeHash: string = '';
 const _partDirtyFlags = new Map<string, boolean>();
 let _partDirtyKeyframesRef: Keyframe[] | null = null;
 
-// B3: Keyframe index cache
-let _kfByPartCache: { keyframesRef: Keyframe[] | null; map: Map<string, Keyframe[]> } = {
-  keyframesRef: null,
-  map: new Map(),
-};
 
 // B4: Modifier resolution LRU cache
 const _modifierResolveCache = new Map<string, Keyframe>();
@@ -83,7 +78,6 @@ function clearAnimationStateCache() {
   // P5-1: Also clear pixel cache when animation state is reset
   getPartPixelCache().clear();
   // B3+B4+B7+B8: Clear all render caches
-  _kfByPartCache = { keyframesRef: null, map: new Map() };
   _modifierResolveCache.clear();
   _modifierResolveCacheKeyframesRef = null;
   _frameRenderCache.clear();
@@ -96,26 +90,6 @@ function clearAnimationStateCache() {
     invalidateParamDriverEvalCache();
   } catch { /* ignore if module not yet loaded */ }
 }
-export function getKfByPart(keyframes: Keyframe[]): Map<string, Keyframe[]> {
-  if (_kfByPartCache.keyframesRef === keyframes) {
-    return _kfByPartCache.map;
-  }
-  // Rebuild index
-  const kfByPart = new Map<string, Keyframe[]>();
-  for (const kf of keyframes) {
-    let arr = kfByPart.get(kf.partId);
-    if (!arr) { arr = []; kfByPart.set(kf.partId, arr); }
-    arr.push(kf);
-  }
-  for (const arr of kfByPart.values()) {
-    if (arr.length > 1 && arr.some((k, i) => i > 0 && k.frame < arr[i - 1].frame)) {
-      arr.sort((a, b) => a.frame - b.frame);
-    }
-  }
-  _kfByPartCache = { keyframesRef: keyframes, map: kfByPart };
-  return kfByPart;
-}
-
 /** B7: Compute a lightweight hash of keyframe data for cache invalidation */
 function computeKeyframeHash(keyframes: Keyframe[]): string {
   let hash = '';
@@ -186,8 +160,6 @@ export function invalidateAnimModifierCache(modifierId: string) {
 // Export cache accessors for other modules
 export function getAnimStateCache() { return _animStateCache; }
 export function getActiveDriversCache() { return _activeDriversCache; }
-export function getKfByPartCache() { return _kfByPartCache; }
-export function setKfByPartCache(val: typeof _kfByPartCache) { _kfByPartCache = val; }
 export function getModifierResolveCache() { return { cache: _modifierResolveCache, max: _MODIFIER_RESOLVE_CACHE_MAX, keyframesRef: _modifierResolveCacheKeyframesRef }; }
 export function setModifierResolveCacheKeyframesRef(ref: Keyframe[] | null) { _modifierResolveCacheKeyframesRef = ref; }
 export function getModifierResolveCacheKeyframesRef() { return _modifierResolveCacheKeyframesRef; }

@@ -75,7 +75,7 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   float: {
     inputs: ['t', 'pixels'],
     outputs: ['outY', 'outRotation', 'pixels'],
-    params: ['height', 'period', 'tilt'],
+    params: ['amplitude', 'period', 'tilt'],
   },
   // breath: 输出 out（scale 系数）
   breath: {
@@ -93,13 +93,13 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   wobble: {
     inputs: ['t', 'pixels'],
     outputs: ['outRotation', 'outX', 'outY', 'pixels'],
-    params: ['angleAmplitude', 'moveAmplitude', 'damping', 'period'],
+    params: ['amplitude', 'moveAmplitude', 'damping', 'period'],
   },
   // bounce: 输出 outY
   bounce: {
     inputs: ['t', 'pixels'],
     outputs: ['outY', 'pixels'],
-    params: ['height', 'period', 'bounces', 'damping'],
+    params: ['amplitude', 'period', 'bounces', 'damping'],
   },
   // elastic: 输出取决于 axis 参数
   elastic: {

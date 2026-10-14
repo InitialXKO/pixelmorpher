@@ -536,10 +536,17 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           </div>
 
           {/* params */}
-          {Object.entries(selected.params).map(([key, val]) => (
+          {Object.entries(selected.params).map(([key, val]) => {
+            const isPrimitive = typeof val === 'number' || typeof val === 'string' || typeof val === 'boolean';
+            return (
             <div key={key} className="flex items-center gap-1.5">
-              <span className="text-[9px] text-gray-500 w-20 truncate">{key}</span>
-              {selected.type === 'nodeRef' && key === 'nodeId' && skeleton ? (
+              <span className="text-[9px] text-gray-500 w-20 truncate" title={key}>{key}</span>
+              {!isPrimitive ? (
+                // 非 primitive（数组/对象）：只读显示，由列表 UI 管理
+                <span className="flex-1 min-w-0 text-[9px] text-gray-500 truncate" title={JSON.stringify(val)}>
+                  {Array.isArray(val) ? `[${val.length} 项]` : '{对象}'}（列表管理）
+                </span>
+              ) : selected.type === 'nodeRef' && key === 'nodeId' && skeleton ? (
                 <select
                   value={String(val)}
                   onChange={(e) => {
@@ -582,7 +589,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                 />
               )}
             </div>
-          ))}
+            );
+          })}
 
           {/* 添加参数 */}
           <AddParamRow

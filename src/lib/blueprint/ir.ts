@@ -36,7 +36,7 @@ export interface BlueprintNode {
   /** 命名输入端口 */
   inputs: Record<string, BlueprintInput>;
   /** 静态参数（不随时间变，如 amplitude 默认值；也可被输入覆盖） */
-  params: Record<string, number | string | boolean>;
+  params: Record<string, import('../types').ModifierParamValue>;
   /** UI 布局信息（节点图坐标），不参与求值 */
   ui?: { x: number; y: number };
 }

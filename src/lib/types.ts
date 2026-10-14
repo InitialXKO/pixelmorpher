@@ -700,7 +700,7 @@ export const GLOBAL_MODIFIER_DEFINITIONS: { type: GlobalModifierType; label: str
     icon: 'ArrowUpFromLine',
     category: 'animation',
     params: [
-      { name: 'amplitude', label: '振幅', type: 'number', default: 10, min: 0, max: 100, step: 1 },
+      { name: 'height', label: '振幅', type: 'number', default: 10, min: 0, max: 100, step: 1 },
       { name: 'period', label: '周期(帧)', type: 'number', default: 16, min: 2, max: 120, step: 1 },
       { name: 'phase', label: '相位', type: 'number', default: 0, min: 0, max: 360, step: 1 },
     ],
@@ -724,7 +724,7 @@ export const GLOBAL_MODIFIER_DEFINITIONS: { type: GlobalModifierType; label: str
     icon: 'Cloud',
     category: 'animation',
     params: [
-      { name: 'amplitude', label: '振幅', type: 'number', default: 5, min: 0, max: 50, step: 0.5 },
+      { name: 'height', label: '振幅', type: 'number', default: 5, min: 0, max: 50, step: 0.5 },
       { name: 'period', label: '周期(帧)', type: 'number', default: 30, min: 2, max: 120, step: 1 },
       { name: 'phase', label: '相位', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       { name: 'pivotOffsetX', label: '枢轴偏移X', type: 'number', default: 0, min: -500, max: 500, step: 1 },
@@ -737,7 +737,7 @@ export const GLOBAL_MODIFIER_DEFINITIONS: { type: GlobalModifierType; label: str
     icon: 'Rotate3d',
     category: 'animation',
     params: [
-      { name: 'amplitude', label: '振幅', type: 'number', default: 5, min: 0, max: 45, step: 0.5 },
+      { name: 'angleAmplitude', label: '振幅', type: 'number', default: 5, min: 0, max: 45, step: 0.5 },
       { name: 'period', label: '周期(帧)', type: 'number', default: 20, min: 2, max: 120, step: 1 },
       { name: 'phase', label: '相位', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       { name: 'pivotOffsetX', label: '枢轴偏移X', type: 'number', default: 0, min: -500, max: 500, step: 1 },
