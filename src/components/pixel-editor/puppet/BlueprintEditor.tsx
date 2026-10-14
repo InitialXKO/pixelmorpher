@@ -201,7 +201,20 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
       }
 
       // 单节点模式（原有逻辑）
-      const t = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: {} } as any);
+      const t = evaluateBlueprint(graph, {
+        frame: previewFrame,
+        frameRate,
+        vars: {},
+        // sprite_source 从这里取当前节点的精灵（调用方负责服装解析）
+        spritePixels: (() => {
+          const nid = (graph as any)._nodeId;
+          if (nid && characterNodes) {
+            const cn = characterNodes.find((c) => c.id === nid);
+            return cn?.spritePixels ?? undefined;
+          }
+          return undefined;
+        })(),
+      } as any);
 
       if (t.pixels) {
         // 有 pixels：绘制 screen 输出的像素
@@ -246,19 +259,59 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           }
         }
       } else {
-        // 无 pixels：显示变换数值（纯变换模式）
-        ctx.strokeStyle = '#1a1a2e';
-        for (let x = 0; x <= W; x += 20) {
-          ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+        // 无 pixels：尝试用该节点的精灵像素
+        const nodeId = (graph as any)._nodeId;
+        const cn = nodeId && characterNodes ? characterNodes.find((n) => n.id === nodeId) : null;
+        const spriteGrid = cn?.spritePixels;
+        if (spriteGrid) {
+          const gw = spriteGrid[0]?.length ?? 0;
+          const gh = spriteGrid.length;
+          if (gw > 0 && gh > 0) {
+            const scale = Math.min((W - 20) / gw, (H - 40) / gh, 4);
+            const dw = gw * scale, dh = gh * scale;
+            ctx.imageSmoothingEnabled = false;
+            const tmp = document.createElement('canvas');
+            tmp.width = gw; tmp.height = gh;
+            const tctx = tmp.getContext('2d');
+            if (tctx) {
+              const img = tctx.createImageData(gw, gh);
+              for (let y = 0; y < gh; y++) {
+                for (let x = 0; x < gw; x++) {
+                  const c = spriteGrid[y]?.[x];
+                  const idx = (y * gw + x) * 4;
+                  if (c && typeof c === 'string') {
+                    const hex = c.replace('#', '');
+                    img.data[idx] = parseInt(hex.slice(0, 2), 16) || 0;
+                    img.data[idx+1] = parseInt(hex.slice(2, 4), 16) || 0;
+                    img.data[idx+2] = parseInt(hex.slice(4, 6), 16) || 0;
+                    img.data[idx+3] = hex.length >= 8 ? parseInt(hex.slice(6, 8), 16) : 255;
+                  }
+                }
+              }
+              tctx.putImageData(img, 0, 0);
+              ctx.save();
+              ctx.translate(W/2 + t.translateX, H/2 + t.translateY);
+              ctx.rotate((t.rotation * Math.PI) / 180);
+              ctx.scale(t.scaleX, t.scaleY);
+              ctx.drawImage(tmp, -dw/2, -dh/2, dw, dh);
+              ctx.restore();
+            }
+          }
+        } else {
+          // 无精灵：显示变换矩形示意
+          ctx.strokeStyle = '#1a1a2e';
+          for (let x = 0; x <= W; x += 20) {
+            ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+          }
+          ctx.save();
+          ctx.translate(W/2 + t.translateX, H/2 + t.translateY);
+          ctx.rotate((t.rotation * Math.PI) / 180);
+          ctx.scale(t.scaleX, t.scaleY);
+          ctx.strokeStyle = '#22d3ee';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(-30, -20, 60, 40);
+          ctx.restore();
         }
-        ctx.save();
-        ctx.translate(W/2 + t.translateX, H/2 + t.translateY);
-        ctx.rotate((t.rotation * Math.PI) / 180);
-        ctx.scale(t.scaleX, t.scaleY);
-        ctx.strokeStyle = '#22d3ee';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(-30, -20, 60, 40);
-        ctx.restore();
       }
       // 数值显示
       ctx.fillStyle = '#71717a';
@@ -764,7 +817,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
               </div>
               {/* 节点输出预览（仅全屏模式） */}
               {isFullscreen && (
-                <NodePreview graph={graph} nodeId={node.id} frame={previewFrame} frameRate={frameRate} />
+                <NodePreview graph={graph} nodeId={node.id} frame={previewFrame} frameRate={frameRate} characterNodes={characterNodes} />
               )}
             </div>
           );
@@ -943,11 +996,12 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
 }
 
 /** 单节点输出预览（无播放按钮，同步预览帧） */
-function NodePreview({ graph, nodeId, frame, frameRate }: {
+function NodePreview({ graph, nodeId, frame, frameRate, characterNodes }: {
   graph: BlueprintGraph;
   nodeId: string;
   frame: number;
   frameRate: number;
+  characterNodes?: Array<{ id: string; spritePixels?: import('@/lib/types').PixelGrid | null }>;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -957,7 +1011,17 @@ function NodePreview({ graph, nodeId, frame, frameRate }: {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     try {
-      const out = evaluateNodeOutput(graph, nodeId, { frame, frameRate, vars: {} } as any);
+      const out = evaluateNodeOutput(graph, nodeId, {
+        frame, frameRate, vars: {},
+        // sprite_source 从这里取像素
+        spritePixels: (() => {
+          if (characterNodes) {
+            const cn = characterNodes.find((c) => c.id === (graph as any)._nodeId);
+            return cn?.spritePixels ?? undefined;
+          }
+          return undefined;
+        })(),
+      } as any);
       const W = canvas.width, H = canvas.height;
       ctx.clearRect(0, 0, W, H);
       ctx.fillStyle = '#080818';
