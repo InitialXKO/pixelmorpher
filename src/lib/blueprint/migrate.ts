@@ -228,8 +228,8 @@ export function modifiersToBlueprint(
         connectToPort('scaleY', modId, 'outScaleY', mod.blendMode ?? 'add', mod.params, gateId);
         break;
       case 'skew':
-        // screen 暂不支持 skew，先连 rotation 近似（或等待渲染器扩展）
-        connectToPort('rotation', modId, 'outX', mod.blendMode ?? 'add', mod.params, gateId);
+        connectToPort('skewX', modId, 'skewX', mod.blendMode ?? 'add', mod.params, gateId);
+        connectToPort('skewY', modId, 'skewY', mod.blendMode ?? 'add', mod.params, gateId);
         break;
       case 'pendulum':
         connectToPort('rotation', modId, 'out', mod.blendMode ?? 'add', mod.params, gateId);
@@ -593,7 +593,8 @@ export function addModifierNodeToBlueprint(
         connectPort('scaleY', 'outScaleY');
         break;
       case 'skew':
-        connectPort('rotation', 'outX');
+        connectPort('skewX', 'skewX');
+        connectPort('skewY', 'skewY');
         break;
       case 'pendulum': connectPort('rotation', 'out'); break;
       case 'wobble':

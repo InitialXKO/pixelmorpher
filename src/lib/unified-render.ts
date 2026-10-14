@@ -101,6 +101,8 @@ export interface WorldTransform {
   worldStretch: number;    // Accumulated stretch factor
   variantIndex: DirectionIndex; // Current direction
   mirror: boolean;         // Whether this node is mirrored
+  skewX?: number;          // Local skew X in degrees (blueprint/legacy skew modifier)
+  skewY?: number;          // Local skew Y in degrees (blueprint/legacy skew modifier)
 }
 
 /**
@@ -829,6 +831,8 @@ export function generateRenderPlan(
       modifiers: nodeModifiers,
       frame,
       frameRate,
+      // 蓝图 skew：有倾斜量时才填，避免空数组污染
+      skews: (worldTf.skewX || worldTf.skewY) ? [{ skewX: worldTf.skewX ?? 0, skewY: worldTf.skewY ?? 0 }] : undefined,
     });
   }
 

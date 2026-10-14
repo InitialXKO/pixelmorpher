@@ -288,7 +288,7 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   simple_physics: { inputs: ['t', 'pixels', 'gate'], outputs: ['pixels'], params: [] },
   // 上屏终点：接收像素图和变换，渲染到画布（管线终点）
   screen: {
-    inputs: ['pixels', 'translateX', 'translateY', 'rotation', 'scaleX', 'scaleY'],
+    inputs: ['pixels', 'translateX', 'translateY', 'rotation', 'scaleX', 'scaleY', 'skewX', 'skewY'],
     outputs: [],
     params: [],
   },

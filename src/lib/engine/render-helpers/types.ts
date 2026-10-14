@@ -13,6 +13,8 @@ export interface InterpolatedNodeValues {
   direction: PuppetDirection;
   viewLatitude: number;
   zIndex: number;
+  skewX: number;
+  skewY: number;
 }
 
 /** Computed world transform for a puppet node */

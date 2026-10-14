@@ -1321,6 +1321,8 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const rotation = asNumber((i.rotation as BlueprintValue) ?? num(0));
     const scaleX = asNumber((i.scaleX as BlueprintValue) ?? num(1));
     const scaleY = asNumber((i.scaleY as BlueprintValue) ?? num(1));
+    const skewX = asNumber((i.skewX as BlueprintValue) ?? num(0));
+    const skewY = asNumber((i.skewY as BlueprintValue) ?? num(0));
     // 返回变换数值，供调用方读取（即使无像素也返回）
     const result: Record<string, BlueprintValue> = {
       translateX: num(translateX),
@@ -1328,16 +1330,18 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
       rotation: num(rotation),
       scaleX: num(scaleX),
       scaleY: num(scaleY),
+      skewX: num(skewX),
+      skewY: num(skewY),
     };
     // 无像素输入：纯变换模式，不绘制
     if (!hasPixelsInput) return result;
     // 有像素输入：忠实绘制（即使为空像素也绘制）
     const cmd = {
       pixels: px ?? [],
-      translateX, translateY, rotation, scaleX, scaleY,
+      translateX, translateY, rotation, scaleX, scaleY, skewX, skewY,
     };
     // 若调用方提供了直接绘制回调，screen 即为绘制终点
-    const drawToScreen = (ctx as any).drawToScreen as ((c: { pixels: import('../types').PixelGrid; translateX: number; translateY: number; rotation: number; scaleX: number; scaleY: number }) => void) | undefined;
+    const drawToScreen = (ctx as any).drawToScreen as ((c: { pixels: import('../types').PixelGrid; translateX: number; translateY: number; rotation: number; scaleX: number; scaleY: number; skewX: number; skewY: number }) => void) | undefined;
     if (drawToScreen) {
       drawToScreen(cmd);
     } else {
@@ -1398,6 +1402,8 @@ export function evaluateBlueprint(
   rotation: number;
   scaleX: number;
   scaleY: number;
+  skewX: number;
+  skewY: number;
   zIndex: number;
 } {
   const sorted = topoSort(graph);
@@ -1474,6 +1480,8 @@ export function evaluateBlueprint(
     rotation: out?.rotation ? asNumber(out.rotation) : 0,
     scaleX: out?.scaleX ? asNumber(out.scaleX) : 1,
     scaleY: out?.scaleY ? asNumber(out.scaleY) : 1,
+    skewX: out?.skewX ? asNumber(out.skewX) : 0,
+    skewY: out?.skewY ? asNumber(out.skewY) : 0,
     zIndex: out?.zIndex ? asNumber(out.zIndex) : 0,
   };
 }

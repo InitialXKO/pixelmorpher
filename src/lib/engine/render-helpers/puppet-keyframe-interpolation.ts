@@ -43,6 +43,8 @@ function interpolateSingleNode(node: Node, currentFrame: number): InterpolatedNo
     direction: 'S' as any,
     viewLatitude: 0,
     zIndex: node.zIndex ?? 0,
+    skewX: 0,
+    skewY: 0,
   };
 }
 
@@ -57,7 +59,7 @@ function interpolateCharacterInternal(
   }
   lastFrame = currentFrame;
 
-  const nodeOutputs = new Map<string, { rotation: number; translateX: number; translateY: number; scaleX: number; scaleY: number; zIndex: number }>();
+  const nodeOutputs = new Map<string, { rotation: number; translateX: number; translateY: number; scaleX: number; scaleY: number; skewX: number; skewY: number; zIndex: number }>();
 
   for (let pass = 0; pass < 2; pass++) {
     for (const nodeId of Object.keys(character.nodes)) {
@@ -77,6 +79,8 @@ function interpolateCharacterInternal(
         values.offsetX += t.translateX;
         values.offsetY += t.translateY;
         values.stretch *= t.scaleY;
+        values.skewX += t.skewX;
+        values.skewY += t.skewY;
         if (t.zIndex !== 0) values.zIndex = t.zIndex;
         if (pass === 0) {
           nodeOutputs.set(node.id, {
@@ -85,6 +89,8 @@ function interpolateCharacterInternal(
             translateY: t.translateY,
             scaleX: t.scaleX,
             scaleY: t.scaleY,
+            skewX: t.skewX,
+            skewY: t.skewY,
             zIndex: t.zIndex,
           });
         }
