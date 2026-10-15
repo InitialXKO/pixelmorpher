@@ -903,7 +903,7 @@ export function createDefaultCharacter(id: string, name: string): Character {
     nodes: {
       [rootNodeId]: createDefaultNode(rootNodeId, 'Root'),
     },
-    sprites: {},
+    // NOTE: Character.sprites is deprecated; sprites live in global s.sprites.
     costumeSets: [],
     directionDrawOrders: {},
     latitude: 0,

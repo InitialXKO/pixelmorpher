@@ -75,7 +75,7 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
       name,
       rootNodeId: '',
       nodes: {},
-      sprites: {},  // Shared sprite table (replaces old Part[])
+      // NOTE: Character.sprites is deprecated; sprites live in global s.sprites.
       costumeSets: [],
       directionDrawOrders: {},
       latitude: 0,
