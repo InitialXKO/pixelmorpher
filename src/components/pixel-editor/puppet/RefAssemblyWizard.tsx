@@ -430,8 +430,11 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                       const x = (e.clientX - rect.left) / rect.width;
                       const y = (e.clientY - rect.top) / rect.height;
                       try {
-                        const result = await segmentAtPoint(x, y, 1);
-                        setSamMasks((prev) => [...prev, { label: `区域${prev.length + 1}`, bounds: result.bounds }]);
+                        await useEditorStore.getState().samSegmentAtPoint(x, y);
+                        const samState = useEditorStore.getState().samState;
+                        if (samState.maskBounds) {
+                          setSamMasks((prev) => [...prev, { label: `区域${prev.length + 1}`, bounds: samState.maskBounds! }]);
+                        }
                       } catch (err) {
                         console.error('[SAM] 分割失败:', err);
                       }
@@ -442,6 +445,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                       const x = (e.clientX - rect.left) / rect.width;
                       const y = (e.clientY - rect.top) / rect.height;
                       try {
+                        // 右键：用负点修正（label=0）
                         const result = await segmentAtPoint(x, y, 0);
                         setSamMasks((prev) => [...prev, { label: `排除${prev.length + 1}`, bounds: result.bounds }]);
                       } catch (err) {
@@ -452,6 +456,51 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 )}
                 {samMasks.length > 0 && (
                   <div className="text-xs text-gray-400">已分割 {samMasks.length} 个区域</div>
+                )}
+                {samMasks.length > 0 && (
+                  <Button
+                    size="sm" variant="outline" className="w-full"
+                    onClick={async () => {
+                      const store = useEditorStore.getState();
+                      const { currentMask, maskShape } = store.samState;
+                      if (!currentMask || !maskShape || !referenceImageUrl) return;
+                      try {
+                        // 加载参考图
+                        const img = new Image();
+                        img.crossOrigin = 'anonymous';
+                        await new Promise((res, rej) => {
+                          img.onload = res; img.onerror = rej;
+                          img.src = referenceImageUrl;
+                        });
+                        // 用 mask 抠图：mask>0.5 保留，否则透明
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        const ctx = canvas.getContext('2d')!;
+                        ctx.drawImage(img, 0, 0);
+                        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                        const [mh, mw] = maskShape;
+                        for (let y = 0; y < canvas.height; y++) {
+                          for (let x = 0; x < canvas.width; x++) {
+                            // mask 坐标映射到图像坐标
+                            const mx = Math.floor((x / canvas.width) * mw);
+                            const my = Math.floor((y / canvas.height) * mh);
+                            const maskVal = currentMask[my * mw + mx];
+                            if (maskVal < 0.5) {
+                              imgData.data[(y * canvas.width + x) * 4 + 3] = 0;
+                            }
+                          }
+                        }
+                        ctx.putImageData(imgData, 0, 0);
+                        const newUrl = canvas.toDataURL();
+                        store.setReferenceImageUrl(newUrl);
+                      } catch (err) {
+                        console.error('[SAM] 抠图失败:', err);
+                      }
+                    }}
+                  >
+                    应用分割抠除背景
+                  </Button>
                 )}
               </div>
             )}
