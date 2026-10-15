@@ -273,7 +273,8 @@ export default function PixelCanvas() {
       renderUnified(offCtx, s.canvasWidth, s.canvasHeight, Object.values(freshStore.sprites), s.keyframes, currentFrame, bgColor,
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
-        s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint);
+        s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint,
+        freshStore.sprites);
     }
 
     // 3. Stroke preview
