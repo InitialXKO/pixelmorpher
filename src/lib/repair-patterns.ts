@@ -4,6 +4,7 @@
 // ============================================================
 
 import type { PixelGrid, PixelColor } from './types';
+import { inpaintPixels } from './inpainting';
 
 /** 空像素判断 */
 const isEmpty = (c: PixelColor) => !c || c === '';
@@ -40,50 +41,21 @@ function getBoundaryColors(pixels: PixelGrid, holes: [number, number][]): string
   return colors;
 }
 
-/** 1. 众数填充：用边缘众数色平涂空洞 */
+/** 1. AI 修复（Telea）：用 inpainting 算法智能填补空洞
+ * 替代原众数填充的简单平涂，按边界加权平均自然过渡 */
 export function patternModeFill(pixels: PixelGrid): PixelGrid {
-  const result = pixels.map(row => [...row]);
   const holes = findHoles(pixels);
-  if (holes.length === 0) return result;
-  const colors = getBoundaryColors(pixels, holes);
-  if (colors.length === 0) return result;
-  const freq = new Map<string, number>();
-  for (const c of colors) freq.set(c, (freq.get(c) ?? 0) + 1);
-  let mode = colors[0];
-  let maxCount = 0;
-  for (const [c, n] of freq) {
-    if (n > maxCount) { maxCount = n; mode = c; }
-  }
-  for (const [x, y] of holes) result[y][x] = mode;
-  return result;
+  if (holes.length === 0) return pixels.map(row => [...row]);
+  const mask = new Set(holes.map(([x, y]) => `${x},${y}`));
+  return inpaintPixels(pixels, mask, 3);
 }
 
-/** 2. 边缘延伸：将每条边向内延伸，交汇处取平均 */
+/** 2. AI 修复（Telea）：替代原简单最近邻，边界加权平均 */
 export function patternEdgeExtend(pixels: PixelGrid): PixelGrid {
-  const result = pixels.map(row => [...row]);
-  const h = pixels.length;
-  const w = pixels[0]?.length ?? 0;
-  // 简单版：每个空洞像素取最近的非空邻居
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (!isEmpty(result[y][x])) continue;
-      // 螺旋向外找最近非空
-      let found = '';
-      for (let r = 1; r < Math.max(w, h) && !found; r++) {
-        for (let dy = -r; dy <= r && !found; dy++) {
-          for (let dx = -r; dx <= r && !found; dx++) {
-            if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-            const nx = x + dx, ny = y + dy;
-            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-            const c = pixels[ny][nx];
-            if (!isEmpty(c)) found = c as string;
-          }
-        }
-      }
-      if (found) result[y][x] = found;
-    }
-  }
-  return result;
+  const holes = findHoles(pixels);
+  if (holes.length === 0) return pixels.map(row => [...row]);
+  const mask = new Set(holes.map(([x, y]) => `${x},${y}`));
+  return inpaintPixels(pixels, mask, 5);
 }
 
 /** 3. Bayer 抖动：两种主色按 4x4 Bayer 矩阵抖动 */
@@ -199,8 +171,8 @@ export function patternDirectional(
 
 // Pattern 注册表（6 为仿制图章，需手动操作，不在此）
 export const REPAIR_PATTERNS = [
-  { id: 'mode', label: '众数填充', fn: patternModeFill },
-  { id: 'edge', label: '边缘延伸', fn: patternEdgeExtend },
+  { id: 'mode', label: 'AI 修复', fn: patternModeFill },
+  { id: 'edge', label: 'AI 修复·大半径', fn: patternEdgeExtend },
   { id: 'bayer', label: 'Bayer 抖动', fn: patternBayerDither },
   { id: 'noise', label: '噪点纹理', fn: patternNoiseTexture },
   { id: 'mirror-v', label: '镜像·垂直', fn: (p: PixelGrid) => patternMirror(p, 'v') },
