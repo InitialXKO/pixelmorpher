@@ -465,35 +465,42 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                       const { currentMask, maskShape } = store.samState;
                       if (!currentMask || !maskShape || !referenceImageUrl) return;
                       try {
-                        // 加载参考图
+                        // 加载参考图（data:/blob: 不需要 crossOrigin）
                         const img = new Image();
-                        img.crossOrigin = 'anonymous';
+                        if (!referenceImageUrl.startsWith('data:') && !referenceImageUrl.startsWith('blob:')) {
+                          img.crossOrigin = 'anonymous';
+                        }
                         await new Promise((res, rej) => {
                           img.onload = res; img.onerror = rej;
                           img.src = referenceImageUrl;
                         });
+                        if (!img.naturalWidth || !img.naturalHeight) {
+                          throw new Error('参考图加载失败（0 尺寸）');
+                        }
                         // 用 mask 抠图：mask>0.5 保留，否则透明
                         const canvas = document.createElement('canvas');
-                        canvas.width = img.width;
-                        canvas.height = img.height;
+                        canvas.width = img.naturalWidth;
+                        canvas.height = img.naturalHeight;
                         const ctx = canvas.getContext('2d')!;
                         ctx.drawImage(img, 0, 0);
                         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                         const [mh, mw] = maskShape;
                         for (let y = 0; y < canvas.height; y++) {
                           for (let x = 0; x < canvas.width; x++) {
-                            // mask 坐标映射到图像坐标
                             const mx = Math.floor((x / canvas.width) * mw);
                             const my = Math.floor((y / canvas.height) * mh);
                             const maskVal = currentMask[my * mw + mx];
-                            if (maskVal < 0.5) {
+                            if (!(maskVal >= 0.5)) {
                               imgData.data[(y * canvas.width + x) * 4 + 3] = 0;
                             }
                           }
                         }
                         ctx.putImageData(imgData, 0, 0);
-                        const newUrl = canvas.toDataURL();
+                        const newUrl = canvas.toDataURL('image/png');
                         store.setReferenceImageUrl(newUrl);
+                        // 清掉旧 mask，避免 overlay 残留
+                        store.clearSAMMask();
+                        setSamMasks([]);
                       } catch (err) {
                         console.error('[SAM] 抠图失败:', err);
                       }

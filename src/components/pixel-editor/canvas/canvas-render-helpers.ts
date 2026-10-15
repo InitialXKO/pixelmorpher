@@ -148,7 +148,8 @@ export function renderSamMaskOverlay(rc: RenderContext, sam: SamOverlayParams) {
       if (value >= 0.5) {
         const cx = Math.floor((mx / maskW) * canvasWidth);
         const cy = Math.floor((my / maskH) * canvasHeight);
-        ctx.fillStyle = 'rgba(33, 116, 144, 0.6)';
+        // 绿色半透明，与蓝色系 UI 区分
+        ctx.fillStyle = 'rgba(0, 255, 136, 0.35)';
         ctx.fillRect(panX + cx * zoom, panY + cy * zoom, zoom, zoom);
       }
     }
