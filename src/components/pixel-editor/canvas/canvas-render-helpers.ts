@@ -129,35 +129,6 @@ export function renderSelectionOverlay(
 // 4. SAM mask overlay
 // ============================================================
 
-export interface SamOverlayParams {
-  currentMask: Float32Array | null;
-  maskShape: [number, number] | null;
-}
-
-export function renderSamMaskOverlay(rc: RenderContext, sam: SamOverlayParams) {
-  if (!sam.currentMask || !sam.maskShape) return;
-  const { ctx, canvasWidth, canvasHeight, zoom, panX, panY } = rc;
-  const [maskH, maskW] = sam.maskShape;
-  const mask = sam.currentMask;
-
-  ctx.save();
-  ctx.globalAlpha = 0.4;
-  for (let my = 0; my < maskH; my++) {
-    for (let mx = 0; mx < maskW; mx++) {
-      const value = mask[my * maskW + mx];
-      if (value >= 0.5) {
-        const cx = Math.floor((mx / maskW) * canvasWidth);
-        const cy = Math.floor((my / maskH) * canvasHeight);
-        // 绿色半透明，与蓝色系 UI 区分
-        ctx.fillStyle = 'rgba(0, 255, 136, 0.35)';
-        ctx.fillRect(panX + cx * zoom, panY + cy * zoom, zoom, zoom);
-      }
-    }
-  }
-  ctx.globalAlpha = 1;
-  ctx.restore();
-}
-
 // ============================================================
 // 5. Lasso path preview
 // ============================================================

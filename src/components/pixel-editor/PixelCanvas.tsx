@@ -15,7 +15,6 @@ import {
   renderGridOverlay,
   renderCanvasBorder,
   renderSelectionOverlay,
-  renderSamMaskOverlay,
   renderLassoPreview,
   renderHandDrawnTrajectoryPreview,
   renderCropPreview,
@@ -325,9 +324,6 @@ export default function PixelCanvas() {
     renderGridOverlay(rc);
     renderCanvasBorder(rc);
     s.selectionMarchOffsetRef.current = renderSelectionOverlay(rc, s.selectionMaskRef.current, s.selectionMarchOffsetRef.current);
-
-    const samState = s.editorStore.getState().samState;
-    renderSamMaskOverlay(rc, { currentMask: samState.currentMask, maskShape: samState.maskShape });
 
     if (s.isDrawingRef.current && s.tool === 'lasso') renderLassoPreview(rc, s.lassoPathRef.current);
     if (s.isDrawingRef.current && s.tool === 'trajectory') renderHandDrawnTrajectoryPreview(rc, s.handDrawTrajectoryRef.current);
