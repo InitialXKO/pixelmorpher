@@ -7,13 +7,15 @@ import { ArrowLeft, ArrowRight, X, Upload } from 'lucide-react';
 import { useEditorStore, useProjectStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import type { PixelGrid, PixelColor } from '@/lib/types';
+import { initSAM, isSAMReady, setSAMImage, segmentAtPoint } from '@/lib/sam';
+import { inpaintPixels } from '@/lib/inpainting';
 
 // ============================================================
 // RefAssemblyWizard - 参考图装配向导
 // 四步：底图 → 对位 → 抠图 → 确认
 // ============================================================
 
-type Step = 'upload' | 'align' | 'mask' | 'confirm';
+type Step = 'upload' | 'sam' | 'align' | 'mask' | 'cleanup' | 'confirm';
 
 // 模块级持久化：防组件卸载导致状态丢失
 let persistedStep: Step = 'upload';
@@ -23,10 +25,12 @@ export function resetRefWizardStep() {
   persistedSelectedCharacterId = null;
 }
 
-const STEPS: { id: Step; label: string }[] = [
+const STEPS: { id: Step; label: string; optional?: boolean }[] = [
   { id: 'upload', label: '底图' },
+  { id: 'sam', label: 'AI分割', optional: true },
   { id: 'align', label: '对位' },
   { id: 'mask', label: '抠图' },
+  { id: 'cleanup', label: 'AI清理', optional: true },
   { id: 'confirm', label: '确认' },
 ];
 
@@ -124,6 +128,10 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   // 已处理的节点 ID → 方式 ('mask' | 'mirror')
   const [processedNodes, setProcessedNodes] = useState<Map<string, string>>(new Map());
   const fileRef = useRef<HTMLInputElement>(null);
+  // SAM 状态
+  const [samStatus, setSamStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [samProgress, setSamProgress] = useState(0);
+  const [samMasks, setSamMasks] = useState<{ label: string; bounds: any }[]>([]);
 
   const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
   const setReferenceImageUrl = useEditorStore((s) => s.setReferenceImageUrl);
@@ -368,6 +376,63 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
             <Button onClick={() => fileRef.current?.click()} variant="outline" className="w-full">
               <Upload className="size-3.5 mr-2" /> 导入自己的图片
+            </Button>
+          </div>
+        )}
+
+        {step === 'sam' && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-400">
+              可选：用 SAM 智能分割。先点角色整体抠出背景，再点各肢体分别分割。
+            </p>
+            {samStatus === 'idle' && (
+              <Button
+                size="sm" variant="outline" className="w-full"
+                onClick={async () => {
+                  setSamStatus('loading');
+                  try {
+                    await initSAM('mobilesam', (_s, p) => setSamProgress(p));
+                    // 设置参考图
+                    if (referenceImageUrl) {
+                      const img = new Image();
+                      img.crossOrigin = 'anonymous';
+                      await new Promise((res, rej) => {
+                        img.onload = res; img.onerror = rej;
+                        img.src = referenceImageUrl;
+                      });
+                      await setSAMImage(img);
+                    }
+                    setSamStatus('ready');
+                  } catch {
+                    setSamStatus('error');
+                  }
+                }}
+              >
+                初始化 SAM（首次下载模型 ~45MB）
+              </Button>
+            )}
+            {samStatus === 'loading' && (
+              <div className="text-xs text-gray-400">加载模型中… {Math.round(samProgress)}%</div>
+            )}
+            {samStatus === 'error' && (
+              <div className="text-xs text-red-400">SAM 初始化失败，可跳过此步骤</div>
+            )}
+            {samStatus === 'ready' && (
+              <div className="space-y-2">
+                <div className="text-xs text-green-400">SAM 就绪。在画布参考图上点选肢体进行分割。</div>
+                {samMasks.length > 0 && (
+                  <div className="text-xs text-gray-400">已分割 {samMasks.length} 个区域</div>
+                )}
+              </div>
+            )}
+            <Button
+              size="sm" variant="ghost" className="w-full text-[11px]"
+              onClick={() => {
+                const idx = STEPS.findIndex((s) => s.id === 'sam');
+                if (idx >= 0) setStep(STEPS[idx + 1].id);
+              }}
+            >
+              跳过 <ArrowRight className="size-3.5 ml-1" />
             </Button>
           </div>
         )}
@@ -632,6 +697,64 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             {!activeSkeleton && (
               <div className="text-xs text-amber-400">请先在木偶资产面板选择一个骨架</div>
             )}
+          </div>
+        )}
+
+        {step === 'cleanup' && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-400">
+              可选：用 Inpainting 清理抠图结果。自动检测并填补精灵中的小洞、修复边缘。
+            </p>
+            <Button
+              size="sm" variant="outline" className="w-full"
+              onClick={() => {
+                const projectStore = useProjectStore.getState();
+                let cleaned = 0;
+                for (const nodeId of processedNodes.keys()) {
+                  const node = sortedNodes.find((n) => n.id === nodeId);
+                  if (!node) continue;
+                  // 取节点精灵
+                  const spriteId = (node as any).costumePiece?.sprites?.[0]?.spriteId
+                    ?? (node as any).spriteId;
+                  const sprite = spriteId ? projectStore.sprites[spriteId] : null;
+                  if (!sprite?.data) continue;
+                  const pixels = sprite.data as PixelGrid;
+                  const h = pixels.length;
+                  const w = h > 0 ? pixels[0].length : 0;
+                  // 检测洞：透明像素且四邻域全不透明
+                  const holes = new Set<string>();
+                  for (let y = 1; y < h - 1; y++) {
+                    for (let x = 1; x < w - 1; x++) {
+                      if (pixels[y][x] !== null) continue;
+                      const neighbors = [
+                        pixels[y-1][x], pixels[y+1][x],
+                        pixels[y][x-1], pixels[y][x+1],
+                      ];
+                      if (neighbors.every((n) => n !== null)) {
+                        holes.add(`${x},${y}`);
+                      }
+                    }
+                  }
+                  if (holes.size > 0) {
+                    const cleanedPixels = inpaintPixels(pixels, holes, 3);
+                    projectStore.setSpritePixels(spriteId, cleanedPixels);
+                    cleaned++;
+                  }
+                }
+                console.info(`[cleanup] Inpainting 清理完成，处理 ${cleaned} 个精灵`);
+              }}
+            >
+              对已抠肢体跑 Inpainting 清理
+            </Button>
+            <Button
+              size="sm" variant="ghost" className="w-full text-[11px]"
+              onClick={() => {
+                const idx = STEPS.findIndex((s) => s.id === 'cleanup');
+                if (idx >= 0) setStep(STEPS[idx + 1].id);
+              }}
+            >
+              跳过 <ArrowRight className="size-3.5 ml-1" />
+            </Button>
           </div>
         )}
 
