@@ -644,36 +644,33 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
       });
     }
 
-    // Set children arrays and rootNodeId, populate sprites table
-    // NOTE: Must read fresh state — `store` is a stale snapshot.
-    // Also: addUnifiedCharacter creates a placeholder 'root' node; the wizard
-    // replaces it with template nodes, so delete the placeholder first —
-    // otherwise find((n) => !n.parentId) returns the empty placeholder instead
-    // of the template's real root (e.g. torso), and render traversal never
-    // reaches the template nodes.
+    // Set children arrays and rootNodeId — do it ATOMICALLY in a single
+    // updateUnifiedCharacter to avoid partial state. The placeholder 'root'
+    // node from addUnifiedCharacter is removed first.
     const initialRootId = newCharacter.rootNodeId;
-    if (initialRootId) {
-      store.removeUnifiedNode(characterId, initialRootId);
-    }
-    const createdChar = useProjectStore.getState().unifiedCharacters[characterId];
-    if (createdChar) {
+    const freshChar = useProjectStore.getState().unifiedCharacters[characterId];
+    if (freshChar) {
+      // Build new nodes map with children populated
+      const nodes: Record<string, any> = { ...freshChar.nodes };
+      if (initialRootId && nodes[initialRootId]) {
+        delete nodes[initialRootId];
+      }
       const childMap: Record<string, string[]> = {};
-      for (const node of Object.values(createdChar.nodes)) {
+      for (const node of Object.values(nodes) as any[]) {
         if (node.parentId) {
           if (!childMap[node.parentId]) childMap[node.parentId] = [];
           childMap[node.parentId].push(node.id);
         }
       }
       for (const [parentId, childIds] of Object.entries(childMap)) {
-        const parent = createdChar.nodes[parentId];
-        if (parent) {
-          store.updateUnifiedNode(characterId, parentId, {
-            children: [...(parent.children || []), ...childIds],
-          });
+        if (nodes[parentId]) {
+          nodes[parentId] = { ...nodes[parentId], children: childIds };
         }
       }
-      const rootNode = Object.values(createdChar.nodes).find((n) => !n.parentId);
-      store.updateUnifiedCharacter(characterId, {
+      const rootNode = (Object.values(nodes) as any[]).find((n) => !n.parentId);
+      // Single atomic write: nodes (with children) + rootNodeId
+      useProjectStore.getState().updateUnifiedCharacter(characterId, {
+        nodes,
         rootNodeId: rootNode?.id ?? '',
         // NOTE: Do NOT set character.sprites — it's deprecated.
         // Sprites live in the global s.sprites table; CostumePiece
