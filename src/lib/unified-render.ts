@@ -73,7 +73,7 @@ import { modifiersToBlueprint } from './blueprint/migrate';
 import type { BlueprintGraph } from './blueprint/ir';
 import type { VariableContext as EngineVariableContext } from './engine/param-driver';
 import type {
-  Part, PixelGrid, ModifierType, Keyframe, Skeleton, ProceduralAnimation,
+  PixelGrid, ModifierType, Keyframe, Skeleton, ProceduralAnimation,
   EffectTrack, MotionBlurStroke, EffectStroke, GlobalModifier,
   AnimationVariable as StoreAnimationVariable,
 } from './types';
@@ -136,6 +136,9 @@ function evaluateBlueprintTransforms(
           vars: {},
           nodeOutputs: pass === 1 ? nodeOutputs : undefined,
           nodeState: blueprintNodeState,
+          // costume 节点用（transform pass 不出像素，但保持 ctx 完整）
+          costumes: character.costumeSets,
+          costumeSlot: (node as any).costumePiece?.slotKey,
         } as any);
         result.set(nodeId, {
           translateX: t.translateX,
@@ -668,23 +671,32 @@ function resolveSprite(
   node: Node,
   direction: DirectionIndex,
   costumeSet?: import('./unified-types').CostumeSet,
-): { sprite: Sprite | null; mirror: boolean } {
+  sprites?: Record<string, import('./unified-types').Sprite>,
+): { sprite: Sprite | null; mirror: boolean; spriteId: string | null } {
+  // Helper: resolve Sprite | SpriteRef to {sprite, spriteId}
+  const resolve = (s: import('./unified-types').Sprite | import('./unified-types').SpriteRef | undefined): { sprite: Sprite | null; spriteId: string | null } => {
+    if (!s) return { sprite: null, spriteId: null };
+    if ('spriteId' in s) {
+      return { sprite: sprites?.[s.spriteId] ?? null, spriteId: s.spriteId };
+    }
+    return { sprite: s as Sprite, spriteId: null };
+  };
   // 1. Try costume set
   if (costumeSet && node.costumePiece) {
     const piece = costumeSet.pieces[node.costumePiece.slotKey];
     if (piece) {
       // Check for direct sprite at this direction
-      const directSprite = piece.sprites[direction];
-      if (directSprite) {
-        return { sprite: directSprite, mirror: false };
+      const direct = resolve(piece.sprites[direction]);
+      if (direct.sprite) {
+        return { sprite: direct.sprite, mirror: false, spriteId: direct.spriteId };
       }
 
       // Check mirror map
       const mirrorSource = piece.mirrorMap[direction];
       if (mirrorSource !== undefined) {
-        const mirroredSprite = piece.sprites[mirrorSource];
-        if (mirroredSprite) {
-          return { sprite: mirroredSprite, mirror: true };
+        const mirrored = resolve(piece.sprites[mirrorSource]);
+        if (mirrored.sprite) {
+          return { sprite: mirrored.sprite, mirror: true, spriteId: mirrored.spriteId };
         }
       }
     }
@@ -692,26 +704,45 @@ function resolveSprite(
 
   // 2. Try costumePiece direction sprites
   if (node.costumePiece) {
-    const directSprite = node.costumePiece.sprites[direction];
-    if (directSprite) {
-      return { sprite: directSprite, mirror: false };
+    const direct = resolve(node.costumePiece.sprites[direction]);
+    if (direct.sprite) {
+      return { sprite: direct.sprite, mirror: false, spriteId: direct.spriteId };
     }
 
     const mirrorSource = node.costumePiece.mirrorMap[direction];
     if (mirrorSource !== undefined) {
-      const mirroredSprite = node.costumePiece.sprites[mirrorSource];
-      if (mirroredSprite) {
-        return { sprite: mirroredSprite, mirror: true };
+      const mirrored = resolve(node.costumePiece.sprites[mirrorSource]);
+      if (mirrored.sprite) {
+        return { sprite: mirrored.sprite, mirror: true, spriteId: mirrored.spriteId };
       }
     }
   }
 
   // 3. Fall back to default sprite
   if (node.sprite) {
-    return { sprite: node.sprite, mirror: false };
+    return { sprite: node.sprite, mirror: false, spriteId: null };
   }
 
-  return { sprite: null, mirror: false };
+  return { sprite: null, mirror: false, spriteId: null };
+}
+
+/**
+ * Resolve the sprite ID for a node's current sprite (same logic as render).
+ * Returns null when the sprite is embedded (no table ID) or missing.
+ * Used by UI (e.g. heightmap editor) to write back to the global sprites table.
+ */
+export function resolveNodeSpriteId(
+  character: import('./unified-types').Character,
+  nodeId: string,
+  direction: DirectionIndex,
+  globalSprites?: Record<string, import('./unified-types').Sprite>,
+): string | null {
+  const node = character.nodes[nodeId];
+  if (!node) return null;
+  const activeCs = (character.costumeSets ?? []).find((cs) => cs.id === character.activeCostumeSetId);
+  const spriteTable = globalSprites ?? character.sprites ?? {};
+  const { spriteId } = resolveSprite(node, direction, activeCs, spriteTable);
+  return spriteId;
 }
 
 // ---- Disc Generation ----
@@ -858,7 +889,10 @@ export function generateRenderPlan(
   autoMotionBlur?: boolean,
   autoMotionBlurIntensity?: number,
   proceduralAnimations?: any[],
+  // Global sprite table (s.sprites). Defaults to character.sprites for backward compat.
+  globalSprites?: Record<string, Sprite>,
 ): RenderPlan {
+  const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
   // H6: 收集角色全部节点的 active param drivers，传入真实求值（之前恒为默认值）
   const allActiveDrivers: ParamDriver[] = [];
@@ -900,8 +934,8 @@ export function generateRenderPlan(
     const node = character.nodes[nodeId];
     if (!node || !node.visible) continue;
 
-    // Resolve sprite
-    const { sprite, mirror } = resolveSprite(node, currentDirection, activeCostumeSet);
+    // Resolve sprite (with Character.sprites table for SpriteRef resolution)
+    const { sprite, mirror } = resolveSprite(node, currentDirection, activeCostumeSet, spriteTable);
     if (!sprite) continue;
 
     // Determine rotation strategy
@@ -939,6 +973,10 @@ export function generateRenderPlan(
       skews: (worldTf.skewX || worldTf.skewY) ? [{ skewX: worldTf.skewX ?? 0, skewY: worldTf.skewY ?? 0 }] : undefined,
       // STEP2 合并：plumbing 蓝图给 renderNodeSprite，替代手拼像素链
       blueprint: (node as any).blueprint ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers as any) : null),
+      // costume 节点求值用：服装集 + 槽位 + 精灵表（SpriteRef 解析）
+      costumes: character.costumeSets,
+      costumeSlot: node.costumePiece?.slotKey,
+      sprites: spriteTable,
     });
   }
 
@@ -964,6 +1002,8 @@ export function generateRenderPlan(
     autoMotionBlur,
     autoMotionBlurIntensity,
     frame,
+    frameRate,
+    characterBlueprint: character.blueprint ?? null,
   };
 }
 
@@ -983,11 +1023,28 @@ export function executeRenderPlan(
   // unified-pipeline-bridge 的两处调用都是在 renderFrame 已画好非木偶部件之后叠加木偶，
   // 若在此 clear 会擦掉同一画布上已有的全部内容——见 F1）。
 
-  for (const instruction of plan.sortedInstructions) {
-    if ('nodeId' in instruction) {
-      renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight);
-    } else {
-      renderDisc(ctx, instruction);
+  // Character blueprint path: composite to offscreen → post-process → draw.
+  // Falls through to legacy path when blueprint is missing or evaluation fails.
+  const useCharBlueprint = !!plan.characterBlueprint;
+  if (useCharBlueprint) {
+    const ok = renderCharacterWithBlueprint(ctx, plan, canvasWidth, canvasHeight);
+    if (!ok) {
+      // Fallback: legacy per-node draw (blueprint invalid — don't lose the frame)
+      for (const instruction of plan.sortedInstructions) {
+        if ('nodeId' in instruction) {
+          renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight);
+        } else {
+          renderDisc(ctx, instruction);
+        }
+      }
+    }
+  } else {
+    for (const instruction of plan.sortedInstructions) {
+      if ('nodeId' in instruction) {
+        renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight);
+      } else {
+        renderDisc(ctx, instruction);
+      }
     }
   }
 
@@ -1137,12 +1194,20 @@ function renderNodeSprite(
     // Only evaluate if the blueprint has pixel-deform work to do.
     // (Pure transform blueprints skip pixel evaluation.)
     const hasPixelChain = blueprint.nodes.some(n =>
-      n.type === 'sprite_source' || (n.inputs as any)?.pixels
+      n.type === 'sprite_source' || n.type === 'costume' || (n.inputs as any)?.pixels
     );
     if (hasPixelChain) {
       const bpCtx: any = {
         frame, frameRate, vars: {},
         spritePixels: effectivePixels,  // sprite_source 从这里取图
+        // costume 节点用
+        costumes: (instruction as any).costumes,
+        direction: instruction.variantIndex,
+        costumeSlot: (instruction as any).costumeSlot,
+        // SpriteRef 解析用：Character.sprites 表
+        sprites: (instruction as any).sprites,
+        // bump_light 手绘高度图（Sprite.heightmap，可选）
+        heightmap: (sprite as any).heightmap,
         // screen 为绘制终点：直接回调更新 effectivePixels
         drawToScreen: (cmd: { pixels: PixelGrid }) => {
           if (cmd.pixels) effectivePixels = cmd.pixels;
@@ -1486,6 +1551,98 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
     g: parseInt(h.slice(2, 4), 16),
     b: parseInt(h.slice(4, 6), 16),
   };
+}
+
+/**
+ * Read back a canvas into a PixelGrid.
+ * Opaque pixels → "#rrggbb", transparent → null.
+ * (Alpha is not preserved — same limitation as the PNG importer.)
+ */
+export function canvasToPixels(canvas: HTMLCanvasElement): PixelGrid {
+  const ctx = canvas.getContext('2d')!;
+  const { width, height } = canvas;
+  const img = ctx.getImageData(0, 0, width, height);
+  const grid: PixelGrid = [];
+  for (let y = 0; y < height; y++) {
+    const row: (string | null)[] = [];
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const a = img.data[i + 3]!;
+      if (a === 0) {
+        row.push(null);
+      } else {
+        const r = img.data[i]!.toString(16).padStart(2, '0');
+        const g = img.data[i + 1]!.toString(16).padStart(2, '0');
+        const b = img.data[i + 2]!.toString(16).padStart(2, '0');
+        row.push(`#${r}${g}${b}`);
+      }
+    }
+    grid.push(row);
+  }
+  return grid;
+}
+
+/**
+ * Render a character through its character-level blueprint.
+ * 1. Draw all node/disc instructions to an offscreen canvas (existing path).
+ * 2. Read back pixels → character_source.
+ * 3. Evaluate character blueprint (user post-processing) → screen.
+ * 4. Draw final pixels to the main canvas.
+ * Falls back to null (caller uses legacy path) when blueprint is missing/invalid.
+ */
+function renderCharacterWithBlueprint(
+  ctx: CanvasRenderingContext2D,
+  plan: RenderPlan,
+  canvasWidth: number,
+  canvasHeight: number,
+): boolean {
+  const blueprint = plan.characterBlueprint;
+  if (!blueprint) return false;
+
+  const frame = plan.frame ?? 0;
+  const frameRate = plan.frameRate ?? 12;
+
+  // Step 1: composite character to offscreen (existing per-node path)
+  const off = document.createElement('canvas');
+  off.width = canvasWidth;
+  off.height = canvasHeight;
+  const offCtx = off.getContext('2d')!;
+  for (const instruction of plan.sortedInstructions) {
+    if ('nodeId' in instruction) {
+      renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight);
+    } else {
+      renderDisc(offCtx, instruction);
+    }
+  }
+
+  // Step 2: read back → character_source pixels
+  const characterPixels = canvasToPixels(off);
+
+  // Step 3: evaluate character blueprint
+  let finalPixels: PixelGrid | null = null;
+  try {
+    evaluateBlueprint(blueprint, {
+      frame,
+      frameRate,
+      vars: {},
+      characterPixels,
+      drawToScreen: (cmd: { pixels: PixelGrid }) => {
+        if (cmd.pixels) finalPixels = cmd.pixels;
+      },
+    } as any);
+  } catch {
+    return false;
+  }
+  if (!finalPixels) return false;
+
+  // Step 4: draw result to main canvas
+  const resultCanvas = pixelsToCanvas(finalPixels, canvasWidth, canvasHeight);
+  if (!resultCanvas) return false;
+  const prevSmoothing = ctx.imageSmoothingEnabled;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(resultCanvas, 0, 0);
+  ctx.imageSmoothingEnabled = prevSmoothing;
+  return true;
 }
 
 // ---- Unified Render Entry Point ----

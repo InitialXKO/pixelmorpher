@@ -6,7 +6,6 @@
 // ============================================================
 
 import type {
-  Part,
   ModifierInstance,
   EffectTrack,
   EffectStroke,

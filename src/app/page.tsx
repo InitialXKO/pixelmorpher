@@ -18,6 +18,7 @@ import Timeline from '@/components/pixel-editor/Timeline';
 import Toolbar from '@/components/pixel-editor/Toolbar';
 import ExportDialog from '@/components/pixel-editor/ExportDialog';
 import { useProjectStore } from '@/lib/store';
+import { pxToSub } from '@/lib/unified-types';
 import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
 import { useAssetStore } from '@/lib/asset-store';
@@ -36,8 +37,8 @@ import {
 } from '@/components/ui/dialog';
 
 export default function Home() {
-  const { parts, animationClips, activeAnimationClipId, setActiveAnimationClip } = useProjectStore();
-  const { selectPart, editMode, exitPartEditMode, partEditPartId } = useEditorStore();
+  const { sprites, animationClips, activeAnimationClipId, setActiveAnimationClip } = useProjectStore();
+  const { selectPart, editMode, exitSpriteEditMode, spriteEditSpriteId } = useEditorStore();
   const isMasking = editMode === 'mask';
   // 遮罩中：锁定不相干操作
   const isLocked = isMasking;
@@ -87,7 +88,7 @@ export default function Home() {
 
     const autoSave = () => {
       const state = useProjectStore.getState();
-      if (state.parts.length > 0) {
+      if (Object.keys(state.sprites).length > 0) {
         const data = state.exportProjectFile();
         localStorage.setItem('pixelmorpher-autosave', JSON.stringify(data));
         localStorage.setItem('pixelmorpher-autosave-time', new Date().toISOString());
@@ -126,7 +127,7 @@ export default function Home() {
 
   // Create demo parts on first load — Kirby-like walking animation
   useEffect(() => {
-    if (initializedRef.current || parts.length > 0) return;
+    if (initializedRef.current || Object.keys(sprites).length > 0) return;
     initializedRef.current = true;
 
     const store = useProjectStore.getState();
@@ -170,9 +171,9 @@ export default function Home() {
     // ============================================================
     // Part 1: Body (24×24) — Round pink Kirby-like body with face
     // ============================================================
-    const body = store.addPart('身体', 24, 24);
+    const body = store.addSprite('身体', 24, 24);
     {
-      const pixels = body.pixels.map((row) => [...row] as string[]);
+      const pixels = body.data.map((row) => [...row] as string[]);
       // Main round body
       fillEllipse(pixels, 12, 12, 10, 10, '#ff88aa', '#cc4477');
 
@@ -201,52 +202,52 @@ export default function Home() {
       pixels[15][13] = '#ee3355';
       pixels[15][14] = '#ee3355';
 
-      store.setPartPixels(body.id, pixels);
-      store.updatePart(body.id, { pivotX: 12, pivotY: 12 });
+      store.setSpritePixels(body.id!, pixels);
+      store.updateSprite(body.id!, { plug: { x: pxToSub(12), y: pxToSub(12) } });
     }
 
     // ============================================================
     // Part 2: Left Arm (10×8) — Stubby round arm (far arm in side view)
     // ============================================================
-    const leftArm = store.addPart('左臂', 10, 8);
+    const leftArm = store.addSprite('左臂', 10, 8);
     {
-      const pixels = leftArm.pixels.map((row) => [...row] as string[]);
+      const pixels = leftArm.data.map((row) => [...row] as string[]);
       fillEllipse(pixels, 5, 4, 4, 3.5, '#ff88aa', '#cc4477');
-      store.setPartPixels(leftArm.id, pixels);
-      store.updatePart(leftArm.id, { pivotX: 5, pivotY: 0 });
+      store.setSpritePixels(leftArm.id!, pixels);
+      store.updateSprite(leftArm.id!, { plug: { x: pxToSub(5), y: pxToSub(0) } });
     }
 
     // ============================================================
     // Part 3: Right Arm (10×8) — Stubby round arm (near arm)
     // ============================================================
-    const rightArm = store.addPart('右臂', 10, 8);
+    const rightArm = store.addSprite('右臂', 10, 8);
     {
-      const pixels = rightArm.pixels.map((row) => [...row] as string[]);
+      const pixels = rightArm.data.map((row) => [...row] as string[]);
       fillEllipse(pixels, 5, 4, 4, 3.5, '#ff88aa', '#cc4477');
-      store.setPartPixels(rightArm.id, pixels);
-      store.updatePart(rightArm.id, { pivotX: 5, pivotY: 0 });
+      store.setSpritePixels(rightArm.id!, pixels);
+      store.updateSprite(rightArm.id!, { plug: { x: pxToSub(5), y: pxToSub(0) } });
     }
 
     // ============================================================
     // Part 4: Left Foot (10×6) — Stubby red foot (far foot)
     // ============================================================
-    const leftFoot = store.addPart('左脚', 10, 6);
+    const leftFoot = store.addSprite('左脚', 10, 6);
     {
-      const pixels = leftFoot.pixels.map((row) => [...row] as string[]);
+      const pixels = leftFoot.data.map((row) => [...row] as string[]);
       fillEllipse(pixels, 5, 3, 4, 2.5, '#dd3366', '#aa1144');
-      store.setPartPixels(leftFoot.id, pixels);
-      store.updatePart(leftFoot.id, { pivotX: 5, pivotY: 0 });
+      store.setSpritePixels(leftFoot.id!, pixels);
+      store.updateSprite(leftFoot.id!, { plug: { x: pxToSub(5), y: pxToSub(0) } });
     }
 
     // ============================================================
     // Part 5: Right Foot (10×6) — Stubby red foot (near foot)
     // ============================================================
-    const rightFoot = store.addPart('右脚', 10, 6);
+    const rightFoot = store.addSprite('右脚', 10, 6);
     {
-      const pixels = rightFoot.pixels.map((row) => [...row] as string[]);
+      const pixels = rightFoot.data.map((row) => [...row] as string[]);
       fillEllipse(pixels, 5, 3, 4, 2.5, '#dd3366', '#aa1144');
-      store.setPartPixels(rightFoot.id, pixels);
-      store.updatePart(rightFoot.id, { pivotX: 5, pivotY: 0 });
+      store.setSpritePixels(rightFoot.id!, pixels);
+      store.updateSprite(rightFoot.id!, { plug: { x: pxToSub(5), y: pxToSub(0) } });
     }
 
     // ============================================================
@@ -283,11 +284,11 @@ export default function Home() {
     //   Left foot: (-4, 2)   Right foot: (2, 2)
 
     // ---- Frame 0: Contact 1 (right foot forward, left foot back) ----
-    addKf(body.id,     0,   0, -10);
-    addKf(leftArm.id,  0, -12, -16);
-    addKf(rightArm.id, 0,   6, -16);
-    addKf(leftFoot.id, 0,  -4,   2);
-    addKf(rightFoot.id,0,   2,   2);
+    addKf(body.id!,     0,   0, -10);
+    addKf(leftArm.id!,  0, -12, -16);
+    addKf(rightArm.id!, 0,   6, -16);
+    addKf(leftFoot.id!, 0,  -4,   2);
+    addKf(rightFoot.id!,0,   2,   2);
 
     // Add pendulum to arms
 
@@ -296,25 +297,25 @@ export default function Home() {
 
 
     // ---- Frame 4: Passing ----
-    addKf(body.id,     4,   0, -12);
-    addKf(leftArm.id,  4, -12, -18);
-    addKf(rightArm.id, 4,   6, -18);
-    addKf(leftFoot.id, 4,  -4,  -1);
-    addKf(rightFoot.id,4,   2,  -1);
+    addKf(body.id!,     4,   0, -12);
+    addKf(leftArm.id!,  4, -12, -18);
+    addKf(rightArm.id!, 4,   6, -18);
+    addKf(leftFoot.id!, 4,  -4,  -1);
+    addKf(rightFoot.id!,4,   2,  -1);
 
     // ---- Frame 8: Contact 2 ----
-    addKf(body.id,     8,   0, -10);
-    addKf(leftArm.id,  8, -12, -16);
-    addKf(rightArm.id, 8,   6, -16);
-    addKf(leftFoot.id, 8,  -4,   2);
-    addKf(rightFoot.id,8,   2,   2);
+    addKf(body.id!,     8,   0, -10);
+    addKf(leftArm.id!,  8, -12, -16);
+    addKf(rightArm.id!, 8,   6, -16);
+    addKf(leftFoot.id!, 8,  -4,   2);
+    addKf(rightFoot.id!,8,   2,   2);
 
     // ---- Frame 12: Passing back ----
-    addKf(body.id,     12,  0, -12);
-    addKf(leftArm.id,  12,-12, -18);
-    addKf(rightArm.id, 12,  6, -18);
-    addKf(leftFoot.id, 12, -4,  -1);
-    addKf(rightFoot.id,12,  2,  -1);
+    addKf(body.id!,     12,  0, -12);
+    addKf(leftArm.id!,  12,-12, -18);
+    addKf(rightArm.id!, 12,  6, -18);
+    addKf(leftFoot.id!, 12, -4,  -1);
+    addKf(rightFoot.id!,12,  2,  -1);
 
     // ============================================================
     // Skeleton
@@ -324,30 +325,30 @@ export default function Home() {
 
     // Spine — center of body
     const spine = store.addBone(skeleton.id, '脊椎', null, 128, 118, 128, 100);
-    store.bindPartToBone(skeleton.id, spine.id, body.id, 1.0);
+    store.bindPartToBone(skeleton.id, spine.id, body.id!, 1.0);
 
     // Left arm bone
     const leftArmBone = store.addBone(skeleton.id, '左臂骨骼', spine.id, 116, 104, 104, 110);
-    store.bindPartToBone(skeleton.id, leftArmBone.id, leftArm.id, 1.0);
+    store.bindPartToBone(skeleton.id, leftArmBone.id, leftArm.id!, 1.0);
 
     // Right arm bone
     const rightArmBone = store.addBone(skeleton.id, '右臂骨骼', spine.id, 140, 104, 152, 110);
-    store.bindPartToBone(skeleton.id, rightArmBone.id, rightArm.id, 1.0);
+    store.bindPartToBone(skeleton.id, rightArmBone.id, rightArm.id!, 1.0);
 
     // Left leg bone
     const leftLegBone = store.addBone(skeleton.id, '左脚骨骼', spine.id, 122, 130, 122, 140);
-    store.bindPartToBone(skeleton.id, leftLegBone.id, leftFoot.id, 1.0);
+    store.bindPartToBone(skeleton.id, leftLegBone.id, leftFoot.id!, 1.0);
 
     // Right leg bone
     const rightLegBone = store.addBone(skeleton.id, '右脚骨骼', spine.id, 134, 130, 134, 140);
-    store.bindPartToBone(skeleton.id, rightLegBone.id, rightFoot.id, 1.0);
+    store.bindPartToBone(skeleton.id, rightLegBone.id, rightFoot.id!, 1.0);
 
     // Select body part by default
-    selectPart(body.id);
+    selectPart(body.id!);
 
     // Auto-record trajectories for all parts
-    for (const part of useProjectStore.getState().parts) {
-      useProjectStore.getState().autoRecordTrajectory(part.id);
+    for (const sprite of Object.values(useProjectStore.getState().sprites)) {
+      useProjectStore.getState().autoRecordTrajectory(sprite.id!);
     }
 
     // Enable trajectory display by default
@@ -355,7 +356,7 @@ export default function Home() {
 
     // V3.0: Migrate legacy data into the active animation clip
     // After all parts, keyframes, and modifiers are created at the Project level,
-  }, [parts.length]);
+  }, [Object.keys(sprites).length]);
 
   // ---- Right panel content based on workspace mode ----
   const renderRightPanel = () => {
@@ -525,21 +526,21 @@ export default function Home() {
                         部件编辑模式
                       </span>
                       <span className="text-[10px] text-cyan-400/60">
-                        — {parts.find(p => p.id === partEditPartId)?.name ?? ''}
+                        — {sprites[spriteEditSpriteId ?? '']?.name ?? ''}
                       </span>
                       <div className="ml-auto flex gap-1.5">
                         <Button
                           variant="ghost"
                           size="sm"
                           className="h-6 text-[10px] text-zinc-400 hover:text-zinc-200 px-2"
-                          onClick={() => exitPartEditMode(true)}
+                          onClick={() => exitSpriteEditMode(true)}
                         >
                           取消
                         </Button>
                         <Button
                           size="sm"
                           className="h-6 text-[10px] bg-cyan-600 hover:bg-cyan-500 px-2"
-                          onClick={() => exitPartEditMode(false)}
+                          onClick={() => exitSpriteEditMode(false)}
                         >
                           确认
                         </Button>

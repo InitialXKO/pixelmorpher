@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useCallback, useRef, useMemo } from 'react';
-import type { Track, Keyframe, Part } from '@/lib/types';
+import type { Track, Keyframe } from '@/lib/types';
+import type { Sprite } from '@/lib/unified-types';
 import type { SnapConfig } from '@/lib/v15-types';
 import KeyframeMarker from './KeyframeMarker';
 import { getFrameWidth, TRACK_HEIGHT, SNAP_PIXEL_THRESHOLD } from './constants';
@@ -45,7 +46,7 @@ const TrackLane = React.memo(function TrackLane({
   snapFrame?: (rawFrame: number, excludeKeyframeId?: string) => number;
   showThumbnail?: boolean;
   timelineThumbnailQuality?: 'off' | 'low' | 'medium' | 'high';
-  part?: Part;
+  part?: Sprite;
   frameStep?: number;
 }) {
   const fw = frameWidth ?? 24;
@@ -70,12 +71,10 @@ const TrackLane = React.memo(function TrackLane({
     [track.partId, track.locked, totalFrames, onAddKeyframe, fw, snapFrame]
   );
 
-  // Generate thumbnail data URL for the part
+  // Generate thumbnail data URL for the sprite
   const thumbnailUrl = useMemo(() => {
     if (!showThumbnail || !part || !timelineThumbnailQuality || timelineThumbnailQuality === 'off') return null;
-    // Use stored thumbnail or generate one inline from part pixels
-    if (part.thumbnail) return part.thumbnail;
-    // Generate a mini thumbnail from the pixels data
+    // Generate a mini thumbnail from the sprite pixels (Sprite 无 thumbnail 缓存，直接生成)
     try {
       const scale = Math.max(1, Math.floor(Math.max(part.width, part.height) / 32));
       const thumbW = Math.max(1, Math.floor(part.width / scale));
@@ -85,9 +84,10 @@ const TrackLane = React.memo(function TrackLane({
       canvas.height = thumbH;
       const ctx = canvas.getContext('2d')!;
       ctx.imageSmoothingEnabled = false;
+      const data = part.data;
       for (let y = 0; y < part.height; y += scale) {
         for (let x = 0; x < part.width; x += scale) {
-          const color = part.pixels[Math.min(y, part.pixels.length - 1)]?.[Math.min(x, part.pixels[0]?.length - 1)];
+          const color = data[Math.min(y, data.length - 1)]?.[Math.min(x, data[0]?.length - 1)];
           if (color) {
             ctx.fillStyle = color;
             ctx.fillRect(Math.floor(x / scale), Math.floor(y / scale), 1, 1);

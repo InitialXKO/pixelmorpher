@@ -21,7 +21,10 @@ import {
   pointInPolygon,
   computeSpriteEndPoint,
   isStrokeToolCheck,
+  spritePivotX,
+  spritePivotY,
 } from './canvas-utils';
+import { subToPx, pxToSub } from '@/lib/unified-types';
 import type { CanvasState } from './use-canvas-state';
 import type { BrushCommand, ModifierInstance } from '@/lib/types';
 
@@ -58,13 +61,13 @@ export const moveToolHandler: ToolHandler = {
     const editorState = s.editorStore.getState();
     // part_edit 模式下只能拖正在编辑的部位
     if (editorState.editMode === 'part_edit') {
-      const editPartId = editorState.partEditPartId;
+      const editPartId = editorState.spriteEditSpriteId;
       if (!editPartId || s.selectedPart?.id !== editPartId) return;
     }
     if (!s.selectedPart) return;
     const selPart = s.selectedPart;
     const offsetX = s.canvasWidth / 2; const offsetY = s.canvasHeight / 2;
-    const { offsetX: txOff, offsetY: tyOff } = s.getInterpolatedTranslateOffset(selPart.id, currentFrame);
+    const { offsetX: txOff, offsetY: tyOff } = s.getInterpolatedTranslateOffset(selPart.id!, currentFrame);
     if (isPixelInPart(px, py, selPart, offsetX, offsetY, txOff, tyOff)) {
       const targetLevel = s.editorStore.getState().moveTargetLevel;
       const kfOnlyOffsetX = txOff; const kfOnlyOffsetY = tyOff;
@@ -84,7 +87,7 @@ export const moveToolHandler: ToolHandler = {
     const newOffsetX = s.moveStartRef.current.offsetX + dx; const newOffsetY = s.moveStartRef.current.offsetY + dy;
     // Part 是纯精灵数据，不再有 part_global 位移层级；统一走关键帧
     let kf = s.keyframes.find(k => k.partId === selPart.id && k.frame === currentFrame);
-    if (!kf) kf = useProjectStore.getState().addKeyframe(selPart.id, currentFrame);
+    if (!kf) kf = useProjectStore.getState().addKeyframe(selPart.id!, currentFrame);
     const translateMod = kf.modifiers.find(m => m.type === 'translate');
     if (translateMod) useProjectStore.getState().updateModifier(kf.id, translateMod.id, { offsetX: newOffsetX, offsetY: newOffsetY });
     else { useProjectStore.getState().addModifier(kf.id, 'translate'); const updatedKf = useProjectStore.getState().keyframes.find(k => k.id === kf!.id); if (updatedKf) { const newMod = updatedKf.modifiers.find(m => m.type === 'translate'); if (newMod) useProjectStore.getState().updateModifier(updatedKf.id, newMod.id, { offsetX: newOffsetX, offsetY: newOffsetY }); } }
@@ -129,19 +132,19 @@ function writePuppetPoseKeyframe(
   clipId: string,
   nodeId: string,
   frame: number,
-  values: { angle: number; stretch: number; offsetX: number; offsetY: number },
-  direction: import('@/lib/types').PuppetDirection,
+  values: { angle: number; stretch: number; x: number; y: number },
+  variantIndex: number,
 ) {
   const store = useProjectStore.getState();
   const clip = store.animationClips.find((c) => c.id === clipId);
   if (!clip) return;
-  const existingKf = (clip.puppetNodeKeyframes ?? []).find(
+  const existingKf = (clip.nodeKeyframes ?? []).find(
     (kf) => kf.nodeId === nodeId && kf.frame === frame
   );
   if (existingKf) {
-    store.updatePuppetNodeKeyframe(clip.id, existingKf.id, { ...values, direction });
+    store.updateNodeKeyframe(clip.id, existingKf.id, { ...values, variantIndex });
   } else {
-    store.addPuppetNodeKeyframe(clip.id, nodeId, frame, { ...values, direction });
+    store.addNodeKeyframe(clip.id, nodeId, frame, { ...values, variantIndex });
   }
 }
 
@@ -150,19 +153,19 @@ export const puppetHandler: ToolHandler = {
     const hit = s.findPuppetNodeAtPixel(px, py);
     const project = useProjectStore.getState();
     if (!hit) {
-      project.setSelectedPuppetNodeId(null);
+      project.setSelectedNodeId(null);
       return;
     }
-    const { node, skeleton, character, clipId } = hit;
-    project.setSelectedPuppetNodeId(node.id);
-    s.editorStore.getState().setActivePuppetSkeletonId(skeleton.id);
+    const { node, character, clipId } = hit;
+    project.setSelectedNodeId(node.id);
+    s.editorStore.getState().setActivePuppetSkeletonId(character.id);
     // 同步到操控会话（PerformPanel 肢体列表高亮用）
     try { usePuppetSessionStore.setState({ performNodeId: node.id }); } catch { /* noop */ }
 
     // 预计算插值（Ctrl/Alt 路径也需要世界角度）
     const tmpClip = clipId ? project.animationClips.find((c) => c.id === clipId) : null;
     const tmpFrame = project.currentFrame;
-    const tmpChar = useProjectStore.getState().unifiedCharacters[skeleton.id];
+    const tmpChar = useProjectStore.getState().unifiedCharacters[character.id];
     const tmpIvMap = tmpChar ? interpolateNodeKeyframes(tmpChar, tmpFrame) : new Map();
 
     // 计算指定节点的世界角度（从根累加）
@@ -171,15 +174,12 @@ export const puppetHandler: ToolHandler = {
       let cur: typeof targetNode | undefined = targetNode;
       while (cur) {
         chain.unshift(cur);
-        const p = cur.plug;
-        if (!p?.socketId) break;
-        cur = skeleton.nodes.find((n) =>
-          n.sockets?.some((s) => s.id === p.socketId)
-        );
+        if (!cur.parentId) break;
+        cur = character.nodes[cur.parentId];
       }
       let angle = 0;
       for (const n of chain) {
-        angle += tmpIvMap.get(n.id)?.angle ?? n.angle;
+        angle += tmpIvMap.get(n.id)?.angle ?? n.transform.angle;
       }
       return angle;
     };
@@ -189,13 +189,28 @@ export const puppetHandler: ToolHandler = {
       const activeCostume = character.activeCostumeSetId
         ? character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId) ?? null
         : null;
-      const direction = skeleton.currentDirection || 'S';
-      const resolvedPart = resolvePuppetNodeSprite(node, direction, activeCostume, project.parts);
-      if (!resolvedPart) return;
+      const direction = (node.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      // Resolve sprite from Character.sprites table (track spriteId for pivot updates)
+      let sprite: import('@/lib/unified-types').Sprite | null = null;
+      let spriteId: string | null = null;
+      if (node.costumePiece && activeCostume) {
+        const piece = activeCostume.pieces[node.costumePiece.slotKey];
+        const ref = piece?.sprites[direction] ?? piece?.sprites[0];
+        if (ref) {
+          if ('spriteId' in ref) {
+            spriteId = ref.spriteId;
+            sprite = useProjectStore.getState().sprites[ref.spriteId] ?? null;
+          } else {
+            sprite = ref;
+          }
+        }
+      }
+      if (!sprite && node.sprite) sprite = node.sprite;
+      if (!sprite) return;
       // 先记录，等 mouseup 时判断是点击还是拖动
       s.puppetNodeDragRef.current = {
         nodeId: node.id,
-        skeletonId: skeleton.id,
+        skeletonId: character.id,
         characterId: character.id,
         clipId: clipId ?? '',
         startX: px,
@@ -210,10 +225,10 @@ export const puppetHandler: ToolHandler = {
         pivotWorldY: 0,
         startMouseAngle: 0,
         dragStarted: false,
-        // pivot 移动专用
-        pivotPartId: resolvedPart.id,
-        origPivotX: resolvedPart.pivotX ?? 0,
-        origPivotY: resolvedPart.pivotY ?? 0,
+        // pivot 移动专用 (spriteId 存于 pivotPartId 字段；plug 为 subpixel，需转像素)
+        pivotPartId: spriteId ?? '',
+        origPivotX: sprite.plug ? subToPx(sprite.plug.x) : 0,
+        origPivotY: sprite.plug ? subToPx(sprite.plug.y) : 0,
         nodeWorldAngle: computeWorldAngle(node),
       };
       return;
@@ -231,19 +246,17 @@ export const puppetHandler: ToolHandler = {
 
     // Alt+拖动：移动该节点所插入的父节点插槽在父节点中的位置（rig 操作，直接改骨架）
     if (e.altKey) {
-      const plug = node.plug;
-      if (!plug?.socketId) return; // 根节点无插槽
-      const parentNode = skeleton.nodes.find((n) =>
-        n.sockets?.some((s) => s.id === plug.socketId)
-      );
+      const socketId = node.attachment.parentSocketId;
+      if (!socketId) return; // 根节点无插槽
+      const parentNode = node.parentId ? character.nodes[node.parentId] : undefined;
       if (!parentNode) return;
-      const socket = parentNode.sockets.find((s) => s.id === plug.socketId);
+      const socket = parentNode.sockets.find((s) => s.id === socketId);
       if (!socket) return;
       // 父节点世界角度（用当前插值姿态，保证视觉跟手）
       const parentWorldAngle = computeWorldAngle(parentNode);
       s.puppetNodeDragRef.current = {
         nodeId: node.id,
-        skeletonId: skeleton.id,
+        skeletonId: character.id,
         characterId: character.id,
         clipId: clipId ?? '',
         startX: px,
@@ -261,8 +274,8 @@ export const puppetHandler: ToolHandler = {
         // socket 移动专用
         socketId: socket.id,
         parentNodeId: parentNode.id,
-        origSocketX: socket.localX,
-        origSocketY: socket.localY,
+        origSocketX: socket.basePosition.x,
+        origSocketY: socket.basePosition.y,
         parentAngle: parentWorldAngle,
       };
       return;
@@ -279,23 +292,33 @@ export const puppetHandler: ToolHandler = {
     const frame = project.currentFrame;
 
     // 以当前帧的插值姿态为拖动基准（所见即所得）
-    const _uc = useProjectStore.getState().unifiedCharacters[skeleton.id];
+    const _uc = useProjectStore.getState().unifiedCharacters[character.id];
     const ivMap = _uc ? interpolateNodeKeyframes(_uc, frame) : new Map();
-    const rootNode = skeleton.nodes.find((n) => !n.plug);
+    const rootNode = Object.values(character.nodes).find((n) => !n.parentId);
     const moveTarget = node;
     const rotateIv = ivMap.get(node.id);
     const moveIv = ivMap.get(moveTarget.id);
 
-    const pivotWorldX = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight).x;
-    const pivotWorldY = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight).y;
+    const pivotWorldX = (() => {
+      const project = useProjectStore.getState();
+      const uChar = project.unifiedCharacters?.[character.id] ?? project.syncPuppetToUnified?.(character.id);
+      const uNode = uChar?.nodes[node.id];
+      if (uChar && uNode) return s.computePivotWorldPosition(uNode, uChar, s.canvasWidth, s.canvasHeight).x;
+      return 0;
+    })();
+    const pivotWorldY = (() => {
+      const project = useProjectStore.getState();
+      const uChar = project.unifiedCharacters?.[character.id] ?? project.syncPuppetToUnified?.(character.id);
+      const uNode = uChar?.nodes[node.id];
+      if (uChar && uNode) return s.computePivotWorldPosition(uNode, uChar, s.canvasWidth, s.canvasHeight).y;
+      return 0;
+    })();
     const startMouseAngle = Math.atan2(py - pivotWorldY, px - pivotWorldX);
 
     // 计算父节点的世界角度（用于 move 模式的坐标转换）
     let parentWorldAngle = 0;
-    if (dragMode === 'move' && node.plug?.socketId) {
-      const parent = skeleton.nodes.find((n) =>
-        n.sockets?.some((s) => s.id === node.plug!.socketId)
-      );
+    if (dragMode === 'move' && node.attachment.parentSocketId) {
+      const parent = node.parentId ? character.nodes[node.parentId] : undefined;
       if (parent) {
         parentWorldAngle = computeWorldAngle(parent);
       }
@@ -303,15 +326,15 @@ export const puppetHandler: ToolHandler = {
 
     s.puppetNodeDragRef.current = {
       nodeId: node.id,
-      skeletonId: skeleton.id,
+      skeletonId: character.id,
       characterId: character.id,
       clipId: resolvedClipId,
       startX: px,
       startY: py,
-      origAngle: rotateIv?.angle ?? node.angle,
-      origStretch: rotateIv?.stretch ?? node.stretch,
-      origOffsetX: moveIv?.offsetX ?? moveTarget.offsetX,
-      origOffsetY: moveIv?.offsetY ?? moveTarget.offsetY,
+      origAngle: rotateIv?.angle ?? node.transform.angle,
+      origStretch: rotateIv?.stretch ?? node.transform.stretch,
+      origOffsetX: moveIv?.x ?? moveTarget.transform.x,
+      origOffsetY: moveIv?.y ?? moveTarget.transform.y,
       moveTargetNodeId: moveTarget.id,
       mode: dragMode,
       pivotWorldX,
@@ -338,12 +361,14 @@ export const puppetHandler: ToolHandler = {
     }
     const store = useProjectStore.getState();
     const frame = store.currentFrame;
-    const skeleton = store.puppetSkeletons.find((sk) => sk.id === drag.skeletonId);
-    if (!skeleton) return;
-    const direction = skeleton.currentDirection || 'S';
+    const character = store.unifiedCharacters[drag.characterId ?? drag.skeletonId];
+    if (!character) return;
+    // Direction for keyframes: from node's variantIndex (0-7) → PuppetDirection
+    const dragNode = character.nodes[drag.nodeId];
+    const variantIndex = (dragNode?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+    const direction = (['E', 'NE', 'N', 'NW', 'W', 'SW', 'S', 'SE'] as const)[variantIndex];
     const clip = store.animationClips.find((c) => c.id === drag.clipId);
-    const _uc = useProjectStore.getState().unifiedCharacters[skeleton.id];
-    const ivMap = _uc ? interpolateNodeKeyframes(_uc, frame) : new Map();
+    const ivMap = interpolateNodeKeyframes(character, frame);
 
     if (drag.mode === 'rotate') {
       const currentMouseAngle = Math.atan2(py - drag.pivotWorldY, px - drag.pivotWorldX);
@@ -351,9 +376,9 @@ export const puppetHandler: ToolHandler = {
       writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
         angle: newAngle,
         stretch: drag.origStretch,
-        offsetX: drag.origOffsetX,
-        offsetY: drag.origOffsetY,
-      }, direction);
+        x: drag.origOffsetX,
+        y: drag.origOffsetY,
+      }, variantIndex);
     } else if (drag.mode === 'socket') {
       // socket：移动父节点插槽在父节点中的位置（rig 操作，直接改骨架）
       const ddx = px - drag.startX;
@@ -364,31 +389,33 @@ export const puppetHandler: ToolHandler = {
       const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
       const newSocketX = Math.round((drag.origSocketX ?? 0) + localDx);
       const newSocketY = Math.round((drag.origSocketY ?? 0) + localDy);
-      const sk = store.puppetSkeletons.find((x) => x.id === drag.skeletonId);
-      const parentNode = sk?.nodes.find((n) => n.id === drag.parentNodeId);
-      if (sk && parentNode) {
+      const charId = drag.characterId ?? drag.skeletonId;
+      const parentNode = character.nodes[drag.parentNodeId ?? ''];
+      if (parentNode) {
         const newSockets = parentNode.sockets.map((s) =>
-          s.id === drag.socketId ? { ...s, localX: newSocketX, localY: newSocketY } : s
+          s.id === drag.socketId ? { ...s, basePosition: { x: newSocketX, y: newSocketY } } : s
         );
-        store.updatePuppetNode(drag.skeletonId, drag.parentNodeId!, { sockets: newSockets });
+        store.updateUnifiedNode(charId, drag.parentNodeId!, { sockets: newSockets });
       }
     } else if (drag.mode === 'pivot') {
-      // pivot：移动部件枢轴在部件中的位置（直接改 Part）
-      // 部件在画布上按节点世界角度旋转，需逆旋转鼠标增量到部件局部空间
+      // pivot：移动精灵枢轴在精灵中的位置（直接改全局 sprites 表）
+      // 精灵在画布上按节点世界角度旋转，需逆旋转鼠标增量到精灵局部空间
       const ddx = px - drag.startX;
       const ddy = py - drag.startY;
       const angleRad = ((drag.nodeWorldAngle ?? 0) * Math.PI) / 180;
       const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
       const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
-      // px 已是画布像素（screenToPixel 里除过 zoom），精灵 1:1 绘制，画布像素 = 部件像素
-      const part = store.parts.find((p) => p.id === drag.pivotPartId);
-      if (part) {
+      // px 已是画布像素（screenToPixel 里除过 zoom），精灵 1:1 绘制，画布像素 = 精灵像素
+      const sprite = useProjectStore.getState().sprites[drag.pivotPartId ?? ''];
+      if (sprite) {
         const newPivotX = Math.round((drag.origPivotX ?? 0) + localDx);
         const newPivotY = Math.round((drag.origPivotY ?? 0) + localDy);
-        // 钳制到部件范围内
-        const clampedX = Math.max(0, Math.min(part.width - 1, newPivotX));
-        const clampedY = Math.max(0, Math.min(part.height - 1, newPivotY));
-        store.updatePart(drag.pivotPartId!, { pivotX: clampedX, pivotY: clampedY });
+        // 钳制到精灵范围内
+        const clampedX = Math.max(0, Math.min(sprite.width - 1, newPivotX));
+        const clampedY = Math.max(0, Math.min(sprite.height - 1, newPivotY));
+        store.updateSprite(drag.pivotPartId!, {
+          plug: { x: pxToSub(clampedX), y: pxToSub(clampedY) },
+        });
       }
     } else {
       // move：移动目标节点的 offset（offset 在父节点局部空间，需逆旋转鼠标增量）
@@ -403,9 +430,9 @@ export const puppetHandler: ToolHandler = {
       writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, targetNodeId, frame, {
         angle: drag.origAngle,
         stretch: drag.origStretch,
-        offsetX: newOffsetX,
-        offsetY: newOffsetY,
-      }, direction);
+        x: newOffsetX,
+        y: newOffsetY,
+      }, variantIndex);
     }
   },
 
@@ -416,40 +443,44 @@ export const puppetHandler: ToolHandler = {
     if (!session.performArmed || !session.autoKeyframe) return;
 
     const projectState = useProjectStore.getState();
-    const selectedNodeId = session.performNodeId ?? projectState.selectedPuppetNodeId;
+    const selectedNodeId = session.performNodeId ?? projectState.selectedNodeId;
     if (!selectedNodeId) return;
 
-    const skeleton = projectState.puppetSkeletons.find((sk) => sk.nodes.some((n) => n.id === selectedNodeId));
-    if (!skeleton) return;
-    const character = projectState.puppetCharacters.find((c) => c.puppetSkeletonId === skeleton.id);
-    const clipId = character ? session.ensurePuppetClip(character.id) : null;
+    // Find the Character containing the selected node
+    let character: import('@/lib/unified-types').Character | null = null;
+    for (const ch of Object.values(projectState.unifiedCharacters)) {
+      if (ch.nodes[selectedNodeId]) { character = ch; break; }
+    }
+    if (!character) return;
+    const clipId = session.ensurePuppetClip(character.id);
     if (!clipId) return;
     const clip = projectState.animationClips.find((c) => c.id === clipId);
     const frame = projectState.currentFrame;
-    const direction = skeleton.currentDirection || 'S';
-    const _uc = useProjectStore.getState().unifiedCharacters[skeleton.id];
-    const ivMap = _uc ? interpolateNodeKeyframes(_uc, frame) : new Map();
+    const selNode = character.nodes[selectedNodeId];
+    const variantIndex = (selNode?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+    const direction = (['E', 'NE', 'N', 'NW', 'W', 'SW', 'S', 'SE'] as const)[variantIndex];
+    const ivMap = interpolateNodeKeyframes(character, frame);
 
     const ANGLE_STEP = 15;
     const MOVE_STEP = 1;
 
-    const applyNodePose = (nodeId: string, patch: Partial<{ angle: number; offsetX: number; offsetY: number }>) => {
+    const applyNodePose = (nodeId: string, patch: Partial<{ angle: number; x: number; y: number }>) => {
       const iv = ivMap.get(nodeId);
-      const node = skeleton.nodes.find((n) => n.id === nodeId);
+      const node = character!.nodes[nodeId];
       if (!node) return;
-      writePuppetPoseKeyframe(skeleton.id, clipId, nodeId, frame, {
-        angle: patch.angle ?? iv?.angle ?? node.angle,
-        stretch: iv?.stretch ?? node.stretch,
-        offsetX: patch.offsetX ?? iv?.offsetX ?? node.offsetX,
-        offsetY: patch.offsetY ?? iv?.offsetY ?? node.offsetY,
-      }, direction);
+      writePuppetPoseKeyframe(character!.id, clipId, nodeId, frame, {
+        angle: patch.angle ?? iv?.angle ?? node.transform.angle,
+        stretch: iv?.stretch ?? node.transform.stretch,
+        x: patch.x ?? iv?.x ?? node.transform.x,
+        y: patch.y ?? iv?.y ?? node.transform.y,
+      }, variantIndex);
     };
 
     if (e.code === 'KeyQ' || e.code === 'KeyE') {
       e.preventDefault();
       const iv = ivMap.get(selectedNodeId);
-      const node = skeleton.nodes.find((n) => n.id === selectedNodeId)!;
-      const base = iv?.angle ?? node.angle;
+      const node = character.nodes[selectedNodeId]!;
+      const base = iv?.angle ?? node.transform.angle;
       const newAngle = e.code === 'KeyQ' ? base - ANGLE_STEP : base + ANGLE_STEP;
       applyNodePose(selectedNodeId, { angle: newAngle });
       return;
@@ -460,18 +491,18 @@ export const puppetHandler: ToolHandler = {
       e.preventDefault();
       // Alt+方向键 = 移动整个木偶（根节点），否则移动选中节点
       const targetId = e.altKey
-        ? skeleton.nodes.find((n) => !n.plug)?.id ?? selectedNodeId
+        ? Object.values(character.nodes).find((n) => !n.parentId)?.id ?? selectedNodeId
         : selectedNodeId;
       const iv = ivMap.get(targetId);
-      const node = skeleton.nodes.find((n) => n.id === targetId)!;
+      const node = character.nodes[targetId]!;
       let dx = 0, dy = 0;
       if (e.code === 'KeyW' || e.code === 'ArrowUp') dy = -MOVE_STEP;
       else if (e.code === 'KeyS' || e.code === 'ArrowDown') dy = MOVE_STEP;
       else if (e.code === 'KeyA' || e.code === 'ArrowLeft') dx = -MOVE_STEP;
       else if (e.code === 'KeyD' || e.code === 'ArrowRight') dx = MOVE_STEP;
       applyNodePose(targetId, {
-        offsetX: (iv?.offsetX ?? node.offsetX) + dx,
-        offsetY: (iv?.offsetY ?? node.offsetY) + dy,
+        x: (iv?.x ?? node.transform.x) + dx,
+        y: (iv?.y ?? node.transform.y) + dy,
       });
     }
   },
@@ -479,11 +510,13 @@ export const puppetHandler: ToolHandler = {
   onMouseUp(s) {
     const drag = s.puppetNodeDragRef.current;
     // Ctrl+点击（未拖动）：进入部件像素编辑
+    // pivotPartId 存的是 spriteId；若为 part_<id> 格式则提取 partId 进入 Part 编辑
     if (drag && drag.mode === 'pivot' && !drag.dragStarted) {
-      const partId = drag.pivotPartId;
+      const spriteId = drag.pivotPartId ?? '';
+      const partId = spriteId.startsWith('part_') ? spriteId.slice(5) : null;
       if (partId) {
         s.editorStore.getState().selectPart(partId);
-        s.editorStore.getState().enterPartEditMode(partId);
+        s.editorStore.getState().enterSpriteEditMode(partId);
       }
     }
   },
@@ -514,7 +547,7 @@ export const fillToolHandler: ToolHandler = {
           let pixelEditMod = currentKf.modifiers.find(m => m.type === 'pixel_edit' && m.enabled);
           let modId = pixelEditMod?.id;
           if (!modId) modId = store.createPixelEditModifier(currentKf.id);
-          const { offsetX: txOffF, offsetY: tyOffF } = s.getInterpolatedTranslateOffset(selPart.id, currentFrame);
+          const { offsetX: txOffF, offsetY: tyOffF } = s.getInterpolatedTranslateOffset(selPart.id!, currentFrame);
           const localF = s.canvasToPartLocal(px, py, selPart, txOffF, tyOffF);
           const fillPt = localF ? { x: localF.lx, y: localF.ly } : { x: px, y: py };
           const fillCmd: BrushCommand = { id: crypto.randomUUID(), type: 'fill', color: s.brushColor, size: 1, points: [fillPt], blendMode: 'normal', brushStyle: s.brushStyle !== 'solid' ? s.brushStyle : undefined, brushStyleParams: s.brushStyle !== 'solid' ? s.brushStyleParams : undefined };
@@ -544,7 +577,7 @@ export const fillToolHandler: ToolHandler = {
       }
       return;
     }
-    if (s.editMode === 'normal' && s.selectedPartId) s.editorStore.getState().enterPartEditMode(s.selectedPartId);
+    if (s.editMode === 'normal' && s.selectedPartId) s.editorStore.getState().enterSpriteEditMode(s.selectedPartId);
     s.applyFill(px, py);
   },
 };
@@ -694,26 +727,27 @@ export const magicWandHandler: ToolHandler = {
     if (!shiftHeld && !ctrlHeld) s.selectionMaskRef.current.clear();
     const offsetX = s.canvasWidth / 2; const offsetY = s.canvasHeight / 2;
     const sortedParts = [...s.parts];
-    let targetColor: string | null = null; let targetPart: import('@/lib/types').Part | null = null;
+    let targetColor: string | null = null; let targetPart: import('@/lib/unified-types').Sprite | null = null;
     for (const part of sortedParts) {
       const local = s.canvasToPartLocal(px, py, part);
-      if (local && part.pixels[local.ly]?.[local.lx] !== null) { targetColor = part.pixels[local.ly][local.lx]; targetPart = part; break; }
+      if (local && part.data[local.ly]?.[local.lx] !== null) { targetColor = part.data[local.ly][local.lx]; targetPart = part; break; }
     }
     if (targetColor && targetPart) {
       const local = s.canvasToPartLocal(px, py, targetPart);
       if (!local) return;
       const visited = new Set<string>(); const queue: { lx: number; ly: number }[] = [local]; visited.add(`${local.lx},${local.ly}`);
       const tR = parseInt(targetColor.slice(1, 3), 16); const tG = parseInt(targetColor.slice(3, 5), 16); const tB = parseInt(targetColor.slice(5, 7), 16);
+      const pivotX = spritePivotX(targetPart); const pivotY = spritePivotY(targetPart);
       while (queue.length > 0) {
         const { lx, ly } = queue.shift()!;
-        const canvasX = (offsetX - targetPart.pivotX) + lx;
-        const canvasY = (offsetY - targetPart.pivotY) + ly;
+        const canvasX = (offsetX - pivotX) + lx;
+        const canvasY = (offsetY - pivotY) + ly;
         const maskKey = `${canvasX},${canvasY}`;
         if (ctrlHeld) s.selectionMaskRef.current.delete(maskKey); else s.selectionMaskRef.current.add(maskKey);
         for (const n of [{ lx: lx - 1, ly }, { lx: lx + 1, ly }, { lx, ly: ly - 1 }, { lx, ly: ly + 1 }]) {
           if (n.lx < 0 || n.lx >= targetPart.width || n.ly < 0 || n.ly >= targetPart.height) continue;
           const nKey = `${n.lx},${n.ly}`; if (visited.has(nKey)) continue; visited.add(nKey);
-          const nColor = targetPart.pixels[n.ly]?.[n.lx]; if (nColor === null) continue;
+          const nColor = targetPart.data[n.ly]?.[n.lx]; if (nColor === null) continue;
           const nR = parseInt(nColor.slice(1, 3), 16); const nG = parseInt(nColor.slice(3, 5), 16); const nB = parseInt(nColor.slice(5, 7), 16);
           if (Math.abs(tR - nR) + Math.abs(tG - nG) + Math.abs(tB - nB) <= s.magicWandTolerance * 3) queue.push(n);
         }
@@ -737,12 +771,13 @@ export const smartSelectHandler: ToolHandler = {
           const pst = useProjectStore.getState();
           const samCanvas = renderUnifiedToCanvas(
             s.canvasWidth, s.canvasHeight,
-            pst.parts, s.keyframes, currentFrame, s.backgroundColor,
+            Object.values(pst.sprites), s.keyframes, currentFrame, s.backgroundColor,
             s.effectTracks, undefined, undefined, false, 0.5,
             undefined, undefined, undefined, 'low',
             s.globalModifiers, undefined,
-            pst.puppetSkeletons, pst.puppetCharacters, undefined,
+            undefined, undefined, undefined,
             s.frameRate,
+            pst.unifiedCharacters,
           );
           if (s.canvasWidth > 0 && s.canvasHeight > 0) {
             editor.setSAMImage(samCanvas).then(() => { editor.samSegmentAtPoint(px / s.canvasWidth, py / s.canvasHeight); });
@@ -763,12 +798,12 @@ export const inpaintHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
     const currentFrame = s.currentFrameRef.current;
     const editor = s.editorStore.getState(); const { samState } = editor;
-    if (samState.currentMask && s.selectedPart) { editor.applyInpaint(s.selectedPart.id); }
+    if (samState.currentMask && s.selectedPart) { editor.applyInpaint(s.selectedPart.id!); }
     else if (s.selectedPart) {
       const selPart = s.selectedPart;
       const offsetX = s.canvasWidth / 2; const offsetY = s.canvasHeight / 2;
-      const lx = px - (offsetX - selPart.pivotX + 0);
-      const ly = py - (offsetY - selPart.pivotY + 0);
+      const lx = px - (offsetX - spritePivotX(selPart) + 0);
+      const ly = py - (offsetY - spritePivotY(selPart) + 0);
       const radius = editor.inpaintRadius;
       const mask = new Set<string>();
       for (let dy = -radius; dy <= radius; dy++) for (let dx = -radius; dx <= radius; dx++) {
@@ -777,10 +812,10 @@ export const inpaintHandler: ToolHandler = {
       if (mask.size > 0) {
         const store = useProjectStore.getState();
         const currentKf = store.keyframes.find(k => k.partId === selPart.id && k.frame === currentFrame);
-        const basePixels = currentKf?.correctionMask ?? selPart.pixels;
+        const basePixels = currentKf?.correctionMask ?? selPart.data;
         const inpainted = inpaintPixels(basePixels, mask, radius);
         if (currentKf?.correctionMask) store.setCorrection(currentKf.id, inpainted);
-        else s.setPartPixels(selPart.id, inpainted);
+        else s.setPartPixels(selPart.id!, inpainted);
       }
     }
   },
@@ -809,7 +844,7 @@ export const brushEraserHandler: ToolHandler = {
         let modId = pixelEditMod?.id;
         if (!modId) modId = store.createPixelEditModifier(currentKf.id);
         const cmdId = crypto.randomUUID();
-        const { offsetX: txOff2, offsetY: tyOff2 } = s.getInterpolatedTranslateOffset(selPart.id, currentFrame);
+        const { offsetX: txOff2, offsetY: tyOff2 } = s.getInterpolatedTranslateOffset(selPart.id!, currentFrame);
         const local2 = s.canvasToPartLocal(px, py, selPart, txOff2, tyOff2);
         const startPt = local2 ? { x: local2.lx, y: local2.ly } : { x: px, y: py };
         s.pixelEditCommandRef.current = { commandId: cmdId, modifierId: modId, keyframeId: currentKf.id, points: [startPt] };
@@ -821,18 +856,18 @@ export const brushEraserHandler: ToolHandler = {
     if (s.editMode === 'normal') {
       if (s.selectedPartId && s.selectedPart) {
         const selPart = s.selectedPart;
-        const editorState = s.editorStore.getState(); editorState.enterPartEditMode(s.selectedPartId!);
+        const editorState = s.editorStore.getState(); editorState.enterSpriteEditMode(s.selectedPartId!);
         const offsetX = Math.floor((s.canvasWidth - selPart.width) / 2);
         const offsetY = Math.floor((s.canvasHeight - selPart.height) / 2);
         const localX = px - offsetX; const localY = py - offsetY;
         if (localX >= 0 && localX < selPart.width && localY >= 0 && localY < selPart.height) {
           const halfBrush = Math.floor(s.brushSize / 2);
-          const newPixels: import('@/lib/types').PixelGrid = selPart.pixels.map((row) => [...row]);
+          const newPixels: import('@/lib/types').PixelGrid = selPart.data.map((row) => [...row]);
           for (let dy = -halfBrush; dy < s.brushSize - halfBrush; dy++) for (let dx = -halfBrush; dx < s.brushSize - halfBrush; dx++) {
             const tx = localX + dx; const ty = localY + dy;
             if (tx >= 0 && tx < selPart.width && ty >= 0 && ty < selPart.height) newPixels[ty][tx] = color;
           }
-          s.setPartPixels(selPart.id, newPixels);
+          s.setPartPixels(selPart.id!, newPixels);
         }
         s.lastPixelRef.current = { x: px, y: py }; return;
       }
@@ -844,7 +879,7 @@ export const brushEraserHandler: ToolHandler = {
       const projectStore = useProjectStore.getState();
       const editorState = s.editorStore.getState();
       if (editorState.partEditStartFrame !== undefined && editorState.partEditStartFrame !== projectStore.currentFrame) {
-        const partId = editorState.partEditPartId!;
+        const partId = editorState.spriteEditSpriteId!;
         const prevFrame = editorState.partEditStartFrame;
         const existingPkf = projectStore.getKeyframeAtFrame(partId, prevFrame);
         const mods = editorState.partEditModifiers.map(m => ({
@@ -887,7 +922,7 @@ export const brushEraserHandler: ToolHandler = {
     const selPart = s.selectedPart;
     const color = s.tool === 'eraser' ? null : s.brushColor;
     if (s.editMode === 'correction' && s.pixelEditCommandRef.current && selPart) {
-      const { offsetX: txOff3, offsetY: tyOff3 } = s.getInterpolatedTranslateOffset(selPart.id, currentFrame);
+      const { offsetX: txOff3, offsetY: tyOff3 } = s.getInterpolatedTranslateOffset(selPart.id!, currentFrame);
       const local3 = s.canvasToPartLocal(px, py, selPart, txOff3, tyOff3);
       if (local3) s.pixelEditCommandRef.current.points.push({ x: local3.lx, y: local3.ly });
       s.lastPixelRef.current = { x: px, y: py }; return;

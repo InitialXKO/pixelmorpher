@@ -38,10 +38,9 @@ function interpolateSingleNode(node: Node, currentFrame: number): InterpolatedNo
   return {
     angle: interpolateTrack(tracks?.angle, currentFrame, 0),
     stretch: interpolateTrack(tracks?.stretch, currentFrame, 1),
-    offsetX: interpolateTrack(tracks?.x, currentFrame, 0),
-    offsetY: interpolateTrack(tracks?.y, currentFrame, 0),
-    direction: 'S' as any,
-    viewLatitude: 0,
+    x: interpolateTrack(tracks?.x, currentFrame, 0),
+    y: interpolateTrack(tracks?.y, currentFrame, 0),
+    variantIndex: 0,
     zIndex: node.zIndex ?? 0,
     skewX: 0,
     skewY: 0,
@@ -77,8 +76,8 @@ function interpolateCharacterInternal(
           nodeState: blueprintNodeState,
         } as any);
         values.angle += t.rotation;
-        values.offsetX += t.translateX;
-        values.offsetY += t.translateY;
+        values.x += t.translateX;
+        values.y += t.translateY;
         values.stretch *= t.scaleY;
         values.scaleX *= t.scaleX;
         values.skewX += t.skewX;
@@ -101,8 +100,8 @@ function interpolateCharacterInternal(
         if (mods.length > 0) {
           const t = computePartAnimationTransform(mods as any, currentFrame, 12);
           values.angle += t.rotation;
-          values.offsetX += t.translateX;
-          values.offsetY += t.translateY;
+          values.x += t.translateX;
+          values.y += t.translateY;
           values.stretch *= t.scaleY;
         }
       }

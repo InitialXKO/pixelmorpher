@@ -7,20 +7,14 @@ import {
   Copy,
   Eye,
   EyeOff,
-  Lock,
-  Unlock,
   ImagePlus,
-  GripVertical,
   Scissors,
   Grid3x3,
   Crosshair,
-  Link,
   Activity,
   Pencil,
   ChevronDown,
   ChevronRight,
-  ArrowUp,
-  ArrowDown,
   Move,
   RotateCw,
   Maximize2,
@@ -36,8 +30,10 @@ import {
   Globe,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
-import type { Part, GlobalModifierType, GlobalModifier, ModifierParamValue } from '@/lib/types';
+import type { GlobalModifierType, GlobalModifier, ModifierParamValue } from '@/lib/types';
 import { GLOBAL_MODIFIER_DEFINITIONS } from '@/lib/types';
+import type { Sprite } from '@/lib/unified-types';
+import { pxToSub, subToPx } from '@/lib/unified-types';
 import SplitImageDialog from '@/components/pixel-editor/SplitImageDialog';
 import MotionAnalysisDialog from '@/components/pixel-editor/MotionAnalysisDialog';
 import ResizePreviewDialog from '@/components/pixel-editor/ResizePreviewDialog';
@@ -46,7 +42,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
 import {
   Select,
   SelectContent,
@@ -96,13 +91,13 @@ const TYPE_ICONS: Record<string, React.ReactNode> = {
   expression: <Code2 className="size-3" />,
 };
 
-function PartThumbnail({ part }: { part: Part }) {
+function SpriteThumbnail({ sprite }: { sprite: Sprite }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    if (!part.pixels || part.pixels.length === 0) return;
+    if (!sprite.data || sprite.data.length === 0) return;
 
     const size = 32;
     canvas.width = size;
@@ -113,12 +108,12 @@ function PartThumbnail({ part }: { part: Part }) {
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, size, size);
 
-    const scaleX = size / part.width;
-    const scaleY = size / part.height;
+    const scaleX = size / sprite.width;
+    const scaleY = size / sprite.height;
     const scale = Math.min(scaleX, scaleY);
 
-    const drawW = part.width * scale;
-    const drawH = part.height * scale;
+    const drawW = sprite.width * scale;
+    const drawH = sprite.height * scale;
     const offsetX = (size - drawW) / 2;
     const offsetY = (size - drawH) / 2;
 
@@ -127,13 +122,13 @@ function PartThumbnail({ part }: { part: Part }) {
       for (let x = 0; x < drawW; x += checkSize) {
         const px = Math.floor(x / scale);
         const py = Math.floor(y / scale);
-        if (px < part.width && py < part.height && part.pixels[py]?.[px] != null) {
-          ctx.fillStyle = part.pixels[py][px]!;
+        if (px < sprite.width && py < sprite.height && sprite.data[py]?.[px] != null) {
+          ctx.fillStyle = sprite.data[py][px]!;
           ctx.fillRect(offsetX + x, offsetY + y, checkSize, checkSize);
         }
       }
     }
-  }, [part.pixels, part.width, part.height]);
+  }, [sprite.data, sprite.width, sprite.height]);
 
   return (
     <div className="size-8 flex-shrink-0 rounded border border-border/50 bg-muted/30 overflow-hidden">
@@ -146,29 +141,26 @@ function PartThumbnail({ part }: { part: Part }) {
   );
 }
 
-// ---- Part Item Component ----
+// ---- Sprite Item Component ----
 
-function PartItem({
-  part,
+function SpriteItem({
+  sprite,
   isSelected,
   onSelect,
   onToggleVisibility,
-  onToggleLock,
   onRename,
-  dragHandleProps,
   onEdit,
 }: {
-  part: Part;
+  sprite: Sprite;
   isSelected: boolean;
   onSelect: () => void;
   onToggleVisibility: () => void;
-  onToggleLock: () => void;
   onRename: (name: string) => void;
-  dragHandleProps?: Record<string, unknown>;
   onEdit?: () => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(part.name);
+  const displayName = sprite.name ?? '未命名精灵';
+  const [editName, setEditName] = useState(displayName);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -179,17 +171,17 @@ function PartItem({
   }, [isEditing]);
 
   const handleDoubleClick = useCallback(() => {
-    setEditName(part.name);
+    setEditName(displayName);
     setIsEditing(true);
-  }, [part.name]);
+  }, [displayName]);
 
   const commitName = useCallback(() => {
     const trimmed = editName.trim();
-    if (trimmed && trimmed !== part.name) {
+    if (trimmed && trimmed !== displayName) {
       onRename(trimmed);
     }
     setIsEditing(false);
-  }, [editName, part.name, onRename]);
+  }, [editName, displayName, onRename]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -197,10 +189,10 @@ function PartItem({
         commitName();
       } else if (e.key === 'Escape') {
         setIsEditing(false);
-        setEditName(part.name);
+        setEditName(displayName);
       }
     },
-    [commitName, part.name]
+    [commitName, displayName]
   );
 
   return (
@@ -216,16 +208,8 @@ function PartItem({
       `}
       onClick={onSelect}
     >
-      {/* Drag handle */}
-      <div
-        className="cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-muted-foreground transition-colors"
-        {...dragHandleProps}
-      >
-        <GripVertical className="size-3.5" />
-      </div>
-
       {/* Thumbnail */}
-      <PartThumbnail part={part} />
+      <SpriteThumbnail sprite={sprite} />
 
       {/* Name */}
       <div className="flex-1 min-w-0">
@@ -243,9 +227,9 @@ function PartItem({
           <span
             className="block text-xs truncate text-foreground/90"
             onDoubleClick={handleDoubleClick}
-            title={part.name}
+            title={displayName}
           >
-            {part.name}
+            {displayName}
           </span>
         )}
       </div>
@@ -274,31 +258,7 @@ function PartItem({
         </TooltipContent>
       </Tooltip>
 
-      {/* Lock toggle */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleLock();
-            }}
-          >
-            {part.locked ? (
-              <Lock className="size-3 text-amber-500" />
-            ) : (
-              <Unlock className="size-3" />
-            )}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="left">
-          {part.locked ? '解锁' : '锁定'}
-        </TooltipContent>
-      </Tooltip>
-
-      {/* Edit (part edit mode) button */}
+      {/* Edit (sprite edit mode) button */}
       {onEdit && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -323,57 +283,38 @@ function PartItem({
   );
 }
 
-// ---- Part Properties Section ----
+// ---- Sprite Properties Section ----
 
-function PartProperties({ part }: { part: Part }) {
-  const updatePart = useProjectStore((s) => s.updatePart);
-  const autoEstimatePivot = useProjectStore((s) => s.autoEstimatePivot);
-    const parts = useProjectStore((s) => s.parts);
+function SpriteProperties({ sprite, spriteId }: { sprite: Sprite; spriteId: string }) {
+  const updateSprite = useProjectStore((s) => s.updateSprite);
+  const autoEstimatePlug = useProjectStore((s) => s.autoEstimatePlug);
   const [resizeOpen, setResizeOpen] = useState(false);
 
-  const handlePivotChange = useCallback(
-    (field: 'pivotX' | 'pivotY', value: string) => {
+  // plug 以 sub-pixel（1/16px）存，UI 显示像素
+  const plugXPx = sprite.plug ? subToPx(sprite.plug.x) : 0;
+  const plugYPx = sprite.plug ? subToPx(sprite.plug.y) : 0;
+
+  const handlePlugChange = useCallback(
+    (axis: 'x' | 'y', value: string) => {
       const num = parseInt(value, 10);
-      if (!isNaN(num)) {
-        updatePart(part.id, { [field]: Math.max(0, num) });
-      }
+      if (isNaN(num)) return;
+      const clamped = Math.max(0, num);
+      const cur = useProjectStore.getState().sprites[spriteId]?.plug ?? { x: 0, y: 0 };
+      updateSprite(spriteId, {
+        plug: axis === 'x' ? { x: pxToSub(clamped), y: cur.y } : { x: cur.x, y: pxToSub(clamped) },
+      });
     },
-    [part.id, updatePart]
+    [spriteId, updateSprite]
   );
 
-  const handleOffsetChange = useCallback(
-    (field: 'offsetX' | 'offsetY', value: string) => {
-      const num = parseInt(value, 10);
-      if (!isNaN(num)) {
-        updatePart(part.id, { [field]: num });
-      }
-    },
-    [part.id, updatePart]
-  );
-
-  const handleAutoPivot = useCallback(() => {
-    autoEstimatePivot(part.id);
-  }, [autoEstimatePivot, part.id]);
-
-  // V3.7: Build list of valid parent candidates (exclude self and descendants to prevent cycles)
-  const parentCandidates = useMemo(() => {
-    const descendantIds = new Set<string>();
-    const collectDescendants = (id: string) => {
-      descendantIds.add(id);
-      for (const p of parts) {
-      }
-    };
-    collectDescendants(part.id);
-    return parts.filter((p) => !descendantIds.has(p.id));
-  }, [parts, part.id]);
-
-
-  const parentPart = null; // Part 无 parentId
+  const handleAutoPlug = useCallback(() => {
+    autoEstimatePlug(spriteId);
+  }, [autoEstimatePlug, spriteId]);
 
   return (
     <div className="space-y-2">
       <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-        部件属性
+        精灵属性
       </h4>
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
@@ -381,9 +322,9 @@ function PartProperties({ part }: { part: Part }) {
           <Input
             type="number"
             min={0}
-            max={part.width - 1}
-            value={part.pivotX}
-            onChange={(e) => handlePivotChange('pivotX', e.target.value)}
+            max={sprite.width - 1}
+            value={plugXPx}
+            onChange={(e) => handlePlugChange('x', e.target.value)}
             className="h-7 text-xs px-2"
           />
         </div>
@@ -392,27 +333,9 @@ function PartProperties({ part }: { part: Part }) {
           <Input
             type="number"
             min={0}
-            max={part.height - 1}
-            value={part.pivotY}
-            onChange={(e) => handlePivotChange('pivotY', e.target.value)}
-            className="h-7 text-xs px-2"
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-[10px] text-muted-foreground">偏移 X</Label>
-          <Input
-            type="number"
-            value={0 || 0}
-            onChange={(e) => handleOffsetChange('offsetX', e.target.value)}
-            className="h-7 text-xs px-2"
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-[10px] text-muted-foreground">偏移 Y</Label>
-          <Input
-            type="number"
-            value={0 || 0}
-            onChange={(e) => handleOffsetChange('offsetY', e.target.value)}
+            max={sprite.height - 1}
+            value={plugYPx}
+            onChange={(e) => handlePlugChange('y', e.target.value)}
             className="h-7 text-xs px-2"
           />
         </div>
@@ -423,7 +346,7 @@ function PartProperties({ part }: { part: Part }) {
               type="number"
               min={1}
               max={512}
-              value={part.width}
+              value={sprite.width}
               readOnly
               className="h-7 text-xs px-2 bg-muted/50"
             />
@@ -436,7 +359,7 @@ function PartProperties({ part }: { part: Part }) {
               type="number"
               min={1}
               max={512}
-              value={part.height}
+              value={sprite.height}
               readOnly
               className="h-7 text-xs px-2 bg-muted/50"
             />
@@ -446,7 +369,7 @@ function PartProperties({ part }: { part: Part }) {
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground/70">
         <span>Z-Index: {0}</span>
         <span>|</span>
-        <span>{part.width} x {part.height} px</span>
+        <span>{sprite.width} x {sprite.height} px</span>
         <Button
           variant="outline"
           size="sm"
@@ -461,46 +384,14 @@ function PartProperties({ part }: { part: Part }) {
       <ResizePreviewDialog
         open={resizeOpen}
         onOpenChange={setResizeOpen}
-        part={part}
+        sprite={sprite}
       />
-
-      {/* V3.7: Parent selector */}
-      <Separator className="my-1" />
-      <div className="space-y-1">
-        <Label className="text-[10px] text-muted-foreground flex items-center gap-1">
-          <Link className="size-3" />
-          父级部件
-        </Label>
-        <Select
-          value={'__none__'}
-          onValueChange={() => {}} // Part 无 parentId
-        >
-          <SelectTrigger className="h-7 text-xs px-2">
-            <SelectValue placeholder="无 (根级)" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__none__" className="text-xs">
-              无 (根级)
-            </SelectItem>
-            {parentCandidates.map((p) => (
-              <SelectItem key={p.id} value={p.id} className="text-xs">
-                {p.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {parentPart && (
-          <div className="text-[10px] text-muted-foreground/70">
-            Part 无父级
-          </div>
-        )}
-      </div>
 
       <Button
         variant="outline"
         size="sm"
         className="h-6 w-full text-[10px] gap-1"
-        onClick={handleAutoPivot}
+        onClick={handleAutoPlug}
       >
         <Crosshair className="size-3" />
         自动枢轴
@@ -509,10 +400,13 @@ function PartProperties({ part }: { part: Part }) {
   );
 }
 
-// ---- Part Global Modifier Card ----
+// ---- Sprite Global Modifier Card ----
 
-function ExpandablePartDetail({ part, onEdit }: { part: Part; onEdit: () => void }) {
+function ExpandableSpriteDetail({ sprite, spriteId, onEdit }: { sprite: Sprite; spriteId: string; onEdit: () => void }) {
   const [expanded, setExpanded] = useState(true);
+  const displayName = sprite.name ?? '未命名精灵';
+  const plugXPx = sprite.plug ? subToPx(sprite.plug.x) : 0;
+  const plugYPx = sprite.plug ? subToPx(sprite.plug.y) : 0;
 
   return (
     <div>
@@ -524,11 +418,11 @@ function ExpandablePartDetail({ part, onEdit }: { part: Part; onEdit: () => void
         <span className="text-muted-foreground">
           {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         </span>
-        <PartThumbnail part={part} />
+        <SpriteThumbnail sprite={sprite} />
         <div className="flex-1 min-w-0">
-          <span className="text-xs font-medium text-foreground/90 truncate">{part.name}</span>
+          <span className="text-xs font-medium text-foreground/90 truncate">{displayName}</span>
           <div className="text-[9px] text-muted-foreground/60">
-            {part.width}×{part.height} · 枢轴({part.pivotX},{part.pivotY})
+            {sprite.width}×{sprite.height} · 枢轴({plugXPx},{plugYPx})
           </div>
         </div>
         <Tooltip>
@@ -549,27 +443,26 @@ function ExpandablePartDetail({ part, onEdit }: { part: Part; onEdit: () => void
       {/* Expandable content */}
       {expanded && (
         <div className="px-3 pb-3 space-y-3">
-          <PartProperties part={part} />
+          <SpriteProperties sprite={sprite} spriteId={spriteId} />
         </div>
       )}
     </div>
   );
 }
 
-// ---- Main PartPanel Component ----
+// ---- Main SpritePanel Component ----
 
-export default function PartPanel() {
-  const parts = useProjectStore((s) => s.parts);
-  const addPart = useProjectStore((s) => s.addPart);
-  const removePart = useProjectStore((s) => s.removePart);
-  const updatePart = useProjectStore((s) => s.updatePart);
-  const duplicatePart = useProjectStore((s) => s.duplicatePart);
-  const importPartFromImage = useProjectStore((s) => s.importPartFromImage);
-  const reorderPart = useProjectStore((s) => s.reorderPart);
+export default function SpritePanel() {
+  const sprites = useProjectStore((s) => s.sprites) ?? {};
+  const addSprite = useProjectStore((s) => s.addSprite);
+  const removeSprite = useProjectStore((s) => s.removeSprite);
+  const updateSprite = useProjectStore((s) => s.updateSprite);
+  const duplicateSprite = useProjectStore((s) => s.duplicateSprite);
+  const importSpriteFromImage = useProjectStore((s) => s.importSpriteFromImage);
 
-  const selectedPartId = useEditorStore((s) => s.selectedPartId);
-  const selectPart = useEditorStore((s) => s.selectPart);
-  const enterPartEditMode = useEditorStore((s) => s.enterPartEditMode);
+  const selectedSpriteId = useEditorStore((s) => s.selectedPartId);
+  const selectSprite = useEditorStore((s) => s.selectPart);
+  const enterSpriteEditMode = useEditorStore((s) => s.enterSpriteEditMode);
 
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [splitOpen, setSplitOpen] = useState(false);
@@ -581,46 +474,42 @@ export default function PartPanel() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Drag state
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
-
-  const sortedParts = [...parts].sort((a, b) => 0);
-  const selectedPart = parts.find((p) => p.id === selectedPartId) ?? null;
+  const spriteEntries = useMemo(() => Object.entries(sprites), [sprites]);
+  const selectedSprite = selectedSpriteId ? (sprites[selectedSpriteId] ?? null) : null;
 
   // ---- Handlers ----
 
-  const handleAddPart = useCallback(() => {
+  const handleAddSprite = useCallback(() => {
     const w = Math.max(1, Math.min(512, newWidth));
     const h = Math.max(1, Math.min(512, newHeight));
-    const name = newName.trim() || `部件 ${parts.length + 1}`;
-    const part = addPart(name, w, h);
-    selectPart(part.id);
+    const name = newName.trim() || `精灵 ${spriteEntries.length + 1}`;
+    const sprite = addSprite(name, w, h);
+    selectSprite(sprite.id ?? null);
     setAddDialogOpen(false);
     setNewName('');
     setNewWidth(32);
     setNewHeight(32);
-  }, [newWidth, newHeight, newName, parts.length, addPart, selectPart]);
+  }, [newWidth, newHeight, newName, spriteEntries.length, addSprite, selectSprite]);
 
-  const handleDeletePart = useCallback(() => {
-    if (!selectedPartId) return;
-    const currentSorted = [...parts].sort((a, b) => 0);
-    const currentIndex = currentSorted.findIndex((p) => p.id === selectedPartId);
-    removePart(selectedPartId);
-    // Select adjacent part
-    const remaining = currentSorted.filter((p) => p.id !== selectedPartId);
+  const handleDeleteSprite = useCallback(() => {
+    if (!selectedSpriteId) return;
+    const ids = spriteEntries.map(([id]) => id);
+    const currentIndex = ids.indexOf(selectedSpriteId);
+    removeSprite(selectedSpriteId);
+    // Select adjacent sprite
+    const remaining = ids.filter((id) => id !== selectedSpriteId);
     if (remaining.length > 0) {
       const nextIndex = Math.min(currentIndex, remaining.length - 1);
-      selectPart(remaining[nextIndex]?.id ?? null);
+      selectSprite(remaining[nextIndex] ?? null);
     } else {
-      selectPart(null);
+      selectSprite(null);
     }
-  }, [selectedPartId, parts, removePart, selectPart]);
+  }, [selectedSpriteId, spriteEntries, removeSprite, selectSprite]);
 
-  const handleDuplicatePart = useCallback(() => {
-    if (!selectedPartId) return;
-    duplicatePart(selectedPartId);
-  }, [selectedPartId, duplicatePart]);
+  const handleDuplicateSprite = useCallback(() => {
+    if (!selectedSpriteId) return;
+    duplicateSprite(selectedSpriteId);
+  }, [selectedSpriteId, duplicateSprite]);
 
   const handleImportPNG = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -639,8 +528,8 @@ export default function PartPanel() {
           ctx.drawImage(img, 0, 0);
           const imageData = ctx.getImageData(0, 0, img.width, img.height);
           const name = file.name.replace(/\.[^/.]+$/, '') || '导入图像';
-          const part = importPartFromImage(name, imageData);
-          selectPart(part.id);
+          const sprite = importSpriteFromImage(name, imageData);
+          selectSprite(sprite.id ?? null);
         };
         img.src = ev.target?.result as string;
       };
@@ -649,82 +538,24 @@ export default function PartPanel() {
       // Reset input so the same file can be re-imported
       e.target.value = '';
     },
-    [importPartFromImage, selectPart]
+    [importSpriteFromImage, selectSprite]
   );
-
-  // ---- Drag & Drop Handlers ----
-
-  const handleDragStart = useCallback(
-    (e: React.DragEvent, index: number) => {
-      setDragIndex(index);
-      e.dataTransfer.effectAllowed = 'move';
-      // Required for Firefox
-      e.dataTransfer.setData('text/plain', String(index));
-    },
-    []
-  );
-
-  const handleDragOver = useCallback(
-    (e: React.DragEvent, index: number) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      if (dragIndex !== null && dragIndex !== index) {
-        setDragOverIndex(index);
-      }
-    },
-    [dragIndex]
-  );
-
-  const handleDragLeave = useCallback(() => {
-    setDragOverIndex(null);
-  }, []);
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent, dropIndex: number) => {
-      e.preventDefault();
-      if (dragIndex === null || dragIndex === dropIndex) {
-        setDragIndex(null);
-        setDragOverIndex(null);
-        return;
-      }
-
-      const reordered = [...sortedParts];
-      const [moved] = reordered.splice(dragIndex, 1);
-      reordered.splice(dropIndex, 0, moved);
-
-      // Update zIndex for all affected parts
-      reordered.forEach((part, idx) => {
-        if (0 !== idx) {
-          reorderPart(part.id, idx);
-        }
-      });
-
-      setDragIndex(null);
-      setDragOverIndex(null);
-    },
-    [dragIndex, sortedParts, reorderPart]
-  );
-
-  const handleDragEnd = useCallback(() => {
-    setDragIndex(null);
-    setDragOverIndex(null);
-  }, []);
 
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/50">
         <h3 className="text-xs font-semibold text-foreground/90 uppercase tracking-wider">
-          部件
+          精灵
         </h3>
         <span className="text-[10px] text-muted-foreground tabular-nums">
-          {parts.length}
+          {spriteEntries.length}
         </span>
       </div>
 
       {/* Action Buttons */}
       <div className="flex items-center gap-1 px-2 py-2 border-b border-border/30">
-        {/* Add Part Dialog */}
+        {/* Add Sprite Dialog */}
         <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -734,14 +565,14 @@ export default function PartPanel() {
                 </Button>
               </DialogTrigger>
             </TooltipTrigger>
-            <TooltipContent side="bottom">新建部件</TooltipContent>
+            <TooltipContent side="bottom">新建精灵</TooltipContent>
           </Tooltip>
 
           <DialogContent className="sm:max-w-[320px]">
             <DialogHeader>
-              <DialogTitle>新建部件</DialogTitle>
+              <DialogTitle>新建精灵</DialogTitle>
               <DialogDescription>
-                创建一个新的像素部件，设置名称和尺寸。
+                创建一个新的像素精灵，设置名称和尺寸。
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-3 py-2">
@@ -753,10 +584,10 @@ export default function PartPanel() {
                   id="part-name"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
-                  placeholder={`部件 ${parts.length + 1}`}
+                  placeholder={`精灵 ${spriteEntries.length + 1}`}
                   className="h-8 text-sm"
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleAddPart();
+                    if (e.key === 'Enter') handleAddSprite();
                   }}
                 />
               </div>
@@ -816,7 +647,7 @@ export default function PartPanel() {
               >
                 取消
               </Button>
-              <Button size="sm" onClick={handleAddPart}>
+              <Button size="sm" onClick={handleAddSprite}>
                 创建
               </Button>
             </DialogFooter>
@@ -902,13 +733,13 @@ export default function PartPanel() {
               variant="ghost"
               size="icon"
               className="size-7"
-              disabled={!selectedPartId}
-              onClick={handleDuplicatePart}
+              disabled={!selectedSpriteId}
+              onClick={handleDuplicateSprite}
             >
               <Copy className="size-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">复制部件</TooltipContent>
+          <TooltipContent side="bottom">复制精灵</TooltipContent>
         </Tooltip>
 
         {/* Delete */}
@@ -918,65 +749,45 @@ export default function PartPanel() {
               variant="ghost"
               size="icon"
               className="size-7 text-destructive/70 hover:text-destructive"
-              disabled={!selectedPartId}
-              onClick={handleDeletePart}
+              disabled={!selectedSpriteId}
+              onClick={handleDeleteSprite}
             >
               <Trash2 className="size-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">删除部件</TooltipContent>
+          <TooltipContent side="bottom">删除精灵</TooltipContent>
         </Tooltip>
       </div>
 
-      {/* Parts List + Part Properties - scrollable together */}
+      {/* Sprites List + Sprite Properties - scrollable together */}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         <div className="p-1.5 space-y-0.5">
-          {sortedParts.length === 0 ? (
+          {spriteEntries.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-muted-foreground/60">
               <ImagePlus className="size-8 mb-2 opacity-40" />
-              <p className="text-[10px]">暂无部件</p>
-              <p className="text-[10px]">点击 + 创建新部件</p>
+              <p className="text-[10px]">暂无精灵</p>
+              <p className="text-[10px]">点击 + 创建新精灵</p>
             </div>
           ) : (
-            sortedParts.map((part, index) => (
-              <div
-                key={part.id}
-                className={`
-                  transition-colors duration-150 rounded-md
-                  ${dragOverIndex === index && dragIndex !== null && dragIndex !== index
-                    ? 'border-t-2 border-t-accent'
-                    : ''}
-                  ${dragIndex === index ? 'opacity-40' : ''}
-                `}
-                onDragOver={(e) => handleDragOver(e, index)}
-                onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, index)}
-              >
-                <PartItem
-                  part={part}
-                  isSelected={part.id === selectedPartId}
-                  onSelect={() => selectPart(part.id)}
+            spriteEntries.map(([id, sprite]) => (
+              <div key={id} className="transition-colors duration-150 rounded-md">
+                <SpriteItem
+                  sprite={sprite}
+                  isSelected={id === selectedSpriteId}
+                  onSelect={() => selectSprite(id)}
                   onToggleVisibility={() => {}}
-                  onToggleLock={() =>
-                    updatePart(part.id, { locked: !part.locked })
-                  }
-                  onRename={(name) => updatePart(part.id, { name })}
-                  onEdit={() => enterPartEditMode(part.id)}
-                  dragHandleProps={{
-                    draggable: true,
-                    onDragStart: (e: React.DragEvent) => handleDragStart(e, index),
-                    onDragEnd: handleDragEnd,
-                  }}
+                  onRename={(name) => updateSprite(id, { name })}
+                  onEdit={() => enterSpriteEditMode(id)}
                 />
               </div>
             ))
           )}
         </div>
 
-        {/* Part Properties - inside the scrollable area */}
-        {selectedPart && (
+        {/* Sprite Properties - inside the scrollable area */}
+        {selectedSprite && selectedSpriteId && (
           <div className="border-t border-border/40 mt-2">
-            <ExpandablePartDetail part={selectedPart} onEdit={() => enterPartEditMode(selectedPart.id)} />
+            <ExpandableSpriteDetail sprite={selectedSprite} spriteId={selectedSpriteId} onEdit={() => enterSpriteEditMode(selectedSpriteId)} />
           </div>
         )}
       </div>

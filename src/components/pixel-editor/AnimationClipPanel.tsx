@@ -15,7 +15,6 @@ export default function AnimationClipPanel() {
     removeAnimationClip,
     updateAnimationClip,
     setActiveAnimationClip,
-    parts,
   } = useProjectStore();
 
   const [editingClipId, setEditingClipId] = useState<string | null>(null);
@@ -63,7 +62,7 @@ export default function AnimationClipPanel() {
       <div className="flex-1 min-h-0 overflow-y-auto">
         {animationClips.map(clip => {
           const isActive = clip.id === activeAnimationClipId;
-          const keyframeCount = clip.puppetNodeKeyframes.length;
+          const keyframeCount = clip.nodeKeyframes.length;
 
           return (
             <div

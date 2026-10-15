@@ -1,12 +1,12 @@
 /**
- * canvas-puppet-render.ts — Puppet skeleton overlay rendering for PixelCanvas.
+ * canvas-puppet-render.ts — Character skeleton overlay rendering for PixelCanvas.
+ * Migrated from Puppet model to new Character model.
  * Extracted from the main render function to keep file sizes manageable.
  */
 
-import { computeSpriteEndPoint } from './canvas-utils';
+import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
 import type { RenderContext } from './canvas-render-helpers';
-import type { PuppetSkeleton, PuppetNode, PuppetNodeKeyframe, PuppetCharacter } from '@/lib/types';
-import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
+import type { Character, Node } from '@/lib/unified-types';
 
 // ============================================================
 // Puppet skeleton overlay visualization
@@ -14,41 +14,31 @@ import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 
 export interface PuppetSkeletonOverlayParams {
   shouldRender: boolean;
-  puppetSkeletons: PuppetSkeleton[];
+  /** 新模型：Character 数组（替代 PuppetSkeleton[]） */
+  characters: Character[];
   activePuppetSkeletonId: string | null;
-  selectedPuppetNodeId: string | null;
-  puppetCharacters: PuppetCharacter[];
+  selectedNodeId: string | null;
   animationClips: import('@/lib/types').AnimationClip[];
-  parts: import('@/lib/types').Part[];
+  sprites: import('@/lib/unified-types').Sprite[];
 }
 
 export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSkeletonOverlayParams) {
-  const { shouldRender, puppetSkeletons, activePuppetSkeletonId, selectedPuppetNodeId, puppetCharacters, animationClips, parts } = params;
-  if (!shouldRender || puppetSkeletons.length === 0) return;
+  const { shouldRender, characters, activePuppetSkeletonId, selectedNodeId, animationClips, sprites: parts } = params;
+  if (!shouldRender || characters.length === 0) return;
 
   const { ctx, canvasWidth, canvasHeight, zoom, panX, panY, currentFrame } = rc;
 
-  for (const skeleton of puppetSkeletons) {
-    const isActive = skeleton.id === activePuppetSkeletonId;
+  for (const character of characters) {
+    const isActive = character.id === activePuppetSkeletonId;
+    const nodes = Object.values(character.nodes);
 
-    const character = puppetCharacters.find(c => c.puppetSkeletonId === skeleton.id);
-    const clip = character ? animationClips.find(c => c.puppetCharacterId === character.id) : null;
-    const keyframes = clip?.puppetNodeKeyframes ?? [];
-
-    // Pre-index keyframes by nodeId
-    const kfByNode = new Map<string, PuppetNodeKeyframe[]>();
-    for (const kf of keyframes) {
-      const arr = kfByNode.get(kf.nodeId) || [];
-      arr.push(kf);
-      kfByNode.set(kf.nodeId, arr);
-    }
-
-    // Build parent map
+    // Build parent map from attachment (new model)
     const parentMap = new Map<string, { parentId: string; socketId: string }>();
-    for (const node of skeleton.nodes) {
-      if (node.plug) {
-        const parentNode = skeleton.nodes.find(n => n.sockets.some(s => s.id === node.plug!.socketId));
-        if (parentNode) parentMap.set(node.id, { parentId: parentNode.id, socketId: node.plug.socketId });
+    for (const node of nodes) {
+      if (node.attachment?.type === 'socket' && node.attachment.parentSocketId) {
+        const socketId = node.attachment.parentSocketId;
+        const parentNode = nodes.find(n => n.sockets.some(s => s.id === socketId));
+        if (parentNode) parentMap.set(node.id, { parentId: parentNode.id, socketId });
       }
     }
 
@@ -58,38 +48,19 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
     const centerY = canvasHeight / 2;
 
     function computeNodeWorldPosOverlay(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldAngle: number): void {
-      const node = skeleton.nodes.find(n => n.id === nodeId);
+      const node = character.nodes[nodeId];
       if (!node) return;
 
-      const nodeKfs = kfByNode.get(node.id) || [];
-      let angle = node.angle;
-      let offsetX = node.offsetX;
-      let offsetY = node.offsetY;
-
-      if (nodeKfs.length > 0) {
-        const sorted = [...nodeKfs].sort((a, b) => a.frame - b.frame);
-        let prevKf: PuppetNodeKeyframe | null = null;
-        let nextKf: PuppetNodeKeyframe | null = null;
-        for (const kf of sorted) {
-          if (kf.frame <= currentFrame) prevKf = kf;
-          if (kf.frame > currentFrame && !nextKf) nextKf = kf;
-        }
-        if (prevKf) {
-          angle = prevKf.angle ?? node.angle;
-          offsetX = prevKf.offsetX ?? node.offsetX;
-          offsetY = prevKf.offsetY ?? node.offsetY;
-          if (nextKf && prevKf.frame !== nextKf.frame) {
-            const t = (currentFrame - prevKf.frame) / (nextKf.frame - prevKf.frame);
-            offsetX = (prevKf.offsetX ?? node.offsetX) + ((nextKf.offsetX ?? node.offsetX) - (prevKf.offsetX ?? node.offsetX)) * t;
-            offsetY = (prevKf.offsetY ?? node.offsetY) + ((nextKf.offsetY ?? node.offsetY) - (prevKf.offsetY ?? node.offsetY)) * t;
-          }
-        }
-      }
+      // 新模型：使用 rest pose（transform），不做关键帧插值
+      const angle = node.transform.angle ?? 0;
+      const offsetX = node.transform.x ?? 0;
+      const offsetY = node.transform.y ?? 0;
 
       let worldX: number;
       let worldY: number;
 
-      if (!node.plug) {
+      const isSocketAttached = node.attachment?.type === 'socket';
+      if (!isSocketAttached) {
         worldX = Math.round(centerX + offsetX);
         worldY = Math.round(centerY + offsetY);
       } else {
@@ -97,14 +68,14 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
         if (parentInfo) {
           const parentPos = worldPositions.get(parentInfo.parentId);
           if (parentPos) {
-            const parentNode = skeleton.nodes.find(n => n.id === parentInfo.parentId);
+            const parentNode = character.nodes[parentInfo.parentId];
             const socket = parentNode?.sockets.find(s => s.id === parentInfo.socketId);
             if (socket && parentNode) {
               const parentAngleRad = (parentPos.angle * Math.PI) / 180;
               const cosA = Math.cos(parentAngleRad);
               const sinA = Math.sin(parentAngleRad);
-              const socketWorldX = parentPos.x + (socket.localX * cosA - socket.localY * sinA);
-              const socketWorldY = parentPos.y + (socket.localX * sinA + socket.localY * cosA);
+              const socketWorldX = parentPos.x + (socket.basePosition.x * cosA - socket.basePosition.y * sinA);
+              const socketWorldY = parentPos.y + (socket.basePosition.x * sinA + socket.basePosition.y * cosA);
               // offset 在父节点局部空间，需按父节点角度旋转（与主渲染一致）
               const rotatedOffsetX = offsetX * cosA - offsetY * sinA;
               const rotatedOffsetY = offsetX * sinA + offsetY * cosA;
@@ -127,35 +98,35 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
       const worldAngle = parentWorldAngle + angle;
       worldPositions.set(node.id, { x: worldX, y: worldY, angle: worldAngle });
 
-      for (const childNode of skeleton.nodes) {
-        if (childNode.plug && parentMap.get(childNode.id)?.parentId === node.id) {
+      for (const childNode of nodes) {
+        if (childNode.attachment?.type === 'socket' && parentMap.get(childNode.id)?.parentId === node.id) {
           computeNodeWorldPosOverlay(childNode.id, worldX, worldY, worldAngle);
         }
       }
     }
 
-    for (const node of skeleton.nodes) {
-      if (!node.plug) computeNodeWorldPosOverlay(node.id, centerX, centerY, 0);
+    for (const node of nodes) {
+      if (node.attachment?.type !== 'socket') computeNodeWorldPosOverlay(node.id, centerX, centerY, 0);
     }
 
     // Draw connections (lines from parent sockets to child positions)
-    for (const node of skeleton.nodes) {
-      if (!node.plug) continue;
+    for (const node of nodes) {
+      if (node.attachment?.type !== 'socket') continue;
       const parentInfo = parentMap.get(node.id);
       if (!parentInfo) continue;
       const parentPos = worldPositions.get(parentInfo.parentId);
       const childPos = worldPositions.get(node.id);
       if (!parentPos || !childPos) continue;
 
-      const parentNode = skeleton.nodes.find(n => n.id === parentInfo.parentId);
+      const parentNode = character.nodes[parentInfo.parentId];
       const socket = parentNode?.sockets.find(s => s.id === parentInfo.socketId);
       if (!socket || !parentNode) continue;
 
       const parentAngleRad = (parentPos.angle * Math.PI) / 180;
       const cosA = Math.cos(parentAngleRad);
       const sinA = Math.sin(parentAngleRad);
-      const socketWorldX = parentPos.x + (socket.localX * cosA - socket.localY * sinA);
-      const socketWorldY = parentPos.y + (socket.localX * sinA + socket.localY * cosA);
+      const socketWorldX = parentPos.x + (socket.basePosition.x * cosA - socket.basePosition.y * sinA);
+      const socketWorldY = parentPos.y + (socket.basePosition.x * sinA + socket.basePosition.y * cosA);
 
       const socketScreenX = panX + socketWorldX * zoom;
       const socketScreenY = panY + socketWorldY * zoom;
@@ -174,14 +145,14 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
     }
 
     // Draw node positions
-    for (const node of skeleton.nodes) {
+    for (const node of nodes) {
       if (!node.visible) continue;
       const pos = worldPositions.get(node.id);
       if (!pos) continue;
 
       const screenX = panX + pos.x * zoom;
       const screenY = panY + pos.y * zoom;
-      const isSelected = node.id === selectedPuppetNodeId;
+      const isSelected = node.id === selectedNodeId;
 
       ctx.save();
       ctx.fillStyle = isSelected ? '#ff8844' : (isActive ? '#88ff88' : '#668866');
@@ -214,8 +185,8 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
         const socketAngleRad = (pos.angle * Math.PI) / 180;
         const cosA2 = Math.cos(socketAngleRad);
         const sinA2 = Math.sin(socketAngleRad);
-        const socketWX = pos.x + (socket.localX * cosA2 - socket.localY * sinA2);
-        const socketWY = pos.y + (socket.localX * sinA2 + socket.localY * cosA2);
+        const socketWX = pos.x + (socket.basePosition.x * cosA2 - socket.basePosition.y * sinA2);
+        const socketWY = pos.y + (socket.basePosition.x * sinA2 + socket.basePosition.y * cosA2);
         const socketSX = panX + socketWX * zoom;
         const socketSY = panY + socketWY * zoom;
 
@@ -225,12 +196,14 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
         ctx.fill();
       }
 
-      // End point indicator for child nodes
-      const nodePart = resolvePuppetNodeSprite(node, skeleton.currentDirection,
-        character?.activeCostumeSetId ? character.costumeSets.find(cs => cs.id === character.activeCostumeSetId) ?? null : null,
-        parts);
-      if (nodePart && node.plug) {
-        const endLocal = computeSpriteEndPoint(nodePart.width, nodePart.height, nodePart.pivotX, nodePart.pivotY);
+      // End point indicator for child nodes (new model: use node.sprite)
+      const nodeSprite = node.sprite;
+      if (nodeSprite && node.attachment?.type === 'socket') {
+        const endLocal = computeSpriteEndPoint(
+          nodeSprite.width, nodeSprite.height,
+          nodeSprite.plug ? nodeSprite.plug.x : 0,
+          nodeSprite.plug ? nodeSprite.plug.y : 0
+        );
         const endRad = (pos.angle * Math.PI) / 180;
         const endCosA = Math.cos(endRad);
         const endSinA = Math.sin(endRad);
@@ -264,7 +237,7 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
 
 export function renderPivotCrosshair(
   rc: RenderContext,
-  selectedPart: import('@/lib/types').Part | null,
+  selectedPart: import('@/lib/unified-types').Sprite | null,
   getInterpolatedTranslateOffset: (partId: string, frame: number) => { offsetX: number; offsetY: number },
 ) {
   if (!selectedPart) return;
@@ -276,7 +249,7 @@ export function renderPivotCrosshair(
   let pivotScreenX = panX + offsetX * zoom;
   let pivotScreenY = panY + offsetY * zoom;
 
-  const { offsetX: txOff, offsetY: tyOff } = getInterpolatedTranslateOffset(selectedPart.id, currentFrame);
+  const { offsetX: txOff, offsetY: tyOff } = getInterpolatedTranslateOffset(selectedPart.id!, currentFrame);
   pivotScreenX += txOff * zoom;
   pivotScreenY += tyOff * zoom;
 
@@ -308,8 +281,8 @@ export function renderPivotCrosshair(
   ctx.restore();
 
   // Part bounding box highlight
-  const partScreenX = panX + (offsetX - selectedPart.pivotX + 0) * zoom;
-  const partScreenY = panY + (offsetY - selectedPart.pivotY + 0) * zoom;
+  const partScreenX = panX + (offsetX - spritePivotX(selectedPart) + 0) * zoom;
+  const partScreenY = panY + (offsetY - spritePivotY(selectedPart) + 0) * zoom;
   const partScreenW = selectedPart.width * zoom;
   const partScreenH = selectedPart.height * zoom;
 

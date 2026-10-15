@@ -86,7 +86,7 @@ export interface ProjectMeta {
   canvasHeight: number;
   frameCount: number;
   frameRate: number;
-  partCount: number;
+  spriteCount: number;
 }
 
 /** Reference from a project asset back to its library source */

@@ -2,8 +2,10 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useProjectStore } from '@/lib/store';
-import { renderUnifiedToCanvas } from '@/lib/unified-pipeline-bridge';
-import type { AnimationClip, PuppetCharacter, PuppetNodeKeyframe } from '@/lib/types';
+import { renderUnifiedCharactersToCanvas } from '@/lib/unified-pipeline-bridge';
+import type { AnimationClip } from '@/lib/types';
+import type { NodeKeyframe } from '@/lib/unified-types';
+import { subToPx } from '@/lib/unified-types';
 import GIF from 'gif.js';
 import {
   Dialog,
@@ -168,7 +170,7 @@ function generateLottieJSON(
   canvasHeight: number,
   frameRate: number,
   totalFrames: number,
-  parts: ReturnType<typeof useProjectStore.getState>['parts'],
+  sprites: import('@/lib/unified-types').Sprite[],
   keyframes: ReturnType<typeof useProjectStore.getState>['keyframes'],
   scale: number,
 ): Record<string, unknown> {
@@ -176,11 +178,11 @@ function generateLottieJSON(
   const h = canvasHeight * scale;
   const layers: LottieLayer[] = [];
 
-  // Sort parts by zIndex for layer ordering
-  const sortedParts = [...parts]; // Part 无 zIndex
+  // Sort sprites by zIndex for layer ordering
+  const sortedSprites = [...sprites];
 
-  for (let i = 0; i < sortedParts.length; i++) {
-    const part = sortedParts[i];
+  for (let i = 0; i < sortedSprites.length; i++) {
+    const part = sortedSprites[i];
     const partKeyframes = keyframes.filter((k) => k.partId === part.id).sort((a, b) => a.frame - b.frame);
 
     // Build keyframe arrays for each transform property
@@ -268,7 +270,7 @@ function generateLottieJSON(
     const colorPixelMap = new Map<string, Array<{ x: number; y: number }>>();
     for (let py = 0; py < part.height; py++) {
       for (let px = 0; px < part.width; px++) {
-        const color = part.pixels[py]?.[px];
+        const color = part.data[py]?.[px];
         if (!color) continue;
         if (!colorPixelMap.has(color)) {
           colorPixelMap.set(color, []);
@@ -354,7 +356,7 @@ function generateLottieJSON(
     if (shapes.length === 0) {
       shapes.push({
         ty: 'rc',
-        nm: part.name,
+        nm: part.name ?? '',
         d: 1,
         p: { a: 0, k: [0, 0] },
         s: { a: 0, k: [partW, partH] },
@@ -376,7 +378,7 @@ function generateLottieJSON(
         ...shapes,
         {
           ty: 'tr',
-          p: { a: 0, k: [(-part.pivotX + 0) * scale, (-part.pivotY + 0) * scale] },
+          p: { a: 0, k: [-(part.plug ? subToPx(part.plug.x) : part.width / 2) * scale, -(part.plug ? subToPx(part.plug.y) : part.height / 2) * scale] },
           a: { a: 0, k: [0, 0] },
           s: { a: 0, k: [100, 100] },
           r: { a: 0, k: 0 },
@@ -405,7 +407,7 @@ function generateLottieJSON(
       ddd: 0,
       ind: i + 1,
       ty: 4,
-      nm: part.name,
+      nm: part.name ?? '',
       sr: 1,
       ks: transform,
       ao: 0,
@@ -432,22 +434,17 @@ function generateLottieJSON(
 }
 
 // ============================================================
-// Helper: Collect puppet node keyframes from animation clips
+// Helper: Collect node keyframes from animation clips
 // ============================================================
 
-/** Collect all puppet node keyframes from puppet animation clips,
- *  matching each character to its clip. */
-function collectPuppetNodeKeyframes(
+/** Collect all node keyframes from animation clips (new Character/Node model). */
+function collectNodeKeyframes(
   animationClips: AnimationClip[],
-  puppetCharacters: PuppetCharacter[],
-): PuppetNodeKeyframe[] {
-  const allKeyframes: PuppetNodeKeyframe[] = [];
-  for (const character of puppetCharacters) {
-    const puppetClip = animationClips.find(
-      c => c.puppetCharacterId === character.id
-    );
-    if (puppetClip?.puppetNodeKeyframes) {
-      allKeyframes.push(...puppetClip.puppetNodeKeyframes);
+): NodeKeyframe[] {
+  const allKeyframes: NodeKeyframe[] = [];
+  for (const clip of animationClips) {
+    if (clip.nodeKeyframes) {
+      allKeyframes.push(...clip.nodeKeyframes);
     }
   }
   return allKeyframes;
@@ -460,7 +457,7 @@ function collectPuppetNodeKeyframes(
 export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) {
   // ---- Store ----
   const {
-    parts,
+    sprites,
     keyframes,
     canvasWidth,
     canvasHeight,
@@ -474,43 +471,24 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
     proceduralAnimations,
     canvasModifierTracks,
     name: projectName,
-    puppetSkeletons,
-    puppetCharacters,
     animationClips,
+    unifiedCharacters,
   } = useProjectStore();
 
-  // Filter out puppet sprite parts from the standard render pipeline.
+  // Filter out puppet sprite sprites from the standard render pipeline.
   // Puppet sprites are rendered by the puppet rendering pipeline, not renderFrame.
-  // Including them in both would cause double-rendering.
-  const puppetSpritePartIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const skeleton of puppetSkeletons ?? []) {
-      for (const node of skeleton.nodes) {
-        if (node.spritePartId) ids.add(node.spritePartId);
-        for (const partId of Object.values(node.directionSprites)) {
-          if (partId) ids.add(partId);
-        }
-      }
-    }
-    for (const character of puppetCharacters ?? []) {
-      for (const costumeSet of character.costumeSets) {
-        for (const partId of Object.values(costumeSet.spriteMap)) {
-          if (partId) ids.add(partId);
-        }
-      }
-    }
-    return ids;
-  }, [puppetSkeletons, puppetCharacters]);
+  const nonPuppetParts = useMemo(() => Object.values(sprites), [sprites]);
 
-  const nonPuppetParts = useMemo(() => {
-    if (puppetSpritePartIds.size === 0) return parts;
-    return parts.filter(p => !puppetSpritePartIds.has(p.id));
-  }, [parts, puppetSpritePartIds]);
+  // Collect node keyframes from animation clips (new model)
+  const nodeKeyframes = useMemo(() => {
+    return collectNodeKeyframes(animationClips);
+  }, [animationClips]);
 
-  // Collect puppet node keyframes from puppet animation clips
-  const puppetNodeKeyframes = useMemo(() => {
-    return collectPuppetNodeKeyframes(animationClips, puppetCharacters ?? []);
-  }, [animationClips, puppetCharacters]);
+  // 获取所有统一角色（用于导出渲染）— 新模型直读，无需同步
+  const getAllUnifiedCharacters = useCallback(() => {
+    const store = useProjectStore.getState();
+    return Object.values(store.unifiedCharacters ?? {});
+  }, []);
 
   // ---- State ----
   const [settings, setSettings] = useState<ExportSettings>(defaultSettings);
@@ -533,28 +511,16 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
 
     try {
       const bg = settings.backgroundMode === 'transparent' ? 'rgba(0,0,0,0)' : settings.customBgColor;
-      const frameCanvas = renderUnifiedToCanvas(
+      const frameCanvas = renderUnifiedCharactersToCanvas(
         canvasWidth,
         canvasHeight,
-        parts,
-        keyframes,
+        getAllUnifiedCharacters(),
         0,
         bg,
-        effectTracks,
-        motionBlurStrokes,
-        effectStrokes,
-        false,
-        0.5,
-        skeletons,
-        proceduralAnimations,
-        canvasModifierTracks,
-        undefined,
-        undefined,
-        undefined,
-        puppetSkeletons,
-        puppetCharacters,
-        puppetNodeKeyframes,
         frameRate,
+        undefined,
+        undefined,
+        canvasModifierTracks,
       );
 
       // Scale for preview
@@ -588,7 +554,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
     } catch {
       setPreviewUrl(null);
     }
-  }, [open, settings.scale, settings.backgroundMode, settings.customBgColor, canvasWidth, canvasHeight, parts, keyframes, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations]);
+  }, [open, settings.scale, settings.backgroundMode, settings.customBgColor, canvasWidth, canvasHeight, sprites, keyframes, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations]);
 
   // ---- Background color for rendering ----
   const getBgColor = useCallback(() => {
@@ -603,28 +569,16 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       const bgColor = getBgColor();
 
       for (let frame = 0; frame < totalFrames; frame++) {
-        const frameCanvas = renderUnifiedToCanvas(
+        const frameCanvas = renderUnifiedCharactersToCanvas(
           canvasWidth,
           canvasHeight,
-          parts,
-          keyframes,
+          getAllUnifiedCharacters(),
           frame,
           bgColor,
-          effectTracks,
-          motionBlurStrokes,
-          effectStrokes,
-          false,
-          0.5,
-          skeletons,
-          proceduralAnimations,
-          canvasModifierTracks,
-          undefined,
-          undefined,
-          undefined,
-          puppetSkeletons,
-          puppetCharacters,
-          puppetNodeKeyframes,
           frameRate,
+          undefined,
+          undefined,
+          canvasModifierTracks,
         );
 
         // Scale
@@ -669,7 +623,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, parts, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations]);
+  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations]);
 
   // ---- Export: Spritesheet ----
   const exportSpritesheet = useCallback(async () => {
@@ -706,28 +660,16 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       ctx.imageSmoothingEnabled = false;
 
       for (let frame = 0; frame < totalFrames; frame++) {
-        const frameCanvas = renderUnifiedToCanvas(
+        const frameCanvas = renderUnifiedCharactersToCanvas(
           canvasWidth,
           canvasHeight,
-          parts,
-          keyframes,
+          getAllUnifiedCharacters(),
           frame,
           bgColor,
-          effectTracks,
-          motionBlurStrokes,
-          effectStrokes,
-          false,
-          0.5,
-          skeletons,
-          proceduralAnimations,
-          canvasModifierTracks,
-          undefined,
-          undefined,
-          undefined,
-          puppetSkeletons,
-          puppetCharacters,
-          puppetNodeKeyframes,
           frameRate,
+          undefined,
+          undefined,
+          canvasModifierTracks,
         );
 
         let col: number;
@@ -768,7 +710,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, parts, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations]);
+  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations]);
 
   // ---- Export: GIF (using gif.js encoder) ----
   const exportGif = useCallback(async () => {
@@ -792,28 +734,16 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
 
       // Render and add each frame
       for (let frame = 0; frame < totalFrames; frame++) {
-        const frameCanvas = renderUnifiedToCanvas(
+        const frameCanvas = renderUnifiedCharactersToCanvas(
           canvasWidth,
           canvasHeight,
-          parts,
-          keyframes,
+          getAllUnifiedCharacters(),
           frame,
           bgColor,
-          effectTracks,
-          motionBlurStrokes,
-          effectStrokes,
-          false,
-          0.5,
-          skeletons,
-          proceduralAnimations,
-          canvasModifierTracks,
-          undefined,
-          undefined,
-          undefined,
-          puppetSkeletons,
-          puppetCharacters,
-          puppetNodeKeyframes,
           frameRate,
+          undefined,
+          undefined,
+          canvasModifierTracks,
         );
 
         const offscreen = document.createElement('canvas');
@@ -858,7 +788,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, parts, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, frameRate, projectName]);
+  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, frameRate, projectName]);
 
   // ---- Export: Video (V2.0) ----
   const exportVideo = useCallback(async () => {
@@ -930,28 +860,16 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
           offCtx.fillRect(0, 0, offscreen.width, offscreen.height);
         }
 
-        const frameCanvas = renderUnifiedToCanvas(
+        const frameCanvas = renderUnifiedCharactersToCanvas(
           canvasWidth,
           canvasHeight,
-          parts,
-          keyframes,
+          getAllUnifiedCharacters(),
           frame,
           bgColor,
-          effectTracks,
-          motionBlurStrokes,
-          effectStrokes,
-          false,
-          0.5,
-          skeletons,
-          proceduralAnimations,
-          canvasModifierTracks,
-          undefined,
-          undefined,
-          undefined,
-          puppetSkeletons,
-          puppetCharacters,
-          puppetNodeKeyframes,
           frameRate,
+          undefined,
+          undefined,
+          canvasModifierTracks,
         );
 
         offCtx.imageSmoothingEnabled = false;
@@ -985,7 +903,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, parts, keyframes, totalFrames, frameRate, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, projectName]);
+  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, frameRate, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, projectName]);
 
   // ---- Export: Lottie (V2.0) ----
   const exportLottie = useCallback(async () => {
@@ -1024,7 +942,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, frameRate, totalFrames, parts, keyframes, settings.lottieScale, onOpenChange, projectName]);
+  }, [canvasWidth, canvasHeight, frameRate, totalFrames, sprites, keyframes, settings.lottieScale, onOpenChange, projectName]);
 
   // ---- Export: Project File (V2.0) ----
   const exportProjectFile = useCallback(() => {
@@ -1410,7 +1328,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
             <div className="text-xs text-gray-500 bg-white/[0.03] rounded-md p-2.5">
               <span className="font-medium text-gray-400">Output:</span>{' '}
               Lottie JSON ({canvasWidth * settings.lottieScale}×{canvasHeight * settings.lottieScale}px),{' '}
-              {parts.length} layers, {totalFrames} frames at {frameRate} FPS
+              {Object.keys(sprites).length} layers, {totalFrames} frames at {frameRate} FPS
             </div>
 
             {/* Lottie note */}
@@ -1428,9 +1346,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
             <div className="space-y-3">
               <div className="text-xs text-gray-500 bg-white/[0.03] rounded-md p-3 space-y-1">
                 <div className="font-medium text-gray-400">Export Project File (.pxm)</div>
-                <div>Save the complete project including all parts, keyframes, skeletons, and procedural animations.</div>
+                <div>Save the complete project including all sprites, keyframes, skeletons, and procedural animations.</div>
                 <div className="text-[10px] text-gray-600 mt-1">
-                  {parts.length} parts · {keyframes.length} keyframes · {skeletons.length} skeletons · {proceduralAnimations.length} procedural anims
+                  {Object.keys(sprites).length} sprites · {keyframes.length} keyframes · {skeletons.length} skeletons · {proceduralAnimations.length} procedural anims
                 </div>
               </div>
               <Button
@@ -1496,12 +1414,12 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
                     // Import each frame as a separate part
                     for (let i = 0; i < frames.length; i++) {
                       const frame = frames[i];
-                      const part = store.addPart(
+                      const sprite = store.addSprite(
                         `${file.name}_frame${i + 1}`,
                         frame.pixels[0]?.length || 1,
                         frame.pixels.length || 1,
                       );
-                      store.setPartPixels(part.id, frame.pixels);
+                      store.setSpritePixels(sprite.id!, frame.pixels);
                     }
                     onOpenChange(false);
                   } catch (err) {

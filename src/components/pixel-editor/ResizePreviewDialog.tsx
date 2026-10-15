@@ -13,12 +13,22 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { useProjectStore } from '@/lib/store';
-import type { Part, PixelGrid, PixelColor } from '@/lib/types';
+import type { PixelGrid, PixelColor } from '@/lib/types';
+import type { Sprite } from '@/lib/unified-types';
+import { subToPx } from '@/lib/unified-types';
 
-// ---- Preview Canvas: renders part pixels with crop overlay ----
+/** 精灵轴心（像素单位）：plug 为 1/16 亚像素，无 plug 时默认 0（与 partToSprite 一致） */
+function spritePivot(sprite: Sprite): { x: number; y: number } {
+  return {
+    x: sprite.plug ? subToPx(sprite.plug.x) : 0,
+    y: sprite.plug ? subToPx(sprite.plug.y) : 0,
+  };
+}
+
+// ---- Preview Canvas: renders sprite pixels with crop overlay ----
 
 interface ResizePreviewCanvasProps {
-  part: Part;
+  sprite: Sprite;
   newWidth: number;
   newHeight: number;
   cropOffsetX: number;
@@ -27,7 +37,7 @@ interface ResizePreviewCanvasProps {
 }
 
 function ResizePreviewCanvas({
-  part,
+  sprite,
   newWidth,
   newHeight,
   cropOffsetX,
@@ -38,6 +48,7 @@ function ResizePreviewCanvas({
   const containerRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
   const dragStartRef = useRef<{ x: number; y: number; startOffsetX: number; startOffsetY: number } | null>(null);
+  const pivot = spritePivot(sprite);
 
   // Compute the display scale to fit the preview area
   const [displayScale, setDisplayScale] = useState(1);
@@ -47,9 +58,9 @@ function ResizePreviewCanvas({
   const maxDisplayH = 240;
 
   useEffect(() => {
-    const scale = Math.min(maxDisplayW / Math.max(newWidth, part.width), maxDisplayH / Math.max(newHeight, part.height), 8);
+    const scale = Math.min(maxDisplayW / Math.max(newWidth, sprite.width), maxDisplayH / Math.max(newHeight, sprite.height), 8);
     setDisplayScale(Math.max(1, Math.floor(scale)));
-  }, [newWidth, newHeight, part.width, part.height]);
+  }, [newWidth, newHeight, sprite.width, sprite.height]);
 
   // Render the preview
   useLayoutEffect(() => {
@@ -60,13 +71,13 @@ function ResizePreviewCanvas({
 
     // Canvas size: show the larger of old/new dimensions with some padding for offset
     // We need to show where both the original content and the new bounds are.
-    // In resizePart, new[x][y] = old[x - cropOffsetX][y - cropOffsetY], so
+    // In resize, new[x][y] = old[x - cropOffsetX][y - cropOffsetY], so
     // the new grid starts at old position (-cropOffsetX, -cropOffsetY) and
     // extends to (-cropOffsetX + newWidth, -cropOffsetY + newHeight).
     const minShowX = Math.min(0, -cropOffsetX);
     const minShowY = Math.min(0, -cropOffsetY);
-    const maxShowX = Math.max(part.width, newWidth - cropOffsetX);
-    const maxShowY = Math.max(part.height, newHeight - cropOffsetY);
+    const maxShowX = Math.max(sprite.width, newWidth - cropOffsetX);
+    const maxShowY = Math.max(sprite.height, newHeight - cropOffsetY);
 
     const showW = maxShowX - minShowX;
     const showH = maxShowY - minShowY;
@@ -117,7 +128,7 @@ function ResizePreviewCanvas({
     };
 
     // Draw original pixels (dimmed where outside crop)
-    drawPixels(part.pixels, 0, 0, true);
+    drawPixels(sprite.data, 0, 0, true);
 
     // Draw new bounds rectangle (crop frame)
     // The new grid starts at old position (-cropOffsetX, -cropOffsetY),
@@ -144,9 +155,9 @@ function ResizePreviewCanvas({
     ctx.fillText(`${newHeight} px`, 0, 0);
     ctx.restore();
 
-    // Draw pivot point of the original part
-    const pivotDrawX = (part.pivotX - minShowX) * pixelSize + pixelSize / 2;
-    const pivotDrawY = (part.pivotY - minShowY) * pixelSize + pixelSize / 2;
+    // Draw pivot point of the original sprite
+    const pivotDrawX = (pivot.x - minShowX) * pixelSize + pixelSize / 2;
+    const pivotDrawY = (pivot.y - minShowY) * pixelSize + pixelSize / 2;
     ctx.fillStyle = '#ef4444';
     ctx.beginPath();
     ctx.arc(pivotDrawX, pivotDrawY, 3, 0, Math.PI * 2);
@@ -158,8 +169,8 @@ function ResizePreviewCanvas({
     // Draw new pivot position (where pivot will be after resize)
     // The new pivot at (newPivotX, newPivotY) in the new grid maps to
     // old position (newPivotX - cropOffsetX, newPivotY - cropOffsetY).
-    const newPivotX = Math.max(0, Math.min(part.pivotX + cropOffsetX, newWidth - 1));
-    const newPivotY = Math.max(0, Math.min(part.pivotY + cropOffsetY, newHeight - 1));
+    const newPivotX = Math.max(0, Math.min(pivot.x + cropOffsetX, newWidth - 1));
+    const newPivotY = Math.max(0, Math.min(pivot.y + cropOffsetY, newHeight - 1));
     const nPivCanvasX = (newPivotX - cropOffsetX - minShowX) * pixelSize + pixelSize / 2;
     const nPivCanvasY = (newPivotY - cropOffsetY - minShowY) * pixelSize + pixelSize / 2;
 
@@ -193,7 +204,7 @@ function ResizePreviewCanvas({
       ctx.fillStyle = '#cccccc';
       ctx.fillText('新锚点', 88, legendY + 3);
     }
-  }, [part, newWidth, newHeight, cropOffsetX, cropOffsetY, displayScale]);
+  }, [sprite, newWidth, newHeight, cropOffsetX, cropOffsetY, displayScale]);
 
   // ---- Mouse drag to adjust crop offset ----
 
@@ -259,31 +270,33 @@ function ResizePreviewCanvas({
 interface ResizePreviewDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  part: Part;
+  sprite: Sprite;
 }
 
-export default function ResizePreviewDialog({ open, onOpenChange, part }: ResizePreviewDialogProps) {
-  const resizePart = useProjectStore((s) => s.resizePart);
+export default function ResizePreviewDialog({ open, onOpenChange, sprite }: ResizePreviewDialogProps) {
+  const resizeSprite = useProjectStore((s) => s.resizeSprite);
 
-  const [newWidth, setNewWidth] = useState(part.width);
-  const [newHeight, setNewHeight] = useState(part.height);
+  const [newWidth, setNewWidth] = useState(sprite.width);
+  const [newHeight, setNewHeight] = useState(sprite.height);
   const [cropOffsetX, setCropOffsetX] = useState(0);
   const [cropOffsetY, setCropOffsetY] = useState(0);
 
-  // Reset state when the dialog opens or part changes
+  // Reset state when the dialog opens or sprite changes
   useEffect(() => {
     if (open) {
-      setNewWidth(part.width);
-      setNewHeight(part.height);
+      setNewWidth(sprite.width);
+      setNewHeight(sprite.height);
       setCropOffsetX(0);
       setCropOffsetY(0);
     }
-  }, [open, part.id, part.width, part.height]);
+  }, [open, sprite.id, sprite.width, sprite.height]);
 
   const handleCropOffsetChange = useCallback((dx: number, dy: number) => {
     setCropOffsetX(dx);
     setCropOffsetY(dy);
   }, []);
+
+  const pivot = spritePivot(sprite);
 
   // Compute the resulting preview pixels info
   const previewInfo = useMemo(() => {
@@ -293,9 +306,9 @@ export default function ResizePreviewDialog({ open, onOpenChange, part }: Resize
     // Count visible pixels after resize
     let visibleCount = 0;
     let totalCount = 0;
-    for (let y = 0; y < part.height; y++) {
-      for (let x = 0; x < part.width; x++) {
-        if (part.pixels[y]?.[x] !== null) {
+    for (let y = 0; y < sprite.height; y++) {
+      for (let x = 0; x < sprite.width; x++) {
+        if (sprite.data[y]?.[x] !== null) {
           totalCount++;
           const newX = x + cropOffsetX;
           const newY = y + cropOffsetY;
@@ -307,18 +320,18 @@ export default function ResizePreviewDialog({ open, onOpenChange, part }: Resize
     }
 
     const lostCount = totalCount - visibleCount;
-    const newPivotX = Math.max(0, Math.min(part.pivotX + cropOffsetX, w - 1));
-    const newPivotY = Math.max(0, Math.min(part.pivotY + cropOffsetY, h - 1));
+    const newPivotX = Math.max(0, Math.min(pivot.x + cropOffsetX, w - 1));
+    const newPivotY = Math.max(0, Math.min(pivot.y + cropOffsetY, h - 1));
 
     return { visibleCount, lostCount, totalCount, newPivotX, newPivotY };
-  }, [newWidth, newHeight, cropOffsetX, cropOffsetY, part]);
+  }, [newWidth, newHeight, cropOffsetX, cropOffsetY, sprite]);
 
   const handleApply = useCallback(() => {
     const w = Math.max(1, Math.min(512, newWidth));
     const h = Math.max(1, Math.min(512, newHeight));
-    resizePart(part.id, w, h, cropOffsetX, cropOffsetY);
+    resizeSprite((sprite.id ?? ''), w, h, cropOffsetX, cropOffsetY);
     onOpenChange(false);
-  }, [newWidth, newHeight, cropOffsetX, cropOffsetY, part.id, resizePart, onOpenChange]);
+  }, [newWidth, newHeight, cropOffsetX, cropOffsetY, (sprite.id ?? ''), resizeSprite, onOpenChange]);
 
   const handleCancel = useCallback(() => {
     onOpenChange(false);
@@ -326,15 +339,15 @@ export default function ResizePreviewDialog({ open, onOpenChange, part }: Resize
 
   // Quick preset sizes
   const presets = useMemo(() => {
-    const base = Math.max(part.width, part.height);
+    const base = Math.max(sprite.width, sprite.height);
     return [
-      { label: '原始', w: part.width, h: part.height },
-      { label: '50%', w: Math.max(1, Math.round(part.width * 0.5)), h: Math.max(1, Math.round(part.height * 0.5)) },
-      { label: '150%', w: Math.min(512, Math.round(part.width * 1.5)), h: Math.min(512, Math.round(part.height * 1.5)) },
-      { label: '200%', w: Math.min(512, part.width * 2), h: Math.min(512, part.height * 2) },
+      { label: '原始', w: sprite.width, h: sprite.height },
+      { label: '50%', w: Math.max(1, Math.round(sprite.width * 0.5)), h: Math.max(1, Math.round(sprite.height * 0.5)) },
+      { label: '150%', w: Math.min(512, Math.round(sprite.width * 1.5)), h: Math.min(512, Math.round(sprite.height * 1.5)) },
+      { label: '200%', w: Math.min(512, sprite.width * 2), h: Math.min(512, sprite.height * 2) },
       { label: '正方形', w: base, h: base },
     ];
-  }, [part.width, part.height]);
+  }, [sprite.width, sprite.height]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -416,7 +429,7 @@ export default function ResizePreviewDialog({ open, onOpenChange, part }: Resize
 
           {/* Preview canvas */}
           <ResizePreviewCanvas
-            part={part}
+            sprite={sprite}
             newWidth={newWidth}
             newHeight={newHeight}
             cropOffsetX={cropOffsetX}
@@ -426,7 +439,7 @@ export default function ResizePreviewDialog({ open, onOpenChange, part }: Resize
 
           {/* Info */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
-            <span>原始: {part.width} x {part.height}</span>
+            <span>原始: {sprite.width} x {sprite.height}</span>
             <span>|</span>
             <span>新: {newWidth} x {newHeight}</span>
             <span>|</span>

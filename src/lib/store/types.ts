@@ -8,7 +8,6 @@
 import type { StateCreator } from 'zustand';
 import type {
   Project,
-  Part,
   Track,
   Keyframe,
   ModifierInstance,
@@ -53,8 +52,6 @@ import type {
   ModifierCoordinateMode,
   // PixelEdit brush command types
   BrushCommand,
-  // V4.1: Part keyframe type
-  PartKeyframe,
   // M7: ParamDriver imports
   ParamDriver,
   ParamDriverWaveform,
@@ -81,7 +78,7 @@ import type {
   ClipPartData,
   Costume,
 } from '../types';
-import type { PuppetSlice } from './puppet-slice';
+import type { Sprite } from '../unified-types';
 import type { CharacterSlice } from './character-slice';
 import type { DccPipelineSlice } from './dcc-pipeline-slice';
 import type { GlobalModifierSlice } from './global-modifier-slice';
@@ -93,7 +90,7 @@ import type {
   SelectionFrameStep,
 } from '../v15-types';
 
-export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'globalModifiers'>, PuppetSlice, CharacterSlice, DccPipelineSlice, GlobalModifierSlice {
+export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'globalModifiers'>, CharacterSlice, DccPipelineSlice, GlobalModifierSlice {
   // Project actions
   setProjectName: (name: string) => void;
   setCanvasSize: (w: number, h: number) => void;
@@ -103,23 +100,17 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   incrementFrame: () => void;
   setBackgroundColor: (color: string) => void;
 
-  // Part actions
-  addPart: (name: string, width: number, height: number, opts?: { pivotX?: number; pivotY?: number }) => Part;
-  removePart: (id: string) => void;
-  updatePart: (id: string, updates: Partial<Part>) => void;
-  setPartPixels: (id: string, pixels: PixelGrid) => void;
-  duplicatePart: (id: string) => void;
-  reorderPart: (id: string, newZIndex: number) => void;
-  importPartFromImage: (name: string, imageData: ImageData) => Part;
-  /** Resize a part's pixel grid, preserving existing pixels and adjusting pivot.
-   *  cropOffsetX/Y control which portion of the original pixels is kept:
-   *    - positive = shift original content right/down within the new canvas
-   *    - negative = crop from left/top (effectively shifting content left/up) */
-  resizePart: (id: string, newWidth: number, newHeight: number, cropOffsetX?: number, cropOffsetY?: number) => void;
-
-  // Split image actions
-  splitImageToParts: (name: string, imageData: ImageData, regions: {x: number; y: number}[][]) => Part[];
-  autoEstimatePivot: (partId: string) => void;
+  // Sprite actions (global sprite table)
+  sprites: Record<string, Sprite>;
+  addSprite: (name: string, width: number, height: number, opts?: { plugX?: number; plugY?: number }) => Sprite;
+  removeSprite: (id: string) => void;
+  updateSprite: (id: string, updates: Partial<Sprite>) => void;
+  setSpritePixels: (id: string, pixels: PixelGrid) => void;
+  duplicateSprite: (id: string) => Sprite | undefined;
+  importSpriteFromImage: (name: string, imageData: ImageData) => Sprite;
+  resizeSprite: (id: string, newWidth: number, newHeight: number, cropOffsetX?: number, cropOffsetY?: number) => void;
+  splitImageToSprites: (name: string, imageData: ImageData, regions: {x: number; y: number}[][]) => Sprite[];
+  autoEstimatePlug: (spriteId: string) => void;
 
   // Track actions
   toggleTrackVisibility: (trackId: string) => void;

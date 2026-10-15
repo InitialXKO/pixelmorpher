@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useCallback, useMemo, useState } from 'react';
-import type { Track, Part, EffectTrack, CanvasModifierTrack, Keyframe } from '@/lib/types';
+import type { Track, EffectTrack, CanvasModifierTrack, Keyframe } from '@/lib/types';
+import type { Sprite } from '@/lib/unified-types';
 import { ANIMATION_MODIFIER_TYPES } from '@/lib/types';
 import { FRAME_WIDTH, TRACK_HEIGHT, SUB_TRACK_HEIGHT } from './constants';
 
@@ -9,7 +10,7 @@ import { FRAME_WIDTH, TRACK_HEIGHT, SUB_TRACK_HEIGHT } from './constants';
 export default function useVirtualScroll(
   scrollContainerRef: React.RefObject<HTMLDivElement | null>,
   tracks: Track[],
-  parts: Part[],
+  sprites: Sprite[],
   effectTracks: EffectTrack[],
   canvasModifierTracks: CanvasModifierTrack[],
   getKeyframesForPart: (partId: string) => Keyframe[],
@@ -27,7 +28,7 @@ export default function useVirtualScroll(
     const groups: { trackId: string; height: number }[] = [];
 
     for (const track of tracks) {
-      const part = parts.find((p) => p.id === track.partId);
+      const _sprite = sprites.find((p) => p.id === track.partId);
       const animModifiers = ([] as import('@/lib/types').PartAnimationModifier[]) ;
       const trackKeyframes = getKeyframesForPart(track.partId);
       const kfModifierTypes = [...new Set(
@@ -85,7 +86,7 @@ export default function useVirtualScroll(
     }
 
     return groups;
-  }, [tracks, parts, effectTracks, canvasModifierTracks, getKeyframesForPart, puppetNodeCount, isPuppetClip]);
+  }, [tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart, puppetNodeCount, isPuppetClip]);
 
   const { rowOffsets, rowHeights, totalHeight } = useMemo(() => {
     const offsets: number[] = [];

@@ -17,11 +17,9 @@ import {
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { NodeTreeItemWrapper } from './puppet/NodeTree';
 import type {
-  PuppetSkeleton,
-  PuppetCharacter,
-  CostumeSet,
   PuppetDirection,
 } from '@/lib/types';
+import type { Character, Node } from '@/lib/unified-types';
 import PuppetCreationWizard from './PuppetCreationWizard';
 import RefAssemblyWizard from './puppet/RefAssemblyWizard';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -34,9 +32,18 @@ import { Separator } from '@/components/ui/separator';
 // ============================================================
 
 export default function PuppetAssetPanel() {
-  const puppetSkeletons = useProjectStore((s) => s.puppetSkeletons) ?? [];
-  const puppetCharacters = useProjectStore((s) => s.puppetCharacters) ?? [];
-  const parts = useProjectStore((s) => s.parts);
+  // ---- New Character model ----
+  const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
+  const syncPuppetToUnified = useProjectStore((s) => s.syncPuppetToUnified);
+  const removeUnifiedCharacter = useProjectStore((s) => s.removeUnifiedCharacter);
+  const addUnifiedNode = useProjectStore((s) => s.addUnifiedNode);
+  const removeUnifiedNode = useProjectStore((s) => s.removeUnifiedNode);
+  const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
+  const setSelectedNodeId = useProjectStore((s) => s.setSelectedNodeId);
+  // Character list derived from unifiedCharacters (each Character = skeleton + character)
+  const characters: Character[] = useMemo(() => Object.values(unifiedCharacters), [unifiedCharacters]);
+
+  const sprites = useProjectStore((s) => s.sprites);
   const animationClips = useProjectStore((s) => s.animationClips);
   const activeAnimationClipId = useProjectStore((s) => s.activeAnimationClipId);
   const setActiveAnimationClip = useProjectStore((s) => s.setActiveAnimationClip);
@@ -138,12 +145,12 @@ export default function PuppetAssetPanel() {
                 <ChevronRight className="size-2.5" />
               )}
               <Users className="size-2.5" />
-              角色 ({puppetCharacters.length})
+              角色 ({characters.length})
             </button>
 
             {sectionExpanded.characters && (
               <div className="space-y-0.5 mt-0.5">
-                {puppetCharacters.length === 0 ? (
+                {characters.length === 0 ? (
                   <div className="text-center py-4 px-2">
                     <Users className="size-5 text-gray-700 mx-auto mb-1" />
                     <p className="text-[9px] text-gray-600 mb-2">尚无木偶角色</p>
@@ -156,16 +163,14 @@ export default function PuppetAssetPanel() {
                     </Button>
                   </div>
                 ) : (
-                  puppetCharacters.map((char) => {
-                    const skeleton = puppetSkeletons.find(
-                      (s) => s.id === char.puppetSkeletonId
-                    );
+                  Object.entries(unifiedCharacters).map(([skeletonKey, char]) => {
                     const isExpanded = expandedChars.has(char.id);
                     const clip = puppetClips.find(
                       (c) => c.puppetCharacterId === char.id
                     );
                     const isActive =
-                      activePuppetSkeletonId === skeleton?.id;
+                      activePuppetSkeletonId === skeletonKey;
+                    const nodeCount = Object.keys(char.nodes).length;
 
                     return (
                       <div key={char.id}>
@@ -176,12 +181,10 @@ export default function PuppetAssetPanel() {
                               : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
                           }`}
                           onClick={() => {
-                            if (skeleton) {
-                              setActivePuppetSkeletonId(skeleton.id);
-                              // 只开不关：避免点另一个角色时把骨骼显示关掉
-                              if (!useEditorStore.getState().showPuppetSkeleton) {
-                                togglePuppetSkeleton();
-                              }
+                            setActivePuppetSkeletonId(skeletonKey);
+                            // 只开不关：避免点另一个角色时把骨骼显示关掉
+                            if (!useEditorStore.getState().showPuppetSkeleton) {
+                              togglePuppetSkeleton();
                             }
                             toggleCharExpand(char.id);
                           }}
@@ -196,7 +199,7 @@ export default function PuppetAssetPanel() {
                             {char.name}
                           </span>
                           <span className="text-[8px] text-gray-600">
-                            {skeleton?.nodes.length ?? 0} 节点
+                            {nodeCount} 节点
                           </span>
                           <button
                             className="opacity-0 group-hover:opacity-100 hover:text-red-400 text-gray-600 transition-opacity"
@@ -204,7 +207,7 @@ export default function PuppetAssetPanel() {
                             onClick={(e) => {
                               e.stopPropagation();
                               if (confirm(`确定删除角色「${char.name}」吗？其骨架、服装和动画片段将一并删除，此操作不可撤销。`)) {
-                                useProjectStore.getState().removePuppetCharacter(char.id);
+                                removeUnifiedCharacter(skeletonKey);
                               }
                             }}
                           >
@@ -215,17 +218,12 @@ export default function PuppetAssetPanel() {
                         {isExpanded && (
                           <div className="ml-4 space-y-0.5 mt-0.5">
                             {/* Skeleton info */}
-                            {skeleton && (
-                              <div className="flex items-center gap-1 px-1 py-0.5 text-[9px] text-gray-500">
-                                <Bone className="size-2" />
-                                <span className="truncate">
-                                  {skeleton.name}
-                                </span>
-                                <span className="text-gray-700">
-                                  方向: {skeleton.currentDirection}
-                                </span>
-                              </div>
-                            )}
+                            <div className="flex items-center gap-1 px-1 py-0.5 text-[9px] text-gray-500">
+                              <Bone className="size-2" />
+                              <span className="truncate">
+                                {char.name}
+                              </span>
+                            </div>
                             {/* Costume sets */}
                             {char.costumeSets.map((cs) => (
                               <div
@@ -235,7 +233,7 @@ export default function PuppetAssetPanel() {
                                 <Shirt className="size-2" />
                                 <span className="truncate">{cs.name}</span>
                                 <span className="text-gray-700">
-                                  {Object.keys(cs.spriteMap).length} 映射
+                                  {Object.keys(cs.pieces).length} 槽位
                                 </span>
                               </div>
                             ))}
@@ -245,7 +243,7 @@ export default function PuppetAssetPanel() {
                                 <Film className="size-2" />
                                 <span className="truncate">{clip.name}</span>
                                 <span className="text-gray-700">
-                                  {(clip.puppetNodeKeyframes ?? []).length} K帧
+                                  {(clip.nodeKeyframes ?? []).length} K帧
                                 </span>
                               </div>
                             )}
@@ -278,46 +276,25 @@ export default function PuppetAssetPanel() {
               </button>
               {/* 增删节点 */}
               {activePuppetSkeletonId && (() => {
-                const skel = puppetSkeletons.find((s) => s.id === activePuppetSkeletonId);
-                const dir = skel?.currentDirection ?? 'S';
+                const character = unifiedCharacters[activePuppetSkeletonId];
+                if (!character) return null;
+                const nodes = Object.values(character.nodes);
                 return (
                 <>
-                  {/* 方向选择 */}
-                  <select
-                    value={dir}
-                    onChange={(e) => {
-                      useProjectStore.getState().setPuppetDirection(activePuppetSkeletonId, e.target.value as any);
-                    }}
-                    className="h-5 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-1 text-gray-300"
-                    title="切换方向"
-                  >
-                    <option value="S">南</option>
-                    <option value="N">北</option>
-                    <option value="E">东</option>
-                    <option value="W">西</option>
-                    <option value="NE">东北</option>
-                    <option value="SE">东南</option>
-                    <option value="SW">西南</option>
-                    <option value="NW">西北</option>
-                  </select>
                   <button
                     className="size-5 flex items-center justify-center text-cyan-400 hover:text-cyan-300"
                     title="添加节点（选择父节点插槽）"
                     onClick={() => {
-                      const skel = puppetSkeletons.find((s) => s.id === activePuppetSkeletonId);
-                      if (!skel || skel.nodes.length === 0) {
+                      if (nodes.length === 0) {
                         // 没有节点时直接创建根节点
-                        const store = useProjectStore.getState();
-                        const newNode = store.addPuppetNode(activePuppetSkeletonId, `节点_1`, {
-                          crossSectionTop: 4,
-                          crossSectionBottom: 3,
+                        const newNode = addUnifiedNode(activePuppetSkeletonId, `节点_1`, {
                           zIndex: 0,
                         });
-                        store.setSelectedPuppetNodeId(newNode.id);
+                        setSelectedNodeId(newNode.id);
                         return;
                       }
                       // 默认选第一个节点的第一个插槽
-                      const firstNode = skel.nodes[0];
+                      const firstNode = nodes[0];
                       setAddNodeDialog({
                         parentNodeId: firstNode.id,
                         socketId: firstNode.sockets[0]?.id ?? '',
@@ -330,12 +307,10 @@ export default function PuppetAssetPanel() {
                     className="size-5 flex items-center justify-center text-red-400 hover:text-red-300"
                     title="删除选中节点"
                     onClick={() => {
-                      const store = useProjectStore.getState();
-                      const nodeId = store.selectedPuppetNodeId;
-                      if (!nodeId) return;
+                      if (!selectedNodeId) return;
                       if (!confirm('确定删除该节点吗？')) return;
-                      store.removePuppetNode(activePuppetSkeletonId, nodeId);
-                      store.setSelectedPuppetNodeId(null);
+                      removeUnifiedNode(activePuppetSkeletonId, selectedNodeId);
+                      setSelectedNodeId(null);
                     }}
                   >
                     <Trash2 className="size-3" />
@@ -345,25 +320,25 @@ export default function PuppetAssetPanel() {
               })()}
             </div>
             {sectionExpanded.nodes && (() => {
-              const activeSkeleton = puppetSkeletons.find((sk) => sk.id === activePuppetSkeletonId);
-              const selectedNodeId = useProjectStore.getState().selectedPuppetNodeId;
-              if (!activeSkeleton) {
+              const character = activePuppetSkeletonId ? unifiedCharacters[activePuppetSkeletonId] : null;
+              if (!character) {
                 return <p className="text-[9px] text-gray-600 px-1 py-1">先选择骨架</p>;
               }
+              const nodes = Object.values(character.nodes);
+              // Root nodes: no parentId (migrated from !node.plug)
+              const rootNodes = nodes.filter((node) => !node.parentId);
               return (
                 <div className="bg-[#080818] rounded border border-[#1e1e3a] p-1 max-h-64 overflow-y-auto mt-1">
-                  {activeSkeleton.nodes
-                    .filter((node) => !node.plug)
-                    .map((node) => (
+                  {rootNodes.map((node) => (
                       <NodeTreeItemWrapper
                         key={node.id}
                         node={node}
                         depth={0}
                         selectedNodeId={selectedNodeId}
                         onSelect={(id) => {
-                          useProjectStore.getState().setSelectedPuppetNodeId(id);
+                          setSelectedNodeId(id);
                         }}
-                        allNodes={activeSkeleton.nodes}
+                        allNodes={nodes}
                       />
                     ))}
                 </div>
@@ -373,9 +348,10 @@ export default function PuppetAssetPanel() {
 
           {/* 添加节点对话框 */}
           {addNodeDialog && (() => {
-            const skel = puppetSkeletons.find((s) => s.id === activePuppetSkeletonId);
-            if (!skel) return null;
-            const parentNode = skel.nodes.find((n) => n.id === addNodeDialog.parentNodeId);
+            const character = activePuppetSkeletonId ? unifiedCharacters[activePuppetSkeletonId] : null;
+            if (!character) return null;
+            const nodes = Object.values(character.nodes);
+            const parentNode = character.nodes[addNodeDialog.parentNodeId];
             return (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setAddNodeDialog(null)}>
                 <div className="bg-[#0d0d1a] border border-[#1e1e3a] rounded p-4 w-64 space-y-3" onClick={(e) => e.stopPropagation()}>
@@ -386,12 +362,12 @@ export default function PuppetAssetPanel() {
                       value={addNodeDialog.parentNodeId}
                       onChange={(e) => {
                         const pid = e.target.value;
-                        const pnode = skel.nodes.find((n) => n.id === pid);
+                        const pnode = character.nodes[pid];
                         setAddNodeDialog({ parentNodeId: pid, socketId: pnode?.sockets[0]?.id ?? '' });
                       }}
                       className="w-full h-7 text-[11px] bg-[#111128] border border-[#1e1e3a] rounded px-2 text-gray-300"
                     >
-                      {skel.nodes.map((n) => (
+                      {nodes.map((n) => (
                         <option key={n.id} value={n.id}>{n.name}</option>
                       ))}
                     </select>
@@ -421,18 +397,16 @@ export default function PuppetAssetPanel() {
                     <button
                       className="px-3 h-7 text-[11px] bg-cyan-600 hover:bg-cyan-500 text-white rounded"
                       onClick={() => {
-                        const store = useProjectStore.getState();
-                        const nodeName = `节点_${skel.nodes.length + 1}`;
-                        const plug = addNodeDialog.socketId
-                          ? { socketId: addNodeDialog.socketId, localX: 0, localY: 0 }
-                          : undefined;
-                        const newNode = store.addPuppetNode(activePuppetSkeletonId!, nodeName, {
-                          crossSectionTop: 4,
-                          crossSectionBottom: 3,
+                        const nodeName = `节点_${nodes.length + 1}`;
+                        // New model: plug → attachment
+                        const attachment = addNodeDialog.socketId
+                          ? { type: 'socket' as const, parentSocketId: addNodeDialog.socketId, plug: { x: 0, y: 0 } }
+                          : { type: 'fixed' as const, fixedOffset: { x: 0, y: 0 }, inheritRotation: true };
+                        const newNode = addUnifiedNode(activePuppetSkeletonId!, nodeName, {
                           zIndex: 0,
-                          ...(plug ? { plug } : {}),
+                          attachment,
                         });
-                        store.setSelectedPuppetNodeId(newNode.id);
+                        setSelectedNodeId(newNode.id);
                         setAddNodeDialog(null);
                       }}
                     >
@@ -458,27 +432,27 @@ export default function PuppetAssetPanel() {
                 <ChevronRight className="size-2.5" />
               )}
               <Image className="size-2.5" />
-              精灵部件 ({parts.length})
+              精灵 ({Object.keys(sprites).length})
             </button>
 
             {sectionExpanded.sprites && (
               <div className="space-y-0.5 mt-0.5 max-h-32 overflow-y-auto">
-                {parts.map((part) => (
+                {Object.values(sprites).map((sprite) => (
                   <div
-                    key={part.id}
+                    key={sprite.id}
                     className="group flex items-center gap-1.5 px-1.5 py-0.5 text-[9px] text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded cursor-pointer transition-colors"
                   >
                     <div className="size-2 rounded-sm border border-gray-700 bg-gray-800 flex-shrink-0" />
-                    <span className="truncate flex-1 min-w-0">{part.name}</span>
+                    <span className="truncate flex-1 min-w-0">{sprite.name}</span>
                     <span className="text-gray-700">
-                      {part.width}x{part.height}
+                      {sprite.width}x{sprite.height}
                     </span>
                     <button
                       className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 hover:text-white"
                       title="编辑像素"
                       onClick={(e) => {
                         e.stopPropagation();
-                        useEditorStore.getState().enterPartEditMode(part.id);
+                        useEditorStore.getState().enterSpriteEditMode(sprite.id!);
                       }}
                     >
                       ✏️
@@ -514,7 +488,8 @@ export default function PuppetAssetPanel() {
                   </p>
                 ) : (
                   puppetClips.map((clip) => {
-                    const char = puppetCharacters.find(
+                    // Find character by Character.id (equals puppetCharacterId after migration)
+                    const char = characters.find(
                       (c) => c.id === clip.puppetCharacterId
                     );
                     return (
@@ -532,7 +507,7 @@ export default function PuppetAssetPanel() {
                           {clip.name}
                         </span>
                         <span className="text-[8px] text-gray-600">
-                          {(clip.puppetNodeKeyframes ?? []).length} K帧
+                          {(clip.nodeKeyframes ?? []).length} K帧
                         </span>
                       </div>
                     );

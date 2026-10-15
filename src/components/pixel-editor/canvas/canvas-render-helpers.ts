@@ -4,8 +4,9 @@
  * All functions are pure — they take ctx + params and draw without side effects.
  */
 
-import { drawDiamond, catmullRomToBezier, evaluateBezier, computeSpriteEndPoint } from './canvas-utils';
-import type { Part, Skeleton, Bone, TrajectoryCurvePoint, PuppetSkeleton, PuppetNode, PuppetNodeKeyframe, PuppetCharacter } from '@/lib/types';
+import { drawDiamond, catmullRomToBezier, evaluateBezier, computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
+import type { Skeleton, Bone, TrajectoryCurvePoint, PuppetSkeleton, PuppetNode, PuppetNodeKeyframe, PuppetCharacter } from '@/lib/types';
+import type { Sprite } from '@/lib/unified-types';
 import { computeBoneTransforms } from '@/lib/engine';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 
@@ -384,12 +385,12 @@ export interface WeightPaintParams {
   showWeightPaint: boolean;
   weightPaintBoneId: string | null;
   skeletons: Skeleton[];
-  parts: Part[];
+  sprites: Sprite[];
   getInterpolatedTranslateOffset: (partId: string, frame: number) => { offsetX: number; offsetY: number };
 }
 
 export function renderWeightPaintOverlay(rc: RenderContext, params: WeightPaintParams) {
-  const { showWeightPaint, weightPaintBoneId, skeletons, parts, getInterpolatedTranslateOffset } = params;
+  const { showWeightPaint, weightPaintBoneId, skeletons, sprites: parts, getInterpolatedTranslateOffset } = params;
   if (!showWeightPaint || !weightPaintBoneId) return;
 
   const { ctx, canvasWidth, canvasHeight, zoom, panX, panY, currentFrame } = rc;
@@ -404,10 +405,10 @@ export function renderWeightPaintOverlay(rc: RenderContext, params: WeightPaintP
 
       const offsetX = canvasWidth / 2;
       const offsetY = canvasHeight / 2;
-      const { offsetX: partOffsetX, offsetY: partOffsetY } = getInterpolatedTranslateOffset(part.id, currentFrame);
+      const { offsetX: partOffsetX, offsetY: partOffsetY } = getInterpolatedTranslateOffset(binding.partId, currentFrame);
 
-      const partScreenX = panX + (offsetX - part.pivotX + 0 + partOffsetX) * zoom;
-      const partScreenY = panY + (offsetY - part.pivotY + 0 + partOffsetY) * zoom;
+      const partScreenX = panX + (offsetX - spritePivotX(part) + 0 + partOffsetX) * zoom;
+      const partScreenY = panY + (offsetY - spritePivotY(part) + 0 + partOffsetY) * zoom;
       const partScreenW = part.width * zoom;
       const partScreenH = part.height * zoom;
 

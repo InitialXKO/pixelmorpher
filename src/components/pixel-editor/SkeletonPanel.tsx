@@ -1122,7 +1122,7 @@ export default function SkeletonPanel() {
     toggleSkeletonVisibility,
     selectedBoneId,
     setSelectedBoneId,
-    parts,
+    sprites,
     currentFrame,
   } = useProjectStore();
 
@@ -1152,8 +1152,8 @@ export default function SkeletonPanel() {
 
   // Parts list for binding
   const partsList = useMemo(
-    () => parts.map((p) => ({ id: p.id, name: p.name })),
-    [parts],
+    () => Object.values(sprites).map((p) => ({ id: p.id!, name: p.name ?? '' })),
+    [sprites],
   );
 
   // Handlers

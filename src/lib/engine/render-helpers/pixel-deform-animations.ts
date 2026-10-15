@@ -6,7 +6,7 @@
  * and transparent-edge trimming after animation deformation.
  */
 
-import type { Part, Keyframe, PixelGrid, PartAnimationModifier } from '../../types';
+import type { Keyframe, PixelGrid, PartAnimationModifier } from '../../types';
 import { padPixelGrid, computeTotalAnimPadding, isPixelDeformModifier, trimTransparentEdges } from '../pixel-modifiers';
 import { resolveAnimModifierParams } from '../param-driver';
 import { getAnimationFrameAndWeight } from '../animation-state';

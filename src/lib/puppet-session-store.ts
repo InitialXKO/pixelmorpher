@@ -17,7 +17,7 @@ export interface PuppetSessionState {
   // ---- 操控会话 ----
   /** 正在操控的角色 id */
   performCharacterId: string | null;
-  /** 操控中选中的节点 id（与 ProjectStore.selectedPuppetNodeId 单向同步） */
+  /** 操控中选中的节点 id（与 ProjectStore.selectedNodeId 单向同步） */
   performNodeId: string | null;
   /** 画布直接操控是否已激活 */
   performArmed: boolean;
@@ -58,10 +58,10 @@ export interface PuppetSessionState {
   clearFramePose: () => void;
 }
 
-function getRootNodeId(skeletonId: string): string | null {
-  const skel = useProjectStore.getState().puppetSkeletons.find((s) => s.id === skeletonId);
-  if (!skel) return null;
-  return skel.nodes.find((n) => !n.plug)?.id ?? skel.nodes[0]?.id ?? null;
+function getRootNodeId(characterId: string): string | null {
+  const character = Object.values(useProjectStore.getState().unifiedCharacters ?? {}).find((c) => c.id === characterId);
+  if (!character) return null;
+  return character.rootNodeId ?? Object.keys(character.nodes)[0] ?? null;
 }
 
 export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => ({
@@ -75,7 +75,7 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
   setPerformNodeId: (id) => {
     set({ performNodeId: id });
     // 单向同步到画布高亮
-    useProjectStore.getState().setSelectedPuppetNodeId(id);
+    useProjectStore.getState().setSelectedNodeId(id);
   },
 
   setAutoKeyframe: (v) => set({ autoKeyframe: v }),
@@ -84,7 +84,7 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
 
   ensurePuppetClip: (characterId) => {
     const project = useProjectStore.getState();
-    const character = (project.puppetCharacters ?? []).find((c) => c.id === characterId);
+    const character = Object.values(project.unifiedCharacters ?? {}).find((c) => c.id === characterId);
     if (!character) return null;
     const existing = project.animationClips.find(
       (c) => true && c.puppetCharacterId === characterId
@@ -107,7 +107,7 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
   enterPerform: (characterId) => {
     const project = useProjectStore.getState();
     const editor = useEditorStore.getState();
-    const character = (project.puppetCharacters ?? []).find((c) => c.id === characterId);
+    const character = Object.values(project.unifiedCharacters ?? {}).find((c) => c.id === characterId);
     if (!character) return;
 
     // 1. 确保木偶片段存在并激活
@@ -115,18 +115,18 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
 
     // 2. 画布进入木偶操控：工具 + 骨骼叠加层
     editor.setTool('puppet');
-    editor.setActivePuppetSkeletonId(character.puppetSkeletonId);
+    editor.setActivePuppetSkeletonId(characterId);
     if (!editor.showPuppetSkeleton) editor.togglePuppetSkeleton();
 
     // 3. 选中根节点
-    const rootId = getRootNodeId(character.puppetSkeletonId);
+    const rootId = getRootNodeId(characterId);
 
     set({
       performCharacterId: characterId,
       performNodeId: rootId,
       performArmed: true,
     });
-    project.setSelectedPuppetNodeId(rootId);
+    project.setSelectedNodeId(rootId);
   },
 
   exitPerform: () => {
@@ -140,14 +140,13 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
     const { performCharacterId } = get();
     if (!performCharacterId) return;
     const project = useProjectStore.getState();
-    const character = (project.puppetCharacters ?? []).find((c) => c.id === performCharacterId);
-    const skeleton = (project.puppetSkeletons ?? []).find((s) => s.id === character?.puppetSkeletonId);
+    const character = Object.values(project.unifiedCharacters ?? {}).find((c) => c.id === performCharacterId);
     const clipId = get().ensurePuppetClip(performCharacterId);
-    if (!skeleton || !clipId) return;
+    if (!character || !clipId) return;
 
     const frame = project.currentFrame;
-    const direction = skeleton.currentDirection;
-    const latitude = skeleton.viewLatitude ?? 0;
+    const direction = 0;
+    const latitude = 0;
 
     // 录制“当前可见姿态”：用关键帧插值求出每节点在当前帧的实际值，
     // 而不是 rest pose（perform 阶段拖动只写关键帧，不碰 rest pose）。
@@ -159,22 +158,21 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
     useProjectStore.setState((st) => ({
       animationClips: st.animationClips.map((c) => {
         if (c.id !== clipId) return c;
-        const existing = c.puppetNodeKeyframes ?? [];
+        const existing = c.nodeKeyframes ?? [];
         // 该帧该节点的旧关键帧全部替换
-        const nodeIds = new Set(skeleton.nodes.map((n) => n.id));
+        const nodeIds = new Set(Object.keys(_uc?.nodes ?? {}));
         const kept = existing.filter((kf) => !(kf.frame === frame && nodeIds.has(kf.nodeId)));
-        const fresh = skeleton.nodes.map((node) => {
+        const fresh = Object.values(_uc?.nodes ?? {}).map((node) => {
           const iv = interpolated.get(node.id);
           return {
             id: crypto.randomUUID(),
             nodeId: node.id,
             frame,
-            angle: iv?.angle ?? node.angle,
-            stretch: iv?.stretch ?? node.stretch,
-            offsetX: iv?.offsetX ?? node.offsetX,
-            offsetY: iv?.offsetY ?? node.offsetY,
-            direction,
-            viewLatitude: latitude,
+            angle: iv?.angle ?? node.transform.angle,
+            stretch: iv?.stretch ?? node.transform.stretch,
+            x: iv?.x ?? node.transform.x,
+            y: iv?.y ?? node.transform.y,
+            variantIndex: 0,
           };
         });
         return { ...c, puppetNodeKeyframes: [...kept, ...fresh] };
@@ -186,22 +184,21 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
     const { performCharacterId } = get();
     if (!performCharacterId) return;
     const project = useProjectStore.getState();
-    const character = (project.puppetCharacters ?? []).find((c) => c.id === performCharacterId);
-    const skeleton = (project.puppetSkeletons ?? []).find((s) => s.id === character?.puppetSkeletonId);
+    const character = Object.values(project.unifiedCharacters ?? {}).find((c) => c.id === performCharacterId);
     const clip = project.animationClips.find(
       (c) => true && c.puppetCharacterId === performCharacterId
     );
-    if (!skeleton || !clip) return;
+    if (!character || !clip) return;
 
     const frame = project.currentFrame;
-    const nodeIds = new Set(skeleton.nodes.map((n) => n.id));
+    const nodeIds = new Set(Object.keys(character.nodes ?? {}));
     project.pushUndo('清除本帧姿态');
     useProjectStore.setState((st) => ({
       animationClips: st.animationClips.map((c) =>
         c.id === clip.id
           ? {
               ...c,
-              puppetNodeKeyframes: (c.puppetNodeKeyframes ?? []).filter(
+              puppetNodeKeyframes: (c.nodeKeyframes ?? []).filter(
                 (kf) => !(kf.frame === frame && nodeIds.has(kf.nodeId))
               ),
             }

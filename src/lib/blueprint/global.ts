@@ -5,6 +5,7 @@
 
 import type { BlueprintGraph, BlueprintNode, BlueprintInput } from './ir';
 import type { PuppetSkeleton } from '../types';
+import type { Character } from '../unified-types';
 
 const SEPARATOR = '__';
 const SYNTHETIC_OUTPUT_ID = '__global_output__';
@@ -15,7 +16,7 @@ const SYNTHETIC_OUTPUT_ID = '__global_output__';
  * - 输入引用也同步加前缀
  * @returns 合并后的图，以及 mergedOutputId -> { puppetNodeId, origOutputId } 的映射
  */
-export function mergeBlueprints(skeleton: PuppetSkeleton): {
+export function mergeBlueprints(skeleton: PuppetSkeleton | Character): {
   graph: BlueprintGraph;
   /** merged 节点 ID -> 所属部件节点 ID */
   nodeOwner: Map<string, string>;
@@ -26,7 +27,11 @@ export function mergeBlueprints(skeleton: PuppetSkeleton): {
   const nodeOwner = new Map<string, string>();
   const outputMap = new Map<string, string>();
 
-  for (const puppetNode of skeleton.nodes) {
+  // Support both PuppetSkeleton (nodes: array) and Character (nodes: Record)
+  const nodes = Array.isArray((skeleton as PuppetSkeleton).nodes)
+    ? (skeleton as PuppetSkeleton).nodes
+    : Object.values((skeleton as Character).nodes);
+  for (const puppetNode of nodes) {
     const bp = puppetNode.blueprint;
     if (!bp) continue;
     const prefix = `${puppetNode.id}${SEPARATOR}`;
@@ -45,7 +50,10 @@ export function mergeBlueprints(skeleton: PuppetSkeleton): {
       }
 
       // UI 坐标按部件分组偏移，避免重叠
-      const nodeIdx = skeleton.nodes.indexOf(puppetNode);
+      const nodeList2 = Array.isArray((skeleton as PuppetSkeleton).nodes)
+        ? (skeleton as PuppetSkeleton).nodes
+        : Object.values((skeleton as Character).nodes);
+      const nodeIdx = nodeList2.indexOf(puppetNode as any);
       const baseX = (nodeIdx % 3) * 400;
       const baseY = Math.floor(nodeIdx / 3) * 400;
 
@@ -88,7 +96,7 @@ export function mergeBlueprints(skeleton: PuppetSkeleton): {
  */
 export function splitBlueprints(
   merged: BlueprintGraph,
-  skeleton: PuppetSkeleton,
+  skeleton: PuppetSkeleton | Character,
   outputMap: Map<string, string>
 ): Map<string, BlueprintGraph> {
   // 按部件节点分组
@@ -123,7 +131,10 @@ export function splitBlueprints(
     }
 
     // 还原 UI 坐标（去掉分组偏移）
-    const nodeIdx = skeleton.nodes.findIndex((n) => n.id === puppetNodeId);
+    const nodeList = Array.isArray((skeleton as PuppetSkeleton).nodes)
+      ? (skeleton as PuppetSkeleton).nodes
+      : Object.values((skeleton as Character).nodes);
+    const nodeIdx = nodeList.findIndex((n) => n.id === puppetNodeId);
     const baseX = nodeIdx >= 0 ? (nodeIdx % 3) * 400 : 0;
     const baseY = nodeIdx >= 0 ? Math.floor(nodeIdx / 3) * 400 : 0;
 

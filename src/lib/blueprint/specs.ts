@@ -23,6 +23,12 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   var: { inputs: [], outputs: ['out'], params: ['name', 'default'] },
   // 精灵源：输出原始像素图（管线起点）
   sprite_source: { inputs: [], outputs: ['pixels'], params: ['spriteId'] },
+  // 服装源：从角色服装集取指定槽位精灵（与 sprite_source 二选一）
+  // setId 可接线（string），slot 为空时用节点所在槽位
+  costume: { inputs: ['t', 'setId'], outputs: ['pixels'], params: ['setId', 'slot'] },
+  // 角色源：输出整角色合成后的像素（管线预渲染，由 ctx.characterPixels 提供）
+  // 角色蓝图专用：character_source → 后处理链 → screen
+  character_source: { inputs: [], outputs: ['pixels'], params: [] },
 
   // ---- 数学 ----
   add: { inputs: ['a', 'b'], outputs: ['out'], params: [] },

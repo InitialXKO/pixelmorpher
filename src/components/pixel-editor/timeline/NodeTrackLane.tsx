@@ -1,32 +1,32 @@
 'use client';
 
 import React, { useCallback, useMemo } from 'react';
-import type { PuppetNode, PuppetNodeKeyframe } from '@/lib/types';
-import { PuppetKeyframeMarker } from './KeyframeMarker';
+import type { Node, NodeKeyframe } from '@/lib/unified-types';
+import { NodeKeyframeMarker } from './KeyframeMarker';
 import { FRAME_WIDTH as STATIC_FRAME_WIDTH, TRACK_HEIGHT } from './constants';
 
-// ---- Puppet Node Track Lane ----
-const PuppetNodeTrackLane = React.memo(function PuppetNodeTrackLane({
+// ---- Node Track Lane (new Character/Node model) ----
+const NodeTrackLane = React.memo(function NodeTrackLane({
   node,
   nodeKeyframes,
-  selectedPuppetKeyframeId,
+  selectedNodeKeyframeId,
   totalFrames,
-  onSelectPuppetKeyframe,
-  onAddPuppetKeyframe,
-  onDeletePuppetKeyframe,
-  onMovePuppetKeyframeToFrame,
-  onUpdatePuppetKeyframe,
+  onSelectNodeKeyframe,
+  onAddNodeKeyframe,
+  onDeleteNodeKeyframe,
+  onMoveNodeKeyframeToFrame,
+  onUpdateNodeKeyframe,
   frameWidth,
 }: {
-  node: PuppetNode;
-  nodeKeyframes: PuppetNodeKeyframe[];
-  selectedPuppetKeyframeId: string | null;
+  node: Node;
+  nodeKeyframes: NodeKeyframe[];
+  selectedNodeKeyframeId: string | null;
   totalFrames: number;
-  onSelectPuppetKeyframe: (id: string) => void;
-  onAddPuppetKeyframe: (nodeId: string, frame: number) => void;
-  onDeletePuppetKeyframe: (keyframeId: string) => void;
-  onMovePuppetKeyframeToFrame: (keyframeId: string) => void;
-  onUpdatePuppetKeyframe: (keyframeId: string, updates: Partial<PuppetNodeKeyframe>) => void;
+  onSelectNodeKeyframe: (id: string) => void;
+  onAddNodeKeyframe: (nodeId: string, frame: number) => void;
+  onDeleteNodeKeyframe: (keyframeId: string) => void;
+  onMoveNodeKeyframeToFrame: (keyframeId: string) => void;
+  onUpdateNodeKeyframe: (keyframeId: string, updates: Partial<NodeKeyframe>) => void;
   frameWidth?: number;
 }) {
   const FRAME_WIDTH = frameWidth ?? STATIC_FRAME_WIDTH;
@@ -42,10 +42,10 @@ const PuppetNodeTrackLane = React.memo(function PuppetNodeTrackLane({
       const x = e.clientX - rect.left;
       const frame = Math.floor(x / FRAME_WIDTH);
       if (frame >= 0 && frame < totalFrames) {
-        onAddPuppetKeyframe(node.id, frame);
+        onAddNodeKeyframe(node.id, frame);
       }
     },
-    [node.id, totalFrames, onAddPuppetKeyframe]
+    [node.id, totalFrames, onAddNodeKeyframe, FRAME_WIDTH]
   );
 
   return (
@@ -59,7 +59,7 @@ const PuppetNodeTrackLane = React.memo(function PuppetNodeTrackLane({
         background: '#0e1028',
       }}
       onDoubleClick={handleDoubleClick}
-      onClick={() => onSelectPuppetKeyframe('')}
+      onClick={() => onSelectNodeKeyframe('')}
     >
       {/* Grid lines */}
       <div
@@ -78,7 +78,7 @@ const PuppetNodeTrackLane = React.memo(function PuppetNodeTrackLane({
         }}
       />
 
-      {/* Interpolation lines between consecutive puppet keyframes */}
+      {/* Interpolation lines between consecutive keyframes */}
       {sortedKeyframes.length > 1 && (
         <svg
           width={width}
@@ -90,7 +90,7 @@ const PuppetNodeTrackLane = React.memo(function PuppetNodeTrackLane({
             const next = sortedKeyframes[i + 1];
             return (
               <line
-                key={`puppet-interp-${kf.id}`}
+                key={`node-interp-${kf.id}`}
                 x1={kf.frame * FRAME_WIDTH + FRAME_WIDTH / 2}
                 y1={TRACK_HEIGHT / 2}
                 x2={next.frame * FRAME_WIDTH + FRAME_WIDTH / 2}
@@ -103,18 +103,18 @@ const PuppetNodeTrackLane = React.memo(function PuppetNodeTrackLane({
         </svg>
       )}
 
-      {/* Puppet keyframe markers */}
+      {/* Node keyframe markers */}
       {sortedKeyframes.map((kf) => (
-        <PuppetKeyframeMarker
+        <NodeKeyframeMarker
           key={kf.id}
           keyframe={kf}
-          isSelected={selectedPuppetKeyframeId === kf.id}
-          onSelect={() => onSelectPuppetKeyframe(kf.id)}
-          onDelete={() => onDeletePuppetKeyframe(kf.id)}
-          onMoveToFrame={() => onMovePuppetKeyframeToFrame(kf.id)}
+          isSelected={selectedNodeKeyframeId === kf.id}
+          onSelect={() => onSelectNodeKeyframe(kf.id)}
+          onDelete={() => onDeleteNodeKeyframe(kf.id)}
+          onMoveToFrame={() => onMoveNodeKeyframeToFrame(kf.id)}
           totalFrames={totalFrames}
           siblingKeyframes={sortedKeyframes}
-          onUpdatePuppetKeyframe={onUpdatePuppetKeyframe}
+          onUpdateNodeKeyframe={onUpdateNodeKeyframe}
           frameWidth={FRAME_WIDTH}
         />
       ))}
@@ -123,10 +123,10 @@ const PuppetNodeTrackLane = React.memo(function PuppetNodeTrackLane({
 }, (prevProps, nextProps) => {
   if (prevProps.node.id !== nextProps.node.id) return false;
   if (prevProps.nodeKeyframes !== nextProps.nodeKeyframes) return false;
-  if (prevProps.selectedPuppetKeyframeId !== nextProps.selectedPuppetKeyframeId) return false;
+  if (prevProps.selectedNodeKeyframeId !== nextProps.selectedNodeKeyframeId) return false;
   if (prevProps.totalFrames !== nextProps.totalFrames) return false;
   if (prevProps.frameWidth !== nextProps.frameWidth) return false;
   return true;
 });
 
-export default PuppetNodeTrackLane;
+export default NodeTrackLane;

@@ -45,14 +45,19 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   // 恢复模板节点到原始 transform
   const restoreTemplateNodes = () => {
     const ps = useProjectStore.getState();
-    const char = ps.puppetCharacters.find((c) => c.id === selectedCharacterId);
+    const char = Object.values(ps.unifiedCharacters ?? {}).find((c: any) => c.id === selectedCharacterId);
     if (!char) return;
-    const skeletonId = char.puppetSkeletonId;
+    const skeletonId = Object.keys(ps.unifiedCharacters ?? {}).find((k) => ps.unifiedCharacters[k]?.id === selectedCharacterId);
+    if (!skeletonId) return;
     originalTransformsRef.current.forEach((orig, nodeId) => {
-      ps.updatePuppetNode(skeletonId, nodeId, {
-        offsetX: orig.offsetX,
-        offsetY: orig.offsetY,
-        angle: orig.angle,
+      const nd = ps.unifiedCharacters[skeletonId]?.nodes[nodeId];
+      ps.updateUnifiedNode(skeletonId, nodeId, {
+        transform: {
+          ...(nd?.transform ?? { x: 0, y: 0, angle: 0, stretch: 1, variantIndex: 0 }),
+          x: orig.offsetX,
+          y: orig.offsetY,
+          angle: orig.angle,
+        },
       });
     });
     originalTransformsRef.current.clear();
@@ -63,25 +68,25 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const saveAlignmentToCostume = () => {
     if (!workingCostumeId || !selectedCharacterId) return;
     const ps = useProjectStore.getState();
-    const char = ps.puppetCharacters.find((c) => c.id === selectedCharacterId);
+    const char = Object.values(ps.unifiedCharacters ?? {}).find((c: any) => c.id === selectedCharacterId);
     if (!char) return;
-    const skeleton = ps.puppetSkeletons.find((sk) => sk.id === char.puppetSkeletonId);
+    const skeleton = char;
     if (!skeleton) return;
 
     const nodeOffsets: Record<string, { x: number; y: number; angle: number }> = {};
     const originals = originalTransformsRef.current;
-    for (const n of skeleton.nodes) {
+    for (const n of Object.values(skeleton.nodes)) {
       const orig = originals.get(n.id);
       if (!orig) continue;
-      const dx = n.offsetX - orig.offsetX;
-      const dy = n.offsetY - orig.offsetY;
-      const da = n.angle - orig.angle;
+      const dx = (n.transform?.x ?? 0) - orig.offsetX;
+      const dy = (n.transform?.y ?? 0) - orig.offsetY;
+      const da = (n.transform?.angle ?? 0) - orig.angle;
       // 只存非零偏移
       if (dx !== 0 || dy !== 0 || da !== 0) {
         nodeOffsets[n.id] = { x: dx, y: dy, angle: da };
       }
     }
-    ps.updateCostumeSet(selectedCharacterId, workingCostumeId, { nodeOffsets });
+    ps.updateUnifiedCostumeSet(selectedCharacterId, workingCostumeId, { nodeOffsets });
     // 恢复模板节点
     restoreTemplateNodes();
   };
@@ -90,7 +95,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const handleClose = (keepCostume: boolean = false) => {
     const ps = useProjectStore.getState();
     if (!keepCostume && workingCostumeId && selectedCharacterId) {
-      ps.removeCostumeSet(selectedCharacterId, workingCostumeId);
+      ps.removeUnifiedCostumeSet(selectedCharacterId, workingCostumeId);
     }
     setWorkingCostumeIdState(null);
     restoreTemplateNodes();
@@ -125,13 +130,17 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const referenceImageOpacity = useEditorStore((s) => s.referenceImageOpacity);
   const setReferenceImageOpacity = useEditorStore((s) => s.setReferenceImageOpacity);
   // 抠图目标：直接用画布全局当前选中的肢体
-  const selectedPuppetNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
-  const setSelectedPuppetNodeId = useProjectStore((s) => s.setSelectedPuppetNodeId);
+  const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
+  const setSelectedNodeId = useProjectStore((s) => s.setSelectedNodeId);
   const setZoom = useEditorStore((s) => s.setZoom);
 
   // 获取当前角色及其骨架节点（按 zIndex 排序，从后往前）
-  const puppetCharacters = useProjectStore((s) => s.puppetCharacters);
-  const puppetSkeletons = useProjectStore((s) => s.puppetSkeletons);
+  const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
+  const syncPuppetToUnified = useProjectStore((s) => s.syncPuppetToUnified);
+  const updateUnifiedNode = useProjectStore((s) => s.updateUnifiedNode);
+  const updateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
+  const addUnifiedNode = useProjectStore((s) => s.addUnifiedNode);
+  const removeUnifiedNode = useProjectStore((s) => s.removeUnifiedNode);
   const [selectedCharacterId, setSelectedCharacterIdState] = useState<string | null>(persistedSelectedCharacterId);
   const setSelectedCharacterId = (id: string | null) => {
     persistedSelectedCharacterId = id;
@@ -144,21 +153,23 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
 
   // 向导直接使用选中的模板（不克隆）
   const effectiveCharacterId = selectedCharacterId;
-  const selectedCharacter = puppetCharacters.find((c) => c.id === effectiveCharacterId);
-  const activeSkeleton = selectedCharacter
-    ? puppetSkeletons.find((sk) => sk.id === selectedCharacter.puppetSkeletonId)
+  const selectedCharacter = Object.values(unifiedCharacters).find((c) => c.id === effectiveCharacterId) ?? null;
+  // In new model, Character IS the skeleton (has nodes)
+  const activeSkeleton = selectedCharacter;
+  // Find dict key for setActivePuppetSkeletonId (keyed by skeletonId)
+  const activeSkeletonKey = selectedCharacter
+    ? Object.keys(unifiedCharacters).find((k) => unifiedCharacters[k]?.id === selectedCharacter.id) ?? null
     : null;
   // 同步到 editor store 供其他组件使用
   const setActivePuppetSkeletonId = useEditorStore((s) => s.setActivePuppetSkeletonId);
   useEffect(() => {
-    setActivePuppetSkeletonId(activeSkeleton?.id ?? null);
-  }, [activeSkeleton?.id, setActivePuppetSkeletonId]);
+    setActivePuppetSkeletonId(activeSkeletonKey);
+  }, [activeSkeletonKey, setActivePuppetSkeletonId]);
   const sortedNodes = activeSkeleton
-    ? [...activeSkeleton.nodes].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
+    ? Object.values(activeSkeleton.nodes).sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0))
     : [];
   // 抠图目标节点：直接用画布全局选中的，不再用向导内部的 targetNodeIndex
-  const targetNode = activeSkeleton?.nodes.find((n) => n.id === selectedPuppetNodeId) ?? null;
-  const addPuppetNode = useProjectStore((s) => s.addPuppetNode);
+  const targetNode = (activeSkeleton && selectedNodeId ? activeSkeleton.nodes[selectedNodeId] : null) ?? null;
 
   // 选中模板：保存原始 transform，创建工作服装，直接进入对位
   // 不需要"开始对位"按钮：选即开始，直接拖
@@ -166,9 +177,9 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   useEffect(() => {
     if (!selectedCharacterId) return;
     const ps = useProjectStore.getState();
-    const sc = ps.puppetCharacters.find((c) => c.id === selectedCharacterId);
+    const sc = Object.values(ps.unifiedCharacters ?? {}).find((c: any) => c.id === selectedCharacterId);
     if (!sc) return;
-    const skeleton = ps.puppetSkeletons.find((sk) => sk.id === sc.puppetSkeletonId);
+    const skeleton = sc;
     if (!skeleton) return;
 
     // 如果已有工作服装且对应当前模板，跳过（避免重复）
@@ -177,24 +188,25 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
       if (existing) return;
       // 否则是重选模板：恢复旧模板节点，删旧服装
       restoreTemplateNodes();
-      ps.removeCostumeSet(selectedCharacterId, workingCostumeId);
+      ps.removeUnifiedCostumeSet(selectedCharacterId, workingCostumeId);
     }
 
     // 保存原始 transform
     originalTransformsRef.current.clear();
-    for (const n of skeleton.nodes) {
+    for (const n of Object.values(skeleton.nodes)) {
       originalTransformsRef.current.set(n.id, {
-        offsetX: n.offsetX,
-        offsetY: n.offsetY,
-        angle: n.angle,
+        offsetX: n.transform?.x ?? 0,
+        offsetY: n.transform?.y ?? 0,
+        angle: n.transform?.angle ?? 0,
       });
     }
 
     // 创建工作服装
-    const costume = ps.addCostumeSet(selectedCharacterId, `${sc.name}（装配）`);
+    const costume = ps.addUnifiedCostumeSet(selectedCharacterId, `${sc.name}（装配）`);
     setWorkingCostumeIdState(costume.id);
     // 设为当前服装（渲染时应用）
-    ps.updatePuppetCharacter(selectedCharacterId, { activeCostumeSetId: costume.id });
+    const charKey203 = Object.keys(ps.unifiedCharacters ?? {}).find((k) => ps.unifiedCharacters[k]?.id === selectedCharacterId);
+    if (charKey203) ps.updateUnifiedCharacter(charKey203, { activeCostumeSetId: costume.id });
     // 进入操控（画布只显示该角色）
     usePuppetSessionStore.getState().enterPerform(selectedCharacterId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -217,7 +229,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
         const idx = sortedNodes.findIndex((n) => n.id === nodeId);
         const next = sortedNodes[Math.min(idx + 1, sortedNodes.length - 1)];
         if (next && next.id !== nodeId) {
-          setSelectedPuppetNodeId(next.id);
+          setSelectedNodeId(next.id);
         }
       }
     };
@@ -228,11 +240,11 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
 
   const handleAddLimb = () => {
     if (!activeSkeleton || !newLimbName.trim()) return;
-    const plug = newLimbSocketId
-      ? { socketId: newLimbSocketId, localX: newLimbPlugX, localY: newLimbPlugY }
-      : null;
-    addPuppetNode(activeSkeleton.id, newLimbName.trim(), {
-      plug,
+    const attachment = newLimbSocketId
+      ? { type: 'socket' as const, parentSocketId: newLimbSocketId, plug: { x: newLimbPlugX, y: newLimbPlugY } }
+      : { type: 'fixed' as const, fixedOffset: { x: 0, y: 0 }, inheritRotation: true };
+    addUnifiedNode(activeSkeletonKey!, newLimbName.trim(), {
+      attachment,
       zIndex: (targetNode?.zIndex ?? 0) + 1,
     });
     setNewLimbName('');
@@ -245,9 +257,10 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     // 注意：这里需要新节点的 ID，暂时用 setTimeout 等待 store 更新后查找
     setTimeout(() => {
       const ps = useProjectStore.getState();
-      const sk = ps.puppetSkeletons.find((s) => s.id === activeSkeleton?.id);
-      const newNode = sk?.nodes[sk.nodes.length - 1];
-      if (newNode) setSelectedPuppetNodeId(newNode.id);
+      const sk = activeSkeleton;
+      const skNodes = sk ? Object.values(sk.nodes) : [];
+      const newNode = skNodes[skNodes.length - 1];
+      if (newNode) setSelectedNodeId(newNode.id);
     }, 100);
   };
 
@@ -265,7 +278,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     if (!mirrorName) return null;
     const src = sortedNodes.find((n) => n.name.toLowerCase() === mirrorName!.toLowerCase());
     // 源节点必须已有精灵（已遮罩或模板自带）
-    if (src && (src.spritePartId || processedNodes.has(src.id))) return src.id;
+    if (src && ((src as any).sprite || src.costumePiece || processedNodes.has(src.id))) return src.id;
     return null;
   };
 
@@ -372,7 +385,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 className="w-full h-8 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
               >
                 <option value="">— 选择角色 —</option>
-                {puppetCharacters.map((c) => (
+                {Object.values(unifiedCharacters).map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
                   </option>
@@ -389,11 +402,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 <div>
                   <label className="text-xs text-gray-500 block mb-1">对位方向（遮罩将应用于此方向）</label>
                   <select
-                    value={activeSkeleton.currentDirection ?? 'S'}
-                    onChange={(e) => {
-                      const skId = activeSkeleton.id;
-                      useProjectStore.getState().setPuppetDirection(skId, e.target.value as any);
-                    }}
+                    value={'S'}
+                    onChange={() => {}}
                     className="w-full h-8 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
                   >
                     <option value="S">南 (S) - 正面</option>
@@ -454,8 +464,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   className="flex-1 text-[10px] h-6 text-red-400 hover:text-red-300"
                   onClick={() => {
                     if (!confirm(`删除节点「${targetNode.name}」？其子节点将一并删除。`)) return;
-                    useProjectStore.getState().removePuppetNode(activeSkeleton.id, targetNode.id);
-                    setSelectedPuppetNodeId(null);
+                    useProjectStore.getState().removeUnifiedNode(activeSkeletonKey!, targetNode.id);
+                    setSelectedNodeId(null);
                   }}
                 >
                   删除节点
@@ -499,7 +509,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                     >
                       <option value="">选择插槽</option>
                       {parentNodeForSocket.sockets.map((s) => (
-                        <option key={s.id} value={s.id}>{s.name} ({s.localX}, {s.localY})</option>
+                        <option key={s.id} value={s.id}>{s.name} ({s.basePosition?.x ?? 0}, {s.basePosition?.y ?? 0})</option>
                       ))}
                     </select>
                     <div className="flex gap-2">
@@ -564,10 +574,10 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                       if (!src || !activeSkeleton) return;
                       const projectStore = useProjectStore.getState();
                       const srcNode = sortedNodes.find((n) => n.id === src);
-                      const srcPart = srcNode?.spritePartId
-                        ? projectStore.parts.find((p) => p.id === srcNode.spritePartId)
-                        : null;
-                      if (!srcPart) return;
+                      // New model: get sprite from node.sprite or costumePiece
+                      const srcSprite = (srcNode as any)?.sprite ?? null;
+                      if (!srcSprite?.data) return;
+                      const srcPart = { width: srcSprite.width, height: srcSprite.height, pixels: srcSprite.data, pivotX: srcSprite.plug?.x ?? 0, pivotY: srcSprite.plug?.y ?? 0 };
                       // 真镜像：水平翻转像素，建新 Part
                       const w = srcPart.width;
                       const h = srcPart.height;
@@ -579,27 +589,31 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                         }
                         flipped.push(row);
                       }
-                      const newPart = projectStore.addPart(
-                        `${targetNode.name}（镜像）`,
-                        w,
-                        h,
-                        {
-                          pivotX: w - 1 - srcPart.pivotX,
-                          pivotY: srcPart.pivotY,
-                        }
-                      );
-                      projectStore.setPartPixels(newPart.id, flipped);
-                      // 写进工作服装的 spriteMap，不改模板节点
+                      // 新模型：精灵直写全局 sprites 表（s.sprites）
+                      const spriteId = `sprite_mirror_${targetNode.id}_${Date.now().toString(36)}`;
+                      useProjectStore.setState((s: any) => ({
+                        sprites: {
+                          ...s.sprites,
+                          [spriteId]: {
+                            id: spriteId,
+                            name: `镜像_${targetNode.name ?? targetNode.id}`,
+                            width: w,
+                            height: h,
+                            data: flipped,
+                          },
+                        },
+                      }));
+                      // 写进工作服装的 pieces，不改模板节点
                       if (workingCostumeId && selectedCharacterId) {
-                        const dir = activeSkeleton.currentDirection ?? 'S';
-                        projectStore.setCostumeSprite(
+                        // 'S' → DirectionIndex 0
+                        projectStore.setUnifiedCostumeSprite(
                           selectedCharacterId,
                           workingCostumeId,
                           targetNode.id,
-                          dir,
-                          newPart.id
+                          0,
+                          spriteId
                         );
-                        projectStore.updatePuppetNode(activeSkeleton.id, targetNode.id, {
+                        projectStore.updateUnifiedNode(activeSkeletonKey!, targetNode.id, {
                         });
                       }
                       setProcessedNodes((m) => new Map(m).set(targetNode.id, 'mirror'));

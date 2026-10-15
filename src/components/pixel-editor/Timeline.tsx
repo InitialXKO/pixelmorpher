@@ -14,7 +14,8 @@ import {
 } from '@/components/ui/dialog';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { startPlayback, stopPlayback } from '@/lib/playback-scheduler';
-import type { InterpolationMode, ModifierType, ModifierParamValue, PuppetNodeKeyframe } from '@/lib/types';
+import type { InterpolationMode, ModifierType, ModifierParamValue } from '@/lib/types';
+import type { NodeKeyframe, Sprite } from '@/lib/unified-types';
 import type { SnapTarget } from '@/lib/v15-types';
 import { DEFAULT_FRAME_WIDTH, getFrameWidth, FRAME_WIDTH as STATIC_FRAME_WIDTH, TRACK_COLOR_HUES } from './timeline/constants';
 import TimelineControls from './timeline/TimelineControls';
@@ -37,7 +38,8 @@ export default function Timeline() {
 
   // ---- Store ----
   const tracks = useProjectStore((s) => s.tracks);
-  const parts = useProjectStore((s) => s.parts);
+  const spritesRecord = useProjectStore((s) => s.sprites);
+  const sprites: Sprite[] = useMemo(() => Object.values(spritesRecord), [spritesRecord]);
   const keyframes = useProjectStore((s) => s.keyframes);
   const totalFrames = useProjectStore((s) => s.totalFrames);
   const frameRate = useProjectStore((s) => s.frameRate);
@@ -70,11 +72,11 @@ export default function Timeline() {
   // ---- Puppet data from store ----
   const activeAnimationClipId = useProjectStore((s) => s.activeAnimationClipId);
   const animationClips = useProjectStore((s) => s.animationClips);
-  const puppetSkeletons = useProjectStore((s) => s.puppetSkeletons) ?? [];
-  const puppetCharacters = useProjectStore((s) => s.puppetCharacters) ?? [];
-  const addPuppetNodeKeyframe = useProjectStore((s) => s.addPuppetNodeKeyframe);
-  const removePuppetNodeKeyframe = useProjectStore((s) => s.removePuppetNodeKeyframe);
-  const updatePuppetNodeKeyframe = useProjectStore((s) => s.updatePuppetNodeKeyframe);
+  const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
+  const syncPuppetToUnified = useProjectStore((s) => s.syncPuppetToUnified);
+  const addNodeKeyframe = useProjectStore((s) => s.addNodeKeyframe);
+  const removeNodeKeyframe = useProjectStore((s) => s.removeNodeKeyframe);
+  const updateNodeKeyframe = useProjectStore((s) => s.updateNodeKeyframe);
 
   // ---- Derived puppet data ----
   const activeClip = useMemo(
@@ -84,36 +86,36 @@ export default function Timeline() {
   const isPuppetClip = true; // 所有 clip 统一为木偶模型
   const puppetCharacter = useMemo(() => {
     if (!isPuppetClip || !activeClip?.puppetCharacterId) return null;
-    return puppetCharacters.find((c) => c.id === activeClip.puppetCharacterId) ?? null;
-  }, [isPuppetClip, activeClip, puppetCharacters]);
+    return Object.values(unifiedCharacters).find((c) => c.id === activeClip.puppetCharacterId) ?? null;
+  }, [isPuppetClip, activeClip, unifiedCharacters]);
   const puppetSkeleton = useMemo(() => {
-    if (!puppetCharacter) return null;
-    return puppetSkeletons.find((s) => s.id === puppetCharacter.puppetSkeletonId) ?? null;
-  }, [puppetCharacter, puppetSkeletons]);
-  const puppetNodes = useMemo(() => puppetSkeleton?.nodes ?? [], [puppetSkeleton]);
-  const puppetNodeKeyframes = useMemo(
-    () => activeClip?.puppetNodeKeyframes ?? [],
+    // In new model, Character IS the skeleton
+    return puppetCharacter;
+  }, [puppetCharacter]);
+  const puppetNodes = useMemo(() => (puppetSkeleton ? Object.values(puppetSkeleton.nodes) : []), [puppetSkeleton]);
+  const nodeKeyframes = useMemo(
+    () => activeClip?.nodeKeyframes ?? [],
     [activeClip]
   );
 
   // ---- Puppet keyframe selection state ----
-  const [selectedPuppetKeyframeId, setSelectedPuppetKeyframeId] = useState<string | null>(null);
-  const [puppetMoveToFrameKfId, setPuppetMoveToFrameKfId] = useState<string | null>(null);
-  const [puppetMoveToFrameValue, setPuppetMoveToFrameValue] = useState(0);
+  const [selectedNodeKeyframeId, setSelectedNodeKeyframeId] = useState<string | null>(null);
+  const [nodeMoveToFrameKfId, setNodeMoveToFrameKfId] = useState<string | null>(null);
+  const [nodeMoveToFrameValue, setNodeMoveToFrameValue] = useState(0);
 
-  const handleSelectPuppetKeyframe = useCallback((id: string) => {
-    setSelectedPuppetKeyframeId(id || null);
+  const handleSelectNodeKeyframe = useCallback((id: string) => {
+    setSelectedNodeKeyframeId(id || null);
   }, []);
 
-  const handleAddPuppetKeyframe = useCallback(
+  const handleAddNodeKeyframe = useCallback(
     (nodeId: string, frame: number) => {
       if (!activeClip) return;
       // H2: 用当前帧的插值姿态填充，而不是空对象（避免节点弹回静止姿态）
-      const skeleton = puppetSkeletons.find((sk) =>
-        sk.nodes.some((n) => n.id === nodeId)
+      const skeleton = Object.values(unifiedCharacters).find((ch) =>
+        Object.values(ch.nodes).some((n) => n.id === nodeId)
       );
-      const node = skeleton?.nodes.find((n) => n.id === nodeId);
-      let values: Partial<Pick<PuppetNodeKeyframe, 'angle' | 'stretch' | 'offsetX' | 'offsetY' | 'direction' | 'viewLatitude'>> = {};
+      const node = skeleton?.nodes[nodeId];
+      let values: Partial<Pick<import('@/lib/unified-types').NodeKeyframe, 'angle' | 'stretch' | 'x' | 'y' | 'variantIndex' | 'zIndex'>> = {};
       // 从新 store 获取 Character，用新签名
       const unifiedCharacter = useProjectStore.getState().unifiedCharacters[activeClip.puppetCharacterId ?? ''];
       if (unifiedCharacter) {
@@ -123,49 +125,49 @@ export default function Timeline() {
         values = {
           angle: iv?.angle ?? uniNode?.transform?.angle ?? 0,
           stretch: iv?.stretch ?? 1,
-          offsetX: iv?.offsetX ?? 0,
-          offsetY: iv?.offsetY ?? 0,
-          direction: 'S',
+          x: iv?.x ?? 0,
+          y: iv?.y ?? 0,
+          variantIndex: 0,
         };
       }
-      addPuppetNodeKeyframe(activeClip.id, nodeId, frame, values);
+      addNodeKeyframe(activeClip.id, nodeId, frame, values);
     },
-    [activeClip, addPuppetNodeKeyframe, puppetSkeletons]
+    [activeClip, addNodeKeyframe, unifiedCharacters]
   );
 
-  const handleDeletePuppetKeyframe = useCallback(
+  const handleDeleteNodeKeyframe = useCallback(
     (keyframeId: string) => {
       if (!activeClip) return;
-      removePuppetNodeKeyframe(activeClip.id, keyframeId);
+      removeNodeKeyframe(activeClip.id, keyframeId);
     },
-    [activeClip, removePuppetNodeKeyframe]
+    [activeClip, removeNodeKeyframe]
   );
 
-  const handleMovePuppetKeyframeToFrame = useCallback(
+  const handleMoveNodeKeyframeToFrame = useCallback(
     (keyframeId: string) => {
-      const kf = puppetNodeKeyframes.find((k) => k.id === keyframeId);
+      const kf = nodeKeyframes.find((k) => k.id === keyframeId);
       if (kf) {
-        setPuppetMoveToFrameKfId(keyframeId);
-        setPuppetMoveToFrameValue(kf.frame);
+        setNodeMoveToFrameKfId(keyframeId);
+        setNodeMoveToFrameValue(kf.frame);
       }
     },
-    [puppetNodeKeyframes]
+    [nodeKeyframes]
   );
 
-  const handleUpdatePuppetKeyframe = useCallback(
-    (keyframeId: string, updates: Partial<PuppetNodeKeyframe>) => {
+  const handleUpdateNodeKeyframe = useCallback(
+    (keyframeId: string, updates: Partial<NodeKeyframe>) => {
       if (!activeClip) return;
-      updatePuppetNodeKeyframe(activeClip.id, keyframeId, updates);
+      updateNodeKeyframe(activeClip.id, keyframeId, updates);
     },
-    [activeClip, updatePuppetNodeKeyframe]
+    [activeClip, updateNodeKeyframe]
   );
 
-  const handlePuppetMoveToFrameConfirm = useCallback(() => {
-    if (puppetMoveToFrameKfId) {
-      handleUpdatePuppetKeyframe(puppetMoveToFrameKfId, { frame: puppetMoveToFrameValue });
-      setPuppetMoveToFrameKfId(null);
+  const handleNodeMoveToFrameConfirm = useCallback(() => {
+    if (nodeMoveToFrameKfId) {
+      handleUpdateNodeKeyframe(nodeMoveToFrameKfId, { frame: nodeMoveToFrameValue });
+      setNodeMoveToFrameKfId(null);
     }
-  }, [puppetMoveToFrameKfId, puppetMoveToFrameValue, handleUpdatePuppetKeyframe]);
+  }, [nodeMoveToFrameKfId, nodeMoveToFrameValue, handleUpdateNodeKeyframe]);
 
   const playState = useEditorStore((s) => s.playState);
   const selectedPartId = useEditorStore((s) => s.selectedPartId);
@@ -175,7 +177,7 @@ export default function Timeline() {
   const selectKeyframe = useEditorStore((s) => s.selectKeyframe);
   const selectEffectTrack = useEditorStore((s) => s.selectEffectTrack);
   const editMode = useEditorStore((s) => s.editMode);
-  const partEditPartId = useEditorStore((s) => s.partEditPartId);
+  const spriteEditSpriteId = useEditorStore((s) => s.spriteEditSpriteId);
 
   // ---- Puppet session (for H1: Diamond button targets selected puppet node) ----
   const performNodeId = usePuppetSessionStore((s) => s.performNodeId);
@@ -246,7 +248,7 @@ export default function Timeline() {
 
   // ---- Virtual Scroll ----
   const { visibleRange, rowOffsets, rowHeights, totalHeight, onScroll: handleVirtualScroll } = useVirtualScroll(
-    scrollContainerRef, tracks, parts, effectTracks, canvasModifierTracks, getKeyframesForPart,
+    scrollContainerRef, tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart,
     puppetNodes.length, isPuppetClip
   );
 
@@ -273,10 +275,10 @@ export default function Timeline() {
         case 'Delete':
         case 'Backspace': {
           if (selectedKeyframeId) { e.preventDefault(); removeKeyframe(selectedKeyframeId); selectKeyframe(null); }
-          else if (selectedPuppetKeyframeId && activeClip) {
+          else if (selectedNodeKeyframeId && activeClip) {
             e.preventDefault();
-            removePuppetNodeKeyframe(activeClip.id, selectedPuppetKeyframeId);
-            setSelectedPuppetKeyframeId(null);
+            removeNodeKeyframe(activeClip.id, selectedNodeKeyframeId);
+            setSelectedNodeKeyframeId(null);
           }
           break;
         }
@@ -379,18 +381,8 @@ export default function Timeline() {
   );
 
   const handleEditAnimModifierParams = useCallback(
-    (partId: string, modifierId: string) => {
-      const part = useProjectStore.getState().parts.find((p) => p.id === partId);
-      const mod = ([] as import('@/lib/types').PartAnimationModifier[])?.find((m) => m.id === modifierId);
-      if (!mod) return;
-      setModifierEditMode('animation');
-      setModifierEditPartId(partId);
-      setModifierEditModifierId(modifierId);
-      setModifierEditModifierType(mod.type);
-      setModifierEditCurrentParams({ ...mod.params });
-      setModifierEditKeyframeId(null);
-      setModifierEditFrame(0);
-      setModifierEditOpen(true);
+    (_partId: string, _modifierId: string) => {
+      // Legacy Part system (disabled in puppet-only mode) — no-op.
     }, []
   );
 
@@ -489,15 +481,20 @@ export default function Timeline() {
   const playheadX = currentFrame * FRAME_WIDTH + FRAME_WIDTH / 2;
 
   const getPartName = useCallback((partId: string) => {
-    const part = parts.find((p) => p.id === partId);
-    return part?.name ?? 'Unknown';
-  }, [parts]);
+    const sp = sprites.find((p) => p.id === partId);
+    return sp?.name ?? 'Unknown';
+  }, [sprites]);
 
   const editTrack = editKfTrackId ? effectTracks.find((t) => t.id === editKfTrackId) ?? null : null;
 
-  // Selected keyframe interpolation mode
+  // Selected keyframe interpolation mode (Part or Node)
   const selectedKf = keyframes.find((k) => k.id === selectedKeyframeId);
-  const selectedKfInterpolationMode = selectedKeyframeId ? (selectedKf?.interpolationMode ?? 'linear') : undefined;
+  const selectedNodeKf = nodeKeyframes.find((k) => k.id === selectedNodeKeyframeId);
+  const selectedKfInterpolationMode = selectedKeyframeId
+    ? (selectedKf?.interpolationMode ?? 'linear')
+    : selectedNodeKeyframeId
+      ? (selectedNodeKf?.interpolationMode ?? 'linear')
+      : undefined;
 
   // ---- V15: Smart snap helper (returns frame with snap applied) ----
   const snapFrame = useCallback(
@@ -562,7 +559,7 @@ export default function Timeline() {
         displayFps={displayFps}
         displayFrames={displayFrames}
         selectedKeyframeId={selectedKeyframeId}
-        selectedPuppetKeyframeId={selectedPuppetKeyframeId}
+        selectedNodeKeyframeId={selectedNodeKeyframeId}
         selectedKfInterpolationMode={selectedKfInterpolationMode}
         onPlay={handlePlay}
         onStop={handleStop}
@@ -573,35 +570,23 @@ export default function Timeline() {
         onFramesInput={setFramesInput}
         onFramesSubmit={handleFramesSubmit}
         onAddKeyframe={() => {
-          // H1: 木偶是唯一工作流，Diamond 按钮给选中的木偶节点打帧
-          if (isPuppetClip && activeClip && performNodeId) {
-            handleAddPuppetKeyframe(performNodeId, currentFrameRef.current);
-            return;
-          }
-          // 回退：旧 Part 路径（理论上走不到）
-          let targetPartId: string | null = null;
-          if (selectedPartId) {
-            const track = tracks.find((t) => t.partId === selectedPartId);
-            if (track && !track.locked) targetPartId = selectedPartId;
-          }
-          if (!targetPartId) {
-            const unlockedTrack = tracks.find((t) => !t.locked);
-            if (unlockedTrack) targetPartId = unlockedTrack.partId;
-          }
-          if (targetPartId) {
-            const kf = addKeyframe(targetPartId, currentFrameRef.current);
-            selectKeyframe(kf.id);
+          // 木偶是唯一工作流，Diamond 按钮给选中的木偶节点打帧
+          if (activeClip && performNodeId) {
+            handleAddNodeKeyframe(performNodeId, currentFrameRef.current);
           }
         }}
         onDeleteKeyframe={() => {
           if (selectedKeyframeId) { removeKeyframe(selectedKeyframeId); selectKeyframe(null); }
-          else if (selectedPuppetKeyframeId && activeClip) {
-            removePuppetNodeKeyframe(activeClip.id, selectedPuppetKeyframeId);
-            setSelectedPuppetKeyframeId(null);
+          else if (selectedNodeKeyframeId && activeClip) {
+            removeNodeKeyframe(activeClip.id, selectedNodeKeyframeId);
+            setSelectedNodeKeyframeId(null);
           }
         }}
         onInterpolationChange={(mode: InterpolationMode) => {
           if (selectedKeyframeId) updateKeyframe(selectedKeyframeId, { interpolationMode: mode });
+          else if (selectedNodeKeyframeId && activeClip) {
+            updateNodeKeyframe(activeClip.id, selectedNodeKeyframeId, { interpolationMode: mode });
+          }
         }}
         onEditFpsStart={() => { setFpsInput(String(frameRate)); setIsEditingFps(true); }}
         onEditFramesStart={() => { setFramesInput(String(totalFrames)); setIsEditingFrames(true); }}
@@ -622,7 +607,7 @@ export default function Timeline() {
         {/* Left: Track Labels Column */}
         <TrackLabelsColumn
           tracks={tracks}
-          parts={parts}
+          sprites={sprites}
           effectTracks={effectTracks}
           canvasModifierTracks={canvasModifierTracks}
           getKeyframesForPart={getKeyframesForPart}
@@ -634,7 +619,7 @@ export default function Timeline() {
           selectedEffectTrackId={selectedEffectTrackId}
           onSelectEffectTrack={handleSelectEffectTrack}
           isPuppetClip={isPuppetClip}
-          puppetNodes={puppetNodes}
+          nodeList={puppetNodes as any}
           labelScrollRef={labelScrollRef}
           // V15: Pass track colors and frame step info
           trackTimelineDisplays={trackTimelineDisplays}
@@ -646,7 +631,7 @@ export default function Timeline() {
         {/* Right: Ruler + Keyframe Lanes */}
         <TrackLanesColumn
           tracks={tracks}
-          parts={parts}
+          sprites={sprites}
           effectTracks={effectTracks}
           canvasModifierTracks={canvasModifierTracks}
           getKeyframesForPart={getKeyframesForPart}
@@ -682,14 +667,14 @@ export default function Timeline() {
           onEditAnimParamDriver={handleEditAnimParamDriver}
           onPlayheadMouseDown={handlePlayheadMouseDown}
           isPuppetClip={isPuppetClip}
-          puppetNodes={puppetNodes}
-          puppetNodeKeyframes={puppetNodeKeyframes}
-          selectedPuppetKeyframeId={selectedPuppetKeyframeId}
-          onSelectPuppetKeyframe={handleSelectPuppetKeyframe}
-          onAddPuppetKeyframe={handleAddPuppetKeyframe}
-          onDeletePuppetKeyframe={handleDeletePuppetKeyframe}
-          onMovePuppetKeyframeToFrame={handleMovePuppetKeyframeToFrame}
-          onUpdatePuppetKeyframe={handleUpdatePuppetKeyframe}
+          nodeList={puppetNodes as any}
+          nodeKeyframes={nodeKeyframes}
+          selectedNodeKeyframeId={selectedNodeKeyframeId}
+          onSelectNodeKeyframe={handleSelectNodeKeyframe}
+          onAddNodeKeyframe={handleAddNodeKeyframe}
+          onDeleteNodeKeyframe={handleDeleteNodeKeyframe}
+          onMoveNodeKeyframeToFrame={handleMoveNodeKeyframeToFrame}
+          onUpdateNodeKeyframe={handleUpdateNodeKeyframe}
           // V15: Pass zoom, snap, and frame step props
           FRAME_WIDTH={FRAME_WIDTH}
           snapConfig={snapConfig}
@@ -731,21 +716,21 @@ export default function Timeline() {
         partId={paramDriverEditPartId}
       />
 
-      {/* Puppet keyframe: Move to Frame dialog */}
-      <Dialog open={puppetMoveToFrameKfId !== null} onOpenChange={(open) => { if (!open) setPuppetMoveToFrameKfId(null); }}>
+      {/* Node keyframe: Move to Frame dialog */}
+      <Dialog open={nodeMoveToFrameKfId !== null} onOpenChange={(open) => { if (!open) setNodeMoveToFrameKfId(null); }}>
         <DialogContent className="bg-[#1a1a2e] border-white/10 text-gray-200 max-w-xs">
           <DialogHeader>
-            <DialogTitle className="text-sm text-gray-100">Move Puppet Keyframe</DialogTitle>
+            <DialogTitle className="text-sm text-gray-100">移动节点关键帧</DialogTitle>
             <DialogDescription className="text-xs text-gray-400">
-              Move this puppet keyframe to a different frame
+              将此节点关键帧移动到另一帧
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-2">
-            <Label className="text-xs text-gray-400">Frame</Label>
+            <Label className="text-xs text-gray-400">帧</Label>
             <Input
               type="number"
-              value={puppetMoveToFrameValue}
-              onChange={(e) => setPuppetMoveToFrameValue(parseInt(e.target.value) || 0)}
+              value={nodeMoveToFrameValue}
+              onChange={(e) => setNodeMoveToFrameValue(parseInt(e.target.value) || 0)}
               className="h-7 text-xs bg-white/5 border-white/10 text-gray-300 px-2"
               min={0}
               max={totalFrames - 1}
@@ -753,8 +738,8 @@ export default function Timeline() {
             />
           </div>
           <DialogFooter className="gap-2">
-            <Button variant="ghost" size="sm" className="text-xs text-gray-400 hover:text-gray-200" onClick={() => setPuppetMoveToFrameKfId(null)}>Cancel</Button>
-            <Button size="sm" className="text-xs bg-cyan-600 hover:bg-cyan-500 text-white" onClick={handlePuppetMoveToFrameConfirm}>Move</Button>
+            <Button variant="ghost" size="sm" className="text-xs text-gray-400 hover:text-gray-200" onClick={() => setNodeMoveToFrameKfId(null)}>取消</Button>
+            <Button size="sm" className="text-xs bg-cyan-600 hover:bg-cyan-500 text-white" onClick={handleNodeMoveToFrameConfirm}>移动</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

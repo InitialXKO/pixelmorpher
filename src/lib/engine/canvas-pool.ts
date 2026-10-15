@@ -5,7 +5,6 @@
 // ============================================================
 
 import type {
-  Part,
   Keyframe,
   ModifierInstance,
   ModifierType,
