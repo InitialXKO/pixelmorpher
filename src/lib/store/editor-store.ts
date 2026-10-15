@@ -29,6 +29,7 @@ import {
 import { initSAM, setSAMImage as samSetImage, segmentAtPoint as samSegmentAtPoint, segmentWithBox as samSegmentWithBox, disposeSAM as samDispose } from '../sam';
 import { inpaintPixels, samMaskToSelectionMask } from '../inpainting';
 import { applyPixelModifiers, invalidateAnimModifierCache, bakeParamDriverToKeyframes } from '../engine';
+import { modifierRegistry } from '../engine/pixel-modifiers';
 
 interface EditorStore extends EditorState {
   setTool: (tool: ToolType) => void;
@@ -200,9 +201,9 @@ const defaultEditor: EditorState = {
   inpaintRadius: 3,
   spriteEditSpriteId: null,
   spriteEditBackupPixels: null,
-  partEditBackupModifiers: [],
-  partEditModifiers: [],
-  partEditStartFrame: undefined,
+  spriteEditBackupModifiers: [],
+  spriteEditModifiers: [],
+  spriteEditStartFrame: undefined,
   brushStyle: 'solid' as BrushStyleType,
   brushStyleParams: { ...DEFAULT_BRUSH_STYLE },
   styleAspects: [],
@@ -523,38 +524,24 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     if (!sprite) return;
 
     const backupPixels = sprite.data.map(row => [...row]);
-    // Sprites are pure assets (no editModifiers/partKeyframes) — backups stay empty.
-    const backupModifiers: any[] = [];
-    const backupPartKeyframes: any[] = [];
-
     const currentFrame = projectStore.currentFrame;
-    // Part 已退化为纯精灵数据，不再自带 editModifiers（重构时移除），
-    // resolvePartEditModifiers 已不存在，直接用空数组。
-    const resolvedMods: any[] = [];
 
     set({
-      editMode: 'part_edit',
+      editMode: 'sprite_edit',
       spriteEditSpriteId: spriteId,
       spriteEditBackupPixels: backupPixels,
-      partEditBackupModifiers: backupModifiers,
-      
-      partEditModifiers: resolvedMods.map(m => ({
-        ...m,
-        params: {
-          ...m.params,
-          ...(m.params.brushCommands ? { brushCommands: JSON.parse(JSON.stringify(m.params.brushCommands)) } : {}),
-        },
-      })),
-      partEditStartFrame: currentFrame,
+      spriteEditBackupModifiers: [],
+      spriteEditModifiers: [],
+      spriteEditStartFrame: currentFrame,
       selectedPartId: spriteId,
     });
   },
 
   exitSpriteEditMode: (cancel: boolean) => {
-    const { spriteEditSpriteId, spriteEditBackupPixels, partEditBackupModifiers, partEditModifiers, partEditStartFrame } = get();
+    const { spriteEditSpriteId, spriteEditBackupPixels, spriteEditBackupModifiers, spriteEditModifiers, spriteEditStartFrame } = get();
 
     if (!spriteEditSpriteId) {
-      set({ editMode: 'normal', spriteEditSpriteId: null, spriteEditBackupPixels: null, partEditBackupModifiers: [], partEditModifiers: [], partEditStartFrame: undefined });
+      set({ editMode: 'normal', spriteEditSpriteId: null, spriteEditBackupPixels: null, spriteEditBackupModifiers: [], spriteEditModifiers: [], spriteEditStartFrame: undefined });
       return;
     }
 
@@ -567,17 +554,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       }
       // Sprites are pure assets (no editModifiers/partKeyframes) — nothing else to restore.
     } else {
-      // 确认：将 partEditModifiers 中的 brushCommands 烘焙进 sprite.data
+      // 确认：将 spriteEditModifiers 中的 brushCommands 烘焙进 sprite.data
       // （part_edit 模式笔刷只攒 commands 做预览，不实时写像素）
       const sprite = projectStore.sprites[spriteEditSpriteId];
-      if (sprite && partEditModifiers.length > 0) {
-        const { modifierRegistry } = require('../engine/pixel-modifiers');
+      if (sprite && spriteEditModifiers.length > 0) {
         const handler = modifierRegistry.get('pixel_edit');
         if (handler) {
           const newPixels = sprite.data.map(row => [...row]);
           let applied = false;
           // 逐个 modifier 应用，保留各自的 opacity
-          for (const m of partEditModifiers) {
+          for (const m of spriteEditModifiers) {
             const cmds = (m.params?.brushCommands as any[]) || [];
             if (cmds.length > 0) {
               const opacity = (m.params?.opacity as number) ?? 1;
@@ -598,9 +584,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       editMode: 'normal',
       spriteEditSpriteId: null,
       spriteEditBackupPixels: null,
-      partEditBackupModifiers: [],
-      partEditModifiers: [],
-      partEditStartFrame: undefined,
+      spriteEditBackupModifiers: [],
+      spriteEditModifiers: [],
+      spriteEditStartFrame: undefined,
     });
   },
 
@@ -608,18 +594,18 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const { createDefaultModifier } = require('../types');
     const newMod = createDefaultModifier(type);
     set((s) => ({
-      partEditModifiers: [...s.partEditModifiers, newMod],
+      spriteEditModifiers: [...s.spriteEditModifiers, newMod],
     }));
     return newMod.id;
   },
 
   setPartEditModifiers: (modifiers) => {
-    set({ partEditModifiers: modifiers });
+    set({ spriteEditModifiers: modifiers });
   },
 
   updatePartEditModifier: (modId: string, params: Record<string, ModifierParamValue>) => {
     set((s) => ({
-      partEditModifiers: s.partEditModifiers.map((m) => {
+      spriteEditModifiers: s.spriteEditModifiers.map((m) => {
         if (m.id !== modId) return m;
         return { ...m, params: { ...m.params, ...params } };
       }),
@@ -628,13 +614,13 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   removePartEditModifier: (modId: string) => {
     set((s) => ({
-      partEditModifiers: s.partEditModifiers.filter((m) => m.id !== modId),
+      spriteEditModifiers: s.spriteEditModifiers.filter((m) => m.id !== modId),
     }));
   },
 
   togglePartEditModifier: (modId: string) => {
     set((s) => ({
-      partEditModifiers: s.partEditModifiers.map((m) => {
+      spriteEditModifiers: s.spriteEditModifiers.map((m) => {
         if (m.id !== modId) return m;
         return { ...m, enabled: !m.enabled };
       }),
@@ -687,7 +673,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
     const { spriteEditSpriteId } = get();
     if (spriteEditSpriteId === partId) {
-      set({ partEditModifiers: [] });
+      set({ spriteEditModifiers: [] });
     }
   },
 
@@ -751,7 +737,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   clearStrokeDrivers: () => set({ strokeDrivers: [] }),
 
   addStrokeDriverToPartEditCmd: (modifierId, commandId, driver) => set((s) => {
-    const mods = s.partEditModifiers.map(m => {
+    const mods = s.spriteEditModifiers.map(m => {
       if (m.id !== modifierId) return m;
       const commands = ((m.params.brushCommands as BrushCommand[]) || []).map(c => {
         if (c.id !== commandId) return c;
@@ -759,10 +745,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       });
       return { ...m, params: { ...m.params, brushCommands: commands } };
     });
-    return { partEditModifiers: mods };
+    return { spriteEditModifiers: mods };
   }),
   removeStrokeDriverFromPartEditCmd: (modifierId, commandId, driverId) => set((s) => {
-    const mods = s.partEditModifiers.map(m => {
+    const mods = s.spriteEditModifiers.map(m => {
       if (m.id !== modifierId) return m;
       const commands = ((m.params.brushCommands as BrushCommand[]) || []).map(c => {
         if (c.id !== commandId) return c;
@@ -770,10 +756,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       });
       return { ...m, params: { ...m.params, brushCommands: commands } };
     });
-    return { partEditModifiers: mods };
+    return { spriteEditModifiers: mods };
   }),
   updateStrokeDriverOnPartEditCmd: (modifierId, commandId, driverId, updates) => set((s) => {
-    const mods = s.partEditModifiers.map(m => {
+    const mods = s.spriteEditModifiers.map(m => {
       if (m.id !== modifierId) return m;
       const commands = ((m.params.brushCommands as BrushCommand[]) || []).map(c => {
         if (c.id !== commandId) return c;
@@ -781,10 +767,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       });
       return { ...m, params: { ...m.params, brushCommands: commands } };
     });
-    return { partEditModifiers: mods };
+    return { spriteEditModifiers: mods };
   }),
   toggleStrokeDriverOnPartEditCmd: (modifierId, commandId, driverId) => set((s) => {
-    const mods = s.partEditModifiers.map(m => {
+    const mods = s.spriteEditModifiers.map(m => {
       if (m.id !== modifierId) return m;
       const commands = ((m.params.brushCommands as BrushCommand[]) || []).map(c => {
         if (c.id !== commandId) return c;
@@ -792,12 +778,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       });
       return { ...m, params: { ...m.params, brushCommands: commands } };
     });
-    return { partEditModifiers: mods };
+    return { spriteEditModifiers: mods };
   }),
 
   addPartEditStrokeDriverParamDriver: (modifierId, commandId, strokeDriverId, paramName, startFrame, endFrame) => set((s) => {
     const driver: ParamDriver = { ...require('../types').createDefaultParamDriver(paramName, 0.5, startFrame ?? 0, endFrame ?? -1) };
-    const mods = s.partEditModifiers.map(m => {
+    const mods = s.spriteEditModifiers.map(m => {
       if (m.id !== modifierId) return m;
       const commands = ((m.params.brushCommands as BrushCommand[]) || []).map(c => {
         if (c.id !== commandId) return c;
@@ -809,10 +795,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       });
       return { ...m, params: { ...m.params, brushCommands: commands } };
     });
-    return { partEditModifiers: mods };
+    return { spriteEditModifiers: mods };
   }),
   removePartEditStrokeDriverParamDriver: (modifierId, commandId, strokeDriverId, driverId) => set((s) => {
-    const mods = s.partEditModifiers.map(m => {
+    const mods = s.spriteEditModifiers.map(m => {
       if (m.id !== modifierId) return m;
       const commands = ((m.params.brushCommands as BrushCommand[]) || []).map(c => {
         if (c.id !== commandId) return c;
@@ -824,10 +810,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       });
       return { ...m, params: { ...m.params, brushCommands: commands } };
     });
-    return { partEditModifiers: mods };
+    return { spriteEditModifiers: mods };
   }),
   updatePartEditStrokeDriverParamDriver: (modifierId, commandId, strokeDriverId, driverId, updates) => set((s) => {
-    const mods = s.partEditModifiers.map(m => {
+    const mods = s.spriteEditModifiers.map(m => {
       if (m.id !== modifierId) return m;
       const commands = ((m.params.brushCommands as BrushCommand[]) || []).map(c => {
         if (c.id !== commandId) return c;
@@ -839,10 +825,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       });
       return { ...m, params: { ...m.params, brushCommands: commands } };
     });
-    return { partEditModifiers: mods };
+    return { spriteEditModifiers: mods };
   }),
   togglePartEditStrokeDriverParamDriver: (modifierId, commandId, strokeDriverId, driverId) => set((s) => {
-    const mods = s.partEditModifiers.map(m => {
+    const mods = s.spriteEditModifiers.map(m => {
       if (m.id !== modifierId) return m;
       const commands = ((m.params.brushCommands as BrushCommand[]) || []).map(c => {
         if (c.id !== commandId) return c;
@@ -854,7 +840,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       });
       return { ...m, params: { ...m.params, brushCommands: commands } };
     });
-    return { partEditModifiers: mods };
+    return { spriteEditModifiers: mods };
   }),
 
   addPartEditStrokeDriverParamKeyframe: (modifierId, commandId, strokeDriverId, frame, params) => set((s) => {
@@ -863,7 +849,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       frame,
       params,
     };
-    const mods = s.partEditModifiers.map(m => {
+    const mods = s.spriteEditModifiers.map(m => {
       if (m.id !== modifierId) return m;
       const commands = ((m.params.brushCommands as BrushCommand[]) || []).map(c => {
         if (c.id !== commandId) return c;
@@ -877,10 +863,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       });
       return { ...m, params: { ...m.params, brushCommands: commands } };
     });
-    return { partEditModifiers: mods };
+    return { spriteEditModifiers: mods };
   }),
   removePartEditStrokeDriverParamKeyframe: (modifierId, commandId, strokeDriverId, paramKfId) => set((s) => {
-    const mods = s.partEditModifiers.map(m => {
+    const mods = s.spriteEditModifiers.map(m => {
       if (m.id !== modifierId) return m;
       const commands = ((m.params.brushCommands as BrushCommand[]) || []).map(c => {
         if (c.id !== commandId) return c;
@@ -892,7 +878,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       });
       return { ...m, params: { ...m.params, brushCommands: commands } };
     });
-    return { partEditModifiers: mods };
+    return { spriteEditModifiers: mods };
   }),
 
   bakePartEditStrokeDriverParamDriver: (modifierId, commandId, strokeDriverId, driverId) => {
@@ -900,7 +886,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     projectStore.pushUndo('烘焙部件编辑笔画驱动器参数驱动器');
     invalidateAnimModifierCache(modifierId);
     const totalFrames = projectStore.totalFrames;
-    const mod = get().partEditModifiers.find((m) => m.id === modifierId);
+    const mod = get().spriteEditModifiers.find((m) => m.id === modifierId);
     if (!mod) return;
     const commands = (mod.params.brushCommands as BrushCommand[]) || [];
     const cmd = commands.find((c) => c.id === commandId);
@@ -917,7 +903,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     );
 
     set((s2) => {
-      const mods = s2.partEditModifiers.map((m) => {
+      const mods = s2.spriteEditModifiers.map((m) => {
         if (m.id !== modifierId) return m;
         const cmds = ((m.params.brushCommands as BrushCommand[]) || []).map(c => {
           if (c.id !== commandId) return c;
@@ -936,7 +922,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         });
         return { ...m, params: { ...m.params, brushCommands: cmds } };
       });
-      return { partEditModifiers: mods };
+      return { spriteEditModifiers: mods };
     });
   },
 
@@ -944,7 +930,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const projectStore = getProjectStore().getState();
     projectStore.pushUndo('反烘焙部件编辑笔画驱动器参数驱动器');
     invalidateAnimModifierCache(modifierId);
-    const mod = get().partEditModifiers.find((m) => m.id === modifierId);
+    const mod = get().spriteEditModifiers.find((m) => m.id === modifierId);
     if (!mod) return;
     const commands = (mod.params.brushCommands as BrushCommand[]) || [];
     const cmd = commands.find((c) => c.id === commandId);
@@ -955,7 +941,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     if (!driver || !driver.isBaked) return;
 
     set((s2) => {
-      const mods = s2.partEditModifiers.map((m) => {
+      const mods = s2.spriteEditModifiers.map((m) => {
         if (m.id !== modifierId) return m;
         const cmds = ((m.params.brushCommands as BrushCommand[]) || []).map(c => {
           if (c.id !== commandId) return c;
@@ -974,7 +960,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         });
         return { ...m, params: { ...m.params, brushCommands: cmds } };
       });
-      return { partEditModifiers: mods };
+      return { spriteEditModifiers: mods };
     });
   },
 }));

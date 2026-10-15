@@ -60,7 +60,7 @@ export const moveToolHandler: ToolHandler = {
     const currentFrame = s.currentFrameRef.current;
     const editorState = s.editorStore.getState();
     // part_edit 模式下只能拖正在编辑的部位
-    if (editorState.editMode === 'part_edit') {
+    if (editorState.editMode === 'sprite_edit') {
       const editPartId = editorState.spriteEditSpriteId;
       if (!editPartId || s.selectedPart?.id !== editPartId) return;
     }
@@ -102,7 +102,7 @@ export const selectToolHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
     // part_edit 模式下禁止切换选中部位
     const editorState = s.editorStore.getState();
-    if (editorState.editMode === 'part_edit') return;
+    if (editorState.editMode === 'sprite_edit') return;
     s.editorStore.getState().selectPart(s.findPartAtPixel(px, py)?.id ?? null);
   },
 };
@@ -556,10 +556,10 @@ export const fillToolHandler: ToolHandler = {
       });
       return;
     }
-    if (s.editMode === 'part_edit' && s.selectedPartId && s.selectedPart) {
+    if (s.editMode === 'sprite_edit' && s.selectedPartId && s.selectedPart) {
       const selPart = s.selectedPart;
       const editorState = s.editorStore.getState();
-      const currentPartEditMods = editorState.partEditModifiers;
+      const currentPartEditMods = editorState.spriteEditModifiers;
       const lastMod = currentPartEditMods[currentPartEditMods.length - 1];
       let modId: string | undefined = (lastMod?.type === 'pixel_edit' && lastMod?.enabled) ? lastMod.id : undefined;
       if (!modId) modId = editorState.addPartEditModifier('pixel_edit');
@@ -568,7 +568,7 @@ export const fillToolHandler: ToolHandler = {
         const offsetY = Math.floor((s.canvasHeight - selPart.height) / 2);
         const fillPt = { x: px - offsetX, y: py - offsetY };
         const fillCmd: BrushCommand = { id: crypto.randomUUID(), type: 'fill', color: s.brushColor, size: 1, points: [fillPt], blendMode: 'normal', brushStyle: s.brushStyle !== 'solid' ? s.brushStyle : undefined, brushStyleParams: s.brushStyle !== 'solid' ? s.brushStyleParams : undefined, ...(s.compositingMode && (s.styleAspects.length > 0 || s.strokeDrivers.length > 0) ? { styleAspects: s.styleAspects.filter(a => a.enabled), strokeDrivers: s.strokeDrivers.filter(d => d.enabled) } : {}) };
-        const updatedMods = s.editorStore.getState().partEditModifiers.map(m => {
+        const updatedMods = s.editorStore.getState().spriteEditModifiers.map(m => {
           if (m.id !== modId) return m;
           const existingCommands: BrushCommand[] = (m.params.brushCommands as BrushCommand[]) || [];
           return { ...m, params: { ...m.params, brushCommands: [...existingCommands, fillCmd] } } as ModifierInstance;
@@ -878,11 +878,11 @@ export const brushEraserHandler: ToolHandler = {
     {
       const projectStore = useProjectStore.getState();
       const editorState = s.editorStore.getState();
-      if (editorState.partEditStartFrame !== undefined && editorState.partEditStartFrame !== projectStore.currentFrame) {
+      if (editorState.spriteEditStartFrame !== undefined && editorState.spriteEditStartFrame !== projectStore.currentFrame) {
         const partId = editorState.spriteEditSpriteId!;
-        const prevFrame = editorState.partEditStartFrame;
+        const prevFrame = editorState.spriteEditStartFrame;
         const existingPkf = projectStore.getKeyframeAtFrame(partId, prevFrame);
-        const mods = editorState.partEditModifiers.map(m => ({
+        const mods = editorState.spriteEditModifiers.map(m => ({
           ...m,
           params: {
             ...m.params,
@@ -890,7 +890,7 @@ export const brushEraserHandler: ToolHandler = {
           },
         }));
         // Part 不再有 editModifiers keyframe，直接使用当前编辑的 modifiers
-        const resolvedMods = editorState.partEditModifiers;
+        const resolvedMods = editorState.spriteEditModifiers;
         s.editorStore.getState().setPartEditModifiers(resolvedMods.map(m => ({
           ...m,
           params: {
@@ -898,9 +898,9 @@ export const brushEraserHandler: ToolHandler = {
             ...(m.params.brushCommands ? { brushCommands: JSON.parse(JSON.stringify(m.params.brushCommands)) } : {}),
           },
         })));
-        s.editorStore.setState({ partEditStartFrame: projectStore.currentFrame });
+        s.editorStore.setState({ spriteEditStartFrame: projectStore.currentFrame });
       }
-      const currentPartEditMods = s.editorStore.getState().partEditModifiers;
+      const currentPartEditMods = s.editorStore.getState().spriteEditModifiers;
       const lastMod = currentPartEditMods[currentPartEditMods.length - 1];
       let modId: string | undefined = (lastMod?.type === 'pixel_edit' && lastMod?.enabled) ? lastMod.id : undefined;
       if (!modId) modId = editorState.addPartEditModifier('pixel_edit');
@@ -910,7 +910,7 @@ export const brushEraserHandler: ToolHandler = {
         const offsetX = Math.floor((s.canvasWidth - selPart.width) / 2);
         const offsetY = Math.floor((s.canvasHeight - selPart.height) / 2);
         const startPt = { x: px - offsetX, y: py - offsetY };
-        s.partEditBrushCmdRef.current = { commandId: cmdId, modifierId: modId, points: [startPt] };
+        s.spriteEditBrushCmdRef.current = { commandId: cmdId, modifierId: modId, points: [startPt] };
       }
     }
     s.lastPixelRef.current = { x: px, y: py };
@@ -927,11 +927,11 @@ export const brushEraserHandler: ToolHandler = {
       if (local3) s.pixelEditCommandRef.current.points.push({ x: local3.lx, y: local3.ly });
       s.lastPixelRef.current = { x: px, y: py }; return;
     }
-    if (s.editMode === 'part_edit' && s.partEditBrushCmdRef.current && selPart) {
+    if (s.editMode === 'sprite_edit' && s.spriteEditBrushCmdRef.current && selPart) {
       const offsetX = Math.floor((s.canvasWidth - selPart.width) / 2); const offsetY = Math.floor((s.canvasHeight - selPart.height) / 2);
       const localX = px - offsetX; const localY = py - offsetY;
-      if (s.lastPixelRef.current) { const lastOffsetX = Math.floor((s.canvasWidth - selPart.width) / 2); const lastOffsetY = Math.floor((s.canvasHeight - selPart.height) / 2); for (const pt of getLinePixels(s.lastPixelRef.current.x - lastOffsetX, s.lastPixelRef.current.y - lastOffsetY, localX, localY)) s.partEditBrushCmdRef.current.points.push({ x: pt.x, y: pt.y }); }
-      else s.partEditBrushCmdRef.current.points.push({ x: localX, y: localY });
+      if (s.lastPixelRef.current) { const lastOffsetX = Math.floor((s.canvasWidth - selPart.width) / 2); const lastOffsetY = Math.floor((s.canvasHeight - selPart.height) / 2); for (const pt of getLinePixels(s.lastPixelRef.current.x - lastOffsetX, s.lastPixelRef.current.y - lastOffsetY, localX, localY)) s.spriteEditBrushCmdRef.current.points.push({ x: pt.x, y: pt.y }); }
+      else s.spriteEditBrushCmdRef.current.points.push({ x: localX, y: localY });
       s.lastPixelRef.current = { x: px, y: py }; return;
     }
     if (s.lastPixelRef.current) {
@@ -956,14 +956,14 @@ export const brushEraserHandler: ToolHandler = {
     }
 
     // PartEdit PixelEdit commit
-    if (s.partEditBrushCmdRef.current) {
-      const { commandId, modifierId, points } = s.partEditBrushCmdRef.current;
+    if (s.spriteEditBrushCmdRef.current) {
+      const { commandId, modifierId, points } = s.spriteEditBrushCmdRef.current;
       if (points.length > 0) {
         const cmd: BrushCommand = { id: commandId, type: s.tool === 'eraser' ? 'erase' : 'draw', color: s.brushColor, size: s.brushSize, points, blendMode: 'normal', brushStyle: s.brushStyle !== 'solid' ? s.brushStyle : undefined, brushStyleParams: s.brushStyle !== 'solid' ? s.brushStyleParams : undefined, ...(s.compositingMode && (s.styleAspects.length > 0 || s.strokeDrivers.length > 0) ? { styleAspects: s.styleAspects.filter(a => a.enabled), strokeDrivers: s.strokeDrivers.filter(d => d.enabled) } : {}) };
-        const updatedMods = s.editorStore.getState().partEditModifiers.map(m => { if (m.id !== modifierId) return m; const existingCommands: BrushCommand[] = (m.params.brushCommands as BrushCommand[]) || []; return { ...m, params: { ...m.params, brushCommands: [...existingCommands, cmd] } } as ModifierInstance; });
+        const updatedMods = s.editorStore.getState().spriteEditModifiers.map(m => { if (m.id !== modifierId) return m; const existingCommands: BrushCommand[] = (m.params.brushCommands as BrushCommand[]) || []; return { ...m, params: { ...m.params, brushCommands: [...existingCommands, cmd] } } as ModifierInstance; });
         s.editorStore.getState().setPartEditModifiers(updatedMods);
       }
-      s.partEditBrushCmdRef.current = null;
+      s.spriteEditBrushCmdRef.current = null;
     }
   },
 };

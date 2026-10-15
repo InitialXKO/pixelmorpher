@@ -236,12 +236,12 @@ export default function PixelCanvas() {
 
     // 2. Render current frame
     // 精灵编辑模式：从全局 sprites 表取 Sprite（已从 Part 迁移）
-    if (s.editMode === 'part_edit' && spriteEditSpriteId) {
+    if (s.editMode === 'sprite_edit' && spriteEditSpriteId) {
       const sprite = useProjectStore.getState().sprites[spriteEditSpriteId];
       if (sprite) {
-        let effectiveMods = s.partEditModifiers;
-        if (s.partEditBrushCmdRef.current) {
-          const { modifierId, commandId, points } = s.partEditBrushCmdRef.current;
+        let effectiveMods = s.spriteEditModifiers;
+        if (s.spriteEditBrushCmdRef.current) {
+          const { modifierId, commandId, points } = s.spriteEditBrushCmdRef.current;
           if (points.length > 0) {
             const cmd: import('@/lib/types').BrushCommand = {
               id: commandId, type: s.tool === 'eraser' ? 'erase' : 'draw', color: s.brushColor, size: s.brushSize,
@@ -249,7 +249,7 @@ export default function PixelCanvas() {
               brushStyleParams: s.brushStyle !== 'solid' ? s.brushStyleParams : undefined,
               ...(s.compositingMode && (s.styleAspects.length > 0 || s.strokeDrivers.length > 0) ? { styleAspects: s.styleAspects.filter(a => a.enabled), strokeDrivers: s.strokeDrivers.filter(d => d.enabled) } : {}),
             };
-            effectiveMods = s.partEditModifiers.map(m => {
+            effectiveMods = s.spriteEditModifiers.map(m => {
               if (m.id !== modifierId) return m;
               const existingCommands: import('@/lib/types').BrushCommand[] = (m.params.brushCommands as import('@/lib/types').BrushCommand[]) || [];
               return { ...m, params: { ...m.params, brushCommands: [...existingCommands, cmd] } } as import('@/lib/types').ModifierInstance;
@@ -375,7 +375,7 @@ export default function PixelCanvas() {
     s.effectTracks, s.autoMotionBlur, s.autoMotionBlurIntensity, s.tool,
     s.skeletons, s.showSkeletons, s.selectedBoneId, s.activeSkeletonId,
     s.showWeightPaint, s.weightPaintBoneId, s.unifiedCharacters,
-    s.canvasModifierTracks, spriteEditSpriteId, s.partEditModifiers,
+    s.canvasModifierTracks, spriteEditSpriteId, s.spriteEditModifiers,
     interaction.renderStrokePreview, s.getInterpolatedTranslateOffset,
     showAllCharacters, performCharacterId, storeCurrentFrame,
     // 参考图：URL/可见性/不透明度变化时重建 render，否则闭包里是旧 s

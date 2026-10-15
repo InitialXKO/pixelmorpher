@@ -358,7 +358,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
             // Only auto-enter when a part is already selected; never silently pick the first part.
             if ((val === 'brush' || val === 'eraser' || val === 'fill') &&
                 state.editMode !== 'correction' &&
-                state.editMode !== 'part_edit') {
+                state.editMode !== 'sprite_edit') {
               const projectStore = useProjectStore.getState();
               const selectedPartId = state.selectedPartId;
               const sprite = selectedPartId ? projectStore.sprites[selectedPartId] : null;

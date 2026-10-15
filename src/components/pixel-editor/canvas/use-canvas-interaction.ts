@@ -79,7 +79,7 @@ export function useCanvasInteraction(s: CanvasState) {
       const { px, py } = s.screenToPixel(e.clientX, e.clientY);
 
       // Delegate to tool handler
-      const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'part_edit');
+      const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'sprite_edit');
       if (handler?.onMouseDown) handler.onMouseDown(s, e, px, py);
     },
     [s],
@@ -99,7 +99,7 @@ export function useCanvasInteraction(s: CanvasState) {
       const { px, py } = s.screenToPixel(e.clientX, e.clientY);
 
       // Delegate to tool handler
-      const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'part_edit');
+      const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'sprite_edit');
       if (handler?.onMouseMove) handler.onMouseMove(s, e, px, py);
     },
     [s],
@@ -111,7 +111,7 @@ export function useCanvasInteraction(s: CanvasState) {
     if (s.isDrawingRef.current && isStrokeTool()) commitStroke();
 
     // Delegate to tool handler for tool-specific mouseUp logic
-    const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'part_edit');
+    const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'sprite_edit');
     if (handler?.onMouseUp) handler.onMouseUp(s);
 
     // General cleanup (always runs)
@@ -222,12 +222,12 @@ export function useCanvasInteraction(s: CanvasState) {
       if (e.code === 'KeyP' && !e.ctrlKey && !e.metaKey && !e.shiftKey) s.editorStore.getState().setTool('puppet');
 
       // Delegate tool-specific keyboard handling
-      const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'part_edit');
+      const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'sprite_edit');
       if (handler?.onKeyDown) handler.onKeyDown(s, e);
 
       // Escape handler (general, runs after tool-specific handlers)
       if (e.code === 'Escape') {
-        if (s.editorStore.getState().editMode === 'part_edit') { s.editorStore.getState().exitSpriteEditMode(false); return; }
+        if (s.editorStore.getState().editMode === 'sprite_edit') { s.editorStore.getState().exitSpriteEditMode(false); return; }
         s.selectionMaskRef.current.clear(); s.lassoPathRef.current = [];
         const samSt = s.editorStore.getState().samState; if (samSt.currentMask) s.editorStore.getState().clearSAMMask();
       }

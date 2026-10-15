@@ -1196,7 +1196,7 @@ export interface EffectStroke {
 
 export type ToolType = 'select' | 'brush' | 'eraser' | 'fill' | 'eyedropper' | 'move' | 'trajectory' | 'crop' | 'motion_blur_brush' | 'glow_brush' | 'particle_brush' | 'afterimage_brush' | 'bone' | 'ik' | 'weight_paint' | 'lasso' | 'magic_wand' | 'smart_select' | 'inpaint' | 'hitbox_drag' | 'puppet';
 export type PlayState = 'stopped' | 'playing' | 'paused';
-export type EditMode = 'normal' | 'correction' | 'trajectory_edit' | 'bone_edit' | 'weight_paint' | 'part_edit' | 'mask';
+export type EditMode = 'normal' | 'correction' | 'trajectory_edit' | 'bone_edit' | 'weight_paint' | 'sprite_edit' | 'mask';
 
 // ---- Brush Style System ----
 
@@ -1711,10 +1711,10 @@ export interface EditorState {
   spriteEditSpriteId: string | null;
   spriteEditBackupPixels: PixelGrid | null;
   /** Backup of part.editModifiers from when entering part_edit mode (for cancel) */
-  partEditBackupModifiers: ModifierInstance[];
-  partEditModifiers: ModifierInstance[];
+  spriteEditBackupModifiers: ModifierInstance[];
+  spriteEditModifiers: ModifierInstance[];
   /** V4.1: The frame at which part_edit mode was entered (used to save as part keyframe) */
-  partEditStartFrame?: number;
+  spriteEditStartFrame?: number;
   // V5: Brush style
   /** Current brush style type (defaults to 'solid') */
   brushStyle: BrushStyleType;

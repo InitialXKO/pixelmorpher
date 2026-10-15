@@ -611,7 +611,7 @@ export function renderUnifiedCharactersToCanvas(
 export function renderSpriteEditUnified(
   ctx: CanvasRenderingContext2D,
   sprite: Sprite,
-  partEditModifiers: any[],
+  spriteEditModifiers: any[],
   canvasWidth: number,
   canvasHeight: number,
   currentFrame: number = 0,
@@ -624,12 +624,12 @@ export function renderSpriteEditUnified(
   const centerY = Math.floor((canvasHeight - sprite.height) / 2);
 
   // Resolve paramKeyframes and paramDrivers before applying pixel modifiers
-  const resolvedMods = (partEditModifiers.some(m =>
+  const resolvedMods = (spriteEditModifiers.some(m =>
     (m.paramKeyframes && m.paramKeyframes.length > 0) ||
     (m.paramDrivers && m.paramDrivers.length > 0 && m.paramDrivers.some((d: any) => d.enabled && !d.isBaked))
   ))
-    ? resolveKeyframeModifierParams(partEditModifiers, currentFrame)
-    : partEditModifiers;
+    ? resolveKeyframeModifierParams(spriteEditModifiers, currentFrame)
+    : spriteEditModifiers;
 
   // Apply pixel-level modifiers via blueprint pipeline
   const pixelModTypes: ModifierType[] = [

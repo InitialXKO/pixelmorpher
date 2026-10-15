@@ -73,7 +73,7 @@ export function useCanvasState() {
     pivotPartId?: string; origPivotX?: number; origPivotY?: number;
   } | null>(null);
   const pixelEditCommandRef = useRef<{ commandId: string; modifierId: string; keyframeId: string; points: { x: number; y: number }[] } | null>(null);
-  const partEditBrushCmdRef = useRef<{ commandId: string; modifierId: string; points: { x: number; y: number }[] } | null>(null);
+  const spriteEditBrushCmdRef = useRef<{ commandId: string; modifierId: string; points: { x: number; y: number }[] } | null>(null);
 
   // ---- Dev FPS counter ----
   const [fpsDisplay, setFpsDisplay] = useState('');
@@ -177,7 +177,7 @@ export function useCanvasState() {
   const magicWandTolerance = useEditorStore((s) => s.magicWandTolerance);
   const trajectorySnap = useEditorStore((s) => s.trajectorySnap);
   const spriteEditSpriteId = useEditorStore((s) => s.spriteEditSpriteId);
-  const partEditModifiers = useEditorStore((s) => s.partEditModifiers);
+  const spriteEditModifiers = useEditorStore((s) => s.spriteEditModifiers);
   const brushStyle = useEditorStore((s) => s.brushStyle);
   const brushStyleParams = useEditorStore((s) => s.brushStyleParams);
   const compositingMode = useEditorStore((s) => s.compositingMode);
@@ -268,7 +268,7 @@ export function useCanvasState() {
 
   const canvasToPartLocal = useCallback(
     (px: number, py: number, part: Sprite, translateOffsetX: number = 0, translateOffsetY: number = 0): { lx: number; ly: number } | null => {
-      if (editMode === 'part_edit' && spriteEditSpriteId === part.id) {
+      if (editMode === 'sprite_edit' && spriteEditSpriteId === part.id) {
         const offsetX = Math.floor((canvasWidth - part.width) / 2);
         const offsetY = Math.floor((canvasHeight - part.height) / 2);
         const localX = px - offsetX;
@@ -680,7 +680,7 @@ export function useCanvasState() {
     onionDataVersionRef.current++;
     invalidateUnifiedPipelineCache();
     dirtyRef.current = true;
-  }, [parts, keyframes, backgroundColor, onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, partEditModifiers, unifiedCharacters]);
+  }, [parts, keyframes, backgroundColor, onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, spriteEditModifiers, unifiedCharacters]);
 
   // ---- Container size / canvas dimension effects ----
   useEffect(() => {
@@ -711,7 +711,7 @@ export function useCanvasState() {
     currentStrokePointsRef, cropStartRef, cropRectRef,
     trajectoryPathRef, handDrawTrajectoryRef, trajectoryCpDragRef,
     selectionMaskRef, lassoPathRef, selectionMarchOffsetRef,
-    boneDragRef, puppetNodeDragRef, pixelEditCommandRef, partEditBrushCmdRef,
+    boneDragRef, puppetNodeDragRef, pixelEditCommandRef, spriteEditBrushCmdRef,
     // State
     fpsFramesRef, fpsLastTimeRef, fpsDisplay, setFpsDisplay,
     currentFrameRef, playStateRef, zoomRef, panRef,
@@ -733,7 +733,7 @@ export function useCanvasState() {
     showPuppetSkeleton, activePuppetSkeletonId, selectedNodeId,
     referenceImageUrl, referenceImageOpacity, referenceImageVisible, maskNodeId,
     refWizardOpen,
-    magicWandTolerance, trajectorySnap, spriteEditSpriteId, partEditModifiers,
+    magicWandTolerance, trajectorySnap, spriteEditSpriteId, spriteEditModifiers,
     brushStyle, brushStyleParams, compositingMode, styleAspects, strokeDrivers, editorStore,
     // Derived
     selectedPart,

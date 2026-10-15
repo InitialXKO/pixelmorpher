@@ -45,7 +45,7 @@ type ModifierRenderer = (
 ) => PixelGrid;
 
 /** Registry mapping modifier type strings to their renderer functions. */
-const modifierRegistry = new Map<string, ModifierRenderer>();
+export const modifierRegistry = new Map<string, ModifierRenderer>();
 
 // Register all modifier renderers at module load time.
 // Function declarations are hoisted, so references below are valid.
