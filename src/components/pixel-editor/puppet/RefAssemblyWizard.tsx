@@ -131,7 +131,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   // SAM 状态
   const [samStatus, setSamStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [samProgress, setSamProgress] = useState(0);
-  const [samMasks, setSamMasks] = useState<{ label: string; bounds: any }[]>([]);
+  const [samMasks, setSamMasks] = useState<{ label: string; bounds: { x: number; y: number; width: number; height: number } }[]>([]);
 
   const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
   const setReferenceImageUrl = useEditorStore((s) => s.setReferenceImageUrl);
@@ -419,7 +419,37 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             )}
             {samStatus === 'ready' && (
               <div className="space-y-2">
-                <div className="text-xs text-green-400">SAM 就绪。在画布参考图上点选肢体进行分割。</div>
+                <div className="text-xs text-green-400">SAM 就绪。点击图中的肢体进行分割（左键=前景，右键=背景排除）。</div>
+                {referenceImageUrl && (
+                  <img
+                    src={referenceImageUrl}
+                    alt="参考图"
+                    className="w-full rounded border border-white/10 cursor-crosshair"
+                    onClick={async (e) => {
+                      const rect = (e.target as HTMLImageElement).getBoundingClientRect();
+                      const x = (e.clientX - rect.left) / rect.width;
+                      const y = (e.clientY - rect.top) / rect.height;
+                      try {
+                        const result = await segmentAtPoint(x, y, 1);
+                        setSamMasks((prev) => [...prev, { label: `区域${prev.length + 1}`, bounds: result.bounds }]);
+                      } catch (err) {
+                        console.error('[SAM] 分割失败:', err);
+                      }
+                    }}
+                    onContextMenu={async (e) => {
+                      e.preventDefault();
+                      const rect = (e.target as HTMLImageElement).getBoundingClientRect();
+                      const x = (e.clientX - rect.left) / rect.width;
+                      const y = (e.clientY - rect.top) / rect.height;
+                      try {
+                        const result = await segmentAtPoint(x, y, 0);
+                        setSamMasks((prev) => [...prev, { label: `排除${prev.length + 1}`, bounds: result.bounds }]);
+                      } catch (err) {
+                        console.error('[SAM] 分割失败:', err);
+                      }
+                    }}
+                  />
+                )}
                 {samMasks.length > 0 && (
                   <div className="text-xs text-gray-400">已分割 {samMasks.length} 个区域</div>
                 )}
