@@ -171,8 +171,8 @@ export function patternDirectional(
 
 // Pattern 注册表（6 为仿制图章，需手动操作，不在此）
 export const REPAIR_PATTERNS = [
-  { id: 'mode', label: '智能填补', fn: patternModeFill },
-  { id: 'edge', label: '智能填补·大半径', fn: patternEdgeExtend },
+  { id: 'mode', label: 'Telea 填补', fn: patternModeFill },
+  { id: 'edge', label: 'Telea 填补·大半径', fn: patternEdgeExtend },
   { id: 'bayer', label: 'Bayer 抖动', fn: patternBayerDither },
   { id: 'noise', label: '噪点纹理', fn: patternNoiseTexture },
   { id: 'mirror-v', label: '镜像·垂直', fn: (p: PixelGrid) => patternMirror(p, 'v') },
