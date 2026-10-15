@@ -20,8 +20,39 @@ import { Label } from '@/components/ui/label';
 import BlueprintEditor from './BlueprintEditor';
 import BlueprintTemplateLoader from './BlueprintTemplateLoader';
 import PathEditor from './PathEditor';
+import HeightmapEditor from './HeightmapEditor';
 import { modifiersToBlueprint } from '@/lib/blueprint/migrate';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
+
+/** 高度图绘制区：读写 Part.heightmap */
+function HeightmapSection({ partId }: { partId: string }) {
+  const part = useProjectStore((s) => s.parts.find((p) => p.id === partId));
+  const updatePart = useProjectStore((s) => s.updatePart);
+  const [showEditor, setShowEditor] = useState(false);
+
+  if (!part) return null;
+
+  return (
+    <div className="mt-2 pt-2 border-t border-[#2a2a4a]">
+      <button
+        onClick={() => setShowEditor(!showEditor)}
+        className="text-[10px] text-cyan-300 hover:text-cyan-200 flex items-center gap-1"
+      >
+        <span>{showEditor ? '▼' : '▶'}</span> 高度图绘制 {part.heightmap ? '(已绘制)' : '(空)'}
+      </button>
+      {showEditor && (
+        <div className="mt-1">
+          <HeightmapEditor
+            value={part.heightmap}
+            onChange={(hm) => updatePart(partId, { heightmap: hm })}
+            width={part.width}
+            height={part.height}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 
 // 收录的修改器：变换类 + 像素类（用户要求像素层程序化动画也要支持）
 const PUPPET_MODIFIER_TYPES: AnimationModifierType[] = [
@@ -32,7 +63,7 @@ const PUPPET_MODIFIER_TYPES: AnimationModifierType[] = [
   'texture_scroll', 'wave_deform', 'contour_scroll', 'reveal_hide',
   'shatter_dissolve', 'annihilate', 'teleport', 'crt_off',
   'bend', 'elliptical_compress', 'dumbbell_stretch', 'pillow_stretch',
-  'hyperbolic_stretch', 'ring_ripple', 'local_inflate', 'path_follow',
+  'hyperbolic_stretch', 'ring_ripple', 'local_inflate', 'path_follow', 'bump_light',
 ];
 
 export default function PuppetModifierPanel() {
@@ -100,6 +131,7 @@ export default function PuppetModifierPanel() {
         spritePixels: part?.pixels ?? null,
         spriteW: part?.width,
         spriteH: part?.height,
+        heightmap: part?.heightmap ?? null,
         parentId,
         socketId: plug?.socketId ?? null,
         socketX: sock?.x ?? 0,
@@ -348,6 +380,7 @@ export default function PuppetModifierPanel() {
           <ModifierRow
             key={m.id}
             modifier={m}
+            partId={node.spritePartId}
             expanded={expandedId === m.id}
             onToggleExpand={() => setExpandedId(expandedId === m.id ? null : m.id)}
             onToggle={() => togglePuppetNodeModifier(skeleton.id, node.id, m.id)}
@@ -369,6 +402,7 @@ export default function PuppetModifierPanel() {
 
 function ModifierRow({
   modifier,
+  partId,
   expanded,
   onToggleExpand,
   onToggle,
@@ -377,6 +411,7 @@ function ModifierRow({
   blueprintNode,
 }: {
   modifier: PartAnimationModifier;
+  partId: string | null;
   expanded: boolean;
   onToggleExpand: () => void;
   onToggle: () => void;
@@ -505,6 +540,10 @@ function ModifierRow({
           })}
           {def.params.length === 0 && (
             <div className="text-[9px] text-gray-600">无可调参数</div>
+          )}
+          {/* bump_light: 高度图绘制 */}
+          {modifier.type === 'bump_light' && partId && (
+            <HeightmapSection partId={partId} />
           )}
         </div>
       )}

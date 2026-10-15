@@ -958,3 +958,209 @@ export function applyPathFollow(
   }
   return result;
 }
+
+/**
+ * Bump lighting: generate heightfield from procedural shape, compute normals,
+ * apply directional lighting. Shapes: bevel (chamfered panel), dome (hemisphere),
+ * ridge (embankment along edge or path), pyramid.
+ */
+export function applyBumpLight(
+  pixels: PixelGrid,
+  width: number,
+  height: number,
+  params: Record<string, ModifierParamValue>,
+  currentFrame: number,
+  frameRate: number,
+  weight: number,
+): PixelGrid {
+  const grid = modifierGuard(pixels, weight);
+  if (!grid) return pixels;
+  const { h, w } = grid;
+
+  const shape = String(params.shape ?? 'bevel');
+  const bumpHeight = Number(params.height ?? 8);
+  const bevelSize = Math.max(1, Number(params.bevelSize ?? 4));
+  const lightAngle = (Number(params.lightAngle ?? 315) * Math.PI) / 180;
+  const lightElevation = (Number(params.lightElevation ?? 45) * Math.PI) / 180;
+  const intensity = Number(params.intensity ?? 1);
+  const ambient = Math.max(0, Math.min(1, Number(params.ambient ?? 0.3)));
+  const specular = Number(params.specular ?? 0);
+  const invert = Boolean(params.invert ?? false);
+  const ridgeSource = String(params.ridgeSource ?? 'edge');
+  const ridgeOffset = Number(params.ridgeOffset ?? 3);
+  const ridgeWidth = Math.max(1, Number(params.ridgeWidth ?? 8));
+  const falloff = String(params.falloff ?? 'both');
+  // 手绘高度图（优先于程序化生成）：-1~1
+  const paintedHeightmap = params.paintedHeightmap as unknown as number[][] | undefined;
+  const path = params.path as unknown as Array<{ x: number; y: number }> | undefined;
+
+  // 解析像素为 RGBA
+  const rgba: { r: number; g: number; b: number; a: number }[][] = [];
+  for (let y = 0; y < h; y++) {
+    const row: { r: number; g: number; b: number; a: number }[] = [];
+    for (let x = 0; x < w; x++) {
+      const c = pixels[y]?.[x];
+      if (c && typeof c === 'string') {
+        const hex = c.replace('#', '');
+        row.push({
+          r: parseInt(hex.slice(0, 2), 16) || 0,
+          g: parseInt(hex.slice(2, 4), 16) || 0,
+          b: parseInt(hex.slice(4, 6), 16) || 0,
+          a: hex.length >= 8 ? parseInt(hex.slice(6, 8), 16) : 255,
+        });
+      } else {
+        row.push({ r: 0, g: 0, b: 0, a: 0 });
+      }
+    }
+    rgba.push(row);
+  }
+
+  // 距离变换：BFS 从透明像素开始
+  const dist: number[][] = [];
+  const queue: Array<[number, number]> = [];
+  for (let y = 0; y < h; y++) {
+    const row: number[] = [];
+    for (let x = 0; x < w; x++) {
+      if (rgba[y]![x]!.a === 0) {
+        row.push(0);
+        queue.push([x, y]);
+      } else {
+        row.push(Infinity);
+      }
+    }
+    dist.push(row);
+  }
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+  while (queue.length > 0) {
+    const [x, y] = queue.shift()!;
+    const d = dist[y]![x]!;
+    for (const [dx, dy] of dirs) {
+      const nx = x + dx, ny = y + dy;
+      if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+        const nd = d + (dx !== 0 && dy !== 0 ? 1.414 : 1);
+        if (nd < dist[ny]![nx]!) {
+          dist[ny]![nx] = nd;
+          queue.push([nx, ny]);
+        }
+      }
+    }
+  }
+
+  // 高度场
+  const heightField: number[][] = [];
+  const cx = w / 2, cy = h / 2;
+  // 手绘高度图优先
+  const usePainted = paintedHeightmap && paintedHeightmap.length === h && paintedHeightmap[0]?.length === w;
+  for (let y = 0; y < h; y++) {
+    const row: number[] = [];
+    for (let x = 0; x < w; x++) {
+      if (rgba[y]![x]!.a === 0) {
+        row.push(0);
+        continue;
+      }
+      // 手绘高度图直接用
+      if (usePainted) {
+        const v = paintedHeightmap![y]![x] ?? 0;
+        row.push(invert ? -v : v);
+        continue;
+      }
+      let hh = 0;
+      const d = dist[y]![x]!;
+      if (shape === 'bevel') {
+        hh = Math.min(1, d / bevelSize);
+      } else if (shape === 'dome') {
+        const dx = (x - cx) / (w / 2), dy = (y - cy) / (h / 2);
+        const r = Math.sqrt(dx * dx + dy * dy);
+        hh = r < 1 ? Math.cos((r * Math.PI) / 2) : 0;
+      } else if (shape === 'ridge') {
+        if (ridgeSource === 'path' && path && path.length >= 2) {
+          // 到路径的最短距离
+          let minDist = Infinity;
+          for (let k = 0; k < path.length - 1; k++) {
+            const p0 = path[k]!, p1 = path[k + 1]!;
+            const vx = p1.x - p0.x, vy = p1.y - p0.y;
+            const wx = x - p0.x, wy = y - p0.y;
+            const c1 = wx * vx + wy * vy;
+            const c2 = vx * vx + vy * vy;
+            const t = c2 > 0 ? Math.max(0, Math.min(1, c1 / c2)) : 0;
+            const px = p0.x + vx * t, py = p0.y + vy * t;
+            const dd = Math.sqrt((x - px) ** 2 + (y - py) ** 2);
+            if (dd < minDist) minDist = dd;
+          }
+          const hw = ridgeWidth / 2;
+          if (falloff === 'both') {
+            hh = Math.max(0, 1 - minDist / hw);
+          } else {
+            // path 模式单向衰减暂按双向处理
+            hh = Math.max(0, 1 - minDist / hw);
+          }
+        } else {
+          // 沿边缘
+          const hw = ridgeWidth / 2;
+          if (falloff === 'both') {
+            hh = Math.max(0, 1 - Math.abs(d - ridgeOffset) / hw);
+          } else if (falloff === 'inward') {
+            hh = d <= ridgeOffset ? 1 : Math.max(0, 1 - (d - ridgeOffset) / ridgeWidth);
+          } else {
+            // outward
+            hh = d >= ridgeOffset ? 1 : Math.max(0, 1 - (ridgeOffset - d) / ridgeWidth);
+          }
+        }
+      } else if (shape === 'pyramid') {
+        const dx = Math.abs(x - cx) / (w / 2), dy = Math.abs(y - cy) / (h / 2);
+        hh = Math.max(0, 1 - Math.max(dx, dy));
+      }
+      row.push(invert ? -hh : hh);
+    }
+    heightField.push(row);
+  }
+
+  // 法线（中心差分）
+  const lightDir = {
+    x: Math.cos(lightElevation) * Math.cos(lightAngle),
+    y: Math.cos(lightElevation) * Math.sin(lightAngle),
+    z: Math.sin(lightElevation),
+  };
+  const scale = bumpHeight / 2; // 高度到法线的缩放
+
+  const result: PixelGrid = [];
+  for (let y = 0; y < h; y++) {
+    const row: (string | null)[] = [];
+    for (let x = 0; x < w; x++) {
+      const px = rgba[y]![x]!;
+      if (px.a === 0) {
+        row.push(null);
+        continue;
+      }
+      // 中心差分求法线
+      const hl = heightField[y]![Math.max(0, x - 1)]!;
+      const hr = heightField[y]![Math.min(w - 1, x + 1)]!;
+      const hu = heightField[Math.max(0, y - 1)]![x]!;
+      const hd = heightField[Math.min(h - 1, y + 1)]![x]!;
+      let nx = ((hl - hr) / 2) * scale;
+      let ny = ((hu - hd) / 2) * scale;
+      let nz = 1;
+      const nlen = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      nx /= nlen; ny /= nlen; nz /= nlen;
+      // 漫反射
+      const diff = Math.max(0, nx * lightDir.x + ny * lightDir.y + nz * lightDir.z);
+      let light = ambient + diff * intensity;
+      // 高光 (Blinn-Phong)
+      if (specular > 0) {
+        const hx = (lightDir.x + 0) / 2, hy = (lightDir.y + 0) / 2, hz = (lightDir.z + 1) / 2;
+        const hlen = Math.sqrt(hx * hx + hy * hy + hz * hz) || 1;
+        const spec = Math.pow(Math.max(0, (nx * hx + ny * hy + nz * hz) / hlen), 32);
+        light += spec * specular;
+      }
+      light = Math.max(0, Math.min(2, light));
+      // 正片叠底合成
+      const r = Math.min(255, Math.round(px.r * light));
+      const g = Math.min(255, Math.round(px.g * light));
+      const b = Math.min(255, Math.round(px.b * light));
+      const toHex = (v: number) => v.toString(16).padStart(2, '0');
+      row.push(`#${toHex(r)}${toHex(g)}${toHex(b)}${toHex(px.a)}`);
+    }
+    result.push(row);
+  }
+  return result;
+}

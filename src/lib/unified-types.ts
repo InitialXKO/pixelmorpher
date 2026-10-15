@@ -57,6 +57,7 @@ export interface Sprite {
   height: number;
   data: PixelGrid;              // 2D pixel grid (replaces Uint8ClampedArray for consistency)
   plug?: Point;                  // Optional: override node's default plug
+  heightmap?: number[][];        // Optional: hand-painted heightmap for bump_light
 }
 
 // ---- Direction System ----

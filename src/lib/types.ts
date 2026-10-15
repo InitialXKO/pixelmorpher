@@ -93,7 +93,8 @@ export type ModifierType =
   | 'gait'                  // V11: Gait animation (semicircle+chord trajectory)
   | 'local_inflate'          // V12: Local inflation/bulge (radial pixel displacement)
   | 'path_follow'            // V12: Path following deformation (limb bends along path)
-  | 'path_move';             // V12: Move along path (translation or orient to tangent);
+  | 'path_move'             // V12: Move along path (translation or orient to tangent)
+  | 'bump_light';            // V12: Normal-mapped bump lighting (bevel/dome/ridge/pyramid);
 
 /** Brush command shape for PixelEdit modifier */
 export type BrushCommandType = 'draw' | 'erase' | 'fill';
@@ -369,6 +370,8 @@ export const ANIMATION_MODIFIER_TYPES: ModifierType[] = [
   'path_follow',
   // V12: Move along path
   'path_move',
+  // V12: Bump lighting
+  'bump_light',
   // V2.0 procedural modifiers also produce geometric transforms per-frame
   'noise', 'wave', 'spring', 'jitter',
 ];
@@ -500,6 +503,8 @@ export interface Part {
   pivotY: number;
   locked: boolean;
   thumbnail?: string; // base64 data URL
+  /** 高度图（bump_light 用）：与 pixels 同尺寸，值域 -1~1（负=凹陷）。undefined=无手绘高度 */
+  heightmap?: number[][];
   // 木偶统一模型：Part 是纯精灵数据，不再承载动画状态。
   // 位置/层级/可见性/修改器全部由 PuppetNode 驱动。
 }
@@ -3122,6 +3127,40 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
         { label: '仅平移', value: 'translate' },
       ]},
       { name: 'loop', label: '循环', type: 'boolean', default: false },
+    ],
+  },
+  {
+    type: 'bump_light',
+    label: '凸凹光照',
+    icon: 'Sun',
+    category: 'effect',
+    params: [
+      { name: 'shape', label: '形状', type: 'select', default: 'bevel', options: [
+        { label: '倒角面板', value: 'bevel' },
+        { label: '半球隆起', value: 'dome' },
+        { label: '田埂', value: 'ridge' },
+        { label: '金字塔尖', value: 'pyramid' },
+      ]},
+      { name: 'height', label: '凸起高度', type: 'number', default: 8, min: 1, max: 50, step: 1 },
+      { name: 'bevelSize', label: '倒角宽度', type: 'number', default: 4, min: 1, max: 50, step: 1 },
+      { name: 'lightAngle', label: '光照角度', type: 'number', default: 315, min: 0, max: 360, step: 1 },
+      { name: 'lightElevation', label: '光照仰角', type: 'number', default: 45, min: 0, max: 90, step: 1 },
+      { name: 'intensity', label: '强度', type: 'number', default: 1, min: 0, max: 3, step: 0.1 },
+      { name: 'ambient', label: '环境光', type: 'number', default: 0.3, min: 0, max: 1, step: 0.05 },
+      { name: 'specular', label: '高光', type: 'number', default: 0, min: 0, max: 2, step: 0.1 },
+      { name: 'invert', label: '反转（阴刻）', type: 'boolean', default: false },
+      { name: 'ridgeSource', label: '脊线来源', type: 'select', default: 'edge', options: [
+        { label: '沿边缘', value: 'edge' },
+        { label: '沿路径', value: 'path' },
+      ]},
+      { name: 'ridgeOffset', label: '脊线偏移', type: 'number', default: 3, min: 0, max: 50, step: 1 },
+      { name: 'ridgeWidth', label: '田埂宽度', type: 'number', default: 8, min: 1, max: 100, step: 1 },
+      { name: 'falloff', label: '衰减方向', type: 'select', default: 'both', options: [
+        { label: '双向', value: 'both' },
+        { label: '只向内', value: 'inward' },
+        { label: '只向外', value: 'outward' },
+      ]},
+      { name: 'path', label: '路径', type: 'path', default: [] },
     ],
   },
 ];

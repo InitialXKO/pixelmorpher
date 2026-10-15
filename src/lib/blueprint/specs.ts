@@ -274,6 +274,11 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     outputs: ['outX', 'outY', 'outRotation'],
     params: ['path', 'pathType', 'progress', 'mode', 'loop'],
   },
+  bump_light: {
+    inputs: ['pixels', 't', 'lightAngle', 'intensity', 'path', 'heightmap'],
+    outputs: ['pixels'],
+    params: ['shape', 'height', 'bevelSize', 'lightAngle', 'lightElevation', 'intensity', 'ambient', 'specular', 'ridgeSource', 'ridgeOffset', 'ridgeWidth', 'falloff', 'path', 'invert'],
+  },
   pixel_edit: {
     inputs: ['pixels', 'brushCommands'],
     outputs: ['pixels'],

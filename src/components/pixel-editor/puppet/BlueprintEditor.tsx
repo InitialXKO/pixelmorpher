@@ -33,6 +33,7 @@ interface BlueprintEditorProps {
     spritePixels?: import('@/lib/types').PixelGrid | null;
     spriteW?: number;
     spriteH?: number;
+    heightmap?: number[][] | null;
     /** 父节点ID（null为根） */
     parentId?: string | null;
     /** 连接到父节点的socket ID */
@@ -212,6 +213,15 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           if (nid && characterNodes) {
             const cn = characterNodes.find((c) => c.id === nid);
             return cn?.spritePixels ?? undefined;
+          }
+          return undefined;
+        })(),
+        // bump_light 从这里取手绘高度图
+        heightmap: (() => {
+          const nid = (graph as any)._nodeId;
+          if (nid && characterNodes) {
+            const cn = characterNodes.find((c) => c.id === nid);
+            return cn?.heightmap ?? undefined;
           }
           return undefined;
         })(),
