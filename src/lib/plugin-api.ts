@@ -1,11 +1,12 @@
 // ============================================================
-// PixelMorpher V2.0 - Plugin API
-// JavaScript API exposed to plugins for interacting with the editor
+// PixelMorpher - Plugin API (Unified Model)
+// JavaScript API exposed to plugins for interacting with the editor.
+// Uses the unified Character/Node/Blueprint model (not legacy puppet*).
 // ============================================================
 
 import { useProjectStore } from './store';
 import { useEditorStore } from './store';
-import { ModifierType, ProceduralConfig, ModifierParamValue } from './types';
+import type { BlueprintGraph } from './blueprint/ir';
 
 export interface PixelMorpherAPI {
   // Project info
@@ -15,34 +16,26 @@ export interface PixelMorpherAPI {
   getCurrentFrame(): number;
   getTotalFrames(): number;
 
-  // Sprites
+  // Sprites (global table)
   getSprites(): { id: string; name: string; width: number; height: number }[];
   addSprite(name: string, width: number, height: number): string;
   removeSprite(id: string): void;
   getSpritePixels(id: string): (string | null)[][] | null;
   setSpritePixels(id: string, pixels: (string | null)[][]): void;
 
-  // Keyframes
-  addKeyframe(partId: string, frame: number): string;
-  removeKeyframe(keyframeId: string): void;
-  getKeyframesForPart(partId: string): { id: string; frame: number; modifiers: any[] }[];
+  // Characters (unified model)
+  getCharacters(): { id: string; name: string }[];
+  addCharacter(name: string): string;
+  getNodes(characterId: string): { id: string; name: string }[];
+  addNode(characterId: string, name: string): string;
+  updateNode(characterId: string, nodeId: string, updates: Record<string, unknown>): void;
 
-  // Modifiers
-  addModifier(keyframeId: string, type: ModifierType): void;
-  updateModifier(keyframeId: string, modifierId: string, params: Record<string, ModifierParamValue>): void;
-  removeModifier(keyframeId: string, modifierId: string): void;
+  // Node keyframes (unified)
+  addNodeKeyframe(clipId: string, nodeId: string, frame: number, values: Record<string, unknown>): string;
 
-  // Trajectory
-  autoRecordTrajectory(partId: string): void;
-  clearTrajectory(partId: string): void;
-
-  // Procedural
-  addProceduralAnimation(partId: string, name: string, config: ProceduralConfig, startFrame: number, endFrame: number): string;
-  removeProceduralAnimation(id: string): void;
-
-  // Skeleton
-  addSkeleton(name: string): string;
-  addBone(skeletonId: string, name: string, parentId: string | null, headX: number, headY: number, tailX: number, tailY: number): string;
+  // Blueprint (unified, replaces old modifiers/procedural)
+  getNodeBlueprint(characterId: string, nodeId: string): BlueprintGraph | null;
+  setNodeBlueprint(characterId: string, nodeId: string, graph: BlueprintGraph | null): void;
 
   // Playback
   play(): void;
@@ -51,77 +44,69 @@ export interface PixelMorpherAPI {
   goToFrame(frame: number): void;
 
   // Selection
-  getSelectedPartId(): string | null;
-  selectPart(id: string): void;
+  getSelectedNodeId(): string | null;
+  selectNode(id: string | null): void;
 
   // Export
   exportProjectFile(): object;
 }
 
 export function createAPI(): PixelMorpherAPI {
+  const getStore = () => useProjectStore.getState();
   return {
-    getProjectName: () => useProjectStore.getState().name,
-    setProjectName: (name) => useProjectStore.getState().setProjectName(name),
+    getProjectName: () => getStore().name,
+    setProjectName: (name) => getStore().setProjectName(name),
     getCanvasSize: () => ({
-      width: useProjectStore.getState().canvasWidth,
-      height: useProjectStore.getState().canvasHeight,
+      width: getStore().canvasWidth,
+      height: getStore().canvasHeight,
     }),
-    getCurrentFrame: () => useProjectStore.getState().currentFrame,
-    getTotalFrames: () => useProjectStore.getState().totalFrames,
+    getCurrentFrame: () => getStore().currentFrame,
+    getTotalFrames: () => getStore().totalFrames,
 
     getSprites: () =>
-      Object.values(useProjectStore.getState().sprites).map((p) => ({
+      Object.values(getStore().sprites).map((p) => ({
         id: p.id!,
         name: p.name ?? '',
         width: p.width,
         height: p.height,
       })),
-    addSprite: (name, w, h) => useProjectStore.getState().addSprite(name, w, h).id!,
-    removeSprite: (id) => useProjectStore.getState().removeSprite(id),
-    getSpritePixels: (id) =>
-      useProjectStore.getState().sprites[id]?.data ?? null,
-    setSpritePixels: (id, pixels) =>
-      useProjectStore.getState().setSpritePixels(id, pixels),
+    addSprite: (name, w, h) => getStore().addSprite(name, w, h).id!,
+    removeSprite: (id) => getStore().removeSprite(id),
+    getSpritePixels: (id) => getStore().sprites[id]?.data ?? null,
+    setSpritePixels: (id, pixels) => getStore().setSpritePixels(id, pixels),
 
-    addKeyframe: (partId, frame) =>
-      useProjectStore.getState().addKeyframe(partId, frame).id,
-    removeKeyframe: (id) => useProjectStore.getState().removeKeyframe(id),
-    getKeyframesForPart: (partId) =>
-      useProjectStore
-        .getState()
-        .getKeyframesForPart(partId)
-        .map((k) => ({ id: k.id, frame: k.frame, modifiers: k.modifiers })),
+    getCharacters: () =>
+      Object.values(getStore().unifiedCharacters).map((c) => ({
+        id: c.id,
+        name: c.name,
+      })),
+    addCharacter: (name) => getStore().addUnifiedCharacter(name).id,
+    getNodes: (characterId) => {
+      const ch = getStore().unifiedCharacters[characterId];
+      if (!ch) return [];
+      return Object.values(ch.nodes).map((n) => ({ id: n.id, name: n.name }));
+    },
+    addNode: (characterId, name) =>
+      getStore().addUnifiedNode(characterId, name).id,
+    updateNode: (characterId, nodeId, updates) =>
+      getStore().updateUnifiedNode(characterId, nodeId, updates as never),
 
-    addModifier: (kfId, type) => useProjectStore.getState().addModifier(kfId, type),
-    updateModifier: (kfId, modId, params) =>
-      useProjectStore.getState().updateModifier(kfId, modId, params),
-    removeModifier: (kfId, modId) =>
-      useProjectStore.getState().removeModifier(kfId, modId),
+    addNodeKeyframe: (clipId, nodeId, frame, values) =>
+      getStore().addNodeKeyframe(clipId, nodeId, frame, values as never).id,
 
-    autoRecordTrajectory: (partId) =>
-      useProjectStore.getState().autoRecordTrajectory(partId),
-    clearTrajectory: (partId) =>
-      useProjectStore.getState().clearTrajectory(partId),
-
-    addProceduralAnimation: (partId, name, config, start, end) =>
-      useProjectStore
-        .getState()
-        .addProceduralAnimation(partId, name, config, start, end).id,
-    removeProceduralAnimation: (id) =>
-      useProjectStore.getState().removeProceduralAnimation(id),
-
-    addSkeleton: (name) => useProjectStore.getState().addSkeleton(name).id,
-    addBone: (skId, name, parentId, hx, hy, tx, ty) =>
-      useProjectStore.getState().addBone(skId, name, parentId, hx, hy, tx, ty).id,
+    getNodeBlueprint: (characterId, nodeId) =>
+      getStore().unifiedCharacters[characterId]?.nodes[nodeId]?.blueprint ?? null,
+    setNodeBlueprint: (characterId, nodeId, graph) =>
+      getStore().updateUnifiedNode(characterId, nodeId, { blueprint: graph ?? undefined } as never),
 
     play: () => useEditorStore.getState().setPlayState('playing'),
     pause: () => useEditorStore.getState().setPlayState('paused'),
     stop: () => useEditorStore.getState().setPlayState('stopped'),
-    goToFrame: (f) => useProjectStore.getState().setCurrentFrame(f),
+    goToFrame: (f) => getStore().setCurrentFrame(f),
 
-    getSelectedPartId: () => useEditorStore.getState().selectedPartId,
-    selectPart: (id) => useEditorStore.getState().selectPart(id),
+    getSelectedNodeId: () => getStore().selectedNodeId ?? null,
+    selectNode: (id) => getStore().setSelectedNodeId(id),
 
-    exportProjectFile: () => useProjectStore.getState().exportProjectFile(),
+    exportProjectFile: () => getStore().exportProjectFile(),
   };
 }
