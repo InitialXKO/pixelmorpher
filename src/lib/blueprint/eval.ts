@@ -1704,9 +1704,21 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const h = inputPixels.length;
     const w = inputPixels[0]?.length ?? 0;
     const result = applyBumpLight(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
-    return { pixels: pixelsVal(result) };
+    return { pixels: pixelsVal(result) } as Record<string, BlueprintValue>;
   },
 };
+
+/**
+ * 注册自定义求值器（实验性）。
+ * 允许插件/脚本注册新的蓝图节点类型。
+ * 已注册的类型会被求值器查找命中，覆盖内置同名类型请谨慎。
+ */
+export function registerEvaluator(type: string, evaluator: NodeEvaluator): void {
+  if (EVALUATORS[type]) {
+    console.warn(`[blueprint] 求值器类型 "${type}" 已存在，将被覆盖`);
+  }
+  EVALUATORS[type] = evaluator;
+}
 
 /** 拓扑排序（Kahn 算法） */
 function topoSort(graph: BlueprintGraph): BlueprintNode[] {
