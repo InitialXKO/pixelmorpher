@@ -543,9 +543,11 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
     const newCharacter = store.addUnifiedCharacter(characterName || '新角色');
     const characterId = newCharacter.id;
 
-    // Helper: Sprite ID -> table entry for Character.sprites
+    // Helper: Sprite ID -> table entry
+    // NOTE: Must read from fresh store state, not the stale `store` snapshot
+    // captured at handleCreate start (sprites are added via addSprite above).
     const spriteIdToTableEntry = (id: string) => {
-      const gs = store.sprites[id];
+      const gs = useProjectStore.getState().sprites[id];
       if (!gs?.data || gs.data.length === 0) return null;
       return {
         width: gs.data[0]?.length ?? gs.width,
