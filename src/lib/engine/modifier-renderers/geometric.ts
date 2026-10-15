@@ -10,6 +10,25 @@ import { geoRng } from '../noise';
 import { modifierGuard, elapsedSeconds, emptyGrid } from './shared';
 import { inpaintPixels } from '../../inpainting';
 
+/** AI inpainting 后处理：收集空洞并用 Telea 填补（替代简单 edge_copy） */
+function applyAiHoleFill(result: PixelGrid, holeFill: string): void {
+  if (holeFill !== 'edge_copy') return;
+  const holes = new Set<string>();
+  for (let hy = 0; hy < result.length; hy++) {
+    for (let hx = 0; hx < result[hy].length; hx++) {
+      if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
+    }
+  }
+  if (holes.size === 0) return;
+  const inpainted = inpaintPixels(result, holes, 3);
+  for (let hy = 0; hy < result.length; hy++) {
+    for (let hx = 0; hx < result[hy].length; hx++) {
+      result[hy][hx] = inpainted[hy][hx];
+    }
+  }
+}
+
+
 /**
  * V10.1: Apply bend deformation — bends the part along a direction with configurable curvature.
  *
@@ -137,23 +156,7 @@ export function applyBend(
     }
   }
 
-  // AI inpainting for holes (replaces simplistic edge_copy)
-  if (holeFill === 'edge_copy') {
-    const holes = new Set<string>();
-    for (let hy = 0; hy < result.length; hy++) {
-      for (let hx = 0; hx < result[hy].length; hx++) {
-        if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
-      }
-    }
-    if (holes.size > 0) {
-      const inpainted = inpaintPixels(result, holes, 3);
-      for (let hy = 0; hy < result.length; hy++) {
-        for (let hx = 0; hx < result[hy].length; hx++) {
-          result[hy][hx] = inpainted[hy][hx];
-        }
-      }
-    }
-  }
+  applyAiHoleFill(result, holeFill);
   return result;
 }
 
@@ -258,23 +261,7 @@ export function applyEllipticalCompress(
     }
   }
 
-  // AI inpainting for holes (replaces simplistic edge_copy)
-  if (holeFill === 'edge_copy') {
-    const holes = new Set<string>();
-    for (let hy = 0; hy < result.length; hy++) {
-      for (let hx = 0; hx < result[hy].length; hx++) {
-        if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
-      }
-    }
-    if (holes.size > 0) {
-      const inpainted = inpaintPixels(result, holes, 3);
-      for (let hy = 0; hy < result.length; hy++) {
-        for (let hx = 0; hx < result[hy].length; hx++) {
-          result[hy][hx] = inpainted[hy][hx];
-        }
-      }
-    }
-  }
+  applyAiHoleFill(result, holeFill);
   return result;
 }
 
@@ -406,23 +393,7 @@ export function applyDumbbellStretch(
     }
   }
 
-  // AI inpainting for holes (replaces simplistic edge_copy)
-  if (holeFill === 'edge_copy') {
-    const holes = new Set<string>();
-    for (let hy = 0; hy < result.length; hy++) {
-      for (let hx = 0; hx < result[hy].length; hx++) {
-        if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
-      }
-    }
-    if (holes.size > 0) {
-      const inpainted = inpaintPixels(result, holes, 3);
-      for (let hy = 0; hy < result.length; hy++) {
-        for (let hx = 0; hx < result[hy].length; hx++) {
-          result[hy][hx] = inpainted[hy][hx];
-        }
-      }
-    }
-  }
+  applyAiHoleFill(result, holeFill);
   return result;
 }
 
@@ -526,23 +497,7 @@ export function applyPillowStretch(
     }
   }
 
-  // AI inpainting for holes (replaces simplistic edge_copy)
-  if (holeFill === 'edge_copy') {
-    const holes = new Set<string>();
-    for (let hy = 0; hy < result.length; hy++) {
-      for (let hx = 0; hx < result[hy].length; hx++) {
-        if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
-      }
-    }
-    if (holes.size > 0) {
-      const inpainted = inpaintPixels(result, holes, 3);
-      for (let hy = 0; hy < result.length; hy++) {
-        for (let hx = 0; hx < result[hy].length; hx++) {
-          result[hy][hx] = inpainted[hy][hx];
-        }
-      }
-    }
-  }
+  applyAiHoleFill(result, holeFill);
   return result;
 }
 
@@ -672,23 +627,7 @@ export function applyHyperbolicStretch(
     }
   }
 
-  // AI inpainting for holes (replaces simplistic edge_copy)
-  if (holeFill === 'edge_copy') {
-    const holes = new Set<string>();
-    for (let hy = 0; hy < result.length; hy++) {
-      for (let hx = 0; hx < result[hy].length; hx++) {
-        if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
-      }
-    }
-    if (holes.size > 0) {
-      const inpainted = inpaintPixels(result, holes, 3);
-      for (let hy = 0; hy < result.length; hy++) {
-        for (let hx = 0; hx < result[hy].length; hx++) {
-          result[hy][hx] = inpainted[hy][hx];
-        }
-      }
-    }
-  }
+  applyAiHoleFill(result, holeFill);
   return result;
 }
 
@@ -798,23 +737,7 @@ export function applyRingRipple(
     }
   }
 
-  // AI inpainting for holes (replaces simplistic edge_copy)
-  if (holeFill === 'edge_copy') {
-    const holes = new Set<string>();
-    for (let hy = 0; hy < result.length; hy++) {
-      for (let hx = 0; hx < result[hy].length; hx++) {
-        if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
-      }
-    }
-    if (holes.size > 0) {
-      const inpainted = inpaintPixels(result, holes, 3);
-      for (let hy = 0; hy < result.length; hy++) {
-        for (let hx = 0; hx < result[hy].length; hx++) {
-          result[hy][hx] = inpainted[hy][hx];
-        }
-      }
-    }
-  }
+  applyAiHoleFill(result, holeFill);
   return result;
 }
 
