@@ -130,6 +130,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const fileRef = useRef<HTMLInputElement>(null);
   // SAM 状态
   const [samStatus, setSamStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [samPreviewUrl, setSamPreviewUrl] = useState<string | null>(null);
   const [samProgress, setSamProgress] = useState(0);
 
   const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
@@ -418,8 +419,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             )}
             {samStatus === 'ready' && (
               <div className="space-y-2">
-                <div className="text-xs text-green-400">SAM 就绪。点击图中角色，自动分割并抠除背景。</div>
-                {referenceImageUrl && (
+                <div className="text-xs text-green-400">SAM 就绪。点击图中角色预览抠图效果，满意后点"应用到主画布"。</div>
+                {referenceImageUrl && !samPreviewUrl && (
                   <img
                     src={referenceImageUrl}
                     alt="参考图"
@@ -430,11 +431,10 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                       const y = (e.clientY - rect.top) / rect.height;
                       const store = useEditorStore.getState();
                       try {
-                        // 分割
                         await store.samSegmentAtPoint(x, y);
                         const { currentMask, maskShape } = store.samState;
                         if (!currentMask || !maskShape || !referenceImageUrl) return;
-                        // 直接应用抠图
+                        // 生成预览（不直接应用）
                         const img = new Image();
                         if (!referenceImageUrl.startsWith('data:') && !referenceImageUrl.startsWith('blob:')) {
                           img.crossOrigin = 'anonymous';
@@ -461,13 +461,39 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                           }
                         }
                         ctx.putImageData(imgData, 0, 0);
-                        store.setReferenceImageUrl(canvas.toDataURL('image/png'));
-                        store.clearSAMMask();
+                        setSamPreviewUrl(canvas.toDataURL('image/png'));
                       } catch (err) {
                         console.error('[SAM] 分割失败:', err);
                       }
                     }}
                   />
+                )}
+                {samPreviewUrl && (
+                  <div className="space-y-2">
+                    <div className="text-xs text-gray-400">预览效果：</div>
+                    <img src={samPreviewUrl} alt="抠图预览" className="w-full rounded border border-green-500/30" />
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm" className="flex-1"
+                        onClick={() => {
+                          useEditorStore.getState().setReferenceImageUrl(samPreviewUrl);
+                          useEditorStore.getState().clearSAMMask();
+                          setSamPreviewUrl(null);
+                        }}
+                      >
+                        应用到主画布
+                      </Button>
+                      <Button
+                        size="sm" variant="ghost"
+                        onClick={() => {
+                          setSamPreviewUrl(null);
+                          useEditorStore.getState().clearSAMMask();
+                        }}
+                      >
+                        重选
+                      </Button>
+                    </div>
+                  </div>
                 )}
               </div>
             )}
