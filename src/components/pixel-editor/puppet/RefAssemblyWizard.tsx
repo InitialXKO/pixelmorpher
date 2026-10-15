@@ -131,7 +131,6 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   // SAM 状态
   const [samStatus, setSamStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [samProgress, setSamProgress] = useState(0);
-  const [samMasks, setSamMasks] = useState<{ label: string; bounds: { x: number; y: number; width: number; height: number } }[]>([]);
 
   const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
   const setReferenceImageUrl = useEditorStore((s) => s.setReferenceImageUrl);
@@ -419,7 +418,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             )}
             {samStatus === 'ready' && (
               <div className="space-y-2">
-                <div className="text-xs text-green-400">SAM 就绪。点击图中角色进行分割，再点"应用分割抠除背景"。</div>
+                <div className="text-xs text-green-400">SAM 就绪。点击图中角色，自动分割并抠除背景。</div>
                 {referenceImageUrl && (
                   <img
                     src={referenceImageUrl}
@@ -429,28 +428,13 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                       const rect = (e.target as HTMLImageElement).getBoundingClientRect();
                       const x = (e.clientX - rect.left) / rect.width;
                       const y = (e.clientY - rect.top) / rect.height;
-                      try {
-                        // 每次点击替换当前 mask，不累积
-                        await useEditorStore.getState().samSegmentAtPoint(x, y);
-                        setSamMasks([{ label: '当前分割', bounds: useEditorStore.getState().samState.maskBounds! }]);
-                      } catch (err) {
-                        console.error('[SAM] 分割失败:', err);
-                      }
-                    }}
-                  />
-                )}
-                {samMasks.length > 0 && (
-                  <div className="text-xs text-gray-400">已分割，可应用抠除背景</div>
-                )}
-                {samMasks.length > 0 && (
-                  <Button
-                    size="sm" variant="outline" className="w-full"
-                    onClick={async () => {
                       const store = useEditorStore.getState();
-                      const { currentMask, maskShape } = store.samState;
-                      if (!currentMask || !maskShape || !referenceImageUrl) return;
                       try {
-                        // 加载参考图（data:/blob: 不需要 crossOrigin）
+                        // 分割
+                        await store.samSegmentAtPoint(x, y);
+                        const { currentMask, maskShape } = store.samState;
+                        if (!currentMask || !maskShape || !referenceImageUrl) return;
+                        // 直接应用抠图
                         const img = new Image();
                         if (!referenceImageUrl.startsWith('data:') && !referenceImageUrl.startsWith('blob:')) {
                           img.crossOrigin = 'anonymous';
@@ -459,10 +443,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                           img.onload = res; img.onerror = rej;
                           img.src = referenceImageUrl;
                         });
-                        if (!img.naturalWidth || !img.naturalHeight) {
-                          throw new Error('参考图加载失败（0 尺寸）');
-                        }
-                        // 用 mask 抠图：mask>0.5 保留，否则透明
+                        if (!img.naturalWidth || !img.naturalHeight) return;
                         const canvas = document.createElement('canvas');
                         canvas.width = img.naturalWidth;
                         canvas.height = img.naturalHeight;
@@ -470,29 +451,23 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                         ctx.drawImage(img, 0, 0);
                         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                         const [mh, mw] = maskShape;
-                        for (let y = 0; y < canvas.height; y++) {
-                          for (let x = 0; x < canvas.width; x++) {
-                            const mx = Math.floor((x / canvas.width) * mw);
-                            const my = Math.floor((y / canvas.height) * mh);
-                            const maskVal = currentMask[my * mw + mx];
-                            if (!(maskVal >= 0.5)) {
-                              imgData.data[(y * canvas.width + x) * 4 + 3] = 0;
+                        for (let py = 0; py < canvas.height; py++) {
+                          for (let px = 0; px < canvas.width; px++) {
+                            const mx = Math.floor((px / canvas.width) * mw);
+                            const my = Math.floor((py / canvas.height) * mh);
+                            if (!(currentMask[my * mw + mx] >= 0.5)) {
+                              imgData.data[(py * canvas.width + px) * 4 + 3] = 0;
                             }
                           }
                         }
                         ctx.putImageData(imgData, 0, 0);
-                        const newUrl = canvas.toDataURL('image/png');
-                        store.setReferenceImageUrl(newUrl);
-                        // 清掉旧 mask，避免 overlay 残留
+                        store.setReferenceImageUrl(canvas.toDataURL('image/png'));
                         store.clearSAMMask();
-                        setSamMasks([]);
                       } catch (err) {
-                        console.error('[SAM] 抠图失败:', err);
+                        console.error('[SAM] 分割失败:', err);
                       }
                     }}
-                  >
-                    应用分割抠除背景
-                  </Button>
+                  />
                 )}
               </div>
             )}
