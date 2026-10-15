@@ -645,7 +645,8 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
     }
 
     // Set children arrays and rootNodeId, populate sprites table
-    const createdChar = store.unifiedCharacters[characterId];
+    // NOTE: Must read fresh state — `store` is a stale snapshot.
+    const createdChar = useProjectStore.getState().unifiedCharacters[characterId];
     if (createdChar) {
       const childMap: Record<string, string[]> = {};
       for (const node of Object.values(createdChar.nodes)) {
@@ -678,7 +679,9 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
       name: '默认服装',
       pieces: {} as Record<string, any>,
     };
-    const finalChar = store.unifiedCharacters[characterId];
+    // NOTE: Must read fresh state — `store` is a stale snapshot from handleCreate start,
+    // nodes created via addUnifiedNode above are not visible in it.
+    const finalChar = useProjectStore.getState().unifiedCharacters[characterId];
     if (finalChar) {
       for (const node of Object.values(finalChar.nodes)) {
         if (node.costumePiece) {
