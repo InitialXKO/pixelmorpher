@@ -646,6 +646,15 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
 
     // Set children arrays and rootNodeId, populate sprites table
     // NOTE: Must read fresh state — `store` is a stale snapshot.
+    // Also: addUnifiedCharacter creates a placeholder 'root' node; the wizard
+    // replaces it with template nodes, so delete the placeholder first —
+    // otherwise find((n) => !n.parentId) returns the empty placeholder instead
+    // of the template's real root (e.g. torso), and render traversal never
+    // reaches the template nodes.
+    const initialRootId = newCharacter.rootNodeId;
+    if (initialRootId) {
+      store.removeUnifiedNode(characterId, initialRootId);
+    }
     const createdChar = useProjectStore.getState().unifiedCharacters[characterId];
     if (createdChar) {
       const childMap: Record<string, string[]> = {};
