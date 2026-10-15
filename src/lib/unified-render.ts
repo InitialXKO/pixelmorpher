@@ -19,6 +19,7 @@ import type {
   NodeRenderInstruction, DiscRenderInstruction, RenderPlan,
   KeyframeTrack, KeyframePoint, InterpolationMode,
   ModifierInstance, GeneratedItem, AnimationVariable, ParamDriver,
+  IKChain,
 } from './unified-types';
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP,
@@ -68,8 +69,10 @@ import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
-import { evaluateBlueprint } from './blueprint/eval';
+import { evaluateBlueprint, EVALUATORS } from './blueprint/eval';
 import { modifiersToBlueprint } from './blueprint/migrate';
+import type { BlueprintNode, BlueprintEvalContext } from './blueprint/ir';
+import { asNumber } from './blueprint/ir';
 import type { BlueprintGraph } from './blueprint/ir';
 import type { VariableContext as EngineVariableContext } from './engine/param-driver';
 import type {
@@ -220,7 +223,300 @@ function computeWorldTransforms(
   // Recursively compute children
   computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms);
 
+  // Apply IK chains (override FK angles)
+  applyIKChains(character, transforms);
+
   return transforms;
+}
+
+/**
+ * Apply IK chains to computed world transforms.
+ *
+ * For each enabled IK chain, solves the IK and overrides the joint angles.
+ * Then recomputes downstream transforms for affected subtrees.
+ */
+function applyIKChains(
+  character: Character,
+  transforms: Map<string, WorldTransform>,
+): void {
+  // If baked IK blueprint exists, evaluate it instead of generating from chains.
+  // The baked blueprint is editable in the blueprint editor.
+  if (character.ikBlueprint) {
+    applyBakedIKBlueprint(character, transforms);
+    return;
+  }
+
+  const chains = character.ikChains?.filter((c) => c.enabled);
+  if (!chains || chains.length === 0) return;
+
+  for (const chain of chains) {
+    applyIKChain(character, chain, transforms);
+  }
+}
+
+/**
+ * Apply baked IK blueprint.
+ *
+ * Evaluates character.ikBlueprint and applies the resulting joint angles.
+ * Nodes with _jointId param in their transform outputs indicate which
+ * joint each angle applies to.
+ */
+function applyBakedIKBlueprint(
+  character: Character,
+  transforms: Map<string, WorldTransform>,
+): void {
+  const blueprint = character.ikBlueprint;
+  if (!blueprint) return;
+
+  const ctx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: {} };
+
+  // Evaluate each transform node that has a _jointId param
+  for (const node of blueprint.nodes) {
+    if (node.type !== 'transform') continue;
+    const jointId = node.params._jointId as string | undefined;
+    if (!jointId) continue;
+
+    // Build a single-node graph to evaluate this transform
+    const singleGraph: BlueprintGraph = {
+      version: 1,
+      nodes: blueprint.nodes,
+      outputId: node.id,
+    };
+    const result = evaluateBlueprint(singleGraph, ctx);
+
+    const t = transforms.get(jointId);
+    if (t) {
+      t.worldAngle = result.rotation;
+    }
+  }
+}
+
+/**
+ * Apply a single IK chain.
+ *
+ * 1. Walk from rootNodeId to endNodeId to get the joint chain.
+ * 2. Get bone lengths from FK joint positions.
+ * 3. Solve IK for the target.
+ * 4. Override joint angles in transforms map.
+ * 5. Recompute downstream transforms.
+ */
+function applyIKChain(
+  character: Character,
+  chain: IKChain,
+  transforms: Map<string, WorldTransform>,
+): void {
+  // Build joint chain: root -> ... -> end
+  const jointIds: string[] = [];
+  let currentId: string | undefined = chain.endNodeId;
+  const visited = new Set<string>();
+  while (currentId && !visited.has(currentId)) {
+    visited.add(currentId);
+    jointIds.unshift(currentId);
+    const node = character.nodes[currentId];
+    if (!node) break;
+    if (currentId === chain.rootNodeId) break;
+    currentId = node.parentId;
+  }
+
+  if (jointIds.length < 2) return;
+  if (jointIds[0] !== chain.rootNodeId) return;
+
+  // Get bone lengths from FK positions
+  const joints: { x: number; y: number }[] = [];
+  for (const id of jointIds) {
+    const t = transforms.get(id);
+    if (!t) return;
+    joints.push({ x: subToPx(t.worldX), y: subToPx(t.worldY) });
+  }
+
+  const lengths: number[] = [];
+  for (let i = 0; i < joints.length - 1; i++) {
+    lengths.push(Math.hypot(joints[i + 1].x - joints[i].x, joints[i + 1].y - joints[i].y));
+  }
+
+  // Solve IK via Blueprint IR.
+  // Construct a blueprint graph with the IK node and evaluate it,
+  // instead of calling solvers directly. This keeps BlueprintGraph
+  // as the single IR for all kinematics.
+  const baseX = joints[0].x;
+  const baseY = joints[0].y;
+  let angles: number[];
+
+  const ikNode: BlueprintNode = chain.solver === '2bone' && lengths.length === 2
+    ? {
+        id: 'ik',
+        type: 'ik_2bone',
+        inputs: {},
+        params: {
+          targetX: chain.target.x,
+          targetY: chain.target.y,
+          len1: lengths[0],
+          len2: lengths[1],
+          baseX,
+          baseY,
+          bendDir: chain.bendDir ?? 1,
+        },
+      }
+    : {
+        id: 'ik',
+        type: 'ik_fabrik',
+        inputs: {},
+        params: {
+          targetX: chain.target.x,
+          targetY: chain.target.y,
+          lengths: lengths.join(','),
+          baseX,
+          baseY,
+        },
+      };
+
+  // Evaluate the IK node through the blueprint evaluator registry
+  const evaluator = EVALUATORS[ikNode.type];
+  if (!evaluator) return;
+  const ctx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: {} };
+  const ikResult = evaluator(ikNode, {}, ctx);
+
+  if (ikNode.type === 'ik_2bone') {
+    const angle1 = asNumber(ikResult.angle1);
+    const angle2 = asNumber(ikResult.angle2);
+    angles = [angle1, angle1 + angle2];
+  } else {
+    // ik_fabrik outputs angles as comma-separated string
+    const anglesVal = ikResult.angles;
+    const anglesStr = typeof anglesVal === 'object' && anglesVal !== null && 'value' in anglesVal
+      ? String((anglesVal as { value: string }).value)
+      : '';
+    angles = anglesStr.split(',').map(Number).filter((n) => !isNaN(n));
+  }
+
+  if (angles.length === 0) return;
+
+  // Override joint angles in transforms
+  // Note: angles are absolute in character space. We need to convert to
+  // local angles relative to parent.
+  for (let i = 0; i < jointIds.length; i++) {
+    const t = transforms.get(jointIds[i]);
+    if (!t) continue;
+
+    // For root joint, local angle = absolute angle - parent world angle
+    // For others, local angle = absolute angle - parent absolute angle
+    let parentWorldAngle = 0;
+    if (i === 0) {
+      const node = character.nodes[jointIds[i]];
+      if (node?.parentId) {
+        const parentT = transforms.get(node.parentId);
+        if (parentT) parentWorldAngle = parentT.worldAngle;
+      }
+    } else {
+      parentWorldAngle = angles[i - 1];
+    }
+
+    const localAngle = angles[i] - parentWorldAngle;
+    t.worldAngle = angles[i];
+
+    // Store the local angle override for recomputation
+    // (we'll recompute children positions based on new angles)
+  }
+
+  // Recompute downstream transforms for the chain subtree
+  // Start from root joint's parent, recompute the chain and its children
+  const rootNode = character.nodes[chain.rootNodeId];
+  if (!rootNode?.parentId) {
+    // Root is character root: recompute from scratch is complex,
+    // for now just update positions along the chain
+    updateChainPositions(character, jointIds, angles, transforms);
+  } else {
+    const parentT = transforms.get(rootNode.parentId);
+    if (parentT) {
+      // Recompute chain joints from parent
+      recomputeChainFromParent(character, jointIds, angles, parentT, transforms);
+    }
+  }
+}
+
+/**
+ * Update joint positions along the IK chain given solved angles.
+ * Used when chain root is the character root.
+ */
+function updateChainPositions(
+  character: Character,
+  jointIds: string[],
+  angles: number[],
+  transforms: Map<string, WorldTransform>,
+): void {
+  for (let i = 1; i < jointIds.length; i++) {
+    const prevT = transforms.get(jointIds[i - 1]);
+    const currT = transforms.get(jointIds[i]);
+    if (!prevT || !currT) continue;
+
+    const node = character.nodes[jointIds[i]];
+    if (!node) continue;
+
+    // Get bone length from original FK (distance is preserved by IK)
+    const origDist = Math.hypot(
+      subToPx(currT.worldX) - subToPx(prevT.worldX),
+      subToPx(currT.worldY) - subToPx(prevT.worldY),
+    );
+
+    const rad = (angles[i - 1] * Math.PI) / 180;
+    const newX = subToPx(prevT.worldX) + Math.cos(rad) * origDist;
+    const newY = subToPx(prevT.worldY) + Math.sin(rad) * origDist;
+
+    currT.worldX = newX * 16 as SubPixel;
+    currT.worldY = newY * 16 as SubPixel;
+    currT.worldAngle = angles[i];
+  }
+}
+
+/**
+ * Recompute chain joint transforms from parent world transform.
+ */
+function recomputeChainFromParent(
+  character: Character,
+  jointIds: string[],
+  angles: number[],
+  parentT: WorldTransform,
+  transforms: Map<string, WorldTransform>,
+): void {
+  let px = subToPx(parentT.worldX);
+  let py = subToPx(parentT.worldY);
+  let parentAngle = parentT.worldAngle;
+
+  for (let i = 0; i < jointIds.length; i++) {
+    const t = transforms.get(jointIds[i]);
+    const node = character.nodes[jointIds[i]];
+    if (!t || !node) continue;
+
+    // Get bone length (from node attachment or FK distance)
+    let boneLen = 0;
+    if (i < jointIds.length - 1) {
+      const nextT = transforms.get(jointIds[i + 1]);
+      if (nextT) {
+        // Use current FK distance as bone length
+        const currX = subToPx(t.worldX);
+        const currY = subToPx(t.worldY);
+        const nextX = subToPx(nextT.worldX);
+        const nextY = subToPx(nextT.worldY);
+        boneLen = Math.hypot(nextX - currX, nextY - currY);
+      }
+    }
+
+    // Update world angle
+    t.worldAngle = angles[i];
+
+    // Update position (except for root, which keeps its FK position)
+    if (i > 0) {
+      const rad = (angles[i - 1] * Math.PI) / 180;
+      px = px + Math.cos(rad) * boneLen;
+      py = py + Math.sin(rad) * boneLen;
+      t.worldX = (px * 16) as SubPixel;
+      t.worldY = (py * 16) as SubPixel;
+    } else {
+      px = subToPx(t.worldX);
+      py = subToPx(t.worldY);
+    }
+    parentAngle = angles[i];
+  }
 }
 
 function computeChildTransforms(

@@ -145,6 +145,17 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     outputs: ['out'],
     params: ['nodeId', 'output'],
   },
+  // ---- IK（逆运动学） ----
+  ik_2bone: {
+    inputs: ['targetX', 'targetY', 'len1', 'len2', 'baseX', 'baseY', 'bendDir'],
+    outputs: ['angle1', 'angle2', 'reachable'],
+    params: ['targetX', 'targetY', 'len1', 'len2', 'baseX', 'baseY', 'bendDir'],
+  },
+  ik_fabrik: {
+    inputs: ['targetX', 'targetY', 'lengths', 'baseX', 'baseY', 'iterations', 'tolerance'],
+    outputs: ['angles', 'converged'],
+    params: ['targetX', 'targetY', 'lengths', 'baseX', 'baseY', 'iterations', 'tolerance'],
+  },
   // ---- 条件与状态 ----
   switch: {
     inputs: ['condition', 'a', 'b'],

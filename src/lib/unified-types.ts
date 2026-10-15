@@ -513,6 +513,33 @@ export interface CostumeSet {
  * Latitude is a static parameter (set at design time, not animated).
  * Direction-dependent draw orders are stored here.
  */
+
+/**
+ * IK Chain: defines a kinematic chain for inverse kinematics.
+ *
+ * The chain is the path from rootNodeId to endNodeId (via parent links).
+ * Bone lengths are derived from node socket positions.
+ *
+ * During render, if the chain is enabled, IK solves joint angles
+ * to reach the target, overriding FK angles.
+ */
+export interface IKChain {
+  id: string;
+  name: string;
+  /** Root joint node ID (e.g., shoulder) */
+  rootNodeId: string;
+  /** End effector node ID (e.g., hand) */
+  endNodeId: string;
+  /** IK target in character space */
+  target: { x: number; y: number };
+  /** Solver: '2bone' for 2-joint chains, 'fabrik' for longer */
+  solver: '2bone' | 'fabrik';
+  /** Bend direction for 2-bone (+1/-1) */
+  bendDir?: number;
+  /** Whether this chain is active */
+  enabled: boolean;
+}
+
 export interface Character {
   id: string;
   name: string;
@@ -520,6 +547,18 @@ export interface Character {
   // ---- Node Tree ----
   rootNodeId: string;            // Root node of the character's tree
   nodes: Record<string, Node>;   // All nodes indexed by ID
+
+  // ---- IK Chains (Inverse Kinematics) ----
+  // Defines kinematic chains for IK solving. The chain's joints are
+  // determined by walking from rootNodeId to endNodeId via parent links.
+  // During render, IK overrides the FK angles for chain joints.
+  ikChains?: IKChain[];
+
+  // ---- Baked IK Blueprint ----
+  // Persistent blueprint generated from ikChains via the Bake button.
+  // Editable in the blueprint editor. Takes precedence over ikChains
+  // at render time if present.
+  ikBlueprint?: BlueprintGraph | null;
 
   // ---- Sprite Table (retired) ----
   // Sprites moved to the global s.sprites table. Kept as optional for

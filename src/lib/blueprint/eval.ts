@@ -14,6 +14,7 @@ import { asNumber, isRef, num, pixels as pixelsVal, asPixels } from './ir';
 import { computeGaitTransform } from '../engine/animation-handlers/shared-helpers';
 import { evalExpression } from '../expression-parser';
 import type { ModifierParamValue, PartAnimationModifier } from '../types';
+import { solveIK2Bone, solveIKFabrik } from './ik';
 
 /**
  * Cubic-bezier 缓动求值（借鉴 keyframe-engine）。
@@ -418,6 +419,50 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     if (!outputs) return { out: num(0) };
     const v = outputs[output as keyof typeof outputs] ?? 0;
     return { out: num(v) };
+  },
+
+  // ---- IK（逆运动学） ----
+  // ik_2bone: 解析法双骨骼 IK
+  // 输入: targetX/targetY（父空间目标点）, len1/len2（骨骼长度）,
+  //       baseX/baseY（基点，默认0,0）, bendDir（弯曲方向 +1/-1，默认+1）
+  // 输出: angle1（肩关节绝对角度）, angle2（肘关节相对角度）, reachable（是否可达）
+  ik_2bone: (n, i) => {
+    const targetX = asNumber(i.targetX ?? num(Number(n.params.targetX ?? 0)));
+    const targetY = asNumber(i.targetY ?? num(Number(n.params.targetY ?? 0)));
+    const len1 = asNumber(i.len1 ?? num(Number(n.params.len1 ?? 50)));
+    const len2 = asNumber(i.len2 ?? num(Number(n.params.len2 ?? 40)));
+    const baseX = asNumber(i.baseX ?? num(Number(n.params.baseX ?? 0)));
+    const baseY = asNumber(i.baseY ?? num(Number(n.params.baseY ?? 0)));
+    const bendDir = asNumber(i.bendDir ?? num(Number(n.params.bendDir ?? 1)));
+    const out = solveIK2Bone({ targetX, targetY, len1, len2, baseX, baseY, bendDir });
+    return {
+      angle1: num(out.angle1),
+      angle2: num(out.angle2),
+      reachable: num(out.reachable ? 1 : 0),
+    };
+  },
+
+  // ik_fabrik: FABRIK 迭代法多骨骼 IK
+  // 输入: targetX/targetY, lengths（骨骼长度数组，逗号分隔字符串或数组）,
+  //       baseX/baseY, iterations（默认10）, tolerance（默认0.5）
+  // 输出: angles（关节角度数组，逗号分隔字符串）, converged（是否收敛）
+  ik_fabrik: (n, i) => {
+    const targetX = asNumber(i.targetX ?? num(Number(n.params.targetX ?? 0)));
+    const targetY = asNumber(i.targetY ?? num(Number(n.params.targetY ?? 0)));
+    const lengthsRaw = i.lengths ?? n.params.lengths ?? '40,30,20';
+    const lengths = String(lengthsRaw)
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((v) => !isNaN(v) && v > 0);
+    const baseX = asNumber(i.baseX ?? num(Number(n.params.baseX ?? 0)));
+    const baseY = asNumber(i.baseY ?? num(Number(n.params.baseY ?? 0)));
+    const iterations = Math.max(1, Math.round(asNumber(i.iterations ?? num(Number(n.params.iterations ?? 10)))));
+    const tolerance = Math.max(0.01, asNumber(i.tolerance ?? num(Number(n.params.tolerance ?? 0.5))));
+    const out = solveIKFabrik({ targetX, targetY, lengths, baseX, baseY, iterations, tolerance });
+    return {
+      angles: { type: 'string', value: out.angles.map((a) => a.toFixed(2)).join(',') } as BlueprintValue,
+      converged: num(out.converged ? 1 : 0),
+    };
   },
 
   // ---- 条件与状态（可选，用于抛接等时序切换） ----
@@ -1930,6 +1975,9 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   jitter: '抖动',
   gait: '步态',
   expression: '表达式',
+  // IK
+  ik_2bone: 'IK双骨骼',
+  ik_fabrik: 'IK多骨骼',
   // 输出
   transform: '变换输出',
   // 像素修改器
