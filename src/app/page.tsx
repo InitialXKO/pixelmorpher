@@ -23,6 +23,13 @@ import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
 import { useAssetStore } from '@/lib/asset-store';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import {
+  saveAutosaveToOPFS,
+  checkAutosaveInOPFS,
+  loadAutosaveFromOPFS,
+  clearAutosaveInOPFS,
+  migrateLegacyAutosave,
+} from '@/lib/autosave-opfs';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { Settings, Route, Activity, Terminal, Puzzle, Layers, Pencil, ChevronDown, ChevronUp, Grid3x3, Eye, Paintbrush, Globe, Film, Shirt, Zap } from 'lucide-react';
@@ -70,29 +77,42 @@ export default function Home() {
     loadProjectList();
   }, [loadLibrary, loadProjectList]);
 
-  // Check for autosave after mount (avoids SSR localStorage issues)
+  // Check for autosave after mount (avoids SSR issues)
+  // Uses OPFS; migrates legacy localStorage autosave on first run.
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('pixelmorpher-autosave');
-      const savedTime = localStorage.getItem('pixelmorpher-autosave-time');
-      if (saved && savedTime) {
-        // Use setTimeout to avoid calling setState directly in effect
-        setTimeout(() => setAutosaveDialogOpen(true), 0);
+    (async () => {
+      try {
+        await migrateLegacyAutosave();
+        const meta = await checkAutosaveInOPFS();
+        if (meta) {
+          setTimeout(() => setAutosaveDialogOpen(true), 0);
+        }
+      } catch (e) {
+        console.error('[autosave] Check failed:', e);
       }
-    } catch {}
+    })();
   }, []);
 
-  // ---- Auto-save: 5-minute interval + beforeunload ----
+  // ---- Auto-save: 5-minute interval + beforeunload (OPFS) ----
   useEffect(() => {
     const AUTO_SAVE_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
-    const autoSave = () => {
+    // Save if there's any meaningful work (not just sprites)
+    const hasWork = () => {
       const state = useProjectStore.getState();
-      if (Object.keys(state.sprites).length > 0) {
-        const data = state.exportProjectFile();
-        localStorage.setItem('pixelmorpher-autosave', JSON.stringify(data));
-        localStorage.setItem('pixelmorpher-autosave-time', new Date().toISOString());
-      }
+      return (
+        Object.keys(state.sprites).length > 0 ||
+        Object.keys(state.unifiedCharacters ?? {}).length > 0 ||
+        (state.animationClips ?? []).length > 0
+      );
+    };
+
+    const autoSave = () => {
+      if (!hasWork()) return;
+      const state = useProjectStore.getState();
+      const data = state.exportProjectFile();
+      // Fire and forget; errors are logged in saveAutosaveToOPFS
+      saveAutosaveToOPFS(data);
     };
 
     const interval = setInterval(autoSave, AUTO_SAVE_INTERVAL);
@@ -106,22 +126,23 @@ export default function Home() {
     };
   }, []);
 
-  const handleRestoreAutosave = useCallback(() => {
+  const handleRestoreAutosave = useCallback(async () => {
     try {
-      const saved = localStorage.getItem('pixelmorpher-autosave');
-      if (saved) {
-        const projectFile = JSON.parse(saved);
-        useProjectStore.getState().importProjectFile(projectFile);
+      const projectFile = await loadAutosaveFromOPFS();
+      if (projectFile) {
+        useProjectStore.getState().importProjectFile(projectFile as any);
+      } else {
+        console.error('[autosave] Restore failed: no data loaded from OPFS');
       }
-    } catch {}
-    localStorage.removeItem('pixelmorpher-autosave');
-    localStorage.removeItem('pixelmorpher-autosave-time');
+    } catch (e) {
+      console.error('[autosave] Restore failed:', e);
+    }
+    await clearAutosaveInOPFS();
     setAutosaveDialogOpen(false);
   }, []);
 
-  const handleDiscardAutosave = useCallback(() => {
-    localStorage.removeItem('pixelmorpher-autosave');
-    localStorage.removeItem('pixelmorpher-autosave-time');
+  const handleDiscardAutosave = useCallback(async () => {
+    await clearAutosaveInOPFS();
     setAutosaveDialogOpen(false);
   }, []);
 
