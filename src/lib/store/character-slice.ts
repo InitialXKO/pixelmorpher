@@ -18,7 +18,7 @@ import { LiveAdapter } from '../migration-adapter';
 export type CharacterSlice = {
   // ---- Character CRUD ----
   unifiedCharacters: Record<string, Character>;
-  addUnifiedCharacter: (name: string) => Character;
+  addUnifiedCharacter: (name: string, opts?: { skipPlaceholderRoot?: boolean }) => Character;
   removeUnifiedCharacter: (id: string) => void;
   updateUnifiedCharacter: (id: string, updates: Partial<Character>) => void;
   /** Sync Puppet data to unified Character (via LiveAdapter). Call when puppet data changes. */
@@ -68,7 +68,7 @@ function generateId(prefix: string): string {
 export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterSlice> = (set, get) => ({
   unifiedCharacters: {},
 
-  addUnifiedCharacter: (name) => {
+  addUnifiedCharacter: (name, opts) => {
     const id = generateId('char');
     const character: Character = {
       id,
@@ -82,10 +82,15 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    // Create root node
-    const rootNode = createDefaultNode(generateId('node'), 'root');
-    character.nodes[rootNode.id] = rootNode;
-    character.rootNodeId = rootNode.id;
+    // Create placeholder root node UNLESS caller will provide its own nodes.
+    // Callers that build a full skeleton (e.g. creation wizard) should pass
+    // { skipPlaceholderRoot: true } and set rootNodeId themselves — otherwise
+    // the placeholder lingers and find((n) => !n.parentId) picks the wrong root.
+    if (!opts?.skipPlaceholderRoot) {
+      const rootNode = createDefaultNode(generateId('node'), 'root');
+      character.nodes[rootNode.id] = rootNode;
+      character.rootNodeId = rootNode.id;
+    }
 
     set((s) => ({
       unifiedCharacters: { ...s.unifiedCharacters, [id]: character },

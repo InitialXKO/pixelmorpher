@@ -238,11 +238,9 @@ export function createPuppyRunExampleCharacter(
   try {
     const store = useProjectStoreHook.getState();
 
-    // 1. 建 Character（新模型真相源）
-    const character = store.addUnifiedCharacter('小狗（奔跑示例）');
+    // 1. 建 Character（新模型真相源），跳过占位 root（小狗的 body 才是真正的根）
+    const character = store.addUnifiedCharacter('小狗（奔跑示例）', { skipPlaceholderRoot: true });
     const characterId = character.id;
-    // 移除 addUnifiedCharacter 自带的默认 root 节点，小狗的 body 才是真正的根
-    store.removeUnifiedNode(characterId, character.rootNodeId);
 
     // 2. 节点定义：复用 DOG_TEMPLATE（侧向版），配置全部来自模板
     const defs = getSideViewDogNodes();

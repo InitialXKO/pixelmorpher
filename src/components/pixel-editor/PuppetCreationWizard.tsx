@@ -540,7 +540,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
     }
 
     // ---- New model: Create Character via addUnifiedCharacter ----
-    const newCharacter = store.addUnifiedCharacter(characterName || '新角色');
+    const newCharacter = store.addUnifiedCharacter(characterName || '新角色', { skipPlaceholderRoot: true });
     const characterId = newCharacter.id;
 
     // Helper: Sprite ID -> table entry
@@ -645,16 +645,13 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
     }
 
     // Set children arrays and rootNodeId — do it ATOMICALLY in a single
-    // updateUnifiedCharacter to avoid partial state. The placeholder 'root'
-    // node from addUnifiedCharacter is removed first.
-    const initialRootId = newCharacter.rootNodeId;
+    // updateUnifiedCharacter to avoid partial state.
+    // (addUnifiedCharacter was called with skipPlaceholderRoot: true,
+    // so there is no placeholder to remove.)
     const freshChar = useProjectStore.getState().unifiedCharacters[characterId];
     if (freshChar) {
       // Build new nodes map with children populated
       const nodes: Record<string, any> = { ...freshChar.nodes };
-      if (initialRootId && nodes[initialRootId]) {
-        delete nodes[initialRootId];
-      }
       const childMap: Record<string, string[]> = {};
       for (const node of Object.values(nodes) as any[]) {
         if (node.parentId) {
