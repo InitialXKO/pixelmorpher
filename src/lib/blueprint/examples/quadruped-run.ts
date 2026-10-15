@@ -21,6 +21,7 @@ import {
   pxToSub,
   createDefaultCostumeSet,
   createDefaultCostumePiece,
+  createDefaultNode,
 } from '@/lib/unified-types';
 import type { Sprite, Socket, Attachment } from '@/lib/unified-types';
 
@@ -262,6 +263,10 @@ export function createPuppyRunExampleCharacter(
 
     // 4. 为每个节点生成精灵 → 存 sprites 表 → 建 Node
     const spritesTable: Record<string, Sprite> = {};
+    // Build nodes in memory (old way) — no store.addUnifiedNode loop
+    const nodes: Record<string, any> = {};
+    const childMap: Record<string, string[]> = {};
+    const costumePieces: Record<string, any> = {};
     console.log('[一键小狗] 开始创建节点，共', defs.length, '个:', defs.map((d) => d.name));
     for (const def of defs) {
       const sprite = generateDefaultCostumeSprite(def.name, 'dog');
@@ -301,8 +306,14 @@ export function createPuppyRunExampleCharacter(
         };
       }
 
-      store.addUnifiedNode(characterId, def.name, {
-        id: nodeIds[def.name],
+      // Build node in memory (old way: no store.addUnifiedNode loop + re-read)
+      const nodeId = nodeIds[def.name];
+      const node = createDefaultNode(nodeId, def.name);
+      const costumePiece = {
+        ...createDefaultCostumePiece(def.name),
+        sprites: { 0: { spriteId } },
+      };
+      Object.assign(node, {
         sockets,
         attachment,
         parentId,
@@ -315,55 +326,32 @@ export function createPuppyRunExampleCharacter(
         },
         zIndex: def.zIndex,
         visible: true,
-        costumePiece: {
-          ...createDefaultCostumePiece(def.name),
-          sprites: { 0: { spriteId } },
-        },
+        children: [], // filled below
+        costumePiece,
       });
+      nodes[nodeId] = node;
+      if (parentId) {
+        if (!childMap[parentId]) childMap[parentId] = [];
+        childMap[parentId].push(nodeId);
+      }
+      costumePieces[def.name] = costumePiece;
     }
 
-    // 5. 回填 children 数组、rootNodeId、sprites 表
-    const createdChar = store.unifiedCharacters[characterId];
-    if (createdChar) {
-      const childMap: Record<string, string[]> = {};
-      for (const node of Object.values(createdChar.nodes)) {
-        if (node.parentId) {
-          if (!childMap[node.parentId]) childMap[node.parentId] = [];
-          childMap[node.parentId].push(node.id);
-        }
+    // Build children arrays, find root, build costume set — all from local data
+    for (const [pid, childIds] of Object.entries(childMap)) {
+      if (nodes[pid]) {
+        nodes[pid].children = childIds;
       }
-      for (const [pid, childIds] of Object.entries(childMap)) {
-        const parent = createdChar.nodes[pid];
-        if (parent) {
-          store.updateUnifiedNode(characterId, pid, {
-            children: [...(parent.children || []), ...childIds],
-          });
-        }
-      }
-      const rootNode = Object.values(createdChar.nodes).find((n) => !n.parentId);
-      store.updateUnifiedCharacter(characterId, {
-        rootNodeId: rootNode?.id ?? '',
-        sprites: spritesTable,
-      });
     }
-
-    // 6. 建默认服装集：从各节点的 costumePiece 收集
+    const rootNode = Object.values(nodes).find((n: any) => !n.parentId) as any;
     const costumeSetId = crypto.randomUUID();
     const newCostumeSet = createDefaultCostumeSet(costumeSetId, '默认服装');
-    const finalChar = store.unifiedCharacters[characterId];
-    if (finalChar) {
-      for (const node of Object.values(finalChar.nodes)) {
-        if (node.costumePiece) {
-          newCostumeSet.pieces[node.costumePiece.slotKey] = node.costumePiece;
-        }
-      }
-      store.updateUnifiedCharacter(characterId, {
-        costumeSets: [newCostumeSet],
-        activeCostumeSetId: costumeSetId,
-      });
-    }
+    newCostumeSet.pieces = { ...costumePieces };
 
-    // 7. 挂蓝图（大腿 + 小腿 + 尾巴 + 身体 + 头）
+    // Single atomic write (old way: build in memory, write once)
+    // Note: blueprints are attached to in-memory nodes BEFORE this write (see below)
+
+    // 7. 挂蓝图（大腿 + 小腿 + 尾巴 + 身体 + 头）— 直接写内存 nodes，不调 updateUnifiedNode
     const blueprints = createQuadrupedRunBlueprint({
       frontLegs: [nodeIds['front_upper_leg_L']!, nodeIds['front_upper_leg_R']!],
       backLegs: [nodeIds['back_upper_leg_L']!, nodeIds['back_upper_leg_R']!],
@@ -374,9 +362,19 @@ export function createPuppyRunExampleCharacter(
       head: nodeIds['head'],
     });
     for (const [nodeId, graph] of blueprints) {
-      store.updateUnifiedNode(characterId, nodeId, { blueprint: graph });
+      if (nodes[nodeId]) {
+        nodes[nodeId].blueprint = graph;
+      }
     }
     console.log('[一键小狗] 蓝图已挂载:', blueprints.size, '个节点');
+
+    useProjectStore.getState().updateUnifiedCharacter(characterId, {
+      nodes,
+      rootNodeId: rootNode?.id ?? '',
+      sprites: spritesTable,
+      costumeSets: [newCostumeSet],
+      activeCostumeSetId: costumeSetId,
+    });
 
     // 8. 切到 perform
     sessionStore.enterPerform(characterId);
