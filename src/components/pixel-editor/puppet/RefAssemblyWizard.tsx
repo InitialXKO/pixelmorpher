@@ -132,6 +132,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const [samStatus, setSamStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [samPreviewUrl, setSamPreviewUrl] = useState<string | null>(null);
   const [samProgress, setSamProgress] = useState(0);
+  const [samImageUrl, setSamImageUrl] = useState<string | null>(null);
 
   const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
   const setReferenceImageUrl = useEditorStore((s) => s.setReferenceImageUrl);
@@ -401,6 +402,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                         img.src = referenceImageUrl;
                       });
                       await setSAMImage(img);
+                      setSamImageUrl(referenceImageUrl);
                     }
                     setSamStatus('ready');
                   } catch {
@@ -431,6 +433,19 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                       const y = (e.clientY - rect.top) / rect.height;
                       const store = useEditorStore.getState();
                       try {
+                        // SAM 编码的图不是当前图时，先重新编码
+                        if (referenceImageUrl !== samImageUrl) {
+                          const simg = new Image();
+                          if (!referenceImageUrl.startsWith('data:') && !referenceImageUrl.startsWith('blob:')) {
+                            simg.crossOrigin = 'anonymous';
+                          }
+                          await new Promise((res, rej) => {
+                            simg.onload = res; simg.onerror = rej;
+                            simg.src = referenceImageUrl;
+                          });
+                          await setSAMImage(simg);
+                          setSamImageUrl(referenceImageUrl);
+                        }
                         await store.samSegmentAtPoint(x, y);
                         const { currentMask, maskShape } = store.samState;
                         if (!currentMask || !maskShape || !referenceImageUrl) return;
