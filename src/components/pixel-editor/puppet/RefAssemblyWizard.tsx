@@ -466,11 +466,23 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                         ctx.drawImage(img, 0, 0);
                         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                         const [mh, mw] = maskShape;
+                        // SAM 预处理：最长边缩放到 1024，pad 成正方形。mask 对应 pad 后的图。
+                        // 逆映射：原图 -> 缩放 -> 加 pad -> mask 坐标
+                        const iw = img.naturalWidth, ih = img.naturalHeight;
+                        const scale = 1024 / Math.max(iw, ih);
+                        const sw = iw * scale, sh = ih * scale;
+                        const padX = (1024 - sw) / 2, padY = (1024 - sh) / 2;
                         for (let py = 0; py < canvas.height; py++) {
                           for (let px = 0; px < canvas.width; px++) {
-                            const mx = Math.floor((px / canvas.width) * mw);
-                            const my = Math.floor((py / canvas.height) * mh);
-                            if (!(currentMask[my * mw + mx] >= 0.5)) {
+                            // 原图坐标 -> SAM 输入坐标（1024 正方形）
+                            const sx = px * scale + padX;
+                            const sy = py * scale + padY;
+                            // SAM 输入 -> mask 坐标
+                            const mx = Math.floor((sx / 1024) * mw);
+                            const my = Math.floor((sy / 1024) * mh);
+                            const inMask = mx >= 0 && mx < mw && my >= 0 && my < mh;
+                            const maskVal = inMask ? currentMask[my * mw + mx] : 0;
+                            if (!(maskVal >= 0.5)) {
                               imgData.data[(py * canvas.width + px) * 4 + 3] = 0;
                             }
                           }
