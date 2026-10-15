@@ -13,7 +13,7 @@ import type { PixelGrid, PixelColor } from '@/lib/types';
 // 四步：底图 → 对位 → 抠图 → 确认
 // ============================================================
 
-type Step = 'upload' | 'align' | 'mask' | 'confirm';
+type Step = 'upload' | 'sam' | 'align' | 'mask' | 'cleanup' | 'confirm';
 
 // 模块级持久化：防组件卸载导致状态丢失
 let persistedStep: Step = 'upload';
@@ -23,10 +23,12 @@ export function resetRefWizardStep() {
   persistedSelectedCharacterId = null;
 }
 
-const STEPS: { id: Step; label: string }[] = [
+const STEPS: { id: Step; label: string; optional?: boolean }[] = [
   { id: 'upload', label: '底图' },
+  { id: 'sam', label: 'AI分割', optional: true },
   { id: 'align', label: '对位' },
   { id: 'mask', label: '抠图' },
+  { id: 'cleanup', label: 'AI清理', optional: true },
   { id: 'confirm', label: '确认' },
 ];
 
@@ -372,6 +374,28 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
           </div>
         )}
 
+        {step === 'sam' && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-400">
+              可选步骤：用 SAM 做智能分割。点一下肢体自动出 mask，比手画选区快。
+              分两层：先抠整个角色（去背景），再分肢体。
+            </p>
+            <div className="text-xs text-amber-400/80">
+              实验性：首次使用需下载模型（MobileSAM ~45MB），已缓存到 OPFS。
+            </div>
+            {/* TODO: SAM 交互 UI（点选分割）待接入 src/lib/sam.ts */}
+            <Button
+              variant="outline" className="w-full"
+              onClick={() => {
+                const idx = STEPS.findIndex((s) => s.id === 'sam');
+                if (idx >= 0 && idx < STEPS.length - 1) setStep(STEPS[idx + 1].id);
+              }}
+            >
+              跳过此步骤 <ArrowRight className="size-3.5 ml-1" />
+            </Button>
+          </div>
+        )}
+
         {step === 'align' && (
           <div className="space-y-3">
             <div>
@@ -632,6 +656,27 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             {!activeSkeleton && (
               <div className="text-xs text-amber-400">请先在木偶资产面板选择一个骨架</div>
             )}
+          </div>
+        )}
+
+        {step === 'cleanup' && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-400">
+              可选步骤：用 Inpainting 清理抠图结果。填小洞、修锯齿边缘、清背景残留。
+            </p>
+            <div className="text-xs text-gray-500">
+              纯算法（Telea），无模型，即点即用。
+            </div>
+            {/* TODO: Inpainting 清理 UI 待接入 src/lib/inpainting.ts */}
+            <Button
+              variant="outline" className="w-full"
+              onClick={() => {
+                const idx = STEPS.findIndex((s) => s.id === 'cleanup');
+                if (idx >= 0 && idx < STEPS.length - 1) setStep(STEPS[idx + 1].id);
+              }}
+            >
+              跳过此步骤 <ArrowRight className="size-3.5 ml-1" />
+            </Button>
           </div>
         )}
 
