@@ -149,12 +149,32 @@ export async function segmentAtPoint(
   bounds: { x: number; y: number; width: number; height: number };
   bitmap: ImageBitmap;
 }> {
+  return segmentWithPoints([{ x, y, label }], previousMask);
+}
+
+/**
+ * Segment with multiple labeled points.
+ * label 1 = foreground (keep), 0 = background (remove)
+ */
+export async function segmentWithPoints(
+  points: { x: number; y: number; label: 1 | 0 }[],
+  previousMask?: any
+): Promise<{
+  data: Float32Array;
+  shape: [number, number];
+  score: number;
+  bounds: { x: number; y: number; width: number; height: number };
+  bitmap: ImageBitmap;
+}> {
   if (!samClient || !samInitialized) throw new Error('SAM未初始化');
 
   // 修正 sam-web 的 pad bug：把原图坐标变换到编码正方形坐标
-  const mapped = mapPointToEncoded(x, y);
+  const mappedPoints = points.map((p) => {
+    const mapped = mapPointToEncoded(p.x, p.y);
+    return { x: mapped.x, y: mapped.y, label: p.label };
+  });
   const result = await samClient.segment({
-    points: [{ x: mapped.x, y: mapped.y, label }],
+    points: mappedPoints,
     previousMask,
   });
 

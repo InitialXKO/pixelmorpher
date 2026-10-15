@@ -114,6 +114,75 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     resetRefWizardStep();
     onClose();
   };
+
+  // SAM 多点分割：左键 label=1（保留），右键 label=0（抠除）
+  const handleSamClick = async (x: number, y: number, label: 1 | 0) => {
+    const store = useEditorStore.getState();
+    const newPoints = [...samPoints, { x, y, label }];
+    setSamPoints(newPoints);
+    try {
+      if (referenceImageUrl !== samImageUrl) {
+        const simg = new Image();
+        if (referenceImageUrl && !referenceImageUrl.startsWith('data:') && !referenceImageUrl.startsWith('blob:')) {
+          simg.crossOrigin = 'anonymous';
+        }
+        await new Promise((res, rej) => {
+          simg.onload = res; simg.onerror = rej;
+          simg.src = referenceImageUrl!;
+        });
+        await setSAMImage(simg);
+        setSamImageUrl(referenceImageUrl);
+      }
+      const { segmentWithPoints } = await import('@/lib/sam');
+      const result = await segmentWithPoints(newPoints);
+      const { data: currentMask, shape: maskShape } = result;
+      if (!referenceImageUrl) return;
+      const img = new Image();
+      if (!referenceImageUrl.startsWith('data:') && !referenceImageUrl.startsWith('blob:')) {
+        img.crossOrigin = 'anonymous';
+      }
+      await new Promise((res, rej) => {
+        img.onload = res; img.onerror = rej;
+        img.src = referenceImageUrl;
+      });
+      if (!img.naturalWidth || !img.naturalHeight) return;
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0);
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const [mh, mw] = maskShape;
+      const iw = img.naturalWidth, ih = img.naturalHeight;
+      const scale = 1024 / Math.max(iw, ih);
+      const sw = iw * scale, sh = ih * scale;
+      const padX = (1024 - sw) / 2, padY = (1024 - sh) / 2;
+      for (let py = 0; py < canvas.height; py++) {
+        for (let px = 0; px < canvas.width; px++) {
+          const sx = px * scale + padX;
+          const sy = py * scale + padY;
+          const mx = Math.floor((sx / 1024) * mw);
+          const my = Math.floor((sy / 1024) * mh);
+          const inMask = mx >= 0 && mx < mw && my >= 0 && my < mh;
+          const maskVal = inMask ? currentMask[my * mw + mx] : 0;
+          const idx = (py * canvas.width + px) * 4;
+          if (!(maskVal >= 0.5)) {
+            imgData.data[idx] = 255;
+            imgData.data[idx + 1] = 80;
+            imgData.data[idx + 2] = 80;
+            imgData.data[idx + 3] = Math.floor(imgData.data[idx + 3] * 0.5 + 128 * 0.5);
+          }
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+      setSamPreviewUrl(canvas.toDataURL('image/png'));
+      store.samState.currentMask = currentMask;
+      store.samState.maskShape = maskShape;
+    } catch (err) {
+      console.error('[SAM] 分割失败:', err);
+    }
+  };
+
   const [step, setStepState] = useState<Step>(persistedStep);
   const setStep = (s: Step) => {
     persistedStep = s;
@@ -133,6 +202,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const [samPreviewUrl, setSamPreviewUrl] = useState<string | null>(null);
   const [samProgress, setSamProgress] = useState(0);
   const [samImageUrl, setSamImageUrl] = useState<string | null>(null);
+  const [samPoints, setSamPoints] = useState<{ x: number; y: number; label: 1 | 0 }[]>([]);
 
   const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
   const setReferenceImageUrl = useEditorStore((s) => s.setReferenceImageUrl);
@@ -421,7 +491,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             )}
             {samStatus === 'ready' && (
               <div className="space-y-2">
-                <div className="text-xs text-green-400">SAM 就绪。点击图中角色预览抠图效果，满意后点"应用到主画布"。</div>
+                <div className="text-xs text-green-400">SAM 就绪。左键点选要保留的，右键点选要抠掉的，预览确认后应用。</div>
                 {referenceImageUrl && !samPreviewUrl && (
                   <img
                     src={referenceImageUrl}
@@ -431,81 +501,63 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                       const rect = (e.target as HTMLImageElement).getBoundingClientRect();
                       const x = (e.clientX - rect.left) / rect.width;
                       const y = (e.clientY - rect.top) / rect.height;
-                      const store = useEditorStore.getState();
-                      try {
-                        // SAM 编码的图不是当前图时，先重新编码
-                        if (referenceImageUrl !== samImageUrl) {
-                          const simg = new Image();
-                          if (!referenceImageUrl.startsWith('data:') && !referenceImageUrl.startsWith('blob:')) {
-                            simg.crossOrigin = 'anonymous';
-                          }
-                          await new Promise((res, rej) => {
-                            simg.onload = res; simg.onerror = rej;
-                            simg.src = referenceImageUrl;
-                          });
-                          await setSAMImage(simg);
-                          setSamImageUrl(referenceImageUrl);
-                        }
-                        await store.samSegmentAtPoint(x, y);
-                        const { currentMask, maskShape } = store.samState;
-                        if (!currentMask || !maskShape || !referenceImageUrl) return;
-                        // 生成预览（不直接应用）
-                        const img = new Image();
-                        if (!referenceImageUrl.startsWith('data:') && !referenceImageUrl.startsWith('blob:')) {
-                          img.crossOrigin = 'anonymous';
-                        }
-                        await new Promise((res, rej) => {
-                          img.onload = res; img.onerror = rej;
-                          img.src = referenceImageUrl;
-                        });
-                        if (!img.naturalWidth || !img.naturalHeight) return;
-                        const canvas = document.createElement('canvas');
-                        canvas.width = img.naturalWidth;
-                        canvas.height = img.naturalHeight;
-                        const ctx = canvas.getContext('2d')!;
-                        ctx.drawImage(img, 0, 0);
-                        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                        const [mh, mw] = maskShape;
-                        // SAM 预处理：最长边缩放到 1024，pad 成正方形。mask 对应 pad 后的图。
-                        // 逆映射：原图 -> 缩放 -> 加 pad -> mask 坐标
-                        const iw = img.naturalWidth, ih = img.naturalHeight;
-                        const scale = 1024 / Math.max(iw, ih);
-                        const sw = iw * scale, sh = ih * scale;
-                        const padX = (1024 - sw) / 2, padY = (1024 - sh) / 2;
-                        for (let py = 0; py < canvas.height; py++) {
-                          for (let px = 0; px < canvas.width; px++) {
-                            // 原图坐标 -> SAM 输入坐标（1024 正方形）
-                            const sx = px * scale + padX;
-                            const sy = py * scale + padY;
-                            // SAM 输入 -> mask 坐标
-                            const mx = Math.floor((sx / 1024) * mw);
-                            const my = Math.floor((sy / 1024) * mh);
-                            const inMask = mx >= 0 && mx < mw && my >= 0 && my < mh;
-                            const maskVal = inMask ? currentMask[my * mw + mx] : 0;
-                            if (!(maskVal >= 0.5)) {
-                              imgData.data[(py * canvas.width + px) * 4 + 3] = 0;
-                            }
-                          }
-                        }
-                        ctx.putImageData(imgData, 0, 0);
-                        setSamPreviewUrl(canvas.toDataURL('image/png'));
-                      } catch (err) {
-                        console.error('[SAM] 分割失败:', err);
-                      }
+                      await handleSamClick(x, y, 1);
+                    }}
+                    onContextMenu={async (e) => {
+                      e.preventDefault();
+                      const rect = (e.target as HTMLImageElement).getBoundingClientRect();
+                      const x = (e.clientX - rect.left) / rect.width;
+                      const y = (e.clientY - rect.top) / rect.height;
+                      await handleSamClick(x, y, 0);
                     }}
                   />
                 )}
                 {samPreviewUrl && (
                   <div className="space-y-2">
-                    <div className="text-xs text-gray-400">预览效果：</div>
+                    <div className="text-xs text-gray-400">预览效果（红色为将抠除）：</div>
                     <img src={samPreviewUrl} alt="抠图预览" className="w-full rounded border border-green-500/30" />
+                    <div className="text-xs text-gray-500">左键{ samPoints.filter(p => p.label === 1).length }点保留 · 右键{ samPoints.filter(p => p.label === 0).length }点抠除</div>
                     <div className="flex gap-2">
                       <Button
                         size="sm" className="flex-1"
-                        onClick={() => {
-                          useEditorStore.getState().setReferenceImageUrl(samPreviewUrl);
-                          useEditorStore.getState().clearSAMMask();
+                        onClick={async () => {
+                          // 用存的 mask 生成干净抠图（透明背景，无红色覆盖）
+                          const store = useEditorStore.getState();
+                          const { currentMask, maskShape } = store.samState;
+                          if (!currentMask || !maskShape || !referenceImageUrl) return;
+                          const img = new Image();
+                          if (!referenceImageUrl.startsWith('data:') && !referenceImageUrl.startsWith('blob:')) {
+                            img.crossOrigin = 'anonymous';
+                          }
+                          await new Promise((res, rej) => {
+                            img.onload = res; img.onerror = rej;
+                            img.src = referenceImageUrl;
+                          });
+                          const canvas = document.createElement('canvas');
+                          canvas.width = img.naturalWidth;
+                          canvas.height = img.naturalHeight;
+                          const ctx = canvas.getContext('2d')!;
+                          ctx.drawImage(img, 0, 0);
+                          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                          const [mh, mw] = maskShape;
+                          const iw = img.naturalWidth, ih = img.naturalHeight;
+                          const scale = 1024 / Math.max(iw, ih);
+                          const padX = (1024 - iw * scale) / 2, padY = (1024 - ih * scale) / 2;
+                          for (let py = 0; py < canvas.height; py++) {
+                            for (let px = 0; px < canvas.width; px++) {
+                              const mx = Math.floor(((px * scale + padX) / 1024) * mw);
+                              const my = Math.floor(((py * scale + padY) / 1024) * mh);
+                              const inMask = mx >= 0 && mx < mw && my >= 0 && my < mh;
+                              if (!(inMask && currentMask[my * mw + mx] >= 0.5)) {
+                                imgData.data[(py * canvas.width + px) * 4 + 3] = 0;
+                              }
+                            }
+                          }
+                          ctx.putImageData(imgData, 0, 0);
+                          store.setReferenceImageUrl(canvas.toDataURL('image/png'));
+                          store.clearSAMMask();
                           setSamPreviewUrl(null);
+                          setSamPoints([]);
                         }}
                       >
                         应用到主画布
@@ -514,6 +566,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                         size="sm" variant="ghost"
                         onClick={() => {
                           setSamPreviewUrl(null);
+                          setSamPoints([]);
                           useEditorStore.getState().clearSAMMask();
                         }}
                       >
