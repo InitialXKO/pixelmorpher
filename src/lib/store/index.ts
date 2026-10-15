@@ -6,7 +6,7 @@
 
 import { create } from 'zustand';
 import type { ProjectStore } from './types';
-import { createPartSlice } from './part-slice';
+import { createSpriteSlice } from './sprite-slice';
 import { createKeyframeSlice } from './keyframe-slice';
 import { createModifierSlice } from './modifier-slice';
 import { createAnimationSlice } from './animation-slice';
@@ -16,7 +16,6 @@ import { createSkeletonSlice } from './skeleton-slice';
 import { createProjectSlice } from './project-slice';
 import { createCorrectionSlice } from './correction-slice';
 import { createGlobalModifierSlice } from './global-modifier-slice';
-import { createPuppetSlice } from './puppet-slice';
 import { createCharacterSlice } from './character-slice';
 import { createDccPipelineSlice } from './dcc-pipeline-slice';
 import { createV15Slice } from './v15-slice';
@@ -30,7 +29,7 @@ export type { ProjectStore } from './types';
 export const useProjectStore = create<ProjectStore>()(
   (...a) => ({
     ...createProjectSlice(...a),
-    ...createPartSlice(...a),
+    ...createSpriteSlice(...a),
     ...createKeyframeSlice(...a),
     ...createModifierSlice(...a),
     ...createAnimationSlice(...a),
@@ -39,7 +38,6 @@ export const useProjectStore = create<ProjectStore>()(
     ...createSkeletonSlice(...a),
     ...createCorrectionSlice(...a),
     ...createGlobalModifierSlice(...a),
-    ...createPuppetSlice(...a),
     ...createCharacterSlice(...a),
     ...createDccPipelineSlice(...a),
     ...createV15Slice(...a),

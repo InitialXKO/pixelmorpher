@@ -8,7 +8,6 @@ import type {
   PuppetNode,
   PuppetDirection,
   CostumeSet,
-  Part,
 } from '../types';
 import type { Node as UnifiedNode, Sprite } from '../unified-types';
 import { PUPPET_DIRECTIONS, DIRECTION_MIRROR } from '../types';
@@ -191,8 +190,8 @@ export function resolvePuppetNodeSprite(
   node: PuppetNode,
   direction: PuppetDirection,
   activeCostumeSet: CostumeSet | null,
-  parts: Part[],
-): Part | null {
+  sprites: import('../unified-types').Sprite[],
+): import('../unified-types').Sprite | null {
   let partId: string | null = null;
 
   // Step 1: Check costume set override
@@ -218,7 +217,7 @@ export function resolvePuppetNodeSprite(
 
   if (!partId) return null;
 
-  return parts.find(p => p.id === partId) ?? null;
+  return sprites.find(p => p.id === partId) ?? null;
 }
 
 

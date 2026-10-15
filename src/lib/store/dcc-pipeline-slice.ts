@@ -243,14 +243,15 @@ export const createDccPipelineSlice: StateCreator<ProjectStore, [], [], DccPipel
       const tgtColor = targetPalette.colors[i]?.color;
       if (srcColor && tgtColor) colorMap.set(srcColor.toLowerCase(), tgtColor);
     }
-    const updatedParts = state.parts.map(part => {
-      const newPixels = part.pixels.map(row => row.map(px => {
+    const updatedSprites: Record<string, import('../unified-types').Sprite> = {};
+    for (const [id, sprite] of Object.entries(state.sprites)) {
+      const newPixels = sprite.data.map(row => row.map(px => {
         if (!px) return px;
         const mapped = colorMap.get(px.toLowerCase());
         return mapped !== undefined ? mapped : px;
       }));
-      return { ...part, pixels: newPixels };
-    });
-    set({ parts: updatedParts });
+      updatedSprites[id] = { ...sprite, data: newPixels };
+    }
+    set({ sprites: updatedSprites });
   },
 });

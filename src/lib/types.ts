@@ -493,36 +493,12 @@ export interface CanvasModifierTrack {
 // per-clip animation behavior — this allows a single Part to be used in multiple
 // animations with different animation behaviors.
 
-export interface Part {
-  id: string;
-  name: string;
-  width: number;
-  height: number;
-  pixels: PixelGrid;
-  pivotX: number;
-  pivotY: number;
-  locked: boolean;
-  thumbnail?: string; // base64 data URL
-  /** 高度图（bump_light 用）：与 pixels 同尺寸，值域 -1~1（负=凹陷）。undefined=无手绘高度 */
-  heightmap?: number[][];
-  // 木偶统一模型：Part 是纯精灵数据，不再承载动画状态。
-  // 位置/层级/可见性/修改器全部由 PuppetNode 驱动。
-}
-
 // ---- Part Keyframe ----
 
 /** A keyframe on the part's internal timeline, defining the modifier stack state at a specific frame.
  *  Uses step interpolation: the modifier stack from the most recent part keyframe (at or before
  *  the current frame) is used. If no part keyframe exists at the current frame, falls back to
  *  part.editModifiers as the base state. */
-export interface PartKeyframe {
-  id: string;
-  /** Frame index in the animation timeline */
-  frame: number;
-  /** Full modifier stack at this frame (pixel-level + translate modifiers) */
-  editModifiers: ModifierInstance[];
-}
-
 // ---- Keyframe ----
 
 export type InterpolationMode = 'linear' | 'bezier' | 'step';
@@ -850,10 +826,6 @@ export interface ClipPartData {
   animationModifiers: PartAnimationModifier[];
   /** Modifier groups for organizing animation modifiers within this clip. */
   modifierGroups: ModifierGroup[];
-  /** Part-level keyframes for per-frame modifier stack state within this clip.
-   *  Moved from Part.partKeyframes — allows different clips to have different
-   *  part-edit states at different frames. */
-  partKeyframes: PartKeyframe[];
 }
 
 export interface AnimationClip {
@@ -865,11 +837,9 @@ export interface AnimationClip {
   /** Total number of frames in this clip */
   totalFrames: number;
 
-  // ---- Per-clip timeline data（统一为木偶模型）----
-  // 旧部件关键帧（tracks/keyframes/clipPartData）已删除。
-  // 动画只走 puppetNodeKeyframes；Part 退化为纯精灵数据。
-  /** Per-node keyframes for puppet animation — 唯一的动画数据源 */
-  puppetNodeKeyframes: PuppetNodeKeyframe[];
+  // ---- Per-clip timeline data（统一为 Character/Node 模型）----
+  /** Per-node keyframes — 唯一的动画数据源（新模型） */
+  nodeKeyframes: import('./unified-types').NodeKeyframe[];
 
   // ---- Per-clip effects ----
   effectTracks: EffectTrack[];
@@ -1136,8 +1106,8 @@ export interface Project {
   description?: string;
 
   // ---- Asset Library ----
-  /** Shared pixel art parts — the fundamental visual unit */
-  parts: Part[];
+  /** Global sprite table — the single pixel asset store */
+  sprites: Record<string, import('./unified-types').Sprite>;
   /** Animation clips — independent animation resources */
   animationClips: AnimationClip[];
   /** The currently active animation clip being edited (null = no clip active) */
@@ -1180,10 +1150,10 @@ export interface Project {
   /** @deprecated Use activeAnimationClip.effectStrokes instead */
   effectStrokes: EffectStroke[];
 
-  // ---- Concrete Puppet (first-class project data) ----
-  puppetSkeletons: PuppetSkeleton[];
-  puppetCharacters: PuppetCharacter[];
-  selectedPuppetNodeId: string | null;
+  // ---- Unified Characters (new model, primary source since v3.1) ----
+  unifiedCharacters: Record<string, import('./unified-types').Character>;
+  selectedCharacterId: string | null;
+  selectedNodeId: string | null;
 
   // ---- DCC Pipeline: Palettes (first-class project data) ----
   palettes: Palette[];
@@ -1738,13 +1708,11 @@ export interface EditorState {
   samState: SAMState;
   inpaintRadius: number;
   // Part Edit Mode
-  partEditPartId: string | null;
-  partEditBackupPixels: PixelGrid | null;
+  spriteEditSpriteId: string | null;
+  spriteEditBackupPixels: PixelGrid | null;
   /** Backup of part.editModifiers from when entering part_edit mode (for cancel) */
   partEditBackupModifiers: ModifierInstance[];
   partEditModifiers: ModifierInstance[];
-  /** V4.1: Backup of part.partKeyframes from when entering part_edit mode (for cancel) */
-  partEditBackupPartKeyframes: PartKeyframe[];
   /** V4.1: The frame at which part_edit mode was entered (used to save as part keyframe) */
   partEditStartFrame?: number;
   // V5: Brush style

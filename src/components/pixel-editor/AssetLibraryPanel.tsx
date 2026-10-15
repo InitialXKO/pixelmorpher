@@ -18,8 +18,6 @@ import {
   Edit3,
   Check,
   X,
-  Lock,
-  Unlock,
   ChevronRight,
   Layers,
 } from 'lucide-react';
@@ -40,7 +38,8 @@ import {
 import { useAssetStore } from '@/lib/asset-store';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import type { LibraryAsset, LibraryAssetType } from '@/lib/asset-types';
-import PartPanel from '@/components/pixel-editor/PartPanel';
+import type { Sprite } from '@/lib/unified-types';
+import SpritePanel from '@/components/pixel-editor/PartPanel';
 
 const TYPE_ICONS: Record<LibraryAssetType, React.ReactNode> = {
   sprite: <Image className="size-3" />,
@@ -296,54 +295,43 @@ function AssetCard({
 }
 
 // ============================================================
-// Project Part Card with Context Menu
+// Project Sprite Card with Context Menu
 // ============================================================
 
-interface PartCardProps {
-  part: {
-    id: string;
-    name: string;
-    pixels: (string | null)[][];
-        locked: boolean;
-        width: number;
-    height: number;
-    pivotX: number;
-    pivotY: number;
-    [key: string]: unknown;
-  };
+interface SpriteCardProps {
+  sprite: Sprite;
   onSelect: () => void;
   onDelete: () => void;
   onRename: (newName: string) => void;
-  onToggleLock: () => void;
   onDuplicate: () => void;
   onSaveToLibrary: () => void;
   isSelected: boolean;
 }
 
-function PartCard({
-  part,
+function SpriteCard({
+  sprite,
   onSelect,
   onDelete,
   onRename,
-  onToggleLock,
   onDuplicate,
   onSaveToLibrary,
   isSelected,
-}: PartCardProps) {
+}: SpriteCardProps) {
   const [isRenaming, setIsRenaming] = useState(false);
-  const [renameValue, setRenameValue] = useState(part.name);
+  const [renameValue, setRenameValue] = useState(sprite.name ?? '');
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   const commitRename = useCallback(() => {
     const trimmed = renameValue.trim();
-    if (trimmed && trimmed !== part.name) {
+    if (trimmed && trimmed !== sprite.name) {
       onRename(trimmed);
     }
     setIsRenaming(false);
-  }, [renameValue, part.name, onRename]);
+  }, [renameValue, sprite.name, onRename]);
 
-  const w = part.pixels[0]?.length ?? 0;
-  const h = part.pixels.length;
+  const w = sprite.data[0]?.length ?? 0;
+  const h = sprite.data.length;
+  const displayName = sprite.name ?? '未命名精灵';
 
   return (
     <ContextMenu>
@@ -358,28 +346,16 @@ function PartCard({
         >
           {/* Mini pixel preview */}
           <div className="size-5 bg-zinc-900 rounded border border-zinc-800 overflow-hidden flex-shrink-0 flex items-center justify-center">
-            <span className="text-[8px] text-zinc-600">{part.name.charAt(0)}</span>
+            <span className="text-[8px] text-zinc-600">{displayName.charAt(0)}</span>
           </div>
-          <span className="text-[10px] text-zinc-300 truncate flex-1 min-w-0">{part.name}</span>
+          <span className="text-[10px] text-zinc-300 truncate flex-1 min-w-0">{displayName}</span>
           <span className="text-[9px] text-zinc-600">{w}×{h}</span>
-          {/* Quick visibility/lock toggles */}
-          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-            <Button
-              variant="ghost"
-              size="sm"
-              className={`h-4 w-4 p-0 ${part.locked ? 'text-amber-500' : 'text-zinc-700'}`}
-              onClick={(e) => { e.stopPropagation(); onToggleLock(); }}
-              title={part.locked ? '解锁' : '锁定'}
-            >
-              {part.locked ? <Lock className="size-2" /> : <Unlock className="size-2" />}
-            </Button>
-          </div>
         </div>
       </ContextMenuTrigger>
 
       <ContextMenuContent className="bg-zinc-900 border-zinc-700 min-w-[160px]">
         <ContextMenuLabel className="text-[10px] text-zinc-400 py-1.5">
-          {part.name}
+          {displayName}
         </ContextMenuLabel>
         <ContextMenuSeparator className="bg-zinc-800" />
 
@@ -393,7 +369,7 @@ function PartCard({
 
         <ContextMenuItem
           className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 py-1.5 cursor-pointer"
-          onClick={() => { setRenameValue(part.name); setIsRenaming(true); }}
+          onClick={() => { setRenameValue(displayName); setIsRenaming(true); }}
         >
           <Edit3 className="size-3 mr-1.5 text-zinc-400" />
           重命名
@@ -401,20 +377,10 @@ function PartCard({
 
         <ContextMenuItem
           className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 py-1.5 cursor-pointer"
-          onClick={onToggleLock}
-        >
-          {part.locked
-            ? <Unlock className="size-3 mr-1.5 text-zinc-400" />
-            : <Lock className="size-3 mr-1.5 text-zinc-400" />}
-          {part.locked ? '解锁部件' : '锁定部件'}
-        </ContextMenuItem>
-
-        <ContextMenuItem
-          className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 py-1.5 cursor-pointer"
           onClick={onDuplicate}
         >
           <Copy className="size-3 mr-1.5 text-zinc-400" />
-          复制部件
+          复制精灵
         </ContextMenuItem>
 
         <ContextMenuSeparator className="bg-zinc-800" />
@@ -425,7 +391,7 @@ function PartCard({
           onClick={onDelete}
         >
           <Trash2 className="size-3 mr-1.5" />
-          删除部件
+          删除精灵
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
@@ -453,12 +419,12 @@ export default function AssetLibraryPanel() {
     setSelectedAssetId,
   } = useAssetStore();
 
-  const { parts, keyframes, removePart, updatePart, addPart, setPartPixels } = useProjectStore();
+  const { sprites, keyframes, removeSprite, updateSprite, addSprite, setSpritePixels } = useProjectStore();
 
   const [searchText, setSearchText] = useState('');
 
-  // Selected part from editor store (lazy read to avoid re-render loop)
-  const [selectedPartId, setSelectedPartId] = useState<string | null>(null);
+  // Selected sprite from editor store (lazy read to avoid re-render loop)
+  const [selectedSpriteId, setSelectedSpriteId] = useState<string | null>(null);
   
   useEffect(() => {
     if (!libraryLoaded) loadLibrary();
@@ -506,57 +472,42 @@ export default function AssetLibraryPanel() {
     setFilter({ searchText: text || undefined });
   }, [setFilter]);
 
-  // ---- Project Part Actions ----
+  // ---- Project Sprite Actions ----
 
-  const handleSelectPart = useCallback((partId: string) => {
-    setSelectedPartId(partId);
+  const handleSelectSprite = useCallback((spriteId: string) => {
+    setSelectedSpriteId(spriteId);
     // Also select in editor store
     try {
       const { useEditorStore } = require('@/lib/store') as { useEditorStore: any };
-      useEditorStore.getState().selectPart(partId);
+      useEditorStore.getState().selectPart(spriteId);
     } catch {}
   }, []);
 
-  const handleDeletePart = useCallback((partId: string) => {
+  const handleDeleteSprite = useCallback((spriteId: string) => {
     const store = useProjectStore.getState();
-    store.pushUndo('删除部件');
-    store.removePart(partId);
+    store.pushUndo('删除精灵');
+    store.removeSprite(spriteId);
   }, []);
 
-  const handleRenamePart = useCallback((partId: string, newName: string) => {
+  const handleRenameSprite = useCallback((spriteId: string, newName: string) => {
     const store = useProjectStore.getState();
-    store.pushUndo('重命名部件');
-    store.updatePart(partId, { name: newName });
+    store.pushUndo('重命名精灵');
+    store.updateSprite(spriteId, { name: newName });
   }, []);
 
-  const handleTogglePartLock = useCallback((partId: string) => {
+  const handleDuplicateSprite = useCallback((spriteId: string) => {
     const store = useProjectStore.getState();
-    const part = store.parts.find((p) => p.id === partId);
-    if (part) {
-      store.updatePart(partId, { locked: !part.locked });
-    }
+    store.pushUndo('复制精灵');
+    store.duplicateSprite(spriteId);
   }, []);
 
-  const handleDuplicatePart = useCallback((partId: string) => {
+  const handleSaveSpriteToLibrary = useCallback(async (spriteId: string) => {
     const store = useProjectStore.getState();
-    const part = store.parts.find((p) => p.id === partId);
-    if (!part) return;
-    store.pushUndo('复制部件');
-    const newPart = store.addPart(`${part.name} 副本`, part.width, part.height);
-    store.setPartPixels(newPart.id, part.pixels.map((row) => [...row] as string[]));
-    store.updatePart(newPart.id, {
-      pivotX: part.pivotX,
-      pivotY: part.pivotY,
-          });
-  }, []);
+    const sprite = store.sprites[spriteId];
+    if (!sprite) return;
 
-  const handleSavePartToLibrary = useCallback(async (partId: string) => {
-    const store = useProjectStore.getState();
-    const part = store.parts.find((p) => p.id === partId);
-    if (!part) return;
-
-    const w = part.pixels[0]?.length ?? 16;
-    const h = part.pixels.length;
+    const w = sprite.data[0]?.length ?? 16;
+    const h = sprite.data.length;
 
     // Generate thumbnail
     const canvas = document.createElement('canvas');
@@ -570,7 +521,7 @@ export default function AssetLibraryPanel() {
       ctx.scale(scale, scale);
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
-          const c = part.pixels[y][x];
+          const c = sprite.data[y][x];
           if (c) {
             ctx.fillStyle = c;
             ctx.fillRect(x, y, 1, 1);
@@ -582,8 +533,8 @@ export default function AssetLibraryPanel() {
 
     const thumbnail = canvas.toDataURL();
     await useAssetStore.getState().saveSpriteToLibrary(
-      part.name,
-      part.pixels.map((row) => [...row] as string[]),
+      sprite.name ?? '未命名精灵',
+      sprite.data.map((row) => [...row] as string[]),
       w,
       h,
       thumbnail,
@@ -610,11 +561,11 @@ export default function AssetLibraryPanel() {
             资产库
           </TabsTrigger>
           <TabsTrigger
-            value="parts"
+            value="sprites"
             className="text-[9px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-0.5 h-5"
           >
             <Layers className="size-2.5 mr-0.5" />
-            部件
+            精灵
           </TabsTrigger>
           <TabsTrigger
             value="project"
@@ -632,9 +583,9 @@ export default function AssetLibraryPanel() {
           </TabsTrigger>
         </TabsList>
 
-        {/* ---- Layer 1.5: Part Panel ---- */}
-        <TabsContent value="parts" className="flex-1 min-h-0 m-0">
-          <PartPanel />
+        {/* ---- Layer 1.5: Sprite Panel ---- */}
+        <TabsContent value="sprites" className="flex-1 min-h-0 m-0">
+          <SpritePanel />
         </TabsContent>
 
         {/* ---- Layer 1: Asset Library ---- */}
@@ -698,7 +649,7 @@ export default function AssetLibraryPanel() {
 
             {/* Footer: Save current part to library */}
             <div className="px-2 py-1.5 border-t border-zinc-800/50">
-              <p className="text-[9px] text-zinc-600 mb-1">将当前部件保存到资产库</p>
+              <p className="text-[9px] text-zinc-600 mb-1">将当前精灵保存到资产库</p>
               <SaveToLibrarySection />
             </div>
           </div>
@@ -707,27 +658,26 @@ export default function AssetLibraryPanel() {
         {/* ---- Layer 2: Project Assets ---- */}
         <TabsContent value="project" className="flex-1 min-h-0 m-0">
           <div className="flex flex-col h-full overflow-auto py-1">
-            {/* Parts */}
+            {/* Sprites */}
             <div className="px-2 py-1">
               <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1 flex items-center gap-1">
                 <Image className="size-2.5" />
-                部件 ({parts.length})
+                精灵 ({Object.keys(sprites).length})
               </div>
-              {parts.length === 0 ? (
-                <p className="text-[9px] text-zinc-600 pl-3">暂无部件</p>
+              {Object.keys(sprites).length === 0 ? (
+                <p className="text-[9px] text-zinc-600 pl-3">暂无精灵</p>
               ) : (
                 <div className="space-y-0.5">
-                  {parts.map((part) => (
-                    <PartCard
-                      key={part.id}
-                      part={part as unknown as PartCardProps['part']}
-                      onSelect={() => handleSelectPart(part.id)}
-                      onDelete={() => handleDeletePart(part.id)}
-                      onRename={(newName) => handleRenamePart(part.id, newName)}
-                      onToggleLock={() => handleTogglePartLock(part.id)}
-                      onDuplicate={() => handleDuplicatePart(part.id)}
-                      onSaveToLibrary={() => handleSavePartToLibrary(part.id)}
-                      isSelected={selectedPartId === part.id}
+                  {Object.entries(sprites).map(([id, sprite]) => (
+                    <SpriteCard
+                      key={id}
+                      sprite={sprite}
+                      onSelect={() => handleSelectSprite(id)}
+                      onDelete={() => handleDeleteSprite(id)}
+                      onRename={(newName) => handleRenameSprite(id, newName)}
+                      onDuplicate={() => handleDuplicateSprite(id)}
+                      onSaveToLibrary={() => handleSaveSpriteToLibrary(id)}
+                      isSelected={selectedSpriteId === id}
                     />
                   ))}
                 </div>
@@ -756,7 +706,7 @@ export default function AssetLibraryPanel() {
 }
 
 // ============================================================
-// Sub-component: Save selected part to library
+// Sub-component: Save selected sprite to library
 // ============================================================
 
 function SaveToLibrarySection() {
@@ -765,18 +715,18 @@ function SaveToLibrarySection() {
   const handleSave = useCallback(async () => {
     const projectStore = useProjectStore.getState();
     const editorStore = require('@/lib/store').useEditorStore.getState();
-    const partId = editorStore.selectedPartId;
-    if (!partId) return;
+    const spriteId = editorStore.selectedPartId;
+    if (!spriteId) return;
 
-    const part = projectStore.parts.find((p) => p.id === partId);
-    if (!part) return;
+    const sprite = projectStore.sprites[spriteId];
+    if (!sprite) return;
 
-    const name = assetName.trim() || part.name;
+    const name = assetName.trim() || sprite.name || '未命名精灵';
 
-    // Generate thumbnail (render part to small canvas)
+    // Generate thumbnail (render sprite to small canvas)
     const canvas = document.createElement('canvas');
-    const w = part.pixels[0]?.length ?? 16;
-    const h = part.pixels.length;
+    const w = sprite.data[0]?.length ?? 16;
+    const h = sprite.data.length;
     canvas.width = Math.min(w, 64);
     canvas.height = Math.min(h, 64);
     const ctx = canvas.getContext('2d');
@@ -787,7 +737,7 @@ function SaveToLibrarySection() {
       ctx.scale(scale, scale);
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
-          const c = part.pixels[y][x];
+          const c = sprite.data[y][x];
           if (c) {
             ctx.fillStyle = c;
             ctx.fillRect(x, y, 1, 1);
@@ -801,7 +751,7 @@ function SaveToLibrarySection() {
 
     await useAssetStore.getState().saveSpriteToLibrary(
       name,
-      part.pixels.map((row) => [...row] as string[]),
+      sprite.data.map((row) => [...row] as string[]),
       w,
       h,
       thumbnail,

@@ -148,21 +148,23 @@ export function useCanvasInteraction(s: CanvasState) {
         const py = (e.clientY - rect.top - s.panY) / s.zoom;
         const hit = s.findPuppetNodeAtPixel(px, py);
         if (!hit) return;
-        const { node, skeleton, character } = hit;
-        const projectStore = useProjectStore.getState();
+        const { node, character } = hit;
         const activeCostume = character.activeCostumeSetId
           ? character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId) ?? null
           : null;
-        const dir = skeleton.currentDirection ?? 'S';
-        const resolvedPart = resolvePuppetNodeSprite(
-          node,
-          dir,
-          activeCostume,
-          projectStore.parts,
-        );
-        if (resolvedPart) {
-          useEditorStore.getState().selectPart(resolvedPart.id);
-          useEditorStore.getState().enterPartEditMode(resolvedPart.id);
+        const dir = (node.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+        // Resolve sprite ID from new model (for part edit mode)
+        let spriteId: string | null = null;
+        if (node.costumePiece && activeCostume) {
+          const piece = activeCostume.pieces[node.costumePiece.slotKey];
+          const ref = piece?.sprites[dir] ?? piece?.sprites[0];
+          if (ref && 'spriteId' in ref) spriteId = ref.spriteId;
+        }
+        if (spriteId) {
+          // Sprite IDs are "part_<partId>" for migrated sprites; extract for edit mode
+          const partId = spriteId.startsWith('part_') ? spriteId.slice(5) : spriteId;
+          useEditorStore.getState().selectPart(partId);
+          useEditorStore.getState().enterSpriteEditMode(partId);
         }
         return;
       }
@@ -201,16 +203,16 @@ export function useCanvasInteraction(s: CanvasState) {
           e.preventDefault();
           // 删除选区像素
           const state = useProjectStore.getState();
-          const part = state.parts.find((p) => p.id === s.editorStore.getState().selectedPartId);
-          if (part) {
-            const newPixels = part.pixels.map((row) => [...row]);
+          const sprite = state.sprites[s.editorStore.getState().selectedPartId ?? ''];
+          if (sprite) {
+            const newPixels = sprite.data.map((row) => [...row]);
             for (const key of s.selectionMaskRef.current) {
               const [x, y] = key.split(',').map(Number);
               if (newPixels[y] && newPixels[y][x] !== undefined) {
                 newPixels[y][x] = null;
               }
             }
-            state.setPartPixels(part.id, newPixels);
+            state.setSpritePixels(sprite.id!, newPixels);
             s.selectionMaskRef.current.clear();
             s.markDirty();
           }
@@ -225,7 +227,7 @@ export function useCanvasInteraction(s: CanvasState) {
 
       // Escape handler (general, runs after tool-specific handlers)
       if (e.code === 'Escape') {
-        if (s.editorStore.getState().editMode === 'part_edit') { s.editorStore.getState().exitPartEditMode(false); return; }
+        if (s.editorStore.getState().editMode === 'part_edit') { s.editorStore.getState().exitSpriteEditMode(false); return; }
         s.selectionMaskRef.current.clear(); s.lassoPathRef.current = [];
         const samSt = s.editorStore.getState().samState; if (samSt.currentMask) s.editorStore.getState().clearSAMMask();
       }

@@ -20,13 +20,13 @@
 // ============================================================
 
 import type {
-  Part, Keyframe, PuppetSkeleton, PuppetCharacter, PuppetNodeKeyframe,
-  AnimationClip, Skeleton, ProceduralAnimation,
+  Keyframe, PuppetSkeleton, PuppetCharacter, PuppetNodeKeyframe, AnimationClip, Skeleton, ProceduralAnimation,
   EffectTrack, MotionBlurStroke, EffectStroke,
   CanvasModifierTrack, GlobalModifier, AnimationVariable,
   PixelGrid, ModifierType,
 } from './types';
-import type { Character, RotationStrategy, AnimationVariable as UnifiedAnimationVariable } from './unified-types';
+import type { Character, RotationStrategy, AnimationVariable as UnifiedAnimationVariable, Sprite } from './unified-types';
+import { subToPx } from './unified-types';
 import { LiveAdapter } from './migration-adapter';
 import {
   generateRenderPlan,
@@ -75,7 +75,7 @@ export function renderUnified(
   ctx: CanvasRenderingContext2D,
   canvasWidth: number,
   canvasHeight: number,
-  parts: Part[],
+  _parts: import('./unified-types').Sprite[],
   keyframes: Keyframe[],
   currentFrame: number,
   backgroundColor: string,
@@ -95,6 +95,7 @@ export function renderUnified(
   animationClips: AnimationClip[],
   useUnifiedPipeline: boolean = true,
   globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
+  sprites?: Record<string, import('./unified-types').Sprite>,
 ): void {
   // ---- Compute puppet sprite part IDs (shared logic) ----
   // 注意：未被任何 Character 引用的 Part 不在主画布渲染（用户确认）。
@@ -115,7 +116,7 @@ export function renderUnified(
       unifiedCharacters,
       animationClips, currentFrame, frameRate,
       globalModifiers, animationVariables, canvasModifierTracks,
-      proceduralAnimations, globalBlueprint,
+      proceduralAnimations, globalBlueprint, sprites,
     );
   }
 
@@ -214,6 +215,7 @@ function renderPuppetViaUnifiedPipeline(
   canvasModifierTracks?: CanvasModifierTrack[],
   proceduralAnimations?: ProceduralAnimation[],
   globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
+  sprites?: Record<string, import('./unified-types').Sprite>,
 ): void {
   // Apply global modifier transform (camera/world transform)
   // This matches the old pipeline's behavior in renderPuppetFrame().
@@ -250,6 +252,7 @@ function renderPuppetViaUnifiedPipeline(
       undefined, // autoMotionBlur
       undefined, // autoMotionBlurIntensity
       proceduralAnimations,
+      sprites, // global sprite table
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }
@@ -304,7 +307,7 @@ export function computePuppetSpritePartIds(
 export function renderUnifiedToCanvas(
   canvasWidth: number,
   canvasHeight: number,
-  parts: Part[],
+  _parts: import('./unified-types').Sprite[],
   keyframes: Keyframe[],
   frame: number,
   backgroundColor: string,
@@ -323,6 +326,8 @@ export function renderUnifiedToCanvas(
   puppetCharacters?: PuppetCharacter[],
   puppetNodeKeyframes?: PuppetNodeKeyframe[],
   frameRate: number = 12,
+  unifiedCharacters?: Record<string, import('./unified-types').Character>,
+  sprites?: Record<string, import('./unified-types').Sprite>,
 ): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = canvasWidth;
@@ -351,7 +356,7 @@ export function renderUnifiedToCanvas(
       const unifiedCharacter = liveAdapter.getCharacter(
         skeleton,
         [character],
-        parts,
+        _parts,
         charKeyframes,
         character.costumeSets ?? [],
       );
@@ -375,6 +380,15 @@ export function renderUnifiedToCanvas(
         'pixel-perfect',
         frameRate,
         unifiedVars,
+        undefined, // backgroundColor
+        undefined, // previewQuality
+        undefined, // effectTracks
+        undefined, // motionBlurStrokes
+        undefined, // effectStrokes
+        undefined, // autoMotionBlur
+        undefined, // autoMotionBlurIntensity
+        undefined, // proceduralAnimations
+        sprites, // global sprite table
       );
       executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
     }
@@ -382,6 +396,16 @@ export function renderUnifiedToCanvas(
 
   if (hasGlobalTransform) {
     ctx.restore();
+  }
+
+  // Render unifiedCharacters directly (new model, no LiveAdapter)
+  if (unifiedCharacters && Object.keys(unifiedCharacters).length > 0) {
+    renderPuppetViaUnifiedPipeline(
+      ctx, canvasWidth, canvasHeight,
+      unifiedCharacters, [], frame, frameRate,
+      globalModifiers, animationVariables, canvasModifierTracks,
+      undefined, undefined, sprites,
+    );
   }
 
   // Apply canvas modifier post-processing
@@ -402,19 +426,20 @@ export function renderCharacterOnionFrameUnified(
   canvasHeight: number,
   skeleton: PuppetSkeleton,
   character: PuppetCharacter,
-  parts: Part[],
+  _parts: import('./unified-types').Sprite[],
   nodeKeyframes: PuppetNodeKeyframe[],
   frame: number,
   frameRate: number,
   globalModifiers?: GlobalModifier[],
   animationVariables?: AnimationVariable[],
+  sprites?: Record<string, import('./unified-types').Sprite>,
 ): void {
   // Use LiveAdapter to convert to unified Character
   liveAdapter.invalidate();
   const unifiedCharacter = liveAdapter.getCharacter(
     skeleton,
     [character],
-    parts,
+    _parts,
     nodeKeyframes,
     character.costumeSets ?? [],
   );
@@ -438,8 +463,140 @@ export function renderCharacterOnionFrameUnified(
     'pixel-perfect',
     frameRate,
     unifiedVars as any,
+    undefined, // backgroundColor
+    undefined, // previewQuality
+    undefined, // effectTracks
+    undefined, // motionBlurStrokes
+    undefined, // effectStrokes
+    undefined, // autoMotionBlur
+    undefined, // autoMotionBlurIntensity
+    undefined, // proceduralAnimations
+    sprites, // global sprite table
   );
   executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
+}
+
+/**
+ * Render a single unified Character at a specific frame for onion skin.
+ * New model: accepts a pre-converted Character directly (no LiveAdapter needed).
+ */
+export function renderCharacterOnionFrameFromCharacter(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  character: Character,
+  nodeKeyframes: import('./unified-types').UnifiedKeyframe[],
+  frame: number,
+  frameRate: number,
+  globalModifiers?: GlobalModifier[],
+  animationVariables?: AnimationVariable[],
+  sprites?: Record<string, import('./unified-types').Sprite>,
+): void {
+  // Convert UnifiedKeyframe format if needed (currently using old format via adapter)
+  // For now, the Character from syncPuppetToUnified already has tracks populated
+  const unifiedVars = animationVariables?.map(v => ({
+    id: v.id,
+    name: v.name,
+    value: v.defaultValue ?? 0,
+    min: 0,
+    max: 100,
+    writerDriverId: v.writerDriverId,
+    defaultValue: v.defaultValue ?? 0,
+  }));
+
+  const plan = generateRenderPlan(
+    character,
+    frame,
+    canvasWidth,
+    canvasHeight,
+    'pixel-perfect',
+    frameRate,
+    unifiedVars as any,
+    undefined, // backgroundColor
+    undefined, // previewQuality
+    undefined, // effectTracks
+    undefined, // motionBlurStrokes
+    undefined, // effectStrokes
+    undefined, // autoMotionBlur
+    undefined, // autoMotionBlurIntensity
+    undefined, // proceduralAnimations
+    sprites, // global sprite table
+  );
+  executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
+}
+
+/**
+ * Render multiple unified Characters to a canvas (for export).
+ * New model: accepts Character[] directly.
+ */
+export function renderUnifiedCharactersToCanvas(
+  canvasWidth: number,
+  canvasHeight: number,
+  characters: Character[],
+  frame: number,
+  backgroundColor: string,
+  frameRate: number = 12,
+  globalModifiers?: GlobalModifier[],
+  animationVariables?: AnimationVariable[],
+  canvasModifierTracks?: CanvasModifierTrack[],
+  sprites?: Record<string, import('./unified-types').Sprite>,
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+  const ctx = canvas.getContext('2d')!;
+
+  // Background
+  if (backgroundColor && backgroundColor !== 'rgba(0,0,0,0)') {
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
+
+  const hasGlobalTransform = applyGlobalTransformWrapper(
+    ctx, canvasWidth, canvasHeight, globalModifiers, frame, frameRate, undefined,
+  );
+
+  for (const character of characters) {
+    const unifiedVars: UnifiedAnimationVariable[] | undefined = animationVariables?.map(v => ({
+      id: v.id,
+      name: v.name,
+      value: v.defaultValue ?? 0,
+      min: 0,
+      max: 100,
+      writerDriverId: v.writerDriverId,
+      defaultValue: v.defaultValue ?? 0,
+    }));
+    const plan = generateRenderPlan(
+      character,
+      frame,
+      canvasWidth,
+      canvasHeight,
+      'pixel-perfect',
+      frameRate,
+      unifiedVars,
+      undefined, // backgroundColor
+      undefined, // previewQuality
+      undefined, // effectTracks
+      undefined, // motionBlurStrokes
+      undefined, // effectStrokes
+      undefined, // autoMotionBlur
+      undefined, // autoMotionBlurIntensity
+      undefined, // proceduralAnimations
+      sprites, // global sprite table
+    );
+    executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
+  }
+
+  if (hasGlobalTransform) {
+    ctx.restore();
+  }
+
+  // Apply canvas modifier post-processing
+  if (canvasModifierTracks && canvasModifierTracks.length > 0) {
+    applyCanvasModifiers(ctx, canvasModifierTracks, frame, canvasWidth, canvasHeight);
+  }
+
+  return canvas;
 }
 
 // ---- Part Edit Mode (moved from unified-render.ts) ----
@@ -447,23 +604,24 @@ export function renderCharacterOnionFrameUnified(
 // Lives in the bridge layer (not the new-pipeline core) by design.
 
 /**
- * Render a single Part centered on canvas for sprite editing.
+ * Render a single Sprite centered on canvas for sprite editing.
  * Migrated from old `renderPartEditMode` in render-pipeline.ts.
  * Applies pixel modifiers via the blueprint pixel pipeline, then draws.
  */
-export function renderPartEditUnified(
+export function renderSpriteEditUnified(
   ctx: CanvasRenderingContext2D,
-  part: Part,
+  sprite: Sprite,
   partEditModifiers: any[],
   canvasWidth: number,
   canvasHeight: number,
   currentFrame: number = 0,
+  sprites?: Record<string, import('./unified-types').Sprite>,
 ): void {
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
   // Center the part on the canvas
-  const centerX = Math.floor((canvasWidth - part.width) / 2);
-  const centerY = Math.floor((canvasHeight - part.height) / 2);
+  const centerX = Math.floor((canvasWidth - sprite.width) / 2);
+  const centerY = Math.floor((canvasHeight - sprite.height) / 2);
 
   // Resolve paramKeyframes and paramDrivers before applying pixel modifiers
   const resolvedMods = (partEditModifiers.some(m =>
@@ -484,12 +642,12 @@ export function renderPartEditUnified(
   let modOffsetX = 0;
   let modOffsetY = 0;
   if (activePixelMods.length > 0) {
-    const modResult = applyPixelModifiers(part.pixels, activePixelMods, currentFrame);
+    const modResult = applyPixelModifiers(sprite.data, activePixelMods, currentFrame);
     pixels = modResult.pixels;
     modOffsetX = modResult.offsetX;
     modOffsetY = modResult.offsetY;
   } else {
-    pixels = part.pixels;
+    pixels = sprite.data;
   }
 
   // Apply pixel shift from translate modifiers
@@ -518,13 +676,13 @@ export function renderPartEditUnified(
   // Draw part boundary indicator
   ctx.strokeStyle = 'rgba(100, 200, 255, 0.3)';
   ctx.lineWidth = 1;
-  ctx.strokeRect(centerX - 0.5, centerY - 0.5, part.width + 1, part.height + 1);
+  ctx.strokeRect(centerX - 0.5, centerY - 0.5, sprite.width + 1, sprite.height + 1);
 
   // Draw pivot cross
   ctx.strokeStyle = 'rgba(255, 200, 50, 0.5)';
   ctx.lineWidth = 1;
-  const pivotScreenX = centerX + part.pivotX;
-  const pivotScreenY = centerY + part.pivotY;
+  const pivotScreenX = centerX + (sprite.plug ? subToPx(sprite.plug.x) : sprite.width / 2);
+  const pivotScreenY = centerY + (sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2);
   ctx.beginPath();
   ctx.moveTo(pivotScreenX - 4, pivotScreenY);
   ctx.lineTo(pivotScreenX + 4, pivotScreenY);

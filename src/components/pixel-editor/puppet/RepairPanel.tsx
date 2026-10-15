@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { X } from 'lucide-react';
 import { useProjectStore } from '@/lib/store';
 import { REPAIR_PATTERNS, patternDirectional } from '@/lib/repair-patterns';
-import type { Part } from '@/lib/types';
+import type { Sprite } from '@/lib/unified-types';
 import type { PixelGrid } from '@/lib/types';
 
 // ============================================================
@@ -13,24 +13,24 @@ import type { PixelGrid } from '@/lib/types';
 // ============================================================
 
 interface Props {
-  part: Part;
+  sprite: Sprite;
   onClose: () => void;
 }
 
-export default function RepairPanel({ part, onClose }: Props) {
+export default function RepairPanel({ sprite, onClose }: Props) {
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [dirX, setDirX] = useState(0);
   const [dirY, setDirY] = useState(0);
-  const setPartPixels = useProjectStore((s) => s.setPartPixels);
+  const setSpritePixels = useProjectStore((s) => s.setSpritePixels);
 
   // 获取最新 Part 数据（应用后刷新）
-  const livePart = useProjectStore((s) => s.parts.find((p) => p.id === part.id)) ?? part;
+  const liveSprite = useProjectStore((s) => s.sprites[sprite.id!]) ?? sprite;
 
   const handleApply = (patternId: string) => {
     const pattern = REPAIR_PATTERNS.find((p) => p.id === patternId);
     if (!pattern || !pattern.fn) return;
-    const newPixels = pattern.fn(livePart.pixels);
-    setPartPixels(part.id, newPixels);
+    const newPixels = pattern.fn(liveSprite.data);
+    setSpritePixels(sprite.id!, newPixels);
     setPreviewId(null);
   };
 
@@ -38,7 +38,7 @@ export default function RepairPanel({ part, onClose }: Props) {
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60">
       <div className="bg-[#1a1a2e] border border-white/10 rounded-lg p-4 w-[360px]">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-gray-200">修补：{part.name}</h3>
+          <h3 className="text-sm font-semibold text-gray-200">修补：{sprite.name}</h3>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300">
             <X className="size-4" />
           </button>
@@ -85,8 +85,8 @@ export default function RepairPanel({ part, onClose }: Props) {
               className="w-full mt-2 text-[11px] h-7"
               disabled={dirX === 0 && dirY === 0}
               onClick={() => {
-                const newPixels = patternDirectional(livePart.pixels, dirX, dirY);
-                setPartPixels(part.id, newPixels);
+                const newPixels = patternDirectional(liveSprite.data, dirX, dirY);
+                setSpritePixels(sprite.id!, newPixels);
               }}
             >
               应用方向延伸
@@ -95,7 +95,7 @@ export default function RepairPanel({ part, onClose }: Props) {
           {/* 仿制图章 */}
           <div className="col-span-2 p-2 rounded bg-white/5 border border-white/10">
             <div className="text-[11px] text-gray-400 mb-1">仿制图章：Alt+点设源点，拖动涂抹</div>
-            <CloneStampCanvas part={livePart} onApply={(pixels) => setPartPixels(part.id, pixels)} />
+            <CloneStampCanvas sprite={liveSprite} onApply={(pixels) => setSpritePixels(sprite.id!, pixels)} />
           </div>
         </div>
         <div className="mt-3">
@@ -109,14 +109,14 @@ export default function RepairPanel({ part, onClose }: Props) {
 }
 
 // 仿制图章：Alt+点击设源点，拖动从源点复制
-function CloneStampCanvas({ part, onApply }: { part: Part; onApply: (p: PixelGrid) => void }) {
+function CloneStampCanvas({ sprite, onApply }: { sprite: Sprite; onApply: (p: PixelGrid) => void }) {
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const [src, setSrc] = React.useState<{ x: number; y: number } | null>(null);
   const isDown = React.useRef(false);
 
-  const pixels = part.pixels;
-  const w = part.width;
-  const h = part.height;
+  const pixels = sprite.data;
+  const w = sprite.width;
+  const h = sprite.height;
 
   // 绘制 Part 预览
   React.useEffect(() => {

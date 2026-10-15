@@ -4,41 +4,46 @@ import React, { useRef, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useProjectStore } from '@/lib/store';
-import type { Part } from '@/lib/types';
+import type { Sprite } from '@/lib/unified-types';
 import RepairPanel from './RepairPanel';
 
 // ============================================================
-// PivotEditor - 轴心编辑器：拖动 + 坐标输入
+// PivotEditor - 轴心编辑器：拖动 + 坐标输入（直接编辑全局 Sprite）
 // ============================================================
 
 interface Props {
-  part: Part;
+  sprite: Sprite;
   onClose: () => void;
 }
 
-export default function PivotEditor({ part, onClose }: Props) {
+// sub-pixel (1/16px) ↔ px
+const subToPx = (v: number) => v * 16;
+const pxToSub = (v: number) => v / 16;
+
+export default function PivotEditor({ sprite, onClose }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [pivotX, setPivotX] = useState(part.pivotX);
-  const [pivotY, setPivotY] = useState(part.pivotY);
+  const initialPlugX = sprite.plug ? Math.round(subToPx(sprite.plug.x)) : Math.floor(sprite.width / 2);
+  const initialPlugY = sprite.plug ? Math.round(subToPx(sprite.plug.y)) : Math.floor(sprite.height / 2);
+  const [pivotX, setPivotX] = useState(initialPlugX);
+  const [pivotY, setPivotY] = useState(initialPlugY);
   const [showRepair, setShowRepair] = useState(false);
   const isDragging = useRef(false);
 
-  const updatePart = useProjectStore((s) => s.updatePart);
+  const updateSprite = useProjectStore((s) => s.updateSprite);
 
-  // 绘制 Part + 轴心十字线
+  // 绘制 Sprite + 轴心十字线
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const scale = Math.min(200 / part.width, 200 / part.height, 8);
-    canvas.width = part.width * scale;
-    canvas.height = part.height * scale;
+    const scale = Math.min(200 / sprite.width, 200 / sprite.height, 8);
+    canvas.width = sprite.width * scale;
+    canvas.height = sprite.height * scale;
     const ctx = canvas.getContext('2d')!;
-    ctx.imageSmoothingEnabled = false;
 
     // 绘制像素
-    for (let y = 0; y < part.height; y++) {
-      for (let x = 0; x < part.width; x++) {
-        const color = part.pixels[y]?.[x];
+    for (let y = 0; y < sprite.height; y++) {
+      for (let x = 0; x < sprite.width; x++) {
+        const color = sprite.data[y]?.[x];
         if (color) {
           ctx.fillStyle = color;
           ctx.fillRect(x * scale, y * scale, scale, scale);
@@ -47,47 +52,33 @@ export default function PivotEditor({ part, onClose }: Props) {
     }
 
     // 绘制轴心十字线
-    const px = pivotX * scale;
-    const py = pivotY * scale;
     ctx.strokeStyle = '#ff0000';
     ctx.lineWidth = 1;
+    const px = pivotX * scale;
+    const py = pivotY * scale;
     ctx.beginPath();
-    ctx.moveTo(px - 10, py);
-    ctx.lineTo(px + 10, py);
-    ctx.moveTo(px, py - 10);
-    ctx.lineTo(px, py + 10);
+    ctx.moveTo(px - 8, py);
+    ctx.lineTo(px + 8, py);
+    ctx.moveTo(px, py - 8);
+    ctx.lineTo(px, py + 8);
     ctx.stroke();
-    // 中心圆
-    ctx.fillStyle = '#ff0000';
-    ctx.beginPath();
-    ctx.arc(px, py, 3, 0, Math.PI * 2);
-    ctx.fill();
-  }, [part, pivotX, pivotY]);
-
-  const getPivotFromEvent = (e: React.MouseEvent) => {
-    const canvas = canvasRef.current!;
-    const rect = canvas.getBoundingClientRect();
-    const scale = canvas.width / part.width;
-    const x = Math.round((e.clientX - rect.left) / scale);
-    const y = Math.round((e.clientY - rect.top) / scale);
-    return {
-      x: Math.max(0, Math.min(part.width - 1, x)),
-      y: Math.max(0, Math.min(part.height - 1, y)),
-    };
-  };
+  });
 
   const handleDown = (e: React.MouseEvent) => {
     isDragging.current = true;
-    const { x, y } = getPivotFromEvent(e);
-    setPivotX(x);
-    setPivotY(y);
+    handleMove(e);
   };
 
   const handleMove = (e: React.MouseEvent) => {
     if (!isDragging.current) return;
-    const { x, y } = getPivotFromEvent(e);
-    setPivotX(x);
-    setPivotY(y);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scale = canvas.width / sprite.width;
+    const x = Math.round((e.clientX - rect.left) / scale);
+    const y = Math.round((e.clientY - rect.top) / scale);
+    setPivotX(Math.max(0, Math.min(sprite.width - 1, x)));
+    setPivotY(Math.max(0, Math.min(sprite.height - 1, y)));
   };
 
   const handleUp = () => {
@@ -95,59 +86,60 @@ export default function PivotEditor({ part, onClose }: Props) {
   };
 
   const handleConfirm = () => {
-    updatePart(part.id, { pivotX, pivotY });
+    updateSprite(sprite.id!, { plug: { x: pxToSub(pivotX), y: pxToSub(pivotY) } });
     onClose();
   };
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60">
       <div className="bg-[#1a1a2e] border border-white/10 rounded-lg p-4 w-[320px]">
-        <h3 className="text-sm font-semibold text-gray-200 mb-3">调整轴心：{part.name}</h3>
-        <div className="flex justify-center mb-3">
-          <canvas
-            ref={canvasRef}
-            className="border border-white/10 cursor-crosshair"
-            style={{ imageRendering: 'pixelated' }}
-            onMouseDown={handleDown}
-            onMouseMove={handleMove}
-            onMouseUp={handleUp}
-            onMouseLeave={handleUp}
-          />
-        </div>
-        <div className="flex gap-2 mb-3">
-          <label className="flex-1 text-xs text-gray-400">
-            X
+        <h3 className="text-sm font-semibold text-gray-200 mb-3">调整轴心：{sprite.name}</h3>
+        <canvas
+          ref={canvasRef}
+          className="w-full border border-white/10 rounded cursor-crosshair"
+          style={{ imageRendering: 'pixelated' }}
+          onMouseDown={handleDown}
+          onMouseMove={handleMove}
+          onMouseUp={handleUp}
+          onMouseLeave={handleUp}
+        />
+        <div className="flex gap-2 mt-3">
+          <div className="flex-1">
+            <label className="text-[10px] text-gray-400">X</label>
             <Input
               type="number"
               value={pivotX}
-              onChange={(e) => setPivotX(Math.max(0, Math.min(part.width - 1, Number(e.target.value))))}
-              className="h-7 text-xs mt-1"
+              onChange={(e) => setPivotX(Math.max(0, Math.min(sprite.width - 1, Number(e.target.value))))}
+              className="h-7 text-xs"
             />
-          </label>
-          <label className="flex-1 text-xs text-gray-400">
-            Y
+          </div>
+          <div className="flex-1">
+            <label className="text-[10px] text-gray-400">Y</label>
             <Input
               type="number"
               value={pivotY}
-              onChange={(e) => setPivotY(Math.max(0, Math.min(part.height - 1, Number(e.target.value))))}
-              className="h-7 text-xs mt-1"
+              onChange={(e) => setPivotY(Math.max(0, Math.min(sprite.height - 1, Number(e.target.value))))}
+              className="h-7 text-xs"
             />
-          </label>
+          </div>
         </div>
-        <p className="text-[10px] text-gray-500 mb-3">拖动红色十字线或直接输入坐标</p>
-        <div className="flex gap-2 mb-2">
-          <Button size="sm" variant="outline" className="flex-1" onClick={() => setShowRepair(true)}>
-            修补空洞
+        <div className="flex gap-2 mt-3">
+          <Button size="sm" onClick={() => setShowRepair(true)} variant="outline" className="flex-1 h-7 text-xs">
+            修复像素
           </Button>
         </div>
-        <div className="flex gap-2">
-          <Button size="sm" className="flex-1" onClick={handleConfirm}>确认</Button>
-          <Button size="sm" variant="ghost" className="flex-1" onClick={onClose}>取消</Button>
+        <div className="flex gap-2 mt-2">
+          <Button size="sm" onClick={handleConfirm} className="flex-1 h-7 text-xs">
+            确认
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onClose} className="flex-1 h-7 text-xs">
+            取消
+          </Button>
         </div>
+        {showRepair && (
+          <RepairPanel sprite={sprite} onClose={() => setShowRepair(false)} />
+        )}
       </div>
-      {showRepair && (
-        <RepairPanel part={part} onClose={() => setShowRepair(false)} />
-      )}
     </div>
   );
 }

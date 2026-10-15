@@ -27,7 +27,7 @@ import {
 
 // Import old types for conversion
 import type {
-  Part, PuppetNode, PuppetSkeleton, PuppetCharacter, PuppetSocket,
+  PuppetNode, PuppetSkeleton, PuppetCharacter, PuppetSocket,
   PuppetNodeKeyframe, Keyframe as OldKeyframe, AnimationClip as OldAnimationClip,
   CostumeSet as OldCostumeSet, PuppetPlug,
   GlobalModifier as OldGlobalModifier,
@@ -44,20 +44,17 @@ import type {
  * The Part becomes a flat visual node with fixed attachment.
  * Its modifier stack, keyframes, and pixel data are preserved.
  */
-function partToNode(part: Part, migrationMap?: MigrationMap): Node {
-  const node = createDefaultNode(part.id, part.name || part.id);
+function partToNode(sprite: import('./unified-types').Sprite, migrationMap?: MigrationMap): Node {
+  const node = createDefaultNode(sprite.id!, sprite.name || sprite.id!);
 
   // Sprite from pixels
-  if (part.pixels && part.pixels.length > 0 && (part.pixels[0]?.length ?? 0) > 0) {
+  if (sprite.data && sprite.data.length > 0 && (sprite.data[0]?.length ?? 0) > 0) {
     node.sprite = {
-      width: part.pixels[0].length,
-      height: part.pixels.length,
-      data: part.pixels,
-      // Preserve Part's pivot semantics: Part.pivotX/Y is the anchor point
-      // relative to the sprite's top-left corner. Default is (0,0) = top-left.
-      // This is critical for correct sprite positioning in the unified pipeline
-      // where worldX/Y = where the plug (pivot) should land on canvas.
-      plug: { x: pxToSub(part.pivotX ?? 0), y: pxToSub(part.pivotY ?? 0) },
+      width: sprite.data[0].length,
+      height: sprite.data.length,
+      data: sprite.data,
+      // Preserve plug semantics
+      plug: sprite.plug ?? { x: 0, y: 0 },
     };
   }
 
@@ -104,7 +101,7 @@ function partToNode(part: Part, migrationMap?: MigrationMap): Node {
  */
 function puppetNodeToNode(
   pNode: PuppetNode,
-  parts: Part[],
+  parts: any[],
   skeleton: PuppetSkeleton,
   migrationMap?: MigrationMap,
 ): Node {
@@ -162,6 +159,9 @@ function puppetNodeToNode(
   // PuppetNode.modifiers 是 PartAnimationModifier[]，需要转成 ModifierInstance[]
   node.modifiers = (pNode.modifiers ?? []).map(convertOldModifier);
 
+  // Copy blueprint (node-level render IR)
+  node.blueprint = pNode.blueprint ?? null;
+
   // Direction sprites → CostumePiece reference
   if (pNode.directionSprites && Object.keys(pNode.directionSprites).length > 0) {
     node.costumePiece = convertDirectionSprites(pNode, parts);
@@ -216,7 +216,7 @@ function puppetNodeToNode(
 function puppetToCharacter(
   skeleton: PuppetSkeleton,
   characters: PuppetCharacter[],
-  parts: Part[],
+  parts: any[],
   nodeKeyframes: PuppetNodeKeyframe[],
   oldCostumeSets: OldCostumeSet[],
   migrationMap?: MigrationMap,
@@ -283,10 +283,10 @@ function puppetToCharacter(
     }
   }
 
-  // Convert costume sets
+  // Convert costume sets (populates result.sprites table with SpriteRefs)
   if (character) {
     result.costumeSets = (character.costumeSets ?? []).map(cs =>
-      convertOldCostumeSet(cs, skeleton, parts)
+      convertOldCostumeSet(cs, skeleton, parts, result.sprites ?? {})
     );
     result.activeCostumeSetId = character.activeCostumeSetId ?? undefined;
 
@@ -533,7 +533,7 @@ function convertPuppetSocket(socket: PuppetSocket): Socket {
 
 function convertDirectionSprites(
   pNode: PuppetNode,
-  parts: Part[],
+  parts: any[],
 ): CostumePiece {
   const piece = createDefaultCostumePiece(pNode.id, pNode.color ?? '#808080');
 
@@ -592,11 +592,13 @@ function convertDirectionSprites(
 function convertOldCostumeSet(
   oldCS: OldCostumeSet,
   skeleton: PuppetSkeleton,
-  parts: Part[],
+  parts: any[],
+  sprites: Record<string, import('./unified-types').Sprite>,
 ): CostumeSet {
   const newCS = createDefaultCostumeSet(oldCS.id, oldCS.name);
 
   // Old costumeSet.spriteMap: Record<"nodeId:direction", partId>
+  // New: populate sprites table, reference by ID (deduplicated)
   if (oldCS.spriteMap) {
     for (const [key, partId] of Object.entries(oldCS.spriteMap)) {
       if (!partId) continue;
@@ -608,14 +610,20 @@ function convertOldCostumeSet(
         newCS.pieces[nodeId] = createDefaultCostumePiece(nodeId);
       }
 
-      // sprite.plug = part.pivotX/Y (rotation anchor)
       if (part?.pixels && part.pixels.length > 0 && (part.pixels[0]?.length ?? 0) > 0) {
-        newCS.pieces[nodeId].sprites[dirIndex] = {
-          width: part.pixels[0].length,
-          height: part.pixels.length,
-          data: part.pixels,
-          plug: { x: pxToSub(part.pivotX ?? 0), y: pxToSub(part.pivotY ?? 0) },
-        };
+        // Deduplicate: reuse existing sprite if same part already converted
+        let spriteId = Object.keys(sprites).find(id => id === `part_${part.id}`);
+        if (!spriteId) {
+          spriteId = `part_${part.id}`;
+          sprites[spriteId] = {
+            width: part.pixels[0].length,
+            height: part.pixels.length,
+            data: part.pixels,
+            plug: { x: pxToSub(part.pivotX ?? 0), y: pxToSub(part.pivotY ?? 0) },
+            heightmap: part.heightmap,
+          };
+        }
+        newCS.pieces[nodeId].sprites[dirIndex] = { spriteId };
       }
     }
   }
@@ -666,7 +674,7 @@ export class LiveAdapter {
   getCharacter(
     skeleton: PuppetSkeleton,
     characters: PuppetCharacter[],
-    parts: Part[],
+    parts: any[],
     nodeKeyframes: PuppetNodeKeyframe[],
     costumeSets: OldCostumeSet[],
   ): Character {
@@ -682,11 +690,11 @@ export class LiveAdapter {
   }
 
   /**
-   * Get sprite nodes (non-puppet parts) as a flat Character.
+   * Get sprite nodes (non-puppet sprites) as a flat Character.
    */
-  getSpriteCharacter(parts: Part[], puppetSpritePartIds: Set<string>): Character | null {
-    const nonPuppetParts = parts.filter(p => !puppetSpritePartIds.has(p.id));
-    if (nonPuppetParts.length === 0) return null;
+  getSpriteCharacter(sprites: import('./unified-types').Sprite[], puppetSpriteIds: Set<string>): Character | null {
+    const nonPuppetSprites = sprites.filter(s => !puppetSpriteIds.has(s.id!));
+    if (nonPuppetSprites.length === 0) return null;
 
     const charId = '_live_sprite_character';
     if (this.characterCache.has(charId)) {
@@ -696,13 +704,13 @@ export class LiveAdapter {
     const char = createDefaultCharacter(charId, 'Sprites');
     const nodes: Record<string, Node> = {};
 
-    for (const part of nonPuppetParts) {
-      nodes[part.id] = partToNode(part);
+    for (const sprite of nonPuppetSprites) {
+      nodes[sprite.id!] = partToNode(sprite);
     }
 
     // Part 不再有 parentId 层级，全部作为根节点的子节点（扁平）
-    const rootPart = nonPuppetParts[0];
-    if (rootPart) char.rootNodeId = rootPart.id;
+    const rootSprite = nonPuppetSprites[0];
+    if (rootSprite) char.rootNodeId = rootSprite.id!;
     char.nodes = nodes;
 
     this.characterCache.set(charId, char);

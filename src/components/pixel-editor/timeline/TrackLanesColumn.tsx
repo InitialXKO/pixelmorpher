@@ -1,7 +1,10 @@
 'use client';
 
 import React, { useCallback, useRef, useMemo } from 'react';
-import type { Track, Part, EffectTrack, CanvasModifierTrack, Keyframe, PuppetNode, PuppetNodeKeyframe } from '@/lib/types';
+import type { Track, EffectTrack, CanvasModifierTrack, Keyframe } from '@/lib/types';
+import type { Sprite } from '@/lib/unified-types';
+import type { Node } from '@/lib/unified-types';
+import type { NodeKeyframe } from '@/lib/unified-types';
 import { ANIMATION_MODIFIER_TYPES } from '@/lib/types';
 import type { SnapConfig, TrackTimelineDisplay } from '@/lib/v15-types';
 import { getFrameWidth, TRACK_HEIGHT, RULER_HEIGHT, TRACK_COLOR_HUES } from './constants';
@@ -11,13 +14,13 @@ import { AnimModifierParamDriverSubTrackLane, ParamDriverSubTrackLane } from './
 import KeyframeModifierSubTrackLane from './KeyframeModifierSubTrackLane';
 import EffectTrackLane from './EffectTrackLane';
 import CanvasModifierTrackLane from './CanvasModifierTrackLane';
-import PuppetNodeTrackLane from './PuppetNodeTrackLane';
+import NodeTrackLane from './NodeTrackLane';
 import { useProjectStore } from '@/lib/store';
 
 // ---- Right: Ruler + Keyframe Lanes (scrollable) ----
 interface TrackLanesColumnProps {
   tracks: Track[];
-  parts: Part[];
+  sprites: Sprite[];
   effectTracks: EffectTrack[];
   canvasModifierTracks: CanvasModifierTrack[];
   getKeyframesForPart: (partId: string) => Keyframe[];
@@ -53,14 +56,14 @@ interface TrackLanesColumnProps {
   onEditAnimParamDriver: (partId: string, modifierId: string, driverId: string) => void;
   onPlayheadMouseDown: (e: React.MouseEvent) => void;
   isPuppetClip: boolean;
-  puppetNodes: PuppetNode[];
-  puppetNodeKeyframes: PuppetNodeKeyframe[];
-  selectedPuppetKeyframeId: string | null;
-  onSelectPuppetKeyframe: (id: string) => void;
-  onAddPuppetKeyframe: (nodeId: string, frame: number) => void;
-  onDeletePuppetKeyframe: (keyframeId: string) => void;
-  onMovePuppetKeyframeToFrame: (keyframeId: string) => void;
-  onUpdatePuppetKeyframe: (keyframeId: string, updates: Partial<PuppetNodeKeyframe>) => void;
+  nodeList: Node[];
+  nodeKeyframes: NodeKeyframe[];
+  selectedNodeKeyframeId: string | null;
+  onSelectNodeKeyframe: (id: string) => void;
+  onAddNodeKeyframe: (nodeId: string, frame: number) => void;
+  onDeleteNodeKeyframe: (keyframeId: string) => void;
+  onMoveNodeKeyframeToFrame: (keyframeId: string) => void;
+  onUpdateNodeKeyframe: (keyframeId: string, updates: Partial<NodeKeyframe>) => void;
   // V15: Dynamic zoom, snap, colors, thumbnails, frame step
   FRAME_WIDTH?: number;
   snapConfig?: SnapConfig;
@@ -71,7 +74,7 @@ interface TrackLanesColumnProps {
 }
 
 export default function TrackLanesColumn({
-  tracks, parts, effectTracks, canvasModifierTracks, getKeyframesForPart,
+  tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart,
   totalFrames, currentFrame, selectedKeyframeId, selectedEffectTrackId,
   visibleRange, rowOffsets, rowHeights, totalHeight, timelineWidth, playheadX,
   scrollContainerRef, playheadLineRef,
@@ -81,9 +84,9 @@ export default function TrackLanesColumn({
   onEditAnimModifierParams, onEditKfModifierParams, onEditParamKeyframe,
   onAddModifierParamKeyframe, onEditParamDriver, onEditAnimParamDriver,
   onPlayheadMouseDown,
-  isPuppetClip, puppetNodes, puppetNodeKeyframes, selectedPuppetKeyframeId,
-  onSelectPuppetKeyframe, onAddPuppetKeyframe, onDeletePuppetKeyframe,
-  onMovePuppetKeyframeToFrame, onUpdatePuppetKeyframe,
+  isPuppetClip, nodeList, nodeKeyframes, selectedNodeKeyframeId,
+  onSelectNodeKeyframe, onAddNodeKeyframe, onDeleteNodeKeyframe,
+  onMoveNodeKeyframeToFrame, onUpdateNodeKeyframe,
   // V15
   FRAME_WIDTH: propFrameWidth,
   snapConfig, snapFrame,
@@ -128,10 +131,11 @@ export default function TrackLanesColumn({
             <div style={{ height: rowOffsets[visibleRange.startIndex] }} />
           )}
 
-          {tracks.map((track, idx) => {
+          {/* Legacy Part tracks: skipped in puppet-only mode (isPuppetClip) */}
+          {!isPuppetClip && tracks.map((track, idx) => {
             if (idx < visibleRange.startIndex || idx > visibleRange.endIndex) return null;
             const trackKeyframes = getKeyframesForPart(track.partId);
-            const part = parts.find((p) => p.id === track.partId);
+            const part = sprites.find((p) => p.id === track.partId);
             const animModifiers: import('@/lib/types').PartAnimationModifier[] = []; // Part 无 animationModifiers
             const kfModifierTypes = [...new Set(
               trackKeyframes.flatMap((kf) => kf.modifiers.map((m) => m.type))
@@ -233,18 +237,18 @@ export default function TrackLanesColumn({
           })()}
 
           {/* Puppet Node Track Lanes */}
-          {isPuppetClip && puppetNodes.length > 0 && (
+          {isPuppetClip && nodeList.length > 0 && (
             <>
               <div className="border-b border-[#2a2a4a]" style={{ height: 20, background: '#0c0c1e' }} />
-              {puppetNodes.map((node) => {
-                const nodeKfs = puppetNodeKeyframes.filter((kf) => kf.nodeId === node.id);
+              {nodeList.map((node) => {
+                const nodeKfs = nodeKeyframes.filter((kf) => kf.nodeId === node.id);
                 return (
-                  <PuppetNodeTrackLane
-                    key={`puppet-lane-${node.id}`} node={node} nodeKeyframes={nodeKfs}
-                    selectedPuppetKeyframeId={selectedPuppetKeyframeId} totalFrames={totalFrames}
-                    onSelectPuppetKeyframe={onSelectPuppetKeyframe} onAddPuppetKeyframe={onAddPuppetKeyframe}
-                    onDeletePuppetKeyframe={onDeletePuppetKeyframe} onMovePuppetKeyframeToFrame={onMovePuppetKeyframeToFrame}
-                    onUpdatePuppetKeyframe={onUpdatePuppetKeyframe}
+                  <NodeTrackLane
+                    key={`node-lane-${node.id}`} node={node} nodeKeyframes={nodeKfs}
+                    selectedNodeKeyframeId={selectedNodeKeyframeId} totalFrames={totalFrames}
+                    onSelectNodeKeyframe={onSelectNodeKeyframe} onAddNodeKeyframe={onAddNodeKeyframe}
+                    onDeleteNodeKeyframe={onDeleteNodeKeyframe} onMoveNodeKeyframeToFrame={onMoveNodeKeyframeToFrame}
+                    onUpdateNodeKeyframe={onUpdateNodeKeyframe}
                     frameWidth={fw}
                   />
                 );

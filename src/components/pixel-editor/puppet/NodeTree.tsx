@@ -10,6 +10,28 @@ import {
   Link2,
 } from 'lucide-react';
 import type { PuppetNode } from '@/lib/types';
+import type { Node as UnifiedNode } from '@/lib/unified-types';
+
+// Union type for migration: accepts both old PuppetNode and new Node
+type AnyNode = PuppetNode | UnifiedNode;
+
+/** Get the plug socket ID for a node (old: node.plug.socketId, new: node.attachment.parentSocketId) */
+function getPlugSocketId(node: AnyNode): string | undefined {
+  if ('plug' in node && node.plug) return node.plug.socketId;
+  if ('attachment' in node && node.attachment?.type === 'socket') return node.attachment.parentSocketId;
+  return undefined;
+}
+
+/** Get node color (old: node.color, new: fallback) */
+function getNodeColor(node: AnyNode): string {
+  if ('color' in node && node.color) return node.color as string;
+  return '#888';
+}
+
+/** Check if node has a plug (is a child node) */
+function hasPlug(node: AnyNode): boolean {
+  return getPlugSocketId(node) !== undefined;
+}
 
 // ---- Node Tree Item ----
 
@@ -25,7 +47,7 @@ function NodeTreeItem({
   allNodes,
   onToggleVisibility,
 }: {
-  node: PuppetNode;
+  node: AnyNode;
   depth: number;
   selectedNodeId: string | null;
   onSelect: () => void;
@@ -33,8 +55,8 @@ function NodeTreeItem({
   onSelectNode: (id: string) => void;
   onToggleExpand: () => void;
   expanded: boolean;
-  childNodes: PuppetNode[];
-  allNodes: PuppetNode[];
+  childNodes: AnyNode[];
+  allNodes: AnyNode[];
   onToggleVisibility?: (nodeId: string) => void;
 }) {
   const hasChildren = childNodes.length > 0;
@@ -66,9 +88,9 @@ function NodeTreeItem({
         )}
         <div
           className="size-2 rounded-full flex-shrink-0"
-          style={{ backgroundColor: node.color || '#888' }}
+          style={{ backgroundColor: getNodeColor(node) }}
         />
-        {node.plug && <Plug className="size-2.5 text-yellow-500/70" />}
+        {hasPlug(node) && <Plug className="size-2.5 text-yellow-500/70" />}
         <span className="text-[10px] truncate flex-1 min-w-0">{node.name}</span>
         {node.sockets.length > 0 && (
           <span className="text-[8px] text-gray-600 flex items-center gap-0.5">
@@ -110,15 +132,18 @@ function NodeTreeItemWrapper({
   allNodes,
   onToggleVisibility,
 }: {
-  node: PuppetNode;
+  node: AnyNode;
   depth: number;
   selectedNodeId: string | null;
   onSelect: (id: string) => void;
-  allNodes: PuppetNode[];
+  allNodes: AnyNode[];
   onToggleVisibility?: (nodeId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
-  const childNodes = allNodes.filter((n) => n.plug?.socketId && node.sockets.some((s) => s.id === n.plug!.socketId));
+  const childNodes = allNodes.filter((n) => {
+    const plugSocketId = getPlugSocketId(n);
+    return plugSocketId && node.sockets.some((s) => s.id === plugSocketId);
+  });
 
   return (
     <NodeTreeItem

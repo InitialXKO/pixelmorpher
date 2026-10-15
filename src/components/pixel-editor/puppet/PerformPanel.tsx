@@ -28,16 +28,15 @@ import {
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
-import DirectionWheel, { oldDirectionToIndex, directionIndexToOldDirection } from '../DirectionWheel';
+import DirectionWheel from '../DirectionWheel';
 import BlueprintTemplateLoader from './BlueprintTemplateLoader';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import type { PuppetDirection } from '@/lib/types';
+// (PuppetDirection import removed: direction now uses DirectionIndex directly)
 
 export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: boolean }) {
-  const puppetCharacters = useProjectStore((s) => s.puppetCharacters) ?? [];
-  const puppetSkeletons = useProjectStore((s) => s.puppetSkeletons) ?? [];
+  const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
   const animationClips = useProjectStore((s) => s.animationClips);
   const currentFrame = useProjectStore((s) => s.currentFrame);
   const setCurrentFrame = useProjectStore((s) => s.setCurrentFrame);
@@ -61,12 +60,18 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
 
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const character = useMemo(
-    () => puppetCharacters.find((c) => c.puppetSkeletonId === activePuppetSkeletonId) ?? null,
-    [puppetCharacters, activePuppetSkeletonId]
+    () => (activePuppetSkeletonId ? unifiedCharacters[activePuppetSkeletonId] ?? null : null),
+    [unifiedCharacters, activePuppetSkeletonId]
   );
-  const skeleton = useMemo(
-    () => puppetSkeletons.find((s) => s.id === activePuppetSkeletonId) ?? null,
-    [puppetSkeletons, activePuppetSkeletonId]
+  // Migrated: read skeleton nodes from unifiedCharacters (new Character model)
+  // instead of puppetSkeletons. Character.nodes is a Record, use Object.values().
+  const unifiedSkeleton = useMemo(() => {
+    if (!activePuppetSkeletonId) return null;
+    return unifiedCharacters[activePuppetSkeletonId] ?? null;
+  }, [unifiedCharacters, activePuppetSkeletonId]);
+  const skeletonNodes = useMemo(
+    () => (unifiedSkeleton ? Object.values(unifiedSkeleton.nodes) : []),
+    [unifiedSkeleton]
   );
   const clip = useMemo(
     () => animationClips.find((c) => c.puppetCharacterId === performCharacterId) ?? null,
@@ -84,7 +89,7 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
   // 该角色全部关键帧所在帧（排序去重），用于上一/下一关键帧导航
   const keyframedFrames = useMemo(() => {
     const frames = new Set<number>();
-    for (const kf of clip?.puppetNodeKeyframes ?? []) frames.add(kf.frame);
+    for (const kf of clip?.nodeKeyframes ?? []) frames.add(kf.frame);
     return [...frames].sort((a, b) => a - b);
   }, [clip]);
 
@@ -131,15 +136,15 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
 
       {/* ---- 进入/退出操控（角色用左侧选中的） ---- */}
       <div className="space-y-1.5">
-        {puppetCharacters.length === 0 && (
+        {Object.keys(unifiedCharacters).length === 0 && (
           <p className="text-[9px] text-amber-500/80">还没有角色 — 先去「搭建」阶段创建骨骼与角色</p>
         )}
-        {puppetCharacters.length > 0 && !activePuppetSkeletonId && (
+        {Object.keys(unifiedCharacters).length > 0 && !activePuppetSkeletonId && (
           <p className="text-[9px] text-amber-500/80">请在左侧面板选择骨架</p>
         )}
-        {activePuppetSkeletonId && skeleton && !character && (
+        {activePuppetSkeletonId && unifiedSkeleton && !character && (
           <p className="text-[9px] text-red-500/80">
-            骨架「{skeleton.name}」没有关联角色（数据异常，裸骨架不应存在）
+            骨架「{unifiedSkeleton.name}」没有关联角色（数据异常，裸骨架不应存在）
           </p>
         )}
         {/* 选中角色后自动进入操控，无需按钮 */}
@@ -155,17 +160,16 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
         )}
       </div>
 
-      {performArmed && skeleton && character && (
+      {performArmed && unifiedSkeleton && character && (
         <>
           {/* ---- 方向盘 ---- */}
           <DirectionWheel
-            value={oldDirectionToIndex(skeleton.currentDirection)}
+            value={unifiedSkeleton.nodes[unifiedSkeleton.rootNodeId]?.transform.variantIndex ?? 0}
             onChange={(idx) => {
-              const dir = directionIndexToOldDirection(idx) as PuppetDirection;
-              useProjectStore.getState().setPuppetDirection(skeleton.id, dir);
+              useProjectStore.getState().setUnifiedDirection(activePuppetSkeletonId!, idx);
             }}
-            latitude={skeleton.viewLatitude ?? 0}
-            onLatitudeChange={(lat) => useProjectStore.getState().setPuppetLatitude(skeleton.id, lat)}
+            latitude={unifiedSkeleton.latitude ?? 0}
+            onLatitudeChange={(lat) => useProjectStore.getState().updateUnifiedCharacter(activePuppetSkeletonId!, { latitude: lat })}
             size="sm"
           />
 
@@ -192,12 +196,12 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
           <div className="space-y-1.5">
             <Label className="text-[10px] text-gray-500 uppercase tracking-wider">肢体</Label>
             <div className="bg-[#080818] rounded border border-[#1e1e3a] p-1 max-h-44 overflow-y-auto">
-              {skeleton.nodes.map((node) => {
+              {skeletonNodes.map((node) => {
                 const iv = interpolated.get(node.id);
-                const hasKf = (clip?.puppetNodeKeyframes ?? []).some(
+                const hasKf = (clip?.nodeKeyframes ?? []).some(
                   (kf) => kf.nodeId === node.id && kf.frame === currentFrame
                 );
-                const isRoot = !node.plug;
+                const isRoot = node.attachment.type === 'fixed' && !node.attachment.parentSocketId;
                 return (
                   <div
                     key={node.id}
@@ -210,14 +214,14 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
                   >
                     <div
                       className="size-2 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: node.color || '#888' }}
+                      style={{ backgroundColor: node.costumePiece?.fillColor || '#888' }}
                     />
                     <span className="text-[10px] text-gray-300 flex-1 truncate min-w-0">
                       {node.name}
                       {isRoot && <span className="text-[8px] text-gray-600 ml-1">(根)</span>}
                     </span>
                     <span className="text-[9px] text-gray-500 tabular-nums w-12 text-right flex-shrink-0">
-                      {(iv?.angle ?? node.angle).toFixed(0)}°
+                      {(iv?.angle ?? node.transform.angle).toFixed(0)}°
                     </span>
                     {hasKf ? (
                       <CircleDot className="size-3 text-amber-400 flex-shrink-0" />
@@ -282,8 +286,8 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
           </div>
 
           {/* ---- 图层顺序（关键帧，step 插值） ---- */}
-          {performNodeId && skeleton && clip && (() => {
-            const node = skeleton.nodes.find((n) => n.id === performNodeId);
+          {performNodeId && unifiedSkeleton && clip && (() => {
+            const node = unifiedSkeleton.nodes[performNodeId];
             const iv = interpolated.get(performNodeId);
             const curZ = iv?.zIndex ?? node?.zIndex ?? 0;
             return (
@@ -308,22 +312,22 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
                       className="h-7 text-[9px] px-1 bg-[#0d0d1a] border-[#1e1e3a]"
                       title={`${label}（在当前帧打关键帧）`}
                       onClick={() => {
-                        const node = skeleton.nodes.find((n) => n.id === performNodeId);
+                        const node = unifiedSkeleton.nodes[performNodeId];
                         if (!node) return;
                         // 当前插值后的 zIndex
                         const iv = interpolated.get(performNodeId);
                         const curZ = iv?.zIndex ?? node.zIndex;
-                        const allZ = skeleton.nodes.map((n) => interpolated.get(n.id)?.zIndex ?? n.zIndex);
+                        const allZ = skeletonNodes.map((n) => interpolated.get(n.id)?.zIndex ?? n.zIndex);
                         const newZ = getZ(curZ, allZ);
                         const store = useProjectStore.getState();
                         // 找当前帧已有关键帧则更新，否则新建
-                        const existing = (clip.puppetNodeKeyframes ?? []).find(
+                        const existing = (clip.nodeKeyframes ?? []).find(
                           (kf) => kf.nodeId === performNodeId && kf.frame === currentFrame
                         );
                         if (existing) {
-                          store.updatePuppetNodeKeyframe(clip.id, existing.id, { zIndex: newZ });
+                          store.updateNodeKeyframe(clip.id, existing.id, { zIndex: newZ });
                         } else {
-                          store.addPuppetNodeKeyframe(clip.id, performNodeId, currentFrame, { zIndex: newZ });
+                          store.addNodeKeyframe(clip.id, performNodeId, currentFrame, { zIndex: newZ });
                         }
                       }}
                     >
@@ -384,9 +388,9 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
           </div>
 
           {/* ---- 蓝图模板（骨骼级，不依赖选中节点） ---- */}
-          {skeleton && (
+          {unifiedSkeleton && (
             <div className="mt-2 pt-2 border-t border-[#1e1e3a]">
-              <BlueprintTemplateLoader skeleton={skeleton} />
+              <BlueprintTemplateLoader character={unifiedSkeleton} />
             </div>
           )}
         </>

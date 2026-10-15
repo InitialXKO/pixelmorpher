@@ -315,7 +315,7 @@ export default function SplitImageDialog({ open, onOpenChange }: SplitImageDialo
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const splitImageToParts = useProjectStore((s) => s.splitImageToParts);
+  const splitImageToSprites = useProjectStore((s) => s.splitImageToSprites);
 
   // Render preview with region overlays
   useEffect(() => {
@@ -446,7 +446,7 @@ export default function SplitImageDialog({ open, onOpenChange }: SplitImageDialo
     const regionPixels = enabledRegions.map((r) => r.pixels);
     const baseName = '拆分';
 
-    splitImageToParts(baseName, sourceImage, regionPixels);
+    splitImageToSprites(baseName, sourceImage, regionPixels);
 
     setSplitting(false);
     onOpenChange(false);
@@ -454,7 +454,7 @@ export default function SplitImageDialog({ open, onOpenChange }: SplitImageDialo
     setSourceImage(null);
     setSourceImageUrl('');
     setRegions([]);
-  }, [sourceImage, regions, splitImageToParts, onOpenChange]);
+  }, [sourceImage, regions, splitImageToSprites, onOpenChange]);
 
   // Reset dialog when closed
   const handleOpenChange = useCallback(

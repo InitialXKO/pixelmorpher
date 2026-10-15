@@ -3,7 +3,17 @@
  * No React or store dependencies.
  */
 
-import type { PixelColor, Part } from '@/lib/types';
+import type { PixelColor } from '@/lib/types';
+import type { Sprite } from '@/lib/unified-types';
+import { subToPx } from '@/lib/unified-types';
+
+/** Sprite plug（sub-pixel，1/16px）→ 像素单位；缺省取中心（与 addSprite/addPart 默认一致） */
+export function spritePivotX(sprite: Sprite): number {
+  return sprite.plug ? subToPx(sprite.plug.x) : Math.floor(sprite.width / 2);
+}
+export function spritePivotY(sprite: Sprite): number {
+  return sprite.plug ? subToPx(sprite.plug.y) : Math.floor(sprite.height / 2);
+}
 
 /** Catmull-Rom to Cubic Bezier conversion for smooth interpolation through all points */
 export function catmullRomToBezier(
@@ -69,18 +79,18 @@ export function drawDiamond(
   ctx.restore();
 }
 
-/** Check if a pixel coordinate is inside a part's bounding box */
+/** Check if a pixel coordinate is inside a sprite's bounding box */
 export function isPixelInPart(
   px: number,
   py: number,
-  part: Part,
+  part: Sprite,
   offsetX: number,
   offsetY: number,
   translateOffsetX: number = 0,
   translateOffsetY: number = 0,
 ): boolean {
-  const left = offsetX - part.pivotX + 0 + translateOffsetX;
-  const top = offsetY - part.pivotY + 0 + translateOffsetY;
+  const left = offsetX - spritePivotX(part) + 0 + translateOffsetX;
+  const top = offsetY - spritePivotY(part) + 0 + translateOffsetY;
   return px >= left && px < left + part.width && py >= top && py < top + part.height;
 }
 
@@ -131,20 +141,20 @@ function perpendicularDistance(
   return numerator / Math.sqrt(lenSq);
 }
 
-/** Get the pixel color at a canvas coordinate from a part */
+/** Get the pixel color at a canvas coordinate from a sprite */
 export function getPixelAt(
   px: number,
   py: number,
-  part: Part,
+  part: Sprite,
   offsetX: number,
   offsetY: number,
   translateOffsetX: number = 0,
   translateOffsetY: number = 0,
 ): PixelColor {
-  const localX = px - (offsetX - part.pivotX + 0 + translateOffsetX);
-  const localY = py - (offsetY - part.pivotY + 0 + translateOffsetY);
+  const localX = px - (offsetX - spritePivotX(part) + 0 + translateOffsetX);
+  const localY = py - (offsetY - spritePivotY(part) + 0 + translateOffsetY);
   if (localX < 0 || localX >= part.width || localY < 0 || localY >= part.height) return null;
-  return part.pixels[localY]?.[localX] ?? null;
+  return part.data[localY]?.[localX] ?? null;
 }
 
 /** Bresenham line algorithm for smooth drawing between two points */

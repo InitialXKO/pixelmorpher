@@ -17,8 +17,7 @@ const defaultProject: Project = {
   name: '未命名项目',
   description: '',
 
-  // Asset Library
-  parts: [],
+  sprites: {},
   animationClips: [],
   activeAnimationClipId: null,
 
@@ -47,10 +46,10 @@ const defaultProject: Project = {
   motionBlurStrokes: [],
   effectStrokes: [],
 
-  // Concrete Puppet (first-class project data)
-  puppetSkeletons: [],
-  puppetCharacters: [],
-  selectedPuppetNodeId: null,
+  // Unified Characters (new model)
+  unifiedCharacters: {},
+  selectedCharacterId: null,
+  selectedNodeId: null,
 
   // DCC Pipeline
   palettes: [],
@@ -100,6 +99,8 @@ export type ProjectSlice = Project & {
 
 export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<ProjectStore>> = (set, get) => ({
   ...defaultProject,
+  // Global sprite table (replaces Part asset library)
+  sprites: {},
   undoStack: [],
   redoStack: [],
   _dragActive: false,
@@ -157,7 +158,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     return JSON.stringify({
       name: s.name,
       description: s.description,
-      parts: s.parts,
+      sprites: s.sprites,
       animationClips: s.animationClips,
       activeAnimationClipId: s.activeAnimationClipId,
       tracks: s.tracks,
@@ -184,10 +185,10 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       maxUndoLevels: s.maxUndoLevels,
       globalModifiers: s.globalModifiers,
       animationVariables: s.animationVariables,
-      // Concrete Puppet (first-class project data)
-      puppetSkeletons: s.puppetSkeletons,
-      puppetCharacters: s.puppetCharacters,
-      selectedPuppetNodeId: s.selectedPuppetNodeId,
+      // Unified Characters (new model, primary source)
+      unifiedCharacters: s.unifiedCharacters,
+      selectedCharacterId: s.selectedCharacterId,
+      selectedNodeId: s.selectedNodeId,
       // DCC Pipeline
       palettes: s.palettes,
       activePaletteId: s.activePaletteId,
@@ -336,12 +337,12 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
   exportProjectFile: () => {
     const state = get();
     return {
-      version: '3.0',
+      version: '3.1',
       project: {
         id: state.id,
         name: state.name,
         description: state.description,
-        parts: state.parts,
+        sprites: state.sprites,
         animationClips: state.animationClips,
         activeAnimationClipId: state.activeAnimationClipId,
         canvasWidth: state.canvasWidth,
@@ -362,10 +363,10 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         trajectories: state.trajectories,
         motionBlurStrokes: state.motionBlurStrokes,
         effectStrokes: state.effectStrokes,
-        // Concrete Puppet (first-class project data)
-        puppetSkeletons: state.puppetSkeletons,
-        puppetCharacters: state.puppetCharacters,
-        selectedPuppetNodeId: state.selectedPuppetNodeId,
+        // Unified Characters (new model)
+        unifiedCharacters: state.unifiedCharacters,
+        selectedCharacterId: state.selectedCharacterId,
+        selectedNodeId: state.selectedNodeId,
         // DCC Pipeline
         palettes: state.palettes,
         activePaletteId: state.activePaletteId,
@@ -404,7 +405,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       }),
     }));
 
-    const processedParts = (file.project.parts || []).map((p: any) => ({
+    const processedParts = ((file.project as any).parts || []).map((p: any) => ({
       ...p,
       parentId: p.parentId ?? null,
       offsetX: p.offsetX ?? 0,
@@ -427,7 +428,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         name: file.project.name || '默认动画',
         frameRate: file.project.frameRate ?? 12,
         totalFrames: file.project.totalFrames ?? 24,
-        puppetNodeKeyframes: [],
+        nodeKeyframes: [],
         effectTracks: file.project.effectTracks || [],
         canvasModifierTracks: file.project.canvasModifierTracks || [],
         trajectories: file.project.trajectories || [],
@@ -441,10 +442,39 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       activeAnimationClipId = migratedClip.id;
     }
 
+    // Migrate parts → sprites (Part retired; Sprite is the single pixel asset type)
+    // Also migrate Character.sprites → global table (dedupe by ID)
+    const migratedSprites: Record<string, import('../unified-types').Sprite> = {
+      ...(file.project.sprites ?? {}),
+    };
+    for (const p of processedParts as any[]) {
+      if (!p?.id || migratedSprites[p.id]) continue;
+      migratedSprites[p.id] = {
+        id: p.id,
+        name: p.name,
+        width: p.width,
+        height: p.height,
+        data: p.pixels ?? [],
+        plug: p.pivotX !== undefined ? { x: (p.pivotX ?? 0) / 16, y: (p.pivotY ?? 0) / 16 } : undefined,
+        heightmap: p.heightmap,
+      };
+    }
+    const unifiedCharacters = file.project.unifiedCharacters || {};
+    for (const ch of Object.values(unifiedCharacters) as any[]) {
+      if (!ch?.sprites) continue;
+      for (const [sid, sp] of Object.entries(ch.sprites) as [string, any][]) {
+        if (!migratedSprites[sid]) {
+          migratedSprites[sid] = { id: sid, ...sp };
+        }
+      }
+      // Character.sprites retired — refs are now global
+      delete ch.sprites;
+    }
+
     set({
       ...file.project,
       keyframes: processedKeyframes,
-      parts: processedParts,
+      sprites: migratedSprites,
       animationClips,
       activeAnimationClipId,
       id: file.project.id || crypto.randomUUID(),
@@ -454,16 +484,20 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       weightMaps: file.weightMaps || [],
       globalModifiers: file.project.globalModifiers || [],
       animationVariables: file.project.animationVariables || [],
-      // Concrete Puppet (first-class project data)
-      puppetSkeletons: file.project.puppetSkeletons || [],
-      puppetCharacters: file.project.puppetCharacters || [],
-      selectedPuppetNodeId: file.project.selectedPuppetNodeId ?? null,
+      // Unified Characters (new model; migrated on load if missing)
+      unifiedCharacters,
+      selectedCharacterId: file.project.selectedCharacterId ?? null,
+      selectedNodeId: file.project.selectedNodeId ?? null,
       // DCC Pipeline
       palettes: file.project.palettes || [],
       activePaletteId: file.project.activePaletteId ?? null,
       undoStack: file.history || [],
       redoStack: [],
     });
+
+    // Note: Old puppet-format files (v3.0) are NOT auto-migrated.
+    // Users should re-import from Spine source via SpineImportDialog.
+    // unifiedCharacters is the single source of truth since v3.1.
 
     // Sync legacy fields from the active clip
     if (activeAnimationClipId) {
@@ -496,15 +530,11 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     get().pushUndo('运动分析拆分');
     const { analyzeMotionAndSplit } = require('../motion-analysis');
     const result = analyzeMotionAndSplit(frames, options?.blockSize, options?.searchRadius, options?.motionThreshold, options?.minRegionSize);
-    const s = get();
-    const newPartIds: string[] = [];
-    const createdParts: any[] = [];
-    const createdTracks: any[] = [];
-    const createdKeyframes: any[] = [];
+    const newSpriteIds: string[] = [];
 
     for (const region of result.regions) {
       const { x: bx, y: by, width: rw, height: rh } = region.bounds;
-      const partPixels: any[] = Array.from({ length: rh }, () => Array(rw).fill(null));
+      const spritePixels: any[] = Array.from({ length: rh }, () => Array(rw).fill(null));
 
       for (const p of region.pixels) {
         const lx = p.x - bx;
@@ -512,66 +542,20 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         if (ly >= 0 && ly < rh && lx >= 0 && lx < rw) {
           const refFrame = frames[frames.length - 1];
           if (p.y < refFrame.length && p.x < refFrame[0].length) {
-            partPixels[ly][lx] = refFrame[p.y][p.x];
+            spritePixels[ly][lx] = refFrame[p.y][p.x];
           }
         }
       }
 
-      const partId = crypto.randomUUID();
-      const part = {
-        id: partId,
-        name: `部件_${region.id}`,
-        width: rw,
-        height: rh,
-        pixels: partPixels,
-        pivotX: Math.round(region.pivotX - bx),
-        pivotY: Math.round(region.pivotY - by),
-        offsetX: 0,
-        offsetY: 0,
-        zIndex: s.parts.length + createdParts.length,
-        visible: true,
-        locked: false,
-        animationModifiers: [],
-        modifierGroups: [],
-        parentId: null,
-        editModifiers: [],
-        partKeyframes: [],
-      };
-
-      const trackId = crypto.randomUUID();
-      const track = {
-        id: trackId,
-        partId,
-        visible: true,
-        locked: false,
-        expanded: true,
-      };
-
-      const keyframeId = crypto.randomUUID();
-      const keyframe = {
-        id: keyframeId,
-        partId,
-        frame: s.currentFrame,
-        modifiers: [],
-        correctionMask: null,
-        isBaked: false,
-      };
-
-      newPartIds.push(partId);
-      createdParts.push(part);
-      createdTracks.push(track);
-      createdKeyframes.push(keyframe);
+      const sprite = get().addSprite(`精灵_${region.id}`, rw, rh, {
+        plugX: Math.round(region.pivotX - bx),
+        plugY: Math.round(region.pivotY - by),
+      });
+      get().setSpritePixels(sprite.id!, spritePixels);
+      newSpriteIds.push(sprite.id!);
     }
 
-    if (createdParts.length > 0) {
-      set((s) => ({
-        parts: [...s.parts, ...createdParts],
-        tracks: [...s.tracks, ...createdTracks],
-        keyframes: [...s.keyframes, ...createdKeyframes],
-      }));
-    }
-
-    return newPartIds;
+    return newSpriteIds;
   },
 
   resetProject: () => {
@@ -625,7 +609,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       name,
       frameRate: s.frameRate,
       totalFrames: s.totalFrames,
-      puppetNodeKeyframes: [],
+      nodeKeyframes: [],
       effectTracks: [],
       canvasModifierTracks: [],
       trajectories: [],

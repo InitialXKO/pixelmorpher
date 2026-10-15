@@ -7,7 +7,6 @@
 import type {
   MotionBlurStroke,
   EffectStroke,
-  Part,
   ModifierInstance,
 } from '../types';
 import type { UnifiedKeyframe } from '../unified-types';

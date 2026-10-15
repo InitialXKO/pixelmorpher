@@ -97,8 +97,8 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
   const brushPresets = useProjectStore((s) => s.brushPresets);
   const allBrushPresets = [...BUILT_IN_BRUSH_PRESETS, ...brushPresets];
 
-  // Parts (for export disabled state) and selection (for correction toggle guard)
-  const parts = useProjectStore((s) => s.parts);
+  // Sprites (for export disabled state) and selection (for correction toggle guard)
+  const sprites = useProjectStore((s) => s.sprites);
   const selectedPartId = useEditorStore((s) => s.selectedPartId);
 
   // Toast for user-facing errors
@@ -361,11 +361,11 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
                 state.editMode !== 'part_edit') {
               const projectStore = useProjectStore.getState();
               const selectedPartId = state.selectedPartId;
-              const part = selectedPartId ? projectStore.parts.find(p => p.id === selectedPartId) : null;
-              if (part) {
-                state.enterPartEditMode(selectedPartId!);
-              } else if (projectStore.parts.length > 0) {
-                toast({ title: '请先选择部件', description: '在部件面板中选择一个部件后再绘画' });
+              const sprite = selectedPartId ? projectStore.sprites[selectedPartId] : null;
+              if (sprite) {
+                state.enterSpriteEditMode(selectedPartId!);
+              } else if (Object.keys(projectStore.sprites).length > 0) {
+                toast({ title: '请先选择精灵', description: '在精灵面板中选择一个精灵后再绘画' });
               }
             }
           }
@@ -643,13 +643,13 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
             size="icon"
             className="h-7 w-7 text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-400 disabled:opacity-30 disabled:cursor-not-allowed"
             onClick={onExportClick}
-            disabled={parts.length === 0}
+            disabled={Object.keys(sprites).length === 0}
           >
             <Download className="size-3.5" />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="text-xs">
-          {parts.length === 0 ? '导出 (暂无部件)' : '导出'}
+          {Object.keys(sprites).length === 0 ? '导出 (暂无精灵)' : '导出'}
         </TooltipContent>
       </Tooltip>
     </div>

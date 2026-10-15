@@ -9,38 +9,38 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import { Network } from 'lucide-react';
 import { useProjectStore } from '@/lib/store';
-import type { PuppetSkeleton } from '@/lib/types';
+import type { Character } from '@/lib/unified-types';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 import { mergeBlueprints, splitBlueprints } from '@/lib/blueprint/global';
 import BlueprintEditor from './BlueprintEditor';
 
 interface GlobalBlueprintEditorProps {
-  skeleton: PuppetSkeleton | null;
+  character: Character | null;
 }
 
-export default function GlobalBlueprintEditor({ skeleton }: GlobalBlueprintEditorProps) {
+export default function GlobalBlueprintEditor({ character }: GlobalBlueprintEditorProps) {
   // 合并后的图（本地编辑状态）
   const [mergedGraph, setMergedGraph] = useState<BlueprintGraph | null>(null);
   const [outputMap, setOutputMap] = useState<Map<string, string>>(new Map());
   // 当前选中的部件：新节点归属到它
-  const selectedPuppetNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
+  const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
 
-  // 从 skeleton 重新合并（打开编辑器时）
+  // 从 character 重新合并（打开编辑器时）
   const merged = useMemo(() => {
-    if (!skeleton) return null;
-    // 如果本地有编辑状态，优先用本地的（避免 skeleton 更新时丢失编辑）
+    if (!character) return null;
+    // 如果本地有编辑状态，优先用本地的（避免 character 更新时丢失编辑）
     if (mergedGraph) return { graph: mergedGraph, outputMap };
-    const result = mergeBlueprints(skeleton);
+    const result = mergeBlueprints(character);
     return result;
-  }, [skeleton, mergedGraph, outputMap]);
+  }, [character, mergedGraph, outputMap]);
 
   // 打开全局编辑器
   const handleOpen = useCallback(() => {
-    if (!skeleton) return;
-    const result = mergeBlueprints(skeleton);
+    if (!character) return;
+    const result = mergeBlueprints(character);
     setMergedGraph(result.graph);
     setOutputMap(result.outputMap);
-  }, [skeleton]);
+  }, [character]);
 
   // 关闭（丢弃未保存）
   const handleClose = useCallback(() => {
@@ -50,19 +50,20 @@ export default function GlobalBlueprintEditor({ skeleton }: GlobalBlueprintEdito
 
   // 保存：拆分回各部件
   const handleSave = useCallback(() => {
-    if (!skeleton || !mergedGraph) return;
-    const split = splitBlueprints(mergedGraph, skeleton, outputMap);
+    if (!character || !mergedGraph) return;
+    const split = splitBlueprints(mergedGraph, character, outputMap);
     const store = useProjectStore.getState();
     for (const [puppetNodeId, graph] of split) {
-      store.updatePuppetNode(skeleton.id, puppetNodeId, { blueprint: graph });
+      store.updateUnifiedNode(character.id, puppetNodeId, { blueprint: graph });
     }
     setMergedGraph(null);
     setOutputMap(new Map());
-  }, [skeleton, mergedGraph, outputMap]);
+  }, [character, mergedGraph, outputMap]);
 
-  if (!skeleton) return null;
+  if (!character) return null;
 
-  const hasAnyBlueprint = skeleton.nodes.some((n) => n.blueprint);
+  const nodeList = Object.values(character.nodes);
+  const hasAnyBlueprint = nodeList.some((n) => n.blueprint);
 
   // 未打开时显示入口
   if (!mergedGraph) {
@@ -74,7 +75,7 @@ export default function GlobalBlueprintEditor({ skeleton }: GlobalBlueprintEdito
             全局蓝图
           </span>
           <span className="text-[9px] text-gray-500">
-            {skeleton.nodes.filter((n) => n.blueprint).length}/{skeleton.nodes.length} 有蓝图
+            {nodeList.filter((n) => n.blueprint).length}/{nodeList.length} 有蓝图
           </span>
         </div>
         {!hasAnyBlueprint ? (
@@ -86,7 +87,7 @@ export default function GlobalBlueprintEditor({ skeleton }: GlobalBlueprintEdito
             onClick={handleOpen}
             className="w-full px-2 py-1.5 rounded border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-[10px] text-cyan-300 transition-colors"
           >
-            打开全局蓝图编辑器（{skeleton.nodes.filter((n) => n.blueprint).length} 个部件）
+            打开全局蓝图编辑器（{nodeList.filter((n) => n.blueprint).length} 个部件）
           </button>
         )}
       </div>
@@ -122,8 +123,8 @@ export default function GlobalBlueprintEditor({ skeleton }: GlobalBlueprintEdito
       <BlueprintEditor
         graph={mergedGraph}
         onChange={setMergedGraph}
-        skeleton={skeleton}
-        idPrefix={selectedPuppetNodeId ?? undefined}
+        skeleton={{ nodes: nodeList.map((n) => ({ id: n.id, name: n.name })) }}
+        idPrefix={selectedNodeId ?? undefined}
       />
     </div>
   );

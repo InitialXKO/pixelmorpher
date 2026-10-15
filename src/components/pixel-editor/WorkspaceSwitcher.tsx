@@ -42,7 +42,7 @@ export default function WorkspaceSwitcher() {
       // Exit part_edit mode when entering puppet mode
       const editorState = useEditorStore.getState();
       if (editorState.editMode === 'part_edit') {
-        editorState.exitPartEditMode(true);
+        editorState.exitSpriteEditMode(true);
       }
       // Enable puppet skeleton overlay when entering puppet mode
       if (!editorState.showPuppetSkeleton) {

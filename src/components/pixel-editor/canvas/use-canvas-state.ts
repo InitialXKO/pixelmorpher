@@ -19,8 +19,9 @@ import {
 } from '@/lib/engine';
 import { generateBrushStamp, applyBrushStamp } from '@/lib/brush-engine';
 import { inpaintPixels } from '@/lib/inpainting';
-import { catmullRomToBezier, isPixelInPart, getPixelAt, computeSpriteEndPoint } from './canvas-utils';
-import type { PixelColor, PixelGrid, Part, Bone, PuppetNode, PuppetSkeleton, PuppetCharacter, PuppetNodeKeyframe, BrushCommand, ModifierInstance } from '@/lib/types';
+import { catmullRomToBezier, isPixelInPart, getPixelAt, computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
+import type { PixelColor, PixelGrid, Bone, PuppetNode, PuppetSkeleton, PuppetCharacter, PuppetNodeKeyframe, BrushCommand, ModifierInstance } from '@/lib/types';
+import type { Node, Character, Sprite } from '@/lib/unified-types';
 import { createEmptyPixelGrid } from '@/lib/types';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 
@@ -84,7 +85,12 @@ export function useCanvasState() {
   const panRef = useRef({ x: useEditorStore.getState().panX, y: useEditorStore.getState().panY });
 
   // ---- Store (reactive selectors) ----
-  const parts = useProjectStore((s) => s.parts);
+  const spritesRecord = useProjectStore((s) => s.sprites);
+  // 全局精灵表（Record）→ 数组；表内精灵 id 必有（addSprite 等写入时生成）
+  const parts: (Sprite & { id: string })[] = useMemo(
+    () => Object.values(spritesRecord).filter((s): s is Sprite & { id: string } => !!s.id),
+    [spritesRecord],
+  );
   const keyframes = useProjectStore((s) => s.keyframes);
   const canvasWidth = useProjectStore((s) => s.canvasWidth);
   const canvasHeight = useProjectStore((s) => s.canvasHeight);
@@ -98,39 +104,15 @@ export function useCanvasState() {
   const skeletons = useProjectStore((s) => s.skeletons);
   const proceduralAnimations = useProjectStore((s) => s.proceduralAnimations);
   const canvasModifierTracks = useProjectStore((s) => s.canvasModifierTracks);
-  const setPartPixels = useProjectStore((s) => s.setPartPixels);
+  const setPartPixels = useProjectStore((s) => s.setSpritePixels);
   const setCorrection = useProjectStore((s) => s.setCorrection);
   const frameRate = useProjectStore((s) => s.frameRate);
   const setCanvasSize = useProjectStore((s) => s.setCanvasSize);
   const animationVariables = useProjectStore((s) => s.animationVariables);
   const globalModifiers = useProjectStore((s) => s.globalModifiers);
-  const puppetSkeletons = useProjectStore((s) => s.puppetSkeletons);
-  const puppetCharacters = useProjectStore((s) => s.puppetCharacters);
-
-  // Puppet sprite part filtering
-  const puppetSpritePartIds = useMemo(
-    () => computePuppetSpritePartIds(puppetSkeletons, puppetCharacters),
-    [puppetSkeletons, puppetCharacters],
-  );
-  const nonPuppetParts = useMemo(() => {
-    if (puppetSpritePartIds.size === 0) return parts;
-    return parts.filter(p => !puppetSpritePartIds.has(p.id));
-  }, [parts, puppetSpritePartIds]);
-
-  const puppetClipsVersion = useProjectStore((s) => {
-    const clips = s.animationClips;
-    let v = 0;
-    for (const c of clips) {
-      if (c.puppetNodeKeyframes) {
-        for (const kf of c.puppetNodeKeyframes) {
-          v = v * 31 + kf.frame * 7 + Math.round((kf.angle ?? 0) * 10) +
-              Math.round((kf.offsetX ?? 0) * 10) + Math.round((kf.offsetY ?? 0) * 10) +
-              Math.round((kf.stretch ?? 1) * 100) + (kf.zIndex ?? 0) * 13;
-        }
-      }
-    }
-    return v;
-  });
+  const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
+  // All parts are non-puppet now (puppet system deleted)
+  const nonPuppetParts = parts;
 
   // ---- Subscribe to currentFrame/zoom/pan via ref ----
   useEffect(() => {
@@ -186,7 +168,7 @@ export function useCanvasState() {
   const weightPaintBoneId = useEditorStore((s) => s.weightPaintBoneId);
   const showPuppetSkeleton = useEditorStore((s) => s.showPuppetSkeleton);
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
-  const selectedPuppetNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
+  const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
   const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
   const referenceImageOpacity = useEditorStore((s) => s.referenceImageOpacity);
   const referenceImageVisible = useEditorStore((s) => s.referenceImageVisible);
@@ -194,7 +176,7 @@ export function useCanvasState() {
   const refWizardOpen = useEditorStore((s) => s.refWizardOpen);
   const magicWandTolerance = useEditorStore((s) => s.magicWandTolerance);
   const trajectorySnap = useEditorStore((s) => s.trajectorySnap);
-  const partEditPartId = useEditorStore((s) => s.partEditPartId);
+  const spriteEditSpriteId = useEditorStore((s) => s.spriteEditSpriteId);
   const partEditModifiers = useEditorStore((s) => s.partEditModifiers);
   const brushStyle = useEditorStore((s) => s.brushStyle);
   const brushStyleParams = useEditorStore((s) => s.brushStyleParams);
@@ -204,7 +186,7 @@ export function useCanvasState() {
   const editorStore = useEditorStore;
 
   // ---- Derived ----
-  const selectedPart = parts.find((p) => p.id === selectedPartId) ?? null;
+  const selectedPart: Sprite | null = (selectedPartId ? spritesRecord[selectedPartId] : undefined) ?? null;
 
   // ---- Helper: get full translate offset ----
   const getFullTranslateOffset = useCallback(
@@ -212,7 +194,7 @@ export function useCanvasState() {
       const store = useProjectStore.getState();
       const { getSurroundingKeyframes: getSurrounding } = store;
       const { prev } = getSurrounding(partId, frame);
-      const part = store.parts.find(p => p.id === partId);
+      const part = store.sprites[partId];
       if (!part) return { offsetX: 0, offsetY: 0 };
 
       const keyframe = prev;
@@ -285,8 +267,8 @@ export function useCanvasState() {
   );
 
   const canvasToPartLocal = useCallback(
-    (px: number, py: number, part: Part, translateOffsetX: number = 0, translateOffsetY: number = 0): { lx: number; ly: number } | null => {
-      if (editMode === 'part_edit' && partEditPartId === part.id) {
+    (px: number, py: number, part: Sprite, translateOffsetX: number = 0, translateOffsetY: number = 0): { lx: number; ly: number } | null => {
+      if (editMode === 'part_edit' && spriteEditSpriteId === part.id) {
         const offsetX = Math.floor((canvasWidth - part.width) / 2);
         const offsetY = Math.floor((canvasHeight - part.height) / 2);
         const localX = px - offsetX;
@@ -296,16 +278,16 @@ export function useCanvasState() {
       }
       const offsetX = canvasWidth / 2;
       const offsetY = canvasHeight / 2;
-      const localX = px - (offsetX - part.pivotX + 0 + translateOffsetX);
-      const localY = py - (offsetY - part.pivotY + 0 + translateOffsetY);
+      const localX = px - (offsetX - spritePivotX(part) + 0 + translateOffsetX);
+      const localY = py - (offsetY - spritePivotY(part) + 0 + translateOffsetY);
       if (localX < 0 || localX >= part.width || localY < 0 || localY >= part.height) return null;
       return { lx: localX, ly: localY };
-    }, [canvasWidth, canvasHeight, editMode, partEditPartId],
+    }, [canvasWidth, canvasHeight, editMode, spriteEditSpriteId],
   );
 
   // ---- Find topmost part at pixel position ----
   const findPartAtPixel = useCallback(
-    (px: number, py: number): Part | null => {
+    (px: number, py: number): Sprite | null => {
       const offsetX = canvasWidth / 2;
       const offsetY = canvasHeight / 2;
       const frame = useProjectStore.getState().currentFrame;
@@ -326,13 +308,13 @@ export function useCanvasState() {
     (px: number, py: number, color: PixelColor, stampIndex: number = 0) => {
       const currentFrame = currentFrameRef.current;
       if (!selectedPart) return;
-      const { offsetX: txOff, offsetY: tyOff } = getInterpolatedTranslateOffset(selectedPart.id, currentFrame);
+      const { offsetX: txOff, offsetY: tyOff } = getInterpolatedTranslateOffset(selectedPart.id!, currentFrame);
       const local = canvasToPartLocal(px, py, selectedPart, txOff, tyOff);
       if (!local) return;
 
       const store = useProjectStore.getState();
-      const currentKf = store.keyframes.find(k => k.partId === selectedPart.id && k.frame === currentFrame);
-      const basePixels = currentKf?.correctionMask ?? selectedPart.pixels;
+      const currentKf = store.keyframes.find(k => k.partId === selectedPart.id! && k.frame === currentFrame);
+      const basePixels = currentKf?.correctionMask ?? selectedPart.data;
       const newPixels: PixelGrid = basePixels.map((row) => [...row]);
 
       if (brushStyle === 'solid' || color === null) {
@@ -353,7 +335,7 @@ export function useCanvasState() {
       }
 
       if (currentKf?.correctionMask) store.setCorrection(currentKf.id, newPixels);
-      else setPartPixels(selectedPart.id, newPixels);
+      else setPartPixels(selectedPart.id!, newPixels);
     }, [selectedPart, brushSize, brushStyle, brushStyleParams, canvasToPartLocal, setPartPixels, setCorrection, getInterpolatedTranslateOffset, canvasWidth, canvasHeight],
   );
 
@@ -361,16 +343,16 @@ export function useCanvasState() {
     (px: number, py: number) => {
       const currentFrame = currentFrameRef.current;
       if (!selectedPart) return;
-      const { offsetX: txOff, offsetY: tyOff } = getInterpolatedTranslateOffset(selectedPart.id, currentFrame);
+      const { offsetX: txOff, offsetY: tyOff } = getInterpolatedTranslateOffset(selectedPart.id!, currentFrame);
       const local = canvasToPartLocal(px, py, selectedPart, txOff, tyOff);
       if (!local) return;
 
       const store = useProjectStore.getState();
-      const currentKf = store.keyframes.find(k => k.partId === selectedPart.id && k.frame === currentFrame);
-      const basePixels = currentKf?.correctionMask ?? selectedPart.pixels;
+      const currentKf = store.keyframes.find(k => k.partId === selectedPart.id! && k.frame === currentFrame);
+      const basePixels = currentKf?.correctionMask ?? selectedPart.data;
       const filled = floodFill(basePixels, local.lx, local.ly, brushColor);
       if (currentKf?.correctionMask) store.setCorrection(currentKf.id, filled);
-      else setPartPixels(selectedPart.id, filled);
+      else setPartPixels(selectedPart.id!, filled);
     }, [selectedPart, brushColor, canvasToPartLocal, setPartPixels, setCorrection, getInterpolatedTranslateOffset, canvasWidth, canvasHeight],
   );
 
@@ -421,53 +403,45 @@ export function useCanvasState() {
 
   // ---- Compute puppet node world pivot position ----
   const computePivotWorldPosition = useCallback(
-    (node: PuppetNode, skeleton: PuppetSkeleton, canvasW: number, canvasH: number): { x: number; y: number } => {
-      const state = useProjectStore.getState();
-      const clip = state.animationClips.find(c => c.puppetCharacterId === state.puppetCharacters.find(ch => ch.puppetSkeletonId === skeleton.id)?.id);
-      const keyframes = clip?.puppetNodeKeyframes ?? [];
-      const kfByNode = new Map<string, PuppetNodeKeyframe[]>();
-      for (const kf of keyframes) { const arr = kfByNode.get(kf.nodeId) || []; arr.push(kf); kfByNode.set(kf.nodeId, arr); }
-
+    (node: Node, character: Character, canvasW: number, canvasH: number): { x: number; y: number } => {
+      // 新模型：使用 rest pose（transform），不做关键帧插值
       const centerX = canvasW / 2;
       const centerY = canvasH / 2;
-      const currentFrame = state.currentFrame;
+      const nodes = Object.values(character.nodes);
 
       const parentMap = new Map<string, { parentId: string; socketId: string }>();
-      for (const n of skeleton.nodes) {
-        if (n.plug) {
-          const parentNode = skeleton.nodes.find(pn => pn.sockets.some(s => s.id === n.plug!.socketId));
-          if (parentNode) parentMap.set(n.id, { parentId: parentNode.id, socketId: n.plug.socketId });
+      for (const n of nodes) {
+        if (n.attachment?.type === 'socket' && n.attachment.parentSocketId) {
+          const socketId = n.attachment.parentSocketId;
+          const parentNode = nodes.find(pn => pn.sockets.some(s => s.id === socketId));
+          if (parentNode) parentMap.set(n.id, { parentId: parentNode.id, socketId });
         }
       }
 
       const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
       function computeNodeWorldPos(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldAngle: number): { x: number; y: number; angle: number } {
-        const n = skeleton.nodes.find(nn => nn.id === nodeId);
+        const n = character.nodes[nodeId];
         if (!n) return { x: parentWorldX, y: parentWorldY, angle: 0 };
-        let angle = n.angle, offsetX = n.offsetX, offsetY = n.offsetY;
-        const nodeKfs = kfByNode.get(n.id) || [];
-        if (nodeKfs.length > 0) {
-          const sorted = [...nodeKfs].sort((a, b) => a.frame - b.frame);
-          let prevKf: PuppetNodeKeyframe | null = null;
-          for (const kf of sorted) { if (kf.frame <= currentFrame) prevKf = kf; }
-          if (prevKf) { angle = prevKf.angle ?? n.angle; offsetX = prevKf.offsetX ?? n.offsetX; offsetY = prevKf.offsetY ?? n.offsetY; }
-        }
+        const angle = n.transform.angle ?? 0;
+        const offsetX = n.transform.x ?? 0;
+        const offsetY = n.transform.y ?? 0;
         let worldX: number, worldY: number;
-        if (!n.plug) { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
+        const isSocketAttached = n.attachment?.type === 'socket';
+        if (!isSocketAttached) { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
         else {
           const parentInfo = parentMap.get(n.id);
           if (parentInfo) {
             const parentPos = worldPositions.get(parentInfo.parentId);
             if (parentPos) {
-              const parentNode = skeleton.nodes.find(nn => nn.id === parentInfo.parentId);
+              const parentNode = character.nodes[parentInfo.parentId];
               const socket = parentNode?.sockets.find(s => s.id === parentInfo.socketId);
               if (socket && parentNode) {
                 const parentAngleRad = (parentPos.angle * Math.PI) / 180;
                 const cosA = Math.cos(parentAngleRad); const sinA = Math.sin(parentAngleRad);
                 const rotatedOffsetX = offsetX * cosA - offsetY * sinA;
                 const rotatedOffsetY = offsetX * sinA + offsetY * cosA;
-                worldX = Math.round(parentPos.x + (socket.localX * cosA - socket.localY * sinA) + rotatedOffsetX);
-                worldY = Math.round(parentPos.y + (socket.localX * sinA + socket.localY * cosA) + rotatedOffsetY);
+                worldX = Math.round(parentPos.x + (socket.basePosition.x * cosA - socket.basePosition.y * sinA) + rotatedOffsetX);
+                worldY = Math.round(parentPos.y + (socket.basePosition.x * sinA + socket.basePosition.y * cosA) + rotatedOffsetY);
               } else { worldX = Math.round(parentPos.x + offsetX); worldY = Math.round(parentPos.y + offsetY); }
             } else { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
           } else { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
@@ -475,121 +449,123 @@ export function useCanvasState() {
         const worldAngle = parentWorldAngle + angle;
         const pos = { x: worldX, y: worldY, angle: worldAngle };
         worldPositions.set(n.id, pos);
-        for (const childInfo of skeleton.nodes.filter(nn => nn.plug && parentMap.get(nn.id)?.parentId === n.id)) computeNodeWorldPos(childInfo.id, worldX, worldY, worldAngle);
+        for (const childInfo of nodes.filter(nn => nn.attachment?.type === 'socket' && parentMap.get(nn.id)?.parentId === n.id)) computeNodeWorldPos(childInfo.id, worldX, worldY, worldAngle);
         return pos;
       }
-      for (const n of skeleton.nodes) { if (!n.plug) computeNodeWorldPos(n.id, centerX, centerY, 0); }
+      for (const n of nodes) { if (n.attachment?.type !== 'socket') computeNodeWorldPos(n.id, centerX, centerY, 0); }
       const nodePos = worldPositions.get(node.id);
       return nodePos ? { x: nodePos.x, y: nodePos.y } : { x: centerX, y: centerY };
     }, [],
   );
 
-  // ---- Puppet node hit-testing ----
+  // ---- Puppet node hit-testing (Character model) ----
   const findPuppetNodeAtPixel = useCallback(
-    (px: number, py: number): { node: PuppetNode; skeleton: PuppetSkeleton; character: PuppetCharacter; clipId: string | null } | null => {
+    (px: number, py: number): { node: Node; character: Character; clipId: string | null } | null => {
       const hitRadius = Math.max(20 / zoom, 8);
       const state = useProjectStore.getState();
-      const skeletons = state.puppetSkeletons;
-      const characters = state.puppetCharacters;
+      const characters = state.unifiedCharacters;
       const clips = state.animationClips;
-      const partsById = new Map(state.parts.map(p => [p.id, p]));
-      let bestHit: { node: PuppetNode; skeleton: PuppetSkeleton; character: PuppetCharacter; clipId: string | null; score: number } | null = null;
+      let bestHit: { node: Node; character: Character; clipId: string | null; score: number } | null = null;
 
-      for (const character of characters) {
-        const skeleton = skeletons.find(s => s.id === character.puppetSkeletonId);
-        if (!skeleton) continue;
-        const skel = skeleton;
+      for (const character of Object.values(characters)) {
         const clip = clips.find(c => c.puppetCharacterId === character.id);
-        const keyframes = clip?.puppetNodeKeyframes ?? [];
         const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
         const centerX = canvasWidth / 2;
         const centerY = canvasHeight / 2;
-
-        const parentMap = new Map<string, { parentId: string; socketId: string }>();
-        for (const node of skel.nodes) {
-          if (node.plug) { const parentNode = skel.nodes.find(n => n.sockets.some(s => s.id === node.plug!.socketId)); if (parentNode) parentMap.set(node.id, { parentId: parentNode.id, socketId: node.plug.socketId }); }
-        }
-        const kfByNode = new Map<string, PuppetNodeKeyframe[]>();
-        for (const kf of keyframes) { const arr = kfByNode.get(kf.nodeId) || []; arr.push(kf); kfByNode.set(kf.nodeId, arr); }
+        const nodes = Object.values(character.nodes);
 
         function computeNodeWorldPos(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldAngle: number): { x: number; y: number; angle: number } {
-          const node = skel.nodes.find(n => n.id === nodeId);
+          const node = character.nodes[nodeId];
           if (!node) return { x: parentWorldX, y: parentWorldY, angle: 0 };
-          const nodeKfs = kfByNode.get(node.id) || [];
-          const currentFrame = state.currentFrame;
-          let angle = node.angle, offsetX = node.offsetX, offsetY = node.offsetY;
-          if (nodeKfs.length > 0) {
-            const sorted = [...nodeKfs].sort((a, b) => a.frame - b.frame);
-            let prevKf: PuppetNodeKeyframe | null = null, nextKf: PuppetNodeKeyframe | null = null;
-            for (const kf of sorted) { if (kf.frame <= currentFrame) prevKf = kf; if (kf.frame > currentFrame && !nextKf) nextKf = kf; }
-            if (prevKf) {
-              angle = prevKf.angle ?? node.angle; offsetX = prevKf.offsetX ?? node.offsetX; offsetY = prevKf.offsetY ?? node.offsetY;
-              if (nextKf && prevKf.frame !== nextKf.frame) {
-                const t = (currentFrame - prevKf.frame) / (nextKf.frame - prevKf.frame);
-                offsetX = (prevKf.offsetX ?? node.offsetX) + ((nextKf.offsetX ?? node.offsetX) - (prevKf.offsetX ?? node.offsetX)) * t;
-                offsetY = (prevKf.offsetY ?? node.offsetY) + ((nextKf.offsetY ?? node.offsetY) - (prevKf.offsetY ?? node.offsetY)) * t;
-              }
-            }
-          }
+          // Rest pose (no keyframe interpolation for hit testing)
+          const angle = node.transform.angle;
+          const offsetX = node.transform.x;
+          const offsetY = node.transform.y;
           let worldX: number, worldY: number;
-          if (!node.plug) { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
-          else {
-            const parentInfo = parentMap.get(node.id);
-            if (parentInfo) {
-              const parentPos = worldPositions.get(parentInfo.parentId);
-              if (parentPos) {
-                const parentNode = skel.nodes.find(n => n.id === parentInfo.parentId);
-                const socket = parentNode?.sockets.find(s => s.id === parentInfo.socketId);
-                if (socket && parentNode) {
-                  const parentAngleRad = (parentPos.angle * Math.PI) / 180;
-                  const cosA = Math.cos(parentAngleRad); const sinA = Math.sin(parentAngleRad);
-                  const rotatedOffsetX = offsetX * cosA - offsetY * sinA;
-                  const rotatedOffsetY = offsetX * sinA + offsetY * cosA;
-                  worldX = Math.round(parentPos.x + (socket.localX * cosA - socket.localY * sinA) + rotatedOffsetX);
-                  worldY = Math.round(parentPos.y + (socket.localX * sinA + socket.localY * cosA) + rotatedOffsetY);
-                } else { worldX = Math.round(parentPos.x + offsetX); worldY = Math.round(parentPos.y + offsetY); }
-              } else { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
-            } else { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
+          const isRoot = !node.parentId;
+          if (isRoot) {
+            worldX = Math.round(centerX + offsetX);
+            worldY = Math.round(centerY + offsetY);
+          } else {
+            const parentNode = node.parentId ? character.nodes[node.parentId] : undefined;
+            const parentPos = node.parentId ? worldPositions.get(node.parentId) : undefined;
+            if (parentPos && parentNode) {
+              // Socket attachment: find socket position on parent
+              const socketId = node.attachment.parentSocketId;
+              const socket = socketId ? parentNode.sockets.find(s => s.id === socketId) : undefined;
+              const parentAngleRad = (parentPos.angle * Math.PI) / 180;
+              const cosA = Math.cos(parentAngleRad); const sinA = Math.sin(parentAngleRad);
+              const socketX = socket ? (socket.basePosition?.x ?? 0) : 0;
+              const socketY = socket ? (socket.basePosition?.y ?? 0) : 0;
+              const plugX = node.attachment.plug?.x ?? 0;
+              const plugY = node.attachment.plug?.y ?? 0;
+              // World pos = parent pos + rotated (socket pos - plug pos + offset)
+              const localX = socketX - plugX + offsetX;
+              const localY = socketY - plugY + offsetY;
+              worldX = Math.round(parentPos.x + localX * cosA - localY * sinA);
+              worldY = Math.round(parentPos.y + localX * sinA + localY * cosA);
+            } else {
+              worldX = Math.round(centerX + offsetX);
+              worldY = Math.round(centerY + offsetY);
+            }
           }
           const worldAngle = parentWorldAngle + angle;
           worldPositions.set(node.id, { x: worldX, y: worldY, angle: worldAngle });
-          for (const childInfo of skel.nodes.filter(n => n.plug && parentMap.get(n.id)?.parentId === node.id)) computeNodeWorldPos(childInfo.id, worldX, worldY, worldAngle);
+          for (const child of nodes.filter(n => n.parentId === node.id)) {
+            computeNodeWorldPos(child.id, worldX, worldY, worldAngle);
+          }
           return { x: worldX, y: worldY, angle: worldAngle };
         }
-        for (const node of skel.nodes) { if (!node.plug) computeNodeWorldPos(node.id, centerX, centerY, 0); }
+        for (const node of nodes) { if (!node.parentId) computeNodeWorldPos(node.id, centerX, centerY, 0); }
 
-        const activeCostumeSet = character.activeCostumeSetId ? character.costumeSets.find(cs => cs.id === character.activeCostumeSetId) : null;
-        const direction = skel.currentDirection;
+        const activeCostumeSet = character.activeCostumeSetId
+          ? character.costumeSets.find(cs => cs.id === character.activeCostumeSetId)
+          : null;
+        // Direction from root node transform
+        const rootNode = character.nodes[character.rootNodeId];
+        const direction = (rootNode?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
-        for (const node of skel.nodes) {
+        for (const node of nodes) {
           if (!node.visible) continue;
           const pos = worldPositions.get(node.id);
           if (!pos) continue;
-          const part = resolvePuppetNodeSprite(node, direction, activeCostumeSet ?? null, state.parts);
+          // Resolve sprite from Character.sprites table (via costumePiece or node.sprite)
+          let sprite: import('@/lib/unified-types').Sprite | null = null;
+          if (node.costumePiece && activeCostumeSet) {
+            const piece = activeCostumeSet.pieces[node.costumePiece.slotKey];
+            if (piece) {
+              const ref = piece.sprites[direction] ?? piece.sprites[0];
+              if (ref) {
+                sprite = 'spriteId' in ref ? (useProjectStore.getState().sprites[ref.spriteId] ?? null) : ref;
+              }
+            }
+          }
+          if (!sprite && node.sprite) sprite = node.sprite;
           let endWorldX: number, endWorldY: number;
-          if (part) {
-            const endLocal = computeSpriteEndPoint(part.width, part.height, part.pivotX, part.pivotY);
+          if (sprite) {
+            const endLocal = computeSpriteEndPoint(sprite.width, sprite.height, sprite.plug?.x ?? 0, sprite.plug?.y ?? 0);
             const rad = (pos.angle * Math.PI) / 180;
             endWorldX = pos.x + endLocal.x * Math.cos(rad) - endLocal.y * Math.sin(rad);
             endWorldY = pos.y + endLocal.x * Math.sin(rad) + endLocal.y * Math.cos(rad);
           } else { endWorldX = pos.x; endWorldY = pos.y; }
 
           let score: number;
-          if (!node.plug) {
+          const isRoot = !node.parentId;
+          if (isRoot) {
             score = Math.min(Math.sqrt((px - endWorldX) ** 2 + (py - endWorldY) ** 2), Math.sqrt((px - pos.x) ** 2 + (py - pos.y) ** 2));
           } else {
             const distToEnd = Math.sqrt((px - endWorldX) ** 2 + (py - endWorldY) ** 2);
             const midX = (pos.x + endWorldX) / 2; const midY = (pos.y + endWorldY) / 2;
             score = Math.min(distToEnd * 0.7, Math.sqrt((px - midX) ** 2 + (py - midY) ** 2));
           }
-          const spriteExtent = part ? Math.max(part.width, part.height) / 2 : 5;
+          const spriteExtent = sprite ? Math.max(sprite.width, sprite.height) / 2 : 5;
           const maxDist = hitRadius + spriteExtent;
           if (score <= maxDist && (!bestHit || score < bestHit.score)) {
-            bestHit = { node, skeleton: skel, character, clipId: clip?.id ?? null, score };
+            bestHit = { node, character, clipId: clip?.id ?? null, score };
           }
         }
       }
-      return bestHit ? { node: bestHit.node, skeleton: bestHit.skeleton, character: bestHit.character, clipId: bestHit.clipId } : null;
+      return bestHit ? { node: bestHit.node, character: bestHit.character, clipId: bestHit.clipId } : null;
     }, [canvasWidth, canvasHeight, zoom],
   );
 
@@ -634,7 +610,7 @@ export function useCanvasState() {
       if (!hitPart) return;
       for (const skeleton of skeletons) {
         const bone = skeleton.bones.find(b => b.id === weightPaintBoneId);
-        if (bone) { useProjectStore.getState().bindPartToBone(skeleton.id, weightPaintBoneId, hitPart.id, 1.0); break; }
+        if (bone) { useProjectStore.getState().bindPartToBone(skeleton.id, weightPaintBoneId, hitPart.id!, 1.0); break; }
       }
     }, [weightPaintBoneId, findPartAtPixel, skeletons],
   );
@@ -645,7 +621,7 @@ export function useCanvasState() {
     if (mask.size === 0) return;
     const projectStore = useProjectStore.getState();
     projectStore.performBatch('提取选区', () => {
-      const { addPart, setPartPixels, updatePart } = projectStore;
+      const { addSprite, setSpritePixels, updateSprite } = projectStore;
       const offsetX = canvasWidth / 2; const offsetY = canvasHeight / 2;
       const sorted = [...parts].sort((a, b) => 0);
       const selectedPixels: { x: number; y: number; color: string; partId: string; localX: number; localY: number }[] = [];
@@ -654,8 +630,8 @@ export function useCanvasState() {
         const px = parseInt(pxStr, 10); const py = parseInt(pyStr, 10);
         for (const part of sorted) {
           const local = canvasToPartLocal(px, py, part);
-          if (local && part.pixels[local.ly]?.[local.lx] !== null) {
-            selectedPixels.push({ x: px, y: py, color: part.pixels[local.ly][local.lx]!, partId: part.id, localX: local.lx, localY: local.ly });
+          if (local && part.data[local.ly]?.[local.lx] !== null) {
+            selectedPixels.push({ x: px, y: py, color: part.data[local.ly][local.lx]!, partId: part.id!, localX: local.lx, localY: local.ly });
             break;
           }
         }
@@ -674,22 +650,26 @@ export function useCanvasState() {
       }
       if (count === 0) { mask.clear(); return; }
       const pivotX = Math.round(sumX / count); const pivotY = Math.round(sumY / count);
-      const newPart = addPart(partName || '选区', partW, partH);
-      updatePart(newPart.id, { pivotX: pivotX + (minX - Math.floor(canvasWidth / 2) + newPart.pivotX - (newPart.pivotX - pivotX)), pivotY: pivotY + (minY - Math.floor(canvasHeight / 2) + newPart.pivotY - (newPart.pivotY - pivotY)) });
-      setPartPixels(newPart.id, pixels);
-      editorStore.getState().selectPart(newPart.id);
+      // addSprite 默认 plug 为中心（px）；原 pivot 算式里 newPart.pivotX 即此默认值
+      const defPivotX = Math.floor(partW / 2); const defPivotY = Math.floor(partH / 2);
+      const newSprite = addSprite(partName || '选区', partW, partH, {
+        plugX: pivotX + (minX - Math.floor(canvasWidth / 2) + defPivotX - (defPivotX - pivotX)),
+        plugY: pivotY + (minY - Math.floor(canvasHeight / 2) + defPivotY - (defPivotY - pivotY)),
+      });
+      setSpritePixels(newSprite.id!, pixels);
+      editorStore.getState().selectPart(newSprite.id!);
 
       if (mode !== 'keep') {
-        const partPixels = new Map<string, { part: Part; locals: Set<string> }>();
+        const partPixels = new Map<string, { part: Sprite; locals: Set<string> }>();
         for (const sp of selectedPixels) {
           if (!partPixels.has(sp.partId)) { const part = parts.find(p => p.id === sp.partId)!; partPixels.set(sp.partId, { part, locals: new Set() }); }
           partPixels.get(sp.partId)!.locals.add(`${sp.localX},${sp.localY}`);
         }
         for (const [partId, { part, locals }] of partPixels) {
-          const newPixels: PixelGrid = part.pixels.map(row => [...row]);
-          if (mode === 'transparent') { for (const key of locals) { const [lx, ly] = key.split(',').map(Number); if (ly >= 0 && ly < part.height && lx >= 0 && lx < part.width) newPixels[ly][lx] = null; } setPartPixels(partId, newPixels); }
-          else if (mode === 'fill') { for (const key of locals) { const [lx, ly] = key.split(',').map(Number); if (ly >= 0 && ly < part.height && lx >= 0 && lx < part.width) newPixels[ly][lx] = fillColor; } setPartPixels(partId, newPixels); }
-          else if (mode === 'inpaint') { const inpainted = inpaintPixels(newPixels, locals, 3); setPartPixels(partId, inpainted); }
+          const newPixels: PixelGrid = part.data.map(row => [...row]);
+          if (mode === 'transparent') { for (const key of locals) { const [lx, ly] = key.split(',').map(Number); if (ly >= 0 && ly < part.height && lx >= 0 && lx < part.width) newPixels[ly][lx] = null; } setSpritePixels(partId, newPixels); }
+          else if (mode === 'fill') { for (const key of locals) { const [lx, ly] = key.split(',').map(Number); if (ly >= 0 && ly < part.height && lx >= 0 && lx < part.width) newPixels[ly][lx] = fillColor; } setSpritePixels(partId, newPixels); }
+          else if (mode === 'inpaint') { const inpainted = inpaintPixels(newPixels, locals, 3); setSpritePixels(partId, inpainted); }
         }
       }
     });
@@ -700,7 +680,7 @@ export function useCanvasState() {
     onionDataVersionRef.current++;
     invalidateUnifiedPipelineCache();
     dirtyRef.current = true;
-  }, [parts, keyframes, backgroundColor, onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, partEditModifiers, puppetSkeletons, puppetCharacters, puppetClipsVersion]);
+  }, [parts, keyframes, backgroundColor, onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, partEditModifiers, unifiedCharacters]);
 
   // ---- Container size / canvas dimension effects ----
   useEffect(() => {
@@ -740,8 +720,8 @@ export function useCanvasState() {
     onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes,
     effectTracks, skeletons, proceduralAnimations, canvasModifierTracks,
     setPartPixels, setCorrection, frameRate, setCanvasSize, animationVariables,
-    globalModifiers, puppetSkeletons, puppetCharacters, puppetSpritePartIds,
-    nonPuppetParts, puppetClipsVersion,
+    globalModifiers,
+    nonPuppetParts, unifiedCharacters,
     // Tile/puppet
     workspaceMode, isPuppetMode,
     // Editor
@@ -750,10 +730,10 @@ export function useCanvasState() {
     autoMotionBlur, autoMotionBlurIntensity, motionBlurBrushType, motionBlurIntensity, motionBlurDirection,
     effectBrushColor, effectBrushRadius, effectBrushIntensity, effectBrushDensity, effectBrushSpread, strokeBlendMode,
     showSkeletons, selectedBoneId, activeSkeletonId, showWeightPaint, weightPaintBoneId,
-    showPuppetSkeleton, activePuppetSkeletonId, selectedPuppetNodeId,
+    showPuppetSkeleton, activePuppetSkeletonId, selectedNodeId,
     referenceImageUrl, referenceImageOpacity, referenceImageVisible, maskNodeId,
     refWizardOpen,
-    magicWandTolerance, trajectorySnap, partEditPartId, partEditModifiers,
+    magicWandTolerance, trajectorySnap, spriteEditSpriteId, partEditModifiers,
     brushStyle, brushStyleParams, compositingMode, styleAspects, strokeDrivers, editorStore,
     // Derived
     selectedPart,

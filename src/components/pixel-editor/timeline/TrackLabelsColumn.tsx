@@ -15,7 +15,8 @@ import {
   Eye, EyeOff, Lock, Unlock, ChevronDown, ChevronRight, Plus, Circle, Diamond, Palette,
 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store';
-import type { Track, Part, EffectTrack, CanvasModifierTrack, Keyframe, EffectType, PuppetNode, PuppetNodeKeyframe } from '@/lib/types';
+import type { Track, EffectTrack, CanvasModifierTrack, Keyframe, EffectType } from '@/lib/types';
+import type { Sprite } from '@/lib/unified-types';
 import { ANIMATION_MODIFIER_TYPES, MODIFIER_DEFINITIONS } from '@/lib/types';
 import type { TrackTimelineDisplay } from '@/lib/v15-types';
 import { RULER_HEIGHT, TRACK_HEIGHT, SUB_TRACK_HEIGHT, LABEL_WIDTH, EFFECT_CONFIG, CATEGORY_COLOR_MAP, PUPPET_COLOR, TRACK_COLOR_HUES } from './constants';
@@ -23,7 +24,7 @@ import { RULER_HEIGHT, TRACK_HEIGHT, SUB_TRACK_HEIGHT, LABEL_WIDTH, EFFECT_CONFI
 // ---- Left: Track Labels Column ----
 interface TrackLabelsColumnProps {
   tracks: Track[];
-  parts: Part[];
+  sprites: Sprite[];
   effectTracks: EffectTrack[];
   canvasModifierTracks: CanvasModifierTrack[];
   getKeyframesForPart: (partId: string) => Keyframe[];
@@ -35,7 +36,7 @@ interface TrackLabelsColumnProps {
   selectedEffectTrackId: string | null;
   onSelectEffectTrack: (id: string | null) => void;
   isPuppetClip: boolean;
-  puppetNodes: PuppetNode[];
+  nodeList: import("@/lib/unified-types").Node[];
   labelScrollRef: React.RefObject<HTMLDivElement | null>;
   // V15: Track colors and frame step
   trackTimelineDisplays?: Record<string, TrackTimelineDisplay>;
@@ -45,10 +46,10 @@ interface TrackLabelsColumnProps {
 }
 
 export default function TrackLabelsColumn({
-  tracks, parts, effectTracks, canvasModifierTracks, getKeyframesForPart,
+  tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart,
   visibleRange, rowOffsets, rowHeights, totalHeight,
   getPartName, selectedEffectTrackId, onSelectEffectTrack,
-  isPuppetClip, puppetNodes, labelScrollRef,
+  isPuppetClip, nodeList, labelScrollRef,
   trackTimelineDisplays, trackFrameSteps,
   onUpdateTrackTimelineDisplay, onSetTrackFrameStep,
 }: TrackLabelsColumnProps) {
@@ -86,10 +87,11 @@ export default function TrackLabelsColumn({
           <div style={{ height: rowOffsets[visibleRange.startIndex] }} />
         )}
 
-        {tracks.map((track, idx) => {
+        {/* Legacy Part tracks: skipped in puppet-only mode (isPuppetClip) */}
+        {!isPuppetClip && tracks.map((track, idx) => {
           if (idx < visibleRange.startIndex || idx > visibleRange.endIndex) return null;
           const partName = getPartName(track.partId);
-          const part = parts.find((p) => p.id === track.partId);
+          const part = sprites.find((p) => p.id === track.partId);
           const animModifiers = ([] as import('@/lib/types').PartAnimationModifier[]) ;
           const trackKeyframes = getKeyframesForPart(track.partId);
           const kfModifierTypes = [...new Set(
@@ -308,15 +310,15 @@ export default function TrackLabelsColumn({
         })()}
 
         {/* Puppet Node labels */}
-        {isPuppetClip && puppetNodes.length > 0 && (() => (
+        {isPuppetClip && nodeList.length > 0 && (() => (
           <React.Fragment key="puppet-section-labels">
             <div className="flex items-center px-2 border-b border-[#2a2a4a]" style={{ height: 20, background: '#0c0c1e' }}>
               <span className="text-[9px] text-cyan-400 uppercase tracking-widest select-none font-medium">🎭 木偶节点</span>
             </div>
-            {puppetNodes.map((node) => (
-              <div key={`puppet-label-${node.id}`} className="flex items-center gap-1 px-2 border-b border-[#1a1a2e] hover:bg-[#141428] transition-colors"
+            {nodeList.map((node) => (
+              <div key={`node-label-${node.id}`} className="flex items-center gap-1 px-2 border-b border-[#1a1a2e] hover:bg-[#141428] transition-colors"
                 style={{ height: TRACK_HEIGHT, background: '#0e1028' }}>
-                <span className="size-2.5 rounded-full shrink-0" style={{ backgroundColor: node.color || PUPPET_COLOR }} />
+                <span className="size-2.5 rounded-full shrink-0" style={{ backgroundColor: node.attachment?.discColor || PUPPET_COLOR }} />
                 <span className="text-xs text-cyan-300 truncate flex-1 min-w-0 select-none" title={node.name}>{node.name}</span>
               </div>
             ))}

@@ -39,21 +39,20 @@ export default function ParamDriverEditDialog({
   const isAnim = source === 'animation';
   const {
     keyframes, updateParamDriver, removeParamDriver, bakeParamDriver, unbakeParamDriver, addParamDriver, totalFrames,
-    parts, addAnimParamDriver, updateAnimParamDriver, removeAnimParamDriver, bakeAnimParamDriver, unbakeAnimParamDriver,
+    addAnimParamDriver, updateAnimParamDriver, removeAnimParamDriver, bakeAnimParamDriver, unbakeAnimParamDriver,
   } = useProjectStore();
   const [activeDriverId, setActiveDriverId] = useState<string | null>(null);
 
   const modifier = useMemo(() => {
     if (!modifierId) return null;
     if (isAnim) {
-      if (!partId) return null;
-      const part = parts.find((p) => p.id === partId);
-      return ([] as import('@/lib/types').PartAnimationModifier[])?.find((m) => m.id === modifierId) ?? null;
+      // Part model removed; animation param drivers on parts no longer supported.
+      return null;
     }
     if (!keyframeId) return null;
     const kf = keyframes.find((k) => k.id === keyframeId);
     return kf?.modifiers.find((m) => m.id === modifierId) ?? null;
-  }, [isAnim, parts, partId, keyframes, keyframeId, modifierId]);
+  }, [isAnim, partId, keyframes, keyframeId, modifierId]);
 
   const drivers = modifier?.paramDrivers ?? [];
   const activeDriver = drivers.find((d) => d.id === (activeDriverId ?? driverId)) ?? null;

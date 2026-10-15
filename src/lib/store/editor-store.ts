@@ -85,8 +85,8 @@ interface EditorStore extends EditorState {
   applyInpaint: (partId: string) => void;
   extractSAMMaskAsPart: () => string | null;
   // Part Edit Mode
-  enterPartEditMode: (partId: string) => void;
-  exitPartEditMode: (cancel: boolean) => void;
+  enterSpriteEditMode: (spriteId: string) => void;
+  exitSpriteEditMode: (cancel: boolean) => void;
   addPartEditModifier: (type: ModifierType) => string;
   updatePartEditModifier: (modId: string, params: Record<string, ModifierParamValue>) => void;
   removePartEditModifier: (modId: string) => void;
@@ -198,11 +198,10 @@ const defaultEditor: EditorState = {
     maskBounds: null,
   },
   inpaintRadius: 3,
-  partEditPartId: null,
-  partEditBackupPixels: null,
+  spriteEditSpriteId: null,
+  spriteEditBackupPixels: null,
   partEditBackupModifiers: [],
   partEditModifiers: [],
-  partEditBackupPartKeyframes: [],
   partEditStartFrame: undefined,
   brushStyle: 'solid' as BrushStyleType,
   brushStyleParams: { ...DEFAULT_BRUSH_STYLE },
@@ -518,23 +517,15 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     return resultPartId;
   },
 
-  enterPartEditMode: (partId: string) => {
+  enterSpriteEditMode: (spriteId: string) => {
     const projectStore = getProjectStore().getState();
-    const part = projectStore.parts.find(p => p.id === partId);
-    if (!part) return;
+    const sprite = projectStore.sprites[spriteId];
+    if (!sprite) return;
 
-    const backupPixels = part.pixels.map(row => [...row]);
-    const backupModifiers = part.editModifiers ? part.editModifiers.map(m => ({ ...m })) : [];
-    const backupPartKeyframes = (part.partKeyframes || []).map(pkf => ({
-      ...pkf,
-      editModifiers: pkf.editModifiers.map(m => ({
-        ...m,
-        params: {
-          ...m.params,
-          ...(m.params.brushCommands ? { brushCommands: JSON.parse(JSON.stringify(m.params.brushCommands)) } : {}),
-        },
-      })),
-    }));
+    const backupPixels = sprite.data.map(row => [...row]);
+    // Sprites are pure assets (no editModifiers/partKeyframes) — backups stay empty.
+    const backupModifiers: any[] = [];
+    const backupPartKeyframes: any[] = [];
 
     const currentFrame = projectStore.currentFrame;
     // Part 已退化为纯精灵数据，不再自带 editModifiers（重构时移除），
@@ -543,10 +534,10 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
     set({
       editMode: 'part_edit',
-      partEditPartId: partId,
-      partEditBackupPixels: backupPixels,
+      spriteEditSpriteId: spriteId,
+      spriteEditBackupPixels: backupPixels,
       partEditBackupModifiers: backupModifiers,
-      partEditBackupPartKeyframes: backupPartKeyframes,
+      
       partEditModifiers: resolvedMods.map(m => ({
         ...m,
         params: {
@@ -555,38 +546,35 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         },
       })),
       partEditStartFrame: currentFrame,
-      selectedPartId: partId,
+      selectedPartId: spriteId,
     });
   },
 
-  exitPartEditMode: (cancel: boolean) => {
-    const { partEditPartId, partEditBackupPixels, partEditBackupModifiers, partEditBackupPartKeyframes, partEditModifiers, partEditStartFrame } = get();
+  exitSpriteEditMode: (cancel: boolean) => {
+    const { spriteEditSpriteId, spriteEditBackupPixels, partEditBackupModifiers, partEditModifiers, partEditStartFrame } = get();
 
-    if (!partEditPartId) {
-      set({ editMode: 'normal', partEditPartId: null, partEditBackupPixels: null, partEditBackupModifiers: [], partEditBackupPartKeyframes: [], partEditModifiers: [], partEditStartFrame: undefined });
+    if (!spriteEditSpriteId) {
+      set({ editMode: 'normal', spriteEditSpriteId: null, spriteEditBackupPixels: null, partEditBackupModifiers: [], partEditModifiers: [], partEditStartFrame: undefined });
       return;
     }
 
     const projectStore = getProjectStore().getState();
 
-    projectStore.performBatch(cancel ? '取消部件编辑' : '完成部件编辑', () => {
+    projectStore.performBatch(cancel ? '取消精灵编辑' : '完成精灵编辑', () => {
     if (cancel) {
-      if (partEditBackupPixels) {
-        projectStore.setPartPixels(partEditPartId, partEditBackupPixels);
+      if (spriteEditBackupPixels) {
+        projectStore.setSpritePixels(spriteEditSpriteId, spriteEditBackupPixels);
       }
-      projectStore.updatePart(partEditPartId, {
-        editModifiers: partEditBackupModifiers,
-        partKeyframes: partEditBackupPartKeyframes || [],
-      });
+      // Sprites are pure assets (no editModifiers/partKeyframes) — nothing else to restore.
     } else {
-      // 确认：将 partEditModifiers 中的 brushCommands 烘焙进 part.pixels
+      // 确认：将 partEditModifiers 中的 brushCommands 烘焙进 sprite.data
       // （part_edit 模式笔刷只攒 commands 做预览，不实时写像素）
-      const part = projectStore.parts.find(p => p.id === partEditPartId);
-      if (part && partEditModifiers.length > 0) {
+      const sprite = projectStore.sprites[spriteEditSpriteId];
+      if (sprite && partEditModifiers.length > 0) {
         const { modifierRegistry } = require('../engine/pixel-modifiers');
         const handler = modifierRegistry.get('pixel_edit');
         if (handler) {
-          const newPixels = part.pixels.map(row => [...row]);
+          const newPixels = sprite.data.map(row => [...row]);
           let applied = false;
           // 逐个 modifier 应用，保留各自的 opacity
           for (const m of partEditModifiers) {
@@ -598,7 +586,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
             }
           }
           if (applied) {
-            projectStore.setPartPixels(partEditPartId, newPixels);
+            projectStore.setSpritePixels(spriteEditSpriteId, newPixels);
           }
         }
       }
@@ -608,10 +596,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
     set({
       editMode: 'normal',
-      partEditPartId: null,
-      partEditBackupPixels: null,
+      spriteEditSpriteId: null,
+      spriteEditBackupPixels: null,
       partEditBackupModifiers: [],
-      partEditBackupPartKeyframes: [],
       partEditModifiers: [],
       partEditStartFrame: undefined,
     });
@@ -698,8 +685,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     projectStore.setPartPixels(partId, resultPixels);
     projectStore.updatePart(partId, { editModifiers: [], partKeyframes: [] });
 
-    const { partEditPartId } = get();
-    if (partEditPartId === partId) {
+    const { spriteEditSpriteId } = get();
+    if (spriteEditSpriteId === partId) {
       set({ partEditModifiers: [] });
     }
   },

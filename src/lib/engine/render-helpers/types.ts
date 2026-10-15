@@ -2,16 +2,15 @@
  * Shared types used by render-pipeline and its extracted helpers.
  */
 
-import type { PuppetDirection } from '../../types';
+import type { DirectionIndex } from '../../unified-types';
 
-/** Interpolated values for a single puppet node at the current frame */
+/** Interpolated values for a single node at the current frame (new Character/Node model) */
 export interface InterpolatedNodeValues {
   angle: number;
   stretch: number;
-  offsetX: number;
-  offsetY: number;
-  direction: PuppetDirection;
-  viewLatitude: number;
+  x: number;
+  y: number;
+  variantIndex: DirectionIndex;
   zIndex: number;
   skewX: number;
   skewY: number;

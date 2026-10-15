@@ -9,7 +9,8 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import { Plus, Trash2, SkipForward } from 'lucide-react';
-import type { Keyframe, PuppetNodeKeyframe } from '@/lib/types';
+import type { Keyframe } from '@/lib/types';
+import type { NodeKeyframe } from '@/lib/unified-types';
 import type { SnapConfig } from '@/lib/v15-types';
 import {
   DEFAULT_FRAME_WIDTH,
@@ -383,7 +384,7 @@ export const EffectKeyframeMarker = React.memo(function EffectKeyframeMarker({
 });
 
 // ---- Puppet Keyframe Marker (teal/cyan diamond) ----
-export const PuppetKeyframeMarker = React.memo(function PuppetKeyframeMarker({
+export const NodeKeyframeMarker = React.memo(function NodeKeyframeMarker({
   keyframe,
   isSelected,
   onSelect,
@@ -391,17 +392,17 @@ export const PuppetKeyframeMarker = React.memo(function PuppetKeyframeMarker({
   onMoveToFrame,
   totalFrames,
   siblingKeyframes,
-  onUpdatePuppetKeyframe,
+  onUpdateNodeKeyframe,
   frameWidth,
 }: {
-  keyframe: PuppetNodeKeyframe;
+  keyframe: NodeKeyframe;
   isSelected: boolean;
   onSelect: () => void;
   onDelete: () => void;
   onMoveToFrame: () => void;
   totalFrames: number;
-  siblingKeyframes: PuppetNodeKeyframe[];
-  onUpdatePuppetKeyframe: (id: string, updates: Partial<PuppetNodeKeyframe>) => void;
+  siblingKeyframes: NodeKeyframe[];
+  onUpdateNodeKeyframe: (id: string, updates: Partial<NodeKeyframe>) => void;
   frameWidth?: number;
 }) {
   const fw = frameWidth ?? DEFAULT_FRAME_WIDTH;
@@ -469,10 +470,10 @@ export const PuppetKeyframeMarker = React.memo(function PuppetKeyframeMarker({
       const finalFrame = dragFrameRef.current;
       if (finalFrame !== keyframe.frame) {
         didDragRef.current = true;
-        onUpdatePuppetKeyframe(keyframe.id, { frame: finalFrame });
+        onUpdateNodeKeyframe(keyframe.id, { frame: finalFrame });
       }
     },
-    [keyframe.id, keyframe.frame, onUpdatePuppetKeyframe]
+    [keyframe.id, keyframe.frame, onUpdateNodeKeyframe]
   );
 
   return (

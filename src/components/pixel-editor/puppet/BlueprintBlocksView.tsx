@@ -38,6 +38,7 @@ const BLOCK_COLORS: Record<string, string> = {
 
 const BLOCK_TEMPLATES: Record<string, string> = {
   time: '当前帧', const: '常量 {value}', var: '变量 {name}',
+  sprite_source: '精灵源', costume: '服装 {setId} 的 {slot} 精灵',
   add: '{a} + {b}', sub: '{a} - {b}', mul: '{a} × {b}', div: '{a} ÷ {b}',
   sin: 'sin {x}', cos: 'cos {x}',
   ease: '缓动 {x}', timeRemap: '时间重映射 {t}',

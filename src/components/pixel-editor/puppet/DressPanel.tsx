@@ -9,26 +9,30 @@ import {
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import type {
-  PuppetCharacter,
-  PuppetSkeleton,
-  PuppetNode,
-  PuppetDirection,
-  Part,
-} from '@/lib/types';
+  Character,
+  Node,
+  CostumeSet,
+  DirectionIndex,
+  Sprite,
+} from '@/lib/unified-types';
+import {
+  createDefaultCostumeSet,
+  createDefaultCostumePiece,
+} from '@/lib/unified-types';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 
-const DIRECTIONS: { value: PuppetDirection; label: string }[] = [
-  { value: 'S', label: '南' },
-  { value: 'E', label: '东' },
-  { value: 'W', label: '西' },
-  { value: 'N', label: '北' },
+const DIRECTIONS: { value: DirectionIndex; label: string }[] = [
+  { value: 6, label: '南' },
+  { value: 0, label: '东' },
+  { value: 4, label: '西' },
+  { value: 2, label: '北' },
 ];
 
 interface DressPanelProps {
-  puppetCharacters: PuppetCharacter[];
-  puppetSkeletons: PuppetSkeleton[];
-  parts: Part[];
+  unifiedCharacters: Record<string, Character>;
+  /** 可分配的精灵（全局精灵表；父组件由 s.sprites 转换传入） */
+  sprites: Sprite[];
   selectedCostumeId: string | null;
   setSelectedCostumeId: (id: string | null) => void;
   selectedNodeId: string | null;
@@ -38,33 +42,32 @@ interface DressPanelProps {
 }
 
 /**
- * DressPanel — 穿衣阶段。
+ * DressPanel — 穿衣阶段（新模型）。
  * 节点驱动：选角色 → 选服装集 → 选节点 → 给四个方向配精灵。
- * 服装集保留，但 UI 不再是独立管理器，而是嵌在节点流程里。
+ * 写入 Character.sprites 表 + CostumeSet.pieces（SpriteRef），不再用 spriteMap。
  */
 export default function DressPanel({
-  puppetCharacters,
-  puppetSkeletons,
-  parts,
+  unifiedCharacters,
+  sprites,
   selectedCostumeId,
   setSelectedCostumeId,
   selectedNodeId,
   handleSelectNodeWithSync,
   hideNodeList = false,
 }: DressPanelProps) {
-  // 角色从左侧选中的骨架反查，不再用右侧选择
+  // 角色：unifiedCharacters 以 skeletonId 为 key
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
-  const selectedCharacter = useMemo(
-    () => puppetCharacters.find((c) => c.puppetSkeletonId === activePuppetSkeletonId) ?? null,
-    [puppetCharacters, activePuppetSkeletonId]
-  );
+  const syncPuppetToUnified = useProjectStore((s) => s.syncPuppetToUnified);
+  const updateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
 
-  const skeleton = useMemo(
-    () =>
-      selectedCharacter
-        ? puppetSkeletons.find((s) => s.id === selectedCharacter.puppetSkeletonId) ?? null
-        : null,
-    [selectedCharacter, puppetSkeletons]
+  const selectedCharacter = useMemo(() => {
+    if (!activePuppetSkeletonId) return null;
+    return unifiedCharacters[activePuppetSkeletonId] ?? syncPuppetToUnified(activePuppetSkeletonId);
+  }, [unifiedCharacters, activePuppetSkeletonId, syncPuppetToUnified]);
+
+  const characterNodes = useMemo(
+    () => (selectedCharacter ? Object.values(selectedCharacter.nodes) : []),
+    [selectedCharacter]
   );
 
   const costumeSets = selectedCharacter?.costumeSets ?? [];
@@ -74,83 +77,92 @@ export default function DressPanel({
   );
 
   const selectedNode = useMemo(
-    () => skeleton?.nodes.find((n) => n.id === selectedNodeId) ?? null,
-    [skeleton, selectedNodeId]
+    () => (selectedNodeId ? (selectedCharacter?.nodes[selectedNodeId] ?? null) : null),
+    [selectedCharacter, selectedNodeId]
   );
 
   // ---- Handlers ----
   const handleAddCostume = () => {
-    if (!selectedCharacter?.id) return;
+    if (!selectedCharacter || !activePuppetSkeletonId) return;
     const store = useProjectStore.getState();
     store.pushUndo('添加服装集');
-    const newSet = {
-      id: crypto.randomUUID(),
-      name: `服装${costumeSets.length + 1}`,
-      spriteMap: {},
-    };
-    useProjectStore.setState({
-      puppetCharacters: (store.puppetCharacters ?? []).map((c) =>
-        c.id === selectedCharacter?.id
-          ? { ...c, costumeSets: [...c.costumeSets, newSet] }
-          : c
-      ),
+    const newSet = createDefaultCostumeSet(
+      crypto.randomUUID(),
+      `服装${costumeSets.length + 1}`
+    );
+    updateUnifiedCharacter(activePuppetSkeletonId, {
+      costumeSets: [...selectedCharacter.costumeSets, newSet],
     });
     setSelectedCostumeId(newSet.id);
   };
 
   const handleDeleteCostume = (costumeId: string) => {
-    if (!selectedCharacter?.id) return;
-    const store = useProjectStore.getState();
-    const cs = store.puppetCharacters
-      ?.find((c) => c.id === selectedCharacter?.id)
-      ?.costumeSets.find((s) => s.id === costumeId);
+    if (!selectedCharacter || !activePuppetSkeletonId) return;
+    const cs = selectedCharacter.costumeSets.find((s) => s.id === costumeId);
     if (!confirm(`删除服装集「${cs?.name ?? ''}」（含全部方向精灵分配）？`)) return;
+    const store = useProjectStore.getState();
     store.pushUndo('删除服装集');
-    useProjectStore.setState({
-      puppetCharacters: (store.puppetCharacters ?? []).map((c) =>
-        c.id === selectedCharacter?.id
-          ? { ...c, costumeSets: c.costumeSets.filter((cs) => cs.id !== costumeId) }
-          : c
-      ),
+    const remaining = selectedCharacter.costumeSets.filter((cs) => cs.id !== costumeId);
+    updateUnifiedCharacter(activePuppetSkeletonId, {
+      costumeSets: remaining,
+      // 如果删除的是激活服装，切换到第一个
+      ...(selectedCharacter.activeCostumeSetId === costumeId
+        ? { activeCostumeSetId: remaining[0]?.id }
+        : {}),
     });
     if (selectedCostumeId === costumeId) {
       setSelectedCostumeId(null);
     }
   };
 
-  const handleSpriteAssign = (nodeId: string, direction: PuppetDirection, partId: string | null) => {
-    if (!selectedCharacter?.id || !selectedCostume) return;
+  const handleSpriteAssign = (nodeId: string, direction: DirectionIndex, spriteId: string | null) => {
+    if (!selectedCharacter || !activePuppetSkeletonId || !selectedCostume) return;
     const store = useProjectStore.getState();
     store.pushUndo('分配精灵', 'assignSprite');
-    const key = `${nodeId}:${direction}`;
-    useProjectStore.setState({
-      puppetCharacters: (store.puppetCharacters ?? []).map((c) =>
-        c.id === selectedCharacter?.id
-          ? {
-              ...c,
-              costumeSets: c.costumeSets.map((cs) =>
-                cs.id === selectedCostume.id
-                  ? {
-                      ...cs,
-                      spriteMap: partId
-                        ? { ...cs.spriteMap, [key]: partId }
-                        : Object.fromEntries(
-                            Object.entries(cs.spriteMap).filter(([k]) => k !== key)
-                          ),
-                    }
-                  : cs
-              ),
-            }
-          : c
-      ),
+
+    const table = { ...(selectedCharacter.sprites ?? {}) };
+    const pieces = { ...selectedCostume.pieces };
+
+    if (spriteId) {
+      // Sprite 已是目标格式：确保在角色 sprites 表中，直接引用
+      const sp = sprites.find((s) => s.id === spriteId) ?? table[spriteId];
+      if (!sp) return;
+      const key = sp.id ?? spriteId;
+      if (!table[key]) table[key] = sp;
+      // 写入 pieces[nodeId].sprites[direction] = { spriteId }
+      const piece = pieces[nodeId] ?? createDefaultCostumePiece(nodeId);
+      pieces[nodeId] = {
+        ...piece,
+        sprites: { ...piece.sprites, [direction]: { spriteId: key } },
+      };
+    } else {
+      // 删除分配
+      const piece = pieces[nodeId];
+      if (piece) {
+        const newSprites = { ...piece.sprites };
+        delete newSprites[direction];
+        pieces[nodeId] = { ...piece, sprites: newSprites };
+      }
+    }
+
+    const newCostumeSets = selectedCharacter.costumeSets.map((cs) =>
+      cs.id === selectedCostume.id ? { ...cs, pieces } : cs
+    );
+    updateUnifiedCharacter(activePuppetSkeletonId, {
+      sprites: table,
+      costumeSets: newCostumeSets,
     });
   };
 
-  const getSpriteFor = (nodeId: string, direction: PuppetDirection): Part | null => {
-    if (!selectedCostume) return null;
-    const partId = selectedCostume.spriteMap[`${nodeId}:${direction}`];
-    if (!partId) return null;
-    return parts.find((p) => p.id === partId) ?? null;
+  const getSpriteFor = (nodeId: string, direction: DirectionIndex): Sprite | null => {
+    if (!selectedCostume || !selectedCharacter) return null;
+    const piece = selectedCostume.pieces[nodeId];
+    const ref = piece?.sprites[direction];
+    if (!ref) return null;
+    // SpriteRef → spriteId → 角色 sprites 表
+    const spriteId = 'spriteId' in ref ? ref.spriteId : null;
+    if (!spriteId) return null;
+    return selectedCharacter.sprites?.[spriteId] ?? null;
   };
 
   return (
@@ -202,13 +214,13 @@ export default function DressPanel({
       )}
 
       {/* 节点列表（hideNodeList 时用共享树） */}
-      {!hideNodeList && skeleton && selectedCostume && (
+      {!hideNodeList && selectedCharacter && selectedCostume && (
         <div>
           <Label className="text-[10px] text-gray-500 uppercase tracking-wider">
-            节点（{skeleton.nodes.length}）
+            节点（{characterNodes.length}）
           </Label>
           <div className="bg-[#080818] rounded border border-[#1e1e3a] p-1 max-h-40 overflow-y-auto mt-1">
-            {skeleton.nodes.map((node) => {
+            {characterNodes.map((node) => {
               const hasSprite = DIRECTIONS.some((d) => getSpriteFor(node.id, d.value));
               return (
                 <div
@@ -235,9 +247,9 @@ export default function DressPanel({
       {selectedNode && selectedCostume && (
         <DirectionSpriteEditor
           node={selectedNode}
-          parts={parts}
+          sprites={sprites}
           getSpriteFor={getSpriteFor}
-          onAssign={(dir, partId) => handleSpriteAssign(selectedNode.id, dir, partId)}
+          onAssign={(dir, spriteId) => handleSpriteAssign(selectedNode.id, dir, spriteId)}
         />
       )}
     </div>
@@ -247,16 +259,16 @@ export default function DressPanel({
 // ---- 四方向精灵编辑器 ----
 function DirectionSpriteEditor({
   node,
-  parts,
+  sprites,
   getSpriteFor,
   onAssign,
 }: {
-  node: PuppetNode;
-  parts: Part[];
-  getSpriteFor: (nodeId: string, dir: PuppetDirection) => Part | null;
-  onAssign: (dir: PuppetDirection, partId: string | null) => void;
+  node: Node;
+  sprites: Sprite[];
+  getSpriteFor: (nodeId: string, dir: DirectionIndex) => Sprite | null;
+  onAssign: (dir: DirectionIndex, spriteId: string | null) => void;
 }) {
-  const [pickerDir, setPickerDir] = useState<PuppetDirection | null>(null);
+  const [pickerDir, setPickerDir] = useState<DirectionIndex | null>(null);
 
   return (
     <div className="bg-[#080818] rounded border border-[#1e1e3a] p-2">
@@ -302,17 +314,17 @@ function DirectionSpriteEditor({
             选择精灵 → {DIRECTIONS.find((d) => d.value === pickerDir)?.label}
           </div>
           <div className="grid grid-cols-3 gap-1">
-            {parts.map((part) => (
+            {sprites.map((sp) => (
               <div
-                key={part.id}
+                key={sp.id ?? sp.name}
                 onClick={() => {
-                  onAssign(pickerDir, part.id);
+                  onAssign(pickerDir, sp.id ?? null);
                   setPickerDir(null);
                 }}
                 className="px-1.5 py-1 rounded text-[9px] bg-black/30 text-gray-400 hover:bg-cyan-500/20 hover:text-cyan-300 cursor-pointer truncate"
-                title={part.name}
+                title={sp.name ?? sp.id}
               >
-                {part.name}
+                {sp.name ?? sp.id?.slice(0, 12)}
               </div>
             ))}
           </div>

@@ -195,7 +195,7 @@ export default function MotionAnalysisDialog({ open, onOpenChange }: MotionAnaly
     // Or: just call motionAnalysisSplit which creates parts for all regions, then remove unwanted ones
 
     // Simpler: call the store method with the frames
-    const newPartIds = motionAnalysisSplit(selectedPixelFrames, {
+    const newSpriteIds = motionAnalysisSplit(selectedPixelFrames, {
       blockSize,
       searchRadius,
       motionThreshold,

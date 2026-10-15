@@ -61,11 +61,10 @@ interface SpritesheetImportDialogProps {
 // ---- Component ----
 
 export default function SpritesheetImportDialog({ open, onOpenChange }: SpritesheetImportDialogProps) {
-  const addPart = useProjectStore((s) => s.addPart);
-  const setPartPixels = useProjectStore((s) => s.setPartPixels);
+  const addSprite = useProjectStore((s) => s.addSprite);
+  const setSpritePixels = useProjectStore((s) => s.setSpritePixels);
   const addAnimationClip = useProjectStore((s) => s.addAnimationClip);
   const updateAnimationClip = useProjectStore((s) => s.updateAnimationClip);
-  const parts = useProjectStore((s) => s.parts);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -303,10 +302,10 @@ export default function SpritesheetImportDialog({ open, onOpenChange }: Spritesh
     tempCtx.drawImage(imageData, 0, 0);
     const fullImageData = tempCtx.getImageData(0, 0, imageData.width, imageData.height);
 
-    const createdPartIds: string[] = [];
+    const createdSpriteIds: string[] = [];
 
     for (const region of enabledRegions) {
-      const part = addPart(`${prefix}${region.label}`, region.width, region.height);
+      const sprite = addSprite(`${prefix}${region.label}`, region.width, region.height);
 
       // Extract pixel data for this region
       const pixels: PixelGrid = [];
@@ -324,18 +323,18 @@ export default function SpritesheetImportDialog({ open, onOpenChange }: Spritesh
         }
         pixels.push(row);
       }
-      setPartPixels(part.id, pixels);
-      createdPartIds.push(part.id);
+      setSpritePixels(sprite.id!, pixels);
+      createdSpriteIds.push(sprite.id!);
     }
 
     // Optionally create animation clip（统一为木偶模型，不再创建部件轨道）
-    if (createClip && createdPartIds.length > 0) {
+    if (createClip && createdSpriteIds.length > 0) {
       const name = clipName || `${prefix}动画`;
       addAnimationClip(name);
     }
 
     onOpenChange(false);
-  }, [imageData, regions, partPrefix, createClip, clipName, addPart, setPartPixels, addAnimationClip, updateAnimationClip, onOpenChange]);
+  }, [imageData, regions, partPrefix, createClip, clipName, addSprite, setSpritePixels, addAnimationClip, updateAnimationClip, onOpenChange]);
 
   const enabledCount = regions.filter((r) => r.enabled).length;
 

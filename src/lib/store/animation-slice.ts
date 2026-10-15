@@ -20,7 +20,6 @@ import {
   SecondaryParamDriver,
   AnimationVariable,
   VariableParamSource,
-  PartKeyframe,
   ModifierInstance,
   createDefaultPartAnimationModifier,
   ModifierCoordinateMode,

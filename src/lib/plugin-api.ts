@@ -15,12 +15,12 @@ export interface PixelMorpherAPI {
   getCurrentFrame(): number;
   getTotalFrames(): number;
 
-  // Parts
-  getParts(): { id: string; name: string; width: number; height: number }[];
-  addPart(name: string, width: number, height: number): string;
-  removePart(id: string): void;
-  getPartPixels(id: string): (string | null)[][] | null;
-  setPartPixels(id: string, pixels: (string | null)[][]): void;
+  // Sprites
+  getSprites(): { id: string; name: string; width: number; height: number }[];
+  addSprite(name: string, width: number, height: number): string;
+  removeSprite(id: string): void;
+  getSpritePixels(id: string): (string | null)[][] | null;
+  setSpritePixels(id: string, pixels: (string | null)[][]): void;
 
   // Keyframes
   addKeyframe(partId: string, frame: number): string;
@@ -69,19 +69,19 @@ export function createAPI(): PixelMorpherAPI {
     getCurrentFrame: () => useProjectStore.getState().currentFrame,
     getTotalFrames: () => useProjectStore.getState().totalFrames,
 
-    getParts: () =>
-      useProjectStore.getState().parts.map((p) => ({
-        id: p.id,
-        name: p.name,
+    getSprites: () =>
+      Object.values(useProjectStore.getState().sprites).map((p) => ({
+        id: p.id!,
+        name: p.name ?? '',
         width: p.width,
         height: p.height,
       })),
-    addPart: (name, w, h) => useProjectStore.getState().addPart(name, w, h).id,
-    removePart: (id) => useProjectStore.getState().removePart(id),
-    getPartPixels: (id) =>
-      useProjectStore.getState().parts.find((p) => p.id === id)?.pixels ?? null,
-    setPartPixels: (id, pixels) =>
-      useProjectStore.getState().setPartPixels(id, pixels),
+    addSprite: (name, w, h) => useProjectStore.getState().addSprite(name, w, h).id!,
+    removeSprite: (id) => useProjectStore.getState().removeSprite(id),
+    getSpritePixels: (id) =>
+      useProjectStore.getState().sprites[id]?.data ?? null,
+    setSpritePixels: (id, pixels) =>
+      useProjectStore.getState().setSpritePixels(id, pixels),
 
     addKeyframe: (partId, frame) =>
       useProjectStore.getState().addKeyframe(partId, frame).id,

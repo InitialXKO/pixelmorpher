@@ -4,7 +4,11 @@ import React, { useRef, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useEditorStore, useProjectStore } from '@/lib/store';
 import PivotEditor from './puppet/PivotEditor';
-import type { Part } from '@/lib/types';
+import type { Sprite } from '@/lib/unified-types';
+import {
+  createDefaultCostumePiece,
+  puppetDirectionToIndex,
+} from '@/lib/unified-types';
 
 // ============================================================
 // MaskBrushOverlay - 遮罩模式专用笔刷
@@ -22,7 +26,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   const isDrawing = useRef(false);
   const lastBarrierPos = useRef<{ x: number; y: number } | null>(null);
   const [brushSize, setBrushSize] = useState(8);
-  const [extractedPart, setExtractedPart] = useState<Part | null>(null);
+  const [extractedSprite, setExtractedSprite] = useState<Sprite | null>(null);
   const [lastUpdateInfo, setLastUpdateInfo] = useState<string | null>(null);
   // 绘制模式：draw=绘制，erase=擦除，barrier=防溢出线
   const [paintMode, setPaintMode] = useState<'draw' | 'erase' | 'barrier'>('draw');
@@ -279,13 +283,16 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       const w = maxX - minX + 1;
       const h = maxY - minY + 1;
       const projectStore = useProjectStore.getState();
-      // 找节点名用于 Part 命名
-      const nodeName = projectStore.puppetSkeletons
-        ?.flatMap((sk) => sk.nodes)
-        .find((n) => n.id === maskNodeId)?.name ?? '未知';
-      const part = projectStore.addPart(`遮罩_${nodeName}`, w, h, {
-        pivotX: Math.floor(w / 2),
-        pivotY: Math.floor(h / 2),
+      // 找节点名用于 Part 命名（新模型：从 unifiedCharacters 查）
+      const unifiedCharacters = projectStore.unifiedCharacters ?? {};
+      let nodeName = '未知';
+      for (const ch of Object.values(unifiedCharacters)) {
+        const node = ch.nodes[maskNodeId];
+        if (node) { nodeName = node.name; break; }
+      }
+      const sprite = projectStore.addSprite(`遮罩_${nodeName}`, w, h, {
+        plugX: Math.floor(w / 2),
+        plugY: Math.floor(h / 2),
       });
 
       const pixels: string[][] = [];
@@ -311,62 +318,54 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
         }
         pixels.push(row);
       }
-      projectStore.setPartPixels(part.id, pixels);
-      console.log('[MaskBrush] 已生成 Part:', part.id);
+      projectStore.setSpritePixels(sprite.id!, pixels);
+      console.log('[MaskBrush] 已生成 Sprite:', sprite.id);
 
-      // 关联到节点：只写当前激活服装的 spriteMap，不改模板节点的 spritePartId
+      // 关联到节点：只写当前激活服装的 pieces（新模型），不改模板节点的 sprite
       // （模板是共享的，服装才是向导产物）
       if (maskNodeId) {
-        const skeletons = projectStore.puppetSkeletons ?? [];
-        const owners = skeletons.filter((sk) =>
-          sk.nodes.some((n) => n.id === maskNodeId)
-        );
-        if (owners.length > 0) {
-          for (const owner of owners) {
-            // 找拥有该骨架的角色，只更新其当前激活服装的 spriteMap
-            // 只写骨架当前方向（对位时选择的方向），不写四个方向
-            const character = (projectStore.puppetCharacters ?? []).find(
-              (c) => c.puppetSkeletonId === owner.id
-            );
-            if (character && character.activeCostumeSetId) {
-              const dir = owner.currentDirection ?? 'S';
-              const activeCs = (character.costumeSets ?? []).find(
-                (cs) => cs.id === character.activeCostumeSetId
-              );
-              if (activeCs) {
-                const newSpriteMap = {
-                  ...activeCs.spriteMap,
-                  [`${maskNodeId}:${dir}`]: part.id,
-                };
-                // 否则渲染时会再翻一次
-                projectStore.updatePuppetNode(owner.id, maskNodeId, {
-                });
-                // 直接更新 store
-                useProjectStore.setState({
-                  puppetCharacters: (useProjectStore.getState().puppetCharacters ?? []).map((c) =>
-                    c.id === character.id
-                      ? {
-                          ...c,
-                          costumeSets: c.costumeSets.map((s) =>
-                            s.id === activeCs.id ? { ...s, spriteMap: newSpriteMap } : s
-                          ),
-                        }
-                      : c
-                  ),
-                });
-              }
-            }
+        const unifiedChars = projectStore.unifiedCharacters ?? {};
+        // 找到拥有该节点的角色（新模型：unifiedCharacters）
+        let ownerId: string | null = null;
+        let ownerChar: (typeof unifiedChars)[string] | null = null;
+        for (const [id, ch] of Object.entries(unifiedChars)) {
+          if (ch.nodes[maskNodeId]) {
+            ownerId = id;
+            ownerChar = ch;
+            break;
           }
-          // 验证（取第一个）
-          const verify = useProjectStore.getState().puppetSkeletons
-            .find((sk) => sk.id === owners[0].id)
-            ?.nodes.find((n) => n.id === maskNodeId);
-          const ok = verify?.spritePartId === part.id;
-          setLastUpdateInfo(
-            `节点 ${maskNodeId.slice(0, 8)} → ${owners.length}个骨架 → Part ${part.id.slice(0, 8)} ${ok ? '✓成功' : '✗失败'}`
-          );
+        }
+        if (ownerChar && ownerId) {
+          // 只写当前激活服装，只写当前方向（对位时选择的方向），不写四个方向
+          // 方向：从角色根节点的 transform.variantIndex 读取（新模型）
+          const rootNode = ownerChar.nodes[ownerChar.rootNodeId];
+          const dirIndex = (rootNode?.transform.variantIndex ?? 6) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+          const activeCsId = ownerChar.activeCostumeSetId;
+          const activeCs = (ownerChar.costumeSets ?? []).find((cs) => cs.id === activeCsId);
+          if (activeCs) {
+            // Sprite 已在全局表，直接引用 ID（无需转换）
+            const spriteId = sprite.id!;
+            // 更新 costumeSet.pieces[maskNodeId].sprites[dirIndex] = { spriteId }
+            const pieces = { ...activeCs.pieces };
+            const piece = pieces[maskNodeId] ?? createDefaultCostumePiece(maskNodeId);
+            pieces[maskNodeId] = {
+              ...piece,
+              sprites: { ...piece.sprites, [dirIndex]: { spriteId } },
+            };
+            const newCostumeSets = ownerChar.costumeSets.map((cs) =>
+              cs.id === activeCs.id ? { ...cs, pieces } : cs
+            );
+            projectStore.updateUnifiedCharacter(ownerId, {
+              costumeSets: newCostumeSets,
+            });
+            setLastUpdateInfo(
+              `节点 ${maskNodeId.slice(0, 8)} → 角色 ${ownerId.slice(0, 8)} → Sprite ${spriteId.slice(0, 12)} ✓成功`
+            );
+          } else {
+            setLastUpdateInfo(`✗角色没有激活服装集`);
+          }
         } else {
-          setLastUpdateInfo(`✗找不到节点所在骨架: ${maskNodeId.slice(0, 8)}`);
+          setLastUpdateInfo(`✗找不到节点所在角色: ${maskNodeId.slice(0, 8)}`);
         }
         console.log('[MaskBrush] 已关联到节点:', maskNodeId);
         // 通知向导更新进度
@@ -375,10 +374,10 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
         );
       }
 
-      // 显示轴心编辑器
-      const fullPart = useProjectStore.getState().parts.find((p) => p.id === part.id);
-      if (fullPart) {
-        setExtractedPart(fullPart);
+      // 显示轴心编辑器（直接编辑全局表中的 Sprite，无需回写）
+      const fullSprite = useProjectStore.getState().sprites[sprite.id!];
+      if (fullSprite) {
+        setExtractedSprite(fullSprite);
         return; // 不立即退出，等轴心确认后再退出
       }
     } catch (err) {
@@ -390,7 +389,8 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   };
 
   const handlePivotClose = () => {
-    setExtractedPart(null);
+    // PivotEditor 直接编辑全局表中的 Sprite，无需回写
+    setExtractedSprite(null);
     setEditMode('normal');
     setMaskNodeId(null);
     // 返回向导继续下一个肢体
@@ -548,8 +548,8 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
         </div>
       )}
       {/* 轴心编辑器 */}
-      {extractedPart && (
-        <PivotEditor part={extractedPart} onClose={handlePivotClose} />
+      {extractedSprite && (
+        <PivotEditor sprite={extractedSprite} onClose={handlePivotClose} />
       )}
     </>
   );

@@ -4,8 +4,8 @@ import React, { useCallback, useEffect } from 'react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
-import { renderCharacterOnionFrameUnified } from '@/lib/unified-pipeline-bridge';
-import { renderPartEditUnified } from '@/lib/unified-pipeline-bridge';
+import { renderCharacterOnionFrameFromCharacter } from '@/lib/unified-pipeline-bridge';
+import { renderSpriteEditUnified } from '@/lib/unified-pipeline-bridge';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
 import { useCanvasState } from './canvas/use-canvas-state';
@@ -67,6 +67,8 @@ export default function PixelCanvas() {
   const performArmed = usePuppetSessionStore((st) => st.performArmed);
   // 订阅当前帧，播放时触发 render 回调更新（否则闭包里的 currentFrame 是旧的）
   const storeCurrentFrame = useProjectStore((st) => st.currentFrame);
+  // 订阅精灵编辑模式的 sprite ID（从 Part 迁移到 Sprite）
+  const spriteEditSpriteId = useEditorStore((st) => st.spriteEditSpriteId);
 
   // ---- Render loop ----
   const render = useCallback(() => {
@@ -143,27 +145,29 @@ export default function PixelCanvas() {
       offCtx.clearRect(0, 0, s.canvasWidth, s.canvasHeight);
       const curVersion = s.onionDataVersionRef.current;
       const kfHash = s.keyframes.map(kf => `${kf.id}:${kf.frame}:${kf.modifiers.length}`).join('|')
-        + `|puppet:${s.puppetClipsVersion}`;
+        + `|node:${useProjectStore.getState().animationClips.map(c => c.nodeKeyframes?.length ?? 0).join(",")}`;
 
-      // 木偶洋葱皮：把指定帧的木偶角色渲染进洋葱缓存画布
+      // 木偶洋葱皮：把指定帧的木偶角色渲染进洋葱缓存画布（新模型）
       // 与顶端开关同构：外层 s.onionSkinEnabled 已控制，此处不再单独检查
       const renderPuppetOnionFrame = (cacheCtx: CanvasRenderingContext2D, frame: number) => {
         const pst = useProjectStore.getState();
-        const clips = pst.animationClips;
-        const skeletons = pst.puppetSkeletons ?? [];
-        const allCharacters = pst.puppetCharacters ?? [];
-        if (skeletons.length === 0 || allCharacters.length === 0) return;
+        const unifiedChars = pst.unifiedCharacters ?? {};
+        const allCharacters = Object.values(unifiedChars);
+        if (allCharacters.length === 0) return;
         // 角色显示互斥：非 perform 或未开启"显示全部"时，只渲染选中角色
+        // 新模型：performCharacterId 直接是 unified Character ID
         const session = usePuppetSessionStore.getState();
-        const characters = filterVisibleCharacters(allCharacters, session);
+        let characters = allCharacters;
+        if (!session.showAllCharacters && session.performCharacterId) {
+          const matched = allCharacters.filter((c) => c.id === session.performCharacterId);
+          if (matched.length > 0) characters = matched;
+        }
         for (const character of characters) {
-          const skel = skeletons.find(sk => sk.id === character.puppetSkeletonId);
-          const clip = clips.find(c => true && c.puppetCharacterId === character.id);
-          if (!skel || !clip) continue;
           try {
-            renderCharacterOnionFrameUnified(
-              cacheCtx, s.canvasWidth, s.canvasHeight, skel, character,
-              pst.parts, clip.puppetNodeKeyframes ?? [], frame,
+            // 新模型：Character 已包含 tracks（sync 时合并），无需单独传 keyframes
+            renderCharacterOnionFrameFromCharacter(
+              cacheCtx, s.canvasWidth, s.canvasHeight, character,
+              [], frame,
               s.frameRate, s.globalModifiers, s.animationVariables
             );
           } catch { /* 单个角色渲染失败不影响其它 */ }
@@ -231,9 +235,10 @@ export default function PixelCanvas() {
     }
 
     // 2. Render current frame
-    if (s.editMode === 'part_edit' && s.partEditPartId) {
-      const part = s.parts.find(p => p.id === s.partEditPartId);
-      if (part) {
+    // 精灵编辑模式：从全局 sprites 表取 Sprite（已从 Part 迁移）
+    if (s.editMode === 'part_edit' && spriteEditSpriteId) {
+      const sprite = useProjectStore.getState().sprites[spriteEditSpriteId];
+      if (sprite) {
         let effectiveMods = s.partEditModifiers;
         if (s.partEditBrushCmdRef.current) {
           const { modifierId, commandId, points } = s.partEditBrushCmdRef.current;
@@ -251,7 +256,7 @@ export default function PixelCanvas() {
             });
           }
         }
-        renderPartEditUnified(offCtx, part, effectiveMods, s.canvasWidth, s.canvasHeight, currentFrame);
+        renderSpriteEditUnified(offCtx, sprite, effectiveMods, s.canvasWidth, s.canvasHeight, currentFrame);
       }
     } else {
       const animationClips = useProjectStore.getState().animationClips;
@@ -260,14 +265,12 @@ export default function PixelCanvas() {
       // 必须从 store 直接读最新的 characters 和 skeletons：闭包里的 s.puppetCharacters/s.puppetSkeletons
       // 在蓝图挂载后可能还是旧引用，导致播放时读不到 blueprint
       const freshStore = useProjectStore.getState();
-      // 同步旧数据到新 unifiedCharacters（替代 LiveAdapter 每帧转换）
-      const { syncUnifiedCharacters } = require('@/lib/store/sync-unified-characters');
-      syncUnifiedCharacters(useProjectStore.setState, useProjectStore.getState);
+      // 新模型：数据直写 unifiedCharacters，无需每帧同步
       const unifiedCharacters = useProjectStore.getState().unifiedCharacters;
       const globalBlueprint = useProjectStore.getState().globalBlueprint;
       // 参考图可见时用透明背景，让参考图透出来做底
       const bgColor = (s.referenceImageUrl && s.referenceImageVisible) ? 'transparent' : s.backgroundColor;
-      renderUnified(offCtx, s.canvasWidth, s.canvasHeight, freshStore.parts, s.keyframes, currentFrame, bgColor,
+      renderUnified(offCtx, s.canvasWidth, s.canvasHeight, Object.values(freshStore.sprites), s.keyframes, currentFrame, bgColor,
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
         s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint);
@@ -330,16 +333,20 @@ export default function PixelCanvas() {
     if (s.isDrawingRef.current && s.tool === 'crop') renderCropPreview(rc, s.cropRectRef.current);
 
     renderBoneOverlay(rc, { skeletons: s.skeletons, showSkeletons: s.showSkeletons, selectedBoneId: s.selectedBoneId, activeSkeletonId: s.activeSkeletonId });
-    renderWeightPaintOverlay(rc, { showWeightPaint: s.showWeightPaint, weightPaintBoneId: s.weightPaintBoneId, skeletons: s.skeletons, parts: s.parts, getInterpolatedTranslateOffset: s.getInterpolatedTranslateOffset });
+    renderWeightPaintOverlay(rc, { showWeightPaint: s.showWeightPaint, weightPaintBoneId: s.weightPaintBoneId, skeletons: s.skeletons, sprites: Object.values(useProjectStore.getState().sprites), getInterpolatedTranslateOffset: s.getInterpolatedTranslateOffset });
     renderTrajectoryOverlay(rc, { showTrajectories: s.showTrajectories, trajectories: s.trajectories, selectedPartId: s.selectedPartId, editMode: s.editMode, trajectorySnap: s.trajectorySnap, totalFrames: useProjectStore.getState().totalFrames });
 
     // Skip puppet skeleton overlay during playback — reduces non-essential drawing overhead
     if (!isPlaying) {
+      // 新模型：从 unifiedCharacters 获取（确保已同步）
+      const pst = useProjectStore.getState();
+      const unifiedChars = pst.unifiedCharacters ?? {};
+      const charList = Object.values(unifiedChars);
       renderPuppetSkeletonOverlay(rc, {
-        shouldRender: (s.isPuppetMode || s.showPuppetSkeleton || s.tool === 'puppet') && s.puppetSkeletons.length > 0,
-        puppetSkeletons: s.puppetSkeletons, activePuppetSkeletonId: s.activePuppetSkeletonId,
-        selectedPuppetNodeId: s.selectedPuppetNodeId, puppetCharacters: s.puppetCharacters,
-        animationClips: useProjectStore.getState().animationClips, parts: s.parts,
+        shouldRender: (s.isPuppetMode || s.showPuppetSkeleton || s.tool === 'puppet') && charList.length > 0,
+        characters: charList, activePuppetSkeletonId: s.activePuppetSkeletonId,
+        selectedNodeId: s.selectedNodeId,
+        animationClips: useProjectStore.getState().animationClips, sprites: Object.values(useProjectStore.getState().sprites),
       });
     }
 
@@ -362,13 +369,13 @@ export default function PixelCanvas() {
   // re-creation of the render callback. Only truly render-affecting state is listed.
   // During playback, most of these don't change, so the callback stays stable.
   }, [
-    s.canvasWidth, s.canvasHeight, s.parts, s.keyframes, s.backgroundColor,
+    s.canvasWidth, s.canvasHeight, useProjectStore.getState().sprites, s.keyframes, s.backgroundColor,
     s.onionSkinEnabled, s.onionSkinFrames, s.showGrid, s.showTrajectories, s.editMode,
     s.trajectories, s.selectedPart, s.selectedPartId, s.motionBlurStrokes, s.effectStrokes,
     s.effectTracks, s.autoMotionBlur, s.autoMotionBlurIntensity, s.tool,
     s.skeletons, s.showSkeletons, s.selectedBoneId, s.activeSkeletonId,
-    s.showWeightPaint, s.weightPaintBoneId, s.puppetSkeletons, s.puppetCharacters, s.puppetClipsVersion,
-    s.canvasModifierTracks, s.partEditPartId, s.partEditModifiers,
+    s.showWeightPaint, s.weightPaintBoneId, s.unifiedCharacters,
+    s.canvasModifierTracks, spriteEditSpriteId, s.partEditModifiers,
     interaction.renderStrokePreview, s.getInterpolatedTranslateOffset,
     showAllCharacters, performCharacterId, storeCurrentFrame,
     // 参考图：URL/可见性/不透明度变化时重建 render，否则闭包里是旧 s
@@ -384,10 +391,11 @@ export default function PixelCanvas() {
     s.markDirty();
   }, [s.referenceImageUrl, s.referenceImageVisible, s.referenceImageOpacity]);
 
-  // 木偶关键帧变化时标记重绘（puppetClipsVersion 含 zIndex）
+  // 节点关键帧变化时标记重绘
+  const animationClips = useProjectStore((s) => s.animationClips);
   useEffect(() => {
     s.markDirty();
-  }, [s.puppetClipsVersion]);
+  }, [animationClips]);
 
   // Animation loop
   useEffect(() => {
@@ -405,11 +413,13 @@ export default function PixelCanvas() {
       const detail = (e as CustomEvent).detail;
       const { nodeId, skeletonId } = detail;
       const projectState = useProjectStore.getState();
-      const skeleton = projectState.puppetSkeletons.find((sk) => sk.id === skeletonId);
-      const node = skeleton?.nodes.find((n) => n.id === nodeId);
-      if (!skeleton || !node) return;
+      // 新模型：从 unifiedCharacters 获取
+      const character = projectState.unifiedCharacters?.[skeletonId]
+        ?? projectState.syncPuppetToUnified?.(skeletonId);
+      const node = character?.nodes[nodeId];
+      if (!character || !node) return;
       // 计算世界坐标
-      const worldPos = s.computePivotWorldPosition(node, skeleton, s.canvasWidth, s.canvasHeight);
+      const worldPos = s.computePivotWorldPosition(node, character, s.canvasWidth, s.canvasHeight);
       // 设置 zoom=3，平移使节点居中
       const zoom = 3;
       const editorStore = useEditorStore.getState();

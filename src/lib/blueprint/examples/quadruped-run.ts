@@ -15,6 +15,14 @@ import type { BlueprintGraph, BlueprintNode } from '../ir';
 import { generateDefaultCostumeSprite } from '@/lib/engine/default-costume-sprites';
 import { DOG_TEMPLATE } from '@/components/pixel-editor/PuppetCreationWizard';
 import type { TemplateNodeDef } from '@/components/pixel-editor/PuppetCreationWizard';
+import { useProjectStore } from '@/lib/store';
+import type { PuppetSessionState } from '@/lib/puppet-session-store';
+import {
+  pxToSub,
+  createDefaultCostumeSet,
+  createDefaultCostumePiece,
+} from '@/lib/unified-types';
+import type { Sprite, Socket, Attachment } from '@/lib/unified-types';
 
 export interface QuadrupedRunSlots {
   frontLegs: string[];
@@ -215,97 +223,167 @@ export function createPuppyRunWestExample(): {
 
 /**
  * 一键创建小狗奔跑示例：复用 DOG_TEMPLATE 的 13 节点结构（侧向/W），
- * 建骨架 + 13 张精灵 + 建角色 + 挂四足奔跑蓝图。
+ * 建 Character + 13 张精灵（sprites 表）+ 默认服装集 + 挂四足奔跑蓝图。
  * 在没有角色时调用，用户点一下就能看到小狗跑。
  * 精灵来自 src/lib/engine/default-costume-sprites.ts 的狗模板
  * （generateDefaultCostumeSprite 内部对节点名做 toLowerCase，
  *  模板的大写 L/R 命名可直接当精灵 key 用）。
+ *
+ * 新模型：直接写 unifiedCharacters，不再经 Part/PuppetSkeleton。
  */
 export function createPuppyRunExampleCharacter(
-  useProjectStoreHook: any,
-  sessionStore: any,
+  useProjectStoreHook: typeof useProjectStore,
+  sessionStore: PuppetSessionState,
 ): string | null {
   try {
     const store = useProjectStoreHook.getState();
 
-  // 1. 建骨架
-  const skeleton = store.addPuppetSkeleton('小狗（奔跑示例）');
+    // 1. 建 Character（新模型真相源）
+    const character = store.addUnifiedCharacter('小狗（奔跑示例）');
+    const characterId = character.id;
+    // 移除 addUnifiedCharacter 自带的默认 root 节点，小狗的 body 才是真正的根
+    store.removeUnifiedNode(characterId, character.rootNodeId);
 
-  // 2. 节点定义：复用 DOG_TEMPLATE（侧向版），配置全部来自模板
-  const defs = getSideViewDogNodes();
+    // 2. 节点定义：复用 DOG_TEMPLATE（侧向版），配置全部来自模板
+    const defs = getSideViewDogNodes();
 
-  // 3. 为每个节点生成精灵 → 建 Part → 建节点（spritePartId 直接写入）
-  const nodeIds: Record<string, string> = {};
-  console.log('[一键小狗] 开始创建节点，共', defs.length, '个:', defs.map(d => d.name));
-  for (const def of defs) {
-    const sprite = generateDefaultCostumeSprite(def.name, 'dog');
-    const part = store.addPart(sprite.partName, sprite.width, sprite.height, {
-      pivotX: sprite.pivotX,
-      pivotY: sprite.pivotY,
-    });
-    store.setPartPixels(part.id, sprite.pixels);
-
-    const node = store.addPuppetNode(skeleton.id, def.name, {
-      sockets: def.sockets.map((s) => ({
-        id: `socket_${Math.random().toString(36).slice(2)}`,
-        ...s,
-      })),
-      // plug 先占位，socketId 在第 4 步修正（模板只写了 socketName）
-      plug: def.plug
-        ? { socketName: def.plug.socketName, socketId: '', localX: def.plug.localX, localY: def.plug.localY, jointWidth: null } as any
-        : null,
-      angle: def.defaultAngle,
-      stretch: def.defaultStretch,
-      offsetX: def.defaultOffsetX,
-      offsetY: def.defaultOffsetY,
-      crossSectionTop: def.crossSectionTop,
-      crossSectionBottom: def.crossSectionBottom,
-      zIndex: def.zIndex,
-      spritePartId: part.id,
-    });
-    nodeIds[def.name] = node.id;
-  }
-
-  // 4. 修正 plug 的 socketId（指向拥有该 socket 的父节点）
-  // 重新获取最新状态（addPuppetNode 后 store 已更新）
-  const freshState = useProjectStoreHook.getState();
-  const allNodes: any[] = freshState.puppetSkeletons
-    .find((sk: any) => sk.id === skeleton.id)?.nodes ?? [];
-  console.log('[一键小狗] 修正plug，共', allNodes.length, '个节点');
-  for (const def of defs) {
-    if (!def.plug) continue;
-    const parentNode = allNodes.find((n: any) =>
-      n.sockets.some((s: any) => s.name === def.plug!.socketName));
-    const socket = parentNode?.sockets.find((s: any) => s.name === def.plug!.socketName);
-    if (socket) {
-      store.updatePuppetNode(skeleton.id, nodeIds[def.name], {
-        plug: { socketId: socket.id, localX: def.plug.localX, localY: def.plug.localY, jointWidth: null },
-      } as any);
+    // 3. 预生成节点 ID 与 socket ID（一次遍历确定父子关系，无需第二遍修正）
+    const nodeIds: Record<string, string> = {};
+    const socketIds: Record<string, string> = {};
+    for (const def of defs) {
+      nodeIds[def.name] = `dog_node_${def.name}`;
+      for (const sock of def.sockets) {
+        socketIds[`${def.name}:${sock.name}`] = `dog_socket_${def.name}_${sock.name}`;
+      }
     }
-  }
+    // 找父节点 def：谁的 sockets 里有名为 def.plug.socketName 的 socket
+    const findParentDef = (def: TemplateNodeDef): TemplateNodeDef | undefined => {
+      if (!def.plug) return undefined;
+      return defs.find((d) => d.sockets.some((s) => s.name === def.plug!.socketName));
+    };
 
-  // 5. 建角色
-  const character = store.addPuppetCharacter('小狗', skeleton.id);
+    // 4. 为每个节点生成精灵 → 存 sprites 表 → 建 Node
+    const spritesTable: Record<string, Sprite> = {};
+    console.log('[一键小狗] 开始创建节点，共', defs.length, '个:', defs.map((d) => d.name));
+    for (const def of defs) {
+      const sprite = generateDefaultCostumeSprite(def.name, 'dog');
+      const spriteId = `dog_sprite_${def.name}`;
+      spritesTable[spriteId] = {
+        width: sprite.width,
+        height: sprite.height,
+        data: sprite.pixels,
+        plug: { x: pxToSub(sprite.pivotX), y: pxToSub(sprite.pivotY) },
+      };
 
-  // 6. 挂蓝图（大腿 + 小腿 + 尾巴 + 身体 + 头）
-  const blueprints = createQuadrupedRunBlueprint({
-    frontLegs: [nodeIds['front_upper_leg_L']!, nodeIds['front_upper_leg_R']!],
-    backLegs: [nodeIds['back_upper_leg_L']!, nodeIds['back_upper_leg_R']!],
-    frontLowerLegs: [nodeIds['front_lower_leg_L']!, nodeIds['front_lower_leg_R']!],
-    backLowerLegs: [nodeIds['back_lower_leg_L']!, nodeIds['back_lower_leg_R']!],
-    tail: nodeIds['tail'],
-    body: nodeIds['body'],
-    head: nodeIds['head'],
-  });
-  for (const [nodeId, graph] of blueprints) {
-    store.updatePuppetNode(skeleton.id, nodeId, { blueprint: graph });
-  }
-  console.log('[一键小狗] 蓝图已挂载:', blueprints.size, '个节点');
+      // sockets：模板 localX/localY → basePosition（SubPixel）
+      const sockets: Socket[] = def.sockets.map((s) => ({
+        id: socketIds[`${def.name}:${s.name}`]!,
+        name: s.name,
+        basePosition: { x: pxToSub(s.localX), y: pxToSub(s.localY) },
+        directionOffsets: {},
+      }));
 
-  // 7. 切到 perform
-  sessionStore.enterPerform(character.id);
+      // attachment：有 plug → socket 模式；无 plug（body）→ fixed 根节点
+      const parentDef = findParentDef(def);
+      let attachment: Attachment;
+      let parentId: string | undefined;
+      if (def.plug && parentDef) {
+        const socketId = socketIds[`${parentDef.name}:${def.plug.socketName}`]!;
+        parentId = nodeIds[parentDef.name];
+        attachment = {
+          type: 'socket',
+          parentSocketId: socketId,
+          plug: { x: pxToSub(def.plug.localX), y: pxToSub(def.plug.localY) },
+        };
+      } else {
+        attachment = {
+          type: 'fixed',
+          fixedOffset: { x: 0, y: 0 },
+          inheritRotation: true,
+        };
+      }
 
-  return character.id;
+      store.addUnifiedNode(characterId, def.name, {
+        id: nodeIds[def.name],
+        sockets,
+        attachment,
+        parentId,
+        transform: {
+          x: pxToSub(def.defaultOffsetX),
+          y: pxToSub(def.defaultOffsetY),
+          angle: def.defaultAngle,
+          stretch: def.defaultStretch,
+          variantIndex: 0,
+        },
+        zIndex: def.zIndex,
+        visible: true,
+        costumePiece: {
+          ...createDefaultCostumePiece(def.name),
+          sprites: { 0: { spriteId } },
+        },
+      });
+    }
+
+    // 5. 回填 children 数组、rootNodeId、sprites 表
+    const createdChar = store.unifiedCharacters[characterId];
+    if (createdChar) {
+      const childMap: Record<string, string[]> = {};
+      for (const node of Object.values(createdChar.nodes)) {
+        if (node.parentId) {
+          if (!childMap[node.parentId]) childMap[node.parentId] = [];
+          childMap[node.parentId].push(node.id);
+        }
+      }
+      for (const [pid, childIds] of Object.entries(childMap)) {
+        const parent = createdChar.nodes[pid];
+        if (parent) {
+          store.updateUnifiedNode(characterId, pid, {
+            children: [...(parent.children || []), ...childIds],
+          });
+        }
+      }
+      const rootNode = Object.values(createdChar.nodes).find((n) => !n.parentId);
+      store.updateUnifiedCharacter(characterId, {
+        rootNodeId: rootNode?.id ?? '',
+        sprites: spritesTable,
+      });
+    }
+
+    // 6. 建默认服装集：从各节点的 costumePiece 收集
+    const costumeSetId = crypto.randomUUID();
+    const newCostumeSet = createDefaultCostumeSet(costumeSetId, '默认服装');
+    const finalChar = store.unifiedCharacters[characterId];
+    if (finalChar) {
+      for (const node of Object.values(finalChar.nodes)) {
+        if (node.costumePiece) {
+          newCostumeSet.pieces[node.costumePiece.slotKey] = node.costumePiece;
+        }
+      }
+      store.updateUnifiedCharacter(characterId, {
+        costumeSets: [newCostumeSet],
+        activeCostumeSetId: costumeSetId,
+      });
+    }
+
+    // 7. 挂蓝图（大腿 + 小腿 + 尾巴 + 身体 + 头）
+    const blueprints = createQuadrupedRunBlueprint({
+      frontLegs: [nodeIds['front_upper_leg_L']!, nodeIds['front_upper_leg_R']!],
+      backLegs: [nodeIds['back_upper_leg_L']!, nodeIds['back_upper_leg_R']!],
+      frontLowerLegs: [nodeIds['front_lower_leg_L']!, nodeIds['front_lower_leg_R']!],
+      backLowerLegs: [nodeIds['back_lower_leg_L']!, nodeIds['back_lower_leg_R']!],
+      tail: nodeIds['tail'],
+      body: nodeIds['body'],
+      head: nodeIds['head'],
+    });
+    for (const [nodeId, graph] of blueprints) {
+      store.updateUnifiedNode(characterId, nodeId, { blueprint: graph });
+    }
+    console.log('[一键小狗] 蓝图已挂载:', blueprints.size, '个节点');
+
+    // 8. 切到 perform
+    sessionStore.enterPerform(characterId);
+
+    return characterId;
   } catch (e) {
     console.error('[一键小狗] 创建失败:', e);
     return null;

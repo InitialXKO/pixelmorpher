@@ -14,10 +14,10 @@ import {
   createQuadrupedRunBlueprint,
   type QuadrupedRunSlots,
 } from '@/lib/blueprint/examples/quadruped-run';
-import type { PuppetSkeleton } from '@/lib/types';
+import type { Character } from '@/lib/unified-types';
 
 interface BlueprintTemplateLoaderProps {
-  skeleton: PuppetSkeleton;
+  character: Character;
 }
 
 const TEMPLATES = [
@@ -36,7 +36,7 @@ const TEMPLATES = [
   },
 ];
 
-export default function BlueprintTemplateLoader({ skeleton }: BlueprintTemplateLoaderProps) {
+export default function BlueprintTemplateLoader({ character }: BlueprintTemplateLoaderProps) {
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const [slotMapping, setSlotMapping] = useState<Record<string, string[]>>({});
 
@@ -85,7 +85,7 @@ export default function BlueprintTemplateLoader({ skeleton }: BlueprintTemplateL
       slots.head,
     ].filter(Boolean) as string[];
     const hasExisting = allNodeIds.some((id) => {
-      const n = skeleton.nodes.find((nn) => nn.id === id);
+      const n = character.nodes[id];
       return n?.blueprint;
     });
     if (hasExisting) {
@@ -95,10 +95,10 @@ export default function BlueprintTemplateLoader({ skeleton }: BlueprintTemplateL
     }
 
     const blueprints = createQuadrupedRunBlueprint(slots);
-    const updatePuppetNode = useProjectStore.getState().updatePuppetNode;
+    const updateUnifiedNode = useProjectStore.getState().updateUnifiedNode;
 
     for (const [nodeId, graph] of blueprints) {
-      updatePuppetNode(skeleton.id, nodeId, { blueprint: graph });
+      updateUnifiedNode(character.id, nodeId, { blueprint: graph });
     }
 
     setSelectedTemplate(null);
@@ -152,7 +152,7 @@ export default function BlueprintTemplateLoader({ skeleton }: BlueprintTemplateL
               {isMulti && <span className="text-gray-600">（可多选）</span>}
             </div>
             <div className="flex flex-wrap gap-1">
-              {skeleton.nodes.map((n) => {
+              {Object.values(character.nodes).map((n) => {
                 const isSelected = selected.includes(n.id);
                 return (
                   <button

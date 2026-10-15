@@ -23,14 +23,28 @@ import PathEditor from './PathEditor';
 import HeightmapEditor from './HeightmapEditor';
 import { modifiersToBlueprint } from '@/lib/blueprint/migrate';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
+import { resolveNodeSpriteId } from '@/lib/unified-render';
 
-/** 高度图绘制区：读写 Part.heightmap */
-function HeightmapSection({ partId }: { partId: string }) {
-  const part = useProjectStore((s) => s.parts.find((p) => p.id === partId));
-  const updatePart = useProjectStore((s) => s.updatePart);
+/** 按节点解析当前精灵 ID，再渲染高度图编辑区 */
+function HeightmapSectionForNode({ characterId, nodeId }: { characterId: string; nodeId: string }) {
+  const spriteId = useProjectStore((s) => {
+    const ch = s.unifiedCharacters[characterId];
+    if (!ch) return null;
+    const rootNode = ch.nodes[ch.rootNodeId];
+    const direction = ((rootNode?.transform as any)?.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+    return resolveNodeSpriteId(ch, nodeId, direction, s.sprites);
+  });
+  if (!spriteId) return null;
+  return <HeightmapSection spriteId={spriteId} />;
+}
+
+/** 高度图绘制区：读写全局 s.sprites[spriteId].heightmap */
+function HeightmapSection({ spriteId }: { spriteId: string }) {
+  const sprite = useProjectStore((s) => s.sprites[spriteId]);
+  const updateSprite = useProjectStore((s) => s.updateSprite);
   const [showEditor, setShowEditor] = useState(false);
 
-  if (!part) return null;
+  if (!sprite) return null;
 
   return (
     <div className="mt-2 pt-2 border-t border-[#2a2a4a]">
@@ -38,15 +52,15 @@ function HeightmapSection({ partId }: { partId: string }) {
         onClick={() => setShowEditor(!showEditor)}
         className="text-[10px] text-cyan-300 hover:text-cyan-200 flex items-center gap-1"
       >
-        <span>{showEditor ? '▼' : '▶'}</span> 高度图绘制 {part.heightmap ? '(已绘制)' : '(空)'}
+        <span>{showEditor ? '▼' : '▶'}</span> 高度图绘制 {sprite.heightmap ? '(已绘制)' : '(空)'}
       </button>
       {showEditor && (
         <div className="mt-1">
           <HeightmapEditor
-            value={part.heightmap}
-            onChange={(hm) => updatePart(partId, { heightmap: hm })}
-            width={part.width}
-            height={part.height}
+            value={sprite.heightmap}
+            onChange={(hm) => updateSprite(spriteId, { heightmap: hm })}
+            width={sprite.width}
+            height={sprite.height}
           />
         </div>
       )}
@@ -67,83 +81,115 @@ const PUPPET_MODIFIER_TYPES: AnimationModifierType[] = [
 ];
 
 export default function PuppetModifierPanel() {
-  const puppetSkeletons = useProjectStore((s) => s.puppetSkeletons) ?? [];
-  const addPuppetNodeModifier = useProjectStore((s) => s.addPuppetNodeModifier);
-  const removePuppetNodeModifier = useProjectStore((s) => s.removePuppetNodeModifier);
-  const updatePuppetNodeModifier = useProjectStore((s) => s.updatePuppetNodeModifier);
-  const togglePuppetNodeModifier = useProjectStore((s) => s.togglePuppetNodeModifier);
+  const syncPuppetToUnified = useProjectStore((s) => s.syncPuppetToUnified);
+  const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
+  const updateUnifiedNode = useProjectStore((s) => s.updateUnifiedNode);
+  const addUnifiedNodeModifier = useProjectStore((s) => s.addUnifiedNodeModifier);
+  const removeUnifiedNodeModifier = useProjectStore((s) => s.removeUnifiedNodeModifier);
+  const updateUnifiedNodeModifier = useProjectStore((s) => s.updateUnifiedNodeModifier);
+  const toggleUnifiedNodeModifier = useProjectStore((s) => s.toggleUnifiedNodeModifier);
 
   const [addingType, setAddingType] = useState<AnimationModifierType>('pendulum');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'modifiers' | 'blueprint' | 'templates'>('modifiers');
 
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
-  const selectedPuppetNodeId = useProjectStore((s) => s.selectedPuppetNodeId);
+  const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
 
-  const skeleton = useMemo(
-    () => puppetSkeletons.find((sk) => sk.id === activePuppetSkeletonId) ?? null,
-    [puppetSkeletons, activePuppetSkeletonId]
+  const character = useMemo(
+    () => (activePuppetSkeletonId ? (unifiedCharacters[activePuppetSkeletonId] ?? syncPuppetToUnified(activePuppetSkeletonId)) : null),
+    [unifiedCharacters, activePuppetSkeletonId, syncPuppetToUnified]
+  );
+  // For BlueprintTemplateLoader (migrated to Character model)
+  const unifiedCharacterForTemplates = useMemo(
+    () => (activePuppetSkeletonId ? (unifiedCharacters[activePuppetSkeletonId] ?? syncPuppetToUnified(activePuppetSkeletonId)) : null),
+    [unifiedCharacters, activePuppetSkeletonId, syncPuppetToUnified]
   );
   const node = useMemo(
-    () => skeleton?.nodes.find((n) => n.id === selectedPuppetNodeId) ?? null,
-    [skeleton, selectedPuppetNodeId]
+    () => (character && selectedNodeId ? character.nodes[selectedNodeId] ?? null : null),
+    [character, selectedNodeId]
   );
+  // 角色即 Character（取服装集给 costume 蓝图节点用）
+  const costumeSets = character?.costumeSets ?? [];
+  // 边界转换：Puppet spriteMap 格式 → 新 pieces 格式（costume 蓝图节点用）
+  // Puppet: spriteMap["nodeId:direction"] -> partId
+  // 新格式: pieces[nodeId].sprites[direction].data = pixels
+  const costumeSetsNewFormat = useMemo(() => {
+    const sprites = useProjectStore.getState().sprites ?? {};
+    return costumeSets.map((cs: any) => {
+      const pieces: Record<string, { sprites: Record<number, { data: unknown }> }> = {};
+      for (const [key, spriteId] of Object.entries(cs.spriteMap ?? {})) {
+        const sep = key.lastIndexOf(':');
+        if (sep < 0) continue;
+        const nodeId = key.slice(0, sep);
+        const direction = Number(key.slice(sep + 1));
+        if (!nodeId || isNaN(direction)) continue;
+        const sprite = sprites[spriteId as string];
+        if (!sprite?.data) continue;
+        if (!pieces[nodeId]) pieces[nodeId] = { sprites: {} };
+        pieces[nodeId].sprites[direction] = { data: sprite.data };
+      }
+      return { id: cs.id, name: cs.name, pieces };
+    });
+  }, [costumeSets]);
   const modifiers = node?.modifiers ?? [];
 
   // 蓝图：优先用节点自带的，没有则从 modifiers 即时转换
   const blueprint: BlueprintGraph | null = useMemo(() => {
     if (!node) return null;
     // 标记节点ID，供预览区分当前编辑节点
-    const bp = node.blueprint ?? (modifiers.length > 0 ? modifiersToBlueprint(modifiers) : null);
+    const bp = (node as any).blueprint ?? (modifiers.length > 0 ? modifiersToBlueprint(modifiers as any) : null);
     if (bp) (bp as any)._nodeId = node.id;
     return bp;
   }, [node, modifiers]);
 
   // 整角色预览数据：所有节点的精灵和蓝图（含层级）
   const characterNodes = useMemo(() => {
-    if (!skeleton) return undefined;
-    const parts = useProjectStore.getState().parts ?? [];
-    const partMap = new Map(parts.map((p: any) => [p.id, p]));
+    if (!character) return undefined;
     // 建 socket 位置映射：socketId -> {nodeId, x, y}
     const socketMap = new Map<string, { x: number; y: number }>();
-    for (const n of skeleton.nodes) {
+    for (const n of Object.values(character?.nodes ?? {})) {
       for (const s of (n.sockets ?? [])) {
-        socketMap.set(s.id, { x: s.localX ?? 0, y: s.localY ?? 0 });
+        socketMap.set(s.id, { x: s.basePosition?.x ?? 0, y: s.basePosition?.y ?? 0 });
       }
     }
     // 建 parent 映射：通过 plug.socketId 找到父节点
     const nodeBySocket = new Map<string, string>();
-    for (const n of skeleton.nodes) {
+    for (const n of Object.values(character?.nodes ?? {})) {
       for (const s of (n.sockets ?? [])) {
         nodeBySocket.set(s.id, n.id);
       }
     }
-    return skeleton.nodes.map((n: any) => {
-      const part = n.spritePartId ? partMap.get(n.spritePartId) : null;
+    return Object.values(character?.nodes ?? {}).map((n: any) => {
+      // New model: sprite from node.sprite or costumePiece
+      const sprite = n.sprite ?? null;
       const bp = n.blueprint ?? (n.modifiers?.length ? modifiersToBlueprint(n.modifiers) : null);
-      const plug = n.plug;
-      const parentId = plug?.socketId ? nodeBySocket.get(plug.socketId) ?? null : null;
-      const sock = plug?.socketId ? socketMap.get(plug.socketId) : null;
+      const attachment = n.attachment;
+      const parentId = n.parentId ?? null;
+      const socketId = attachment?.type === 'socket' ? attachment.parentSocketId ?? null : null;
+      const sock = socketId ? socketMap.get(socketId) : null;
+      const plug = attachment?.plug;
       return {
         id: n.id,
         name: n.name,
         blueprint: bp,
-        spritePixels: part?.pixels ?? null,
-        spriteW: part?.width,
-        spriteH: part?.height,
-        heightmap: part?.heightmap ?? null,
+        spritePixels: sprite?.data ?? null,
+        spriteW: sprite?.width,
+        spriteH: sprite?.height,
+        heightmap: sprite?.heightmap ?? null,
         parentId,
-        socketId: plug?.socketId ?? null,
+        socketId,
         socketX: sock?.x ?? 0,
         socketY: sock?.y ?? 0,
-        plugX: plug?.localX ?? 0,
-        plugY: plug?.localY ?? 0,
+        plugX: plug?.x ?? 0,
+        plugY: plug?.y ?? 0,
+        variantIndex: n.transform?.variantIndex ?? 0,
       };
     });
-  }, [skeleton]);
+  }, [character]);
 
   const updateBlueprint = (g: BlueprintGraph) => {
-    if (!skeleton || !node) return;
+    if (!character || !node) return;
     const store = useProjectStore.getState();
     
     // 反向同步：蓝图 → modifiers 列表
@@ -161,7 +207,7 @@ export default function PuppetModifierPanel() {
     
     // 先保存蓝图 + 删除的 modifier（直接更新，不触发 sync，避免二次修改蓝图）
     let newModifiers = modifiers.filter(m => !toDelete.has(m.id));
-    store.updatePuppetNode(skeleton.id, node.id, { 
+    updateUnifiedNode(activePuppetSkeletonId!, node.id, { 
       blueprint: g,
       modifiers: newModifiers,
     } as any);
@@ -231,8 +277,8 @@ export default function PuppetModifierPanel() {
       
       // 写回（直接更新 modifiers 数组，不触发蓝图 sync）
       if (paramsChanged || blendModeChanged || timeChanged || enabledChanged) {
-        const sk = useProjectStore.getState().puppetSkeletons.find(s => s.id === skeleton.id);
-        const nd = sk?.nodes.find(n => n.id === node.id);
+        const ch = useProjectStore.getState().unifiedCharacters[activePuppetSkeletonId!];
+        const nd = ch?.nodes[node.id];
         if (nd) {
           const updatedMods = (nd.modifiers ?? []).map((m: any) => {
             if (m.id !== mod.id) return m;
@@ -243,7 +289,7 @@ export default function PuppetModifierPanel() {
             if (timeChanged) Object.assign(updated, timeUpdates);
             return updated;
           });
-          useProjectStore.getState().updatePuppetNode(skeleton.id, node.id, { modifiers: updatedMods } as any);
+          useProjectStore.getState().updateUnifiedNode(activePuppetSkeletonId!, node.id, { modifiers: updatedMods } as any);
         }
       }
     }
@@ -251,7 +297,7 @@ export default function PuppetModifierPanel() {
 
   // 创建空蓝图（含输出节点）
   const createBlueprint = () => {
-    if (!skeleton || !node) return;
+    if (!character || !node) return;
     const outputId = `node_${Date.now().toString(36)}`;
     const graph: BlueprintGraph = {
       version: 1,
@@ -266,13 +312,13 @@ export default function PuppetModifierPanel() {
       ],
       outputId,
     };
-    useProjectStore.getState().updatePuppetNode(skeleton.id, node.id, { blueprint: graph });
+    useProjectStore.getState().updateUnifiedNode(activePuppetSkeletonId!, node.id, { blueprint: graph });
   };
 
-  if (!node || !skeleton) return null;
+  if (!node || !character) return null;
 
   const handleAdd = () => {
-    addPuppetNodeModifier(skeleton.id, node.id, addingType);
+    addUnifiedNodeModifier(activePuppetSkeletonId!, node.id, addingType);
   };
 
   return (
@@ -316,8 +362,8 @@ export default function PuppetModifierPanel() {
         </div>
       </div>
 
-      {activeTab === 'templates' ? (
-        <BlueprintTemplateLoader skeleton={skeleton} />
+      {activeTab === 'templates' && unifiedCharacterForTemplates ? (
+        <BlueprintTemplateLoader character={unifiedCharacterForTemplates} />
       ) : activeTab === 'blueprint' ? (
         <>
           {blueprint ? (
@@ -325,8 +371,9 @@ export default function PuppetModifierPanel() {
               graph={blueprint}
               onChange={updateBlueprint}
               title={`${node.name} 的蓝图`}
-              skeleton={skeleton}
+              skeleton={character ? { nodes: Object.values(character.nodes).map(n => ({ id: n.id, name: n.name })) } : null}
               characterNodes={characterNodes}
+              costumeSets={costumeSetsNewFormat}
             />
           ) : (
             <div className="text-center py-4 space-y-2">
@@ -379,14 +426,15 @@ export default function PuppetModifierPanel() {
         {modifiers.map((m) => (
           <ModifierRow
             key={m.id}
-            modifier={m}
-            partId={node.spritePartId}
+            modifier={m as any}
+            characterId={activePuppetSkeletonId}
+            nodeId={node.id}
             expanded={expandedId === m.id}
             onToggleExpand={() => setExpandedId(expandedId === m.id ? null : m.id)}
-            onToggle={() => togglePuppetNodeModifier(skeleton.id, node.id, m.id)}
-            onRemove={() => removePuppetNodeModifier(skeleton.id, node.id, m.id)}
+            onToggle={() => toggleUnifiedNodeModifier(activePuppetSkeletonId!, node.id, m.id)}
+            onRemove={() => removeUnifiedNodeModifier(activePuppetSkeletonId!, node.id, m.id)}
             onUpdateParam={(name, value) =>
-              updatePuppetNodeModifier(skeleton.id, node.id, m.id, { [name]: value })
+              updateUnifiedNodeModifier(activePuppetSkeletonId!, node.id, m.id, { [name]: value })
             }
             blueprintNode={node.blueprint?.nodes.find(
               n => n.id === `mod_${m.id.replace(/-/g, '').slice(0, 12)}`
@@ -402,7 +450,8 @@ export default function PuppetModifierPanel() {
 
 function ModifierRow({
   modifier,
-  partId,
+  characterId,
+  nodeId,
   expanded,
   onToggleExpand,
   onToggle,
@@ -411,7 +460,8 @@ function ModifierRow({
   blueprintNode,
 }: {
   modifier: PartAnimationModifier;
-  partId: string | null;
+  characterId: string | null;
+  nodeId: string | null;
   expanded: boolean;
   onToggleExpand: () => void;
   onToggle: () => void;
@@ -541,9 +591,9 @@ function ModifierRow({
           {def.params.length === 0 && (
             <div className="text-[9px] text-gray-600">无可调参数</div>
           )}
-          {/* bump_light: 高度图绘制 */}
-          {modifier.type === 'bump_light' && partId && (
-            <HeightmapSection partId={partId} />
+          {/* bump_light: 高度图绘制（新模型：写 Character.sprites[spriteId].heightmap） */}
+          {modifier.type === 'bump_light' && characterId && nodeId && (
+            <HeightmapSectionForNode characterId={characterId} nodeId={nodeId} />
           )}
         </div>
       )}

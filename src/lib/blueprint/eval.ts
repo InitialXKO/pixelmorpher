@@ -141,6 +141,56 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     return { pixels: pixelsVal(grid) };
   },
 
+  // character_source: 角色源节点（角色蓝图专用）
+  // 输出管线预渲染的整角色合成像素，由 ctx.characterPixels 提供。
+  // 无预渲染数据时输出空（调用方必须在求值前写入）。
+  character_source: (_n, _i, ctx): Record<string, BlueprintValue> => {
+    const grid = (ctx as any).characterPixels as import('../types').PixelGrid | undefined;
+    if (!grid) return {};
+    return { pixels: pixelsVal(grid) };
+  },
+
+  // costume: 服装源节点
+  // 从 ctx.costumes（新 pieces 格式）按 setId/slot 取精灵，支持 mirrorMap 回退
+  // setId 可接线（string 类型），接线优先于 params；slot 为空时用节点 ID
+  costume: (n, i, ctx): Record<string, BlueprintValue> => {
+    let setId = String(n.params.setId ?? '');
+    const wiredSetId = i.setId as BlueprintValue | undefined;
+    if (wiredSetId && wiredSetId.type === 'string') {
+      setId = wiredSetId.value;
+    }
+    const direction = Number((ctx as any).direction ?? 0);
+    const costumes = (ctx as any).costumes as Array<{
+      id: string;
+      pieces: Record<string, { sprites?: Partial<Record<number, { data?: unknown; spriteId?: string }>>; mirrorMap?: Record<number, number> }>;
+    }> | undefined;
+    const sprites = (ctx as any).sprites as Record<string, { data: unknown }> | undefined;
+    if (!setId || !costumes) return {};
+    const set = costumes.find(cs => cs.id === setId);
+    if (!set?.pieces) return {};
+
+    // pieces[slot].sprites[direction]，slot 为空时用节点默认槽位
+    // UI 传入时已在边界把 Puppet spriteMap 转成 pieces（nodeId 即 slot）
+    const slot = String(n.params.slot ?? (ctx as any).costumeSlot ?? (ctx as any).nodeId ?? '');
+    if (!slot) return {};
+    const piece = set.pieces[slot];
+    if (!piece) return {};
+    const resolveSpriteData = (s: { data?: unknown; spriteId?: string } | undefined): unknown => {
+      if (!s) return undefined;
+      if (s.spriteId && sprites) return sprites[s.spriteId]?.data;
+      return s.data;
+    };
+    let spriteData = resolveSpriteData(piece.sprites?.[direction]);
+    if (!spriteData && piece.mirrorMap) {
+      const mirrorSource = piece.mirrorMap[direction];
+      if (mirrorSource !== undefined) {
+        spriteData = resolveSpriteData(piece.sprites?.[mirrorSource]);
+      }
+    }
+    if (!spriteData) return {};
+    return { pixels: pixelsVal(spriteData as import('../types').PixelGrid) };
+  },
+
   // ---- 数学 ----
   add: (_n, i) => ({ out: num(asNumber(i.a ?? num(0)) + asNumber(i.b ?? num(0))) }),
   sub: (_n, i) => ({ out: num(asNumber(i.a ?? num(0)) - asNumber(i.b ?? num(0))) }),
@@ -1837,6 +1887,9 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   timeGate: '时间门',
   const: '常量',
   var: '变量',
+  sprite_source: '精灵源',
+  costume: '服装源',
+  character_source: '角色源',
   // 数学
   add: '加',
   sub: '减',

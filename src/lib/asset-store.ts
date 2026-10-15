@@ -191,14 +191,15 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
       case 'sprite': {
         const spriteData = asset.data as SpriteAssetData;
         projectStore.pushUndo('从资产库导入精灵');
-        const part = projectStore.addPart(
+        const sprite = projectStore.addSprite(
           asset.name,
           spriteData.width,
           spriteData.height,
         );
-        projectStore.setPartPixels(part.id, spriteData.pixels.map((row) => [...row]));
+        projectStore.setSpritePixels(sprite.id!, spriteData.pixels.map((row) => [...row]));
         if (spriteData.pivotX != null && spriteData.pivotY != null) {
-          projectStore.updatePart(part.id, { pivotX: spriteData.pivotX, pivotY: spriteData.pivotY });
+          const { pxToSub } = require('./unified-types');
+          projectStore.updateSprite(sprite.id!, { plug: { x: pxToSub(spriteData.pivotX), y: pxToSub(spriteData.pivotY) } });
         }
         break;
       }
@@ -208,12 +209,12 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
         projectStore.pushUndo('从资产库导入瓦片集');
         for (let i = 0; i < tilesetData.tiles.length; i++) {
           const tile = tilesetData.tiles[i];
-          const part = projectStore.addPart(
+          const sprite = projectStore.addSprite(
             `${asset.name}_${i}`,
             tilesetData.tileWidth,
             tilesetData.tileHeight,
           );
-          projectStore.setPartPixels(part.id, tile.pixels.map((r) => [...r]));
+          projectStore.setSpritePixels(sprite.id!, tile.pixels.map((r) => [...r]));
         }
         break;
       }
@@ -280,7 +281,7 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
       canvasHeight,
       frameCount: 16,
       frameRate: 8,
-      partCount: 0,
+      spriteCount: 0,
     };
 
     await dbPut('projectMeta', meta);
@@ -452,7 +453,7 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
         canvasHeight: state.canvasHeight,
         frameCount: state.totalFrames,
         frameRate: state.frameRate,
-        partCount: state.parts.length,
+        spriteCount: Object.keys(state.sprites).length,
       };
 
       await dbPut('projectMeta', meta);
@@ -491,7 +492,7 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
         canvasHeight: projectStore.canvasHeight,
         frameCount: projectStore.totalFrames,
         frameRate: projectStore.frameRate,
-        partCount: projectStore.parts.length,
+        spriteCount: Object.keys(projectStore.sprites).length,
       } as ProjectMeta;
 
       await dbPut('projectMeta', updated);

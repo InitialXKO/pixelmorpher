@@ -7,7 +7,6 @@
 // ============================================================
 
 import type {
-  Part,
   ModifierInstance,
   ModifierType,
   PixelGrid,

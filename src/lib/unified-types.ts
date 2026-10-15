@@ -49,10 +49,13 @@ export type PixelColor = string | null;
 export type PixelGrid = PixelColor[][];
 
 /**
- * Sprite: a raster image asset attached to a Node.
+ * Sprite: the single pixel asset type (replaces Part).
+ * Stored in the global s.sprites table; referenced by ID from CostumePiece.
  * Optional plug overrides the node's default plug position.
  */
 export interface Sprite {
+  id?: string;                   // Global table key (s.sprites); optional for inline literals
+  name?: string;                 // Asset library display name
   width: number;
   height: number;
   data: PixelGrid;              // 2D pixel grid (replaces Uint8ClampedArray for consistency)
@@ -79,6 +82,25 @@ export const DIRECTION_NAMES: Record<DirectionIndex, string> = {
 
 /** Mirror map: direction → source direction for sprite lookup + flip */
 export type MirrorMap = Partial<Record<DirectionIndex, DirectionIndex>>;
+
+/**
+ * Convert old PuppetDirection string ('N', 'S', 'E', 'W', etc.) to DirectionIndex.
+ * Matches the DIRECTION_MAP in migration-adapter.ts.
+ */
+export function puppetDirectionToIndex(direction: string): DirectionIndex {
+  const lower = direction?.toLowerCase?.() ?? '';
+  const map: Record<string, DirectionIndex> = {
+    'east': 0, 'e': 0, 'right': 0,
+    'ne': 1, 'northeast': 1,
+    'north': 2, 'n': 2, 'up': 2,
+    'nw': 3, 'northwest': 3,
+    'west': 4, 'w': 4, 'left': 4,
+    'sw': 5, 'southwest': 5,
+    'south': 6, 's': 6, 'down': 6,
+    'se': 7, 'southeast': 7,
+  };
+  return map[lower] ?? map[direction] ?? 0;
+}
 
 /** Default mirror map: left directions mirror right directions */
 export const DEFAULT_MIRROR_MAP: MirrorMap = {
@@ -384,6 +406,9 @@ export interface Node {
   // ---- Modifier Stack (executed in order) ----
   modifiers: ModifierInstance[];
 
+  // ---- Blueprint (node-level render IR, preferred over modifiers) ----
+  blueprint?: BlueprintGraph | null;
+
   // ---- Animation Tracks (drive transform properties) ----
   tracks: NodeTracks;
 
@@ -418,17 +443,50 @@ export interface NodeTracks {
   variantIndex?: KeyframeTrack<number>;
 }
 
+/**
+ * NodeKeyframe: a single keyframe for a Node in a clip timeline.
+ * New model replacement for PuppetNodeKeyframe.
+ * Field names align with NodeTracks (x/y not offsetX/offsetY, variantIndex not direction).
+ */
+export interface NodeKeyframe {
+  id: string;
+  nodeId: string;
+  frame: number;
+  angle?: number;
+  stretch?: number;
+  x?: number;
+  y?: number;
+  variantIndex?: number;
+  /** zIndex override (step interpolation) */
+  zIndex?: number;
+  /** Interpolation mode for this keyframe */
+  interpolationMode?: import('./types').InterpolationMode;
+}
+
 // ---- Costume System ----
+
+/**
+ * SpriteRef: reference to a Sprite in Character.sprites by ID.
+ * Used in CostumePiece instead of embedding Sprite data directly.
+ */
+export interface SpriteRef {
+  spriteId: string;
+}
 
 /**
  * CostumePiece: a slot-based sprite collection with direction variants,
  * mirror mapping, and cross sections for disc generation.
+ *
+ * Sprites are referenced by ID from Character.sprites (not embedded).
+ * This preserves the reference model: shared, deduplicated, single source of truth.
  */
 export interface CostumePiece {
   slotKey: string;                              // Slot identifier (e.g., "left_arm", "torso")
   fillColor: string;                            // Primary color for disc generation
-  sprites: Partial<Record<DirectionIndex, Sprite>>; // Direction → sprite
-  scaleVariants: Partial<Record<number, Partial<Record<DirectionIndex, Sprite>>>>; // Scale → direction → sprite
+  // Direction → sprite. Accepts embedded Sprite (legacy) or SpriteRef (new reference model).
+  // New code should use SpriteRef; embedded is for migration transition.
+  sprites: Partial<Record<DirectionIndex, Sprite | SpriteRef>>;
+  scaleVariants: Partial<Record<number, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>>;
   mirrorMap: MirrorMap;                         // Direction mirror mapping
   crossSections: CrossSection[];                // Cross section definitions for disc gen
 }
@@ -441,6 +499,9 @@ export interface CostumeSet {
   id: string;
   name: string;
   pieces: Record<string, CostumePiece>; // slotKey → CostumePiece
+  /** Per-node transform offsets for this costume (from ref-assembly alignment).
+   *  Key: node ID. Value: offset applied on top of rest pose. */
+  nodeOffsets?: Record<string, { x: number; y: number; angle: number }>;
 }
 
 // ---- Character Definition ----
@@ -460,6 +521,11 @@ export interface Character {
   rootNodeId: string;            // Root node of the character's tree
   nodes: Record<string, Node>;   // All nodes indexed by ID
 
+  // ---- Sprite Table (retired) ----
+  // Sprites moved to the global s.sprites table. Kept as optional for
+  // backward compat during migration; readers must use the global table.
+  sprites?: Record<string, Sprite>; // spriteId → Sprite (deprecated)
+
   // ---- Costume System ----
   costumeSets: CostumeSet[];
   activeCostumeSetId?: string;
@@ -470,6 +536,12 @@ export interface Character {
 
   // ---- Static Latitude ----
   latitude: number;              // Viewing latitude (degrees, -90 to 90)
+
+  // ---- Character Blueprint (whole-character render IR) ----
+  // character_source → user post-processing chain → screen.
+  // For whole-character effects (outline/glow/color grade on the composited
+  // character). Per-node effects stay in node.blueprint. Null = legacy path.
+  blueprint?: BlueprintGraph | null;
 
   // ---- Metadata ----
   createdAt: number;
@@ -647,6 +719,12 @@ export interface NodeRenderInstruction {
   autoMotionBlurKeyframes?: UnifiedKeyframe[];
   /** Blueprint graph for this node (transform + pixel chain). Preferred over modifiers. */
   blueprint?: BlueprintGraph | null;
+  /** Costume sets for costume node evaluation (character.costumeSets) */
+  costumes?: CostumeSet[];
+  /** Costume slot key for costume node (node.costumePiece.slotKey) */
+  costumeSlot?: string;
+  /** Shared sprite table for SpriteRef resolution (character.sprites) */
+  sprites?: Record<string, Sprite>;
 }
 
 /**
@@ -683,6 +761,9 @@ export interface RenderPlan {
   autoMotionBlur?: boolean;
   autoMotionBlurIntensity?: number;
   frame?: number;
+  frameRate?: number;
+  /** Character-level blueprint (whole-character post-processing). Null = legacy per-node path. */
+  characterBlueprint?: import('./blueprint/ir').BlueprintGraph | null;
 }
 
 // ---- Procedural Animation (Unified) ----
@@ -783,6 +864,7 @@ export function createDefaultCharacter(id: string, name: string): Character {
     nodes: {
       [rootNodeId]: createDefaultNode(rootNodeId, 'Root'),
     },
+    sprites: {},
     costumeSets: [],
     directionDrawOrders: {},
     latitude: 0,

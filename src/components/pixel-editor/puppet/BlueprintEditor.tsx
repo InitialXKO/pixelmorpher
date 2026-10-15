@@ -19,6 +19,8 @@ interface BlueprintEditorProps {
   graph: BlueprintGraph;
   onChange: (graph: BlueprintGraph) => void;
   title?: string;
+  /** 服装集（costume 蓝图节点用）：新 pieces 格式 */
+  costumeSets?: Array<{ id: string; name: string; pieces: Record<string, { sprites?: Record<number, { data: unknown }>; mirrorMap?: Record<number, number> }> }>;
   /** 传入后，nodeRef 节点的 nodeId 参数渲染为下拉选择 */
   skeleton?: { nodes: { id: string; name: string }[] } | null;
   /** 新节点 ID 前缀（全局编辑器用：归属到指定部件） */
@@ -44,6 +46,8 @@ interface BlueprintEditorProps {
     /** 自身plug偏移（局部坐标） */
     plugX?: number;
     plugY?: number;
+    /** 方向索引（0-7），用于 costume 节点 */
+    variantIndex?: number;
   }>;
 }
 
@@ -51,7 +55,7 @@ const NODE_WIDTH = 140;
 const NODE_HEADER_H = 24;
 const PORT_H = 18;
 
-export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, characterNodes }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, characterNodes, costumeSets }: BlueprintEditorProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
   const [viewMode, setViewMode] = useState<'graph' | 'blocks'>('graph');
@@ -213,6 +217,27 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           if (nid && characterNodes) {
             const cn = characterNodes.find((c) => c.id === nid);
             return cn?.spritePixels ?? undefined;
+          }
+          return undefined;
+        })(),
+        // costume 节点用：角色全部服装集（新 pieces 格式）
+        costumes: costumeSets,
+        direction: (() => {
+          const nid = (graph as any)._nodeId;
+          if (nid && characterNodes) {
+            const cn = characterNodes.find((c) => c.id === nid);
+            return (cn?.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+          }
+          return 0 as const;
+        })(),
+        nodeId: (graph as any)._nodeId,
+        // 新模型：Character.sprites 表（SpriteRef 解析用）；Puppet 路径用内嵌 data，可选
+        sprites: undefined,
+        costumeSlot: (() => {
+          const nid = (graph as any)._nodeId;
+          if (nid && characterNodes) {
+            const cn = characterNodes.find((c) => c.id === nid);
+            return (cn as any)?.costumeSlot ?? undefined;
           }
           return undefined;
         })(),
