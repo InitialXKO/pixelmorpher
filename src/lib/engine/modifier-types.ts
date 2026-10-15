@@ -38,6 +38,8 @@ export const PIXEL_DEFORM_MODIFIER_TYPES: ModifierType[] = [
   'sphere_rotate',
   // V12: 路径跟随
   'path_follow',
+  // V12: 凸凹光照
+  'bump_light',
 ];
 
 /** Check if a modifier type operates at the pixel-deformation level. */

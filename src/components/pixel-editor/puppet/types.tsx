@@ -40,5 +40,6 @@ export const LIMB_ANIM_MOD_TYPES: AnimationModifierType[] = [
   'local_inflate',
   'path_follow',
   'path_move',
+  'bump_light',
   'noise', 'wave', 'spring', 'jitter',
 ];

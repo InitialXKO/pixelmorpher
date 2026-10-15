@@ -1580,6 +1580,37 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     }
     return result;
   },
+  bump_light: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyBumpLight } = require('../engine/modifier-renderers/geometric');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k === 'pixels' || k === 't' || k === 'gate') continue;
+      if (k === 'path') {
+        const wired = v as BlueprintValue;
+        if (wired && wired.type === 'array') params.path = wired.value;
+      } else if (k === 'heightmap') {
+        // 手绘高度图接线（优先于 ctx 和程序化）
+        const wired = v as BlueprintValue;
+        if (wired && wired.type === 'array') params.paintedHeightmap = wired.value;
+      } else {
+        params[k] = v;
+      }
+    }
+    if (!params.path && Array.isArray(n.params.path)) {
+      params.path = n.params.path;
+    }
+    // ctx.heightmap：调用方传入的 Part.heightmap（自动，无需手动接线）
+    if (!params.paintedHeightmap && (ctx as any).heightmap) {
+      params.paintedHeightmap = (ctx as any).heightmap;
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyBumpLight(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
 };
 
 /** 拓扑排序（Kahn 算法） */
