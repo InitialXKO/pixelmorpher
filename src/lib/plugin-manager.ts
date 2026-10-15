@@ -4,6 +4,8 @@
 // ============================================================
 
 import { createAPI, PixelMorpherAPI } from './plugin-api';
+import { registerEvaluator, registerNodeLabel } from './blueprint/eval';
+import { registerNodeSpec } from './blueprint/specs';
 
 export interface PluginManifest {
   id: string;
@@ -64,9 +66,34 @@ class PluginManagerClass {
     });
 
     // Register custom modifiers
+    // 同时注册为蓝图节点（打通插件→蓝图）：
+    // - 求值器：包 CustomModifierDef.execute 为 NodeEvaluator
+    // - 规格：inputs=['pixels'], outputs=['pixels'], params 取自 mod.params
+    // - 标签：用 mod.name
     if (result.customModifiers) {
       for (const mod of result.customModifiers) {
-        this.customModifiers.set(`${manifest.id}:${mod.name}`, mod);
+        const key = `${manifest.id}:${mod.name}`;
+        this.customModifiers.set(key, mod);
+
+        // 注册为蓝图节点
+        const nodeType = `plugin_${manifest.id}_${mod.name}`;
+        registerEvaluator(nodeType, (_node, inputs, _ctx) => {
+          const pixelsInput = (inputs as any).pixels;
+          const inputPixels: (string | null)[][] =
+            pixelsInput?.value ?? pixelsInput ?? [];
+          const params: Record<string, any> = {};
+          for (const p of mod.params) {
+            params[p.name] = (_node as any).params?.[p.name] ?? p.default;
+          }
+          const output = mod.execute(inputPixels, params);
+          return { pixels: { value: output } as any };
+        });
+        registerNodeSpec(nodeType, {
+          inputs: ['pixels'],
+          outputs: ['pixels'],
+          params: mod.params.map((p) => p.name),
+        });
+        registerNodeLabel(nodeType, `插件:${mod.name}`);
       }
     }
 

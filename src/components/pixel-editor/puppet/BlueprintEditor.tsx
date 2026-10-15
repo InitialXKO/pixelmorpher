@@ -371,7 +371,10 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     mouseY: number;
   } | null>(null);
 
-  const nodeTypes = useMemo(() => listBlueprintNodeTypes(), []);
+  const [nodeTypesVersion, setNodeTypesVersion] = useState(0);
+  // 节点类型列表：从注册表实时读取（含插件动态注册的）
+  // 下拉框聚焦时刷新，确保后注册的插件节点能出现
+  const nodeTypes = useMemo(() => listBlueprintNodeTypes(), [nodeTypesVersion]);
 
   // 自动布局：按拓扑深度分列
   const positions = useMemo(() => {
@@ -620,6 +623,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
         <select
           value={addingType}
           onChange={(e) => setAddingType(e.target.value)}
+          onFocus={() => setNodeTypesVersion((v) => v + 1)}
           className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1.5 py-1 text-[10px] text-gray-300"
         >
           {nodeTypes.map((t) => (

@@ -346,6 +346,25 @@ export function getNodeInputs(type: string): string[] {
 }
 
 /**
+ * 动态注册节点规格（实验性/插件用）。
+ * 与 registerEvaluator() 配合：先注册求值器，再注册规格，UI 才能显示。
+ */
+export function registerNodeSpec(type: string, spec: BlueprintNodeSpec): void {
+  if (BLUEPRINT_NODE_SPECS[type]) {
+    console.warn(`[blueprint] 节点规格 "${type}" 已存在，将被覆盖`);
+  }
+  BLUEPRINT_NODE_SPECS[type] = spec;
+}
+
+/**
+ * 获取所有已注册的节点类型（含动态注册的）。
+ * UI 节点面板从这里取列表。
+ */
+export function getAllNodeTypes(): string[] {
+  return Object.keys(BLUEPRINT_NODE_SPECS);
+}
+
+/**
  * 根据目标端口选择源节点的默认输出
  * 例如：目标是 rotation → 优先选 outRotation
  */

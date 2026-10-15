@@ -2034,6 +2034,14 @@ export function getBlueprintNodeLabel(type: string): string {
   return BLUEPRINT_NODE_LABELS[type] ?? type;
 }
 
+/**
+ * 动态注册节点标签（实验性/插件用）。
+ * 与 registerEvaluator() + registerNodeSpec() 配合使用。
+ */
+export function registerNodeLabel(type: string, label: string): void {
+  BLUEPRINT_NODE_LABELS[type] = label;
+}
+
 // ============================================================
 // 像素节点求值器 — 输入/输出 PixelGrid
 // 用于蓝图中的像素修改器节点（texture_scroll 等）
