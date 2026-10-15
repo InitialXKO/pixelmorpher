@@ -13,6 +13,41 @@ import type { SAMModelType, SAMStatus } from './types';
 // Lazy-loaded SAM client instance
 let samClient: any = null;
 let samInitialized = false;
+// 原图尺寸（setSAMImage 时记录，用于点坐标的 pad 变换）
+let samSourceSize: { w: number; h: number } | null = null;
+
+/**
+ * sam-web 的 resizeAndPadBox 逻辑（与 node_modules/sam-web/dist/index.js 一致）
+ * SAM 把图缩放到 1024 正方形：最长边填满，短边居中 pad
+ */
+function resizeAndPadBox(
+  sourceDim: { w: number; h: number },
+  targetDim: { w: number; h: number }
+): { x: number; y: number; w: number; h: number } {
+  if (sourceDim.h === sourceDim.w) {
+    return { x: 0, y: 0, w: targetDim.w, h: targetDim.h };
+  } else if (sourceDim.h > sourceDim.w) {
+    const newW = (sourceDim.w / sourceDim.h) * targetDim.w;
+    const padLeft = Math.floor((targetDim.w - newW) / 2);
+    return { x: padLeft, y: 0, w: newW, h: targetDim.h };
+  } else {
+    const newH = (sourceDim.h / sourceDim.w) * targetDim.h;
+    const padTop = Math.floor((targetDim.h - newH) / 2);
+    return { x: 0, y: padTop, w: targetDim.w, h: newH };
+  }
+}
+
+/**
+ * 把原图归一化坐标 (0..1) 变换到 SAM 编码的 1024 正方形归一化坐标
+ * 修正 sam-web segment() 未做 pad 变换的 bug
+ */
+function mapPointToEncoded(x: number, y: number): { x: number; y: number } {
+  if (!samSourceSize) return { x, y };
+  const box = resizeAndPadBox(samSourceSize, { w: 1024, h: 1024 });
+  const sx = box.x + x * box.w;
+  const sy = box.y + y * box.h;
+  return { x: sx / 1024, y: sy / 1024 };
+}
 
 /**
  * Initialize SAM model for browser-side segmentation.
@@ -90,6 +125,10 @@ export async function setSAMImage(
   imageSource: HTMLCanvasElement | HTMLImageElement
 ): Promise<void> {
   if (!samClient || !samInitialized) throw new Error('SAM未初始化');
+  // 记录原图尺寸，用于点坐标变换
+  const w = imageSource instanceof HTMLCanvasElement ? imageSource.width : imageSource.naturalWidth || imageSource.width;
+  const h = imageSource instanceof HTMLCanvasElement ? imageSource.height : imageSource.naturalHeight || imageSource.height;
+  samSourceSize = { w, h };
   await samClient.setImage(imageSource);
 }
 
@@ -112,8 +151,10 @@ export async function segmentAtPoint(
 }> {
   if (!samClient || !samInitialized) throw new Error('SAM未初始化');
 
+  // 修正 sam-web 的 pad bug：把原图坐标变换到编码正方形坐标
+  const mapped = mapPointToEncoded(x, y);
   const result = await samClient.segment({
-    points: [{ x, y, label }],
+    points: [{ x: mapped.x, y: mapped.y, label }],
     previousMask,
   });
 
@@ -137,8 +178,10 @@ export async function segmentWithBox(
 }> {
   if (!samClient || !samInitialized) throw new Error('SAM未初始化');
 
+  const m1 = mapPointToEncoded(x1, y1);
+  const m2 = mapPointToEncoded(x2, y2);
   const result = await samClient.segment({
-    box: { x1, y1, x2, y2 },
+    box: { x1: m1.x, y1: m1.y, x2: m2.x, y2: m2.y },
     previousMask,
   });
 
@@ -157,6 +200,7 @@ export function disposeSAM(): void {
     }
     samClient = null;
     samInitialized = false;
+    samSourceSize = null;
   }
 }
 
