@@ -7,7 +7,7 @@ import { ArrowLeft, ArrowRight, X, Upload } from 'lucide-react';
 import { useEditorStore, useProjectStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import type { PixelGrid, PixelColor } from '@/lib/types';
-import { initSAM, isSAMReady, setSAMImage, segmentAtPoint } from '@/lib/sam';
+import { initSAM, isSAMReady, setSAMImage } from '@/lib/sam';
 import { inpaintPixels } from '@/lib/inpainting';
 
 // ============================================================
@@ -419,7 +419,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             )}
             {samStatus === 'ready' && (
               <div className="space-y-2">
-                <div className="text-xs text-green-400">SAM 就绪。点击图中的肢体进行分割（左键=前景，右键=背景排除）。</div>
+                <div className="text-xs text-green-400">SAM 就绪。点击图中角色进行分割，再点"应用分割抠除背景"。</div>
                 {referenceImageUrl && (
                   <img
                     src={referenceImageUrl}
@@ -430,24 +430,9 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                       const x = (e.clientX - rect.left) / rect.width;
                       const y = (e.clientY - rect.top) / rect.height;
                       try {
+                        // 每次点击替换当前 mask，不累积
                         await useEditorStore.getState().samSegmentAtPoint(x, y);
-                        const samState = useEditorStore.getState().samState;
-                        if (samState.maskBounds) {
-                          setSamMasks((prev) => [...prev, { label: `区域${prev.length + 1}`, bounds: samState.maskBounds! }]);
-                        }
-                      } catch (err) {
-                        console.error('[SAM] 分割失败:', err);
-                      }
-                    }}
-                    onContextMenu={async (e) => {
-                      e.preventDefault();
-                      const rect = (e.target as HTMLImageElement).getBoundingClientRect();
-                      const x = (e.clientX - rect.left) / rect.width;
-                      const y = (e.clientY - rect.top) / rect.height;
-                      try {
-                        // 右键：用负点修正（label=0）
-                        const result = await segmentAtPoint(x, y, 0);
-                        setSamMasks((prev) => [...prev, { label: `排除${prev.length + 1}`, bounds: result.bounds }]);
+                        setSamMasks([{ label: '当前分割', bounds: useEditorStore.getState().samState.maskBounds! }]);
                       } catch (err) {
                         console.error('[SAM] 分割失败:', err);
                       }
@@ -455,7 +440,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   />
                 )}
                 {samMasks.length > 0 && (
-                  <div className="text-xs text-gray-400">已分割 {samMasks.length} 个区域</div>
+                  <div className="text-xs text-gray-400">已分割，可应用抠除背景</div>
                 )}
                 {samMasks.length > 0 && (
                   <Button
