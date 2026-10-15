@@ -8,24 +8,7 @@ import type { PixelGrid, ModifierParamValue } from '../../types';
 import { hexToRgb } from '../color-utils';
 import { geoRng } from '../noise';
 import { modifierGuard, elapsedSeconds, emptyGrid } from './shared';
-
-/** Find nearest non-null source pixel for hole filling */
-function findNearestSourceColor(pixels: PixelGrid, x: number, y: number, maxRadius: number = 10): string | null {
-  const h = pixels.length;
-  const w = pixels[0]?.length || 0;
-  for (let r = 1; r <= maxRadius; r++) {
-    for (let dy = -r; dy <= r; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; // only check perimeter
-        const sx = x + dx, sy = y + dy;
-        if (sx >= 0 && sx < w && sy >= 0 && sy < h && pixels[sy][sx] !== null) {
-          return pixels[sy][sx];
-        }
-      }
-    }
-  }
-  return null;
-}
+import { inpaintPixels } from '../../inpainting';
 
 /**
  * V10.1: Apply bend deformation — bends the part along a direction with configurable curvature.
@@ -151,16 +134,26 @@ export function applyBend(
         }
       }
 
-      // Hole filling
-      if (result[y][x] === null && holeFill === 'edge_copy') {
-        const nearest = findNearestSourceColor(pixels, x, y);
-        if (nearest !== null) {
-          result[y][x] = nearest;
+    }
+  }
+
+  // AI inpainting for holes (replaces simplistic edge_copy)
+  if (holeFill === 'edge_copy') {
+    const holes = new Set<string>();
+    for (let hy = 0; hy < result.length; hy++) {
+      for (let hx = 0; hx < result[hy].length; hx++) {
+        if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
+      }
+    }
+    if (holes.size > 0) {
+      const inpainted = inpaintPixels(result, holes, 3);
+      for (let hy = 0; hy < result.length; hy++) {
+        for (let hx = 0; hx < result[hy].length; hx++) {
+          result[hy][hx] = inpainted[hy][hx];
         }
       }
     }
   }
-
   return result;
 }
 
@@ -262,16 +255,26 @@ export function applyEllipticalCompress(
         result[y][x] = pixels[sy][sx];
       }
 
-      // Hole filling
-      if (result[y][x] === null && holeFill === 'edge_copy') {
-        const nearest = findNearestSourceColor(pixels, x, y);
-        if (nearest !== null) {
-          result[y][x] = nearest;
+    }
+  }
+
+  // AI inpainting for holes (replaces simplistic edge_copy)
+  if (holeFill === 'edge_copy') {
+    const holes = new Set<string>();
+    for (let hy = 0; hy < result.length; hy++) {
+      for (let hx = 0; hx < result[hy].length; hx++) {
+        if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
+      }
+    }
+    if (holes.size > 0) {
+      const inpainted = inpaintPixels(result, holes, 3);
+      for (let hy = 0; hy < result.length; hy++) {
+        for (let hx = 0; hx < result[hy].length; hx++) {
+          result[hy][hx] = inpainted[hy][hx];
         }
       }
     }
   }
-
   return result;
 }
 
@@ -400,16 +403,26 @@ export function applyDumbbellStretch(
         result[y][x] = pixels[sy][sx];
       }
 
-      // Hole filling
-      if (result[y][x] === null && holeFill === 'edge_copy') {
-        const nearest = findNearestSourceColor(pixels, x, y);
-        if (nearest !== null) {
-          result[y][x] = nearest;
+    }
+  }
+
+  // AI inpainting for holes (replaces simplistic edge_copy)
+  if (holeFill === 'edge_copy') {
+    const holes = new Set<string>();
+    for (let hy = 0; hy < result.length; hy++) {
+      for (let hx = 0; hx < result[hy].length; hx++) {
+        if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
+      }
+    }
+    if (holes.size > 0) {
+      const inpainted = inpaintPixels(result, holes, 3);
+      for (let hy = 0; hy < result.length; hy++) {
+        for (let hx = 0; hx < result[hy].length; hx++) {
+          result[hy][hx] = inpainted[hy][hx];
         }
       }
     }
   }
-
   return result;
 }
 
@@ -510,16 +523,26 @@ export function applyPillowStretch(
         result[y][x] = pixels[sy][sx];
       }
 
-      // Hole filling
-      if (result[y][x] === null && holeFill === 'edge_copy') {
-        const nearest = findNearestSourceColor(pixels, x, y);
-        if (nearest !== null) {
-          result[y][x] = nearest;
+    }
+  }
+
+  // AI inpainting for holes (replaces simplistic edge_copy)
+  if (holeFill === 'edge_copy') {
+    const holes = new Set<string>();
+    for (let hy = 0; hy < result.length; hy++) {
+      for (let hx = 0; hx < result[hy].length; hx++) {
+        if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
+      }
+    }
+    if (holes.size > 0) {
+      const inpainted = inpaintPixels(result, holes, 3);
+      for (let hy = 0; hy < result.length; hy++) {
+        for (let hx = 0; hx < result[hy].length; hx++) {
+          result[hy][hx] = inpainted[hy][hx];
         }
       }
     }
   }
-
   return result;
 }
 
@@ -646,16 +669,26 @@ export function applyHyperbolicStretch(
         result[y][x] = pixels[sy][sx];
       }
 
-      // Hole filling
-      if (result[y][x] === null && holeFill === 'edge_copy') {
-        const nearest = findNearestSourceColor(pixels, x, y);
-        if (nearest !== null) {
-          result[y][x] = nearest;
+    }
+  }
+
+  // AI inpainting for holes (replaces simplistic edge_copy)
+  if (holeFill === 'edge_copy') {
+    const holes = new Set<string>();
+    for (let hy = 0; hy < result.length; hy++) {
+      for (let hx = 0; hx < result[hy].length; hx++) {
+        if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
+      }
+    }
+    if (holes.size > 0) {
+      const inpainted = inpaintPixels(result, holes, 3);
+      for (let hy = 0; hy < result.length; hy++) {
+        for (let hx = 0; hx < result[hy].length; hx++) {
+          result[hy][hx] = inpainted[hy][hx];
         }
       }
     }
   }
-
   return result;
 }
 
@@ -762,16 +795,26 @@ export function applyRingRipple(
         }
       }
 
-      // Hole filling
-      if (result[y][x] === null && holeFill === 'edge_copy') {
-        const nearest = findNearestSourceColor(pixels, x, y);
-        if (nearest !== null) {
-          result[y][x] = nearest;
+    }
+  }
+
+  // AI inpainting for holes (replaces simplistic edge_copy)
+  if (holeFill === 'edge_copy') {
+    const holes = new Set<string>();
+    for (let hy = 0; hy < result.length; hy++) {
+      for (let hx = 0; hx < result[hy].length; hx++) {
+        if (result[hy][hx] === null) holes.add(`${hx},${hy}`);
+      }
+    }
+    if (holes.size > 0) {
+      const inpainted = inpaintPixels(result, holes, 3);
+      for (let hy = 0; hy < result.length; hy++) {
+        for (let hx = 0; hx < result[hy].length; hx++) {
+          result[hy][hx] = inpainted[hy][hx];
         }
       }
     }
   }
-
   return result;
 }
 
