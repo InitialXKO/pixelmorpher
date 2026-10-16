@@ -196,7 +196,9 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           ctx.translate(w.x, w.y);
           ctx.rotate((w.angle * Math.PI) / 180);
           ctx.scale(t.scaleX, t.scaleY);
-          ctx.drawImage(tmp, -dw/2, -dh/2, dw, dh);
+          const plugX1 = (cn.plugX ?? gw / 2) * scale;
+          const plugY1 = (cn.plugY ?? gh / 2) * scale;
+          ctx.drawImage(tmp, -plugX1, -plugY1, dw, dh);
           ctx.restore();
         }
         // 标注
@@ -329,7 +331,9 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
               ctx.translate(W/2 + t.translateX, H/2 + t.translateY);
               ctx.rotate((t.rotation * Math.PI) / 180);
               ctx.scale(t.scaleX, t.scaleY);
-              ctx.drawImage(tmp, -dw/2, -dh/2, dw, dh);
+              const plugX2 = ((cn?.plugX ?? gw / 2)) * scale;
+              const plugY2 = ((cn?.plugY ?? gh / 2)) * scale;
+              ctx.drawImage(tmp, -plugX2, -plugY2, dw, dh);
               ctx.restore();
             }
           }
