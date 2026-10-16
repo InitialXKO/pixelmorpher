@@ -42,11 +42,11 @@ export default function IKBakeButton({ character }: IKBakeButtonProps) {
       const angle = parentAngle + (node.transform.angle ?? 0);
       const x = parentX + (node.transform.x ?? 0);
       const y = parentY + (node.transform.y ?? 0);
-      // Store as sub-pixel (x16)
+      // 已是 SubPixel，直接存
       transforms.set(nodeId, {
         nodeId,
-        worldX: x * 16,
-        worldY: y * 16,
+        worldX: x,
+        worldY: y,
         worldAngle: angle,
       });
       for (const childId of node.children) {

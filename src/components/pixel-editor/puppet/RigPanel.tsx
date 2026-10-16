@@ -8,6 +8,7 @@ import {
   Target,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
+import { subToPx, pxToSub } from '@/lib/unified-types';
 import type {
   Character,
   Node,
@@ -273,8 +274,8 @@ function RigNodeProperties({
             <Label className="text-[9px] text-gray-600">偏移 X</Label>
             <Input
               type="number"
-              value={node.transform.x}
-              onChange={(e) => onUpdate({ transform: { ...node.transform, x: Number(e.target.value) || 0 } })}
+              value={subToPx(node.transform.x)}
+              onChange={(e) => onUpdate({ transform: { ...node.transform, x: pxToSub(Number(e.target.value) || 0) } })}
               className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
             />
           </div>
@@ -282,8 +283,8 @@ function RigNodeProperties({
             <Label className="text-[9px] text-gray-600">偏移 Y</Label>
             <Input
               type="number"
-              value={node.transform.y}
-              onChange={(e) => onUpdate({ transform: { ...node.transform, y: Number(e.target.value) || 0 } })}
+              value={subToPx(node.transform.y)}
+              onChange={(e) => onUpdate({ transform: { ...node.transform, y: pxToSub(Number(e.target.value) || 0) } })}
               className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
             />
           </div>

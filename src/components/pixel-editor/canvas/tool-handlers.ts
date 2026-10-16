@@ -462,7 +462,7 @@ export const puppetHandler: ToolHandler = {
     const ivMap = interpolateNodeKeyframes(character, frame);
 
     const ANGLE_STEP = 15;
-    const MOVE_STEP = 1;
+    const MOVE_STEP = pxToSub(1);  // SubPixel：键盘微调 1 像素
 
     const applyNodePose = (nodeId: string, patch: Partial<{ angle: number; x: number; y: number }>) => {
       const iv = ivMap.get(nodeId);
