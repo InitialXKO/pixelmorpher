@@ -108,8 +108,12 @@ export function solveIK2Bone(input: IK2BoneInput): IK2BoneOutput {
 
   // Law of cosines: interior elbow angle
   // cos(B) = (l1² + l2² - d²) / (2 * l1 * l2)
-  const cosB = (len1 * len1 + len2 * len2 - dist * dist) / (2 * len1 * len2);
-  const interiorAngle = Math.acos(Math.max(-1, Math.min(1, cosB)));
+  // Guard: 0-length bones → NaN
+  let interiorAngle = Math.PI;
+  if (len1 > 1e-6 && len2 > 1e-6) {
+    const cosB = (len1 * len1 + len2 * len2 - dist * dist) / (2 * len1 * len2);
+    interiorAngle = Math.acos(Math.max(-1, Math.min(1, cosB)));
+  }
 
   // Elbow angle relative to bone1 (0 = straight)
   // Sign is opposite of shoulder offset to maintain the bend direction.
