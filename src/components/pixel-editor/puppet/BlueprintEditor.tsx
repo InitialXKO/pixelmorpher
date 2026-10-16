@@ -242,12 +242,12 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
             for (const cid of (childrenMap.get(pid) ?? [])) {
               const cn = nodeMap.get(cid)!;
               const ct = getLocalT(cn, previewFrame);
-              // socket 偏移按父角度旋转
-              const sx = (cn.socketX ?? 0), sy = (cn.socketY ?? 0);
+              // socket 偏移按父角度旋转（socket 存 SubPixel，除 16 转像素）
+              const sx = (cn.socketX ?? 0) / 16, sy = (cn.socketY ?? 0) / 16;
               const rsx = sx * cosA - sy * sinA;
               const rsy = sx * sinA + sy * cosA;
-              // 子节点本地偏移（plug对齐：减去plug偏移）
-              const px = (cn.plugX ?? 0), py = (cn.plugY ?? 0);
+              // 子节点本地偏移（plug对齐：减去plug偏移，plug 存 SubPixel）
+              const px = (cn.plugX ?? 0) / 16, py = (cn.plugY ?? 0) / 16;
               // 世界位置 = 父世界位置 + 旋转后的socket偏移 + 蓝图位移 - plug偏移（plug已在局部坐标系）
               const wx = pw.x + rsx + ct.translateX - px;
               const wy = pw.y + rsy + ct.translateY - py;
@@ -292,8 +292,9 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           ctx.translate(w.x, w.y);
           ctx.rotate((w.angle * Math.PI) / 180);
           ctx.scale(t.scaleX, t.scaleY);
-          const plugX1 = (cn.plugX ?? gw / 2) * scale;
-          const plugY1 = (cn.plugY ?? gh / 2) * scale;
+          // plug 是 SubPixel，除 16
+          const plugX1 = (cn.plugX != null ? cn.plugX / 16 : gw / 2) * scale;
+          const plugY1 = (cn.plugY != null ? cn.plugY / 16 : gh / 2) * scale;
           ctx.drawImage(tmp, -plugX1, -plugY1, dw, dh);
           ctx.restore();
         }
@@ -456,8 +457,9 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
               ctx.translate(W/2 + t.translateX, H/2 + t.translateY);
               ctx.rotate((t.rotation * Math.PI) / 180);
               ctx.scale(t.scaleX, t.scaleY);
-              const plugX2 = ((cn?.plugX ?? gw / 2)) * scale;
-              const plugY2 = ((cn?.plugY ?? gh / 2)) * scale;
+              // plug 存的是 SubPixel（×16），需除 16 转像素；缺省用中心
+              const plugX2 = ((cn?.plugX != null ? cn.plugX / 16 : gw / 2)) * scale;
+              const plugY2 = ((cn?.plugY != null ? cn.plugY / 16 : gh / 2)) * scale;
               ctx.drawImage(tmp, -plugX2, -plugY2, dw, dh);
               ctx.restore();
             }
