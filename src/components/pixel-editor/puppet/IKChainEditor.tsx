@@ -49,16 +49,30 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     if (!character || !canAdd) return;
     const solver = chainJoints.length === 2 ? '2bone' : 'fabrik';
     const endNode = character.nodes[endId];
-    // 目标点默认为末端当前位置（需在 FK 下计算，这里简化用节点本地坐标）
+    // 计算末端执行器的 FK 世界位置（SubPixel→像素），作为 IK 初始目标
+    // 这样新建链不会导致肢体跳变
+    let tx = 0, ty = 0, angle = 0;
+    // 从根往末端累积（chainJoints 已是 root→end 顺序）
+    for (const jid of chainJoints) {
+      const jn = character.nodes[jid] as any;
+      const lx = (jn?.transform?.x ?? 0) / 16;
+      const ly = (jn?.transform?.y ?? 0) / 16;
+      const la = jn?.transform?.angle ?? 0;
+      const rad = (angle * Math.PI) / 180;
+      tx += lx * Math.cos(rad) - ly * Math.sin(rad);
+      ty += lx * Math.sin(rad) + ly * Math.cos(rad);
+      angle += la;
+    }
     const newChain: IKChain = {
       id: `ik_${Date.now().toString(36)}`,
       name: `${character.nodes[rootId]?.name ?? rootId} → ${endNode?.name ?? endId}`,
       rootNodeId: rootId,
       endNodeId: endId,
-      target: { x: 0, y: 0 },
+      target: { x: tx, y: ty },
       solver,
       bendDir: 1,
-      enabled: true,
+      // 默认禁用：用户摆好目标点后再启用，避免新建即干扰拖拽
+      enabled: false,
     };
     updateUnifiedCharacter(character.id, {
       ikChains: [...(character.ikChains ?? []), newChain],
