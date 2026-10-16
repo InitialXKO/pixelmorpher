@@ -112,7 +112,7 @@ export default function RigPanel({
     const newSocket = {
       id: crypto.randomUUID(),
       name: `socket_${(selectedNode.sockets?.length ?? 0) + 1}`,
-      basePosition: { x: 0, y: -8 },
+      basePosition: { x: pxToSub(0), y: pxToSub(-8) },
       directionOffsets: {},
     };
     handleUpdateNode(selectedNodeId, {
@@ -389,10 +389,10 @@ function RigNodeProperties({
               />
               <Input
                 type="number"
-                value={socket.basePosition.x}
+                value={subToPx(socket.basePosition.x)}
                 onChange={(e) => {
                   const sockets = (node.sockets ?? []).map((s) =>
-                    s.id === socket.id ? { ...s, basePosition: { ...s.basePosition, x: Number(e.target.value) || 0 } } : s
+                    s.id === socket.id ? { ...s, basePosition: { ...s.basePosition, x: pxToSub(Number(e.target.value) || 0) } } : s
                   );
                   onUpdate({ sockets });
                 }}
@@ -401,10 +401,10 @@ function RigNodeProperties({
               />
               <Input
                 type="number"
-                value={socket.basePosition.y}
+                value={subToPx(socket.basePosition.y)}
                 onChange={(e) => {
                   const sockets = (node.sockets ?? []).map((s) =>
-                    s.id === socket.id ? { ...s, basePosition: { ...s.basePosition, y: Number(e.target.value) || 0 } } : s
+                    s.id === socket.id ? { ...s, basePosition: { ...s.basePosition, y: pxToSub(Number(e.target.value) || 0) } } : s
                   );
                   onUpdate({ sockets });
                 }}

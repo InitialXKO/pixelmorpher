@@ -20,7 +20,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store';
-import { createDefaultNode } from '@/lib/unified-types';
+import { createDefaultNode, pxToSub } from '@/lib/unified-types';
 import type {
   PuppetDirection,
 } from '@/lib/types';
@@ -561,7 +561,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
       const sockets = def.sockets.map((sock) => ({
         id: socketIdMap[`${def.name}:${sock.name}`],
         name: sock.name,
-        basePosition: { x: sock.localX, y: sock.localY },
+        basePosition: { x: pxToSub(sock.localX), y: pxToSub(sock.localY) },
         directionOffsets: {},
       }));
 
