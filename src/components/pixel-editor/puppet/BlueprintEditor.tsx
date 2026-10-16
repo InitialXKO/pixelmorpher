@@ -10,7 +10,7 @@ import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
 import { Plus, Trash2, X, Network, Blocks, Maximize2, Minimize2, Play, Pause } from 'lucide-react';
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { listBlueprintNodeTypes, getBlueprintNodeLabel, evaluateBlueprint, evaluateNodeOutput } from '@/lib/blueprint/eval';
-import { getDefaultOutputForPort, getNodeInputs } from '@/lib/blueprint/specs';
+import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs } from '@/lib/blueprint/specs';
 import { getModifierDef } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
@@ -462,6 +462,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
   // 连线中：从输出端口拖到输入端口
   const [connecting, setConnecting] = useState<{
     fromNodeId: string;
+    fromPort: string;
     mouseX: number;
     mouseY: number;
   } | null>(null);
@@ -607,13 +608,13 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
   }, [graph, onChange]);
 
   // 连接：fromNode 输出 -> toNode 的 port 输入
-  const connectPorts = useCallback((fromNodeId: string, toNodeId: string, port: string) => {
+  const connectPorts = useCallback((fromNodeId: string, fromPort: string, toNodeId: string, port: string) => {
     if (fromNodeId === toNodeId) return; // 不自连
     const fromNode = graph.nodes.find((n) => n.id === fromNodeId);
     const toNode = graph.nodes.find((n) => n.id === toNodeId);
     if (!toNode || !fromNode) return;
-    // 从注册表取默认输出端口
-    const output = getDefaultOutputForPort(fromNode.type, port);
+    // 用用户选择的输出端口（不再取默认）
+    const output = fromPort;
     onChange({
       ...graph,
       nodes: graph.nodes.map((n) =>
@@ -839,22 +840,35 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
               style={{ left: pos.x, top: pos.y, width: NODE_WIDTH }}
               onClick={(e) => { e.stopPropagation(); setSelectedId(node.id); }}
             >
-              {/* 输出端口（右侧，可拖出连线） */}
-              <div
-                className="absolute -right-1.5 top-3 size-3 rounded-full bg-cyan-400 border border-cyan-200 cursor-crosshair hover:scale-125 transition-transform"
-                title="拖出以连接"
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  const container = e.currentTarget.closest('.relative') as HTMLElement | null;
-                  const rect = container?.getBoundingClientRect();
-                  if (!rect || !container) return;
-                  setConnecting({
-                    fromNodeId: node.id,
-                    mouseX: e.clientX - rect.left + container.scrollLeft,
-                    mouseY: e.clientY - rect.top + container.scrollTop,
-                  });
-                }}
-              />
+              {/* 输出端口（右侧，每个输出一个可拖点） */}
+              {getNodeOutputs(node.type).map((outPort, idx) => (
+                <div
+                  key={outPort}
+                  className="absolute -right-1.5 size-3 rounded-full bg-cyan-400 border border-cyan-200 cursor-crosshair hover:scale-125 transition-transform"
+                  style={{ top: 12 + idx * 16 }}
+                  title={`输出: ${outPort}（拖出以连接）`}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    const container = e.currentTarget.closest('.relative') as HTMLElement | null;
+                    const rect = container?.getBoundingClientRect();
+                    if (!rect || !container) return;
+                    setConnecting({
+                      fromNodeId: node.id,
+                      fromPort: outPort,
+                      mouseX: e.clientX - rect.left + container.scrollLeft,
+                      mouseY: e.clientY - rect.top + container.scrollTop,
+                    });
+                  }}
+                />
+              ))}
+              {/* 输出端口标签 */}
+              <div className="absolute -right-1 top-1 flex flex-col gap-[2px] items-end pointer-events-none">
+                {getNodeOutputs(node.type).map((outPort, idx) => (
+                  <div key={outPort} className="text-[7px] text-cyan-300/70 pr-3" style={{ marginTop: idx === 0 ? 8 : 6 }}>
+                    {outPort}
+                  </div>
+                ))}
+              </div>
               <div
                 className="flex items-center justify-between px-1.5 py-1 border-b border-[#1e1e3a] cursor-move select-none"
                 onMouseDown={(e) => {
@@ -908,7 +922,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                         onMouseUp={(e) => {
                           e.stopPropagation();
                           if (connecting) {
-                            connectPorts(connecting.fromNodeId, node.id, port);
+                            connectPorts(connecting.fromNodeId, connecting.fromPort, node.id, port);
                             setConnecting(null);
                           }
                         }}
