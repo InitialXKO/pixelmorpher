@@ -136,16 +136,30 @@ function writePuppetPoseKeyframe(
   variantIndex: number,
 ) {
   const store = useProjectStore.getState();
-  const clip = store.animationClips.find((c) => c.id === clipId);
-  if (!clip) return;
-  const existingKf = (clip.nodeKeyframes ?? []).find(
-    (kf) => kf.nodeId === nodeId && kf.frame === frame
-  );
-  if (existingKf) {
-    store.updateNodeKeyframe(clip.id, existingKf.id, { ...values, variantIndex });
-  } else {
-    store.addNodeKeyframe(clip.id, nodeId, frame, { ...values, variantIndex });
-  }
+  const character = store.unifiedCharacters[skeletonId];
+  if (!character) return;
+  const node = character.nodes[nodeId];
+  if (!node) return;
+
+  // 直接写 node.tracks（渲染器从这里读）
+  const setTrack = (trackName: 'angle' | 'x' | 'y' | 'stretch', value: number) => {
+    const track = node.tracks[trackName] ?? { keyframes: [], interpolation: 'linear' as const };
+    const idx = track.keyframes.findIndex(k => k.frame === frame);
+    const newKeyframes = idx >= 0
+      ? track.keyframes.map((k, i) => i === idx ? { ...k, value } : k)
+      : [...track.keyframes, { frame, value }].sort((a, b) => a.frame - b.frame);
+    return { ...track, keyframes: newKeyframes };
+  };
+
+  store.updateUnifiedNode(skeletonId, nodeId, {
+    tracks: {
+      ...node.tracks,
+      angle: setTrack('angle', values.angle),
+      x: setTrack('x', values.x),
+      y: setTrack('y', values.y),
+      stretch: setTrack('stretch', values.stretch),
+    },
+  });
 }
 
 export const puppetHandler: ToolHandler = {
