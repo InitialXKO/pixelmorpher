@@ -380,7 +380,9 @@ function applyIKChain(
   if (ikNode.type === 'ik_2bone') {
     const angle1 = asNumber(ikResult.angle1);
     const angle2 = asNumber(ikResult.angle2);
-    angles = [angle1, angle1 + angle2];
+    // 肩、肘绝对角；腕及后续关节沿用末端角（无独立 IK 旋转）
+    const elbowAbs = angle1 + angle2;
+    angles = jointIds.map((_, idx) => (idx === 0 ? angle1 : elbowAbs));
   } else {
     // ik_fabrik outputs angles as comma-separated string
     const anglesVal = ikResult.angles;
