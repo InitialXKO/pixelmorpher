@@ -11,6 +11,7 @@ import { Plus, Trash2, X, Network, Blocks, Maximize2, Minimize2, Play, Pause } f
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { listBlueprintNodeTypes, getBlueprintNodeLabel, evaluateBlueprint, evaluateNodeOutput } from '@/lib/blueprint/eval';
 import { getDefaultOutputForPort, getNodeInputs } from '@/lib/blueprint/specs';
+import { getModifierDef } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
 import PathEditor from './PathEditor';
@@ -54,6 +55,91 @@ interface BlueprintEditorProps {
 const NODE_WIDTH = 140;
 const NODE_HEADER_H = 24;
 const PORT_H = 18;
+
+/** 蓝图节点参数区：若节点类型对应修改器，用修改器的参数 schema 渲染富控件 */
+function BlueprintNodeParams({ selected, updateNode }: {
+  selected: BlueprintNode;
+  updateNode: (id: string, patch: Partial<BlueprintNode>) => void;
+}) {
+  const modDef = (() => {
+    try { return getModifierDef(selected.type as any); } catch { return null; }
+  })();
+  const updateParam = (name: string, v: any) => {
+    updateNode(selected.id, {
+      params: { ...selected.params, [name]: v },
+    });
+  };
+
+  if (modDef && modDef.params && modDef.params.length > 0) {
+    return (
+      <>
+        {modDef.params.map((p: any) => {
+          const val = (selected.params as any)[p.name] ?? p.default;
+          return (
+            <div key={p.name} className="flex items-center gap-1.5">
+              <span className="text-[9px] text-gray-500 w-20 truncate flex-shrink-0" title={p.label ?? p.name}>
+                {p.label ?? p.name}
+              </span>
+              {p.type === 'boolean' ? (
+                <input
+                  type="checkbox"
+                  checked={Boolean(val)}
+                  onChange={(e) => updateParam(p.name, e.target.checked)}
+                  className="size-3"
+                />
+              ) : p.type === 'select' && p.options ? (
+                <select
+                  value={String(val)}
+                  onChange={(e) => updateParam(p.name, e.target.value)}
+                  className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300"
+                >
+                  {p.options.map((opt: any) => (
+                    <option key={String(opt.value)} value={String(opt.value)}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              ) : p.type === 'color' ? (
+                <input
+                  type="color"
+                  value={String(val) || '#000000'}
+                  onChange={(e) => updateParam(p.name, e.target.value)}
+                  className="flex-1 min-w-0 h-6 bg-[#0a0a1a] border border-[#2a2a4a] rounded cursor-pointer"
+                />
+              ) : p.type === 'path' ? (
+                <div className="flex-1 min-w-0">
+                  <PathEditor
+                    value={Array.isArray(val) ? val : []}
+                    onChange={(path) => updateParam(p.name, path)}
+                    pathType={String((selected.params as any).pathType ?? 'polyline') as 'polyline' | 'bezier'}
+                  />
+                </div>
+              ) : p.type === 'string' ? (
+                <input
+                  type="text"
+                  value={String(val ?? '')}
+                  onChange={(e) => updateParam(p.name, e.target.value)}
+                  className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300"
+                />
+              ) : (
+                <input
+                  type="number"
+                  value={Number(val)}
+                  step={p.step ?? 0.1}
+                  min={p.min}
+                  max={p.max}
+                  onChange={(e) => updateParam(p.name, Number(e.target.value))}
+                  className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300 tabular-nums"
+                />
+              )}
+            </div>
+          );
+        })}
+      </>
+    );
+  }
+  return null; // 无 schema 时由调用方渲染通用 UI
+}
 
 export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, characterNodes, costumeSets }: BlueprintEditorProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -893,7 +979,10 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           </div>
 
           {/* params */}
-          {Object.entries(selected.params).map(([key, val]) => {
+          {(() => {
+            const _def = (() => { try { return getModifierDef(selected.type as any); } catch { return null; } })();
+            if (_def?.params?.length) return <BlueprintNodeParams selected={selected} updateNode={updateNode} />;
+            return <>{Object.entries(selected.params).map(([key, val]) => {
             const isPrimitive = typeof val === 'number' || typeof val === 'string' || typeof val === 'boolean';
             // path_follow 的 path 参数：用 PathEditor
             const isPathParam = selected.type === 'path_follow' && key === 'path';
@@ -961,7 +1050,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
               )}
             </div>
             );
-          })}
+          })}</>;
+          })()}
 
           {/* 添加参数 */}
           <AddParamRow
