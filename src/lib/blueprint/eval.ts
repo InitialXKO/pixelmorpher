@@ -805,13 +805,14 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
 
   // ---- 输出 ----
   // transform: 把各分量组合成最终变换
-  transform: (_n, i) => ({
-    translateX: num(asNumber(i.translateX ?? num(0))),
-    translateY: num(asNumber(i.translateY ?? num(0))),
-    rotation: num(asNumber(i.rotation ?? num(0))),
-    scaleX: num(asNumber(i.scaleX ?? num(1))),
-    scaleY: num(asNumber(i.scaleY ?? num(1))),
-    zIndex: num(asNumber(i.zIndex ?? num(0))),
+  // input 优先，没有 input 时用 params 做默认值
+  transform: (n, i) => ({
+    translateX: num(asNumber(i.translateX ?? n.params.translateX ?? num(0))),
+    translateY: num(asNumber(i.translateY ?? n.params.translateY ?? num(0))),
+    rotation: num(asNumber(i.rotation ?? n.params.rotation ?? num(0))),
+    scaleX: num(asNumber(i.scaleX ?? n.params.scaleX ?? num(1))),
+    scaleY: num(asNumber(i.scaleY ?? n.params.scaleY ?? num(1))),
+    zIndex: num(asNumber(i.zIndex ?? n.params.zIndex ?? num(0))),
   }),
 
   // ---- 像素形变（蓝图内处理像素，由渲染管线传入像素并取回结果） ----
