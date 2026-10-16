@@ -972,7 +972,7 @@ function resolveSprite(
     }
     return { sprite: s as Sprite, spriteId: null };
   };
-  // 1. Try costume set
+  // 只走服装集：node.slot 只定义槽位，不存精灵
   if (costumeSet && node.slot) {
     const piece = costumeSet.pieces[node.slot.slotKey];
     if (piece) {
@@ -991,27 +991,6 @@ function resolveSprite(
         }
       }
     }
-  }
-
-  // 2. Try costumePiece direction sprites
-  if (node.slot) {
-    const direct = resolve(node.slot.sprites[direction]);
-    if (direct.sprite) {
-      return { sprite: direct.sprite, mirror: false, spriteId: direct.spriteId };
-    }
-
-    const mirrorSource = node.slot.mirrorMap[direction];
-    if (mirrorSource !== undefined) {
-      const mirrored = resolve(node.slot.sprites[mirrorSource]);
-      if (mirrored.sprite) {
-        return { sprite: mirrored.sprite, mirror: true, spriteId: mirrored.spriteId };
-      }
-    }
-  }
-
-  // 3. Fall back to default sprite
-  if (node.sprite) {
-    return { sprite: node.sprite, mirror: false, spriteId: null };
   }
 
   return { sprite: null, mirror: false, spriteId: null };
