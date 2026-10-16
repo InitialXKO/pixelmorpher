@@ -3,6 +3,7 @@
 import React, { useCallback, useMemo } from 'react';
 import type { Node, NodeKeyframe } from '@/lib/unified-types';
 import { NodeKeyframeMarker } from './KeyframeMarker';
+import { NodeKeyframeModifierSubTrackLane, NodeParamDriverSubTrackLane } from './NodeKeyframeModifierSubTrackLane';
 import { FRAME_WIDTH as STATIC_FRAME_WIDTH, TRACK_HEIGHT } from './constants';
 
 // ---- Node Track Lane (new Character/Node model) ----
@@ -19,6 +20,8 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
   frameWidth,
   snapConfig,
   snapFrame,
+  onEditModifierParams,
+  onEditParamDriver,
 }: {
   node: Node;
   nodeKeyframes: NodeKeyframe[];
@@ -32,6 +35,8 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
   frameWidth?: number;
   snapConfig?: import('@/lib/v15-types').SnapConfig;
   snapFrame?: (rawFrame: number, excludeKeyframeId?: string) => number;
+  onEditModifierParams?: (keyframeId: string, modifierId: string) => void;
+  onEditParamDriver?: (keyframeId: string, modifierId: string, driverId: string) => void;
 }) {
   const FRAME_WIDTH = frameWidth ?? STATIC_FRAME_WIDTH;
   const width = totalFrames * FRAME_WIDTH;
@@ -53,6 +58,7 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
   );
 
   return (
+    <>
     <div
       data-track-lane
       className="relative border-b border-[#1e1e2e]"
@@ -125,6 +131,23 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
         />
       ))}
     </div>
+    {/* Per-keyframe modifier sub-tracks */}
+    <NodeKeyframeModifierSubTrackLane
+      node={node}
+      nodeKeyframes={nodeKeyframes}
+      totalFrames={totalFrames}
+      frameWidth={FRAME_WIDTH}
+      onEditModifierParams={onEditModifierParams ?? (() => {})}
+    />
+    {/* ParamDriver sub-tracks */}
+    <NodeParamDriverSubTrackLane
+      node={node}
+      nodeKeyframes={nodeKeyframes}
+      totalFrames={totalFrames}
+      frameWidth={FRAME_WIDTH}
+      onEditParamDriver={onEditParamDriver ?? (() => {})}
+    />
+    </>
   );
 }, (prevProps, nextProps) => {
   if (prevProps.node.id !== nextProps.node.id) return false;

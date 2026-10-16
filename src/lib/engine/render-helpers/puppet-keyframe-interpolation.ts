@@ -6,7 +6,7 @@
  * blueprint/modifiers and adds to values.
  */
 
-import type { Character, Node, KeyframeTrack } from '../../unified-types';
+import type { Character, Node, KeyframeTrack, ModifierInstance, NodeKeyframe, ModifierParamValue } from '../../unified-types';
 import type { InterpolatedNodeValues } from './types';
 import { computePartAnimationTransform } from '../animation-dispatch';
 import { evaluateBlueprint } from '../../blueprint/eval';
@@ -122,4 +122,125 @@ export function interpolateNodeKeyframes(
   currentFrame: number,
 ): Map<string, InterpolatedNodeValues> {
   return interpolateCharacterInternal(character, currentFrame);
+}
+
+// ---- Per-keyframe modifier interpolation ----
+
+/**
+ * 插值单个 modifier 参数值。
+ * 数值：线性插值；非数值（boolean/string）：step，取前一帧的值。
+ */
+function interpolateParamValue(prev: ModifierParamValue, next: ModifierParamValue, t: number): ModifierParamValue {
+  if (typeof prev === 'number' && typeof next === 'number') {
+    return prev + (next - prev) * t;
+  }
+  // 非数值用 step：t < 1 时取 prev，t = 1 时取 next
+  return t < 1 ? prev : next;
+}
+
+/**
+ * 把 modifier 的数值 params 按强度缩放（用于淡入淡出）。
+ * strength=1 全强度，strength=0 无效果（数值 params → 0）。
+ */
+function scaleModifierByStrength(mod: ModifierInstance, strength: number): ModifierInstance {
+  if (strength === 1) return mod;
+  const params: Record<string, ModifierParamValue> = {};
+  for (const [key, value] of Object.entries(mod.params)) {
+    params[key] = typeof value === 'number' ? value * strength : value;
+  }
+  return { ...mod, params, enabled: strength > 0 };
+}
+
+/**
+ * 插值两个 NodeKeyframe 的 modifiers。
+ *
+ * 规则：
+ * - 同 type 的 modifier：params 逐个插值（数值线性，非数值 step）
+ * - 只在 prev 存在的 modifier：按强度 1→0 淡出（t=0.5 时半强度）
+ * - 只在 next 存在的 modifier：按强度 0→1 淡入
+ * - 不同 id 但同 type 的视为同一个（按 type 匹配）
+ *
+ * @param prevMods 前一帧的 modifiers（t=0 时）
+ * @param nextMods 后一帧的 modifiers（t=1 时）
+ * @param t 插值系数 0-1
+ */
+export function interpolateNodeKeyframeModifiers(
+  prevMods: ModifierInstance[] | undefined,
+  nextMods: ModifierInstance[] | undefined,
+  t: number,
+): ModifierInstance[] {
+  const prev = prevMods ?? [];
+  const next = nextMods ?? [];
+  if (prev.length === 0 && next.length === 0) return [];
+  if (t <= 0) return prev.map((m) => ({ ...m }));
+  if (t >= 1) return next.map((m) => ({ ...m }));
+
+  const result: ModifierInstance[] = [];
+  const matchedNext = new Set<string>();
+
+  for (const pMod of prev) {
+    // 按 type 匹配 next 中的 modifier
+    const nMod = next.find((m) => m.type === pMod.type && !matchedNext.has(m.id));
+    if (nMod) {
+      matchedNext.add(nMod.id);
+      // 同 type：插值 params
+      const params: Record<string, ModifierParamValue> = {};
+      const allKeys = new Set([...Object.keys(pMod.params), ...Object.keys(nMod.params)]);
+      for (const key of allKeys) {
+        const pv = pMod.params[key];
+        const nv = nMod.params[key];
+        if (pv !== undefined && nv !== undefined) {
+          params[key] = interpolateParamValue(pv, nv, t);
+        } else if (pv !== undefined) {
+          // 只在 prev 有：数值按强度淡出，非数值 step（t<1 保留）
+          params[key] = typeof pv === 'number' ? pv * (1 - t) : pv;
+        } else {
+          // 只在 next 有：数值按强度淡入，非数值 step（t=1 才出现）
+          params[key] = typeof nv === 'number' ? (nv as number) * t : (nv as ModifierParamValue);
+          if (typeof nv !== 'number' && t < 1) {
+            // 非数值且未到下一帧：不加入 params
+            delete params[key];
+          }
+        }
+      }
+      result.push({
+        ...pMod,
+        id: nMod.id,
+        params,
+        enabled: pMod.enabled || nMod.enabled,
+      });
+    } else {
+      // 只在 prev 存在：淡出
+      result.push(scaleModifierByStrength(pMod, 1 - t));
+    }
+  }
+
+  // 只在 next 存在的：淡入
+  for (const nMod of next) {
+    if (!matchedNext.has(nMod.id)) {
+      // 检查是否已按 type 匹配过（避免重复）
+      const alreadyMatched = result.some((r) => r.type === nMod.type && prev.some((p) => p.type === nMod.type));
+      if (!alreadyMatched) {
+        result.push(scaleModifierByStrength(nMod, t));
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 在两个 NodeKeyframe 之间插值 modifiers 的便捷函数。
+ */
+export function interpolateKeyframesModifiers(
+  prevKf: NodeKeyframe | null,
+  nextKf: NodeKeyframe | null,
+  frame: number,
+): ModifierInstance[] {
+  if (!prevKf && !nextKf) return [];
+  if (!prevKf) return (nextKf!.modifiers ?? []).map((m) => ({ ...m }));
+  if (!nextKf) return (prevKf.modifiers ?? []).map((m) => ({ ...m }));
+  if (prevKf.frame === nextKf.frame) return (prevKf.modifiers ?? []).map((m) => ({ ...m }));
+  const t = Math.max(0, Math.min(1, (frame - prevKf.frame) / (nextKf.frame - prevKf.frame)));
+  return interpolateNodeKeyframeModifiers(prevKf.modifiers, nextKf.modifiers, t);
 }

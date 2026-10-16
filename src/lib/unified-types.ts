@@ -461,6 +461,8 @@ export interface NodeKeyframe {
   zIndex?: number;
   /** Interpolation mode for this keyframe */
   interpolationMode?: import('./types').InterpolationMode;
+  /** Per-keyframe modifiers (interpolated between keyframes by param) */
+  modifiers?: ModifierInstance[];
 }
 
 // ---- Costume System ----
