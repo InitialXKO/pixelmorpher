@@ -79,9 +79,11 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
               const sinA = Math.sin(parentAngleRad);
               const socketWorldX = parentPos.x + (socket.basePosition.x * cosA - socket.basePosition.y * sinA);
               const socketWorldY = parentPos.y + (socket.basePosition.x * sinA + socket.basePosition.y * cosA);
-              // plug 对准插槽：不加 childOffset
-              worldX = Math.round(socketWorldX);
-              worldY = Math.round(socketWorldY);
+              // offset 在父节点局部空间，需按父节点角度旋转（与主渲染一致）
+              const rotatedOffsetX = offsetX * cosA - offsetY * sinA;
+              const rotatedOffsetY = offsetX * sinA + offsetY * cosA;
+              worldX = Math.round(socketWorldX + rotatedOffsetX);
+              worldY = Math.round(socketWorldY + rotatedOffsetY);
             } else {
               worldX = Math.round(parentPos.x + offsetX);
               worldY = Math.round(parentPos.y + offsetY);

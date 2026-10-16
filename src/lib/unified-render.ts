@@ -567,9 +567,13 @@ function computeChildTransforms(
         const rotatedChildX_px = childOffsetX_px * cosA - childOffsetY_px * sinA;
         const rotatedChildY_px = childOffsetX_px * sinA + childOffsetY_px * cosA;
 
-        // plug 对准父节点插槽：不加 childOffset
-        childWorldX = parentWorld.worldX + pxToSub(rotatedSocketX_px);
-        childWorldY = parentWorld.worldY + pxToSub(rotatedSocketY_px);
+        // 与 overlay 对齐：不减 plug（overlay 的节点标签位置用户确认正确）
+        childWorldX = parentWorld.worldX
+          + pxToSub(rotatedSocketX_px)
+          + pxToSub(rotatedChildX_px);
+        childWorldY = parentWorld.worldY
+          + pxToSub(rotatedSocketY_px)
+          + pxToSub(rotatedChildY_px);
       } else {
         childWorldX = parentWorld.worldX + childInterpolated.x;
         childWorldY = parentWorld.worldY + childInterpolated.y;
