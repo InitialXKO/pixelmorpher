@@ -48,25 +48,19 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
 
   const canAdd = rootId && endId && rootId !== endId && chainJoints.length >= 2;
 
-  const handleAdd = () => {
-    if (!character || !canAdd) return;
-    // 2bone = 2 根骨 = 3 关节；其他（1 骨/多骨）走 fabrik
-    const solver = chainJoints.length === 3 ? '2bone' : 'fabrik';
-    const endNode = character.nodes[endId];
-    // 用真实变换管线算尖端 FK 位置（与 applyIKChain 同源）
+  /** 用真实变换管线算指定链的尖端世界位置（与 applyIKChain 同源） */
+  const computeChainTip = (
+    ch: Character,
+    jointIds: string[],
+  ): { tipX: number; tipY: number; tipLength: number } => {
     const store = useProjectStore.getState();
-    const currentFrame = store.currentFrame;
-    const canvasW = store.canvasWidth;
-    const canvasH = store.canvasHeight;
-    const transforms = computeWorldTransforms(character, currentFrame, canvasW, canvasH);
-    // 取链上关节的世界位置（像素，世界空间）
+    const transforms = computeWorldTransforms(ch, store.currentFrame, store.canvasWidth, store.canvasHeight);
     const joints: { x: number; y: number }[] = [];
-    for (const jid of chainJoints) {
+    for (const jid of jointIds) {
       const t = transforms.get(jid);
       if (!t) break;
       joints.push({ x: subToPx(t.worldX), y: subToPx(t.worldY) });
     }
-    // 尖端：末关节位置 + 沿最后一段方向外推（默认长度取最后一段骨长）
     let tipLength = 0;
     let tipX = 0, tipY = 0;
     if (joints.length >= 1) {
@@ -84,6 +78,29 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
         }
       }
     }
+    return { tipX, tipY, tipLength };
+  };
+
+  /** 按 chain 的 root/end 算出 jointIds（root→end） */
+  const getChainJointIds = (ch: Character, chain: IKChain): string[] => {
+    const path: string[] = [];
+    let cur: string | undefined = chain.endNodeId;
+    const visited = new Set<string>();
+    while (cur && !visited.has(cur)) {
+      visited.add(cur);
+      path.unshift(cur);
+      if (cur === chain.rootNodeId) break;
+      cur = ch.nodes[cur]?.parentId;
+    }
+    return path[0] === chain.rootNodeId ? path : [];
+  };
+
+  const handleAdd = () => {
+    if (!character || !canAdd) return;
+    // 2bone = 2 根骨 = 3 关节；其他（1 骨/多骨）走 fabrik
+    const solver = chainJoints.length === 3 ? '2bone' : 'fabrik';
+    const endNode = character.nodes[endId];
+    const { tipX, tipY, tipLength } = computeChainTip(character, chainJoints);
     const newChain: IKChain = {
       id: `ik_${Date.now().toString(36)}`,
       name: `${character.nodes[rootId]?.name ?? rootId} → ${endNode?.name ?? endId}`,
@@ -105,8 +122,21 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
 
   const handleToggle = (id: string) => {
     if (!character) return;
+    const chain = chains.find((c) => c.id === id);
+    if (!chain) return;
+    const willEnable = !chain.enabled;
+    let patch: Partial<IKChain> = { enabled: willEnable };
+    // 启用时把目标重算到当前尖端位置，避免用创建时的旧位置导致跳变
+    if (willEnable) {
+      const jointIds = getChainJointIds(character, chain);
+      if (jointIds.length >= 2) {
+        const { tipX, tipY } = computeChainTip(character, jointIds);
+        // 保留用户已调过的 tipLength，只更新目标点
+        patch = { ...patch, target: { x: tipX, y: tipY } };
+      }
+    }
     updateUnifiedCharacter(character.id, {
-      ikChains: chains.map((c) => (c.id === id ? { ...c, enabled: !c.enabled } : c)),
+      ikChains: chains.map((c) => (c.id === id ? { ...c, ...patch } : c)),
     });
   };
 
