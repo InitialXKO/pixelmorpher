@@ -530,8 +530,14 @@ export interface IKChain {
   rootNodeId: string;
   /** End effector node ID (e.g., hand) */
   endNodeId: string;
-  /** IK target in character space */
+  /** IK target in character space (static fallback) */
   target: { x: number; y: number };
+  /**
+   * Optional blueprint driving the target dynamically.
+   * Evaluated each frame; outputs {x, y} or {targetX, targetY}.
+   * If present, overrides the static target. Use for gait/sine/etc.
+   */
+  targetBlueprint?: import('./blueprint/ir').BlueprintGraph;
   /** Solver: '2bone' for 2-joint chains, 'fabrik' for longer */
   solver: '2bone' | 'fabrik';
   /** Bend direction for 2-bone (+1/-1) */
