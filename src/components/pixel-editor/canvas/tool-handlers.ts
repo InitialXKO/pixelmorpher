@@ -424,8 +424,8 @@ export const puppetHandler: ToolHandler = {
       const angleRad = ((drag.parentWorldAngle ?? 0) * Math.PI) / 180;
       const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
       const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
-      const newOffsetX = Math.round(drag.origOffsetX + localDx);
-      const newOffsetY = Math.round(drag.origOffsetY + localDy);
+      const newOffsetX = Math.round(drag.origOffsetX + pxToSub(localDx));
+      const newOffsetY = Math.round(drag.origOffsetY + pxToSub(localDy));
       const targetNodeId = drag.moveTargetNodeId ?? drag.nodeId;
       writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, targetNodeId, frame, {
         angle: drag.origAngle,
