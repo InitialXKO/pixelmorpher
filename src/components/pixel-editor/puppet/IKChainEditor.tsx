@@ -9,6 +9,7 @@ import React, { useState, useMemo } from 'react';
 import { Plus, Trash2, Power } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useProjectStore } from '@/lib/store';
+import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import type { Character, IKChain } from '@/lib/unified-types';
 
 interface IKChainEditorProps {
@@ -52,14 +53,18 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     const endNode = character.nodes[endId];
     // 计算末端执行器的 FK 世界位置（SubPixel→像素），作为 IK 初始目标
     // 目标是尖端（末节末端），不是关节轴心
+    // 用当前帧插值，不是 rest pose
+    const currentFrame = useProjectStore.getState().currentFrame;
+    const ivMap = interpolateNodeKeyframes(character, currentFrame);
     let tx = 0, ty = 0, angle = 0;
     const fkPositions: { x: number; y: number }[] = [{ x: 0, y: 0 }];
     // 从根往末端累积（chainJoints 已是 root→end 顺序）
     for (const jid of chainJoints) {
       const jn = character.nodes[jid] as any;
-      const lx = (jn?.transform?.x ?? 0) / 16;
-      const ly = (jn?.transform?.y ?? 0) / 16;
-      const la = jn?.transform?.angle ?? 0;
+      const iv = ivMap.get(jid);
+      const lx = ((iv?.x ?? jn?.transform?.x) ?? 0) / 16;
+      const ly = ((iv?.y ?? jn?.transform?.y) ?? 0) / 16;
+      const la = iv?.angle ?? jn?.transform?.angle ?? 0;
       const rad = (angle * Math.PI) / 180;
       tx += lx * Math.cos(rad) - ly * Math.sin(rad);
       ty += lx * Math.sin(rad) + ly * Math.cos(rad);
