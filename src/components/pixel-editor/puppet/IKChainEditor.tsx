@@ -55,27 +55,27 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
   ): { tipX: number; tipY: number; tipLength: number } => {
     const store = useProjectStore.getState();
     const transforms = computeWorldTransforms(ch, store.currentFrame, store.canvasWidth, store.canvasHeight);
-    const joints: { x: number; y: number }[] = [];
+    const joints: { x: number; y: number; angle: number }[] = [];
     for (const jid of jointIds) {
       const t = transforms.get(jid);
       if (!t) break;
-      joints.push({ x: subToPx(t.worldX), y: subToPx(t.worldY) });
+      joints.push({ x: subToPx(t.worldX), y: subToPx(t.worldY), angle: t.worldAngle });
     }
     let tipLength = 0;
     let tipX = 0, tipY = 0;
     if (joints.length >= 1) {
       const last = joints[joints.length - 1];
       tipX = last.x; tipY = last.y;
+      // 尖端方向用末关节自己的世界角度（精灵朝向），不是骨方向
+      const rad = (last.angle * Math.PI) / 180;
+      // 默认尖端长取最后一段骨长
       if (joints.length >= 2) {
         const prev = joints[joints.length - 2];
-        const dx = last.x - prev.x;
-        const dy = last.y - prev.y;
-        const d = Math.hypot(dx, dy);
-        if (d > 1e-6) {
-          tipLength = d;
-          tipX = last.x + (dx / d) * tipLength;
-          tipY = last.y + (dy / d) * tipLength;
-        }
+        tipLength = Math.hypot(last.x - prev.x, last.y - prev.y);
+      }
+      if (tipLength > 1e-6) {
+        tipX = last.x + Math.cos(rad) * tipLength;
+        tipY = last.y + Math.sin(rad) * tipLength;
       }
     }
     return { tipX, tipY, tipLength };
