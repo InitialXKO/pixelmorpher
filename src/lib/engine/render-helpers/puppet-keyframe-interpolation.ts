@@ -65,8 +65,16 @@ function interpolateCharacterInternal(
     for (const nodeId of Object.keys(character.nodes)) {
       const node = character.nodes[nodeId]!;
       const values = interpolateSingleNode(node, currentFrame);
+      // 合并 node.modifiers 和 keyframe modifiers（keyframe 优先，同 type 去重）
+      const kfModifiers = getInterpolatedKeyframeModifiers(character, nodeId, currentFrame);
+      const nodeMods = node.modifiers ?? [];
+      const kfTypes = new Set(kfModifiers.map((m) => m.type));
+      const mergedModifiers = [
+        ...nodeMods.filter((m) => !kfTypes.has(m.type)),
+        ...kfModifiers,
+      ];
       // 优先用 node.blueprint（已同步，含手动编辑）；无蓝图时从 modifiers 生成
-      const blueprint = (node as any).blueprint ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers as any) : null);
+      const blueprint = (node as any).blueprint ?? (mergedModifiers.length ? modifiersToBlueprint(mergedModifiers as any) : null);
       if (blueprint) {
         const t = evaluateBlueprint(blueprint, {
           frame: currentFrame,
@@ -243,4 +251,31 @@ export function interpolateKeyframesModifiers(
   if (prevKf.frame === nextKf.frame) return (prevKf.modifiers ?? []).map((m) => ({ ...m }));
   const t = Math.max(0, Math.min(1, (frame - prevKf.frame) / (nextKf.frame - prevKf.frame)));
   return interpolateNodeKeyframeModifiers(prevKf.modifiers, nextKf.modifiers, t);
+}
+
+/**
+ * 获取某节点在指定帧的插值后 keyframe modifiers。
+ * 供 interpolateCharacterInternal 调用，与 node.modifiers 合并。
+ */
+function getInterpolatedKeyframeModifiers(
+  character: Character,
+  nodeId: string,
+  currentFrame: number,
+): ModifierInstance[] {
+  const kfs = (character.nodeKeyframes ?? [])
+    .filter((kf) => kf.nodeId === nodeId)
+    .sort((a, b) => a.frame - b.frame);
+  if (kfs.length === 0) return [];
+
+  let prevKf: NodeKeyframe | null = null;
+  let nextKf: NodeKeyframe | null = null;
+  for (const kf of kfs) {
+    if (kf.frame <= currentFrame) prevKf = kf;
+    if (kf.frame >= currentFrame && !nextKf) nextKf = kf;
+  }
+  // 边界：都在一侧时用最近的
+  if (!prevKf) prevKf = nextKf;
+  if (!nextKf) nextKf = prevKf;
+
+  return interpolateKeyframesModifiers(prevKf, nextKf, currentFrame);
 }
