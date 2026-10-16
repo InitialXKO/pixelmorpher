@@ -1667,6 +1667,7 @@ function renderNodeSprite(
       stretch,
       pivotX,
       pivotY,
+      sprite.id,
     );
 
     // Draw at world position with half-pixel alignment
