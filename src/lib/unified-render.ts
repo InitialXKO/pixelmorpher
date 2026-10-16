@@ -404,9 +404,12 @@ function applyIKChain(
   const ctx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: {} };
   const ikResult = evaluator(ikNode, {}, ctx);
 
+  // 求解器返回 X 轴角（atan2），骨骼系统用 Y 轴角（worldAngle），减 90° 转换
+  const toYAxis = (xAngle: number): number => xAngle - 90;
+
   if (ikNode.type === 'ik_2bone') {
-    const angle1 = asNumber(ikResult.angle1);
-    const angle2 = asNumber(ikResult.angle2);
+    const angle1 = toYAxis(asNumber(ikResult.angle1));
+    const angle2 = asNumber(ikResult.angle2); // 相对角，不用转
     // 肩、肘绝对角；腕及后续关节沿用末端角（无独立 IK 旋转）
     const elbowAbs = angle1 + angle2;
     angles = jointIds.map((_, idx) => (idx === 0 ? angle1 : elbowAbs));
@@ -416,7 +419,7 @@ function applyIKChain(
     const anglesStr = typeof anglesVal === 'object' && anglesVal !== null && 'value' in anglesVal
       ? String((anglesVal as { value: string }).value)
       : '';
-    const raw = anglesStr.split(',').map(Number).filter((n) => !isNaN(n));
+    const raw = anglesStr.split(',').map(Number).filter((n) => !isNaN(n)).map(toYAxis);
     // fabrik 返回 N-1 个骨角度，补到 N 个关节（末关节沿用最后骨角度）
     angles = jointIds.map((_, idx) => raw[Math.min(idx, raw.length - 1)] ?? 0);
   }
