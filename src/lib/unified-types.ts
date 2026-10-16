@@ -536,6 +536,8 @@ export interface IKChain {
   solver: '2bone' | 'fabrik';
   /** Bend direction for 2-bone (+1/-1) */
   bendDir?: number;
+  /** Distance from end joint pivot to tip (pixels). IK controls the tip, not the pivot. */
+  tipLength?: number;
   /** Whether this chain is active */
   enabled: boolean;
 }

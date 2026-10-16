@@ -335,6 +335,26 @@ function applyIKChain(
     lengths.push(Math.hypot(joints[i + 1].x - joints[i].x, joints[i + 1].y - joints[i].y));
   }
 
+  // 末端尖端：IK 控制的是末节尖端，不是关节轴心
+  // 在链末加虚拟尖端关节，长度为 tipLength（默认取最后一段骨长）
+  const tipLength = chain.tipLength ?? (lengths.length > 0 ? lengths[lengths.length - 1] : 0);
+  const realJointCount = jointIds.length;
+  if (tipLength > 1e-6 && joints.length >= 2) {
+    // 按 FK 最后一段的方向外推尖端位置
+    const lastJ = joints[joints.length - 1];
+    const prevJ = joints[joints.length - 2];
+    const dx = lastJ.x - prevJ.x;
+    const dy = lastJ.y - prevJ.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 1e-6) {
+      joints.push({
+        x: lastJ.x + (dx / d) * tipLength,
+        y: lastJ.y + (dy / d) * tipLength,
+      });
+      lengths.push(tipLength);
+    }
+  }
+
   // Solve IK via Blueprint IR.
   // Construct a blueprint graph with the IK node and evaluate it,
   // instead of calling solvers directly. This keeps BlueprintGraph
