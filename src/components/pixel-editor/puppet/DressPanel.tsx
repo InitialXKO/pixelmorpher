@@ -119,18 +119,16 @@ export default function DressPanel({
     const store = useProjectStore.getState();
     store.pushUndo('分配精灵', 'assignSprite');
 
-    const table = { ...(selectedCharacter.sprites ?? {}) };
     const pieces = { ...selectedCostume.pieces };
     // 用 slotKey（不是 nodeId）——渲染器按 costumeSet.pieces[node.slot.slotKey] 查找
     const node = selectedCharacter.nodes[nodeId];
     const slotKey = node?.slot?.slotKey ?? nodeId;
 
     if (spriteId) {
-      // Sprite 已是目标格式：确保在角色 sprites 表中，直接引用
-      const sp = sprites.find((s) => s.id === spriteId) ?? table[spriteId];
+      // Sprite 在全局表（sprites prop），直接引用 ID，不复制
+      const sp = sprites.find((s) => s.id === spriteId);
       if (!sp) return;
       const key = sp.id ?? spriteId;
-      if (!table[key]) table[key] = sp;
       // 写入 pieces[slotKey].sprites[direction] = { spriteId }
       const piece = pieces[slotKey] ?? createDefaultCostumePiece(slotKey);
       pieces[slotKey] = {
@@ -151,7 +149,6 @@ export default function DressPanel({
       cs.id === selectedCostume.id ? { ...cs, pieces } : cs
     );
     updateUnifiedCharacter(activePuppetSkeletonId, {
-      sprites: table,
       costumeSets: newCostumeSets,
     });
   };
@@ -163,10 +160,10 @@ export default function DressPanel({
     const piece = selectedCostume.pieces[slotKey];
     const ref = piece?.sprites[direction];
     if (!ref) return null;
-    // SpriteRef → spriteId → 角色 sprites 表
+    // SpriteRef → spriteId → 全局精灵表（sprites prop）
     const spriteId = 'spriteId' in ref ? ref.spriteId : null;
     if (!spriteId) return null;
-    return selectedCharacter.sprites?.[spriteId] ?? null;
+    return sprites.find((s) => s.id === spriteId) ?? null;
   };
 
   return (
