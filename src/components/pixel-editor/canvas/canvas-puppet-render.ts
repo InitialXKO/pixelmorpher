@@ -8,6 +8,8 @@ import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-util
 import type { RenderContext } from './canvas-render-helpers';
 import type { Character, Node } from '@/lib/unified-types';
 import { pxToSub, subToPx } from '@/lib/unified-types';
+import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { useProjectStore } from '@/lib/store';
 
 // ============================================================
 // Puppet skeleton overlay visualization
@@ -45,6 +47,8 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
 
     // Compute world positions recursively (SubPixel units throughout;
     // converted to pixels via subToPx at draw time)
+    // 用当前帧插值，不是 rest pose
+    const ivMap = interpolateNodeKeyframes(character, useProjectStore.getState().currentFrame);
     const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
     const centerX = pxToSub(canvasWidth / 2);
     const centerY = pxToSub(canvasHeight / 2);
@@ -53,11 +57,12 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
       const node = character.nodes[nodeId];
       if (!node) return;
 
-      // 新模型：使用 rest pose（transform），不做关键帧插值
+      // 用插值，不是 rest pose
+      const iv = ivMap.get(nodeId);
       // 单位：全 SubPixel（node.transform.x/y、socket.basePosition 均为 SubPixel）
-      const angle = node.transform.angle ?? 0;
-      const offsetX = node.transform.x ?? 0;
-      const offsetY = node.transform.y ?? 0;
+      const angle = iv?.angle ?? node.transform.angle ?? 0;
+      const offsetX = iv?.x ?? node.transform.x ?? 0;
+      const offsetY = iv?.y ?? node.transform.y ?? 0;
 
       let worldX: number;
       let worldY: number;
