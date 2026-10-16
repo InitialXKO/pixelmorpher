@@ -19,22 +19,25 @@ const _canvasPool: HTMLCanvasElement[] = [];
 const _canvasPoolMaxSize = 128; // Increased from 32 to reduce alloc/free churn during playback
 
 export function acquireCanvas(w: number, h: number): HTMLCanvasElement {
+  // Guard: 0 尺寸 canvas 会导致 drawImage 抛 InvalidStateError
+  const cw = Math.max(1, Math.ceil(w));
+  const ch = Math.max(1, Math.ceil(h));
   const c = _canvasPool.pop();
   if (c) {
-    if (c.width !== w || c.height !== h) {
-      c.width = w;
-      c.height = h;
+    if (c.width !== cw || c.height !== ch) {
+      c.width = cw;
+      c.height = ch;
     } else {
       // 同尺寸复用必须清空，否则残留上次的像素（曾导致同精灵对称角度时重影）
-      c.getContext('2d')!.clearRect(0, 0, w, h);
+      c.getContext('2d')!.clearRect(0, 0, cw, ch);
     }
     // 重置 transform，防止复用的 canvas 残留翻转/旋转
     c.getContext('2d')!.setTransform(1, 0, 0, 1, 0, 0);
     return c;
   }
   const nc = document.createElement('canvas');
-  nc.width = w;
-  nc.height = h;
+  nc.width = cw;
+  nc.height = ch;
   return nc;
 }
 
