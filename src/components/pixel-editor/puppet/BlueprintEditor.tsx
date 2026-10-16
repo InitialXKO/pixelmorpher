@@ -666,8 +666,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
         onClick={() => setSelectedId(null)}
         onMouseMove={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
-          const mx = e.clientX - rect.left;
-          const my = e.clientY - rect.top;
+          const mx = e.clientX - rect.left + e.currentTarget.scrollLeft;
+          const my = e.clientY - rect.top + e.currentTarget.scrollTop;
           if (dragging) {
             const dx = mx - dragging.startX;
             const dy = my - dragging.startY;
@@ -750,12 +750,13 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                 title="拖出以连接"
                 onMouseDown={(e) => {
                   e.stopPropagation();
-                  const rect = e.currentTarget.closest('.relative')?.getBoundingClientRect();
-                  if (!rect) return;
+                  const container = e.currentTarget.closest('.relative') as HTMLElement | null;
+                  const rect = container?.getBoundingClientRect();
+                  if (!rect || !container) return;
                   setConnecting({
                     fromNodeId: node.id,
-                    mouseX: e.clientX - rect.left,
-                    mouseY: e.clientY - rect.top,
+                    mouseX: e.clientX - rect.left + container.scrollLeft,
+                    mouseY: e.clientY - rect.top + container.scrollTop,
                   });
                 }}
               />
@@ -765,12 +766,13 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                   // 只有左键且不是从端口开始的才拖节点
                   if (e.button !== 0) return;
                   e.preventDefault(); // 防止选中文字
-                  const rect = e.currentTarget.closest('.relative')?.getBoundingClientRect();
-                  if (!rect) return;
+                  const container = e.currentTarget.closest('.relative') as HTMLElement | null;
+                  const rect = container?.getBoundingClientRect();
+                  if (!rect || !container) return;
                   setDragging({
                     nodeId: node.id,
-                    startX: e.clientX - rect.left,
-                    startY: e.clientY - rect.top,
+                    startX: e.clientX - rect.left + container.scrollLeft,
+                    startY: e.clientY - rect.top + container.scrollTop,
                     origX: pos.x,
                     origY: pos.y,
                   });
