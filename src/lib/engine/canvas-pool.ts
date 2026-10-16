@@ -24,6 +24,9 @@ export function acquireCanvas(w: number, h: number): HTMLCanvasElement {
     if (c.width !== w || c.height !== h) {
       c.width = w;
       c.height = h;
+    } else {
+      // 同尺寸复用必须清空，否则残留上次的像素（曾导致同精灵对称角度时重影）
+      c.getContext('2d')!.clearRect(0, 0, w, h);
     }
     // 重置 transform，防止复用的 canvas 残留翻转/旋转
     c.getContext('2d')!.setTransform(1, 0, 0, 1, 0, 0);

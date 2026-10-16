@@ -58,7 +58,6 @@ export function renderPixelPerfectRotation(
   stretchY: number = 1,
   pivotX: number = 0,
   pivotY: number = 0,
-  spriteId?: string,
 ): PixelPerfectRotationResult {
   // No rotation needed — pivot stays unchanged
   if (angle === 0 && stretchY === 1) {
@@ -76,7 +75,7 @@ export function renderPixelPerfectRotation(
   // ---- Cache lookup ----
   // H13: 缓存里存的是独立 canvas（非池化），命中时再拷一份池化 canvas 返回，
   // 这样调用方沿用既有的 release 语义永远安全，不会污染缓存。
-  const cacheKey = getRotationCacheKey(spriteCanvas, angle, stretchY, pivotX, pivotY, spriteId);
+  const cacheKey = getRotationCacheKey(spriteCanvas, angle, stretchY, pivotX, pivotY);
   const cached = getCachedRotation(cacheKey);
   if (cached) {
     const copy = acquireCanvas(cached.canvas.width, cached.canvas.height);

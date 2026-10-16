@@ -113,7 +113,6 @@ export function getRotationCacheKey(
   stretch: number,
   pivotX: number,
   pivotY: number,
-  spriteId?: string,
 ): string {
   // Quantize angle to 0.01 degree precision (sub-degree changes are invisible at pixel scale)
   const qAngle = Math.round(angle * 100);
@@ -151,8 +150,7 @@ export function getRotationCacheKey(
     // Canvas may be tainted or not accessible — use dimensions only
   }
 
-  const idPart = spriteId ?? 'noid';
-  return `${idPart}:${fingerprint}:${qAngle}:${qStretch}:${qPivotX}:${qPivotY}`;
+  return `${fingerprint}:${qAngle}:${qStretch}:${qPivotX}:${qPivotY}`;
 }
 
 /**
