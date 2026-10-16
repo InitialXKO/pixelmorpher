@@ -77,8 +77,11 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
               const parentAngleRad = (parentPos.angle * Math.PI) / 180;
               const cosA = Math.cos(parentAngleRad);
               const sinA = Math.sin(parentAngleRad);
-              const socketWorldX = parentPos.x + (socket.basePosition.x * cosA - socket.basePosition.y * sinA);
-              const socketWorldY = parentPos.y + (socket.basePosition.x * sinA + socket.basePosition.y * cosA);
+              // 与主渲染一致：用 directionOffsets
+              const dir = (parentNode.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
+              const sockOff = socket.directionOffsets?.[dir] ?? socket.basePosition;
+              const socketWorldX = parentPos.x + (sockOff.x * cosA - sockOff.y * sinA);
+              const socketWorldY = parentPos.y + (sockOff.x * sinA + sockOff.y * cosA);
               // offset 在父节点局部空间，需按父节点角度旋转（与主渲染一致）
               const rotatedOffsetX = offsetX * cosA - offsetY * sinA;
               const rotatedOffsetY = offsetX * sinA + offsetY * cosA;
@@ -128,8 +131,10 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
       const parentAngleRad = (parentPos.angle * Math.PI) / 180;
       const cosA = Math.cos(parentAngleRad);
       const sinA = Math.sin(parentAngleRad);
-      const socketWorldX = parentPos.x + (socket.basePosition.x * cosA - socket.basePosition.y * sinA);
-      const socketWorldY = parentPos.y + (socket.basePosition.x * sinA + socket.basePosition.y * cosA);
+      const dir2 = (parentNode.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
+      const sockOff2 = socket.directionOffsets?.[dir2] ?? socket.basePosition;
+      const socketWorldX = parentPos.x + (sockOff2.x * cosA - sockOff2.y * sinA);
+      const socketWorldY = parentPos.y + (sockOff2.x * sinA + sockOff2.y * cosA);
 
       const socketScreenX = panX + subToPx(socketWorldX) * zoom;
       const socketScreenY = panY + subToPx(socketWorldY) * zoom;
@@ -188,8 +193,10 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
         const socketAngleRad = (pos.angle * Math.PI) / 180;
         const cosA2 = Math.cos(socketAngleRad);
         const sinA2 = Math.sin(socketAngleRad);
-        const socketWX = pos.x + (socket.basePosition.x * cosA2 - socket.basePosition.y * sinA2);
-        const socketWY = pos.y + (socket.basePosition.x * sinA2 + socket.basePosition.y * cosA2);
+        const dir3 = (node.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
+        const sockOff3 = socket.directionOffsets?.[dir3] ?? socket.basePosition;
+        const socketWX = pos.x + (sockOff3.x * cosA2 - sockOff3.y * sinA2);
+        const socketWY = pos.y + (sockOff3.x * sinA2 + sockOff3.y * cosA2);
         const socketSX = panX + subToPx(socketWX) * zoom;
         const socketSY = panY + subToPx(socketWY) * zoom;
 

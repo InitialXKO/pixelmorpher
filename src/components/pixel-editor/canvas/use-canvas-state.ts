@@ -441,8 +441,10 @@ export function useCanvasState() {
                 const cosA = Math.cos(parentAngleRad); const sinA = Math.sin(parentAngleRad);
                 const rotatedOffsetX = offsetX * cosA - offsetY * sinA;
                 const rotatedOffsetY = offsetX * sinA + offsetY * cosA;
-                worldX = Math.round(parentPos.x + (socket.basePosition.x * cosA - socket.basePosition.y * sinA) + rotatedOffsetX);
-                worldY = Math.round(parentPos.y + (socket.basePosition.x * sinA + socket.basePosition.y * cosA) + rotatedOffsetY);
+                const dir4 = (parentNode.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
+                const sockOff4 = socket.directionOffsets?.[dir4] ?? socket.basePosition;
+                worldX = Math.round(parentPos.x + (sockOff4.x * cosA - sockOff4.y * sinA) + rotatedOffsetX);
+                worldY = Math.round(parentPos.y + (sockOff4.x * sinA + sockOff4.y * cosA) + rotatedOffsetY);
               } else { worldX = Math.round(parentPos.x + offsetX); worldY = Math.round(parentPos.y + offsetY); }
             } else { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
           } else { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
@@ -501,8 +503,10 @@ export function useCanvasState() {
               const socket = socketId ? parentNode.sockets.find(s => s.id === socketId) : undefined;
               const parentAngleRad = (parentPos.angle * Math.PI) / 180;
               const cosA = Math.cos(parentAngleRad); const sinA = Math.sin(parentAngleRad);
-              const socketX = socket ? (socket.basePosition?.x ?? 0) : 0;
-              const socketY = socket ? (socket.basePosition?.y ?? 0) : 0;
+              const dir5 = (parentNode.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
+              const sockOff5 = socket?.directionOffsets?.[dir5] ?? socket?.basePosition;
+              const socketX = sockOff5?.x ?? 0;
+              const socketY = sockOff5?.y ?? 0;
               // World pos = parent pos + rotated (socket pos + offset)
               // 与 overlay/主渲染一致：不减 plug
               const localX = socketX + offsetX;
