@@ -35,11 +35,12 @@ export function renderIKTargetHandles(
 ): void {
   const chains = character.ikChains?.filter((c) => c.enabled);
   if (!chains || chains.length === 0) return;
-  const { ctx, canvasWidth, canvasHeight, zoom, panX, panY } = rc;
+  const { ctx, zoom, panX, panY } = rc;
   ctx.save();
   for (const chain of chains) {
-    const sx = panX + (canvasWidth / 2 + chain.target.x) * zoom;
-    const sy = panY + (canvasHeight / 2 + chain.target.y) * zoom;
+    // chain.target 已是世界空间像素（含画布中心偏移），与 joints 对齐
+    const sx = panX + chain.target.x * zoom;
+    const sy = panY + chain.target.y * zoom;
     // 准星
     ctx.strokeStyle = '#00ff88';
     ctx.lineWidth = 1.5;

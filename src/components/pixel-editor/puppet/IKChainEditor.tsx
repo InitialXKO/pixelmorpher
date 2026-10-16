@@ -86,12 +86,15 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
         tipY = last.y + (dy / d) * tipLength;
       }
     }
+    // 目标是世界空间（含画布中心偏移），与 applyIKChain 里的 joints 对齐
+    const canvasW = useProjectStore.getState().canvasWidth;
+    const canvasH = useProjectStore.getState().canvasHeight;
     const newChain: IKChain = {
       id: `ik_${Date.now().toString(36)}`,
       name: `${character.nodes[rootId]?.name ?? rootId} → ${endNode?.name ?? endId}`,
       rootNodeId: rootId,
       endNodeId: endId,
-      target: { x: tipX, y: tipY },
+      target: { x: tipX + canvasW / 2, y: tipY + canvasH / 2 },
       solver,
       bendDir: 1,
       tipLength,
@@ -125,9 +128,13 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
 
   const handleTargetChange = (id: string, axis: 'x' | 'y', value: number) => {
     if (!character || !Number.isFinite(value)) return;
+    // 输入为角色局部坐标，转世界坐标存储
+    const offset = axis === 'x'
+      ? useProjectStore.getState().canvasWidth / 2
+      : useProjectStore.getState().canvasHeight / 2;
     updateUnifiedCharacter(character.id, {
       ikChains: chains.map((c) =>
-        c.id === id ? { ...c, target: { ...c.target, [axis]: value } } : c,
+        c.id === id ? { ...c, target: { ...c.target, [axis]: value + offset } } : c,
       ),
     });
   };
@@ -170,14 +177,14 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
                   <Trash2 className="size-3" />
                 </button>
               </div>
-              {/* IK 目标点坐标 */}
+              {/* IK 目标点坐标（显示为角色局部坐标，存储为世界坐标） */}
               <div className="flex items-center gap-1 text-gray-500">
                 <span>目标</span>
                 <label className="flex items-center gap-0.5">
                   X
                   <input
                     type="number"
-                    value={Math.round(c.target.x)}
+                    value={Math.round(c.target.x - useProjectStore.getState().canvasWidth / 2)}
                     onChange={(e) => handleTargetChange(c.id, 'x', Number(e.target.value))}
                     className="w-14 px-1 py-0.5 bg-black/50 rounded text-gray-300 text-[10px]"
                   />
@@ -186,7 +193,7 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
                   Y
                   <input
                     type="number"
-                    value={Math.round(c.target.y)}
+                    value={Math.round(c.target.y - useProjectStore.getState().canvasHeight / 2)}
                     onChange={(e) => handleTargetChange(c.id, 'y', Number(e.target.value))}
                     className="w-14 px-1 py-0.5 bg-black/50 rounded text-gray-300 text-[10px]"
                   />

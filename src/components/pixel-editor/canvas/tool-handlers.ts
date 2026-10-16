@@ -176,8 +176,6 @@ function findIKTargetAtPixel(
   const zoom = editor.zoom;
   const panX = editor.panX;
   const panY = editor.panY;
-  const canvasW = project.canvasWidth;
-  const canvasH = project.canvasHeight;
   const activeId = editor.activePuppetSkeletonId;
   const chars = project.unifiedCharacters;
   const list = activeId && chars[activeId] ? [chars[activeId]] : Object.values(chars);
@@ -186,8 +184,9 @@ function findIKTargetAtPixel(
     if (!ch) continue;
     for (const chain of ch.ikChains ?? []) {
       if (!chain.enabled) continue;
-      const sx = panX + (canvasW / 2 + chain.target.x) * zoom;
-      const sy = panY + (canvasH / 2 + chain.target.y) * zoom;
+      // chain.target 世界空间像素
+      const sx = panX + chain.target.x * zoom;
+      const sy = panY + chain.target.y * zoom;
       const dx = px - sx;
       const dy = py - sy;
       if (dx * dx + dy * dy <= HIT_R * HIT_R) {
@@ -418,11 +417,9 @@ export const puppetHandler: ToolHandler = {
       const zoom = editor.zoom;
       const panX = editor.panX;
       const panY = editor.panY;
-      const canvasW = project.canvasWidth;
-      const canvasH = project.canvasHeight;
-      // 屏幕 → 角色空间
-      const tx = (px - panX) / zoom - canvasW / 2;
-      const ty = (py - panY) / zoom - canvasH / 2;
+      // 屏幕 → 世界空间（chain.target 与 joints 同空间）
+      const tx = (px - panX) / zoom;
+      const ty = (py - panY) / zoom;
       const ch = project.unifiedCharacters[ikDrag.characterId];
       if (ch) {
         const chains = (ch.ikChains ?? []).map((c) =>
