@@ -22,6 +22,7 @@ import { inpaintPixels } from '@/lib/inpainting';
 import { catmullRomToBezier, isPixelInPart, getPixelAt, computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
 import type { PixelColor, PixelGrid, Bone, PuppetNode, PuppetSkeleton, PuppetCharacter, PuppetNodeKeyframe, BrushCommand, ModifierInstance } from '@/lib/types';
 import type { Node, Character, Sprite } from '@/lib/unified-types';
+import { pxToSub, subToPx } from '@/lib/unified-types';
 import { createEmptyPixelGrid } from '@/lib/types';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 
@@ -402,11 +403,12 @@ export function useCanvasState() {
   );
 
   // ---- Compute puppet node world pivot position ----
+  // 单位统一：内部全 SubPixel，返回画布像素（调用方按像素用）
   const computePivotWorldPosition = useCallback(
     (node: Node, character: Character, canvasW: number, canvasH: number): { x: number; y: number } => {
       // 新模型：使用 rest pose（transform），不做关键帧插值
-      const centerX = canvasW / 2;
-      const centerY = canvasH / 2;
+      const centerX = pxToSub(canvasW / 2);
+      const centerY = pxToSub(canvasH / 2);
       const nodes = Object.values(character.nodes);
 
       const parentMap = new Map<string, { parentId: string; socketId: string }>();
@@ -454,14 +456,18 @@ export function useCanvasState() {
       }
       for (const n of nodes) { if (n.attachment?.type !== 'socket') computeNodeWorldPos(n.id, centerX, centerY, 0); }
       const nodePos = worldPositions.get(node.id);
-      return nodePos ? { x: nodePos.x, y: nodePos.y } : { x: centerX, y: centerY };
+      // 返回画布像素
+      return nodePos ? { x: subToPx(nodePos.x), y: subToPx(nodePos.y) } : { x: subToPx(centerX), y: subToPx(centerY) };
     }, [],
   );
 
   // ---- Puppet node hit-testing (Character model) ----
   const findPuppetNodeAtPixel = useCallback(
     (px: number, py: number): { node: Node; character: Character; clipId: string | null } | null => {
-      const hitRadius = Math.max(20 / zoom, 8);
+      // 单位统一：内部全 SubPixel。px/py（画布像素）、hitRadius（画布像素）入口转 SubPixel。
+      const hitRadius = pxToSub(Math.max(20 / zoom, 8));
+      const clickX = pxToSub(px);
+      const clickY = pxToSub(py);
       const state = useProjectStore.getState();
       const characters = state.unifiedCharacters;
       const clips = state.animationClips;
@@ -470,8 +476,8 @@ export function useCanvasState() {
       for (const character of Object.values(characters)) {
         const clip = clips.find(c => c.puppetCharacterId === character.id);
         const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
-        const centerX = canvasWidth / 2;
-        const centerY = canvasHeight / 2;
+        const centerX = pxToSub(canvasWidth / 2);
+        const centerY = pxToSub(canvasHeight / 2);
         const nodes = Object.values(character.nodes);
 
         function computeNodeWorldPos(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldAngle: number): { x: number; y: number; angle: number } {
@@ -491,17 +497,17 @@ export function useCanvasState() {
             const parentPos = node.parentId ? worldPositions.get(node.parentId) : undefined;
             if (parentPos && parentNode) {
               // Socket attachment: find socket position on parent
+              // 全 SubPixel：socket.basePosition、offset 均为 SubPixel，直接用
               const socketId = node.attachment.parentSocketId;
               const socket = socketId ? parentNode.sockets.find(s => s.id === socketId) : undefined;
               const parentAngleRad = (parentPos.angle * Math.PI) / 180;
               const cosA = Math.cos(parentAngleRad); const sinA = Math.sin(parentAngleRad);
               const socketX = socket ? (socket.basePosition?.x ?? 0) : 0;
               const socketY = socket ? (socket.basePosition?.y ?? 0) : 0;
-              const plugX = node.attachment.plug?.x ?? 0;
-              const plugY = node.attachment.plug?.y ?? 0;
-              // World pos = parent pos + rotated (socket pos - plug pos + offset)
-              const localX = socketX - plugX + offsetX;
-              const localY = socketY - plugY + offsetY;
+              // World pos = parent pos + rotated (socket pos + offset)
+              // 与 overlay/主渲染一致：不减 plug
+              const localX = socketX + offsetX;
+              const localY = socketY + offsetY;
               worldX = Math.round(parentPos.x + localX * cosA - localY * sinA);
               worldY = Math.round(parentPos.y + localX * sinA + localY * cosA);
             } else {
@@ -543,22 +549,23 @@ export function useCanvasState() {
           if (!sprite && node.sprite) sprite = node.sprite;
           let endWorldX: number, endWorldY: number;
           if (sprite) {
-            const endLocal = computeSpriteEndPoint(sprite.width, sprite.height, sprite.plug?.x ?? 0, sprite.plug?.y ?? 0);
+            // plug 是 SubPixel，转像素后与 width/height（像素）一致计算，再转回 SubPixel
+            const endLocal = computeSpriteEndPoint(sprite.width, sprite.height, subToPx(sprite.plug?.x ?? 0), subToPx(sprite.plug?.y ?? 0));
             const rad = (pos.angle * Math.PI) / 180;
-            endWorldX = pos.x + endLocal.x * Math.cos(rad) - endLocal.y * Math.sin(rad);
-            endWorldY = pos.y + endLocal.x * Math.sin(rad) + endLocal.y * Math.cos(rad);
+            endWorldX = pos.x + pxToSub(endLocal.x * Math.cos(rad) - endLocal.y * Math.sin(rad));
+            endWorldY = pos.y + pxToSub(endLocal.x * Math.sin(rad) + endLocal.y * Math.cos(rad));
           } else { endWorldX = pos.x; endWorldY = pos.y; }
 
           let score: number;
           const isRoot = !node.parentId;
           if (isRoot) {
-            score = Math.min(Math.sqrt((px - endWorldX) ** 2 + (py - endWorldY) ** 2), Math.sqrt((px - pos.x) ** 2 + (py - pos.y) ** 2));
+            score = Math.min(Math.sqrt((clickX - endWorldX) ** 2 + (clickY - endWorldY) ** 2), Math.sqrt((clickX - pos.x) ** 2 + (clickY - pos.y) ** 2));
           } else {
-            const distToEnd = Math.sqrt((px - endWorldX) ** 2 + (py - endWorldY) ** 2);
+            const distToEnd = Math.sqrt((clickX - endWorldX) ** 2 + (clickY - endWorldY) ** 2);
             const midX = (pos.x + endWorldX) / 2; const midY = (pos.y + endWorldY) / 2;
-            score = Math.min(distToEnd * 0.7, Math.sqrt((px - midX) ** 2 + (py - midY) ** 2));
+            score = Math.min(distToEnd * 0.7, Math.sqrt((clickX - midX) ** 2 + (clickY - midY) ** 2));
           }
-          const spriteExtent = sprite ? Math.max(sprite.width, sprite.height) / 2 : 5;
+          const spriteExtent = pxToSub(sprite ? Math.max(sprite.width, sprite.height) / 2 : 5);
           const maxDist = hitRadius + spriteExtent;
           if (score <= maxDist && (!bestHit || score < bestHit.score)) {
             bestHit = { node, character, clipId: clip?.id ?? null, score };

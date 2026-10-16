@@ -7,6 +7,7 @@
 import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
 import type { RenderContext } from './canvas-render-helpers';
 import type { Character, Node } from '@/lib/unified-types';
+import { pxToSub, subToPx } from '@/lib/unified-types';
 
 // ============================================================
 // Puppet skeleton overlay visualization
@@ -42,16 +43,18 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
       }
     }
 
-    // Compute world positions recursively
+    // Compute world positions recursively (SubPixel units throughout;
+    // converted to pixels via subToPx at draw time)
     const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
-    const centerX = canvasWidth / 2;
-    const centerY = canvasHeight / 2;
+    const centerX = pxToSub(canvasWidth / 2);
+    const centerY = pxToSub(canvasHeight / 2);
 
     function computeNodeWorldPosOverlay(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldAngle: number): void {
       const node = character.nodes[nodeId];
       if (!node) return;
 
       // 新模型：使用 rest pose（transform），不做关键帧插值
+      // 单位：全 SubPixel（node.transform.x/y、socket.basePosition 均为 SubPixel）
       const angle = node.transform.angle ?? 0;
       const offsetX = node.transform.x ?? 0;
       const offsetY = node.transform.y ?? 0;
@@ -128,10 +131,10 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
       const socketWorldX = parentPos.x + (socket.basePosition.x * cosA - socket.basePosition.y * sinA);
       const socketWorldY = parentPos.y + (socket.basePosition.x * sinA + socket.basePosition.y * cosA);
 
-      const socketScreenX = panX + socketWorldX * zoom;
-      const socketScreenY = panY + socketWorldY * zoom;
-      const childScreenX = panX + childPos.x * zoom;
-      const childScreenY = panY + childPos.y * zoom;
+      const socketScreenX = panX + subToPx(socketWorldX) * zoom;
+      const socketScreenY = panY + subToPx(socketWorldY) * zoom;
+      const childScreenX = panX + subToPx(childPos.x) * zoom;
+      const childScreenY = panY + subToPx(childPos.y) * zoom;
 
       ctx.save();
       ctx.strokeStyle = isActive ? '#88ff88' : '#448844';
@@ -150,8 +153,8 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
       const pos = worldPositions.get(node.id);
       if (!pos) continue;
 
-      const screenX = panX + pos.x * zoom;
-      const screenY = panY + pos.y * zoom;
+      const screenX = panX + subToPx(pos.x) * zoom;
+      const screenY = panY + subToPx(pos.y) * zoom;
       const isSelected = node.id === selectedNodeId;
 
       ctx.save();
@@ -187,8 +190,8 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
         const sinA2 = Math.sin(socketAngleRad);
         const socketWX = pos.x + (socket.basePosition.x * cosA2 - socket.basePosition.y * sinA2);
         const socketWY = pos.y + (socket.basePosition.x * sinA2 + socket.basePosition.y * cosA2);
-        const socketSX = panX + socketWX * zoom;
-        const socketSY = panY + socketWY * zoom;
+        const socketSX = panX + subToPx(socketWX) * zoom;
+        const socketSY = panY + subToPx(socketWY) * zoom;
 
         ctx.fillStyle = '#ffcc00';
         ctx.beginPath();
@@ -197,20 +200,21 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
       }
 
       // End point indicator for child nodes (new model: use node.sprite)
+      // plug 是 SubPixel，转像素后与 width/height（像素）一致计算
       const nodeSprite = node.sprite;
       if (nodeSprite && node.attachment?.type === 'socket') {
         const endLocal = computeSpriteEndPoint(
           nodeSprite.width, nodeSprite.height,
-          nodeSprite.plug ? nodeSprite.plug.x : 0,
-          nodeSprite.plug ? nodeSprite.plug.y : 0
+          nodeSprite.plug ? subToPx(nodeSprite.plug.x) : 0,
+          nodeSprite.plug ? subToPx(nodeSprite.plug.y) : 0
         );
         const endRad = (pos.angle * Math.PI) / 180;
         const endCosA = Math.cos(endRad);
         const endSinA = Math.sin(endRad);
-        const endWX = pos.x + endLocal.x * endCosA - endLocal.y * endSinA;
-        const endWY = pos.y + endLocal.x * endSinA + endLocal.y * endCosA;
-        const endSX = panX + endWX * zoom;
-        const endSY = panY + endWY * zoom;
+        const endWX = pos.x + pxToSub(endLocal.x * endCosA - endLocal.y * endSinA);
+        const endWY = pos.y + pxToSub(endLocal.x * endSinA + endLocal.y * endCosA);
+        const endSX = panX + subToPx(endWX) * zoom;
+        const endSY = panY + subToPx(endWY) * zoom;
 
         const dSize = isSelected ? 5 : 3;
         ctx.fillStyle = isSelected ? '#ff4488' : (isActive ? '#44aaff' : '#446688');

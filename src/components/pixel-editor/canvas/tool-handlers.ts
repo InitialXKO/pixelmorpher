@@ -387,8 +387,8 @@ export const puppetHandler: ToolHandler = {
       const angleRad = ((drag.parentAngle ?? 0) * Math.PI) / 180;
       const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
       const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
-      const newSocketX = Math.round((drag.origSocketX ?? 0) + localDx);
-      const newSocketY = Math.round((drag.origSocketY ?? 0) + localDy);
+      const newSocketX = Math.round((drag.origSocketX ?? 0) + pxToSub(localDx));
+      const newSocketY = Math.round((drag.origSocketY ?? 0) + pxToSub(localDy));
       const charId = drag.characterId ?? drag.skeletonId;
       const parentNode = character.nodes[drag.parentNodeId ?? ''];
       if (parentNode) {
