@@ -85,7 +85,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
     const refCanvas = document.createElement('canvas');
     refCanvas.width = canvasWidth;
     refCanvas.height = canvasHeight;
-    const refCtx = refCanvas.getContext('2d')!;
+    const refCtx = refCanvas.getContext('2d', { willReadFrequently: true })!;
     const scale = Math.min(canvasWidth / img.naturalWidth, canvasHeight / img.naturalHeight);
     const dw = img.naturalWidth * scale;
     const dh = img.naturalHeight * scale;
@@ -172,7 +172,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
     let barrierData: ImageData | null = null;
     const bCanvas = barrierCanvasRef.current;
     if (bCanvas) {
-      barrierData = bCanvas.getContext('2d')!.getImageData(0, 0, canvasWidth, canvasHeight);
+      barrierData = bCanvas.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, canvasWidth, canvasHeight);
     }
 
     if (erase) {
@@ -251,7 +251,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
     }
 
     try {
-      const maskCtx = maskCanvas.getContext('2d')!;
+      const maskCtx = maskCanvas.getContext('2d', { willReadFrequently: true })!;
       const maskData = maskCtx.getImageData(0, 0, canvasWidth, canvasHeight);
 
       const refData = await getReferenceImageData();
