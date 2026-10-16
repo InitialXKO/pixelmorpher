@@ -459,12 +459,14 @@ function applyIKChain(
   if (!rootNode?.parentId) {
     // Root is character root: recompute from scratch is complex,
     // for now just update positions along the chain
-    updateChainPositions(character, jointIds, angles, transforms);
+    // boneLengths 取前 N-1 个（不含虚拟尖端）
+    const fkBoneLengths = lengths.slice(0, jointIds.length - 1);
+    updateChainPositions(character, jointIds, angles, transforms, fkBoneLengths);
   } else {
     const parentT = transforms.get(rootNode.parentId);
     if (parentT) {
       // Recompute chain joints from parent
-      recomputeChainFromParent(character, jointIds, angles, parentT, transforms);
+      recomputeChainFromParent(character, jointIds, angles, parentT, transforms, lengths.slice(0, jointIds.length - 1));
     }
   }
 }
@@ -478,6 +480,7 @@ function updateChainPositions(
   jointIds: string[],
   angles: number[],
   transforms: Map<string, WorldTransform>,
+  boneLengths: number[],
 ): void {
   for (let i = 1; i < jointIds.length; i++) {
     const prevT = transforms.get(jointIds[i - 1]);
@@ -487,11 +490,9 @@ function updateChainPositions(
     const node = character.nodes[jointIds[i]];
     if (!node) continue;
 
-    // Get bone length from original FK (distance is preserved by IK)
-    const origDist = Math.hypot(
-      subToPx(currT.worldX) - subToPx(prevT.worldX),
-      subToPx(currT.worldY) - subToPx(prevT.worldY),
-    );
+    // 用预计算的 FK 骨长（不能从已改过的 transforms 现算）
+    const origDist = boneLengths[i - 1] ?? 0;
+    if (origDist <= 1e-6) continue;
 
     // 骨沿局部 Y 轴：方向为 (-sin θ, cos θ)
     const rad = (angles[i - 1] * Math.PI) / 180;
@@ -513,6 +514,7 @@ function recomputeChainFromParent(
   angles: number[],
   parentT: WorldTransform,
   transforms: Map<string, WorldTransform>,
+  boneLengths: number[],
 ): void {
   let px = subToPx(parentT.worldX);
   let py = subToPx(parentT.worldY);
@@ -523,19 +525,9 @@ function recomputeChainFromParent(
     const node = character.nodes[jointIds[i]];
     if (!t || !node) continue;
 
-    // Get bone length (from node attachment or FK distance)
-    let boneLen = 0;
-    if (i < jointIds.length - 1) {
-      const nextT = transforms.get(jointIds[i + 1]);
-      if (nextT) {
-        // Use current FK distance as bone length
-        const currX = subToPx(t.worldX);
-        const currY = subToPx(t.worldY);
-        const nextX = subToPx(nextT.worldX);
-        const nextY = subToPx(nextT.worldY);
-        boneLen = Math.hypot(nextX - currX, nextY - currY);
-      }
-    }
+    // 骨长用预计算的 FK 长度：boneLengths[i-1] 是 parent→当前关节的骨
+    // （i=0 是根，不需要骨长）
+    const boneLen = i > 0 ? (boneLengths[i - 1] ?? 0) : 0;
 
     // Update world angle
     t.worldAngle = angles[i];
