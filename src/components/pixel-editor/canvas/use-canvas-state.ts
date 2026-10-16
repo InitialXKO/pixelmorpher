@@ -16,6 +16,7 @@ import {
   combineTransformsComponentLevel,
   floodFill,
 } from '@/lib/engine';
+import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { generateBrushStamp, applyBrushStamp } from '@/lib/brush-engine';
 import { inpaintPixels } from '@/lib/inpainting';
 import { catmullRomToBezier, isPixelInPart, getPixelAt, computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
@@ -405,7 +406,9 @@ export function useCanvasState() {
   // 单位统一：内部全 SubPixel，返回画布像素（调用方按像素用）
   const computePivotWorldPosition = useCallback(
     (node: Node, character: Character, canvasW: number, canvasH: number): { x: number; y: number } => {
-      // 新模型：使用 rest pose（transform），不做关键帧插值
+      // 用当前帧插值，不是 rest pose
+      const state = useProjectStore.getState();
+      const ivMap = interpolateNodeKeyframes(character, state.currentFrame);
       const centerX = pxToSub(canvasW / 2);
       const centerY = pxToSub(canvasH / 2);
       const nodes = Object.values(character.nodes);
@@ -423,9 +426,10 @@ export function useCanvasState() {
       function computeNodeWorldPos(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldAngle: number): { x: number; y: number; angle: number } {
         const n = character.nodes[nodeId];
         if (!n) return { x: parentWorldX, y: parentWorldY, angle: 0 };
-        const angle = n.transform.angle ?? 0;
-        const offsetX = n.transform.x ?? 0;
-        const offsetY = n.transform.y ?? 0;
+        const iv = ivMap.get(nodeId);
+        const angle = iv?.angle ?? n.transform.angle ?? 0;
+        const offsetX = iv?.x ?? n.transform.x ?? 0;
+        const offsetY = iv?.y ?? n.transform.y ?? 0;
         let worldX: number, worldY: number;
         const isSocketAttached = n.attachment?.type === 'socket';
         if (!isSocketAttached) { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
@@ -480,14 +484,16 @@ export function useCanvasState() {
         const centerX = pxToSub(canvasWidth / 2);
         const centerY = pxToSub(canvasHeight / 2);
         const nodes = Object.values(character.nodes);
+        // 用当前帧插值（不是 rest pose），否则移动/旋转后点击不准
+        const ivMap = interpolateNodeKeyframes(character, state.currentFrame);
 
         function computeNodeWorldPos(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldAngle: number): { x: number; y: number; angle: number } {
           const node = character.nodes[nodeId];
           if (!node) return { x: parentWorldX, y: parentWorldY, angle: 0 };
-          // Rest pose (no keyframe interpolation for hit testing)
-          const angle = node.transform.angle;
-          const offsetX = node.transform.x;
-          const offsetY = node.transform.y;
+          const iv = ivMap.get(nodeId);
+          const angle = iv?.angle ?? node.transform.angle;
+          const offsetX = iv?.x ?? node.transform.x;
+          const offsetY = iv?.y ?? node.transform.y;
           let worldX: number, worldY: number;
           const isRoot = !node.parentId;
           if (isRoot) {
