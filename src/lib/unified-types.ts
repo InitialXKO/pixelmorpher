@@ -412,6 +412,11 @@ export interface Node {
   // ---- Animation Tracks (drive transform properties) ----
   tracks: NodeTracks;
 
+  // ---- Trajectory (node-level motion path, baked from trajectory tool) ----
+  // Points are in the same space as tracks.x/tracks.y (parent-local SubPixel offsets).
+  // When present, renderer interpolates x/y from trajectory instead of tracks.
+  trajectory?: { frame: number; x: number; y: number }[];
+
   // ---- Dynamic Generated Items ----
   generated?: GeneratedItem;
 

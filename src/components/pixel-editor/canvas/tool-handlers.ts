@@ -11,6 +11,7 @@ import { useWorkspaceStore } from '@/lib/workspace-store';
 import { inpaintPixels, samMaskToSelectionMask } from '@/lib/inpainting';
 import { floodFill } from '@/lib/engine';
 import { renderUnifiedToCanvas } from '@/lib/unified-render';
+import { resolveNodeSpriteId } from '@/lib/unified-render';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
@@ -129,7 +130,7 @@ export const selectToolHandler: ToolHandler = {
 // ---------------------------------------------------------------------------
 
 /** 把操控写入关键帧：存在则更新，不存在则以当前插值姿态为基准新建 */
-function writePuppetPoseKeyframe(
+export function writePuppetPoseKeyframe(
   skeletonId: string,
   clipId: string,
   nodeId: string,
@@ -905,6 +906,471 @@ export const inpaintHandler: ToolHandler = {
 };
 
 // ---------------------------------------------------------------------------
+// Node-level Tool Handlers（新架构）
+//
+// 背景：2026-10-10「木偶唯一工作流」后 getToolHandler 恒返回 puppetHandler，
+// 以下 12 个工具静默错配。Node 级实现让它们真正可用：
+//   select/move/trajectory/lasso/magic_wand → 操作木偶节点
+//   inpaint → 已迁移（62bc70b）
+//   motion_blur/glow/particle/afterimage → strokeToolHandler（帧级 overlay，无需 Node 改造）
+// ---------------------------------------------------------------------------
+
+// ---- Node 级通用 helper ----
+
+type UnifiedNode = import('@/lib/unified-types').Node;
+type UnifiedCharacter = import('@/lib/unified-types').Character;
+
+/** 选中的木偶节点及其角色（优先 selectedNodeId，回退 performNodeId） */
+function getSelectedPuppetNode(): { node: UnifiedNode; character: UnifiedCharacter } | null {
+  const project = useProjectStore.getState();
+  const nodeId = project.selectedNodeId ?? usePuppetSessionStore.getState().performNodeId;
+  if (!nodeId) return null;
+  for (const ch of Object.values(project.unifiedCharacters)) {
+    const node = (ch as UnifiedCharacter).nodes[nodeId];
+    if (node) return { node: node as UnifiedNode, character: ch as UnifiedCharacter };
+  }
+  return null;
+}
+
+/** 解析选中节点的精灵（经 costume/piece/sprite） */
+function resolveSelectedNodeSprite(s: CanvasState): {
+  node: UnifiedNode; character: UnifiedCharacter; sprite: import('@/lib/unified-types').Sprite; spriteId: string;
+} | null {
+  const sel = getSelectedPuppetNode();
+  if (!sel) return null;
+  const { node, character } = sel;
+  const project = useProjectStore.getState();
+  const direction = (node.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  const spriteId = resolveNodeSpriteId(character, node.id, direction, project.sprites);
+  if (!spriteId) return null;
+  const sprite = project.sprites[spriteId];
+  if (!sprite) return null;
+  return { node, character, sprite, spriteId };
+}
+
+/** 计算节点的世界角度（从根累加当前帧插值角度，度） */
+function computeNodeWorldAngle(character: UnifiedCharacter, nodeId: string): number {
+  const state = useProjectStore.getState();
+  const ivMap = interpolateNodeKeyframes(character, state.currentFrame);
+  const chain: string[] = [];
+  let cur: string | undefined = nodeId;
+  while (cur) {
+    chain.unshift(cur);
+    cur = character.nodes[cur]?.parentId ?? undefined;
+  }
+  let angle = 0;
+  for (const id of chain) {
+    const n = character.nodes[id];
+    angle += ivMap.get(id)?.angle ?? n?.transform.angle ?? 0;
+  }
+  return angle;
+}
+
+/** 画布坐标 → 节点精灵局部坐标（考虑节点世界位姿），越界返回 null */
+function canvasToNodeSpriteLocal(
+  s: CanvasState,
+  character: UnifiedCharacter,
+  node: UnifiedNode,
+  sprite: import('@/lib/unified-types').Sprite,
+  px: number, py: number,
+): { lx: number; ly: number } | null {
+  const world = s.computePivotWorldPosition(node as any, character as any, s.canvasWidth, s.canvasHeight);
+  const angle = computeNodeWorldAngle(character, node.id);
+  const pivotX = sprite.plug ? subToPx(sprite.plug.x) : sprite.width / 2;
+  const pivotY = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
+  const dx = px - world.x;
+  const dy = py - world.y;
+  const rad = (angle * Math.PI) / 180;
+  const cosA = Math.cos(rad), sinA = Math.sin(rad);
+  const lx = Math.round(dx * cosA + dy * sinA + pivotX);
+  const ly = Math.round(-dx * sinA + dy * cosA + pivotY);
+  if (lx < 0 || lx >= sprite.width || ly < 0 || ly >= sprite.height) return null;
+  return { lx, ly };
+}
+
+/** 节点精灵局部坐标 → 画布坐标 */
+function nodeSpriteLocalToCanvas(
+  s: CanvasState,
+  character: UnifiedCharacter,
+  node: UnifiedNode,
+  sprite: import('@/lib/unified-types').Sprite,
+  lx: number, ly: number,
+): { x: number; y: number } {
+  const world = s.computePivotWorldPosition(node as any, character as any, s.canvasWidth, s.canvasHeight);
+  const angle = computeNodeWorldAngle(character, node.id);
+  const pivotX = sprite.plug ? subToPx(sprite.plug.x) : sprite.width / 2;
+  const pivotY = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
+  const rad = (angle * Math.PI) / 180;
+  const cosA = Math.cos(rad), sinA = Math.sin(rad);
+  const dx = lx - pivotX, dy = ly - pivotY;
+  return {
+    x: Math.round(world.x + dx * cosA - dy * sinA),
+    y: Math.round(world.y + dx * sinA + dy * cosA),
+  };
+}
+
+/** 选中节点的精灵在画布上的包围盒（含旋转），用于选区裁剪 */
+function getNodeSpriteCanvasBounds(
+  s: CanvasState,
+  character: UnifiedCharacter,
+  node: UnifiedNode,
+  sprite: import('@/lib/unified-types').Sprite,
+): { minX: number; minY: number; maxX: number; maxY: number } {
+  const corners = [
+    nodeSpriteLocalToCanvas(s, character, node, sprite, 0, 0),
+    nodeSpriteLocalToCanvas(s, character, node, sprite, sprite.width - 1, 0),
+    nodeSpriteLocalToCanvas(s, character, node, sprite, 0, sprite.height - 1),
+    nodeSpriteLocalToCanvas(s, character, node, sprite, sprite.width - 1, sprite.height - 1),
+  ];
+  return {
+    minX: Math.min(...corners.map((c) => c.x)),
+    minY: Math.min(...corners.map((c) => c.y)),
+    maxX: Math.max(...corners.map((c) => c.x)),
+    maxY: Math.max(...corners.map((c) => c.y)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Node Select Handler — 点选木偶节点（只选中，不拖拽）
+// ---------------------------------------------------------------------------
+
+export const nodeSelectHandler: ToolHandler = {
+  onMouseDown(s, e, px, py) {
+    const hit = s.findPuppetNodeAtPixel(px, py);
+    const project = useProjectStore.getState();
+    if (!hit) {
+      project.setSelectedNodeId(null);
+      try { usePuppetSessionStore.setState({ performNodeId: null }); } catch { /* noop */ }
+      return;
+    }
+    const { node, character } = hit;
+    project.setSelectedNodeId(node.id);
+    s.editorStore.getState().setActivePuppetSkeletonId(character.id);
+    try { usePuppetSessionStore.setState({ performNodeId: node.id }); } catch { /* noop */ }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Node Move Handler — 拖拽移动选中的木偶节点（写 node.tracks x/y）
+// ---------------------------------------------------------------------------
+
+export const nodeMoveHandler: ToolHandler = {
+  onMouseDown(s, e, px, py) {
+    const hit = s.findPuppetNodeAtPixel(px, py);
+    if (!hit) return;
+    const { node, character } = hit;
+    const project = useProjectStore.getState();
+    project.setSelectedNodeId(node.id);
+    s.editorStore.getState().setActivePuppetSkeletonId(character.id);
+    try { usePuppetSessionStore.setState({ performNodeId: node.id }); } catch { /* noop */ }
+
+    const session = usePuppetSessionStore.getState();
+    if (!session.performArmed) {
+      usePuppetSessionStore.setState({ performArmed: true });
+    }
+    if (!session.autoKeyframe) return; // 关闭自动关键帧时只选中
+
+    const frame = project.currentFrame;
+    const ivMap = interpolateNodeKeyframes(character, frame);
+    const iv = ivMap.get(node.id);
+
+    // 父节点世界角度（move 坐标转换，复用 puppetHandler 逻辑）
+    let parentWorldAngle = 0;
+    if (node.parentId) {
+      const parent = character.nodes[node.parentId];
+      if (parent) parentWorldAngle = computeNodeWorldAngle(character, parent.id);
+    }
+
+    s.isDrawingRef.current = true;
+    s.markDirty();
+    s.puppetNodeDragRef.current = {
+      nodeId: node.id,
+      skeletonId: character.id,
+      characterId: character.id,
+      clipId: '',
+      startX: px,
+      startY: py,
+      origAngle: iv?.angle ?? node.transform.angle,
+      origStretch: iv?.stretch ?? node.transform.stretch,
+      origOffsetX: iv?.x ?? node.transform.x,
+      origOffsetY: iv?.y ?? node.transform.y,
+      moveTargetNodeId: node.id,
+      mode: 'move',
+      pivotWorldX: 0,
+      pivotWorldY: 0,
+      startMouseAngle: 0,
+      dragStarted: false,
+      parentWorldAngle,
+    };
+  },
+
+  onMouseMove(s, e, px, py) {
+    const drag = s.puppetNodeDragRef.current;
+    if (!drag || drag.mode !== 'move') return;
+    if (!drag.dragStarted) {
+      const ddx = px - drag.startX;
+      const ddy = py - drag.startY;
+      if (Math.sqrt(ddx * ddx + ddy * ddy) < 2) return;
+      drag.dragStarted = true;
+      useProjectStore.getState().beginDrag('移动木偶节点');
+      s.isDrawingRef.current = true;
+      s.markDirty();
+    }
+    const store = useProjectStore.getState();
+    const frame = store.currentFrame;
+    const character = store.unifiedCharacters[drag.characterId ?? drag.skeletonId];
+    if (!character) return;
+    const dragNode = character.nodes[drag.nodeId];
+    const variantIndex = (dragNode?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+    // 逆旋转鼠标增量到父节点局部空间（与 puppetHandler move 分支一致）
+    const ddx = px - drag.startX;
+    const ddy = py - drag.startY;
+    const angleRad = ((drag.parentWorldAngle ?? 0) * Math.PI) / 180;
+    const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
+    const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
+    const newOffsetX = Math.round(drag.origOffsetX + pxToSub(localDx));
+    const newOffsetY = Math.round(drag.origOffsetY + pxToSub(localDy));
+    writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
+      angle: drag.origAngle,
+      stretch: drag.origStretch,
+      x: newOffsetX,
+      y: newOffsetY,
+    }, variantIndex);
+  },
+
+  onMouseUp(s) {
+    s.puppetNodeDragRef.current = null;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Node Trajectory Handler — 为选中节点绘制运动轨迹，烘焙为 node.trajectory
+// ---------------------------------------------------------------------------
+
+export const nodeTrajectoryHandler: ToolHandler = {
+  onMouseDown(s, e, px, py) {
+    s.isDrawingRef.current = true;
+    s.markDirty();
+    s.trajectoryPathRef.current = [{ x: px, y: py }];
+    s.lastPixelRef.current = { x: px, y: py };
+  },
+
+  onMouseMove(s, e, px, py) {
+    if (!s.isDrawingRef.current) return;
+    if (s.lastPixelRef.current) {
+      for (const point of getLinePixels(s.lastPixelRef.current.x, s.lastPixelRef.current.y, px, py)) {
+        s.trajectoryPathRef.current.push({ x: point.x, y: point.y });
+      }
+    } else {
+      s.trajectoryPathRef.current.push({ x: px, y: py });
+    }
+    s.lastPixelRef.current = { x: px, y: py };
+  },
+
+  onMouseUp(s) {
+    if (!s.isDrawingRef.current) return;
+    const path = s.trajectoryPathRef.current;
+    s.trajectoryPathRef.current = [];
+    if (path.length < 2) return;
+    const sel = getSelectedPuppetNode();
+    if (!sel) return;
+    const { node, character } = sel;
+    const store = useProjectStore.getState();
+    const totalFrames = store.totalFrames;
+
+    // 以绘制时的当前帧位姿为基准：路径点 → 节点局部 offset
+    const baseFrame = store.currentFrame;
+    const ivMap = interpolateNodeKeyframes(character, baseFrame);
+    const iv = ivMap.get(node.id);
+    const baseX = iv?.x ?? node.transform.x;
+    const baseY = iv?.y ?? node.transform.y;
+    const baseWorld = s.computePivotWorldPosition(node as any, character as any, s.canvasWidth, s.canvasHeight);
+    let parentWorldAngle = 0;
+    if (node.parentId && character.nodes[node.parentId]) {
+      parentWorldAngle = computeNodeWorldAngle(character, node.parentId);
+    }
+    const angleRad = (parentWorldAngle * Math.PI) / 180;
+    const cosA = Math.cos(angleRad), sinA = Math.sin(angleRad);
+
+    // 路径采样到帧
+    const pathLength = path.length;
+    const numSamples = Math.min(totalFrames, Math.max(2, Math.round(pathLength / 3)));
+    const points: { frame: number; x: number; y: number }[] = [];
+    for (let i = 0; i < numSamples; i++) {
+      const pathIndex = Math.min(Math.round((i * (pathLength - 1)) / (numSamples - 1)), pathLength - 1);
+      const pt = path[pathIndex];
+      const frame = numSamples === 1 ? 0 : Math.round((i / (numSamples - 1)) * (totalFrames - 1));
+      // 画布增量 → 父节点局部增量（逆旋转）
+      const ddx = pt.x - baseWorld.x;
+      const ddy = pt.y - baseWorld.y;
+      const localDx = ddx * cosA + ddy * sinA;
+      const localDy = -ddx * sinA + ddy * cosA;
+      points.push({
+        frame,
+        x: Math.round(baseX + pxToSub(localDx)),
+        y: Math.round(baseY + pxToSub(localDy)),
+      });
+    }
+
+    store.pushUndo('绘制节点轨迹');
+    store.updateUnifiedNode(character.id, node.id, { trajectory: points });
+    s.markDirty();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Node Lasso Handler — 套索选区；有选中节点时裁剪到其精灵包围盒
+// ---------------------------------------------------------------------------
+
+export const nodeLassoHandler: ToolHandler = {
+  onMouseDown(s, e, px, py) {
+    s.isDrawingRef.current = true;
+    s.markDirty();
+    s.selectionMaskRef.current.clear();
+    s.lassoPathRef.current = [{ x: px, y: py }];
+    s.lastPixelRef.current = { x: px, y: py };
+  },
+
+  onMouseMove(s, e, px, py) {
+    if (!s.isDrawingRef.current) return;
+    if (s.lastPixelRef.current) {
+      for (const point of getLinePixels(s.lastPixelRef.current.x, s.lastPixelRef.current.y, px, py)) {
+        s.lassoPathRef.current.push({ x: point.x, y: point.y });
+      }
+    } else {
+      s.lassoPathRef.current.push({ x: px, y: py });
+    }
+    s.lastPixelRef.current = { x: px, y: py };
+  },
+
+  onMouseUp(s) {
+    if (!s.isDrawingRef.current || s.lassoPathRef.current.length <= 2) return;
+    const path = s.lassoPathRef.current;
+    path.push({ ...path[0] });
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of path) {
+      minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+    }
+    // 有选中节点时，将选区裁剪到其精灵包围盒（选区作用于该节点精灵）
+    const nodeSprite = resolveSelectedNodeSprite(s);
+    let bounds: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
+    if (nodeSprite) {
+      bounds = getNodeSpriteCanvasBounds(s, nodeSprite.character, nodeSprite.node, nodeSprite.sprite);
+      minX = Math.max(minX, bounds.minX); minY = Math.max(minY, bounds.minY);
+      maxX = Math.min(maxX, bounds.maxX); maxY = Math.min(maxY, bounds.maxY);
+    }
+    for (let y = Math.floor(minY); y <= Math.ceil(maxY); y++) {
+      for (let x = Math.floor(minX); x <= Math.ceil(maxX); x++) {
+        if (pointInPolygon(x, y, path)) s.selectionMaskRef.current.add(`${x},${y}`);
+      }
+    }
+    s.lassoPathRef.current = [];
+    s.markDirty();
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Node Magic Wand Handler — 节点感知的魔棒选区
+// ---------------------------------------------------------------------------
+
+export const nodeMagicWandHandler: ToolHandler = {
+  onMouseDown(s, e, px, py) {
+    const shiftHeld = e.shiftKey;
+    const ctrlHeld = e.ctrlKey || e.metaKey;
+    if (!shiftHeld && !ctrlHeld) s.selectionMaskRef.current.clear();
+
+    // 优先：选中节点的精灵（节点感知，考虑世界位姿）
+    const nodeSprite = resolveSelectedNodeSprite(s);
+    if (nodeSprite) {
+      const { character, node, sprite } = nodeSprite;
+      const local = canvasToNodeSpriteLocal(s, character, node, sprite, Math.round(px), Math.round(py));
+      if (!local) return;
+      const targetColor = sprite.data[local.ly]?.[local.lx];
+      if (targetColor === null || targetColor === undefined) return;
+      const tR = parseInt(targetColor.slice(1, 3), 16);
+      const tG = parseInt(targetColor.slice(3, 5), 16);
+      const tB = parseInt(targetColor.slice(5, 7), 16);
+      const visited = new Set<string>();
+      const queue: { lx: number; ly: number }[] = [local];
+      visited.add(`${local.lx},${local.ly}`);
+      const tolerance = s.magicWandTolerance ?? 10;
+      while (queue.length > 0) {
+        const { lx, ly } = queue.shift()!;
+        const canvasPt = nodeSpriteLocalToCanvas(s, character, node, sprite, lx, ly);
+        const maskKey = `${canvasPt.x},${canvasPt.y}`;
+        if (ctrlHeld) s.selectionMaskRef.current.delete(maskKey);
+        else s.selectionMaskRef.current.add(maskKey);
+        for (const n of [{ lx: lx - 1, ly }, { lx: lx + 1, ly }, { lx, ly: ly - 1 }, { lx, ly: ly + 1 }]) {
+          if (n.lx < 0 || n.lx >= sprite.width || n.ly < 0 || n.ly >= sprite.height) continue;
+          const nKey = `${n.lx},${n.ly}`;
+          if (visited.has(nKey)) continue;
+          visited.add(nKey);
+          const nColor = sprite.data[n.ly]?.[n.lx];
+          if (nColor === null || nColor === undefined) continue;
+          const nR = parseInt(nColor.slice(1, 3), 16);
+          const nG = parseInt(nColor.slice(3, 5), 16);
+          const nB = parseInt(nColor.slice(5, 7), 16);
+          if (Math.abs(tR - nR) + Math.abs(tG - nG) + Math.abs(tB - nB) <= tolerance * 3) {
+            queue.push(n);
+          }
+        }
+      }
+      s.markDirty();
+      return;
+    }
+
+    // 回退：旧逻辑（遍历全局精灵表，画布中心坐标系）
+    const offsetX = s.canvasWidth / 2;
+    const offsetY = s.canvasHeight / 2;
+    const sortedParts = [...s.parts];
+    let targetColor: string | null = null;
+    let targetPart: import('@/lib/unified-types').Sprite | null = null;
+    for (const part of sortedParts) {
+      const local = s.canvasToPartLocal(px, py, part);
+      if (local && part.data[local.ly]?.[local.lx] !== null) {
+        targetColor = part.data[local.ly][local.lx];
+        targetPart = part;
+        break;
+      }
+    }
+    if (targetColor && targetPart) {
+      const local = s.canvasToPartLocal(px, py, targetPart);
+      if (!local) return;
+      const visited = new Set<string>();
+      const queue: { lx: number; ly: number }[] = [local];
+      visited.add(`${local.lx},${local.ly}`);
+      const tR = parseInt(targetColor.slice(1, 3), 16);
+      const tG = parseInt(targetColor.slice(3, 5), 16);
+      const tB = parseInt(targetColor.slice(5, 7), 16);
+      const pivotX = spritePivotX(targetPart);
+      const pivotY = spritePivotY(targetPart);
+      while (queue.length > 0) {
+        const { lx, ly } = queue.shift()!;
+        const canvasX = (offsetX - pivotX) + lx;
+        const canvasY = (offsetY - pivotY) + ly;
+        const maskKey = `${canvasX},${canvasY}`;
+        if (ctrlHeld) s.selectionMaskRef.current.delete(maskKey);
+        else s.selectionMaskRef.current.add(maskKey);
+        for (const n of [{ lx: lx - 1, ly }, { lx: lx + 1, ly }, { lx, ly: ly - 1 }, { lx, ly: ly + 1 }]) {
+          if (n.lx < 0 || n.lx >= targetPart.width || n.ly < 0 || n.ly >= targetPart.height) continue;
+          const nKey = `${n.lx},${n.ly}`;
+          if (visited.has(nKey)) continue;
+          visited.add(nKey);
+          const nColor = targetPart.data[n.ly]?.[n.lx];
+          if (nColor === null) continue;
+          const nR = parseInt(nColor.slice(1, 3), 16);
+          const nG = parseInt(nColor.slice(3, 5), 16);
+          const nB = parseInt(nColor.slice(5, 7), 16);
+          if (Math.abs(tR - nR) + Math.abs(tG - nG) + Math.abs(tB - nB) <= s.magicWandTolerance * 3) queue.push(n);
+        }
+      }
+      s.markDirty();
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Brush / Eraser Handler
 // ---------------------------------------------------------------------------
 
@@ -1136,14 +1602,32 @@ export function getToolHandler(
   tool: string,
   isPartEdit: boolean = false,
 ): ToolHandler | null {
-  // Part-edit mode: pixel tools edit the part directly even inside puppet workspace
-  // (puppetHandler would otherwise swallow brush/eraser/fill events)
+  // 精灵编辑模式：像素工具直接编辑精灵（puppetHandler 会吞掉 brush/eraser/fill 事件）
   if (isPartEdit) {
     if (tool === 'brush' || tool === 'eraser') return brushEraserHandler;
     if (tool === 'fill') return fillToolHandler;
     if (tool === 'eyedropper') return eyedropperHandler;
   }
 
-  // Puppet 是唯一工作流（workspace mode 已退役），非精灵编辑时一律走 puppetHandler
-  return puppetHandler;
+  // Node 级分发（新架构；旧画布精灵层分发已随 workspace mode 退役）
+  switch (tool) {
+    case 'puppet': return puppetHandler;
+    case 'select': return nodeSelectHandler;
+    case 'move': return nodeMoveHandler;
+    case 'trajectory': return nodeTrajectoryHandler;
+    case 'crop': return cropHandler; // 评估中：新架构下意义不大，见报告
+    case 'lasso': return nodeLassoHandler;
+    case 'magic_wand': return nodeMagicWandHandler;
+    case 'smart_select': return smartSelectHandler;
+    case 'inpaint': return inpaintHandler; // 已迁移（62bc70b：SAM 选区 + 圆形半径）
+    case 'motion_blur_brush':
+    case 'glow_brush':
+    case 'particle_brush':
+    case 'afterimage_brush': return strokeToolHandler; // 帧级 overlay，无需 Node 改造
+    case 'brush':
+    case 'eraser': return brushEraserHandler;
+    case 'fill': return fillToolHandler;
+    case 'eyedropper': return eyedropperHandler;
+    default: return puppetHandler;
+  }
 }

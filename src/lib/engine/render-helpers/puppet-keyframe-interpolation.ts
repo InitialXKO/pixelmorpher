@@ -35,16 +35,45 @@ function interpolateTrack(track: KeyframeTrack<number> | undefined, frame: numbe
 
 function interpolateSingleNode(node: Node, currentFrame: number): InterpolatedNodeValues {
   const tracks = node.tracks;
+  let x = interpolateTrack(tracks?.x, currentFrame, 0);
+  let y = interpolateTrack(tracks?.y, currentFrame, 0);
+  // Node trajectory（轨迹工具烘焙）：有轨迹点时 x/y 走轨迹插值，与关键帧插值合并
+  const traj = node.trajectory;
+  if (traj && traj.length > 0) {
+    const tp = interpolateTrajectoryPoints(traj, currentFrame);
+    if (tp) { x = tp.x; y = tp.y; }
+  }
   return {
     angle: interpolateTrack(tracks?.angle, currentFrame, 0),
     stretch: interpolateTrack(tracks?.stretch, currentFrame, 1),
-    x: interpolateTrack(tracks?.x, currentFrame, 0),
-    y: interpolateTrack(tracks?.y, currentFrame, 0),
+    x,
+    y,
     variantIndex: 0,
     zIndex: node.zIndex ?? 0,
     skewX: 0,
     skewY: 0,
     scaleX: 1,
+  };
+}
+
+/** 轨迹点线性插值（帧 → x/y） */
+function interpolateTrajectoryPoints(
+  points: { frame: number; x: number; y: number }[],
+  frame: number,
+): { x: number; y: number } | null {
+  if (points.length === 0) return null;
+  const sorted = [...points].sort((a, b) => a.frame - b.frame);
+  let prev = sorted[0];
+  let next: typeof prev | null = null;
+  for (const p of sorted) {
+    if (p.frame <= frame) prev = p;
+    else { next = p; break; }
+  }
+  if (!next || prev.frame === next.frame) return { x: prev.x, y: prev.y };
+  const t = (frame - prev.frame) / (next.frame - prev.frame);
+  return {
+    x: Math.round(prev.x + (next.x - prev.x) * t),
+    y: Math.round(prev.y + (next.y - prev.y) * t),
   };
 }
 
