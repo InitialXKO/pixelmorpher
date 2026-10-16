@@ -81,8 +81,8 @@ let _kfByPartCache: { keyframesRef: Keyframe[] | null; map: Map<string, Keyframe
 };
 
 // ============================================================
-// B4: Modifier resolution LRU cache — avoid redundant per-part per-frame resolution
-// Key: "partId:frame", Value: resolved modifiers array
+// B4: Modifier resolution LRU cache — avoid redundant per-sprite per-frame resolution
+// Key: "spriteId:frame", Value: resolved modifiers array
 // Cleared when keyframes reference changes
 // ============================================================
 const _modifierResolveCache = new Map<string, Keyframe>();

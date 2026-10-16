@@ -192,32 +192,32 @@ export function resolvePuppetNodeSprite(
   activeCostumeSet: CostumeSet | null,
   sprites: import('../unified-types').Sprite[],
 ): import('../unified-types').Sprite | null {
-  let partId: string | null = null;
+  let spriteId: string | null = null;
 
   // Step 1: Check costume set override
   if (activeCostumeSet) {
     const costumeKey = `${node.id}:${direction}`;
-    partId = activeCostumeSet.spriteMap[costumeKey] ?? null;
-    if (!partId) {
+    spriteId = activeCostumeSet.spriteMap[costumeKey] ?? null;
+    if (!spriteId) {
       // Try default direction key
       const defaultKey = `${node.id}:default`;
-      partId = activeCostumeSet.spriteMap[defaultKey] ?? null;
+      spriteId = activeCostumeSet.spriteMap[defaultKey] ?? null;
     }
   }
 
   // Step 2: Check direction-specific sprite override
-  if (!partId && node.directionSprites) {
-    partId = node.directionSprites[direction] ?? null;
+  if (!spriteId && node.directionSprites) {
+    spriteId = node.directionSprites[direction] ?? null;
   }
 
   // Step 4: Fall back to default sprite
-  if (!partId) {
-    partId = node.spritePartId;
+  if (!spriteId) {
+    spriteId = node.spritePartId;
   }
 
-  if (!partId) return null;
+  if (!spriteId) return null;
 
-  return sprites.find(p => p.id === partId) ?? null;
+  return sprites.find(p => p.id === spriteId) ?? null;
 }
 
 

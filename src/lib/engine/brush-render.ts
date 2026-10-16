@@ -336,7 +336,7 @@ export function applyAutoMotionBlur(
   ctx: CanvasRenderingContext2D,
   nodeId: string,
   currentFrame: number,
-  // UnifiedKeyframe: only partId/frame/modifiers are read.
+  // UnifiedKeyframe: only spriteId/frame/modifiers are read.
   // Old Keyframe[] is assignable to UnifiedKeyframe[] (id+frame present).
   keyframes: UnifiedKeyframe[],
   intensity: number,
@@ -345,7 +345,7 @@ export function applyAutoMotionBlur(
 ): void {
   // Find the current and previous keyframes
   const partKeyframes = keyframes
-    .filter((k) => k.partId === nodeId)
+    .filter((k) => k.spriteId === nodeId)
     .sort((a, b) => a.frame - b.frame);
 
   let currentKf: UnifiedKeyframe | null = null;

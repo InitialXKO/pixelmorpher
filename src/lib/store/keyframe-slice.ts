@@ -22,14 +22,14 @@ export type KeyframeSlice = {
 };
 
 export const createKeyframeSlice: StateCreator<ProjectStore, [], [], KeyframeSlice> = (set, get) => ({
-  addKeyframe: (partId, frame) => {
+  addKeyframe: (spriteId, frame) => {
     get().pushUndo('添加关键帧');
     // H8/H9: 关键帧数据变更，插值缓存与 driver 求值缓存失效
     invalidateInterpolationCache();
     invalidateParamDriverEvalCache();    const id = crypto.randomUUID();
     const keyframe: Keyframe = {
       id,
-      partId,
+      spriteId,
       frame,
       modifiers: [],
       correctionMask: null,
@@ -37,9 +37,9 @@ export const createKeyframeSlice: StateCreator<ProjectStore, [], [], KeyframeSli
     };
     // Copy modifiers from previous keyframe if exists
     // V3.1: Only copy NON-animation modifiers (animation modifiers are part-level now)
-    const existing = get().getKeyframeAtFrame(partId, frame);
+    const existing = get().getKeyframeAtFrame(spriteId, frame);
     if (!existing) {
-      const prevKf = get().getSurroundingKeyframes(partId, frame).prev;
+      const prevKf = get().getSurroundingKeyframes(spriteId, frame).prev;
       if (prevKf) {
         keyframe.modifiers = prevKf.modifiers
           .filter((m) => !ANIMATION_MODIFIER_TYPES.includes(m.type))
@@ -51,7 +51,7 @@ export const createKeyframeSlice: StateCreator<ProjectStore, [], [], KeyframeSli
       }
     }
     set((s) => ({
-      keyframes: [...s.keyframes.filter((k) => !(k.partId === partId && k.frame === frame)), keyframe],
+      keyframes: [...s.keyframes.filter((k) => !(k.spriteId === spriteId && k.frame === frame)), keyframe],
     }));
     return keyframe;
   },
@@ -82,7 +82,7 @@ export const createKeyframeSlice: StateCreator<ProjectStore, [], [], KeyframeSli
     if (!source) return {} as Keyframe;
     const newKf: Keyframe = {
       id: crypto.randomUUID(),
-      partId: source.partId,
+      spriteId: source.spriteId,
       frame: toFrame,
       modifiers: source.modifiers.map((m) => ({
         ...m,
@@ -96,17 +96,17 @@ export const createKeyframeSlice: StateCreator<ProjectStore, [], [], KeyframeSli
       isBaked: false,
     };
     set((s) => ({
-      keyframes: [...s.keyframes.filter((k) => !(k.partId === source.partId && k.frame === toFrame)), newKf],
+      keyframes: [...s.keyframes.filter((k) => !(k.spriteId === source.spriteId && k.frame === toFrame)), newKf],
     }));
     return newKf;
   },
 
-  getKeyframesForPart: (partId) => get().keyframes.filter((k) => k.partId === partId).sort((a, b) => a.frame - b.frame),
+  getKeyframesForPart: (spriteId) => get().keyframes.filter((k) => k.spriteId === spriteId).sort((a, b) => a.frame - b.frame),
 
-  getKeyframeAtFrame: (partId, frame) => get().keyframes.find((k) => k.partId === partId && k.frame === frame),
+  getKeyframeAtFrame: (spriteId, frame) => get().keyframes.find((k) => k.spriteId === spriteId && k.frame === frame),
 
-  getSurroundingKeyframes: (partId, frame) => {
-    const kfs = get().keyframes.filter((k) => k.partId === partId).sort((a, b) => a.frame - b.frame);
+  getSurroundingKeyframes: (spriteId, frame) => {
+    const kfs = get().keyframes.filter((k) => k.spriteId === spriteId).sort((a, b) => a.frame - b.frame);
     let prev: Keyframe | null = null;
     let next: Keyframe | null = null;
     for (const kf of kfs) {

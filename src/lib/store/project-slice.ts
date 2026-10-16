@@ -9,7 +9,7 @@ import type { StateCreator } from 'zustand';
 import type { ProjectStore } from './types';
 import type { Project, HistoryEntry, ProjectFile, BrushPreset, AnimationClip, ClipPartData, Costume, Track } from '../types';
 import { MODIFIER_DEFINITIONS } from '../types';
-import { _isDragActive, _dragPostStackLen, _pendingTrajectoryPartIds, setDragActive, setDragPostStackLen, resetDragState } from './shared';
+import { _isDragActive, _dragPostStackLen, _pendingTrajectorySpriteIds, setDragActive, setDragPostStackLen, resetDragState } from './shared';
 import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '../engine';
 
 const defaultProject: Project = {
@@ -261,12 +261,12 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     }
     setDragPostStackLen(0);
 
-    if (_pendingTrajectoryPartIds.size > 0) {
-      const partIds = [..._pendingTrajectoryPartIds];
-      _pendingTrajectoryPartIds.clear();
+    if (_pendingTrajectorySpriteIds.size > 0) {
+      const spriteIds = [..._pendingTrajectorySpriteIds];
+      _pendingTrajectorySpriteIds.clear();
       setTimeout(() => {
-        for (const pid of partIds) {
-          get().autoRecordTrajectory(pid);
+        for (const sid of spriteIds) {
+          get().autoRecordTrajectory(sid);
         }
       }, 0);
     }

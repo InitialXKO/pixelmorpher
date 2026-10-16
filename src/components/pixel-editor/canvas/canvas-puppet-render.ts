@@ -291,7 +291,7 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
 export function renderPivotCrosshair(
   rc: RenderContext,
   selectedPart: import('@/lib/unified-types').Sprite | null,
-  getInterpolatedTranslateOffset: (partId: string, frame: number) => { offsetX: number; offsetY: number },
+  getInterpolatedTranslateOffset: (spriteId: string, frame: number) => { offsetX: number; offsetY: number },
 ) {
   if (!selectedPart) return;
   const { ctx, canvasWidth, canvasHeight, zoom, panX, panY, currentFrame } = rc;

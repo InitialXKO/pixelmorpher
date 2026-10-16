@@ -828,7 +828,7 @@ export default function ProceduralPanel() {
 
   // ---- Derived ----
   const partAnimations = useMemo(
-    () => proceduralAnimations.filter((pa) => pa.partId === selectedPartId),
+    () => proceduralAnimations.filter((pa) => pa.spriteId === selectedPartId),
     [proceduralAnimations, selectedPartId],
   );
 

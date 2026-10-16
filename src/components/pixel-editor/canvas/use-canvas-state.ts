@@ -56,7 +56,7 @@ export function useCanvasState() {
   const trajectoryPathRef = useRef<{ x: number; y: number }[]>([]);
   const handDrawTrajectoryRef = useRef<{ x: number; y: number }[]>([]);
   const trajectoryCpDragRef = useRef<{
-    partId: string; segmentIdx: number; cp: 'cp1' | 'cp2';
+    spriteId: string; segmentIdx: number; cp: 'cp1' | 'cp2';
     startX: number; startY: number; origCp1x: number; origCp1y: number; origCp2x: number; origCp2y: number;
   } | null>(null);
   const selectionMaskRef = useRef<Set<string>>(new Set());
@@ -191,11 +191,11 @@ export function useCanvasState() {
 
   // ---- Helper: get full translate offset ----
   const getFullTranslateOffset = useCallback(
-    (partId: string, frame: number): { offsetX: number; offsetY: number } => {
+    (spriteId: string, frame: number): { offsetX: number; offsetY: number } => {
       const store = useProjectStore.getState();
       const { getSurroundingKeyframes: getSurrounding } = store;
-      const { prev } = getSurrounding(partId, frame);
-      const part = store.sprites[partId];
+      const { prev } = getSurrounding(spriteId, frame);
+      const part = store.sprites[spriteId];
       if (!part) return { offsetX: 0, offsetY: 0 };
 
       const keyframe = prev;
@@ -214,9 +214,9 @@ export function useCanvasState() {
 
   // ---- Helper: get interpolated modifiers ----
   const getInterpolatedModifiers = useCallback(
-    (partId: string, frame: number) => {
+    (spriteId: string, frame: number) => {
       const { getSurroundingKeyframes: getSurrounding } = useProjectStore.getState();
-      const { prev, next, t } = getSurrounding(partId, frame);
+      const { prev, next, t } = getSurrounding(spriteId, frame);
       if (prev && next && prev.frame !== next.frame && t > 0) {
         return interpolateModifiers(prev.modifiers, next.modifiers, t, prev.interpolationMode ?? 'linear', prev.bezierCP1, prev.bezierCP2);
       } else if (prev) return prev.modifiers;
@@ -314,7 +314,7 @@ export function useCanvasState() {
       if (!local) return;
 
       const store = useProjectStore.getState();
-      const currentKf = store.keyframes.find(k => k.partId === selectedPart.id! && k.frame === currentFrame);
+      const currentKf = store.keyframes.find(k => k.spriteId === selectedPart.id! && k.frame === currentFrame);
       const basePixels = currentKf?.correctionMask ?? selectedPart.data;
       const newPixels: PixelGrid = basePixels.map((row) => [...row]);
 
@@ -349,7 +349,7 @@ export function useCanvasState() {
       if (!local) return;
 
       const store = useProjectStore.getState();
-      const currentKf = store.keyframes.find(k => k.partId === selectedPart.id! && k.frame === currentFrame);
+      const currentKf = store.keyframes.find(k => k.spriteId === selectedPart.id! && k.frame === currentFrame);
       const basePixels = currentKf?.correctionMask ?? selectedPart.data;
       const filled = floodFill(basePixels, local.lx, local.ly, brushColor);
       if (currentKf?.correctionMask) store.setCorrection(currentKf.id, filled);
@@ -595,7 +595,7 @@ export function useCanvasState() {
 
       for (const traj of trajectories) {
         if (!traj.visible || traj.points.length < 2) continue;
-        if (traj.partId !== selectedPartId) continue;
+        if (traj.spriteId !== selectedPartId) continue;
         const screenPoints = traj.points.map((pt) => ({ x: panX + (centerX + pt.x) * zoom, y: panY + (centerY + pt.y) * zoom }));
         for (let i = 0; i < screenPoints.length - 1; i++) {
           const p0 = i > 0 ? screenPoints[i - 1] : screenPoints[i];
@@ -607,10 +607,10 @@ export function useCanvasState() {
           if (curvePt && (curvePt.cp1x !== 0 || curvePt.cp1y !== 0)) { cp1x = p1.x + curvePt.cp1x * zoom; cp1y = p1.y + curvePt.cp1y * zoom; }
           if (nextCurvePt && (nextCurvePt.cp2x !== 0 || nextCurvePt.cp2y !== 0)) { cp2x = p2.x + nextCurvePt.cp2x * zoom; cp2y = p2.y + nextCurvePt.cp2y * zoom; }
           if (Math.sqrt((px * zoom + panX - cp1x) ** 2 + (py * zoom + panY - cp1y) ** 2) <= hitRadius) {
-            return { partId: traj.partId, segmentIdx: i, cp: 'cp1' as const, cp1x: curvePt?.cp1x ?? 0, cp1y: curvePt?.cp1y ?? 0, cp2x: nextCurvePt?.cp2x ?? 0, cp2y: nextCurvePt?.cp2y ?? 0 };
+            return { spriteId: traj.spriteId, segmentIdx: i, cp: 'cp1' as const, cp1x: curvePt?.cp1x ?? 0, cp1y: curvePt?.cp1y ?? 0, cp2x: nextCurvePt?.cp2x ?? 0, cp2y: nextCurvePt?.cp2y ?? 0 };
           }
           if (Math.sqrt((px * zoom + panX - cp2x) ** 2 + (py * zoom + panY - cp2y) ** 2) <= hitRadius) {
-            return { partId: traj.partId, segmentIdx: i, cp: 'cp2' as const, cp1x: curvePt?.cp1x ?? 0, cp1y: curvePt?.cp1y ?? 0, cp2x: nextCurvePt?.cp2x ?? 0, cp2y: nextCurvePt?.cp2y ?? 0 };
+            return { spriteId: traj.spriteId, segmentIdx: i, cp: 'cp2' as const, cp1x: curvePt?.cp1x ?? 0, cp1y: curvePt?.cp1y ?? 0, cp2x: nextCurvePt?.cp2x ?? 0, cp2y: nextCurvePt?.cp2y ?? 0 };
           }
         }
       }
@@ -640,14 +640,14 @@ export function useCanvasState() {
       const { addSprite, setSpritePixels, updateSprite } = projectStore;
       const offsetX = canvasWidth / 2; const offsetY = canvasHeight / 2;
       const sorted = [...parts].sort((a, b) => 0);
-      const selectedPixels: { x: number; y: number; color: string; partId: string; localX: number; localY: number }[] = [];
+      const selectedPixels: { x: number; y: number; color: string; spriteId: string; localX: number; localY: number }[] = [];
       for (const key of mask) {
         const [pxStr, pyStr] = key.split(',');
         const px = parseInt(pxStr, 10); const py = parseInt(pyStr, 10);
         for (const part of sorted) {
           const local = canvasToPartLocal(px, py, part);
           if (local && part.data[local.ly]?.[local.lx] !== null) {
-            selectedPixels.push({ x: px, y: py, color: part.data[local.ly][local.lx]!, partId: part.id!, localX: local.lx, localY: local.ly });
+            selectedPixels.push({ x: px, y: py, color: part.data[local.ly][local.lx]!, spriteId: part.id!, localX: local.lx, localY: local.ly });
             break;
           }
         }
@@ -678,14 +678,14 @@ export function useCanvasState() {
       if (mode !== 'keep') {
         const partPixels = new Map<string, { part: Sprite; locals: Set<string> }>();
         for (const sp of selectedPixels) {
-          if (!partPixels.has(sp.partId)) { const part = parts.find(p => p.id === sp.partId)!; partPixels.set(sp.partId, { part, locals: new Set() }); }
-          partPixels.get(sp.partId)!.locals.add(`${sp.localX},${sp.localY}`);
+          if (!partPixels.has(sp.spriteId)) { const part = parts.find(p => p.id === sp.spriteId)!; partPixels.set(sp.spriteId, { part, locals: new Set() }); }
+          partPixels.get(sp.spriteId)!.locals.add(`${sp.localX},${sp.localY}`);
         }
-        for (const [partId, { part, locals }] of partPixels) {
+        for (const [spriteId, { part, locals }] of partPixels) {
           const newPixels: PixelGrid = part.data.map(row => [...row]);
-          if (mode === 'transparent') { for (const key of locals) { const [lx, ly] = key.split(',').map(Number); if (ly >= 0 && ly < part.height && lx >= 0 && lx < part.width) newPixels[ly][lx] = null; } setSpritePixels(partId, newPixels); }
-          else if (mode === 'fill') { for (const key of locals) { const [lx, ly] = key.split(',').map(Number); if (ly >= 0 && ly < part.height && lx >= 0 && lx < part.width) newPixels[ly][lx] = fillColor; } setSpritePixels(partId, newPixels); }
-          else if (mode === 'inpaint') { const inpainted = inpaintPixels(newPixels, locals, 3); setSpritePixels(partId, inpainted); }
+          if (mode === 'transparent') { for (const key of locals) { const [lx, ly] = key.split(',').map(Number); if (ly >= 0 && ly < part.height && lx >= 0 && lx < part.width) newPixels[ly][lx] = null; } setSpritePixels(spriteId, newPixels); }
+          else if (mode === 'fill') { for (const key of locals) { const [lx, ly] = key.split(',').map(Number); if (ly >= 0 && ly < part.height && lx >= 0 && lx < part.width) newPixels[ly][lx] = fillColor; } setSpritePixels(spriteId, newPixels); }
+          else if (mode === 'inpaint') { const inpainted = inpaintPixels(newPixels, locals, 3); setSpritePixels(spriteId, inpainted); }
         }
       }
     });

@@ -358,7 +358,7 @@ export interface WeightPaintParams {
   weightPaintBoneId: string | null;
   skeletons: Skeleton[];
   sprites: Sprite[];
-  getInterpolatedTranslateOffset: (partId: string, frame: number) => { offsetX: number; offsetY: number };
+  getInterpolatedTranslateOffset: (spriteId: string, frame: number) => { offsetX: number; offsetY: number };
 }
 
 export function renderWeightPaintOverlay(rc: RenderContext, params: WeightPaintParams) {
@@ -372,12 +372,12 @@ export function renderWeightPaintOverlay(rc: RenderContext, params: WeightPaintP
     if (!bone) continue;
 
     for (const binding of bone.boundParts) {
-      const part = parts.find(p => p.id === binding.partId);
+      const part = parts.find(p => p.id === binding.spriteId);
       if (!part || !true) continue;
 
       const offsetX = canvasWidth / 2;
       const offsetY = canvasHeight / 2;
-      const { offsetX: partOffsetX, offsetY: partOffsetY } = getInterpolatedTranslateOffset(binding.partId, currentFrame);
+      const { offsetX: partOffsetX, offsetY: partOffsetY } = getInterpolatedTranslateOffset(binding.spriteId, currentFrame);
 
       const partScreenX = panX + (offsetX - spritePivotX(part) + 0 + partOffsetX) * zoom;
       const partScreenY = panY + (offsetY - spritePivotY(part) + 0 + partOffsetY) * zoom;
@@ -418,7 +418,7 @@ export function renderTrajectoryOverlay(rc: RenderContext, params: TrajectoryOve
   for (const traj of trajectories) {
     if (!traj.visible || traj.points.length === 0) continue;
 
-    const isSelected = traj.partId === selectedPartId;
+    const isSelected = traj.spriteId === selectedPartId;
     const curveColor = isSelected ? '#00ffaa' : '#ff8800';
     const pointColor = isSelected ? '#00ffdd' : '#ffaa44';
     const highlightColor = '#ff3366';

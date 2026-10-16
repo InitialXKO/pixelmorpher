@@ -762,7 +762,7 @@ export interface NodeRenderInstruction {
   autoMotionBlur?: boolean;
   autoMotionBlurIntensity?: number;
   /** Part identity + full keyframe list for auto-motion-blur lookup (nodeId = part.id). */
-  autoMotionBlurPartId?: string;
+  autoMotionBlurSpriteId?: string;
   autoMotionBlurKeyframes?: UnifiedKeyframe[];
   /** Blueprint graph for this node (transform + pixel chain). Preferred over modifiers. */
   blueprint?: BlueprintGraph | null;
@@ -817,7 +817,7 @@ export interface RenderPlan {
 
 /**
  * Node-level procedural animation for the unified pipeline.
- * Migrated from old ProceduralAnimation (which was partId-based).
+ * Migrated from old ProceduralAnimation (which was spriteId-based).
  * Uses nodeId to target Character nodes directly.
  */
 export interface NodeProceduralAnimation {

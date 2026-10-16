@@ -933,11 +933,11 @@ function BoneProperties({
         {bone.boundParts.length > 0 && (
           <div className="space-y-1 max-h-32 overflow-y-auto">
             {bone.boundParts.map((bp) => {
-              const part = parts.find((p) => p.id === bp.partId);
+              const part = parts.find((p) => p.id === bp.spriteId);
               return (
-                <div key={bp.partId} className="flex items-center gap-1.5 px-1.5 py-1 rounded bg-zinc-800/60 group">
+                <div key={bp.spriteId} className="flex items-center gap-1.5 px-1.5 py-1 rounded bg-zinc-800/60 group">
                   <span className="text-[10px] text-zinc-300 flex-1 min-w-0 truncate">
-                    {part?.name ?? bp.partId}
+                    {part?.name ?? bp.spriteId}
                   </span>
                   <Slider
                     className="w-16"
@@ -946,12 +946,12 @@ function BoneProperties({
                     max={1}
                     step={0.01}
                     onPointerDown={() => beginDrag('调整绑定权重')}
-                    onValueChange={([w]) => bindPartToBone(skeletonId, bone.id, bp.partId, w)}
-                    onValueCommit={([w]) => { bindPartToBone(skeletonId, bone.id, bp.partId, w); endDrag(); }}
+                    onValueChange={([w]) => bindPartToBone(skeletonId, bone.id, bp.spriteId, w)}
+                    onValueCommit={([w]) => { bindPartToBone(skeletonId, bone.id, bp.spriteId, w); endDrag(); }}
                   />
                   <span className="text-[9px] text-zinc-400 w-6 text-right font-mono">{bp.weight.toFixed(2)}</span>
                   <button
-                    onClick={() => unbindPartFromBone(skeletonId, bone.id, bp.partId)}
+                    onClick={() => unbindPartFromBone(skeletonId, bone.id, bp.spriteId)}
                     className="size-4 flex items-center justify-center rounded hover:bg-zinc-700/50 text-zinc-600 hover:text-red-400 shrink-0 opacity-0 group-hover:opacity-100"
                   >
                     <Trash2 className="size-2.5" />
@@ -971,7 +971,7 @@ function BoneProperties({
               </SelectTrigger>
               <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-200">
                 {parts
-                  .filter((p) => !bone.boundParts.some((bp) => bp.partId === p.id))
+                  .filter((p) => !bone.boundParts.some((bp) => bp.spriteId === p.id))
                   .map((p) => (
                     <SelectItem key={p.id} value={p.id} className="text-[10px]">{p.name}</SelectItem>
                   ))}

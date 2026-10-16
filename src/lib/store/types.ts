@@ -118,13 +118,13 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   toggleTrackExpanded: (trackId: string) => void;
 
   // Keyframe actions
-  addKeyframe: (partId: string, frame: number) => Keyframe;
+  addKeyframe: (spriteId: string, frame: number) => Keyframe;
   removeKeyframe: (keyframeId: string) => void;
   updateKeyframe: (keyframeId: string, updates: Partial<Keyframe>) => void;
   duplicateKeyframe: (keyframeId: string, toFrame: number) => Keyframe;
-  getKeyframesForPart: (partId: string) => Keyframe[];
-  getKeyframeAtFrame: (partId: string, frame: number) => Keyframe | undefined;
-  getSurroundingKeyframes: (partId: string, frame: number) => { prev: Keyframe | null; next: Keyframe | null; t: number };
+  getKeyframesForPart: (spriteId: string) => Keyframe[];
+  getKeyframeAtFrame: (spriteId: string, frame: number) => Keyframe | undefined;
+  getSurroundingKeyframes: (spriteId: string, frame: number) => { prev: Keyframe | null; next: Keyframe | null; t: number };
 
   // Modifier actions
   addModifier: (keyframeId: string, type: ModifierType) => void;
@@ -137,12 +137,12 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   uncollapseModifiers: (keyframeId: string) => void;
   bakeModifiers: (keyframeId: string) => void;
   // V3.0: Bake animation modifiers to timeline keyframes
-  bakeToTimeline: (partId: string, startFrame: number, endFrame: number, step: number) => void;
+  bakeToTimeline: (spriteId: string, startFrame: number, endFrame: number, step: number) => void;
   // V3.0: Update modifier effective range
   updateModifierRange: (keyframeId: string, modifierId: string, range: { startFrame?: number; endFrame?: number; fadeInFrames?: number; fadeOutFrames?: number }) => void;
   // V2.3: Scope-aware modifier actions
-  addModifierToSubsequent: (partId: string, fromFrame: number, type: ModifierType) => void;
-  removeModifierFromSubsequent: (partId: string, fromFrame: number, modifierType: ModifierType) => void;
+  addModifierToSubsequent: (spriteId: string, fromFrame: number, type: ModifierType) => void;
+  removeModifierFromSubsequent: (spriteId: string, fromFrame: number, modifierType: ModifierType) => void;
 
   // M6: Modifier parameter keyframe actions
   addModifierParamKeyframe: (keyframeId: string, modifierId: string, frame: number, params: Record<string, ModifierParamValue>) => void;
@@ -184,13 +184,13 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   updateEffectKeyframe: (effectTrackId: string, keyframeId: string, params: Record<string, ModifierParamValue>) => void;
 
   // Trajectory actions
-  addTrajectoryPoint: (partId: string, frame: number, x: number, y: number, rotation: number) => void;
-  updateTrajectoryPoint: (partId: string, frame: number, updates: Partial<Omit<TrajectoryCurvePoint, 'frame'>>) => void;
-  clearTrajectory: (partId: string) => void;
-  toggleTrajectoryVisibility: (partId: string) => void;
-  autoRecordTrajectory: (partId: string) => void;
-  generateTweenFromTrajectory: (partId: string, startFrame: number, endFrame: number, step: number) => void;
-  generateAfterimageSequence: (partId: string, config: AfterimageConfig) => void;
+  addTrajectoryPoint: (spriteId: string, frame: number, x: number, y: number, rotation: number) => void;
+  updateTrajectoryPoint: (spriteId: string, frame: number, updates: Partial<Omit<TrajectoryCurvePoint, 'frame'>>) => void;
+  clearTrajectory: (spriteId: string) => void;
+  toggleTrajectoryVisibility: (spriteId: string) => void;
+  autoRecordTrajectory: (spriteId: string) => void;
+  generateTweenFromTrajectory: (spriteId: string, startFrame: number, endFrame: number, step: number) => void;
+  generateAfterimageSequence: (spriteId: string, config: AfterimageConfig) => void;
 
   // Motion blur stroke actions
   addMotionBlurStroke: (stroke: Omit<MotionBlurStroke, 'id'>) => void;
@@ -212,8 +212,8 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   addBone: (skeletonId: string, name: string, parentId: string | null, headX: number, headY: number, tailX: number, tailY: number, color?: string) => Bone;
   removeBone: (skeletonId: string, boneId: string) => void;
   updateBone: (skeletonId: string, boneId: string, updates: Partial<Bone>) => void;
-  bindPartToBone: (skeletonId: string, boneId: string, partId: string, weight: number) => void;
-  unbindPartFromBone: (skeletonId: string, boneId: string, partId: string) => void;
+  bindPartToBone: (skeletonId: string, boneId: string, spriteId: string, weight: number) => void;
+  unbindPartFromBone: (skeletonId: string, boneId: string, spriteId: string) => void;
   addBoneConstraint: (skeletonId: string, boneId: string, constraint: BoneConstraint) => void;
   removeBoneConstraint: (skeletonId: string, boneId: string, constraintIndex: number) => void;
   addBonePose: (skeletonId: string, boneId: string, frame: number, rotation: number, ikTargetX?: number, ikTargetY?: number) => void;
@@ -223,7 +223,7 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   selectedBoneId: string | null;
 
   // V2.0: Procedural Animation actions
-  addProceduralAnimation: (partId: string, name: string, config: ProceduralConfig, startFrame: number, endFrame: number) => ProceduralAnimation;
+  addProceduralAnimation: (spriteId: string, name: string, config: ProceduralConfig, startFrame: number, endFrame: number) => ProceduralAnimation;
   removeProceduralAnimation: (id: string) => void;
   updateProceduralAnimation: (id: string, updates: Partial<ProceduralAnimation>) => void;
   toggleProceduralAnimation: (id: string) => void;
@@ -231,8 +231,8 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
 
   // V2.0: Weight Map actions
   weightMaps: WeightMap[];
-  setWeightMap: (partId: string, weights: (string | null)[][]) => void;
-  getWeightMap: (partId: string) => WeightMap | undefined;
+  setWeightMap: (spriteId: string, weights: (string | null)[][]) => void;
+  getWeightMap: (spriteId: string) => WeightMap | undefined;
 
   // V12: Global Modifier actions
   addGlobalModifier: (type: GlobalModifierType) => GlobalModifier;

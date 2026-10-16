@@ -446,8 +446,8 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
   const handleNext = useCallback(() => setStep((s) => Math.min(s + 1, 2)), []);
   const handlePrev = useCallback(() => setStep((s) => Math.max(s - 1, 0)), []);
 
-  const handleAssignSprite = useCallback((nodeName: string, partId: string | null) => {
-    setSpriteAssignments((prev) => ({ ...prev, [nodeName]: partId }));
+  const handleAssignSprite = useCallback((nodeName: string, spriteId: string | null) => {
+    setSpriteAssignments((prev) => ({ ...prev, [nodeName]: spriteId }));
   }, []);
 
   const handleCreate = useCallback(() => {

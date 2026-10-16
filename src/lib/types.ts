@@ -493,23 +493,22 @@ export interface CanvasModifierTrack {
 // per-clip animation behavior — this allows a single Part to be used in multiple
 // animations with different animation behaviors.
 
-// ---- Part Keyframe ----
+// ---- Sprite Keyframe ----
 
-/** A keyframe on the part's internal timeline, defining the modifier stack state at a specific frame.
- *  Uses step interpolation: the modifier stack from the most recent part keyframe (at or before
- *  the current frame) is used. If no part keyframe exists at the current frame, falls back to
- *  part.editModifiers as the base state. */
+/** A keyframe on the sprite's internal timeline, defining the modifier stack state at a specific frame.
+ *  Uses step interpolation: the modifier stack from the most recent sprite keyframe (at or before
+ *  the current frame) is used. */
 // ---- Keyframe ----
 
 export type InterpolationMode = 'linear' | 'bezier' | 'step';
 
 export interface Keyframe {
   id: string;
-  partId: string;
+  spriteId: string;
   frame: number;
   modifiers: ModifierInstance[];
   /** Manual pixel data for this keyframe (set by "promote to manual frame" or collapse).
-   *  When present, replaces part.pixels as the rendering base for this keyframe.
+   *  When present, replaces sprite pixels as the rendering base for this keyframe.
    *  Other keyframes are unaffected. Can be further edited with brush/fill tools. */
   correctionMask: PixelGrid | null;
   /** Dimension overrides when correctionMask has different size than part.
@@ -585,7 +584,7 @@ export interface TrajectoryCurvePoint extends TrajectoryPoint {
 }
 
 export interface Trajectory {
-  partId: string;
+  spriteId: string;
   points: TrajectoryCurvePoint[];
   visible: boolean;
 }
@@ -919,7 +918,7 @@ export interface PuppetNode {
   plug: PuppetPlug | null;
   /** Default sprite part ID for this node */
   spritePartId: string | null;
-  /** Direction-specific sprite overrides: direction → partId */
+  /** Direction-specific sprite overrides: direction → spriteId */
   directionSprites: Partial<Record<PuppetDirection, string>>;
   /** Current rotation angle (degrees) */
   angle: number;
@@ -991,7 +990,7 @@ export interface PuppetSkeleton {
 export interface CostumeSet {
   id: string;
   name: string;
-  /** Maps "nodeId:direction" to partId for sprite overrides */
+  /** Maps "nodeId:direction" to spriteId for sprite overrides */
   spriteMap: Record<string, string>;
   /** Per-node transform offsets for this costume (from ref-assembly alignment).
    *  Key: node ID. Value: offset applied on top of rest pose. */
@@ -1167,7 +1166,7 @@ export type MotionBlurBrushType = 'linear' | 'radial' | 'directional';
 export interface MotionBlurStroke {
   id: string;
   frame: number;
-  partId: string;
+  spriteId: string;
   points: { x: number; y: number }[];
   brushType: MotionBlurBrushType;
   intensity: number;
@@ -1182,7 +1181,7 @@ export type CoordinateMode = 'follow_part' | 'world_fixed';
 export interface EffectStroke {
   id: string;
   frame: number;
-  partId: string;
+  spriteId: string;
   type: EffectBrushType;
   points: { x: number; y: number }[];
   color: string;
@@ -1828,7 +1827,7 @@ export interface Bone {
   /** Bone length */
   length: number;
   /** Connected parts with weights */
-  boundParts: { partId: string; weight: number }[];
+  boundParts: { spriteId: string; weight: number }[];
   /** Constraints on this bone */
   constraints: BoneConstraint[];
   visible: boolean;
@@ -1898,7 +1897,7 @@ export type ProceduralConfig = ProceduralNoise | ProceduralWave | ProceduralSpri
 export interface ProceduralAnimation {
   id: string;
   name: string;
-  partId: string;
+  spriteId: string;
   nodeId?: string;  // 新增：节点级程序化动画（新管线用）
   config: ProceduralConfig;
   enabled: boolean;
@@ -1909,7 +1908,7 @@ export interface ProceduralAnimation {
 // ---- V2.0: Weight Map ----
 
 export interface WeightMap {
-  partId: string;
+  spriteId: string;
   /** weights[y][x] = boneId or null */
   weights: (string | null)[][];
 }

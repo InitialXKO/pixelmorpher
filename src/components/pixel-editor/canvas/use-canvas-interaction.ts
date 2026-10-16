@@ -31,16 +31,16 @@ export function useCanvasInteraction(s: CanvasState) {
   const commitStroke = useCallback(() => {
     const points = s.currentStrokePointsRef.current;
     if (points.length < 2) { s.currentStrokePointsRef.current = []; return; }
-    const partId = s.selectedPartId || '';
+    const spriteId = s.selectedPartId || '';
     const currentFrame = s.currentFrameRef.current;
     const frame = currentFrame;
 
     if (s.tool === 'motion_blur_brush') {
-      const stroke: Omit<MotionBlurStroke, 'id'> = { frame, partId, points, brushType: s.motionBlurBrushType, intensity: s.motionBlurIntensity, direction: s.motionBlurDirection, blendMode: s.strokeBlendMode };
+      const stroke: Omit<MotionBlurStroke, 'id'> = { frame, spriteId, points, brushType: s.motionBlurBrushType, intensity: s.motionBlurIntensity, direction: s.motionBlurDirection, blendMode: s.strokeBlendMode };
       useProjectStore.getState().addMotionBlurStroke(stroke);
     } else if (s.tool === 'glow_brush' || s.tool === 'particle_brush' || s.tool === 'afterimage_brush') {
       const effectType = s.tool === 'glow_brush' ? 'glow_brush' : s.tool === 'particle_brush' ? 'particle_brush' : 'afterimage_brush';
-      const stroke: Omit<EffectStroke, 'id'> = { frame, partId, type: effectType, points, color: s.effectBrushColor, radius: s.effectBrushRadius, intensity: s.effectBrushIntensity, density: s.effectBrushDensity, spread: s.effectBrushSpread, blendMode: s.strokeBlendMode };
+      const stroke: Omit<EffectStroke, 'id'> = { frame, spriteId, type: effectType, points, color: s.effectBrushColor, radius: s.effectBrushRadius, intensity: s.effectBrushIntensity, density: s.effectBrushDensity, spread: s.effectBrushSpread, blendMode: s.strokeBlendMode };
       useProjectStore.getState().addEffectStroke(stroke);
     }
     s.currentStrokePointsRef.current = [];
@@ -54,11 +54,11 @@ export function useCanvasInteraction(s: CanvasState) {
       if (points.length < 2) return;
 
       if (s.tool === 'motion_blur_brush') {
-        const previewStroke: MotionBlurStroke = { id: '__preview__', frame: currentFrame, partId: s.selectedPartId || '', points, brushType: s.motionBlurBrushType, intensity: s.motionBlurIntensity, direction: s.motionBlurDirection, blendMode: s.strokeBlendMode };
+        const previewStroke: MotionBlurStroke = { id: '__preview__', frame: currentFrame, spriteId: s.selectedPartId || '', points, brushType: s.motionBlurBrushType, intensity: s.motionBlurIntensity, direction: s.motionBlurDirection, blendMode: s.strokeBlendMode };
         renderMotionBlurStroke(offCtx, previewStroke);
       } else if (s.tool === 'glow_brush' || s.tool === 'particle_brush' || s.tool === 'afterimage_brush') {
         const effectType = s.tool === 'glow_brush' ? 'glow_brush' : s.tool === 'particle_brush' ? 'particle_brush' : 'afterimage_brush';
-        const previewStroke: EffectStroke = { id: '__preview__', frame: currentFrame, partId: s.selectedPartId || '', type: effectType, points, color: s.effectBrushColor, radius: s.effectBrushRadius, intensity: s.effectBrushIntensity, density: s.effectBrushDensity, spread: s.effectBrushSpread, blendMode: s.strokeBlendMode };
+        const previewStroke: EffectStroke = { id: '__preview__', frame: currentFrame, spriteId: s.selectedPartId || '', type: effectType, points, color: s.effectBrushColor, radius: s.effectBrushRadius, intensity: s.effectBrushIntensity, density: s.effectBrushDensity, spread: s.effectBrushSpread, blendMode: s.strokeBlendMode };
         renderEffectStroke(offCtx, previewStroke);
       }
     }, [s.tool, s.selectedPartId, s.motionBlurBrushType, s.motionBlurIntensity, s.motionBlurDirection, s.effectBrushColor, s.effectBrushRadius, s.effectBrushIntensity, s.effectBrushDensity, s.effectBrushSpread],
@@ -161,10 +161,10 @@ export function useCanvasInteraction(s: CanvasState) {
           if (ref && 'spriteId' in ref) spriteId = ref.spriteId;
         }
         if (spriteId) {
-          // Sprite IDs are "part_<partId>" for migrated sprites; extract for edit mode
-          const partId = spriteId.startsWith('part_') ? spriteId.slice(5) : spriteId;
-          useEditorStore.getState().selectPart(partId);
-          useEditorStore.getState().enterSpriteEditMode(partId);
+          // Sprite IDs are "part_<id>" for migrated sprites; extract for edit mode
+          const extractedSpriteId = spriteId.startsWith('part_') ? spriteId.slice(5) : spriteId;
+          useEditorStore.getState().selectPart(extractedSpriteId);
+          useEditorStore.getState().enterSpriteEditMode(extractedSpriteId);
         }
         return;
       }

@@ -327,12 +327,12 @@ export default function TrajectoryPanel() {
 
   // ---- Derived ----
   const trajectory = useMemo(
-    () => trajectories.find((t) => t.partId === selectedPartId),
+    () => trajectories.find((t) => t.spriteId === selectedPartId),
     [trajectories, selectedPartId],
   );
 
   const hasKeyframes = useMemo(
-    () => keyframes.some((k) => k.partId === selectedPartId),
+    () => keyframes.some((k) => k.spriteId === selectedPartId),
     [keyframes, selectedPartId],
   );
 

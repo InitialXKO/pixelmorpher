@@ -358,7 +358,7 @@ export function computeBoneTransforms(
 export function applyProceduralAnimations(
   modifiers: ModifierInstance[],
   proceduralAnimations: ProceduralAnimation[],
-  partId: string,
+  spriteId: string,
   frame: number,
   nodeId?: string,
 ): ModifierInstance[] {
@@ -372,8 +372,8 @@ export function applyProceduralAnimations(
   }));
 
   for (const pa of proceduralAnimations) {
-    // 匹配 partId 或 nodeId（新管线节点级程序化动画用 nodeId）
-    const matchesPart = pa.partId === partId;
+    // 匹配 spriteId 或 nodeId（新管线节点级程序化动画用 nodeId）
+    const matchesPart = pa.spriteId === spriteId;
     const matchesNode = nodeId && pa.nodeId === nodeId;
     if (!pa.enabled || (!matchesPart && !matchesNode)) continue;
     if (frame < pa.startFrame || frame > pa.endFrame) continue;

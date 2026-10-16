@@ -27,7 +27,7 @@ import {
   imageDataToPixelGrid,
   bakeParamDriverToKeyframes,
 } from '../engine';
-import { _isDragActive, _pendingTrajectoryPartIds } from './shared';
+import { _isDragActive, _pendingTrajectorySpriteIds } from './shared';
 
 export type ModifierSlice = {
   addModifier: ProjectStore['addModifier'];
@@ -71,9 +71,9 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
       const kf = get().keyframes.find((k) => k.id === keyframeId);
       if (kf) {
         if (_isDragActive) {
-          _pendingTrajectoryPartIds.add(kf.partId);
+          _pendingTrajectorySpriteIds.add(kf.spriteId);
         } else {
-          setTimeout(() => get().autoRecordTrajectory(kf.partId), 0);
+          setTimeout(() => get().autoRecordTrajectory(kf.spriteId), 0);
         }
       }
     }
@@ -134,9 +134,9 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
         }
         if (mod.type === 'translate' || mod.type === 'rotate') {
           if (_isDragActive) {
-            _pendingTrajectoryPartIds.add(kf.partId);
+            _pendingTrajectorySpriteIds.add(kf.spriteId);
           } else {
-            setTimeout(() => get().autoRecordTrajectory(kf.partId), 0);
+            setTimeout(() => get().autoRecordTrajectory(kf.spriteId), 0);
           }
         }
       }
@@ -235,12 +235,12 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
     return;
   },
 
-  bakeToTimeline: (partId, startFrame, endFrame, step) => {
+  bakeToTimeline: (spriteId, startFrame, endFrame, step) => {
     get().pushUndo('烘焙到时间轴');
     const state = get();
 
     const partKeyframes = state.keyframes
-      .filter((k) => k.partId === partId)
+      .filter((k) => k.spriteId === spriteId)
       .sort((a, b) => a.frame - b.frame);
     if (partKeyframes.length === 0) return;
 
@@ -249,7 +249,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
       let hasAnimMods = false;
 
       {
-        const kf = state.keyframes.find((k) => k.partId === partId && k.frame === frame);
+        const kf = state.keyframes.find((k) => k.spriteId === spriteId && k.frame === frame);
         if (!kf || kf.isBaked) continue;
         const kfAnimMods = kf.modifiers.filter((m) =>
           m.enabled && ANIMATION_MODIFIER_TYPES.includes(m.type)
@@ -274,11 +274,11 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
       totalRot = Math.round(totalRot * 10) / 10;
 
       let targetKfId: string;
-      const existingKf = state.keyframes.find((k) => k.partId === partId && k.frame === frame);
+      const existingKf = state.keyframes.find((k) => k.spriteId === spriteId && k.frame === frame);
       if (existingKf) {
         targetKfId = existingKf.id;
       } else {
-        const newKf = get().addKeyframe(partId, frame);
+        const newKf = get().addKeyframe(spriteId, frame);
         targetKfId = newKf.id;
       }
 
@@ -356,12 +356,12 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
     }));
   },
 
-  addModifierToSubsequent: (partId, fromFrame, type) => {
+  addModifierToSubsequent: (spriteId, fromFrame, type) => {
     get().pushUndo('添加到后续帧');
     const newMod = createDefaultModifier(type);
     set((s) => ({
       keyframes: s.keyframes.map((k) => {
-        if (k.partId !== partId || k.frame < fromFrame || k.isBaked) return k;
+        if (k.spriteId !== spriteId || k.frame < fromFrame || k.isBaked) return k;
         return {
           ...k,
           modifiers: [...k.modifiers, { ...newMod, id: crypto.randomUUID() }],
@@ -370,18 +370,18 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
     }));
     if (type === 'translate' || type === 'rotate') {
       if (_isDragActive) {
-        _pendingTrajectoryPartIds.add(partId);
+        _pendingTrajectorySpriteIds.add(spriteId);
       } else {
-        setTimeout(() => get().autoRecordTrajectory(partId), 0);
+        setTimeout(() => get().autoRecordTrajectory(spriteId), 0);
       }
     }
   },
 
-  removeModifierFromSubsequent: (partId, fromFrame, modifierType) => {
+  removeModifierFromSubsequent: (spriteId, fromFrame, modifierType) => {
     get().pushUndo('从后续帧删除');
     set((s) => ({
       keyframes: s.keyframes.map((k) => {
-        if (k.partId !== partId || k.frame < fromFrame) return k;
+        if (k.spriteId !== spriteId || k.frame < fromFrame) return k;
         return {
           ...k,
           modifiers: k.modifiers.filter((m) => m.type !== modifierType),
@@ -390,9 +390,9 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
     }));
     if (modifierType === 'translate' || modifierType === 'rotate') {
       if (_isDragActive) {
-        _pendingTrajectoryPartIds.add(partId);
+        _pendingTrajectorySpriteIds.add(spriteId);
       } else {
-        setTimeout(() => get().autoRecordTrajectory(partId), 0);
+        setTimeout(() => get().autoRecordTrajectory(spriteId), 0);
       }
     }
   },

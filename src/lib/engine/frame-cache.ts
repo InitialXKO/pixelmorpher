@@ -120,26 +120,26 @@ export function setCachedFrame(frame: number, canvas: HTMLCanvasElement, keyfram
   _frameRenderCache.set(frame, { canvas, keyframeHash: hash });
 }
 /** B8: Mark a part as dirty (needs canvas rebuild) */
-export function markPartDirty(partId: string): void {
+export function markPartDirty(spriteId: string): void {
   // Mark all frame entries for this part as dirty
   for (const key of _partDirtyFlags.keys()) {
-    if (key.startsWith(partId + ':')) {
+    if (key.startsWith(spriteId + ':')) {
       _partDirtyFlags.set(key, true);
     }
   }
 }
 
 /** B8: Check if a part:frame combination is dirty */
-function isPartDirty(partId: string, frame: number): boolean {
-  const key = `${partId}:${frame}`;
+function isPartDirty(spriteId: string, frame: number): boolean {
+  const key = `${spriteId}:${frame}`;
   const dirty = _partDirtyFlags.get(key);
   // If not tracked, assume dirty (first render)
   return dirty === undefined || dirty;
 }
 
 /** B8: Mark a part:frame as clean after rendering */
-function markPartClean(partId: string, frame: number): void {
-  _partDirtyFlags.set(`${partId}:${frame}`, false);
+function markPartClean(spriteId: string, frame: number): void {
+  _partDirtyFlags.set(`${spriteId}:${frame}`, false);
 }
 /**
  * Invalidate the cache for a specific animation modifier.

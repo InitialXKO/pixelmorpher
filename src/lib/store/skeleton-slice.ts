@@ -126,7 +126,7 @@ export const createSkeletonSlice: StateCreator<ProjectStore, [], [], SkeletonSli
     }));
   },
 
-  bindPartToBone: (skeletonId, boneId, partId, weight) => {
+  bindPartToBone: (skeletonId, boneId, spriteId, weight) => {
     get().pushUndo('绑定部件到骨头', 'bindPartToBone');
     set((s) => ({
     skeletons: s.skeletons.map((sk) => {
@@ -135,18 +135,18 @@ export const createSkeletonSlice: StateCreator<ProjectStore, [], [], SkeletonSli
         ...sk,
         bones: sk.bones.map((b) => {
           if (b.id !== boneId) return b;
-          const existing = b.boundParts.find((bp) => bp.partId === partId);
+          const existing = b.boundParts.find((bp) => bp.spriteId === spriteId);
           if (existing) {
-            return { ...b, boundParts: b.boundParts.map((bp) => bp.partId === partId ? { ...bp, weight } : bp) };
+            return { ...b, boundParts: b.boundParts.map((bp) => bp.spriteId === spriteId ? { ...bp, weight } : bp) };
           }
-          return { ...b, boundParts: [...b.boundParts, { partId, weight }] };
+          return { ...b, boundParts: [...b.boundParts, { spriteId, weight }] };
         }),
       };
     }),
     }));
   },
 
-  unbindPartFromBone: (skeletonId, boneId, partId) => {
+  unbindPartFromBone: (skeletonId, boneId, spriteId) => {
     get().pushUndo('解绑部件');
     set((s) => ({
     skeletons: s.skeletons.map((sk) => {
@@ -155,7 +155,7 @@ export const createSkeletonSlice: StateCreator<ProjectStore, [], [], SkeletonSli
         ...sk,
         bones: sk.bones.map((b) => {
           if (b.id !== boneId) return b;
-          return { ...b, boundParts: b.boundParts.filter((bp) => bp.partId !== partId) };
+          return { ...b, boundParts: b.boundParts.filter((bp) => bp.spriteId !== spriteId) };
         }),
       };
     }),
@@ -225,12 +225,12 @@ export const createSkeletonSlice: StateCreator<ProjectStore, [], [], SkeletonSli
 
   setSelectedBoneId: (boneId) => set({ selectedBoneId: boneId }),
 
-  addProceduralAnimation: (partId, name, config, startFrame, endFrame) => {
+  addProceduralAnimation: (spriteId, name, config, startFrame, endFrame) => {
     get().pushUndo('添加程序动画');
     const pa: ProceduralAnimation = {
       id: crypto.randomUUID(),
       name,
-      partId,
+      spriteId,
       config,
       enabled: true,
       startFrame,
@@ -265,14 +265,14 @@ export const createSkeletonSlice: StateCreator<ProjectStore, [], [], SkeletonSli
     }));
   },
 
-  setWeightMap: (partId, weights) => {
+  setWeightMap: (spriteId, weights) => {
     get().pushUndo('设置权重图');
     set((s) => {
-      const maps = s.weightMaps.filter((wm) => wm.partId !== partId);
-      maps.push({ partId, weights });
+      const maps = s.weightMaps.filter((wm) => wm.spriteId !== spriteId);
+      maps.push({ spriteId, weights });
       return { weightMaps: maps };
     });
   },
 
-  getWeightMap: (partId) => get().weightMaps.find((wm) => wm.partId === partId),
+  getWeightMap: (spriteId) => get().weightMaps.find((wm) => wm.spriteId === spriteId),
 });

@@ -13,7 +13,7 @@ export default function useVirtualScroll(
   sprites: Sprite[],
   effectTracks: EffectTrack[],
   canvasModifierTracks: CanvasModifierTrack[],
-  getKeyframesForPart: (partId: string) => Keyframe[],
+  getKeyframesForPart: (spriteId: string) => Keyframe[],
   puppetNodeCount: number = 0,
   isPuppetClip: boolean = false,
 ): {

@@ -183,7 +183,7 @@ function generateLottieJSON(
 
   for (let i = 0; i < sortedSprites.length; i++) {
     const part = sortedSprites[i];
-    const partKeyframes = keyframes.filter((k) => k.partId === part.id).sort((a, b) => a.frame - b.frame);
+    const partKeyframes = keyframes.filter((k) => k.spriteId === part.id).sort((a, b) => a.frame - b.frame);
 
     // Build keyframe arrays for each transform property
     const positionKeys: LottieKeyframe[] = [];

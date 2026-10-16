@@ -22,13 +22,13 @@ export type TrajectorySlice = {
 };
 
 export const createTrajectorySlice: StateCreator<ProjectStore, [], [], TrajectorySlice> = (set, get) => ({
-  addTrajectoryPoint: (partId, frame, x, y, rotation) => {
+  addTrajectoryPoint: (spriteId, frame, x, y, rotation) => {
     get().pushUndo('添加轨迹点');
     set((s) => {
       const trajectories = [...s.trajectories];
-      let traj = trajectories.find((t) => t.partId === partId);
+      let traj = trajectories.find((t) => t.spriteId === spriteId);
       if (!traj) {
-        traj = { partId, points: [] as TrajectoryCurvePoint[], visible: true };
+        traj = { spriteId, points: [] as TrajectoryCurvePoint[], visible: true };
         trajectories.push(traj);
       }
       const existing = traj.points.findIndex((p) => p.frame === frame);
@@ -48,22 +48,22 @@ export const createTrajectorySlice: StateCreator<ProjectStore, [], [], Trajector
     });
   },
 
-  clearTrajectory: (partId) => {
+  clearTrajectory: (spriteId) => {
     get().pushUndo('清除轨迹');
     set((s) => ({
-    trajectories: s.trajectories.map((t) => (t.partId === partId ? { ...t, points: [] } : t)),
+    trajectories: s.trajectories.map((t) => (t.spriteId === spriteId ? { ...t, points: [] } : t)),
     }));
   },
 
-  toggleTrajectoryVisibility: (partId) => set((s) => ({
-    trajectories: s.trajectories.map((t) => (t.partId === partId ? { ...t, visible: !t.visible } : t)),
+  toggleTrajectoryVisibility: (spriteId) => set((s) => ({
+    trajectories: s.trajectories.map((t) => (t.spriteId === spriteId ? { ...t, visible: !t.visible } : t)),
   })),
 
-  updateTrajectoryPoint: (partId, frame, updates) => {
+  updateTrajectoryPoint: (spriteId, frame, updates) => {
     get().pushUndo('更新轨迹点', 'updateTrajectoryPoint');
     set((s) => {
       const trajectories = s.trajectories.map((t) => {
-        if (t.partId !== partId) return t;
+        if (t.spriteId !== spriteId) return t;
         const points = t.points.map((p) =>
           p.frame === frame ? { ...p, ...updates } : p
         );
@@ -73,11 +73,11 @@ export const createTrajectorySlice: StateCreator<ProjectStore, [], [], Trajector
     });
   },
 
-  autoRecordTrajectory: (partId) => {
+  autoRecordTrajectory: (spriteId) => {
     get().pushUndo('自动记录轨迹');
     const state = get();
     const kfs = state.keyframes
-      .filter((k) => k.partId === partId)
+      .filter((k) => k.spriteId === spriteId)
       .sort((a, b) => a.frame - b.frame);
 
     const points: TrajectoryCurvePoint[] = [];
@@ -103,20 +103,20 @@ export const createTrajectorySlice: StateCreator<ProjectStore, [], [], Trajector
 
     set((s) => {
       const trajectories = [...s.trajectories];
-      const idx = trajectories.findIndex((t) => t.partId === partId);
+      const idx = trajectories.findIndex((t) => t.spriteId === spriteId);
       if (idx >= 0) {
         trajectories[idx] = { ...trajectories[idx], points };
       } else {
-        trajectories.push({ partId, points, visible: true });
+        trajectories.push({ spriteId, points, visible: true });
       }
       return { trajectories };
     });
   },
 
-  generateTweenFromTrajectory: (partId, startFrame, endFrame, step) => {
+  generateTweenFromTrajectory: (spriteId, startFrame, endFrame, step) => {
     get().pushUndo('从轨迹生成补间');
     const state = get();
-    const traj = state.trajectories.find((t) => t.partId === partId);
+    const traj = state.trajectories.find((t) => t.spriteId === spriteId);
     if (!traj || traj.points.length < 2) return;
 
     const points = traj.points;
@@ -140,9 +140,9 @@ export const createTrajectorySlice: StateCreator<ProjectStore, [], [], Trajector
       const y = prevPt.y + (nextPt.y - prevPt.y) * t;
       const rotation = prevPt.rotation + (nextPt.rotation - prevPt.rotation) * t;
 
-      let kf = state.keyframes.find((k) => k.partId === partId && k.frame === frame);
+      let kf = state.keyframes.find((k) => k.spriteId === spriteId && k.frame === frame);
       if (!kf) {
-        kf = get().addKeyframe(partId, frame);
+        kf = get().addKeyframe(spriteId, frame);
       }
 
       const translateMod = kf.modifiers.find((m) => m.type === 'translate');
@@ -176,20 +176,20 @@ export const createTrajectorySlice: StateCreator<ProjectStore, [], [], Trajector
       }
     }
 
-    get().autoRecordTrajectory(partId);
+    get().autoRecordTrajectory(spriteId);
   },
 
-  generateAfterimageSequence: (partId, config) => {
+  generateAfterimageSequence: (spriteId, config) => {
     get().pushUndo('生成残影序列');
     const state = get();
-    const traj = state.trajectories.find((t) => t.partId === partId);
+    const traj = state.trajectories.find((t) => t.spriteId === spriteId);
     if (!traj || traj.points.length < 2) return;
 
     const { count, opacityDecay, spacing } = config;
     const points = traj.points;
 
     for (const pt of points) {
-      const kf = state.keyframes.find((k) => k.partId === partId && k.frame === pt.frame);
+      const kf = state.keyframes.find((k) => k.spriteId === spriteId && k.frame === pt.frame);
       if (!kf) continue;
 
       const existingAfterimage = kf.modifiers.find((m) => m.type === 'afterimage');

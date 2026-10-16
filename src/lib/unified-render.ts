@@ -1682,11 +1682,11 @@ function renderNodeSprite(
     instruction.autoMotionBlur &&
     instruction.autoMotionBlurKeyframes &&
     instruction.autoMotionBlurKeyframes.length > 0 &&
-    instruction.autoMotionBlurPartId
+    instruction.autoMotionBlurSpriteId
   ) {
     applyAutoMotionBlur(
       ctx,
-      instruction.autoMotionBlurPartId ?? instruction.nodeId,
+      instruction.autoMotionBlurSpriteId ?? instruction.nodeId,
       frame,
       instruction.autoMotionBlurKeyframes,
       instruction.autoMotionBlurIntensity ?? 0.5,

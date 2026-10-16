@@ -281,10 +281,10 @@ export default function Home() {
 
     // Helper: create a keyframe with translate + optional rotate
     const addKf = (
-      partId: string, frame: number,
+      spriteId: string, frame: number,
       offsetX: number, offsetY: number, angle?: number,
     ) => {
-      const kf = store.addKeyframe(partId, frame);
+      const kf = store.addKeyframe(spriteId, frame);
       store.addModifier(kf.id, 'translate');
       if (angle !== undefined && angle !== 0) {
         store.addModifier(kf.id, 'rotate');

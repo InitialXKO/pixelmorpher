@@ -113,7 +113,7 @@ export default function PuppetModifierPanel() {
   // 角色即 Character（取服装集给 costume 蓝图节点用）
   const costumeSets = character?.costumeSets ?? [];
   // 边界转换：Puppet spriteMap 格式 → 新 pieces 格式（costume 蓝图节点用）
-  // Puppet: spriteMap["nodeId:direction"] -> partId
+  // Puppet: spriteMap["nodeId:direction"] -> spriteId
   // 新格式: pieces[nodeId].sprites[direction].data = pixels
   const costumeSetsNewFormat = useMemo(() => {
     const sprites = useProjectStore.getState().sprites ?? {};
