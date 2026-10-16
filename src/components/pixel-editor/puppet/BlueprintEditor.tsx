@@ -10,7 +10,7 @@ import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
 import { Plus, Trash2, X, Network, Blocks, Maximize2, Minimize2, Play, Pause } from 'lucide-react';
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { listBlueprintNodeTypes, getBlueprintNodeLabel, evaluateBlueprint, evaluateNodeOutput } from '@/lib/blueprint/eval';
-import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs, getPortColor, getPortDataType, canConnectPorts } from '@/lib/blueprint/specs';
+import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs, getNodeParamPorts, getPortColor, getPortDataType, canConnectPorts } from '@/lib/blueprint/specs';
 import { getModifierDef } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
@@ -911,7 +911,9 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
               <div className="px-1.5 py-1">
                 {(() => {
                   const specInputs = getNodeInputs(node.type);
-                  const allPorts = Array.from(new Set([...specInputs, ...Object.keys(node.inputs)]));
+                  const paramPorts = getNodeParamPorts(node.type);
+                  // 输入端口 = spec.inputs + spec.params（参数可被连线覆盖）+ 已有连接
+                  const allPorts = Array.from(new Set([...specInputs, ...paramPorts, ...Object.keys(node.inputs)]));
                   if (allPorts.length === 0) {
                     return <div className="text-[8px] text-gray-600">无输入</div>;
                   }
@@ -921,7 +923,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                     const literalVal = typeof input === 'object' && input !== null && 'type' in input && (input as any).type === 'number'
                       ? (input as any).value
                       : null;
-                    const isSpecDefined = specInputs.includes(port);
+                    const isSpecDefined = specInputs.includes(port) || paramPorts.includes(port);
+                    const isParamPort = paramPorts.includes(port) && !specInputs.includes(port);
                     return (
                       <div
                         key={port}
@@ -954,9 +957,12 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                             backgroundColor: isConnected ? getPortColor(port) : '#1e1e3a',
                             borderColor: isConnected ? getPortColor(port) : '#4b5563',
                           }}
-                          title={`${port} (${getPortDataType(port)})`}
+                          title={`${port} (${getPortDataType(port)})${isParamPort ? ' — 参数，可连线覆盖' : ''}`}
                         />
-                        <span className={isSpecDefined ? '' : 'text-amber-500/70'}>← {port}</span>
+                        <span className={isSpecDefined ? '' : 'text-amber-500/70'}>
+                          ← {port}
+                          {isParamPort && <span className="text-[7px] text-purple-400/70 ml-0.5">参</span>}
+                        </span>
                         {isConnected ? (
                           <span className="text-[8px] text-cyan-400/70 truncate">
                             {graph.nodes.find((n) => n.id === (input as any).nodeId)?.type ?? '?'}

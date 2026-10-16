@@ -371,6 +371,13 @@ export function getNodeInputs(type: string): string[] {
 }
 
 /**
+ * 获取节点类型的可连线参数列表（params 中可被输入覆盖的）
+ */
+export function getNodeParamPorts(type: string): string[] {
+  return BLUEPRINT_NODE_SPECS[type]?.params ?? [];
+}
+
+/**
  * 动态注册节点规格（实验性/插件用）。
  * 与 registerEvaluator() 配合：先注册求值器，再注册规格，UI 才能显示。
  */
