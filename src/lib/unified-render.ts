@@ -546,18 +546,17 @@ function computeChildTransforms(
         // Get socket offset based on parent's current direction
         const socketOffset = resolveSocketOffset(socket, parentWorld.variantIndex);
 
-        // IMPORTANT: Socket offsets are stored in sub-pixel units.
-        // We must convert to PIXELS before applying rotation (cos/sin),
-        // then convert the rotated result back to sub-pixel for world position.
-        const socketOffsetX_px = subToPx(socketOffset.x);
-        const socketOffsetY_px = subToPx(socketOffset.y);
+        // Socket offset 与 overlay/hit test 保持一致：直接使用，不做 subToPx 转换
+        // (overlay 用原始值计算节点标签位置，用户确认正确)
+        const socketOffsetX = socketOffset.x;
+        const socketOffsetY = socketOffset.y;
 
         // Rotate socket offset by parent's world angle
         const angleRad = (parentWorld.worldAngle * Math.PI) / 180;
         const cosA = Math.cos(angleRad);
         const sinA = Math.sin(angleRad);
-        const rotatedSocketX_px = socketOffsetX_px * cosA - socketOffsetY_px * sinA;
-        const rotatedSocketY_px = socketOffsetX_px * sinA + socketOffsetY_px * cosA;
+        const rotatedSocketX = socketOffsetX * cosA - socketOffsetY * sinA;
+        const rotatedSocketY = socketOffsetX * sinA + socketOffsetY * cosA;
 
         // Rotate child's local offset by parent's world angle
         // (child offset is in parent's local space, so it must rotate with the parent)
@@ -573,10 +572,10 @@ function computeChildTransforms(
         const plugOffset = childNode.attachment.plug ?? { x: 0, y: 0 };
 
         childWorldX = parentWorld.worldX
-          + pxToSub(rotatedSocketX_px) - plugOffset.x
+          + rotatedSocketX - plugOffset.x
           + pxToSub(rotatedChildX_px);
         childWorldY = parentWorld.worldY
-          + pxToSub(rotatedSocketY_px) - plugOffset.y
+          + rotatedSocketY - plugOffset.y
           + pxToSub(rotatedChildY_px);
       } else {
         childWorldX = parentWorld.worldX + childInterpolated.x;
