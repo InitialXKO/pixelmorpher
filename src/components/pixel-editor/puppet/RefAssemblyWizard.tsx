@@ -117,11 +117,6 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
 
   // SAM 多点分割：左键 label=1（保留），右键 label=0（抠除）
   const handleSamClick = async (x: number, y: number, label: 1 | 0) => {
-    // 右键需要先有前景点，否则 SAM 无法确定目标
-    if (label === 0 && !samPoints.some((p) => p.label === 1)) {
-      console.warn('[SAM] 请先左键点选要保留的区域');
-      return;
-    }
     const store = useEditorStore.getState();
     const newPoints = [...samPoints, { x, y, label }];
     setSamPoints(newPoints);
