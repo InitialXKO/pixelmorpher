@@ -24,41 +24,39 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
   const [endId, setEndId] = useState<string>('');
   const [editingTargetChainId, setEditingTargetChainId] = useState<string | null>(null);
 
-  /** 为链创建默认目标蓝图（transform 输出，translate=当前静态目标） */
+  /** 为链创建默认目标蓝图（源变换节点 + 输出节点） */
   const createDefaultTargetBlueprint = (chain: IKChain): BlueprintGraph => {
     // 世界坐标转局部（蓝图里用局部更直观）
     const store = useProjectStore.getState();
     const lx = chain.target.x - store.canvasWidth / 2;
     const ly = chain.target.y - store.canvasHeight / 2;
+    const sourceId = `target_src_${chain.id}`;
     const outId = `target_out_${chain.id}`;
-    const waveYId = `target_waveY_${chain.id}`;
     return {
       version: 1,
       nodes: [
         {
-          id: waveYId,
-          type: 'waveform',
+          id: sourceId,
+          type: 'transform',
           inputs: {},
           params: {
-            waveform: 'sine',
-            baseValue: ly,
-            amplitude: 0,
-            period: 30,
-            _label: 'Y 摆动',
+            translateX: lx,
+            translateY: ly,
+            _label: '源-拖放位置',
           },
-          ui: { x: 50, y: 200 },
+          ui: { x: 50, y: 100 },
         },
         {
           id: outId,
           type: 'transform',
           inputs: {
-            translateY: { nodeId: waveYId, output: 'out' },
+            translateX: { nodeId: sourceId, output: 'translateX' },
+            translateY: { nodeId: sourceId, output: 'translateY' },
           },
           params: {
-            translateX: lx,
-            _label: `${chain.name} 目标点`,
+            _label: '输出-目标点',
           },
-          ui: { x: 250, y: 100 },
+          ui: { x: 300, y: 100 },
         },
       ],
       outputId: outId,
