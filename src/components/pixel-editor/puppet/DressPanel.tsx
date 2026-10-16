@@ -70,10 +70,8 @@ export default function DressPanel({
   );
 
   const costumeSets = selectedCharacter?.costumeSets ?? [];
-  const selectedCostume = useMemo(
-    () => costumeSets.find((cs) => cs.id === selectedCostumeId) ?? costumeSets[0] ?? null,
-    [costumeSets, selectedCostumeId]
-  );
+  // 不用 memo，直接算，确保每次渲染都是最新
+  const selectedCostume = costumeSets.find((cs) => cs.id === selectedCostumeId) ?? costumeSets[0] ?? null;
 
   const selectedNode = useMemo(
     () => (selectedNodeId ? (selectedCharacter?.nodes[selectedNodeId] ?? null) : null),
