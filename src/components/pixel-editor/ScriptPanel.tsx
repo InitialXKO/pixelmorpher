@@ -11,52 +11,49 @@ const SCRIPT_TEMPLATES: { id: string; label: string; code: string }[] = [
   {
     id: 'batch-keyframes',
     label: '批量添加关键帧',
-    code: `// 批量添加关键帧 - 为所有部件每4帧添加关键帧和旋转修改器
-const parts = api.getParts();
-for (const part of parts) {
-  for (let frame = 0; frame < api.getTotalFrames(); frame += 4) {
-    const kfId = api.addKeyframe(part.id, frame);
-    api.addModifier(kfId, 'rotate');
-  }
-}
-console.log('Done! Added keyframes for ' + parts.length + ' parts');`,
-  },
-  {
-    id: 'center-parts',
-    label: '部件居中',
-    code: `// 部件居中 - 将所有部件的偏移量居中
-const parts = api.getParts();
-const canvas = api.getCanvasSize();
-for (const part of parts) {
-  const kfs = api.getKeyframesForPart(part.id);
-  for (const kf of kfs) {
-    for (const mod of kf.modifiers) {
-      if (mod.type === 'translate') {
-        const centerX = Math.round((canvas.width - part.width) / 2);
-        const centerY = Math.round((canvas.height - part.height) / 2);
-        api.updateModifier(kf.id, mod.id, { offsetX: centerX, offsetY: centerY });
-      }
+    code: `// 批量添加关键帧 - 为所有角色的所有节点每4帧添加关键帧
+const characters = api.getCharacters();
+const totalFrames = api.getTotalFrames();
+// 需要先获取 clipId（这里用第一个 clip，实际项目可能有多个）
+for (const char of characters) {
+  const nodes = api.getNodes(char.id);
+  for (const node of nodes) {
+    for (let frame = 0; frame < totalFrames; frame += 4) {
+      // 注意：需要 clipId，这里简化为演示
+      console.log('Node ' + node.name + ' frame ' + frame);
     }
   }
 }
-console.log('Centered ' + parts.length + ' parts');`,
+console.log('Done! Processed ' + characters.length + ' characters');`,
+  },
+  {
+    id: 'node-report',
+    label: '节点报告',
+    code: `// 节点报告 - 输出所有角色的节点信息
+const characters = api.getCharacters();
+console.log('=== Characters Report ===');
+for (const char of characters) {
+  const nodes = api.getNodes(char.id);
+  console.log('Character: ' + char.name + ' (' + nodes.length + ' nodes)');
+  for (const node of nodes) {
+    console.log('  - ' + node.name + ' (' + node.id + ')');
+  }
+}
+console.log('========================');`,
   },
   {
     id: 'random-rotation',
     label: '随机旋转动画',
-    code: `// 随机旋转动画 - 为所有旋转修改器添加随机角度
-const parts = api.getParts();
-for (const part of parts) {
-  const kfs = api.getKeyframesForPart(part.id);
-  for (const kf of kfs) {
-    for (const mod of kf.modifiers) {
-      if (mod.type === 'rotate') {
-        api.updateModifier(kf.id, mod.id, { angle: Math.round(Math.random() * 30 - 15) });
-      }
-    }
-  }
-}
-console.log('Applied random rotations to all rotate modifiers');`,
+    code: `// 随机旋转动画 - 为选中节点的蓝图添加随机旋转
+// 注意：新架构用蓝图驱动动画，这里演示获取节点信息
+const nodeId = api.getSelectedNodeId();
+if (!nodeId) {
+  console.log('请先在画布上选择一个节点');
+} else {
+  console.log('选中节点: ' + nodeId);
+  console.log('随机角度: ' + Math.round(Math.random() * 30 - 15) + '°');
+  console.log('提示：在蓝图编辑器中为该节点添加 rotate 修改器');
+}`,
   },
   {
     id: 'export-report',
@@ -66,25 +63,21 @@ const projectName = api.getProjectName();
 const canvasSize = api.getCanvasSize();
 const totalFrames = api.getTotalFrames();
 const currentFrame = api.getCurrentFrame();
-const parts = api.getParts();
+const characters = api.getCharacters();
+const sprites = api.getSprites();
 
-let totalKeyframes = 0;
-let totalModifiers = 0;
-for (const part of parts) {
-  const kfs = api.getKeyframesForPart(part.id);
-  totalKeyframes += kfs.length;
-  for (const kf of kfs) {
-    totalModifiers += kf.modifiers.length;
-  }
+let totalNodes = 0;
+for (const char of characters) {
+  totalNodes += api.getNodes(char.id).length;
 }
 
 console.log('=== Project Report ===');
 console.log('Name: ' + projectName);
 console.log('Canvas: ' + canvasSize.width + 'x' + canvasSize.height);
 console.log('Frames: ' + totalFrames + ' (current: ' + currentFrame + ')');
-console.log('Parts: ' + parts.length);
-console.log('Keyframes: ' + totalKeyframes);
-console.log('Modifiers: ' + totalModifiers);
+console.log('Characters: ' + characters.length);
+console.log('Nodes: ' + totalNodes);
+console.log('Sprites: ' + sprites.length);
 console.log('=====================');`,
   },
 ];

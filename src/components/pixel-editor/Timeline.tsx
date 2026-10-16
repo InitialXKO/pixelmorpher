@@ -38,7 +38,6 @@ export default function Timeline() {
   const rulerHighlightRef = useRef<SVGRectElement>(null);
 
   // ---- Store ----
-  const keyframes = useProjectStore((s) => s.keyframes);
   const totalFrames = useProjectStore((s) => s.totalFrames);
   const frameRate = useProjectStore((s) => s.frameRate);
   const setCurrentFrame = useProjectStore((s) => s.setCurrentFrame);
