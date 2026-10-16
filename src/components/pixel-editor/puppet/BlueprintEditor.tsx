@@ -216,11 +216,16 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
         // sprite_source 从这里取当前节点的精灵（调用方负责服装解析）
         spritePixels: (() => {
           const nid = (graph as any)._nodeId;
-          if (nid && characterNodes) {
-            const cn = characterNodes.find((c) => c.id === nid);
-            return cn?.spritePixels ?? undefined;
-          }
-          return undefined;
+          if (!nid || !characterNodes || !costumeSets?.length) return undefined;
+          const cn = characterNodes.find((c) => c.id === nid) as any;
+          if (!cn) return undefined;
+          const slotKey = cn.slot?.slotKey ?? cn.costumeSlot ?? nid;
+          const direction = (cn.variantIndex ?? 0) as number;
+          // 取第一个服装集（预览用）；pieces[slotKey].sprites[direction].data
+          const cs = costumeSets[0] as any;
+          const piece = cs?.pieces?.[slotKey];
+          const entry = piece?.sprites?.[direction] ?? piece?.sprites?.[6];
+          return entry?.data ?? undefined;
         })(),
         // costume 节点用：角色全部服装集（新 pieces 格式）
         costumes: costumeSets,

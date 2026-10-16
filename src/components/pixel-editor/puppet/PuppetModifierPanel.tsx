@@ -116,17 +116,21 @@ export default function PuppetModifierPanel() {
   const costumeSetsNewFormat = useMemo(() => {
     const sprites = useProjectStore.getState().sprites ?? {};
     return costumeSets.map((cs: any) => {
-      const pieces: Record<string, { sprites: Record<number, { data: unknown }> }> = {};
-      for (const [key, spriteId] of Object.entries(cs.spriteMap ?? {})) {
-        const sep = key.lastIndexOf(':');
-        if (sep < 0) continue;
-        const nodeId = key.slice(0, sep);
-        const direction = Number(key.slice(sep + 1));
-        if (!nodeId || isNaN(direction)) continue;
-        const sprite = sprites[spriteId as string];
-        if (!sprite?.data) continue;
-        if (!pieces[nodeId]) pieces[nodeId] = { sprites: {} };
-        pieces[nodeId].sprites[direction] = { data: sprite.data };
+      const pieces: Record<string, { sprites: Record<number, { data: unknown }>, mirrorMap?: Record<number, number> }> = {};
+      // 新格式：cs.pieces[slotKey].sprites[direction] = { spriteId }
+      const srcPieces = cs.pieces ?? {};
+      for (const [slotKey, piece] of Object.entries(srcPieces) as any) {
+        const pieceSprites: Record<number, { data: unknown }> = {};
+        const dirMap = (piece as any).sprites ?? {};
+        for (const [dirStr, ref] of Object.entries(dirMap) as any) {
+          const direction = Number(dirStr);
+          if (isNaN(direction)) continue;
+          const spriteId = (ref as any)?.spriteId;
+          const sprite = spriteId ? sprites[spriteId] : null;
+          if (!sprite?.data) continue;
+          pieceSprites[direction] = { data: sprite.data };
+        }
+        pieces[slotKey] = { sprites: pieceSprites, mirrorMap: (piece as any).mirrorMap };
       }
       return { id: cs.id, name: cs.name, pieces };
     });
