@@ -608,6 +608,16 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
         }
       }
 
+      // node.costumePiece 只定义 slot（不带 sprites），sprites 只在 costumeSet.pieces 里
+      const nodeCostumePiece = {
+        slotKey: def.name,
+        fillColor: NODE_COLORS[idx % NODE_COLORS.length],
+        sprites: {},
+        scaleVariants: {},
+        mirrorMap: {},
+        crossSections: [],
+      };
+      // costumeSet.pieces 带 sprites（激活服装的覆盖）
       const costumePiece = {
         slotKey: def.name,
         fillColor: NODE_COLORS[idx % NODE_COLORS.length],
@@ -635,7 +645,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
         visible: true,
         parentId,
         children: [], // filled below
-        costumePiece,
+        costumePiece: nodeCostumePiece,
       });
       nodes[nodeId] = node;
       costumePieces[def.name] = costumePiece;
