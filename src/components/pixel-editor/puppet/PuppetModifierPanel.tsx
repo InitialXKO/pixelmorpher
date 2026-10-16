@@ -82,6 +82,7 @@ const PUPPET_MODIFIER_TYPES: AnimationModifierType[] = [
 
 export default function PuppetModifierPanel() {
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
+  const spritesTable = useProjectStore((s) => s.sprites);
   const updateUnifiedNode = useProjectStore((s) => s.updateUnifiedNode);
   const addUnifiedNodeModifier = useProjectStore((s) => s.addUnifiedNodeModifier);
   const removeUnifiedNodeModifier = useProjectStore((s) => s.removeUnifiedNodeModifier);
@@ -149,6 +150,9 @@ export default function PuppetModifierPanel() {
   // 整角色预览数据：所有节点的精灵和蓝图（含层级）
   const characterNodes = useMemo(() => {
     if (!character) return undefined;
+    // 新模型：从 activeCostumeSet 经 slotKey → spriteId → sprites 表取像素
+    const activeSet = (character.costumeSets ?? []).find((cs: any) => cs.id === character.activeCostumeSetId)
+      ?? (character.costumeSets ?? [])[0];
     // 建 socket 位置映射：socketId -> {nodeId, x, y}
     const socketMap = new Map<string, { x: number; y: number }>();
     for (const n of Object.values(character?.nodes ?? {})) {
@@ -164,8 +168,21 @@ export default function PuppetModifierPanel() {
       }
     }
     return Object.values(character?.nodes ?? {}).map((n: any) => {
-      // New model: sprite from node.sprite or costumePiece
-      const sprite = n.sprite ?? null;
+      // 新模型：经 costumeSet.pieces[slotKey].sprites[direction] → Sprite 或 SpriteRef
+      const slotKey = n.slot?.slotKey;
+      const piece = slotKey ? activeSet?.pieces?.[slotKey] : null;
+      // 默认取南向（6），预览用
+      const spriteOrRef = piece?.sprites?.[6] ?? piece?.sprites?.[0];
+      let sprite: any = null;
+      if (spriteOrRef) {
+        if ('spriteId' in spriteOrRef) {
+          // SpriteRef → 查全局表
+          sprite = (spritesTable as Record<string, any>)[(spriteOrRef as any).spriteId] ?? null;
+        } else {
+          // 内嵌 Sprite
+          sprite = spriteOrRef;
+        }
+      }
       const bp = n.blueprint ?? (n.modifiers?.length ? modifiersToBlueprint(n.modifiers) : null);
       const attachment = n.attachment;
       const parentId = n.parentId ?? null;
@@ -189,7 +206,7 @@ export default function PuppetModifierPanel() {
         variantIndex: n.transform?.variantIndex ?? 0,
       };
     });
-  }, [character]);
+  }, [character, spritesTable]);
 
   const updateBlueprint = (g: BlueprintGraph) => {
     if (!character || !node) return;
