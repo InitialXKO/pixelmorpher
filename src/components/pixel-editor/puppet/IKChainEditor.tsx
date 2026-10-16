@@ -10,6 +10,8 @@ import { Plus, Trash2, Power } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useProjectStore } from '@/lib/store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { computeWorldTransforms } from '@/lib/unified-render';
+import { subToPx } from '@/lib/unified-types';
 import type { Character, IKChain } from '@/lib/unified-types';
 
 interface IKChainEditorProps {
@@ -51,50 +53,43 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     // 2bone = 2 根骨 = 3 关节；其他（1 骨/多骨）走 fabrik
     const solver = chainJoints.length === 3 ? '2bone' : 'fabrik';
     const endNode = character.nodes[endId];
-    // 计算末端执行器的 FK 世界位置（SubPixel→像素），作为 IK 初始目标
-    // 目标是尖端（末节末端），不是关节轴心
-    // 用当前帧插值，不是 rest pose
-    const currentFrame = useProjectStore.getState().currentFrame;
-    const ivMap = interpolateNodeKeyframes(character, currentFrame);
-    let tx = 0, ty = 0, angle = 0;
-    const fkPositions: { x: number; y: number }[] = [{ x: 0, y: 0 }];
-    // 从根往末端累积（chainJoints 已是 root→end 顺序）
+    // 用真实变换管线算尖端 FK 位置（与 applyIKChain 同源）
+    const store = useProjectStore.getState();
+    const currentFrame = store.currentFrame;
+    const canvasW = store.canvasWidth;
+    const canvasH = store.canvasHeight;
+    const transforms = computeWorldTransforms(character, currentFrame, canvasW, canvasH);
+    // 取链上关节的世界位置（像素，世界空间）
+    const joints: { x: number; y: number }[] = [];
     for (const jid of chainJoints) {
-      const jn = character.nodes[jid] as any;
-      const iv = ivMap.get(jid);
-      const lx = ((iv?.x ?? jn?.transform?.x) ?? 0) / 16;
-      const ly = ((iv?.y ?? jn?.transform?.y) ?? 0) / 16;
-      const la = iv?.angle ?? jn?.transform?.angle ?? 0;
-      const rad = (angle * Math.PI) / 180;
-      tx += lx * Math.cos(rad) - ly * Math.sin(rad);
-      ty += lx * Math.sin(rad) + ly * Math.cos(rad);
-      angle += la;
-      fkPositions.push({ x: tx, y: ty });
+      const t = transforms.get(jid);
+      if (!t) break;
+      joints.push({ x: subToPx(t.worldX), y: subToPx(t.worldY) });
     }
     // 尖端：末关节位置 + 沿最后一段方向外推（默认长度取最后一段骨长）
     let tipLength = 0;
-    let tipX = tx, tipY = ty;
-    if (fkPositions.length >= 2) {
-      const last = fkPositions[fkPositions.length - 1];
-      const prev = fkPositions[fkPositions.length - 2];
-      const dx = last.x - prev.x;
-      const dy = last.y - prev.y;
-      const d = Math.hypot(dx, dy);
-      if (d > 1e-6) {
-        tipLength = d;
-        tipX = last.x + (dx / d) * tipLength;
-        tipY = last.y + (dy / d) * tipLength;
+    let tipX = 0, tipY = 0;
+    if (joints.length >= 1) {
+      const last = joints[joints.length - 1];
+      tipX = last.x; tipY = last.y;
+      if (joints.length >= 2) {
+        const prev = joints[joints.length - 2];
+        const dx = last.x - prev.x;
+        const dy = last.y - prev.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 1e-6) {
+          tipLength = d;
+          tipX = last.x + (dx / d) * tipLength;
+          tipY = last.y + (dy / d) * tipLength;
+        }
       }
     }
-    // 目标是世界空间（含画布中心偏移），与 applyIKChain 里的 joints 对齐
-    const canvasW = useProjectStore.getState().canvasWidth;
-    const canvasH = useProjectStore.getState().canvasHeight;
     const newChain: IKChain = {
       id: `ik_${Date.now().toString(36)}`,
       name: `${character.nodes[rootId]?.name ?? rootId} → ${endNode?.name ?? endId}`,
       rootNodeId: rootId,
       endNodeId: endId,
-      target: { x: tipX + canvasW / 2, y: tipY + canvasH / 2 },
+      target: { x: tipX, y: tipY },
       solver,
       bendDir: 1,
       tipLength,

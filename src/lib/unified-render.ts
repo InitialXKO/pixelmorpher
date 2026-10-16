@@ -191,7 +191,7 @@ export interface WorldTransform {
  * Step 1: Compute world transforms for all nodes in a character.
  * Traverses the node tree depth-first from the root.
  */
-function computeWorldTransforms(
+export function computeWorldTransforms(
   character: Character,
   frame: number,
   canvasWidth: number,
