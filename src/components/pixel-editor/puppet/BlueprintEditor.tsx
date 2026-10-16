@@ -57,9 +57,10 @@ const NODE_HEADER_H = 24;
 const PORT_H = 18;
 
 /** 蓝图节点参数区：若节点类型对应修改器，用修改器的参数 schema 渲染富控件 */
-function BlueprintNodeParams({ selected, updateNode }: {
+function BlueprintNodeParams({ selected, updateNode, onExposePort }: {
   selected: BlueprintNode;
   updateNode: (id: string, patch: Partial<BlueprintNode>) => void;
+  onExposePort?: (nodeId: string, port: string) => void;
 }) {
   const modDef = (() => {
     try { return getModifierDef(selected.type as any); } catch { return null; }
@@ -131,6 +132,15 @@ function BlueprintNodeParams({ selected, updateNode }: {
                   onChange={(e) => updateParam(p.name, Number(e.target.value))}
                   className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300 tabular-nums"
                 />
+              )}
+              {onExposePort && (
+                <button
+                  onClick={() => onExposePort(selected.id, p.name)}
+                  className="flex-shrink-0 size-4 rounded text-[10px] leading-none text-gray-500 hover:text-cyan-300 hover:bg-cyan-400/10"
+                  title={`将 ${p.label ?? p.name} 暴露为输入端口`}
+                >
+                  +
+                </button>
               )}
             </div>
           );
@@ -468,6 +478,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
   } | null>(null);
 
   const [nodeTypesVersion, setNodeTypesVersion] = useState(0);
+  // 每个节点已暴露的参数端口（nodeId -> portName[]），UI 状态
+  const [exposedPorts, setExposedPorts] = useState<Record<string, string[]>>({});
   // 节点类型列表：从注册表实时读取（含插件动态注册的）
   // 下拉框聚焦时刷新，确保后注册的插件节点能出现
   const nodeTypes = useMemo(() => listBlueprintNodeTypes(), [nodeTypesVersion]);
@@ -912,8 +924,10 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                 {(() => {
                   const specInputs = getNodeInputs(node.type);
                   const paramPorts = getNodeParamPorts(node.type);
-                  // 输入端口 = spec.inputs + spec.params（参数可被连线覆盖）+ 已有连接
-                  const allPorts = Array.from(new Set([...specInputs, ...paramPorts, ...Object.keys(node.inputs)]));
+                  // 输入端口 = spec.inputs + 已暴露的参数端口 + 已有连接
+                  // （参数默认不画端口，点 params 区的 + 才暴露）
+                  const exposed = exposedPorts[node.id] ?? [];
+                  const allPorts = Array.from(new Set([...specInputs, ...exposed, ...Object.keys(node.inputs)]));
                   if (allPorts.length === 0) {
                     return <div className="text-[8px] text-gray-600">无输入</div>;
                   }
@@ -924,7 +938,9 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                       ? (input as any).value
                       : null;
                     const isSpecDefined = specInputs.includes(port) || paramPorts.includes(port);
-                    const isParamPort = paramPorts.includes(port) && !specInputs.includes(port);
+                    // 暴露的参数端口（可隐藏）
+                    const isExposedParam = exposed.includes(port);
+                    const isParamPort = isExposedParam;
                     return (
                       <div
                         key={port}
@@ -963,6 +979,22 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                           ← {port}
                           {isParamPort && <span className="text-[7px] text-purple-400/70 ml-0.5">参</span>}
                         </span>
+                        {/* 暴露的参数端口：未连接时可隐藏 */}
+                        {isExposedParam && !isConnected && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExposedPorts((prev) => ({
+                                ...prev,
+                                [node.id]: (prev[node.id] ?? []).filter((p) => p !== port),
+                              }));
+                            }}
+                            className="ml-auto flex-shrink-0 size-3.5 rounded text-[9px] leading-none text-gray-600 hover:text-red-400 hover:bg-red-400/10"
+                            title="隐藏此端口"
+                          >
+                            −
+                          </button>
+                        )}
                         {isConnected ? (
                           <span className="text-[8px] text-cyan-400/70 truncate">
                             {graph.nodes.find((n) => n.id === (input as any).nodeId)?.type ?? '?'}
@@ -1015,7 +1047,19 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           {/* params */}
           {(() => {
             const _def = (() => { try { return getModifierDef(selected.type as any); } catch { return null; } })();
-            if (_def?.params?.length) return <BlueprintNodeParams selected={selected} updateNode={updateNode} />;
+            if (_def?.params?.length) return (
+              <BlueprintNodeParams
+                selected={selected}
+                updateNode={updateNode}
+                onExposePort={(nodeId, port) => {
+                  setExposedPorts((prev) => {
+                    const cur = prev[nodeId] ?? [];
+                    if (cur.includes(port)) return prev;
+                    return { ...prev, [nodeId]: [...cur, port] };
+                  });
+                }}
+              />
+            );
             return <>{Object.entries(selected.params).map(([key, val]) => {
             const isPrimitive = typeof val === 'number' || typeof val === 'string' || typeof val === 'boolean';
             // path_follow 的 path 参数：用 PathEditor
