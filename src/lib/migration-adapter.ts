@@ -47,16 +47,7 @@ import type {
 function partToNode(sprite: import('./unified-types').Sprite, migrationMap?: MigrationMap): Node {
   const node = createDefaultNode(sprite.id!, sprite.name || sprite.id!);
 
-  // Sprite from pixels
-  if (sprite.data && sprite.data.length > 0 && (sprite.data[0]?.length ?? 0) > 0) {
-    node.sprite = {
-      width: sprite.data[0].length,
-      height: sprite.data.length,
-      data: sprite.data,
-      // Preserve plug semantics
-      plug: sprite.plug ?? { x: 0, y: 0 },
-    };
-  }
+  // Sprite 已走服装集，node.sprite 不再使用（渲染器只读 costumeSet）
 
   // Transform from Part offsets and pivot (Part 是纯精灵数据，无偏移)
   node.transform = {
@@ -108,20 +99,7 @@ function puppetNodeToNode(
   const node = createDefaultNode(pNode.id, pNode.name || pNode.id);
 
   // Resolve sprite from parts
-  const spritePart = parts.find(p => p.id === pNode.spritePartId);
-  if (spritePart?.pixels && spritePart.pixels.length > 0 && (spritePart.pixels[0]?.length ?? 0) > 0) {
-    // sprite.plug = the ROTATION/POSITIONING ANCHOR (part.pivotX/Y),
-    // NOT the socket attachment point (pNode.plug.localX/Y).
-    // The socket attachment point is stored separately in attachment.plug.
-    // Using part.pivot as the anchor ensures rotation happens around the correct center
-    // and draw positioning matches the old pipeline's behavior.
-    node.sprite = {
-      width: spritePart.pixels[0].length,
-      height: spritePart.pixels.length,
-      data: spritePart.pixels,
-      plug: { x: pxToSub(spritePart.pivotX ?? 0), y: pxToSub(spritePart.pivotY ?? 0) },
-    };
-  }
+  // Sprite 已走服装集，node.sprite 不再使用（渲染器只读 costumeSet）
 
   // Transform from PuppetNode properties
   node.transform = {
