@@ -31,19 +31,34 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     const lx = chain.target.x - store.canvasWidth / 2;
     const ly = chain.target.y - store.canvasHeight / 2;
     const outId = `target_out_${chain.id}`;
+    const waveYId = `target_waveY_${chain.id}`;
     return {
       version: 1,
       nodes: [
         {
-          id: outId,
-          type: 'transform',
+          id: waveYId,
+          type: 'waveform',
           inputs: {},
           params: {
+            waveform: 'sine',
+            baseValue: ly,
+            amplitude: 0,
+            period: 30,
+            _label: 'Y 摆动',
+          },
+          ui: { x: 50, y: 200 },
+        },
+        {
+          id: outId,
+          type: 'transform',
+          inputs: {
+            translateY: { nodeId: waveYId, output: 'out' },
+          },
+          params: {
             translateX: lx,
-            translateY: ly,
             _label: `${chain.name} 目标点`,
           },
-          ui: { x: 200, y: 100 },
+          ui: { x: 250, y: 100 },
         },
       ],
       outputId: outId,
