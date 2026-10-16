@@ -172,10 +172,11 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
           const maskVal = inMask ? currentMask[my * mw + mx] : 0;
           const idx = (py * canvas.width + px) * 4;
           if (!(maskVal >= 0.5)) {
+            // 抠除区：不透明红色覆盖
             imgData.data[idx] = 255;
-            imgData.data[idx + 1] = 80;
-            imgData.data[idx + 2] = 80;
-            imgData.data[idx + 3] = Math.floor(imgData.data[idx + 3] * 0.5 + 128 * 0.5);
+            imgData.data[idx + 1] = 60;
+            imgData.data[idx + 2] = 60;
+            imgData.data[idx + 3] = 255;
           }
         }
       }
