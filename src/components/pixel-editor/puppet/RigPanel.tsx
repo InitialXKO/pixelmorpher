@@ -21,6 +21,7 @@ import PuppetModifierPanel from './PuppetModifierPanel';
 import GlobalBlueprintEditor from './GlobalBlueprintEditor';
 import CharacterBlueprintEditor from './CharacterBlueprintEditor';
 import IKBakeButton from './IKBakeButton';
+import IKChainEditor from './IKChainEditor';
 
 interface RigPanelProps {
   unifiedCharacters: Record<string, Character>;
@@ -191,6 +192,12 @@ export default function RigPanel({
       <div className="pt-2 border-t border-[#1e1e3a]">
         <div className="text-[10px] text-gray-500 mb-1">角色蓝图</div>
         <CharacterBlueprintEditor character={selectedCharacter} />
+      </div>
+
+      {/* ---- IK 链 ---- */}
+      <div className="pt-2 border-t border-[#1e1e3a]">
+        <div className="text-[10px] text-gray-500 mb-1">IK 链</div>
+        <IKChainEditor character={selectedCharacter} />
       </div>
 
       {/* ---- IK 烘焙 ---- */}
