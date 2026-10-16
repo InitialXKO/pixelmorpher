@@ -80,6 +80,7 @@ function interpolateTrajectoryPoints(
 function interpolateCharacterInternal(
   character: Character,
   currentFrame: number,
+  nodeKeyframes: NodeKeyframe[] = [],
 ): Map<string, InterpolatedNodeValues> {
   const result = new Map<string, InterpolatedNodeValues>();
 
@@ -95,7 +96,7 @@ function interpolateCharacterInternal(
       const node = character.nodes[nodeId]!;
       const values = interpolateSingleNode(node, currentFrame);
       // 合并 node.modifiers 和 keyframe modifiers（keyframe 优先，同 type 去重）
-      const kfModifiers = getInterpolatedKeyframeModifiers(character, nodeId, currentFrame);
+      const kfModifiers = getInterpolatedKeyframeModifiers(nodeKeyframes, nodeId, currentFrame);
       const nodeMods = node.modifiers ?? [];
       const kfTypes = new Set(kfModifiers.map((m) => m.type));
       const mergedModifiers = [
@@ -157,8 +158,9 @@ function interpolateCharacterInternal(
 export function interpolateNodeKeyframes(
   character: Character,
   currentFrame: number,
+  nodeKeyframes: NodeKeyframe[] = [],
 ): Map<string, InterpolatedNodeValues> {
-  return interpolateCharacterInternal(character, currentFrame);
+  return interpolateCharacterInternal(character, currentFrame, nodeKeyframes);
 }
 
 // ---- Per-keyframe modifier interpolation ----
@@ -287,11 +289,11 @@ export function interpolateKeyframesModifiers(
  * 供 interpolateCharacterInternal 调用，与 node.modifiers 合并。
  */
 function getInterpolatedKeyframeModifiers(
-  character: Character,
+  nodeKeyframes: NodeKeyframe[],
   nodeId: string,
   currentFrame: number,
 ): ModifierInstance[] {
-  const kfs = (character.nodeKeyframes ?? [])
+  const kfs = nodeKeyframes
     .filter((kf) => kf.nodeId === nodeId)
     .sort((a, b) => a.frame - b.frame);
   if (kfs.length === 0) return [];
