@@ -12,6 +12,7 @@ import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { listBlueprintNodeTypes, getBlueprintNodeLabel, evaluateBlueprint, evaluateNodeOutput } from '@/lib/blueprint/eval';
 import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs, getNodeParamPorts, getPortColor, getPortDataType, canConnectPorts } from '@/lib/blueprint/specs';
 import { getModifierDef } from '@/lib/types';
+import { resolvePreviewSprite, getActiveCostumeSet } from '@/lib/sprite-resolve';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
 import PathEditor from './PathEditor';
@@ -22,6 +23,10 @@ interface BlueprintEditorProps {
   title?: string;
   /** 服装集（costume 蓝图节点用）：新 pieces 格式 */
   costumeSets?: Array<{ id: string; name: string; pieces: Record<string, { sprites?: Record<number, { data: unknown }>; mirrorMap?: Record<number, number> }> }>;
+  /** 当前激活服装集 ID（预览解析用） */
+  activeCostumeSetId?: string;
+  /** 全局精灵表（SpriteRef 解析用） */
+  spritesTable?: Record<string, any>;
   /** 传入后，nodeRef 节点的 nodeId 参数渲染为下拉选择 */
   skeleton?: { nodes: { id: string; name: string }[] } | null;
   /** 新节点 ID 前缀（全局编辑器用：归属到指定部件） */
@@ -151,7 +156,7 @@ function BlueprintNodeParams({ selected, updateNode, onExposePort }: {
   return null; // 无 schema 时由调用方渲染通用 UI
 }
 
-export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, characterNodes, costumeSets }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, characterNodes, costumeSets, activeCostumeSetId, spritesTable }: BlueprintEditorProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
   const [viewMode, setViewMode] = useState<'graph' | 'blocks'>('graph');
@@ -310,19 +315,17 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
         frame: previewFrame,
         frameRate,
         vars: {},
-        // sprite_source 从这里取当前节点的精灵（调用方负责服装解析）
+        // sprite_source 从这里取当前节点的精灵（共享解析，与主渲染一致）
         spritePixels: (() => {
           const nid = (graph as any)._nodeId;
-          if (!nid || !characterNodes || !costumeSets?.length) return undefined;
+          if (!nid || !characterNodes) return undefined;
           const cn = characterNodes.find((c) => c.id === nid) as any;
           if (!cn) return undefined;
           const slotKey = cn.slot?.slotKey ?? cn.costumeSlot ?? nid;
-          const direction = (cn.variantIndex ?? 0) as number;
-          // 取第一个服装集（预览用）；pieces[slotKey].sprites[direction].data
-          const cs = costumeSets[0] as any;
-          const piece = cs?.pieces?.[slotKey];
-          const entry = piece?.sprites?.[direction] ?? piece?.sprites?.[6];
-          return entry?.data ?? undefined;
+          const direction = (cn.variantIndex ?? 6) as number;
+          const activeSet = getActiveCostumeSet(costumeSets as any, activeCostumeSetId);
+          const resolved = resolvePreviewSprite(slotKey, direction, activeSet, spritesTable as any);
+          return (resolved.sprite as any)?.data ?? undefined;
         })(),
         // costume 节点用：角色全部服装集（新 pieces 格式）
         costumes: costumeSets,

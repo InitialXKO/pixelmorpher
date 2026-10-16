@@ -15,6 +15,7 @@ import {
   type AnimationModifierType,
   type PartAnimationModifier,
 } from '@/lib/types';
+import { resolvePreviewSprite, getActiveCostumeSet } from '@/lib/sprite-resolve';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import BlueprintEditor from './BlueprintEditor';
@@ -168,21 +169,11 @@ export default function PuppetModifierPanel() {
       }
     }
     return Object.values(character?.nodes ?? {}).map((n: any) => {
-      // 新模型：经 costumeSet.pieces[slotKey].sprites[direction] → Sprite 或 SpriteRef
+      // 共享解析：与主渲染一致（含 mirrorMap）
       const slotKey = n.slot?.slotKey;
-      const piece = slotKey ? activeSet?.pieces?.[slotKey] : null;
-      // 默认取南向（6），预览用
-      const spriteOrRef = piece?.sprites?.[6] ?? piece?.sprites?.[0];
-      let sprite: any = null;
-      if (spriteOrRef) {
-        if ('spriteId' in spriteOrRef) {
-          // SpriteRef → 查全局表
-          sprite = (spritesTable as Record<string, any>)[(spriteOrRef as any).spriteId] ?? null;
-        } else {
-          // 内嵌 Sprite
-          sprite = spriteOrRef;
-        }
-      }
+      // 预览默认南向（6）；方向由调用方按当前帧定
+      const resolved = resolvePreviewSprite(slotKey, 6, activeSet as any, spritesTable as any);
+      const sprite = resolved.sprite;
       const bp = n.blueprint ?? (n.modifiers?.length ? modifiersToBlueprint(n.modifiers) : null);
       const attachment = n.attachment;
       const parentId = n.parentId ?? null;
@@ -394,6 +385,8 @@ export default function PuppetModifierPanel() {
               skeleton={character ? { nodes: Object.values(character.nodes).map(n => ({ id: n.id, name: n.name })) } : null}
               characterNodes={characterNodes}
               costumeSets={costumeSetsNewFormat}
+              activeCostumeSetId={character?.activeCostumeSetId}
+              spritesTable={spritesTable as any}
             />
           ) : (
             <div className="text-center py-4 space-y-2">
