@@ -90,9 +90,13 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
 
   const handleDelete = (id: string) => {
     if (!character) return;
-    updateUnifiedCharacter(character.id, {
-      ikChains: chains.filter((c) => c.id !== id),
-    });
+    const remaining = chains.filter((c) => c.id !== id);
+    const patch: any = { ikChains: remaining };
+    // 删光链后，烘焙的蓝图也失效，一并清除（否则 ikBlueprint 优先继续生效）
+    if (remaining.length === 0 && character.ikBlueprint) {
+      patch.ikBlueprint = null;
+    }
+    updateUnifiedCharacter(character.id, patch);
   };
 
   if (!character) return null;

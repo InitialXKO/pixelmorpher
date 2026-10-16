@@ -93,8 +93,12 @@ export function solveIK2Bone(input: IK2BoneInput): IK2BoneOutput {
 
   // Law of cosines: angle at shoulder between target direction and bone1
   // cos(A) = (l1² + d² - l2²) / (2 * l1 * d)
-  const cosA = (len1 * len1 + dist * dist - len2 * len2) / (2 * len1 * dist);
-  const angleA = Math.acos(Math.max(-1, Math.min(1, cosA)));
+  // Guard: 0-length bones or 0 dist → NaN，返回 0 角度
+  let angleA = 0;
+  if (len1 > 1e-6 && dist > 1e-6) {
+    const cosA = (len1 * len1 + dist * dist - len2 * len2) / (2 * len1 * dist);
+    angleA = Math.acos(Math.max(-1, Math.min(1, cosA)));
+  }
 
   // Shoulder angle (absolute)
   // bendDir=+1: elbow bends counterclockwise from target direction
