@@ -6,11 +6,13 @@
 // ============================================================
 
 import React, { useState, useMemo } from 'react';
-import { Plus, Trash2, Power } from 'lucide-react';
+import { Plus, Trash2, Power, Network } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useProjectStore } from '@/lib/store';
 import { computeIKChainTip, getIKChainJointIds } from '@/lib/ik-tip';
 import type { Character, IKChain } from '@/lib/unified-types';
+import type { BlueprintGraph } from '@/lib/blueprint/ir';
+import BlueprintEditor from './BlueprintEditor';
 
 interface IKChainEditorProps {
   character: Character | null;
@@ -20,6 +22,51 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
   const updateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
   const [rootId, setRootId] = useState<string>('');
   const [endId, setEndId] = useState<string>('');
+  const [editingTargetChainId, setEditingTargetChainId] = useState<string | null>(null);
+
+  /** 为链创建默认目标蓝图（transform 输出，translate=当前静态目标） */
+  const createDefaultTargetBlueprint = (chain: IKChain): BlueprintGraph => {
+    // 世界坐标转局部（蓝图里用局部更直观）
+    const store = useProjectStore.getState();
+    const lx = chain.target.x - store.canvasWidth / 2;
+    const ly = chain.target.y - store.canvasHeight / 2;
+    const outId = `target_out_${chain.id}`;
+    return {
+      version: 1,
+      nodes: [
+        {
+          id: outId,
+          type: 'transform',
+          inputs: {},
+          params: {
+            translateX: lx,
+            translateY: ly,
+            _label: `${chain.name} 目标点`,
+          },
+          ui: { x: 200, y: 100 },
+        },
+      ],
+      outputId: outId,
+    };
+  };
+
+  const handleTargetBlueprintChange = (chainId: string, graph: BlueprintGraph) => {
+    if (!character) return;
+    updateUnifiedCharacter(character.id, {
+      ikChains: chains.map((c) => (c.id === chainId ? { ...c, targetBlueprint: graph } : c)),
+    });
+  };
+
+  const handleClearTargetBlueprint = (chainId: string) => {
+    if (!character) return;
+    updateUnifiedCharacter(character.id, {
+      ikChains: chains.map((c) => {
+        if (c.id !== chainId) return c;
+        const { targetBlueprint: _tb, ...rest } = c;
+        return rest;
+      }),
+    });
+  };
 
   const nodes = useMemo(() => {
     if (!character) return [];
@@ -137,7 +184,22 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
               <div className="flex items-center gap-1.5">
                 <span className="flex-1 truncate text-gray-300" title={c.name}>
                   {c.name} <span className="text-gray-600">({c.solver})</span>
+                  {c.targetBlueprint && <span className="text-purple-400 ml-1">[蓝图驱动]</span>}
                 </span>
+                <button
+                  onClick={() => {
+                    if (!c.targetBlueprint) {
+                      // 首次打开时创建默认蓝图
+                      const bp = createDefaultTargetBlueprint(c);
+                      handleTargetBlueprintChange(c.id, bp);
+                    }
+                    setEditingTargetChainId(c.id);
+                  }}
+                  className={`p-0.5 rounded ${c.targetBlueprint ? 'text-purple-400' : 'text-gray-600 hover:text-purple-300'}`}
+                  title="编辑目标蓝图（步态/正弦等修改器驱动）"
+                >
+                  <Network className="size-3" />
+                </button>
                 <button
                   onClick={() => handleToggle(c.id)}
                   className={`p-0.5 rounded ${c.enabled ? 'text-green-400' : 'text-gray-600'}`}
@@ -241,6 +303,53 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
           <Plus className="size-3 mr-1" /> 添加 IK 链
         </Button>
       </div>
+
+      {/* 目标蓝图编辑弹窗 */}
+      {editingTargetChainId && (() => {
+        const chain = chains.find((c) => c.id === editingTargetChainId);
+        if (!chain) return null;
+        const graph = chain.targetBlueprint ?? createDefaultTargetBlueprint(chain);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+            <div className="w-[90vw] h-[85vh] bg-[#1a1a1a] rounded-lg flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
+                <span className="text-sm text-gray-200">
+                  {chain.name} — 目标点蓝图
+                  <span className="text-xs text-gray-500 ml-2">
+                    用 translateX/translateY 输出目标坐标（局部坐标）
+                  </span>
+                </span>
+                <div className="flex items-center gap-2">
+                  {chain.targetBlueprint && (
+                    <button
+                      onClick={() => {
+                        handleClearTargetBlueprint(chain.id);
+                      }}
+                      className="text-xs text-gray-500 hover:text-red-400"
+                      title="清除蓝图，回到静态目标"
+                    >
+                      清除蓝图
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setEditingTargetChainId(null)}
+                    className="text-gray-400 hover:text-white text-lg leading-none px-2"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <BlueprintEditor
+                  graph={graph}
+                  onChange={(g) => handleTargetBlueprintChange(chain.id, g)}
+                  title={`${chain.name} 目标`}
+                />
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

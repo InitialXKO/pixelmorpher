@@ -372,17 +372,15 @@ function applyIKChain(
 
   // 目标点：优先用 targetBlueprint 动态求值（步态/正弦等修改器驱动），
   // 没有则用静态 chain.target
+  // targetBlueprint 的输出节点应为 transform 类型，用 translateX/translateY 做目标坐标
   let targetX = chain.target.x;
   let targetY = chain.target.y;
   if (chain.targetBlueprint) {
     try {
       const tbCtx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: {} };
       const tbResult = evaluateBlueprint(chain.targetBlueprint, tbCtx);
-      // 支持 {x, y} 或 {targetX, targetY} 输出
-      const rx = (tbResult as Record<string, unknown>).x ?? (tbResult as Record<string, unknown>).targetX;
-      const ry = (tbResult as Record<string, unknown>).y ?? (tbResult as Record<string, unknown>).targetY;
-      if (typeof rx === 'number' && Number.isFinite(rx)) targetX = rx;
-      if (typeof ry === 'number' && Number.isFinite(ry)) targetY = ry;
+      if (Number.isFinite(tbResult.translateX)) targetX = tbResult.translateX;
+      if (Number.isFinite(tbResult.translateY)) targetY = tbResult.translateY;
     } catch {
       // 蓝图求值失败时回退到静态目标
     }
