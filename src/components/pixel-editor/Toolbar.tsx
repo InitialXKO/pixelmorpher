@@ -48,7 +48,6 @@ import {
   TrajectorySnapToggle,
   SkeletonsToggle,
   ShowAllCharactersToggle,
-  WeightPaintToggle,
   OnionSkinToggle,
   PreviewQualitySelect,
 } from './toolbar/ViewControls';
@@ -338,19 +337,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
             if (val === 'trajectory') {
               setEditMode('trajectory_edit');
               if (!showTrajectories) toggleTrajectories();
-            } else if (val === 'bone') {
-              setEditMode('bone_edit');
-              if (!showSkeletons) toggleSkeletons();
-            } else if (val === 'ik') {
-              setEditMode('bone_edit');
-              if (!showSkeletons) toggleSkeletons();
-            } else if (val === 'weight_paint') {
-              setEditMode('weight_paint');
-              if (!showSkeletons) toggleSkeletons();
-              if (!showWeightPaint) toggleWeightPaint();
-            } else if (state.editMode === 'trajectory_edit' ||
-                       state.editMode === 'bone_edit' ||
-                       state.editMode === 'weight_paint') {
+            } else if (state.editMode === 'trajectory_edit') {
               setEditMode('normal');
             }
 
@@ -382,8 +369,6 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
                   value === 'motion_blur_brush' ? 'data-[state=on]:bg-cyan-600/40 data-[state=on]:text-cyan-300 data-[state=on]:ring-cyan-500/50' : ''
                 } ${
                   value === 'glow_brush' || value === 'particle_brush' || value === 'afterimage_brush' ? 'data-[state=on]:bg-amber-600/40 data-[state=on]:text-amber-300 data-[state=on]:ring-amber-500/50' : ''
-                } ${
-                  value === 'bone' || value === 'ik' || value === 'weight_paint' ? 'data-[state=on]:bg-orange-600/40 data-[state=on]:text-orange-300 data-[state=on]:ring-orange-500/50' : ''
                 }`}
               >
                 {icon}
@@ -600,7 +585,6 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
 
       <SkeletonsToggle />
       <ShowAllCharactersToggle />
-      <WeightPaintToggle />
       <OnionSkinToggle />
 
       <Separator orientation="vertical" className="h-5 bg-white/10" />
