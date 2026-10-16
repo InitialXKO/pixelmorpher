@@ -8,7 +8,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
-import { Trash2, SkipForward } from 'lucide-react';
+import { Trash2, SkipForward, Copy } from 'lucide-react';
 import type { NodeKeyframe } from '@/lib/unified-types';
 import {
   DEFAULT_FRAME_WIDTH,
@@ -101,6 +101,7 @@ export const NodeKeyframeMarker = React.memo(function NodeKeyframeMarker({
   isSelected,
   onSelect,
   onDelete,
+  onDuplicate,
   onMoveToFrame,
   totalFrames,
   siblingKeyframes,
@@ -113,6 +114,7 @@ export const NodeKeyframeMarker = React.memo(function NodeKeyframeMarker({
   isSelected: boolean;
   onSelect: () => void;
   onDelete: () => void;
+  onDuplicate: () => void;
   onMoveToFrame: () => void;
   totalFrames: number;
   siblingKeyframes: NodeKeyframe[];
@@ -248,6 +250,11 @@ export const NodeKeyframeMarker = React.memo(function NodeKeyframeMarker({
         </button>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52">
+        <ContextMenuItem onClick={onDuplicate}>
+          <Copy className="size-4 mr-2 text-emerald-400" />
+          <span>Duplicate Keyframe</span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
         <ContextMenuItem onClick={onDelete} variant="destructive">
           <Trash2 className="size-4 mr-2" />
           <span>Delete Puppet Keyframe</span>

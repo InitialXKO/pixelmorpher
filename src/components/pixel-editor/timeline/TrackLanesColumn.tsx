@@ -43,6 +43,7 @@ interface TrackLanesColumnProps {
   onSelectNodeKeyframe: (id: string) => void;
   onAddNodeKeyframe: (nodeId: string, frame: number) => void;
   onDeleteNodeKeyframe: (keyframeId: string) => void;
+  onDuplicateNodeKeyframe: (keyframeId: string) => void;
   onMoveNodeKeyframeToFrame: (keyframeId: string) => void;
   onUpdateNodeKeyframe: (keyframeId: string, updates: Partial<NodeKeyframe>) => void;
   // V15: Dynamic zoom, snap, colors, thumbnails, frame step
@@ -63,7 +64,7 @@ export default function TrackLanesColumn({
   onAddEffectKeyframe, onDeleteEffectKeyframe, onEditEffectKeyframe,
   onPlayheadMouseDown,
   isPuppetClip, nodeList, nodeKeyframes, selectedNodeKeyframeId,
-  onSelectNodeKeyframe, onAddNodeKeyframe, onDeleteNodeKeyframe,
+  onSelectNodeKeyframe, onAddNodeKeyframe, onDeleteNodeKeyframe, onDuplicateNodeKeyframe,
   onMoveNodeKeyframeToFrame, onUpdateNodeKeyframe,
   // V15
   FRAME_WIDTH: propFrameWidth,
@@ -171,7 +172,7 @@ export default function TrackLanesColumn({
                       key={`node-lane-${node.id}`} node={node} nodeKeyframes={nodeKfs}
                       selectedNodeKeyframeId={selectedNodeKeyframeId} totalFrames={totalFrames}
                       onSelectNodeKeyframe={onSelectNodeKeyframe} onAddNodeKeyframe={onAddNodeKeyframe}
-                      onDeleteNodeKeyframe={onDeleteNodeKeyframe} onMoveNodeKeyframeToFrame={onMoveNodeKeyframeToFrame}
+                      onDeleteNodeKeyframe={onDeleteNodeKeyframe} onDuplicateNodeKeyframe={onDuplicateNodeKeyframe} onMoveNodeKeyframeToFrame={onMoveNodeKeyframeToFrame}
                       onUpdateNodeKeyframe={onUpdateNodeKeyframe}
                       frameWidth={fw}
                       snapConfig={snapConfig}

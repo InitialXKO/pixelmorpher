@@ -15,6 +15,7 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
   onSelectNodeKeyframe,
   onAddNodeKeyframe,
   onDeleteNodeKeyframe,
+  onDuplicateNodeKeyframe,
   onMoveNodeKeyframeToFrame,
   onUpdateNodeKeyframe,
   frameWidth,
@@ -30,6 +31,7 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
   onSelectNodeKeyframe: (id: string) => void;
   onAddNodeKeyframe: (nodeId: string, frame: number) => void;
   onDeleteNodeKeyframe: (keyframeId: string) => void;
+  onDuplicateNodeKeyframe: (keyframeId: string) => void;
   onMoveNodeKeyframeToFrame: (keyframeId: string) => void;
   onUpdateNodeKeyframe: (keyframeId: string, updates: Partial<NodeKeyframe>) => void;
   frameWidth?: number;
@@ -49,12 +51,16 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
     (e: React.MouseEvent<HTMLDivElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
       const x = e.clientX - rect.left;
-      const frame = Math.floor(x / FRAME_WIDTH);
+      let frame = Math.floor(x / FRAME_WIDTH);
+      // 吸附
+      if (snapFrame && snapConfig?.enabled) {
+        frame = snapFrame(frame);
+      }
       if (frame >= 0 && frame < totalFrames) {
         onAddNodeKeyframe(node.id, frame);
       }
     },
-    [node.id, totalFrames, onAddNodeKeyframe, FRAME_WIDTH]
+    [node.id, totalFrames, onAddNodeKeyframe, FRAME_WIDTH, snapFrame, snapConfig]
   );
 
   return (
@@ -121,6 +127,7 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
           isSelected={selectedNodeKeyframeId === kf.id}
           onSelect={() => onSelectNodeKeyframe(kf.id)}
           onDelete={() => onDeleteNodeKeyframe(kf.id)}
+          onDuplicate={() => onDuplicateNodeKeyframe(kf.id)}
           onMoveToFrame={() => onMoveNodeKeyframeToFrame(kf.id)}
           totalFrames={totalFrames}
           siblingKeyframes={sortedKeyframes}
@@ -155,6 +162,7 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
   if (prevProps.selectedNodeKeyframeId !== nextProps.selectedNodeKeyframeId) return false;
   if (prevProps.totalFrames !== nextProps.totalFrames) return false;
   if (prevProps.frameWidth !== nextProps.frameWidth) return false;
+  if (prevProps.snapConfig !== nextProps.snapConfig) return false;
   return true;
 });
 

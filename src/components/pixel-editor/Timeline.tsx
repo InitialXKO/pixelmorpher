@@ -25,9 +25,11 @@ import EffectKeyframeEditDialog from './timeline/dialogs/EffectKeyframeEditDialo
 import useVirtualScroll from './timeline/useVirtualScroll';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { useToast } from '@/hooks/use-toast';
 
 // ---- Main Timeline Component ----
 export default function Timeline() {
+  const { toast } = useToast();
   // P5-2: currentFrame removed from reactive subscription — read via ref + subscribe instead
   const currentFrameRef = useRef(useProjectStore.getState().currentFrame);
   const playheadLineRef = useRef<HTMLDivElement>(null);
@@ -131,6 +133,30 @@ export default function Timeline() {
     [activeClip, removeNodeKeyframe]
   );
 
+  const handleDuplicateNodeKeyframe = useCallback(
+    (keyframeId: string) => {
+      if (!activeClip) return;
+      const kf = nodeKeyframes.find((k) => k.id === keyframeId);
+      if (!kf) return;
+      // 新帧 = 原帧+1（若冲突则找下一个空位）
+      let newFrame = kf.frame + 1;
+      const usedFrames = new Set(nodeKeyframes.filter((k) => k.nodeId === kf.nodeId).map((k) => k.frame));
+      while (usedFrames.has(newFrame) && newFrame < totalFrames) newFrame++;
+      if (newFrame >= totalFrames) return;
+      addNodeKeyframe(activeClip.id, kf.nodeId, newFrame, {
+        angle: kf.angle,
+        stretch: kf.stretch,
+        x: kf.x,
+        y: kf.y,
+        variantIndex: kf.variantIndex,
+        zIndex: kf.zIndex,
+        interpolationMode: kf.interpolationMode,
+        modifiers: kf.modifiers ? JSON.parse(JSON.stringify(kf.modifiers)) : undefined,
+      });
+    },
+    [activeClip, nodeKeyframes, totalFrames, addNodeKeyframe]
+  );
+
   const handleMoveNodeKeyframeToFrame = useCallback(
     (keyframeId: string) => {
       const kf = nodeKeyframes.find((k) => k.id === keyframeId);
@@ -222,7 +248,7 @@ export default function Timeline() {
   // Part 轨道已删除：tracks 传空数组（原 tracks 恒为空）
   const { visibleRange, rowOffsets, rowHeights, totalHeight, onScroll: handleVirtualScroll } = useVirtualScroll(
     scrollContainerRef, [], [], effectTracks, canvasModifierTracks, () => [],
-    puppetNodes.length, isPuppetClip
+    puppetNodes as any, isPuppetClip, nodeKeyframes as any
   );
 
   // ---- Playback Logic ----
@@ -391,9 +417,9 @@ export default function Timeline() {
         if (distEnd < bestDist) { bestDist = distEnd; bestFrame = totalFrames - 1; }
       }
 
-      // Snap to other keyframes
+      // Snap to other keyframes (node keyframes in puppet mode)
       if (snapConfig.snapToKeyframes) {
-        for (const kf of keyframes) {
+        for (const kf of nodeKeyframes) {
           if (excludeKeyframeId && kf.id === excludeKeyframeId) continue;
           const dist = Math.abs(rawFrame - kf.frame);
           if (dist < bestDist) { bestDist = dist; bestFrame = kf.frame; }
@@ -412,7 +438,7 @@ export default function Timeline() {
 
       return bestFrame;
     },
-    [snapConfig, timelineZoom, totalFrames, keyframes]
+    [snapConfig, timelineZoom, totalFrames, nodeKeyframes]
   );
 
   return (
@@ -444,6 +470,8 @@ export default function Timeline() {
           // 木偶是唯一工作流，Diamond 按钮给选中的木偶节点打帧
           if (activeClip && performNodeId) {
             handleAddNodeKeyframe(performNodeId, currentFrameRef.current);
+          } else if (!performNodeId) {
+            toast({ title: '请先选择节点', description: '在画布上点击一个木偶节点后再打关键帧' });
           }
         }}
         onDeleteKeyframe={() => {
@@ -524,6 +552,7 @@ export default function Timeline() {
           onSelectNodeKeyframe={handleSelectNodeKeyframe}
           onAddNodeKeyframe={handleAddNodeKeyframe}
           onDeleteNodeKeyframe={handleDeleteNodeKeyframe}
+          onDuplicateNodeKeyframe={handleDuplicateNodeKeyframe}
           onMoveNodeKeyframeToFrame={handleMoveNodeKeyframeToFrame}
           onUpdateNodeKeyframe={handleUpdateNodeKeyframe}
           // V15: Pass zoom, snap, and frame step props

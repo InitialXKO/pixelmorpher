@@ -14,8 +14,9 @@ export default function useVirtualScroll(
   effectTracks: EffectTrack[],
   canvasModifierTracks: CanvasModifierTrack[],
   getKeyframesForPart: (spriteId: string) => Keyframe[],
-  puppetNodeCount: number = 0,
+  puppetNodes: Array<{ id: string }> = [],
   isPuppetClip: boolean = false,
+  nodeKeyframes: Array<{ nodeId: string; modifiers?: Array<{ type: string; paramDrivers?: Array<unknown> }> }> = [],
 ): {
   visibleRange: { startIndex: number; endIndex: number };
   rowOffsets: number[];
@@ -54,15 +55,30 @@ export default function useVirtualScroll(
     }
 
     // H4: 木偶行计入总高度，否则播放头红线在木偶区被截断
-    if (isPuppetClip && puppetNodeCount > 0) {
+    // N4: 子轨道行高也要计入（per-keyframe modifiers + param drivers）
+    if (isPuppetClip && puppetNodes.length > 0) {
       groups.push({ trackId: '__puppet_sep__', height: 20 });
-      for (let i = 0; i < puppetNodeCount; i++) {
-        groups.push({ trackId: `__puppet__${i}`, height: TRACK_HEIGHT });
+      for (const node of puppetNodes) {
+        // 基础行高
+        let height = TRACK_HEIGHT;
+        // 子轨道：统计该节点所有 keyframe 的 modifier types 和 paramDrivers
+        const nks = nodeKeyframes.filter((kf) => kf.nodeId === node.id);
+        const modTypes = new Set<string>();
+        let paramDriverCount = 0;
+        for (const kf of nks) {
+          for (const mod of kf.modifiers ?? []) {
+            modTypes.add(mod.type);
+            paramDriverCount += (mod.paramDrivers ?? []).length;
+          }
+        }
+        height += modTypes.size * SUB_TRACK_HEIGHT;
+        height += paramDriverCount * SUB_TRACK_HEIGHT;
+        groups.push({ trackId: `__puppet__${node.id}`, height });
       }
     }
 
     return groups;
-  }, [tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart, puppetNodeCount, isPuppetClip]);
+  }, [tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart, puppetNodes, isPuppetClip, nodeKeyframes]);
 
   const { rowOffsets, rowHeights, totalHeight } = useMemo(() => {
     const offsets: number[] = [];
