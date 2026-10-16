@@ -9,9 +9,7 @@ import React, { useState, useMemo } from 'react';
 import { Plus, Trash2, Power } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useProjectStore } from '@/lib/store';
-import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
-import { computeWorldTransforms } from '@/lib/unified-render';
-import { subToPx } from '@/lib/unified-types';
+import { computeIKChainTip, getIKChainJointIds } from '@/lib/ik-tip';
 import type { Character, IKChain } from '@/lib/unified-types';
 
 interface IKChainEditorProps {
@@ -48,59 +46,12 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
 
   const canAdd = rootId && endId && rootId !== endId && chainJoints.length >= 2;
 
-  /** 用真实变换管线算指定链的尖端世界位置（与 applyIKChain 同源） */
-  const computeChainTip = (
-    ch: Character,
-    jointIds: string[],
-  ): { tipX: number; tipY: number; tipLength: number } => {
-    const store = useProjectStore.getState();
-    const transforms = computeWorldTransforms(ch, store.currentFrame, store.canvasWidth, store.canvasHeight);
-    const joints: { x: number; y: number; angle: number }[] = [];
-    for (const jid of jointIds) {
-      const t = transforms.get(jid);
-      if (!t) break;
-      joints.push({ x: subToPx(t.worldX), y: subToPx(t.worldY), angle: t.worldAngle });
-    }
-    let tipLength = 0;
-    let tipX = 0, tipY = 0;
-    if (joints.length >= 1) {
-      const last = joints[joints.length - 1];
-      tipX = last.x; tipY = last.y;
-      // 尖端方向用末关节自己的世界角度，沿精灵局部 Y 轴（骨方向）
-      const rad = (last.angle * Math.PI) / 180;
-      // 默认尖端长取最后一段骨长
-      if (joints.length >= 2) {
-        const prev = joints[joints.length - 2];
-        tipLength = Math.hypot(last.x - prev.x, last.y - prev.y);
-      }
-      if (tipLength > 1e-6) {
-        tipX = last.x + -Math.sin(rad) * tipLength;
-        tipY = last.y + Math.cos(rad) * tipLength;
-      }
-    }
-    return { tipX, tipY, tipLength };
-  };
-
-  /** 按 chain 的 root/end 算出 jointIds（root→end） */
-  const getChainJointIds = (ch: Character, chain: IKChain): string[] => {
-    const path: string[] = [];
-    let cur: string | undefined = chain.endNodeId;
-    const visited = new Set<string>();
-    while (cur && !visited.has(cur)) {
-      visited.add(cur);
-      path.unshift(cur);
-      if (cur === chain.rootNodeId) break;
-      cur = ch.nodes[cur]?.parentId;
-    }
-    return path[0] === chain.rootNodeId ? path : [];
-  };
-
   const handleAdd = () => {
     if (!character || !canAdd) return;
     // 2bone = 2 根骨 = 3 关节；其他（1 骨/多骨）走 fabrik
     const solver = chainJoints.length === 3 ? '2bone' : 'fabrik';
     const endNode = character.nodes[endId];
-    const { tipX, tipY, tipLength } = computeChainTip(character, chainJoints);
+    const { tipX, tipY, tipLength } = computeIKChainTip(character, chainJoints);
     const newChain: IKChain = {
       id: `ik_${Date.now().toString(36)}`,
       name: `${character.nodes[rootId]?.name ?? rootId} → ${endNode?.name ?? endId}`,
@@ -128,9 +79,9 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     let patch: Partial<IKChain> = { enabled: willEnable };
     // 启用时把目标重算到当前尖端位置，避免用创建时的旧位置导致跳变
     if (willEnable) {
-      const jointIds = getChainJointIds(character, chain);
+      const jointIds = getIKChainJointIds(character, chain.rootNodeId, chain.endNodeId);
       if (jointIds.length >= 2) {
-        const { tipX, tipY } = computeChainTip(character, jointIds);
+        const { tipX, tipY } = computeIKChainTip(character, jointIds, chain.tipLength);
         // 保留用户已调过的 tipLength，只更新目标点
         patch = { ...patch, target: { x: tipX, y: tipY } };
       }

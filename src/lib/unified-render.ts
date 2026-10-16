@@ -73,6 +73,7 @@ import { applyCanvasModifiers } from './engine/canvas-modifiers';
 import { evaluateBlueprint, EVALUATORS } from './blueprint/eval';
 import { modifiersToBlueprint } from './blueprint/migrate';
 import type { BlueprintNode, BlueprintEvalContext } from './blueprint/ir';
+import { isIKChainSuspended } from './ik-drag-state';
 import { asNumber } from './blueprint/ir';
 import type { BlueprintGraph } from './blueprint/ir';
 import type { VariableContext as EngineVariableContext } from './engine/param-driver';
@@ -247,7 +248,7 @@ function applyIKChains(
     return;
   }
 
-  const chains = character.ikChains?.filter((c) => c.enabled);
+  const chains = character.ikChains?.filter((c) => c.enabled && !isIKChainSuspended(c.id));
   if (!chains || chains.length === 0) return;
 
   for (const chain of chains) {
@@ -336,9 +337,19 @@ function applyIKChain(
   }
 
   // 末端尖端：IK 控制的是末节尖端，不是关节轴心
-  // 在链末加虚拟尖端关节，长度为 tipLength（默认取最后一段骨长）
+  // 在链末加虚拟尖端关节，长度为 tipLength（默认取末关节精灵 Y 轴长度）
   // 尖端方向用末关节自己的世界角度，沿精灵局部 Y 轴（骨方向）
-  const tipLength = chain.tipLength ?? (lengths.length > 0 ? lengths[lengths.length - 1] : 0);
+  let tipLength = chain.tipLength ?? 0;
+  if (tipLength <= 0) {
+    const endNode = character.nodes[chain.endNodeId];
+    const sprite = endNode?.sprite;
+    if (sprite && sprite.height > 0) {
+      const plugY = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
+      tipLength = Math.max(1, sprite.height - plugY);
+    } else if (lengths.length > 0) {
+      tipLength = lengths[lengths.length - 1];
+    }
+  }
   const realJointCount = jointIds.length;
   if (tipLength > 1e-6 && joints.length >= 1) {
     const lastJ = joints[joints.length - 1];
