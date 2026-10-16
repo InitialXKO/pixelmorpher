@@ -214,7 +214,7 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
                   >
                     <div
                       className="size-2 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: node.costumePiece?.fillColor || '#888' }}
+                      style={{ backgroundColor: node.slot?.fillColor || '#888' }}
                     />
                     <span className="text-[10px] text-gray-300 flex-1 truncate min-w-0">
                       {node.name}

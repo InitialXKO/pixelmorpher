@@ -531,8 +531,8 @@ export function useCanvasState() {
           if (!pos) continue;
           // Resolve sprite from Character.sprites table (via costumePiece or node.sprite)
           let sprite: import('@/lib/unified-types').Sprite | null = null;
-          if (node.costumePiece && activeCostumeSet) {
-            const piece = activeCostumeSet.pieces[node.costumePiece.slotKey];
+          if (node.slot && activeCostumeSet) {
+            const piece = activeCostumeSet.pieces[node.slot.slotKey];
             if (piece) {
               const ref = piece.sprites[direction] ?? piece.sprites[0];
               if (ref) {

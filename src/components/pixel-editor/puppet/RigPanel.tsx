@@ -300,8 +300,8 @@ function RigNodeProperties({
           <Label className="text-[9px] text-gray-600">关节盘颜色</Label>
           <input
             type="color"
-            value={node.costumePiece?.fillColor || '#888888'}
-            onChange={(e) => onUpdate({ costumePiece: node.costumePiece ? { ...node.costumePiece, fillColor: e.target.value } : undefined })}
+            value={node.slot?.fillColor || '#888888'}
+            onChange={(e) => onUpdate({ slot: node.slot ? { ...node.slot, fillColor: e.target.value } : undefined })}
             className="size-6 rounded border border-[#1e1e3a] bg-transparent cursor-pointer"
           />
         </div>

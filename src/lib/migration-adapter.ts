@@ -164,7 +164,7 @@ function puppetNodeToNode(
 
   // Direction sprites → CostumePiece reference
   if (pNode.directionSprites && Object.keys(pNode.directionSprites).length > 0) {
-    node.costumePiece = convertDirectionSprites(pNode, parts);
+    node.slot = convertDirectionSprites(pNode, parts);
   }
 
   // Cross sections → CostumePiece (for disc diameter) + Generated item
@@ -172,20 +172,20 @@ function puppetNodeToNode(
   // so that generateDiscInstructions can compute the disc diameter correctly.
   if (pNode.crossSectionTop || pNode.crossSectionBottom) {
     // Ensure costumePiece exists (may already have been created by convertDirectionSprites)
-    if (!node.costumePiece) {
-      node.costumePiece = createDefaultCostumePiece(pNode.id, pNode.color ?? '#808080');
+    if (!node.slot) {
+      node.slot = createDefaultCostumePiece(pNode.id, pNode.color ?? '#808080');
     }
     // Add cross sections if not already present (convertDirectionSprites may have added them)
-    const existingIds = new Set(node.costumePiece.crossSections.map(cs => cs.id));
+    const existingIds = new Set(node.slot.crossSections.map(cs => cs.id));
     if (pNode.crossSectionTop && !existingIds.has('plug')) {
-      node.costumePiece.crossSections.push({
+      node.slot.crossSections.push({
         id: 'plug',
         mode: 'inside',
         diameter: pNode.crossSectionTop,
       });
     }
     if (pNode.crossSectionBottom && !existingIds.has('bottom')) {
-      node.costumePiece.crossSections.push({
+      node.slot.crossSections.push({
         id: 'bottom',
         mode: 'inside',
         diameter: pNode.crossSectionBottom,
@@ -290,17 +290,17 @@ function puppetToCharacter(
     );
     result.activeCostumeSetId = character.activeCostumeSetId ?? undefined;
 
-    // Sync active costume sprites to node.costumePiece:
-    // unified-render reads node.costumePiece.sprites, not costumeSet.pieces.
+    // Sync active costume sprites to node.slot:
+    // unified-render reads node.slot.sprites, not costumeSet.pieces.
     // Without this, spriteMap extractions never reach the renderer and it
     // falls back to DEFAULT_MIRROR_MAP (causing S/W flip).
     const activeCS = result.costumeSets.find(cs => cs.id === result.activeCostumeSetId);
     if (activeCS) {
       for (const [nodeId, node] of Object.entries(nodeMap)) {
         const pieceSprites = (activeCS.pieces as Record<string, { sprites?: Record<number, unknown> }>)[nodeId]?.sprites;
-        if (pieceSprites && node.costumePiece) {
+        if (pieceSprites && node.slot) {
           for (const [dirIndex, sprite] of Object.entries(pieceSprites)) {
-            (node.costumePiece.sprites as Record<string, unknown>)[dirIndex] = sprite;
+            (node.slot.sprites as Record<string, unknown>)[dirIndex] = sprite;
           }
         }
       }

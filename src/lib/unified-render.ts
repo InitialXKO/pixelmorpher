@@ -141,7 +141,7 @@ function evaluateBlueprintTransforms(
           nodeState: blueprintNodeState,
           // costume 节点用（transform pass 不出像素，但保持 ctx 完整）
           costumes: character.costumeSets,
-          costumeSlot: (node as any).costumePiece?.slotKey,
+          costumeSlot: (node as any).slot?.slotKey,
         } as any);
         result.set(nodeId, {
           translateX: t.translateX,
@@ -578,7 +578,7 @@ function computeChildTransforms(
       }
 
       // Check if this direction requires mirroring
-      const mirrorMap = childNode.costumePiece?.mirrorMap ?? DEFAULT_MIRROR_MAP;
+      const mirrorMap = childNode.slot?.mirrorMap ?? DEFAULT_MIRROR_MAP;
       if (mirrorMap[childInterpolated.variantIndex] !== undefined) {
         childMirror = !parentWorld.mirror; // Toggle mirror
       }
@@ -972,8 +972,8 @@ function resolveSprite(
     return { sprite: s as Sprite, spriteId: null };
   };
   // 1. Try costume set
-  if (costumeSet && node.costumePiece) {
-    const piece = costumeSet.pieces[node.costumePiece.slotKey];
+  if (costumeSet && node.slot) {
+    const piece = costumeSet.pieces[node.slot.slotKey];
     if (piece) {
       // Check for direct sprite at this direction
       const direct = resolve(piece.sprites[direction]);
@@ -993,15 +993,15 @@ function resolveSprite(
   }
 
   // 2. Try costumePiece direction sprites
-  if (node.costumePiece) {
-    const direct = resolve(node.costumePiece.sprites[direction]);
+  if (node.slot) {
+    const direct = resolve(node.slot.sprites[direction]);
     if (direct.sprite) {
       return { sprite: direct.sprite, mirror: false, spriteId: direct.spriteId };
     }
 
-    const mirrorSource = node.costumePiece.mirrorMap[direction];
+    const mirrorSource = node.slot.mirrorMap[direction];
     if (mirrorSource !== undefined) {
-      const mirrored = resolve(node.costumePiece.sprites[mirrorSource]);
+      const mirrored = resolve(node.slot.sprites[mirrorSource]);
       if (mirrored.sprite) {
         return { sprite: mirrored.sprite, mirror: true, spriteId: mirrored.spriteId };
       }
@@ -1072,7 +1072,7 @@ function generateDiscInstructions(
     if (typeof storedJointWidth === 'number' && storedJointWidth > 0) {
       diameter = storedJointWidth;
     } else {
-      const childPiece = node.costumePiece;
+      const childPiece = node.slot;
       const plugCS = childPiece?.crossSections.find(cs => cs.id === node.generated!.crossSectionId);
       const bottomCS = childPiece?.crossSections.find(cs => cs.id === 'bottom');
       diameter = getPlugJointWidth(
@@ -1124,7 +1124,7 @@ function generateDiscInstructions(
 
     // 关节盘颜色约定：plug.discColor 自定义 > 子节点精灵开口处众数颜色 > 旧 fallback。
     // 开口中心 = 精灵 pivot（sprite.plug）+ plug 本地坐标（attachment.plug）。
-    const childPiece = node.costumePiece;
+    const childPiece = node.slot;
     let fillColor: string = childPiece?.fillColor ?? node.sprite?.data?.[0]?.[0] ?? '#808080';
     const customDiscColor = node.attachment?.discColor;
     if (typeof customDiscColor === 'string' && customDiscColor) {
@@ -1265,7 +1265,7 @@ export function generateRenderPlan(
       blueprint: (node as any).blueprint ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers as any) : null),
       // costume 节点求值用：服装集 + 槽位 + 精灵表（SpriteRef 解析）
       costumes: character.costumeSets,
-      costumeSlot: node.costumePiece?.slotKey,
+      costumeSlot: node.slot?.slotKey,
       sprites: spriteTable,
     });
   }

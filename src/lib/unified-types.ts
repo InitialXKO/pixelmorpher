@@ -427,7 +427,7 @@ export interface Node {
   visible: boolean;
 
   // ---- Costume Reference ----
-  costumePiece?: CostumePiece;   // Optional: links to costume system
+  slot?: CostumePiece;            // Optional: costume slot definition (links node to a costume slot)
 
   // ---- Children ----
   children: string[];            // Child node IDs (resolved at runtime)
@@ -760,7 +760,7 @@ export interface NodeRenderInstruction {
   blueprint?: BlueprintGraph | null;
   /** Costume sets for costume node evaluation (character.costumeSets) */
   costumes?: CostumeSet[];
-  /** Costume slot key for costume node (node.costumePiece.slotKey) */
+  /** Costume slot key for costume node (node.slot.slotKey) */
   costumeSlot?: string;
   /** Shared sprite table for SpriteRef resolution (character.sprites) */
   sprites?: Record<string, Sprite>;

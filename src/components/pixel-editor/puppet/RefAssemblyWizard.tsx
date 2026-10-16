@@ -359,7 +359,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     if (!mirrorName) return null;
     const src = sortedNodes.find((n) => n.name.toLowerCase() === mirrorName!.toLowerCase());
     // 源节点必须已有精灵（已遮罩或模板自带）
-    if (src && ((src as any).sprite || src.costumePiece || processedNodes.has(src.id))) return src.id;
+    if (src && ((src as any).sprite || src.slot || processedNodes.has(src.id))) return src.id;
     return null;
   };
 
@@ -885,7 +885,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   const node = sortedNodes.find((n) => n.id === nodeId);
                   if (!node) continue;
                   // 取节点精灵
-                  const spriteId = (node as any).costumePiece?.sprites?.[0]?.spriteId
+                  const spriteId = (node as any).slot?.sprites?.[0]?.spriteId
                     ?? (node as any).spriteId;
                   const sprite = spriteId ? projectStore.sprites[spriteId] : null;
                   if (!sprite?.data) continue;

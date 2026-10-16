@@ -327,7 +327,7 @@ export function createPuppyRunExampleCharacter(
         zIndex: def.zIndex,
         visible: true,
         children: [], // filled below
-        costumePiece,
+        slot: costumePiece,
       });
       nodes[nodeId] = node;
       if (parentId) {

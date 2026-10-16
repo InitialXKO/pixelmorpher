@@ -193,8 +193,8 @@ export const puppetHandler: ToolHandler = {
       // Resolve sprite from Character.sprites table (track spriteId for pivot updates)
       let sprite: import('@/lib/unified-types').Sprite | null = null;
       let spriteId: string | null = null;
-      if (node.costumePiece && activeCostume) {
-        const piece = activeCostume.pieces[node.costumePiece.slotKey];
+      if (node.slot && activeCostume) {
+        const piece = activeCostume.pieces[node.slot.slotKey];
         const ref = piece?.sprites[direction] ?? piece?.sprites[0];
         if (ref) {
           if ('spriteId' in ref) {

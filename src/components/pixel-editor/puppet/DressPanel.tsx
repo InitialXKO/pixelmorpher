@@ -122,9 +122,9 @@ export default function DressPanel({
 
     const table = { ...(selectedCharacter.sprites ?? {}) };
     const pieces = { ...selectedCostume.pieces };
-    // 用 slotKey（不是 nodeId）——渲染器按 costumeSet.pieces[node.costumePiece.slotKey] 查找
+    // 用 slotKey（不是 nodeId）——渲染器按 costumeSet.pieces[node.slot.slotKey] 查找
     const node = selectedCharacter.nodes[nodeId];
-    const slotKey = node?.costumePiece?.slotKey ?? nodeId;
+    const slotKey = node?.slot?.slotKey ?? nodeId;
 
     if (spriteId) {
       // Sprite 已是目标格式：确保在角色 sprites 表中，直接引用
@@ -160,7 +160,7 @@ export default function DressPanel({
   const getSpriteFor = (nodeId: string, direction: DirectionIndex): Sprite | null => {
     if (!selectedCostume || !selectedCharacter) return null;
     const node = selectedCharacter.nodes[nodeId];
-    const slotKey = node?.costumePiece?.slotKey ?? nodeId;
+    const slotKey = node?.slot?.slotKey ?? nodeId;
     const piece = selectedCostume.pieces[slotKey];
     const ref = piece?.sprites[direction];
     if (!ref) return null;

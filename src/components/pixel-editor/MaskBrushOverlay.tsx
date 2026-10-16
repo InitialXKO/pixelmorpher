@@ -345,9 +345,9 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
           if (activeCs) {
             // Sprite 已在全局表，直接引用 ID（无需转换）
             const spriteId = sprite.id!;
-            // 用 slotKey（不是 nodeId）——渲染器按 costumeSet.pieces[node.costumePiece.slotKey] 查找
+            // 用 slotKey（不是 nodeId）——渲染器按 costumeSet.pieces[node.slot.slotKey] 查找
             const node = ownerChar.nodes[maskNodeId];
-            const slotKey = node?.costumePiece?.slotKey ?? maskNodeId;
+            const slotKey = node?.slot?.slotKey ?? maskNodeId;
             const pieces = { ...activeCs.pieces };
             const piece = pieces[slotKey] ?? createDefaultCostumePiece(slotKey);
             pieces[slotKey] = {

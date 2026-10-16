@@ -155,8 +155,8 @@ export function useCanvasInteraction(s: CanvasState) {
         const dir = (node.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
         // Resolve sprite ID from new model (for part edit mode)
         let spriteId: string | null = null;
-        if (node.costumePiece && activeCostume) {
-          const piece = activeCostume.pieces[node.costumePiece.slotKey];
+        if (node.slot && activeCostume) {
+          const piece = activeCostume.pieces[node.slot.slotKey];
           const ref = piece?.sprites[dir] ?? piece?.sprites[0];
           if (ref && 'spriteId' in ref) spriteId = ref.spriteId;
         }
