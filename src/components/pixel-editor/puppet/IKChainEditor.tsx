@@ -51,8 +51,9 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     const solver = chainJoints.length === 3 ? '2bone' : 'fabrik';
     const endNode = character.nodes[endId];
     // 计算末端执行器的 FK 世界位置（SubPixel→像素），作为 IK 初始目标
-    // 这样新建链不会导致肢体跳变
+    // 目标是尖端（末节末端），不是关节轴心
     let tx = 0, ty = 0, angle = 0;
+    const fkPositions: { x: number; y: number }[] = [{ x: 0, y: 0 }];
     // 从根往末端累积（chainJoints 已是 root→end 顺序）
     for (const jid of chainJoints) {
       const jn = character.nodes[jid] as any;
@@ -63,15 +64,32 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
       tx += lx * Math.cos(rad) - ly * Math.sin(rad);
       ty += lx * Math.sin(rad) + ly * Math.cos(rad);
       angle += la;
+      fkPositions.push({ x: tx, y: ty });
+    }
+    // 尖端：末关节位置 + 沿最后一段方向外推（默认长度取最后一段骨长）
+    let tipLength = 0;
+    let tipX = tx, tipY = ty;
+    if (fkPositions.length >= 2) {
+      const last = fkPositions[fkPositions.length - 1];
+      const prev = fkPositions[fkPositions.length - 2];
+      const dx = last.x - prev.x;
+      const dy = last.y - prev.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 1e-6) {
+        tipLength = d;
+        tipX = last.x + (dx / d) * tipLength;
+        tipY = last.y + (dy / d) * tipLength;
+      }
     }
     const newChain: IKChain = {
       id: `ik_${Date.now().toString(36)}`,
       name: `${character.nodes[rootId]?.name ?? rootId} → ${endNode?.name ?? endId}`,
       rootNodeId: rootId,
       endNodeId: endId,
-      target: { x: tx, y: ty },
+      target: { x: tipX, y: tipY },
       solver,
       bendDir: 1,
+      tipLength,
       // 默认禁用：用户摆好目标点后再启用，避免新建即干扰拖拽
       enabled: false,
     };
