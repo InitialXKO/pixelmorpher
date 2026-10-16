@@ -226,7 +226,7 @@ export function computeWorldTransforms(
   computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms);
 
   // Apply IK chains (override FK angles)
-  applyIKChains(character, transforms, canvasWidth, canvasHeight);
+  applyIKChains(character, transforms, canvasWidth, canvasHeight, frame, frameRate);
 
   return transforms;
 }
@@ -242,6 +242,8 @@ function applyIKChains(
   transforms: Map<string, WorldTransform>,
   canvasWidth: number,
   canvasHeight: number,
+  frame: number,
+  frameRate: number,
 ): void {
   // If baked IK blueprint exists, evaluate it instead of generating from chains.
   // The baked blueprint is editable in the blueprint editor.
@@ -254,7 +256,7 @@ function applyIKChains(
   if (!chains || chains.length === 0) return;
 
   for (const chain of chains) {
-    applyIKChain(character, chain, transforms, canvasWidth, canvasHeight);
+    applyIKChain(character, chain, transforms, canvasWidth, canvasHeight, frame, frameRate);
   }
 }
 
@@ -310,6 +312,8 @@ function applyIKChain(
   transforms: Map<string, WorldTransform>,
   canvasWidth: number,
   canvasHeight: number,
+  frame: number,
+  frameRate: number,
 ): void {
   // Build joint chain: root -> ... -> end
   const jointIds: string[] = [];
@@ -382,7 +386,7 @@ function applyIKChain(
   let targetY = chain.target.y;
   if (chain.targetBlueprint) {
     try {
-      const tbCtx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: {} };
+      const tbCtx: BlueprintEvalContext = { frame, frameRate, vars: {} };
       const tbResult = evaluateBlueprint(chain.targetBlueprint, tbCtx);
       if (Number.isFinite(tbResult.translateX)) targetX = tbResult.translateX + canvasWidth / 2;
       if (Number.isFinite(tbResult.translateY)) targetY = tbResult.translateY + canvasHeight / 2;
