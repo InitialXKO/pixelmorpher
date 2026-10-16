@@ -57,13 +57,12 @@ export default function DressPanel({
 }: DressPanelProps) {
   // 角色：unifiedCharacters 以 skeletonId 为 key
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
-  const syncPuppetToUnified = useProjectStore((s) => s.syncPuppetToUnified);
   const updateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
 
   const selectedCharacter = useMemo(() => {
     if (!activePuppetSkeletonId) return null;
-    return unifiedCharacters[activePuppetSkeletonId] ?? syncPuppetToUnified(activePuppetSkeletonId);
-  }, [unifiedCharacters, activePuppetSkeletonId, syncPuppetToUnified]);
+    return unifiedCharacters[activePuppetSkeletonId] ?? null;
+  }, [unifiedCharacters, activePuppetSkeletonId]);
 
   const characterNodes = useMemo(
     () => (selectedCharacter ? Object.values(selectedCharacter.nodes) : []),

@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useProjectStore } from '@/lib/store';
-import { renderUnifiedCharactersToCanvas } from '@/lib/unified-pipeline-bridge';
+import { renderUnifiedCharactersToCanvas } from '@/lib/unified-render';
 import type { AnimationClip } from '@/lib/types';
 import type { NodeKeyframe } from '@/lib/unified-types';
 import { subToPx } from '@/lib/unified-types';

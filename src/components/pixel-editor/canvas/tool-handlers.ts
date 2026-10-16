@@ -10,7 +10,7 @@ import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
 import { inpaintPixels } from '@/lib/inpainting';
 import { floodFill } from '@/lib/engine';
-import { renderUnifiedToCanvas } from '@/lib/unified-pipeline-bridge';
+import { renderUnifiedToCanvas } from '@/lib/unified-render';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
@@ -301,14 +301,14 @@ export const puppetHandler: ToolHandler = {
 
     const pivotWorldX = (() => {
       const project = useProjectStore.getState();
-      const uChar = project.unifiedCharacters?.[character.id] ?? project.syncPuppetToUnified?.(character.id);
+      const uChar = project.unifiedCharacters?.[character.id];
       const uNode = uChar?.nodes[node.id];
       if (uChar && uNode) return s.computePivotWorldPosition(uNode, uChar, s.canvasWidth, s.canvasHeight).x;
       return 0;
     })();
     const pivotWorldY = (() => {
       const project = useProjectStore.getState();
-      const uChar = project.unifiedCharacters?.[character.id] ?? project.syncPuppetToUnified?.(character.id);
+      const uChar = project.unifiedCharacters?.[character.id];
       const uNode = uChar?.nodes[node.id];
       if (uChar && uNode) return s.computePivotWorldPosition(uNode, uChar, s.canvasWidth, s.canvasHeight).y;
       return 0;
@@ -775,7 +775,6 @@ export const smartSelectHandler: ToolHandler = {
             s.effectTracks, undefined, undefined, false, 0.5,
             undefined, undefined, undefined, 'low',
             s.globalModifiers, undefined,
-            undefined, undefined, undefined,
             s.frameRate,
             pst.unifiedCharacters,
           );

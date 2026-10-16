@@ -8,8 +8,7 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { useProjectStore } from '@/lib/store';
 import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
-import { invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
-import { computePuppetSpritePartIds } from '@/lib/unified-pipeline-bridge';
+import { invalidateUnifiedPipelineCache } from '@/lib/unified-render';
 import {
   interpolateModifiers,
   computeKeyframeBaseTransform,

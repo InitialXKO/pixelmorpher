@@ -4,10 +4,10 @@ import React, { useCallback, useEffect } from 'react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
-import { renderCharacterOnionFrameFromCharacter } from '@/lib/unified-pipeline-bridge';
-import { renderSpriteEditUnified } from '@/lib/unified-pipeline-bridge';
+import { renderCharacterOnionFrameFromCharacter } from '@/lib/unified-render';
+import { renderSpriteEditUnified } from '@/lib/unified-render';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
-import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-pipeline-bridge';
+import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-render';
 import { useCanvasState } from './canvas/use-canvas-state';
 import { useCanvasInteraction } from './canvas/use-canvas-interaction';
 import MaskBrushOverlay from './MaskBrushOverlay';
@@ -412,7 +412,7 @@ export default function PixelCanvas() {
       const projectState = useProjectStore.getState();
       // 新模型：从 unifiedCharacters 获取
       const character = projectState.unifiedCharacters?.[skeletonId]
-        ?? projectState.syncPuppetToUnified?.(skeletonId);
+        ?? null;
       const node = character?.nodes[nodeId];
       if (!character || !node) return;
       // 计算世界坐标

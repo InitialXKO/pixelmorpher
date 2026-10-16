@@ -68,6 +68,7 @@ import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from 
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
+import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
 import { evaluateBlueprint, EVALUATORS } from './blueprint/eval';
 import { modifiersToBlueprint } from './blueprint/migrate';
@@ -78,7 +79,7 @@ import type { VariableContext as EngineVariableContext } from './engine/param-dr
 import type {
   PixelGrid, ModifierType, Keyframe, Skeleton, ProceduralAnimation,
   EffectTrack, MotionBlurStroke, EffectStroke, GlobalModifier,
-  AnimationVariable as StoreAnimationVariable,
+  AnimationVariable as StoreAnimationVariable, AnimationClip, CanvasModifierTrack,
 } from './types';
 import {
   resolveNodeModifiers,
@@ -1973,3 +1974,332 @@ function pxToSub(v: number): SubPixel {
   return Math.round(v * 16);
 }
 
+
+// ============================================================
+// Render Orchestrators (moved from unified-pipeline-bridge.ts)
+// ============================================================
+// The old Puppet pipeline bridge is deleted. These are the
+// new-model-only entry points.
+
+/** Invalidate render caches when store data changes */
+export function invalidateUnifiedPipelineCache(): void {
+  clearRenderCaches();
+}
+
+/**
+ * H11: 全局变换（镜头/世界）包装——实时预览与导出两条路径复用。
+ */
+function applyGlobalTransformWrapper(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  globalModifiers: GlobalModifier[] | undefined,
+  frame: number,
+  frameRate: number,
+  globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
+): boolean {
+  let globalTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
+  if (globalModifiers && globalModifiers.length > 0) {
+    const blueprint = globalBlueprint ?? modifiersToBlueprint(globalModifiers as any);
+    if (blueprint) {
+      const t = evaluateBlueprint(blueprint, { frame, frameRate, vars: {} } as any);
+      globalTransform = {
+        translateX: t.translateX, translateY: t.translateY, rotation: t.rotation,
+        scaleX: t.scaleX, scaleY: t.scaleY,
+      };
+    }
+  }
+  const has = globalTransform.translateX !== 0 || globalTransform.translateY !== 0 ||
+    globalTransform.rotation !== 0 || globalTransform.scaleX !== 1 || globalTransform.scaleY !== 1;
+  if (has) {
+    ctx.save();
+    ctx.translate(canvasWidth / 2, canvasHeight / 2);
+    ctx.translate(globalTransform.translateX, globalTransform.translateY);
+    ctx.rotate((globalTransform.rotation * Math.PI) / 180);
+    ctx.scale(globalTransform.scaleX, globalTransform.scaleY);
+    ctx.translate(-canvasWidth / 2, -canvasHeight / 2);
+  }
+  return has;
+}
+
+function renderPuppetViaUnifiedPipeline(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  unifiedCharacters: Record<string, Character>,
+  currentFrame: number,
+  frameRate: number,
+  globalModifiers?: GlobalModifier[],
+  animationVariables?: StoreAnimationVariable[],
+  canvasModifierTracks?: CanvasModifierTrack[],
+  proceduralAnimations?: ProceduralAnimation[],
+  globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
+  sprites?: Record<string, Sprite>,
+): void {
+  const hasGlobalTransform = applyGlobalTransformWrapper(
+    ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
+  );
+  for (const unifiedCharacter of Object.values(unifiedCharacters)) {
+    const unifiedVars: AnimationVariable[] | undefined = animationVariables?.map(v => ({
+      id: v.id, name: v.name, value: v.defaultValue ?? 0, min: 0, max: 100,
+      writerDriverId: (v as any).writerDriverId, defaultValue: v.defaultValue ?? 0,
+    }));
+    const plan = generateRenderPlan(
+      unifiedCharacter, currentFrame, canvasWidth, canvasHeight,
+      'pixel-perfect', frameRate, unifiedVars,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, proceduralAnimations, sprites,
+    );
+    executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
+  }
+  if (hasGlobalTransform) ctx.restore();
+}
+
+/**
+ * Main canvas render orchestrator (new model only).
+ */
+export function renderUnified(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  _parts: Sprite[],
+  keyframes: Keyframe[],
+  currentFrame: number,
+  backgroundColor: string,
+  effectTracks: EffectTrack[] | undefined,
+  motionBlurStrokes: MotionBlurStroke[] | undefined,
+  effectStrokes: EffectStroke[] | undefined,
+  autoMotionBlur: boolean,
+  autoMotionBlurIntensity: number,
+  skeletons: Skeleton[] | undefined,
+  proceduralAnimations: ProceduralAnimation[] | undefined,
+  canvasModifierTracks: CanvasModifierTrack[] | undefined,
+  frameRate: number,
+  previewQuality: 'low' | 'medium' | 'high',
+  animationVariables: StoreAnimationVariable[] | undefined,
+  globalModifiers: GlobalModifier[] | undefined,
+  unifiedCharacters: Record<string, Character> | undefined,
+  animationClips: AnimationClip[],
+  useUnifiedPipeline: boolean = true,
+  globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
+  sprites?: Record<string, Sprite>,
+): void {
+  if (backgroundColor !== 'transparent') {
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
+  if (unifiedCharacters && Object.keys(unifiedCharacters).length > 0) {
+    renderPuppetViaUnifiedPipeline(
+      ctx, canvasWidth, canvasHeight, unifiedCharacters,
+      currentFrame, frameRate, globalModifiers, animationVariables,
+      canvasModifierTracks, proceduralAnimations, globalBlueprint, sprites,
+    );
+  }
+  if (effectTracks) {
+    for (const effectTrack of effectTracks) {
+      if (!effectTrack.visible) continue;
+      const kf = effectTrack.keyframes
+        ?.filter((k: any) => k.frame <= currentFrame)
+        ?.sort((a: any, b: any) => b.frame - a.frame)[0];
+      if (!kf) continue;
+      renderEffectTrackFrame(ctx, effectTrack, kf, currentFrame, canvasWidth, canvasHeight);
+    }
+  }
+  if (motionBlurStrokes) {
+    for (const stroke of motionBlurStrokes) {
+      if (stroke.frame === currentFrame) renderMotionBlurStroke(ctx, stroke);
+    }
+  }
+  if (effectStrokes) {
+    for (const stroke of effectStrokes) {
+      if (stroke.frame === currentFrame) renderEffectStroke(ctx, stroke);
+    }
+  }
+  if (canvasModifierTracks && canvasModifierTracks.length > 0) {
+    applyCanvasModifiers(ctx, canvasModifierTracks, currentFrame, canvasWidth, canvasHeight);
+  }
+}
+
+/**
+ * Render a single frame to a canvas for export/SAM (new model only).
+ */
+export function renderUnifiedToCanvas(
+  canvasWidth: number,
+  canvasHeight: number,
+  _parts: Sprite[],
+  keyframes: Keyframe[],
+  frame: number,
+  backgroundColor: string,
+  effectTracks?: EffectTrack[],
+  motionBlurStrokes?: MotionBlurStroke[],
+  effectStrokes?: EffectStroke[],
+  autoMotionBlur: boolean = false,
+  autoMotionBlurIntensity: number = 0.5,
+  skeletons?: Skeleton[],
+  proceduralAnimations?: ProceduralAnimation[],
+  canvasModifierTracks?: CanvasModifierTrack[],
+  previewQuality: 'low' | 'medium' | 'high' = 'high',
+  globalModifiers?: GlobalModifier[],
+  animationVariables?: StoreAnimationVariable[],
+  frameRate: number = 12,
+  unifiedCharacters?: Record<string, Character>,
+  sprites?: Record<string, Sprite>,
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+  const ctx = canvas.getContext('2d')!;
+  const hasGlobalTransform = applyGlobalTransformWrapper(
+    ctx, canvasWidth, canvasHeight, globalModifiers, frame, frameRate, undefined,
+  );
+  if (unifiedCharacters && Object.keys(unifiedCharacters).length > 0) {
+    renderPuppetViaUnifiedPipeline(
+      ctx, canvasWidth, canvasHeight, unifiedCharacters,
+      frame, frameRate, globalModifiers, animationVariables,
+      canvasModifierTracks, undefined, undefined, sprites,
+    );
+  }
+  if (hasGlobalTransform) ctx.restore();
+  if (canvasModifierTracks && canvasModifierTracks.length > 0) {
+    applyCanvasModifiers(ctx, canvasModifierTracks, frame, canvasWidth, canvasHeight);
+  }
+  return canvas;
+}
+
+/**
+ * Render a single character at a specific frame for onion skin (new model).
+ */
+export function renderCharacterOnionFrameFromCharacter(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  character: Character,
+  nodeKeyframes: any[],
+  frame: number,
+  frameRate: number,
+  globalModifiers?: GlobalModifier[],
+  animationVariables?: StoreAnimationVariable[],
+  sprites?: Record<string, Sprite>,
+): void {
+  const unifiedVars = animationVariables?.map(v => ({
+    id: v.id, name: v.name, value: v.defaultValue ?? 0, min: 0, max: 100,
+    writerDriverId: (v as any).writerDriverId, defaultValue: v.defaultValue ?? 0,
+  }));
+  const plan = generateRenderPlan(
+    character, frame, canvasWidth, canvasHeight,
+    'pixel-perfect', frameRate, unifiedVars as any,
+    undefined, undefined, undefined, undefined, undefined,
+    undefined, undefined, undefined, sprites,
+  );
+  executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
+}
+
+/**
+ * Render multiple unified Characters to a canvas (for export).
+ */
+export function renderUnifiedCharactersToCanvas(
+  canvasWidth: number,
+  canvasHeight: number,
+  characters: Character[],
+  frame: number,
+  backgroundColor: string,
+  frameRate: number = 12,
+  globalModifiers?: GlobalModifier[],
+  animationVariables?: StoreAnimationVariable[],
+  canvasModifierTracks?: CanvasModifierTrack[],
+  sprites?: Record<string, Sprite>,
+): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+  const ctx = canvas.getContext('2d')!;
+  if (backgroundColor && backgroundColor !== 'rgba(0,0,0,0)') {
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
+  const hasGlobalTransform = applyGlobalTransformWrapper(
+    ctx, canvasWidth, canvasHeight, globalModifiers, frame, frameRate, undefined,
+  );
+  for (const character of characters) {
+    const unifiedVars: AnimationVariable[] | undefined = animationVariables?.map(v => ({
+      id: v.id, name: v.name, value: v.defaultValue ?? 0, min: 0, max: 100,
+      writerDriverId: (v as any).writerDriverId, defaultValue: v.defaultValue ?? 0,
+    }));
+    const plan = generateRenderPlan(
+      character, frame, canvasWidth, canvasHeight,
+      'pixel-perfect', frameRate, unifiedVars,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, sprites,
+    );
+    executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
+  }
+  if (hasGlobalTransform) ctx.restore();
+  if (canvasModifierTracks && canvasModifierTracks.length > 0) {
+    applyCanvasModifiers(ctx, canvasModifierTracks, frame, canvasWidth, canvasHeight);
+  }
+  return canvas;
+}
+
+/**
+ * Render a single Sprite centered on canvas for sprite editing.
+ */
+export function renderSpriteEditUnified(
+  ctx: CanvasRenderingContext2D,
+  sprite: Sprite,
+  spriteEditModifiers: any[],
+  canvasWidth: number,
+  canvasHeight: number,
+  currentFrame: number = 0,
+  sprites?: Record<string, Sprite>,
+): void {
+  ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+  const centerX = Math.floor((canvasWidth - sprite.width) / 2);
+  const centerY = Math.floor((canvasHeight - sprite.height) / 2);
+  const resolvedMods = (spriteEditModifiers.some(m =>
+    (m.paramKeyframes && m.paramKeyframes.length > 0) ||
+    (m.paramDrivers && m.paramDrivers.length > 0 && m.paramDrivers.some((d: any) => d.enabled && !d.isBaked))
+  ))
+    ? resolveKeyframeModifierParams(spriteEditModifiers, currentFrame)
+    : spriteEditModifiers;
+  const pixelModTypes = [
+    'color_replace', 'outline', 'dither', 'pixel_displace',
+    'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip', 'pixel_edit',
+  ];
+  const activePixelMods = resolvedMods.filter(m => pixelModTypes.includes(m.type) && m.enabled);
+  let pixels: import('./unified-types').PixelGrid;
+  let modOffsetX = 0, modOffsetY = 0;
+  if (activePixelMods.length > 0) {
+    const modResult = applyPixelModifiers(sprite.data, activePixelMods, currentFrame);
+    pixels = modResult.pixels;
+    modOffsetX = modResult.offsetX;
+    modOffsetY = modResult.offsetY;
+  } else {
+    pixels = sprite.data;
+  }
+  const translateMod = resolvedMods.find(m => m.type === 'translate' && m.enabled);
+  let shiftX = 0, shiftY = 0;
+  if (translateMod) {
+    shiftX = Math.round(Number(translateMod.params.offsetX) || 0);
+    shiftY = Math.round(Number(translateMod.params.offsetY) || 0);
+  }
+  const gridH = pixels.length;
+  const gridW = pixels[0]?.length || 0;
+  const originX = centerX - modOffsetX;
+  const originY = centerY - modOffsetY;
+  ctx.imageSmoothingEnabled = false;
+  const spriteCanvas = pixelsToCanvas(pixels, gridW, gridH);
+  if (spriteCanvas) ctx.drawImage(spriteCanvas, originX + shiftX, originY + shiftY);
+  ctx.strokeStyle = 'rgba(100, 200, 255, 0.3)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(centerX - 0.5, centerY - 0.5, sprite.width + 1, sprite.height + 1);
+  ctx.strokeStyle = 'rgba(255, 200, 50, 0.5)';
+  ctx.lineWidth = 1;
+  const pivotScreenX = centerX + (sprite.plug ? subToPx(sprite.plug.x) : sprite.width / 2);
+  const pivotScreenY = centerY + (sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2);
+  ctx.beginPath();
+  ctx.moveTo(pivotScreenX - 4, pivotScreenY);
+  ctx.lineTo(pivotScreenX + 4, pivotScreenY);
+  ctx.moveTo(pivotScreenX, pivotScreenY - 4);
+  ctx.lineTo(pivotScreenX, pivotScreenY + 4);
+  ctx.stroke();
+}

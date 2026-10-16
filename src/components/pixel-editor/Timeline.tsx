@@ -73,7 +73,6 @@ export default function Timeline() {
   const activeAnimationClipId = useProjectStore((s) => s.activeAnimationClipId);
   const animationClips = useProjectStore((s) => s.animationClips);
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
-  const syncPuppetToUnified = useProjectStore((s) => s.syncPuppetToUnified);
   const addNodeKeyframe = useProjectStore((s) => s.addNodeKeyframe);
   const removeNodeKeyframe = useProjectStore((s) => s.removeNodeKeyframe);
   const updateNodeKeyframe = useProjectStore((s) => s.updateNodeKeyframe);

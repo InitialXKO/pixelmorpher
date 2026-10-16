@@ -837,17 +837,6 @@ export interface ProceduralAnimationConfig {
 
 // ---- Migration Types ----
 
-/**
- * Old-to-new migration result.
- * Tracks which old entities map to which new entities.
- */
-export interface MigrationMap {
-  partToNode: Record<string, string>;      // old Part.id → new Node.id
-  puppetNodeToNode: Record<string, string>; // old PuppetNode.id → new Node.id
-  skeletonToCharacter: Record<string, string>; // old PuppetSkeleton.id → new Character.id
-  oldClipToNewClip: Record<string, string>;   // old AnimationClip.id → new UnifiedAnimationClip.id
-}
-
 // ============================================================
 // Default Value Factories
 // ============================================================

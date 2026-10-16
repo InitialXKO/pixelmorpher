@@ -23,7 +23,6 @@ import type { DirectionIndex } from '@/lib/unified-types';
 // ---- Main Component ----
 
 export default function PuppetPanel() {
-  const syncPuppetToUnified = useProjectStore((s) => s.syncPuppetToUnified);
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
   const animationClips = useProjectStore((s) => s.animationClips);
   const sprites = useProjectStore((s) => s.sprites);
@@ -44,7 +43,7 @@ export default function PuppetPanel() {
   const [spineImportOpen, setSpineImportOpen] = useState(false);
 
   const selectedCharacter = activePuppetSkeletonId
-    ? (unifiedCharacters[activePuppetSkeletonId] ?? syncPuppetToUnified(activePuppetSkeletonId))
+    ? (unifiedCharacters[activePuppetSkeletonId] ?? null)
     : null;
   const selectedNode = selectedNodeId ? (selectedCharacter?.nodes[selectedNodeId] ?? null) : null;
 

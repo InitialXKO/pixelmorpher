@@ -15,7 +15,7 @@ import {
   createEmptyPixelGrid,
 } from '../types';
 import { markPartDirty, invalidateAnimModifierCache } from '../engine';
-import { invalidateUnifiedPipelineCache } from '../unified-pipeline-bridge';
+import { invalidateUnifiedPipelineCache } from '../unified-render';
 import { rgbaToHexOrNull } from '@/lib/engine/utils';
 
 export type SpriteSlice = {

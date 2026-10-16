@@ -34,7 +34,6 @@ import { Separator } from '@/components/ui/separator';
 export default function PuppetAssetPanel() {
   // ---- New Character model ----
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
-  const syncPuppetToUnified = useProjectStore((s) => s.syncPuppetToUnified);
   const removeUnifiedCharacter = useProjectStore((s) => s.removeUnifiedCharacter);
   const addUnifiedNode = useProjectStore((s) => s.addUnifiedNode);
   const removeUnifiedNode = useProjectStore((s) => s.removeUnifiedNode);

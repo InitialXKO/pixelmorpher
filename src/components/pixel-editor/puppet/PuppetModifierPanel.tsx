@@ -81,7 +81,6 @@ const PUPPET_MODIFIER_TYPES: AnimationModifierType[] = [
 ];
 
 export default function PuppetModifierPanel() {
-  const syncPuppetToUnified = useProjectStore((s) => s.syncPuppetToUnified);
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
   const updateUnifiedNode = useProjectStore((s) => s.updateUnifiedNode);
   const addUnifiedNodeModifier = useProjectStore((s) => s.addUnifiedNodeModifier);
@@ -97,13 +96,13 @@ export default function PuppetModifierPanel() {
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
 
   const character = useMemo(
-    () => (activePuppetSkeletonId ? (unifiedCharacters[activePuppetSkeletonId] ?? syncPuppetToUnified(activePuppetSkeletonId)) : null),
-    [unifiedCharacters, activePuppetSkeletonId, syncPuppetToUnified]
+    () => (activePuppetSkeletonId ? unifiedCharacters[activePuppetSkeletonId] ?? null : null),
+    [unifiedCharacters, activePuppetSkeletonId]
   );
   // For BlueprintTemplateLoader (migrated to Character model)
   const unifiedCharacterForTemplates = useMemo(
-    () => (activePuppetSkeletonId ? (unifiedCharacters[activePuppetSkeletonId] ?? syncPuppetToUnified(activePuppetSkeletonId)) : null),
-    [unifiedCharacters, activePuppetSkeletonId, syncPuppetToUnified]
+    () => (activePuppetSkeletonId ? unifiedCharacters[activePuppetSkeletonId] ?? null : null),
+    [unifiedCharacters, activePuppetSkeletonId]
   );
   const node = useMemo(
     () => (character && selectedNodeId ? character.nodes[selectedNodeId] ?? null : null),

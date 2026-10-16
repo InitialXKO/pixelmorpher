@@ -13,7 +13,6 @@ import type {
 } from '../unified-types';
 import { createDefaultNode, createDefaultCostumeSet, createDefaultCostumePiece } from '../unified-types';
 import type { DirectionIndex } from '../unified-types';
-import { LiveAdapter } from '../migration-adapter';
 
 export type CharacterSlice = {
   // ---- Character CRUD ----
@@ -21,8 +20,6 @@ export type CharacterSlice = {
   addUnifiedCharacter: (name: string, opts?: { skipPlaceholderRoot?: boolean }) => Character;
   removeUnifiedCharacter: (id: string) => void;
   updateUnifiedCharacter: (id: string, updates: Partial<Character>) => void;
-  /** Sync Puppet data to unified Character (via LiveAdapter). Call when puppet data changes. */
-  syncPuppetToUnified: (skeletonId: string) => Character | null;
   /** Set direction for all nodes (updates transform.variantIndex). variantIndex: 0-7 direction index. */
   setUnifiedDirection: (characterId: string, variantIndex: number) => void;
   /** Currently selected node ID (unified Node ID) */
@@ -113,25 +110,6 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
         [id]: { ...s.unifiedCharacters[id]!, ...updates, updatedAt: Date.now() },
       },
     }));
-  },
-
-  syncPuppetToUnified: (skeletonId) => {
-    const s = get() as any;
-    const skeleton = s.puppetSkeletons?.find((sk: any) => sk.id === skeletonId);
-    if (!skeleton) return null;
-    const adapter = new LiveAdapter();
-    const puppetChar = s.puppetCharacters?.find((c: any) => c.puppetSkeletonId === skeletonId);
-    const character = adapter.getCharacter(
-      skeleton,
-      puppetChar ? [puppetChar] : [],
-      s.parts ?? [],
-      s.puppetNodeKeyframes ?? [],
-      puppetChar?.costumeSets ?? []
-    );
-    set((state: any) => ({
-      unifiedCharacters: { ...state.unifiedCharacters, [skeletonId]: character },
-    }));
-    return character;
   },
 
   setUnifiedDirection: (characterId, variantIndex) => {

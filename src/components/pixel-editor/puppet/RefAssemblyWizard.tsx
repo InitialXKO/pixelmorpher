@@ -217,7 +217,6 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
 
   // 获取当前角色及其骨架节点（按 zIndex 排序，从后往前）
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
-  const syncPuppetToUnified = useProjectStore((s) => s.syncPuppetToUnified);
   const updateUnifiedNode = useProjectStore((s) => s.updateUnifiedNode);
   const updateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
   const addUnifiedNode = useProjectStore((s) => s.addUnifiedNode);
