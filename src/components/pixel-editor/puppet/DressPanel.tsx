@@ -307,7 +307,7 @@ function DirectionSpriteEditor({
       </div>
 
       {/* 精灵选择器 */}
-      {pickerDir && (
+      {pickerDir !== null && (
         <div className="mt-2 bg-[#111128] rounded border border-[#1e1e3a] p-1.5 max-h-40 overflow-y-auto">
           <div className="text-[9px] text-gray-600 mb-1">
             选择精灵 → {DIRECTIONS.find((d) => d.value === pickerDir)?.label}
