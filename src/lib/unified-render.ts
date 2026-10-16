@@ -479,9 +479,10 @@ function updateChainPositions(
       subToPx(currT.worldY) - subToPx(prevT.worldY),
     );
 
+    // 骨沿局部 Y 轴：方向为 (-sin θ, cos θ)
     const rad = (angles[i - 1] * Math.PI) / 180;
-    const newX = subToPx(prevT.worldX) + Math.cos(rad) * origDist;
-    const newY = subToPx(prevT.worldY) + Math.sin(rad) * origDist;
+    const newX = subToPx(prevT.worldX) + -Math.sin(rad) * origDist;
+    const newY = subToPx(prevT.worldY) + Math.cos(rad) * origDist;
 
     currT.worldX = newX * 16 as SubPixel;
     currT.worldY = newY * 16 as SubPixel;
@@ -527,9 +528,10 @@ function recomputeChainFromParent(
 
     // Update position (except for root, which keeps its FK position)
     if (i > 0) {
+      // 骨沿局部 Y 轴
       const rad = (angles[i - 1] * Math.PI) / 180;
-      px = px + Math.cos(rad) * boneLen;
-      py = py + Math.sin(rad) * boneLen;
+      px = px + -Math.sin(rad) * boneLen;
+      py = py + Math.cos(rad) * boneLen;
       t.worldX = (px * 16) as SubPixel;
       t.worldY = (py * 16) as SubPixel;
     } else {
