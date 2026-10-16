@@ -226,7 +226,7 @@ export function computeWorldTransforms(
   computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms);
 
   // Apply IK chains (override FK angles)
-  applyIKChains(character, transforms);
+  applyIKChains(character, transforms, canvasWidth, canvasHeight);
 
   return transforms;
 }
@@ -240,6 +240,8 @@ export function computeWorldTransforms(
 function applyIKChains(
   character: Character,
   transforms: Map<string, WorldTransform>,
+  canvasWidth: number,
+  canvasHeight: number,
 ): void {
   // If baked IK blueprint exists, evaluate it instead of generating from chains.
   // The baked blueprint is editable in the blueprint editor.
@@ -252,7 +254,7 @@ function applyIKChains(
   if (!chains || chains.length === 0) return;
 
   for (const chain of chains) {
-    applyIKChain(character, chain, transforms);
+    applyIKChain(character, chain, transforms, canvasWidth, canvasHeight);
   }
 }
 
@@ -306,6 +308,8 @@ function applyIKChain(
   character: Character,
   chain: IKChain,
   transforms: Map<string, WorldTransform>,
+  canvasWidth: number,
+  canvasHeight: number,
 ): void {
   // Build joint chain: root -> ... -> end
   const jointIds: string[] = [];
@@ -373,14 +377,15 @@ function applyIKChain(
   // 目标点：优先用 targetBlueprint 动态求值（步态/正弦等修改器驱动），
   // 没有则用静态 chain.target
   // targetBlueprint 的输出节点应为 transform 类型，用 translateX/translateY 做目标坐标
+  // 蓝图里是局部坐标（相对画布中心），转世界坐标（+画布中心偏移）
   let targetX = chain.target.x;
   let targetY = chain.target.y;
   if (chain.targetBlueprint) {
     try {
       const tbCtx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: {} };
       const tbResult = evaluateBlueprint(chain.targetBlueprint, tbCtx);
-      if (Number.isFinite(tbResult.translateX)) targetX = tbResult.translateX;
-      if (Number.isFinite(tbResult.translateY)) targetY = tbResult.translateY;
+      if (Number.isFinite(tbResult.translateX)) targetX = tbResult.translateX + canvasWidth / 2;
+      if (Number.isFinite(tbResult.translateY)) targetY = tbResult.translateY + canvasHeight / 2;
     } catch {
       // 蓝图求值失败时回退到静态目标
     }
