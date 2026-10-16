@@ -565,17 +565,12 @@ function computeChildTransforms(
         const rotatedChildX_px = childOffsetX_px * cosA - childOffsetY_px * sinA;
         const rotatedChildY_px = childOffsetX_px * sinA + childOffsetY_px * cosA;
 
-        // The child's plug (attachment point) should be at the socket position.
-        // Subtract the plug offset to align the child's plug with the socket.
-        // This matches the old pipeline's:
-        //   childOffsetX - childNode.plug.localX
-        const plugOffset = childNode.attachment.plug ?? { x: 0, y: 0 };
-
+        // 与 overlay 对齐：不减 plug（overlay 的节点标签位置用户确认正确）
         childWorldX = parentWorld.worldX
-          + rotatedSocketX - plugOffset.x
+          + rotatedSocketX
           + pxToSub(rotatedChildX_px);
         childWorldY = parentWorld.worldY
-          + rotatedSocketY - plugOffset.y
+          + rotatedSocketY
           + pxToSub(rotatedChildY_px);
       } else {
         childWorldX = parentWorld.worldX + childInterpolated.x;
