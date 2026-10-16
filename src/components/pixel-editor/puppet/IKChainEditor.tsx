@@ -66,7 +66,7 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     if (joints.length >= 1) {
       const last = joints[joints.length - 1];
       tipX = last.x; tipY = last.y;
-      // 尖端方向用末关节自己的世界角度（精灵朝向），不是骨方向
+      // 尖端方向用末关节自己的世界角度，沿精灵局部 Y 轴（骨方向）
       const rad = (last.angle * Math.PI) / 180;
       // 默认尖端长取最后一段骨长
       if (joints.length >= 2) {
@@ -74,8 +74,8 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
         tipLength = Math.hypot(last.x - prev.x, last.y - prev.y);
       }
       if (tipLength > 1e-6) {
-        tipX = last.x + Math.cos(rad) * tipLength;
-        tipY = last.y + Math.sin(rad) * tipLength;
+        tipX = last.x + -Math.sin(rad) * tipLength;
+        tipY = last.y + Math.cos(rad) * tipLength;
       }
     }
     return { tipX, tipY, tipLength };

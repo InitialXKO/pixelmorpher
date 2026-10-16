@@ -337,15 +337,15 @@ function applyIKChain(
 
   // 末端尖端：IK 控制的是末节尖端，不是关节轴心
   // 在链末加虚拟尖端关节，长度为 tipLength（默认取最后一段骨长）
-  // 尖端方向用末关节自己的世界角度（精灵朝向）
+  // 尖端方向用末关节自己的世界角度，沿精灵局部 Y 轴（骨方向）
   const tipLength = chain.tipLength ?? (lengths.length > 0 ? lengths[lengths.length - 1] : 0);
   const realJointCount = jointIds.length;
   if (tipLength > 1e-6 && joints.length >= 1) {
     const lastJ = joints[joints.length - 1];
     const rad = (lastJ.angle * Math.PI) / 180;
     joints.push({
-      x: lastJ.x + Math.cos(rad) * tipLength,
-      y: lastJ.y + Math.sin(rad) * tipLength,
+      x: lastJ.x + -Math.sin(rad) * tipLength,
+      y: lastJ.y + Math.cos(rad) * tipLength,
       angle: lastJ.angle,
     });
     lengths.push(tipLength);
