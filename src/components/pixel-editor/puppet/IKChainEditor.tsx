@@ -100,6 +100,22 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     updateUnifiedCharacter(character.id, patch);
   };
 
+  const handleTargetChange = (id: string, axis: 'x' | 'y', value: number) => {
+    if (!character || !Number.isFinite(value)) return;
+    updateUnifiedCharacter(character.id, {
+      ikChains: chains.map((c) =>
+        c.id === id ? { ...c, target: { ...c.target, [axis]: value } } : c,
+      ),
+    });
+  };
+
+  const handleTipLengthChange = (id: string, value: number) => {
+    if (!character || !Number.isFinite(value) || value < 0) return;
+    updateUnifiedCharacter(character.id, {
+      ikChains: chains.map((c) => (c.id === id ? { ...c, tipLength: value } : c)),
+    });
+  };
+
   if (!character) return null;
 
   return (
@@ -110,25 +126,58 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
           {chains.map((c) => (
             <div
               key={c.id}
-              className="flex items-center gap-1.5 px-1.5 py-1 rounded bg-black/30 text-[10px]"
+              className="px-1.5 py-1 rounded bg-black/30 text-[10px] space-y-1"
             >
-              <span className="flex-1 truncate text-gray-300" title={c.name}>
-                {c.name} <span className="text-gray-600">({c.solver})</span>
-              </span>
-              <button
-                onClick={() => handleToggle(c.id)}
-                className={`p-0.5 rounded ${c.enabled ? 'text-green-400' : 'text-gray-600'}`}
-                title={c.enabled ? '禁用' : '启用'}
-              >
-                <Power className="size-3" />
-              </button>
-              <button
-                onClick={() => handleDelete(c.id)}
-                className="p-0.5 rounded text-gray-600 hover:text-red-400"
-                title="删除"
-              >
-                <Trash2 className="size-3" />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <span className="flex-1 truncate text-gray-300" title={c.name}>
+                  {c.name} <span className="text-gray-600">({c.solver})</span>
+                </span>
+                <button
+                  onClick={() => handleToggle(c.id)}
+                  className={`p-0.5 rounded ${c.enabled ? 'text-green-400' : 'text-gray-600'}`}
+                  title={c.enabled ? '禁用' : '启用'}
+                >
+                  <Power className="size-3" />
+                </button>
+                <button
+                  onClick={() => handleDelete(c.id)}
+                  className="p-0.5 rounded text-gray-600 hover:text-red-400"
+                  title="删除"
+                >
+                  <Trash2 className="size-3" />
+                </button>
+              </div>
+              {/* IK 目标点坐标 */}
+              <div className="flex items-center gap-1 text-gray-500">
+                <span>目标</span>
+                <label className="flex items-center gap-0.5">
+                  X
+                  <input
+                    type="number"
+                    value={Math.round(c.target.x)}
+                    onChange={(e) => handleTargetChange(c.id, 'x', Number(e.target.value))}
+                    className="w-14 px-1 py-0.5 bg-black/50 rounded text-gray-300 text-[10px]"
+                  />
+                </label>
+                <label className="flex items-center gap-0.5">
+                  Y
+                  <input
+                    type="number"
+                    value={Math.round(c.target.y)}
+                    onChange={(e) => handleTargetChange(c.id, 'y', Number(e.target.value))}
+                    className="w-14 px-1 py-0.5 bg-black/50 rounded text-gray-300 text-[10px]"
+                  />
+                </label>
+                <label className="flex items-center gap-0.5" title="末节尖端到轴心的距离">
+                  尖端
+                  <input
+                    type="number"
+                    value={Math.round(c.tipLength ?? 0)}
+                    onChange={(e) => handleTipLengthChange(c.id, Number(e.target.value))}
+                    className="w-12 px-1 py-0.5 bg-black/50 rounded text-gray-300 text-[10px]"
+                  />
+                </label>
+              </div>
             </div>
           ))}
         </div>
