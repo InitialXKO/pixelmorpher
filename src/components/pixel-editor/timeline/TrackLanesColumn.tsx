@@ -1,17 +1,12 @@
 'use client';
 
-import React, { useCallback, useRef, useMemo } from 'react';
-import type { Track, EffectTrack, CanvasModifierTrack, Keyframe } from '@/lib/types';
-import type { Sprite } from '@/lib/unified-types';
+import React, { useRef } from 'react';
+import type { EffectTrack, CanvasModifierTrack } from '@/lib/types';
 import type { Node } from '@/lib/unified-types';
 import type { NodeKeyframe } from '@/lib/unified-types';
-import { ANIMATION_MODIFIER_TYPES } from '@/lib/types';
 import type { SnapConfig, TrackTimelineDisplay } from '@/lib/v15-types';
-import { getFrameWidth, TRACK_HEIGHT, RULER_HEIGHT, TRACK_COLOR_HUES } from './constants';
+import { getFrameWidth, TRACK_HEIGHT, RULER_HEIGHT } from './constants';
 import FrameRuler from './FrameRuler';
-import TrackLane from './TrackLane';
-import { AnimModifierParamDriverSubTrackLane, ParamDriverSubTrackLane } from './ParamDriverSubTrackLane';
-import KeyframeModifierSubTrackLane from './KeyframeModifierSubTrackLane';
 import EffectTrackLane from './EffectTrackLane';
 import CanvasModifierTrackLane from './CanvasModifierTrackLane';
 import NodeTrackLane from './NodeTrackLane';
@@ -19,14 +14,10 @@ import { useProjectStore } from '@/lib/store';
 
 // ---- Right: Ruler + Keyframe Lanes (scrollable) ----
 interface TrackLanesColumnProps {
-  tracks: Track[];
-  sprites: Sprite[];
   effectTracks: EffectTrack[];
   canvasModifierTracks: CanvasModifierTrack[];
-  getKeyframesForPart: (partId: string) => Keyframe[];
   totalFrames: number;
   currentFrame: number;
-  selectedKeyframeId: string | null;
   selectedEffectTrackId: string | null;
   visibleRange: { startIndex: number; endIndex: number };
   rowOffsets: number[];
@@ -35,25 +26,15 @@ interface TrackLanesColumnProps {
   timelineWidth: number;
   playheadX: number;
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
+  rulerScrollRef: React.RefObject<HTMLDivElement | null>;
+  rulerHighlightRef: React.RefObject<SVGRectElement | null>;
   playheadLineRef: React.RefObject<HTMLDivElement | null>;
   onScroll: () => void;
   onRulerClick: (frame: number) => void;
-  onSelectKeyframe: (id: string) => void;
   onSelectEffectTrack: (id: string | null) => void;
-  onAddKeyframe: (partId: string, frame: number) => void;
-  onDeleteKeyframe: (id: string) => void;
-  onDuplicateKeyframe: (id: string) => void;
-  onMoveKeyframeToFrame: (id: string) => void;
-  onUpdateKeyframe: (id: string, updates: Partial<Keyframe>) => void;
   onAddEffectKeyframe: (trackId: string, frame: number) => void;
   onDeleteEffectKeyframe: (trackId: string, keyframeId: string) => void;
   onEditEffectKeyframe: (trackId: string, keyframeId: string) => void;
-  onEditAnimModifierParams: (partId: string, modifierId: string) => void;
-  onEditKfModifierParams: (keyframeId: string, modifierId: string) => void;
-  onEditParamKeyframe: (keyframeId: string, modifierId: string, paramKfId: string) => void;
-  onAddModifierParamKeyframe: (keyframeId: string, modifierId: string, frame: number) => void;
-  onEditParamDriver: (keyframeId: string, modifierId: string, driverId: string) => void;
-  onEditAnimParamDriver: (partId: string, modifierId: string, driverId: string) => void;
   onPlayheadMouseDown: (e: React.MouseEvent) => void;
   isPuppetClip: boolean;
   nodeList: Node[];
@@ -74,15 +55,12 @@ interface TrackLanesColumnProps {
 }
 
 export default function TrackLanesColumn({
-  tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart,
-  totalFrames, currentFrame, selectedKeyframeId, selectedEffectTrackId,
+  effectTracks, canvasModifierTracks,
+  totalFrames, currentFrame, selectedEffectTrackId,
   visibleRange, rowOffsets, rowHeights, totalHeight, timelineWidth, playheadX,
-  scrollContainerRef, playheadLineRef,
-  onScroll, onRulerClick, onSelectKeyframe, onSelectEffectTrack,
-  onAddKeyframe, onDeleteKeyframe, onDuplicateKeyframe, onMoveKeyframeToFrame, onUpdateKeyframe,
+  scrollContainerRef, rulerScrollRef, rulerHighlightRef, playheadLineRef,
+  onScroll, onRulerClick, onSelectEffectTrack,
   onAddEffectKeyframe, onDeleteEffectKeyframe, onEditEffectKeyframe,
-  onEditAnimModifierParams, onEditKfModifierParams, onEditParamKeyframe,
-  onAddModifierParamKeyframe, onEditParamDriver, onEditAnimParamDriver,
   onPlayheadMouseDown,
   isPuppetClip, nodeList, nodeKeyframes, selectedNodeKeyframeId,
   onSelectNodeKeyframe, onAddNodeKeyframe, onDeleteNodeKeyframe,
@@ -96,21 +74,11 @@ export default function TrackLanesColumn({
   const fw = propFrameWidth ?? getFrameWidth(timelineZoom);
   const rulerWidth = totalFrames * fw;
 
-  // Get track color hue based on index
-  const getTrackColor = useCallback((trackIndex: number, trackId: string): string => {
-    const display = trackTimelineDisplays?.[trackId];
-    if (display && display.colorHue >= 0) {
-      return `hsl(${display.colorHue}, 50%, 45%)`;
-    }
-    const hue = TRACK_COLOR_HUES[trackIndex % TRACK_COLOR_HUES.length];
-    return `hsl(${hue}, 50%, 45%)`;
-  }, [trackTimelineDisplays]);
-
   return (
     <div className="flex-1 overflow-hidden flex flex-col relative">
       {/* Ruler row (fixed) */}
-      <div className="shrink-0 overflow-hidden border-b border-[#1e1e3a]" style={{ height: RULER_HEIGHT }}>
-        <FrameRuler totalFrames={totalFrames} currentFrame={currentFrame} onRulerClick={onRulerClick} timelineZoom={timelineZoom} />
+      <div ref={rulerScrollRef} className="shrink-0 overflow-hidden border-b border-[#1e1e3a]" style={{ height: RULER_HEIGHT }}>
+        <FrameRuler totalFrames={totalFrames} currentFrame={currentFrame} onRulerClick={onRulerClick} timelineZoom={timelineZoom} highlightRef={rulerHighlightRef} />
       </div>
 
       {/* Track lanes (scrollable) */}
@@ -119,10 +87,10 @@ export default function TrackLanesColumn({
         className="flex-1 overflow-auto relative"
         style={{ scrollbarWidth: 'thin', scrollbarColor: '#3a3a5a #0d0d1f' }}
         onScroll={onScroll}
-        onClick={() => { onSelectKeyframe(''); onSelectEffectTrack(null); }}
+        onClick={() => { onSelectEffectTrack(null); }}
       >
         <div style={{ width: rulerWidth, minWidth: rulerWidth, height: totalHeight, position: 'relative' }}>
-          {tracks.length === 0 && effectTracks.length === 0 && (
+          {effectTracks.length === 0 && nodeList.length === 0 && (
             <div className="flex items-center justify-center h-32 text-xs text-gray-600">
               Double-click on a track lane to add a keyframe
             </div>
@@ -131,67 +99,16 @@ export default function TrackLanesColumn({
             <div style={{ height: rowOffsets[visibleRange.startIndex] }} />
           )}
 
-          {/* Legacy Part tracks: skipped in puppet-only mode (isPuppetClip) */}
-          {!isPuppetClip && tracks.map((track, idx) => {
-            if (idx < visibleRange.startIndex || idx > visibleRange.endIndex) return null;
-            const trackKeyframes = getKeyframesForPart(track.partId);
-            const part = sprites.find((p) => p.id === track.partId);
-            const animModifiers: import('@/lib/types').PartAnimationModifier[] = []; // Part 无 animationModifiers
-            const kfModifierTypes = [...new Set(
-              trackKeyframes.flatMap((kf) => kf.modifiers.map((m) => m.type))
-            )].filter((t) => !ANIMATION_MODIFIER_TYPES.includes(t));
-
-            const trackColor = getTrackColor(idx, track.id);
-            const display = trackTimelineDisplays?.[track.id];
-            const showThumbnails = display?.showThumbnails ?? true;
-            const effectiveStep = getEffectiveFrameStep ? getEffectiveFrameStep(track.partId, currentFrame) : 1;
-
-            return (
-              <React.Fragment key={track.id}>
-                <TrackLane
-                  track={track} keyframes={trackKeyframes} selectedKeyframeId={selectedKeyframeId}
-                  totalFrames={totalFrames} onSelectKeyframe={onSelectKeyframe} onAddKeyframe={onAddKeyframe}
-                  onDeleteKeyframe={onDeleteKeyframe} onDuplicateKeyframe={onDuplicateKeyframe}
-                  onMoveKeyframeToFrame={onMoveKeyframeToFrame} onUpdateKeyframe={onUpdateKeyframe}
-                  // V15 props
-                  frameWidth={fw}
-                  trackColor={trackColor}
-                  snapConfig={snapConfig}
-                  snapFrame={snapFrame}
-                  showThumbnail={showThumbnails}
-                  timelineThumbnailQuality={timelineThumbnailQuality}
-                  part={part}
-                  frameStep={effectiveStep}
-                />
-                {track.expanded && kfModifierTypes.map((modType) => (
-                  <KeyframeModifierSubTrackLane
-                    key={`kf-mod-${modType}`} modifierType={modType} partKeyframes={trackKeyframes}
-                    totalFrames={totalFrames} onAddParamKeyframe={onAddModifierParamKeyframe}
-                    onEditModifierParams={onEditKfModifierParams} onEditParamKeyframe={onEditParamKeyframe}
-                    frameWidth={fw}
-                  />
-                ))}
-                {track.expanded && kfModifierTypes.map((modType) => (
-                  <ParamDriverSubTrackLane
-                    key={`pd-${modType}`} modifierType={modType} partKeyframes={trackKeyframes}
-                    totalFrames={totalFrames} onEditParamDriver={onEditParamDriver}
-                    frameWidth={fw}
-                  />
-                ))}
-              </React.Fragment>
-            );
-          })}
-
           {/* Effect tracks separator */}
           {effectTracks.length > 0 && (() => {
-            const sepIdx = tracks.length;
+            const sepIdx = 0;
             if (sepIdx < visibleRange.startIndex || sepIdx > visibleRange.endIndex) return null;
             return <div className="border-b border-[#2a2a4a]" style={{ height: 20, background: '#0c0c1e' }} />;
           })()}
 
           {/* Effect track lanes */}
           {effectTracks.map((effectTrack, etIdx) => {
-            const rowIdx = tracks.length + (effectTracks.length > 0 ? 1 : 0) + etIdx;
+            const rowIdx = (effectTracks.length > 0 ? 1 : 0) + etIdx;
             if (rowIdx < visibleRange.startIndex || rowIdx > visibleRange.endIndex) return null;
             return (
               <EffectTrackLane
@@ -207,21 +124,21 @@ export default function TrackLanesColumn({
           {/* Effect add spacer */}
           {(() => {
             if (effectTracks.length === 0) return null;
-            const addIdx = tracks.length + 1 + effectTracks.length;
+            const addIdx = 1 + effectTracks.length;
             if (addIdx < visibleRange.startIndex || addIdx > visibleRange.endIndex) return null;
             return <div style={{ height: TRACK_HEIGHT + 4, background: '#0f0f24' }} />;
           })()}
 
           {/* Canvas modifier separator */}
           {canvasModifierTracks.length > 0 && (() => {
-            let cmSepIdx = tracks.length + (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
+            const cmSepIdx = (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
             if (cmSepIdx < visibleRange.startIndex || cmSepIdx > visibleRange.endIndex) return null;
             return <div className="border-b border-[#2a2a4a]" style={{ height: 20, background: '#0c0c1e' }} />;
           })()}
 
           {/* Canvas modifier track lanes */}
           {canvasModifierTracks.map((cmTrack, cmIdx) => {
-            let cmRowIdx = tracks.length + (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
+            let cmRowIdx = (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
             if (canvasModifierTracks.length > 0) cmRowIdx += 1 + cmIdx;
             if (cmRowIdx < visibleRange.startIndex || cmRowIdx > visibleRange.endIndex) return null;
             return <CanvasModifierTrackLane key={cmTrack.id} track={cmTrack} totalFrames={totalFrames} currentFrame={currentFrame} frameWidth={fw} />;
@@ -230,31 +147,41 @@ export default function TrackLanesColumn({
           {/* Canvas modifier add spacer */}
           {(() => {
             if (canvasModifierTracks.length === 0) return null;
-            let cmAddIdx = tracks.length + (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
+            let cmAddIdx = (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
             if (canvasModifierTracks.length > 0) cmAddIdx += 1 + canvasModifierTracks.length;
             if (cmAddIdx < visibleRange.startIndex || cmAddIdx > visibleRange.endIndex) return null;
             return <div style={{ height: TRACK_HEIGHT + 4, background: '#0d0d22' }} />;
           })()}
 
           {/* Puppet Node Track Lanes */}
-          {isPuppetClip && nodeList.length > 0 && (
-            <>
-              <div className="border-b border-[#2a2a4a]" style={{ height: 20, background: '#0c0c1e' }} />
-              {nodeList.map((node) => {
-                const nodeKfs = nodeKeyframes.filter((kf) => kf.nodeId === node.id);
-                return (
-                  <NodeTrackLane
-                    key={`node-lane-${node.id}`} node={node} nodeKeyframes={nodeKfs}
-                    selectedNodeKeyframeId={selectedNodeKeyframeId} totalFrames={totalFrames}
-                    onSelectNodeKeyframe={onSelectNodeKeyframe} onAddNodeKeyframe={onAddNodeKeyframe}
-                    onDeleteNodeKeyframe={onDeleteNodeKeyframe} onMoveNodeKeyframeToFrame={onMoveNodeKeyframeToFrame}
-                    onUpdateNodeKeyframe={onUpdateNodeKeyframe}
-                    frameWidth={fw}
-                  />
-                );
-              })}
-            </>
-          )}
+          {isPuppetClip && nodeList.length > 0 && (() => {
+            // 计算 puppet 分隔符的行索引（effect + canvasModifier 之后）
+            let puppetSepIdx = (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
+            if (canvasModifierTracks.length > 0) puppetSepIdx += 1 + canvasModifierTracks.length + 1;
+            if (puppetSepIdx < visibleRange.startIndex || puppetSepIdx > visibleRange.endIndex) return null;
+            return (
+              <>
+                <div className="border-b border-[#2a2a4a]" style={{ height: 20, background: '#0c0c1e' }} />
+                {nodeList.map((node, nodeIdx) => {
+                  const rowIdx = puppetSepIdx + 1 + nodeIdx;
+                  if (rowIdx < visibleRange.startIndex || rowIdx > visibleRange.endIndex) return null;
+                  const nodeKfs = nodeKeyframes.filter((kf) => kf.nodeId === node.id);
+                  return (
+                    <NodeTrackLane
+                      key={`node-lane-${node.id}`} node={node} nodeKeyframes={nodeKfs}
+                      selectedNodeKeyframeId={selectedNodeKeyframeId} totalFrames={totalFrames}
+                      onSelectNodeKeyframe={onSelectNodeKeyframe} onAddNodeKeyframe={onAddNodeKeyframe}
+                      onDeleteNodeKeyframe={onDeleteNodeKeyframe} onMoveNodeKeyframeToFrame={onMoveNodeKeyframeToFrame}
+                      onUpdateNodeKeyframe={onUpdateNodeKeyframe}
+                      frameWidth={fw}
+                      snapConfig={snapConfig}
+                      snapFrame={snapFrame}
+                    />
+                  );
+                })}
+              </>
+            );
+          })()}
 
           {/* Bottom padding */}
           {visibleRange.endIndex < rowOffsets.length - 1 && (

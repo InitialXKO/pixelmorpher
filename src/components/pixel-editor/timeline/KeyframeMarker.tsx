@@ -8,305 +8,17 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
-import { Plus, Trash2, SkipForward } from 'lucide-react';
-import type { Keyframe } from '@/lib/types';
+import { Trash2, SkipForward } from 'lucide-react';
 import type { NodeKeyframe } from '@/lib/unified-types';
-import type { SnapConfig } from '@/lib/v15-types';
 import {
   DEFAULT_FRAME_WIDTH,
   TRACK_HEIGHT,
-  KEYFRAME_SIZE,
   EFFECT_KEYFRAME_SIZE,
   PUPPET_KEYFRAME_SIZE,
   PUPPET_COLOR,
-  SNAP_PIXEL_THRESHOLD,
 } from './constants';
 
-/** Compute smart snap: snap to nearest snap target */
-function computeSnapFrame(
-  rawFrame: number,
-  totalFrames: number,
-  excludeKeyframeId: string | undefined,
-  siblingKeyframes: { id: string; frame: number }[],
-  snapConfig?: SnapConfig,
-  fw?: number,
-): number {
-  if (!snapConfig?.enabled) return rawFrame;
 
-  const threshold = (snapConfig.threshold ?? SNAP_PIXEL_THRESHOLD) / (fw ?? DEFAULT_FRAME_WIDTH);
-  let bestFrame = rawFrame;
-  let bestDist = threshold;
-
-  // Snap to frame markers (every 5th frame)
-  if (snapConfig.snapToFrameMarkers) {
-    for (let f = 0; f < totalFrames; f += 5) {
-      const dist = Math.abs(rawFrame - f);
-      if (dist < bestDist) { bestDist = dist; bestFrame = f; }
-    }
-    // Also snap to frame 0 and last frame
-    const dist0 = Math.abs(rawFrame - 0);
-    if (dist0 < bestDist) { bestDist = dist0; bestFrame = 0; }
-    const distEnd = Math.abs(rawFrame - (totalFrames - 1));
-    if (distEnd < bestDist) { bestDist = distEnd; bestFrame = totalFrames - 1; }
-  }
-
-  // Snap to other keyframes
-  if (snapConfig.snapToKeyframes) {
-    for (const kf of siblingKeyframes) {
-      if (excludeKeyframeId && kf.id === excludeKeyframeId) continue;
-      const dist = Math.abs(rawFrame - kf.frame);
-      if (dist < bestDist) { bestDist = dist; bestFrame = kf.frame; }
-    }
-  }
-
-  // Snap to segment boundaries
-  if (snapConfig.snapToSegmentBoundaries) {
-    const mid = Math.floor(totalFrames / 2);
-    const boundaries = [0, mid, totalFrames - 1];
-    for (const f of boundaries) {
-      const dist = Math.abs(rawFrame - f);
-      if (dist < bestDist) { bestDist = dist; bestFrame = f; }
-    }
-  }
-
-  return bestFrame;
-}
-
-// ---- Keyframe Marker (HTML-based for ContextMenu support) ----
-const KeyframeMarker = React.memo(function KeyframeMarker({
-  keyframe,
-  isSelected,
-  onSelect,
-  onDelete,
-  onDuplicate,
-  onMoveToFrame,
-  totalFrames,
-  siblingKeyframes,
-  onUpdateKeyframe,
-  // V15: Dynamic frame width, track color, smart snap
-  frameWidth,
-  trackColor,
-  snapConfig,
-  snapFrame,
-}: {
-  keyframe: Keyframe;
-  isSelected: boolean;
-  onSelect: () => void;
-  onDelete: () => void;
-  onDuplicate: () => void;
-  onMoveToFrame: () => void;
-  totalFrames: number;
-  siblingKeyframes: Keyframe[];
-  onUpdateKeyframe: (id: string, updates: Partial<Keyframe>) => void;
-  // V15
-  frameWidth?: number;
-  trackColor?: string;
-  snapConfig?: SnapConfig;
-  snapFrame?: (rawFrame: number, excludeKeyframeId?: string) => number;
-}) {
-  const fw = frameWidth ?? DEFAULT_FRAME_WIDTH;
-  const color = trackColor ?? '#f59e0b';
-
-  // ---- Drag state ----
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragFrame, setDragFrame] = useState(keyframe.frame);
-  // Refs for synchronous access in pointer handlers (avoids stale closures)
-  const isDraggingRef = useRef(false);
-  const dragFrameRef = useRef(keyframe.frame);
-  const trackLaneRef = useRef<Element | null>(null);
-  const didDragRef = useRef(false);
-  const lastSnappedFrameRef = useRef(keyframe.frame);
-
-  // Use dragFrame for position while dragging, otherwise keyframe.frame
-  const displayFrame = isDragging ? dragFrame : keyframe.frame;
-  const left = displayFrame * fw + fw / 2 - KEYFRAME_SIZE / 2;
-  const top = TRACK_HEIGHT / 2 - KEYFRAME_SIZE / 2;
-
-  // ---- Pointer handlers for drag-to-move with snapping ----
-  const handlePointerDown = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>) => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      e.stopPropagation();
-      e.currentTarget.setPointerCapture(e.pointerId);
-      const trackLane = e.currentTarget.closest('[data-track-lane]');
-      trackLaneRef.current = trackLane;
-      isDraggingRef.current = true;
-      didDragRef.current = false;
-      setIsDragging(true);
-      setDragFrame(keyframe.frame);
-      dragFrameRef.current = keyframe.frame;
-      lastSnappedFrameRef.current = keyframe.frame;
-      onSelect();
-    },
-    [keyframe.frame, onSelect]
-  );
-
-  const handlePointerMove = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>) => {
-      if (!isDraggingRef.current) return;
-      const trackLane = trackLaneRef.current;
-      if (!trackLane) return;
-      const rect = trackLane.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      let rawFrame = Math.round((x - fw / 2) / fw);
-      rawFrame = Math.max(0, Math.min(rawFrame, totalFrames - 1));
-
-      // Apply smart snapping
-      let frame = rawFrame;
-      if (snapConfig?.enabled) {
-        // Try snap to nearest keyframe
-        const snapped = computeSnapFrame(rawFrame, totalFrames, keyframe.id, siblingKeyframes, snapConfig, fw);
-        frame = snapped;
-      }
-
-      const hasCollision = siblingKeyframes.some(
-        (kf) => kf.id !== keyframe.id && kf.frame === frame
-      );
-      if (!hasCollision && frame !== dragFrameRef.current) {
-        didDragRef.current = true;
-        setDragFrame(frame);
-        dragFrameRef.current = frame;
-        lastSnappedFrameRef.current = frame;
-      }
-    },
-    [totalFrames, siblingKeyframes, keyframe.id, fw, snapConfig]
-  );
-
-  const handlePointerUp = useCallback(
-    (e: React.PointerEvent<HTMLButtonElement>) => {
-      if (!isDraggingRef.current) return;
-      try {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      } catch {
-        // Pointer capture may already be released
-      }
-      isDraggingRef.current = false;
-      setIsDragging(false);
-      trackLaneRef.current = null;
-      const finalFrame = dragFrameRef.current;
-      if (finalFrame !== keyframe.frame) {
-        didDragRef.current = true;
-        onUpdateKeyframe(keyframe.id, { frame: finalFrame });
-      }
-    },
-    [keyframe.id, keyframe.frame, onUpdateKeyframe]
-  );
-
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <button
-          className={`absolute focus:outline-none group ${isDragging ? 'z-30' : 'z-20'}`}
-          style={{
-            left,
-            top,
-            width: KEYFRAME_SIZE,
-            height: KEYFRAME_SIZE,
-            cursor: isDragging ? 'grabbing' : 'grab',
-            touchAction: 'none',
-          }}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (didDragRef.current) {
-              didDragRef.current = false;
-              return;
-            }
-            onSelect();
-          }}
-          onDoubleClick={(e) => e.stopPropagation()}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-        >
-          <span
-            className={`block w-full h-full rotate-45 rounded-[1px] ${
-              isDragging ? 'scale-[1.4]' : ''
-            }`}
-            style={{
-              background: isDragging ? color : isSelected ? '#ffffff' : color,
-              boxShadow: isDragging
-                ? `0 0 10px ${color}70`
-                : isSelected
-                  ? '0 0 6px rgba(255,255,255,0.5)'
-                  : `0 0 3px ${color}40`,
-              border: isDragging
-                ? `1.5px solid ${color}`
-                : isSelected
-                  ? '1.5px solid #ffffff'
-                  : `1px solid ${color}`,
-              transition: isDragging ? 'none' : 'all 0.1s',
-            }}
-          />
-          {keyframe.interpolationMode === 'step' && (
-            <span
-              className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-red-400 border border-red-300"
-              title="Step interpolation"
-            />
-          )}
-          {keyframe.interpolationMode === 'bezier' && (
-            <span
-              className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-cyan-400 border border-cyan-300"
-              title="Bezier interpolation"
-            />
-          )}
-          <span
-            className="absolute -inset-1.5"
-            style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
-          />
-        </button>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-52">
-        <ContextMenuItem onClick={onDelete} variant="destructive">
-          <Trash2 className="size-4 mr-2" />
-          <span>Delete Keyframe</span>
-          <span className="ml-auto text-xs text-gray-500">Del</span>
-        </ContextMenuItem>
-        <ContextMenuItem onClick={onDuplicate}>
-          <Plus className="size-4 mr-2 text-amber-400" />
-          <span>Duplicate</span>
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={onMoveToFrame}>
-          <SkipForward className="size-4 mr-2 text-sky-400" />
-          <span>Move to Frame...</span>
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => onUpdateKeyframe(keyframe.id, { interpolationMode: 'linear' })}>
-          <span className="text-xs">Interpolation: Linear</span>
-          {(!keyframe.interpolationMode || keyframe.interpolationMode === 'linear') && (
-            <span className="ml-auto text-xs text-emerald-400">✓</span>
-          )}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => onUpdateKeyframe(keyframe.id, { interpolationMode: 'bezier' })}>
-          <span className="text-xs">Interpolation: Bezier</span>
-          {keyframe.interpolationMode === 'bezier' && (
-            <span className="ml-auto text-xs text-emerald-400">✓</span>
-          )}
-        </ContextMenuItem>
-        <ContextMenuItem onClick={() => onUpdateKeyframe(keyframe.id, { interpolationMode: 'step' })}>
-          <span className="text-xs">Interpolation: Step</span>
-          {keyframe.interpolationMode === 'step' && (
-            <span className="ml-auto text-xs text-emerald-400">✓</span>
-          )}
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  );
-}, (prevProps, nextProps) => {
-  if (prevProps.keyframe.id !== nextProps.keyframe.id) return false;
-  if (prevProps.keyframe.frame !== nextProps.keyframe.frame) return false;
-  if (prevProps.isSelected !== nextProps.isSelected) return false;
-  if (prevProps.totalFrames !== nextProps.totalFrames) return false;
-  if (prevProps.frameWidth !== nextProps.frameWidth) return false;
-  if (prevProps.trackColor !== nextProps.trackColor) return false;
-  if (prevProps.keyframe !== nextProps.keyframe) {
-    if (prevProps.keyframe.interpolationMode !== nextProps.keyframe.interpolationMode) return false;
-  }
-  return true;
-});
-
-export default KeyframeMarker;
 
 // ---- Effect Keyframe Marker (circle shape) ----
 export const EffectKeyframeMarker = React.memo(function EffectKeyframeMarker({
@@ -394,6 +106,8 @@ export const NodeKeyframeMarker = React.memo(function NodeKeyframeMarker({
   siblingKeyframes,
   onUpdateNodeKeyframe,
   frameWidth,
+  snapConfig,
+  snapFrame,
 }: {
   keyframe: NodeKeyframe;
   isSelected: boolean;
@@ -404,6 +118,8 @@ export const NodeKeyframeMarker = React.memo(function NodeKeyframeMarker({
   siblingKeyframes: NodeKeyframe[];
   onUpdateNodeKeyframe: (id: string, updates: Partial<NodeKeyframe>) => void;
   frameWidth?: number;
+  snapConfig?: import('@/lib/v15-types').SnapConfig;
+  snapFrame?: (rawFrame: number, excludeKeyframeId?: string) => number;
 }) {
   const fw = frameWidth ?? DEFAULT_FRAME_WIDTH;
   const [isDragging, setIsDragging] = useState(false);
@@ -444,6 +160,10 @@ export const NodeKeyframeMarker = React.memo(function NodeKeyframeMarker({
       const x = e.clientX - rect.left;
       let frame = Math.round((x - fw / 2) / fw);
       frame = Math.max(0, Math.min(frame, totalFrames - 1));
+      // 吸附：优先用 snapFrame prop（全 store 吸附），没有则回退到同轨道检查
+      if (snapFrame && snapConfig?.enabled) {
+        frame = snapFrame(frame, keyframe.id);
+      }
       const hasCollision = siblingKeyframes.some(
         (kf) => kf.id !== keyframe.id && kf.frame === frame
       );
@@ -453,7 +173,7 @@ export const NodeKeyframeMarker = React.memo(function NodeKeyframeMarker({
         dragFrameRef.current = frame;
       }
     },
-    [totalFrames, siblingKeyframes, keyframe.id, fw]
+    [totalFrames, siblingKeyframes, keyframe.id, fw, snapConfig, snapFrame]
   );
 
   const handlePointerUp = useCallback(
@@ -547,5 +267,6 @@ export const NodeKeyframeMarker = React.memo(function NodeKeyframeMarker({
   if (prevProps.isSelected !== nextProps.isSelected) return false;
   if (prevProps.totalFrames !== nextProps.totalFrames) return false;
   if (prevProps.frameWidth !== nextProps.frameWidth) return false;
+  if (prevProps.snapConfig !== nextProps.snapConfig) return false;
   return true;
 });

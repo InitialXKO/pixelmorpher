@@ -11,11 +11,13 @@ export default function FrameRuler({
   currentFrame,
   onRulerClick,
   timelineZoom,
+  highlightRef,
 }: {
   totalFrames: number;
   currentFrame: number;
   onRulerClick: (frame: number) => void;
   timelineZoom?: number;
+  highlightRef?: React.RefObject<SVGRectElement | null>;
 }) {
   const zoom = useProjectStore((s) => s.timelineZoom);
   const effectiveZoom = timelineZoom ?? zoom;
@@ -44,7 +46,10 @@ export default function FrameRuler({
       style={{ minWidth: width }}
       onClick={(e) => {
         const rect = e.currentTarget.getBoundingClientRect();
-        const x = e.clientX - rect.left;
+        // 补上横向滚动偏移（父容器 overflow-hidden，用 scrollLeft 同步）
+        const parent = e.currentTarget.parentElement;
+        const scrollLeft = parent ? parent.scrollLeft : 0;
+        const x = e.clientX - rect.left + scrollLeft;
         const frame = Math.floor(x / FRAME_WIDTH);
         onRulerClick(Math.max(0, Math.min(frame, totalFrames - 1)));
       }}
@@ -54,6 +59,7 @@ export default function FrameRuler({
 
       {/* Current frame highlight */}
       <rect
+        ref={highlightRef}
         x={currentFrame * FRAME_WIDTH}
         y={0}
         width={FRAME_WIDTH}

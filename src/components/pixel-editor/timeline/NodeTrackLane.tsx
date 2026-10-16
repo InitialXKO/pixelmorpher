@@ -17,6 +17,8 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
   onMoveNodeKeyframeToFrame,
   onUpdateNodeKeyframe,
   frameWidth,
+  snapConfig,
+  snapFrame,
 }: {
   node: Node;
   nodeKeyframes: NodeKeyframe[];
@@ -28,6 +30,8 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
   onMoveNodeKeyframeToFrame: (keyframeId: string) => void;
   onUpdateNodeKeyframe: (keyframeId: string, updates: Partial<NodeKeyframe>) => void;
   frameWidth?: number;
+  snapConfig?: import('@/lib/v15-types').SnapConfig;
+  snapFrame?: (rawFrame: number, excludeKeyframeId?: string) => number;
 }) {
   const FRAME_WIDTH = frameWidth ?? STATIC_FRAME_WIDTH;
   const width = totalFrames * FRAME_WIDTH;
@@ -116,6 +120,8 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
           siblingKeyframes={sortedKeyframes}
           onUpdateNodeKeyframe={onUpdateNodeKeyframe}
           frameWidth={FRAME_WIDTH}
+          snapConfig={snapConfig}
+          snapFrame={snapFrame}
         />
       ))}
     </div>

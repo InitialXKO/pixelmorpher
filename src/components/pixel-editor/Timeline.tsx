@@ -14,16 +14,14 @@ import {
 } from '@/components/ui/dialog';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { startPlayback, stopPlayback } from '@/lib/playback-scheduler';
-import type { InterpolationMode, ModifierType, ModifierParamValue } from '@/lib/types';
-import type { NodeKeyframe, Sprite } from '@/lib/unified-types';
+import type { InterpolationMode } from '@/lib/types';
+import type { NodeKeyframe } from '@/lib/unified-types';
 import type { SnapTarget } from '@/lib/v15-types';
-import { DEFAULT_FRAME_WIDTH, getFrameWidth, FRAME_WIDTH as STATIC_FRAME_WIDTH, TRACK_COLOR_HUES } from './timeline/constants';
+import { DEFAULT_FRAME_WIDTH, getFrameWidth, TRACK_COLOR_HUES } from './timeline/constants';
 import TimelineControls from './timeline/TimelineControls';
 import TrackLabelsColumn from './timeline/TrackLabelsColumn';
 import TrackLanesColumn from './timeline/TrackLanesColumn';
-import ParamDriverEditDialog from './timeline/dialogs/ParamDriverEditDialog';
 import EffectKeyframeEditDialog from './timeline/dialogs/EffectKeyframeEditDialog';
-import ModifierParamEditDialog from './timeline/dialogs/ModifierParamEditDialog';
 import useVirtualScroll from './timeline/useVirtualScroll';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
@@ -35,28 +33,19 @@ export default function Timeline() {
   const playheadLineRef = useRef<HTMLDivElement>(null);
   const playheadTriangleRef = useRef<HTMLDivElement>(null);
   const frameDisplayRef = useRef<HTMLSpanElement>(null);
+  const rulerHighlightRef = useRef<SVGRectElement>(null);
 
   // ---- Store ----
-  const tracks = useProjectStore((s) => s.tracks);
-  const spritesRecord = useProjectStore((s) => s.sprites);
-  const sprites: Sprite[] = useMemo(() => Object.values(spritesRecord), [spritesRecord]);
   const keyframes = useProjectStore((s) => s.keyframes);
   const totalFrames = useProjectStore((s) => s.totalFrames);
   const frameRate = useProjectStore((s) => s.frameRate);
   const setCurrentFrame = useProjectStore((s) => s.setCurrentFrame);
   const setFrameRate = useProjectStore((s) => s.setFrameRate);
   const setTotalFrames = useProjectStore((s) => s.setTotalFrames);
-  const addKeyframe = useProjectStore((s) => s.addKeyframe);
-  const removeKeyframe = useProjectStore((s) => s.removeKeyframe);
-  const duplicateKeyframe = useProjectStore((s) => s.duplicateKeyframe);
-  const getKeyframesForPart = useProjectStore((s) => s.getKeyframesForPart);
-  const updateKeyframe = useProjectStore((s) => s.updateKeyframe);
   const effectTracks = useProjectStore((s) => s.effectTracks);
   const addEffectKeyframe = useProjectStore((s) => s.addEffectKeyframe);
   const removeEffectKeyframe = useProjectStore((s) => s.removeEffectKeyframe);
   const canvasModifierTracks = useProjectStore((s) => s.canvasModifierTracks);
-  const addModifierParamKeyframe = useProjectStore((s) => s.addModifierParamKeyframe);
-  const addParamDriver = useProjectStore((s) => s.addParamDriver);
 
   // ---- V15: Timeline zoom & snap ----
   const timelineZoom = useProjectStore((s) => s.timelineZoom);
@@ -169,11 +158,8 @@ export default function Timeline() {
   }, [nodeMoveToFrameKfId, nodeMoveToFrameValue, handleUpdateNodeKeyframe]);
 
   const playState = useEditorStore((s) => s.playState);
-  const selectedPartId = useEditorStore((s) => s.selectedPartId);
-  const selectedKeyframeId = useEditorStore((s) => s.selectedKeyframeId);
   const selectedEffectTrackId = useEditorStore((s) => s.selectedEffectTrackId);
   const setPlayState = useEditorStore((s) => s.setPlayState);
-  const selectKeyframe = useEditorStore((s) => s.selectKeyframe);
   const selectEffectTrack = useEditorStore((s) => s.selectEffectTrack);
   const editMode = useEditorStore((s) => s.editMode);
   const spriteEditSpriteId = useEditorStore((s) => s.spriteEditSpriteId);
@@ -193,6 +179,10 @@ export default function Timeline() {
         const fw = getFrameWidth(state.timelineZoom);
         if (playheadLineRef.current) {
           playheadLineRef.current.style.left = `${f * fw + fw / 2 - 1}px`;
+        }
+        if (rulerHighlightRef.current) {
+          rulerHighlightRef.current.setAttribute('x', String(f * fw));
+          rulerHighlightRef.current.setAttribute('width', String(fw));
         }
         if (frameDisplayRef.current) {
           frameDisplayRef.current.textContent = String(f);
@@ -220,34 +210,18 @@ export default function Timeline() {
   const [editKfTrackId, setEditKfTrackId] = useState<string | null>(null);
   const [editKfId, setEditKfId] = useState<string | null>(null);
 
-  // ---- Modifier param edit dialog state ----
-  const [modifierEditOpen, setModifierEditOpen] = useState(false);
-  const [modifierEditMode, setModifierEditMode] = useState<'animation' | 'keyframe'>('animation');
-  const [modifierEditPartId, setModifierEditPartId] = useState<string | null>(null);
-  const [modifierEditModifierId, setModifierEditModifierId] = useState<string | null>(null);
-  const [modifierEditModifierType, setModifierEditModifierType] = useState<ModifierType | null>(null);
-  const [modifierEditCurrentParams, setModifierEditCurrentParams] = useState<Record<string, ModifierParamValue> | undefined>(undefined);
-  const [modifierEditKeyframeId, setModifierEditKeyframeId] = useState<string | null>(null);
-  const [modifierEditFrame, setModifierEditFrame] = useState<number>(0);
-
-  // ---- ParamDriver edit dialog state ----
-  const [paramDriverEditOpen, setParamDriverEditOpen] = useState(false);
-  const [paramDriverEditKeyframeId, setParamDriverEditKeyframeId] = useState<string | null>(null);
-  const [paramDriverEditModifierId, setParamDriverEditModifierId] = useState<string | null>(null);
-  const [paramDriverEditDriverId, setParamDriverEditDriverId] = useState<string | null>(null);
-  const [paramDriverEditSource, setParamDriverEditSource] = useState<'keyframe' | 'animation'>('keyframe');
-  const [paramDriverEditPartId, setParamDriverEditPartId] = useState<string | null>(null);
-
   const displayFps = isEditingFps ? fpsInput : String(frameRate);
   const displayFrames = isEditingFrames ? framesInput : String(totalFrames);
 
   // ---- Refs ----
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const labelScrollRef = useRef<HTMLDivElement>(null);
+  const rulerScrollRef = useRef<HTMLDivElement>(null);
 
   // ---- Virtual Scroll ----
+  // Part 轨道已删除：tracks 传空数组（原 tracks 恒为空）
   const { visibleRange, rowOffsets, rowHeights, totalHeight, onScroll: handleVirtualScroll } = useVirtualScroll(
-    scrollContainerRef, tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart,
+    scrollContainerRef, [], [], effectTracks, canvasModifierTracks, () => [],
     puppetNodes.length, isPuppetClip
   );
 
@@ -273,8 +247,7 @@ export default function Timeline() {
       switch (e.key) {
         case 'Delete':
         case 'Backspace': {
-          if (selectedKeyframeId) { e.preventDefault(); removeKeyframe(selectedKeyframeId); selectKeyframe(null); }
-          else if (selectedNodeKeyframeId && activeClip) {
+          if (selectedNodeKeyframeId && activeClip) {
             e.preventDefault();
             removeNodeKeyframe(activeClip.id, selectedNodeKeyframeId);
             setSelectedNodeKeyframeId(null);
@@ -309,12 +282,15 @@ export default function Timeline() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedKeyframeId, playState, totalFrames, removeKeyframe, selectKeyframe, setPlayState, setCurrentFrame, timelineZoom, setTimelineZoom]);
+  }, [selectedNodeKeyframeId, activeClip, playState, totalFrames, removeNodeKeyframe, setPlayState, setCurrentFrame, timelineZoom, setTimelineZoom]);
 
   // ---- Scroll sync ----
   const handleTrackScroll = useCallback(() => {
     if (labelScrollRef.current && scrollContainerRef.current) {
       labelScrollRef.current.scrollTop = scrollContainerRef.current.scrollTop;
+    }
+    if (rulerScrollRef.current && scrollContainerRef.current) {
+      rulerScrollRef.current.scrollLeft = scrollContainerRef.current.scrollLeft;
     }
     handleVirtualScroll();
   }, [handleVirtualScroll]);
@@ -330,31 +306,6 @@ export default function Timeline() {
   const handleStepForward = useCallback(() => { setPlayState('paused'); setCurrentFrame(Math.min(totalFrames - 1, currentFrameRef.current + 1)); }, [totalFrames, setPlayState, setCurrentFrame]);
 
   const handleRulerClick = useCallback((frame: number) => { setCurrentFrame(frame); }, [setCurrentFrame]);
-  const handleSelectKeyframe = useCallback((id: string) => { selectKeyframe(id || null); }, [selectKeyframe]);
-  const handleAddKeyframe = useCallback((partId: string, frame: number) => { addKeyframe(partId, frame); }, [addKeyframe]);
-
-  const handleDeleteKeyframe = useCallback(
-    (id: string) => { removeKeyframe(id); if (selectedKeyframeId === id) selectKeyframe(null); },
-    [selectedKeyframeId, removeKeyframe, selectKeyframe]
-  );
-
-  const handleDuplicateKeyframe = useCallback(
-    (id: string) => { const targetFrame = Math.min(currentFrameRef.current + 5, totalFrames - 1); duplicateKeyframe(id, targetFrame); },
-    [totalFrames, duplicateKeyframe]
-  );
-
-  const handleMoveKeyframeToFrame = useCallback(
-    (id: string) => {
-      const kf = useProjectStore.getState().keyframes.find((k) => k.id === id);
-      if (!kf) return;
-      const targetStr = window.prompt('Move keyframe to frame:', String(kf.frame));
-      if (targetStr !== null) {
-        const target = parseInt(targetStr, 10);
-        if (!isNaN(target) && target >= 0 && target < totalFrames) updateKeyframe(id, { frame: target });
-      }
-    },
-    [totalFrames, updateKeyframe]
-  );
 
   const handleFpsSubmit = useCallback(() => {
     const val = parseInt(fpsInput, 10);
@@ -369,76 +320,6 @@ export default function Timeline() {
     else setFramesInput(String(totalFrames));
     setIsEditingFrames(false);
   }, [framesInput, totalFrames, setTotalFrames]);
-
-  const handleAddModifierParamKeyframe = useCallback(
-    (keyframeId: string, modifierId: string, frame: number) => {
-      const kf = useProjectStore.getState().keyframes.find((k) => k.id === keyframeId);
-      const mod = kf?.modifiers.find((m) => m.id === modifierId);
-      if (mod) addModifierParamKeyframe(keyframeId, modifierId, frame, {});
-    },
-    [addModifierParamKeyframe]
-  );
-
-  const handleEditAnimModifierParams = useCallback(
-    (_partId: string, _modifierId: string) => {
-      // Legacy Part system (disabled in puppet-only mode) — no-op.
-    }, []
-  );
-
-  const handleEditKfModifierParams = useCallback(
-    (keyframeId: string, modifierId: string) => {
-      const kf = useProjectStore.getState().keyframes.find((k) => k.id === keyframeId);
-      const mod = kf?.modifiers.find((m) => m.id === modifierId);
-      if (!mod || !kf) return;
-      setModifierEditMode('keyframe');
-      setModifierEditPartId(null);
-      setModifierEditModifierId(modifierId);
-      setModifierEditModifierType(mod.type);
-      setModifierEditCurrentParams({ ...mod.params });
-      setModifierEditKeyframeId(keyframeId);
-      setModifierEditFrame(kf.frame);
-      setModifierEditOpen(true);
-    }, []
-  );
-
-  const handleEditParamKeyframe = useCallback(
-    (keyframeId: string, modifierId: string, paramKfId: string) => {
-      const kf = useProjectStore.getState().keyframes.find((k) => k.id === keyframeId);
-      const mod = kf?.modifiers.find((m) => m.id === modifierId);
-      const pkf = mod?.paramKeyframes?.find((p) => p.id === paramKfId);
-      if (!mod || !kf || !pkf) return;
-      setModifierEditMode('keyframe');
-      setModifierEditPartId(null);
-      setModifierEditModifierId(modifierId);
-      setModifierEditModifierType(mod.type);
-      setModifierEditCurrentParams({ ...mod.params, ...pkf.params });
-      setModifierEditKeyframeId(keyframeId);
-      setModifierEditFrame(pkf.frame);
-      setModifierEditOpen(true);
-    }, []
-  );
-
-  const handleEditParamDriver = useCallback(
-    (keyframeId: string, modifierId: string, driverId: string) => {
-      setParamDriverEditKeyframeId(keyframeId);
-      setParamDriverEditModifierId(modifierId);
-      setParamDriverEditDriverId(driverId);
-      setParamDriverEditSource('keyframe');
-      setParamDriverEditPartId(null);
-      setParamDriverEditOpen(true);
-    }, []
-  );
-
-  const handleEditAnimParamDriver = useCallback(
-    (partId: string, modifierId: string, driverId: string) => {
-      setParamDriverEditKeyframeId(null);
-      setParamDriverEditModifierId(modifierId);
-      setParamDriverEditDriverId(driverId);
-      setParamDriverEditSource('animation');
-      setParamDriverEditPartId(partId);
-      setParamDriverEditOpen(true);
-    }, []
-  );
 
   // ---- Effect track handlers ----
   const handleAddEffectKeyframe = useCallback((trackId: string, frame: number) => { addEffectKeyframe(trackId, frame); }, [addEffectKeyframe]);
@@ -479,21 +360,13 @@ export default function Timeline() {
   const timelineWidth = totalFrames * FRAME_WIDTH;
   const playheadX = currentFrame * FRAME_WIDTH + FRAME_WIDTH / 2;
 
-  const getPartName = useCallback((partId: string) => {
-    const sp = sprites.find((p) => p.id === partId);
-    return sp?.name ?? 'Unknown';
-  }, [sprites]);
-
   const editTrack = editKfTrackId ? effectTracks.find((t) => t.id === editKfTrackId) ?? null : null;
 
-  // Selected keyframe interpolation mode (Part or Node)
-  const selectedKf = keyframes.find((k) => k.id === selectedKeyframeId);
+  // Selected node keyframe interpolation mode
   const selectedNodeKf = nodeKeyframes.find((k) => k.id === selectedNodeKeyframeId);
-  const selectedKfInterpolationMode = selectedKeyframeId
-    ? (selectedKf?.interpolationMode ?? 'linear')
-    : selectedNodeKeyframeId
-      ? (selectedNodeKf?.interpolationMode ?? 'linear')
-      : undefined;
+  const selectedKfInterpolationMode = selectedNodeKeyframeId
+    ? (selectedNodeKf?.interpolationMode ?? 'linear')
+    : undefined;
 
   // ---- V15: Smart snap helper (returns frame with snap applied) ----
   const snapFrame = useCallback(
@@ -557,7 +430,6 @@ export default function Timeline() {
         isEditingFrames={isEditingFrames}
         displayFps={displayFps}
         displayFrames={displayFrames}
-        selectedKeyframeId={selectedKeyframeId}
         selectedNodeKeyframeId={selectedNodeKeyframeId}
         selectedKfInterpolationMode={selectedKfInterpolationMode}
         onPlay={handlePlay}
@@ -575,15 +447,13 @@ export default function Timeline() {
           }
         }}
         onDeleteKeyframe={() => {
-          if (selectedKeyframeId) { removeKeyframe(selectedKeyframeId); selectKeyframe(null); }
-          else if (selectedNodeKeyframeId && activeClip) {
+          if (selectedNodeKeyframeId && activeClip) {
             removeNodeKeyframe(activeClip.id, selectedNodeKeyframeId);
             setSelectedNodeKeyframeId(null);
           }
         }}
         onInterpolationChange={(mode: InterpolationMode) => {
-          if (selectedKeyframeId) updateKeyframe(selectedKeyframeId, { interpolationMode: mode });
-          else if (selectedNodeKeyframeId && activeClip) {
+          if (selectedNodeKeyframeId && activeClip) {
             updateNodeKeyframe(activeClip.id, selectedNodeKeyframeId, { interpolationMode: mode });
           }
         }}
@@ -605,16 +475,12 @@ export default function Timeline() {
       <div className="flex flex-1 overflow-hidden">
         {/* Left: Track Labels Column */}
         <TrackLabelsColumn
-          tracks={tracks}
-          sprites={sprites}
           effectTracks={effectTracks}
           canvasModifierTracks={canvasModifierTracks}
-          getKeyframesForPart={getKeyframesForPart}
           visibleRange={visibleRange}
           rowOffsets={rowOffsets}
           rowHeights={rowHeights}
           totalHeight={totalHeight}
-          getPartName={getPartName}
           selectedEffectTrackId={selectedEffectTrackId}
           onSelectEffectTrack={handleSelectEffectTrack}
           isPuppetClip={isPuppetClip}
@@ -629,14 +495,10 @@ export default function Timeline() {
 
         {/* Right: Ruler + Keyframe Lanes */}
         <TrackLanesColumn
-          tracks={tracks}
-          sprites={sprites}
           effectTracks={effectTracks}
           canvasModifierTracks={canvasModifierTracks}
-          getKeyframesForPart={getKeyframesForPart}
           totalFrames={totalFrames}
           currentFrame={currentFrame}
-          selectedKeyframeId={selectedKeyframeId}
           selectedEffectTrackId={selectedEffectTrackId}
           visibleRange={visibleRange}
           rowOffsets={rowOffsets}
@@ -645,25 +507,15 @@ export default function Timeline() {
           timelineWidth={timelineWidth}
           playheadX={playheadX}
           scrollContainerRef={scrollContainerRef}
+          rulerScrollRef={rulerScrollRef}
+          rulerHighlightRef={rulerHighlightRef}
           playheadLineRef={playheadLineRef}
           onScroll={handleTrackScroll}
           onRulerClick={handleRulerClick}
-          onSelectKeyframe={handleSelectKeyframe}
           onSelectEffectTrack={handleSelectEffectTrack}
-          onAddKeyframe={handleAddKeyframe}
-          onDeleteKeyframe={handleDeleteKeyframe}
-          onDuplicateKeyframe={handleDuplicateKeyframe}
-          onMoveKeyframeToFrame={handleMoveKeyframeToFrame}
-          onUpdateKeyframe={updateKeyframe}
           onAddEffectKeyframe={handleAddEffectKeyframe}
           onDeleteEffectKeyframe={handleDeleteEffectKeyframe}
           onEditEffectKeyframe={handleEditEffectKeyframe}
-          onEditAnimModifierParams={handleEditAnimModifierParams}
-          onEditKfModifierParams={handleEditKfModifierParams}
-          onEditParamKeyframe={handleEditParamKeyframe}
-          onAddModifierParamKeyframe={handleAddModifierParamKeyframe}
-          onEditParamDriver={handleEditParamDriver}
-          onEditAnimParamDriver={handleEditAnimParamDriver}
           onPlayheadMouseDown={handlePlayheadMouseDown}
           isPuppetClip={isPuppetClip}
           nodeList={puppetNodes as any}
@@ -690,29 +542,6 @@ export default function Timeline() {
         onOpenChange={setEditKfDialogOpen}
         effectTrack={editTrack}
         keyframeId={editKfId}
-      />
-
-      <ModifierParamEditDialog
-        key={`${modifierEditMode}-${modifierEditModifierId ?? ''}-${modifierEditKeyframeId ?? ''}`}
-        open={modifierEditOpen}
-        onOpenChange={setModifierEditOpen}
-        mode={modifierEditMode}
-        partId={modifierEditPartId ?? undefined}
-        modifierId={modifierEditModifierId ?? undefined}
-        modifierType={modifierEditModifierType ?? undefined}
-        currentParams={modifierEditCurrentParams}
-        keyframeId={modifierEditKeyframeId ?? undefined}
-        frame={modifierEditFrame}
-      />
-
-      <ParamDriverEditDialog
-        open={paramDriverEditOpen}
-        onOpenChange={setParamDriverEditOpen}
-        keyframeId={paramDriverEditKeyframeId}
-        modifierId={paramDriverEditModifierId}
-        driverId={paramDriverEditDriverId}
-        source={paramDriverEditSource}
-        partId={paramDriverEditPartId}
       />
 
       {/* Node keyframe: Move to Frame dialog */}

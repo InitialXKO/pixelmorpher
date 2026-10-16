@@ -12,27 +12,21 @@ import {
   DropdownMenuGroup,
 } from '@/components/ui/dropdown-menu';
 import {
-  Eye, EyeOff, Lock, Unlock, ChevronDown, ChevronRight, Plus, Circle, Diamond, Palette,
+  Eye, EyeOff, Lock, Unlock, Plus, Circle,
 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store';
-import type { Track, EffectTrack, CanvasModifierTrack, Keyframe, EffectType } from '@/lib/types';
-import type { Sprite } from '@/lib/unified-types';
-import { ANIMATION_MODIFIER_TYPES, MODIFIER_DEFINITIONS } from '@/lib/types';
+import type { EffectTrack, CanvasModifierTrack, EffectType } from '@/lib/types';
 import type { TrackTimelineDisplay } from '@/lib/v15-types';
-import { RULER_HEIGHT, TRACK_HEIGHT, SUB_TRACK_HEIGHT, LABEL_WIDTH, EFFECT_CONFIG, CATEGORY_COLOR_MAP, PUPPET_COLOR, TRACK_COLOR_HUES } from './constants';
+import { RULER_HEIGHT, TRACK_HEIGHT, LABEL_WIDTH, EFFECT_CONFIG, PUPPET_COLOR } from './constants';
 
 // ---- Left: Track Labels Column ----
 interface TrackLabelsColumnProps {
-  tracks: Track[];
-  sprites: Sprite[];
   effectTracks: EffectTrack[];
   canvasModifierTracks: CanvasModifierTrack[];
-  getKeyframesForPart: (partId: string) => Keyframe[];
   visibleRange: { startIndex: number; endIndex: number };
   rowOffsets: number[];
   rowHeights: number[];
   totalHeight: number;
-  getPartName: (partId: string) => string;
   selectedEffectTrackId: string | null;
   onSelectEffectTrack: (id: string | null) => void;
   isPuppetClip: boolean;
@@ -46,28 +40,13 @@ interface TrackLabelsColumnProps {
 }
 
 export default function TrackLabelsColumn({
-  tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart,
+  effectTracks, canvasModifierTracks,
   visibleRange, rowOffsets, rowHeights, totalHeight,
-  getPartName, selectedEffectTrackId, onSelectEffectTrack,
+  selectedEffectTrackId, onSelectEffectTrack,
   isPuppetClip, nodeList, labelScrollRef,
   trackTimelineDisplays, trackFrameSteps,
   onUpdateTrackTimelineDisplay, onSetTrackFrameStep,
 }: TrackLabelsColumnProps) {
-  // Get track color hue
-  const getTrackColor = (trackIndex: number, trackId: string): string => {
-    const display = trackTimelineDisplays?.[trackId];
-    if (display && display.colorHue >= 0) {
-      return `hsl(${display.colorHue}, 50%, 45%)`;
-    }
-    const hue = TRACK_COLOR_HUES[trackIndex % TRACK_COLOR_HUES.length];
-    return `hsl(${hue}, 50%, 45%)`;
-  };
-
-  // Cycle track color
-  const cycleTrackColor = (trackId: string, currentHue: number) => {
-    const nextHue = currentHue < 0 ? 0 : (currentHue + 30) % 360;
-    onUpdateTrackTimelineDisplay?.(trackId, { colorHue: nextHue });
-  };
 
   return (
     <div className="shrink-0 flex flex-col border-r border-[#1e1e3a]" style={{ width: LABEL_WIDTH }}>
@@ -78,119 +57,18 @@ export default function TrackLabelsColumn({
 
       {/* Track labels */}
       <div ref={labelScrollRef} className="flex-1 overflow-y-hidden overflow-x-hidden">
-        {tracks.length === 0 && effectTracks.length === 0 && (
+        {effectTracks.length === 0 && nodeList.length === 0 && (
           <div className="flex items-center justify-center h-24 text-xs text-gray-600 px-4 text-center">
-            No tracks yet. Add a part to create a track.
+            暂无轨道
           </div>
         )}
         {rowOffsets.length > 0 && visibleRange.startIndex > 0 && (
           <div style={{ height: rowOffsets[visibleRange.startIndex] }} />
         )}
 
-        {/* Legacy Part tracks: skipped in puppet-only mode (isPuppetClip) */}
-        {!isPuppetClip && tracks.map((track, idx) => {
-          if (idx < visibleRange.startIndex || idx > visibleRange.endIndex) return null;
-          const partName = getPartName(track.partId);
-          const part = sprites.find((p) => p.id === track.partId);
-          const animModifiers = ([] as import('@/lib/types').PartAnimationModifier[]) ;
-          const trackKeyframes = getKeyframesForPart(track.partId);
-          const kfModifierTypes = [...new Set(
-            trackKeyframes.flatMap((kf) => kf.modifiers.map((m) => m.type))
-          )].filter((t) => !ANIMATION_MODIFIER_TYPES.includes(t));
-
-          const trackColor = getTrackColor(idx, track.id);
-          const display = trackTimelineDisplays?.[track.id];
-          const frameStep = trackFrameSteps?.[track.partId] ?? 1;
-          const colorHue = display?.colorHue ?? -1;
-
-          return (
-            <React.Fragment key={track.id}>
-              <div
-                className="flex items-center gap-1 px-2 border-b border-[#1e1e2e] hover:bg-[#1a1a30] transition-colors"
-                style={{ height: TRACK_HEIGHT, background: track.locked ? '#0e0e20' : '#12122a' }}
-              >
-                {/* V15: Track color indicator */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    cycleTrackColor(track.id, colorHue);
-                  }}
-                  className="p-0.5 hover:bg-white/10 rounded transition-colors"
-                  title="Click to cycle track color"
-                >
-                  <span className="block size-2.5 rounded-sm" style={{ backgroundColor: trackColor }} />
-                </button>
-                <button onClick={() => useProjectStore.getState().toggleTrackExpanded(track.id)} className="p-0.5 hover:bg-white/10 rounded transition-colors">
-                  {track.expanded ? <ChevronDown className="size-3 text-gray-400" /> : <ChevronRight className="size-3 text-gray-400" />}
-                </button>
-                <span className="text-xs text-gray-300 truncate flex-1 min-w-0 select-none" title={partName}>{partName}</span>
-                {/* V15: Frame step indicator */}
-                {frameStep > 1 && (
-                  <span className="text-[8px] font-mono text-amber-500/70 select-none px-0.5" title={`Frame step: ${frameStep}`}>
-                    x{frameStep}
-                  </span>
-                )}
-                <button onClick={() => useProjectStore.getState().toggleTrackVisibility(track.id)} className="p-0.5 hover:bg-white/10 rounded transition-colors" title={track.visible ? 'Hide track' : 'Show track'}>
-                  {track.visible ? <Eye className="size-3 text-gray-400" /> : <EyeOff className="size-3 text-gray-600" />}
-                </button>
-                <button onClick={() => useProjectStore.getState().toggleTrackLock(track.id)} className="p-0.5 hover:bg-white/10 rounded transition-colors" title={track.locked ? 'Unlock track' : 'Lock track'}>
-                  {track.locked ? <Lock className="size-3 text-amber-500" /> : <Unlock className="size-3 text-gray-400" />}
-                </button>
-              </div>
-              {/* Anim modifier sub-labels */}
-              {track.expanded && animModifiers.map((mod) => {
-                const modDef = MODIFIER_DEFINITIONS.find((d) => d.type === mod.type);
-                const modLabel = modDef?.label ?? mod.type;
-                const category = modDef?.category ?? 'animation';
-                const modColor = CATEGORY_COLOR_MAP[category] ?? '#8b5cf6';
-                return (
-                  <div key={mod.id} className="flex items-center gap-1 px-2 border-b border-[#1a1a2e]" style={{ height: SUB_TRACK_HEIGHT, background: '#0c0c1e' }}>
-                    <span className="size-2 rounded-sm shrink-0" style={{ backgroundColor: mod.enabled ? modColor : '#4b5563', opacity: mod.enabled ? 0.8 : 0.4 }} />
-                    <span className="text-[10px] truncate flex-1 min-w-0 select-none" style={{ color: mod.enabled ? '#9ca3af' : '#4b5563' }} title={modLabel}>{modLabel}</span>
-                  </div>
-                );
-              })}
-              {/* Anim ParamDriver spacers */}
-              {track.expanded && animModifiers.map((mod) => {
-                const driverCount = mod.paramDrivers?.length ?? 0;
-                if (driverCount === 0) return null;
-                return <div key={`anim-pd-spacer-${mod.id}`} style={{ height: driverCount * SUB_TRACK_HEIGHT, background: '#0c0c1e' }} />;
-              })}
-              {/* KF modifier sub-labels */}
-              {track.expanded && kfModifierTypes.map((modType) => {
-                const modDef = MODIFIER_DEFINITIONS.find((d) => d.type === modType);
-                const modLabel = modDef?.label ?? modType;
-                const category = modDef?.category ?? 'transform';
-                const modColor = CATEGORY_COLOR_MAP[category] ?? '#3b82f6';
-                const anyEnabled = trackKeyframes.some((kf) => kf.modifiers.some((m) => m.type === modType && m.enabled));
-                const paramKfCount = trackKeyframes.reduce((sum, kf) => {
-                  const mod = kf.modifiers.find((m) => m.type === modType);
-                  return sum + (mod?.paramKeyframes?.length ?? 0);
-                }, 0);
-                return (
-                  <div key={`kf-mod-${modType}`} className="flex items-center gap-1 px-2 border-b border-[#1a1a2e]" style={{ height: SUB_TRACK_HEIGHT, background: '#0a0a1a' }}>
-                    <Diamond className="size-2 shrink-0" style={{ color: anyEnabled ? modColor : '#4b5563', opacity: anyEnabled ? 0.8 : 0.4 }} />
-                    <span className="text-[10px] truncate flex-1 min-w-0 select-none" style={{ color: anyEnabled ? '#9ca3af' : '#4b5563' }} title={`${modLabel}${paramKfCount > 0 ? ` (${paramKfCount} keyframes)` : ''}`}>{modLabel}</span>
-                    {paramKfCount > 0 && <span className="text-[8px] text-gray-600 select-none">{paramKfCount}k</span>}
-                  </div>
-                );
-              })}
-              {/* KF ParamDriver spacers */}
-              {track.expanded && kfModifierTypes.map((modType) => {
-                const driverCount = trackKeyframes.reduce((sum, kf) => {
-                  const mod = kf.modifiers.find((m) => m.type === modType);
-                  return sum + (mod?.paramDrivers?.length ?? 0);
-                }, 0);
-                if (driverCount === 0) return null;
-                return <div key={`pd-spacer-${modType}`} style={{ height: driverCount * SUB_TRACK_HEIGHT, background: '#0a0a1a' }} />;
-              })}
-            </React.Fragment>
-          );
-        })}
-
         {/* Effect separator */}
         {effectTracks.length > 0 && (() => {
-          const sepIdx = tracks.length;
+          const sepIdx = 0;
           if (sepIdx < visibleRange.startIndex || sepIdx > visibleRange.endIndex) return null;
           return (
             <div className="flex items-center px-2 border-b border-[#2a2a4a]" style={{ height: 20, background: '#0c0c1e' }}>
@@ -201,7 +79,7 @@ export default function TrackLabelsColumn({
 
         {/* Effect track labels */}
         {effectTracks.map((effectTrack, etIdx) => {
-          const rowIdx = tracks.length + (effectTracks.length > 0 ? 1 : 0) + etIdx;
+          const rowIdx = (effectTracks.length > 0 ? 1 : 0) + etIdx;
           if (rowIdx < visibleRange.startIndex || rowIdx > visibleRange.endIndex) return null;
           const config = EFFECT_CONFIG[effectTrack.type];
           const isSelected = selectedEffectTrackId === effectTrack.id;
@@ -223,7 +101,7 @@ export default function TrackLabelsColumn({
 
         {/* Add effect track button */}
         {(() => {
-          const addIdx = tracks.length + (effectTracks.length > 0 ? 1 : 0) + effectTracks.length;
+          const addIdx = (effectTracks.length > 0 ? 1 : 0) + effectTracks.length;
           if (effectTracks.length === 0) return null;
           if (addIdx < visibleRange.startIndex || addIdx > visibleRange.endIndex) return null;
           return (
@@ -251,7 +129,7 @@ export default function TrackLabelsColumn({
 
         {/* Canvas modifier separator */}
         {canvasModifierTracks.length > 0 && (() => {
-          let cmSepIdx = tracks.length + (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
+          let cmSepIdx = (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
           if (cmSepIdx < visibleRange.startIndex || cmSepIdx > visibleRange.endIndex) return null;
           return (
             <div className="flex items-center px-2 border-b border-[#2a2a4a]" style={{ height: 20, background: '#0c0c1e' }}>
@@ -262,7 +140,7 @@ export default function TrackLabelsColumn({
 
         {/* Canvas modifier labels */}
         {canvasModifierTracks.map((cmTrack, cmIdx) => {
-          let cmRowIdx = tracks.length + (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
+          let cmRowIdx = (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
           if (canvasModifierTracks.length > 0) cmRowIdx += 1 + cmIdx;
           if (cmRowIdx < visibleRange.startIndex || cmRowIdx > visibleRange.endIndex) return null;
           return (
@@ -283,7 +161,7 @@ export default function TrackLabelsColumn({
         {/* Add canvas modifier button */}
         {(() => {
           if (canvasModifierTracks.length === 0) return null;
-          let cmAddIdx = tracks.length + (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
+          let cmAddIdx = (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
           if (canvasModifierTracks.length > 0) cmAddIdx += 1 + canvasModifierTracks.length;
           if (cmAddIdx < visibleRange.startIndex || cmAddIdx > visibleRange.endIndex) return null;
           return (
@@ -310,20 +188,29 @@ export default function TrackLabelsColumn({
         })()}
 
         {/* Puppet Node labels */}
-        {isPuppetClip && nodeList.length > 0 && (() => (
+        {isPuppetClip && nodeList.length > 0 && (() => {
+          let puppetSepIdx = (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
+          if (canvasModifierTracks.length > 0) puppetSepIdx += 1 + canvasModifierTracks.length + 1;
+          if (puppetSepIdx < visibleRange.startIndex || puppetSepIdx > visibleRange.endIndex) return null;
+          return (
           <React.Fragment key="puppet-section-labels">
             <div className="flex items-center px-2 border-b border-[#2a2a4a]" style={{ height: 20, background: '#0c0c1e' }}>
               <span className="text-[9px] text-cyan-400 uppercase tracking-widest select-none font-medium">🎭 木偶节点</span>
             </div>
-            {nodeList.map((node) => (
+            {nodeList.map((node, nodeIdx) => {
+              const rowIdx = puppetSepIdx + 1 + nodeIdx;
+              if (rowIdx < visibleRange.startIndex || rowIdx > visibleRange.endIndex) return null;
+              return (
               <div key={`node-label-${node.id}`} className="flex items-center gap-1 px-2 border-b border-[#1a1a2e] hover:bg-[#141428] transition-colors"
                 style={{ height: TRACK_HEIGHT, background: '#0e1028' }}>
                 <span className="size-2.5 rounded-full shrink-0" style={{ backgroundColor: node.attachment?.discColor || PUPPET_COLOR }} />
                 <span className="text-xs text-cyan-300 truncate flex-1 min-w-0 select-none" title={node.name}>{node.name}</span>
               </div>
-            ))}
+              );
+            })}
           </React.Fragment>
-        ))()}
+          );
+        })()}
 
         {/* Bottom padding */}
         {visibleRange.endIndex < rowOffsets.length - 1 && (

@@ -25,7 +25,6 @@ export default function TimelineControls({
   isEditingFrames,
   displayFps,
   displayFrames,
-  selectedKeyframeId,
   selectedNodeKeyframeId,
   selectedKfInterpolationMode,
   onPlay,
@@ -60,8 +59,7 @@ export default function TimelineControls({
   isEditingFrames: boolean;
   displayFps: string;
   displayFrames: string;
-  selectedKeyframeId: string | null;
-  selectedNodeKeyframeId?: string | null;
+  selectedNodeKeyframeId: string | null;
   selectedKfInterpolationMode?: InterpolationMode;
   onPlay: () => void;
   onStop: () => void;
@@ -215,8 +213,8 @@ export default function TimelineControls({
           <Button
             variant="ghost"
             size="icon"
-            className={`size-7 ${(selectedKeyframeId || selectedNodeKeyframeId) ? 'text-red-400 hover:text-red-300 hover:bg-red-500/10' : 'text-gray-600 cursor-not-allowed'}`}
-            disabled={!selectedKeyframeId && !selectedNodeKeyframeId}
+            className={`size-7 ${selectedNodeKeyframeId ? 'text-red-400 hover:text-red-300 hover:bg-red-500/10' : 'text-gray-600 cursor-not-allowed'}`}
+            disabled={!selectedNodeKeyframeId}
             onClick={onDeleteKeyframe}
           >
             <Trash2 className="size-3.5" />
@@ -283,7 +281,7 @@ export default function TimelineControls({
       <div className="flex-1" />
 
       {/* Interpolation mode selector */}
-      {selectedKeyframeId && selectedKfInterpolationMode !== undefined && (
+      {selectedNodeKeyframeId && selectedKfInterpolationMode !== undefined && (
         <div className="flex items-center gap-1 text-xs">
           <span className="text-gray-500">Interp</span>
           <select
