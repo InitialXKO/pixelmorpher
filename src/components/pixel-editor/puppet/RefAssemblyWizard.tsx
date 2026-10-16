@@ -117,6 +117,11 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
 
   // SAM 多点分割：左键 label=1（保留），右键 label=0（抠除）
   const handleSamClick = async (x: number, y: number, label: 1 | 0) => {
+    // 右键需要先有前景点，否则 SAM 无法确定目标
+    if (label === 0 && !samPoints.some((p) => p.label === 1)) {
+      console.warn('[SAM] 请先左键点选要保留的区域');
+      return;
+    }
     const store = useEditorStore.getState();
     const newPoints = [...samPoints, { x, y, label }];
     setSamPoints(newPoints);
@@ -514,8 +519,25 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 )}
                 {samPreviewUrl && (
                   <div className="space-y-2">
-                    <div className="text-xs text-gray-400">预览效果（红色为将抠除）：</div>
-                    <img src={samPreviewUrl} alt="抠图预览" className="w-full rounded border border-green-500/30" />
+                    <div className="text-xs text-gray-400">预览效果（红色为将抠除，可继续左右键加点修正）：</div>
+                    <img
+                      src={samPreviewUrl}
+                      alt="抠图预览"
+                      className="w-full rounded border border-green-500/30 cursor-crosshair"
+                      onClick={async (e) => {
+                        const rect = (e.target as HTMLImageElement).getBoundingClientRect();
+                        const x = (e.clientX - rect.left) / rect.width;
+                        const y = (e.clientY - rect.top) / rect.height;
+                        await handleSamClick(x, y, 1);
+                      }}
+                      onContextMenu={async (e) => {
+                        e.preventDefault();
+                        const rect = (e.target as HTMLImageElement).getBoundingClientRect();
+                        const x = (e.clientX - rect.left) / rect.width;
+                        const y = (e.clientY - rect.top) / rect.height;
+                        await handleSamClick(x, y, 0);
+                      }}
+                    />
                     <div className="text-xs text-gray-500">左键{ samPoints.filter(p => p.label === 1).length }点保留 · 右键{ samPoints.filter(p => p.label === 0).length }点抠除</div>
                     <div className="flex gap-2">
                       <Button
