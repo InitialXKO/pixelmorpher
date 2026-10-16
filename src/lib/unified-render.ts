@@ -1206,7 +1206,7 @@ export function generateRenderPlan(
     if (!node || !node.visible) continue;
 
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
-    const { sprite, mirror } = resolveSprite(node, currentDirection, activeCostumeSet, spriteTable);
+    const { sprite, mirror, spriteId } = resolveSprite(node, currentDirection, activeCostumeSet, spriteTable);
     if (!sprite) continue;
 
     // Determine rotation strategy
@@ -1225,6 +1225,7 @@ export function generateRenderPlan(
     nodeInstructions.push({
       nodeId,
       sprite,
+      spriteId: spriteId ?? sprite.id ?? null,
       worldX: worldTf.worldX,
       worldY: worldTf.worldY,
       angle: worldTf.worldAngle,
@@ -1376,6 +1377,7 @@ function renderNodeSprite(
   canvasHeight: number,
 ): void {
   const { nodeId, sprite, worldX, worldY, angle, stretch, mirror, rotationStrategy, modifiers, frame, frameRate } = instruction;
+  const spriteId = instruction.spriteId ?? sprite.id ?? null;
   const scaleX = instruction.scaleX ?? 1;
   const skews = instruction.skews ?? [];
   const previewQuality = instruction.previewQuality ?? 'high';
@@ -1667,7 +1669,7 @@ function renderNodeSprite(
       stretch,
       pivotX,
       pivotY,
-      sprite.id,
+      spriteId ?? undefined,
     );
 
     // Draw at world position with half-pixel alignment

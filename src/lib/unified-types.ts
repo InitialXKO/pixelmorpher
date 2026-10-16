@@ -731,6 +731,7 @@ export type RotationStrategy = 'native' | 'pixel-perfect';
 export interface NodeRenderInstruction {
   nodeId: string;
   sprite: Sprite;
+  spriteId?: string | null;      // Global sprite ID for cache key (null for inline)
   worldX: SubPixel;
   worldY: SubPixel;
   angle: number;
