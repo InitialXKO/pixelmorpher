@@ -355,9 +355,33 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
         })(),
       } as any);
 
-      if (t.pixels) {
-        // 有 pixels：绘制 screen 输出的像素
-        const grid = t.pixels;
+      // screen 节点无输出：取其 pixels 输入的像素
+      let previewPixels = t.pixels;
+      if (!previewPixels && selected?.type === 'screen') {
+        const pixelsInput = selected.inputs?.pixels;
+        if (pixelsInput && typeof pixelsInput === 'object' && 'nodeId' in pixelsInput) {
+          const ref = pixelsInput as { nodeId: string; output?: string };
+          try {
+            const out = evaluateNodeOutput(graph, ref.nodeId, {
+              frame: previewFrame,
+              frameRate,
+              vars: {},
+            } as any);
+            // out 是该节点的输出 Record，取 pixels 或 output 指定的
+            const outVals = out as Record<string, any>;
+            const px = outVals[ref.output ?? 'pixels'];
+            if (px && typeof px === 'object' && 'data' in px) {
+              previewPixels = (px as any).data;
+            } else if (Array.isArray(px)) {
+              previewPixels = px;
+            }
+          } catch {}
+        }
+      }
+
+      if (previewPixels) {
+        // 有 pixels：绘制像素
+        const grid = previewPixels;
         const gw = grid[0]?.length ?? 0;
         const gh = grid.length;
         if (gw > 0 && gh > 0) {
