@@ -83,7 +83,6 @@ interface EditorStore extends EditorState {
   clearSAMMask: () => void;
   disposeSAMModel: () => void;
   setInpaintRadius: (radius: number) => void;
-  applyInpaint: (partId: string) => void;
   extractSAMMaskAsPart: () => string | null;
   // Part Edit Mode
   enterSpriteEditMode: (spriteId: string) => void;
@@ -93,7 +92,6 @@ interface EditorStore extends EditorState {
   removePartEditModifier: (modId: string) => void;
   togglePartEditModifier: (modId: string) => void;
   setPartEditModifiers: (modifiers: import('../types').ModifierInstance[]) => void;
-  bakePartEditModifiers: (partId: string) => void;
   // V5: Brush style
   setBrushStyle: (style: BrushStyleType) => void;
   setBrushStyleParams: (params: Partial<BrushStyleParams>) => void;
@@ -167,7 +165,7 @@ const defaultEditor: EditorState = {
   panY: 0,
   playState: 'stopped',
   editMode: 'normal',
-  selectedPartId: null,
+  selectedSpriteId: null,
   selectedKeyframeId: null,
   selectedModifierId: null,
   selectedEffectTrackId: null,
@@ -266,7 +264,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setPan: (x, y) => set({ panX: x, panY: y }),
   setPlayState: (state) => set({ playState: state }),
   setEditMode: (mode) => set({ editMode: mode }),
-  selectPart: (id) => set({ selectedPartId: id, selectedKeyframeId: null, selectedModifierId: null }),
+  selectPart: (id) => set({ selectedSpriteId: id, selectedKeyframeId: null, selectedModifierId: null }),
   selectKeyframe: (id) => set({ selectedKeyframeId: id }),
   selectModifier: (id) => set({ selectedModifierId: id }),
   selectEffectTrack: (id) => set({ selectedEffectTrackId: id }),
@@ -373,47 +371,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }));
   },
   setInpaintRadius: (radius) => set({ inpaintRadius: radius }),
-  applyInpaint: (partId: string) => {
-    const { samState, inpaintRadius } = get();
-    if (!samState.currentMask || !samState.maskShape) return;
-
-    const projectStore = getProjectStore().getState();
-    const part = projectStore.parts.find(p => p.id === partId);
-    if (!part) return;
-
-    const offsetX = projectStore.canvasWidth / 2;
-    const offsetY = projectStore.canvasHeight / 2;
-
-    if (!samState.currentMask || !samState.maskShape) return;
-    const canvasMask = samMaskToSelectionMask(
-      samState.currentMask,
-      samState.maskShape,
-      projectStore.canvasWidth,
-      projectStore.canvasHeight,
-    );
-
-    const partMask = new Set<string>();
-    for (const key of canvasMask) {
-      const [cx, cy] = key.split(',').map(Number);
-      const lx = cx - (offsetX - part.pivotX + (part.offsetX || 0));
-      const ly = cy - (offsetY - part.pivotY + (part.offsetY || 0));
-      if (lx >= 0 && lx < part.width && ly >= 0 && ly < part.height) {
-        partMask.add(`${lx},${ly}`);
-      }
-    }
-
-    if (partMask.size === 0) return;
-
-    const currentFrame = projectStore.currentFrame;
-    const currentKf = projectStore.keyframes.find(k => k.partId === partId && k.frame === currentFrame);
-    const basePixels = currentKf?.correctionMask ?? part.pixels;
-    const inpaintedPixels = inpaintPixels(basePixels, partMask, inpaintRadius);
-    if (currentKf?.correctionMask) {
-      projectStore.setCorrection(currentKf.id, inpaintedPixels);
-    } else {
-      projectStore.setPartPixels(partId, inpaintedPixels);
-    }
-  },
 
   extractSAMMaskAsPart: () => {
     const { samState } = get();
@@ -533,7 +490,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       spriteEditBackupModifiers: [],
       spriteEditModifiers: [],
       spriteEditStartFrame: currentFrame,
-      selectedPartId: spriteId,
+      selectedSpriteId: spriteId,
     });
   },
 
@@ -625,56 +582,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         return { ...m, enabled: !m.enabled };
       }),
     }));
-  },
-
-  bakePartEditModifiers: (partId: string) => {
-    const projectStore = getProjectStore().getState();
-    const part = projectStore.parts.find(p => p.id === partId);
-    if (!part || !part.editModifiers || part.editModifiers.length === 0) return;
-
-    const pixelModTypes: ModifierType[] = [
-      'color_replace', 'outline', 'dither', 'pixel_displace',
-      'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip',
-      'pixel_edit',
-    ];
-    const pixelMods = part.editModifiers.filter(m => pixelModTypes.includes(m.type) && m.enabled);
-    let resultPixels = part.pixels.map(row => [...row]);
-    if (pixelMods.length > 0) {
-      const currentFrame = projectStore.currentFrame;
-      const modResult = applyPixelModifiers(resultPixels ?? part.pixels, pixelMods, currentFrame);
-      resultPixels = modResult.pixels;
-    }
-
-    const translateMod = part.editModifiers.find(m => m.type === 'translate' && m.enabled);
-    if (translateMod) {
-      const dx = Math.round(Number(translateMod.params.offsetX) || 0);
-      const dy = Math.round(Number(translateMod.params.offsetY) || 0);
-      if (dx !== 0 || dy !== 0) {
-        const shifted: PixelGrid = [];
-        for (let y = 0; y < part.height; y++) {
-          const row: PixelColor[] = [];
-          for (let x = 0; x < part.width; x++) {
-            const srcX = x - dx;
-            const srcY = y - dy;
-            if (srcX >= 0 && srcX < part.width && srcY >= 0 && srcY < part.height) {
-              row.push(resultPixels[srcY]?.[srcX] ?? null);
-            } else {
-              row.push(null);
-            }
-          }
-          shifted.push(row);
-        }
-        resultPixels = shifted;
-      }
-    }
-
-    projectStore.setPartPixels(partId, resultPixels);
-    projectStore.updatePart(partId, { editModifiers: [], partKeyframes: [] });
-
-    const { spriteEditSpriteId } = get();
-    if (spriteEditSpriteId === partId) {
-      set({ spriteEditModifiers: [] });
-    }
   },
 
   setBrushStyle: (style) => set({ brushStyle: style }),

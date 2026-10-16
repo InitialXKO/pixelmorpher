@@ -822,30 +822,30 @@ export default function ProceduralPanel() {
     totalFrames,
   } = useProjectStore();
 
-  const { selectedPartId } = useEditorStore();
+  const { selectedSpriteId } = useEditorStore();
 
   // Feature 5: CSV waveform import ref
 
   // ---- Derived ----
   const partAnimations = useMemo(
-    () => proceduralAnimations.filter((pa) => pa.spriteId === selectedPartId),
-    [proceduralAnimations, selectedPartId],
+    () => proceduralAnimations.filter((pa) => pa.spriteId === selectedSpriteId),
+    [proceduralAnimations, selectedSpriteId],
   );
 
   // ---- Handlers ----
   const handleAdd = useCallback(
     (type: ProceduralConfig['type']) => {
-      if (!selectedPartId) return;
+      if (!selectedSpriteId) return;
       const info = PROCEDURAL_TYPE_INFO[type];
       addProceduralAnimation(
-        selectedPartId,
+        selectedSpriteId,
         `${info.label} ${partAnimations.length + 1}`,
         { ...info.defaultConfig },
         0,
         totalFrames - 1,
       );
     },
-    [selectedPartId, partAnimations.length, totalFrames, addProceduralAnimation],
+    [selectedSpriteId, partAnimations.length, totalFrames, addProceduralAnimation],
   );
 
   const handleRemove = useCallback(
@@ -870,7 +870,7 @@ export default function ProceduralPanel() {
   );
 
   // ---- Render ----
-  if (!selectedPartId) {
+  if (!selectedSpriteId) {
     return (
       <div className="flex flex-col h-full bg-zinc-950" style={{ width: 280 }}>
         <div className="px-3 py-2.5 border-b border-zinc-800 shrink-0">

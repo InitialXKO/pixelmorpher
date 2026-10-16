@@ -99,7 +99,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
 
   // Sprites (for export disabled state) and selection (for correction toggle guard)
   const sprites = useProjectStore((s) => s.sprites);
-  const selectedPartId = useEditorStore((s) => s.selectedPartId);
+  const selectedSpriteId = useEditorStore((s) => s.selectedSpriteId);
 
   // Toast for user-facing errors
   const { toast } = useToast();
@@ -360,10 +360,10 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
                 state.editMode !== 'correction' &&
                 state.editMode !== 'sprite_edit') {
               const projectStore = useProjectStore.getState();
-              const selectedPartId = state.selectedPartId;
-              const sprite = selectedPartId ? projectStore.sprites[selectedPartId] : null;
+              const selectedSpriteId = state.selectedSpriteId;
+              const sprite = selectedSpriteId ? projectStore.sprites[selectedSpriteId] : null;
               if (sprite) {
-                state.enterSpriteEditMode(selectedPartId!);
+                state.enterSpriteEditMode(selectedSpriteId!);
               } else if (Object.keys(projectStore.sprites).length > 0) {
                 toast({ title: '请先选择精灵', description: '在精灵面板中选择一个精灵后再绘画' });
               }
@@ -407,7 +407,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
               onPressedChange={(pressed) => {
                 setEditMode(pressed ? 'correction' : 'normal');
               }}
-              disabled={!selectedPartId}
+              disabled={!selectedSpriteId}
               aria-label="修正模式"
               className="h-7 px-2 py-0 data-[state=on]:bg-cyan-600/30 data-[state=on]:text-cyan-300 data-[state=on]:ring-cyan-500/50 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded text-[10px] gap-1 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-500"
             >
@@ -416,7 +416,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
             </Toggle>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-xs">
-            {selectedPartId ? '修正模式: 笔画记录为 PixelEdit 修改器 (非破坏性)' : '修正模式: 请先选择一个部件'}
+            {selectedSpriteId ? '修正模式: 笔画记录为 PixelEdit 修改器 (非破坏性)' : '修正模式: 请先选择一个部件'}
           </TooltipContent>
         </Tooltip>
       )}

@@ -305,7 +305,7 @@ export default function TrajectoryPanel() {
   } = useProjectStore();
 
   const {
-    selectedPartId,
+    selectedSpriteId,
     showTrajectories,
     editMode,
     setEditMode,
@@ -327,34 +327,34 @@ export default function TrajectoryPanel() {
 
   // ---- Derived ----
   const trajectory = useMemo(
-    () => trajectories.find((t) => t.spriteId === selectedPartId),
-    [trajectories, selectedPartId],
+    () => trajectories.find((t) => t.spriteId === selectedSpriteId),
+    [trajectories, selectedSpriteId],
   );
 
   const hasKeyframes = useMemo(
-    () => keyframes.some((k) => k.spriteId === selectedPartId),
-    [keyframes, selectedPartId],
+    () => keyframes.some((k) => k.spriteId === selectedSpriteId),
+    [keyframes, selectedSpriteId],
   );
 
   // ---- Handlers ----
   const handleRecord = useCallback(() => {
-    if (!selectedPartId) return;
-    autoRecordTrajectory(selectedPartId);
+    if (!selectedSpriteId) return;
+    autoRecordTrajectory(selectedSpriteId);
     // Also enable trajectory display
     if (!showTrajectories) {
       toggleTrajectories();
     }
-  }, [selectedPartId, autoRecordTrajectory, showTrajectories, toggleTrajectories]);
+  }, [selectedSpriteId, autoRecordTrajectory, showTrajectories, toggleTrajectories]);
 
   const handleClear = useCallback(() => {
-    if (!selectedPartId) return;
-    clearTrajectory(selectedPartId);
-  }, [selectedPartId, clearTrajectory]);
+    if (!selectedSpriteId) return;
+    clearTrajectory(selectedSpriteId);
+  }, [selectedSpriteId, clearTrajectory]);
 
   const handleToggleVisibility = useCallback(() => {
-    if (!selectedPartId) return;
-    toggleTrajectoryVisibility(selectedPartId);
-  }, [selectedPartId, toggleTrajectoryVisibility]);
+    if (!selectedSpriteId) return;
+    toggleTrajectoryVisibility(selectedSpriteId);
+  }, [selectedSpriteId, toggleTrajectoryVisibility]);
 
   const handleToggleShow = useCallback(() => {
     toggleTrajectories();
@@ -362,26 +362,26 @@ export default function TrajectoryPanel() {
 
   const handlePointUpdate = useCallback(
     (frame: number, updates: Partial<Omit<TrajectoryCurvePoint, 'frame'>>) => {
-      if (!selectedPartId) return;
-      updateTrajectoryPoint(selectedPartId, frame, updates);
+      if (!selectedSpriteId) return;
+      updateTrajectoryPoint(selectedSpriteId, frame, updates);
     },
-    [selectedPartId, updateTrajectoryPoint],
+    [selectedSpriteId, updateTrajectoryPoint],
   );
 
   const handleGenerateTween = useCallback(() => {
-    if (!selectedPartId || !trajectory || trajectory.points.length < 2) return;
-    generateTweenFromTrajectory(selectedPartId, tweenStartFrame, tweenEndFrame, tweenStep);
-  }, [selectedPartId, trajectory, tweenStartFrame, tweenEndFrame, tweenStep, generateTweenFromTrajectory]);
+    if (!selectedSpriteId || !trajectory || trajectory.points.length < 2) return;
+    generateTweenFromTrajectory(selectedSpriteId, tweenStartFrame, tweenEndFrame, tweenStep);
+  }, [selectedSpriteId, trajectory, tweenStartFrame, tweenEndFrame, tweenStep, generateTweenFromTrajectory]);
 
   const handleGenerateAfterimage = useCallback(() => {
-    if (!selectedPartId || !trajectory || trajectory.points.length < 2) return;
+    if (!selectedSpriteId || !trajectory || trajectory.points.length < 2) return;
     const config: AfterimageConfig = {
       count: afterimageCount,
       opacityDecay: afterimageOpacityDecay,
       spacing: afterimageSpacing,
     };
-    generateAfterimageSequence(selectedPartId, config);
-  }, [selectedPartId, trajectory, afterimageCount, afterimageOpacityDecay, afterimageSpacing, generateAfterimageSequence]);
+    generateAfterimageSequence(selectedSpriteId, config);
+  }, [selectedSpriteId, trajectory, afterimageCount, afterimageOpacityDecay, afterimageSpacing, generateAfterimageSequence]);
 
   const handleEditToggle = useCallback(() => {
     if (editMode === 'trajectory_edit') {
@@ -396,7 +396,7 @@ export default function TrajectoryPanel() {
   }, [editMode, setEditMode, showTrajectories, toggleTrajectories]);
 
   // ---- Render ----
-  if (!selectedPartId) {
+  if (!selectedSpriteId) {
     return (
       <div className="flex flex-col h-full bg-zinc-950" style={{ width: 280 }}>
         <div className="px-3 py-2.5 border-b border-zinc-800 shrink-0">

@@ -332,7 +332,7 @@ export default function PixelCanvas() {
 
     renderBoneOverlay(rc, { skeletons: s.skeletons, showSkeletons: s.showSkeletons, selectedBoneId: s.selectedBoneId, activeSkeletonId: s.activeSkeletonId });
     renderWeightPaintOverlay(rc, { showWeightPaint: s.showWeightPaint, weightPaintBoneId: s.weightPaintBoneId, skeletons: s.skeletons, sprites: Object.values(useProjectStore.getState().sprites), getInterpolatedTranslateOffset: s.getInterpolatedTranslateOffset });
-    renderTrajectoryOverlay(rc, { showTrajectories: s.showTrajectories, trajectories: s.trajectories, selectedPartId: s.selectedPartId, editMode: s.editMode, trajectorySnap: s.trajectorySnap, totalFrames: useProjectStore.getState().totalFrames });
+    renderTrajectoryOverlay(rc, { showTrajectories: s.showTrajectories, trajectories: s.trajectories, selectedSpriteId: s.selectedSpriteId, editMode: s.editMode, trajectorySnap: s.trajectorySnap, totalFrames: useProjectStore.getState().totalFrames });
 
     // Skip puppet skeleton overlay during playback — reduces non-essential drawing overhead
     if (!isPlaying) {
@@ -374,7 +374,7 @@ export default function PixelCanvas() {
   }, [
     s.canvasWidth, s.canvasHeight, useProjectStore.getState().sprites, s.keyframes, s.backgroundColor,
     s.onionSkinEnabled, s.onionSkinFrames, s.showGrid, s.showTrajectories, s.editMode,
-    s.trajectories, s.selectedPart, s.selectedPartId, s.motionBlurStrokes, s.effectStrokes,
+    s.trajectories, s.selectedPart, s.selectedSpriteId, s.motionBlurStrokes, s.effectStrokes,
     s.effectTracks, s.autoMotionBlur, s.autoMotionBlurIntensity, s.tool,
     s.skeletons, s.showSkeletons, s.selectedBoneId, s.activeSkeletonId,
     s.showWeightPaint, s.weightPaintBoneId, s.unifiedCharacters,

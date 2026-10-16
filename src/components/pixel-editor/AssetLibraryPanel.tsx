@@ -715,7 +715,7 @@ function SaveToLibrarySection() {
   const handleSave = useCallback(async () => {
     const projectStore = useProjectStore.getState();
     const editorStore = require('@/lib/store').useEditorStore.getState();
-    const spriteId = editorStore.selectedPartId;
+    const spriteId = editorStore.selectedSpriteId;
     if (!spriteId) return;
 
     const sprite = projectStore.sprites[spriteId];

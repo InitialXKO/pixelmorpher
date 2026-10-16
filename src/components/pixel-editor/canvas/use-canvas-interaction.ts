@@ -31,7 +31,7 @@ export function useCanvasInteraction(s: CanvasState) {
   const commitStroke = useCallback(() => {
     const points = s.currentStrokePointsRef.current;
     if (points.length < 2) { s.currentStrokePointsRef.current = []; return; }
-    const spriteId = s.selectedPartId || '';
+    const spriteId = s.selectedSpriteId || '';
     const currentFrame = s.currentFrameRef.current;
     const frame = currentFrame;
 
@@ -44,7 +44,7 @@ export function useCanvasInteraction(s: CanvasState) {
       useProjectStore.getState().addEffectStroke(stroke);
     }
     s.currentStrokePointsRef.current = [];
-  }, [s.tool, s.selectedPartId, s.motionBlurBrushType, s.motionBlurIntensity, s.motionBlurDirection, s.effectBrushColor, s.effectBrushRadius, s.effectBrushIntensity, s.effectBrushDensity, s.effectBrushSpread]);
+  }, [s.tool, s.selectedSpriteId, s.motionBlurBrushType, s.motionBlurIntensity, s.motionBlurDirection, s.effectBrushColor, s.effectBrushRadius, s.effectBrushIntensity, s.effectBrushDensity, s.effectBrushSpread]);
 
   // ---- Render stroke preview ----
   const renderStrokePreview = useCallback(
@@ -54,14 +54,14 @@ export function useCanvasInteraction(s: CanvasState) {
       if (points.length < 2) return;
 
       if (s.tool === 'motion_blur_brush') {
-        const previewStroke: MotionBlurStroke = { id: '__preview__', frame: currentFrame, spriteId: s.selectedPartId || '', points, brushType: s.motionBlurBrushType, intensity: s.motionBlurIntensity, direction: s.motionBlurDirection, blendMode: s.strokeBlendMode };
+        const previewStroke: MotionBlurStroke = { id: '__preview__', frame: currentFrame, spriteId: s.selectedSpriteId || '', points, brushType: s.motionBlurBrushType, intensity: s.motionBlurIntensity, direction: s.motionBlurDirection, blendMode: s.strokeBlendMode };
         renderMotionBlurStroke(offCtx, previewStroke);
       } else if (s.tool === 'glow_brush' || s.tool === 'particle_brush' || s.tool === 'afterimage_brush') {
         const effectType = s.tool === 'glow_brush' ? 'glow_brush' : s.tool === 'particle_brush' ? 'particle_brush' : 'afterimage_brush';
-        const previewStroke: EffectStroke = { id: '__preview__', frame: currentFrame, spriteId: s.selectedPartId || '', type: effectType, points, color: s.effectBrushColor, radius: s.effectBrushRadius, intensity: s.effectBrushIntensity, density: s.effectBrushDensity, spread: s.effectBrushSpread, blendMode: s.strokeBlendMode };
+        const previewStroke: EffectStroke = { id: '__preview__', frame: currentFrame, spriteId: s.selectedSpriteId || '', type: effectType, points, color: s.effectBrushColor, radius: s.effectBrushRadius, intensity: s.effectBrushIntensity, density: s.effectBrushDensity, spread: s.effectBrushSpread, blendMode: s.strokeBlendMode };
         renderEffectStroke(offCtx, previewStroke);
       }
-    }, [s.tool, s.selectedPartId, s.motionBlurBrushType, s.motionBlurIntensity, s.motionBlurDirection, s.effectBrushColor, s.effectBrushRadius, s.effectBrushIntensity, s.effectBrushDensity, s.effectBrushSpread],
+    }, [s.tool, s.selectedSpriteId, s.motionBlurBrushType, s.motionBlurIntensity, s.motionBlurDirection, s.effectBrushColor, s.effectBrushRadius, s.effectBrushIntensity, s.effectBrushDensity, s.effectBrushSpread],
   );
 
   // ---- Mouse Down ----
@@ -203,7 +203,7 @@ export function useCanvasInteraction(s: CanvasState) {
           e.preventDefault();
           // 删除选区像素
           const state = useProjectStore.getState();
-          const sprite = state.sprites[s.editorStore.getState().selectedPartId ?? ''];
+          const sprite = state.sprites[s.editorStore.getState().selectedSpriteId ?? ''];
           if (sprite) {
             const newPixels = sprite.data.map((row) => [...row]);
             for (const key of s.selectionMaskRef.current) {

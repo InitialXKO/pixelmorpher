@@ -27,31 +27,7 @@ export default function useVirtualScroll(
   const rowGroups = useMemo(() => {
     const groups: { trackId: string; height: number }[] = [];
 
-    for (const track of tracks) {
-      const _sprite = sprites.find((p) => p.id === track.partId);
-      const animModifiers = ([] as import('@/lib/types').PartAnimationModifier[]) ;
-      const trackKeyframes = getKeyframesForPart(track.partId);
-      const kfModifierTypes = [...new Set(
-        trackKeyframes.flatMap((kf) => kf.modifiers.map((m) => m.type))
-      )].filter((t) => !ANIMATION_MODIFIER_TYPES.includes(t));
-
-      let height = TRACK_HEIGHT;
-      if (track.expanded) {
-        height += animModifiers.length * SUB_TRACK_HEIGHT;
-        for (const mod of animModifiers) {
-          height += (mod.paramDrivers?.length ?? 0) * SUB_TRACK_HEIGHT;
-        }
-        height += kfModifierTypes.length * SUB_TRACK_HEIGHT;
-        for (const modType of kfModifierTypes) {
-          const driverCount = trackKeyframes.reduce((sum, kf) => {
-            const mod = kf.modifiers.find((m) => m.type === modType);
-            return sum + (mod?.paramDrivers?.length ?? 0);
-          }, 0);
-          height += driverCount * SUB_TRACK_HEIGHT;
-        }
-      }
-      groups.push({ trackId: track.id, height });
-    }
+    // Legacy Part tracks removed (Part retired; tracks always empty)
 
     if (effectTracks.length > 0) {
       groups.push({ trackId: '__effect_sep__', height: 20 });

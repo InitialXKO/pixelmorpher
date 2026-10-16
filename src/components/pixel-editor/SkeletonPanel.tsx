@@ -714,7 +714,7 @@ function BoneProperties({
   const { currentFrame } = useProjectStore();
 
   const [showAddConstraint, setShowAddConstraint] = useState(false);
-  const [bindPartId, setBindPartId] = useState<string>('');
+  const [bindSpriteId, setBindPartId] = useState<string>('');
   const [bindWeight, setBindWeight] = useState(1);
 
   // Computed rest rotation and length from head/tail
@@ -778,12 +778,12 @@ function BoneProperties({
   }, [skeletonId, bone.id, currentFrame, bone.poseRotation, addBonePose]);
 
   const handleBindPart = useCallback(() => {
-    if (bindPartId) {
-      bindPartToBone(skeletonId, bone.id, bindPartId, bindWeight);
+    if (bindSpriteId) {
+      bindPartToBone(skeletonId, bone.id, bindSpriteId, bindWeight);
       setBindPartId('');
       setBindWeight(1);
     }
-  }, [skeletonId, bone.id, bindPartId, bindWeight, bindPartToBone]);
+  }, [skeletonId, bone.id, bindSpriteId, bindWeight, bindPartToBone]);
 
   const handleAddConstraint = useCallback(
     (constraint: BoneConstraint) => addBoneConstraint(skeletonId, bone.id, constraint),
@@ -965,7 +965,7 @@ function BoneProperties({
         {/* Add part binding */}
         {parts.length > 0 && (
           <div className="flex items-center gap-1.5">
-            <Select value={bindPartId} onValueChange={setBindPartId}>
+            <Select value={bindSpriteId} onValueChange={setBindPartId}>
               <SelectTrigger className="h-5 text-[10px] bg-zinc-800 border-zinc-700 text-zinc-200 flex-1">
                 <SelectValue placeholder="Select part" />
               </SelectTrigger>
@@ -991,7 +991,7 @@ function BoneProperties({
               size="icon"
               className="size-5 p-0 text-zinc-500 hover:text-emerald-400"
               onClick={handleBindPart}
-              disabled={!bindPartId}
+              disabled={!bindSpriteId}
             >
               <Plus className="size-3" />
             </Button>

@@ -149,10 +149,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   removeModifierParamKeyframe: (keyframeId: string, modifierId: string, paramKfId: string) => void;
   updateModifierParamKeyframe: (keyframeId: string, modifierId: string, paramKfId: string, params: Record<string, ModifierParamValue>) => void;
 
-  // M7: PartAnimationModifier param keyframe actions
-  addAnimModifierParamKeyframe: (partId: string, modifierId: string, frame: number, params: Record<string, ModifierParamValue>) => void;
-  removeAnimModifierParamKeyframe: (partId: string, modifierId: string, paramKfId: string) => void;
-
   // M7: ParamDriver actions
   addParamDriver: (keyframeId: string, modifierId: string, paramName: string, startFrame?: number, endFrame?: number) => void;
   removeParamDriver: (keyframeId: string, modifierId: string, driverId: string) => void;
@@ -162,14 +158,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   bakeParamDriver: (keyframeId: string, modifierId: string, driverId: string) => void;
   /** Unbake: remove baked paramKeyframes that came from a driver, re-enable the driver */
   unbakeParamDriver: (keyframeId: string, modifierId: string, driverId: string) => void;
-
-  // M7: PartAnimationModifier ParamDriver actions
-  addAnimParamDriver: (partId: string, modifierId: string, paramName: string, startFrame?: number, endFrame?: number) => void;
-  removeAnimParamDriver: (partId: string, modifierId: string, driverId: string) => void;
-  updateAnimParamDriver: (partId: string, modifierId: string, driverId: string, updates: Partial<ParamDriver>) => void;
-  toggleAnimParamDriver: (partId: string, modifierId: string, driverId: string) => void;
-  bakeAnimParamDriver: (partId: string, modifierId: string, driverId: string) => void;
-  unbakeAnimParamDriver: (partId: string, modifierId: string, driverId: string) => void;
 
   // Correction actions
   setCorrection: (keyframeId: string, mask: PixelGrid | null) => void;
@@ -319,7 +307,7 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   motionAnalysisSplit: (frames: PixelGrid[], options?: { blockSize?: number; searchRadius?: number; motionThreshold?: number; minRegionSize?: number }) => string[];
 
   // M8: Animation variable actions
-  addAnimationVariable: (name: string, scope: 'global' | 'part', partId?: string) => AnimationVariable;
+  addAnimationVariable: (name: string, scope: 'global' | 'part') => AnimationVariable;
   removeAnimationVariable: (variableId: string) => void;
   updateAnimationVariable: (variableId: string, updates: Partial<AnimationVariable>) => void;
   renameAnimationVariable: (variableId: string, name: string) => void;

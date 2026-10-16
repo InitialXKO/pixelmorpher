@@ -63,14 +63,13 @@ export const createAnimationSlice: StateCreator<ProjectStore, [], [], AnimationS
 
 
 
-  addAnimationVariable: (name, scope, partId) => {
+  addAnimationVariable: (name, scope) => {
     get().pushUndo('添加动画变量');
     invalidateVariableContextCache();
     const variable: AnimationVariable = {
       id: crypto.randomUUID(),
       name,
       scope,
-      partId: scope === 'part' ? partId : undefined,
       writerDriverId: '',
       defaultValue: 0,
     };

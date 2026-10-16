@@ -251,8 +251,8 @@ export const puppetHandler: ToolHandler = {
         pivotWorldY: 0,
         startMouseAngle: 0,
         dragStarted: false,
-        // pivot 移动专用 (spriteId 存于 pivotPartId 字段；plug 为 subpixel，需转像素)
-        pivotPartId: spriteId ?? '',
+        // pivot 移动专用 (spriteId 存于 pivotSpriteId 字段；plug 为 subpixel，需转像素)
+        pivotSpriteId: spriteId ?? '',
         origPivotX: sprite.plug ? subToPx(sprite.plug.x) : 0,
         origPivotY: sprite.plug ? subToPx(sprite.plug.y) : 0,
         nodeWorldAngle: computeWorldAngle(node),
@@ -432,14 +432,14 @@ export const puppetHandler: ToolHandler = {
       const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
       const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
       // px 已是画布像素（screenToPixel 里除过 zoom），精灵 1:1 绘制，画布像素 = 精灵像素
-      const sprite = useProjectStore.getState().sprites[drag.pivotPartId ?? ''];
+      const sprite = useProjectStore.getState().sprites[drag.pivotSpriteId ?? ''];
       if (sprite) {
         const newPivotX = Math.round((drag.origPivotX ?? 0) + localDx);
         const newPivotY = Math.round((drag.origPivotY ?? 0) + localDy);
         // 钳制到精灵范围内
         const clampedX = Math.max(0, Math.min(sprite.width - 1, newPivotX));
         const clampedY = Math.max(0, Math.min(sprite.height - 1, newPivotY));
-        store.updateSprite(drag.pivotPartId!, {
+        store.updateSprite(drag.pivotSpriteId!, {
           plug: { x: pxToSub(clampedX), y: pxToSub(clampedY) },
         });
       }
@@ -559,9 +559,9 @@ export const puppetHandler: ToolHandler = {
     }
     const drag = s.puppetNodeDragRef.current;
     // Ctrl+点击（未拖动）：进入部件像素编辑
-    // pivotPartId 存的是 spriteId；若为 part_<id> 格式则提取 id 进入精灵编辑
+    // pivotSpriteId 存的是 spriteId；若为 part_<id> 格式则提取 id 进入精灵编辑
     if (drag && drag.mode === 'pivot' && !drag.dragStarted) {
-      const pivotSpriteId = drag.pivotPartId ?? '';
+      const pivotSpriteId = drag.pivotSpriteId ?? '';
       const extractedSpriteId = pivotSpriteId.startsWith('part_') ? pivotSpriteId.slice(5) : null;
       if (extractedSpriteId) {
         s.editorStore.getState().selectPart(extractedSpriteId);
@@ -586,12 +586,12 @@ export const eyedropperHandler: ToolHandler = {
 export const fillToolHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
     const currentFrame = s.currentFrameRef.current;
-    if (s.editMode === 'correction' && s.selectedPartId && s.selectedPart) {
+    if (s.editMode === 'correction' && s.selectedSpriteId && s.selectedPart) {
       const selPart = s.selectedPart;
       const store = useProjectStore.getState();
       store.performBatch('填充', () => {
-        let currentKf = store.keyframes.find(k => k.spriteId === s.selectedPartId && k.frame === currentFrame);
-        if (!currentKf) currentKf = store.addKeyframe(s.selectedPartId!, currentFrame);
+        let currentKf = store.keyframes.find(k => k.spriteId === s.selectedSpriteId && k.frame === currentFrame);
+        if (!currentKf) currentKf = store.addKeyframe(s.selectedSpriteId!, currentFrame);
         if (currentKf) {
           let pixelEditMod = currentKf.modifiers.find(m => m.type === 'pixel_edit' && m.enabled);
           let modId = pixelEditMod?.id;
@@ -605,7 +605,7 @@ export const fillToolHandler: ToolHandler = {
       });
       return;
     }
-    if (s.editMode === 'sprite_edit' && s.selectedPartId && s.selectedPart) {
+    if (s.editMode === 'sprite_edit' && s.selectedSpriteId && s.selectedPart) {
       const selPart = s.selectedPart;
       const editorState = s.editorStore.getState();
       const currentPartEditMods = editorState.spriteEditModifiers;
@@ -626,7 +626,7 @@ export const fillToolHandler: ToolHandler = {
       }
       return;
     }
-    if (s.editMode === 'normal' && s.selectedPartId) s.editorStore.getState().enterSpriteEditMode(s.selectedPartId);
+    if (s.editMode === 'normal' && s.selectedSpriteId) s.editorStore.getState().enterSpriteEditMode(s.selectedSpriteId);
     s.applyFill(px, py);
   },
 };
@@ -637,7 +637,7 @@ export const fillToolHandler: ToolHandler = {
 
 export const trajectoryHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
-    if (s.editMode === 'trajectory_edit' && s.selectedPartId) {
+    if (s.editMode === 'trajectory_edit' && s.selectedSpriteId) {
       const cpHit = s.findTrajectoryCpAtPixel(px, py);
       if (cpHit) {
         useProjectStore.getState().beginDrag('拖动轨迹控制点');
@@ -646,7 +646,7 @@ export const trajectoryHandler: ToolHandler = {
         return;
       }
     }
-    if (e.shiftKey && s.selectedPartId) { s.isDrawingRef.current = true; s.markDirty(); s.handDrawTrajectoryRef.current = [{ x: px, y: py }]; s.lastPixelRef.current = { x: px, y: py }; return; }
+    if (e.shiftKey && s.selectedSpriteId) { s.isDrawingRef.current = true; s.markDirty(); s.handDrawTrajectoryRef.current = [{ x: px, y: py }]; s.lastPixelRef.current = { x: px, y: py }; return; }
     s.isDrawingRef.current = true; s.markDirty();
     s.trajectoryPathRef.current = [{ x: px, y: py }]; s.lastPixelRef.current = { x: px, y: py };
   },
@@ -671,7 +671,7 @@ export const trajectoryHandler: ToolHandler = {
 
   onMouseUp(s) {
     // Hand-drawn trajectory
-    if (s.isDrawingRef.current && s.handDrawTrajectoryRef.current.length > 2 && s.selectedPartId) {
+    if (s.isDrawingRef.current && s.handDrawTrajectoryRef.current.length > 2 && s.selectedSpriteId) {
       const rawPath = s.handDrawTrajectoryRef.current;
       const simplified = simplifyPath(rawPath, 3);
       const totalFrames = useProjectStore.getState().totalFrames;
@@ -684,14 +684,14 @@ export const trajectoryHandler: ToolHandler = {
         const prevPt = i > 0 ? simplified[i - 1] : simplified[i]; const nextPt = i < simplified.length - 1 ? simplified[i + 1] : simplified[i];
         const cp1x = i > 0 ? (prevPt.x + pt.x) / 2 - pt.x : 0; const cp1y = i > 0 ? (prevPt.y + pt.y) / 2 - pt.y : 0;
         const cp2x = i < simplified.length - 1 ? (nextPt.x + pt.x) / 2 - pt.x : 0; const cp2y = i < simplified.length - 1 ? (nextPt.y + pt.y) / 2 - pt.y : 0;
-        useProjectStore.getState().addTrajectoryPoint(s.selectedPartId, frame, snapX, snapY, 0);
-        useProjectStore.getState().updateTrajectoryPoint(s.selectedPartId, frame, { cp1x, cp1y, cp2x, cp2y });
+        useProjectStore.getState().addTrajectoryPoint(s.selectedSpriteId, frame, snapX, snapY, 0);
+        useProjectStore.getState().updateTrajectoryPoint(s.selectedSpriteId, frame, { cp1x, cp1y, cp2x, cp2y });
       }
       s.handDrawTrajectoryRef.current = [];
     } else if (s.handDrawTrajectoryRef.current.length > 0) s.handDrawTrajectoryRef.current = [];
 
     // Trajectory freehand path
-    if (s.isDrawingRef.current && s.trajectoryPathRef.current.length >= 2 && s.selectedPartId) {
+    if (s.isDrawingRef.current && s.trajectoryPathRef.current.length >= 2 && s.selectedSpriteId) {
       const path = s.trajectoryPathRef.current; const totalFrames = useProjectStore.getState().totalFrames; const pathLength = path.length;
       const numSamples = Math.min(totalFrames, Math.max(2, Math.round(pathLength / 3)));
       const step = pathLength / numSamples;
@@ -699,7 +699,7 @@ export const trajectoryHandler: ToolHandler = {
         const pathIndex = Math.min(Math.round(i * step), pathLength - 1); const point = path[pathIndex];
         const frame = Math.round((i / (numSamples - 1)) * (totalFrames - 1));
         const snapX = s.trajectorySnap ? Math.round(point.x) : point.x; const snapY = s.trajectorySnap ? Math.round(point.y) : point.y;
-        useProjectStore.getState().addTrajectoryPoint(s.selectedPartId, frame, snapX, snapY, 0);
+        useProjectStore.getState().addTrajectoryPoint(s.selectedSpriteId, frame, snapX, snapY, 0);
       }
       s.trajectoryPathRef.current = [];
     }
@@ -845,9 +845,8 @@ export const smartSelectHandler: ToolHandler = {
 export const inpaintHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
     const currentFrame = s.currentFrameRef.current;
-    const editor = s.editorStore.getState(); const { samState } = editor;
-    if (samState.currentMask && s.selectedPart) { editor.applyInpaint(s.selectedPart.id!); }
-    else if (s.selectedPart) {
+    const editor = s.editorStore.getState();
+    if (s.selectedPart) {
       const selPart = s.selectedPart;
       const offsetX = s.canvasWidth / 2; const offsetY = s.canvasHeight / 2;
       const lx = px - (offsetX - spritePivotX(selPart) + 0);
@@ -882,11 +881,11 @@ export const brushEraserHandler: ToolHandler = {
     const color = s.tool === 'eraser' ? null : s.brushColor;
 
     // Correction mode
-    if (s.editMode === 'correction' && s.selectedPartId && s.selectedPart) {
+    if (s.editMode === 'correction' && s.selectedSpriteId && s.selectedPart) {
       const selPart = s.selectedPart;
       const store = useProjectStore.getState();
-      let currentKf = store.keyframes.find(k => k.spriteId === s.selectedPartId && k.frame === currentFrame);
-      if (!currentKf) currentKf = store.addKeyframe(s.selectedPartId!, currentFrame);
+      let currentKf = store.keyframes.find(k => k.spriteId === s.selectedSpriteId && k.frame === currentFrame);
+      if (!currentKf) currentKf = store.addKeyframe(s.selectedSpriteId!, currentFrame);
       if (currentKf) {
         let pixelEditMod = currentKf.modifiers.find(m => m.type === 'pixel_edit' && m.enabled);
         let modId = pixelEditMod?.id;
@@ -902,9 +901,9 @@ export const brushEraserHandler: ToolHandler = {
 
     // Normal mode fallback
     if (s.editMode === 'normal') {
-      if (s.selectedPartId && s.selectedPart) {
+      if (s.selectedSpriteId && s.selectedPart) {
         const selPart = s.selectedPart;
-        const editorState = s.editorStore.getState(); editorState.enterSpriteEditMode(s.selectedPartId!);
+        const editorState = s.editorStore.getState(); editorState.enterSpriteEditMode(s.selectedSpriteId!);
         const offsetX = Math.floor((s.canvasWidth - selPart.width) / 2);
         const offsetY = Math.floor((s.canvasHeight - selPart.height) / 2);
         const localX = px - offsetX; const localY = py - offsetY;

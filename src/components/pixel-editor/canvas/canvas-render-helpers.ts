@@ -401,14 +401,14 @@ export function renderWeightPaintOverlay(rc: RenderContext, params: WeightPaintP
 export interface TrajectoryOverlayParams {
   showTrajectories: boolean;
   trajectories: import('@/lib/types').Trajectory[];
-  selectedPartId: string | null;
+  selectedSpriteId: string | null;
   editMode: string;
   trajectorySnap: boolean;
   totalFrames: number;
 }
 
 export function renderTrajectoryOverlay(rc: RenderContext, params: TrajectoryOverlayParams) {
-  const { showTrajectories, trajectories, selectedPartId, editMode, trajectorySnap, totalFrames } = params;
+  const { showTrajectories, trajectories, selectedSpriteId, editMode, trajectorySnap, totalFrames } = params;
   if (!showTrajectories) return;
 
   const { ctx, canvasWidth, canvasHeight, zoom, panX, panY, currentFrame } = rc;
@@ -418,7 +418,7 @@ export function renderTrajectoryOverlay(rc: RenderContext, params: TrajectoryOve
   for (const traj of trajectories) {
     if (!traj.visible || traj.points.length === 0) continue;
 
-    const isSelected = traj.spriteId === selectedPartId;
+    const isSelected = traj.spriteId === selectedSpriteId;
     const curveColor = isSelected ? '#00ffaa' : '#ff8800';
     const pointColor = isSelected ? '#00ffdd' : '#ffaa44';
     const highlightColor = '#ff3366';

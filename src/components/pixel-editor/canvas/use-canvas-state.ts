@@ -71,7 +71,7 @@ export function useCanvasState() {
     // socket 模式专用
     socketId?: string; parentNodeId?: string; origSocketX?: number; origSocketY?: number; parentAngle?: number;
     // pivot 模式专用
-    pivotPartId?: string; origPivotX?: number; origPivotY?: number;
+    pivotSpriteId?: string; origPivotX?: number; origPivotY?: number;
   } | null>(null);
   const pixelEditCommandRef = useRef<{ commandId: string; modifierId: string; keyframeId: string; points: { x: number; y: number }[] } | null>(null);
   const spriteEditBrushCmdRef = useRef<{ commandId: string; modifierId: string; points: { x: number; y: number }[] } | null>(null);
@@ -148,7 +148,7 @@ export function useCanvasState() {
   const showGrid = useEditorStore((s) => s.showGrid);
   const showTrajectories = useEditorStore((s) => s.showTrajectories);
   const editMode = useEditorStore((s) => s.editMode);
-  const selectedPartId = useEditorStore((s) => s.selectedPartId);
+  const selectedSpriteId = useEditorStore((s) => s.selectedSpriteId);
   const setZoom = useEditorStore((s) => s.setZoom);
   const setPan = useEditorStore((s) => s.setPan);
   const autoMotionBlur = useEditorStore((s) => s.autoMotionBlur);
@@ -187,7 +187,7 @@ export function useCanvasState() {
   const editorStore = useEditorStore;
 
   // ---- Derived ----
-  const selectedPart: Sprite | null = (selectedPartId ? spritesRecord[selectedPartId] : undefined) ?? null;
+  const selectedPart: Sprite | null = (selectedSpriteId ? spritesRecord[selectedSpriteId] : undefined) ?? null;
 
   // ---- Helper: get full translate offset ----
   const getFullTranslateOffset = useCallback(
@@ -595,7 +595,7 @@ export function useCanvasState() {
 
       for (const traj of trajectories) {
         if (!traj.visible || traj.points.length < 2) continue;
-        if (traj.spriteId !== selectedPartId) continue;
+        if (traj.spriteId !== selectedSpriteId) continue;
         const screenPoints = traj.points.map((pt) => ({ x: panX + (centerX + pt.x) * zoom, y: panY + (centerY + pt.y) * zoom }));
         for (let i = 0; i < screenPoints.length - 1; i++) {
           const p0 = i > 0 ? screenPoints[i - 1] : screenPoints[i];
@@ -615,7 +615,7 @@ export function useCanvasState() {
         }
       }
       return null;
-    }, [trajectories, selectedPartId, canvasWidth, canvasHeight, zoom, panX, panY],
+    }, [trajectories, selectedSpriteId, canvasWidth, canvasHeight, zoom, panX, panY],
   );
 
   // ---- Apply weight paint ----
@@ -742,7 +742,7 @@ export function useCanvasState() {
     workspaceMode, isPuppetMode,
     // Editor
     tool, brushSize, brushColor, zoom, panX, panY, showGrid, showTrajectories,
-    editMode, selectedPartId, setZoom, setPan,
+    editMode, selectedSpriteId, setZoom, setPan,
     autoMotionBlur, autoMotionBlurIntensity, motionBlurBrushType, motionBlurIntensity, motionBlurDirection,
     effectBrushColor, effectBrushRadius, effectBrushIntensity, effectBrushDensity, effectBrushSpread, strokeBlendMode,
     showSkeletons, selectedBoneId, activeSkeletonId, showWeightPaint, weightPaintBoneId,

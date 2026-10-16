@@ -120,9 +120,17 @@ export default function Home() {
     const handleUnload = () => autoSave();
     window.addEventListener('beforeunload', handleUnload);
 
+    // Page Lifecycle 推荐：切到后台时保存（页面还活着，OPFS 异步写能完成；
+    // beforeunload 不等 Promise，OPFS 写大概率被撕掉，只当最后兜底）
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') autoSave();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
     return () => {
       clearInterval(interval);
       window.removeEventListener('beforeunload', handleUnload);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 

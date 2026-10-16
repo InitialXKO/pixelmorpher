@@ -460,7 +460,7 @@ export default function SpritePanel() {
   const duplicateSprite = useProjectStore((s) => s.duplicateSprite);
   const importSpriteFromImage = useProjectStore((s) => s.importSpriteFromImage);
 
-  const selectedSpriteId = useEditorStore((s) => s.selectedPartId);
+  const selectedSpriteId = useEditorStore((s) => s.selectedSpriteId);
   const selectSprite = useEditorStore((s) => s.selectPart);
   const enterSpriteEditMode = useEditorStore((s) => s.enterSpriteEditMode);
 

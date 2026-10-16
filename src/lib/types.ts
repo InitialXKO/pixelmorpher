@@ -224,8 +224,6 @@ export interface AnimationVariable {
   name: string;
   /** 'global' = visible to all parts; 'part' = visible only within one part */
   scope: 'global' | 'part';
-  /** For part-scope variables: which part this variable belongs to */
-  partId?: string;
   /** The single ParamDriver that writes to this variable each frame.
    *  Its evaluateParamDriver output becomes the variable's value. */
   writerDriverId: string;
@@ -540,7 +538,6 @@ export interface Keyframe {
 
 export interface Track {
   id: string;
-  partId: string;
   visible: boolean;
   locked: boolean;
   expanded: boolean;
@@ -817,8 +814,6 @@ export const GLOBAL_MODIFIER_DEFINITIONS: { type: GlobalModifierType; label: str
 //   - A single Part can appear in multiple clips with different animation behaviors
 
 export interface ClipPartData {
-  /** The part this data belongs to */
-  partId: string;
   /** Animation modifiers for this part within this clip.
    *  Moved from Part.animationModifiers — allows different clips to animate
    *  the same part differently (e.g., walk vs run vs idle). */
@@ -1675,7 +1670,7 @@ export interface EditorState {
   panY: number;
   playState: PlayState;
   editMode: EditMode;
-  selectedPartId: string | null;
+  selectedSpriteId: string | null;
   selectedKeyframeId: string | null;
   selectedModifierId: string | null;
   selectedEffectTrackId: string | null;
