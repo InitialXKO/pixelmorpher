@@ -162,8 +162,58 @@ function writePuppetPoseKeyframe(
   });
 }
 
+/**
+ * 命中测试：屏幕像素是否落在某启用 IK 链的目标手柄上
+ * 返回 { characterId, chainId } 或 null
+ */
+function findIKTargetAtPixel(
+  s: CanvasState,
+  px: number,
+  py: number,
+): { characterId: string; chainId: string } | null {
+  const project = useProjectStore.getState();
+  const editor = s.editorStore.getState();
+  const zoom = editor.zoom;
+  const panX = editor.panX;
+  const panY = editor.panY;
+  const canvasW = project.canvasWidth;
+  const canvasH = project.canvasHeight;
+  const activeId = editor.activePuppetSkeletonId;
+  const chars = project.unifiedCharacters;
+  const list = activeId && chars[activeId] ? [chars[activeId]] : Object.values(chars);
+  const HIT_R = 12;
+  for (const ch of list) {
+    if (!ch) continue;
+    for (const chain of ch.ikChains ?? []) {
+      if (!chain.enabled) continue;
+      const sx = panX + (canvasW / 2 + chain.target.x) * zoom;
+      const sy = panY + (canvasH / 2 + chain.target.y) * zoom;
+      const dx = px - sx;
+      const dy = py - sy;
+      if (dx * dx + dy * dy <= HIT_R * HIT_R) {
+        return { characterId: ch.id, chainId: chain.id };
+      }
+    }
+  }
+  return null;
+}
+
 export const puppetHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
+    // 优先命中 IK 目标手柄
+    const ikHit = findIKTargetAtPixel(s, px, py);
+    if (ikHit) {
+      const sAny = s as unknown as { ikTargetDragRef?: { current: { characterId: string; chainId: string; startX: number; startY: number } | null } };
+      sAny.ikTargetDragRef = sAny.ikTargetDragRef || { current: null };
+      sAny.ikTargetDragRef.current = {
+        characterId: ikHit.characterId,
+        chainId: ikHit.chainId,
+        startX: px,
+        startY: py,
+      };
+      s.isDrawingRef.current = true;
+      return;
+    }
     const hit = s.findPuppetNodeAtPixel(px, py);
     const project = useProjectStore.getState();
     if (!hit) {
@@ -360,6 +410,29 @@ export const puppetHandler: ToolHandler = {
   },
 
   onMouseMove(s, e, px, py) {
+    // IK 目标拖拽
+    const ikDrag = (s as unknown as { ikTargetDragRef?: { current: { characterId: string; chainId: string } | null } }).ikTargetDragRef?.current;
+    if (ikDrag) {
+      const project = useProjectStore.getState();
+      const editor = s.editorStore.getState();
+      const zoom = editor.zoom;
+      const panX = editor.panX;
+      const panY = editor.panY;
+      const canvasW = project.canvasWidth;
+      const canvasH = project.canvasHeight;
+      // 屏幕 → 角色空间
+      const tx = (px - panX) / zoom - canvasW / 2;
+      const ty = (py - panY) / zoom - canvasH / 2;
+      const ch = project.unifiedCharacters[ikDrag.characterId];
+      if (ch) {
+        const chains = (ch.ikChains ?? []).map((c) =>
+          c.id === ikDrag.chainId ? { ...c, target: { x: Math.round(tx), y: Math.round(ty) } } : c,
+        );
+        project.updateUnifiedCharacter(ikDrag.characterId, { ikChains: chains });
+      }
+      s.markDirty();
+      return;
+    }
     const drag = s.puppetNodeDragRef.current;
     if (!drag) return;
     if (!drag.dragStarted) {
@@ -522,6 +595,14 @@ export const puppetHandler: ToolHandler = {
   },
 
   onMouseUp(s) {
+    // IK 目标拖拽结束
+    const ikRef = (s as unknown as { ikTargetDragRef?: { current: unknown } }).ikTargetDragRef;
+    if (ikRef?.current) {
+      ikRef.current = null;
+      s.isDrawingRef.current = false;
+      s.markDirty();
+      return;
+    }
     const drag = s.puppetNodeDragRef.current;
     // Ctrl+点击（未拖动）：进入部件像素编辑
     // pivotPartId 存的是 spriteId；若为 part_<id> 格式则提取 partId 进入 Part 编辑

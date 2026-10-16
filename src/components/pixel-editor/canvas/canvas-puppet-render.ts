@@ -25,6 +25,42 @@ export interface PuppetSkeletonOverlayParams {
   sprites: import('@/lib/unified-types').Sprite[];
 }
 
+/**
+ * 在骨架覆盖层上绘制 IK 目标手柄
+ * 坐标：chain.target 为角色空间像素，(0,0) 在画布中心
+ */
+export function renderIKTargetHandles(
+  rc: { ctx: CanvasRenderingContext2D; canvasWidth: number; canvasHeight: number; zoom: number; panX: number; panY: number },
+  character: Character,
+): void {
+  const chains = character.ikChains?.filter((c) => c.enabled);
+  if (!chains || chains.length === 0) return;
+  const { ctx, canvasWidth, canvasHeight, zoom, panX, panY } = rc;
+  ctx.save();
+  for (const chain of chains) {
+    const sx = panX + (canvasWidth / 2 + chain.target.x) * zoom;
+    const sy = panY + (canvasHeight / 2 + chain.target.y) * zoom;
+    // 准星
+    ctx.strokeStyle = '#00ff88';
+    ctx.lineWidth = 1.5;
+    const r = 8;
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(sx - r - 4, sy); ctx.lineTo(sx - r + 2, sy);
+    ctx.moveTo(sx + r - 2, sy); ctx.lineTo(sx + r + 4, sy);
+    ctx.moveTo(sx, sy - r - 4); ctx.lineTo(sx, sy - r + 2);
+    ctx.moveTo(sx, sy + r - 2); ctx.lineTo(sx, sy + r + 4);
+    ctx.stroke();
+    // 链名
+    ctx.fillStyle = '#00ff88';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(chain.name, sx + r + 6, sy - r - 2);
+  }
+  ctx.restore();
+}
+
 export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSkeletonOverlayParams) {
   const { shouldRender, characters, activePuppetSkeletonId, selectedNodeId, animationClips, sprites: parts } = params;
   if (!shouldRender || characters.length === 0) return;

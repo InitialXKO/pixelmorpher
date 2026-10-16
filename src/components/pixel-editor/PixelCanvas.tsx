@@ -24,6 +24,7 @@ import {
 } from './canvas/canvas-render-helpers';
 import {
   renderPuppetSkeletonOverlay,
+  renderIKTargetHandles,
   renderPivotCrosshair,
   renderStrokeCursorIndicator,
   renderFpsCounter,
@@ -345,6 +346,11 @@ export default function PixelCanvas() {
         selectedNodeId: s.selectedNodeId,
         animationClips: useProjectStore.getState().animationClips, sprites: Object.values(useProjectStore.getState().sprites),
       });
+      // IK 目标手柄（启用的链）
+      const activeChar = charList.find((c) => c.id === s.activePuppetSkeletonId) ?? charList[0];
+      if (activeChar && (s.isPuppetMode || s.tool === 'puppet')) {
+        renderIKTargetHandles(rc, activeChar);
+      }
     }
 
     renderPivotCrosshair(rc, s.selectedPart, s.getInterpolatedTranslateOffset);
