@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import {
   Plus,
   Trash2,
@@ -46,6 +46,40 @@ interface DressPanelProps {
  * 节点驱动：选角色 → 选服装集 → 选节点 → 给四个方向配精灵。
  * 写入 Character.sprites 表 + CostumeSet.pieces（SpriteRef），不再用 spriteMap。
  */
+
+/** 精灵缩略图：canvas 绘制 PixelGrid */
+function SpriteThumbnail({ sprite, size = 32 }: { sprite: Sprite; size?: number }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !sprite.data) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = sprite.width, h = sprite.height;
+    canvas.width = w;
+    canvas.height = h;
+    ctx.clearRect(0, 0, w, h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const c = sprite.data[y]?.[x];
+        if (c && c !== '#00000000' && !c.endsWith('00')) {
+          ctx.fillStyle = c;
+          ctx.fillRect(x, y, 1, 1);
+        }
+      }
+    }
+  }, [sprite]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{ width: size, height: size, imageRendering: 'pixelated' }}
+      className="rounded bg-black/50"
+    />
+  );
+}
+
 export default function DressPanel({
   unifiedCharacters,
   sprites,
@@ -296,7 +330,7 @@ function DirectionSpriteEditor({
                 className="h-12 rounded bg-black/30 border border-dashed border-gray-700 flex items-center justify-center cursor-pointer hover:border-cyan-500/50 overflow-hidden"
               >
                 {sprite ? (
-                  <span className="text-[9px] text-gray-400 truncate px-1">{sprite.name}</span>
+                  <SpriteThumbnail sprite={sprite} size={40} />
                 ) : (
                   <Plus className="size-4 text-gray-700" />
                 )}
@@ -320,10 +354,11 @@ function DirectionSpriteEditor({
                   onAssign(pickerDir, sp.id ?? null);
                   setPickerDir(null);
                 }}
-                className="px-1.5 py-1 rounded text-[9px] bg-black/30 text-gray-400 hover:bg-cyan-500/20 hover:text-cyan-300 cursor-pointer truncate"
+                className="p-1 rounded bg-black/30 hover:bg-cyan-500/20 cursor-pointer flex flex-col items-center gap-0.5"
                 title={sp.name ?? sp.id}
               >
-                {sp.name ?? sp.id?.slice(0, 12)}
+                <SpriteThumbnail sprite={sp} size={36} />
+                <span className="text-[8px] text-gray-400 truncate w-full text-center">{sp.name ?? sp.id?.slice(0, 12)}</span>
               </div>
             ))}
           </div>
