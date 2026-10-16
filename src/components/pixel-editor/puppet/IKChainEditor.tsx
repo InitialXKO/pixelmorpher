@@ -47,7 +47,8 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
 
   const handleAdd = () => {
     if (!character || !canAdd) return;
-    const solver = chainJoints.length === 2 ? '2bone' : 'fabrik';
+    // 2bone = 2 根骨 = 3 关节；其他（1 骨/多骨）走 fabrik
+    const solver = chainJoints.length === 3 ? '2bone' : 'fabrik';
     const endNode = character.nodes[endId];
     // 计算末端执行器的 FK 世界位置（SubPixel→像素），作为 IK 初始目标
     // 这样新建链不会导致肢体跳变
@@ -169,7 +170,7 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
           <div className="text-[9px] text-gray-500">
             {chainJoints.length >= 2 ? (
               <span>
-                关节数: {chainJoints.length}（{chainJoints.length === 2 ? '2bone' : 'fabrik'}）
+                关节数: {chainJoints.length}（{chainJoints.length === 3 ? '2bone' : 'fabrik'}）
               </span>
             ) : (
               <span className="text-amber-500">两节点不连通（末端不在根的子树下）</span>

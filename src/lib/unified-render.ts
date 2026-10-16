@@ -389,7 +389,9 @@ function applyIKChain(
     const anglesStr = typeof anglesVal === 'object' && anglesVal !== null && 'value' in anglesVal
       ? String((anglesVal as { value: string }).value)
       : '';
-    angles = anglesStr.split(',').map(Number).filter((n) => !isNaN(n));
+    const raw = anglesStr.split(',').map(Number).filter((n) => !isNaN(n));
+    // fabrik 返回 N-1 个骨角度，补到 N 个关节（末关节沿用最后骨角度）
+    angles = jointIds.map((_, idx) => raw[Math.min(idx, raw.length - 1)] ?? 0);
   }
 
   if (angles.length === 0) return;
