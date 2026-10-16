@@ -8,7 +8,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useProjectStore } from '@/lib/store';
 import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
-import { inpaintPixels } from '@/lib/inpainting';
+import { inpaintPixels, samMaskToSelectionMask } from '@/lib/inpainting';
 import { floodFill } from '@/lib/engine';
 import { renderUnifiedToCanvas } from '@/lib/unified-render';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
@@ -846,6 +846,42 @@ export const inpaintHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
     const currentFrame = s.currentFrameRef.current;
     const editor = s.editorStore.getState();
+    const { samState } = editor;
+    // SAM 辅助 inpaint（新架构迁移：替代已删除的 applyInpaint——旧实现读不存在的 parts 必崩）。
+    // SAM 选区存在时，用 inpaint 工具点一下即对选区做 Telea 填补；否则走下面的圆形半径逻辑。
+    if (samState.currentMask && samState.maskShape && s.selectedPart) {
+      const selPart = s.selectedPart;
+      const offsetX = s.canvasWidth / 2;
+      const offsetY = s.canvasHeight / 2;
+      const canvasMask = samMaskToSelectionMask(
+        samState.currentMask,
+        samState.maskShape,
+        s.canvasWidth,
+        s.canvasHeight,
+      );
+      const pivotX = spritePivotX(selPart);
+      const pivotY = spritePivotY(selPart);
+      const spriteMask = new Set<string>();
+      for (const key of canvasMask) {
+        const comma = key.indexOf(',');
+        const cx = Number(key.slice(0, comma));
+        const cy = Number(key.slice(comma + 1));
+        const lx = Math.round(cx - (offsetX - pivotX));
+        const ly = Math.round(cy - (offsetY - pivotY));
+        if (lx >= 0 && lx < selPart.width && ly >= 0 && ly < selPart.height) {
+          spriteMask.add(`${lx},${ly}`);
+        }
+      }
+      if (spriteMask.size > 0) {
+        const store = useProjectStore.getState();
+        const currentKf = store.keyframes.find(k => k.spriteId === selPart.id && k.frame === currentFrame);
+        const basePixels = currentKf?.correctionMask ?? selPart.data;
+        const inpainted = inpaintPixels(basePixels, spriteMask, editor.inpaintRadius);
+        if (currentKf?.correctionMask) store.setCorrection(currentKf.id, inpainted);
+        else s.setPartPixels(selPart.id!, inpainted);
+      }
+      return;
+    }
     if (s.selectedPart) {
       const selPart = s.selectedPart;
       const offsetX = s.canvasWidth / 2; const offsetY = s.canvasHeight / 2;
@@ -1098,7 +1134,6 @@ export const weightPaintHandler: ToolHandler = {
 
 export function getToolHandler(
   tool: string,
-  isPuppetMode: boolean,
   isPartEdit: boolean = false,
 ): ToolHandler | null {
   // Part-edit mode: pixel tools edit the part directly even inside puppet workspace
@@ -1109,26 +1144,6 @@ export function getToolHandler(
     if (tool === 'eyedropper') return eyedropperHandler;
   }
 
-  // Puppet mode takes priority
-  if (isPuppetMode || tool === 'puppet') return puppetHandler;
-
-  // Standard tool dispatch
-  switch (tool) {
-    case 'move': return moveToolHandler;
-    case 'select': return selectToolHandler;
-    case 'eyedropper': return eyedropperHandler;
-    case 'fill': return fillToolHandler;
-    case 'trajectory': return trajectoryHandler;
-    case 'crop': return cropHandler;
-    case 'lasso': return lassoHandler;
-    case 'magic_wand': return magicWandHandler;
-    case 'smart_select': return smartSelectHandler;
-    case 'inpaint': return inpaintHandler;
-    case 'brush':
-    case 'eraser': return brushEraserHandler;
-    default:
-      // Stroke tools (motion_blur_brush, glow_brush, particle_brush, afterimage_brush)
-      if (isStrokeToolCheck(tool)) return strokeToolHandler;
-      return null;
-  }
+  // Puppet 是唯一工作流（workspace mode 已退役），非精灵编辑时一律走 puppetHandler
+  return puppetHandler;
 }

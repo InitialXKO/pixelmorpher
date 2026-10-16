@@ -135,9 +135,6 @@ export function useCanvasState() {
   }, []);
 
   // ---- Puppet mode state ----
-  const { mode: workspaceMode } = useWorkspaceStore();
-  const isPuppetMode = workspaceMode === 'puppet';
-
   // ---- Editor store selectors ----
   const tool = useEditorStore((s) => s.tool);
   const brushSize = useEditorStore((s) => s.brushSize);
@@ -738,8 +735,6 @@ export function useCanvasState() {
     setPartPixels, setCorrection, frameRate, setCanvasSize, animationVariables,
     globalModifiers,
     nonPuppetParts, unifiedCharacters,
-    // Tile/puppet
-    workspaceMode, isPuppetMode,
     // Editor
     tool, brushSize, brushColor, zoom, panX, panY, showGrid, showTrajectories,
     editMode, selectedSpriteId, setZoom, setPan,

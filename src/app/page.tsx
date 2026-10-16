@@ -49,24 +49,16 @@ export default function Home() {
   const isMasking = editMode === 'mask';
   // 遮罩中：锁定不相干操作
   const isLocked = isMasking;
-  const { mode, layouts, updateLayout } = useWorkspaceStore();
+  const { layouts } = useWorkspaceStore();
   const [exportOpen, setExportOpen] = useState(false);
   const initializedRef = useRef(false);
   const { showProjectHome, setShowProjectHome, loadProjectList, loadLibrary } = useAssetStore();
 
-  // Get current layout based on workspace mode
-  const currentLayout = layouts[mode];
+  // 单一编辑器布局（workspace mode 已退役，puppet 是唯一工作流）
+  const currentLayout = layouts['puppet'];
 
   // Timeline collapsed state — locally managed, initialized from workspace layout
-  // When workspace mode changes, the workspace store is the source of truth
-  const [timelineCollapsed, setTimelineCollapsed] = useState(() => layouts[mode].timelineCollapsed);
-  const [activeMode, setActiveMode] = useState(mode);
-
-  // Sync when mode changes (using a key-based pattern)
-  if (activeMode !== mode) {
-    setActiveMode(mode);
-    setTimelineCollapsed(layouts[mode].timelineCollapsed);
-  }
+  const [timelineCollapsed, setTimelineCollapsed] = useState(() => currentLayout.timelineCollapsed);
 
   // ---- Check for autosave on startup ----
   const [autosaveDialogOpen, setAutosaveDialogOpen] = useState(false);
@@ -389,13 +381,8 @@ export default function Home() {
 
   // ---- Right panel content based on workspace mode ----
   const renderRightPanel = () => {
-    // Puppet mode: single focused workflow panel (rig → dress → perform).
-    // Modifier/canvas-effect tabs were removed here — they live in animation mode.
-    if (mode === 'puppet') {
-      return <PuppetPanel />;
-    }
-
-    // Animation mode: tabbed panel with all the existing tabs
+    // Puppet 是唯一工作流：单 focused 面板（rig → dress → perform）
+    return <PuppetPanel />;
     return (
       <Tabs defaultValue={currentLayout.rightPanelDefaultTab} className="flex flex-col h-full">
         <TabsList className="w-full justify-start rounded-none border-b border-zinc-800 bg-zinc-950 h-auto min-h-8 px-0.5 py-0.5 flex-wrap">
@@ -493,7 +480,7 @@ export default function Home() {
         </div>
 
         {/* Project Home Screen (replaces editor when no project is open) */}
-        {mode === 'project_home' || showProjectHome ? (
+        {showProjectHome ? (
           <ProjectHomeScreen />
         ) : (
         /* Main content area with resizable panels */
@@ -512,21 +499,12 @@ export default function Home() {
                 className="transition-all duration-300"
               >
                 <div className={isLocked ? 'pointer-events-none opacity-40 h-full' : 'h-full'}>
-                {mode === 'puppet' ? (
                   <div className="flex flex-col h-full">
                     <PuppetAssetPanel />
                     <div className="border-t border-zinc-800/50">
                       <AnimationClipPanel />
                     </div>
                   </div>
-                ) : (
-                  <div className="flex flex-col h-full">
-                    <AssetLibraryPanel />
-                    <div className="border-t border-zinc-800/50">
-                      <AnimationClipPanel />
-                    </div>
-                  </div>
-                )}
                 </div>
               </ResizablePanel>
               <ResizableHandle className="bg-zinc-800/80 hover:bg-purple-600/30 transition-colors w-px" />

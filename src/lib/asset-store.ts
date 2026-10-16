@@ -331,10 +331,7 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
       }
 
       // Switch workspace mode to animation editor
-      try {
-        const { useWorkspaceStore } = await import('./workspace-store');
-        useWorkspaceStore.getState().setMode('puppet');
-      } catch {}
+      // workspace mode 已退役：puppet 是唯一工作流，无需 setMode
 
       set({ currentProjectId: id, showProjectHome: false });
     } catch {
@@ -458,11 +455,7 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
 
       await dbPut('projectMeta', meta);
 
-      // Switch workspace mode to animation editor
-      try {
-        const { useWorkspaceStore } = await import('./workspace-store');
-        useWorkspaceStore.getState().setMode('puppet');
-      } catch {}
+      // workspace mode 已退役：puppet 是唯一工作流，无需 setMode
 
       set((s) => ({
         projectList: [meta, ...s.projectList],

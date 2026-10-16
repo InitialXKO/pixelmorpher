@@ -1,15 +1,12 @@
 'use client';
 
 import { create } from 'zustand';
-import type { WorkspaceMode } from './types';
 
 // ============================================================
 // PixelMorpher - Workspace Store
-// Manages workspace mode switching and layout configuration
+// workspace mode 已退役：puppet 是唯一工作流
+// 仅保留编辑器布局配置
 // ============================================================
-
-// Re-export WorkspaceMode from canonical types.ts for backward compatibility
-export type { WorkspaceMode };
 
 export interface WorkspaceLayout {
   leftPanelWidth: number;     // pixels
@@ -40,27 +37,14 @@ export interface TileWorkflowSettings {
 }
 
 export interface WorkspaceState {
-  mode: WorkspaceMode;
-  layouts: Record<WorkspaceMode, WorkspaceLayout>;
-  tilePreview: TilePreviewSettings;
-  tileWorkflow: TileWorkflowSettings;
+  // workspace mode 已退役：puppet 是唯一工作流
+  // 布局为单一对象（不再按 mode 区分）
+  layouts: Record<'puppet', WorkspaceLayout>;
   // actions
-  setMode: (mode: WorkspaceMode) => void;
-  updateLayout: (mode: WorkspaceMode, updates: Partial<WorkspaceLayout>) => void;
-  updateTilePreview: (updates: Partial<TilePreviewSettings>) => void;
-  updateTileWorkflow: (updates: Partial<TileWorkflowSettings>) => void;
+  updateLayout: (updates: Partial<WorkspaceLayout>) => void;
 }
 
-const DEFAULT_LAYOUTS: Record<WorkspaceMode, WorkspaceLayout> = {
-  project_home: {
-    leftPanelWidth: 0,
-    leftPanelVisible: false,
-    rightPanelWidth: 0,
-    rightPanelVisible: false,
-    timelineHeight: 0,
-    timelineCollapsed: true,
-    rightPanelDefaultTab: '',
-  },
+const DEFAULT_LAYOUTS: Record<'puppet', WorkspaceLayout> = {
   puppet: {
     leftPanelWidth: 240,
     leftPanelVisible: true,
@@ -72,44 +56,14 @@ const DEFAULT_LAYOUTS: Record<WorkspaceMode, WorkspaceLayout> = {
   },
 };
 
-const DEFAULT_TILE_PREVIEW: TilePreviewSettings = {
-  cols: 3,
-  rows: 3,
-  gap: 1,
-  gapColor: '#1a1a2e',
-  seamlessHighlight: false,
-  zoom: 2,
-};
-
-const DEFAULT_TILE_WORKFLOW: TileWorkflowSettings = {
-  defaultStep: 1,
-  tileSize: 16,
-  autoGenerateOnSwitch: true,
-};
-
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
-  mode: 'puppet',
   layouts: { ...DEFAULT_LAYOUTS },
-  tilePreview: { ...DEFAULT_TILE_PREVIEW },
-  tileWorkflow: { ...DEFAULT_TILE_WORKFLOW },
 
-  setMode: (mode) => set({ mode }),
-
-  updateLayout: (mode, updates) =>
+  updateLayout: (updates) =>
     set((state) => ({
       layouts: {
         ...state.layouts,
-        [mode]: { ...state.layouts[mode], ...updates },
+        puppet: { ...state.layouts.puppet, ...updates },
       },
-    })),
-
-  updateTilePreview: (updates) =>
-    set((state) => ({
-      tilePreview: { ...state.tilePreview, ...updates },
-    })),
-
-  updateTileWorkflow: (updates) =>
-    set((state) => ({
-      tileWorkflow: { ...state.tileWorkflow, ...updates },
     })),
 }));

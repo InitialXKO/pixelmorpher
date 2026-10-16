@@ -1,110 +1,42 @@
 'use client';
 
 import React from 'react';
-import { Home, Users } from 'lucide-react';
+import { Home } from 'lucide-react';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { useWorkspaceStore } from '@/lib/workspace-store';
+import { Button } from '@/components/ui/button';
 import { useEditorStore } from '@/lib/store';
-import type { WorkspaceMode } from '@/lib/workspace-store';
+import { useAssetStore } from '@/lib/asset-store';
 
 // ============================================================
-// WorkspaceSwitcher - Toggle between project_home and puppet modes
-// When switching modes, properly clean up mode-specific state:
-//   - Switching to puppet: exit part_edit mode, enable skeleton overlay
-//   - Switching to project_home: save current project
+// WorkspaceSwitcher - 退役 workspace mode 后，仅保留"返回主页"按钮
 // ============================================================
-
-const MODE_CONFIG: { value: WorkspaceMode; icon: React.ReactNode; label: string; activeColor: string; activeBg: string }[] = [
-  {
-    value: 'project_home',
-    icon: <Home className="size-3.5" />,
-    label: '项目管理',
-    activeColor: 'text-amber-300',
-    activeBg: 'bg-amber-600/30',
-  },
-  {
-    value: 'puppet',
-    icon: <Users className="size-3.5" />,
-    label: '木偶模式',
-    activeColor: 'text-cyan-300',
-    activeBg: 'bg-cyan-600/30',
-  },
-];
 
 export default function WorkspaceSwitcher() {
-  const { mode, setMode } = useWorkspaceStore();
-
-  const handleModeSwitch = (newMode: WorkspaceMode) => {
-    if (newMode === mode) return;
-
-    // Clean up mode-specific state when switching
-    if (newMode === 'puppet') {
-      // Exit part_edit mode when entering puppet mode
-      const editorState = useEditorStore.getState();
-      if (editorState.editMode === 'sprite_edit') {
-        editorState.exitSpriteEditMode(true);
-      }
-      // Enable puppet skeleton overlay when entering puppet mode
-      if (!editorState.showPuppetSkeleton) {
-        editorState.togglePuppetSkeleton();
-      }
-      // Auto-activate puppet tool as the default canvas tool
-      if (editorState.tool !== 'puppet') {
-        editorState.setTool('puppet');
-      }
+  const handleGoHome = () => {
+    // 保存当前项目
+    useAssetStore.getState().saveCurrentProject();
+    // 退出精灵编辑模式
+    const editorState = useEditorStore.getState();
+    if (editorState.editMode === 'sprite_edit') {
+      editorState.exitSpriteEditMode(true);
     }
-
-    // When leaving puppet mode, disable skeleton overlay
-    if (mode === 'puppet' && newMode !== 'puppet') {
-      const editorState = useEditorStore.getState();
-      if (editorState.showPuppetSkeleton) {
-        editorState.togglePuppetSkeleton();
-      }
-    }
-
-    if (newMode === 'project_home') {
-      // Save current project before going home
-      const { useAssetStore } = require('@/lib/asset-store') as { useAssetStore: any };
-      useAssetStore.getState().saveCurrentProject();
-      useAssetStore.getState().setShowProjectHome(true);
-    } else {
-      // 离开项目主页：必须同时清除 showProjectHome，否则主页会一直盖住编辑器
-      const { useAssetStore } = require('@/lib/asset-store') as { useAssetStore: any };
-      if (useAssetStore.getState().showProjectHome) {
-        useAssetStore.getState().setShowProjectHome(false);
-      }
-    }
-
-    setMode(newMode);
+    // 显示主页
+    useAssetStore.getState().setShowProjectHome(true);
   };
 
   return (
-    <div className="flex items-center gap-0.5 bg-white/5 rounded-md p-0.5">
-      {MODE_CONFIG.map(({ value, icon, label, activeColor, activeBg }) => {
-        const isActive = mode === value;
-        return (
-          <Tooltip key={value}>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => handleModeSwitch(value)}
-                className={`
-                  flex items-center justify-center h-6 w-7 rounded-sm transition-all duration-200
-                  ${isActive
-                    ? `${activeBg} ${activeColor} ring-1 ring-current/30`
-                    : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'
-                  }
-                `}
-                aria-label={label}
-              >
-                {icon}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-xs">
-              {label}
-            </TooltipContent>
-          </Tooltip>
-        );
-      })}
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7 text-gray-300 hover:text-white hover:bg-white/10"
+          onClick={handleGoHome}
+        >
+          <Home className="size-3.5" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="text-xs">返回项目主页</TooltipContent>
+    </Tooltip>
   );
 }

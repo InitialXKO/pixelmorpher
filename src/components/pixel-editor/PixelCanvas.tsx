@@ -341,14 +341,14 @@ export default function PixelCanvas() {
       const unifiedChars = pst.unifiedCharacters ?? {};
       const charList = Object.values(unifiedChars);
       renderPuppetSkeletonOverlay(rc, {
-        shouldRender: (s.isPuppetMode || s.showPuppetSkeleton || s.tool === 'puppet') && charList.length > 0,
+        shouldRender: (s.showPuppetSkeleton || s.tool === 'puppet') && charList.length > 0,
         characters: charList, activePuppetSkeletonId: s.activePuppetSkeletonId,
         selectedNodeId: s.selectedNodeId,
         animationClips: useProjectStore.getState().animationClips, sprites: Object.values(useProjectStore.getState().sprites),
       });
       // IK 目标手柄（启用的链）
       const activeChar = charList.find((c) => c.id === s.activePuppetSkeletonId) ?? charList[0];
-      if (activeChar && (s.isPuppetMode || s.tool === 'puppet')) {
+      if (activeChar && s.tool === 'puppet') {
         renderIKTargetHandles(rc, activeChar);
       }
     }
@@ -481,7 +481,7 @@ export default function PixelCanvas() {
       )}
 
       {/* Unarmed badge */}
-      {s.isPuppetMode && !performArmed && (
+      {!performArmed && (
         <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.4)', backdropFilter: 'blur(4px)' }}>
           未武装
         </div>

@@ -79,7 +79,7 @@ export function useCanvasInteraction(s: CanvasState) {
       const { px, py } = s.screenToPixel(e.clientX, e.clientY);
 
       // Delegate to tool handler
-      const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'sprite_edit');
+      const handler = getToolHandler(s.tool, s.editMode === 'sprite_edit');
       if (handler?.onMouseDown) handler.onMouseDown(s, e, px, py);
     },
     [s],
@@ -99,7 +99,7 @@ export function useCanvasInteraction(s: CanvasState) {
       const { px, py } = s.screenToPixel(e.clientX, e.clientY);
 
       // Delegate to tool handler
-      const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'sprite_edit');
+      const handler = getToolHandler(s.tool, s.editMode === 'sprite_edit');
       if (handler?.onMouseMove) handler.onMouseMove(s, e, px, py);
     },
     [s],
@@ -111,7 +111,7 @@ export function useCanvasInteraction(s: CanvasState) {
     if (s.isDrawingRef.current && isStrokeTool()) commitStroke();
 
     // Delegate to tool handler for tool-specific mouseUp logic
-    const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'sprite_edit');
+    const handler = getToolHandler(s.tool, s.editMode === 'sprite_edit');
     if (handler?.onMouseUp) handler.onMouseUp(s);
 
     // General cleanup (always runs)
@@ -139,8 +139,8 @@ export function useCanvasInteraction(s: CanvasState) {
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       if (s.selectionMaskRef.current.size > 0) { setShowExtractDialog(true); return; }
-      // 木偶模式下双击进入该服装部件的像素编辑
-      if (s.isPuppetMode) {
+      // 双击进入该服装部件的像素编辑（puppet 是唯一工作流）
+      {
         const canvas = s.canvasRef.current;
         if (!canvas) return;
         const rect = canvas.getBoundingClientRect();
@@ -168,7 +168,7 @@ export function useCanvasInteraction(s: CanvasState) {
         }
         return;
       }
-    }, [s.selectionMaskRef, s.isPuppetMode, s.canvasRef, s.panX, s.panY, s.zoom, s.findPuppetNodeAtPixel],
+    }, [s.selectionMaskRef, s.canvasRef, s.panX, s.panY, s.zoom, s.findPuppetNodeAtPixel],
   );
 
   // ---- Keyboard handlers ----
@@ -222,7 +222,7 @@ export function useCanvasInteraction(s: CanvasState) {
       if (e.code === 'KeyP' && !e.ctrlKey && !e.metaKey && !e.shiftKey) s.editorStore.getState().setTool('puppet');
 
       // Delegate tool-specific keyboard handling
-      const handler = getToolHandler(s.tool, s.isPuppetMode, s.editMode === 'sprite_edit');
+      const handler = getToolHandler(s.tool, s.editMode === 'sprite_edit');
       if (handler?.onKeyDown) handler.onKeyDown(s, e);
 
       // Escape handler (general, runs after tool-specific handlers)
