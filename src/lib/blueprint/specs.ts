@@ -339,6 +339,31 @@ export function getNodeOutputs(type: string): string[] {
 }
 
 /**
+ * 推断端口的数据类型（用于颜色区分与连接校验）
+ * 约定：含 'pixel' → pixels；其余 → number
+ */
+export function getPortDataType(portName: string): 'pixels' | 'number' {
+  const lower = portName.toLowerCase();
+  if (lower.includes('pixel')) return 'pixels';
+  return 'number';
+}
+
+/**
+ * 端口颜色：pixels 用青色，number 用绿色
+ */
+export function getPortColor(portName: string): string {
+  const t = getPortDataType(portName);
+  return t === 'pixels' ? '#22d3ee' : '#4ade80'; // cyan-400 vs green-400
+}
+
+/**
+ * 检查输出端口是否可连接到输入端口（类型必须匹配）
+ */
+export function canConnectPorts(fromPort: string, toPort: string): boolean {
+  return getPortDataType(fromPort) === getPortDataType(toPort);
+}
+
+/**
  * 获取节点类型的输入端口列表
  */
 export function getNodeInputs(type: string): string[] {

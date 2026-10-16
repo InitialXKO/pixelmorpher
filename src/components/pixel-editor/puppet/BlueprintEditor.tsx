@@ -10,7 +10,7 @@ import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
 import { Plus, Trash2, X, Network, Blocks, Maximize2, Minimize2, Play, Pause } from 'lucide-react';
 import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { listBlueprintNodeTypes, getBlueprintNodeLabel, evaluateBlueprint, evaluateNodeOutput } from '@/lib/blueprint/eval';
-import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs } from '@/lib/blueprint/specs';
+import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs, getPortColor, getPortDataType, canConnectPorts } from '@/lib/blueprint/specs';
 import { getModifierDef } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
@@ -840,27 +840,34 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
               style={{ left: pos.x, top: pos.y, width: NODE_WIDTH }}
               onClick={(e) => { e.stopPropagation(); setSelectedId(node.id); }}
             >
-              {/* 输出端口（右侧，每个输出一个可拖点） */}
-              {getNodeOutputs(node.type).map((outPort, idx) => (
-                <div
-                  key={outPort}
-                  className="absolute -right-1.5 size-3 rounded-full bg-cyan-400 border border-cyan-200 cursor-crosshair hover:scale-125 transition-transform"
-                  style={{ top: 12 + idx * 16 }}
-                  title={`输出: ${outPort}（拖出以连接）`}
-                  onMouseDown={(e) => {
-                    e.stopPropagation();
-                    const container = e.currentTarget.closest('.relative') as HTMLElement | null;
-                    const rect = container?.getBoundingClientRect();
-                    if (!rect || !container) return;
-                    setConnecting({
-                      fromNodeId: node.id,
-                      fromPort: outPort,
-                      mouseX: e.clientX - rect.left + container.scrollLeft,
-                      mouseY: e.clientY - rect.top + container.scrollTop,
-                    });
-                  }}
-                />
-              ))}
+              {/* 输出端口（右侧，每个输出一个可拖点，按数据类型着色） */}
+              {getNodeOutputs(node.type).map((outPort, idx) => {
+                const color = getPortColor(outPort);
+                return (
+                  <div
+                    key={outPort}
+                    className="absolute -right-1.5 size-3 rounded-full border cursor-crosshair hover:scale-125 transition-transform"
+                    style={{
+                      top: 12 + idx * 16,
+                      backgroundColor: color,
+                      borderColor: color,
+                    }}
+                    title={`输出: ${outPort}（${getPortDataType(outPort)}，拖出以连接）`}
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      const container = e.currentTarget.closest('.relative') as HTMLElement | null;
+                      const rect = container?.getBoundingClientRect();
+                      if (!rect || !container) return;
+                      setConnecting({
+                        fromNodeId: node.id,
+                        fromPort: outPort,
+                        mouseX: e.clientX - rect.left + container.scrollLeft,
+                        mouseY: e.clientY - rect.top + container.scrollTop,
+                      });
+                    }}
+                  />
+                );
+              })}
               {/* 输出端口标签 */}
               <div className="absolute -right-1 top-1 flex flex-col gap-[2px] items-end pointer-events-none">
                 {getNodeOutputs(node.type).map((outPort, idx) => (
@@ -922,6 +929,12 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                         onMouseUp={(e) => {
                           e.stopPropagation();
                           if (connecting) {
+                            // 类型校验：pixels 只能连 pixels
+                            if (!canConnectPorts(connecting.fromPort, port)) {
+                              // 类型不匹配，不连接（可加提示）
+                              setConnecting(null);
+                              return;
+                            }
                             connectPorts(connecting.fromNodeId, connecting.fromPort, node.id, port);
                             setConnecting(null);
                           }
@@ -934,13 +947,14 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                         }}
                         title={isConnected ? '点击断开' : '从输出端口拖到这里以连接，或直接输入数字'}
                       >
-                        {/* 输入端口圆点 */}
+                        {/* 输入端口圆点（按数据类型着色） */}
                         <div
-                          className={`absolute -left-1.5 top-1/2 -translate-y-1/2 size-2.5 rounded-full border cursor-crosshair ${
-                            isConnected
-                              ? 'bg-cyan-400 border-cyan-200'
-                              : 'bg-[#1e1e3a] border-gray-600 hover:border-cyan-400'
-                          }`}
+                          className="absolute -left-1.5 top-1/2 -translate-y-1/2 size-2.5 rounded-full border cursor-crosshair"
+                          style={{
+                            backgroundColor: isConnected ? getPortColor(port) : '#1e1e3a',
+                            borderColor: isConnected ? getPortColor(port) : '#4b5563',
+                          }}
+                          title={`${port} (${getPortDataType(port)})`}
                         />
                         <span className={isSpecDefined ? '' : 'text-amber-500/70'}>← {port}</span>
                         {isConnected ? (
