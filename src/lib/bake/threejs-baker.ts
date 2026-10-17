@@ -50,6 +50,8 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture): v
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
     if (!mesh.isMesh) return;
+    // SkinnedMesh 的包围盒是 bind pose 的，关掉 frustum culling 防误裁
+    mesh.frustumCulled = false;
     const old = mesh.material as THREE.MeshStandardMaterial | undefined;
     const baseColor =
       old && 'color' in old && (old as THREE.MeshStandardMaterial).color
@@ -154,7 +156,15 @@ export async function bakeModelToSprites(
     const model = gltf.scene;
 
     let meshCount = 0;
-    model.traverse((o) => { if ((o as THREE.Mesh).isMesh) meshCount++; });
+    let skinnedCount = 0;
+    model.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh) meshCount++;
+      if ((o as THREE.SkinnedMesh).isSkinnedMesh) {
+        skinnedCount++;
+        // 确保骨骼矩阵更新（静态 T-pose 也要刷一次）
+        (o as THREE.SkinnedMesh).skeleton.update();
+      }
+    });
     if (meshCount === 0) throw new Error('模型中没有找到 Mesh');
 
     // ---- 归一化:居中 + 缩放到包围球直径 2 ----
