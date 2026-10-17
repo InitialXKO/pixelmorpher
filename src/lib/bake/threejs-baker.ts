@@ -28,6 +28,15 @@ export interface BakeOptions {
   paletteSize?: number;
   /** 卡通渐变级数,默认 3 */
   toonSteps?: number;
+  /**
+   * 手指卷曲 0~1（仅 bakeSingleBone）：0=保持原样，1=完全握拳。
+   * 按关节类型给最大角度（MCP 90°/PIP 100°/DIP 70°，拇指分开处理），再乘以该值。
+   */
+  fingerCurl?: number;
+  /** 手动指定的拇指 bone 名（优先于自动匹配） */
+  thumbBoneName?: string;
+  /** 手动指定的手指 bone 名列表（优先于自动匹配） */
+  fingerBoneNames?: string[];
 }
 
 const DIRECTIONS = 8;
@@ -70,7 +79,7 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture): v
 }
 
 /** 中位切分法:把不透明像素聚成 paletteSize 个颜色 */
-function medianCut(pixels: Uint8ClampedArray, paletteSize: number): Array<[number, number, number]> {
+export function medianCut(pixels: Uint8ClampedArray, paletteSize: number): Array<[number, number, number]> {
   interface Box { colors: Array<[number, number, number]>; }
   const opaque: Array<[number, number, number]> = [];
   for (let i = 0; i < pixels.length; i += 4) {
@@ -113,7 +122,7 @@ function medianCut(pixels: Uint8ClampedArray, paletteSize: number): Array<[numbe
   });
 }
 
-function nearestPaletteIndex(
+export function nearestPaletteIndex(
   r: number, g: number, b: number,
   palette: Array<[number, number, number]>,
 ): number {
