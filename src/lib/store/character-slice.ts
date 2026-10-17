@@ -27,7 +27,7 @@ export type CharacterSlice = {
   setSelectedNodeId: (id: string | null) => void;
 
   // ---- Node Keyframes ----
-  addNodeKeyframe: (clipId: string, nodeId: string, frame: number, values: Partial<Pick<import('../unified-types').NodeKeyframe, 'angle' | 'stretch' | 'x' | 'y' | 'variantIndex' | 'zIndex' | 'interpolationMode' | 'modifiers'>>) => import('../unified-types').NodeKeyframe;
+  addNodeKeyframe: (clipId: string, nodeId: string, frame: number, values: Partial<Pick<import('../unified-types').NodeKeyframe, 'angle' | 'stretch' | 'x' | 'y' | 'variantIndex' | 'zIndex' | 'interpolationMode' | 'modifiers' | 'faceTurn'>>) => import('../unified-types').NodeKeyframe;
   removeNodeKeyframe: (clipId: string, keyframeId: string) => void;
   updateNodeKeyframe: (clipId: string, keyframeId: string, updates: Partial<import('../unified-types').NodeKeyframe>) => void;
 

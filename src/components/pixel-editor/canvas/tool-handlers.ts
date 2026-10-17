@@ -581,6 +581,35 @@ export const eyedropperHandler: ToolHandler = {
 };
 
 // ---------------------------------------------------------------------------
+// Landmark Annotation Handler（蒙皮转面手动特征点标注）
+// ---------------------------------------------------------------------------
+// 仅在 sprite_edit 模式有效：点击精灵设置当前目标特征点（左眼/右眼/鼻子/嘴）。
+// 坐标存为相对值 0~1（方向无关）。
+
+export const landmarkHandler: ToolHandler = {
+  onMouseDown(s, e, px, py) {
+    if (s.editMode !== 'sprite_edit' || !s.selectedSpriteId || !s.selectedPart) return;
+    const selPart = s.selectedPart;
+    // sprite_edit 居中绘制约定（与 fillToolHandler 一致）
+    const offsetX = Math.floor((s.canvasWidth - selPart.width) / 2);
+    const offsetY = Math.floor((s.canvasHeight - selPart.height) / 2);
+    const lx = px - offsetX;
+    const ly = py - offsetY;
+    // 越界不标注
+    if (lx < 0 || ly < 0 || lx >= selPart.width || ly >= selPart.height) return;
+    const nx = lx / selPart.width;
+    const ny = ly / selPart.height;
+    const target = s.editorStore.getState().landmarkTarget;
+    const store = useProjectStore.getState();
+    const existing = store.sprites[s.selectedSpriteId!]?.landmarks ?? {};
+    store.updateSpriteLandmarks(s.selectedSpriteId!, {
+      ...existing,
+      [target]: { x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)) },
+    });
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Fill Tool Handler
 // ---------------------------------------------------------------------------
 
@@ -1688,6 +1717,7 @@ export function getToolHandler(
     if (tool === 'brush' || tool === 'eraser') return brushEraserHandler;
     if (tool === 'fill') return fillToolHandler;
     if (tool === 'eyedropper') return eyedropperHandler;
+    if (tool === 'landmark') return landmarkHandler;
   }
 
   // Node 级分发（新架构；旧画布精灵层分发已随 workspace mode 退役）

@@ -358,6 +358,13 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     outputs: ['path'],
     params: ['nodeId'],
   },
+  // face_turn: Spine 式伪 3D 转头（蒙皮转面）
+  // 输入 t/yaw/pitch，输出变形后像素；用单张静态图模拟转头，不用多角度差分
+  face_turn: {
+    inputs: ['t', 'yaw', 'pitch', 'pixels'],
+    outputs: ['pixels'],
+    params: ['yaw', 'pitch', 'centerX', 'centerY', 'perspective', 'depthBoost'],
+  },
 };
 
 /**

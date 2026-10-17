@@ -61,18 +61,21 @@ export default function useVirtualScroll(
       for (const node of puppetNodes) {
         // 基础行高
         let height = TRACK_HEIGHT;
-        // 子轨道：统计该节点所有 keyframe 的 modifier types 和 paramDrivers
+        // 子轨道：统计该节点所有 keyframe 的 modifier types、paramDrivers、faceTurn
         const nks = nodeKeyframes.filter((kf) => kf.nodeId === node.id);
         const modTypes = new Set<string>();
         let paramDriverCount = 0;
+        let hasFaceTurn = false;
         for (const kf of nks) {
           for (const mod of kf.modifiers ?? []) {
             modTypes.add(mod.type);
             paramDriverCount += (mod.paramDrivers ?? []).length;
           }
+          if ((kf as any).faceTurn) hasFaceTurn = true;
         }
         height += modTypes.size * SUB_TRACK_HEIGHT;
         height += paramDriverCount * SUB_TRACK_HEIGHT;
+        if (hasFaceTurn) height += SUB_TRACK_HEIGHT;
         groups.push({ trackId: `__puppet__${node.id}`, height });
       }
     }

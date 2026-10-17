@@ -611,3 +611,64 @@ export function renderTrajectoryOverlay(rc: RenderContext, params: TrajectoryOve
     }
   }
 }
+
+// ============================================================
+// Landmark overlay（蒙皮转面手动特征点标注）
+// ============================================================
+
+const LANDMARK_COLORS: Record<string, string> = {
+  leftEye: '#60a5fa',  // 蓝
+  rightEye: '#4ade80', // 绿
+  nose: '#facc15',     // 黄
+  mouth: '#f87171',    // 红
+};
+
+const LANDMARK_LABELS: Record<string, string> = {
+  leftEye: '左眼',
+  rightEye: '右眼',
+  nose: '鼻',
+  mouth: '嘴',
+};
+
+/**
+ * 在 sprite_edit 模式下绘制已标注的特征点。
+ * landmarks 为相对坐标 0~1；offsetX/Y 为精灵在画布上的偏移（居中绘制约定）。
+ */
+export function renderLandmarkOverlay(
+  rc: RenderContext,
+  landmarks: import('@/lib/unified-types').SpriteLandmarks | undefined,
+  spriteWidth: number,
+  spriteHeight: number,
+  offsetX: number,
+  offsetY: number,
+): void {
+  if (!landmarks) return;
+  const { ctx, zoom, panX, panY } = rc;
+
+  ctx.save();
+  for (const key of ['leftEye', 'rightEye', 'nose', 'mouth'] as const) {
+    const pt = landmarks[key];
+    if (!pt) continue;
+    const px = pt.x * spriteWidth + offsetX;
+    const py = pt.y * spriteHeight + offsetY;
+    const sx = panX + px * zoom;
+    const sy = panY + py * zoom;
+    const r = Math.max(3, 4 * zoom * 0.5);
+
+    // 外圈白边 + 彩色圆点
+    ctx.beginPath();
+    ctx.arc(sx, sy, r + 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0, Math.PI * 2);
+    ctx.fillStyle = LANDMARK_COLORS[key];
+    ctx.fill();
+    // 标签
+    ctx.fillStyle = '#fff';
+    ctx.font = `${Math.max(9, 10 * zoom * 0.5)}px sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.fillText(LANDMARK_LABELS[key], sx + r + 3, sy + 3);
+  }
+  ctx.restore();
+}

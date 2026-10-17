@@ -173,6 +173,64 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
             size="sm"
           />
 
+          {/* ---- 蒙皮转面（连续朝向 + 单图模式） ---- */}
+          <div className="space-y-1.5 bg-[#080818] rounded border border-[#1e1e3a] p-2">
+            <div className="flex items-center justify-between">
+              <Label className="text-[10px] text-gray-500 uppercase tracking-wider">转面</Label>
+              <label className="flex items-center gap-1 text-[9px] text-gray-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="size-3 accent-cyan-500"
+                  checked={character.faceTurnConfig?.enabled ?? false}
+                  onChange={(e) => {
+                    const cfg = character.faceTurnConfig ?? {};
+                    useProjectStore.getState().updateUnifiedCharacter(activePuppetSkeletonId!, {
+                      faceTurnConfig: { ...cfg, enabled: e.target.checked } as any,
+                    });
+                  }}
+                />
+                启用
+              </label>
+            </div>
+            {(character.faceTurnConfig?.enabled ?? false) && (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] text-gray-500 w-12 shrink-0">朝向角</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={360}
+                    step={1}
+                    value={character.facingAngle ?? 0}
+                    onChange={(e) => {
+                      useProjectStore.getState().updateUnifiedCharacter(activePuppetSkeletonId!, {
+                        facingAngle: Number(e.target.value),
+                      });
+                    }}
+                    className="flex-1 h-1 accent-cyan-500"
+                  />
+                  <span className="text-[9px] text-cyan-300 font-mono w-8 text-right">
+                    {Math.round(character.facingAngle ?? 0)}°
+                  </span>
+                </div>
+                <label className="flex items-center gap-1.5 text-[9px] text-gray-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="size-3 accent-cyan-500"
+                    checked={character.faceTurnConfig?.singleImageMode ?? false}
+                    onChange={(e) => {
+                      const cfg = character.faceTurnConfig ?? {};
+                      useProjectStore.getState().updateUnifiedCharacter(activePuppetSkeletonId!, {
+                        faceTurnConfig: { ...cfg, singleImageMode: e.target.checked } as any,
+                      });
+                    }}
+                  />
+                  单图模式（不切换精灵，全程转面）
+                </label>
+              </>
+            )}
+          </div>
+
           {/* ---- 画布操作提示 ---- */}
           <div className="bg-cyan-500/5 border border-cyan-500/20 rounded p-2 space-y-1">
             <div className="flex items-center gap-1 text-[9px] text-cyan-300/90 font-medium">

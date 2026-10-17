@@ -1261,13 +1261,64 @@ export function generateRenderPlan(
   const rootTransform = worldTransforms.get(character.rootNodeId);
   const currentDirection = rootTransform?.variantIndex ?? 0;
 
+  // 方向间过渡（蒙皮转面 A）：facingAngle 为连续角度时，计算相邻两方向及混合系数
+  // 单图模式（蒙皮转面 C）：不切换精灵，用 faceTurn 的 yaw 模拟转头
+  const singleImageMode = character.faceTurnConfig?.singleImageMode === true;
+  let dirBlend: { dirA: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7; dirB: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7; blend: number } | undefined;
+  let singleImageYaw = 0;
+  if (character.facingAngle !== undefined && character.faceTurnConfig?.enabled) {
+    if (singleImageMode) {
+      // 单图模式：facingAngle → yaw（-1~1），不切换精灵
+      // 归一化到 [-180, 180)，yaw = angle / 180
+      let a = ((character.facingAngle % 360) + 360) % 360;
+      if (a > 180) a -= 360;
+      singleImageYaw = Math.max(-1, Math.min(1, a / 180));
+      // dirBlend 保持 undefined（单精灵）
+    } else {
+      // 懒加载避免循环依赖
+      const { facingAngleToBlend } = require('./skin/face-turn') as typeof import('./skin/face-turn');
+      dirBlend = facingAngleToBlend(character.facingAngle);
+      // blend 为 0 或 1 时退化为单方向（避免双采样开销）
+      if (dirBlend.blend < 1e-6 || dirBlend.blend > 1 - 1e-6) {
+        dirBlend = undefined;
+      }
+    }
+  }
+
   for (const [nodeId, worldTf] of worldTransforms) {
     const node = character.nodes[nodeId];
     if (!node || !node.visible) continue;
 
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
-    const { sprite, mirror } = resolveSprite(node, currentDirection, activeCostumeSet, spriteTable);
+    // 方向混合时：先按 dirA 解析主精灵
+    const resolveDir = dirBlend ? dirBlend.dirA : currentDirection;
+    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable);
     if (!sprite) continue;
+
+    // 方向间过渡（蒙皮转面 A）：blend 不为 0/1 时，双精灵 faceTurn + alpha 混合
+    // 只在需要时双采样，避免性能开销
+    let blendedSprite: typeof sprite | null = null;
+    if (dirBlend && sprite.data) {
+      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable);
+      if (spriteB && spriteB.data) {
+        try {
+          const { applyFaceTurn, alphaBlendGrids } = require('./skin/face-turn') as typeof import('./skin/face-turn');
+          // dirA 的 yaw：从 0（blend=0）到 -1（blend=1，转向 dirB）
+          // dirB 的 yaw：从 1（blend=0）到 0（blend=1）
+          // 即：每个精灵都向"中间"转，blend 处相遇
+          const yawA = -dirBlend.blend;
+          const yawB = 1 - dirBlend.blend;
+          const gridA = applyFaceTurn(sprite.data, { yaw: yawA, pitch: 0, landmarks: sprite.landmarks });
+          const gridB = applyFaceTurn(spriteB.data, { yaw: yawB, pitch: 0, landmarks: spriteB.landmarks });
+          const blended = alphaBlendGrids(gridA, gridB, dirBlend.blend);
+          blendedSprite = { ...sprite, data: blended };
+        } catch {
+          // 混合失败时回退到单精灵
+          blendedSprite = null;
+        }
+      }
+    }
+    const effectiveSprite = blendedSprite ?? sprite;
 
     // Determine rotation strategy
     const strategy: RotationStrategy = rotationStrategy;
@@ -1315,7 +1366,7 @@ export function generateRenderPlan(
 
     nodeInstructions.push({
       nodeId,
-      sprite,
+      sprite: effectiveSprite,
       worldX: worldTf.worldX,
       worldY: worldTf.worldY,
       angle: worldTf.worldAngle,
@@ -1330,6 +1381,20 @@ export function generateRenderPlan(
       frame,
       frameRate,
       meshSkin,
+      // Face turn（Spine 式伪 3D 转头）：先转面整体，后关节蒙皮局部
+      // TODO: 从 keyframe 插值获取（puppet-keyframe-interpolation.ts 已有 getInterpolatedKeyframeFaceTurn，
+      // 需 computeWorldTransforms 接入 nodeKeyframes）；当前用 node 静态值
+      // 单图模式（C）：singleImageYaw（来自 facingAngle）+ node.faceTurn（微动）叠加
+      faceTurn: (() => {
+        const base = node.faceTurn ?? { yaw: 0, pitch: 0 };
+        if (singleImageMode && Math.abs(singleImageYaw) > 1e-6) {
+          return {
+            yaw: Math.max(-1, Math.min(1, singleImageYaw + base.yaw)),
+            pitch: base.pitch,
+          };
+        }
+        return node.faceTurn;
+      })(),
       // t.scaleX 修复：蓝图 scaleX 独立 plumbing，不再平均吃掉
       scaleX: worldTf.scaleX,
       // 蓝图 skew：有倾斜量时才填，避免空数组污染
@@ -1641,6 +1706,21 @@ function renderNodeSprite(
 
       evaluateBlueprint(bpGraph, bpCtx);
     }
+  }
+
+  // ---- Face turn（Spine 式伪 3D 转头）：在像素定稿后、关节蒙皮前变形 ----
+  // 先转面（整体），后关节蒙皮（局部）。用单张静态图模拟转头，不用多角度差分。
+  const faceTurn = (instruction as any).faceTurn as
+    | { yaw: number; pitch: number }
+    | undefined;
+  if (faceTurn && (Math.abs(faceTurn.yaw) > 1e-6 || Math.abs(faceTurn.pitch) > 1e-6)) {
+    // 懒加载避免循环依赖
+    const { applyFaceTurn } = require('./skin/face-turn') as typeof import('./skin/face-turn');
+    effectivePixels = applyFaceTurn(effectivePixels, {
+      yaw: faceTurn.yaw,
+      pitch: faceTurn.pitch,
+      landmarks: sprite.landmarks,
+    });
   }
 
   // ---- Mesh skinning（关节网格蒙皮）：在像素定稿后、转 canvas 前变形 ----

@@ -53,6 +53,14 @@ export type PixelGrid = PixelColor[][];
  * Stored in the global s.sprites table; referenced by ID from CostumePiece.
  * Optional plug overrides the node's default plug position.
  */
+export interface SpriteLandmarks {
+  /** 相对坐标 0~1（方向无关，存在 sprite 级） */
+  leftEye?: { x: number; y: number };
+  rightEye?: { x: number; y: number };
+  nose?: { x: number; y: number };
+  mouth?: { x: number; y: number };
+}
+
 export interface Sprite {
   id?: string;                   // Global table key (s.sprites); optional for inline literals
   name?: string;                 // Asset library display name
@@ -61,6 +69,7 @@ export interface Sprite {
   data: PixelGrid;              // 2D pixel grid (replaces Uint8ClampedArray for consistency)
   plug?: Point;                  // Optional: override node's default plug
   heightmap?: number[][];        // Optional: hand-painted heightmap for bump_light
+  landmarks?: SpriteLandmarks;   // Optional: 手动标注的特征点（眼/鼻/嘴），用于蒙皮转面
 }
 
 // ---- Direction System ----
@@ -426,6 +435,11 @@ export interface Node {
   // When present, renderer interpolates x/y from trajectory instead of tracks.
   trajectory?: { frame: number; x: number; y: number }[];
 
+  // ---- Face Turn (Spine-style pseudo-3D head turning) ----
+  // 用单张静态图 + 网格变形模拟转头/转身，不用画多角度差分。
+  // yaw: -1（左）~ 1（右）；pitch: -1（上）~ 1（下）
+  faceTurn?: { yaw: number; pitch: number };
+
   // ---- Dynamic Generated Items ----
   generated?: GeneratedItem;
 
@@ -477,6 +491,8 @@ export interface NodeKeyframe {
   interpolationMode?: import('./types').InterpolationMode;
   /** Per-keyframe modifiers (interpolated between keyframes by param) */
   modifiers?: ModifierInstance[];
+  /** Per-keyframe face turn (Spine-style pseudo-3D head turning, lerped) */
+  faceTurn?: { yaw: number; pitch: number };
 }
 
 // ---- Costume System ----
@@ -605,6 +621,18 @@ export interface Character {
   // For whole-character effects (outline/glow/color grade on the composited
   // character). Per-node effects stay in node.blueprint. Null = legacy path.
   blueprint?: BlueprintGraph | null;
+
+  // ---- Face Turn Config (Spine-style pseudo-3D) ----
+  faceTurnConfig?: {
+    enabled: boolean;
+    singleImageMode: boolean;
+  };
+
+  // ---- Facing Angle (continuous, for direction blending) ----
+  // 0~360 degrees. When set, renderer blends between adjacent discrete
+  // directions (0-7) using faceTurn deformation + alpha blending.
+  // Undefined = use discrete variantIndex only (legacy behavior).
+  facingAngle?: number;
 
   // ---- Metadata ----
   createdAt: number;
@@ -795,6 +823,11 @@ export interface NodeRenderInstruction {
     jointAngle: number; // 关节相对角度（度，子相对父）
     radius: number;     // 影响半径（像素）
     curve: 'linear' | 'smoothstep';
+  };
+  /** Face turn params（Spine 式伪 3D 转头，renderNodeSprite 在 meshSkin 之前应用） */
+  faceTurn?: {
+    yaw: number;    // -1（左）~ 1（右）
+    pitch: number;  // -1（上）~ 1（下）
   };
 }
 

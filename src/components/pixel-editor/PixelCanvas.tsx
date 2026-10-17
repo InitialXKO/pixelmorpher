@@ -15,6 +15,7 @@ import {
   renderGridOverlay,
   renderCanvasBorder,
   renderSelectionOverlay,
+  renderLandmarkOverlay,
   renderLassoPreview,
   renderHandDrawnTrajectoryPreview,
   renderCropPreview,
@@ -328,6 +329,14 @@ export default function PixelCanvas() {
     // sprite_edit 下选区 mask 存的是精灵局部坐标，绘制时加回精灵的画布原点偏移
     const selOrigin = s.editMode === 'sprite_edit' ? spriteEditCanvasOrigin(s) : { x: 0, y: 0 };
     s.selectionMarchOffsetRef.current = renderSelectionOverlay(rc, s.selectionMaskRef.current, s.selectionMarchOffsetRef.current, selOrigin.x, selOrigin.y);
+
+    // sprite_edit 下绘制已标注的特征点（蒙皮转面）
+    if (s.editMode === 'sprite_edit' && spriteEditSpriteId) {
+      const lmSprite = useProjectStore.getState().sprites[spriteEditSpriteId];
+      if (lmSprite?.landmarks) {
+        renderLandmarkOverlay(rc, lmSprite.landmarks, lmSprite.width, lmSprite.height, selOrigin.x, selOrigin.y);
+      }
+    }
 
     if (s.isDrawingRef.current && s.tool === 'lasso') renderLassoPreview(rc, s.lassoPathRef.current);
     if (s.isDrawingRef.current && s.tool === 'trajectory') renderHandDrawnTrajectoryPreview(rc, s.handDrawTrajectoryRef.current);

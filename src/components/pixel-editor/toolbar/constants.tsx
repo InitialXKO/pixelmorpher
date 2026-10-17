@@ -17,6 +17,7 @@ import {
   WandSparkles,
   Scan,
   PersonStanding,
+  Crosshair,
 } from 'lucide-react';
 import type { ToolType } from '@/lib/types';
 
@@ -31,6 +32,7 @@ export const TOOL_CONFIG: { value: ToolType; icon: React.ReactNode; label: strin
   { value: 'eraser', icon: <Eraser className="size-3.5" />, label: '橡皮擦' },
   { value: 'fill', icon: <PaintBucket className="size-3.5" />, label: '填充' },
   { value: 'eyedropper', icon: <Pipette className="size-3.5" />, label: '取色器' },
+  { value: 'landmark', icon: <Crosshair className="size-3.5" />, label: '特征点标注', group: 'pixel' },
   { value: 'move', icon: <Move className="size-3.5" />, label: '移动' },
   { value: 'trajectory', icon: <Route className="size-3.5" />, label: '轨迹', group: 'trajectory' },
   { value: 'crop', icon: <Crop className="size-3.5" />, label: '裁剪' },

@@ -4,6 +4,7 @@ import React, { useCallback, useMemo } from 'react';
 import type { Node, NodeKeyframe } from '@/lib/unified-types';
 import { NodeKeyframeMarker } from './KeyframeMarker';
 import { NodeKeyframeModifierSubTrackLane, NodeParamDriverSubTrackLane } from './NodeKeyframeModifierSubTrackLane';
+import { FaceTurnSubTrackLane } from './FaceTurnSubTrackLane';
 import { FRAME_WIDTH as STATIC_FRAME_WIDTH, TRACK_HEIGHT } from './constants';
 
 // ---- Node Track Lane (new Character/Node model) ----
@@ -153,6 +154,13 @@ const NodeTrackLane = React.memo(function NodeTrackLane({
       totalFrames={totalFrames}
       frameWidth={FRAME_WIDTH}
       onEditParamDriver={onEditParamDriver ?? (() => {})}
+    />
+    {/* FaceTurn sub-track */}
+    <FaceTurnSubTrackLane
+      node={node}
+      nodeKeyframes={nodeKeyframes}
+      totalFrames={totalFrames}
+      frameWidth={FRAME_WIDTH}
     />
     </>
   );

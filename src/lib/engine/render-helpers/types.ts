@@ -15,6 +15,8 @@ export interface InterpolatedNodeValues {
   skewX: number;
   skewY: number;
   scaleX: number;
+  /** Face turn (Spine-style pseudo-3D, lerped from keyframes) */
+  faceTurn?: { yaw: number; pitch: number };
 }
 
 /** Computed world transform for a puppet node */
