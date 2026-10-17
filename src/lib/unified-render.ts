@@ -1389,7 +1389,7 @@ export function executeRenderPlan(
   // Render motion blur strokes for this frame
   if (plan.motionBlurStrokes) {
     for (const stroke of plan.motionBlurStrokes) {
-      if ((stroke as any).frame === currentFrame) {
+      if ((stroke as any).frame <= currentFrame) {
         renderMotionBlurStroke(ctx, stroke as any);
       }
     }
@@ -1398,7 +1398,7 @@ export function executeRenderPlan(
   // Render effect strokes for this frame
   if (plan.effectStrokes) {
     for (const stroke of plan.effectStrokes) {
-      if ((stroke as any).frame === currentFrame) {
+      if ((stroke as any).frame <= currentFrame) {
         renderEffectStroke(ctx, stroke as any);
       }
     }
