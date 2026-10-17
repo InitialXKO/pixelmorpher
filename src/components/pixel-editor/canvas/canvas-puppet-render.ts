@@ -85,7 +85,9 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
     // Compute world positions recursively (SubPixel units throughout;
     // converted to pixels via subToPx at draw time)
     // 用当前帧插值，不是 rest pose
-    const ivMap = interpolateNodeKeyframes(character, useProjectStore.getState().currentFrame);
+    // 传入该角色对应 clip 的 nodeKeyframes（用于 per-keyframe modifiers 插值）
+    const clip = animationClips.find((c) => (c as any).puppetCharacterId === character.id) ?? animationClips[0];
+    const ivMap = interpolateNodeKeyframes(character, useProjectStore.getState().currentFrame, clip?.nodeKeyframes ?? []);
     const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
     const centerX = pxToSub(canvasWidth / 2);
     const centerY = pxToSub(canvasHeight / 2);

@@ -597,11 +597,6 @@ export interface Character {
   // character). Per-node effects stay in node.blueprint. Null = legacy path.
   blueprint?: BlueprintGraph | null;
 
-  // ---- Node Keyframes (per-node animation) ----
-  // Keyframes for node transform properties. Stored here (not in node.tracks)
-  // to keep the Character serializable. node.tracks is derived from these.
-  nodeKeyframes?: NodeKeyframe[];
-
   // ---- Metadata ----
   createdAt: number;
   updatedAt: number;

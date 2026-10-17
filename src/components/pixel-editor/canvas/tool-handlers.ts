@@ -1538,62 +1538,6 @@ export const strokeToolHandler: ToolHandler = {
 // Bone Tool Handler
 // ---------------------------------------------------------------------------
 
-export const boneHandler: ToolHandler = {
-  onMouseDown(s, e, px, py) {
-    const hitResult = s.findBoneAtPixel(px, py);
-    if (hitResult) {
-      useProjectStore.getState().beginDrag('拖动骨骼'); s.isDrawingRef.current = true; s.markDirty();
-      s.boneDragRef.current = { boneId: hitResult.bone.id, skeletonId: hitResult.skeletonId, endpoint: hitResult.endpoint, startX: px, startY: py, origHeadX: hitResult.bone.headX, origHeadY: hitResult.bone.headY, origTailX: hitResult.bone.tailX, origTailY: hitResult.bone.tailY, origTargetX: hitResult.targetX ?? 0, origTargetY: hitResult.targetY ?? 0 };
-      useProjectStore.getState().setSelectedBoneId(hitResult.bone.id);
-    } else useProjectStore.getState().setSelectedBoneId(null);
-  },
-
-  onMouseMove(s, e, px, py) {
-    if (!s.isDrawingRef.current || !s.boneDragRef.current) return;
-    const currentFrame = s.currentFrameRef.current;
-    const drag = s.boneDragRef.current; const ddx = px - drag.startX; const ddy = py - drag.startY;
-    if (drag.endpoint === 'head') useProjectStore.getState().updateBone(drag.skeletonId, drag.boneId, { headX: drag.origHeadX + ddx, headY: drag.origHeadY + ddy });
-    else if (drag.endpoint === 'tail') useProjectStore.getState().updateBone(drag.skeletonId, drag.boneId, { tailX: drag.origTailX + ddx, tailY: drag.origTailY + ddy });
-    else if (drag.endpoint === 'ik_target') useProjectStore.getState().addBonePose(drag.skeletonId, drag.boneId, currentFrame, 0, drag.origTargetX + ddx, drag.origTargetY + ddy);
-  },
-};
-
-// ---------------------------------------------------------------------------
-// IK Tool Handler
-// ---------------------------------------------------------------------------
-
-export const ikHandler: ToolHandler = {
-  onMouseDown(s, e, px, py) {
-    const hitResult = s.findBoneAtPixel(px, py);
-    if (hitResult && hitResult.endpoint === 'ik_target') {
-      useProjectStore.getState().beginDrag('IK拖动'); s.isDrawingRef.current = true; s.markDirty();
-      s.boneDragRef.current = { boneId: hitResult.bone.id, skeletonId: hitResult.skeletonId, endpoint: 'ik_target', startX: px, startY: py, origHeadX: hitResult.bone.headX, origHeadY: hitResult.bone.headY, origTailX: hitResult.bone.tailX, origTailY: hitResult.bone.tailY, origTargetX: hitResult.targetX ?? 0, origTargetY: hitResult.targetY ?? 0 };
-      useProjectStore.getState().setSelectedBoneId(hitResult.bone.id);
-    } else if (hitResult) useProjectStore.getState().setSelectedBoneId(hitResult.bone.id);
-    else useProjectStore.getState().setSelectedBoneId(null);
-  },
-
-  // IK shares the same drag logic as bone
-  onMouseMove: boneHandler.onMouseMove!,
-};
-
-// ---------------------------------------------------------------------------
-// Weight Paint Handler
-// ---------------------------------------------------------------------------
-
-export const weightPaintHandler: ToolHandler = {
-  onMouseDown(s, e, px, py) {
-    useProjectStore.getState().beginDrag('权重绘制'); s.isDrawingRef.current = true; s.markDirty(); s.applyWeightPaint(px, py); s.lastPixelRef.current = { x: px, y: py };
-  },
-
-  onMouseMove(s, e, px, py) {
-    if (!s.isDrawingRef.current) return;
-    if (s.lastPixelRef.current) { for (const point of getLinePixels(s.lastPixelRef.current.x, s.lastPixelRef.current.y, px, py)) s.applyWeightPaint(point.x, point.y); }
-    else s.applyWeightPaint(px, py);
-    s.lastPixelRef.current = { x: px, y: py };
-  },
-};
-
 // ---------------------------------------------------------------------------
 // Dispatch: getToolHandler
 // ---------------------------------------------------------------------------

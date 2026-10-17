@@ -158,9 +158,24 @@ function interpolateCharacterInternal(
 export function interpolateNodeKeyframes(
   character: Character,
   currentFrame: number,
-  nodeKeyframes: NodeKeyframe[] = [],
+  nodeKeyframes?: NodeKeyframe[],
 ): Map<string, InterpolatedNodeValues> {
-  return interpolateCharacterInternal(character, currentFrame, nodeKeyframes);
+  // 未传入时从 store 取 active clip 的 nodeKeyframes（用于 per-keyframe modifiers）
+  let kfs = nodeKeyframes;
+  if (!kfs) {
+    try {
+      // 懒加载避免循环依赖
+      const { useProjectStore } = require('../../store') as typeof import('../../store');
+      const s = useProjectStore.getState();
+      const clips = (s as any).animationClips ?? [];
+      const activeId = (s as any).activeAnimationClipId;
+      const clip = clips.find((c: any) => c.id === activeId) ?? clips[0];
+      kfs = clip?.nodeKeyframes ?? [];
+    } catch {
+      kfs = [];
+    }
+  }
+  return interpolateCharacterInternal(character, currentFrame, kfs);
 }
 
 // ---- Per-keyframe modifier interpolation ----
