@@ -253,7 +253,11 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
     set((s) => ({
       animationClips: s.animationClips.map((c) =>
         c.id === clipId
-          ? { ...c, nodeKeyframes: [...(c.nodeKeyframes ?? []), kf] }
+          ? {
+              ...c,
+              // 同 nodeId 同帧的旧关键帧先删掉（add 语义 = replace，跟旧 addKeyframe 一致）
+              nodeKeyframes: [...(c.nodeKeyframes ?? []).filter((k) => !(k.nodeId === nodeId && k.frame === frame)), kf],
+            }
           : c
       ),
     }));
@@ -274,11 +278,22 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
 
   updateNodeKeyframe: (clipId, keyframeId, updates) => {
     set((s) => ({
-      animationClips: s.animationClips.map((c) =>
-        c.id === clipId
-          ? { ...c, nodeKeyframes: (c.nodeKeyframes ?? []).map((k) => k.id === keyframeId ? { ...k, ...updates } : k) }
-          : c
-      ),
+      animationClips: s.animationClips.map((c) => {
+        if (c.id !== clipId) return c;
+        const kfs = c.nodeKeyframes ?? [];
+        // 改帧时（move）：目标帧同 nodeId 的其他关键帧先删掉（move 语义 = replace）
+        let next = kfs;
+        if (updates.frame !== undefined) {
+          const moving = kfs.find((k) => k.id === keyframeId);
+          if (moving) {
+            next = kfs.filter((k) => !(k.id !== keyframeId && k.nodeId === moving.nodeId && k.frame === updates.frame));
+          }
+        }
+        return {
+          ...c,
+          nodeKeyframes: next.map((k) => (k.id === keyframeId ? { ...k, ...updates } : k)),
+        };
+      }),
     }));
   },
 
