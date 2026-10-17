@@ -69,6 +69,12 @@ export interface BlueprintEvalContext {
    * 跨帧保持，由调用方维护。
    */
   nodeState?: Map<string, any>;
+  /**
+   * 动态笔触收集（可选）。
+   * stroke_emitter / stroke_source 求值时把生成的动态笔触推入此处，
+   * 由渲染层与手绘静态笔触合并。调用方在求值前传入空数组，求值后读取。
+   */
+  dynamicStrokes?: Array<Record<string, unknown>>;
 }
 
 // ---- 类型辅助 ----

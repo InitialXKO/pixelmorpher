@@ -1707,6 +1707,200 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const result = applyBumpLight(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
     return { pixels: pixelsVal(result) } as Record<string, BlueprintValue>;
   },
+
+  // ---- 笔触/轨迹发射器（全局蓝图，帧级特效层） ----
+  // 生成的动态笔触经 ctx.dynamicStrokes 收集，由渲染层与手绘笔融合
+  stroke_emitter: (n, i, ctx): Record<string, BlueprintValue> => {
+    const getNum = (key: string, def: number): number => {
+      const wired = i[key] as BlueprintValue | undefined;
+      if (wired !== undefined) return asNumber(wired);
+      const p = n.params[key];
+      return typeof p === 'number' ? p : def;
+    };
+    const getStr = (key: string, def: string): string => {
+      const wired = i[key] as BlueprintValue | undefined;
+      if (wired && wired.type === 'string') return wired.value;
+      const p = n.params[key];
+      return typeof p === 'string' ? p : def;
+    };
+    const t = asNumber(i.t as BlueprintValue ?? num(ctx.frame));
+    const shape = getStr('shape', 'circle');
+    const pointCount = Math.max(2, Math.round(getNum('pointCount', 24)));
+    const cx = getNum('centerX', 0);
+    const cy = getNum('centerY', 0);
+    const rx = getNum('radiusX', 50);
+    const ry = getNum('radiusY', 50);
+    const phase = (t / Math.max(1, ctx.frameRate)) * Math.PI * 2;
+
+    const points: Array<{ x: number; y: number }> = [];
+    if (shape === 'wave') {
+      for (let k = 0; k < pointCount; k++) {
+        const px = cx - rx + (2 * rx * k) / (pointCount - 1);
+        points.push({ x: px, y: cy + Math.sin((k / pointCount) * Math.PI * 4 + phase) * ry * 0.5 });
+      }
+    } else if (shape === 'line') {
+      const ang = (getNum('direction', 0) * Math.PI) / 180;
+      for (let k = 0; k < pointCount; k++) {
+        const d = -rx + (2 * rx * k) / (pointCount - 1);
+        points.push({ x: cx + Math.cos(ang) * d, y: cy + Math.sin(ang) * d });
+      }
+    } else {
+      // circle（默认）：椭圆，随 t 旋转
+      for (let k = 0; k < pointCount; k++) {
+        const a = (k / pointCount) * Math.PI * 2 + phase;
+        points.push({ x: cx + Math.cos(a) * rx, y: cy + Math.sin(a) * ry });
+      }
+    }
+
+    const strokeType = getStr('type', 'glow');
+    const frame = Math.round(getNum('frame', ctx.frame));
+    const dyn = (ctx as any).dynamicStrokes as Array<Record<string, unknown>> | undefined;
+    if (dyn && points.length >= 2) {
+      const base = {
+        frame,
+        points,
+        intensity: getNum('intensity', 1),
+        blendMode: getStr('blendMode', 'lighter'),
+      };
+      if (strokeType === 'motion_blur') {
+        dyn.push({
+          ...base,
+          kind: 'motion_blur',
+          brushType: getStr('brushType', 'directional'),
+          direction: getNum('direction', 180),
+        });
+      } else {
+        const typeMap: Record<string, string> = {
+          glow: 'glow_brush', particle: 'particle_brush', afterimage: 'afterimage_brush',
+        };
+        dyn.push({
+          ...base,
+          kind: 'effect',
+          type: typeMap[strokeType] ?? 'glow_brush',
+          color: getStr('color', '#ffffff'),
+          radius: getNum('radius', 8),
+          density: getNum('density', 1),
+          spread: getNum('spread', 0),
+        });
+      }
+    }
+    return {
+      path: { type: 'array', value: points } as BlueprintValue,
+      intensity: num(getNum('intensity', 1)),
+      outX: num(cx),
+      outY: num(cy),
+    };
+  },
+
+  // stroke_source: 引用已手绘笔触，输出 path + 参数；蓝图连线可覆盖参数
+  stroke_source: (n, i, ctx): Record<string, BlueprintValue> => {
+    const strokeId = String(n.params.strokeId ?? '');
+    if (!strokeId) return { path: { type: 'array', value: [] } as BlueprintValue };
+    let stroke: Record<string, any> | null = null;
+    let kind: 'motion_blur' | 'effect' = 'effect';
+    try {
+      // 懒加载避免循环依赖
+      const { useProjectStore } = require('../store') as typeof import('../store');
+      const s = useProjectStore.getState();
+      const mb = (s.motionBlurStrokes ?? []).find((x: any) => x.id === strokeId);
+      if (mb) { stroke = mb; kind = 'motion_blur'; }
+      else {
+        const ef = (s.effectStrokes ?? []).find((x: any) => x.id === strokeId);
+        if (ef) { stroke = ef; kind = 'effect'; }
+      }
+    } catch { /* store 不可用时返回空 */ }
+    if (!stroke) return { path: { type: 'array', value: [] } as BlueprintValue };
+
+    // 连线覆盖：wired inputs 优先于笔触原值
+    const override = (key: string, fallback: number): number => {
+      const wired = i[key] as BlueprintValue | undefined;
+      return wired !== undefined ? asNumber(wired) : fallback;
+    };
+    const intensity = override('intensity', Number(stroke.intensity ?? 1));
+    const points = Array.isArray(stroke.points) ? stroke.points : [];
+
+    // 推入动态笔触（带 sourceStrokeId，渲染时替换静态原笔触，避免重复绘制）
+    const dyn = (ctx as any).dynamicStrokes as Array<Record<string, unknown>> | undefined;
+    if (dyn && points.length >= 2) {
+      dyn.push({ ...stroke, intensity, sourceStrokeId: strokeId, kind });
+    }
+    const out: Record<string, BlueprintValue> = {
+      path: { type: 'array', value: points } as BlueprintValue,
+      intensity: num(intensity),
+    };
+    if (kind === 'effect') {
+      if (stroke.color !== undefined) out.color = { type: 'string', value: String(stroke.color) } as BlueprintValue;
+      if (stroke.radius !== undefined) out.radius = num(override('radius', Number(stroke.radius)));
+    } else {
+      if (stroke.direction !== undefined) out.direction = num(override('direction', Number(stroke.direction)));
+    }
+    return out;
+  },
+
+  // trajectory_emitter: 动态生成轨迹点集
+  trajectory_emitter: (n, i, ctx): Record<string, BlueprintValue> => {
+    const getNum = (key: string, def: number): number => {
+      const wired = i[key] as BlueprintValue | undefined;
+      if (wired !== undefined) return asNumber(wired);
+      const p = n.params[key];
+      return typeof p === 'number' ? p : def;
+    };
+    const getStr = (key: string, def: string): string => {
+      const p = n.params[key];
+      return typeof p === 'string' ? p : def;
+    };
+    const t = asNumber(i.t as BlueprintValue ?? num(ctx.frame));
+    const shape = getStr('shape', 'circle');
+    const pointCount = Math.max(2, Math.round(getNum('pointCount', 32)));
+    const cx = getNum('centerX', 0);
+    const cy = getNum('centerY', 0);
+    const rx = getNum('radiusX', 60);
+    const ry = getNum('radiusY', 60);
+    const period = Math.max(1, getNum('period', 24));
+    const phase = (t / period) * Math.PI * 2 + (getNum('phase', 0) * Math.PI) / 180;
+
+    const points: Array<{ x: number; y: number }> = [];
+    if (shape === 'wave') {
+      for (let k = 0; k < pointCount; k++) {
+        const px = cx - rx + (2 * rx * k) / (pointCount - 1);
+        points.push({ x: px, y: cy + Math.sin((k / pointCount) * Math.PI * 4 + phase) * ry * 0.5 });
+      }
+    } else if (shape === 'figure8') {
+      for (let k = 0; k < pointCount; k++) {
+        const a = (k / pointCount) * Math.PI * 2 + phase;
+        points.push({ x: cx + Math.sin(a) * rx, y: cy + Math.sin(a * 2) * ry * 0.5 });
+      }
+    } else {
+      // circle（默认）
+      for (let k = 0; k < pointCount; k++) {
+        const a = (k / pointCount) * Math.PI * 2 + phase;
+        points.push({ x: cx + Math.cos(a) * rx, y: cy + Math.sin(a) * ry });
+      }
+    }
+    return { path: { type: 'array', value: points } as BlueprintValue };
+  },
+
+  // trajectory_source: 引用已烘焙轨迹（node.trajectory），输出 path
+  trajectory_source: (n, _i, _ctx): Record<string, BlueprintValue> => {
+    const nodeId = String(n.params.nodeId ?? '');
+    if (!nodeId) return { path: { type: 'array', value: [] } as BlueprintValue };
+    try {
+      const { useProjectStore } = require('../store') as typeof import('../store');
+      const s = useProjectStore.getState();
+      const chars = s.unifiedCharacters ?? {};
+      for (const ch of Object.values(chars) as Array<any>) {
+        const node = ch.nodes?.[nodeId];
+        const traj = node?.trajectory;
+        if (Array.isArray(traj) && traj.length >= 2) {
+          const pts = [...traj]
+            .sort((a, b) => a.frame - b.frame)
+            .map((p) => ({ x: p.x, y: p.y }));
+          return { path: { type: 'array', value: pts } as BlueprintValue };
+        }
+      }
+    } catch { /* ignore */ }
+    return { path: { type: 'array', value: [] } as BlueprintValue };
+  },
 };
 
 /**
@@ -1856,6 +2050,61 @@ export function evaluateBlueprint(
     // screen 节点的 pixels 输出（如果有）
     pixels: pixelsOut && pixelsOut.type === 'pixels' ? pixelsOut.grid : undefined,
   };
+}
+
+/**
+ * 求值全局蓝图中的笔触/轨迹发射器节点，收集动态笔触。
+ * 只求值 stroke_emitter / stroke_source / trajectory_emitter / trajectory_source
+ * 四种节点（拓扑序，保证连线依赖正确）。手绘静态笔触不在此处理。
+ *
+ * 返回的动态笔触与 MotionBlurStroke / EffectStroke 同形，另带：
+ * - kind: 'motion_blur' | 'effect'（渲染分流用）
+ * - sourceStrokeId?: 引用手绘笔触时带上，渲染层用它替换静态原笔触
+ */
+export function collectDynamicStrokes(
+  graph: BlueprintGraph,
+  frame: number,
+  frameRate: number,
+): { motionBlur: Array<Record<string, unknown>>; effect: Array<Record<string, unknown>> } {
+  const STROKE_NODE_TYPES = new Set([
+    'stroke_emitter', 'stroke_source', 'trajectory_emitter', 'trajectory_source',
+  ]);
+  const sorted = topoSort(graph).filter((n) => STROKE_NODE_TYPES.has(n.type));
+  const values = new Map<string, Record<string, BlueprintValue>>();
+  const ctx: BlueprintEvalContext = {
+    frame,
+    frameRate,
+    vars: {},
+    dynamicStrokes: [],
+  };
+  for (const node of sorted) {
+    const evaluator = EVALUATORS[node.type];
+    if (!evaluator) continue;
+    if (node.params.enabled === false) continue;
+    // 解析输入（连线引用 → 已求值；字面值直接用）
+    const resolvedInputs: Record<string, BlueprintValue> = {};
+    for (const [key, input] of Object.entries(node.inputs)) {
+      if (isRef(input)) {
+        const src = values.get(input.nodeId);
+        const outName = input.output ?? 'out';
+        if (src && src[outName]) resolvedInputs[key] = src[outName]!;
+      } else {
+        resolvedInputs[key] = input as BlueprintValue;
+      }
+    }
+    try {
+      values.set(node.id, evaluator(node, resolvedInputs, ctx));
+    } catch {
+      values.set(node.id, {});
+    }
+  }
+  const motionBlur: Array<Record<string, unknown>> = [];
+  const effect: Array<Record<string, unknown>> = [];
+  for (const s of ctx.dynamicStrokes ?? []) {
+    if (s.kind === 'motion_blur') motionBlur.push(s);
+    else effect.push(s);
+  }
+  return { motionBlur, effect };
 }
 
 /** 注册自定义节点类型（插件/扩展用） */

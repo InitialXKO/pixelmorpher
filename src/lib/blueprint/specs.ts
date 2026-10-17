@@ -329,6 +329,35 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     outputs: [],
     params: [],
   },
+
+  // ---- 笔触/轨迹发射器（全局蓝图用，帧级特效层） ----
+  // stroke_emitter: 按形状动态生成笔触路径，每帧求值
+  // 输出 path（{x,y}[] 可连线）+ 笔触参数；渲染层合并为动态笔触
+  stroke_emitter: {
+    inputs: ['t'],
+    outputs: ['path', 'intensity', 'outX', 'outY'],
+    params: ['type', 'shape', 'pointCount', 'radiusX', 'radiusY', 'centerX', 'centerY', 'intensity', 'color', 'direction', 'density', 'spread', 'blendMode', 'frame'],
+  },
+  // stroke_source: 引用已手绘笔触（strokeId 下拉选，不许手输）
+  // 输出该笔触的 path + 全部参数；蓝图可覆盖参数（如 intensity）
+  stroke_source: {
+    inputs: [],
+    outputs: ['path', 'intensity', 'color', 'radius', 'direction'],
+    params: ['strokeId'],
+  },
+  // trajectory_emitter: 动态生成轨迹点集（如圆周、波浪）
+  trajectory_emitter: {
+    inputs: ['t'],
+    outputs: ['path'],
+    params: ['shape', 'pointCount', 'radiusX', 'radiusY', 'centerX', 'centerY', 'period', 'phase'],
+  },
+  // trajectory_source: 引用已烘焙轨迹（nodeId 下拉选，不许手输）
+  // 输出 path（{frame,x,y}[] 转 {x,y}[]，按帧排序）
+  trajectory_source: {
+    inputs: [],
+    outputs: ['path'],
+    params: ['nodeId'],
+  },
 };
 
 /**
@@ -340,20 +369,23 @@ export function getNodeOutputs(type: string): string[] {
 
 /**
  * 推断端口的数据类型（用于颜色区分与连接校验）
- * 约定：含 'pixel' → pixels；其余 → number
+ * 约定：含 'pixel' → pixels；端口名 == 'path' → path；其余 → number
  */
-export function getPortDataType(portName: string): 'pixels' | 'number' {
+export function getPortDataType(portName: string): 'pixels' | 'number' | 'path' {
   const lower = portName.toLowerCase();
   if (lower.includes('pixel')) return 'pixels';
+  if (lower === 'path') return 'path';
   return 'number';
 }
 
 /**
- * 端口颜色：pixels 用青色，number 用绿色
+ * 端口颜色：pixels 用青色，number 用绿色，path 用紫色
  */
 export function getPortColor(portName: string): string {
   const t = getPortDataType(portName);
-  return t === 'pixels' ? '#22d3ee' : '#4ade80'; // cyan-400 vs green-400
+  if (t === 'pixels') return '#22d3ee'; // cyan-400
+  if (t === 'path') return '#c084fc'; // purple-400
+  return '#4ade80'; // green-400
 }
 
 /**

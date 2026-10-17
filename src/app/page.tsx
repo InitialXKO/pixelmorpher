@@ -5,6 +5,7 @@ import PixelCanvas from '@/components/pixel-editor/PixelCanvas';
 import TrajectoryPanel from '@/components/pixel-editor/TrajectoryPanel';
 import PuppetPanel from '@/components/pixel-editor/PuppetPanel';
 import PuppetAssetPanel from '@/components/pixel-editor/PuppetAssetPanel';
+import StrokePanel from '@/components/pixel-editor/StrokePanel';
 import DccPipelinePanel from '@/components/pixel-editor/DccPipelinePanel';
 import ProceduralPanel from '@/components/pixel-editor/ProceduralPanel';
 import ScriptPanel from '@/components/pixel-editor/ScriptPanel';
@@ -503,6 +504,9 @@ export default function Home() {
                     <PuppetAssetPanel />
                     <div className="border-t border-zinc-800/50">
                       <AnimationClipPanel />
+                    </div>
+                    <div className="border-t border-zinc-800/50 flex-1 min-h-0">
+                      <StrokePanel />
                     </div>
                   </div>
                 </div>

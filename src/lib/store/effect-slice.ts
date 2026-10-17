@@ -25,9 +25,11 @@ export type EffectSlice = {
   removeEffectKeyframe: ProjectStore['removeEffectKeyframe'];
   updateEffectKeyframe: ProjectStore['updateEffectKeyframe'];
   addMotionBlurStroke: ProjectStore['addMotionBlurStroke'];
+  updateMotionBlurStroke: ProjectStore['updateMotionBlurStroke'];
   removeMotionBlurStroke: ProjectStore['removeMotionBlurStroke'];
   clearMotionBlurStrokesForFrame: ProjectStore['clearMotionBlurStrokesForFrame'];
   addEffectStroke: ProjectStore['addEffectStroke'];
+  updateEffectStroke: ProjectStore['updateEffectStroke'];
   removeEffectStroke: ProjectStore['removeEffectStroke'];
   clearEffectStrokesForFrame: ProjectStore['clearEffectStrokesForFrame'];
   toggleOnionSkin: ProjectStore['toggleOnionSkin'];
@@ -135,6 +137,13 @@ export const createEffectSlice: StateCreator<ProjectStore, [], [], EffectSlice> 
     }));
   },
 
+  updateMotionBlurStroke: (id, patch) => {
+    get().pushUndo('更新运动模糊笔触');
+    set((s) => ({
+    motionBlurStrokes: s.motionBlurStrokes.map((s2) => (s2.id === id ? { ...s2, ...patch } : s2)),
+    }));
+  },
+
   clearMotionBlurStrokesForFrame: (frame) => {
     get().pushUndo('清除帧运动模糊');
     set((s) => ({
@@ -153,6 +162,13 @@ export const createEffectSlice: StateCreator<ProjectStore, [], [], EffectSlice> 
     get().pushUndo('删除效果笔触');
     set((s) => ({
     effectStrokes: s.effectStrokes.filter((e) => e.id !== id),
+    }));
+  },
+
+  updateEffectStroke: (id, patch) => {
+    get().pushUndo('更新效果笔触');
+    set((s) => ({
+    effectStrokes: s.effectStrokes.map((e) => (e.id === id ? { ...e, ...patch } : e)),
     }));
   },
 

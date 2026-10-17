@@ -70,7 +70,7 @@ import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
-import { evaluateBlueprint, EVALUATORS } from './blueprint/eval';
+import { evaluateBlueprint, EVALUATORS, collectDynamicStrokes } from './blueprint/eval';
 import { modifiersToBlueprint } from './blueprint/migrate';
 import type { BlueprintNode, BlueprintEvalContext } from './blueprint/ir';
 import { isIKChainSuspended } from './ik-drag-state';
@@ -2218,14 +2218,33 @@ export function renderUnified(
     }
   }
   if (motionBlurStrokes) {
-    for (const stroke of motionBlurStrokes) {
-      if (stroke.frame === currentFrame) renderMotionBlurStroke(ctx, stroke);
+    // 动态笔触（蓝图 stroke_emitter / stroke_source 每帧求值）
+    const dynamic = globalBlueprint
+      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate)
+      : { motionBlur: [], effect: [] };
+    const overriddenIds = new Set<string>();
+    for (const s of [...dynamic.motionBlur, ...dynamic.effect]) {
+      if (typeof s.sourceStrokeId === 'string') overriddenIds.add(s.sourceStrokeId);
     }
+    // 静态手绘：frame <= currentFrame 且未被蓝图覆盖
+    for (const stroke of motionBlurStrokes) {
+      if (stroke.frame <= currentFrame && !overriddenIds.has(stroke.id)) renderMotionBlurStroke(ctx, stroke);
+    }
+    // 动态：全部渲染（已是当帧求值结果）
+    for (const stroke of dynamic.motionBlur) renderMotionBlurStroke(ctx, stroke as any);
   }
   if (effectStrokes) {
-    for (const stroke of effectStrokes) {
-      if (stroke.frame === currentFrame) renderEffectStroke(ctx, stroke);
+    const dynamic = globalBlueprint
+      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate)
+      : { motionBlur: [], effect: [] };
+    const overriddenIds = new Set<string>();
+    for (const s of [...dynamic.motionBlur, ...dynamic.effect]) {
+      if (typeof s.sourceStrokeId === 'string') overriddenIds.add(s.sourceStrokeId);
     }
+    for (const stroke of effectStrokes) {
+      if (stroke.frame <= currentFrame && !overriddenIds.has(stroke.id)) renderEffectStroke(ctx, stroke);
+    }
+    for (const stroke of dynamic.effect) renderEffectStroke(ctx, stroke as any);
   }
   if (canvasModifierTracks && canvasModifierTracks.length > 0) {
     applyCanvasModifiers(ctx, canvasModifierTracks, currentFrame, canvasWidth, canvasHeight);

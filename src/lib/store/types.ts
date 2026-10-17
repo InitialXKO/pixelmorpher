@@ -182,11 +182,13 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
 
   // Motion blur stroke actions
   addMotionBlurStroke: (stroke: Omit<MotionBlurStroke, 'id'>) => void;
+  updateMotionBlurStroke: (id: string, patch: Partial<MotionBlurStroke>) => void;
   removeMotionBlurStroke: (id: string) => void;
   clearMotionBlurStrokesForFrame: (frame: number) => void;
 
   // Effect stroke actions
   addEffectStroke: (stroke: Omit<EffectStroke, 'id'>) => void;
+  updateEffectStroke: (id: string, patch: Partial<EffectStroke>) => void;
   removeEffectStroke: (id: string) => void;
   clearEffectStrokesForFrame: (frame: number) => void;
 

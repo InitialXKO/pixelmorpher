@@ -12,6 +12,7 @@ import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { listBlueprintNodeTypes, getBlueprintNodeLabel, evaluateBlueprint, evaluateNodeOutput } from '@/lib/blueprint/eval';
 import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs, getNodeParamPorts, getPortColor, getPortDataType, canConnectPorts } from '@/lib/blueprint/specs';
 import { getModifierDef } from '@/lib/types';
+import { useProjectStore } from '@/lib/store';
 import { resolvePreviewSprite, getActiveCostumeSet } from '@/lib/sprite-resolve';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
@@ -159,6 +160,10 @@ function BlueprintNodeParams({ selected, updateNode, onExposePort }: {
 export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, characterNodes, costumeSets, activeCostumeSetId, spritesTable }: BlueprintEditorProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
+  // 笔触/轨迹下拉选项（stroke_source / trajectory_source 用，不许手输 ID）
+  const motionBlurStrokes = useProjectStore((s) => s.motionBlurStrokes) ?? [];
+  const effectStrokes = useProjectStore((s) => s.effectStrokes) ?? [];
+  const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
   const [viewMode, setViewMode] = useState<'graph' | 'blocks'>('graph');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [previewFrame, setPreviewFrame] = useState(0);
@@ -1141,6 +1146,49 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                   {['rotation', 'translateX', 'translateY', 'scaleX', 'scaleY'].map((o) => (
                     <option key={o} value={o}>{o}</option>
                   ))}
+                </select>
+              ) : selected.type === 'stroke_source' && key === 'strokeId' ? (
+                <select
+                  value={String(val ?? '')}
+                  onChange={(e) => {
+                    updateNode(selected.id, {
+                      params: { ...selected.params, [key]: e.target.value },
+                    });
+                  }}
+                  className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300"
+                >
+                  <option value="">选择笔触…</option>
+                  {motionBlurStrokes.map((s: any) => (
+                    <option key={s.id} value={s.id}>
+                      🌫️ 动态模糊 · frame {s.frame} · {s.points?.length ?? 0} 点
+                    </option>
+                  ))}
+                  {effectStrokes.map((s: any) => (
+                    <option key={s.id} value={s.id}>
+                      {s.type === 'glow_brush' ? '✨' : s.type === 'particle_brush' ? '🔵' : '👻'}{' '}
+                      {s.type === 'glow_brush' ? '辉光' : s.type === 'particle_brush' ? '粒子' : '残影'} · frame {s.frame} · {s.points?.length ?? 0} 点
+                    </option>
+                  ))}
+                </select>
+              ) : selected.type === 'trajectory_source' && key === 'nodeId' ? (
+                <select
+                  value={String(val ?? '')}
+                  onChange={(e) => {
+                    updateNode(selected.id, {
+                      params: { ...selected.params, [key]: e.target.value },
+                    });
+                  }}
+                  className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300"
+                >
+                  <option value="">选择轨迹…</option>
+                  {Object.values(unifiedCharacters as Record<string, any>).flatMap((ch: any) =>
+                    Object.values(ch.nodes ?? {}).filter((n: any) => Array.isArray(n.trajectory) && n.trajectory.length >= 2)
+                      .map((n: any) => (
+                        <option key={n.id} value={n.id}>
+                          {ch.name ?? ch.id} / {n.name ?? n.id} · {n.trajectory.length} 点
+                        </option>
+                      ))
+                  )}
                 </select>
               ) : (
                 <input
