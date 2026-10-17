@@ -1,0 +1,695 @@
+'use client';
+
+// ============================================================
+// PixelMorpher - three.js 按骨骼烘焙 → 导入 Character
+// 主流程 C：ID 缓冲双遍渲染 → 2D 按 bone 拆分 → 导入为角色
+// 备选 A：单肢体独立重烘（拆下竖直，手指可握拳）→ 替换
+// ============================================================
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { BakeResult } from '@/lib/bake/threejs-baker';
+import {
+  bakeModelTwoPass,
+  bakeSingleBone,
+  previewHandCurl,
+  inspectFingers,
+  type TwoPassBakeData,
+  type BakedBoneInfo,
+  type FingerDetectResult,
+} from '@/lib/bake/threejs-baker-twopass';
+import {
+  splitByBoneId,
+  mapBonesToNodes,
+  rgbaToGrid,
+  alignLimbToRest,
+  type ProcessedBone,
+  type ProcessedBoneDirection,
+} from '@/lib/bake/skeleton-mapper';
+import type { PixelGrid, DirectionIndex } from '@/lib/unified-types';
+import { useProjectStore } from '@/lib/store';
+import BonePicker3D from './BonePicker3D';
+
+const SAMPLE_URL = 'https://threejs.org/examples/models/gltf/Xbot.glb';
+
+interface ThreeBakeDialogProps {
+  open: boolean;
+  onClose: () => void;
+}
+
+/** 显示 BakeResult（RGBA） */
+function ResultCanvas({ result, size = 128 }: { result: BakeResult; size?: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const copy = new Uint8ClampedArray(result.pixels.length);
+    copy.set(result.pixels);
+    const img = new ImageData(copy, result.width, result.height);
+    const tmp = document.createElement('canvas');
+    tmp.width = result.width;
+    tmp.height = result.height;
+    tmp.getContext('2d')?.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
+  }, [result]);
+  return (
+    <canvas
+      ref={ref}
+      width={size}
+      height={size}
+      className="border border-[#2a2a4a] bg-[repeating-conic-gradient(#1a1a2e_0%_25%,#141428_0%_50%)] bg-[size:16px_16px]"
+      style={{ imageRendering: 'pixelated' }}
+    />
+  );
+}
+
+/** 显示 PixelGrid */
+function PixelGridCanvas({ grid, scale = 3 }: { grid: PixelGrid; scale?: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const h = grid.length;
+    const w = grid[0]?.length ?? 0;
+    canvas.width = Math.max(1, w * scale);
+    canvas.height = Math.max(1, h * scale);
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const c = grid[y]?.[x];
+        if (!c) continue;
+        ctx.fillStyle = c;
+        ctx.fillRect(x * scale, y * scale, scale, scale);
+      }
+    }
+  }, [grid, scale]);
+  return (
+    <canvas
+      ref={ref}
+      className="border border-[#2a2a4a] bg-[repeating-conic-gradient(#1a1a2e_0%_25%,#141428_0%_50%)] bg-[size:12px_12px]"
+      style={{ imageRendering: 'pixelated' }}
+    />
+  );
+}
+
+function statusLabel(s: FingerDetectResult['fingerStatus']): string {
+  return s === 'auto' ? '自动' : s === 'manual' ? '手动' : '缺失';
+}
+
+// ---- 单肢体重烘面板 ----
+
+interface RebakePanelProps {
+  bone: BakedBoneInfo;
+  input: string | ArrayBuffer;
+  size: number;
+  paletteSize: number;
+  onClose: () => void;
+  onDone: (boneIndex: number, boneName: string, results: BakeResult[]) => void;
+}
+
+function RebakePanel({ bone, input, size, paletteSize, onClose, onDone }: RebakePanelProps) {
+  const [fingerCurl, setFingerCurl] = useState(70); // 0~100
+  const [detect, setDetect] = useState<FingerDetectResult | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [manualThumb, setManualThumb] = useState<string | null>(null);
+  const [manualFingers, setManualFingers] = useState<string[] | null>(null);
+  const [pickMode, setPickMode] = useState<'thumb' | 'finger' | null>(null);
+  const [pickedBone, setPickedBone] = useState<string | null>(null);
+  const [preview, setPreview] = useState<BakeResult | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [rebaking, setRebaking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 手指检测（自动 > 手动 > 缺失）
+  useEffect(() => {
+    let cancelled = false;
+    setDetecting(true);
+    setError(null);
+    inspectFingers(input, {
+      thumbBoneName: manualThumb ?? undefined,
+      fingerBoneNames: manualFingers ?? undefined,
+    })
+      .then((d) => {
+        if (!cancelled) {
+          setDetect(d);
+          setDetecting(false);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : String(e));
+          setDetecting(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [input, manualThumb, manualFingers]);
+
+  // 手部特写预览（滑杆 debounce）
+  useEffect(() => {
+    if (!detect) return;
+    if (detect.fingers.length === 0 && !detect.thumb) {
+      setPreview(null);
+      return;
+    }
+    setPreviewLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const pv = await previewHandCurl(input, {
+          fingerCurl: fingerCurl / 100,
+          thumbBoneName: manualThumb ?? undefined,
+          fingerBoneNames: manualFingers ?? undefined,
+          paletteSize,
+        });
+        setPreview(pv);
+      } catch (e) {
+        console.error('[previewHandCurl]', e);
+        setPreview(null);
+      } finally {
+        setPreviewLoading(false);
+      }
+    }, 450);
+    return () => clearTimeout(t);
+  }, [detect, fingerCurl, manualThumb, manualFingers, input, paletteSize]);
+
+  const handleConfirmPick = useCallback(() => {
+    if (!pickedBone) return;
+    if (pickMode === 'thumb') {
+      setManualThumb(pickedBone);
+    } else if (pickMode === 'finger') {
+      setManualFingers((prev) => [...(prev ?? []), pickedBone]);
+    }
+    setPickedBone(null);
+    setPickMode(null);
+  }, [pickedBone, pickMode]);
+
+  const handleRebake = useCallback(async () => {
+    setRebaking(true);
+    setError(null);
+    try {
+      const results = await bakeSingleBone(input, bone.name, {
+        size,
+        paletteSize,
+        fingerCurl: fingerCurl / 100,
+        thumbBoneName: manualThumb ?? undefined,
+        fingerBoneNames: manualFingers ?? undefined,
+      });
+      onDone(bone.index, bone.name, results);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRebaking(false);
+    }
+  }, [input, bone, size, paletteSize, fingerCurl, manualThumb, manualFingers, onDone]);
+
+  const hasHand = !!detect && (detect.fingers.length > 0 || !!detect.thumb);
+
+  return (
+    <div className="mb-3 rounded border border-amber-900/60 bg-amber-950/20 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-[12px] font-bold text-amber-200">
+          单独重烘：{bone.name}
+          <span className="ml-2 font-normal text-gray-500">（拆下竖直，8 方向）</span>
+        </div>
+        <button onClick={onClose} className="text-[11px] text-gray-500 hover:text-gray-200">
+          ← 返回
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-2 rounded border border-red-900 bg-red-950/50 p-2 text-[11px] text-red-300">
+          {error}
+        </div>
+      )}
+
+      {/* 手指状态 */}
+      <div className="mb-2 text-[11px] text-gray-400">
+        {detecting && '检测手指 bones 中…'}
+        {!detecting && detect && (
+          <>
+            手指：{detect.fingers.length} 根（{statusLabel(detect.fingerStatus)}）
+            {' · '}拇指：
+            {detect.thumb ? `${detect.thumb.label}（${statusLabel(detect.thumbStatus)}）` : '缺失'}
+          </>
+        )}
+      </div>
+
+      {hasHand && (
+        <div className="mb-2 flex items-start gap-3">
+          <div className="flex-1">
+            <label className="mb-1 block text-[11px] text-gray-400">
+              手指卷曲：{fingerCurl}%
+              <span className="ml-1 text-gray-600">（0=保持原样，100=完全握拳）</span>
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={fingerCurl}
+              onChange={(e) => setFingerCurl(Number(e.target.value))}
+              className="w-full accent-amber-500"
+            />
+            <div className="mt-1 text-[10px] text-gray-600">
+              角度按关节：MCP 90° / PIP 100° / DIP 70° / 拇指屈曲 60°+内收 35°，再 × 卷曲系数
+            </div>
+          </div>
+          <div className="flex flex-col items-center gap-1">
+            {previewLoading && <div className="text-[10px] text-gray-500">预览渲染中…</div>}
+            {!previewLoading && preview && (
+              <>
+                <ResultCanvas result={preview} size={96} />
+                <div className="text-[10px] text-gray-500">手部特写（前视）</div>
+              </>
+            )}
+            {!previewLoading && !preview && (
+              <div className="text-[10px] text-gray-600">无手部预览</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 手动指定 */}
+      {!detecting && detect && (detect.thumbStatus === 'missing' || detect.fingerStatus === 'missing') && (
+        <div className="mb-2 flex items-center gap-2 text-[11px]">
+          <span className="text-gray-500">自动匹配失败：</span>
+          {detect.thumbStatus === 'missing' && !manualThumb && (
+            <button
+              onClick={() => { setPickMode('thumb'); setPickedBone(null); }}
+              className="h-6 rounded border border-[#3a3a5a] bg-[#1a1a30] px-2 text-gray-300 hover:bg-[#222240]"
+            >
+              点击模型指定拇指
+            </button>
+          )}
+          {detect.fingerStatus === 'missing' && (
+            <button
+              onClick={() => { setPickMode('finger'); setPickedBone(null); }}
+              className="h-6 rounded border border-[#3a3a5a] bg-[#1a1a30] px-2 text-gray-300 hover:bg-[#222240]"
+            >
+              点击模型指定手指
+            </button>
+          )}
+        </div>
+      )}
+      {manualThumb && (
+        <div className="mb-1 text-[11px] text-gray-400">
+          已手动指定拇指：<span className="text-amber-300">{manualThumb}</span>
+          <button onClick={() => setManualThumb(null)} className="ml-2 text-gray-600 hover:text-gray-300">清除</button>
+        </div>
+      )}
+      {manualFingers && manualFingers.length > 0 && (
+        <div className="mb-1 text-[11px] text-gray-400">
+          已手动指定手指：<span className="text-amber-300">{manualFingers.join(', ')}</span>
+          <button onClick={() => setManualFingers(null)} className="ml-2 text-gray-600 hover:text-gray-300">清除</button>
+        </div>
+      )}
+
+      {/* 3D 拾取 */}
+      {pickMode && (
+        <div className="mb-2 flex items-start gap-3 rounded border border-[#2a2a4a] p-2">
+          <BonePicker3D input={input} onPick={setPickedBone} highlightBone={pickedBone} />
+          <div className="flex flex-col gap-2 text-[11px]">
+            <div className="text-gray-400">
+              {pickMode === 'thumb' ? '点击模型上的拇指' : '点击模型上的一根手指'}
+            </div>
+            {pickedBone && (
+              <div className="text-gray-300">
+                命中：<span className="font-bold text-red-400">{pickedBone}</span>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={handleConfirmPick}
+                disabled={!pickedBone}
+                className="h-6 rounded bg-amber-700 px-3 text-white hover:bg-amber-600 disabled:opacity-50"
+              >
+                确认
+              </button>
+              <button
+                onClick={() => { setPickMode(null); setPickedBone(null); }}
+                className="h-6 rounded border border-[#3a3a5a] px-3 text-gray-400 hover:bg-[#222240]"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <button
+        onClick={handleRebake}
+        disabled={rebaking}
+        className="h-7 rounded bg-amber-700 px-4 text-[11px] font-bold text-white hover:bg-amber-600 disabled:opacity-50"
+      >
+        {rebaking ? '重烘中…' : '开始重烘（8 方向）'}
+      </button>
+    </div>
+  );
+}
+
+// ---- 主对话框 ----
+
+export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps) {
+  const [url, setUrl] = useState(SAMPLE_URL);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [fileData, setFileData] = useState<ArrayBuffer | null>(null);
+  const [size, setSize] = useState(64);
+  const [paletteSize, setPaletteSize] = useState(16);
+
+  const [baking, setBaking] = useState(false);
+  const [progress, setProgress] = useState('');
+  const [twoPass, setTwoPass] = useState<TwoPassBakeData | null>(null);
+  const [processed, setProcessed] = useState<Map<number, ProcessedBone> | null>(null);
+  const [showIds, setShowIds] = useState(false);
+  const [totalMs, setTotalMs] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  const [rebakeTarget, setRebakeTarget] = useState<BakedBoneInfo | null>(null);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+
+  const fileRef = useRef<HTMLInputElement>(null);
+  const input: string | ArrayBuffer = fileData ?? url.trim();
+
+  const handleFile = useCallback((f: File | undefined) => {
+    if (!f) return;
+    setFileName(f.name);
+    setFileData(null);
+    setTwoPass(null);
+    setProcessed(null);
+    setError(null);
+    setImportMsg(null);
+    const reader = new FileReader();
+    reader.onload = () => setFileData(reader.result as ArrayBuffer);
+    reader.onerror = () => setError('文件读取失败');
+    reader.readAsArrayBuffer(f);
+  }, []);
+
+  const handleBake = useCallback(async () => {
+    setBaking(true);
+    setError(null);
+    setTwoPass(null);
+    setProcessed(null);
+    setImportMsg(null);
+    setRebakeTarget(null);
+    try {
+      const inp: string | ArrayBuffer = fileData ?? url.trim();
+      if (!inp || (typeof inp === 'string' && inp.length === 0)) {
+        throw new Error('请先选择文件或填写 URL');
+      }
+      setProgress('加载模型…');
+      await new Promise((r) => setTimeout(r, 30));
+      const t0 = performance.now();
+      const data = await bakeModelTwoPass(inp, {
+        size,
+        onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
+      });
+      setTotalMs(performance.now() - t0);
+      setProgress('按 bone 拆分…');
+      await new Promise((r) => setTimeout(r, 30));
+      const proc = splitByBoneId(data, { paletteSize });
+      setTwoPass(data);
+      setProcessed(proc);
+      setProgress('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setProgress('');
+    } finally {
+      setBaking(false);
+    }
+  }, [fileData, url, size, paletteSize]);
+
+  const handleRebakeDone = useCallback(
+    (boneIndex: number, boneName: string, results: BakeResult[]) => {
+      setProcessed((prev) => {
+        if (!prev) return prev;
+        const next = new Map(prev);
+        const pb = next.get(boneIndex);
+        if (!pb) return prev;
+        const parentPb = pb.parentIndex !== null ? next.get(pb.parentIndex) : undefined;
+        const dirs: ProcessedBoneDirection[] = results.map((r) => {
+          const orig = pb.directions.find((d) => d.direction === r.direction);
+          let grid = rgbaToGrid(r.pixels, r.width, r.height);
+          // 竖直重烘图 → 对齐到原始姿态（最近 90° 无损旋转）
+          if (orig && parentPb) {
+            const pOrig = parentPb.directions.find((d) => d.direction === r.direction);
+            if (pOrig) {
+              grid = alignLimbToRest(grid, orig.jointX - pOrig.jointX, orig.jointY - pOrig.jointY);
+            }
+          }
+          const w = grid[0]?.length ?? r.width;
+          const h = grid.length;
+          return {
+            direction: r.direction as DirectionIndex,
+            grid,
+            width: w,
+            height: h,
+            cropX: 0,
+            cropY: 0,
+            // 关节几何不变：保留原始全帧坐标（socket 计算用）
+            jointX: orig?.jointX ?? r.width / 2,
+            jointY: orig?.jointY ?? r.height / 2,
+            // 新图以关节为中心
+            plugX: w / 2,
+            plugY: h / 2,
+          };
+        });
+        next.set(boneIndex, { ...pb, directions: dirs });
+        return next;
+      });
+      setRebakeTarget(null);
+      setImportMsg(`已替换 ${boneName} 的 8 方向图（已对齐原始姿态）`);
+    },
+    [],
+  );
+
+  const handleImport = useCallback(() => {
+    if (!processed || processed.size === 0) return;
+    try {
+      const store = useProjectStore.getState();
+      const base = fileName ? fileName.replace(/\.(glb|gltf)$/i, '') : 'baked';
+      const name = `烘焙_${base}`;
+      store.pushUndo('导入烘焙角色');
+      const char = store.addUnifiedCharacter(name, { skipPlaceholderRoot: true });
+      const mapped = mapBonesToNodes(processed, char.id, name);
+      // 一次写入：节点树 + 服装集（不中途回读，见 AGENTS.md 快照坑）
+      store.updateUnifiedCharacter(char.id, {
+        nodes: mapped.character.nodes,
+        rootNodeId: mapped.character.rootNodeId,
+        costumeSets: mapped.character.costumeSets,
+        activeCostumeSetId: mapped.character.activeCostumeSetId,
+      });
+      // 精灵批量入库（单次 setState，合并进同一次 undo）
+      useProjectStore.setState((s) => ({
+        sprites: { ...s.sprites, ...mapped.sprites },
+      }));
+      setImportMsg(
+        `已创建角色 ${name}，含 ${mapped.stats.nodes} 个节点，${mapped.stats.sprites} 张精灵`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [processed, fileName]);
+
+  if (!open) return null;
+
+  // 8 方向总览缩略图
+  const dirThumbs: BakeResult[] | null =
+    twoPass == null
+      ? null
+      : ([0, 1, 2, 3, 4, 5, 6, 7] as const).map((d) => {
+          const g = twoPass.groups.find((x) => x.direction === d && x.pass === 0)!;
+          return {
+            direction: d,
+            pixels: showIds ? g.idPixels : g.colorPixels,
+            width: twoPass.width,
+            height: twoPass.height,
+            colorCount: 0,
+            elapsedMs: 0,
+          };
+        });
+
+  const boneList = processed ? [...processed.values()].sort((a, b) => a.boneIndex - b.boneIndex) : [];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[90vh] w-[860px] overflow-y-auto rounded-lg border border-[#2a2a4a] bg-[#12122a] p-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-bold text-gray-200">
+            3D 按骨骼烘焙 <span className="font-normal text-gray-500">（ID 双遍 → 拆分 → 导入角色）</span>
+          </h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-200">✕</button>
+        </div>
+
+        {/* 输入 */}
+        <div className="mb-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="h-7 shrink-0 rounded border border-[#3a3a5a] bg-[#1a1a30] px-3 text-[11px] text-gray-300 hover:bg-[#222240]"
+            >
+              选择 .glb/.gltf
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".glb,.gltf"
+              className="hidden"
+              onChange={(e) => handleFile(e.target.files?.[0])}
+            />
+            <span className="truncate text-[11px] text-gray-500">
+              {fileName ?? '或使用下方 URL（默认 Xbot）'}
+            </span>
+          </div>
+          <input
+            value={url}
+            onChange={(e) => { setUrl(e.target.value); setFileName(null); setFileData(null); }}
+            placeholder="https://…/model.glb"
+            className="h-7 w-full rounded border border-[#2a2a4a] bg-[#0d0d1f] px-2 text-[11px] text-gray-300"
+          />
+          <div className="flex items-center gap-4 text-[11px] text-gray-400">
+            <label className="flex items-center gap-1">
+              分辨率
+              <select
+                value={size}
+                onChange={(e) => setSize(Number(e.target.value))}
+                className="h-6 rounded border border-[#2a2a4a] bg-[#0d0d1f] px-1 text-gray-300"
+              >
+                <option value={32}>32</option>
+                <option value={64}>64</option>
+                <option value={128}>128</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-1">
+              调色板
+              <select
+                value={paletteSize}
+                onChange={(e) => setPaletteSize(Number(e.target.value))}
+                className="h-6 rounded border border-[#2a2a4a] bg-[#0d0d1f] px-1 text-gray-300"
+              >
+                <option value={8}>8 色</option>
+                <option value={16}>16 色</option>
+                <option value={32}>32 色</option>
+              </select>
+            </label>
+            <button
+              onClick={handleBake}
+              disabled={baking}
+              className="h-7 rounded bg-cyan-700 px-4 text-[11px] font-bold text-white hover:bg-cyan-600 disabled:opacity-50"
+            >
+              {baking ? '烘焙中…' : '按骨骼烘焙'}
+            </button>
+            {progress && <span className="text-cyan-400">{progress}</span>}
+            <span className="text-gray-600">每方向 2 遍（前/后）× 8 方向 = 16 遍，用模型原始姿态</span>
+          </div>
+        </div>
+
+        {error && (
+          <div className="mb-3 rounded border border-red-900 bg-red-950/50 p-2 text-[11px] text-red-300">
+            {error}
+          </div>
+        )}
+        {importMsg && (
+          <div className="mb-3 rounded border border-green-900 bg-green-950/50 p-2 text-[11px] text-green-300">
+            {importMsg}
+          </div>
+        )}
+
+        {/* 单肢体重烘面板 */}
+        {rebakeTarget && (
+          <RebakePanel
+            bone={rebakeTarget}
+            input={input}
+            size={size}
+            paletteSize={paletteSize}
+            onClose={() => setRebakeTarget(null)}
+            onDone={handleRebakeDone}
+          />
+        )}
+
+        {/* 8 方向总览 */}
+        {dirThumbs && (
+          <div className="mb-3">
+            <div className="mb-2 flex items-center gap-3 text-[11px] text-gray-400">
+              <span>
+                {twoPass!.bones.length} bones · {processed?.size ?? 0} 有效肢体 · 总耗时 {totalMs.toFixed(0)}ms · {size}×{size}
+              </span>
+              <label className="flex cursor-pointer items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={showIds}
+                  onChange={(e) => setShowIds(e.target.checked)}
+                />
+                显示 ID 图（调试拆分）
+              </label>
+              <button
+                onClick={handleImport}
+                disabled={!processed || processed.size === 0}
+                className="h-7 rounded bg-green-700 px-4 text-[11px] font-bold text-white hover:bg-green-600 disabled:opacity-50"
+              >
+                导入为角色
+              </button>
+            </div>
+            <div className="grid grid-cols-8 gap-2">
+              {dirThumbs.map((r) => (
+                <div key={r.direction} className="flex flex-col items-center gap-1">
+                  <ResultCanvas result={r} size={80} />
+                  <div className="text-[10px] text-gray-500">{r.direction * 45}°</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 骨骼列表 */}
+        {boneList.length > 0 && (
+          <div>
+            <div className="mb-2 text-[11px] text-gray-400">
+              肢体列表（{boneList.length}）— 不满意可单独重烘
+            </div>
+            <div className="grid grid-cols-6 gap-2">
+              {boneList.map((pb) => {
+                const d0 = pb.directions.find((d) => d.direction === 0) ?? pb.directions[0];
+                const boneInfo = twoPass?.bones[pb.boneIndex];
+                return (
+                  <div
+                    key={pb.boneIndex}
+                    className="flex flex-col items-center gap-1 rounded border border-[#2a2a4a] p-2"
+                  >
+                    {d0 && <PixelGridCanvas grid={d0.grid} scale={2} />}
+                    <div className="max-w-[110px] truncate text-[10px] text-gray-300" title={pb.boneName}>
+                      {pb.boneName}
+                    </div>
+                    <button
+                      onClick={() => boneInfo && setRebakeTarget(boneInfo)}
+                      className="h-6 rounded border border-[#3a3a5a] bg-[#1a1a30] px-2 text-[10px] text-gray-300 hover:bg-[#222240]"
+                    >
+                      重烘
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {!twoPass && !error && !baking && (
+          <div className="py-8 text-center text-[11px] text-gray-600">
+            选择模型后点「按骨骼烘焙」：16 遍渲染（ID 双遍 × 8 方向）→ 自动按 bone 拆分 → 可导入为角色
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
