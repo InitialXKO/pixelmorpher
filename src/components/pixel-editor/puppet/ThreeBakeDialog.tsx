@@ -5,7 +5,7 @@
 // 上传 .glb/.gltf 或填 URL → 8 方向烘焙 → 拼图预览
 // ============================================================
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { bakeModelToSprites, type BakeResult } from '@/lib/bake/threejs-baker';
 
 const SAMPLE_URL =
@@ -18,24 +18,23 @@ interface ThreeBakeDialogProps {
 
 function ResultCanvas({ result }: { result: BakeResult }) {
   const ref = useRef<HTMLCanvasElement>(null);
-  const drawnFor = useRef<BakeResult | null>(null);
-  if (ref.current && drawnFor.current !== result) {
-    drawnFor.current = result;
-    const ctx = ref.current.getContext('2d');
-    if (ctx) {
-      const copy = new Uint8ClampedArray(result.pixels.length);
-      copy.set(result.pixels);
-      const img = new ImageData(copy, result.width, result.height);
-      // 画到临时 canvas 再放大(nearest)显示
-      const tmp = document.createElement('canvas');
-      tmp.width = result.width;
-      tmp.height = result.height;
-      tmp.getContext('2d')?.putImageData(img, 0, 0);
-      ctx.imageSmoothingEnabled = false;
-      ctx.clearRect(0, 0, ref.current.width, ref.current.height);
-      ctx.drawImage(tmp, 0, 0, ref.current.width, ref.current.height);
-    }
-  }
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const copy = new Uint8ClampedArray(result.pixels.length);
+    copy.set(result.pixels);
+    const img = new ImageData(copy, result.width, result.height);
+    // 画到临时 canvas 再放大(nearest)显示
+    const tmp = document.createElement('canvas');
+    tmp.width = result.width;
+    tmp.height = result.height;
+    tmp.getContext('2d')?.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
+  }, [result]);
   return (
     <div className="flex flex-col items-center gap-1">
       <canvas
