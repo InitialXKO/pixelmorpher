@@ -1093,6 +1093,13 @@ function generateDiscInstructions(
   for (const [nodeId, node] of Object.entries(character.nodes)) {
     if (!node.generated || node.generated.type !== 'disc') continue;
 
+    // mesh 蒙皮模式：不生成关节盘（由像素变形代替）
+    if (node.attachment?.type === 'socket' && node.attachment.parentSocketId && node.parentId) {
+      const parentNode = character.nodes[node.parentId];
+      const socket = parentNode?.sockets.find(s => s.id === node.attachment!.parentSocketId);
+      if (socket?.skinning === 'mesh') continue;
+    }
+
     const worldTf = worldTransforms.get(nodeId);
     if (!worldTf) continue;
 
@@ -1275,6 +1282,37 @@ export function generateRenderPlan(
       ) as any;
     }
 
+    // ---- Mesh skinning: 若父 socket.skinning === 'mesh'，计算蒙皮参数 ----
+    // （替代关节盘：子精灵在 plug 附近做插值变形）
+    let meshSkin: NodeRenderInstruction['meshSkin'];
+    if (node.attachment?.type === 'socket' && node.attachment.parentSocketId) {
+      const parentNode = node.parentId ? character.nodes[node.parentId] : undefined;
+      const socket = parentNode?.sockets.find(s => s.id === node.attachment!.parentSocketId);
+      if (socket?.skinning === 'mesh') {
+        const parentWorldTf = parentNode ? worldTransforms.get(parentNode.id) : undefined;
+        if (parentWorldTf) {
+          // 关节相对角度 = 子世界角 - 父世界角
+          let jointAngle = worldTf.worldAngle - parentWorldTf.worldAngle;
+          // 归一化到 [-180, 180]
+          while (jointAngle > 180) jointAngle -= 360;
+          while (jointAngle < -180) jointAngle += 360;
+          // plug 在精灵局部坐标（像素）：sprite.plug（SubPixel）+ attachment.plug 偏移
+          // 默认值与 renderNodeSprite 的 pivot 计算一致（无 plug 时居中）
+          const plugBaseX = sprite.plug ? subToPx(sprite.plug.x) : sprite.width / 2;
+          const plugBaseY = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
+          const plugOffX = node.attachment.plug ? subToPx(node.attachment.plug.x) : 0;
+          const plugOffY = node.attachment.plug ? subToPx(node.attachment.plug.y) : 0;
+          meshSkin = {
+            plugX: plugBaseX + plugOffX,
+            plugY: plugBaseY + plugOffY,
+            jointAngle,
+            radius: socket.skinRadius ?? 8,
+            curve: socket.skinCurve ?? 'smoothstep',
+          };
+        }
+      }
+    }
+
     nodeInstructions.push({
       nodeId,
       sprite,
@@ -1291,6 +1329,7 @@ export function generateRenderPlan(
       modifiers: nodeModifiers,
       frame,
       frameRate,
+      meshSkin,
       // t.scaleX 修复：蓝图 scaleX 独立 plumbing，不再平均吃掉
       scaleX: worldTf.scaleX,
       // 蓝图 skew：有倾斜量时才填，避免空数组污染
@@ -1602,6 +1641,26 @@ function renderNodeSprite(
 
       evaluateBlueprint(bpGraph, bpCtx);
     }
+  }
+
+  // ---- Mesh skinning（关节网格蒙皮）：在像素定稿后、转 canvas 前变形 ----
+  // socket.skinning === 'mesh' 时，用插值变形代替关节盘遮盖接缝。
+  // 注意：plug 坐标是精灵局部（未镜像）；mirror 时 plug X 已在下方翻转，
+  // 此处蒙皮作用于未镜像的 effectivePixels，故用原始 plug 坐标。
+  const meshSkin = (instruction as any).meshSkin as
+    | { plugX: number; plugY: number; jointAngle: number; radius: number; curve: 'linear' | 'smoothstep' }
+    | undefined;
+  if (meshSkin && Math.abs(meshSkin.jointAngle) > 0.01 && meshSkin.radius > 0) {
+    // 懒加载避免循环依赖（mesh-skin 只依赖类型+工具函数，无回引）
+    const { applyMeshSkin } = require('./skin/mesh-skin') as typeof import('./skin/mesh-skin');
+    effectivePixels = applyMeshSkin(
+      effectivePixels,
+      meshSkin.plugX,
+      meshSkin.plugY,
+      meshSkin.jointAngle,
+      meshSkin.radius,
+      meshSkin.curve,
+    );
   }
 
   // Create offscreen canvas from (possibly modified) sprite data

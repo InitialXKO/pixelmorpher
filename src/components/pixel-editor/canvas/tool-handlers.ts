@@ -10,7 +10,7 @@ import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
 import { inpaintPixels, samMaskToSelectionMask } from '@/lib/inpainting';
 import { floodFill } from '@/lib/engine';
-import { renderUnifiedToCanvas } from '@/lib/unified-render';
+import { renderUnifiedToCanvas, renderSpriteEditUnified } from '@/lib/unified-render';
 import { resolveNodeSpriteId } from '@/lib/unified-render';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
@@ -807,6 +807,73 @@ export const magicWandHandler: ToolHandler = {
 };
 
 // ---------------------------------------------------------------------------
+// 选区工具的精灵编辑坐标换算
+//
+// 选区工具（lasso/magic_wand/smart_select）的使用场景是精灵像素编辑：点选工具时
+// 自动进入 sprite_edit（见 Toolbar）。sprite_edit 下画布只居中绘制被编辑的精灵
+// （见 renderSpriteEditUnified），选区 mask 存精灵局部坐标（"lx,ly"），Delete 键、
+// inpaint、选区覆盖层都按局部坐标消费。
+// ---------------------------------------------------------------------------
+
+/** 画布坐标 → 当前编辑精灵的局部坐标（sprite_edit 居中绘制约定） */
+function spriteEditCanvasToLocal(s: CanvasState, px: number, py: number): { lx: number; ly: number } | null {
+  const sprite = s.selectedPart;
+  if (!sprite) return null;
+  const offX = Math.floor((s.canvasWidth - sprite.width) / 2);
+  const offY = Math.floor((s.canvasHeight - sprite.height) / 2);
+  const lx = Math.round(px - offX);
+  const ly = Math.round(py - offY);
+  if (lx < 0 || lx >= sprite.width || ly < 0 || ly >= sprite.height) return null;
+  return { lx, ly };
+}
+
+/** 精灵编辑模式下精灵在画布上的绘制原点（左上角），供选区覆盖层把局部坐标映回画布 */
+export function spriteEditCanvasOrigin(s: CanvasState): { x: number; y: number } {
+  const sprite = s.selectedPart;
+  if (!sprite) return { x: 0, y: 0 };
+  return {
+    x: Math.floor((s.canvasWidth - sprite.width) / 2),
+    y: Math.floor((s.canvasHeight - sprite.height) / 2),
+  };
+}
+
+/** SAM mask（画布坐标）→ 当前编辑精灵局部坐标，写入 selectionMaskRef */
+function applySAMMaskToSpriteLocalSelection(s: CanvasState) {
+  const editor = s.editorStore.getState();
+  const { currentMask, maskShape } = editor.samState;
+  const sprite = s.selectedPart;
+  if (!currentMask || !maskShape || !sprite) return;
+  const canvasMask = samMaskToSelectionMask(currentMask, maskShape, s.canvasWidth, s.canvasHeight);
+  const local = new Set<string>();
+  for (const key of canvasMask) {
+    const comma = key.indexOf(',');
+    const cx = Number(key.slice(0, comma));
+    const cy = Number(key.slice(comma + 1));
+    const pt = spriteEditCanvasToLocal(s, cx, cy);
+    if (pt) local.add(`${pt.lx},${pt.ly}`);
+  }
+  s.selectionMaskRef.current = local;
+  s.markDirty();
+}
+
+/** 把当前精灵编辑视图渲染到离屏 canvas（供 SAM 编码：所见即所分割） */
+function renderSpriteEditViewToCanvas(s: CanvasState): HTMLCanvasElement {
+  const canvas = document.createElement('canvas');
+  canvas.width = s.canvasWidth;
+  canvas.height = s.canvasHeight;
+  const ctx = canvas.getContext('2d')!;
+  renderSpriteEditUnified(
+    ctx,
+    s.selectedPart!,
+    s.spriteEditModifiers ?? [],
+    s.canvasWidth,
+    s.canvasHeight,
+    s.currentFrameRef.current,
+  );
+  return canvas;
+}
+
+// ---------------------------------------------------------------------------
 // Smart Select (SAM) Handler
 // ---------------------------------------------------------------------------
 
@@ -816,25 +883,33 @@ export const smartSelectHandler: ToolHandler = {
     const editor = s.editorStore.getState(); const { samState } = editor;
     if (samState.status === 'idle') { editor.initSAMModel(samState.model); return; }
     if (samState.status === 'ready') {
+      // 精灵编辑模式：SAM 编码当前精灵编辑视图（所见即所分割），分割后 mask
+      // 换算到编辑精灵局部坐标写入选区（复用 inpaint 的 mask→局部换算思路）。
+      const inSpriteEdit = s.editMode === 'sprite_edit' && s.selectedPart;
+      const afterSegment = () => { if (inSpriteEdit) applySAMMaskToSpriteLocalSelection(s); };
       if (!samState.currentMask) {
         try {
           const pst = useProjectStore.getState();
-          const samCanvas = renderUnifiedToCanvas(
-            s.canvasWidth, s.canvasHeight,
-            Object.values(pst.sprites), s.keyframes, currentFrame, s.backgroundColor,
-            s.effectTracks, undefined, undefined, false, 0.5,
-            undefined, undefined, undefined, 'low',
-            s.globalModifiers, undefined,
-            s.frameRate,
-            pst.unifiedCharacters,
-          );
+          const samCanvas = inSpriteEdit
+            ? renderSpriteEditViewToCanvas(s)
+            : renderUnifiedToCanvas(
+              s.canvasWidth, s.canvasHeight,
+              Object.values(pst.sprites), s.keyframes, currentFrame, s.backgroundColor,
+              s.effectTracks, undefined, undefined, false, 0.5,
+              undefined, undefined, undefined, 'low',
+              s.globalModifiers, undefined,
+              s.frameRate,
+              pst.unifiedCharacters,
+            );
           if (s.canvasWidth > 0 && s.canvasHeight > 0) {
-            editor.setSAMImage(samCanvas).then(() => { editor.samSegmentAtPoint(px / s.canvasWidth, py / s.canvasHeight); });
+            editor.setSAMImage(samCanvas).then(() => {
+              editor.samSegmentAtPoint(px / s.canvasWidth, py / s.canvasHeight).then(afterSegment);
+            });
           }
         } catch (err) { console.error('[SAM] Failed to encode image:', err); }
         return;
       }
-      editor.samSegmentAtPoint(px / s.canvasWidth, py / s.canvasHeight);
+      editor.samSegmentAtPoint(px / s.canvasWidth, py / s.canvasHeight).then(afterSegment);
     }
   },
 };
@@ -863,12 +938,21 @@ export const inpaintHandler: ToolHandler = {
       const pivotX = spritePivotX(selPart);
       const pivotY = spritePivotY(selPart);
       const spriteMask = new Set<string>();
+      // sprite_edit 下精灵居中绘制，走局部坐标换算；旧模式沿用 pivot 居中的换算
+      const inSpriteEdit = s.editMode === 'sprite_edit';
       for (const key of canvasMask) {
         const comma = key.indexOf(',');
         const cx = Number(key.slice(0, comma));
         const cy = Number(key.slice(comma + 1));
-        const lx = Math.round(cx - (offsetX - pivotX));
-        const ly = Math.round(cy - (offsetY - pivotY));
+        let lx: number, ly: number;
+        if (inSpriteEdit) {
+          const local = spriteEditCanvasToLocal(s, cx, cy);
+          if (!local) continue;
+          lx = local.lx; ly = local.ly;
+        } else {
+          lx = Math.round(cx - (offsetX - pivotX));
+          ly = Math.round(cy - (offsetY - pivotY));
+        }
         if (lx >= 0 && lx < selPart.width && ly >= 0 && ly < selPart.height) {
           spriteMask.add(`${lx},${ly}`);
         }
@@ -1252,6 +1336,19 @@ export const nodeLassoHandler: ToolHandler = {
       minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
       maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
     }
+    // 精灵编辑模式：选区直接作用于编辑精灵像素，mask 存局部坐标
+    if (s.editMode === 'sprite_edit' && s.selectedPart) {
+      for (let y = Math.floor(minY); y <= Math.ceil(maxY); y++) {
+        for (let x = Math.floor(minX); x <= Math.ceil(maxX); x++) {
+          if (!pointInPolygon(x, y, path)) continue;
+          const local = spriteEditCanvasToLocal(s, x, y);
+          if (local) s.selectionMaskRef.current.add(`${local.lx},${local.ly}`);
+        }
+      }
+      s.lassoPathRef.current = [];
+      s.markDirty();
+      return;
+    }
     // 有选中节点时，将选区裁剪到其精灵包围盒（选区作用于该节点精灵）
     const nodeSprite = resolveSelectedNodeSprite(s);
     let bounds: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
@@ -1279,6 +1376,46 @@ export const nodeMagicWandHandler: ToolHandler = {
     const shiftHeld = e.shiftKey;
     const ctrlHeld = e.ctrlKey || e.metaKey;
     if (!shiftHeld && !ctrlHeld) s.selectionMaskRef.current.clear();
+
+    // 精灵编辑模式：直接在编辑精灵像素上漫水，mask 存局部坐标（选区作用于精灵像素）
+    if (s.editMode === 'sprite_edit' && s.selectedPart) {
+      const sprite = s.selectedPart;
+      const start = spriteEditCanvasToLocal(s, Math.round(px), Math.round(py));
+      if (start) {
+        const targetColor = sprite.data[start.ly]?.[start.lx];
+        if (targetColor !== null && targetColor !== undefined) {
+          const tR = parseInt(targetColor.slice(1, 3), 16);
+          const tG = parseInt(targetColor.slice(3, 5), 16);
+          const tB = parseInt(targetColor.slice(5, 7), 16);
+          const visited = new Set<string>();
+          const queue: { lx: number; ly: number }[] = [start];
+          visited.add(`${start.lx},${start.ly}`);
+          const tolerance = s.magicWandTolerance ?? 10;
+          while (queue.length > 0) {
+            const { lx, ly } = queue.shift()!;
+            const maskKey = `${lx},${ly}`;
+            if (ctrlHeld) s.selectionMaskRef.current.delete(maskKey);
+            else s.selectionMaskRef.current.add(maskKey);
+            for (const n of [{ lx: lx - 1, ly }, { lx: lx + 1, ly }, { lx, ly: ly - 1 }, { lx, ly: ly + 1 }]) {
+              if (n.lx < 0 || n.lx >= sprite.width || n.ly < 0 || n.ly >= sprite.height) continue;
+              const nKey = `${n.lx},${n.ly}`;
+              if (visited.has(nKey)) continue;
+              visited.add(nKey);
+              const nColor = sprite.data[n.ly]?.[n.lx];
+              if (nColor === null || nColor === undefined) continue;
+              const nR = parseInt(nColor.slice(1, 3), 16);
+              const nG = parseInt(nColor.slice(3, 5), 16);
+              const nB = parseInt(nColor.slice(5, 7), 16);
+              if (Math.abs(tR - nR) + Math.abs(tG - nG) + Math.abs(tB - nB) <= tolerance * 3) {
+                queue.push(n);
+              }
+            }
+          }
+          s.markDirty();
+        }
+      }
+      return;
+    }
 
     // 优先：选中节点的精灵（节点感知，考虑世界位姿）
     const nodeSprite = resolveSelectedNodeSprite(s);

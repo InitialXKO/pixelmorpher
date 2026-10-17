@@ -638,7 +638,20 @@ export function useCanvasState() {
       const offsetX = canvasWidth / 2; const offsetY = canvasHeight / 2;
       const sorted = [...parts].sort((a, b) => 0);
       const selectedPixels: { x: number; y: number; color: string; spriteId: string; localX: number; localY: number }[] = [];
-      for (const key of mask) {
+      // sprite_edit 下 mask 存的是编辑精灵局部坐标，先映回画布坐标，后续沿用画布坐标流程
+      //（canvasToPartLocal 本身已是 sprite_edit 感知的，映回后能正确解回局部坐标）
+      let maskKeys: Set<string> = mask;
+      if (editMode === 'sprite_edit' && selectedPart) {
+        const offX = Math.floor((canvasWidth - selectedPart.width) / 2);
+        const offY = Math.floor((canvasHeight - selectedPart.height) / 2);
+        const translated = new Set<string>();
+        for (const key of mask) {
+          const [lx, ly] = key.split(',').map(Number);
+          translated.add(`${lx + offX},${ly + offY}`);
+        }
+        maskKeys = translated;
+      }
+      for (const key of maskKeys) {
         const [pxStr, pyStr] = key.split(',');
         const px = parseInt(pxStr, 10); const py = parseInt(pyStr, 10);
         for (const part of sorted) {
@@ -686,7 +699,7 @@ export function useCanvasState() {
         }
       }
     });
-  }, [parts, canvasWidth, canvasHeight, canvasToPartLocal, editorStore]);
+  }, [parts, canvasWidth, canvasHeight, canvasToPartLocal, editorStore, editMode, selectedPart]);
 
   // ---- Onion data version bump effect ----
   useEffect(() => {

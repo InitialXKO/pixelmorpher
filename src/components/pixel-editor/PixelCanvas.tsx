@@ -31,6 +31,7 @@ import {
 } from './canvas/canvas-puppet-render';
 import { acquireCanvas, releaseCanvas } from '@/lib/engine/canvas-pool';
 import { getCursorStyle, isStrokeToolCheck } from './canvas/canvas-utils';
+import { spriteEditCanvasOrigin } from './canvas/tool-handlers';
 
 // ============================================================
 // PixelCanvas - Central canvas for PixelMorpher pixel animation
@@ -324,7 +325,9 @@ export default function PixelCanvas() {
     // 6-10. Overlays
     renderGridOverlay(rc);
     renderCanvasBorder(rc);
-    s.selectionMarchOffsetRef.current = renderSelectionOverlay(rc, s.selectionMaskRef.current, s.selectionMarchOffsetRef.current);
+    // sprite_edit 下选区 mask 存的是精灵局部坐标，绘制时加回精灵的画布原点偏移
+    const selOrigin = s.editMode === 'sprite_edit' ? spriteEditCanvasOrigin(s) : { x: 0, y: 0 };
+    s.selectionMarchOffsetRef.current = renderSelectionOverlay(rc, s.selectionMaskRef.current, s.selectionMarchOffsetRef.current, selOrigin.x, selOrigin.y);
 
     if (s.isDrawingRef.current && s.tool === 'lasso') renderLassoPreview(rc, s.lassoPathRef.current);
     if (s.isDrawingRef.current && s.tool === 'trajectory') renderHandDrawnTrajectoryPreview(rc, s.handDrawTrajectoryRef.current);

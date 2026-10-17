@@ -172,12 +172,21 @@ export interface GeneratedItem {
  * At runtime, the actual position is looked up by the parent's variantIndex.
  * If no entry exists for the current direction, basePosition is used.
  */
+/** 关节蒙皮模式：disc=关节盘遮盖（默认），mesh=网格蒙皮变形 */
+export type SocketSkinning = 'disc' | 'mesh';
+
 export interface Socket {
   id: string;
   name: string;
   basePosition: Point;                    // Base offset relative to parent anchor
   directionOffsets: Partial<Record<DirectionIndex, Point>>; // Per-direction overrides
   templateOffsets?: Partial<Record<DirectionIndex, Point>>; // L0 template suggestions (can be reset to these)
+  /** 蒙皮模式：'disc'（默认，关节盘遮盖接缝）| 'mesh'（网格蒙皮，父子精灵插值变形） */
+  skinning?: SocketSkinning;
+  /** mesh 模式：影响半径（像素），默认 8 */
+  skinRadius?: number;
+  /** mesh 模式：混合曲线，默认 'smoothstep' */
+  skinCurve?: 'linear' | 'smoothstep';
 }
 
 /** Attachment type: how a child node connects to its parent */
@@ -779,6 +788,14 @@ export interface NodeRenderInstruction {
   costumeSlot?: string;
   /** Shared sprite table for SpriteRef resolution (character.sprites) */
   sprites?: Record<string, Sprite>;
+  /** Mesh skinning params (socket.skinning === 'mesh' 时填充，renderNodeSprite 用） */
+  meshSkin?: {
+    plugX: number;   // plug 在精灵局部坐标（像素）
+    plugY: number;
+    jointAngle: number; // 关节相对角度（度，子相对父）
+    radius: number;     // 影响半径（像素）
+    curve: 'linear' | 'smoothstep';
+  };
 }
 
 /**

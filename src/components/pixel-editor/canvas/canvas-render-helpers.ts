@@ -84,6 +84,8 @@ export function renderSelectionOverlay(
   rc: RenderContext,
   selectionMask: Set<string>,
   marchOffset: number,
+  offsetX: number = 0,
+  offsetY: number = 0,
 ): number {
   if (selectionMask.size === 0) return marchOffset;
 
@@ -95,8 +97,8 @@ export function renderSelectionOverlay(
 
   for (const key of selectionMask) {
     const [sx, sy] = key.split(',');
-    const px = parseInt(sx, 10);
-    const py = parseInt(sy, 10);
+    const px = parseInt(sx, 10) + offsetX;
+    const py = parseInt(sy, 10) + offsetY;
     ctx.clearRect(panX + px * zoom, panY + py * zoom, zoom, zoom);
   }
 
@@ -108,15 +110,18 @@ export function renderSelectionOverlay(
 
   for (const key of selectionMask) {
     const [sx, sy] = key.split(',');
-    const px = parseInt(sx, 10);
-    const py = parseInt(sy, 10);
+    // 边界判定在 mask 自身坐标系里做，绘制时再加偏移
+    const lx = parseInt(sx, 10);
+    const ly = parseInt(sy, 10);
     const isBoundary =
-      !selectionMask.has(`${px - 1},${py}`) ||
-      !selectionMask.has(`${px + 1},${py}`) ||
-      !selectionMask.has(`${px},${py - 1}`) ||
-      !selectionMask.has(`${px},${py + 1}`);
+      !selectionMask.has(`${lx - 1},${ly}`) ||
+      !selectionMask.has(`${lx + 1},${ly}`) ||
+      !selectionMask.has(`${lx},${ly - 1}`) ||
+      !selectionMask.has(`${lx},${ly + 1}`);
 
     if (isBoundary) {
+      const px = lx + offsetX;
+      const py = ly + offsetY;
       ctx.strokeRect(panX + px * zoom, panY + py * zoom, zoom, zoom);
     }
   }

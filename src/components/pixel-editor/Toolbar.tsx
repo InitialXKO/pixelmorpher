@@ -341,19 +341,29 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
               setEditMode('normal');
             }
 
-            // Auto-enter part_edit mode when switching to brush/eraser/fill in non-correction mode.
-            // Only auto-enter when a part is already selected; never silently pick the first part.
-            if ((val === 'brush' || val === 'eraser' || val === 'fill') &&
-                state.editMode !== 'correction' &&
-                state.editMode !== 'sprite_edit') {
+            // Auto-enter sprite_edit when switching to brush/eraser/fill in non-correction mode.
+            // Only auto-enter when a sprite is already selected; never silently pick the first one.
+            const autoEnterSpriteEdit = (hint: string) => {
               const projectStore = useProjectStore.getState();
               const selectedSpriteId = state.selectedSpriteId;
               const sprite = selectedSpriteId ? projectStore.sprites[selectedSpriteId] : null;
               if (sprite) {
                 state.enterSpriteEditMode(selectedSpriteId!);
               } else if (Object.keys(projectStore.sprites).length > 0) {
-                toast({ title: '请先选择精灵', description: '在精灵面板中选择一个精灵后再绘画' });
+                toast({ title: '请先选择精灵', description: hint });
               }
+            };
+            if ((val === 'brush' || val === 'eraser' || val === 'fill') &&
+                state.editMode !== 'correction' &&
+                state.editMode !== 'sprite_edit') {
+              autoEnterSpriteEdit('在精灵面板中选择一个精灵后再绘画');
+            }
+            // 选区工具的使用场景就是精灵像素编辑：lasso/magic_wand/smart_select 点选时
+            // 有选中精灵则自动进 sprite_edit，无选中精灵则 toast（不静默）。
+            if ((val === 'lasso' || val === 'magic_wand' || val === 'smart_select') &&
+                state.editMode !== 'correction' &&
+                state.editMode !== 'sprite_edit') {
+              autoEnterSpriteEdit('在精灵面板中选择一个精灵后再框选');
             }
           }
         }}
