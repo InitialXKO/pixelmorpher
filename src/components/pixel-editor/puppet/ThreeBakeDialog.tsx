@@ -9,7 +9,7 @@ import { useCallback, useRef, useState } from 'react';
 import { bakeModelToSprites, type BakeResult } from '@/lib/bake/threejs-baker';
 
 const SAMPLE_URL =
-  'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/main/2.0/Duck/glTF-Binary/Duck.glb';
+  'https://threejs.org/examples/models/gltf/Xbot.glb';
 
 interface ThreeBakeDialogProps {
   open: boolean;
