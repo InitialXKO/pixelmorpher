@@ -443,6 +443,15 @@ export default function PuppetAssetPanel() {
                   >
                     <div className="size-2 rounded-sm border border-gray-700 bg-gray-800 flex-shrink-0" />
                     <span className="truncate flex-1 min-w-0">{sprite.name}</span>
+                    {(() => {
+                      const lm = (sprite as any).landmarks;
+                      const n = lm ? ['leftEye', 'rightEye', 'nose', 'mouth'].filter((k) => (lm as any)[k]).length : 0;
+                      return n > 0 ? (
+                        <span className="text-cyan-500/80" title="特征点标注">
+                          ◉{n}/4
+                        </span>
+                      ) : null;
+                    })()}
                     <span className="text-gray-700">
                       {sprite.width}x{sprite.height}
                     </span>

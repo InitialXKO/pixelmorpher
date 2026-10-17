@@ -357,3 +357,71 @@ export function MoveToolControls() {
     </div>
   );
 }
+
+// ---- Landmark Annotation Controls（蒙皮转面手动特征点标注） ----
+const LANDMARK_META = [
+  { key: 'leftEye', label: '左眼', color: '#60a5fa' },  // 蓝
+  { key: 'rightEye', label: '右眼', color: '#4ade80' }, // 绿
+  { key: 'nose', label: '鼻子', color: '#facc15' },     // 黄
+  { key: 'mouth', label: '嘴', color: '#f87171' },       // 红
+] as const;
+
+export function LandmarkControls() {
+  const landmarkTarget = useEditorStore((s) => s.landmarkTarget);
+  const setLandmarkTarget = useEditorStore((s) => s.setLandmarkTarget);
+  const selectedSpriteId = useEditorStore((s) => s.selectedSpriteId);
+  const landmarks = useProjectStore((s) =>
+    selectedSpriteId ? s.sprites[selectedSpriteId]?.landmarks ?? {} : {}
+  );
+  const updateSpriteLandmarks = useProjectStore((s) => s.updateSpriteLandmarks);
+
+  const count = LANDMARK_META.filter(({ key }) => (landmarks as any)[key]).length;
+
+  return (
+    <div className="flex items-center gap-1 mx-1 shrink-0">
+      <span className="text-[10px] text-gray-500 uppercase tracking-wide">标注</span>
+      <ToggleGroup
+        type="single"
+        value={landmarkTarget}
+        onValueChange={(val) => {
+          if (val) setLandmarkTarget(val as typeof landmarkTarget);
+        }}
+        className="gap-0.5"
+      >
+        {LANDMARK_META.map(({ key, label, color }) => {
+          const done = !!(landmarks as any)[key];
+          return (
+            <ToggleGroupItem
+              key={key}
+              value={key}
+              aria-label={label}
+              className={`h-6 px-1.5 text-[10px] border border-white/10 rounded flex items-center gap-1 ${
+                landmarkTarget === key
+                  ? 'bg-cyan-600/30 text-cyan-300 border-cyan-500/50'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+              }`}
+            >
+              <span
+                className="size-1.5 rounded-full inline-block"
+                style={{ backgroundColor: color, opacity: done ? 1 : 0.3 }}
+              />
+              {label}
+            </ToggleGroupItem>
+          );
+        })}
+      </ToggleGroup>
+      <span className="text-[10px] text-gray-500">{count}/4</span>
+      {count > 0 && (
+        <button
+          className="text-[10px] text-gray-500 hover:text-red-400 px-1"
+          title="清除全部标注"
+          onClick={() => {
+            if (selectedSpriteId) updateSpriteLandmarks(selectedSpriteId, undefined);
+          }}
+        >
+          清除
+        </button>
+      )}
+    </div>
+  );
+}

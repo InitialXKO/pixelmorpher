@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import BlueprintEditor from './BlueprintEditor';
 import BlueprintTemplateLoader from './BlueprintTemplateLoader';
+import { FaceTurnPanel } from './FaceTurnPanel';
 import PathEditor from './PathEditor';
 import HeightmapEditor from './HeightmapEditor';
 import { modifiersToBlueprint } from '@/lib/blueprint/migrate';
@@ -92,7 +93,7 @@ export default function PuppetModifierPanel() {
 
   const [addingType, setAddingType] = useState<AnimationModifierType>('pendulum');
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'modifiers' | 'blueprint' | 'templates'>('modifiers');
+  const [activeTab, setActiveTab] = useState<'modifiers' | 'blueprint' | 'templates' | 'faceturn'>('modifiers');
 
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
@@ -370,11 +371,23 @@ export default function PuppetModifierPanel() {
           >
             模板
           </button>
+          <button
+            onClick={() => setActiveTab('faceturn')}
+            className={`text-[9px] px-1.5 py-0.5 rounded ${
+              activeTab === 'faceturn'
+                ? 'bg-cyan-500/20 text-cyan-300'
+                : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            转面
+          </button>
         </div>
       </div>
 
       {activeTab === 'templates' && unifiedCharacterForTemplates ? (
         <BlueprintTemplateLoader character={unifiedCharacterForTemplates} />
+      ) : activeTab === 'faceturn' ? (
+        <FaceTurnPanel character={character} node={node} />
       ) : activeTab === 'blueprint' ? (
         <>
           {blueprint ? (

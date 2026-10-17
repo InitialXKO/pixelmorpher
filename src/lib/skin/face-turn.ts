@@ -32,6 +32,8 @@ export interface FaceTurnParams {
   perspective?: number;
   /** 深度增强：凸起处（如鼻子）的额外位移倍数，默认 1.5 */
   depthBoost?: number;
+  /** 手动标注的特征点（相对坐标 0~1）；有则优先用鼻子位置替代亮度启发式 */
+  landmarks?: import('../unified-types').SpriteLandmarks;
 }
 
 function isTransparent(p: PixelColor): boolean {
@@ -71,6 +73,21 @@ export function applyFaceTurn(
   const cy = params.centerY ?? height / 2;
   const k = params.perspective ?? 0.3;
   const depthBoost = params.depthBoost ?? 1.5;
+  const landmarks = params.landmarks;
+
+  // 手动标注：鼻子像素位置（有标注时替代亮度启发式）
+  const nosePx = landmarks?.nose
+    ? { x: landmarks.nose.x * width, y: landmarks.nose.y * height }
+    : null;
+  // 眼睛位置（用于不对称权重：转右时左眼侧压缩更多）
+  const eyeLPx = landmarks?.leftEye
+    ? { x: landmarks.leftEye.x * width, y: landmarks.leftEye.y * height }
+    : null;
+  const eyeRPx = landmarks?.rightEye
+    ? { x: landmarks.rightEye.x * width, y: landmarks.rightEye.y * height }
+    : null;
+  // 鼻子影响半径（像素）：标注模式下按精灵尺寸自适应
+  const noseRadius = Math.max(2, Math.min(width, height) * 0.15);
 
   const result: PixelGrid = pixels.map(row => [...row]);
 
@@ -89,16 +106,41 @@ export function applyFaceTurn(
       let dx = yaw * nx * width * k * 0.5;
       let dy = pitch * ny * height * k * 0.5;
 
-      // 深度启发式：亮度高的像素视为凸起（如鼻子高光），额外增强位移
-      // 这是简化的深度估计，比全图统一位移更有"立体感"
-      const c = parseColor(orig);
-      if (c) {
-        const brightness = (c.r + c.g + c.b) / 3 / 255;
-        // 亮度 > 0.7 视为高光/凸起
-        if (brightness > 0.7) {
-          const boost = (brightness - 0.7) / 0.3 * (depthBoost - 1);
-          dx += yaw * boost * width * 0.05;
-          dy += pitch * boost * height * 0.05;
+      if (nosePx) {
+        // ---- 手动标注模式 ----
+        // 鼻子：按到鼻子标注点的距离算深度权重，越近位移越大
+        const dNose = Math.hypot(x - nosePx.x, y - nosePx.y);
+        if (dNose < noseRadius) {
+          const w = 1 - dNose / noseRadius; // 0~1，鼻子中心最强
+          const boost = w * (depthBoost - 1);
+          dx += yaw * boost * width * 0.08;
+          dy += pitch * boost * height * 0.08;
+        }
+        // 眼睛不对称：转右（yaw>0）时，左眼侧（x < cx）压缩更多；
+        // 转左时反之。用眼睛位置确定"远侧"，增强其位移。
+        if (eyeLPx && eyeRPx && Math.abs(yaw) > 1e-6) {
+          // 远侧眼睛：yaw>0 时是左眼，yaw<0 时是右眼
+          const farEye = yaw > 0 ? eyeLPx : eyeRPx;
+          const dEye = Math.hypot(x - farEye.x, y - farEye.y);
+          const eyeRadius = noseRadius * 0.8;
+          if (dEye < eyeRadius) {
+            const w = (1 - dEye / eyeRadius) * 0.5;
+            // 远侧向转面方向"跟进"，制造不对称挤压
+            dx += yaw * w * width * 0.04;
+          }
+        }
+      } else {
+        // ---- 亮度启发式（无标注时回退，保持兼容） ----
+        // 亮度高的像素视为凸起（如鼻子高光），额外增强位移
+        const c = parseColor(orig);
+        if (c) {
+          const brightness = (c.r + c.g + c.b) / 3 / 255;
+          // 亮度 > 0.7 视为高光/凸起
+          if (brightness > 0.7) {
+            const boost = (brightness - 0.7) / 0.3 * (depthBoost - 1);
+            dx += yaw * boost * width * 0.05;
+            dy += pitch * boost * height * 0.05;
+          }
         }
       }
 

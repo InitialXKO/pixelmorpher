@@ -53,6 +53,14 @@ export type PixelGrid = PixelColor[][];
  * Stored in the global s.sprites table; referenced by ID from CostumePiece.
  * Optional plug overrides the node's default plug position.
  */
+export interface SpriteLandmarks {
+  /** 相对坐标 0~1（方向无关，存在 sprite 级） */
+  leftEye?: { x: number; y: number };
+  rightEye?: { x: number; y: number };
+  nose?: { x: number; y: number };
+  mouth?: { x: number; y: number };
+}
+
 export interface Sprite {
   id?: string;                   // Global table key (s.sprites); optional for inline literals
   name?: string;                 // Asset library display name
@@ -61,6 +69,7 @@ export interface Sprite {
   data: PixelGrid;              // 2D pixel grid (replaces Uint8ClampedArray for consistency)
   plug?: Point;                  // Optional: override node's default plug
   heightmap?: number[][];        // Optional: hand-painted heightmap for bump_light
+  landmarks?: SpriteLandmarks;   // Optional: 手动标注的特征点（眼/鼻/嘴），用于蒙皮转面
 }
 
 // ---- Direction System ----

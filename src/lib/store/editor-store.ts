@@ -63,6 +63,8 @@ interface EditorStore extends EditorState {
   setPreviewQuality: (quality: 'low' | 'medium' | 'high') => void;
   magicWandTolerance: number;
   setMagicWandTolerance: (tolerance: number) => void;
+  landmarkTarget: 'leftEye' | 'rightEye' | 'nose' | 'mouth';
+  setLandmarkTarget: (target: 'leftEye' | 'rightEye' | 'nose' | 'mouth') => void;
   // V2.0: Skeleton / Bone editor state
   activeSkeletonId: string | null;
   setActiveSkeletonId: (id: string | null) => void;
@@ -186,6 +188,7 @@ const defaultEditor: EditorState = {
   effectCoordinateMode: 'follow_part',
   previewQuality: 'high' as const,
   magicWandTolerance: 32,
+  landmarkTarget: 'leftEye' as const,
   trajectorySnap: false,
   samState: {
     status: 'idle' as SAMStatus,
@@ -290,6 +293,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setWeightPaintBoneId: (id) => set({ weightPaintBoneId: id }),
   toggleProcedural: () => set((s) => ({ showProcedural: !s.showProcedural })),
   setMagicWandTolerance: (tolerance) => set({ magicWandTolerance: tolerance }),
+  setLandmarkTarget: (target) => set({ landmarkTarget: target }),
   setMoveTargetLevel: (level) => set({ moveTargetLevel: level }),
   setPaletteConstrained: (enabled) => set({ paletteConstrained: enabled }),
   setSelectedPaletteSlot: (index) => set({ selectedPaletteSlot: index }),

@@ -1308,8 +1308,8 @@ export function generateRenderPlan(
           // 即：每个精灵都向"中间"转，blend 处相遇
           const yawA = -dirBlend.blend;
           const yawB = 1 - dirBlend.blend;
-          const gridA = applyFaceTurn(sprite.data, { yaw: yawA, pitch: 0 });
-          const gridB = applyFaceTurn(spriteB.data, { yaw: yawB, pitch: 0 });
+          const gridA = applyFaceTurn(sprite.data, { yaw: yawA, pitch: 0, landmarks: sprite.landmarks });
+          const gridB = applyFaceTurn(spriteB.data, { yaw: yawB, pitch: 0, landmarks: spriteB.landmarks });
           const blended = alphaBlendGrids(gridA, gridB, dirBlend.blend);
           blendedSprite = { ...sprite, data: blended };
         } catch {
@@ -1719,6 +1719,7 @@ function renderNodeSprite(
     effectivePixels = applyFaceTurn(effectivePixels, {
       yaw: faceTurn.yaw,
       pitch: faceTurn.pitch,
+      landmarks: sprite.landmarks,
     });
   }
 

@@ -37,6 +37,7 @@ import {
   MagicWandControls,
   SmartSelectStatus,
   InpaintControls,
+  LandmarkControls,
   MotionBlurBrushControls,
   EffectBrushControls,
   MoveToolControls,
@@ -365,6 +366,12 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
                 state.editMode !== 'sprite_edit') {
               autoEnterSpriteEdit('在精灵面板中选择一个精灵后再框选');
             }
+            // 特征点标注的使用场景也是精灵像素：landmark 点选时自动进 sprite_edit。
+            if (val === 'landmark' &&
+                state.editMode !== 'correction' &&
+                state.editMode !== 'sprite_edit') {
+              autoEnterSpriteEdit('在精灵面板中选择一个精灵后再标注特征点');
+            }
           }
         }}
         className="gap-0.5 mx-1"
@@ -523,6 +530,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
       {isMagicWandTool && <MagicWandControls />}
       {tool === 'smart_select' && <SmartSelectStatus />}
       {tool === 'inpaint' && <InpaintControls />}
+      {tool === 'landmark' && <LandmarkControls />}
       {isMotionBlurBrush && <MotionBlurBrushControls blendMode={blendMode} setBlendMode={setBlendMode} />}
       {isEffectBrush && <EffectBrushControls blendMode={blendMode} setBlendMode={setBlendMode} />}
       {isMoveTool && <MoveToolControls />}
