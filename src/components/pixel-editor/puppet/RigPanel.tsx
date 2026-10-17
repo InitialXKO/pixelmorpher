@@ -16,6 +16,7 @@ import type {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { NodeTreeItemWrapper } from './NodeTree';
 import PuppetModifierPanel from './PuppetModifierPanel';
 import GlobalBlueprintEditor from './GlobalBlueprintEditor';
@@ -382,52 +383,92 @@ function RigNodeProperties({
           </Button>
         </div>
         <div className="space-y-1 mt-1">
-          {(node.sockets ?? []).map((socket) => (
-            <div key={socket.id} className="flex items-center gap-1.5 text-[10px]">
-              <Input
-                value={socket.name}
-                onChange={(e) => {
-                  const sockets = (node.sockets ?? []).map((s) =>
-                    s.id === socket.id ? { ...s, name: e.target.value } : s
-                  );
-                  onUpdate({ sockets });
-                }}
-                className="flex-1 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
-              />
-              <Input
-                type="number"
-                value={subToPx(socket.basePosition.x)}
-                onChange={(e) => {
-                  const sockets = (node.sockets ?? []).map((s) =>
-                    s.id === socket.id ? { ...s, basePosition: { ...s.basePosition, x: pxToSub(Number(e.target.value) || 0) } } : s
-                  );
-                  onUpdate({ sockets });
-                }}
-                className="w-14 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
-                title="X"
-              />
-              <Input
-                type="number"
-                value={subToPx(socket.basePosition.y)}
-                onChange={(e) => {
-                  const sockets = (node.sockets ?? []).map((s) =>
-                    s.id === socket.id ? { ...s, basePosition: { ...s.basePosition, y: pxToSub(Number(e.target.value) || 0) } } : s
-                  );
-                  onUpdate({ sockets });
-                }}
-                className="w-14 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
-                title="Y"
-              />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-5 text-red-400 hover:text-red-300"
-                onClick={() => onRemoveSocket(socket.id)}
-              >
-                <Trash2 className="size-3" />
-              </Button>
-            </div>
-          ))}
+          {(node.sockets ?? []).map((socket) => {
+            const updateSocket = (patch: Partial<typeof socket>) => {
+              const sockets = (node.sockets ?? []).map((s) =>
+                s.id === socket.id ? { ...s, ...patch } : s
+              );
+              onUpdate({ sockets });
+            };
+            const skinning = socket.skinning ?? 'disc';
+            return (
+              <div key={socket.id} className="space-y-1 rounded border border-transparent">
+                <div className="flex items-center gap-1.5 text-[10px]">
+                  <Input
+                    value={socket.name}
+                    onChange={(e) => updateSocket({ name: e.target.value })}
+                    className="flex-1 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
+                  />
+                  <Input
+                    type="number"
+                    value={subToPx(socket.basePosition.x)}
+                    onChange={(e) => {
+                      updateSocket({ basePosition: { ...socket.basePosition, x: pxToSub(Number(e.target.value) || 0) } });
+                    }}
+                    className="w-14 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
+                    title="X"
+                  />
+                  <Input
+                    type="number"
+                    value={subToPx(socket.basePosition.y)}
+                    onChange={(e) => {
+                      updateSocket({ basePosition: { ...socket.basePosition, y: pxToSub(Number(e.target.value) || 0) } });
+                    }}
+                    className="w-14 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
+                    title="Y"
+                  />
+                  <Select
+                    value={skinning}
+                    onValueChange={(v) => updateSocket({ skinning: v as 'disc' | 'mesh' })}
+                  >
+                    <SelectTrigger
+                      className="w-[72px] h-6 text-[10px] bg-[#111128] border-[#1e1e3a] text-gray-300"
+                      title="关节蒙皮模式：disc=关节盘遮盖，mesh=网格蒙皮变形"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-[#1a1a2e] border-white/10 text-gray-200">
+                      <SelectItem value="disc">关节盘</SelectItem>
+                      <SelectItem value="mesh">网格蒙皮</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-5 text-red-400 hover:text-red-300"
+                    onClick={() => onRemoveSocket(socket.id)}
+                  >
+                    <Trash2 className="size-3" />
+                  </Button>
+                </div>
+                {skinning === 'mesh' && (
+                  <div className="flex items-center gap-1.5 text-[10px] pl-1">
+                    <Label className="text-[10px] text-gray-500 shrink-0">蒙皮半径</Label>
+                    <Input
+                      type="number"
+                      value={socket.skinRadius ?? 8}
+                      onChange={(e) => updateSocket({ skinRadius: Math.max(1, Number(e.target.value) || 8) })}
+                      className="w-14 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
+                      title="影响半径（像素）"
+                    />
+                    <Label className="text-[10px] text-gray-500 shrink-0">曲线</Label>
+                    <Select
+                      value={socket.skinCurve ?? 'smoothstep'}
+                      onValueChange={(v) => updateSocket({ skinCurve: v as 'linear' | 'smoothstep' })}
+                    >
+                      <SelectTrigger className="w-[92px] h-6 text-[10px] bg-[#111128] border-[#1e1e3a] text-gray-300">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#1a1a2e] border-white/10 text-gray-200">
+                        <SelectItem value="smoothstep">smoothstep</SelectItem>
+                        <SelectItem value="linear">linear</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
