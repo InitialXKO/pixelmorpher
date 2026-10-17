@@ -95,6 +95,9 @@ function interpolateCharacterInternal(
     for (const nodeId of Object.keys(character.nodes)) {
       const node = character.nodes[nodeId]!;
       const values = interpolateSingleNode(node, currentFrame);
+      // 合并 node.faceTurn 和 keyframe faceTurn（keyframe 优先）
+      const kfFaceTurn = getInterpolatedKeyframeFaceTurn(nodeKeyframes, nodeId, currentFrame);
+      values.faceTurn = kfFaceTurn ?? node.faceTurn;
       // 合并 node.modifiers 和 keyframe modifiers（keyframe 优先，同 type 去重）
       const kfModifiers = getInterpolatedKeyframeModifiers(nodeKeyframes, nodeId, currentFrame);
       const nodeMods = node.modifiers ?? [];
@@ -324,4 +327,37 @@ function getInterpolatedKeyframeModifiers(
   if (!nextKf) nextKf = prevKf;
 
   return interpolateKeyframesModifiers(prevKf, nextKf, currentFrame);
+}
+
+/**
+ * 获取某节点在指定帧的插值后 faceTurn（yaw/pitch 数值 lerp）。
+ * 供 interpolateCharacterInternal 调用，与 node.faceTurn 合并（keyframe 优先）。
+ */
+function getInterpolatedKeyframeFaceTurn(
+  nodeKeyframes: NodeKeyframe[],
+  nodeId: string,
+  currentFrame: number,
+): { yaw: number; pitch: number } | undefined {
+  const kfs = nodeKeyframes
+    .filter((kf) => kf.nodeId === nodeId && kf.faceTurn)
+    .sort((a, b) => a.frame - b.frame);
+  if (kfs.length === 0) return undefined;
+
+  let prevKf: NodeKeyframe | null = null;
+  let nextKf: NodeKeyframe | null = null;
+  for (const kf of kfs) {
+    if (kf.frame <= currentFrame) prevKf = kf;
+    if (kf.frame >= currentFrame && !nextKf) nextKf = kf;
+  }
+  if (!prevKf) prevKf = nextKf;
+  if (!nextKf) nextKf = prevKf;
+
+  const prev = prevKf!.faceTurn!;
+  const next = nextKf!.faceTurn!;
+  if (prevKf!.frame === nextKf!.frame) return { ...prev };
+  const t = Math.max(0, Math.min(1, (currentFrame - prevKf!.frame) / (nextKf!.frame - prevKf!.frame)));
+  return {
+    yaw: prev.yaw + (next.yaw - prev.yaw) * t,
+    pitch: prev.pitch + (next.pitch - prev.pitch) * t,
+  };
 }

@@ -1901,6 +1901,45 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     } catch { /* ignore */ }
     return { path: { type: 'array', value: [] } as BlueprintValue };
   },
+
+  // face_turn: Spine 式伪 3D 转头（蒙皮转面）
+  // 输入 pixels + yaw/pitch，输出变形后像素
+  face_turn: (n, i, ctx): Record<string, BlueprintValue> => {
+    const getNum = (key: string, def: number): number => {
+      const wired = i[key] as BlueprintValue | undefined;
+      if (wired !== undefined) return asNumber(wired);
+      const p = n.params[key];
+      return typeof p === 'number' ? p : def;
+    };
+    const pixelsIn = i.pixels as BlueprintValue | undefined;
+    if (!pixelsIn || pixelsIn.type !== 'pixels') {
+      return { pixels: pixelsIn as BlueprintValue };
+    }
+    const yaw = getNum('yaw', 0);
+    const pitch = getNum('pitch', 0);
+    if (Math.abs(yaw) < 1e-6 && Math.abs(pitch) < 1e-6) {
+      return { pixels: pixelsIn as BlueprintValue };
+    }
+    try {
+      const { applyFaceTurn } = require('../skin/face-turn') as typeof import('../skin/face-turn');
+      const grid = (pixelsIn as any).grid as import('../unified-types').PixelGrid;
+      const centerX = n.params['centerX'];
+      const centerY = n.params['centerY'];
+      const perspective = n.params['perspective'];
+      const depthBoost = n.params['depthBoost'];
+      const out = applyFaceTurn(grid, {
+        yaw,
+        pitch,
+        centerX: typeof centerX === 'number' ? centerX : undefined,
+        centerY: typeof centerY === 'number' ? centerY : undefined,
+        perspective: typeof perspective === 'number' ? perspective : undefined,
+        depthBoost: typeof depthBoost === 'number' ? depthBoost : undefined,
+      });
+      return { pixels: { type: 'pixels', grid: out } as BlueprintValue };
+    } catch {
+      return { pixels: pixelsIn as BlueprintValue };
+    }
+  },
 };
 
 /**
