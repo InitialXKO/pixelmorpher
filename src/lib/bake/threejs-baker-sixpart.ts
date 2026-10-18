@@ -293,10 +293,17 @@ function groupTrianglesByPart(
     const c = index ? index.getX(t * 3 + 2) : t * 3 + 2;
     // 三角形主导 bone：三顶点投票（权重和最大）
     const votes = new Map<number, number>();
+    const parts = new Set<PartName>();
     for (const vi of [a, b, c]) {
       const bi = baked.vertBone[vi];
-      if (bi >= 0) votes.set(bi, (votes.get(bi) ?? 0) + 1);
+      if (bi >= 0) {
+        votes.set(bi, (votes.get(bi) ?? 0) + 1);
+        const p = boneToPart[bi];
+        if (p) parts.add(p);
+      }
     }
+    // 跨部件三角形跳过（留给封盖填洞），不硬分到一侧
+    if (parts.size !== 1) continue;
     let bestBone = -1;
     let bestVotes = 0;
     for (const [bi, n] of votes) {
@@ -400,7 +407,7 @@ function addCaps(
   loops: BoundaryLoop[],
   partCentroid: THREE.Vector3,
   baseColor: THREE.Color,
-  partBoneForCap: (loopVerts: number[]) => number,
+  partBoneForCap: (centroid: THREE.Vector3) => number,
   capVertBone: number[],
 ): void {
   const c = new THREE.Vector3();
@@ -445,23 +452,11 @@ function addCaps(
     positions.push(c.x, c.y, c.z);
     if (uvs) uvs.push(0.5, 0.5);
     colors.push(cr, cg, cb);
-    const capBone = partBoneForCap(loop.verts);
-    capVertBone.push(capBone);
-
-    // 封盖用独立顶点（单 bone ID），不复用主几何顶点（避免重叠 ID 插值污染）
-    const capLoopIdx: number[] = [];
-    for (let i = 0; i < m; i++) {
-      const vi = loop.verts[i];
-      capLoopIdx.push(positions.length / 3);
-      positions.push(positions[vi * 3], positions[vi * 3 + 1], positions[vi * 3 + 2]);
-      if (uvs) uvs.push(0.5, 0.5);
-      colors.push(cr, cg, cb);
-      capVertBone.push(capBone);
-    }
+    capVertBone.push(partBoneForCap(c));
 
     for (let i = 0; i < m; i++) {
-      const a = capLoopIdx[i];
-      const b = capLoopIdx[(i + 1) % m];
+      const a = loop.verts[i];
+      const b = loop.verts[(i + 1) % m];
       if (flip) indices.push(centerIdx, b, a);
       else indices.push(centerIdx, a, b);
     }
@@ -566,20 +561,18 @@ function buildPartGeometry(
       }
       tmpCentroid.multiplyScalar(1 / Math.max(vc, 1));
       const capVertBone: number[] = [];
+      // 封盖 bone：取部件内出现最多的 bone（通常是根，如上臂）
+      const boneFreq = new Map<number, number>();
+      for (const vb of vertBone) {
+        if (vb >= 0) boneFreq.set(vb, (boneFreq.get(vb) ?? 0) + 1);
+      }
+      let capBone = -1;
+      let capBest = 0;
+      for (const [bi, n] of boneFreq) {
+        if (n > capBest) { capBest = n; capBone = bi; }
+      }
       const useUv = hasUv.some(Boolean);
       if (capIndexStart < 0) capIndexStart = indices.length; // 记录第一个封盖起始
-      // 封盖 bone：用部件根 bone（parent 不在部件内的），不投票
-      // 先收集部件内 bones，再找根
-      const partBoneSet = new Set<number>();
-      for (const vb of vertBone) if (vb >= 0) partBoneSet.add(vb);
-      let rootBone = -1;
-      for (const bi of partBoneSet) {
-        const b = bones[bi];
-        const p = b.parent as THREE.Bone | null;
-        const pIdx = p && (p as any).isBone ? (bones as THREE.Bone[]).indexOf(p) : -1;
-        if (pIdx < 0 || !partBoneSet.has(pIdx)) { rootBone = bi; break; }
-      }
-      const boneForLoop = (_loopVerts: number[]): number => rootBone;
       addCaps(
         positions,
         useUv ? uvs : null,
@@ -588,7 +581,7 @@ function buildPartGeometry(
         loops,
         tmpCentroid,
         baseColor,
-        boneForLoop,
+        () => capBone,
         capVertBone,
       );
       // capVertBone 与新增顶点一一对应（addCaps 按序 push）
