@@ -894,7 +894,7 @@ export async function bakeModelTwoPass(
       group.rotation.y = (d / 8) * Math.PI * 2;
       group.updateMatrixWorld(true);
 
-      // 关节投影（整图像素，top-down），按规范方向索引
+      // 关节投影（整图像素，top-down）
       for (let bi = 0; bi < bones.length; bi++) {
         projV.copy(normJoints[bi]).applyMatrix4(group.matrixWorld).project(camera);
         jointPixels[bi][((d + 6) % 8)] = {

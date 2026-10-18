@@ -165,15 +165,11 @@ export function splitByBoneId(
       let y0 = Math.max(0, Math.floor(minY - pad2));
       let x1 = Math.min(W, Math.ceil(maxX + pad2));
       let y1 = Math.min(H, Math.ceil(maxY + pad2));
-      // 确保关节在裁剪框内（若远离 mask 超 20px 则不强制）
-      const jxC2 = Math.max(x0, Math.min(x1 - 1, jx));
-      const jyC2 = Math.max(y0, Math.min(y1 - 1, jy));
-      if (Math.hypot(jx - jxC2, jy - jyC2) <= 20) {
-        x0 = Math.min(x0, Math.floor(jx));
-        y0 = Math.min(y0, Math.floor(jy));
-        x1 = Math.max(x1, Math.ceil(jx) + 1);
-        y1 = Math.max(y1, Math.ceil(jy) + 1);
-      }
+      // 确保关节在裁剪框内
+      x0 = Math.min(x0, Math.floor(jx));
+      y0 = Math.min(y0, Math.floor(jy));
+      x1 = Math.max(x1, Math.ceil(jx) + 1);
+      y1 = Math.max(y1, Math.ceil(jy) + 1);
       const cw = x1 - x0;
       const ch = y1 - y0;
 
@@ -550,16 +546,11 @@ export function splitSixParts(
         let y0 = Math.max(0, Math.floor(minY - pad));
         let x1 = Math.min(W, Math.ceil(maxX + pad));
         let y1 = Math.min(H, Math.ceil(maxY + pad));
-        // 确保关节在裁剪框内（若关节远离 mask 超过 20px 则不强制，避免拉出大片空白）
-        const jxC = Math.max(x0, Math.min(x1 - 1, jx));
-        const jyC = Math.max(y0, Math.min(y1 - 1, jy));
-        const jDist = Math.hypot(jx - jxC, jy - jyC);
-        if (jDist <= 20) {
-          x0 = Math.min(x0, Math.floor(jx));
-          y0 = Math.min(y0, Math.floor(jy));
-          x1 = Math.max(x1, Math.ceil(jx) + 1);
-          y1 = Math.max(y1, Math.ceil(jy) + 1);
-        }
+        // 确保关节在裁剪框内
+        x0 = Math.min(x0, Math.floor(jx));
+        y0 = Math.min(y0, Math.floor(jy));
+        x1 = Math.max(x1, Math.ceil(jx) + 1);
+        y1 = Math.max(y1, Math.ceil(jy) + 1);
         const cw = x1 - x0;
         const ch = y1 - y0;
 
@@ -581,24 +572,18 @@ export function splitSixParts(
         }
 
         const palette = medianCut(crop, paletteSize);
-        // 尺寸归一化：按 cameraHalf 缩放到整模像素空间
-        const cwN = Math.max(1, Math.round(cw * g.cameraHalf));
-        const chN = Math.max(1, Math.round(ch * g.cameraHalf));
         const grid: PixelGrid = [];
-        // 最近邻下采样（若 cwN==cw 则 1:1）
-        for (let y = 0; y < chN; y++) {
+        for (let y = 0; y < ch; y++) {
           const row: (string | null)[] = [];
-          const sy = Math.min(ch - 1, Math.floor((y * ch) / chN));
-          for (let x = 0; x < cwN; x++) {
-            const sx = Math.min(cw - 1, Math.floor((x * cw) / cwN));
-            const o = (sy * cw + sx) * 4;
+          for (let x = 0; x < cw; x++) {
+            const o = (y * cw + x) * 4;
             row.push(rgbaToHexOrNull(crop[o], crop[o + 1], crop[o + 2], crop[o + 3]));
           }
           grid.push(row);
         }
         if (palette.length > 0) {
-          for (let y = 0; y < chN; y++) {
-            for (let x = 0; x < cwN; x++) {
+          for (let y = 0; y < ch; y++) {
+            for (let x = 0; x < cw; x++) {
               const c = grid[y][x];
               if (!c) continue;
               const r = parseInt(c.slice(1, 3), 16);
@@ -614,14 +599,14 @@ export function splitSixParts(
         pb.directions.push({
           direction: d as DirectionIndex,
           grid,
-          width: cwN,
-          height: chN,
+          width: cw,
+          height: ch,
           cropX: x0,
           cropY: y0,
           jointX: jx,
           jointY: jy,
-          plugX: (jx - x0) * g.cameraHalf,
-          plugY: (jy - y0) * g.cameraHalf,
+          plugX: jx - x0,
+          plugY: jy - y0,
         });
       }
     }

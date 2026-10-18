@@ -87,8 +87,6 @@ export interface SixPartGroup {
   colorPixels: Uint8ClampedArray;
   /** 块内局部 bone ID（0,1,2…，见 partBoneMap） */
   idPixels: Uint8ClampedArray;
-  /** 相机半宽（归一化单位），用于跨部件尺寸归一化 */
-  cameraHalf: number;
 }
 
 export interface SixPartBakeData {
@@ -304,35 +302,17 @@ function groupTrianglesByPart(
         if (p) parts.add(p);
       }
     }
-    // 跨部件三角形：若含 torso 则归 torso（父部件，如盆骨/肩/颈处），否则跳过留给封盖
-    let targetPart: PartName | null = null;
-    if (parts.size === 1) {
-      targetPart = [...parts][0];
-    } else if (parts.has('torso')) {
-      targetPart = 'torso';
-    } else {
-      continue;
-    }
+    // 跨部件三角形跳过（留给封盖填洞），不硬分到一侧
+    if (parts.size !== 1) continue;
     let bestBone = -1;
     let bestVotes = 0;
     for (const [bi, n] of votes) {
       if (n > bestVotes) { bestVotes = n; bestBone = bi; }
     }
     if (bestBone < 0) continue;
-    // 若按投票的 bone 不在 targetPart（如 torso 内的腿 bone），则取 targetPart 内投票最多的
-    let finalPart = boneToPart[bestBone];
-    if (finalPart !== targetPart) {
-      // 在 targetPart 的 bones 中找投票最多的
-      let altBest = -1; let altVotes = 0;
-      for (const [bi, n] of votes) {
-        if (boneToPart[bi] === targetPart && n > altVotes) { altVotes = n; altBest = bi; }
-      }
-      if (altBest < 0) continue;
-      bestBone = altBest;
-      finalPart = targetPart;
-    }
-    if (!finalPart) continue;
-    const pt = result.get(finalPart)!;
+    const part = boneToPart[bestBone];
+    if (!part) continue; // 无归属的 bone（如未识别）跳过
+    const pt = result.get(part)!;
     pt.tris.push([a, b, c]);
     pt.triBone.push(bestBone);
   }
@@ -1026,12 +1006,9 @@ export async function bakeSixParts(
       const idTriIds = new Float32Array(triCount * 3);
       const idTexData = new Uint8Array(triCount * 4);
       for (let t = 0; t < triCount; t++) {
-        // 三角形 bone 集：3 顶点 vertBones 并集 → 过滤非邻接 → 局部索引 → 按位或
-        // 过滤：只保留与主 bone 邻接的（parent/child/self），防大腿含脚等跨级泄漏
-        const triBones = new Set<number>();
-        let primaryGi = -1;
-        let primaryCount = 0;
-        const boneCounts = new Map<number, number>();
+        // 三角形 bone 集：3 顶点 vertBones 并集 → 局部索引 → 按位或
+        let r = 0, g = 0, b = 0;
+        const seenLi = new Set<number>();
         for (let k = 0; k < 3; k++) {
           const v = srcIndex ? srcIndex.getX(t * 3 + k) : t * 3 + k;
           idPositions[(t * 3 + k) * 3] = srcPos.getX(v);
@@ -1041,34 +1018,12 @@ export async function bakeSixParts(
           const vbs = bp.vertBones[v] ?? [];
           const bones = vbs.length > 0 ? vbs : (bp.vertBone[v] >= 0 ? [bp.vertBone[v]] : []);
           for (const gi of bones) {
-            triBones.add(gi);
-            boneCounts.set(gi, (boneCounts.get(gi) ?? 0) + 1);
+            const li = localIndex.get(gi);
+            if (li === undefined || li < 0 || li > 23 || seenLi.has(li)) continue;
+            seenLi.add(li);
+            const [br, bg, bb] = encodeBoneId(li);
+            r |= br; g |= bg; b |= bb;
           }
-        }
-        // 主 bone = 出现最多的
-        for (const [gi, n] of boneCounts) {
-          if (n > primaryCount) { primaryCount = n; primaryGi = gi; }
-        }
-        // 邻接过滤
-        const filtered = new Set<number>();
-        if (primaryGi >= 0) {
-          const pIdx = parentIndex[primaryGi];
-          for (const gi of triBones) {
-            if (gi === primaryGi || gi === pIdx || parentIndex[gi] === primaryGi) {
-              filtered.add(gi);
-            }
-          }
-          // 若过滤后为空（不应发生），回退到主 bone
-          if (filtered.size === 0) filtered.add(primaryGi);
-        }
-        let r = 0, g = 0, b = 0;
-        const seenLi = new Set<number>();
-        for (const gi of filtered) {
-          const li = localIndex.get(gi);
-          if (li === undefined || li < 0 || li > 23 || seenLi.has(li)) continue;
-          seenLi.add(li);
-          const [br, bg, bb] = encodeBoneId(li);
-          r |= br; g |= bg; b |= bb;
         }
         idTexData[t * 4] = r; idTexData[t * 4 + 1] = g;
         idTexData[t * 4 + 2] = b; idTexData[t * 4 + 3] = 255;
@@ -1122,8 +1077,6 @@ export async function bakeSixParts(
       const pcenter = pbox.getCenter(new THREE.Vector3());
       const psize = pbox.getSize(new THREE.Vector3());
       const half = Math.max(psize.x, psize.y) / 2 * partPadding;
-      // 归一化用去 padding 的 half（真实部件尺寸比例）
-      const normHalf = Math.max(psize.x, psize.y) / 2;
 
       const scene = new THREE.Scene();
       scene.add(partGroup);
@@ -1143,7 +1096,7 @@ export async function bakeSixParts(
         partGroup.rotation.y = ang;
         partGroup.updateMatrixWorld(true);
 
-        // 关节像素（用部件相机），按规范方向索引（非烘焙顺序）
+        // 关节像素（用部件相机），按规范方向索引
         for (const gi of bp.partBones) {
           projV.copy(normJoints[gi]).applyMatrix4(partGroup.matrixWorld).project(camera);
           boneInfos[gi].jointPixels[((d + 6) % 8)] = {
@@ -1174,7 +1127,7 @@ export async function bakeSixParts(
         onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° ID`);
         await new Promise((r) => setTimeout(r, 0));
 
-        groups.push({ part: pname, direction: ((d + 6) % 8), colorPixels, idPixels, cameraHalf: normHalf });
+        groups.push({ part: pname, direction: ((d + 6) % 8), colorPixels, idPixels });
         renderer.setRenderTarget(null);
       }
 
