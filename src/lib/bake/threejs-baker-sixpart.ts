@@ -1008,9 +1008,12 @@ export async function bakeSixParts(
       const idTriIds = new Float32Array(triCount * 3);
       const idTexData = new Uint8Array(triCount * 4);
       for (let t = 0; t < triCount; t++) {
-        // 三角形 bone 集：3 顶点 vertBones 并集 → 局部索引 → 按位或
-        let r = 0, g = 0, b = 0;
-        const seenLi = new Set<number>();
+        // 三角形 bone 集：3 顶点 vertBones 并集 → 过滤非邻接 → 局部索引 → 按位或
+        // 过滤：只保留与主 bone 邻接的（parent/child/self），防大腿含脚等跨级泄漏
+        const triBones = new Set<number>();
+        let primaryGi = -1;
+        let primaryCount = 0;
+        const boneCounts = new Map<number, number>();
         for (let k = 0; k < 3; k++) {
           const v = srcIndex ? srcIndex.getX(t * 3 + k) : t * 3 + k;
           idPositions[(t * 3 + k) * 3] = srcPos.getX(v);
@@ -1020,12 +1023,34 @@ export async function bakeSixParts(
           const vbs = bp.vertBones[v] ?? [];
           const bones = vbs.length > 0 ? vbs : (bp.vertBone[v] >= 0 ? [bp.vertBone[v]] : []);
           for (const gi of bones) {
-            const li = localIndex.get(gi);
-            if (li === undefined || li < 0 || li > 23 || seenLi.has(li)) continue;
-            seenLi.add(li);
-            const [br, bg, bb] = encodeBoneId(li);
-            r |= br; g |= bg; b |= bb;
+            triBones.add(gi);
+            boneCounts.set(gi, (boneCounts.get(gi) ?? 0) + 1);
           }
+        }
+        // 主 bone = 出现最多的
+        for (const [gi, n] of boneCounts) {
+          if (n > primaryCount) { primaryCount = n; primaryGi = gi; }
+        }
+        // 邻接过滤
+        const filtered = new Set<number>();
+        if (primaryGi >= 0) {
+          const pIdx = parentIndex[primaryGi];
+          for (const gi of triBones) {
+            if (gi === primaryGi || gi === pIdx || parentIndex[gi] === primaryGi) {
+              filtered.add(gi);
+            }
+          }
+          // 若过滤后为空（不应发生），回退到主 bone
+          if (filtered.size === 0) filtered.add(primaryGi);
+        }
+        let r = 0, g = 0, b = 0;
+        const seenLi = new Set<number>();
+        for (const gi of filtered) {
+          const li = localIndex.get(gi);
+          if (li === undefined || li < 0 || li > 23 || seenLi.has(li)) continue;
+          seenLi.add(li);
+          const [br, bg, bb] = encodeBoneId(li);
+          r |= br; g |= bg; b |= bb;
         }
         idTexData[t * 4] = r; idTexData[t * 4 + 1] = g;
         idTexData[t * 4 + 2] = b; idTexData[t * 4 + 3] = 255;

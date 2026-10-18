@@ -342,7 +342,10 @@ export default function PixelCanvas() {
     if (s.isDrawingRef.current && s.tool === 'trajectory') renderHandDrawnTrajectoryPreview(rc, s.handDrawTrajectoryRef.current);
     if (s.isDrawingRef.current && s.tool === 'crop') renderCropPreview(rc, s.cropRectRef.current);
 
-    renderBoneOverlay(rc, { skeletons: s.skeletons, showSkeletons: s.showSkeletons, selectedBoneId: s.selectedBoneId, activeSkeletonId: s.activeSkeletonId });
+    // 精灵编辑模式下不画骨骼覆盖层（精灵居中显示，与角色坐标系不同，会误导）
+    if (s.editMode !== 'sprite_edit') {
+      renderBoneOverlay(rc, { skeletons: s.skeletons, showSkeletons: s.showSkeletons, selectedBoneId: s.selectedBoneId, activeSkeletonId: s.activeSkeletonId });
+    }
     renderWeightPaintOverlay(rc, { showWeightPaint: s.showWeightPaint, weightPaintBoneId: s.weightPaintBoneId, skeletons: s.skeletons, sprites: Object.values(useProjectStore.getState().sprites), getInterpolatedTranslateOffset: s.getInterpolatedTranslateOffset });
     renderTrajectoryOverlay(rc, { showTrajectories: s.showTrajectories, trajectories: s.trajectories, selectedSpriteId: s.selectedSpriteId, editMode: s.editMode, trajectorySnap: s.trajectorySnap, totalFrames: useProjectStore.getState().totalFrames });
 
