@@ -52,6 +52,13 @@ export interface TwoPassBakeOptions extends BakeOptions {
   manualMerges?: Map<number, number>;
   /** 手动取消合并：boneIndex 集合（强制保持独立，跳过自动规则） */
   manualUnmerges?: Set<number>;
+  /**
+   * 仅重渲 ID（改合并设置后用）：跳过 toon 颜色遍，复用 reuseBake 的颜色。
+   * 颜色与合并无关，只需 ID 重新染色。8 遍代替 16 遍。
+   */
+  idOnly?: boolean;
+  /** idOnly 时复用此前烘焙的颜色（同模型同尺寸） */
+  reuseBake?: TwoPassBakeData;
 }
 
 /** 拆分粒度 */
@@ -438,6 +445,11 @@ export async function bakeModelTwoPass(
   const smallBoneThreshold = options.smallBoneThreshold ?? 50;
   const manualMerges = options.manualMerges;
   const manualUnmerges = options.manualUnmerges;
+  const idOnly = options.idOnly ?? false;
+  const reuseBake = options.reuseBake;
+  if (idOnly && !reuseBake) {
+    throw new Error('idOnly 需要提供 reuseBake');
+  }
 
   if (typeof window === 'undefined') {
     throw new Error('bakeModelTwoPass 仅支持浏览器环境(WebGL)');
@@ -563,7 +575,7 @@ export async function bakeModelTwoPass(
     const groups: TwoPassGroup[] = [];
     const jointPixels: Array<Array<{ x: number; y: number }>> = bones.map(() => []);
     const projV = new THREE.Vector3();
-    const total = 16;
+    const total = idOnly ? 8 : 16;
     let done = 0;
 
     for (let d = 0; d < 8; d++) {
@@ -582,24 +594,40 @@ export async function bakeModelTwoPass(
       renderer.setRenderTarget(rt);
       renderer.clear(true, true, false);
 
-      // Pass 0 前：正常 Z
-      setMaterials('toon', THREE.LessEqualDepth);
-      renderer.render(scene, camera);
-      const colorFront = readFlipped();
+      let colorFront: Uint8ClampedArray;
+      let colorBack: Uint8ClampedArray;
+      const useCachedColors = idOnly && reuseBake;
+      if (useCachedColors) {
+        // 仅重渲 ID：复用缓存颜色
+        const rf = reuseBake!.groups.find((g) => g.direction === d && g.pass === 0);
+        const rb = reuseBake!.groups.find((g) => g.direction === d && g.pass === 1);
+        if (!rf || !rb) throw new Error(`reuseBake 缺少方向 ${d} 的颜色`);
+        colorFront = rf.colorPixels;
+        colorBack = rb.colorPixels;
+      } else {
+        // Pass 0 前：正常 Z
+        setMaterials('toon', THREE.LessEqualDepth);
+        renderer.render(scene, camera);
+        colorFront = readFlipped();
+        // Pass 1 颜色稍后渲（ID 前遍之后）
+        colorBack = new Uint8ClampedArray(0); // 占位，下面覆盖
+      }
       setMaterials('id', THREE.LessEqualDepth);
       renderer.render(scene, camera);
       const idFront = readFlipped();
-      onProgress?.(++done, total, `方向 ${d * 45}° 前`);
+      onProgress?.(++done, total, `方向 ${d * 45}° ${idOnly ? 'ID' : '前'}`);
       await new Promise((r) => setTimeout(r, 0)); // 让 UI 更新
 
-      // Pass 1 后：反转 Z（不清 depth！）
-      setMaterials('toon', THREE.GreaterDepth);
-      renderer.render(scene, camera);
-      const colorBack = readFlipped();
+      if (!useCachedColors) {
+        // Pass 1 后：反转 Z（不清 depth！）
+        setMaterials('toon', THREE.GreaterDepth);
+        renderer.render(scene, camera);
+        colorBack = readFlipped();
+      }
       setMaterials('id', THREE.GreaterDepth);
       renderer.render(scene, camera);
       const idBack = readFlipped();
-      onProgress?.(++done, total, `方向 ${d * 45}° 后`);
+      onProgress?.(++done, total, `方向 ${d * 45}° ${idOnly ? 'ID后' : '后'}`);
       await new Promise((r) => setTimeout(r, 0));
 
       groups.push(

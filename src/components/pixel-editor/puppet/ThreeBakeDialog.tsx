@@ -214,7 +214,10 @@ function RebakePanel({ bone, input, size, paletteSize, onClose, onDone }: Rebake
     }
   }, [input, bone, size, paletteSize, fingerCurl, manualThumb, manualFingers, onDone]);
 
-  const hasHand = !!detect && (detect.fingers.length > 0 || !!detect.thumb);
+  const hasHand = !!detect
+    && (detect.fingers.length > 0 || !!detect.thumb)
+    // 只对手臂 limb 显示：inspectFingers 扫的是整模，重烘腿时也会检出手指
+    && /arm|hand|wrist/i.test(bone.name);
 
   return (
     <div className="mb-3 rounded border border-amber-900/60 bg-amber-950/20 p-3">
@@ -660,6 +663,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [fileData, setFileData] = useState<ArrayBuffer | null>(null);
   // URL 下载缓存：改合并设置后重烘不重复下载
   const urlCache = useRef<{ url: string; data: ArrayBuffer } | null>(null);
+  // 上次烘焙结果（用于合并变化时只重渲 ID）
+  const lastBakeRef = useRef<{ key: string; data: TwoPassBakeData } | null>(null);
   const [size, setSize] = useState(64);
   const [paletteSize, setPaletteSize] = useState(16);
   const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
@@ -733,13 +738,21 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       setProgress('加载模型…');
       await new Promise((r) => setTimeout(r, 30));
       const t0 = performance.now();
+      // 合并变化时只重渲 ID：颜色与合并无关，复用上次的颜色省一半时间
+      // 判定条件：有上次结果 && 同模型 && 同尺寸
+      const bakeKey = `${fileData ? 'file:' + fileName : 'url:' + url.trim()}|${size}`;
+      const canReuseColors = lastBakeRef.current
+        && lastBakeRef.current.key === bakeKey
+        && lastBakeRef.current.data.width === size;
       const data = await bakeModelTwoPass(inp, {
         size,
         granularity,
         manualMerges,
         manualUnmerges,
         onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
+        ...(canReuseColors ? { idOnly: true, reuseBake: lastBakeRef.current!.data } : {}),
       });
+      lastBakeRef.current = { key: bakeKey, data };
       setTotalMs(performance.now() - t0);
       setProgress('按 bone 拆分…');
       await new Promise((r) => setTimeout(r, 30));
