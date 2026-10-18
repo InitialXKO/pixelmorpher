@@ -597,6 +597,92 @@ function buildPartGeometry(
   };
 }
 
+// ---- 手臂下垂 ----
+
+/**
+ * 找臂链根（肩）：部件内 parent 不在本部件的 bone。
+ * 肩按约定归躯干（见 boneToPart），所以臂部件的根即肩关节。
+ */
+function findArmRoot(
+  parentIndex: (number | null)[],
+  boneToPart: (PartName | null)[],
+  part: 'armL' | 'armR',
+): number | null {
+  for (let i = 0; i < parentIndex.length; i++) {
+    if (boneToPart[i] !== part) continue;
+    const p = parentIndex[i];
+    if (p === null || boneToPart[p] !== part) return i;
+  }
+  return null;
+}
+
+export interface ArmDroopResult {
+  rotated: boolean;
+  /** 臂原始方向与目标方向的夹角（度） */
+  angleDeg: number;
+  /** 应用到顶点的四元数（null = 未旋转） */
+  quaternion: THREE.Quaternion | null;
+  /** 肩关节位置（模型空间） */
+  shoulderPos: THREE.Vector3;
+}
+
+/**
+ * 手臂下垂旋转：把臂部件几何绕肩关节转到自然垂下。
+ *
+ * - 当前臂方向 = 手腕 - 肩（归一化）
+ * - 目标方向 = (0,-1,0)，左右各外张 5°（避免贴躯干）
+ *   - 角色面朝 +Z 时 +X 为左（与 assignBoneToPart 一致）
+ * - 夹角 < 10° 时跳过（已是垂臂姿态）
+ *
+ * 只旋转几何顶点；调用方需同步旋转对应 bone 的 bindPos（关节投影用）。
+ */
+export function droopArmPart(
+  built: BuiltPart,
+  part: 'armL' | 'armR',
+  shoulderPos: THREE.Vector3,
+  handPos: THREE.Vector3,
+): ArmDroopResult {
+  const result: ArmDroopResult = {
+    rotated: false,
+    angleDeg: 0,
+    quaternion: null,
+    shoulderPos: shoulderPos.clone(),
+  };
+
+  const cur = new THREE.Vector3().subVectors(handPos, shoulderPos);
+  if (cur.lengthSq() < 1e-12) return result;
+  cur.normalize();
+
+  // 目标：垂直向下 + 外张 5°
+  // 绕 +Z 轴旋转：(0,-1,0) → (sinθ, -cosθ, 0)；左臂 +5°（+X），右臂 -5°
+  const tilt = THREE.MathUtils.degToRad(5);
+  const target = new THREE.Vector3(0, -1, 0).applyAxisAngle(
+    new THREE.Vector3(0, 0, 1),
+    part === 'armL' ? tilt : -tilt,
+  );
+
+  const angleDeg = THREE.MathUtils.radToDeg(cur.angleTo(target));
+  result.angleDeg = angleDeg;
+  if (angleDeg < 10) return result; // 已垂下，跳过
+
+  const quat = new THREE.Quaternion().setFromUnitVectors(cur, target);
+  result.quaternion = quat;
+  result.rotated = true;
+
+  // 旋转全部顶点（绕肩关节）
+  const pos = built.geometry.getAttribute('position') as THREE.BufferAttribute;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    v.sub(shoulderPos).applyQuaternion(quat).add(shoulderPos);
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  pos.needsUpdate = true;
+  built.geometry.computeVertexNormals();
+  built.geometry.computeBoundingBox();
+  return result;
+}
+
 // ---- 卡通渐变 ----
 function makeGradientMap(steps: number): THREE.DataTexture {
   const data = new Uint8Array(steps);
@@ -755,6 +841,32 @@ export async function bakeSixParts(
       if (built) parts.set(p, built);
     }
     if (parts.size === 0) throw new Error('六部件拆分后没有可用几何');
+
+    // ---- 手臂下垂：armL/armR 转成自然垂下姿态（非 T-pose） ----
+    // 在归一化之前做，使 bbox/scale 按垂臂姿态计算；关节投影用旋转后的 bindPos。
+    if (topology.cross !== null) {
+      for (const ap of ['armL', 'armR'] as const) {
+        const built = parts.get(ap);
+        if (!built) continue;
+        const shoulderIdx = findArmRoot(parentIndex, boneToPart, ap);
+        const handIdx = ap === 'armL' ? topology.handL : topology.handR;
+        if (shoulderIdx === null || handIdx === null) continue;
+        const res = droopArmPart(built, ap, bindPos[shoulderIdx], bindPos[handIdx]);
+        if (res.rotated && res.quaternion) {
+          // 同步旋转该部件 bones 的 bindPos（关节投影/后续流程用）
+          const q = res.quaternion;
+          const s = res.shoulderPos;
+          const v = new THREE.Vector3();
+          for (let bi = 0; bi < bones.length; bi++) {
+            if (boneToPart[bi] !== ap) continue;
+            v.copy(bindPos[bi]).sub(s).applyQuaternion(q).add(s);
+            bindPos[bi].copy(v);
+          }
+          // 同步拓扑输入的世界坐标（topoBones 已用于分析，此处仅保持一致性，无需重分析）
+        }
+        console.log(`[bake] ${ap} 臂原始夹角 ${res.angleDeg.toFixed(1)}°${res.rotated ? ' → 已转垂下' : '（跳过）'}`);
+      }
+    }
 
     // ---- 整模归一化（各部件同 scale） ----
     const fullBox = new THREE.Box3();
