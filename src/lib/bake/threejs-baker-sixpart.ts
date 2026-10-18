@@ -1104,6 +1104,8 @@ export async function bakeSixParts(
       const pcenter = pbox.getCenter(new THREE.Vector3());
       const psize = pbox.getSize(new THREE.Vector3());
       const half = Math.max(psize.x, psize.y) / 2 * partPadding;
+      // 归一化用去 padding 的 half（真实部件尺寸比例）
+      const normHalf = Math.max(psize.x, psize.y) / 2;
 
       const scene = new THREE.Scene();
       scene.add(partGroup);
@@ -1154,7 +1156,7 @@ export async function bakeSixParts(
         onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° ID`);
         await new Promise((r) => setTimeout(r, 0));
 
-        groups.push({ part: pname, direction: ((d + 6) % 8), colorPixels, idPixels, cameraHalf: half });
+        groups.push({ part: pname, direction: ((d + 6) % 8), colorPixels, idPixels, cameraHalf: normHalf });
         renderer.setRenderTarget(null);
       }
 
