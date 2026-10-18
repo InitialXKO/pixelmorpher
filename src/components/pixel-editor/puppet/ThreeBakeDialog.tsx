@@ -13,9 +13,14 @@ import {
   bakeSingleBone,
   previewHandCurl,
   inspectFingers,
+  parseModelBones,
+  computeBoneMerge,
   type TwoPassBakeData,
   type BakedBoneInfo,
   type FingerDetectResult,
+  type ParsedBoneInfo,
+  type BoneMergeInfo,
+  type BoneGranularity,
 } from '@/lib/bake/threejs-baker-twopass';
 import {
   splitByBoneId,
@@ -353,6 +358,290 @@ function RebakePanel({ bone, input, size, paletteSize, onClose, onDone }: Rebake
   );
 }
 
+// ---- 骨骼合并面板 ----
+
+interface BoneMergePanelProps {
+  input: string | ArrayBuffer;
+  granularity: BoneGranularity;
+  smallBoneThreshold?: number;
+  onMergesChange: (merges: Map<number, number>, unmerges: Set<number>) => void;
+}
+
+/**
+ * 烘焙前手动调整 bone 合并。
+ * 流程：解析骨骼 → 显示树（自动合并预览）→ 用户手动合并/取消 → 烘焙时传入。
+ */
+function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesChange }: BoneMergePanelProps) {
+  const [bones, setBones] = useState<ParsedBoneInfo[] | null>(null);
+  const [parsing, setParsing] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [manualMerges, setManualMerges] = useState<Map<number, number>>(new Map());
+  const [manualUnmerges, setManualUnmerges] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [expanded, setExpanded] = useState(true);
+
+  const handleParse = useCallback(async () => {
+    setParsing(true);
+    setParseError(null);
+    try {
+      const inp = typeof input === 'string' ? input.trim() : input;
+      if (!inp || (typeof inp === 'string' && inp.length === 0)) {
+        throw new Error('请先选择文件或填写 URL');
+      }
+      const parsed = await parseModelBones(inp);
+      setBones(parsed);
+      setManualMerges(new Map());
+      setManualUnmerges(new Set());
+      setSelected(new Set());
+      onMergesChange(new Map(), new Set());
+    } catch (e) {
+      setParseError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setParsing(false);
+    }
+  }, [input, onMergesChange]);
+
+  // 自动合并预览（随手动覆盖实时重算）
+  const mergeInfo: BoneMergeInfo | null = bones
+    ? computeBoneMerge(
+        bones.map((b) => b.name),
+        bones.map((b) => b.parentIndex),
+        bones.map((b) => b.vertexCount),
+        granularity,
+        smallBoneThreshold,
+        manualMerges,
+        manualUnmerges,
+      )
+    : null;
+
+  const updateMerges = useCallback(
+    (merges: Map<number, number>, unmerges: Set<number>) => {
+      setManualMerges(merges);
+      setManualUnmerges(unmerges);
+      onMergesChange(merges, unmerges);
+    },
+    [onMergesChange],
+  );
+
+  const toggleSelect = useCallback((idx: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  }, []);
+
+  /** 选中多个 → 合并到第一个（按层级最浅的优先） */
+  const handleMergeSelected = useCallback(() => {
+    if (!bones || selected.size < 2) return;
+    const arr = [...selected].sort((a, b) => {
+      // 深度浅的优先当目标
+      const depth = (i: number): number => {
+        let d = 0;
+        let p = bones[i].parentIndex;
+        while (p !== null && p !== undefined) { d++; p = bones[p].parentIndex; }
+        return d;
+      };
+      return depth(a) - depth(b);
+    });
+    const target = arr[0];
+    const merges = new Map(manualMerges);
+    const unmerges = new Set(manualUnmerges);
+    for (let k = 1; k < arr.length; k++) {
+      const src = arr[k];
+      if (src === target) continue;
+      merges.set(src, target);
+      unmerges.delete(src); // 手动合并覆盖取消
+    }
+    updateMerges(merges, unmerges);
+    setSelected(new Set());
+  }, [bones, selected, manualMerges, manualUnmerges, updateMerges]);
+
+  /** 单个 → 并入父级 */
+  const handleMergeToParent = useCallback(() => {
+    if (!bones || selected.size !== 1) return;
+    const src = [...selected][0];
+    const p = bones[src].parentIndex;
+    if (p === null || p === undefined) return;
+    const merges = new Map(manualMerges);
+    const unmerges = new Set(manualUnmerges);
+    merges.set(src, p);
+    unmerges.delete(src);
+    updateMerges(merges, unmerges);
+    setSelected(new Set());
+  }, [bones, selected, manualMerges, manualUnmerges, updateMerges]);
+
+  /** 取消合并（恢复独立） */
+  const handleUnmerge = useCallback(() => {
+    if (!bones || selected.size === 0) return;
+    const merges = new Map(manualMerges);
+    const unmerges = new Set(manualUnmerges);
+    for (const src of selected) {
+      merges.delete(src);
+      // 如果自动规则会合并它，则加入 unmerges 强制独立
+      unmerges.add(src);
+    }
+    updateMerges(merges, unmerges);
+    setSelected(new Set());
+  }, [bones, selected, manualMerges, manualUnmerges, updateMerges]);
+
+  /** 清除手动取消（恢复自动规则） */
+  const handleClearUnmerge = useCallback(() => {
+    if (selected.size === 0) return;
+    const unmerges = new Set(manualUnmerges);
+    for (const src of selected) unmerges.delete(src);
+    updateMerges(new Map(manualMerges), unmerges);
+    setSelected(new Set());
+  }, [selected, manualMerges, manualUnmerges, updateMerges]);
+
+  if (!bones) {
+    return (
+      <div className="mb-3 rounded border border-[#2a2a4a] bg-[#12122a] p-2">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleParse}
+            disabled={parsing}
+            className="h-7 rounded border border-[#3a3a5a] bg-[#1a1a30] px-3 text-[11px] text-gray-300 hover:bg-[#222240] disabled:opacity-50"
+          >
+            {parsing ? '解析中…' : '解析骨骼（手动合并）'}
+          </button>
+          <span className="text-[11px] text-gray-600">
+            烘焙前可手动调整 bone 合并（自动规则已预应用）
+          </span>
+        </div>
+        {parseError && <div className="mt-1 text-[11px] text-red-400">{parseError}</div>}
+      </div>
+    );
+  }
+
+  // 建树
+  const childrenMap = new Map<number, number[]>();
+  const roots: number[] = [];
+  for (const b of bones) {
+    if (b.parentIndex === null || b.parentIndex === undefined) roots.push(b.index);
+    else {
+      const arr = childrenMap.get(b.parentIndex) ?? [];
+      arr.push(b.index);
+      childrenMap.set(b.parentIndex, arr);
+    }
+  }
+
+  const renderRow = (idx: number, depth: number): React.ReactNode => {
+    const b = bones[idx];
+    const eff = mergeInfo!.effectiveIndex[idx];
+    const isMerged = eff !== idx;
+    const isManual = manualMerges.has(idx);
+    const isUnmerged = manualUnmerges.has(idx);
+    const reason = mergeInfo!.reasons[idx];
+    return (
+      <div key={idx}>
+        <div
+          className={`flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-[11px] hover:bg-[#1a1a30] ${
+            selected.has(idx) ? 'bg-[#1e2a4a]' : ''
+          }`}
+          onClick={() => toggleSelect(idx)}
+        >
+          <input
+            type="checkbox"
+            checked={selected.has(idx)}
+            onChange={() => toggleSelect(idx)}
+            onClick={(e) => e.stopPropagation()}
+            className="h-3 w-3"
+          />
+          <span style={{ paddingLeft: depth * 12 }} className="truncate text-gray-300">
+            {b.name || `bone_${idx}`}
+          </span>
+          <span className="shrink-0 text-gray-600">{b.vertexCount} 顶点</span>
+          {isMerged ? (
+            <span
+              className={`shrink-0 rounded px-1 ${isManual ? 'bg-purple-900 text-purple-200' : 'bg-[#2a2a4a] text-gray-400'}`}
+              title={reason ?? ''}
+            >
+              → {bones[eff]?.name ?? eff}{isManual ? ' (手动)' : ''}
+            </span>
+          ) : (
+            <span className={`shrink-0 rounded px-1 ${isUnmerged ? 'bg-amber-900 text-amber-200' : 'bg-green-950 text-green-400'}`}>
+              {isUnmerged ? '独立 (手动)' : '独立'}
+            </span>
+          )}
+        </div>
+        {(childrenMap.get(idx) ?? []).map((c) => renderRow(c, depth + 1))}
+      </div>
+    );
+  };
+
+  const effectiveCount = mergeInfo ? new Set(mergeInfo.effectiveIndex).size : 0;
+
+  return (
+    <div className="mb-3 rounded border border-[#2a2a4a] bg-[#12122a] p-2">
+      <div className="mb-1 flex items-center gap-2">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="text-[11px] font-bold text-gray-300"
+        >
+          {expanded ? '▼' : '▶'} 骨骼合并
+        </button>
+        <span className="text-[11px] text-gray-500">
+          {bones.length} bones → {effectiveCount} 有效
+          {manualMerges.size > 0 && <span className="text-purple-400">（手动 {manualMerges.size}）</span>}
+          {manualUnmerges.size > 0 && <span className="text-amber-400">（取消 {manualUnmerges.size}）</span>}
+        </span>
+        <button
+          onClick={handleParse}
+          className="ml-auto h-6 rounded border border-[#3a3a5a] bg-[#1a1a30] px-2 text-[10px] text-gray-400 hover:bg-[#222240]"
+        >
+          重新解析
+        </button>
+      </div>
+      {expanded && (
+        <>
+          <div className="mb-1 flex flex-wrap items-center gap-1">
+            <button
+              onClick={handleMergeSelected}
+              disabled={selected.size < 2}
+              className="h-6 rounded bg-purple-800 px-2 text-[10px] text-white hover:bg-purple-700 disabled:opacity-40"
+              title="选中 2+ 个 bone，合并到层级最浅的那个"
+            >
+              合并选中 ({selected.size})
+            </button>
+            <button
+              onClick={handleMergeToParent}
+              disabled={selected.size !== 1}
+              className="h-6 rounded border border-[#3a3a5a] bg-[#1a1a30] px-2 text-[10px] text-gray-300 hover:bg-[#222240] disabled:opacity-40"
+              title="选中 1 个 bone，并入其父级"
+            >
+              并入父级
+            </button>
+            <button
+              onClick={handleUnmerge}
+              disabled={selected.size === 0}
+              className="h-6 rounded border border-amber-800 bg-amber-950 px-2 text-[10px] text-amber-200 hover:bg-amber-900 disabled:opacity-40"
+              title="取消选中 bone 的合并（含自动），强制独立"
+            >
+              取消合并
+            </button>
+            <button
+              onClick={handleClearUnmerge}
+              disabled={selected.size === 0}
+              className="h-6 rounded border border-[#3a3a5a] bg-[#1a1a30] px-2 text-[10px] text-gray-400 hover:bg-[#222240] disabled:opacity-40"
+              title="清除手动取消，恢复自动规则"
+            >
+              恢复自动
+            </button>
+            <span className="text-[10px] text-gray-600">
+              点选行或复选框多选
+            </span>
+          </div>
+          <div className="max-h-64 overflow-y-auto rounded border border-[#1a1a30] bg-[#0d0d1f] p-1">
+            {roots.map((r) => renderRow(r, 0))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ---- 主对话框 ----
 
 export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps) {
@@ -374,6 +663,14 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [rebakeTarget, setRebakeTarget] = useState<BakedBoneInfo | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
 
+  // 手动 bone 合并（烘焙前调整）
+  const [manualMerges, setManualMerges] = useState<Map<number, number>>(new Map());
+  const [manualUnmerges, setManualUnmerges] = useState<Set<number>>(new Set());
+  const handleMergesChange = useCallback((merges: Map<number, number>, unmerges: Set<number>) => {
+    setManualMerges(merges);
+    setManualUnmerges(unmerges);
+  }, []);
+
   const fileRef = useRef<HTMLInputElement>(null);
   const input: string | ArrayBuffer = fileData ?? url.trim();
 
@@ -385,6 +682,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setProcessed(null);
     setError(null);
     setImportMsg(null);
+    setManualMerges(new Map());
+    setManualUnmerges(new Set());
     const reader = new FileReader();
     reader.onload = () => setFileData(reader.result as ArrayBuffer);
     reader.onerror = () => setError('文件读取失败');
@@ -409,6 +708,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       const data = await bakeModelTwoPass(inp, {
         size,
         granularity,
+        manualMerges,
+        manualUnmerges,
         onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
       });
       setTotalMs(performance.now() - t0);
@@ -424,7 +725,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize, granularity]);
+  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges]);
 
   const handleRebakeDone = useCallback(
     (boneIndex: number, boneName: string, results: BakeResult[]) => {
@@ -607,6 +908,14 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             <span className="text-gray-600">每方向 2 遍（前/后）× 8 方向 = 16 遍，用模型原始姿态</span>
           </div>
         </div>
+
+        {/* 骨骼手动合并（烘焙前） */}
+        <BoneMergePanel
+          key={fileName ?? url}
+          input={input}
+          granularity={granularity}
+          onMergesChange={handleMergesChange}
+        />
 
         {error && (
           <div className="mb-3 rounded border border-red-900 bg-red-950/50 p-2 text-[11px] text-red-300">

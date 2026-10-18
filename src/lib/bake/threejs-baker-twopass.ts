@@ -48,6 +48,10 @@ export interface TwoPassBakeOptions extends BakeOptions {
   granularity?: BoneGranularity;
   /** 小 bone 合并阈值（顶点数，粗粒度下 leaf bone 小于此值并入父 bone），默认 50 */
   smallBoneThreshold?: number;
+  /** 手动合并：boneIndex → 目标 boneIndex（优先于自动规则） */
+  manualMerges?: Map<number, number>;
+  /** 手动取消合并：boneIndex 集合（强制保持独立，跳过自动规则） */
+  manualUnmerges?: Set<number>;
 }
 
 /** 拆分粒度 */
@@ -61,6 +65,10 @@ export interface BoneMergeInfo {
   effectiveBones: number[];
   /** 合并原因（调试用）：boneIndex → 说明 */
   reasons: Record<number, string>;
+  /** 手动合并：boneIndex → 目标 boneIndex（用户指定，优先于自动规则） */
+  manualMerges: Map<number, number>;
+  /** 手动取消合并：boneIndex 集合（用户指定保持独立，跳过自动规则） */
+  manualUnmerges: Set<number>;
 }
 
 const FINGER_TOE_RE = /finger|thumb|index|middle|ring|pinky|little|digit|toe/i;
@@ -72,6 +80,10 @@ const HAND_FOOT_RE = /hand|foot|wrist|ankle/i;
  *  1. 手指/脚趾 bone → 并入最近的手/脚祖先（找不到则并入直接父级）；
  *  2. 顶点数 < 阈值的 leaf bone → 并入父 bone（root 永不合并）。
  * 细粒度：恒等映射。
+ * 手动覆盖（优先级最高）：
+ *  - manualMerges：强制 boneIndex → 目标（先应用，自动规则跳过已手动指定的）；
+ *  - manualUnmerges：强制保持独立（自动规则跳过）。
+ * 传递闭包保证 A→B→C 时 A 最终到 C。
  */
 export function computeBoneMerge(
   boneNames: string[],
@@ -79,15 +91,45 @@ export function computeBoneMerge(
   vertexCounts: number[],
   granularity: BoneGranularity,
   smallThreshold: number,
+  manualMerges?: Map<number, number>,
+  manualUnmerges?: Set<number>,
 ): BoneMergeInfo {
   const n = boneNames.length;
   const effectiveIndex = Array.from({ length: n }, (_, i) => i);
   const reasons: Record<number, string> = {};
+  const mm = manualMerges ?? new Map<number, number>();
+  const mu = manualUnmerges ?? new Set<number>();
   if (granularity === 'fine') {
-    return { effectiveIndex, effectiveBones: effectiveIndex.slice(), reasons };
+    // 细粒度下仍尊重手动合并（用户显式要求）
+    const directTarget = Array.from({ length: n }, (_, i) => i);
+    for (const [src, dst] of mm) {
+      if (src < 0 || src >= n || dst < 0 || dst >= n || src === dst) continue;
+      directTarget[src] = dst;
+      reasons[src] = `手动并入 ${boneNames[dst]}`;
+    }
+    const resolveFine = (i: number): number => {
+      let cur = i;
+      const seen = new Set<number>([i]);
+      while (directTarget[cur] !== cur) {
+        cur = directTarget[cur];
+        if (seen.has(cur)) break;
+        seen.add(cur);
+      }
+      return cur;
+    };
+    for (let i = 0; i < n; i++) effectiveIndex[i] = resolveFine(i);
+    const effectiveBones = [...new Set(effectiveIndex)].sort((a, b) => a - b);
+    return { effectiveIndex, effectiveBones, reasons, manualMerges: mm, manualUnmerges: mu };
   }
 
   const directTarget = Array.from({ length: n }, (_, i) => i);
+  // 手动合并优先：先应用，自动规则跳过已手动指定的 bone
+  for (const [src, dst] of mm) {
+    if (src < 0 || src >= n || dst < 0 || dst >= n || src === dst) continue;
+    if (parentIndex[src] === null) continue; // root 永不合并
+    directTarget[src] = dst;
+    reasons[src] = `手动并入 ${boneNames[dst]}`;
+  }
   const childrenOf = (i: number): number[] => {
     const out: number[] = [];
     for (let j = 0; j < n; j++) if (parentIndex[j] === i) out.push(j);
@@ -95,9 +137,11 @@ export function computeBoneMerge(
   };
   const isRoot = (i: number): boolean => parentIndex[i] === null;
 
-  // 规则 1：手指/脚趾 → 手/脚
+  // 规则 1：手指/脚趾 → 手/脚（跳过手动指定/手动取消的）
   for (let i = 0; i < n; i++) {
     if (isRoot(i)) continue;
+    if (directTarget[i] !== i) continue; // 已手动合并
+    if (mu.has(i)) continue; // 手动取消合并，保持独立
     if (!FINGER_TOE_RE.test(boneNames[i])) continue;
     // 向上找手/脚祖先（排除自己这种手指名）
     let p = parentIndex[i];
@@ -126,7 +170,8 @@ export function computeBoneMerge(
     return db - da;
   });
   for (const i of order) {
-    if (directTarget[i] !== i) continue; // 已被规则 1 合并
+    if (directTarget[i] !== i) continue; // 已被规则 1/手动合并
+    if (mu.has(i)) continue; // 手动取消合并，保持独立
     if (isRoot(i)) continue;
     if (childrenOf(i).length > 0) continue; // 非叶子
     if ((vertexCounts[i] ?? 0) >= smallThreshold) continue;
@@ -148,7 +193,7 @@ export function computeBoneMerge(
   };
   for (let i = 0; i < n; i++) effectiveIndex[i] = resolve(i);
   const effectiveBones = [...new Set(effectiveIndex)].sort((a, b) => a - b);
-  return { effectiveIndex, effectiveBones, reasons };
+  return { effectiveIndex, effectiveBones, reasons, manualMerges: mm, manualUnmerges: mu };
 }
 
 /**
@@ -335,6 +380,49 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture): M
   return map;
 }
 
+/** 轻量 bone 信息（解析用，不渲染） */
+export interface ParsedBoneInfo {
+  index: number;
+  name: string;
+  parentIndex: number | null;
+  /** 主导顶点数（与 ID 染色同一判定逻辑） */
+  vertexCount: number;
+}
+
+/**
+ * 轻量解析模型骨骼（不创建 WebGL 上下文、不渲染）。
+ * 用于烘焙前的骨骼合并 UI：显示 bone 树、顶点数、自动合并预览。
+ */
+export async function parseModelBones(
+  input: string | ArrayBuffer,
+): Promise<ParsedBoneInfo[]> {
+  if (typeof window === 'undefined') {
+    throw new Error('parseModelBones 仅支持浏览器环境');
+  }
+  const loader = new GLTFLoader();
+  const gltf =
+    typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
+  const model = gltf.scene;
+  model.updateMatrixWorld(true);
+
+  const { bones, indexByBone, parentIndex } = collectBones(model);
+  if (bones.length === 0) throw new Error('模型中没有找到骨骼 (Bone)');
+
+  const bindPos = bones.map((b) => {
+    const v = new THREE.Vector3();
+    b.getWorldPosition(v);
+    return v;
+  });
+  const vertexCounts = countBoneVertices(model, indexByBone, bindPos, bones.length);
+
+  return bones.map((b, i) => ({
+    index: i,
+    name: b.name || `bone_${i}`,
+    parentIndex: parentIndex[i],
+    vertexCount: vertexCounts[i] ?? 0,
+  }));
+}
+
 /**
  * 双遍 ID 缓冲烘焙。
  * 每个方向 4 次渲染（前颜色/前ID/后颜色/后ID），共 8 方向 → 16 组。
@@ -348,6 +436,8 @@ export async function bakeModelTwoPass(
   const onProgress = options.onProgress;
   const granularity: BoneGranularity = options.granularity ?? 'coarse';
   const smallBoneThreshold = options.smallBoneThreshold ?? 50;
+  const manualMerges = options.manualMerges;
+  const manualUnmerges = options.manualUnmerges;
 
   if (typeof window === 'undefined') {
     throw new Error('bakeModelTwoPass 仅支持浏览器环境(WebGL)');
@@ -395,6 +485,8 @@ export async function bakeModelTwoPass(
       vertexCounts,
       granularity,
       smallBoneThreshold,
+      manualMerges,
+      manualUnmerges,
     );
     model.traverse((o) => {
       const m = o as THREE.Mesh;
