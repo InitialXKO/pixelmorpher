@@ -384,7 +384,7 @@ function addCaps(
   loops: BoundaryLoop[],
   partCentroid: THREE.Vector3,
   baseColor: THREE.Color,
-  partBoneForCap: (centroid: THREE.Vector3) => number,
+  partBoneForCap: (loopVerts: number[]) => number,
   capVertBone: number[],
 ): void {
   const c = new THREE.Vector3();
@@ -429,7 +429,7 @@ function addCaps(
     positions.push(c.x, c.y, c.z);
     if (uvs) uvs.push(0.5, 0.5);
     colors.push(cr, cg, cb);
-    capVertBone.push(partBoneForCap(c));
+    capVertBone.push(partBoneForCap(loop.verts));
 
     for (let i = 0; i < m; i++) {
       const a = loop.verts[i];
@@ -534,18 +534,21 @@ function buildPartGeometry(
       }
       tmpCentroid.multiplyScalar(1 / Math.max(vc, 1));
       const capVertBone: number[] = [];
-      // 封盖 bone：取部件内出现最多的 bone（通常是根，如上臂）
-      const boneFreq = new Map<number, number>();
-      for (const vb of vertBone) {
-        if (vb >= 0) boneFreq.set(vb, (boneFreq.get(vb) ?? 0) + 1);
-      }
-      let capBone = -1;
-      let capBest = 0;
-      for (const [bi, n] of boneFreq) {
-        if (n > capBest) { capBest = n; capBone = bi; }
-      }
       const useUv = hasUv.some(Boolean);
       if (capIndexStart < 0) capIndexStart = indices.length; // 记录第一个封盖起始
+      // 封盖 bone：取边界环顶点中最多的 bone（不是整部件最多）
+      const boneForLoop = (loopVerts: number[]): number => {
+        const freq = new Map<number, number>();
+        for (const vi of loopVerts) {
+          const bi = vertBone[vi];
+          if (bi >= 0) freq.set(bi, (freq.get(bi) ?? 0) + 1);
+        }
+        let best = -1, bestN = 0;
+        for (const [bi, n] of freq) {
+          if (n > bestN) { bestN = n; best = bi; }
+        }
+        return best;
+      };
       addCaps(
         positions,
         useUv ? uvs : null,
@@ -554,7 +557,7 @@ function buildPartGeometry(
         loops,
         tmpCentroid,
         baseColor,
-        () => capBone,
+        boneForLoop,
         capVertBone,
       );
       // capVertBone 与新增顶点一一对应（addCaps 按序 push）
