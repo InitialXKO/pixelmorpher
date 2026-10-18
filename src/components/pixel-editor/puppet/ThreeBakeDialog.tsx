@@ -648,6 +648,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [url, setUrl] = useState(SAMPLE_URL);
   const [fileName, setFileName] = useState<string | null>(null);
   const [fileData, setFileData] = useState<ArrayBuffer | null>(null);
+  // URL 下载缓存：改合并设置后重烘不重复下载
+  const urlCache = useRef<{ url: string; data: ArrayBuffer } | null>(null);
   const [size, setSize] = useState(64);
   const [paletteSize, setPaletteSize] = useState(16);
   const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
@@ -698,9 +700,25 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setImportMsg(null);
     setRebakeTarget(null);
     try {
-      const inp: string | ArrayBuffer = fileData ?? url.trim();
-      if (!inp || (typeof inp === 'string' && inp.length === 0)) {
-        throw new Error('请先选择文件或填写 URL');
+      // 输入解析：文件直接用；URL 走缓存，避免改合并设置后重烘时重复下载
+      let inp: string | ArrayBuffer;
+      if (fileData) {
+        inp = fileData;
+        urlCache.current = null; // 切到文件时清 URL 缓存
+      } else {
+        const u = url.trim();
+        if (!u) throw new Error('请先选择文件或填写 URL');
+        if (urlCache.current && urlCache.current.url === u) {
+          inp = urlCache.current.data;
+        } else {
+          setProgress('下载模型…');
+          await new Promise((r) => setTimeout(r, 30));
+          const resp = await fetch(u);
+          if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
+          const buf = await resp.arrayBuffer();
+          urlCache.current = { url: u, data: buf };
+          inp = buf;
+        }
       }
       setProgress('加载模型…');
       await new Promise((r) => setTimeout(r, 30));
