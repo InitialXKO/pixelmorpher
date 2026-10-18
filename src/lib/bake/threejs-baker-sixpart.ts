@@ -876,8 +876,19 @@ export async function bakeSixParts(
     }
     if (parts.size === 0) throw new Error('六部件拆分后没有可用几何');
 
+    // ---- 整模归一化（各部件同 scale）----
+    // 注意：在手臂下垂之前计算，用 T-pose 的 bbox，保证与双遍版 scale 一致
+    const fullBox = new THREE.Box3();
+    for (const [, bp] of parts) {
+      bp.geometry.computeBoundingBox();
+      fullBox.union(bp.geometry.boundingBox!);
+    }
+    const center = fullBox.getCenter(new THREE.Vector3());
+    const sphere = fullBox.getBoundingSphere(new THREE.Sphere());
+    const scale = sphere.radius > 1e-6 ? 1 / sphere.radius : 1;
+
     // ---- 手臂下垂：armL/armR 转成自然垂下姿态（非 T-pose） ----
-    // 在归一化之前做，使 bbox/scale 按垂臂姿态计算；关节投影用旋转后的 bindPos。
+    // 在归一化之后做，不影响 scale；关节 bindPos 同步旋转
     if (topology.cross !== null) {
       for (const ap of ['armL', 'armR'] as const) {
         const built = parts.get(ap);
@@ -896,21 +907,10 @@ export async function bakeSixParts(
             v.copy(bindPos[bi]).sub(s).applyQuaternion(q).add(s);
             bindPos[bi].copy(v);
           }
-          // 同步拓扑输入的世界坐标（topoBones 已用于分析，此处仅保持一致性，无需重分析）
         }
         console.log(`[bake] ${ap} 臂原始夹角 ${res.angleDeg.toFixed(1)}°${res.rotated ? ' → 已转垂下' : '（跳过）'}`);
       }
     }
-
-    // ---- 整模归一化（各部件同 scale） ----
-    const fullBox = new THREE.Box3();
-    for (const [, bp] of parts) {
-      bp.geometry.computeBoundingBox();
-      fullBox.union(bp.geometry.boundingBox!);
-    }
-    const center = fullBox.getCenter(new THREE.Vector3());
-    const sphere = fullBox.getBoundingSphere(new THREE.Sphere());
-    const scale = sphere.radius > 1e-6 ? 1 / sphere.radius : 1;
 
     // ---- bone 合并（复用整模逻辑，用于 2D 拆分） ----
     const vertexCounts = new Array<number>(bones.length).fill(0);
