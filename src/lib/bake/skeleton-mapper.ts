@@ -439,3 +439,182 @@ export function mapBonesToNodes(
     },
   };
 }
+
+// ---- 六部件 2D 拆分 ----
+
+import type { SixPartBakeData, SixPartName } from './threejs-baker-sixpart';
+import { SIX_PARTS } from './threejs-baker-sixpart';
+
+/**
+ * 按六部件的块内 ID 拆分。
+ * 每部件每方向：读块内 ID（局部）→ 映射到全局 bone → 累积像素 → 裁剪。
+ * 输出与 splitByBoneId 同格式（ProcessedBone），下游 mapBonesToNodes 不用改。
+ */
+export function splitSixParts(
+  bake: SixPartBakeData,
+  opts: SplitOptions = {},
+): Map<number, ProcessedBone> {
+  const padding = opts.padding ?? 1.35;
+  const minCrop = opts.minCrop ?? 10;
+  const paletteSize = opts.paletteSize ?? 16;
+  const W = bake.width;
+  const H = bake.height;
+
+  const result = new Map<number, ProcessedBone>();
+  const merge = bake.merge;
+  for (const b of bake.bones) {
+    let pIdx = b.parentIndex;
+    if (merge && pIdx !== null && pIdx !== undefined) {
+      const effP = merge.effectiveIndex[pIdx] ?? pIdx;
+      const effSelf = merge.effectiveIndex[b.index] ?? b.index;
+      pIdx = effP === effSelf ? null : effP;
+    }
+    result.set(b.index, {
+      boneIndex: b.index,
+      boneName: b.name,
+      parentIndex: pIdx,
+      directions: [],
+    });
+  }
+
+  for (const part of SIX_PARTS) {
+    const localToGlobal = bake.partBoneMap[part];
+    if (!localToGlobal || localToGlobal.length === 0) continue;
+    // 局部 ID → 全局 bone 的有效色表（容错解码用）
+    const validColors = new Map<string, number>();
+    localToGlobal.forEach((gi, li) => {
+      const v = li + 1;
+      const r = v & 0xff, g = (v >> 8) & 0xff, bl = (v >> 16) & 0xff;
+      validColors.set(`${r},${g},${bl}`, gi);
+    });
+    const decodeRobust = (r: number, g: number, b: number): number => {
+      const key = `${r},${g},${b}`;
+      const exact = validColors.get(key);
+      if (exact !== undefined) return exact;
+      if (r === 0 && g === 0 && b === 0) return -1;
+      let best = -1;
+      let bestD = 40 * 40 * 3;
+      for (const [k, idx] of validColors) {
+        const [vr, vg, vb] = k.split(',').map(Number);
+        const d = (r - vr) ** 2 + (g - vg) ** 2 + (b - vb) ** 2;
+        if (d < bestD) { bestD = d; best = idx; }
+      }
+      return best;
+    };
+
+    for (let d = 0; d < 8; d++) {
+      const g = bake.groups.find((x) => x.part === part && x.direction === d);
+      if (!g) continue;
+      const perBone = new Map<number, { rgba: Uint8ClampedArray; mask: Uint8Array; count: number }>();
+      for (let p = 0; p < W * H; p++) {
+        const o = p * 4;
+        const bi = decodeRobust(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
+        if (bi < 0) continue;
+        if (g.colorPixels[o + 3] <= 8) continue; // 透明跳过
+        let e = perBone.get(bi);
+        if (!e) {
+          e = { rgba: new Uint8ClampedArray(W * H * 4), mask: new Uint8Array(W * H), count: 0 };
+          perBone.set(bi, e);
+        }
+        e.mask[p] = 1;
+        e.count++;
+        e.rgba[o] = g.colorPixels[o];
+        e.rgba[o + 1] = g.colorPixels[o + 1];
+        e.rgba[o + 2] = g.colorPixels[o + 2];
+        e.rgba[o + 3] = 255;
+      }
+
+      // 每 bone 裁剪（与 splitByBoneId 同逻辑）
+      for (const [bi, e] of perBone) {
+        const bone = bake.bones[bi];
+        const pb = result.get(bi)!;
+        let minX = W, maxX = -1, minY = H, maxY = -1;
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            if (e.mask[y * W + x]) {
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        if (maxX < 0) continue;
+        const jp = bone.jointPixels[d];
+        if (!jp) continue;
+        const jx = jp.x;
+        const jy = jp.y;
+        const hx = Math.max(Math.abs(minX - jx), Math.abs(maxX - jx), 1) * padding;
+        const hy = Math.max(Math.abs(minY - jy), Math.abs(maxY - jy), 1) * padding;
+        let half = Math.max(hx, hy, minCrop / 2);
+        half = Math.min(half, Math.min(jx, jy, W - jx, H - jy, W / 2, H / 2));
+        half = Math.max(half, 2);
+        const x0 = Math.round(jx - half);
+        const y0 = Math.round(jy - half);
+        const cw = Math.round(half * 2);
+        const ch = Math.round(half * 2);
+
+        const crop = new Uint8ClampedArray(cw * ch * 4);
+        for (let y = 0; y < ch; y++) {
+          for (let x = 0; x < cw; x++) {
+            const sx = x0 + x, sy = y0 + y;
+            const so = (sy * W + sx) * 4;
+            const do_ = (y * cw + x) * 4;
+            if (sx < 0 || sx >= W || sy < 0 || sy >= H || !e.mask[sy * W + sx]) {
+              crop[do_ + 3] = 0;
+              continue;
+            }
+            crop[do_] = e.rgba[so];
+            crop[do_ + 1] = e.rgba[so + 1];
+            crop[do_ + 2] = e.rgba[so + 2];
+            crop[do_ + 3] = 255;
+          }
+        }
+
+        const palette = medianCut(crop, paletteSize);
+        const grid: PixelGrid = [];
+        for (let y = 0; y < ch; y++) {
+          const row: (string | null)[] = [];
+          for (let x = 0; x < cw; x++) {
+            const o = (y * cw + x) * 4;
+            row.push(rgbaToHexOrNull(crop[o], crop[o + 1], crop[o + 2], crop[o + 3]));
+          }
+          grid.push(row);
+        }
+        if (palette.length > 0) {
+          for (let y = 0; y < ch; y++) {
+            for (let x = 0; x < cw; x++) {
+              const c = grid[y][x];
+              if (!c) continue;
+              const r = parseInt(c.slice(1, 3), 16);
+              const gg = parseInt(c.slice(3, 5), 16);
+              const b = parseInt(c.slice(5, 7), 16);
+              const idx = nearestPaletteIndex(r, gg, b, palette);
+              const p = palette[idx];
+              grid[y][x] = '#' + [p[0], p[1], p[2]].map((v) => v.toString(16).padStart(2, '0')).join('');
+            }
+          }
+        }
+
+        pb.directions.push({
+          direction: d as DirectionIndex,
+          grid,
+          width: cw,
+          height: ch,
+          cropX: x0,
+          cropY: y0,
+          jointX: jx,
+          jointY: jy,
+          plugX: jx - x0,
+          plugY: jy - y0,
+        });
+      }
+    }
+  }
+
+  // 删掉 8 方向全空的 bone
+  for (const [bi, pb] of [...result]) {
+    if (pb.directions.length === 0) result.delete(bi);
+  }
+  return result;
+}

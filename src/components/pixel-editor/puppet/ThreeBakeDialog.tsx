@@ -24,6 +24,7 @@ import {
 } from '@/lib/bake/threejs-baker-twopass';
 import {
   splitByBoneId,
+  splitSixParts,
   mapBonesToNodes,
   rgbaToGrid,
   alignLimbToRest,
@@ -33,6 +34,13 @@ import {
 import type { PixelGrid, DirectionIndex } from '@/lib/unified-types';
 import { useProjectStore } from '@/lib/store';
 import BonePicker3D from './BonePicker3D';
+import {
+  bakeSixParts,
+  SIX_PARTS,
+  SIX_PART_LABEL,
+  type SixPartBakeData,
+  type SixPartName,
+} from '@/lib/bake/threejs-baker-sixpart';
 
 const SAMPLE_URL = 'https://threejs.org/examples/models/gltf/Xbot.glb';
 
@@ -668,10 +676,13 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [size, setSize] = useState(64);
   const [paletteSize, setPaletteSize] = useState(16);
   const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
+  /** 烘焙模式：twopass=整模 ID 双遍（16 遍），sixpart=六部件（96 遍） */
+  const [bakeMode, setBakeMode] = useState<'twopass' | 'sixpart'>('sixpart');
 
   const [baking, setBaking] = useState(false);
   const [progress, setProgress] = useState('');
   const [twoPass, setTwoPass] = useState<TwoPassBakeData | null>(null);
+  const [sixPart, setSixPart] = useState<SixPartBakeData | null>(null);
   const [processed, setProcessed] = useState<Map<number, ProcessedBone> | null>(null);
   const [showIds, setShowIds] = useState(false);
   const [totalMs, setTotalMs] = useState(0);
@@ -696,6 +707,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setFileName(f.name);
     setFileData(null);
     setTwoPass(null);
+    setSixPart(null);
     setProcessed(null);
     setError(null);
     setImportMsg(null);
@@ -711,6 +723,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setBaking(true);
     setError(null);
     setTwoPass(null);
+    setSixPart(null);
     setProcessed(null);
     setImportMsg(null);
     setRebakeTarget(null);
@@ -767,6 +780,66 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       setBaking(false);
     }
   }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges]);
+
+  /** 六部件烘焙：6 部件 × 8 方向 ×（颜色+ID）= 96 遍 */
+  const handleBakeSixPart = useCallback(async () => {
+    setBaking(true);
+    setError(null);
+    setSixPart(null);
+    setTwoPass(null);
+    setProcessed(null);
+    setImportMsg(null);
+    setRebakeTarget(null);
+    try {
+      let inp: string | ArrayBuffer;
+      if (fileData) {
+        inp = fileData;
+        urlCache.current = null;
+      } else {
+        const u = url.trim();
+        if (!u) throw new Error('请先选择文件或填写 URL');
+        if (urlCache.current && urlCache.current.url === u) {
+          inp = urlCache.current.data;
+        } else {
+          setProgress('下载模型…');
+          await new Promise((r) => setTimeout(r, 30));
+          const resp = await fetch(u);
+          if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
+          const buf = await resp.arrayBuffer();
+          urlCache.current = { url: u, data: buf };
+          inp = buf;
+        }
+      }
+      setProgress('加载模型…');
+      await new Promise((r) => setTimeout(r, 30));
+      const t0 = performance.now();
+      const data = await bakeSixParts(inp, {
+        size,
+        granularity,
+        manualMerges,
+        manualUnmerges,
+        onProgress: (done, total, label) => setProgress(`${done}/${total} 遍 · ${label}`),
+      });
+      setTotalMs(performance.now() - t0);
+      setProgress('按部件拆分…');
+      await new Promise((r) => setTimeout(r, 30));
+      const proc = splitSixParts(data, { paletteSize });
+      setSixPart(data);
+      setProcessed(proc);
+      setProgress('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setProgress('');
+    } finally {
+      setBaking(false);
+    }
+  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges]);
+
+  /** 按当前模式分发烘焙 */
+  const handleBakeDispatch = useCallback(() => {
+    if (bakeMode === 'sixpart') handleBakeSixPart();
+    else handleBake();
+  }, [bakeMode, handleBakeSixPart, handleBake]);
 
   const handleRebakeDone = useCallback(
     (boneIndex: number, boneName: string, results: BakeResult[]) => {
@@ -858,6 +931,28 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
           };
         });
 
+  /** 六部件模式：部件 → 8 方向缩略图 */
+  const sixPartThumbs: { part: SixPartName; thumbs: BakeResult[] }[] | null =
+    sixPart == null
+      ? null
+      : SIX_PARTS.filter((p) => sixPart.groups.some((g) => g.part === p)).map((p) => ({
+          part: p,
+          thumbs: ([0, 1, 2, 3, 4, 5, 6, 7] as const).map((d) => {
+            const g = sixPart.groups.find((x) => x.part === p && x.direction === d)!;
+            return {
+              direction: d,
+              pixels: showIds ? g.idPixels : g.colorPixels,
+              width: sixPart.width,
+              height: sixPart.height,
+              colorCount: 0,
+              elapsedMs: 0,
+            };
+          }),
+        }));
+
+  /** 当前模式的 bones（重烘按钮用） */
+  const curBones = bakeMode === 'sixpart' ? sixPart?.bones : twoPass?.bones;
+
   const boneList = processed ? [...processed.values()].sort((a, b) => a.boneIndex - b.boneIndex) : [];
 
   return (
@@ -871,7 +966,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       >
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-bold text-gray-200">
-            3D 按骨骼烘焙 <span className="font-normal text-gray-500">（ID 双遍 → 拆分 → 导入角色）</span>
+            3D 烘焙 <span className="font-normal text-gray-500">（{bakeMode === 'sixpart' ? '六部件 → 块内 ID 拆分' : 'ID 双遍 → 拆分'} → 导入角色）</span>
           </h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-200">✕</button>
         </div>
@@ -927,6 +1022,17 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                 <option value={32}>32 色</option>
               </select>
             </label>
+            <label className="flex items-center gap-1" title="整模 ID 双遍：16 遍，整模一次渲染；六部件：96 遍，6 块独立渲染无遮挡">
+              烘焙模式
+              <select
+                value={bakeMode}
+                onChange={(e) => setBakeMode(e.target.value as 'twopass' | 'sixpart')}
+                className="h-6 rounded border border-[#2a2a4a] bg-[#0d0d1f] px-1 text-gray-300"
+              >
+                <option value="sixpart">六部件（96 遍）</option>
+                <option value="twopass">整模 ID 双遍（16 遍）</option>
+              </select>
+            </label>
             <label className="flex items-center gap-1" title="粗：手指/脚趾/小骨骼合并，约15个节点；细：一个骨骼一个节点（调试用）">
               拆分粒度
               <select
@@ -939,14 +1045,18 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               </select>
             </label>
             <button
-              onClick={handleBake}
+              onClick={handleBakeDispatch}
               disabled={baking}
               className="h-7 rounded bg-cyan-700 px-4 text-[11px] font-bold text-white hover:bg-cyan-600 disabled:opacity-50"
             >
-              {baking ? '烘焙中…' : '按骨骼烘焙'}
+              {baking ? '烘焙中…' : bakeMode === 'sixpart' ? '六部件烘焙' : '按骨骼烘焙'}
             </button>
             {progress && <span className="text-cyan-400">{progress}</span>}
-            <span className="text-gray-600">每方向 2 遍（前/后）× 8 方向 = 16 遍，用模型原始姿态</span>
+            <span className="text-gray-600">
+              {bakeMode === 'sixpart'
+                ? '6 部件 × 8 方向 ×（颜色+ID）= 96 遍，分块独立渲染无遮挡'
+                : '每方向 2 遍（前/后）× 8 方向 = 16 遍，用模型原始姿态'}
+            </span>
           </div>
         </div>
 
@@ -956,7 +1066,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
           input={input}
           granularity={granularity}
           onMergesChange={handleMergesChange}
-          onBake={handleBake}
+          onBake={handleBakeDispatch}
           baking={baking}
         />
 
@@ -1017,6 +1127,45 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
           </div>
         )}
 
+        {/* 六部件总览：6 组 × 8 方向 */}
+        {sixPartThumbs && (
+          <div className="mb-3">
+            <div className="mb-2 flex items-center gap-3 text-[11px] text-gray-400">
+              <span>
+                {sixPart!.bones.length} bones · {processed?.size ?? 0} 有效肢体 · 总耗时 {totalMs.toFixed(0)}ms · {size}×{size} · 六部件
+              </span>
+              <label className="flex cursor-pointer items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={showIds}
+                  onChange={(e) => setShowIds(e.target.checked)}
+                />
+                显示 ID 图（调试拆分）
+              </label>
+              <button
+                onClick={handleImport}
+                disabled={!processed || processed.size === 0}
+                className="h-7 rounded bg-green-700 px-4 text-[11px] font-bold text-white hover:bg-green-600 disabled:opacity-50"
+              >
+                导入为角色
+              </button>
+            </div>
+            {sixPartThumbs.map(({ part, thumbs }) => (
+              <div key={part} className="mb-2">
+                <div className="mb-1 text-[10px] text-gray-500">{SIX_PART_LABEL[part]}</div>
+                <div className="grid grid-cols-8 gap-2">
+                  {thumbs.map((r) => (
+                    <div key={r.direction} className="flex flex-col items-center gap-1">
+                      <ResultCanvas result={r} size={64} />
+                      <div className="text-[10px] text-gray-600">{r.direction * 45}°</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* 骨骼列表 */}
         {boneList.length > 0 && (
           <div>
@@ -1026,7 +1175,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             <div className="grid grid-cols-6 gap-2">
               {boneList.map((pb) => {
                 const d0 = pb.directions.find((d) => d.direction === 0) ?? pb.directions[0];
-                const boneInfo = twoPass?.bones[pb.boneIndex];
+                const boneInfo = curBones?.[pb.boneIndex];
                 return (
                   <div
                     key={pb.boneIndex}
@@ -1049,9 +1198,11 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
           </div>
         )}
 
-        {!twoPass && !error && !baking && (
+        {!twoPass && !sixPart && !error && !baking && (
           <div className="py-8 text-center text-[11px] text-gray-600">
-            选择模型后点「按骨骼烘焙」：16 遍渲染（ID 双遍 × 8 方向）→ 自动按 bone 拆分 → 可导入为角色
+            {bakeMode === 'sixpart'
+              ? '选择模型后点「六部件烘焙」：6 部件 × 8 方向 ×（颜色+ID）= 96 遍 → 块内 ID 拆分 → 可导入为角色'
+              : '选择模型后点「按骨骼烘焙」：16 遍渲染（ID 双遍 × 8 方向）→ 自动按 bone 拆分 → 可导入为角色'}
           </div>
         )}
       </div>
