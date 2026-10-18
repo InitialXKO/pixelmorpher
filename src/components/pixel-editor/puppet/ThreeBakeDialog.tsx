@@ -33,6 +33,7 @@ import {
   type ProcessedBoneDirection,
 } from '@/lib/bake/skeleton-mapper';
 import type { PixelGrid, DirectionIndex } from '@/lib/unified-types';
+import { pxToSub } from '@/lib/unified-types';
 import { useProjectStore } from '@/lib/store';
 import BonePicker3D from './BonePicker3D';
 import {
@@ -688,6 +689,10 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
 
   const [rebakeTarget, setRebakeTarget] = useState<BakedBoneInfo | null>(null);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  // 点击肢体预览弹出的骨骼（显示8方向）
+  const [popupBone, setPopupBone] = useState<ProcessedBone | null>(null);
+  // 上次导入的角色ID（用于手动替换服装）
+  const [lastImportedCharId, setLastImportedCharId] = useState<string | null>(null);
 
   // 手动 bone 合并（烘焙前调整）
   const [manualMerges, setManualMerges] = useState<Map<number, number>>(new Map());
@@ -903,6 +908,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       useProjectStore.setState((s) => ({
         sprites: { ...s.sprites, ...mapped.sprites },
       }));
+      setLastImportedCharId(char.id);
       setImportMsg(
         `已创建角色 ${name}，含 ${mapped.stats.nodes} 个节点，${mapped.stats.sprites} 张精灵`,
       );
@@ -910,6 +916,37 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       setError(e instanceof Error ? e.message : String(e));
     }
   }, [processed, fileName]);
+
+  // 手动替换服装：用预览的某方向精灵替换已导入角色的对应精灵
+  const handleReplaceSprite = useCallback((
+    boneIndex: number,
+    boneName: string,
+    dir: ProcessedBoneDirection,
+  ) => {
+    if (!lastImportedCharId) {
+      setError('请先导入角色，再手动替换服装');
+      return;
+    }
+    const spriteId = `spr_${lastImportedCharId}_${boneIndex}_${dir.direction}`;
+    const exists = useProjectStore.getState().sprites[spriteId];
+    if (!exists) {
+      setError(`未找到精灵 ${spriteId}，请确认已导入`);
+      return;
+    }
+    useProjectStore.setState((s) => ({
+      sprites: {
+        ...s.sprites,
+        [spriteId]: {
+          ...s.sprites[spriteId],
+          width: dir.width,
+          height: dir.height,
+          data: dir.grid,
+          plug: { x: pxToSub(dir.plugX), y: pxToSub(dir.plugY) },
+        },
+      },
+    }));
+    setImportMsg(`已替换 ${boneName} d${dir.direction}`);
+  }, [lastImportedCharId]);
 
   if (!open) return null;
 
@@ -1179,7 +1216,15 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                     key={pb.boneIndex}
                     className="flex flex-col items-center gap-1 rounded border border-[#2a2a4a] p-2"
                   >
-                    {d0 && <PixelGridCanvas grid={d0.grid} scale={2} />}
+                    {d0 && (
+                      <button
+                        onClick={() => setPopupBone(pb)}
+                        className="cursor-pointer hover:opacity-80"
+                        title="点击查看8方向"
+                      >
+                        <PixelGridCanvas grid={d0.grid} scale={2} />
+                      </button>
+                    )}
                     <div className="max-w-[110px] truncate text-[10px] text-gray-300" title={pb.boneName}>
                       {pb.boneName}
                     </div>
@@ -1201,6 +1246,65 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             {bakeMode === 'sixpart'
               ? '选择模型后点「六部件烘焙」：6 部件 × 8 方向 ×（颜色+ID）= 96 遍 → 块内 ID 拆分 → 可导入为角色'
               : '选择模型后点「按骨骼烘焙」：16 遍渲染（ID 双遍 × 8 方向）→ 自动按 bone 拆分 → 可导入为角色'}
+          </div>
+        )}
+
+        {/* 肢体8方向弹窗：点击肢体预览弹出，各方向附带手动替换服装按钮 */}
+        {popupBone && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+            onClick={() => setPopupBone(null)}
+          >
+            <div
+              className="max-h-[90vh] overflow-auto rounded-lg border border-[#3a3a5a] bg-[#1a1a2e] p-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <div className="text-sm text-gray-200">
+                  {popupBone.boneName} — 8 方向精灵
+                </div>
+                <button
+                  onClick={() => setPopupBone(null)}
+                  className="rounded border border-[#3a3a5a] px-2 py-1 text-xs text-gray-300 hover:bg-[#222240]"
+                >
+                  关闭
+                </button>
+              </div>
+              <div className="grid grid-cols-4 gap-3">
+                {[...popupBone.directions]
+                  .sort((a, b) => a.direction - b.direction)
+                  .map((dir) => (
+                    <div
+                      key={dir.direction}
+                      className="flex flex-col items-center gap-1 rounded border border-[#2a2a4a] p-2"
+                    >
+                      <div className="text-[10px] text-gray-400">
+                        方向 {dir.direction}（{dir.width}×{dir.height}）
+                      </div>
+                      <PixelGridCanvas grid={dir.grid} scale={2} />
+                      <button
+                        onClick={() =>
+                          handleReplaceSprite(popupBone.boneIndex, popupBone.boneName, dir)
+                        }
+                        disabled={!lastImportedCharId}
+                        className="h-6 rounded border border-[#3a3a5a] bg-[#1a1a30] px-2 text-[10px] text-gray-300 hover:bg-[#222240] disabled:opacity-40"
+                        title={
+                          lastImportedCharId
+                            ? '用此预览替换已导入角色的对应精灵'
+                            : '请先导入角色'
+                        }
+                      >
+                        手动替换服装
+                      </button>
+                    </div>
+                  ))}
+              </div>
+              {!lastImportedCharId && (
+                <div className="mt-2 text-[11px] text-yellow-400">
+                  提示：请先点「导入角色」，再使用手动替换。
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
