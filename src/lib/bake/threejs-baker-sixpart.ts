@@ -556,19 +556,18 @@ function buildPartGeometry(
       const capVertBone: number[] = [];
       const useUv = hasUv.some(Boolean);
       if (capIndexStart < 0) capIndexStart = indices.length; // 记录第一个封盖起始
-      // 封盖 bone：取边界环顶点中最多的 bone（不是整部件最多）
-      const boneForLoop = (loopVerts: number[]): number => {
-        const freq = new Map<number, number>();
-        for (const vi of loopVerts) {
-          const bi = vertBone[vi];
-          if (bi >= 0) freq.set(bi, (freq.get(bi) ?? 0) + 1);
-        }
-        let best = -1, bestN = 0;
-        for (const [bi, n] of freq) {
-          if (n > bestN) { bestN = n; best = bi; }
-        }
-        return best;
-      };
+      // 封盖 bone：用部件根 bone（parent 不在部件内的），不投票
+      // 先收集部件内 bones，再找根
+      const partBoneSet = new Set<number>();
+      for (const vb of vertBone) if (vb >= 0) partBoneSet.add(vb);
+      let rootBone = -1;
+      for (const bi of partBoneSet) {
+        const b = bones[bi];
+        const p = b.parent as THREE.Bone | null;
+        const pIdx = p && (p as any).isBone ? (bones as THREE.Bone[]).indexOf(p) : -1;
+        if (pIdx < 0 || !partBoneSet.has(pIdx)) { rootBone = bi; break; }
+      }
+      const boneForLoop = (_loopVerts: number[]): number => rootBone;
       addCaps(
         positions,
         useUv ? uvs : null,
