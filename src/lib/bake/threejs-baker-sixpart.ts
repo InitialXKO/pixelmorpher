@@ -304,17 +304,35 @@ function groupTrianglesByPart(
         if (p) parts.add(p);
       }
     }
-    // 跨部件三角形跳过（留给封盖填洞），不硬分到一侧
-    if (parts.size !== 1) continue;
+    // 跨部件三角形：若含 torso 则归 torso（父部件，如盆骨/肩/颈处），否则跳过留给封盖
+    let targetPart: PartName | null = null;
+    if (parts.size === 1) {
+      targetPart = [...parts][0];
+    } else if (parts.has('torso')) {
+      targetPart = 'torso';
+    } else {
+      continue;
+    }
     let bestBone = -1;
     let bestVotes = 0;
     for (const [bi, n] of votes) {
       if (n > bestVotes) { bestVotes = n; bestBone = bi; }
     }
     if (bestBone < 0) continue;
-    const part = boneToPart[bestBone];
-    if (!part) continue; // 无归属的 bone（如未识别）跳过
-    const pt = result.get(part)!;
+    // 若按投票的 bone 不在 targetPart（如 torso 内的腿 bone），则取 targetPart 内投票最多的
+    let finalPart = boneToPart[bestBone];
+    if (finalPart !== targetPart) {
+      // 在 targetPart 的 bones 中找投票最多的
+      let altBest = -1; let altVotes = 0;
+      for (const [bi, n] of votes) {
+        if (boneToPart[bi] === targetPart && n > altVotes) { altVotes = n; altBest = bi; }
+      }
+      if (altBest < 0) continue;
+      bestBone = altBest;
+      finalPart = targetPart;
+    }
+    if (!finalPart) continue;
+    const pt = result.get(finalPart)!;
     pt.tris.push([a, b, c]);
     pt.triBone.push(bestBone);
   }
