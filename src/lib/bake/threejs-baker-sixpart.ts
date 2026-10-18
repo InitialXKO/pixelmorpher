@@ -611,17 +611,22 @@ function buildPartGeometry(
   geo.computeVertexNormals();
 
   // 部件内 bone 列表（按首次出现；用全部 vertBones 而非仅主导，避免纯次要 bone 丢失）
+  // 只收 boneToPart 属于本部件的（蒙皮重叠可能带入别部件 bone，需过滤）
   const seen = new Set<number>();
   const partBones: number[] = [];
   for (const vbs of vertBones) {
     for (const vb of vbs) {
-      if (vb >= 0 && !seen.has(vb)) { seen.add(vb); partBones.push(vb); }
+      if (vb >= 0 && !seen.has(vb) && boneToPart[vb] === part) {
+        seen.add(vb); partBones.push(vb);
+      }
     }
   }
   // 兜底：若 vertBones 全空（非蒙皮），用主导 vertBone
   if (partBones.length === 0) {
     for (const vb of vertBone) {
-      if (vb >= 0 && !seen.has(vb)) { seen.add(vb); partBones.push(vb); }
+      if (vb >= 0 && !seen.has(vb) && boneToPart[vb] === part) {
+        seen.add(vb); partBones.push(vb);
+      }
     }
   }
 
