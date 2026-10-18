@@ -505,25 +505,51 @@ function countBoneVertices(
   return counts;
 }
 
-/** bone index → RGB（+1 偏移，0 保留给背景） */
+/** bone index → RGB 位掩码（1248 形式，支持 ID 重叠）
+ * Bone i → 第 (i%8) 位，第 floor(i/8) 通道
+ * Bone 0 → (1,0,0), Bone 7 → (128,0,0), Bone 8 → (0,1,0), Bone 23 → (0,0,128)
+ * 上限 24；-1/越界 → 黑（背景）
+ */
 export function encodeBoneId(index: number): [number, number, number] {
-  // 亮色编码：避免 (1,0,0) 这类近似黑，解码易混淆
-  // 用质数乘法散列，保证相邻 index 颜色差异大且远离黑色
-  let r = (index * 73 + 31) % 256;
-  let g = (index * 149 + 57) % 256;
-  let b = (index * 211 + 101) % 256;
-  // 太暗则提亮（避免近似黑）
-  if (r + g + b < 192) {
-    r = 255 - r; g = 255 - g; b = 255 - b;
-  }
-  // 避免纯黑（背景色）
-  if (r === 0 && g === 0 && b === 0) r = 128;
-  return [r, g, b];
+  if (index < 0 || index > 23) return [0, 0, 0];
+  const bit = index % 8;
+  const ch = Math.floor(index / 8);
+  const rgb: [number, number, number] = [0, 0, 0];
+  rgb[ch] = 1 << bit;
+  return rgb;
 }
 
-/** RGB → bone index（-1 = 背景/无效） */
-export function decodeBoneId(r: number, g: number, b: number): number {
-  return (r | (g << 8) | (b << 16)) - 1;
+/** 位掩码解码：返回所有置位的 bone index（[] = 背景/无效）
+ * - 精确整数值 → 二进制分解（无误判）
+ * - 插值非整数 → 包容式：位值 v，若 ch >= v*0.6 且 ch < v*2.5 则判定存在
+ *   （边界像素同时归属双方；上界 guard 避免小位被大值误触发）
+ */
+export function decodeBoneMask(r: number, g: number, b: number): number[] {
+  const bones: number[] = [];
+  const channels = [r, g, b];
+  for (let c = 0; c < 3; c++) {
+    const ch = channels[c];
+    if (ch < 0.5) continue;
+    const iv = Math.round(ch);
+    if (Math.abs(ch - iv) < 0.25) {
+      // 精确值：二进制分解
+      for (let i = 0; i < 8; i++) {
+        if (iv & (1 << i)) bones.push(c * 8 + i);
+      }
+    } else {
+      // 插值：包容式阈值
+      for (let i = 0; i < 8; i++) {
+        const v = 1 << i;
+        if (ch >= v * 0.6 && ch < v * 2.5) bones.push(c * 8 + i);
+      }
+    }
+  }
+  return bones;
+}
+
+/** RGB → bone index 列表（位掩码版；兼容旧名单骨调用，返回 [] 表背景） */
+export function decodeBoneId(r: number, g: number, b: number): number[] {
+  return decodeBoneMask(r, g, b);
 }
 
 /** 收集场景中所有 Bone，建立全局索引 */
@@ -566,23 +592,34 @@ function assignBoneVertexColors(
   const colors = new Float32Array(pos.count * 3);
   const sm = mesh as THREE.SkinnedMesh;
 
+  // 合并后 bone 的紧凑索引（0..M-1，用于位掩码；M ≤ 24）
+  // 与 skeleton-mapper.ts 的重建逻辑一致（排序保证顺序相同）
+  const effSet = new Set<number>();
+  for (let i = 0; i < effectiveIndex.length; i++) effSet.add(effectiveIndex[i] ?? i);
+  const effList = [...effSet].sort((a, b) => a - b);
+  const compactByMerged = new Map<number, number>(effList.map((gi, ci) => [gi, ci]));
+
   if (sm.isSkinnedMesh && geo.getAttribute('skinIndex')) {
     const skinIndex = geo.getAttribute('skinIndex') as THREE.BufferAttribute;
     const skinWeight = geo.getAttribute('skinWeight') as THREE.BufferAttribute;
     const skeleton = sm.skeleton;
     for (let v = 0; v < pos.count; v++) {
-      let bestJ = 0;
-      let bestW = -Infinity;
+      // weight > 0.2 的 bones 全部按位或（边界重叠）
+      let r = 0, g = 0, b = 0;
       for (let j = 0; j < 4; j++) {
         const w = skinWeight.getComponent(v, j);
-        if (w > bestW) { bestW = w; bestJ = j; }
+        if (w <= 0.2) continue;
+        const jointIdx = Math.round(skinIndex.getComponent(v, j));
+        const bone = skeleton.bones[jointIdx];
+        const gi = bone ? (indexByBone.get(bone) ?? -1) : -1;
+        if (gi < 0) continue;
+        // 用合并后的有效 bone 染 ID（手指等并入手/脚）
+        const ei = effectiveIndex[gi] ?? gi;
+        const ci = compactByMerged.get(ei);
+        if (ci === undefined) continue;
+        const [br, bg, bb] = encodeBoneId(ci);
+        r |= br; g |= bg; b |= bb;
       }
-      const jointIdx = Math.round(skinIndex.getComponent(v, bestJ));
-      const bone = skeleton.bones[jointIdx];
-      const gi = bone ? (indexByBone.get(bone) ?? -1) : -1;
-      // 用合并后的有效 bone 染 ID（手指等并入手/脚）
-      const ei = gi >= 0 ? (effectiveIndex[gi] ?? gi) : -1;
-      const [r, g, b] = ei >= 0 ? encodeBoneId(ei) : [0, 0, 0];
       colors[v * 3] = r / 255;
       colors[v * 3 + 1] = g / 255;
       colors[v * 3 + 2] = b / 255;
@@ -600,7 +637,8 @@ function assignBoneVertexColors(
       if (d < bestD) { bestD = d; best = i; }
     }
     const ei = effectiveIndex[best] ?? best;
-    const [r, g, b] = encodeBoneId(ei);
+    const ci = compactByMerged.get(ei) ?? 0;
+    const [r, g, b] = encodeBoneId(ci);
     for (let v = 0; v < pos.count; v++) {
       colors[v * 3] = r / 255;
       colors[v * 3 + 1] = g / 255;

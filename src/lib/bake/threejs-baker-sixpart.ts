@@ -117,6 +117,8 @@ interface BakedMesh {
   material: THREE.Material | null; // 原材质（取色用）
   /** 每顶点主导 bone 的全局 index（-1=无） */
   vertBone: Int32Array;
+  /** 每顶点 weight>0.2 的 bones（全局 index，用于 ID 位掩码重叠） */
+  vertBones: number[][];
 }
 
 /**
@@ -185,6 +187,7 @@ function bakeSkinnedMesh(
 
   const outPos = new Float32Array(vCount * 3);
   const vertBone = new Int32Array(vCount).fill(-1);
+  const vertBones: number[][] = new Array(vCount);
 
   const v = new THREE.Vector3();
   if (sm.isSkinnedMesh && geo.getAttribute('skinIndex')) {
@@ -218,11 +221,23 @@ function bakeSkinnedMesh(
       }
       // mesh 的世界矩阵（model 在 group 里可能有变换，此处先取模型空间）
       outPos[i * 3] = tv.x; outPos[i * 3 + 1] = tv.y; outPos[i * 3 + 2] = tv.z;
+      // 主导 bone（兼容旧逻辑：三角投票、封盖、顶点计数）
       if (bestJ >= 0) {
         const ji = Math.round(skinIndex.getComponent(i, bestJ));
         const bone = skeleton.bones[ji];
         vertBone[i] = bone ? (indexByBone.get(bone) ?? -1) : -1;
       }
+      // weight>0.2 的全部 bones（ID 位掩码重叠用）
+      const multi: number[] = [];
+      for (let j = 0; j < 4; j++) {
+        const w = skinWeight.getComponent(i, j);
+        if (w <= 0.2) continue;
+        const ji = Math.round(skinIndex.getComponent(i, j));
+        const bone = skeleton.bones[ji];
+        const gi = bone ? (indexByBone.get(bone) ?? -1) : -1;
+        if (gi >= 0 && !multi.includes(gi)) multi.push(gi);
+      }
+      vertBones[i] = multi;
     }
   } else {
     // 非蒙皮：直接拷贝
@@ -230,6 +245,7 @@ function bakeSkinnedMesh(
       outPos[i * 3] = posAttr.getX(i);
       outPos[i * 3 + 1] = posAttr.getY(i);
       outPos[i * 3 + 2] = posAttr.getZ(i);
+      vertBones[i] = [];
     }
   }
 
@@ -245,7 +261,7 @@ function bakeSkinnedMesh(
   }
   // 法线稍后用 computeVertexNormals 重算（姿态变化后原法线不准）
   void normAttr;
-  return { geometry: out, material: mesh.material as THREE.Material | null, vertBone };
+  return { geometry: out, material: mesh.material as THREE.Material | null, vertBone, vertBones };
 }
 
 // ---- 部件拆分 ----
@@ -447,6 +463,8 @@ interface BuiltPart {
   geometry: THREE.BufferGeometry;
   /** 每顶点全局 bone index（封盖顶点已填） */
   vertBone: Int32Array;
+  /** 每顶点 weight>0.2 的 bones（全局 index，ID 位掩码用；封盖为单元素） */
+  vertBones: number[][];
   /** 部件内 bone 列表（全局 index，按首次出现序） */
   partBones: number[];
   /** 材质基色（封盖用） */
@@ -469,6 +487,7 @@ function buildPartGeometry(
   const colors: number[] = []; // 顶点色：原顶点白，封盖用 baseColor
   const indices: number[] = [];
   const vertBone: number[] = [];
+  const vertBones: number[][] = [];
   const hasUv: boolean[] = [];
   let baseColor = new THREE.Color(0xffffff);
   let map: THREE.Texture | null = null;
@@ -511,6 +530,7 @@ function buildPartGeometry(
         hasUv.push(!!srcUv);
         colors.push(1, 1, 1);
         vertBone.push(bm.vertBone[vi]);
+        vertBones.push(bm.vertBones[vi] ?? []);
       }
       return ni;
     };
@@ -561,7 +581,10 @@ function buildPartGeometry(
         capVertBone,
       );
       // capVertBone 与新增顶点一一对应（addCaps 按序 push）
-      for (const cb of capVertBone) vertBone.push(cb);
+      for (const cb of capVertBone) {
+        vertBone.push(cb);
+        vertBones.push(cb >= 0 ? [cb] : []);
+      }
     }
   }
 
@@ -583,17 +606,26 @@ function buildPartGeometry(
   }
   geo.computeVertexNormals();
 
-  // 部件内 bone 列表（按首次出现）
+  // 部件内 bone 列表（按首次出现；用全部 vertBones 而非仅主导，避免纯次要 bone 丢失）
   const seen = new Set<number>();
   const partBones: number[] = [];
-  for (const vb of vertBone) {
-    if (vb >= 0 && !seen.has(vb)) { seen.add(vb); partBones.push(vb); }
+  for (const vbs of vertBones) {
+    for (const vb of vbs) {
+      if (vb >= 0 && !seen.has(vb)) { seen.add(vb); partBones.push(vb); }
+    }
+  }
+  // 兜底：若 vertBones 全空（非蒙皮），用主导 vertBone
+  if (partBones.length === 0) {
+    for (const vb of vertBone) {
+      if (vb >= 0 && !seen.has(vb)) { seen.add(vb); partBones.push(vb); }
+    }
   }
 
   return {
     part,
     geometry: geo,
     vertBone: new Int32Array(vertBone),
+    vertBones,
     partBones,
     baseColor,
     map,
@@ -964,14 +996,21 @@ export async function bakeSixParts(
       inner.scale.setScalar(scale);
       partGroup.add(inner);
 
-      // 块内 ID 顶点色（局部索引）
+      // 块内 ID 顶点色（局部索引位掩码；weight>0.2 的 bones 按位或，边界重叠）
       const idColors = new Float32Array(bp.vertBone.length * 3);
       const localIndex = new Map<number, number>();
       bp.partBones.forEach((gi, li) => localIndex.set(gi, li));
       for (let i = 0; i < bp.vertBone.length; i++) {
-        const gi = bp.vertBone[i];
-        const li = gi >= 0 ? (localIndex.get(gi) ?? -1) : -1;
-        const [r, g, b] = li >= 0 ? encodeBoneId(li) : [0, 0, 0];
+        let r = 0, g = 0, b = 0;
+        const vbs = bp.vertBones[i] ?? [];
+        // 兜底：vertBones 为空时用主导 bone
+        const bones = vbs.length > 0 ? vbs : (bp.vertBone[i] >= 0 ? [bp.vertBone[i]] : []);
+        for (const gi of bones) {
+          const li = localIndex.get(gi);
+          if (li === undefined || li < 0 || li > 23) continue;
+          const [br, bg, bb] = encodeBoneId(li);
+          r |= br; g |= bg; b |= bb;
+        }
         idColors[i * 3] = r / 255; idColors[i * 3 + 1] = g / 255; idColors[i * 3 + 2] = b / 255;
       }
       const idGeo = new THREE.BufferGeometry();

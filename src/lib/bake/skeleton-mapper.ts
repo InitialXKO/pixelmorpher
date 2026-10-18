@@ -4,7 +4,7 @@
 // ============================================================
 
 import type { TwoPassBakeData } from './threejs-baker-twopass';
-import { encodeBoneId } from './threejs-baker-twopass';
+import { decodeBoneMask } from './threejs-baker-twopass';
 import { medianCut, nearestPaletteIndex } from './threejs-baker';
 import { rgbaToHexOrNull } from '../engine/utils';
 import {
@@ -68,26 +68,20 @@ export function splitByBoneId(
   const W = bake.width;
   const H = bake.height;
 
-  // 有效 bone 颜色表（用于解码容错）
-  const validColors = new Map<string, number>();
-  for (const b of bake.bones) {
-    const [r, g, bl] = encodeBoneId(b.index);
-    validColors.set(`${r},${g},${bl}`, b.index);
-  }
-  const decodeRobust = (r: number, g: number, b: number): number => {
-    const key = `${r},${g},${b}`;
-    const exact = validColors.get(key);
-    if (exact !== undefined) return exact;
-    if (r === 0 && g === 0 && b === 0) return -1;
-    // 边界混合像素：找最近的有效色
-    let best = -1;
-    let bestD = 40 * 40 * 3; // 阈值
-    for (const [k, idx] of validColors) {
-      const [vr, vg, vb] = k.split(',').map(Number);
-      const d = (r - vr) ** 2 + (g - vg) ** 2 + (b - vb) ** 2;
-      if (d < bestD) { bestD = d; best = idx; }
+  // 位掩码解码：compact 紧凑索引 → 合并后全局 bone
+  // （与 threejs-baker-twopass.ts assignBoneVertexColors 的 compact 映射一致：排序保证顺序相同）
+  const effSet = new Set<number>();
+  const merge0 = bake.merge;
+  for (const b of bake.bones) effSet.add(merge0 ? (merge0.effectiveIndex[b.index] ?? b.index) : b.index);
+  const effList = [...effSet].sort((a, b) => a - b);
+  // 返回合并后全局 bone index 列表（[] = 背景）
+  const decodeBones = (r: number, g: number, b: number): number[] => {
+    const out: number[] = [];
+    for (const ci of decodeBoneMask(r, g, b)) {
+      const gi = effList[ci];
+      if (gi !== undefined) out.push(gi);
     }
-    return best;
+    return out;
   };
 
   const result = new Map<number, ProcessedBone>();
@@ -114,21 +108,12 @@ export function splitByBoneId(
     const front = bake.groups.find((g) => g.direction === d && g.pass === 0)!;
     const back = bake.groups.find((g) => g.direction === d && g.pass === 1)!;
 
-    // 一遍扫描，按 bone 累积 mask + 颜色
+    // 一遍扫描，按 bone 累积 mask + 颜色（位掩码：像素同时归属多个 bones）
     const perBone = new Map<number, { rgba: Uint8ClampedArray; mask: Uint8Array; count: number }>();
-    for (let p = 0; p < W * H; p++) {
-      const o = p * 4;
-      let bi = decodeRobust(front.idPixels[o], front.idPixels[o + 1], front.idPixels[o + 2]);
-      let src = front.colorPixels;
-      if (bi < 0) {
-        bi = decodeRobust(back.idPixels[o], back.idPixels[o + 1], back.idPixels[o + 2]);
-        src = back.colorPixels;
-      }
-      if (bi < 0) continue;
-      // 合并映射：手指等并入手，ID 用合并后的 effectiveIndex
+    const addPixel = (bi0: number, src: Uint8ClampedArray, o: number, p: number) => {
+      let bi = bi0;
+      // 合并映射（幂等：ID 已是合并后索引）
       if (merge) bi = merge.effectiveIndex[bi] ?? bi;
-      // 透明像素跳过（颜色无意义）
-      if (src[o + 3] <= 8) continue;
       let e = perBone.get(bi);
       if (!e) {
         e = { rgba: new Uint8ClampedArray(W * H * 4), mask: new Uint8Array(W * H), count: 0 };
@@ -140,6 +125,19 @@ export function splitByBoneId(
       e.rgba[o + 1] = src[o + 1];
       e.rgba[o + 2] = src[o + 2];
       e.rgba[o + 3] = 255;
+    };
+    for (let p = 0; p < W * H; p++) {
+      const o = p * 4;
+      let bones = decodeBones(front.idPixels[o], front.idPixels[o + 1], front.idPixels[o + 2]);
+      let src = front.colorPixels;
+      if (bones.length === 0) {
+        bones = decodeBones(back.idPixels[o], back.idPixels[o + 1], back.idPixels[o + 2]);
+        src = back.colorPixels;
+      }
+      if (bones.length === 0) continue;
+      // 透明像素跳过（颜色无意义）
+      if (src[o + 3] <= 8) continue;
+      for (const bi of bones) addPixel(bi, src, o, p);
     }
 
     // 每 bone 裁剪
@@ -484,38 +482,24 @@ export function splitSixParts(
   for (const part of ALL_PARTS) {
     const localToGlobal = bake.partBoneMap[part];
     if (!localToGlobal || localToGlobal.length === 0) continue;
-    // 局部 ID → 全局 bone 的有效色表（容错解码用）
-    const validColors = new Map<string, number>();
-    localToGlobal.forEach((gi, li) => {
-      const [r, g, bl] = encodeBoneId(li);
-      validColors.set(`${r},${g},${bl}`, gi);
-    });
-    const decodeRobust = (r: number, g: number, b: number): number => {
-      const key = `${r},${g},${b}`;
-      const exact = validColors.get(key);
-      if (exact !== undefined) return exact;
-      if (r === 0 && g === 0 && b === 0) return -1;
-      let best = -1;
-      let bestD = 40 * 40 * 3;
-      for (const [k, idx] of validColors) {
-        const [vr, vg, vb] = k.split(',').map(Number);
-        const d = (r - vr) ** 2 + (g - vg) ** 2 + (b - vb) ** 2;
-        if (d < bestD) { bestD = d; best = idx; }
+    // 位掩码解码：局部索引位 → 全局 bone（[] = 背景）
+    const decodeBones = (r: number, g: number, b: number): number[] => {
+      const out: number[] = [];
+      for (const li of decodeBoneMask(r, g, b)) {
+        const gi = localToGlobal[li];
+        if (gi !== undefined) out.push(gi);
       }
-      return best;
+      return out;
     };
 
     for (let d = 0; d < 8; d++) {
       const g = bake.groups.find((x) => x.part === part && x.direction === d);
       if (!g) continue;
       const perBone = new Map<number, { rgba: Uint8ClampedArray; mask: Uint8Array; count: number }>();
-      for (let p = 0; p < W * H; p++) {
-        const o = p * 4;
-        let bi = decodeRobust(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
-        if (bi < 0) continue;
-        // 合并映射：手指等并入手，ID 用合并后的 effectiveIndex
+      const addPixel = (bi0: number, o: number, p: number) => {
+        let bi = bi0;
+        // 合并映射：手指等并入手
         if (merge) bi = merge.effectiveIndex[bi] ?? bi;
-        if (g.colorPixels[o + 3] <= 8) continue; // 透明跳过
         let e = perBone.get(bi);
         if (!e) {
           e = { rgba: new Uint8ClampedArray(W * H * 4), mask: new Uint8Array(W * H), count: 0 };
@@ -527,6 +511,13 @@ export function splitSixParts(
         e.rgba[o + 1] = g.colorPixels[o + 1];
         e.rgba[o + 2] = g.colorPixels[o + 2];
         e.rgba[o + 3] = 255;
+      };
+      for (let p = 0; p < W * H; p++) {
+        const o = p * 4;
+        const bones = decodeBones(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
+        if (bones.length === 0) continue;
+        if (g.colorPixels[o + 3] <= 8) continue; // 透明跳过
+        for (const bi of bones) addPixel(bi, o, p);
       }
 
       // 每 bone 裁剪（与 splitByBoneId 同逻辑）
