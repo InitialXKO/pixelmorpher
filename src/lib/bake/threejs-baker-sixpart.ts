@@ -16,9 +16,19 @@ import {
   type BoneGranularity,
 } from './threejs-baker-twopass';
 import type { BakeOptions } from './threejs-baker';
+import {
+  analyzeTopology,
+  type PartName,
+  type TopoBone,
+  type TopologyResult,
+} from './bone-topology';
 
 export type SixPartName = 'head' | 'torso' | 'armL' | 'armR' | 'legL' | 'legR';
 export const SIX_PARTS: SixPartName[] = ['head', 'torso', 'armL', 'armR', 'legL', 'legR'];
+/** 全部件名（含尾巴/道具），拓扑驱动 */
+export type { PartName } from './bone-topology';
+/** 全部部件（含尾巴/道具） */
+export const ALL_PARTS: PartName[] = [...SIX_PARTS, 'tail', 'props'];
 
 export const SIX_PART_LABEL: Record<SixPartName, string> = {
   head: '头',
@@ -27,6 +37,12 @@ export const SIX_PART_LABEL: Record<SixPartName, string> = {
   armR: '右臂',
   legL: '左腿',
   legR: '右腿',
+};
+/** 全部件中文名 */
+export const PART_LABEL: Record<PartName, string> = {
+  ...SIX_PART_LABEL,
+  tail: '尾巴',
+  props: '道具',
 };
 
 // ---- bone 名 → 部件 ----
@@ -65,7 +81,7 @@ export function assignBoneToPart(
 
 // ---- 烘焙数据类型 ----
 export interface SixPartGroup {
-  part: SixPartName;
+  part: PartName;
   direction: number;
   colorPixels: Uint8ClampedArray;
   /** 块内局部 bone ID（0,1,2…，见 partBoneMap） */
@@ -77,7 +93,7 @@ export interface SixPartBakeData {
   /** 48 组：6 部件 × 8 方向 */
   groups: SixPartGroup[];
   /** 部件 → 局部 ID → 全局 bone index */
-  partBoneMap: Record<SixPartName, number[]>;
+  partBoneMap: Record<PartName, number[]>;
   width: number;
   height: number;
   normalization: { center: { x: number; y: number; z: number }; scale: number };
@@ -100,6 +116,53 @@ interface BakedMesh {
   material: THREE.Material | null; // 原材质（取色用）
   /** 每顶点主导 bone 的全局 index（-1=无） */
   vertBone: Int32Array;
+}
+
+/**
+ * 统计每 bone 的蒙皮权重和（遍历所有 SkinnedMesh）。
+ * 非蒙皮 Mesh 若刚性挂在 bone 下，给该 bone 记 1（视为有效）。
+ */
+function computeBoneWeightSums(
+  model: THREE.Object3D,
+  bones: THREE.Bone[],
+  indexByBone: Map<THREE.Bone, number>,
+): number[] {
+  const sums = new Array<number>(bones.length).fill(0);
+  model.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const geo = mesh.geometry;
+    const sm = mesh as THREE.SkinnedMesh;
+    if (sm.isSkinnedMesh && geo.getAttribute('skinIndex')) {
+      const skinIndex = geo.getAttribute('skinIndex') as THREE.BufferAttribute;
+      const skinWeight = geo.getAttribute('skinWeight') as THREE.BufferAttribute;
+      const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+      const skeleton = sm.skeleton;
+      for (let v = 0; v < pos.count; v++) {
+        for (let j = 0; j < 4; j++) {
+          const w = skinWeight.getComponent(v, j);
+          if (w <= 0) continue;
+          const jointIdx = Math.round(skinIndex.getComponent(v, j));
+          const bone = skeleton.bones[jointIdx];
+          const gi = bone ? (indexByBone.get(bone) ?? -1) : -1;
+          if (gi >= 0) sums[gi] += w;
+        }
+      }
+    } else {
+      // 刚性挂载：找最近 bone 祖先
+      let p: THREE.Object3D | null = mesh.parent;
+      while (p) {
+        const b = p as THREE.Bone;
+        if (b.isBone) {
+          const gi = indexByBone.get(b);
+          if (gi !== undefined) sums[gi] += 1;
+          break;
+        }
+        p = p.parent;
+      }
+    }
+  });
+  return sums;
 }
 
 /**
@@ -198,14 +261,14 @@ interface PartTriangles {
  */
 function groupTrianglesByPart(
   baked: BakedMesh,
-  boneToPart: (SixPartName | null)[],
-): Map<SixPartName, PartTriangles> {
+  boneToPart: (PartName | null)[],
+): Map<PartName, PartTriangles> {
   const geo = baked.geometry;
   const index = geo.getIndex();
   const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
   const triCount = index ? index.count / 3 : Math.floor(posAttr.count / 3);
-  const result = new Map<SixPartName, PartTriangles>();
-  for (const p of SIX_PARTS) result.set(p, { tris: [], triBone: [] });
+  const result = new Map<PartName, PartTriangles>();
+  for (const p of ALL_PARTS) result.set(p, { tris: [], triBone: [] });
 
   for (let t = 0; t < triCount; t++) {
     const a = index ? index.getX(t * 3) : t * 3;
@@ -378,7 +441,7 @@ function addCaps(
 
 // ---- 部件几何构建 ----
 interface BuiltPart {
-  part: SixPartName;
+  part: PartName;
   /** 静态几何（模型空间，未归一化），含封盖 */
   geometry: THREE.BufferGeometry;
   /** 每顶点全局 bone index（封盖顶点已填） */
@@ -396,8 +459,8 @@ interface BuiltPart {
  */
 function buildPartGeometry(
   bakedMeshes: BakedMesh[],
-  part: SixPartName,
-  boneToPart: (SixPartName | null)[],
+  part: PartName,
+  boneToPart: (PartName | null)[],
   bones: THREE.Bone[],
 ): BuiltPart | null {
   const positions: number[] = [];
@@ -536,6 +599,63 @@ function makeGradientMap(steps: number): THREE.DataTexture {
   return tex;
 }
 
+/** 拓扑分析用的轻量 bone 信息 */
+export interface TopoParsedBone {
+  index: number;
+  name: string;
+  parentIndex: number | null;
+  worldPos: { x: number; y: number; z: number };
+  weightSum: number;
+}
+
+/**
+ * 轻量解析模型并做拓扑分析（不创建 WebGL 上下文、不渲染）。
+ * 用于烘焙前的骨骼面板：显示拓扑结果（十字/髋部/手掌）+ 手动合并。
+ */
+export async function parseModelTopology(
+  input: string | ArrayBuffer,
+): Promise<{ bones: TopoParsedBone[]; topology: TopologyResult }> {
+  if (typeof window === 'undefined') {
+    throw new Error('parseModelTopology 仅支持浏览器环境');
+  }
+  const loader = new GLTFLoader();
+  const gltf =
+    typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
+  const model = gltf.scene;
+  model.updateMatrixWorld(true);
+
+  const bones: THREE.Bone[] = [];
+  const indexByBone = new Map<THREE.Bone, number>();
+  model.traverse((o) => {
+    const b = o as THREE.Bone;
+    if (b.isBone) { indexByBone.set(b, bones.length); bones.push(b); }
+  });
+  if (bones.length === 0) throw new Error('模型中没有找到骨骼 (Bone)');
+  const parentIndex = bones.map((b) => {
+    const p = b.parent as THREE.Bone | null;
+    return p && p.isBone && indexByBone.has(p) ? indexByBone.get(p)! : null;
+  });
+  const bindPos = bones.map((b) => {
+    const v = new THREE.Vector3();
+    b.getWorldPosition(v);
+    return v;
+  });
+  const weightSums = computeBoneWeightSums(model, bones, indexByBone);
+
+  const topoBones: TopoBone[] = bones.map((b, i) => ({
+    index: i,
+    name: b.name || `bone_${i}`,
+    parentIndex: parentIndex[i],
+    worldPos: { x: bindPos[i].x, y: bindPos[i].y, z: bindPos[i].z },
+    weightSum: weightSums[i],
+  }));
+  const topology = analyzeTopology(topoBones);
+  return {
+    bones: topoBones,
+    topology,
+  };
+}
+
 /**
  * 六部件烘焙。
  * 每部件独立场景：8 方向 ×（颜色 + 块内ID）= 96 遍。无双遍（无遮挡）。
@@ -589,10 +709,23 @@ export async function bakeSixParts(
       return v;
     });
 
-    // bone → 部件
-    const boneToPart: (SixPartName | null)[] = bones.map((b, i) =>
-      assignBoneToPart(b.name || '', bindPos[i].x),
-    );
+    // bone → 部件（拓扑驱动，失败时回退名字匹配）
+    const weightSums = computeBoneWeightSums(model, bones, indexByBone);
+    const topoBones: TopoBone[] = bones.map((b, i) => ({
+      index: i,
+      name: b.name || `bone_${i}`,
+      parentIndex: parentIndex[i],
+      worldPos: { x: bindPos[i].x, y: bindPos[i].y, z: bindPos[i].z },
+      weightSum: weightSums[i],
+    }));
+    const topology: TopologyResult = analyzeTopology(topoBones);
+    let boneToPart: (PartName | null)[];
+    if (topology.cross !== null) {
+      boneToPart = topology.boneToPart;
+    } else {
+      // 拓扑失败，回退名字匹配
+      boneToPart = bones.map((b, i) => assignBoneToPart(b.name || '', bindPos[i].x));
+    }
 
     // ---- 蒙皮烘焙为静态 ----
     const bakedMeshes: BakedMesh[] = [];
@@ -607,8 +740,8 @@ export async function bakeSixParts(
     if (bakedMeshes.length === 0) throw new Error('模型中没有找到 Mesh');
 
     // ---- 构建 6 部件 ----
-    const parts = new Map<SixPartName, BuiltPart>();
-    for (const p of SIX_PARTS) {
+    const parts = new Map<PartName, BuiltPart>();
+    for (const p of ALL_PARTS) {
       const built = buildPartGeometry(bakedMeshes, p, boneToPart, bones);
       if (built) parts.set(p, built);
     }
@@ -671,7 +804,7 @@ export async function bakeSixParts(
     };
 
     const groups: SixPartGroup[] = [];
-    const partBoneMap = {} as Record<SixPartName, number[]>;
+    const partBoneMap = {} as Record<PartName, number[]>;
     const total = parts.size * 8 * 2;
     let done = 0;
 

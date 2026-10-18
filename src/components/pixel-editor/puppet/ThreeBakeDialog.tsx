@@ -36,11 +36,13 @@ import { useProjectStore } from '@/lib/store';
 import BonePicker3D from './BonePicker3D';
 import {
   bakeSixParts,
-  SIX_PARTS,
-  SIX_PART_LABEL,
+  ALL_PARTS,
+  PART_LABEL,
+  parseModelTopology,
   type SixPartBakeData,
-  type SixPartName,
+  type PartName,
 } from '@/lib/bake/threejs-baker-sixpart';
+import type { TopologyResult } from '@/lib/bake/bone-topology';
 
 const SAMPLE_URL = 'https://threejs.org/examples/models/gltf/Xbot.glb';
 
@@ -386,6 +388,7 @@ interface BoneMergePanelProps {
  */
 function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesChange, onBake, baking }: BoneMergePanelProps) {
   const [bones, setBones] = useState<ParsedBoneInfo[] | null>(null);
+  const [topology, setTopology] = useState<TopologyResult | null>(null);
   const [parsing, setParsing] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
   const [manualMerges, setManualMerges] = useState<Map<number, number>>(new Map());
@@ -403,6 +406,13 @@ function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesC
       }
       const parsed = await parseModelBones(inp);
       setBones(parsed);
+      // 拓扑分析（不依赖骨骼名）
+      try {
+        const topo = await parseModelTopology(inp);
+        setTopology(topo.topology);
+      } catch {
+        setTopology(null);
+      }
       setManualMerges(new Map());
       setManualUnmerges(new Set());
       setSelected(new Set());
@@ -607,6 +617,23 @@ function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesC
           重新解析
         </button>
       </div>
+      {topology && (
+        <div className="mb-1 rounded bg-[#0d0d1f] px-2 py-1 text-[10px] text-gray-500">
+          拓扑：十字
+          <span className="text-cyan-400">{topology.cross !== null ? bones[topology.cross]?.name ?? topology.cross : '未找到'}</span>
+          {' / '}髋部
+          <span className="text-cyan-400">{topology.hipFork !== null ? bones[topology.hipFork]?.name ?? topology.hipFork : '未找到'}</span>
+          {' / '}手掌
+          <span className="text-cyan-400">
+            {topology.handL !== null ? bones[topology.handL]?.name ?? topology.handL : '无'}({topology.fingersL.length}指)
+            {' / '}
+            {topology.handR !== null ? bones[topology.handR]?.name ?? topology.handR : '无'}({topology.fingersR.length}指)
+          </span>
+          {topology.props.length > 0 && (
+            <span> / 道具<span className="text-amber-400">{topology.props.length}</span></span>
+          )}
+        </div>
+      )}
       {expanded && (
         <>
           <div className="mb-1 flex flex-wrap items-center gap-1">
@@ -932,10 +959,10 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         });
 
   /** 六部件模式：部件 → 8 方向缩略图 */
-  const sixPartThumbs: { part: SixPartName; thumbs: BakeResult[] }[] | null =
+  const sixPartThumbs: { part: PartName; thumbs: BakeResult[] }[] | null =
     sixPart == null
       ? null
-      : SIX_PARTS.filter((p) => sixPart.groups.some((g) => g.part === p)).map((p) => ({
+      : ALL_PARTS.filter((p) => sixPart.groups.some((g) => g.part === p)).map((p) => ({
           part: p,
           thumbs: ([0, 1, 2, 3, 4, 5, 6, 7] as const).map((d) => {
             const g = sixPart.groups.find((x) => x.part === p && x.direction === d)!;
@@ -1152,7 +1179,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             </div>
             {sixPartThumbs.map(({ part, thumbs }) => (
               <div key={part} className="mb-2">
-                <div className="mb-1 text-[10px] text-gray-500">{SIX_PART_LABEL[part]}</div>
+                <div className="mb-1 text-[10px] text-gray-500">{PART_LABEL[part]}</div>
                 <div className="grid grid-cols-8 gap-2">
                   {thumbs.map((r) => (
                     <div key={r.direction} className="flex flex-col items-center gap-1">

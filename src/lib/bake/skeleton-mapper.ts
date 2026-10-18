@@ -442,8 +442,8 @@ export function mapBonesToNodes(
 
 // ---- 六部件 2D 拆分 ----
 
-import type { SixPartBakeData, SixPartName } from './threejs-baker-sixpart';
-import { SIX_PARTS } from './threejs-baker-sixpart';
+import type { SixPartBakeData } from './threejs-baker-sixpart';
+import { ALL_PARTS } from './threejs-baker-sixpart';
 
 /**
  * 按六部件的块内 ID 拆分。
@@ -477,7 +477,7 @@ export function splitSixParts(
     });
   }
 
-  for (const part of SIX_PARTS) {
+  for (const part of ALL_PARTS) {
     const localToGlobal = bake.partBoneMap[part];
     if (!localToGlobal || localToGlobal.length === 0) continue;
     // 局部 ID → 全局 bone 的有效色表（容错解码用）
