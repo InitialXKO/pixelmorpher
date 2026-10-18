@@ -97,6 +97,8 @@ export interface SixPartBakeData {
   groups: SixPartGroup[];
   /** 部件 → 局部 ID → 全局 bone index */
   partBoneMap: Record<PartName, number[]>;
+  /** 拓扑骨骼归属：boneIndex → PartName（2D split 用此过滤跨部件泄漏） */
+  boneToPart: (PartName | null)[];
   width: number;
   height: number;
   normalization: { center: { x: number; y: number; z: number }; scale: number };
@@ -1172,6 +1174,7 @@ export async function bakeSixParts(
       bones: boneInfos,
       groups,
       partBoneMap,
+      boneToPart,
       width: size,
       height: size,
       normalization: { center: { x: center.x, y: center.y, z: center.z }, scale },

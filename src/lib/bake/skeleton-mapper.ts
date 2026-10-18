@@ -483,11 +483,15 @@ export function splitSixParts(
     const localToGlobal = bake.partBoneMap[part];
     if (!localToGlobal || localToGlobal.length === 0) continue;
     // 位掩码解码：局部索引位 → 全局 bone（[] = 背景）
+    // 拓扑过滤：只保留拓扑归属本部件的 bone（防3D分三角泄漏，如盆骨三角被分到腿部）
+    const boneToPart = bake.boneToPart;
     const decodeBones = (r: number, g: number, b: number): number[] => {
       const out: number[] = [];
       for (const li of decodeBoneMask(r, g, b)) {
         const gi = localToGlobal[li];
-        if (gi !== undefined) out.push(gi);
+        if (gi === undefined) continue;
+        if (boneToPart && boneToPart[gi] !== part) continue;
+        out.push(gi);
       }
       return out;
     };
