@@ -531,8 +531,8 @@ export function decodeBoneMask(r: number, g: number, b: number): number[] {
     const ch = channels[c];
     if (ch < 0.5) continue;
     const iv = Math.round(ch);
-    if (Math.abs(ch - iv) < 0.25) {
-      // 精确值：二进制分解
+    if (Math.abs(ch - iv) < 0.4) {
+      // 精确值（容差 0.4，应对 GPU 量化噪声）：二进制分解
       for (let i = 0; i < 8; i++) {
         if (iv & (1 << i)) bones.push(c * 8 + i);
       }
