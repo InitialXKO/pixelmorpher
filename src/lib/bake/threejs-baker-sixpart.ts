@@ -87,6 +87,8 @@ export interface SixPartGroup {
   colorPixels: Uint8ClampedArray;
   /** 块内局部 bone ID（0,1,2…，见 partBoneMap） */
   idPixels: Uint8ClampedArray;
+  /** 相机半宽（归一化单位），用于跨部件尺寸归一化 */
+  cameraHalf: number;
 }
 
 export interface SixPartBakeData {
@@ -1127,7 +1129,7 @@ export async function bakeSixParts(
         onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° ID`);
         await new Promise((r) => setTimeout(r, 0));
 
-        groups.push({ part: pname, direction: ((d + 6) % 8), colorPixels, idPixels });
+        groups.push({ part: pname, direction: ((d + 6) % 8), colorPixels, idPixels, cameraHalf: half });
         renderer.setRenderTarget(null);
       }
 
