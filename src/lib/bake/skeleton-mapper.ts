@@ -165,11 +165,15 @@ export function splitByBoneId(
       let y0 = Math.max(0, Math.floor(minY - pad2));
       let x1 = Math.min(W, Math.ceil(maxX + pad2));
       let y1 = Math.min(H, Math.ceil(maxY + pad2));
-      // 确保关节在裁剪框内
-      x0 = Math.min(x0, Math.floor(jx));
-      y0 = Math.min(y0, Math.floor(jy));
-      x1 = Math.max(x1, Math.ceil(jx) + 1);
-      y1 = Math.max(y1, Math.ceil(jy) + 1);
+      // 确保关节在裁剪框内（若远离 mask 超 20px 则不强制）
+      const jxC2 = Math.max(x0, Math.min(x1 - 1, jx));
+      const jyC2 = Math.max(y0, Math.min(y1 - 1, jy));
+      if (Math.hypot(jx - jxC2, jy - jyC2) <= 20) {
+        x0 = Math.min(x0, Math.floor(jx));
+        y0 = Math.min(y0, Math.floor(jy));
+        x1 = Math.max(x1, Math.ceil(jx) + 1);
+        y1 = Math.max(y1, Math.ceil(jy) + 1);
+      }
       const cw = x1 - x0;
       const ch = y1 - y0;
 
@@ -546,11 +550,16 @@ export function splitSixParts(
         let y0 = Math.max(0, Math.floor(minY - pad));
         let x1 = Math.min(W, Math.ceil(maxX + pad));
         let y1 = Math.min(H, Math.ceil(maxY + pad));
-        // 确保关节在裁剪框内
-        x0 = Math.min(x0, Math.floor(jx));
-        y0 = Math.min(y0, Math.floor(jy));
-        x1 = Math.max(x1, Math.ceil(jx) + 1);
-        y1 = Math.max(y1, Math.ceil(jy) + 1);
+        // 确保关节在裁剪框内（若关节远离 mask 超过 20px 则不强制，避免拉出大片空白）
+        const jxC = Math.max(x0, Math.min(x1 - 1, jx));
+        const jyC = Math.max(y0, Math.min(y1 - 1, jy));
+        const jDist = Math.hypot(jx - jxC, jy - jyC);
+        if (jDist <= 20) {
+          x0 = Math.min(x0, Math.floor(jx));
+          y0 = Math.min(y0, Math.floor(jy));
+          x1 = Math.max(x1, Math.ceil(jx) + 1);
+          y1 = Math.max(y1, Math.ceil(jy) + 1);
+        }
         const cw = x1 - x0;
         const ch = y1 - y0;
 
