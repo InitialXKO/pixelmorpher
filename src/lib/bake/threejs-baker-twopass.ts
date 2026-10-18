@@ -38,10 +38,167 @@ export interface TwoPassBakeData {
   width: number;
   height: number;
   normalization: { center: { x: number; y: number; z: number }; scale: number };
+  /** bone 合并信息（粗粒度下有效 bone 数 < 全部 bone 数） */
+  merge: BoneMergeInfo;
 }
 
 export interface TwoPassBakeOptions extends BakeOptions {
   onProgress?: (done: number, total: number, label: string) => void;
+  /** 拆分粒度：coarse（默认，合并手指/脚趾/小 bone）| fine（一个 bone 一个节点，调试用） */
+  granularity?: BoneGranularity;
+  /** 小 bone 合并阈值（顶点数，粗粒度下 leaf bone 小于此值并入父 bone），默认 50 */
+  smallBoneThreshold?: number;
+}
+
+/** 拆分粒度 */
+export type BoneGranularity = 'coarse' | 'fine';
+
+/** bone 合并信息：boneIndex → 有效 boneIndex（合并目标） */
+export interface BoneMergeInfo {
+  /** boneIndex → effectiveBoneIndex（未合并则为自身） */
+  effectiveIndex: number[];
+  /** 去重后的有效 bone 索引（即 ID 图中实际出现的） */
+  effectiveBones: number[];
+  /** 合并原因（调试用）：boneIndex → 说明 */
+  reasons: Record<number, string>;
+}
+
+const FINGER_TOE_RE = /finger|thumb|index|middle|ring|pinky|little|digit|toe/i;
+const HAND_FOOT_RE = /hand|foot|wrist|ankle/i;
+
+/**
+ * 计算 bone 合并映射。
+ * 粗粒度规则：
+ *  1. 手指/脚趾 bone → 并入最近的手/脚祖先（找不到则并入直接父级）；
+ *  2. 顶点数 < 阈值的 leaf bone → 并入父 bone（root 永不合并）。
+ * 细粒度：恒等映射。
+ */
+export function computeBoneMerge(
+  boneNames: string[],
+  parentIndex: (number | null)[],
+  vertexCounts: number[],
+  granularity: BoneGranularity,
+  smallThreshold: number,
+): BoneMergeInfo {
+  const n = boneNames.length;
+  const effectiveIndex = Array.from({ length: n }, (_, i) => i);
+  const reasons: Record<number, string> = {};
+  if (granularity === 'fine') {
+    return { effectiveIndex, effectiveBones: effectiveIndex.slice(), reasons };
+  }
+
+  const directTarget = Array.from({ length: n }, (_, i) => i);
+  const childrenOf = (i: number): number[] => {
+    const out: number[] = [];
+    for (let j = 0; j < n; j++) if (parentIndex[j] === i) out.push(j);
+    return out;
+  };
+  const isRoot = (i: number): boolean => parentIndex[i] === null;
+
+  // 规则 1：手指/脚趾 → 手/脚
+  for (let i = 0; i < n; i++) {
+    if (isRoot(i)) continue;
+    if (!FINGER_TOE_RE.test(boneNames[i])) continue;
+    // 向上找手/脚祖先（排除自己这种手指名）
+    let p = parentIndex[i];
+    let target: number | null = null;
+    while (p !== null && p !== undefined) {
+      if (HAND_FOOT_RE.test(boneNames[p]) && !FINGER_TOE_RE.test(boneNames[p])) {
+        target = p;
+        break;
+      }
+      p = parentIndex[p];
+    }
+    if (target === null) target = parentIndex[i]!;
+    if (target !== i) {
+      directTarget[i] = target;
+      reasons[i] = `手指/脚趾并入 ${boneNames[target]}`;
+    }
+  }
+
+  // 规则 2：小 leaf bone → 父 bone（自底向上一遍；用原始层级判 leaf）
+  const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => {
+    // 深度大的先（叶子优先）
+    let da = 0, db = 0;
+    let pa = parentIndex[a], pb = parentIndex[b];
+    while (pa !== null && pa !== undefined) { da++; pa = parentIndex[pa]; }
+    while (pb !== null && pb !== undefined) { db++; pb = parentIndex[pb]; }
+    return db - da;
+  });
+  for (const i of order) {
+    if (directTarget[i] !== i) continue; // 已被规则 1 合并
+    if (isRoot(i)) continue;
+    if (childrenOf(i).length > 0) continue; // 非叶子
+    if ((vertexCounts[i] ?? 0) >= smallThreshold) continue;
+    const p = parentIndex[i]!;
+    directTarget[i] = p;
+    reasons[i] = `小 bone（${vertexCounts[i] ?? 0} 顶点 < ${smallThreshold}）并入 ${boneNames[p]}`;
+  }
+
+  // 传递闭包：effective[i] = directTarget 链的终点
+  const resolve = (i: number): number => {
+    let cur = i;
+    const seen = new Set<number>([i]);
+    while (directTarget[cur] !== cur) {
+      cur = directTarget[cur];
+      if (seen.has(cur)) break; // 防环（理论上不会发生，合并只向上）
+      seen.add(cur);
+    }
+    return cur;
+  };
+  for (let i = 0; i < n; i++) effectiveIndex[i] = resolve(i);
+  const effectiveBones = [...new Set(effectiveIndex)].sort((a, b) => a - b);
+  return { effectiveIndex, effectiveBones, reasons };
+}
+
+/**
+ * 统计每 bone 的主导顶点数（与 assignBoneVertexColors 同一判定逻辑）。
+ * SkinnedMesh：skinIndices 最大权重；普通 Mesh：整 mesh 计入最近 bone。
+ */
+function countBoneVertices(
+  model: THREE.Object3D,
+  indexByBone: Map<THREE.Bone, number>,
+  boneBindPos: THREE.Vector3[],
+  boneCount: number,
+): number[] {
+  const counts = new Array<number>(boneCount).fill(0);
+  model.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const geo = mesh.geometry;
+    const sm = mesh as THREE.SkinnedMesh;
+    if (sm.isSkinnedMesh && geo.getAttribute('skinIndex')) {
+      const skinIndex = geo.getAttribute('skinIndex') as THREE.BufferAttribute;
+      const skinWeight = geo.getAttribute('skinWeight') as THREE.BufferAttribute;
+      const pos = geo.getAttribute('position');
+      const skeleton = sm.skeleton;
+      for (let v = 0; v < pos.count; v++) {
+        let bestJ = 0;
+        let bestW = -Infinity;
+        for (let j = 0; j < 4; j++) {
+          const w = skinWeight.getComponent(v, j);
+          if (w > bestW) { bestW = w; bestJ = j; }
+        }
+        const jointIdx = Math.round(skinIndex.getComponent(v, bestJ));
+        const bone = skeleton.bones[jointIdx];
+        const gi = bone ? (indexByBone.get(bone) ?? -1) : -1;
+        if (gi >= 0) counts[gi]++;
+      }
+    } else {
+      geo.computeBoundingBox();
+      const c = new THREE.Vector3();
+      geo.boundingBox!.getCenter(c);
+      let best = 0;
+      let bestD = Infinity;
+      for (let i = 0; i < boneBindPos.length; i++) {
+        const d = c.distanceToSquared(boneBindPos[i]);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      const pos = geo.getAttribute('position');
+      counts[best] += pos.count;
+    }
+  });
+  return counts;
 }
 
 /** bone index → RGB（+1 偏移，0 保留给背景） */
@@ -82,11 +239,13 @@ function collectBones(scene: THREE.Object3D): {
  * 给 mesh 加逐顶点 bone ID 颜色属性（ID 图用）。
  * SkinnedMesh：按 skinIndices 最大权重的主导 bone。
  * 普通 Mesh：按质心找最近 bone，全顶点同色。
+ * ID 颜色使用合并后的有效 bone 索引（effectiveIndex），不是原始 bone。
  */
 function assignBoneVertexColors(
   mesh: THREE.Mesh,
   indexByBone: Map<THREE.Bone, number>,
   boneBindPos: THREE.Vector3[],
+  effectiveIndex: number[],
 ): void {
   const geo = mesh.geometry;
   const pos = geo.getAttribute('position');
@@ -107,7 +266,9 @@ function assignBoneVertexColors(
       const jointIdx = Math.round(skinIndex.getComponent(v, bestJ));
       const bone = skeleton.bones[jointIdx];
       const gi = bone ? (indexByBone.get(bone) ?? -1) : -1;
-      const [r, g, b] = gi >= 0 ? encodeBoneId(gi) : [0, 0, 0];
+      // 用合并后的有效 bone 染 ID（手指等并入手/脚）
+      const ei = gi >= 0 ? (effectiveIndex[gi] ?? gi) : -1;
+      const [r, g, b] = ei >= 0 ? encodeBoneId(ei) : [0, 0, 0];
       colors[v * 3] = r / 255;
       colors[v * 3 + 1] = g / 255;
       colors[v * 3 + 2] = b / 255;
@@ -124,7 +285,8 @@ function assignBoneVertexColors(
       const d = c.distanceToSquared(boneBindPos[i]);
       if (d < bestD) { bestD = d; best = i; }
     }
-    const [r, g, b] = encodeBoneId(best);
+    const ei = effectiveIndex[best] ?? best;
+    const [r, g, b] = encodeBoneId(ei);
     for (let v = 0; v < pos.count; v++) {
       colors[v * 3] = r / 255;
       colors[v * 3 + 1] = g / 255;
@@ -184,6 +346,8 @@ export async function bakeModelTwoPass(
   const size = options.size ?? 128;
   const toonSteps = options.toonSteps ?? 3;
   const onProgress = options.onProgress;
+  const granularity: BoneGranularity = options.granularity ?? 'coarse';
+  const smallBoneThreshold = options.smallBoneThreshold ?? 50;
 
   if (typeof window === 'undefined') {
     throw new Error('bakeModelTwoPass 仅支持浏览器环境(WebGL)');
@@ -223,10 +387,18 @@ export async function bakeModelTwoPass(
       return v;
     });
 
-    // ---- 逐顶点 bone ID 颜色 ----
+    // ---- 逐顶点 bone ID 颜色（用合并后的有效 bone 染） ----
+    const vertexCounts = countBoneVertices(model, indexByBone, bindPos, bones.length);
+    const merge = computeBoneMerge(
+      bones.map((b) => b.name || ''),
+      parentIndex,
+      vertexCounts,
+      granularity,
+      smallBoneThreshold,
+    );
     model.traverse((o) => {
       const m = o as THREE.Mesh;
-      if (m.isMesh) assignBoneVertexColors(m, indexByBone, bindPos);
+      if (m.isMesh) assignBoneVertexColors(m, indexByBone, bindPos, merge.effectiveIndex);
     });
 
     // ---- 归一化 ----
@@ -373,6 +545,7 @@ export async function bakeModelTwoPass(
         center: { x: center.x, y: center.y, z: center.z },
         scale,
       },
+      merge,
     };
   } finally {
     renderer.dispose();

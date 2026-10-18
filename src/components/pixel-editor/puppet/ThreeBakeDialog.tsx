@@ -361,6 +361,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [fileData, setFileData] = useState<ArrayBuffer | null>(null);
   const [size, setSize] = useState(64);
   const [paletteSize, setPaletteSize] = useState(16);
+  const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
 
   const [baking, setBaking] = useState(false);
   const [progress, setProgress] = useState('');
@@ -407,6 +408,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       const t0 = performance.now();
       const data = await bakeModelTwoPass(inp, {
         size,
+        granularity,
         onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
       });
       setTotalMs(performance.now() - t0);
@@ -422,7 +424,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize]);
+  }, [fileData, url, size, paletteSize, granularity]);
 
   const handleRebakeDone = useCallback(
     (boneIndex: number, boneName: string, results: BakeResult[]) => {
@@ -581,6 +583,17 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                 <option value={8}>8 色</option>
                 <option value={16}>16 色</option>
                 <option value={32}>32 色</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-1" title="粗：手指/脚趾/小骨骼合并，约15个节点；细：一个骨骼一个节点（调试用）">
+              拆分粒度
+              <select
+                value={granularity}
+                onChange={(e) => setGranularity(e.target.value as 'coarse' | 'fine')}
+                className="h-6 rounded border border-[#2a2a4a] bg-[#0d0d1f] px-1 text-gray-300"
+              >
+                <option value="coarse">粗（合并）</option>
+                <option value="fine">细（调试）</option>
               </select>
             </label>
             <button

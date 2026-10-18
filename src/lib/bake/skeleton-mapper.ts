@@ -92,11 +92,20 @@ export function splitByBoneId(
 
   const result = new Map<number, ProcessedBone>();
   // boneIndex → ProcessedBone（累积 8 方向）
+  // parentIndex 重映射到有效父 bone（合并后父级可能被并掉，如手指的父是另一节手指）
+  const merge = bake.merge;
   for (const b of bake.bones) {
+    let pIdx = b.parentIndex;
+    if (merge && pIdx !== null && pIdx !== undefined) {
+      const effP = merge.effectiveIndex[pIdx] ?? pIdx;
+      const effSelf = merge.effectiveIndex[b.index] ?? b.index;
+      // 有效父不能是自己（防环）；若父被并入自己，则视为无父（根）
+      pIdx = effP === effSelf ? null : effP;
+    }
     result.set(b.index, {
       boneIndex: b.index,
       boneName: b.name,
-      parentIndex: b.parentIndex,
+      parentIndex: pIdx,
       directions: [],
     });
   }
