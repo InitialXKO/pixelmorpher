@@ -475,6 +475,8 @@ function buildPartGeometry(
 
   // 部件质心（封盖朝向用）：先收集再算
   const tmpCentroid = new THREE.Vector3();
+  // 材质分组用：第一个封盖索引起始（-1 = 无封盖）
+  let capIndexStart = -1;
 
   for (const bm of bakedMeshes) {
     const grouped = groupTrianglesByPart(bm, boneToPart);
@@ -542,6 +544,7 @@ function buildPartGeometry(
         if (n > capBest) { capBest = n; capBone = bi; }
       }
       const useUv = hasUv.some(Boolean);
+      if (capIndexStart < 0) capIndexStart = indices.length; // 记录第一个封盖起始
       addCaps(
         positions,
         useUv ? uvs : null,
@@ -569,6 +572,11 @@ function buildPartGeometry(
   }
   geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
   geo.setIndex(indices);
+  // 材质分组：原几何（有纹理）vs 封盖（无纹理，纯顶点色）
+  if (capIndexStart >= 0 && capIndexStart < indices.length) {
+    geo.addGroup(0, capIndexStart, 0);
+    geo.addGroup(capIndexStart, indices.length - capIndexStart, 1);
+  }
   geo.computeVertexNormals();
 
   // 部件内 bone 列表（按首次出现）
@@ -818,9 +826,15 @@ export async function bakeSixParts(
         color: new THREE.Color(0xffffff),
         map: bp.map ?? undefined,
         gradientMap,
-        vertexColors: true, // 封盖色走顶点色
+        vertexColors: true,
       });
-      const mesh = new THREE.Mesh(bp.geometry, toonMat);
+      // 封盖材质：无纹理，纯顶点色（避免纹理×封盖色）
+      const capMat = new THREE.MeshToonMaterial({
+        color: new THREE.Color(0xffffff),
+        gradientMap,
+        vertexColors: true,
+      });
+      const mesh = new THREE.Mesh(bp.geometry, [toonMat, capMat]);
       mesh.frustumCulled = false;
       // 应用归一化：geometry 是模型空间，移到 group 里做位移缩放
       const inner = new THREE.Group();
@@ -923,6 +937,7 @@ export async function bakeSixParts(
       }
 
       toonMat.dispose();
+      capMat.dispose();
       idMat.dispose();
       idGeo.dispose();
     }

@@ -125,6 +125,8 @@ export function splitByBoneId(
         src = back.colorPixels;
       }
       if (bi < 0) continue;
+      // 合并映射：手指等并入手，ID 用合并后的 effectiveIndex
+      if (merge) bi = merge.effectiveIndex[bi] ?? bi;
       // 透明像素跳过（颜色无意义）
       if (src[o + 3] <= 8) continue;
       let e = perBone.get(bi);
@@ -508,8 +510,10 @@ export function splitSixParts(
       const perBone = new Map<number, { rgba: Uint8ClampedArray; mask: Uint8Array; count: number }>();
       for (let p = 0; p < W * H; p++) {
         const o = p * 4;
-        const bi = decodeRobust(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
+        let bi = decodeRobust(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
         if (bi < 0) continue;
+        // 合并映射：手指等并入手，ID 用合并后的 effectiveIndex
+        if (merge) bi = merge.effectiveIndex[bi] ?? bi;
         if (g.colorPixels[o + 3] <= 8) continue; // 透明跳过
         let e = perBone.get(bi);
         if (!e) {
