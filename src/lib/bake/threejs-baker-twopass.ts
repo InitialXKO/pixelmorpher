@@ -12,6 +12,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { BakeOptions, BakeResult } from './threejs-baker';
 import { medianCut, nearestPaletteIndex } from './threejs-baker';
+import type { TopologyResult } from './bone-topology';
+import { analyzeTopology, type TopoBone } from './bone-topology';
 
 export interface BakedBoneInfo {
   index: number;
@@ -194,6 +196,256 @@ export function computeBoneMerge(
     while (directTarget[cur] !== cur) {
       cur = directTarget[cur];
       if (seen.has(cur)) break; // 防环（理论上不会发生，合并只向上）
+      seen.add(cur);
+    }
+    return cur;
+  };
+  for (let i = 0; i < n; i++) effectiveIndex[i] = resolve(i);
+  const effectiveBones = [...new Set(effectiveIndex)].sort((a, b) => a - b);
+  return { effectiveIndex, effectiveBones, reasons, manualMerges: mm, manualUnmerges: mu };
+}
+
+/**
+ * 拓扑驱动默认合并（激进）：只在主关节处拆分。
+ * - 头链 → 1（全并入头）
+ * - 躯干链（cross→hipFork）→ 1（含脊柱多段）
+ * - 臂链 → 3（上臂/前臂/手，肩并入躯干，手指并入手）
+ * - 腿链 → 3（大腿/小腿/脚，脚趾并入脚）
+ * - 尾巴 → 躯干（默认不拆，可手动拆分）
+ * - 道具 → 各自独立
+ * 手动覆盖（优先级最高）：
+ *  - manualUnmerges：强制独立（拆分），子树跟随（传递闭包自然处理）；
+ *  - manualMerges：强制并入目标（保留给 fine 模式/兼容）。
+ * 最终标准人形：头1 + 躯干1 + 臂3×2 + 腿3×2 = 14 Nodes。
+ */
+export function computeTopologyMerge(
+  topology: TopologyResult,
+  boneNames: string[],
+  parentIndex: (number | null)[],
+  manualMerges?: Map<number, number>,
+  manualUnmerges?: Set<number>,
+): BoneMergeInfo {
+  const n = boneNames.length;
+  const effectiveIndex = Array.from({ length: n }, (_, i) => i);
+  const reasons: Record<number, string> = {};
+  const mm = manualMerges ?? new Map<number, number>();
+  const mu = manualUnmerges ?? new Set<number>();
+  const directTarget = Array.from({ length: n }, (_, i) => i);
+  const isRoot = (i: number): boolean => parentIndex[i] === null;
+  /** 明确保留为独立 Node 的 bones（不参与清理合并） */
+  const kept = new Set<number>();
+  const keep = (i: number): void => { kept.add(i); };
+
+  // 手动合并优先（fine 模式/兼容）
+  for (const [src, dst] of mm) {
+    if (src < 0 || src >= n || dst < 0 || dst >= n || src === dst) continue;
+    if (isRoot(src)) continue;
+    directTarget[src] = dst;
+    reasons[src] = `手动并入 ${boneNames[dst]}`;
+  }
+  const isManual = (i: number): boolean => directTarget[i] !== i;
+  const isSplit = (i: number): boolean => mu.has(i);
+
+  const setMerge = (src: number, dst: number, reason: string): void => {
+    if (src === dst || isRoot(src)) return;
+    if (isManual(src)) return; // 手动合并优先
+    if (isSplit(src)) return; // 手动拆分：保持独立
+    directTarget[src] = dst;
+    reasons[src] = reason;
+  };
+
+  // ---- 目标代表 ----
+  const torsoRep = topology.hipFork ?? topology.cross;
+  const headRep = topology.headRoot;
+  if (torsoRep !== null) keep(torsoRep);
+  if (headRep !== null) keep(headRep);
+
+  // ---- 头链：全并入头 ----
+  if (headRep !== null) {
+    const stack = [headRep];
+    const seen = new Set<number>();
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (seen.has(i)) continue;
+      seen.add(i);
+      for (let j = 0; j < n; j++) {
+        if (parentIndex[j] === i) {
+          // 只处理头子树内的（通过 topology.boneToPart 确认，避免串到别处）
+          if (topology.boneToPart[j] === 'head' || j === headRep) {
+            setMerge(j, headRep, `头链并入 ${boneNames[headRep]}`);
+            stack.push(j);
+          }
+        }
+      }
+    }
+  }
+
+  // ---- 躯干链：cross→hipFork 路径全并入 torsoRep ----
+  if (torsoRep !== null && topology.cross !== null) {
+    // 从 cross 沿 parent 走到 torsoRep，收集路径
+    const path = new Set<number>();
+    let cur: number | null = topology.cross;
+    const seen = new Set<number>();
+    while (cur !== null && !seen.has(cur)) {
+      seen.add(cur);
+      path.add(cur);
+      if (cur === torsoRep) break;
+      cur = parentIndex[cur];
+    }
+    for (const i of path) {
+      if (i !== torsoRep) setMerge(i, torsoRep, `脊柱并入 ${boneNames[torsoRep]}`);
+    }
+  }
+
+  // ---- 手臂：肩→躯干，链分 3 段，手指→手 ----
+  const processArm = (armRoot: number | null, hand: number | null, fingers: number[][], side: string): void => {
+    if (armRoot === null || hand === null) return;
+    // 肩（armRoot，cross 的直接子）→ 躯干
+    if (torsoRep !== null) setMerge(armRoot, torsoRep, `肩并入 ${boneNames[torsoRep]}`);
+    // 链：从 hand 沿 parent 走到 armRoot（不含 armRoot）
+    const chain: number[] = [];
+    let cur: number | null = hand;
+    const seen = new Set<number>();
+    while (cur !== null && cur !== armRoot && !seen.has(cur)) {
+      seen.add(cur);
+      chain.unshift(cur);
+      cur = parentIndex[cur];
+    }
+    // chain = [上臂, ..., 前臂, 手]，保持 3 段
+    if (chain.length > 3) {
+      const first = chain[0];
+      const secondLast = chain[chain.length - 2];
+      keep(first); keep(secondLast); keep(chain[chain.length - 1]);
+      // 中间多余的并入第一段（上臂）
+      for (let k = 1; k < chain.length - 2; k++) {
+        setMerge(chain[k], first, `臂多余段并入 ${boneNames[first]}`);
+      }
+      void secondLast;
+    } else {
+      for (const c of chain) keep(c);
+    }
+    // 手指全并入手
+    for (const finger of fingers) {
+      for (const fi of finger) {
+        setMerge(fi, hand, `手指并入 ${boneNames[hand]}`);
+      }
+    }
+  };
+  // armRoot：cross 的子中属于对应臂的那个。topology 没直接给，用 boneToPart 反推：
+  // 找到 part 为 armL/R 且 parent 为 cross（或 parent 链上经过 cross）的最顶层 bone
+  const findArmRoot = (part: 'armL' | 'armR'): number | null => {
+    if (topology.cross === null) return null;
+    for (let i = 0; i < n; i++) {
+      if (topology.boneToPart[i] !== part) continue;
+      // 沿 parent 上走到 cross，确认直接子
+      let cur: number | null = i;
+      let prev: number | null = null;
+      const seen = new Set<number>();
+      while (cur !== null && cur !== topology.cross && !seen.has(cur)) {
+        seen.add(cur);
+        prev = cur;
+        cur = parentIndex[cur];
+      }
+      if (cur === topology.cross && prev !== null) return prev;
+    }
+    return null;
+  };
+  processArm(findArmRoot('armL'), topology.handL, topology.fingersL, '左');
+  processArm(findArmRoot('armR'), topology.handR, topology.fingersR, '右');
+
+  // ---- 腿：保持 3 段 [大腿, 小腿, 脚]，脚趾→脚 ----
+  const processLeg = (legRoot: number | null, side: string): void => {
+    if (legRoot === null) return;
+    // 主链：沿最大子树（这里简化：沿第一个子走，拓扑已保证结构干净）
+    // 用 parent 链反推更稳：找到 legRoot 子树中最深的叶，走 parent 链回 legRoot
+    const childrenOf = (i: number): number[] => {
+      const out: number[] = [];
+      for (let j = 0; j < n; j++) if (parentIndex[j] === i) out.push(j);
+      return out;
+    };
+    // 找最深叶（DFS）
+    let deepest = legRoot;
+    let maxDepth = -1;
+    const dfs = (i: number, d: number): void => {
+      if (d > maxDepth) { maxDepth = d; deepest = i; }
+      for (const c of childrenOf(i)) dfs(c, d + 1);
+    };
+    dfs(legRoot, 0);
+    // 从最深叶沿 parent 走回 legRoot
+    const path: number[] = [];
+    let cur: number | null = deepest;
+    const seen = new Set<number>();
+    while (cur !== null && !seen.has(cur)) {
+      seen.add(cur);
+      path.unshift(cur);
+      if (cur === legRoot) break;
+      cur = parentIndex[cur];
+    }
+    // path = [大腿, ..., 脚, ...脚趾]，脚 = path[2]（若长度≥3），之后的全并入脚
+    if (path.length >= 3) {
+      const foot = path[2];
+      keep(path[0]); keep(path[1]); keep(foot);
+      for (let k = 3; k < path.length; k++) {
+        setMerge(path[k], foot, `脚趾并入 ${boneNames[foot]}`);
+      }
+      // path[0..2] 保持独立（大腿/小腿/脚），不合并
+      void side;
+    } else {
+      for (const c of path) keep(c);
+    }
+    // path 长度 < 3：保持原样（不合并）
+  };
+  // legRoot：hipFork 的子中属于对应腿的
+  const findLegRoot = (part: 'legL' | 'legR'): number | null => {
+    if (topology.hipFork === null) return null;
+    for (const c of (() => { const o: number[] = []; for (let j = 0; j < n; j++) if (parentIndex[j] === topology.hipFork) o.push(j); return o; })()) {
+      if (topology.boneToPart[c] === part) return c;
+    }
+    return null;
+  };
+  processLeg(findLegRoot('legL'), '左');
+  processLeg(findLegRoot('legR'), '右');
+
+  // ---- 尾巴：默认并入躯干（可手动拆分） ----
+  if (torsoRep !== null && topology.tail.length > 0) {
+    // 尾巴根：tail 中 parent 不在 tail 里的
+    const tailSet = new Set(topology.tail);
+    for (const t of topology.tail) {
+      const p = parentIndex[t];
+      if (p === null || !tailSet.has(p)) {
+        setMerge(t, torsoRep, `尾巴并入 ${boneNames[torsoRep]}（可手动拆分）`);
+      } else {
+        // 尾巴内部链：并入父级（传递到尾巴根）
+        setMerge(t, p, `尾段并入 ${boneNames[p]}`);
+      }
+    }
+  }
+
+  // ---- 道具：各自独立（不合并） ----
+  // （默认 directTarget[i] = i，已是独立）
+  for (let i = 0; i < n; i++) {
+    if (topology.boneToPart[i] === 'props') keep(i);
+  }
+
+  // ---- 清理：未明确保留的 Helper/饰品 bone，并入父级 ----
+  // （手指/脚趾/脊柱/肩/尾巴等已有明确规则；剩下的 Helper、物理骨、武器子骨等并入父级）
+  for (let i = 0; i < n; i++) {
+    if (directTarget[i] !== i) continue; // 已有合并目标
+    if (isRoot(i)) continue;
+    if (mu.has(i)) continue; // 手动拆分：保持独立
+    if (kept.has(i)) continue; // 明确保留
+    const p = parentIndex[i]!;
+    directTarget[i] = p;
+    reasons[i] = `Helper/饰品并入 ${boneNames[p]}`;
+  }
+
+  // ---- 传递闭包 ----
+  const resolve = (i: number): number => {
+    let cur = i;
+    const seen = new Set<number>([i]);
+    while (directTarget[cur] !== cur) {
+      cur = directTarget[cur];
+      if (seen.has(cur)) break;
       seen.add(cur);
     }
     return cur;
@@ -491,15 +743,39 @@ export async function bakeModelTwoPass(
 
     // ---- 逐顶点 bone ID 颜色（用合并后的有效 bone 染） ----
     const vertexCounts = countBoneVertices(model, indexByBone, bindPos, bones.length);
-    const merge = computeBoneMerge(
-      bones.map((b) => b.name || ''),
-      parentIndex,
-      vertexCounts,
-      granularity,
-      smallBoneThreshold,
-      manualMerges,
-      manualUnmerges,
-    );
+    // 拓扑驱动默认合并（激进：只拆主关节），失败时回退名字匹配
+    let merge: BoneMergeInfo;
+    try {
+      const topoBones: TopoBone[] = bones.map((b, i) => ({
+        index: i,
+        name: b.name || `bone_${i}`,
+        parentIndex: parentIndex[i],
+        worldPos: { x: bindPos[i].x, y: bindPos[i].y, z: bindPos[i].z },
+        weightSum: vertexCounts[i] ?? 0,
+      }));
+      const topology: TopologyResult = analyzeTopology(topoBones);
+      merge = topology.cross !== null
+        ? computeTopologyMerge(topology, bones.map((b) => b.name || ''), parentIndex, manualMerges, manualUnmerges)
+        : computeBoneMerge(
+            bones.map((b) => b.name || ''),
+            parentIndex,
+            vertexCounts,
+            granularity,
+            smallBoneThreshold,
+            manualMerges,
+            manualUnmerges,
+          );
+    } catch {
+      merge = computeBoneMerge(
+        bones.map((b) => b.name || ''),
+        parentIndex,
+        vertexCounts,
+        granularity,
+        smallBoneThreshold,
+        manualMerges,
+        manualUnmerges,
+      );
+    }
     model.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.isMesh) assignBoneVertexColors(m, indexByBone, bindPos, merge.effectiveIndex);

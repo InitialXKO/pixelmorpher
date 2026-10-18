@@ -12,6 +12,7 @@ import {
   BakedBoneInfo,
   BoneMergeInfo,
   computeBoneMerge,
+  computeTopologyMerge,
   encodeBoneId,
   type BoneGranularity,
 } from './threejs-baker-twopass';
@@ -773,15 +774,18 @@ export async function bakeSixParts(
         if (bi >= 0) vertexCounts[bi]++;
       }
     }
-    const merge = computeBoneMerge(
-      bones.map((b) => b.name || ''),
-      parentIndex,
-      vertexCounts,
-      granularity,
-      smallBoneThreshold,
-      manualMerges,
-      manualUnmerges,
-    );
+    // 拓扑驱动默认合并（激进：只拆主关节），拓扑失败时回退名字匹配
+    const merge = topology.cross !== null
+      ? computeTopologyMerge(topology, bones.map((b) => b.name || ''), parentIndex, manualMerges, manualUnmerges)
+      : computeBoneMerge(
+          bones.map((b) => b.name || ''),
+          parentIndex,
+          vertexCounts,
+          granularity,
+          smallBoneThreshold,
+          manualMerges,
+          manualUnmerges,
+        );
 
     // ---- BakedBoneInfo（含关节投影位） ----
     // 关节世界坐标（模型空间）→ 归一化 → 每部件每方向投影在渲染时算

@@ -15,6 +15,7 @@ import {
   inspectFingers,
   parseModelBones,
   computeBoneMerge,
+  computeTopologyMerge,
   type TwoPassBakeData,
   type BakedBoneInfo,
   type FingerDetectResult,
@@ -424,17 +425,25 @@ function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesC
     }
   }, [input, onMergesChange]);
 
-  // 自动合并预览（随手动覆盖实时重算）
+  // 自动合并预览（拓扑驱动，失败时回退名字匹配；随手动覆盖实时重算）
   const mergeInfo: BoneMergeInfo | null = bones
-    ? computeBoneMerge(
-        bones.map((b) => b.name),
-        bones.map((b) => b.parentIndex),
-        bones.map((b) => b.vertexCount),
-        granularity,
-        smallBoneThreshold,
-        manualMerges,
-        manualUnmerges,
-      )
+    ? topology && topology.cross !== null
+      ? computeTopologyMerge(
+          topology,
+          bones.map((b) => b.name),
+          bones.map((b) => b.parentIndex),
+          manualMerges,
+          manualUnmerges,
+        )
+      : computeBoneMerge(
+          bones.map((b) => b.name),
+          bones.map((b) => b.parentIndex),
+          bones.map((b) => b.vertexCount),
+          granularity,
+          smallBoneThreshold,
+          manualMerges,
+          manualUnmerges,
+        )
     : null;
 
   const updateMerges = useCallback(
@@ -455,54 +464,23 @@ function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesC
     });
   }, []);
 
-  /** 选中多个 → 合并到第一个（按层级最浅的优先） */
-  const handleMergeSelected = useCallback(() => {
-    if (!bones || selected.size < 2) return;
-    const arr = [...selected].sort((a, b) => {
-      // 深度浅的优先当目标
-      const depth = (i: number): number => {
-        let d = 0;
-        let p = bones[i].parentIndex;
-        while (p !== null && p !== undefined) { d++; p = bones[p].parentIndex; }
-        return d;
-      };
-      return depth(a) - depth(b);
-    });
-    const target = arr[0];
+  /** 单个 bone：从父节点拆分（强制独立，子树跟随） */
+  const handleSplitOne = useCallback((idx: number) => {
+    if (!bones) return;
     const merges = new Map(manualMerges);
     const unmerges = new Set(manualUnmerges);
-    for (let k = 1; k < arr.length; k++) {
-      const src = arr[k];
-      if (src === target) continue;
-      merges.set(src, target);
-      unmerges.delete(src); // 手动合并覆盖取消
-    }
+    merges.delete(idx);
+    unmerges.add(idx);
     updateMerges(merges, unmerges);
-    setSelected(new Set());
-  }, [bones, selected, manualMerges, manualUnmerges, updateMerges]);
+  }, [bones, manualMerges, manualUnmerges, updateMerges]);
 
-  /** 单个 → 并入父级 */
-  const handleMergeToParent = useCallback(() => {
-    if (!bones || selected.size !== 1) return;
-    const src = [...selected][0];
-    const p = bones[src].parentIndex;
-    if (p === null || p === undefined) return;
-    const merges = new Map(manualMerges);
-    const unmerges = new Set(manualUnmerges);
-    merges.set(src, p);
-    unmerges.delete(src);
-    updateMerges(merges, unmerges);
-    setSelected(new Set());
-  }, [bones, selected, manualMerges, manualUnmerges, updateMerges]);
-
-  /** 取消合并（恢复独立） */
-  const handleUnmerge = useCallback(() => {
+  /** 批量拆分选中 */
+  const handleSplitSelected = useCallback(() => {
     if (!bones || selected.size === 0) return;
     const merges = new Map(manualMerges);
     const unmerges = new Set(manualUnmerges);
     for (const src of selected) {
       merges.delete(src);
-      // 如果自动规则会合并它，则加入 unmerges 强制独立
       unmerges.add(src);
     }
     updateMerges(merges, unmerges);
@@ -530,7 +508,7 @@ function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesC
             {parsing ? '解析中…' : '解析骨骼（手动合并）'}
           </button>
           <span className="text-[11px] text-gray-600">
-            烘焙前可手动调整 bone 合并（自动规则已预应用）
+            烘焙前可手动拆分 bone（拓扑自动合并已预应用，默认只拆主关节）
           </span>
         </div>
         {parseError && <div className="mt-1 text-[11px] text-red-400">{parseError}</div>}
@@ -577,15 +555,24 @@ function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesC
           </span>
           <span className="shrink-0 text-gray-600">{b.vertexCount} 顶点</span>
           {isMerged ? (
-            <span
-              className={`shrink-0 rounded px-1 ${isManual ? 'bg-purple-900 text-purple-200' : 'bg-[#2a2a4a] text-gray-400'}`}
-              title={reason ?? ''}
-            >
-              → {bones[eff]?.name ?? eff}{isManual ? ' (手动)' : ''}
-            </span>
+            <>
+              <span
+                className={`shrink-0 rounded px-1 ${isManual ? 'bg-purple-900 text-purple-200' : 'bg-[#2a2a4a] text-gray-400'}`}
+                title={reason ?? ''}
+              >
+                → {bones[eff]?.name ?? eff}{isManual ? ' (手动)' : ''}
+              </span>
+              <button
+                onClick={(e) => { e.stopPropagation(); handleSplitOne(idx); }}
+                className="shrink-0 rounded border border-amber-800 bg-amber-950 px-1 text-[10px] text-amber-200 hover:bg-amber-900"
+                title="从父节点拆分，使其独立（子树跟随）"
+              >
+                拆分
+              </button>
+            </>
           ) : (
             <span className={`shrink-0 rounded px-1 ${isUnmerged ? 'bg-amber-900 text-amber-200' : 'bg-green-950 text-green-400'}`}>
-              {isUnmerged ? '独立 (手动)' : '独立'}
+              {isUnmerged ? '独立 (手动拆分)' : '独立'}
             </span>
           )}
         </div>
@@ -603,7 +590,7 @@ function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesC
           onClick={() => setExpanded(!expanded)}
           className="text-[11px] font-bold text-gray-300"
         >
-          {expanded ? '▼' : '▶'} 骨骼合并
+          {expanded ? '▼' : '▶'} 骨骼合并/拆分
         </button>
         <span className="text-[11px] text-gray-500">
           {bones.length} bones → {effectiveCount} 有效
@@ -638,39 +625,23 @@ function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesC
         <>
           <div className="mb-1 flex flex-wrap items-center gap-1">
             <button
-              onClick={handleMergeSelected}
-              disabled={selected.size < 2}
-              className="h-6 rounded bg-purple-800 px-2 text-[10px] text-white hover:bg-purple-700 disabled:opacity-40"
-              title="选中 2+ 个 bone，合并到层级最浅的那个"
-            >
-              合并选中 ({selected.size})
-            </button>
-            <button
-              onClick={handleMergeToParent}
-              disabled={selected.size !== 1}
-              className="h-6 rounded border border-[#3a3a5a] bg-[#1a1a30] px-2 text-[10px] text-gray-300 hover:bg-[#222240] disabled:opacity-40"
-              title="选中 1 个 bone，并入其父级"
-            >
-              并入父级
-            </button>
-            <button
-              onClick={handleUnmerge}
+              onClick={handleSplitSelected}
               disabled={selected.size === 0}
               className="h-6 rounded border border-amber-800 bg-amber-950 px-2 text-[10px] text-amber-200 hover:bg-amber-900 disabled:opacity-40"
-              title="取消选中 bone 的合并（含自动），强制独立"
+              title="批量拆分选中 bone（从父节点脱离，子树跟随）"
             >
-              取消合并
+              拆分选中 ({selected.size})
             </button>
             <button
               onClick={handleClearUnmerge}
               disabled={selected.size === 0}
               className="h-6 rounded border border-[#3a3a5a] bg-[#1a1a30] px-2 text-[10px] text-gray-400 hover:bg-[#222240] disabled:opacity-40"
-              title="清除手动取消，恢复自动规则"
+              title="清除手动拆分，恢复自动合并"
             >
               恢复自动
             </button>
             <span className="text-[10px] text-gray-600">
-              点选行或复选框多选
+              每行"拆分"可单独拆分；点选行或复选框多选后批量操作
             </span>
             <button
               onClick={onBake}
