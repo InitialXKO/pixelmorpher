@@ -561,15 +561,18 @@ function buildPartGeometry(
       }
       tmpCentroid.multiplyScalar(1 / Math.max(vc, 1));
       const capVertBone: number[] = [];
-      // 封盖 bone：取部件内出现最多的 bone（通常是根，如上臂）
-      const boneFreq = new Map<number, number>();
-      for (const vb of vertBone) {
-        if (vb >= 0) boneFreq.set(vb, (boneFreq.get(vb) ?? 0) + 1);
+      // 封盖 bone：取部件根 bone（parent 不在部件内的，即切口处的 bone）
+      // 不取"最多"，因手指合并后手顶点最多，会错取到手
+      const partSet = new Set<number>();
+      for (let bi = 0; bi < boneToPart.length; bi++) {
+        if (boneToPart[bi] === part) partSet.add(bi);
       }
       let capBone = -1;
-      let capBest = 0;
-      for (const [bi, n] of boneFreq) {
-        if (n > capBest) { capBest = n; capBone = bi; }
+      for (const bi of partSet) {
+        const b = bones[bi];
+        const p = b.parent as THREE.Bone | null;
+        const pIdx = p && (p as any).isBone ? bones.indexOf(p) : -1;
+        if (pIdx < 0 || !partSet.has(pIdx)) { capBone = bi; break; }
       }
       const useUv = hasUv.some(Boolean);
       if (capIndexStart < 0) capIndexStart = indices.length; // 记录第一个封盖起始
