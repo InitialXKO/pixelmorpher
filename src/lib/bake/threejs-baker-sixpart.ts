@@ -918,7 +918,7 @@ export async function bakeSixParts(
         onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° ID`);
         await new Promise((r) => setTimeout(r, 0));
 
-        groups.push({ part: pname, direction: d, colorPixels, idPixels });
+        groups.push({ part: pname, direction: ((d + 6) % 8), colorPixels, idPixels });
         renderer.setRenderTarget(null);
       }
 

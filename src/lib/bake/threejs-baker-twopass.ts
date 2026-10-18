@@ -631,8 +631,8 @@ export async function bakeModelTwoPass(
       await new Promise((r) => setTimeout(r, 0));
 
       groups.push(
-        { direction: d, pass: 0, colorPixels: colorFront, idPixels: idFront },
-        { direction: d, pass: 1, colorPixels: colorBack, idPixels: idBack },
+        { direction: ((d + 6) % 8), pass: 0, colorPixels: colorFront, idPixels: idFront },
+        { direction: ((d + 6) % 8), pass: 1, colorPixels: colorBack, idPixels: idBack },
       );
       renderer.setRenderTarget(null);
     }
@@ -1440,7 +1440,7 @@ export async function bakeSingleBone(
       }
 
       results.push({
-        direction: d,
+        direction: ((d + 6) % 8),
         pixels: flipped,
         width: size,
         height: size,

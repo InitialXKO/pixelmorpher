@@ -242,7 +242,7 @@ export async function bakeModelToSprites(
       }
 
       results.push({
-        direction: d,
+        direction: ((d + 6) % 8),
         pixels: flipped,
         width: size,
         height: size,
