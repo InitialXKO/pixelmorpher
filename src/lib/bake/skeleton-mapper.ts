@@ -482,6 +482,12 @@ export function splitSixParts(
   for (const part of ALL_PARTS) {
     const localToGlobal = bake.partBoneMap[part];
     if (!localToGlobal || localToGlobal.length === 0) continue;
+    // 合并后有效 bone 数：若只有 1 个，跳过 ID 拆分
+    const effectiveBones = new Set<number>();
+    for (const gi of localToGlobal) {
+      effectiveBones.add(merge ? (merge.effectiveIndex[gi] ?? gi) : gi);
+    }
+    const needSplit = effectiveBones.size > 1;
     // 位掩码解码：局部索引位 → 全局 bone（[] = 背景）
     const decodeBones = (r: number, g: number, b: number): number[] => {
       const out: number[] = [];
@@ -496,6 +502,19 @@ export function splitSixParts(
       const g = bake.groups.find((x) => x.part === part && x.direction === d);
       if (!g) continue;
       const perBone = new Map<number, { rgba: Uint8ClampedArray; mask: Uint8Array; count: number }>();
+      // 单 bone：直接用 alpha 做 mask，不解 ID
+      if (!needSplit) {
+        const gi = [...effectiveBones][0];
+        const e = { rgba: new Uint8ClampedArray(W * H * 4), mask: new Uint8Array(W * H), count: 0 };
+        for (let p = 0; p < W * H; p++) {
+          const o = p * 4;
+          if (g.colorPixels[o + 3] <= 8) continue;
+          e.mask[p] = 1; e.count++;
+          e.rgba[o] = g.colorPixels[o]; e.rgba[o + 1] = g.colorPixels[o + 1];
+          e.rgba[o + 2] = g.colorPixels[o + 2]; e.rgba[o + 3] = 255;
+        }
+        perBone.set(gi, e);
+      } else {
       const addPixel = (bi0: number, o: number, p: number) => {
         let bi = bi0;
         // 合并映射：手指等并入手
@@ -519,6 +538,7 @@ export function splitSixParts(
         if (g.colorPixels[o + 3] <= 8) continue; // 透明跳过
         for (const bi of bones) addPixel(bi, o, p);
       }
+      } // end else (needSplit)
 
       // 每 bone 裁剪（与 splitByBoneId 同逻辑）
       for (const [bi, e] of perBone) {
