@@ -572,18 +572,24 @@ export function splitSixParts(
         }
 
         const palette = medianCut(crop, paletteSize);
+        // 尺寸归一化：按 cameraHalf 缩放到整模像素空间
+        const cwN = Math.max(1, Math.round(cw * g.cameraHalf));
+        const chN = Math.max(1, Math.round(ch * g.cameraHalf));
         const grid: PixelGrid = [];
-        for (let y = 0; y < ch; y++) {
+        // 最近邻下采样（若 cwN==cw 则 1:1）
+        for (let y = 0; y < chN; y++) {
           const row: (string | null)[] = [];
-          for (let x = 0; x < cw; x++) {
-            const o = (y * cw + x) * 4;
+          const sy = Math.min(ch - 1, Math.floor((y * ch) / chN));
+          for (let x = 0; x < cwN; x++) {
+            const sx = Math.min(cw - 1, Math.floor((x * cw) / cwN));
+            const o = (sy * cw + sx) * 4;
             row.push(rgbaToHexOrNull(crop[o], crop[o + 1], crop[o + 2], crop[o + 3]));
           }
           grid.push(row);
         }
         if (palette.length > 0) {
-          for (let y = 0; y < ch; y++) {
-            for (let x = 0; x < cw; x++) {
+          for (let y = 0; y < chN; y++) {
+            for (let x = 0; x < cwN; x++) {
               const c = grid[y][x];
               if (!c) continue;
               const r = parseInt(c.slice(1, 3), 16);
@@ -599,14 +605,14 @@ export function splitSixParts(
         pb.directions.push({
           direction: d as DirectionIndex,
           grid,
-          width: cw,
-          height: ch,
+          width: cwN,
+          height: chN,
           cropX: x0,
           cropY: y0,
           jointX: jx,
           jointY: jy,
-          plugX: jx - x0,
-          plugY: jy - y0,
+          plugX: (jx - x0) * g.cameraHalf,
+          plugY: (jy - y0) * g.cameraHalf,
         });
       }
     }
