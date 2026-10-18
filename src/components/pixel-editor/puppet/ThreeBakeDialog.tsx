@@ -365,13 +365,15 @@ interface BoneMergePanelProps {
   granularity: BoneGranularity;
   smallBoneThreshold?: number;
   onMergesChange: (merges: Map<number, number>, unmerges: Set<number>) => void;
+  onBake: () => void;
+  baking: boolean;
 }
 
 /**
  * 烘焙前手动调整 bone 合并。
  * 流程：解析骨骼 → 显示树（自动合并预览）→ 用户手动合并/取消 → 烘焙时传入。
  */
-function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesChange }: BoneMergePanelProps) {
+function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesChange, onBake, baking }: BoneMergePanelProps) {
   const [bones, setBones] = useState<ParsedBoneInfo[] | null>(null);
   const [parsing, setParsing] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -632,6 +634,14 @@ function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesC
             <span className="text-[10px] text-gray-600">
               点选行或复选框多选
             </span>
+            <button
+              onClick={onBake}
+              disabled={baking}
+              className="ml-auto h-6 rounded bg-cyan-700 px-3 text-[10px] font-bold text-white hover:bg-cyan-600 disabled:opacity-50"
+              title="用当前合并设置烘焙（模型已缓存，不重复下载）"
+            >
+              {baking ? '烘焙中…' : '应用合并并烘焙'}
+            </button>
           </div>
           <div className="max-h-64 overflow-y-auto rounded border border-[#1a1a30] bg-[#0d0d1f] p-1">
             {roots.map((r) => renderRow(r, 0))}
@@ -933,6 +943,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
           input={input}
           granularity={granularity}
           onMergesChange={handleMergesChange}
+          onBake={handleBake}
+          baking={baking}
         />
 
         {error && (
