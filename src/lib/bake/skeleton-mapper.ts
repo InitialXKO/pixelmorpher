@@ -4,6 +4,7 @@
 // ============================================================
 
 import type { TwoPassBakeData } from './threejs-baker-twopass';
+import { encodeBoneId } from './threejs-baker-twopass';
 import { medianCut, nearestPaletteIndex } from './threejs-baker';
 import { rgbaToHexOrNull } from '../engine/utils';
 import {
@@ -70,8 +71,7 @@ export function splitByBoneId(
   // 有效 bone 颜色表（用于解码容错）
   const validColors = new Map<string, number>();
   for (const b of bake.bones) {
-    const v = b.index + 1;
-    const r = v & 0xff, g = (v >> 8) & 0xff, bl = (v >> 16) & 0xff;
+    const [r, g, bl] = encodeBoneId(b.index);
     validColors.set(`${r},${g},${bl}`, b.index);
   }
   const decodeRobust = (r: number, g: number, b: number): number => {
@@ -487,8 +487,7 @@ export function splitSixParts(
     // 局部 ID → 全局 bone 的有效色表（容错解码用）
     const validColors = new Map<string, number>();
     localToGlobal.forEach((gi, li) => {
-      const v = li + 1;
-      const r = v & 0xff, g = (v >> 8) & 0xff, bl = (v >> 16) & 0xff;
+      const [r, g, bl] = encodeBoneId(li);
       validColors.set(`${r},${g},${bl}`, gi);
     });
     const decodeRobust = (r: number, g: number, b: number): number => {

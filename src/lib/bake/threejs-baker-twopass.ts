@@ -507,8 +507,18 @@ function countBoneVertices(
 
 /** bone index → RGB（+1 偏移，0 保留给背景） */
 export function encodeBoneId(index: number): [number, number, number] {
-  const v = index + 1;
-  return [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff];
+  // 亮色编码：避免 (1,0,0) 这类近似黑，解码易混淆
+  // 用质数乘法散列，保证相邻 index 颜色差异大且远离黑色
+  let r = (index * 73 + 31) % 256;
+  let g = (index * 149 + 57) % 256;
+  let b = (index * 211 + 101) % 256;
+  // 太暗则提亮（避免近似黑）
+  if (r + g + b < 192) {
+    r = 255 - r; g = 255 - g; b = 255 - b;
+  }
+  // 避免纯黑（背景色）
+  if (r === 0 && g === 0 && b === 0) r = 128;
+  return [r, g, b];
 }
 
 /** RGB → bone index（-1 = 背景/无效） */
