@@ -161,17 +161,19 @@ export function splitByBoneId(
       if (maxX < 0) continue; // 无像素
       const jx = bone.jointPixels[d].x;
       const jy = bone.jointPixels[d].y;
-      // 以关节为中心的最大半经
-      const hx = Math.max(Math.abs(minX - jx), Math.abs(maxX - jx), 1) * padding;
-      const hy = Math.max(Math.abs(minY - jy), Math.abs(maxY - jy), 1) * padding;
-      let half = Math.max(hx, hy, minCrop / 2);
-      // clamp 到图内（保持关节居中，允许边缘截断）
-      half = Math.min(half, Math.min(jx, jy, W - jx, H - jy, W / 2, H / 2));
-      half = Math.max(half, 2);
-      const x0 = Math.round(jx - half);
-      const y0 = Math.round(jy - half);
-      const cw = Math.round(half * 2);
-      const ch = Math.round(half * 2);
+      // 紧包围盒裁剪（+2px padding），plug 存偏移
+      const pad2 = 2;
+      let x0 = Math.max(0, Math.floor(minX - pad2));
+      let y0 = Math.max(0, Math.floor(minY - pad2));
+      let x1 = Math.min(W, Math.ceil(maxX + pad2));
+      let y1 = Math.min(H, Math.ceil(maxY + pad2));
+      // 确保关节在裁剪框内
+      x0 = Math.min(x0, Math.floor(jx));
+      y0 = Math.min(y0, Math.floor(jy));
+      x1 = Math.max(x1, Math.ceil(jx) + 1);
+      y1 = Math.max(y1, Math.ceil(jy) + 1);
+      const cw = x1 - x0;
+      const ch = y1 - y0;
 
       // 提取裁剪区
       const crop = new Uint8ClampedArray(cw * ch * 4);
@@ -548,15 +550,19 @@ export function splitSixParts(
         if (!jp) continue;
         const jx = jp.x;
         const jy = jp.y;
-        const hx = Math.max(Math.abs(minX - jx), Math.abs(maxX - jx), 1) * padding;
-        const hy = Math.max(Math.abs(minY - jy), Math.abs(maxY - jy), 1) * padding;
-        let half = Math.max(hx, hy, minCrop / 2);
-        half = Math.min(half, Math.min(jx, jy, W - jx, H - jy, W / 2, H / 2));
-        half = Math.max(half, 2);
-        const x0 = Math.round(jx - half);
-        const y0 = Math.round(jy - half);
-        const cw = Math.round(half * 2);
-        const ch = Math.round(half * 2);
+        // 紧包围盒裁剪（+2px padding），plug 存偏移
+        const pad = 2;
+        let x0 = Math.max(0, Math.floor(minX - pad));
+        let y0 = Math.max(0, Math.floor(minY - pad));
+        let x1 = Math.min(W, Math.ceil(maxX + pad));
+        let y1 = Math.min(H, Math.ceil(maxY + pad));
+        // 确保关节在裁剪框内
+        x0 = Math.min(x0, Math.floor(jx));
+        y0 = Math.min(y0, Math.floor(jy));
+        x1 = Math.max(x1, Math.ceil(jx) + 1);
+        y1 = Math.max(y1, Math.ceil(jy) + 1);
+        const cw = x1 - x0;
+        const ch = y1 - y0;
 
         const crop = new Uint8ClampedArray(cw * ch * 4);
         for (let y = 0; y < ch; y++) {
