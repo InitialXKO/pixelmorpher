@@ -445,11 +445,23 @@ function addCaps(
     positions.push(c.x, c.y, c.z);
     if (uvs) uvs.push(0.5, 0.5);
     colors.push(cr, cg, cb);
-    capVertBone.push(partBoneForCap(loop.verts));
+    const capBone = partBoneForCap(loop.verts);
+    capVertBone.push(capBone);
+
+    // 封盖用独立顶点（单 bone ID），不复用主几何顶点（避免重叠 ID 插值污染）
+    const capLoopIdx: number[] = [];
+    for (let i = 0; i < m; i++) {
+      const vi = loop.verts[i];
+      capLoopIdx.push(positions.length / 3);
+      positions.push(positions[vi * 3], positions[vi * 3 + 1], positions[vi * 3 + 2]);
+      if (uvs) uvs.push(0.5, 0.5);
+      colors.push(cr, cg, cb);
+      capVertBone.push(capBone);
+    }
 
     for (let i = 0; i < m; i++) {
-      const a = loop.verts[i];
-      const b = loop.verts[(i + 1) % m];
+      const a = capLoopIdx[i];
+      const b = capLoopIdx[(i + 1) % m];
       if (flip) indices.push(centerIdx, b, a);
       else indices.push(centerIdx, a, b);
     }
