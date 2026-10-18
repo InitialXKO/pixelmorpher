@@ -1123,13 +1123,13 @@ export async function bakeSixParts(
         partGroup.rotation.y = ang;
         partGroup.updateMatrixWorld(true);
 
-        // 关节像素（用部件相机）
+        // 关节像素（用部件相机），按规范方向索引（非烘焙顺序）
         for (const gi of bp.partBones) {
           projV.copy(normJoints[gi]).applyMatrix4(partGroup.matrixWorld).project(camera);
-          boneInfos[gi].jointPixels.push({
+          boneInfos[gi].jointPixels[((d + 6) % 8)] = {
             x: ((projV.x + 1) / 2) * size,
             y: ((1 - projV.y) / 2) * size,
-          });
+          };
         }
 
         renderer.setRenderTarget(rt);
