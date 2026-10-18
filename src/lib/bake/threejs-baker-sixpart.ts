@@ -992,29 +992,67 @@ export async function bakeSixParts(
       inner.scale.setScalar(scale);
       partGroup.add(inner);
 
-      // 块内 ID 顶点色（局部索引位掩码；weight>0.2 的 bones 按位或，边界重叠）
-      const idColors = new Float32Array(bp.vertBone.length * 3);
+      // 块内 ID：非索引几何 + DataTexture 位掩码 + flat shader（无插值）
+      // 每个三角形 3 顶点 bone 集相同（取 3 顶点 vertBones 并集），三角形内部无插值，边界硬边
       const localIndex = new Map<number, number>();
       bp.partBones.forEach((gi, li) => localIndex.set(gi, li));
-      for (let i = 0; i < bp.vertBone.length; i++) {
+      const srcPos = bp.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const srcIndex = bp.geometry.getIndex();
+      const triCount = srcIndex ? srcIndex.count / 3 : Math.floor(srcPos.count / 3);
+      const idPositions = new Float32Array(triCount * 9);
+      const idTriIds = new Float32Array(triCount * 3);
+      const idTexData = new Uint8Array(triCount * 4);
+      for (let t = 0; t < triCount; t++) {
+        // 三角形 bone 集：3 顶点 vertBones 并集 → 局部索引 → 按位或
         let r = 0, g = 0, b = 0;
-        const vbs = bp.vertBones[i] ?? [];
-        // 兜底：vertBones 为空时用主导 bone
-        const bones = vbs.length > 0 ? vbs : (bp.vertBone[i] >= 0 ? [bp.vertBone[i]] : []);
-        for (const gi of bones) {
-          const li = localIndex.get(gi);
-          if (li === undefined || li < 0 || li > 23) continue;
-          const [br, bg, bb] = encodeBoneId(li);
-          r |= br; g |= bg; b |= bb;
+        const seenLi = new Set<number>();
+        for (let k = 0; k < 3; k++) {
+          const v = srcIndex ? srcIndex.getX(t * 3 + k) : t * 3 + k;
+          idPositions[(t * 3 + k) * 3] = srcPos.getX(v);
+          idPositions[(t * 3 + k) * 3 + 1] = srcPos.getY(v);
+          idPositions[(t * 3 + k) * 3 + 2] = srcPos.getZ(v);
+          idTriIds[t * 3 + k] = t;
+          const vbs = bp.vertBones[v] ?? [];
+          const bones = vbs.length > 0 ? vbs : (bp.vertBone[v] >= 0 ? [bp.vertBone[v]] : []);
+          for (const gi of bones) {
+            const li = localIndex.get(gi);
+            if (li === undefined || li < 0 || li > 23 || seenLi.has(li)) continue;
+            seenLi.add(li);
+            const [br, bg, bb] = encodeBoneId(li);
+            r |= br; g |= bg; b |= bb;
+          }
         }
-        idColors[i * 3] = r / 255; idColors[i * 3 + 1] = g / 255; idColors[i * 3 + 2] = b / 255;
+        idTexData[t * 4] = r; idTexData[t * 4 + 1] = g;
+        idTexData[t * 4 + 2] = b; idTexData[t * 4 + 3] = 255;
       }
       const idGeo = new THREE.BufferGeometry();
-      idGeo.setAttribute('position', bp.geometry.getAttribute('position'));
-      idGeo.setIndex(bp.geometry.getIndex());
-      idGeo.setAttribute('color', new THREE.BufferAttribute(idColors, 3));
-      idGeo.computeVertexNormals();
-      const idMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+      idGeo.setAttribute('position', new THREE.BufferAttribute(idPositions, 3));
+      idGeo.setAttribute('aTriId', new THREE.BufferAttribute(idTriIds, 1));
+      const idTex = new THREE.DataTexture(idTexData, triCount, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+      idTex.minFilter = THREE.NearestFilter;
+      idTex.magFilter = THREE.NearestFilter;
+      idTex.needsUpdate = true;
+      const idMat = new THREE.ShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        uniforms: { uIdTex: { value: idTex } },
+        vertexShader: `
+          in float aTriId;
+          flat out int vTriId;
+          void main() {
+            vTriId = int(aTriId + 0.5);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          precision highp float;
+          flat in int vTriId;
+          uniform sampler2D uIdTex;
+          out vec4 outColor;
+          void main() {
+            outColor = texelFetch(uIdTex, ivec2(vTriId, 0), 0);
+          }
+        `,
+      });
       const idMesh = new THREE.Mesh(idGeo, idMat);
       idMesh.frustumCulled = false;
       const idInner = new THREE.Group();
@@ -1094,6 +1132,7 @@ export async function bakeSixParts(
       capMat.dispose();
       idMat.dispose();
       idGeo.dispose();
+      idTex.dispose();
     }
 
     rt.dispose();

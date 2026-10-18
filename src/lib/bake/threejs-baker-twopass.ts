@@ -520,28 +520,16 @@ export function encodeBoneId(index: number): [number, number, number] {
 }
 
 /** 位掩码解码：返回所有置位的 bone index（[] = 背景/无效）
- * - 精确整数值 → 二进制分解（无误判）
- * - 插值非整数 → 包容式：位值 v，若 ch >= v*0.6 且 ch < v*2.5 则判定存在
- *   （边界像素同时归属双方；上界 guard 避免小位被大值误触发）
+ * 输入为精确整数（纹理无插值），直接位运算，无需阈值/容差
  */
 export function decodeBoneMask(r: number, g: number, b: number): number[] {
   const bones: number[] = [];
   const channels = [r, g, b];
   for (let c = 0; c < 3; c++) {
-    const ch = channels[c];
-    if (ch < 0.5) continue;
-    const iv = Math.round(ch);
-    if (Math.abs(ch - iv) < 0.4) {
-      // 精确值（容差 0.4，应对 GPU 量化噪声）：二进制分解
-      for (let i = 0; i < 8; i++) {
-        if (iv & (1 << i)) bones.push(c * 8 + i);
-      }
-    } else {
-      // 插值：包容式阈值
-      for (let i = 0; i < 8; i++) {
-        const v = 1 << i;
-        if (ch >= v * 0.6 && ch < v * 2.5) bones.push(c * 8 + i);
-      }
+    const iv = Math.round(channels[c]);
+    if (iv === 0) continue;
+    for (let i = 0; i < 8; i++) {
+      if (iv & (1 << i)) bones.push(c * 8 + i);
     }
   }
   return bones;
