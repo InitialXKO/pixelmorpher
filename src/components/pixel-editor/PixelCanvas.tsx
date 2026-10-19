@@ -391,7 +391,7 @@ export default function PixelCanvas() {
     s.onionSkinEnabled, s.onionSkinFrames, s.showGrid, s.showTrajectories, s.editMode,
     s.trajectories, s.selectedPart, s.selectedSpriteId, s.motionBlurStrokes, s.effectStrokes,
     s.effectTracks, s.autoMotionBlur, s.autoMotionBlurIntensity, s.tool,
-    s.skeletons, s.showSkeletons, s.selectedBoneId, s.activeSkeletonId,
+    s.skeletons, s.showSkeletons, s.showPuppetSkeleton, s.selectedBoneId, s.activeSkeletonId,
     s.showWeightPaint, s.weightPaintBoneId, s.unifiedCharacters,
     s.canvasModifierTracks, spriteEditSpriteId, s.spriteEditModifiers,
     interaction.renderStrokePreview, s.getInterpolatedTranslateOffset,
