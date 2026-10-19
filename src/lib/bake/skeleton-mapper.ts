@@ -29,12 +29,14 @@ export interface ProcessedBoneDirection {
   /** 裁剪框在整图中的原点（top-down 像素） */
   cropX: number;
   cropY: number;
-  /** 关节在整图中的像素（top-down） */
+  /** 关节在整图中的像素（top-down，未归一化） */
   jointX: number;
   jointY: number;
-  /** 关节在裁剪图中的像素（= plug） */
+  /** 关节在裁剪图中的像素（= plug，已 ×cameraHalf 归一化） */
   plugX: number;
   plugY: number;
+  /** 相机半宽（归一化系数），用于跨部件 joint 坐标统一尺度 */
+  cameraHalf: number;
 }
 
 export interface ProcessedBone {
@@ -232,6 +234,7 @@ export function splitByBoneId(
         jointY: jy,
         plugX,
         plugY,
+        cameraHalf: 1,
       });
     }
   }
@@ -393,9 +396,10 @@ export function mapBonesToNodes(
       const d = pdir.direction;
       const cdir = pb.directions.find((x) => x.direction === d);
       if (!cdir) continue;
-      // 注意 Y 轴：烘焙图是 top-down，2D 世界 Y 向下；SubPixel 同样向下为正，直接相减即可
-      const ox = cdir.jointX - pdir.jointX;
-      const oy = cdir.jointY - pdir.jointY;
+      // 注意 Y 轴：烘焙图是 top-down，2D 世界 Y 向下；SubPixel 同样向下为正
+      // 跨部件归一化：jointX/Y 是各部件独立相机下的像素，需 ×cameraHalf 统一到整模尺度再相减
+      const ox = cdir.jointX * cdir.cameraHalf - pdir.jointX * pdir.cameraHalf;
+      const oy = cdir.jointY * cdir.cameraHalf - pdir.jointY * pdir.cameraHalf;
       const off = { x: pxToSub(ox), y: pxToSub(oy) };
       if (d === 0) socket.basePosition = off;
       socket.directionOffsets[d] = off;
@@ -623,6 +627,7 @@ export function splitSixParts(
           jointY: jy,
           plugX: (jx - x0) * g.cameraHalf,
           plugY: (jy - y0) * g.cameraHalf,
+          cameraHalf: g.cameraHalf,
         });
       }
     }

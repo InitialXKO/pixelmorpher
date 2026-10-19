@@ -877,6 +877,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             // 新图以关节为中心
             plugX: w / 2,
             plugY: h / 2,
+            cameraHalf: orig?.cameraHalf ?? 1,
           };
         });
         next.set(boneIndex, { ...pb, directions: dirs });
