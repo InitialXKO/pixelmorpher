@@ -56,6 +56,11 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     outputs: ['out', 'outRotation', 'rotation', 'pixels'],
     params: ['angle', 'pivotOffsetX', 'pivotOffsetY'],
   },
+  pseudo3d_rotate: {
+    inputs: ['x', 'y', 'z', 'angle', 'direction'],
+    outputs: ['outX', 'outY', 'outZ'],
+    params: ['angle', 'direction'],
+  },
   uniform_scale: {
     inputs: ['t', 'pixels', 'gate'],
     outputs: ['out', 'outScaleX', 'outScaleY', 'scaleX', 'scaleY', 'pixels'],

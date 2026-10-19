@@ -15,6 +15,7 @@ import { computeGaitTransform } from '../engine/animation-handlers/shared-helper
 import { evalExpression } from '../expression-parser';
 import type { ModifierParamValue, PartAnimationModifier } from '../types';
 import { solveIK2Bone, solveIKFabrik } from './ik';
+import { rotatePseudo3D } from '../unified-types';
 
 /**
  * Cubic-bezier 缓动求值（借鉴 keyframe-engine）。
@@ -237,6 +238,19 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     };
     if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
     return result;
+  },
+  // 伪3D旋转：输入3D点(x,y,z)+角度+方向，输出伪3D旋转后的3D点
+  // 方向 0=East…6=South，与 projectToView 一致
+  pseudo3d_rotate: (n, i): Record<string, BlueprintValue> => {
+    const x = asNumber(i.x ?? num(0));
+    const y = asNumber(i.y ?? num(0));
+    const z = asNumber(i.z ?? num(0));
+    const angle = asNumber(i.angle ?? num(Number(n.params.angle ?? 0)));
+    const direction = Math.round(asNumber(i.direction ?? num(Number(n.params.direction ?? 6)))) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+    const rotated = rotatePseudo3D(x, y, z, angle, direction);
+    return {
+      outX: num(rotated.x), outY: num(rotated.y), outZ: num(rotated.z),
+    };
   },
   uniform_scale: (n, i, ctx): Record<string, BlueprintValue> => {
     const scale = asNumber(i.scale ?? num(Number(n.params.scale ?? 1)));
@@ -2259,6 +2273,7 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   // 程序化动画
   translate: '平移',
   rotate: '旋转',
+  pseudo3d_rotate: '伪3D旋转',
   uniform_scale: '均匀缩放',
   skew: '倾斜',
   non_uniform_stretch: '非均匀拉伸',
