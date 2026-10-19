@@ -852,9 +852,13 @@ export async function bakeSixParts(
       weightSum: weightSums[i],
     }));
     const topology: TopologyResult = analyzeTopology(topoBones);
-    // 6 件划分恒用名字版 assignBoneToPart（拓扑版会把 root 标成 props，导致 hips 无归属）
-    // 拓扑版仅用于骨骼合并，不用于 6 件几何划分
-    const boneToPart: (PartName | null)[] = bones.map((b, i) => assignBoneToPart(b.name || '', bindPos[i].x));
+    let boneToPart: (PartName | null)[];
+    if (topology.cross !== null) {
+      boneToPart = topology.boneToPart;
+    } else {
+      // 拓扑失败，回退名字匹配
+      boneToPart = bones.map((b, i) => assignBoneToPart(b.name || '', bindPos[i].x));
+    }
 
     // ---- 蒙皮烘焙为静态 ----
     const bakedMeshes: BakedMesh[] = [];
@@ -1021,10 +1025,8 @@ export async function bakeSixParts(
           const vbs = bp.vertBones[v] ?? [];
           const bones = vbs.length > 0 ? vbs : (bp.vertBone[v] >= 0 ? [bp.vertBone[v]] : []);
           for (const gi of bones) {
-            // 流程修正：ID 纹理只含本部件骨骼（名字版 assignBoneToPart，拓扑版会把 hips 标成 props）
-            // 防跨部件泄漏：如盆骨三角带手臂权重被分到臂部时，其 hips 权重不应出现在臂部 ID 图中
-            const bName = boneInfos[gi]?.name || '';
-            if (assignBoneToPart(bName, 0) !== pname) continue;
+            // 流程修正：ID 纹理只含本部件拓扑骨骼（防跨部件泄漏，如盆骨三角带大腿权重被分到腿部时，其 hips 权重不應出現在腿部 ID 图中）
+            if (boneToPart[gi] !== pname) continue;
             triBones.add(gi);
             boneCounts.set(gi, (boneCounts.get(gi) ?? 0) + 1);
           }
