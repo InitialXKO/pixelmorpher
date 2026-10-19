@@ -263,9 +263,18 @@ export function splitByBoneId(
     }
   }
 
-  // 删掉 8 方向全空的 bone
+  // 删掉 8 方向全空的 bone，但保留有子节点的父骨骼（避免子变孤儿归原点）
+  // 先收集所有被引用的 parentIndex
+  const referencedParents = new Set<number>();
+  for (const pb of result.values()) {
+    if (pb.parentIndex !== null && pb.parentIndex !== undefined) {
+      referencedParents.add(pb.parentIndex);
+    }
+  }
   for (const [bi, pb] of [...result]) {
-    if (pb.directions.length === 0) result.delete(bi);
+    if (pb.directions.length === 0 && !referencedParents.has(bi)) {
+      result.delete(bi);
+    }
   }
   // 回填 worldToPixels（可逆性：记录 bake 时的转换系数）
   fillWorldToPixels(result, W, bake.normalization.scale);
@@ -713,9 +722,17 @@ export function splitSixParts(
     }
   }
 
-  // 删掉 8 方向全空的 bone
+  // 删掉 8 方向全空的 bone，但保留有子节点的父骨骼（避免子变孤儿归原点）
+  const referencedParents = new Set<number>();
+  for (const pb of result.values()) {
+    if (pb.parentIndex !== null && pb.parentIndex !== undefined) {
+      referencedParents.add(pb.parentIndex);
+    }
+  }
   for (const [bi, pb] of [...result]) {
-    if (pb.directions.length === 0) result.delete(bi);
+    if (pb.directions.length === 0 && !referencedParents.has(bi)) {
+      result.delete(bi);
+    }
   }
   // 回填 worldToPixels（可逆性：记录 bake 时的转换系数）
   fillWorldToPixels(result, W, bake.normalization.scale);
