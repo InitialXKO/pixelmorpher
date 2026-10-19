@@ -177,8 +177,9 @@ function evaluateBlueprintTransforms(
 /** Computed world transform for a node */
 export interface WorldTransform {
   nodeId: string;
-  worldX: SubPixel;        // World position X (sub-pixel)
-  worldY: SubPixel;        // World position Y (sub-pixel)
+  worldX: SubPixel;        // World position X (sub-pixel, 3D)
+  worldY: SubPixel;        // World position Y (sub-pixel, 3D)
+  worldZ: SubPixel;        // World position Z (sub-pixel, 3D depth)
   worldAngle: number;      // Accumulated rotation (degrees)
   worldStretch: number;    // Accumulated stretch factor
   variantIndex: DirectionIndex; // Current direction
@@ -212,6 +213,7 @@ export function computeWorldTransforms(
     nodeId: rootNode.id,
     worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + rootInterpolated.x),
     worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + rootInterpolated.y),
+    worldZ: rootInterpolated.z,
     worldAngle: rootInterpolated.angle,
     worldStretch: rootInterpolated.stretch,
     variantIndex: rootInterpolated.variantIndex,
@@ -590,6 +592,7 @@ function computeChildTransforms(
     const childInterpolated = interpolateTransform(childNode, frame, frameRate, variableContext, blueprintTransforms);
     let childWorldX: SubPixel;
     let childWorldY: SubPixel;
+    let childWorldZ: SubPixel;
     let childAngle = childInterpolated.angle;
     let childMirror = parentWorld.mirror;
 
@@ -627,9 +630,12 @@ function computeChildTransforms(
         childWorldY = parentWorld.worldY
           + pxToSub(rotatedSocketY_px)
           + pxToSub(rotatedChildY_px);
+        // Z 直接累加（socket 无 z 偏移）
+        childWorldZ = parentWorld.worldZ + childInterpolated.z;
       } else {
         childWorldX = parentWorld.worldX + childInterpolated.x;
         childWorldY = parentWorld.worldY + childInterpolated.y;
+        childWorldZ = parentWorld.worldZ + childInterpolated.z;
       }
 
       // Check if this direction requires mirroring
@@ -653,6 +659,7 @@ function computeChildTransforms(
 
       childWorldX = parentWorld.worldX + pxToSub(rotatedX);
       childWorldY = parentWorld.worldY + pxToSub(rotatedY);
+      childWorldZ = parentWorld.worldZ + childInterpolated.z;
     }
 
     // Inherit parent rotation if configured
@@ -664,6 +671,7 @@ function computeChildTransforms(
       nodeId: childId,
       worldX: childWorldX,
       worldY: childWorldY,
+      worldZ: childWorldZ,
       worldAngle: childAngle,
       worldStretch: childInterpolated.stretch * parentWorld.worldStretch,
       variantIndex: childInterpolated.variantIndex,
@@ -709,6 +717,7 @@ function interpolateTransform(
   // Step 1: Keyframe-driven base transform
   const kfX = interpolateTrack(node.tracks.x, frame, base.x);
   const kfY = interpolateTrack(node.tracks.y, frame, base.y);
+  const kfZ = base.z; // 暂无 z 轨道，直接用 base（3D 烘焙写入）
   const kfAngle = interpolateTrack(node.tracks.angle, frame, base.angle);
   const kfStretch = interpolateTrack(node.tracks.stretch, frame, base.stretch);
   const kfVariant = interpolateTrack(node.tracks.variantIndex, frame, base.variantIndex) as DirectionIndex;
@@ -719,7 +728,7 @@ function interpolateTransform(
     return {
       x: kfX + pxToSub(bpT.translateX),
       y: kfY + pxToSub(bpT.translateY),
-      z: 0,
+      z: kfZ,
       angle: kfAngle + bpT.rotation,
       stretch: kfStretch * bpT.scaleY,
       scaleX: bpT.scaleX,
@@ -741,7 +750,7 @@ function interpolateTransform(
     return {
       x: kfX + pxToSub(animTransform.translateX),
       y: kfY + pxToSub(animTransform.translateY),
-      z: 0,
+      z: kfZ,
       angle: kfAngle + animTransform.rotation,
       stretch: kfStretch * ((animTransform.scaleX + animTransform.scaleY) / 2), // Average scale as stretch
       variantIndex: kfVariant,
@@ -751,7 +760,7 @@ function interpolateTransform(
   return {
     x: kfX,
     y: kfY,
-    z: 0,
+    z: kfZ,
     angle: kfAngle,
     stretch: kfStretch,
     variantIndex: kfVariant,
