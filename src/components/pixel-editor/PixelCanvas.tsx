@@ -324,7 +324,7 @@ export default function PixelCanvas() {
     }
 
     // 6-10. Overlays
-    renderGridOverlay(rc);
+    if (s.showGrid) renderGridOverlay(rc);
     renderCanvasBorder(rc);
     // sprite_edit 下选区 mask 存的是精灵局部坐标，绘制时加回精灵的画布原点偏移
     const selOrigin = s.editMode === 'sprite_edit' ? spriteEditCanvasOrigin(s) : { x: 0, y: 0 };

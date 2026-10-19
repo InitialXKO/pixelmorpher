@@ -30,7 +30,7 @@ export interface RenderContext {
 
 export function renderGridOverlay(rc: RenderContext) {
   const { ctx, canvasWidth, canvasHeight, zoom, panX, panY } = rc;
-  if (zoom < 8) return;
+  if (zoom < 4) return;
 
   ctx.save();
   ctx.strokeStyle = '#333333';
