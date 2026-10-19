@@ -363,7 +363,7 @@ export default function PixelCanvas() {
       });
       // IK 目标手柄（启用的链）
       const activeChar = charList.find((c) => c.id === s.activePuppetSkeletonId) ?? charList[0];
-      if (activeChar && s.tool === 'puppet') {
+      if (activeChar && s.showPuppetSkeleton) {
         renderIKTargetHandles(rc, activeChar);
       }
     }
