@@ -68,6 +68,8 @@ export function useCanvasState() {
     startX: number; startY: number; origAngle: number; origStretch: number; origOffsetX: number; origOffsetY: number; origOffsetZ?: number;
     mode: 'rotate' | 'move' | 'moveAll' | 'socket' | 'pivot'; pivotWorldX: number; pivotWorldY: number; startMouseAngle: number;
     dragStarted: boolean; moveTargetNodeId?: string; parentWorldAngle?: number; nodeWorldAngle?: number;
+    // 伪3D模式专用：子节点原始本地偏移
+    origChildOffsets?: Record<string, { x: number; y: number; z: number }>;
     // socket 模式专用
     socketId?: string; parentNodeId?: string; origSocketX?: number; origSocketY?: number; parentAngle?: number;
     // pivot 模式专用

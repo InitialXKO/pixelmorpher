@@ -27,7 +27,7 @@ import {
   spritePivotX,
   spritePivotY,
 } from './canvas-utils';
-import { subToPx, pxToSub, mapDragTo3D, type SubPixel } from '@/lib/unified-types';
+import { subToPx, pxToSub, mapDragTo3D, rotatePseudo3D, type SubPixel } from '@/lib/unified-types';
 import type { CanvasState } from './use-canvas-state';
 import type { BrushCommand, ModifierInstance } from '@/lib/types';
 
@@ -177,14 +177,6 @@ export const puppetHandler: ToolHandler = {
     const { node, character, clipId } = hit;
     project.setSelectedNodeId(node.id);
     s.editorStore.getState().setActivePuppetSkeletonId(character.id);
-    // 伪3D旋转工具：设标志为 true 后持久（不自动清零，避免姿态弹回）
-    const activeTool = s.editorStore.getState().tool;
-    if (activeTool === 'pseudo3d_rotate') {
-      const ch0 = project.unifiedCharacters[character.id];
-      if (ch0 && !ch0.pseudo3DRotate) {
-        project.updateUnifiedCharacter(character.id, { pseudo3DRotate: true });
-      }
-    }
     // 如果拖的是 IK 链的末端，挂起该链（拖拽期间用 FK，松手后重算目标）
     const ch = project.unifiedCharacters[character.id];
     if (ch) {
@@ -380,6 +372,24 @@ export const puppetHandler: ToolHandler = {
       startMouseAngle,
       dragStarted: false,
       parentWorldAngle,
+      // 伪3D模式：存储子节点原始本地偏移（实时烘焙用）
+      ...(s.editorStore.getState().tool === 'pseudo3d_rotate' && dragMode === 'rotate'
+        ? {
+            origChildOffsets: Object.fromEntries(
+              (node.children ?? []).map((childId) => {
+                const child = character.nodes[childId];
+                return [
+                  childId,
+                  {
+                    x: child?.transform.x ?? 0,
+                    y: child?.transform.y ?? 0,
+                    z: child?.transform.z ?? 0,
+                  },
+                ];
+              })
+            ),
+          }
+        : {}),
     };
   },
 
@@ -413,13 +423,38 @@ export const puppetHandler: ToolHandler = {
 
     if (drag.mode === 'rotate') {
       const currentMouseAngle = Math.atan2(py - drag.pivotWorldY, px - drag.pivotWorldX);
-      const newAngle = drag.origAngle + Math.round((currentMouseAngle - drag.startMouseAngle) * 180 / Math.PI);
-      writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
-        angle: newAngle,
-        stretch: drag.origStretch,
-        x: drag.origOffsetX,
-        y: drag.origOffsetY,
-      }, variantIndex);
+      const angleDelta = (currentMouseAngle - drag.startMouseAngle) * 180 / Math.PI;
+      const activeTool = s.editorStore.getState().tool;
+      if (activeTool === 'pseudo3d_rotate' && drag.origChildOffsets) {
+        // 伪3D实时烘焙：直接把变换后的3D坐标写进子节点，不依赖标志位
+        for (const [childId, orig] of Object.entries(drag.origChildOffsets)) {
+          const rotated = rotatePseudo3D(
+            subToPx(orig.x),
+            subToPx(orig.y),
+            subToPx(orig.z),
+            angleDelta,
+            viewDir
+          );
+          // 直接写子节点本地坐标（base transform，实时烘焙）
+          store.updateUnifiedNode(drag.characterId ?? drag.skeletonId, childId, {
+            transform: {
+              ...character.nodes[childId].transform,
+              x: pxToSub(rotated.x),
+              y: pxToSub(rotated.y),
+              z: pxToSub(rotated.z),
+            },
+          });
+        }
+        // 父节点角度不变（子节点已直接位移）
+      } else {
+        const newAngle = drag.origAngle + Math.round(angleDelta);
+        writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
+          angle: newAngle,
+          stretch: drag.origStretch,
+          x: drag.origOffsetX,
+          y: drag.origOffsetY,
+        }, variantIndex);
+      }
     } else if (drag.mode === 'socket') {
       // socket：移动父节点插槽在父节点中的位置（rig 操作，直接改骨架）
       const ddx = px - drag.startX;

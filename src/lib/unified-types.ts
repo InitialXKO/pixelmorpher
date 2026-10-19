@@ -760,12 +760,6 @@ export interface Character {
   // Undefined = use discrete variantIndex only (legacy behavior).
   facingAngle?: number;
 
-  // ---- Pseudo-3D Rotation (feature, from axis-misalignment bug) ----
-  // When true, parent rotation is applied in XY plane regardless of view
-  // direction, producing the "wonderful pseudo-3D" effect (depth axis swings).
-  // When false (default), rotation is applied correctly in the view plane.
-  pseudo3DRotate?: boolean;
-
   // ---- Metadata ----
   createdAt: number;
   updatedAt: number;

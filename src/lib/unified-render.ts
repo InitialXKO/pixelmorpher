@@ -22,7 +22,7 @@ import type {
   IKChain,
 } from './unified-types';
 import {
-  subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane, rotatePseudo3D,
+  subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
 } from './unified-types';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
@@ -619,15 +619,10 @@ function computeChildTransforms(
         const totalX = sockX3D + childOffsetX_px;
         const totalY = socketOffsetY_px + childOffsetY_px;
         const totalZ = sockZ3D + childOffsetZ_px;
-        // 旋转：正常模式按视平面转；伪3D模式转（Y, 深度轴）平面（全朝向有效）
+        // 旋转：按视平面转
         let rotated: { x: number; y: number; z: number };
-        if (character.pseudo3DRotate) {
-          // 伪3D：固定视平面水平轴，转 Y-深度平面 → 深度甩动（南向也有效）
-          rotated = rotatePseudo3D(totalX, totalY, totalZ, parentWorld.worldAngle, parentWorld.variantIndex);
-        } else {
-          // 正常：视平面内旋转（按父节点朝向）
-          rotated = rotateInViewPlane(totalX, totalY, totalZ, parentWorld.worldAngle, parentWorld.variantIndex);
-        }
+        // 正常：视平面内旋转（按父节点朝向）
+        rotated = rotateInViewPlane(totalX, totalY, totalZ, parentWorld.worldAngle, parentWorld.variantIndex);
         childWorldX = parentWorld.worldX + pxToSub(rotated.x);
         childWorldY = parentWorld.worldY + pxToSub(rotated.y);
         childWorldZ = parentWorld.worldZ + pxToSub(rotated.z);
@@ -651,13 +646,9 @@ function computeChildTransforms(
       const totalOffsetX_px = subToPx(fixedOffset.x) + subToPx(childInterpolated.x);
       const totalOffsetY_px = subToPx(fixedOffset.y) + subToPx(childInterpolated.y) * childInterpolated.stretch;
       const totalOffsetZ_px = subToPx(childInterpolated.z ?? 0);
-      // 旋转：正常模式按视平面转；伪3D模式转（Y, 深度轴）平面
+      // 旋转：按视平面转
       let rotated2: { x: number; y: number; z: number };
-      if (character.pseudo3DRotate) {
-        rotated2 = rotatePseudo3D(totalOffsetX_px, totalOffsetY_px, totalOffsetZ_px, parentWorld.worldAngle, parentWorld.variantIndex);
-      } else {
-        rotated2 = rotateInViewPlane(totalOffsetX_px, totalOffsetY_px, totalOffsetZ_px, parentWorld.worldAngle, parentWorld.variantIndex);
-      }
+      rotated2 = rotateInViewPlane(totalOffsetX_px, totalOffsetY_px, totalOffsetZ_px, parentWorld.worldAngle, parentWorld.variantIndex);
 
       childWorldX = parentWorld.worldX + pxToSub(rotated2.x);
       childWorldY = parentWorld.worldY + pxToSub(rotated2.y);
