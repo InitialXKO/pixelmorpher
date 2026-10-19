@@ -606,6 +606,12 @@ export function splitSixParts(
           }
         }
 
+        // 去重：同 bone 同 direction 只保留第一张（torso 主，armL/armR 泄漏的 50px 忽略）
+        // 2D 流程：1 骨骼 1 方向 1 图，不叠加多 part
+        if (pb.directions.some((dd) => dd.direction === d)) {
+          console.log(`[splitSixParts] skip duplicate hips: part=${part} dir=${d} (already have)`);
+          continue;
+        }
         pb.directions.push({
           direction: d as DirectionIndex,
           grid,
