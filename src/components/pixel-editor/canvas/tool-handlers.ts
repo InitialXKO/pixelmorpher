@@ -372,17 +372,18 @@ export const puppetHandler: ToolHandler = {
       startMouseAngle,
       dragStarted: false,
       parentWorldAngle,
-      // 伪3D模式：存储子节点原始本地偏移（实时烘焙用）
+      // 伪3D模式：存储子节点原始本地偏移（实时烘焙用，取当前帧插值）
       ...(s.editorStore.getState().tool === 'pseudo3d_rotate' && dragMode === 'rotate'
         ? {
             origChildOffsets: Object.fromEntries(
               (node.children ?? []).map((childId) => {
                 const child = character.nodes[childId];
+                const childIv = ivMap.get(childId);
                 return [
                   childId,
                   {
-                    x: child?.transform.x ?? 0,
-                    y: child?.transform.y ?? 0,
+                    x: childIv?.x ?? child?.transform.x ?? 0,
+                    y: childIv?.y ?? child?.transform.y ?? 0,
                     z: child?.transform.z ?? 0,
                   },
                 ];
@@ -468,17 +469,21 @@ export const puppetHandler: ToolHandler = {
           const rotated = rotatePseudo3D(totalX, totalY, totalZ, newParentAngle, viewDir);
           // 4. 逆解：正常旋转逆运算（基于完整新角度）
           const newTotal = inverseRotateInViewPlane(rotated.x, rotated.y, rotated.z, newParentAngle, viewDir);
-          // 5. 减去 socket，得 newChildLocal（像素 → SubPixel 写回）
-          const newChildX_px = newTotal.x - sockX3D_px;
-          const newChildY_px = newTotal.y - sockY3D_px;
-          const newChildZ_px = newTotal.z - sockZ3D_px;
+          // 5. 减去 socket，得 newChildLocal（像素 → SubPixel）
+          const newChildX = pxToSub(newTotal.x - sockX3D_px);
+          const newChildY = pxToSub(newTotal.y - sockY3D_px);
+          const newChildZ = pxToSub(newTotal.z - sockZ3D_px);
+          // 写关键帧（x/y），z 走 base（无 z 轨道）
+          const childIv = ivMap.get(childId);
+          writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, childId, frame, {
+            angle: childIv?.angle ?? childNode.transform.angle,
+            stretch: childIv?.stretch ?? childNode.transform.stretch,
+            x: Math.round(newChildX),
+            y: Math.round(newChildY),
+          }, variantIndex);
+          // z 直接写 base
           store.updateUnifiedNode(drag.characterId ?? drag.skeletonId, childId, {
-            transform: {
-              ...childNode.transform,
-              x: pxToSub(newChildX_px),
-              y: pxToSub(newChildY_px),
-              z: pxToSub(newChildZ_px),
-            },
+            transform: { ...childNode.transform, z: Math.round(newChildZ) },
           });
         }
         // 父节点角度不变（子节点已直接烘焙位移）
