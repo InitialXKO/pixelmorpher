@@ -1086,6 +1086,21 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             >
               {baking ? '烘焙中…' : bakeMode === 'sixpart' ? '六部件烘焙' : '按骨骼烘焙'}
             </button>
+            {bakeMode === 'sixpart' && sixPart && (
+              <button
+                onClick={() => {
+                  const t0 = performance.now();
+                  const proc = splitSixParts(sixPart, { paletteSize });
+                  setProcessed(proc);
+                  setTotalMs(performance.now() - t0);
+                  setImportMsg(`2D 重拆完成（${proc.size} 骨骼），未重跑 3D`);
+                }}
+                className="h-7 rounded border border-cyan-700 px-3 text-[11px] text-cyan-300 hover:bg-cyan-900 disabled:opacity-50"
+                title="对已有 sixPart 数据重跑 splitSixParts，不跑 96 遍 3D"
+              >
+                重新拆分 2D
+              </button>
+            )}
             {progress && <span className="text-cyan-400">{progress}</span>}
             <span className="text-gray-600">
               {bakeMode === 'sixpart'

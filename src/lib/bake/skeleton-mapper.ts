@@ -523,6 +523,10 @@ export function splitSixParts(
       // 每 bone 裁剪（与 splitByBoneId 同逻辑）
       for (const [bi, e] of perBone) {
         const bone = bake.bones[bi];
+        // 诊断：记录每个 bone 在哪个 part 被 push（查 3 重复来源）
+        if (bone.name.toLowerCase().includes('hips')) {
+          console.log(`[splitSixParts] push hips: part=${part} dir=${d} bone=${bone.name} bi=${bi} count=${e.count}`);
+        }
         const pb = result.get(bi)!;
         let minX = W, maxX = -1, minY = H, maxY = -1;
         for (let y = 0; y < H; y++) {
