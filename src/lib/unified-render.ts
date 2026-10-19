@@ -619,17 +619,27 @@ function computeChildTransforms(
         const totalX = sockX3D + childOffsetX_px;
         const totalY = socketOffsetY_px + childOffsetY_px;
         const totalZ = sockZ3D + childOffsetZ_px;
-        // 旋转：正常模式按视平面转；伪3D模式故意转XY（复刻bug原理）
+        // 旋转：正常模式按视平面转；伪3D模式转（Y, 深度轴）平面（全朝向有效）
         let rotated: { x: number; y: number; z: number };
         if (character.pseudo3DRotate) {
-          // 伪3D：XY平面旋转，Z不动（bug原理：轴错位导致深度甩动）
+          // 伪3D：固定视平面水平轴，转 Y-深度平面 → 深度甩动（南向也有效）
+          const theta = (((parentWorld.variantIndex + 2) % 8) * Math.PI) / 4;
+          const cosT = Math.cos(theta);
+          const sinT = Math.sin(theta);
+          // 3D → (h=视水平, d=深度)
+          const h = totalX * cosT + totalZ * sinT;
+          const d = -totalX * sinT + totalZ * cosT;
+          // 转 (d, y) 平面
           const rad = (parentWorld.worldAngle * Math.PI) / 180;
           const cosA = Math.cos(rad);
           const sinA = Math.sin(rad);
+          const d2 = d * cosA - totalY * sinA;
+          const y2 = d * sinA + totalY * cosA;
+          // (h, d2) → 3D
           rotated = {
-            x: totalX * cosA - totalY * sinA,
-            y: totalX * sinA + totalY * cosA,
-            z: totalZ,
+            x: h * cosT - d2 * sinT,
+            y: y2,
+            z: h * sinT + d2 * cosT,
           };
         } else {
           // 正常：视平面内旋转（按父节点朝向）
@@ -658,16 +668,23 @@ function computeChildTransforms(
       const totalOffsetX_px = subToPx(fixedOffset.x) + subToPx(childInterpolated.x);
       const totalOffsetY_px = subToPx(fixedOffset.y) + subToPx(childInterpolated.y) * childInterpolated.stretch;
       const totalOffsetZ_px = subToPx(childInterpolated.z ?? 0);
-      // 旋转：正常模式按视平面转；伪3D模式故意转XY
+      // 旋转：正常模式按视平面转；伪3D模式转（Y, 深度轴）平面
       let rotated2: { x: number; y: number; z: number };
       if (character.pseudo3DRotate) {
+        const theta = (((parentWorld.variantIndex + 2) % 8) * Math.PI) / 4;
+        const cosT = Math.cos(theta);
+        const sinT = Math.sin(theta);
+        const h = totalOffsetX_px * cosT + totalOffsetZ_px * sinT;
+        const d = -totalOffsetX_px * sinT + totalOffsetZ_px * cosT;
         const rad = (parentWorld.worldAngle * Math.PI) / 180;
         const cosA = Math.cos(rad);
         const sinA = Math.sin(rad);
+        const d2 = d * cosA - totalOffsetY_px * sinA;
+        const y2 = d * sinA + totalOffsetY_px * cosA;
         rotated2 = {
-          x: totalOffsetX_px * cosA - totalOffsetY_px * sinA,
-          y: totalOffsetX_px * sinA + totalOffsetY_px * cosA,
-          z: totalOffsetZ_px,
+          x: h * cosT - d2 * sinT,
+          y: y2,
+          z: h * sinT + d2 * cosT,
         };
       } else {
         rotated2 = rotateInViewPlane(totalOffsetX_px, totalOffsetY_px, totalOffsetZ_px, parentWorld.worldAngle, parentWorld.variantIndex);
