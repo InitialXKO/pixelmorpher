@@ -426,10 +426,12 @@ export function mapBonesToNodes(
     } else {
       const parentPb = processed.get(pb.parentIndex!);
       const socketId = `sock_${characterId}_${pb.parentIndex}_${pb.boneIndex}`;
+      // plug 置零：sprite.plug 已是关节在精灵内的位置（jx-x0），再加 attachment.plug 会双重偏移
+      // 节点原点经 transform 已在关节处，无需额外偏移
       node.attachment = {
         type: 'socket',
         parentSocketId: socketId,
-        plug: d0 ? { x: pxToSub(d0.plugX), y: pxToSub(d0.plugY) } : { x: 0, y: 0 },
+        plug: { x: 0, y: 0 },
       };
       void parentPb;
     }
