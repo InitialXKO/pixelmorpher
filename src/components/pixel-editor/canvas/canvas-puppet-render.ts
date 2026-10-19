@@ -92,8 +92,8 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
     const centerX = pxToSub(canvasWidth / 2);
     const centerY = pxToSub(canvasHeight / 2);
 
-    // 3D 世界坐标累加（与主渲染 computeWorldTransforms 一致），最后投影到 2D 显示
-    // worldPositions 存投影后的 2D（x,y）+ 角度，供绘制标签/连线用
+    // 3D 世界坐标累加（与主渲染 computeWorldTransforms 一致：以原点为中心，不含画布中心）
+    // worldPositions 存投影后 2D（含画布中心），供绘制标签/连线用
     function computeNodeWorldPosOverlay(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldZ: number, parentWorldAngle: number, parentViewDir: number): void {
       const node = character.nodes[nodeId];
       if (!node) return;
@@ -111,13 +111,12 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
 
       const isSocketAttached = node.attachment?.type === 'socket';
       if (!isSocketAttached) {
-        // 根节点：画布中心 + 本地偏移（3D）
-        worldX3D = centerX + offsetX;
-        worldY3D = centerY + offsetY;
+        // 根节点：3D 原点 + 本地偏移（不含画布中心，与主渲染一致）
+        worldX3D = offsetX;
+        worldY3D = offsetY;
         worldZ3D = offsetZ;
       } else {
         // 子节点：父 3D 世界坐标 + 旋转后的本地 3D 偏移（socket 已置零）
-        // 与主渲染一致：rotateInViewPlane 按父视角旋转视平面
         const rotated = rotateInViewPlane(offsetX, offsetY, offsetZ, parentWorldAngle, parentViewDir as any);
         worldX3D = parentWorldX + rotated.x;
         worldY3D = parentWorldY + rotated.y;
@@ -125,12 +124,11 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
       }
 
       const worldAngle = parentWorldAngle + angle;
-      // 投影到 2D（与主渲染 generateRenderPlan 一致）
+      // 投影到 2D（与主渲染 generateRenderPlan 一致），再加画布中心
       const proj = projectToView(worldX3D, worldY3D, worldZ3D, viewDir);
-      // 存 2D 投影结果（+ 画布中心偏移，centerX/Y 已含）
-      // 注意：projectToView 返回的是相对坐标，需加回中心？主渲染在 generateRenderPlan 里加画布中心
-      // 此处 worldX3D 已含 centerX，投影后需保持。简化：直接存投影的 canvasX/Y（已是 SubPixel）
-      worldPositions.set(node.id, { x: proj.canvasX, y: proj.canvasY, angle: worldAngle } as any);
+      const finalX = proj.canvasX + centerX;
+      const finalY = proj.canvasY + centerY;
+      worldPositions.set(node.id, { x: finalX, y: finalY, angle: worldAngle } as any);
 
       for (const childNode of nodes) {
         if (childNode.attachment?.type === 'socket' && parentMap.get(childNode.id)?.parentId === node.id) {
