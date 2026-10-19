@@ -27,7 +27,7 @@ import {
   spritePivotX,
   spritePivotY,
 } from './canvas-utils';
-import { subToPx, pxToSub, mapDragTo3D, rotatePseudo3D, type SubPixel } from '@/lib/unified-types';
+import { subToPx, pxToSub, mapDragTo3D, rotatePseudo3D, inverseRotateInViewPlane, type SubPixel } from '@/lib/unified-types';
 import type { CanvasState } from './use-canvas-state';
 import type { BrushCommand, ModifierInstance } from '@/lib/types';
 
@@ -425,27 +425,57 @@ export const puppetHandler: ToolHandler = {
       const currentMouseAngle = Math.atan2(py - drag.pivotWorldY, px - drag.pivotWorldX);
       const angleDelta = (currentMouseAngle - drag.startMouseAngle) * 180 / Math.PI;
       const activeTool = s.editorStore.getState().tool;
-      if (activeTool === 'pseudo3d_rotate' && drag.origChildOffsets) {
-        // 伪3D实时烘焙：直接把变换后的3D坐标写进子节点，不依赖标志位
-        for (const [childId, orig] of Object.entries(drag.origChildOffsets)) {
-          const rotated = rotatePseudo3D(
-            subToPx(orig.x),
-            subToPx(orig.y),
-            subToPx(orig.z),
-            angleDelta,
-            viewDir
-          );
-          // 直接写子节点本地坐标（base transform，实时烘焙）
+      const childIds = drag.origChildOffsets ? Object.keys(drag.origChildOffsets) : [];
+      if (activeTool === 'pseudo3d_rotate' && childIds.length > 0) {
+        // 伪3D实时烘焙：用渲染器完整输入（socket3D + childLocal）做变换，再逆解回 childLocal
+        // 保证烘焙结果与渲染伪3D所见完全一致
+        const theta = (((viewDir + 2) % 8) * Math.PI) / 4;
+        const cosT = Math.cos(theta);
+        const sinT = Math.sin(theta);
+        const draggedNode = character.nodes[drag.nodeId];
+        for (const [childId, orig] of Object.entries(drag.origChildOffsets!)) {
+          const childNode = character.nodes[childId];
+          if (!childNode) continue;
+          // 1. 取 socket 3D 偏移（与渲染器一致）
+          let sockX3D_px = 0, sockY3D_px = 0, sockZ3D_px = 0;
+          if (childNode.attachment?.type === 'socket' && childNode.attachment.parentSocketId && draggedNode) {
+            const socket = draggedNode.sockets.find((s) => s.id === childNode.attachment!.parentSocketId);
+            if (socket) {
+              const off = socket.directionOffsets?.[viewDir] ?? socket.basePosition;
+              const sx_px = subToPx(off.x);
+              const sy_px = subToPx(off.y);
+              sockX3D_px = sx_px * cosT;
+              sockY3D_px = sy_px;
+              sockZ3D_px = sx_px * sinT;
+            }
+          } else if (childNode.attachment?.type === 'fixed') {
+            const fo = childNode.attachment.fixedOffset ?? { x: 0, y: 0 };
+            sockX3D_px = subToPx(fo.x);
+            sockY3D_px = subToPx(fo.y);
+            // fixed 无 z
+          }
+          // 2. 渲染器输入 total = socket3D + childLocal（像素）
+          const totalX = sockX3D_px + subToPx(orig.x);
+          const totalY = sockY3D_px + subToPx(orig.y);
+          const totalZ = sockZ3D_px + subToPx(orig.z);
+          // 3. 伪3D 旋转（渲染器用的那个结果）
+          const rotated = rotatePseudo3D(totalX, totalY, totalZ, angleDelta, viewDir);
+          // 4. 逆解：正常旋转的逆运算，得 newTotal
+          const newTotal = inverseRotateInViewPlane(rotated.x, rotated.y, rotated.z, angleDelta, viewDir);
+          // 5. 减去 socket，得 newChildLocal（像素 → SubPixel 写回）
+          const newChildX_px = newTotal.x - sockX3D_px;
+          const newChildY_px = newTotal.y - sockY3D_px;
+          const newChildZ_px = newTotal.z - sockZ3D_px;
           store.updateUnifiedNode(drag.characterId ?? drag.skeletonId, childId, {
             transform: {
-              ...character.nodes[childId].transform,
-              x: pxToSub(rotated.x),
-              y: pxToSub(rotated.y),
-              z: pxToSub(rotated.z),
+              ...childNode.transform,
+              x: pxToSub(newChildX_px),
+              y: pxToSub(newChildY_px),
+              z: pxToSub(newChildZ_px),
             },
           });
         }
-        // 父节点角度不变（子节点已直接位移）
+        // 父节点角度不变（子节点已直接烘焙位移）
       } else {
         const newAngle = drag.origAngle + Math.round(angleDelta);
         writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
