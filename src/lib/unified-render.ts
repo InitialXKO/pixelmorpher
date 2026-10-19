@@ -211,9 +211,10 @@ export function computeWorldTransforms(
   const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext, blueprintTransforms);
   const rootWorld: WorldTransform = {
     nodeId: rootNode.id,
-    worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + rootInterpolated.x),
-    worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + rootInterpolated.y),
-    worldZ: rootInterpolated.z,
+    // 3D 世界坐标以原点为中心，不含画布中心（画布中心在投影后 2D 阶段加）
+    worldX: rootInterpolated.x,
+    worldY: rootInterpolated.y,
+    worldZ: rootInterpolated.z ?? 0,
     worldAngle: rootInterpolated.angle,
     worldStretch: rootInterpolated.stretch,
     variantIndex: rootInterpolated.variantIndex,
@@ -1377,12 +1378,13 @@ export function generateRenderPlan(
     }
 
     // 3D 投影：按当前朝向将 3D 世界坐标映射到 2D 画布（直接取项，非两步投影）
+    // 投影后加画布中心（3D 世界以原点为中心，2D 画布以中心为原点）
     const proj = projectToView(worldTf.worldX, worldTf.worldY, worldTf.worldZ, currentDirection);
     nodeInstructions.push({
       nodeId,
       sprite: effectiveSprite,
-      worldX: proj.canvasX as SubPixel,
-      worldY: proj.canvasY as SubPixel,
+      worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel)) as SubPixel,
+      worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel)) as SubPixel,
       angle: worldTf.worldAngle,
       stretch: worldTf.worldStretch,
       variantIndex: worldTf.variantIndex,
