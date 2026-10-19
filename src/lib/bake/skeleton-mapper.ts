@@ -398,7 +398,8 @@ export function mapBonesToNodes(
         const bw = pb.bakeWidth ?? 128;
         const scale = (bw / 2) / gch; // (W/2)/globalCameraHalf，全局统一尺度
         node.transform.x = pxToSub((pb.joint3D.x - parentPb.joint3D.x) * scale);
-        node.transform.y = pxToSub((pb.joint3D.y - parentPb.joint3D.y) * scale);
+        // Y 取反：joint3D.y 是 Three.js Y-up，画布是 Y-down（原点左上）
+        node.transform.y = pxToSub(-(pb.joint3D.y - parentPb.joint3D.y) * scale);
         node.transform.z = pxToSub((pb.joint3D.z - parentPb.joint3D.z) * scale);
       } else {
         // 回退：无 3D 数据时用 South 视图 2D 差值（保证不归零，覆盖层 2D 逻辑可用）
