@@ -27,7 +27,7 @@ import {
   spritePivotX,
   spritePivotY,
 } from './canvas-utils';
-import { subToPx, pxToSub } from '@/lib/unified-types';
+import { subToPx, pxToSub, mapDragTo3D, type SubPixel } from '@/lib/unified-types';
 import type { CanvasState } from './use-canvas-state';
 import type { BrushCommand, ModifierInstance } from '@/lib/types';
 
@@ -491,7 +491,7 @@ export const puppetHandler: ToolHandler = {
     const ANGLE_STEP = 15;
     const MOVE_STEP = pxToSub(1);  // SubPixel：键盘微调 1 像素
 
-    const applyNodePose = (nodeId: string, patch: Partial<{ angle: number; x: number; y: number }>) => {
+    const applyNodePose = (nodeId: string, patch: Partial<{ angle: number; x: number; y: number; z: number }>) => {
       const iv = ivMap.get(nodeId);
       const node = character!.nodes[nodeId];
       if (!node) return;
@@ -501,6 +501,10 @@ export const puppetHandler: ToolHandler = {
         x: patch.x ?? iv?.x ?? node.transform.x,
         y: patch.y ?? iv?.y ?? node.transform.y,
       }, variantIndex);
+      // 3D z 暂直接写 base transform（无 z 轨道）
+      if (patch.z !== undefined) {
+        node.transform.z = patch.z;
+      }
     };
 
     if (e.code === 'KeyQ' || e.code === 'KeyE') {
@@ -527,9 +531,13 @@ export const puppetHandler: ToolHandler = {
       else if (e.code === 'KeyS' || e.code === 'ArrowDown') dy = MOVE_STEP;
       else if (e.code === 'KeyA' || e.code === 'ArrowLeft') dx = -MOVE_STEP;
       else if (e.code === 'KeyD' || e.code === 'ArrowRight') dx = MOVE_STEP;
+      // 3D 映射：按当前朝向将 2D 键盘增量映射到 3D
+      const dir = (node.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      const d3 = mapDragTo3D(dx as SubPixel, dy as SubPixel, dir);
       applyNodePose(targetId, {
-        x: (iv?.x ?? node.transform.x) + dx,
-        y: (iv?.y ?? node.transform.y) + dy,
+        x: (iv?.x ?? node.transform.x) + d3.dx3,
+        y: (iv?.y ?? node.transform.y) + d3.dy3,
+        z: (node.transform.z ?? 0) + d3.dz3,
       });
     }
   },
