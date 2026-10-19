@@ -345,6 +345,19 @@ export function mapBonesToNodes(
       .filter((c) => c.parentIndex === pb.boneIndex)
       .map((c) => nodeIdByBone.get(c.boneIndex)!);
 
+    // 3D 位置（Option A）：local offset = (joint3D - parent.joint3D) * 64 → SubPixel
+    // 64 将归一化 [-1,1] 映射到像素 [-64,64]，与 2D 精灵尺度对齐
+    if (!isRoot && pb.joint3D) {
+      const parentPb = processed.get(pb.parentIndex!);
+      const pj = parentPb?.joint3D;
+      if (pj) {
+        node.transform.x = pxToSub((pb.joint3D.x - pj.x) * 64);
+        node.transform.y = pxToSub((pb.joint3D.y - pj.y) * 64);
+        node.transform.z = pxToSub((pb.joint3D.z - pj.z) * 64);
+      }
+    }
+    // 根节点 transform 保持 (0,0,0)
+
     // attachment：plug 用方向 0 的（各方向 sprite.plug 自己带）
     const d0 = pb.directions.find((d) => d.direction === 0) ?? pb.directions[0];
     if (isRoot) {
