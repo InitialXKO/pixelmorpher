@@ -398,8 +398,17 @@ export function mapBonesToNodes(
         node.transform.y = pxToSub((pb.joint3D.y - parentPb.joint3D.y) * scale);
         node.transform.z = pxToSub((pb.joint3D.z - parentPb.joint3D.z) * scale);
       } else {
-        node.transform.x = 0;
-        node.transform.y = 0;
+        // 回退：无 3D 数据时用 South 视图 2D 差值（保证不归零，覆盖层 2D 逻辑可用）
+        const cdir6 = pb.directions.find((d) => d.direction === 6);
+        const pdir6 = parentPb?.directions.find((d) => d.direction === 6);
+        if (cdir6 && pdir6) {
+          const scaleRatio = pdir6.cameraHalf / cdir6.cameraHalf;
+          node.transform.x = pxToSub(cdir6.jointX - pdir6.jointX * scaleRatio);
+          node.transform.y = pxToSub(cdir6.jointY - pdir6.jointY * scaleRatio);
+        } else {
+          node.transform.x = 0;
+          node.transform.y = 0;
+        }
         node.transform.z = 0;
       }
     }
