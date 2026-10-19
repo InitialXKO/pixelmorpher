@@ -1752,6 +1752,7 @@ export function getToolHandler(
   switch (tool) {
     case 'puppet': return puppetHandler;
     case 'pseudo3d_rotate': return puppetHandler; // 复用 puppet 拖拽，onMouseDown 内按工具名设伪3D标志
+    case 'landmark': return landmarkHandler; // 精灵编辑模式外 no-op（handler 内 early return）
     case 'select': return nodeSelectHandler;
     case 'move': return nodeMoveHandler;
     case 'trajectory': return nodeTrajectoryHandler;
