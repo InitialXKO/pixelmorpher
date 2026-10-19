@@ -1025,6 +1025,8 @@ export async function bakeSixParts(
           const vbs = bp.vertBones[v] ?? [];
           const bones = vbs.length > 0 ? vbs : (bp.vertBone[v] >= 0 ? [bp.vertBone[v]] : []);
           for (const gi of bones) {
+            // 流程修正：ID 纹理只含本部件拓扑骨骼（防跨部件泄漏，如盆骨三角带大腿权重被分到腿部时，其 hips 权重不應出現在腿部 ID 图中）
+            if (boneToPart[gi] !== pname) continue;
             triBones.add(gi);
             boneCounts.set(gi, (boneCounts.get(gi) ?? 0) + 1);
           }

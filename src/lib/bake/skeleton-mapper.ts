@@ -445,7 +445,7 @@ export function mapBonesToNodes(
 // ---- 六部件 2D 拆分 ----
 
 import type { SixPartBakeData } from './threejs-baker-sixpart';
-import { ALL_PARTS, assignBoneToPart } from './threejs-baker-sixpart';
+import { ALL_PARTS } from './threejs-baker-sixpart';
 
 /**
  * 按六部件的块内 ID 拆分。
@@ -483,16 +483,11 @@ export function splitSixParts(
     const localToGlobal = bake.partBoneMap[part];
     if (!localToGlobal || localToGlobal.length === 0) continue;
     // 位掩码解码：局部索引位 → 全局 bone（[] = 背景）
-    // 拓扑过滤：只保留拓扑归属本部件的 bone（防3D分三角泄漏，如盆骨三角被分到腿部）
-    // boneToPart 优先用 bake 数据（新），无则现场按名计算（兼容旧 bake）
-    const boneToPart = bake.boneToPart ?? bake.bones.map((b) => assignBoneToPart(b.name || '', 0));
     const decodeBones = (r: number, g: number, b: number): number[] => {
       const out: number[] = [];
       for (const li of decodeBoneMask(r, g, b)) {
         const gi = localToGlobal[li];
-        if (gi === undefined) continue;
-        if (boneToPart[gi] !== part) continue;
-        out.push(gi);
+        if (gi !== undefined) out.push(gi);
       }
       return out;
     };
