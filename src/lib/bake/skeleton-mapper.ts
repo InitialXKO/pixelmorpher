@@ -378,8 +378,15 @@ export function mapBonesToNodes(
       const cdir6 = pb.directions.find((d) => d.direction === 6);
       const pdir6 = parentPb?.directions.find((d) => d.direction === 6);
       if (cdir6 && pdir6) {
-        node.transform.x = pxToSub(cdir6.jointX - pdir6.jointX);
-        node.transform.y = pxToSub(cdir6.jointY - pdir6.jointY);
+        // 可逆性：cdir/pdir 的 jointX/Y 是各部件独立相机下的图像素，尺度不同不能直接减。
+        // 经记录的 cameraHalf 换算到同一尺度（子部件像素）：
+        //   world = pixels * cameraHalf / (W/2)；diffPixels_child = (cWorld - pWorld) * (W/2) / cCameraHalf
+        // 化简得：dx = cJointX - pJointX * (pCameraHalf / cCameraHalf)
+        const scaleRatio = pdir6.cameraHalf / cdir6.cameraHalf;
+        const dx = cdir6.jointX - pdir6.jointX * scaleRatio;
+        const dy = cdir6.jointY - pdir6.jointY * scaleRatio;
+        node.transform.x = pxToSub(dx);
+        node.transform.y = pxToSub(dy);
       } else {
         node.transform.x = 0;
         node.transform.y = 0;
