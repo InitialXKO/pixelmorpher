@@ -485,7 +485,15 @@ export function splitSixParts(
 
   const result = new Map<number, ProcessedBone>();
   const merge = bake.merge;
+  // 只为有效（代表）骨骼建 ProcessedBone：合并掉的骨骼不单独拆分
+  // （2D 只拆四肢等需要关节的部位；头/躯干合并为单节点，不按骨骼切分）
+  const effectiveSet = new Set<number>();
   for (const b of bake.bones) {
+    const eff = merge ? (merge.effectiveIndex[b.index] ?? b.index) : b.index;
+    effectiveSet.add(eff);
+  }
+  for (const b of bake.bones) {
+    if (!effectiveSet.has(b.index)) continue; // 被合并掉的骨骼跳过
     let pIdx = b.parentIndex;
     if (merge && pIdx !== null && pIdx !== undefined) {
       const effP = merge.effectiveIndex[pIdx] ?? pIdx;
