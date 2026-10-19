@@ -427,8 +427,14 @@ export const puppetHandler: ToolHandler = {
       const activeTool = s.editorStore.getState().tool;
       const childIds = drag.origChildOffsets ? Object.keys(drag.origChildOffsets) : [];
       if (activeTool === 'pseudo3d_rotate' && childIds.length > 0) {
-        // 伪3D实时烘焙：用渲染器完整输入（socket3D + childLocal）做变换，再逆解回 childLocal
-        // 保证烘焙结果与渲染伪3D所见完全一致
+        // 伪3D实时烘焙：父角度正常写入，子节点逆解保证所见即所得
+        const newParentAngle = drag.origAngle + Math.round(angleDelta);
+        writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
+          angle: newParentAngle,
+          stretch: drag.origStretch,
+          x: drag.origOffsetX,
+          y: drag.origOffsetY,
+        }, variantIndex);
         const theta = (((viewDir + 2) % 8) * Math.PI) / 4;
         const cosT = Math.cos(theta);
         const sinT = Math.sin(theta);
@@ -458,10 +464,10 @@ export const puppetHandler: ToolHandler = {
           const totalX = sockX3D_px + subToPx(orig.x);
           const totalY = sockY3D_px + subToPx(orig.y);
           const totalZ = sockZ3D_px + subToPx(orig.z);
-          // 3. 伪3D 旋转（渲染器用的那个结果）
-          const rotated = rotatePseudo3D(totalX, totalY, totalZ, angleDelta, viewDir);
-          // 4. 逆解：正常旋转的逆运算，得 newTotal
-          const newTotal = inverseRotateInViewPlane(rotated.x, rotated.y, rotated.z, angleDelta, viewDir);
+          // 3. 伪3D 旋转（基于完整新角度）
+          const rotated = rotatePseudo3D(totalX, totalY, totalZ, newParentAngle, viewDir);
+          // 4. 逆解：正常旋转逆运算（基于完整新角度）
+          const newTotal = inverseRotateInViewPlane(rotated.x, rotated.y, rotated.z, newParentAngle, viewDir);
           // 5. 减去 socket，得 newChildLocal（像素 → SubPixel 写回）
           const newChildX_px = newTotal.x - sockX3D_px;
           const newChildY_px = newTotal.y - sockY3D_px;
