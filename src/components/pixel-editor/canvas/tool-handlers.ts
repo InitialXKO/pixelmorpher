@@ -444,8 +444,9 @@ export const puppetHandler: ToolHandler = {
         const theta = (((viewDir + 2) % 8) * Math.PI) / 4;
         const cosT = Math.cos(theta);
         const sinT = Math.sin(theta);
-        // 递归烘焙：parentNodeId 的子节点用 parentAngle 做伪3D→逆解
-        const bakeLevel = (parentNodeId: string, parentAngle: number) => {
+        // 递归烘焙：parentNodeId 的子节点用父节点**世界角度**做伪3D→逆解
+        // （旧标志位系统渲染端用 parentWorld.worldAngle；传局部角度时，中间节点局部角为 0 的边会退化为普通旋转，伪3D传不到孙节点）
+        const bakeLevel = (parentNodeId: string, parentWorldAngle: number) => {
           const parentNode = character.nodes[parentNodeId];
           if (!parentNode) return;
           for (const childId of parentNode.children ?? []) {
@@ -469,15 +470,17 @@ export const puppetHandler: ToolHandler = {
               sockX3D_px = subToPx(fo.x);
               sockY3D_px = subToPx(fo.y);
             }
+            const childIvEarly = ivMap.get(childId);
+            const childStretch = childIvEarly?.stretch ?? childNode.transform.stretch ?? 1;
             const totalX = sockX3D_px + subToPx(orig.x);
-            const totalY = sockY3D_px + subToPx(orig.y);
+            const totalY = sockY3D_px + subToPx(orig.y) * childStretch;
             const totalZ = sockZ3D_px + subToPx(orig.z);
-            const rotated = rotatePseudo3D(totalX, totalY, totalZ, parentAngle, viewDir);
-            const newTotal = inverseRotateInViewPlane(rotated.x, rotated.y, rotated.z, parentAngle, viewDir);
+            const rotated = rotatePseudo3D(totalX, totalY, totalZ, parentWorldAngle, viewDir);
+            const newTotal = inverseRotateInViewPlane(rotated.x, rotated.y, rotated.z, parentWorldAngle, viewDir);
             const newChildX = pxToSub(newTotal.x - sockX3D_px);
             const newChildY = pxToSub(newTotal.y - sockY3D_px);
             const newChildZ = pxToSub(newTotal.z - sockZ3D_px);
-            const childIv = ivMap.get(childId);
+            const childIv = childIvEarly;
             const childAngle = childIv?.angle ?? childNode.transform.angle ?? 0;
             const childVariantIndex = (childNode.transform.variantIndex ?? variantIndex) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
             writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, childId, frame, {
@@ -489,13 +492,30 @@ export const puppetHandler: ToolHandler = {
             store.updateUnifiedNode(drag.characterId ?? drag.skeletonId, childId, {
               transform: { ...childNode.transform, z: Math.round(newChildZ) },
             });
-            // 递归：子节点的子节点用子节点的角度继续烘焙
+            // 递归：子节点的世界角度 = 父世界角度 + 子局部角度（子局部角度本轮不变），往下传
+            // 注意：仅当 inheritRotation !== false 时累积（与渲染端 computeWorldTransforms:668-670 一致）
             if ((childNode.children ?? []).length > 0) {
-              bakeLevel(childId, childAngle);
+              const childWorldAngle = childNode.attachment.inheritRotation !== false
+                ? parentWorldAngle + childAngle
+                : childAngle;
+              bakeLevel(childId, childWorldAngle);
             }
           }
         };
-        bakeLevel(drag.nodeId, newParentAngle);
+        // 被拖节点的祖先链世界角度（拖拽期间祖先角度不变）；第一层的父世界角度 = 祖先世界角 + 被拖节点新局部角
+        let ancestorsWorldAngle = 0;
+        {
+          const seen = new Set<string>();
+          let pid = dragNode?.parentId;
+          while (pid && !seen.has(pid)) {
+            seen.add(pid);
+            const pNode = character.nodes[pid];
+            if (!pNode) break;
+            ancestorsWorldAngle += ivMap.get(pid)?.angle ?? pNode.transform.angle ?? 0;
+            pid = pNode.parentId;
+          }
+        }
+        bakeLevel(drag.nodeId, ancestorsWorldAngle + newParentAngle);
       } else {
         const newAngle = drag.origAngle + Math.round(angleDelta);
         writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
