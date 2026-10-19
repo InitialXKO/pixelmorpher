@@ -605,16 +605,20 @@ function computeChildTransforms(
         const socketOffset = resolveSocketOffset(socket, parentWorld.variantIndex);
 
         // Socket offsets are stored in sub-pixel units.
-        // 3D: combine socket (2D) + child local (3D), rotate in view plane
+        // 3D: socket 2D 按朝向映射到 3D（南向 sx→X，东向 sx→Z），再与 child 3D 合并
         const socketOffsetX_px = subToPx(socketOffset.x);
         const socketOffsetY_px = subToPx(socketOffset.y);
         const childOffsetX_px = subToPx(childInterpolated.x);
         const childOffsetY_px = subToPx(childInterpolated.y) * childInterpolated.stretch;
         const childOffsetZ_px = subToPx(childInterpolated.z ?? 0);
-        // 合并偏移（socket z=0）
-        const totalX = socketOffsetX_px + childOffsetX_px;
+        // socket 2D → 3D（按父节点朝向）：sx 按 θ 分配到 X/Z，sy 直接到 Y
+        const theta = (((parentWorld.variantIndex + 2) % 8) * Math.PI) / 4;
+        const sockX3D = socketOffsetX_px * Math.cos(theta);
+        const sockZ3D = socketOffsetX_px * Math.sin(theta);
+        // 合并偏移
+        const totalX = sockX3D + childOffsetX_px;
         const totalY = socketOffsetY_px + childOffsetY_px;
-        const totalZ = childOffsetZ_px;
+        const totalZ = sockZ3D + childOffsetZ_px;
         // 旋转：正常模式按视平面转；伪3D模式故意转XY（复刻bug原理）
         let rotated: { x: number; y: number; z: number };
         if (character.pseudo3DRotate) {
