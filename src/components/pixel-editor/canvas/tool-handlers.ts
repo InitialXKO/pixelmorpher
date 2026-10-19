@@ -177,6 +177,14 @@ export const puppetHandler: ToolHandler = {
     const { node, character, clipId } = hit;
     project.setSelectedNodeId(node.id);
     s.editorStore.getState().setActivePuppetSkeletonId(character.id);
+    // 伪3D旋转工具：拖拽期间启用伪3D模式
+    const activeTool = s.editorStore.getState().tool;
+    if (activeTool === 'pseudo3d_rotate') {
+      const ch = project.unifiedCharacters[character.id];
+      if (ch) {
+        project.updateUnifiedCharacter(character.id, { pseudo3DRotate: true });
+      }
+    }
     // 如果拖的是 IK 链的末端，挂起该链（拖拽期间用 FK，松手后重算目标）
     const ch = project.unifiedCharacters[character.id];
     if (ch) {
@@ -549,9 +557,15 @@ export const puppetHandler: ToolHandler = {
   },
 
   onMouseUp(s) {
+    // 清除伪3D旋转标志
+    const project = useProjectStore.getState();
+    for (const ch of Object.values(project.unifiedCharacters)) {
+      if (ch?.pseudo3DRotate) {
+        project.updateUnifiedCharacter(ch.id, { pseudo3DRotate: false });
+      }
+    }
     // 恢复被挂起的 IK 链，目标点重算到新尖端位置
     if (suspendedIKChains.size > 0) {
-      const project = useProjectStore.getState();
       for (const chainId of Array.from(suspendedIKChains)) {
         // 找到这条链所属的角色
         for (const ch of Object.values(project.unifiedCharacters)) {
@@ -1737,6 +1751,7 @@ export function getToolHandler(
   // Node 级分发（新架构；旧画布精灵层分发已随 workspace mode 退役）
   switch (tool) {
     case 'puppet': return puppetHandler;
+    case 'pseudo3d_rotate': return puppetHandler; // 复用 puppet 拖拽，onMouseDown 内按工具名设伪3D标志
     case 'select': return nodeSelectHandler;
     case 'move': return nodeMoveHandler;
     case 'trajectory': return nodeTrajectoryHandler;

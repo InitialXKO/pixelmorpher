@@ -1188,7 +1188,7 @@ export interface EffectStroke {
   coordinateMode?: CoordinateMode; // default: 'follow_part'
 }
 
-export type ToolType = 'select' | 'brush' | 'eraser' | 'fill' | 'eyedropper' | 'move' | 'trajectory' | 'crop' | 'motion_blur_brush' | 'glow_brush' | 'particle_brush' | 'afterimage_brush' | 'lasso' | 'magic_wand' | 'smart_select' | 'inpaint' | 'puppet' | 'landmark';
+export type ToolType = 'select' | 'brush' | 'eraser' | 'fill' | 'eyedropper' | 'move' | 'trajectory' | 'crop' | 'motion_blur_brush' | 'glow_brush' | 'particle_brush' | 'afterimage_brush' | 'lasso' | 'magic_wand' | 'smart_select' | 'inpaint' | 'puppet' | 'landmark' | 'pseudo3d_rotate';
 export type PlayState = 'stopped' | 'playing' | 'paused';
 export type EditMode = 'normal' | 'correction' | 'trajectory_edit' | 'bone_edit' | 'weight_paint' | 'sprite_edit' | 'mask';
 

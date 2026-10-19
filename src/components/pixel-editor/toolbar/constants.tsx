@@ -18,6 +18,7 @@ import {
   Scan,
   PersonStanding,
   Crosshair,
+  Rotate3d,
 } from 'lucide-react';
 import type { ToolType } from '@/lib/types';
 
@@ -27,6 +28,7 @@ import type { ToolType } from '@/lib/types';
 
 export const TOOL_CONFIG: { value: ToolType; icon: React.ReactNode; label: string; group?: string }[] = [
   { value: 'puppet', icon: <PersonStanding className="size-3.5" />, label: '木偶' },
+  { value: 'pseudo3d_rotate', icon: <Rotate3d className="size-3.5" />, label: '伪3D旋转' },
   { value: 'select', icon: <MousePointer2 className="size-3.5" />, label: '选择' },
   { value: 'brush', icon: <Paintbrush className="size-3.5" />, label: '画笔' },
   { value: 'eraser', icon: <Eraser className="size-3.5" />, label: '橡皮擦' },
