@@ -60,19 +60,20 @@ export interface SplitOptions {
 }
 
 /**
- * 回填 worldToPixels（可逆性原则）：
- * 记录 bake 时的数值转换：worldToPixels = (图像尺寸/2) / (cameraHalf * normalization.scale)，
- * 使 joint3D（归一化）→像素 的转换可逆，不靠猜测的 64。
+ * 回填 normToPixels（可逆性原则）：
+ * 记录 bake 时的数值转换：normToPixels = (图像尺寸/2) / cameraHalf，
+ * 使 joint3D（归一化单位）→像素 的转换可逆，不靠猜测的 64。
+ * 注意：cameraHalf 本身已是归一化单位（pbox 由归一化坐标构建），故分母不再乘 scale。
  */
 function fillWorldToPixels(
   result: Map<number, ProcessedBone>,
   W: number,
-  scale: number,
+  _scale: number, // 保留参数占位（历史签名），实际不再使用
 ): void {
   for (const pb of result.values()) {
     const d6 = pb.directions.find((d) => d.direction === 6) ?? pb.directions[0];
-    if (d6 && d6.cameraHalf > 0 && scale > 0) {
-      pb.worldToPixels = (W / 2) / (d6.cameraHalf * scale);
+    if (d6 && d6.cameraHalf > 0) {
+      pb.worldToPixels = (W / 2) / d6.cameraHalf;
     }
   }
 }
