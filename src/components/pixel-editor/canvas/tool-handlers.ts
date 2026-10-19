@@ -177,12 +177,14 @@ export const puppetHandler: ToolHandler = {
     const { node, character, clipId } = hit;
     project.setSelectedNodeId(node.id);
     s.editorStore.getState().setActivePuppetSkeletonId(character.id);
-    // 伪3D旋转工具：拖拽期间启用伪3D模式
+    // 伪3D旋转标志跟随工具：伪3D工具设 true，普通木偶工具设 false（持久化，不随鼠标松开清除）
     const activeTool = s.editorStore.getState().tool;
-    if (activeTool === 'pseudo3d_rotate') {
-      const ch = project.unifiedCharacters[character.id];
-      if (ch) {
+    const ch0 = project.unifiedCharacters[character.id];
+    if (ch0) {
+      if (activeTool === 'pseudo3d_rotate' && !ch0.pseudo3DRotate) {
         project.updateUnifiedCharacter(character.id, { pseudo3DRotate: true });
+      } else if (activeTool === 'puppet' && ch0.pseudo3DRotate) {
+        project.updateUnifiedCharacter(character.id, { pseudo3DRotate: false });
       }
     }
     // 如果拖的是 IK 链的末端，挂起该链（拖拽期间用 FK，松手后重算目标）
@@ -573,13 +575,7 @@ export const puppetHandler: ToolHandler = {
   },
 
   onMouseUp(s) {
-    // 清除伪3D旋转标志
     const project = useProjectStore.getState();
-    for (const ch of Object.values(project.unifiedCharacters)) {
-      if (ch?.pseudo3DRotate) {
-        project.updateUnifiedCharacter(ch.id, { pseudo3DRotate: false });
-      }
-    }
     // 恢复被挂起的 IK 链，目标点重算到新尖端位置
     if (suspendedIKChains.size > 0) {
       for (const chainId of Array.from(suspendedIKChains)) {
