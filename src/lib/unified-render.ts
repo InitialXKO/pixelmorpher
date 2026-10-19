@@ -719,6 +719,7 @@ function interpolateTransform(
     return {
       x: kfX + pxToSub(bpT.translateX),
       y: kfY + pxToSub(bpT.translateY),
+      z: 0,
       angle: kfAngle + bpT.rotation,
       stretch: kfStretch * bpT.scaleY,
       scaleX: bpT.scaleX,
@@ -740,6 +741,7 @@ function interpolateTransform(
     return {
       x: kfX + pxToSub(animTransform.translateX),
       y: kfY + pxToSub(animTransform.translateY),
+      z: 0,
       angle: kfAngle + animTransform.rotation,
       stretch: kfStretch * ((animTransform.scaleX + animTransform.scaleY) / 2), // Average scale as stretch
       variantIndex: kfVariant,
@@ -749,6 +751,7 @@ function interpolateTransform(
   return {
     x: kfX,
     y: kfY,
+    z: 0,
     angle: kfAngle,
     stretch: kfStretch,
     variantIndex: kfVariant,

@@ -948,6 +948,7 @@ export async function bakeSixParts(
       parentIndex: parentIndex[i],
       bindPos: { x: bindPos[i].x, y: bindPos[i].y, z: bindPos[i].z },
       jointPixels: [], // 六部件下按（部件，方向）投影，见 groups
+      joint3D: { x: normJoints[i].x, y: normJoints[i].y, z: normJoints[i].z },
     }));
 
     // ---- 渲染 ----

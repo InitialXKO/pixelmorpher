@@ -23,6 +23,8 @@ export interface BakedBoneInfo {
   bindPos: { x: number; y: number; z: number };
   /** 8 方向关节在整图中的像素坐标（top-down） */
   jointPixels: Array<{ x: number; y: number }>;
+  /** 归一化 3D 坐标（(bindPos-center)*scale，用于 3D 节点位置） */
+  joint3D?: { x: number; y: number; z: number };
 }
 
 export interface TwoPassGroup {

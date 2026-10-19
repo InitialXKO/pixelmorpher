@@ -236,8 +236,9 @@ export interface Attachment {
  * variantIndex selects direction variant for sprite lookup and socket offsets.
  */
 export interface NodeTransform {
-  x: SubPixel;                  // Local X offset
-  y: SubPixel;                  // Local Y offset
+  x: SubPixel;                  // Local X offset (3D)
+  y: SubPixel;                  // Local Y offset (3D, vertical)
+  z: SubPixel;                  // Local Z offset (3D, depth)
   angle: number;                // Rotation angle (degrees)
   stretch: number;              // Y-axis stretch factor (0.5 ~ 2.0)
   variantIndex: DirectionIndex; // Direction variant index (0-7)
@@ -251,6 +252,7 @@ function createDefaultTransform(): NodeTransform {
   return {
     x: 0,
     y: 0,
+    z: 0,
     angle: 0,
     stretch: 1.0,
     variantIndex: 0,
