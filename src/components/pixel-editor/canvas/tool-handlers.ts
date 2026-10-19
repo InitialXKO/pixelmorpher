@@ -446,13 +446,17 @@ export const puppetHandler: ToolHandler = {
       }
     } else {
       // move：移动目标节点的 offset（offset 在父节点局部空间，需逆旋转鼠标增量）
+      // 3D：按当前朝向将 2D 增量映射到 3D（南向改 x/y，东向改 z/y）
       const ddx = px - drag.startX;
       const ddy = py - drag.startY;
       const angleRad = ((drag.parentWorldAngle ?? 0) * Math.PI) / 180;
       const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
       const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
-      const newOffsetX = Math.round(drag.origOffsetX + pxToSub(localDx));
-      const newOffsetY = Math.round(drag.origOffsetY + pxToSub(localDy));
+      const d3 = mapDragTo3D(pxToSub(localDx) as SubPixel, pxToSub(localDy) as SubPixel, variantIndex);
+      const targetNode = character.nodes[drag.moveTargetNodeId ?? drag.nodeId];
+      const newOffsetX = Math.round(drag.origOffsetX + d3.dx3);
+      const newOffsetY = Math.round(drag.origOffsetY + d3.dy3);
+      const newOffsetZ = Math.round((targetNode?.transform.z ?? 0) + d3.dz3);
       const targetNodeId = drag.moveTargetNodeId ?? drag.nodeId;
       writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, targetNodeId, frame, {
         angle: drag.origAngle,
@@ -460,6 +464,8 @@ export const puppetHandler: ToolHandler = {
         x: newOffsetX,
         y: newOffsetY,
       }, variantIndex);
+      // 3D z 暂直接写 base（无 z 轨道）
+      if (targetNode) targetNode.transform.z = newOffsetZ as SubPixel;
     }
   },
 
