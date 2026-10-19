@@ -406,6 +406,7 @@ export function mapBonesToNodes(
     // 根节点 transform 保持 (0,0,0)
 
     // attachment：plug 用方向 0 的（各方向 sprite.plug 自己带）
+    // 注意：无方向的父骨骼占位（directions 为空）没有 plug，用零值
     const d0 = pb.directions.find((d) => d.direction === 0) ?? pb.directions[0];
     if (isRoot) {
       node.attachment = { type: 'fixed', fixedOffset: { x: 0, y: 0 } };
@@ -415,7 +416,7 @@ export function mapBonesToNodes(
       node.attachment = {
         type: 'socket',
         parentSocketId: socketId,
-        plug: { x: pxToSub(d0.plugX), y: pxToSub(d0.plugY) },
+        plug: d0 ? { x: pxToSub(d0.plugX), y: pxToSub(d0.plugY) } : { x: 0, y: 0 },
       };
       void parentPb;
     }
