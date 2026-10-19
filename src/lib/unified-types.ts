@@ -64,6 +64,27 @@ export function projectToView(
   return { canvasX, canvasY: y, depth };
 }
 
+/**
+ * 2D 拖动 → 3D 增量：按朝向将画布 2D 拖动映射到 3D 坐标增量
+ * @param dx 画布 X 增量（SubPixel）
+ * @param dy 画布 Y 增量（SubPixel）
+ * @param direction 8 方向索引（0=East…6=South）
+ * @returns { dx3, dy3, dz3 } 3D 坐标增量（SubPixel）
+ */
+export function mapDragTo3D(
+  dx: SubPixel,
+  dy: SubPixel,
+  direction: DirectionIndex,
+): { dx3: SubPixel; dy3: SubPixel; dz3: SubPixel } {
+  const theta = (((direction + 2) % 8) * Math.PI) / 4;
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  // 逆映射：dx 分配到 x/z，dy 直接到 y
+  const dx3 = dx * cos;
+  const dz3 = dx * sin;
+  return { dx3: dx3 as SubPixel, dy3: dy, dz3: dz3 as SubPixel };
+}
+
 // ---- Sprite & Visual Data ----
 
 /** Pixel color: hex string or null (transparent) */

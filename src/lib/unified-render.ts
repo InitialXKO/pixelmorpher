@@ -717,7 +717,7 @@ function interpolateTransform(
   // Step 1: Keyframe-driven base transform
   const kfX = interpolateTrack(node.tracks.x, frame, base.x);
   const kfY = interpolateTrack(node.tracks.y, frame, base.y);
-  const kfZ = base.z; // 暂无 z 轨道，直接用 base（3D 烘焙写入）
+  const kfZ = base.z ?? 0; // 暂无 z 轨道，直接用 base（3D 烘焙写入）；旧数据缺 z 时默 0
   const kfAngle = interpolateTrack(node.tracks.angle, frame, base.angle);
   const kfStretch = interpolateTrack(node.tracks.stretch, frame, base.stretch);
   const kfVariant = interpolateTrack(node.tracks.variantIndex, frame, base.variantIndex) as DirectionIndex;
