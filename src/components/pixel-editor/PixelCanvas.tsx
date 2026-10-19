@@ -356,7 +356,7 @@ export default function PixelCanvas() {
       const unifiedChars = pst.unifiedCharacters ?? {};
       const charList = Object.values(unifiedChars);
       renderPuppetSkeletonOverlay(rc, {
-        shouldRender: (s.showPuppetSkeleton || s.tool === 'puppet') && charList.length > 0,
+        shouldRender: s.showPuppetSkeleton && charList.length > 0,
         characters: charList, activePuppetSkeletonId: s.activePuppetSkeletonId,
         selectedNodeId: s.selectedNodeId,
         animationClips: useProjectStore.getState().animationClips, sprites: Object.values(useProjectStore.getState().sprites),
@@ -408,6 +408,11 @@ export default function PixelCanvas() {
   useEffect(() => {
     s.markDirty();
   }, [s.referenceImageUrl, s.referenceImageVisible, s.referenceImageOpacity]);
+
+  // 覆盖层开关变化时标记重绘（网格/骨骼/轨迹等）
+  useEffect(() => {
+    s.markDirty();
+  }, [s.showGrid, s.showPuppetSkeleton, s.showTrajectories, s.showSkeletons]);
 
   // 节点关键帧变化时标记重绘
   const animationClips = useProjectStore((s) => s.animationClips);
