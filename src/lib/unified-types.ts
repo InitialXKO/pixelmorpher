@@ -40,6 +40,30 @@ export function halfPixelAlignSub(v: SubPixel): SubPixel {
   return Number.isInteger(px) ? v + 8 : v;
 }
 
+/**
+ * 3D → 2D 投影：按朝向将 3D 节点坐标投影到画布 2D
+ * @param x 3D X（东西向，SubPixel）
+ * @param y 3D Y（垂直，SubPixel）
+ * @param z 3D Z（南北向，SubPixel）
+ * @param direction 8 方向索引（0=East…6=South）
+ * @returns { canvasX, canvasY, depth } 画布 2D 坐标（SubPixel）与深度（越大越靠前）
+ */
+export function projectToView(
+  x: SubPixel,
+  y: SubPixel,
+  z: SubPixel,
+  direction: DirectionIndex,
+): { canvasX: SubPixel; canvasY: SubPixel; depth: number } {
+  // 朝向 → 旋转角（与烘焙一致：南向 0°，东向 90°，逆时针）
+  const theta = (((direction + 2) % 8) * Math.PI) / 4;
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  // 旋转投影：x' = x·cosθ + z·sinθ，深度 = -x·sinθ + z·cosθ
+  const canvasX = x * cos + z * sin;
+  const depth = -x * sin + z * cos;
+  return { canvasX, canvasY: y, depth };
+}
+
 // ---- Sprite & Visual Data ----
 
 /** Pixel color: hex string or null (transparent) */

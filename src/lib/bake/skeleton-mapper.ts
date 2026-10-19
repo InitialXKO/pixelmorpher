@@ -44,6 +44,8 @@ export interface ProcessedBone {
   boneName: string;
   parentIndex: number | null;
   directions: ProcessedBoneDirection[]; // 有效方向（有像素的）
+  /** 3D 关节坐标（归一化模型空间，用于 3D 节点位置） */
+  joint3D?: { x: number; y: number; z: number };
 }
 
 export interface SplitOptions {
@@ -103,6 +105,7 @@ export function splitByBoneId(
       boneName: b.name,
       parentIndex: pIdx,
       directions: [],
+      joint3D: b.joint3D,
     });
   }
 
@@ -480,6 +483,7 @@ export function splitSixParts(
       boneName: b.name,
       parentIndex: pIdx,
       directions: [],
+      joint3D: b.joint3D,
     });
   }
 
