@@ -104,8 +104,12 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
 
       const iv = ivMap.get(nodeId);
       const angle = iv?.angle ?? node.transform.angle ?? 0;
-      const offsetX = iv?.x ?? node.transform.x ?? 0;
-      const offsetY = iv?.y ?? node.transform.y ?? 0;
+      // 关键帧有无的区分：interpolateSingleNode 无轨道时返回默认 0，会污染 base；
+      // 有轨道时用插值，无轨道时直接用 node.transform（与主渲染 interpolateTransform 传 base.x 做默认一致）
+      const hasKfX = !!(node.tracks?.x?.keyframes && node.tracks.x.keyframes.length > 0);
+      const hasKfY = !!(node.tracks?.y?.keyframes && node.tracks.y.keyframes.length > 0);
+      const offsetX = hasKfX ? (iv?.x ?? node.transform.x ?? 0) : (node.transform.x ?? 0);
+      const offsetY = hasKfY ? (iv?.y ?? node.transform.y ?? 0) : (node.transform.y ?? 0);
       const offsetZ = node.transform.z ?? 0;
 
       let worldX3D: number;
