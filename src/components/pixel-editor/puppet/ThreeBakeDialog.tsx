@@ -977,7 +977,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             const g = sixPart.groups.find((x) => x.part === p && x.direction === d)!;
             return {
               direction: d,
-              pixels: showIds ? g.idPixels : g.colorPixels,
+              pixels: (showIds ? g.idPixels : undefined) ?? g.colorPixels,
               width: sixPart.width,
               height: sixPart.height,
               colorCount: 0,

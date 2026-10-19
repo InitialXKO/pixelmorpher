@@ -85,8 +85,8 @@ export interface SixPartGroup {
   part: PartName;
   direction: number;
   colorPixels: Uint8ClampedArray;
-  /** 块内局部 bone ID（0,1,2…，见 partBoneMap） */
-  idPixels: Uint8ClampedArray;
+  /** 块内局部 bone ID（0,1,2…，见 partBoneMap）；单节点部件可省略（无需拆分） */
+  idPixels?: Uint8ClampedArray;
   /** 相机半宽（归一化单位），用于跨部件尺寸归一化 */
   cameraHalf: number;
 }
@@ -968,7 +968,19 @@ export async function bakeSixParts(
 
     const groups: SixPartGroup[] = [];
     const partBoneMap = {} as Record<PartName, number[]>;
-    const total = parts.size * 8 * 2;
+    // 单节点部件（合并后只剩一个有效骨骼）跳过 ID 遍：无需按骨骼拆分
+    const partNeedsId = new Map<PartName, boolean>();
+    for (const [pname, bp] of parts) {
+      const effSet = new Set<number>();
+      for (const gi of bp.partBones) {
+        effSet.add(merge ? (merge.effectiveIndex[gi] ?? gi) : gi);
+      }
+      partNeedsId.set(pname, effSet.size > 1);
+    }
+    let total = 0;
+    for (const pname of parts.keys()) {
+      total += 8 * (partNeedsId.get(pname) ? 2 : 1);
+    }
     let done = 0;
 
     // 部件内局部 ID → 全局 bone：用 partBones 顺序
@@ -1148,16 +1160,19 @@ export async function bakeSixParts(
         onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° 颜色`);
         await new Promise((r) => setTimeout(r, 0));
 
-        // ID（同角度，不清 depth 也无妨，单遍无遮挡问题）
-        scene.remove(partGroup);
-        scene.add(idInner);
-        idInner.rotation.y = ang;
-        idInner.updateMatrixWorld(true);
-        renderer.clear(true, true, false);
-        renderer.render(scene, camera);
-        const idPixels = readFlipped();
-        onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° ID`);
-        await new Promise((r) => setTimeout(r, 0));
+        // ID：单节点部件跳过（无需拆分）
+        let idPixels: Uint8ClampedArray | undefined;
+        if (partNeedsId.get(pname)) {
+          scene.remove(partGroup);
+          scene.add(idInner);
+          idInner.rotation.y = ang;
+          idInner.updateMatrixWorld(true);
+          renderer.clear(true, true, false);
+          renderer.render(scene, camera);
+          idPixels = readFlipped();
+          onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° ID`);
+          await new Promise((r) => setTimeout(r, 0));
+        }
 
         groups.push({ part: pname, direction: ((d + 6) % 8), colorPixels, idPixels, cameraHalf: half });
         renderer.setRenderTarget(null);

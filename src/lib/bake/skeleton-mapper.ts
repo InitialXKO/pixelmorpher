@@ -544,10 +544,19 @@ export function splitSixParts(
       };
       for (let p = 0; p < W * H; p++) {
         const o = p * 4;
-        const bones = decodeBones(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
-        if (bones.length === 0) continue;
         if (g.colorPixels[o + 3] <= 8) continue; // 透明跳过
-        for (const bi of bones) addPixel(bi, o, p);
+        if (!g.idPixels) {
+          // 单节点部件：无 ID 图，所有非透明像素归唯一有效骨骼
+          const localToGlobal = bake.partBoneMap[part];
+          const gi0 = localToGlobal?.[0];
+          if (gi0 === undefined) continue;
+          const bi = merge ? (merge.effectiveIndex[gi0] ?? gi0) : gi0;
+          addPixel(bi, o, p);
+        } else {
+          const bones = decodeBones(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
+          if (bones.length === 0) continue;
+          for (const bi of bones) addPixel(bi, o, p);
+        }
       }
 
       // 每 bone 裁剪（与 splitByBoneId 同逻辑）
