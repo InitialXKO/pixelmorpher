@@ -85,6 +85,41 @@ export function mapDragTo3D(
   return { dx3: dx3 as SubPixel, dy3: dy, dz3: dz3 as SubPixel };
 }
 
+/**
+ * 视平面内旋转：将 3D 偏移量按朝向在视平面内旋转 angle 度
+ * 南向转 XY 面，东向转 ZY 面，斜向按 θ 旋转
+ * @param x 3D X 偏移（像素）
+ * @param y 3D Y 偏移（像素）
+ * @param z 3D Z 偏移（像素）
+ * @param angleDeg 旋转角度（度）
+ * @param direction 8 方向索引
+ * @returns 旋转后的 (x', y', z')（像素）
+ */
+export function rotateInViewPlane(
+  x: number,
+  y: number,
+  z: number,
+  angleDeg: number,
+  direction: DirectionIndex,
+): { x: number; y: number; z: number } {
+  const theta = (((direction + 2) % 8) * Math.PI) / 4;
+  const cosT = Math.cos(theta);
+  const sinT = Math.sin(theta);
+  // 3D → 视平面坐标：h = x·cosθ + z·sinθ（横），d = -x·sinθ + z·cosθ（深）
+  const h = x * cosT + z * sinT;
+  const d = -x * sinT + z * cosT;
+  // 视平面内旋转 (h, y)
+  const rad = (angleDeg * Math.PI) / 180;
+  const cosA = Math.cos(rad);
+  const sinA = Math.sin(rad);
+  const h2 = h * cosA - y * sinA;
+  const y2 = h * sinA + y * cosA;
+  // 视平面 → 3D：x' = h'·cosθ - d·sinθ，z' = h'·sinθ + d·cosθ
+  const x2 = h2 * cosT - d * sinT;
+  const z2 = h2 * sinT + d * cosT;
+  return { x: x2, y: y2, z: z2 };
+}
+
 // ---- Sprite & Visual Data ----
 
 /** Pixel color: hex string or null (transparent) */
@@ -680,6 +715,12 @@ export interface Character {
   // directions (0-7) using faceTurn deformation + alpha blending.
   // Undefined = use discrete variantIndex only (legacy behavior).
   facingAngle?: number;
+
+  // ---- Pseudo-3D Rotation (feature, from axis-misalignment bug) ----
+  // When true, parent rotation is applied in XY plane regardless of view
+  // direction, producing the "wonderful pseudo-3D" effect (depth axis swings).
+  // When false (default), rotation is applied correctly in the view plane.
+  pseudo3DRotate?: boolean;
 
   // ---- Metadata ----
   createdAt: number;

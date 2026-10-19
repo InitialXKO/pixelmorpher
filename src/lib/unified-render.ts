@@ -22,7 +22,7 @@ import type {
   IKChain,
 } from './unified-types';
 import {
-  subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView,
+  subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
 } from './unified-types';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
@@ -605,34 +605,35 @@ function computeChildTransforms(
         const socketOffset = resolveSocketOffset(socket, parentWorld.variantIndex);
 
         // Socket offsets are stored in sub-pixel units.
-        // Convert to PIXELS before applying rotation (cos/sin),
-        // then convert the rotated result back to sub-pixel for world position.
+        // 3D: combine socket (2D) + child local (3D), rotate in view plane
         const socketOffsetX_px = subToPx(socketOffset.x);
         const socketOffsetY_px = subToPx(socketOffset.y);
-
-        // Rotate socket offset by parent's world angle
-        const angleRad = (parentWorld.worldAngle * Math.PI) / 180;
-        const cosA = Math.cos(angleRad);
-        const sinA = Math.sin(angleRad);
-        const rotatedSocketX_px = socketOffsetX_px * cosA - socketOffsetY_px * sinA;
-        const rotatedSocketY_px = socketOffsetX_px * sinA + socketOffsetY_px * cosA;
-
-        // Rotate child's local offset by parent's world angle
-        // (child offset is in parent's local space, so it must rotate with the parent)
         const childOffsetX_px = subToPx(childInterpolated.x);
         const childOffsetY_px = subToPx(childInterpolated.y) * childInterpolated.stretch;
-        const rotatedChildX_px = childOffsetX_px * cosA - childOffsetY_px * sinA;
-        const rotatedChildY_px = childOffsetX_px * sinA + childOffsetY_px * cosA;
-
-        // 与 overlay 对齐：不减 plug（overlay 的节点标签位置用户确认正确）
-        childWorldX = parentWorld.worldX
-          + pxToSub(rotatedSocketX_px)
-          + pxToSub(rotatedChildX_px);
-        childWorldY = parentWorld.worldY
-          + pxToSub(rotatedSocketY_px)
-          + pxToSub(rotatedChildY_px);
-        // Z 直接累加（socket 无 z 偏移）
-        childWorldZ = parentWorld.worldZ + childInterpolated.z;
+        const childOffsetZ_px = subToPx(childInterpolated.z ?? 0);
+        // 合并偏移（socket z=0）
+        const totalX = socketOffsetX_px + childOffsetX_px;
+        const totalY = socketOffsetY_px + childOffsetY_px;
+        const totalZ = childOffsetZ_px;
+        // 旋转：正常模式按视平面转；伪3D模式故意转XY（复刻bug原理）
+        let rotated: { x: number; y: number; z: number };
+        if (character.pseudo3DRotate) {
+          // 伪3D：XY平面旋转，Z不动（bug原理：轴错位导致深度甩动）
+          const rad = (parentWorld.worldAngle * Math.PI) / 180;
+          const cosA = Math.cos(rad);
+          const sinA = Math.sin(rad);
+          rotated = {
+            x: totalX * cosA - totalY * sinA,
+            y: totalX * sinA + totalY * cosA,
+            z: totalZ,
+          };
+        } else {
+          // 正常：视平面内旋转（按父节点朝向）
+          rotated = rotateInViewPlane(totalX, totalY, totalZ, parentWorld.worldAngle, parentWorld.variantIndex);
+        }
+        childWorldX = parentWorld.worldX + pxToSub(rotated.x);
+        childWorldY = parentWorld.worldY + pxToSub(rotated.y);
+        childWorldZ = parentWorld.worldZ + pxToSub(rotated.z);
       } else {
         childWorldX = parentWorld.worldX + childInterpolated.x;
         childWorldY = parentWorld.worldY + childInterpolated.y;
@@ -648,19 +649,29 @@ function computeChildTransforms(
     } else {
       // Fixed attachment: offset rotated by parent's world angle
       const fixedOffset = childNode.attachment.fixedOffset ?? { x: 0, y: 0 };
-      const angleRad = (parentWorld.worldAngle * Math.PI) / 180;
-      const cosA = Math.cos(angleRad);
-      const sinA = Math.sin(angleRad);
 
-      // Combine fixed offset + child's local offset, then rotate
+      // Combine fixed offset + child's local offset (3D)
       const totalOffsetX_px = subToPx(fixedOffset.x) + subToPx(childInterpolated.x);
       const totalOffsetY_px = subToPx(fixedOffset.y) + subToPx(childInterpolated.y) * childInterpolated.stretch;
-      const rotatedX = totalOffsetX_px * cosA - totalOffsetY_px * sinA;
-      const rotatedY = totalOffsetX_px * sinA + totalOffsetY_px * cosA;
+      const totalOffsetZ_px = subToPx(childInterpolated.z ?? 0);
+      // 旋转：正常模式按视平面转；伪3D模式故意转XY
+      let rotated2: { x: number; y: number; z: number };
+      if (character.pseudo3DRotate) {
+        const rad = (parentWorld.worldAngle * Math.PI) / 180;
+        const cosA = Math.cos(rad);
+        const sinA = Math.sin(rad);
+        rotated2 = {
+          x: totalOffsetX_px * cosA - totalOffsetY_px * sinA,
+          y: totalOffsetX_px * sinA + totalOffsetY_px * cosA,
+          z: totalOffsetZ_px,
+        };
+      } else {
+        rotated2 = rotateInViewPlane(totalOffsetX_px, totalOffsetY_px, totalOffsetZ_px, parentWorld.worldAngle, parentWorld.variantIndex);
+      }
 
-      childWorldX = parentWorld.worldX + pxToSub(rotatedX);
-      childWorldY = parentWorld.worldY + pxToSub(rotatedY);
-      childWorldZ = parentWorld.worldZ + childInterpolated.z;
+      childWorldX = parentWorld.worldX + pxToSub(rotated2.x);
+      childWorldY = parentWorld.worldY + pxToSub(rotated2.y);
+      childWorldZ = parentWorld.worldZ + pxToSub(rotated2.z);
     }
 
     // Inherit parent rotation if configured
