@@ -376,6 +376,9 @@ export function mapBonesToNodes(
     const isRoot = pb.boneIndex === rootBone.boneIndex;
     const node = createDefaultNode(nodeId, pb.boneName);
     node.parentId = isRoot ? undefined : nodeIdByBone.get(pb.parentIndex!);
+    // 3D 烘焙角色默认朝向南（6），与烘焙时的规范方向一致
+    // （主渲染 currentDirection = rootTransform.variantIndex ?? 0，默认东会导致侧视投影错位）
+    node.transform.variantIndex = 6 as any;
 
     // children
     node.children = sorted
