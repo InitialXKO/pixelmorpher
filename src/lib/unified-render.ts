@@ -1753,12 +1753,12 @@ function renderNodeSprite(
   }
 
   // Create offscreen canvas from (possibly modified) sprite data
-  // 可逆性：分部件尺度差换算。精灵是分部件像素，节点是全局像素，绘制时按比例缩放对齐。
-  // scaleFactor = globalCameraHalf / partCameraHalf（记录的尺度差，可逆）
-  // 分部件相机紧（partCH小）→ 精灵像素小 → 需放大到全局尺度
+  // 可逆性：分部件尺度差换算。精灵是分部件像素（相机紧→图里大），节点是全局像素，
+  // 绘制时按比例缩放对齐。scaleFactor = partCameraHalf / globalCameraHalf（记录的尺度差，可逆）
+  // 相机紧（partCH小）→ 精灵在图里占比大 → 需缩小到全局尺度
   const partCH = sprite.partCameraHalf ?? 1.0;
   const globalCH = sprite.globalCameraHalf ?? 1.0;
-  const scaleFactor = globalCH / partCH;
+  const scaleFactor = partCH / globalCH;
 
   let spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height);
   if (!spriteCanvas || spriteCanvas.width === 0 || spriteCanvas.height === 0) return;
