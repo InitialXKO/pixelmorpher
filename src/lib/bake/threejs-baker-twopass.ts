@@ -971,6 +971,7 @@ export async function bakeModelTwoPass(
         parentIndex: parentIndex[i],
         bindPos: { x: bindPos[i].x, y: bindPos[i].y, z: bindPos[i].z },
         jointPixels: jointPixels[i],
+        joint3D: { x: normJoints[i].x, y: normJoints[i].y, z: normJoints[i].z },
       })),
       groups,
       width: size,
