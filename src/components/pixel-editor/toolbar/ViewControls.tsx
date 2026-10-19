@@ -219,27 +219,6 @@ export function ShowAllCharactersToggle() {
 }
 
 // ---- Weight Paint Toggle ----
-export function WeightPaintToggle() {
-  const showWeightPaint = useEditorStore((s) => s.showWeightPaint);
-  const toggleWeightPaint = useEditorStore((s) => s.toggleWeightPaint);
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Toggle
-          pressed={showWeightPaint}
-          onPressedChange={toggleWeightPaint}
-          aria-label="权重绘制"
-          className="h-7 w-7 p-0 data-[state=on]:bg-orange-600/30 data-[state=on]:text-orange-300 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded"
-        >
-          <Paintbrush className="size-3.5" />
-        </Toggle>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" className="text-xs">权重绘制</TooltipContent>
-    </Tooltip>
-  );
-}
-
 // ---- Onion Skin Toggle ----
 export function OnionSkinToggle() {
   // H22: 洋葱皮开关以 project-store 的 onionSkinEnabled 为唯一真相源
