@@ -402,6 +402,9 @@ export const puppetHandler: ToolHandler = {
     const dragNode = character.nodes[drag.nodeId];
     const variantIndex = (dragNode?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
     const direction = (['E', 'NE', 'N', 'NW', 'W', 'SW', 'S', 'SE'] as const)[variantIndex];
+    // 3D 视图朝向：用根节点的 variantIndex（全场景统一相机方向，非单节点精灵方向）
+    const rootNode = character.nodes[character.rootNodeId];
+    const viewDir = (rootNode?.transform.variantIndex ?? variantIndex) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
     const clip = store.animationClips.find((c) => c.id === drag.clipId);
     const ivMap = interpolateNodeKeyframes(character, frame);
 
@@ -454,13 +457,13 @@ export const puppetHandler: ToolHandler = {
       }
     } else {
       // move：移动目标节点的 offset（offset 在父节点局部空间，需逆旋转鼠标增量）
-      // 3D：按当前朝向将 2D 增量映射到 3D（南向改 x/y，东向改 z/y）
+      // 3D：按视图朝向（根节点方向）将 2D 增量映射到 3D（南向改 x/y，东向改 z/y）
       const ddx = px - drag.startX;
       const ddy = py - drag.startY;
       const angleRad = ((drag.parentWorldAngle ?? 0) * Math.PI) / 180;
       const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
       const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
-      const d3 = mapDragTo3D(pxToSub(localDx) as SubPixel, pxToSub(localDy) as SubPixel, variantIndex);
+      const d3 = mapDragTo3D(pxToSub(localDx) as SubPixel, pxToSub(localDy) as SubPixel, viewDir);
       const targetNode = character.nodes[drag.moveTargetNodeId ?? drag.nodeId];
       const newOffsetX = Math.round(drag.origOffsetX + d3.dx3);
       const newOffsetY = Math.round(drag.origOffsetY + d3.dy3);
@@ -545,8 +548,9 @@ export const puppetHandler: ToolHandler = {
       else if (e.code === 'KeyS' || e.code === 'ArrowDown') dy = MOVE_STEP;
       else if (e.code === 'KeyA' || e.code === 'ArrowLeft') dx = -MOVE_STEP;
       else if (e.code === 'KeyD' || e.code === 'ArrowRight') dx = MOVE_STEP;
-      // 3D 映射：按当前朝向将 2D 键盘增量映射到 3D
-      const dir = (node.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      // 3D 映射：按视图朝向（根节点方向）将 2D 键盘增量映射到 3D
+      const rootN = character.nodes[character.rootNodeId];
+      const dir = (rootN?.transform.variantIndex ?? node.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
       const d3 = mapDragTo3D(dx as SubPixel, dy as SubPixel, dir);
       applyNodePose(targetId, {
         x: (iv?.x ?? node.transform.x) + d3.dx3,
