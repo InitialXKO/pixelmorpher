@@ -7,8 +7,8 @@
 import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
 import type { RenderContext } from './canvas-render-helpers';
 import type { Character, Node } from '@/lib/unified-types';
-import { pxToSub, subToPx, projectToView, rotateInViewPlane } from '@/lib/unified-types';
-import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { pxToSub, subToPx, projectToView } from '@/lib/unified-types';
+import { computeWorldTransforms } from '@/lib/unified-render';
 import { useProjectStore } from '@/lib/store';
 
 // ============================================================
@@ -83,69 +83,21 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
     }
 
     // Compute world positions recursively (SubPixel units throughout;
-    // converted to pixels via subToPx at draw time)
-    // 用当前帧插值，不是 rest pose
-    // 传入该角色对应 clip 的 nodeKeyframes（用于 per-keyframe modifiers 插值）
-    const clip = animationClips.find((c) => (c as any).puppetCharacterId === character.id) ?? animationClips[0];
-    const ivMap = interpolateNodeKeyframes(character, useProjectStore.getState().currentFrame, clip?.nodeKeyframes ?? []);
+    // 直接复用主渲染的 computeWorldTransforms，保证与主画布完全一致（不再重复造轮子）
+    // 主渲染：3D 世界坐标（原点中心）→ generateRenderPlan 投影到 2D（+画布中心）
+    const worldTransforms = computeWorldTransforms(character, currentFrame, canvasWidth, canvasHeight);
     const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
     const centerX = pxToSub(canvasWidth / 2);
     const centerY = pxToSub(canvasHeight / 2);
-    // 与主渲染一致：用根节点的 variantIndex 作为当前朝向（默认 0=东）
+    // 与主渲染 generateRenderPlan:938 一致：用根节点的 variantIndex 作为当前朝向
     const rootNodeForDir = character.nodes[character.rootNodeId];
     const currentDirection = (rootNodeForDir?.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
-
-    // 3D 世界坐标累加（与主渲染 computeWorldTransforms 一致：以原点为中心，不含画布中心）
-    // worldPositions 存投影后 2D（含画布中心），供绘制标签/连线用
-    // 与主渲染一致：全角色统一用根节点的 currentDirection 投影，不再按节点各自 variantIndex
-    function computeNodeWorldPosOverlay(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldZ: number, parentWorldAngle: number): void {
-      const node = character.nodes[nodeId];
-      if (!node) return;
-
-      const iv = ivMap.get(nodeId);
-      const angle = iv?.angle ?? node.transform.angle ?? 0;
-      // 关键帧有无的区分：interpolateSingleNode 无轨道时返回默认 0，会污染 base；
-      // 有轨道时用插值，无轨道时直接用 node.transform（与主渲染 interpolateTransform 传 base.x 做默认一致）
-      const hasKfX = !!(node.tracks?.x?.keyframes && node.tracks.x.keyframes.length > 0);
-      const hasKfY = !!(node.tracks?.y?.keyframes && node.tracks.y.keyframes.length > 0);
-      const offsetX = hasKfX ? (iv?.x ?? node.transform.x ?? 0) : (node.transform.x ?? 0);
-      const offsetY = hasKfY ? (iv?.y ?? node.transform.y ?? 0) : (node.transform.y ?? 0);
-      const offsetZ = node.transform.z ?? 0;
-
-      let worldX3D: number;
-      let worldY3D: number;
-      let worldZ3D: number;
-
-      const isSocketAttached = node.attachment?.type === 'socket';
-      if (!isSocketAttached) {
-        // 根节点：3D 原点 + 本地偏移（不含画布中心，与主渲染一致）
-        worldX3D = offsetX;
-        worldY3D = offsetY;
-        worldZ3D = offsetZ;
-      } else {
-        // 子节点：父 3D 世界坐标 + 旋转后的本地 3D 偏移（socket 已置零）
-        const rotated = rotateInViewPlane(offsetX, offsetY, offsetZ, parentWorldAngle, currentDirection as any);
-        worldX3D = parentWorldX + rotated.x;
-        worldY3D = parentWorldY + rotated.y;
-        worldZ3D = parentWorldZ + rotated.z;
-      }
-
-      const worldAngle = parentWorldAngle + angle;
-      // 投影到 2D（与主渲染 generateRenderPlan 一致：用 currentDirection），再加画布中心
-      const proj = projectToView(worldX3D, worldY3D, worldZ3D, currentDirection);
+    for (const [nodeId, wt] of worldTransforms) {
+      // 投影到 2D（与主渲染 generateRenderPlan:1374 一致），再加画布中心（:1377-1378）
+      const proj = projectToView(wt.worldX, wt.worldY, wt.worldZ, currentDirection);
       const finalX = proj.canvasX + centerX;
       const finalY = proj.canvasY + centerY;
-      worldPositions.set(node.id, { x: finalX, y: finalY, angle: worldAngle } as any);
-
-      for (const childNode of nodes) {
-        if (childNode.attachment?.type === 'socket' && parentMap.get(childNode.id)?.parentId === node.id) {
-          computeNodeWorldPosOverlay(childNode.id, worldX3D, worldY3D, worldZ3D, worldAngle);
-        }
-      }
-    }
-
-    for (const node of nodes) {
-      if (node.attachment?.type !== 'socket') computeNodeWorldPosOverlay(node.id, 0, 0, 0, 0);
+      worldPositions.set(nodeId, { x: finalX, y: finalY, angle: wt.worldAngle });
     }
 
     // Draw connections (lines from parent sockets to child positions)
