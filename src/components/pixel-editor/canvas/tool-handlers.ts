@@ -433,8 +433,17 @@ export const puppetHandler: ToolHandler = {
       const charId = drag.characterId ?? drag.skeletonId;
       const parentNode = character.nodes[drag.parentNodeId ?? ''];
       if (parentNode) {
+        // 当前视图朝向（根节点方向）：3D 角色 socket 有 8 方向 offsets，需同步更新
+        const rootN = character.nodes[character.rootNodeId];
+        const viewDir = (rootN?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
         const newSockets = parentNode.sockets.map((s) =>
-          s.id === drag.socketId ? { ...s, basePosition: { x: newSocketX, y: newSocketY } } : s
+          s.id === drag.socketId
+            ? {
+                ...s,
+                basePosition: { x: newSocketX, y: newSocketY },
+                directionOffsets: { ...s.directionOffsets, [viewDir]: { x: newSocketX, y: newSocketY } },
+              }
+            : s
         );
         store.updateUnifiedNode(charId, drag.parentNodeId!, { sockets: newSockets });
       }
