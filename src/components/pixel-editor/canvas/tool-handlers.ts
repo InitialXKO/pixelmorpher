@@ -177,14 +177,12 @@ export const puppetHandler: ToolHandler = {
     const { node, character, clipId } = hit;
     project.setSelectedNodeId(node.id);
     s.editorStore.getState().setActivePuppetSkeletonId(character.id);
-    // 伪3D旋转标志跟随工具：伪3D工具设 true，普通木偶工具设 false（持久化，不随鼠标松开清除）
+    // 伪3D旋转工具：设标志为 true 后持久（不自动清零，避免姿态弹回）
     const activeTool = s.editorStore.getState().tool;
-    const ch0 = project.unifiedCharacters[character.id];
-    if (ch0) {
-      if (activeTool === 'pseudo3d_rotate' && !ch0.pseudo3DRotate) {
+    if (activeTool === 'pseudo3d_rotate') {
+      const ch0 = project.unifiedCharacters[character.id];
+      if (ch0 && !ch0.pseudo3DRotate) {
         project.updateUnifiedCharacter(character.id, { pseudo3DRotate: true });
-      } else if (activeTool === 'puppet' && ch0.pseudo3DRotate) {
-        project.updateUnifiedCharacter(character.id, { pseudo3DRotate: false });
       }
     }
     // 如果拖的是 IK 链的末端，挂起该链（拖拽期间用 FK，松手后重算目标）

@@ -120,6 +120,50 @@ export function rotateInViewPlane(
   return { x: x2, y: y2, z: z2 };
 }
 
+/**
+ * rotateInViewPlane 的逆运算：已知旋转后坐标，反推旋转前
+ */
+export function inverseRotateInViewPlane(
+  x: number,
+  y: number,
+  z: number,
+  angleDeg: number,
+  direction: DirectionIndex,
+): { x: number; y: number; z: number } {
+  return rotateInViewPlane(x, y, z, -angleDeg, direction);
+}
+
+/**
+ * 伪3D旋转：固定视平面水平轴，转 (Y, 深度轴) 平面
+ * 南向转 (Z,Y)，东向转 (X,Y)，全朝向有效
+ */
+export function rotatePseudo3D(
+  x: number,
+  y: number,
+  z: number,
+  angleDeg: number,
+  direction: DirectionIndex,
+): { x: number; y: number; z: number } {
+  const theta = (((direction + 2) % 8) * Math.PI) / 4;
+  const cosT = Math.cos(theta);
+  const sinT = Math.sin(theta);
+  // 3D → (h=视水平, d=深度)
+  const h = x * cosT + z * sinT;
+  const d = -x * sinT + z * cosT;
+  // 转 (d, y) 平面
+  const rad = (angleDeg * Math.PI) / 180;
+  const cosA = Math.cos(rad);
+  const sinA = Math.sin(rad);
+  const d2 = d * cosA - y * sinA;
+  const y2 = d * sinA + y * cosA;
+  // (h, d2) → 3D
+  return {
+    x: h * cosT - d2 * sinT,
+    y: y2,
+    z: h * sinT + d2 * cosT,
+  };
+}
+
 // ---- Sprite & Visual Data ----
 
 /** Pixel color: hex string or null (transparent) */

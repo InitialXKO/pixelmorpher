@@ -22,7 +22,7 @@ import type {
   IKChain,
 } from './unified-types';
 import {
-  subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
+  subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane, rotatePseudo3D,
 } from './unified-types';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
@@ -623,24 +623,7 @@ function computeChildTransforms(
         let rotated: { x: number; y: number; z: number };
         if (character.pseudo3DRotate) {
           // 伪3D：固定视平面水平轴，转 Y-深度平面 → 深度甩动（南向也有效）
-          const theta = (((parentWorld.variantIndex + 2) % 8) * Math.PI) / 4;
-          const cosT = Math.cos(theta);
-          const sinT = Math.sin(theta);
-          // 3D → (h=视水平, d=深度)
-          const h = totalX * cosT + totalZ * sinT;
-          const d = -totalX * sinT + totalZ * cosT;
-          // 转 (d, y) 平面
-          const rad = (parentWorld.worldAngle * Math.PI) / 180;
-          const cosA = Math.cos(rad);
-          const sinA = Math.sin(rad);
-          const d2 = d * cosA - totalY * sinA;
-          const y2 = d * sinA + totalY * cosA;
-          // (h, d2) → 3D
-          rotated = {
-            x: h * cosT - d2 * sinT,
-            y: y2,
-            z: h * sinT + d2 * cosT,
-          };
+          rotated = rotatePseudo3D(totalX, totalY, totalZ, parentWorld.worldAngle, parentWorld.variantIndex);
         } else {
           // 正常：视平面内旋转（按父节点朝向）
           rotated = rotateInViewPlane(totalX, totalY, totalZ, parentWorld.worldAngle, parentWorld.variantIndex);
@@ -671,21 +654,7 @@ function computeChildTransforms(
       // 旋转：正常模式按视平面转；伪3D模式转（Y, 深度轴）平面
       let rotated2: { x: number; y: number; z: number };
       if (character.pseudo3DRotate) {
-        const theta = (((parentWorld.variantIndex + 2) % 8) * Math.PI) / 4;
-        const cosT = Math.cos(theta);
-        const sinT = Math.sin(theta);
-        const h = totalOffsetX_px * cosT + totalOffsetZ_px * sinT;
-        const d = -totalOffsetX_px * sinT + totalOffsetZ_px * cosT;
-        const rad = (parentWorld.worldAngle * Math.PI) / 180;
-        const cosA = Math.cos(rad);
-        const sinA = Math.sin(rad);
-        const d2 = d * cosA - totalOffsetY_px * sinA;
-        const y2 = d * sinA + totalOffsetY_px * cosA;
-        rotated2 = {
-          x: h * cosT - d2 * sinT,
-          y: y2,
-          z: h * sinT + d2 * cosT,
-        };
+        rotated2 = rotatePseudo3D(totalOffsetX_px, totalOffsetY_px, totalOffsetZ_px, parentWorld.worldAngle, parentWorld.variantIndex);
       } else {
         rotated2 = rotateInViewPlane(totalOffsetX_px, totalOffsetY_px, totalOffsetZ_px, parentWorld.worldAngle, parentWorld.variantIndex);
       }
