@@ -44,8 +44,10 @@ export interface ProcessedBone {
   boneName: string;
   parentIndex: number | null;
   directions: ProcessedBoneDirection[]; // 有效方向（有像素的）
-  /** 3D 关节坐标（归一化模型空间，用于 3D 节点位置） */
+  /** 3D 关节坐标（世界单位，未归一化，用于 3D 节点位置） */
   joint3D?: { x: number; y: number; z: number };
+  /** 世界单位→像素的全局系数（= 64 * normalization.scale），用于 joint3D 转像素 */
+  worldToPixels?: number;
 }
 
 export interface SplitOptions {
@@ -55,6 +57,24 @@ export interface SplitOptions {
   minCrop?: number;
   /** 调色板颜色数，默认 16 */
   paletteSize?: number;
+}
+
+/**
+ * 回填 worldToPixels（可逆性原则）：
+ * 记录 bake 时的数值转换：worldToPixels = (图像尺寸/2) / (cameraHalf * normalization.scale)，
+ * 使 joint3D（归一化）→像素 的转换可逆，不靠猜测的 64。
+ */
+function fillWorldToPixels(
+  result: Map<number, ProcessedBone>,
+  W: number,
+  scale: number,
+): void {
+  for (const pb of result.values()) {
+    const d6 = pb.directions.find((d) => d.direction === 6) ?? pb.directions[0];
+    if (d6 && d6.cameraHalf > 0 && scale > 0) {
+      pb.worldToPixels = (W / 2) / (d6.cameraHalf * scale);
+    }
+  }
 }
 
 /**
@@ -246,6 +266,8 @@ export function splitByBoneId(
   for (const [bi, pb] of [...result]) {
     if (pb.directions.length === 0) result.delete(bi);
   }
+  // 回填 worldToPixels（可逆性：记录 bake 时的转换系数）
+  fillWorldToPixels(result, W, bake.normalization.scale);
   return result;
 }
 
@@ -345,16 +367,31 @@ export function mapBonesToNodes(
       .filter((c) => c.parentIndex === pb.boneIndex)
       .map((c) => nodeIdByBone.get(c.boneIndex)!);
 
-    // 3D 位置：X/Y 由 socket 承担（2D 烘焙像素尺度，与精灵对齐），
-    // 节点 transform 只保留 Z（深度），避免 X/Y 双重计数导致错位。
-    // （六部件各部件相机尺度不一，joint3D 整模归一化无法与 socket 对齐，故 X/Y 必须走 socket）
-    if (!isRoot && pb.joint3D) {
+    // 3D 位置（可逆性原则）：
+    // X/Y：用 South 视图（dir=6）的 2D 关节差值，单位=烘焙图像素，与精灵 plug 同源，保证拼合。
+    //   记录的转换：bake 时 jointX/Y 即图像素，无需再乘系数，直接可逆。
+    // Z：用 joint3D 差值，单位=归一化，需转像素。转换系数 = (图像尺寸/2) / (cameraHalf * scale)，
+    //   其中 cameraHalf（世界单位/半图）与 scale（归一化系数）均为 bake 时记录的值，保证可逆。
+    if (!isRoot) {
       const parentPb = processed.get(pb.parentIndex!);
-      const pj = parentPb?.joint3D;
-      if (pj) {
+      // South 视图的 2D 关节差值
+      const cdir6 = pb.directions.find((d) => d.direction === 6);
+      const pdir6 = parentPb?.directions.find((d) => d.direction === 6);
+      if (cdir6 && pdir6) {
+        node.transform.x = pxToSub(cdir6.jointX - pdir6.jointX);
+        node.transform.y = pxToSub(cdir6.jointY - pdir6.jointY);
+      } else {
         node.transform.x = 0;
         node.transform.y = 0;
-        node.transform.z = pxToSub((pb.joint3D.z - pj.z) * 64);
+      }
+      // Z：joint3D 差值转像素（用 South 方向的 cameraHalf 与全局 scale）
+      if (pb.joint3D && parentPb?.joint3D && pb.worldToPixels) {
+        node.transform.z = pxToSub((pb.joint3D.z - parentPb.joint3D.z) * pb.worldToPixels);
+      } else if (pb.joint3D && parentPb?.joint3D) {
+        // 回退：旧数据无 worldToPixels，用 64 近似
+        node.transform.z = pxToSub((pb.joint3D.z - parentPb.joint3D.z) * 64);
+      } else {
+        node.transform.z = 0;
       }
     }
     // 根节点 transform 保持 (0,0,0)
@@ -409,15 +446,11 @@ export function mapBonesToNodes(
       basePosition: { x: 0, y: 0 },
       directionOffsets: {},
     };
+    // 可逆性原则：节点 transform 已含完整的 3D 位移（X/Y 来自 South 视图 2D 差值，Z 来自 joint3D），
+    // socket 置零避免双重计数。2D 回退时渲染器用 directionOffsets[dir]??basePosition，零值即无偏移。
     for (const pdir of parentPb.directions) {
       const d = pdir.direction;
-      const cdir = pb.directions.find((x) => x.direction === d);
-      if (!cdir) continue;
-      // 注意 Y 轴：烘焙图是 top-down，2D 世界 Y 向下；SubPixel 同样向下为正
-      // 跨部件归一化：jointX/Y 是各部件独立相机下的像素，需 ×cameraHalf 统一到整模尺度再相减
-      const ox = cdir.jointX * cdir.cameraHalf - pdir.jointX * pdir.cameraHalf;
-      const oy = cdir.jointY * cdir.cameraHalf - pdir.jointY * pdir.cameraHalf;
-      const off = { x: pxToSub(ox), y: pxToSub(oy) };
+      const off = { x: 0, y: 0 };
       if (d === 0) socket.basePosition = off;
       socket.directionOffsets[d] = off;
     }
@@ -506,8 +539,12 @@ export function splitSixParts(
       parentIndex: pIdx,
       directions: [],
       joint3D: b.joint3D,
+      // 可逆性：记录世界→像素的转换系数 = (图像尺寸/2) / (cameraHalf * scale)
+      // cameraHalf 取 South 方向的值（各方向同部件相机，理论一致）；directions 填充后再回填
+      worldToPixels: undefined, // 占位，directions 就绪后在下方回填
     });
   }
+  // 回填 worldToPixels（需 directions 就绪，故在像素循环后）
 
   for (const part of ALL_PARTS) {
     const localToGlobal = bake.partBoneMap[part];
@@ -672,5 +709,9 @@ export function splitSixParts(
   for (const [bi, pb] of [...result]) {
     if (pb.directions.length === 0) result.delete(bi);
   }
+  // 回填 worldToPixels（可逆性：记录 bake 时的转换系数）
+  fillWorldToPixels(result, W, bake.normalization.scale);
   return result;
 }
+
+// ---- 单骨骼 2D 拆分 ----
