@@ -103,6 +103,8 @@ export interface SixPartBakeData {
   height: number;
   normalization: { center: { x: number; y: number; z: number }; scale: number };
   merge: BoneMergeInfo;
+  /** 整模相机半宽（归一化单位），用于全局统一尺度（可逆性：记录尺度差） */
+  globalCameraHalf: number;
 }
 
 export interface SixPartBakeOptions extends BakeOptions {
@@ -1197,6 +1199,8 @@ export async function bakeSixParts(
       height: size,
       normalization: { center: { x: center.x, y: center.y, z: center.z }, scale },
       merge,
+      // 整模归一化到 [-1,1]，globalCameraHalf = 1.0（归一化单位）
+      globalCameraHalf: 1.0,
     };
   } finally {
     renderer.dispose();

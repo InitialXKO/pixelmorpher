@@ -1753,15 +1753,32 @@ function renderNodeSprite(
   }
 
   // Create offscreen canvas from (possibly modified) sprite data
-  const spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height);
+  // 可逆性：分部件尺度差换算。精灵是分部件像素，节点是全局像素，绘制时按比例缩放对齐。
+  // scaleFactor = partCameraHalf / globalCameraHalf（记录的尺度差，可逆）
+  const partCH = sprite.partCameraHalf ?? 1.0;
+  const globalCH = sprite.globalCameraHalf ?? 1.0;
+  const scaleFactor = partCH / globalCH;
+
+  let spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height);
   if (!spriteCanvas || spriteCanvas.width === 0 || spriteCanvas.height === 0) return;
+  // 若尺度不一致，重采样到全局像素（一次，非每帧；记录的系数保证可逆）
+  if (Math.abs(scaleFactor - 1) > 0.001) {
+    const scaled = document.createElement('canvas');
+    scaled.width = Math.max(1, Math.round(spriteCanvas.width * scaleFactor));
+    scaled.height = Math.max(1, Math.round(spriteCanvas.height * scaleFactor));
+    const sctx = scaled.getContext('2d')!;
+    sctx.imageSmoothingEnabled = false; // 像素风不模糊
+    sctx.drawImage(spriteCanvas, 0, 0, scaled.width, scaled.height);
+    spriteCanvas = scaled;
+  }
 
   // Compute the pivot/plug position in the working canvas.
   // Account for modifier offset (e.g. outline expansion shifts the origin).
   // worldX/Y is where this pivot should land on the output canvas.
   // When mirrored, the plug X is flipped: x → width - x
-  let pivotX = (sprite.plug?.x !== undefined ? subToPx(sprite.plug.x) : spriteCanvas.width / 2) + modOffsetX;
-  const pivotY = (sprite.plug?.y !== undefined ? subToPx(sprite.plug.y) : spriteCanvas.height / 2) + modOffsetY;
+  // 注意：plug 已在全局像素下（画布已缩放），直接使用
+  let pivotX = (sprite.plug?.x !== undefined ? subToPx(sprite.plug.x) * scaleFactor : spriteCanvas.width / 2) + modOffsetX;
+  const pivotY = (sprite.plug?.y !== undefined ? subToPx(sprite.plug.y) * scaleFactor : spriteCanvas.height / 2) + modOffsetY;
 
   // Step 3: Apply horizontal flip if mirrored (STATIC mirror: flip BEFORE rotation)
   let workingCanvas: HTMLCanvasElement = spriteCanvas;

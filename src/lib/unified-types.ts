@@ -194,6 +194,10 @@ export interface Sprite {
   plug?: Point;                  // Optional: override node's default plug
   heightmap?: number[][];        // Optional: hand-painted heightmap for bump_light
   landmarks?: SpriteLandmarks;   // Optional: 手动标注的特征点（眼/鼻/嘴），用于蒙皮转面
+  /** 分部件相机半宽（归一化单位），用于渲染时换算到全局尺度（可逆性：记录尺度差） */
+  partCameraHalf?: number;
+  /** 整模相机半宽（归一化单位），全局统一尺度基准 */
+  globalCameraHalf?: number;
 }
 
 // ---- Direction System ----

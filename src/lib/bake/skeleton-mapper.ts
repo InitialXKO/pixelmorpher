@@ -37,6 +37,8 @@ export interface ProcessedBoneDirection {
   plugY: number;
   /** 相机半宽（归一化系数），用于跨部件 joint 坐标统一尺度 */
   cameraHalf: number;
+  /** 整模相机半宽（归一化单位），用于渲染时换算到全局尺度（可逆性：记录尺度差） */
+  globalCameraHalf?: number;
 }
 
 export interface ProcessedBone {
@@ -48,6 +50,8 @@ export interface ProcessedBone {
   joint3D?: { x: number; y: number; z: number };
   /** 世界单位→像素的全局系数（= 64 * normalization.scale），用于 joint3D 转像素 */
   worldToPixels?: number;
+  /** 烘焙图像尺寸（像素），用于全局尺度换算 */
+  bakeWidth?: number;
 }
 
 export interface SplitOptions {
@@ -127,6 +131,7 @@ export function splitByBoneId(
       parentIndex: pIdx,
       directions: [],
       joint3D: b.joint3D,
+      bakeWidth: W,
     });
   }
 
@@ -377,37 +382,24 @@ export function mapBonesToNodes(
       .filter((c) => c.parentIndex === pb.boneIndex)
       .map((c) => nodeIdByBone.get(c.boneIndex)!);
 
-    // 3D 位置（可逆性原则）：
-    // X/Y：用 South 视图（dir=6）的 2D 关节差值，单位=烘焙图像素，与精灵 plug 同源，保证拼合。
-    //   记录的转换：bake 时 jointX/Y 即图像素，无需再乘系数，直接可逆。
-    // Z：用 joint3D 差值，单位=归一化，需转像素。转换系数 = (图像尺寸/2) / (cameraHalf * scale)，
-    //   其中 cameraHalf（世界单位/半图）与 scale（归一化系数）均为 bake 时记录的值，保证可逆。
+    // 3D 位置（可逆性原则，全局统一尺度）：
+    // 直接用 joint3D（归一化 3D 真值）差值，三轴同源，不再经 2D 反推。
+    // 换算：pixels = normalized * (W/2) / globalCameraHalf，其中 globalCameraHalf=1.0（整模归一化到[-1,1]）。
+    // 记录的转换：bake.globalCameraHalf 在烘焙时记录，split 透传到 direction，导入时使用，全程可逆。
     if (!isRoot) {
       const parentPb = processed.get(pb.parentIndex!);
-      // South 视图的 2D 关节差值
-      const cdir6 = pb.directions.find((d) => d.direction === 6);
-      const pdir6 = parentPb?.directions.find((d) => d.direction === 6);
-      if (cdir6 && pdir6) {
-        // 可逆性：cdir/pdir 的 jointX/Y 是各部件独立相机下的图像素，尺度不同不能直接减。
-        // 经记录的 cameraHalf 换算到同一尺度（子部件像素）：
-        //   world = pixels * cameraHalf / (W/2)；diffPixels_child = (cWorld - pWorld) * (W/2) / cCameraHalf
-        // 化简得：dx = cJointX - pJointX * (pCameraHalf / cCameraHalf)
-        const scaleRatio = pdir6.cameraHalf / cdir6.cameraHalf;
-        const dx = cdir6.jointX - pdir6.jointX * scaleRatio;
-        const dy = cdir6.jointY - pdir6.jointY * scaleRatio;
-        node.transform.x = pxToSub(dx);
-        node.transform.y = pxToSub(dy);
+      if (pb.joint3D && parentPb?.joint3D) {
+        // 取子骨骼 South 方向的 globalCameraHalf（各方向一致；回退 1.0）
+        const cdir = pb.directions.find((d) => d.direction === 6) ?? pb.directions[0];
+        const gch = cdir?.globalCameraHalf ?? 1.0;
+        const bw = pb.bakeWidth ?? 128;
+        const scale = (bw / 2) / gch; // (W/2)/globalCameraHalf，全局统一尺度
+        node.transform.x = pxToSub((pb.joint3D.x - parentPb.joint3D.x) * scale);
+        node.transform.y = pxToSub((pb.joint3D.y - parentPb.joint3D.y) * scale);
+        node.transform.z = pxToSub((pb.joint3D.z - parentPb.joint3D.z) * scale);
       } else {
         node.transform.x = 0;
         node.transform.y = 0;
-      }
-      // Z：joint3D 差值转像素（用 South 方向的 cameraHalf 与全局 scale）
-      if (pb.joint3D && parentPb?.joint3D && pb.worldToPixels) {
-        node.transform.z = pxToSub((pb.joint3D.z - parentPb.joint3D.z) * pb.worldToPixels);
-      } else if (pb.joint3D && parentPb?.joint3D) {
-        // 回退：旧数据无 worldToPixels，用 64 近似
-        node.transform.z = pxToSub((pb.joint3D.z - parentPb.joint3D.z) * 64);
-      } else {
         node.transform.z = 0;
       }
     }
@@ -440,6 +432,9 @@ export function mapBonesToNodes(
         height: dir.height,
         data: dir.grid,
         plug: { x: pxToSub(dir.plugX), y: pxToSub(dir.plugY) },
+        // 可逆性：记录分部件与全局的尺度差，渲染时换算
+        partCameraHalf: dir.cameraHalf,
+        globalCameraHalf: dir.globalCameraHalf ?? 1.0,
       };
       sprites[spriteId] = sprite;
       piece.sprites[dir.direction] = { spriteId };
@@ -556,6 +551,7 @@ export function splitSixParts(
       parentIndex: pIdx,
       directions: [],
       joint3D: b.joint3D,
+      bakeWidth: W,
       // 可逆性：记录世界→像素的转换系数 = (图像尺寸/2) / (cameraHalf * scale)
       // cameraHalf 取 South 方向的值（各方向同部件相机，理论一致）；directions 填充后再回填
       worldToPixels: undefined, // 占位，directions 就绪后在下方回填
@@ -717,6 +713,7 @@ export function splitSixParts(
           plugX: (jx - x0) * g.cameraHalf,
           plugY: (jy - y0) * g.cameraHalf,
           cameraHalf: g.cameraHalf,
+          globalCameraHalf: bake.globalCameraHalf,
         });
       }
     }
