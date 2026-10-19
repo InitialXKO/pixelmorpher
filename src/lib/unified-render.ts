@@ -22,7 +22,7 @@ import type {
   IKChain,
 } from './unified-types';
 import {
-  subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP,
+  subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView,
 } from './unified-types';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
@@ -1376,17 +1376,20 @@ export function generateRenderPlan(
       }
     }
 
+    // 3D 投影：按当前朝向将 3D 世界坐标映射到 2D 画布（直接取项，非两步投影）
+    const proj = projectToView(worldTf.worldX, worldTf.worldY, worldTf.worldZ, currentDirection);
     nodeInstructions.push({
       nodeId,
       sprite: effectiveSprite,
-      worldX: worldTf.worldX,
-      worldY: worldTf.worldY,
+      worldX: proj.canvasX as SubPixel,
+      worldY: proj.canvasY as SubPixel,
       angle: worldTf.worldAngle,
       stretch: worldTf.worldStretch,
       variantIndex: worldTf.variantIndex,
       rotationStrategy: strategy,
       mirror: mirror || worldTf.mirror,
-      zIndex: nodeZ.get(nodeId) ?? 0,
+      // 3D 深度排序替代 zIndex：depth 越大越靠前（后绘制）
+      zIndex: proj.depth,
       drawLayer: node.drawLayer,
       generated: undefined, // Discs are handled separately
       modifiers: nodeModifiers,
