@@ -475,18 +475,18 @@ export const puppetHandler: ToolHandler = {
           const newChildZ = pxToSub(newTotal.z - sockZ3D_px);
           // 写关键帧（x/y），z 走 base（无 z 轨道）
           const childIv = ivMap.get(childId);
+          const childVariantIndex = (childNode.transform.variantIndex ?? variantIndex) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
           writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, childId, frame, {
             angle: childIv?.angle ?? childNode.transform.angle,
             stretch: childIv?.stretch ?? childNode.transform.stretch,
             x: Math.round(newChildX),
             y: Math.round(newChildY),
-          }, variantIndex);
+          }, childVariantIndex);
           // z 直接写 base
           store.updateUnifiedNode(drag.characterId ?? drag.skeletonId, childId, {
             transform: { ...childNode.transform, z: Math.round(newChildZ) },
           });
         }
-        // 父节点角度不变（子节点已直接烘焙位移）
       } else {
         const newAngle = drag.origAngle + Math.round(angleDelta);
         writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
