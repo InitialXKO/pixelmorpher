@@ -254,6 +254,7 @@ export const puppetHandler: ToolHandler = {
         origStretch: 1,
         origOffsetX: 0,
         origOffsetY: 0,
+        origOffsetZ: 0,
         moveTargetNodeId: node.id,
         mode: 'pivot' as const,
         pivotWorldX: 0,
@@ -300,6 +301,7 @@ export const puppetHandler: ToolHandler = {
         origStretch: 1,
         origOffsetX: 0,
         origOffsetY: 0,
+        origOffsetZ: 0,
         moveTargetNodeId: node.id,
         mode: 'socket' as const,
         pivotWorldX: 0,
@@ -370,6 +372,7 @@ export const puppetHandler: ToolHandler = {
       origStretch: rotateIv?.stretch ?? node.transform.stretch,
       origOffsetX: moveIv?.x ?? moveTarget.transform.x,
       origOffsetY: moveIv?.y ?? moveTarget.transform.y,
+      origOffsetZ: moveTarget.transform.z ?? 0,
       moveTargetNodeId: moveTarget.id,
       mode: dragMode,
       pivotWorldX,
@@ -467,7 +470,7 @@ export const puppetHandler: ToolHandler = {
       const targetNode = character.nodes[drag.moveTargetNodeId ?? drag.nodeId];
       const newOffsetX = Math.round(drag.origOffsetX + d3.dx3);
       const newOffsetY = Math.round(drag.origOffsetY + d3.dy3);
-      const newOffsetZ = Math.round((targetNode?.transform.z ?? 0) + d3.dz3);
+      const newOffsetZ = Math.round((drag.origOffsetZ ?? 0) + d3.dz3);
       const targetNodeId = drag.moveTargetNodeId ?? drag.nodeId;
       writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, targetNodeId, frame, {
         angle: drag.origAngle,
