@@ -91,10 +91,14 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
     const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
     const centerX = pxToSub(canvasWidth / 2);
     const centerY = pxToSub(canvasHeight / 2);
+    // 与主渲染一致：用根节点的 variantIndex 作为当前朝向（默认 0=东）
+    const rootNodeForDir = character.nodes[character.rootNodeId];
+    const currentDirection = (rootNodeForDir?.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
 
     // 3D 世界坐标累加（与主渲染 computeWorldTransforms 一致：以原点为中心，不含画布中心）
     // worldPositions 存投影后 2D（含画布中心），供绘制标签/连线用
-    function computeNodeWorldPosOverlay(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldZ: number, parentWorldAngle: number, parentViewDir: number): void {
+    // 与主渲染一致：全角色统一用根节点的 currentDirection 投影，不再按节点各自 variantIndex
+    function computeNodeWorldPosOverlay(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldZ: number, parentWorldAngle: number): void {
       const node = character.nodes[nodeId];
       if (!node) return;
 
@@ -103,7 +107,6 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
       const offsetX = iv?.x ?? node.transform.x ?? 0;
       const offsetY = iv?.y ?? node.transform.y ?? 0;
       const offsetZ = node.transform.z ?? 0;
-      const viewDir = (node.transform.variantIndex ?? parentViewDir ?? 6) as 0|1|2|3|4|5|6|7;
 
       let worldX3D: number;
       let worldY3D: number;
@@ -117,28 +120,28 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
         worldZ3D = offsetZ;
       } else {
         // 子节点：父 3D 世界坐标 + 旋转后的本地 3D 偏移（socket 已置零）
-        const rotated = rotateInViewPlane(offsetX, offsetY, offsetZ, parentWorldAngle, parentViewDir as any);
+        const rotated = rotateInViewPlane(offsetX, offsetY, offsetZ, parentWorldAngle, currentDirection as any);
         worldX3D = parentWorldX + rotated.x;
         worldY3D = parentWorldY + rotated.y;
         worldZ3D = parentWorldZ + rotated.z;
       }
 
       const worldAngle = parentWorldAngle + angle;
-      // 投影到 2D（与主渲染 generateRenderPlan 一致），再加画布中心
-      const proj = projectToView(worldX3D, worldY3D, worldZ3D, viewDir);
+      // 投影到 2D（与主渲染 generateRenderPlan 一致：用 currentDirection），再加画布中心
+      const proj = projectToView(worldX3D, worldY3D, worldZ3D, currentDirection);
       const finalX = proj.canvasX + centerX;
       const finalY = proj.canvasY + centerY;
       worldPositions.set(node.id, { x: finalX, y: finalY, angle: worldAngle } as any);
 
       for (const childNode of nodes) {
         if (childNode.attachment?.type === 'socket' && parentMap.get(childNode.id)?.parentId === node.id) {
-          computeNodeWorldPosOverlay(childNode.id, worldX3D, worldY3D, worldZ3D, worldAngle, viewDir);
+          computeNodeWorldPosOverlay(childNode.id, worldX3D, worldY3D, worldZ3D, worldAngle);
         }
       }
     }
 
     for (const node of nodes) {
-      if (node.attachment?.type !== 'socket') computeNodeWorldPosOverlay(node.id, 0, 0, 0, 0, 6);
+      if (node.attachment?.type !== 'socket') computeNodeWorldPosOverlay(node.id, 0, 0, 0, 0);
     }
 
     // Draw connections (lines from parent sockets to child positions)
