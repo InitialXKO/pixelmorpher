@@ -7,7 +7,7 @@
 import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
 import type { RenderContext } from './canvas-render-helpers';
 import type { Character, Node } from '@/lib/unified-types';
-import { pxToSub, subToPx } from '@/lib/unified-types';
+import { pxToSub, subToPx, projectToView, rotateInViewPlane } from '@/lib/unified-types';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { useProjectStore } from '@/lib/store';
 
@@ -92,71 +92,55 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
     const centerX = pxToSub(canvasWidth / 2);
     const centerY = pxToSub(canvasHeight / 2);
 
-    function computeNodeWorldPosOverlay(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldAngle: number): void {
+    // 3D 世界坐标累加（与主渲染 computeWorldTransforms 一致），最后投影到 2D 显示
+    // worldPositions 存投影后的 2D（x,y）+ 角度，供绘制标签/连线用
+    function computeNodeWorldPosOverlay(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldZ: number, parentWorldAngle: number, parentViewDir: number): void {
       const node = character.nodes[nodeId];
       if (!node) return;
 
-      // 用插值，不是 rest pose
       const iv = ivMap.get(nodeId);
-      // 单位：全 SubPixel（node.transform.x/y、socket.basePosition 均为 SubPixel）
       const angle = iv?.angle ?? node.transform.angle ?? 0;
       const offsetX = iv?.x ?? node.transform.x ?? 0;
       const offsetY = iv?.y ?? node.transform.y ?? 0;
+      const offsetZ = node.transform.z ?? 0;
+      const viewDir = (node.transform.variantIndex ?? parentViewDir ?? 6) as 0|1|2|3|4|5|6|7;
 
-      let worldX: number;
-      let worldY: number;
+      let worldX3D: number;
+      let worldY3D: number;
+      let worldZ3D: number;
 
       const isSocketAttached = node.attachment?.type === 'socket';
       if (!isSocketAttached) {
-        worldX = Math.round(centerX + offsetX);
-        worldY = Math.round(centerY + offsetY);
+        // 根节点：画布中心 + 本地偏移（3D）
+        worldX3D = centerX + offsetX;
+        worldY3D = centerY + offsetY;
+        worldZ3D = offsetZ;
       } else {
-        const parentInfo = parentMap.get(node.id);
-        if (parentInfo) {
-          const parentPos = worldPositions.get(parentInfo.parentId);
-          if (parentPos) {
-            const parentNode = character.nodes[parentInfo.parentId];
-            const socket = parentNode?.sockets.find(s => s.id === parentInfo.socketId);
-            if (socket && parentNode) {
-              const parentAngleRad = (parentPos.angle * Math.PI) / 180;
-              const cosA = Math.cos(parentAngleRad);
-              const sinA = Math.sin(parentAngleRad);
-              // 与主渲染一致：用 directionOffsets
-              const dir = (parentNode.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
-              const sockOff = socket.directionOffsets?.[dir] ?? socket.basePosition;
-              const socketWorldX = parentPos.x + (sockOff.x * cosA - sockOff.y * sinA);
-              const socketWorldY = parentPos.y + (sockOff.x * sinA + sockOff.y * cosA);
-              // offset 在父节点局部空间，需按父节点角度旋转（与主渲染一致）
-              const rotatedOffsetX = offsetX * cosA - offsetY * sinA;
-              const rotatedOffsetY = offsetX * sinA + offsetY * cosA;
-              worldX = Math.round(socketWorldX + rotatedOffsetX);
-              worldY = Math.round(socketWorldY + rotatedOffsetY);
-            } else {
-              worldX = Math.round(parentPos.x + offsetX);
-              worldY = Math.round(parentPos.y + offsetY);
-            }
-          } else {
-            worldX = Math.round(centerX + offsetX);
-            worldY = Math.round(centerY + offsetY);
-          }
-        } else {
-          worldX = Math.round(centerX + offsetX);
-          worldY = Math.round(centerY + offsetY);
-        }
+        // 子节点：父 3D 世界坐标 + 旋转后的本地 3D 偏移（socket 已置零）
+        // 与主渲染一致：rotateInViewPlane 按父视角旋转视平面
+        const rotated = rotateInViewPlane(offsetX, offsetY, offsetZ, parentWorldAngle, parentViewDir as any);
+        worldX3D = parentWorldX + rotated.x;
+        worldY3D = parentWorldY + rotated.y;
+        worldZ3D = parentWorldZ + rotated.z;
       }
 
       const worldAngle = parentWorldAngle + angle;
-      worldPositions.set(node.id, { x: worldX, y: worldY, angle: worldAngle });
+      // 投影到 2D（与主渲染 generateRenderPlan 一致）
+      const proj = projectToView(worldX3D, worldY3D, worldZ3D, viewDir);
+      // 存 2D 投影结果（+ 画布中心偏移，centerX/Y 已含）
+      // 注意：projectToView 返回的是相对坐标，需加回中心？主渲染在 generateRenderPlan 里加画布中心
+      // 此处 worldX3D 已含 centerX，投影后需保持。简化：直接存投影的 canvasX/Y（已是 SubPixel）
+      worldPositions.set(node.id, { x: proj.canvasX, y: proj.canvasY, angle: worldAngle } as any);
 
       for (const childNode of nodes) {
         if (childNode.attachment?.type === 'socket' && parentMap.get(childNode.id)?.parentId === node.id) {
-          computeNodeWorldPosOverlay(childNode.id, worldX, worldY, worldAngle);
+          computeNodeWorldPosOverlay(childNode.id, worldX3D, worldY3D, worldZ3D, worldAngle, viewDir);
         }
       }
     }
 
     for (const node of nodes) {
-      if (node.attachment?.type !== 'socket') computeNodeWorldPosOverlay(node.id, centerX, centerY, 0);
+      if (node.attachment?.type !== 'socket') computeNodeWorldPosOverlay(node.id, 0, 0, 0, 0, 6);
     }
 
     // Draw connections (lines from parent sockets to child positions)
