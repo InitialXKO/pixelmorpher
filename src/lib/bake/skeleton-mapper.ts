@@ -345,14 +345,15 @@ export function mapBonesToNodes(
       .filter((c) => c.parentIndex === pb.boneIndex)
       .map((c) => nodeIdByBone.get(c.boneIndex)!);
 
-    // 3D 位置（Option A）：local offset = (joint3D - parent.joint3D) * 64 → SubPixel
-    // 64 将归一化 [-1,1] 映射到像素 [-64,64]，与 2D 精灵尺度对齐
+    // 3D 位置：X/Y 由 socket 承担（2D 烘焙像素尺度，与精灵对齐），
+    // 节点 transform 只保留 Z（深度），避免 X/Y 双重计数导致错位。
+    // （六部件各部件相机尺度不一，joint3D 整模归一化无法与 socket 对齐，故 X/Y 必须走 socket）
     if (!isRoot && pb.joint3D) {
       const parentPb = processed.get(pb.parentIndex!);
       const pj = parentPb?.joint3D;
       if (pj) {
-        node.transform.x = pxToSub((pb.joint3D.x - pj.x) * 64);
-        node.transform.y = pxToSub((pb.joint3D.y - pj.y) * 64);
+        node.transform.x = 0;
+        node.transform.y = 0;
         node.transform.z = pxToSub((pb.joint3D.z - pj.z) * 64);
       }
     }
@@ -408,12 +409,15 @@ export function mapBonesToNodes(
       basePosition: { x: 0, y: 0 },
       directionOffsets: {},
     };
-    // 3D 导入：节点 transform 已含 (joint3D-parent.joint3D)*64 的 3D 位移，
-    // socket 不再重复计算 2D 偏移（否则渲染器里 socket3D+childLocal 双重计数导致错位）。
-    // directionOffsets 置零，plug 仍用 2D 烘焙值（精灵锚点）。
     for (const pdir of parentPb.directions) {
       const d = pdir.direction;
-      const off = { x: 0, y: 0 };
+      const cdir = pb.directions.find((x) => x.direction === d);
+      if (!cdir) continue;
+      // 注意 Y 轴：烘焙图是 top-down，2D 世界 Y 向下；SubPixel 同样向下为正
+      // 跨部件归一化：jointX/Y 是各部件独立相机下的像素，需 ×cameraHalf 统一到整模尺度再相减
+      const ox = cdir.jointX * cdir.cameraHalf - pdir.jointX * pdir.cameraHalf;
+      const oy = cdir.jointY * cdir.cameraHalf - pdir.jointY * pdir.cameraHalf;
+      const off = { x: pxToSub(ox), y: pxToSub(oy) };
       if (d === 0) socket.basePosition = off;
       socket.directionOffsets[d] = off;
     }
