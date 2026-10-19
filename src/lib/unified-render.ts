@@ -1756,9 +1756,10 @@ function renderNodeSprite(
   // 可逆性：分部件尺度差换算。精灵是分部件像素（相机紧→图里大），节点是全局像素，
   // 绘制时按比例缩放对齐。scaleFactor = partCameraHalf / globalCameraHalf（记录的尺度差，可逆）
   // 相机紧（partCH小）→ 精灵在图里占比大 → 需缩小到全局尺度
+  // TODO: 用户反馈烘焙精灵已正确但渲染裁剪，暂禁用缩放排查
   const partCH = sprite.partCameraHalf ?? 1.0;
   const globalCH = sprite.globalCameraHalf ?? 1.0;
-  const scaleFactor = partCH / globalCH;
+  const scaleFactor = 1.0; // partCH / globalCH;
 
   let spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height);
   if (!spriteCanvas || spriteCanvas.width === 0 || spriteCanvas.height === 0) return;
