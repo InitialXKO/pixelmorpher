@@ -19,6 +19,8 @@ export interface BakeResult {
   colorCount: number;
   /** 该方向耗时 ms */
   elapsedMs: number;
+  /** 单肢体重烘专用：本图帧在整模归一化尺度下的等效 cameraHalf（替换回主烘焙数据时对齐尺度用） */
+  cameraHalfGlobal?: number;
 }
 
 export interface BakeOptions {

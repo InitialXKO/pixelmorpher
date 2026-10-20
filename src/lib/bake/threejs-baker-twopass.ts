@@ -1154,7 +1154,7 @@ function orientLimbVertical(
   positions: number[],
   jointModel: THREE.Vector3,
   parentJointModel: THREE.Vector3 | null,
-): { positions: number[]; joint: THREE.Vector3 } {
+): { positions: number[]; joint: THREE.Vector3; azimuth: number } {
   const n = positions.length / 3;
   // 质心
   const centroid = new THREE.Vector3();
@@ -1191,6 +1191,9 @@ function orientLimbVertical(
   }
   const joint = jointModel.clone().applyQuaternion(q1);
 
+  // 方位锚：原模型正面（+Z）被 q2∘q1 转到哪个水平方位——拍摄时绕 Y 减去它，
+  // 使每个方向编号对应的观察方位与主烘焙一致（否则编号对、拍到的面错一档）。
+  const composed = q1.clone();
   // q2：XZ 平面宽轴 → X（扁平面朝 ±Z，手心朝前）
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (let i = 0; i < n; i++) {
@@ -1202,6 +1205,7 @@ function orientLimbVertical(
   }
   if ((maxZ - minZ) > (maxX - minX)) {
     const q2 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+    composed.premultiply(q2);
     for (let i = 0; i < n; i++) {
       v.set(rotated[i * 3], rotated[i * 3 + 1], rotated[i * 3 + 2]).applyQuaternion(q2);
       rotated[i * 3] = v.x;
@@ -1210,8 +1214,10 @@ function orientLimbVertical(
     }
     joint.applyQuaternion(q2);
   }
+  const frontAfter = new THREE.Vector3(0, 0, 1).applyQuaternion(composed);
+  const azimuth = Math.atan2(frontAfter.x, frontAfter.z);
 
-  return { positions: rotated, joint };
+  return { positions: rotated, joint, azimuth };
 }
 
 // ============================================================
@@ -1676,7 +1682,7 @@ function extractBoneGeometry(
 function prepareLimbGeometry(
   analysis: ReturnType<typeof analyzeTriangles>,
   boneIndex: number,
-): { geometry: THREE.BufferGeometry; jointN: THREE.Vector3 } | null {
+): { geometry: THREE.BufferGeometry; jointN: THREE.Vector3; azimuth: number; radiusModel: number } | null {
   const subtree = collectSubtreeIndices(analysis.parentIndex, boneIndex);
   const tri = extractBoneTriangles(analysis, subtree, boneIndex);
   if (!tri) return null;
@@ -1702,7 +1708,7 @@ function prepareLimbGeometry(
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(normPos, 3));
   geometry.computeVertexNormals();
-  return { geometry, jointN };
+  return { geometry, jointN, azimuth: oriented.azimuth, radiusModel: osphere.radius };
 }
 
 /** 在已加载的 model 上应用手指握拳（detect + pose），返回检测结果 */
@@ -1746,6 +1752,8 @@ export async function bakeSingleBone(
       typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
     const model = gltf.scene;
     model.updateMatrixWorld(true);
+    // 整模包围球半径（原始单位）：把单烘取景尺度折算回整模归一化尺度用
+    const modelSphere = new THREE.Box3().setFromObject(model).getBoundingSphere(new THREE.Sphere());
 
     // 手指握拳（bakeSingleBone 专属，主流程 C 不摆）：先摆姿态再分析
     poseFingersOnModel(model, options);
@@ -1758,7 +1766,7 @@ export async function bakeSingleBone(
     // 子树语义：选手部 bone 会带上手指（握拳才有意义），选前臂会带上手
     const prepared = prepareLimbGeometry(analysis, boneIndex);
     if (!prepared) throw new Error(`骨骼 ${boneName} 没有三角形`);
-    const { geometry, jointN } = prepared;
+    const { geometry, jointN, azimuth, radiusModel } = prepared;
 
     const gradientMap = makeGradientMap(toonSteps);
     const mesh = new THREE.Mesh(
@@ -1789,7 +1797,7 @@ export async function bakeSingleBone(
 
     for (let d = 0; d < 8; d++) {
       const dt0 = performance.now();
-      group.rotation.y = (d / 8) * Math.PI * 2;
+      group.rotation.y = (d / 8) * Math.PI * 2 - azimuth;
       group.updateMatrixWorld(true);
       jointWorld.copy(jointN).applyMatrix4(group.matrixWorld);
       camera.position.copy(jointWorld).addScaledVector(viewDir, 4);
@@ -1827,6 +1835,8 @@ export async function bakeSingleBone(
         height: size,
         colorCount: colorSet.size,
         elapsedMs: performance.now() - dt0,
+        // 本帧在整模归一化尺度下的等效 cameraHalf：帧半高 (f/2, limb 归一化单位) × 肢体半径占整模半径之比
+        cameraHalfGlobal: modelSphere.radius > 1e-9 ? (f / 2) * (radiusModel / modelSphere.radius) : undefined,
       });
     }
 
@@ -1907,7 +1917,7 @@ export async function previewHandCurl(
 
     const prepared = prepareLimbGeometry(analysis, handIndex);
     if (!prepared) return null;
-    const { geometry, jointN } = prepared;
+    const { geometry, jointN, azimuth } = prepared;
 
     const gradientMap = makeGradientMap(toonSteps);
     const mesh = new THREE.Mesh(
@@ -1927,7 +1937,7 @@ export async function previewHandCurl(
     const f = 2.4;
     const camera = new THREE.OrthographicCamera(-f / 2, f / 2, f / 2, -f / 2, 0.1, 20);
     const viewDir = new THREE.Vector3(0, 1.1, 4).normalize();
-    group.rotation.y = (direction / 8) * Math.PI * 2;
+    group.rotation.y = (direction / 8) * Math.PI * 2 - azimuth;
     group.updateMatrixWorld(true);
     const jointWorld = jointN.clone().applyMatrix4(group.matrixWorld);
     camera.position.copy(jointWorld).addScaledVector(viewDir, 4);

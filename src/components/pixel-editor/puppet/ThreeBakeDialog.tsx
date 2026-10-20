@@ -909,7 +909,9 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             // 新图以关节为中心
             plugX: w / 2,
             plugY: h / 2,
-            cameraHalf: orig?.cameraHalf ?? 1,
+            // 尺度用重烘帧自己的等效 cameraHalf（整模归一化尺度），不能沿用原图的——两套取景脱钩，沿用会把精灵按整帧大小解释；global 保留原图的
+            cameraHalf: r.cameraHalfGlobal ?? orig?.cameraHalf ?? 1,
+            globalCameraHalf: orig?.globalCameraHalf,
           };
         });
         next.set(boneIndex, { ...pb, directions: dirs });
