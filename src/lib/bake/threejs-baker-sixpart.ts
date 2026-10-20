@@ -480,7 +480,8 @@ export function droopArmPose(
 }
 
 /**
- * 破洞填充（乙案）：本部件帧透明、整模参考帧不透明的像素 = 被其他部位三角形遮挡的破洞。
+ * 破洞填充（乙案）：部件轮廓**内部**的透明像素中、整模参考帧不透明处 = 被其他部位三角形遮挡的破洞。
+ * 轮廓外透明（从帧四边可达）不填——那里背后是其他部位，填了等于把别的部件长进本部件。
  * 颜色取参考帧在该位置的真实颜色（遮挡者的颜色）；ID 不用遮挡者的，而是破洞所在骨骼的——
  * 从洞周边已有 ID 像素多源 BFS 扩散赋予，全图无 ID 源时用 fallbackMask（部件根骨骼）。
  * 返回填充像素数。
@@ -493,10 +494,30 @@ export function fillOccludedHoles(
   fallbackMask: [number, number, number],
 ): number {
   const n = size * size;
+  // 外部透明区：从帧四边 flood fill 可达的透明像素（部件轮廓之外，不算破洞，
+  // 否则轮廓外背后其他部位的像素会被填进本部件）
+  const outside = new Uint8Array(n);
+  {
+    const q: number[] = [];
+    const seed = (i: number) => {
+      if (!outside[i] && colorPixels[i * 4 + 3] === 0) { outside[i] = 1; q.push(i); }
+    };
+    for (let x = 0; x < size; x++) { seed(x); seed((size - 1) * size + x); }
+    for (let y = 0; y < size; y++) { seed(y * size); seed(y * size + size - 1); }
+    let h = 0;
+    while (h < q.length) {
+      const cur = q[h++];
+      const cx = cur % size;
+      if (cx > 0) seed(cur - 1);
+      if (cx < size - 1) seed(cur + 1);
+      if (cur - size >= 0) seed(cur - size);
+      if (cur + size < n) seed(cur + size);
+    }
+  }
   const holes: number[] = [];
   for (let i = 0; i < n; i++) {
     const o = i * 4;
-    if (colorPixels[o + 3] === 0 && occlPixels[o + 3] > 0) {
+    if (colorPixels[o + 3] === 0 && !outside[i] && occlPixels[o + 3] > 0) {
       colorPixels[o] = occlPixels[o];
       colorPixels[o + 1] = occlPixels[o + 1];
       colorPixels[o + 2] = occlPixels[o + 2];
