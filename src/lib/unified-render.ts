@@ -377,8 +377,12 @@ function applyIKChain(
   // Construct a blueprint graph with the IK node and evaluate it,
   // instead of calling solvers directly. This keeps BlueprintGraph
   // as the single IR for all kinematics.
-  const baseX = joints[0].x;
-  const baseY = joints[0].y;
+  // 关节 transforms 是原点中心空间（3D 管线），而目标约定为含画布中心空间
+  // （chain.target 存盘口径、蓝图 translate+中心，见下）。求解器只消费
+  // (target − base) 向量与骨长（骨长由关节差值得到，平移不变），
+  // 故把基点换到目标空间求解；角度写回走 transforms 自身 FK，不受影响。
+  const baseX = joints[0].x + canvasWidth / 2;
+  const baseY = joints[0].y + canvasHeight / 2;
   let angles: number[];
 
   // 目标点：优先用 targetBlueprint 动态求值（步态/正弦等修改器驱动），

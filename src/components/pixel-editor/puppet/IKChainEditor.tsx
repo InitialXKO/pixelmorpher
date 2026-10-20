@@ -112,12 +112,14 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     const solver = chainJoints.length === 3 ? '2bone' : 'fabrik';
     const endNode = character.nodes[endId];
     const { tipX, tipY, tipLength } = computeIKChainTip(character, chainJoints);
+    // tip 是原点中心空间；chain.target 的存盘口径为含画布中心空间，写入时补中心
+    const tipStore = useProjectStore.getState();
     const newChain: IKChain = {
       id: `ik_${Date.now().toString(36)}`,
       name: `${character.nodes[rootId]?.name ?? rootId} → ${endNode?.name ?? endId}`,
       rootNodeId: rootId,
       endNodeId: endId,
-      target: { x: tipX, y: tipY },
+      target: { x: tipX + tipStore.canvasWidth / 2, y: tipY + tipStore.canvasHeight / 2 },
       solver,
       bendDir: 1,
       tipLength,
@@ -142,8 +144,9 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
       const jointIds = getIKChainJointIds(character, chain.rootNodeId, chain.endNodeId);
       if (jointIds.length >= 2) {
         const { tipX, tipY } = computeIKChainTip(character, jointIds, chain.tipLength);
-        // 保留用户已调过的 tipLength，只更新目标点
-        patch = { ...patch, target: { x: tipX, y: tipY } };
+        // 保留用户已调过的 tipLength，只更新目标点（tip 原点空间 → target 含中心口径，补中心）
+        const st = useProjectStore.getState();
+        patch = { ...patch, target: { x: tipX + st.canvasWidth / 2, y: tipY + st.canvasHeight / 2 } };
       }
     }
     updateUnifiedCharacter(character.id, {
