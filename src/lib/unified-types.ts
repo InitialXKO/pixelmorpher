@@ -923,6 +923,10 @@ export interface Character {
   // character). Per-node effects stay in node.blueprint. Null = legacy path.
   blueprint?: BlueprintGraph | null;
 
+  /** 状态蓝图：纯状态图（无像素），每帧在服装解析前求值，输出服装集/槽位变体指令
+   *  （costume_state 节点）。生效状态叠加顺序：静态字段 → clip 状态轨道 → 状态蓝图 */
+  stateBlueprint?: BlueprintGraph | null;
+
   // ---- Face Turn Config (Spine-style pseudo-3D) ----
   faceTurnConfig?: {
     enabled: boolean;
@@ -938,6 +942,16 @@ export interface Character {
   // ---- Metadata ----
   createdAt: number;
   updatedAt: number;
+}
+
+/** clip 服装/变体状态轨道的一个关键帧（离散切换、无插值）。
+ *  求值：以角色静态字段为底，按帧序增量应用 frame ≤ 当前帧的键 */
+export interface CostumeStateKeyframe {
+  frame: number;
+  /** 给出时从该帧起整覆生效服装集 id；不给 = 沿用下层/前键的结果 */
+  costumeSetId?: string;
+  /** 逐槽增量：variantId = 指派该变体；null = 该槽从此回基础 */
+  slotChanges?: Record<string, string | null>;
 }
 
 // ---- Animation Clip (Unified) ----

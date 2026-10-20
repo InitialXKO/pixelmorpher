@@ -12,7 +12,7 @@ import {
   DropdownMenuGroup,
 } from '@/components/ui/dropdown-menu';
 import {
-  Eye, EyeOff, Lock, Unlock, Plus, Circle,
+  Eye, EyeOff, Lock, Unlock, Plus, Circle, X,
 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store';
 import type { EffectTrack, CanvasModifierTrack, EffectType } from '@/lib/types';
@@ -37,6 +37,13 @@ interface TrackLabelsColumnProps {
   trackFrameSteps?: Record<string, number>;
   onUpdateTrackTimelineDisplay?: (trackId: string, updates: Partial<TrackTimelineDisplay>) => void;
   onSetTrackFrameStep?: (trackId: string, step: number) => void;
+  /** 服装/变体状态轨道标签（记录/删除/当前帧摘要） */
+  costumeState?: {
+    summary: string;
+    selectedFrame: number | null;
+    onRecord: () => void;
+    onDeleteSelected: () => void;
+  } | null;
 }
 
 export default function TrackLabelsColumn({
@@ -46,6 +53,7 @@ export default function TrackLabelsColumn({
   isPuppetClip, nodeList, labelScrollRef,
   trackTimelineDisplays, trackFrameSteps,
   onUpdateTrackTimelineDisplay, onSetTrackFrameStep,
+  costumeState,
 }: TrackLabelsColumnProps) {
 
   return (
@@ -209,6 +217,41 @@ export default function TrackLabelsColumn({
               );
             })}
           </React.Fragment>
+          );
+        })()}
+
+        {/* 服装/变体状态轨道标签（行索引与 useVirtualScroll 的 __costume_state__ 对齐） */}
+        {costumeState && isPuppetClip && nodeList.length > 0 && (() => {
+          let puppetSepIdx = (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
+          if (canvasModifierTracks.length > 0) puppetSepIdx += 1 + canvasModifierTracks.length + 1;
+          const rowIdx = puppetSepIdx + 1 + nodeList.length;
+          if (rowIdx < visibleRange.startIndex || rowIdx > visibleRange.endIndex) return null;
+          return (
+            <div className="flex items-center gap-1 px-2 border-b border-[#1a1a2e]"
+              style={{ height: TRACK_HEIGHT, background: '#14102a' }}>
+              <div className="flex-1 min-w-0">
+                <div className="text-[10px] text-purple-300 leading-tight select-none">服装/变体</div>
+                <div className="text-[8px] text-gray-500 truncate leading-tight" title={costumeState.summary}>
+                  {costumeState.summary}
+                </div>
+              </div>
+              <button
+                title="在当前帧记录状态键：把换装面板里的当前服装/变体状态与轨道此前状态的差异写入本帧（无差异且本帧有旧键则删键）"
+                onClick={costumeState.onRecord}
+                className="size-5 flex items-center justify-center rounded bg-purple-500/20 text-purple-200 hover:bg-purple-500/40 shrink-0"
+              >
+                <Plus className="size-3" />
+              </button>
+              {costumeState.selectedFrame !== null && (
+                <button
+                  title={`删除帧 ${costumeState.selectedFrame} 的状态键`}
+                  onClick={costumeState.onDeleteSelected}
+                  className="size-5 flex items-center justify-center rounded bg-red-500/15 text-red-300 hover:bg-red-500/35 shrink-0"
+                >
+                  <X className="size-3" />
+                </button>
+              )}
+            </div>
           );
         })()}
 

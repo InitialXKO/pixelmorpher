@@ -14,7 +14,7 @@ import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs, getNodeParamPor
 import { getModifierDef } from '@/lib/types';
 import { useProjectStore } from '@/lib/store';
 import { resolvePreviewSprite, getActiveCostumeSet } from '@/lib/sprite-resolve';
-import { generateRenderPlan, executeRenderPlan, evaluateBlueprintTransforms, canvasToPixels } from '@/lib/unified-render';
+import { generateRenderPlan, executeRenderPlan, evaluateBlueprintTransforms, canvasToPixels, pickClipStateKeyframes } from '@/lib/unified-render';
 import type { Character } from '@/lib/unified-types';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
@@ -224,7 +224,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
             }
             const plan = generateRenderPlan(character, previewFrame, offW, offH, 'pixel-perfect', frameRate,
               undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-              spritesTable as any, bpOverrides);
+              spritesTable as any, bpOverrides, undefined,
+              pickClipStateKeyframes(useProjectStore.getState().animationClips, useProjectStore.getState().activeAnimationClipId, character.id));
             executeRenderPlan(octx, plan, offW, offH);
             ctx.drawImage(off, 0, 0, W, H);
           }
@@ -370,7 +371,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           const bpOverrides = evaluateBlueprintTransforms(character, previewFrame, frameRate);
           const plan = generateRenderPlan({ ...character, blueprint: null }, previewFrame, offW, offH, 'pixel-perfect', frameRate,
             undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-            spritesTable as any, bpOverrides);
+            spritesTable as any, bpOverrides, undefined,
+            pickClipStateKeyframes(useProjectStore.getState().animationClips, useProjectStore.getState().activeAnimationClipId, character.id));
           executeRenderPlan(octx, plan, offW, offH);
           return canvasToPixels(off);
         } catch { return undefined; }

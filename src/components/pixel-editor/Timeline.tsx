@@ -25,6 +25,8 @@ import EffectKeyframeEditDialog from './timeline/dialogs/EffectKeyframeEditDialo
 import useVirtualScroll from './timeline/useVirtualScroll';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { resolveTrackCostumeState } from '@/lib/unified-render';
+import type { CostumeStateKeyframe } from '@/lib/unified-types';
 import { useToast } from '@/hooks/use-toast';
 
 // ---- Main Timeline Component ----
@@ -66,6 +68,7 @@ export default function Timeline() {
   const addNodeKeyframe = useProjectStore((s) => s.addNodeKeyframe);
   const removeNodeKeyframe = useProjectStore((s) => s.removeNodeKeyframe);
   const updateNodeKeyframe = useProjectStore((s) => s.updateNodeKeyframe);
+  const updateAnimationClip = useProjectStore((s) => s.updateAnimationClip);
 
   // ---- Derived puppet data ----
   const activeClip = useMemo(
@@ -130,6 +133,60 @@ export default function Timeline() {
       removeNodeKeyframe(activeClip.id, keyframeId);
     },
     [activeClip, removeNodeKeyframe]
+  );
+
+  // ---- 服装/变体状态轨道（clip 级） ----
+  const [selectedStateKfFrame, setSelectedStateKfFrame] = useState<number | null>(null);
+  const stateKeyframes = useMemo(
+    () => activeClip?.stateKeyframes ?? [],
+    [activeClip]
+  );
+  /** 当前帧轨道生效状态摘要（静态+轨道口径，不含状态蓝图层；帧读 ref 与 Lanes 同口径） */
+  const costumeStateSummary = (() => {
+    if (!puppetCharacter) return '';
+    const eff = resolveTrackCostumeState(puppetCharacter, currentFrameRef.current, stateKeyframes);
+    const setName = puppetCharacter.costumeSets.find((cs) => cs.id === eff.costumeSetId)?.name ?? '无服装集';
+    const parts = Object.entries(eff.slotVariants).map(([slot, vid]) => {
+      const vName = (puppetCharacter.variantDefs ?? []).find((v) => v.id === vid)?.name ?? vid.slice(0, 6);
+      return `${slot}:${vName}`;
+    });
+    return parts.length > 0 ? `${setName} · ${parts.join(' ')}` : setName;
+  })();
+
+  /** 在当前帧记录状态键：把角色当前静态状态与「本帧之前轨道求值」的差异写成增量键 */
+  const handleRecordStateKeyframe = useCallback(() => {
+    if (!activeClip || !puppetCharacter) return;
+    const frame = currentFrameRef.current;
+    const prev = resolveTrackCostumeState(
+      puppetCharacter, frame, stateKeyframes.filter((k) => k.frame < frame)
+    );
+    const targetSetId = puppetCharacter.activeCostumeSetId;
+    const targetSlots = puppetCharacter.slotVariants ?? {};
+    const key: CostumeStateKeyframe = { frame };
+    if (targetSetId && targetSetId !== prev.costumeSetId) key.costumeSetId = targetSetId;
+    const slotChanges: Record<string, string | null> = {};
+    for (const slot of new Set([...Object.keys(prev.slotVariants), ...Object.keys(targetSlots)])) {
+      if (targetSlots[slot] !== prev.slotVariants[slot]) {
+        slotChanges[slot] = targetSlots[slot] ?? null;
+      }
+    }
+    if (Object.keys(slotChanges).length > 0) key.slotChanges = slotChanges;
+    const hasChanges = key.costumeSetId !== undefined || key.slotChanges !== undefined;
+    const rest = stateKeyframes.filter((k) => k.frame !== frame);
+    const next = hasChanges ? [...rest, key].sort((a, b) => a.frame - b.frame) : rest;
+    updateAnimationClip(activeClip.id, { stateKeyframes: next });
+    setSelectedStateKfFrame(hasChanges ? frame : null);
+  }, [activeClip, puppetCharacter, stateKeyframes, updateAnimationClip]);
+
+  const handleDeleteStateKeyframe = useCallback(
+    (frame: number) => {
+      if (!activeClip) return;
+      updateAnimationClip(activeClip.id, {
+        stateKeyframes: stateKeyframes.filter((k) => k.frame !== frame),
+      });
+      if (selectedStateKfFrame === frame) setSelectedStateKfFrame(null);
+    },
+    [activeClip, stateKeyframes, selectedStateKfFrame, updateAnimationClip]
   );
 
   const handleDuplicateNodeKeyframe = useCallback(
@@ -247,7 +304,8 @@ export default function Timeline() {
   // Part 轨道已删除：tracks 传空数组（原 tracks 恒为空）
   const { visibleRange, rowOffsets, rowHeights, totalHeight, onScroll: handleVirtualScroll } = useVirtualScroll(
     scrollContainerRef, [], [], effectTracks, canvasModifierTracks, () => [],
-    puppetNodes as any, isPuppetClip, nodeKeyframes as any
+    puppetNodes as any, isPuppetClip, nodeKeyframes as any,
+    !!(activeClip && puppetCharacter && puppetNodes.length > 0)
   );
 
   // ---- Playback Logic ----
@@ -518,6 +576,14 @@ export default function Timeline() {
           trackFrameSteps={trackFrameSteps}
           onUpdateTrackTimelineDisplay={updateTrackTimelineDisplay}
           onSetTrackFrameStep={setTrackFrameStep}
+          costumeState={activeClip && puppetCharacter ? {
+            summary: costumeStateSummary,
+            selectedFrame: selectedStateKfFrame,
+            onRecord: handleRecordStateKeyframe,
+            onDeleteSelected: () => {
+              if (selectedStateKfFrame !== null) handleDeleteStateKeyframe(selectedStateKfFrame);
+            },
+          } : null}
         />
 
         {/* Right: Ruler + Keyframe Lanes */}
@@ -561,6 +627,11 @@ export default function Timeline() {
           trackTimelineDisplays={trackTimelineDisplays}
           getEffectiveFrameStep={getEffectiveFrameStep}
           timelineThumbnailQuality={useProjectStore.getState().timelineThumbnailQuality}
+          costumeState={activeClip && puppetCharacter ? {
+            keyframes: stateKeyframes,
+            selectedFrame: selectedStateKfFrame,
+            onSelectKeyframe: setSelectedStateKfFrame,
+          } : null}
         />
       </div>
 

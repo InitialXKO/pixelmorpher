@@ -74,7 +74,7 @@ import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
-import { evaluateBlueprint, collectDynamicStrokes } from './blueprint/eval';
+import { evaluateBlueprint, collectDynamicStrokes, evaluateCostumeState } from './blueprint/eval';
 import { modifiersToBlueprint } from './blueprint/migrate';
 import type { BlueprintEvalContext } from './blueprint/ir';
 import { isIKChainSuspended } from './ik-drag-state';
@@ -1130,6 +1130,87 @@ function generateDiscInstructions(
  * before computing world transforms, ensuring procedural animation
  * contributions (pendulum, bounce, etc.) are included.
  */
+/** 本帧生效的服装状态（generateRenderPlan 内部唯一口径） */
+export interface EffectiveCostumeState {
+  costumeSetId?: string;
+  slotVariants: Record<string, string>;
+}
+
+/**
+ * 生效服装状态的前两层：角色静态字段 + clip 状态轨道（不含状态蓝图）。
+ * 时间轴的轨道摘要与「记录」diff 以此为口径（蓝图是程序化层，不进轨道编辑）。
+ */
+export function resolveTrackCostumeState(
+  character: Character,
+  frame: number,
+  stateKeyframes?: import('./unified-types').CostumeStateKeyframe[],
+): EffectiveCostumeState {
+  let costumeSetId = character.activeCostumeSetId;
+  const slotVariants: Record<string, string> = { ...(character.slotVariants ?? {}) };
+  if (stateKeyframes && stateKeyframes.length > 0) {
+    const sorted = [...stateKeyframes].sort((a, b) => a.frame - b.frame);
+    for (const k of sorted) {
+      if (k.frame > frame) break;
+      if (k.costumeSetId) costumeSetId = k.costumeSetId;
+      if (k.slotChanges) {
+        for (const [slot, v] of Object.entries(k.slotChanges)) {
+          if (v === null) delete slotVariants[slot];
+          else slotVariants[slot] = v;
+        }
+      }
+    }
+  }
+  return { costumeSetId, slotVariants };
+}
+
+/**
+ * 生效服装状态 = 三层增量叠加：
+ *  1) 角色静态字段（activeCostumeSetId / slotVariants，换装面板所设）
+ *  2) clip 状态轨道（stateKeyframes：frame ≤ 当前帧的键按帧序应用；
+ *     costumeSetId 整覆，slotChanges 逐槽覆、null 删该槽指派）
+ *  3) 角色状态蓝图（stateBlueprint 的 costume_state 指令组装结果，同增量语义）
+ * 蓝图求值 ctx 的 vars 沿用全仓现状（各蓝图求值路径均传空 vars，var 节点用自身默认值）。
+ * 蓝图求值失败时静默回落轨道层结果，不中断渲染。
+ */
+export function resolveEffectiveCostumeState(
+  character: Character,
+  frame: number,
+  frameRate: number,
+  stateKeyframes?: import('./unified-types').CostumeStateKeyframe[],
+): EffectiveCostumeState {
+  const { costumeSetId: trackSetId, slotVariants } = resolveTrackCostumeState(character, frame, stateKeyframes);
+  let costumeSetId = trackSetId;
+  if (character.stateBlueprint) {
+    try {
+      const out = evaluateCostumeState(character.stateBlueprint, { frame, frameRate, vars: {} } as any);
+      if (out) {
+        if (out.setId) costumeSetId = out.setId;
+        for (const [slot, v] of Object.entries(out.slotChanges)) {
+          if (v === null) delete slotVariants[slot];
+          else slotVariants[slot] = v;
+        }
+      }
+    } catch { /* 状态蓝图失败：保持轨道层结果 */ }
+  }
+  return { costumeSetId, slotVariants };
+}
+
+/**
+ * 从 clip 列表挑出对某角色生效的状态轨道：仅激活 clip 且其 puppetCharacterId
+ * 等于该角色时返回其 stateKeyframes（与 Timeline 的 clip→角色归属口径一致）；
+ * 其余情况返回 undefined（该角色本帧只受静态字段+状态蓝图影响）。
+ */
+export function pickClipStateKeyframes(
+  clips: Array<{ id: string; puppetCharacterId?: string; stateKeyframes?: import('./unified-types').CostumeStateKeyframe[] }> | undefined,
+  activeClipId: string | null | undefined,
+  characterId: string,
+): import('./unified-types').CostumeStateKeyframe[] | undefined {
+  if (!clips || !activeClipId) return undefined;
+  const clip = clips.find((c) => c.id === activeClipId);
+  if (!clip || clip.puppetCharacterId !== characterId) return undefined;
+  return clip.stateKeyframes;
+}
+
 export function generateRenderPlan(
   character: Character,
   frame: number,
@@ -1152,6 +1233,8 @@ export function generateRenderPlan(
   blueprintTransformsOverride?: Map<string, BlueprintTransformResult>,
   // 透视缩短开关（编辑器视图选项）：开启时精灵沿骨骼方向按投影长度比缩放
   perspectiveForeshorten?: boolean,
+  // 当前 clip 的服装/变体状态轨道（仅激活 clip 且归属本角色时由调用方传入）
+  stateKeyframes?: import('./unified-types').CostumeStateKeyframe[],
 ): RenderPlan {
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
@@ -1173,6 +1256,9 @@ export function generateRenderPlan(
   // Phase 0 (path B): Evaluate node blueprints for transform values (two-pass)
   const blueprintTransforms = blueprintTransformsOverride ?? evaluateBlueprintTransforms(character, frame, frameRate);
 
+  // 生效服装状态：静态字段 → clip 状态轨道 → 状态蓝图（三层增量叠加）
+  const effCostume = resolveEffectiveCostumeState(character, frame, frameRate, stateKeyframes);
+
   // Step 1: World transforms (includes blueprint-evaluated modifier contributions)
   const worldTransforms = computeWorldTransforms(
     character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
@@ -1181,9 +1267,9 @@ export function generateRenderPlan(
   // Step 2: Z-order (includes disc Z computation)
   const { nodeZ, discZ } = computeZOrder(character, worldTransforms);
 
-  // Step 3: Get active costume set
-  const activeCostumeSet = character.activeCostumeSetId
-    ? character.costumeSets.find(cs => cs.id === character.activeCostumeSetId)
+  // Step 3: Get active costume set（用生效状态的集 id，含轨道/蓝图覆盖）
+  const activeCostumeSet = effCostume.costumeSetId
+    ? character.costumeSets.find(cs => cs.id === effCostume.costumeSetId)
     : undefined;
 
   // Step 4: Generate node render instructions
@@ -1222,14 +1308,14 @@ export function generateRenderPlan(
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
     // 方向混合时：先按 dirA 解析主精灵
     const resolveDir = dirBlend ? dirBlend.dirA : currentDirection;
-    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? '']);
+    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? '']);
     if (!sprite) continue;
 
     // 方向间过渡（蒙皮转面 A）：blend 不为 0/1 时，双精灵 faceTurn + alpha 混合
     // 只在需要时双采样，避免性能开销
     let blendedSprite: typeof sprite | null = null;
     if (dirBlend && sprite.data) {
-      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? '']);
+      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? '']);
       if (spriteB && spriteB.data) {
         try {
           const { applyFaceTurn, alphaBlendGrids } = require('./skin/face-turn') as typeof import('./skin/face-turn');
@@ -2192,6 +2278,8 @@ function renderPuppetViaUnifiedPipeline(
   globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
   sprites?: Record<string, Sprite>,
   perspectiveForeshorten?: boolean,
+  animationClips?: AnimationClip[],
+  activeClipId?: string | null,
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
@@ -2207,6 +2295,7 @@ function renderPuppetViaUnifiedPipeline(
       undefined, undefined, undefined, undefined, undefined,
       undefined, undefined, proceduralAnimations, sprites,
       undefined, perspectiveForeshorten,
+      pickClipStateKeyframes(animationClips, activeClipId, unifiedCharacter.id),
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }
@@ -2242,6 +2331,7 @@ export function renderUnified(
   globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
   sprites?: Record<string, Sprite>,
   perspectiveForeshorten?: boolean,
+  activeClipId?: string | null,
 ): void {
   if (backgroundColor !== 'transparent') {
     ctx.fillStyle = backgroundColor;
@@ -2252,7 +2342,7 @@ export function renderUnified(
       ctx, canvasWidth, canvasHeight, unifiedCharacters,
       currentFrame, frameRate, globalModifiers, animationVariables,
       canvasModifierTracks, proceduralAnimations, globalBlueprint, sprites,
-      perspectiveForeshorten,
+      perspectiveForeshorten, animationClips, activeClipId,
     );
   }
   if (effectTracks) {
@@ -2323,6 +2413,8 @@ export function renderUnifiedToCanvas(
   frameRate: number = 12,
   unifiedCharacters?: Record<string, Character>,
   sprites?: Record<string, Sprite>,
+  animationClips?: AnimationClip[],
+  activeClipId?: string | null,
 ): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = canvasWidth;
@@ -2336,6 +2428,7 @@ export function renderUnifiedToCanvas(
       ctx, canvasWidth, canvasHeight, unifiedCharacters,
       frame, frameRate, globalModifiers, animationVariables,
       canvasModifierTracks, undefined, undefined, sprites,
+      undefined, animationClips, activeClipId,
     );
   }
   if (hasGlobalTransform) ctx.restore();
@@ -2387,6 +2480,8 @@ export function renderUnifiedCharactersToCanvas(
   animationVariables?: StoreAnimationVariable[],
   canvasModifierTracks?: CanvasModifierTrack[],
   sprites?: Record<string, Sprite>,
+  animationClips?: AnimationClip[],
+  activeClipId?: string | null,
 ): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = canvasWidth;
@@ -2409,6 +2504,8 @@ export function renderUnifiedCharactersToCanvas(
       'pixel-perfect', frameRate, unifiedVars,
       undefined, undefined, undefined, undefined, undefined,
       undefined, undefined, undefined, sprites,
+      undefined, undefined,
+      pickClipStateKeyframes(animationClips, activeClipId, character.id),
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }

@@ -276,7 +276,7 @@ export default function PixelCanvas() {
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
         s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint,
-        freshStore.sprites, s.perspectiveForeshorten);
+        freshStore.sprites, s.perspectiveForeshorten, freshStore.activeAnimationClipId);
     }
 
     // 3. Stroke preview

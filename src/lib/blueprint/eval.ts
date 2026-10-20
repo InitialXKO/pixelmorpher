@@ -193,6 +193,35 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     return { pixels: pixelsVal(spriteData as import('../types').PixelGrid) };
   },
 
+  // 服装状态：状态蓝图专用，把服装集/槽位变体指令写入 ctx.costumeStateCmds，
+  // 由 evaluateCostumeState 在整图求值后组装（求值顺序内后写覆盖先写）。
+  // setId 可接线（string 优先于 params）；slot 给出且 clearVariant 时该槽回基础；
+  // gate<0.5 / enabled=false 时求值器不被调用，天然不生效。
+  costume_state: (n, i, ctx): Record<string, BlueprintValue> => {
+    const cmds = ((ctx as any).costumeStateCmds ??= []) as Array<{
+      setId?: string; slot?: string; variant?: string | null;
+    }>;
+    let setId = String(n.params.setId ?? '');
+    const wiredSetId = i.setId as BlueprintValue | undefined;
+    if (wiredSetId && wiredSetId.type === 'string' && wiredSetId.value) {
+      setId = wiredSetId.value;
+    }
+    const slot = String(n.params.slot ?? '');
+    const variant = String(n.params.variant ?? '');
+    const clearVariant = n.params.clearVariant === true || n.params.clearVariant === 'true';
+    const cmd: { setId?: string; slot?: string; variant?: string | null } = {};
+    if (setId) cmd.setId = setId;
+    if (slot && clearVariant) {
+      cmd.slot = slot;
+      cmd.variant = null;
+    } else if (slot && variant) {
+      cmd.slot = slot;
+      cmd.variant = variant;
+    }
+    if (cmd.setId !== undefined || cmd.slot !== undefined) cmds.push(cmd);
+    return {};
+  },
+
   // ---- 数学 ----
   add: (_n, i) => ({ out: num(asNumber(i.a ?? num(0)) + asNumber(i.b ?? num(0))) }),
   sub: (_n, i) => ({ out: num(asNumber(i.a ?? num(0)) - asNumber(i.b ?? num(0))) }),
@@ -2112,6 +2141,31 @@ export function evaluateBlueprint(
   };
 }
 
+/** 状态蓝图组装结果：服装集整覆 + 逐槽变体增量（null = 回基础） */
+export interface CostumeStateResult {
+  setId?: string;
+  slotChanges: Record<string, string | null>;
+}
+
+/**
+ * 求值状态蓝图，组装 costume_state 节点发出的状态指令（求值顺序内后写覆盖先写）。
+ * 无任何指令时返回 null（调用方保持下层状态不变）。
+ */
+export function evaluateCostumeState(
+  graph: BlueprintGraph,
+  ctx: BlueprintEvalContext,
+): CostumeStateResult | null {
+  const cmds: Array<{ setId?: string; slot?: string; variant?: string | null }> = [];
+  evaluateBlueprint(graph, { ...ctx, costumeStateCmds: cmds } as BlueprintEvalContext);
+  if (cmds.length === 0) return null;
+  const result: CostumeStateResult = { slotChanges: {} };
+  for (const c of cmds) {
+    if (c.setId) result.setId = c.setId;
+    if (c.slot) result.slotChanges[c.slot] = c.variant ?? null;
+  }
+  return result;
+}
+
 /**
  * 求值全局蓝图中的笔触/轨迹发射器节点，收集动态笔触。
  * 只求值 stroke_emitter / stroke_source / trajectory_emitter / trajectory_source
@@ -2256,6 +2310,7 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   var: '变量',
   sprite_source: '精灵源',
   costume: '服装源',
+  costume_state: '服装状态',
   character_source: '角色源',
   // 数学
   add: '加',

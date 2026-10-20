@@ -53,6 +53,12 @@ interface TrackLanesColumnProps {
   trackTimelineDisplays?: Record<string, TrackTimelineDisplay>;
   getEffectiveFrameStep?: (trackId: string, frame: number) => number;
   timelineThumbnailQuality?: 'off' | 'low' | 'medium' | 'high';
+  /** 服装/变体状态轨道（clip 级，排在木偶节点行之后） */
+  costumeState?: {
+    keyframes: import('@/lib/unified-types').CostumeStateKeyframe[];
+    selectedFrame: number | null;
+    onSelectKeyframe: (frame: number | null) => void;
+  } | null;
 }
 
 export default function TrackLanesColumn({
@@ -70,6 +76,7 @@ export default function TrackLanesColumn({
   FRAME_WIDTH: propFrameWidth,
   snapConfig, snapFrame,
   trackTimelineDisplays, getEffectiveFrameStep, timelineThumbnailQuality,
+  costumeState,
 }: TrackLanesColumnProps) {
   const timelineZoom = useProjectStore((s) => s.timelineZoom);
   const fw = propFrameWidth ?? getFrameWidth(timelineZoom);
@@ -181,6 +188,47 @@ export default function TrackLanesColumn({
                   );
                 })}
               </>
+            );
+          })()}
+
+          {/* 服装/变体状态轨道（clip 级，木偶节点行之后；行索引与 useVirtualScroll 的 __costume_state__ 对齐） */}
+          {costumeState && isPuppetClip && nodeList.length > 0 && (() => {
+            let puppetSepIdx = (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
+            if (canvasModifierTracks.length > 0) puppetSepIdx += 1 + canvasModifierTracks.length + 1;
+            const rowIdx = puppetSepIdx + 1 + nodeList.length;
+            if (rowIdx < visibleRange.startIndex || rowIdx > visibleRange.endIndex) return null;
+            const describe = (k: import('@/lib/unified-types').CostumeStateKeyframe) => {
+              const parts: string[] = [`帧 ${k.frame}`];
+              if (k.costumeSetId) parts.push('换服装集');
+              if (k.slotChanges) {
+                for (const [slot, v] of Object.entries(k.slotChanges)) {
+                  parts.push(`${slot} → ${v === null ? '基础' : '变体'}`);
+                }
+              }
+              return parts.join(' · ');
+            };
+            return (
+              <div className="relative border-b border-[#1a1a2e]" style={{ height: TRACK_HEIGHT, background: '#14102a' }}>
+                {costumeState.keyframes.map((k) => {
+                  const selected = costumeState.selectedFrame === k.frame;
+                  return (
+                    <button
+                      key={k.frame}
+                      title={describe(k)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        costumeState.onSelectKeyframe(selected ? null : k.frame);
+                      }}
+                      className={`absolute top-1/2 size-2.5 rotate-45 border ${
+                        selected
+                          ? 'bg-purple-200 border-white'
+                          : 'bg-purple-400 border-purple-200/60 hover:bg-purple-300'
+                      }`}
+                      style={{ left: k.frame * fw + fw / 2, transform: 'translate(-50%, -50%) rotate(45deg)' }}
+                    />
+                  );
+                })}
+              </div>
             );
           })()}
 
