@@ -302,8 +302,17 @@ export function groupTrianglesByPart(
     const parts = new Set<PartName>();
     for (const vi of [a, b, c]) {
       const bi = baked.vertBone[vi];
-      if (bi >= 0) {
-        votes.set(bi, (votes.get(bi) ?? 0) + 1);
+      if (bi >= 0) votes.set(bi, (votes.get(bi) ?? 0) + 1);
+      // 涉及部件按顶点的全部权重骨骼（vertBones）判定，不按主 bone：
+      // 交界带的三角形主 bone 全在一侧、但顶点带另一侧的混合权重，
+      // 只按主 bone 判会把另一侧剔空、留下破洞（与 ID 掩码按 vertBones 并集的口径一致）
+      const vbs = baked.vertBones[vi] ?? [];
+      if (vbs.length > 0) {
+        for (const gi of vbs) {
+          const p = boneToPart[gi];
+          if (p) parts.add(p);
+        }
+      } else if (bi >= 0) {
         const p = boneToPart[bi];
         if (p) parts.add(p);
       }
