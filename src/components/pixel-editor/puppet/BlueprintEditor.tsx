@@ -28,6 +28,7 @@ interface BlueprintEditorProps {
   costumeSets?: Array<{ id: string; name: string; pieces: Record<string, { sprites?: Record<number, { data: unknown }>; mirrorMap?: Record<number, number> }> }>;
   /** 当前激活服装集 ID（预览解析用） */
   activeCostumeSetId?: string;
+  slotVariants?: Record<string, string>;
   /** 全局精灵表（SpriteRef 解析用） */
   spritesTable?: Record<string, any>;
   /** 传入后，nodeRef 节点的 nodeId 参数渲染为下拉选择 */
@@ -161,7 +162,7 @@ function BlueprintNodeParams({ selected, updateNode, onExposePort }: {
   return null; // 无 schema 时由调用方渲染通用 UI
 }
 
-export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, character, characterNodes, costumeSets, activeCostumeSetId, spritesTable }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, character, characterNodes, costumeSets, activeCostumeSetId, slotVariants, spritesTable }: BlueprintEditorProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
   // 笔触/轨迹下拉选项（stroke_source / trajectory_source 用，不许手输 ID）
@@ -367,7 +368,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           const slotKey = cn.slot?.slotKey ?? cn.costumeSlot ?? nid;
           const direction = (cn.variantIndex ?? 6) as number;
           const activeSet = getActiveCostumeSet(costumeSets as any, activeCostumeSetId);
-          const resolved = resolvePreviewSprite(slotKey, direction, activeSet, spritesTable as any);
+          const resolved = resolvePreviewSprite(slotKey, direction, activeSet, spritesTable as any, slotVariants?.[slotKey]);
           return (resolved.sprite as any)?.data ?? undefined;
         })(),
         // costume 节点用：角色全部服装集（新 pieces 格式）

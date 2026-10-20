@@ -7,6 +7,7 @@ import {
   Shirt,
   X,
   Check,
+  Layers,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import type {
@@ -113,6 +114,13 @@ export default function DressPanel({
     [selectedCharacter, selectedNodeId]
   );
 
+  // ---- 通用变体（槽位级） ----
+  const variantDefs = selectedCharacter?.variantDefs ?? [];
+  // 编辑维度：null = 基础层；否则配图写进该变体的 variantSprites 层
+  const [editVariantIdRaw, setEditVariantId] = useState<string | null>(null);
+  const editVariantId = editVariantIdRaw && variantDefs.some((v) => v.id === editVariantIdRaw) ? editVariantIdRaw : null;
+  const editVariant = variantDefs.find((v) => v.id === editVariantId) ?? null;
+
   // ---- Handlers ----
   const handleAddCostume = () => {
     if (!selectedCharacter || !activePuppetSkeletonId) return;
@@ -158,6 +166,77 @@ export default function DressPanel({
     }
   };
 
+  // ---- 变体 handlers ----
+  const handleAddVariant = () => {
+    if (!selectedCharacter || !activePuppetSkeletonId) return;
+    const store = useProjectStore.getState();
+    store.pushUndo('添加变体');
+    const def = { id: crypto.randomUUID(), name: `变体${variantDefs.length + 1}` };
+    updateUnifiedCharacter(activePuppetSkeletonId, {
+      variantDefs: [...variantDefs, def],
+    });
+    setEditVariantId(def.id);
+  };
+
+  const handleRenameVariant = (variantId: string) => {
+    if (!selectedCharacter || !activePuppetSkeletonId) return;
+    const def = variantDefs.find((v) => v.id === variantId);
+    if (!def) return;
+    const name = prompt('变体名称（如：破损、湿透、燃烧）', def.name)?.trim();
+    if (!name || name === def.name) return;
+    const store = useProjectStore.getState();
+    store.pushUndo('变体改名');
+    updateUnifiedCharacter(activePuppetSkeletonId, {
+      variantDefs: variantDefs.map((v) => (v.id === variantId ? { ...v, name } : v)),
+    });
+  };
+
+  const handleDeleteVariant = (variantId: string) => {
+    if (!selectedCharacter || !activePuppetSkeletonId) return;
+    const def = variantDefs.find((v) => v.id === variantId);
+    if (!confirm(`删除变体「${def?.name ?? ''}」？全部服装集里的该变体精灵与部位指派将一并清除（基础精灵不受影响）。`)) return;
+    const store = useProjectStore.getState();
+    store.pushUndo('删除变体');
+    // 清理三处引用：各集 piece 的 variantSprites[id]、槽位指派、定义本身
+    const newCostumeSets = selectedCharacter.costumeSets.map((cs) => {
+      let touched = false;
+      const pieces: Record<string, CostumeSet['pieces'][string]> = {};
+      for (const [key, piece] of Object.entries(cs.pieces)) {
+        if (piece.variantSprites && variantId in piece.variantSprites) {
+          touched = true;
+          const variantSprites = { ...piece.variantSprites };
+          delete variantSprites[variantId];
+          pieces[key] = { ...piece, variantSprites };
+        } else {
+          pieces[key] = piece;
+        }
+      }
+      return touched ? { ...cs, pieces } : cs;
+    });
+    const newSlotVariants: Record<string, string> = {};
+    for (const [k, v] of Object.entries(selectedCharacter.slotVariants ?? {})) {
+      if (v !== variantId) newSlotVariants[k] = v;
+    }
+    updateUnifiedCharacter(activePuppetSkeletonId, {
+      variantDefs: variantDefs.filter((v) => v.id !== variantId),
+      costumeSets: newCostumeSets,
+      slotVariants: newSlotVariants,
+    });
+    if (editVariantId === variantId) setEditVariantId(null);
+  };
+
+  /** 槽位变体指派：'' = 基础（删条目） */
+  const handleSlotVariantChange = (node: Node, variantId: string) => {
+    if (!selectedCharacter || !activePuppetSkeletonId) return;
+    const slotKey = node?.slot?.slotKey ?? node.id;
+    const store = useProjectStore.getState();
+    store.pushUndo('指派部位变体');
+    const slotVariants = { ...(selectedCharacter.slotVariants ?? {}) };
+    if (variantId) slotVariants[slotKey] = variantId;
+    else delete slotVariants[slotKey];
+    updateUnifiedCharacter(activePuppetSkeletonId, { slotVariants });
+  };
+
   const handleSpriteAssign = (nodeId: string, direction: DirectionIndex, spriteId: string | null) => {
     if (!selectedCharacter || !activePuppetSkeletonId || !selectedCostume) return;
     const store = useProjectStore.getState();
@@ -173,19 +252,37 @@ export default function DressPanel({
       const sp = sprites.find((s) => s.id === spriteId);
       if (!sp) return;
       const key = sp.id ?? spriteId;
-      // 写入 pieces[slotKey].sprites[direction] = { spriteId }
       const piece = pieces[slotKey] ?? createDefaultCostumePiece(slotKey);
-      pieces[slotKey] = {
-        ...piece,
-        sprites: { ...piece.sprites, [direction]: { spriteId: key } },
-      };
+      if (editVariantId) {
+        // 变体层：写入 pieces[slotKey].variantSprites[editVariantId][direction]
+        const layer = { ...(piece.variantSprites?.[editVariantId] ?? {}), [direction]: { spriteId: key } };
+        pieces[slotKey] = {
+          ...piece,
+          variantSprites: { ...piece.variantSprites, [editVariantId]: layer },
+        };
+      } else {
+        // 基础层：写入 pieces[slotKey].sprites[direction] = { spriteId }
+        pieces[slotKey] = {
+          ...piece,
+          sprites: { ...piece.sprites, [direction]: { spriteId: key } },
+        };
+      }
     } else {
-      // 删除分配
+      // 删除分配（当前编辑层内）
       const piece = pieces[slotKey];
       if (piece) {
-        const newSprites = { ...piece.sprites };
-        delete newSprites[direction];
-        pieces[slotKey] = { ...piece, sprites: newSprites };
+        if (editVariantId) {
+          const layer = { ...(piece.variantSprites?.[editVariantId] ?? {}) };
+          delete layer[direction];
+          pieces[slotKey] = {
+            ...piece,
+            variantSprites: { ...piece.variantSprites, [editVariantId]: layer },
+          };
+        } else {
+          const newSprites = { ...piece.sprites };
+          delete newSprites[direction];
+          pieces[slotKey] = { ...piece, sprites: newSprites };
+        }
       }
     }
 
@@ -197,14 +294,29 @@ export default function DressPanel({
     });
   };
 
+  /** 当前编辑层（基础/变体）下某节点某方向的精灵 */
   const getSpriteFor = (nodeId: string, direction: DirectionIndex): Sprite | null => {
     if (!selectedCostume || !selectedCharacter) return null;
     const node = selectedCharacter.nodes[nodeId];
     const slotKey = node?.slot?.slotKey ?? nodeId;
     const piece = selectedCostume.pieces[slotKey];
-    const ref = piece?.sprites[direction];
+    const ref = editVariantId
+      ? piece?.variantSprites?.[editVariantId]?.[direction]
+      : piece?.sprites[direction];
     if (!ref) return null;
     // SpriteRef → spriteId → 全局精灵表（sprites prop）
+    const spriteId = 'spriteId' in ref ? ref.spriteId : null;
+    if (!spriteId) return null;
+    return sprites.find((s) => s.id === spriteId) ?? null;
+  };
+
+  /** 基础层精灵（变体编辑时显示回落来源用） */
+  const getBaseSpriteFor = (nodeId: string, direction: DirectionIndex): Sprite | null => {
+    if (!selectedCostume || !selectedCharacter) return null;
+    const node = selectedCharacter.nodes[nodeId];
+    const slotKey = node?.slot?.slotKey ?? nodeId;
+    const ref = selectedCostume.pieces[slotKey]?.sprites[direction];
+    if (!ref) return null;
     const spriteId = 'spriteId' in ref ? ref.spriteId : null;
     if (!spriteId) return null;
     return sprites.find((s) => s.id === spriteId) ?? null;
@@ -279,6 +391,78 @@ export default function DressPanel({
         </div>
       )}
 
+      {/* 通用变体（槽位级）：选编辑维度后配图写进变体层；部位指派决定渲染用哪层 */}
+      {selectedCharacter && (
+        <div>
+          <div className="flex items-center justify-between">
+            <Label className="text-[10px] text-gray-500 uppercase tracking-wider">
+              <Layers className="size-3 inline mr-1" />
+              变体（部位状态）
+            </Label>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-5 text-purple-400 hover:text-purple-300"
+              onClick={handleAddVariant}
+              title="添加变体（名称自定义，如破损/湿透）"
+            >
+              <Plus className="size-3" />
+            </Button>
+          </div>
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            <div
+              className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] cursor-pointer border ${
+                editVariantId === null
+                  ? 'bg-purple-500/20 border-purple-500/50 text-purple-200'
+                  : 'bg-[#111128] border-[#1e1e3a] text-gray-400 hover:border-gray-600'
+              }`}
+              onClick={() => setEditVariantId(null)}
+              title="编辑基础层精灵"
+            >
+              基础
+            </div>
+            {variantDefs.map((v) => (
+              <div
+                key={v.id}
+                className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] cursor-pointer border ${
+                  editVariantId === v.id
+                    ? 'bg-purple-500/20 border-purple-500/50 text-purple-200'
+                    : 'bg-[#111128] border-[#1e1e3a] text-gray-400 hover:border-gray-600'
+                }`}
+                onClick={() => setEditVariantId(v.id)}
+                title="点击切换到此变体的编辑层"
+              >
+                <span>{v.name}</span>
+                {editVariantId === v.id && (
+                  <button
+                    className="text-purple-300/80 hover:text-purple-100"
+                    title="改名"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRenameVariant(v.id);
+                    }}
+                  >
+                    改名
+                  </button>
+                )}
+                <X
+                  className="size-3 hover:text-red-400"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteVariant(v.id);
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+          <p className="text-[9px] text-gray-600 mt-1 leading-relaxed">
+            {editVariant
+              ? `正在编辑「${editVariant.name}」层：配图只写变体层，未画的方向渲染时回落基础图。`
+              : '正在编辑基础层。变体是部位级状态（全身切换用服装集）；在下方选节点可指派该部位的变体。'}
+          </p>
+        </div>
+      )}
+
       {/* 节点列表（hideNodeList 时用共享树） */}
       {!hideNodeList && selectedCharacter && selectedCostume && (
         <div>
@@ -288,6 +472,9 @@ export default function DressPanel({
           <div className="bg-[#080818] rounded border border-[#1e1e3a] p-1 max-h-40 overflow-y-auto mt-1">
             {characterNodes.map((node) => {
               const hasSprite = DIRECTIONS.some((d) => getSpriteFor(node.id, d.value));
+              const assignedVariant = variantDefs.find(
+                (v) => v.id === selectedCharacter.slotVariants?.[node.slot?.slotKey ?? node.id],
+              );
               return (
                 <div
                   key={node.id}
@@ -299,8 +486,13 @@ export default function DressPanel({
                   }`}
                 >
                   <span className="flex-1 truncate">{node.name}</span>
+                  {assignedVariant && (
+                    <span className="text-[9px] text-purple-300 flex-shrink-0" title="此部位已指派变体（主渲染生效）">
+                      {assignedVariant.name}
+                    </span>
+                  )}
                   {hasSprite && (
-                    <span className="size-1.5 rounded-full bg-emerald-400" title="已配精灵" />
+                    <span className="size-1.5 rounded-full bg-emerald-400" title="当前编辑层已配精灵" />
                   )}
                 </div>
               );
@@ -309,14 +501,34 @@ export default function DressPanel({
         </div>
       )}
 
-      {/* 方向精灵分配 */}
+      {/* 部位变体指派 + 方向精灵分配 */}
       {selectedNode && selectedCostume && (
-        <DirectionSpriteEditor
-          node={selectedNode}
-          sprites={sprites}
-          getSpriteFor={getSpriteFor}
-          onAssign={(dir, spriteId) => handleSpriteAssign(selectedNode.id, dir, spriteId)}
-        />
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5 text-[10px] text-gray-500">
+            <span className="flex-shrink-0">此部位变体</span>
+            <select
+              value={selectedCharacter?.slotVariants?.[selectedNode.slot?.slotKey ?? selectedNode.id] ?? ''}
+              onChange={(e) => handleSlotVariantChange(selectedNode, e.target.value)}
+              className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-1 text-[10px] text-gray-300"
+              title="指派后主渲染该部位用变体层精灵（未画方向回落基础）；与当前编辑哪层无关"
+            >
+              <option value="">基础（无变体）</option>
+              {variantDefs.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <DirectionSpriteEditor
+            node={selectedNode}
+            sprites={sprites}
+            getSpriteFor={getSpriteFor}
+            getBaseSpriteFor={editVariant ? getBaseSpriteFor : undefined}
+            layerLabel={editVariant?.name}
+            onAssign={(dir, spriteId) => handleSpriteAssign(selectedNode.id, dir, spriteId)}
+          />
+        </div>
       )}
     </div>
   );
@@ -327,11 +539,17 @@ function DirectionSpriteEditor({
   node,
   sprites,
   getSpriteFor,
+  getBaseSpriteFor,
+  layerLabel,
   onAssign,
 }: {
   node: Node;
   sprites: Sprite[];
   getSpriteFor: (nodeId: string, dir: DirectionIndex) => Sprite | null;
+  /** 变体编辑时传入：显示回落的基础图（半透明） */
+  getBaseSpriteFor?: (nodeId: string, dir: DirectionIndex) => Sprite | null;
+  /** 当前编辑层名称（变体名）；undefined = 基础层 */
+  layerLabel?: string;
   onAssign: (dir: DirectionIndex, spriteId: string | null) => void;
 }) {
   const [pickerDir, setPickerDir] = useState<DirectionIndex | null>(null);
@@ -340,10 +558,12 @@ function DirectionSpriteEditor({
     <div className="bg-[#080818] rounded border border-[#1e1e3a] p-2">
       <Label className="text-[10px] text-gray-500 uppercase tracking-wider">
         {node.name} — 方向精灵
+        {layerLabel && <span className="text-purple-300 normal-case">（变体：{layerLabel}）</span>}
       </Label>
       <div className="grid grid-cols-2 gap-1.5 mt-1.5">
         {DIRECTIONS.map(({ value, label }) => {
           const sprite = getSpriteFor(node.id, value);
+          const baseSprite = !sprite && getBaseSpriteFor ? getBaseSpriteFor(node.id, value) : null;
           return (
             <div
               key={value}
@@ -351,6 +571,9 @@ function DirectionSpriteEditor({
             >
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[10px] text-gray-500">{label} ({value})</span>
+                {baseSprite && (
+                  <span className="text-[8px] text-gray-600" title="变体未画此方向，渲染回落此基础图">回落基础</span>
+                )}
                 {sprite && (
                   <X
                     className="size-3 text-gray-600 hover:text-red-400 cursor-pointer"
@@ -364,6 +587,10 @@ function DirectionSpriteEditor({
               >
                 {sprite ? (
                   <SpriteThumbnail sprite={sprite} size={40} />
+                ) : baseSprite ? (
+                  <div className="opacity-40">
+                    <SpriteThumbnail sprite={baseSprite} size={40} />
+                  </div>
                 ) : (
                   <Plus className="size-4 text-gray-700" />
                 )}

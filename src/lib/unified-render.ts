@@ -93,6 +93,7 @@ import {
   type VariableContext,
   getEmptyVariableContext,
 } from './unified-animation-resolver';
+import { resolvePieceSprite } from './sprite-resolve';
 
 // ---- World Transform Computation ----
 
@@ -959,36 +960,14 @@ function resolveSprite(
   direction: DirectionIndex,
   costumeSet?: import('./unified-types').CostumeSet,
   sprites?: Record<string, import('./unified-types').Sprite>,
+  variantId?: string,
 ): { sprite: Sprite | null; mirror: boolean; spriteId: string | null } {
-  // Helper: resolve Sprite | SpriteRef to {sprite, spriteId}
-  const resolve = (s: import('./unified-types').Sprite | import('./unified-types').SpriteRef | undefined): { sprite: Sprite | null; spriteId: string | null } => {
-    if (!s) return { sprite: null, spriteId: null };
-    if ('spriteId' in s) {
-      return { sprite: sprites?.[s.spriteId] ?? null, spriteId: s.spriteId };
-    }
-    return { sprite: s as Sprite, spriteId: null };
-  };
-  // 只走服装集：node.slot 只定义槽位，不存精灵
+  // 只走服装集：node.slot 只定义槽位，不存精灵。
+  // 分层解析（变体→基础）走 sprite-resolve 的共同实现，与蓝图预览逐级一致。
   if (costumeSet && node.slot) {
     const piece = costumeSet.pieces[node.slot.slotKey];
-    if (piece) {
-      // Check for direct sprite at this direction
-      const direct = resolve(piece.sprites[direction]);
-      if (direct.sprite) {
-        return { sprite: direct.sprite, mirror: false, spriteId: direct.spriteId };
-      }
-
-      // Check mirror map
-      const mirrorSource = piece.mirrorMap[direction];
-      if (mirrorSource !== undefined) {
-        const mirrored = resolve(piece.sprites[mirrorSource]);
-        if (mirrored.sprite) {
-          return { sprite: mirrored.sprite, mirror: true, spriteId: mirrored.spriteId };
-        }
-      }
-    }
+    return resolvePieceSprite(piece, direction, variantId, sprites);
   }
-
   return { sprite: null, mirror: false, spriteId: null };
 }
 
@@ -1007,7 +986,7 @@ export function resolveNodeSpriteId(
   if (!node) return null;
   const activeCs = (character.costumeSets ?? []).find((cs) => cs.id === character.activeCostumeSetId);
   const spriteTable = globalSprites ?? character.sprites ?? {};
-  const { spriteId } = resolveSprite(node, direction, activeCs, spriteTable);
+  const { spriteId } = resolveSprite(node, direction, activeCs, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? '']);
   return spriteId;
 }
 
@@ -1243,14 +1222,14 @@ export function generateRenderPlan(
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
     // 方向混合时：先按 dirA 解析主精灵
     const resolveDir = dirBlend ? dirBlend.dirA : currentDirection;
-    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable);
+    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? '']);
     if (!sprite) continue;
 
     // 方向间过渡（蒙皮转面 A）：blend 不为 0/1 时，双精灵 faceTurn + alpha 混合
     // 只在需要时双采样，避免性能开销
     let blendedSprite: typeof sprite | null = null;
     if (dirBlend && sprite.data) {
-      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable);
+      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? '']);
       if (spriteB && spriteB.data) {
         try {
           const { applyFaceTurn, alphaBlendGrids } = require('./skin/face-turn') as typeof import('./skin/face-turn');

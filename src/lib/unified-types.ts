@@ -759,6 +759,9 @@ export interface CostumePiece {
   // Direction → sprite. Accepts embedded Sprite (legacy) or SpriteRef (new reference model).
   // New code should use SpriteRef; embedded is for migration transition.
   sprites: Partial<Record<DirectionIndex, Sprite | SpriteRef>>;
+  /** 通用自定义变体精灵：variantId → direction → sprite（变体定义在 Character.variantDefs）。
+   *  解析顺序：变体直达 → 变体镜像 → 基础 sprites 直达 → 基础镜像（见 sprite-resolve 的 resolvePieceSprite） */
+  variantSprites?: Record<string, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>;
   scaleVariants: Partial<Record<number, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>>;
   mirrorMap: MirrorMap;                         // Direction mirror mapping
   crossSections: CrossSection[];                // Cross section definitions for disc gen
@@ -899,6 +902,13 @@ export interface Character {
   // ---- Costume System ----
   costumeSets: CostumeSet[];
   activeCostumeSetId?: string;
+
+  // ---- 通用自定义变体（槽位级） ----
+  /** 变体定义（用户命名，如破损/湿透/燃烧）；变体只到槽位级——全身切换是服装集的职责，不在此重复 */
+  variantDefs?: { id: string; name: string }[];
+  /** 槽位变体指派：slotKey → variantId（无条目 = 基础）。角色级状态，不属于任何服装集，
+   *  故同一部位在任何服装下都处于该变体；精灵本体存各集 piece 的 variantSprites */
+  slotVariants?: Record<string, string>;
 
   // ---- Direction Draw Order ----
   // Per-direction draw order overrides (direction → drawLayer → z-order list)

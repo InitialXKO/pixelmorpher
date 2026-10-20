@@ -173,7 +173,7 @@ export default function PuppetModifierPanel() {
       // 共享解析：与主渲染一致（含 mirrorMap）
       const slotKey = n.slot?.slotKey;
       // 预览默认南向（6）；方向由调用方按当前帧定
-      const resolved = resolvePreviewSprite(slotKey, 6, activeSet as any, spritesTable as any);
+      const resolved = resolvePreviewSprite(slotKey, 6, activeSet as any, spritesTable as any, character?.slotVariants?.[slotKey ?? '']);
       const sprite = resolved.sprite;
       const bp = n.blueprint ?? (n.modifiers?.length ? modifiersToBlueprint(n.modifiers) : null);
       const attachment = n.attachment;
@@ -400,6 +400,7 @@ export default function PuppetModifierPanel() {
               characterNodes={characterNodes}
               costumeSets={costumeSetsNewFormat}
               activeCostumeSetId={character?.activeCostumeSetId}
+              slotVariants={character?.slotVariants}
               spritesTable={spritesTable as any}
             />
           ) : (
