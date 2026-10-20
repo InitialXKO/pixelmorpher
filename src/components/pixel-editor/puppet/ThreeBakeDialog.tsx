@@ -1254,7 +1254,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                         className="cursor-pointer hover:opacity-80"
                         title="点击查看8方向"
                       >
-                        <PixelGridCanvas grid={d0.grid} scale={2} />
+                        <PixelGridCanvas grid={d0.grid} scale={2} plugX={d0.plugX} plugY={d0.plugY} />
                       </button>
                     )}
                     <div className="max-w-[110px] truncate text-[10px] text-gray-300" title={pb.boneName}>
@@ -1313,7 +1313,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                       <div className="text-[10px] text-gray-400">
                         方向 {dir.direction}（{dir.width}×{dir.height}）
                       </div>
-                      <PixelGridCanvas grid={dir.grid} scale={2} />
+                      <PixelGridCanvas grid={dir.grid} scale={2} plugX={dir.plugX} plugY={dir.plugY} />
                       <button
                         onClick={() =>
                           handleReplaceSprite(popupBone.boneIndex, popupBone.boneName, dir)
