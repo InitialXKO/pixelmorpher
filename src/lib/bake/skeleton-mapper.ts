@@ -457,7 +457,7 @@ export function mapBonesToNodes(
       const scale = (bw / 2) / gch;
       socket.offset3D = {
         x: pxToSub((pb.joint3D.x - parentPb.joint3D.x) * scale),
-        y: pxToSub(-(pb.joint3D.y - parentPb.joint3D.y) * scale), // Y-up→Y-down
+        y: pxToSub((pb.joint3D.y - parentPb.joint3D.y) * scale), // 不取反：3D 空间 Y-up，与 joint3D 一致
         z: pxToSub((pb.joint3D.z - parentPb.joint3D.z) * scale),
       };
     }
