@@ -1096,17 +1096,18 @@ function extractBoneTriangles(
     const index = geo.getIndex();
     const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
     const sm = mesh as unknown as THREE.SkinnedMesh;
-    // 蒙皮感知：摆过姿态（握拳）后必须走 boneTransform 取 posed 顶点；
-    // bind pose 下 boneTransform = 原始顶点，与直接拷贝一致
+    // 蒙皮感知：摆过姿态（握拳）后必须走 applyBoneTransform 取 posed 顶点；
+    // bind pose 下 applyBoneTransform = 原始顶点，与直接拷贝一致
+    // （three r151 起 boneTransform 改名为 applyBoneTransform，0.186 已无旧名）
     const useSkinning = !!sm.isSkinnedMesh && !!sm.skeleton && !!geo.getAttribute('skinIndex');
     for (let t = 0; t < triBone.length; t++) {
       if (!boneIndices.has(triBone[t])) continue;
       for (let k = 0; k < 3; k++) {
         const vi = index ? index.getX(t * 3 + k) : t * 3 + k;
+        v.fromBufferAttribute(posAttr, vi);
         if (useSkinning) {
-          sm.boneTransform(vi, v); // mesh 局部（posed）
-        } else {
-          v.fromBufferAttribute(posAttr, vi);
+          // applyBoneTransform 以 target 当前值（原始顶点）为输入、原地写回 posed 顶点
+          sm.applyBoneTransform(vi, v); // mesh 局部（posed）
         }
         // mesh 局部 → 模型空间
         v.applyMatrix4(mesh.matrixWorld);
