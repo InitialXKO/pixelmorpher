@@ -5,6 +5,7 @@
 
 import type { TwoPassBakeData } from './threejs-baker-twopass';
 import { decodeBoneMask } from './threejs-baker-twopass';
+import type { PartName } from './threejs-baker-sixpart';
 import { medianCut, nearestPaletteIndex } from './threejs-baker';
 import { rgbaToHexOrNull } from '../engine/utils';
 import {
@@ -52,6 +53,8 @@ export interface ProcessedBone {
   worldToPixels?: number;
   /** 烘焙图像尺寸（像素），用于全局尺度换算 */
   bakeWidth?: number;
+  /** 所属部件（六部件拆分填；双遍无此概念则为空） */
+  part?: PartName;
 }
 
 export interface SplitOptions {
@@ -392,6 +395,16 @@ export function mapBonesToNodes(
     node.transform.z = 0;
     // 根节点 transform 保持 (0,0,0)
 
+    // T-pose 摆回（甲案）：手臂是垂下烘焙的（局部偏移竖直向下），链根节点（肩）写 ∓90°
+    // 基础角度，把整条臂链在南向视平面里转回水平（精灵与子关节同角旋转，保持对位）；
+    // 与模型原始姿势解耦：角度只由肩关节在模型中心的左/右侧决定（+X 侧 -90°，-X 侧 +90°）
+    if (!isRoot && (pb.part === 'armL' || pb.part === 'armR') && pb.joint3D) {
+      const parentPb = processed.get(pb.parentIndex!);
+      if (parentPb && parentPb.part !== pb.part) {
+        node.transform.angle = pb.joint3D.x >= 0 ? -90 : 90;
+      }
+    }
+
     // attachment：plug 用方向 0 的（各方向 sprite.plug 自己带）
     // 注意：无方向的父骨骼占位（directions 为空）没有 plug，用零值
     const d0 = pb.directions.find((d) => d.direction === 0) ?? pb.directions[0];
@@ -455,11 +468,24 @@ export function mapBonesToNodes(
       const gch = cdir?.globalCameraHalf ?? 1.0;
       const bw = pb.bakeWidth ?? 128;
       const scale = (bw / 2) / gch;
-      socket.offset3D = {
-        x: pxToSub((pb.joint3D.x - parentPb.joint3D.x) * scale),
-        y: pxToSub(-(pb.joint3D.y - parentPb.joint3D.y) * scale), // Y-up→Y-down（画布坐标）
-        z: pxToSub((pb.joint3D.z - parentPb.joint3D.z) * scale),
-      };
+      const isArmChainInternal =
+        (pb.part === 'armL' || pb.part === 'armR') && parentPb.part === pb.part;
+      if (isArmChainInternal) {
+        // T-pose（甲案）：臂链内偏移拉直为纯向下（局部系），只保留 3D 骨长；
+        // 摆回水平靠链根节点（肩）的 ∓90° 基础角度，精灵与关节同角旋转对位不变
+        const len = Math.hypot(
+          pb.joint3D.x - parentPb.joint3D.x,
+          pb.joint3D.y - parentPb.joint3D.y,
+          pb.joint3D.z - parentPb.joint3D.z,
+        );
+        socket.offset3D = { x: 0, y: pxToSub(len * scale), z: 0 };
+      } else {
+        socket.offset3D = {
+          x: pxToSub((pb.joint3D.x - parentPb.joint3D.x) * scale),
+          y: pxToSub(-(pb.joint3D.y - parentPb.joint3D.y) * scale), // Y-up→Y-down（画布坐标）
+          z: pxToSub((pb.joint3D.z - parentPb.joint3D.z) * scale),
+        };
+      }
     }
     // 2D directionOffsets 置零（3D 管线用 offset3D，2D 回退时用零值）
     for (const pdir of parentPb.directions) {
@@ -703,6 +729,7 @@ export function splitSixParts(
           console.log(`[splitSixParts] skip duplicate hips: part=${part} dir=${d} (already have)`);
           continue;
         }
+        if (!pb.part) pb.part = part; // 部件归属（导入时臂链 T-pose 摆回用；首个添加方为归属部件）
         pb.directions.push({
           direction: d as DirectionIndex,
           grid,
