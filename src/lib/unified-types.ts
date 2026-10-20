@@ -164,6 +164,112 @@ export function rotatePseudo3D(
   };
 }
 
+// ---- Frame FK 数学（真 3D 姿态） ----
+//
+// 姿态不再是标量角，而是朝向框架的复合旋转。矩阵在「朝向基」坐标 (h, y, d) 下表达：
+// h = 视平面横轴、y = 竖直、d = 深度轴（与 projectToView/rotateInViewPlane 同约定）。
+// 局部旋转 L = RU(tilt)·RD(angle)：RD 绕 d 轴转视平面内角（= rotateInViewPlane 的旋转），
+// RU 绕 h 轴转出平面角（= rotatePseudo3D 的旋转）。tilt 恒 0 时整套逐值退化为旧标量 FK。
+
+/** 3×3 旋转矩阵（行主序），坐标系为朝向基 (h, y, d) */
+export type Mat3 = [number, number, number, number, number, number, number, number, number];
+
+export const MAT3_IDENTITY: Mat3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+/** 矩阵乘法 a·b（先 b 后 a） */
+export function mat3Mul(a: Mat3, b: Mat3): Mat3 {
+  const o = new Array(9) as Mat3;
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      o[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+    }
+  }
+  return o;
+}
+
+/** 矩阵作用于朝向基坐标向量 (h, y, d) */
+export function mat3Apply(m: Mat3, h: number, y: number, d: number): { h: number; y: number; d: number } {
+  return {
+    h: m[0] * h + m[1] * y + m[2] * d,
+    y: m[3] * h + m[4] * y + m[5] * d,
+    d: m[6] * h + m[7] * y + m[8] * d,
+  };
+}
+
+/** 转置（旋转矩阵的逆） */
+export function mat3Transpose(m: Mat3): Mat3 {
+  return [m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]];
+}
+
+/** 视平面内旋转矩阵 RD（绕 d 轴），与 rotateInViewPlane 的 (h,y) 旋转同约定 */
+export function rotMatD(angleDeg: number): Mat3 {
+  const rad = (angleDeg * Math.PI) / 180;
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  return [c, -s, 0, s, c, 0, 0, 0, 1];
+}
+
+/** 出平面旋转矩阵 RU（绕 h 轴），与 rotatePseudo3D 的 (d,y) 旋转同约定 */
+export function rotMatU(tiltDeg: number): Mat3 {
+  const rad = (tiltDeg * Math.PI) / 180;
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  // y' = c·y + s·d；d' = −s·y + c·d
+  return [1, 0, 0, 0, c, s, 0, -s, c];
+}
+
+/** 局部旋转复合：先视平面内 angle、后出平面 tilt（L = RU(tilt)·RD(angle)） */
+export function localRotMat(angleDeg: number, tiltDeg: number): Mat3 {
+  if (tiltDeg === 0) return rotMatD(angleDeg);
+  return mat3Mul(rotMatU(tiltDeg), rotMatD(angleDeg));
+}
+
+/** 世界轴坐标 → 朝向基坐标 (h, y, d) */
+export function worldToViewBasis(
+  x: number, y: number, z: number, direction: DirectionIndex,
+): { h: number; y: number; d: number } {
+  const theta = (((direction + 2) % 8) * Math.PI) / 4;
+  const cosT = Math.cos(theta);
+  const sinT = Math.sin(theta);
+  return { h: x * cosT + z * sinT, y, d: -x * sinT + z * cosT };
+}
+
+/** 朝向基坐标 (h, y, d) → 世界轴坐标 */
+export function viewBasisToWorld(
+  h: number, y: number, d: number, direction: DirectionIndex,
+): { x: number; y: number; z: number } {
+  const theta = (((direction + 2) % 8) * Math.PI) / 4;
+  const cosT = Math.cos(theta);
+  const sinT = Math.sin(theta);
+  return { x: h * cosT - d * sinT, y, z: h * sinT + d * cosT };
+}
+
+/**
+ * 用 frame 旋转一个世界轴偏移向量：偏移先换到 direction 的朝向基，
+ * 在基坐标下左乘 m，再换回世界轴。m = rotMatD(A) 时与 rotateInViewPlane 逐值相同。
+ */
+export function applyFrameRotation(
+  m: Mat3, x: number, y: number, z: number, direction: DirectionIndex,
+): { x: number; y: number; z: number } {
+  const b = worldToViewBasis(x, y, z, direction);
+  const r = mat3Apply(m, b.h, b.y, b.d);
+  return viewBasisToWorld(r.h, r.y, r.d, direction);
+}
+
+/**
+ * frame 的视平面派生角（度）：节点局部 +Y 轴（骨骼主轴）经 frame 旋转后，
+ * 在自身朝向视平面上的投影角。tilt=0 时恒等于累积标量角（旧 worldAngle）。
+ */
+export function frameViewAngle(m: Mat3): number {
+  // +Y 轴在基坐标下旋转后 = 矩阵第 2 列 (m[1], m[4], m[7])，取 (h, y) 分量
+  return (Math.atan2(-m[1], m[4]) * 180) / Math.PI;
+}
+
+/** frame 旋转后的节点局部 +Y 轴在世界轴下的单位方向（入参须为单位长度偏移的 frame） */
+export function frameYAxisWorld(m: Mat3, direction: DirectionIndex): { x: number; y: number; z: number } {
+  return viewBasisToWorld(m[1], m[4], m[7], direction);
+}
+
 // ---- Sprite & Visual Data ----
 
 /** Pixel color: hex string or null (transparent) */
@@ -369,7 +475,8 @@ export interface NodeTransform {
   x: SubPixel;                  // Local X offset (3D)
   y: SubPixel;                  // Local Y offset (3D, vertical)
   z: SubPixel;                  // Local Z offset (3D, depth)
-  angle: number;                // Rotation angle (degrees)
+  angle: number;                // Rotation angle (degrees, view-plane)
+  tilt?: number;                // Out-of-plane rotation (degrees, about view-plane horizontal axis). Default 0 = legacy scalar FK.
   stretch: number;              // Y-axis stretch factor (0.5 ~ 2.0)
   variantIndex: DirectionIndex; // Direction variant index (0-7)
   scaleX?: number;               // X-axis scale factor (blueprint t.scaleX, default 1)
@@ -597,6 +704,7 @@ export interface Node {
 /** Animation tracks for a node's transform properties */
 export interface NodeTracks {
   angle?: KeyframeTrack<number>;
+  tilt?: KeyframeTrack<number>;
   x?: KeyframeTrack<number>;
   y?: KeyframeTrack<number>;
   stretch?: KeyframeTrack<number>;
@@ -613,6 +721,7 @@ export interface NodeKeyframe {
   nodeId: string;
   frame: number;
   angle?: number;
+  tilt?: number;
   stretch?: number;
   x?: number;
   y?: number;
@@ -948,6 +1057,8 @@ export interface NodeRenderInstruction {
   worldY: SubPixel;
   angle: number;
   stretch: number;
+  /** 透视缩短系数（0~1）：精灵沿骨骼方向的绘制长度比；undefined = 不缩短 */
+  foreshorten?: number;
   variantIndex: DirectionIndex;
   rotationStrategy: RotationStrategy;
   mirror: boolean;               // Whether to flip horizontally

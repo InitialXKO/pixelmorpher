@@ -19,11 +19,12 @@ import type {
   NodeRenderInstruction, DiscRenderInstruction, RenderPlan,
   KeyframeTrack, KeyframePoint, InterpolationMode,
   ModifierInstance, GeneratedItem, AnimationVariable, ParamDriver,
-  IKChain,
+  IKChain, Mat3,
 } from './unified-types';
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
   resolveChainTarget3D,
+  mat3Mul, localRotMat, rotMatD, applyFrameRotation, frameViewAngle, frameYAxisWorld,
 } from './unified-types';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
@@ -104,6 +105,7 @@ export interface BlueprintTransformResult {
   translateY: number;
   translateZ: number;
   rotation: number;
+  tilt: number;
   scaleX: number;
   scaleY: number;
   skewX: number;
@@ -126,7 +128,7 @@ export function evaluateBlueprintTransforms(
 
   const result = new Map<string, BlueprintTransformResult>();
   const nodeOutputs = new Map<string, {
-    rotation: number; translateX: number; translateY: number; translateZ: number;
+    rotation: number; tilt: number; translateX: number; translateY: number; translateZ: number;
     scaleX: number; scaleY: number; skewX: number; skewY: number; zIndex: number;
   }>();
 
@@ -152,6 +154,7 @@ export function evaluateBlueprintTransforms(
           translateY: t.translateY,
           translateZ: t.translateZ ?? 0,
           rotation: t.rotation,
+          tilt: t.tilt ?? 0,
           scaleX: t.scaleX,
           scaleY: t.scaleY,
           skewX: t.skewX,
@@ -160,6 +163,7 @@ export function evaluateBlueprintTransforms(
         if (pass === 0) {
           nodeOutputs.set(nodeId, {
             rotation: t.rotation,
+            tilt: t.tilt ?? 0,
             translateX: t.translateX,
             translateY: t.translateY,
             translateZ: t.translateZ ?? 0,
@@ -184,7 +188,8 @@ export interface WorldTransform {
   worldX: SubPixel;        // World position X (sub-pixel, 3D)
   worldY: SubPixel;        // World position Y (sub-pixel, 3D)
   worldZ: SubPixel;        // World position Z (sub-pixel, 3D depth)
-  worldAngle: number;      // Accumulated rotation (degrees)
+  worldAngle: number;      // Derived view-plane angle (degrees; = frameViewAngle(worldFrame))
+  worldFrame: Mat3;        // Accumulated orientation frame (basis-coords rotation, incl. own local rot)
   worldStretch: number;    // Accumulated stretch factor
   variantIndex: DirectionIndex; // Current direction
   mirror: boolean;         // Whether this node is mirrored
@@ -213,13 +218,15 @@ export function computeWorldTransforms(
 
   // Root node: center of canvas + node's own offset
   const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext, blueprintTransforms);
+  const rootFrame = localRotMat(rootInterpolated.angle, rootInterpolated.tilt ?? 0);
   const rootWorld: WorldTransform = {
     nodeId: rootNode.id,
     // 3D 世界坐标以原点为中心，不含画布中心（画布中心在投影后 2D 阶段加）
     worldX: rootInterpolated.x,
     worldY: rootInterpolated.y,
     worldZ: rootInterpolated.z ?? 0,
-    worldAngle: rootInterpolated.angle,
+    worldAngle: frameViewAngle(rootFrame),
+    worldFrame: rootFrame,
     worldStretch: rootInterpolated.stretch,
     variantIndex: rootInterpolated.variantIndex,
     mirror: false,
@@ -300,6 +307,7 @@ function applyBakedIKBlueprint(
     const t = transforms.get(jointId);
     if (t) {
       t.worldAngle = result.rotation;
+      t.worldFrame = rotMatD(result.rotation);
     }
   }
 }
@@ -560,6 +568,7 @@ function applyIKChain(
     t.worldY = pxToSub(p.y) as SubPixel;
     t.worldZ = pxToSub(p.z) as SubPixel;
     t.worldAngle = jointAngles[i];
+    t.worldFrame = rotMatD(jointAngles[i]);
   }
 }
 
@@ -582,7 +591,6 @@ function computeChildTransforms(
     let childWorldX: SubPixel;
     let childWorldY: SubPixel;
     let childWorldZ: SubPixel;
-    let childAngle = childInterpolated.angle;
     let childMirror = parentWorld.mirror;
 
     if (childNode.attachment.type === 'socket' && childNode.attachment.parentSocketId) {
@@ -601,10 +609,8 @@ function computeChildTransforms(
         const totalX = sockX3D + childOffsetX_px;
         const totalY = sockY + childOffsetY_px;
         const totalZ = sockZ3D + childOffsetZ_px;
-        // 旋转：按视平面转
-        let rotated: { x: number; y: number; z: number };
-        // 正常：视平面内旋转（按父节点朝向）
-        rotated = rotateInViewPlane(totalX, totalY, totalZ, parentWorld.worldAngle, parentWorld.variantIndex);
+        // 旋转：父 frame 复合旋转（tilt 全 0 时与旧 rotateInViewPlane(父 worldAngle) 逐值相同）
+        const rotated = applyFrameRotation(parentWorld.worldFrame, totalX, totalY, totalZ, parentWorld.variantIndex);
         childWorldX = parentWorld.worldX + pxToSub(rotated.x);
         childWorldY = parentWorld.worldY + pxToSub(rotated.y);
         childWorldZ = parentWorld.worldZ + pxToSub(rotated.z);
@@ -628,26 +634,28 @@ function computeChildTransforms(
       const totalOffsetX_px = subToPx(fixedOffset.x) + subToPx(childInterpolated.x);
       const totalOffsetY_px = subToPx(fixedOffset.y) + subToPx(childInterpolated.y) * childInterpolated.stretch;
       const totalOffsetZ_px = subToPx(childInterpolated.z ?? 0);
-      // 旋转：按视平面转
-      let rotated2: { x: number; y: number; z: number };
-      rotated2 = rotateInViewPlane(totalOffsetX_px, totalOffsetY_px, totalOffsetZ_px, parentWorld.worldAngle, parentWorld.variantIndex);
+      // 旋转：父 frame 复合旋转（同 socket 分支）
+      const rotated2 = applyFrameRotation(parentWorld.worldFrame, totalOffsetX_px, totalOffsetY_px, totalOffsetZ_px, parentWorld.variantIndex);
 
       childWorldX = parentWorld.worldX + pxToSub(rotated2.x);
       childWorldY = parentWorld.worldY + pxToSub(rotated2.y);
       childWorldZ = parentWorld.worldZ + pxToSub(rotated2.z);
     }
 
-    // Inherit parent rotation if configured
-    if (childNode.attachment.inheritRotation !== false) {
-      childAngle += parentWorld.worldAngle;
-    }
+    // Frame 复合：inheritRotation 时父 frame · 本地 (angle, tilt)，否则只用本地
+    // （tilt 全 0 时退化为旧标量角相加/重置，逐值一致）
+    const childLocalFrame = localRotMat(childInterpolated.angle, childInterpolated.tilt ?? 0);
+    const childFrame = childNode.attachment.inheritRotation !== false
+      ? mat3Mul(parentWorld.worldFrame, childLocalFrame)
+      : childLocalFrame;
 
     const childWorld: WorldTransform = {
       nodeId: childId,
       worldX: childWorldX,
       worldY: childWorldY,
       worldZ: childWorldZ,
-      worldAngle: childAngle,
+      worldAngle: frameViewAngle(childFrame),
+      worldFrame: childFrame,
       worldStretch: childInterpolated.stretch * parentWorld.worldStretch,
       variantIndex: childInterpolated.variantIndex,
       mirror: childMirror,
@@ -711,6 +719,7 @@ function interpolateTransform(
   const kfY = interpolateTrack(node.tracks.y, frame, base.y);
   const kfZ = base.z ?? 0; // 暂无 z 轨道，直接用 base（3D 烘焙写入）；旧数据缺 z 时默 0
   const kfAngle = interpolateTrack(node.tracks.angle, frame, base.angle);
+  const kfTilt = interpolateTrack(node.tracks.tilt, frame, base.tilt ?? 0);
   const kfStretch = interpolateTrack(node.tracks.stretch, frame, base.stretch);
   const kfVariant = interpolateTrack(node.tracks.variantIndex, frame, base.variantIndex) as DirectionIndex;
 
@@ -723,6 +732,7 @@ function interpolateTransform(
       // 蓝图 translateZ 是节点的程序化 z 通道（z 无关键帧轨道，这是唯一的动态 z 来源）
       z: kfZ + pxToSub(bpT.translateZ ?? 0),
       angle: kfAngle + bpT.rotation,
+      tilt: kfTilt + (bpT.tilt ?? 0),
       stretch: kfStretch * bpT.scaleY,
       scaleX: bpT.scaleX,
       skewX: bpT.skewX,
@@ -745,6 +755,7 @@ function interpolateTransform(
       y: kfY + pxToSub(animTransform.translateY),
       z: kfZ,
       angle: kfAngle + animTransform.rotation,
+      tilt: kfTilt,
       stretch: kfStretch * ((animTransform.scaleX + animTransform.scaleY) / 2), // Average scale as stretch
       variantIndex: kfVariant,
     };
@@ -755,6 +766,7 @@ function interpolateTransform(
     y: kfY,
     z: kfZ,
     angle: kfAngle,
+    tilt: kfTilt,
     stretch: kfStretch,
     variantIndex: kfVariant,
   };
@@ -1160,7 +1172,7 @@ function generateDiscInstructions(
         if (parentWorldTf) {
           // Compute socket 3D position (same math as computeChildTransforms)
           const s3 = socketOffsetTo3D(socket, parentWorldTf.variantIndex);
-          const rot = rotateInViewPlane(s3.x, s3.y, s3.z, parentWorldTf.worldAngle, parentWorldTf.variantIndex);
+          const rot = applyFrameRotation(parentWorldTf.worldFrame, s3.x, s3.y, s3.z, parentWorldTf.variantIndex);
           socketWorldX = (parentWorldTf.worldX + pxToSub(rot.x)) as SubPixel;
           socketWorldY = (parentWorldTf.worldY + pxToSub(rot.y)) as SubPixel;
           socketWorldZ = (parentWorldTf.worldZ + pxToSub(rot.z)) as SubPixel;
@@ -1234,6 +1246,8 @@ export function generateRenderPlan(
   globalSprites?: Record<string, Sprite>,
   // Phase 0 蓝图求值的覆盖（预览未保存的编辑图用；默认走渲染器内部求值）
   blueprintTransformsOverride?: Map<string, BlueprintTransformResult>,
+  // 透视缩短开关（编辑器视图选项）：开启时精灵沿骨骼方向按投影长度比缩放
+  perspectiveForeshorten?: boolean,
 ): RenderPlan {
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
@@ -1379,6 +1393,14 @@ export function generateRenderPlan(
     // 3D 投影：按当前朝向将 3D 世界坐标映射到 2D 画布（直接取项，非两步投影）
     // 投影后加画布中心（3D 世界以原点为中心，2D 画布以中心为原点）
     const proj = projectToView(worldTf.worldX, worldTf.worldY, worldTf.worldZ, currentDirection);
+    // 透视缩短：节点 +Y 轴（骨骼主轴）单位方向投影到渲染朝向视平面后的长度比
+    let foreshorten: number | undefined;
+    if (perspectiveForeshorten) {
+      const yw = frameYAxisWorld(worldTf.worldFrame, worldTf.variantIndex);
+      const thR = (((currentDirection + 2) % 8) * Math.PI) / 4;
+      const hr = yw.x * Math.cos(thR) + yw.z * Math.sin(thR);
+      foreshorten = Math.min(1, Math.hypot(hr, yw.y));
+    }
     nodeInstructions.push({
       nodeId,
       sprite: effectiveSprite,
@@ -1386,6 +1408,7 @@ export function generateRenderPlan(
       worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel)) as SubPixel,
       angle: worldTf.worldAngle,
       stretch: worldTf.worldStretch,
+      foreshorten,
       variantIndex: worldTf.variantIndex,
       rotationStrategy: strategy,
       mirror: mirror || worldTf.mirror,
@@ -1550,6 +1573,8 @@ function renderNodeSprite(
 ): void {
   const { nodeId, sprite, worldX, worldY, angle, stretch, mirror, rotationStrategy, modifiers, frame, frameRate } = instruction;
   const scaleX = instruction.scaleX ?? 1;
+  // 透视缩短：沿骨骼方向（局部 Y）乘投影长度比；未开启时 foreshorten 为 undefined → 恒 1
+  const effStretch = stretch * (instruction.foreshorten ?? 1);
   const skews = instruction.skews ?? [];
   const previewQuality = instruction.previewQuality ?? 'high';
 
@@ -1820,7 +1845,7 @@ function renderNodeSprite(
   // Then draw at (-pivotX, -pivotY) so the pivot aligns with world position
   ctx.translate(Math.round(drawPivotX), Math.round(drawPivotY));
   ctx.rotate((angle * Math.PI) / 180);
-  ctx.scale(scaleX, stretch);
+  ctx.scale(scaleX, effStretch);
 
   // Apply skews (matches old pipeline's renderPartToCanvas order: after scale)
   for (const { skewX, skewY } of skews) {
@@ -1878,7 +1903,7 @@ function renderNodeSprite(
   // Pixel-perfect rotation only handles rotate + Y-stretch. Parts with X-scale
   // or skew fall back to the native canvas path (same as the old pipeline).
   const usePixelPerfect = rotationStrategy === 'pixel-perfect'
-    && (angle !== 0 || stretch !== 1.0)
+    && (angle !== 0 || effStretch !== 1.0)
     && scaleX === 1
     && skews.length === 0;
   if (usePixelPerfect) {
@@ -1891,7 +1916,7 @@ function renderNodeSprite(
     const result = renderPixelPerfectRotation(
       workingCanvas,
       angle,
-      stretch,
+      effStretch,
       pivotX,
       pivotY,
     );
@@ -1921,7 +1946,7 @@ function renderNodeSprite(
       ctx.save();
       ctx.translate(Math.round(drawPivotX), Math.round(drawPivotY));
       ctx.rotate((angle * Math.PI) / 180);
-      ctx.scale(scaleX, stretch);
+      ctx.scale(scaleX, effStretch);
       for (const { skewX, skewY } of skews) {
         ctx.transform(1, Math.tan((skewY * Math.PI) / 180), Math.tan((skewX * Math.PI) / 180), 1, 0, 0);
       }
@@ -2262,6 +2287,7 @@ function renderPuppetViaUnifiedPipeline(
   proceduralAnimations?: ProceduralAnimation[],
   globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
   sprites?: Record<string, Sprite>,
+  perspectiveForeshorten?: boolean,
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
@@ -2276,6 +2302,7 @@ function renderPuppetViaUnifiedPipeline(
       'pixel-perfect', frameRate, unifiedVars,
       undefined, undefined, undefined, undefined, undefined,
       undefined, undefined, proceduralAnimations, sprites,
+      undefined, perspectiveForeshorten,
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }
@@ -2310,6 +2337,7 @@ export function renderUnified(
   useUnifiedPipeline: boolean = true,
   globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
   sprites?: Record<string, Sprite>,
+  perspectiveForeshorten?: boolean,
 ): void {
   if (backgroundColor !== 'transparent') {
     ctx.fillStyle = backgroundColor;
@@ -2320,6 +2348,7 @@ export function renderUnified(
       ctx, canvasWidth, canvasHeight, unifiedCharacters,
       currentFrame, frameRate, globalModifiers, animationVariables,
       canvasModifierTracks, proceduralAnimations, globalBlueprint, sprites,
+      perspectiveForeshorten,
     );
   }
   if (effectTracks) {

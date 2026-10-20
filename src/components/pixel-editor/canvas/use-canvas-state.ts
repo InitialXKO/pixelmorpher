@@ -161,6 +161,7 @@ export function useCanvasState() {
   const effectBrushSpread = useEditorStore((s) => s.effectBrushSpread);
   const strokeBlendMode = useEditorStore((s) => s.strokeBlendMode);
   const showSkeletons = useEditorStore((s) => s.showSkeletons);
+  const perspectiveForeshorten = useEditorStore((s) => s.perspectiveForeshorten);
   const selectedBoneId = useProjectStore((s) => s.selectedBoneId);
   const activeSkeletonId = useEditorStore((s) => s.activeSkeletonId);
   const showWeightPaint = useEditorStore((s) => s.showWeightPaint);
@@ -673,7 +674,7 @@ export function useCanvasState() {
     editMode, selectedSpriteId, setZoom, setPan,
     autoMotionBlur, autoMotionBlurIntensity, motionBlurBrushType, motionBlurIntensity, motionBlurDirection,
     effectBrushColor, effectBrushRadius, effectBrushIntensity, effectBrushDensity, effectBrushSpread, strokeBlendMode,
-    showSkeletons, selectedBoneId, activeSkeletonId, showWeightPaint, weightPaintBoneId,
+    showSkeletons, perspectiveForeshorten, selectedBoneId, activeSkeletonId, showWeightPaint, weightPaintBoneId,
     showPuppetSkeleton, activePuppetSkeletonId, selectedNodeId,
     referenceImageUrl, referenceImageOpacity, referenceImageVisible, maskNodeId,
     refWizardOpen,

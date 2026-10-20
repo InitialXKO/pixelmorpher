@@ -826,6 +826,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     translateY: num(asNumber(i.translateY ?? num(Number(n.params.translateY ?? 0)))),
     translateZ: num(asNumber(i.translateZ ?? num(Number(n.params.translateZ ?? 0)))),
     rotation: num(asNumber(i.rotation ?? num(Number(n.params.rotation ?? 0)))),
+    tilt: num(asNumber(i.tilt ?? num(Number(n.params.tilt ?? 0)))),
     scaleX: num(asNumber(i.scaleX ?? num(Number(n.params.scaleX ?? 1)))),
     scaleY: num(asNumber(i.scaleY ?? num(Number(n.params.scaleY ?? 1)))),
     zIndex: num(asNumber(i.zIndex ?? num(Number(n.params.zIndex ?? 0)))),
@@ -2018,6 +2019,7 @@ export function evaluateBlueprint(
   translateY: number;
   translateZ: number;
   rotation: number;
+  tilt: number;
   scaleX: number;
   scaleY: number;
   skewX: number;
@@ -2099,6 +2101,7 @@ export function evaluateBlueprint(
     translateY: out?.translateY ? asNumber(out.translateY) : 0,
     translateZ: out?.translateZ ? asNumber(out.translateZ) : 0,
     rotation: out?.rotation ? asNumber(out.rotation) : 0,
+    tilt: out?.tilt ? asNumber(out.tilt) : 0,
     scaleX: out?.scaleX ? asNumber(out.scaleX) : 1,
     scaleY: out?.scaleY ? asNumber(out.scaleY) : 1,
     skewX: out?.skewX ? asNumber(out.skewX) : 0,

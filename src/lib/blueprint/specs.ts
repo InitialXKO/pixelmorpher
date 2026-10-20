@@ -127,7 +127,7 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
 
   // ---- 输出 ----
   transform: {
-    inputs: ['translateX', 'translateY', 'translateZ', 'rotation', 'scaleX', 'scaleY', 'zIndex'],
+    inputs: ['translateX', 'translateY', 'translateZ', 'rotation', 'tilt', 'scaleX', 'scaleY', 'zIndex'],
     outputs: ['outX', 'outY', 'outRotation', 'outScaleX', 'outScaleY', 'outZIndex'],
     params: [],
   },

@@ -216,7 +216,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
               try {
                 const r = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: {} } as any);
                 bpOverrides.set(editedId, {
-                  translateX: r.translateX ?? 0, translateY: r.translateY ?? 0, translateZ: r.translateZ ?? 0, rotation: r.rotation ?? 0,
+                  translateX: r.translateX ?? 0, translateY: r.translateY ?? 0, translateZ: r.translateZ ?? 0, rotation: r.rotation ?? 0, tilt: r.tilt ?? 0,
                   scaleX: r.scaleX ?? 1, scaleY: r.scaleY ?? 1, skewX: r.skewX ?? 0, skewY: r.skewY ?? 0,
                 });
               } catch { /* 求值失败则用已保存版本 */ }

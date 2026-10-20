@@ -19,6 +19,7 @@ import {
   Eye,
   Magnet,
   Users,
+  Scaling,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
@@ -187,6 +188,29 @@ export function SkeletonsToggle() {
         </Toggle>
       </TooltipTrigger>
       <TooltipContent side="bottom" className="text-xs">显示骨骼（节点标签/IK目标/插槽）</TooltipContent>
+    </Tooltip>
+  );
+}
+
+// ---- 透视缩短 Toggle ----
+// 真 3D 姿态下，精灵沿骨骼方向按投影长度比缩放（骨骼掀向观察者时精灵变短）
+export function ForeshortenToggle() {
+  const perspectiveForeshorten = useEditorStore((s) => s.perspectiveForeshorten);
+  const togglePerspectiveForeshorten = useEditorStore((s) => s.togglePerspectiveForeshorten);
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Toggle
+          pressed={perspectiveForeshorten}
+          onPressedChange={togglePerspectiveForeshorten}
+          aria-label="透视缩短"
+          className="h-7 w-7 p-0 data-[state=on]:bg-cyan-600/30 data-[state=on]:text-cyan-300 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded"
+        >
+          <Scaling className="size-3.5" />
+        </Toggle>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="text-xs">透视缩短（精灵沿骨骼方向按投影缩放）</TooltipContent>
     </Tooltip>
   );
 }

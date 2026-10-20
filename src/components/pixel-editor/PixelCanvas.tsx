@@ -276,7 +276,7 @@ export default function PixelCanvas() {
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
         s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint,
-        freshStore.sprites);
+        freshStore.sprites, s.perspectiveForeshorten);
     }
 
     // 3. Stroke preview
@@ -412,7 +412,7 @@ export default function PixelCanvas() {
   // 覆盖层开关变化时标记重绘（网格/骨骼/轨迹等）
   useEffect(() => {
     s.markDirty();
-  }, [s.showGrid, s.showPuppetSkeleton, s.showTrajectories, s.showSkeletons]);
+  }, [s.showGrid, s.showPuppetSkeleton, s.showTrajectories, s.showSkeletons, s.perspectiveForeshorten]);
 
   // 节点关键帧变化时标记重绘
   const animationClips = useProjectStore((s) => s.animationClips);
