@@ -928,6 +928,14 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       const base = fileName ? fileName.replace(/\.(glb|gltf)$/i, '') : 'baked';
       const name = `烘焙_${base}`;
       store.pushUndo('导入烘焙角色');
+      // 分辨率超出项目画布尺寸时自动放大画布（直接 setState，合并进同一次 undo）
+      let enlargeNote = '';
+      const needW = Math.max(store.canvasWidth, size);
+      const needH = Math.max(store.canvasHeight, size);
+      if (needW > store.canvasWidth || needH > store.canvasHeight) {
+        useProjectStore.setState({ canvasWidth: needW, canvasHeight: needH });
+        enlargeNote = `；分辨率 ${size} 超出项目尺寸，已自动放大画布为 ${needW}×${needH}`;
+      }
       const char = store.addUnifiedCharacter(name, { skipPlaceholderRoot: true });
       const mapped = mapBonesToNodes(processed, char.id, name);
       // 一次写入：节点树 + 服装集（不中途回读，见 AGENTS.md 快照坑）
@@ -943,12 +951,12 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       }));
       setLastImportedCharId(char.id);
       setImportMsg(
-        `已创建角色 ${name}，含 ${mapped.stats.nodes} 个节点，${mapped.stats.sprites} 张精灵`,
+        `已创建角色 ${name}，含 ${mapped.stats.nodes} 个节点，${mapped.stats.sprites} 张精灵${enlargeNote}`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [processed, fileName]);
+  }, [processed, fileName, size]);
 
   // 手动替换服装：用预览的某方向精灵替换已导入角色的对应精灵
   const handleReplaceSprite = useCallback((
@@ -1076,6 +1084,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                 <option value={32}>32</option>
                 <option value={64}>64</option>
                 <option value={128}>128</option>
+                <option value={256}>256</option>
+                <option value={512}>512</option>
               </select>
             </label>
             <label className="flex items-center gap-1">
