@@ -605,19 +605,31 @@ function computeChildTransforms(
         const socketOffset = resolveSocketOffset(socket, parentWorld.variantIndex);
 
         // Socket offsets are stored in sub-pixel units.
-        // 3D: socket 2D 按朝向映射到 3D（南向 sx→X，东向 sx→Z），再与 child 3D 合并
-        const socketOffsetX_px = subToPx(socketOffset.x);
-        const socketOffsetY_px = subToPx(socketOffset.y);
+        // 选项 A：若 socket 有 3D 静态偏移（3D 管线），直接用 3D，不做 2D→3D 转换
+        // 否则走 2D→3D 转换（2D 管线兼容）
+        let sockX3D: number;
+        let sockZ3D: number;
+        let sockY: number;
+        if (socket.offset3D) {
+          // 3D 管线：offset3D 已是 3D 向量（SubPixel），直接用
+          sockX3D = subToPx(socket.offset3D.x);
+          sockY = subToPx(socket.offset3D.y);
+          sockZ3D = subToPx(socket.offset3D.z);
+        } else {
+          // 2D 管线：socket 2D 按朝向映射到 3D（南向 sx→X，东向 sx→Z）
+          const socketOffsetX_px = subToPx(socketOffset.x);
+          const socketOffsetY_px = subToPx(socketOffset.y);
+          const theta = (((parentWorld.variantIndex + 2) % 8) * Math.PI) / 4;
+          sockX3D = socketOffsetX_px * Math.cos(theta);
+          sockZ3D = socketOffsetX_px * Math.sin(theta);
+          sockY = socketOffsetY_px;
+        }
         const childOffsetX_px = subToPx(childInterpolated.x);
         const childOffsetY_px = subToPx(childInterpolated.y) * childInterpolated.stretch;
         const childOffsetZ_px = subToPx(childInterpolated.z ?? 0);
-        // socket 2D → 3D（按父节点朝向）：sx 按 θ 分配到 X/Z，sy 直接到 Y
-        const theta = (((parentWorld.variantIndex + 2) % 8) * Math.PI) / 4;
-        const sockX3D = socketOffsetX_px * Math.cos(theta);
-        const sockZ3D = socketOffsetX_px * Math.sin(theta);
-        // 合并偏移
+        // 合并偏移：socket 3D + child 3D（姿态）
         const totalX = sockX3D + childOffsetX_px;
-        const totalY = socketOffsetY_px + childOffsetY_px;
+        const totalY = sockY + childOffsetY_px;
         const totalZ = sockZ3D + childOffsetZ_px;
         // 旋转：按视平面转
         let rotated: { x: number; y: number; z: number };

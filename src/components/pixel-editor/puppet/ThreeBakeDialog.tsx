@@ -84,7 +84,7 @@ function ResultCanvas({ result, size = 128 }: { result: BakeResult; size?: numbe
 }
 
 /** 显示 PixelGrid */
-function PixelGridCanvas({ grid, scale = 3 }: { grid: PixelGrid; scale?: number }) {
+function PixelGridCanvas({ grid, scale = 3, plugX, plugY }: { grid: PixelGrid; scale?: number; plugX?: number; plugY?: number }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -105,7 +105,23 @@ function PixelGridCanvas({ grid, scale = 3 }: { grid: PixelGrid; scale?: number 
         ctx.fillRect(x * scale, y * scale, scale, scale);
       }
     }
-  }, [grid, scale]);
+    // 标出 plug（关节）位置：红色十字
+    if (plugX !== undefined && plugY !== undefined) {
+      const px = plugX * scale;
+      const py = plugY * scale;
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(px - 4, py);
+      ctx.lineTo(px + 4, py);
+      ctx.moveTo(px, py - 4);
+      ctx.lineTo(px, py + 4);
+      ctx.stroke();
+      // 中心点
+      ctx.fillStyle = '#ff0000';
+      ctx.fillRect(px - 1, py - 1, 2, 2);
+    }
+  }, [grid, scale, plugX, plugY]);
   return (
     <canvas
       ref={ref}

@@ -385,37 +385,11 @@ export function mapBonesToNodes(
       .filter((c) => c.parentIndex === pb.boneIndex)
       .map((c) => nodeIdByBone.get(c.boneIndex)!);
 
-    // 3D 位置（可逆性原则，全局统一尺度）：
-    // 直接用 joint3D（归一化 3D 真值）差值，三轴同源，不再经 2D 反推。
-    // 换算：pixels = normalized * (W/2) / globalCameraHalf，其中 globalCameraHalf=1.0（整模归一化到[-1,1]）。
-    // 记录的转换：bake.globalCameraHalf 在烘焙时记录，split 透传到 direction，导入时使用，全程可逆。
-    if (!isRoot) {
-      const parentPb = processed.get(pb.parentIndex!);
-      if (pb.joint3D && parentPb?.joint3D) {
-        // 取子骨骼 South 方向的 globalCameraHalf（各方向一致；回退 1.0）
-        const cdir = pb.directions.find((d) => d.direction === 6) ?? pb.directions[0];
-        const gch = cdir?.globalCameraHalf ?? 1.0;
-        const bw = pb.bakeWidth ?? 128;
-        const scale = (bw / 2) / gch; // (W/2)/globalCameraHalf，全局统一尺度
-        node.transform.x = pxToSub((pb.joint3D.x - parentPb.joint3D.x) * scale);
-        // Y 取反：joint3D.y 是 Three.js Y-up，画布是 Y-down（原点左上）
-        node.transform.y = pxToSub(-(pb.joint3D.y - parentPb.joint3D.y) * scale);
-        node.transform.z = pxToSub((pb.joint3D.z - parentPb.joint3D.z) * scale);
-      } else {
-        // 回退：无 3D 数据时用 South 视图 2D 差值（保证不归零，覆盖层 2D 逻辑可用）
-        const cdir6 = pb.directions.find((d) => d.direction === 6);
-        const pdir6 = parentPb?.directions.find((d) => d.direction === 6);
-        if (cdir6 && pdir6) {
-          const scaleRatio = pdir6.cameraHalf / cdir6.cameraHalf;
-          node.transform.x = pxToSub(cdir6.jointX - pdir6.jointX * scaleRatio);
-          node.transform.y = pxToSub(cdir6.jointY - pdir6.jointY * scaleRatio);
-        } else {
-          node.transform.x = 0;
-          node.transform.y = 0;
-        }
-        node.transform.z = 0;
-      }
-    }
+    // Transform 归零：姿态层初始 0，静态 3D 偏移存 Socket.offset3D（选项 A）
+    // （旧逻辑把 joint3D 差值写 transform，与姿态混在一起，抽象错误）
+    node.transform.x = 0;
+    node.transform.y = 0;
+    node.transform.z = 0;
     // 根节点 transform 保持 (0,0,0)
 
     // attachment：plug 用方向 0 的（各方向 sprite.plug 自己带）
@@ -474,8 +448,20 @@ export function mapBonesToNodes(
       basePosition: { x: 0, y: 0 },
       directionOffsets: {},
     };
-    // 可逆性原则：节点 transform 已含完整的 3D 位移（X/Y 来自 South 视图 2D 差值，Z 来自 joint3D），
-    // socket 置零避免双重计数。2D 回退时渲染器用 directionOffsets[dir]??basePosition，零值即无偏移。
+    // 选项 A：Socket 存 3D 静态偏移（父关节→子关节），Transform 存姿态（初始 0）
+    // 3D 偏移 = joint3D 差值（全局像素，Y 取反：Y-up→Y-down）
+    if (pb.joint3D && parentPb.joint3D) {
+      const cdir = pb.directions.find((d) => d.direction === 6) ?? pb.directions[0];
+      const gch = cdir?.globalCameraHalf ?? 1.0;
+      const bw = pb.bakeWidth ?? 128;
+      const scale = (bw / 2) / gch;
+      socket.offset3D = {
+        x: pxToSub((pb.joint3D.x - parentPb.joint3D.x) * scale),
+        y: pxToSub(-(pb.joint3D.y - parentPb.joint3D.y) * scale), // Y-up→Y-down
+        z: pxToSub((pb.joint3D.z - parentPb.joint3D.z) * scale),
+      };
+    }
+    // 2D directionOffsets 置零（3D 管线用 offset3D，2D 回退时用零值）
     for (const pdir of parentPb.directions) {
       const d = pdir.direction;
       const off = { x: 0, y: 0 };

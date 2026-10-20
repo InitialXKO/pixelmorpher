@@ -318,6 +318,8 @@ export interface Socket {
   basePosition: Point;                    // Base offset relative to parent anchor
   directionOffsets: Partial<Record<DirectionIndex, Point>>; // Per-direction overrides
   templateOffsets?: Partial<Record<DirectionIndex, Point>>; // L0 template suggestions (can be reset to these)
+  /** 3D 静态偏移（3D 管线用）：父关节→子关节的 3D 向量（SubPixel），direction 无关 */
+  offset3D?: { x: number; y: number; z: number };
   /** 蒙皮模式：'disc'（默认，关节盘遮盖接缝）| 'mesh'（网格蒙皮，父子精灵插值变形） */
   skinning?: SocketSkinning;
   /** mesh 模式：影响半径（像素），默认 8 */
