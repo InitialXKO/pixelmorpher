@@ -1077,7 +1077,12 @@ export async function bakeSixParts(
       const idGeo = new THREE.BufferGeometry();
       idGeo.setAttribute('position', new THREE.BufferAttribute(idPositions, 3));
       idGeo.setAttribute('aTriId', new THREE.BufferAttribute(idTriIds, 1));
-      const idTex = new THREE.DataTexture(idTexData, triCount, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+      // 一维排布宽度 = triCount，高面数部件会超 GPU 最大纹理尺寸（常见 8192/16384）→ 折成近方形二维
+      const idTexW = Math.max(1, Math.ceil(Math.sqrt(triCount)));
+      const idTexH = Math.max(1, Math.ceil(triCount / idTexW));
+      const idTexFull = new Uint8Array(idTexW * idTexH * 4);
+      idTexFull.set(idTexData);
+      const idTex = new THREE.DataTexture(idTexFull, idTexW, idTexH, THREE.RGBAFormat, THREE.UnsignedByteType);
       idTex.minFilter = THREE.NearestFilter;
       idTex.magFilter = THREE.NearestFilter;
       idTex.needsUpdate = true;
@@ -1098,7 +1103,7 @@ export async function bakeSixParts(
           uniform sampler2D uIdTex;
           out vec4 outColor;
           void main() {
-            outColor = texelFetch(uIdTex, ivec2(vTriId, 0), 0);
+            outColor = texelFetch(uIdTex, ivec2(vTriId % textureSize(uIdTex, 0).x, vTriId / textureSize(uIdTex, 0).x), 0);
           }
         `,
       });
