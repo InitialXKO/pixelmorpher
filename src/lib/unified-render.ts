@@ -89,6 +89,8 @@ import {
   resolveNodeModifiers,
   computeAnimationModifierTransform,
   buildVariableContext,
+  buildBlueprintVars,
+  mapStoreAnimationVariables,
   type ResolvedModifier,
   type VariableContext,
   getEmptyVariableContext,
@@ -122,6 +124,7 @@ export function evaluateBlueprintTransforms(
   character: Character,
   frame: number,
   frameRate: number,
+  vars?: Record<string, number | string | boolean>,
 ): Map<string, BlueprintTransformResult> {
   if (frame < blueprintLastFrame || frame > blueprintLastFrame + 5) {
     blueprintNodeState.clear();
@@ -144,7 +147,7 @@ export function evaluateBlueprintTransforms(
         const t = evaluateBlueprint(blueprint, {
           frame,
           frameRate,
-          vars: {},
+          vars: vars ?? {},
           nodeOutputs: pass === 1 ? nodeOutputs : undefined,
           nodeState: blueprintNodeState,
           // costume 节点用（transform pass 不出像素，但保持 ctx 完整）
@@ -246,7 +249,7 @@ export function computeWorldTransforms(
   // 链外后代随 frame 复合自动跟随。ikOverrides 已传入时（重算遍）不再求解。
   if (!ikOverrides) {
     if (character.ikBlueprint) {
-      applyBakedIKBlueprint(character, transforms);
+      applyBakedIKBlueprint(character, transforms, variableContext?.values);
       return transforms;
     }
     const chains = character.ikChains?.filter((c) => c.enabled && !isIKChainSuspended(c.id));
@@ -274,11 +277,12 @@ export function computeWorldTransforms(
 function applyBakedIKBlueprint(
   character: Character,
   transforms: Map<string, WorldTransform>,
+  vars?: Record<string, number>,
 ): void {
   const blueprint = character.ikBlueprint;
   if (!blueprint) return;
 
-  const ctx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: {} };
+  const ctx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: vars ?? {} };
 
   // Evaluate each transform node that has a _jointId param
   for (const node of blueprint.nodes) {
@@ -423,7 +427,7 @@ function solveChainIKOverrides(
   let target: V3 = { ...staticT };
   if (chain.targetBlueprint) {
     try {
-      const tbResult = evaluateBlueprint(chain.targetBlueprint, { frame, frameRate, vars: {} });
+      const tbResult = evaluateBlueprint(chain.targetBlueprint, { frame, frameRate, vars: variableContext?.values ?? {} });
       if (Number.isFinite(tbResult.translateX)) target.x = tbResult.translateX;
       if (Number.isFinite(tbResult.translateY)) target.y = tbResult.translateY;
       if (Number.isFinite(tbResult.translateZ)) target.z = tbResult.translateZ;
@@ -1177,12 +1181,13 @@ export function resolveEffectiveCostumeState(
   frame: number,
   frameRate: number,
   stateKeyframes?: import('./unified-types').CostumeStateKeyframe[],
+  vars?: Record<string, number | string | boolean>,
 ): EffectiveCostumeState {
   const { costumeSetId: trackSetId, slotVariants } = resolveTrackCostumeState(character, frame, stateKeyframes);
   let costumeSetId = trackSetId;
   if (character.stateBlueprint) {
     try {
-      const out = evaluateCostumeState(character.stateBlueprint, { frame, frameRate, vars: {} } as any);
+      const out = evaluateCostumeState(character.stateBlueprint, { frame, frameRate, vars: vars ?? {} } as any);
       if (out) {
         if (out.setId) costumeSetId = out.setId;
         for (const [slot, v] of Object.entries(out.slotChanges)) {
@@ -1253,11 +1258,14 @@ export function generateRenderPlan(
     ? buildVariableContext(animationVariables, frame, allActiveDrivers)
     : undefined;
 
+  // 蓝图变量（变量名 → 本帧值，含 writer 驱动求值）：全部蓝图求值入口统一从此注入
+  const blueprintVars: Record<string, number> = variableContext?.values ?? {};
+
   // Phase 0 (path B): Evaluate node blueprints for transform values (two-pass)
-  const blueprintTransforms = blueprintTransformsOverride ?? evaluateBlueprintTransforms(character, frame, frameRate);
+  const blueprintTransforms = blueprintTransformsOverride ?? evaluateBlueprintTransforms(character, frame, frameRate, blueprintVars);
 
   // 生效服装状态：静态字段 → clip 状态轨道 → 状态蓝图（三层增量叠加）
-  const effCostume = resolveEffectiveCostumeState(character, frame, frameRate, stateKeyframes);
+  const effCostume = resolveEffectiveCostumeState(character, frame, frameRate, stateKeyframes, blueprintVars);
 
   // Step 1: World transforms (includes blueprint-evaluated modifier contributions)
   const worldTransforms = computeWorldTransforms(
@@ -1461,6 +1469,7 @@ export function generateRenderPlan(
     frame,
     frameRate,
     characterBlueprint: character.blueprint ?? null,
+    blueprintVars,
   };
 }
 
@@ -1489,7 +1498,7 @@ export function executeRenderPlan(
       // Fallback: legacy per-node draw (blueprint invalid — don't lose the frame)
       for (const instruction of plan.sortedInstructions) {
         if ('nodeId' in instruction) {
-          renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight);
+          renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
         } else {
           renderDisc(ctx, instruction);
         }
@@ -1498,7 +1507,7 @@ export function executeRenderPlan(
   } else {
     for (const instruction of plan.sortedInstructions) {
       if ('nodeId' in instruction) {
-        renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight);
+        renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
       } else {
         renderDisc(ctx, instruction);
       }
@@ -1560,6 +1569,7 @@ function renderNodeSprite(
   instruction: NodeRenderInstruction,
   canvasWidth: number,
   canvasHeight: number,
+  blueprintVars?: Record<string, number>,
 ): void {
   const { nodeId, sprite, worldX, worldY, angle, stretch, mirror, rotationStrategy, modifiers, frame, frameRate } = instruction;
   const scaleX = instruction.scaleX ?? 1;
@@ -1657,7 +1667,7 @@ function renderNodeSprite(
     );
     if (hasPixelChain) {
       const bpCtx: any = {
-        frame, frameRate, vars: {},
+        frame, frameRate, vars: blueprintVars ?? {},
         spritePixels: effectivePixels,  // sprite_source 从这里取图
         // costume 节点用
         costumes: (instruction as any).costumes,
@@ -1728,7 +1738,7 @@ function renderNodeSprite(
 
       const bpGraph = { version: 1 as const, nodes: bpNodes, edges: [], outputId: 'bp_screen' };
       const bpCtx: any = {
-        frame, frameRate, vars: {},
+        frame, frameRate, vars: blueprintVars ?? {},
         spritePixels: effectivePixels,
         drawToScreen: (cmd: { pixels: PixelGrid }) => {
           if (cmd.pixels) effectivePixels = cmd.pixels;
@@ -2122,7 +2132,7 @@ function renderCharacterWithBlueprint(
   const offCtx = off.getContext('2d')!;
   for (const instruction of plan.sortedInstructions) {
     if ('nodeId' in instruction) {
-      renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight);
+      renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
     } else {
       renderDisc(offCtx, instruction);
     }
@@ -2137,7 +2147,7 @@ function renderCharacterWithBlueprint(
     evaluateBlueprint(blueprint, {
       frame,
       frameRate,
-      vars: {},
+      vars: plan.blueprintVars ?? {},
       characterPixels,
       drawToScreen: (cmd: { pixels: PixelGrid }) => {
         if (cmd.pixels) finalPixels = cmd.pixels;
@@ -2239,12 +2249,13 @@ function applyGlobalTransformWrapper(
   frame: number,
   frameRate: number,
   globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
+  vars?: Record<string, number>,
 ): boolean {
   let globalTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
   if (globalModifiers && globalModifiers.length > 0) {
     const blueprint = globalBlueprint ?? modifiersToBlueprint(globalModifiers as any);
     if (blueprint) {
-      const t = evaluateBlueprint(blueprint, { frame, frameRate, vars: {} } as any);
+      const t = evaluateBlueprint(blueprint, { frame, frameRate, vars: vars ?? {} } as any);
       globalTransform = {
         translateX: t.translateX, translateY: t.translateY, rotation: t.rotation,
         scaleX: t.scaleX, scaleY: t.scaleY,
@@ -2283,12 +2294,10 @@ function renderPuppetViaUnifiedPipeline(
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
+    buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame),
   );
   for (const unifiedCharacter of Object.values(unifiedCharacters)) {
-    const unifiedVars: AnimationVariable[] | undefined = animationVariables?.map(v => ({
-      id: v.id, name: v.name, value: v.defaultValue ?? 0, min: 0, max: 100,
-      writerDriverId: (v as any).writerDriverId, defaultValue: v.defaultValue ?? 0,
-    }));
+    const unifiedVars = mapStoreAnimationVariables(animationVariables);
     const plan = generateRenderPlan(
       unifiedCharacter, currentFrame, canvasWidth, canvasHeight,
       'pixel-perfect', frameRate, unifiedVars,
@@ -2358,7 +2367,7 @@ export function renderUnified(
   if (motionBlurStrokes) {
     // 动态笔触（蓝图 stroke_emitter / stroke_source 每帧求值）
     const dynamic = globalBlueprint
-      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate)
+      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate, buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame))
       : { motionBlur: [], effect: [] };
     const overriddenIds = new Set<string>();
     for (const s of [...dynamic.motionBlur, ...dynamic.effect]) {
@@ -2373,7 +2382,7 @@ export function renderUnified(
   }
   if (effectStrokes) {
     const dynamic = globalBlueprint
-      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate)
+      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate, buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame))
       : { motionBlur: [], effect: [] };
     const overriddenIds = new Set<string>();
     for (const s of [...dynamic.motionBlur, ...dynamic.effect]) {
@@ -2422,6 +2431,7 @@ export function renderUnifiedToCanvas(
   const ctx = canvas.getContext('2d')!;
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, frame, frameRate, undefined,
+    buildBlueprintVars(mapStoreAnimationVariables(animationVariables), frame),
   );
   if (unifiedCharacters && Object.keys(unifiedCharacters).length > 0) {
     renderPuppetViaUnifiedPipeline(
@@ -2493,12 +2503,10 @@ export function renderUnifiedCharactersToCanvas(
   }
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, frame, frameRate, undefined,
+    buildBlueprintVars(mapStoreAnimationVariables(animationVariables), frame),
   );
   for (const character of characters) {
-    const unifiedVars: AnimationVariable[] | undefined = animationVariables?.map(v => ({
-      id: v.id, name: v.name, value: v.defaultValue ?? 0, min: 0, max: 100,
-      writerDriverId: (v as any).writerDriverId, defaultValue: v.defaultValue ?? 0,
-    }));
+    const unifiedVars = mapStoreAnimationVariables(animationVariables);
     const plan = generateRenderPlan(
       character, frame, canvasWidth, canvasHeight,
       'pixel-perfect', frameRate, unifiedVars,

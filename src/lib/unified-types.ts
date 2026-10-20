@@ -1185,6 +1185,9 @@ export interface RenderPlan {
   frameRate?: number;
   /** Character-level blueprint (whole-character post-processing). Null = legacy per-node path. */
   characterBlueprint?: import('./blueprint/ir').BlueprintGraph | null;
+  /** 本帧蓝图变量（变量名 → 值）：generateRenderPlan 从 AnimationVariable 求值后注入，
+   *  供 executeRenderPlan/renderNodeSprite 的蓝图求值 ctx.vars 使用 */
+  blueprintVars?: Record<string, number>;
 }
 
 // ---- Procedural Animation (Unified) ----

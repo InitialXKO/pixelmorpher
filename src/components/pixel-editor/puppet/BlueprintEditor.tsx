@@ -13,6 +13,30 @@ import { listBlueprintNodeTypes, getBlueprintNodeLabel, evaluateBlueprint, evalu
 import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs, getNodeParamPorts, getPortColor, getPortDataType, canConnectPorts } from '@/lib/blueprint/specs';
 import { getModifierDef } from '@/lib/types';
 import { useProjectStore } from '@/lib/store';
+import { buildBlueprintVars, mapStoreAnimationVariables } from '@/lib/unified-animation-resolver';
+import type { ParamDriver } from '@/lib/unified-types';
+
+/** 编辑器预览用蓝图变量：从 store 的 animationVariables 按帧求值（与主渲染同口径；
+ *  character 给出时含其节点 param drivers 的 writer 求值）。失败/无变量时为空 */
+function previewBlueprintVars(frame: number, character?: Character | null): Record<string, number> {
+  try {
+    const storeVars = useProjectStore.getState().animationVariables;
+    if (!storeVars || storeVars.length === 0) return {};
+    const drivers: ParamDriver[] = [];
+    if (character) {
+      for (const n of Object.values(character.nodes)) {
+        for (const mod of n.modifiers ?? []) {
+          for (const d of mod.paramDrivers ?? []) {
+            if (d.enabled) drivers.push(d);
+          }
+        }
+      }
+    }
+    return buildBlueprintVars(mapStoreAnimationVariables(storeVars as any), frame, drivers);
+  } catch {
+    return {};
+  }
+}
 import { resolvePreviewSprite, getActiveCostumeSet } from '@/lib/sprite-resolve';
 import { generateRenderPlan, executeRenderPlan, evaluateBlueprintTransforms, canvasToPixels, pickClipStateKeyframes } from '@/lib/unified-render';
 import type { Character } from '@/lib/unified-types';
@@ -212,10 +236,10 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           if (octx) {
             const editedId = (graph as any)._nodeId as string | undefined;
             // 其余节点：走渲染器自己的两-pass 求值（animateOthers 关时取第 0 帧，保持"他静态"语义）
-            const bpOverrides = evaluateBlueprintTransforms(character, animateOthers ? previewFrame : 0, frameRate);
+            const bpOverrides = evaluateBlueprintTransforms(character, animateOthers ? previewFrame : 0, frameRate, previewBlueprintVars(animateOthers ? previewFrame : 0, character));
             if (editedId && graph) {
               try {
-                const r = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: {} } as any);
+                const r = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: previewBlueprintVars(previewFrame, character) } as any);
                 bpOverrides.set(editedId, {
                   translateX: r.translateX ?? 0, translateY: r.translateY ?? 0, translateZ: r.translateZ ?? 0, rotation: r.rotation ?? 0, tilt: r.tilt ?? 0,
                   scaleX: r.scaleX ?? 1, scaleY: r.scaleY ?? 1, skewX: r.skewX ?? 0, skewY: r.skewY ?? 0,
@@ -269,7 +293,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           const bp = (cn.id === (graph as any)._nodeId) ? graph : cn.blueprint;
           if (bp && (animateOthers || cn.id === (graph as any)._nodeId)) {
             try {
-              const r = evaluateBlueprint(bp, { frame: animateOthers ? frame : 0, frameRate, vars: {} } as any);
+              const r = evaluateBlueprint(bp, { frame: animateOthers ? frame : 0, frameRate, vars: previewBlueprintVars(animateOthers ? frame : 0, character) } as any);
               t = r;
             } catch {}
           }
@@ -368,7 +392,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           off.width = offW; off.height = offH;
           const octx = off.getContext('2d');
           if (!octx) return undefined;
-          const bpOverrides = evaluateBlueprintTransforms(character, previewFrame, frameRate);
+          const bpOverrides = evaluateBlueprintTransforms(character, previewFrame, frameRate, previewBlueprintVars(previewFrame, character));
           const plan = generateRenderPlan({ ...character, blueprint: null }, previewFrame, offW, offH, 'pixel-perfect', frameRate,
             undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
             spritesTable as any, bpOverrides, undefined,
@@ -382,7 +406,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
       const t = evaluateBlueprint(graph, {
         frame: previewFrame,
         frameRate,
-        vars: {},
+        vars: previewBlueprintVars(previewFrame, character),
         ...(isCharGraph ? {
           characterPixels,
           drawToScreen: (cmd: { pixels: import('@/lib/types').PixelGrid }) => { capturedScreenPixels = cmd.pixels; },
@@ -441,7 +465,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
             const out = evaluateNodeOutput(graph, ref.nodeId, {
               frame: previewFrame,
               frameRate,
-              vars: {},
+              vars: previewBlueprintVars(previewFrame, character),
             } as any);
             // out 是该节点的输出 Record，取 pixels 或 output 指定的
             const outVals = out as Record<string, any>;
@@ -1389,7 +1413,7 @@ function NodePreview({ graph, nodeId, frame, frameRate, characterNodes }: {
     if (!ctx) return;
     try {
       const out = evaluateNodeOutput(graph, nodeId, {
-        frame, frameRate, vars: {},
+        frame, frameRate, vars: previewBlueprintVars(frame),
         // sprite_source 从这里取像素
         spritePixels: (() => {
           if (characterNodes) {

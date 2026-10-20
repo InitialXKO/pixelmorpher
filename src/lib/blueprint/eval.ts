@@ -2179,6 +2179,7 @@ export function collectDynamicStrokes(
   graph: BlueprintGraph,
   frame: number,
   frameRate: number,
+  vars?: Record<string, number | string | boolean>,
 ): { motionBlur: Array<Record<string, unknown>>; effect: Array<Record<string, unknown>> } {
   const STROKE_NODE_TYPES = new Set([
     'stroke_emitter', 'stroke_source', 'trajectory_emitter', 'trajectory_source',
@@ -2188,7 +2189,7 @@ export function collectDynamicStrokes(
   const ctx: BlueprintEvalContext = {
     frame,
     frameRate,
-    vars: {},
+    vars: vars ?? {},
     dynamicStrokes: [],
   };
   for (const node of sorted) {
