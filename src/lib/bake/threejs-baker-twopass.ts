@@ -1430,6 +1430,7 @@ function curlFingerChain(
   palmCenter: THREE.Vector3,
   curl: number,
   maxDeg: number[],
+  palmSideDir: THREE.Vector3 | null = null,
 ): void {
   if (bones.length === 0) return;
   const mcp = bones[0];
@@ -1439,15 +1440,21 @@ function curlFingerChain(
   if (axis0.lengthSq() < 1e-6) return;
   axis0.normalize();
 
-  // 试探：+12° 让指尖靠近掌心则符号为正
-  const dBefore = chainTipWorld(bones).distanceTo(palmCenter);
+  // 试探定符号：优先掌侧方向（指尖位移朝掌侧为正）——距离判据在边缘指上会失效
+  // （palmCenter 在指根群中心，边缘指的横向偏移让「靠近中心」与掌内/掌外脱钩）。
   const probe = THREE.MathUtils.degToRad(12);
+  const tipBefore = chainTipWorld(bones);
   applyWorldRotation(mcp, axis0, probe);
   model.updateMatrixWorld(true);
-  const dAfter = chainTipWorld(bones).distanceTo(palmCenter);
+  const tipAfter = chainTipWorld(bones);
   applyWorldRotation(mcp, axis0, -probe);
   model.updateMatrixWorld(true);
-  const sign = dAfter < dBefore ? 1 : -1;
+  let sign: number;
+  if (palmSideDir) {
+    sign = tipAfter.sub(tipBefore).dot(palmSideDir) > 0 ? 1 : -1;
+  } else {
+    sign = tipAfter.distanceTo(palmCenter) < tipBefore.distanceTo(palmCenter) ? 1 : -1;
+  }
 
   for (let i = 0; i < bones.length && i < maxDeg.length; i++) {
     const b = bones[i];
@@ -1474,59 +1481,84 @@ export function applyFingerCurl(
   if (det.fingers.length === 0 && !det.thumb) return;
   model.updateMatrixWorld(true);
 
-  // 指关节轴：四指 MCP 位置拟合直线
-  const mcpPts: THREE.Vector3[] = [];
-  for (const f of det.fingers) {
-    if (f.bones.length > 0) mcpPts.push(f.bones[0].getWorldPosition(new THREE.Vector3()));
-  }
-  let knuckleAxis: THREE.Vector3 | null = null;
-  if (mcpPts.length >= 2) {
-    knuckleAxis = fitLineDirection(mcpPts);
-  } else if (det.fingers.length > 0 && det.thumb) {
-    // 兜底：手指×拇指叉乘
-    const fdir = boneDirWorld(det.fingers[0].bones[0]);
-    const tdir = det.thumb.bones.length > 0 ? boneDirWorld(det.thumb.bones[0]) : null;
-    if (fdir && tdir) {
-      const ax = new THREE.Vector3().crossVectors(fdir, tdir);
-      if (ax.lengthSq() > 1e-6) knuckleAxis = ax.normalize();
+  // 按手分组（链根的父 bone = 手骨）：轴/掌心必须逐手算——整模混算时拟合直线
+  // 会取到跨手最远点对（如 T-pose 两手横展 → 轴与手指方向共线，弯曲轴投影为 0，
+  // 四指被整根跳过、只有方向不共线的拇指能弯）。
+  interface HandGroup { fingers: FingerChain[]; thumb: FingerChain | null }
+  const groups = new Map<THREE.Object3D | null, HandGroup>();
+  const groupOf = (ch: FingerChain): HandGroup => {
+    const hub = ch.bones.length > 0 ? (ch.bones[0].parent as THREE.Object3D | null) : null;
+    let g = groups.get(hub);
+    if (!g) { g = { fingers: [], thumb: null }; groups.set(hub, g); }
+    return g;
+  };
+  for (const f of det.fingers) groupOf(f).fingers.push(f);
+  if (det.thumb) groupOf(det.thumb).thumb = det.thumb;
+
+  for (const { fingers, thumb } of groups.values()) {
+    // 指关节轴：本手四指 MCP 位置拟合直线
+    const mcpPts: THREE.Vector3[] = [];
+    for (const f of fingers) {
+      if (f.bones.length > 0) mcpPts.push(f.bones[0].getWorldPosition(new THREE.Vector3()));
     }
-  }
-  if (!knuckleAxis) return;
-
-  const palmCenter = new THREE.Vector3();
-  if (mcpPts.length > 0) {
-    for (const p of mcpPts) palmCenter.add(p);
-    palmCenter.multiplyScalar(1 / mcpPts.length);
-  } else if (det.thumb && det.thumb.bones.length > 0) {
-    det.thumb.bones[0].getWorldPosition(palmCenter);
-  }
-
-  // 掌法线（拇指内收轴）
-  let palmNormal: THREE.Vector3 | null = null;
-  if (det.fingers.length > 0) {
-    const fdir = boneDirWorld(det.fingers[0].bones[0]);
-    if (fdir) palmNormal = new THREE.Vector3().crossVectors(knuckleAxis, fdir).normalize();
-  }
-
-  for (const f of det.fingers) {
-    curlFingerChain(model, f.bones, knuckleAxis, palmCenter, c, FINGER_MAX_DEG);
-  }
-  if (det.thumb && det.thumb.bones.length > 0) {
-    const tb = det.thumb.bones;
-    // 拇指先内收（向掌心），符号经试探确定
-    if (palmNormal && palmNormal.lengthSq() > 0.5) {
-      const d0 = chainTipWorld(tb).distanceTo(palmCenter);
-      const probe = THREE.MathUtils.degToRad(10);
-      applyWorldRotation(tb[0], palmNormal, probe);
-      model.updateMatrixWorld(true);
-      const d1 = chainTipWorld(tb).distanceTo(palmCenter);
-      applyWorldRotation(tb[0], palmNormal, -probe);
-      model.updateMatrixWorld(true);
-      const sign = d1 < d0 ? 1 : -1;
-      applyWorldRotation(tb[0], palmNormal, sign * THREE.MathUtils.degToRad(THUMB_ADDUCT_DEG * c));
-      model.updateMatrixWorld(true);
+    let knuckleAxis: THREE.Vector3 | null = null;
+    if (mcpPts.length >= 2) {
+      knuckleAxis = fitLineDirection(mcpPts);
+    } else if (fingers.length > 0 && thumb) {
+      // 兜底：手指×拇指叉乘
+      const fdir = boneDirWorld(fingers[0].bones[0]);
+      const tdir = thumb.bones.length > 0 ? boneDirWorld(thumb.bones[0]) : null;
+      if (fdir && tdir) {
+        const ax = new THREE.Vector3().crossVectors(fdir, tdir);
+        if (ax.lengthSq() > 1e-6) knuckleAxis = ax.normalize();
+      }
     }
-    curlFingerChain(model, tb, knuckleAxis, palmCenter, c, THUMB_FLEX_DEG);
+    if (!knuckleAxis) continue;
+
+    const palmCenter = new THREE.Vector3();
+    if (mcpPts.length > 0) {
+      for (const p of mcpPts) palmCenter.add(p);
+      palmCenter.multiplyScalar(1 / mcpPts.length);
+    } else if (thumb && thumb.bones.length > 0) {
+      thumb.bones[0].getWorldPosition(palmCenter);
+    }
+
+    // 掌法线（拇指内收轴）
+    let palmNormal: THREE.Vector3 | null = null;
+    if (fingers.length > 0) {
+      const fdir = boneDirWorld(fingers[0].bones[0]);
+      if (fdir) palmNormal = new THREE.Vector3().crossVectors(knuckleAxis, fdir).normalize();
+    }
+
+    // 掌侧方向：掌法线按拇指根所在侧校准符号（拇指长在掌侧），供弯曲符号判定
+    let palmSideDir: THREE.Vector3 | null = null;
+    if (palmNormal && thumb && thumb.bones.length > 0) {
+      const toThumb = thumb.bones[0].getWorldPosition(new THREE.Vector3()).sub(palmCenter);
+      if (toThumb.lengthSq() > 1e-10) {
+        palmSideDir = palmNormal.clone().multiplyScalar(Math.sign(palmNormal.dot(toThumb)) || 1);
+      }
+    }
+
+    for (const f of fingers) {
+      curlFingerChain(model, f.bones, knuckleAxis, palmCenter, c, FINGER_MAX_DEG, palmSideDir);
+    }
+    if (thumb && thumb.bones.length > 0) {
+      const tb = thumb.bones;
+      // 拇指先内收（向掌心），符号经试探确定
+      if (palmNormal && palmNormal.lengthSq() > 0.5) {
+        const d0 = chainTipWorld(tb).distanceTo(palmCenter);
+        const probe = THREE.MathUtils.degToRad(10);
+        applyWorldRotation(tb[0], palmNormal, probe);
+        model.updateMatrixWorld(true);
+        const d1 = chainTipWorld(tb).distanceTo(palmCenter);
+        applyWorldRotation(tb[0], palmNormal, -probe);
+        model.updateMatrixWorld(true);
+        const sign = d1 < d0 ? 1 : -1;
+        applyWorldRotation(tb[0], palmNormal, sign * THREE.MathUtils.degToRad(THUMB_ADDUCT_DEG * c));
+        model.updateMatrixWorld(true);
+      }
+      curlFingerChain(model, tb, knuckleAxis, palmCenter, c, THUMB_FLEX_DEG, palmSideDir);
+    }
   }
   model.updateMatrixWorld(true);
 }
