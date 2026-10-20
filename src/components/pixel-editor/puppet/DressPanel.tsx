@@ -6,6 +6,7 @@ import {
   Trash2,
   Shirt,
   X,
+  Check,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import type {
@@ -127,6 +128,17 @@ export default function DressPanel({
     setSelectedCostumeId(newSet.id);
   };
 
+  const handleSetActiveCostume = (costumeId: string) => {
+    if (!selectedCharacter || !activePuppetSkeletonId) return;
+    if (selectedCharacter.activeCostumeSetId === costumeId) return;
+    const store = useProjectStore.getState();
+    store.pushUndo('设为生效服装');
+    // 主渲染（generateRenderPlan/resolveSprite）与画布命中都读 activeCostumeSetId；
+    // 同时把面板编辑对象切到该集，避免「编辑的」与「生效的」不一致
+    updateUnifiedCharacter(activePuppetSkeletonId, { activeCostumeSetId: costumeId });
+    setSelectedCostumeId(costumeId);
+  };
+
   const handleDeleteCostume = (costumeId: string) => {
     if (!selectedCharacter || !activePuppetSkeletonId) return;
     const cs = selectedCharacter.costumeSets.find((s) => s.id === costumeId);
@@ -220,17 +232,37 @@ export default function DressPanel({
             </Button>
           </div>
           <div className="flex flex-wrap gap-1.5 mt-1.5">
-            {costumeSets.map((cs) => (
+            {costumeSets.map((cs) => {
+              const isActive = selectedCharacter.activeCostumeSetId === cs.id;
+              return (
               <div
                 key={cs.id}
                 className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] cursor-pointer border ${
                   selectedCostume?.id === cs.id
                     ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300'
                     : 'bg-[#111128] border-[#1e1e3a] text-gray-400 hover:border-gray-600'
-                }`}
+                } ${isActive ? 'ring-1 ring-emerald-500/60' : ''}`}
                 onClick={() => setSelectedCostumeId(cs.id)}
+                title={isActive ? '主渲染生效中（点击切换面板编辑对象）' : '点击切换面板编辑对象'}
               >
                 <span>{cs.name}</span>
+                {isActive ? (
+                  <span className="flex items-center gap-0.5 text-emerald-400" title="主渲染生效中">
+                    <Check className="size-3" />
+                    生效中
+                  </span>
+                ) : (
+                  <button
+                    className="px-1 rounded bg-emerald-500/15 text-emerald-300/90 hover:bg-emerald-500/30 hover:text-emerald-200"
+                    title="设为主渲染生效的服装集"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleSetActiveCostume(cs.id);
+                    }}
+                  >
+                    设为生效
+                  </button>
+                )}
                 {costumeSets.length > 1 && (
                   <X
                     className="size-3 hover:text-red-400"
@@ -241,7 +273,8 @@ export default function DressPanel({
                   />
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
