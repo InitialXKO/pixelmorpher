@@ -364,8 +364,12 @@ function solveDepthProfile(
 /**
  * Apply a single IK chain.（视平面求解 + 深度写回）
  *
- * 运动学事实（与 computeChildTransforms 的 rotateInViewPlane 一致）：关节的
- * 视平面位置由祖先角度决定，深度（垂直视平面的分量）不被角度改变。因此：
+ * 运动学事实（与 computeChildTransforms 的 rotateInViewPlane 一致）：单个偏移在
+ * 其自身视平面内旋转时，深度分量 d 不变——这是局部性质，不是全局结论：遮挡由
+ * 渲染方向对关节世界坐标算的 depth 决定，求解改变 u 后世界 x/z 随之改变
+ * （x = u·cosθ − d·sinθ，z = u·sinθ + d·cosθ），换一视角 depth 即含 u 项，
+ * 故遮挡被角度改变。本求解据此分工：角度在视平面内解，d 单独分布，最后由
+ * (u, v, d) 反投影出的世界坐标统一决定各视角的遮挡。因此：
  * 1. 关节链与目标（target3D）投影到链根关节朝向的视平面 (u, v)，深度记 d；
  * 2. (u, v) 内走旧 2D 求解（与历史实现同路径：蓝图求值器 ik_2bone/ik_fabrik，
  *    视平面骨长、沿末关节世界角的视平面尖端、角度合成位置）——南向时 (u,v)=(x,y)、
