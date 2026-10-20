@@ -1143,11 +1143,8 @@ export async function bakeSixParts(
         partGroup.updateMatrixWorld(true);
 
         // 关节像素（用部件相机），按规范方向索引
-        // 注意：normJoints 已是归一化模型空间（原点中心），只需应用旋转，不应用 partGroup 的位移
-        // （旧代码 applyMatrix4(partGroup.matrixWorld) 会双重应用位移，导致南向关节错位）
-        const rotY = new THREE.Matrix4().makeRotationY(ang);
         for (const gi of bp.partBones) {
-          projV.copy(normJoints[gi]).applyMatrix4(rotY).project(camera);
+          projV.copy(normJoints[gi]).applyMatrix4(partGroup.matrixWorld).project(camera);
           boneInfos[gi].jointPixels[((d + 6) % 8)] = {
             x: ((projV.x + 1) / 2) * size,
             y: ((1 - projV.y) / 2) * size,
