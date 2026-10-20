@@ -112,7 +112,7 @@ export interface BlueprintTransformResult {
  * Phase 0 (path B): Evaluate all node blueprints for transform values.
  * Two-pass for cross-node references (nodeOutputs). Mirrors puppet-keyframe-interpolation.
  */
-function evaluateBlueprintTransforms(
+export function evaluateBlueprintTransforms(
   character: Character,
   frame: number,
   frameRate: number,
@@ -601,29 +601,11 @@ function computeChildTransforms(
       // Socket-based attachment: compute from parent's socket position
       const socket = parentNode.sockets.find(s => s.id === childNode.attachment!.parentSocketId);
       if (socket) {
-        // Get socket offset based on parent's current direction
-        const socketOffset = resolveSocketOffset(socket, parentWorld.variantIndex);
-
-        // Socket offsets are stored in sub-pixel units.
-        // 选项 A：若 socket 有 3D 静态偏移（3D 管线），直接用 3D，不做 2D→3D 转换
-        // 否则走 2D→3D 转换（2D 管线兼容）
-        let sockX3D: number;
-        let sockZ3D: number;
-        let sockY: number;
-        if (socket.offset3D) {
-          // 3D 管线：offset3D 已是 3D 向量（SubPixel），直接用
-          sockX3D = subToPx(socket.offset3D.x);
-          sockY = subToPx(socket.offset3D.y);
-          sockZ3D = subToPx(socket.offset3D.z);
-        } else {
-          // 2D 管线：socket 2D 按朝向映射到 3D（南向 sx→X，东向 sx→Z）
-          const socketOffsetX_px = subToPx(socketOffset.x);
-          const socketOffsetY_px = subToPx(socketOffset.y);
-          const theta = (((parentWorld.variantIndex + 2) % 8) * Math.PI) / 4;
-          sockX3D = socketOffsetX_px * Math.cos(theta);
-          sockZ3D = socketOffsetX_px * Math.sin(theta);
-          sockY = socketOffsetY_px;
-        }
+        // Socket 3D 偏移：走共同口径 socketOffsetTo3D（offset3D 或 2D→3D 映射）
+        const s3 = socketOffsetTo3D(socket, parentWorld.variantIndex);
+        const sockX3D = s3.x;
+        const sockZ3D = s3.z;
+        const sockY = s3.y;
         const childOffsetX_px = subToPx(childInterpolated.x);
         const childOffsetY_px = subToPx(childInterpolated.y) * childInterpolated.stretch;
         const childOffsetZ_px = subToPx(childInterpolated.z ?? 0);
@@ -700,6 +682,23 @@ function computeChildTransforms(
  */
 function resolveSocketOffset(socket: Socket, direction: DirectionIndex): Point {
   return socket.directionOffsets[direction] ?? socket.basePosition;
+}
+
+/**
+ * Socket 偏移 → 3D（像素）。全项目唯一口径：所有需要 socket 3D 偏移的地方
+ * （渲染、伪 3D 烘焙、覆盖层、命中）都必须走这里，不得各自再算。
+ * - offset3D 存在（3D 管线，选项 A）：直接用 3D 向量
+ * - 否则（2D 管线）：2D 偏移按朝向映射到 3D（sx·cosθ→X、sy→Y、sx·sinθ→Z）
+ */
+export function socketOffsetTo3D(socket: Socket, variantIndex: DirectionIndex): { x: number; y: number; z: number } {
+  if (socket.offset3D) {
+    return { x: subToPx(socket.offset3D.x), y: subToPx(socket.offset3D.y), z: subToPx(socket.offset3D.z) };
+  }
+  const socketOffset = resolveSocketOffset(socket, variantIndex);
+  const sx = subToPx(socketOffset.x);
+  const sy = subToPx(socketOffset.y);
+  const theta = (((variantIndex + 2) % 8) * Math.PI) / 4;
+  return { x: sx * Math.cos(theta), y: sy, z: sx * Math.sin(theta) };
 }
 
 // ---- Transform Interpolation ----
@@ -1104,6 +1103,9 @@ function generateDiscInstructions(
   character: Character,
   worldTransforms: Map<string, WorldTransform>,
   discZ: Map<string, number>,
+  canvasWidth: number,
+  canvasHeight: number,
+  currentDirection: DirectionIndex,
 ): DiscRenderInstruction[] {
   const discs: DiscRenderInstruction[] = [];
 
@@ -1155,9 +1157,11 @@ function generateDiscInstructions(
 
     // Position the disc at the socket world position (connection point),
     // not at the child node's world position.
-    // Compute the socket world position from the parent's transform.
-    let discWorldX = worldTf.worldX;
-    let discWorldY = worldTf.worldY;
+    // 与节点指令同一口径：3D 世界坐标 → socketOffsetTo3D → 视平面旋转 → 投影 + 画布中心。
+    // （此前：2D socket 数学的结果直接当画布坐标——没投影、没中心化、没读 offset3D，盘位置全错）
+    let socketWorldX = worldTf.worldX;
+    let socketWorldY = worldTf.worldY;
+    let socketWorldZ = worldTf.worldZ;
 
     if (parentNode && node.attachment.type === 'socket' && node.attachment.parentSocketId) {
       // Find the socket on the parent
@@ -1165,20 +1169,20 @@ function generateDiscInstructions(
       if (socket) {
         const parentWorldTf = worldTransforms.get(parentNode.id);
         if (parentWorldTf) {
-          // Compute socket world position (same math as computeChildTransforms)
-          const socketOffset = resolveSocketOffset(socket, parentWorldTf.variantIndex);
-          const socketOffsetX_px = subToPx(socketOffset.x);
-          const socketOffsetY_px = subToPx(socketOffset.y);
-          const angleRad = (parentWorldTf.worldAngle * Math.PI) / 180;
-          const cosA = Math.cos(angleRad);
-          const sinA = Math.sin(angleRad);
-          const rotatedSocketX_px = socketOffsetX_px * cosA - socketOffsetY_px * sinA;
-          const rotatedSocketY_px = socketOffsetX_px * sinA + socketOffsetY_px * cosA;
-          discWorldX = parentWorldTf.worldX + pxToSub(rotatedSocketX_px);
-          discWorldY = parentWorldTf.worldY + pxToSub(rotatedSocketY_px);
+          // Compute socket 3D position (same math as computeChildTransforms)
+          const s3 = socketOffsetTo3D(socket, parentWorldTf.variantIndex);
+          const rot = rotateInViewPlane(s3.x, s3.y, s3.z, parentWorldTf.worldAngle, parentWorldTf.variantIndex);
+          socketWorldX = (parentWorldTf.worldX + pxToSub(rot.x)) as SubPixel;
+          socketWorldY = (parentWorldTf.worldY + pxToSub(rot.y)) as SubPixel;
+          socketWorldZ = (parentWorldTf.worldZ + pxToSub(rot.z)) as SubPixel;
         }
       }
     }
+
+    // 投影到 2D 并加画布中心（与节点指令完全同一口径）
+    const discProj = projectToView(socketWorldX, socketWorldY, socketWorldZ, currentDirection);
+    const discWorldX = (pxToSub(canvasWidth / 2) + (discProj.canvasX as SubPixel)) as SubPixel;
+    const discWorldY = (pxToSub(canvasHeight / 2) + (discProj.canvasY as SubPixel)) as SubPixel;
 
     // 关节盘颜色约定：plug.discColor 自定义 > 子节点精灵开口处众数颜色 > 旧 fallback。
     // 开口中心 = 精灵 pivot（sprite.plug）+ plug 本地坐标（attachment.plug）。
@@ -1239,6 +1243,8 @@ export function generateRenderPlan(
   proceduralAnimations?: any[],
   // Global sprite table (s.sprites). Defaults to character.sprites for backward compat.
   globalSprites?: Record<string, Sprite>,
+  // Phase 0 蓝图求值的覆盖（预览未保存的编辑图用；默认走渲染器内部求值）
+  blueprintTransformsOverride?: Map<string, BlueprintTransformResult>,
 ): RenderPlan {
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
@@ -1258,7 +1264,7 @@ export function generateRenderPlan(
     : undefined;
 
   // Phase 0 (path B): Evaluate node blueprints for transform values (two-pass)
-  const blueprintTransforms = evaluateBlueprintTransforms(character, frame, frameRate);
+  const blueprintTransforms = blueprintTransformsOverride ?? evaluateBlueprintTransforms(character, frame, frameRate);
 
   // Step 1: World transforms (includes blueprint-evaluated modifier contributions)
   const worldTransforms = computeWorldTransforms(
@@ -1430,7 +1436,7 @@ export function generateRenderPlan(
   }
 
   // Step 5: Generate disc instructions
-  const discInstructions = generateDiscInstructions(character, worldTransforms, discZ);
+  const discInstructions = generateDiscInstructions(character, worldTransforms, discZ, canvasWidth, canvasHeight, currentDirection);
 
   // Step 6: Sort all instructions by Z
   const allInstructions: (NodeRenderInstruction | DiscRenderInstruction)[] = [

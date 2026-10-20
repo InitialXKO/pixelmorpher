@@ -14,6 +14,8 @@ import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs, getNodeParamPor
 import { getModifierDef } from '@/lib/types';
 import { useProjectStore } from '@/lib/store';
 import { resolvePreviewSprite, getActiveCostumeSet } from '@/lib/sprite-resolve';
+import { generateRenderPlan, executeRenderPlan, evaluateBlueprintTransforms } from '@/lib/unified-render';
+import type { Character } from '@/lib/unified-types';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
 import PathEditor from './PathEditor';
@@ -34,7 +36,9 @@ interface BlueprintEditorProps {
   idPrefix?: string;
   /** 帧率（预览播放用） */
   frameRate?: number;
-  /** 整角色预览用：所有节点及其精灵和蓝图 */
+  /** 整角色预览用：真实 Character（有它时预览走主渲染管线，与主画布一致） */
+  character?: Character | null;
+  /** 整角色预览用：所有节点及其精灵和蓝图（无 character 上下文时的旧兜底路径） */
   characterNodes?: Array<{
     id: string;
     name: string;
@@ -157,7 +161,7 @@ function BlueprintNodeParams({ selected, updateNode, onExposePort }: {
   return null; // 无 schema 时由调用方渲染通用 UI
 }
 
-export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, characterNodes, costumeSets, activeCostumeSetId, spritesTable }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, character, characterNodes, costumeSets, activeCostumeSetId, spritesTable }: BlueprintEditorProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
   // 笔触/轨迹下拉选项（stroke_source / trajectory_source 用，不许手输 ID）
@@ -196,6 +200,40 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
       ctx.fillRect(0, 0, W, H);
 
       if (previewMode === 'character' && characterNodes && characterNodes.length > 0) {
+        // 与主渲染一致：有真实 Character 时直接走 generateRenderPlan + executeRenderPlan，
+        // 位置/投影/精灵/方向/修改器全部是主画布的同一实现；未保存的编辑图经 blueprintTransforms 注入。
+        // （此前：自有 BFS 用 basePosition 2D 累加、不投影、不认 offset3D、精灵解析也自理）
+        if (character) {
+          const offW = 440, offH = 320; // 11:8，与 220×160 同比例，保证缩放像素清晰
+          const off = document.createElement('canvas');
+          off.width = offW; off.height = offH;
+          const octx = off.getContext('2d');
+          if (octx) {
+            const editedId = (graph as any)._nodeId as string | undefined;
+            // 其余节点：走渲染器自己的两-pass 求值（animateOthers 关时取第 0 帧，保持"他静态"语义）
+            const bpOverrides = evaluateBlueprintTransforms(character, animateOthers ? previewFrame : 0, frameRate);
+            if (editedId && graph) {
+              try {
+                const r = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: {} } as any);
+                bpOverrides.set(editedId, {
+                  translateX: r.translateX ?? 0, translateY: r.translateY ?? 0, rotation: r.rotation ?? 0,
+                  scaleX: r.scaleX ?? 1, scaleY: r.scaleY ?? 1, skewX: r.skewX ?? 0, skewY: r.skewY ?? 0,
+                });
+              } catch { /* 求值失败则用已保存版本 */ }
+            }
+            const plan = generateRenderPlan(character, previewFrame, offW, offH, 'pixel-perfect', frameRate,
+              undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+              spritesTable as any, bpOverrides);
+            executeRenderPlan(octx, plan, offW, offH);
+            ctx.drawImage(off, 0, 0, W, H);
+          }
+          // 标注
+          ctx.fillStyle = '#71717a';
+          ctx.font = '9px monospace';
+          ctx.fillText(`整角色 f${previewFrame}${animateOthers ? '' : '（他静态）'}`, 4, 12);
+          return;
+        }
+        // 无 Character 上下文时的旧兜底路径（自有 BFS，2D 口径）
         // 整角色模式：层级定位，插头对准插槽
         // 背景网格
         ctx.strokeStyle = '#1a1a2e';

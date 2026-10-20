@@ -396,6 +396,7 @@ export default function PuppetModifierPanel() {
               onChange={updateBlueprint}
               title={`${node.name} 的蓝图`}
               skeleton={character ? { nodes: Object.values(character.nodes).map(n => ({ id: n.id, name: n.name })) } : null}
+              character={character ?? null}
               characterNodes={characterNodes}
               costumeSets={costumeSetsNewFormat}
               activeCostumeSetId={character?.activeCostumeSetId}

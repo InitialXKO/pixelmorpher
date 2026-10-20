@@ -7,8 +7,8 @@
 import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
 import type { RenderContext } from './canvas-render-helpers';
 import type { Character, Node } from '@/lib/unified-types';
-import { pxToSub, subToPx, projectToView } from '@/lib/unified-types';
-import { computeWorldTransforms } from '@/lib/unified-render';
+import { pxToSub, subToPx, projectToView, rotateInViewPlane } from '@/lib/unified-types';
+import { computeWorldTransforms, socketOffsetTo3D } from '@/lib/unified-render';
 import { useProjectStore } from '@/lib/store';
 
 // ============================================================
@@ -113,13 +113,19 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
       const socket = parentNode?.sockets.find(s => s.id === parentInfo.socketId);
       if (!socket || !parentNode) continue;
 
-      const parentAngleRad = (parentPos.angle * Math.PI) / 180;
-      const cosA = Math.cos(parentAngleRad);
-      const sinA = Math.sin(parentAngleRad);
-      const dir2 = (parentNode.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
-      const sockOff2 = socket.directionOffsets?.[dir2] ?? socket.basePosition;
-      const socketWorldX = parentPos.x + (sockOff2.x * cosA - sockOff2.y * sinA);
-      const socketWorldY = parentPos.y + (sockOff2.x * sinA + sockOff2.y * cosA);
+      // 插槽点：与渲染器同一口径——socketOffsetTo3D → 视平面旋转 → 投影 + 画布中心
+      // （此前：2D directionOffsets 自算，不认 offset3D，3D 角色下插槽点塌到父节点）
+      const parentWt = worldTransforms.get(parentInfo.parentId)!; // 与 parentPos 同源，必有
+      const s3 = socketOffsetTo3D(socket, parentWt.variantIndex);
+      const rotSock = rotateInViewPlane(s3.x, s3.y, s3.z, parentWt.worldAngle, parentWt.variantIndex);
+      const projSock = projectToView(
+        parentWt.worldX + pxToSub(rotSock.x),
+        parentWt.worldY + pxToSub(rotSock.y),
+        parentWt.worldZ + pxToSub(rotSock.z),
+        currentDirection,
+      );
+      const socketWorldX = projSock.canvasX + centerX;
+      const socketWorldY = projSock.canvasY + centerY;
 
       const socketScreenX = panX + subToPx(socketWorldX) * zoom;
       const socketScreenY = panY + subToPx(socketWorldY) * zoom;
@@ -173,15 +179,19 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
         ctx.fillText(node.name, screenX + 8, screenY - 4);
       }
 
-      // Socket positions
+      // Socket positions（与渲染器同一口径：socketOffsetTo3D → 视平面旋转 → 投影 + 画布中心）
+      const nodeWt = worldTransforms.get(node.id)!; // 与 pos 同源，必有
       for (const socket of node.sockets) {
-        const socketAngleRad = (pos.angle * Math.PI) / 180;
-        const cosA2 = Math.cos(socketAngleRad);
-        const sinA2 = Math.sin(socketAngleRad);
-        const dir3 = (node.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
-        const sockOff3 = socket.directionOffsets?.[dir3] ?? socket.basePosition;
-        const socketWX = pos.x + (sockOff3.x * cosA2 - sockOff3.y * sinA2);
-        const socketWY = pos.y + (sockOff3.x * sinA2 + sockOff3.y * cosA2);
+        const s3d = socketOffsetTo3D(socket, nodeWt.variantIndex);
+        const rotDot = rotateInViewPlane(s3d.x, s3d.y, s3d.z, nodeWt.worldAngle, nodeWt.variantIndex);
+        const projDot = projectToView(
+          nodeWt.worldX + pxToSub(rotDot.x),
+          nodeWt.worldY + pxToSub(rotDot.y),
+          nodeWt.worldZ + pxToSub(rotDot.z),
+          currentDirection,
+        );
+        const socketWX = projDot.canvasX + centerX;
+        const socketWY = projDot.canvasY + centerY;
         const socketSX = panX + subToPx(socketWX) * zoom;
         const socketSY = panY + subToPx(socketWY) * zoom;
 

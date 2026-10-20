@@ -12,6 +12,7 @@ import { inpaintPixels, samMaskToSelectionMask } from '@/lib/inpainting';
 import { floodFill } from '@/lib/engine';
 import { renderUnifiedToCanvas, renderSpriteEditUnified } from '@/lib/unified-render';
 import { resolveNodeSpriteId } from '@/lib/unified-render';
+import { socketOffsetTo3D, computeWorldTransforms } from '@/lib/unified-render';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
@@ -196,19 +197,10 @@ export const puppetHandler: ToolHandler = {
     const tmpIvMap = tmpChar ? interpolateNodeKeyframes(tmpChar, tmpFrame) : new Map();
 
     // 计算指定节点的世界角度（从根累加）
+    // 世界角度走主渲染共同代码（尊重 inheritRotation；此前手工沿链累加不查该标志，与渲染端口径微差）
+    const worldTransformsForAngle = computeWorldTransforms(character, tmpFrame, s.canvasWidth, s.canvasHeight);
     const computeWorldAngle = (targetNode: typeof node): number => {
-      const chain: typeof targetNode[] = [];
-      let cur: typeof targetNode | undefined = targetNode;
-      while (cur) {
-        chain.unshift(cur);
-        if (!cur.parentId) break;
-        cur = character.nodes[cur.parentId];
-      }
-      let angle = 0;
-      for (const n of chain) {
-        angle += tmpIvMap.get(n.id)?.angle ?? n.transform.angle;
-      }
-      return angle;
+      return worldTransformsForAngle.get(targetNode.id)?.worldAngle ?? 0;
     };
 
     // Ctrl+点击/拖动：点击=编辑该节点精灵，拖动=移动部件枢轴在部件中的位置
@@ -282,6 +274,15 @@ export const puppetHandler: ToolHandler = {
       if (!socket) return;
       // 父节点世界角度（用当前插值姿态，保证视觉跟手）
       const parentWorldAngle = computeWorldAngle(parentNode);
+      // 3D socket（带 offset3D）：拖拽起点取 offset3D 在当前视角下的 2D 投影（x2d = x·cosθ + z·sinθ），
+      // 否则起点读 basePosition(=0) 会跳
+      const rootForDir = character.nodes[character.rootNodeId];
+      const dragViewDir = (rootForDir?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      const dragTheta = (((dragViewDir + 2) % 8) * Math.PI) / 4;
+      const origSocketPosX = socket.offset3D
+        ? Math.round(socket.offset3D.x * Math.cos(dragTheta) + socket.offset3D.z * Math.sin(dragTheta))
+        : socket.basePosition.x;
+      const origSocketPosY = socket.offset3D ? socket.offset3D.y : socket.basePosition.y;
       s.puppetNodeDragRef.current = {
         nodeId: node.id,
         skeletonId: character.id,
@@ -303,8 +304,8 @@ export const puppetHandler: ToolHandler = {
         // socket 移动专用
         socketId: socket.id,
         parentNodeId: parentNode.id,
-        origSocketX: socket.basePosition.x,
-        origSocketY: socket.basePosition.y,
+        origSocketX: origSocketPosX,
+        origSocketY: origSocketPosY,
         parentAngle: parentWorldAngle,
       };
       return;
@@ -441,9 +442,6 @@ export const puppetHandler: ToolHandler = {
           x: drag.origOffsetX,
           y: drag.origOffsetY,
         }, variantIndex);
-        const theta = (((viewDir + 2) % 8) * Math.PI) / 4;
-        const cosT = Math.cos(theta);
-        const sinT = Math.sin(theta);
         // 递归烘焙：parentNodeId 的子节点用父节点**世界角度**做伪3D→逆解
         // （旧标志位系统渲染端用 parentWorld.worldAngle；传局部角度时，中间节点局部角为 0 的边会退化为普通旋转，伪3D传不到孙节点）
         const bakeLevel = (parentNodeId: string, parentWorldAngle: number) => {
@@ -458,12 +456,11 @@ export const puppetHandler: ToolHandler = {
             if (childNode.attachment?.type === 'socket' && childNode.attachment.parentSocketId) {
               const socket = parentNode.sockets.find((s) => s.id === childNode.attachment!.parentSocketId);
               if (socket) {
-                const off = socket.directionOffsets?.[viewDir] ?? socket.basePosition;
-                const sx_px = subToPx(off.x);
-                const sy_px = subToPx(off.y);
-                sockX3D_px = sx_px * cosT;
-                sockY3D_px = sy_px;
-                sockZ3D_px = sx_px * sinT;
+                // socket 3D 偏移：走共同口径 socketOffsetTo3D（与渲染器同一实现）
+                const s3 = socketOffsetTo3D(socket, viewDir);
+                sockX3D_px = s3.x;
+                sockY3D_px = s3.y;
+                sockZ3D_px = s3.z;
               }
             } else if (childNode.attachment?.type === 'fixed') {
               const fo = childNode.attachment.fixedOffset ?? { x: 0, y: 0 };
@@ -503,18 +500,10 @@ export const puppetHandler: ToolHandler = {
           }
         };
         // 被拖节点的祖先链世界角度（拖拽期间祖先角度不变）；第一层的父世界角度 = 祖先世界角 + 被拖节点新局部角
-        let ancestorsWorldAngle = 0;
-        {
-          const seen = new Set<string>();
-          let pid = dragNode?.parentId;
-          while (pid && !seen.has(pid)) {
-            seen.add(pid);
-            const pNode = character.nodes[pid];
-            if (!pNode) break;
-            ancestorsWorldAngle += ivMap.get(pid)?.angle ?? pNode.transform.angle ?? 0;
-            pid = pNode.parentId;
-          }
-        }
+        // 祖先世界角度走主渲染共同代码（同 computeWorldAngle 的修法）
+        const ancestorsWorldAngle = dragNode?.parentId
+          ? (computeWorldTransforms(character, frame, s.canvasWidth, s.canvasHeight).get(dragNode.parentId)?.worldAngle ?? 0)
+          : 0;
         bakeLevel(drag.nodeId, ancestorsWorldAngle + newParentAngle);
       } else {
         const newAngle = drag.origAngle + Math.round(angleDelta);
@@ -541,15 +530,29 @@ export const puppetHandler: ToolHandler = {
         // 当前视图朝向（根节点方向）：3D 角色 socket 有 8 方向 offsets，需同步更新
         const rootN = character.nodes[character.rootNodeId];
         const viewDir = (rootN?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
-        const newSockets = parentNode.sockets.map((s) =>
-          s.id === drag.socketId
-            ? {
-                ...s,
-                basePosition: { x: newSocketX, y: newSocketY },
-                directionOffsets: { ...s.directionOffsets, [viewDir]: { x: newSocketX, y: newSocketY } },
-              }
-            : s
-        );
+        const moveTheta = (((viewDir + 2) % 8) * Math.PI) / 4;
+        const newSockets = parentNode.sockets.map((s) => {
+          if (s.id !== drag.socketId) return s;
+          if (s.offset3D) {
+            // 3D socket：视角平面内的 2D 新位置写回 offset3D；
+            // 垂直于视角的深度分量 perp 在当前视角不可见、不可拖，原样保留
+            // （x3 = u·cosθ − perp·sinθ，z3 = u·sinθ + perp·cosθ，与正向投影互逆）
+            const perp = -s.offset3D.x * Math.sin(moveTheta) + s.offset3D.z * Math.cos(moveTheta);
+            return {
+              ...s,
+              offset3D: {
+                x: Math.round(newSocketX * Math.cos(moveTheta) - perp * Math.sin(moveTheta)),
+                y: newSocketY,
+                z: Math.round(newSocketX * Math.sin(moveTheta) + perp * Math.cos(moveTheta)),
+              },
+            };
+          }
+          return {
+            ...s,
+            basePosition: { x: newSocketX, y: newSocketY },
+            directionOffsets: { ...s.directionOffsets, [viewDir]: { x: newSocketX, y: newSocketY } },
+          };
+        });
         store.updateUnifiedNode(charId, drag.parentNodeId!, { sockets: newSockets });
       }
     } else if (drag.mode === 'pivot') {
