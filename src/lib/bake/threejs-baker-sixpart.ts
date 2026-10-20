@@ -353,58 +353,56 @@ export interface HoleRing {
 }
 
 /**
- * 从一个源网格的部件视图提取边界环（破洞）：破洞只认切口边——
- * 在整模里有对面三角形（边频次 ≥2)、在本部件视图里只剩单侧（频次 1）的边。
- * 模型真实外边界（整模频次也是 1，如轮廓边）不是破洞，不提取。
+ * 从一个源网格的部件视图提取破洞（边界环）：洞是剔除产生的——整模本来没有洞，
+ * 剔掉其他部位之后才在切口处张开。判定先过滤「发生过剔除」这个条件：
+ * 一条边两侧的三角形分属保留（在本部件视图中）与被剔（不在视图中）两侧时，
+ * 这条边才是洞的边界；模型固有开口（整模单边）没有被剔的一侧，不算洞。
  */
-const fullEdgeCountCache = new WeakMap<BakedMesh, Map<string, number>>();
-function fullEdgeCounts(bm: BakedMesh): Map<string, number> {
-  let m = fullEdgeCountCache.get(bm);
-  if (m) return m;
-  m = new Map();
+export function extractHoleRings(bm: BakedMesh, tris: number[][], triBone: number[]): HoleRing[] {
+  const pos = bm.geometry.getAttribute('position') as THREE.BufferAttribute;
   const geo = bm.geometry;
   const index = geo.getIndex();
-  const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
-  const triCount = index ? index.count / 3 : Math.floor(posAttr.count / 3);
+  const triCount = index ? index.count / 3 : Math.floor(pos.count / 3);
+  const tkey = (a: number, b: number, c: number) => [a, b, c].sort((m, n) => m - n).join(',');
   const ekey = (a: number, b: number) => (a < b ? `${a}_${b}` : `${b}_${a}`);
+
+  // 本部件视图的三角形 → 各自的 triBone（按无序顶点 key 对齐整模序号）
+  const viewBone = new Map<string, number>();
+  tris.forEach(([a, b, c], t) => viewBone.set(tkey(a, b, c), triBone[t]));
+
+  // 整模每条边：统计两侧三角形中保留/被剔的分布
+  interface EdgeSides { hasIn: boolean; hasOut: boolean; inBone: number }
+  const edges = new Map<string, EdgeSides>();
   for (let t = 0; t < triCount; t++) {
     const a = index ? index.getX(t * 3) : t * 3;
     const b = index ? index.getX(t * 3 + 1) : t * 3 + 1;
     const c = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+    const bone = viewBone.get(tkey(a, b, c));
+    const isIn = bone !== undefined;
     for (const [u, v] of [[a, b], [b, c], [c, a]] as const) {
       const k = ekey(u, v);
-      m.set(k, (m.get(k) ?? 0) + 1);
+      let rec = edges.get(k);
+      if (!rec) { rec = { hasIn: false, hasOut: false, inBone: -1 }; edges.set(k, rec); }
+      if (isIn) { rec.hasIn = true; rec.inBone = bone as number; }
+      else rec.hasOut = true;
     }
   }
-  fullEdgeCountCache.set(bm, m);
-  return m;
-}
 
-export function extractHoleRings(bm: BakedMesh, tris: number[][], triBone: number[]): HoleRing[] {
-  const pos = bm.geometry.getAttribute('position') as THREE.BufferAttribute;
-  const full = fullEdgeCounts(bm);
-  const edgeCount = new Map<string, number>();
-  const edgeTri = new Map<string, number>();
-  const ekey = (a: number, b: number) => (a < b ? `${a}_${b}` : `${b}_${a}`);
-  tris.forEach(([a, b, c], t) => {
-    for (const [u, v] of [[a, b], [b, c], [c, a]] as const) {
-      const k = ekey(u, v);
-      edgeCount.set(k, (edgeCount.get(k) ?? 0) + 1);
-      edgeTri.set(k, t);
-    }
-  });
+  // 洞界边：两侧分属保留与被剔
   const adj = new Map<number, number[]>();
+  const edgeBone = new Map<string, number>();
   const addAdj = (u: number, v: number) => {
     const arr = adj.get(u);
     if (arr) arr.push(v); else adj.set(u, [v]);
   };
-  for (const [k, cnt] of edgeCount) {
-    if (cnt !== 1) continue;
-    if ((full.get(k) ?? 0) < 2) continue; // 整模里也是单边 → 真外边界，不是切口
+  for (const [k, rec] of edges) {
+    if (!rec.hasIn || !rec.hasOut) continue;
     const [u, v] = k.split('_').map(Number);
     addAdj(u, v);
     addAdj(v, u);
+    edgeBone.set(k, rec.inBone);
   }
+
   const visited = new Set<number>();
   const rings: HoleRing[] = [];
   for (const start of adj.keys()) {
@@ -425,11 +423,8 @@ export function extractHoleRings(bm: BakedMesh, tris: number[][], triBone: numbe
     if (ring.length < 3) continue;
     const votes = new Map<number, number>();
     for (let i = 0; i < ring.length; i++) {
-      const t = edgeTri.get(ekey(ring[i], ring[(i + 1) % ring.length]));
-      if (t !== undefined) {
-        const b = triBone[t];
-        votes.set(b, (votes.get(b) ?? 0) + 1);
-      }
+      const b = edgeBone.get(ekey(ring[i], ring[(i + 1) % ring.length]));
+      if (b !== undefined && b >= 0) votes.set(b, (votes.get(b) ?? 0) + 1);
     }
     let bone = -1;
     let best = 0;
