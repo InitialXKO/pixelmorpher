@@ -29,6 +29,8 @@ import {
   mapBonesToNodes,
   rgbaToGrid,
   alignLimbToRest,
+  scaleGridNearest,
+  cropGridToContent,
   type ProcessedBone,
   type ProcessedBoneDirection,
 } from '@/lib/bake/skeleton-mapper';
@@ -887,13 +889,31 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         const dirs: ProcessedBoneDirection[] = results.map((r) => {
           const orig = pb.directions.find((d) => d.direction === r.direction);
           let grid = rgbaToGrid(r.pixels, r.width, r.height);
-          // 竖直重烘图 → 对齐到原始姿态（最近 90° 无损旋转）
+          // 关节在重烘帧正中（相机恒对准关节取景）
+          let jx = r.width / 2;
+          let jy = r.height / 2;
+          // 竖直重烘图 → 对齐到原始姿态（最近 90° 无损旋转，绕图中心，关节仍在中心）
           if (orig && parentPb) {
             const pOrig = parentPb.directions.find((d) => d.direction === r.direction);
             if (pOrig) {
               grid = alignLimbToRest(grid, orig.jointX - pOrig.jointX, orig.jointY - pOrig.jointY);
             }
           }
+          // 像素密度对齐：渲染端 1 像素 = 1 全局像素（scaleFactor 已定案禁用），
+          // 精灵尺寸全由像素数决定——重烘帧密度与原图不同，必须先按密度比重采样到同密度
+          if (orig && r.cameraHalfGlobal && orig.cameraHalf > 0) {
+            const s = r.cameraHalfGlobal / orig.cameraHalf;
+            if (Math.abs(s - 1) > 0.01) {
+              grid = scaleGridNearest(grid, s);
+              jx *= s;
+              jy *= s;
+            }
+          }
+          // 紧包围盒裁剪（与主烘焙同口径：内容 + 2px）
+          const cropped = cropGridToContent(grid, 2);
+          grid = cropped.grid;
+          jx -= cropped.cropX;
+          jy -= cropped.cropY;
           const w = grid[0]?.length ?? r.width;
           const h = grid.length;
           return {
@@ -906,11 +926,10 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             // 关节几何不变：保留原始全帧坐标（socket 计算用）
             jointX: orig?.jointX ?? r.width / 2,
             jointY: orig?.jointY ?? r.height / 2,
-            // 新图以关节为中心
-            plugX: w / 2,
-            plugY: h / 2,
-            // 尺度用重烘帧自己的等效 cameraHalf（整模归一化尺度），不能沿用原图的——两套取景脱钩，沿用会把精灵按整帧大小解释；global 保留原图的
-            cameraHalf: r.cameraHalfGlobal ?? orig?.cameraHalf ?? 1,
+            plugX: jx,
+            plugY: jy,
+            // 像素密度已对齐到原图，尺度声明随之恢复与原图一致；global 保留原图的
+            cameraHalf: orig?.cameraHalf ?? r.cameraHalfGlobal ?? 1,
             globalCameraHalf: orig?.globalCameraHalf,
           };
         });

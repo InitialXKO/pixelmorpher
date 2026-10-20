@@ -325,6 +325,53 @@ function rotateGrid90CW(grid: PixelGrid): PixelGrid {
   return out;
 }
 
+/** PixelGrid 最近邻缩放（单烘图与主烘焙图做像素密度对齐用） */
+export function scaleGridNearest(grid: PixelGrid, scale: number): PixelGrid {
+  const h = grid.length;
+  const w = grid[0]?.length ?? 0;
+  if (w === 0 || h === 0 || !(scale > 0)) return grid;
+  const nw = Math.max(1, Math.round(w * scale));
+  const nh = Math.max(1, Math.round(h * scale));
+  const out: PixelGrid = [];
+  for (let y = 0; y < nh; y++) {
+    const sy = Math.min(h - 1, Math.floor(y / scale));
+    const row: (string | null)[] = [];
+    for (let x = 0; x < nw; x++) {
+      row.push(grid[sy][Math.min(w - 1, Math.floor(x / scale))]);
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+/** PixelGrid 紧包围盒裁剪（非透明像素 + padding，与主烘焙裁剪同口径） */
+export function cropGridToContent(
+  grid: PixelGrid,
+  padding = 2,
+): { grid: PixelGrid; cropX: number; cropY: number } {
+  const h = grid.length;
+  const w = grid[0]?.length ?? 0;
+  let minX = w, maxX = -1, minY = h, maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (grid[y][x] !== null) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return { grid, cropX: 0, cropY: 0 };
+  const x0 = Math.max(0, minX - padding);
+  const y0 = Math.max(0, minY - padding);
+  const x1 = Math.min(w - 1, maxX + padding);
+  const y1 = Math.min(h - 1, maxY + padding);
+  const out: PixelGrid = [];
+  for (let y = y0; y <= y1; y++) out.push(grid[y].slice(x0, x1 + 1));
+  return { grid: out, cropX: x0, cropY: y0 };
+}
+
 /**
  * 将单肢体重烘的竖直 limb 图旋转对齐到原始姿态。
  * 竖直烘焙的 distal 恒朝图像下方（+y）；目标是原始姿态的 limb 方向（父关节→子关节）。
