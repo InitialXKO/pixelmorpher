@@ -11,14 +11,16 @@ import { Plus, Trash2, Link2, ChevronDown, ChevronRight, RotateCcw } from 'lucid
 // Exported Types
 // ---------------------------------------------------------------------------
 
-/** Socket info that works with both old and new data models */
+/** Socket info that works with both old and new data models
+ *  注意：本接口所有坐标均为像素（pixels）；统一模型的 Socket 偏移是 SubPixel，
+ *  写入 store 时必须用 pxToSub 换算（含 offset3D 三轴）。 */
 export interface SocketInfo {
   id: string;
   name: string;
   x: number; // Base X position (pixels)
   y: number; // Base Y position (pixels)
   directionOffsets?: Partial<Record<number, { x: number; y: number }>>; // Per-direction overrides
-  /** 3D 静态偏移（pixels）。存在时渲染端以它为准，directionOffsets 不生效（选项 A，与统一模型 Socket.offset3D 对应） */
+  /** 3D 静态偏移（pixels，写入时 pxToSub）。存在时渲染端以它为准，directionOffsets 不生效（选项 A，与统一模型 Socket.offset3D 对应） */
   offset3D?: { x: number; y: number; z: number };
 }
 
