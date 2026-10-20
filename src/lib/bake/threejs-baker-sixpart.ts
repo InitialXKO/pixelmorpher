@@ -993,7 +993,7 @@ export async function bakeSixParts(
       const partGroup = new THREE.Group();
       const toonMat = new THREE.MeshToonMaterial({
         color: new THREE.Color(0xffffff),
-        map: bp.map ?? undefined,
+        ...(bp.map ? { map: bp.map } : {}),
         gradientMap,
         vertexColors: true,
       });

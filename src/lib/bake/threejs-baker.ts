@@ -70,7 +70,7 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture): v
       old && 'map' in old ? ((old as THREE.MeshStandardMaterial).map as THREE.Texture | null) : null;
     mesh.material = new THREE.MeshToonMaterial({
       color: baseColor,
-      map: map ?? undefined,
+      ...(map ? { map } : {}),
       gradientMap,
     });
     // 旧材质释放(贴图保留,新材质在用)

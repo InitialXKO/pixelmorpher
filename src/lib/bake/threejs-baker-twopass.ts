@@ -667,7 +667,7 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture): M
       old && 'map' in old ? ((old as THREE.MeshStandardMaterial).map as THREE.Texture | null) : null;
     const tm = new THREE.MeshToonMaterial({
       color: baseColor,
-      map: texMap ?? undefined,
+      ...(texMap ? { map: texMap } : {}),
       gradientMap,
     });
     map.set(mesh, tm);
