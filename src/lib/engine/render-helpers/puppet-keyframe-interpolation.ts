@@ -45,6 +45,7 @@ function interpolateSingleNode(node: Node, currentFrame: number): InterpolatedNo
   }
   return {
     angle: interpolateTrack(tracks?.angle, currentFrame, 0),
+    tilt: interpolateTrack(tracks?.tilt, currentFrame, node.transform.tilt ?? 0),
     stretch: interpolateTrack(tracks?.stretch, currentFrame, 1),
     x,
     y,
@@ -117,6 +118,7 @@ function interpolateCharacterInternal(
           nodeState: blueprintNodeState,
         } as any);
         values.angle += t.rotation;
+        values.tilt = (values.tilt ?? 0) + (t.tilt ?? 0);
         values.x += t.translateX;
         values.y += t.translateY;
         values.stretch *= t.scaleY;

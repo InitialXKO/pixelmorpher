@@ -12,7 +12,7 @@ import { inpaintPixels, samMaskToSelectionMask } from '@/lib/inpainting';
 import { floodFill } from '@/lib/engine';
 import { renderUnifiedToCanvas, renderSpriteEditUnified } from '@/lib/unified-render';
 import { resolveNodeSpriteId } from '@/lib/unified-render';
-import { socketOffsetTo3D, computeWorldTransforms } from '@/lib/unified-render';
+import { computeWorldTransforms } from '@/lib/unified-render';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
@@ -28,7 +28,7 @@ import {
   spritePivotX,
   spritePivotY,
 } from './canvas-utils';
-import { subToPx, pxToSub, mapDragTo3D, rotatePseudo3D, inverseRotateInViewPlane, ikTargetMirror, type SubPixel } from '@/lib/unified-types';
+import { subToPx, pxToSub, mapDragTo3D, ikTargetMirror, type SubPixel } from '@/lib/unified-types';
 import type { CanvasState } from './use-canvas-state';
 import type { BrushCommand, ModifierInstance } from '@/lib/types';
 
@@ -136,7 +136,7 @@ export function writePuppetPoseKeyframe(
   clipId: string,
   nodeId: string,
   frame: number,
-  values: { angle: number; stretch: number; x: number; y: number },
+  values: { angle: number; stretch: number; x: number; y: number; tilt?: number },
   variantIndex: number,
 ) {
   const store = useProjectStore.getState();
@@ -146,7 +146,7 @@ export function writePuppetPoseKeyframe(
   if (!node) return;
 
   // 直接写 node.tracks（渲染器从这里读）
-  const setTrack = (trackName: 'angle' | 'x' | 'y' | 'stretch', value: number) => {
+  const setTrack = (trackName: 'angle' | 'x' | 'y' | 'stretch' | 'tilt', value: number) => {
     const track = node.tracks[trackName] ?? { keyframes: [], interpolation: 'linear' as const };
     const idx = track.keyframes.findIndex(k => k.frame === frame);
     const newKeyframes = idx >= 0
@@ -162,6 +162,8 @@ export function writePuppetPoseKeyframe(
       x: setTrack('x', values.x),
       y: setTrack('y', values.y),
       stretch: setTrack('stretch', values.stretch),
+      // tilt 仅在调用方给出时写（伪 3D 工具 / tilt 编辑），其余拖拽不碰出平面角轨道
+      ...(values.tilt !== undefined ? { tilt: setTrack('tilt', values.tilt) } : {}),
     },
   });
 }
@@ -362,6 +364,7 @@ export const puppetHandler: ToolHandler = {
       startX: px,
       startY: py,
       origAngle: rotateIv?.angle ?? node.transform.angle,
+      origTilt: rotateIv?.tilt ?? node.transform.tilt ?? 0,
       origStretch: rotateIv?.stretch ?? node.transform.stretch,
       origOffsetX: moveIv?.x ?? moveTarget.transform.x,
       origOffsetY: moveIv?.y ?? moveTarget.transform.y,
@@ -373,30 +376,6 @@ export const puppetHandler: ToolHandler = {
       startMouseAngle,
       dragStarted: false,
       parentWorldAngle,
-      // 伪3D模式：存储子节点原始本地偏移（实时烘焙用，取当前帧插值）
-      ...(s.editorStore.getState().tool === 'pseudo3d_rotate' && dragMode === 'rotate'
-        ? {
-            origChildOffsets: (() => {
-              // 递归收集整棵子树的原始本地偏移（伪3D烘焙需传播到孙节点）
-              const result: Record<string, { x: number; y: number; z: number }> = {};
-              const collect = (nodeId: string) => {
-                const n = character.nodes[nodeId];
-                for (const cid of n?.children ?? []) {
-                  const child = character.nodes[cid];
-                  const childIv = ivMap.get(cid);
-                  result[cid] = {
-                    x: childIv?.x ?? child?.transform.x ?? 0,
-                    y: childIv?.y ?? child?.transform.y ?? 0,
-                    z: child?.transform.z ?? 0,
-                  };
-                  collect(cid);
-                }
-              };
-              collect(node.id);
-              return result;
-            })(),
-          }
-        : {}),
     };
   },
 
@@ -432,79 +411,18 @@ export const puppetHandler: ToolHandler = {
       const currentMouseAngle = Math.atan2(py - drag.pivotWorldY, px - drag.pivotWorldX);
       const angleDelta = (currentMouseAngle - drag.startMouseAngle) * 180 / Math.PI;
       const activeTool = s.editorStore.getState().tool;
-      const childIds = drag.origChildOffsets ? Object.keys(drag.origChildOffsets) : [];
-      if (activeTool === 'pseudo3d_rotate' && childIds.length > 0) {
-        // 伪3D实时烘焙：父角度正常写入，整棵子树递归逆解保证所见即所得
-        const newParentAngle = drag.origAngle + Math.round(angleDelta);
+      if (activeTool === 'pseudo3d_rotate') {
+        // 伪3D旋转（乙）：拖拽角直接写被拖节点的出平面角 tilt 关键帧，子树零写入——
+        // frame 复合（RU(tilt)）自动把整棵子树掀出平面。旧版递归烘焙后代 local x/y/z 已废弃
+        // （历史烘焙数据是普通 x/y/z 数据，原样可渲染，不迁移）。
+        const newTilt = (drag.origTilt ?? 0) + Math.round(angleDelta);
         writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
-          angle: newParentAngle,
+          angle: drag.origAngle,
           stretch: drag.origStretch,
           x: drag.origOffsetX,
           y: drag.origOffsetY,
+          tilt: newTilt,
         }, variantIndex);
-        // 递归烘焙：parentNodeId 的子节点用父节点**世界角度**做伪3D→逆解
-        // （旧标志位系统渲染端用 parentWorld.worldAngle；传局部角度时，中间节点局部角为 0 的边会退化为普通旋转，伪3D传不到孙节点）
-        const bakeLevel = (parentNodeId: string, parentWorldAngle: number) => {
-          const parentNode = character.nodes[parentNodeId];
-          if (!parentNode) return;
-          for (const childId of parentNode.children ?? []) {
-            const orig = drag.origChildOffsets![childId];
-            const childNode = character.nodes[childId];
-            if (!orig || !childNode) continue;
-            // socket 3D 偏移（与渲染器一致）
-            let sockX3D_px = 0, sockY3D_px = 0, sockZ3D_px = 0;
-            if (childNode.attachment?.type === 'socket' && childNode.attachment.parentSocketId) {
-              const socket = parentNode.sockets.find((s) => s.id === childNode.attachment!.parentSocketId);
-              if (socket) {
-                // socket 3D 偏移：走共同口径 socketOffsetTo3D（与渲染器同一实现）
-                const s3 = socketOffsetTo3D(socket, viewDir);
-                sockX3D_px = s3.x;
-                sockY3D_px = s3.y;
-                sockZ3D_px = s3.z;
-              }
-            } else if (childNode.attachment?.type === 'fixed') {
-              const fo = childNode.attachment.fixedOffset ?? { x: 0, y: 0 };
-              sockX3D_px = subToPx(fo.x);
-              sockY3D_px = subToPx(fo.y);
-            }
-            const childIvEarly = ivMap.get(childId);
-            const childStretch = childIvEarly?.stretch ?? childNode.transform.stretch ?? 1;
-            const totalX = sockX3D_px + subToPx(orig.x);
-            const totalY = sockY3D_px + subToPx(orig.y) * childStretch;
-            const totalZ = sockZ3D_px + subToPx(orig.z);
-            const rotated = rotatePseudo3D(totalX, totalY, totalZ, parentWorldAngle, viewDir);
-            const newTotal = inverseRotateInViewPlane(rotated.x, rotated.y, rotated.z, parentWorldAngle, viewDir);
-            const newChildX = pxToSub(newTotal.x - sockX3D_px);
-            const newChildY = pxToSub(newTotal.y - sockY3D_px);
-            const newChildZ = pxToSub(newTotal.z - sockZ3D_px);
-            const childIv = childIvEarly;
-            const childAngle = childIv?.angle ?? childNode.transform.angle ?? 0;
-            const childVariantIndex = (childNode.transform.variantIndex ?? variantIndex) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
-            writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, childId, frame, {
-              angle: childAngle,
-              stretch: childIv?.stretch ?? childNode.transform.stretch,
-              x: Math.round(newChildX),
-              y: Math.round(newChildY),
-            }, childVariantIndex);
-            store.updateUnifiedNode(drag.characterId ?? drag.skeletonId, childId, {
-              transform: { ...childNode.transform, z: Math.round(newChildZ) },
-            });
-            // 递归：子节点的世界角度 = 父世界角度 + 子局部角度（子局部角度本轮不变），往下传
-            // 注意：仅当 inheritRotation !== false 时累积（与渲染端 computeWorldTransforms:668-670 一致）
-            if ((childNode.children ?? []).length > 0) {
-              const childWorldAngle = childNode.attachment.inheritRotation !== false
-                ? parentWorldAngle + childAngle
-                : childAngle;
-              bakeLevel(childId, childWorldAngle);
-            }
-          }
-        };
-        // 被拖节点的祖先链世界角度（拖拽期间祖先角度不变）；第一层的父世界角度 = 祖先世界角 + 被拖节点新局部角
-        // 祖先世界角度走主渲染共同代码（同 computeWorldAngle 的修法）
-        const ancestorsWorldAngle = dragNode?.parentId
-          ? (computeWorldTransforms(character, frame, s.canvasWidth, s.canvasHeight).get(dragNode.parentId)?.worldAngle ?? 0)
-          : 0;
-        bakeLevel(drag.nodeId, ancestorsWorldAngle + newParentAngle);
       } else {
         const newAngle = drag.origAngle + Math.round(angleDelta);
         writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {

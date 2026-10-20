@@ -10,7 +10,8 @@ import { Plus, Trash2, Power, Network } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useProjectStore } from '@/lib/store';
 import { computeIKChainTip, getIKChainJointIds } from '@/lib/ik-tip';
-import { resolveChainTarget3D, ikTargetMirror } from '@/lib/unified-types';
+import { resolveChainTarget3D, ikTargetMirror, subToPx } from '@/lib/unified-types';
+import { computeWorldTransforms } from '@/lib/unified-render';
 import type { Character, IKChain } from '@/lib/unified-types';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 import BlueprintEditor from './BlueprintEditor';
@@ -196,6 +197,44 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     });
   };
 
+  // ---- pole（极向量，仅 2bone）：原点中心世界空间，与 target3D 同空间 ----
+  const handlePoleChange = (id: string, axis: 'x' | 'y' | 'z', value: number) => {
+    if (!character || !Number.isFinite(value)) return;
+    updateUnifiedCharacter(character.id, {
+      ikChains: chains.map((c) =>
+        c.id === id ? { ...c, poleTarget3D: { ...(c.poleTarget3D ?? { x: 0, y: 0, z: 0 }), [axis]: value } } : c,
+      ),
+    });
+  };
+
+  const handlePoleCapture = (id: string) => {
+    if (!character) return;
+    const chain = chains.find((c) => c.id === id);
+    if (!chain) return;
+    const jointIds = getIKChainJointIds(character, chain.rootNodeId, chain.endNodeId);
+    if (jointIds.length < 3) return;
+    // FK 肘位：全部链禁用的克隆上算（与求解器缺省 pole 口径一致）
+    const fkChar = { ...character, ikChains: (character.ikChains ?? []).map((c) => ({ ...c, enabled: false })) };
+    const st = useProjectStore.getState();
+    const t = computeWorldTransforms(fkChar, st.currentFrame, st.canvasWidth, st.canvasHeight).get(jointIds[1]);
+    if (!t) return;
+    const r1 = (v: number) => Math.round(v * 10) / 10;
+    updateUnifiedCharacter(character.id, {
+      ikChains: chains.map((c) =>
+        c.id === id
+          ? { ...c, poleTarget3D: { x: r1(subToPx(t.worldX)), y: r1(subToPx(t.worldY)), z: r1(subToPx(t.worldZ)) } }
+          : c,
+      ),
+    });
+  };
+
+  const handlePoleClear = (id: string) => {
+    if (!character) return;
+    updateUnifiedCharacter(character.id, {
+      ikChains: chains.map((c) => (c.id === id ? { ...c, poleTarget3D: undefined } : c)),
+    });
+  };
+
   if (!character) return null;
 
   return (
@@ -273,6 +312,41 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
                   />
                 </label>
               </div>
+              {/* pole 极向量（仅 2bone 显示）：决定肘的弯曲侧，原点中心世界空间 */}
+              {c.solver === '2bone' && (
+                <div className="flex items-center gap-1 text-gray-500">
+                  <span title="极向量（原点中心世界空间）：肘向极向量一侧弯曲；缺省取求解前 FK 肘位">极向</span>
+                  {(['x', 'y', 'z'] as const).map((axis) => (
+                    <label key={axis} className="flex items-center gap-0.5">
+                      {axis.toUpperCase()}
+                      <input
+                        type="number"
+                        value={Math.round(c.poleTarget3D?.[axis] ?? 0)}
+                        onChange={(e) => handlePoleChange(c.id, axis, Number(e.target.value))}
+                        className="w-12 px-1 py-0.5 bg-black/50 rounded text-gray-300 text-[10px]"
+                      />
+                    </label>
+                  ))}
+                  <button
+                    onClick={() => handlePoleCapture(c.id)}
+                    className="px-1 py-0.5 rounded bg-black/50 text-gray-400 hover:text-cyan-300"
+                    title="把当前帧的 FK 肘位写入极向量"
+                  >
+                    取肘位
+                  </button>
+                  {c.poleTarget3D ? (
+                    <button
+                      onClick={() => handlePoleClear(c.id)}
+                      className="px-1 py-0.5 rounded bg-black/50 text-gray-400 hover:text-red-300"
+                      title="清除极向量，恢复缺省（FK 肘位）"
+                    >
+                      清除
+                    </button>
+                  ) : (
+                    <span className="text-gray-600">缺省=FK肘位</span>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

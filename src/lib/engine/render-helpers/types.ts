@@ -17,6 +17,8 @@ export interface InterpolatedNodeValues {
   scaleX: number;
   /** Face turn (Spine-style pseudo-3D, lerped from keyframes) */
   faceTurn?: { yaw: number; pitch: number };
+  /** 出平面角（乙两角制）：tracks.tilt 插值，回退 base tilt */
+  tilt?: number;
 }
 
 /** Computed world transform for a puppet node */
