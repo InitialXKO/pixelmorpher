@@ -18,6 +18,8 @@ export interface SocketInfo {
   x: number; // Base X position (pixels)
   y: number; // Base Y position (pixels)
   directionOffsets?: Partial<Record<number, { x: number; y: number }>>; // Per-direction overrides
+  /** 3D 静态偏移（pixels）。存在时渲染端以它为准，directionOffsets 不生效（选项 A，与统一模型 Socket.offset3D 对应） */
+  offset3D?: { x: number; y: number; z: number };
 }
 
 export interface SocketEditorProps {
@@ -64,6 +66,24 @@ function SocketCard({ socket, onChange, onRemove, selectedDirection, disabled }:
   const [editingDir, setEditingDir] = useState<DirectionIndex | null>(selectedDirection ?? null);
 
   const offsets = socket.directionOffsets ?? {};
+
+  const handle3DChange = useCallback(
+    (axis: 'x' | 'y' | 'z', value: string) => {
+      if (!socket.offset3D) return;
+      onChange({ offset3D: { ...socket.offset3D, [axis]: Number(value) || 0 } });
+    },
+    [onChange, socket.offset3D],
+  );
+
+  // 添加 3D 偏移：种子取当前基准位置（南向口径：sx→X、sy→Y、Z=0，与渲染端 2D→3D 映射一致）
+  const handleAdd3D = useCallback(() => {
+    onChange({ offset3D: { x: socket.x, y: socket.y, z: 0 } });
+  }, [onChange, socket.x, socket.y]);
+
+  // 移除 3D 偏移：回退到 2D 方向偏移口径
+  const handleRemove3D = useCallback(() => {
+    onChange({ offset3D: undefined });
+  }, [onChange]);
 
   const handleBaseXChange = useCallback(
     (value: string) => {
@@ -144,6 +164,11 @@ function SocketCard({ socket, onChange, onRemove, selectedDirection, disabled }:
           )}
         </button>
         <Link2 className="size-2.5 text-yellow-500/70 flex-shrink-0" />
+        {socket.offset3D && (
+          <span className="text-[7px] px-1 rounded bg-cyan-900/50 text-cyan-300 flex-shrink-0" title="3D 偏移生效，方向偏移不生效">
+            3D
+          </span>
+        )}
         <Input
           value={socket.name}
           onChange={(e) => onChange({ name: e.target.value })}
@@ -181,13 +206,75 @@ function SocketCard({ socket, onChange, onRemove, selectedDirection, disabled }:
         />
       </div>
 
+      {/* ---- 3D offset ---- */}
+      {expanded && (
+        <div className="pl-3 space-y-1">
+          <div className="flex items-center justify-between pr-1">
+            <span className="text-[9px] text-gray-600 uppercase tracking-wider">
+              3D 偏移
+            </span>
+            {socket.offset3D ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-3.5 text-gray-500 hover:text-red-400"
+                onClick={handleRemove3D}
+                disabled={disabled}
+                title="移除 3D 偏移（回退 2D）"
+              >
+                <Trash2 className="size-2" />
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-3.5 text-gray-500 hover:text-cyan-400"
+                onClick={handleAdd3D}
+                disabled={disabled}
+                title="添加 3D 偏移"
+              >
+                <Plus className="size-2" />
+              </Button>
+            )}
+          </div>
+          {socket.offset3D && (
+            <div className="flex items-center gap-1">
+              <Label className="text-[8px] text-gray-600 w-4">X</Label>
+              <Input
+                type="number"
+                value={socket.offset3D.x}
+                onChange={(e) => handle3DChange('x', e.target.value)}
+                className="h-4 text-[8px] bg-[#080818] border-[#1e1e3a] w-12"
+                disabled={disabled}
+              />
+              <Label className="text-[8px] text-gray-600 w-4">Y</Label>
+              <Input
+                type="number"
+                value={socket.offset3D.y}
+                onChange={(e) => handle3DChange('y', e.target.value)}
+                className="h-4 text-[8px] bg-[#080818] border-[#1e1e3a] w-12"
+                disabled={disabled}
+              />
+              <Label className="text-[8px] text-gray-600 w-4">Z</Label>
+              <Input
+                type="number"
+                value={socket.offset3D.z}
+                onChange={(e) => handle3DChange('z', e.target.value)}
+                className="h-4 text-[8px] bg-[#080818] border-[#1e1e3a] w-12"
+                disabled={disabled}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ---- Direction offsets (collapsible) ---- */}
       {expanded && (
         <div className="pl-3 space-y-1.5">
           {/* Section header */}
           <div className="flex items-center justify-between pr-1">
             <span className="text-[9px] text-gray-600 uppercase tracking-wider">
-              方向偏移
+              方向偏移{socket.offset3D ? '（3D 生效中，不生效）' : ''}
             </span>
             {activeOffsetCount > 0 && (
               <span className="text-[7px] text-cyan-500/60">
