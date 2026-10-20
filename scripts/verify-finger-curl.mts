@@ -66,6 +66,18 @@ fingers.forEach((f, i) => {
   if (!ok) fail++;
   console.log(`${ok ? 'PASS' : 'FAIL'} ${f.label}: 位移=${moved.toFixed(3)} 掌侧符号=${side} 第一节掌侧分量=${palmComp.toFixed(3)}`);
 });
+// 拇指（乙·对掌）：尖端应落在四指前方掌侧——相对 hand 的 x 为正、不深陷、且比伸直时更靠近指根中心
+const handBone = allBones.find((b) => b.name === 'mixamorig:LeftHand')!;
+const handPosV = handBone.getWorldPosition(new THREE.Vector3());
+const mcpLeft = new THREE.Vector3();
+fingers.forEach((f) => mcpLeft.add(f.bones[0].getWorldPosition(new THREE.Vector3())));
+mcpLeft.multiplyScalar(1 / fingers.length);
+const thumbTip1 = tipOf(detAll.thumb!.bones);
+const relT = thumbTip1.clone().sub(handPosV);
+const dCenter1 = thumbTip1.distanceTo(mcpLeft);
+const thumbOk = relT.x > 0.03 && relT.y > -0.07 && dCenter1 < 0.075;
+if (!thumbOk) fail++;
+console.log(`${thumbOk ? 'PASS' : 'FAIL'} thumb 对掌落点: relHand=(${relT.toArray().map((v) => v.toFixed(3)).join(',')}) 距指根中心=${dCenter1.toFixed(3)}`);
 const tt = tipOf(detAll.thumb!.bones);
 const tSide = Math.sign(n.dot(tt.clone().sub(mcpC)));
 if (tSide !== thumbSide) { fail++; console.log('FAIL thumb side', tSide); } else console.log('PASS thumb 掌侧');

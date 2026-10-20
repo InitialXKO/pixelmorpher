@@ -309,7 +309,7 @@ function RebakePanel({ bone, input, size, paletteSize, onClose, onDone }: Rebake
               className="w-full accent-amber-500"
             />
             <div className="mt-1 text-[10px] text-gray-600">
-              角度按关节：MCP 90° / PIP 100° / DIP 70° / 拇指屈曲 60°+内收 35°，再 × 卷曲系数
+              角度按关节：MCP 90° / PIP 100° / DIP 70°；拇指对掌拧转 + 轻微弯曲，再 × 卷曲系数
             </div>
           </div>
           <div className="flex flex-col items-center gap-1">

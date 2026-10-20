@@ -1165,14 +1165,19 @@ function orientLimbVertical(
   }
   centroid.multiplyScalar(1 / Math.max(n, 1));
 
-  // 远端方向：质心 − 关节（肢体从关节向外延伸）
-  // 若质心与关节几乎重合，用父关节反方向兜底
-  let distal = centroid.clone().sub(jointModel);
-  if (distal.lengthSq() < 1e-8 && parentJointModel) {
-    distal = jointModel.clone().sub(parentJointModel);
+  // 远端方向：父关节 → 本关节（骨骼方向，姿态无关）。
+  // 不用「质心 − 关节」：质心随姿态移动（如握拳后质心移向掌心），定向会跟着漂，
+  // 同一肢体在不同姿态下预览朝向不一致。
+  let distal: THREE.Vector3 | null = null;
+  if (parentJointModel) {
+    const d = jointModel.clone().sub(parentJointModel);
+    if (d.lengthSq() > 1e-8) distal = d.normalize();
   }
-  if (distal.lengthSq() < 1e-8) distal.set(0, -1, 0);
-  distal.normalize();
+  if (!distal) {
+    // 无父关节（如根骨）时兜底：质心 − 关节
+    const d = centroid.clone().sub(jointModel);
+    distal = d.lengthSq() > 1e-8 ? d.normalize() : new THREE.Vector3(0, -1, 0);
+  }
 
   // q1：远端 → -Y
   const q1 = new THREE.Quaternion().setFromUnitVectors(distal, new THREE.Vector3(0, -1, 0));
@@ -1212,7 +1217,7 @@ function orientLimbVertical(
 // ============================================================
 // 手指检测与握拳（bakeSingleBone 用）
 // 角度按关节类型（解剖学近似，非硬编码正确值，用户可调）：
-//   四指 MCP 90° / PIP 100° / DIP 70°；拇指 MCP 屈曲 60° / IP 50° + 内收 35°
+//   四指 MCP 90° / PIP 100° / DIP 70°；拇指走对掌：根骨拧转对准四指根中心 + 第二节起轻微弯曲 25° / 20°
 // 实际应用角度 = maxAngle * fingerCurl（0~1）
 // ============================================================
 
@@ -1233,8 +1238,7 @@ export interface FingerDetectResult {
 }
 
 const FINGER_MAX_DEG = [90, 100, 70]; // MCP, PIP, DIP（解剖学近似）
-const THUMB_FLEX_DEG = [60, 50];     // MCP, IP
-const THUMB_ADDUCT_DEG = 35;         // 拇指内收
+const THUMB_FLEX_DEG = [25, 20];     // 对掌拧转后的轻微弯曲（第二节起）
 
 const HAND_RE = /hand/i;
 const WRIST_RE = /wrist/i;
@@ -1544,20 +1548,48 @@ export function applyFingerCurl(
     }
     if (thumb && thumb.bones.length > 0) {
       const tb = thumb.bones;
-      // 拇指先内收（向掌心），符号经试探确定
-      if (palmNormal && palmNormal.lengthSq() > 0.5) {
-        const d0 = chainTipWorld(tb).distanceTo(palmCenter);
-        const probe = THREE.MathUtils.degToRad(10);
-        applyWorldRotation(tb[0], palmNormal, probe);
-        model.updateMatrixWorld(true);
-        const d1 = chainTipWorld(tb).distanceTo(palmCenter);
-        applyWorldRotation(tb[0], palmNormal, -probe);
-        model.updateMatrixWorld(true);
-        const sign = d1 < d0 ? 1 : -1;
-        applyWorldRotation(tb[0], palmNormal, sign * THREE.MathUtils.degToRad(THUMB_ADDUCT_DEG * c));
-        model.updateMatrixWorld(true);
+      // 对掌（乙模型）：拇指不跟四指一起绕弯曲轴卷——根骨拧转、长轴对准四指根中心
+      // （压向食指/中指），再从第二节起轻微弯曲扣合。旧模型（绕四指轴 60°/50°）
+      // 会在拧转前就把拇指甩到腕后下方。
+      const palmSide = palmSideDir ?? palmNormal;
+      const d0 = boneDirWorld(tb[0]);
+      if (d0 && palmSide) {
+        const dT = palmCenter.clone().sub(tb[0].getWorldPosition(new THREE.Vector3()));
+        if (dT.lengthSq() > 1e-10) {
+          dT.normalize();
+          if (d0.dot(dT) > -0.999) {
+            const q = new THREE.Quaternion().setFromUnitVectors(d0, dT);
+            const qPart = new THREE.Quaternion().slerp(q, c);
+            const qOld = tb[0].getWorldQuaternion(new THREE.Quaternion());
+            const qNew = qPart.multiply(qOld);
+            const parent = tb[0].parent;
+            if (parent) {
+              const qParInv = parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+              tb[0].quaternion.copy(qParInv.multiply(qNew));
+              model.updateMatrixWorld(true);
+            }
+          }
+        }
+        // 轻微弯曲：第二节起绕 dir×掌侧方向小角扣合，符号由掌侧试探定
+        for (let i = 1; i < tb.length && i - 1 < THUMB_FLEX_DEG.length; i++) {
+          const b = tb[i];
+          const dir = boneDirWorld(b);
+          if (!dir) continue;
+          const axis = new THREE.Vector3().crossVectors(dir, palmSide);
+          if (axis.lengthSq() < 1e-6) continue;
+          axis.normalize();
+          const probe = THREE.MathUtils.degToRad(10);
+          const tipBefore = chainTipWorld(tb);
+          applyWorldRotation(b, axis, probe);
+          model.updateMatrixWorld(true);
+          const disp = chainTipWorld(tb).sub(tipBefore);
+          applyWorldRotation(b, axis, -probe);
+          model.updateMatrixWorld(true);
+          const sign = disp.dot(palmSide) > 0 ? 1 : -1;
+          applyWorldRotation(b, axis, sign * THREE.MathUtils.degToRad(THUMB_FLEX_DEG[i - 1] * c));
+          model.updateMatrixWorld(true);
+        }
       }
-      curlFingerChain(model, tb, knuckleAxis, palmCenter, c, THUMB_FLEX_DEG, palmSideDir);
     }
   }
   model.updateMatrixWorld(true);
