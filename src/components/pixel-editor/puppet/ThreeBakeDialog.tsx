@@ -54,7 +54,7 @@ interface ThreeBakeDialogProps {
 }
 
 /** 显示 BakeResult（RGBA） */
-function ResultCanvas({ result, size = 128 }: { result: BakeResult; size?: number }) {
+function ResultCanvas({ result, size = 128, markers }: { result: BakeResult; size?: number; markers?: { x: number; y: number }[] }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -71,7 +71,23 @@ function ResultCanvas({ result, size = 128 }: { result: BakeResult; size?: numbe
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
-  }, [result]);
+    // 标出关节位置：红色十字（与 PixelGridCanvas 的 plug 标记同样式）
+    if (markers && markers.length > 0) {
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 1;
+      ctx.fillStyle = '#ff0000';
+      for (const m of markers) {
+        ctx.beginPath();
+        ctx.moveTo(m.x - 4, m.y);
+        ctx.lineTo(m.x + 4, m.y);
+        ctx.moveTo(m.x, m.y - 4);
+        ctx.lineTo(m.x, m.y + 4);
+        ctx.stroke();
+        // 中心点
+        ctx.fillRect(m.x - 1, m.y - 1, 2, 2);
+      }
+    }
+  }, [result, markers]);
   return (
     <canvas
       ref={ref}
@@ -1221,12 +1237,20 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               <div key={part} className="mb-2">
                 <div className="mb-1 text-[10px] text-gray-500">{PART_LABEL[part]}</div>
                 <div className="grid grid-cols-8 gap-2">
-                  {thumbs.map((r) => (
-                    <div key={r.direction} className="flex flex-col items-center gap-1">
-                      <ResultCanvas result={r} size={64} />
-                      <div className="text-[10px] text-gray-600">{r.direction * 45}°</div>
-                    </div>
-                  ))}
+                  {thumbs.map((r) => {
+                    // 该部件各有效骨骼的关节投影位置（烘焙帧像素 → 64px 预览坐标）
+                    const markers = (sixPart!.partBoneMap[part] ?? [])
+                      .filter((gi) => sixPart!.merge.effectiveIndex[gi] === gi)
+                      .map((gi) => sixPart!.bones[gi]?.jointPixels?.[r.direction])
+                      .filter((jp): jp is { x: number; y: number } => !!jp)
+                      .map((jp) => ({ x: (jp.x / sixPart!.width) * 64, y: (jp.y / sixPart!.height) * 64 }));
+                    return (
+                      <div key={r.direction} className="flex flex-col items-center gap-1">
+                        <ResultCanvas result={r} size={64} markers={markers} />
+                        <div className="text-[10px] text-gray-600">{r.direction * 45}°</div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ))}
