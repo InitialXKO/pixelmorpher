@@ -872,6 +872,7 @@ export async function bakeModelTwoPass(
     const camera = new THREE.OrthographicCamera(-frustum, frustum, frustum, -frustum, 0.1, 20);
     camera.position.set(0, 1.1, 4);
     camera.lookAt(0, 0, 0);
+    camera.updateMatrixWorld(true); // 必需：首个方向（d=0/南向）的关节投影在首遍 render 前，需有效视图矩阵
 
     const rt = new THREE.WebGLRenderTarget(size, size, { samples: 0, depthBuffer: true });
     const readBuffer = new Uint8Array(size * size * 4);

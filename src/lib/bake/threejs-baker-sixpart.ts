@@ -1133,6 +1133,7 @@ export async function bakeSixParts(
       const camera = new THREE.OrthographicCamera(-half, half, half, -half, 0.1, 20);
       camera.position.set(pcenter.x, pcenter.y + half * 0.25, pcenter.z + 4);
       camera.lookAt(pcenter);
+      camera.updateMatrixWorld(true); // 必需：lookAt 不更新矩阵，首个方向（d=0/南向）的关节投影会用到过期的视图矩阵（首遍 render 后才被动更新，所以只有南向错）
 
       // 关节投影（此部件的 bones，每方向）
       const projV = new THREE.Vector3();
