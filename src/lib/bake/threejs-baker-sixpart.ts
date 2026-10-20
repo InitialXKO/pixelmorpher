@@ -276,6 +276,8 @@ interface PartTriangles {
   tris: number[][];
   /** 三角形主导 bone（全局 index） */
   triBone: number[];
+  /** 三角形在源几何中的序号（与 tris 平行）——收录顺序 ≠ 源序号，扣「其余三角」时必须用它对齐 */
+  triIndex: number[];
 }
 
 /**
@@ -291,7 +293,7 @@ export function groupTrianglesByPart(
   const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
   const triCount = index ? index.count / 3 : Math.floor(posAttr.count / 3);
   const result = new Map<PartName, PartTriangles>();
-  for (const p of ALL_PARTS) result.set(p, { tris: [], triBone: [] });
+  for (const p of ALL_PARTS) result.set(p, { tris: [], triBone: [], triIndex: [] });
 
   for (let t = 0; t < triCount; t++) {
     const a = index ? index.getX(t * 3) : t * 3;
@@ -321,6 +323,7 @@ export function groupTrianglesByPart(
       const pt = result.get(p)!;
       pt.tris.push([a, b, c]);
       pt.triBone.push(bestBone);
+      pt.triIndex.push(t);
     }
   }
   return result;
@@ -333,6 +336,8 @@ interface BuiltPartView {
   source: BakedMesh;
   /** 本部件在此源几何上的三角形索引序列（原顶点序，本部件的「剔除」结果即这份视图） */
   index: number[];
+  /** index 里每个三角形在源几何中的序号（与 index 的三元组平行） */
+  triIndices: number[];
 }
 
 interface BuiltPart {
@@ -455,7 +460,7 @@ export function buildPartGeometry(
     if (pt.tris.length === 0) continue;
     const index: number[] = [];
     for (const [a, b, c] of pt.tris) index.push(a, b, c);
-    views.push({ source: bm, index });
+    views.push({ source: bm, index, triIndices: pt.triIndex });
     rings.push(...extractHoleRings(bm, pt.tris, pt.triBone));
   }
   if (views.length === 0) return null;
@@ -1036,11 +1041,11 @@ export async function bakeSixParts(
       const psize = pbox.getSize(new THREE.Vector3());
       const half = Math.max(psize.x, psize.y) / 2 * partPadding;
 
-      // 本部件自己的三角形键集（剔除判定里不当作其他部位）
+      // 本部件自己的三角形键集（源序号口径；「其余三角」构建时据此扣除）
       const ownTriKeys = new Set<string>();
       for (const view of bp.views) {
         const mi = bakedMeshes.indexOf(view.source);
-        for (let t = 0; t < view.index.length / 3; t++) ownTriKeys.add(`${mi}:${t}`);
+        for (const t of view.triIndices) ownTriKeys.add(`${mi}:${t}`);
       }
 
       // —— 破洞的同遍渲染组（无破洞的部件不建）：判定搬进渲染遍内部，不做渲染前扫描。
@@ -1086,13 +1091,15 @@ export async function bakeSixParts(
         const otherGeos: { bm: BakedMesh; geo: THREE.BufferGeometry }[] = [];
         bakedMeshes.forEach((bm, mi) => {
           const idx: number[] = [];
+          const srcTris: number[] = [];
           const triCount = Math.floor((bm.geometry.getIndex()?.count ?? bm.geometry.getAttribute('position').count) / 3);
           for (let t = 0; t < triCount; t++) {
             if (ownTriKeys.has(`${mi}:${t}`)) continue;
             const [a, b, c] = triVertsOf(bm, t);
             idx.push(a, b, c);
+            srcTris.push(t);
           }
-          if (idx.length > 0) otherGeos.push({ bm, geo: makeViewGeometry({ source: bm, index: idx }) });
+          if (idx.length > 0) otherGeos.push({ bm, geo: makeViewGeometry({ source: bm, index: idx, triIndices: srcTris }) });
         });
         // 颜色组：源材质 toon + stencil 门控（≠0 才出片元）
         const otherColorMeshes = otherGeos.map(({ bm, geo }) => {
