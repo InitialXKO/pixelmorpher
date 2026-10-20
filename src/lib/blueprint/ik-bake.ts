@@ -7,7 +7,8 @@
  */
 import type { BlueprintGraph, BlueprintNode } from './ir';
 import type { Character, IKChain } from '../unified-types';
-import { subToPx } from '../unified-types';
+import { subToPx, resolveChainTarget3D } from '../unified-types';
+import { useProjectStore } from '../store';
 import type { WorldTransform } from '../unified-render';
 
 /**
@@ -68,6 +69,9 @@ export function ikChainsToBlueprint(
     if (!baseT) continue;
     const baseX = subToPx(baseT.worldX);
     const baseY = subToPx(baseT.worldY);
+    // 目标走 target3D 解析（原点空间）；旧实现直读 chain.target（旧义含中心）与 base 空间错位
+    const store = useProjectStore.getState();
+    const t3 = resolveChainTarget3D(chain, store.canvasWidth, store.canvasHeight);
 
     const ikNodeId = `ik_${chain.id}`;
 
@@ -81,8 +85,8 @@ export function ikChainsToBlueprint(
           // Default to chain.target if not connected
         },
         params: {
-          targetX: chain.target.x,
-          targetY: chain.target.y,
+          targetX: t3.x,
+          targetY: t3.y,
           len1: lengths[0],
           len2: lengths[1],
           baseX,
@@ -125,8 +129,8 @@ export function ikChainsToBlueprint(
         type: 'ik_fabrik',
         inputs: {},
         params: {
-          targetX: chain.target.x,
-          targetY: chain.target.y,
+          targetX: t3.x,
+          targetY: t3.y,
           lengths: lengths.join(','),
           baseX,
           baseY,

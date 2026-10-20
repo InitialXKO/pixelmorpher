@@ -692,11 +692,15 @@ export const puppetHandler: ToolHandler = {
           if (!chain) continue;
           const jointIds = getIKChainJointIds(ch, chain.rootNodeId, chain.endNodeId);
           if (jointIds.length >= 2) {
-            const { tipX, tipY } = computeIKChainTip(ch, jointIds, chain.tipLength);
-            // tip 是原点中心空间；chain.target 的存盘口径为含画布中心空间，写入时补中心
+            const { tipX, tipY, tipZ } = computeIKChainTip(ch, jointIds, chain.tipLength);
+            // tip 是原点中心 3D：求解目标写 target3D；chain.target 保持旧义镜像不变式（+画布中心）
             project.updateUnifiedCharacter(ch.id, {
               ikChains: ch.ikChains!.map((c) =>
-                c.id === chainId ? { ...c, target: { x: tipX + project.canvasWidth / 2, y: tipY + project.canvasHeight / 2 } } : c,
+                c.id === chainId ? {
+                  ...c,
+                  target: { x: tipX + project.canvasWidth / 2, y: tipY + project.canvasHeight / 2 },
+                  target3D: { x: tipX, y: tipY, z: tipZ },
+                } : c,
               ),
             });
           }

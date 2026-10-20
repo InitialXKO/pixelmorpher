@@ -694,8 +694,17 @@ export interface IKChain {
   rootNodeId: string;
   /** End effector node ID (e.g., hand) */
   endNodeId: string;
-  /** IK target in character space (static fallback) */
+  /**
+   * 旧义 2D 目标（历史字段）：含画布中心的画布空间像素。
+   * 仅作旧数据种子与旧义镜像——求解禁止读它，一律走 target3D（见 resolveChainTarget3D）。
+   * 写入方须保持镜像不变式：target = target3D + (canvasW/2, canvasH/2)。
+   */
   target: { x: number; y: number };
+  /**
+   * 求解唯一输入：原点中心世界空间的 3D 目标（像素，z 向外为正）。
+   * 缺失（旧项目）时由 resolveChainTarget3D 从 target 换算/填充：减画布中心、z=0。
+   */
+  target3D?: { x: number; y: number; z: number };
   /**
    * Optional blueprint driving the target dynamically.
    * Evaluated each frame; outputs {x, y} or {targetX, targetY}.
@@ -710,6 +719,26 @@ export interface IKChain {
   tipLength?: number;
   /** Whether this chain is active */
   enabled: boolean;
+}
+
+/**
+ * IK 链求解目标的唯一解析口径：返回原点中心世界空间的 3D 目标（像素）。
+ * - target3D 存在 → 直接用；
+ * - 缺失（旧项目）→ 从旧义 target 换算：减画布中心、z=0（旧求解从未约束 z，
+ *   旧目标的深度不存在，z=0 与旧行为逐值等价）。
+ * 求解、绘制、烘焙、编辑器一律走这里，不得直读 chain.target 求解。
+ */
+export function resolveChainTarget3D(
+  chain: IKChain,
+  canvasWidth: number,
+  canvasHeight: number,
+): { x: number; y: number; z: number } {
+  if (chain.target3D) return chain.target3D;
+  return {
+    x: chain.target.x - canvasWidth / 2,
+    y: chain.target.y - canvasHeight / 2,
+    z: 0,
+  };
 }
 
 export interface Character {

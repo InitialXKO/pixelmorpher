@@ -10,6 +10,7 @@ import { Plus, Trash2, Power, Network } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useProjectStore } from '@/lib/store';
 import { computeIKChainTip, getIKChainJointIds } from '@/lib/ik-tip';
+import { resolveChainTarget3D } from '@/lib/unified-types';
 import type { Character, IKChain } from '@/lib/unified-types';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 import BlueprintEditor from './BlueprintEditor';
@@ -26,10 +27,12 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
 
   /** 为链创建默认目标蓝图（源变换节点 + 输出节点） */
   const createDefaultTargetBlueprint = (chain: IKChain): BlueprintGraph => {
-    // 世界坐标转局部（蓝图里用局部更直观）
+    // 蓝图里用原点中心局部坐标（与 target3D 同空间，直接取）
     const store = useProjectStore.getState();
-    const lx = chain.target.x - store.canvasWidth / 2;
-    const ly = chain.target.y - store.canvasHeight / 2;
+    const t3 = resolveChainTarget3D(chain, store.canvasWidth, store.canvasHeight);
+    const lx = t3.x;
+    const ly = t3.y;
+    const lz = t3.z;
     const sourceId = `target_src_${chain.id}`;
     const outId = `target_out_${chain.id}`;
     return {
@@ -42,6 +45,7 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
           params: {
             translateX: lx,
             translateY: ly,
+            translateZ: lz,
             _label: '源-拖放位置',
           },
           ui: { x: 50, y: 100 },
@@ -52,6 +56,7 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
           inputs: {
             translateX: { nodeId: sourceId, output: 'translateX' },
             translateY: { nodeId: sourceId, output: 'translateY' },
+            translateZ: { nodeId: sourceId, output: 'translateZ' },
           },
           params: {
             _label: '输出-目标点',
@@ -111,8 +116,8 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     // 2bone = 2 根骨 = 3 关节；其他（1 骨/多骨）走 fabrik
     const solver = chainJoints.length === 3 ? '2bone' : 'fabrik';
     const endNode = character.nodes[endId];
-    const { tipX, tipY, tipLength } = computeIKChainTip(character, chainJoints);
-    // tip 是原点中心空间；chain.target 的存盘口径为含画布中心空间，写入时补中心
+    const { tipX, tipY, tipZ, tipLength } = computeIKChainTip(character, chainJoints);
+    // tip 是原点中心 3D：求解目标写 target3D；chain.target 保持旧义镜像不变式（+画布中心）
     const tipStore = useProjectStore.getState();
     const newChain: IKChain = {
       id: `ik_${Date.now().toString(36)}`,
@@ -120,6 +125,7 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
       rootNodeId: rootId,
       endNodeId: endId,
       target: { x: tipX + tipStore.canvasWidth / 2, y: tipY + tipStore.canvasHeight / 2 },
+      target3D: { x: tipX, y: tipY, z: tipZ },
       solver,
       bendDir: 1,
       tipLength,
@@ -143,10 +149,14 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     if (willEnable) {
       const jointIds = getIKChainJointIds(character, chain.rootNodeId, chain.endNodeId);
       if (jointIds.length >= 2) {
-        const { tipX, tipY } = computeIKChainTip(character, jointIds, chain.tipLength);
-        // 保留用户已调过的 tipLength，只更新目标点（tip 原点空间 → target 含中心口径，补中心）
+        const { tipX, tipY, tipZ } = computeIKChainTip(character, jointIds, chain.tipLength);
+        // 保留用户已调过的 tipLength，只更新目标点：target3D 写原点 3D，target 保持旧义镜像
         const st = useProjectStore.getState();
-        patch = { ...patch, target: { x: tipX + st.canvasWidth / 2, y: tipY + st.canvasHeight / 2 } };
+        patch = {
+          ...patch,
+          target: { x: tipX + st.canvasWidth / 2, y: tipY + st.canvasHeight / 2 },
+          target3D: { x: tipX, y: tipY, z: tipZ },
+        };
       }
     }
     updateUnifiedCharacter(character.id, {
@@ -332,7 +342,7 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
                 <span className="text-sm text-gray-200">
                   {chain.name} — 目标点蓝图
                   <span className="text-xs text-gray-500 ml-2">
-                    用 translateX/translateY 输出目标坐标（局部坐标）
+                    用 translateX/translateY/translateZ 输出目标坐标（原点中心局部坐标）
                   </span>
                 </span>
                 <div className="flex items-center gap-2">

@@ -23,6 +23,7 @@ import type {
 } from './unified-types';
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
+  resolveChainTarget3D,
 } from './unified-types';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
@@ -101,6 +102,7 @@ let blueprintLastFrame = -1;
 export interface BlueprintTransformResult {
   translateX: number;
   translateY: number;
+  translateZ: number;
   rotation: number;
   scaleX: number;
   scaleY: number;
@@ -124,7 +126,7 @@ export function evaluateBlueprintTransforms(
 
   const result = new Map<string, BlueprintTransformResult>();
   const nodeOutputs = new Map<string, {
-    rotation: number; translateX: number; translateY: number;
+    rotation: number; translateX: number; translateY: number; translateZ: number;
     scaleX: number; scaleY: number; skewX: number; skewY: number; zIndex: number;
   }>();
 
@@ -148,6 +150,7 @@ export function evaluateBlueprintTransforms(
         result.set(nodeId, {
           translateX: t.translateX,
           translateY: t.translateY,
+          translateZ: t.translateZ ?? 0,
           rotation: t.rotation,
           scaleX: t.scaleX,
           scaleY: t.scaleY,
@@ -159,6 +162,7 @@ export function evaluateBlueprintTransforms(
             rotation: t.rotation,
             translateX: t.translateX,
             translateY: t.translateY,
+            translateZ: t.translateZ ?? 0,
             scaleX: t.scaleX,
             scaleY: t.scaleY,
             skewX: t.skewX,
@@ -301,13 +305,74 @@ function applyBakedIKBlueprint(
 }
 
 /**
- * Apply a single IK chain.
+ * IK 深度分布：在保持每段 3D 长度（FK 欧氏长度）的前提下，为各段深度增量选符号，
+ * 使末关节深度尽量到达目标深度，次优目标是深度剖面尽量贴近 FK。
+ * 原理：视平面求解保持每段的视平面长度 = FK 视平面长度，故每段深度增量幅值
+ * |Δd_i| = sqrt(L3D_i² - L_i²) 被骨长唯一确定（恰等于 FK 的 |Δdepth_i|），
+ * 自由度只剩符号。段数 ≤12 时全枚举（2^k），更多时贪心翻转。
+ * FK 符号组合本身是候选之一：目标深度 == FK 末端深度时结果恒为 FK 剖面（零改动）。
+ */
+function solveDepthProfile(
+  fkDepths: number[],
+  capacities: number[],
+  targetDepth: number,
+): number[] {
+  const k = capacities.length;
+  if (k === 0) return fkDepths.slice();
+  const fkSigns: number[] = capacities.map((c, i) => {
+    const d = fkDepths[i + 1] - fkDepths[i];
+    return d < 0 ? -1 : 1;
+  });
+  const evaluate = (signs: number[]): { depths: number[]; err: number; dev: number } => {
+    const depths = [fkDepths[0]];
+    for (let i = 0; i < k; i++) depths.push(depths[i] + signs[i] * capacities[i]);
+    let dev = 0;
+    for (let i = 0; i <= k; i++) dev += Math.abs(depths[i] - fkDepths[i]);
+    return { depths, err: Math.abs(depths[k] - targetDepth), dev };
+  };
+  let best = evaluate(fkSigns);
+  if (k <= 12) {
+    const total = 1 << k;
+    for (let mask = 1; mask < total; mask++) {
+      const signs = fkSigns.map((s, i) => ((mask >> i) & 1 ? -s : s));
+      const cand = evaluate(signs);
+      if (cand.err < best.err - 1e-9 || (Math.abs(cand.err - best.err) <= 1e-9 && cand.dev < best.dev - 1e-9)) {
+        best = cand;
+      }
+    }
+  } else {
+    // 贪心：反复翻转最能减小末端误差的单个符号
+    let signs = fkSigns.slice();
+    for (let iter = 0; iter < k; iter++) {
+      let improved = false;
+      for (let i = 0; i < k; i++) {
+        const trial = signs.slice();
+        trial[i] = -trial[i];
+        const cand = evaluate(trial);
+        if (cand.err < best.err - 1e-9) {
+          best = cand;
+          signs = trial;
+          improved = true;
+        }
+      }
+      if (!improved) break;
+    }
+  }
+  return best.depths;
+}
+
+/**
+ * Apply a single IK chain.（视平面求解 + 深度写回）
  *
- * 1. Walk from rootNodeId to endNodeId to get the joint chain.
- * 2. Get bone lengths from FK joint positions.
- * 3. Solve IK for the target.
- * 4. Override joint angles in transforms map.
- * 5. Recompute downstream transforms.
+ * 运动学事实（与 computeChildTransforms 的 rotateInViewPlane 一致）：关节的
+ * 视平面位置由祖先角度决定，深度（垂直视平面的分量）不被角度改变。因此：
+ * 1. 关节链与目标（target3D）投影到链根关节朝向的视平面 (u, v)，深度记 d；
+ * 2. (u, v) 内走旧 2D 求解（与历史实现同路径：蓝图求值器 ik_2bone/ik_fabrik，
+ *    视平面骨长、沿末关节世界角的视平面尖端、角度合成位置）——南向时 (u,v)=(x,y)、
+ *    d=z，整条链退化为旧行为逐值一致；
+ * 3. 深度由 solveDepthProfile 分布（保持每段 3D 骨长），末端深度追目标深度；
+ * 4. (u, v, d) 反投影回 3D 写回 transforms（含 worldZ）+ 世界角（视平面角，即求解角）。
+ * 链外后代仍是 IK 前 FK 结果（与旧实现一致，旧实现同样只重算链关节）。
  */
 function applyIKChain(
   character: Character,
@@ -334,22 +399,47 @@ function applyIKChain(
   if (jointIds.length < 2) return;
   if (jointIds[0] !== chain.rootNodeId) return;
 
-  // Get bone lengths from FK positions
-  const joints: { x: number; y: number; angle: number }[] = [];
-  for (const id of jointIds) {
+  // FK 关节（像素，原点中心世界空间）
+  const fk = jointIds.map((id) => {
     const t = transforms.get(id);
-    if (!t) return;
-    joints.push({ x: subToPx(t.worldX), y: subToPx(t.worldY), angle: t.worldAngle });
-  }
+    if (!t) return null;
+    return { x: subToPx(t.worldX), y: subToPx(t.worldY), z: subToPx(t.worldZ), angle: t.worldAngle, variant: t.variantIndex };
+  });
+  if (fk.some((j) => j === null)) return;
+  const fkJoints = fk as { x: number; y: number; z: number; angle: number; variant: DirectionIndex }[];
 
+  // 求解视平面：链根关节的朝向
+  const dir = fkJoints[0].variant;
+  const theta = (((dir + 2) % 8) * Math.PI) / 4;
+  const cosT = Math.cos(theta);
+  const sinT = Math.sin(theta);
+  const toView = (x: number, y: number, z: number) => ({
+    u: x * cosT + z * sinT,
+    v: y,
+    d: -x * sinT + z * cosT,
+  });
+  const fromView = (u: number, v: number, d: number) => ({
+    x: u * cosT - d * sinT,
+    y: v,
+    z: u * sinT + d * cosT,
+  });
+
+  const view = fkJoints.map((j) => toView(j.x, j.y, j.z));
+  const nReal = jointIds.length;
+
+  // 视平面骨长 + 3D 骨长（深度容量用）
   const lengths: number[] = [];
-  for (let i = 0; i < joints.length - 1; i++) {
-    lengths.push(Math.hypot(joints[i + 1].x - joints[i].x, joints[i + 1].y - joints[i].y));
+  const lengths3D: number[] = [];
+  for (let i = 0; i < nReal - 1; i++) {
+    lengths.push(Math.hypot(view[i + 1].u - view[i].u, view[i + 1].v - view[i].v));
+    lengths3D.push(Math.hypot(
+      fkJoints[i + 1].x - fkJoints[i].x,
+      fkJoints[i + 1].y - fkJoints[i].y,
+      fkJoints[i + 1].z - fkJoints[i].z,
+    ));
   }
 
-  // 末端尖端：IK 控制的是末节尖端，不是关节轴心
-  // 在链末加虚拟尖端关节，长度为 tipLength（默认取末关节精灵 Y 轴长度）
-  // 尖端方向用末关节自己的世界角度，沿精灵局部 Y 轴（骨方向）
+  // 末端尖端（视平面内沿末关节世界角方向，深度沿用末关节）——与旧 2D 公式同构
   let tipLength = chain.tipLength ?? 0;
   if (tipLength <= 0) {
     const endNode = character.nodes[chain.endNodeId];
@@ -361,59 +451,46 @@ function applyIKChain(
       tipLength = lengths[lengths.length - 1];
     }
   }
-  const realJointCount = jointIds.length;
-  if (tipLength > 1e-6 && joints.length >= 1) {
-    const lastJ = joints[joints.length - 1];
-    const rad = (lastJ.angle * Math.PI) / 180;
-    joints.push({
-      x: lastJ.x + -Math.sin(rad) * tipLength,
-      y: lastJ.y + Math.cos(rad) * tipLength,
-      angle: lastJ.angle,
-    });
+  if (tipLength > 1e-6) {
+    const last = view[nReal - 1];
+    const rad = (fkJoints[nReal - 1].angle * Math.PI) / 180;
+    view.push({ u: last.u + -Math.sin(rad) * tipLength, v: last.v + Math.cos(rad) * tipLength, d: last.d });
     lengths.push(tipLength);
+    lengths3D.push(tipLength);
   }
 
-  // Solve IK via Blueprint IR.
-  // Construct a blueprint graph with the IK node and evaluate it,
-  // instead of calling solvers directly. This keeps BlueprintGraph
-  // as the single IR for all kinematics.
-  // 关节 transforms 是原点中心空间（3D 管线），而目标约定为含画布中心空间
-  // （chain.target 存盘口径、蓝图 translate+中心，见下）。求解器只消费
-  // (target − base) 向量与骨长（骨长由关节差值得到，平移不变），
-  // 故把基点换到目标空间求解；角度写回走 transforms 自身 FK，不受影响。
-  const baseX = joints[0].x + canvasWidth / 2;
-  const baseY = joints[0].y + canvasHeight / 2;
-  let angles: number[];
-
-  // 目标点：优先用 targetBlueprint 动态求值（步态/正弦等修改器驱动），
-  // 没有则用静态 chain.target
-  // targetBlueprint 的输出节点应为 transform 类型，用 translateX/translateY 做目标坐标
-  // 蓝图里是局部坐标（相对画布中心），转世界坐标（+画布中心偏移）
-  let targetX = chain.target.x;
-  let targetY = chain.target.y;
+  // 目标：静态 = target3D；蓝图 = translateX/Y/Z 逐分量覆盖（均原点中心世界空间）
+  // chain.target（旧义含画布中心）禁止直读——换算只在 resolveChainTarget3D 里发生。
+  const staticT = resolveChainTarget3D(chain, canvasWidth, canvasHeight);
+  let targetX = staticT.x;
+  let targetY = staticT.y;
+  let targetZ = staticT.z;
   if (chain.targetBlueprint) {
     try {
       const tbCtx: BlueprintEvalContext = { frame, frameRate, vars: {} };
       const tbResult = evaluateBlueprint(chain.targetBlueprint, tbCtx);
-      if (Number.isFinite(tbResult.translateX)) targetX = tbResult.translateX + canvasWidth / 2;
-      if (Number.isFinite(tbResult.translateY)) targetY = tbResult.translateY + canvasHeight / 2;
+      if (Number.isFinite(tbResult.translateX)) targetX = tbResult.translateX;
+      if (Number.isFinite(tbResult.translateY)) targetY = tbResult.translateY;
+      if (Number.isFinite(tbResult.translateZ)) targetZ = tbResult.translateZ;
     } catch {
       // 蓝图求值失败时回退到静态目标
     }
   }
+  const tView = toView(targetX, targetY, targetZ);
 
-  const ikNode: BlueprintNode = chain.solver === '2bone' && lengths.length === 2
+  // 视平面内求解：经蓝图求值器注册表（与历史实现同一路径，单 IR）
+  const baseU = view[0].u;
+  const baseV = view[0].v;
+  const is2Bone = chain.solver === '2bone' && lengths.length === 2;
+  const ikNode: BlueprintNode = is2Bone
     ? {
         id: 'ik',
         type: 'ik_2bone',
         inputs: {},
         params: {
-          targetX,
-          targetY,
-          len1: lengths[0],
-          len2: lengths[1],
-          baseX,
-          baseY,
+          targetX: tView.u, targetY: tView.v,
+          len1: lengths[0], len2: lengths[1],
+          baseX: baseU, baseY: baseV,
           bendDir: chain.bendDir ?? 1,
         },
       }
@@ -422,163 +499,66 @@ function applyIKChain(
         type: 'ik_fabrik',
         inputs: {},
         params: {
-          targetX,
-          targetY,
+          targetX: tView.u, targetY: tView.v,
           lengths: lengths.join(','),
-          baseX,
-          baseY,
+          baseX: baseU, baseY: baseV,
         },
       };
-
-  // Evaluate the IK node through the blueprint evaluator registry
   const evaluator = EVALUATORS[ikNode.type];
   if (!evaluator) return;
   const ctx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: {} };
   const ikResult = evaluator(ikNode, {}, ctx);
 
-  // 求解器返回 X 轴角（atan2），骨骼系统用 Y 轴角（worldAngle），减 90° 转换
+  // 求解器返回 X 轴角，骨骼系统用 Y 轴角（worldAngle），减 90° 转换（旧口径）
   const toYAxis = (xAngle: number): number => xAngle - 90;
-
-  if (ikNode.type === 'ik_2bone') {
+  let jointAngles: number[];
+  if (is2Bone) {
     const angle1 = toYAxis(asNumber(ikResult.angle1));
     const angle2 = asNumber(ikResult.angle2); // 相对角，不用转
-    // 肩、肘绝对角；腕及后续关节沿用末端角（无独立 IK 旋转）
     const elbowAbs = angle1 + angle2;
-    angles = jointIds.map((_, idx) => (idx === 0 ? angle1 : elbowAbs));
+    jointAngles = jointIds.map((_, idx) => (idx === 0 ? angle1 : elbowAbs));
   } else {
-    // ik_fabrik outputs angles as comma-separated string
     const anglesVal = ikResult.angles;
     const anglesStr = typeof anglesVal === 'object' && anglesVal !== null && 'value' in anglesVal
       ? String((anglesVal as { value: string }).value)
       : '';
     const raw = anglesStr.split(',').map(Number).filter((n) => !isNaN(n)).map(toYAxis);
+    if (raw.length === 0) return;
     // fabrik 返回 N-1 个骨角度，补到 N 个关节（末关节沿用最后骨角度）
-    angles = jointIds.map((_, idx) => raw[Math.min(idx, raw.length - 1)] ?? 0);
+    jointAngles = jointIds.map((_, idx) => raw[Math.min(idx, raw.length - 1)] ?? 0);
   }
 
-  if (angles.length === 0) return;
+  // 由角度合成视平面位置（旧写回公式，搬到 (u, v)）：骨沿 (-sin a, cos a)
+  const solvedUV: { u: number; v: number }[] = [{ u: baseU, v: baseV }];
+  for (let i = 1; i < nReal; i++) {
+    const rad = (jointAngles[i - 1] * Math.PI) / 180;
+    const prev = solvedUV[i - 1];
+    solvedUV.push({
+      u: prev.u + -Math.sin(rad) * lengths[i - 1],
+      v: prev.v + Math.cos(rad) * lengths[i - 1],
+    });
+  }
 
-  // Override joint angles in transforms
-  // Note: angles are absolute in character space. We need to convert to
-  // local angles relative to parent.
-  for (let i = 0; i < jointIds.length; i++) {
+  // 深度分布（只动真实段；尖端段深度容量为 0，尖端深度 = 末关节深度）
+  const fkDepths = view.slice(0, nReal).map((p) => p.d);
+  const capacities: number[] = [];
+  for (let i = 0; i < nReal - 1; i++) {
+    capacities.push(Math.sqrt(Math.max(0, lengths3D[i] * lengths3D[i] - lengths[i] * lengths[i])));
+  }
+  const solvedDepths = solveDepthProfile(fkDepths, capacities, tView.d);
+
+  // 写回：(u, v, d) 反投影为 3D（含 worldZ）+ 世界角
+  for (let i = 0; i < nReal; i++) {
     const t = transforms.get(jointIds[i]);
     if (!t) continue;
-
-    // For root joint, local angle = absolute angle - parent world angle
-    // For others, local angle = absolute angle - parent absolute angle
-    let parentWorldAngle = 0;
-    if (i === 0) {
-      const node = character.nodes[jointIds[i]];
-      if (node?.parentId) {
-        const parentT = transforms.get(node.parentId);
-        if (parentT) parentWorldAngle = parentT.worldAngle;
-      }
-    } else {
-      parentWorldAngle = angles[i - 1];
-    }
-
-    const localAngle = angles[i] - parentWorldAngle;
-    t.worldAngle = angles[i];
-
-    // Store the local angle override for recomputation
-    // (we'll recompute children positions based on new angles)
-  }
-
-  // Recompute downstream transforms for the chain subtree
-  // Start from root joint's parent, recompute the chain and its children
-  const rootNode = character.nodes[chain.rootNodeId];
-  if (!rootNode?.parentId) {
-    // Root is character root: recompute from scratch is complex,
-    // for now just update positions along the chain
-    // boneLengths 取前 N-1 个（不含虚拟尖端）
-    const fkBoneLengths = lengths.slice(0, jointIds.length - 1);
-    updateChainPositions(character, jointIds, angles, transforms, fkBoneLengths);
-  } else {
-    const parentT = transforms.get(rootNode.parentId);
-    if (parentT) {
-      // Recompute chain joints from parent
-      recomputeChainFromParent(character, jointIds, angles, parentT, transforms, lengths.slice(0, jointIds.length - 1));
-    }
+    const p = fromView(solvedUV[i].u, solvedUV[i].v, solvedDepths[i]);
+    t.worldX = pxToSub(p.x) as SubPixel;
+    t.worldY = pxToSub(p.y) as SubPixel;
+    t.worldZ = pxToSub(p.z) as SubPixel;
+    t.worldAngle = jointAngles[i];
   }
 }
 
-/**
- * Update joint positions along the IK chain given solved angles.
- * Used when chain root is the character root.
- */
-function updateChainPositions(
-  character: Character,
-  jointIds: string[],
-  angles: number[],
-  transforms: Map<string, WorldTransform>,
-  boneLengths: number[],
-): void {
-  for (let i = 1; i < jointIds.length; i++) {
-    const prevT = transforms.get(jointIds[i - 1]);
-    const currT = transforms.get(jointIds[i]);
-    if (!prevT || !currT) continue;
-
-    const node = character.nodes[jointIds[i]];
-    if (!node) continue;
-
-    // 用预计算的 FK 骨长（不能从已改过的 transforms 现算）
-    const origDist = boneLengths[i - 1] ?? 0;
-    if (origDist <= 1e-6) continue;
-
-    // 骨沿局部 Y 轴：方向为 (-sin θ, cos θ)
-    const rad = (angles[i - 1] * Math.PI) / 180;
-    const newX = subToPx(prevT.worldX) + -Math.sin(rad) * origDist;
-    const newY = subToPx(prevT.worldY) + Math.cos(rad) * origDist;
-
-    currT.worldX = newX * 16 as SubPixel;
-    currT.worldY = newY * 16 as SubPixel;
-    currT.worldAngle = angles[i];
-  }
-}
-
-/**
- * Recompute chain joint transforms from parent world transform.
- */
-function recomputeChainFromParent(
-  character: Character,
-  jointIds: string[],
-  angles: number[],
-  parentT: WorldTransform,
-  transforms: Map<string, WorldTransform>,
-  boneLengths: number[],
-): void {
-  let px = subToPx(parentT.worldX);
-  let py = subToPx(parentT.worldY);
-  let parentAngle = parentT.worldAngle;
-
-  for (let i = 0; i < jointIds.length; i++) {
-    const t = transforms.get(jointIds[i]);
-    const node = character.nodes[jointIds[i]];
-    if (!t || !node) continue;
-
-    // 骨长用预计算的 FK 长度：boneLengths[i-1] 是 parent→当前关节的骨
-    // （i=0 是根，不需要骨长）
-    const boneLen = i > 0 ? (boneLengths[i - 1] ?? 0) : 0;
-
-    // Update world angle
-    t.worldAngle = angles[i];
-
-    // Update position (except for root, which keeps its FK position)
-    if (i > 0) {
-      // 骨沿局部 Y 轴
-      const rad = (angles[i - 1] * Math.PI) / 180;
-      px = px + -Math.sin(rad) * boneLen;
-      py = py + Math.cos(rad) * boneLen;
-      t.worldX = (px * 16) as SubPixel;
-      t.worldY = (py * 16) as SubPixel;
-    } else {
-      px = subToPx(t.worldX);
-      py = subToPx(t.worldY);
-    }
-    parentAngle = angles[i];
-  }
-}
 
 function computeChildTransforms(
   parentNode: Node,
@@ -736,7 +716,8 @@ function interpolateTransform(
     return {
       x: kfX + pxToSub(bpT.translateX),
       y: kfY + pxToSub(bpT.translateY),
-      z: kfZ,
+      // 蓝图 translateZ 是节点的程序化 z 通道（z 无关键帧轨道，这是唯一的动态 z 来源）
+      z: kfZ + pxToSub(bpT.translateZ ?? 0),
       angle: kfAngle + bpT.rotation,
       stretch: kfStretch * bpT.scaleY,
       scaleX: bpT.scaleX,

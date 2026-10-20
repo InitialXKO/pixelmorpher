@@ -460,6 +460,21 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       };
     }
     const unifiedCharacters = file.project.unifiedCharacters || {};
+    // IK target3D 填充：旧项目链只有 target（旧义含画布中心），按文件画布尺寸换算为
+    // 原点中心 3D 目标（z=0，旧求解未约束深度）。填充后 target 原样保留作旧义镜像。
+    const fileCanvasW = file.project.canvasWidth ?? 256;
+    const fileCanvasH = file.project.canvasHeight ?? 256;
+    for (const ch of Object.values(unifiedCharacters) as any[]) {
+      for (const chain of ch?.ikChains ?? []) {
+        if (chain && !chain.target3D && chain.target) {
+          chain.target3D = {
+            x: chain.target.x - fileCanvasW / 2,
+            y: chain.target.y - fileCanvasH / 2,
+            z: 0,
+          };
+        }
+      }
+    }
     for (const ch of Object.values(unifiedCharacters) as any[]) {
       if (!ch?.sprites) continue;
       for (const [sid, sp] of Object.entries(ch.sprites) as [string, any][]) {

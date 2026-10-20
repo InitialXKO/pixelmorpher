@@ -440,7 +440,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // 输入: targetX/targetY（父空间目标点）, len1/len2（骨骼长度）,
   //       baseX/baseY（基点，默认0,0）, bendDir（弯曲方向 +1/-1，默认+1）
   // 输出: angle1（肩关节绝对角度）, angle2（肘关节相对角度）, reachable（是否可达）
-  ik_2bone: (n, i) => {
+  ik_2bone: (n, i): Record<string, BlueprintValue> => {
     const targetX = asNumber(i.targetX ?? num(Number(n.params.targetX ?? 0)));
     const targetY = asNumber(i.targetY ?? num(Number(n.params.targetY ?? 0)));
     const len1 = asNumber(i.len1 ?? num(Number(n.params.len1 ?? 50)));
@@ -460,7 +460,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // 输入: targetX/targetY, lengths（骨骼长度数组，逗号分隔字符串或数组）,
   //       baseX/baseY, iterations（默认10）, tolerance（默认0.5）
   // 输出: angles（关节角度数组，逗号分隔字符串）, converged（是否收敛）
-  ik_fabrik: (n, i) => {
+  ik_fabrik: (n, i): Record<string, BlueprintValue> => {
     const targetX = asNumber(i.targetX ?? num(Number(n.params.targetX ?? 0)));
     const targetY = asNumber(i.targetY ?? num(Number(n.params.targetY ?? 0)));
     const lengthsRaw = i.lengths ?? n.params.lengths ?? '40,30,20';
@@ -821,12 +821,14 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // transform: 把各分量组合成最终变换
   // input 优先，没有 input 时用 params 做默认值
   transform: (n, i) => ({
-    translateX: num(asNumber(i.translateX ?? n.params.translateX ?? num(0))),
-    translateY: num(asNumber(i.translateY ?? n.params.translateY ?? num(0))),
-    rotation: num(asNumber(i.rotation ?? n.params.rotation ?? num(0))),
-    scaleX: num(asNumber(i.scaleX ?? n.params.scaleX ?? num(1))),
-    scaleY: num(asNumber(i.scaleY ?? n.params.scaleY ?? num(1))),
-    zIndex: num(asNumber(i.zIndex ?? n.params.zIndex ?? num(0))),
+    // params 是裸值，须按全仓惯例 num(Number(...)) 包裹后再 asNumber（裸数字直喂 asNumber 恒 0）
+    translateX: num(asNumber(i.translateX ?? num(Number(n.params.translateX ?? 0)))),
+    translateY: num(asNumber(i.translateY ?? num(Number(n.params.translateY ?? 0)))),
+    translateZ: num(asNumber(i.translateZ ?? num(Number(n.params.translateZ ?? 0)))),
+    rotation: num(asNumber(i.rotation ?? num(Number(n.params.rotation ?? 0)))),
+    scaleX: num(asNumber(i.scaleX ?? num(Number(n.params.scaleX ?? 1)))),
+    scaleY: num(asNumber(i.scaleY ?? num(Number(n.params.scaleY ?? 1)))),
+    zIndex: num(asNumber(i.zIndex ?? num(Number(n.params.zIndex ?? 0)))),
   }),
 
   // ---- 像素形变（蓝图内处理像素，由渲染管线传入像素并取回结果） ----
@@ -2014,6 +2016,7 @@ export function evaluateBlueprint(
 ): {
   translateX: number;
   translateY: number;
+  translateZ: number;
   rotation: number;
   scaleX: number;
   scaleY: number;
@@ -2094,6 +2097,7 @@ export function evaluateBlueprint(
   return {
     translateX: out?.translateX ? asNumber(out.translateX) : 0,
     translateY: out?.translateY ? asNumber(out.translateY) : 0,
+    translateZ: out?.translateZ ? asNumber(out.translateZ) : 0,
     rotation: out?.rotation ? asNumber(out.rotation) : 0,
     scaleX: out?.scaleX ? asNumber(out.scaleX) : 1,
     scaleY: out?.scaleY ? asNumber(out.scaleY) : 1,

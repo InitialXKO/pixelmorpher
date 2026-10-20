@@ -7,7 +7,7 @@
 import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
 import type { RenderContext } from './canvas-render-helpers';
 import type { Character, Node } from '@/lib/unified-types';
-import { pxToSub, subToPx, projectToView, rotateInViewPlane } from '@/lib/unified-types';
+import { pxToSub, subToPx, projectToView, rotateInViewPlane, resolveChainTarget3D } from '@/lib/unified-types';
 import { computeWorldTransforms, socketOffsetTo3D } from '@/lib/unified-render';
 import { useProjectStore } from '@/lib/store';
 
@@ -27,20 +27,23 @@ export interface PuppetSkeletonOverlayParams {
 
 /**
  * 在骨架覆盖层上绘制 IK 目标手柄
- * 坐标：chain.target 为角色空间像素，(0,0) 在画布中心
+ * 坐标：静态求解目标 target3D（原点中心世界空间）按链末关节当前朝向投影到 2D，再加画布中心
  */
 export function renderIKTargetHandles(
-  rc: { ctx: CanvasRenderingContext2D; canvasWidth: number; canvasHeight: number; zoom: number; panX: number; panY: number },
+  rc: { ctx: CanvasRenderingContext2D; canvasWidth: number; canvasHeight: number; zoom: number; panX: number; panY: number; currentFrame: number },
   character: Character,
 ): void {
   const chains = character.ikChains?.filter((c) => c.enabled);
   if (!chains || chains.length === 0) return;
   const { ctx, zoom, panX, panY } = rc;
+  const worldTransforms = computeWorldTransforms(character, rc.currentFrame, rc.canvasWidth, rc.canvasHeight);
   ctx.save();
   for (const chain of chains) {
-    // chain.target 已是世界空间像素（含画布中心偏移），与 joints 对齐
-    const sx = panX + chain.target.x * zoom;
-    const sy = panY + chain.target.y * zoom;
+    const t3 = resolveChainTarget3D(chain, rc.canvasWidth, rc.canvasHeight);
+    const dir = worldTransforms.get(chain.endNodeId)?.variantIndex ?? 6;
+    const proj = projectToView(pxToSub(t3.x), pxToSub(t3.y), pxToSub(t3.z), dir);
+    const sx = panX + (rc.canvasWidth / 2 + subToPx(proj.canvasX)) * zoom;
+    const sy = panY + (rc.canvasHeight / 2 + subToPx(proj.canvasY)) * zoom;
     // 准星
     ctx.strokeStyle = '#00ff88';
     ctx.lineWidth = 1.5;
