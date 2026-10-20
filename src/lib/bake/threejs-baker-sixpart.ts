@@ -302,17 +302,8 @@ export function groupTrianglesByPart(
     const parts = new Set<PartName>();
     for (const vi of [a, b, c]) {
       const bi = baked.vertBone[vi];
-      if (bi >= 0) votes.set(bi, (votes.get(bi) ?? 0) + 1);
-      // 涉及部件按顶点的全部权重骨骼（vertBones）判定，不按主 bone：
-      // 交界带的三角形主 bone 全在一侧、但顶点带另一侧的混合权重，
-      // 只按主 bone 判会把另一侧剔空、留下破洞（与 ID 掩码按 vertBones 并集的口径一致）
-      const vbs = baked.vertBones[vi] ?? [];
-      if (vbs.length > 0) {
-        for (const gi of vbs) {
-          const p = boneToPart[gi];
-          if (p) parts.add(p);
-        }
-      } else if (bi >= 0) {
+      if (bi >= 0) {
+        votes.set(bi, (votes.get(bi) ?? 0) + 1);
         const p = boneToPart[bi];
         if (p) parts.add(p);
       }
@@ -395,6 +386,19 @@ function makeViewGeometry(view: BuiltPartView): THREE.BufferGeometry {
   return g;
 }
 
+/** 由源材质派生 toon 材质（保留源材质自己的 map/color） */
+function makeToonFromSource(
+  source: THREE.Material | null,
+  gradientMap: THREE.DataTexture,
+): THREE.MeshToonMaterial {
+  const src = source as THREE.MeshStandardMaterial | null;
+  return new THREE.MeshToonMaterial({
+    color: src && 'color' in src && src.color ? (src.color as THREE.Color).clone() : new THREE.Color(0xffffff),
+    ...(src && 'map' in src && src.map ? { map: src.map as THREE.Texture } : {}),
+    gradientMap,
+  });
+}
+
 // ---- 手臂下垂 ----
 
 /**
@@ -473,6 +477,72 @@ export function droopArmPose(
   applyWorldQuaternion(bones[shoulderIdx], qDelta);
   result.rotated = true;
   return result;
+}
+
+/**
+ * 破洞填充（乙案）：本部件帧透明、整模参考帧不透明的像素 = 被其他部位三角形遮挡的破洞。
+ * 颜色取参考帧在该位置的真实颜色（遮挡者的颜色）；ID 不用遮挡者的，而是破洞所在骨骼的——
+ * 从洞周边已有 ID 像素多源 BFS 扩散赋予，全图无 ID 源时用 fallbackMask（部件根骨骼）。
+ * 返回填充像素数。
+ */
+export function fillOccludedHoles(
+  colorPixels: Uint8ClampedArray,
+  idPixels: Uint8ClampedArray | undefined,
+  occlPixels: Uint8ClampedArray,
+  size: number,
+  fallbackMask: [number, number, number],
+): number {
+  const n = size * size;
+  const holes: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    if (colorPixels[o + 3] === 0 && occlPixels[o + 3] > 0) {
+      colorPixels[o] = occlPixels[o];
+      colorPixels[o + 1] = occlPixels[o + 1];
+      colorPixels[o + 2] = occlPixels[o + 2];
+      colorPixels[o + 3] = occlPixels[o + 3];
+      holes.push(i);
+    }
+  }
+  if (holes.length === 0 || !idPixels) return holes.length;
+
+  // 多源 BFS：从所有已有 ID 的像素出发，给洞像素赋最近源的掩码
+  const assigned = new Uint8Array(n);
+  const queue: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (idPixels[i * 4 + 3] > 0) { assigned[i] = 1; queue.push(i); }
+  }
+  const holeSet = new Set(holes);
+  let head = 0;
+  const spread = (from: number, to: number) => {
+    if (to < 0 || to >= n || assigned[to]) return;
+    if (!holeSet.has(to)) return;
+    const fo = from * 4, to4 = to * 4;
+    idPixels[to4] = idPixels[fo];
+    idPixels[to4 + 1] = idPixels[fo + 1];
+    idPixels[to4 + 2] = idPixels[fo + 2];
+    idPixels[to4 + 3] = 255;
+    assigned[to] = 1;
+    queue.push(to);
+  };
+  while (head < queue.length) {
+    const cur = queue[head++];
+    const cx = cur % size;
+    if (cx > 0) spread(cur, cur - 1);
+    if (cx < size - 1) spread(cur, cur + 1);
+    if (cur - size >= 0) spread(cur, cur - size);
+    if (cur + size < n) spread(cur, cur + size);
+  }
+  // 仍未赋值（整图无 ID 源的极端情况）：回退掩码
+  for (const i of holes) {
+    if (assigned[i]) continue;
+    const o = i * 4;
+    idPixels[o] = fallbackMask[0];
+    idPixels[o + 1] = fallbackMask[1];
+    idPixels[o + 2] = fallbackMask[2];
+    idPixels[o + 3] = 255;
+  }
+  return holes.length;
 }
 
 // ---- 卡通渐变 ----
@@ -719,6 +789,19 @@ export async function bakeSixParts(
     };
 
     const groups: SixPartGroup[] = [];
+    // 整模参考组（遮挡破洞填充用）：与部件帧同相机渲整模，结构与 partGroup 同构
+    const fullGroup = new THREE.Group();
+    {
+      const fullInner = new THREE.Group();
+      for (const bm of bakedMeshes) {
+        const mesh = new THREE.Mesh(bm.geometry, makeToonFromSource(bm.material, gradientMap));
+        mesh.frustumCulled = false;
+        fullInner.add(mesh);
+      }
+      fullInner.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+      fullInner.scale.setScalar(scale);
+      fullGroup.add(fullInner);
+    }
     const partBoneMap = {} as Record<PartName, number[]>;
     // 单节点部件（合并后只剩一个有效骨骼）跳过 ID 遍：无需按骨骼拆分
     const partNeedsId = new Map<PartName, boolean>();
@@ -731,7 +814,7 @@ export async function bakeSixParts(
     }
     let total = 0;
     for (const pname of parts.keys()) {
-      total += 8 * (partNeedsId.get(pname) ? 2 : 1);
+      total += 8 * ((partNeedsId.get(pname) ? 2 : 1) + 1); // 颜色 + (ID) + 遮挡参考
     }
     let done = 0;
 
@@ -744,12 +827,7 @@ export async function bakeSixParts(
       // 颜色遍：部件的每个索引视图用其源材质派生 toon 材质（各自的 map/color），不再全部件共用一份
       const inner = new THREE.Group();
       for (const view of bp.views) {
-        const src = view.source.material as THREE.MeshStandardMaterial | null;
-        const toonMat = new THREE.MeshToonMaterial({
-          color: src && 'color' in src && src.color ? (src.color as THREE.Color).clone() : new THREE.Color(0xffffff),
-          ...(src && 'map' in src && src.map ? { map: src.map as THREE.Texture } : {}),
-          gradientMap,
-        });
+        const toonMat = makeToonFromSource(view.source.material, gradientMap);
         const mesh = new THREE.Mesh(makeViewGeometry(view), toonMat);
         mesh.frustumCulled = false;
         inner.add(mesh);
@@ -933,6 +1011,33 @@ export async function bakeSixParts(
           await new Promise((r) => setTimeout(r, 0));
         }
 
+        // 遮挡参考帧：同相机渲整模（找出被其他部位盖住的破洞）
+        scene.remove(partGroup);
+        scene.remove(idInner);
+        if (!scene.children.includes(fullGroup)) scene.add(fullGroup);
+        fullGroup.rotation.y = ang;
+        fullGroup.updateMatrixWorld(true);
+        renderer.clear(true, true, false);
+        renderer.render(scene, camera);
+        const occlPixels = readFlipped();
+        onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° 遮挡参考`);
+        await new Promise((r) => setTimeout(r, 0));
+        scene.remove(fullGroup);
+
+        // 破洞填充：颜色取遮挡者的真实颜色；ID 取破洞所在骨骼的（由洞周边本部件 ID 扩散）
+        {
+          let fallbackMask: [number, number, number] = [0, 0, 0];
+          if (idPixels) {
+            let rootLi = 0;
+            for (let li = 0; li < bp.partBones.length; li++) {
+              const p = parentIndex[bp.partBones[li]];
+              if (p === null || boneToPart[p] !== pname) { rootLi = li; break; }
+            }
+            fallbackMask = encodeBoneId(rootLi) as [number, number, number];
+          }
+          fillOccludedHoles(colorPixels, idPixels, occlPixels, size, fallbackMask);
+        }
+
         groups.push({ part: pname, direction: ((d + 6) % 8), colorPixels, idPixels, cameraHalf: half });
         renderer.setRenderTarget(null);
       }
@@ -952,6 +1057,10 @@ export async function bakeSixParts(
       });
     }
 
+    fullGroup.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh) (m.material as THREE.Material).dispose();
+    });
     rt.dispose();
     gradientMap.dispose();
 
