@@ -11,6 +11,7 @@ import type { Project, HistoryEntry, ProjectFile, BrushPreset, AnimationClip, Cl
 import { MODIFIER_DEFINITIONS } from '../types';
 import { _isDragActive, _dragPostStackLen, _pendingTrajectorySpriteIds, setDragActive, setDragPostStackLen, resetDragState } from './shared';
 import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '../engine';
+import { resolveChainTarget3D } from '../unified-types';
 
 const defaultProject: Project = {
   id: crypto.randomUUID(),
@@ -460,6 +461,18 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       };
     }
     const unifiedCharacters = file.project.unifiedCharacters || {};
+    // IK target3D 填充：旧项目链只有 target（链朝向画布平面上的点），按文件画布尺寸与
+    // 链根节点朝向反投影换算为原点中心 3D 目标（东向时 x 分量落入 z）。填充后 target 原样保留作旧义镜像。
+    const fileCanvasW = file.project.canvasWidth ?? 256;
+    const fileCanvasH = file.project.canvasHeight ?? 256;
+    for (const ch of Object.values(unifiedCharacters) as any[]) {
+      for (const chain of ch?.ikChains ?? []) {
+        if (chain && !chain.target3D && chain.target) {
+          const rootVariant = ch.nodes?.[chain.rootNodeId]?.transform?.variantIndex ?? 6;
+          chain.target3D = resolveChainTarget3D(chain, fileCanvasW, fileCanvasH, rootVariant);
+        }
+      }
+    }
     for (const ch of Object.values(unifiedCharacters) as any[]) {
       if (!ch?.sprites) continue;
       for (const [sid, sp] of Object.entries(ch.sprites) as [string, any][]) {

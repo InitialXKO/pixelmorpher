@@ -11,6 +11,7 @@ import type { InterpolatedNodeValues } from './types';
 import { computePartAnimationTransform } from '../animation-dispatch';
 import { evaluateBlueprint } from '../../blueprint/eval';
 import { modifiersToBlueprint } from '../../blueprint/migrate';
+import { buildBlueprintVars, mapStoreAnimationVariables } from '../../unified-animation-resolver';
 
 // hold 等有状态节点的跨帧存储
 const blueprintNodeState = new Map<string, any>();
@@ -45,6 +46,7 @@ function interpolateSingleNode(node: Node, currentFrame: number): InterpolatedNo
   }
   return {
     angle: interpolateTrack(tracks?.angle, currentFrame, 0),
+    tilt: interpolateTrack(tracks?.tilt, currentFrame, node.transform.tilt ?? 0),
     stretch: interpolateTrack(tracks?.stretch, currentFrame, 1),
     x,
     y,
@@ -89,6 +91,25 @@ function interpolateCharacterInternal(
   }
   lastFrame = currentFrame;
 
+  // 蓝图变量：从 store 读 animationVariables（与主渲染 generateRenderPlan 同口径，
+  // drivers 取本角色全部节点的 active param drivers）。store 不可用时为空（回退 var 节点默认值）
+  let blueprintVars: Record<string, number> = {};
+  try {
+    const { useProjectStore } = require('../../store') as typeof import('../../store');
+    const storeVars = (useProjectStore.getState() as any).animationVariables;
+    if (Array.isArray(storeVars) && storeVars.length > 0) {
+      const drivers: import('../../unified-types').ParamDriver[] = [];
+      for (const n of Object.values(character.nodes)) {
+        for (const mod of n.modifiers ?? []) {
+          for (const d of (mod as any).paramDrivers ?? []) {
+            if (d.enabled) drivers.push(d);
+          }
+        }
+      }
+      blueprintVars = buildBlueprintVars(mapStoreAnimationVariables(storeVars), currentFrame, drivers as any);
+    }
+  } catch { /* store 不可用（测试/SSR）：保持空 vars */ }
+
   const nodeOutputs = new Map<string, { rotation: number; translateX: number; translateY: number; scaleX: number; scaleY: number; skewX: number; skewY: number; zIndex: number }>();
 
   for (let pass = 0; pass < 2; pass++) {
@@ -112,11 +133,12 @@ function interpolateCharacterInternal(
         const t = evaluateBlueprint(blueprint, {
           frame: currentFrame,
           frameRate: 12,
-          vars: {},
+          vars: blueprintVars,
           nodeOutputs: pass === 1 ? nodeOutputs : undefined,
           nodeState: blueprintNodeState,
         } as any);
         values.angle += t.rotation;
+        values.tilt = (values.tilt ?? 0) + (t.tilt ?? 0);
         values.x += t.translateX;
         values.y += t.translateY;
         values.stretch *= t.scaleY;

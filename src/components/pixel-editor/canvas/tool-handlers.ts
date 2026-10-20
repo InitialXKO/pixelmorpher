@@ -12,6 +12,7 @@ import { inpaintPixels, samMaskToSelectionMask } from '@/lib/inpainting';
 import { floodFill } from '@/lib/engine';
 import { renderUnifiedToCanvas, renderSpriteEditUnified } from '@/lib/unified-render';
 import { resolveNodeSpriteId } from '@/lib/unified-render';
+import { computeWorldTransforms } from '@/lib/unified-render';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
@@ -27,7 +28,7 @@ import {
   spritePivotX,
   spritePivotY,
 } from './canvas-utils';
-import { subToPx, pxToSub } from '@/lib/unified-types';
+import { subToPx, pxToSub, mapDragTo3D, ikTargetMirror, type SubPixel } from '@/lib/unified-types';
 import type { CanvasState } from './use-canvas-state';
 import type { BrushCommand, ModifierInstance } from '@/lib/types';
 
@@ -135,7 +136,7 @@ export function writePuppetPoseKeyframe(
   clipId: string,
   nodeId: string,
   frame: number,
-  values: { angle: number; stretch: number; x: number; y: number },
+  values: { angle: number; stretch: number; x: number; y: number; tilt?: number },
   variantIndex: number,
 ) {
   const store = useProjectStore.getState();
@@ -145,7 +146,7 @@ export function writePuppetPoseKeyframe(
   if (!node) return;
 
   // 直接写 node.tracks（渲染器从这里读）
-  const setTrack = (trackName: 'angle' | 'x' | 'y' | 'stretch', value: number) => {
+  const setTrack = (trackName: 'angle' | 'x' | 'y' | 'stretch' | 'tilt', value: number) => {
     const track = node.tracks[trackName] ?? { keyframes: [], interpolation: 'linear' as const };
     const idx = track.keyframes.findIndex(k => k.frame === frame);
     const newKeyframes = idx >= 0
@@ -161,6 +162,8 @@ export function writePuppetPoseKeyframe(
       x: setTrack('x', values.x),
       y: setTrack('y', values.y),
       stretch: setTrack('stretch', values.stretch),
+      // tilt 仅在调用方给出时写（伪 3D 工具 / tilt 编辑），其余拖拽不碰出平面角轨道
+      ...(values.tilt !== undefined ? { tilt: setTrack('tilt', values.tilt) } : {}),
     },
   });
 }
@@ -196,19 +199,10 @@ export const puppetHandler: ToolHandler = {
     const tmpIvMap = tmpChar ? interpolateNodeKeyframes(tmpChar, tmpFrame) : new Map();
 
     // 计算指定节点的世界角度（从根累加）
+    // 世界角度走主渲染共同代码（尊重 inheritRotation；此前手工沿链累加不查该标志，与渲染端口径微差）
+    const worldTransformsForAngle = computeWorldTransforms(character, tmpFrame, s.canvasWidth, s.canvasHeight);
     const computeWorldAngle = (targetNode: typeof node): number => {
-      const chain: typeof targetNode[] = [];
-      let cur: typeof targetNode | undefined = targetNode;
-      while (cur) {
-        chain.unshift(cur);
-        if (!cur.parentId) break;
-        cur = character.nodes[cur.parentId];
-      }
-      let angle = 0;
-      for (const n of chain) {
-        angle += tmpIvMap.get(n.id)?.angle ?? n.transform.angle;
-      }
-      return angle;
+      return worldTransformsForAngle.get(targetNode.id)?.worldAngle ?? 0;
     };
 
     // Ctrl+点击/拖动：点击=编辑该节点精灵，拖动=移动部件枢轴在部件中的位置
@@ -246,6 +240,7 @@ export const puppetHandler: ToolHandler = {
         origStretch: 1,
         origOffsetX: 0,
         origOffsetY: 0,
+        origOffsetZ: 0,
         moveTargetNodeId: node.id,
         mode: 'pivot' as const,
         pivotWorldX: 0,
@@ -281,6 +276,15 @@ export const puppetHandler: ToolHandler = {
       if (!socket) return;
       // 父节点世界角度（用当前插值姿态，保证视觉跟手）
       const parentWorldAngle = computeWorldAngle(parentNode);
+      // 3D socket（带 offset3D）：拖拽起点取 offset3D 在当前视角下的 2D 投影（x2d = x·cosθ + z·sinθ），
+      // 否则起点读 basePosition(=0) 会跳
+      const rootForDir = character.nodes[character.rootNodeId];
+      const dragViewDir = (rootForDir?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      const dragTheta = (((dragViewDir + 2) % 8) * Math.PI) / 4;
+      const origSocketPosX = socket.offset3D
+        ? Math.round(socket.offset3D.x * Math.cos(dragTheta) + socket.offset3D.z * Math.sin(dragTheta))
+        : socket.basePosition.x;
+      const origSocketPosY = socket.offset3D ? socket.offset3D.y : socket.basePosition.y;
       s.puppetNodeDragRef.current = {
         nodeId: node.id,
         skeletonId: character.id,
@@ -292,6 +296,7 @@ export const puppetHandler: ToolHandler = {
         origStretch: 1,
         origOffsetX: 0,
         origOffsetY: 0,
+        origOffsetZ: 0,
         moveTargetNodeId: node.id,
         mode: 'socket' as const,
         pivotWorldX: 0,
@@ -301,8 +306,8 @@ export const puppetHandler: ToolHandler = {
         // socket 移动专用
         socketId: socket.id,
         parentNodeId: parentNode.id,
-        origSocketX: socket.basePosition.x,
-        origSocketY: socket.basePosition.y,
+        origSocketX: origSocketPosX,
+        origSocketY: origSocketPosY,
         parentAngle: parentWorldAngle,
       };
       return;
@@ -359,9 +364,11 @@ export const puppetHandler: ToolHandler = {
       startX: px,
       startY: py,
       origAngle: rotateIv?.angle ?? node.transform.angle,
+      origTilt: rotateIv?.tilt ?? node.transform.tilt ?? 0,
       origStretch: rotateIv?.stretch ?? node.transform.stretch,
       origOffsetX: moveIv?.x ?? moveTarget.transform.x,
       origOffsetY: moveIv?.y ?? moveTarget.transform.y,
+      origOffsetZ: moveTarget.transform.z ?? 0,
       moveTargetNodeId: moveTarget.id,
       mode: dragMode,
       pivotWorldX,
@@ -394,18 +401,37 @@ export const puppetHandler: ToolHandler = {
     const dragNode = character.nodes[drag.nodeId];
     const variantIndex = (dragNode?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
     const direction = (['E', 'NE', 'N', 'NW', 'W', 'SW', 'S', 'SE'] as const)[variantIndex];
+    // 3D 视图朝向：用根节点的 variantIndex（全场景统一相机方向，非单节点精灵方向）
+    const rootNode = character.nodes[character.rootNodeId];
+    const viewDir = (rootNode?.transform.variantIndex ?? variantIndex) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
     const clip = store.animationClips.find((c) => c.id === drag.clipId);
     const ivMap = interpolateNodeKeyframes(character, frame);
 
     if (drag.mode === 'rotate') {
       const currentMouseAngle = Math.atan2(py - drag.pivotWorldY, px - drag.pivotWorldX);
-      const newAngle = drag.origAngle + Math.round((currentMouseAngle - drag.startMouseAngle) * 180 / Math.PI);
-      writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
-        angle: newAngle,
-        stretch: drag.origStretch,
-        x: drag.origOffsetX,
-        y: drag.origOffsetY,
-      }, variantIndex);
+      const angleDelta = (currentMouseAngle - drag.startMouseAngle) * 180 / Math.PI;
+      const activeTool = s.editorStore.getState().tool;
+      if (activeTool === 'pseudo3d_rotate') {
+        // 伪3D旋转（乙）：拖拽角直接写被拖节点的出平面角 tilt 关键帧，子树零写入——
+        // frame 复合（RU(tilt)）自动把整棵子树掀出平面。旧版递归烘焙后代 local x/y/z 已废弃
+        // （历史烘焙数据是普通 x/y/z 数据，原样可渲染，不迁移）。
+        const newTilt = (drag.origTilt ?? 0) + Math.round(angleDelta);
+        writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
+          angle: drag.origAngle,
+          stretch: drag.origStretch,
+          x: drag.origOffsetX,
+          y: drag.origOffsetY,
+          tilt: newTilt,
+        }, variantIndex);
+      } else {
+        const newAngle = drag.origAngle + Math.round(angleDelta);
+        writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
+          angle: newAngle,
+          stretch: drag.origStretch,
+          x: drag.origOffsetX,
+          y: drag.origOffsetY,
+        }, variantIndex);
+      }
     } else if (drag.mode === 'socket') {
       // socket：移动父节点插槽在父节点中的位置（rig 操作，直接改骨架）
       const ddx = px - drag.startX;
@@ -419,9 +445,32 @@ export const puppetHandler: ToolHandler = {
       const charId = drag.characterId ?? drag.skeletonId;
       const parentNode = character.nodes[drag.parentNodeId ?? ''];
       if (parentNode) {
-        const newSockets = parentNode.sockets.map((s) =>
-          s.id === drag.socketId ? { ...s, basePosition: { x: newSocketX, y: newSocketY } } : s
-        );
+        // 当前视图朝向（根节点方向）：3D 角色 socket 有 8 方向 offsets，需同步更新
+        const rootN = character.nodes[character.rootNodeId];
+        const viewDir = (rootN?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+        const moveTheta = (((viewDir + 2) % 8) * Math.PI) / 4;
+        const newSockets = parentNode.sockets.map((s) => {
+          if (s.id !== drag.socketId) return s;
+          if (s.offset3D) {
+            // 3D socket：视角平面内的 2D 新位置写回 offset3D；
+            // 垂直于视角的深度分量 perp 在当前视角不可见、不可拖，原样保留
+            // （x3 = u·cosθ − perp·sinθ，z3 = u·sinθ + perp·cosθ，与正向投影互逆）
+            const perp = -s.offset3D.x * Math.sin(moveTheta) + s.offset3D.z * Math.cos(moveTheta);
+            return {
+              ...s,
+              offset3D: {
+                x: Math.round(newSocketX * Math.cos(moveTheta) - perp * Math.sin(moveTheta)),
+                y: newSocketY,
+                z: Math.round(newSocketX * Math.sin(moveTheta) + perp * Math.cos(moveTheta)),
+              },
+            };
+          }
+          return {
+            ...s,
+            basePosition: { x: newSocketX, y: newSocketY },
+            directionOffsets: { ...s.directionOffsets, [viewDir]: { x: newSocketX, y: newSocketY } },
+          };
+        });
         store.updateUnifiedNode(charId, drag.parentNodeId!, { sockets: newSockets });
       }
     } else if (drag.mode === 'pivot') {
@@ -446,13 +495,17 @@ export const puppetHandler: ToolHandler = {
       }
     } else {
       // move：移动目标节点的 offset（offset 在父节点局部空间，需逆旋转鼠标增量）
+      // 3D：按视图朝向（根节点方向）将 2D 增量映射到 3D（南向改 x/y，东向改 z/y）
       const ddx = px - drag.startX;
       const ddy = py - drag.startY;
       const angleRad = ((drag.parentWorldAngle ?? 0) * Math.PI) / 180;
       const localDx = ddx * Math.cos(-angleRad) - ddy * Math.sin(-angleRad);
       const localDy = ddx * Math.sin(-angleRad) + ddy * Math.cos(-angleRad);
-      const newOffsetX = Math.round(drag.origOffsetX + pxToSub(localDx));
-      const newOffsetY = Math.round(drag.origOffsetY + pxToSub(localDy));
+      const d3 = mapDragTo3D(pxToSub(localDx) as SubPixel, pxToSub(localDy) as SubPixel, viewDir);
+      const targetNode = character.nodes[drag.moveTargetNodeId ?? drag.nodeId];
+      const newOffsetX = Math.round(drag.origOffsetX + d3.dx3);
+      const newOffsetY = Math.round(drag.origOffsetY + d3.dy3);
+      const newOffsetZ = Math.round((drag.origOffsetZ ?? 0) + d3.dz3);
       const targetNodeId = drag.moveTargetNodeId ?? drag.nodeId;
       writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, targetNodeId, frame, {
         angle: drag.origAngle,
@@ -460,6 +513,8 @@ export const puppetHandler: ToolHandler = {
         x: newOffsetX,
         y: newOffsetY,
       }, variantIndex);
+      // 3D z 暂直接写 base（无 z 轨道）
+      if (targetNode) targetNode.transform.z = newOffsetZ as SubPixel;
     }
   },
 
@@ -491,7 +546,7 @@ export const puppetHandler: ToolHandler = {
     const ANGLE_STEP = 15;
     const MOVE_STEP = pxToSub(1);  // SubPixel：键盘微调 1 像素
 
-    const applyNodePose = (nodeId: string, patch: Partial<{ angle: number; x: number; y: number }>) => {
+    const applyNodePose = (nodeId: string, patch: Partial<{ angle: number; x: number; y: number; z: number }>) => {
       const iv = ivMap.get(nodeId);
       const node = character!.nodes[nodeId];
       if (!node) return;
@@ -501,6 +556,10 @@ export const puppetHandler: ToolHandler = {
         x: patch.x ?? iv?.x ?? node.transform.x,
         y: patch.y ?? iv?.y ?? node.transform.y,
       }, variantIndex);
+      // 3D z 暂直接写 base transform（无 z 轨道）
+      if (patch.z !== undefined) {
+        node.transform.z = patch.z;
+      }
     };
 
     if (e.code === 'KeyQ' || e.code === 'KeyE') {
@@ -527,17 +586,22 @@ export const puppetHandler: ToolHandler = {
       else if (e.code === 'KeyS' || e.code === 'ArrowDown') dy = MOVE_STEP;
       else if (e.code === 'KeyA' || e.code === 'ArrowLeft') dx = -MOVE_STEP;
       else if (e.code === 'KeyD' || e.code === 'ArrowRight') dx = MOVE_STEP;
+      // 3D 映射：按视图朝向（根节点方向）将 2D 键盘增量映射到 3D
+      const rootN = character.nodes[character.rootNodeId];
+      const dir = (rootN?.transform.variantIndex ?? node.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+      const d3 = mapDragTo3D(dx as SubPixel, dy as SubPixel, dir);
       applyNodePose(targetId, {
-        x: (iv?.x ?? node.transform.x) + dx,
-        y: (iv?.y ?? node.transform.y) + dy,
+        x: (iv?.x ?? node.transform.x) + d3.dx3,
+        y: (iv?.y ?? node.transform.y) + d3.dy3,
+        z: (node.transform.z ?? 0) + d3.dz3,
       });
     }
   },
 
   onMouseUp(s) {
+    const project = useProjectStore.getState();
     // 恢复被挂起的 IK 链，目标点重算到新尖端位置
     if (suspendedIKChains.size > 0) {
-      const project = useProjectStore.getState();
       for (const chainId of Array.from(suspendedIKChains)) {
         // 找到这条链所属的角色
         for (const ch of Object.values(project.unifiedCharacters)) {
@@ -546,10 +610,15 @@ export const puppetHandler: ToolHandler = {
           if (!chain) continue;
           const jointIds = getIKChainJointIds(ch, chain.rootNodeId, chain.endNodeId);
           if (jointIds.length >= 2) {
-            const { tipX, tipY } = computeIKChainTip(ch, jointIds, chain.tipLength);
+            const { tipX, tipY, tipZ, direction } = computeIKChainTip(ch, jointIds, chain.tipLength);
+            // tip 是原点中心 3D：求解目标写 target3D；chain.target 写投影镜像（按链朝向投影 + 画布中心）
             project.updateUnifiedCharacter(ch.id, {
               ikChains: ch.ikChains!.map((c) =>
-                c.id === chainId ? { ...c, target: { x: tipX, y: tipY } } : c,
+                c.id === chainId ? {
+                  ...c,
+                  target: ikTargetMirror({ x: tipX, y: tipY, z: tipZ }, direction, project.canvasWidth, project.canvasHeight),
+                  target3D: { x: tipX, y: tipY, z: tipZ },
+                } : c,
               ),
             });
           }
@@ -1723,6 +1792,8 @@ export function getToolHandler(
   // Node 级分发（新架构；旧画布精灵层分发已随 workspace mode 退役）
   switch (tool) {
     case 'puppet': return puppetHandler;
+    case 'pseudo3d_rotate': return puppetHandler; // 复用 puppet 拖拽，onMouseDown 内按工具名设伪3D标志
+    case 'landmark': return landmarkHandler; // 精灵编辑模式外 no-op（handler 内 early return）
     case 'select': return nodeSelectHandler;
     case 'move': return nodeMoveHandler;
     case 'trajectory': return nodeTrajectoryHandler;

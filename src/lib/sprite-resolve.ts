@@ -6,7 +6,7 @@
 //   → SpriteRef 查全局表，内嵌 Sprite 直接用
 // ============================================================
 
-import type { CostumeSet, Sprite, SpriteRef } from './unified-types';
+import type { CostumePiece, CostumeSet, DirectionIndex, Sprite, SpriteRef } from './unified-types';
 
 export interface ResolvedSprite {
   sprite: Sprite | null;
@@ -27,6 +27,42 @@ function resolveEntry(
 }
 
 /**
+ * 服装件分层解析（主渲染与预览的共同实现，禁止另写一份）：
+ * 变体直达 → 变体镜像 → 基础直达 → 基础镜像。
+ * variantId 来自角色的槽位变体指派（Character.slotVariants[slotKey]）；
+ * 变体层只需画与基础不同的图，未命中自动回落基础层，变体永不留空洞。
+ */
+export function resolvePieceSprite(
+  piece: CostumePiece | undefined,
+  direction: DirectionIndex,
+  variantId: string | undefined,
+  spritesTable?: Record<string, Sprite>,
+): ResolvedSprite {
+  if (!piece) {
+    return { sprite: null, mirror: false, spriteId: null };
+  }
+  const layers: (Partial<Record<DirectionIndex, Sprite | SpriteRef>> | undefined)[] = [
+    variantId ? piece.variantSprites?.[variantId] : undefined,
+    piece.sprites,
+  ];
+  for (const layer of layers) {
+    if (!layer) continue;
+    const direct = resolveEntry(layer[direction], spritesTable);
+    if (direct.sprite) {
+      return { sprite: direct.sprite, mirror: false, spriteId: direct.spriteId };
+    }
+    const mirrorSource = piece.mirrorMap?.[direction];
+    if (mirrorSource !== undefined) {
+      const mirrored = resolveEntry(layer[mirrorSource], spritesTable);
+      if (mirrored.sprite) {
+        return { sprite: mirrored.sprite, mirror: true, spriteId: mirrored.spriteId };
+      }
+    }
+  }
+  return { sprite: null, mirror: false, spriteId: null };
+}
+
+/**
  * 解析指定槽位、方向的精灵（与主渲染 resolveSprite 同逻辑）
  */
 export function resolvePreviewSprite(
@@ -34,31 +70,13 @@ export function resolvePreviewSprite(
   direction: number,
   costumeSet: CostumeSet | undefined,
   spritesTable?: Record<string, Sprite>,
+  variantId?: string,
 ): ResolvedSprite {
   if (!slotKey || !costumeSet) {
     return { sprite: null, mirror: false, spriteId: null };
   }
-  const piece = (costumeSet.pieces as Record<string, any>)[slotKey];
-  if (!piece) {
-    return { sprite: null, mirror: false, spriteId: null };
-  }
-
-  // 1. 直接命中
-  const direct = resolveEntry(piece.sprites?.[direction], spritesTable);
-  if (direct.sprite) {
-    return { sprite: direct.sprite, mirror: false, spriteId: direct.spriteId };
-  }
-
-  // 2. mirrorMap 回退
-  const mirrorSource = piece.mirrorMap?.[direction];
-  if (mirrorSource !== undefined) {
-    const mirrored = resolveEntry(piece.sprites?.[mirrorSource], spritesTable);
-    if (mirrored.sprite) {
-      return { sprite: mirrored.sprite, mirror: true, spriteId: mirrored.spriteId };
-    }
-  }
-
-  return { sprite: null, mirror: false, spriteId: null };
+  const piece = (costumeSet.pieces as Record<string, CostumePiece>)[slotKey];
+  return resolvePieceSprite(piece, direction as DirectionIndex, variantId, spritesTable);
 }
 
 /**

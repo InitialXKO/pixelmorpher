@@ -15,6 +15,7 @@ import type { Character } from '@/lib/unified-types';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 import { createDefaultCharacterBlueprint, validateCharacterBlueprint } from '@/lib/blueprint/character';
 import BlueprintEditor from './BlueprintEditor';
+import { useBlueprintPreviewData } from './use-blueprint-preview-data';
 
 interface CharacterBlueprintEditorProps {
   character: Character | null;
@@ -24,6 +25,8 @@ export default function CharacterBlueprintEditor({ character }: CharacterBluepri
   const [editing, setEditing] = useState(false);
   const [localGraph, setLocalGraph] = useState<BlueprintGraph | null>(null);
   const updateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
+  // 预览接线：与 PuppetModifierPanel 同一构造（服装/变体解析 + 整角色预览数据）
+  const { spritesTable, costumeSetsNewFormat, characterNodes } = useBlueprintPreviewData(character);
 
   const graph = localGraph ?? character?.blueprint ?? null;
 
@@ -105,6 +108,12 @@ export default function CharacterBlueprintEditor({ character }: CharacterBluepri
           graph={graph}
           onChange={setLocalGraph}
           title={`${character.name} 的角色蓝图`}
+          character={character}
+          characterNodes={characterNodes}
+          costumeSets={costumeSetsNewFormat}
+          activeCostumeSetId={character.activeCostumeSetId}
+          slotVariants={character.slotVariants}
+          spritesTable={spritesTable as any}
         />
       )}
     </div>

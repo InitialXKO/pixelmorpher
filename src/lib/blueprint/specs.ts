@@ -26,6 +26,9 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   // 服装源：从角色服装集取指定槽位精灵（与 sprite_source 二选一）
   // setId 可接线（string），slot 为空时用节点所在槽位
   costume: { inputs: ['t', 'setId'], outputs: ['pixels'], params: ['setId', 'slot'] },
+  // 服装状态：状态蓝图专用，输出服装集/槽位变体指令（无像素输出）
+  // setId 可接线（string）；slot+variant 指派变体，slot+clearVariant 回基础
+  costume_state: { inputs: ['t', 'setId'], outputs: [], params: ['setId', 'slot', 'variant', 'clearVariant'] },
   // 角色源：输出整角色合成后的像素（管线预渲染，由 ctx.characterPixels 提供）
   // 角色蓝图专用：character_source → 后处理链 → screen
   character_source: { inputs: [], outputs: ['pixels'], params: [] },
@@ -55,6 +58,11 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     inputs: ['t', 'pixels', 'gate'],
     outputs: ['out', 'outRotation', 'rotation', 'pixels'],
     params: ['angle', 'pivotOffsetX', 'pivotOffsetY'],
+  },
+  pseudo3d_rotate: {
+    inputs: ['x', 'y', 'z', 'angle', 'direction'],
+    outputs: ['outX', 'outY', 'outZ'],
+    params: ['angle', 'direction'],
   },
   uniform_scale: {
     inputs: ['t', 'pixels', 'gate'],
@@ -122,7 +130,7 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
 
   // ---- 输出 ----
   transform: {
-    inputs: ['translateX', 'translateY', 'rotation', 'scaleX', 'scaleY', 'zIndex'],
+    inputs: ['translateX', 'translateY', 'translateZ', 'rotation', 'tilt', 'scaleX', 'scaleY', 'zIndex'],
     outputs: ['outX', 'outY', 'outRotation', 'outScaleX', 'outScaleY', 'outZIndex'],
     params: [],
   },

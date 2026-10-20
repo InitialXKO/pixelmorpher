@@ -516,6 +516,39 @@ export function getEmptyVariableContext(): VariableContext {
   return EMPTY_VARIABLE_CONTEXT;
 }
 
+/**
+ * store 形 AnimationVariable（types.ts）→ 渲染管线形（unified-types）的共同映射。
+ * 此前 renderPuppetViaUnifiedPipeline / renderUnifiedCharactersToCanvas 各自内联了一份。
+ */
+export function mapStoreAnimationVariables(
+  vars: import('./types').AnimationVariable[] | undefined,
+): AnimationVariable[] | undefined {
+  if (!vars) return undefined;
+  return vars.map((v) => ({
+    id: v.id,
+    name: v.name,
+    value: (v as { defaultValue?: number }).defaultValue ?? 0,
+    min: 0,
+    max: 100,
+    writerDriverId: (v as { writerDriverId?: string }).writerDriverId,
+    defaultValue: (v as { defaultValue?: number }).defaultValue ?? 0,
+  }));
+}
+
+/**
+ * 蓝图 ctx.vars 适配：变量名 → 当前帧求值（buildVariableContext，含 writer 驱动）。
+ * 蓝图 var 节点按名读 ctx.vars——此前所有求值入口都传 {}，var 节点恒回退自身默认值；
+ * 统一从这里注入。无变量时返回空对象（行为与旧现状一致）。
+ */
+export function buildBlueprintVars(
+  variables: AnimationVariable[] | undefined,
+  frame: number,
+  allActiveDrivers: ParamDriver[] = [],
+): Record<string, number> {
+  if (!variables || variables.length === 0) return {};
+  return buildVariableContext(variables, frame, allActiveDrivers).values;
+}
+
 // ============================================================
 // 4. Combined Resolution for Render Pipeline
 // ============================================================

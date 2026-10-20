@@ -17,6 +17,7 @@ export default function useVirtualScroll(
   puppetNodes: Array<{ id: string }> = [],
   isPuppetClip: boolean = false,
   nodeKeyframes: Array<{ nodeId: string; modifiers?: Array<{ type: string; paramDrivers?: Array<unknown> }> }> = [],
+  showCostumeStateRow: boolean = false,
 ): {
   visibleRange: { startIndex: number; endIndex: number };
   rowOffsets: number[];
@@ -80,8 +81,13 @@ export default function useVirtualScroll(
       }
     }
 
+    // 服装/变体状态轨道行（clip 级，排在木偶节点行之后；两列组件按同一位置口径渲染）
+    if (isPuppetClip && showCostumeStateRow) {
+      groups.push({ trackId: '__costume_state__', height: TRACK_HEIGHT });
+    }
+
     return groups;
-  }, [tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart, puppetNodes, isPuppetClip, nodeKeyframes]);
+  }, [tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart, puppetNodes, isPuppetClip, nodeKeyframes, showCostumeStateRow]);
 
   const { rowOffsets, rowHeights, totalHeight } = useMemo(() => {
     const offsets: number[] = [];

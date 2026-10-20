@@ -70,6 +70,9 @@ interface EditorStore extends EditorState {
   setActiveSkeletonId: (id: string | null) => void;
   showSkeletons: boolean;
   toggleSkeletons: () => void;
+  // 真 3D FK：透视缩短开关（精灵沿骨骼方向按投影长度比缩放；默认关）
+  perspectiveForeshorten: boolean;
+  togglePerspectiveForeshorten: () => void;
   showWeightPaint: boolean;
   toggleWeightPaint: () => void;
   weightPaintBoneId: string | null;
@@ -242,6 +245,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   moveTargetLevel: 'keyframe' as const,
   activeSkeletonId: null,
   showSkeletons: false,
+  perspectiveForeshorten: false,
   showWeightPaint: false,
   weightPaintBoneId: null,
   showProcedural: false,
@@ -289,6 +293,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setPreviewQuality: (quality) => set({ previewQuality: quality }),
   setActiveSkeletonId: (id) => set({ activeSkeletonId: id }),
   toggleSkeletons: () => set((s) => ({ showSkeletons: !s.showSkeletons })),
+  togglePerspectiveForeshorten: () => set((s) => ({ perspectiveForeshorten: !s.perspectiveForeshorten })),
   toggleWeightPaint: () => set((s) => ({ showWeightPaint: !s.showWeightPaint })),
   setWeightPaintBoneId: (id) => set({ weightPaintBoneId: id }),
   toggleProcedural: () => set((s) => ({ showProcedural: !s.showProcedural })),

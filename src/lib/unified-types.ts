@@ -40,6 +40,236 @@ export function halfPixelAlignSub(v: SubPixel): SubPixel {
   return Number.isInteger(px) ? v + 8 : v;
 }
 
+/**
+ * 3D → 2D 投影：按朝向将 3D 节点坐标投影到画布 2D
+ * @param x 3D X（东西向，SubPixel）
+ * @param y 3D Y（垂直，SubPixel）
+ * @param z 3D Z（南北向，SubPixel）
+ * @param direction 8 方向索引（0=East…6=South）
+ * @returns { canvasX, canvasY, depth } 画布 2D 坐标（SubPixel）与深度（越大越靠前）
+ */
+export function projectToView(
+  x: SubPixel,
+  y: SubPixel,
+  z: SubPixel,
+  direction: DirectionIndex,
+): { canvasX: SubPixel; canvasY: SubPixel; depth: number } {
+  // 朝向 → 旋转角（与烘焙一致：南向 0°，东向 90°，逆时针）
+  const theta = (((direction + 2) % 8) * Math.PI) / 4;
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  // 旋转投影：x' = x·cosθ + z·sinθ，深度 = -x·sinθ + z·cosθ
+  const canvasX = x * cos + z * sin;
+  const depth = -x * sin + z * cos;
+  return { canvasX, canvasY: y, depth };
+}
+
+/**
+ * 2D 拖动 → 3D 增量：按朝向将画布 2D 拖动映射到 3D 坐标增量
+ * @param dx 画布 X 增量（SubPixel）
+ * @param dy 画布 Y 增量（SubPixel）
+ * @param direction 8 方向索引（0=East…6=South）
+ * @returns { dx3, dy3, dz3 } 3D 坐标增量（SubPixel）
+ */
+export function mapDragTo3D(
+  dx: SubPixel,
+  dy: SubPixel,
+  direction: DirectionIndex,
+): { dx3: SubPixel; dy3: SubPixel; dz3: SubPixel } {
+  const theta = (((direction + 2) % 8) * Math.PI) / 4;
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  // 逆映射：dx 分配到 x/z，dy 直接到 y
+  const dx3 = dx * cos;
+  const dz3 = dx * sin;
+  return { dx3: dx3 as SubPixel, dy3: dy, dz3: dz3 as SubPixel };
+}
+
+/**
+ * 视平面内旋转：将 3D 偏移量按朝向在视平面内旋转 angle 度
+ * 南向转 XY 面，东向转 ZY 面，斜向按 θ 旋转
+ * @param x 3D X 偏移（像素）
+ * @param y 3D Y 偏移（像素）
+ * @param z 3D Z 偏移（像素）
+ * @param angleDeg 旋转角度（度）
+ * @param direction 8 方向索引
+ * @returns 旋转后的 (x', y', z')（像素）
+ */
+export function rotateInViewPlane(
+  x: number,
+  y: number,
+  z: number,
+  angleDeg: number,
+  direction: DirectionIndex,
+): { x: number; y: number; z: number } {
+  const theta = (((direction + 2) % 8) * Math.PI) / 4;
+  const cosT = Math.cos(theta);
+  const sinT = Math.sin(theta);
+  // 3D → 视平面坐标：h = x·cosθ + z·sinθ（横），d = -x·sinθ + z·cosθ（深）
+  const h = x * cosT + z * sinT;
+  const d = -x * sinT + z * cosT;
+  // 视平面内旋转 (h, y)
+  const rad = (angleDeg * Math.PI) / 180;
+  const cosA = Math.cos(rad);
+  const sinA = Math.sin(rad);
+  const h2 = h * cosA - y * sinA;
+  const y2 = h * sinA + y * cosA;
+  // 视平面 → 3D：x' = h'·cosθ - d·sinθ，z' = h'·sinθ + d·cosθ
+  const x2 = h2 * cosT - d * sinT;
+  const z2 = h2 * sinT + d * cosT;
+  return { x: x2, y: y2, z: z2 };
+}
+
+/**
+ * rotateInViewPlane 的逆运算：已知旋转后坐标，反推旋转前
+ */
+export function inverseRotateInViewPlane(
+  x: number,
+  y: number,
+  z: number,
+  angleDeg: number,
+  direction: DirectionIndex,
+): { x: number; y: number; z: number } {
+  return rotateInViewPlane(x, y, z, -angleDeg, direction);
+}
+
+/**
+ * 伪3D旋转：固定视平面水平轴，转 (Y, 深度轴) 平面
+ * 南向转 (Z,Y)，东向转 (X,Y)，全朝向有效
+ */
+export function rotatePseudo3D(
+  x: number,
+  y: number,
+  z: number,
+  angleDeg: number,
+  direction: DirectionIndex,
+): { x: number; y: number; z: number } {
+  const theta = (((direction + 2) % 8) * Math.PI) / 4;
+  const cosT = Math.cos(theta);
+  const sinT = Math.sin(theta);
+  // 3D → (h=视水平, d=深度)
+  const h = x * cosT + z * sinT;
+  const d = -x * sinT + z * cosT;
+  // 转 (d, y) 平面
+  const rad = (angleDeg * Math.PI) / 180;
+  const cosA = Math.cos(rad);
+  const sinA = Math.sin(rad);
+  const d2 = d * cosA - y * sinA;
+  const y2 = d * sinA + y * cosA;
+  // (h, d2) → 3D
+  return {
+    x: h * cosT - d2 * sinT,
+    y: y2,
+    z: h * sinT + d2 * cosT,
+  };
+}
+
+// ---- Frame FK 数学（真 3D 姿态） ----
+//
+// 姿态不再是标量角，而是朝向框架的复合旋转。矩阵在「朝向基」坐标 (h, y, d) 下表达：
+// h = 视平面横轴、y = 竖直、d = 深度轴（与 projectToView/rotateInViewPlane 同约定）。
+// 局部旋转 L = RU(tilt)·RD(angle)：RD 绕 d 轴转视平面内角（= rotateInViewPlane 的旋转），
+// RU 绕 h 轴转出平面角（= rotatePseudo3D 的旋转）。tilt 恒 0 时整套逐值退化为旧标量 FK。
+
+/** 3×3 旋转矩阵（行主序），坐标系为朝向基 (h, y, d) */
+export type Mat3 = [number, number, number, number, number, number, number, number, number];
+
+export const MAT3_IDENTITY: Mat3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+/** 矩阵乘法 a·b（先 b 后 a） */
+export function mat3Mul(a: Mat3, b: Mat3): Mat3 {
+  const o = new Array(9) as Mat3;
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      o[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+    }
+  }
+  return o;
+}
+
+/** 矩阵作用于朝向基坐标向量 (h, y, d) */
+export function mat3Apply(m: Mat3, h: number, y: number, d: number): { h: number; y: number; d: number } {
+  return {
+    h: m[0] * h + m[1] * y + m[2] * d,
+    y: m[3] * h + m[4] * y + m[5] * d,
+    d: m[6] * h + m[7] * y + m[8] * d,
+  };
+}
+
+/** 转置（旋转矩阵的逆） */
+export function mat3Transpose(m: Mat3): Mat3 {
+  return [m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]];
+}
+
+/** 视平面内旋转矩阵 RD（绕 d 轴），与 rotateInViewPlane 的 (h,y) 旋转同约定 */
+export function rotMatD(angleDeg: number): Mat3 {
+  const rad = (angleDeg * Math.PI) / 180;
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  return [c, -s, 0, s, c, 0, 0, 0, 1];
+}
+
+/** 出平面旋转矩阵 RU（绕 h 轴），与 rotatePseudo3D 的 (d,y) 旋转同约定 */
+export function rotMatU(tiltDeg: number): Mat3 {
+  const rad = (tiltDeg * Math.PI) / 180;
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  // y' = c·y + s·d；d' = −s·y + c·d
+  return [1, 0, 0, 0, c, s, 0, -s, c];
+}
+
+/** 局部旋转复合：先视平面内 angle、后出平面 tilt（L = RU(tilt)·RD(angle)） */
+export function localRotMat(angleDeg: number, tiltDeg: number): Mat3 {
+  if (tiltDeg === 0) return rotMatD(angleDeg);
+  return mat3Mul(rotMatU(tiltDeg), rotMatD(angleDeg));
+}
+
+/** 世界轴坐标 → 朝向基坐标 (h, y, d) */
+export function worldToViewBasis(
+  x: number, y: number, z: number, direction: DirectionIndex,
+): { h: number; y: number; d: number } {
+  const theta = (((direction + 2) % 8) * Math.PI) / 4;
+  const cosT = Math.cos(theta);
+  const sinT = Math.sin(theta);
+  return { h: x * cosT + z * sinT, y, d: -x * sinT + z * cosT };
+}
+
+/** 朝向基坐标 (h, y, d) → 世界轴坐标 */
+export function viewBasisToWorld(
+  h: number, y: number, d: number, direction: DirectionIndex,
+): { x: number; y: number; z: number } {
+  const theta = (((direction + 2) % 8) * Math.PI) / 4;
+  const cosT = Math.cos(theta);
+  const sinT = Math.sin(theta);
+  return { x: h * cosT - d * sinT, y, z: h * sinT + d * cosT };
+}
+
+/**
+ * 用 frame 旋转一个世界轴偏移向量：偏移先换到 direction 的朝向基，
+ * 在基坐标下左乘 m，再换回世界轴。m = rotMatD(A) 时与 rotateInViewPlane 逐值相同。
+ */
+export function applyFrameRotation(
+  m: Mat3, x: number, y: number, z: number, direction: DirectionIndex,
+): { x: number; y: number; z: number } {
+  const b = worldToViewBasis(x, y, z, direction);
+  const r = mat3Apply(m, b.h, b.y, b.d);
+  return viewBasisToWorld(r.h, r.y, r.d, direction);
+}
+
+/**
+ * frame 的视平面派生角（度）：节点局部 +Y 轴（骨骼主轴）经 frame 旋转后，
+ * 在自身朝向视平面上的投影角。tilt=0 时恒等于累积标量角（旧 worldAngle）。
+ */
+export function frameViewAngle(m: Mat3): number {
+  // +Y 轴在基坐标下旋转后 = 矩阵第 2 列 (m[1], m[4], m[7])，取 (h, y) 分量
+  return (Math.atan2(-m[1], m[4]) * 180) / Math.PI;
+}
+
+/** frame 旋转后的节点局部 +Y 轴在世界轴下的单位方向（入参须为单位长度偏移的 frame） */
+export function frameYAxisWorld(m: Mat3, direction: DirectionIndex): { x: number; y: number; z: number } {
+  return viewBasisToWorld(m[1], m[4], m[7], direction);
+}
+
 // ---- Sprite & Visual Data ----
 
 /** Pixel color: hex string or null (transparent) */
@@ -70,6 +300,10 @@ export interface Sprite {
   plug?: Point;                  // Optional: override node's default plug
   heightmap?: number[][];        // Optional: hand-painted heightmap for bump_light
   landmarks?: SpriteLandmarks;   // Optional: 手动标注的特征点（眼/鼻/嘴），用于蒙皮转面
+  /** 分部件相机半宽（归一化单位），用于渲染时换算到全局尺度（可逆性：记录尺度差） */
+  partCameraHalf?: number;
+  /** 整模相机半宽（归一化单位），全局统一尺度基准 */
+  globalCameraHalf?: number;
 }
 
 // ---- Direction System ----
@@ -190,6 +424,8 @@ export interface Socket {
   basePosition: Point;                    // Base offset relative to parent anchor
   directionOffsets: Partial<Record<DirectionIndex, Point>>; // Per-direction overrides
   templateOffsets?: Partial<Record<DirectionIndex, Point>>; // L0 template suggestions (can be reset to these)
+  /** 3D 静态偏移（3D 管线用）：父关节→子关节的 3D 向量（SubPixel），direction 无关 */
+  offset3D?: { x: number; y: number; z: number };
   /** 蒙皮模式：'disc'（默认，关节盘遮盖接缝）| 'mesh'（网格蒙皮，父子精灵插值变形） */
   skinning?: SocketSkinning;
   /** mesh 模式：影响半径（像素），默认 8 */
@@ -236,9 +472,11 @@ export interface Attachment {
  * variantIndex selects direction variant for sprite lookup and socket offsets.
  */
 export interface NodeTransform {
-  x: SubPixel;                  // Local X offset
-  y: SubPixel;                  // Local Y offset
-  angle: number;                // Rotation angle (degrees)
+  x: SubPixel;                  // Local X offset (3D)
+  y: SubPixel;                  // Local Y offset (3D, vertical)
+  z: SubPixel;                  // Local Z offset (3D, depth)
+  angle: number;                // Rotation angle (degrees, view-plane)
+  tilt?: number;                // Out-of-plane rotation (degrees, about view-plane horizontal axis). Default 0 = legacy scalar FK.
   stretch: number;              // Y-axis stretch factor (0.5 ~ 2.0)
   variantIndex: DirectionIndex; // Direction variant index (0-7)
   scaleX?: number;               // X-axis scale factor (blueprint t.scaleX, default 1)
@@ -251,6 +489,7 @@ function createDefaultTransform(): NodeTransform {
   return {
     x: 0,
     y: 0,
+    z: 0,
     angle: 0,
     stretch: 1.0,
     variantIndex: 0,
@@ -465,6 +704,7 @@ export interface Node {
 /** Animation tracks for a node's transform properties */
 export interface NodeTracks {
   angle?: KeyframeTrack<number>;
+  tilt?: KeyframeTrack<number>;
   x?: KeyframeTrack<number>;
   y?: KeyframeTrack<number>;
   stretch?: KeyframeTrack<number>;
@@ -481,6 +721,7 @@ export interface NodeKeyframe {
   nodeId: string;
   frame: number;
   angle?: number;
+  tilt?: number;
   stretch?: number;
   x?: number;
   y?: number;
@@ -518,6 +759,9 @@ export interface CostumePiece {
   // Direction → sprite. Accepts embedded Sprite (legacy) or SpriteRef (new reference model).
   // New code should use SpriteRef; embedded is for migration transition.
   sprites: Partial<Record<DirectionIndex, Sprite | SpriteRef>>;
+  /** 通用自定义变体精灵：variantId → direction → sprite（变体定义在 Character.variantDefs）。
+   *  解析顺序：变体直达 → 变体镜像 → 基础 sprites 直达 → 基础镜像（见 sprite-resolve 的 resolvePieceSprite） */
+  variantSprites?: Record<string, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>;
   scaleVariants: Partial<Record<number, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>>;
   mirrorMap: MirrorMap;                         // Direction mirror mapping
   crossSections: CrossSection[];                // Cross section definitions for disc gen
@@ -562,8 +806,20 @@ export interface IKChain {
   rootNodeId: string;
   /** End effector node ID (e.g., hand) */
   endNodeId: string;
-  /** IK target in character space (static fallback) */
+  /**
+   * 旧义 2D 目标（历史字段）：链朝向画布平面上的点（含画布中心）。
+   * 仅作旧数据种子与旧义镜像——求解禁止读它，一律走 target3D（见 resolveChainTarget3D）。
+   * 写入方须保持投影镜像不变式：target = 画布中心 + projectToView(target3D, 链朝向).canvasXY。
+   */
   target: { x: number; y: number };
+  /**
+   * 求解唯一输入：原点中心世界空间的 3D 目标（像素，z 向外为正）。
+   * 缺失（旧项目）时由 resolveChainTarget3D 从 target 按链朝向反投影换算
+   * （target 是链朝向画布平面上的点：其 x 分量按朝向落入世界 x/z，y 不变）。
+   */
+  target3D?: { x: number; y: number; z: number };
+  /** 2bone 极向量目标（原点中心世界空间）；缺省取求解前 FK 的肘位（姿态连续） */
+  poleTarget3D?: { x: number; y: number; z: number };
   /**
    * Optional blueprint driving the target dynamically.
    * Evaluated each frame; outputs {x, y} or {targetX, targetY}.
@@ -578,6 +834,44 @@ export interface IKChain {
   tipLength?: number;
   /** Whether this chain is active */
   enabled: boolean;
+}
+
+/**
+ * IK 链求解目标的唯一解析口径：返回原点中心世界空间的 3D 目标（像素）。
+ * - target3D 存在 → 直接用；
+ * - 缺失（旧项目）→ 从旧义 target 换算：target 是「链朝向画布平面」上的点，
+ *   (u, v) = target − 画布中心 是该朝向视平面坐标、深度 d=0，按 direction 反投影：
+ *   南向 (u, v, 0)；东向 (0, v, u)——x 分量落入 z（用户 2026-10-20 定案）。
+ * direction = 链根关节朝向（缺省 6 南向，与旧行为逐值一致）。
+ * 求解、绘制、烘焙、编辑器一律走这里，不得直读 chain.target 求解。
+ */
+export function resolveChainTarget3D(
+  chain: IKChain,
+  canvasWidth: number,
+  canvasHeight: number,
+  direction: DirectionIndex = 6,
+): { x: number; y: number; z: number } {
+  if (chain.target3D) return chain.target3D;
+  return viewBasisToWorld(
+    chain.target.x - canvasWidth / 2,
+    chain.target.y - canvasHeight / 2,
+    0,
+    direction,
+  );
+}
+
+/** 旧义镜像：由 target3D（原点中心世界）按链朝向投影回画布平面 + 画布中心，写入 chain.target */
+export function ikTargetMirror(
+  target3D: { x: number; y: number; z: number },
+  direction: DirectionIndex,
+  canvasWidth: number,
+  canvasHeight: number,
+): { x: number; y: number } {
+  const proj = projectToView(pxToSub(target3D.x), pxToSub(target3D.y), pxToSub(target3D.z), direction);
+  return {
+    x: canvasWidth / 2 + subToPx(proj.canvasX),
+    y: canvasHeight / 2 + subToPx(proj.canvasY),
+  };
 }
 
 export interface Character {
@@ -609,6 +903,13 @@ export interface Character {
   costumeSets: CostumeSet[];
   activeCostumeSetId?: string;
 
+  // ---- 通用自定义变体（槽位级） ----
+  /** 变体定义（用户命名，如破损/湿透/燃烧）；变体只到槽位级——全身切换是服装集的职责，不在此重复 */
+  variantDefs?: { id: string; name: string }[];
+  /** 槽位变体指派：slotKey → variantId（无条目 = 基础）。角色级状态，不属于任何服装集，
+   *  故同一部位在任何服装下都处于该变体；精灵本体存各集 piece 的 variantSprites */
+  slotVariants?: Record<string, string>;
+
   // ---- Direction Draw Order ----
   // Per-direction draw order overrides (direction → drawLayer → z-order list)
   directionDrawOrders: Partial<Record<DirectionIndex, Record<string, string[]>>>;
@@ -621,6 +922,10 @@ export interface Character {
   // For whole-character effects (outline/glow/color grade on the composited
   // character). Per-node effects stay in node.blueprint. Null = legacy path.
   blueprint?: BlueprintGraph | null;
+
+  /** 状态蓝图：纯状态图（无像素），每帧在服装解析前求值，输出服装集/槽位变体指令
+   *  （costume_state 节点）。生效状态叠加顺序：静态字段 → clip 状态轨道 → 状态蓝图 */
+  stateBlueprint?: BlueprintGraph | null;
 
   // ---- Face Turn Config (Spine-style pseudo-3D) ----
   faceTurnConfig?: {
@@ -637,6 +942,16 @@ export interface Character {
   // ---- Metadata ----
   createdAt: number;
   updatedAt: number;
+}
+
+/** clip 服装/变体状态轨道的一个关键帧（离散切换、无插值）。
+ *  求值：以角色静态字段为底，按帧序增量应用 frame ≤ 当前帧的键 */
+export interface CostumeStateKeyframe {
+  frame: number;
+  /** 给出时从该帧起整覆生效服装集 id；不给 = 沿用下层/前键的结果 */
+  costumeSetId?: string;
+  /** 逐槽增量：variantId = 指派该变体；null = 该槽从此回基础 */
+  slotChanges?: Record<string, string | null>;
 }
 
 // ---- Animation Clip (Unified) ----
@@ -787,6 +1102,8 @@ export interface NodeRenderInstruction {
   worldY: SubPixel;
   angle: number;
   stretch: number;
+  /** 透视缩短系数（0~1）：精灵沿骨骼方向的绘制长度比；undefined = 不缩短 */
+  foreshorten?: number;
   variantIndex: DirectionIndex;
   rotationStrategy: RotationStrategy;
   mirror: boolean;               // Whether to flip horizontally
@@ -868,6 +1185,9 @@ export interface RenderPlan {
   frameRate?: number;
   /** Character-level blueprint (whole-character post-processing). Null = legacy per-node path. */
   characterBlueprint?: import('./blueprint/ir').BlueprintGraph | null;
+  /** 本帧蓝图变量（变量名 → 值）：generateRenderPlan 从 AnimationVariable 求值后注入，
+   *  供 executeRenderPlan/renderNodeSprite 的蓝图求值 ctx.vars 使用 */
+  blueprintVars?: Record<string, number>;
 }
 
 // ---- Procedural Animation (Unified) ----

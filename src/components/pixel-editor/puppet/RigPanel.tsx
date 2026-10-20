@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   Plus,
   Trash2,
@@ -21,8 +21,10 @@ import { NodeTreeItemWrapper } from './NodeTree';
 import PuppetModifierPanel from './PuppetModifierPanel';
 import GlobalBlueprintEditor from './GlobalBlueprintEditor';
 import CharacterBlueprintEditor from './CharacterBlueprintEditor';
+import StateBlueprintEditor from './StateBlueprintEditor';
 import IKBakeButton from './IKBakeButton';
 import IKChainEditor from './IKChainEditor';
+import ThreeBakeDialog from './ThreeBakeDialog';
 
 interface RigPanelProps {
   unifiedCharacters: Record<string, Character>;
@@ -47,6 +49,8 @@ export default function RigPanel({
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const selectedSkeletonId = activePuppetSkeletonId;
   const selectedCharacter = selectedSkeletonId ? (unifiedCharacters[selectedSkeletonId] ?? null) : null;
+
+  const [threeBakeOpen, setThreeBakeOpen] = useState(false);
 
   // ---- Handlers ----
   // (增删节点已移到左侧面板树，此处只保留细节编辑)
@@ -150,6 +154,19 @@ export default function RigPanel({
     <div className="space-y-3">
       {/* 骨骼：用左侧选中的，不再重复选择 */}
 
+      {/* 3D 烘焙 MVP 测试入口 */}
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="flex-1 text-[10px] h-6 border-purple-600/50 text-purple-400 hover:bg-purple-500/10"
+          onClick={() => setThreeBakeOpen(true)}
+        >
+          <Bone className="size-3 mr-1" /> 3D 烘焙测试 (MVP)
+        </Button>
+      </div>
+      <ThreeBakeDialog open={threeBakeOpen} onClose={() => setThreeBakeOpen(false)} />
+
       {/* Canvas interaction: Switch to puppet tool */}
       {selectedSkeletonId && (
         <div className="flex items-center gap-2">
@@ -193,6 +210,12 @@ export default function RigPanel({
       <div className="pt-2 border-t border-[#1e1e3a]">
         <div className="text-[10px] text-gray-500 mb-1">角色蓝图</div>
         <CharacterBlueprintEditor character={selectedCharacter} />
+      </div>
+
+      {/* ---- 状态蓝图（服装/变体程序化驱动） ---- */}
+      <div className="pt-2 border-t border-[#1e1e3a]">
+        <div className="text-[10px] text-gray-500 mb-1">状态蓝图（服装/变体驱动）</div>
+        <StateBlueprintEditor character={selectedCharacter} />
       </div>
 
       {/* ---- IK 链 ---- */}

@@ -7,8 +7,8 @@
 import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
 import type { RenderContext } from './canvas-render-helpers';
 import type { Character, Node } from '@/lib/unified-types';
-import { pxToSub, subToPx } from '@/lib/unified-types';
-import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { pxToSub, subToPx, projectToView, rotateInViewPlane, resolveChainTarget3D } from '@/lib/unified-types';
+import { computeWorldTransforms, socketOffsetTo3D } from '@/lib/unified-render';
 import { useProjectStore } from '@/lib/store';
 
 // ============================================================
@@ -27,20 +27,25 @@ export interface PuppetSkeletonOverlayParams {
 
 /**
  * 在骨架覆盖层上绘制 IK 目标手柄
- * 坐标：chain.target 为角色空间像素，(0,0) 在画布中心
+ * 坐标：静态求解目标 target3D（原点中心世界空间）按链末关节当前朝向投影到 2D，再加画布中心
  */
 export function renderIKTargetHandles(
-  rc: { ctx: CanvasRenderingContext2D; canvasWidth: number; canvasHeight: number; zoom: number; panX: number; panY: number },
+  rc: { ctx: CanvasRenderingContext2D; canvasWidth: number; canvasHeight: number; zoom: number; panX: number; panY: number; currentFrame: number },
   character: Character,
 ): void {
   const chains = character.ikChains?.filter((c) => c.enabled);
   if (!chains || chains.length === 0) return;
   const { ctx, zoom, panX, panY } = rc;
+  const worldTransforms = computeWorldTransforms(character, rc.currentFrame, rc.canvasWidth, rc.canvasHeight);
   ctx.save();
   for (const chain of chains) {
-    // chain.target 已是世界空间像素（含画布中心偏移），与 joints 对齐
-    const sx = panX + chain.target.x * zoom;
-    const sy = panY + chain.target.y * zoom;
+    // 填充/解析按链根关节朝向（target 是该朝向画布平面上的点）；手柄绘制仍按末关节朝向投影
+    const rootDir = worldTransforms.get(chain.rootNodeId)?.variantIndex ?? 6;
+    const t3 = resolveChainTarget3D(chain, rc.canvasWidth, rc.canvasHeight, rootDir);
+    const dir = worldTransforms.get(chain.endNodeId)?.variantIndex ?? 6;
+    const proj = projectToView(pxToSub(t3.x), pxToSub(t3.y), pxToSub(t3.z), dir);
+    const sx = panX + (rc.canvasWidth / 2 + subToPx(proj.canvasX)) * zoom;
+    const sy = panY + (rc.canvasHeight / 2 + subToPx(proj.canvasY)) * zoom;
     // 准星
     ctx.strokeStyle = '#00ff88';
     ctx.lineWidth = 1.5;
@@ -83,80 +88,21 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
     }
 
     // Compute world positions recursively (SubPixel units throughout;
-    // converted to pixels via subToPx at draw time)
-    // 用当前帧插值，不是 rest pose
-    // 传入该角色对应 clip 的 nodeKeyframes（用于 per-keyframe modifiers 插值）
-    const clip = animationClips.find((c) => (c as any).puppetCharacterId === character.id) ?? animationClips[0];
-    const ivMap = interpolateNodeKeyframes(character, useProjectStore.getState().currentFrame, clip?.nodeKeyframes ?? []);
+    // 直接复用主渲染的 computeWorldTransforms，保证与主画布完全一致（不再重复造轮子）
+    // 主渲染：3D 世界坐标（原点中心）→ generateRenderPlan 投影到 2D（+画布中心）
+    const worldTransforms = computeWorldTransforms(character, currentFrame, canvasWidth, canvasHeight);
     const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
     const centerX = pxToSub(canvasWidth / 2);
     const centerY = pxToSub(canvasHeight / 2);
-
-    function computeNodeWorldPosOverlay(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldAngle: number): void {
-      const node = character.nodes[nodeId];
-      if (!node) return;
-
-      // 用插值，不是 rest pose
-      const iv = ivMap.get(nodeId);
-      // 单位：全 SubPixel（node.transform.x/y、socket.basePosition 均为 SubPixel）
-      const angle = iv?.angle ?? node.transform.angle ?? 0;
-      const offsetX = iv?.x ?? node.transform.x ?? 0;
-      const offsetY = iv?.y ?? node.transform.y ?? 0;
-
-      let worldX: number;
-      let worldY: number;
-
-      const isSocketAttached = node.attachment?.type === 'socket';
-      if (!isSocketAttached) {
-        worldX = Math.round(centerX + offsetX);
-        worldY = Math.round(centerY + offsetY);
-      } else {
-        const parentInfo = parentMap.get(node.id);
-        if (parentInfo) {
-          const parentPos = worldPositions.get(parentInfo.parentId);
-          if (parentPos) {
-            const parentNode = character.nodes[parentInfo.parentId];
-            const socket = parentNode?.sockets.find(s => s.id === parentInfo.socketId);
-            if (socket && parentNode) {
-              const parentAngleRad = (parentPos.angle * Math.PI) / 180;
-              const cosA = Math.cos(parentAngleRad);
-              const sinA = Math.sin(parentAngleRad);
-              // 与主渲染一致：用 directionOffsets
-              const dir = (parentNode.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
-              const sockOff = socket.directionOffsets?.[dir] ?? socket.basePosition;
-              const socketWorldX = parentPos.x + (sockOff.x * cosA - sockOff.y * sinA);
-              const socketWorldY = parentPos.y + (sockOff.x * sinA + sockOff.y * cosA);
-              // offset 在父节点局部空间，需按父节点角度旋转（与主渲染一致）
-              const rotatedOffsetX = offsetX * cosA - offsetY * sinA;
-              const rotatedOffsetY = offsetX * sinA + offsetY * cosA;
-              worldX = Math.round(socketWorldX + rotatedOffsetX);
-              worldY = Math.round(socketWorldY + rotatedOffsetY);
-            } else {
-              worldX = Math.round(parentPos.x + offsetX);
-              worldY = Math.round(parentPos.y + offsetY);
-            }
-          } else {
-            worldX = Math.round(centerX + offsetX);
-            worldY = Math.round(centerY + offsetY);
-          }
-        } else {
-          worldX = Math.round(centerX + offsetX);
-          worldY = Math.round(centerY + offsetY);
-        }
-      }
-
-      const worldAngle = parentWorldAngle + angle;
-      worldPositions.set(node.id, { x: worldX, y: worldY, angle: worldAngle });
-
-      for (const childNode of nodes) {
-        if (childNode.attachment?.type === 'socket' && parentMap.get(childNode.id)?.parentId === node.id) {
-          computeNodeWorldPosOverlay(childNode.id, worldX, worldY, worldAngle);
-        }
-      }
-    }
-
-    for (const node of nodes) {
-      if (node.attachment?.type !== 'socket') computeNodeWorldPosOverlay(node.id, centerX, centerY, 0);
+    // 与主渲染 generateRenderPlan:938 一致：用根节点的 variantIndex 作为当前朝向
+    const rootNodeForDir = character.nodes[character.rootNodeId];
+    const currentDirection = (rootNodeForDir?.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
+    for (const [nodeId, wt] of worldTransforms) {
+      // 投影到 2D（与主渲染 generateRenderPlan:1374 一致），再加画布中心（:1377-1378）
+      const proj = projectToView(wt.worldX, wt.worldY, wt.worldZ, currentDirection);
+      const finalX = proj.canvasX + centerX;
+      const finalY = proj.canvasY + centerY;
+      worldPositions.set(nodeId, { x: finalX, y: finalY, angle: wt.worldAngle });
     }
 
     // Draw connections (lines from parent sockets to child positions)
@@ -172,13 +118,19 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
       const socket = parentNode?.sockets.find(s => s.id === parentInfo.socketId);
       if (!socket || !parentNode) continue;
 
-      const parentAngleRad = (parentPos.angle * Math.PI) / 180;
-      const cosA = Math.cos(parentAngleRad);
-      const sinA = Math.sin(parentAngleRad);
-      const dir2 = (parentNode.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
-      const sockOff2 = socket.directionOffsets?.[dir2] ?? socket.basePosition;
-      const socketWorldX = parentPos.x + (sockOff2.x * cosA - sockOff2.y * sinA);
-      const socketWorldY = parentPos.y + (sockOff2.x * sinA + sockOff2.y * cosA);
+      // 插槽点：与渲染器同一口径——socketOffsetTo3D → 视平面旋转 → 投影 + 画布中心
+      // （此前：2D directionOffsets 自算，不认 offset3D，3D 角色下插槽点塌到父节点）
+      const parentWt = worldTransforms.get(parentInfo.parentId)!; // 与 parentPos 同源，必有
+      const s3 = socketOffsetTo3D(socket, parentWt.variantIndex);
+      const rotSock = rotateInViewPlane(s3.x, s3.y, s3.z, parentWt.worldAngle, parentWt.variantIndex);
+      const projSock = projectToView(
+        parentWt.worldX + pxToSub(rotSock.x),
+        parentWt.worldY + pxToSub(rotSock.y),
+        parentWt.worldZ + pxToSub(rotSock.z),
+        currentDirection,
+      );
+      const socketWorldX = projSock.canvasX + centerX;
+      const socketWorldY = projSock.canvasY + centerY;
 
       const socketScreenX = panX + subToPx(socketWorldX) * zoom;
       const socketScreenY = panY + subToPx(socketWorldY) * zoom;
@@ -232,15 +184,19 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
         ctx.fillText(node.name, screenX + 8, screenY - 4);
       }
 
-      // Socket positions
+      // Socket positions（与渲染器同一口径：socketOffsetTo3D → 视平面旋转 → 投影 + 画布中心）
+      const nodeWt = worldTransforms.get(node.id)!; // 与 pos 同源，必有
       for (const socket of node.sockets) {
-        const socketAngleRad = (pos.angle * Math.PI) / 180;
-        const cosA2 = Math.cos(socketAngleRad);
-        const sinA2 = Math.sin(socketAngleRad);
-        const dir3 = (node.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
-        const sockOff3 = socket.directionOffsets?.[dir3] ?? socket.basePosition;
-        const socketWX = pos.x + (sockOff3.x * cosA2 - sockOff3.y * sinA2);
-        const socketWY = pos.y + (sockOff3.x * sinA2 + sockOff3.y * cosA2);
+        const s3d = socketOffsetTo3D(socket, nodeWt.variantIndex);
+        const rotDot = rotateInViewPlane(s3d.x, s3d.y, s3d.z, nodeWt.worldAngle, nodeWt.variantIndex);
+        const projDot = projectToView(
+          nodeWt.worldX + pxToSub(rotDot.x),
+          nodeWt.worldY + pxToSub(rotDot.y),
+          nodeWt.worldZ + pxToSub(rotDot.z),
+          currentDirection,
+        );
+        const socketWX = projDot.canvasX + centerX;
+        const socketWY = projDot.canvasY + centerY;
         const socketSX = panX + subToPx(socketWX) * zoom;
         const socketSY = panY + subToPx(socketWY) * zoom;
 

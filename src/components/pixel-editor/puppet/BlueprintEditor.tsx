@@ -13,7 +13,33 @@ import { listBlueprintNodeTypes, getBlueprintNodeLabel, evaluateBlueprint, evalu
 import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs, getNodeParamPorts, getPortColor, getPortDataType, canConnectPorts } from '@/lib/blueprint/specs';
 import { getModifierDef } from '@/lib/types';
 import { useProjectStore } from '@/lib/store';
+import { buildBlueprintVars, mapStoreAnimationVariables } from '@/lib/unified-animation-resolver';
+import type { ParamDriver } from '@/lib/unified-types';
+
+/** 编辑器预览用蓝图变量：从 store 的 animationVariables 按帧求值（与主渲染同口径；
+ *  character 给出时含其节点 param drivers 的 writer 求值）。失败/无变量时为空 */
+function previewBlueprintVars(frame: number, character?: Character | null): Record<string, number> {
+  try {
+    const storeVars = useProjectStore.getState().animationVariables;
+    if (!storeVars || storeVars.length === 0) return {};
+    const drivers: ParamDriver[] = [];
+    if (character) {
+      for (const n of Object.values(character.nodes)) {
+        for (const mod of n.modifiers ?? []) {
+          for (const d of mod.paramDrivers ?? []) {
+            if (d.enabled) drivers.push(d);
+          }
+        }
+      }
+    }
+    return buildBlueprintVars(mapStoreAnimationVariables(storeVars as any), frame, drivers);
+  } catch {
+    return {};
+  }
+}
 import { resolvePreviewSprite, getActiveCostumeSet } from '@/lib/sprite-resolve';
+import { generateRenderPlan, executeRenderPlan, evaluateBlueprintTransforms, canvasToPixels, pickClipStateKeyframes } from '@/lib/unified-render';
+import type { Character } from '@/lib/unified-types';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
 import PathEditor from './PathEditor';
@@ -26,6 +52,7 @@ interface BlueprintEditorProps {
   costumeSets?: Array<{ id: string; name: string; pieces: Record<string, { sprites?: Record<number, { data: unknown }>; mirrorMap?: Record<number, number> }> }>;
   /** 当前激活服装集 ID（预览解析用） */
   activeCostumeSetId?: string;
+  slotVariants?: Record<string, string>;
   /** 全局精灵表（SpriteRef 解析用） */
   spritesTable?: Record<string, any>;
   /** 传入后，nodeRef 节点的 nodeId 参数渲染为下拉选择 */
@@ -34,7 +61,9 @@ interface BlueprintEditorProps {
   idPrefix?: string;
   /** 帧率（预览播放用） */
   frameRate?: number;
-  /** 整角色预览用：所有节点及其精灵和蓝图 */
+  /** 整角色预览用：真实 Character（有它时预览走主渲染管线，与主画布一致） */
+  character?: Character | null;
+  /** 整角色预览用：所有节点及其精灵和蓝图（无 character 上下文时的旧兜底路径） */
   characterNodes?: Array<{
     id: string;
     name: string;
@@ -157,7 +186,7 @@ function BlueprintNodeParams({ selected, updateNode, onExposePort }: {
   return null; // 无 schema 时由调用方渲染通用 UI
 }
 
-export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, characterNodes, costumeSets, activeCostumeSetId, spritesTable }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, character, characterNodes, costumeSets, activeCostumeSetId, slotVariants, spritesTable }: BlueprintEditorProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
   // 笔触/轨迹下拉选项（stroke_source / trajectory_source 用，不许手输 ID）
@@ -196,6 +225,41 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
       ctx.fillRect(0, 0, W, H);
 
       if (previewMode === 'character' && characterNodes && characterNodes.length > 0) {
+        // 与主渲染一致：有真实 Character 时直接走 generateRenderPlan + executeRenderPlan，
+        // 位置/投影/精灵/方向/修改器全部是主画布的同一实现；未保存的编辑图经 blueprintTransforms 注入。
+        // （此前：自有 BFS 用 basePosition 2D 累加、不投影、不认 offset3D、精灵解析也自理）
+        if (character) {
+          const offW = 440, offH = 320; // 11:8，与 220×160 同比例，保证缩放像素清晰
+          const off = document.createElement('canvas');
+          off.width = offW; off.height = offH;
+          const octx = off.getContext('2d');
+          if (octx) {
+            const editedId = (graph as any)._nodeId as string | undefined;
+            // 其余节点：走渲染器自己的两-pass 求值（animateOthers 关时取第 0 帧，保持"他静态"语义）
+            const bpOverrides = evaluateBlueprintTransforms(character, animateOthers ? previewFrame : 0, frameRate, previewBlueprintVars(animateOthers ? previewFrame : 0, character));
+            if (editedId && graph) {
+              try {
+                const r = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: previewBlueprintVars(previewFrame, character) } as any);
+                bpOverrides.set(editedId, {
+                  translateX: r.translateX ?? 0, translateY: r.translateY ?? 0, translateZ: r.translateZ ?? 0, rotation: r.rotation ?? 0, tilt: r.tilt ?? 0,
+                  scaleX: r.scaleX ?? 1, scaleY: r.scaleY ?? 1, skewX: r.skewX ?? 0, skewY: r.skewY ?? 0,
+                });
+              } catch { /* 求值失败则用已保存版本 */ }
+            }
+            const plan = generateRenderPlan(character, previewFrame, offW, offH, 'pixel-perfect', frameRate,
+              undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+              spritesTable as any, bpOverrides, undefined,
+              pickClipStateKeyframes(useProjectStore.getState().animationClips, useProjectStore.getState().activeAnimationClipId, character.id));
+            executeRenderPlan(octx, plan, offW, offH);
+            ctx.drawImage(off, 0, 0, W, H);
+          }
+          // 标注
+          ctx.fillStyle = '#71717a';
+          ctx.font = '9px monospace';
+          ctx.fillText(`整角色 f${previewFrame}${animateOthers ? '' : '（他静态）'}`, 4, 12);
+          return;
+        }
+        // 无 Character 上下文时的旧兜底路径（自有 BFS，2D 口径）
         // 整角色模式：层级定位，插头对准插槽
         // 背景网格
         ctx.strokeStyle = '#1a1a2e';
@@ -229,7 +293,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           const bp = (cn.id === (graph as any)._nodeId) ? graph : cn.blueprint;
           if (bp && (animateOthers || cn.id === (graph as any)._nodeId)) {
             try {
-              const r = evaluateBlueprint(bp, { frame: animateOthers ? frame : 0, frameRate, vars: {} } as any);
+              const r = evaluateBlueprint(bp, { frame: animateOthers ? frame : 0, frameRate, vars: previewBlueprintVars(animateOthers ? frame : 0, character) } as any);
               t = r;
             } catch {}
           }
@@ -315,11 +379,38 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
         return;
       }
 
+      // 角色蓝图（character_source 图）：与主渲染 renderCharacterWithBlueprint 同口径——
+      // characterPixels 须是未过角色蓝图的原始合成，故用 blueprint 置空的角色副本生成渲染计划
+      //（节点蓝图经 bpOverrides 正常生效）；screen 的绘制经 drawToScreen 捕获（其求值器只回变换数值）。
+      const isCharGraph = graph.nodes.some((n) => n.type === 'character_source');
+      let capturedScreenPixels: import('@/lib/types').PixelGrid | undefined;
+      const characterPixels = (() => {
+        if (!isCharGraph || !character) return undefined;
+        try {
+          const offW = 440, offH = 320;
+          const off = document.createElement('canvas');
+          off.width = offW; off.height = offH;
+          const octx = off.getContext('2d');
+          if (!octx) return undefined;
+          const bpOverrides = evaluateBlueprintTransforms(character, previewFrame, frameRate, previewBlueprintVars(previewFrame, character));
+          const plan = generateRenderPlan({ ...character, blueprint: null }, previewFrame, offW, offH, 'pixel-perfect', frameRate,
+            undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+            spritesTable as any, bpOverrides, undefined,
+            pickClipStateKeyframes(useProjectStore.getState().animationClips, useProjectStore.getState().activeAnimationClipId, character.id));
+          executeRenderPlan(octx, plan, offW, offH);
+          return canvasToPixels(off);
+        } catch { return undefined; }
+      })();
+
       // 单节点模式（原有逻辑）
       const t = evaluateBlueprint(graph, {
         frame: previewFrame,
         frameRate,
-        vars: {},
+        vars: previewBlueprintVars(previewFrame, character),
+        ...(isCharGraph ? {
+          characterPixels,
+          drawToScreen: (cmd: { pixels: import('@/lib/types').PixelGrid }) => { capturedScreenPixels = cmd.pixels; },
+        } : {}),
         // sprite_source 从这里取当前节点的精灵（共享解析，与主渲染一致）
         spritePixels: (() => {
           const nid = (graph as any)._nodeId;
@@ -329,7 +420,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           const slotKey = cn.slot?.slotKey ?? cn.costumeSlot ?? nid;
           const direction = (cn.variantIndex ?? 6) as number;
           const activeSet = getActiveCostumeSet(costumeSets as any, activeCostumeSetId);
-          const resolved = resolvePreviewSprite(slotKey, direction, activeSet, spritesTable as any);
+          const resolved = resolvePreviewSprite(slotKey, direction, activeSet, spritesTable as any, slotVariants?.[slotKey]);
           return (resolved.sprite as any)?.data ?? undefined;
         })(),
         // costume 节点用：角色全部服装集（新 pieces 格式）
@@ -364,8 +455,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
         })(),
       } as any);
 
-      // screen 节点无输出：取其 pixels 输入的像素
-      let previewPixels = t.pixels;
+      // screen 节点无输出：角色图取 drawToScreen 捕获的像素；其余取其 pixels 输入的像素
+      let previewPixels = capturedScreenPixels ?? t.pixels;
       if (!previewPixels && selected?.type === 'screen') {
         const pixelsInput = selected.inputs?.pixels;
         if (pixelsInput && typeof pixelsInput === 'object' && 'nodeId' in pixelsInput) {
@@ -374,7 +465,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
             const out = evaluateNodeOutput(graph, ref.nodeId, {
               frame: previewFrame,
               frameRate,
-              vars: {},
+              vars: previewBlueprintVars(previewFrame, character),
             } as any);
             // out 是该节点的输出 Record，取 pixels 或 output 指定的
             const outVals = out as Record<string, any>;
@@ -1322,7 +1413,7 @@ function NodePreview({ graph, nodeId, frame, frameRate, characterNodes }: {
     if (!ctx) return;
     try {
       const out = evaluateNodeOutput(graph, nodeId, {
-        frame, frameRate, vars: {},
+        frame, frameRate, vars: previewBlueprintVars(frame),
         // sprite_source 从这里取像素
         spritePixels: (() => {
           if (characterNodes) {

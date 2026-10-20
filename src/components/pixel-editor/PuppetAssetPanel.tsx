@@ -16,6 +16,10 @@ import {
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { NodeTreeItemWrapper } from './puppet/NodeTree';
+import { SocketEditor, type SocketInfo } from './SocketEditor';
+import ThreeBakeDialog from './puppet/ThreeBakeDialog';
+import { Box } from 'lucide-react';
+import { pxToSub, subToPx, type Socket } from '@/lib/unified-types';
 import type {
   PuppetDirection,
 } from '@/lib/types';
@@ -31,12 +35,31 @@ import { Separator } from '@/components/ui/separator';
 // Browses puppet characters, skeletons, sprite parts, and clips
 // ============================================================
 
+/** Socket（SubPixel）→ SocketInfo（像素） */
+function socketToInfo(s: Socket): SocketInfo {
+  return {
+    id: s.id,
+    name: s.name,
+    x: subToPx(s.basePosition.x),
+    y: subToPx(s.basePosition.y),
+    directionOffsets: Object.fromEntries(
+      Object.entries(s.directionOffsets ?? {})
+        .filter(([, o]) => o !== undefined)
+        .map(([d, o]) => [d, { x: subToPx(o.x), y: subToPx(o.y) }]),
+    ),
+    offset3D: s.offset3D
+      ? { x: subToPx(s.offset3D.x), y: subToPx(s.offset3D.y), z: subToPx(s.offset3D.z) }
+      : undefined,
+  };
+}
+
 export default function PuppetAssetPanel() {
   // ---- New Character model ----
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
   const removeUnifiedCharacter = useProjectStore((s) => s.removeUnifiedCharacter);
   const addUnifiedNode = useProjectStore((s) => s.addUnifiedNode);
   const removeUnifiedNode = useProjectStore((s) => s.removeUnifiedNode);
+  const updateUnifiedNode = useProjectStore((s) => s.updateUnifiedNode);
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
   const setSelectedNodeId = useProjectStore((s) => s.setSelectedNodeId);
   // Character list derived from unifiedCharacters (each Character = skeleton + character)
@@ -53,6 +76,7 @@ export default function PuppetAssetPanel() {
   const setActivePuppetSkeletonId = useEditorStore((s) => s.setActivePuppetSkeletonId);
 
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [threeBakeOpen, setThreeBakeOpen] = useState(false);
   const refWizardOpen = useEditorStore((s) => s.refWizardOpen);
   const setRefWizardOpen = useEditorStore((s) => s.setRefWizardOpen);
   const [expandedChars, setExpandedChars] = useState<Set<string>>(new Set());
@@ -83,6 +107,70 @@ export default function PuppetAssetPanel() {
     setSectionExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  // ---- 选中节点及其插槽编辑（SocketEditor 接线） ----
+  const activeCharacter = activePuppetSkeletonId ? unifiedCharacters[activePuppetSkeletonId] ?? null : null;
+  const selectedNode = activeCharacter && selectedNodeId ? activeCharacter.nodes[selectedNodeId] ?? null : null;
+
+  const handleSocketChange = (socketId: string, updates: Partial<SocketInfo>) => {
+    if (!activePuppetSkeletonId || !selectedNode) return;
+    const sockets = selectedNode.sockets.map((s) => {
+      if (s.id !== socketId) return s;
+      const next: Socket = { ...s };
+      if (updates.name !== undefined) next.name = updates.name;
+      if (updates.x !== undefined || updates.y !== undefined) {
+        next.basePosition = {
+          x: pxToSub(updates.x ?? subToPx(s.basePosition.x)),
+          y: pxToSub(updates.y ?? subToPx(s.basePosition.y)),
+        };
+      }
+      if (updates.directionOffsets !== undefined) {
+        const dirOff: Record<string, { x: ReturnType<typeof pxToSub>; y: ReturnType<typeof pxToSub> }> = {};
+        for (const [d, o] of Object.entries(updates.directionOffsets)) {
+          if (o) dirOff[d] = { x: pxToSub(o.x), y: pxToSub(o.y) };
+        }
+        next.directionOffsets = dirOff as Socket['directionOffsets'];
+      }
+      if ('offset3D' in updates) {
+        next.offset3D = updates.offset3D
+          ? { x: pxToSub(updates.offset3D.x), y: pxToSub(updates.offset3D.y), z: pxToSub(updates.offset3D.z) }
+          : undefined;
+      }
+      return next;
+    });
+    updateUnifiedNode(activePuppetSkeletonId, selectedNode.id, { sockets });
+  };
+
+  const handleSocketAdd = () => {
+    if (!activePuppetSkeletonId || !selectedNode) return;
+    const newSocket: Socket = {
+      id: crypto.randomUUID(),
+      name: `socket_${selectedNode.sockets.length + 1}`,
+      basePosition: { x: pxToSub(0), y: pxToSub(-8) },
+      directionOffsets: {},
+    };
+    updateUnifiedNode(activePuppetSkeletonId, selectedNode.id, {
+      sockets: [...selectedNode.sockets, newSocket],
+    });
+  };
+
+  const handleSocketRemove = (socketId: string) => {
+    if (!activePuppetSkeletonId || !selectedNode || !activeCharacter) return;
+    const socket = selectedNode.sockets.find((s) => s.id === socketId);
+    const attached = Object.values(activeCharacter.nodes).filter(
+      (n) => n.attachment?.type === 'socket' && n.attachment.parentSocketId === socketId,
+    );
+    if (attached.length > 0 && !confirm(`删除插槽「${socket?.name ?? socketId}」会 detach ${attached.length} 个子节点（${attached.map((n) => n.name).join('、')}），继续？`)) return;
+    updateUnifiedNode(activePuppetSkeletonId, selectedNode.id, {
+      sockets: selectedNode.sockets.filter((s) => s.id !== socketId),
+    });
+    // 与 RigPanel 同语义：被 detach 的子节点改 fixed 附件（parentId 保留，仍挂在原父节点下）
+    for (const n of attached) {
+      updateUnifiedNode(activePuppetSkeletonId, n.id, {
+        attachment: { type: 'fixed', fixedOffset: { x: 0, y: 0 }, inheritRotation: true },
+      });
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-[#0d0d1a]">
       {/* Header */}
@@ -109,7 +197,18 @@ export default function PuppetAssetPanel() {
         >
           <Image className="size-3" />
         </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-5 text-purple-400 hover:text-purple-300"
+          onClick={() => setThreeBakeOpen(true)}
+          title="3D 烘焙导入（GLB → 2D 木偶）"
+        >
+          <Box className="size-3" />
+        </Button>
       </div>
+
+      <ThreeBakeDialog open={threeBakeOpen} onClose={() => setThreeBakeOpen(false)} />
 
       <PuppetCreationWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
       {refWizardOpen ? (
@@ -338,6 +437,12 @@ export default function PuppetAssetPanel() {
                           setSelectedNodeId(id);
                         }}
                         allNodes={nodes}
+                        onToggleVisibility={(nodeId) => {
+                          const target = character.nodes[nodeId];
+                          if (target && activePuppetSkeletonId) {
+                            updateUnifiedNode(activePuppetSkeletonId, nodeId, { visible: !target.visible });
+                          }
+                        }}
                       />
                     ))}
                 </div>
@@ -417,6 +522,22 @@ export default function PuppetAssetPanel() {
             );
           })()}
 
+          {/* ---- 选中节点的插槽编辑（SocketEditor） ---- */}
+          {selectedNode && (
+            <div className="mt-2 bg-[#080818] rounded border border-[#1e1e3a] p-1.5">
+              <div className="text-[9px] text-gray-500 px-0.5 pb-1 truncate">
+                {selectedNode.name} 的插槽
+              </div>
+              <SocketEditor
+                sockets={selectedNode.sockets.map(socketToInfo)}
+                selectedDirection={(activeCharacter?.nodes[activeCharacter.rootNodeId]?.transform.variantIndex ?? 6) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7}
+                onSocketChange={handleSocketChange}
+                onSocketAdd={handleSocketAdd}
+                onSocketRemove={handleSocketRemove}
+              />
+            </div>
+          )}
+
           <Separator className="bg-[#1e1e3a]" />
 
           {/* ---- Sprite Parts Section ---- */}
@@ -440,6 +561,10 @@ export default function PuppetAssetPanel() {
                   <div
                     key={sprite.id}
                     className="group flex items-center gap-1.5 px-1.5 py-0.5 text-[9px] text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded cursor-pointer transition-colors"
+                    title="编辑像素"
+                    onClick={() => {
+                      useEditorStore.getState().enterSpriteEditMode(sprite.id!);
+                    }}
                   >
                     <div className="size-2 rounded-sm border border-gray-700 bg-gray-800 flex-shrink-0" />
                     <span className="truncate flex-1 min-w-0">{sprite.name}</span>

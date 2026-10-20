@@ -13,6 +13,7 @@ import type { Character } from '@/lib/unified-types';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 import { mergeBlueprints, splitBlueprints } from '@/lib/blueprint/global';
 import BlueprintEditor from './BlueprintEditor';
+import { useBlueprintPreviewData } from './use-blueprint-preview-data';
 
 interface GlobalBlueprintEditorProps {
   character: Character | null;
@@ -24,6 +25,8 @@ export default function GlobalBlueprintEditor({ character }: GlobalBlueprintEdit
   const [outputMap, setOutputMap] = useState<Map<string, string>>(new Map());
   // 当前选中的部件：新节点归属到它
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
+  // 预览接线：与 PuppetModifierPanel 同一构造（服装/变体解析 + 整角色预览数据）
+  const { spritesTable, costumeSetsNewFormat, characterNodes } = useBlueprintPreviewData(character);
 
   // 从 character 重新合并（打开编辑器时）
   const merged = useMemo(() => {
@@ -125,6 +128,12 @@ export default function GlobalBlueprintEditor({ character }: GlobalBlueprintEdit
         onChange={setMergedGraph}
         skeleton={{ nodes: nodeList.map((n) => ({ id: n.id, name: n.name })) }}
         idPrefix={selectedNodeId ?? undefined}
+        character={character}
+        characterNodes={characterNodes}
+        costumeSets={costumeSetsNewFormat}
+        activeCostumeSetId={character.activeCostumeSetId}
+        slotVariants={character.slotVariants}
+        spritesTable={spritesTable as any}
       />
     </div>
   );

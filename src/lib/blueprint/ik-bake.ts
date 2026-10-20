@@ -7,7 +7,8 @@
  */
 import type { BlueprintGraph, BlueprintNode } from './ir';
 import type { Character, IKChain } from '../unified-types';
-import { subToPx } from '../unified-types';
+import { subToPx, resolveChainTarget3D, projectToView, pxToSub } from '../unified-types';
+import { useProjectStore } from '../store';
 import type { WorldTransform } from '../unified-render';
 
 /**
@@ -68,6 +69,13 @@ export function ikChainsToBlueprint(
     if (!baseT) continue;
     const baseX = subToPx(baseT.worldX);
     const baseY = subToPx(baseT.worldY);
+    // 目标走 target3D 解析（原点空间、按链根朝向填充）；烘焙蓝图是 2D 产物，
+    // 其 targetX/Y 取 target3D 在链朝向画布平面上的投影 (u, v)
+    const store = useProjectStore.getState();
+    const rootDir = transforms.get(jointIds[0])?.variantIndex ?? 6;
+    const t3 = resolveChainTarget3D(chain, store.canvasWidth, store.canvasHeight, rootDir);
+    const tProj = projectToView(pxToSub(t3.x), pxToSub(t3.y), pxToSub(t3.z), rootDir);
+    const t2 = { x: subToPx(tProj.canvasX), y: t3.y };
 
     const ikNodeId = `ik_${chain.id}`;
 
@@ -81,8 +89,8 @@ export function ikChainsToBlueprint(
           // Default to chain.target if not connected
         },
         params: {
-          targetX: chain.target.x,
-          targetY: chain.target.y,
+          targetX: t2.x,
+          targetY: t2.y,
           len1: lengths[0],
           len2: lengths[1],
           baseX,
@@ -125,8 +133,8 @@ export function ikChainsToBlueprint(
         type: 'ik_fabrik',
         inputs: {},
         params: {
-          targetX: chain.target.x,
-          targetY: chain.target.y,
+          targetX: t2.x,
+          targetY: t2.y,
           lengths: lengths.join(','),
           baseX,
           baseY,

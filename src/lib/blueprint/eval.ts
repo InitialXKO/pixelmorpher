@@ -15,6 +15,7 @@ import { computeGaitTransform } from '../engine/animation-handlers/shared-helper
 import { evalExpression } from '../expression-parser';
 import type { ModifierParamValue, PartAnimationModifier } from '../types';
 import { solveIK2Bone, solveIKFabrik } from './ik';
+import { rotatePseudo3D } from '../unified-types';
 
 /**
  * Cubic-bezier 缓动求值（借鉴 keyframe-engine）。
@@ -192,6 +193,35 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     return { pixels: pixelsVal(spriteData as import('../types').PixelGrid) };
   },
 
+  // 服装状态：状态蓝图专用，把服装集/槽位变体指令写入 ctx.costumeStateCmds，
+  // 由 evaluateCostumeState 在整图求值后组装（求值顺序内后写覆盖先写）。
+  // setId 可接线（string 优先于 params）；slot 给出且 clearVariant 时该槽回基础；
+  // gate<0.5 / enabled=false 时求值器不被调用，天然不生效。
+  costume_state: (n, i, ctx): Record<string, BlueprintValue> => {
+    const cmds = ((ctx as any).costumeStateCmds ??= []) as Array<{
+      setId?: string; slot?: string; variant?: string | null;
+    }>;
+    let setId = String(n.params.setId ?? '');
+    const wiredSetId = i.setId as BlueprintValue | undefined;
+    if (wiredSetId && wiredSetId.type === 'string' && wiredSetId.value) {
+      setId = wiredSetId.value;
+    }
+    const slot = String(n.params.slot ?? '');
+    const variant = String(n.params.variant ?? '');
+    const clearVariant = n.params.clearVariant === true || n.params.clearVariant === 'true';
+    const cmd: { setId?: string; slot?: string; variant?: string | null } = {};
+    if (setId) cmd.setId = setId;
+    if (slot && clearVariant) {
+      cmd.slot = slot;
+      cmd.variant = null;
+    } else if (slot && variant) {
+      cmd.slot = slot;
+      cmd.variant = variant;
+    }
+    if (cmd.setId !== undefined || cmd.slot !== undefined) cmds.push(cmd);
+    return {};
+  },
+
   // ---- 数学 ----
   add: (_n, i) => ({ out: num(asNumber(i.a ?? num(0)) + asNumber(i.b ?? num(0))) }),
   sub: (_n, i) => ({ out: num(asNumber(i.a ?? num(0)) - asNumber(i.b ?? num(0))) }),
@@ -237,6 +267,19 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     };
     if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
     return result;
+  },
+  // 伪3D旋转：输入3D点(x,y,z)+角度+方向，输出伪3D旋转后的3D点
+  // 方向 0=East…6=South，与 projectToView 一致
+  pseudo3d_rotate: (n, i): Record<string, BlueprintValue> => {
+    const x = asNumber(i.x ?? num(0));
+    const y = asNumber(i.y ?? num(0));
+    const z = asNumber(i.z ?? num(0));
+    const angle = asNumber(i.angle ?? num(Number(n.params.angle ?? 0)));
+    const direction = Math.round(asNumber(i.direction ?? num(Number(n.params.direction ?? 6)))) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+    const rotated = rotatePseudo3D(x, y, z, angle, direction);
+    return {
+      outX: num(rotated.x), outY: num(rotated.y), outZ: num(rotated.z),
+    };
   },
   uniform_scale: (n, i, ctx): Record<string, BlueprintValue> => {
     const scale = asNumber(i.scale ?? num(Number(n.params.scale ?? 1)));
@@ -426,7 +469,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // 输入: targetX/targetY（父空间目标点）, len1/len2（骨骼长度）,
   //       baseX/baseY（基点，默认0,0）, bendDir（弯曲方向 +1/-1，默认+1）
   // 输出: angle1（肩关节绝对角度）, angle2（肘关节相对角度）, reachable（是否可达）
-  ik_2bone: (n, i) => {
+  ik_2bone: (n, i): Record<string, BlueprintValue> => {
     const targetX = asNumber(i.targetX ?? num(Number(n.params.targetX ?? 0)));
     const targetY = asNumber(i.targetY ?? num(Number(n.params.targetY ?? 0)));
     const len1 = asNumber(i.len1 ?? num(Number(n.params.len1 ?? 50)));
@@ -446,7 +489,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // 输入: targetX/targetY, lengths（骨骼长度数组，逗号分隔字符串或数组）,
   //       baseX/baseY, iterations（默认10）, tolerance（默认0.5）
   // 输出: angles（关节角度数组，逗号分隔字符串）, converged（是否收敛）
-  ik_fabrik: (n, i) => {
+  ik_fabrik: (n, i): Record<string, BlueprintValue> => {
     const targetX = asNumber(i.targetX ?? num(Number(n.params.targetX ?? 0)));
     const targetY = asNumber(i.targetY ?? num(Number(n.params.targetY ?? 0)));
     const lengthsRaw = i.lengths ?? n.params.lengths ?? '40,30,20';
@@ -807,12 +850,15 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // transform: 把各分量组合成最终变换
   // input 优先，没有 input 时用 params 做默认值
   transform: (n, i) => ({
-    translateX: num(asNumber(i.translateX ?? n.params.translateX ?? num(0))),
-    translateY: num(asNumber(i.translateY ?? n.params.translateY ?? num(0))),
-    rotation: num(asNumber(i.rotation ?? n.params.rotation ?? num(0))),
-    scaleX: num(asNumber(i.scaleX ?? n.params.scaleX ?? num(1))),
-    scaleY: num(asNumber(i.scaleY ?? n.params.scaleY ?? num(1))),
-    zIndex: num(asNumber(i.zIndex ?? n.params.zIndex ?? num(0))),
+    // params 是裸值，须按全仓惯例 num(Number(...)) 包裹后再 asNumber（裸数字直喂 asNumber 恒 0）
+    translateX: num(asNumber(i.translateX ?? num(Number(n.params.translateX ?? 0)))),
+    translateY: num(asNumber(i.translateY ?? num(Number(n.params.translateY ?? 0)))),
+    translateZ: num(asNumber(i.translateZ ?? num(Number(n.params.translateZ ?? 0)))),
+    rotation: num(asNumber(i.rotation ?? num(Number(n.params.rotation ?? 0)))),
+    tilt: num(asNumber(i.tilt ?? num(Number(n.params.tilt ?? 0)))),
+    scaleX: num(asNumber(i.scaleX ?? num(Number(n.params.scaleX ?? 1)))),
+    scaleY: num(asNumber(i.scaleY ?? num(Number(n.params.scaleY ?? 1)))),
+    zIndex: num(asNumber(i.zIndex ?? num(Number(n.params.zIndex ?? 0)))),
   }),
 
   // ---- 像素形变（蓝图内处理像素，由渲染管线传入像素并取回结果） ----
@@ -2000,7 +2046,9 @@ export function evaluateBlueprint(
 ): {
   translateX: number;
   translateY: number;
+  translateZ: number;
   rotation: number;
+  tilt: number;
   scaleX: number;
   scaleY: number;
   skewX: number;
@@ -2080,7 +2128,9 @@ export function evaluateBlueprint(
   return {
     translateX: out?.translateX ? asNumber(out.translateX) : 0,
     translateY: out?.translateY ? asNumber(out.translateY) : 0,
+    translateZ: out?.translateZ ? asNumber(out.translateZ) : 0,
     rotation: out?.rotation ? asNumber(out.rotation) : 0,
+    tilt: out?.tilt ? asNumber(out.tilt) : 0,
     scaleX: out?.scaleX ? asNumber(out.scaleX) : 1,
     scaleY: out?.scaleY ? asNumber(out.scaleY) : 1,
     skewX: out?.skewX ? asNumber(out.skewX) : 0,
@@ -2089,6 +2139,31 @@ export function evaluateBlueprint(
     // screen 节点的 pixels 输出（如果有）
     pixels: pixelsOut && pixelsOut.type === 'pixels' ? pixelsOut.grid : undefined,
   };
+}
+
+/** 状态蓝图组装结果：服装集整覆 + 逐槽变体增量（null = 回基础） */
+export interface CostumeStateResult {
+  setId?: string;
+  slotChanges: Record<string, string | null>;
+}
+
+/**
+ * 求值状态蓝图，组装 costume_state 节点发出的状态指令（求值顺序内后写覆盖先写）。
+ * 无任何指令时返回 null（调用方保持下层状态不变）。
+ */
+export function evaluateCostumeState(
+  graph: BlueprintGraph,
+  ctx: BlueprintEvalContext,
+): CostumeStateResult | null {
+  const cmds: Array<{ setId?: string; slot?: string; variant?: string | null }> = [];
+  evaluateBlueprint(graph, { ...ctx, costumeStateCmds: cmds } as BlueprintEvalContext);
+  if (cmds.length === 0) return null;
+  const result: CostumeStateResult = { slotChanges: {} };
+  for (const c of cmds) {
+    if (c.setId) result.setId = c.setId;
+    if (c.slot) result.slotChanges[c.slot] = c.variant ?? null;
+  }
+  return result;
 }
 
 /**
@@ -2104,6 +2179,7 @@ export function collectDynamicStrokes(
   graph: BlueprintGraph,
   frame: number,
   frameRate: number,
+  vars?: Record<string, number | string | boolean>,
 ): { motionBlur: Array<Record<string, unknown>>; effect: Array<Record<string, unknown>> } {
   const STROKE_NODE_TYPES = new Set([
     'stroke_emitter', 'stroke_source', 'trajectory_emitter', 'trajectory_source',
@@ -2113,7 +2189,7 @@ export function collectDynamicStrokes(
   const ctx: BlueprintEvalContext = {
     frame,
     frameRate,
-    vars: {},
+    vars: vars ?? {},
     dynamicStrokes: [],
   };
   for (const node of sorted) {
@@ -2235,6 +2311,7 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   var: '变量',
   sprite_source: '精灵源',
   costume: '服装源',
+  costume_state: '服装状态',
   character_source: '角色源',
   // 数学
   add: '加',
@@ -2259,6 +2336,7 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   // 程序化动画
   translate: '平移',
   rotate: '旋转',
+  pseudo3d_rotate: '伪3D旋转',
   uniform_scale: '均匀缩放',
   skew: '倾斜',
   non_uniform_stretch: '非均匀拉伸',

@@ -8,7 +8,7 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { useProjectStore } from '@/lib/store';
 import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
-import { invalidateUnifiedPipelineCache } from '@/lib/unified-render';
+import { invalidateUnifiedPipelineCache, computeWorldTransforms } from '@/lib/unified-render';
 import {
   interpolateModifiers,
   computeKeyframeBaseTransform,
@@ -16,13 +16,12 @@ import {
   combineTransformsComponentLevel,
   floodFill,
 } from '@/lib/engine';
-import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { generateBrushStamp, applyBrushStamp } from '@/lib/brush-engine';
 import { inpaintPixels } from '@/lib/inpainting';
 import { catmullRomToBezier, isPixelInPart, getPixelAt, computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
 import type { PixelColor, PixelGrid, Bone, PuppetNode, PuppetSkeleton, PuppetCharacter, PuppetNodeKeyframe, BrushCommand, ModifierInstance } from '@/lib/types';
 import type { Node, Character, Sprite } from '@/lib/unified-types';
-import { pxToSub, subToPx } from '@/lib/unified-types';
+import { pxToSub, subToPx, projectToView } from '@/lib/unified-types';
 import { createEmptyPixelGrid } from '@/lib/types';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 
@@ -65,9 +64,11 @@ export function useCanvasState() {
   const boneDragRef = useRef<{ boneId: string; skeletonId: string; endpoint: 'head' | 'tail' | 'ik_target'; startX: number; startY: number; origHeadX: number; origHeadY: number; origTailX: number; origTailY: number; origTargetX: number; origTargetY: number } | null>(null);
   const puppetNodeDragRef = useRef<{
     nodeId: string; skeletonId: string; characterId: string; clipId: string;
-    startX: number; startY: number; origAngle: number; origStretch: number; origOffsetX: number; origOffsetY: number;
+    startX: number; startY: number; origAngle: number; origStretch: number; origOffsetX: number; origOffsetY: number; origOffsetZ?: number;
     mode: 'rotate' | 'move' | 'moveAll' | 'socket' | 'pivot'; pivotWorldX: number; pivotWorldY: number; startMouseAngle: number;
     dragStarted: boolean; moveTargetNodeId?: string; parentWorldAngle?: number; nodeWorldAngle?: number;
+    // 伪3D工具专用：拖拽起始的出平面角（tracks.tilt 插值，含蓝图贡献）
+    origTilt?: number;
     // socket 模式专用
     socketId?: string; parentNodeId?: string; origSocketX?: number; origSocketY?: number; parentAngle?: number;
     // pivot 模式专用
@@ -160,6 +161,7 @@ export function useCanvasState() {
   const effectBrushSpread = useEditorStore((s) => s.effectBrushSpread);
   const strokeBlendMode = useEditorStore((s) => s.strokeBlendMode);
   const showSkeletons = useEditorStore((s) => s.showSkeletons);
+  const perspectiveForeshorten = useEditorStore((s) => s.perspectiveForeshorten);
   const selectedBoneId = useProjectStore((s) => s.selectedBoneId);
   const activeSkeletonId = useEditorStore((s) => s.activeSkeletonId);
   const showWeightPaint = useEditorStore((s) => s.showWeightPaint);
@@ -401,65 +403,21 @@ export function useCanvasState() {
 
   // ---- Compute puppet node world pivot position ----
   // 单位统一：内部全 SubPixel，返回画布像素（调用方按像素用）
+  // 复用主渲染的 computeWorldTransforms（与绘制、命中同源）；此前私有 2D 计算不认 offset3D，
+  // 3D 角色的枢轴点同样塌到父/根位置
   const computePivotWorldPosition = useCallback(
     (node: Node, character: Character, canvasW: number, canvasH: number): { x: number; y: number } => {
-      // 用当前帧插值，不是 rest pose
       const state = useProjectStore.getState();
-      const ivMap = interpolateNodeKeyframes(character, state.currentFrame);
+      const worldTransforms = computeWorldTransforms(character, state.currentFrame, canvasW, canvasH);
       const centerX = pxToSub(canvasW / 2);
       const centerY = pxToSub(canvasH / 2);
-      const nodes = Object.values(character.nodes);
-
-      const parentMap = new Map<string, { parentId: string; socketId: string }>();
-      for (const n of nodes) {
-        if (n.attachment?.type === 'socket' && n.attachment.parentSocketId) {
-          const socketId = n.attachment.parentSocketId;
-          const parentNode = nodes.find(pn => pn.sockets.some(s => s.id === socketId));
-          if (parentNode) parentMap.set(n.id, { parentId: parentNode.id, socketId });
-        }
-      }
-
-      const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
-      function computeNodeWorldPos(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldAngle: number): { x: number; y: number; angle: number } {
-        const n = character.nodes[nodeId];
-        if (!n) return { x: parentWorldX, y: parentWorldY, angle: 0 };
-        const iv = ivMap.get(nodeId);
-        const angle = iv?.angle ?? n.transform.angle ?? 0;
-        const offsetX = iv?.x ?? n.transform.x ?? 0;
-        const offsetY = iv?.y ?? n.transform.y ?? 0;
-        let worldX: number, worldY: number;
-        const isSocketAttached = n.attachment?.type === 'socket';
-        if (!isSocketAttached) { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
-        else {
-          const parentInfo = parentMap.get(n.id);
-          if (parentInfo) {
-            const parentPos = worldPositions.get(parentInfo.parentId);
-            if (parentPos) {
-              const parentNode = character.nodes[parentInfo.parentId];
-              const socket = parentNode?.sockets.find(s => s.id === parentInfo.socketId);
-              if (socket && parentNode) {
-                const parentAngleRad = (parentPos.angle * Math.PI) / 180;
-                const cosA = Math.cos(parentAngleRad); const sinA = Math.sin(parentAngleRad);
-                const rotatedOffsetX = offsetX * cosA - offsetY * sinA;
-                const rotatedOffsetY = offsetX * sinA + offsetY * cosA;
-                const dir4 = (parentNode.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
-                const sockOff4 = socket.directionOffsets?.[dir4] ?? socket.basePosition;
-                worldX = Math.round(parentPos.x + (sockOff4.x * cosA - sockOff4.y * sinA) + rotatedOffsetX);
-                worldY = Math.round(parentPos.y + (sockOff4.x * sinA + sockOff4.y * cosA) + rotatedOffsetY);
-              } else { worldX = Math.round(parentPos.x + offsetX); worldY = Math.round(parentPos.y + offsetY); }
-            } else { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
-          } else { worldX = Math.round(centerX + offsetX); worldY = Math.round(centerY + offsetY); }
-        }
-        const worldAngle = parentWorldAngle + angle;
-        const pos = { x: worldX, y: worldY, angle: worldAngle };
-        worldPositions.set(n.id, pos);
-        for (const childInfo of nodes.filter(nn => nn.attachment?.type === 'socket' && parentMap.get(nn.id)?.parentId === n.id)) computeNodeWorldPos(childInfo.id, worldX, worldY, worldAngle);
-        return pos;
-      }
-      for (const n of nodes) { if (n.attachment?.type !== 'socket') computeNodeWorldPos(n.id, centerX, centerY, 0); }
-      const nodePos = worldPositions.get(node.id);
-      // 返回画布像素
-      return nodePos ? { x: subToPx(nodePos.x), y: subToPx(nodePos.y) } : { x: subToPx(centerX), y: subToPx(centerY) };
+      // 与主渲染 generateRenderPlan 一致：根节点 variantIndex 为当前朝向
+      const rootNodeForDir = character.nodes[character.rootNodeId];
+      const currentDirection = (rootNodeForDir?.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
+      const wt = worldTransforms.get(node.id);
+      if (!wt) return { x: canvasW / 2, y: canvasH / 2 };
+      const proj = projectToView(wt.worldX, wt.worldY, wt.worldZ, currentDirection);
+      return { x: subToPx(proj.canvasX + centerX), y: subToPx(proj.canvasY + centerY) };
     }, [],
   );
 
@@ -477,58 +435,21 @@ export function useCanvasState() {
 
       for (const character of Object.values(characters)) {
         const clip = clips.find(c => c.puppetCharacterId === character.id);
-        const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
+        // 复用主渲染的 computeWorldTransforms（与绘制、骨骼覆盖层同源）：
+        // 此前私有 computeNodeWorldPos 只读 socket 2D 偏移、不认 offset3D，
+        // 3D 角色的子节点命中点全部塌到父/根位置，点击必然不准
+        const worldTransforms = computeWorldTransforms(character, state.currentFrame, canvasWidth, canvasHeight);
         const centerX = pxToSub(canvasWidth / 2);
         const centerY = pxToSub(canvasHeight / 2);
-        const nodes = Object.values(character.nodes);
-        // 用当前帧插值（不是 rest pose），否则移动/旋转后点击不准
-        const ivMap = interpolateNodeKeyframes(character, state.currentFrame);
-
-        function computeNodeWorldPos(nodeId: string, parentWorldX: number, parentWorldY: number, parentWorldAngle: number): { x: number; y: number; angle: number } {
-          const node = character.nodes[nodeId];
-          if (!node) return { x: parentWorldX, y: parentWorldY, angle: 0 };
-          const iv = ivMap.get(nodeId);
-          const angle = iv?.angle ?? node.transform.angle;
-          const offsetX = iv?.x ?? node.transform.x;
-          const offsetY = iv?.y ?? node.transform.y;
-          let worldX: number, worldY: number;
-          const isRoot = !node.parentId;
-          if (isRoot) {
-            worldX = Math.round(centerX + offsetX);
-            worldY = Math.round(centerY + offsetY);
-          } else {
-            const parentNode = node.parentId ? character.nodes[node.parentId] : undefined;
-            const parentPos = node.parentId ? worldPositions.get(node.parentId) : undefined;
-            if (parentPos && parentNode) {
-              // Socket attachment: find socket position on parent
-              // 全 SubPixel：socket.basePosition、offset 均为 SubPixel，直接用
-              const socketId = node.attachment.parentSocketId;
-              const socket = socketId ? parentNode.sockets.find(s => s.id === socketId) : undefined;
-              const parentAngleRad = (parentPos.angle * Math.PI) / 180;
-              const cosA = Math.cos(parentAngleRad); const sinA = Math.sin(parentAngleRad);
-              const dir5 = (parentNode.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
-              const sockOff5 = socket?.directionOffsets?.[dir5] ?? socket?.basePosition;
-              const socketX = sockOff5?.x ?? 0;
-              const socketY = sockOff5?.y ?? 0;
-              // World pos = parent pos + rotated (socket pos + offset)
-              // 与 overlay/主渲染一致：不减 plug
-              const localX = socketX + offsetX;
-              const localY = socketY + offsetY;
-              worldX = Math.round(parentPos.x + localX * cosA - localY * sinA);
-              worldY = Math.round(parentPos.y + localX * sinA + localY * cosA);
-            } else {
-              worldX = Math.round(centerX + offsetX);
-              worldY = Math.round(centerY + offsetY);
-            }
-          }
-          const worldAngle = parentWorldAngle + angle;
-          worldPositions.set(node.id, { x: worldX, y: worldY, angle: worldAngle });
-          for (const child of nodes.filter(n => n.parentId === node.id)) {
-            computeNodeWorldPos(child.id, worldX, worldY, worldAngle);
-          }
-          return { x: worldX, y: worldY, angle: worldAngle };
+        // 与主渲染 generateRenderPlan 一致：根节点 variantIndex 为当前朝向
+        const rootNodeForDir = character.nodes[character.rootNodeId];
+        const currentDirection = (rootNodeForDir?.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
+        const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
+        for (const [nodeId, wt] of worldTransforms) {
+          const proj = projectToView(wt.worldX, wt.worldY, wt.worldZ, currentDirection);
+          worldPositions.set(nodeId, { x: proj.canvasX + centerX, y: proj.canvasY + centerY, angle: wt.worldAngle });
         }
-        for (const node of nodes) { if (!node.parentId) computeNodeWorldPos(node.id, centerX, centerY, 0); }
+        const nodes = Object.values(character.nodes);
 
         const activeCostumeSet = character.activeCostumeSetId
           ? character.costumeSets.find(cs => cs.id === character.activeCostumeSetId)
@@ -753,7 +674,7 @@ export function useCanvasState() {
     editMode, selectedSpriteId, setZoom, setPan,
     autoMotionBlur, autoMotionBlurIntensity, motionBlurBrushType, motionBlurIntensity, motionBlurDirection,
     effectBrushColor, effectBrushRadius, effectBrushIntensity, effectBrushDensity, effectBrushSpread, strokeBlendMode,
-    showSkeletons, selectedBoneId, activeSkeletonId, showWeightPaint, weightPaintBoneId,
+    showSkeletons, perspectiveForeshorten, selectedBoneId, activeSkeletonId, showWeightPaint, weightPaintBoneId,
     showPuppetSkeleton, activePuppetSkeletonId, selectedNodeId,
     referenceImageUrl, referenceImageOpacity, referenceImageVisible, maskNodeId,
     refWizardOpen,

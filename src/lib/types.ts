@@ -835,6 +835,10 @@ export interface AnimationClip {
   /** Per-node keyframes — 唯一的动画数据源（新模型） */
   nodeKeyframes: import('./unified-types').NodeKeyframe[];
 
+  /** 服装/变体状态轨道：离散切换的关键帧，渲染时叠加在角色静态服装状态之上
+   *  （再往上是角色状态蓝图）。仅当此 clip 为激活 clip 且 puppetCharacterId 属于该角色时生效 */
+  stateKeyframes?: import('./unified-types').CostumeStateKeyframe[];
+
   // ---- Per-clip effects ----
   effectTracks: EffectTrack[];
   canvasModifierTracks: CanvasModifierTrack[];
@@ -1188,7 +1192,7 @@ export interface EffectStroke {
   coordinateMode?: CoordinateMode; // default: 'follow_part'
 }
 
-export type ToolType = 'select' | 'brush' | 'eraser' | 'fill' | 'eyedropper' | 'move' | 'trajectory' | 'crop' | 'motion_blur_brush' | 'glow_brush' | 'particle_brush' | 'afterimage_brush' | 'lasso' | 'magic_wand' | 'smart_select' | 'inpaint' | 'puppet' | 'landmark';
+export type ToolType = 'select' | 'brush' | 'eraser' | 'fill' | 'eyedropper' | 'move' | 'trajectory' | 'crop' | 'motion_blur_brush' | 'glow_brush' | 'particle_brush' | 'afterimage_brush' | 'lasso' | 'magic_wand' | 'smart_select' | 'inpaint' | 'puppet' | 'landmark' | 'pseudo3d_rotate';
 export type PlayState = 'stopped' | 'playing' | 'paused';
 export type EditMode = 'normal' | 'correction' | 'trajectory_edit' | 'bone_edit' | 'weight_paint' | 'sprite_edit' | 'mask';
 

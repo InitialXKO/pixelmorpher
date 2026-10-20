@@ -28,6 +28,7 @@ import {
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { writePuppetPoseKeyframe } from '../canvas/tool-handlers';
 import DirectionWheel from '../DirectionWheel';
 import BlueprintTemplateLoader from './BlueprintTemplateLoader';
 import { Button } from '@/components/ui/button';
@@ -281,6 +282,11 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
                     <span className="text-[9px] text-gray-500 tabular-nums w-12 text-right flex-shrink-0">
                       {(iv?.angle ?? node.transform.angle).toFixed(0)}°
                     </span>
+                    {Math.abs(iv?.tilt ?? node.transform.tilt ?? 0) >= 0.5 && (
+                      <span className="text-[9px] text-purple-300/80 tabular-nums flex-shrink-0" title="出平面角 tilt">
+                        t{(iv?.tilt ?? node.transform.tilt ?? 0).toFixed(0)}°
+                      </span>
+                    )}
                     {hasKf ? (
                       <CircleDot className="size-3 text-amber-400 flex-shrink-0" />
                     ) : (
@@ -342,6 +348,43 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
               </Button>
             </div>
           </div>
+
+          {/* ---- 出平面角 tilt（关键帧） ---- */}
+          {performNodeId && unifiedSkeleton && (() => {
+            const node = unifiedSkeleton.nodes[performNodeId];
+            if (!node) return null;
+            const iv = interpolated.get(performNodeId);
+            const curTilt = iv?.tilt ?? node.transform.tilt ?? 0;
+            return (
+              <div className="space-y-1.5">
+                <Label className="text-[10px] text-gray-500 uppercase tracking-wider">
+                  出平面角 tilt <span className="normal-case text-[9px]">(当前帧关键帧)</span>
+                  <span className="ml-2 text-cyan-300 font-mono">{curTilt.toFixed(0)}°</span>
+                </Label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    step={1}
+                    value={Math.round(curTilt)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (!Number.isFinite(v)) return;
+                      writePuppetPoseKeyframe(unifiedSkeleton.id, clip?.id ?? '', performNodeId, currentFrame, {
+                        angle: iv?.angle ?? node.transform.angle,
+                        stretch: iv?.stretch ?? node.transform.stretch,
+                        x: iv?.x ?? node.transform.x,
+                        y: iv?.y ?? node.transform.y,
+                        tilt: v,
+                      }, (node.transform.variantIndex ?? 6) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7);
+                    }}
+                    className="w-20 px-1.5 py-1 bg-black/50 rounded text-gray-300 text-[10px]"
+                    title="出平面角（度）：绕朝向水平轴掀转，整棵子树跟随。伪3D旋转工具拖拽也写此轨道"
+                  />
+                  <span className="text-[9px] text-gray-600">伪3D旋转工具拖拽也写此轨道</span>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ---- 图层顺序（关键帧，step 插值） ---- */}
           {performNodeId && unifiedSkeleton && clip && (() => {

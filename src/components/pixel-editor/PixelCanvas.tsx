@@ -276,7 +276,7 @@ export default function PixelCanvas() {
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
         s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint,
-        freshStore.sprites);
+        freshStore.sprites, s.perspectiveForeshorten, freshStore.activeAnimationClipId);
     }
 
     // 3. Stroke preview
@@ -324,7 +324,7 @@ export default function PixelCanvas() {
     }
 
     // 6-10. Overlays
-    renderGridOverlay(rc);
+    if (s.showGrid) renderGridOverlay(rc);
     renderCanvasBorder(rc);
     // sprite_edit 下选区 mask 存的是精灵局部坐标，绘制时加回精灵的画布原点偏移
     const selOrigin = s.editMode === 'sprite_edit' ? spriteEditCanvasOrigin(s) : { x: 0, y: 0 };
@@ -342,7 +342,10 @@ export default function PixelCanvas() {
     if (s.isDrawingRef.current && s.tool === 'trajectory') renderHandDrawnTrajectoryPreview(rc, s.handDrawTrajectoryRef.current);
     if (s.isDrawingRef.current && s.tool === 'crop') renderCropPreview(rc, s.cropRectRef.current);
 
-    renderBoneOverlay(rc, { skeletons: s.skeletons, showSkeletons: s.showSkeletons, selectedBoneId: s.selectedBoneId, activeSkeletonId: s.activeSkeletonId });
+    // 精灵编辑模式下不画骨骼覆盖层（精灵居中显示，与角色坐标系不同，会误导）
+    if (s.editMode !== 'sprite_edit') {
+      renderBoneOverlay(rc, { skeletons: s.skeletons, showSkeletons: s.showSkeletons, selectedBoneId: s.selectedBoneId, activeSkeletonId: s.activeSkeletonId });
+    }
     renderWeightPaintOverlay(rc, { showWeightPaint: s.showWeightPaint, weightPaintBoneId: s.weightPaintBoneId, skeletons: s.skeletons, sprites: Object.values(useProjectStore.getState().sprites), getInterpolatedTranslateOffset: s.getInterpolatedTranslateOffset });
     renderTrajectoryOverlay(rc, { showTrajectories: s.showTrajectories, trajectories: s.trajectories, selectedSpriteId: s.selectedSpriteId, editMode: s.editMode, trajectorySnap: s.trajectorySnap, totalFrames: useProjectStore.getState().totalFrames });
 
@@ -353,14 +356,14 @@ export default function PixelCanvas() {
       const unifiedChars = pst.unifiedCharacters ?? {};
       const charList = Object.values(unifiedChars);
       renderPuppetSkeletonOverlay(rc, {
-        shouldRender: (s.showPuppetSkeleton || s.tool === 'puppet') && charList.length > 0,
+        shouldRender: s.showPuppetSkeleton && charList.length > 0,
         characters: charList, activePuppetSkeletonId: s.activePuppetSkeletonId,
         selectedNodeId: s.selectedNodeId,
         animationClips: useProjectStore.getState().animationClips, sprites: Object.values(useProjectStore.getState().sprites),
       });
       // IK 目标手柄（启用的链）
       const activeChar = charList.find((c) => c.id === s.activePuppetSkeletonId) ?? charList[0];
-      if (activeChar && s.tool === 'puppet') {
+      if (activeChar && s.showPuppetSkeleton) {
         renderIKTargetHandles(rc, activeChar);
       }
     }
@@ -388,7 +391,7 @@ export default function PixelCanvas() {
     s.onionSkinEnabled, s.onionSkinFrames, s.showGrid, s.showTrajectories, s.editMode,
     s.trajectories, s.selectedPart, s.selectedSpriteId, s.motionBlurStrokes, s.effectStrokes,
     s.effectTracks, s.autoMotionBlur, s.autoMotionBlurIntensity, s.tool,
-    s.skeletons, s.showSkeletons, s.selectedBoneId, s.activeSkeletonId,
+    s.skeletons, s.showSkeletons, s.showPuppetSkeleton, s.selectedBoneId, s.activeSkeletonId,
     s.showWeightPaint, s.weightPaintBoneId, s.unifiedCharacters,
     s.canvasModifierTracks, spriteEditSpriteId, s.spriteEditModifiers,
     interaction.renderStrokePreview, s.getInterpolatedTranslateOffset,
@@ -405,6 +408,11 @@ export default function PixelCanvas() {
   useEffect(() => {
     s.markDirty();
   }, [s.referenceImageUrl, s.referenceImageVisible, s.referenceImageOpacity]);
+
+  // 覆盖层开关变化时标记重绘（网格/骨骼/轨迹等）
+  useEffect(() => {
+    s.markDirty();
+  }, [s.showGrid, s.showPuppetSkeleton, s.showTrajectories, s.showSkeletons, s.perspectiveForeshorten]);
 
   // 节点关键帧变化时标记重绘
   const animationClips = useProjectStore((s) => s.animationClips);

@@ -19,11 +19,15 @@ import type {
   NodeRenderInstruction, DiscRenderInstruction, RenderPlan,
   KeyframeTrack, KeyframePoint, InterpolationMode,
   ModifierInstance, GeneratedItem, AnimationVariable, ParamDriver,
-  IKChain,
+  IKChain, Mat3,
 } from './unified-types';
 import {
-  subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP,
+  subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
+  resolveChainTarget3D,
+  mat3Mul, mat3Transpose, mat3Apply, localRotMat, rotMatD, applyFrameRotation, frameViewAngle, frameYAxisWorld,
+  worldToViewBasis, MAT3_IDENTITY,
 } from './unified-types';
+import { solveIK2Bone3D, solveIKFabrik3D } from './blueprint/ik';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
 import { sampleJointDiscColor, getPlugJointWidth } from './engine/render-helpers/puppet-joint-color';
@@ -70,11 +74,10 @@ import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
-import { evaluateBlueprint, EVALUATORS, collectDynamicStrokes } from './blueprint/eval';
+import { evaluateBlueprint, collectDynamicStrokes, evaluateCostumeState } from './blueprint/eval';
 import { modifiersToBlueprint } from './blueprint/migrate';
-import type { BlueprintNode, BlueprintEvalContext } from './blueprint/ir';
+import type { BlueprintEvalContext } from './blueprint/ir';
 import { isIKChainSuspended } from './ik-drag-state';
-import { asNumber } from './blueprint/ir';
 import type { BlueprintGraph } from './blueprint/ir';
 import type { VariableContext as EngineVariableContext } from './engine/param-driver';
 import type {
@@ -86,10 +89,13 @@ import {
   resolveNodeModifiers,
   computeAnimationModifierTransform,
   buildVariableContext,
+  buildBlueprintVars,
+  mapStoreAnimationVariables,
   type ResolvedModifier,
   type VariableContext,
   getEmptyVariableContext,
 } from './unified-animation-resolver';
+import { resolvePieceSprite } from './sprite-resolve';
 
 // ---- World Transform Computation ----
 
@@ -101,7 +107,9 @@ let blueprintLastFrame = -1;
 export interface BlueprintTransformResult {
   translateX: number;
   translateY: number;
+  translateZ: number;
   rotation: number;
+  tilt: number;
   scaleX: number;
   scaleY: number;
   skewX: number;
@@ -112,10 +120,11 @@ export interface BlueprintTransformResult {
  * Phase 0 (path B): Evaluate all node blueprints for transform values.
  * Two-pass for cross-node references (nodeOutputs). Mirrors puppet-keyframe-interpolation.
  */
-function evaluateBlueprintTransforms(
+export function evaluateBlueprintTransforms(
   character: Character,
   frame: number,
   frameRate: number,
+  vars?: Record<string, number | string | boolean>,
 ): Map<string, BlueprintTransformResult> {
   if (frame < blueprintLastFrame || frame > blueprintLastFrame + 5) {
     blueprintNodeState.clear();
@@ -124,7 +133,7 @@ function evaluateBlueprintTransforms(
 
   const result = new Map<string, BlueprintTransformResult>();
   const nodeOutputs = new Map<string, {
-    rotation: number; translateX: number; translateY: number;
+    rotation: number; tilt: number; translateX: number; translateY: number; translateZ: number;
     scaleX: number; scaleY: number; skewX: number; skewY: number; zIndex: number;
   }>();
 
@@ -138,7 +147,7 @@ function evaluateBlueprintTransforms(
         const t = evaluateBlueprint(blueprint, {
           frame,
           frameRate,
-          vars: {},
+          vars: vars ?? {},
           nodeOutputs: pass === 1 ? nodeOutputs : undefined,
           nodeState: blueprintNodeState,
           // costume 节点用（transform pass 不出像素，但保持 ctx 完整）
@@ -148,7 +157,9 @@ function evaluateBlueprintTransforms(
         result.set(nodeId, {
           translateX: t.translateX,
           translateY: t.translateY,
+          translateZ: t.translateZ ?? 0,
           rotation: t.rotation,
+          tilt: t.tilt ?? 0,
           scaleX: t.scaleX,
           scaleY: t.scaleY,
           skewX: t.skewX,
@@ -157,8 +168,10 @@ function evaluateBlueprintTransforms(
         if (pass === 0) {
           nodeOutputs.set(nodeId, {
             rotation: t.rotation,
+            tilt: t.tilt ?? 0,
             translateX: t.translateX,
             translateY: t.translateY,
+            translateZ: t.translateZ ?? 0,
             scaleX: t.scaleX,
             scaleY: t.scaleY,
             skewX: t.skewX,
@@ -177,9 +190,11 @@ function evaluateBlueprintTransforms(
 /** Computed world transform for a node */
 export interface WorldTransform {
   nodeId: string;
-  worldX: SubPixel;        // World position X (sub-pixel)
-  worldY: SubPixel;        // World position Y (sub-pixel)
-  worldAngle: number;      // Accumulated rotation (degrees)
+  worldX: SubPixel;        // World position X (sub-pixel, 3D)
+  worldY: SubPixel;        // World position Y (sub-pixel, 3D)
+  worldZ: SubPixel;        // World position Z (sub-pixel, 3D depth)
+  worldAngle: number;      // Derived view-plane angle (degrees; = frameViewAngle(worldFrame))
+  worldFrame: Mat3;        // Accumulated orientation frame (basis-coords rotation, incl. own local rot)
   worldStretch: number;    // Accumulated stretch factor
   variantIndex: DirectionIndex; // Current direction
   mirror: boolean;         // Whether this node is mirrored
@@ -200,6 +215,7 @@ export function computeWorldTransforms(
   frameRate: number = 12,
   variableContext?: VariableContext,
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
+  ikOverrides?: Map<string, { angle: number; tilt: number }>,
 ): Map<string, WorldTransform> {
   const transforms = new Map<string, WorldTransform>();
 
@@ -207,12 +223,16 @@ export function computeWorldTransforms(
   if (!rootNode) return transforms;
 
   // Root node: center of canvas + node's own offset
-  const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext, blueprintTransforms);
+  const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides);
+  const rootFrame = localRotMat(rootInterpolated.angle, rootInterpolated.tilt ?? 0);
   const rootWorld: WorldTransform = {
     nodeId: rootNode.id,
-    worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + rootInterpolated.x),
-    worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + rootInterpolated.y),
-    worldAngle: rootInterpolated.angle,
+    // 3D 世界坐标以原点为中心，不含画布中心（画布中心在投影后 2D 阶段加）
+    worldX: rootInterpolated.x,
+    worldY: rootInterpolated.y,
+    worldZ: rootInterpolated.z ?? 0,
+    worldAngle: frameViewAngle(rootFrame),
+    worldFrame: rootFrame,
     worldStretch: rootInterpolated.stretch,
     variantIndex: rootInterpolated.variantIndex,
     mirror: false,
@@ -223,41 +243,28 @@ export function computeWorldTransforms(
   transforms.set(rootNode.id, rootWorld);
 
   // Recursively compute children
-  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms);
+  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides);
 
-  // Apply IK chains (override FK angles)
-  applyIKChains(character, transforms, canvasWidth, canvasHeight, frame, frameRate);
+  // IK（乙：真 3D）：首遍 FK 后解出各链关节的局部 (angle, tilt) 覆写，整树重算 FK——
+  // 链外后代随 frame 复合自动跟随。ikOverrides 已传入时（重算遍）不再求解。
+  if (!ikOverrides) {
+    if (character.ikBlueprint) {
+      applyBakedIKBlueprint(character, transforms, variableContext?.values);
+      return transforms;
+    }
+    const chains = character.ikChains?.filter((c) => c.enabled && !isIKChainSuspended(c.id));
+    if (chains && chains.length > 0) {
+      const overrides = new Map<string, { angle: number; tilt: number }>();
+      for (const chain of chains) {
+        solveChainIKOverrides(character, chain, transforms, canvasWidth, canvasHeight, frame, frameRate, variableContext, blueprintTransforms, overrides);
+      }
+      if (overrides.size > 0) {
+        return computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, overrides);
+      }
+    }
+  }
 
   return transforms;
-}
-
-/**
- * Apply IK chains to computed world transforms.
- *
- * For each enabled IK chain, solves the IK and overrides the joint angles.
- * Then recomputes downstream transforms for affected subtrees.
- */
-function applyIKChains(
-  character: Character,
-  transforms: Map<string, WorldTransform>,
-  canvasWidth: number,
-  canvasHeight: number,
-  frame: number,
-  frameRate: number,
-): void {
-  // If baked IK blueprint exists, evaluate it instead of generating from chains.
-  // The baked blueprint is editable in the blueprint editor.
-  if (character.ikBlueprint) {
-    applyBakedIKBlueprint(character, transforms);
-    return;
-  }
-
-  const chains = character.ikChains?.filter((c) => c.enabled && !isIKChainSuspended(c.id));
-  if (!chains || chains.length === 0) return;
-
-  for (const chain of chains) {
-    applyIKChain(character, chain, transforms, canvasWidth, canvasHeight, frame, frameRate);
-  }
 }
 
 /**
@@ -270,11 +277,12 @@ function applyIKChains(
 function applyBakedIKBlueprint(
   character: Character,
   transforms: Map<string, WorldTransform>,
+  vars?: Record<string, number>,
 ): void {
   const blueprint = character.ikBlueprint;
   if (!blueprint) return;
 
-  const ctx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: {} };
+  const ctx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: vars ?? {} };
 
   // Evaluate each transform node that has a _jointId param
   for (const node of blueprint.nodes) {
@@ -293,20 +301,63 @@ function applyBakedIKBlueprint(
     const t = transforms.get(jointId);
     if (t) {
       t.worldAngle = result.rotation;
+      t.worldFrame = rotMatD(result.rotation);
     }
   }
 }
 
+// ---- IK 真 3D 求解（乙） ----
+//
+// 流程：首遍 FK 关节位置 → 3D 位置求解（2bone 解析 / FABRIK）→ 每关节 (angle, tilt)
+// 闭式反解为局部覆写 → 整树重算 FK。FK/IK 同一套 frame 复合口径，故自洽：
+// 重算后的关节位置与求解位置逐点一致（verify-ik-space A2）。
+
+type V3 = { x: number; y: number; z: number };
+
 /**
- * Apply a single IK chain.
- *
- * 1. Walk from rootNodeId to endNodeId to get the joint chain.
- * 2. Get bone lengths from FK joint positions.
- * 3. Solve IK for the target.
- * 4. Override joint angles in transforms map.
- * 5. Recompute downstream transforms.
+ * (angle, tilt) 闭式反解：求本地 L = RU(tilt)·RD(angle)，使
+ * applyFrameRotation(Mprev·L, offWorld, variant) 的方向 == dirWorld（均为世界轴向量）。
+ * 推导：等式化到 variant 朝向基坐标后即 L·ô = Mprev⁻¹·r̂（Mprev 为旋转阵，逆=转置）；
+ * RD 先定 h 分量（两解取与 refAngle 近者，姿态连续），RU 再把 (y, d) 对齐。
+ * inherit=false 时 Mprev 按单位阵（帧重置，与 FK 语义一致）。
+ * |q.h| 超过偏移在 (h,y) 平面的投影长度时该方向不可达，a 钳到边界（残余误差由调用方断言监控）。
  */
-function applyIKChain(
+function solveLocalAngleTilt(
+  mPrev: Mat3,
+  variant: DirectionIndex,
+  offWorld: V3,
+  dirWorld: V3,
+  refAngleDeg: number,
+  inherit: boolean,
+): { angle: number; tilt: number } {
+  const oW = Math.hypot(offWorld.x, offWorld.y, offWorld.z) || 1;
+  const o = worldToViewBasis(offWorld.x / oW, offWorld.y / oW, offWorld.z / oW, variant);
+  const dW = Math.hypot(dirWorld.x, dirWorld.y, dirWorld.z) || 1;
+  const r = worldToViewBasis(dirWorld.x / dW, dirWorld.y / dW, dirWorld.z / dW, variant);
+  const q = inherit ? mat3Apply(mat3Transpose(mPrev), r.h, r.y, r.d) : r;
+
+  const rho = Math.hypot(o.h, o.y);
+  const refRad = (refAngleDeg * Math.PI) / 180;
+  let a: number;
+  if (rho > 1e-9) {
+    const phi = Math.atan2(o.y, o.h);
+    const base = Math.acos(Math.max(-1, Math.min(1, q.h / rho)));
+    const a1 = -phi + base;
+    const a2 = -phi - base;
+    const dist = (x: number, y: number) => Math.abs(Math.atan2(Math.sin(x - y), Math.cos(x - y)));
+    a = dist(a1, refRad) <= dist(a2, refRad) ? a1 : a2;
+  } else {
+    a = refRad;
+  }
+  const o1y = o.h * Math.sin(a) + o.y * Math.cos(a);
+  const alpha1 = Math.atan2(o.d, o1y);
+  const alpha2 = Math.atan2(q.d, q.y);
+  const tilt = alpha1 - alpha2;
+  return { angle: (a * 180) / Math.PI, tilt: (tilt * 180) / Math.PI };
+}
+
+/** 为一条链在首遍 FK（transforms）上求解各关节的局部 (angle, tilt) 覆写，写入 overrides */
+function solveChainIKOverrides(
   character: Character,
   chain: IKChain,
   transforms: Map<string, WorldTransform>,
@@ -314,8 +365,11 @@ function applyIKChain(
   canvasHeight: number,
   frame: number,
   frameRate: number,
+  variableContext: VariableContext | undefined,
+  blueprintTransforms: Map<string, BlueprintTransformResult> | undefined,
+  overrides: Map<string, { angle: number; tilt: number }>,
 ): void {
-  // Build joint chain: root -> ... -> end
+  // 关节链 root → end（与旧实现同走法）
   const jointIds: string[] = [];
   let currentId: string | undefined = chain.endNodeId;
   const visited = new Set<string>();
@@ -327,26 +381,24 @@ function applyIKChain(
     if (currentId === chain.rootNodeId) break;
     currentId = node.parentId;
   }
+  if (jointIds.length < 2 || jointIds[0] !== chain.rootNodeId) return;
 
-  if (jointIds.length < 2) return;
-  if (jointIds[0] !== chain.rootNodeId) return;
+  const fk = jointIds.map((id) => transforms.get(id));
+  if (fk.some((t) => !t)) return;
+  const fkT = fk as WorldTransform[];
+  const pos: V3[] = fkT.map((t) => ({ x: subToPx(t.worldX), y: subToPx(t.worldY), z: subToPx(t.worldZ) }));
+  const n = jointIds.length;
 
-  // Get bone lengths from FK positions
-  const joints: { x: number; y: number; angle: number }[] = [];
-  for (const id of jointIds) {
-    const t = transforms.get(id);
-    if (!t) return;
-    joints.push({ x: subToPx(t.worldX), y: subToPx(t.worldY), angle: t.worldAngle });
-  }
-
+  // 每段固定偏移（world 轴向量）：由 FK 帧逆旋转段向量还原——与 FK 合成严格互逆，不另算 socket/local
+  const totals: V3[] = [];
   const lengths: number[] = [];
-  for (let i = 0; i < joints.length - 1; i++) {
-    lengths.push(Math.hypot(joints[i + 1].x - joints[i].x, joints[i + 1].y - joints[i].y));
+  for (let i = 0; i < n - 1; i++) {
+    const seg = { x: pos[i + 1].x - pos[i].x, y: pos[i + 1].y - pos[i].y, z: pos[i + 1].z - pos[i].z };
+    lengths.push(Math.hypot(seg.x, seg.y, seg.z));
+    totals.push(applyFrameRotation(mat3Transpose(fkT[i].worldFrame), seg.x, seg.y, seg.z, fkT[i].variantIndex));
   }
 
-  // 末端尖端：IK 控制的是末节尖端，不是关节轴心
-  // 在链末加虚拟尖端关节，长度为 tipLength（默认取末关节精灵 Y 轴长度）
-  // 尖端方向用末关节自己的世界角度，沿精灵局部 Y 轴（骨方向）
+  // 尖端：末关节 + 其 frame 的 +Y 轴 × tipLength（与 computeIKChainTip 同构造）
   let tipLength = chain.tipLength ?? 0;
   if (tipLength <= 0) {
     const endNode = character.nodes[chain.endNodeId];
@@ -358,220 +410,83 @@ function applyIKChain(
       tipLength = lengths[lengths.length - 1];
     }
   }
-  const realJointCount = jointIds.length;
-  if (tipLength > 1e-6 && joints.length >= 1) {
-    const lastJ = joints[joints.length - 1];
-    const rad = (lastJ.angle * Math.PI) / 180;
-    joints.push({
-      x: lastJ.x + -Math.sin(rad) * tipLength,
-      y: lastJ.y + Math.cos(rad) * tipLength,
-      angle: lastJ.angle,
+  const points: V3[] = [...pos];
+  if (tipLength > 1e-6) {
+    const yAxis = frameYAxisWorld(fkT[n - 1].worldFrame, fkT[n - 1].variantIndex);
+    points.push({
+      x: pos[n - 1].x + yAxis.x * tipLength,
+      y: pos[n - 1].y + yAxis.y * tipLength,
+      z: pos[n - 1].z + yAxis.z * tipLength,
     });
     lengths.push(tipLength);
   }
 
-  // Solve IK via Blueprint IR.
-  // Construct a blueprint graph with the IK node and evaluate it,
-  // instead of calling solvers directly. This keeps BlueprintGraph
-  // as the single IR for all kinematics.
-  const baseX = joints[0].x;
-  const baseY = joints[0].y;
-  let angles: number[];
-
-  // 目标点：优先用 targetBlueprint 动态求值（步态/正弦等修改器驱动），
-  // 没有则用静态 chain.target
-  // targetBlueprint 的输出节点应为 transform 类型，用 translateX/translateY 做目标坐标
-  // 蓝图里是局部坐标（相对画布中心），转世界坐标（+画布中心偏移）
-  let targetX = chain.target.x;
-  let targetY = chain.target.y;
+  // 目标：target3D（按链根朝向填充）+ targetBlueprint 的 XYZ 逐分量覆盖
+  const dir0 = fkT[0].variantIndex;
+  const staticT = resolveChainTarget3D(chain, canvasWidth, canvasHeight, dir0);
+  let target: V3 = { ...staticT };
   if (chain.targetBlueprint) {
     try {
-      const tbCtx: BlueprintEvalContext = { frame, frameRate, vars: {} };
-      const tbResult = evaluateBlueprint(chain.targetBlueprint, tbCtx);
-      if (Number.isFinite(tbResult.translateX)) targetX = tbResult.translateX + canvasWidth / 2;
-      if (Number.isFinite(tbResult.translateY)) targetY = tbResult.translateY + canvasHeight / 2;
+      const tbResult = evaluateBlueprint(chain.targetBlueprint, { frame, frameRate, vars: variableContext?.values ?? {} });
+      if (Number.isFinite(tbResult.translateX)) target.x = tbResult.translateX;
+      if (Number.isFinite(tbResult.translateY)) target.y = tbResult.translateY;
+      if (Number.isFinite(tbResult.translateZ)) target.z = tbResult.translateZ;
     } catch {
       // 蓝图求值失败时回退到静态目标
     }
   }
 
-  const ikNode: BlueprintNode = chain.solver === '2bone' && lengths.length === 2
-    ? {
-        id: 'ik',
-        type: 'ik_2bone',
-        inputs: {},
-        params: {
-          targetX,
-          targetY,
-          len1: lengths[0],
-          len2: lengths[1],
-          baseX,
-          baseY,
-          bendDir: chain.bendDir ?? 1,
-        },
-      }
-    : {
-        id: 'ik',
-        type: 'ik_fabrik',
-        inputs: {},
-        params: {
-          targetX,
-          targetY,
-          lengths: lengths.join(','),
-          baseX,
-          baseY,
-        },
+  // 位置求解
+  let solved: V3[];
+  if (chain.solver === '2bone' && lengths.length === 2) {
+    let pole: V3 = chain.poleTarget3D ? { ...chain.poleTarget3D } : { ...points[1] };
+    if (!chain.poleTarget3D && (chain.bendDir ?? 1) < 0) {
+      // bendDir=-1 且无显式 pole：把 FK 肘位关于 root→target 轴镜像到另一侧
+      const axis = { x: target.x - points[0].x, y: target.y - points[0].y, z: target.z - points[0].z };
+      const al = Math.hypot(axis.x, axis.y, axis.z) || 1;
+      const d = { x: axis.x / al, y: axis.y / al, z: axis.z / al };
+      const rel = { x: pole.x - points[0].x, y: pole.y - points[0].y, z: pole.z - points[0].z };
+      const proj = rel.x * d.x + rel.y * d.y + rel.z * d.z;
+      pole = {
+        x: points[0].x + 2 * proj * d.x - rel.x,
+        y: points[0].y + 2 * proj * d.y - rel.y,
+        z: points[0].z + 2 * proj * d.z - rel.z,
       };
-
-  // Evaluate the IK node through the blueprint evaluator registry
-  const evaluator = EVALUATORS[ikNode.type];
-  if (!evaluator) return;
-  const ctx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: {} };
-  const ikResult = evaluator(ikNode, {}, ctx);
-
-  // 求解器返回 X 轴角（atan2），骨骼系统用 Y 轴角（worldAngle），减 90° 转换
-  const toYAxis = (xAngle: number): number => xAngle - 90;
-
-  if (ikNode.type === 'ik_2bone') {
-    const angle1 = toYAxis(asNumber(ikResult.angle1));
-    const angle2 = asNumber(ikResult.angle2); // 相对角，不用转
-    // 肩、肘绝对角；腕及后续关节沿用末端角（无独立 IK 旋转）
-    const elbowAbs = angle1 + angle2;
-    angles = jointIds.map((_, idx) => (idx === 0 ? angle1 : elbowAbs));
+    }
+    const r = solveIK2Bone3D(points[0], target, lengths[0], lengths[1], pole);
+    solved = [points[0], r.mid, r.end];
   } else {
-    // ik_fabrik outputs angles as comma-separated string
-    const anglesVal = ikResult.angles;
-    const anglesStr = typeof anglesVal === 'object' && anglesVal !== null && 'value' in anglesVal
-      ? String((anglesVal as { value: string }).value)
-      : '';
-    const raw = anglesStr.split(',').map(Number).filter((n) => !isNaN(n)).map(toYAxis);
-    // fabrik 返回 N-1 个骨角度，补到 N 个关节（末关节沿用最后骨角度）
-    angles = jointIds.map((_, idx) => raw[Math.min(idx, raw.length - 1)] ?? 0);
+    solved = solveIKFabrik3D(points, lengths, target);
   }
 
-  if (angles.length === 0) return;
-
-  // Override joint angles in transforms
-  // Note: angles are absolute in character space. We need to convert to
-  // local angles relative to parent.
-  for (let i = 0; i < jointIds.length; i++) {
-    const t = transforms.get(jointIds[i]);
-    if (!t) continue;
-
-    // For root joint, local angle = absolute angle - parent world angle
-    // For others, local angle = absolute angle - parent absolute angle
-    let parentWorldAngle = 0;
-    if (i === 0) {
-      const node = character.nodes[jointIds[i]];
-      if (node?.parentId) {
-        const parentT = transforms.get(node.parentId);
-        if (parentT) parentWorldAngle = parentT.worldAngle;
-      }
-    } else {
-      parentWorldAngle = angles[i - 1];
-    }
-
-    const localAngle = angles[i] - parentWorldAngle;
-    t.worldAngle = angles[i];
-
-    // Store the local angle override for recomputation
-    // (we'll recompute children positions based on new angles)
-  }
-
-  // Recompute downstream transforms for the chain subtree
-  // Start from root joint's parent, recompute the chain and its children
-  const rootNode = character.nodes[chain.rootNodeId];
-  if (!rootNode?.parentId) {
-    // Root is character root: recompute from scratch is complex,
-    // for now just update positions along the chain
-    // boneLengths 取前 N-1 个（不含虚拟尖端）
-    const fkBoneLengths = lengths.slice(0, jointIds.length - 1);
-    updateChainPositions(character, jointIds, angles, transforms, fkBoneLengths);
-  } else {
-    const parentT = transforms.get(rootNode.parentId);
-    if (parentT) {
-      // Recompute chain joints from parent
-      recomputeChainFromParent(character, jointIds, angles, parentT, transforms, lengths.slice(0, jointIds.length - 1));
-    }
+  // 位置 → 局部 (angle, tilt) 覆写：逐段沿链推进父帧（Mprev 与 FK 的 plain-product 复合口径一致）
+  const rootNode = character.nodes[jointIds[0]];
+  const parentId = rootNode?.parentId ?? undefined;
+  const parentT = parentId ? transforms.get(parentId) : undefined;
+  let mPrev: Mat3 = parentT ? parentT.worldFrame : MAT3_IDENTITY;
+  let hasParent = !!parentT;
+  for (let s = 0; s < lengths.length; s++) {
+    const jid = jointIds[s];
+    const node = character.nodes[jid];
+    if (!node) break;
+    const segDir = {
+      x: solved[s + 1].x - solved[s].x,
+      y: solved[s + 1].y - solved[s].y,
+      z: solved[s + 1].z - solved[s].z,
+    };
+    if (Math.hypot(segDir.x, segDir.y, segDir.z) < 1e-9) continue;
+    const offWorld = s < totals.length ? totals[s] : { x: 0, y: tipLength, z: 0 };
+    const inherit = hasParent && node.attachment?.inheritRotation !== false;
+    const ref = interpolateTransform(node, frame, frameRate, variableContext, blueprintTransforms);
+    const { angle, tilt } = solveLocalAngleTilt(mPrev, fkT[s].variantIndex, offWorld, segDir, ref.angle, inherit);
+    overrides.set(jid, { angle, tilt });
+    const local = localRotMat(angle, tilt);
+    mPrev = inherit ? mat3Mul(mPrev, local) : local;
+    hasParent = true;
   }
 }
 
-/**
- * Update joint positions along the IK chain given solved angles.
- * Used when chain root is the character root.
- */
-function updateChainPositions(
-  character: Character,
-  jointIds: string[],
-  angles: number[],
-  transforms: Map<string, WorldTransform>,
-  boneLengths: number[],
-): void {
-  for (let i = 1; i < jointIds.length; i++) {
-    const prevT = transforms.get(jointIds[i - 1]);
-    const currT = transforms.get(jointIds[i]);
-    if (!prevT || !currT) continue;
 
-    const node = character.nodes[jointIds[i]];
-    if (!node) continue;
-
-    // 用预计算的 FK 骨长（不能从已改过的 transforms 现算）
-    const origDist = boneLengths[i - 1] ?? 0;
-    if (origDist <= 1e-6) continue;
-
-    // 骨沿局部 Y 轴：方向为 (-sin θ, cos θ)
-    const rad = (angles[i - 1] * Math.PI) / 180;
-    const newX = subToPx(prevT.worldX) + -Math.sin(rad) * origDist;
-    const newY = subToPx(prevT.worldY) + Math.cos(rad) * origDist;
-
-    currT.worldX = newX * 16 as SubPixel;
-    currT.worldY = newY * 16 as SubPixel;
-    currT.worldAngle = angles[i];
-  }
-}
-
-/**
- * Recompute chain joint transforms from parent world transform.
- */
-function recomputeChainFromParent(
-  character: Character,
-  jointIds: string[],
-  angles: number[],
-  parentT: WorldTransform,
-  transforms: Map<string, WorldTransform>,
-  boneLengths: number[],
-): void {
-  let px = subToPx(parentT.worldX);
-  let py = subToPx(parentT.worldY);
-  let parentAngle = parentT.worldAngle;
-
-  for (let i = 0; i < jointIds.length; i++) {
-    const t = transforms.get(jointIds[i]);
-    const node = character.nodes[jointIds[i]];
-    if (!t || !node) continue;
-
-    // 骨长用预计算的 FK 长度：boneLengths[i-1] 是 parent→当前关节的骨
-    // （i=0 是根，不需要骨长）
-    const boneLen = i > 0 ? (boneLengths[i - 1] ?? 0) : 0;
-
-    // Update world angle
-    t.worldAngle = angles[i];
-
-    // Update position (except for root, which keeps its FK position)
-    if (i > 0) {
-      // 骨沿局部 Y 轴
-      const rad = (angles[i - 1] * Math.PI) / 180;
-      px = px + -Math.sin(rad) * boneLen;
-      py = py + Math.cos(rad) * boneLen;
-      t.worldX = (px * 16) as SubPixel;
-      t.worldY = (py * 16) as SubPixel;
-    } else {
-      px = subToPx(t.worldX);
-      py = subToPx(t.worldY);
-    }
-    parentAngle = angles[i];
-  }
-}
 
 function computeChildTransforms(
   parentNode: Node,
@@ -582,54 +497,43 @@ function computeChildTransforms(
   frameRate: number = 12,
   variableContext?: VariableContext,
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
+  ikOverrides?: Map<string, { angle: number; tilt: number }>,
 ): void {
   for (const childId of parentNode.children) {
     const childNode = character.nodes[childId];
     if (!childNode) continue;
 
-    const childInterpolated = interpolateTransform(childNode, frame, frameRate, variableContext, blueprintTransforms);
+    const childInterpolated = interpolateTransform(childNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides);
     let childWorldX: SubPixel;
     let childWorldY: SubPixel;
-    let childAngle = childInterpolated.angle;
+    let childWorldZ: SubPixel;
     let childMirror = parentWorld.mirror;
 
     if (childNode.attachment.type === 'socket' && childNode.attachment.parentSocketId) {
       // Socket-based attachment: compute from parent's socket position
       const socket = parentNode.sockets.find(s => s.id === childNode.attachment!.parentSocketId);
       if (socket) {
-        // Get socket offset based on parent's current direction
-        const socketOffset = resolveSocketOffset(socket, parentWorld.variantIndex);
-
-        // Socket offsets are stored in sub-pixel units.
-        // Convert to PIXELS before applying rotation (cos/sin),
-        // then convert the rotated result back to sub-pixel for world position.
-        const socketOffsetX_px = subToPx(socketOffset.x);
-        const socketOffsetY_px = subToPx(socketOffset.y);
-
-        // Rotate socket offset by parent's world angle
-        const angleRad = (parentWorld.worldAngle * Math.PI) / 180;
-        const cosA = Math.cos(angleRad);
-        const sinA = Math.sin(angleRad);
-        const rotatedSocketX_px = socketOffsetX_px * cosA - socketOffsetY_px * sinA;
-        const rotatedSocketY_px = socketOffsetX_px * sinA + socketOffsetY_px * cosA;
-
-        // Rotate child's local offset by parent's world angle
-        // (child offset is in parent's local space, so it must rotate with the parent)
+        // Socket 3D 偏移：走共同口径 socketOffsetTo3D（offset3D 或 2D→3D 映射）
+        const s3 = socketOffsetTo3D(socket, parentWorld.variantIndex);
+        const sockX3D = s3.x;
+        const sockZ3D = s3.z;
+        const sockY = s3.y;
         const childOffsetX_px = subToPx(childInterpolated.x);
         const childOffsetY_px = subToPx(childInterpolated.y) * childInterpolated.stretch;
-        const rotatedChildX_px = childOffsetX_px * cosA - childOffsetY_px * sinA;
-        const rotatedChildY_px = childOffsetX_px * sinA + childOffsetY_px * cosA;
-
-        // 与 overlay 对齐：不减 plug（overlay 的节点标签位置用户确认正确）
-        childWorldX = parentWorld.worldX
-          + pxToSub(rotatedSocketX_px)
-          + pxToSub(rotatedChildX_px);
-        childWorldY = parentWorld.worldY
-          + pxToSub(rotatedSocketY_px)
-          + pxToSub(rotatedChildY_px);
+        const childOffsetZ_px = subToPx(childInterpolated.z ?? 0);
+        // 合并偏移：socket 3D + child 3D（姿态）
+        const totalX = sockX3D + childOffsetX_px;
+        const totalY = sockY + childOffsetY_px;
+        const totalZ = sockZ3D + childOffsetZ_px;
+        // 旋转：父 frame 复合旋转（tilt 全 0 时与旧 rotateInViewPlane(父 worldAngle) 逐值相同）
+        const rotated = applyFrameRotation(parentWorld.worldFrame, totalX, totalY, totalZ, parentWorld.variantIndex);
+        childWorldX = parentWorld.worldX + pxToSub(rotated.x);
+        childWorldY = parentWorld.worldY + pxToSub(rotated.y);
+        childWorldZ = parentWorld.worldZ + pxToSub(rotated.z);
       } else {
         childWorldX = parentWorld.worldX + childInterpolated.x;
         childWorldY = parentWorld.worldY + childInterpolated.y;
+        childWorldZ = parentWorld.worldZ + childInterpolated.z;
       }
 
       // Check if this direction requires mirroring
@@ -641,30 +545,33 @@ function computeChildTransforms(
     } else {
       // Fixed attachment: offset rotated by parent's world angle
       const fixedOffset = childNode.attachment.fixedOffset ?? { x: 0, y: 0 };
-      const angleRad = (parentWorld.worldAngle * Math.PI) / 180;
-      const cosA = Math.cos(angleRad);
-      const sinA = Math.sin(angleRad);
 
-      // Combine fixed offset + child's local offset, then rotate
+      // Combine fixed offset + child's local offset (3D)
       const totalOffsetX_px = subToPx(fixedOffset.x) + subToPx(childInterpolated.x);
       const totalOffsetY_px = subToPx(fixedOffset.y) + subToPx(childInterpolated.y) * childInterpolated.stretch;
-      const rotatedX = totalOffsetX_px * cosA - totalOffsetY_px * sinA;
-      const rotatedY = totalOffsetX_px * sinA + totalOffsetY_px * cosA;
+      const totalOffsetZ_px = subToPx(childInterpolated.z ?? 0);
+      // 旋转：父 frame 复合旋转（同 socket 分支）
+      const rotated2 = applyFrameRotation(parentWorld.worldFrame, totalOffsetX_px, totalOffsetY_px, totalOffsetZ_px, parentWorld.variantIndex);
 
-      childWorldX = parentWorld.worldX + pxToSub(rotatedX);
-      childWorldY = parentWorld.worldY + pxToSub(rotatedY);
+      childWorldX = parentWorld.worldX + pxToSub(rotated2.x);
+      childWorldY = parentWorld.worldY + pxToSub(rotated2.y);
+      childWorldZ = parentWorld.worldZ + pxToSub(rotated2.z);
     }
 
-    // Inherit parent rotation if configured
-    if (childNode.attachment.inheritRotation !== false) {
-      childAngle += parentWorld.worldAngle;
-    }
+    // Frame 复合：inheritRotation 时父 frame · 本地 (angle, tilt)，否则只用本地
+    // （tilt 全 0 时退化为旧标量角相加/重置，逐值一致）
+    const childLocalFrame = localRotMat(childInterpolated.angle, childInterpolated.tilt ?? 0);
+    const childFrame = childNode.attachment.inheritRotation !== false
+      ? mat3Mul(parentWorld.worldFrame, childLocalFrame)
+      : childLocalFrame;
 
     const childWorld: WorldTransform = {
       nodeId: childId,
       worldX: childWorldX,
       worldY: childWorldY,
-      worldAngle: childAngle,
+      worldZ: childWorldZ,
+      worldAngle: frameViewAngle(childFrame),
+      worldFrame: childFrame,
       worldStretch: childInterpolated.stretch * parentWorld.worldStretch,
       variantIndex: childInterpolated.variantIndex,
       mirror: childMirror,
@@ -675,7 +582,7 @@ function computeChildTransforms(
     transforms.set(childId, childWorld);
 
     // Recurse into children
-    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms);
+    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides);
   }
 }
 
@@ -687,6 +594,23 @@ function computeChildTransforms(
  */
 function resolveSocketOffset(socket: Socket, direction: DirectionIndex): Point {
   return socket.directionOffsets[direction] ?? socket.basePosition;
+}
+
+/**
+ * Socket 偏移 → 3D（像素）。全项目唯一口径：所有需要 socket 3D 偏移的地方
+ * （渲染、伪 3D 烘焙、覆盖层、命中）都必须走这里，不得各自再算。
+ * - offset3D 存在（3D 管线，选项 A）：直接用 3D 向量
+ * - 否则（2D 管线）：2D 偏移按朝向映射到 3D（sx·cosθ→X、sy→Y、sx·sinθ→Z）
+ */
+export function socketOffsetTo3D(socket: Socket, variantIndex: DirectionIndex): { x: number; y: number; z: number } {
+  if (socket.offset3D) {
+    return { x: subToPx(socket.offset3D.x), y: subToPx(socket.offset3D.y), z: subToPx(socket.offset3D.z) };
+  }
+  const socketOffset = resolveSocketOffset(socket, variantIndex);
+  const sx = subToPx(socketOffset.x);
+  const sy = subToPx(socketOffset.y);
+  const theta = (((variantIndex + 2) % 8) * Math.PI) / 4;
+  return { x: sx * Math.cos(theta), y: sy, z: sx * Math.sin(theta) };
 }
 
 // ---- Transform Interpolation ----
@@ -703,13 +627,29 @@ function interpolateTransform(
   frameRate: number = 12,
   variableContext?: VariableContext,
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
+  ikOverrides?: Map<string, { angle: number; tilt: number }>,
+): NodeTransform {
+  const r = interpolateTransformImpl(node, frame, frameRate, variableContext, blueprintTransforms);
+  // IK 覆写：求解出的局部 (angle, tilt) 绝对替换（乙的注入层，与蓝图同一层级之上）
+  const ov = ikOverrides?.get(node.id);
+  return ov ? { ...r, angle: ov.angle, tilt: ov.tilt } : r;
+}
+
+function interpolateTransformImpl(
+  node: Node,
+  frame: number,
+  frameRate: number = 12,
+  variableContext?: VariableContext,
+  blueprintTransforms?: Map<string, BlueprintTransformResult>,
 ): NodeTransform {
   const base = node.transform;
 
   // Step 1: Keyframe-driven base transform
   const kfX = interpolateTrack(node.tracks.x, frame, base.x);
   const kfY = interpolateTrack(node.tracks.y, frame, base.y);
+  const kfZ = base.z ?? 0; // 暂无 z 轨道，直接用 base（3D 烘焙写入）；旧数据缺 z 时默 0
   const kfAngle = interpolateTrack(node.tracks.angle, frame, base.angle);
+  const kfTilt = interpolateTrack(node.tracks.tilt, frame, base.tilt ?? 0);
   const kfStretch = interpolateTrack(node.tracks.stretch, frame, base.stretch);
   const kfVariant = interpolateTrack(node.tracks.variantIndex, frame, base.variantIndex) as DirectionIndex;
 
@@ -719,7 +659,10 @@ function interpolateTransform(
     return {
       x: kfX + pxToSub(bpT.translateX),
       y: kfY + pxToSub(bpT.translateY),
+      // 蓝图 translateZ 是节点的程序化 z 通道（z 无关键帧轨道，这是唯一的动态 z 来源）
+      z: kfZ + pxToSub(bpT.translateZ ?? 0),
       angle: kfAngle + bpT.rotation,
+      tilt: kfTilt + (bpT.tilt ?? 0),
       stretch: kfStretch * bpT.scaleY,
       scaleX: bpT.scaleX,
       skewX: bpT.skewX,
@@ -740,7 +683,9 @@ function interpolateTransform(
     return {
       x: kfX + pxToSub(animTransform.translateX),
       y: kfY + pxToSub(animTransform.translateY),
+      z: kfZ,
       angle: kfAngle + animTransform.rotation,
+      tilt: kfTilt,
       stretch: kfStretch * ((animTransform.scaleX + animTransform.scaleY) / 2), // Average scale as stretch
       variantIndex: kfVariant,
     };
@@ -749,7 +694,9 @@ function interpolateTransform(
   return {
     x: kfX,
     y: kfY,
+    z: kfZ,
     angle: kfAngle,
+    tilt: kfTilt,
     stretch: kfStretch,
     variantIndex: kfVariant,
   };
@@ -1017,36 +964,14 @@ function resolveSprite(
   direction: DirectionIndex,
   costumeSet?: import('./unified-types').CostumeSet,
   sprites?: Record<string, import('./unified-types').Sprite>,
+  variantId?: string,
 ): { sprite: Sprite | null; mirror: boolean; spriteId: string | null } {
-  // Helper: resolve Sprite | SpriteRef to {sprite, spriteId}
-  const resolve = (s: import('./unified-types').Sprite | import('./unified-types').SpriteRef | undefined): { sprite: Sprite | null; spriteId: string | null } => {
-    if (!s) return { sprite: null, spriteId: null };
-    if ('spriteId' in s) {
-      return { sprite: sprites?.[s.spriteId] ?? null, spriteId: s.spriteId };
-    }
-    return { sprite: s as Sprite, spriteId: null };
-  };
-  // 只走服装集：node.slot 只定义槽位，不存精灵
+  // 只走服装集：node.slot 只定义槽位，不存精灵。
+  // 分层解析（变体→基础）走 sprite-resolve 的共同实现，与蓝图预览逐级一致。
   if (costumeSet && node.slot) {
     const piece = costumeSet.pieces[node.slot.slotKey];
-    if (piece) {
-      // Check for direct sprite at this direction
-      const direct = resolve(piece.sprites[direction]);
-      if (direct.sprite) {
-        return { sprite: direct.sprite, mirror: false, spriteId: direct.spriteId };
-      }
-
-      // Check mirror map
-      const mirrorSource = piece.mirrorMap[direction];
-      if (mirrorSource !== undefined) {
-        const mirrored = resolve(piece.sprites[mirrorSource]);
-        if (mirrored.sprite) {
-          return { sprite: mirrored.sprite, mirror: true, spriteId: mirrored.spriteId };
-        }
-      }
-    }
+    return resolvePieceSprite(piece, direction, variantId, sprites);
   }
-
   return { sprite: null, mirror: false, spriteId: null };
 }
 
@@ -1065,7 +990,7 @@ export function resolveNodeSpriteId(
   if (!node) return null;
   const activeCs = (character.costumeSets ?? []).find((cs) => cs.id === character.activeCostumeSetId);
   const spriteTable = globalSprites ?? character.sprites ?? {};
-  const { spriteId } = resolveSprite(node, direction, activeCs, spriteTable);
+  const { spriteId } = resolveSprite(node, direction, activeCs, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? '']);
   return spriteId;
 }
 
@@ -1087,6 +1012,9 @@ function generateDiscInstructions(
   character: Character,
   worldTransforms: Map<string, WorldTransform>,
   discZ: Map<string, number>,
+  canvasWidth: number,
+  canvasHeight: number,
+  currentDirection: DirectionIndex,
 ): DiscRenderInstruction[] {
   const discs: DiscRenderInstruction[] = [];
 
@@ -1138,9 +1066,11 @@ function generateDiscInstructions(
 
     // Position the disc at the socket world position (connection point),
     // not at the child node's world position.
-    // Compute the socket world position from the parent's transform.
-    let discWorldX = worldTf.worldX;
-    let discWorldY = worldTf.worldY;
+    // 与节点指令同一口径：3D 世界坐标 → socketOffsetTo3D → 视平面旋转 → 投影 + 画布中心。
+    // （此前：2D socket 数学的结果直接当画布坐标——没投影、没中心化、没读 offset3D，盘位置全错）
+    let socketWorldX = worldTf.worldX;
+    let socketWorldY = worldTf.worldY;
+    let socketWorldZ = worldTf.worldZ;
 
     if (parentNode && node.attachment.type === 'socket' && node.attachment.parentSocketId) {
       // Find the socket on the parent
@@ -1148,20 +1078,20 @@ function generateDiscInstructions(
       if (socket) {
         const parentWorldTf = worldTransforms.get(parentNode.id);
         if (parentWorldTf) {
-          // Compute socket world position (same math as computeChildTransforms)
-          const socketOffset = resolveSocketOffset(socket, parentWorldTf.variantIndex);
-          const socketOffsetX_px = subToPx(socketOffset.x);
-          const socketOffsetY_px = subToPx(socketOffset.y);
-          const angleRad = (parentWorldTf.worldAngle * Math.PI) / 180;
-          const cosA = Math.cos(angleRad);
-          const sinA = Math.sin(angleRad);
-          const rotatedSocketX_px = socketOffsetX_px * cosA - socketOffsetY_px * sinA;
-          const rotatedSocketY_px = socketOffsetX_px * sinA + socketOffsetY_px * cosA;
-          discWorldX = parentWorldTf.worldX + pxToSub(rotatedSocketX_px);
-          discWorldY = parentWorldTf.worldY + pxToSub(rotatedSocketY_px);
+          // Compute socket 3D position (same math as computeChildTransforms)
+          const s3 = socketOffsetTo3D(socket, parentWorldTf.variantIndex);
+          const rot = applyFrameRotation(parentWorldTf.worldFrame, s3.x, s3.y, s3.z, parentWorldTf.variantIndex);
+          socketWorldX = (parentWorldTf.worldX + pxToSub(rot.x)) as SubPixel;
+          socketWorldY = (parentWorldTf.worldY + pxToSub(rot.y)) as SubPixel;
+          socketWorldZ = (parentWorldTf.worldZ + pxToSub(rot.z)) as SubPixel;
         }
       }
     }
+
+    // 投影到 2D 并加画布中心（与节点指令完全同一口径）
+    const discProj = projectToView(socketWorldX, socketWorldY, socketWorldZ, currentDirection);
+    const discWorldX = (pxToSub(canvasWidth / 2) + (discProj.canvasX as SubPixel)) as SubPixel;
+    const discWorldY = (pxToSub(canvasHeight / 2) + (discProj.canvasY as SubPixel)) as SubPixel;
 
     // 关节盘颜色约定：plug.discColor 自定义 > 子节点精灵开口处众数颜色 > 旧 fallback。
     // 开口中心 = 精灵 pivot（sprite.plug）+ plug 本地坐标（attachment.plug）。
@@ -1204,6 +1134,88 @@ function generateDiscInstructions(
  * before computing world transforms, ensuring procedural animation
  * contributions (pendulum, bounce, etc.) are included.
  */
+/** 本帧生效的服装状态（generateRenderPlan 内部唯一口径） */
+export interface EffectiveCostumeState {
+  costumeSetId?: string;
+  slotVariants: Record<string, string>;
+}
+
+/**
+ * 生效服装状态的前两层：角色静态字段 + clip 状态轨道（不含状态蓝图）。
+ * 时间轴的轨道摘要与「记录」diff 以此为口径（蓝图是程序化层，不进轨道编辑）。
+ */
+export function resolveTrackCostumeState(
+  character: Character,
+  frame: number,
+  stateKeyframes?: import('./unified-types').CostumeStateKeyframe[],
+): EffectiveCostumeState {
+  let costumeSetId = character.activeCostumeSetId;
+  const slotVariants: Record<string, string> = { ...(character.slotVariants ?? {}) };
+  if (stateKeyframes && stateKeyframes.length > 0) {
+    const sorted = [...stateKeyframes].sort((a, b) => a.frame - b.frame);
+    for (const k of sorted) {
+      if (k.frame > frame) break;
+      if (k.costumeSetId) costumeSetId = k.costumeSetId;
+      if (k.slotChanges) {
+        for (const [slot, v] of Object.entries(k.slotChanges)) {
+          if (v === null) delete slotVariants[slot];
+          else slotVariants[slot] = v;
+        }
+      }
+    }
+  }
+  return { costumeSetId, slotVariants };
+}
+
+/**
+ * 生效服装状态 = 三层增量叠加：
+ *  1) 角色静态字段（activeCostumeSetId / slotVariants，换装面板所设）
+ *  2) clip 状态轨道（stateKeyframes：frame ≤ 当前帧的键按帧序应用；
+ *     costumeSetId 整覆，slotChanges 逐槽覆、null 删该槽指派）
+ *  3) 角色状态蓝图（stateBlueprint 的 costume_state 指令组装结果，同增量语义）
+ * 蓝图求值 ctx 的 vars 沿用全仓现状（各蓝图求值路径均传空 vars，var 节点用自身默认值）。
+ * 蓝图求值失败时静默回落轨道层结果，不中断渲染。
+ */
+export function resolveEffectiveCostumeState(
+  character: Character,
+  frame: number,
+  frameRate: number,
+  stateKeyframes?: import('./unified-types').CostumeStateKeyframe[],
+  vars?: Record<string, number | string | boolean>,
+): EffectiveCostumeState {
+  const { costumeSetId: trackSetId, slotVariants } = resolveTrackCostumeState(character, frame, stateKeyframes);
+  let costumeSetId = trackSetId;
+  if (character.stateBlueprint) {
+    try {
+      const out = evaluateCostumeState(character.stateBlueprint, { frame, frameRate, vars: vars ?? {} } as any);
+      if (out) {
+        if (out.setId) costumeSetId = out.setId;
+        for (const [slot, v] of Object.entries(out.slotChanges)) {
+          if (v === null) delete slotVariants[slot];
+          else slotVariants[slot] = v;
+        }
+      }
+    } catch { /* 状态蓝图失败：保持轨道层结果 */ }
+  }
+  return { costumeSetId, slotVariants };
+}
+
+/**
+ * 从 clip 列表挑出对某角色生效的状态轨道：仅激活 clip 且其 puppetCharacterId
+ * 等于该角色时返回其 stateKeyframes（与 Timeline 的 clip→角色归属口径一致）；
+ * 其余情况返回 undefined（该角色本帧只受静态字段+状态蓝图影响）。
+ */
+export function pickClipStateKeyframes(
+  clips: Array<{ id: string; puppetCharacterId?: string; stateKeyframes?: import('./unified-types').CostumeStateKeyframe[] }> | undefined,
+  activeClipId: string | null | undefined,
+  characterId: string,
+): import('./unified-types').CostumeStateKeyframe[] | undefined {
+  if (!clips || !activeClipId) return undefined;
+  const clip = clips.find((c) => c.id === activeClipId);
+  if (!clip || clip.puppetCharacterId !== characterId) return undefined;
+  return clip.stateKeyframes;
+}
+
 export function generateRenderPlan(
   character: Character,
   frame: number,
@@ -1222,6 +1234,12 @@ export function generateRenderPlan(
   proceduralAnimations?: any[],
   // Global sprite table (s.sprites). Defaults to character.sprites for backward compat.
   globalSprites?: Record<string, Sprite>,
+  // Phase 0 蓝图求值的覆盖（预览未保存的编辑图用；默认走渲染器内部求值）
+  blueprintTransformsOverride?: Map<string, BlueprintTransformResult>,
+  // 透视缩短开关（编辑器视图选项）：开启时精灵沿骨骼方向按投影长度比缩放
+  perspectiveForeshorten?: boolean,
+  // 当前 clip 的服装/变体状态轨道（仅激活 clip 且归属本角色时由调用方传入）
+  stateKeyframes?: import('./unified-types').CostumeStateKeyframe[],
 ): RenderPlan {
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
@@ -1240,8 +1258,14 @@ export function generateRenderPlan(
     ? buildVariableContext(animationVariables, frame, allActiveDrivers)
     : undefined;
 
+  // 蓝图变量（变量名 → 本帧值，含 writer 驱动求值）：全部蓝图求值入口统一从此注入
+  const blueprintVars: Record<string, number> = variableContext?.values ?? {};
+
   // Phase 0 (path B): Evaluate node blueprints for transform values (two-pass)
-  const blueprintTransforms = evaluateBlueprintTransforms(character, frame, frameRate);
+  const blueprintTransforms = blueprintTransformsOverride ?? evaluateBlueprintTransforms(character, frame, frameRate, blueprintVars);
+
+  // 生效服装状态：静态字段 → clip 状态轨道 → 状态蓝图（三层增量叠加）
+  const effCostume = resolveEffectiveCostumeState(character, frame, frameRate, stateKeyframes, blueprintVars);
 
   // Step 1: World transforms (includes blueprint-evaluated modifier contributions)
   const worldTransforms = computeWorldTransforms(
@@ -1251,9 +1275,9 @@ export function generateRenderPlan(
   // Step 2: Z-order (includes disc Z computation)
   const { nodeZ, discZ } = computeZOrder(character, worldTransforms);
 
-  // Step 3: Get active costume set
-  const activeCostumeSet = character.activeCostumeSetId
-    ? character.costumeSets.find(cs => cs.id === character.activeCostumeSetId)
+  // Step 3: Get active costume set（用生效状态的集 id，含轨道/蓝图覆盖）
+  const activeCostumeSet = effCostume.costumeSetId
+    ? character.costumeSets.find(cs => cs.id === effCostume.costumeSetId)
     : undefined;
 
   // Step 4: Generate node render instructions
@@ -1292,14 +1316,14 @@ export function generateRenderPlan(
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
     // 方向混合时：先按 dirA 解析主精灵
     const resolveDir = dirBlend ? dirBlend.dirA : currentDirection;
-    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable);
+    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? '']);
     if (!sprite) continue;
 
     // 方向间过渡（蒙皮转面 A）：blend 不为 0/1 时，双精灵 faceTurn + alpha 混合
     // 只在需要时双采样，避免性能开销
     let blendedSprite: typeof sprite | null = null;
     if (dirBlend && sprite.data) {
-      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable);
+      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? '']);
       if (spriteB && spriteB.data) {
         try {
           const { applyFaceTurn, alphaBlendGrids } = require('./skin/face-turn') as typeof import('./skin/face-turn');
@@ -1364,17 +1388,30 @@ export function generateRenderPlan(
       }
     }
 
+    // 3D 投影：按当前朝向将 3D 世界坐标映射到 2D 画布（直接取项，非两步投影）
+    // 投影后加画布中心（3D 世界以原点为中心，2D 画布以中心为原点）
+    const proj = projectToView(worldTf.worldX, worldTf.worldY, worldTf.worldZ, currentDirection);
+    // 透视缩短：节点 +Y 轴（骨骼主轴）单位方向投影到渲染朝向视平面后的长度比
+    let foreshorten: number | undefined;
+    if (perspectiveForeshorten) {
+      const yw = frameYAxisWorld(worldTf.worldFrame, worldTf.variantIndex);
+      const thR = (((currentDirection + 2) % 8) * Math.PI) / 4;
+      const hr = yw.x * Math.cos(thR) + yw.z * Math.sin(thR);
+      foreshorten = Math.min(1, Math.hypot(hr, yw.y));
+    }
     nodeInstructions.push({
       nodeId,
       sprite: effectiveSprite,
-      worldX: worldTf.worldX,
-      worldY: worldTf.worldY,
+      worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel)) as SubPixel,
+      worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel)) as SubPixel,
       angle: worldTf.worldAngle,
       stretch: worldTf.worldStretch,
+      foreshorten,
       variantIndex: worldTf.variantIndex,
       rotationStrategy: strategy,
       mirror: mirror || worldTf.mirror,
-      zIndex: nodeZ.get(nodeId) ?? 0,
+      // 3D 深度排序替代 zIndex：depth 越大越靠前（后绘制）
+      zIndex: proj.depth,
       drawLayer: node.drawLayer,
       generated: undefined, // Discs are handled separately
       modifiers: nodeModifiers,
@@ -1409,7 +1446,7 @@ export function generateRenderPlan(
   }
 
   // Step 5: Generate disc instructions
-  const discInstructions = generateDiscInstructions(character, worldTransforms, discZ);
+  const discInstructions = generateDiscInstructions(character, worldTransforms, discZ, canvasWidth, canvasHeight, currentDirection);
 
   // Step 6: Sort all instructions by Z
   const allInstructions: (NodeRenderInstruction | DiscRenderInstruction)[] = [
@@ -1432,6 +1469,7 @@ export function generateRenderPlan(
     frame,
     frameRate,
     characterBlueprint: character.blueprint ?? null,
+    blueprintVars,
   };
 }
 
@@ -1460,7 +1498,7 @@ export function executeRenderPlan(
       // Fallback: legacy per-node draw (blueprint invalid — don't lose the frame)
       for (const instruction of plan.sortedInstructions) {
         if ('nodeId' in instruction) {
-          renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight);
+          renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
         } else {
           renderDisc(ctx, instruction);
         }
@@ -1469,7 +1507,7 @@ export function executeRenderPlan(
   } else {
     for (const instruction of plan.sortedInstructions) {
       if ('nodeId' in instruction) {
-        renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight);
+        renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
       } else {
         renderDisc(ctx, instruction);
       }
@@ -1531,9 +1569,12 @@ function renderNodeSprite(
   instruction: NodeRenderInstruction,
   canvasWidth: number,
   canvasHeight: number,
+  blueprintVars?: Record<string, number>,
 ): void {
   const { nodeId, sprite, worldX, worldY, angle, stretch, mirror, rotationStrategy, modifiers, frame, frameRate } = instruction;
   const scaleX = instruction.scaleX ?? 1;
+  // 透视缩短：沿骨骼方向（局部 Y）乘投影长度比；未开启时 foreshorten 为 undefined → 恒 1
+  const effStretch = stretch * (instruction.foreshorten ?? 1);
   const skews = instruction.skews ?? [];
   const previewQuality = instruction.previewQuality ?? 'high';
 
@@ -1626,7 +1667,7 @@ function renderNodeSprite(
     );
     if (hasPixelChain) {
       const bpCtx: any = {
-        frame, frameRate, vars: {},
+        frame, frameRate, vars: blueprintVars ?? {},
         spritePixels: effectivePixels,  // sprite_source 从这里取图
         // costume 节点用
         costumes: (instruction as any).costumes,
@@ -1697,7 +1738,7 @@ function renderNodeSprite(
 
       const bpGraph = { version: 1 as const, nodes: bpNodes, edges: [], outputId: 'bp_screen' };
       const bpCtx: any = {
-        frame, frameRate, vars: {},
+        frame, frameRate, vars: blueprintVars ?? {},
         spritePixels: effectivePixels,
         drawToScreen: (cmd: { pixels: PixelGrid }) => {
           if (cmd.pixels) effectivePixels = cmd.pixels;
@@ -1744,15 +1785,34 @@ function renderNodeSprite(
   }
 
   // Create offscreen canvas from (possibly modified) sprite data
-  const spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height);
+  // 可逆性：分部件尺度差换算。精灵是分部件像素（相机紧→图里大），节点是全局像素，
+  // 绘制时按比例缩放对齐。scaleFactor = partCameraHalf / globalCameraHalf（记录的尺度差，可逆）
+  // 相机紧（partCH小）→ 精灵在图里占比大 → 需缩小到全局尺度
+  // TODO: 用户反馈烘焙精灵已正确但渲染裁剪，暂禁用缩放排查
+  const partCH = sprite.partCameraHalf ?? 1.0;
+  const globalCH = sprite.globalCameraHalf ?? 1.0;
+  const scaleFactor = 1.0; // partCH / globalCH;
+
+  let spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height);
   if (!spriteCanvas || spriteCanvas.width === 0 || spriteCanvas.height === 0) return;
+  // 若尺度不一致，重采样到全局像素（一次，非每帧；记录的系数保证可逆）
+  if (Math.abs(scaleFactor - 1) > 0.001) {
+    const scaled = document.createElement('canvas');
+    scaled.width = Math.max(1, Math.round(spriteCanvas.width * scaleFactor));
+    scaled.height = Math.max(1, Math.round(spriteCanvas.height * scaleFactor));
+    const sctx = scaled.getContext('2d')!;
+    sctx.imageSmoothingEnabled = false; // 像素风不模糊
+    sctx.drawImage(spriteCanvas, 0, 0, scaled.width, scaled.height);
+    spriteCanvas = scaled;
+  }
 
   // Compute the pivot/plug position in the working canvas.
   // Account for modifier offset (e.g. outline expansion shifts the origin).
   // worldX/Y is where this pivot should land on the output canvas.
   // When mirrored, the plug X is flipped: x → width - x
-  let pivotX = (sprite.plug?.x !== undefined ? subToPx(sprite.plug.x) : spriteCanvas.width / 2) + modOffsetX;
-  const pivotY = (sprite.plug?.y !== undefined ? subToPx(sprite.plug.y) : spriteCanvas.height / 2) + modOffsetY;
+  // 注意：plug 已在全局像素下（画布已缩放），直接使用
+  let pivotX = (sprite.plug?.x !== undefined ? subToPx(sprite.plug.x) * scaleFactor : spriteCanvas.width / 2) + modOffsetX;
+  const pivotY = (sprite.plug?.y !== undefined ? subToPx(sprite.plug.y) * scaleFactor : spriteCanvas.height / 2) + modOffsetY;
 
   // Step 3: Apply horizontal flip if mirrored (STATIC mirror: flip BEFORE rotation)
   let workingCanvas: HTMLCanvasElement = spriteCanvas;
@@ -1785,7 +1845,7 @@ function renderNodeSprite(
   // Then draw at (-pivotX, -pivotY) so the pivot aligns with world position
   ctx.translate(Math.round(drawPivotX), Math.round(drawPivotY));
   ctx.rotate((angle * Math.PI) / 180);
-  ctx.scale(scaleX, stretch);
+  ctx.scale(scaleX, effStretch);
 
   // Apply skews (matches old pipeline's renderPartToCanvas order: after scale)
   for (const { skewX, skewY } of skews) {
@@ -1843,7 +1903,7 @@ function renderNodeSprite(
   // Pixel-perfect rotation only handles rotate + Y-stretch. Parts with X-scale
   // or skew fall back to the native canvas path (same as the old pipeline).
   const usePixelPerfect = rotationStrategy === 'pixel-perfect'
-    && (angle !== 0 || stretch !== 1.0)
+    && (angle !== 0 || effStretch !== 1.0)
     && scaleX === 1
     && skews.length === 0;
   if (usePixelPerfect) {
@@ -1856,7 +1916,7 @@ function renderNodeSprite(
     const result = renderPixelPerfectRotation(
       workingCanvas,
       angle,
-      stretch,
+      effStretch,
       pivotX,
       pivotY,
     );
@@ -1886,7 +1946,7 @@ function renderNodeSprite(
       ctx.save();
       ctx.translate(Math.round(drawPivotX), Math.round(drawPivotY));
       ctx.rotate((angle * Math.PI) / 180);
-      ctx.scale(scaleX, stretch);
+      ctx.scale(scaleX, effStretch);
       for (const { skewX, skewY } of skews) {
         ctx.transform(1, Math.tan((skewY * Math.PI) / 180), Math.tan((skewX * Math.PI) / 180), 1, 0, 0);
       }
@@ -2072,7 +2132,7 @@ function renderCharacterWithBlueprint(
   const offCtx = off.getContext('2d')!;
   for (const instruction of plan.sortedInstructions) {
     if ('nodeId' in instruction) {
-      renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight);
+      renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
     } else {
       renderDisc(offCtx, instruction);
     }
@@ -2087,7 +2147,7 @@ function renderCharacterWithBlueprint(
     evaluateBlueprint(blueprint, {
       frame,
       frameRate,
-      vars: {},
+      vars: plan.blueprintVars ?? {},
       characterPixels,
       drawToScreen: (cmd: { pixels: PixelGrid }) => {
         if (cmd.pixels) finalPixels = cmd.pixels;
@@ -2189,12 +2249,13 @@ function applyGlobalTransformWrapper(
   frame: number,
   frameRate: number,
   globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
+  vars?: Record<string, number>,
 ): boolean {
   let globalTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
   if (globalModifiers && globalModifiers.length > 0) {
     const blueprint = globalBlueprint ?? modifiersToBlueprint(globalModifiers as any);
     if (blueprint) {
-      const t = evaluateBlueprint(blueprint, { frame, frameRate, vars: {} } as any);
+      const t = evaluateBlueprint(blueprint, { frame, frameRate, vars: vars ?? {} } as any);
       globalTransform = {
         translateX: t.translateX, translateY: t.translateY, rotation: t.rotation,
         scaleX: t.scaleX, scaleY: t.scaleY,
@@ -2227,20 +2288,23 @@ function renderPuppetViaUnifiedPipeline(
   proceduralAnimations?: ProceduralAnimation[],
   globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
   sprites?: Record<string, Sprite>,
+  perspectiveForeshorten?: boolean,
+  animationClips?: AnimationClip[],
+  activeClipId?: string | null,
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
+    buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame),
   );
   for (const unifiedCharacter of Object.values(unifiedCharacters)) {
-    const unifiedVars: AnimationVariable[] | undefined = animationVariables?.map(v => ({
-      id: v.id, name: v.name, value: v.defaultValue ?? 0, min: 0, max: 100,
-      writerDriverId: (v as any).writerDriverId, defaultValue: v.defaultValue ?? 0,
-    }));
+    const unifiedVars = mapStoreAnimationVariables(animationVariables);
     const plan = generateRenderPlan(
       unifiedCharacter, currentFrame, canvasWidth, canvasHeight,
       'pixel-perfect', frameRate, unifiedVars,
       undefined, undefined, undefined, undefined, undefined,
       undefined, undefined, proceduralAnimations, sprites,
+      undefined, perspectiveForeshorten,
+      pickClipStateKeyframes(animationClips, activeClipId, unifiedCharacter.id),
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }
@@ -2275,6 +2339,8 @@ export function renderUnified(
   useUnifiedPipeline: boolean = true,
   globalBlueprint?: import('./blueprint/ir').BlueprintGraph | null,
   sprites?: Record<string, Sprite>,
+  perspectiveForeshorten?: boolean,
+  activeClipId?: string | null,
 ): void {
   if (backgroundColor !== 'transparent') {
     ctx.fillStyle = backgroundColor;
@@ -2285,6 +2351,7 @@ export function renderUnified(
       ctx, canvasWidth, canvasHeight, unifiedCharacters,
       currentFrame, frameRate, globalModifiers, animationVariables,
       canvasModifierTracks, proceduralAnimations, globalBlueprint, sprites,
+      perspectiveForeshorten, animationClips, activeClipId,
     );
   }
   if (effectTracks) {
@@ -2300,7 +2367,7 @@ export function renderUnified(
   if (motionBlurStrokes) {
     // 动态笔触（蓝图 stroke_emitter / stroke_source 每帧求值）
     const dynamic = globalBlueprint
-      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate)
+      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate, buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame))
       : { motionBlur: [], effect: [] };
     const overriddenIds = new Set<string>();
     for (const s of [...dynamic.motionBlur, ...dynamic.effect]) {
@@ -2315,7 +2382,7 @@ export function renderUnified(
   }
   if (effectStrokes) {
     const dynamic = globalBlueprint
-      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate)
+      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate, buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame))
       : { motionBlur: [], effect: [] };
     const overriddenIds = new Set<string>();
     for (const s of [...dynamic.motionBlur, ...dynamic.effect]) {
@@ -2355,6 +2422,8 @@ export function renderUnifiedToCanvas(
   frameRate: number = 12,
   unifiedCharacters?: Record<string, Character>,
   sprites?: Record<string, Sprite>,
+  animationClips?: AnimationClip[],
+  activeClipId?: string | null,
 ): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = canvasWidth;
@@ -2362,12 +2431,14 @@ export function renderUnifiedToCanvas(
   const ctx = canvas.getContext('2d')!;
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, frame, frameRate, undefined,
+    buildBlueprintVars(mapStoreAnimationVariables(animationVariables), frame),
   );
   if (unifiedCharacters && Object.keys(unifiedCharacters).length > 0) {
     renderPuppetViaUnifiedPipeline(
       ctx, canvasWidth, canvasHeight, unifiedCharacters,
       frame, frameRate, globalModifiers, animationVariables,
       canvasModifierTracks, undefined, undefined, sprites,
+      undefined, animationClips, activeClipId,
     );
   }
   if (hasGlobalTransform) ctx.restore();
@@ -2419,6 +2490,8 @@ export function renderUnifiedCharactersToCanvas(
   animationVariables?: StoreAnimationVariable[],
   canvasModifierTracks?: CanvasModifierTrack[],
   sprites?: Record<string, Sprite>,
+  animationClips?: AnimationClip[],
+  activeClipId?: string | null,
 ): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = canvasWidth;
@@ -2430,17 +2503,17 @@ export function renderUnifiedCharactersToCanvas(
   }
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, frame, frameRate, undefined,
+    buildBlueprintVars(mapStoreAnimationVariables(animationVariables), frame),
   );
   for (const character of characters) {
-    const unifiedVars: AnimationVariable[] | undefined = animationVariables?.map(v => ({
-      id: v.id, name: v.name, value: v.defaultValue ?? 0, min: 0, max: 100,
-      writerDriverId: (v as any).writerDriverId, defaultValue: v.defaultValue ?? 0,
-    }));
+    const unifiedVars = mapStoreAnimationVariables(animationVariables);
     const plan = generateRenderPlan(
       character, frame, canvasWidth, canvasHeight,
       'pixel-perfect', frameRate, unifiedVars,
       undefined, undefined, undefined, undefined, undefined,
       undefined, undefined, undefined, sprites,
+      undefined, undefined,
+      pickClipStateKeyframes(animationClips, activeClipId, character.id),
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }

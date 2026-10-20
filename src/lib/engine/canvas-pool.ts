@@ -19,9 +19,10 @@ const _canvasPool: HTMLCanvasElement[] = [];
 const _canvasPoolMaxSize = 128; // Increased from 32 to reduce alloc/free churn during playback
 
 export function acquireCanvas(w: number, h: number): HTMLCanvasElement {
-  // Guard: 0 尺寸 canvas 会导致 drawImage 抛 InvalidStateError
-  const cw = Math.max(1, Math.ceil(w));
-  const ch = Math.max(1, Math.ceil(h));
+  // Guard: 0 尺寸 canvas 会导致 drawImage 抛 InvalidStateError；
+  // NaN 也要拦（Math.max(1, NaN) === NaN，拦不住），否则 width 静默变 0
+  const cw = Number.isFinite(w) ? Math.max(1, Math.ceil(w)) : 1;
+  const ch = Number.isFinite(h) ? Math.max(1, Math.ceil(h)) : 1;
   const c = _canvasPool.pop();
   if (c) {
     if (c.width !== cw || c.height !== ch) {

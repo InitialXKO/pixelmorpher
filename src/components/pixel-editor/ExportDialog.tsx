@@ -472,6 +472,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
     canvasModifierTracks,
     name: projectName,
     animationClips,
+    activeAnimationClipId,
     unifiedCharacters,
   } = useProjectStore();
 
@@ -521,6 +522,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
         undefined,
         undefined,
         canvasModifierTracks,
+        undefined,
+        animationClips,
+        activeAnimationClipId,
       );
 
       // Scale for preview
@@ -579,6 +583,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
           undefined,
           undefined,
           canvasModifierTracks,
+          undefined,
+          animationClips,
+          activeAnimationClipId,
         );
 
         // Scale
@@ -670,6 +677,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
           undefined,
           undefined,
           canvasModifierTracks,
+          undefined,
+          animationClips,
+          activeAnimationClipId,
         );
 
         let col: number;
@@ -744,6 +754,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
           undefined,
           undefined,
           canvasModifierTracks,
+          undefined,
+          animationClips,
+          activeAnimationClipId,
         );
 
         const offscreen = document.createElement('canvas');
@@ -870,6 +883,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
           undefined,
           undefined,
           canvasModifierTracks,
+          undefined,
+          animationClips,
+          activeAnimationClipId,
         );
 
         offCtx.imageSmoothingEnabled = false;
