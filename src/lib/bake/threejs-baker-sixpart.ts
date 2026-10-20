@@ -328,52 +328,40 @@ export function groupTrianglesByPart(
 
 
 // ---- 部件几何构建 ----
-interface BuiltPartMesh {
-  /** 原 BakedMesh 几何剔除部件外三角形后的克隆（属性原样保留，只换 index） */
-  geometry: THREE.BufferGeometry;
-  /** 原材质（颜色遍建 toon 材质时取它自己的 map/color） */
-  sourceMaterial: THREE.Material | null;
-  /** 每顶点全局 bone index（与原几何顶点序一致） */
-  vertBone: Int32Array;
-  /** 每顶点 weight>0.2 的 bones（ID 位掩码用，与原几何顶点序一致） */
-  vertBones: number[][];
+interface BuiltPartView {
+  /** 数据源（整模静态几何；本视图与其它部件共享其属性数据，零复制） */
+  source: BakedMesh;
+  /** 本部件在此源几何上的三角形索引序列（原顶点序，本部件的「剔除」结果即这份视图） */
+  index: number[];
 }
 
 interface BuiltPart {
   part: PartName;
-  meshes: BuiltPartMesh[];
+  views: BuiltPartView[];
   /** 部件内 bone 列表（全局 index，按首次出现序） */
   partBones: number[];
 }
 
 /**
- * 构建单个部件：不重拼几何——在每个原 BakedMesh 的几何上剔除不属于本部件的三角形，
- * 顶点/UV 等属性与原材质全部原样保留。切口不封盖（与像素层拆分口径一致）。
+ * 构建单个部件的索引视图：不复制、不重拼几何——整模几何只有一份，
+ * 每个部件只是它的一份索引（部件外的三角形不进本部件的索引，即被剔除）。
+ * 跨部件三角形按 groupTrianglesByPart 的多归属同时出现在相关部件的视图里。
  */
 export function buildPartGeometry(
   bakedMeshes: BakedMesh[],
   part: PartName,
   boneToPart: (PartName | null)[],
 ): BuiltPart | null {
-  const meshes: BuiltPartMesh[] = [];
+  const views: BuiltPartView[] = [];
   for (const bm of bakedMeshes) {
     const grouped = groupTrianglesByPart(bm, boneToPart);
     const pt = grouped.get(part)!;
     if (pt.tris.length === 0) continue;
-    const geo = bm.geometry.clone();
-    const idx: number[] = [];
-    for (const [a, b, c] of pt.tris) idx.push(a, b, c);
-    geo.setIndex(idx);
-    geo.clearGroups(); // 索引已换，原材质分组区间失效；颜色遍按单材质渲染
-    geo.computeVertexNormals(); // 与 BakedMesh 口径一致：posed 法线重算（原几何无法线）
-    meshes.push({
-      geometry: geo,
-      sourceMaterial: bm.material,
-      vertBone: bm.vertBone,
-      vertBones: bm.vertBones,
-    });
+    const index: number[] = [];
+    for (const [a, b, c] of pt.tris) index.push(a, b, c);
+    views.push({ source: bm, index });
   }
-  if (meshes.length === 0) return null;
+  if (views.length === 0) return null;
 
   // 部件内 bone 列表：从拓扑 boneToPart 直接取，不从顶点扫
   // （3D 拆分完已知六件归属，顶点扫描是冗余且易错的）
@@ -381,7 +369,21 @@ export function buildPartGeometry(
   for (let bi = 0; bi < boneToPart.length; bi++) {
     if (boneToPart[bi] === part) partBones.push(bi);
   }
-  return { part, meshes, partBones };
+  return { part, views, partBones };
+}
+
+/** 由索引视图生成渲染用几何：属性对象与源几何共享（不复制数据），只装本视图的索引。 */
+function makeViewGeometry(view: BuiltPartView): THREE.BufferGeometry {
+  const src = view.source.geometry;
+  const g = new THREE.BufferGeometry();
+  const pos = src.getAttribute('position');
+  if (pos) g.setAttribute('position', pos);
+  const nor = src.getAttribute('normal');
+  if (nor) g.setAttribute('normal', nor);
+  const uv = src.getAttribute('uv');
+  if (uv) g.setAttribute('uv', uv);
+  g.setIndex(view.index);
+  return g;
 }
 
 // ---- 手臂下垂 ----
@@ -407,34 +409,40 @@ export interface ArmDroopResult {
   rotated: boolean;
   /** 臂原始方向与目标方向的夹角（度） */
   angleDeg: number;
-  /** 应用到顶点的四元数（null = 未旋转） */
-  quaternion: THREE.Quaternion | null;
-  /** 肩关节位置（模型空间） */
-  shoulderPos: THREE.Vector3;
+}
+
+/** 世界空间旋转某 bone（与 twopass 的 applyWorldRotation 同范式：由期望世界四元数反解局部四元数） */
+function applyWorldQuaternion(bone: THREE.Bone, qDeltaWorld: THREE.Quaternion): void {
+  const qOld = bone.getWorldQuaternion(new THREE.Quaternion());
+  const qNew = qDeltaWorld.clone().multiply(qOld);
+  const parent = bone.parent;
+  if (!parent) return;
+  const qParInv = parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+  bone.quaternion.copy(qParInv.multiply(qNew));
 }
 
 /**
- * 手臂下垂旋转：把臂部件几何绕肩关节转到自然垂下。
+ * 手臂下垂：骨骼蒙皮动作——在蒙皮烘焙之前旋转肩骨（臂链根）的姿态，
+ * 整臂由骨骼层级与蒙皮权重自然跟随变形，不动任何烘焙后顶点。
  *
- * - 当前臂方向 = 手腕 - 肩（归一化）
+ * - 当前臂方向 = 手 - 肩（归一化，bindPos 为摆姿前世界坐标）
  * - 目标方向 = (0,-1,0)，左右各外张 5°（避免贴躯干）
  *   - 角色面朝 +Z 时 +X 为左（与 assignBoneToPart 一致）
  * - 夹角 < 10° 时跳过（已是垂臂姿态）
  *
- * 只旋转几何顶点；调用方需同步旋转对应 bone 的 bindPos（关节投影用）。
+ * 调用方在两臂都处理后需 updateMatrixWorld 并重取 bindPos。
  */
-export function droopArmPart(
-  built: BuiltPart,
+export function droopArmPose(
+  bones: THREE.Bone[],
   part: 'armL' | 'armR',
-  shoulderPos: THREE.Vector3,
-  handPos: THREE.Vector3,
+  shoulderIdx: number,
+  handIdx: number,
+  bindPos: THREE.Vector3[],
 ): ArmDroopResult {
-  const result: ArmDroopResult = {
-    rotated: false,
-    angleDeg: 0,
-    quaternion: null,
-    shoulderPos: shoulderPos.clone(),
-  };
+  const result: ArmDroopResult = { rotated: false, angleDeg: 0 };
+  const shoulderPos = bindPos[shoulderIdx];
+  const handPos = bindPos[handIdx];
+  if (!shoulderPos || !handPos) return result;
 
   const cur = new THREE.Vector3().subVectors(handPos, shoulderPos);
   if (cur.lengthSq() < 1e-12) return result;
@@ -452,23 +460,9 @@ export function droopArmPart(
   result.angleDeg = angleDeg;
   if (angleDeg < 10) return result; // 已垂下，跳过
 
-  const quat = new THREE.Quaternion().setFromUnitVectors(cur, target);
-  result.quaternion = quat;
+  const qDelta = new THREE.Quaternion().setFromUnitVectors(cur, target);
+  applyWorldQuaternion(bones[shoulderIdx], qDelta);
   result.rotated = true;
-
-  // 旋转全部顶点（绕肩关节）：部件的每个子几何逐个转
-  const v = new THREE.Vector3();
-  for (const pm of built.meshes) {
-    const pos = pm.geometry.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < pos.count; i++) {
-      v.fromBufferAttribute(pos, i);
-      v.sub(shoulderPos).applyQuaternion(quat).add(shoulderPos);
-      pos.setXYZ(i, v.x, v.y, v.z);
-    }
-    pos.needsUpdate = true;
-    pm.geometry.computeVertexNormals();
-    pm.geometry.computeBoundingBox();
-  }
   return result;
 }
 
@@ -611,6 +605,24 @@ export async function bakeSixParts(
       boneToPart = bones.map((b, i) => assignBoneToPart(b.name || '', bindPos[i].x));
     }
 
+    // ---- 手臂下垂（骨骼姿态，提前到蒙皮烘焙之前）：转肩骨姿态，整臂由蒙皮自然变形 ----
+    if (topology.cross !== null) {
+      let anyDroop = false;
+      for (const ap of ['armL', 'armR'] as const) {
+        const shoulderIdx = findArmRoot(parentIndex, boneToPart, ap);
+        const handIdx = ap === 'armL' ? topology.handL : topology.handR;
+        if (shoulderIdx === null || handIdx === null) continue;
+        const res = droopArmPose(bones, ap, shoulderIdx, handIdx, bindPos);
+        if (res.rotated) anyDroop = true;
+        console.log(`[bake] ${ap} 臂原始夹角 ${res.angleDeg.toFixed(1)}°${res.rotated ? ' → 已转垂下' : '（跳过）'}`);
+      }
+      if (anyDroop) {
+        // 摆姿后重取关节世界位置（后续投影/拆分都读这份 bindPos）
+        model.updateMatrixWorld(true);
+        for (let bi = 0; bi < bones.length; bi++) bones[bi].getWorldPosition(bindPos[bi]);
+      }
+    }
+
     // ---- 蒙皮烘焙为静态 ----
     const bakedMeshes: BakedMesh[] = [];
     model.traverse((o) => {
@@ -623,7 +635,10 @@ export async function bakeSixParts(
     });
     if (bakedMeshes.length === 0) throw new Error('模型中没有找到 Mesh');
 
-    // ---- 构建 6 部件 ----
+    // 法线：整模统一算一次（最终姿态），各部件索引视图共享
+    for (const bm of bakedMeshes) bm.geometry.computeVertexNormals();
+
+    // ---- 构建 6 部件（索引视图，不复制几何） ----
     const parts = new Map<PartName, BuiltPart>();
     for (const p of ALL_PARTS) {
       const built = buildPartGeometry(bakedMeshes, p, boneToPart);
@@ -631,39 +646,11 @@ export async function bakeSixParts(
     }
     if (parts.size === 0) throw new Error('六部件拆分后没有可用几何');
 
-    // ---- 手臂下垂：armL/armR 转成自然垂下姿态（非 T-pose） ----
-    // 在归一化之前做，使 bbox/scale 按垂臂姿态计算；关节投影用旋转后的 bindPos。
-    if (topology.cross !== null) {
-      for (const ap of ['armL', 'armR'] as const) {
-        const built = parts.get(ap);
-        if (!built) continue;
-        const shoulderIdx = findArmRoot(parentIndex, boneToPart, ap);
-        const handIdx = ap === 'armL' ? topology.handL : topology.handR;
-        if (shoulderIdx === null || handIdx === null) continue;
-        const res = droopArmPart(built, ap, bindPos[shoulderIdx], bindPos[handIdx]);
-        if (res.rotated && res.quaternion) {
-          // 同步旋转该部件 bones 的 bindPos（关节投影/后续流程用）
-          const q = res.quaternion;
-          const s = res.shoulderPos;
-          const v = new THREE.Vector3();
-          for (let bi = 0; bi < bones.length; bi++) {
-            if (boneToPart[bi] !== ap) continue;
-            v.copy(bindPos[bi]).sub(s).applyQuaternion(q).add(s);
-            bindPos[bi].copy(v);
-          }
-          // 同步拓扑输入的世界坐标（topoBones 已用于分析，此处仅保持一致性，无需重分析）
-        }
-        console.log(`[bake] ${ap} 臂原始夹角 ${res.angleDeg.toFixed(1)}°${res.rotated ? ' → 已转垂下' : '（跳过）'}`);
-      }
-    }
-
     // ---- 整模归一化（各部件同 scale） ----
     const fullBox = new THREE.Box3();
-    for (const [, bp] of parts) {
-      for (const pm of bp.meshes) {
-        pm.geometry.computeBoundingBox();
-        fullBox.union(pm.geometry.boundingBox!);
-      }
+    for (const bm of bakedMeshes) {
+      bm.geometry.computeBoundingBox();
+      fullBox.union(bm.geometry.boundingBox!);
     }
     const center = fullBox.getCenter(new THREE.Vector3());
     const sphere = fullBox.getBoundingSphere(new THREE.Sphere());
@@ -672,18 +659,10 @@ export async function bakeSixParts(
     // ---- bone 合并（复用整模逻辑，用于 2D 拆分） ----
     const vertexCounts = new Array<number>(bones.length).fill(0);
     for (const [, bp] of parts) {
-      for (const pm of bp.meshes) {
-        // 只统计被本部件三角形实际引用的顶点（原几何未引用顶点不算）
-        const idx = pm.geometry.getIndex();
-        const seen = new Set<number>();
-        if (idx) {
-          for (let i = 0; i < idx.count; i++) seen.add(idx.getX(i));
-        } else {
-          const n = (pm.geometry.getAttribute('position') as THREE.BufferAttribute).count;
-          for (let i = 0; i < n; i++) seen.add(i);
-        }
-        for (const vi of seen) {
-          const bi = pm.vertBone[vi];
+      for (const view of bp.views) {
+        // 只统计被本部件视图实际引用的顶点
+        for (const vi of new Set<number>(view.index)) {
+          const bi = view.source.vertBone[vi];
           if (bi >= 0) vertexCounts[bi]++;
         }
       }
@@ -753,16 +732,16 @@ export async function bakeSixParts(
 
       // 归一化变换：整模 center/scale
       const partGroup = new THREE.Group();
-      // 颜色遍：部件的每个子几何用其原材质派生 toon 材质（各自的 map/color），不再全部件共用一份
+      // 颜色遍：部件的每个索引视图用其源材质派生 toon 材质（各自的 map/color），不再全部件共用一份
       const inner = new THREE.Group();
-      for (const pm of bp.meshes) {
-        const src = pm.sourceMaterial as THREE.MeshStandardMaterial | null;
+      for (const view of bp.views) {
+        const src = view.source.material as THREE.MeshStandardMaterial | null;
         const toonMat = new THREE.MeshToonMaterial({
           color: src && 'color' in src && src.color ? (src.color as THREE.Color).clone() : new THREE.Color(0xffffff),
           ...(src && 'map' in src && src.map ? { map: src.map as THREE.Texture } : {}),
           gradientMap,
         });
-        const mesh = new THREE.Mesh(pm.geometry, toonMat);
+        const mesh = new THREE.Mesh(makeViewGeometry(view), toonMat);
         mesh.frustumCulled = false;
         inner.add(mesh);
       }
@@ -778,10 +757,9 @@ export async function bakeSixParts(
       const localIndex = new Map<number, number>();
       bp.partBones.forEach((gi, li) => localIndex.set(gi, li));
       const idInner = new THREE.Group();
-      for (const pm of bp.meshes) {
-        const srcPos = pm.geometry.getAttribute('position') as THREE.BufferAttribute;
-        const srcIndex = pm.geometry.getIndex();
-        const triCount = srcIndex ? srcIndex.count / 3 : Math.floor(srcPos.count / 3);
+      for (const view of bp.views) {
+        const srcPos = view.source.geometry.getAttribute('position') as THREE.BufferAttribute;
+        const triCount = Math.floor(view.index.length / 3);
         if (triCount === 0) continue;
         const idPositions = new Float32Array(triCount * 9);
         const idTriIds = new Float32Array(triCount * 3);
@@ -794,13 +772,13 @@ export async function bakeSixParts(
           let primaryCount = 0;
           const boneCounts = new Map<number, number>();
           for (let k = 0; k < 3; k++) {
-            const v = srcIndex ? srcIndex.getX(t * 3 + k) : t * 3 + k;
+            const v = view.index[t * 3 + k];
             idPositions[(t * 3 + k) * 3] = srcPos.getX(v);
             idPositions[(t * 3 + k) * 3 + 1] = srcPos.getY(v);
             idPositions[(t * 3 + k) * 3 + 2] = srcPos.getZ(v);
             idTriIds[t * 3 + k] = t;
-            const vbs = pm.vertBones[v] ?? [];
-            const bones = vbs.length > 0 ? vbs : (pm.vertBone[v] >= 0 ? [pm.vertBone[v]] : []);
+            const vbs = view.source.vertBones[v] ?? [];
+            const bones = vbs.length > 0 ? vbs : (view.source.vertBone[v] >= 0 ? [view.source.vertBone[v]] : []);
             for (const gi of bones) {
               // 流程修正：ID 纹理只含本部件拓扑骨骼（防跨部件泄漏，如盆骨三角带大腿权重被分到腿部时，其 hips 权重不應出現在腿部 ID 图中）
               if (boneToPart[gi] !== pname) continue;
@@ -880,10 +858,10 @@ export async function bakeSixParts(
       const pbox = new THREE.Box3();
       {
         const tv = new THREE.Vector3();
-        for (const pm of bp.meshes) {
-          const pa = pm.geometry.getAttribute('position') as THREE.BufferAttribute;
-          for (let i = 0; i < pa.count; i++) {
-            tv.fromBufferAttribute(pa, i);
+        for (const view of bp.views) {
+          const pa = view.source.geometry.getAttribute('position') as THREE.BufferAttribute;
+          for (const vi of new Set<number>(view.index)) {
+            tv.fromBufferAttribute(pa, vi);
             tv.sub(center).multiplyScalar(scale);
             pbox.expandByPoint(tv);
           }
@@ -950,7 +928,7 @@ export async function bakeSixParts(
         renderer.setRenderTarget(null);
       }
 
-      // 清理本部件的颜色/ID 资源（子几何克隆归 bake 内部所有，在此释放）
+      // 清理本部件的颜色/ID 资源（视图几何与源几何共享属性数据，不在此释放）
       partGroup.traverse((o) => {
         const m = o as THREE.Mesh;
         if (m.isMesh) (m.material as THREE.Material).dispose();
@@ -963,7 +941,6 @@ export async function bakeSixParts(
         mat.dispose();
         m.geometry.dispose();
       });
-      for (const pm of bp.meshes) pm.geometry.dispose();
     }
 
     rt.dispose();
