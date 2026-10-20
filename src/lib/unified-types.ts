@@ -804,16 +804,19 @@ export interface IKChain {
   /** End effector node ID (e.g., hand) */
   endNodeId: string;
   /**
-   * 旧义 2D 目标（历史字段）：含画布中心的画布空间像素。
+   * 旧义 2D 目标（历史字段）：链朝向画布平面上的点（含画布中心）。
    * 仅作旧数据种子与旧义镜像——求解禁止读它，一律走 target3D（见 resolveChainTarget3D）。
-   * 写入方须保持镜像不变式：target = target3D + (canvasW/2, canvasH/2)。
+   * 写入方须保持投影镜像不变式：target = 画布中心 + projectToView(target3D, 链朝向).canvasXY。
    */
   target: { x: number; y: number };
   /**
    * 求解唯一输入：原点中心世界空间的 3D 目标（像素，z 向外为正）。
-   * 缺失（旧项目）时由 resolveChainTarget3D 从 target 换算/填充：减画布中心、z=0。
+   * 缺失（旧项目）时由 resolveChainTarget3D 从 target 按链朝向反投影换算
+   * （target 是链朝向画布平面上的点：其 x 分量按朝向落入世界 x/z，y 不变）。
    */
   target3D?: { x: number; y: number; z: number };
+  /** 2bone 极向量目标（原点中心世界空间）；缺省取求解前 FK 的肘位（姿态连续） */
+  poleTarget3D?: { x: number; y: number; z: number };
   /**
    * Optional blueprint driving the target dynamically.
    * Evaluated each frame; outputs {x, y} or {targetX, targetY}.
@@ -833,20 +836,38 @@ export interface IKChain {
 /**
  * IK 链求解目标的唯一解析口径：返回原点中心世界空间的 3D 目标（像素）。
  * - target3D 存在 → 直接用；
- * - 缺失（旧项目）→ 从旧义 target 换算：减画布中心、z=0（旧求解从未约束 z，
- *   旧目标的深度不存在，z=0 与旧行为逐值等价）。
+ * - 缺失（旧项目）→ 从旧义 target 换算：target 是「链朝向画布平面」上的点，
+ *   (u, v) = target − 画布中心 是该朝向视平面坐标、深度 d=0，按 direction 反投影：
+ *   南向 (u, v, 0)；东向 (0, v, u)——x 分量落入 z（用户 2026-10-20 定案）。
+ * direction = 链根关节朝向（缺省 6 南向，与旧行为逐值一致）。
  * 求解、绘制、烘焙、编辑器一律走这里，不得直读 chain.target 求解。
  */
 export function resolveChainTarget3D(
   chain: IKChain,
   canvasWidth: number,
   canvasHeight: number,
+  direction: DirectionIndex = 6,
 ): { x: number; y: number; z: number } {
   if (chain.target3D) return chain.target3D;
+  return viewBasisToWorld(
+    chain.target.x - canvasWidth / 2,
+    chain.target.y - canvasHeight / 2,
+    0,
+    direction,
+  );
+}
+
+/** 旧义镜像：由 target3D（原点中心世界）按链朝向投影回画布平面 + 画布中心，写入 chain.target */
+export function ikTargetMirror(
+  target3D: { x: number; y: number; z: number },
+  direction: DirectionIndex,
+  canvasWidth: number,
+  canvasHeight: number,
+): { x: number; y: number } {
+  const proj = projectToView(pxToSub(target3D.x), pxToSub(target3D.y), pxToSub(target3D.z), direction);
   return {
-    x: chain.target.x - canvasWidth / 2,
-    y: chain.target.y - canvasHeight / 2,
-    z: 0,
+    x: canvasWidth / 2 + subToPx(proj.canvasX),
+    y: canvasHeight / 2 + subToPx(proj.canvasY),
   };
 }
 

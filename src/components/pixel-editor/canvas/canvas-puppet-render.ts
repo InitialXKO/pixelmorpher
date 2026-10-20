@@ -39,7 +39,9 @@ export function renderIKTargetHandles(
   const worldTransforms = computeWorldTransforms(character, rc.currentFrame, rc.canvasWidth, rc.canvasHeight);
   ctx.save();
   for (const chain of chains) {
-    const t3 = resolveChainTarget3D(chain, rc.canvasWidth, rc.canvasHeight);
+    // 填充/解析按链根关节朝向（target 是该朝向画布平面上的点）；手柄绘制仍按末关节朝向投影
+    const rootDir = worldTransforms.get(chain.rootNodeId)?.variantIndex ?? 6;
+    const t3 = resolveChainTarget3D(chain, rc.canvasWidth, rc.canvasHeight, rootDir);
     const dir = worldTransforms.get(chain.endNodeId)?.variantIndex ?? 6;
     const proj = projectToView(pxToSub(t3.x), pxToSub(t3.y), pxToSub(t3.z), dir);
     const sx = panX + (rc.canvasWidth / 2 + subToPx(proj.canvasX)) * zoom;

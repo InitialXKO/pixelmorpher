@@ -259,3 +259,94 @@ function jointsToAngles(joints: FabrikJoint[]): number[] {
   }
   return angles;
 }
+
+// ============================================================
+// 真 3D 位置求解（乙）：与 frame FK 自洽——先解关节世界位置，
+// 再由 unified-render 的 solveLocalAngleTilt 闭式反解每关节 (angle, tilt)。
+// ============================================================
+
+export interface IK3DPoint { x: number; y: number; z: number }
+
+const v3 = (a: IK3DPoint, b: IK3DPoint): IK3DPoint => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+const add3 = (a: IK3DPoint, b: IK3DPoint): IK3DPoint => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z });
+const mul3 = (a: IK3DPoint, s: number): IK3DPoint => ({ x: a.x * s, y: a.y * s, z: a.z * s });
+const len3 = (a: IK3DPoint): number => Math.hypot(a.x, a.y, a.z);
+const norm3 = (a: IK3DPoint): IK3DPoint => { const l = len3(a); return l < 1e-12 ? { x: 0, y: 0, z: 0 } : mul3(a, 1 / l); };
+const dot3 = (a: IK3DPoint, b: IK3DPoint): number => a.x * b.x + a.y * b.y + a.z * b.z;
+
+/**
+ * 3D 两骨 IK（解析）：在 (root, target, pole) 定义的平面内解。
+ * pole 决定肘的弯曲侧；目标超距时全伸直指向目标，目标过近时按余弦定理钳制。
+ * 返回 mid（肘）与 end（末端，钳制后）位置。
+ */
+export function solveIK2Bone3D(
+  root: IK3DPoint,
+  target: IK3DPoint,
+  len1: number,
+  len2: number,
+  pole: IK3DPoint,
+): { mid: IK3DPoint; end: IK3DPoint } {
+  const toT = v3(target, root);
+  const total = len1 + len2;
+  let dist = len3(toT);
+  const minDist = Math.abs(len1 - len2) + 1e-6;
+  dist = Math.max(minDist, Math.min(total - 1e-6, dist));
+  const dir = norm3(toT);
+  const end = add3(root, mul3(dir, dist));
+  // 余弦定理：root→mid 在 dir 上的投影长 a，高 h
+  const a = (len1 * len1 - len2 * len2 + dist * dist) / (2 * dist);
+  const h = Math.sqrt(Math.max(0, len1 * len1 - a * a));
+  // 弯曲方向：pole 相对 root→target 轴的正交分量；退化时任取正交方向
+  let perp = v3(pole, root);
+  perp = v3(perp, mul3(dir, dot3(perp, dir)));
+  if (len3(perp) < 1e-9) {
+    // pole 与轴共线：用与 dir 不平行的任意轴叉积
+    const ax = Math.abs(dir.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+    perp = {
+      x: dir.y * ax.z - dir.z * ax.y,
+      y: dir.z * ax.x - dir.x * ax.z,
+      z: dir.x * ax.y - dir.y * ax.x,
+    };
+  }
+  perp = norm3(perp);
+  const mid = add3(add3(root, mul3(dir, a)), mul3(perp, h));
+  return { mid, end };
+}
+
+/**
+ * 3D FABRIK：根固定，迭代前后向使末端到达 target（不可达时全伸直指向）。
+ * points 为初始关节位置（取 FK），lengths 为段长（points.length - 1 段）。
+ */
+export function solveIKFabrik3D(
+  points: IK3DPoint[],
+  lengths: number[],
+  target: IK3DPoint,
+  iterations = 40,
+): IK3DPoint[] {
+  const n = points.length;
+  const pts = points.map((p) => ({ ...p }));
+  const root = { ...points[0] };
+  const totalLen = lengths.reduce((s, l) => s + l, 0);
+  if (len3(v3(target, root)) >= totalLen) {
+    // 不可达：沿目标方向全伸直
+    const dir = norm3(v3(target, root));
+    for (let i = 1; i < n; i++) pts[i] = add3(pts[i - 1], mul3(dir, lengths[i - 1]));
+    return pts;
+  }
+  for (let it = 0; it < iterations; it++) {
+    // 后向：末端 → target
+    pts[n - 1] = { ...target };
+    for (let i = n - 2; i >= 0; i--) {
+      const dir = norm3(v3(pts[i], pts[i + 1]));
+      pts[i] = add3(pts[i + 1], mul3(dir, lengths[i]));
+    }
+    // 前向：根 → 固定
+    pts[0] = { ...root };
+    for (let i = 1; i < n; i++) {
+      const dir = norm3(v3(pts[i], pts[i - 1]));
+      pts[i] = add3(pts[i - 1], mul3(dir, lengths[i - 1]));
+    }
+    if (len3(v3(pts[n - 1], target)) < 1e-4) break;
+  }
+  return pts;
+}

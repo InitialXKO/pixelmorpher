@@ -10,7 +10,7 @@ import { Plus, Trash2, Power, Network } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useProjectStore } from '@/lib/store';
 import { computeIKChainTip, getIKChainJointIds } from '@/lib/ik-tip';
-import { resolveChainTarget3D } from '@/lib/unified-types';
+import { resolveChainTarget3D, ikTargetMirror } from '@/lib/unified-types';
 import type { Character, IKChain } from '@/lib/unified-types';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 import BlueprintEditor from './BlueprintEditor';
@@ -27,9 +27,10 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
 
   /** 为链创建默认目标蓝图（源变换节点 + 输出节点） */
   const createDefaultTargetBlueprint = (chain: IKChain): BlueprintGraph => {
-    // 蓝图里用原点中心局部坐标（与 target3D 同空间，直接取）
+    // 蓝图里用原点中心局部坐标（与 target3D 同空间）；填充按链根节点朝向反投影
     const store = useProjectStore.getState();
-    const t3 = resolveChainTarget3D(chain, store.canvasWidth, store.canvasHeight);
+    const rootVariant = character?.nodes[chain.rootNodeId]?.transform.variantIndex ?? 6;
+    const t3 = resolveChainTarget3D(chain, store.canvasWidth, store.canvasHeight, rootVariant);
     const lx = t3.x;
     const ly = t3.y;
     const lz = t3.z;
@@ -116,15 +117,15 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     // 2bone = 2 根骨 = 3 关节；其他（1 骨/多骨）走 fabrik
     const solver = chainJoints.length === 3 ? '2bone' : 'fabrik';
     const endNode = character.nodes[endId];
-    const { tipX, tipY, tipZ, tipLength } = computeIKChainTip(character, chainJoints);
-    // tip 是原点中心 3D：求解目标写 target3D；chain.target 保持旧义镜像不变式（+画布中心）
+    const { tipX, tipY, tipZ, tipLength, direction } = computeIKChainTip(character, chainJoints);
+    // tip 是原点中心 3D：求解目标写 target3D；chain.target 写投影镜像（按链朝向投影 + 画布中心）
     const tipStore = useProjectStore.getState();
     const newChain: IKChain = {
       id: `ik_${Date.now().toString(36)}`,
       name: `${character.nodes[rootId]?.name ?? rootId} → ${endNode?.name ?? endId}`,
       rootNodeId: rootId,
       endNodeId: endId,
-      target: { x: tipX + tipStore.canvasWidth / 2, y: tipY + tipStore.canvasHeight / 2 },
+      target: ikTargetMirror({ x: tipX, y: tipY, z: tipZ }, direction, tipStore.canvasWidth, tipStore.canvasHeight),
       target3D: { x: tipX, y: tipY, z: tipZ },
       solver,
       bendDir: 1,
@@ -149,12 +150,12 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
     if (willEnable) {
       const jointIds = getIKChainJointIds(character, chain.rootNodeId, chain.endNodeId);
       if (jointIds.length >= 2) {
-        const { tipX, tipY, tipZ } = computeIKChainTip(character, jointIds, chain.tipLength);
-        // 保留用户已调过的 tipLength，只更新目标点：target3D 写原点 3D，target 保持旧义镜像
+        const { tipX, tipY, tipZ, direction } = computeIKChainTip(character, jointIds, chain.tipLength);
+        // 保留用户已调过的 tipLength，只更新目标点：target3D 写原点 3D，target 写投影镜像
         const st = useProjectStore.getState();
         patch = {
           ...patch,
-          target: { x: tipX + st.canvasWidth / 2, y: tipY + st.canvasHeight / 2 },
+          target: ikTargetMirror({ x: tipX, y: tipY, z: tipZ }, direction, st.canvasWidth, st.canvasHeight),
           target3D: { x: tipX, y: tipY, z: tipZ },
         };
       }

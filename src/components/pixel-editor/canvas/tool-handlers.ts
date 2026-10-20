@@ -28,7 +28,7 @@ import {
   spritePivotX,
   spritePivotY,
 } from './canvas-utils';
-import { subToPx, pxToSub, mapDragTo3D, rotatePseudo3D, inverseRotateInViewPlane, type SubPixel } from '@/lib/unified-types';
+import { subToPx, pxToSub, mapDragTo3D, rotatePseudo3D, inverseRotateInViewPlane, ikTargetMirror, type SubPixel } from '@/lib/unified-types';
 import type { CanvasState } from './use-canvas-state';
 import type { BrushCommand, ModifierInstance } from '@/lib/types';
 
@@ -692,13 +692,13 @@ export const puppetHandler: ToolHandler = {
           if (!chain) continue;
           const jointIds = getIKChainJointIds(ch, chain.rootNodeId, chain.endNodeId);
           if (jointIds.length >= 2) {
-            const { tipX, tipY, tipZ } = computeIKChainTip(ch, jointIds, chain.tipLength);
-            // tip 是原点中心 3D：求解目标写 target3D；chain.target 保持旧义镜像不变式（+画布中心）
+            const { tipX, tipY, tipZ, direction } = computeIKChainTip(ch, jointIds, chain.tipLength);
+            // tip 是原点中心 3D：求解目标写 target3D；chain.target 写投影镜像（按链朝向投影 + 画布中心）
             project.updateUnifiedCharacter(ch.id, {
               ikChains: ch.ikChains!.map((c) =>
                 c.id === chainId ? {
                   ...c,
-                  target: { x: tipX + project.canvasWidth / 2, y: tipY + project.canvasHeight / 2 },
+                  target: ikTargetMirror({ x: tipX, y: tipY, z: tipZ }, direction, project.canvasWidth, project.canvasHeight),
                   target3D: { x: tipX, y: tipY, z: tipZ },
                 } : c,
               ),
