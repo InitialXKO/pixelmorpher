@@ -14,7 +14,7 @@ import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs, getNodeParamPor
 import { getModifierDef } from '@/lib/types';
 import { useProjectStore } from '@/lib/store';
 import { resolvePreviewSprite, getActiveCostumeSet } from '@/lib/sprite-resolve';
-import { generateRenderPlan, executeRenderPlan, evaluateBlueprintTransforms } from '@/lib/unified-render';
+import { generateRenderPlan, executeRenderPlan, evaluateBlueprintTransforms, canvasToPixels } from '@/lib/unified-render';
 import type { Character } from '@/lib/unified-types';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
@@ -354,11 +354,37 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
         return;
       }
 
+      // 角色蓝图（character_source 图）：与主渲染 renderCharacterWithBlueprint 同口径——
+      // characterPixels 须是未过角色蓝图的原始合成，故用 blueprint 置空的角色副本生成渲染计划
+      //（节点蓝图经 bpOverrides 正常生效）；screen 的绘制经 drawToScreen 捕获（其求值器只回变换数值）。
+      const isCharGraph = graph.nodes.some((n) => n.type === 'character_source');
+      let capturedScreenPixels: import('@/lib/types').PixelGrid | undefined;
+      const characterPixels = (() => {
+        if (!isCharGraph || !character) return undefined;
+        try {
+          const offW = 440, offH = 320;
+          const off = document.createElement('canvas');
+          off.width = offW; off.height = offH;
+          const octx = off.getContext('2d');
+          if (!octx) return undefined;
+          const bpOverrides = evaluateBlueprintTransforms(character, previewFrame, frameRate);
+          const plan = generateRenderPlan({ ...character, blueprint: null }, previewFrame, offW, offH, 'pixel-perfect', frameRate,
+            undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+            spritesTable as any, bpOverrides);
+          executeRenderPlan(octx, plan, offW, offH);
+          return canvasToPixels(off);
+        } catch { return undefined; }
+      })();
+
       // 单节点模式（原有逻辑）
       const t = evaluateBlueprint(graph, {
         frame: previewFrame,
         frameRate,
         vars: {},
+        ...(isCharGraph ? {
+          characterPixels,
+          drawToScreen: (cmd: { pixels: import('@/lib/types').PixelGrid }) => { capturedScreenPixels = cmd.pixels; },
+        } : {}),
         // sprite_source 从这里取当前节点的精灵（共享解析，与主渲染一致）
         spritePixels: (() => {
           const nid = (graph as any)._nodeId;
@@ -403,8 +429,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
         })(),
       } as any);
 
-      // screen 节点无输出：取其 pixels 输入的像素
-      let previewPixels = t.pixels;
+      // screen 节点无输出：角色图取 drawToScreen 捕获的像素；其余取其 pixels 输入的像素
+      let previewPixels = capturedScreenPixels ?? t.pixels;
       if (!previewPixels && selected?.type === 'screen') {
         const pixelsInput = selected.inputs?.pixels;
         if (pixelsInput && typeof pixelsInput === 'object' && 'nodeId' in pixelsInput) {
