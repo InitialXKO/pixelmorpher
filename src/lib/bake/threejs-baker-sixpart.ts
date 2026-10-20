@@ -338,8 +338,108 @@ interface BuiltPartView {
 interface BuiltPart {
   part: PartName;
   views: BuiltPartView[];
+  /** 破洞（边界环，模型空间）：全部视图的开口汇总 */
+  rings: HoleRing[];
   /** 部件内 bone 列表（全局 index，按首次出现序） */
   partBones: number[];
+}
+
+/** 破洞（几何开口）：部件被剔出后在交界处留下的边界环 */
+export interface HoleRing {
+  /** 环顶点（模型空间，闭环不重复首尾） */
+  points: THREE.Vector3[];
+  /** 破洞所在骨骼（全局 index，环上三角形主 bone 众数） */
+  bone: number;
+}
+
+/**
+ * 从一个源网格的部件视图提取边界环（破洞）：破洞只认切口边——
+ * 在整模里有对面三角形（边频次 ≥2)、在本部件视图里只剩单侧（频次 1）的边。
+ * 模型真实外边界（整模频次也是 1，如轮廓边）不是破洞，不提取。
+ */
+const fullEdgeCountCache = new WeakMap<BakedMesh, Map<string, number>>();
+function fullEdgeCounts(bm: BakedMesh): Map<string, number> {
+  let m = fullEdgeCountCache.get(bm);
+  if (m) return m;
+  m = new Map();
+  const geo = bm.geometry;
+  const index = geo.getIndex();
+  const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+  const triCount = index ? index.count / 3 : Math.floor(posAttr.count / 3);
+  const ekey = (a: number, b: number) => (a < b ? `${a}_${b}` : `${b}_${a}`);
+  for (let t = 0; t < triCount; t++) {
+    const a = index ? index.getX(t * 3) : t * 3;
+    const b = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+    const c = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+    for (const [u, v] of [[a, b], [b, c], [c, a]] as const) {
+      const k = ekey(u, v);
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
+  }
+  fullEdgeCountCache.set(bm, m);
+  return m;
+}
+
+export function extractHoleRings(bm: BakedMesh, tris: number[][], triBone: number[]): HoleRing[] {
+  const pos = bm.geometry.getAttribute('position') as THREE.BufferAttribute;
+  const full = fullEdgeCounts(bm);
+  const edgeCount = new Map<string, number>();
+  const edgeTri = new Map<string, number>();
+  const ekey = (a: number, b: number) => (a < b ? `${a}_${b}` : `${b}_${a}`);
+  tris.forEach(([a, b, c], t) => {
+    for (const [u, v] of [[a, b], [b, c], [c, a]] as const) {
+      const k = ekey(u, v);
+      edgeCount.set(k, (edgeCount.get(k) ?? 0) + 1);
+      edgeTri.set(k, t);
+    }
+  });
+  const adj = new Map<number, number[]>();
+  const addAdj = (u: number, v: number) => {
+    const arr = adj.get(u);
+    if (arr) arr.push(v); else adj.set(u, [v]);
+  };
+  for (const [k, cnt] of edgeCount) {
+    if (cnt !== 1) continue;
+    if ((full.get(k) ?? 0) < 2) continue; // 整模里也是单边 → 真外边界，不是切口
+    const [u, v] = k.split('_').map(Number);
+    addAdj(u, v);
+    addAdj(v, u);
+  }
+  const visited = new Set<number>();
+  const rings: HoleRing[] = [];
+  for (const start of adj.keys()) {
+    if (visited.has(start)) continue;
+    const ring: number[] = [];
+    let cur = start;
+    let prev = -1;
+    while (true) {
+      visited.add(cur);
+      ring.push(cur);
+      const nexts = (adj.get(cur) ?? []).filter((x) => x !== prev);
+      if (nexts.length === 0) break;
+      const nxt = nexts.find((x) => !visited.has(x)) ?? nexts[0];
+      prev = cur;
+      cur = nxt;
+      if (cur === start || ring.length > 100000) break;
+    }
+    if (ring.length < 3) continue;
+    const votes = new Map<number, number>();
+    for (let i = 0; i < ring.length; i++) {
+      const t = edgeTri.get(ekey(ring[i], ring[(i + 1) % ring.length]));
+      if (t !== undefined) {
+        const b = triBone[t];
+        votes.set(b, (votes.get(b) ?? 0) + 1);
+      }
+    }
+    let bone = -1;
+    let best = 0;
+    for (const [b, n] of votes) if (n > best) { best = n; bone = b; }
+    rings.push({
+      points: ring.map((vi) => new THREE.Vector3().fromBufferAttribute(pos, vi)),
+      bone,
+    });
+  }
+  return rings;
 }
 
 /**
@@ -353,6 +453,7 @@ export function buildPartGeometry(
   boneToPart: (PartName | null)[],
 ): BuiltPart | null {
   const views: BuiltPartView[] = [];
+  const rings: HoleRing[] = [];
   for (const bm of bakedMeshes) {
     const grouped = groupTrianglesByPart(bm, boneToPart);
     const pt = grouped.get(part)!;
@@ -360,6 +461,7 @@ export function buildPartGeometry(
     const index: number[] = [];
     for (const [a, b, c] of pt.tris) index.push(a, b, c);
     views.push({ source: bm, index });
+    rings.push(...extractHoleRings(bm, pt.tris, pt.triBone));
   }
   if (views.length === 0) return null;
 
@@ -369,7 +471,7 @@ export function buildPartGeometry(
   for (let bi = 0; bi < boneToPart.length; bi++) {
     if (boneToPart[bi] === part) partBones.push(bi);
   }
-  return { part, views, partBones };
+  return { part, views, rings, partBones };
 }
 
 /** 由索引视图生成渲染用几何：属性对象与源几何共享（不复制数据），只装本视图的索引。 */
@@ -479,91 +581,65 @@ export function droopArmPose(
   return result;
 }
 
+/** 帧平面 2D 多边形（像素坐标，y 向下）扫描线填充 → 像素索引集 */
+export function fillPolygonPixels(poly: { x: number; y: number }[], size: number): number[] {
+  const out: number[] = [];
+  if (poly.length < 3) return out;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of poly) { if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y; }
+  const y0 = Math.max(0, Math.floor(minY));
+  const y1 = Math.min(size - 1, Math.ceil(maxY));
+  for (let y = y0; y <= y1; y++) {
+    const yc = y + 0.5;
+    const xs: number[] = [];
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      if ((a.y <= yc && b.y > yc) || (b.y <= yc && a.y > yc)) {
+        xs.push(a.x + ((yc - a.y) / (b.y - a.y)) * (b.x - a.x));
+      }
+    }
+    if (xs.length < 2) continue;
+    xs.sort((m, n) => m - n);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const xa = Math.max(0, Math.ceil(xs[k] - 0.5));
+      const xb = Math.min(size - 1, Math.floor(xs[k + 1] - 0.5));
+      for (let x = xa; x <= xb; x++) out.push(y * size + x);
+    }
+  }
+  return out;
+}
+
 /**
- * 破洞填充（乙案）：部件轮廓**内部**的透明像素中、整模参考帧不透明处 = 被其他部位三角形遮挡的破洞。
- * 轮廓外透明（从帧四边可达）不填——那里背后是其他部位，填了等于把别的部件长进本部件。
- * 颜色取参考帧在该位置的真实颜色（遮挡者的颜色）；ID 不用遮挡者的，而是破洞所在骨骼的——
- * 从洞周边已有 ID 像素多源 BFS 扩散赋予，全图无 ID 源时用 fallbackMask（部件根骨骼）。
- * 返回填充像素数。
+ * 破洞填充（几何口径）：holePixels 是边界环投影出的破洞像素 → 破洞所在骨骼的掩码（null = 无 ID 只填颜色）。
+ * 在整模参考帧不透明（确有其他部位三角形遮挡）的位置：颜色覆盖为遮挡者的真实颜色，
+ * ID 覆盖为破洞所在骨骼的掩码——与本部件帧该像素原来透不透明无关。
+ * 返回实际填充像素数。
  */
-export function fillOccludedHoles(
+export function fillHolePixels(
   colorPixels: Uint8ClampedArray,
   idPixels: Uint8ClampedArray | undefined,
   occlPixels: Uint8ClampedArray,
-  size: number,
-  fallbackMask: [number, number, number],
+  holePixels: Map<number, [number, number, number] | null>,
 ): number {
-  const n = size * size;
-  // 外部透明区：从帧四边 flood fill 可达的透明像素（部件轮廓之外，不算破洞，
-  // 否则轮廓外背后其他部位的像素会被填进本部件）
-  const outside = new Uint8Array(n);
-  {
-    const q: number[] = [];
-    const seed = (i: number) => {
-      if (!outside[i] && colorPixels[i * 4 + 3] === 0) { outside[i] = 1; q.push(i); }
-    };
-    for (let x = 0; x < size; x++) { seed(x); seed((size - 1) * size + x); }
-    for (let y = 0; y < size; y++) { seed(y * size); seed(y * size + size - 1); }
-    let h = 0;
-    while (h < q.length) {
-      const cur = q[h++];
-      const cx = cur % size;
-      if (cx > 0) seed(cur - 1);
-      if (cx < size - 1) seed(cur + 1);
-      if (cur - size >= 0) seed(cur - size);
-      if (cur + size < n) seed(cur + size);
-    }
-  }
-  const holes: number[] = [];
-  for (let i = 0; i < n; i++) {
+  let filled = 0;
+  for (const [i, mask] of holePixels) {
     const o = i * 4;
-    if (colorPixels[o + 3] === 0 && !outside[i] && occlPixels[o + 3] > 0) {
-      colorPixels[o] = occlPixels[o];
-      colorPixels[o + 1] = occlPixels[o + 1];
-      colorPixels[o + 2] = occlPixels[o + 2];
-      colorPixels[o + 3] = occlPixels[o + 3];
-      holes.push(i);
+    if (occlPixels[o + 3] === 0) continue; // 该方向无遮挡者，不填
+    colorPixels[o] = occlPixels[o];
+    colorPixels[o + 1] = occlPixels[o + 1];
+    colorPixels[o + 2] = occlPixels[o + 2];
+    colorPixels[o + 3] = occlPixels[o + 3];
+    if (idPixels && mask) {
+      idPixels[o] = mask[0];
+      idPixels[o + 1] = mask[1];
+      idPixels[o + 2] = mask[2];
+      idPixels[o + 3] = 255;
     }
+    filled++;
   }
-  if (holes.length === 0 || !idPixels) return holes.length;
-
-  // 多源 BFS：从所有已有 ID 的像素出发，给洞像素赋最近源的掩码
-  const assigned = new Uint8Array(n);
-  const queue: number[] = [];
-  for (let i = 0; i < n; i++) {
-    if (idPixels[i * 4 + 3] > 0) { assigned[i] = 1; queue.push(i); }
-  }
-  const holeSet = new Set(holes);
-  let head = 0;
-  const spread = (from: number, to: number) => {
-    if (to < 0 || to >= n || assigned[to]) return;
-    if (!holeSet.has(to)) return;
-    const fo = from * 4, to4 = to * 4;
-    idPixels[to4] = idPixels[fo];
-    idPixels[to4 + 1] = idPixels[fo + 1];
-    idPixels[to4 + 2] = idPixels[fo + 2];
-    idPixels[to4 + 3] = 255;
-    assigned[to] = 1;
-    queue.push(to);
-  };
-  while (head < queue.length) {
-    const cur = queue[head++];
-    const cx = cur % size;
-    if (cx > 0) spread(cur, cur - 1);
-    if (cx < size - 1) spread(cur, cur + 1);
-    if (cur - size >= 0) spread(cur, cur - size);
-    if (cur + size < n) spread(cur, cur + size);
-  }
-  // 仍未赋值（整图无 ID 源的极端情况）：回退掩码
-  for (const i of holes) {
-    if (assigned[i]) continue;
-    const o = i * 4;
-    idPixels[o] = fallbackMask[0];
-    idPixels[o + 1] = fallbackMask[1];
-    idPixels[o + 2] = fallbackMask[2];
-    idPixels[o + 3] = 255;
-  }
-  return holes.length;
+  return filled;
 }
 
 // ---- 卡通渐变 ----
@@ -1045,18 +1121,24 @@ export async function bakeSixParts(
         await new Promise((r) => setTimeout(r, 0));
         scene.remove(fullGroup);
 
-        // 破洞填充：颜色取遮挡者的真实颜色；ID 取破洞所在骨骼的（由洞周边本部件 ID 扩散）
-        {
-          let fallbackMask: [number, number, number] = [0, 0, 0];
-          if (idPixels) {
-            let rootLi = 0;
-            for (let li = 0; li < bp.partBones.length; li++) {
-              const p = parentIndex[bp.partBones[li]];
-              if (p === null || boneToPart[p] !== pname) { rootLi = li; break; }
+        // 破洞填充（几何口径）：边界环投影到本帧 → 破洞像素集；
+        // 在整模帧有遮挡者的位置，颜色覆盖为遮挡者的、ID 覆盖为破洞所在骨骼的
+        if (bp.rings.length > 0) {
+          const upAxis = new THREE.Vector3(0, 1, 0);
+          const holePixels = new Map<number, [number, number, number] | null>();
+          for (const ring of bp.rings) {
+            const poly = ring.points.map((p) => {
+              const v = p.clone().sub(center).multiplyScalar(scale).applyAxisAngle(upAxis, ang).project(camera);
+              return { x: ((v.x + 1) / 2) * size, y: ((1 - v.y) / 2) * size };
+            });
+            let mask: [number, number, number] | null = null;
+            if (idPixels) {
+              const li = localIndex.get(ring.bone);
+              if (li !== undefined) mask = encodeBoneId(li) as [number, number, number];
             }
-            fallbackMask = encodeBoneId(rootLi) as [number, number, number];
+            for (const idx of fillPolygonPixels(poly, size)) holePixels.set(idx, mask);
           }
-          fillOccludedHoles(colorPixels, idPixels, occlPixels, size, fallbackMask);
+          if (holePixels.size > 0) fillHolePixels(colorPixels, idPixels, occlPixels, holePixels);
         }
 
         groups.push({ part: pname, direction: ((d + 6) % 8), colorPixels, idPixels, cameraHalf: half });
