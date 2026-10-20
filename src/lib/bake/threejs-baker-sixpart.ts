@@ -282,7 +282,7 @@ interface PartTriangles {
  * 按部件分组三角形。返回 part → 三角形列表。
  * boneToPart: 全局 bone index → 部件名。
  */
-function groupTrianglesByPart(
+export function groupTrianglesByPart(
   baked: BakedMesh,
   boneToPart: (PartName | null)[],
 ): Map<PartName, PartTriangles> {
@@ -308,316 +308,72 @@ function groupTrianglesByPart(
         if (p) parts.add(p);
       }
     }
-    // 跨部件三角形跳过（留给封盖填洞），不硬分到一侧
-    if (parts.size !== 1) continue;
+    // 跨部件三角形不跳过：归入它涉及的每个部件——在交界破洞处由这块真实三角形本身遮挡，
+    // 不再造封盖假面；像素归属在 2D 拆分时按 ID 掩码精确决定，不会双算
+    if (parts.size === 0) continue;
     let bestBone = -1;
     let bestVotes = 0;
     for (const [bi, n] of votes) {
       if (n > bestVotes) { bestVotes = n; bestBone = bi; }
     }
     if (bestBone < 0) continue;
-    const part = boneToPart[bestBone];
-    if (!part) continue; // 无归属的 bone（如未识别）跳过
-    const pt = result.get(part)!;
-    pt.tris.push([a, b, c]);
-    pt.triBone.push(bestBone);
+    for (const p of parts) {
+      const pt = result.get(p)!;
+      pt.tris.push([a, b, c]);
+      pt.triBone.push(bestBone);
+    }
   }
   return result;
 }
 
-// ---- 边界检测与封盖 ----
-interface BoundaryLoop {
-  /** 有序顶点索引（原几何顶点序，闭环不重复首尾） */
-  verts: number[];
-}
-
-/**
- * 找边界边（只被一个三角形使用的边），并连成环。
- */
-function findBoundaryLoops(tris: number[][]): BoundaryLoop[] {
-  const edgeCount = new Map<string, number>();
-  const edgeKey = (a: number, b: number) => (a < b ? `${a}_${b}` : `${b}_${a}`);
-  for (const [a, b, c] of tris) {
-    for (const [u, v] of [[a, b], [b, c], [c, a]] as const) {
-      const k = edgeKey(u, v);
-      edgeCount.set(k, (edgeCount.get(k) ?? 0) + 1);
-    }
-  }
-  // 邻接表：顶点 → 相连的边界顶点
-  const adj = new Map<number, number[]>();
-  const addAdj = (u: number, v: number) => {
-    if (!adj.has(u)) adj.set(u, []);
-    adj.get(u)!.push(v);
-  };
-  for (const [k, n] of edgeCount) {
-    if (n !== 1) continue;
-    const [a, b] = k.split('_').map(Number);
-    addAdj(a, b);
-    addAdj(b, a);
-  }
-  // 走环
-  const visited = new Set<string>();
-  const loops: BoundaryLoop[] = [];
-  for (const [start] of adj) {
-    for (const next of adj.get(start)!) {
-      const ek = edgeKey(start, next);
-      if (visited.has(ek)) continue;
-      // 从 start→next 出发走环
-      const loop = [start];
-      let prev = start;
-      let cur = next;
-      visited.add(ek);
-      while (cur !== start) {
-        loop.push(cur);
-        const nbs = adj.get(cur) ?? [];
-        // 找下一个：排除 prev，优先未访问的边
-        let nxt = -1;
-        for (const nb of nbs) {
-          if (nb === prev) continue;
-          const k2 = edgeKey(cur, nb);
-          if (!visited.has(k2)) { nxt = nb; visited.add(k2); break; }
-        }
-        if (nxt < 0) {
-          // 死路：尝试走已访问的（环可能分叉，取任意未走过的）
-          for (const nb of nbs) {
-            if (nb === prev) continue;
-            const k2 = edgeKey(cur, nb);
-            if (!visited.has(k2)) { nxt = nb; visited.add(k2); break; }
-          }
-        }
-        if (nxt < 0) break; // 非闭合，放弃此环
-        prev = cur;
-        cur = nxt;
-        if (loop.length > 10000) break; // 防无限
-      }
-      if (cur === start && loop.length >= 3) {
-        loops.push({ verts: loop });
-      }
-    }
-  }
-  return loops;
-}
-
-/**
- * 为部件几何加封盖（三角扇）。
- * - 每个边界环：质心为扇心，环顶点为扇边
- * - winding：按 Newell 法线与（环质心 - 部件质心）的点积决定，保证朝外
- * - 封盖顶点色 = baseColor（转 linear，钳制最低 0.08，避免纯黑）
- * - 封盖顶点的 bone ID 由 partBoneForCap(质心) 决定（用于块内 ID 图）
- */
-function addCaps(
-  positions: number[],
-  uvs: number[] | null,
-  colors: number[],
-  indices: number[],
-  loops: BoundaryLoop[],
-  partCentroid: THREE.Vector3,
-  baseColor: THREE.Color,
-  partBoneForCap: (centroid: THREE.Vector3) => number,
-  capVertBone: number[],
-): void {
-  const c = new THREE.Vector3();
-  const p0 = new THREE.Vector3();
-  const p1 = new THREE.Vector3();
-  const outward = new THREE.Vector3();
-  // 封盖色：baseColor 转 linear，避免纯黑
-  const lc = baseColor.clone().convertSRGBToLinear();
-  const cr = Math.max(lc.r, 0.08);
-  const cg = Math.max(lc.g, 0.08);
-  const cb = Math.max(lc.b, 0.08);
-
-  for (const loop of loops) {
-    const m = loop.verts.length;
-    if (m < 3) continue;
-    // 环质心
-    c.set(0, 0, 0);
-    for (const vi of loop.verts) {
-      c.x += positions[vi * 3]; c.y += positions[vi * 3 + 1]; c.z += positions[vi * 3 + 2];
-    }
-    c.multiplyScalar(1 / m);
-    // Newell 法线
-    const n = new THREE.Vector3();
-    for (let i = 0; i < m; i++) {
-      const a = loop.verts[i];
-      const b = loop.verts[(i + 1) % m];
-      p0.set(positions[a * 3], positions[a * 3 + 1], positions[a * 3 + 2]);
-      p1.set(positions[b * 3], positions[b * 3 + 1], positions[b * 3 + 2]);
-      n.x += (p0.y - p1.y) * (p0.z + p1.z);
-      n.y += (p0.z - p1.z) * (p0.x + p1.x);
-      n.z += (p0.x - p1.x) * (p0.y + p1.y);
-    }
-    if (n.lengthSq() < 1e-12) continue;
-    n.normalize();
-    // 朝外方向 ≈ 环质心 - 部件质心
-    outward.copy(c).sub(partCentroid);
-    if (outward.lengthSq() < 1e-12) outward.set(0, 1, 0);
-    outward.normalize();
-    const flip = n.dot(outward) < 0;
-
-    const centerIdx = positions.length / 3;
-    positions.push(c.x, c.y, c.z);
-    if (uvs) uvs.push(0.5, 0.5);
-    colors.push(cr, cg, cb);
-    capVertBone.push(partBoneForCap(c));
-
-    for (let i = 0; i < m; i++) {
-      const a = loop.verts[i];
-      const b = loop.verts[(i + 1) % m];
-      if (flip) indices.push(centerIdx, b, a);
-      else indices.push(centerIdx, a, b);
-    }
-  }
-}
 
 // ---- 部件几何构建 ----
+interface BuiltPartMesh {
+  /** 原 BakedMesh 几何剔除部件外三角形后的克隆（属性原样保留，只换 index） */
+  geometry: THREE.BufferGeometry;
+  /** 原材质（颜色遍建 toon 材质时取它自己的 map/color） */
+  sourceMaterial: THREE.Material | null;
+  /** 每顶点全局 bone index（与原几何顶点序一致） */
+  vertBone: Int32Array;
+  /** 每顶点 weight>0.2 的 bones（ID 位掩码用，与原几何顶点序一致） */
+  vertBones: number[][];
+}
+
 interface BuiltPart {
   part: PartName;
-  /** 静态几何（模型空间，未归一化），含封盖 */
-  geometry: THREE.BufferGeometry;
-  /** 每顶点全局 bone index（封盖顶点已填） */
-  vertBone: Int32Array;
-  /** 每顶点 weight>0.2 的 bones（全局 index，ID 位掩码用；封盖为单元素） */
-  vertBones: number[][];
+  meshes: BuiltPartMesh[];
   /** 部件内 bone 列表（全局 index，按首次出现序） */
   partBones: number[];
-  /** 材质基色（封盖用） */
-  baseColor: THREE.Color;
-  /** 贴图（有则带上） */
-  map: THREE.Texture | null;
 }
 
 /**
- * 从 baked meshes 构建单个部件的几何（含封盖）。
+ * 构建单个部件：不重拼几何——在每个原 BakedMesh 的几何上剔除不属于本部件的三角形，
+ * 顶点/UV 等属性与原材质全部原样保留。切口不封盖（与像素层拆分口径一致）。
  */
-function buildPartGeometry(
+export function buildPartGeometry(
   bakedMeshes: BakedMesh[],
   part: PartName,
   boneToPart: (PartName | null)[],
-  bones: THREE.Bone[],
 ): BuiltPart | null {
-  const positions: number[] = [];
-  const uvs: number[] = [];
-  const colors: number[] = []; // 顶点色：原顶点白，封盖用 baseColor
-  const indices: number[] = [];
-  const vertBone: number[] = [];
-  const vertBones: number[][] = [];
-  const hasUv: boolean[] = [];
-  let baseColor = new THREE.Color(0xffffff);
-  let map: THREE.Texture | null = null;
-  let colorPicked = false;
-
-  // 部件质心（封盖朝向用）：先收集再算
-  const tmpCentroid = new THREE.Vector3();
-  // 材质分组用：第一个封盖索引起始（-1 = 无封盖）
-  let capIndexStart = -1;
-
+  const meshes: BuiltPartMesh[] = [];
   for (const bm of bakedMeshes) {
     const grouped = groupTrianglesByPart(bm, boneToPart);
     const pt = grouped.get(part)!;
     if (pt.tris.length === 0) continue;
-
-    // 取材质基色（第一个非空）
-    if (!colorPicked && bm.material) {
-      const mt = bm.material as THREE.MeshStandardMaterial;
-      if (mt && 'color' in mt && (mt as THREE.MeshStandardMaterial).color) {
-        baseColor = ((mt as THREE.MeshStandardMaterial).color as THREE.Color).clone();
-      }
-      if (mt && 'map' in mt) {
-        map = ((mt as THREE.MeshStandardMaterial).map as THREE.Texture | null) ?? null;
-      }
-      colorPicked = true;
-    }
-
-    const srcPos = bm.geometry.getAttribute('position') as THREE.BufferAttribute;
-    const srcUv = bm.geometry.getAttribute('uv') as THREE.BufferAttribute | undefined;
-    const srcIndex = bm.geometry.getIndex();
-    // 顶点重映射（去重）：原顶点序 → 新顶点序
-    const remap = new Map<number, number>();
-    const getNew = (vi: number): number => {
-      let ni = remap.get(vi);
-      if (ni === undefined) {
-        ni = positions.length / 3;
-        remap.set(vi, ni);
-        positions.push(srcPos.getX(vi), srcPos.getY(vi), srcPos.getZ(vi));
-        if (srcUv) uvs.push(srcUv.getX(vi), srcUv.getY(vi));
-        hasUv.push(!!srcUv);
-        colors.push(1, 1, 1);
-        vertBone.push(bm.vertBone[vi]);
-        vertBones.push(bm.vertBones[vi] ?? []);
-      }
-      return ni;
-    };
-    const localTris: number[][] = [];
-    for (let ti = 0; ti < pt.tris.length; ti++) {
-      const [a, b, c] = pt.tris[ti];
-      const na = getNew(a), nb = getNew(b), nc = getNew(c);
-      localTris.push([na, nb, nc]);
-      indices.push(na, nb, nc);
-    }
-    // 封盖（在局部索引空间找边界环）
-    const loops = findBoundaryLoops(localTris);
-    if (loops.length > 0) {
-      // 部件质心（当前已收集的顶点）
-      tmpCentroid.set(0, 0, 0);
-      const vc = positions.length / 3;
-      for (let i = 0; i < vc; i++) {
-        tmpCentroid.x += positions[i * 3];
-        tmpCentroid.y += positions[i * 3 + 1];
-        tmpCentroid.z += positions[i * 3 + 2];
-      }
-      tmpCentroid.multiplyScalar(1 / Math.max(vc, 1));
-      const capVertBone: number[] = [];
-      // 封盖 bone：取部件根 bone（parent 不在部件内的，即切口处的 bone）
-      // 不取"最多"，因手指合并后手顶点最多，会错取到手
-      const partSet = new Set<number>();
-      for (let bi = 0; bi < boneToPart.length; bi++) {
-        if (boneToPart[bi] === part) partSet.add(bi);
-      }
-      let capBone = -1;
-      for (const bi of partSet) {
-        const b = bones[bi];
-        const p = b.parent as THREE.Bone | null;
-        const pIdx = p && (p as any).isBone ? bones.indexOf(p) : -1;
-        if (pIdx < 0 || !partSet.has(pIdx)) { capBone = bi; break; }
-      }
-      const useUv = hasUv.some(Boolean);
-      if (capIndexStart < 0) capIndexStart = indices.length; // 记录第一个封盖起始
-      addCaps(
-        positions,
-        useUv ? uvs : null,
-        colors,
-        indices,
-        loops,
-        tmpCentroid,
-        baseColor,
-        () => capBone,
-        capVertBone,
-      );
-      // capVertBone 与新增顶点一一对应（addCaps 按序 push）
-      for (const cb of capVertBone) {
-        vertBone.push(cb);
-        vertBones.push(cb >= 0 ? [cb] : []);
-      }
-    }
+    const geo = bm.geometry.clone();
+    const idx: number[] = [];
+    for (const [a, b, c] of pt.tris) idx.push(a, b, c);
+    geo.setIndex(idx);
+    geo.clearGroups(); // 索引已换，原材质分组区间失效；颜色遍按单材质渲染
+    geo.computeVertexNormals(); // 与 BakedMesh 口径一致：posed 法线重算（原几何无法线）
+    meshes.push({
+      geometry: geo,
+      sourceMaterial: bm.material,
+      vertBone: bm.vertBone,
+      vertBones: bm.vertBones,
+    });
   }
-
-  if (indices.length === 0) return null;
-
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
-  // uv：只有全部顶点都有才加（混用会有问题，简单起见：有则加，无则不加）
-  const useUv = hasUv.length > 0 && hasUv.every(Boolean) && uvs.length === (positions.length / 3) * 2;
-  if (useUv) {
-    geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
-  geo.setIndex(indices);
-  // 材质分组：原几何（有纹理）vs 封盖（无纹理，纯顶点色）
-  if (capIndexStart >= 0 && capIndexStart < indices.length) {
-    geo.addGroup(0, capIndexStart, 0);
-    geo.addGroup(capIndexStart, indices.length - capIndexStart, 1);
-  }
-  geo.computeVertexNormals();
+  if (meshes.length === 0) return null;
 
   // 部件内 bone 列表：从拓扑 boneToPart 直接取，不从顶点扫
   // （3D 拆分完已知六件归属，顶点扫描是冗余且易错的）
@@ -625,16 +381,7 @@ function buildPartGeometry(
   for (let bi = 0; bi < boneToPart.length; bi++) {
     if (boneToPart[bi] === part) partBones.push(bi);
   }
-
-  return {
-    part,
-    geometry: geo,
-    vertBone: new Int32Array(vertBone),
-    vertBones,
-    partBones,
-    baseColor,
-    map,
-  };
+  return { part, meshes, partBones };
 }
 
 // ---- 手臂下垂 ----
@@ -709,17 +456,19 @@ export function droopArmPart(
   result.quaternion = quat;
   result.rotated = true;
 
-  // 旋转全部顶点（绕肩关节）
-  const pos = built.geometry.getAttribute('position') as THREE.BufferAttribute;
+  // 旋转全部顶点（绕肩关节）：部件的每个子几何逐个转
   const v = new THREE.Vector3();
-  for (let i = 0; i < pos.count; i++) {
-    v.fromBufferAttribute(pos, i);
-    v.sub(shoulderPos).applyQuaternion(quat).add(shoulderPos);
-    pos.setXYZ(i, v.x, v.y, v.z);
+  for (const pm of built.meshes) {
+    const pos = pm.geometry.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      v.sub(shoulderPos).applyQuaternion(quat).add(shoulderPos);
+      pos.setXYZ(i, v.x, v.y, v.z);
+    }
+    pos.needsUpdate = true;
+    pm.geometry.computeVertexNormals();
+    pm.geometry.computeBoundingBox();
   }
-  pos.needsUpdate = true;
-  built.geometry.computeVertexNormals();
-  built.geometry.computeBoundingBox();
   return result;
 }
 
@@ -877,7 +626,7 @@ export async function bakeSixParts(
     // ---- 构建 6 部件 ----
     const parts = new Map<PartName, BuiltPart>();
     for (const p of ALL_PARTS) {
-      const built = buildPartGeometry(bakedMeshes, p, boneToPart, bones);
+      const built = buildPartGeometry(bakedMeshes, p, boneToPart);
       if (built) parts.set(p, built);
     }
     if (parts.size === 0) throw new Error('六部件拆分后没有可用几何');
@@ -911,8 +660,10 @@ export async function bakeSixParts(
     // ---- 整模归一化（各部件同 scale） ----
     const fullBox = new THREE.Box3();
     for (const [, bp] of parts) {
-      bp.geometry.computeBoundingBox();
-      fullBox.union(bp.geometry.boundingBox!);
+      for (const pm of bp.meshes) {
+        pm.geometry.computeBoundingBox();
+        fullBox.union(pm.geometry.boundingBox!);
+      }
     }
     const center = fullBox.getCenter(new THREE.Vector3());
     const sphere = fullBox.getBoundingSphere(new THREE.Sphere());
@@ -921,9 +672,20 @@ export async function bakeSixParts(
     // ---- bone 合并（复用整模逻辑，用于 2D 拆分） ----
     const vertexCounts = new Array<number>(bones.length).fill(0);
     for (const [, bp] of parts) {
-      for (let i = 0; i < bp.vertBone.length; i++) {
-        const bi = bp.vertBone[i];
-        if (bi >= 0) vertexCounts[bi]++;
+      for (const pm of bp.meshes) {
+        // 只统计被本部件三角形实际引用的顶点（原几何未引用顶点不算）
+        const idx = pm.geometry.getIndex();
+        const seen = new Set<number>();
+        if (idx) {
+          for (let i = 0; i < idx.count; i++) seen.add(idx.getX(i));
+        } else {
+          const n = (pm.geometry.getAttribute('position') as THREE.BufferAttribute).count;
+          for (let i = 0; i < n; i++) seen.add(i);
+        }
+        for (const vi of seen) {
+          const bi = pm.vertBone[vi];
+          if (bi >= 0) vertexCounts[bi]++;
+        }
       }
     }
     // 拓扑驱动默认合并（激进：只拆主关节），拓扑失败时回退名字匹配
@@ -991,23 +753,19 @@ export async function bakeSixParts(
 
       // 归一化变换：整模 center/scale
       const partGroup = new THREE.Group();
-      const toonMat = new THREE.MeshToonMaterial({
-        color: new THREE.Color(0xffffff),
-        ...(bp.map ? { map: bp.map } : {}),
-        gradientMap,
-        vertexColors: true,
-      });
-      // 封盖材质：无纹理，纯顶点色（避免纹理×封盖色）
-      const capMat = new THREE.MeshToonMaterial({
-        color: new THREE.Color(0xffffff),
-        gradientMap,
-        vertexColors: true,
-      });
-      const mesh = new THREE.Mesh(bp.geometry, [toonMat, capMat]);
-      mesh.frustumCulled = false;
-      // 应用归一化：geometry 是模型空间，移到 group 里做位移缩放
+      // 颜色遍：部件的每个子几何用其原材质派生 toon 材质（各自的 map/color），不再全部件共用一份
       const inner = new THREE.Group();
-      inner.add(mesh);
+      for (const pm of bp.meshes) {
+        const src = pm.sourceMaterial as THREE.MeshStandardMaterial | null;
+        const toonMat = new THREE.MeshToonMaterial({
+          color: src && 'color' in src && src.color ? (src.color as THREE.Color).clone() : new THREE.Color(0xffffff),
+          ...(src && 'map' in src && src.map ? { map: src.map as THREE.Texture } : {}),
+          gradientMap,
+        });
+        const mesh = new THREE.Mesh(pm.geometry, toonMat);
+        mesh.frustumCulled = false;
+        inner.add(mesh);
+      }
       inner.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
       // 注意：position 缩放要在 scale 之后——用 inner.scale + inner.position 组合：
       // world = scale * (pos - center) → inner.scale=scale, inner.position=-center*scale
@@ -1016,113 +774,119 @@ export async function bakeSixParts(
 
       // 块内 ID：非索引几何 + DataTexture 位掩码 + flat shader（无插值）
       // 每个三角形 3 顶点 bone 集相同（取 3 顶点 vertBones 并集），三角形内部无插值，边界硬边
+      // 部件的每个子几何各建一份 ID 几何/纹理（数据源为该子几何自己的 vertBones/vertBone）
       const localIndex = new Map<number, number>();
       bp.partBones.forEach((gi, li) => localIndex.set(gi, li));
-      const srcPos = bp.geometry.getAttribute('position') as THREE.BufferAttribute;
-      const srcIndex = bp.geometry.getIndex();
-      const triCount = srcIndex ? srcIndex.count / 3 : Math.floor(srcPos.count / 3);
-      const idPositions = new Float32Array(triCount * 9);
-      const idTriIds = new Float32Array(triCount * 3);
-      const idTexData = new Uint8Array(triCount * 4);
-      for (let t = 0; t < triCount; t++) {
-        // 三角形 bone 集：3 顶点 vertBones 并集 → 过滤非邻接 → 局部索引 → 按位或
-        // 过滤：只保留与主 bone 邻接的（parent/child/self），防大腿含脚等跨级泄漏
-        const triBones = new Set<number>();
-        let primaryGi = -1;
-        let primaryCount = 0;
-        const boneCounts = new Map<number, number>();
-        for (let k = 0; k < 3; k++) {
-          const v = srcIndex ? srcIndex.getX(t * 3 + k) : t * 3 + k;
-          idPositions[(t * 3 + k) * 3] = srcPos.getX(v);
-          idPositions[(t * 3 + k) * 3 + 1] = srcPos.getY(v);
-          idPositions[(t * 3 + k) * 3 + 2] = srcPos.getZ(v);
-          idTriIds[t * 3 + k] = t;
-          const vbs = bp.vertBones[v] ?? [];
-          const bones = vbs.length > 0 ? vbs : (bp.vertBone[v] >= 0 ? [bp.vertBone[v]] : []);
-          for (const gi of bones) {
-            // 流程修正：ID 纹理只含本部件拓扑骨骼（防跨部件泄漏，如盆骨三角带大腿权重被分到腿部时，其 hips 权重不應出現在腿部 ID 图中）
-            if (boneToPart[gi] !== pname) continue;
-            triBones.add(gi);
-            boneCounts.set(gi, (boneCounts.get(gi) ?? 0) + 1);
-          }
-        }
-        // 主 bone = 出现最多的
-        for (const [gi, n] of boneCounts) {
-          if (n > primaryCount) { primaryCount = n; primaryGi = gi; }
-        }
-        // 邻接过滤
-        const filtered = new Set<number>();
-        if (primaryGi >= 0) {
-          const pIdx = parentIndex[primaryGi];
-          for (const gi of triBones) {
-            if (gi === primaryGi || gi === pIdx || parentIndex[gi] === primaryGi) {
-              filtered.add(gi);
+      const idInner = new THREE.Group();
+      for (const pm of bp.meshes) {
+        const srcPos = pm.geometry.getAttribute('position') as THREE.BufferAttribute;
+        const srcIndex = pm.geometry.getIndex();
+        const triCount = srcIndex ? srcIndex.count / 3 : Math.floor(srcPos.count / 3);
+        if (triCount === 0) continue;
+        const idPositions = new Float32Array(triCount * 9);
+        const idTriIds = new Float32Array(triCount * 3);
+        const idTexData = new Uint8Array(triCount * 4);
+        for (let t = 0; t < triCount; t++) {
+          // 三角形 bone 集：3 顶点 vertBones 并集 → 过滤非邻接 → 局部索引 → 按位或
+          // 过滤：只保留与主 bone 邻接的（parent/child/self），防大腿含脚等跨级泄漏
+          const triBones = new Set<number>();
+          let primaryGi = -1;
+          let primaryCount = 0;
+          const boneCounts = new Map<number, number>();
+          for (let k = 0; k < 3; k++) {
+            const v = srcIndex ? srcIndex.getX(t * 3 + k) : t * 3 + k;
+            idPositions[(t * 3 + k) * 3] = srcPos.getX(v);
+            idPositions[(t * 3 + k) * 3 + 1] = srcPos.getY(v);
+            idPositions[(t * 3 + k) * 3 + 2] = srcPos.getZ(v);
+            idTriIds[t * 3 + k] = t;
+            const vbs = pm.vertBones[v] ?? [];
+            const bones = vbs.length > 0 ? vbs : (pm.vertBone[v] >= 0 ? [pm.vertBone[v]] : []);
+            for (const gi of bones) {
+              // 流程修正：ID 纹理只含本部件拓扑骨骼（防跨部件泄漏，如盆骨三角带大腿权重被分到腿部时，其 hips 权重不應出現在腿部 ID 图中）
+              if (boneToPart[gi] !== pname) continue;
+              triBones.add(gi);
+              boneCounts.set(gi, (boneCounts.get(gi) ?? 0) + 1);
             }
           }
-          // 若过滤后为空（不应发生），回退到主 bone
-          if (filtered.size === 0) filtered.add(primaryGi);
+          // 主 bone = 出现最多的
+          for (const [gi, n] of boneCounts) {
+            if (n > primaryCount) { primaryCount = n; primaryGi = gi; }
+          }
+          // 邻接过滤
+          const filtered = new Set<number>();
+          if (primaryGi >= 0) {
+            const pIdx = parentIndex[primaryGi];
+            for (const gi of triBones) {
+              if (gi === primaryGi || gi === pIdx || parentIndex[gi] === primaryGi) {
+                filtered.add(gi);
+              }
+            }
+            // 若过滤后为空（不应发生），回退到主 bone
+            if (filtered.size === 0) filtered.add(primaryGi);
+          }
+          let r = 0, g = 0, b = 0;
+          const seenLi = new Set<number>();
+          for (const gi of filtered) {
+            const li = localIndex.get(gi);
+            if (li === undefined || li < 0 || li > 23 || seenLi.has(li)) continue;
+            seenLi.add(li);
+            const [br, bg, bb] = encodeBoneId(li);
+            r |= br; g |= bg; b |= bb;
+          }
+          idTexData[t * 4] = r; idTexData[t * 4 + 1] = g;
+          idTexData[t * 4 + 2] = b; idTexData[t * 4 + 3] = 255;
         }
-        let r = 0, g = 0, b = 0;
-        const seenLi = new Set<number>();
-        for (const gi of filtered) {
-          const li = localIndex.get(gi);
-          if (li === undefined || li < 0 || li > 23 || seenLi.has(li)) continue;
-          seenLi.add(li);
-          const [br, bg, bb] = encodeBoneId(li);
-          r |= br; g |= bg; b |= bb;
-        }
-        idTexData[t * 4] = r; idTexData[t * 4 + 1] = g;
-        idTexData[t * 4 + 2] = b; idTexData[t * 4 + 3] = 255;
+        const idGeo = new THREE.BufferGeometry();
+        idGeo.setAttribute('position', new THREE.BufferAttribute(idPositions, 3));
+        idGeo.setAttribute('aTriId', new THREE.BufferAttribute(idTriIds, 1));
+        // 一维排布宽度 = triCount，高面数部件会超 GPU 最大纹理尺寸（常见 8192/16384）→ 折成近方形二维
+        const idTexW = Math.max(1, Math.ceil(Math.sqrt(triCount)));
+        const idTexH = Math.max(1, Math.ceil(triCount / idTexW));
+        const idTexFull = new Uint8Array(idTexW * idTexH * 4);
+        idTexFull.set(idTexData);
+        const idTex = new THREE.DataTexture(idTexFull, idTexW, idTexH, THREE.RGBAFormat, THREE.UnsignedByteType);
+        idTex.minFilter = THREE.NearestFilter;
+        idTex.magFilter = THREE.NearestFilter;
+        idTex.needsUpdate = true;
+        const idMat = new THREE.ShaderMaterial({
+          glslVersion: THREE.GLSL3,
+          uniforms: { uIdTex: { value: idTex } },
+          vertexShader: `
+            in float aTriId;
+            flat out int vTriId;
+            void main() {
+              vTriId = int(aTriId + 0.5);
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: `
+            precision highp float;
+            flat in int vTriId;
+            uniform sampler2D uIdTex;
+            out vec4 outColor;
+            void main() {
+              outColor = texelFetch(uIdTex, ivec2(vTriId % textureSize(uIdTex, 0).x, vTriId / textureSize(uIdTex, 0).x), 0);
+            }
+          `,
+        });
+        const idMesh = new THREE.Mesh(idGeo, idMat);
+        idMesh.frustumCulled = false;
+        idInner.add(idMesh);
       }
-      const idGeo = new THREE.BufferGeometry();
-      idGeo.setAttribute('position', new THREE.BufferAttribute(idPositions, 3));
-      idGeo.setAttribute('aTriId', new THREE.BufferAttribute(idTriIds, 1));
-      // 一维排布宽度 = triCount，高面数部件会超 GPU 最大纹理尺寸（常见 8192/16384）→ 折成近方形二维
-      const idTexW = Math.max(1, Math.ceil(Math.sqrt(triCount)));
-      const idTexH = Math.max(1, Math.ceil(triCount / idTexW));
-      const idTexFull = new Uint8Array(idTexW * idTexH * 4);
-      idTexFull.set(idTexData);
-      const idTex = new THREE.DataTexture(idTexFull, idTexW, idTexH, THREE.RGBAFormat, THREE.UnsignedByteType);
-      idTex.minFilter = THREE.NearestFilter;
-      idTex.magFilter = THREE.NearestFilter;
-      idTex.needsUpdate = true;
-      const idMat = new THREE.ShaderMaterial({
-        glslVersion: THREE.GLSL3,
-        uniforms: { uIdTex: { value: idTex } },
-        vertexShader: `
-          in float aTriId;
-          flat out int vTriId;
-          void main() {
-            vTriId = int(aTriId + 0.5);
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }
-        `,
-        fragmentShader: `
-          precision highp float;
-          flat in int vTriId;
-          uniform sampler2D uIdTex;
-          out vec4 outColor;
-          void main() {
-            outColor = texelFetch(uIdTex, ivec2(vTriId % textureSize(uIdTex, 0).x, vTriId / textureSize(uIdTex, 0).x), 0);
-          }
-        `,
-      });
-      const idMesh = new THREE.Mesh(idGeo, idMat);
-      idMesh.frustumCulled = false;
-      const idInner = new THREE.Group();
-      idInner.add(idMesh);
       idInner.position.copy(inner.position);
       idInner.scale.setScalar(scale);
 
       // 部件相机：紧贴部件 bbox（归一化空间）
       const pbox = new THREE.Box3();
       {
-        const pa = bp.geometry.getAttribute('position') as THREE.BufferAttribute;
         const tv = new THREE.Vector3();
-        for (let i = 0; i < pa.count; i++) {
-          tv.fromBufferAttribute(pa, i);
-          tv.sub(center).multiplyScalar(scale);
-          pbox.expandByPoint(tv);
+        for (const pm of bp.meshes) {
+          const pa = pm.geometry.getAttribute('position') as THREE.BufferAttribute;
+          for (let i = 0; i < pa.count; i++) {
+            tv.fromBufferAttribute(pa, i);
+            tv.sub(center).multiplyScalar(scale);
+            pbox.expandByPoint(tv);
+          }
         }
       }
       const pcenter = pbox.getCenter(new THREE.Vector3());
@@ -1186,11 +950,20 @@ export async function bakeSixParts(
         renderer.setRenderTarget(null);
       }
 
-      toonMat.dispose();
-      capMat.dispose();
-      idMat.dispose();
-      idGeo.dispose();
-      idTex.dispose();
+      // 清理本部件的颜色/ID 资源（子几何克隆归 bake 内部所有，在此释放）
+      partGroup.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (m.isMesh) (m.material as THREE.Material).dispose();
+      });
+      idInner.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        const mat = m.material as THREE.ShaderMaterial;
+        (mat.uniforms.uIdTex.value as THREE.Texture).dispose();
+        mat.dispose();
+        m.geometry.dispose();
+      });
+      for (const pm of bp.meshes) pm.geometry.dispose();
     }
 
     rt.dispose();
