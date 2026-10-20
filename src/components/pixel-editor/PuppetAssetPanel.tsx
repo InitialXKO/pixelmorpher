@@ -17,6 +17,8 @@ import {
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { NodeTreeItemWrapper } from './puppet/NodeTree';
 import { SocketEditor, type SocketInfo } from './SocketEditor';
+import ThreeBakeDialog from './puppet/ThreeBakeDialog';
+import { Box } from 'lucide-react';
 import { pxToSub, subToPx, type Socket } from '@/lib/unified-types';
 import type {
   PuppetDirection,
@@ -74,6 +76,7 @@ export default function PuppetAssetPanel() {
   const setActivePuppetSkeletonId = useEditorStore((s) => s.setActivePuppetSkeletonId);
 
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [threeBakeOpen, setThreeBakeOpen] = useState(false);
   const refWizardOpen = useEditorStore((s) => s.refWizardOpen);
   const setRefWizardOpen = useEditorStore((s) => s.setRefWizardOpen);
   const [expandedChars, setExpandedChars] = useState<Set<string>>(new Set());
@@ -194,7 +197,18 @@ export default function PuppetAssetPanel() {
         >
           <Image className="size-3" />
         </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-5 text-purple-400 hover:text-purple-300"
+          onClick={() => setThreeBakeOpen(true)}
+          title="3D 烘焙导入（GLB → 2D 木偶）"
+        >
+          <Box className="size-3" />
+        </Button>
       </div>
+
+      <ThreeBakeDialog open={threeBakeOpen} onClose={() => setThreeBakeOpen(false)} />
 
       <PuppetCreationWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
       {refWizardOpen ? (
