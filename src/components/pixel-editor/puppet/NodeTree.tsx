@@ -141,6 +141,9 @@ function NodeTreeItemWrapper({
 }) {
   const [expanded, setExpanded] = useState(true);
   const childNodes = allNodes.filter((n) => {
+    // 新模型：父子以 parentId 为准（与渲染器同一口径）；旧模型无 parentId，靠 plug.socketId 匹配
+    // （此前一律用 socket 匹配：fixed 附件的子节点 parentId 非空却匹配不上 socket，会从树上整个消失）
+    if ('parentId' in n) return n.parentId === node.id;
     const plugSocketId = getPlugSocketId(n);
     return plugSocketId && node.sockets.some((s) => s.id === plugSocketId);
   });
