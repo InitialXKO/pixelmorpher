@@ -59,6 +59,10 @@ interface BlueprintEditorProps {
   skeleton?: { nodes: { id: string; name: string }[] } | null;
   /** 新节点 ID 前缀（全局编辑器用：归属到指定部件） */
   idPrefix?: string;
+  /** 图语境：'ik-target' = IK 链目标蓝图——图内 transform 节点的
+   *  translateX/Y/Z 是 target3D 同空间（原点中心渲染世界），端子/参数标签
+   *  带罗盘后缀、Y 按展示空间（上为正）翻转显示（与 Vec3Field 同口径） */
+  spaceContext?: 'ik-target';
   /** 帧率（预览播放用） */
   frameRate?: number;
   /** 整角色预览用：真实 Character（有它时预览走主渲染管线，与主画布一致） */
@@ -186,7 +190,19 @@ function BlueprintNodeParams({ selected, updateNode, onExposePort }: {
   return null; // 无 schema 时由调用方渲染通用 UI
 }
 
-export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, character, characterNodes, costumeSets, activeCostumeSetId, slotVariants, spritesTable }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, character, characterNodes, costumeSets, activeCostumeSetId, slotVariants, spritesTable, spaceContext }: BlueprintEditorProps) {
+  // IK 目标蓝图语境的轴向标注/翻转（仅 transform 节点的 translate* 键）
+  const inIkTarget = spaceContext === 'ik-target';
+  const axisSuffixFor = (nodeType: string, key: string): string => {
+    if (!inIkTarget || nodeType !== 'transform') return '';
+    if (key === 'translateX') return '（东）';
+    if (key === 'translateY') return '（上）';
+    if (key === 'translateZ') return '（南）';
+    return '';
+  };
+  const flipYFor = (nodeType: string, key: string): boolean =>
+    inIkTarget && nodeType === 'transform' && key === 'translateY';
+  const neg = (v: number): number => (v === 0 ? 0 : -v);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
   // 笔触/轨迹下拉选项（stroke_source / trajectory_source 用，不许手输 ID）
@@ -1101,7 +1117,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                           title={`${port} (${getPortDataType(port)})${isParamPort ? ' — 参数，可连线覆盖' : ''}`}
                         />
                         <span className={isSpecDefined ? '' : 'text-amber-500/70'}>
-                          ← {port}
+                          ← {port}{axisSuffixFor(node.type, port)}
                           {isParamPort && <span className="text-[7px] text-purple-400/70 ml-0.5">参</span>}
                         </span>
                         {/* 暴露的参数端口：未连接时可隐藏 */}
@@ -1127,10 +1143,11 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                         ) : (
                           <input
                             type="number"
-                            value={literalVal ?? ''}
+                            value={literalVal == null ? '' : flipYFor(node.type, port) ? neg(literalVal) : literalVal}
                             placeholder="0"
                             onChange={(e) => {
-                              const v = e.target.value === '' ? null : Number(e.target.value);
+                              const raw = e.target.value === '' ? null : Number(e.target.value);
+                              const v = raw != null && flipYFor(node.type, port) ? neg(raw) : raw;
                               setSlotLiteral(node.id, port, v);
                             }}
                             onClick={(e) => e.stopPropagation()}
@@ -1191,7 +1208,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
             const isPathParam = selected.type === 'path_follow' && key === 'path';
             return (
             <div key={key} className="flex items-center gap-1.5">
-              <span className="text-[9px] text-gray-500 w-20 truncate" title={key}>{key}</span>
+              <span className="text-[9px] text-gray-500 w-20 truncate" title={key}>{key}{axisSuffixFor(selected.type, key)}</span>
               {isPathParam ? (
                 <div className="flex-1 min-w-0">
                   <PathEditor
@@ -1284,9 +1301,11 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
               ) : (
                 <input
                   type={typeof val === 'number' ? 'number' : 'text'}
-                  value={String(val)}
+                  value={typeof val === 'number' && flipYFor(selected.type, key) ? String(neg(val)) : String(val)}
                   onChange={(e) => {
-                    const v = typeof val === 'number' ? Number(e.target.value) : e.target.value;
+                    const v = typeof val === 'number'
+                      ? (flipYFor(selected.type, key) ? neg(Number(e.target.value)) : Number(e.target.value))
+                      : e.target.value;
                     updateNode(selected.id, {
                       params: { ...selected.params, [key]: v },
                     });

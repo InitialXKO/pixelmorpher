@@ -29,7 +29,8 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
 
   /** 为链创建默认目标蓝图（源变换节点 + 输出节点） */
   const createDefaultTargetBlueprint = (chain: IKChain): BlueprintGraph => {
-    // 蓝图里用原点中心局部坐标（与 target3D 同空间）；填充按链根节点朝向反投影
+    // 蓝图里用原点中心世界坐标（与 target3D 同空间，渲染世界 Y 向下存；
+    // 目标蓝图编辑器按展示空间 X东/Y上/Z南 翻转显示）；填充按链根节点朝向反投影
     const store = useProjectStore.getState();
     const rootVariant = character?.nodes[chain.rootNodeId]?.transform.variantIndex ?? 6;
     const t3 = resolveChainTarget3D(chain, store.canvasWidth, store.canvasHeight, rootVariant);
@@ -414,7 +415,7 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
                 <span className="text-sm text-gray-200">
                   {chain.name} — 目标点蓝图
                   <span className="text-xs text-gray-500 ml-2">
-                    用 translateX/translateY/translateZ 输出目标坐标（原点中心局部坐标）
+                    用 translateX/translateY/translateZ 输出目标坐标（原点中心世界系：X 东 / Y 上 / Z 南）
                   </span>
                 </span>
                 <div className="flex items-center gap-2">
@@ -442,6 +443,7 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
                   graph={graph}
                   onChange={(g) => handleTargetBlueprintChange(chain.id, g)}
                   title={`${chain.name} 目标`}
+                  spaceContext="ik-target"
                 />
               </div>
             </div>
