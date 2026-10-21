@@ -926,10 +926,12 @@ export async function bakeModelTwoPass(
       let colorBack: Uint8ClampedArray;
       const useCachedColors = idOnly && reuseBake && lat === 0;
       if (useCachedColors) {
-        // 仅重渲 ID：复用缓存颜色
-        const rf = reuseBake!.groups.find((g) => g.direction === d && g.pass === 0);
-        const rb = reuseBake!.groups.find((g) => g.direction === d && g.pass === 1);
-        if (!rf || !rb) throw new Error(`reuseBake 缺少方向 ${d} 的颜色`);
+        // 仅重渲 ID：复用缓存颜色。组里存的是规范（显示）方向 ((d+6)%8)，不能拿
+        // 循环序 d 直接比（旧代码差 2 步=90°，每方向都取到别人方向的颜色）；纬度钉基纬度
+        const dispDir = ((d + 6) % 8);
+        const rf = reuseBake!.groups.find((g) => g.direction === dispDir && g.pass === 0 && (g.latitude ?? 0) === 0);
+        const rb = reuseBake!.groups.find((g) => g.direction === dispDir && g.pass === 1 && (g.latitude ?? 0) === 0);
+        if (!rf || !rb) throw new Error(`reuseBake 缺少方向 ${dispDir} 的颜色`);
         colorFront = rf.colorPixels;
         colorBack = rb.colorPixels;
       } else {
