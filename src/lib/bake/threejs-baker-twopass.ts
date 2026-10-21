@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import { loadModelScene } from './load-model';
+import { makeNprFromSource } from './pmx-npr';
 import type { BakeOptions, BakeResult } from './threejs-baker';
 import { dirsForLatitude, latitudePitchRad, medianCut, nearestPaletteIndex } from './threejs-baker';
 import type { TopologyResult } from './bone-topology';
@@ -656,7 +657,7 @@ function makeGradientMap(steps: number): THREE.DataTexture {
 }
 
 /** 换卡通材质（保留原贴图/基色），返回 mesh→toon 材质映射 */
-function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, usePmxToonMap?: boolean): Map<THREE.Mesh, THREE.Material> {
+function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, usePmxNpr?: boolean): Map<THREE.Mesh, THREE.Material> {
   const map = new Map<THREE.Mesh, THREE.Material>();
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
@@ -669,15 +670,14 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, us
         : new THREE.Color(0xffffff);
     const texMap =
       old && 'map' in old ? ((old as THREE.MeshStandardMaterial).map as THREE.Texture | null) : null;
-    const tm = new THREE.MeshToonMaterial({
-      color: baseColor,
-      ...(texMap ? { map: texMap } : {}),
-      ...(old && 'side' in old && old.side !== undefined ? { side: old.side } : {}),
-      gradientMap:
-        usePmxToonMap && old?.userData?.pmxToonGradient
-          ? (old.userData.pmxToonGradient as THREE.DataTexture)
-          : gradientMap,
-    });
+    const tm =
+      (usePmxNpr ? makeNprFromSource(old ?? null) : null) ??
+      new THREE.MeshToonMaterial({
+        color: baseColor,
+        ...(texMap ? { map: texMap } : {}),
+        ...(old && 'side' in old && old.side !== undefined ? { side: old.side } : {}),
+        gradientMap,
+      });
     map.set(mesh, tm);
     mesh.material = tm;
     if (old && old !== tm) old.dispose();
@@ -841,7 +841,7 @@ export async function bakeModelTwoPass(
 
     // ---- 材质 ----
     const gradientMap = makeGradientMap(toonSteps);
-    const toonMats = applyToonMaterials(group, gradientMap, options.usePmxToonMap);
+    const toonMats = applyToonMaterials(group, gradientMap, options.usePmxNpr);
     // toon 只写颜色不写 depth；depth 由 ID 遍统一写，避免同遍内 color/ID 的 depth 不一致
     // （Pass 1 若 toon 先写了后表面 depth，ID 再用 GreaterDepth 会全灭）
     toonMats.forEach((tm) => {
@@ -1751,16 +1751,18 @@ function prepareLimbGeometry(
 
 /** 源材质 → 单烘 toon（与主烘焙 applyToonMaterials 同口径：color + map 条件传参；另继承 side，
  * 双面源模型压单面会剔掉绕向不齐的三角形，与六部件同根问题） */
-function toonFromExtractedSource(srcMat: THREE.Material | null, gradientMap: THREE.Texture, usePmxToonMap?: boolean): THREE.MeshToonMaterial {
+function toonFromExtractedSource(srcMat: THREE.Material | null, gradientMap: THREE.Texture, usePmxNpr?: boolean): THREE.Material {
+  // PMX 原味着色（开关开）：走参考版 NPR 着色
+  if (usePmxNpr) {
+    const npr = makeNprFromSource(srcMat);
+    if (npr) return npr;
+  }
   const s = srcMat as THREE.MeshStandardMaterial | null;
   return new THREE.MeshToonMaterial({
     color: s && 'color' in s && s.color ? (s.color as THREE.Color).clone() : new THREE.Color(0xffffff),
     ...(s && 'map' in s && s.map ? { map: s.map as THREE.Texture } : {}),
     ...(s && 'side' in s && s.side !== undefined ? { side: s.side } : {}),
-    gradientMap:
-      usePmxToonMap && s?.userData?.pmxToonGradient
-        ? (s.userData.pmxToonGradient as THREE.DataTexture)
-        : gradientMap,
+    gradientMap,
   });
 }
 
@@ -1819,7 +1821,7 @@ export async function bakeSingleBone(
     const { geometry, jointN, azimuth, radiusModel, sourceMaterials } = prepared;
 
     const gradientMap = makeGradientMap(toonSteps);
-    const toonMats = sourceMaterials.map((sm) => toonFromExtractedSource(sm, gradientMap, options.usePmxToonMap));
+    const toonMats = sourceMaterials.map((sm) => toonFromExtractedSource(sm, gradientMap, options.usePmxNpr));
     const mesh = new THREE.Mesh(geometry, toonMats.length === 1 ? toonMats[0] : toonMats);
     mesh.frustumCulled = false;
 
@@ -1962,7 +1964,7 @@ export async function previewHandCurl(
     const { geometry, jointN, azimuth, sourceMaterials } = prepared;
 
     const gradientMap = makeGradientMap(toonSteps);
-    const toonMats = sourceMaterials.map((sm) => toonFromExtractedSource(sm, gradientMap, options.usePmxToonMap));
+    const toonMats = sourceMaterials.map((sm) => toonFromExtractedSource(sm, gradientMap, options.usePmxNpr));
     const mesh = new THREE.Mesh(geometry, toonMats.length === 1 ? toonMats[0] : toonMats);
     mesh.frustumCulled = false;
     const group = new THREE.Group();

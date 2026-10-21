@@ -2,9 +2,9 @@
 // THREE.Group（SkinnedMesh + Bone 层级 + 按材质分组），喂现有烘焙管线。
 // 构建口径仿用户提供参考（SFV sfv-viewer/mmd/index.ts 的 buildThreeSkinnedMesh），
 // 材质为 MeshStandardMaterial（diffuse 色 + map + DoubleSide），烘焙时由管线
-// 统一转 toon（makeToonFromSource）。PMX toon 贴图另抽成纵向亮度剖面的
-// DataTexture 挂 material.userData.pmxToonGradient，供「原味着色」开关选用；
-// sphere 贴图挂 userData.pmxSphereMap（烘焙暂不消费）。
+// 统一转 toon（makeToonFromSource）；「PMX 原味着色」开关打开时改走参考版
+// NPR 着色（pmx-npr.ts）。sphere 贴图挂 userData.pmxSphereMap（烘焙暂不消费），
+// PMX toon 贴图不单独加载（NPR 预设是参数化的，不消费 toon 图）。
 
 import * as THREE from 'three';
 import type { PMXParsedData } from './pmx-parser';
@@ -42,44 +42,6 @@ export function createBlobTextureResolver(files: Map<string, Blob>): PMXTextureR
       URL.revokeObjectURL(url);
     }
   };
-}
-
-/** 从 toon 贴图抽纵向亮度剖面 → 横向 RedFormat DataTexture（作 gradientMap 用）。
- *  MMD toon 图上亮下暗；gradientMap 横轴 0=暗（NdotL 0）→1=亮，故剖面自底向上取。 */
-export function toonTextureToGradient(tex: THREE.Texture): THREE.DataTexture | null {
-  const img = tex.image as (HTMLImageElement | ImageBitmap) | undefined;
-  if (!img || !img.width || !img.height) return null;
-  const w = Math.min(img.width, 64);
-  const h = img.height;
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return null;
-  ctx.drawImage(img as CanvasImageSource, 0, 0, w, h);
-  let data: ImageData;
-  try {
-    data = ctx.getImageData(0, 0, w, h);
-  } catch {
-    return null;
-  }
-  const STEPS = 32;
-  const out = new Uint8Array(STEPS);
-  for (let i = 0; i < STEPS; i++) {
-    // i=0（暗）取图底部行，i=STEPS-1（亮）取顶部行
-    const row = Math.min(h - 1, Math.max(0, Math.round((1 - i / (STEPS - 1)) * (h - 1))));
-    let sum = 0;
-    for (let x = 0; x < w; x++) {
-      const o = (row * w + x) * 4;
-      sum += 0.2126 * data.data[o] + 0.7152 * data.data[o + 1] + 0.0722 * data.data[o + 2];
-    }
-    out[i] = Math.round(sum / w);
-  }
-  const grad = new THREE.DataTexture(out, STEPS, 1, THREE.RedFormat);
-  grad.minFilter = THREE.LinearFilter;
-  grad.magFilter = THREE.LinearFilter;
-  grad.needsUpdate = true;
-  return grad;
 }
 
 export async function buildPMXScene(
@@ -145,13 +107,6 @@ export async function buildPMXScene(
       if (tex) {
         tex.colorSpace = THREE.SRGBColorSpace;
         m.map = tex;
-      }
-    }
-    if (!mat.toonShared && mat.toonTextureIndex >= 0 && mat.toonTextureIndex < data.textures.length) {
-      const toonTex = await resolveTexture(data.textures[mat.toonTextureIndex]);
-      if (toonTex) {
-        const grad = toonTextureToGradient(toonTex);
-        if (grad) m.userData.pmxToonGradient = grad;
       }
     }
     if (mat.sphereTextureIndex >= 0 && mat.sphereTextureIndex < data.textures.length) {

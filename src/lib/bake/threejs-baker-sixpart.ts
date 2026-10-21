@@ -8,6 +8,7 @@
 
 import * as THREE from 'three';
 import { loadModelScene } from './load-model';
+import { makeNprFromSource } from './pmx-npr';
 import {
   BakedBoneInfo,
   BoneMergeInfo,
@@ -403,21 +404,21 @@ function makeViewGeometry(view: BuiltPartView): THREE.BufferGeometry {
 export function makeToonFromSource(
   source: THREE.Material | null,
   gradientMap: THREE.DataTexture,
-  usePmxToonMap?: boolean,
-): THREE.MeshToonMaterial {
+  usePmxNpr?: boolean,
+): THREE.Material {
+  // PMX 原味着色（开关开）：走参考版 NPR 着色，不做 toon 转换
+  if (usePmxNpr) {
+    const npr = makeNprFromSource(source);
+    if (npr) return npr;
+  }
   const src = source as THREE.MeshStandardMaterial | null;
-  // PMX 原味着色：源材质带 toon 剖面（桥接挂 userData.pmxToonGradient）且开关开时用它
-  const grad =
-    usePmxToonMap && src?.userData?.pmxToonGradient
-      ? (src.userData.pmxToonGradient as THREE.DataTexture)
-      : gradientMap;
   return new THREE.MeshToonMaterial({
     color: src && 'color' in src && src.color ? (src.color as THREE.Color).clone() : new THREE.Color(0xffffff),
     ...(src && 'map' in src && src.map ? { map: src.map as THREE.Texture } : {}),
     // 继承源材质的面性：源模型双面（doubleSided）时压成单面会把绕向不齐的三角形
     //（如颈圈）从正面剔掉——几何在、轮廓标记也盖得住，却没有任何表面能填
     ...(src && 'side' in src && src.side !== undefined ? { side: src.side } : {}),
-    gradientMap: grad,
+    gradientMap,
   });
 }
 
@@ -888,7 +889,7 @@ export async function bakeSixParts(
       // 颜色遍：部件的每个索引视图用其源材质派生 toon 材质（各自的 map/color），不再全部件共用一份
       const inner = new THREE.Group();
       for (const view of bp.views) {
-        const toonMat = makeToonFromSource(view.source.material, gradientMap, options.usePmxToonMap);
+        const toonMat = makeToonFromSource(view.source.material, gradientMap, options.usePmxNpr);
         const mesh = new THREE.Mesh(makeViewGeometry(view), toonMat);
         mesh.frustumCulled = false;
         inner.add(mesh);
@@ -1112,7 +1113,7 @@ export async function bakeSixParts(
         const idInnerG = new THREE.Group();
         for (const view of views) {
           const geo = makeViewGeometry(view);
-          const tmat = makeToonFromSource(view.source.material, gradientMap, options.usePmxToonMap);
+          const tmat = makeToonFromSource(view.source.material, gradientMap, options.usePmxNpr);
           gateByDirection(tmat, dirShared, ci);
           mats.push(tmat);
           const cm = new THREE.Mesh(geo, tmat);

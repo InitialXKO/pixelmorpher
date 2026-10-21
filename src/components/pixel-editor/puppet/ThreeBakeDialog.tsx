@@ -236,7 +236,7 @@ function RebakePanel({ bone, input, pmxTextures, pmxFlavor, size, paletteSize, o
       try {
         const pv = await previewHandCurl(input, {
           pmxTextures,
-          usePmxToonMap: pmxFlavor,
+          usePmxNpr: pmxFlavor,
           fingerCurl: fingerCurl / 100,
           thumbBoneName: manualThumb ?? undefined,
           fingerBoneNames: manualFingers ?? undefined,
@@ -270,7 +270,7 @@ function RebakePanel({ bone, input, pmxTextures, pmxFlavor, size, paletteSize, o
     try {
       const results = await bakeSingleBone(input, bone.name, {
         pmxTextures,
-        usePmxToonMap: pmxFlavor,
+        usePmxNpr: pmxFlavor,
         size,
         paletteSize,
         fingerCurl: fingerCurl / 100,
@@ -739,7 +739,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [bakeMode, setBakeMode] = useState<'twopass' | 'sixpart' | 'manual'>('sixpart');
   // 全角度模式：额外 ±45°（各 8 方向）与 ±90°（各 1 个朝向）纬度的整套精灵
   const [fullAngle, setFullAngle] = useState(false);
-  // PMX 导入：zip 解包的贴图文件表 + 原味着色开关（toon 贴图作 ramp，默认关）
+  // PMX 导入：zip 解包的贴图文件表 + 原味着色开关（参考版 NPR，默认关）
   const pmxTexturesRef = useRef<Map<string, Blob> | null>(null);
   const [isPmx, setIsPmx] = useState(false);
   const [pmxFlavor, setPmxFlavor] = useState(false);
@@ -866,7 +866,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         manualMerges,
         manualUnmerges,
         pmxTextures: pmxTexturesRef.current ?? undefined,
-        usePmxToonMap: pmxFlavor,
+        usePmxNpr: pmxFlavor,
         extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
         onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
         ...(canReuseColors ? { idOnly: true, reuseBake: lastBakeRef.current!.data } : {}),
@@ -907,7 +907,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         manualMerges,
         manualUnmerges,
         pmxTextures: pmxTexturesRef.current ?? undefined,
-        usePmxToonMap: pmxFlavor,
+        usePmxNpr: pmxFlavor,
         extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
         onProgress: (done, total, label) => setProgress(`${done}/${total} 遍 · ${label}`),
       });
@@ -990,7 +990,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         size,
         paletteSize,
         pmxTextures: pmxTexturesRef.current ?? undefined,
-        usePmxToonMap: pmxFlavor,
+        usePmxNpr: pmxFlavor,
         extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
         onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
       });
@@ -1093,7 +1093,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     if (!processed || processed.size === 0) return;
     try {
       const store = useProjectStore.getState();
-      const base = fileName ? fileName.replace(/\.(glb|gltf)$/i, '') : 'baked';
+      const base = fileName ? fileName.replace(/\.(glb|gltf|pmx|zip)$/i, '') : 'baked';
       const name = `烘焙_${base}`;
       store.pushUndo('导入烘焙角色');
       // 分辨率超出项目画布尺寸时自动放大画布（直接 setState，合并进同一次 undo）
@@ -1285,7 +1285,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               全角度（±45°/±90°）
             </label>
             {isPmx && (
-              <label className="flex cursor-pointer items-center gap-1" title="开：带 toon 贴图的 PMX 材质用其自身 toon 贴图的明暗剖面作 ramp（MMD 原味）；关：全用管线共享 gradientMap（与 GLB 同一口径）">
+              <label className="flex cursor-pointer items-center gap-1" title="开：颜色遍用参考版 NPR 着色——材质按名称分类（脸/发/肌/眼/衣/金属等）套 toon ramp + rim 预设；关：全走管线统一 toon 转换（共享 gradientMap，与 GLB 同一口径）">
                 <input type="checkbox" checked={pmxFlavor} onChange={(e) => setPmxFlavor(e.target.checked)} />
                 PMX 原味着色
               </label>
@@ -1522,6 +1522,19 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
           </div>
         )}
 
+        {/* 导入为角色（三模式共用：processed 有结果就显示，不再绑在双遍/六部件总览里） */}
+        {processed && processed.size > 0 && (
+          <div className="mb-3 flex items-center gap-3">
+            <button
+              onClick={handleImport}
+              className="h-7 rounded bg-green-700 px-4 text-[11px] font-bold text-white hover:bg-green-600"
+            >
+              导入为角色
+            </button>
+            <span className="text-[11px] text-gray-500">{processed.size} 个有效肢体待导入</span>
+          </div>
+        )}
+
         {/* 单肢体重烘面板 */}
         {rebakeTarget && (
           <RebakePanel
@@ -1551,13 +1564,6 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                 />
                 显示 ID 图（调试拆分）
               </label>
-              <button
-                onClick={handleImport}
-                disabled={!processed || processed.size === 0}
-                className="h-7 rounded bg-green-700 px-4 text-[11px] font-bold text-white hover:bg-green-600 disabled:opacity-50"
-              >
-                导入为角色
-              </button>
             </div>
             <div className="grid grid-cols-8 gap-2">
               {dirThumbs.map((r) => (
@@ -1585,13 +1591,6 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                 />
                 显示 ID 图（调试拆分）
               </label>
-              <button
-                onClick={handleImport}
-                disabled={!processed || processed.size === 0}
-                className="h-7 rounded bg-green-700 px-4 text-[11px] font-bold text-white hover:bg-green-600 disabled:opacity-50"
-              >
-                导入为角色
-              </button>
             </div>
             {sixPartThumbs.map(({ part, thumbs }) => (
               <div key={part} className="mb-2">

@@ -58,8 +58,8 @@ export interface ManualPartSpec {
 export interface ManualBakeOptions {
   /** PMX 导入的贴图文件表（zip 解包：路径→Blob）；仅 PMX 输入时用 */
   pmxTextures?: Map<string, Blob>;
-  /** PMX 原味着色：开时带 toon 贴图的材质用其自身 toon 剖面作 gradientMap */
-  usePmxToonMap?: boolean;
+  /** PMX 原味着色：开时颜色遍用参考版 NPR 着色（pmx-npr.ts），关时统一 toon 转换 */
+  usePmxNpr?: boolean;
   /** 全角度模式：额外纬度（度），如 [45,-45,90,-90]；基纬度 0 恒渲，|纬度|≥90 只渲一个朝向 */
   extraLatitudes?: number[];
   size?: number;
@@ -498,8 +498,8 @@ export async function bakeManualParts(
         if (pm.index) geo.setIndex(new THREE.BufferAttribute(pm.index, 1));
         geo.computeVertexNormals();
         const toonMat = Array.isArray(pm.material)
-          ? pm.material.map((m) => makeToonFromSource(m, gradientMap, options.usePmxToonMap))
-          : makeToonFromSource(pm.material, gradientMap, options.usePmxToonMap);
+          ? pm.material.map((m) => makeToonFromSource(m, gradientMap, options.usePmxNpr))
+          : makeToonFromSource(pm.material, gradientMap, options.usePmxNpr);
         if (Array.isArray(toonMat)) {
           for (const g of pm.groups) geo.addGroup(g.start, g.count, g.materialIndex);
         }
