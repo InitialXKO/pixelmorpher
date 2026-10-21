@@ -53,6 +53,8 @@ export interface ManualPartSpec {
   meshIndices: number[];
   /** 枢轴来源，缺省 = meshIndices[0] 的原点 */
   pivot?: ManualPivotSpec;
+  /** 父部件覆盖（specs 数组下标）：-1 = 挂根；undefined = 自动解析（锚网格场景图祖先） */
+  parentIndex?: number;
 }
 
 export interface ManualBakeOptions {
@@ -233,7 +235,7 @@ export interface PreparedManual {
  * 第一个属于其他部件的网格所在的部件下标；无则 -1（挂根）。未分配网格在链上跳过。 */
 export function resolveManualParentIndices(
   meshes: ManualMeshInfo[],
-  parts: { meshIndices: number[]; pivot?: ManualPivotSpec }[],
+  parts: { meshIndices: number[]; pivot?: ManualPivotSpec; parentIndex?: number }[],
 ): number[] {
   const parentByMesh = new Map(meshes.map((m) => [m.meshIndex, m.parentMeshIndex]));
   const specIndexByMesh = new Map<number, number>();
@@ -242,6 +244,13 @@ export function resolveManualParentIndices(
   });
   return parts.map((part, idx) => {
     if (part.meshIndices.length === 0) return -1;
+    // 手动指定父部件优先：-1 = 挂根；合法的他人下标直接采用；自指/越界回落自动解析
+    if (part.parentIndex !== undefined) {
+      if (part.parentIndex === -1) return -1;
+      if (part.parentIndex >= 0 && part.parentIndex < parts.length && part.parentIndex !== idx) {
+        return part.parentIndex;
+      }
+    }
     const pivot = part.pivot ?? { mode: 'mesh' as const, meshIndex: part.meshIndices[0] };
     const anchor = pivot.mode === 'mesh' ? pivot.meshIndex : part.meshIndices[0];
     let anc = parentByMesh.get(anchor) ?? null;

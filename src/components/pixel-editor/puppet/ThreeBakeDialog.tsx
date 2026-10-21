@@ -7,7 +7,7 @@ import { unzipSync } from 'fflate';
 // 备选 A：单肢体独立重烘（拆下竖直，手指可握拳）→ 替换
 // ============================================================
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BakeResult } from '@/lib/bake/threejs-baker';
 import { FULL_ANGLE_LATITUDES } from '@/lib/bake/threejs-baker';
 import {
@@ -53,6 +53,8 @@ interface ManualPartDraft {
   name: string;
   meshIndices: number[];
   pivot: ManualPivotSpec;
+  /** 父部件覆盖：null = 自动解析；-1 = 挂根；其他 = 父部件草稿 id */
+  parentId: number | null;
 }
 import type { PixelGrid, DirectionIndex } from '@/lib/unified-types';
 import { pxToSub } from '@/lib/unified-types';
@@ -946,6 +948,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         name: n,
         meshIndices: [...g.meshIndices],
         pivot: { mode: 'mesh', meshIndex: g.meshIndices[0] } as ManualPivotSpec,
+        parentId: null,
       };
     });
   }, []);
@@ -992,6 +995,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               name: manualCatalog?.meshes[first]?.name ?? '部件',
               meshIndices: [...meshIndices],
               pivot: { mode: 'mesh', meshIndex: first } as ManualPivotSpec,
+              parentId: null,
             },
           ];
         } else if (target !== '') {
@@ -1011,9 +1015,45 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     const id = manualPartSeq.current++;
     setManualParts((prev) => [
       ...prev,
-      { id, name: `部件 ${id}`, meshIndices: [], pivot: { mode: 'center' } as ManualPivotSpec },
+      { id, name: `部件 ${id}`, meshIndices: [], pivot: { mode: 'center' } as ManualPivotSpec, parentId: null },
     ]);
   }, []);
+
+  /** 草稿父覆盖 → 非空部件数组内的下标（烘焙 specs 与层级预览共用换算） */
+  const draftParentIndex = (d: ManualPartDraft, nonEmpty: ManualPartDraft[]): number | undefined => {
+    if (d.parentId === null || d.parentId === undefined) return undefined;
+    if (d.parentId === -1) return -1;
+    const idx = nonEmpty.findIndex((o) => o.id === d.parentId);
+    return idx >= 0 ? idx : undefined;
+  };
+
+  /** 自动解析结果（无覆盖）：供部件行「自动（当前：X）」标注 */
+  const manualAutoParents = useMemo(() => {
+    if (!manualCatalog) return null;
+    const nonEmpty = manualParts.filter((d) => d.meshIndices.length > 0);
+    if (nonEmpty.length === 0) return null;
+    const parents = resolveManualParentIndices(
+      manualCatalog.meshes,
+      nonEmpty.map((d) => ({ meshIndices: d.meshIndices, pivot: d.pivot })),
+    );
+    return { nonEmpty, parents };
+  }, [manualCatalog, manualParts]);
+
+  /** 有效层级（含手动覆盖）：层级预览与烘焙同一结果 */
+  const manualEffective = useMemo(() => {
+    if (!manualCatalog) return null;
+    const nonEmpty = manualParts.filter((d) => d.meshIndices.length > 0);
+    if (nonEmpty.length === 0) return null;
+    const parents = resolveManualParentIndices(
+      manualCatalog.meshes,
+      nonEmpty.map((d) => ({
+        meshIndices: d.meshIndices,
+        pivot: d.pivot,
+        parentIndex: draftParentIndex(d, nonEmpty),
+      })),
+    );
+    return { nonEmpty, parents };
+  }, [manualCatalog, manualParts]);
 
   const loadManualCatalog = useCallback(async () => {
     setManualListLoading(true);
@@ -1049,13 +1089,13 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setImportMsg(null);
     setRebakeTarget(null);
     try {
-      const specs: ManualPartSpec[] = manualParts
-        .filter((d) => d.meshIndices.length > 0)
-        .map((d) => ({
-          name: d.name.trim() || manualCatalog.meshes[d.meshIndices[0]]?.name || '部件',
-          meshIndices: d.meshIndices,
-          pivot: d.pivot,
-        }));
+      const nonEmptyDrafts = manualParts.filter((d) => d.meshIndices.length > 0);
+      const specs: ManualPartSpec[] = nonEmptyDrafts.map((d) => ({
+        name: d.name.trim() || manualCatalog.meshes[d.meshIndices[0]]?.name || '部件',
+        meshIndices: d.meshIndices,
+        pivot: d.pivot,
+        parentIndex: draftParentIndex(d, nonEmptyDrafts),
+      }));
       if (specs.length === 0) throw new Error('至少把一个网格分配给部件');
       setProgress('加载模型…');
       await new Promise((r) => setTimeout(r, 30));
@@ -1454,7 +1494,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               </button>
             </div>
             {!manualCatalog && !manualListLoading && (
-              <div className="text-[11px] text-gray-600">选择模型文件后自动读取网格列表（URL 输入请点「重新读取」）。把网格分配给部件（多个网格可合并为一个部件），枢轴默认取网格原点，可改包围盒中心或自定义坐标；父子层级按场景图中最近的跨部件网格祖先。</div>
+              <div className="text-[11px] text-gray-600">选择模型文件后自动读取网格列表（URL 输入请点「重新读取」）。把网格分配给部件（多个网格可合并为一个部件），枢轴默认取网格原点，可改包围盒中心或自定义坐标；父子层级默认按场景图中最近的跨部件网格祖先解析，也可在部件行「父部件」里手动指定。</div>
             )}
             {manualListLoading && <div className="text-[11px] text-gray-500">读取网格列表…</div>}
             {manualCatalog && (
@@ -1574,6 +1614,64 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                           ))}
                         </select>
                       )}
+                      {(() => {
+                        const autoIdx = manualAutoParents ? manualAutoParents.nonEmpty.findIndex((o) => o.id === d.id) : -1;
+                        const autoParent = autoIdx >= 0 ? manualAutoParents!.parents[autoIdx] : -2;
+                        const autoLabel =
+                          autoParent === -1 ? '根' : autoParent >= 0 ? manualAutoParents!.nonEmpty[autoParent]?.name || '部件' : null;
+                        const effIdx = manualEffective ? manualEffective.nonEmpty.findIndex((o) => o.id === d.id) : -1;
+                        const descendantIds = new Set<number>();
+                        if (manualEffective && effIdx >= 0) {
+                          const parents = manualEffective.parents;
+                          manualEffective.nonEmpty.forEach((o, j) => {
+                            let cur = parents[j];
+                            const seen = new Set<number>();
+                            while (cur !== -1 && cur !== undefined && !seen.has(cur)) {
+                              if (cur === effIdx) {
+                                descendantIds.add(o.id);
+                                break;
+                              }
+                              seen.add(cur);
+                              cur = parents[cur];
+                            }
+                          });
+                        }
+                        const selectValue =
+                          d.parentId === null
+                            ? 'auto'
+                            : d.parentId === -1
+                              ? 'root'
+                              : manualParts.some((o) => o.id === d.parentId)
+                                ? String(d.parentId)
+                                : 'auto';
+                        return (
+                          <label className="flex items-center gap-1 text-gray-400">
+                            父部件
+                            <select
+                              value={selectValue}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                const pid = v === 'auto' ? null : v === 'root' ? -1 : Number(v);
+                                setManualParts((prev) => prev.map((pp) => (pp.id === d.id ? { ...pp, parentId: pid } : pp)));
+                              }}
+                              className="h-6 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-gray-300"
+                              title="自动 = 按锚网格的场景图祖先解析；也可直接指定父部件或挂根"
+                            >
+                              <option value="auto">自动{autoLabel ? `（当前：${autoLabel}）` : ''}</option>
+                              <option value="root">根（无父部件）</option>
+                              {manualParts
+                                .filter((o) => o.id !== d.id)
+                                .map((o) => (
+                                  <option key={o.id} value={String(o.id)} disabled={descendantIds.has(o.id)}>
+                                    {o.name || '部件'}
+                                    {o.meshIndices.length === 0 ? '（空）' : ''}
+                                    {descendantIds.has(o.id) ? '（后代）' : ''}
+                                  </option>
+                                ))}
+                            </select>
+                          </label>
+                        );
+                      })()}
                       <button
                         onClick={() => setManualParts((prev) => prev.filter((p) => p.id !== d.id))}
                         className="rounded border border-[#3a3a5a] px-2 py-0.5 text-[10px] text-gray-400 hover:bg-[#222240]"
@@ -1659,12 +1757,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                   })}
                 </div>
                 {(() => {
-                  const nonEmpty = manualParts.filter((d) => d.meshIndices.length > 0);
-                  if (nonEmpty.length === 0) return null;
-                  const parents = resolveManualParentIndices(
-                    manualCatalog.meshes,
-                    nonEmpty.map((d) => ({ meshIndices: d.meshIndices, pivot: d.pivot })),
-                  );
+                  if (!manualEffective) return null;
+                  const { nonEmpty, parents } = manualEffective;
                   const childrenOf = new Map<number, number[]>();
                   parents.forEach((pIdx, i) => {
                     if (pIdx >= 0) {
@@ -1673,22 +1767,27 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                       childrenOf.set(pIdx, arr);
                     }
                   });
-                  const renderNode = (i: number, depth: number): React.ReactNode => (
-                    <div key={nonEmpty[i].id}>
-                      <div style={{ paddingLeft: depth * 14 }} className="py-px text-[11px]">
-                        {depth > 0 && <span className="text-gray-600">└ </span>}
-                        <span className="text-gray-200">{nonEmpty[i].name || '部件'}</span>
-                        <span className="text-gray-600"> · {nonEmpty[i].meshIndices.length} 网格</span>
+                  const renderNode = (i: number, depth: number, seen: ReadonlySet<number>): React.ReactNode => {
+                    if (seen.has(i)) return null;
+                    const nextSeen = new Set(seen);
+                    nextSeen.add(i);
+                    return (
+                      <div key={nonEmpty[i].id}>
+                        <div style={{ paddingLeft: depth * 14 }} className="py-px text-[11px]">
+                          {depth > 0 && <span className="text-gray-600">└ </span>}
+                          <span className="text-gray-200">{nonEmpty[i].name || '部件'}</span>
+                          <span className="text-gray-600"> · {nonEmpty[i].meshIndices.length} 网格</span>
+                        </div>
+                        {(childrenOf.get(i) ?? []).map((c) => renderNode(c, depth + 1, nextSeen))}
                       </div>
-                      {(childrenOf.get(i) ?? []).map((c) => renderNode(c, depth + 1))}
-                    </div>
-                  );
+                    );
+                  };
                   return (
                     <div className="mt-2 border-t border-[#2a2a4a] pt-2">
                       <div className="mb-1 text-[10px] text-gray-500">
-                        导入后层级预览（锚网格 = 枢轴网格或首网格，沿场景图祖先取第一个跨部件网格；与烘焙同口径解析）
+                        导入后层级预览（与烘焙同口径：部件行「父部件」手动指定优先；自动 = 锚网格沿场景图祖先取第一个跨部件网格）
                       </div>
-                      {nonEmpty.map((_, i) => (parents[i] === -1 ? renderNode(i, 0) : null))}
+                      {nonEmpty.map((_, i) => (parents[i] === -1 ? renderNode(i, 0, new Set()) : null))}
                     </div>
                   );
                 })()}
