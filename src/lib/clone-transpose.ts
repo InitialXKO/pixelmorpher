@@ -179,7 +179,7 @@ export function cloneSubtreeTransposed(
   const ikChains: IKChain[] = [...(character.ikChains ?? [])];
   const internalChains = ikChains.filter((c) => inSubtree.has(c.rootNodeId) && inSubtree.has(c.endNodeId));
   if (internalChains.length > 0) {
-    const world = computeWorldTransforms(character, 0);
+    const world = computeWorldTransforms(character, 0, canvas?.width ?? 0, canvas?.height ?? 0);
     const rad = (thetaDeg * Math.PI) / 180;
     const cos = Math.cos(rad);
     const sin = Math.sin(rad);
