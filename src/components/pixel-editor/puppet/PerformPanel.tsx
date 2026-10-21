@@ -28,6 +28,7 @@ import {
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { captureSkinningSnapshot } from '@/lib/skin/snapshot-capture';
 import { writePuppetPoseKeyframe } from '../canvas/tool-handlers';
 import DirectionWheel from '../DirectionWheel';
 import BlueprintTemplateLoader from './BlueprintTemplateLoader';
@@ -381,6 +382,83 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
                     title="出平面角（度）：绕朝向水平轴掀转，整棵子树跟随。伪3D旋转工具拖拽也写此轨道"
                   />
                   <span className="text-[9px] text-gray-600">伪3D旋转工具拖拽也写此轨道</span>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* ---- 蒙皮快照（plug 允许蒙皮时） ---- */}
+          {performNodeId && unifiedSkeleton && (() => {
+            const node = unifiedSkeleton.nodes[performNodeId];
+            if (!node || node.attachment?.type !== 'socket' || !node.attachment.parentSocketId) return null;
+            if (node.attachment.allowSkinning !== true) return null;
+            const snap = node.attachment.skinningSnapshot;
+            return (
+              <div className="space-y-1.5">
+                <Label className="text-[10px] text-gray-500 uppercase tracking-wider">
+                  蒙皮快照 <span className="normal-case text-[9px]">(与父节点合并变形)</span>
+                </Label>
+                <div className="text-[9px] text-gray-500 leading-relaxed">
+                  {snap
+                    ? `已快照：帧 ${snap.frame} · 朝向 ${snap.direction} · 基础角 ${snap.baseAngle.toFixed(0)}°（该朝向下旋转走合并精灵弯曲，不再用关节盘）`
+                    : '未快照：按下后把本节点与父节点按当前帧姿态合并成一张精灵，之后旋转自动网格弯曲'}
+                </div>
+                <div className="flex gap-1">
+                  <Button
+                    size="sm"
+                    className="flex-1 h-7 text-[10px] bg-cyan-700 hover:bg-cyan-600"
+                    title="以当前帧姿态捕获蒙皮快照（父+子合并精灵）"
+                    onClick={() => {
+                      const st = useProjectStore.getState();
+                      const character = st.unifiedCharacters[unifiedSkeleton.id];
+                      if (!character) return;
+                      const result = captureSkinningSnapshot(
+                        character,
+                        performNodeId,
+                        currentFrame,
+                        st.canvasWidth,
+                        st.canvasHeight,
+                        st.sprites,
+                      );
+                      if (!result) {
+                        alert('快照失败：当前帧该节点与父节点没有可捕获的像素');
+                        return;
+                      }
+                      const spriteId = result.sprite.id;
+                      if (!spriteId) return;
+                      st.pushUndo('蒙皮快照');
+                      useProjectStore.setState((s) => ({
+                        sprites: { ...s.sprites, [spriteId]: result.sprite },
+                      }));
+                      const cur = useProjectStore.getState().unifiedCharacters[unifiedSkeleton.id]?.nodes[performNodeId];
+                      if (cur) {
+                        st.updateUnifiedNode(unifiedSkeleton.id, performNodeId, {
+                          attachment: { ...cur.attachment, skinningSnapshot: result.snapshot },
+                        });
+                      }
+                    }}
+                  >
+                    蒙皮快照（当前帧）
+                  </Button>
+                  {snap && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-[10px] border-[#1e1e3a] text-gray-500 hover:text-red-300 px-2"
+                      title="删除快照，恢复双精灵 + 关节盘渲染"
+                      onClick={() => {
+                        const st = useProjectStore.getState();
+                        const cur = st.unifiedCharacters[unifiedSkeleton.id]?.nodes[performNodeId];
+                        if (!cur) return;
+                        st.pushUndo('删除蒙皮快照');
+                        st.updateUnifiedNode(unifiedSkeleton.id, performNodeId, {
+                          attachment: { ...cur.attachment, skinningSnapshot: null },
+                        });
+                      }}
+                    >
+                      删除
+                    </Button>
+                  )}
                 </div>
               </div>
             );

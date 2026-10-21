@@ -12,8 +12,8 @@
 //    用 carveJointOpening() 在默认精灵生成时 carve。
 // 2. 颜色：关节盘颜色可在 plug.discColor 逐关节自定义，不限于预设枚举；
 //    为空时自动取子节点侧精灵开口处的众数颜色（排除轮廓色）。
-// 3. z-order：关节盘绘制在父子两侧精灵之后，透过开口可见（unified: discZ = min(parentZ, childZ) - 50；
-//    旧管线: renderJointDiscs 在精灵绘制之前调用）。
+// 3. z-order：关节盘无视深度排序、始终被遮挡，只透过开口可见
+//    （unified 与旧管线都在全部精灵之前绘制）。
 // 4. 大小：关节盘直径 = 两侧开口宽度的平均值
 //    = (parent.crossSectionBottom + child.crossSectionTop) / 2。
 // ============================================================ */

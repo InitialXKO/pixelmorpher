@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BakeResult } from '@/lib/bake/threejs-baker';
+import { FULL_ANGLE_LATITUDES } from '@/lib/bake/threejs-baker';
 import {
   bakeModelTwoPass,
   bakeSingleBone,
@@ -34,6 +35,21 @@ import {
   type ProcessedBone,
   type ProcessedBoneDirection,
 } from '@/lib/bake/skeleton-mapper';
+import {
+  bakeManualParts,
+  listManualMeshes,
+  type ManualCatalog,
+  type ManualPartSpec,
+  type ManualPivotSpec,
+} from '@/lib/bake/threejs-baker-manual';
+
+/** 手动拆分的部件草稿（对话框编辑态） */
+interface ManualPartDraft {
+  id: number;
+  name: string;
+  meshIndices: number[];
+  pivot: ManualPivotSpec;
+}
 import type { PixelGrid, DirectionIndex } from '@/lib/unified-types';
 import { pxToSub } from '@/lib/unified-types';
 import { useProjectStore } from '@/lib/store';
@@ -710,7 +726,14 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [paletteSize, setPaletteSize] = useState(16);
   const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
   /** 烘焙模式：twopass=整模 ID 双遍（16 遍），sixpart=六部件（96 遍） */
-  const [bakeMode, setBakeMode] = useState<'twopass' | 'sixpart'>('sixpart');
+  const [bakeMode, setBakeMode] = useState<'twopass' | 'sixpart' | 'manual'>('sixpart');
+  // 全角度模式：额外 ±45°（各 8 方向）与 ±90°（各 1 个朝向）纬度的整套精灵
+  const [fullAngle, setFullAngle] = useState(false);
+  // 手动拆分（按网格）：网格清单 + 部件草稿（多网格可合并为一个部件，枢轴可调）
+  const [manualCatalog, setManualCatalog] = useState<ManualCatalog | null>(null);
+  const [manualParts, setManualParts] = useState<ManualPartDraft[]>([]);
+  const [manualListLoading, setManualListLoading] = useState(false);
+  const manualPartSeq = useRef(1);
 
   const [baking, setBaking] = useState(false);
   const [progress, setProgress] = useState('');
@@ -750,11 +773,32 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setImportMsg(null);
     setManualMerges(new Map());
     setManualUnmerges(new Set());
+    setManualCatalog(null);
+    setManualParts([]);
     const reader = new FileReader();
     reader.onload = () => setFileData(reader.result as ArrayBuffer);
     reader.onerror = () => setError('文件读取失败');
     reader.readAsArrayBuffer(f);
   }, []);
+
+
+  /** 输入解析：文件直接用；URL 走缓存，避免重复下载 */
+  const resolveInput = useCallback(async (): Promise<string | ArrayBuffer> => {
+    if (fileData) {
+      urlCache.current = null; // 切到文件时清 URL 缓存
+      return fileData;
+    }
+    const u = url.trim();
+    if (!u) throw new Error('请先选择文件或填写 URL');
+    if (urlCache.current && urlCache.current.url === u) {
+      return urlCache.current.data;
+    }
+    const resp = await fetch(u);
+    if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
+    const buf = await resp.arrayBuffer();
+    urlCache.current = { url: u, data: buf };
+    return buf;
+  }, [fileData, url]);
 
   const handleBake = useCallback(async () => {
     setBaking(true);
@@ -765,26 +809,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setImportMsg(null);
     setRebakeTarget(null);
     try {
-      // 输入解析：文件直接用；URL 走缓存，避免改合并设置后重烘时重复下载
-      let inp: string | ArrayBuffer;
-      if (fileData) {
-        inp = fileData;
-        urlCache.current = null; // 切到文件时清 URL 缓存
-      } else {
-        const u = url.trim();
-        if (!u) throw new Error('请先选择文件或填写 URL');
-        if (urlCache.current && urlCache.current.url === u) {
-          inp = urlCache.current.data;
-        } else {
-          setProgress('下载模型…');
-          await new Promise((r) => setTimeout(r, 30));
-          const resp = await fetch(u);
-          if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
-          const buf = await resp.arrayBuffer();
-          urlCache.current = { url: u, data: buf };
-          inp = buf;
-        }
-      }
+      const inp = await resolveInput();
       setProgress('加载模型…');
       await new Promise((r) => setTimeout(r, 30));
       const t0 = performance.now();
@@ -799,6 +824,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         granularity,
         manualMerges,
         manualUnmerges,
+        extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
         onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
         ...(canReuseColors ? { idOnly: true, reuseBake: lastBakeRef.current!.data } : {}),
       });
@@ -816,7 +842,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges]);
+  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges, fullAngle]);
 
   /** 六部件烘焙：6 部件 × 8 方向 ×（颜色+ID）= 96 遍 */
   const handleBakeSixPart = useCallback(async () => {
@@ -828,25 +854,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setImportMsg(null);
     setRebakeTarget(null);
     try {
-      let inp: string | ArrayBuffer;
-      if (fileData) {
-        inp = fileData;
-        urlCache.current = null;
-      } else {
-        const u = url.trim();
-        if (!u) throw new Error('请先选择文件或填写 URL');
-        if (urlCache.current && urlCache.current.url === u) {
-          inp = urlCache.current.data;
-        } else {
-          setProgress('下载模型…');
-          await new Promise((r) => setTimeout(r, 30));
-          const resp = await fetch(u);
-          if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
-          const buf = await resp.arrayBuffer();
-          urlCache.current = { url: u, data: buf };
-          inp = buf;
-        }
-      }
+      const inp = await resolveInput();
       setProgress('加载模型…');
       await new Promise((r) => setTimeout(r, 30));
       const t0 = performance.now();
@@ -855,6 +863,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         granularity,
         manualMerges,
         manualUnmerges,
+        extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
         onProgress: (done, total, label) => setProgress(`${done}/${total} 遍 · ${label}`),
       });
       setTotalMs(performance.now() - t0);
@@ -870,13 +879,91 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges]);
+  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges, fullAngle]);
+
+  /** 读取网格清单（手动模式） */
+  const loadManualCatalog = useCallback(async () => {
+    setManualListLoading(true);
+    try {
+      const inp = await resolveInput();
+      const cat = await listManualMeshes(inp);
+      setManualCatalog(cat);
+      const used = new Set<string>();
+      setManualParts(
+        cat.meshes.map((m) => {
+          let n = m.name;
+          let k = 2;
+          while (used.has(n)) n = `${m.name}_${k++}`;
+          used.add(n);
+          return {
+            id: manualPartSeq.current++,
+            name: n,
+            meshIndices: [m.meshIndex],
+            pivot: { mode: 'mesh', meshIndex: m.meshIndex } as ManualPivotSpec,
+          };
+        }),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setManualListLoading(false);
+    }
+  }, [resolveInput]);
+
+  // 切到手动模式 / 换文件时自动读取网格清单（URL 改动走「重新读取」按钮）
+  useEffect(() => {
+    if (bakeMode === 'manual' && fileData) {
+      void loadManualCatalog();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bakeMode, fileData]);
+
+  /** 手动拆分烘焙：勾选网格 → 每网格一部件 8 方向 → processed（与骨骼流同构） */
+  const handleBakeManual = useCallback(async () => {
+    if (!manualCatalog) return;
+    setBaking(true);
+    setError(null);
+    setTwoPass(null);
+    setSixPart(null);
+    setProcessed(null);
+    setImportMsg(null);
+    setRebakeTarget(null);
+    try {
+      const specs: ManualPartSpec[] = manualParts
+        .filter((d) => d.meshIndices.length > 0)
+        .map((d) => ({
+          name: d.name.trim() || manualCatalog.meshes[d.meshIndices[0]]?.name || '部件',
+          meshIndices: d.meshIndices,
+          pivot: d.pivot,
+        }));
+      if (specs.length === 0) throw new Error('至少把一个网格分配给部件');
+      setProgress('加载模型…');
+      await new Promise((r) => setTimeout(r, 30));
+      const inp = await resolveInput();
+      const t0 = performance.now();
+      const proc = await bakeManualParts(inp, specs, {
+        size,
+        paletteSize,
+        extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
+        onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
+      });
+      setTotalMs(performance.now() - t0);
+      setProcessed(proc);
+      setProgress('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setProgress('');
+    } finally {
+      setBaking(false);
+    }
+  }, [manualCatalog, manualParts, resolveInput, size, paletteSize, fullAngle]);
 
   /** 按当前模式分发烘焙 */
   const handleBakeDispatch = useCallback(() => {
     if (bakeMode === 'sixpart') handleBakeSixPart();
+    else if (bakeMode === 'manual') handleBakeManual();
     else handleBake();
-  }, [bakeMode, handleBakeSixPart, handleBake]);
+  }, [bakeMode, handleBakeSixPart, handleBake, handleBakeManual]);
 
   const handleRebakeDone = useCallback(
     (boneIndex: number, boneName: string, results: BakeResult[]) => {
@@ -1061,7 +1148,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         }));
 
   /** 当前模式的 bones（重烘按钮用） */
-  const curBones = bakeMode === 'sixpart' ? sixPart?.bones : twoPass?.bones;
+  const curBones = bakeMode === 'sixpart' ? sixPart?.bones : bakeMode === 'twopass' ? twoPass?.bones : undefined;
 
   const boneList = processed ? [...processed.values()].sort((a, b) => a.boneIndex - b.boneIndex) : [];
 
@@ -1076,7 +1163,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       >
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-bold text-gray-200">
-            3D 烘焙 <span className="font-normal text-gray-500">（{bakeMode === 'sixpart' ? '六部件 → 块内 ID 拆分' : 'ID 双遍 → 拆分'} → 导入角色）</span>
+            3D 烘焙 <span className="font-normal text-gray-500">（{bakeMode === 'sixpart' ? '六部件 → 块内 ID 拆分' : bakeMode === 'manual' ? '手动拆分（按网格）' : 'ID 双遍 → 拆分'} → 导入角色）</span>
           </h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-200">✕</button>
         </div>
@@ -1138,13 +1225,19 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               烘焙模式
               <select
                 value={bakeMode}
-                onChange={(e) => setBakeMode(e.target.value as 'twopass' | 'sixpart')}
+                onChange={(e) => setBakeMode(e.target.value as 'twopass' | 'sixpart' | 'manual')}
                 className="h-6 rounded border border-[#2a2a4a] bg-[#0d0d1f] px-1 text-gray-300"
               >
                 <option value="sixpart">六部件（96 遍）</option>
                 <option value="twopass">整模 ID 双遍（16 遍）</option>
+                <option value="manual">手动拆分（按网格）</option>
               </select>
             </label>
+            <label className="flex cursor-pointer items-center gap-1" title="额外渲染 ±45°（各 8 方向）与 ±90°（各 1 个朝向，正上方/正下方）的整套精灵，导入后按角色纬度自动选用；渲染遍数约 ×3.3">
+              <input type="checkbox" checked={fullAngle} onChange={(e) => setFullAngle(e.target.checked)} />
+              全角度（±45°/±90°）
+            </label>
+            {bakeMode !== 'manual' && (
             <label className="flex items-center gap-1" title="粗：手指/脚趾/小骨骼合并，约15个节点；细：一个骨骼一个节点（调试用）">
               拆分粒度
               <select
@@ -1156,12 +1249,13 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                 <option value="fine">细（调试）</option>
               </select>
             </label>
+            )}
             <button
               onClick={handleBakeDispatch}
               disabled={baking}
               className="h-7 rounded bg-cyan-700 px-4 text-[11px] font-bold text-white hover:bg-cyan-600 disabled:opacity-50"
             >
-              {baking ? '烘焙中…' : bakeMode === 'sixpart' ? '六部件烘焙' : '按骨骼烘焙'}
+              {baking ? '烘焙中…' : bakeMode === 'sixpart' ? '六部件烘焙' : bakeMode === 'manual' ? '手动拆分烘焙' : '按骨骼烘焙'}
             </button>
             {bakeMode === 'sixpart' && sixPart && (
               <button
@@ -1182,12 +1276,15 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             <span className="text-gray-600">
               {bakeMode === 'sixpart'
                 ? '6 部件 × 8 方向 ×（颜色+ID）= 96 遍，分块独立渲染无遮挡'
-                : '每方向 2 遍（前/后）× 8 方向 = 16 遍，用模型原始姿态'}
+                : bakeMode === 'manual'
+                  ? '每部件 8 方向独立渲染；枢轴 = 网格原点，层级按场景图网格祖先'
+                  : '每方向 2 遍（前/后）× 8 方向 = 16 遍，用模型原始姿态'}
             </span>
           </div>
         </div>
 
-        {/* 骨骼手动合并（烘焙前） */}
+        {/* 骨骼手动合并（烘焙前；手动拆分模式无骨骼合并） */}
+        {bakeMode !== 'manual' && (
         <BoneMergePanel
           key={fileName ?? url}
           input={input}
@@ -1196,6 +1293,169 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
           onBake={handleBakeDispatch}
           baking={baking}
         />
+        )}
+
+        {/* 手动拆分：部件清单（多网格合并 + 枢轴）与网格分配 */}
+        {bakeMode === 'manual' && (
+          <div className="mb-3 rounded border border-[#2a2a4a] bg-[#0d0d1f] p-3">
+            <div className="mb-2 flex items-center gap-2 text-[11px] text-gray-300">
+              <span className="font-bold">手动拆分（按网格）</span>
+              {manualCatalog && (
+                <span className="text-gray-500">
+                  {manualCatalog.meshes.length} 个网格 · {manualParts.filter((d) => d.meshIndices.length > 0).length} 个部件
+                  {manualCatalog.hasBones ? '；此模型有骨骼，将按绑定姿势静态拆分' : '；无骨骼绑定'}
+                </span>
+              )}
+              <span className="flex-1" />
+              <button
+                onClick={() => void loadManualCatalog()}
+                disabled={manualListLoading}
+                className="rounded border border-[#3a3a5a] px-2 py-0.5 text-[10px] text-gray-300 hover:bg-[#222240] disabled:opacity-50"
+              >
+                {manualListLoading ? '读取中…' : '重新读取'}
+              </button>
+            </div>
+            {!manualCatalog && !manualListLoading && (
+              <div className="text-[11px] text-gray-600">选择模型文件后自动读取网格列表（URL 输入请点「重新读取」）。把网格分配给部件（多个网格可合并为一个部件），枢轴默认取网格原点，可改包围盒中心或自定义坐标；父子层级按场景图中最近的跨部件网格祖先。</div>
+            )}
+            {manualListLoading && <div className="text-[11px] text-gray-500">读取网格列表…</div>}
+            {manualCatalog && (
+              <>
+                <div className="mb-2 max-h-64 overflow-y-auto">
+                  {manualParts.map((d) => (
+                    <div key={d.id} className="flex flex-wrap items-center gap-2 py-0.5 text-[11px]">
+                      <input
+                        value={d.name}
+                        onChange={(e) =>
+                          setManualParts((prev) => prev.map((p) => (p.id === d.id ? { ...p, name: e.target.value } : p)))
+                        }
+                        className="h-6 w-36 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-gray-200"
+                      />
+                      <span className="text-gray-500">{d.meshIndices.length} 网格</span>
+                      <label className="flex items-center gap-1 text-gray-400">
+                        枢轴
+                        <select
+                          value={d.pivot.mode === 'mesh' ? `mesh:${d.pivot.meshIndex}` : d.pivot.mode}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setManualParts((prev) =>
+                              prev.map((p) => {
+                                if (p.id !== d.id) return p;
+                                if (v === 'center') return { ...p, pivot: { mode: 'center' } as ManualPivotSpec };
+                                if (v === 'custom') {
+                                  const first = manualCatalog.meshes[p.meshIndices[0]];
+                                  return {
+                                    ...p,
+                                    pivot: {
+                                      mode: 'custom',
+                                      point: first ? { ...first.pivot } : { x: 0, y: 0, z: 0 },
+                                    } as ManualPivotSpec,
+                                  };
+                                }
+                                return { ...p, pivot: { mode: 'mesh', meshIndex: Number(v.slice(5)) } as ManualPivotSpec };
+                              }),
+                            );
+                          }}
+                          className="h-6 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-gray-300"
+                        >
+                          {d.meshIndices.map((mi) => (
+                            <option key={mi} value={`mesh:${mi}`}>
+                              网格原点：{manualCatalog.meshes[mi]?.name ?? mi}
+                            </option>
+                          ))}
+                          <option value="center">包围盒中心</option>
+                          <option value="custom">自定义坐标</option>
+                        </select>
+                      </label>
+                      {d.pivot.mode === 'custom' &&
+                        (['x', 'y', 'z'] as const).map((axis) => (
+                          <input
+                            key={axis}
+                            type="number"
+                            step={0.05}
+                            value={d.pivot.mode === 'custom' ? d.pivot.point[axis] : 0}
+                            onChange={(e) => {
+                              const val = Number(e.target.value);
+                              setManualParts((prev) =>
+                                prev.map((p) =>
+                                  p.id === d.id && p.pivot.mode === 'custom'
+                                    ? { ...p, pivot: { mode: 'custom', point: { ...p.pivot.point, [axis]: Number.isFinite(val) ? val : 0 } } as ManualPivotSpec }
+                                    : p,
+                                ),
+                              );
+                            }}
+                            className="h-6 w-16 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-gray-200"
+                            title={`枢轴 ${axis.toUpperCase()}（模型世界坐标）`}
+                          />
+                        ))}
+                      <button
+                        onClick={() => setManualParts((prev) => prev.filter((p) => p.id !== d.id))}
+                        className="rounded border border-[#3a3a5a] px-2 py-0.5 text-[10px] text-gray-400 hover:bg-[#222240]"
+                      >
+                        删除部件
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="border-t border-[#2a2a4a] pt-2">
+                  {manualCatalog.meshes.map((m) => {
+                    const owner = manualParts.find((d) => d.meshIndices.includes(m.meshIndex));
+                    return (
+                      <div key={m.meshIndex} className="flex items-center gap-2 py-0.5 text-[11px]">
+                        <span className="w-44 truncate text-gray-300" title={m.path}>{m.name}</span>
+                        <span className="text-gray-600">{m.triCount} 三角形</span>
+                        <select
+                          value={owner ? String(owner.id) : ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setManualParts((prev) => {
+                              // 先从原部件摘出（枢轴若指向被摘网格且部件还有余网格，改指首网格）
+                              let next = prev.map((p) => {
+                                if (!p.meshIndices.includes(m.meshIndex)) return p;
+                                const rest = p.meshIndices.filter((x) => x !== m.meshIndex);
+                                let pivot = p.pivot;
+                                if (pivot.mode === 'mesh' && pivot.meshIndex === m.meshIndex && rest.length > 0) {
+                                  pivot = { mode: 'mesh', meshIndex: rest[0] } as ManualPivotSpec;
+                                }
+                                return { ...p, meshIndices: rest, pivot };
+                              });
+                              if (v === '__new') {
+                                next = [
+                                  ...next,
+                                  {
+                                    id: manualPartSeq.current++,
+                                    name: m.name,
+                                    meshIndices: [m.meshIndex],
+                                    pivot: { mode: 'mesh', meshIndex: m.meshIndex } as ManualPivotSpec,
+                                  },
+                                ];
+                              } else if (v !== '') {
+                                const tid = Number(v);
+                                next = next.map((p) =>
+                                  p.id === tid ? { ...p, meshIndices: [...p.meshIndices, m.meshIndex] } : p,
+                                );
+                              }
+                              return next;
+                            });
+                          }}
+                          className="h-6 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-gray-300"
+                        >
+                          <option value="">不包含</option>
+                          {manualParts.map((d) => (
+                            <option key={d.id} value={String(d.id)}>
+                              → {d.name || '部件'}
+                            </option>
+                          ))}
+                          <option value="__new">＋ 新建部件</option>
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {error && (
           <div className="mb-3 rounded border border-red-900 bg-red-950/50 p-2 text-[11px] text-red-300">
@@ -1305,7 +1565,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         {boneList.length > 0 && (
           <div>
             <div className="mb-2 text-[11px] text-gray-400">
-              肢体列表（{boneList.length}）— 不满意可单独重烘
+              {bakeMode === 'manual' ? `部件列表（${boneList.length}）` : `肢体列表（${boneList.length}）— 不满意可单独重烘`}
             </div>
             <div className="grid grid-cols-6 gap-2">
               {boneList.map((pb) => {
@@ -1328,12 +1588,14 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                     <div className="max-w-[110px] truncate text-[10px] text-gray-300" title={pb.boneName}>
                       {pb.boneName}
                     </div>
+                    {bakeMode !== 'manual' && (
                     <button
                       onClick={() => boneInfo && setRebakeTarget(boneInfo)}
                       className="h-6 rounded border border-[#3a3a5a] bg-[#1a1a30] px-2 text-[10px] text-gray-300 hover:bg-[#222240]"
                     >
                       重烘
                     </button>
+                    )}
                   </div>
                 );
               })}
@@ -1341,11 +1603,13 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
           </div>
         )}
 
-        {!twoPass && !sixPart && !error && !baking && (
+        {!twoPass && !sixPart && !processed && !error && !baking && (
           <div className="py-8 text-center text-[11px] text-gray-600">
             {bakeMode === 'sixpart'
               ? '选择模型后点「六部件烘焙」：6 部件 × 8 方向 ×（颜色+ID）= 96 遍 → 块内 ID 拆分 → 可导入为角色'
-              : '选择模型后点「按骨骼烘焙」：16 遍渲染（ID 双遍 × 8 方向）→ 自动按 bone 拆分 → 可导入为角色'}
+              : bakeMode === 'manual'
+                ? '选择模型后在部件清单里勾选网格，点「手动拆分烘焙」：每部件 8 方向 → 可导入为角色（适合非人形 / 无骨骼绑定的模型）'
+                : '选择模型后点「按骨骼烘焙」：16 遍渲染（ID 双遍 × 8 方向）→ 自动按 bone 拆分 → 可导入为角色'}
           </div>
         )}
 

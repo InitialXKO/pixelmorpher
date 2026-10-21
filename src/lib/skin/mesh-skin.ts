@@ -151,3 +151,78 @@ function getPixel(
   if (x < 0 || x >= width || y < 0 || y >= height) return null;
   return pixels[y][x] ?? null;
 }
+
+/**
+ * 蒙皮快照弯曲：对「父+子合并精灵」做关节弯曲变形。
+ *
+ * 合并精灵冻结的是快照姿态；当前子相对父的角变化 deltaAngle 时：
+ * - 沿子肢体轴向（axis）投影 t ≤ −radius 的像素（父侧）不动
+ * - t ≥ +radius 的像素（子侧）绕关节刚性旋转 deltaAngle
+ * - 带内按 curve 平滑过渡（每像素按其权重 w 旋转 deltaAngle·w）
+ * 逆映射采样，但权重 w 必须按源像素的轴向投影算（正向映射的定义），
+ * 故对每个输出像素迭代求一致解 s = R(−delta·w(s))·(p − J)（迭代后正向验证，
+ * 折叠区无原像判透明；若按输出像素的投影取 w，肢体转 90° 后落点投影
+ * 归零、权重全错位、肢体消失）。
+ * 采样透明 → 输出透明（与 applyMeshSkin 不同：那里精灵本体仍在渲染，保留原像素
+ * 防撕裂；这里整条肢体转走后原位必须清空，否则留下快照姿势的残影）。
+ *
+ * @param pixels - 合并精灵像素（不修改）
+ * @param jointX/jointY - 关节在精灵局部坐标（像素）
+ * @param axisX/axisY - 子肢体轴向单位向量（精灵局部，y-down）
+ * @param deltaAngle - 相对快照的角变化（度）
+ * @param radius - 弯曲带半径（像素，沿轴向 ±radius）
+ */
+export function applySnapshotBend(
+  pixels: PixelGrid,
+  jointX: number,
+  jointY: number,
+  axisX: number,
+  axisY: number,
+  deltaAngle: number,
+  radius: number,
+  curve: SkinCurve = 'smoothstep',
+): PixelGrid {
+  const height = pixels.length;
+  const width = height > 0 ? pixels[0].length : 0;
+  if (width === 0 || height === 0 || radius <= 0) return pixels;
+  const angleRad = (deltaAngle * Math.PI) / 180;
+  if (Math.abs(angleRad) < 1e-6) return pixels;
+
+  const weightAt = (t: number): number => {
+    let w = (t + radius) / (2 * radius);
+    if (w < 0) w = 0;
+    if (w > 1) w = 1;
+    if (curve === 'smoothstep') w = w * w * (3 - 2 * w);
+    return w;
+  };
+  const result: PixelGrid = pixels.map((row) => [...row]);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const dx = x - jointX;
+      const dy = y - jointY;
+      // 迭代求源点 s = R(−delta·w(s))·(p−J)，w 按源点轴向投影；初值取全
+      // 旋转（偏向刚性支）。大角度下变形会折叠、逆解可能不存在/不唯一，
+      // 迭代后正向验证：R(+delta·w(s))·s 与 (p−J) 偏差 >1.5px 视为无原像 → 透明。
+      let sx = dx * Math.cos(angleRad) + dy * Math.sin(angleRad);
+      let sy = -dx * Math.sin(angleRad) + dy * Math.cos(angleRad);
+      for (let it = 0; it < 4; it++) {
+        const w = weightAt(sx * axisX + sy * axisY);
+        const back = -angleRad * w;
+        const cosB = Math.cos(back);
+        const sinB = Math.sin(back);
+        sx = dx * cosB - dy * sinB;
+        sy = dx * sinB + dy * cosB;
+      }
+      const wF = weightAt(sx * axisX + sy * axisY);
+      const fwd = angleRad * wF;
+      const fx = sx * Math.cos(fwd) - sy * Math.sin(fwd);
+      const fy = sx * Math.sin(fwd) + sy * Math.cos(fwd);
+      if (Math.hypot(fx - dx, fy - dy) > 1.5) {
+        result[y][x] = null;
+        continue;
+      }
+      result[y][x] = bilinearSample(pixels, jointX + sx, jointY + sy, width, height);
+    }
+  }
+  return result;
+}

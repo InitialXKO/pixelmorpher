@@ -23,7 +23,21 @@ export interface BakeResult {
   cameraHalfGlobal?: number;
 }
 
+// ---- 全角度（多纬度）烘焙 ----
+/** 全角度模式的额外纬度（度）：±45 各 8 方向，±90 只渲一个朝向（极点处 8 方位等价）。基纬度 0 恒有 */
+export const FULL_ANGLE_LATITUDES: readonly number[] = [45, -45, 90, -90];
+/** 某纬度要渲染的烘焙循环方向（0..7）；|纬度|≥90 只渲循环 0 */
+export function dirsForLatitude(lat: number): number[] {
+  return Math.abs(lat) >= 90 ? [0] : [0, 1, 2, 3, 4, 5, 6, 7];
+}
+/** 纬度 → 组俯仰角（弧度）：正纬度=自上方看（组 rotation.x=+弧度，order 'YXZ' 先俯仰后偏航） */
+export function latitudePitchRad(lat: number): number {
+  return (lat * Math.PI) / 180;
+}
+
 export interface BakeOptions {
+  /** 全角度模式：额外纬度（度），如 [45,-45,90,-90]；基纬度 0 恒渲，|纬度|≥90 只渲一个朝向 */
+  extraLatitudes?: number[];
   /** 渲染分辨率,默认 64 */
   size?: number;
   /** 调色板颜色数,默认 16 */

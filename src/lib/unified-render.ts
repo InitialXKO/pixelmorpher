@@ -14,7 +14,7 @@
 // ============================================================
 
 import type {
-  Node, Character, NodeTransform, Socket, DirectionIndex,
+  Node, Character, NodeTransform, Socket, DirectionIndex, SkinningSnapshot,
   SubPixel, Point, Sprite, RotationStrategy, CostumePiece,
   NodeRenderInstruction, DiscRenderInstruction, RenderPlan,
   KeyframeTrack, KeyframePoint, InterpolationMode,
@@ -866,91 +866,46 @@ function solveCubicBezierX(cp1x: number, cp2x: number, t: number): number {
 // ---- Z-Order Computation ----
 
 /**
- * Step 3: Compute Z-order for all nodes and discs.
- * Uses drawLayer and zIndex, with direction-dependent ordering.
+ * 关节盘生成判定（唯一口径）：plug 开关 attachment.autoJointDisc 未关（默认开）
+ * 且节点经 socket 连接到父插口。node.generated 是旧数据，不再作门——仅其
+ * crossSectionId 在直径回退时被采用（见 generateDiscInstructions）。
+ * 蒙皮快照生效的连接另行抑制（见 generateDiscInstructions 的认领判定）。
  */
-function computeZOrder(
+function nodeHasJointDisc(node: Node): boolean {
+  if (node.attachment?.type !== 'socket' || !node.attachment.parentSocketId) return false;
+  if (node.attachment.autoJointDisc === false) return false;
+  return true;
+}
+
+/**
+ * 蒙皮快照认领（唯一口径，渲染计划与关节盘抑制共用）：
+ * 返回当前朝向真正生效的快照（子节点 id → 快照 + 父节点 id）。
+ * 规则：一父只被一个子认领（首个）；被认领为父的节点自身快照停用（防双绘）。
+ */
+function computeActiveSnapshots(
   character: Character,
-  worldTransforms: Map<string, WorldTransform>,
-): { nodeZ: Map<string, number>; discZ: Map<string, number> } {
-  const nodeZ = new Map<string, number>();
-  const discZ = new Map<string, number>();
-
-  const rootTransform = worldTransforms.get(character.rootNodeId);
-  const currentDirection = rootTransform?.variantIndex ?? 0;
-  const latitude = character.latitude ?? 0;
-
-  // 计算 worldY 范围，用于纬度归一化
-  let minY = Infinity, maxY = -Infinity;
-  for (const wt of worldTransforms.values()) {
-    if (wt.worldY < minY) minY = wt.worldY;
-    if (wt.worldY > maxY) maxY = wt.worldY;
+  direction: DirectionIndex,
+): Map<string, { snap: SkinningSnapshot; parentId: string }> {
+  const candidates = new Map<string, { snap: SkinningSnapshot; parentId: string }>();
+  for (const n of Object.values(character.nodes)) {
+    const att = n.attachment;
+    if (!att || att.type !== 'socket' || !att.parentSocketId) continue;
+    if (att.allowSkinning !== true || !att.skinningSnapshot) continue;
+    if (att.skinningSnapshot.direction !== direction) continue;
+    if (!n.parentId) continue;
+    candidates.set(n.id, { snap: att.skinningSnapshot, parentId: n.parentId });
   }
-  const yRange = maxY - minY;
-
-  // 方向：variantIndex 0=S, 1=SE, 2=E, 3=NE, 4=N, 5=NW, 6=W, 7=SW（按 directionToVariantIndex）
-  const dirName = ['S', 'SE', 'E', 'NE', 'N', 'NW', 'W', 'SW'][currentDirection] ?? 'S';
-  const facingE = dirName.includes('E');
-  const facingW = dirName.includes('W');
-  const facingS = dirName === 'S' || dirName === 'SE' || dirName === 'SW';
-  const facingN = dirName === 'N' || dirName === 'NE' || dirName === 'NW';
-
-  const computeDefaultZ = (node: Node, worldY: number): number => {
-    let directionBias = 0;
-    const side = node.side ?? 'C';
-    const isCore = node.isCore ?? false;
-
-    if (facingE) {
-      if (side === 'L') directionBias = -0.1;
-      else if (side === 'R') directionBias = 0.1;
-    } else if (facingW) {
-      if (side === 'L') directionBias = 0.1;
-      else if (side === 'R') directionBias = -0.1;
-    }
-    // S/N：肢体 vs 身体
-    if (facingS) {
-      directionBias += isCore ? -0.2 : 0.2;
-    } else if (facingN) {
-      directionBias += isCore ? 0.2 : -0.2;
-    }
-
-    let latitudeBias = 0;
-    if (latitude > 0 && yRange > 0) {
-      const normalizedY = Math.max(0, Math.min(1, (worldY - minY) / yRange));
-      // 俯视时 worldY 小的（头/上部）在上层
-      latitudeBias = (0.5 - normalizedY) * 0.5 * (latitude / 90);
-    }
-
-    return 0.5 + directionBias + latitudeBias;
-  };
-
-  // Assign Z indices: sortKey = explicitZ * 1000 + defaultZ
-  const assignZ = (nodeId: string) => {
-    const node = character.nodes[nodeId];
-    if (!node || !node.visible) return;
-
-    const wt = worldTransforms.get(nodeId);
-    const worldY = wt?.worldY ?? 0;
-    const defaultZ = computeDefaultZ(node, worldY);
-    const explicitZ = node.zIndex ?? 0;
-    const sortKey = explicitZ * 1000 + defaultZ;
-    nodeZ.set(nodeId, sortKey);
-
-    // If this node has a generated disc, its Z goes BELOW both parent and child
-    if (node.generated) {
-      const ownZ = nodeZ.get(nodeId) ?? 0;
-      const parentZ = node.parentId ? nodeZ.get(node.parentId) ?? ownZ : ownZ;
-      discZ.set(`${nodeId}_disc`, Math.min(parentZ, ownZ) - 0.5);
-    }
-
-    // Process children
-    for (const childId of node.children) {
-      assignZ(childId);
-    }
-  };
-
-  assignZ(character.rootNodeId);
-  return { nodeZ, discZ };
+  const claimedBy = new Map<string, string>();
+  for (const [childId, c] of candidates) {
+    if (!claimedBy.has(c.parentId)) claimedBy.set(c.parentId, childId);
+  }
+  const active = new Map<string, { snap: SkinningSnapshot; parentId: string }>();
+  for (const [childId, c] of candidates) {
+    if (claimedBy.get(c.parentId) !== childId) continue; // 认领落败
+    if (claimedBy.has(childId)) continue; // 自身被子认领 → 停用（防双绘）
+    active.set(childId, c);
+  }
+  return active;
 }
 
 // ---- Sprite Resolution ----
@@ -965,12 +920,13 @@ function resolveSprite(
   costumeSet?: import('./unified-types').CostumeSet,
   sprites?: Record<string, import('./unified-types').Sprite>,
   variantId?: string,
+  latitude?: number,
 ): { sprite: Sprite | null; mirror: boolean; spriteId: string | null } {
   // 只走服装集：node.slot 只定义槽位，不存精灵。
-  // 分层解析（变体→基础）走 sprite-resolve 的共同实现，与蓝图预览逐级一致。
+  // 分层解析（纬度→变体→基础）走 sprite-resolve 的共同实现，与蓝图预览逐级一致。
   if (costumeSet && node.slot) {
     const piece = costumeSet.pieces[node.slot.slotKey];
-    return resolvePieceSprite(piece, direction, variantId, sprites);
+    return resolvePieceSprite(piece, direction, variantId, sprites, latitude);
   }
   return { sprite: null, mirror: false, spriteId: null };
 }
@@ -990,7 +946,7 @@ export function resolveNodeSpriteId(
   if (!node) return null;
   const activeCs = (character.costumeSets ?? []).find((cs) => cs.id === character.activeCostumeSetId);
   const spriteTable = globalSprites ?? character.sprites ?? {};
-  const { spriteId } = resolveSprite(node, direction, activeCs, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? '']);
+  const { spriteId } = resolveSprite(node, direction, activeCs, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? ''], character.latitude ?? 0);
   return spriteId;
 }
 
@@ -1011,15 +967,21 @@ export function resolveNodeSpriteId(
 function generateDiscInstructions(
   character: Character,
   worldTransforms: Map<string, WorldTransform>,
-  discZ: Map<string, number>,
   canvasWidth: number,
   canvasHeight: number,
   currentDirection: DirectionIndex,
+  activeSnapshots: Map<string, { snap: SkinningSnapshot; parentId: string }>,
+  activeCostumeSet?: import('./unified-types').CostumeSet,
+  spriteTable?: Record<string, Sprite>,
 ): DiscRenderInstruction[] {
   const discs: DiscRenderInstruction[] = [];
 
   for (const [nodeId, node] of Object.entries(character.nodes)) {
-    if (!node.generated || node.generated.type !== 'disc') continue;
+    if (!nodeHasJointDisc(node)) continue;
+    if (activeSnapshots.has(nodeId)) continue; // 蒙皮快照生效：改走合并精灵弯曲，不出盘
+    // 无精灵可遮盖（占位/结构节点）不出盘：node.sprite 现行管线不赋值，
+    // 以 slot 精灵条目为准（烘焙占位节点的 slot.sprites 为空）
+    if (!node.sprite && Object.keys(node.slot?.sprites ?? {}).length === 0) continue;
 
     // mesh 蒙皮模式：不生成关节盘（由像素变形代替）
     if (node.attachment?.type === 'socket' && node.attachment.parentSocketId && node.parentId) {
@@ -1042,7 +1004,7 @@ function generateDiscInstructions(
       diameter = storedJointWidth;
     } else {
       const childPiece = node.slot;
-      const plugCS = childPiece?.crossSections.find(cs => cs.id === node.generated!.crossSectionId);
+      const plugCS = childPiece?.crossSections.find(cs => cs.id === (node.generated?.crossSectionId ?? 'plug'));
       const bottomCS = childPiece?.crossSections.find(cs => cs.id === 'bottom');
       diameter = getPlugJointWidth(
         {
@@ -1093,20 +1055,28 @@ function generateDiscInstructions(
     const discWorldX = (pxToSub(canvasWidth / 2) + (discProj.canvasX as SubPixel)) as SubPixel;
     const discWorldY = (pxToSub(canvasHeight / 2) + (discProj.canvasY as SubPixel)) as SubPixel;
 
-    // 关节盘颜色约定：plug.discColor 自定义 > 子节点精灵开口处众数颜色 > 旧 fallback。
-    // 开口中心 = 精灵 pivot（sprite.plug）+ plug 本地坐标（attachment.plug）。
+    // 关节盘无 zIndex、不参与深度排序：执行端在全部精灵之前统一先画，
+    // 始终被遮挡，只在没有精灵覆盖的开口处露出来补缝（规格）。
+
+    // 关节盘配色（生成时自动按精灵配色）：plug.discColor 自定义 > 子节点当前
+    // 精灵在 plug（关节）处采样的众数色（排除轮廓色）> piece.fillColor 兜底。
+    // 精灵走与节点指令相同的解析（node.sprite 现行管线从不赋值，旧采样分支是死代码，
+    // 此前实际一直用 fillColor——烘焙导入件为 #ffffff，盘恒为白色）。
     const childPiece = node.slot;
-    let fillColor: string = childPiece?.fillColor ?? node.sprite?.data?.[0]?.[0] ?? '#808080';
+    let fillColor: string = childPiece?.fillColor ?? '#808080';
     const customDiscColor = node.attachment?.discColor;
     if (typeof customDiscColor === 'string' && customDiscColor) {
       fillColor = customDiscColor;
-    } else if (node.sprite?.data && node.sprite?.plug) {
-      const pivotX = subToPx(node.sprite.plug.x);
-      const pivotY = subToPx(node.sprite.plug.y);
-      const plugLocalX = node.attachment?.plug ? subToPx(node.attachment.plug.x) : 0;
-      const plugLocalY = node.attachment?.plug ? subToPx(node.attachment.plug.y) : 0;
-      const sampled = sampleJointDiscColor(node.sprite.data, pivotX + plugLocalX, pivotY + plugLocalY);
-      if (sampled) fillColor = sampled;
+    } else {
+      const resolved = resolveSprite(node, currentDirection, activeCostumeSet, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? ''], character.latitude ?? 0);
+      const spr = resolved.sprite;
+      if (spr?.data && spr.plug) {
+        let sampleX = subToPx(spr.plug.x);
+        const sampleY = subToPx(spr.plug.y);
+        if (resolved.mirror) sampleX = spr.width - 1 - sampleX;
+        const sampled = sampleJointDiscColor(spr.data, sampleX, sampleY);
+        if (sampled) fillColor = sampled;
+      }
     }
     const outlineColor = '#000000'; // From global palette in full implementation
 
@@ -1116,7 +1086,6 @@ function generateDiscInstructions(
       diameter,
       fillColor: typeof fillColor === 'string' ? fillColor : '#808080',
       outlineColor,
-      zIndex: discZ.get(`${nodeId}_disc`) ?? 0,
     });
   }
 
@@ -1272,9 +1241,6 @@ export function generateRenderPlan(
     character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
   );
 
-  // Step 2: Z-order (includes disc Z computation)
-  const { nodeZ, discZ } = computeZOrder(character, worldTransforms);
-
   // Step 3: Get active costume set（用生效状态的集 id，含轨道/蓝图覆盖）
   const activeCostumeSet = effCostume.costumeSetId
     ? character.costumeSets.find(cs => cs.id === effCostume.costumeSetId)
@@ -1309,21 +1275,74 @@ export function generateRenderPlan(
     }
   }
 
+  // 蒙皮快照认领（与关节盘抑制同一口径）：生效子节点的父精灵被合并图替代。
+  // 合并精灵缺失/子节点不可见的认领不成立（否则父被跳过又无人接）。
+  const activeSnapshots = computeActiveSnapshots(character, currentDirection as DirectionIndex);
+  for (const [childId, entry] of [...activeSnapshots]) {
+    const cn = character.nodes[childId];
+    if (!cn || !cn.visible || !spriteTable[entry.snap.spriteId]) activeSnapshots.delete(childId);
+  }
+  const claimedParents = new Set<string>([...activeSnapshots.values()].map((a) => a.parentId));
+
   for (const [nodeId, worldTf] of worldTransforms) {
     const node = character.nodes[nodeId];
     if (!node || !node.visible) continue;
+    if (claimedParents.has(nodeId)) continue; // 精灵已并入子节点的蒙皮快照
+
+    // 蒙皮快照：以合并精灵代替本节点精灵（父精灵已在上行跳过），
+    // 位置/枢轴沿用本节点口径，转角 = 父当前世界角 − 快照时父世界角，
+    // 弯曲量 = 当前相对角 − 快照基础角（renderNodeSprite 里对合并像素弯曲）
+    const snapEntry = activeSnapshots.get(nodeId);
+    if (snapEntry) {
+      const parentWorldTf = worldTransforms.get(snapEntry.parentId);
+      const mergedSprite = spriteTable[snapEntry.snap.spriteId];
+      if (parentWorldTf && mergedSprite) {
+        const projSnap = projectToView(worldTf.worldX, worldTf.worldY, worldTf.worldZ, currentDirection);
+        let deltaAngle = (worldTf.worldAngle - parentWorldTf.worldAngle) - snapEntry.snap.baseAngle;
+        while (deltaAngle > 180) deltaAngle -= 360;
+        while (deltaAngle < -180) deltaAngle += 360;
+        nodeInstructions.push({
+          nodeId,
+          sprite: mergedSprite,
+          worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (projSnap.canvasX as SubPixel)) as SubPixel,
+          worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (projSnap.canvasY as SubPixel)) as SubPixel,
+          angle: parentWorldTf.worldAngle - snapEntry.snap.parentBaseAngle,
+          stretch: 1,
+          variantIndex: worldTf.variantIndex,
+          rotationStrategy,
+          mirror: false,
+          zIndex: projSnap.depth,
+          drawLayer: node.drawLayer,
+          modifiers: [],
+          frame,
+          frameRate,
+          snapshotSkin: {
+            jointX: mergedSprite.plug ? subToPx(mergedSprite.plug.x) : mergedSprite.width / 2,
+            jointY: mergedSprite.plug ? subToPx(mergedSprite.plug.y) : mergedSprite.height / 2,
+            axisX: snapEntry.snap.axisX,
+            axisY: snapEntry.snap.axisY,
+            deltaAngle,
+            radius: snapEntry.snap.radius,
+            curve: snapEntry.snap.curve,
+          },
+          blueprint: null,
+        });
+        continue;
+      }
+      // 合并精灵缺失 → 落回普通渲染
+    }
 
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
     // 方向混合时：先按 dirA 解析主精灵
     const resolveDir = dirBlend ? dirBlend.dirA : currentDirection;
-    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? '']);
+    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0);
     if (!sprite) continue;
 
     // 方向间过渡（蒙皮转面 A）：blend 不为 0/1 时，双精灵 faceTurn + alpha 混合
     // 只在需要时双采样，避免性能开销
     let blendedSprite: typeof sprite | null = null;
     if (dirBlend && sprite.data) {
-      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? '']);
+      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0);
       if (spriteB && spriteB.data) {
         try {
           const { applyFaceTurn, alphaBlendGrids } = require('./skin/face-turn') as typeof import('./skin/face-turn');
@@ -1446,13 +1465,11 @@ export function generateRenderPlan(
   }
 
   // Step 5: Generate disc instructions
-  const discInstructions = generateDiscInstructions(character, worldTransforms, discZ, canvasWidth, canvasHeight, currentDirection);
+  const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots, activeCostumeSet, spriteTable);
 
-  // Step 6: Sort all instructions by Z
-  const allInstructions: (NodeRenderInstruction | DiscRenderInstruction)[] = [
-    ...nodeInstructions,
-    ...discInstructions,
-  ];
+  // Step 6: 节点指令按 zIndex（投影深度）排序；关节盘不进排序流，
+  // 由执行端从 discInstructions 单独先行绘制（无视深度、始终被遮挡）
+  const allInstructions: NodeRenderInstruction[] = [...nodeInstructions];
   allInstructions.sort((a, b) => a.zIndex - b.zIndex);
 
   return {
@@ -1496,21 +1513,16 @@ export function executeRenderPlan(
     const ok = renderCharacterWithBlueprint(ctx, plan, canvasWidth, canvasHeight);
     if (!ok) {
       // Fallback: legacy per-node draw (blueprint invalid — don't lose the frame)
+      // 关节盘先行（不参与深度排序、始终被遮挡），节点随后按深度序绘制
+      for (const disc of plan.discInstructions) renderDisc(ctx, disc);
       for (const instruction of plan.sortedInstructions) {
-        if ('nodeId' in instruction) {
-          renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
-        } else {
-          renderDisc(ctx, instruction);
-        }
+        renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
       }
     }
   } else {
+    for (const disc of plan.discInstructions) renderDisc(ctx, disc);
     for (const instruction of plan.sortedInstructions) {
-      if ('nodeId' in instruction) {
-        renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
-      } else {
-        renderDisc(ctx, instruction);
-      }
+      renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
     }
   }
 
@@ -1781,6 +1793,24 @@ function renderNodeSprite(
       meshSkin.jointAngle,
       meshSkin.radius,
       meshSkin.curve,
+    );
+  }
+
+  // ---- 蒙皮快照弯曲：合并精灵在像素定稿后按相对角变化弯曲 ----
+  const snapshotSkin = (instruction as any).snapshotSkin as
+    | { jointX: number; jointY: number; axisX: number; axisY: number; deltaAngle: number; radius: number; curve: 'linear' | 'smoothstep' }
+    | undefined;
+  if (snapshotSkin && Math.abs(snapshotSkin.deltaAngle) > 0.01 && snapshotSkin.radius > 0) {
+    const { applySnapshotBend } = require('./skin/mesh-skin') as typeof import('./skin/mesh-skin');
+    effectivePixels = applySnapshotBend(
+      effectivePixels,
+      snapshotSkin.jointX,
+      snapshotSkin.jointY,
+      snapshotSkin.axisX,
+      snapshotSkin.axisY,
+      snapshotSkin.deltaAngle,
+      snapshotSkin.radius,
+      snapshotSkin.curve,
     );
   }
 
@@ -2130,12 +2160,10 @@ function renderCharacterWithBlueprint(
   off.width = canvasWidth;
   off.height = canvasHeight;
   const offCtx = off.getContext('2d')!;
+  // 关节盘先行（不参与深度排序、始终被遮挡），节点随后按深度序绘制
+  for (const disc of plan.discInstructions) renderDisc(offCtx, disc);
   for (const instruction of plan.sortedInstructions) {
-    if ('nodeId' in instruction) {
-      renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
-    } else {
-      renderDisc(offCtx, instruction);
-    }
+    renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
   }
 
   // Step 2: read back → character_source pixels

@@ -462,6 +462,42 @@ export interface Attachment {
    * 为空时按 plug 位置回退估算。
    */
   jointWidth?: number | null;
+  /**
+   * 自动生成关节盘（plug 开关）：undefined/true = 在此连接处自动生成关节盘
+   * 遮盖接缝；false = 不生成。直径取 jointWidth / plug 截面，颜色取 discColor。
+   */
+  autoJointDisc?: boolean;
+  /**
+   * 允许蒙皮（plug 开关）：true 时动画面板出现「蒙皮快照」按钮；
+   * 快照生效后该连接不再生成关节盘，改走合并精灵网格变形。
+   */
+  allowSkinning?: boolean;
+  /** 蒙皮快照（动画面板捕获；null/undefined = 未快照，仍走双精灵渲染） */
+  skinningSnapshot?: SkinningSnapshot | null;
+}
+
+/**
+ * 蒙皮快照：把子节点与父节点在某个关键帧的姿态合并成一张精灵，
+ * 之后子节点旋转时对这张合并精灵做网格弯曲（代替父/子两张精灵 + 关节盘）。
+ */
+export interface SkinningSnapshot {
+  /** 合并精灵 id（全局精灵表）；其 plug = 关节在合并精灵内的位置 */
+  spriteId: string;
+  /** 捕获帧（展示用） */
+  frame: number;
+  /** 捕获时的渲染朝向（快照只在该朝向生效） */
+  direction: DirectionIndex;
+  /** 捕获时子相对父的角度（度） */
+  baseAngle: number;
+  /** 捕获时父节点的世界角度（度）：渲染时合并精灵转角 = 父当前世界角 − 此值 */
+  parentBaseAngle: number;
+  /** 子肢体轴向（合并精灵局部坐标的单位向量，y-down）：弯曲权重沿此轴过渡 */
+  axisX: number;
+  axisY: number;
+  /** 弯曲带半径（像素）：关节沿轴向 ±radius 为过渡带，之外刚性 */
+  radius: number;
+  /** 弯曲过渡曲线 */
+  curve: 'linear' | 'smoothstep';
 }
 
 // ---- Transform ----
@@ -762,6 +798,10 @@ export interface CostumePiece {
   /** 通用自定义变体精灵：variantId → direction → sprite（变体定义在 Character.variantDefs）。
    *  解析顺序：变体直达 → 变体镜像 → 基础 sprites 直达 → 基础镜像（见 sprite-resolve 的 resolvePieceSprite） */
   variantSprites?: Record<string, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>;
+  /** 全角度烘焙的纬度精灵集：纬度（度，±45/±90）→ direction → sprite；基纬度 0 用 sprites。
+   *  解析：角色 latitude 取最近的已存纬度（差 ≤22.5°）整套优先，套内缺方向回落基础链；
+   *  极点套（±90）只有 direction 0 一张，任意方向都用它（见 sprite-resolve 的 resolvePieceSprite） */
+  latitudeSprites?: Record<number, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>;
   scaleVariants: Partial<Record<number, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>>;
   mirrorMap: MirrorMap;                         // Direction mirror mapping
   crossSections: CrossSection[];                // Cross section definitions for disc gen
@@ -1133,6 +1173,16 @@ export interface NodeRenderInstruction {
   costumeSlot?: string;
   /** Shared sprite table for SpriteRef resolution (character.sprites) */
   sprites?: Record<string, Sprite>;
+  /** 蒙皮快照弯曲参数（attachment.skinningSnapshot 生效时填充，renderNodeSprite 用） */
+  snapshotSkin?: {
+    jointX: number;  // 关节在合并精灵局部坐标（像素）
+    jointY: number;
+    axisX: number;   // 子肢体轴向（单位向量）
+    axisY: number;
+    deltaAngle: number; // 当前相对角 − 快照基础角（度）
+    radius: number;     // 弯曲带半径（像素）
+    curve: 'linear' | 'smoothstep';
+  };
   /** Mesh skinning params (socket.skinning === 'mesh' 时填充，renderNodeSprite 用） */
   meshSkin?: {
     plugX: number;   // plug 在精灵局部坐标（像素）
@@ -1166,14 +1216,16 @@ export interface DiscRenderInstruction {
   diameter: number;
   fillColor: string;
   outlineColor: string;
-  zIndex: number;                // min(parent Z, child Z) - 50: occluded by sprites on both sides
+  // 无 zIndex：关节盘不参与深度排序——执行端在全部精灵之前统一先画，
+  // 始终被遮挡，只透过开口补缝（规格）
 }
 
 /** Complete render plan for a frame */
 export interface RenderPlan {
   nodeInstructions: NodeRenderInstruction[];
   discInstructions: DiscRenderInstruction[];
-  sortedInstructions: (NodeRenderInstruction | DiscRenderInstruction)[];
+  /** 节点指令按 zIndex（投影深度）排序后的绘制序；关节盘不在此列（单独先行绘制） */
+  sortedInstructions: NodeRenderInstruction[];
   backgroundColor?: string;
   previewQuality?: 'low' | 'medium' | 'high';
   effectTracks?: any[];
