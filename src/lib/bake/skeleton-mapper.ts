@@ -696,6 +696,21 @@ export function splitSixParts(
         }
       }
 
+      // [split-debug] 临时诊断（定位后删）：三段计数——ID 帧解码数 / 归属数 / 最终精灵数
+      if (g.idPixels && (part === 'armL' || part === 'armR')) {
+        const idCount = new Map<number, number>();
+        for (let p = 0; p < W * H; p++) {
+          const o = p * 4;
+          for (const bi of decodeBones(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2])) {
+            const eff = merge ? (merge.effectiveIndex[bi] ?? bi) : bi;
+            idCount.set(eff, (idCount.get(eff) ?? 0) + 1);
+          }
+        }
+        for (const [eff, n] of idCount) {
+          const e2 = perBone.get(eff);
+          console.log(`[split-debug] ${part} dir=${d} bone=${bake.bones[eff]?.name} idFrame=${n} attributed=${e2?.count ?? 0}`);
+        }
+      }
       // 每 bone 裁剪（与 splitByBoneId 同逻辑）
       for (const [bi, e] of perBone) {
         const bone = bake.bones[bi];
@@ -837,6 +852,11 @@ export function splitSixParts(
           continue;
         }
         if (!pb.part) pb.part = part; // 部件归属（导入时臂链 T-pose 摆回用；首个添加方为归属部件）
+        if (part === 'armL' || part === 'armR') {
+          let cells = 0;
+          for (const row of grid) for (const c of row) if (c) cells++;
+          console.log(`[split-debug] ${part} dir=${d} bone=${bone.name} sprite=${cells} (crop ${cw}x${ch} cameraHalf=${g.cameraHalf.toFixed(3)})`);
+        }
         pb.directions.push({
           direction: d as DirectionIndex,
           grid,
