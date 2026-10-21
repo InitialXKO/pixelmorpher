@@ -28,6 +28,8 @@ export type CharacterSlice = {
   setSelectedNodeId: (id: string | null) => void;
   /** 肢体转位克隆：克隆节点子树并转平面角度 θ（含剪辑关键帧跟随）。返回克隆根 id，失败 null */
   cloneNodeSubtreeTransposed: (characterId: string, rootNodeId: string, thetaDeg: number) => string | null;
+  /** 纯复制子树（不转位）：与转位克隆同一套引用跟随，仅不挂 rotate 修改器。返回新根 id */
+  cloneNodeSubtree: (characterId: string, rootNodeId: string) => string | null;
 
   // ---- Node Keyframes ----
   addNodeKeyframe: (clipId: string, nodeId: string, frame: number, values: Partial<Pick<import('../unified-types').NodeKeyframe, 'angle' | 'stretch' | 'x' | 'y' | 'variantIndex' | 'zIndex' | 'interpolationMode' | 'modifiers' | 'faceTurn'>>) => import('../unified-types').NodeKeyframe;
@@ -166,6 +168,28 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
         },
       };
     });
+  },
+
+  cloneNodeSubtree: (characterId, rootNodeId) => {
+    const state = get();
+    const character = state.unifiedCharacters[characterId];
+    if (!character) return null;
+    const result = cloneSubtreeTransposed(character, rootNodeId, 0, generateId, {
+      width: state.canvasWidth,
+      height: state.canvasHeight,
+    }, { plain: true });
+    if (!result) return null;
+    state.pushUndo('复制子树');
+    set((s) => ({
+      unifiedCharacters: {
+        ...s.unifiedCharacters,
+        [characterId]: { ...result.character, updatedAt: Date.now() },
+      },
+      animationClips: s.animationClips.map(
+        (clip) => cloneClipDataForTranspose(clip, characterId, result, generateId) ?? clip,
+      ),
+    }));
+    return result.newRootId;
   },
 
   cloneNodeSubtreeTransposed: (characterId, rootNodeId, thetaDeg) => {

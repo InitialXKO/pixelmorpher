@@ -15,7 +15,15 @@ import {
   Film,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
-import { NodeTreeItemWrapper } from './puppet/NodeTree';
+import { NodeTreeItemWrapper, type NodeMenuHandlers, type ExpandCmd } from './puppet/NodeTree';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
+import { collectSubtreeIds, deleteNodeSubtree, addSocketToNode } from '@/lib/node-actions';
 import { SocketEditor, type SocketInfo } from './SocketEditor';
 import ThreeBakeDialog from './puppet/ThreeBakeDialog';
 import { Box } from 'lucide-react';
@@ -51,6 +59,25 @@ function socketToInfo(s: Socket): SocketInfo {
       ? { x: subToPx(s.offset3D.x), y: subToPx(s.offset3D.y), z: subToPx(s.offset3D.z) }
       : undefined,
   };
+}
+
+/** 行内重命名输入（右键菜单触发；Enter/blur 提交，Esc/空名取消） */
+function RowRenameInput({ initial, onCommit }: { initial: string; onCommit: (name: string) => void }) {
+  const [v, setV] = useState(initial);
+  return (
+    <input
+      className="h-4 flex-1 min-w-0 bg-[#111128] border border-cyan-700 rounded px-1 text-[10px] text-gray-200 outline-none"
+      value={v}
+      autoFocus
+      onChange={(e) => setV(e.target.value)}
+      onBlur={() => onCommit(v.trim())}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') onCommit(v.trim());
+        if (e.key === 'Escape') onCommit('');
+      }}
+      onClick={(e) => e.stopPropagation()}
+    />
+  );
 }
 
 export default function PuppetAssetPanel() {
@@ -93,6 +120,82 @@ export default function PuppetAssetPanel() {
   } | null>(null);
 
   const puppetClips = animationClips;
+
+  // ---- 右键菜单：展开命令 + 行内重命名目标 ----
+  const [expandCmd, setExpandCmd] = useState<ExpandCmd | null>(null);
+  const [renaming, setRenaming] = useState<
+    | { kind: 'character'; id: string }
+    | { kind: 'costume'; id: string; charId: string }
+    | { kind: 'sprite'; id: string }
+    | { kind: 'clip'; id: string }
+    | null
+  >(null);
+
+  const nodeMenuHandlers: NodeMenuHandlers | undefined = activePuppetSkeletonId
+    ? {
+        onRename: (node, name) => {
+          const st = useProjectStore.getState();
+          st.pushUndo('更新节点', 'updateNode');
+          st.updateUnifiedNode(activePuppetSkeletonId, node.id, { name });
+        },
+        onAddChild: (node) => {
+          setSelectedNodeId(node.id);
+          setAddNodeDialog({
+            parentNodeId: node.id,
+            socketId: (node as Node).sockets?.[0]?.id ?? '',
+          });
+        },
+        onAddSocket: (node) => addSocketToNode(activePuppetSkeletonId, node as Node),
+        onClone: (node) => {
+          const id = useProjectStore.getState().cloneNodeSubtree(activePuppetSkeletonId, node.id);
+          if (id) setSelectedNodeId(id);
+        },
+        onTranspose: (node, deg) => {
+          const id = useProjectStore
+            .getState()
+            .cloneNodeSubtreeTransposed(activePuppetSkeletonId, node.id, deg);
+          if (id) setSelectedNodeId(id);
+        },
+        onCustomTranspose: (node) => {
+          setSelectedNodeId(node.id);
+          const el = document.getElementById('rig-transpose-angle-input') as HTMLInputElement | null;
+          el?.focus();
+          el?.select();
+        },
+        onToggleVisibility: (node) => {
+          const target = unifiedCharacters[activePuppetSkeletonId]?.nodes[node.id];
+          if (target) updateUnifiedNode(activePuppetSkeletonId, node.id, { visible: !target.visible });
+        },
+        onExpandSubtree: (node, value) => {
+          const ch = unifiedCharacters[activePuppetSkeletonId];
+          if (!ch) return;
+          setExpandCmd({
+            ids: new Set(collectSubtreeIds(ch.nodes, node.id)),
+            value,
+            nonce: Date.now(),
+          });
+        },
+        onDelete: (node) => {
+          deleteNodeSubtree(activePuppetSkeletonId, node.id);
+        },
+        isRoot: (node) => unifiedCharacters[activePuppetSkeletonId]?.rootNodeId === node.id,
+      }
+    : undefined;
+
+  /** 精灵被服装槽位引用的次数（删除确认用；深走 pieces 统计同 id 字符串） */
+  const countSpriteRefs = (spriteId: string): number => {
+    const deep = (v: unknown): number =>
+      v === spriteId
+        ? 1
+        : v && typeof v === 'object'
+          ? Object.values(v as Record<string, unknown>).reduce<number>((a, x) => a + deep(x), 0)
+          : 0;
+    let n = 0;
+    for (const ch of Object.values(unifiedCharacters)) {
+      for (const cs of ch.costumeSets) n += deep(cs.pieces);
+    }
+    return n;
+  };
 
   const toggleCharExpand = (id: string) => {
     setExpandedChars((prev) => {
@@ -272,6 +375,8 @@ export default function PuppetAssetPanel() {
 
                     return (
                       <div key={char.id}>
+                        <ContextMenu>
+                          <ContextMenuTrigger asChild>
                         <div
                           className={`group flex items-center gap-1 px-1.5 py-1 rounded cursor-pointer transition-colors ${
                             isActive
@@ -293,9 +398,21 @@ export default function PuppetAssetPanel() {
                             <ChevronRight className="size-2.5 flex-shrink-0" />
                           )}
                           <Shirt className="size-2.5 text-cyan-500/70 flex-shrink-0" />
-                          <span className="text-[10px] truncate flex-1 min-w-0">
-                            {char.name}
-                          </span>
+                          {renaming?.kind === 'character' && renaming.id === skeletonKey ? (
+                            <RowRenameInput
+                              initial={char.name}
+                              onCommit={(name) => {
+                                if (name && name !== char.name) {
+                                  useProjectStore.getState().updateUnifiedCharacter(skeletonKey, { name });
+                                }
+                                setRenaming(null);
+                              }}
+                            />
+                          ) : (
+                            <span className="text-[10px] truncate flex-1 min-w-0">
+                              {char.name}
+                            </span>
+                          )}
                           <span className="text-[8px] text-gray-600">
                             {nodeCount} 节点
                           </span>
@@ -312,6 +429,43 @@ export default function PuppetAssetPanel() {
                             <Trash2 className="size-2.5" />
                           </button>
                         </div>
+                          </ContextMenuTrigger>
+                          <ContextMenuContent className="min-w-36">
+                            <ContextMenuItem
+                              onSelect={() => {
+                                setActivePuppetSkeletonId(skeletonKey);
+                                if (!useEditorStore.getState().showPuppetSkeleton) {
+                                  togglePuppetSkeleton();
+                                }
+                              }}
+                            >
+                              设为当前角色
+                            </ContextMenuItem>
+                            <ContextMenuItem onSelect={() => setRenaming({ kind: 'character', id: skeletonKey })}>
+                              重命名
+                            </ContextMenuItem>
+                            <ContextMenuItem
+                              onSelect={() =>
+                                useProjectStore
+                                  .getState()
+                                  .addUnifiedCostumeSet(skeletonKey, `服装集 ${(char.costumeSets.length ?? 0) + 1}`)
+                              }
+                            >
+                              新建服装集
+                            </ContextMenuItem>
+                            <ContextMenuSeparator />
+                            <ContextMenuItem
+                              className="text-red-400 focus:text-red-300"
+                              onSelect={() => {
+                                if (confirm(`确定删除角色「${char.name}」吗？其骨架、服装和动画片段将一并删除，此操作不可撤销。`)) {
+                                  removeUnifiedCharacter(skeletonKey);
+                                }
+                              }}
+                            >
+                              删除角色
+                            </ContextMenuItem>
+                          </ContextMenuContent>
+                        </ContextMenu>
 
                         {isExpanded && (
                           <div className="ml-4 space-y-0.5 mt-0.5">
@@ -324,16 +478,62 @@ export default function PuppetAssetPanel() {
                             </div>
                             {/* Costume sets */}
                             {char.costumeSets.map((cs) => (
-                              <div
-                                key={cs.id}
-                                className="flex items-center gap-1 px-1 py-0.5 text-[9px] text-gray-500"
-                              >
-                                <Shirt className="size-2" />
-                                <span className="truncate">{cs.name}</span>
-                                <span className="text-gray-700">
-                                  {Object.keys(cs.pieces).length} 槽位
-                                </span>
-                              </div>
+                              <ContextMenu key={cs.id}>
+                                <ContextMenuTrigger asChild>
+                                  <div className="flex items-center gap-1 px-1 py-0.5 text-[9px] text-gray-500 cursor-pointer hover:text-gray-300">
+                                    <Shirt className="size-2" />
+                                    {renaming?.kind === 'costume' && renaming.id === cs.id ? (
+                                      <RowRenameInput
+                                        initial={cs.name}
+                                        onCommit={(name) => {
+                                          if (name && name !== cs.name) {
+                                            useProjectStore
+                                              .getState()
+                                              .updateUnifiedCostumeSet(skeletonKey, cs.id, { name });
+                                          }
+                                          setRenaming(null);
+                                        }}
+                                      />
+                                    ) : (
+                                      <span className="truncate">{cs.name}</span>
+                                    )}
+                                    {char.activeCostumeSetId === cs.id && (
+                                      <span className="text-cyan-500">生效中</span>
+                                    )}
+                                    <span className="text-gray-700">
+                                      {Object.keys(cs.pieces).length} 槽位
+                                    </span>
+                                  </div>
+                                </ContextMenuTrigger>
+                                <ContextMenuContent className="min-w-36">
+                                  <ContextMenuItem
+                                    disabled={char.activeCostumeSetId === cs.id}
+                                    onSelect={() =>
+                                      useProjectStore
+                                        .getState()
+                                        .updateUnifiedCharacter(skeletonKey, { activeCostumeSetId: cs.id })
+                                    }
+                                  >
+                                    设为生效
+                                  </ContextMenuItem>
+                                  <ContextMenuItem
+                                    onSelect={() => setRenaming({ kind: 'costume', id: cs.id, charId: skeletonKey })}
+                                  >
+                                    重命名
+                                  </ContextMenuItem>
+                                  <ContextMenuSeparator />
+                                  <ContextMenuItem
+                                    className="text-red-400 focus:text-red-300"
+                                    onSelect={() => {
+                                      if (confirm(`确定删除服装集「${cs.name}」吗？其 ${Object.keys(cs.pieces).length} 个槽位配置将一并删除。`)) {
+                                        useProjectStore.getState().removeUnifiedCostumeSet(skeletonKey, cs.id);
+                                      }
+                                    }}
+                                  >
+                                    删除服装集
+                                  </ContextMenuItem>
+                                </ContextMenuContent>
+                              </ContextMenu>
                             ))}
                             {/* Linked clip */}
                             {clip && (
@@ -437,6 +637,8 @@ export default function PuppetAssetPanel() {
                           setSelectedNodeId(id);
                         }}
                         allNodes={nodes}
+                        menuHandlers={nodeMenuHandlers}
+                        expandCmd={expandCmd}
                         onToggleVisibility={(nodeId) => {
                           const target = character.nodes[nodeId];
                           if (target && activePuppetSkeletonId) {
@@ -558,8 +760,9 @@ export default function PuppetAssetPanel() {
             {sectionExpanded.sprites && (
               <div className="space-y-0.5 mt-0.5 max-h-32 overflow-y-auto">
                 {Object.values(sprites).map((sprite) => (
+                  <ContextMenu key={sprite.id}>
+                    <ContextMenuTrigger asChild>
                   <div
-                    key={sprite.id}
                     className="group flex items-center gap-1.5 px-1.5 py-0.5 text-[9px] text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded cursor-pointer transition-colors"
                     title="编辑像素"
                     onClick={() => {
@@ -567,7 +770,19 @@ export default function PuppetAssetPanel() {
                     }}
                   >
                     <div className="size-2 rounded-sm border border-gray-700 bg-gray-800 flex-shrink-0" />
-                    <span className="truncate flex-1 min-w-0">{sprite.name}</span>
+                    {renaming?.kind === 'sprite' && renaming.id === sprite.id ? (
+                      <RowRenameInput
+                        initial={sprite.name ?? ''}
+                        onCommit={(name) => {
+                          if (name && name !== sprite.name) {
+                            useProjectStore.getState().updateSprite(sprite.id!, { name });
+                          }
+                          setRenaming(null);
+                        }}
+                      />
+                    ) : (
+                      <span className="truncate flex-1 min-w-0">{sprite.name}</span>
+                    )}
                     {(() => {
                       const lm = (sprite as any).landmarks;
                       const n = lm ? ['leftEye', 'rightEye', 'nose', 'mouth'].filter((k) => (lm as any)[k]).length : 0;
@@ -591,6 +806,32 @@ export default function PuppetAssetPanel() {
                       ✏️
                     </button>
                   </div>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent className="min-w-36">
+                      <ContextMenuItem
+                        onSelect={() => useEditorStore.getState().enterSpriteEditMode(sprite.id!)}
+                      >
+                        编辑像素
+                      </ContextMenuItem>
+                      <ContextMenuItem onSelect={() => setRenaming({ kind: 'sprite', id: sprite.id! })}>
+                        重命名
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem
+                        className="text-red-400 focus:text-red-300"
+                        onSelect={() => {
+                          const refs = countSpriteRefs(sprite.id!);
+                          const msg =
+                            refs > 0
+                              ? `精灵「${sprite.name}」被 ${refs} 处槽位引用，删除后这些槽位将无图，继续？`
+                              : `确定删除精灵「${sprite.name}」吗？`;
+                          if (confirm(msg)) useProjectStore.getState().removeSprite(sprite.id!);
+                        }}
+                      >
+                        删除精灵
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
                 ))}
               </div>
             )}
@@ -626,23 +867,57 @@ export default function PuppetAssetPanel() {
                       (c) => c.id === clip.puppetCharacterId
                     );
                     return (
-                      <div
-                        key={clip.id}
-                        className={`flex items-center gap-1.5 px-1.5 py-1 rounded cursor-pointer transition-colors ${
-                          activeAnimationClipId === clip.id
-                            ? 'bg-amber-500/15 text-amber-300'
-                            : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
-                        }`}
-                        onClick={() => setActiveAnimationClip(clip.id)}
-                      >
-                        <Film className="size-2.5 text-amber-500/70 flex-shrink-0" />
-                        <span className="text-[10px] truncate flex-1 min-w-0">
-                          {clip.name}
-                        </span>
-                        <span className="text-[8px] text-gray-600">
-                          {(clip.nodeKeyframes ?? []).length} K帧
-                        </span>
-                      </div>
+                      <ContextMenu key={clip.id}>
+                        <ContextMenuTrigger asChild>
+                          <div
+                            className={`flex items-center gap-1.5 px-1.5 py-1 rounded cursor-pointer transition-colors ${
+                              activeAnimationClipId === clip.id
+                                ? 'bg-amber-500/15 text-amber-300'
+                                : 'text-gray-400 hover:bg-white/5 hover:text-gray-200'
+                            }`}
+                            onClick={() => setActiveAnimationClip(clip.id)}
+                          >
+                            <Film className="size-2.5 text-amber-500/70 flex-shrink-0" />
+                            {renaming?.kind === 'clip' && renaming.id === clip.id ? (
+                              <RowRenameInput
+                                initial={clip.name}
+                                onCommit={(name) => {
+                                  if (name && name !== clip.name) {
+                                    useProjectStore.getState().updateAnimationClip(clip.id, { name });
+                                  }
+                                  setRenaming(null);
+                                }}
+                              />
+                            ) : (
+                              <span className="text-[10px] truncate flex-1 min-w-0">
+                                {clip.name}
+                              </span>
+                            )}
+                            <span className="text-[8px] text-gray-600">
+                              {(clip.nodeKeyframes ?? []).length} K帧
+                            </span>
+                          </div>
+                        </ContextMenuTrigger>
+                        <ContextMenuContent className="min-w-36">
+                          <ContextMenuItem onSelect={() => setActiveAnimationClip(clip.id)}>
+                            设为当前片段
+                          </ContextMenuItem>
+                          <ContextMenuItem onSelect={() => setRenaming({ kind: 'clip', id: clip.id })}>
+                            重命名
+                          </ContextMenuItem>
+                          <ContextMenuSeparator />
+                          <ContextMenuItem
+                            className="text-red-400 focus:text-red-300"
+                            onSelect={() => {
+                              if (animationClips.length <= 1) return;
+                              if (!confirm(`确定删除动画片段「${clip.name}」吗？其中的关键帧将一并删除，此操作不可撤销。`)) return;
+                              useProjectStore.getState().removeAnimationClip(clip.id);
+                            }}
+                          >
+                            删除片段
+                          </ContextMenuItem>
+                        </ContextMenuContent>
+                      </ContextMenu>
                     );
                   })
                 )}

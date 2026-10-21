@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { NodeTreeItemWrapper } from './NodeTree';
+import { deleteNodeSubtree } from '@/lib/node-actions';
 import PuppetModifierPanel from './PuppetModifierPanel';
 import GlobalBlueprintEditor from './GlobalBlueprintEditor';
 import CharacterBlueprintEditor from './CharacterBlueprintEditor';
@@ -84,42 +85,10 @@ export default function RigPanel({
   }, [selectedSkeletonId, selectedNodeId, selectedNode, selectedCharacter]);
 
   const handleDeleteNode = useCallback(() => {
-    if (!selectedSkeletonId || !selectedNodeId || !selectedNode || !selectedCharacter) return;
-    // 根节点不能删
-    if (selectedNodeId === selectedCharacter.rootNodeId) return;
-    const childCount = Object.values(selectedCharacter.nodes).filter(n => n.parentId === selectedNodeId).length;
-    if (childCount > 0 && !confirm(`删除节点「${selectedNode.name}」会连带删除 ${childCount} 个子节点，继续？`)) return;
-    const store = useProjectStore.getState();
-    store.pushUndo('删除节点');
-    // 递归收集所有后代
-    const idsToRemove = new Set<string>([selectedNodeId]);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const n of Object.values(selectedCharacter.nodes)) {
-        if (idsToRemove.has(n.id)) continue;
-        if (n.parentId && idsToRemove.has(n.parentId)) {
-          idsToRemove.add(n.id);
-          changed = true;
-        }
-      }
-    }
-    // 从父节点的 children 列表移除
-    const parentId = selectedNode.parentId;
-    if (parentId) {
-      const parent = selectedCharacter.nodes[parentId];
-      if (parent) {
-        store.updateUnifiedNode(selectedSkeletonId, parentId, {
-          children: parent.children.filter(id => id !== selectedNodeId),
-        });
-      }
-    }
-    // 删除所有收集到的节点
-    for (const id of idsToRemove) {
-      store.removeUnifiedNode(selectedSkeletonId, id);
-    }
-    store.setSelectedNodeId(null);
-  }, [selectedSkeletonId, selectedNodeId, selectedNode, selectedCharacter]);
+    if (!selectedSkeletonId || !selectedNodeId) return;
+    // 与右键菜单共用同一删除口径（node-actions：含只挂插槽的子节点、根节点拒绝、确认文案一致）
+    deleteNodeSubtree(selectedSkeletonId, selectedNodeId);
+  }, [selectedSkeletonId, selectedNodeId]);
 
   const handleAddSocket = useCallback(() => {
     if (!selectedSkeletonId || !selectedNodeId || !selectedNode) return;
@@ -284,6 +253,7 @@ function RigNodeProperties({
       <div>
         <Label className="text-[10px] text-gray-500">名称</Label>
         <Input
+          id="rig-node-name-input"
           value={node.name}
           onChange={(e) => onUpdate({ name: e.target.value })}
           className="h-7 text-[11px] bg-[#111128] border-[#1e1e3a] mt-1"
@@ -296,6 +266,7 @@ function RigNodeProperties({
           <div className="flex-1">
             <Label className="text-[10px] text-gray-500">转位克隆（转平面角度°）</Label>
             <Input
+              id="rig-transpose-angle-input"
               type="number"
               value={transposeAngle}
               onChange={(e) => setTransposeAngle(Number(e.target.value) || 0)}

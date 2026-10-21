@@ -136,7 +136,10 @@ export function cloneSubtreeTransposed(
   nextId: IdFactory = defaultId,
   /** 给出时，克隆 IK 链的 target 镜像按投影不变式重算（需画布尺寸） */
   canvas?: { width: number; height: number },
+  /** plain=true：纯复制（θ 应为 0）——不挂 rotate 修改器、不动 IK transposeAngle，根名后缀「·副本」 */
+  options?: { plain?: boolean },
 ): TransposeCloneResult | null {
+  const plain = options?.plain === true;
   const root = character.nodes[rootNodeId];
   if (!root || rootNodeId === character.rootNodeId || !root.parentId) return null;
   const parent = character.nodes[root.parentId];
@@ -188,9 +191,9 @@ export function cloneSubtreeTransposed(
     // 节点蓝图内部指向子树节点的 id 参数（如 nodeRef.nodeId）重映射
     if (node.blueprint) remapIdStrings(node.blueprint as unknown, idMap);
     if (oldId === rootNodeId) {
-      node.name = `${src.name}·转位`;
-      // θ 由 'rotate' 变换修改器承载（渲染 Step 2 加算），不改任何角度数据
-      const mod: ModifierInstance = {
+      node.name = plain ? `${src.name}·副本` : `${src.name}·转位`;
+      // θ 由 'rotate' 变换修改器承载（渲染 Step 2 加算），不改任何角度数据；纯复制不挂
+      const mod: ModifierInstance | null = plain ? null : {
         id: nextId('mod'),
         type: 'rotate',
         enabled: true,
@@ -200,9 +203,11 @@ export function cloneSubtreeTransposed(
         paramKeyframes: [],
         paramDrivers: [],
       };
-      node.modifiers = [...node.modifiers, mod];
-      if (node.blueprint) {
-        node.blueprint = attachRotateModifierToBlueprint(node.blueprint, mod, nextId);
+      if (mod) {
+        node.modifiers = [...node.modifiers, mod];
+        if (node.blueprint) {
+          node.blueprint = attachRotateModifierToBlueprint(node.blueprint, mod, nextId);
+        }
       }
     }
     nodes[node.id] = node;
@@ -270,7 +275,7 @@ export function cloneSubtreeTransposed(
     for (const chain of internalChains) {
       const c = deepClone(chain);
       c.id = nextId('ik');
-      c.name = `${chain.name}·转位`;
+      c.name = plain ? `${chain.name}·副本` : `${chain.name}·转位`;
       c.rootNodeId = idMap.get(chain.rootNodeId)!;
       c.endNodeId = idMap.get(chain.endNodeId)!;
       // 蓝图驱动目标的转位角（求解输入端生效，与源链已有转位角叠加）

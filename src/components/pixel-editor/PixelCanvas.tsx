@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
@@ -33,6 +33,19 @@ import {
 import { acquireCanvas, releaseCanvas } from '@/lib/engine/canvas-pool';
 import { getCursorStyle, isStrokeToolCheck } from './canvas/canvas-utils';
 import { spriteEditCanvasOrigin } from './canvas/tool-handlers';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
+import { Check } from 'lucide-react';
+import { addChildNode, addSocketToNode, deleteNodeSubtree } from '@/lib/node-actions';
 
 // ============================================================
 // PixelCanvas - Central canvas for PixelMorpher pixel animation
@@ -467,8 +480,72 @@ export default function PixelCanvas() {
 
   const cursorStyle = s.editMode === 'correction' ? 'crosshair' : getCursorStyle(s.tool, s.spaceHeldRef.current, performArmed);
 
+  // ---- 右键菜单（命中节点 → 节点操作；空白 → 视图/缩放；有选区 → 追加提取） ----
+  const [menuTarget, setMenuTarget] = useState<{
+    nodeId: string;
+    characterId: string;
+    nodeName: string;
+    nodeVisible: boolean;
+    isRoot: boolean;
+  } | null>(null);
+  const [menuHasSelection, setMenuHasSelection] = useState(false);
+  const showGrid = useEditorStore((x) => x.showGrid);
+  const showPuppetSkeleton = useEditorStore((x) => x.showPuppetSkeleton);
+  const onionSkinEnabled = useProjectStore((x) => x.onionSkinEnabled);
+
+  const handleCanvasContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      const { px, py } = s.screenToPixel(e.clientX, e.clientY);
+      const hit = s.findPuppetNodeAtPixel(px, py);
+      if (hit) {
+        useProjectStore.getState().setSelectedNodeId(hit.node.id);
+        useEditorStore.getState().setActivePuppetSkeletonId(hit.character.id);
+        setMenuTarget({
+          nodeId: hit.node.id,
+          characterId: hit.character.id,
+          nodeName: hit.node.name,
+          nodeVisible: hit.node.visible,
+          isRoot: hit.character.rootNodeId === hit.node.id,
+        });
+      } else {
+        setMenuTarget(null);
+      }
+      setMenuHasSelection(s.selectionMaskRef.current.size > 0);
+    },
+    [s],
+  );
+
+  const focusInputById = (id: string) => {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    el?.focus();
+    el?.select();
+  };
+
+  const zoomBy = (factor: number) => {
+    const es = useEditorStore.getState();
+    es.setZoom(es.zoom * factor);
+  };
+  const zoomFit = () => {
+    const el = s.containerRef.current;
+    if (!el) return;
+    const es = useEditorStore.getState();
+    const z = Math.min(el.clientWidth / s.canvasWidth, el.clientHeight / s.canvasHeight);
+    es.setZoom(z);
+    const az = useEditorStore.getState().zoom;
+    es.setPan((el.clientWidth - s.canvasWidth * az) / 2, (el.clientHeight - s.canvasHeight * az) / 2);
+  };
+  const zoom100 = () => {
+    const el = s.containerRef.current;
+    if (!el) return;
+    const es = useEditorStore.getState();
+    es.setZoom(1);
+    es.setPan((el.clientWidth - s.canvasWidth) / 2, (el.clientHeight - s.canvasHeight) / 2);
+  };
+
   return (
-    <div ref={s.containerRef} className="relative w-full h-full overflow-hidden" style={{ background: '#0f0f1a' }}>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+    <div ref={s.containerRef} className="relative w-full h-full overflow-hidden" style={{ background: '#0f0f1a' }} onContextMenu={handleCanvasContextMenu}>
       {/* Correction mode border */}
       {s.editMode === 'correction' && (
         <div className="absolute inset-0 pointer-events-none z-50" style={{ boxShadow: 'inset 0 0 0 3px rgba(34, 211, 238, 0.6)', borderRadius: '4px' }} />
@@ -580,5 +657,122 @@ export default function PixelCanvas() {
         </div>
       )}
     </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="min-w-44">
+        {menuTarget ? (
+          <>
+            <ContextMenuLabel className="max-w-48 truncate">{menuTarget.nodeName}</ContextMenuLabel>
+            <ContextMenuItem onSelect={() => focusInputById('rig-node-name-input')}>
+              重命名
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => {
+                const ch = useProjectStore.getState().unifiedCharacters[menuTarget.characterId];
+                const n = ch?.nodes[menuTarget.nodeId];
+                if (n) addChildNode(menuTarget.characterId, n);
+              }}
+            >
+              新建子节点
+            </ContextMenuItem>
+            <ContextMenuItem
+              onSelect={() => {
+                const ch = useProjectStore.getState().unifiedCharacters[menuTarget.characterId];
+                const n = ch?.nodes[menuTarget.nodeId];
+                if (n) addSocketToNode(menuTarget.characterId, n);
+              }}
+            >
+              添加插槽
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              disabled={menuTarget.isRoot}
+              onSelect={() => {
+                const id = useProjectStore
+                  .getState()
+                  .cloneNodeSubtree(menuTarget.characterId, menuTarget.nodeId);
+                if (id) useProjectStore.getState().setSelectedNodeId(id);
+              }}
+            >
+              复制子树
+            </ContextMenuItem>
+            <ContextMenuSub>
+              <ContextMenuSubTrigger disabled={menuTarget.isRoot}>转位克隆</ContextMenuSubTrigger>
+              <ContextMenuSubContent>
+                {[45, 90, 180].map((deg) => (
+                  <ContextMenuItem
+                    key={deg}
+                    onSelect={() => {
+                      const id = useProjectStore
+                        .getState()
+                        .cloneNodeSubtreeTransposed(menuTarget.characterId, menuTarget.nodeId, deg);
+                      if (id) useProjectStore.getState().setSelectedNodeId(id);
+                    }}
+                  >
+                    {deg}°
+                  </ContextMenuItem>
+                ))}
+                <ContextMenuSeparator />
+                <ContextMenuItem onSelect={() => focusInputById('rig-transpose-angle-input')}>
+                  自定义角度…
+                </ContextMenuItem>
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              onSelect={() => {
+                const st = useProjectStore.getState();
+                const n = st.unifiedCharacters[menuTarget.characterId]?.nodes[menuTarget.nodeId];
+                if (n) {
+                  st.pushUndo('更新节点', 'updateNode');
+                  st.updateUnifiedNode(menuTarget.characterId, menuTarget.nodeId, { visible: !n.visible });
+                }
+              }}
+            >
+              {menuTarget.nodeVisible ? '隐藏节点' : '显示节点'}
+            </ContextMenuItem>
+            <ContextMenuItem
+              disabled={menuTarget.isRoot}
+              className="text-red-400 focus:text-red-300"
+              onSelect={() => deleteNodeSubtree(menuTarget.characterId, menuTarget.nodeId)}
+            >
+              删除节点
+            </ContextMenuItem>
+          </>
+        ) : (
+          <>
+            <ContextMenuItem onSelect={() => useEditorStore.getState().toggleGrid()}>
+              {showGrid && <Check className="size-3.5" />} 显示网格
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => useProjectStore.getState().toggleOnionSkin()}>
+              {onionSkinEnabled && <Check className="size-3.5" />} 洋葱皮
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => useEditorStore.getState().togglePuppetSkeleton()}>
+              {showPuppetSkeleton && <Check className="size-3.5" />} 骨骼叠加
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={() => zoomBy(1.25)}>放大</ContextMenuItem>
+            <ContextMenuItem onSelect={() => zoomBy(0.8)}>缩小</ContextMenuItem>
+            <ContextMenuItem onSelect={zoomFit}>适应画布</ContextMenuItem>
+            <ContextMenuItem onSelect={zoom100}>100%</ContextMenuItem>
+            {menuHasSelection && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem onSelect={() => interaction.setShowExtractDialog(true)}>
+                  提取为部件…
+                </ContextMenuItem>
+                <ContextMenuItem
+                  onSelect={() => {
+                    s.selectionMaskRef.current.clear();
+                    s.markDirty();
+                  }}
+                >
+                  清除选区
+                </ContextMenuItem>
+              </>
+            )}
+          </>
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
