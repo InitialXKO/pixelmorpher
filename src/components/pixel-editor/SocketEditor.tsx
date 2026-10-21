@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Plus, Trash2, Link2, ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
+import { Vec3Field } from './shared/Vec3Field';
 
 // ---------------------------------------------------------------------------
 // Exported Types
@@ -68,14 +69,6 @@ function SocketCard({ socket, onChange, onRemove, selectedDirection, disabled }:
   const [editingDir, setEditingDir] = useState<DirectionIndex | null>(selectedDirection ?? null);
 
   const offsets = socket.directionOffsets ?? {};
-
-  const handle3DChange = useCallback(
-    (axis: 'x' | 'y' | 'z', value: string) => {
-      if (!socket.offset3D) return;
-      onChange({ offset3D: { ...socket.offset3D, [axis]: Number(value) || 0 } });
-    },
-    [onChange, socket.offset3D],
-  );
 
   // 添加 3D 偏移：种子取当前基准位置（南向口径：sx→X、sy→Y、Z=0，与渲染端 2D→3D 映射一致）
   const handleAdd3D = useCallback(() => {
@@ -240,29 +233,13 @@ function SocketCard({ socket, onChange, onRemove, selectedDirection, disabled }:
             )}
           </div>
           {socket.offset3D && (
-            <div className="flex items-center gap-1">
-              <Label className="text-[8px] text-gray-600 w-4">X</Label>
-              <Input
-                type="number"
-                value={socket.offset3D.x}
-                onChange={(e) => handle3DChange('x', e.target.value)}
-                className="h-4 text-[8px] bg-[#080818] border-[#1e1e3a] w-12"
-                disabled={disabled}
-              />
-              <Label className="text-[8px] text-gray-600 w-4">Y</Label>
-              <Input
-                type="number"
-                value={socket.offset3D.y}
-                onChange={(e) => handle3DChange('y', e.target.value)}
-                className="h-4 text-[8px] bg-[#080818] border-[#1e1e3a] w-12"
-                disabled={disabled}
-              />
-              <Label className="text-[8px] text-gray-600 w-4">Z</Label>
-              <Input
-                type="number"
-                value={socket.offset3D.z}
-                onChange={(e) => handle3DChange('z', e.target.value)}
-                className="h-4 text-[8px] bg-[#080818] border-[#1e1e3a] w-12"
+            <div className="flex items-center gap-1" title="父局部系；罗盘以静止姿态为基准（静止时与世界轴对齐）">
+              <Vec3Field
+                space="render-world"
+                unit="px"
+                value={socket.offset3D}
+                onChange={(v) => onChange({ offset3D: v })}
+                inputClassName="h-4 text-[8px] bg-[#080818] border border-[#1e1e3a] rounded w-12 px-0.5 text-gray-200"
                 disabled={disabled}
               />
             </div>

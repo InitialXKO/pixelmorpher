@@ -53,6 +53,7 @@ interface ManualPartDraft {
 import type { PixelGrid, DirectionIndex } from '@/lib/unified-types';
 import { pxToSub } from '@/lib/unified-types';
 import { useProjectStore } from '@/lib/store';
+import { Vec3Field } from '../shared/Vec3Field';
 import BonePicker3D from './BonePicker3D';
 import {
   bakeSixParts,
@@ -1367,27 +1368,27 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                           <option value="custom">自定义坐标</option>
                         </select>
                       </label>
-                      {d.pivot.mode === 'custom' &&
-                        (['x', 'y', 'z'] as const).map((axis) => (
-                          <input
-                            key={axis}
-                            type="number"
+                      {d.pivot.mode === 'custom' && (
+                        <span title="枢轴（模型世界坐标）">
+                          <Vec3Field
+                            space="file"
+                            unit="模型单位"
                             step={0.05}
-                            value={d.pivot.mode === 'custom' ? d.pivot.point[axis] : 0}
-                            onChange={(e) => {
-                              const val = Number(e.target.value);
+                            value={d.pivot.point}
+                            onChange={(v) =>
                               setManualParts((prev) =>
                                 prev.map((p) =>
                                   p.id === d.id && p.pivot.mode === 'custom'
-                                    ? { ...p, pivot: { mode: 'custom', point: { ...p.pivot.point, [axis]: Number.isFinite(val) ? val : 0 } } as ManualPivotSpec }
+                                    ? { ...p, pivot: { mode: 'custom', point: v } as ManualPivotSpec }
                                     : p,
                                 ),
-                              );
-                            }}
-                            className="h-6 w-16 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-gray-200"
-                            title={`枢轴 ${axis.toUpperCase()}（模型世界坐标）`}
+                              )
+                            }
+                            labelClassName="text-[10px] text-gray-400 whitespace-nowrap"
+                            inputClassName="h-6 w-16 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-gray-200"
                           />
-                        ))}
+                        </span>
+                      )}
                       <button
                         onClick={() => setManualParts((prev) => prev.filter((p) => p.id !== d.id))}
                         className="rounded border border-[#3a3a5a] px-2 py-0.5 text-[10px] text-gray-400 hover:bg-[#222240]"
