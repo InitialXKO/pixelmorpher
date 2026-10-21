@@ -761,8 +761,11 @@ export async function bakeSixParts(
       uJoints: { value: THREE.Vector3[] };
       uDirs: { value: THREE.Vector3[] };
       uCount: { value: number };
+      uContour: { value: THREE.DataTexture };
+      uRtSize: { value: number };
     }
     const DIR_GATE_GLSL = `
+      if (texture2D(uContour, gl_FragCoord.xy / uRtSize).r < 0.5) discard;
       vec3 rd = normalize(vPos - cameraPosition);
       float best = 1e9;
       int bestI = -1;
@@ -796,6 +799,8 @@ export async function bakeSixParts(
       uniform vec3 uDirs[8];
       uniform int uCount;
       uniform int uOwn;
+      uniform sampler2D uContour;
+      uniform float uRtSize;
       varying vec3 vPos;
     `;
     const gateByDirection = (mat: THREE.Material, shared: DirShared, own: number): void => {
@@ -803,6 +808,8 @@ export async function bakeSixParts(
         shader.uniforms.uJoints = shared.uJoints;
         shader.uniforms.uDirs = shared.uDirs;
         shader.uniforms.uCount = shared.uCount;
+        shader.uniforms.uContour = shared.uContour;
+        shader.uniforms.uRtSize = shared.uRtSize;
         shader.uniforms.uOwn = { value: own };
         shader.vertexShader = ('varying vec3 vPos;\n' + shader.vertexShader).replace(
           '#include <worldpos_vertex>',
@@ -823,6 +830,8 @@ export async function bakeSixParts(
           uJoints: shared.uJoints,
           uDirs: shared.uDirs,
           uCount: shared.uCount,
+          uContour: shared.uContour,
+          uRtSize: shared.uRtSize,
           uOwn: { value: own },
         },
         vertexShader: `
@@ -838,6 +847,8 @@ export async function bakeSixParts(
           uniform vec3 uDirs[8];
           uniform int uCount;
           uniform int uOwn;
+          uniform sampler2D uContour;
+          uniform float uRtSize;
           varying vec3 vPos;
           void main() {
             ${DIR_GATE_GLSL}
@@ -846,9 +857,6 @@ export async function bakeSixParts(
         `,
         side: THREE.DoubleSide,
       });
-      mat.stencilWrite = true;
-      mat.stencilFunc = THREE.EqualStencilFunc;
-      mat.stencilRef = 1;
       return mat;
     };
 
@@ -978,9 +986,7 @@ export async function bakeSixParts(
 
       // 外轮廓标记组：本部件双面渲进 stencil（不出颜色/深度）——候选的二维剔除区域
       const markMat = new THREE.MeshBasicMaterial({
-        colorWrite: false, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
-        stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc, stencilRef: 1,
-        stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp, stencilZPass: THREE.ReplaceStencilOp,
+        color: 0xffffff, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
       });
       const markGroup = new THREE.Group();
       {
@@ -1014,11 +1020,39 @@ export async function bakeSixParts(
         const dirBase = normJoints[farGi].clone().sub(normJoints[bi]).normalize();
         conns.push({ q, bP, bQ, jointGi: bi, dirBase });
       }
+      // 填充轮廓资源：掩码读回 → CPU 洪泛（边缘可达的空像素=外，余者=轮廓内，
+      // 对穿的断口如侧面肩口由此纳入轮廓）→ 轮廓纹理，候选门控采样它
+      const maskPx = new Uint8Array(size * size * 4);
+      const contourData = new Uint8Array(size * size);
+      const contourOutside = new Uint8Array(size * size);
+      const contourTex = new THREE.DataTexture(contourData, size, size, THREE.RedFormat);
+      contourTex.minFilter = THREE.NearestFilter;
+      contourTex.magFilter = THREE.NearestFilter;
+      const buildContour = () => {
+        contourOutside.fill(0);
+        const stack: number[] = [];
+        for (let x = 0; x < size; x++) { stack.push(x); stack.push((size - 1) * size + x); }
+        for (let y = 0; y < size; y++) { stack.push(y * size); stack.push(y * size + size - 1); }
+        while (stack.length) {
+          const k = stack.pop()!;
+          if (contourOutside[k] || maskPx[k * 4] > 0) continue;
+          contourOutside[k] = 1;
+          const x = k % size, y = (k / size) | 0;
+          if (x > 0) stack.push(k - 1);
+          if (x < size - 1) stack.push(k + 1);
+          if (y > 0) stack.push(k - size);
+          if (y < size - 1) stack.push(k + size);
+        }
+        for (let k = 0; k < size * size; k++) contourData[k] = contourOutside[k] ? 0 : 255;
+        contourTex.needsUpdate = true;
+      };
       // 方向判定共享 uniform（关节位置/方向线每方向旋转更新）
       const dirShared: DirShared = {
         uJoints: { value: Array.from({ length: 8 }, () => new THREE.Vector3()) },
         uDirs: { value: Array.from({ length: 8 }, () => new THREE.Vector3(0, -1, 0)) },
         uCount: { value: Math.min(conns.length, 8) },
+        uContour: { value: contourTex },
+        uRtSize: { value: size },
       };
       const candSets: CandSet[] = [];
       for (let ci = 0; ci < conns.length; ci++) {
@@ -1037,9 +1071,6 @@ export async function bakeSixParts(
         for (const view of views) {
           const geo = makeViewGeometry(view);
           const tmat = makeToonFromSource(view.source.material, gradientMap);
-          tmat.stencilWrite = true;
-          tmat.stencilFunc = THREE.EqualStencilFunc;
-          tmat.stencilRef = 1;
           gateByDirection(tmat, dirShared, ci);
           mats.push(tmat);
           const cm = new THREE.Mesh(geo, tmat);
@@ -1119,16 +1150,21 @@ export async function bakeSixParts(
           }
         }
 
-        // 颜色一遍，第一段：外轮廓标记 + 候选（接通部件在接通骨骼上的三角形，外轮廓内）
+        // 外轮廓掩码：本部件双面投影渲成白掩码读回，洪泛填充成轮廓纹理
         scene.remove(idInner);
         scene.remove(partGroup);
         scene.add(markGroup);
-        for (const cs of candSets) scene.add(cs.color);
         renderer.setRenderTarget(rt);
         renderer.clear(true, true, true);
         renderer.render(scene, camera);
-        for (const cs of candSets) scene.remove(cs.color);
         scene.remove(markGroup);
+        renderer.readRenderTargetPixels(rt, 0, 0, size, size, maskPx);
+        buildContour();
+        // 颜色一遍，第一段：候选（填充轮廓内 + 方向线归属）
+        for (const cs of candSets) scene.add(cs.color);
+        renderer.clear(true, true, true);
+        renderer.render(scene, camera);
+        for (const cs of candSets) scene.remove(cs.color);
         // 第二段：只清深度，本部件正面在全新深度上画——对候选是无条件覆写（强制遮挡），
         // 本部件内部仍按深度自洽
         scene.add(partGroup);
@@ -1157,17 +1193,15 @@ export async function bakeSixParts(
         onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° 颜色`);
         await new Promise((r) => setTimeout(r, 0));
 
-        // ID 一遍：单节点部件跳过。结构同颜色遍：候选先写「本部件骨骼」的 ID（外轮廓
-        // 标记在 ID 遍重写 stencil），再清深度由本部件自己的 ID 覆写其表面
+        // ID 一遍：单节点部件跳过。结构同颜色遍：候选先写「本部件骨骼」的 ID（共用
+        // 本方向颜色遍已建好的填充轮廓纹理），再清深度由本部件自己的 ID 覆写其表面
         let idPixels: Uint8ClampedArray | undefined;
         if (partNeedsId.get(pname)) {
           scene.remove(partGroup);
-          scene.add(markGroup);
           for (const cs of candSets) scene.add(cs.id);
           renderer.clear(true, true, true);
           renderer.render(scene, camera);
           for (const cs of candSets) scene.remove(cs.id);
-          scene.remove(markGroup);
           scene.add(idInner);
           idInner.rotation.y = ang;
           idInner.updateMatrixWorld(true);
