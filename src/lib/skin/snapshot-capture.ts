@@ -49,14 +49,11 @@ export function captureSkinningSnapshot(
   // 它对无轨道节点用 0 兜底，会清零 rest 角度/偏移，快照姿态就错了（且它还
   // 偷读全局 store 的 active clip，与调用方传入的帧上下文无关）。
   const clone: Character = JSON.parse(JSON.stringify(character));
-  // 只渲父/子与父的祖先链；清掉一切既有快照，关掉全部关节盘（盘是补缝垫片、
-  // 独立绘制，不属于双精灵本体——父节点自己的盘烘进去会与活盘双份重叠）
+  // 只渲父/子两个节点：祖先只提供世界变换（变换计算不看可见性），精灵绝不能
+  // 渲进来——祖先与父子重叠的像素（如躯干压在大臂上）会被焊进合并图、随子
+  // 关节旋转。清掉一切既有快照，关掉全部关节盘（盘是补缝垫片、独立绘制，
+  // 不属于双精灵本体——父节点自己的盘烘进去会与活盘双份重叠）
   const keep = new Set<string>([nodeId, parent.id]);
-  let anc = parent.parentId ? clone.nodes[parent.parentId] : undefined;
-  while (anc) {
-    keep.add(anc.id);
-    anc = anc.parentId ? clone.nodes[anc.parentId] : undefined;
-  }
   for (const n of Object.values(clone.nodes)) {
     if (!keep.has(n.id)) n.visible = false;
     if (n.attachment) {
