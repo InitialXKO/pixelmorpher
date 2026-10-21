@@ -395,6 +395,9 @@ function makeToonFromSource(
   return new THREE.MeshToonMaterial({
     color: src && 'color' in src && src.color ? (src.color as THREE.Color).clone() : new THREE.Color(0xffffff),
     ...(src && 'map' in src && src.map ? { map: src.map as THREE.Texture } : {}),
+    // 继承源材质的面性：源模型双面（doubleSided）时压成单面会把绕向不齐的三角形
+    //（如颈圈）从正面剔掉——几何在、轮廓标记也盖得住，却没有任何表面能填
+    ...(src && 'side' in src && src.side !== undefined ? { side: src.side } : {}),
     gradientMap,
   });
 }
@@ -841,6 +844,7 @@ export async function bakeSixParts(
             gl_FragColor = vec4(uColor, 1.0);
           }
         `,
+        side: THREE.DoubleSide,
       });
       mat.stencilWrite = true;
       mat.stencilFunc = THREE.EqualStencilFunc;
@@ -963,6 +967,7 @@ export async function bakeSixParts(
               outColor = texelFetch(uIdTex, ivec2(vTriId % textureSize(uIdTex, 0).x, vTriId / textureSize(uIdTex, 0).x), 0);
             }
           `,
+          side: THREE.DoubleSide,
         });
         const idMesh = new THREE.Mesh(idGeo, idMat);
         idMesh.frustumCulled = false;
