@@ -742,24 +742,42 @@ export async function bakeSixParts(
 
     // —— 破洞填充（最终方案）：
     // 1) 只用所渲染部件的外轮廓剔除其他部件：本部件双面渲进 stencil 得到填充轮廓（二维区域）；
-    // 2) 候选 =「通过骨骼与本部件接通」的部件整体——接通关系看骨骼父子（parentIndex）、不看
-    //    切口几何；洞口是单个关节的切口，洞内能露出的只有正坐在切口上的那个部件的表面：
-    //    其他接通部件在轮廓外被剔除、在本部件表面处被覆写，不需要按骨骼挑三角形（挑骨骼会
-    //    漏掉锁骨这类不主导任何三角形的接通骨骼）；
+    // 2) 候选 =「通过骨骼与本部件接通」的部件整体（不按骨骼挑三角形——挑骨骼会漏掉锁骨
+    //    这类不主导任何三角形的接通骨骼）；每个接通关系一个候选集，候选片元还须落在本
+    //    接通关节的洞口圆盘内（圆心 = 关节投影，半径 = 对方接通骨骼的骨长投影）：洞口只取
+    //    它自己的接通部件——如髋口取大腿，垂到髋边的手（手臂候选集，圆盘在肩关节）进不来；
     // 3) 本部件正面最后画、只清深度，强制遮挡未剔除部分；单面渲染；
     // 4) 遮挡部件进 ID 遍，ID 改成本部件的：写该接通关系在本部件一侧的骨骼（同一部件对
     //    多条接通边时取第一条）。
     // 候选按接通部件构建、每部件只提交一遍，成本与洞数无关。
+    /** 候选的洞口圆盘门控（颜色/ID 共用同一 uniform 对象）：片元须落在本接通关节的圆盘内 */
+    const gateHole = (mat: THREE.Material, u: { value: THREE.Vector3 }): void => {
+      mat.onBeforeCompile = (shader) => {
+        shader.uniforms.uHole = u;
+        shader.fragmentShader = ('uniform vec3 uHole;\n' + shader.fragmentShader).replace(
+          '#include <clipping_planes_fragment>',
+          '#include <clipping_planes_fragment>\n  if (distance(gl_FragCoord.xy, uHole.xy) > uHole.z) discard;',
+        );
+      };
+      mat.customProgramCacheKey = () => 'hole-gate';
+    };
     /** 遮挡者在 ID 遍的材质：整块输出本部件骨骼的 ID 色（与 ID 帧同一 RGB 掩码格式） */
-    const makeCandIdMaterial = (rgb: [number, number, number]): THREE.ShaderMaterial => {
+    const makeCandIdMaterial = (rgb: [number, number, number], uHole: { value: THREE.Vector3 }): THREE.ShaderMaterial => {
       const mat = new THREE.ShaderMaterial({
-        uniforms: { uColor: { value: new THREE.Vector3(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255) } },
+        uniforms: {
+          uColor: { value: new THREE.Vector3(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255) },
+          uHole,
+        },
         vertexShader: `
           void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
         `,
         fragmentShader: `
           uniform vec3 uColor;
-          void main() { gl_FragColor = vec4(uColor, 1.0); }
+          uniform vec3 uHole;
+          void main() {
+            if (distance(gl_FragCoord.xy, uHole.xy) > uHole.z) discard;
+            gl_FragColor = vec4(uColor, 1.0);
+          }
         `,
       });
       mat.stencilWrite = true;
@@ -910,20 +928,20 @@ export async function bakeSixParts(
         mi.scale.setScalar(scale);
         markGroup.add(mi);
       }
-      // 候选组：与本部件通过骨骼接通的每个部件一组（颜色组 + ID 组），变换与 partGroup 一致
-      interface CandSet { color: THREE.Group; id: THREE.Group; mats: THREE.Material[] }
-      const connBoneOf = new Map<PartName, number>();
+      // 候选组：每条跨部件骨骼边（一个接通关节）一组（颜色组 + ID 组），变换与 partGroup 一致
+      interface CandSet { color: THREE.Group; id: THREE.Group; mats: THREE.Material[]; holeU: { value: THREE.Vector3 }; bP: number; bQ: number }
+      const conns: { q: PartName; bP: number; bQ: number }[] = [];
       for (let bi = 0; bi < boneToPart.length; bi++) {
         const pi = parentIndex[bi];
         if (pi == null) continue;
         const pParent = boneToPart[pi];
         const pChild = boneToPart[bi];
         if (!pParent || !pChild || pParent === pChild) continue;
-        if (pParent === pname && !connBoneOf.has(pChild)) connBoneOf.set(pChild, pi);
-        else if (pChild === pname && !connBoneOf.has(pParent)) connBoneOf.set(pParent, bi);
+        if (pParent === pname) conns.push({ q: pChild, bP: pi, bQ: bi });
+        else if (pChild === pname) conns.push({ q: pParent, bP: bi, bQ: pi });
       }
       const candSets: CandSet[] = [];
-      for (const [q, bP] of connBoneOf) {
+      for (const { q, bP, bQ } of conns) {
         const qb = parts.get(q);
         if (!qb) continue;
         const views = qb.views;
@@ -931,7 +949,8 @@ export async function bakeSixParts(
         const li = localIndex.get(bP);
         if (li === undefined) continue;
         const mats: THREE.Material[] = [];
-        const candIdMat = makeCandIdMaterial(encodeBoneId(li) as [number, number, number]);
+        const holeU = { value: new THREE.Vector3(0, 0, 0) };
+        const candIdMat = makeCandIdMaterial(encodeBoneId(li) as [number, number, number], holeU);
         mats.push(candIdMat);
         const colorInner = new THREE.Group();
         const idInnerG = new THREE.Group();
@@ -941,6 +960,7 @@ export async function bakeSixParts(
           tmat.stencilWrite = true;
           tmat.stencilFunc = THREE.EqualStencilFunc;
           tmat.stencilRef = 1;
+          gateHole(tmat, holeU);
           mats.push(tmat);
           const cm = new THREE.Mesh(geo, tmat);
           cm.frustumCulled = false;
@@ -957,7 +977,7 @@ export async function bakeSixParts(
         idInnerG.position.copy(inner.position);
         idInnerG.scale.setScalar(scale);
         idG.add(idInnerG);
-        candSets.push({ color: colorG, id: idG, mats });
+        candSets.push({ color: colorG, id: idG, mats, holeU, bP, bQ });
       }
 
       // 部件相机：紧贴部件 bbox（归一化空间）
@@ -1008,6 +1028,19 @@ export async function bakeSixParts(
             x: ((projV.x + 1) / 2) * size,
             y: ((1 - projV.y) / 2) * size,
           };
+        }
+
+        // 候选集的洞口圆盘（本方向）：圆心 = 本侧接通关节投影；半径 = 对方接通骨骼 bQ
+        // 的骨长（bQ 到其子关节）在本帧的投影长度
+        for (const cs of candSets) {
+          const jp = boneInfos[cs.bP].jointPixels[((d + 6) % 8)];
+          if (!jp) continue;
+          const childGi = parentIndex.findIndex((p) => p === cs.bQ);
+          const endGi = childGi >= 0 ? childGi : cs.bQ;
+          projV.copy(normJoints[endGi]).applyMatrix4(partGroup.matrixWorld).project(camera);
+          const ex = ((projV.x + 1) / 2) * size;
+          const ey = ((1 - projV.y) / 2) * size;
+          cs.holeU.value.set(jp.x, size - jp.y, Math.hypot(ex - jp.x, ey - jp.y));
         }
 
         // 颜色一遍，第一段：外轮廓标记 + 候选（接通部件在接通骨骼上的三角形，外轮廓内）
