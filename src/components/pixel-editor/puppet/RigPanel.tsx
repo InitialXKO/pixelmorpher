@@ -75,6 +75,14 @@ export default function RigPanel({
     [selectedSkeletonId, selectedCharacter, handleUpdateNode]
   );
 
+  const handleTransposeClone = useCallback((thetaDeg: number) => {
+    if (!selectedSkeletonId || !selectedNodeId || !selectedNode) return;
+    if (selectedNodeId === selectedCharacter?.rootNodeId) return;
+    const store = useProjectStore.getState();
+    const newRootId = store.cloneNodeSubtreeTransposed(selectedSkeletonId, selectedNodeId, thetaDeg);
+    if (newRootId) store.setSelectedNodeId(newRootId);
+  }, [selectedSkeletonId, selectedNodeId, selectedNode, selectedCharacter]);
+
   const handleDeleteNode = useCallback(() => {
     if (!selectedSkeletonId || !selectedNodeId || !selectedNode || !selectedCharacter) return;
     // 根节点不能删
@@ -197,6 +205,7 @@ export default function RigPanel({
           onAddSocket={handleAddSocket}
           onRemoveSocket={handleRemoveSocket}
           onDeleteNode={handleDeleteNode}
+          onTransposeClone={handleTransposeClone}
           isRoot={selectedNode.id === selectedCharacter?.rootNodeId}
         />
       )}
@@ -241,6 +250,7 @@ function RigNodeProperties({
   onAddSocket,
   onRemoveSocket,
   onDeleteNode,
+  onTransposeClone,
   isRoot,
 }: {
   node: Node;
@@ -249,8 +259,10 @@ function RigNodeProperties({
   onAddSocket: () => void;
   onRemoveSocket: (socketId: string) => void;
   onDeleteNode: () => void;
+  onTransposeClone: (thetaDeg: number) => void;
   isRoot: boolean;
 }) {
+  const [transposeAngle, setTransposeAngle] = useState(45);
   return (
     <div className="space-y-3 bg-[#080818] rounded border border-[#1e1e3a] p-2">
       <div className="flex items-center justify-between">
@@ -277,6 +289,30 @@ function RigNodeProperties({
           className="h-7 text-[11px] bg-[#111128] border-[#1e1e3a] mt-1"
         />
       </div>
+
+      {/* 转位克隆：克隆整个子树并转平面角度（根节点除外） */}
+      {!isRoot && (
+        <div className="flex items-end gap-1.5">
+          <div className="flex-1">
+            <Label className="text-[10px] text-gray-500">转位克隆（转平面角度°）</Label>
+            <Input
+              type="number"
+              value={transposeAngle}
+              onChange={(e) => setTransposeAngle(Number(e.target.value) || 0)}
+              className="h-7 text-[11px] bg-[#111128] border-[#1e1e3a] mt-1"
+              title="克隆此节点子树，克隆根绕附着点转此角度（根 angle 与其关键帧一起转）"
+            />
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-[11px]"
+            onClick={() => onTransposeClone(transposeAngle)}
+          >
+            克隆
+          </Button>
+        </div>
+      )}
 
       {/* Rest pose */}
       <div>

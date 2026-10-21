@@ -13,6 +13,7 @@ import type {
 } from '../unified-types';
 import { createDefaultNode, createDefaultCostumeSet, createDefaultCostumePiece } from '../unified-types';
 import type { DirectionIndex } from '../unified-types';
+import { cloneSubtreeTransposed, cloneClipDataForTranspose } from '../clone-transpose';
 
 export type CharacterSlice = {
   // ---- Character CRUD ----
@@ -25,6 +26,8 @@ export type CharacterSlice = {
   /** Currently selected node ID (unified Node ID) */
   selectedNodeId: string | null;
   setSelectedNodeId: (id: string | null) => void;
+  /** 肢体转位克隆：克隆节点子树并转平面角度 θ（含剪辑关键帧跟随）。返回克隆根 id，失败 null */
+  cloneNodeSubtreeTransposed: (characterId: string, rootNodeId: string, thetaDeg: number) => string | null;
 
   // ---- Node Keyframes ----
   addNodeKeyframe: (clipId: string, nodeId: string, frame: number, values: Partial<Pick<import('../unified-types').NodeKeyframe, 'angle' | 'stretch' | 'x' | 'y' | 'variantIndex' | 'zIndex' | 'interpolationMode' | 'modifiers' | 'faceTurn'>>) => import('../unified-types').NodeKeyframe;
@@ -163,6 +166,28 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
         },
       };
     });
+  },
+
+  cloneNodeSubtreeTransposed: (characterId, rootNodeId, thetaDeg) => {
+    const state = get();
+    const character = state.unifiedCharacters[characterId];
+    if (!character) return null;
+    const result = cloneSubtreeTransposed(character, rootNodeId, thetaDeg, generateId, {
+      width: state.canvasWidth,
+      height: state.canvasHeight,
+    });
+    if (!result) return null;
+    state.pushUndo('转位克隆');
+    set((s) => ({
+      unifiedCharacters: {
+        ...s.unifiedCharacters,
+        [characterId]: { ...result.character, updatedAt: Date.now() },
+      },
+      animationClips: s.animationClips.map(
+        (clip) => cloneClipDataForTranspose(clip, characterId, result, thetaDeg, generateId) ?? clip,
+      ),
+    }));
+    return result.newRootId;
   },
 
   updateUnifiedNode: (characterId, nodeId, updates) => {
