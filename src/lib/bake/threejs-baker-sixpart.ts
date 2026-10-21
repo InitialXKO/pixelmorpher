@@ -752,7 +752,7 @@ export async function bakeSixParts(
     //    多条接通边时取第一条）。
     // 候选按接通部件构建、每部件只提交一遍，成本与洞数无关。
     /** 候选的方向判定门控（颜色/ID 共用同一组 uniform）：每条接通关系一条方向线
-     * （过接通关节、沿接通骨骼方向）；片元视线与哪条方向线最贴近就归哪个接通，
+     * （过接通关节、沿接通骨骼方向的射线）；片元视线与哪条方向射线最贴近就归哪个接通，
      * 不是本关系的丢弃。uJoints/uDirs/uCount 按部件共享、每方向旋转更新 */
     interface DirShared {
       uJoints: { value: THREE.Vector3[] };
@@ -774,9 +774,15 @@ export async function bakeSixParts(
         if (denom < 1e-8) {
           dist = length(w0 - rd * d);
         } else {
-          float tRay = (b * e - d) / denom;
           float tLine = (e - b * d) / denom;
-          dist = length((cameraPosition + rd * tRay) - (uJoints[i] + uDirs[i] * tLine));
+          if (tLine < 0.0) {
+            // 方向有向：最近点落在关节之后时，距离取视线到关节点的距离
+            float tRay = max(-d, 0.0);
+            dist = length((cameraPosition + rd * tRay) - uJoints[i]);
+          } else {
+            float tRay = (b * e - d) / denom;
+            dist = length((cameraPosition + rd * tRay) - (uJoints[i] + uDirs[i] * tLine));
+          }
         }
         if (dist < best) { best = dist; bestI = i; }
       }
