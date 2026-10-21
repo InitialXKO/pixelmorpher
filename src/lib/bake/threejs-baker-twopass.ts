@@ -1082,12 +1082,16 @@ function extractBoneTriangles(
   targetIndex: number,
 ): {
   positions: number[]; // 模型空间 xyz 平铺
+  uvs: number[]; // 与 positions 逐顶点对齐的 uv（源几何无 uv 时填 0）
+  segments: { start: number; count: number; material: THREE.Material | null }[];
   bbox: THREE.Box3;
   jointModel: THREE.Vector3;
   parentJointModel: THREE.Vector3 | null;
   count: number;
 } | null {
   const positions: number[] = [];
+  const uvs: number[] = [];
+  const segments: { start: number; count: number; material: THREE.Material | null }[] = [];
   const bbox = new THREE.Box3();
   const v = new THREE.Vector3();
 
@@ -1095,6 +1099,8 @@ function extractBoneTriangles(
     const geo = mesh.geometry;
     const index = geo.getIndex();
     const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+    const uvAttr = geo.getAttribute('uv') as THREE.BufferAttribute | undefined;
+    const segStart = positions.length / 3;
     const sm = mesh as unknown as THREE.SkinnedMesh;
     // 蒙皮感知：摆过姿态（握拳）后必须走 applyBoneTransform 取 posed 顶点；
     // bind pose 下 applyBoneTransform = 原始顶点，与直接拷贝一致
@@ -1112,8 +1118,15 @@ function extractBoneTriangles(
         // mesh 局部 → 模型空间
         v.applyMatrix4(mesh.matrixWorld);
         positions.push(v.x, v.y, v.z);
+        if (uvAttr) uvs.push(uvAttr.getX(vi), uvAttr.getY(vi));
+        else uvs.push(0, 0);
         bbox.expandByPoint(v);
       }
+    }
+    const segCount = positions.length / 3 - segStart;
+    if (segCount > 0) {
+      const m = mesh.material as THREE.Material | THREE.Material[] | undefined;
+      segments.push({ start: segStart, count: segCount, material: Array.isArray(m) ? (m[0] ?? null) : (m ?? null) });
     }
   }
 
@@ -1123,7 +1136,7 @@ function extractBoneTriangles(
   const parentJointModel = parentIdx !== null && parentIdx !== undefined
     ? analysis.bindPos[parentIdx].clone()
     : null;
-  return { positions, bbox, jointModel, parentJointModel, count: positions.length / 3 };
+  return { positions, uvs, segments, bbox, jointModel, parentJointModel, count: positions.length / 3 };
 }
 
 /** 收集 bone 子树（自身 + 所有后代）索引 */
@@ -1682,7 +1695,7 @@ function extractBoneGeometry(
 function prepareLimbGeometry(
   analysis: ReturnType<typeof analyzeTriangles>,
   boneIndex: number,
-): { geometry: THREE.BufferGeometry; jointN: THREE.Vector3; azimuth: number; radiusModel: number } | null {
+): { geometry: THREE.BufferGeometry; jointN: THREE.Vector3; azimuth: number; radiusModel: number; sourceMaterials: (THREE.Material | null)[] } | null {
   const subtree = collectSubtreeIndices(analysis.parentIndex, boneIndex);
   const tri = extractBoneTriangles(analysis, subtree, boneIndex);
   if (!tri) return null;
@@ -1707,8 +1720,27 @@ function prepareLimbGeometry(
   const jointN = oriented.joint.clone().sub(ocenter).multiplyScalar(oscale);
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(normPos, 3));
+  // uv 与顶点逐一对齐（竖直化/归一化只动 position，uv 不变），纹理得以透传
+  geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(tri.uvs), 2));
+  const sourceMaterials: (THREE.Material | null)[] = [];
+  for (const seg of tri.segments) {
+    geometry.addGroup(seg.start, seg.count, sourceMaterials.length);
+    sourceMaterials.push(seg.material);
+  }
   geometry.computeVertexNormals();
-  return { geometry, jointN, azimuth: oriented.azimuth, radiusModel: osphere.radius };
+  return { geometry, jointN, azimuth: oriented.azimuth, radiusModel: osphere.radius, sourceMaterials };
+}
+
+/** 源材质 → 单烘 toon（与主烘焙 applyToonMaterials 同口径：color + map 条件传参；另继承 side，
+ * 双面源模型压单面会剔掉绕向不齐的三角形，与六部件同根问题） */
+function toonFromExtractedSource(srcMat: THREE.Material | null, gradientMap: THREE.Texture): THREE.MeshToonMaterial {
+  const s = srcMat as THREE.MeshStandardMaterial | null;
+  return new THREE.MeshToonMaterial({
+    color: s && 'color' in s && s.color ? (s.color as THREE.Color).clone() : new THREE.Color(0xffffff),
+    ...(s && 'map' in s && s.map ? { map: s.map as THREE.Texture } : {}),
+    ...(s && 'side' in s && s.side !== undefined ? { side: s.side } : {}),
+    gradientMap,
+  });
 }
 
 /** 在已加载的 model 上应用手指握拳（detect + pose），返回检测结果 */
@@ -1766,13 +1798,11 @@ export async function bakeSingleBone(
     // 子树语义：选手部 bone 会带上手指（握拳才有意义），选前臂会带上手
     const prepared = prepareLimbGeometry(analysis, boneIndex);
     if (!prepared) throw new Error(`骨骼 ${boneName} 没有三角形`);
-    const { geometry, jointN, azimuth, radiusModel } = prepared;
+    const { geometry, jointN, azimuth, radiusModel, sourceMaterials } = prepared;
 
     const gradientMap = makeGradientMap(toonSteps);
-    const mesh = new THREE.Mesh(
-      geometry,
-      new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap }),
-    );
+    const toonMats = sourceMaterials.map((sm) => toonFromExtractedSource(sm, gradientMap));
+    const mesh = new THREE.Mesh(geometry, toonMats.length === 1 ? toonMats[0] : toonMats);
     mesh.frustumCulled = false;
 
     const group = new THREE.Group();
@@ -1843,7 +1873,7 @@ export async function bakeSingleBone(
     rt.dispose();
     gradientMap.dispose();
     geometry.dispose();
-    (mesh.material as THREE.Material).dispose();
+    for (const m of toonMats) m.dispose();
     return results;
   } finally {
     renderer.dispose();
@@ -1917,13 +1947,11 @@ export async function previewHandCurl(
 
     const prepared = prepareLimbGeometry(analysis, handIndex);
     if (!prepared) return null;
-    const { geometry, jointN, azimuth } = prepared;
+    const { geometry, jointN, azimuth, sourceMaterials } = prepared;
 
     const gradientMap = makeGradientMap(toonSteps);
-    const mesh = new THREE.Mesh(
-      geometry,
-      new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap }),
-    );
+    const toonMats = sourceMaterials.map((sm) => toonFromExtractedSource(sm, gradientMap));
+    const mesh = new THREE.Mesh(geometry, toonMats.length === 1 ? toonMats[0] : toonMats);
     mesh.frustumCulled = false;
     const group = new THREE.Group();
     group.add(mesh);
@@ -1971,7 +1999,7 @@ export async function previewHandCurl(
     rt.dispose();
     gradientMap.dispose();
     geometry.dispose();
-    (mesh.material as THREE.Material).dispose();
+    for (const m of toonMats) m.dispose();
     return {
       direction: direction as BakeResult['direction'],
       pixels: flipped,

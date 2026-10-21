@@ -899,10 +899,23 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               grid = alignLimbToRest(grid, orig.jointX - pOrig.jointX, orig.jointY - pOrig.jointY);
             }
           }
-          // 像素密度对齐：渲染端 1 像素 = 1 全局像素（scaleFactor 已定案禁用），
-          // 精灵尺寸全由像素数决定——重烘帧密度与原图不同，必须先按密度比重采样到同密度
-          if (orig && r.cameraHalfGlobal && orig.cameraHalf > 0) {
-            const s = r.cameraHalfGlobal / orig.cameraHalf;
+          // 像素密度对齐：精灵尺寸全由像素数决定，重烘帧必须先重采样到原图密度。
+          // 新帧密度 = r.width / (2·cameraHalfGlobal)（px/归一化单位）。
+          // 六部件原图在 split 时已归一化到全局像素空间，其处理后密度
+          // = worldToPixels（世界→原帧像素密度）× orig.cameraHalf（原帧→处理后缩放），
+          // 旧公式 s = cameraHalfGlobal / orig.cameraHalf 把已归一化的密度又除了一遍
+          // orig.cameraHalf（手臂部件 ≈0.47），结果放大 ≈2.1 倍——拳头偏大的根因。
+          // 双遍原图 cameraHalf 恒为 1 且未经该归一化，沿用旧比值，行为不变。
+          if (orig && r.cameraHalfGlobal) {
+            let s: number;
+            if (orig.globalCameraHalf !== undefined) {
+              const wMain = pb.worldToPixels && orig.cameraHalf > 0
+                ? pb.worldToPixels * 2 * orig.cameraHalf
+                : r.width;
+              s = (r.cameraHalfGlobal * wMain) / r.width;
+            } else {
+              s = orig.cameraHalf > 0 ? r.cameraHalfGlobal / orig.cameraHalf : 1;
+            }
             if (Math.abs(s - 1) > 0.01) {
               grid = scaleGridNearest(grid, s);
               jx *= s;
