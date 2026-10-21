@@ -1216,14 +1216,16 @@ export interface DiscRenderInstruction {
   diameter: number;
   fillColor: string;
   outlineColor: string;
-  zIndex: number;                // min(parent Z, child Z) - 50: occluded by sprites on both sides
+  // 无 zIndex：关节盘不参与深度排序——执行端在全部精灵之前统一先画，
+  // 始终被遮挡，只透过开口补缝（规格）
 }
 
 /** Complete render plan for a frame */
 export interface RenderPlan {
   nodeInstructions: NodeRenderInstruction[];
   discInstructions: DiscRenderInstruction[];
-  sortedInstructions: (NodeRenderInstruction | DiscRenderInstruction)[];
+  /** 节点指令按 zIndex（投影深度）排序后的绘制序；关节盘不在此列（单独先行绘制） */
+  sortedInstructions: NodeRenderInstruction[];
   backgroundColor?: string;
   previewQuality?: 'low' | 'medium' | 'high';
   effectTracks?: any[];

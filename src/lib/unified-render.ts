@@ -952,9 +952,6 @@ export function resolveNodeSpriteId(
 
 // ---- Disc Generation ----
 
-/** 关节盘 zIndex：无视深度排序、始终被遮挡（纯补缝垫片），固定极小值永远最先绘制 */
-const DISC_Z_BEHIND_ALL = -1e9;
-
 /**
  * Step 4 (partial): Generate disc render instructions for nodes
  * with `generated` configuration.
@@ -1056,9 +1053,8 @@ function generateDiscInstructions(
     const discWorldX = (pxToSub(canvasWidth / 2) + (discProj.canvasX as SubPixel)) as SubPixel;
     const discWorldY = (pxToSub(canvasHeight / 2) + (discProj.canvasY as SubPixel)) as SubPixel;
 
-    // 深度（规格）：关节盘无视深度排序、始终被遮挡——纯补缝垫片，只在没有
-    // 任何精灵覆盖的开口处露出来。zIndex 固定极小值永远最先绘制；盘间同值，
-    // 稳定排序保持生成顺序。
+    // 关节盘无 zIndex、不参与深度排序：执行端在全部精灵之前统一先画，
+    // 始终被遮挡，只在没有精灵覆盖的开口处露出来补缝（规格）。
 
     // 关节盘颜色约定：plug.discColor 自定义 > 子节点精灵开口处众数颜色 > 旧 fallback。
     // 开口中心 = 精灵 pivot（sprite.plug）+ plug 本地坐标（attachment.plug）。
@@ -1083,7 +1079,6 @@ function generateDiscInstructions(
       diameter,
       fillColor: typeof fillColor === 'string' ? fillColor : '#808080',
       outlineColor,
-      zIndex: DISC_Z_BEHIND_ALL,
     });
   }
 
@@ -1465,11 +1460,9 @@ export function generateRenderPlan(
   // Step 5: Generate disc instructions
   const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots);
 
-  // Step 6: Sort all instructions by Z
-  const allInstructions: (NodeRenderInstruction | DiscRenderInstruction)[] = [
-    ...nodeInstructions,
-    ...discInstructions,
-  ];
+  // Step 6: 节点指令按 zIndex（投影深度）排序；关节盘不进排序流，
+  // 由执行端从 discInstructions 单独先行绘制（无视深度、始终被遮挡）
+  const allInstructions: NodeRenderInstruction[] = [...nodeInstructions];
   allInstructions.sort((a, b) => a.zIndex - b.zIndex);
 
   return {
@@ -1513,21 +1506,16 @@ export function executeRenderPlan(
     const ok = renderCharacterWithBlueprint(ctx, plan, canvasWidth, canvasHeight);
     if (!ok) {
       // Fallback: legacy per-node draw (blueprint invalid — don't lose the frame)
+      // 关节盘先行（不参与深度排序、始终被遮挡），节点随后按深度序绘制
+      for (const disc of plan.discInstructions) renderDisc(ctx, disc);
       for (const instruction of plan.sortedInstructions) {
-        if ('nodeId' in instruction) {
-          renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
-        } else {
-          renderDisc(ctx, instruction);
-        }
+        renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
       }
     }
   } else {
+    for (const disc of plan.discInstructions) renderDisc(ctx, disc);
     for (const instruction of plan.sortedInstructions) {
-      if ('nodeId' in instruction) {
-        renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
-      } else {
-        renderDisc(ctx, instruction);
-      }
+      renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
     }
   }
 
@@ -2165,12 +2153,10 @@ function renderCharacterWithBlueprint(
   off.width = canvasWidth;
   off.height = canvasHeight;
   const offCtx = off.getContext('2d')!;
+  // 关节盘先行（不参与深度排序、始终被遮挡），节点随后按深度序绘制
+  for (const disc of plan.discInstructions) renderDisc(offCtx, disc);
   for (const instruction of plan.sortedInstructions) {
-    if ('nodeId' in instruction) {
-      renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
-    } else {
-      renderDisc(offCtx, instruction);
-    }
+    renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
   }
 
   // Step 2: read back → character_source pixels
