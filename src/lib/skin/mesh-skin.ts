@@ -151,3 +151,60 @@ function getPixel(
   if (x < 0 || x >= width || y < 0 || y >= height) return null;
   return pixels[y][x] ?? null;
 }
+
+/**
+ * 蒙皮快照弯曲：对「父+子合并精灵」做关节弯曲变形。
+ *
+ * 合并精灵冻结的是快照姿态；当前子相对父的角变化 deltaAngle 时：
+ * - 沿子肢体轴向（axis）投影 t ≤ −radius 的像素（父侧）不动
+ * - t ≥ +radius 的像素（子侧）绕关节刚性旋转 deltaAngle
+ * - 带内按 curve 平滑过渡（每像素按其权重 w 旋转 deltaAngle·w）
+ * 逆映射采样（与 applyMeshSkin 同约定）：输出像素 p 的采样点为
+ * J + R(−delta·w)·(p − J)；采样透明时保留原像素（防撕裂，与 mesh-skin 一致）。
+ *
+ * @param pixels - 合并精灵像素（不修改）
+ * @param jointX/jointY - 关节在精灵局部坐标（像素）
+ * @param axisX/axisY - 子肢体轴向单位向量（精灵局部，y-down）
+ * @param deltaAngle - 相对快照的角变化（度）
+ * @param radius - 弯曲带半径（像素，沿轴向 ±radius）
+ */
+export function applySnapshotBend(
+  pixels: PixelGrid,
+  jointX: number,
+  jointY: number,
+  axisX: number,
+  axisY: number,
+  deltaAngle: number,
+  radius: number,
+  curve: SkinCurve = 'smoothstep',
+): PixelGrid {
+  const height = pixels.length;
+  const width = height > 0 ? pixels[0].length : 0;
+  if (width === 0 || height === 0 || radius <= 0) return pixels;
+  const angleRad = (deltaAngle * Math.PI) / 180;
+  if (Math.abs(angleRad) < 1e-6) return pixels;
+
+  const result: PixelGrid = pixels.map((row) => [...row]);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const dx = x - jointX;
+      const dy = y - jointY;
+      const t = dx * axisX + dy * axisY;
+      if (t <= -radius) continue; // 父侧：不动
+      let w = (t + radius) / (2 * radius);
+      if (w > 1) w = 1;
+      if (curve === 'smoothstep') w = w * w * (3 - 2 * w);
+      if (w <= 0) continue;
+      const back = -angleRad * w;
+      const cosB = Math.cos(back);
+      const sinB = Math.sin(back);
+      const sx = jointX + dx * cosB - dy * sinB;
+      const sy = jointY + dx * sinB + dy * cosB;
+      const sampled = bilinearSample(pixels, sx, sy, width, height);
+      if (!isTransparent(sampled)) {
+        result[y][x] = sampled;
+      }
+    }
+  }
+  return result;
+}

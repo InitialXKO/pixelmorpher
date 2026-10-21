@@ -14,7 +14,7 @@
 // ============================================================
 
 import type {
-  Node, Character, NodeTransform, Socket, DirectionIndex,
+  Node, Character, NodeTransform, Socket, DirectionIndex, SkinningSnapshot,
   SubPixel, Point, Sprite, RotationStrategy, CostumePiece,
   NodeRenderInstruction, DiscRenderInstruction, RenderPlan,
   KeyframeTrack, KeyframePoint, InterpolationMode,
@@ -869,11 +869,43 @@ function solveCubicBezierX(cp1x: number, cp2x: number, t: number): number {
  * 关节盘生成判定（唯一口径）：plug 开关 attachment.autoJointDisc 未关（默认开）
  * 且节点经 socket 连接到父插口。node.generated 是旧数据，不再作门——仅其
  * crossSectionId 在直径回退时被采用（见 generateDiscInstructions）。
+ * 蒙皮快照生效的连接另行抑制（见 generateDiscInstructions 的认领判定）。
  */
 function nodeHasJointDisc(node: Node): boolean {
   if (node.attachment?.type !== 'socket' || !node.attachment.parentSocketId) return false;
   if (node.attachment.autoJointDisc === false) return false;
   return true;
+}
+
+/**
+ * 蒙皮快照认领（唯一口径，渲染计划与关节盘抑制共用）：
+ * 返回当前朝向真正生效的快照（子节点 id → 快照 + 父节点 id）。
+ * 规则：一父只被一个子认领（首个）；被认领为父的节点自身快照停用（防双绘）。
+ */
+function computeActiveSnapshots(
+  character: Character,
+  direction: DirectionIndex,
+): Map<string, { snap: SkinningSnapshot; parentId: string }> {
+  const candidates = new Map<string, { snap: SkinningSnapshot; parentId: string }>();
+  for (const n of Object.values(character.nodes)) {
+    const att = n.attachment;
+    if (!att || att.type !== 'socket' || !att.parentSocketId) continue;
+    if (att.allowSkinning !== true || !att.skinningSnapshot) continue;
+    if (att.skinningSnapshot.direction !== direction) continue;
+    if (!n.parentId) continue;
+    candidates.set(n.id, { snap: att.skinningSnapshot, parentId: n.parentId });
+  }
+  const claimedBy = new Map<string, string>();
+  for (const [childId, c] of candidates) {
+    if (!claimedBy.has(c.parentId)) claimedBy.set(c.parentId, childId);
+  }
+  const active = new Map<string, { snap: SkinningSnapshot; parentId: string }>();
+  for (const [childId, c] of candidates) {
+    if (claimedBy.get(c.parentId) !== childId) continue; // 认领落败
+    if (claimedBy.has(childId)) continue; // 自身被子认领 → 停用（防双绘）
+    active.set(childId, c);
+  }
+  return active;
 }
 
 /**
@@ -1026,11 +1058,13 @@ function generateDiscInstructions(
   canvasWidth: number,
   canvasHeight: number,
   currentDirection: DirectionIndex,
+  activeSnapshots: Map<string, { snap: SkinningSnapshot; parentId: string }>,
 ): DiscRenderInstruction[] {
   const discs: DiscRenderInstruction[] = [];
 
   for (const [nodeId, node] of Object.entries(character.nodes)) {
     if (!nodeHasJointDisc(node)) continue;
+    if (activeSnapshots.has(nodeId)) continue; // 蒙皮快照生效：改走合并精灵弯曲，不出盘
     // 无精灵可遮盖（占位/结构节点）不出盘：node.sprite 现行管线不赋值，
     // 以 slot 精灵条目为准（烘焙占位节点的 slot.sprites 为空）
     if (!node.sprite && Object.keys(node.slot?.sprites ?? {}).length === 0) continue;
@@ -1323,9 +1357,62 @@ export function generateRenderPlan(
     }
   }
 
+  // 蒙皮快照认领（与关节盘抑制同一口径）：生效子节点的父精灵被合并图替代。
+  // 合并精灵缺失/子节点不可见的认领不成立（否则父被跳过又无人接）。
+  const activeSnapshots = computeActiveSnapshots(character, currentDirection as DirectionIndex);
+  for (const [childId, entry] of [...activeSnapshots]) {
+    const cn = character.nodes[childId];
+    if (!cn || !cn.visible || !spriteTable[entry.snap.spriteId]) activeSnapshots.delete(childId);
+  }
+  const claimedParents = new Set<string>([...activeSnapshots.values()].map((a) => a.parentId));
+
   for (const [nodeId, worldTf] of worldTransforms) {
     const node = character.nodes[nodeId];
     if (!node || !node.visible) continue;
+    if (claimedParents.has(nodeId)) continue; // 精灵已并入子节点的蒙皮快照
+
+    // 蒙皮快照：以合并精灵代替本节点精灵（父精灵已在上行跳过），
+    // 位置/枢轴沿用本节点口径，转角 = 父当前世界角 − 快照时父世界角，
+    // 弯曲量 = 当前相对角 − 快照基础角（renderNodeSprite 里对合并像素弯曲）
+    const snapEntry = activeSnapshots.get(nodeId);
+    if (snapEntry) {
+      const parentWorldTf = worldTransforms.get(snapEntry.parentId);
+      const mergedSprite = spriteTable[snapEntry.snap.spriteId];
+      if (parentWorldTf && mergedSprite) {
+        const projSnap = projectToView(worldTf.worldX, worldTf.worldY, worldTf.worldZ, currentDirection);
+        let deltaAngle = (worldTf.worldAngle - parentWorldTf.worldAngle) - snapEntry.snap.baseAngle;
+        while (deltaAngle > 180) deltaAngle -= 360;
+        while (deltaAngle < -180) deltaAngle += 360;
+        nodeInstructions.push({
+          nodeId,
+          sprite: mergedSprite,
+          worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (projSnap.canvasX as SubPixel)) as SubPixel,
+          worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (projSnap.canvasY as SubPixel)) as SubPixel,
+          angle: parentWorldTf.worldAngle - snapEntry.snap.parentBaseAngle,
+          stretch: 1,
+          variantIndex: worldTf.variantIndex,
+          rotationStrategy,
+          mirror: false,
+          zIndex: projSnap.depth,
+          drawLayer: node.drawLayer,
+          modifiers: [],
+          frame,
+          frameRate,
+          snapshotSkin: {
+            jointX: mergedSprite.plug ? subToPx(mergedSprite.plug.x) : mergedSprite.width / 2,
+            jointY: mergedSprite.plug ? subToPx(mergedSprite.plug.y) : mergedSprite.height / 2,
+            axisX: snapEntry.snap.axisX,
+            axisY: snapEntry.snap.axisY,
+            deltaAngle,
+            radius: snapEntry.snap.radius,
+            curve: snapEntry.snap.curve,
+          },
+          blueprint: null,
+        });
+        continue;
+      }
+      // 合并精灵缺失 → 落回普通渲染
+    }
 
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
     // 方向混合时：先按 dirA 解析主精灵
@@ -1460,7 +1547,7 @@ export function generateRenderPlan(
   }
 
   // Step 5: Generate disc instructions
-  const discInstructions = generateDiscInstructions(character, worldTransforms, discZ, canvasWidth, canvasHeight, currentDirection);
+  const discInstructions = generateDiscInstructions(character, worldTransforms, discZ, canvasWidth, canvasHeight, currentDirection, activeSnapshots);
 
   // Step 6: Sort all instructions by Z
   const allInstructions: (NodeRenderInstruction | DiscRenderInstruction)[] = [
@@ -1795,6 +1882,24 @@ function renderNodeSprite(
       meshSkin.jointAngle,
       meshSkin.radius,
       meshSkin.curve,
+    );
+  }
+
+  // ---- 蒙皮快照弯曲：合并精灵在像素定稿后按相对角变化弯曲 ----
+  const snapshotSkin = (instruction as any).snapshotSkin as
+    | { jointX: number; jointY: number; axisX: number; axisY: number; deltaAngle: number; radius: number; curve: 'linear' | 'smoothstep' }
+    | undefined;
+  if (snapshotSkin && Math.abs(snapshotSkin.deltaAngle) > 0.01 && snapshotSkin.radius > 0) {
+    const { applySnapshotBend } = require('./skin/mesh-skin') as typeof import('./skin/mesh-skin');
+    effectivePixels = applySnapshotBend(
+      effectivePixels,
+      snapshotSkin.jointX,
+      snapshotSkin.jointY,
+      snapshotSkin.axisX,
+      snapshotSkin.axisY,
+      snapshotSkin.deltaAngle,
+      snapshotSkin.radius,
+      snapshotSkin.curve,
     );
   }
 
