@@ -709,7 +709,7 @@ export async function bakeSixParts(
 
     // ---- 渲染 ----
     const gradientMap = makeGradientMap(toonSteps);
-    const rt = new THREE.WebGLRenderTarget(size, size, { samples: 0, depthBuffer: true });
+    const rt = new THREE.WebGLRenderTarget(size, size, { samples: 0, depthBuffer: true, stencilBuffer: true });
     const readBuffer = new Uint8Array(size * size * 4);
     const readFlipped = (): Uint8ClampedArray => {
       renderer.readRenderTargetPixels(rt, 0, 0, size, size, readBuffer);
@@ -740,92 +740,44 @@ export async function bakeSixParts(
     }
     let done = 0;
 
-    // —— 破洞填充（最终方案）：只用所渲染部件的外轮廓剔除其他部件，本部件强制遮挡，单面渲染。
-    // 「外轮廓」落实为深度跨度：每方向先把本部件渲两遍深度图——正面深度（外表面）与背面深度
-    // （内壁）；其他部件（候选）同遍提交，片元深度落在 [正面, 背面] 跨度内才保留：跨度之外
-    // （轮廓外、部件前方、内壁之后）一律剔除。破洞处正面缺失、跨度从相机延伸到内壁，直接与
-    // 洞接通的部件（堵口者）的表面正在跨度内——被保留；只是路过洞口前方的部件在跨度之外
-    // （比正面还靠前或不在洞口深度内）被剔。最后本部件正面以 depthTest 关强制覆写。
-    // 候选只提交一遍，成本与洞数无关。
-    const SPAN_FAR = 20; // 与部件相机 far 一致
-    const spanRTParams = {
-      // 需要深度附件：预渲自身要靠深度取最近的正/背面片元
-      depthBuffer: true, stencilBuffer: false, type: THREE.FloatType,
-      minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
-    } as const;
-    const spanFrontRT = new THREE.WebGLRenderTarget(size, size, spanRTParams);
-    const spanBackRT = new THREE.WebGLRenderTarget(size, size, spanRTParams);
-    const makeSpanDepthMat = (side: THREE.Side) => new THREE.ShaderMaterial({
-      side,
-      uniforms: { uSpanFar: { value: SPAN_FAR } },
-      vertexShader: `
-        varying float vZ;
-        void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vZ = -mv.z; gl_Position = projectionMatrix * mv; }
-      `,
-      fragmentShader: `
-        varying float vZ;
-        uniform float uSpanFar;
-        void main() { gl_FragColor = vec4(vZ / uSpanFar, 0.0, 0.0, 1.0); }
-      `,
-    });
-    const spanFrontMat = makeSpanDepthMat(THREE.FrontSide);
-    const spanBackMat = makeSpanDepthMat(THREE.BackSide);
-    /** 给候选部件的 toon 材质注入跨度门控：片元查本部件正/背面深度图，落在跨度外丢弃 */
-    const patchSpan = (mat: THREE.Material) => {
-      const m = mat as THREE.MeshToonMaterial;
-      m.onBeforeCompile = (shader) => {
-        if (!shader.vertexShader.includes('#include <project_vertex>') || !shader.fragmentShader.includes('#include <clipping_planes_fragment>')) {
-          throw new Error('跨度门控注入锚点缺失（three 着色器结构变化）');
+    // —— 破洞填充（最终方案）：
+    // 1) 只用所渲染部件的外轮廓剔除其他部件：本部件双面渲进 stencil 得到填充轮廓（二维区域）；
+    // 2) 候选只取「通过骨骼与本部件接通」的部件在接通骨骼上的三角形——洞是拆掉该部件造成的，
+    //    接通关系看骨骼父子（parentIndex），不看切口几何；多个部件遮挡时由候选集本身决定取舍；
+    // 3) 本部件正面最后画、关深度测试，强制遮挡未剔除部分（不比深度）；单面渲染；
+    // 4) 遮挡部件进 ID 遍，ID 改成本部件的：写它所填洞在本部件一侧的骨骼（接通骨骼对里本部件的那个）。
+    // 候选按接通骨骼对构建、每对只提交一遍，成本与洞数无关。
+    /** 接通骨骼对在对方部件一侧的候选视图：对方部件中主 bone 恰为接通骨骼 bQ 的三角形 */
+    const buildPairCandidateViews = (qPart: PartName, bQ: number): BuiltPartView[] => {
+      const views: BuiltPartView[] = [];
+      for (const bm of bakedMeshes) {
+        const pt = groupTrianglesByPart(bm, boneToPart).get(qPart)!;
+        const index: number[] = [];
+        for (let t = 0; t < pt.tris.length; t++) {
+          if (pt.triBone[t] !== bQ) continue;
+          index.push(pt.tris[t][0], pt.tris[t][1], pt.tris[t][2]);
         }
-        shader.uniforms.uSpanFront = { value: spanFrontRT.texture };
-        shader.uniforms.uSpanBack = { value: spanBackRT.texture };
-        shader.uniforms.uSpanFar = { value: SPAN_FAR };
-        shader.uniforms.uSpanRes = { value: size };
-        shader.vertexShader = 'varying float vSpanViewZ;\n' + shader.vertexShader.replace(
-          '#include <project_vertex>',
-          '#include <project_vertex>\n  vSpanViewZ = -mvPosition.z;',
-        );
-        shader.fragmentShader = ('varying float vSpanViewZ;\nuniform sampler2D uSpanFront;\nuniform sampler2D uSpanBack;\nuniform float uSpanFar;\nuniform float uSpanRes;\n' + shader.fragmentShader).replace(
-          '#include <clipping_planes_fragment>',
-          `#include <clipping_planes_fragment>
-          {
-            vec2 spanUv = gl_FragCoord.xy / uSpanRes;
-            float spanFr = texture2D(uSpanFront, spanUv).r;
-            float spanBr = texture2D(uSpanBack, spanUv).r;
-            bool spanFAbs = spanFr > 1.0;
-            bool spanBAbs = spanBr > 1.0;
-            if (spanFAbs && spanBAbs) discard;
-            float spanEps = uSpanFar * 0.0005;
-            float spanLo = spanFAbs ? 0.0 : spanFr * uSpanFar - spanEps;
-            float spanHi = spanBAbs ? uSpanFar : spanBr * uSpanFar + spanEps;
-            if (vSpanViewZ < spanLo || vSpanViewZ > spanHi) discard;
-          }`,
-        );
-      };
-      m.customProgramCacheKey = () => 'span-toon-v1';
-    };
-    // 候选组：每个部件一份（其全部索引视图 + 跨度门控 toon），整场烘焙共用，按方向换位
-    const candGroups = new Map<PartName, THREE.Group>();
-    const candMats: THREE.Material[] = [];
-    const candGeos: THREE.BufferGeometry[] = [];
-    for (const [qname, qp] of parts) {
-      const outer = new THREE.Group();
-      const inner = new THREE.Group();
-      for (const view of qp.views) {
-        const mat = makeToonFromSource(view.source.material, gradientMap);
-        patchSpan(mat);
-        candMats.push(mat);
-        const geo = makeViewGeometry(view);
-        candGeos.push(geo);
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.frustumCulled = false;
-        inner.add(mesh);
+        if (index.length > 0) views.push({ source: bm, index });
       }
-      inner.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
-      inner.scale.setScalar(scale);
-      outer.add(inner);
-      candGroups.set(qname, outer);
-    }
+      return views;
+    };
+    /** 遮挡者在 ID 遍的材质：整块输出本部件骨骼的 ID 色（与 ID 帧同一 RGB 掩码格式） */
+    const makeCandIdMaterial = (rgb: [number, number, number]): THREE.ShaderMaterial => {
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { uColor: { value: new THREE.Vector3(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255) } },
+        vertexShader: `
+          void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+        `,
+        fragmentShader: `
+          uniform vec3 uColor;
+          void main() { gl_FragColor = vec4(uColor, 1.0); }
+        `,
+      });
+      mat.stencilWrite = true;
+      mat.stencilFunc = THREE.EqualStencilFunc;
+      mat.stencilRef = 1;
+      return mat;
+    };
 
     // 部件内局部 ID → 全局 bone：用 partBones 顺序
     for (const [pname, bp] of parts) {
@@ -837,10 +789,7 @@ export async function bakeSixParts(
       const inner = new THREE.Group();
       for (const view of bp.views) {
         const toonMat = makeToonFromSource(view.source.material, gradientMap);
-        // 强制遮挡：本部件在颜色遍最后画、无条件覆写其他部件留下的像素（不比深度）
-        toonMat.depthTest = false;
         const mesh = new THREE.Mesh(makeViewGeometry(view), toonMat);
-        mesh.renderOrder = 10;
         mesh.frustumCulled = false;
         inner.add(mesh);
       }
@@ -927,9 +876,6 @@ export async function bakeSixParts(
         idTex.needsUpdate = true;
         const idMat = new THREE.ShaderMaterial({
           glslVersion: THREE.GLSL3,
-          // ID 遍按「部件是个实体」出图：正面优先（深度取最近），正面缺失处（破洞）取其后
-          // 本部件内壁的 bone——填入像素的 ID 因此归所渲染部件，不需要遮挡者参与 ID 遍
-          side: THREE.DoubleSide,
           uniforms: { uIdTex: { value: idTex } },
           vertexShader: `
             in float aTriId;
@@ -955,6 +901,74 @@ export async function bakeSixParts(
       }
       idInner.position.copy(inner.position);
       idInner.scale.setScalar(scale);
+
+      // 外轮廓标记组：本部件双面渲进 stencil（不出颜色/深度）——候选的二维剔除区域
+      const markMat = new THREE.MeshBasicMaterial({
+        colorWrite: false, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
+        stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc, stencilRef: 1,
+        stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp, stencilZPass: THREE.ReplaceStencilOp,
+      });
+      const markGroup = new THREE.Group();
+      {
+        const mi = new THREE.Group();
+        for (const view of bp.views) {
+          const mesh = new THREE.Mesh(makeViewGeometry(view), markMat);
+          mesh.renderOrder = -10;
+          mesh.frustumCulled = false;
+          mi.add(mesh);
+        }
+        mi.position.copy(inner.position);
+        mi.scale.setScalar(scale);
+        markGroup.add(mi);
+      }
+      // 候选组：与本部件通过骨骼接通的每个部件一对（颜色组 + ID 组），变换与 partGroup 一致
+      interface CandSet { color: THREE.Group; id: THREE.Group; mats: THREE.Material[] }
+      const candSets: CandSet[] = [];
+      for (let bi = 0; bi < boneToPart.length; bi++) {
+        const pi = parentIndex[bi];
+        if (pi == null) continue;
+        const pParent = boneToPart[pi];
+        const pChild = boneToPart[bi];
+        if (!pParent || !pChild || pParent === pChild) continue;
+        let bP = -1;
+        let bQ = -1;
+        let q: PartName | null = null;
+        if (pParent === pname) { bP = pi; bQ = bi; q = pChild; }
+        else if (pChild === pname) { bP = bi; bQ = pi; q = pParent; }
+        if (!q || bP < 0) continue;
+        const views = buildPairCandidateViews(q, bQ);
+        if (views.length === 0) continue;
+        const li = localIndex.get(bP);
+        if (li === undefined) continue;
+        const mats: THREE.Material[] = [];
+        const candIdMat = makeCandIdMaterial(encodeBoneId(li) as [number, number, number]);
+        mats.push(candIdMat);
+        const colorInner = new THREE.Group();
+        const idInnerG = new THREE.Group();
+        for (const view of views) {
+          const geo = makeViewGeometry(view);
+          const tmat = makeToonFromSource(view.source.material, gradientMap);
+          tmat.stencilWrite = true;
+          tmat.stencilFunc = THREE.EqualStencilFunc;
+          tmat.stencilRef = 1;
+          mats.push(tmat);
+          const cm = new THREE.Mesh(geo, tmat);
+          cm.frustumCulled = false;
+          colorInner.add(cm);
+          const im = new THREE.Mesh(geo, candIdMat);
+          im.frustumCulled = false;
+          idInnerG.add(im);
+        }
+        const colorG = new THREE.Group();
+        colorInner.position.copy(inner.position);
+        colorInner.scale.setScalar(scale);
+        colorG.add(colorInner);
+        const idG = new THREE.Group();
+        idInnerG.position.copy(inner.position);
+        idInnerG.scale.setScalar(scale);
+        idG.add(idInnerG);
+        candSets.push({ color: colorG, id: idG, mats });
+      }
 
       // 部件相机：紧贴部件 bbox（归一化空间）
       const pbox = new THREE.Box3();
@@ -987,12 +1001,15 @@ export async function bakeSixParts(
       // 关节投影（此部件的 bones，每方向）
       const projV = new THREE.Vector3();
 
-      const spanSentinel = new THREE.Color(2, 0, 0); // 跨度深度图的「无表面」哨兵（>1）
       for (let d = 0; d < 8; d++) {
         const ang = (d / 8) * Math.PI * 2;
         partGroup.rotation.y = ang;
         partGroup.updateMatrixWorld(true);
-        for (const g of candGroups.values()) g.rotation.y = ang;
+        markGroup.rotation.y = ang;
+        for (const cs of candSets) {
+          cs.color.rotation.y = ang;
+          cs.id.rotation.y = ang;
+        }
 
         // 关节像素（用部件相机），按规范方向索引
         for (const gi of bp.partBones) {
@@ -1003,42 +1020,45 @@ export async function bakeSixParts(
           };
         }
 
-        // 跨度预渲：本部件正/背面深度图（场景里只放本部件）——候选门控与外轮廓剔除都据此
+        // 颜色一遍，第一段：外轮廓标记 + 候选（接通部件在接通骨骼上的三角形，外轮廓内）
         scene.remove(idInner);
-        for (const g of candGroups.values()) scene.remove(g);
-        if (!scene.children.includes(partGroup)) scene.add(partGroup);
-        renderer.setClearColor(spanSentinel, 1);
-        scene.overrideMaterial = spanFrontMat;
-        renderer.setRenderTarget(spanFrontRT);
-        renderer.render(scene, camera);
-        scene.overrideMaterial = spanBackMat;
-        renderer.setRenderTarget(spanBackRT);
-        renderer.render(scene, camera);
-        scene.overrideMaterial = null;
-        renderer.setClearColor(0x000000, 0);
-
-        // 颜色一遍：候选（其他部件，跨度门控）先画，本部件正面最后强制覆写
+        scene.remove(partGroup);
+        scene.add(markGroup);
+        for (const cs of candSets) scene.add(cs.color);
         renderer.setRenderTarget(rt);
         renderer.clear(true, true, true);
-        for (const [qname, g] of candGroups) {
-          if (qname !== pname) scene.add(g);
-        }
         renderer.render(scene, camera);
+        for (const cs of candSets) scene.remove(cs.color);
+        scene.remove(markGroup);
+        // 第二段：只清深度，本部件正面在全新深度上画——对候选是无条件覆写（强制遮挡），
+        // 本部件内部仍按深度自洽
+        scene.add(partGroup);
+        renderer.clear(false, true, false);
+        renderer.autoClear = false;
+        renderer.render(scene, camera);
+        renderer.autoClear = true;
         const colorPixels = readFlipped();
         onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° 颜色`);
         await new Promise((r) => setTimeout(r, 0));
-        for (const g of candGroups.values()) scene.remove(g);
 
-        // ID 一遍：单节点部件跳过。只渲本部件（双面、深度取最近表面）：正面在处取正面
-        // bone，正面缺失的破洞处取其后内壁的 bone——填入像素的 ID 归所渲染部件
+        // ID 一遍：单节点部件跳过。结构同颜色遍：候选先写「本部件骨骼」的 ID（外轮廓
+        // 标记在 ID 遍重写 stencil），再清深度由本部件自己的 ID 覆写其表面
         let idPixels: Uint8ClampedArray | undefined;
         if (partNeedsId.get(pname)) {
           scene.remove(partGroup);
+          scene.add(markGroup);
+          for (const cs of candSets) scene.add(cs.id);
+          renderer.clear(true, true, true);
+          renderer.render(scene, camera);
+          for (const cs of candSets) scene.remove(cs.id);
+          scene.remove(markGroup);
           scene.add(idInner);
           idInner.rotation.y = ang;
           idInner.updateMatrixWorld(true);
-          renderer.clear(true, true, true);
+          renderer.clear(false, true, false);
+          renderer.autoClear = false;
           renderer.render(scene, camera);
+          renderer.autoClear = true;
           idPixels = readFlipped();
           onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° ID`);
           await new Promise((r) => setTimeout(r, 0));
@@ -1061,14 +1081,9 @@ export async function bakeSixParts(
         mat.dispose();
         m.geometry.dispose();
       });
+      markMat.dispose();
+      for (const cs of candSets) for (const m of cs.mats) m.dispose();
     }
-
-    spanFrontRT.dispose();
-    spanBackRT.dispose();
-    spanFrontMat.dispose();
-    spanBackMat.dispose();
-    for (const m of candMats) m.dispose();
-    for (const g of candGeos) g.dispose();
 
     rt.dispose();
     gradientMap.dispose();
