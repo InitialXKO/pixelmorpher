@@ -886,6 +886,12 @@ export async function bakeSixParts(
       const localIndex = new Map<number, number>();
       bp.partBones.forEach((gi, li) => localIndex.set(gi, li));
       const idInner = new THREE.Group();
+      // 旋转必须挂在父组上（与颜色遍 partGroup>inner 同构：R·(T+S·p)）。
+      // 若 idInner 单对象同时带 position/rotation/scale，three 组合为
+      // T·R·S，与颜色遍差 (R-I)·T——旋转方向上 ID 帧整体平移、与颜色帧
+      // 错位（90° 时达十余像素，拆分按颜色 alpha 跳过把整片像素刷掉）。
+      const idPartGroup = new THREE.Group();
+      idPartGroup.add(idInner);
       for (const view of bp.views) {
         const srcPos = view.source.geometry.getAttribute('position') as THREE.BufferAttribute;
         const triCount = Math.floor(view.index.length / 3);
@@ -1151,7 +1157,7 @@ export async function bakeSixParts(
         }
 
         // 外轮廓掩码：本部件双面投影渲成白掩码读回，洪泛填充成轮廓纹理
-        scene.remove(idInner);
+        scene.remove(idPartGroup);
         scene.remove(partGroup);
         scene.add(markGroup);
         renderer.setRenderTarget(rt);
@@ -1202,9 +1208,9 @@ export async function bakeSixParts(
           renderer.clear(true, true, true);
           renderer.render(scene, camera);
           for (const cs of candSets) scene.remove(cs.id);
-          scene.add(idInner);
-          idInner.rotation.y = ang;
-          idInner.updateMatrixWorld(true);
+          scene.add(idPartGroup);
+          idPartGroup.rotation.y = ang;
+          idPartGroup.updateMatrixWorld(true);
           renderer.clear(false, true, false);
           renderer.autoClear = false;
           renderer.render(scene, camera);
