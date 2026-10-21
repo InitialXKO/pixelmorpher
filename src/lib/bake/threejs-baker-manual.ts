@@ -630,3 +630,35 @@ export async function bakeManualParts(
     try { renderer.forceContextLoss(); } catch { /* noop */ }
   }
 }
+
+// ---- 点选（乙案）纯助手：网格 ID 编解码 + 三视图取景 ----
+
+/** 网格序号 → ID 色（RGB 三字节，值 = meshIndex + 1；0 保留为背景/未命中） */
+export function encodeMeshIdColor(meshIndex: number): [number, number, number] {
+  const v = meshIndex + 1;
+  return [(v & 0xff) / 255, ((v >> 8) & 0xff) / 255, ((v >> 16) & 0xff) / 255];
+}
+
+/** ID 图像素字节 → 网格序号；背景（0）返回 null */
+export function decodeMeshId(r: number, g: number, b: number): number | null {
+  const v = r | (g << 8) | (b << 16);
+  return v > 0 ? v - 1 : null;
+}
+
+/** 三视图/3D 预览取景：与 prepareManualParts 同口径（全模型包围盒中心 + 包围球半径） */
+export function computeManualFraming(
+  statics: { positions: Float32Array }[],
+): { center: { x: number; y: number; z: number }; radius: number } {
+  const box = new THREE.Box3();
+  const tv = new THREE.Vector3();
+  for (const s of statics) {
+    for (let i = 0; i < s.positions.length; i += 3) {
+      tv.set(s.positions[i], s.positions[i + 1], s.positions[i + 2]);
+      box.expandByPoint(tv);
+    }
+  }
+  if (box.isEmpty()) return { center: { x: 0, y: 0, z: 0 }, radius: 1 };
+  const c = box.getCenter(new THREE.Vector3());
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  return { center: { x: c.x, y: c.y, z: c.z }, radius: Math.max(1e-6, sphere.radius) };
+}

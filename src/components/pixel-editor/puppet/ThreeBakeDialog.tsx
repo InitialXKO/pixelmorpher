@@ -59,6 +59,7 @@ import { pxToSub } from '@/lib/unified-types';
 import { useProjectStore } from '@/lib/store';
 import { Vec3Field } from '../shared/Vec3Field';
 import BonePicker3D from './BonePicker3D';
+import ManualPickPanel from './ManualPickPanel';
 import {
   bakeSixParts,
   ALL_PARTS,
@@ -1691,6 +1692,15 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                     </div>
                   );
                 })()}
+                <ManualPickPanel
+                  key={fileName ?? url}
+                  resolveInput={resolveInput}
+                  pmxTextures={pmxTexturesRef.current ?? undefined}
+                  catalog={manualCatalog}
+                  parts={manualParts}
+                  selectedMeshes={selectedMeshes}
+                  onSelectionChange={setSelectedMeshes}
+                />
               </>
             )}
           </div>
