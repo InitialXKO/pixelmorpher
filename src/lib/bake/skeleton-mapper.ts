@@ -307,7 +307,7 @@ export interface MappedImport {
   character: Character;
   /** 全局精灵表条目 */
   sprites: Record<string, Sprite>;
-  stats: { bones: number; nodes: number; sprites: number };
+  stats: { bones: number; nodes: number; sprites: number; discs: number };
 }
 
 /** RGBA → PixelGrid（直接转 hex，不再量化；输入应已量化） */
@@ -412,14 +412,57 @@ function sanitizeId(s: string): string {
  * - Node 世界位置 = 关节位置；sprite.plug = 裁剪图中的关节像素。
  * - 父 socket 偏移 = 子关节在父裁剪图中的投影 − 父 plug（逐方向）。
  */
+/**
+ * 实测关节开口宽度（= 关节盘直径，全局像素）：取规范方向（6 南，缺省取第一个）
+ * 精灵在 plug 行 ±2 行内、以 plug 为中心的连续不透明段（plug 点透明时取该行
+ * 最长段）的最大值。无可测像素返回 null。
+ */
+function measureJointOpeningWidth(pb: ProcessedBone): number | null {
+  const dir = pb.directions.find((d) => d.direction === 6) ?? pb.directions[0];
+  if (!dir) return null;
+  const grid = dir.grid;
+  const cy = Math.round(dir.plugY);
+  const cx = Math.round(dir.plugX);
+  let best = 0;
+  for (let y = Math.max(0, cy - 2); y <= Math.min(grid.length - 1, cy + 2); y++) {
+    const row = grid[y];
+    if (!row || row.length === 0) continue;
+    let run = 0;
+    if (cx >= 0 && cx < row.length && row[cx]) {
+      run = 1;
+      for (let x = cx - 1; x >= 0 && row[x]; x--) run++;
+      for (let x = cx + 1; x < row.length && row[x]; x++) run++;
+    } else {
+      let cur = 0;
+      for (const c of row) {
+        cur = c ? cur + 1 : 0;
+        if (cur > run) run = cur;
+      }
+    }
+    if (run > best) best = run;
+  }
+  return best > 0 ? best : null;
+}
+
+export interface MapBonesOptions {
+  /**
+   * 自动生成关节盘：为每个 socket 连接的节点写 generated disc 配置，
+   * 直径按精灵在 plug 处实测的开口宽度写入 attachment.jointWidth 与
+   * piece 的 'plug' 截面（渲染端 generateDiscInstructions 据此出盘）。
+   */
+  autoJointDisc?: boolean;
+}
+
 export function mapBonesToNodes(
   processed: Map<number, ProcessedBone>,
   characterId: string,
   characterName: string,
+  options?: MapBonesOptions,
 ): MappedImport {
   const nodes: Record<string, Node> = {};
   const sprites: Record<string, Sprite> = {};
   const pieces: Record<string, CostumePiece> = {};
+  let discCount = 0;
   const nodeIdByBone = new Map<number, string>();
 
   // 先建所有 node（无层级）
@@ -503,6 +546,19 @@ export function mapBonesToNodes(
     }
     pieces[slotKey] = piece;
     node.slot = piece;
+
+    // 自动生成关节盘（导入选项）：socket 连接 + 有精灵 + 实测到开口宽度才写。
+    // 渲染端 generateDiscInstructions 只认 node.generated；直径首选
+    // attachment.jointWidth，其次 piece 的 'plug' 截面（与旧迁移生产端同口径）。
+    if (!isRoot && options?.autoJointDisc && pb.directions.length > 0) {
+      const w = measureJointOpeningWidth(pb);
+      if (w !== null) {
+        node.generated = { type: 'disc', crossSectionId: 'plug' };
+        if (node.attachment.type === 'socket') node.attachment.jointWidth = w;
+        piece.crossSections.push({ id: 'plug', mode: 'inside', diameter: w });
+        discCount++;
+      }
+    }
 
     nodes[nodeId] = node;
   }
@@ -591,6 +647,7 @@ export function mapBonesToNodes(
       bones: sorted.length,
       nodes: sorted.length,
       sprites: Object.keys(sprites).length,
+      discs: discCount,
     },
   };
 }
