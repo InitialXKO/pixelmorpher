@@ -952,6 +952,9 @@ export function resolveNodeSpriteId(
 
 // ---- Disc Generation ----
 
+/** 关节盘 zIndex：无视深度排序、始终被遮挡（纯补缝垫片），固定极小值永远最先绘制 */
+const DISC_Z_BEHIND_ALL = -1e9;
+
 /**
  * Step 4 (partial): Generate disc render instructions for nodes
  * with `generated` configuration.
@@ -1053,14 +1056,9 @@ function generateDiscInstructions(
     const discWorldX = (pxToSub(canvasWidth / 2) + (discProj.canvasX as SubPixel)) as SubPixel;
     const discWorldY = (pxToSub(canvasHeight / 2) + (discProj.canvasY as SubPixel)) as SubPixel;
 
-    // 深度：与节点指令同量纲（投影深度，SubPixel）——盘低于父子双方（透过开口
-    // 可见），取 min(父深度, 关节深度) − 1。此前盘用 computeZOrder 的 ~0 量级
-    // 启发值，节点改走投影深度后量纲脱节，盘永远排在所有精灵之前被盖住。
-    const parentWorldTf = node.parentId ? worldTransforms.get(node.parentId) : undefined;
-    const parentDepth = parentWorldTf
-      ? projectToView(parentWorldTf.worldX, parentWorldTf.worldY, parentWorldTf.worldZ, currentDirection).depth
-      : discProj.depth;
-    const discDepth = Math.min(parentDepth, discProj.depth) - 1;
+    // 深度（规格）：关节盘无视深度排序、始终被遮挡——纯补缝垫片，只在没有
+    // 任何精灵覆盖的开口处露出来。zIndex 固定极小值永远最先绘制；盘间同值，
+    // 稳定排序保持生成顺序。
 
     // 关节盘颜色约定：plug.discColor 自定义 > 子节点精灵开口处众数颜色 > 旧 fallback。
     // 开口中心 = 精灵 pivot（sprite.plug）+ plug 本地坐标（attachment.plug）。
@@ -1085,7 +1083,7 @@ function generateDiscInstructions(
       diameter,
       fillColor: typeof fillColor === 'string' ? fillColor : '#808080',
       outlineColor,
-      zIndex: discDepth,
+      zIndex: DISC_Z_BEHIND_ALL,
     });
   }
 
