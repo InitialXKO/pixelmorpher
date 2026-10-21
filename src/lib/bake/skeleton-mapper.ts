@@ -307,7 +307,7 @@ export interface MappedImport {
   character: Character;
   /** 全局精灵表条目 */
   sprites: Record<string, Sprite>;
-  stats: { bones: number; nodes: number; sprites: number; discs: number };
+  stats: { bones: number; nodes: number; sprites: number };
 }
 
 /** RGBA → PixelGrid（直接转 hex，不再量化；输入应已量化） */
@@ -444,25 +444,14 @@ function measureJointOpeningWidth(pb: ProcessedBone): number | null {
   return best > 0 ? best : null;
 }
 
-export interface MapBonesOptions {
-  /**
-   * 自动生成关节盘：为每个 socket 连接的节点写 generated disc 配置，
-   * 直径按精灵在 plug 处实测的开口宽度写入 attachment.jointWidth 与
-   * piece 的 'plug' 截面（渲染端 generateDiscInstructions 据此出盘）。
-   */
-  autoJointDisc?: boolean;
-}
-
 export function mapBonesToNodes(
   processed: Map<number, ProcessedBone>,
   characterId: string,
   characterName: string,
-  options?: MapBonesOptions,
 ): MappedImport {
   const nodes: Record<string, Node> = {};
   const sprites: Record<string, Sprite> = {};
   const pieces: Record<string, CostumePiece> = {};
-  let discCount = 0;
   const nodeIdByBone = new Map<number, string>();
 
   // 先建所有 node（无层级）
@@ -547,16 +536,15 @@ export function mapBonesToNodes(
     pieces[slotKey] = piece;
     node.slot = piece;
 
-    // 自动生成关节盘（导入选项）：socket 连接 + 有精灵 + 实测到开口宽度才写。
-    // 渲染端 generateDiscInstructions 只认 node.generated；直径首选
-    // attachment.jointWidth，其次 piece 的 'plug' 截面（与旧迁移生产端同口径）。
-    if (!isRoot && options?.autoJointDisc && pb.directions.length > 0) {
+    // 关节盘直径数据（无条件写入）：socket 连接 + 有精灵 + 实测到开口宽度时，
+    // 把直径写入 attachment.jointWidth 与 piece 的 'plug' 截面——渲染端出盘时
+    // 首选 jointWidth、其次截面。是否出盘由 plug 属性 autoJointDisc 决定
+    // （默认开），不在导入端控制。
+    if (!isRoot && pb.directions.length > 0) {
       const w = measureJointOpeningWidth(pb);
       if (w !== null) {
-        node.generated = { type: 'disc', crossSectionId: 'plug' };
         if (node.attachment.type === 'socket') node.attachment.jointWidth = w;
         piece.crossSections.push({ id: 'plug', mode: 'inside', diameter: w });
-        discCount++;
       }
     }
 
@@ -647,7 +635,6 @@ export function mapBonesToNodes(
       bones: sorted.length,
       nodes: sorted.length,
       sprites: Object.keys(sprites).length,
-      discs: discCount,
     },
   };
 }

@@ -462,6 +462,11 @@ export interface Attachment {
    * 为空时按 plug 位置回退估算。
    */
   jointWidth?: number | null;
+  /**
+   * 自动生成关节盘（plug 开关）：undefined/true = 在此连接处自动生成关节盘
+   * 遮盖接缝；false = 不生成。直径取 jointWidth / plug 截面，颜色取 discColor。
+   */
+  autoJointDisc?: boolean;
 }
 
 // ---- Transform ----

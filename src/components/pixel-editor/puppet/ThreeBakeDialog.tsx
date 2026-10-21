@@ -742,8 +742,6 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [error, setError] = useState<string | null>(null);
 
   const [rebakeTarget, setRebakeTarget] = useState<BakedBoneInfo | null>(null);
-  /** 导入时自动生成关节盘（遮盖关节接缝，直径按精灵开口宽度实测） */
-  const [autoJointDisc, setAutoJointDisc] = useState(true);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   // 点击肢体预览弹出的骨骼（显示8方向）
   const [popupBone, setPopupBone] = useState<ProcessedBone | null>(null);
@@ -1054,7 +1052,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         enlargeNote = `；分辨率 ${size} 超出项目尺寸，已自动放大画布为 ${needW}×${needH}`;
       }
       const char = store.addUnifiedCharacter(name, { skipPlaceholderRoot: true });
-      const mapped = mapBonesToNodes(processed, char.id, name, { autoJointDisc });
+      const mapped = mapBonesToNodes(processed, char.id, name);
       // 一次写入：节点树 + 服装集（不中途回读，见 AGENTS.md 快照坑）
       store.updateUnifiedCharacter(char.id, {
         nodes: mapped.character.nodes,
@@ -1068,12 +1066,12 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       }));
       setLastImportedCharId(char.id);
       setImportMsg(
-        `已创建角色 ${name}，含 ${mapped.stats.nodes} 个节点，${mapped.stats.sprites} 张精灵${autoJointDisc ? `，${mapped.stats.discs} 个关节盘` : ''}${enlargeNote}`,
+        `已创建角色 ${name}，含 ${mapped.stats.nodes} 个节点，${mapped.stats.sprites} 张精灵${enlargeNote}`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [processed, fileName, size, autoJointDisc]);
+  }, [processed, fileName, size]);
 
   // 手动替换服装：用预览的某方向精灵替换已导入角色的对应精灵
   const handleReplaceSprite = useCallback((
@@ -1242,17 +1240,6 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               </select>
             </label>
             )}
-            <label
-              className="flex cursor-pointer items-center gap-1"
-              title="导入时为每个关节连接自动生成关节盘遮盖接缝：直径按精灵在关节（plug）处的开口宽度实测，颜色取关节处众数色"
-            >
-              <input
-                type="checkbox"
-                checked={autoJointDisc}
-                onChange={(e) => setAutoJointDisc(e.target.checked)}
-              />
-              自动生成关节盘
-            </label>
             <button
               onClick={handleBakeDispatch}
               disabled={baking}

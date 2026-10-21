@@ -866,6 +866,17 @@ function solveCubicBezierX(cp1x: number, cp2x: number, t: number): number {
 // ---- Z-Order Computation ----
 
 /**
+ * 关节盘生成判定（唯一口径）：plug 开关 attachment.autoJointDisc 未关（默认开）
+ * 且节点经 socket 连接到父插口。node.generated 是旧数据，不再作门——仅其
+ * crossSectionId 在直径回退时被采用（见 generateDiscInstructions）。
+ */
+function nodeHasJointDisc(node: Node): boolean {
+  if (node.attachment?.type !== 'socket' || !node.attachment.parentSocketId) return false;
+  if (node.attachment.autoJointDisc === false) return false;
+  return true;
+}
+
+/**
  * Step 3: Compute Z-order for all nodes and discs.
  * Uses drawLayer and zIndex, with direction-dependent ordering.
  */
@@ -937,7 +948,7 @@ function computeZOrder(
     nodeZ.set(nodeId, sortKey);
 
     // If this node has a generated disc, its Z goes BELOW both parent and child
-    if (node.generated) {
+    if (nodeHasJointDisc(node)) {
       const ownZ = nodeZ.get(nodeId) ?? 0;
       const parentZ = node.parentId ? nodeZ.get(node.parentId) ?? ownZ : ownZ;
       discZ.set(`${nodeId}_disc`, Math.min(parentZ, ownZ) - 0.5);
@@ -1019,7 +1030,10 @@ function generateDiscInstructions(
   const discs: DiscRenderInstruction[] = [];
 
   for (const [nodeId, node] of Object.entries(character.nodes)) {
-    if (!node.generated || node.generated.type !== 'disc') continue;
+    if (!nodeHasJointDisc(node)) continue;
+    // 无精灵可遮盖（占位/结构节点）不出盘：node.sprite 现行管线不赋值，
+    // 以 slot 精灵条目为准（烘焙占位节点的 slot.sprites 为空）
+    if (!node.sprite && Object.keys(node.slot?.sprites ?? {}).length === 0) continue;
 
     // mesh 蒙皮模式：不生成关节盘（由像素变形代替）
     if (node.attachment?.type === 'socket' && node.attachment.parentSocketId && node.parentId) {
@@ -1042,7 +1056,7 @@ function generateDiscInstructions(
       diameter = storedJointWidth;
     } else {
       const childPiece = node.slot;
-      const plugCS = childPiece?.crossSections.find(cs => cs.id === node.generated!.crossSectionId);
+      const plugCS = childPiece?.crossSections.find(cs => cs.id === (node.generated?.crossSectionId ?? 'plug'));
       const bottomCS = childPiece?.crossSections.find(cs => cs.id === 'bottom');
       diameter = getPlugJointWidth(
         {

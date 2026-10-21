@@ -328,7 +328,22 @@ function RigNodeProperties({
         <div className="grid grid-cols-2 gap-1.5 mt-1">
           {/* TODO(migration): crossSectionTop/Bottom moved to CostumePiece.crossSections in new model */}
         </div>
-        <div className="flex items-center gap-2 mt-1.5">
+        {node.attachment?.type === 'socket' && node.attachment.parentSocketId && (
+          <div className="flex items-center gap-2 mt-1.5">
+            <Label className="text-[9px] text-gray-600">关节盘</Label>
+            <input
+              type="checkbox"
+              checked={node.attachment.autoJointDisc !== false}
+              onChange={(e) =>
+                onUpdate({
+                  attachment: { ...node.attachment, autoJointDisc: e.target.checked },
+                })
+              }
+            />
+            <span className="text-[9px] text-gray-500">自动生成（遮盖接缝）</span>
+          </div>
+        )}
+        <div className={`flex items-center gap-2 mt-1.5 ${node.attachment?.autoJointDisc === false ? 'opacity-40 pointer-events-none' : ''}`}>
           <Label className="text-[9px] text-gray-600">关节盘颜色</Label>
           <input
             type="color"
