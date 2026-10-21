@@ -742,25 +742,14 @@ export async function bakeSixParts(
 
     // —— 破洞填充（最终方案）：
     // 1) 只用所渲染部件的外轮廓剔除其他部件：本部件双面渲进 stencil 得到填充轮廓（二维区域）；
-    // 2) 候选只取「通过骨骼与本部件接通」的部件在接通骨骼上的三角形——洞是拆掉该部件造成的，
-    //    接通关系看骨骼父子（parentIndex），不看切口几何；多个部件遮挡时由候选集本身决定取舍；
-    // 3) 本部件正面最后画、关深度测试，强制遮挡未剔除部分（不比深度）；单面渲染；
-    // 4) 遮挡部件进 ID 遍，ID 改成本部件的：写它所填洞在本部件一侧的骨骼（接通骨骼对里本部件的那个）。
-    // 候选按接通骨骼对构建、每对只提交一遍，成本与洞数无关。
-    /** 接通骨骼对在对方部件一侧的候选视图：对方部件中主 bone 恰为接通骨骼 bQ 的三角形 */
-    const buildPairCandidateViews = (qPart: PartName, bQ: number): BuiltPartView[] => {
-      const views: BuiltPartView[] = [];
-      for (const bm of bakedMeshes) {
-        const pt = groupTrianglesByPart(bm, boneToPart).get(qPart)!;
-        const index: number[] = [];
-        for (let t = 0; t < pt.tris.length; t++) {
-          if (pt.triBone[t] !== bQ) continue;
-          index.push(pt.tris[t][0], pt.tris[t][1], pt.tris[t][2]);
-        }
-        if (index.length > 0) views.push({ source: bm, index });
-      }
-      return views;
-    };
+    // 2) 候选 =「通过骨骼与本部件接通」的部件整体——接通关系看骨骼父子（parentIndex）、不看
+    //    切口几何；洞口是单个关节的切口，洞内能露出的只有正坐在切口上的那个部件的表面：
+    //    其他接通部件在轮廓外被剔除、在本部件表面处被覆写，不需要按骨骼挑三角形（挑骨骼会
+    //    漏掉锁骨这类不主导任何三角形的接通骨骼）；
+    // 3) 本部件正面最后画、只清深度，强制遮挡未剔除部分；单面渲染；
+    // 4) 遮挡部件进 ID 遍，ID 改成本部件的：写该接通关系在本部件一侧的骨骼（同一部件对
+    //    多条接通边时取第一条）。
+    // 候选按接通部件构建、每部件只提交一遍，成本与洞数无关。
     /** 遮挡者在 ID 遍的材质：整块输出本部件骨骼的 ID 色（与 ID 帧同一 RGB 掩码格式） */
     const makeCandIdMaterial = (rgb: [number, number, number]): THREE.ShaderMaterial => {
       const mat = new THREE.ShaderMaterial({
@@ -921,22 +910,23 @@ export async function bakeSixParts(
         mi.scale.setScalar(scale);
         markGroup.add(mi);
       }
-      // 候选组：与本部件通过骨骼接通的每个部件一对（颜色组 + ID 组），变换与 partGroup 一致
+      // 候选组：与本部件通过骨骼接通的每个部件一组（颜色组 + ID 组），变换与 partGroup 一致
       interface CandSet { color: THREE.Group; id: THREE.Group; mats: THREE.Material[] }
-      const candSets: CandSet[] = [];
+      const connBoneOf = new Map<PartName, number>();
       for (let bi = 0; bi < boneToPart.length; bi++) {
         const pi = parentIndex[bi];
         if (pi == null) continue;
         const pParent = boneToPart[pi];
         const pChild = boneToPart[bi];
         if (!pParent || !pChild || pParent === pChild) continue;
-        let bP = -1;
-        let bQ = -1;
-        let q: PartName | null = null;
-        if (pParent === pname) { bP = pi; bQ = bi; q = pChild; }
-        else if (pChild === pname) { bP = bi; bQ = pi; q = pParent; }
-        if (!q || bP < 0) continue;
-        const views = buildPairCandidateViews(q, bQ);
+        if (pParent === pname && !connBoneOf.has(pChild)) connBoneOf.set(pChild, pi);
+        else if (pChild === pname && !connBoneOf.has(pParent)) connBoneOf.set(pParent, bi);
+      }
+      const candSets: CandSet[] = [];
+      for (const [q, bP] of connBoneOf) {
+        const qb = parts.get(q);
+        if (!qb) continue;
+        const views = qb.views;
         if (views.length === 0) continue;
         const li = localIndex.get(bP);
         if (li === undefined) continue;
