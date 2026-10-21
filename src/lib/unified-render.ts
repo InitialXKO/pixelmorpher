@@ -971,6 +971,8 @@ function generateDiscInstructions(
   canvasHeight: number,
   currentDirection: DirectionIndex,
   activeSnapshots: Map<string, { snap: SkinningSnapshot; parentId: string }>,
+  activeCostumeSet?: import('./unified-types').CostumeSet,
+  spriteTable?: Record<string, Sprite>,
 ): DiscRenderInstruction[] {
   const discs: DiscRenderInstruction[] = [];
 
@@ -1056,20 +1058,25 @@ function generateDiscInstructions(
     // 关节盘无 zIndex、不参与深度排序：执行端在全部精灵之前统一先画，
     // 始终被遮挡，只在没有精灵覆盖的开口处露出来补缝（规格）。
 
-    // 关节盘颜色约定：plug.discColor 自定义 > 子节点精灵开口处众数颜色 > 旧 fallback。
-    // 开口中心 = 精灵 pivot（sprite.plug）+ plug 本地坐标（attachment.plug）。
+    // 关节盘配色（生成时自动按精灵配色）：plug.discColor 自定义 > 子节点当前
+    // 精灵在 plug（关节）处采样的众数色（排除轮廓色）> piece.fillColor 兜底。
+    // 精灵走与节点指令相同的解析（node.sprite 现行管线从不赋值，旧采样分支是死代码，
+    // 此前实际一直用 fillColor——烘焙导入件为 #ffffff，盘恒为白色）。
     const childPiece = node.slot;
-    let fillColor: string = childPiece?.fillColor ?? node.sprite?.data?.[0]?.[0] ?? '#808080';
+    let fillColor: string = childPiece?.fillColor ?? '#808080';
     const customDiscColor = node.attachment?.discColor;
     if (typeof customDiscColor === 'string' && customDiscColor) {
       fillColor = customDiscColor;
-    } else if (node.sprite?.data && node.sprite?.plug) {
-      const pivotX = subToPx(node.sprite.plug.x);
-      const pivotY = subToPx(node.sprite.plug.y);
-      const plugLocalX = node.attachment?.plug ? subToPx(node.attachment.plug.x) : 0;
-      const plugLocalY = node.attachment?.plug ? subToPx(node.attachment.plug.y) : 0;
-      const sampled = sampleJointDiscColor(node.sprite.data, pivotX + plugLocalX, pivotY + plugLocalY);
-      if (sampled) fillColor = sampled;
+    } else {
+      const resolved = resolveSprite(node, currentDirection, activeCostumeSet, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? ''], character.latitude ?? 0);
+      const spr = resolved.sprite;
+      if (spr?.data && spr.plug) {
+        let sampleX = subToPx(spr.plug.x);
+        const sampleY = subToPx(spr.plug.y);
+        if (resolved.mirror) sampleX = spr.width - 1 - sampleX;
+        const sampled = sampleJointDiscColor(spr.data, sampleX, sampleY);
+        if (sampled) fillColor = sampled;
+      }
     }
     const outlineColor = '#000000'; // From global palette in full implementation
 
@@ -1458,7 +1465,7 @@ export function generateRenderPlan(
   }
 
   // Step 5: Generate disc instructions
-  const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots);
+  const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots, activeCostumeSet, spriteTable);
 
   // Step 6: 节点指令按 zIndex（投影深度）排序；关节盘不进排序流，
   // 由执行端从 discInstructions 单独先行绘制（无视深度、始终被遮挡）
