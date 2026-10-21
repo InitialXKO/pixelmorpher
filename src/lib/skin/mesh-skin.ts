@@ -188,40 +188,97 @@ export function applySnapshotBend(
   const angleRad = (deltaAngle * Math.PI) / 180;
   if (Math.abs(angleRad) < 1e-6) return pixels;
 
-  const weightAt = (t: number): number => {
+  // 垂直门控走廊（带内横向衰减）：仅轴向权重是一条无限宽的「板」，宽父件
+  // （躯干）在关节轴高处的像素会被整片带走（实测 δ=60°/r=12 时离轴 16px 处
+  // 位移 ≈9.5px）。走廊从精灵自身量：子侧带外半段（t∈[radius/2, radius]）
+  // 不透明像素的垂直跨度——即肢体离开过渡带时的出口宽度（含衣物；取这段是
+  // 因为 t≈0 处有父件自身的截面、会把走廊污染成父件宽度，且出口宽度正是
+  // 与刚性区连续所必需的门控宽度）。带内（t<radius）权重乘门控（走廊内 1、
+  // 向外 smoothstep 到 0，外沿 = 内沿×1.25+2px）；子侧刚性区（t≥radius）
+  // 不门控、整宽同转。量不到（该段无像素）则不门控。
+  let corridorInner: number | null = null;
+  {
+    let maxU = 0;
+    let found = false;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (isTransparent(pixels[y][x])) continue;
+        const dx = x - jointX;
+        const dy = y - jointY;
+        const t = dx * axisX + dy * axisY;
+        if (t < radius / 2 || t > radius) continue;
+        const u = Math.abs(-dx * axisY + dy * axisX);
+        if (u > maxU) maxU = u;
+        found = true;
+      }
+    }
+    if (found) corridorInner = maxU;
+  }
+  const corridorOuter = corridorInner !== null ? corridorInner * 1.25 + 2 : 0;
+  const gateAt = (u: number): number => {
+    if (corridorInner === null) return 1;
+    const a = Math.abs(u);
+    if (a <= corridorInner) return 1;
+    if (a >= corridorOuter) return 0;
+    const s = (a - corridorInner) / (corridorOuter - corridorInner);
+    return 1 - s * s * (3 - 2 * s);
+  };
+  const weightAt = (sx: number, sy: number): number => {
+    const t = sx * axisX + sy * axisY;
     let w = (t + radius) / (2 * radius);
     if (w < 0) w = 0;
     if (w > 1) w = 1;
     if (curve === 'smoothstep') w = w * w * (3 - 2 * w);
+    if (w > 0 && t < radius) {
+      w *= gateAt(-sx * axisY + sy * axisX);
+    }
     return w;
   };
+  // 迭代求源点 s = R(−delta·w(s))·(p−J)。变形可折叠，同一输出像素可能有
+  // 多个自洽原像（静止材料自身 + 转入的空位/材料），故双初值各解一次：
+  // 全旋转初值（刚性支）与恒等初值（静止支）；各自正向验证（R(+delta·w(s))·s
+  // 与 (p−J) 偏差 ≤1.5px 才有效），优先取采样到不透明像素的候选，
+  // 两者都不透明时取刚性支（移动材料盖静止材料）；都无效 → 无原像 → 透明。
   const result: PixelGrid = pixels.map((row) => [...row]);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const dx = x - jointX;
       const dy = y - jointY;
-      // 迭代求源点 s = R(−delta·w(s))·(p−J)，w 按源点轴向投影；初值取全
-      // 旋转（偏向刚性支）。大角度下变形会折叠、逆解可能不存在/不唯一，
-      // 迭代后正向验证：R(+delta·w(s))·s 与 (p−J) 偏差 >1.5px 视为无原像 → 透明。
-      let sx = dx * Math.cos(angleRad) + dy * Math.sin(angleRad);
-      let sy = -dx * Math.sin(angleRad) + dy * Math.cos(angleRad);
-      for (let it = 0; it < 4; it++) {
-        const w = weightAt(sx * axisX + sy * axisY);
-        const back = -angleRad * w;
-        const cosB = Math.cos(back);
-        const sinB = Math.sin(back);
-        sx = dx * cosB - dy * sinB;
-        sy = dx * sinB + dy * cosB;
+      const solveFrom = (ix: number, iy: number) => {
+        let sx = ix;
+        let sy = iy;
+        for (let it = 0; it < 4; it++) {
+          const w = weightAt(sx, sy);
+          const back = -angleRad * w;
+          const cosB = Math.cos(back);
+          const sinB = Math.sin(back);
+          sx = dx * cosB - dy * sinB;
+          sy = dx * sinB + dy * cosB;
+        }
+        const wF = weightAt(sx, sy);
+        const fwd = angleRad * wF;
+        const fx = sx * Math.cos(fwd) - sy * Math.sin(fwd);
+        const fy = sx * Math.sin(fwd) + sy * Math.cos(fwd);
+        return { sx, sy, valid: Math.hypot(fx - dx, fy - dy) <= 1.5 };
+      };
+      const rigid = solveFrom(
+        dx * Math.cos(angleRad) + dy * Math.sin(angleRad),
+        -dx * Math.sin(angleRad) + dy * Math.cos(angleRad),
+      );
+      const still = solveFrom(dx, dy);
+      let chosen: { sx: number; sy: number; valid: boolean } | null = null;
+      for (const cand of [rigid, still]) {
+        if (!cand.valid) continue;
+        const s = bilinearSample(pixels, jointX + cand.sx, jointY + cand.sy, width, height);
+        if (!isTransparent(s)) {
+          chosen = cand;
+          break;
+        }
+        if (!chosen) chosen = cand; // 先留第一个有效候选（可能采样透明）
       }
-      const wF = weightAt(sx * axisX + sy * axisY);
-      const fwd = angleRad * wF;
-      const fx = sx * Math.cos(fwd) - sy * Math.sin(fwd);
-      const fy = sx * Math.sin(fwd) + sy * Math.cos(fwd);
-      if (Math.hypot(fx - dx, fy - dy) > 1.5) {
-        result[y][x] = null;
-        continue;
-      }
-      result[y][x] = bilinearSample(pixels, jointX + sx, jointY + sy, width, height);
+      result[y][x] = chosen
+        ? bilinearSample(pixels, jointX + chosen.sx, jointY + chosen.sy, width, height)
+        : null;
     }
   }
   return result;
