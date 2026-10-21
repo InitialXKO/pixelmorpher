@@ -387,7 +387,7 @@ function makeViewGeometry(view: BuiltPartView): THREE.BufferGeometry {
 }
 
 /** 由源材质派生 toon 材质（保留源材质自己的 map/color） */
-function makeToonFromSource(
+export function makeToonFromSource(
   source: THREE.Material | null,
   gradientMap: THREE.DataTexture,
 ): THREE.MeshToonMaterial {
@@ -483,7 +483,7 @@ export function droopArmPose(
 }
 
 // ---- 卡通渐变 ----
-function makeGradientMap(steps: number): THREE.DataTexture {
+export function makeGradientMap(steps: number): THREE.DataTexture {
   const data = new Uint8Array(steps);
   for (let i = 0; i < steps; i++) data[i] = Math.round((i / (steps - 1)) * 255);
   const tex = new THREE.DataTexture(data, steps, 1, THREE.RedFormat);
