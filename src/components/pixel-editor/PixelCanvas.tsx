@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
-import { renderCharacterOnionFrameFromCharacter } from '@/lib/unified-render';
+import { renderCharacterOnionFrameFromCharacter, geometryDirectionFromToggle } from '@/lib/unified-render';
 import { renderSpriteEditUnified } from '@/lib/unified-render';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-render';
@@ -183,7 +183,8 @@ export default function PixelCanvas() {
             renderCharacterOnionFrameFromCharacter(
               cacheCtx, s.canvasWidth, s.canvasHeight, character,
               [], frame,
-              s.frameRate, s.globalModifiers, s.animationVariables
+              s.frameRate, s.globalModifiers, s.animationVariables, undefined,
+              geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D)
             );
           } catch { /* 单个角色渲染失败不影响其它 */ }
         }
@@ -289,7 +290,8 @@ export default function PixelCanvas() {
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
         s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
         s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint,
-        freshStore.sprites, s.perspectiveForeshorten, freshStore.activeAnimationClipId);
+        freshStore.sprites, s.perspectiveForeshorten, freshStore.activeAnimationClipId,
+        geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
     }
 
     // 3. Stroke preview
@@ -490,6 +492,7 @@ export default function PixelCanvas() {
   } | null>(null);
   const [menuHasSelection, setMenuHasSelection] = useState(false);
   const showGrid = useEditorStore((x) => x.showGrid);
+  const nodeTurn3D = useEditorStore((x) => x.nodeTurn3D);
   const showPuppetSkeleton = useEditorStore((x) => x.showPuppetSkeleton);
   const onionSkinEnabled = useProjectStore((x) => x.onionSkinEnabled);
 
@@ -748,6 +751,9 @@ export default function PixelCanvas() {
             </ContextMenuItem>
             <ContextMenuItem onSelect={() => useEditorStore.getState().togglePuppetSkeleton()}>
               {showPuppetSkeleton && <Check className="size-3.5" />} 骨骼叠加
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => useEditorStore.getState().toggleNodeTurn3D()}>
+              {nodeTurn3D && <Check className="size-3.5" />} 节点转向
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => zoomBy(1.25)}>放大</ContextMenuItem>

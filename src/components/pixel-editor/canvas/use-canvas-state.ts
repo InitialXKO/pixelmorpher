@@ -8,7 +8,7 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { useProjectStore } from '@/lib/store';
 import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
-import { invalidateUnifiedPipelineCache, computeWorldTransforms } from '@/lib/unified-render';
+import { invalidateUnifiedPipelineCache, computeWorldTransforms, geometryDirectionFromToggle } from '@/lib/unified-render';
 import {
   interpolateModifiers,
   computeKeyframeBaseTransform,
@@ -408,7 +408,7 @@ export function useCanvasState() {
   const computePivotWorldPosition = useCallback(
     (node: Node, character: Character, canvasW: number, canvasH: number): { x: number; y: number } => {
       const state = useProjectStore.getState();
-      const worldTransforms = computeWorldTransforms(character, state.currentFrame, canvasW, canvasH);
+      const worldTransforms = computeWorldTransforms(character, state.currentFrame, canvasW, canvasH, undefined, undefined, undefined, undefined, geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
       const centerX = pxToSub(canvasW / 2);
       const centerY = pxToSub(canvasH / 2);
       // 与主渲染 generateRenderPlan 一致：根节点 variantIndex 为当前朝向
@@ -438,7 +438,7 @@ export function useCanvasState() {
         // 复用主渲染的 computeWorldTransforms（与绘制、骨骼覆盖层同源）：
         // 此前私有 computeNodeWorldPos 只读 socket 2D 偏移、不认 offset3D，
         // 3D 角色的子节点命中点全部塌到父/根位置，点击必然不准
-        const worldTransforms = computeWorldTransforms(character, state.currentFrame, canvasWidth, canvasHeight);
+        const worldTransforms = computeWorldTransforms(character, state.currentFrame, canvasWidth, canvasHeight, undefined, undefined, undefined, undefined, geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
         const centerX = pxToSub(canvasWidth / 2);
         const centerY = pxToSub(canvasHeight / 2);
         // 与主渲染 generateRenderPlan 一致：根节点 variantIndex 为当前朝向

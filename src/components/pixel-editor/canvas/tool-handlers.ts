@@ -12,7 +12,7 @@ import { inpaintPixels, samMaskToSelectionMask } from '@/lib/inpainting';
 import { floodFill } from '@/lib/engine';
 import { renderUnifiedToCanvas, renderSpriteEditUnified } from '@/lib/unified-render';
 import { resolveNodeSpriteId } from '@/lib/unified-render';
-import { computeWorldTransforms } from '@/lib/unified-render';
+import { computeWorldTransforms, geometryDirectionFromToggle } from '@/lib/unified-render';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
@@ -200,7 +200,7 @@ export const puppetHandler: ToolHandler = {
 
     // 计算指定节点的世界角度（从根累加）
     // 世界角度走主渲染共同代码（尊重 inheritRotation；此前手工沿链累加不查该标志，与渲染端口径微差）
-    const worldTransformsForAngle = computeWorldTransforms(character, tmpFrame, s.canvasWidth, s.canvasHeight);
+    const worldTransformsForAngle = computeWorldTransforms(character, tmpFrame, s.canvasWidth, s.canvasHeight, undefined, undefined, undefined, undefined, geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
     const computeWorldAngle = (targetNode: typeof node): number => {
       return worldTransformsForAngle.get(targetNode.id)?.worldAngle ?? 0;
     };
@@ -610,7 +610,7 @@ export const puppetHandler: ToolHandler = {
           if (!chain) continue;
           const jointIds = getIKChainJointIds(ch, chain.rootNodeId, chain.endNodeId);
           if (jointIds.length >= 2) {
-            const { tipX, tipY, tipZ, direction } = computeIKChainTip(ch, jointIds, chain.tipLength);
+            const { tipX, tipY, tipZ, direction } = computeIKChainTip(ch, jointIds, chain.tipLength, geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
             // tip 是原点中心 3D：求解目标写 target3D；chain.target 写投影镜像（按链朝向投影 + 画布中心）
             project.updateUnifiedCharacter(ch.id, {
               ikChains: ch.ikChains!.map((c) =>

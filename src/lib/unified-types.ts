@@ -270,6 +270,20 @@ export function frameYAxisWorld(m: Mat3, direction: DirectionIndex): { x: number
   return viewBasisToWorld(m[1], m[4], m[7], direction);
 }
 
+/**
+ * frame 的 +Y 轴在 viewDirection 视平面上的派生角（度）：frame 在 geometryDirection 基下
+ * 复合（节点转向开启）时，精灵在目标朝向下的屏幕角度。geometryDirection === viewDirection
+ * 时与 frameViewAngle 逐值相同（基变换互逆）。
+ */
+export function frameViewAngleForDirection(
+  m: Mat3, geometryDirection: DirectionIndex, viewDirection: DirectionIndex,
+): number {
+  const y = frameYAxisWorld(m, geometryDirection);
+  const th = (((viewDirection + 2) % 8) * Math.PI) / 4;
+  const h = y.x * Math.cos(th) + y.z * Math.sin(th);
+  return (Math.atan2(-h, y.y) * 180) / Math.PI;
+}
+
 // ---- Sprite & Visual Data ----
 
 /** Pixel color: hex string or null (transparent) */

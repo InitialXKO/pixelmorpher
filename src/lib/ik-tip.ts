@@ -35,22 +35,23 @@ export function computeIKChainTip(
   ch: Character,
   jointIds: string[],
   tipLengthOverride?: number,
+  geometryDirection?: DirectionIndex,
 ): { tipX: number; tipY: number; tipZ: number; tipLength: number; direction: DirectionIndex } {
   const store = useProjectStore.getState();
-  const transforms = computeWorldTransforms(ch, store.currentFrame, store.canvasWidth, store.canvasHeight);
+  const transforms = computeWorldTransforms(ch, store.currentFrame, store.canvasWidth, store.canvasHeight, undefined, undefined, undefined, undefined, geometryDirection);
   const joints: { x: number; y: number; z: number; yAxis: { x: number; y: number; z: number }; variant: DirectionIndex }[] = [];
   for (const jid of jointIds) {
     const t = transforms.get(jid);
     if (!t) break;
     joints.push({
       x: subToPx(t.worldX), y: subToPx(t.worldY), z: subToPx(t.worldZ),
-      yAxis: frameYAxisWorld(t.worldFrame, t.variantIndex),
+      yAxis: frameYAxisWorld(t.worldFrame, geometryDirection ?? t.variantIndex),
       variant: t.variantIndex,
     });
   }
   let tipLength = tipLengthOverride ?? 0;
   let tipX = 0, tipY = 0, tipZ = 0;
-  const direction: DirectionIndex = joints.length > 0 ? joints[0].variant : 6;
+  const direction: DirectionIndex = geometryDirection ?? (joints.length > 0 ? joints[0].variant : 6);
   if (joints.length >= 1) {
     const last = joints[joints.length - 1];
     tipX = last.x; tipY = last.y; tipZ = last.z;

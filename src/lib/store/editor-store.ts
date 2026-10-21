@@ -44,6 +44,7 @@ interface EditorStore extends EditorState {
   selectModifier: (id: string | null) => void;
   selectEffectTrack: (id: string | null) => void;
   toggleGrid: () => void;
+  toggleNodeTurn3D: () => void;
   toggleTrajectories: () => void;
   // Motion blur
   setAutoMotionBlur: (enabled: boolean) => void;
@@ -175,6 +176,7 @@ const defaultEditor: EditorState = {
   selectedModifierId: null,
   selectedEffectTrackId: null,
   showGrid: true,
+  nodeTurn3D: false,
   showTrajectories: false,
   isDirty: false,
   autoMotionBlur: false,
@@ -276,6 +278,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   selectModifier: (id) => set({ selectedModifierId: id }),
   selectEffectTrack: (id) => set({ selectedEffectTrackId: id }),
   toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
+  toggleNodeTurn3D: () => set((s) => ({ nodeTurn3D: !s.nodeTurn3D })),
   toggleTrajectories: () => set((s) => ({ showTrajectories: !s.showTrajectories })),
   setAutoMotionBlur: (enabled) => set({ autoMotionBlur: enabled }),
   setAutoMotionBlurIntensity: (intensity) => set({ autoMotionBlurIntensity: intensity }),

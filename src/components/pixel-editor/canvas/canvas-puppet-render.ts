@@ -8,8 +8,8 @@ import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-util
 import type { RenderContext } from './canvas-render-helpers';
 import type { Character, Node } from '@/lib/unified-types';
 import { pxToSub, subToPx, projectToView, rotateInViewPlane, resolveChainTarget3D } from '@/lib/unified-types';
-import { computeWorldTransforms, socketOffsetTo3D } from '@/lib/unified-render';
-import { useProjectStore } from '@/lib/store';
+import { computeWorldTransforms, socketOffsetTo3D, geometryDirectionFromToggle } from '@/lib/unified-render';
+import { useProjectStore, useEditorStore } from '@/lib/store';
 
 // ============================================================
 // Puppet skeleton overlay visualization
@@ -36,11 +36,12 @@ export function renderIKTargetHandles(
   const chains = character.ikChains?.filter((c) => c.enabled);
   if (!chains || chains.length === 0) return;
   const { ctx, zoom, panX, panY } = rc;
-  const worldTransforms = computeWorldTransforms(character, rc.currentFrame, rc.canvasWidth, rc.canvasHeight);
+  const geoDir = geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D);
+  const worldTransforms = computeWorldTransforms(character, rc.currentFrame, rc.canvasWidth, rc.canvasHeight, undefined, undefined, undefined, undefined, geoDir);
   ctx.save();
   for (const chain of chains) {
     // 填充/解析按链根关节朝向（target 是该朝向画布平面上的点）；手柄绘制仍按末关节朝向投影
-    const rootDir = worldTransforms.get(chain.rootNodeId)?.variantIndex ?? 6;
+    const rootDir = geoDir ?? worldTransforms.get(chain.rootNodeId)?.variantIndex ?? 6;
     const t3 = resolveChainTarget3D(chain, rc.canvasWidth, rc.canvasHeight, rootDir);
     const dir = worldTransforms.get(chain.endNodeId)?.variantIndex ?? 6;
     const proj = projectToView(pxToSub(t3.x), pxToSub(t3.y), pxToSub(t3.z), dir);
@@ -90,7 +91,7 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
     // Compute world positions recursively (SubPixel units throughout;
     // 直接复用主渲染的 computeWorldTransforms，保证与主画布完全一致（不再重复造轮子）
     // 主渲染：3D 世界坐标（原点中心）→ generateRenderPlan 投影到 2D（+画布中心）
-    const worldTransforms = computeWorldTransforms(character, currentFrame, canvasWidth, canvasHeight);
+    const worldTransforms = computeWorldTransforms(character, currentFrame, canvasWidth, canvasHeight, undefined, undefined, undefined, undefined, geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
     const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
     const centerX = pxToSub(canvasWidth / 2);
     const centerY = pxToSub(canvasHeight / 2);
