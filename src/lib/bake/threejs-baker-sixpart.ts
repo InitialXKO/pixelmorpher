@@ -276,8 +276,6 @@ interface PartTriangles {
   tris: number[][];
   /** 三角形主导 bone（全局 index） */
   triBone: number[];
-  /** 三角形在源几何中的序号（与 tris 平行）——收录顺序 ≠ 源序号，扣「其余三角」时必须用它对齐 */
-  triIndex: number[];
 }
 
 /**
@@ -293,7 +291,7 @@ export function groupTrianglesByPart(
   const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
   const triCount = index ? index.count / 3 : Math.floor(posAttr.count / 3);
   const result = new Map<PartName, PartTriangles>();
-  for (const p of ALL_PARTS) result.set(p, { tris: [], triBone: [], triIndex: [] });
+  for (const p of ALL_PARTS) result.set(p, { tris: [], triBone: [] });
 
   for (let t = 0; t < triCount; t++) {
     const a = index ? index.getX(t * 3) : t * 3;
@@ -323,7 +321,6 @@ export function groupTrianglesByPart(
       const pt = result.get(p)!;
       pt.tris.push([a, b, c]);
       pt.triBone.push(bestBone);
-      pt.triIndex.push(t);
     }
   }
   return result;
@@ -336,110 +333,13 @@ interface BuiltPartView {
   source: BakedMesh;
   /** 本部件在此源几何上的三角形索引序列（原顶点序，本部件的「剔除」结果即这份视图） */
   index: number[];
-  /** index 里每个三角形在源几何中的序号（与 index 的三元组平行） */
-  triIndices: number[];
 }
 
 interface BuiltPart {
   part: PartName;
   views: BuiltPartView[];
-  /** 破洞（边界环，模型空间）：全部视图的开口汇总 */
-  rings: HoleRing[];
   /** 部件内 bone 列表（全局 index，按首次出现序） */
   partBones: number[];
-}
-
-/** 破洞（几何开口）：部件被剔出后在交界处留下的边界环 */
-export interface HoleRing {
-  /** 环顶点（模型空间，闭环不重复首尾） */
-  points: THREE.Vector3[];
-  /** 破洞所在骨骼（全局 index，环上三角形主 bone 众数） */
-  bone: number;
-}
-
-/**
- * 从一个源网格的部件视图提取破洞（边界环）：洞是剔除产生的——整模本来没有洞，
- * 剔掉其他部位之后才在切口处张开。判定先过滤「发生过剔除」这个条件：
- * 一条边两侧的三角形分属保留（在本部件视图中）与被剔（不在视图中）两侧时，
- * 这条边才是洞的边界；模型固有开口（整模单边）没有被剔的一侧，不算洞。
- */
-export function extractHoleRings(bm: BakedMesh, tris: number[][], triBone: number[]): HoleRing[] {
-  const pos = bm.geometry.getAttribute('position') as THREE.BufferAttribute;
-  const geo = bm.geometry;
-  const index = geo.getIndex();
-  const triCount = index ? index.count / 3 : Math.floor(pos.count / 3);
-  const tkey = (a: number, b: number, c: number) => [a, b, c].sort((m, n) => m - n).join(',');
-  const ekey = (a: number, b: number) => (a < b ? `${a}_${b}` : `${b}_${a}`);
-
-  // 本部件视图的三角形 → 各自的 triBone（按无序顶点 key 对齐整模序号）
-  const viewBone = new Map<string, number>();
-  tris.forEach(([a, b, c], t) => viewBone.set(tkey(a, b, c), triBone[t]));
-
-  // 整模每条边：统计两侧三角形中保留/被剔的分布
-  interface EdgeSides { hasIn: boolean; hasOut: boolean; inBone: number }
-  const edges = new Map<string, EdgeSides>();
-  for (let t = 0; t < triCount; t++) {
-    const a = index ? index.getX(t * 3) : t * 3;
-    const b = index ? index.getX(t * 3 + 1) : t * 3 + 1;
-    const c = index ? index.getX(t * 3 + 2) : t * 3 + 2;
-    const bone = viewBone.get(tkey(a, b, c));
-    const isIn = bone !== undefined;
-    for (const [u, v] of [[a, b], [b, c], [c, a]] as const) {
-      const k = ekey(u, v);
-      let rec = edges.get(k);
-      if (!rec) { rec = { hasIn: false, hasOut: false, inBone: -1 }; edges.set(k, rec); }
-      if (isIn) { rec.hasIn = true; rec.inBone = bone as number; }
-      else rec.hasOut = true;
-    }
-  }
-
-  // 洞界边：两侧分属保留与被剔
-  const adj = new Map<number, number[]>();
-  const edgeBone = new Map<string, number>();
-  const addAdj = (u: number, v: number) => {
-    const arr = adj.get(u);
-    if (arr) arr.push(v); else adj.set(u, [v]);
-  };
-  for (const [k, rec] of edges) {
-    if (!rec.hasIn || !rec.hasOut) continue;
-    const [u, v] = k.split('_').map(Number);
-    addAdj(u, v);
-    addAdj(v, u);
-    edgeBone.set(k, rec.inBone);
-  }
-
-  const visited = new Set<number>();
-  const rings: HoleRing[] = [];
-  for (const start of adj.keys()) {
-    if (visited.has(start)) continue;
-    const ring: number[] = [];
-    let cur = start;
-    let prev = -1;
-    while (true) {
-      visited.add(cur);
-      ring.push(cur);
-      const nexts = (adj.get(cur) ?? []).filter((x) => x !== prev);
-      if (nexts.length === 0) break;
-      const nxt = nexts.find((x) => !visited.has(x)) ?? nexts[0];
-      prev = cur;
-      cur = nxt;
-      if (cur === start || ring.length > 100000) break;
-    }
-    if (ring.length < 3) continue;
-    const votes = new Map<number, number>();
-    for (let i = 0; i < ring.length; i++) {
-      const b = edgeBone.get(ekey(ring[i], ring[(i + 1) % ring.length]));
-      if (b !== undefined && b >= 0) votes.set(b, (votes.get(b) ?? 0) + 1);
-    }
-    let bone = -1;
-    let best = 0;
-    for (const [b, n] of votes) if (n > best) { best = n; bone = b; }
-    rings.push({
-      points: ring.map((vi) => new THREE.Vector3().fromBufferAttribute(pos, vi)),
-      bone,
-    });
-  }
-  return rings;
 }
 
 /**
@@ -453,15 +353,13 @@ export function buildPartGeometry(
   boneToPart: (PartName | null)[],
 ): BuiltPart | null {
   const views: BuiltPartView[] = [];
-  const rings: HoleRing[] = [];
   for (const bm of bakedMeshes) {
     const grouped = groupTrianglesByPart(bm, boneToPart);
     const pt = grouped.get(part)!;
     if (pt.tris.length === 0) continue;
     const index: number[] = [];
     for (const [a, b, c] of pt.tris) index.push(a, b, c);
-    views.push({ source: bm, index, triIndices: pt.triIndex });
-    rings.push(...extractHoleRings(bm, pt.tris, pt.triBone));
+    views.push({ source: bm, index });
   }
   if (views.length === 0) return null;
 
@@ -471,7 +369,7 @@ export function buildPartGeometry(
   for (let bi = 0; bi < boneToPart.length; bi++) {
     if (boneToPart[bi] === part) partBones.push(bi);
   }
-  return { part, views, rings, partBones };
+  return { part, views, partBones };
 }
 
 /** 由索引视图生成渲染用几何：属性对象与源几何共享（不复制数据），只装本视图的索引。 */
@@ -579,59 +477,6 @@ export function droopArmPose(
   applyWorldQuaternion(bones[shoulderIdx], qDelta);
   result.rotated = true;
   return result;
-}
-
-/**
- * 破洞环的 stencil 标记几何：环在其拟合平面上三角化（Newell 法线 + 平面基 + triangulateShape），
- * 位置用环的原 3D 点——渲染时随部件组同变换投影，光栅化出的像素即破洞在此方向帧上的区域。
- */
-export function buildRingMarkGeometry(ring: HoleRing): THREE.BufferGeometry {
-  const pts = ring.points;
-  const n = new THREE.Vector3();
-  for (let i = 0; i < pts.length; i++) {
-    const a = pts[i];
-    const b = pts[(i + 1) % pts.length];
-    n.x += (a.y - b.y) * (a.z + b.z);
-    n.y += (a.z - b.z) * (a.x + b.x);
-    n.z += (a.x - b.x) * (a.y + b.y);
-  }
-  if (n.lengthSq() < 1e-12) n.set(0, 0, 1);
-  n.normalize();
-  const helper = Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
-  const u = new THREE.Vector3().crossVectors(helper, n).normalize();
-  const v = new THREE.Vector3().crossVectors(n, u);
-  const origin = pts[0];
-  const contour = pts.map((p) => {
-    const d = p.clone().sub(origin);
-    return new THREE.Vector2(d.dot(u), d.dot(v));
-  });
-  const faces = THREE.ShapeUtils.triangulateShape(contour, []);
-  const positions = new Float32Array(pts.length * 3);
-  pts.forEach((p, i) => {
-    positions[i * 3] = p.x;
-    positions[i * 3 + 1] = p.y;
-    positions[i * 3 + 2] = p.z;
-  });
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  const idx: number[] = [];
-  for (const f of faces) idx.push(f[0], f[1], f[2]);
-  g.setIndex(idx);
-  return g;
-}
-
-/** 遮挡者在 ID 遍的材质：整块输出破洞所在骨骼的 ID 色（与 ID 帧同一 RGB 掩码格式） */
-function makeFlatIdMaterial(rgb: [number, number, number]): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: new THREE.Vector3(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255) } },
-    vertexShader: `
-      void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
-    `,
-    fragmentShader: `
-      uniform vec3 uColor;
-      void main() { gl_FragColor = vec4(uColor, 1.0); }
-    `,
-  });
 }
 
 // ---- 卡通渐变 ----
@@ -864,7 +709,7 @@ export async function bakeSixParts(
 
     // ---- 渲染 ----
     const gradientMap = makeGradientMap(toonSteps);
-    const rt = new THREE.WebGLRenderTarget(size, size, { samples: 0, depthBuffer: true, stencilBuffer: true });
+    const rt = new THREE.WebGLRenderTarget(size, size, { samples: 0, depthBuffer: true });
     const readBuffer = new Uint8Array(size * size * 4);
     const readFlipped = (): Uint8ClampedArray => {
       renderer.readRenderTargetPixels(rt, 0, 0, size, size, readBuffer);
@@ -878,12 +723,6 @@ export async function bakeSixParts(
     };
 
     const groups: SixPartGroup[] = [];
-
-    /** 源网格内一个三角形的三顶点序号 */
-    const triVertsOf = (bm: BakedMesh, t: number): [number, number, number] => {
-      const idx = bm.geometry.getIndex();
-      return idx ? [idx.getX(t * 3), idx.getX(t * 3 + 1), idx.getX(t * 3 + 2)] : [t * 3, t * 3 + 1, t * 3 + 2];
-    };
 
     const partBoneMap = {} as Record<PartName, number[]>;
     // 单节点部件（合并后只剩一个有效骨骼）跳过 ID 遍：无需按骨骼拆分
@@ -901,6 +740,93 @@ export async function bakeSixParts(
     }
     let done = 0;
 
+    // —— 破洞填充（最终方案）：只用所渲染部件的外轮廓剔除其他部件，本部件强制遮挡，单面渲染。
+    // 「外轮廓」落实为深度跨度：每方向先把本部件渲两遍深度图——正面深度（外表面）与背面深度
+    // （内壁）；其他部件（候选）同遍提交，片元深度落在 [正面, 背面] 跨度内才保留：跨度之外
+    // （轮廓外、部件前方、内壁之后）一律剔除。破洞处正面缺失、跨度从相机延伸到内壁，直接与
+    // 洞接通的部件（堵口者）的表面正在跨度内——被保留；只是路过洞口前方的部件在跨度之外
+    // （比正面还靠前或不在洞口深度内）被剔。最后本部件正面以 depthTest 关强制覆写。
+    // 候选只提交一遍，成本与洞数无关。
+    const SPAN_FAR = 20; // 与部件相机 far 一致
+    const spanRTParams = {
+      // 需要深度附件：预渲自身要靠深度取最近的正/背面片元
+      depthBuffer: true, stencilBuffer: false, type: THREE.FloatType,
+      minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+    } as const;
+    const spanFrontRT = new THREE.WebGLRenderTarget(size, size, spanRTParams);
+    const spanBackRT = new THREE.WebGLRenderTarget(size, size, spanRTParams);
+    const makeSpanDepthMat = (side: THREE.Side) => new THREE.ShaderMaterial({
+      side,
+      uniforms: { uSpanFar: { value: SPAN_FAR } },
+      vertexShader: `
+        varying float vZ;
+        void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vZ = -mv.z; gl_Position = projectionMatrix * mv; }
+      `,
+      fragmentShader: `
+        varying float vZ;
+        uniform float uSpanFar;
+        void main() { gl_FragColor = vec4(vZ / uSpanFar, 0.0, 0.0, 1.0); }
+      `,
+    });
+    const spanFrontMat = makeSpanDepthMat(THREE.FrontSide);
+    const spanBackMat = makeSpanDepthMat(THREE.BackSide);
+    /** 给候选部件的 toon 材质注入跨度门控：片元查本部件正/背面深度图，落在跨度外丢弃 */
+    const patchSpan = (mat: THREE.Material) => {
+      const m = mat as THREE.MeshToonMaterial;
+      m.onBeforeCompile = (shader) => {
+        if (!shader.vertexShader.includes('#include <project_vertex>') || !shader.fragmentShader.includes('#include <clipping_planes_fragment>')) {
+          throw new Error('跨度门控注入锚点缺失（three 着色器结构变化）');
+        }
+        shader.uniforms.uSpanFront = { value: spanFrontRT.texture };
+        shader.uniforms.uSpanBack = { value: spanBackRT.texture };
+        shader.uniforms.uSpanFar = { value: SPAN_FAR };
+        shader.uniforms.uSpanRes = { value: size };
+        shader.vertexShader = 'varying float vSpanViewZ;\n' + shader.vertexShader.replace(
+          '#include <project_vertex>',
+          '#include <project_vertex>\n  vSpanViewZ = -mvPosition.z;',
+        );
+        shader.fragmentShader = ('varying float vSpanViewZ;\nuniform sampler2D uSpanFront;\nuniform sampler2D uSpanBack;\nuniform float uSpanFar;\nuniform float uSpanRes;\n' + shader.fragmentShader).replace(
+          '#include <clipping_planes_fragment>',
+          `#include <clipping_planes_fragment>
+          {
+            vec2 spanUv = gl_FragCoord.xy / uSpanRes;
+            float spanFr = texture2D(uSpanFront, spanUv).r;
+            float spanBr = texture2D(uSpanBack, spanUv).r;
+            bool spanFAbs = spanFr > 1.0;
+            bool spanBAbs = spanBr > 1.0;
+            if (spanFAbs && spanBAbs) discard;
+            float spanEps = uSpanFar * 0.0005;
+            float spanLo = spanFAbs ? 0.0 : spanFr * uSpanFar - spanEps;
+            float spanHi = spanBAbs ? uSpanFar : spanBr * uSpanFar + spanEps;
+            if (vSpanViewZ < spanLo || vSpanViewZ > spanHi) discard;
+          }`,
+        );
+      };
+      m.customProgramCacheKey = () => 'span-toon-v1';
+    };
+    // 候选组：每个部件一份（其全部索引视图 + 跨度门控 toon），整场烘焙共用，按方向换位
+    const candGroups = new Map<PartName, THREE.Group>();
+    const candMats: THREE.Material[] = [];
+    const candGeos: THREE.BufferGeometry[] = [];
+    for (const [qname, qp] of parts) {
+      const outer = new THREE.Group();
+      const inner = new THREE.Group();
+      for (const view of qp.views) {
+        const mat = makeToonFromSource(view.source.material, gradientMap);
+        patchSpan(mat);
+        candMats.push(mat);
+        const geo = makeViewGeometry(view);
+        candGeos.push(geo);
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.frustumCulled = false;
+        inner.add(mesh);
+      }
+      inner.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+      inner.scale.setScalar(scale);
+      outer.add(inner);
+      candGroups.set(qname, outer);
+    }
+
     // 部件内局部 ID → 全局 bone：用 partBones 顺序
     for (const [pname, bp] of parts) {
       partBoneMap[pname] = [...bp.partBones];
@@ -911,7 +837,10 @@ export async function bakeSixParts(
       const inner = new THREE.Group();
       for (const view of bp.views) {
         const toonMat = makeToonFromSource(view.source.material, gradientMap);
+        // 强制遮挡：本部件在颜色遍最后画、无条件覆写其他部件留下的像素（不比深度）
+        toonMat.depthTest = false;
         const mesh = new THREE.Mesh(makeViewGeometry(view), toonMat);
+        mesh.renderOrder = 10;
         mesh.frustumCulled = false;
         inner.add(mesh);
       }
@@ -998,6 +927,9 @@ export async function bakeSixParts(
         idTex.needsUpdate = true;
         const idMat = new THREE.ShaderMaterial({
           glslVersion: THREE.GLSL3,
+          // ID 遍按「部件是个实体」出图：正面优先（深度取最近），正面缺失处（破洞）取其后
+          // 本部件内壁的 bone——填入像素的 ID 因此归所渲染部件，不需要遮挡者参与 ID 遍
+          side: THREE.DoubleSide,
           uniforms: { uIdTex: { value: idTex } },
           vertexShader: `
             in float aTriId;
@@ -1041,99 +973,6 @@ export async function bakeSixParts(
       const psize = pbox.getSize(new THREE.Vector3());
       const half = Math.max(psize.x, psize.y) / 2 * partPadding;
 
-      // 本部件自己的三角形键集（源序号口径；「其余三角」构建时据此扣除）
-      const ownTriKeys = new Set<string>();
-      for (const view of bp.views) {
-        const mi = bakedMeshes.indexOf(view.source);
-        for (const t of view.triIndices) ownTriKeys.add(`${mi}:${t}`);
-      }
-
-      // —— 破洞的同遍渲染组（无破洞的部件不建）：判定搬进渲染遍内部，不做渲染前扫描。
-      // 标记组：把每个破洞环光栅化进 stencil（值 = 环序号+1），不出颜色、不写深度；
-      // 其余三角颜色组：整模其余三角形同遍提交，片元被 stencil 门控——破洞区外剔除、区内参与同遍深度（遮挡自洽）；
-      // 逐环 ID 组：其余三角形在 stencil == 该环序号的片元上，以该破洞所在骨骼的 ID 色出图。
-      interface HolePass {
-        mark: THREE.Group;
-        otherColor: THREE.Group;
-        otherId: THREE.Group[];
-        mats: THREE.Material[];
-        markGeos: THREE.BufferGeometry[];
-      }
-      let holePass: HolePass | null = null;
-      if (bp.rings.length > 0 && bp.rings.length <= 254) {
-        const mats: THREE.Material[] = [];
-        const markGeos: THREE.BufferGeometry[] = [];
-        const wrap = (meshes: THREE.Mesh[]): THREE.Group => {
-          const g = new THREE.Group();
-          const inner = new THREE.Group();
-          for (const m of meshes) inner.add(m);
-          inner.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
-          inner.scale.setScalar(scale);
-          g.add(inner);
-          return g;
-        };
-        // 标记组
-        const markMeshes = bp.rings.map((ring, ri) => {
-          const mat = new THREE.MeshBasicMaterial({
-            colorWrite: false, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
-            stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc, stencilRef: ri + 1,
-            stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp, stencilZPass: THREE.ReplaceStencilOp,
-          });
-          mats.push(mat);
-          const geo = buildRingMarkGeometry(ring);
-          markGeos.push(geo);
-          const mesh = new THREE.Mesh(geo, mat);
-          mesh.renderOrder = -10;
-          mesh.frustumCulled = false;
-          return mesh;
-        });
-        // 其余三角（整模减去本部件）的视图几何，颜色/ID 共用
-        const otherGeos: { bm: BakedMesh; geo: THREE.BufferGeometry }[] = [];
-        bakedMeshes.forEach((bm, mi) => {
-          const idx: number[] = [];
-          const srcTris: number[] = [];
-          const triCount = Math.floor((bm.geometry.getIndex()?.count ?? bm.geometry.getAttribute('position').count) / 3);
-          for (let t = 0; t < triCount; t++) {
-            if (ownTriKeys.has(`${mi}:${t}`)) continue;
-            const [a, b, c] = triVertsOf(bm, t);
-            idx.push(a, b, c);
-            srcTris.push(t);
-          }
-          if (idx.length > 0) otherGeos.push({ bm, geo: makeViewGeometry({ source: bm, index: idx, triIndices: srcTris }) });
-        });
-        // 颜色组：源材质 toon + stencil 门控（≠0 才出片元）
-        const otherColorMeshes = otherGeos.map(({ bm, geo }) => {
-          const mat = makeToonFromSource(bm.material, gradientMap);
-          mat.stencilWrite = true;
-          mat.stencilFunc = THREE.NotEqualStencilFunc;
-          mat.stencilRef = 0;
-          mats.push(mat);
-          const mesh = new THREE.Mesh(geo, mat);
-          mesh.renderOrder = 1;
-          mesh.frustumCulled = false;
-          return mesh;
-        });
-        // 逐环 ID 组：该环 bone 的 ID 色 + stencil 门控（== 环序号）
-        const otherId: THREE.Group[] = [];
-        bp.rings.forEach((ring, ri) => {
-          const li = localIndex.get(ring.bone);
-          if (li === undefined) return;
-          const mat = makeFlatIdMaterial(encodeBoneId(li) as [number, number, number]);
-          mat.stencilWrite = true;
-          mat.stencilFunc = THREE.EqualStencilFunc;
-          mat.stencilRef = ri + 1;
-          mats.push(mat);
-          const meshes = otherGeos.map(({ geo }) => {
-            const mesh = new THREE.Mesh(geo, mat);
-            mesh.renderOrder = 1;
-            mesh.frustumCulled = false;
-            return mesh;
-          });
-          otherId.push(wrap(meshes));
-        });
-        holePass = { mark: wrap(markMeshes), otherColor: wrap(otherColorMeshes), otherId, mats, markGeos };
-      }
-
       const scene = new THREE.Scene();
       scene.add(partGroup);
       scene.add(new THREE.AmbientLight(0xffffff, 0.9));
@@ -1148,15 +987,12 @@ export async function bakeSixParts(
       // 关节投影（此部件的 bones，每方向）
       const projV = new THREE.Vector3();
 
+      const spanSentinel = new THREE.Color(2, 0, 0); // 跨度深度图的「无表面」哨兵（>1）
       for (let d = 0; d < 8; d++) {
         const ang = (d / 8) * Math.PI * 2;
         partGroup.rotation.y = ang;
         partGroup.updateMatrixWorld(true);
-        if (holePass) {
-          holePass.mark.rotation.y = ang;
-          holePass.otherColor.rotation.y = ang;
-          for (const g of holePass.otherId) g.rotation.y = ang;
-        }
+        for (const g of candGroups.values()) g.rotation.y = ang;
 
         // 关节像素（用部件相机），按规范方向索引
         for (const gi of bp.partBones) {
@@ -1167,39 +1003,45 @@ export async function bakeSixParts(
           };
         }
 
+        // 跨度预渲：本部件正/背面深度图（场景里只放本部件）——候选门控与外轮廓剔除都据此
+        scene.remove(idInner);
+        for (const g of candGroups.values()) scene.remove(g);
+        if (!scene.children.includes(partGroup)) scene.add(partGroup);
+        renderer.setClearColor(spanSentinel, 1);
+        scene.overrideMaterial = spanFrontMat;
+        renderer.setRenderTarget(spanFrontRT);
+        renderer.render(scene, camera);
+        scene.overrideMaterial = spanBackMat;
+        renderer.setRenderTarget(spanBackRT);
+        renderer.render(scene, camera);
+        scene.overrideMaterial = null;
+        renderer.setClearColor(0x000000, 0);
+
+        // 颜色一遍：候选（其他部件，跨度门控）先画，本部件正面最后强制覆写
         renderer.setRenderTarget(rt);
         renderer.clear(true, true, true);
-
-        // 颜色一遍：标记组（stencil 写破洞区）+ 本部件 + 其余三角（stencil 门控、深度同遍自洽）
-        scene.remove(idInner);
-        if (!scene.children.includes(partGroup)) scene.add(partGroup);
-        if (holePass) { scene.add(holePass.mark); scene.add(holePass.otherColor); }
+        for (const [qname, g] of candGroups) {
+          if (qname !== pname) scene.add(g);
+        }
         renderer.render(scene, camera);
         const colorPixels = readFlipped();
         onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° 颜色`);
         await new Promise((r) => setTimeout(r, 0));
-        if (holePass) { scene.remove(holePass.mark); scene.remove(holePass.otherColor); }
+        for (const g of candGroups.values()) scene.remove(g);
 
-        // ID 一遍：单节点部件跳过；标记组重写 stencil，逐环组以破洞骨骼 ID 色出图
+        // ID 一遍：单节点部件跳过。只渲本部件（双面、深度取最近表面）：正面在处取正面
+        // bone，正面缺失的破洞处取其后内壁的 bone——填入像素的 ID 归所渲染部件
         let idPixels: Uint8ClampedArray | undefined;
         if (partNeedsId.get(pname)) {
           scene.remove(partGroup);
           scene.add(idInner);
           idInner.rotation.y = ang;
           idInner.updateMatrixWorld(true);
-          if (holePass) {
-            scene.add(holePass.mark);
-            for (const g of holePass.otherId) scene.add(g);
-          }
           renderer.clear(true, true, true);
           renderer.render(scene, camera);
           idPixels = readFlipped();
           onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° ID`);
           await new Promise((r) => setTimeout(r, 0));
-          if (holePass) {
-            scene.remove(holePass.mark);
-            for (const g of holePass.otherId) scene.remove(g);
-          }
         }
 
         groups.push({ part: pname, direction: ((d + 6) % 8), colorPixels, idPixels, cameraHalf: half });
@@ -1219,11 +1061,14 @@ export async function bakeSixParts(
         mat.dispose();
         m.geometry.dispose();
       });
-      if (holePass) {
-        for (const m of holePass.mats) m.dispose();
-        for (const g of holePass.markGeos) g.dispose();
-      }
     }
+
+    spanFrontRT.dispose();
+    spanBackRT.dispose();
+    spanFrontMat.dispose();
+    spanBackMat.dispose();
+    for (const m of candMats) m.dispose();
+    for (const g of candGeos) g.dispose();
 
     rt.dispose();
     gradientMap.dispose();
