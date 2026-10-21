@@ -908,94 +908,6 @@ function computeActiveSnapshots(
   return active;
 }
 
-/**
- * Step 3: Compute Z-order for all nodes and discs.
- * Uses drawLayer and zIndex, with direction-dependent ordering.
- */
-function computeZOrder(
-  character: Character,
-  worldTransforms: Map<string, WorldTransform>,
-): { nodeZ: Map<string, number>; discZ: Map<string, number> } {
-  const nodeZ = new Map<string, number>();
-  const discZ = new Map<string, number>();
-
-  const rootTransform = worldTransforms.get(character.rootNodeId);
-  const currentDirection = rootTransform?.variantIndex ?? 0;
-  const latitude = character.latitude ?? 0;
-
-  // 计算 worldY 范围，用于纬度归一化
-  let minY = Infinity, maxY = -Infinity;
-  for (const wt of worldTransforms.values()) {
-    if (wt.worldY < minY) minY = wt.worldY;
-    if (wt.worldY > maxY) maxY = wt.worldY;
-  }
-  const yRange = maxY - minY;
-
-  // 方向：variantIndex 0=S, 1=SE, 2=E, 3=NE, 4=N, 5=NW, 6=W, 7=SW（按 directionToVariantIndex）
-  const dirName = ['S', 'SE', 'E', 'NE', 'N', 'NW', 'W', 'SW'][currentDirection] ?? 'S';
-  const facingE = dirName.includes('E');
-  const facingW = dirName.includes('W');
-  const facingS = dirName === 'S' || dirName === 'SE' || dirName === 'SW';
-  const facingN = dirName === 'N' || dirName === 'NE' || dirName === 'NW';
-
-  const computeDefaultZ = (node: Node, worldY: number): number => {
-    let directionBias = 0;
-    const side = node.side ?? 'C';
-    const isCore = node.isCore ?? false;
-
-    if (facingE) {
-      if (side === 'L') directionBias = -0.1;
-      else if (side === 'R') directionBias = 0.1;
-    } else if (facingW) {
-      if (side === 'L') directionBias = 0.1;
-      else if (side === 'R') directionBias = -0.1;
-    }
-    // S/N：肢体 vs 身体
-    if (facingS) {
-      directionBias += isCore ? -0.2 : 0.2;
-    } else if (facingN) {
-      directionBias += isCore ? 0.2 : -0.2;
-    }
-
-    let latitudeBias = 0;
-    if (latitude > 0 && yRange > 0) {
-      const normalizedY = Math.max(0, Math.min(1, (worldY - minY) / yRange));
-      // 俯视时 worldY 小的（头/上部）在上层
-      latitudeBias = (0.5 - normalizedY) * 0.5 * (latitude / 90);
-    }
-
-    return 0.5 + directionBias + latitudeBias;
-  };
-
-  // Assign Z indices: sortKey = explicitZ * 1000 + defaultZ
-  const assignZ = (nodeId: string) => {
-    const node = character.nodes[nodeId];
-    if (!node || !node.visible) return;
-
-    const wt = worldTransforms.get(nodeId);
-    const worldY = wt?.worldY ?? 0;
-    const defaultZ = computeDefaultZ(node, worldY);
-    const explicitZ = node.zIndex ?? 0;
-    const sortKey = explicitZ * 1000 + defaultZ;
-    nodeZ.set(nodeId, sortKey);
-
-    // If this node has a generated disc, its Z goes BELOW both parent and child
-    if (nodeHasJointDisc(node)) {
-      const ownZ = nodeZ.get(nodeId) ?? 0;
-      const parentZ = node.parentId ? nodeZ.get(node.parentId) ?? ownZ : ownZ;
-      discZ.set(`${nodeId}_disc`, Math.min(parentZ, ownZ) - 0.5);
-    }
-
-    // Process children
-    for (const childId of node.children) {
-      assignZ(childId);
-    }
-  };
-
-  assignZ(character.rootNodeId);
-  return { nodeZ, discZ };
-}
-
 // ---- Sprite Resolution ----
 
 /**
@@ -1055,7 +967,6 @@ export function resolveNodeSpriteId(
 function generateDiscInstructions(
   character: Character,
   worldTransforms: Map<string, WorldTransform>,
-  discZ: Map<string, number>,
   canvasWidth: number,
   canvasHeight: number,
   currentDirection: DirectionIndex,
@@ -1142,6 +1053,15 @@ function generateDiscInstructions(
     const discWorldX = (pxToSub(canvasWidth / 2) + (discProj.canvasX as SubPixel)) as SubPixel;
     const discWorldY = (pxToSub(canvasHeight / 2) + (discProj.canvasY as SubPixel)) as SubPixel;
 
+    // 深度：与节点指令同量纲（投影深度，SubPixel）——盘低于父子双方（透过开口
+    // 可见），取 min(父深度, 关节深度) − 1。此前盘用 computeZOrder 的 ~0 量级
+    // 启发值，节点改走投影深度后量纲脱节，盘永远排在所有精灵之前被盖住。
+    const parentWorldTf = node.parentId ? worldTransforms.get(node.parentId) : undefined;
+    const parentDepth = parentWorldTf
+      ? projectToView(parentWorldTf.worldX, parentWorldTf.worldY, parentWorldTf.worldZ, currentDirection).depth
+      : discProj.depth;
+    const discDepth = Math.min(parentDepth, discProj.depth) - 1;
+
     // 关节盘颜色约定：plug.discColor 自定义 > 子节点精灵开口处众数颜色 > 旧 fallback。
     // 开口中心 = 精灵 pivot（sprite.plug）+ plug 本地坐标（attachment.plug）。
     const childPiece = node.slot;
@@ -1165,7 +1085,7 @@ function generateDiscInstructions(
       diameter,
       fillColor: typeof fillColor === 'string' ? fillColor : '#808080',
       outlineColor,
-      zIndex: discZ.get(`${nodeId}_disc`) ?? 0,
+      zIndex: discDepth,
     });
   }
 
@@ -1320,9 +1240,6 @@ export function generateRenderPlan(
   const worldTransforms = computeWorldTransforms(
     character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
   );
-
-  // Step 2: Z-order (includes disc Z computation)
-  const { nodeZ, discZ } = computeZOrder(character, worldTransforms);
 
   // Step 3: Get active costume set（用生效状态的集 id，含轨道/蓝图覆盖）
   const activeCostumeSet = effCostume.costumeSetId
@@ -1548,7 +1465,7 @@ export function generateRenderPlan(
   }
 
   // Step 5: Generate disc instructions
-  const discInstructions = generateDiscInstructions(character, worldTransforms, discZ, canvasWidth, canvasHeight, currentDirection, activeSnapshots);
+  const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots);
 
   // Step 6: Sort all instructions by Z
   const allInstructions: (NodeRenderInstruction | DiscRenderInstruction)[] = [
