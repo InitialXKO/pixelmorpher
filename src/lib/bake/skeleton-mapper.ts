@@ -711,6 +711,32 @@ export function splitSixParts(
           console.log(`[split-debug] ${part} dir=${d} bone=${bake.bones[eff]?.name} idFrame=${n} attributed=${e2?.count ?? 0}`);
         }
       }
+      // [split-debug] 偏移扫描：ID 掩码与颜色不透明区的最佳重叠偏移（定位后删）
+      if (g.idPixels && part === 'armL' && (d === 0 || d === 6)) {
+        const arm2Gi = bake.bones.findIndex((bb) => bb.name === 'b_L_Arm2');
+        const arm2Eff = merge ? (merge.effectiveIndex[arm2Gi] ?? arm2Gi) : arm2Gi;
+        const maskA: number[] = [];
+        for (let p = 0; p < W * H; p++) {
+          const o = p * 4;
+          const bones = decodeBones(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
+          if (bones.some((bi) => (merge ? (merge.effectiveIndex[bi] ?? bi) : bi) === arm2Eff)) maskA.push(p);
+        }
+        let bestOff = '', bestN = -1;
+        for (let dy = -24; dy <= 24; dy += 2) {
+          for (let dx = -24; dx <= 24; dx += 2) {
+            let n = 0;
+            for (const p of maskA) {
+              const x = (p % W) + dx, y = ((p / W) | 0) + dy;
+              if (x < 0 || x >= W || y < 0 || y >= H) continue;
+              if (g.colorPixels[(y * W + x) * 4 + 3] > 8) n++;
+            }
+            if (n > bestN) { bestN = n; bestOff = `${dx},${dy}`; }
+          }
+        }
+        let opaque = 0;
+        for (let i = 3; i < g.colorPixels.length; i += 4) if (g.colorPixels[i] > 8) opaque++;
+        console.log(`[split-debug] armL dir=${d} Arm2掩码=${maskA.length} 颜色不透明总数=${opaque} 最佳偏移=${bestOff} 重叠=${bestN}`);
+      }
       // 每 bone 裁剪（与 splitByBoneId 同逻辑）
       for (const [bi, e] of perBone) {
         const bone = bake.bones[bi];
