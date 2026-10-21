@@ -10,7 +10,7 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { loadModelScene } from './load-model';
 import { makeToonFromSource, makeGradientMap } from './threejs-baker-sixpart';
 import { dirsForLatitude, latitudePitchRad, medianCut, nearestPaletteIndex } from './threejs-baker';
 import { rgbaToHexOrNull } from '../engine/utils';
@@ -56,6 +56,10 @@ export interface ManualPartSpec {
 }
 
 export interface ManualBakeOptions {
+  /** PMX 导入的贴图文件表（zip 解包：路径→Blob）；仅 PMX 输入时用 */
+  pmxTextures?: Map<string, Blob>;
+  /** PMX 原味着色：开时带 toon 贴图的材质用其自身 toon 剖面作 gradientMap */
+  usePmxToonMap?: boolean;
   /** 全角度模式：额外纬度（度），如 [45,-45,90,-90]；基纬度 0 恒渲，|纬度|≥90 只渲一个朝向 */
   extraLatitudes?: number[];
   size?: number;
@@ -78,11 +82,8 @@ interface StaticMesh {
   groups: THREE.BufferGeometry['groups'];
 }
 
-async function loadModel(input: string | ArrayBuffer): Promise<THREE.Group> {
-  const loader = new GLTFLoader();
-  const gltf =
-    typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
-  return gltf.scene;
+async function loadModel(input: string | ArrayBuffer, pmxTextures?: Map<string, Blob>): Promise<THREE.Group> {
+  return (await loadModelScene(input, pmxTextures)) as THREE.Group;
 }
 
 /** 遍历模型，收集每网格的静态（世界空间）几何与清单信息 */
@@ -182,8 +183,8 @@ function collectStaticMeshes(model: THREE.Object3D): { statics: StaticMesh[]; ha
 }
 
 /** 读取网格清单（对话框在手动模式下展示勾选） */
-export async function listManualMeshes(input: string | ArrayBuffer): Promise<ManualCatalog> {
-  const model = await loadModel(input);
+export async function listManualMeshes(input: string | ArrayBuffer, pmxTextures?: Map<string, Blob>): Promise<ManualCatalog> {
+  const model = await loadModel(input, pmxTextures);
   const { statics, hasBones } = collectStaticMeshes(model);
   return { meshes: statics.map((s) => s.info), hasBones };
 }
@@ -193,8 +194,9 @@ export async function listManualMeshes(input: string | ArrayBuffer): Promise<Man
 /** 加载并收集静态网格数据（prepareManualParts 的输入；供测试与高级调用） */
 export async function loadManualStatics(
   input: string | ArrayBuffer,
+  pmxTextures?: Map<string, Blob>,
 ): Promise<{ statics: StaticMesh[]; hasBones: boolean }> {
-  const model = await loadModel(input);
+  const model = await loadModel(input, pmxTextures);
   return collectStaticMeshes(model);
 }
 
@@ -439,7 +441,7 @@ export async function bakeManualParts(
     throw new Error('bakeManualParts 仅支持浏览器环境(WebGL)');
   }
 
-  const model = await loadModel(input);
+  const model = await loadModel(input, options.pmxTextures);
   const { statics } = collectStaticMeshes(model);
   const prepared = prepareManualParts(statics, specs, partPadding);
 
@@ -496,8 +498,8 @@ export async function bakeManualParts(
         if (pm.index) geo.setIndex(new THREE.BufferAttribute(pm.index, 1));
         geo.computeVertexNormals();
         const toonMat = Array.isArray(pm.material)
-          ? pm.material.map((m) => makeToonFromSource(m, gradientMap))
-          : makeToonFromSource(pm.material, gradientMap);
+          ? pm.material.map((m) => makeToonFromSource(m, gradientMap, options.usePmxToonMap))
+          : makeToonFromSource(pm.material, gradientMap, options.usePmxToonMap);
         if (Array.isArray(toonMat)) {
           for (const g of pm.groups) geo.addGroup(g.start, g.count, g.materialIndex);
         }

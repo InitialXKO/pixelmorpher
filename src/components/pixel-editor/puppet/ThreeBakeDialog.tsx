@@ -1,4 +1,5 @@
 'use client';
+import { unzipSync } from 'fflate';
 
 // ============================================================
 // PixelMorpher - three.js 按骨骼烘焙 → 导入 Character
@@ -175,13 +176,15 @@ function statusLabel(s: FingerDetectResult['fingerStatus']): string {
 interface RebakePanelProps {
   bone: BakedBoneInfo;
   input: string | ArrayBuffer;
+  pmxTextures?: Map<string, Blob>;
+  pmxFlavor?: boolean;
   size: number;
   paletteSize: number;
   onClose: () => void;
   onDone: (boneIndex: number, boneName: string, results: BakeResult[]) => void;
 }
 
-function RebakePanel({ bone, input, size, paletteSize, onClose, onDone }: RebakePanelProps) {
+function RebakePanel({ bone, input, pmxTextures, pmxFlavor, size, paletteSize, onClose, onDone }: RebakePanelProps) {
   const [fingerCurl, setFingerCurl] = useState(70); // 0~100
   const [detect, setDetect] = useState<FingerDetectResult | null>(null);
   const [detecting, setDetecting] = useState(false);
@@ -202,6 +205,7 @@ function RebakePanel({ bone, input, size, paletteSize, onClose, onDone }: Rebake
     inspectFingers(input, {
       thumbBoneName: manualThumb ?? undefined,
       fingerBoneNames: manualFingers ?? undefined,
+      pmxTextures,
     })
       .then((d) => {
         if (!cancelled) {
@@ -231,6 +235,8 @@ function RebakePanel({ bone, input, size, paletteSize, onClose, onDone }: Rebake
     const t = setTimeout(async () => {
       try {
         const pv = await previewHandCurl(input, {
+          pmxTextures,
+          usePmxToonMap: pmxFlavor,
           fingerCurl: fingerCurl / 100,
           thumbBoneName: manualThumb ?? undefined,
           fingerBoneNames: manualFingers ?? undefined,
@@ -263,6 +269,8 @@ function RebakePanel({ bone, input, size, paletteSize, onClose, onDone }: Rebake
     setError(null);
     try {
       const results = await bakeSingleBone(input, bone.name, {
+        pmxTextures,
+        usePmxToonMap: pmxFlavor,
         size,
         paletteSize,
         fingerCurl: fingerCurl / 100,
@@ -428,6 +436,7 @@ function RebakePanel({ bone, input, size, paletteSize, onClose, onDone }: Rebake
 
 interface BoneMergePanelProps {
   input: string | ArrayBuffer;
+  pmxTextures?: Map<string, Blob>;
   granularity: BoneGranularity;
   smallBoneThreshold?: number;
   onMergesChange: (merges: Map<number, number>, unmerges: Set<number>) => void;
@@ -439,7 +448,7 @@ interface BoneMergePanelProps {
  * 烘焙前手动调整 bone 合并。
  * 流程：解析骨骼 → 显示树（自动合并预览）→ 用户手动合并/取消 → 烘焙时传入。
  */
-function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesChange, onBake, baking }: BoneMergePanelProps) {
+function BoneMergePanel({ input, pmxTextures, granularity, smallBoneThreshold = 50, onMergesChange, onBake, baking }: BoneMergePanelProps) {
   const [bones, setBones] = useState<ParsedBoneInfo[] | null>(null);
   const [topology, setTopology] = useState<TopologyResult | null>(null);
   const [parsing, setParsing] = useState(false);
@@ -457,11 +466,11 @@ function BoneMergePanel({ input, granularity, smallBoneThreshold = 50, onMergesC
       if (!inp || (typeof inp === 'string' && inp.length === 0)) {
         throw new Error('请先选择文件或填写 URL');
       }
-      const parsed = await parseModelBones(inp);
+      const parsed = await parseModelBones(inp, pmxTextures);
       setBones(parsed);
       // 拓扑分析（不依赖骨骼名）
       try {
-        const topo = await parseModelTopology(inp);
+        const topo = await parseModelTopology(inp, pmxTextures);
         setTopology(topo.topology);
       } catch {
         setTopology(null);
@@ -730,6 +739,10 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [bakeMode, setBakeMode] = useState<'twopass' | 'sixpart' | 'manual'>('sixpart');
   // 全角度模式：额外 ±45°（各 8 方向）与 ±90°（各 1 个朝向）纬度的整套精灵
   const [fullAngle, setFullAngle] = useState(false);
+  // PMX 导入：zip 解包的贴图文件表 + 原味着色开关（toon 贴图作 ramp，默认关）
+  const pmxTexturesRef = useRef<Map<string, Blob> | null>(null);
+  const [isPmx, setIsPmx] = useState(false);
+  const [pmxFlavor, setPmxFlavor] = useState(false);
   // 手动拆分（按网格）：网格清单 + 部件草稿（多网格可合并为一个部件，枢轴可调）
   const [manualCatalog, setManualCatalog] = useState<ManualCatalog | null>(null);
   const [manualParts, setManualParts] = useState<ManualPartDraft[]>([]);
@@ -776,8 +789,35 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setManualUnmerges(new Set());
     setManualCatalog(null);
     setManualParts([]);
+    pmxTexturesRef.current = null;
+    setIsPmx(false);
     const reader = new FileReader();
-    reader.onload = () => setFileData(reader.result as ArrayBuffer);
+    reader.onload = () => {
+      const buf = reader.result as ArrayBuffer;
+      if (/\.zip$/i.test(f.name)) {
+        // zip 包导入：整模型文件夹打包——找 .pmx，其余条目作贴图文件表
+        try {
+          const files = unzipSync(new Uint8Array(buf));
+          const pmxPath = Object.keys(files).find((k) => /\.pmx$/i.test(k));
+          if (!pmxPath) {
+            setError('zip 中没有 .pmx 文件');
+            return;
+          }
+          const tex = new Map<string, Blob>();
+          for (const [path, bytes] of Object.entries(files)) {
+            if (path !== pmxPath) tex.set(path, new Blob([bytes as BlobPart]));
+          }
+          pmxTexturesRef.current = tex;
+          setIsPmx(true);
+          setFileData(files[pmxPath].slice().buffer as ArrayBuffer);
+        } catch (e) {
+          setError(e instanceof Error ? `zip 解压失败：${e.message}` : 'zip 解压失败');
+        }
+        return;
+      }
+      if (/\.pmx$/i.test(f.name)) setIsPmx(true);
+      setFileData(buf);
+    };
     reader.onerror = () => setError('文件读取失败');
     reader.readAsArrayBuffer(f);
   }, []);
@@ -825,6 +865,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         granularity,
         manualMerges,
         manualUnmerges,
+        pmxTextures: pmxTexturesRef.current ?? undefined,
+        usePmxToonMap: pmxFlavor,
         extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
         onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
         ...(canReuseColors ? { idOnly: true, reuseBake: lastBakeRef.current!.data } : {}),
@@ -843,7 +885,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges, fullAngle]);
+  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor]);
 
   /** 六部件烘焙：6 部件 × 8 方向 ×（颜色+ID）= 96 遍 */
   const handleBakeSixPart = useCallback(async () => {
@@ -864,6 +906,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         granularity,
         manualMerges,
         manualUnmerges,
+        pmxTextures: pmxTexturesRef.current ?? undefined,
+        usePmxToonMap: pmxFlavor,
         extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
         onProgress: (done, total, label) => setProgress(`${done}/${total} 遍 · ${label}`),
       });
@@ -880,14 +924,14 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges, fullAngle]);
+  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor]);
 
   /** 读取网格清单（手动模式） */
   const loadManualCatalog = useCallback(async () => {
     setManualListLoading(true);
     try {
       const inp = await resolveInput();
-      const cat = await listManualMeshes(inp);
+      const cat = await listManualMeshes(inp, pmxTexturesRef.current ?? undefined);
       setManualCatalog(cat);
       const used = new Set<string>();
       setManualParts(
@@ -945,6 +989,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       const proc = await bakeManualParts(inp, specs, {
         size,
         paletteSize,
+        pmxTextures: pmxTexturesRef.current ?? undefined,
+        usePmxToonMap: pmxFlavor,
         extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
         onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
       });
@@ -957,7 +1003,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [manualCatalog, manualParts, resolveInput, size, paletteSize, fullAngle]);
+  }, [manualCatalog, manualParts, resolveInput, size, paletteSize, fullAngle, pmxFlavor]);
 
   /** 按当前模式分发烘焙 */
   const handleBakeDispatch = useCallback(() => {
@@ -1181,7 +1227,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             <input
               ref={fileRef}
               type="file"
-              accept=".glb,.gltf"
+              accept=".glb,.gltf,.pmx,.zip"
               className="hidden"
               onChange={(e) => handleFile(e.target.files?.[0])}
             />
@@ -1238,6 +1284,12 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               <input type="checkbox" checked={fullAngle} onChange={(e) => setFullAngle(e.target.checked)} />
               全角度（±45°/±90°）
             </label>
+            {isPmx && (
+              <label className="flex cursor-pointer items-center gap-1" title="开：带 toon 贴图的 PMX 材质用其自身 toon 贴图的明暗剖面作 ramp（MMD 原味）；关：全用管线共享 gradientMap（与 GLB 同一口径）">
+                <input type="checkbox" checked={pmxFlavor} onChange={(e) => setPmxFlavor(e.target.checked)} />
+                PMX 原味着色
+              </label>
+            )}
             {bakeMode !== 'manual' && (
             <label className="flex items-center gap-1" title="粗：手指/脚趾/小骨骼合并，约15个节点；细：一个骨骼一个节点（调试用）">
               拆分粒度
@@ -1287,6 +1339,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         {/* 骨骼手动合并（烘焙前；手动拆分模式无骨骼合并） */}
         {bakeMode !== 'manual' && (
         <BoneMergePanel
+          pmxTextures={pmxTexturesRef.current ?? undefined}
           key={fileName ?? url}
           input={input}
           granularity={granularity}
@@ -1472,6 +1525,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         {/* 单肢体重烘面板 */}
         {rebakeTarget && (
           <RebakePanel
+            pmxTextures={pmxTexturesRef.current ?? undefined}
+            pmxFlavor={pmxFlavor}
             bone={rebakeTarget}
             input={input}
             size={size}
