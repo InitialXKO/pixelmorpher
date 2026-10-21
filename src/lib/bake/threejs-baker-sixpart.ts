@@ -946,6 +946,23 @@ export async function bakeSixParts(
             const [br, bg, bb] = encodeBoneId(li);
             r |= br; g |= bg; b |= bb;
           }
+          if ((r | g | b) === 0 && filtered.size > 0) {
+            // 掩码为空兜底：过滤集全是局部编号 ≥24 的骨骼（手臂部件骨骼数
+            // 可达 50+，掩码只有 24 位，手指多节/肩部辅助骨骼全在界外）——
+            // 这类三角形像素解码为空、从所有精灵消失（指尖整片丢失）。
+            // 改按合并后的有效骨骼编码：像素仍归属到正确精灵（手/大臂），
+            // 代价只是这些像素的 contrib 贡献锚粒度降到有效骨骼。
+            const seenEff = new Set<number>();
+            for (const gi of filtered) {
+              const eff = merge.effectiveIndex[gi] ?? gi;
+              if (seenEff.has(eff)) continue;
+              seenEff.add(eff);
+              const li = localIndex.get(eff);
+              if (li === undefined || li < 0 || li > 23) continue;
+              const [br, bg, bb] = encodeBoneId(li);
+              r |= br; g |= bg; b |= bb;
+            }
+          }
           idTexData[t * 4] = r; idTexData[t * 4 + 1] = g;
           idTexData[t * 4 + 2] = b; idTexData[t * 4 + 3] = 255;
         }
