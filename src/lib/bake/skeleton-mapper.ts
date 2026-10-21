@@ -650,16 +650,17 @@ export function splitSixParts(
     for (let d = 0; d < 8; d++) {
       const g = bake.groups.find((x) => x.part === part && x.direction === d);
       if (!g) continue;
-      const perBone = new Map<number, { rgba: Uint8ClampedArray; mask: Uint8Array; count: number }>();
+      const perBone = new Map<number, { rgba: Uint8ClampedArray; mask: Uint8Array; count: number; contrib: Map<number, number> }>();
       const addPixel = (bi0: number, o: number, p: number) => {
         let bi = bi0;
         // 合并映射：手指等并入手
         if (merge) bi = merge.effectiveIndex[bi] ?? bi;
         let e = perBone.get(bi);
         if (!e) {
-          e = { rgba: new Uint8ClampedArray(W * H * 4), mask: new Uint8Array(W * H), count: 0 };
+          e = { rgba: new Uint8ClampedArray(W * H * 4), mask: new Uint8Array(W * H), count: 0, contrib: new Map() };
           perBone.set(bi, e);
         }
+        e.contrib.set(bi0, (e.contrib.get(bi0) ?? 0) + 1);
         e.mask[p] = 1;
         e.count++;
         e.rgba[o] = g.colorPixels[o];
@@ -675,8 +676,7 @@ export function splitSixParts(
           const localToGlobal = bake.partBoneMap[part];
           const gi0 = localToGlobal?.[0];
           if (gi0 === undefined) continue;
-          const bi = merge ? (merge.effectiveIndex[gi0] ?? gi0) : gi0;
-          addPixel(bi, o, p);
+          addPixel(gi0, o, p);
         } else {
           const bones = decodeBones(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
           if (bones.length === 0) continue;
@@ -687,10 +687,6 @@ export function splitSixParts(
       // 每 bone 裁剪（与 splitByBoneId 同逻辑）
       for (const [bi, e] of perBone) {
         const bone = bake.bones[bi];
-        // 诊断：记录每个 bone 在哪个 part 被 push（查 3 重复来源）
-        if (bone.name.toLowerCase().includes('hips')) {
-          console.log(`[splitSixParts] push hips: part=${part} dir=${d} bone=${bone.name} bi=${bi} count=${e.count}`);
-        }
         const pb = result.get(bi)!;
         let minX = W, maxX = -1, minY = H, maxY = -1;
         for (let y = 0; y < H; y++) {
@@ -704,7 +700,17 @@ export function splitSixParts(
           }
         }
         if (maxX < 0) continue;
-        const jp = bone.jointPixels[d];
+        const exist = pb.directions.find((dd) => dd.direction === d);
+        // 重复条目（同 bone 同方向已有主图）：本帧像素多来自被合并进 bi 的贡献骨骼
+        // （如锁骨并入躯干单元），以像素最多的贡献骨骼为锚在本帧重建，后文重锚叠回主图
+        let domBi = bi;
+        if (exist) {
+          let best = -1;
+          for (const [cbi, n] of e.contrib) {
+            if (n > best) { best = n; domBi = cbi; }
+          }
+        }
+        const jp = (exist ? bake.bones[domBi] : bone).jointPixels[d];
         if (!jp) continue;
         const jx = jp.x;
         const jy = jp.y;
@@ -770,10 +776,52 @@ export function splitSixParts(
           }
         }
 
-        // 去重：同 bone 同 direction 只保留第一张（torso 主，armL/armR 泄漏的 50px 忽略）
-        // 2D 流程：1 骨骼 1 方向 1 图，不叠加多 part
-        if (pb.directions.some((dd) => dd.direction === d)) {
-          console.log(`[splitSixParts] skip duplicate hips: part=${part} dir=${d} (already have)`);
+        // 重复条目不再整批丢弃：跨部件帧里属于本骨骼（多为合并进来的贡献骨骼，
+        // 如锁骨归躯干单元但几何在手臂部件）的像素在主图里可能正是缺口
+        //（躯干帧中它只是候选、被方向线门控切掉一部分）。按锚关节的 3D 偏移
+        // 重锚后叠回主图，只填透明处；主图画布不扩张，超出部分裁掉。
+        if (exist) {
+          const domJoint = bake.bones[domBi].joint3D;
+          const biJoint = bone.joint3D;
+          if (domJoint && biJoint) {
+            const loopAng = (((d + 2) % 8) / 8) * Math.PI * 2;
+            const cosA = Math.cos(loopAng);
+            const sinA = Math.sin(loopAng);
+            const dx = domJoint.x - biJoint.x;
+            const dy = domJoint.y - biJoint.y;
+            const dz = domJoint.z - biJoint.z;
+            const rx = dx * cosA + dz * sinA;
+            const ry = dy;
+            const rz = -dx * sinA + dz * cosA;
+            // 相机基（与烘焙同式：相机在中心 + (0, half·0.25, 4) 看向中心；
+            // right=(1,0,0)，up=(0, zz, -zy)）——倾斜差异为二阶小量，取主图 half
+            const hP = exist.cameraHalf;
+            const nn = Math.hypot(0.25 * hP, 4);
+            const zy = (0.25 * hP) / nn;
+            const zz = 4 / nn;
+            const deltaPxX = rx * (W / 2);
+            const deltaPxY = -(ry * zz - rz * zy) * (W / 2);
+            const dupPlugX = (jx - x0) * g.cameraHalf;
+            const dupPlugY = (jy - y0) * g.cameraHalf;
+            const offX = Math.round(exist.plugX - dupPlugX + deltaPxX);
+            const offY = Math.round(exist.plugY - dupPlugY + deltaPxY);
+            let filled = 0;
+            for (let y = 0; y < grid.length; y++) {
+              const ty = y + offY;
+              if (ty < 0 || ty >= exist.grid.length) continue;
+              for (let x = 0; x < grid[y].length; x++) {
+                const c = grid[y][x];
+                if (!c) continue;
+                const tx = x + offX;
+                if (tx < 0 || tx >= exist.grid[ty].length) continue;
+                if (exist.grid[ty][tx] === null) {
+                  exist.grid[ty][tx] = c;
+                  filled++;
+                }
+              }
+            }
+            console.log(`[splitSixParts] overlay ${bone.name}: part=${part} dir=${d} anchor=${bake.bones[domBi].name} filled=${filled}`);
+          }
           continue;
         }
         if (!pb.part) pb.part = part; // 部件归属（导入时臂链 T-pose 摆回用；首个添加方为归属部件）
