@@ -38,10 +38,21 @@ export interface ManualCatalog {
   hasBones: boolean;
 }
 
+export type ManualPivotSpec =
+  /** 用某个网格的原点（不必属于本部件——可指连接点处的网格） */
+  | { mode: 'mesh'; meshIndex: number }
+  /** 部件包围盒中心（世界坐标） */
+  | { mode: 'center' }
+  /** 自定义枢轴（文件世界坐标） */
+  | { mode: 'custom'; point: { x: number; y: number; z: number } };
+
 export interface ManualPartSpec {
-  meshIndex: number;
   /** 部件名（= 导入后的节点名） */
   name: string;
+  /** 组成部件的网格（可多个：多网格合并为一个部件） */
+  meshIndices: number[];
+  /** 枢轴来源，缺省 = meshIndices[0] 的原点 */
+  pivot?: ManualPivotSpec;
 }
 
 export interface ManualBakeOptions {
@@ -185,14 +196,18 @@ export async function loadManualStatics(
   return collectStaticMeshes(model);
 }
 
-export interface PreparedManualPart {
-  spec: ManualPartSpec;
+export interface PreparedManualPartMesh {
   /** 归一化空间几何（position/uv/index 已就绪） */
   positions: Float32Array;
   uvs: Float32Array | null;
   index: Uint32Array | null;
   material: THREE.Material | THREE.Material[];
   groups: THREE.BufferGeometry['groups'];
+}
+
+export interface PreparedManualPart {
+  spec: ManualPartSpec;
+  meshes: PreparedManualPartMesh[];
   /** 枢轴（归一化空间） */
   pivotNorm: { x: number; y: number; z: number };
   /** 取景：球心（归一化空间）+ 相机半宽 */
@@ -233,42 +248,73 @@ export function prepareManualParts(
   });
 
   const byMeshIndex = new Map(statics.map((s) => [s.info.meshIndex, s]));
-  const specIndexByMesh = new Map(specs.map((sp, i) => [sp.meshIndex, i]));
+  // 网格 → 所属部件下标（一个网格至多属于一个部件，重复占用直接报错）
+  const specIndexByMesh = new Map<number, number>();
+  specs.forEach((sp, i) => {
+    if (sp.meshIndices.length === 0) throw new Error(`手动拆分：部件「${sp.name}」没有网格`);
+    for (const mi of sp.meshIndices) {
+      if (specIndexByMesh.has(mi)) throw new Error(`手动拆分：网格 ${mi} 被多个部件占用`);
+      specIndexByMesh.set(mi, i);
+    }
+  });
 
-  const parts: PreparedManualPart[] = specs.map((spec) => {
-    const s = byMeshIndex.get(spec.meshIndex);
-    if (!s) throw new Error(`手动拆分：找不到网格 ${spec.meshIndex}`);
-    const positions = new Float32Array(s.positions.length);
-    for (let i = 0; i < s.positions.length; i += 3) {
-      const n = norm(s.positions[i], s.positions[i + 1], s.positions[i + 2]);
-      positions[i] = n.x; positions[i + 1] = n.y; positions[i + 2] = n.z;
-    }
-    // 取景球（归一化空间）
+  const parts: PreparedManualPart[] = specs.map((spec, specIdx) => {
+    const meshes: PreparedManualPartMesh[] = [];
     const box = new THREE.Box3();
-    for (let i = 0; i < positions.length; i += 3) {
-      tv.set(positions[i], positions[i + 1], positions[i + 2]);
-      box.expandByPoint(tv);
+    const worldBox = new THREE.Box3();
+    for (const mi of spec.meshIndices) {
+      const s = byMeshIndex.get(mi);
+      if (!s) throw new Error(`手动拆分：找不到网格 ${mi}`);
+      const positions = new Float32Array(s.positions.length);
+      for (let i = 0; i < s.positions.length; i += 3) {
+        const n = norm(s.positions[i], s.positions[i + 1], s.positions[i + 2]);
+        positions[i] = n.x; positions[i + 1] = n.y; positions[i + 2] = n.z;
+        tv.set(n.x, n.y, n.z);
+        box.expandByPoint(tv);
+        tv.set(s.positions[i], s.positions[i + 1], s.positions[i + 2]);
+        worldBox.expandByPoint(tv);
+      }
+      meshes.push({
+        positions,
+        uvs: s.uvs,
+        index: s.index,
+        material: s.material,
+        groups: s.groups,
+      });
     }
+    // 取景球（全部网格并集，归一化空间）
     const partSphere = box.getBoundingSphere(new THREE.Sphere());
     const half = Math.max(0.02, partSphere.radius * partPadding);
-    // 父部件：最近的网格祖先中被选中的那个
+    // 枢轴解析（世界坐标 → 归一化）
+    const pivotSpec = spec.pivot ?? { mode: 'mesh' as const, meshIndex: spec.meshIndices[0] };
+    let pivotWorld: { x: number; y: number; z: number };
+    if (pivotSpec.mode === 'custom') {
+      pivotWorld = pivotSpec.point;
+    } else if (pivotSpec.mode === 'center') {
+      const c = worldBox.getCenter(new THREE.Vector3());
+      pivotWorld = { x: c.x, y: c.y, z: c.z };
+    } else {
+      const ps = byMeshIndex.get(pivotSpec.meshIndex);
+      if (!ps) throw new Error(`手动拆分：找不到枢轴网格 ${pivotSpec.meshIndex}`);
+      pivotWorld = ps.info.pivot;
+    }
+    // 父部件：从锚网格（枢轴网格，center/custom 时用首网格）沿场景图祖先链上溯，
+    // 第一个属于其他部件的祖先网格所在的部件
+    const anchorMesh =
+      pivotSpec.mode === 'mesh' ? pivotSpec.meshIndex : spec.meshIndices[0];
     let parentSpecIndex = -1;
-    let ancMesh = s.info.parentMeshIndex;
+    let ancMesh = byMeshIndex.get(anchorMesh)?.info.parentMeshIndex ?? null;
     const seen = new Set<number>();
     while (ancMesh !== null && !seen.has(ancMesh)) {
       seen.add(ancMesh);
       const si = specIndexByMesh.get(ancMesh);
-      if (si !== undefined) { parentSpecIndex = si; break; }
+      if (si !== undefined && si !== specIdx) { parentSpecIndex = si; break; }
       ancMesh = byMeshIndex.get(ancMesh)?.info.parentMeshIndex ?? null;
     }
     return {
       spec,
-      positions,
-      uvs: s.uvs,
-      index: s.index,
-      material: s.material,
-      groups: s.groups,
-      pivotNorm: norm(s.info.pivot.x, s.info.pivot.y, s.info.pivot.z),
+      meshes,
+      pivotNorm: norm(pivotWorld.x, pivotWorld.y, pivotWorld.z),
       frameCenter: { x: partSphere.center.x, y: partSphere.center.y, z: partSphere.center.z },
       half,
       parentSpecIndex,
@@ -435,21 +481,26 @@ export async function bakeManualParts(
 
     for (let pi = 0; pi < prepared.parts.length; pi++) {
       const part = prepared.parts[pi];
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(part.positions, 3));
-      if (part.uvs) geo.setAttribute('uv', new THREE.BufferAttribute(part.uvs, 2));
-      if (part.index) geo.setIndex(new THREE.BufferAttribute(part.index, 1));
-      geo.computeVertexNormals();
-      const toonMat = Array.isArray(part.material)
-        ? part.material.map((m) => makeToonFromSource(m, gradientMap))
-        : makeToonFromSource(part.material, gradientMap);
-      if (Array.isArray(toonMat)) {
-        for (const g of part.groups) geo.addGroup(g.start, g.count, g.materialIndex);
-      }
-      const mesh = new THREE.Mesh(geo, toonMat);
-      mesh.frustumCulled = false;
       const rotGroup = new THREE.Group();
-      rotGroup.add(mesh);
+      const disposables: Array<{ dispose(): void }> = [];
+      for (const pm of part.meshes) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(pm.positions, 3));
+        if (pm.uvs) geo.setAttribute('uv', new THREE.BufferAttribute(pm.uvs, 2));
+        if (pm.index) geo.setIndex(new THREE.BufferAttribute(pm.index, 1));
+        geo.computeVertexNormals();
+        const toonMat = Array.isArray(pm.material)
+          ? pm.material.map((m) => makeToonFromSource(m, gradientMap))
+          : makeToonFromSource(pm.material, gradientMap);
+        if (Array.isArray(toonMat)) {
+          for (const g of pm.groups) geo.addGroup(g.start, g.count, g.materialIndex);
+        }
+        const mesh = new THREE.Mesh(geo, toonMat);
+        mesh.frustumCulled = false;
+        rotGroup.add(mesh);
+        disposables.push(geo);
+        (Array.isArray(toonMat) ? toonMat : [toonMat]).forEach((m) => disposables.push(m));
+      }
       scene.add(rotGroup);
 
       const fc = part.frameCenter;
@@ -481,8 +532,7 @@ export async function bakeManualParts(
       }
 
       scene.remove(rotGroup);
-      geo.dispose();
-      (Array.isArray(toonMat) ? toonMat : [toonMat]).forEach((m) => m.dispose());
+      disposables.forEach((d) => d.dispose());
 
       result.set(pi + 1, {
         boneIndex: pi + 1,
