@@ -160,18 +160,30 @@ export function splitByBoneId(
       e.rgba[o + 2] = src[o + 2];
       e.rgba[o + 3] = 255;
     };
+    // back 补充：同一像素 front 已给某 bone 时不覆盖（front 优先），只补该 bone 缺的像素
+    const addPixelBack = (bi0: number, src: Uint8ClampedArray, o: number, p: number) => {
+      let bi = bi0;
+      if (merge) bi = merge.effectiveIndex[bi] ?? bi;
+      const e = perBone.get(bi);
+      if (e && e.mask[p]) return;
+      addPixel(bi0, src, o, p);
+    };
     for (let p = 0; p < W * H; p++) {
       const o = p * 4;
-      let bones = decodeBones(front.idPixels[o], front.idPixels[o + 1], front.idPixels[o + 2]);
-      let src = front.colorPixels;
-      if (bones.length === 0) {
-        bones = decodeBones(back.idPixels[o], back.idPixels[o + 1], back.idPixels[o + 2]);
-        src = back.colorPixels;
+      // 并集语义（与烘焙文件头一致：像素 = pass0 ∪ pass1）：两遍独立归属。
+      // 旧逻辑 front 非空就不看 back——被遮挡的远侧肢体在 front 全被遮挡者
+      // 占住，其像素只存在于 back 遍，被整批丢弃（侧面方向远侧小臂/手全缺）。
+      // 透明像素跳过（颜色无意义），两遍各自判定。
+      if (front.colorPixels[o + 3] > 8) {
+        for (const bi of decodeBones(front.idPixels[o], front.idPixels[o + 1], front.idPixels[o + 2])) {
+          addPixel(bi, front.colorPixels, o, p);
+        }
       }
-      if (bones.length === 0) continue;
-      // 透明像素跳过（颜色无意义）
-      if (src[o + 3] <= 8) continue;
-      for (const bi of bones) addPixel(bi, src, o, p);
+      if (back.colorPixels[o + 3] > 8) {
+        for (const bi of decodeBones(back.idPixels[o], back.idPixels[o + 1], back.idPixels[o + 2])) {
+          addPixelBack(bi, back.colorPixels, o, p);
+        }
+      }
     }
 
     // 每 bone 裁剪

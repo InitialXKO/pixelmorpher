@@ -940,6 +940,10 @@ export async function bakeModelTwoPass(
         colorBack = readFlipped();
       }
       setMaterials('id', THREE.GreaterDepth);
+      // 只清颜色不清深度：Greater 测试仍需 pass0 的前表面深度；不清颜色则
+      // idBack 里没被 ID 覆盖的像素残留 toon 颜色，拆分按并集读 back 时会被
+      // 解码成幻影骨骼
+      renderer.clear(true, false, false);
       renderer.render(scene, camera);
       const idBack = readFlipped();
       onProgress?.(++done, total, `方向 ${d * 45}° ${idOnly ? 'ID后' : '后'}`);
