@@ -1132,6 +1132,23 @@ export async function bakeSixParts(
         renderer.render(scene, camera);
         renderer.autoClear = true;
         const colorPixels = readFlipped();
+        // [临时诊断] 躯干原始帧 ASCII（定位真机与 CPU 模拟的分岔点，定位后删）
+        if (pname === 'torso') {
+          const AW = 64, AH = 40;
+          let opaque = 0;
+          for (let i = 3; i < colorPixels.length; i += 4) if (colorPixels[i] > 8) opaque++;
+          const rows: string[] = [];
+          for (let ay = 0; ay < AH; ay++) {
+            let row = '';
+            const sy = Math.floor((ay / AH) * size);
+            for (let ax = 0; ax < AW; ax++) {
+              const sx = Math.floor((ax / AW) * size);
+              row += colorPixels[(sy * size + sx) * 4 + 3] > 8 ? '#' : '.';
+            }
+            rows.push(row);
+          }
+          console.log(`[bake-debug] torso dir=${((d + 6) % 8)} opaque=${opaque}/${size * size}\n${rows.join('\n')}`);
+        }
         onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° 颜色`);
         await new Promise((r) => setTimeout(r, 0));
 
