@@ -3,15 +3,14 @@
 // 把子节点与父节点在当前帧姿态下合并渲染成一张精灵（冻结姿态），
 // 之后子节点旋转时对合并精灵网格弯曲（见 skin/mesh-skin 的
 // applySnapshotBend 与 unified-render 的快照认领）。
-// 姿态口径：interpolateNodeKeyframes（动画面板读数同源）写入克隆
-// 角色后走 generateRenderPlan + executeRenderPlan 只渲父/子两节点。
+// 姿态口径：克隆角色直接走 generateRenderPlan 按帧渲染（其内部按节点
+// 轨道插值当前帧姿态），只渲父/子两节点。
 // 仅浏览器环境（需要 Canvas）。
 // ============================================================
 
 import type { Character, Sprite, SkinningSnapshot, DirectionIndex } from '../unified-types';
 import { pxToSub, subToPx } from '../unified-types';
 import { generateRenderPlan, executeRenderPlan, computeWorldTransforms } from '../unified-render';
-import { interpolateNodeKeyframes } from '../engine/render-helpers/puppet-keyframe-interpolation';
 import { rgbaToHexOrNull } from '../engine/utils';
 
 export interface SkinningCaptureResult {
@@ -45,19 +44,13 @@ export function captureSkinningSnapshot(
   const parent = character.nodes[node.parentId];
   if (!parent) return null;
 
-  // 克隆 + 当前帧姿态（关键帧插值写入 transform，与面板读数同源）
+  // 克隆后直接按帧渲染：generateRenderPlan 内部按节点轨道插值当前帧姿态
+  // （带 base 兜底）。不要把 interpolateNodeKeyframes 的结果写入 base transform——
+  // 它对无轨道节点用 0 兜底，会清零 rest 角度/偏移，快照姿态就错了（且它还
+  // 偷读全局 store 的 active clip，与调用方传入的帧上下文无关）。
   const clone: Character = JSON.parse(JSON.stringify(character));
-  const interpolated = interpolateNodeKeyframes(character, frame);
-  for (const n of Object.values(clone.nodes)) {
-    const iv = interpolated.get(n.id);
-    if (!iv) continue;
-    if (typeof iv.angle === 'number') n.transform.angle = iv.angle;
-    if (typeof iv.stretch === 'number') n.transform.stretch = iv.stretch;
-    if (typeof iv.x === 'number') n.transform.x = iv.x;
-    if (typeof iv.y === 'number') n.transform.y = iv.y;
-    if (typeof (iv as { tilt?: number }).tilt === 'number') n.transform.tilt = (iv as { tilt?: number }).tilt;
-  }
-  // 只渲父/子与父的祖先链；清掉一切既有快照与关节盘（渲原始双精灵）
+  // 只渲父/子与父的祖先链；清掉一切既有快照，关掉全部关节盘（盘是补缝垫片、
+  // 独立绘制，不属于双精灵本体——父节点自己的盘烘进去会与活盘双份重叠）
   const keep = new Set<string>([nodeId, parent.id]);
   let anc = parent.parentId ? clone.nodes[parent.parentId] : undefined;
   while (anc) {
@@ -67,12 +60,8 @@ export function captureSkinningSnapshot(
   for (const n of Object.values(clone.nodes)) {
     if (!keep.has(n.id)) n.visible = false;
     if (n.attachment) {
-      n.attachment = { ...n.attachment, skinningSnapshot: undefined };
+      n.attachment = { ...n.attachment, skinningSnapshot: undefined, autoJointDisc: false };
     }
-  }
-  const cloneChild = clone.nodes[nodeId];
-  if (cloneChild.attachment) {
-    cloneChild.attachment = { ...cloneChild.attachment, autoJointDisc: false };
   }
 
   const plan = generateRenderPlan(
