@@ -744,7 +744,7 @@ export async function bakeSixParts(
     // 1) 只用所渲染部件的外轮廓剔除其他部件：本部件双面渲进 stencil 得到填充轮廓（二维区域）；
     // 2) 候选 =「通过骨骼与本部件接通」的部件整体（不按骨骼挑三角形——挑骨骼会漏掉锁骨
     //    这类不主导任何三角形的接通骨骼）；每个接通关系一个候选集，候选片元还须落在本
-    //    接通关节的洞口圆盘内（圆心 = 关节投影，半径 = 对方接通骨骼的骨长投影）：洞口只取
+    //    接通关节的洞口圆盘内（圆心 = 关节枢轴即子骨骼原点投影，半径 = 对方接通骨骼的骨长投影）：洞口只取
     //    它自己的接通部件——如髋口取大腿，垂到髋边的手（手臂候选集，圆盘在肩关节）进不来；
     // 3) 本部件正面最后画、只清深度，强制遮挡未剔除部分；单面渲染；
     // 4) 遮挡部件进 ID 遍，ID 改成本部件的：写该接通关系在本部件一侧的骨骼（同一部件对
@@ -929,19 +929,20 @@ export async function bakeSixParts(
         markGroup.add(mi);
       }
       // 候选组：每条跨部件骨骼边（一个接通关节）一组（颜色组 + ID 组），变换与 partGroup 一致
-      interface CandSet { color: THREE.Group; id: THREE.Group; mats: THREE.Material[]; holeU: { value: THREE.Vector3 }; bP: number; bQ: number }
-      const conns: { q: PartName; bP: number; bQ: number }[] = [];
+      interface CandSet { color: THREE.Group; id: THREE.Group; mats: THREE.Material[]; holeU: { value: THREE.Vector3 }; bP: number; bQ: number; jointGi: number }
+      const conns: { q: PartName; bP: number; bQ: number; jointGi: number }[] = [];
       for (let bi = 0; bi < boneToPart.length; bi++) {
         const pi = parentIndex[bi];
         if (pi == null) continue;
         const pParent = boneToPart[pi];
         const pChild = boneToPart[bi];
         if (!pParent || !pChild || pParent === pChild) continue;
-        if (pParent === pname) conns.push({ q: pChild, bP: pi, bQ: bi });
-        else if (pChild === pname) conns.push({ q: pParent, bP: bi, bQ: pi });
+        // 接通关节的枢轴在子骨骼原点（bi），圆盘圆心取它而非父骨骼
+        if (pParent === pname) conns.push({ q: pChild, bP: pi, bQ: bi, jointGi: bi });
+        else if (pChild === pname) conns.push({ q: pParent, bP: bi, bQ: pi, jointGi: bi });
       }
       const candSets: CandSet[] = [];
-      for (const { q, bP, bQ } of conns) {
+      for (const { q, bP, bQ, jointGi } of conns) {
         const qb = parts.get(q);
         if (!qb) continue;
         const views = qb.views;
@@ -977,7 +978,7 @@ export async function bakeSixParts(
         idInnerG.position.copy(inner.position);
         idInnerG.scale.setScalar(scale);
         idG.add(idInnerG);
-        candSets.push({ color: colorG, id: idG, mats, holeU, bP, bQ });
+        candSets.push({ color: colorG, id: idG, mats, holeU, bP, bQ, jointGi });
       }
 
       // 部件相机：紧贴部件 bbox（归一化空间）
@@ -1030,17 +1031,18 @@ export async function bakeSixParts(
           };
         }
 
-        // 候选集的洞口圆盘（本方向）：圆心 = 本侧接通关节投影；半径 = 对方接通骨骼 bQ
-        // 的骨长（bQ 到其子关节）在本帧的投影长度
+        // 候选集的洞口圆盘（本方向）：圆心 = 接通关节（跨部件边的子骨骼原点）投影；
+        // 半径 = 对方接通骨骼 bQ 的骨长（bQ 到其子关节）在本帧的投影长度
         for (const cs of candSets) {
-          const jp = boneInfos[cs.bP].jointPixels[((d + 6) % 8)];
-          if (!jp) continue;
+          projV.copy(normJoints[cs.jointGi]).applyMatrix4(partGroup.matrixWorld).project(camera);
+          const jx = ((projV.x + 1) / 2) * size;
+          const jy = ((1 - projV.y) / 2) * size;
           const childGi = parentIndex.findIndex((p) => p === cs.bQ);
           const endGi = childGi >= 0 ? childGi : cs.bQ;
           projV.copy(normJoints[endGi]).applyMatrix4(partGroup.matrixWorld).project(camera);
           const ex = ((projV.x + 1) / 2) * size;
           const ey = ((1 - projV.y) / 2) * size;
-          cs.holeU.value.set(jp.x, size - jp.y, Math.hypot(ex - jp.x, ey - jp.y));
+          cs.holeU.value.set(jx, size - jy, Math.hypot(ex - jx, ey - jy));
         }
 
         // 颜色一遍，第一段：外轮廓标记 + 候选（接通部件在接通骨骼上的三角形，外轮廓内）
