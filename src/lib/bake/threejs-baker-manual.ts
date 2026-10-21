@@ -228,6 +228,79 @@ export interface PreparedManual {
   rootJoint3D: { x: number; y: number; z: number };
 }
 
+/** 父部件解析（与 prepareManualParts 同一口径的纯函数版，供对话框层级预览复用）：
+ * 锚网格 = 枢轴网格（pivot 缺省或 mode 非 mesh 时用首网格），沿 parentMeshIndex 链上溯，
+ * 第一个属于其他部件的网格所在的部件下标；无则 -1（挂根）。未分配网格在链上跳过。 */
+export function resolveManualParentIndices(
+  meshes: ManualMeshInfo[],
+  parts: { meshIndices: number[]; pivot?: ManualPivotSpec }[],
+): number[] {
+  const parentByMesh = new Map(meshes.map((m) => [m.meshIndex, m.parentMeshIndex]));
+  const specIndexByMesh = new Map<number, number>();
+  parts.forEach((p, i) => {
+    for (const mi of p.meshIndices) if (!specIndexByMesh.has(mi)) specIndexByMesh.set(mi, i);
+  });
+  return parts.map((part, idx) => {
+    if (part.meshIndices.length === 0) return -1;
+    const pivot = part.pivot ?? { mode: 'mesh' as const, meshIndex: part.meshIndices[0] };
+    const anchor = pivot.mode === 'mesh' ? pivot.meshIndex : part.meshIndices[0];
+    let anc = parentByMesh.get(anchor) ?? null;
+    const seen = new Set<number>();
+    while (anc !== null && !seen.has(anc)) {
+      seen.add(anc);
+      const si = specIndexByMesh.get(anc);
+      if (si !== undefined && si !== idx) return si;
+      anc = parentByMesh.get(anc) ?? null;
+    }
+    return -1;
+  });
+}
+
+export interface ManualMeshGroup {
+  name: string;
+  meshIndices: number[];
+}
+
+/** 一键分组草案：按场景图子树——每网格沿 parentMeshIndex 上溯到顶层网格祖先，同根同组 */
+export function groupManualMeshesBySubtree(meshes: ManualMeshInfo[]): ManualMeshGroup[] {
+  const byIndex = new Map(meshes.map((m) => [m.meshIndex, m]));
+  const rootOf = (m: ManualMeshInfo): number => {
+    let cur = m;
+    const seen = new Set<number>();
+    while (cur.parentMeshIndex !== null && byIndex.has(cur.parentMeshIndex) && !seen.has(cur.meshIndex)) {
+      seen.add(cur.meshIndex);
+      cur = byIndex.get(cur.parentMeshIndex)!;
+    }
+    return cur.meshIndex;
+  };
+  const groups = new Map<number, number[]>();
+  for (const m of meshes) {
+    const r = rootOf(m);
+    const arr = groups.get(r) ?? [];
+    arr.push(m.meshIndex);
+    groups.set(r, arr);
+  }
+  return [...groups.entries()].map(([r, idxs]) => ({ name: byIndex.get(r)?.name ?? `mesh_${r}`, meshIndices: idxs }));
+}
+
+/** 网格名 → 词干：去掉尾部数字与分隔符（Arm_L_1 → Arm_L、Mesh.002 → Mesh） */
+export function manualNameStem(name: string): string {
+  const stem = name.replace(/\d+$/, '').replace(/[\s_\-.]+$/, '');
+  return stem || name;
+}
+
+/** 一键分组草案：按名称词干分组（同词干同组，单例自成一组） */
+export function groupManualMeshesByNamePrefix(meshes: ManualMeshInfo[]): ManualMeshGroup[] {
+  const groups = new Map<string, number[]>();
+  for (const m of meshes) {
+    const stem = manualNameStem(m.name);
+    const arr = groups.get(stem) ?? [];
+    arr.push(m.meshIndex);
+    groups.set(stem, arr);
+  }
+  return [...groups.entries()].map(([stem, idxs]) => ({ name: stem, meshIndices: idxs }));
+}
+
 export function prepareManualParts(
   statics: StaticMesh[],
   specs: ManualPartSpec[],
@@ -261,6 +334,8 @@ export function prepareManualParts(
       specIndexByMesh.set(mi, i);
     }
   });
+
+  const parentIndices = resolveManualParentIndices(statics.map((s) => s.info), specs);
 
   const parts: PreparedManualPart[] = specs.map((spec, specIdx) => {
     const meshes: PreparedManualPartMesh[] = [];
@@ -302,19 +377,8 @@ export function prepareManualParts(
       if (!ps) throw new Error(`手动拆分：找不到枢轴网格 ${pivotSpec.meshIndex}`);
       pivotWorld = ps.info.pivot;
     }
-    // 父部件：从锚网格（枢轴网格，center/custom 时用首网格）沿场景图祖先链上溯，
-    // 第一个属于其他部件的祖先网格所在的部件
-    const anchorMesh =
-      pivotSpec.mode === 'mesh' ? pivotSpec.meshIndex : spec.meshIndices[0];
-    let parentSpecIndex = -1;
-    let ancMesh = byMeshIndex.get(anchorMesh)?.info.parentMeshIndex ?? null;
-    const seen = new Set<number>();
-    while (ancMesh !== null && !seen.has(ancMesh)) {
-      seen.add(ancMesh);
-      const si = specIndexByMesh.get(ancMesh);
-      if (si !== undefined && si !== specIdx) { parentSpecIndex = si; break; }
-      ancMesh = byMeshIndex.get(ancMesh)?.info.parentMeshIndex ?? null;
-    }
+    // 父部件：同源解析（resolveManualParentIndices，锚网格沿 parentMeshIndex 链上溯）
+    const parentSpecIndex = parentIndices[specIdx];
     return {
       spec,
       meshes,

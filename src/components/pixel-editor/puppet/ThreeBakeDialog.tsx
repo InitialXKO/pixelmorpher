@@ -39,6 +39,9 @@ import {
 import {
   bakeManualParts,
   listManualMeshes,
+  groupManualMeshesBySubtree,
+  groupManualMeshesByNamePrefix,
+  resolveManualParentIndices,
   type ManualCatalog,
   type ManualPartSpec,
   type ManualPivotSpec,
@@ -746,6 +749,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   // 手动拆分（按网格）：网格清单 + 部件草稿（多网格可合并为一个部件，枢轴可调）
   const [manualCatalog, setManualCatalog] = useState<ManualCatalog | null>(null);
   const [manualParts, setManualParts] = useState<ManualPartDraft[]>([]);
+  const [selectedMeshes, setSelectedMeshes] = useState<Set<number>>(new Set());
+  const [bulkTarget, setBulkTarget] = useState('');
   const [manualListLoading, setManualListLoading] = useState(false);
   const manualPartSeq = useRef(1);
 
@@ -927,27 +932,96 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor]);
 
   /** 读取网格清单（手动模式） */
+  /** 分组草案 → 部件草稿（名称消重，枢轴默认首网格原点） */
+  const draftsFromGroups = useCallback((groups: { name: string; meshIndices: number[] }[]): ManualPartDraft[] => {
+    const used = new Set<string>();
+    return groups.map((g) => {
+      let n = g.name;
+      let k = 2;
+      while (used.has(n)) n = `${g.name}_${k++}`;
+      used.add(n);
+      return {
+        id: manualPartSeq.current++,
+        name: n,
+        meshIndices: [...g.meshIndices],
+        pivot: { mode: 'mesh', meshIndex: g.meshIndices[0] } as ManualPivotSpec,
+      };
+    });
+  }, []);
+
+  /** 一键分组（甲）：按子树 / 按名称前缀 / 逐网格；已有手工划分时先确认 */
+  const applyManualGrouping = useCallback(
+    (mode: 'subtree' | 'prefix' | 'perMesh') => {
+      if (!manualCatalog) return;
+      const dirty = manualParts.some((d) => d.meshIndices.length !== 1 || d.pivot.mode !== 'mesh');
+      if (dirty && !window.confirm('重新分组将覆盖当前的部件划分与枢轴设置，继续？')) return;
+      const groups =
+        mode === 'subtree'
+          ? groupManualMeshesBySubtree(manualCatalog.meshes)
+          : mode === 'prefix'
+            ? groupManualMeshesByNamePrefix(manualCatalog.meshes)
+            : manualCatalog.meshes.map((m) => ({ name: m.name, meshIndices: [m.meshIndex] }));
+      setManualParts(draftsFromGroups(groups));
+      setSelectedMeshes(new Set());
+    },
+    [manualCatalog, manualParts, draftsFromGroups],
+  );
+
+  /** 把一组网格分配给目标部件（'' = 不包含，'__new' = 新建，数字 = 部件 id）；单行与批量共用 */
+  const assignMeshes = useCallback(
+    (meshIndices: number[], target: string) => {
+      if (meshIndices.length === 0) return;
+      const moving = new Set(meshIndices);
+      setManualParts((prev) => {
+        let next = prev.map((p) => {
+          if (!p.meshIndices.some((mi) => moving.has(mi))) return p;
+          const rest = p.meshIndices.filter((x) => !moving.has(x));
+          let pivot = p.pivot;
+          if (pivot.mode === 'mesh' && moving.has(pivot.meshIndex) && rest.length > 0) {
+            pivot = { mode: 'mesh', meshIndex: rest[0] } as ManualPivotSpec;
+          }
+          return { ...p, meshIndices: rest, pivot };
+        });
+        if (target === '__new') {
+          const first = meshIndices[0];
+          next = [
+            ...next,
+            {
+              id: manualPartSeq.current++,
+              name: manualCatalog?.meshes[first]?.name ?? '部件',
+              meshIndices: [...meshIndices],
+              pivot: { mode: 'mesh', meshIndex: first } as ManualPivotSpec,
+            },
+          ];
+        } else if (target !== '') {
+          const tid = Number(target);
+          next = next.map((p) =>
+            p.id === tid ? { ...p, meshIndices: [...p.meshIndices, ...meshIndices] } : p,
+          );
+        }
+        return next;
+      });
+    },
+    [manualCatalog],
+  );
+
+  /** 新建空部件（之后用网格行的下拉或批量分配往里放网格） */
+  const addManualPart = useCallback(() => {
+    const id = manualPartSeq.current++;
+    setManualParts((prev) => [
+      ...prev,
+      { id, name: `部件 ${id}`, meshIndices: [], pivot: { mode: 'center' } as ManualPivotSpec },
+    ]);
+  }, []);
+
   const loadManualCatalog = useCallback(async () => {
     setManualListLoading(true);
     try {
       const inp = await resolveInput();
       const cat = await listManualMeshes(inp, pmxTexturesRef.current ?? undefined);
       setManualCatalog(cat);
-      const used = new Set<string>();
-      setManualParts(
-        cat.meshes.map((m) => {
-          let n = m.name;
-          let k = 2;
-          while (used.has(n)) n = `${m.name}_${k++}`;
-          used.add(n);
-          return {
-            id: manualPartSeq.current++,
-            name: n,
-            meshIndices: [m.meshIndex],
-            pivot: { mode: 'mesh', meshIndex: m.meshIndex } as ManualPivotSpec,
-          };
-        }),
-      );
+      setManualParts(draftsFromGroups(cat.meshes.map((m) => ({ name: m.name, meshIndices: [m.meshIndex] }))));
+      setSelectedMeshes(new Set());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1368,6 +1442,15 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               >
                 {manualListLoading ? '读取中…' : '重新读取'}
               </button>
+              <button onClick={() => applyManualGrouping('subtree')} disabled={!manualCatalog} className="rounded border border-[#3a3a5a] px-2 py-0.5 text-[10px] text-gray-300 hover:bg-[#222240] disabled:opacity-50" title="以顶层网格为根，其场景图子树内的网格并为一个部件">
+                按子树分组
+              </button>
+              <button onClick={() => applyManualGrouping('prefix')} disabled={!manualCatalog} className="rounded border border-[#3a3a5a] px-2 py-0.5 text-[10px] text-gray-300 hover:bg-[#222240] disabled:opacity-50" title="名称去掉尾部数字后词干相同的网格并为一个部件（如 Arm_L_1 / Arm_L_2）">
+                按名称前缀
+              </button>
+              <button onClick={() => applyManualGrouping('perMesh')} disabled={!manualCatalog} className="rounded border border-[#3a3a5a] px-2 py-0.5 text-[10px] text-gray-300 hover:bg-[#222240] disabled:opacity-50" title="每个网格自成一个部件">
+                逐网格
+              </button>
             </div>
             {!manualCatalog && !manualListLoading && (
               <div className="text-[11px] text-gray-600">选择模型文件后自动读取网格列表（URL 输入请点「重新读取」）。把网格分配给部件（多个网格可合并为一个部件），枢轴默认取网格原点，可改包围盒中心或自定义坐标；父子层级按场景图中最近的跨部件网格祖先。</div>
@@ -1375,6 +1458,16 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             {manualListLoading && <div className="text-[11px] text-gray-500">读取网格列表…</div>}
             {manualCatalog && (
               <>
+                <div className="mb-1 flex items-center gap-2">
+                  <button onClick={addManualPart} className="rounded border border-[#3a3a5a] px-2 py-0.5 text-[10px] text-gray-300 hover:bg-[#222240] disabled:opacity-50">＋ 新建部件</button>
+                  <button
+                    onClick={() => setManualParts((prev) => prev.filter((d) => d.meshIndices.length > 0))}
+                    className="rounded border border-[#3a3a5a] px-2 py-0.5 text-[10px] text-gray-300 hover:bg-[#222240] disabled:opacity-50"
+                    title="移除没有任何网格的部件行"
+                  >
+                    清除空部件
+                  </button>
+                </div>
                 <div className="mb-2 max-h-64 overflow-y-auto">
                   {manualParts.map((d) => (
                     <div key={d.id} className="flex flex-wrap items-center gap-2 py-0.5 text-[11px]">
@@ -1412,11 +1505,22 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                           }}
                           className="h-6 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-gray-300"
                         >
-                          {d.meshIndices.map((mi) => (
-                            <option key={mi} value={`mesh:${mi}`}>
-                              网格原点：{manualCatalog.meshes[mi]?.name ?? mi}
-                            </option>
-                          ))}
+                          <optgroup label="本部件网格">
+                            {d.meshIndices.map((mi) => (
+                              <option key={mi} value={`mesh:${mi}`}>
+                                网格原点：{manualCatalog.meshes[mi]?.name ?? mi}
+                              </option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="其他网格（连接点）">
+                            {manualCatalog.meshes
+                              .filter((mm) => !d.meshIndices.includes(mm.meshIndex))
+                              .map((mm) => (
+                                <option key={mm.meshIndex} value={`mesh:${mm.meshIndex}`}>
+                                  网格原点：{mm.name}
+                                </option>
+                              ))}
+                          </optgroup>
                           <option value="center">包围盒中心</option>
                           <option value="custom">自定义坐标</option>
                         </select>
@@ -1442,6 +1546,33 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                           />
                         </span>
                       )}
+                      {d.pivot.mode === 'custom' && (
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            const mp = manualCatalog.meshes[Number(e.target.value)]?.pivot;
+                            if (!mp) return;
+                            setManualParts((prev) =>
+                              prev.map((p) =>
+                                p.id === d.id && p.pivot.mode === 'custom'
+                                  ? { ...p, pivot: { mode: 'custom', point: { ...mp } } as ManualPivotSpec }
+                                  : p,
+                              ),
+                            );
+                          }}
+                          className="h-6 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-gray-400"
+                          title="把某个网格的原点坐标填入自定义枢轴"
+                        >
+                          <option value="" disabled>
+                            取网格原点…
+                          </option>
+                          {manualCatalog.meshes.map((mm) => (
+                            <option key={mm.meshIndex} value={mm.meshIndex}>
+                              {mm.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                       <button
                         onClick={() => setManualParts((prev) => prev.filter((p) => p.id !== d.id))}
                         className="rounded border border-[#3a3a5a] px-2 py-0.5 text-[10px] text-gray-400 hover:bg-[#222240]"
@@ -1452,46 +1583,66 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                   ))}
                 </div>
                 <div className="border-t border-[#2a2a4a] pt-2">
+                  <div className="mb-1 flex items-center gap-2 text-[11px]">
+                    <label className="flex items-center gap-1 text-gray-400">
+                      <input
+                        type="checkbox"
+                        checked={selectedMeshes.size > 0 && selectedMeshes.size === manualCatalog.meshes.length}
+                        onChange={(e) =>
+                          setSelectedMeshes(
+                            e.target.checked ? new Set(manualCatalog.meshes.map((x) => x.meshIndex)) : new Set(),
+                          )
+                        }
+                        className="size-3 accent-cyan-500"
+                      />
+                      全选
+                    </label>
+                    <span className="text-gray-500">已选 {selectedMeshes.size} 个</span>
+                    <select value={bulkTarget} onChange={(e) => setBulkTarget(e.target.value)} className="h-6 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-gray-300">
+                      <option value="">不包含</option>
+                      {manualParts.map((d) => (
+                        <option key={d.id} value={String(d.id)}>
+                          → {d.name || '部件'}
+                        </option>
+                      ))}
+                      <option value="__new">＋ 新建部件</option>
+                    </select>
+                    <button
+                      disabled={selectedMeshes.size === 0}
+                      onClick={() => {
+                        assignMeshes([...selectedMeshes], bulkTarget);
+                        setSelectedMeshes(new Set());
+                      }}
+                      className="rounded border border-[#3a3a5a] px-2 py-0.5 text-[10px] text-gray-300 hover:bg-[#222240] disabled:opacity-50"
+                    >
+                      批量分配
+                    </button>
+                  </div>
                   {manualCatalog.meshes.map((m) => {
                     const owner = manualParts.find((d) => d.meshIndices.includes(m.meshIndex));
                     return (
                       <div key={m.meshIndex} className="flex items-center gap-2 py-0.5 text-[11px]">
+                        <input
+                          type="checkbox"
+                          checked={selectedMeshes.has(m.meshIndex)}
+                          onChange={(e) =>
+                            setSelectedMeshes((prev) => {
+                              const n = new Set(prev);
+                              if (e.target.checked) n.add(m.meshIndex);
+                              else n.delete(m.meshIndex);
+                              return n;
+                            })
+                          }
+                          className="size-3 shrink-0 accent-cyan-500"
+                        />
                         <span className="w-44 truncate text-gray-300" title={m.path}>{m.name}</span>
                         <span className="text-gray-600">{m.triCount} 三角形</span>
+                        <span className="font-mono text-[10px] text-gray-600" title="网格原点（文件世界坐标）">
+                          原点 {m.pivot.x.toFixed(2)}, {m.pivot.y.toFixed(2)}, {m.pivot.z.toFixed(2)}
+                        </span>
                         <select
                           value={owner ? String(owner.id) : ''}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setManualParts((prev) => {
-                              // 先从原部件摘出（枢轴若指向被摘网格且部件还有余网格，改指首网格）
-                              let next = prev.map((p) => {
-                                if (!p.meshIndices.includes(m.meshIndex)) return p;
-                                const rest = p.meshIndices.filter((x) => x !== m.meshIndex);
-                                let pivot = p.pivot;
-                                if (pivot.mode === 'mesh' && pivot.meshIndex === m.meshIndex && rest.length > 0) {
-                                  pivot = { mode: 'mesh', meshIndex: rest[0] } as ManualPivotSpec;
-                                }
-                                return { ...p, meshIndices: rest, pivot };
-                              });
-                              if (v === '__new') {
-                                next = [
-                                  ...next,
-                                  {
-                                    id: manualPartSeq.current++,
-                                    name: m.name,
-                                    meshIndices: [m.meshIndex],
-                                    pivot: { mode: 'mesh', meshIndex: m.meshIndex } as ManualPivotSpec,
-                                  },
-                                ];
-                              } else if (v !== '') {
-                                const tid = Number(v);
-                                next = next.map((p) =>
-                                  p.id === tid ? { ...p, meshIndices: [...p.meshIndices, m.meshIndex] } : p,
-                                );
-                              }
-                              return next;
-                            });
-                          }}
+                          onChange={(e) => assignMeshes([m.meshIndex], e.target.value)}
                           className="h-6 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-gray-300"
                         >
                           <option value="">不包含</option>
@@ -1506,6 +1657,40 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                     );
                   })}
                 </div>
+                {(() => {
+                  const nonEmpty = manualParts.filter((d) => d.meshIndices.length > 0);
+                  if (nonEmpty.length === 0) return null;
+                  const parents = resolveManualParentIndices(
+                    manualCatalog.meshes,
+                    nonEmpty.map((d) => ({ meshIndices: d.meshIndices, pivot: d.pivot })),
+                  );
+                  const childrenOf = new Map<number, number[]>();
+                  parents.forEach((pIdx, i) => {
+                    if (pIdx >= 0) {
+                      const arr = childrenOf.get(pIdx) ?? [];
+                      arr.push(i);
+                      childrenOf.set(pIdx, arr);
+                    }
+                  });
+                  const renderNode = (i: number, depth: number): React.ReactNode => (
+                    <div key={nonEmpty[i].id}>
+                      <div style={{ paddingLeft: depth * 14 }} className="py-px text-[11px]">
+                        {depth > 0 && <span className="text-gray-600">└ </span>}
+                        <span className="text-gray-200">{nonEmpty[i].name || '部件'}</span>
+                        <span className="text-gray-600"> · {nonEmpty[i].meshIndices.length} 网格</span>
+                      </div>
+                      {(childrenOf.get(i) ?? []).map((c) => renderNode(c, depth + 1))}
+                    </div>
+                  );
+                  return (
+                    <div className="mt-2 border-t border-[#2a2a4a] pt-2">
+                      <div className="mb-1 text-[10px] text-gray-500">
+                        导入后层级预览（锚网格 = 枢轴网格或首网格，沿场景图祖先取第一个跨部件网格；与烘焙同口径解析）
+                      </div>
+                      {nonEmpty.map((_, i) => (parents[i] === -1 ? renderNode(i, 0) : null))}
+                    </div>
+                  );
+                })()}
               </>
             )}
           </div>
