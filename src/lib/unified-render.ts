@@ -428,9 +428,21 @@ function solveChainIKOverrides(
   if (chain.targetBlueprint) {
     try {
       const tbResult = evaluateBlueprint(chain.targetBlueprint, { frame, frameRate, vars: variableContext?.values ?? {} });
-      if (Number.isFinite(tbResult.translateX)) target.x = tbResult.translateX;
-      if (Number.isFinite(tbResult.translateY)) target.y = tbResult.translateY;
-      if (Number.isFinite(tbResult.translateZ)) target.z = tbResult.translateZ;
+      let drove = false;
+      if (Number.isFinite(tbResult.translateX)) { target.x = tbResult.translateX; drove = true; }
+      if (Number.isFinite(tbResult.translateY)) { target.y = tbResult.translateY; drove = true; }
+      if (Number.isFinite(tbResult.translateZ)) { target.z = tbResult.translateZ; drove = true; }
+      // 转位（改在 IK 蓝图的输入端）：图输出绕链根当前世界位在 XY 平面内转
+      // transposeAngle——图本身不改，静态目标回退时不重复旋转（drove 门控）
+      if (drove && chain.transposeAngle) {
+        const rad = (chain.transposeAngle * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const dx = target.x - points[0].x;
+        const dy = target.y - points[0].y;
+        target.x = points[0].x + dx * cos - dy * sin;
+        target.y = points[0].y + dx * sin + dy * cos;
+      }
     } catch {
       // 蓝图求值失败时回退到静态目标
     }

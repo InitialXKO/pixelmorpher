@@ -872,6 +872,10 @@ export interface IKChain {
   bendDir?: number;
   /** Distance from end joint pivot to tip (pixels). IK controls the tip, not the pivot. */
   tipLength?: number;
+  /** 转位角（度，转位克隆写入）：仅当 targetBlueprint 驱动目标时生效——渲染端在
+   *  蓝图输出覆盖目标之后、求解之前，绕链根当前世界位在 XY 平面内把目标转此角。
+   *  静态目标的转位在克隆时已直接旋转 target3D，不走此字段。 */
+  transposeAngle?: number;
   /** Whether this chain is active */
   enabled: boolean;
 }

@@ -1,22 +1,31 @@
 // 肢体转位克隆：把一个节点子树深拷贝一份，克隆根绕其 socket 附着点在平面内
-// 转 θ 安置（转位 = 转平面角度：克隆根 base angle 与其 angle 轨道 +θ；
-// 不含 tilt、不镜像、附着点不变、子孙局部角不变）。
+// 转 θ 安置（转位 = 转平面角度，不含 tilt、不镜像、附着点不变、子孙局部角不变）。
+//
+// θ 的承载：克隆根挂一个 'rotate' 变换修改器（params.angle = θ），在渲染
+// Step 2 与关键帧角度加算——不改 base/轨道/剪辑/服装偏移的任何角度值，
+// 事后可调、可关。节点有蓝图时按手术式同步把修改器节点接进图（优先
+// addModifierNodeToBlueprint；其要求 time/screen 节点，缺失时手动接进
+// transform 输出节点的 rotation 端口）；无蓝图时渲染端按 modifiers 现场生成。
 //
 // 引用跟随口径：
 // - 子树内部引用重映射跟随：children/parentId、子孙 attachment.parentSocketId
 //   （socket 随父节点克隆换新 id）、节点蓝图里指向子树节点的 nodeId 参数、
 //   服装集 pieces（按新 slotKey 复制条目，精灵共用）、nodeOffsets、slotVariants、
-//   剪辑 nodeKeyframes（按新 nodeId 复制，根的 angle +θ）、剪辑状态关键帧的
-//   slotChanges（同帧补新 slotKey 同值）。
+//   剪辑 nodeKeyframes（按新 nodeId 原样复制）、剪辑状态关键帧的 slotChanges
+//   （同帧补新 slotKey 同值）。
 // - 克隆根的 parentSocketId 指向原父节点 socket（子树外），保持不变。
-// - 完全落在子树内的 IK 链才克隆（跨界链不克隆）；链的 target3D/poleTarget3D
-//   绕链根第 0 帧世界位在 XY 平面（东/下）内转 θ，target 镜像按不变式重算；
-//   带 targetBlueprint 的链蓝图值逐帧覆盖静态目标，转位对其无效（已知限）。
+// - 完全落在子树内的 IK 链才克隆（跨界链不克隆）；静态 target3D/poleTarget3D
+//   绕链根第 0 帧世界位在 XY 平面（东/下）内转 θ，target 镜像按不变式重算
+//   （IK 覆写是顶层绝对替换，只认目标——转位对 IK 的尊重只能从目标侧给）；
+//   蓝图驱动的链另在链上记 transposeAngle：渲染端在蓝图输出覆盖目标之后、
+//   求解之前，绕链根当前世界位把图输出转 θ（改在 IK 蓝图的输入端）。
 // - 角色级蓝图（角色/状态/全局）里指向原节点的引用不改（外部引用留在原肢体）。
 
-import type { Character, Node, IKChain, NodeKeyframe, CostumeStateKeyframe } from './unified-types';
+import type { Character, Node, IKChain, NodeKeyframe, CostumeStateKeyframe, ModifierInstance } from './unified-types';
 import { computeWorldTransforms } from './unified-render';
 import { subToPx, ikTargetMirror } from './unified-types';
+import { addModifierNodeToBlueprint } from './blueprint/migrate';
+import type { BlueprintGraph } from './blueprint/ir';
 
 export type IdFactory = (prefix: string) => string;
 
@@ -43,6 +52,68 @@ function remapIdStrings(value: unknown, idMap: Map<string, string>): void {
       else remapIdStrings(v, idMap);
     }
   }
+}
+
+/**
+ * 把 rotate 修改器接进已有蓝图：优先手术式 addModifierNodeToBlueprint
+ * （要求图中有 time/screen 节点）；未生效时手动把 rotate 节点接进
+ * transform 输出节点的 rotation 端口（已有连接则插 add 节点合并，
+ * 字面量则经 const 节点保留）。无 transform 节点则原图返回（修改器仅存列表）。
+ */
+function attachRotateModifierToBlueprint(
+  bp: BlueprintGraph,
+  mod: ModifierInstance,
+  nextId: IdFactory,
+): BlueprintGraph {
+  const patched = addModifierNodeToBlueprint(bp, mod as never);
+  const modGraphId = `mod_${mod.id.replace(/-/g, '').slice(0, 12)}`;
+  if (patched.nodes.some((n) => n.id === modGraphId)) return patched;
+
+  const graph = deepClone(bp);
+  let timeNode = graph.nodes.find((n) => n.type === 'time');
+  if (!timeNode) {
+    timeNode = { id: nextId('time'), type: 'time', inputs: {}, params: {} };
+    graph.nodes.push(timeNode);
+  }
+  graph.nodes.push({
+    id: modGraphId,
+    type: 'rotate',
+    inputs: { t: { nodeId: timeNode.id } },
+    params: { enabled: true, angle: Number(mod.params.angle ?? 0), pivotOffsetX: 0, pivotOffsetY: 0 },
+  });
+  const transformNode = graph.nodes.find((n) => n.type === 'transform');
+  if (!transformNode) return bp;
+  const existing = transformNode.inputs.rotation as { nodeId?: string; type?: string; value?: number } | undefined;
+  if (existing && typeof existing === 'object' && 'nodeId' in existing && existing.nodeId) {
+    const addId = nextId('add');
+    graph.nodes.push({
+      id: addId,
+      type: 'add',
+      inputs: {
+        a: existing as never,
+        b: { nodeId: modGraphId, output: 'outRotation' },
+      },
+      params: {},
+    });
+    transformNode.inputs.rotation = { nodeId: addId, output: 'out' };
+  } else if (existing && typeof existing === 'object' && existing.type === 'number') {
+    const constId = nextId('const');
+    graph.nodes.push({ id: constId, type: 'const', inputs: {}, params: { value: existing.value ?? 0 } });
+    const addId = nextId('add');
+    graph.nodes.push({
+      id: addId,
+      type: 'add',
+      inputs: {
+        a: { nodeId: constId, output: 'out' },
+        b: { nodeId: modGraphId, output: 'outRotation' },
+      },
+      params: {},
+    });
+    transformNode.inputs.rotation = { nodeId: addId, output: 'out' };
+  } else {
+    transformNode.inputs.rotation = { nodeId: modGraphId, output: 'outRotation' };
+  }
+  return graph;
 }
 
 export interface TransposeCloneResult {
@@ -118,15 +189,18 @@ export function cloneSubtreeTransposed(
     if (node.blueprint) remapIdStrings(node.blueprint as unknown, idMap);
     if (oldId === rootNodeId) {
       node.name = `${src.name}·转位`;
-      node.transform = { ...node.transform, angle: (node.transform.angle ?? 0) + thetaDeg };
-      if (node.tracks.angle) {
-        node.tracks = {
-          ...node.tracks,
-          angle: {
-            ...node.tracks.angle,
-            keyframes: node.tracks.angle.keyframes.map((kf) => ({ ...kf, value: kf.value + thetaDeg })),
-          },
-        };
+      // θ 由 'rotate' 变换修改器承载（渲染 Step 2 加算），不改任何角度数据
+      const mod: ModifierInstance = {
+        id: nextId('mod'),
+        type: 'rotate',
+        enabled: true,
+        collapsed: false,
+        params: { angle: thetaDeg, pivotOffsetX: 0, pivotOffsetY: 0 },
+        blendMode: 'add',
+      };
+      node.modifiers = [...node.modifiers, mod];
+      if (node.blueprint) {
+        node.blueprint = attachRotateModifierToBlueprint(node.blueprint, mod, nextId);
       }
     }
     nodes[node.id] = node;
@@ -151,8 +225,7 @@ export function cloneSubtreeTransposed(
       for (const oldId of subtreeIds) {
         const off = set.nodeOffsets[oldId];
         if (off) {
-          nextOffsets[idMap.get(oldId)!] =
-            oldId === rootNodeId ? { ...off, angle: off.angle + thetaDeg } : { ...off };
+          nextOffsets[idMap.get(oldId)!] = { ...off };
           offChanged = true;
         }
       }
@@ -198,6 +271,8 @@ export function cloneSubtreeTransposed(
       c.name = `${chain.name}·转位`;
       c.rootNodeId = idMap.get(chain.rootNodeId)!;
       c.endNodeId = idMap.get(chain.endNodeId)!;
+      // 蓝图驱动目标的转位角（求解输入端生效，与源链已有转位角叠加）
+      c.transposeAngle = (chain.transposeAngle ?? 0) + thetaDeg;
       if (c.target3D) {
         c.target3D = rotateTarget(chain, c.target3D);
         if (canvas) {
@@ -221,19 +296,18 @@ export function cloneSubtreeTransposed(
 }
 
 /**
- * 剪辑级跟随（纯函数）：把属于该角色的 nodeKeyframes 按 idMap 复制一份
- * （根的 angle 显式值 +θ），并给状态关键帧的 slotChanges 补新 slotKey 同值。
- * 无可复制内容时返回 null（剪辑不变）。
+ * 剪辑级跟随（纯函数）：把属于该角色的 nodeKeyframes 按 idMap 原样复制一份
+ * （角度不改——转位由克隆根的 rotate 修改器在渲染期叠加），并给状态关键帧
+ * 的 slotChanges 补新 slotKey 同值。无可复制内容时返回 null（剪辑不变）。
  */
 export function cloneClipDataForTranspose<T extends { puppetCharacterId?: string; nodeKeyframes?: NodeKeyframe[]; stateKeyframes?: CostumeStateKeyframe[] }>(
   clip: T,
   characterId: string,
   result: TransposeCloneResult,
-  thetaDeg: number,
   nextId: IdFactory = defaultId,
 ): T | null {
   if (clip.puppetCharacterId !== characterId) return null;
-  const { idMap, slotKeyMap, oldRootId } = result;
+  const { idMap, slotKeyMap } = result;
   let changed = false;
 
   const srcKfs = clip.nodeKeyframes ?? [];
@@ -245,7 +319,6 @@ export function cloneClipDataForTranspose<T extends { puppetCharacterId?: string
       ...deepClone(kf),
       id: nextId('kf'),
       nodeId: newNodeId,
-      ...(kf.nodeId === oldRootId && kf.angle !== undefined ? { angle: kf.angle + thetaDeg } : {}),
     });
   }
   let nodeKeyframes = clip.nodeKeyframes;

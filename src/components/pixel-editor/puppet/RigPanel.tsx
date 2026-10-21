@@ -300,7 +300,7 @@ function RigNodeProperties({
               value={transposeAngle}
               onChange={(e) => setTransposeAngle(Number(e.target.value) || 0)}
               className="h-7 text-[11px] bg-[#111128] border-[#1e1e3a] mt-1"
-              title="克隆此节点子树，克隆根绕附着点转此角度（根 angle 与其关键帧一起转）"
+              title="克隆此节点子树，克隆根挂 rotate 变换修改器转此角度（渲染期叠加，事后可调可关）"
             />
           </div>
           <Button

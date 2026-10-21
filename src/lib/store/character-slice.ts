@@ -184,7 +184,7 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
         [characterId]: { ...result.character, updatedAt: Date.now() },
       },
       animationClips: s.animationClips.map(
-        (clip) => cloneClipDataForTranspose(clip, characterId, result, thetaDeg, generateId) ?? clip,
+        (clip) => cloneClipDataForTranspose(clip, characterId, result, generateId) ?? clip,
       ),
     }));
     return result.newRootId;
