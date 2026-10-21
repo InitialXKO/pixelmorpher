@@ -1008,12 +1008,13 @@ function resolveSprite(
   costumeSet?: import('./unified-types').CostumeSet,
   sprites?: Record<string, import('./unified-types').Sprite>,
   variantId?: string,
+  latitude?: number,
 ): { sprite: Sprite | null; mirror: boolean; spriteId: string | null } {
   // 只走服装集：node.slot 只定义槽位，不存精灵。
-  // 分层解析（变体→基础）走 sprite-resolve 的共同实现，与蓝图预览逐级一致。
+  // 分层解析（纬度→变体→基础）走 sprite-resolve 的共同实现，与蓝图预览逐级一致。
   if (costumeSet && node.slot) {
     const piece = costumeSet.pieces[node.slot.slotKey];
-    return resolvePieceSprite(piece, direction, variantId, sprites);
+    return resolvePieceSprite(piece, direction, variantId, sprites, latitude);
   }
   return { sprite: null, mirror: false, spriteId: null };
 }
@@ -1033,7 +1034,7 @@ export function resolveNodeSpriteId(
   if (!node) return null;
   const activeCs = (character.costumeSets ?? []).find((cs) => cs.id === character.activeCostumeSetId);
   const spriteTable = globalSprites ?? character.sprites ?? {};
-  const { spriteId } = resolveSprite(node, direction, activeCs, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? '']);
+  const { spriteId } = resolveSprite(node, direction, activeCs, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? ''], character.latitude ?? 0);
   return spriteId;
 }
 
@@ -1417,14 +1418,14 @@ export function generateRenderPlan(
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
     // 方向混合时：先按 dirA 解析主精灵
     const resolveDir = dirBlend ? dirBlend.dirA : currentDirection;
-    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? '']);
+    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0);
     if (!sprite) continue;
 
     // 方向间过渡（蒙皮转面 A）：blend 不为 0/1 时，双精灵 faceTurn + alpha 混合
     // 只在需要时双采样，避免性能开销
     let blendedSprite: typeof sprite | null = null;
     if (dirBlend && sprite.data) {
-      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? '']);
+      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0);
       if (spriteB && spriteB.data) {
         try {
           const { applyFaceTurn, alphaBlendGrids } = require('./skin/face-turn') as typeof import('./skin/face-turn');

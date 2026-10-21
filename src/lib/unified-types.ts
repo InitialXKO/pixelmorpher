@@ -798,6 +798,10 @@ export interface CostumePiece {
   /** 通用自定义变体精灵：variantId → direction → sprite（变体定义在 Character.variantDefs）。
    *  解析顺序：变体直达 → 变体镜像 → 基础 sprites 直达 → 基础镜像（见 sprite-resolve 的 resolvePieceSprite） */
   variantSprites?: Record<string, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>;
+  /** 全角度烘焙的纬度精灵集：纬度（度，±45/±90）→ direction → sprite；基纬度 0 用 sprites。
+   *  解析：角色 latitude 取最近的已存纬度（差 ≤22.5°）整套优先，套内缺方向回落基础链；
+   *  极点套（±90）只有 direction 0 一张，任意方向都用它（见 sprite-resolve 的 resolvePieceSprite） */
+  latitudeSprites?: Record<number, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>;
   scaleVariants: Partial<Record<number, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>>;
   mirrorMap: MirrorMap;                         // Direction mirror mapping
   crossSections: CrossSection[];                // Cross section definitions for disc gen

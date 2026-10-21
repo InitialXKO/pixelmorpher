@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BakeResult } from '@/lib/bake/threejs-baker';
+import { FULL_ANGLE_LATITUDES } from '@/lib/bake/threejs-baker';
 import {
   bakeModelTwoPass,
   bakeSingleBone,
@@ -726,6 +727,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
   /** 烘焙模式：twopass=整模 ID 双遍（16 遍），sixpart=六部件（96 遍） */
   const [bakeMode, setBakeMode] = useState<'twopass' | 'sixpart' | 'manual'>('sixpart');
+  // 全角度模式：额外 ±45°（各 8 方向）与 ±90°（各 1 个朝向）纬度的整套精灵
+  const [fullAngle, setFullAngle] = useState(false);
   // 手动拆分（按网格）：网格清单 + 部件草稿（多网格可合并为一个部件，枢轴可调）
   const [manualCatalog, setManualCatalog] = useState<ManualCatalog | null>(null);
   const [manualParts, setManualParts] = useState<ManualPartDraft[]>([]);
@@ -821,6 +824,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         granularity,
         manualMerges,
         manualUnmerges,
+        extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
         onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
         ...(canReuseColors ? { idOnly: true, reuseBake: lastBakeRef.current!.data } : {}),
       });
@@ -838,7 +842,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges]);
+  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges, fullAngle]);
 
   /** 六部件烘焙：6 部件 × 8 方向 ×（颜色+ID）= 96 遍 */
   const handleBakeSixPart = useCallback(async () => {
@@ -859,6 +863,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         granularity,
         manualMerges,
         manualUnmerges,
+        extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
         onProgress: (done, total, label) => setProgress(`${done}/${total} 遍 · ${label}`),
       });
       setTotalMs(performance.now() - t0);
@@ -874,7 +879,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges]);
+  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges, fullAngle]);
 
   /** 读取网格清单（手动模式） */
   const loadManualCatalog = useCallback(async () => {
@@ -939,6 +944,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       const proc = await bakeManualParts(inp, specs, {
         size,
         paletteSize,
+        extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
         onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
       });
       setTotalMs(performance.now() - t0);
@@ -950,7 +956,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [manualCatalog, manualParts, resolveInput, size, paletteSize]);
+  }, [manualCatalog, manualParts, resolveInput, size, paletteSize, fullAngle]);
 
   /** 按当前模式分发烘焙 */
   const handleBakeDispatch = useCallback(() => {
@@ -1226,6 +1232,10 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                 <option value="twopass">整模 ID 双遍（16 遍）</option>
                 <option value="manual">手动拆分（按网格）</option>
               </select>
+            </label>
+            <label className="flex cursor-pointer items-center gap-1" title="额外渲染 ±45°（各 8 方向）与 ±90°（各 1 个朝向，正上方/正下方）的整套精灵，导入后按角色纬度自动选用；渲染遍数约 ×3.3">
+              <input type="checkbox" checked={fullAngle} onChange={(e) => setFullAngle(e.target.checked)} />
+              全角度（±45°/±90°）
             </label>
             {bakeMode !== 'manual' && (
             <label className="flex items-center gap-1" title="粗：手指/脚趾/小骨骼合并，约15个节点；细：一个骨骼一个节点（调试用）">

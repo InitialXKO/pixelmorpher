@@ -11,7 +11,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { BakeOptions, BakeResult } from './threejs-baker';
-import { medianCut, nearestPaletteIndex } from './threejs-baker';
+import { dirsForLatitude, latitudePitchRad, medianCut, nearestPaletteIndex } from './threejs-baker';
 import type { TopologyResult } from './bone-topology';
 import { analyzeTopology, type TopoBone } from './bone-topology';
 
@@ -29,10 +29,14 @@ export interface BakedBoneInfo {
 
 export interface TwoPassGroup {
   direction: number;
+  /** 视角纬度（度，undefined/0=基纬度） */
+  latitude?: number;
   /** 0=前（LessEqualDepth），1=后（GreaterDepth） */
   pass: 0 | 1;
   colorPixels: Uint8ClampedArray;
   idPixels: Uint8ClampedArray;
+  /** 本组（纬度,方向）下各 bone 的关节像素（按 bone index）；拆分优先用它，回落 bones[].jointPixels[方向] */
+  jointPixels?: Array<{ x: number; y: number } | undefined>;
 }
 
 export interface TwoPassBakeData {
@@ -890,20 +894,29 @@ export async function bakeModelTwoPass(
     const groups: TwoPassGroup[] = [];
     const jointPixels: Array<Array<{ x: number; y: number }>> = bones.map(() => []);
     const projV = new THREE.Vector3();
-    const total = idOnly ? 8 : 16;
+    // 全角度：基纬度 0 + 额外纬度（±90 只渲循环 0）；帧列表拍平避免循环体重排
+    const latitudes = [0, ...(options.extraLatitudes ?? [])];
+    const frames: Array<{ lat: number; d: number }> = latitudes.flatMap((lat) =>
+      dirsForLatitude(lat).map((d) => ({ lat, d })),
+    );
+    const total = frames.length * (idOnly ? 1 : 2);
     let done = 0;
 
-    for (let d = 0; d < 8; d++) {
+    group.rotation.order = 'YXZ';
+    for (const { lat, d } of frames) {
       group.rotation.y = (d / 8) * Math.PI * 2;
+      group.rotation.x = latitudePitchRad(lat);
       group.updateMatrixWorld(true);
 
-      // 关节投影（整图像素，top-down）
+      // 关节投影（整图像素，top-down）；bone 级 jointPixels 只记基纬度，组上带本帧的
+      const frameJoints: Array<{ x: number; y: number }> = [];
       for (let bi = 0; bi < bones.length; bi++) {
         projV.copy(normJoints[bi]).applyMatrix4(group.matrixWorld).project(camera);
-        jointPixels[bi][((d + 6) % 8)] = {
+        frameJoints[bi] = {
           x: ((projV.x + 1) / 2) * size,
           y: ((1 - projV.y) / 2) * size,
         };
+        if (lat === 0) jointPixels[bi][((d + 6) % 8)] = frameJoints[bi];
       }
 
       renderer.setRenderTarget(rt);
@@ -911,7 +924,7 @@ export async function bakeModelTwoPass(
 
       let colorFront: Uint8ClampedArray;
       let colorBack: Uint8ClampedArray;
-      const useCachedColors = idOnly && reuseBake;
+      const useCachedColors = idOnly && reuseBake && lat === 0;
       if (useCachedColors) {
         // 仅重渲 ID：复用缓存颜色
         const rf = reuseBake!.groups.find((g) => g.direction === d && g.pass === 0);
@@ -930,7 +943,7 @@ export async function bakeModelTwoPass(
       setMaterials('id', THREE.LessEqualDepth);
       renderer.render(scene, camera);
       const idFront = readFlipped();
-      onProgress?.(++done, total, `方向 ${d * 45}° ${idOnly ? 'ID' : '前'}`);
+      onProgress?.(++done, total, `${lat !== 0 ? `纬度 ${lat}° ` : ''}方向 ${d * 45}° ${idOnly ? 'ID' : '前'}`);
       await new Promise((r) => setTimeout(r, 0)); // 让 UI 更新
 
       if (!useCachedColors) {
@@ -946,12 +959,12 @@ export async function bakeModelTwoPass(
       renderer.clear(true, false, false);
       renderer.render(scene, camera);
       const idBack = readFlipped();
-      onProgress?.(++done, total, `方向 ${d * 45}° ${idOnly ? 'ID后' : '后'}`);
+      onProgress?.(++done, total, `${lat !== 0 ? `纬度 ${lat}° ` : ''}方向 ${d * 45}° ${idOnly ? 'ID后' : '后'}`);
       await new Promise((r) => setTimeout(r, 0));
 
       groups.push(
-        { direction: ((d + 6) % 8), pass: 0, colorPixels: colorFront, idPixels: idFront },
-        { direction: ((d + 6) % 8), pass: 1, colorPixels: colorBack, idPixels: idBack },
+        { direction: ((d + 6) % 8), latitude: lat, pass: 0, colorPixels: colorFront, idPixels: idFront, jointPixels: frameJoints },
+        { direction: ((d + 6) % 8), latitude: lat, pass: 1, colorPixels: colorBack, idPixels: idBack, jointPixels: frameJoints },
       );
       renderer.setRenderTarget(null);
     }

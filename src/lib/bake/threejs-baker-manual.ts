@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { makeToonFromSource, makeGradientMap } from './threejs-baker-sixpart';
-import { medianCut, nearestPaletteIndex } from './threejs-baker';
+import { dirsForLatitude, latitudePitchRad, medianCut, nearestPaletteIndex } from './threejs-baker';
 import { rgbaToHexOrNull } from '../engine/utils';
 import type { PixelGrid, DirectionIndex } from '../unified-types';
 import type { ProcessedBone, ProcessedBoneDirection } from './skeleton-mapper';
@@ -56,6 +56,8 @@ export interface ManualPartSpec {
 }
 
 export interface ManualBakeOptions {
+  /** 全角度模式：额外纬度（度），如 [45,-45,90,-90]；基纬度 0 恒渲，|纬度|≥90 只渲一个朝向 */
+  extraLatitudes?: number[];
   size?: number;
   paletteSize?: number;
   toonSteps?: number;
@@ -475,7 +477,11 @@ export async function bakeManualParts(
       bakeWidth: size,
     });
 
-    const total = prepared.parts.length * 8;
+    const latitudes = [0, ...(options.extraLatitudes ?? [])];
+    const frames: Array<{ lat: number; d: number }> = latitudes.flatMap((lat) =>
+      dirsForLatitude(lat).map((d) => ({ lat, d })),
+    );
+    const total = prepared.parts.length * frames.length;
     let done = 0;
     const projV = new THREE.Vector3();
 
@@ -510,8 +516,10 @@ export async function bakeManualParts(
       camera.updateMatrixWorld(true);
 
       const directions: ProcessedBoneDirection[] = [];
-      for (let d = 0; d < 8; d++) {
+      rotGroup.rotation.order = 'YXZ';
+      for (const { lat, d } of frames) {
         rotGroup.rotation.y = (d / 8) * Math.PI * 2;
+        rotGroup.rotation.x = latitudePitchRad(lat);
         rotGroup.updateMatrixWorld(true);
         // 枢轴投影（整图 top-down 像素）
         projV.set(part.pivotNorm.x, part.pivotNorm.y, part.pivotNorm.z)
@@ -526,8 +534,11 @@ export async function bakeManualParts(
         const colorPixels = readFlipped();
         renderer.setRenderTarget(null);
         const dir = buildDirection(colorPixels, size, ((d + 6) % 8), jx, jy, part.half, paletteSize);
-        if (dir) directions.push(dir);
-        onProgress?.(++done, total, `${part.spec.name} ${d * 45}°`);
+        if (dir) {
+          dir.latitude = lat;
+          directions.push(dir);
+        }
+        onProgress?.(++done, total, `${part.spec.name} ${lat !== 0 ? `纬度 ${lat}° ` : ''}${d * 45}°`);
         await new Promise((r) => setTimeout(r, 0));
       }
 

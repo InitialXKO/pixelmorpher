@@ -24,6 +24,8 @@ import {
 // ---- 处理后的单 bone 单方向 ----
 export interface ProcessedBoneDirection {
   direction: DirectionIndex;
+  /** 视角纬度（度）：undefined/0=基纬度套；±45/±90=全角度模式的额外套（±90 只有 direction 0） */
+  latitude?: number;
   grid: PixelGrid;
   width: number;
   height: number;
@@ -138,9 +140,22 @@ export function splitByBoneId(
     });
   }
 
-  for (let d = 0; d < 8; d++) {
-    const front = bake.groups.find((g) => g.direction === d && g.pass === 0)!;
-    const back = bake.groups.find((g) => g.direction === d && g.pass === 1)!;
+  // （纬度,方向）对迭代：基纬度 8 向 + 全角度额外纬度（±90 只有方向 0）
+  const pairKeys: Array<{ lat: number; d: number }> = [];
+  {
+    const seen = new Set<string>();
+    for (const g of bake.groups) {
+      const lat = g.latitude ?? 0;
+      const key = `${lat}|${g.direction}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        pairKeys.push({ lat, d: g.direction });
+      }
+    }
+  }
+  for (const { lat, d } of pairKeys) {
+    const front = bake.groups.find((g) => g.direction === d && g.pass === 0 && (g.latitude ?? 0) === lat)!;
+    const back = bake.groups.find((g) => g.direction === d && g.pass === 1 && (g.latitude ?? 0) === lat)!;
 
     // 一遍扫描，按 bone 累积 mask + 颜色（位掩码：像素同时归属多个 bones）
     const perBone = new Map<number, { rgba: Uint8ClampedArray; mask: Uint8Array; count: number }>();
@@ -203,8 +218,9 @@ export function splitByBoneId(
         }
       }
       if (maxX < 0) continue; // 无像素
-      const jx = bone.jointPixels[d].x;
-      const jy = bone.jointPixels[d].y;
+      const jp0 = front.jointPixels?.[bi] ?? bone.jointPixels[d];
+      const jx = jp0.x;
+      const jy = jp0.y;
       // 紧包围盒裁剪（+2px padding），plug 存偏移
       const pad2 = 2;
       let x0 = Math.max(0, Math.floor(minX - pad2));
@@ -269,6 +285,7 @@ export function splitByBoneId(
       const plugY = jy - y0;
       pb.directions.push({
         direction: d as DirectionIndex,
+        latitude: lat,
         grid,
         width: cw,
         height: ch,
@@ -418,7 +435,7 @@ function sanitizeId(s: string): string {
  * 最长段）的最大值。无可测像素返回 null。
  */
 function measureJointOpeningWidth(pb: ProcessedBone): number | null {
-  const dir = pb.directions.find((d) => d.direction === 6) ?? pb.directions[0];
+  const dir = pb.directions.find((d) => d.direction === 6 && (d.latitude ?? 0) === 0) ?? pb.directions[0];
   if (!dir) return null;
   const grid = dir.grid;
   const cy = Math.round(dir.plugY);
@@ -498,7 +515,7 @@ export function mapBonesToNodes(
 
     // attachment：plug 用方向 0 的（各方向 sprite.plug 自己带）
     // 注意：无方向的父骨骼占位（directions 为空）没有 plug，用零值
-    const d0 = pb.directions.find((d) => d.direction === 0) ?? pb.directions[0];
+    const d0 = pb.directions.find((d) => d.direction === 0 && (d.latitude ?? 0) === 0) ?? pb.directions[0];
     if (isRoot) {
       node.attachment = { type: 'fixed', fixedOffset: { x: 0, y: 0 } };
     } else {
@@ -518,10 +535,13 @@ export function mapBonesToNodes(
     const slotKey = `slot_${characterId}_${pb.boneIndex}`;
     const piece = createDefaultCostumePiece(slotKey, '#ffffff');
     for (const dir of pb.directions) {
-      const spriteId = `spr_${characterId}_${pb.boneIndex}_${dir.direction}`;
+      const dirLat = dir.latitude ?? 0;
+      const spriteId = dirLat === 0
+        ? `spr_${characterId}_${pb.boneIndex}_${dir.direction}`
+        : `spr_${characterId}_${pb.boneIndex}_lat${dirLat}_${dir.direction}`;
       const sprite: Sprite = {
         id: spriteId,
-        name: `${pb.boneName} d${dir.direction}`,
+        name: dirLat === 0 ? `${pb.boneName} d${dir.direction}` : `${pb.boneName} lat${dirLat} d${dir.direction}`,
         width: dir.width,
         height: dir.height,
         data: dir.grid,
@@ -531,7 +551,12 @@ export function mapBonesToNodes(
         globalCameraHalf: dir.globalCameraHalf ?? 1.0,
       };
       sprites[spriteId] = sprite;
-      piece.sprites[dir.direction] = { spriteId };
+      if (dirLat === 0) {
+        piece.sprites[dir.direction] = { spriteId };
+      } else {
+        (piece.latitudeSprites ??= {})[dirLat] ??= {};
+        piece.latitudeSprites[dirLat][dir.direction] = { spriteId };
+      }
     }
     pieces[slotKey] = piece;
     node.slot = piece;
@@ -567,7 +592,7 @@ export function mapBonesToNodes(
     // 选项 A：Socket 存 3D 静态偏移（父关节→子关节），Transform 存姿态（初始 0）
     // 3D 偏移 = joint3D 差值（全局像素，Y 取反：Y-up→Y-down）
     if (pb.joint3D && parentPb.joint3D) {
-      const cdir = pb.directions.find((d) => d.direction === 6) ?? pb.directions[0];
+      const cdir = pb.directions.find((d) => d.direction === 6 && (d.latitude ?? 0) === 0) ?? pb.directions[0];
       const gch = cdir?.globalCameraHalf ?? 1.0;
       const bw = pb.bakeWidth ?? 128;
       const scale = (bw / 2) / gch;
@@ -703,8 +728,22 @@ export function splitSixParts(
       return out;
     };
 
-    for (let d = 0; d < 8; d++) {
-      const g = bake.groups.find((x) => x.part === part && x.direction === d);
+    // （纬度,方向）对迭代（同 splitByBoneId）
+    const partPairs: Array<{ lat: number; d: number }> = [];
+    {
+      const seen = new Set<string>();
+      for (const x of bake.groups) {
+        if (x.part !== part) continue;
+        const lat = x.latitude ?? 0;
+        const key = `${lat}|${x.direction}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          partPairs.push({ lat, d: x.direction });
+        }
+      }
+    }
+    for (const { lat, d } of partPairs) {
+      const g = bake.groups.find((x) => x.part === part && x.direction === d && (x.latitude ?? 0) === lat);
       if (!g) continue;
       const perBone = new Map<number, { rgba: Uint8ClampedArray; mask: Uint8Array; count: number; contrib: Map<number, number> }>();
       const addPixel = (bi0: number, o: number, p: number) => {
@@ -797,7 +836,7 @@ export function splitSixParts(
           }
         }
         if (maxX < 0) continue;
-        const exist = pb.directions.find((dd) => dd.direction === d);
+        const exist = pb.directions.find((dd) => dd.direction === d && (dd.latitude ?? 0) === lat);
         // 重复条目（同 bone 同方向已有主图）：本帧像素多来自被合并进 bi 的贡献骨骼
         // （如锁骨并入躯干单元），以像素最多的贡献骨骼为锚在本帧重建，后文重锚叠回主图
         let domBi = bi;
@@ -807,7 +846,7 @@ export function splitSixParts(
             if (n > best) { best = n; domBi = cbi; }
           }
         }
-        const jp = (exist ? bake.bones[domBi] : bone).jointPixels[d];
+        const jp = g.jointPixels?.[domBi] ?? (exist ? bake.bones[domBi] : bone).jointPixels[d];
         if (!jp) continue;
         const jx = jp.x;
         const jy = jp.y;
@@ -929,6 +968,7 @@ export function splitSixParts(
         }
         pb.directions.push({
           direction: d as DirectionIndex,
+          latitude: lat,
           grid,
           width: cwN,
           height: chN,

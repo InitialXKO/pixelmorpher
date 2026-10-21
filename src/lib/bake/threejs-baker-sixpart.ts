@@ -17,6 +17,7 @@ import {
   type BoneGranularity,
 } from './threejs-baker-twopass';
 import type { BakeOptions } from './threejs-baker';
+import { dirsForLatitude, latitudePitchRad } from './threejs-baker';
 import {
   analyzeTopology,
   type PartName,
@@ -84,6 +85,10 @@ export function assignBoneToPart(
 export interface SixPartGroup {
   part: PartName;
   direction: number;
+  /** 视角纬度（度，undefined/0=基纬度） */
+  latitude?: number;
+  /** 本组（纬度,方向）下本部件各 bone 的关节像素（全局 bone index → 像素） */
+  jointPixels?: Record<number, { x: number; y: number }>;
   colorPixels: Uint8ClampedArray;
   /** 块内局部 bone ID（0,1,2…，见 partBoneMap）；单节点部件可省略（无需拆分） */
   idPixels?: Uint8ClampedArray;
@@ -737,9 +742,14 @@ export async function bakeSixParts(
       }
       partNeedsId.set(pname, effSet.size > 1);
     }
+    // 全角度：基纬度 0 + 额外纬度（±90 只渲循环 0）
+    const latitudes = [0, ...(options.extraLatitudes ?? [])];
+    const frames: Array<{ lat: number; d: number }> = latitudes.flatMap((lat) =>
+      dirsForLatitude(lat).map((d) => ({ lat, d })),
+    );
     let total = 0;
     for (const pname of parts.keys()) {
-      total += 8 * (partNeedsId.get(pname) ? 2 : 1);
+      total += frames.length * (partNeedsId.get(pname) ? 2 : 1);
     }
     let done = 0;
 
@@ -1145,28 +1155,40 @@ export async function bakeSixParts(
       // 关节投影（此部件的 bones，每方向）
       const projV = new THREE.Vector3();
 
-      for (let d = 0; d < 8; d++) {
+      for (const { lat, d } of frames) {
         const ang = (d / 8) * Math.PI * 2;
-        partGroup.rotation.y = ang;
+        const pitch = latitudePitchRad(lat);
+        // 俯仰+偏航（order YXZ：先俯仰后偏航，纬度相对观察者恒定）；四组同构设置
+        for (const g of [partGroup, markGroup, idPartGroup]) {
+          g.rotation.order = 'YXZ';
+          g.rotation.y = ang;
+          g.rotation.x = pitch;
+        }
         partGroup.updateMatrixWorld(true);
-        markGroup.rotation.y = ang;
+        idPartGroup.updateMatrixWorld(true);
         for (const cs of candSets) {
-          cs.color.rotation.y = ang;
-          cs.id.rotation.y = ang;
+          for (const g of [cs.color, cs.id]) {
+            g.rotation.order = 'YXZ';
+            g.rotation.y = ang;
+            g.rotation.x = pitch;
+          }
         }
 
-        // 关节像素（用部件相机），按规范方向索引
+        // 关节像素（用部件相机），按规范方向索引；bone 级只记基纬度，组上带本帧的
+        const groupJoints: Record<number, { x: number; y: number }> = {};
         for (const gi of bp.partBones) {
           projV.copy(normJoints[gi]).applyMatrix4(partGroup.matrixWorld).project(camera);
-          boneInfos[gi].jointPixels[((d + 6) % 8)] = {
+          const jp = {
             x: ((projV.x + 1) / 2) * size,
             y: ((1 - projV.y) / 2) * size,
           };
+          groupJoints[gi] = jp;
+          if (lat === 0) boneInfos[gi].jointPixels[((d + 6) % 8)] = jp;
         }
 
         // 候选方向线（本方向）：关节位置与骨骼方向随 partGroup 同步旋转（纯旋转，点/向同变换）
         {
-          const rotM = new THREE.Matrix4().makeRotationY(ang);
+          const rotM = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(pitch, ang, 0, 'YXZ'));
           for (let i = 0; i < conns.length && i < 8; i++) {
             dirShared.uJoints.value[i].copy(normJoints[conns[i].jointGi]).applyMatrix4(rotM);
             dirShared.uDirs.value[i].copy(conns[i].dirBase).applyMatrix4(rotM);
@@ -1213,7 +1235,7 @@ export async function bakeSixParts(
           }
           console.log(`[bake-debug] torso dir=${((d + 6) % 8)} opaque=${opaque}/${size * size}\n${rows.join('\n')}`);
         }
-        onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° 颜色`);
+        onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${lat !== 0 ? `纬度 ${lat}° ` : ''}${d * 45}° 颜色`);
         await new Promise((r) => setTimeout(r, 0));
 
         // ID 一遍：单节点部件跳过。结构同颜色遍：候选先写「本部件骨骼」的 ID（共用
@@ -1226,18 +1248,17 @@ export async function bakeSixParts(
           renderer.render(scene, camera);
           for (const cs of candSets) scene.remove(cs.id);
           scene.add(idPartGroup);
-          idPartGroup.rotation.y = ang;
           idPartGroup.updateMatrixWorld(true);
           renderer.clear(false, true, false);
           renderer.autoClear = false;
           renderer.render(scene, camera);
           renderer.autoClear = true;
           idPixels = readFlipped();
-          onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${d * 45}° ID`);
+          onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${lat !== 0 ? `纬度 ${lat}° ` : ''}${d * 45}° ID`);
           await new Promise((r) => setTimeout(r, 0));
         }
 
-        groups.push({ part: pname, direction: ((d + 6) % 8), colorPixels, idPixels, cameraHalf: half });
+        groups.push({ part: pname, direction: ((d + 6) % 8), latitude: lat, jointPixels: groupJoints, colorPixels, idPixels, cameraHalf: half });
         renderer.setRenderTarget(null);
       }
 
