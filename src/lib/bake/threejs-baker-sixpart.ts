@@ -72,6 +72,19 @@ export function assignBoneToPart(
   }
   if (/頭|目|眼|髪|髮/.test(n) || (/首/.test(n) && !/手首/.test(n))) return 'head';
   if (/上半身|下半身|腰|胸|肩|センター/.test(n)) return 'torso';
+  // VRoid / VRM 标准人形骨名（J_Bip_*；J_Sec_* 为头发/裙摆等次级骨）
+  if (n.includes('J_Bip_') || n.startsWith('J_Sec_') || n.includes('J_Opt_')) {
+    const side = /_L_/.test(n) ? 'L' : /_R_/.test(n) ? 'R' : 'C';
+    if (/Shoulder/.test(n)) return 'torso'; // 锁骨归躯干（与英文 shoulder 的现有约定一致）
+    if (/UpperArm|LowerArm|Forearm|Hand|Thumb|Index|Middle|Ring|Little/.test(n))
+      return side === 'R' ? 'armR' : 'armL';
+    if (/UpperLeg|LowerLeg|Foot|Toe/.test(n)) return side === 'R' ? 'legR' : 'legL';
+    if (/Head|Neck|Eye/.test(n)) return 'head';
+    if (/Hips|Spine|Chest|UpperChest/.test(n)) return 'torso';
+    if (/Hair/.test(n)) return 'head'; // J_Sec 头发
+    if (/Skirt|Bust/.test(n)) return 'torso'; // J_Sec 裙摆/胸部弹簧骨
+    return null;
+  }
   if (HEAD_RE.test(n) && !/spine/i.test(n)) return 'head';
   const isArm = ARM_RE.test(n);
   const isLeg = LEG_RE.test(n);

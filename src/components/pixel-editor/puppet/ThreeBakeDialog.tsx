@@ -741,7 +741,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [fullAngle, setFullAngle] = useState(false);
   // PMX 导入：zip 解包的贴图文件表 + 原味着色开关（参考版 NPR，默认关）
   const pmxTexturesRef = useRef<Map<string, Blob> | null>(null);
-  const [isPmx, setIsPmx] = useState(false);
+  const [isMmd, setIsMmd] = useState(false);
   const [pmxFlavor, setPmxFlavor] = useState(false);
   // 手动拆分（按网格）：网格清单 + 部件草稿（多网格可合并为一个部件，枢轴可调）
   const [manualCatalog, setManualCatalog] = useState<ManualCatalog | null>(null);
@@ -790,7 +790,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setManualCatalog(null);
     setManualParts([]);
     pmxTexturesRef.current = null;
-    setIsPmx(false);
+    setIsMmd(false);
     const reader = new FileReader();
     reader.onload = () => {
       const buf = reader.result as ArrayBuffer;
@@ -798,9 +798,9 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         // zip 包导入：整模型文件夹打包——找 .pmx，其余条目作贴图文件表
         try {
           const files = unzipSync(new Uint8Array(buf));
-          const pmxPath = Object.keys(files).find((k) => /\.pmx$/i.test(k));
+          const pmxPath = Object.keys(files).find((k) => /\.(pmx|pmd)$/i.test(k));
           if (!pmxPath) {
-            setError('zip 中没有 .pmx 文件');
+            setError('zip 中没有 .pmx / .pmd 文件');
             return;
           }
           const tex = new Map<string, Blob>();
@@ -808,14 +808,14 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             if (path !== pmxPath) tex.set(path, new Blob([bytes as BlobPart]));
           }
           pmxTexturesRef.current = tex;
-          setIsPmx(true);
+          setIsMmd(true);
           setFileData(files[pmxPath].slice().buffer as ArrayBuffer);
         } catch (e) {
           setError(e instanceof Error ? `zip 解压失败：${e.message}` : 'zip 解压失败');
         }
         return;
       }
-      if (/\.pmx$/i.test(f.name)) setIsPmx(true);
+      if (/\.(pmx|pmd)$/i.test(f.name)) setIsMmd(true);
       setFileData(buf);
     };
     reader.onerror = () => setError('文件读取失败');
@@ -1227,7 +1227,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             <input
               ref={fileRef}
               type="file"
-              accept=".glb,.gltf,.pmx,.zip"
+              accept=".glb,.gltf,.vrm,.pmx,.pmd,.zip"
               className="hidden"
               onChange={(e) => handleFile(e.target.files?.[0])}
             />
@@ -1284,10 +1284,10 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               <input type="checkbox" checked={fullAngle} onChange={(e) => setFullAngle(e.target.checked)} />
               全角度（±45°/±90°）
             </label>
-            {isPmx && (
+            {isMmd && (
               <label className="flex cursor-pointer items-center gap-1" title="开：颜色遍用参考版 NPR 着色——材质按名称分类（脸/发/肌/眼/衣/金属等）套 toon ramp + rim 预设；关：全走管线统一 toon 转换（共享 gradientMap，与 GLB 同一口径）">
                 <input type="checkbox" checked={pmxFlavor} onChange={(e) => setPmxFlavor(e.target.checked)} />
-                PMX 原味着色
+                MMD 原味着色
               </label>
             )}
             {bakeMode !== 'manual' && (
