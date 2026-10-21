@@ -197,6 +197,8 @@ export function cloneSubtreeTransposed(
         collapsed: false,
         params: { angle: thetaDeg, pivotOffsetX: 0, pivotOffsetY: 0 },
         blendMode: 'add',
+        paramKeyframes: [],
+        paramDrivers: [],
       };
       node.modifiers = [...node.modifiers, mod];
       if (node.blueprint) {
