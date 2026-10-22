@@ -196,7 +196,7 @@ export interface WorldTransform {
   worldZ: SubPixel;        // World position Z (sub-pixel, 3D depth)
   worldAngle: number;      // Derived view-plane angle (degrees; = frameViewAngle(worldFrame))
   worldFrame: Mat3;        // Accumulated orientation frame (basis-coords rotation, incl. own local rot)
-  worldStretch: number;    // Accumulated stretch factor
+  worldStretch: number;    // 本节点自身 stretch（不沿层级累乘；与 scaleX/skew 同口径）
   variantIndex: DirectionIndex; // Current direction
   mirror: boolean;         // Whether this node is mirrored
   scaleX?: number;          // X-axis scale factor (blueprint t.scaleX, default 1)
@@ -592,7 +592,7 @@ function computeChildTransforms(
         ? frameViewAngleForDirection(childFrame, geometryDirection, childInterpolated.variantIndex)
         : frameViewAngle(childFrame),
       worldFrame: childFrame,
-      worldStretch: childInterpolated.stretch * parentWorld.worldStretch,
+      worldStretch: childInterpolated.stretch,
       variantIndex: childInterpolated.variantIndex,
       mirror: childMirror,
       scaleX: childInterpolated.scaleX,
