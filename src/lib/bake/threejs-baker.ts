@@ -6,7 +6,8 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { loadModelScene } from './load-model';
+import { makeNprFromSource } from './pmx-npr';
 
 export interface BakeResult {
   /** 方向索引 0-7,对应角度 direction*45° */
@@ -38,6 +39,12 @@ export function latitudePitchRad(lat: number): number {
 export interface BakeOptions {
   /** 全角度模式：额外纬度（度），如 [45,-45,90,-90]；基纬度 0 恒渲，|纬度|≥90 只渲一个朝向 */
   extraLatitudes?: number[];
+  /** PMX 导入的贴图文件表（zip 解包：路径→Blob）；仅 PMX 输入时用 */
+  pmxTextures?: Map<string, Blob>;
+  /** PMX 原味着色：开时颜色遍用参考版 NPR 着色（材质按名分类套 toon ramp + rim
+   *  预设，pmx-npr.ts），关（默认）时全走统一 toon 转换（共享 gradientMap，
+   *  与 GLB 来源同一口径） */
+  usePmxNpr?: boolean;
   /** 渲染分辨率,默认 64 */
   size?: number;
   /** 调色板颜色数,默认 16 */
@@ -71,7 +78,7 @@ function makeGradientMap(steps: number): THREE.DataTexture {
 }
 
 /** 把场景内所有 Mesh 换成卡通材质(保留原贴图与基色) */
-function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture): void {
+function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, usePmxNpr?: boolean): void {
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
     if (!mesh.isMesh) return;
@@ -84,11 +91,15 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture): v
         : new THREE.Color(0xffffff);
     const map =
       old && 'map' in old ? ((old as THREE.MeshStandardMaterial).map as THREE.Texture | null) : null;
-    mesh.material = new THREE.MeshToonMaterial({
-      color: baseColor,
-      ...(map ? { map } : {}),
-      gradientMap,
-    });
+    const npr = usePmxNpr ? makeNprFromSource(old ?? null) : null;
+    mesh.material =
+      npr ??
+      new THREE.MeshToonMaterial({
+        color: baseColor,
+        ...(map ? { map } : {}),
+        ...(old && 'side' in old && old.side !== undefined ? { side: old.side } : {}),
+        gradientMap,
+      });
     // 旧材质释放(贴图保留,新材质在用)
     if (old && old !== mesh.material) old.dispose();
   });
@@ -175,10 +186,7 @@ export async function bakeModelToSprites(
 
   try {
     // ---- 加载 ----
-    const loader = new GLTFLoader();
-    const gltf =
-      typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
-    const model = gltf.scene;
+    const model = await loadModelScene(input, options.pmxTextures);
 
     let meshCount = 0;
     let skinnedCount = 0;
@@ -205,7 +213,7 @@ export async function bakeModelToSprites(
 
     // ---- 卡通材质 + 灯光 ----
     const gradientMap = makeGradientMap(toonSteps);
-    applyToonMaterials(group, gradientMap);
+    applyToonMaterials(group, gradientMap, options.usePmxNpr);
     const scene = new THREE.Scene();
     scene.add(group);
     scene.add(new THREE.AmbientLight(0xffffff, 0.9));

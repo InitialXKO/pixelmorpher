@@ -270,6 +270,20 @@ export function frameYAxisWorld(m: Mat3, direction: DirectionIndex): { x: number
   return viewBasisToWorld(m[1], m[4], m[7], direction);
 }
 
+/**
+ * frame 的 +Y 轴在 viewDirection 视平面上的派生角（度）：frame 在 geometryDirection 基下
+ * 复合（节点转向开启）时，精灵在目标朝向下的屏幕角度。geometryDirection === viewDirection
+ * 时与 frameViewAngle 逐值相同（基变换互逆）。
+ */
+export function frameViewAngleForDirection(
+  m: Mat3, geometryDirection: DirectionIndex, viewDirection: DirectionIndex,
+): number {
+  const y = frameYAxisWorld(m, geometryDirection);
+  const th = (((viewDirection + 2) % 8) * Math.PI) / 4;
+  const h = y.x * Math.cos(th) + y.z * Math.sin(th);
+  return (Math.atan2(-h, y.y) * 180) / Math.PI;
+}
+
 // ---- Sprite & Visual Data ----
 
 /** Pixel color: hex string or null (transparent) */
@@ -872,6 +886,10 @@ export interface IKChain {
   bendDir?: number;
   /** Distance from end joint pivot to tip (pixels). IK controls the tip, not the pivot. */
   tipLength?: number;
+  /** 转位角（度，转位克隆写入）：仅当 targetBlueprint 驱动目标时生效——渲染端在
+   *  蓝图输出覆盖目标之后、求解之前，绕链根当前世界位在 XY 平面内把目标转此角。
+   *  静态目标的转位在克隆时已直接旋转 target3D，不走此字段。 */
+  transposeAngle?: number;
   /** Whether this chain is active */
   enabled: boolean;
 }

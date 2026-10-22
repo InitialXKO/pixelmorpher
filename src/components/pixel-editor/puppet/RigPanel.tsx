@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { NodeTreeItemWrapper } from './NodeTree';
+import { collectSubtreeIds, deleteNodeSubtree, findParentNode, ikChainMembership, reparentNode } from '@/lib/node-actions';
 import PuppetModifierPanel from './PuppetModifierPanel';
 import GlobalBlueprintEditor from './GlobalBlueprintEditor';
 import CharacterBlueprintEditor from './CharacterBlueprintEditor';
@@ -75,43 +76,19 @@ export default function RigPanel({
     [selectedSkeletonId, selectedCharacter, handleUpdateNode]
   );
 
-  const handleDeleteNode = useCallback(() => {
-    if (!selectedSkeletonId || !selectedNodeId || !selectedNode || !selectedCharacter) return;
-    // 根节点不能删
-    if (selectedNodeId === selectedCharacter.rootNodeId) return;
-    const childCount = Object.values(selectedCharacter.nodes).filter(n => n.parentId === selectedNodeId).length;
-    if (childCount > 0 && !confirm(`删除节点「${selectedNode.name}」会连带删除 ${childCount} 个子节点，继续？`)) return;
+  const handleTransposeClone = useCallback((thetaDeg: number) => {
+    if (!selectedSkeletonId || !selectedNodeId || !selectedNode) return;
+    if (selectedNodeId === selectedCharacter?.rootNodeId) return;
     const store = useProjectStore.getState();
-    store.pushUndo('删除节点');
-    // 递归收集所有后代
-    const idsToRemove = new Set<string>([selectedNodeId]);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const n of Object.values(selectedCharacter.nodes)) {
-        if (idsToRemove.has(n.id)) continue;
-        if (n.parentId && idsToRemove.has(n.parentId)) {
-          idsToRemove.add(n.id);
-          changed = true;
-        }
-      }
-    }
-    // 从父节点的 children 列表移除
-    const parentId = selectedNode.parentId;
-    if (parentId) {
-      const parent = selectedCharacter.nodes[parentId];
-      if (parent) {
-        store.updateUnifiedNode(selectedSkeletonId, parentId, {
-          children: parent.children.filter(id => id !== selectedNodeId),
-        });
-      }
-    }
-    // 删除所有收集到的节点
-    for (const id of idsToRemove) {
-      store.removeUnifiedNode(selectedSkeletonId, id);
-    }
-    store.setSelectedNodeId(null);
+    const newRootId = store.cloneNodeSubtreeTransposed(selectedSkeletonId, selectedNodeId, thetaDeg);
+    if (newRootId) store.setSelectedNodeId(newRootId);
   }, [selectedSkeletonId, selectedNodeId, selectedNode, selectedCharacter]);
+
+  const handleDeleteNode = useCallback(() => {
+    if (!selectedSkeletonId || !selectedNodeId) return;
+    // 与右键菜单共用同一删除口径（node-actions：含只挂插槽的子节点、根节点拒绝、确认文案一致）
+    deleteNodeSubtree(selectedSkeletonId, selectedNodeId);
+  }, [selectedSkeletonId, selectedNodeId]);
 
   const handleAddSocket = useCallback(() => {
     if (!selectedSkeletonId || !selectedNodeId || !selectedNode) return;
@@ -197,6 +174,7 @@ export default function RigPanel({
           onAddSocket={handleAddSocket}
           onRemoveSocket={handleRemoveSocket}
           onDeleteNode={handleDeleteNode}
+          onTransposeClone={handleTransposeClone}
           isRoot={selectedNode.id === selectedCharacter?.rootNodeId}
         />
       )}
@@ -241,6 +219,7 @@ function RigNodeProperties({
   onAddSocket,
   onRemoveSocket,
   onDeleteNode,
+  onTransposeClone,
   isRoot,
 }: {
   node: Node;
@@ -249,8 +228,11 @@ function RigNodeProperties({
   onAddSocket: () => void;
   onRemoveSocket: (socketId: string) => void;
   onDeleteNode: () => void;
+  onTransposeClone: (thetaDeg: number) => void;
   isRoot: boolean;
 }) {
+  const [transposeAngle, setTransposeAngle] = useState(45);
+  const character = useProjectStore((s) => (characterId ? s.unifiedCharacters[characterId] : undefined));
   return (
     <div className="space-y-3 bg-[#080818] rounded border border-[#1e1e3a] p-2">
       <div className="flex items-center justify-between">
@@ -272,11 +254,37 @@ function RigNodeProperties({
       <div>
         <Label className="text-[10px] text-gray-500">名称</Label>
         <Input
+          id="rig-node-name-input"
           value={node.name}
           onChange={(e) => onUpdate({ name: e.target.value })}
           className="h-7 text-[11px] bg-[#111128] border-[#1e1e3a] mt-1"
         />
       </div>
+
+      {/* 转位克隆：克隆整个子树并转平面角度（根节点除外） */}
+      {!isRoot && (
+        <div className="flex items-end gap-1.5">
+          <div className="flex-1">
+            <Label className="text-[10px] text-gray-500">转位克隆（转平面角度°）</Label>
+            <Input
+              id="rig-transpose-angle-input"
+              type="number"
+              value={transposeAngle}
+              onChange={(e) => setTransposeAngle(Number(e.target.value) || 0)}
+              className="h-7 text-[11px] bg-[#111128] border-[#1e1e3a] mt-1"
+              title="克隆此节点子树，克隆根挂 rotate 变换修改器转此角度（渲染期叠加，事后可调可关）"
+            />
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-[11px]"
+            onClick={() => onTransposeClone(transposeAngle)}
+          >
+            克隆
+          </Button>
+        </div>
+      )}
 
       {/* Rest pose */}
       <div>
@@ -321,6 +329,68 @@ function RigNodeProperties({
           </div>
         </div>
       </div>
+
+      {/* 连接（父节点 / 插槽） */}
+      {character && !isRoot && (
+        <div>
+          <Label className="text-[10px] text-gray-500 uppercase tracking-wider">连接（父节点 / 插槽）</Label>
+          {(() => {
+            const currentParent = findParentNode(character.nodes, node);
+            const connValue =
+              node.attachment?.type === 'socket' && node.attachment.parentSocketId
+                ? node.attachment.parentSocketId
+                : `fixed:${currentParent?.id ?? character.rootNodeId}`;
+            const subtreeIds = new Set(collectSubtreeIds(character.nodes, node.id));
+            const candidates = Object.values(character.nodes).filter((n) => !subtreeIds.has(n.id));
+            return (
+              <>
+                <select
+                  value={connValue}
+                  onChange={(e) => {
+                    if (!characterId) return;
+                    if (ikChainMembership(character, node.id) === 'member') {
+                      alert('该节点是 IK 链的中间关节，改父级会破坏 IK 链的层级，请先删除或调整 IK 链');
+                      return;
+                    }
+                    const v = e.target.value;
+                    let parentId: string;
+                    let socketId: string | null;
+                    if (v.startsWith('fixed:')) {
+                      parentId = v.slice(6);
+                      socketId = null;
+                    } else {
+                      socketId = v;
+                      const owner = Object.values(character.nodes).find((n) =>
+                        (n.sockets ?? []).some((sk) => sk.id === v),
+                      );
+                      if (!owner) return;
+                      parentId = owner.id;
+                    }
+                    if (!reparentNode(characterId, node.id, { parentId, socketId })) {
+                      alert('无法更改父节点：目标无效或会形成循环引用');
+                    }
+                  }}
+                  className="mt-1 h-6 w-full rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-[11px] text-gray-300"
+                >
+                  {candidates.map((p) => (
+                    <optgroup key={p.id} label={p.id === character.rootNodeId ? `${p.name}（根节点）` : p.name}>
+                      {(p.sockets ?? []).map((sk) => (
+                        <option key={sk.id} value={sk.id}>
+                          插槽：{sk.name}
+                        </option>
+                      ))}
+                      <option value={`fixed:${p.id}`}>（固定连接，不插槽）</option>
+                    </optgroup>
+                  ))}
+                </select>
+                <p className="mt-0.5 text-[9px] text-gray-600">
+                  插槽连接的位置由插槽决定，换父级后节点会移到新插槽处
+                </p>
+              </>
+            );
+          })()}
+        </div>
+      )}
 
       {/* 关节 */}
       <div>

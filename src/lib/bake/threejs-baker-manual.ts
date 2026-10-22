@@ -10,7 +10,7 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { loadModelScene } from './load-model';
 import { makeToonFromSource, makeGradientMap } from './threejs-baker-sixpart';
 import { dirsForLatitude, latitudePitchRad, medianCut, nearestPaletteIndex } from './threejs-baker';
 import { rgbaToHexOrNull } from '../engine/utils';
@@ -53,9 +53,17 @@ export interface ManualPartSpec {
   meshIndices: number[];
   /** 枢轴来源，缺省 = meshIndices[0] 的原点 */
   pivot?: ManualPivotSpec;
+  /** 父部件覆盖（specs 数组下标）：-1 = 挂根；undefined = 自动解析（锚网格场景图祖先） */
+  parentIndex?: number;
+  /** 朝向调整（垂臂）：渲染前把部件绕枢轴按垂臂语义转到自然下垂，后代部件跟随 */
+  droop?: boolean;
 }
 
 export interface ManualBakeOptions {
+  /** PMX 导入的贴图文件表（zip 解包：路径→Blob）；仅 PMX 输入时用 */
+  pmxTextures?: Map<string, Blob>;
+  /** PMX 原味着色：开时颜色遍用参考版 NPR 着色（pmx-npr.ts），关时统一 toon 转换 */
+  usePmxNpr?: boolean;
   /** 全角度模式：额外纬度（度），如 [45,-45,90,-90]；基纬度 0 恒渲，|纬度|≥90 只渲一个朝向 */
   extraLatitudes?: number[];
   size?: number;
@@ -78,11 +86,8 @@ interface StaticMesh {
   groups: THREE.BufferGeometry['groups'];
 }
 
-async function loadModel(input: string | ArrayBuffer): Promise<THREE.Group> {
-  const loader = new GLTFLoader();
-  const gltf =
-    typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
-  return gltf.scene;
+async function loadModel(input: string | ArrayBuffer, pmxTextures?: Map<string, Blob>): Promise<THREE.Group> {
+  return (await loadModelScene(input, pmxTextures)) as THREE.Group;
 }
 
 /** 遍历模型，收集每网格的静态（世界空间）几何与清单信息 */
@@ -182,8 +187,8 @@ function collectStaticMeshes(model: THREE.Object3D): { statics: StaticMesh[]; ha
 }
 
 /** 读取网格清单（对话框在手动模式下展示勾选） */
-export async function listManualMeshes(input: string | ArrayBuffer): Promise<ManualCatalog> {
-  const model = await loadModel(input);
+export async function listManualMeshes(input: string | ArrayBuffer, pmxTextures?: Map<string, Blob>): Promise<ManualCatalog> {
+  const model = await loadModel(input, pmxTextures);
   const { statics, hasBones } = collectStaticMeshes(model);
   return { meshes: statics.map((s) => s.info), hasBones };
 }
@@ -193,8 +198,9 @@ export async function listManualMeshes(input: string | ArrayBuffer): Promise<Man
 /** 加载并收集静态网格数据（prepareManualParts 的输入；供测试与高级调用） */
 export async function loadManualStatics(
   input: string | ArrayBuffer,
+  pmxTextures?: Map<string, Blob>,
 ): Promise<{ statics: StaticMesh[]; hasBones: boolean }> {
-  const model = await loadModel(input);
+  const model = await loadModel(input, pmxTextures);
   return collectStaticMeshes(model);
 }
 
@@ -217,6 +223,8 @@ export interface PreparedManualPart {
   half: number;
   /** 父部件在 specs 中的下标，无（挂根）为 -1 */
   parentSpecIndex: number;
+  /** 实际施加的朝向调整角度（度）；0 = 未启用或已下垂跳过 */
+  droopAngleDeg: number;
 }
 
 export interface PreparedManual {
@@ -224,6 +232,86 @@ export interface PreparedManual {
   normalization: { center: { x: number; y: number; z: number }; scale: number };
   /** 根节点 joint3D（模型原点的归一化坐标） */
   rootJoint3D: { x: number; y: number; z: number };
+}
+
+/** 父部件解析（与 prepareManualParts 同一口径的纯函数版，供对话框层级预览复用）：
+ * 锚网格 = 枢轴网格（pivot 缺省或 mode 非 mesh 时用首网格），沿 parentMeshIndex 链上溯，
+ * 第一个属于其他部件的网格所在的部件下标；无则 -1（挂根）。未分配网格在链上跳过。 */
+export function resolveManualParentIndices(
+  meshes: ManualMeshInfo[],
+  parts: { meshIndices: number[]; pivot?: ManualPivotSpec; parentIndex?: number }[],
+): number[] {
+  const parentByMesh = new Map(meshes.map((m) => [m.meshIndex, m.parentMeshIndex]));
+  const specIndexByMesh = new Map<number, number>();
+  parts.forEach((p, i) => {
+    for (const mi of p.meshIndices) if (!specIndexByMesh.has(mi)) specIndexByMesh.set(mi, i);
+  });
+  return parts.map((part, idx) => {
+    if (part.meshIndices.length === 0) return -1;
+    // 手动指定父部件优先：-1 = 挂根；合法的他人下标直接采用；自指/越界回落自动解析
+    if (part.parentIndex !== undefined) {
+      if (part.parentIndex === -1) return -1;
+      if (part.parentIndex >= 0 && part.parentIndex < parts.length && part.parentIndex !== idx) {
+        return part.parentIndex;
+      }
+    }
+    const pivot = part.pivot ?? { mode: 'mesh' as const, meshIndex: part.meshIndices[0] };
+    const anchor = pivot.mode === 'mesh' ? pivot.meshIndex : part.meshIndices[0];
+    let anc = parentByMesh.get(anchor) ?? null;
+    const seen = new Set<number>();
+    while (anc !== null && !seen.has(anc)) {
+      seen.add(anc);
+      const si = specIndexByMesh.get(anc);
+      if (si !== undefined && si !== idx) return si;
+      anc = parentByMesh.get(anc) ?? null;
+    }
+    return -1;
+  });
+}
+
+export interface ManualMeshGroup {
+  name: string;
+  meshIndices: number[];
+}
+
+/** 一键分组草案：按场景图子树——每网格沿 parentMeshIndex 上溯到顶层网格祖先，同根同组 */
+export function groupManualMeshesBySubtree(meshes: ManualMeshInfo[]): ManualMeshGroup[] {
+  const byIndex = new Map(meshes.map((m) => [m.meshIndex, m]));
+  const rootOf = (m: ManualMeshInfo): number => {
+    let cur = m;
+    const seen = new Set<number>();
+    while (cur.parentMeshIndex !== null && byIndex.has(cur.parentMeshIndex) && !seen.has(cur.meshIndex)) {
+      seen.add(cur.meshIndex);
+      cur = byIndex.get(cur.parentMeshIndex)!;
+    }
+    return cur.meshIndex;
+  };
+  const groups = new Map<number, number[]>();
+  for (const m of meshes) {
+    const r = rootOf(m);
+    const arr = groups.get(r) ?? [];
+    arr.push(m.meshIndex);
+    groups.set(r, arr);
+  }
+  return [...groups.entries()].map(([r, idxs]) => ({ name: byIndex.get(r)?.name ?? `mesh_${r}`, meshIndices: idxs }));
+}
+
+/** 网格名 → 词干：去掉尾部数字与分隔符（Arm_L_1 → Arm_L、Mesh.002 → Mesh） */
+export function manualNameStem(name: string): string {
+  const stem = name.replace(/\d+$/, '').replace(/[\s_\-.]+$/, '');
+  return stem || name;
+}
+
+/** 一键分组草案：按名称词干分组（同词干同组，单例自成一组） */
+export function groupManualMeshesByNamePrefix(meshes: ManualMeshInfo[]): ManualMeshGroup[] {
+  const groups = new Map<string, number[]>();
+  for (const m of meshes) {
+    const stem = manualNameStem(m.name);
+    const arr = groups.get(stem) ?? [];
+    arr.push(m.meshIndex);
+    groups.set(stem, arr);
+  }
+  return [...groups.entries()].map(([stem, idxs]) => ({ name: stem, meshIndices: idxs }));
 }
 
 export function prepareManualParts(
@@ -260,33 +348,34 @@ export function prepareManualParts(
     }
   });
 
-  const parts: PreparedManualPart[] = specs.map((spec, specIdx) => {
+  const parentIndices = resolveManualParentIndices(statics.map((s) => s.info), specs);
+
+  // 第一遍：归一化顶点 + 枢轴解析（未做朝向调整）
+  interface RawManualPart {
+    meshes: PreparedManualPartMesh[];
+    pivotNorm: { x: number; y: number; z: number };
+  }
+  const rawParts: RawManualPart[] = specs.map((spec) => {
     const meshes: PreparedManualPartMesh[] = [];
-    const box = new THREE.Box3();
     const worldBox = new THREE.Box3();
     for (const mi of spec.meshIndices) {
-      const s = byMeshIndex.get(mi);
-      if (!s) throw new Error(`手动拆分：找不到网格 ${mi}`);
-      const positions = new Float32Array(s.positions.length);
-      for (let i = 0; i < s.positions.length; i += 3) {
-        const n = norm(s.positions[i], s.positions[i + 1], s.positions[i + 2]);
+      const sm = byMeshIndex.get(mi);
+      if (!sm) throw new Error(`手动拆分：找不到网格 ${mi}`);
+      const positions = new Float32Array(sm.positions.length);
+      for (let i = 0; i < sm.positions.length; i += 3) {
+        const n = norm(sm.positions[i], sm.positions[i + 1], sm.positions[i + 2]);
         positions[i] = n.x; positions[i + 1] = n.y; positions[i + 2] = n.z;
-        tv.set(n.x, n.y, n.z);
-        box.expandByPoint(tv);
-        tv.set(s.positions[i], s.positions[i + 1], s.positions[i + 2]);
+        tv.set(sm.positions[i], sm.positions[i + 1], sm.positions[i + 2]);
         worldBox.expandByPoint(tv);
       }
       meshes.push({
         positions,
-        uvs: s.uvs,
-        index: s.index,
-        material: s.material,
-        groups: s.groups,
+        uvs: sm.uvs,
+        index: sm.index,
+        material: sm.material,
+        groups: sm.groups,
       });
     }
-    // 取景球（全部网格并集，归一化空间）
-    const partSphere = box.getBoundingSphere(new THREE.Sphere());
-    const half = Math.max(0.02, partSphere.radius * partPadding);
     // 枢轴解析（世界坐标 → 归一化）
     const pivotSpec = spec.pivot ?? { mode: 'mesh' as const, meshIndex: spec.meshIndices[0] };
     let pivotWorld: { x: number; y: number; z: number };
@@ -300,26 +389,94 @@ export function prepareManualParts(
       if (!ps) throw new Error(`手动拆分：找不到枢轴网格 ${pivotSpec.meshIndex}`);
       pivotWorld = ps.info.pivot;
     }
-    // 父部件：从锚网格（枢轴网格，center/custom 时用首网格）沿场景图祖先链上溯，
-    // 第一个属于其他部件的祖先网格所在的部件
-    const anchorMesh =
-      pivotSpec.mode === 'mesh' ? pivotSpec.meshIndex : spec.meshIndices[0];
-    let parentSpecIndex = -1;
-    let ancMesh = byMeshIndex.get(anchorMesh)?.info.parentMeshIndex ?? null;
-    const seen = new Set<number>();
-    while (ancMesh !== null && !seen.has(ancMesh)) {
-      seen.add(ancMesh);
-      const si = specIndexByMesh.get(ancMesh);
-      if (si !== undefined && si !== specIdx) { parentSpecIndex = si; break; }
-      ancMesh = byMeshIndex.get(ancMesh)?.info.parentMeshIndex ?? null;
+    return { meshes, pivotNorm: norm(pivotWorld.x, pivotWorld.y, pivotWorld.z) };
+  });
+
+  // 朝向调整（垂臂，与 sixpart droopArmPose 同语义）：按层级自上而下——先应用祖先
+  // 部件的调整（几何与本部件枢轴一起跟随，如同骨骼先摆姿再拆分），再算本部件的调整：
+  // 肢体方向 = 枢轴 → 最远顶点；目标 = 正下 + 按水平分量符号外张 5°；夹角 < 10° 跳过；
+  // 绕本部件枢轴最短弧旋转（枢轴本身不动）。归一化空间为均匀缩放，方向即真实方向。
+  interface DroopXf { q: THREE.Quaternion; px: number; py: number; pz: number }
+  const applyDroopXf = (positions: Float32Array, xf: DroopXf) => {
+    const v = new THREE.Vector3();
+    for (let i = 0; i < positions.length; i += 3) {
+      v.set(positions[i] - xf.px, positions[i + 1] - xf.py, positions[i + 2] - xf.pz).applyQuaternion(xf.q);
+      positions[i] = v.x + xf.px; positions[i + 1] = v.y + xf.py; positions[i + 2] = v.z + xf.pz;
     }
+  };
+  const depthOf = (i: number): number => {
+    let d = 0;
+    let cur = parentIndices[i];
+    const seen = new Set<number>();
+    while (cur >= 0 && !seen.has(cur)) { seen.add(cur); d++; cur = parentIndices[cur]; }
+    return d;
+  };
+  const topoOrder = specs.map((_, i) => i).sort((a, b) => depthOf(a) - depthOf(b));
+  const seqOf: DroopXf[][] = specs.map(() => []);
+  const droopAngles: number[] = specs.map(() => 0);
+  const pv = new THREE.Vector3();
+  for (const i of topoOrder) {
+    const raw = rawParts[i];
+    const seq = parentIndices[i] >= 0 ? seqOf[parentIndices[i]] : [];
+    for (const xf of seq) {
+      for (const m of raw.meshes) applyDroopXf(m.positions, xf);
+      pv.set(raw.pivotNorm.x - xf.px, raw.pivotNorm.y - xf.py, raw.pivotNorm.z - xf.pz).applyQuaternion(xf.q);
+      raw.pivotNorm = { x: pv.x + xf.px, y: pv.y + xf.py, z: pv.z + xf.pz };
+    }
+    let own: DroopXf | null = null;
+    if (specs[i].droop) {
+      let best = 0;
+      let fx = 0, fy = 0, fz = 0;
+      for (const m of raw.meshes) {
+        const pos = m.positions;
+        for (let j = 0; j < pos.length; j += 3) {
+          const dx = pos[j] - raw.pivotNorm.x;
+          const dy = pos[j + 1] - raw.pivotNorm.y;
+          const dz = pos[j + 2] - raw.pivotNorm.z;
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 > best) { best = d2; fx = dx; fy = dy; fz = dz; }
+        }
+      }
+      if (best > 1e-12) {
+        const cur = new THREE.Vector3(fx, fy, fz).normalize();
+        const tiltSign = cur.x > 0.05 ? 1 : cur.x < -0.05 ? -1 : 0;
+        const target = new THREE.Vector3(0, -1, 0).applyAxisAngle(
+          new THREE.Vector3(0, 0, 1),
+          THREE.MathUtils.degToRad(5) * tiltSign,
+        );
+        const deg = THREE.MathUtils.radToDeg(cur.angleTo(target));
+        if (deg >= 10) {
+          own = {
+            q: new THREE.Quaternion().setFromUnitVectors(cur, target),
+            px: raw.pivotNorm.x, py: raw.pivotNorm.y, pz: raw.pivotNorm.z,
+          };
+          for (const m of raw.meshes) applyDroopXf(m.positions, own);
+          droopAngles[i] = deg;
+        }
+      }
+    }
+    seqOf[i] = own ? [...seq, own] : seq;
+  }
+
+  // 第二遍：取景按调整后的最终几何算
+  const parts: PreparedManualPart[] = specs.map((spec, specIdx) => {
+    const raw = rawParts[specIdx];
+    const box = new THREE.Box3();
+    for (const m of raw.meshes) {
+      for (let j = 0; j < m.positions.length; j += 3) {
+        tv.set(m.positions[j], m.positions[j + 1], m.positions[j + 2]);
+        box.expandByPoint(tv);
+      }
+    }
+    const partSphere = box.getBoundingSphere(new THREE.Sphere());
     return {
       spec,
-      meshes,
-      pivotNorm: norm(pivotWorld.x, pivotWorld.y, pivotWorld.z),
+      meshes: raw.meshes,
+      pivotNorm: raw.pivotNorm,
       frameCenter: { x: partSphere.center.x, y: partSphere.center.y, z: partSphere.center.z },
-      half,
-      parentSpecIndex,
+      half: Math.max(0.02, partSphere.radius * partPadding),
+      parentSpecIndex: parentIndices[specIdx],
+      droopAngleDeg: droopAngles[specIdx],
     };
   });
 
@@ -439,7 +596,7 @@ export async function bakeManualParts(
     throw new Error('bakeManualParts 仅支持浏览器环境(WebGL)');
   }
 
-  const model = await loadModel(input);
+  const model = await loadModel(input, options.pmxTextures);
   const { statics } = collectStaticMeshes(model);
   const prepared = prepareManualParts(statics, specs, partPadding);
 
@@ -487,6 +644,9 @@ export async function bakeManualParts(
 
     for (let pi = 0; pi < prepared.parts.length; pi++) {
       const part = prepared.parts[pi];
+      if (part.droopAngleDeg > 0) {
+        console.info(`[bake-manual] ${part.spec.name} 朝向调整（垂臂）${part.droopAngleDeg.toFixed(0)}°`);
+      }
       const rotGroup = new THREE.Group();
       const disposables: Array<{ dispose(): void }> = [];
       for (const pm of part.meshes) {
@@ -496,8 +656,8 @@ export async function bakeManualParts(
         if (pm.index) geo.setIndex(new THREE.BufferAttribute(pm.index, 1));
         geo.computeVertexNormals();
         const toonMat = Array.isArray(pm.material)
-          ? pm.material.map((m) => makeToonFromSource(m, gradientMap))
-          : makeToonFromSource(pm.material, gradientMap);
+          ? pm.material.map((m) => makeToonFromSource(m, gradientMap, options.usePmxNpr))
+          : makeToonFromSource(pm.material, gradientMap, options.usePmxNpr);
         if (Array.isArray(toonMat)) {
           for (const g of pm.groups) geo.addGroup(g.start, g.count, g.materialIndex);
         }
@@ -563,4 +723,36 @@ export async function bakeManualParts(
     renderer.dispose();
     try { renderer.forceContextLoss(); } catch { /* noop */ }
   }
+}
+
+// ---- 点选（乙案）纯助手：网格 ID 编解码 + 三视图取景 ----
+
+/** 网格序号 → ID 色（RGB 三字节，值 = meshIndex + 1；0 保留为背景/未命中） */
+export function encodeMeshIdColor(meshIndex: number): [number, number, number] {
+  const v = meshIndex + 1;
+  return [(v & 0xff) / 255, ((v >> 8) & 0xff) / 255, ((v >> 16) & 0xff) / 255];
+}
+
+/** ID 图像素字节 → 网格序号；背景（0）返回 null */
+export function decodeMeshId(r: number, g: number, b: number): number | null {
+  const v = r | (g << 8) | (b << 16);
+  return v > 0 ? v - 1 : null;
+}
+
+/** 三视图/3D 预览取景：与 prepareManualParts 同口径（全模型包围盒中心 + 包围球半径） */
+export function computeManualFraming(
+  statics: { positions: Float32Array }[],
+): { center: { x: number; y: number; z: number }; radius: number } {
+  const box = new THREE.Box3();
+  const tv = new THREE.Vector3();
+  for (const s of statics) {
+    for (let i = 0; i < s.positions.length; i += 3) {
+      tv.set(s.positions[i], s.positions[i + 1], s.positions[i + 2]);
+      box.expandByPoint(tv);
+    }
+  }
+  if (box.isEmpty()) return { center: { x: 0, y: 0, z: 0 }, radius: 1 };
+  const c = box.getCenter(new THREE.Vector3());
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  return { center: { x: c.x, y: c.y, z: c.z }, radius: Math.max(1e-6, sphere.radius) };
 }

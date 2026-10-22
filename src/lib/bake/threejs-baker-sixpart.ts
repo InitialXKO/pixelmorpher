@@ -7,7 +7,8 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { loadModelScene } from './load-model';
+import { makeNprFromSource } from './pmx-npr';
 import {
   BakedBoneInfo,
   BoneMergeInfo,
@@ -63,6 +64,27 @@ export function assignBoneToPart(
   boneWorldX: number,
 ): SixPartName | null {
   const n = boneName;
+  // MMD 日文标准骨名（PMX 导入）：左/右前缀定侧；先于英文正则（手首/足首含「首」防误入 head）
+  if (/腕|ひじ|手首|手捩|指/.test(n)) return n.startsWith('右') ? 'armR' : 'armL';
+  if (/足|ひざ|つま先/.test(n)) {
+    if (/ＩＫ|IK/.test(n)) return null; // IK 骨（足ＩＫ等）无蒙皮权重，归属由拓扑合并处理
+    return n.startsWith('右') ? 'legR' : 'legL';
+  }
+  if (/頭|目|眼|髪|髮/.test(n) || (/首/.test(n) && !/手首/.test(n))) return 'head';
+  if (/上半身|下半身|腰|胸|肩|センター/.test(n)) return 'torso';
+  // VRoid / VRM 标准人形骨名（J_Bip_*；J_Sec_* 为头发/裙摆等次级骨）
+  if (n.includes('J_Bip_') || n.startsWith('J_Sec_') || n.includes('J_Opt_')) {
+    const side = /_L_/.test(n) ? 'L' : /_R_/.test(n) ? 'R' : 'C';
+    if (/Shoulder/.test(n)) return 'torso'; // 锁骨归躯干（与英文 shoulder 的现有约定一致）
+    if (/UpperArm|LowerArm|Forearm|Hand|Thumb|Index|Middle|Ring|Little/.test(n))
+      return side === 'R' ? 'armR' : 'armL';
+    if (/UpperLeg|LowerLeg|Foot|Toe/.test(n)) return side === 'R' ? 'legR' : 'legL';
+    if (/Head|Neck|Eye/.test(n)) return 'head';
+    if (/Hips|Spine|Chest|UpperChest/.test(n)) return 'torso';
+    if (/Hair/.test(n)) return 'head'; // J_Sec 头发
+    if (/Skirt|Bust/.test(n)) return 'torso'; // J_Sec 裙摆/胸部弹簧骨
+    return null;
+  }
   if (HEAD_RE.test(n) && !/spine/i.test(n)) return 'head';
   const isArm = ARM_RE.test(n);
   const isLeg = LEG_RE.test(n);
@@ -395,7 +417,13 @@ function makeViewGeometry(view: BuiltPartView): THREE.BufferGeometry {
 export function makeToonFromSource(
   source: THREE.Material | null,
   gradientMap: THREE.DataTexture,
-): THREE.MeshToonMaterial {
+  usePmxNpr?: boolean,
+): THREE.Material {
+  // PMX 原味着色（开关开）：走参考版 NPR 着色，不做 toon 转换
+  if (usePmxNpr) {
+    const npr = makeNprFromSource(source);
+    if (npr) return npr;
+  }
   const src = source as THREE.MeshStandardMaterial | null;
   return new THREE.MeshToonMaterial({
     color: src && 'color' in src && src.color ? (src.color as THREE.Color).clone() : new THREE.Color(0xffffff),
@@ -513,14 +541,12 @@ export interface TopoParsedBone {
  */
 export async function parseModelTopology(
   input: string | ArrayBuffer,
+  pmxTextures?: Map<string, Blob>,
 ): Promise<{ bones: TopoParsedBone[]; topology: TopologyResult }> {
   if (typeof window === 'undefined') {
     throw new Error('parseModelTopology 仅支持浏览器环境');
   }
-  const loader = new GLTFLoader();
-  const gltf =
-    typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
-  const model = gltf.scene;
+  const model = await loadModelScene(input, pmxTextures);
   model.updateMatrixWorld(true);
 
   const bones: THREE.Bone[] = [];
@@ -584,10 +610,7 @@ export async function bakeSixParts(
   renderer.toneMapping = THREE.NoToneMapping;
 
   try {
-    const loader = new GLTFLoader();
-    const gltf =
-      typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
-    const model = gltf.scene;
+    const model = await loadModelScene(input, options.pmxTextures);
     model.updateMatrixWorld(true);
 
     // ---- bones ----
@@ -879,7 +902,7 @@ export async function bakeSixParts(
       // 颜色遍：部件的每个索引视图用其源材质派生 toon 材质（各自的 map/color），不再全部件共用一份
       const inner = new THREE.Group();
       for (const view of bp.views) {
-        const toonMat = makeToonFromSource(view.source.material, gradientMap);
+        const toonMat = makeToonFromSource(view.source.material, gradientMap, options.usePmxNpr);
         const mesh = new THREE.Mesh(makeViewGeometry(view), toonMat);
         mesh.frustumCulled = false;
         inner.add(mesh);
@@ -1103,7 +1126,7 @@ export async function bakeSixParts(
         const idInnerG = new THREE.Group();
         for (const view of views) {
           const geo = makeViewGeometry(view);
-          const tmat = makeToonFromSource(view.source.material, gradientMap);
+          const tmat = makeToonFromSource(view.source.material, gradientMap, options.usePmxNpr);
           gateByDirection(tmat, dirShared, ci);
           mats.push(tmat);
           const cm = new THREE.Mesh(geo, tmat);

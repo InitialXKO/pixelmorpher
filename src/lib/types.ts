@@ -1679,6 +1679,7 @@ export interface EditorState {
   selectedModifierId: string | null;
   selectedEffectTrackId: string | null;
   showGrid: boolean;
+  nodeTurn3D: boolean;
   showTrajectories: boolean;
   isDirty: boolean;
   // Motion blur

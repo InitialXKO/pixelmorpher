@@ -21,6 +21,13 @@ import { Slider } from '@/components/ui/slider';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 
 // ============================================================
 // StrokePanel — 笔触与轨迹管理面板
@@ -73,6 +80,8 @@ function StrokeRow({ u }: { u: UnifiedStroke }) {
 
   return (
     <div className="rounded border border-zinc-800/60 bg-zinc-900/40 overflow-hidden">
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
       <div
         className="flex items-center gap-1.5 px-2 py-1.5 cursor-pointer hover:bg-zinc-800/40"
         onClick={() => setCurrentFrame(s.frame)}
@@ -100,6 +109,23 @@ function StrokeRow({ u }: { u: UnifiedStroke }) {
           <TooltipContent side="left" className="text-[10px]">删除笔触</TooltipContent>
         </Tooltip>
       </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="min-w-36">
+          <ContextMenuItem onSelect={() => setCurrentFrame(s.frame)}>
+            跳转到该帧
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => setExpanded(!expanded)}>
+            {expanded ? '收起参数' : '展开参数'}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            className="text-red-400 focus:text-red-300"
+            onSelect={remove}
+          >
+            删除笔触
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
       {expanded && (
         <div className="px-2 pb-2 pt-1 space-y-1.5 border-t border-zinc-800/60">
           <ParamRow label="起始帧" value={s.frame}>
@@ -212,6 +238,8 @@ function TrajectoryRow({ characterId, characterName, nodeId, nodeName, trajector
   const minF = Math.min(...frames);
   const maxF = Math.max(...frames);
   return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
     <div className="flex items-center gap-1.5 px-2 py-1.5 rounded border border-zinc-800/60 bg-zinc-900/40 hover:bg-zinc-800/40">
       <Route className="size-3.5 text-cyan-400 shrink-0" />
       <button
@@ -236,6 +264,20 @@ function TrajectoryRow({ characterId, characterName, nodeId, nodeName, trajector
         <TooltipContent side="left" className="text-[10px]">删除轨迹</TooltipContent>
       </Tooltip>
     </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="min-w-36">
+        <ContextMenuItem onSelect={() => setCurrentFrame(minF)}>
+          跳转到起始帧
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          className="text-red-400 focus:text-red-300"
+          onSelect={() => updateUnifiedNode(characterId, nodeId, { trajectory: [] } as any)}
+        >
+          删除轨迹
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

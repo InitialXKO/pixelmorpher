@@ -9,7 +9,8 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { loadModelScene } from './load-model';
+import { makeNprFromSource } from './pmx-npr';
 import type { BakeOptions, BakeResult } from './threejs-baker';
 import { dirsForLatitude, latitudePitchRad, medianCut, nearestPaletteIndex } from './threejs-baker';
 import type { TopologyResult } from './bone-topology';
@@ -656,7 +657,7 @@ function makeGradientMap(steps: number): THREE.DataTexture {
 }
 
 /** 换卡通材质（保留原贴图/基色），返回 mesh→toon 材质映射 */
-function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture): Map<THREE.Mesh, THREE.Material> {
+function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, usePmxNpr?: boolean): Map<THREE.Mesh, THREE.Material> {
   const map = new Map<THREE.Mesh, THREE.Material>();
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
@@ -669,11 +670,14 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture): M
         : new THREE.Color(0xffffff);
     const texMap =
       old && 'map' in old ? ((old as THREE.MeshStandardMaterial).map as THREE.Texture | null) : null;
-    const tm = new THREE.MeshToonMaterial({
-      color: baseColor,
-      ...(texMap ? { map: texMap } : {}),
-      gradientMap,
-    });
+    const tm =
+      (usePmxNpr ? makeNprFromSource(old ?? null) : null) ??
+      new THREE.MeshToonMaterial({
+        color: baseColor,
+        ...(texMap ? { map: texMap } : {}),
+        ...(old && 'side' in old && old.side !== undefined ? { side: old.side } : {}),
+        gradientMap,
+      });
     map.set(mesh, tm);
     mesh.material = tm;
     if (old && old !== tm) old.dispose();
@@ -696,14 +700,12 @@ export interface ParsedBoneInfo {
  */
 export async function parseModelBones(
   input: string | ArrayBuffer,
+  pmxTextures?: Map<string, Blob>,
 ): Promise<ParsedBoneInfo[]> {
   if (typeof window === 'undefined') {
     throw new Error('parseModelBones 仅支持浏览器环境');
   }
-  const loader = new GLTFLoader();
-  const gltf =
-    typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
-  const model = gltf.scene;
+  const model = await loadModelScene(input, pmxTextures);
   model.updateMatrixWorld(true);
 
   const { bones, indexByBone, parentIndex } = collectBones(model);
@@ -755,10 +757,7 @@ export async function bakeModelTwoPass(
   renderer.toneMapping = THREE.NoToneMapping;
 
   try {
-    const loader = new GLTFLoader();
-    const gltf =
-      typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
-    const model = gltf.scene;
+    const model = await loadModelScene(input, options.pmxTextures);
     model.updateMatrixWorld(true);
 
     // ---- bones ----
@@ -842,7 +841,7 @@ export async function bakeModelTwoPass(
 
     // ---- 材质 ----
     const gradientMap = makeGradientMap(toonSteps);
-    const toonMats = applyToonMaterials(group, gradientMap);
+    const toonMats = applyToonMaterials(group, gradientMap, options.usePmxNpr);
     // toon 只写颜色不写 depth；depth 由 ID 遍统一写，避免同遍内 color/ID 的 depth 不一致
     // （Pass 1 若 toon 先写了后表面 depth，ID 再用 GreaterDepth 会全灭）
     toonMats.forEach((tm) => {
@@ -1354,7 +1353,7 @@ function autoFindRoots(
  */
 export function detectFingers(
   allBones: THREE.Bone[],
-  spec: { thumbBoneName?: string; fingerBoneNames?: string[] } = {},
+  spec: { thumbBoneName?: string; fingerBoneNames?: string[]; pmxTextures?: Map<string, Blob> } = {},
 ): FingerDetectResult {
   const res: FingerDetectResult = {
     fingers: [],
@@ -1752,7 +1751,12 @@ function prepareLimbGeometry(
 
 /** 源材质 → 单烘 toon（与主烘焙 applyToonMaterials 同口径：color + map 条件传参；另继承 side，
  * 双面源模型压单面会剔掉绕向不齐的三角形，与六部件同根问题） */
-function toonFromExtractedSource(srcMat: THREE.Material | null, gradientMap: THREE.Texture): THREE.MeshToonMaterial {
+function toonFromExtractedSource(srcMat: THREE.Material | null, gradientMap: THREE.Texture, usePmxNpr?: boolean): THREE.Material {
+  // PMX 原味着色（开关开）：走参考版 NPR 着色
+  if (usePmxNpr) {
+    const npr = makeNprFromSource(srcMat);
+    if (npr) return npr;
+  }
   const s = srcMat as THREE.MeshStandardMaterial | null;
   return new THREE.MeshToonMaterial({
     color: s && 'color' in s && s.color ? (s.color as THREE.Color).clone() : new THREE.Color(0xffffff),
@@ -1798,10 +1802,7 @@ export async function bakeSingleBone(
   renderer.toneMapping = THREE.NoToneMapping;
 
   try {
-    const loader = new GLTFLoader();
-    const gltf =
-      typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
-    const model = gltf.scene;
+    const model = await loadModelScene(input, options.pmxTextures);
     model.updateMatrixWorld(true);
     // 整模包围球半径（原始单位）：把单烘取景尺度折算回整模归一化尺度用
     const modelSphere = new THREE.Box3().setFromObject(model).getBoundingSphere(new THREE.Sphere());
@@ -1820,7 +1821,7 @@ export async function bakeSingleBone(
     const { geometry, jointN, azimuth, radiusModel, sourceMaterials } = prepared;
 
     const gradientMap = makeGradientMap(toonSteps);
-    const toonMats = sourceMaterials.map((sm) => toonFromExtractedSource(sm, gradientMap));
+    const toonMats = sourceMaterials.map((sm) => toonFromExtractedSource(sm, gradientMap, options.usePmxNpr));
     const mesh = new THREE.Mesh(geometry, toonMats.length === 1 ? toonMats[0] : toonMats);
     mesh.frustumCulled = false;
 
@@ -1903,15 +1904,12 @@ export async function bakeSingleBone(
 /** 仅检测手指/拇指（不摆姿态），供 UI 显示状态用 */
 export async function inspectFingers(
   input: string | ArrayBuffer,
-  spec: { thumbBoneName?: string; fingerBoneNames?: string[] } = {},
+  spec: { thumbBoneName?: string; fingerBoneNames?: string[]; pmxTextures?: Map<string, Blob> } = {},
 ): Promise<FingerDetectResult> {
   if (typeof window === 'undefined') {
     throw new Error('inspectFingers 仅支持浏览器环境');
   }
-  const loader = new GLTFLoader();
-  const gltf =
-    typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
-  const model = gltf.scene;
+  const model = await loadModelScene(input, spec.pmxTextures);
   model.updateMatrixWorld(true);
   const allBones: THREE.Bone[] = [];
   model.traverse((o) => {
@@ -1941,10 +1939,7 @@ export async function previewHandCurl(
   renderer.toneMapping = THREE.NoToneMapping;
 
   try {
-    const loader = new GLTFLoader();
-    const gltf =
-      typeof input === 'string' ? await loader.loadAsync(input) : await loader.parseAsync(input, '');
-    const model = gltf.scene;
+    const model = await loadModelScene(input, options.pmxTextures);
     model.updateMatrixWorld(true);
 
     const det = poseFingersOnModel(model, options);
@@ -1969,7 +1964,7 @@ export async function previewHandCurl(
     const { geometry, jointN, azimuth, sourceMaterials } = prepared;
 
     const gradientMap = makeGradientMap(toonSteps);
-    const toonMats = sourceMaterials.map((sm) => toonFromExtractedSource(sm, gradientMap));
+    const toonMats = sourceMaterials.map((sm) => toonFromExtractedSource(sm, gradientMap, options.usePmxNpr));
     const mesh = new THREE.Mesh(geometry, toonMats.length === 1 ? toonMats[0] : toonMats);
     mesh.frustumCulled = false;
     const group = new THREE.Group();

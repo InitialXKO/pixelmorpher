@@ -24,7 +24,8 @@ import type {
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
   resolveChainTarget3D,
-  mat3Mul, mat3Transpose, mat3Apply, localRotMat, rotMatD, applyFrameRotation, frameViewAngle, frameYAxisWorld,
+  mat3Mul, mat3Transpose, mat3Apply, localRotMat, rotMatD, applyFrameRotation, frameViewAngle,
+  frameViewAngleForDirection, frameYAxisWorld,
   worldToViewBasis, MAT3_IDENTITY,
 } from './unified-types';
 import { solveIK2Bone3D, solveIKFabrik3D } from './blueprint/ik';
@@ -216,6 +217,7 @@ export function computeWorldTransforms(
   variableContext?: VariableContext,
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
+  geometryDirection?: DirectionIndex,
 ): Map<string, WorldTransform> {
   const transforms = new Map<string, WorldTransform>();
 
@@ -231,7 +233,9 @@ export function computeWorldTransforms(
     worldX: rootInterpolated.x,
     worldY: rootInterpolated.y,
     worldZ: rootInterpolated.z ?? 0,
-    worldAngle: frameViewAngle(rootFrame),
+    worldAngle: geometryDirection !== undefined
+      ? frameViewAngleForDirection(rootFrame, geometryDirection, rootInterpolated.variantIndex)
+      : frameViewAngle(rootFrame),
     worldFrame: rootFrame,
     worldStretch: rootInterpolated.stretch,
     variantIndex: rootInterpolated.variantIndex,
@@ -243,7 +247,7 @@ export function computeWorldTransforms(
   transforms.set(rootNode.id, rootWorld);
 
   // Recursively compute children
-  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides);
+  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection);
 
   // IK（乙：真 3D）：首遍 FK 后解出各链关节的局部 (angle, tilt) 覆写，整树重算 FK——
   // 链外后代随 frame 复合自动跟随。ikOverrides 已传入时（重算遍）不再求解。
@@ -256,10 +260,10 @@ export function computeWorldTransforms(
     if (chains && chains.length > 0) {
       const overrides = new Map<string, { angle: number; tilt: number }>();
       for (const chain of chains) {
-        solveChainIKOverrides(character, chain, transforms, canvasWidth, canvasHeight, frame, frameRate, variableContext, blueprintTransforms, overrides);
+        solveChainIKOverrides(character, chain, transforms, canvasWidth, canvasHeight, frame, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection);
       }
       if (overrides.size > 0) {
-        return computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, overrides);
+        return computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection);
       }
     }
   }
@@ -368,6 +372,7 @@ function solveChainIKOverrides(
   variableContext: VariableContext | undefined,
   blueprintTransforms: Map<string, BlueprintTransformResult> | undefined,
   overrides: Map<string, { angle: number; tilt: number }>,
+  geometryDirection?: DirectionIndex,
 ): void {
   // 关节链 root → end（与旧实现同走法）
   const jointIds: string[] = [];
@@ -395,7 +400,7 @@ function solveChainIKOverrides(
   for (let i = 0; i < n - 1; i++) {
     const seg = { x: pos[i + 1].x - pos[i].x, y: pos[i + 1].y - pos[i].y, z: pos[i + 1].z - pos[i].z };
     lengths.push(Math.hypot(seg.x, seg.y, seg.z));
-    totals.push(applyFrameRotation(mat3Transpose(fkT[i].worldFrame), seg.x, seg.y, seg.z, fkT[i].variantIndex));
+    totals.push(applyFrameRotation(mat3Transpose(fkT[i].worldFrame), seg.x, seg.y, seg.z, geometryDirection ?? fkT[i].variantIndex));
   }
 
   // 尖端：末关节 + 其 frame 的 +Y 轴 × tipLength（与 computeIKChainTip 同构造）
@@ -412,7 +417,7 @@ function solveChainIKOverrides(
   }
   const points: V3[] = [...pos];
   if (tipLength > 1e-6) {
-    const yAxis = frameYAxisWorld(fkT[n - 1].worldFrame, fkT[n - 1].variantIndex);
+    const yAxis = frameYAxisWorld(fkT[n - 1].worldFrame, geometryDirection ?? fkT[n - 1].variantIndex);
     points.push({
       x: pos[n - 1].x + yAxis.x * tipLength,
       y: pos[n - 1].y + yAxis.y * tipLength,
@@ -422,15 +427,27 @@ function solveChainIKOverrides(
   }
 
   // 目标：target3D（按链根朝向填充）+ targetBlueprint 的 XYZ 逐分量覆盖
-  const dir0 = fkT[0].variantIndex;
+  const dir0 = geometryDirection ?? fkT[0].variantIndex;
   const staticT = resolveChainTarget3D(chain, canvasWidth, canvasHeight, dir0);
   let target: V3 = { ...staticT };
   if (chain.targetBlueprint) {
     try {
       const tbResult = evaluateBlueprint(chain.targetBlueprint, { frame, frameRate, vars: variableContext?.values ?? {} });
-      if (Number.isFinite(tbResult.translateX)) target.x = tbResult.translateX;
-      if (Number.isFinite(tbResult.translateY)) target.y = tbResult.translateY;
-      if (Number.isFinite(tbResult.translateZ)) target.z = tbResult.translateZ;
+      let drove = false;
+      if (Number.isFinite(tbResult.translateX)) { target.x = tbResult.translateX; drove = true; }
+      if (Number.isFinite(tbResult.translateY)) { target.y = tbResult.translateY; drove = true; }
+      if (Number.isFinite(tbResult.translateZ)) { target.z = tbResult.translateZ; drove = true; }
+      // 转位（改在 IK 蓝图的输入端）：图输出绕链根当前世界位在 XY 平面内转
+      // transposeAngle——图本身不改，静态目标回退时不重复旋转（drove 门控）
+      if (drove && chain.transposeAngle) {
+        const rad = (chain.transposeAngle * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        const dx = target.x - points[0].x;
+        const dy = target.y - points[0].y;
+        target.x = points[0].x + dx * cos - dy * sin;
+        target.y = points[0].y + dx * sin + dy * cos;
+      }
     } catch {
       // 蓝图求值失败时回退到静态目标
     }
@@ -478,7 +495,7 @@ function solveChainIKOverrides(
     const offWorld = s < totals.length ? totals[s] : { x: 0, y: tipLength, z: 0 };
     const inherit = hasParent && node.attachment?.inheritRotation !== false;
     const ref = interpolateTransform(node, frame, frameRate, variableContext, blueprintTransforms);
-    const { angle, tilt } = solveLocalAngleTilt(mPrev, fkT[s].variantIndex, offWorld, segDir, ref.angle, inherit);
+    const { angle, tilt } = solveLocalAngleTilt(mPrev, geometryDirection ?? fkT[s].variantIndex, offWorld, segDir, ref.angle, inherit);
     overrides.set(jid, { angle, tilt });
     const local = localRotMat(angle, tilt);
     mPrev = inherit ? mat3Mul(mPrev, local) : local;
@@ -498,6 +515,7 @@ function computeChildTransforms(
   variableContext?: VariableContext,
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
+  geometryDirection?: DirectionIndex,
 ): void {
   for (const childId of parentNode.children) {
     const childNode = character.nodes[childId];
@@ -514,7 +532,7 @@ function computeChildTransforms(
       const socket = parentNode.sockets.find(s => s.id === childNode.attachment!.parentSocketId);
       if (socket) {
         // Socket 3D 偏移：走共同口径 socketOffsetTo3D（offset3D 或 2D→3D 映射）
-        const s3 = socketOffsetTo3D(socket, parentWorld.variantIndex);
+        const s3 = socketOffsetTo3D(socket, geometryDirection ?? parentWorld.variantIndex);
         const sockX3D = s3.x;
         const sockZ3D = s3.z;
         const sockY = s3.y;
@@ -526,7 +544,7 @@ function computeChildTransforms(
         const totalY = sockY + childOffsetY_px;
         const totalZ = sockZ3D + childOffsetZ_px;
         // 旋转：父 frame 复合旋转（tilt 全 0 时与旧 rotateInViewPlane(父 worldAngle) 逐值相同）
-        const rotated = applyFrameRotation(parentWorld.worldFrame, totalX, totalY, totalZ, parentWorld.variantIndex);
+        const rotated = applyFrameRotation(parentWorld.worldFrame, totalX, totalY, totalZ, geometryDirection ?? parentWorld.variantIndex);
         childWorldX = parentWorld.worldX + pxToSub(rotated.x);
         childWorldY = parentWorld.worldY + pxToSub(rotated.y);
         childWorldZ = parentWorld.worldZ + pxToSub(rotated.z);
@@ -551,7 +569,7 @@ function computeChildTransforms(
       const totalOffsetY_px = subToPx(fixedOffset.y) + subToPx(childInterpolated.y) * childInterpolated.stretch;
       const totalOffsetZ_px = subToPx(childInterpolated.z ?? 0);
       // 旋转：父 frame 复合旋转（同 socket 分支）
-      const rotated2 = applyFrameRotation(parentWorld.worldFrame, totalOffsetX_px, totalOffsetY_px, totalOffsetZ_px, parentWorld.variantIndex);
+      const rotated2 = applyFrameRotation(parentWorld.worldFrame, totalOffsetX_px, totalOffsetY_px, totalOffsetZ_px, geometryDirection ?? parentWorld.variantIndex);
 
       childWorldX = parentWorld.worldX + pxToSub(rotated2.x);
       childWorldY = parentWorld.worldY + pxToSub(rotated2.y);
@@ -570,7 +588,9 @@ function computeChildTransforms(
       worldX: childWorldX,
       worldY: childWorldY,
       worldZ: childWorldZ,
-      worldAngle: frameViewAngle(childFrame),
+      worldAngle: geometryDirection !== undefined
+        ? frameViewAngleForDirection(childFrame, geometryDirection, childInterpolated.variantIndex)
+        : frameViewAngle(childFrame),
       worldFrame: childFrame,
       worldStretch: childInterpolated.stretch * parentWorld.worldStretch,
       variantIndex: childInterpolated.variantIndex,
@@ -582,7 +602,7 @@ function computeChildTransforms(
     transforms.set(childId, childWorld);
 
     // Recurse into children
-    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides);
+    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection);
   }
 }
 
@@ -594,6 +614,16 @@ function computeChildTransforms(
  */
 function resolveSocketOffset(socket: Socket, direction: DirectionIndex): Point {
   return socket.directionOffsets[direction] ?? socket.basePosition;
+}
+
+/** 节点转向（乙案：全员基准 3D 真转）的几何基准朝向：世界 3D 固定在此朝向下计算
+ * （socket 嵌入、frame 基、姿势偏移、IK 目标填充），投影与选图仍用目标朝向。
+ * 南向（6）与烘焙/模型空间一致：θ=0 时 2D 布局原样嵌入 z=0 平面。 */
+export const GEOMETRY_CANONICAL_DIRECTION: DirectionIndex = 6;
+
+/** 视图开关 → 几何方向参数：关 = undefined（全部表达式回落到节点 variantIndex，与旧行为逐值一致） */
+export function geometryDirectionFromToggle(on: boolean): DirectionIndex | undefined {
+  return on ? GEOMETRY_CANONICAL_DIRECTION : undefined;
 }
 
 /**
@@ -973,6 +1003,7 @@ function generateDiscInstructions(
   activeSnapshots: Map<string, { snap: SkinningSnapshot; parentId: string }>,
   activeCostumeSet?: import('./unified-types').CostumeSet,
   spriteTable?: Record<string, Sprite>,
+  geometryDirection?: DirectionIndex,
 ): DiscRenderInstruction[] {
   const discs: DiscRenderInstruction[] = [];
 
@@ -1041,8 +1072,8 @@ function generateDiscInstructions(
         const parentWorldTf = worldTransforms.get(parentNode.id);
         if (parentWorldTf) {
           // Compute socket 3D position (same math as computeChildTransforms)
-          const s3 = socketOffsetTo3D(socket, parentWorldTf.variantIndex);
-          const rot = applyFrameRotation(parentWorldTf.worldFrame, s3.x, s3.y, s3.z, parentWorldTf.variantIndex);
+          const s3 = socketOffsetTo3D(socket, geometryDirection ?? parentWorldTf.variantIndex);
+          const rot = applyFrameRotation(parentWorldTf.worldFrame, s3.x, s3.y, s3.z, geometryDirection ?? parentWorldTf.variantIndex);
           socketWorldX = (parentWorldTf.worldX + pxToSub(rot.x)) as SubPixel;
           socketWorldY = (parentWorldTf.worldY + pxToSub(rot.y)) as SubPixel;
           socketWorldZ = (parentWorldTf.worldZ + pxToSub(rot.z)) as SubPixel;
@@ -1209,6 +1240,8 @@ export function generateRenderPlan(
   perspectiveForeshorten?: boolean,
   // 当前 clip 的服装/变体状态轨道（仅激活 clip 且归属本角色时由调用方传入）
   stateKeyframes?: import('./unified-types').CostumeStateKeyframe[],
+  // 节点转向（乙案）：几何基准朝向；undefined = 现行口径（几何基 = 节点 variantIndex）
+  geometryDirection?: DirectionIndex,
 ): RenderPlan {
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
@@ -1239,6 +1272,7 @@ export function generateRenderPlan(
   // Step 1: World transforms (includes blueprint-evaluated modifier contributions)
   const worldTransforms = computeWorldTransforms(
     character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
+    undefined, geometryDirection,
   );
 
   // Step 3: Get active costume set（用生效状态的集 id，含轨道/蓝图覆盖）
@@ -1413,7 +1447,7 @@ export function generateRenderPlan(
     // 透视缩短：节点 +Y 轴（骨骼主轴）单位方向投影到渲染朝向视平面后的长度比
     let foreshorten: number | undefined;
     if (perspectiveForeshorten) {
-      const yw = frameYAxisWorld(worldTf.worldFrame, worldTf.variantIndex);
+      const yw = frameYAxisWorld(worldTf.worldFrame, geometryDirection ?? worldTf.variantIndex);
       const thR = (((currentDirection + 2) % 8) * Math.PI) / 4;
       const hr = yw.x * Math.cos(thR) + yw.z * Math.sin(thR);
       foreshorten = Math.min(1, Math.hypot(hr, yw.y));
@@ -1465,7 +1499,7 @@ export function generateRenderPlan(
   }
 
   // Step 5: Generate disc instructions
-  const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots, activeCostumeSet, spriteTable);
+  const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots, activeCostumeSet, spriteTable, geometryDirection);
 
   // Step 6: 节点指令按 zIndex（投影深度）排序；关节盘不进排序流，
   // 由执行端从 discInstructions 单独先行绘制（无视深度、始终被遮挡）
@@ -2319,6 +2353,7 @@ function renderPuppetViaUnifiedPipeline(
   perspectiveForeshorten?: boolean,
   animationClips?: AnimationClip[],
   activeClipId?: string | null,
+  geometryDirection?: DirectionIndex,
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
@@ -2333,6 +2368,7 @@ function renderPuppetViaUnifiedPipeline(
       undefined, undefined, proceduralAnimations, sprites,
       undefined, perspectiveForeshorten,
       pickClipStateKeyframes(animationClips, activeClipId, unifiedCharacter.id),
+      geometryDirection,
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }
@@ -2369,6 +2405,7 @@ export function renderUnified(
   sprites?: Record<string, Sprite>,
   perspectiveForeshorten?: boolean,
   activeClipId?: string | null,
+  geometryDirection?: DirectionIndex,
 ): void {
   if (backgroundColor !== 'transparent') {
     ctx.fillStyle = backgroundColor;
@@ -2379,7 +2416,7 @@ export function renderUnified(
       ctx, canvasWidth, canvasHeight, unifiedCharacters,
       currentFrame, frameRate, globalModifiers, animationVariables,
       canvasModifierTracks, proceduralAnimations, globalBlueprint, sprites,
-      perspectiveForeshorten, animationClips, activeClipId,
+      perspectiveForeshorten, animationClips, activeClipId, geometryDirection,
     );
   }
   if (effectTracks) {
@@ -2490,6 +2527,7 @@ export function renderCharacterOnionFrameFromCharacter(
   globalModifiers?: GlobalModifier[],
   animationVariables?: StoreAnimationVariable[],
   sprites?: Record<string, Sprite>,
+  geometryDirection?: DirectionIndex,
 ): void {
   const unifiedVars = animationVariables?.map(v => ({
     id: v.id, name: v.name, value: v.defaultValue ?? 0, min: 0, max: 100,
@@ -2500,6 +2538,7 @@ export function renderCharacterOnionFrameFromCharacter(
     'pixel-perfect', frameRate, unifiedVars as any,
     undefined, undefined, undefined, undefined, undefined,
     undefined, undefined, undefined, sprites,
+    undefined, undefined, undefined, geometryDirection,
   );
   executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
 }

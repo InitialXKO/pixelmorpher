@@ -6,6 +6,13 @@ import { Plus, Trash2, Film, Settings, ChevronRight, Clock, Tag } from 'lucide-r
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useState, useCallback } from 'react';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 
 export default function AnimationClipPanel() {
   const {
@@ -45,6 +52,23 @@ export default function AnimationClipPanel() {
     setEditingClipId(null);
   }, [updateAnimationClip]);
 
+  const handleDuplicateClip = useCallback((clip: AnimationClip) => {
+    const copy = addAnimationClip(`${clip.name} 副本`);
+    updateAnimationClip(copy.id, {
+      frameRate: clip.frameRate,
+      totalFrames: clip.totalFrames,
+      puppetCharacterId: clip.puppetCharacterId,
+      nodeKeyframes: structuredClone(clip.nodeKeyframes ?? []),
+      stateKeyframes: structuredClone(clip.stateKeyframes ?? []),
+      effectTracks: structuredClone(clip.effectTracks ?? []),
+      canvasModifierTracks: structuredClone(clip.canvasModifierTracks ?? []),
+      trajectories: structuredClone(clip.trajectories ?? []),
+      motionBlurStrokes: structuredClone(clip.motionBlurStrokes ?? []),
+      effectStrokes: structuredClone(clip.effectStrokes ?? []),
+      tags: [...(clip.tags ?? [])],
+    });
+  }, [addAnimationClip, updateAnimationClip]);
+
   return (
     <div className="flex flex-col h-full bg-[#0e0e1c]">
       {/* Header */}
@@ -65,14 +89,16 @@ export default function AnimationClipPanel() {
           const keyframeCount = clip.nodeKeyframes.length;
 
           return (
+          <ContextMenu key={clip.id}>
+            <ContextMenuTrigger asChild>
             <div
-              key={clip.id}
               className={`group flex flex-col border-b border-zinc-800/30 cursor-pointer transition-colors ${
                 isActive
                   ? 'bg-amber-500/10 border-l-2 border-l-amber-500'
                   : 'hover:bg-white/5 border-l-2 border-l-transparent'
               }`}
               onClick={() => handleSelectClip(clip.id)}
+              onContextMenu={() => handleSelectClip(clip.id)}
             >
               <div className="flex items-center gap-1.5 px-2 py-1.5">
                 <ChevronRight
@@ -143,6 +169,32 @@ export default function AnimationClipPanel() {
                 </div>
               )}
             </div>
+            </ContextMenuTrigger>
+            <ContextMenuContent className="min-w-36">
+              <ContextMenuItem onSelect={() => handleSelectClip(clip.id)}>
+                设为当前片段
+              </ContextMenuItem>
+              <ContextMenuItem
+                onSelect={() => {
+                  handleSelectClip(clip.id);
+                  setEditingClipId(clip.id);
+                }}
+              >
+                重命名
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => handleDuplicateClip(clip)}>
+                复制片段
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                disabled={animationClips.length <= 1}
+                className="text-red-400 focus:text-red-300"
+                onSelect={() => handleDeleteClip(clip.id)}
+              >
+                删除片段
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
           );
         })}
       </div>
