@@ -1,8 +1,10 @@
 'use client';
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { useProjectStore } from '@/lib/store';
+import { useProjectStore, useEditorStore } from '@/lib/store';
 import { renderUnifiedCharactersToCanvas } from '@/lib/unified-render';
+import { convertCharacterToRuntimePackage } from '@/lib/proc-runtime/convert';
+import { buildRuntimeHtml } from '@/lib/proc-runtime/runtime-template';
 import type { AnimationClip } from '@/lib/types';
 import type { NodeKeyframe } from '@/lib/unified-types';
 import { subToPx } from '@/lib/unified-types';
@@ -38,6 +40,7 @@ import {
   FileJson,
   FolderOpen,
   Package,
+  Gamepad2,
   Upload,
   FileUp,
 } from 'lucide-react';
@@ -52,7 +55,7 @@ interface ExportDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type ExportFormat = 'spritesheet' | 'png' | 'gif' | 'video' | 'lottie' | 'project';
+type ExportFormat = 'spritesheet' | 'png' | 'gif' | 'video' | 'lottie' | 'project' | 'procruntime';
 type BackgroundMode = 'transparent' | 'custom';
 type SpritesheetDirection = 'horizontal' | 'vertical';
 type VideoFormat = 'webm' | 'mp4';
@@ -1006,6 +1009,38 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
     onOpenChange(false);
   }, [onOpenChange]);
 
+  // ---- Export: 程序化运行时包（自包含 HTML：运行时本体 + 角色数据） ----
+  const [procCharId, setProcCharId] = useState<string | null>(null);
+  const procCharacter = useMemo(() => {
+    const store = useProjectStore.getState();
+    const chars = Object.values(store.unifiedCharacters ?? {});
+    if (chars.length === 0) return null;
+    const wanted = procCharId ?? useEditorStore.getState().activePuppetSkeletonId;
+    return chars.find((c) => c.id === wanted) ?? chars[0];
+  }, [procCharId, activeTab]);
+  const procPkg = useMemo(
+    () => (procCharacter ? convertCharacterToRuntimePackage(procCharacter) : null),
+    [procCharacter],
+  );
+  const exportProcRuntime = useCallback(() => {
+    if (!procCharacter || !procPkg) return;
+    try {
+      const html = buildRuntimeHtml(procPkg);
+      const blob = new Blob([html], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${procCharacter.name}-runtime.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Proc runtime export failed:', err);
+    }
+    onOpenChange(false);
+  }, [procCharacter, procPkg, onOpenChange]);
+
   // ---- Handle export button click ----
   const handleExport = useCallback(() => {
     switch (activeTab) {
@@ -1027,8 +1062,11 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       case 'project':
         exportProjectFile();
         break;
+      case 'procruntime':
+        exportProcRuntime();
+        break;
     }
-  }, [activeTab, exportPngSequence, exportSpritesheet, exportGif, exportVideo, exportLottie, exportProjectFile]);
+  }, [activeTab, exportPngSequence, exportSpritesheet, exportGif, exportVideo, exportLottie, exportProjectFile, exportProcRuntime]);
 
   // ---- Get export button label ----
   const getExportLabel = useCallback(() => {
@@ -1040,6 +1078,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       case 'video': return 'Export Video';
       case 'lottie': return 'Export Lottie';
       case 'project': return 'Export Project';
+      case 'procruntime': return 'Export Runtime';
     }
   }, [activeTab, isExporting]);
 
@@ -1113,6 +1152,10 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
             <TabsTrigger value="project" className="flex-1 min-w-[70px] gap-1 text-[10px] sm:text-xs data-[state=active]:bg-purple-600/30 data-[state=active]:text-purple-300 px-1.5 py-1.5">
               <Package className="size-3" />
               工程
+            </TabsTrigger>
+            <TabsTrigger value="procruntime" className="flex-1 min-w-[70px] gap-1 text-[10px] sm:text-xs data-[state=active]:bg-purple-600/30 data-[state=active]:text-purple-300 px-1.5 py-1.5">
+              <Gamepad2 className="size-3" />
+              运行时
             </TabsTrigger>
           </TabsList>
 
@@ -1456,12 +1499,61 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
               </Button>
             </div>
           </TabsContent>
+
+          {/* ---- 程序化运行时 Tab ---- */}
+          <TabsContent value="procruntime" className="space-y-4 mt-4">
+            <div className="space-y-3">
+              <div className="text-xs text-gray-500 bg-white/[0.03] rounded-md p-3 space-y-1">
+                <div className="font-medium text-gray-400">程序化运行时包（自包含 HTML）</div>
+                <div>
+                  不导帧、不导轨道：导出参数化角色 + 行为蓝图（运行时实时求值）+ 表演蓝图（采样烘焙）+ 运行时本体。
+                  宿主只喂输入（移动/跳跃/触发），姿态由运行时程序化合成。与「程序化预览」同一本体，所见即所得。
+                </div>
+                {procPkg && (
+                  <div className="text-[10px] text-gray-600 mt-1">
+                    部件 {procPkg.parts.length} · 服装 {Object.keys(procPkg.costumes).length} · 表演 {procPkg.performances.length}
+                  </div>
+                )}
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-gray-400">角色</Label>
+                <Select
+                  value={procCharacter?.id ?? ''}
+                  onValueChange={(v) => setProcCharId(v)}
+                >
+                  <SelectTrigger className="h-8 text-xs bg-white/5 border-white/10 text-gray-300">
+                    <SelectValue placeholder="选择角色" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-[#1a1a2e] border-white/10">
+                    {Object.values(unifiedCharacters ?? {}).map((c) => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {procPkg && procPkg.warnings.length > 0 && (
+                <div className="rounded-md border border-amber-900/50 bg-amber-950/20 p-3 space-y-1">
+                  {procPkg.warnings.map((w, i) => (
+                    <div key={i} className="text-[11px] text-amber-300/90">⚠ {w}</div>
+                  ))}
+                </div>
+              )}
+              <Button
+                onClick={exportProcRuntime}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white gap-2"
+                disabled={!procCharacter}
+              >
+                <Download className="size-3.5" />
+                Export Runtime HTML
+              </Button>
+            </div>
+          </TabsContent>
         </Tabs>
 
         <Separator className="bg-white/10" />
 
         {/* ---- Common: Background ---- */}
-        {activeTab !== 'project' && (
+        {activeTab !== 'project' && activeTab !== 'procruntime' && (
           <div className="space-y-2">
             <Label className="text-xs text-gray-400">Background</Label>
             <div className="flex items-center gap-3">

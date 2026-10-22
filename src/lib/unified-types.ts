@@ -788,6 +788,102 @@ export interface NodeKeyframe {
   faceTurn?: { yaw: number; pitch: number };
 }
 
+// ---- Parametric Appearance（参数化外观：程序化运行时的槽位外观来源） ----
+
+/**
+ * pattern 层语言的 mask 原语（烘焙期求值，与运行时 compileTile 的 maskHit 同构）。
+ * 层程序是数据：层按序求值，后层覆盖先层（同像素 ch='glint' 的层写 glint 候选通道）。
+ */
+export type ParametricMask =
+  | { m: 'all' }
+  | { m: 'inside' }
+  | { m: 'edge'; w: number }
+  | { m: 'band'; w0: number; w1: number }
+  | { m: 'bands'; axis: 'x' | 'y' | 'd'; f: number; ph?: number; duty?: number }
+  | { m: 'checker'; f: number }
+  | { m: 'noise'; f: number; seed?: number; gt?: number }
+  | { m: 'gradLt'; axis: 'x' | 'y'; t: number }
+  | { m: 'facing'; deg: number; tol?: number; w?: number };
+
+/** 层程序的一层：mask 层（写表面档位/glint 候选）或 bump 形式层
+ *  （bump 是枚举的连续光照公式：以形状距离场为伪高度图，公式输出按两阈值量化成 lo/mid/hi 三档） */
+export type ParametricLayer =
+  | { mask: ParametricMask; slot: number; ch?: 'glint' }
+  | { bumpForm: 'dome' | 'top' | 'side' | 'edge'; hi: number; mid: number; lo: number };
+
+export interface ParametricShapeDef {
+  kind: 'rect' | 'ellipse' | 'capsule' | 'poly';
+  /** 逻辑尺寸（px）；瓦片按此 +2px 边距烘焙 */
+  size: [number, number];
+  /** rect/capsule 圆角（0..1，相对半短边） */
+  roundness?: number;
+  /** kind='poly' 的轮廓点（部件局部 px，原点=形状中心，x 右 y 下） */
+  poly?: [number, number][];
+  polyPivot?: [number, number];
+}
+
+/**
+ * 参数化外观：挂在 CostumePiece 上（随服装集变化——同一槽位在不同服装集可有
+ * 不同的参数化外观，即服装覆盖）。存在 = 该槽在此服装下以参数化形式进入
+ * 程序化运行时包；主渲染管线不消费此字段（仍走 sprites），它服务于程序化
+ * 预览与「程序化运行时包」导出。
+ */
+export interface ParametricAppearance {
+  shape: ParametricShapeDef;
+  /** 形状中心相对节点原点的偏移（px，x 右 y 下，节点局部） */
+  centerOffset: [number, number];
+  /** 表面层程序（pattern 层语言） */
+  surface: ParametricLayer[];
+  /** 表面预设名（UI 显示与回选；程序本体以 surface 为准） */
+  surfaceName?: string;
+  /** 调色板家族名（运行时 PALETTES 的键） */
+  palette: string;
+  /** 运行时枚举槽位编号（LIGHT / OUTLINE / RIM / GLINT，见 proc-runtime 枚举表） */
+  light: number;
+  outline: number;
+  rim: number;
+  glint: number;
+  /** rim / glint 强度（0..1，运行时作哈希门） */
+  rimI: number;
+  glintI: number;
+}
+
+// ---- Procedural Runtime（程序化行为与表演：角色级，导出运行时消费） ----
+
+/**
+ * 程序化行为 = 按节点的蓝图（behaviorGraphs[nodeId]）：与表演同源同工具，
+ * 区别只在时间形态——行为是输入驱动的无限过程，图在运行时被实时求值
+ * （宿主喂 vars：t/phase/moveX/speed01/grounded，见 proc-runtime 方言表
+ * 的 behavior 语境）；表演是有限时长、触发式，导出时采样烘焙成曲线。
+ * 编辑器关键帧系统不消费这两者。
+ */
+
+/**
+ * 作者型表演（挂蓝图）：程序化层产基础姿态，表演按包络权重淡入/淡出。
+ * 图按节点存（graphs[nodeId]）——主系统蓝图本就是按节点的（图隐含目标=
+ * 所属节点），在蓝图编辑器里以该节点为语境编辑；导出时经方言翻译
+ * （可求值子集直译、程序运动类采样烘焙成曲线）进入运行时包。
+ */
+export interface ProcPerformance {
+  id: string;
+  name: string;
+  /** 宿主输入动作名（如 'attack'）；运行时模板默认映射到按键，可由宿主改绑 */
+  trigger: string;
+  /** 时长（秒） */
+  duration: number;
+  envelopeIn: number;
+  envelopeOut: number;
+  /** 合成口径：override=按包络权重接管掩码部件；add=加算 */
+  mode: 'add' | 'override';
+  /** 部件掩码（nodeId 列表）：掩码外节点程序化照旧 */
+  maskNodeIds: string[];
+  /** nodeId → 该节点的表演图（主系统 BlueprintGraph） */
+  graphs: Record<string, BlueprintGraph>;
+  /** 残影部件（nodeId，可选）：表演期间该部件发历史残影（实例流效果） */
+  afterimageNodeId?: string;
+  enabled: boolean;
+}
+
 // ---- Costume System ----
 
 /**
@@ -821,6 +917,8 @@ export interface CostumePiece {
   scaleVariants: Partial<Record<number, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>>;
   mirrorMap: MirrorMap;                         // Direction mirror mapping
   crossSections: CrossSection[];                // Cross section definitions for disc gen
+  /** 参数化外观（可选）：该槽在此服装集下的程序化形式，见 ParametricAppearance */
+  parametric?: ParametricAppearance;
 }
 
 /**
@@ -986,6 +1084,12 @@ export interface Character {
   /** 状态蓝图：纯状态图（无像素），每帧在服装解析前求值，输出服装集/槽位变体指令
    *  （costume_state 节点）。生效状态叠加顺序：静态字段 → clip 状态轨道 → 状态蓝图 */
   stateBlueprint?: BlueprintGraph | null;
+
+  // ---- 程序化运行时（导出/预览专用，编辑器关键帧系统不消费） ----
+  /** 程序化行为蓝图：nodeId → 该节点的行为图（运行时实时求值） */
+  behaviorGraphs?: Record<string, BlueprintGraph>;
+  /** 作者型表演清单（挂蓝图，见 ProcPerformance） */
+  performances?: ProcPerformance[];
 
   // ---- Face Turn Config (Spine-style pseudo-3D) ----
   faceTurnConfig?: {

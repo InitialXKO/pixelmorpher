@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { NodeTreeItemWrapper } from './NodeTree';
 import { collectSubtreeIds, deleteNodeSubtree, findParentNode, ikChainMembership, reparentNode } from '@/lib/node-actions';
 import PuppetModifierPanel from './PuppetModifierPanel';
+import ParametricAppearanceEditor from './ParametricAppearanceEditor';
 import GlobalBlueprintEditor from './GlobalBlueprintEditor';
 import CharacterBlueprintEditor from './CharacterBlueprintEditor';
 import StateBlueprintEditor from './StateBlueprintEditor';
@@ -620,6 +621,19 @@ function RigNodeProperties({
           })}
         </div>
       </div>
+
+      {/* 参数化外观（程序化运行时）：按槽位 × 服装集存 */}
+      {character && (
+        <div className="pt-2 border-t border-[#1e1e3a]">
+          {node.slot?.slotKey && characterId ? (
+            <ParametricAppearanceEditor characterId={characterId} slotKey={node.slot.slotKey} />
+          ) : (
+            <p className="text-[10px] text-gray-500">
+              参数化外观：此节点尚无槽位（slot），先在换装中为它建立槽位后可启用。
+            </p>
+          )}
+        </div>
+      )}
 
       {/* ---- 程序化修改器 / 蓝图 ---- */}
       <div className="pt-2 border-t border-[#1e1e3a] space-y-2">

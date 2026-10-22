@@ -136,7 +136,7 @@ export function writePuppetPoseKeyframe(
   clipId: string,
   nodeId: string,
   frame: number,
-  values: { angle: number; stretch: number; x: number; y: number; tilt?: number },
+  values: { angle: number; stretch: number; scaleX: number; x: number; y: number; tilt?: number },
   variantIndex: number,
 ) {
   const store = useProjectStore.getState();
@@ -146,7 +146,7 @@ export function writePuppetPoseKeyframe(
   if (!node) return;
 
   // 直接写 node.tracks（渲染器从这里读）
-  const setTrack = (trackName: 'angle' | 'x' | 'y' | 'stretch' | 'tilt', value: number) => {
+  const setTrack = (trackName: 'angle' | 'x' | 'y' | 'stretch' | 'scaleX' | 'tilt', value: number) => {
     const track = node.tracks[trackName] ?? { keyframes: [], interpolation: 'linear' as const };
     const idx = track.keyframes.findIndex(k => k.frame === frame);
     const newKeyframes = idx >= 0
@@ -162,6 +162,7 @@ export function writePuppetPoseKeyframe(
       x: setTrack('x', values.x),
       y: setTrack('y', values.y),
       stretch: setTrack('stretch', values.stretch),
+      scaleX: setTrack('scaleX', values.scaleX),
       // tilt 仅在调用方给出时写（伪 3D 工具 / tilt 编辑），其余拖拽不碰出平面角轨道
       ...(values.tilt !== undefined ? { tilt: setTrack('tilt', values.tilt) } : {}),
     },
@@ -238,6 +239,7 @@ export const puppetHandler: ToolHandler = {
         startY: py,
         origAngle: 0,
         origStretch: 1,
+        origScaleX: 1,
         origOffsetX: 0,
         origOffsetY: 0,
         origOffsetZ: 0,
@@ -294,6 +296,7 @@ export const puppetHandler: ToolHandler = {
         startY: py,
         origAngle: 0,
         origStretch: 1,
+        origScaleX: 1,
         origOffsetX: 0,
         origOffsetY: 0,
         origOffsetZ: 0,
@@ -366,6 +369,7 @@ export const puppetHandler: ToolHandler = {
       origAngle: rotateIv?.angle ?? node.transform.angle,
       origTilt: rotateIv?.tilt ?? node.transform.tilt ?? 0,
       origStretch: rotateIv?.stretch ?? node.transform.stretch,
+      origScaleX: rotateIv?.scaleX ?? node.transform.scaleX ?? 1,
       origOffsetX: moveIv?.x ?? moveTarget.transform.x,
       origOffsetY: moveIv?.y ?? moveTarget.transform.y,
       origOffsetZ: moveTarget.transform.z ?? 0,
@@ -419,6 +423,7 @@ export const puppetHandler: ToolHandler = {
         writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
           angle: drag.origAngle,
           stretch: drag.origStretch,
+          scaleX: drag.origScaleX ?? 1,
           x: drag.origOffsetX,
           y: drag.origOffsetY,
           tilt: newTilt,
@@ -428,6 +433,7 @@ export const puppetHandler: ToolHandler = {
         writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
           angle: newAngle,
           stretch: drag.origStretch,
+          scaleX: drag.origScaleX ?? 1,
           x: drag.origOffsetX,
           y: drag.origOffsetY,
         }, variantIndex);
@@ -510,6 +516,7 @@ export const puppetHandler: ToolHandler = {
       writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, targetNodeId, frame, {
         angle: drag.origAngle,
         stretch: drag.origStretch,
+        scaleX: drag.origScaleX ?? 1,
         x: newOffsetX,
         y: newOffsetY,
       }, variantIndex);
@@ -553,6 +560,7 @@ export const puppetHandler: ToolHandler = {
       writePuppetPoseKeyframe(character!.id, clipId, nodeId, frame, {
         angle: patch.angle ?? iv?.angle ?? node.transform.angle,
         stretch: iv?.stretch ?? node.transform.stretch,
+        scaleX: iv?.scaleX ?? node.transform.scaleX ?? 1,
         x: patch.x ?? iv?.x ?? node.transform.x,
         y: patch.y ?? iv?.y ?? node.transform.y,
       }, variantIndex);
@@ -1274,6 +1282,7 @@ export const nodeMoveHandler: ToolHandler = {
       startY: py,
       origAngle: iv?.angle ?? node.transform.angle,
       origStretch: iv?.stretch ?? node.transform.stretch,
+      origScaleX: iv?.scaleX ?? node.transform.scaleX ?? 1,
       origOffsetX: iv?.x ?? node.transform.x,
       origOffsetY: iv?.y ?? node.transform.y,
       moveTargetNodeId: node.id,
@@ -1315,6 +1324,7 @@ export const nodeMoveHandler: ToolHandler = {
     writePuppetPoseKeyframe(drag.skeletonId, drag.clipId, drag.nodeId, frame, {
       angle: drag.origAngle,
       stretch: drag.origStretch,
+      scaleX: drag.origScaleX ?? 1,
       x: newOffsetX,
       y: newOffsetY,
     }, variantIndex);

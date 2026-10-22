@@ -64,7 +64,7 @@ export function useCanvasState() {
   const boneDragRef = useRef<{ boneId: string; skeletonId: string; endpoint: 'head' | 'tail' | 'ik_target'; startX: number; startY: number; origHeadX: number; origHeadY: number; origTailX: number; origTailY: number; origTargetX: number; origTargetY: number } | null>(null);
   const puppetNodeDragRef = useRef<{
     nodeId: string; skeletonId: string; characterId: string; clipId: string;
-    startX: number; startY: number; origAngle: number; origStretch: number; origOffsetX: number; origOffsetY: number; origOffsetZ?: number;
+    startX: number; startY: number; origAngle: number; origStretch: number; origScaleX?: number; origOffsetX: number; origOffsetY: number; origOffsetZ?: number;
     mode: 'rotate' | 'move' | 'moveAll' | 'socket' | 'pivot'; pivotWorldX: number; pivotWorldY: number; startMouseAngle: number;
     dragStarted: boolean; moveTargetNodeId?: string; parentWorldAngle?: number; nodeWorldAngle?: number;
     // 伪3D工具专用：拖拽起始的出平面角（tracks.tilt 插值，含蓝图贡献）
