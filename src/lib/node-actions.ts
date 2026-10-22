@@ -90,6 +90,79 @@ export function addChildNode(characterId: string, parent: Node): Node | null {
   return node;
 }
 
+/** 节点在 IK 链中的身份：'root' = 链根（可整链搬迁）、'member' = 链中间关节
+ *  （改父级会断链）、null = 不在任何链中 */
+export function ikChainMembership(
+  character: { ikChains?: { rootNodeId: string; endNodeId: string }[]; nodes: Record<string, Node> },
+  nodeId: string,
+): 'root' | 'member' | null {
+  for (const chain of character.ikChains ?? []) {
+    if (chain.rootNodeId === nodeId) return 'root';
+    let cur: Node | undefined = character.nodes[chain.endNodeId];
+    const seen = new Set<string>();
+    while (cur && cur.id !== chain.rootNodeId && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      if (cur.id === nodeId) return 'member';
+      cur = findParentNode(character.nodes, cur) ?? undefined;
+    }
+  }
+  return null;
+}
+
+/** 更改节点的父节点与连接插槽：三处写齐——attachment.parentSocketId、
+ * 新旧父级的 children 迁移、node.parentId（渲染按 children 遍历 + 在父身上查插槽，
+ * 只改 attachment 会留半吊子状态）。socketId 为 null = 固定连接（不插槽）。
+ * 根节点拒绝、目标在自身子树内拒绝（防环）。返回是否执行（无变化也算执行成功）。 */
+export function reparentNode(
+  characterId: string,
+  nodeId: string,
+  target: { parentId: string; socketId: string | null },
+): boolean {
+  const store = useProjectStore.getState();
+  const character = store.unifiedCharacters[characterId];
+  if (!character) return false;
+  const node = character.nodes[nodeId];
+  if (!node || nodeId === character.rootNodeId) return false;
+  const newParent = character.nodes[target.parentId];
+  if (!newParent) return false;
+  if (collectSubtreeIds(character.nodes, nodeId).includes(target.parentId)) return false;
+  if (target.socketId !== null && !(newParent.sockets ?? []).some((s) => s.id === target.socketId)) {
+    return false;
+  }
+  const oldParent = findParentNode(character.nodes, node);
+  const att = node.attachment;
+  const already =
+    oldParent?.id === target.parentId &&
+    (target.socketId !== null
+      ? att?.type === 'socket' && att.parentSocketId === target.socketId
+      : att?.type === 'fixed');
+  if (already) return true;
+
+  store.pushUndo('更改父节点');
+  if (oldParent && oldParent.id !== target.parentId && oldParent.children.includes(nodeId)) {
+    store.updateUnifiedNode(characterId, oldParent.id, {
+      children: oldParent.children.filter((id) => id !== nodeId),
+    });
+  }
+  if (!newParent.children.includes(nodeId)) {
+    store.updateUnifiedNode(characterId, target.parentId, {
+      children: [...newParent.children, nodeId],
+    });
+  }
+  const attachment =
+    target.socketId !== null
+      ? { ...att, type: 'socket' as const, parentSocketId: target.socketId }
+      : {
+          ...att,
+          type: 'fixed' as const,
+          parentSocketId: undefined,
+          fixedOffset: att?.fixedOffset ?? { x: 0, y: 0 },
+          inheritRotation: att?.inheritRotation ?? true,
+        };
+  store.updateUnifiedNode(characterId, nodeId, { parentId: target.parentId, attachment });
+  return true;
+}
+
 /** 给节点添加一个插槽（构造与 RigPanel handleAddSocket 一致） */
 export function addSocketToNode(characterId: string, node: Node): void {
   const store = useProjectStore.getState();

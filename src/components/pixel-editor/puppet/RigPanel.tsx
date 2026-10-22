@@ -18,7 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { NodeTreeItemWrapper } from './NodeTree';
-import { deleteNodeSubtree } from '@/lib/node-actions';
+import { collectSubtreeIds, deleteNodeSubtree, findParentNode, ikChainMembership, reparentNode } from '@/lib/node-actions';
 import PuppetModifierPanel from './PuppetModifierPanel';
 import GlobalBlueprintEditor from './GlobalBlueprintEditor';
 import CharacterBlueprintEditor from './CharacterBlueprintEditor';
@@ -232,6 +232,7 @@ function RigNodeProperties({
   isRoot: boolean;
 }) {
   const [transposeAngle, setTransposeAngle] = useState(45);
+  const character = useProjectStore((s) => (characterId ? s.unifiedCharacters[characterId] : undefined));
   return (
     <div className="space-y-3 bg-[#080818] rounded border border-[#1e1e3a] p-2">
       <div className="flex items-center justify-between">
@@ -328,6 +329,68 @@ function RigNodeProperties({
           </div>
         </div>
       </div>
+
+      {/* 连接（父节点 / 插槽） */}
+      {character && !isRoot && (
+        <div>
+          <Label className="text-[10px] text-gray-500 uppercase tracking-wider">连接（父节点 / 插槽）</Label>
+          {(() => {
+            const currentParent = findParentNode(character.nodes, node);
+            const connValue =
+              node.attachment?.type === 'socket' && node.attachment.parentSocketId
+                ? node.attachment.parentSocketId
+                : `fixed:${currentParent?.id ?? character.rootNodeId}`;
+            const subtreeIds = new Set(collectSubtreeIds(character.nodes, node.id));
+            const candidates = Object.values(character.nodes).filter((n) => !subtreeIds.has(n.id));
+            return (
+              <>
+                <select
+                  value={connValue}
+                  onChange={(e) => {
+                    if (!characterId) return;
+                    if (ikChainMembership(character, node.id) === 'member') {
+                      alert('该节点是 IK 链的中间关节，改父级会破坏 IK 链的层级，请先删除或调整 IK 链');
+                      return;
+                    }
+                    const v = e.target.value;
+                    let parentId: string;
+                    let socketId: string | null;
+                    if (v.startsWith('fixed:')) {
+                      parentId = v.slice(6);
+                      socketId = null;
+                    } else {
+                      socketId = v;
+                      const owner = Object.values(character.nodes).find((n) =>
+                        (n.sockets ?? []).some((sk) => sk.id === v),
+                      );
+                      if (!owner) return;
+                      parentId = owner.id;
+                    }
+                    if (!reparentNode(characterId, node.id, { parentId, socketId })) {
+                      alert('无法更改父节点：目标无效或会形成循环引用');
+                    }
+                  }}
+                  className="mt-1 h-6 w-full rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-[11px] text-gray-300"
+                >
+                  {candidates.map((p) => (
+                    <optgroup key={p.id} label={p.id === character.rootNodeId ? `${p.name}（根节点）` : p.name}>
+                      {(p.sockets ?? []).map((sk) => (
+                        <option key={sk.id} value={sk.id}>
+                          插槽：{sk.name}
+                        </option>
+                      ))}
+                      <option value={`fixed:${p.id}`}>（固定连接，不插槽）</option>
+                    </optgroup>
+                  ))}
+                </select>
+                <p className="mt-0.5 text-[9px] text-gray-600">
+                  插槽连接的位置由插槽决定，换父级后节点会移到新插槽处
+                </p>
+              </>
+            );
+          })()}
+        </div>
+      )}
 
       {/* 关节 */}
       <div>
