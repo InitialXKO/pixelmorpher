@@ -681,6 +681,7 @@ function interpolateTransformImpl(
   const kfAngle = interpolateTrack(node.tracks.angle, frame, base.angle);
   const kfTilt = interpolateTrack(node.tracks.tilt, frame, base.tilt ?? 0);
   const kfStretch = interpolateTrack(node.tracks.stretch, frame, base.stretch);
+  const kfScaleX = interpolateTrack(node.tracks.scaleX, frame, base.scaleX ?? 1);
   const kfVariant = interpolateTrack(node.tracks.variantIndex, frame, base.variantIndex) as DirectionIndex;
 
   // Step 2 (path B): Blueprint-driven modifier contributions (preferred)
@@ -694,7 +695,7 @@ function interpolateTransformImpl(
       angle: kfAngle + bpT.rotation,
       tilt: kfTilt + (bpT.tilt ?? 0),
       stretch: kfStretch * bpT.scaleY,
-      scaleX: (base.scaleX ?? 1) * bpT.scaleX,
+      scaleX: kfScaleX * bpT.scaleX,
       skewX: (base.skewX ?? 0) + bpT.skewX,
       skewY: (base.skewY ?? 0) + bpT.skewY,
       variantIndex: kfVariant,
@@ -717,7 +718,7 @@ function interpolateTransformImpl(
       angle: kfAngle + animTransform.rotation,
       tilt: kfTilt,
       stretch: kfStretch * ((animTransform.scaleX + animTransform.scaleY) / 2), // Average scale as stretch
-      scaleX: base.scaleX,
+      scaleX: kfScaleX,
       skewX: base.skewX,
       skewY: base.skewY,
       variantIndex: kfVariant,
@@ -731,7 +732,7 @@ function interpolateTransformImpl(
     angle: kfAngle,
     tilt: kfTilt,
     stretch: kfStretch,
-    scaleX: base.scaleX,
+    scaleX: kfScaleX,
     skewX: base.skewX,
     skewY: base.skewY,
     variantIndex: kfVariant,

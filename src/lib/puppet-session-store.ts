@@ -170,6 +170,7 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
             frame,
             angle: iv?.angle ?? node.transform.angle,
             stretch: iv?.stretch ?? node.transform.stretch,
+            scaleX: iv?.scaleX ?? node.transform.scaleX ?? 1,
             x: iv?.x ?? node.transform.x,
             y: iv?.y ?? node.transform.y,
             variantIndex: 0,

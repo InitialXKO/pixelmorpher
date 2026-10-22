@@ -107,7 +107,7 @@ export default function Timeline() {
         Object.values(ch.nodes).some((n) => n.id === nodeId)
       );
       const node = skeleton?.nodes[nodeId];
-      let values: Partial<Pick<import('@/lib/unified-types').NodeKeyframe, 'angle' | 'stretch' | 'x' | 'y' | 'variantIndex' | 'zIndex'>> = {};
+      let values: Partial<Pick<import('@/lib/unified-types').NodeKeyframe, 'angle' | 'stretch' | 'scaleX' | 'x' | 'y' | 'variantIndex' | 'zIndex'>> = {};
       // 从新 store 获取 Character，用新签名
       const unifiedCharacter = useProjectStore.getState().unifiedCharacters[activeClip.puppetCharacterId ?? ''];
       if (unifiedCharacter) {
@@ -117,6 +117,7 @@ export default function Timeline() {
         values = {
           angle: iv?.angle ?? uniNode?.transform?.angle ?? 0,
           stretch: iv?.stretch ?? 1,
+          scaleX: iv?.scaleX ?? uniNode?.transform?.scaleX ?? 1,
           x: iv?.x ?? 0,
           y: iv?.y ?? 0,
           variantIndex: 0,
@@ -202,6 +203,7 @@ export default function Timeline() {
       addNodeKeyframe(activeClip.id, kf.nodeId, newFrame, {
         angle: kf.angle,
         stretch: kf.stretch,
+        scaleX: kf.scaleX,
         x: kf.x,
         y: kf.y,
         variantIndex: kf.variantIndex,

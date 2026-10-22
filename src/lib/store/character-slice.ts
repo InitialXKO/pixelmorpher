@@ -32,7 +32,7 @@ export type CharacterSlice = {
   cloneNodeSubtree: (characterId: string, rootNodeId: string) => string | null;
 
   // ---- Node Keyframes ----
-  addNodeKeyframe: (clipId: string, nodeId: string, frame: number, values: Partial<Pick<import('../unified-types').NodeKeyframe, 'angle' | 'stretch' | 'x' | 'y' | 'variantIndex' | 'zIndex' | 'interpolationMode' | 'modifiers' | 'faceTurn'>>) => import('../unified-types').NodeKeyframe;
+  addNodeKeyframe: (clipId: string, nodeId: string, frame: number, values: Partial<Pick<import('../unified-types').NodeKeyframe, 'angle' | 'stretch' | 'scaleX' | 'x' | 'y' | 'variantIndex' | 'zIndex' | 'interpolationMode' | 'modifiers' | 'faceTurn'>>) => import('../unified-types').NodeKeyframe;
   removeNodeKeyframe: (clipId: string, keyframeId: string) => void;
   updateNodeKeyframe: (clipId: string, keyframeId: string, updates: Partial<import('../unified-types').NodeKeyframe>) => void;
 
