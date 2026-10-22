@@ -1,5 +1,5 @@
-import { useState } from 'react';
 'use client';
+import { useState } from 'react';
 
 // ============================================================
 // ParametricAppearanceEditor — 槽位参数化外观编辑（Rig 面板内）
