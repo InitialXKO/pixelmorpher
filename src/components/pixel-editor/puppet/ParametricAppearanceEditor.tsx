@@ -1,3 +1,4 @@
+import { useState } from 'react';
 'use client';
 
 // ============================================================
@@ -11,15 +12,19 @@
 import React from 'react';
 import { useProjectStore } from '@/lib/store';
 import { createDefaultCostumePiece } from '@/lib/unified-types';
-import type { ParametricAppearance } from '@/lib/unified-types';
+import type { ParametricAppearance, SurfaceGraph } from '@/lib/unified-types';
 import {
   PALETTE_NAMES, LIGHT, OUTLINE, RIM, GLINT,
   LIGHT_NAMES, OUTLINE_NAMES, RIM_NAMES, GLINT_NAMES,
 } from '@/lib/proc-runtime/palettes';
 import { SURFACE_PRESETS, SURFACE_PRESET_NAMES, createDefaultParametricAppearance } from '@/lib/proc-runtime/surfaces';
 import PolyContourEditor from './PolyContourEditor';
-import { PATTERN_TEMPLATES, instantiatePattern, patternTemplateByName } from '@/lib/proc-runtime/pattern-templates';
-const PATTERN_CLUSTERS = [...new Set(PATTERN_TEMPLATES.map((t) => t.cluster))];
+import { PATTERN_TEMPLATES, instantiatePattern, type PatternParamDef } from '@/lib/proc-runtime/pattern-templates';
+import SurfaceGraphEditor from './SurfaceGraphEditor';
+import {
+  loadUserPatterns, saveUserPattern, deleteUserPattern, renameUserPattern,
+  findPatternTemplate, isUserPattern, deriveParamDefs, type UserPatternTemplate,
+} from '@/lib/proc-runtime/pattern-library';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -29,6 +34,10 @@ const numCls = 'h-6 text-[10px] bg-[#111128] border-[#1e1e3a]';
 
 export default function ParametricAppearanceEditor({ characterId, slotKey }: { characterId: string; slotKey: string }) {
   const character = useProjectStore((s) => s.unifiedCharacters[characterId]);
+  const [userPatterns, setUserPatterns] = useState<UserPatternTemplate[]>(() => loadUserPatterns());
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [customDefs, setCustomDefs] = useState<PatternParamDef[] | null>(null);
+  const refreshUserPatterns = () => setUserPatterns(loadUserPatterns());
   if (!character) return null;
   const set = character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId) ?? character.costumeSets[0];
   if (!set) {
@@ -36,6 +45,13 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
   }
   const piece = set.pieces[slotKey];
   const app = piece?.parametric;
+  const allTemplates = [...PATTERN_TEMPLATES, ...userPatterns];
+  const allClusters = [...new Set(allTemplates.map((t) => t.cluster))];
+  const activeTemplate = findPatternTemplate(app?.surfaceName);
+  const editorDefs: PatternParamDef[] = activeTemplate?.params ?? customDefs ?? (app?.surfaceGraph ? deriveParamDefs(app.surfaceGraph) : []);
+  const editorShape = app ? (app.shape.kind === 'poly'
+    ? { kind: 'poly' as const, size: app.shape.size, points: (app.shape.poly ?? []).map(([x, y]): [number, number] => [x, -y]), pivot: (app.shape.polyPivot ? [app.shape.polyPivot[0], -app.shape.polyPivot[1]] : [0, 0]) as [number, number] }
+    : { kind: app.shape.kind, size: app.shape.size, roundness: app.shape.roundness ?? 0 }) : null;
 
   const write = (next: ParametricAppearance | undefined) => {
     const store = useProjectStore.getState();
@@ -136,21 +152,35 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
               <option value="（自定义）">（自定义）</option>
             </select>
           </div>
-          {/* 模式模板（表面 DAG）：选模板 + 参数；启用后烘焙优先走 DAG，层程序留作回退 */}
+          {/* 模式库（表面 DAG）：选模板 + 参数 + 我的模板管理；启用后烘焙优先走 DAG，层程序留作回退 */}
           <div>
-            <Label className="text-[9px] text-gray-600">模式模板（DAG）</Label>
+            <Label className="text-[9px] text-gray-600">模式库（DAG 模板）</Label>
             {app.surfaceGraph ? (
               <div className="mt-1 space-y-1.5">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-cyan-300">{patternTemplateByName(app.surfaceName)?.name ?? app.surfaceName ?? '自定义模式'}</span>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] text-cyan-300">{activeTemplate?.name ?? app.surfaceName ?? '自定义模式'}</span>
                   <span className="text-[9px] text-gray-600">已启用（烘焙走 DAG）</span>
                   <div className="flex-1" />
+                  <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5 text-violet-300"
+                    onClick={() => { setCustomDefs(editorDefs); setEditorOpen(true); }}>
+                    打开模式编辑器
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5"
+                    onClick={() => {
+                      const name = window.prompt('存为我的模板，名称', app.surfaceName ?? '我的模式');
+                      if (!name) return;
+                      saveUserPattern(name, app.surfaceGraph!, activeTemplate?.params);
+                      refreshUserPatterns();
+                      patch({ surfaceName: name });
+                    }}>
+                    存为我的模板
+                  </Button>
                   <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5 text-red-400 hover:text-red-300"
                     onClick={() => patch({ surfaceGraph: undefined })}>
                     移除（回层程序）
                   </Button>
                 </div>
-                {(patternTemplateByName(app.surfaceName)?.params ?? []).map((pd) => (
+                {editorDefs.map((pd) => (
                   <div key={pd.key} className="flex items-center gap-1.5">
                     <span className="w-14 text-[9px] text-gray-500">{pd.label}</span>
                     <input
@@ -165,28 +195,97 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
                     <span className="w-8 text-right text-[9px] text-gray-400">{app.surfaceGraph!.params?.[pd.key] ?? pd.def}</span>
                   </div>
                 ))}
-                {!patternTemplateByName(app.surfaceName) && (
-                  <p className="text-[9px] text-gray-600">自定义图（非模板实例）：参数在图数据内，模板滑杆不适用。</p>
+                {editorDefs.length === 0 && (
+                  <p className="text-[9px] text-gray-600">此图尚无暴露参数：在模式编辑器里把节点参数绑定到 $参数后，这里会出现滑杆。</p>
                 )}
               </div>
             ) : (
               <select
                 value=""
                 onChange={(e) => {
-                  const t = PATTERN_TEMPLATES.find((x) => x.id === e.target.value);
+                  const t = allTemplates.find((x) => x.id === e.target.value);
                   if (t) patch({ surfaceGraph: instantiatePattern(t), surfaceName: t.name });
                 }}
                 className={selCls}
               >
                 <option value="">选择模板启用 DAG 模式…</option>
-                {PATTERN_CLUSTERS.map((c) => (
+                {allClusters.map((c) => (
                   <optgroup key={c} label={c}>
-                    {PATTERN_TEMPLATES.filter((t) => t.cluster === c).map((t) => (
+                    {allTemplates.filter((t) => t.cluster === c).map((t) => (
                       <option key={t.id} value={t.id}>{t.name}</option>
                     ))}
                   </optgroup>
                 ))}
               </select>
+            )}
+            {!app.surfaceGraph && (
+              <Button size="sm" variant="ghost" className="mt-1 h-5 text-[9px] px-1.5 text-violet-300"
+                onClick={() => {
+                  const blank: SurfaceGraph = {
+                    version: 1,
+                    nodes: [
+                      { id: 'in', op: 'inside' },
+                      { id: 'g', op: 'grad', params: { axis: 'y', flip: 0 } },
+                    ],
+                    writes: [
+                      { from: 'in', slot: 2, at: 0.5 },
+                      { from: 'g', slot: 0, bump: { hi: 5, mid: 3, lo: 2 } },
+                    ],
+                    params: {},
+                  };
+                  patch({ surfaceGraph: blank, surfaceName: '空白模式' });
+                  setCustomDefs([]);
+                  setEditorOpen(true);
+                }}>
+                空白新建模式（打开编辑器）
+              </Button>
+            )}
+            {editorOpen && app.surfaceGraph && editorShape && (
+              <SurfaceGraphEditor
+                title={app.surfaceName ?? '自定义模式'}
+                graph={app.surfaceGraph}
+                paramDefs={editorDefs}
+                shape={editorShape}
+                onChange={(g, defs, structural) => {
+                  setCustomDefs(defs);
+                  let name = app.surfaceName;
+                  if (structural && name && !name.endsWith('·改')) name = `${name}·改`;
+                  patch(name !== app.surfaceName ? { surfaceGraph: g, surfaceName: name } : { surfaceGraph: g });
+                }}
+                onSaveTemplate={(name) => {
+                  saveUserPattern(name, app.surfaceGraph!, customDefs ?? editorDefs);
+                  refreshUserPatterns();
+                  patch({ surfaceName: name });
+                }}
+                onClose={() => setEditorOpen(false)}
+              />
+            )}
+            {userPatterns.length > 0 && (
+              <details className="mt-1">
+                <summary className="text-[9px] text-gray-500 cursor-pointer">模式库管理（我的 {userPatterns.length}）</summary>
+                <div className="mt-1 space-y-1 max-h-28 overflow-y-auto">
+                  {userPatterns.map((t) => (
+                    <div key={t.id} className="flex items-center gap-1">
+                      <span className="flex-1 text-[10px] text-gray-300 truncate">{t.name}</span>
+                      <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1"
+                        onClick={() => patch({ surfaceGraph: instantiatePattern(t), surfaceName: t.name })}>
+                        应用
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1"
+                        onClick={() => {
+                          const name = window.prompt('改名', t.name);
+                          if (name) { renameUserPattern(t.id, name); refreshUserPatterns(); }
+                        }}>
+                        改名
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1 text-red-400 hover:text-red-300"
+                        onClick={() => { deleteUserPattern(t.id); refreshUserPatterns(); }}>
+                        删除
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </details>
             )}
           </div>
           <div className="grid grid-cols-2 gap-1.5">

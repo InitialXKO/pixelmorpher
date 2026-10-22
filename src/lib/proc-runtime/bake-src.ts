@@ -313,6 +313,73 @@ function compileSurfaceGraph(graph, shape) {
         var lv = IN(node, 'in', x, y, env, cache);
         return Math.max(0, 1 - Math.abs(lv - P(node, 'level', 0)) / Math.max(0.01, P(node, 'w', 1)));
       }
+      case 'remap': {
+        var rv = IN(node, 'in', x, y, env, cache);
+        var rlo = P(node, 'lo', 0), rhi = P(node, 'hi', 1);
+        var rn = Math.max(0, Math.min(1, (rv - rlo) / Math.max(0.01, rhi - rlo)));
+        rn = Math.pow(rn, Math.max(0.05, P(node, 'gamma', 1)));
+        var steps = Math.round(P(node, 'steps', 0));
+        if (steps > 1) rn = Math.round(rn * (steps - 1)) / (steps - 1);
+        return rn;
+      }
+      case 'blur': {
+        var br = Math.max(0.4, P(node, 'r', 1));
+        var bc2 = node.inputs ? byId.get(node.inputs.in) : undefined;
+        if (!bc2) return 0;
+        return (ev(bc2, x, y, env, null) + ev(bc2, x - br, y, env, null) + ev(bc2, x + br, y, env, null)
+          + ev(bc2, x, y - br, env, null) + ev(bc2, x, y + br, env, null)) / 5;
+      }
+      case 'fadeEdge': {
+        // 不分离：图案在形状边界按带符号距离淡出
+        var fw = Math.max(0.2, P(node, 'w', 2));
+        return IN(node, 'in', x, y, env, cache) * Math.max(0, Math.min(1, base.sd / fw));
+      }
+      case 'mirror': {
+        var mat = P(node, 'at', 0);
+        var mx = x, my = y;
+        if (PS(node, 'axis', 'x') === 'x') mx = mat - Math.abs(x - mat);
+        else my = mat - Math.abs(y - mat);
+        var mch = node.inputs ? byId.get(node.inputs.in) : undefined;
+        return mch ? ev(mch, mx, my, env, null) : 0;
+      }
+      case 'rotate': {
+        var rdeg = P(node, 'deg', 45) * Math.PI / 180;
+        var rc = Math.cos(rdeg), rs = Math.sin(rdeg);
+        var rch2 = node.inputs ? byId.get(node.inputs.in) : undefined;
+        return rch2 ? ev(rch2, x * rc - y * rs, x * rs + y * rc, env, null) : 0;
+      }
+      case 'overlay2': {
+        // 回声/尺度层级：同一子场在缩放坐标再求值一次，按权重取大叠印
+        var ok = P(node, 'k', 2.2), ow = P(node, 'w', 0.8);
+        var och = node.inputs ? byId.get(node.inputs.in) : undefined;
+        if (!och) return 0;
+        var o1 = ev(och, x, y, env, null);
+        var o2 = ev(och, x * ok, y * ok, env, null) * ow;
+        return Math.max(o1, o2);
+      }
+      case 'focal': {
+        var fcx = P(node, 'cx', 0), fcy = P(node, 'cy', 0);
+        var fd = Math.hypot(x - fcx, y - fcy);
+        var fr2 = Math.max(0.5, P(node, 'r', 8));
+        if (PS(node, 'mode', 'spot') === 'ring') {
+          return Math.max(0, 1 - Math.abs(fd - fr2) / Math.max(0.3, P(node, 'w', 1.5)));
+        }
+        var ft = Math.max(0, 1 - fd / fr2);
+        return ft * ft;
+      }
+      case 'voidF': {
+        var vcx = P(node, 'cx', 0), vcy = P(node, 'cy', 0);
+        var vd = Math.hypot(x - vcx, y - vcy);
+        var vr = P(node, 'r', 8), vsoft = Math.max(0.5, P(node, 'soft', 3));
+        return Math.max(0, Math.min(1, (vd - (vr - vsoft)) / (2 * vsoft)));
+      }
+      case 'edgeProx': return Math.max(0, Math.min(1, 1 - base.sd / Math.max(0.3, P(node, 'w', 3))));
+      case 'weave': {
+        var wcw = Math.max(1, P(node, 'cw', 5)), wch = Math.max(1, P(node, 'ch', 5));
+        var wpar = Math.abs(Math.floor(x / wcw) + Math.floor(y / wch)) % 2;
+        var wv = wpar === 1 ? IN(node, 'b', x, y, env, cache) : IN(node, 'a', x, y, env, cache);
+        return wv * (wpar === 1 ? 0.8 : 1);
+      }
       case 'warp': {
         var wfx = IN(node, 'fx', x, y, env, cache) - 0.5;
         var wfy = IN(node, 'fy', x, y, env, cache) - 0.5;
@@ -329,11 +396,27 @@ function compileSurfaceGraph(graph, shape) {
         var col = Math.floor((x + shift) / rcw + 0.5);
         var lx = ((x + shift) / rcw + 0.5) % 1; lx = (lx - Math.floor(lx) - 0.5) * rcw;
         var ly = ((y / rch + 0.5) % 1); ly = (ly - Math.floor(ly) - 0.5) * rch;
+        var rseed = P(node, 'seed', 0);
         var cell2 = {
           w: rcw, h: rch, row: row, col: col, parity: parity,
-          hash: hashN(col, row, P(node, 'seed', 0)), rand: hashN(col, row, P(node, 'seed', 0) + 77),
+          hash: hashN(col, row, rseed), rand: hashN(col, row, rseed + 77),
         };
+        // 粗糙度：每单元位置/旋转抖动（哈希驱动，确定性）
+        var jit = P(node, 'jit', 0);
+        if (jit > 0) {
+          lx += (hashN(col, row, rseed + 101) - 0.5) * 2 * jit;
+          ly += (hashN(col, row, rseed + 131) - 0.5) * 2 * jit;
+        }
+        var rotj = P(node, 'rot', 0);
+        if (rotj > 0) {
+          var ra = (hashN(col, row, rseed + 202) - 0.5) * 2 * rotj;
+          var rc2 = Math.cos(ra), rs2 = Math.sin(ra);
+          var tx = lx * rc2 - ly * rs2, ty = lx * rs2 + ly * rc2;
+          lx = tx; ly = ty;
+        }
+        // 交替重复 AB：奇偶行用 B 程序（Alexander 交替重复的完整式）
         var child2 = node.inputs ? byId.get(node.inputs.in) : undefined;
+        if (parity === 1 && node.inputs && node.inputs.b) child2 = byId.get(node.inputs.b);
         return child2 ? ev(child2, lx, ly, { base: base, cell: cell2 }, null) : 0;
       }
       case 'repeatPolar': {

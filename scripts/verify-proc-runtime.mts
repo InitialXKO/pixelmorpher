@@ -258,7 +258,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
 {
   const baker = createSurfaceBaker();
   const shape = { kind: 'rect', size: [40, 32] as [number, number], roundness: 0.15 };
-  check('G1 模板数量 ≥ 12', PATTERN_TEMPLATES.length >= 12);
+  check('G1 模板数量 ≥ 22', PATTERN_TEMPLATES.length >= 22);
   for (const t of PATTERN_TEMPLATES) {
     const g = instantiatePattern(t);
     const ids = new Set(g.nodes.map((x) => x.id));
@@ -288,6 +288,107 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   } as unknown as Character;
   const pkg2 = convertCharacterToRuntimePackage(ch2);
   check('G4 转换器把 surfaceGraph 透传进包', !!(pkg2.parts[0]?.base as { surfaceGraph?: SurfaceGraph }).surfaceGraph);
+}
+
+// ---------- H) 十五属性算子语义 ----------
+{
+  const baker = createSurfaceBaker();
+  const shape = { kind: 'rect', size: [36, 28] as [number, number], roundness: 0.1 };
+  // mirror 局部对称：镜像折叠后的瓦片左右对称
+  const mirrorGraph: SurfaceGraph = {
+    version: 1, nodes: [
+      { id: 'in', op: 'inside' },
+      { id: 'st', op: 'stripes', params: { axis: 'x', f: 5, duty: 0.45 } },
+      { id: 'nz', op: 'noise', params: { f: 0.3, seed: 3 } },
+      { id: 'mixv', op: 'mul', inputs: { a: 'st', b: 'nz' } },
+      { id: 'mir', op: 'mirror', inputs: { in: 'mixv' }, params: { axis: 'x', at: 0 } },
+      { id: 'gate', op: 'threshold', inputs: { in: 'mir' }, params: { at: 0.2 } },
+    ],
+    writes: [{ from: 'in', slot: 2, at: 0.5 }, { from: 'gate', slot: 4, at: 0.5 }],
+  };
+  const tm = baker.compileTileDAG(shape, mirrorGraph);
+  let symmetric = true;
+  for (let j = 0; j < tm.h && symmetric; j++) {
+    for (let i = 2; i < tm.cx; i++) {
+      const a = tm.data[(j * tm.w + i) * 4];
+      const b = tm.data[(j * tm.w + (2 * tm.cx - i)) * 4];
+      if (a !== b) { symmetric = false; break; }
+    }
+  }
+  check('H1 mirror 局部对称：瓦片左右逐像素对称', symmetric);
+  // weave 交锁与 stripes 不同且多档
+  const woven = PATTERN_TEMPLATES.find((t) => t.id === 'woven')!;
+  const tw = baker.compileTileDAG(shape, instantiatePattern(woven));
+  const wTiers = new Set<number>();
+  for (let i = 0; i < tw.data.length; i += 4) if (tw.data[i] <= 7) wTiers.add(tw.data[i]);
+  check('H2 weave 编织模板多档位（交锁生效）', wTiers.has(3) && wTiers.has(4));
+  // glint 通道：水面模板产生 0/255 并存的 G 通道
+  const water = PATTERN_TEMPLATES.find((t) => t.id === 'water')!;
+  const twt = baker.compileTileDAG(shape, instantiatePattern(water));
+  let g0 = false, g255 = false;
+  for (let i = 0; i < twt.data.length; i += 4) {
+    if (twt.data[i + 1] === 0) g0 = true;
+    if (twt.data[i + 1] === 255) g255 = true;
+  }
+  check('H3 水面 DAG glint 通道写出生效（G 有 0 有 255）', g0 && g255);
+  // 藤蔓模板：茎叶档 + 亮边
+  const vine = PATTERN_TEMPLATES.find((t) => t.id === 'vine')!;
+  const tv = baker.compileTileDAG({ kind: 'rect', size: [28, 40], roundness: 0.1 }, instantiatePattern(vine));
+  const vTiers = new Set<number>();
+  for (let i = 0; i < tv.data.length; i += 4) if (tv.data[i] <= 7) vTiers.add(tv.data[i]);
+  check('H4 藤蔓路径发生器烘焙出茎叶档 3', vTiers.has(3));
+  // AB 交替：repeat 双程序奇偶行不同
+  const abGraph: SurfaceGraph = {
+    version: 1, nodes: [
+      { id: 'in', op: 'inside' },
+      { id: 'csA', op: 'cellShape', params: { kind: 'rect', gap: 0.5 } },
+      { id: 'csB', op: 'cellShape', params: { kind: 'circle', gap: 0.5 } },
+      { id: 'rep', op: 'repeat', inputs: { in: 'csA', b: 'csB' }, params: { cw: 10, ch: 8, seed: 1 } },
+    ],
+    writes: [{ from: 'in', slot: 1, at: 0.5 }, { from: 'rep', slot: 3, at: 0 }],
+  };
+  const aGraph: SurfaceGraph = {
+    ...abGraph,
+    nodes: abGraph.nodes.map((x) => x.id === 'rep' ? { ...x, inputs: { in: 'csA' } } : x),
+  };
+  const tab = baker.compileTileDAG(shape, abGraph);
+  const ta = baker.compileTileDAG(shape, aGraph);
+  check('H5 repeat AB 交替与单程序结果不同（B 程序在奇数行生效）', !Buffer.from(tab.data).equals(Buffer.from(ta.data)));
+  // repeat 抖动生效
+  const jitGraph: SurfaceGraph = {
+    ...aGraph,
+    nodes: aGraph.nodes.map((x) => x.id === 'rep' ? { ...x, params: { ...x.params, jit: 1.5 } } : x),
+  };
+  const tj = baker.compileTileDAG(shape, jitGraph);
+  check('H6 repeat 单元抖动（粗糙度）改变图案', !Buffer.from(tj.data).equals(Buffer.from(ta.data)));
+}
+
+// ---------- H7) 编辑器规格表与求值器对齐 ----------
+{
+  const { SURFACE_OP_SPECS } = await import('../src/lib/proc-runtime/surface-ops');
+  const { BAKE_SRC } = await import('../src/lib/proc-runtime/bake-src');
+  const missing = SURFACE_OP_SPECS.filter((s) => !BAKE_SRC.includes(`case '${s.op}'`)).map((s) => s.op);
+  check(`H7 规格表算子在求值器中全部存在（缺失：${missing.join(',') || '无'}）`, missing.length === 0);
+  check('H7b 规格表算子数 ≥ 40', SURFACE_OP_SPECS.length >= 40);
+}
+
+// ---------- H8) v2 画布自动布局 ----------
+{
+  const { computeSurfaceLayout, surfaceScopeParentMap, SURFACE_NODE_W, SURFACE_NODE_H } = await import('../src/lib/proc-runtime/surface-ops');
+  const g = instantiatePattern(PATTERN_TEMPLATES.find((t) => t.id === 'mech')!);
+  const l1 = computeSurfaceLayout(g);
+  const l2 = computeSurfaceLayout(g);
+  check('H8a 布局确定性（两次结果一致）', JSON.stringify(l1) === JSON.stringify(l2));
+  check('H8b 每个节点都有坐标', g.nodes.every((x) => !!l1.pos[x.id]));
+  const parents = surfaceScopeParentMap(g);
+  let contained = true;
+  for (const [child, p] of parents) {
+    const f = l1.frames[p];
+    const cp = l1.pos[child];
+    if (!f || !cp) { contained = false; break; }
+    if (cp.x < f.x || cp.y < f.y || cp.x + SURFACE_NODE_W > f.x + f.w + 1 || cp.y + SURFACE_NODE_H > f.y + f.h + 1) { contained = false; break; }
+  }
+  check('H8c 作用域子图落在框内', contained && parents.size > 0);
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

@@ -287,6 +287,214 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       { from: 'g', slot: 0, bump: { hi: 1, mid: 2, lo: 3 } },
     ]),
   },
+  {
+    id: 'roof', name: '屋顶平瓦', cluster: '重复',
+    params: [
+      P('cw', '瓦宽', 8, 16, 1, 11), P('ch', '瓦高', 6, 12, 1, 9), P('gap', '瓦缝', 0.3, 1.5, 0.1, 0.7),
+    ],
+    graph: graph([
+      ...baseIn(1),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$ch', alt: 0.5, seed: 15 }),
+      n('cs', 'cellShape', undefined, { kind: 'scallop', gap: '$gap', arc: -0.6 }),
+      n('edge', 'levelBand', { in: 'rep' }, { level: 0, w: 0.9 }),
+      n('cv', 'cellV'),
+      n('repCv', 'repeat', { in: 'cv' }, { cw: '$cw', ch: '$ch', alt: 0.5, seed: 15 }),
+      n('lip', 'threshold', { in: 'repCv' }, { at: -0.6, soft: 0.2 }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('rep', 3, { at: 0 }),
+      w('lip', 2, { at: 0.4 }),
+      w('edge', 4, { at: 0.5 }),
+    ]),
+  },
+  {
+    id: 'grass', name: '草地', cluster: '自然',
+    params: [
+      P('cw', '草簇距', 3, 7, 0.5, 4.5), P('rough', '粗糙（抖动）', 0, 1, 0.1, 0.6),
+    ],
+    graph: graph([
+      ...baseIn(1),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: 6, alt: 0.5, seed: 16, jit: '$rough', rot: 0.35 }),
+      n('cs', 'cellShape', undefined, { kind: 'slat', dir: 'y', th: 1.4, gap: 0.2 }),
+      n('tip', 'levelBand', { in: 'rep' }, { level: 1.2, w: 1 }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('rep', 3, { at: 0 }),
+      w('tip', 5, { at: 0.45 }),
+    ]),
+  },
+  {
+    id: 'water', name: '水面', cluster: '自然',
+    params: [
+      P('f', '波距', 3, 8, 0.5, 5), P('warp', '波纹扭曲', 0, 5, 0.5, 2.5),
+    ],
+    graph: graph([
+      ...baseIn(2),
+      n('nz', 'noise', undefined, { f: 0.1, seed: 17 }),
+      n('wv', 'stripes', undefined, { axis: 'y', f: '$f', duty: 0.4 }),
+      n('ww', 'warp', { in: 'wv', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
+      n('crest', 'levelBand', { in: 'ww' }, { level: 0.5, w: 0.5 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('ww', 3, { at: 0.5 }),
+      w('crest', 0, { at: 0.5, ch: 'glint' }),
+    ]),
+  },
+  {
+    id: 'marble', name: '大理石', cluster: '自然',
+    params: [
+      P('warp', '纹路扭曲', 2, 9, 0.5, 5.5), P('vein', '纹宽', 0.2, 0.6, 0.05, 0.35),
+    ],
+    graph: graph([
+      ...baseIn(5),
+      n('nz', 'blob', undefined, { f: 0.05, seed: 18, contrast: 1.4 }),
+      n('bandsF', 'stripes', undefined, { axis: 'd', f: 7, duty: 0.5 }),
+      n('w1', 'warp', { in: 'bandsF', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
+      n('veinB', 'levelBand', { in: 'w1' }, { level: 0.5, w: '$vein' }),
+      n('shade', 'remap', { in: 'nz' }, { lo: 0.3, hi: 0.75 }),
+      n('shadeG', 'threshold', { in: 'shade' }, { at: 0.72, soft: 0.1 }),
+    ], [
+      w('in', 5, { at: 0.5 }),
+      w('shadeG', 4, { at: 0.5 }),
+      w('veinB', 2, { at: 0.42 }),
+    ]),
+  },
+  {
+    id: 'camo', name: '迷彩', cluster: '自然',
+    params: [
+      P('scale', '斑大小', 0.04, 0.11, 0.01, 0.07),
+    ],
+    graph: graph([
+      ...baseIn(2),
+      n('b1', 'blob', undefined, { f: '$scale', seed: 19, contrast: 1.3 }),
+      n('g1', 'threshold', { in: 'b1' }, { at: 0.52, soft: 0.06 }),
+      n('b2', 'blob', undefined, { f: '$scale', seed: 43, contrast: 1.3 }),
+      n('g2', 'threshold', { in: 'b2' }, { at: 0.58, soft: 0.06 }),
+      n('b3', 'blob', undefined, { f: '$scale', seed: 71, contrast: 1.2 }),
+      n('g3', 'threshold', { in: 'b3' }, { at: 0.64, soft: 0.06 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('g1', 3, { at: 0.5 }),
+      w('g2', 4, { at: 0.5 }),
+      w('g3', 1, { at: 0.5 }),
+    ]),
+  },
+  {
+    id: 'clouds', name: '云层', cluster: '自然',
+    params: [
+      P('scale', '云团大小', 0.03, 0.09, 0.01, 0.05), P('thresh', '云密度', 0.4, 0.62, 0.02, 0.5),
+    ],
+    graph: graph([
+      ...baseIn(6),
+      n('bl', 'blob', undefined, { f: '$scale', seed: 20, contrast: 1.15 }),
+      n('gate', 'threshold', { in: 'bl' }, { at: '$thresh', soft: 0.09 }),
+      n('botG', 'grad', undefined, { axis: 'y' }),
+      n('botM', 'mul', { a: 'gate', b: 'botG' }),
+      n('edgeB', 'levelBand', { in: 'bl' }, { level: '$thresh', w: 0.09 }),
+    ], [
+      w('in', 6, { at: 0.5 }),
+      w('gate', 5, { at: 0.5 }),
+      w('botM', 4, { at: 0.6 }),
+      w('edgeB', 3, { at: 0.4 }),
+    ]),
+  },
+  {
+    id: 'rock', name: '岩石', cluster: '自然',
+    params: [
+      P('f', '岩块大小', 5, 11, 1, 8),
+    ],
+    graph: graph([
+      ...baseIn(3),
+      n('vor', 'voronoi', undefined, { f: '$f', seed: 22, mode: 'edge' }),
+      n('crack', 'levelBand', { in: 'vor' }, { level: 0, w: 0.8 }),
+      n('vorId', 'voronoi', undefined, { f: '$f', seed: 22, mode: 'id' }),
+      n('tint', 'threshold', { in: 'vorId' }, { at: 0.5 }),
+    ], [
+      w('in', 3, { at: 0.5 }),
+      w('tint', 2, { at: 0.5 }),
+      w('crack', 1, { at: 0.45 }),
+    ]),
+  },
+  {
+    id: 'lava', name: '熔岩裂纹', cluster: '自然',
+    params: [
+      P('f', '裂块大小', 5, 11, 1, 7.5),
+    ],
+    graph: graph([
+      ...baseIn(0),
+      n('vor', 'voronoi', undefined, { f: '$f', seed: 23, mode: 'edge' }),
+      n('crack', 'levelBand', { in: 'vor' }, { level: 0, w: 1 }),
+      n('core', 'levelBand', { in: 'vor' }, { level: 0, w: 0.45 }),
+    ], [
+      w('in', 0, { at: 0.5 }),
+      w('crack', 6, { at: 0.45 }),
+      w('core', 0, { at: 0.5, ch: 'glint' }),
+    ]),
+  },
+  {
+    id: 'leather', name: '皮革', cluster: '自然',
+    params: [
+      P('f', '纹孔大小', 3.5, 7, 0.5, 5),
+    ],
+    graph: graph([
+      ...baseIn(3),
+      n('vor', 'voronoi', undefined, { f: '$f', seed: 24, mode: 'edge' }),
+      n('pore', 'levelBand', { in: 'vor' }, { level: 0, w: 0.55 }),
+      n('soft', 'blur', { in: 'pore' }, { r: 0.8 }),
+    ], [
+      w('in', 3, { at: 0.5 }),
+      w('soft', 2, { at: 0.4 }),
+    ]),
+  },
+  {
+    id: 'woven', name: '藤编', cluster: '重复',
+    params: [
+      P('cw', '编距', 3.5, 7, 0.5, 5),
+    ],
+    graph: graph([
+      ...baseIn(2),
+      n('sa', 'stripes', undefined, { axis: 'x', f: '$cw', duty: 0.82 }),
+      n('sb', 'stripes', undefined, { axis: 'y', f: '$cw', duty: 0.82 }),
+      n('wv', 'weave', { a: 'sa', b: 'sb' }, { cw: '$cw', ch: '$cw' }),
+      n('wvHi', 'threshold', { in: 'wv' }, { at: 0.9 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('wv', 3, { at: 0.4 }),
+      w('wvHi', 4, { at: 0.5 }),
+    ]),
+  },
+  {
+    id: 'vine', name: '藤蔓', cluster: '自然',
+    params: [
+      P('seed', '藤蔓种子', 1, 40, 1, 5), P('w0', '茎粗', 0.8, 2.6, 0.2, 1.5),
+    ],
+    graph: graph([
+      ...baseIn(2),
+      n('vn', 'vine', undefined, { seed: '$seed', w0: '$w0', w1: 0.7, step: 3.5, leafEvery: 8 }),
+      n('edge', 'levelBand', { in: 'vn' }, { level: 0, w: 0.7 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('vn', 3, { at: 0 }),
+      w('edge', 5, { at: 0.45 }),
+    ]),
+  },
+  {
+    id: 'medallion', name: '回声徽章', cluster: '着色',
+    params: [
+      P('seg', '花瓣数', 6, 16, 1, 10), P('echo', '回声权重', 0.3, 1, 0.05, 0.75),
+    ],
+    graph: graph([
+      ...baseIn(1),
+      n('pol', 'repeatPolar', { in: 'cs' }, { seg: '$seg', arcW: 7, seed: 26 }),
+      n('cs', 'cellShape', undefined, { kind: 'scallop', gap: 0.6 }),
+      n('echoed', 'overlay2', { in: 'pol' }, { k: 2.1, w: '$echo' }),
+      n('ring', 'focal', undefined, { mode: 'ring', r: 11, w: 1.2 }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('echoed', 3, { at: 0 }),
+      w('ring', 5, { at: 0.4 }),
+    ]),
+  },
 ];
 
 /** 实例化：深克隆图 + 参数取默认值（graph.params） */

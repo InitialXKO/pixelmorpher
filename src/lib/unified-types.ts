@@ -858,6 +858,11 @@ export interface SurfaceGraph {
   writes: SurfaceGraphWrite[];
   /** 模板暴露参数的当前值 */
   params?: Record<string, number>;
+  /** 编辑器布局（v2 画布）：节点坐标 + 作用域框矩形；烘焙/运行时忽略 */
+  ui?: {
+    pos?: Record<string, { x: number; y: number }>;
+    frames?: Record<string, { x: number; y: number; w: number; h: number }>;
+  };
 }
 
 export interface ParametricAppearance {
