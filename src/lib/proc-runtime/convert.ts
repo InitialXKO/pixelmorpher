@@ -29,6 +29,7 @@ export interface RuntimePartBase {
   rimI: number; glintI: number;
   surfaceName?: string;
   surface: ParametricAppearance['surface'];
+  surfaceGraph?: ParametricAppearance['surfaceGraph'];
 }
 
 export interface RuntimePart {
@@ -78,6 +79,7 @@ function appearanceToBase(
     rimI: app.rimI, glintI: app.glintI,
     surfaceName: app.surfaceName,
     surface: app.surface,
+    surfaceGraph: app.surfaceGraph,
   };
 }
 

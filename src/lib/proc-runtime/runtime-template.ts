@@ -7,12 +7,14 @@
 // ============================================================
 import type { ProcRuntimePackage } from './convert';
 import { RUNTIME_EVAL_SRC } from './eval-src';
+import { BAKE_SRC } from './bake-src';
 
 export function buildRuntimeHtml(pkg: ProcRuntimePackage): string {
   const json = JSON.stringify(pkg).replace(/</g, '\\u003c');
   return TEMPLATE
     .split('/*__PACKAGE__*/').join(json)
-    .split('/*__EVAL__*/').join(RUNTIME_EVAL_SRC);
+    .split('/*__EVAL__*/').join(RUNTIME_EVAL_SRC)
+    .split('/*__BAKE__*/').join(BAKE_SRC);
 }
 
 const TEMPLATE = `<!DOCTYPE html>
@@ -292,12 +294,17 @@ function resolvePart(part, variantIndex, costume) {
       if (c.pal) p.pal = c.pal;
       if (c.size) p.size = c.size;
       if (c.roundness !== undefined) p.roundness = c.roundness;
+      if (c.surfaceGraph !== undefined) p.surfaceGraph = c.surfaceGraph;
     }
   }
   const shape = p.poly
     ? { kind: 'poly', size: p.size, points: p.poly, pivot: p.polyPivot || [0, 0] }
     : { kind: p.shapeKind || 'rect', size: p.size, roundness: p.roundness ?? 0 };
-  return { params: p, shape, program: p.surface || [{ mask: { m: 'inside' }, slot: 2 }] };
+  return {
+    params: p, shape,
+    program: p.surface || [{ mask: { m: 'inside' }, slot: 2 }],
+    graph: p.surfaceGraph || null,
+  };
 }
 const DRAW_ORDER_MAIN = {
   0: ['cape', 'left_arm', 'left_leg', 'right_leg', 'right_arm', 'torso', 'head'],
@@ -363,6 +370,7 @@ function packInstances(els) {
 }
 // === PURE END ===
 /*__EVAL__*/
+/*__BAKE__*/
 
 // ---------- 数据（来自运行时包） ----------
 const PAL = EMBEDDED.palettes;
@@ -389,7 +397,7 @@ const tileCache = new Map();
 let atlasState = null;
 function tileKeyOf(part, variant, costumeName, resolved) {
   return [part.key, variant, costumeName, JSON.stringify(resolved.shape),
-    JSON.stringify(resolved.program.map((l) => [l.mask ? l.mask.m : l.bumpForm, l.slot, l.ch]))].join('|');
+    resolved.graph ? 'G' + JSON.stringify(resolved.graph) : JSON.stringify(resolved.program.map((l) => [l.mask ? l.mask.m : l.bumpForm, l.slot, l.ch]))].join('|');
 }
 function ensureAtlas(gl, variant, costumeName) {
   if (atlasState && atlasState.variant === variant && atlasState.costumeName === costumeName) return atlasState;
@@ -401,7 +409,7 @@ function ensureAtlas(gl, variant, costumeName) {
     if (resolved.params.hidden) { map.set(part.key, null); continue; }
     const key = tileKeyOf(part, variant, costumeName, resolved);
     let tile = tileCache.get(key);
-    if (!tile) { tile = compileTile(resolved.shape, resolved.program); tileCache.set(key, tile); }
+    if (!tile) { tile = resolved.graph ? compileTileDAG(resolved.shape, resolved.graph) : compileTile(resolved.shape, resolved.program); tileCache.set(key, tile); }
     tiles.push(tile);
     entries.push([part.key, tile, resolved]);
   }

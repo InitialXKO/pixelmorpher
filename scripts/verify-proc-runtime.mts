@@ -14,6 +14,9 @@ import { dialectOf } from '../src/lib/proc-runtime/dialect';
 import { createRuntimeEvaluator } from '../src/lib/proc-runtime/eval-src';
 import { convertCharacterToRuntimePackage } from '../src/lib/proc-runtime/convert';
 import { createDefaultCostumePiece } from '../src/lib/unified-types';
+import { createSurfaceBaker } from '../src/lib/proc-runtime/bake-src';
+import { PATTERN_TEMPLATES, instantiatePattern } from '../src/lib/proc-runtime/pattern-templates';
+import type { SurfaceGraph } from '../src/lib/unified-types';
 
 let passed = 0;
 function check(name: string, cond: boolean) {
@@ -219,6 +222,72 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     id: 'e', name: '空', nodes: {}, rootNodeIds: [], costumeSets: [], variants: {},
   } as unknown as Character);
   check('E9 空角色行为图为空对象（不报错）', Object.keys(empty.behavior.graphs).length === 0);
+}
+
+// ---------- F) 表面 DAG 烘焙语义 ----------
+{
+  const baker = createSurfaceBaker();
+  const shape = { kind: 'rect', size: [36, 28] as [number, number], roundness: 0.1 };
+  const tiersOf = (data: Uint8Array) => {
+    const s = new Set<number>();
+    for (let i = 0; i < data.length; i += 4) s.add(data[i]);
+    return s;
+  };
+  const scales = PATTERN_TEMPLATES.find((t) => t.id === 'scales')!;
+  const g1 = instantiatePattern(scales);
+  const t1 = baker.compileTileDAG(shape, g1);
+  const tiers1 = tiersOf(t1.data);
+  check('F1 鳞片烘焙多档位（含鳞体 3 与亮边 5）', tiers1.has(3) && tiers1.has(5) && tiers1.has(2));
+  const t1b = baker.compileTileDAG(shape, instantiatePattern(scales));
+  check('F2 同图重复烘焙逐字节确定', Buffer.from(t1.data).equals(Buffer.from(t1b.data)));
+  const g2 = instantiatePattern(scales);
+  g2.params!.cw = 16;
+  const t2 = baker.compileTileDAG(shape, g2);
+  check('F3 模板参数生效（鳞宽 10→16 图案变化）', !Buffer.from(t1.data).equals(Buffer.from(t2.data)));
+  const wood = PATTERN_TEMPLATES.find((t) => t.id === 'wood')!;
+  const gw = instantiatePattern(wood);
+  const tw = baker.compileTileDAG(shape, gw);
+  const gw0 = instantiatePattern(wood);
+  gw0.params!.warp = 0;
+  const tw0 = baker.compileTileDAG(shape, gw0);
+  check('F4 warp 坐标扭曲生效（木纹 warp=3 与 warp=0 不同）', !Buffer.from(tw.data).equals(Buffer.from(tw0.data)));
+  check('F5 木纹含纹线档 2 与结眼档 1 或纹线', tiersOf(tw.data).has(2));
+}
+
+// ---------- G) 模板库全量校验 ----------
+{
+  const baker = createSurfaceBaker();
+  const shape = { kind: 'rect', size: [40, 32] as [number, number], roundness: 0.15 };
+  check('G1 模板数量 ≥ 12', PATTERN_TEMPLATES.length >= 12);
+  for (const t of PATTERN_TEMPLATES) {
+    const g = instantiatePattern(t);
+    const ids = new Set(g.nodes.map((x) => x.id));
+    const refsOk = g.nodes.every((x) => Object.values(x.inputs ?? {}).every((r) => ids.has(r)))
+      && g.writes.every((x) => ids.has(x.from));
+    const paramKeys = new Set(t.params.map((p) => p.key));
+    const dollarOk = JSON.stringify(g.nodes).match(/"\$[a-zA-Z]+"/g)?.every((s) => paramKeys.has(s.slice(2, -1))) ?? true;
+    check(`G2 模板 ${t.name}：引用完整 + $参数有定义`, refsOk && dollarOk);
+    const tile = baker.compileTileDAG(shape, g);
+    const tiers = new Set<number>();
+    let rangeOk = true;
+    for (let i = 0; i < tile.data.length; i += 4) {
+      const v = tile.data[i];
+      if (!((v >= 0 && v <= 7) || v === 254 || v === 255)) rangeOk = false;
+      if (v <= 7) tiers.add(v);
+    }
+    check(`G3 模板 ${t.name}：烘焙非退化（≥2 内部档位、值域合法）`, rangeOk && tiers.size >= 2);
+  }
+  // 转换器透传 surfaceGraph
+  const appWithGraph = { ...createDefaultParametricAppearance(), surfaceGraph: instantiatePattern(PATTERN_TEMPLATES.find((t) => t.id === 'scales')!) };
+  const ch2 = {
+    id: 'ch2', name: '图角色',
+    nodes: { torso: makeNode('torso', '躯干', 'torso') },
+    rootNodeIds: ['torso'],
+    costumeSets: [{ id: 's', name: '默认', pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: appWithGraph } } }],
+    activeCostumeSetId: 's', variants: {},
+  } as unknown as Character;
+  const pkg2 = convertCharacterToRuntimePackage(ch2);
+  check('G4 转换器把 surfaceGraph 透传进包', !!(pkg2.parts[0]?.base as { surfaceGraph?: SurfaceGraph }).surfaceGraph);
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

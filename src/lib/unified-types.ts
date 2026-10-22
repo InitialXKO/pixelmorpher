@@ -828,12 +828,46 @@ export interface ParametricShapeDef {
  * 程序化运行时包；主渲染管线不消费此字段（仍走 sprites），它服务于程序化
  * 预览与「程序化运行时包」导出。
  */
+/**
+ * 表面模式 DAG（场代数）：节点值 = (x,y) → 标量场，掩码是场的阈值化。
+ * 算子可任意嵌套/扇出（真 DAG），烘焙期逐像素求值成档位图集，
+ * 运行时仍 O(1) 采样。模板库 = 存好的图 + 暴露参数（graph.params，
+ * 节点参数以 "$key" 引用）。与旧层程序并存：有 surfaceGraph 时优先。
+ */
+export interface SurfaceGraphNode {
+  id: string;
+  op: string;
+  /** 输入口 → 上游节点 id（口名按 op 定义：a/b/in/fx/fy 等） */
+  inputs?: Record<string, string>;
+  /** 参数：数值或 "$paramKey"（从 graph.params 取） */
+  params?: Record<string, number | string>;
+}
+export interface SurfaceGraphWrite {
+  from: string;
+  /** 写档位（1..7）；ch='glint' 时写 glint 通道；bump 时按高度三档量化 */
+  slot: number;
+  /** 命中阈值（场 ≥ at 命中；缺省 0.5，距离场通常用 0） */
+  at?: number;
+  ch?: 'glint';
+  bump?: { hi: number; mid: number; lo: number };
+}
+export interface SurfaceGraph {
+  version: 1;
+  nodes: SurfaceGraphNode[];
+  /** 按序写出（后写覆盖先写，与层程序同一口径） */
+  writes: SurfaceGraphWrite[];
+  /** 模板暴露参数的当前值 */
+  params?: Record<string, number>;
+}
+
 export interface ParametricAppearance {
   shape: ParametricShapeDef;
   /** 形状中心相对节点原点的偏移（px，x 右 y 下，节点局部） */
   centerOffset: [number, number];
-  /** 表面层程序（pattern 层语言） */
+  /** 表面层程序（pattern 层语言）；有 surfaceGraph 时让位 */
   surface: ParametricLayer[];
+  /** 表面模式 DAG（模板库的本体）；存在时烘焙优先走它 */
+  surfaceGraph?: SurfaceGraph;
   /** 表面预设名（UI 显示与回选；程序本体以 surface 为准） */
   surfaceName?: string;
   /** 调色板家族名（运行时 PALETTES 的键） */

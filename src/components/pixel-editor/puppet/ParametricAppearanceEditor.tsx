@@ -18,6 +18,8 @@ import {
 } from '@/lib/proc-runtime/palettes';
 import { SURFACE_PRESETS, SURFACE_PRESET_NAMES, createDefaultParametricAppearance } from '@/lib/proc-runtime/surfaces';
 import PolyContourEditor from './PolyContourEditor';
+import { PATTERN_TEMPLATES, instantiatePattern, patternTemplateByName } from '@/lib/proc-runtime/pattern-templates';
+const PATTERN_CLUSTERS = [...new Set(PATTERN_TEMPLATES.map((t) => t.cluster))];
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -133,6 +135,59 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
               {SURFACE_PRESET_NAMES.map((n) => <option key={n} value={n}>{n}</option>)}
               <option value="（自定义）">（自定义）</option>
             </select>
+          </div>
+          {/* 模式模板（表面 DAG）：选模板 + 参数；启用后烘焙优先走 DAG，层程序留作回退 */}
+          <div>
+            <Label className="text-[9px] text-gray-600">模式模板（DAG）</Label>
+            {app.surfaceGraph ? (
+              <div className="mt-1 space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-cyan-300">{patternTemplateByName(app.surfaceName)?.name ?? app.surfaceName ?? '自定义模式'}</span>
+                  <span className="text-[9px] text-gray-600">已启用（烘焙走 DAG）</span>
+                  <div className="flex-1" />
+                  <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5 text-red-400 hover:text-red-300"
+                    onClick={() => patch({ surfaceGraph: undefined })}>
+                    移除（回层程序）
+                  </Button>
+                </div>
+                {(patternTemplateByName(app.surfaceName)?.params ?? []).map((pd) => (
+                  <div key={pd.key} className="flex items-center gap-1.5">
+                    <span className="w-14 text-[9px] text-gray-500">{pd.label}</span>
+                    <input
+                      type="range" min={pd.min} max={pd.max} step={pd.step}
+                      value={app.surfaceGraph!.params?.[pd.key] ?? pd.def}
+                      onChange={(e) => {
+                        const g = app.surfaceGraph!;
+                        patch({ surfaceGraph: { ...g, params: { ...g.params, [pd.key]: Number(e.target.value) } } });
+                      }}
+                      className="flex-1 h-1 accent-cyan-400"
+                    />
+                    <span className="w-8 text-right text-[9px] text-gray-400">{app.surfaceGraph!.params?.[pd.key] ?? pd.def}</span>
+                  </div>
+                ))}
+                {!patternTemplateByName(app.surfaceName) && (
+                  <p className="text-[9px] text-gray-600">自定义图（非模板实例）：参数在图数据内，模板滑杆不适用。</p>
+                )}
+              </div>
+            ) : (
+              <select
+                value=""
+                onChange={(e) => {
+                  const t = PATTERN_TEMPLATES.find((x) => x.id === e.target.value);
+                  if (t) patch({ surfaceGraph: instantiatePattern(t), surfaceName: t.name });
+                }}
+                className={selCls}
+              >
+                <option value="">选择模板启用 DAG 模式…</option>
+                {PATTERN_CLUSTERS.map((c) => (
+                  <optgroup key={c} label={c}>
+                    {PATTERN_TEMPLATES.filter((t) => t.cluster === c).map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-1.5">
             <div>
