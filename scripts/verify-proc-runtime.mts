@@ -31,7 +31,7 @@ function check(name: string, cond: boolean) {
   const first = layers[0];
   check('A1 预设首层是 inside 全覆盖（slot=最暗档 1）', 'mask' in first && first.mask.m === 'inside' && first.slot === 1);
   const hasEdge = layers.some((l) => 'mask' in l && l.mask.m === 'edge');
-  check('A2 预设含 edge 层（描边来自层程序）', hasEdge);
+  check('A2 预设不含 edge 层（甲：描边归 OUTLINE 枚举，层程序只管面内）', !hasEdge);
   const bumpLayers = SURFACE_PRESETS['穹光（bump）']();
   check('A3 穹光预设含 bumpForm 层（连续公式烘焙为档位）', bumpLayers.some((l) => 'bumpForm' in l && l.bumpForm === 'dome'));
   const appearance = createDefaultParametricAppearance();
@@ -452,6 +452,28 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('J6 DAG 外观烘焙出多色 Sprite（鳞片）', !!sprDag && colors.size >= 3);
   check('J7 镜像方向集 = 西半向 3/4/5', PARAMETRIC_MIRROR_DIRECTIONS.has(4) && PARAMETRIC_MIRROR_DIRECTIONS.has(3)
     && PARAMETRIC_MIRROR_DIRECTIONS.has(5) && !PARAMETRIC_MIRROR_DIRECTIONS.has(0) && !PARAMETRIC_MIRROR_DIRECTIONS.has(6));
+}
+
+// ---------- K) 甲：预设不焊暗边，描边归 OUTLINE 枚举 ----------
+{
+  const { SURFACE_PRESETS, SURFACE_PRESET_NAMES, createDefaultParametricAppearance } = await import('../src/lib/proc-runtime/surfaces');
+  const { buildParametricSprite } = await import('../src/lib/proc-runtime/main-canvas');
+  const { PALETTES } = await import('../src/lib/proc-runtime/palettes');
+  const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
+  const welded = SURFACE_PRESET_NAMES.filter((name) =>
+    SURFACE_PRESETS[name]().some((l) => 'mask' in l && l.mask.m === 'edge' && l.slot === 0));
+  check(`K1 全部层预设无焊死边缘压暗层（命中：${welded.join(',') || '无'}）`, welded.length === 0);
+  const base = {
+    ...createDefaultParametricAppearance(),
+    palette: 'shirt',
+    shape: { kind: 'rect' as const, size: [20, 14] as [number, number], roundness: 0 },
+  };
+  const countPal0 = (spr: { data: (string | null)[][] } | null) =>
+    spr ? spr.data.flat().filter((c) => c === hex(PALETTES.shirt[0])).length : -1;
+  const sprNone = buildParametricSprite({ ...base, outline: 0 }, 'k-none');
+  const sprOuter = buildParametricSprite({ ...base, outline: 1 }, 'k-outer');
+  check('K2 outline=NONE 时全图无 pal[0] 像素（真无框）', countPal0(sprNone) === 0);
+  check('K3 outline=OUTER 时外环出现 pal[0] 像素（枚举管辖描边）', countPal0(sprOuter) > 10);
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
