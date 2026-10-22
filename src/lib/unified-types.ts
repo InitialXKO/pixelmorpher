@@ -758,6 +758,7 @@ export interface NodeTracks {
   x?: KeyframeTrack<number>;
   y?: KeyframeTrack<number>;
   stretch?: KeyframeTrack<number>;
+  scaleX?: KeyframeTrack<number>;
   variantIndex?: KeyframeTrack<number>;
 }
 
@@ -773,6 +774,7 @@ export interface NodeKeyframe {
   angle?: number;
   tilt?: number;
   stretch?: number;
+  scaleX?: number;
   x?: number;
   y?: number;
   variantIndex?: number;

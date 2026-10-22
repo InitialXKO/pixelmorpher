@@ -54,7 +54,7 @@ function interpolateSingleNode(node: Node, currentFrame: number): InterpolatedNo
     zIndex: node.zIndex ?? 0,
     skewX: 0,
     skewY: 0,
-    scaleX: 1,
+    scaleX: interpolateTrack(tracks?.scaleX, currentFrame, node.transform.scaleX ?? 1),
   };
 }
 

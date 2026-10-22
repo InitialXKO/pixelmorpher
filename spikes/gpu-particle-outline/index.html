@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>GPU 粒子 + 程序化纹理 + 多段线轮廓 — 研究原型</title>
+<title>GPU 粒子 + 程序化纹理 + 多段线轮廓 — 研究原型（mask 烘焙版）</title>
 <style>
   body { margin: 0; background: #0b0b16; color: #cfd3e6; font: 13px/1.5 system-ui, sans-serif; }
   main { max-width: 860px; margin: 0 auto; padding: 16px; }
@@ -19,8 +19,8 @@
 </head>
 <body>
 <main>
-  <h1>GPU 粒子 + 程序化纹理 + 多段线轮廓 · 研究原型</h1>
-  <p class="sub">一个 instanced draw call 画完整个角色：quad = 部件，片元里算多段线 SDF 轮廓 + 程序化 pattern + 调色板量化 + 运动驱动 rim/glint。骨骼在 CPU 算每部件 pos/rot（方案 §6-1），斗篷/羽饰用弹簧滞后（§6-2）。</p>
+  <h1>GPU 粒子 + 程序化纹理 + 多段线轮廓 · 研究原型（mask 烘焙版）</h1>
+  <p class="sub">架构口径：<b>SDF 只是生成 mask 的中间工具</b>——加载时在 CPU 把多段线距离场阈值化成像素 mask（描边/明暗/rim/高光候选一次烘焙进图集），片元只做纹理采样 + 调色板查表（pattern 程序已在烘焙期编译进 mask），逐像素成本 O(1)、与线段数无关。一个 instanced draw call 画完整个角色；骨骼在 CPU 算位姿（方案 §6-1），斗篷/羽饰弹簧滞后（§6-2）。</p>
   <canvas id="gl" width="768" height="768"></canvas>
   <div class="bar">
     <button id="playBtn">暂停</button>
@@ -33,14 +33,13 @@
     </label>
     <span id="stat" class="note"></span>
   </div>
-  <p class="note">轮廓是手工多段线（logo 式折线），pattern 为条纹/棋盘/噪点/鳞片/金属渐变五类，全部颜色走 8 档调色板查表；硬边靠 <code>discard</code>（alpha test），无 blending、无深度，层序由 CPU 按 layer 排序后单次 instanced 绘制。细节与结论见同目录 RESEARCH.md。</p>
+  <p class="note">每个部件的外观是一段 <b>pattern 程序</b>：由枚举形式组合（光照 = 平涂/纵向渐变/横向渐变，描边 = 暗色 1px，rim = 朝向边缘带，表面 = 条纹/棋盘/噪点/鳞片），烘焙期编译成 mask（R = 调色板档位、255 = 透明；G = glint 候选）。运行时只剩采样、glint 点亮与查表。光照/描边/rim 因此都是离散形式而非连续公式，改外观 = 改程序组合，不改着色器。细节与结论见同目录 RESEARCH.md。</p>
 </main>
 
 <script>
 'use strict';
-// === PURE BEGIN ===（纯逻辑：轮廓编译 / 实例打包 / 排序 / 量化；verify.mjs 抽取此段校验）
+// === PURE BEGIN ===（纯逻辑：轮廓编译 / 距离场→mask 烘焙 / 图集打包 / 实例打包 / 排序；verify.mjs 抽取此段校验）
 const MAX_OUTLINES = 8;
-const MAX_SEG = 32;
 
 /** logo/turtle 式指令 → 折线点列。指令：['M',x,y] ['L',x,y] ['FD',d] ['RT',deg] ['LT',deg] ['PU'] ['PD']
  *  坐标为元素局部像素（y 向下），初始位置 (0,0)、朝向 0°（+x 方向，顺时针为正——y 向下系） */
@@ -75,21 +74,142 @@ function pointsToSegments(points, pivot, close = true) {
   return segs;
 }
 
-/** 轮廓定义表 → 着色器数据纹理（MAX_OUTLINES × MAX_SEG × RGBA float）+ 每轮廓线段数 */
-function compileOutlines(defs) {
-  if (defs.length > MAX_OUTLINES) throw new Error(`轮廓数 ${defs.length} 超过上限 ${MAX_OUTLINES}`);
-  const data = new Float32Array(MAX_OUTLINES * MAX_SEG * 4);
-  const counts = new Int32Array(MAX_OUTLINES);
-  defs.forEach((def, oi) => {
-    const segs = pointsToSegments(def.points, def.pivot, def.close !== false);
-    if (segs.length > MAX_SEG) throw new Error(`轮廓 ${oi} 线段数 ${segs.length} 超过上限 ${MAX_SEG}`);
-    counts[oi] = segs.length;
-    segs.forEach((s, si) => {
-      const o = (oi * MAX_SEG + si) * 4;
-      data[o] = s[0]; data[o + 1] = s[1]; data[o + 2] = s[2]; data[o + 3] = s[3];
-    });
-  });
-  return { data, counts };
+/** 点到线段距离（SDF 的基本单元——只在烘焙期用） */
+function sdSegment(px, py, s) {
+  const pa = [px - s[0], py - s[1]];
+  const ba = [s[2] - s[0], s[3] - s[1]];
+  const denom = Math.max(ba[0] * ba[0] + ba[1] * ba[1], 1e-6);
+  const h = Math.min(1, Math.max(0, (pa[0] * ba[0] + pa[1] * ba[1]) / denom));
+  const dx = pa[0] - ba[0] * h, dy = pa[1] - ba[1] * h;
+  return Math.hypot(dx, dy);
+}
+
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+const smoothstep = (a, b, v) => { const t = clamp01((v - a) / (b - a)); return t * t * (3 - 2 * t); };
+/** 点在闭合折线内（even-odd）——覆盖由多边形决定，距离场只产边带/方向掩码 */
+function pointInPolygon(px, py, points) {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const [xi, yi] = points[i];
+    const [xj, yj] = points[j];
+    if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** pattern 模式语言：层 = { mask, slot, ch }，后层覆盖先层；mask 是数据原语，bake 期求值。
+ *  编译产物仍是离散 mask：R = 调色板档位（255 透明），G = glint 候选（ch:'glint' 层写入）。
+ *  距离场只作中间量：edge/band 按 d 取带、facing 按距离场梯度方向取向——产物是掩码，不是连续着色。 */
+function maskHit(mask, ctx) {
+  switch (mask.m) {
+    case 'all': return true;
+    case 'inside': return ctx.inside;
+    case 'edge': return ctx.d <= mask.w;
+    case 'band': return ctx.d > mask.w0 && ctx.d <= mask.w1;
+    case 'bands': {
+      const v = mask.axis === 'x' ? ctx.px : mask.axis === 'y' ? ctx.py : ctx.px + ctx.py * 0.35;
+      const f = ((v / mask.f + (mask.ph ?? 0)) % 1 + 1) % 1;
+      return f < (mask.duty ?? 0.5);
+    }
+    case 'checker': {
+      const cx = Math.floor(ctx.px / mask.f), cy = Math.floor(ctx.py / mask.f);
+      return ((cx + cy) % 2 + 2) % 2 === 0;
+    }
+    case 'noise': {
+      const cx = Math.floor(ctx.px / mask.f), cy = Math.floor(ctx.py / mask.f);
+      let hsh = Math.sin(cx * 127.1 + cy * 311.7 + (mask.seed ?? 0) * 74.7) * 43758.5453;
+      hsh -= Math.floor(hsh);
+      return hsh > (mask.gt ?? 0.72);
+    }
+    case 'gradLt': {
+      const v = mask.axis === 'x' ? ctx.px01 : ctx.py01;
+      return v < mask.t;
+    }
+    case 'facing': {
+      if (ctx.d > (mask.w ?? 1.6)) return false;
+      const deg = (Math.atan2(ctx.gy, ctx.gx) * 180) / Math.PI;
+      const diff = Math.abs(((deg - mask.deg) % 360 + 540) % 360 - 180);
+      return diff <= (mask.tol ?? 55);
+    }
+    default: throw new Error('pattern: 未知 mask 原语 ' + mask.m);
+  }
+}
+
+/** 枚举常见形式（光照/描边/rim/表面都是语言里可组合的命名形式，不是连续公式） */
+const F = {
+  /** 光照·平涂 */
+  lightFlat: (slot = 2) => [{ mask: { m: 'inside' }, slot }],
+  /** 光照·纵向三档渐变（上亮下暗） */
+  lightGradY: (slots = [3, 2, 1]) => [
+    { mask: { m: 'inside' }, slot: slots[2] },
+    { mask: { m: 'gradLt', axis: 'y', t: 0.66 }, slot: slots[1] },
+    { mask: { m: 'gradLt', axis: 'y', t: 0.33 }, slot: slots[0] },
+  ],
+  /** 光照·横向三档渐变 */
+  lightGradX: (slots = [1, 2, 3]) => [
+    { mask: { m: 'inside' }, slot: slots[0] },
+    { mask: { m: 'gradLt', axis: 'x', t: 0.66 }, slot: slots[2] },
+    { mask: { m: 'gradLt', axis: 'x', t: 0.33 }, slot: slots[1] },
+  ],
+  /** 描边·暗色 1px（slot 0） */
+  outlineDark: (w = 1) => [{ mask: { m: 'edge', w }, slot: 0 }],
+  /** rim·朝向某方向的边缘带（deg 为距离场梯度方向，y 向下系；左上光时背光缘 ≈ -135°） */
+  rim: (deg, slot = 4, w = 1.8, tol = 60) => [{ mask: { m: 'facing', deg, tol, w }, slot }],
+  /** glint 候选·迎光面（写 G 通道，运行时按噪声/角速度点亮） */
+  glintFace: (deg = 45, tol = 65) => [{ mask: { m: 'facing', deg, tol, w: 99 }, slot: 0, ch: 'glint' }],
+  /** 表面·条纹 */
+  stripes: (slot = 5, f = 3, ph = 0, duty = 0.5) => [{ mask: { m: 'bands', axis: 'd', f, ph, duty }, slot }],
+  /** 表面·棋盘 */
+  checker: (slot = 5, f = 3) => [{ mask: { m: 'checker', f }, slot }],
+  /** 表面·噪点 */
+  speckle: (slot = 3, f = 2, seed = 1, gt = 0.72) => [{ mask: { m: 'noise', f, seed, gt }, slot }],
+  /** 表面·鳞片（错行压暗带） */
+  scales: (slot = 1, f = 3) => [{ mask: { m: 'bands', axis: 'y', f, ph: 0, duty: 0.5 }, slot }],
+};
+
+/** pattern 程序 → 像素 mask：逐像素求覆盖与层，写 slot/G 通道 */
+function compileMask(points, segments, w, h, pivot, program) {
+  const dist = (x, y) => {
+    let d = Infinity;
+    for (const sg of segments) d = Math.min(d, sdSegment(x, y, sg));
+    return d;
+  };
+  const polyRel = points.map(([x, y]) => [x - pivot[0], y - pivot[1]]);
+  const out = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const px = x + 0.5 - pivot[0];
+      const py = y + 0.5 - pivot[1];
+      const o = (y * w + x) * 4;
+      out[o] = 255; out[o + 3] = 255;
+      const d = dist(px, py);
+      const inside = pointInPolygon(px, py, polyRel);
+      if (!inside && d > 0.5) continue; // 未覆盖
+      const gx = dist(px + 1, py) - dist(px - 1, py);
+      const gy = dist(px, py + 1) - dist(px, py - 1);
+      const ctx = { px, py, px01: (x + 0.5) / w, py01: (y + 0.5) / h, inside, d, gx, gy };
+      for (const layer of program) {
+        if (!maskHit(layer.mask, ctx)) continue;
+        if (layer.ch === 'glint') out[o + 1] = 255;
+        else out[o] = layer.slot;
+      }
+    }
+  }
+  return out;
+}
+
+/** 图集货架打包：tiles = [{w,h}] → 每 tile 左上坐标（保持原序）+ 图集总高 */
+function packAtlas(tiles, atlasWidth = 256) {
+  const order = tiles.map((t, i) => [t, i]).sort((a, b) => b[0].h - a[0].h);
+  const placements = new Array(tiles.length);
+  let x = 0, y = 0, rowH = 0;
+  for (const [t, i] of order) {
+    if (x + t.w > atlasWidth) { x = 0; y += rowH; rowH = 0; }
+    placements[i] = [x, y];
+    x += t.w;
+    rowH = Math.max(rowH, t.h);
+  }
+  return { placements, height: y + rowH };
 }
 
 /** 像素网格量化：吸附到最近的整数像素 */
@@ -103,9 +223,9 @@ function sortByLayer(elements) {
     .map((p) => p[0]);
 }
 
-/** 实例打包（与顶点属性布局一致，17 float/实例）：
- *  pos2 size2 rot1 pivot2 misc4(outline,pattern,paletteBase,seed) param4 motion2 */
-const INSTANCE_FLOATS = 17;
+/** 实例打包（与顶点属性布局一致，19 float/实例）：
+ *  pos2 size2 rot1 pivot2 tile2 misc4(保留,paletteBase,seed,0) param4 motion2 */
+const INSTANCE_FLOATS = 19;
 function packInstances(elements, out) {
   const buf = out ?? new Float32Array(elements.length * INSTANCE_FLOATS);
   elements.forEach((el, i) => {
@@ -114,56 +234,78 @@ function packInstances(elements, out) {
     buf[o + 2] = el.size[0]; buf[o + 3] = el.size[1];
     buf[o + 4] = el.rot;
     buf[o + 5] = el.pivot[0]; buf[o + 6] = el.pivot[1];
-    buf[o + 7] = el.outline; buf[o + 8] = el.pattern; buf[o + 9] = el.palette; buf[o + 10] = el.seed;
-    buf[o + 11] = el.param[0]; buf[o + 12] = el.param[1]; buf[o + 13] = el.param[2]; buf[o + 14] = el.param[3];
-    buf[o + 15] = el.motion[0]; buf[o + 16] = el.motion[1];
+    buf[o + 7] = el.tile[0]; buf[o + 8] = el.tile[1];
+    buf[o + 9] = el.pattern; buf[o + 10] = el.palette; buf[o + 11] = el.seed; buf[o + 12] = 0;
+    buf[o + 13] = el.param[0]; buf[o + 14] = el.param[1]; buf[o + 15] = el.param[2]; buf[o + 16] = el.param[3];
+    buf[o + 17] = el.motion[0]; buf[o + 18] = el.motion[1];
   });
   return buf;
 }
 // === PURE END ===
 
-// ---------- 调色板：8 家族 × 8 档（0 描边 / 1 暗 / 2 本 / 3 亮 / 4 高光 / 5  accent / 6 accent 暗 / 7 accent 亮）
+// ---------- 调色板：8 家族 × 8 档（0 描边 / 1 暗 / 2 本 / 3 亮 / 4 高光 / 5 accent / 6 accent 暗 / 7 accent 亮）
 const PALETTE_HEX = [
-  // steel 钢蓝
   '#1b2233', '#4a5a75', '#7d92b2', '#b9c9de', '#ffffff', '#3d4c66', '#2c3850', '#93a9c7',
-  // cloth 红布
   '#2a0f14', '#7a2432', '#b23a48', '#e0685f', '#ffd9c9', '#5c1a26', '#471219', '#d15454',
-  // skin 肤
   '#4a2c1a', '#b07a4e', '#e0a878', '#f7cfa0', '#fff2df', '#8a5a34', '#6e4526', '#eebd8d',
-  // gold 金
   '#33240a', '#9c7414', '#d9a821', '#ffd94d', '#fff7cc', '#7a5a10', '#5f450c', '#f2c531',
-  // cloak 紫斗篷
   '#17102b', '#3d2a6e', '#5f439e', '#8a6fd1', '#e6dcff', '#2a1c4f', '#20153d', '#7558bd',
-  // leather 皮
   '#241207', '#6e4520', '#9c6a34', '#c79a5f', '#ffe9c4', '#54341a', '#402712', '#b5854a',
-  // bone 骨白
   '#2e2a24', '#8a8172', '#c9bfa8', '#efe8d8', '#ffffff', '#6e675a', '#575146', '#ddd5c2',
-  // gem 青玉
   '#062a26', '#14665c', '#21a08d', '#4fd8c2', '#eafffb', '#0d4a42', '#093832', '#35bfa9',
 ];
 const PAL = { steel: 0, cloth: 8, skin: 16, gold: 24, cloak: 32, leather: 40, bone: 48, gem: 56 };
 
 // ---------- 轮廓定义（局部像素，y 向下，points 相对左上，pivot 相对左上）
-// 0 躯干铠甲 16×18，pivot 顶部中央
 const OUTLINES = [
   { points: [[2, 0], [14, 0], [16, 5], [15, 13], [12, 18], [4, 18], [1, 13], [0, 5]], pivot: [8, 1] },
-  // 1 头 12×12，pivot 颈部
   { points: [[2, 0], [10, 0], [12, 3], [12, 9], [9, 12], [3, 12], [0, 9], [0, 3]], pivot: [6, 10] },
-  // 2 上臂 6×12，pivot 肩
   { points: [[0, 0], [6, 0], [6, 10], [4, 12], [2, 12], [0, 10]], pivot: [3, 1] },
-  // 3 剑 4×22，pivot 握柄
   { points: [[1, 0], [3, 0], [3, 14], [4, 16], [2, 22], [0, 16], [1, 14]], pivot: [2, 1] },
-  // 4 大腿 7×12，pivot 髋
   { points: [[0, 0], [7, 0], [6, 12], [1, 12]], pivot: [3.5, 1] },
-  // 5 小腿 6×11，pivot 膝
   { points: [[0, 0], [6, 0], [5, 9], [6, 11], [0, 11], [1, 9]], pivot: [3, 1] },
-  // 6 斗篷段 12×10，pivot 顶部中央
   { points: [[1, 0], [11, 0], [12, 7], [9, 10], [3, 10], [0, 7]], pivot: [6, 1] },
-  // 7 羽饰 5×10，pivot 根部
   { points: [[2, 0], [4, 1], [5, 6], [3, 10], [1, 9], [0, 4]], pivot: [2.5, 9] },
 ];
 const EL_SIZE = [[16, 18], [12, 12], [6, 12], [4, 22], [7, 12], [6, 11], [12, 10], [5, 10]];
 const EL_PIVOT = OUTLINES.map((o) => o.pivot);
+
+// ---------- 每部件的 pattern 程序（枚举形式组合；顺序 = 覆盖顺序：填充→表面→glint 候选→rim→描边）
+// 光向约定左上：迎光梯度向 ≈ 45°，背光缘 ≈ -135°
+const EL_PROGRAMS = [
+  // 0 躯干铠甲：纵向渐变光 + 迎光 glint 候选 + 背光 rim + 描边
+  [...F.lightGradY([3, 2, 1]), ...F.glintFace(45), ...F.rim(-135), ...F.outlineDark()],
+  // 1 头：平缓渐变
+  [...F.lightGradY([3, 2, 2]), ...F.outlineDark()],
+  // 2 上臂
+  [...F.lightGradY([3, 2, 1]), ...F.glintFace(45), ...F.outlineDark()],
+  // 3 剑：横向渐变（刃面）+ 强 glint 候选
+  [...F.lightGradX([1, 2, 3]), ...F.glintFace(45), ...F.outlineDark()],
+  // 4 大腿皮：平涂 + 鳞片压暗带
+  [...F.lightFlat(2), ...F.scales(1), ...F.outlineDark()],
+  // 5 小腿钢
+  [...F.lightGradY([3, 2, 1]), ...F.outlineDark()],
+  // 6 斗篷：渐变 + 条纹（accent）
+  [...F.lightGradY([2, 1, 1]), ...F.stripes(5, 3), ...F.outlineDark()],
+  // 7 羽饰：平涂 + 噪点提亮
+  [...F.lightFlat(2), ...F.speckle(3, 2, 5), ...F.outlineDark()],
+];
+
+// ---------- 烘焙：全部轮廓 → mask 图集（SDF 只在这里出现） ----------
+const ATLAS_W = 256;
+const maskTiles = OUTLINES.map((def, i) => {
+  const segs = pointsToSegments(def.points, def.pivot);
+  return { w: EL_SIZE[i][0], h: EL_SIZE[i][1], data: compileMask(def.points, segs, EL_SIZE[i][0], EL_SIZE[i][1], def.pivot, EL_PROGRAMS[i]) };
+});
+const atlas = packAtlas(maskTiles, ATLAS_W);
+const atlasData = new Uint8Array(ATLAS_W * atlas.height * 4);
+maskTiles.forEach((tile, i) => {
+  const [tx, ty] = atlas.placements[i];
+  for (let y = 0; y < tile.h; y++) {
+    atlasData.set(tile.data.subarray(y * tile.w * 4, (y + 1) * tile.w * 4), ((ty + y) * ATLAS_W + tx) * 4);
+  }
+});
+const tileOf = (outlineIdx) => atlas.placements[outlineIdx];
 
 // ---------- WebGL2 ----------
 const canvas = document.getElementById('gl');
@@ -176,14 +318,17 @@ layout(location=1) in vec2 aPos;
 layout(location=2) in vec2 aSize;
 layout(location=3) in float aRot;
 layout(location=4) in vec2 aPivot;
-layout(location=5) in vec4 aMisc;
-layout(location=6) in vec4 aParam;
-layout(location=7) in vec2 aMotion;
+layout(location=5) in vec2 aTile;
+layout(location=6) in vec4 aMisc;
+layout(location=7) in vec4 aParam;
+layout(location=8) in vec2 aMotion;
 uniform vec2 uWorld;
 uniform float uSnap;
 uniform float uAngleSteps;
 out vec2 vLocal;
 out vec2 vSize;
+flat out vec2 vPivot;
+flat out vec2 vTile;
 flat out vec4 vMisc;
 out vec4 vParam;
 out vec2 vMotion;
@@ -195,6 +340,8 @@ void main() {
   vec2 lp = vec2(aCorner.x * aSize.x - aPivot.x, aCorner.y * aSize.y - aPivot.y);
   vLocal = lp;
   vSize = aSize;
+  vPivot = aPivot;
+  vTile = aTile;
   vec2 yu = vec2(lp.x, -lp.y);
   float r = radians(rot);
   vec2 w = pos + vec2(yu.x * cos(r) - yu.y * sin(r), yu.x * sin(r) + yu.y * cos(r));
@@ -208,89 +355,33 @@ const FRAG = `#version 300 es
 precision highp float;
 in vec2 vLocal;
 in vec2 vSize;
+flat in vec2 vPivot;
+flat in vec2 vTile;
 flat in vec4 vMisc;
 in vec4 vParam;
 in vec2 vMotion;
-uniform sampler2D uSegTex;
+uniform sampler2D uMaskTex;
 uniform sampler2D uPaletteTex;
-uniform int uSegCount[${MAX_OUTLINES}];
 uniform float uTime;
-uniform vec2 uLight;
 out vec4 fragColor;
 
-float sdSegment(vec2 p, vec2 a, vec2 b) {
-  vec2 pa = p - a, ba = b - a;
-  float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
-  return length(pa - ba * h);
-}
-float outlineDist(vec2 p, int id) {
-  float d = 1e9;
-  int n = uSegCount[id];
-  for (int i = 0; i < ${MAX_SEG}; i++) {
-    if (i >= n) break;
-    vec4 s = texelFetch(uSegTex, ivec2(i, id), 0);
-    d = min(d, sdSegment(p, s.xy, s.zw));
-  }
-  return d;
-}
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
   return fract((p3.x + p3.y) * p3.z);
 }
-// pattern 对填充档位的改写：slotIn ∈ {1 暗,2 本,3 亮} → 新 slot（5/6/7 为 accent 系）
-int applyPattern(int pid, vec2 p, vec4 prm, float seed, int slot) {
-  float f = max(prm.x, 0.5);
-  float phase = prm.y + seed * 13.7;
-  if (pid == 1) {          // 条纹
-    float band = step(0.5, fract((p.x + p.y * 0.35) / f + phase));
-    if (band > 0.5) slot = slot >= 2 ? 5 : 6;
-  } else if (pid == 2) {   // 棋盘
-    float cell = mod(floor(p.x / f) + floor(p.y / f), 2.0);
-    if (cell > 0.5) slot = slot >= 2 ? 7 : 5;
-  } else if (pid == 3) {   // 噪点
-    if (hash12(floor(p / f) + seed * 7.0) > 0.72) slot = min(slot + 1, 3);
-  } else if (pid == 4) {   // 鳞片：错行弧带 → 明暗交替
-    float row = floor(p.y / f);
-    float v = fract(p.x / f + mod(row, 2.0) * 0.5);
-    if (v < 0.5) slot = max(slot - 1, 1);
-  }
-  return slot;
-}
 void main() {
-  int oid = int(vMisc.x + 0.5);
-  int pid = int(vMisc.y + 0.5);
-  int base = int(vMisc.z + 0.5);
-  float seed = vMisc.w;
-  vec2 p = vLocal;
-  float d = outlineDist(p, oid);
-  float width = 1.0;
-  if (d > width + 0.5) discard;
-  // SDF 梯度 → 伪法线（y 向下系）
-  float e = 1.0;
-  vec2 g = vec2(outlineDist(p + vec2(e, 0.0), oid) - outlineDist(p - vec2(e, 0.0), oid),
-                outlineDist(p + vec2(0.0, e), oid) - outlineDist(p - vec2(0.0, e), oid));
-  vec2 n2 = g / max(length(g), 1e-4);
-  float li = dot(n2, normalize(uLight)) * 0.5 + 0.5;
-  bool isLine = d <= width;
-  int slot;
-  if (isLine) {
-    slot = 0;
-  } else {
-    // 光影：法线光 + 纵向渐变（pattern 5 加重渐变），量化三档
-    float grad = pid == 5 ? 0.55 : 0.22;
-    float shadeF = li * 0.55 + (0.5 - p.y / max(vSize.y, 1.0)) * grad + 0.42;
-    int shade = int(clamp(floor(shadeF * 3.0), 0.0, 2.0));
-    slot = 1 + shade;
-    slot = applyPattern(pid, p, vParam, seed, slot);
-    // rim：靠近边缘且背光侧 → 高光档（阈值化 1 档）
-    float rimBand = 1.0 - smoothstep(0.5, 2.5, d);
-    if (rimBand > 0.55 && li < 0.38) slot = 4;
-    // glint：高光向 + 噪声闪点，角速度越大越容易闪（prm.w = 材质闪度）
-    float sparkle = hash12(floor(p / 2.0) + floor(uTime * 6.0) * 7.31 + seed * 17.0);
-    float thresh = 1.0 - 0.13 * vParam.w * (0.3 + vMotion.y * 1.6);
-    if (li > 0.84 && sparkle > thresh) slot = 4;
-  }
+  int base = int(vMisc.y + 0.5);
+  float seed = vMisc.z;
+  vec2 pix = floor(vLocal + vPivot);
+  if (pix.x < 0.0 || pix.y < 0.0 || pix.x >= vSize.x || pix.y >= vSize.y) discard;
+  vec4 mask = texelFetch(uMaskTex, ivec2(vTile) + ivec2(pix), 0);
+  int slot = int(mask.r * 255.0 + 0.5);
+  if (slot >= 128) discard;                    // 透明：alpha test 硬边
+  // glint：只在 pattern 程序烘焙出的候选区（mask.g）内，按噪声与角速度点亮到高光档
+  float sparkle = hash12(floor(vLocal / 2.0) + floor(uTime * 6.0) * 7.31 + seed * 17.0);
+  float thresh = 1.0 - 0.13 * vParam.w * (0.3 + vMotion.y * 1.6);
+  if (slot != 0 && mask.g > 0.35 && sparkle > thresh) slot = 4;
   vec3 col = texelFetch(uPaletteTex, ivec2(base + slot, 0), 0).rgb;
   fragColor = vec4(col, 1.0);
 }`;
@@ -311,7 +402,6 @@ gl.linkProgram(prog);
 if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
 gl.useProgram(prog);
 
-// 基础 quad
 const vao = gl.createVertexArray();
 gl.bindVertexArray(vao);
 const quadBuf = gl.createBuffer();
@@ -320,7 +410,6 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.ST
 gl.enableVertexAttribArray(0);
 gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-// 实例缓冲（交错 17 float）
 const instBuf = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
 const STRIDE = INSTANCE_FLOATS * 4;
@@ -329,16 +418,17 @@ const attr = (loc, size, offsetFloats) => {
   gl.vertexAttribPointer(loc, size, gl.FLOAT, false, STRIDE, offsetFloats * 4);
   gl.vertexAttribDivisor(loc, 1);
 };
-attr(1, 2, 0); attr(2, 2, 2); attr(3, 1, 4); attr(4, 2, 5); attr(5, 4, 7); attr(6, 4, 11); attr(7, 2, 15);
+attr(1, 2, 0); attr(2, 2, 2); attr(3, 1, 4); attr(4, 2, 5); attr(5, 2, 7); attr(6, 4, 9); attr(7, 4, 13); attr(8, 2, 17);
 
-// 线段数据纹理（float，NEAREST 采样 + texelFetch 精确取）
-const { data: segData, counts: segCounts } = compileOutlines(OUTLINES);
-const segTex = gl.createTexture();
+// mask 图集纹理
+const maskTex = gl.createTexture();
 gl.activeTexture(gl.TEXTURE0);
-gl.bindTexture(gl.TEXTURE_2D, segTex);
-gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, MAX_SEG, MAX_OUTLINES, 0, gl.RGBA, gl.FLOAT, segData);
+gl.bindTexture(gl.TEXTURE_2D, maskTex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, ATLAS_W, atlas.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, atlasData);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
 // 调色板纹理 64×1
 const palData = new Uint8Array(64 * 4);
@@ -356,38 +446,36 @@ gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
 const U = (n) => gl.getUniformLocation(prog, n);
-gl.uniform1i(U('uSegTex'), 0);
+gl.uniform1i(U('uMaskTex'), 0);
 gl.uniform1i(U('uPaletteTex'), 1);
-gl.uniform1iv(U('uSegCount[0]'), segCounts);
-gl.uniform2f(U('uLight'), -0.55, -0.83); // 左上光（y 向下系）
 
 gl.disable(gl.BLEND);
 gl.disable(gl.DEPTH_TEST);
 gl.clearColor(0.043, 0.043, 0.086, 1);
 
 // ---------- 元素（粒子即部件）与小骨骼 ----------
-function makeEl(outline, pattern, palette, layer, param, seed) {
+function makeEl(outline, palette, layer, param, seed) {
   return {
-    outline, pattern, palette, layer, seed,
-    size: EL_SIZE[outline], pivot: EL_PIVOT[outline],
+    outline, pattern: 0, palette, layer, seed,
+    size: EL_SIZE[outline], pivot: EL_PIVOT[outline], tile: tileOf(outline),
     param: [...param], pos: [0, 0], rot: 0, motion: [0, 0],
   };
 }
 // param = [freq, phase, reserve, glint]
-const cloak1 = makeEl(6, 1, PAL.cloak, -6, [3, 0, 0, 0.1], 1);
-const cloak2 = makeEl(6, 1, PAL.cloak, -5, [3, 0.4, 0, 0.1], 2);
-const cloak3 = makeEl(6, 1, PAL.cloak, -4, [3, 0.8, 0, 0.1], 3);
-const thighFar = makeEl(4, 4, PAL.leather, -3, [3, 0, 0, 0], 4);
-const shinFar = makeEl(5, 0, PAL.steel, -2, [3, 0, 0, 0.3], 5);
-const armFar = makeEl(2, 0, PAL.steel, -1, [3, 0, 0, 0.3], 6);
-const torso = makeEl(0, 5, PAL.steel, 0, [3, 0, 0, 0.5], 7);
-const thighNear = makeEl(4, 4, PAL.leather, 1, [3, 0, 0, 0], 8);
-const head = makeEl(1, 0, PAL.skin, 2, [3, 0, 0, 0.05], 9);
-const shinNear = makeEl(5, 0, PAL.steel, 2, [3, 0, 0, 0.3], 10);
-const plume = makeEl(7, 3, PAL.cloth, 3, [2, 0, 0, 0], 11);
-const armNear = makeEl(2, 0, PAL.steel, 4, [3, 0, 0, 0.3], 12);
-const sword = makeEl(3, 5, PAL.steel, 5, [3, 0, 0, 1.0], 13);
-const gem = makeEl(7, 0, PAL.gem, 1, [2, 0, 0, 0.9], 14); // 胸前宝石（复用羽饰轮廓示意）
+const cloak1 = makeEl(6, PAL.cloak, -6, [3, 0, 0, 0.1], 1);
+const cloak2 = makeEl(6, PAL.cloak, -5, [3, 0.4, 0, 0.1], 2);
+const cloak3 = makeEl(6, PAL.cloak, -4, [3, 0.8, 0, 0.1], 3);
+const thighFar = makeEl(4, PAL.leather, -3, [3, 0, 0, 0], 4);
+const shinFar = makeEl(5, PAL.steel, -2, [3, 0, 0, 0.3], 5);
+const armFar = makeEl(2, PAL.steel, -1, [3, 0, 0, 0.3], 6);
+const torso = makeEl(0, PAL.steel, 0, [3, 0, 0, 0.5], 7);
+const thighNear = makeEl(4, PAL.leather, 1, [3, 0, 0, 0], 8);
+const head = makeEl(1, PAL.skin, 2, [3, 0, 0, 0.05], 9);
+const shinNear = makeEl(5, PAL.steel, 2, [3, 0, 0, 0.3], 10);
+const plume = makeEl(7, PAL.cloth, 3, [2, 0, 0, 0], 11);
+const armNear = makeEl(2, PAL.steel, 4, [3, 0, 0, 0.3], 12);
+const sword = makeEl(3, PAL.steel, 5, [3, 0, 0, 1.0], 13);
+const gem = makeEl(7, PAL.gem, 1, [2, 0, 0, 0.9], 14); // 胸前宝石（复用羽饰 mask 左上块示意）
 gem.size = [5, 5];
 const elements = [cloak1, cloak2, cloak3, thighFar, shinFar, armFar, torso, thighNear, head, shinNear, plume, armNear, sword, gem];
 
@@ -395,7 +483,7 @@ const rot2 = (deg, x, y) => {
   const r = (deg * Math.PI) / 180;
   return [x * Math.cos(r) - y * Math.sin(r), x * Math.sin(r) + y * Math.cos(r)];
 };
-// 关节链：父关节世界位 + 父角度 + 局部偏移（y 向下正）→ 子关节世界位
+// 关节链：父关节世界位 + 父角度 + 局部偏移（dy 向下为正）→ 子关节世界位
 const chain = (pos, deg, dx, dy) => {
   const [rx, ry] = rot2(deg, dx, -dy);
   return [pos[0] + rx, pos[1] + ry];
@@ -491,7 +579,7 @@ function frame(now) {
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clear(gl.COLOR_BUFFER_BIT);
   gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, sorted.length);
-  document.getElementById('stat').textContent = `${sorted.length} 元素 · 1 draw call · 世界 ${world}px`;
+  document.getElementById('stat').textContent = `${sorted.length} 元素 · 1 draw call · 片元 O(1) 采样 · 世界 ${world}px`;
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
