@@ -391,4 +391,67 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('H8c 作用域子图落在框内', contained && parents.size > 0);
 }
 
+// ---------- I) 注入作用域同名冲突守卫 ----------
+{
+  const { BAKE_SRC } = await import('../src/lib/proc-runtime/bake-src');
+  const { readFileSync } = await import('node:fs');
+  const tpl = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+  const fnNames = (s: string) => new Set([...s.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1]));
+  const bakeNames = fnNames(BAKE_SRC);
+  const tplNames = fnNames(tpl);
+  const overlap = [...bakeNames].filter((x) => tplNames.has(x));
+  check(`I1 BAKE_SRC 与模板顶层函数无同名（冲突：${overlap.join(',') || '无'}）`, overlap.length === 0);
+  const baker = createSurfaceBaker();
+  const tri = baker.compileTileDAG(
+    { kind: 'poly', size: [30, 26], points: [[-12, 10], [12, 10], [0, -11]], pivot: [0, 0] },
+    instantiatePattern(PATTERN_TEMPLATES.find((t) => t.id === 'scales')!),
+  );
+  let inner = 0;
+  for (let i = 0; i < tri.data.length; i += 4) if (tri.data[i] <= 7) inner++;
+  check('I2 poly 形状 DAG 烘焙非退化（改名后 sdSegmentB/pointInPolygonB 正常）', inner > 80);
+}
+
+// ---------- J) 主画布参数化适配 ----------
+{
+  const { buildParametricSprite, PARAMETRIC_MIRROR_DIRECTIONS } = await import('../src/lib/proc-runtime/main-canvas');
+  const { SURFACE_PRESETS, createDefaultParametricAppearance } = await import('../src/lib/proc-runtime/surfaces');
+  const { PALETTES } = await import('../src/lib/proc-runtime/palettes');
+  const { pxToSub } = await import('../src/lib/unified-types');
+  const hex = (n: number) => `#${n.toString(16).padStart(6, '0')}`;
+  const appJ = {
+    ...createDefaultParametricAppearance(),
+    palette: 'shirt',
+    shape: { kind: 'rect' as const, size: [20, 14] as [number, number], roundness: 0 },
+    surface: SURFACE_PRESETS['纵向渐变'](),
+    surfaceName: '纵向渐变',
+  };
+  const spr = buildParametricSprite(appJ, 'torso');
+  check('J1 层程序外观烘焙出 Sprite（尺寸 = 形状 + 4 边距）', !!spr && spr.width === 24 && spr.height === 18);
+  check('J2 centerOffset=0 时 plug 在瓦片中心', !!spr && spr.plug?.x === pxToSub(12) && spr.plug?.y === pxToSub(9));
+  const sprOff = buildParametricSprite({ ...appJ, centerOffset: [3, 0] }, 'torso');
+  check('J3 centerOffset +3 → plug 左移 3px', !!sprOff && sprOff.plug?.x === pxToSub(9));
+  const outlineHex = hex(PALETTES.shirt[0]);
+  const colCenter = (g: NonNullable<typeof spr>) => {
+    const col = g.data.map((r) => r[Math.floor(g.width / 2)]);
+    const filled = col.filter((c) => c !== null);
+    // 剥掉两端描边色（预设自带 outlineDark + OUTLINE 外环），取内侧渐变两端
+    let a = 0, b = filled.length - 1;
+    while (a < filled.length && filled[a] === outlineHex) a++;
+    while (b >= 0 && filled[b] === outlineHex) b--;
+    return { top: filled[a], bottom: filled[b] };
+  };
+  const cc = spr ? colCenter(spr) : { top: null, bottom: null };
+  check('J4 渐变朝向：剥描边后产品空间顶 = 暗档 pal[1]、底 = 亮档 pal[3]（烘焙空间翻回）',
+    cc.top === hex(PALETTES.shirt[1]) && cc.bottom === hex(PALETTES.shirt[3]));
+  const spr2 = buildParametricSprite(appJ, 'torso');
+  check('J5 缓存命中同一对象', spr === spr2);
+  const appDag = { ...appJ, surfaceGraph: instantiatePattern(PATTERN_TEMPLATES.find((t) => t.id === 'scales')!) };
+  const sprDag = buildParametricSprite(appDag, 'torso');
+  const colors = new Set<string>();
+  sprDag?.data.forEach((r) => r.forEach((c) => { if (c) colors.add(c); }));
+  check('J6 DAG 外观烘焙出多色 Sprite（鳞片）', !!sprDag && colors.size >= 3);
+  check('J7 镜像方向集 = 西半向 3/4/5', PARAMETRIC_MIRROR_DIRECTIONS.has(4) && PARAMETRIC_MIRROR_DIRECTIONS.has(3)
+    && PARAMETRIC_MIRROR_DIRECTIONS.has(5) && !PARAMETRIC_MIRROR_DIRECTIONS.has(0) && !PARAMETRIC_MIRROR_DIRECTIONS.has(6));
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

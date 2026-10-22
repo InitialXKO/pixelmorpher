@@ -959,6 +959,16 @@ function resolveSprite(
   variantId?: string,
   latitude?: number,
 ): { sprite: Sprite | null; mirror: boolean; spriteId: string | null } {
+  // 参数化优先（用户拍板）：生效服装件带 parametric 时，主画布以参数化
+  // 烘焙精灵渲染，盖过精灵图。件键走产品回退口径 slot.slotKey ?? nodeId。
+  if (costumeSet) {
+    const piece = costumeSet.pieces[node.slot?.slotKey ?? node.id];
+    if (piece?.parametric) {
+      const { buildParametricSprite, PARAMETRIC_MIRROR_DIRECTIONS } = require('./proc-runtime/main-canvas') as typeof import('./proc-runtime/main-canvas');
+      const spr = buildParametricSprite(piece.parametric, node.id);
+      if (spr) return { sprite: spr, mirror: PARAMETRIC_MIRROR_DIRECTIONS.has(direction), spriteId: null };
+    }
+  }
   // 只走服装集：node.slot 只定义槽位，不存精灵。
   // 分层解析（纬度→变体→基础）走 sprite-resolve 的共同实现，与蓝图预览逐级一致。
   if (costumeSet && node.slot) {

@@ -12,12 +12,12 @@
 // ============================================================
 
 export const BAKE_SRC = `
-function sdSegment(px, py, ax, ay, bx, by) {
+function sdSegmentB(px, py, ax, ay, bx, by) {
   var pax = px - ax, pay = py - ay, bax = bx - ax, bay = by - ay;
   var h = Math.max(0, Math.min(1, (pax * bax + pay * bay) / (bax * bax + bay * bay || 1)));
   return Math.hypot(pax - bax * h, pay - bay * h);
 }
-function pointInPolygon(px, py, pts) {
+function pointInPolygonB(px, py, pts) {
   var inside = false;
   for (var i = 0, j = pts.length - 1; i < pts.length; j = i++) {
     var xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
@@ -33,9 +33,9 @@ function shapeFieldDAG(shape, px, py) {
     var d = Infinity;
     for (var i = 0; i < rel.length; i++) {
       var a = rel[i], b = rel[(i + 1) % rel.length];
-      d = Math.min(d, sdSegment(px, py, a[0], a[1], b[0], b[1]));
+      d = Math.min(d, sdSegmentB(px, py, a[0], a[1], b[0], b[1]));
     }
-    return { inside: rel.length >= 3 ? pointInPolygon(px, py, rel) : false, d: d };
+    return { inside: rel.length >= 3 ? pointInPolygonB(px, py, rel) : false, d: d };
   }
   if (shape.kind === 'ellipse') {
     var rx = Math.max(w / 2, 0.5), ry = Math.max(h / 2, 0.5);
@@ -279,7 +279,7 @@ function compileSurfaceGraph(graph, shape) {
           var sg = data.segs[si];
           var frac = (sg[4] * P(node, 'step', 4)) / data.total;
           var hw2 = w0 + (w1 - w0) * Math.min(1, frac);
-          var dd2 = sdSegment(x, y, sg[0], sg[1], sg[2], sg[3]);
+          var dd2 = sdSegmentB(x, y, sg[0], sg[1], sg[2], sg[3]);
           if (hw2 - dd2 > best) best = hw2 - dd2;
         }
         for (var li = 0; li < data.leaves.length; li++) {
@@ -505,6 +505,108 @@ function compileTileDAG(shape, graph) {
   }
   return { w: w, h: h, cx: cx, cy: cy, data: data };
 }
+// ---- 层程序烘焙（主画布适配用；语义与模板 PURE 的 compileTile 逐项一致，
+// 形状场共用 shapeFieldDAG（与 PURE shapeField 同公式），mask/bump 为移植） ----
+function maskHitB(mask, ctx) {
+  switch (mask.m) {
+    case 'all': return true;
+    case 'inside': return ctx.inside;
+    case 'edge': return ctx.d <= mask.w;
+    case 'band': return ctx.d > mask.w0 && ctx.d <= mask.w1;
+    case 'bands': {
+      var v = mask.axis === 'x' ? ctx.px : mask.axis === 'y' ? ctx.py : ctx.px + ctx.py * 0.35;
+      var f = ((v / mask.f + (mask.ph !== undefined && mask.ph !== null ? mask.ph : 0)) % 1 + 1) % 1;
+      return f < (mask.duty !== undefined && mask.duty !== null ? mask.duty : 0.5);
+    }
+    case 'checker': {
+      var cx2 = Math.floor(ctx.px / mask.f), cy2 = Math.floor(ctx.py / mask.f);
+      return ((cx2 + cy2) % 2 + 2) % 2 === 0;
+    }
+    case 'noise': {
+      var cx3 = Math.floor(ctx.px / mask.f), cy3 = Math.floor(ctx.py / mask.f);
+      var hs = Math.sin(cx3 * 127.1 + cy3 * 311.7 + (mask.seed !== undefined && mask.seed !== null ? mask.seed : 0) * 74.7) * 43758.5453;
+      hs -= Math.floor(hs);
+      return hs > (mask.gt !== undefined && mask.gt !== null ? mask.gt : 0.72);
+    }
+    case 'gradLt': {
+      var v2 = mask.axis === 'x' ? ctx.px01 : ctx.py01;
+      return v2 < mask.t;
+    }
+    case 'facing': {
+      if (ctx.d > (mask.w !== undefined && mask.w !== null ? mask.w : 1.6)) return false;
+      var deg = (Math.atan2(ctx.gy, ctx.gx) * 180) / Math.PI;
+      var diff = Math.abs(((deg - mask.deg) % 360 + 540) % 360 - 180);
+      return diff <= (mask.tol !== undefined && mask.tol !== null ? mask.tol : 55);
+    }
+  }
+  return false;
+}
+function bumpValueB(form, ctx) {
+  var cl = function (v) { return Math.max(0, Math.min(1, v)); };
+  switch (form) {
+    case 'dome': return cl(ctx.h);
+    case 'top': return cl(0.30 + 0.45 * ctx.h + 0.25 * ctx.gy);
+    case 'side': return cl(0.30 + 0.45 * ctx.h + 0.25 * ctx.gx);
+    case 'edge': return cl(1 - ctx.h);
+  }
+  return 0;
+}
+function compileTileLayers(shape, program) {
+  var M = 2;
+  var w = Math.ceil(shape.size[0]) + M * 2;
+  var h = Math.ceil(shape.size[1]) + M * 2;
+  var cx = Math.floor(w / 2), cy = Math.floor(h / 2);
+  var hasGlint = program.some(function (l) { return l.ch === 'glint'; });
+  var fields = new Array(w * h);
+  var maxD = 0.0001;
+  for (var j = 0; j < h; j++) {
+    for (var i = 0; i < w; i++) {
+      var lx = i - cx, ly = j - cy;
+      var f0 = shapeFieldDAG(shape, lx, ly);
+      var gx = shapeFieldDAG(shape, lx + 1, ly).d - shapeFieldDAG(shape, lx - 1, ly).d;
+      var gy = shapeFieldDAG(shape, lx, ly + 1).d - shapeFieldDAG(shape, lx, ly - 1).d;
+      fields[j * w + i] = { lx: lx, ly: ly, inside: f0.inside, d: f0.d, gx: gx, gy: gy };
+      if (f0.inside) maxD = Math.max(maxD, f0.d);
+    }
+  }
+  var data = new Uint8Array(w * h * 4);
+  for (var j2 = 0; j2 < h; j2++) {
+    for (var i2 = 0; i2 < w; i2++) {
+      var f = fields[j2 * w + i2];
+      var o = (j2 * w + i2) * 4;
+      data[o + 3] = 255;
+      var occ = f.inside || f.d <= 0.5;
+      if (!occ) {
+        data[o] = f.d <= 1.5 ? 254 : 255;
+        data[o + 1] = 255;
+        continue;
+      }
+      var ctx = {
+        px: f.lx, py: f.ly,
+        px01: shape.size[0] > 0 ? (f.lx + shape.size[0] / 2) / shape.size[0] : 0.5,
+        py01: shape.size[1] > 0 ? (f.ly + shape.size[1] / 2) / shape.size[1] : 0.5,
+        inside: f.inside, d: f.d, gx: f.gx, gy: f.gy,
+        h: f.inside ? f.d / maxD : 0,
+      };
+      var slot = 2, g = hasGlint ? 0 : 255;
+      for (var li = 0; li < program.length; li++) {
+        var layer = program[li];
+        if (layer.bumpForm) {
+          var bv = bumpValueB(layer.bumpForm, ctx);
+          slot = bv > 0.66 ? layer.hi : bv > 0.33 ? layer.mid : layer.lo;
+          continue;
+        }
+        if (!maskHitB(layer.mask, ctx)) continue;
+        if (layer.ch === 'glint') g = 255;
+        else slot = layer.slot;
+      }
+      data[o] = slot;
+      data[o + 1] = g;
+    }
+  }
+  return { w: w, h: h, cx: cx, cy: cy, data: data };
+}
+
 `;
 
 /** 探针/测试用：加载同一份烘焙源 */
@@ -513,7 +615,11 @@ export function createSurfaceBaker(): {
     shape: { kind: string; size: [number, number]; roundness?: number; points?: [number, number][]; pivot?: [number, number] },
     graph: unknown,
   ) => { w: number; h: number; cx: number; cy: number; data: Uint8Array };
+  compileTileLayers: (
+    shape: { kind: string; size: [number, number]; roundness?: number; points?: [number, number][]; pivot?: [number, number] },
+    program: unknown,
+  ) => { w: number; h: number; cx: number; cy: number; data: Uint8Array };
 } {
-  const factory = new Function(`${BAKE_SRC}\nreturn { compileTileDAG };`);
+  const factory = new Function(`${BAKE_SRC}\nreturn { compileTileDAG, compileTileLayers };`);
   return factory() as never;
 }
