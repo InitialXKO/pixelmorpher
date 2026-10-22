@@ -55,6 +55,8 @@ export interface ManualPartSpec {
   pivot?: ManualPivotSpec;
   /** 父部件覆盖（specs 数组下标）：-1 = 挂根；undefined = 自动解析（锚网格场景图祖先） */
   parentIndex?: number;
+  /** 朝向调整（垂臂）：渲染前把部件绕枢轴按垂臂语义转到自然下垂，后代部件跟随 */
+  droop?: boolean;
 }
 
 export interface ManualBakeOptions {
@@ -221,6 +223,8 @@ export interface PreparedManualPart {
   half: number;
   /** 父部件在 specs 中的下标，无（挂根）为 -1 */
   parentSpecIndex: number;
+  /** 实际施加的朝向调整角度（度）；0 = 未启用或已下垂跳过 */
+  droopAngleDeg: number;
 }
 
 export interface PreparedManual {
@@ -346,33 +350,32 @@ export function prepareManualParts(
 
   const parentIndices = resolveManualParentIndices(statics.map((s) => s.info), specs);
 
-  const parts: PreparedManualPart[] = specs.map((spec, specIdx) => {
+  // 第一遍：归一化顶点 + 枢轴解析（未做朝向调整）
+  interface RawManualPart {
+    meshes: PreparedManualPartMesh[];
+    pivotNorm: { x: number; y: number; z: number };
+  }
+  const rawParts: RawManualPart[] = specs.map((spec) => {
     const meshes: PreparedManualPartMesh[] = [];
-    const box = new THREE.Box3();
     const worldBox = new THREE.Box3();
     for (const mi of spec.meshIndices) {
-      const s = byMeshIndex.get(mi);
-      if (!s) throw new Error(`手动拆分：找不到网格 ${mi}`);
-      const positions = new Float32Array(s.positions.length);
-      for (let i = 0; i < s.positions.length; i += 3) {
-        const n = norm(s.positions[i], s.positions[i + 1], s.positions[i + 2]);
+      const sm = byMeshIndex.get(mi);
+      if (!sm) throw new Error(`手动拆分：找不到网格 ${mi}`);
+      const positions = new Float32Array(sm.positions.length);
+      for (let i = 0; i < sm.positions.length; i += 3) {
+        const n = norm(sm.positions[i], sm.positions[i + 1], sm.positions[i + 2]);
         positions[i] = n.x; positions[i + 1] = n.y; positions[i + 2] = n.z;
-        tv.set(n.x, n.y, n.z);
-        box.expandByPoint(tv);
-        tv.set(s.positions[i], s.positions[i + 1], s.positions[i + 2]);
+        tv.set(sm.positions[i], sm.positions[i + 1], sm.positions[i + 2]);
         worldBox.expandByPoint(tv);
       }
       meshes.push({
         positions,
-        uvs: s.uvs,
-        index: s.index,
-        material: s.material,
-        groups: s.groups,
+        uvs: sm.uvs,
+        index: sm.index,
+        material: sm.material,
+        groups: sm.groups,
       });
     }
-    // 取景球（全部网格并集，归一化空间）
-    const partSphere = box.getBoundingSphere(new THREE.Sphere());
-    const half = Math.max(0.02, partSphere.radius * partPadding);
     // 枢轴解析（世界坐标 → 归一化）
     const pivotSpec = spec.pivot ?? { mode: 'mesh' as const, meshIndex: spec.meshIndices[0] };
     let pivotWorld: { x: number; y: number; z: number };
@@ -386,15 +389,94 @@ export function prepareManualParts(
       if (!ps) throw new Error(`手动拆分：找不到枢轴网格 ${pivotSpec.meshIndex}`);
       pivotWorld = ps.info.pivot;
     }
-    // 父部件：同源解析（resolveManualParentIndices，锚网格沿 parentMeshIndex 链上溯）
-    const parentSpecIndex = parentIndices[specIdx];
+    return { meshes, pivotNorm: norm(pivotWorld.x, pivotWorld.y, pivotWorld.z) };
+  });
+
+  // 朝向调整（垂臂，与 sixpart droopArmPose 同语义）：按层级自上而下——先应用祖先
+  // 部件的调整（几何与本部件枢轴一起跟随，如同骨骼先摆姿再拆分），再算本部件的调整：
+  // 肢体方向 = 枢轴 → 最远顶点；目标 = 正下 + 按水平分量符号外张 5°；夹角 < 10° 跳过；
+  // 绕本部件枢轴最短弧旋转（枢轴本身不动）。归一化空间为均匀缩放，方向即真实方向。
+  interface DroopXf { q: THREE.Quaternion; px: number; py: number; pz: number }
+  const applyDroopXf = (positions: Float32Array, xf: DroopXf) => {
+    const v = new THREE.Vector3();
+    for (let i = 0; i < positions.length; i += 3) {
+      v.set(positions[i] - xf.px, positions[i + 1] - xf.py, positions[i + 2] - xf.pz).applyQuaternion(xf.q);
+      positions[i] = v.x + xf.px; positions[i + 1] = v.y + xf.py; positions[i + 2] = v.z + xf.pz;
+    }
+  };
+  const depthOf = (i: number): number => {
+    let d = 0;
+    let cur = parentIndices[i];
+    const seen = new Set<number>();
+    while (cur >= 0 && !seen.has(cur)) { seen.add(cur); d++; cur = parentIndices[cur]; }
+    return d;
+  };
+  const topoOrder = specs.map((_, i) => i).sort((a, b) => depthOf(a) - depthOf(b));
+  const seqOf: DroopXf[][] = specs.map(() => []);
+  const droopAngles: number[] = specs.map(() => 0);
+  const pv = new THREE.Vector3();
+  for (const i of topoOrder) {
+    const raw = rawParts[i];
+    const seq = parentIndices[i] >= 0 ? seqOf[parentIndices[i]] : [];
+    for (const xf of seq) {
+      for (const m of raw.meshes) applyDroopXf(m.positions, xf);
+      pv.set(raw.pivotNorm.x - xf.px, raw.pivotNorm.y - xf.py, raw.pivotNorm.z - xf.pz).applyQuaternion(xf.q);
+      raw.pivotNorm = { x: pv.x + xf.px, y: pv.y + xf.py, z: pv.z + xf.pz };
+    }
+    let own: DroopXf | null = null;
+    if (specs[i].droop) {
+      let best = 0;
+      let fx = 0, fy = 0, fz = 0;
+      for (const m of raw.meshes) {
+        const pos = m.positions;
+        for (let j = 0; j < pos.length; j += 3) {
+          const dx = pos[j] - raw.pivotNorm.x;
+          const dy = pos[j + 1] - raw.pivotNorm.y;
+          const dz = pos[j + 2] - raw.pivotNorm.z;
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 > best) { best = d2; fx = dx; fy = dy; fz = dz; }
+        }
+      }
+      if (best > 1e-12) {
+        const cur = new THREE.Vector3(fx, fy, fz).normalize();
+        const tiltSign = cur.x > 0.05 ? 1 : cur.x < -0.05 ? -1 : 0;
+        const target = new THREE.Vector3(0, -1, 0).applyAxisAngle(
+          new THREE.Vector3(0, 0, 1),
+          THREE.MathUtils.degToRad(5) * tiltSign,
+        );
+        const deg = THREE.MathUtils.radToDeg(cur.angleTo(target));
+        if (deg >= 10) {
+          own = {
+            q: new THREE.Quaternion().setFromUnitVectors(cur, target),
+            px: raw.pivotNorm.x, py: raw.pivotNorm.y, pz: raw.pivotNorm.z,
+          };
+          for (const m of raw.meshes) applyDroopXf(m.positions, own);
+          droopAngles[i] = deg;
+        }
+      }
+    }
+    seqOf[i] = own ? [...seq, own] : seq;
+  }
+
+  // 第二遍：取景按调整后的最终几何算
+  const parts: PreparedManualPart[] = specs.map((spec, specIdx) => {
+    const raw = rawParts[specIdx];
+    const box = new THREE.Box3();
+    for (const m of raw.meshes) {
+      for (let j = 0; j < m.positions.length; j += 3) {
+        tv.set(m.positions[j], m.positions[j + 1], m.positions[j + 2]);
+        box.expandByPoint(tv);
+      }
+    }
+    const partSphere = box.getBoundingSphere(new THREE.Sphere());
     return {
       spec,
-      meshes,
-      pivotNorm: norm(pivotWorld.x, pivotWorld.y, pivotWorld.z),
+      meshes: raw.meshes,
+      pivotNorm: raw.pivotNorm,
       frameCenter: { x: partSphere.center.x, y: partSphere.center.y, z: partSphere.center.z },
-      half,
-      parentSpecIndex,
+      half: Math.max(0.02, partSphere.radius * partPadding),
+      parentSpecIndex: parentIndices[specIdx],
+      droopAngleDeg: droopAngles[specIdx],
     };
   });
 
@@ -562,6 +644,9 @@ export async function bakeManualParts(
 
     for (let pi = 0; pi < prepared.parts.length; pi++) {
       const part = prepared.parts[pi];
+      if (part.droopAngleDeg > 0) {
+        console.info(`[bake-manual] ${part.spec.name} 朝向调整（垂臂）${part.droopAngleDeg.toFixed(0)}°`);
+      }
       const rotGroup = new THREE.Group();
       const disposables: Array<{ dispose(): void }> = [];
       for (const pm of part.meshes) {

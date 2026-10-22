@@ -55,6 +55,8 @@ interface ManualPartDraft {
   pivot: ManualPivotSpec;
   /** 父部件覆盖：null = 自动解析；-1 = 挂根；其他 = 父部件草稿 id */
   parentId: number | null;
+  /** 朝向调整（垂臂）：渲染时绕枢轴转到自然下垂 */
+  droop: boolean;
 }
 import type { PixelGrid, DirectionIndex } from '@/lib/unified-types';
 import { pxToSub } from '@/lib/unified-types';
@@ -949,6 +951,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         meshIndices: [...g.meshIndices],
         pivot: { mode: 'mesh', meshIndex: g.meshIndices[0] } as ManualPivotSpec,
         parentId: null,
+        droop: false,
       };
     });
   }, []);
@@ -996,6 +999,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               meshIndices: [...meshIndices],
               pivot: { mode: 'mesh', meshIndex: first } as ManualPivotSpec,
               parentId: null,
+              droop: false,
             },
           ];
         } else if (target !== '') {
@@ -1015,7 +1019,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     const id = manualPartSeq.current++;
     setManualParts((prev) => [
       ...prev,
-      { id, name: `部件 ${id}`, meshIndices: [], pivot: { mode: 'center' } as ManualPivotSpec, parentId: null },
+      { id, name: `部件 ${id}`, meshIndices: [], pivot: { mode: 'center' } as ManualPivotSpec, parentId: null, droop: false },
     ]);
   }, []);
 
@@ -1095,6 +1099,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         meshIndices: d.meshIndices,
         pivot: d.pivot,
         parentIndex: draftParentIndex(d, nonEmptyDrafts),
+        droop: d.droop,
       }));
       if (specs.length === 0) throw new Error('至少把一个网格分配给部件');
       setProgress('加载模型…');
@@ -1520,6 +1525,20 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                         className="h-6 w-36 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-gray-200"
                       />
                       <span className="text-gray-500">{d.meshIndices.length} 网格</span>
+                      <label
+                        className="flex items-center gap-1 text-gray-400"
+                        title="渲染前把部件绕枢轴按垂臂方式转到自然下垂（肢体方向→正下、外张 5°；已下垂不动），后代部件跟随旋转"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={d.droop}
+                          onChange={(e) =>
+                            setManualParts((prev) => prev.map((p) => (p.id === d.id ? { ...p, droop: e.target.checked } : p)))
+                          }
+                          className="size-3.5 accent-indigo-400"
+                        />
+                        调整朝向（垂臂）
+                      </label>
                       <label className="flex items-center gap-1 text-gray-400">
                         枢轴
                         <select
