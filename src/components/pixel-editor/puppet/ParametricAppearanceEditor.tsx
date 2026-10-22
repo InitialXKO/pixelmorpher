@@ -8,7 +8,7 @@
 // 程序化预览与「程序化运行时包」导出。
 // ============================================================
 
-import React, { useState } from 'react';
+import React from 'react';
 import { useProjectStore } from '@/lib/store';
 import { createDefaultCostumePiece } from '@/lib/unified-types';
 import type { ParametricAppearance } from '@/lib/unified-types';
@@ -17,6 +17,7 @@ import {
   LIGHT_NAMES, OUTLINE_NAMES, RIM_NAMES, GLINT_NAMES,
 } from '@/lib/proc-runtime/palettes';
 import { SURFACE_PRESETS, SURFACE_PRESET_NAMES, createDefaultParametricAppearance } from '@/lib/proc-runtime/surfaces';
+import PolyContourEditor from './PolyContourEditor';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -26,7 +27,6 @@ const numCls = 'h-6 text-[10px] bg-[#111128] border-[#1e1e3a]';
 
 export default function ParametricAppearanceEditor({ characterId, slotKey }: { characterId: string; slotKey: string }) {
   const character = useProjectStore((s) => s.unifiedCharacters[characterId]);
-  const [polyText, setPolyText] = useState<string | null>(null);
   if (!character) return null;
   const set = character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId) ?? character.costumeSets[0];
   if (!set) {
@@ -108,19 +108,16 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
           </div>
           {app.shape.kind === 'poly' && (
             <div>
-              <Label className="text-[9px] text-gray-600">轮廓点（x,y 空格分隔，原点=形状中心，y 向下）</Label>
-              <Input
-                value={polyText ?? (app.shape.poly ?? []).map((p) => p.join(',')).join(' ')}
-                onChange={(e) => {
-                  setPolyText(e.target.value);
-                  const pts = e.target.value.trim().split(/\s+/).map((tok) => tok.split(',').map(Number));
-                  if (pts.length >= 3 && pts.every((p) => p.length === 2 && p.every((v) => Number.isFinite(v)))) {
-                    patchShape({ poly: pts as [number, number][] });
-                  }
-                }}
-                onBlur={() => setPolyText(null)}
-                className={numCls + ' w-full'}
-              />
+              <Label className="text-[9px] text-gray-600">轮廓编辑（原点=形状中心，y 向下）</Label>
+              <div className="mt-1">
+                <PolyContourEditor
+                  poly={app.shape.poly}
+                  pivot={app.shape.polyPivot}
+                  size={app.shape.size}
+                  onChange={(poly) => patchShape({ poly })}
+                  onPivotChange={(polyPivot) => patchShape({ polyPivot })}
+                />
+              </div>
             </div>
           )}
           <div>
