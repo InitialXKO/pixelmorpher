@@ -434,12 +434,12 @@ function sanitizeId(s: string): string {
  * 精灵在 plug 行 ±2 行内、以 plug 为中心的连续不透明段（plug 点透明时取该行
  * 最长段）的最大值。无可测像素返回 null。
  */
-function measureJointOpeningWidth(pb: ProcessedBone): number | null {
-  const dir = pb.directions.find((d) => d.direction === 6 && (d.latitude ?? 0) === 0) ?? pb.directions[0];
-  if (!dir) return null;
-  const grid = dir.grid;
-  const cy = Math.round(dir.plugY);
-  const cx = Math.round(dir.plugX);
+/** 关节开口实测（全局像素）：plug 行 ±2 内、以 plug 为中心的连续不透明段
+ * （plug 点透明时取该行最长段）的最大值。无可测像素返回 null。
+ * 烘焙导入与编辑器「重新生成关节盘」共用同一量法。 */
+export function measureOpeningWidth(grid: PixelGrid, plugX: number, plugY: number): number | null {
+  const cy = Math.round(plugY);
+  const cx = Math.round(plugX);
   let best = 0;
   for (let y = Math.max(0, cy - 2); y <= Math.min(grid.length - 1, cy + 2); y++) {
     const row = grid[y];
@@ -459,6 +459,12 @@ function measureJointOpeningWidth(pb: ProcessedBone): number | null {
     if (run > best) best = run;
   }
   return best > 0 ? best : null;
+}
+
+function measureJointOpeningWidth(pb: ProcessedBone): number | null {
+  const dir = pb.directions.find((d) => d.direction === 6 && (d.latitude ?? 0) === 0) ?? pb.directions[0];
+  if (!dir) return null;
+  return measureOpeningWidth(dir.grid, dir.plugX, dir.plugY);
 }
 
 export function mapBonesToNodes(

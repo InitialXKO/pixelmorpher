@@ -5,6 +5,7 @@ import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
 import { renderCharacterOnionFrameFromCharacter, geometryDirectionFromToggle } from '@/lib/unified-render';
+import { clearJointDiscs, regenerateJointDiscs } from '@/lib/joint-discs';
 import { renderSpriteEditUnified } from '@/lib/unified-render';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-render';
@@ -493,6 +494,7 @@ export default function PixelCanvas() {
   const [menuHasSelection, setMenuHasSelection] = useState(false);
   const showGrid = useEditorStore((x) => x.showGrid);
   const nodeTurn3D = useEditorStore((x) => x.nodeTurn3D);
+  const activePuppetSkeletonId = useEditorStore((x) => x.activePuppetSkeletonId);
   const showPuppetSkeleton = useEditorStore((x) => x.showPuppetSkeleton);
   const onionSkinEnabled = useProjectStore((x) => x.onionSkinEnabled);
 
@@ -537,6 +539,17 @@ export default function PixelCanvas() {
     const az = useEditorStore.getState().zoom;
     es.setPan((el.clientWidth - s.canvasWidth * az) / 2, (el.clientHeight - s.canvasHeight * az) / 2);
   };
+  const applyJointDiscOp = (op: 'clear' | 'regen') => {
+    const st = useProjectStore.getState();
+    const id = useEditorStore.getState().activePuppetSkeletonId;
+    const ch = id ? st.unifiedCharacters[id] : undefined;
+    if (!id || !ch) return;
+    const r = op === 'clear' ? clearJointDiscs(ch) : regenerateJointDiscs(ch, st.sprites);
+    if (r.changed === 0) return;
+    st.pushUndo(op === 'clear' ? '清除关节盘' : '重新生成关节盘');
+    st.updateUnifiedCharacter(id, { nodes: r.character.nodes });
+  };
+
   const zoom100 = () => {
     const el = s.containerRef.current;
     if (!el) return;
@@ -754,6 +767,13 @@ export default function PixelCanvas() {
             </ContextMenuItem>
             <ContextMenuItem onSelect={() => useEditorStore.getState().toggleNodeTurn3D()}>
               {nodeTurn3D && <Check className="size-3.5" />} 节点转向
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem disabled={!activePuppetSkeletonId} onSelect={() => applyJointDiscOp('clear')}>
+              清除所有关节盘
+            </ContextMenuItem>
+            <ContextMenuItem disabled={!activePuppetSkeletonId} onSelect={() => applyJointDiscOp('regen')}>
+              重新生成所有关节盘
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => zoomBy(1.25)}>放大</ContextMenuItem>
