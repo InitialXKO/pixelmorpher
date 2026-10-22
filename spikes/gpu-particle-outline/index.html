@@ -2,17 +2,21 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<title>参数化像素角色 · 合流版（骨架=变体/排序/语义/全局格，shape=图元∪多边形，pattern=枚举槽位+层语言，档位制）</title>
+<title>程序化像素角色运行时 · 合流版 v3（程序化动画 + 蓝图表演层 + UI 接线原型）</title>
 <style>
   html,body{margin:0;height:100%;overflow:hidden;background:#0a0a18}
   canvas{display:block;image-rendering:pixelated}
   #hud{position:fixed;left:14px;bottom:14px;color:#6a6a9a;font:12px/1.7 ui-monospace,monospace;pointer-events:none;user-select:none}
   #hud b{color:#9a9ad0}
-  #panel{position:fixed;top:14px;right:14px;color:#9a9ad0;font:12px/1.7 ui-monospace,monospace;user-select:none;background:#14142a;border:1px solid #2a2a4a;border-radius:6px;padding:10px 14px;width:200px}
-  #panel h4{margin:6px 0 4px;color:#c0c0e0;font-size:11px;text-transform:uppercase;letter-spacing:.08em}
+  #panel{position:fixed;top:14px;right:14px;color:#9a9ad0;font:12px/1.6 ui-monospace,monospace;user-select:none;background:#14142a;border:1px solid #2a2a4a;border-radius:6px;padding:10px 14px;width:236px;max-height:calc(100% - 28px);overflow-y:auto}
+  #panel h4{margin:10px 0 4px;color:#c0c0e0;font-size:11px;text-transform:uppercase;letter-spacing:.08em}
   #panel h4:first-child{margin-top:0}
   #panel button{background:#22224a;color:#c0c0e0;border:1px solid #3a3a6a;border-radius:4px;padding:3px 8px;margin:2px;cursor:pointer;font:inherit}
   #panel button.on{background:#4a6fd4;border-color:#7a9ff8;color:#fff}
+  #panel select{background:#1a1a38;color:#c0c0e0;border:1px solid #3a3a6a;border-radius:4px;font:inherit;padding:2px 4px;max-width:130px}
+  #panel input[type=range]{width:104px;accent-color:#4a6fd4;vertical-align:middle}
+  #panel .row{display:flex;align-items:center;justify-content:space-between;gap:6px;margin:2px 0}
+  #panel .row label{color:#8a8ac0}
   #debug{position:fixed;top:14px;left:14px;color:#9a9ad0;font:11px/1.6 ui-monospace,monospace;background:#14142a;border:1px solid #2a2a4a;border-radius:6px;padding:8px 12px;display:none;pointer-events:none;min-width:220px}
   #debug b{color:#c0c0e0}#debug .sem{color:#7a9ff8}
   .note{position:fixed;left:14px;top:14px;max-width:400px;color:#565678;font:11px/1.6 ui-monospace,monospace;pointer-events:none}
@@ -20,16 +24,34 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<div class="note">合流版：骨架取参数化版（变体推导/方向排序/语义表/全局格），shape = 图元 ∪ 多边形轮廓（统一烘焙成 mask 瓦片），pattern = 枚举槽位（运行时管边与光）＋层语言（烘焙管面），出色只走调色板档位。斗篷与剑是多边形部件。</div>
-<div id="hud"><b>A/D</b> 移动·自动转向　<b>W</b> 跳跃　<b>1-8</b> 锁定方向　<b>点击</b> 查看像素身份（需开调试）</div>
+<div class="note">程序化动画运行时（合流版 v3）：姿态由行为参数程序化合成（无动画帧/轨道）；作者型表演挂蓝图（触发+掩码+包络，运行时图求值）；UI 按主系统接线方案成形：部件外观 / 行为 / 表演 / 导出。</div>
+<div id="hud"><b>A/D</b> 移动·自动转向　<b>W</b> 跳跃　<b>J</b> 斩击（蓝图表演）　<b>1-8</b> 锁定方向　<b>点击</b> 像素身份（需开调试）</div>
 <div id="panel">
   <h4>方向 (1-8)</h4><div id="dirRow"></div>
   <h4>服装</h4><div id="cosRow"></div>
-  <h4>选项</h4>
+  <h4>部件外观</h4>
+  <div class="row"><label>部件</label><select id="uiPart"></select></div>
+  <div class="row"><label>调色板</label><select id="uiPal"></select></div>
+  <div class="row"><label>表面程序</label><select id="uiSurface"></select></div>
+  <div class="row"><label>光照 LIGHT</label><select id="uiLight"></select></div>
+  <div class="row"><label>描边 OUTLINE</label><select id="uiOutline"></select></div>
+  <div class="row"><label>边缘光 RIM</label><select id="uiRim"></select></div>
+  <div class="row"><label>闪光 GLINT</label><select id="uiGlint"></select></div>
+  <div class="row"><label>圆角</label><input type="range" id="uiRound" min="0" max="1" step="0.05"></div>
+  <h4>行为（程序化）</h4>
+  <div class="row"><label>步幅</label><input type="range" id="uiStride" min="0" max="1.2" step="0.05"></div>
+  <div class="row"><label>摆臂</label><input type="range" id="uiArmAmp" min="0" max="1.2" step="0.05"></div>
+  <div class="row"><label>弹跳 bob</label><input type="range" id="uiBob" min="0" max="2.5" step="0.1"></div>
+  <div class="row"><label>呼吸</label><input type="range" id="uiBreath" min="0" max="1" step="0.05"></div>
+  <div class="row"><label>斗篷摆幅</label><input type="range" id="uiCapeSway" min="0" max="0.5" step="0.02"></div>
+  <div id="roleRows"></div>
+  <h4>表演（挂蓝图）</h4>
+  <div id="perfRows"></div>
+  <h4>选项 / 导出</h4>
   <div>
-    <button id="btnBake">烘焙: 关</button>
     <button id="btnLock">锁定: 关</button>
     <button id="btnDebug">调试: 关</button>
+    <button id="btnExport">导出运行时包 (JSON)</button>
   </div>
 </div>
 <div id="debug"></div>
@@ -37,16 +59,15 @@
 <script>
 'use strict';
 /* ================================================================
-   合流架构（两级 pattern）：
-   - 骨架：参数化部件 + 变体推导（base+东向+镜像/对角共享）+ 方向排序
-     + 语义表（像素身份）+ 全局格渲染（整屏低清、屏幕空间求值）。
-   - shape：图元（圆角矩形/椭圆/胶囊）∪ 多边形轮廓——两者都在加载期
-     烘焙成同一种 mask 瓦片（R=表面档位/254 外环/255 外，G=glint 候选），
-     运行时统一采样，片元 O(1)。距离场只出现在烘焙期（产边带/方向掩码）。
-   - pattern 两级：层语言在下管「面」——mask 原语层程序烘焙出每像素的
-     基础档位（渐变/条纹/棋盘/噪点/鳞片）；枚举槽位在上管「边与光」——
-     LIGHT/OUTLINE/RIM/GLINT 运行时按邻居占据以枚举形式调制档位。
-   - 出色：只查调色板（家族×8 档纹理），无 mix 出界色。
+   程序化像素角色运行时（合流版 v3）
+   - 渲染：参数化部件（图元 ∪ 多边形）统一烘焙 mask 瓦片，GPU instanced
+     一次绘制；pattern 两级（层语言烘焙管面 + 枚举槽位运行时管边与光）；
+     出色只走家族 × 8 档调色板。
+   - 动画：程序化运行时——无帧、无轨道。宿主喂输入（移动/跳跃/触发），
+     行为剖面（部件角色 + 步态参数 + 弹簧）合成本帧姿态。
+   - 表演：作者型动作挂蓝图——图数据 + 小求值器（方言：vars/曲线/数学/
+     transform，节点 enabled 短路），触发后按部件掩码与包络合成到程序化
+     姿态之上（加算/接管两口径）；实例流效果（残影）为表演附带项。
    ================================================================ */
 
 // === PURE BEGIN ===（纯逻辑段，verify.mjs 抽取校验）
@@ -58,7 +79,6 @@ function sdSegment(px, py, s) {
   const dx = wx - vx * t, dy = wy - vy * t;
   return Math.hypot(dx, dy);
 }
-/** turtle 指令 → 折线点（logo 语言） */
 function turtleToPoints(cmds, start = [0, 0], headingDeg = -90) {
   const pts = [[start[0], start[1]]];
   let [x, y] = start, h = (headingDeg * Math.PI) / 180;
@@ -70,7 +90,6 @@ function turtleToPoints(cmds, start = [0, 0], headingDeg = -90) {
   }
   return pts;
 }
-/** 折线点 → 线段 [x1,y1,x2,y2]（已相对枢轴） */
 function pointsToSegments(points, pivot) {
   const segs = [];
   for (let i = 0; i < points.length - 1; i++) {
@@ -78,7 +97,6 @@ function pointsToSegments(points, pivot) {
   }
   return segs;
 }
-/** 点在闭合折线内（even-odd） */
 function pointInPolygon(px, py, points) {
   let inside = false;
   for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
@@ -88,9 +106,7 @@ function pointInPolygon(px, py, points) {
   }
   return inside;
 }
-/** 形状场（烘焙期）：返回 {inside, d}，d 为到边界距离（近似即可，只产掩码用）。
- *  shape: {kind:'rect'|'ellipse'|'capsule'|'poly', size:[w,h], roundness, points?, pivot?}
- *  采样点为部件局部坐标（原点=部件中心，y 向下）。 */
+/** 形状场（烘焙期）：{inside, d} */
 function shapeField(shape, px, py) {
   const [w, h] = shape.size;
   if (shape.kind === 'poly') {
@@ -115,14 +131,13 @@ function shapeField(shape, px, py) {
     const d = Math.hypot(px - cx, py - cy) - r;
     return { inside: d <= 0, d: Math.abs(d) };
   }
-  // rect（圆角）：标准圆角盒距离
   const r = Math.max(0, Math.min(1, shape.roundness ?? 0)) * Math.min(w, h) / 2;
   const qx = Math.abs(px) - (w / 2 - r), qy = Math.abs(py) - (h / 2 - r);
   const ax = Math.max(qx, 0), ay = Math.max(qy, 0);
   const dOut = Math.hypot(ax, ay) + Math.min(Math.max(qx, qy), 0) - r;
   return { inside: dOut <= 0, d: Math.abs(dOut) };
 }
-/** pattern 层语言：层 = { mask, slot, ch }，后层覆盖先层（烘焙期求值，管「面」） */
+/** pattern 层语言的 mask 原语（烘焙期） */
 function maskHit(mask, ctx) {
   switch (mask.m) {
     case 'all': return true;
@@ -157,7 +172,19 @@ function maskHit(mask, ctx) {
     default: throw new Error('pattern: 未知 mask 原语 ' + mask.m);
   }
 }
-/** 枚举形式目录（层语言一侧：光照渐变/表面，烘焙编译） */
+/** bump 枚举公式（烘焙期）：以距离场为伪高度图，输出 0..1 明暗量。
+ *  枚举的是公式目录本身——著者选形式，公式内部可以是连续的。 */
+function bumpValue(form, ctx) {
+  const cl = (v) => Math.max(0, Math.min(1, v));
+  switch (form) {
+    case 'dome': return cl(ctx.h);                                   // 穹面：中心高
+    case 'top': return cl(0.30 + 0.45 * ctx.h + 0.25 * ctx.gy);      // 顶光：高度 + 向下梯度
+    case 'side': return cl(0.30 + 0.45 * ctx.h + 0.25 * ctx.gx);     // 侧光
+    case 'edge': return cl(1 - ctx.h);                               // 缘光：边缘高
+    default: throw new Error('bump: 未知形式 ' + form);
+  }
+}
+/** 枚举形式目录（层语言一侧） */
 const F = {
   lightFlat: (slot = 2) => [{ mask: { m: 'inside' }, slot }],
   lightGradY: (slots = [3, 2, 1]) => [
@@ -177,39 +204,53 @@ const F = {
   checker: (slot = 5, f = 3) => [{ mask: { m: 'checker', f }, slot }],
   speckle: (slot = 3, f = 2, seed = 1, gt = 0.72) => [{ mask: { m: 'noise', f, seed, gt }, slot }],
   scales: (slot = 1, f = 3) => [{ mask: { m: 'bands', axis: 'y', f, ph: 0, duty: 0.5 }, slot }],
+  /** bump 形式层：公式输出按两阈值量化成 lo/mid/hi 三档 */
+  bump: (form = 'dome', hi = 3, mid = 2, lo = 1) => [{ bumpForm: form, hi, mid, lo }],
 };
-/** shape + 层程序 → mask 瓦片。采样点 = 整数局部格（原点=部件中心，瓦片含 2px 边距）。
- *  R：0..127 表面档位（占据）／254 外环（未占据但距边界 ≤1.5，供 OUTER 描边）／255 外；
- *  G：glint 候选（程序无 glint 层时全 255＝不设门）。返回 {w,h,cx,cy,data}，(cx,cy)=原点瓦片像素坐标。 */
+/** shape + 层程序 → mask 瓦片（两遍：先算场与最大内切距离，再求层） */
 function compileTile(shape, program) {
   const M = 2;
   const w = Math.ceil(shape.size[0]) + M * 2;
   const h = Math.ceil(shape.size[1]) + M * 2;
   const cx = Math.floor(w / 2), cy = Math.floor(h / 2);
   const hasGlint = program.some((l) => l.ch === 'glint');
-  const distAt = (lx, ly) => shapeField(shape, lx, ly).d;
-  const data = new Uint8Array(w * h * 4);
+  const fields = new Array(w * h);
+  let maxD = 0.0001;
   for (let j = 0; j < h; j++) {
     for (let i = 0; i < w; i++) {
       const lx = i - cx, ly = j - cy;
+      const f0 = shapeField(shape, lx, ly);
+      const gx = shapeField(shape, lx + 1, ly).d - shapeField(shape, lx - 1, ly).d;
+      const gy = shapeField(shape, lx, ly + 1).d - shapeField(shape, lx, ly - 1).d;
+      fields[j * w + i] = { lx, ly, inside: f0.inside, d: f0.d, gx, gy };
+      if (f0.inside) maxD = Math.max(maxD, f0.d);
+    }
+  }
+  const data = new Uint8Array(w * h * 4);
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < w; i++) {
+      const f0 = fields[j * w + i];
       const o = (j * w + i) * 4;
       data[o + 3] = 255;
-      const f0 = shapeField(shape, lx, ly);
       const occ = f0.inside || f0.d <= 0.5;
       if (!occ) {
         data[o] = f0.d <= 1.5 ? 254 : 255;
         continue;
       }
-      const gx = distAt(lx + 1, ly) - distAt(lx - 1, ly);
-      const gy = distAt(lx, ly + 1) - distAt(lx, ly - 1);
       const ctx = {
-        px: lx, py: ly,
-        px01: shape.size[0] > 0 ? (lx + shape.size[0] / 2) / shape.size[0] : 0.5,
-        py01: shape.size[1] > 0 ? (ly + shape.size[1] / 2) / shape.size[1] : 0.5,
-        inside: f0.inside, d: f0.d, gx, gy,
+        px: f0.lx, py: f0.ly,
+        px01: shape.size[0] > 0 ? (f0.lx + shape.size[0] / 2) / shape.size[0] : 0.5,
+        py01: shape.size[1] > 0 ? (f0.ly + shape.size[1] / 2) / shape.size[1] : 0.5,
+        inside: f0.inside, d: f0.d, gx: f0.gx, gy: f0.gy,
+        h: f0.inside ? f0.d / maxD : 0,
       };
       let slot = 2, g = hasGlint ? 0 : 255;
       for (const layer of program) {
+        if (layer.bumpForm) {
+          const v = bumpValue(layer.bumpForm, ctx);
+          slot = v > 0.66 ? layer.hi : v > 0.33 ? layer.mid : layer.lo;
+          continue;
+        }
         if (!maskHit(layer.mask, ctx)) continue;
         if (layer.ch === 'glint') g = 255;
         else slot = layer.slot;
@@ -220,7 +261,6 @@ function compileTile(shape, program) {
   }
   return { w, h, cx, cy, data };
 }
-/** 图集货架打包 */
 function packAtlas(tiles, atlasW) {
   const placements = [];
   let x = 0, y = 0, shelfH = 0;
@@ -232,7 +272,6 @@ function packAtlas(tiles, atlasW) {
   }
   return { placements, height: y + shelfH };
 }
-/** 变体推导（参数化版骨架）：base + 东向(2)，其余镜像/对角共享 */
 const MIRROR_VARIANT = { 1: 7, 7: 1, 3: 5, 5: 3 };
 const DIAGONAL_MAIN = { 1: 2, 3: 4, 5: 4, 7: 6 };
 function mirrorParams(p) {
@@ -243,7 +282,6 @@ function mirrorParams(p) {
   if (p.poly) out.poly = p.poly.map(([x, y]) => [-x, y]);
   return out;
 }
-/** 变体推导链：返回来源变体的原始覆盖（不做镜像，镜像在合并后统一施加一次） */
 function resolveVariantParams(part, variant) {
   if (part.variants && part.variants[variant]) return part.variants[variant];
   const mirror = MIRROR_VARIANT[variant];
@@ -257,7 +295,6 @@ function resolveVariantParams(part, variant) {
   if (variant === 6 && part.variants && part.variants[2]) return part.variants[2];
   return {};
 }
-/** 该方向的推导是否经过镜像（与 resolveVariantParams 同一条链） */
 function variantMirrored(part, variant) {
   if (part.variants && part.variants[variant]) return false;
   const mirror = MIRROR_VARIANT[variant];
@@ -272,10 +309,8 @@ function variantMirrored(part, variant) {
   if (variant === 4) return true;
   return false;
 }
-/** 部件 × 方向 × 服装 → 已解析参数（含 shape 描述与层程序） */
 function resolvePart(part, variantIndex, costume) {
   let p = { ...part.base, ...resolveVariantParams(part, variantIndex) };
-  // 镜像在合并后统一施加：base 的 pivot/off 与多边形轮廓一并翻（参数化版只翻覆盖项，多边形部件会翻错）
   if (variantMirrored(part, variantIndex)) p = mirrorParams(p);
   if (costume && part.costumeKeys && part.costumeKeys.length > 0) {
     const c = costume[part.costumeKeys[0]];
@@ -291,7 +326,6 @@ function resolvePart(part, variantIndex, costume) {
     : { kind: p.shapeKind || 'rect', size: p.size, roundness: p.roundness ?? 0 };
   return { params: p, shape, program: p.surface || [{ mask: { m: 'inside' }, slot: 2 }] };
 }
-/** 方向遮挡排序（参数化版骨架）：4 主序 + 对角共享 */
 const DRAW_ORDER_MAIN = {
   0: ['cape', 'left_arm', 'left_leg', 'right_leg', 'right_arm', 'torso', 'head'],
   4: ['cape', 'left_arm', 'left_leg', 'right_leg', 'right_arm', 'torso', 'head'],
@@ -309,8 +343,144 @@ function sortParts(parts, v) {
   }
   return result;
 }
-/** 实例打包：19 float —— pos2 size2 rot1 pivotTile2 tile4 misc4(family,seed,modes 打包,0) param4(rimI,glintI,phase,0)
- *  modes 打包 = light + outline*8 + rim*64 + glint*512（各 3 bit） */
+/** 程序化姿态合成：behavior = {gait, roles, springs, attach}；input = {moveX, grounded, speed01, t}
+ *  state = {phase, springs:{key:{a,v}}, attachSprings:{key:{a,v}}}（跨帧持有）
+ *  返回 pose: { key: {a, dy, rim, glint} } */
+function computeProceduralPose(behavior, input, state, dt) {
+  const g = behavior.gait;
+  const moving = Math.abs(input.moveX) > 0.01 && input.grounded;
+  state.phase += dt * (moving ? g.phaseRate : g.idleRate);
+  const ph = state.phase, t = input.t;
+  const swing = moving ? 1 : 0;
+  const legSwing = Math.sin(ph) * g.strideAmp * swing;
+  const bob = input.grounded
+    ? (moving ? Math.abs(Math.sin(ph)) * g.bobAmp : Math.sin(t * 2.0) * g.breathAmp)
+    : 0;
+  const lean = input.moveX * g.leanAmp * (moving ? 1 : 0);
+  const rimB = !input.grounded ? 0.35 : moving ? 0.20 : 0;
+  const glintB = !input.grounded ? 0.45 : moving ? 0.25 : 0;
+  const pose = {};
+  for (const key of Object.keys(behavior.roles)) {
+    const role = behavior.roles[key];
+    let a = 0, dy = bob, rim = 0, glint = 0;
+    switch (role) {
+      case 'legL': a = input.grounded ? legSwing : g.airLegSplit; break;
+      case 'legR': a = input.grounded ? -legSwing : -g.airLegSplit; break;
+      case 'footL': a = input.grounded ? legSwing * 0.9 : g.airLegSplit; break;
+      case 'footR': a = input.grounded ? -legSwing * 0.9 : -g.airLegSplit; break;
+      case 'armL': a = input.grounded ? -Math.sin(ph) * g.armAmp * swing + Math.sin(t * 2 + 1) * g.idleSway : -g.airArmRaise; rim = rimB; glint = glintB; break;
+      case 'armR': a = input.grounded ? Math.sin(ph) * g.armAmp * swing + Math.sin(t * 2 + 1) * g.idleSway : g.airArmRaise; rim = rimB; glint = glintB; break;
+      case 'torso': a = lean; break;
+      case 'head': a = -lean * 0.5; dy = bob * 0.92; break;
+      case 'spring': {
+        const cfg = (behavior.springs || {})[key] || { stiffness: 6, damping: 0.86, swayAmp: 0.1, baseA: 0 };
+        if (!state.springs[key]) state.springs[key] = { a: 0, v: 0 };
+        const s = state.springs[key];
+        const target = cfg.baseA + Math.sin(t * 2 + (cfg.phase || 0)) * cfg.swayAmp * 0.4 - input.moveX * cfg.swayAmp * (moving ? 1 : 0.3);
+        s.v += (target - s.a) * Math.min(1, cfg.stiffness * dt);
+        s.v *= Math.pow(cfg.damping, dt * 60);
+        s.a += s.v * dt * 8;
+        a = s.a; break;
+      }
+      default: break; // 'none' 等
+    }
+    pose[key] = { a, dy, rim, glint };
+  }
+  // 持握附属：跟随所挂部件角度 + 弹簧滞后
+  for (const key of Object.keys(behavior.attach || {})) {
+    const cfg = behavior.attach[key];
+    if (!state.attachSprings[key]) state.attachSprings[key] = { a: 0, v: 0 };
+    const s = state.attachSprings[key];
+    const target = (pose[cfg.on] ? pose[cfg.on].a : 0) + (cfg.extra || 0);
+    s.v += (target - s.a) * Math.min(1, cfg.stiffness * dt);
+    s.v *= Math.pow(cfg.damping, dt * 60);
+    s.a += s.v * dt * 8;
+    pose[key] = { a: s.a, dy: pose[cfg.on] ? pose[cfg.on].dy : 0, rim: rimB, glint: glintB + 0.1 };
+  }
+  return pose;
+}
+/** 蓝图小求值器（运行时方言：time/const/curve/math/sin/transform；enabled 短路）
+ *  graph = { nodes: [{id, type, enabled?, ...}] }；ctx = { u }（0..1 表演进度）
+ *  返回 Map partKey -> { angle?, dx?, dy? } */
+function evalBlueprint(graph, ctx) {
+  const values = new Map();
+  const out = new Map();
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const val = (id) => values.get(id) ?? 0;
+  const order = [];
+  const seen = new Set();
+  const visit = (n) => {
+    if (seen.has(n.id)) return;
+    seen.add(n.id);
+    for (const dep of n.inputs || []) { const d = byId.get(dep); if (d) visit(d); }
+    order.push(n);
+  };
+  graph.nodes.forEach(visit);
+  for (const n of order) {
+    if (n.enabled === false) { values.set(n.id, 0); continue; }
+    switch (n.type) {
+      case 'time': values.set(n.id, ctx.u); break;
+      case 'const': values.set(n.id, n.value ?? 0); break;
+      case 'curve': {
+        const x = val(n.inputs[0]);
+        const pts = n.points;
+        let y = pts[pts.length - 1][1];
+        if (x <= pts[0][0]) y = pts[0][1];
+        else {
+          for (let i = 0; i < pts.length - 1; i++) {
+            if (x >= pts[i][0] && x <= pts[i + 1][0]) {
+              const u = (x - pts[i][0]) / Math.max(1e-6, pts[i + 1][0] - pts[i][0]);
+              y = pts[i][1] * (1 - u) + pts[i + 1][1] * u;
+              break;
+            }
+          }
+        }
+        values.set(n.id, y); break;
+      }
+      case 'math': {
+        const a = val(n.inputs[0]), b = n.inputs.length > 1 ? val(n.inputs[1]) : (n.b ?? 0);
+        values.set(n.id, n.op === 'add' ? a + b : n.op === 'sub' ? a - b : n.op === 'mul' ? a * b : n.op === 'min' ? Math.min(a, b) : Math.max(a, b));
+        break;
+      }
+      case 'sin': values.set(n.id, Math.sin(val(n.inputs[0]) * (n.freq ?? 1) + (n.phase ?? 0)) * (n.amp ?? 1)); break;
+      case 'transform': {
+        const rec = out.get(n.part) || {};
+        if (n.angleFrom) rec.angle = val(n.angleFrom);
+        if (n.dxFrom) rec.dx = val(n.dxFrom);
+        if (n.dyFrom) rec.dy = val(n.dyFrom);
+        out.set(n.part, rec);
+        break;
+      }
+      default: throw new Error('蓝图方言: 未知节点 ' + n.type);
+    }
+  }
+  return out;
+}
+/** 表演包络权重：tSec 内淡入、duration-out 前淡出 */
+function envelopeWeight(tSec, duration, envIn, envOut) {
+  if (tSec < 0 || tSec > duration) return 0;
+  const a = envIn > 0 ? Math.min(1, tSec / envIn) : 1;
+  const b = envOut > 0 ? Math.min(1, (duration - tSec) / envOut) : 1;
+  const s = Math.min(a, b);
+  return s * s * (3 - 2 * s);
+}
+/** 表演合成：mode 'add' 加算 / 'override' 按权重接管（仅掩码部件） */
+function composePerformance(pose, perf, bpOut, w) {
+  if (w <= 0) return pose;
+  const next = { ...pose };
+  for (const key of perf.mask) {
+    const rec = bpOut.get(key);
+    if (!rec) continue;
+    const cur = next[key] || { a: 0, dy: 0, rim: 0, glint: 0 };
+    const m = { ...cur };
+    if (rec.angle !== undefined) m.a = perf.mode === 'override' ? cur.a * (1 - w) + rec.angle * w : cur.a + rec.angle * w;
+    if (rec.dy !== undefined) m.dy = perf.mode === 'override' ? cur.dy * (1 - w) + rec.dy * w : cur.dy + rec.dy * w;
+    if (rec.dx !== undefined) m.dx = (cur.dx || 0) + rec.dx * w;
+    next[key] = m;
+  }
+  return next;
+}
+/** 实例打包：19 float —— pos2 size2 rot1 pivotTile2 tile4 misc4(family,seed,modes,0) param4(rimI,glintI,phase,ghost) */
 const INSTANCE_FLOATS = 19;
 function packInstances(els) {
   const buf = new Float32Array(els.length * INSTANCE_FLOATS);
@@ -324,18 +494,19 @@ function packInstances(els) {
     buf[o + 11] = el.family; buf[o + 12] = el.seed;
     buf[o + 13] = el.modes[0] + el.modes[1] * 8 + el.modes[2] * 64 + el.modes[3] * 512;
     buf[o + 14] = 0;
-    buf[o + 15] = el.param[0]; buf[o + 16] = el.param[1]; buf[o + 17] = el.param[2]; buf[o + 18] = 0;
+    buf[o + 15] = el.param[0]; buf[o + 16] = el.param[1]; buf[o + 17] = el.param[2]; buf[o + 18] = el.ghost ? 1 : 0;
   });
   return buf;
 }
 // === PURE END ===
 
-// ---------- 枚举槽位（运行时，管「边与光」） ----------
+// ---------- 枚举槽位（运行时） ----------
 const LIGHT = { FLAT: 0, TOP: 1, TOP_LEFT: 2, TOP_RIGHT: 3, BOTTOM: 4, BACK: 5, AMBIENT: 6 };
 const OUTLINE = { NONE: 0, OUTER: 1, INNER: 2, DROP: 3, TOP_ONLY: 4 };
 const RIM = { NONE: 0, UPPER_LEFT: 1, UPPER_RIGHT: 2, BOTH_SIDES: 3, BOTTOM: 4, FULL: 5, SCAN: 6 };
 const GLINT = { NONE: 0, CORNER: 1, STAR: 2, EDGE_FLOW: 3 };
 const SHAPEK = { RECT: 'rect', ELLIPSE: 'ellipse', CAPSULE: 'capsule', POLY: 'poly' };
+const enumNames = (o) => Object.keys(o);
 
 // ---------- 调色板：家族 × 8 档 [描边, 暗, 本, 亮, 高光, 强调, 次强调, 纯白] ----------
 const rgb = (h) => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
@@ -357,99 +528,92 @@ const PAL = {
 const PAL_NAMES = Object.keys(PAL);
 const palIndex = (name) => Math.max(0, PAL_NAMES.indexOf(name));
 
-// ---------- 部件定义（参数化版 12 部件 + 多边形斗篷/剑） ----------
+// ---------- 表面程序预设库（UI 接线 v1 的层程序入口） ----------
+const SURFACE_PRESETS = {
+  '穹光（bump）': () => [...F.bump('dome'), ...F.glintFace(45), ...F.rimBand(-135), ...F.outlineDark()],
+  '纵向渐变': () => [...F.lightGradY([3, 2, 1]), ...F.outlineDark()],
+  '平缓渐变': () => [...F.lightGradY([3, 2, 2]), ...F.outlineDark()],
+  '条纹布': () => [...F.lightGradY([2, 1, 1]), ...F.stripes(5, 3), ...F.outlineDark()],
+  '鳞甲': () => [...F.lightFlat(2), ...F.scales(1), ...F.outlineDark()],
+  '噪点皮': () => [...F.lightFlat(2), ...F.speckle(3, 2, 5), ...F.outlineDark()],
+  '素面': () => [...F.lightFlat(2), ...F.outlineDark()],
+};
+
+// ---------- 部件定义 ----------
 const PARTS = [
   { key: 'cape', drawLayer: 'cape', sortOrder: 0, costumeKeys: ['cape'],
     base: { pivot: [0, 24], off: [0, -6], size: [15, 17], shapeKind: SHAPEK.POLY,
       poly: [[-6, -8], [6, -8], [8, 4], [5, 9], [2, 6], [-1, 9], [-4, 6], [-7, 9], [-8, 3]], polyPivot: [0, 0],
       light: LIGHT.TOP_LEFT, outline: OUTLINE.OUTER, rim: RIM.NONE, glint: GLINT.NONE,
-      pal: 'cloak', rimI: 0.3, glintI: 0,
-      surface: [...F.lightGradY([2, 1, 1]), ...F.stripes(5, 3), ...F.outlineDark()] },
+      pal: 'cloak', rimI: 0.3, glintI: 0, surfaceName: '条纹布', surface: SURFACE_PRESETS['条纹布']() },
     variants: { 2: { pivot: [-1, 24] } } },
-
   { key: 'armBack', drawLayer: 'left_arm', sortOrder: 0, costumeKeys: ['arm'],
     base: { pivot: [-2, 26], off: [0, -5.5], size: [3, 11], shapeKind: SHAPEK.CAPSULE, roundness: 1.0,
       light: LIGHT.TOP_LEFT, outline: OUTLINE.OUTER, rim: RIM.NONE, glint: GLINT.NONE,
-      pal: 'shirt', rimI: 0.35, glintI: 0, surface: [...F.lightGradY([3, 2, 1]), ...F.outlineDark()] },
+      pal: 'shirt', rimI: 0.35, glintI: 0, surfaceName: '纵向渐变', surface: SURFACE_PRESETS['纵向渐变']() },
     variants: { 2: { pivot: [-3, 26] } } },
-
   { key: 'legBack', drawLayer: 'left_leg', sortOrder: 0, costumeKeys: ['pants'],
     base: { pivot: [-1.5, 13], off: [0, -5], size: [4, 10], shapeKind: SHAPEK.RECT, roundness: 0.7,
       light: LIGHT.TOP_LEFT, outline: OUTLINE.OUTER, rim: RIM.NONE, glint: GLINT.NONE,
-      pal: 'pants', rimI: 0.30, glintI: 0, surface: [...F.lightGradY([3, 2, 1]), ...F.outlineDark()] },
+      pal: 'pants', rimI: 0.30, glintI: 0, surfaceName: '纵向渐变', surface: SURFACE_PRESETS['纵向渐变']() },
     variants: { 2: { pivot: [-2.5, 13] } } },
-
   { key: 'shoeBack', drawLayer: 'left_leg', sortOrder: 1, costumeKeys: ['shoe'],
     base: { pivot: [-1.5, 13], off: [0, -11.5], size: [5, 3], shapeKind: SHAPEK.RECT, roundness: 0.4,
       light: LIGHT.TOP, outline: OUTLINE.OUTER, rim: RIM.NONE, glint: GLINT.STAR,
-      pal: 'shoe', rimI: 0.30, glintI: 0.70, surface: [...F.lightFlat(2), ...F.outlineDark()] },
+      pal: 'shoe', rimI: 0.30, glintI: 0.70, surfaceName: '素面', surface: SURFACE_PRESETS['素面']() },
     variants: { 2: { pivot: [-2.5, 13] } } },
-
   { key: 'body', drawLayer: 'torso', sortOrder: 0, costumeKeys: ['body'],
     base: { pivot: [0, 20], off: [0, 0], size: [11, 14], shapeKind: SHAPEK.RECT, roundness: 0.35,
       light: LIGHT.TOP_LEFT, outline: OUTLINE.OUTER, rim: RIM.BOTH_SIDES, glint: GLINT.NONE,
-      pal: 'shirt', rimI: 0.55, glintI: 0,
-      surface: [...F.lightGradY([3, 2, 1]), ...F.glintFace(45), ...F.rimBand(-135), ...F.outlineDark()] },
+      pal: 'shirt', rimI: 0.55, glintI: 0, surfaceName: '穹光（bump）', surface: SURFACE_PRESETS['穹光（bump）']() },
     variants: { 2: { size: [10, 14] } } },
-
   { key: 'scarf', drawLayer: 'torso', sortOrder: 1, costumeKeys: ['scarf'],
     base: { pivot: [0, 27], off: [0, 0], size: [12, 3], shapeKind: SHAPEK.RECT, roundness: 0.5,
       light: LIGHT.TOP, outline: OUTLINE.OUTER, rim: RIM.NONE, glint: GLINT.NONE,
-      pal: 'scarf', rimI: 0.40, glintI: 0, surface: [...F.lightFlat(2), ...F.stripes(3, 2), ...F.outlineDark()] },
+      pal: 'scarf', rimI: 0.40, glintI: 0, surfaceName: '条纹布', surface: SURFACE_PRESETS['条纹布']() },
     variants: { 2: { size: [10, 3] } } },
-
   { key: 'head', drawLayer: 'head', sortOrder: 0, costumeKeys: ['head'],
     base: { pivot: [0, 27], off: [0, 6.5], size: [13, 13], shapeKind: SHAPEK.RECT, roundness: 0.55,
       light: LIGHT.TOP_LEFT, outline: OUTLINE.OUTER, rim: RIM.UPPER_LEFT, glint: GLINT.NONE,
-      pal: 'skin', rimI: 0.60, glintI: 0, surface: [...F.lightGradY([3, 2, 2]), ...F.outlineDark()] },
+      pal: 'skin', rimI: 0.60, glintI: 0, surfaceName: '平缓渐变', surface: SURFACE_PRESETS['平缓渐变']() },
     variants: { 2: { pivot: [1, 27], size: [12, 13], roundness: 0.6 } } },
-
   { key: 'hair', drawLayer: 'head', sortOrder: 2, costumeKeys: ['hair'],
     base: { pivot: [0, 27], off: [0, 11], size: [14, 5], shapeKind: SHAPEK.RECT, roundness: 0.5,
       light: LIGHT.TOP_LEFT, outline: OUTLINE.OUTER, rim: RIM.NONE, glint: GLINT.STAR,
-      pal: 'hair', rimI: 0.40, glintI: 0.40, surface: [...F.lightGradY([3, 2, 1]), ...F.speckle(3, 2, 5), ...F.outlineDark()] },
+      pal: 'hair', rimI: 0.40, glintI: 0.40, surfaceName: '噪点皮', surface: SURFACE_PRESETS['噪点皮']() },
     variants: { 2: { pivot: [1, 27], size: [13, 5] } } },
-
   { key: 'legFront', drawLayer: 'right_leg', sortOrder: 0, costumeKeys: ['pants'],
     base: { pivot: [1.5, 13], off: [0, -5], size: [4, 10], shapeKind: SHAPEK.RECT, roundness: 0.7,
       light: LIGHT.TOP_LEFT, outline: OUTLINE.OUTER, rim: RIM.NONE, glint: GLINT.NONE,
-      pal: 'pants', rimI: 0.30, glintI: 0, surface: [...F.lightGradY([3, 2, 1]), ...F.outlineDark()] },
+      pal: 'pants', rimI: 0.30, glintI: 0, surfaceName: '纵向渐变', surface: SURFACE_PRESETS['纵向渐变']() },
     variants: { 2: { pivot: [2.5, 13] } } },
-
   { key: 'shoeFront', drawLayer: 'right_leg', sortOrder: 1, costumeKeys: ['shoe'],
     base: { pivot: [1.5, 13], off: [0, -11.5], size: [5, 3], shapeKind: SHAPEK.RECT, roundness: 0.4,
       light: LIGHT.TOP, outline: OUTLINE.OUTER, rim: RIM.NONE, glint: GLINT.STAR,
-      pal: 'shoe', rimI: 0.30, glintI: 0.70, surface: [...F.lightFlat(2), ...F.outlineDark()] },
+      pal: 'shoe', rimI: 0.30, glintI: 0.70, surfaceName: '素面', surface: SURFACE_PRESETS['素面']() },
     variants: { 2: { pivot: [2.5, 13] } } },
-
   { key: 'eye', drawLayer: 'head', sortOrder: 1, costumeKeys: [],
     base: { pivot: [3.5, 34], off: [0, 0], size: [2.5, 3], shapeKind: SHAPEK.ELLIPSE, roundness: 0,
       light: LIGHT.FLAT, outline: OUTLINE.INNER, rim: RIM.NONE, glint: GLINT.NONE,
-      pal: 'eye', rimI: 0, glintI: 0, surface: [...F.lightFlat(2)] },
+      pal: 'eye', rimI: 0, glintI: 0, surfaceName: '素面', surface: SURFACE_PRESETS['素面']() },
     variants: { 2: { pivot: [4.5, 34], size: [1.5, 3] } } },
-
   { key: 'pupil', drawLayer: 'head', sortOrder: 1, costumeKeys: [],
     base: { pivot: [4.2, 34], off: [0, 0], size: [1.4, 1.7], shapeKind: SHAPEK.ELLIPSE, roundness: 0,
       light: LIGHT.FLAT, outline: OUTLINE.NONE, rim: RIM.NONE, glint: GLINT.CORNER,
-      pal: 'pupil', rimI: 0, glintI: 0.50, surface: [...F.lightFlat(2)] },
+      pal: 'pupil', rimI: 0, glintI: 0.50, surfaceName: '素面', surface: SURFACE_PRESETS['素面']() },
     variants: { 2: { pivot: [5.0, 34] } } },
-
   { key: 'armFront', drawLayer: 'right_arm', sortOrder: 0, costumeKeys: ['arm'],
     base: { pivot: [2, 26], off: [0, -5.5], size: [3, 11], shapeKind: SHAPEK.CAPSULE, roundness: 1.0,
       light: LIGHT.TOP_LEFT, outline: OUTLINE.OUTER, rim: RIM.NONE, glint: GLINT.NONE,
-      pal: 'shirt', rimI: 0.35, glintI: 0, surface: [...F.lightGradY([3, 2, 1]), ...F.outlineDark()] },
+      pal: 'shirt', rimI: 0.35, glintI: 0, surfaceName: '纵向渐变', surface: SURFACE_PRESETS['纵向渐变']() },
     variants: { 2: { pivot: [1, 26] } } },
-
   { key: 'sword', drawLayer: 'right_arm', sortOrder: 1, costumeKeys: [],
     base: { pivot: [2, 26], off: [2.5, -11], size: [13, 5], shapeKind: SHAPEK.POLY,
       poly: [[-6, -1], [-4, -1], [-4, -2], [-2, -2], [-2, -1], [4, -1], [6, 0], [4, 1], [-2, 1], [-2, 2], [-4, 2], [-4, 1], [-6, 1]], polyPivot: [0, 0],
       light: LIGHT.TOP, outline: OUTLINE.OUTER, rim: RIM.NONE, glint: GLINT.EDGE_FLOW,
-      pal: 'steel', rimI: 0.3, glintI: 0.8,
-      surface: [...F.lightGradY([3, 2, 1]), ...F.glintFace(30, 80), ...F.outlineDark()] },
+      pal: 'steel', rimI: 0.3, glintI: 0.8, surfaceName: '纵向渐变', surface: SURFACE_PRESETS['纵向渐变']() },
     variants: { 2: { off: [3.5, -11] } } },
 ];
-
-// ---------- 服装（槽位覆盖；null = 隐藏） ----------
 const COSTUMES = {
   casual: { label: '便服',
     body: { pal: 'shirt', size: [11, 14], roundness: 0.35 }, arm: { pal: 'shirt' },
@@ -461,7 +625,37 @@ const COSTUMES = {
     scarf: null, hair: { pal: 'hair' }, head: { pal: 'skin' }, cape: null },
 };
 
-// ---------- 稀疏语义表：像素身份（参数化版骨架，含多边形部件条目） ----------
+// ---------- 程序化行为剖面（角色级） ----------
+const BEHAVIOR = {
+  archetype: 'biped',
+  gait: { strideAmp: 0.75, armAmp: 0.65, bobAmp: 1.2, breathAmp: 0.4, idleSway: 0.05, leanAmp: 0.06, phaseRate: 11, idleRate: 2.2, airLegSplit: 0.5, airArmRaise: 0.5 },
+  roles: { cape: 'spring', armBack: 'armL', legBack: 'legL', shoeBack: 'footL', body: 'torso', scarf: 'spring', head: 'head', hair: 'head', legFront: 'legR', shoeFront: 'footR', eye: 'head', pupil: 'head', armFront: 'armR' },
+  springs: {
+    cape: { stiffness: 5, damping: 0.86, swayAmp: 0.22, phase: 0.6, baseA: 0 },
+    scarf: { stiffness: 9, damping: 0.84, swayAmp: 0.10, phase: 0, baseA: 0 },
+  },
+  attach: { sword: { on: 'armFront', stiffness: 14, damping: 0.80, extra: 0 } },
+};
+
+// ---------- 表演蓝图（作者型表演挂蓝图；图为数据，产品里由蓝图编辑器产出） ----------
+const PERFORMANCES = [
+  { id: 'slash', name: '斩击', triggerKey: 'KeyJ', duration: 0.45, enabled: true,
+    envelope: { in: 0.05, out: 0.15 }, mode: 'override',
+    mask: ['armFront', 'sword', 'body'],
+    afterimage: { part: 'sword', count: 3, interval: 0.035 },
+    graph: { nodes: [
+      { id: 't', type: 'time' },
+      { id: 'swing', type: 'curve', inputs: ['t'], points: [[0, -0.35], [0.3, -0.55], [0.52, 1.85], [0.78, 1.55], [1, 0.15]] },
+      { id: 'armSwing', type: 'math', op: 'mul', inputs: ['swing'], b: 0.6 },
+      { id: 'dip', type: 'curve', inputs: ['t'], points: [[0, 0], [0.4, -0.6], [0.6, -1.4], [1, 0]] },
+      { id: 'twist', type: 'curve', inputs: ['t'], points: [[0, 0], [0.5, 0.12], [1, 0]] },
+      { id: 'n1', type: 'transform', part: 'sword', angleFrom: 'swing', dyFrom: 'dip' },
+      { id: 'n2', type: 'transform', part: 'armFront', angleFrom: 'armSwing', dyFrom: 'dip' },
+      { id: 'n3', type: 'transform', part: 'body', angleFrom: 'twist', dyFrom: 'dip' },
+    ] } },
+];
+
+// ---------- 稀疏语义表 ----------
 const semanticTable = new Map();
 const pixelKey = (k, v, gx, gy) => `${k}:${v}:${gx}:${gy}`;
 semanticTable.set(pixelKey('eye', 0, 1, 0), { part: 'eye', dof: 'TX|TY' });
@@ -471,15 +665,16 @@ semanticTable.set(pixelKey('armFront', 0, 0, -5), { part: 'arm', constraint: 'ch
 semanticTable.set(pixelKey('sword', 0, -5, 0), { part: 'sword', constraint: 'grip' });
 semanticTable.set(pixelKey('cape', 0, 0, -8), { part: 'cape', constraint: 'anchor' });
 
-// ---------- 瓦片图集（按 方向×服装 懒构建，编译结果缓存） ----------
+// ---------- 瓦片图集（方向×服装×数据版本 懒构建） ----------
 const tileCache = new Map();
+let dataRev = 0;
 function tileKeyOf(part, variant, costumeName, resolved) {
   return [part.key, variant, costumeName, JSON.stringify(resolved.shape),
-    JSON.stringify(resolved.program.map((l) => [l.mask.m, l.slot, l.ch]))].join('|');
+    JSON.stringify(resolved.program.map((l) => [l.mask ? l.mask.m : l.bumpForm, l.slot, l.ch]))].join('|');
 }
-let atlasState = null; // { variant, costumeName, tex, map: Map<key, {tile, place, resolved} | null> }
+let atlasState = null;
 function ensureAtlas(gl, variant, costumeName) {
-  if (atlasState && atlasState.variant === variant && atlasState.costumeName === costumeName) return atlasState;
+  if (atlasState && atlasState.variant === variant && atlasState.costumeName === costumeName && atlasState.rev === dataRev) return atlasState;
   const costume = COSTUMES[costumeName];
   const tiles = [], entries = [];
   const map = new Map();
@@ -507,11 +702,11 @@ function ensureAtlas(gl, variant, costumeName) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  atlasState = { variant, costumeName, tex, map };
+  atlasState = { variant, costumeName, rev: dataRev, tex, map };
   return atlasState;
 }
 
-// ---------- WebGL 渲染 ----------
+// ---------- WebGL ----------
 const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl2', { antialias: false });
 if (!gl) throw new Error('WebGL2 不可用');
@@ -519,17 +714,15 @@ const VIEW_H = 180;
 let lowW = 320;
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
-  const aspect = w / h;
-  lowW = Math.max(1, Math.round(VIEW_H * aspect));
+  lowW = Math.max(1, Math.round(VIEW_H * (w / h)));
   canvas.width = lowW; canvas.height = VIEW_H;
   canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
 }
 window.addEventListener('resize', resize); resize();
-
 function compileShader(type, src) {
   const sh = gl.createShader(type);
   gl.shaderSource(sh, src); gl.compileShader(sh);
-  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error('着色器编译失败: ' + gl.getShaderInfoLog(sh) + '\n' + src);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error('着色器编译失败: ' + gl.getShaderInfoLog(sh));
   return sh;
 }
 function makeProgram(vs, fs) {
@@ -540,8 +733,6 @@ function makeProgram(vs, fs) {
   if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error('程序链接失败: ' + gl.getProgramInfoLog(pr));
   return pr;
 }
-
-// 主程序：instanced 瓦片 quad
 const partProg = makeProgram(
 `#version 300 es
 layout(location=0) in vec2 aCorner;
@@ -556,8 +747,8 @@ uniform vec2 uCam; uniform vec2 uViewHalf; uniform vec2 uRes;
 out vec2 vCenterScreen; out float vRot; out vec4 vTile; out vec2 vTileC; out vec4 vMisc; out vec4 vParam;
 void main(){
   float c = cos(iRot), s = sin(iRot);
-  vec2 local = aCorner * iSize;                    // 局部坐标 y 向下
-  vec2 woff = vec2(local.x * c + local.y * s, local.x * s - local.y * c); // (x,-y) 旋转到 y-up 世界
+  vec2 local = aCorner * iSize;
+  vec2 woff = vec2(local.x * c + local.y * s, local.x * s - local.y * c);
   vec2 world = iPos + woff;
   vCenterScreen = ((iPos - uCam) / uViewHalf * 0.5 + 0.5) * uRes;
   vRot = iRot; vTile = iTile; vTileC = iTileC; vMisc = iMisc; vParam = iParam;
@@ -589,8 +780,8 @@ void main(){
   int family = int(vMisc.x + 0.5);
   vec2 d = gl_FragCoord.xy - vCenterScreen;
   float c = cos(vRot), s = sin(vRot);
-  vec2 lup = vec2(d.x * c + d.y * s, -d.x * s + d.y * c);  // 局部 y-up
-  ivec2 g = ivec2(floor(vec2(lup.x, -lup.y) + 0.5));       // 局部格 y 向下（与瓦片一致）
+  vec2 lup = vec2(d.x * c + d.y * s, -d.x * s + d.y * c);
+  ivec2 g = ivec2(floor(vec2(lup.x, -lup.y) + 0.5));
   int r0 = tileRAt(g);
   bool occ = r0 < 128;
   if (!occ) {
@@ -608,7 +799,6 @@ void main(){
   bool inL = !(tileRAt(g + ivec2(-1, 0)) < 128), inR = !(tileRAt(g + ivec2(1, 0)) < 128);
   bool inT = !(tileRAt(g + ivec2(0, -1)) < 128), inB = !(tileRAt(g + ivec2(0, 1)) < 128);
   int slot = r0;
-  // LIGHT 枚举：只调制 1..3 档（层语言给的强调档 4..7 不动）
   bool isLit = false, isDark = false;
   if (lm == 1) { isLit = inT; isDark = inB; }
   else if (lm == 2) { isLit = inT || inL; isDark = inB || inR; }
@@ -617,7 +807,6 @@ void main(){
   else if (lm == 5) { isLit = inL || inR || inB || inT; isDark = !isLit; }
   else if (lm == 6) { isLit = true; }
   if (slot >= 1 && slot <= 3) { if (isDark) slot = 1; else if (isLit) slot = 3; }
-  // RIM 枚举：命中写高光档 4；强度走哈希门（保持档位制）
   bool rimHit = false;
   if (rm == 1) rimHit = inT && inL;
   else if (rm == 2) rimHit = inT && inR;
@@ -630,7 +819,6 @@ void main(){
     rimHit = (inL || inR || inB || inT) && abs(yN - band) < 0.12;
   }
   if (rimHit && hash12(vec2(g) + vMisc.y) < vParam.x) slot = 4;
-  // GLINT 枚举：只在烘焙候选区（tile G）内点亮
   if (tileGAt(g) > 0.35) {
     bool gHit = false;
     if (gm == 1) gHit = inT && inR;
@@ -641,12 +829,10 @@ void main(){
     }
     if (gHit && hash12(vec2(g) * 1.7 + vMisc.y) < vParam.y) slot = 4;
   }
-  // OUTLINE INNER
   if (om == 2 && (inL || inR || inB || inT)) slot = 0;
+  if (vParam.w > 0.5 && slot >= 1) slot = 1;
   oColor = vec4(texelFetch(uPal, ivec2(slot, family), 0).rgb, 1.0);
 }`);
-
-// 调色板纹理（8 档 × 家族）
 const palTex = gl.createTexture();
 {
   const data = new Uint8Array(8 * PAL_NAMES.length * 4);
@@ -662,8 +848,6 @@ const palTex = gl.createTexture();
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 }
-
-// 部件 VAO：quad + 实例缓冲
 const partVAO = gl.createVertexArray();
 const quadBuf = gl.createBuffer();
 const instBuf = gl.createBuffer();
@@ -682,8 +866,6 @@ const instBuf = gl.createBuffer();
   }
   gl.bindVertexArray(null);
 }
-
-// 布景程序：实心 quad（地面/装饰/影子椭圆）
 const solidProg = makeProgram(
 `#version 300 es
 layout(location=0) in vec2 aPos;
@@ -727,7 +909,7 @@ function buildScenery(charX, charY, onGround) {
   for (let i = -10; i <= 10; i++) {
     const gx = base + i * 24;
     const hh = 1.5 + (Math.abs(i * 7 + Math.floor(charX / 24)) % 3);
-    quad(gx, -1.5 + hh / 2 - 1.5, 4, hh, [0.118, 0.118, 0.243, 1], 0);
+    quad(gx, hh / 2 - 3, 4, hh, [0.118, 0.118, 0.243, 1], 0);
   }
   quad(charX, -0.75, 4000, 1.5, [0.165, 0.165, 0.322, 1], 0);
   const shrink = onGround ? 1 : Math.max(0.5, 1 - charY / 50);
@@ -735,11 +917,20 @@ function buildScenery(charX, charY, onGround) {
   return new Float32Array(verts);
 }
 
-// ---------- 角色状态与动画（参数化版骨架） ----------
-const char = { x: 0, y: 0, vy: 0, onGround: true, variant: 0, lockedVariant: false, moving: false, phase: 0 };
+// ---------- 宿主输入与运行时状态 ----------
+const char = { x: 0, y: 0, vy: 0, onGround: true, variant: 0, lockedVariant: false };
 let currentCostume = 'casual';
-let bakeEnabled = false, debugEnabled = false;
+let debugEnabled = false;
+let elapsed = 0;
+const procState = { phase: 0, springs: {}, attachSprings: {} };
+const activePerfs = [];
+let lastPose = null;
 const keys = Object.create(null);
+function startPerf(perf) {
+  if (!perf.enabled) return;
+  if (activePerfs.some((a) => a.perf === perf)) return;
+  activePerfs.push({ perf, t: 0, snapTimer: 0, snaps: [] });
+}
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   const d = parseInt(e.key);
@@ -748,15 +939,18 @@ window.addEventListener('keydown', (e) => {
     const b = document.getElementById('btnLock');
     b.textContent = '锁定: 开'; b.classList.add('on');
   }
+  for (const perf of PERFORMANCES) if (perf.triggerKey === e.code) startPerf(perf);
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 const MOVE_SPEED = 72, JUMP_V = 200, GRAVITY = 720;
-function updateCharacter(dt) {
+function readMoveX() {
   let ix = 0;
   if (keys['KeyA'] || keys['ArrowLeft']) ix -= 1;
   if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
-  char.moving = ix !== 0;
+  return ix;
+}
+function updateCharacter(dt, ix) {
   if (ix !== 0 && !char.lockedVariant) { char.variant = ix > 0 ? 2 : 6; updateDirButtons(); }
   char.x += ix * MOVE_SPEED * dt;
   if ((keys['KeyW'] || keys['ArrowUp']) && char.onGround) { char.vy = JUMP_V; char.onGround = false; }
@@ -764,86 +958,24 @@ function updateCharacter(dt) {
     char.vy -= GRAVITY * dt; char.y += char.vy * dt;
     if (char.y <= 0) { char.y = 0; char.vy = 0; char.onGround = true; }
   }
-  char.phase += dt * (char.moving ? 12 : 2.5);
 }
-function computeIdleAnims(t) {
-  const legA = Math.sin(t * 2.0) * 0.06, armA = Math.sin(t * 2.0 + 1.0) * 0.05, bob = Math.sin(t * 2.0) * 0.4;
-  const capeA = Math.sin(t * 2.0 + 0.6) * 0.07;
-  return {
-    cape: { a: capeA, dy: bob, rim: 0, glint: 0 },
-    armBack: { a: armA, dy: bob, rim: 0, glint: 0 }, legBack: { a: -legA, dy: bob, rim: 0, glint: 0 },
-    shoeBack: { a: -legA, dy: bob, rim: 0, glint: 0 }, body: { a: 0, dy: bob, rim: 0, glint: 0 },
-    scarf: { a: Math.sin(t * 4.0) * 0.05, dy: bob, rim: 0, glint: 0 },
-    head: { a: 0, dy: bob, rim: 0, glint: 0 }, hair: { a: 0, dy: bob, rim: 0, glint: 0 },
-    legFront: { a: legA, dy: bob, rim: 0, glint: 0 }, shoeFront: { a: legA, dy: bob, rim: 0, glint: 0 },
-    eye: { a: 0, dy: bob, rim: 0, glint: 0 }, pupil: { a: 0, dy: bob, rim: 0, glint: 0 },
-    armFront: { a: armA, dy: bob, rim: 0, glint: 0 }, sword: { a: armA, dy: bob, rim: 0, glint: 0.1 },
-  };
-}
-function computeMovingAnims(phase) {
-  const legA = Math.sin(phase) * 0.75, armA = -Math.sin(phase) * 0.65;
-  const bob = Math.abs(Math.sin(phase)) * 1.2, rimB = 0.20, glintB = 0.25;
-  return {
-    cape: { a: Math.sin(phase + 0.8) * 0.16 - 0.12, dy: bob, rim: 0, glint: 0 },
-    armBack: { a: armA, dy: bob, rim: rimB, glint: glintB },
-    legBack: { a: -legA, dy: bob, rim: 0, glint: 0 }, shoeBack: { a: -legA, dy: bob, rim: 0, glint: 0 },
-    body: { a: 0, dy: bob, rim: 0, glint: 0 }, scarf: { a: Math.sin(phase * 2) * 0.08, dy: bob, rim: 0, glint: 0 },
-    head: { a: 0, dy: bob, rim: 0, glint: 0 }, hair: { a: 0, dy: bob, rim: 0, glint: 0 },
-    legFront: { a: legA, dy: bob, rim: 0, glint: 0 }, shoeFront: { a: legA, dy: bob, rim: 0, glint: 0 },
-    eye: { a: 0, dy: bob, rim: 0, glint: 0 }, pupil: { a: 0, dy: bob, rim: 0, glint: 0 },
-    armFront: { a: armA, dy: bob, rim: rimB, glint: glintB }, sword: { a: armA, dy: bob, rim: rimB, glint: glintB + 0.2 },
-  };
-}
-function computeAirborneAnims() {
-  const legA = 0.5, armA = -0.5, rimB = 0.35, glintB = 0.45;
-  return {
-    cape: { a: -0.3, dy: 0, rim: 0, glint: 0 },
-    armBack: { a: armA, dy: 0, rim: rimB, glint: glintB }, legBack: { a: -legA, dy: 0, rim: 0, glint: 0 },
-    shoeBack: { a: -legA, dy: 0, rim: 0, glint: 0 }, body: { a: 0, dy: 0, rim: 0, glint: 0 },
-    scarf: { a: 0, dy: 0, rim: 0, glint: 0 }, head: { a: 0, dy: 0, rim: 0, glint: 0 }, hair: { a: 0, dy: 0, rim: 0, glint: 0 },
-    legFront: { a: legA, dy: 0, rim: 0, glint: 0 }, shoeFront: { a: legA, dy: 0, rim: 0, glint: 0 },
-    eye: { a: 0, dy: 0, rim: 0, glint: 0 }, pupil: { a: 0, dy: 0, rim: 0, glint: 0 },
-    armFront: { a: armA, dy: 0, rim: rimB, glint: glintB }, sword: { a: armA - 0.3, dy: 0, rim: rimB, glint: glintB },
-  };
-}
-// 动画烘焙（idle/moving 曲线表，全字段保留）
-function buildBakeTable() {
-  const buckets = 100, duration = 2.0;
-  const table = { idle: {}, moving: {} };
-  for (let b = 0; b < buckets; b++) {
-    const t = (b / buckets) * duration;
-    const srcs = { idle: computeIdleAnims(t), moving: computeMovingAnims((t / duration) * Math.PI * 2) };
-    for (const state of ['idle', 'moving']) {
-      for (const key in srcs[state]) {
-        if (!table[state][key]) {
-          table[state][key] = { a: new Float32Array(buckets), dy: new Float32Array(buckets), rim: new Float32Array(buckets), glint: new Float32Array(buckets) };
-        }
-        const T = table[state][key], s = srcs[state][key];
-        T.a[b] = s.a || 0; T.dy[b] = s.dy || 0; T.rim[b] = s.rim || 0; T.glint[b] = s.glint || 0;
-      }
-    }
-  }
-  return { buckets, duration, table };
-}
-const bakedTable = buildBakeTable();
-function getFrameAnims(t, moving, airborne, phase) {
-  if (airborne) return computeAirborneAnims();
-  const state = moving ? 'moving' : 'idle';
-  if (!bakeEnabled) return state === 'idle' ? computeIdleAnims(t) : computeMovingAnims(phase);
-  const { buckets, duration, table } = bakedTable;
-  const src = table[state];
-  const phaseT = state === 'idle' ? t : (phase / (2 * Math.PI)) * duration;
-  const f = (((phaseT % duration) + duration) % duration) / duration * buckets;
-  const i = Math.floor(f) % buckets, u = f - Math.floor(f), j = (i + 1) % buckets;
-  const result = {};
-  for (const key in src) {
-    const T = src[key];
-    result[key] = { a: T.a[i] * (1 - u) + T.a[j] * u, dy: T.dy[i] * (1 - u) + T.dy[j] * u, rim: T.rim[i] * (1 - u) + T.rim[j] * u, glint: T.glint[i] * (1 - u) + T.glint[j] * u };
-  }
-  return result;
+function partCenter(params, an) {
+  const c = Math.cos(an.a), s = Math.sin(an.a);
+  const rx = params.off[0] * c - params.off[1] * s;
+  const ry = params.off[0] * s + params.off[1] * c;
+  return [char.x + params.pivot[0] + rx + (an.dx || 0), char.y + params.pivot[1] + ry + (an.dy || 0)];
 }
 
-// ---------- UI ----------
+// ---------- UI 接线 ----------
+function fillSelect(el, names, value) {
+  el.innerHTML = '';
+  for (const n of names) {
+    const o = document.createElement('option');
+    o.value = n; o.textContent = n;
+    el.appendChild(o);
+  }
+  el.value = value;
+}
 const dirRow = document.getElementById('dirRow');
 const dirButtons = [];
 for (let i = 0; i < 8; i++) {
@@ -867,35 +999,133 @@ for (const key in COSTUMES) {
 }
 function updateCosButtons() { cosRow.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.key === currentCostume)); }
 updateCosButtons();
-document.getElementById('btnBake').onclick = function () { bakeEnabled = !bakeEnabled; this.textContent = '烘焙: ' + (bakeEnabled ? '开' : '关'); this.classList.toggle('on', bakeEnabled); };
+
+// ① 部件外观
+const uiPart = document.getElementById('uiPart');
+fillSelect(uiPart, PARTS.map((p) => p.key), 'body');
+const selPart = () => PARTS.find((p) => p.key === uiPart.value);
+function refreshAppearance() {
+  const b = selPart().base;
+  fillSelect(document.getElementById('uiPal'), PAL_NAMES, b.pal);
+  const presets = Object.keys(SURFACE_PRESETS);
+  fillSelect(document.getElementById('uiSurface'), [...presets, '（自定义）'], presets.includes(b.surfaceName) ? b.surfaceName : '（自定义）');
+  fillSelect(document.getElementById('uiLight'), enumNames(LIGHT), enumNames(LIGHT)[b.light]);
+  fillSelect(document.getElementById('uiOutline'), enumNames(OUTLINE), enumNames(OUTLINE)[b.outline]);
+  fillSelect(document.getElementById('uiRim'), enumNames(RIM), enumNames(RIM)[b.rim]);
+  fillSelect(document.getElementById('uiGlint'), enumNames(GLINT), enumNames(GLINT)[b.glint]);
+  document.getElementById('uiRound').value = b.roundness ?? 0;
+}
+uiPart.onchange = refreshAppearance;
+document.getElementById('uiPal').onchange = (e) => { selPart().base.pal = e.target.value; dataRev++; };
+document.getElementById('uiSurface').onchange = (e) => {
+  const name = e.target.value;
+  if (SURFACE_PRESETS[name]) { selPart().base.surface = SURFACE_PRESETS[name](); selPart().base.surfaceName = name; dataRev++; }
+};
+document.getElementById('uiLight').onchange = (e) => { selPart().base.light = LIGHT[e.target.value]; dataRev++; };
+document.getElementById('uiOutline').onchange = (e) => { selPart().base.outline = OUTLINE[e.target.value]; dataRev++; };
+document.getElementById('uiRim').onchange = (e) => { selPart().base.rim = RIM[e.target.value]; dataRev++; };
+document.getElementById('uiGlint').onchange = (e) => { selPart().base.glint = GLINT[e.target.value]; dataRev++; };
+document.getElementById('uiRound').oninput = (e) => { selPart().base.roundness = parseFloat(e.target.value); dataRev++; };
+refreshAppearance();
+
+// ② 行为参数 + 部件角色表
+const bindSlider = (id, get, set) => {
+  const el = document.getElementById(id);
+  el.value = get();
+  el.oninput = () => set(parseFloat(el.value));
+};
+bindSlider('uiStride', () => BEHAVIOR.gait.strideAmp, (v) => { BEHAVIOR.gait.strideAmp = v; });
+bindSlider('uiArmAmp', () => BEHAVIOR.gait.armAmp, (v) => { BEHAVIOR.gait.armAmp = v; });
+bindSlider('uiBob', () => BEHAVIOR.gait.bobAmp, (v) => { BEHAVIOR.gait.bobAmp = v; });
+bindSlider('uiBreath', () => BEHAVIOR.gait.breathAmp, (v) => { BEHAVIOR.gait.breathAmp = v; });
+bindSlider('uiCapeSway', () => BEHAVIOR.springs.cape.swayAmp, (v) => { BEHAVIOR.springs.cape.swayAmp = v; });
+const ROLE_NAMES = ['legL', 'legR', 'footL', 'footR', 'armL', 'armR', 'torso', 'head', 'spring', 'none'];
+{
+  const box = document.getElementById('roleRows');
+  for (const part of PARTS) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const lab = document.createElement('label');
+    lab.textContent = part.key;
+    row.appendChild(lab);
+    if (BEHAVIOR.attach[part.key]) {
+      const span = document.createElement('span');
+      span.textContent = '持握跟随 ' + BEHAVIOR.attach[part.key].on;
+      span.style.color = '#6a6a9a';
+      row.appendChild(span);
+    } else {
+      const sel = document.createElement('select');
+      fillSelect(sel, ROLE_NAMES, BEHAVIOR.roles[part.key] ?? 'none');
+      sel.onchange = () => {
+        if (sel.value === 'none') delete BEHAVIOR.roles[part.key];
+        else {
+          BEHAVIOR.roles[part.key] = sel.value;
+          if (sel.value === 'spring' && !BEHAVIOR.springs[part.key]) {
+            BEHAVIOR.springs[part.key] = { stiffness: 7, damping: 0.85, swayAmp: 0.12, phase: 0, baseA: 0 };
+          }
+        }
+      };
+      row.appendChild(sel);
+    }
+    box.appendChild(row);
+  }
+}
+
+// ③ 表演清单
+{
+  const box = document.getElementById('perfRows');
+  for (const perf of PERFORMANCES) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const lab = document.createElement('label');
+    lab.textContent = perf.name + ' (' + perf.triggerKey.replace('Key', '') + ')';
+    row.appendChild(lab);
+    const modeSel = document.createElement('select');
+    fillSelect(modeSel, ['override', 'add'], perf.mode);
+    modeSel.onchange = () => { perf.mode = modeSel.value; };
+    row.appendChild(modeSel);
+    const btn = document.createElement('button');
+    btn.textContent = '触发';
+    btn.onclick = () => startPerf(perf);
+    row.appendChild(btn);
+    box.appendChild(row);
+  }
+}
+
+// ④ 选项 / 导出
 document.getElementById('btnLock').onclick = function () { char.lockedVariant = !char.lockedVariant; this.textContent = '锁定: ' + (char.lockedVariant ? '开' : '关'); this.classList.toggle('on', char.lockedVariant); };
 const debugEl = document.getElementById('debug');
 document.getElementById('btnDebug').onclick = function () { debugEnabled = !debugEnabled; this.textContent = '调试: ' + (debugEnabled ? '开' : '关'); this.classList.toggle('on', debugEnabled); debugEl.style.display = debugEnabled ? 'block' : 'none'; };
+document.getElementById('btnExport').onclick = () => {
+  const pkg = {
+    format: 'procedural-pixel-runtime-1',
+    note: '运行时本体为本页脚本（渲染核心 + 程序化引擎 + 蓝图求值器）；此 JSON 为角色/行为/表演数据。',
+    palettes: PAL, parts: PARTS, costumes: COSTUMES, behavior: BEHAVIOR, performances: PERFORMANCES,
+  };
+  const blob = new Blob([JSON.stringify(pkg, null, 1)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'character-runtime.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
 
-// ---------- 点击查看像素身份（CPU 读同一批烘焙瓦片，保证一致） ----------
-let elapsed = 0;
-function partCenter(params, angle, dy) {
-  const c = Math.cos(angle), s = Math.sin(angle);
-  const rx = params.off[0] * c - params.off[1] * s;
-  const ry = params.off[0] * s + params.off[1] * c;
-  return [char.x + params.pivot[0] + rx, char.y + params.pivot[1] + ry + dy];
-}
+// ---------- 点击查看像素身份 ----------
 canvas.addEventListener('click', (e) => {
-  if (!debugEnabled || !atlasState) return;
+  if (!debugEnabled || !atlasState || !lastPose) return;
   const rect = canvas.getBoundingClientRect();
   const mx = (e.clientX - rect.left) / rect.width * lowW;
   const my = (e.clientY - rect.top) / rect.height * VIEW_H;
   const camX = char.x, camY = 22 + char.y * 0.35;
   const wx = camX + (mx - lowW / 2), wy = camY + (VIEW_H / 2 - my);
   const sorted = sortParts(PARTS, char.variant);
-  const anims = getFrameAnims(elapsed, char.moving, !char.onGround, char.phase);
   for (let i = sorted.length - 1; i >= 0; i--) {
     const part = sorted[i];
     const entry = atlasState.map.get(part.key);
     if (!entry) continue;
     const { tile, resolved } = entry;
-    const an = anims[part.key] || { a: 0, dy: 0 };
-    const [cxw, cyw] = partCenter(resolved.params, an.a, an.dy);
+    const an = lastPose[part.key] || { a: 0, dy: 0 };
+    const [cxw, cyw] = partCenter(resolved.params, an);
     const dx = wx - cxw, dy = wy - cyw;
     const c = Math.cos(an.a), s = Math.sin(an.a);
     const lupX = dx * c + dy * s, lupY = -dx * s + dy * c;
@@ -917,34 +1147,70 @@ canvas.addEventListener('click', (e) => {
   debugEl.innerHTML = '<span style="color:#6a6a9a">未命中</span>';
 });
 
-// ---------- 主循环 ----------
+// ---------- 主循环：输入 → 程序化姿态 → 表演合成 → 渲染 ----------
 const uLoc = (pr, n) => gl.getUniformLocation(pr, n);
 const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal') };
 const solidU = { cam: uLoc(solidProg, 'uCam'), vh: uLoc(solidProg, 'uViewHalf') };
 let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now; elapsed += dt;
-  updateCharacter(dt);
+  const ix = readMoveX();
+  updateCharacter(dt, ix);
+  const input = { moveX: ix, grounded: char.onGround, speed01: ix !== 0 ? 1 : 0, t: elapsed };
+  let pose = computeProceduralPose(BEHAVIOR, input, procState, dt);
+  // 表演层
+  for (let i = activePerfs.length - 1; i >= 0; i--) {
+    const act = activePerfs[i];
+    act.t += dt;
+    const w = envelopeWeight(act.t, act.perf.duration, act.perf.envelope.in, act.perf.envelope.out);
+    if (w > 0) {
+      const bpOut = evalBlueprint(act.perf.graph, { u: Math.min(1, act.t / act.perf.duration) });
+      pose = composePerformance(pose, act.perf, bpOut, w);
+    }
+    if (act.t > act.perf.duration) activePerfs.splice(i, 1);
+  }
+  lastPose = pose;
   const state = ensureAtlas(gl, char.variant, currentCostume);
-  const anims = getFrameAnims(elapsed, char.moving, !char.onGround, char.phase);
   const sorted = sortParts(PARTS, char.variant);
   const els = [];
+  const elByKey = new Map();
   sorted.forEach((part, idx) => {
     const entry = state.map.get(part.key);
     if (!entry) return;
     const { tile, place, resolved } = entry;
     const p = resolved.params;
-    const an = anims[part.key] || { a: 0, dy: 0, rim: 0, glint: 0 };
-    const [cxw, cyw] = partCenter(p, an.a, an.dy);
-    els.push({
+    const an = pose[part.key] || { a: 0, dy: 0, rim: 0, glint: 0 };
+    const [cxw, cyw] = partCenter(p, an);
+    const el = {
       pos: [cxw, cyw], size: [tile.w, tile.h], rot: an.a,
       tileCx: tile.cx, tileCy: tile.cy,
       tile: [place[0], place[1], tile.w, tile.h],
       family: palIndex(p.pal), seed: (idx * 0.137) % 1,
       modes: [p.light, p.outline, p.rim, p.glint],
       param: [Math.min(1, (p.rimI || 0) + (an.rim || 0)), Math.min(1, (p.glintI || 0) + (an.glint || 0)), (idx * 0.137) % 1],
-    });
+      ghost: false,
+    };
+    els.push(el);
+    elByKey.set(part.key, el);
   });
+  // 实例流效果：表演残影（在本体实例前插入历史快照，档位压暗）
+  for (const act of activePerfs) {
+    const ai = act.perf.afterimage;
+    if (!ai) continue;
+    const live = elByKey.get(ai.part);
+    if (!live) continue;
+    act.snapTimer += dt;
+    if (act.snapTimer >= ai.interval) {
+      act.snapTimer = 0;
+      act.snaps.push({ el: { ...live }, born: elapsed });
+      if (act.snaps.length > ai.count) act.snaps.shift();
+    }
+    const idx = els.indexOf(live);
+    const ghosts = act.snaps
+      .filter((s) => elapsed - s.born < ai.interval * ai.count * 1.8)
+      .map((s) => ({ ...s.el, ghost: true }));
+    els.splice(idx, 0, ...ghosts);
+  }
   const camX = char.x, camY = 22 + char.y * 0.35;
   gl.viewport(0, 0, lowW, VIEW_H);
   gl.clearColor(0.070, 0.070, 0.157, 1);
@@ -980,7 +1246,7 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-window.PSA = { char, PARTS, COSTUMES, semanticTable, pixelKey, PAL, tileCache };
+window.PSA = { char, PARTS, COSTUMES, BEHAVIOR, PERFORMANCES, semanticTable, pixelKey, PAL, tileCache };
 </script>
 </body>
 </html>
