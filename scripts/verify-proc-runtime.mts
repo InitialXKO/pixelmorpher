@@ -13,6 +13,7 @@ import { translatePerformanceGraph, translateBehaviorGraph } from '../src/lib/pr
 import { dialectOf } from '../src/lib/proc-runtime/dialect';
 import { createRuntimeEvaluator } from '../src/lib/proc-runtime/eval-src';
 import { convertCharacterToRuntimePackage } from '../src/lib/proc-runtime/convert';
+import { createDefaultCostumePiece } from '../src/lib/unified-types';
 
 let passed = 0;
 function check(name: string, cond: boolean) {
@@ -179,17 +180,19 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     nodes: {
       torso: makeNode('torso', '躯干', 'torso'),
       hat: makeNode('hat', '帽子', null, 'torso'),
+      arm: makeNode('arm', '手臂', null, 'torso'),
     },
     rootNodeIds: ['torso'],
     costumeSets: [{
       id: 'set1', name: '默认',
       pieces: {
         torso: { nodeId: 'torso', zIndex: 0, parametric: createDefaultParametricAppearance() },
+        arm: { ...createDefaultCostumePiece('arm'), parametric: createDefaultParametricAppearance() },
       },
     }],
     activeCostumeSetId: 'set1',
     variants: { '0': '东', '2': '西' },
-    behaviorGraphs: { torso: gaitBehaviorGraph, hat: gaitBehaviorGraph },
+    behaviorGraphs: { torso: gaitBehaviorGraph, hat: gaitBehaviorGraph, arm: gaitBehaviorGraph },
     performances: [{
       id: 'perf1', name: '斩击', trigger: 'attack', duration: 1, enabled: true,
       mode: 'override', envelopeIn: 0.1, envelopeOut: 0.2,
@@ -206,7 +209,10 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('E5 表演进包且触发键映射 KeyJ', pkg.performances.length === 1 && (pkg.performances[0] as { triggerKey?: string }).triggerKey === 'KeyJ');
   const perfNodes = pkg.performances[0].graph.nodes;
   check('E6 表演图 context=performance 且含曲线', pkg.performances[0].graph.context === 'performance' && perfNodes.some((n) => n.type === 'curve'));
-  check('E7 无槽位节点（帽子）的行为图点名 warning 且不进包', pkg.warnings.some((w) => w.includes('帽子') && w.includes('行为图')) && !('hat' in graphs));
+  check('E7 无 slot 节点（帽子）的行为图以 nodeId 为键进包（产品回退口径）', 'hat' in graphs);
+  check('E10 无 slot 节点（手臂）的参数化件以 nodeId 为键进包', pkg.parts.some((p) => p.key === 'arm'));
+  check('E11 无 slot 节点（手臂）的行为图进包', 'arm' in graphs);
+  check('E12 无「有参数化外观但无对应节点」误报', !pkg.warnings.some((w) => w.includes('无对应节点')));
   check('E8 变体：部件带西向(2)空覆盖（走统一镜像）', pkg.parts.some((p) => p.key === 'torso' && p.variants && 2 in p.variants));
 
   const empty = convertCharacterToRuntimePackage({

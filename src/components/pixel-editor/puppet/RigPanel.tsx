@@ -622,16 +622,12 @@ function RigNodeProperties({
         </div>
       </div>
 
-      {/* 参数化外观（程序化运行时）：按槽位 × 服装集存 */}
-      {character && (
+      {/* 参数化外观（程序化运行时）：按槽位 × 服装集存；槽位键与换装同一
+          口径（node.slot.slotKey ?? nodeId）——slot 只由烘焙导入写入，
+          手建节点没有 slot 时以 nodeId 为键，两边读写一致 */}
+      {character && characterId && (
         <div className="pt-2 border-t border-[#1e1e3a]">
-          {node.slot?.slotKey && characterId ? (
-            <ParametricAppearanceEditor characterId={characterId} slotKey={node.slot.slotKey} />
-          ) : (
-            <p className="text-[10px] text-gray-500">
-              参数化外观：此节点尚无槽位（slot），先在换装中为它建立槽位后可启用。
-            </p>
-          )}
+          <ParametricAppearanceEditor characterId={characterId} slotKey={node.slot?.slotKey ?? node.id} />
         </div>
       )}
 

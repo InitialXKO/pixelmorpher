@@ -88,9 +88,11 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
     ?? character.costumeSets[0];
 
   // ---- 部件：任一服装集里带 parametric 的槽位 ----
+  // 槽位键与换装同一口径（slot.slotKey ?? nodeId）：手建节点没有 slot
+  // （slot 只由烘焙导入写入），其 pieces 以 nodeId 为键，必须能反查到节点。
   const slotNode = new Map<string, string>(); // slotKey → nodeId
   for (const node of Object.values(character.nodes)) {
-    if (node.slot?.slotKey) slotNode.set(node.slot.slotKey, node.id);
+    slotNode.set(node.slot?.slotKey ?? node.id, node.id);
   }
   const parts: RuntimePart[] = [];
   const parametricSlots = new Set<string>();
@@ -139,9 +141,10 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
   }
 
   // ---- 行为蓝图：nodeId → slotKey，逐图结构翻译 ----
+  // 同一回退口径：无 slot 的节点以 nodeId 为部件键；节点不存在才判死。
   const toSlot = (nodeId: string): string | null => {
     const n = character.nodes[nodeId];
-    return n?.slot?.slotKey ?? null;
+    return n ? (n.slot?.slotKey ?? nodeId) : null;
   };
   const behavior: ProcRuntimePackage['behavior'] = { graphs: {} };
   {
@@ -149,7 +152,7 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
     for (const [nodeId, graph] of Object.entries(character.behaviorGraphs ?? {})) {
       const slot = toSlot(nodeId);
       const nodeName = character.nodes[nodeId]?.name ?? nodeId;
-      if (!slot) { warnings.push(`行为图：节点 ${nodeName} 无槽位，未进包`); continue; }
+      if (!slot) { warnings.push(`行为图：节点 ${nodeName} 不存在，未进包`); continue; }
       const res = translateBehaviorGraph(graph, slot, `b${gi++}_`, (refId) => toSlot(refId));
       for (const w of res.warnings) warnings.push(`行为图「${nodeName}」：${w}`);
       if (!res.ok) { warnings.push(`行为图「${nodeName}」翻译失败：${res.reason}`); continue; }
@@ -166,7 +169,7 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
     let gi = 0;
     for (const nodeId of perf.maskNodeIds) {
       const slot = toSlot(nodeId);
-      if (!slot) { warnings.push(`表演「${perf.name}」：掩码节点 ${character.nodes[nodeId]?.name ?? nodeId} 无槽位`); continue; }
+      if (!slot) { warnings.push(`表演「${perf.name}」：掩码节点 ${character.nodes[nodeId]?.name ?? nodeId} 不存在`); continue; }
       mask.push(slot);
       const graph = perf.graphs[nodeId];
       if (!graph) { warnings.push(`表演「${perf.name}」：节点 ${character.nodes[nodeId]?.name ?? nodeId} 在掩码内但没有表演图`); continue; }
