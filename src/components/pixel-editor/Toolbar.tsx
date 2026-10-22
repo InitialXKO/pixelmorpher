@@ -371,6 +371,13 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
                 state.editMode !== 'sprite_edit') {
               autoEnterSpriteEdit('在精灵面板中选择一个精灵后再标注特征点');
             }
+            // 裁剪在 sprite_edit 里裁当前精灵（改尺寸/扩边），画布上仍裁项目画布：
+            // 有选中精灵时先自动进 sprite_edit，与画笔/选区同一联动。
+            if (val === 'crop' &&
+                state.editMode !== 'correction' &&
+                state.editMode !== 'sprite_edit') {
+              autoEnterSpriteEdit('在精灵面板中选择一个精灵后再裁剪它');
+            }
           }
         }}
         className="gap-0.5 mx-1"

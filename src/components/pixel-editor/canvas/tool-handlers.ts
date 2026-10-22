@@ -834,6 +834,23 @@ export const cropHandler: ToolHandler = {
     const rect = s.cropRectRef.current;
     const cropX = Math.min(rect.x1, rect.x2); const cropY = Math.min(rect.y1, rect.y2);
     const cropW = Math.abs(rect.x2 - rect.x1) + 1; const cropH = Math.abs(rect.y2 - rect.y1) + 1;
+    // sprite_edit：裁当前精灵——框选矩形换算到精灵局部坐标（精灵居中绘制），
+    // 框超出精灵边界 = 扩边补透明；走 resizeSprite（像素/plug/heightmap/
+    // landmarks 同步平移，与「调整尺寸」对话框同一口径）。其余模式维持裁画布。
+    if (s.editMode === 'sprite_edit' && s.selectedSpriteId && s.selectedPart) {
+      if (cropW >= 1 && cropH >= 1) {
+        const origin = spriteEditCanvasOrigin(s);
+        const lx0 = cropX - origin.x;
+        const ly0 = cropY - origin.y;
+        const newW = Math.max(1, Math.min(512, cropW));
+        const newH = Math.max(1, Math.min(512, cropH));
+        useProjectStore.getState().resizeSprite(s.selectedSpriteId, newW, newH, -lx0, -ly0);
+        s.markDirty();
+      }
+      s.cropStartRef.current = null; s.cropRectRef.current = null;
+      s.isDrawingRef.current = false;
+      return;
+    }
     if (cropW >= 2 && cropH >= 2) {
       const store = useProjectStore.getState(); const oldCenterX = s.canvasWidth / 2; const oldCenterY = s.canvasHeight / 2;
       const newCenterOffsetX = cropX + cropW / 2 - oldCenterX; const newCenterOffsetY = cropY + cropH / 2 - oldCenterY;
@@ -1807,7 +1824,7 @@ export function getToolHandler(
     case 'select': return nodeSelectHandler;
     case 'move': return nodeMoveHandler;
     case 'trajectory': return nodeTrajectoryHandler;
-    case 'crop': return cropHandler; // 评估中：新架构下意义不大，见报告
+    case 'crop': return cropHandler; // 双语义：sprite_edit 裁精灵（resizeSprite 口径），其余裁项目画布
     case 'lasso': return nodeLassoHandler;
     case 'magic_wand': return nodeMagicWandHandler;
     case 'smart_select': return smartSelectHandler;

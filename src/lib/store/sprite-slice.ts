@@ -162,6 +162,34 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
       const newPlugX = Math.max(0, Math.min(oldPlugX + cropOffsetX, newWidth - 1));
       const newPlugY = Math.max(0, Math.min(oldPlugY + cropOffsetY, newHeight - 1));
 
+      // heightmap 与像素同口径裁切（界外补 0）
+      const newHeightmap = sprite.heightmap
+        ? Array.from({ length: newHeight }, (_, y) =>
+            Array.from({ length: newWidth }, (_, x) => {
+              const srcX = x - cropOffsetX;
+              const srcY = y - cropOffsetY;
+              return srcY >= 0 && srcY < oldH && srcX >= 0 && srcX < oldW
+                ? sprite.heightmap![srcY]?.[srcX] ?? 0
+                : 0;
+            }))
+        : undefined;
+      // landmarks 是相对坐标：经绝对坐标平移后重新归一化，界外贴边
+      const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+      const remapLm = (p?: { x: number; y: number }) => p
+        ? {
+            x: clamp01((p.x * oldW + cropOffsetX) / newWidth),
+            y: clamp01((p.y * oldH + cropOffsetY) / newHeight),
+          }
+        : undefined;
+      const newLandmarks = sprite.landmarks
+        ? {
+            leftEye: remapLm(sprite.landmarks.leftEye),
+            rightEye: remapLm(sprite.landmarks.rightEye),
+            nose: remapLm(sprite.landmarks.nose),
+            mouth: remapLm(sprite.landmarks.mouth),
+          }
+        : undefined;
+
       return {
         sprites: {
           ...s.sprites,
@@ -171,6 +199,8 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
             height: newHeight,
             data: newData,
             plug: { x: pxToSub(newPlugX), y: pxToSub(newPlugY) },
+            ...(newHeightmap ? { heightmap: newHeightmap } : {}),
+            ...(newLandmarks ? { landmarks: newLandmarks } : {}),
           },
         },
       };
