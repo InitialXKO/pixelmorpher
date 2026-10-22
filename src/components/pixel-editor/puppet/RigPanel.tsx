@@ -310,6 +310,32 @@ function RigNodeProperties({
             />
           </div>
           <div>
+            <Label className="text-[9px] text-gray-600">缩放 X</Label>
+            <Input
+              type="number"
+              step="0.1"
+              value={node.transform.scaleX ?? 1}
+              onChange={(e) => onUpdate({ transform: { ...node.transform, scaleX: Number(e.target.value) || 1 } })}
+              className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
+              title="横向缩放（transform.scaleX）；纵向缩放是「拉伸」"
+            />
+          </div>
+          <div>
+            <Label className="text-[9px] text-gray-600">等比缩放</Label>
+            <Input
+              type="number"
+              step="0.1"
+              value={(node.transform.scaleX ?? 1) === node.transform.stretch ? node.transform.stretch : ''}
+              placeholder="混合"
+              onChange={(e) => {
+                const v = Number(e.target.value) || 1;
+                onUpdate({ transform: { ...node.transform, scaleX: v, stretch: v } });
+              }}
+              className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
+              title="同时写横向缩放与拉伸（纵向），保持等比"
+            />
+          </div>
+          <div>
             <Label className="text-[9px] text-gray-600">偏移 X</Label>
             <Input
               type="number"

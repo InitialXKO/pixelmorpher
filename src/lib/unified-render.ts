@@ -694,9 +694,9 @@ function interpolateTransformImpl(
       angle: kfAngle + bpT.rotation,
       tilt: kfTilt + (bpT.tilt ?? 0),
       stretch: kfStretch * bpT.scaleY,
-      scaleX: bpT.scaleX,
-      skewX: bpT.skewX,
-      skewY: bpT.skewY,
+      scaleX: (base.scaleX ?? 1) * bpT.scaleX,
+      skewX: (base.skewX ?? 0) + bpT.skewX,
+      skewY: (base.skewY ?? 0) + bpT.skewY,
       variantIndex: kfVariant,
     };
   }
@@ -717,6 +717,9 @@ function interpolateTransformImpl(
       angle: kfAngle + animTransform.rotation,
       tilt: kfTilt,
       stretch: kfStretch * ((animTransform.scaleX + animTransform.scaleY) / 2), // Average scale as stretch
+      scaleX: base.scaleX,
+      skewX: base.skewX,
+      skewY: base.skewY,
       variantIndex: kfVariant,
     };
   }
@@ -728,6 +731,9 @@ function interpolateTransformImpl(
     angle: kfAngle,
     tilt: kfTilt,
     stretch: kfStretch,
+    scaleX: base.scaleX,
+    skewX: base.skewX,
+    skewY: base.skewY,
     variantIndex: kfVariant,
   };
 }
