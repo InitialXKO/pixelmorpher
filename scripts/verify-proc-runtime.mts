@@ -836,6 +836,27 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   const bytes5 = glow5 ? Buffer.from(glow5.data, 'base64') : null;
   check('Q15 第 4 个选第 1 组：黄选区并入 R 通道、B 通道只剩蓝', !!bytes5
     && bytes5[3 * 3 + 0] === 255 && bytes5[3 * 3 + 2] === 0 && bytes5[2 * 3 + 2] === 255);
+
+  // 辉光形状：单像素选区 + 圈宽 2，各形状的印章衰减几何
+  const grid9 = Array.from({ length: 9 }, (_, y) =>
+    Array.from({ length: 9 }, (_, x) => (x === 4 && y === 4 ? '#2ea8ff' : '#111111'))) as never;
+  const shapeField = (shape: string, over: Record<string, unknown> = {}) => glowField({
+    ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: '#2ea8ff',
+    glowHalo: 2, glowShape: shape, ...over,
+  } as never, grid9);
+  const at = (f: { field: Float32Array } | null, x: number, y: number) => f?.field[y * 9 + x] ?? -1;
+  const nearV = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+  const fSq = shapeField('square');
+  check('Q16 方形（缺省）：对角与正交同圈同值', nearV(at(fSq, 6, 4), 1 / 3) && nearV(at(fSq, 6, 6), 1 / 3));
+  const fCi = shapeField('circle');
+  check('Q17 圆形：欧氏距离衰减、对角 2.83 超出圈宽归零', nearV(at(fCi, 6, 4), 1 / 3) && at(fCi, 6, 6) === 0 && nearV(at(fCi, 5, 5), 1 - Math.SQRT2 / 3));
+  const fSt = shapeField('star');
+  check('Q18 十字星形：轴向伸长（0.444）、对角收短归零', nearV(at(fSt, 6, 4), 1 - (2 / 1.2) / 3) && at(fSt, 5, 5) === 0);
+  const fFl = shapeField('flame');
+  check('Q19 焰形：向上伸长（3 格外仍有 0.45）、向下压短、向上收尖', nearV(at(fFl, 4, 1), 0.45) && at(fFl, 4, 6) === 0 && at(fFl, 6, 2) === 0);
+  const kernel = encodeGlowMask([[false, false, false], [true, true, true], [false, false, false]]);
+  const fCu = shapeField('custom', { glowHalo: 0, glowShapeKernel: kernel });
+  check('Q20 自定义印章：只沿所画轮廓盖（横向有、纵向无），圈宽为 0 也生效', at(fCu, 3, 4) === 1 && at(fCu, 5, 4) === 1 && at(fCu, 4, 3) === 0 && at(fCu, 4, 5) === 0);
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

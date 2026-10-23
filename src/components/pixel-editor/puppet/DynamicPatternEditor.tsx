@@ -198,9 +198,27 @@ export default function DynamicPatternEditor({
                   <span className="text-[9px] text-gray-500">第 {(glowRankOf(inst) ?? 3) + 1} 个</span>
                 </div>
               )}
+              {section === '发光' && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[9px] text-gray-500 w-24 shrink-0">辉光形状</span>
+                  <select
+                    value={np(inst).glowShape}
+                    onChange={(e) => patchParam(inst.id, 'glowShape', e.target.value)}
+                    className={`${selCls} flex-1`}
+                    title="柔光圈的形状：方形（一直以来的样子）/ 圆形 / 十字星形（横竖伸长）/ 焰形（向上伸长收尖）/ 自定义印章（自己画轮廓）"
+                  >
+                    <option value="square">方形</option>
+                    <option value="circle">圆形</option>
+                    <option value="star">十字星形</option>
+                    <option value="flame">焰形</option>
+                    <option value="custom">自定义印章</option>
+                  </select>
+                </div>
+              )}
               {DYNAMIC_PARAM_DEFS.filter((d) => d.section === section)
                 .filter((d) => !(section === '发光' && glowOverflowOf(inst)
                   && (d.key === 'glowStrength' || d.key === 'glowHz' || d.key === 'glowPhase')))
+                .filter((d) => !(section === '发光' && d.key === 'glowHalo' && np(inst).glowShape === 'custom'))
                 .map((d) => {
                 const v = np(inst)[d.key] as number;
                 return (
@@ -220,6 +238,12 @@ export default function DynamicPatternEditor({
           {np(inst).glowEnabled && (
             <GlowSelectionPanel
               grid={previewGrid}
+              params={np(inst)}
+              onPatch={(key, value) => patchParam(inst.id, key, value)}
+            />
+          )}
+          {np(inst).glowEnabled && np(inst).glowShape === 'custom' && (
+            <GlowShapeKernelPanel
               params={np(inst)}
               onPatch={(key, value) => patchParam(inst.id, key, value)}
             />
@@ -400,6 +424,112 @@ function GlowSelectionPanel({
       ) : (
         <p className="text-[9px] text-gray-600">当前槽位没有可用的代表图 — 先给这个槽位配上精灵或参数化外观，才能取色/标记。</p>
       )}
+    </div>
+  );
+}
+
+const KERNEL_SIZE = 15;
+
+/** 自定义印章的缺省轮廓：半径 5 的圆 */
+function defaultKernelGrid(): boolean[][] {
+  const c = Math.floor(KERNEL_SIZE / 2);
+  return Array.from({ length: KERNEL_SIZE }, (_, y) =>
+    Array.from({ length: KERNEL_SIZE }, (_, x) => (x - c) ** 2 + (y - c) ** 2 <= 25));
+}
+
+/**
+ * 自定义辉光印章面板：画柔光圈的轮廓（15×15，中心对准每个选区像素盖下去）。
+ * 亮度按轮廓内深度衰减（越靠中心越亮），与 glowStamp 的 custom 口径一致。
+ */
+function GlowShapeKernelPanel({
+  params,
+  onPatch,
+}: {
+  params: DynamicPatternParams;
+  onPatch: (key: keyof DynamicPatternParams, value: number | boolean | string | GlowMaskData) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const dragRef = useRef<{ value: boolean } | null>(null);
+  const cell = 12;
+  const boolGrid: boolean[][] = React.useMemo(() => {
+    const k = params.glowShapeKernel;
+    if (k && k.w === KERNEL_SIZE && k.h === KERNEL_SIZE) {
+      const cells = unpackMaskBits(k.bits, KERNEL_SIZE * KERNEL_SIZE);
+      return Array.from({ length: KERNEL_SIZE }, (_, y) =>
+        Array.from({ length: KERNEL_SIZE }, (_, x) => !!cells[y * KERNEL_SIZE + x]));
+    }
+    return defaultKernelGrid();
+  }, [params.glowShapeKernel]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const c = Math.floor(KERNEL_SIZE / 2);
+    for (let y = 0; y < KERNEL_SIZE; y++) {
+      for (let x = 0; x < KERNEL_SIZE; x++) {
+        ctx.fillStyle = boolGrid[y][x] ? 'rgba(255,170,60,0.85)' : (((x + y) % 2 === 0) ? '#1a1a2e' : '#141424');
+        ctx.fillRect(x * cell, y * cell, cell, cell);
+        if (x === c && y === c) {
+          ctx.fillStyle = 'rgba(255,255,255,0.9)';
+          ctx.fillRect(x * cell + cell / 2 - 1, y * cell + cell / 2 - 1, 2, 2);
+        }
+      }
+    }
+  }, [boolGrid, cell]);
+
+  const applyAt = (x: number, y: number, value: boolean) => {
+    const next = boolGrid.map((row) => [...row]);
+    next[y][x] = value;
+    onPatch('glowShapeKernel', encodeGlowMask(next));
+  };
+  const cellAt = (e: React.PointerEvent): { x: number; y: number } | null => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    const x = Math.floor((e.clientX - rect.left) / cell);
+    const y = Math.floor((e.clientY - rect.top) / cell);
+    return x >= 0 && y >= 0 && x < KERNEL_SIZE && y < KERNEL_SIZE ? { x, y } : null;
+  };
+
+  return (
+    <div className="rounded border border-[#1e1e3a] p-1.5 space-y-1">
+      <div className="flex items-center gap-1.5">
+        <span className="text-[9px] text-gray-500">辉光印章（中心点对准选区像素）</span>
+        <Button
+          size="sm" variant="ghost" className="h-5 text-[9px] px-1.5"
+          onClick={() => onPatch('glowShapeKernel', encodeGlowMask(defaultKernelGrid()))}
+        >
+          填成圆形
+        </Button>
+        <Button
+          size="sm" variant="ghost" className="h-5 text-[9px] px-1.5"
+          onClick={() => onPatch('glowShapeKernel', encodeGlowMask(Array.from({ length: KERNEL_SIZE }, () => Array(KERNEL_SIZE).fill(false))))}
+        >
+          清空
+        </Button>
+      </div>
+      <canvas
+        ref={canvasRef}
+        width={KERNEL_SIZE * cell}
+        height={KERNEL_SIZE * cell}
+        className="max-w-full border border-[#1e1e3a] rounded cursor-crosshair touch-none"
+        onPointerDown={(e) => {
+          const p = cellAt(e);
+          if (!p) return;
+          dragRef.current = { value: !boolGrid[p.y][p.x] };
+          applyAt(p.x, p.y, dragRef.current.value);
+          (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          if (!dragRef.current) return;
+          const p = cellAt(e);
+          if (p) applyAt(p.x, p.y, dragRef.current.value);
+        }}
+        onPointerUp={() => { dragRef.current = null; }}
+        onPointerLeave={() => { dragRef.current = null; }}
+      />
+      <p className="text-[9px] text-gray-600">按住拖动画轮廓；从已画处起拖 = 擦除。轮廓内越靠中心越亮，边缘淡出。</p>
     </div>
   );
 }

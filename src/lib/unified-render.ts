@@ -1856,6 +1856,7 @@ function buildGlowOverlay(
     ...contributors.flatMap((c) => [
       c.glowHalo, c.glowMaskSource, c.glowPick, c.glowTolerance,
       c.glowMask?.w ?? 0, c.glowMask?.h ?? 0, c.glowMask?.bits ?? '',
+      c.glowShape ?? 'square', c.glowShapeKernel?.w ?? 0, c.glowShapeKernel?.h ?? 0, c.glowShapeKernel?.bits ?? '',
     ]),
   ].join('|');
   const key = `${contentHash}|${sig}|${Math.round(pulse * 24)}|${mirror ? 'M' : ''}`;
