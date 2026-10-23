@@ -47,7 +47,8 @@ export interface DynamicPatternParams {
   glowPhase: number;        // 相位（周期数 0..1）
   glowHalo: number;         // 柔光圈宽（px，0 = 只亮选区内）
   glowMaskSource: GlowMaskSource; // 选区来源：取色 / 手动标记
-  glowPick: string;         // 取色选区：目标颜色（#rrggbb，与像素色精确匹配）
+  glowPick: string;         // 取色选区：目标颜色（#rrggbb）
+  glowTolerance: number;    // 取色容差 0..1（RGB 距离归一化；0 = 精确同色）
   glowMask?: GlowMaskData;  // 手动标记选区：位打包掩码（行优先，1 = 选中）
 }
 
@@ -84,7 +85,7 @@ export function defaultDynamicParams(): DynamicPatternParams {
     color: '#ffb46b', alpha: 0.5, maxParticles: 90,
     glowEnabled: false, glowColor: '#7dd7ff', glowStrength: 1, glowHz: 0.8,
     glowPhase: 0, glowHalo: 2, glowMaskSource: 'color', glowPick: '#2ea8ff',
-    glowMask: undefined,
+    glowTolerance: 0, glowMask: undefined,
   };
 }
 
@@ -207,7 +208,7 @@ function normHex(c: string): string {
 
 /**
  * 按选区来源算出部件网格上的发光选区（1 = 选中）。无选中返回 null。
- * 取色：像素颜色与 glowPick 精确相等（不分大小写；透明格不选）。
+ * 取色：与 glowPick 的 RGB 距离 ≤ glowTolerance（0 = 精确同色，不分大小写；透明格不选）。
  * 手动标记：读 glowMask 位打包，坐标对齐网格左上，越界丢弃。
  */
 export function glowMaskCells(
@@ -234,11 +235,34 @@ export function glowMaskCells(
   } else {
     const pick = normHex(params.glowPick || '');
     if (!pick.startsWith('#')) return null;
-    for (let y = 0; y < h; y++) {
-      const row = grid[y];
-      for (let x = 0; x < w; x++) {
-        const c = row[x];
-        if (c && normHex(c) === pick) { cells[y * w + x] = 1; any = true; }
+    const tol = Math.max(0, Math.min(1, params.glowTolerance || 0));
+    if (tol <= 0) {
+      for (let y = 0; y < h; y++) {
+        const row = grid[y];
+        for (let x = 0; x < w; x++) {
+          const c = row[x];
+          if (c && normHex(c) === pick) { cells[y * w + x] = 1; any = true; }
+        }
+      }
+    } else {
+      // 容差选色：RGB 距离（归一化到 0..1）≤ 容差即选中——渐变美术下
+      // 一次选住整片同色系；透明格永不选中。
+      const pr = parseInt(pick.slice(1, 3), 16);
+      const pg = parseInt(pick.slice(3, 5), 16);
+      const pb = parseInt(pick.slice(5, 7), 16);
+      const maxD = tol * 441.673; // sqrt(3)*255
+      for (let y = 0; y < h; y++) {
+        const row = grid[y];
+        for (let x = 0; x < w; x++) {
+          const c = row[x];
+          if (!c) continue;
+          const m = /^#([0-9a-fA-F]{6})$/.exec(c.trim());
+          if (!m) continue;
+          const dr = parseInt(m[1].slice(0, 2), 16) - pr;
+          const dg = parseInt(m[1].slice(2, 4), 16) - pg;
+          const db = parseInt(m[1].slice(4, 6), 16) - pb;
+          if (Math.sqrt(dr * dr + dg * dg + db * db) <= maxD) { cells[y * w + x] = 1; any = true; }
+        }
       }
     }
   }
@@ -407,4 +431,5 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'glowHz', label: '呼吸频率（次/秒）', section: '发光', min: 0, max: 3, step: 0.05 },
   { key: 'glowPhase', label: '呼吸相位', section: '发光', min: 0, max: 1, step: 0.01 },
   { key: 'glowHalo', label: '柔光圈宽（px）', section: '发光', min: 0, max: 6, step: 1 },
+  { key: 'glowTolerance', label: '取色容差（0=精确同色）', section: '发光', min: 0, max: 0.6, step: 0.01 },
 ];

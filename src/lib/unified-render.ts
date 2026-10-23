@@ -1850,7 +1850,7 @@ function buildGlowOverlay(
   if (pulse <= 0.01 || params.glowStrength <= 0) return null;
   const sig = [
     params.glowColor, params.glowStrength, params.glowHalo, params.glowMaskSource,
-    params.glowPick, params.glowMask?.w ?? 0, params.glowMask?.h ?? 0, params.glowMask?.bits ?? '',
+    params.glowPick, params.glowTolerance, params.glowMask?.w ?? 0, params.glowMask?.h ?? 0, params.glowMask?.bits ?? '',
   ].join('|');
   const key = `${contentHash}|${sig}|${Math.round(pulse * 24)}|${mirror ? 'M' : ''}`;
   const hit = glowOverlayCache.get(key);

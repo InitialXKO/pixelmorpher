@@ -776,6 +776,11 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   const pkg2 = convertCharacterToRuntimePackage(ch2);
   check('Q8 选区为空时不进包且 warning 点名', !pkg2.parts.find((p) => p.key === 'gem')?.glow
     && pkg2.warnings.some((x) => x.includes('发光段') && x.includes('选区为空')));
+  const tolGrid = [['#2ea8ff', '#2fa0f0', '#ff0000', null]] as never;
+  const tolCells = glowMaskCells({ ...colorParams, glowTolerance: 0.05 }, tolGrid);
+  check('Q10 容差 0.05 选住近色（距离约 0.039）、不选远色', !!tolCells && tolCells[0] === 1 && tolCells[1] === 1 && tolCells[2] === 0 && tolCells[3] === 0);
+  const exactCells = glowMaskCells({ ...colorParams, glowTolerance: 0 }, tolGrid);
+  check('Q11 容差 0 仍是精确同色', !!exactCells && exactCells[0] === 1 && exactCells[1] === 0);
   const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
   const html = buildRuntimeHtml(pkg);
   check('Q9 模板含发光着色接线（uGlow/applyGlow/iGlowA）', html.includes('uGlow') && html.includes('applyGlow') && html.includes('iGlowA'));
