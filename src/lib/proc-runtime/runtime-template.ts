@@ -395,7 +395,7 @@ function spriteTileOf(sg, mirrored) {
   for (let j = 0; j < h; j++) {
     for (let i = 0; i < w; i++) {
       const sx = mirrored ? sg.w - 1 - (i - M) : i - M;
-      const sy = sg.h - 1 - (j - M);
+      const sy = j - M;
       if (sx < 0 || sy < 0 || sx >= sg.w || sy >= sg.h) continue;
       const c = sg.data[sy] && sg.data[sy][sx];
       if (c === null || c === undefined || c === '') continue;
@@ -405,7 +405,7 @@ function spriteTileOf(sg, mirrored) {
   return {
     w: w, h: h,
     cx: M + (mirrored ? sg.w - 1 - sg.plug[0] : sg.plug[0]),
-    cy: M + (sg.h - 1 - sg.plug[1]),
+    cy: M + sg.plug[1],
     data: data,
   };
 }
@@ -588,17 +588,19 @@ function ensureAtlas(gl, variant, costumeName) {
     for (let j = 0; j < tile.h; j++) {
       data.set(tile.data.subarray(j * tile.w * 4, (j + 1) * tile.w * 4), ((ay + j) * 256 + ax) * 4);
     }
-    // 底图（overlay 底色 / 精灵直贴图）：与档位瓦片同格对齐
-    // （行进场翻转 + 镜像列翻转，同 shadeTileOverSprite 口径）
+    // 底图（overlay 底色 / 精灵直贴图）：与档位瓦片同格对齐（镜像时列翻转）。
+    // 行序须随瓦片族：精灵瓦片是产品行序（自上而下）→ 同序写入；
+    // 参数化栅格瓦片是烘焙行序（自下而上）→ 翻转写入（维持既有对齐）。
     const resolved = entries[i][2], mirrored = entries[i][3];
     const bs = resolved.composite === 'overlay' ? resolved.baseSprite
       : resolved.composite === 'sprite' ? entries[i][4] : null;
     if (bs) {
       const M = 2 + (resolved.halo || 0) + (entries[i][6] || 0);
+      const flipY = resolved.composite !== 'sprite';
       for (let j = 0; j < tile.h; j++) {
         for (let ii = 0; ii < tile.w; ii++) {
           const sx = mirrored ? bs.w - 1 - (ii - M) : ii - M;
-          const sy = bs.h - 1 - (j - M);
+          const sy = flipY ? bs.h - 1 - (j - M) : j - M;
           if (sx < 0 || sy < 0 || sx >= bs.w || sy >= bs.h) continue;
           const c = bs.data[sy] && bs.data[sy][sx];
           const rgb = c ? parseHexRt(c) : null;
@@ -608,20 +610,21 @@ function ensureAtlas(gl, variant, costumeName) {
         }
       }
     }
-    // 发光场：与瓦片同格对齐（R = 权重）。映射与底图同式：代表图行翻转 +
-    // 镜像列翻转；space=tile 的代表图与瓦片同尺寸（边距已含，M=0），
-    // space=sprite 的代表图是精灵原图（边距 M = 2 + halo）。
+    // 发光场：与瓦片同格对齐（R = 权重）。行序同底图口径（精灵瓦片
+    // 同序、参数化栅格瓦片翻转），镜像列翻转；space=tile 的代表图与
+    // 瓦片同尺寸（边距已含，M=0），space=sprite 的代表图是精灵原图。
     const ge = entries[i][5];
     if (ge) {
       const M = (ge.space === 'tile' ? 0 : 2 + (resolved.halo || 0)) + (entries[i][6] || 0);
       const gw = ge.w, gh = ge.h;
       const pX = ge.padX || 0, pY = ge.padY || 0;
       const gd = decodeGlowData(ge.data);
+      const flipY = !entries[i][4];
       for (let j = 0; j < tile.h; j++) {
         for (let ii = 0; ii < tile.w; ii++) {
           const u = ii - M, v = j - M;
           const sx = mirrored ? gw - 1 - u - pX : u + pX;
-          const sy = gh - 1 - v - pY;
+          const sy = flipY ? gh - 1 - v - pY : v + pY;
           if (sx < 0 || sy < 0 || sx >= gw || sy >= gh) continue;
           const src3 = (sy * gw + sx) * 3;
           const v0 = gd[src3] || 0, v1 = gd[src3 + 1] || 0, v2 = gd[src3 + 2] || 0;
