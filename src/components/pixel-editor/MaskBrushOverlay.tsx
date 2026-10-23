@@ -11,6 +11,7 @@ import {
   subToPx,
 } from '@/lib/unified-types';
 import { computeWorldTransforms, geometryDirectionFromToggle } from '@/lib/unified-render';
+import { alphaPlaneFromImageData, computeFloodRegion } from '@/lib/mask-region';
 
 // ============================================================
 // MaskBrushOverlay - 遮罩模式专用笔刷
@@ -27,6 +28,12 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   const barrierCanvasRef = useRef<HTMLCanvasElement>(null);
   const isDrawing = useRef(false);
   const lastBarrierPos = useRef<{ x: number; y: number } | null>(null);
+  // 防溢出：画布上是否已有线（无线的笔画不付洪泛成本）；本笔画的洪泛可达
+  // 区域（落笔时按种子算一次，逐像素查位图——取代旧的逐像素射线判定，
+  // 射线模型的三处漏见 lib/mask-region 头注）；上个盖章点（笔画插值用）
+  const hasBarrierRef = useRef(false);
+  const strokeRegionRef = useRef<Uint8Array | null>(null);
+  const lastStampPos = useRef<{ x: number; y: number } | null>(null);
   const [brushSize, setBrushSize] = useState(8);
   const [extractedSprite, setExtractedSprite] = useState<Sprite | null>(null);
   const [lastUpdateInfo, setLastUpdateInfo] = useState<string | null>(null);
@@ -62,6 +69,8 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       bCanvas.height = canvasHeight;
       bCanvas.getContext('2d')!.clearRect(0, 0, canvasWidth, canvasHeight);
     }
+    hasBarrierRef.current = false;
+    strokeRegionRef.current = null;
   }, [canvasWidth, canvasHeight, maskNodeId]);
 
   const getPos = (e: React.MouseEvent) => {
@@ -118,26 +127,17 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   };
 
 
-  // 检查从 (cx,cy) 到 (x,y) 的射线是否穿过防溢出线
-  const rayCrossesBarrier = (
-    barrierData: ImageData,
-    cx: number, cy: number,
-    x: number, y: number
-  ): boolean => {
-    const dx = x - cx;
-    const dy = y - cy;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist < 0.5) return false;
-    const steps = Math.ceil(dist);
-    for (let i = 1; i < steps; i++) {
-      const t = i / steps;
-      const px = Math.round(cx + dx * t);
-      const py = Math.round(cy + dy * t);
-      if (px < 0 || py < 0 || px >= canvasWidth || py >= canvasHeight) continue;
-      const idx = (py * canvasWidth + px) * 4;
-      if (barrierData.data[idx + 3] > 10) return true;
-    }
-    return false;
+  // 本笔画的洪泛区域：落笔时以落点为种子对防溢出线画布算一次。
+  // 无线时返回 null（不约束、零成本）。种子落在墙上 → 全 0 位图（本笔画
+  // 无可涂区，抬笔点到线内侧再画）。
+  const computeStrokeRegion = (sx: number, sy: number): Uint8Array | null => {
+    if (!hasBarrierRef.current) return null;
+    const bCanvas = barrierCanvasRef.current;
+    if (!bCanvas) return null;
+    const bCtx = bCanvas.getContext('2d', { willReadFrequently: true })!;
+    const img = bCtx.getImageData(0, 0, canvasWidth, canvasHeight);
+    const alpha = alphaPlaneFromImageData(img.data, canvasWidth, canvasHeight);
+    return computeFloodRegion(alpha, canvasWidth, canvasHeight, sx, sy);
   };
 
   const drawAt = (x: number, y: number) => {
@@ -164,18 +164,12 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       }
       bCtx.stroke();
       lastBarrierPos.current = { x, y };
+      hasBarrierRef.current = true;
       return;
     }
 
     const erase = paintMode === 'erase';
     const radius = brushSize / 2;
-
-    // 获取防溢出线数据（用于约束）
-    let barrierData: ImageData | null = null;
-    const bCanvas = barrierCanvasRef.current;
-    if (bCanvas) {
-      barrierData = bCanvas.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, canvasWidth, canvasHeight);
-    }
 
     if (erase) {
       // 擦除：不受防溢出线约束
@@ -187,9 +181,12 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       return;
     }
 
-    // 绘制：逐像素检查防溢出线
+    // 绘制：逐像素查本笔画的洪泛区域位图。笔刷中心在哪不影响判定——
+    // 圆跨在墙两侧时只涂区域内那部分，严丝合缝贴到墙边（无死区），
+    // 快拖时盖章点跳多远都漏不出去（旧射线模型在此三处皆漏）。
     ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = 'rgba(255,0,0,0.5)';
+    const region = strokeRegionRef.current;
     const x0 = Math.max(0, Math.floor(x - radius));
     const x1 = Math.min(canvasWidth - 1, Math.ceil(x + radius));
     const y0 = Math.max(0, Math.floor(y - radius));
@@ -199,8 +196,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
         const dx = px - x;
         const dy = py - y;
         if (dx * dx + dy * dy > radius * radius) continue;
-        // 防溢出：射线穿过线条则跳过（只保留笔刷中心一侧）
-        if (barrierData && rayCrossesBarrier(barrierData, x, y, px, py)) continue;
+        if (region && !region[py * canvasWidth + px]) continue;
         ctx.fillRect(px, py, 1, 1);
       }
     }
@@ -215,6 +211,12 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
     isDrawing.current = true;
     if (paintMode === 'barrier') {
       lastBarrierPos.current = null; // 新笔画
+    } else {
+      // 落笔即定本笔画的可达区域（绘制模式）；擦除不设区域
+      if (paintMode === 'draw') {
+        strokeRegionRef.current = computeStrokeRegion(x, y);
+      }
+      lastStampPos.current = { x, y };
     }
     drawAt(x, y);
   };
@@ -230,17 +232,39 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       });
     }
     if (!isDrawing.current) return;
-    drawAt(x, y);
+    if (paintMode === 'barrier') {
+      drawAt(x, y); // 线条靠 lineTo 自带连续性
+      return;
+    }
+    // 绘制/擦除：相邻采样点间插值盖章，快拖不留点状断口
+    const last = lastStampPos.current;
+    if (last) {
+      const dx = x - last.x;
+      const dy = y - last.y;
+      const dist = Math.hypot(dx, dy);
+      const step = Math.max(1, brushSize / 4);
+      const n = Math.max(1, Math.ceil(dist / step));
+      for (let i = 1; i <= n; i++) {
+        drawAt(Math.round(last.x + (dx * i) / n), Math.round(last.y + (dy * i) / n));
+      }
+    } else {
+      drawAt(x, y);
+    }
+    lastStampPos.current = { x, y };
   };
 
   const handleUp = () => {
     isDrawing.current = false;
     lastBarrierPos.current = null;
+    lastStampPos.current = null;
+    strokeRegionRef.current = null;
   };
 
   const handleLeave = () => {
     isDrawing.current = false;
     lastBarrierPos.current = null;
+    lastStampPos.current = null;
+    strokeRegionRef.current = null;
     setCursorPos(null);
   };
 
@@ -548,6 +572,8 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
             onClick={() => {
               const bCanvas = barrierCanvasRef.current;
               if (bCanvas) bCanvas.getContext('2d')!.clearRect(0, 0, canvasWidth, canvasHeight);
+              hasBarrierRef.current = false;
+              strokeRegionRef.current = null;
             }}
           >
             清除线条
