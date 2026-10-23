@@ -9,8 +9,7 @@ import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import type { PixelGrid } from '@/lib/types';
 import { initSAM, isSAMReady, setSAMImage } from '@/lib/sam';
 import { inpaintPixels } from '@/lib/inpainting';
-import { counterRotateNodeOffset } from '@/lib/sprite-transform';
-import type { DirectionIndex } from '@/lib/unified-types';
+import type { DirectionIndex, NodeTransform, NodeTracks } from '@/lib/unified-types';
 
 // ============================================================
 // RefAssemblyWizard - 参考图装配向导
@@ -48,53 +47,23 @@ const BUILT_IN_REFS = [
 ];
 
 export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) {
-  // 恢复模板节点到原始 transform
-  const restoreTemplateNodes = () => {
+  // 恢复模板姿态快照（transform + tracks 整表写回）。
+  // 对位拖动经操控管线写的是当前帧的姿态关键帧（node.tracks），不写 transform——
+  // 早先只快照/恢复 transform 且把差值存进无人消费的 nodeOffsets，等于对位成果
+  // 既存不进服装、又以关键帧形式污染模板轨道。现行口径：对位姿态只是抠图的
+  // 取样条件，抠图时按节点世界角把精灵转正（见 MaskBrushOverlay），姿态本身
+  // 不落盘；快照在选模板时拍下，关闭/完成/换模板时整表恢复，模板不留痕迹。
+  const restoreTemplatePose = () => {
+    const snap = poseSnapshotRef.current;
+    if (!snap) return;
+    poseSnapshotRef.current = null;
     const ps = useProjectStore.getState();
-    const char = Object.values(ps.unifiedCharacters ?? {}).find((c: any) => c.id === selectedCharacterId);
-    if (!char) return;
-    const skeletonId = Object.keys(ps.unifiedCharacters ?? {}).find((k) => ps.unifiedCharacters[k]?.id === selectedCharacterId);
-    if (!skeletonId) return;
-    originalTransformsRef.current.forEach((orig, nodeId) => {
-      const nd = ps.unifiedCharacters[skeletonId]?.nodes[nodeId];
-      ps.updateUnifiedNode(skeletonId, nodeId, {
-        transform: {
-          ...(nd?.transform ?? { x: 0, y: 0, angle: 0, stretch: 1, variantIndex: 0 }),
-          x: orig.offsetX,
-          y: orig.offsetY,
-          angle: orig.angle,
-        },
+    snap.nodes.forEach((entry, nodeId) => {
+      ps.updateUnifiedNode(snap.charKey, nodeId, {
+        transform: structuredClone(entry.transform),
+        tracks: structuredClone(entry.tracks),
       });
     });
-    originalTransformsRef.current.clear();
-  };
-
-  // 计算对位偏移差值，存进服装，恢复模板节点
-  // 在离开 align 步骤时调用
-  const saveAlignmentToCostume = () => {
-    if (!workingCostumeId || !selectedCharacterId) return;
-    const ps = useProjectStore.getState();
-    const char = Object.values(ps.unifiedCharacters ?? {}).find((c: any) => c.id === selectedCharacterId);
-    if (!char) return;
-    const skeleton = char;
-    if (!skeleton) return;
-
-    const nodeOffsets: Record<string, { x: number; y: number; angle: number }> = {};
-    const originals = originalTransformsRef.current;
-    for (const n of Object.values(skeleton.nodes)) {
-      const orig = originals.get(n.id);
-      if (!orig) continue;
-      const dx = (n.transform?.x ?? 0) - orig.offsetX;
-      const dy = (n.transform?.y ?? 0) - orig.offsetY;
-      const da = (n.transform?.angle ?? 0) - orig.angle;
-      // 只存非零偏移
-      if (dx !== 0 || dy !== 0 || da !== 0) {
-        nodeOffsets[n.id] = { x: dx, y: dy, angle: da };
-      }
-    }
-    ps.updateUnifiedCostumeSet(selectedCharacterId, workingCostumeId, { nodeOffsets });
-    // 恢复模板节点
-    restoreTemplateNodes();
   };
 
   // 内部关闭：恢复模板，删工作服装（取消时），清参考图
@@ -104,7 +73,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
       ps.removeUnifiedCostumeSet(selectedCharacterId, workingCostumeId);
     }
     setWorkingCostumeIdState(null);
-    restoreTemplateNodes();
+    restoreTemplatePose();
     // 清参考图（否则第二次进入时残留旧 URL）
     const oldUrl = useEditorStore.getState().referenceImageUrl;
     if (oldUrl && oldUrl.startsWith('blob:')) {
@@ -237,8 +206,11 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   };
   // 工作服装 ID（选模板时创建）
   const [workingCostumeId, setWorkingCostumeIdState] = useState<string | null>(null);
-  // 原始节点 transform（选模板时保存，用于计算偏移差值和恢复模板）
-  const originalTransformsRef = useRef<Map<string, { offsetX: number; offsetY: number; angle: number }>>(new Map());
+  // 模板姿态快照（选模板时拍下：每节点 transform + tracks 深拷贝 + 角色字典键）
+  const poseSnapshotRef = useRef<{
+    charKey: string;
+    nodes: Map<string, { transform: NodeTransform; tracks: NodeTracks }>;
+  } | null>(null);
 
   // 向导直接使用选中的模板（不克隆）
   const effectiveCharacterId = selectedCharacterId;
@@ -260,53 +232,47 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   // 抠图目标节点：直接用画布全局选中的，不再用向导内部的 targetNodeIndex
   const targetNode = (activeSkeleton && selectedNodeId ? activeSkeleton.nodes[selectedNodeId] : null) ?? null;
 
-  // 选中模板：保存原始 transform，创建工作服装，直接进入对位
+  // 选中模板：拍姿态快照，创建工作服装，直接进入对位
   // 不需要"开始对位"按钮：选即开始，直接拖
-  // 不克隆：对位偏移最终存进服装的 nodeOffsets，模板节点在关闭时恢复
+  // 不克隆：对位姿态只是抠图取样条件，快照在关闭/完成/换模板时整表恢复
   useEffect(() => {
     if (!selectedCharacterId) return;
     const ps = useProjectStore.getState();
-    const sc = Object.values(ps.unifiedCharacters ?? {}).find((c: any) => c.id === selectedCharacterId);
-    if (!sc) return;
+    const charKey = Object.keys(ps.unifiedCharacters ?? {}).find((k) => ps.unifiedCharacters[k]?.id === selectedCharacterId);
+    const sc = charKey ? ps.unifiedCharacters[charKey] : undefined;
+    if (!sc || !charKey) return;
     const skeleton = sc;
-    if (!skeleton) return;
 
     // 如果已有工作服装且对应当前模板，跳过（避免重复）
     if (workingCostumeId) {
       const existing = sc.costumeSets.find((cs) => cs.id === workingCostumeId);
       if (existing) return;
-      // 否则是重选模板：恢复旧模板节点，删旧服装
-      restoreTemplateNodes();
-      ps.removeUnifiedCostumeSet(selectedCharacterId, workingCostumeId);
+      // 否则是重选模板：恢复旧模板姿态，删旧服装（旧服装挂旧角色名下，用快照里的键）
+      const oldCharKey = poseSnapshotRef.current?.charKey;
+      restoreTemplatePose();
+      if (oldCharKey) ps.removeUnifiedCostumeSet(oldCharKey, workingCostumeId);
     }
 
-    // 保存原始 transform
-    originalTransformsRef.current.clear();
-    for (const n of Object.values(skeleton.nodes)) {
-      originalTransformsRef.current.set(n.id, {
-        offsetX: n.transform?.x ?? 0,
-        offsetY: n.transform?.y ?? 0,
-        angle: n.transform?.angle ?? 0,
-      });
-    }
+    // 拍姿态快照（transform + tracks 深拷贝）
+    poseSnapshotRef.current = {
+      charKey,
+      nodes: new Map(
+        Object.values(skeleton.nodes).map((n) => [
+          n.id,
+          { transform: structuredClone(n.transform), tracks: structuredClone(n.tracks) },
+        ]),
+      ),
+    };
 
     // 创建工作服装
     const costume = ps.addUnifiedCostumeSet(selectedCharacterId, `${sc.name}（装配）`);
     setWorkingCostumeIdState(costume.id);
     // 设为当前服装（渲染时应用）
-    const charKey203 = Object.keys(ps.unifiedCharacters ?? {}).find((k) => ps.unifiedCharacters[k]?.id === selectedCharacterId);
-    if (charKey203) ps.updateUnifiedCharacter(charKey203, { activeCostumeSetId: costume.id });
+    ps.updateUnifiedCharacter(charKey, { activeCostumeSetId: costume.id });
     // 进入操控（画布只显示该角色）
     usePuppetSessionStore.getState().enterPerform(selectedCharacterId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCharacterId]);
-
-  // 监听对位完成事件，跳到 mask 步骤
-  useEffect(() => {
-    const handler = () => setStep('mask');
-    window.addEventListener('ref-assembly:align-done', handler);
-    return () => window.removeEventListener('ref-assembly:align-done', handler);
-  }, []);
 
   // 监听遮罩完成事件，更新进度并自动推进到下一肢体
   useEffect(() => {
@@ -415,13 +381,11 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     setProcessedNodes((m) => new Map(m).set(targetNode.id, mode));
   };
 
-  // 甲1：旋转已抠精灵并反调对位偏移角（nodeOffsets.angle -= θ），合成记录不变
+  // 旋转已抠精灵（绕锚点）：抠图时已按对位姿态转正，此处是事后手动再转，
+  // 直接改精灵本体即可——不再有 nodeOffsets 反调（该通道已随对位落盘一并退役）
   const handleRotateExtracted = (theta: number) => {
-    if (!targetNode || !targetSpriteId || !selectedCharacterId || !workingCostumeId) return;
-    const ps = useProjectStore.getState();
-    ps.transformSprite(targetSpriteId, { kind: 'rotate', angleDeg: theta });
-    const next = counterRotateNodeOffset(workingCostume?.nodeOffsets, targetNode.id, theta);
-    ps.updateUnifiedCostumeSet(selectedCharacterId, workingCostumeId, { nodeOffsets: next });
+    if (!targetNode || !targetSpriteId) return;
+    useProjectStore.getState().transformSprite(targetSpriteId, { kind: 'rotate', angleDeg: theta });
   };
 
   // 父节点变化时，重置 socket 选择
@@ -695,26 +659,33 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   模板角色「{selectedCharacter.name}」已覆盖在底图上，
                   直接在画布上拖动角色肢体（拖动旋转，Shift+拖动平移）对准底图。
                 </p>
-                {/* 方向选择：遮罩只应用于此方向 */}
+                {/* 方向选择：直接读写角色当前方向（根节点 variantIndex），
+                    遮罩保存时按同一口径落进该方向的精灵槽位 */}
                 <div>
                   <label className="text-xs text-gray-500 block mb-1">对位方向（遮罩将应用于此方向）</label>
                   <select
-                    value={'S'}
-                    onChange={() => {}}
+                    value={wizardDirIndex}
+                    onChange={(e) => {
+                      if (!selectedCharacterId) return;
+                      useProjectStore.getState().setUnifiedDirection(
+                        selectedCharacterId,
+                        Number(e.target.value) as DirectionIndex,
+                      );
+                    }}
                     className="w-full h-8 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
                   >
-                    <option value="S">南 (S) - 正面</option>
-                    <option value="N">北 (N) - 背面</option>
-                    <option value="E">东 (E) - 右侧</option>
-                    <option value="W">西 (W) - 左侧</option>
-                    <option value="NE">东北 (NE)</option>
-                    <option value="SE">东南 (SE)</option>
-                    <option value="SW">西南 (SW)</option>
-                    <option value="NW">西北 (NW)</option>
+                    <option value={6}>南 (S) - 正面</option>
+                    <option value={2}>北 (N) - 背面</option>
+                    <option value={0}>东 (E) - 右侧</option>
+                    <option value={4}>西 (W) - 左侧</option>
+                    <option value={1}>东北 (NE)</option>
+                    <option value={7}>东南 (SE)</option>
+                    <option value={5}>西南 (SW)</option>
+                    <option value={3}>西北 (NW)</option>
                   </select>
                 </div>
                 <p className="text-[11px] text-gray-400">
-                  已为「{selectedCharacter?.name}」创建新服装，直接在画布上拖动肢体对位（拖动旋转，Shift+拖动平移）。对位偏移将存入服装。
+                  已为「{selectedCharacter?.name}」创建新服装，直接在画布上拖动肢体对位（拖动旋转，Shift+拖动平移）。对位姿态只是抠图的取样条件：抠图时精灵按对位角度自动转正、锚点落在关节上；离开向导后模板姿态自动恢复，不留痕迹。
                 </p>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-500">底图不透明度</span>
@@ -937,10 +908,10 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                     </Button>
                   </div>
                 </div>
-                {/* 旋转已抠精灵（甲1）：同步反调对位偏移角，装配合成记录不变 */}
+                {/* 旋转已抠精灵（绕锚点）：事后手动再转，直接改精灵本体 */}
                 {targetSpriteId && (
                   <div className="p-2 rounded bg-white/5 border border-white/10 space-y-2">
-                    <div className="text-[10px] text-gray-500">旋转已抠精灵（绕锚点，同步反调对位偏移）</div>
+                    <div className="text-[10px] text-gray-500">旋转已抠精灵（绕锚点）</div>
                     <div className="flex items-center gap-1">
                       <button
                         onClick={() => handleRotateExtracted(90)}
@@ -1089,13 +1060,11 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             }
             onClick={() => {
               if (stepIndex >= 0 && stepIndex < STEPS.length - 1) {
-                // 离开 align 步骤：保存对位偏移到服装，恢复模板
-                if (step === 'align') {
-                  saveAlignmentToCostume();
-                }
+                // 对位姿态跨 align/mask 两步保留（抠图取样要用），不中途恢复
                 setStep(STEPS[stepIndex + 1].id);
               } else if (stepIndex === STEPS.length - 1) {
-                // 完成：保留工作服装，只关向导
+                // 完成：保留工作服装，恢复模板姿态，关向导
+                restoreTemplatePose();
                 setWorkingCostumeIdState(null);
                 resetRefWizardStep();
                 onClose();

@@ -7,8 +7,10 @@ import PivotEditor from './puppet/PivotEditor';
 import type { Sprite } from '@/lib/unified-types';
 import {
   createDefaultCostumePiece,
-  puppetDirectionToIndex,
+  projectToView,
+  subToPx,
 } from '@/lib/unified-types';
+import { computeWorldTransforms, geometryDirectionFromToggle } from '@/lib/unified-render';
 
 // ============================================================
 // MaskBrushOverlay - 遮罩模式专用笔刷
@@ -283,16 +285,53 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       const w = maxX - minX + 1;
       const h = maxY - minY + 1;
       const projectStore = useProjectStore.getState();
-      // 找节点名用于 Part 命名（新模型：从 unifiedCharacters 查）
+      // 找到拥有该节点的角色（新模型：unifiedCharacters）
       const unifiedCharacters = projectStore.unifiedCharacters ?? {};
-      let nodeName = '未知';
-      for (const ch of Object.values(unifiedCharacters)) {
-        const node = ch.nodes[maskNodeId];
-        if (node) { nodeName = node.name; break; }
+      let ownerId: string | null = null;
+      let ownerChar: (typeof unifiedCharacters)[string] | null = null;
+      for (const [id, ch] of Object.entries(unifiedCharacters)) {
+        if (ch.nodes[maskNodeId]) {
+          ownerId = id;
+          ownerChar = ch;
+          break;
+        }
       }
+      const nodeName = ownerChar?.nodes[maskNodeId]?.name ?? '未知';
+
+      // 抠图转正口径：取节点在当前对位姿态下的世界变换（与画布渲染同一条
+      // computeWorldTransforms + projectToView 口径）。plug 直接落在关节的画布
+      // 位置上，采样后按 −世界角把精灵转回节点局部规范朝向——装配渲染时节点
+      // 转回对位姿态即与参考图重合，任何其他姿态下精灵与骨骼的相对朝向恒定，
+      // 不再需要 nodeOffsets 之类的事后角度补偿。
+      let nodeCanvas: { x: number; y: number; angle: number } | null = null;
+      if (ownerChar) {
+        const wts = computeWorldTransforms(
+          ownerChar,
+          projectStore.currentFrame,
+          canvasWidth,
+          canvasHeight,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D),
+        );
+        const wt = wts.get(maskNodeId);
+        if (wt) {
+          const rootNodeForDir = ownerChar.nodes[ownerChar.rootNodeId];
+          const currentDirection = (rootNodeForDir?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+          const proj = projectToView(wt.worldX, wt.worldY, wt.worldZ, currentDirection);
+          nodeCanvas = {
+            x: subToPx(proj.canvasX) + canvasWidth / 2,
+            y: subToPx(proj.canvasY) + canvasHeight / 2,
+            angle: wt.worldAngle,
+          };
+        }
+      }
+
       const sprite = projectStore.addSprite(`遮罩_${nodeName}`, w, h, {
-        plugX: Math.floor(w / 2),
-        plugY: Math.floor(h / 2),
+        plugX: nodeCanvas ? nodeCanvas.x - minX : Math.floor(w / 2),
+        plugY: nodeCanvas ? nodeCanvas.y - minY : Math.floor(h / 2),
       });
 
       const pixels: string[][] = [];
@@ -321,20 +360,20 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       projectStore.setSpritePixels(sprite.id!, pixels);
       console.log('[MaskBrush] 已生成 Sprite:', sprite.id);
 
+      // 转正：绕 plug（关节）按 −世界角旋转精灵内容（transformSprite 绕锚点烘焙，
+      // plug 随旋转更新）。角度归一到 (−180, 180]，近零跳过（轴对齐采样即规范朝向）。
+      if (nodeCanvas) {
+        let theta = nodeCanvas.angle % 360;
+        if (theta > 180) theta -= 360;
+        if (theta <= -180) theta += 360;
+        if (Math.abs(theta) >= 0.5) {
+          projectStore.transformSprite(sprite.id!, { kind: 'rotate', angleDeg: -theta });
+        }
+      }
+
       // 关联到节点：只写当前激活服装的 pieces（新模型），不改模板节点的 sprite
       // （模板是共享的，服装才是向导产物）
       if (maskNodeId) {
-        const unifiedChars = projectStore.unifiedCharacters ?? {};
-        // 找到拥有该节点的角色（新模型：unifiedCharacters）
-        let ownerId: string | null = null;
-        let ownerChar: (typeof unifiedChars)[string] | null = null;
-        for (const [id, ch] of Object.entries(unifiedChars)) {
-          if (ch.nodes[maskNodeId]) {
-            ownerId = id;
-            ownerChar = ch;
-            break;
-          }
-        }
         if (ownerChar && ownerId) {
           // 只写当前激活服装，只写当前方向（对位时选择的方向），不写四个方向
           // 方向：从角色根节点的 transform.variantIndex 读取（新模型）

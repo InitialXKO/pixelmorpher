@@ -5,20 +5,19 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useProjectStore } from '@/lib/store';
 import type { Sprite } from '@/lib/unified-types';
+import { pxToSub, subToPx } from '@/lib/unified-types';
 import RepairPanel from './RepairPanel';
 
 // ============================================================
 // PivotEditor - 轴心编辑器：拖动 + 坐标输入（直接编辑全局 Sprite）
+// plug 单位换算必须用 unified-types 的统一口径（pxToSub = px×16、
+// subToPx = sub÷16）；本文件早先自带一份写反的换算，点选位置会被写成 1/16。
 // ============================================================
 
 interface Props {
   sprite: Sprite;
   onClose: () => void;
 }
-
-// sub-pixel (1/16px) ↔ px
-const subToPx = (v: number) => v * 16;
-const pxToSub = (v: number) => v / 16;
 
 export default function PivotEditor({ sprite, onClose }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -74,11 +73,15 @@ export default function PivotEditor({ sprite, onClose }: Props) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const scale = canvas.width / sprite.width;
-    const x = Math.round((e.clientX - rect.left) / scale);
-    const y = Math.round((e.clientY - rect.top) / scale);
-    setPivotX(Math.max(0, Math.min(sprite.width - 1, x)));
-    setPivotY(Math.max(0, Math.min(sprite.height - 1, y)));
+    // clientX 偏移是 CSS 像素，必须除以 CSS 尺寸对应的缩放；
+    // 早先用 canvas.width（后备分辨率）换算，与 w-full 拉伸后的显示尺寸
+    // 不一致，点击位置会被系统性放大/缩小。
+    const scaleX = rect.width / sprite.width;
+    const scaleY = rect.height / sprite.height;
+    const x = Math.round((e.clientX - rect.left) / scaleX);
+    const y = Math.round((e.clientY - rect.top) / scaleY);
+    setPivotX(Math.max(0, Math.min(sprite.width, x)));
+    setPivotY(Math.max(0, Math.min(sprite.height, y)));
   };
 
   const handleUp = () => {
@@ -109,7 +112,7 @@ export default function PivotEditor({ sprite, onClose }: Props) {
             <Input
               type="number"
               value={pivotX}
-              onChange={(e) => setPivotX(Math.max(0, Math.min(sprite.width - 1, Number(e.target.value))))}
+              onChange={(e) => setPivotX(Math.max(0, Math.min(sprite.width, Number(e.target.value))))}
               className="h-7 text-xs"
             />
           </div>
@@ -118,7 +121,7 @@ export default function PivotEditor({ sprite, onClose }: Props) {
             <Input
               type="number"
               value={pivotY}
-              onChange={(e) => setPivotY(Math.max(0, Math.min(sprite.height - 1, Number(e.target.value))))}
+              onChange={(e) => setPivotY(Math.max(0, Math.min(sprite.height, Number(e.target.value))))}
               className="h-7 text-xs"
             />
           </div>
