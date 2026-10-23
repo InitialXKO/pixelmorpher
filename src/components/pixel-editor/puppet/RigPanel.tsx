@@ -21,6 +21,7 @@ import { NodeTreeItemWrapper } from './NodeTree';
 import { collectSubtreeIds, deleteNodeSubtree, findParentNode, ikChainMembership, reparentNode } from '@/lib/node-actions';
 import PuppetModifierPanel from './PuppetModifierPanel';
 import ParametricAppearanceEditor from './ParametricAppearanceEditor';
+import DynamicPatternEditor from './DynamicPatternEditor';
 import GlobalBlueprintEditor from './GlobalBlueprintEditor';
 import CharacterBlueprintEditor from './CharacterBlueprintEditor';
 import StateBlueprintEditor from './StateBlueprintEditor';
@@ -475,6 +476,18 @@ function RigNodeProperties({
           onChange={(e) => onUpdate({ zIndex: Number(e.target.value) || 0 })}
           className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a] mt-1"
         />
+      </div>
+
+      {/* 动态模式（节点挂载：角色固有，不随换装变；与服装件挂载按效果位合并） */}
+      <div>
+        <Label className="text-[10px] text-gray-500 uppercase tracking-wider">动态效果（节点）</Label>
+        <div className="mt-1">
+          <DynamicPatternEditor
+            instances={node.dynamicPatterns ?? []}
+            onChange={(next) => onUpdate({ dynamicPatterns: next })}
+            hint="挂在节点上，换装不变；服装件同效果位可替换或压制这里的实例。"
+          />
+        </div>
       </div>
 
       {/* 方向排序标记 */}

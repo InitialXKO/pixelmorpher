@@ -74,6 +74,8 @@ import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from 
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
+import { resolveDynamicPatterns, dynamicDeformAt } from './dynamic-patterns';
+import { simulateDynamicParticles } from './dynamic-pattern-sim';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
 import { evaluateBlueprint, collectDynamicStrokes, evaluateCostumeState } from './blueprint/eval';
@@ -1482,13 +1484,28 @@ export function generateRenderPlan(
       const hr = yw.x * tR.cos + yw.z * tR.sin;
       foreshorten = Math.min(1, Math.hypot(hr, yw.y));
     }
+    // 动态模式（双挂载解析）：形变段乘进本指令的 stretch/scaleX——
+    // 只动本节点精灵、不沿层级传播；粒子由执行端按 dynamicPatterns 绘制
+    const dynResolved = resolveDynamicPatterns(
+      node.dynamicPatterns,
+      activeCostumeSet?.pieces[node.slot?.slotKey ?? node.id]?.dynamicPatterns,
+    );
+    let dynSx = 1, dynSy = 1;
+    if (dynResolved.length > 0) {
+      const tSec = frame / frameRate;
+      for (const r of dynResolved) {
+        const d = dynamicDeformAt(r.instance.params, tSec);
+        dynSx *= d.sx;
+        dynSy *= d.sy;
+      }
+    }
     nodeInstructions.push({
       nodeId,
       sprite: effectiveSprite,
       worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel)) as SubPixel,
       worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel)) as SubPixel,
       angle: worldTf.worldAngle,
-      stretch: worldTf.worldStretch,
+      stretch: dynResolved.length > 0 ? worldTf.worldStretch * dynSy : worldTf.worldStretch,
       foreshorten,
       variantIndex: worldTf.variantIndex,
       rotationStrategy: strategy,
@@ -1518,7 +1535,8 @@ export function generateRenderPlan(
         return node.faceTurn;
       })(),
       // t.scaleX 修复：蓝图 scaleX 独立 plumbing，不再平均吃掉
-      scaleX: worldTf.scaleX,
+      scaleX: dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX,
+      dynamicPatterns: dynResolved.length > 0 ? dynResolved : undefined,
       // 蓝图 skew：有倾斜量时才填，避免空数组污染
       skews: (worldTf.skewX || worldTf.skewY) ? [{ skewX: worldTf.skewX ?? 0, skewY: worldTf.skewY ?? 0 }] : undefined,
       // STEP2 合并：plumbing 蓝图给 renderNodeSprite，替代手拼像素链
@@ -1639,6 +1657,37 @@ const PIXEL_MOD_TYPES: ModifierType[] = [
   'color_replace', 'outline', 'dither', 'pixel_displace',
   'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip', 'pixel_edit',
 ];
+
+/** 动态模式粒子绘制（本地坐标：原点 = 枢轴，与精灵同一变换空间） */
+function drawDynamicParticles(
+  ctx: CanvasRenderingContext2D,
+  instruction: NodeRenderInstruction,
+  layer: 'back' | 'front',
+): void {
+  const list = instruction.dynamicPatterns;
+  if (!list || list.length === 0) return;
+  for (const resolved of list) {
+    const particles = simulateDynamicParticles(
+      resolved, instruction.sprite, instruction.frame, instruction.frameRate,
+      instruction.mirror, layer, instruction.nodeId,
+    );
+    for (const p of particles) {
+      if (p.size <= 0 || p.alpha <= 0) continue;
+      const r = Math.max(0.5, p.size / 2);
+      const m = /^#([0-9a-fA-F]{6})$/.exec(p.color);
+      const rgb = m
+        ? `${parseInt(m[1].slice(0, 2), 16)},${parseInt(m[1].slice(2, 4), 16)},${parseInt(m[1].slice(4, 6), 16)}`
+        : '255,180,107';
+      const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+      grad.addColorStop(0, `rgba(${rgb},${Math.min(1, p.alpha)})`);
+      grad.addColorStop(1, `rgba(${rgb},0)`);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
 
 /**
  * Render a single node sprite to the canvas.
@@ -2002,6 +2051,11 @@ function renderNodeSprite(
     );
   }
 
+  // 动态模式粒子（身后层）：与身后效果同空间，精灵之前绘制
+  if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
+    drawDynamicParticles(ctx, instruction, 'back');
+  }
+
   // ========================================================================
   // STEP 4b: Draw the main sprite
   // In the transformed coordinate space, the sprite's top-left is at (-pivotX, -pivotY)
@@ -2053,13 +2107,16 @@ function renderNodeSprite(
     const topEffectMods = previewQuality === 'low' ? [] : modifiers.filter(m =>
       m.enabled && m.type === 'particle'
     );
-    if (topEffectMods.length > 0) {
+    if (topEffectMods.length > 0 || (previewQuality !== 'low' && instruction.dynamicPatterns?.length)) {
       ctx.save();
       ctx.translate(Math.round(drawPivotX), Math.round(drawPivotY));
       ctx.rotate((angle * Math.PI) / 180);
       ctx.scale(scaleX, effStretch);
       for (const { skewX, skewY } of skews) {
         ctx.transform(1, Math.tan((skewY * Math.PI) / 180), Math.tan((skewX * Math.PI) / 180), 1, 0, 0);
+      }
+      if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
+        drawDynamicParticles(ctx, instruction, 'front');
       }
       for (const mod of topEffectMods) {
         renderParticleEffect(ctx, nodeId, sprite, mod as any, frame);
@@ -2069,6 +2126,11 @@ function renderNodeSprite(
   } else {
     // Native Canvas2D or no rotation: draw in the already-transformed space
     ctx.drawImage(workingCanvas, -pivotX, -pivotY);
+
+    // 动态模式粒子（身前层）
+    if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
+      drawDynamicParticles(ctx, instruction, 'front');
+    }
 
     // ========================================================================
     // STEP 4c: Render "on top" effects (after the part itself)

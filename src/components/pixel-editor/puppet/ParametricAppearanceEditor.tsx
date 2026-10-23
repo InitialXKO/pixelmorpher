@@ -26,6 +26,8 @@ import {
   findPatternTemplate, isUserPattern, deriveParamDefs, type UserPatternTemplate,
 } from '@/lib/proc-runtime/pattern-library';
 import { resolvePieceSprite } from '@/lib/sprite-resolve';
+import DynamicPatternEditor from './DynamicPatternEditor';
+import type { DynamicPatternInstance } from '@/lib/dynamic-patterns';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -73,6 +75,17 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
       pieces: { ...cs.pieces, [slotKey]: { ...p, parametric: next } },
     });
   };
+  const writeDynamic = (next: DynamicPatternInstance[]) => {
+    const store = useProjectStore.getState();
+    const ch = store.unifiedCharacters[characterId];
+    const cs = ch?.costumeSets.find((x) => x.id === ch.activeCostumeSetId) ?? ch?.costumeSets[0];
+    if (!ch || !cs) return;
+    store.pushUndo('动态效果（服装件）', 'dynamic');
+    const p = cs.pieces[slotKey] ?? createDefaultCostumePiece(slotKey);
+    store.updateUnifiedCostumeSet(characterId, cs.id, {
+      pieces: { ...cs.pieces, [slotKey]: { ...p, dynamicPatterns: next } },
+    });
+  };
   const patch = (p: Partial<ParametricAppearance>) => { if (app) write({ ...app, ...p }); };
   const patchShape = (p: Partial<ParametricAppearance['shape']>) => { if (app) patch({ shape: { ...app.shape, ...p } }); };
 
@@ -90,6 +103,16 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
       <p className="mt-0.5 text-[9px] text-gray-600">
         按服装集存（当前：{set.name}）；槽位 {slotKey}。主画布参数化优先，改动即时上画布；同时供程序化预览/导出。
       </p>
+      <div className="mt-2">
+        <Label className="text-[10px] text-gray-500 uppercase tracking-wider">动态效果（服装件）</Label>
+        <div className="mt-1">
+          <DynamicPatternEditor
+            instances={piece?.dynamicPatterns ?? []}
+            onChange={writeDynamic}
+            hint="挂在当前服装集的这个槽位上，换集即换；与节点挂载按效果位合并：同位替换、关闭压制、不同位叠加。"
+          />
+        </div>
+      </div>
       {app && (
         <div className="mt-1.5 space-y-1.5">
           <div>

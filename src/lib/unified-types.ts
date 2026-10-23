@@ -735,6 +735,11 @@ export interface Node {
   // When present, renderer interpolates x/y from trajectory instead of tracks.
   trajectory?: { frame: number; x: number; y: number }[];
 
+  // ---- 动态模式（节点挂载：角色固有效果，不随换装变）----
+  // 与服装件的同名字段双挂载：按效果位合并，服装件同位替换、
+  // 同位关闭压制（见 dynamic-patterns 的 resolveDynamicPatterns）。
+  dynamicPatterns?: import('./dynamic-patterns').DynamicPatternInstance[];
+
   // ---- Face Turn (Spine-style pseudo-3D head turning) ----
   // 用单张静态图 + 网格变形模拟转头/转身，不用画多角度差分。
   // yaw: -1（左）~ 1（右）；pitch: -1（上）~ 1（下）
@@ -987,6 +992,8 @@ export interface CostumePiece {
   crossSections: CrossSection[];                // Cross section definitions for disc gen
   /** 参数化外观（可选）：该槽在此服装集下的程序化形式，见 ParametricAppearance */
   parametric?: ParametricAppearance;
+  /** 动态模式（服装件挂载：随本服装集生效，与节点挂载双挂载合并） */
+  dynamicPatterns?: import('./dynamic-patterns').DynamicPatternInstance[];
 }
 
 /**
@@ -1368,6 +1375,8 @@ export interface NodeRenderInstruction {
   costumes?: CostumeSet[];
   /** Costume slot key for costume node (node.slot.slotKey) */
   costumeSlot?: string;
+  /** 动态模式（双挂载解析后）：形变已乘进 stretch/scaleX，粒子由执行端按此绘制 */
+  dynamicPatterns?: import('./dynamic-patterns').ResolvedDynamicPattern[];
   /** Shared sprite table for SpriteRef resolution (character.sprites) */
   sprites?: Record<string, Sprite>;
   /** 蒙皮快照弯曲参数（attachment.skinningSnapshot 生效时填充，renderNodeSprite 用） */
