@@ -89,6 +89,8 @@ export default function PuppetPanel() {
   const handleSelectNodeWithSync = (nodeId: string | null) => {
     setSelectedNodeId(nodeId);
     setSelectedNodeId(nodeId);
+    // 节点树点选同样进入锁定（与画布中键命中同一状态）
+    useEditorStore.getState().setNodeLockId(nodeId);
   };
 
   // M1: rig 阶段纬度写入 store，渲染端读的是 character.latitude

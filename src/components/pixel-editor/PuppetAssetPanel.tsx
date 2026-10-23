@@ -12,6 +12,8 @@ import {
   Eye,
   EyeOff,
   Image,
+  ImagePlus,
+  Crosshair,
   Film,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
@@ -31,7 +33,8 @@ import { pxToSub, subToPx, type Socket } from '@/lib/unified-types';
 import type {
   PuppetDirection,
 } from '@/lib/types';
-import type { Character, Node } from '@/lib/unified-types';
+import type { Character, Node, Sprite } from '@/lib/unified-types';
+import ResizePreviewDialog from './ResizePreviewDialog';
 import PuppetCreationWizard from './PuppetCreationWizard';
 import RefAssemblyWizard from './puppet/RefAssemblyWizard';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -90,6 +93,77 @@ function RowRenameInput({ initial, onCommit }: { initial: string; onCommit: (nam
   );
 }
 
+// ---- 精灵属性区（自退役的 PartPanel/SpritePanel 平移：锚点编辑/自动枢轴/调整尺寸） ----
+function SpritePropertiesSection({ sprite }: { sprite: Sprite }) {
+  const updateSprite = useProjectStore((s) => s.updateSprite);
+  const autoEstimatePlug = useProjectStore((s) => s.autoEstimatePlug);
+  const [resizeOpen, setResizeOpen] = useState(false);
+  const spriteId = sprite.id ?? '';
+  const plugXPx = sprite.plug ? subToPx(sprite.plug.x) : 0;
+  const plugYPx = sprite.plug ? subToPx(sprite.plug.y) : 0;
+  const handlePlugChange = (axis: 'x' | 'y', value: string) => {
+    const num = parseInt(value, 10);
+    if (isNaN(num)) return;
+    const clamped = Math.max(0, num);
+    const cur = useProjectStore.getState().sprites[spriteId]?.plug ?? { x: 0, y: 0 };
+    updateSprite(spriteId, {
+      plug: axis === 'x' ? { x: pxToSub(clamped), y: cur.y } : { x: cur.x, y: pxToSub(clamped) },
+    });
+  };
+  return (
+    <div className="space-y-2 px-1 py-1.5">
+      <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+        精灵属性 · {sprite.name ?? '未命名精灵'}
+      </h4>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <Label className="text-[10px] text-gray-500">锚点 X</Label>
+          <Input
+            type="number"
+            min={0}
+            max={sprite.width - 1}
+            value={plugXPx}
+            onChange={(e) => handlePlugChange('x', e.target.value)}
+            className="h-7 text-xs px-2"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[10px] text-gray-500">锚点 Y</Label>
+          <Input
+            type="number"
+            min={0}
+            max={sprite.height - 1}
+            value={plugYPx}
+            onChange={(e) => handlePlugChange('y', e.target.value)}
+            className="h-7 text-xs px-2"
+          />
+        </div>
+      </div>
+      <div className="flex items-center gap-2 text-[10px] text-gray-500">
+        <span>{sprite.width} x {sprite.height} px</span>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-5 px-1.5 text-[10px] gap-0.5 ml-auto"
+          onClick={() => setResizeOpen(true)}
+        >
+          调整尺寸
+        </Button>
+      </div>
+      <ResizePreviewDialog open={resizeOpen} onOpenChange={setResizeOpen} sprite={sprite} />
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-6 w-full text-[10px] gap-1"
+        onClick={() => autoEstimatePlug(spriteId)}
+      >
+        <Crosshair className="size-3" />
+        自动枢轴
+      </Button>
+    </div>
+  );
+}
+
 export default function PuppetAssetPanel() {
   // ---- New Character model ----
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
@@ -129,6 +203,34 @@ export default function PuppetAssetPanel() {
     setNewSpriteW(32);
     setNewSpriteH(32);
     if (sprite.id) useEditorStore.getState().enterSpriteEditMode(sprite.id);
+  };
+  // 属性区跟随编辑器选中精灵（点行进编辑时同步写入 selectedSpriteId）
+  const selectedSpriteId = useEditorStore((s) => s.selectedSpriteId);
+  const selectedSprite = selectedSpriteId ? (sprites[selectedSpriteId] ?? null) : null;
+  // 导入 PNG（单张进精灵表，自退役的 PartPanel 平移）
+  const spriteFileRef = React.useRef<HTMLInputElement>(null);
+  const handleImportSpritePNG = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new window.Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, img.width, img.height);
+        const name = file.name.replace(/\.[^/.]+$/, '') || '导入图像';
+        const sprite = useProjectStore.getState().importSpriteFromImage(name, imageData);
+        if (sprite.id) useEditorStore.getState().enterSpriteEditMode(sprite.id);
+      };
+      img.src = ev.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
   };
   const refWizardOpen = useEditorStore((s) => s.refWizardOpen);
   const setRefWizardOpen = useEditorStore((s) => s.setRefWizardOpen);
@@ -714,6 +816,8 @@ export default function PuppetAssetPanel() {
                         selectedNodeId={selectedNodeId}
                         onSelect={(id) => {
                           setSelectedNodeId(id);
+                          // 节点树点选同样进入锁定（与画布中键命中同一状态）
+                          useEditorStore.getState().setNodeLockId(id);
                         }}
                         allNodes={nodes}
                         menuHandlers={nodeMenuHandlers}
@@ -839,11 +943,26 @@ export default function PuppetAssetPanel() {
               <button
                 title="新建精灵"
                 aria-label="新建精灵"
-                className="p-1 mr-1 text-gray-500 hover:text-gray-200 hover:bg-white/5 rounded transition-colors"
+                className="p-1 text-gray-500 hover:text-gray-200 hover:bg-white/5 rounded transition-colors"
                 onClick={() => setNewSpriteOpen(true)}
               >
                 <Plus className="size-3" />
               </button>
+              <button
+                title="导入 PNG"
+                aria-label="导入 PNG"
+                className="p-1 mr-1 text-gray-500 hover:text-gray-200 hover:bg-white/5 rounded transition-colors"
+                onClick={() => spriteFileRef.current?.click()}
+              >
+                <ImagePlus className="size-3" />
+              </button>
+              <input
+                ref={spriteFileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={handleImportSpritePNG}
+              />
             </div>
 
             {sectionExpanded.sprites && (
@@ -905,6 +1024,14 @@ export default function PuppetAssetPanel() {
                       <ContextMenuItem onSelect={() => setRenaming({ kind: 'sprite', id: sprite.id! })}>
                         重命名
                       </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => {
+                          const dup = useProjectStore.getState().duplicateSprite(sprite.id!);
+                          if (dup?.id) useEditorStore.getState().enterSpriteEditMode(dup.id);
+                        }}
+                      >
+                        复制精灵
+                      </ContextMenuItem>
                       <ContextMenuSeparator />
                       <ContextMenuItem
                         className="text-red-400 focus:text-red-300"
@@ -922,6 +1049,11 @@ export default function PuppetAssetPanel() {
                     </ContextMenuContent>
                   </ContextMenu>
                 ))}
+              </div>
+            )}
+            {sectionExpanded.sprites && selectedSprite && (
+              <div className="border-t border-white/5 mt-0.5">
+                <SpritePropertiesSection sprite={selectedSprite} />
               </div>
             )}
           </div>

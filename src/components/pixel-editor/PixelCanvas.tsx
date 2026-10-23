@@ -493,6 +493,15 @@ export default function PixelCanvas() {
   } | null>(null);
   const [menuHasSelection, setMenuHasSelection] = useState(false);
   const showGrid = useEditorStore((x) => x.showGrid);
+  const nodeLockId = useEditorStore((x) => x.nodeLockId);
+  const lockedNodeName = useProjectStore((x) => {
+    if (!nodeLockId) return null;
+    for (const ch of Object.values(x.unifiedCharacters)) {
+      const n = ch.nodes[nodeLockId];
+      if (n) return n.name;
+    }
+    return null;
+  });
   const nodeTurn3D = useEditorStore((x) => x.nodeTurn3D);
   const activePuppetSkeletonId = useEditorStore((x) => x.activePuppetSkeletonId);
   const showPuppetSkeleton = useEditorStore((x) => x.showPuppetSkeleton);
@@ -597,6 +606,13 @@ export default function PixelCanvas() {
       {!performArmed && (
         <div className="absolute top-3 right-3 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.4)', backdropFilter: 'blur(4px)' }}>
           未武装
+        </div>
+      )}
+
+      {/* Node lock badge */}
+      {nodeLockId && lockedNodeName && (
+        <div className="absolute top-3 left-3 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide pointer-events-none z-50" style={{ background: 'rgba(168, 85, 247, 0.18)', color: '#c084fc', border: '1px solid rgba(168, 85, 247, 0.4)', backdropFilter: 'blur(4px)' }}>
+          🔒 已锁定节点：{lockedNodeName}（空白处单击解除 · 中键点击循环切换）
         </div>
       )}
 

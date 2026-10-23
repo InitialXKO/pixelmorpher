@@ -169,10 +169,27 @@ export function writePuppetPoseKeyframe(
   });
 }
 
+/** 锁定节点解析：editor.nodeLockId 有效（节点仍存在）时返回其命中三元组，
+ *  节点类 handler 在锁定期间以它为准、不再另行命中其他节点。 */
+export function lockedPuppetHit(s: CanvasState): { node: import('@/lib/unified-types').Node; character: import('@/lib/unified-types').Character; clipId: string | null } | null {
+  const lockId = s.editorStore.getState().nodeLockId;
+  if (!lockId) return null;
+  const project = useProjectStore.getState();
+  for (const character of Object.values(project.unifiedCharacters)) {
+    const node = character.nodes[lockId];
+    if (node) {
+      const clip = project.animationClips.find((c) => c.puppetCharacterId === character.id);
+      return { node, character, clipId: clip?.id ?? null };
+    }
+  }
+  return null;
+}
+
 /** IK 目标手柄仅做可视化，不可拖拽（拖精灵本身，目标自动跟随） */
 export const puppetHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
-    const hit = s.findPuppetNodeAtPixel(px, py);
+    const lockHit = lockedPuppetHit(s);
+    const hit = lockHit ?? s.findPuppetNodeAtPixel(px, py);
     const project = useProjectStore.getState();
     if (!hit) {
       project.setSelectedNodeId(null);
@@ -1243,6 +1260,8 @@ function getNodeSpriteCanvasBounds(
 
 export const nodeSelectHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
+    // 锁定期间左键不改选（空白解锁由交互层在 mouseup 统一判）
+    if (lockedPuppetHit(s)) return;
     const hit = s.findPuppetNodeAtPixel(px, py);
     const project = useProjectStore.getState();
     if (!hit) {
@@ -1263,7 +1282,7 @@ export const nodeSelectHandler: ToolHandler = {
 
 export const nodeMoveHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
-    const hit = s.findPuppetNodeAtPixel(px, py);
+    const hit = lockedPuppetHit(s) ?? s.findPuppetNodeAtPixel(px, py);
     if (!hit) return;
     const { node, character } = hit;
     const project = useProjectStore.getState();

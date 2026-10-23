@@ -1737,6 +1737,8 @@ export interface EditorState {
   // ---- Concrete Puppet ----
   showPuppetSkeleton: boolean;
   activePuppetSkeletonId: string | null;
+  /** 节点锁定（中键循环命中/节点树点选置位；空白单击解除） */
+  nodeLockId: string | null;
   // ---- Hitbox editor ----
   selectedHitboxId: string | null;
   // ---- Palette constraint drawing ----
