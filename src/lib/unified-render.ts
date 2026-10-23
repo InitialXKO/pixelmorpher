@@ -74,7 +74,7 @@ import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from 
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
-import { resolveDynamicPatterns, dynamicDeformAt } from './dynamic-patterns';
+import { resolveDynamicPatterns, dynamicDeformAt, glowField, glowPulseAt, type DynamicPatternParams } from './dynamic-patterns';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
@@ -1830,6 +1830,88 @@ function drawDynamicParticles(
   }
 }
 
+/** 发光叠加层缓存：键 = 像素内容哈希 + 发光参数签名 + 脉冲量化步 + 镜像位 */
+const glowOverlayCache = new Map<string, { canvas: HTMLCanvasElement; pad: number } | null>();
+
+/**
+ * 动态模式发光段：为一个实例构建发光叠加层（未镜像空间，pad = 柔光圈外扩）。
+ * 选区内：原色提亮并染向辉光色；柔光圈：辉光色淡出。脉冲决定整体明暗。
+ * 返回 null = 本帧无可见发光（未启用 / 脉冲近 0 / 选区为空）。
+ */
+function buildGlowOverlay(
+  pixels: PixelGrid,
+  params: DynamicPatternParams,
+  tSec: number,
+  contentHash: string,
+  mirror: boolean,
+): { canvas: HTMLCanvasElement; pad: number; key: string } | null {
+  if (!params.glowEnabled) return null;
+  const pulse = glowPulseAt(params, tSec);
+  if (pulse <= 0.01 || params.glowStrength <= 0) return null;
+  const sig = [
+    params.glowColor, params.glowStrength, params.glowHalo, params.glowMaskSource,
+    params.glowPick, params.glowMask?.w ?? 0, params.glowMask?.h ?? 0, params.glowMask?.bits ?? '',
+  ].join('|');
+  const key = `${contentHash}|${sig}|${Math.round(pulse * 24)}|${mirror ? 'M' : ''}`;
+  const hit = glowOverlayCache.get(key);
+  if (hit !== undefined) return hit ? { ...hit, key } : null;
+  let result: { canvas: HTMLCanvasElement; pad: number } | null = null;
+  const gf = glowField(params, pixels);
+  if (gf) {
+    const pad = Math.max(0, Math.min(8, Math.round(params.glowHalo || 0)));
+    const W = gf.w + pad * 2;
+    const H = gf.h + pad * 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const c2d = canvas.getContext('2d')!;
+    const img = c2d.createImageData(W, H);
+    const glowRgbObj = hexToRgb(params.glowColor);
+    const glowRgb: [number, number, number] = glowRgbObj
+      ? [glowRgbObj.r, glowRgbObj.g, glowRgbObj.b]
+      : [125, 215, 255];
+    const k = Math.min(1, pulse * params.glowStrength);
+    for (let y = 0; y < gf.h; y++) {
+      for (let x = 0; x < gf.w; x++) {
+        const f = gf.field[y * gf.w + x];
+        if (f <= 0) continue;
+        const o = ((y + pad) * W + (x + pad)) * 4;
+        if (f >= 0.999) {
+          const origObj = hexToRgb(pixels[y][x] ?? '');
+          const orig: [number, number, number] = origObj
+            ? [origObj.r, origObj.g, origObj.b]
+            : glowRgb;
+          img.data[o] = Math.min(255, Math.round(orig[0] + (255 - orig[0]) * 0.35 * k + glowRgb[0] * 0.25 * k));
+          img.data[o + 1] = Math.min(255, Math.round(orig[1] + (255 - orig[1]) * 0.35 * k + glowRgb[1] * 0.25 * k));
+          img.data[o + 2] = Math.min(255, Math.round(orig[2] + (255 - orig[2]) * 0.35 * k + glowRgb[2] * 0.25 * k));
+          img.data[o + 3] = Math.round(235 * k);
+        } else {
+          img.data[o] = glowRgb[0];
+          img.data[o + 1] = glowRgb[1];
+          img.data[o + 2] = glowRgb[2];
+          img.data[o + 3] = Math.round(200 * f * k);
+        }
+      }
+    }
+    c2d.putImageData(img, 0, 0);
+    let out = canvas;
+    if (mirror) {
+      const flip = document.createElement('canvas');
+      flip.width = W;
+      flip.height = H;
+      const fctx = flip.getContext('2d')!;
+      fctx.translate(W, 0);
+      fctx.scale(-1, 1);
+      fctx.drawImage(canvas, 0, 0);
+      out = flip;
+    }
+    result = { canvas: out, pad };
+  }
+  if (glowOverlayCache.size > 128) glowOverlayCache.clear();
+  glowOverlayCache.set(key, result);
+  return result ? { ...result, key } : null;
+}
+
 /**
  * Render a single node sprite to the canvas.
  * Implements the unified rendering flow:
@@ -2112,6 +2194,8 @@ function renderNodeSprite(
   let pivotX = (sprite.plug?.x !== undefined ? subToPx(sprite.plug.x) * scaleFactor : spriteCanvas.width / 2) + modOffsetX;
   const pivotY = (sprite.plug?.y !== undefined ? subToPx(sprite.plug.y) * scaleFactor : spriteCanvas.height / 2) + modOffsetY;
 
+  const pivotXRaw = pivotX; // 未镜像口径的枢轴（发光叠加层按此对位）
+
   // Step 3: Apply horizontal flip if mirrored (STATIC mirror: flip BEFORE rotation)
   let workingCanvas: HTMLCanvasElement = spriteCanvas;
   if (mirror) {
@@ -2130,6 +2214,15 @@ function renderNodeSprite(
   // STEP 4: Set up canvas transform for this sprite's world position
   // (translate + rotate + scale around pivot), then render effects + sprite
   // ========================================================================
+
+  // 动态模式发光段：叠加层与精灵同像素空间（scaleFactor ≡ 1 前提，与绘制口径一致）
+  const glowOverlays = previewQuality === 'low' || !instruction.dynamicPatterns?.length
+    ? []
+    : instruction.dynamicPatterns
+      .map((r) => buildGlowOverlay(effectivePixels, r.instance.params, frame / frameRate, pixelContentHash, mirror))
+      .filter((x): x is { canvas: HTMLCanvasElement; pad: number; key: string } => !!x);
+  const glowPivotX = (g: { canvas: HTMLCanvasElement; pad: number }) =>
+    (mirror ? g.canvas.width - (pivotXRaw + g.pad) : pivotXRaw + g.pad);
 
   // Compute the draw position (where the pivot lands on canvas)
   const drawPivotX = subToPx(worldX);
@@ -2243,6 +2336,25 @@ function renderNodeSprite(
       releaseCanvas(result.canvas);
     }
 
+    // 动态模式发光段（pixel-perfect 路径）：叠加层过同一旋转机器后加色叠加
+    if (glowOverlays.length > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const g of glowOverlays) {
+        const gres = renderPixelPerfectRotation(
+          g.canvas, angle, effStretch, glowPivotX(g), pivotY + g.pad,
+          { scaleX, skews, contentHash: g.key },
+        );
+        ctx.drawImage(
+          gres.canvas,
+          Math.round(subToPx(worldX) - gres.resultPivotX),
+          Math.round(subToPx(worldY) - gres.resultPivotY),
+        );
+        if (gres.canvas !== g.canvas) releaseCanvas(gres.canvas);
+      }
+      ctx.restore();
+    }
+
     // Render "on top" effects after the sprite for pixel-perfect rotation path
     // Preview quality: skip particle effects in low quality mode (old parity).
     const topEffectMods = previewQuality === 'low' ? [] : modifiers.filter(m =>
@@ -2267,6 +2379,16 @@ function renderNodeSprite(
   } else {
     // Native Canvas2D or no rotation: draw in the already-transformed space
     ctx.drawImage(workingCanvas, -pivotX, -pivotY);
+
+    // 动态模式发光段：与精灵同一变换空间，加色叠加在精灵之上
+    if (glowOverlays.length > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const g of glowOverlays) {
+        ctx.drawImage(g.canvas, -glowPivotX(g), -(pivotY + g.pad));
+      }
+      ctx.restore();
+    }
 
     // 动态模式粒子（身前层）
     if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {

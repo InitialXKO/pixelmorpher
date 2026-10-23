@@ -6,13 +6,14 @@
 //   坐标转运行时系：x 同向、y 取反（产品 y 下 / 运行时 y 上）、角度同理。
 // - 行为图/表演图的 nodeId（含 nodeRef 目标）一律换算成 slotKey。
 // - 表演图经 graph-translate 采样烘焙；翻译失败/无贡献逐条进 warnings，不静默。
-import type { Character, CostumePiece, DirectionIndex, ParametricAppearance } from '../unified-types';
+import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, Sprite } from '../unified-types';
+import { buildParametricSprite } from './main-canvas';
 import { subToPx } from '../unified-types';
 import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
-import { resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
+import { glowField, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
 import { createDefaultParametricAppearance } from './surfaces';
 import { PALETTES } from './palettes';
 import {
@@ -49,6 +50,18 @@ export interface RuntimeDynamicInstance {
   params: DynamicPatternParams;
 }
 
+/**
+ * 运行时发光场（导出时按代表图预计算：选区 1 + 柔光圈衰减，权重 0..255）。
+ * space: 'tile' = 代表图是参数化烘焙图（与瓦片同尺寸同朝向关系）；
+ * 'sprite' = 代表图是精灵原图（瓦片带 2+halo 边距，模板按底图同式映射）。
+ */
+export interface RuntimeGlowEntry {
+  w: number;
+  h: number;
+  space: 'tile' | 'sprite';
+  data: string;
+}
+
 export interface RuntimePart {
   key: string;
   drawLayer: string;
@@ -59,6 +72,8 @@ export interface RuntimePart {
   variants: { 2: Record<string, never> };
   /** 动态模式（默认服装集下的解析结果；换装集见 costumes[*].__dynamic） */
   dynamic?: RuntimeDynamicInstance[];
+  /** 发光场（默认服装集；换装集见 costumes[*].__glow） */
+  glow?: RuntimeGlowEntry;
   /** 精灵部件（无参数化外观）：模板按直贴图瓦片绘制 */
   spriteKind?: boolean;
   /** 精灵部件在默认服装集下的东向精灵网格（逐集见 costumes[*].__sprite） */
@@ -121,6 +136,46 @@ function eastSpriteOf(
   return undefined;
 }
 
+/**
+ * 槽位代表图（编辑器取色/手动标记与运行时发光场共用一个口径）：
+ * 参数化外观优先（与主画布同路烘焙），否则取代表方向精灵（东向优先、
+ * 缺图按方向序回落）。externalSprites = 工程级全局表（与导出同口径合并）。
+ */
+export function representativeGridForSlot(
+  character: Character,
+  slotKey: string,
+  externalSprites?: Record<string, Sprite>,
+  costumeSetId?: string,
+): PixelGrid | null {
+  return representativeGridForSlotEx(character, slotKey, externalSprites, costumeSetId)?.grid ?? null;
+}
+
+/** representativeGridForSlot 的带来源版：space 供运行时模板决定场到瓦片的映射 */
+export function representativeGridForSlotEx(
+  character: Character,
+  slotKey: string,
+  externalSprites?: Record<string, Sprite>,
+  costumeSetId?: string,
+): { grid: PixelGrid; space: 'tile' | 'sprite' } | null {
+  const table: SpriteTable = { ...(character.sprites ?? {}), ...(externalSprites ?? {}) };
+  const set = character.costumeSets.find((cs) => cs.id === (costumeSetId ?? character.activeCostumeSetId))
+    ?? character.costumeSets[0];
+  const piece = set?.pieces[slotKey];
+  if (!piece) return null;
+  let baseSpr: Sprite | undefined;
+  for (const dir of [2, 0, 6, 4, 1, 3, 5, 7] as DirectionIndex[]) {
+    const r = resolvePieceSprite(piece, dir, character.slotVariants?.[slotKey], table, character.latitude ?? 0);
+    if (r.sprite) { baseSpr = r.sprite; break; }
+  }
+  if (piece.parametric) {
+    const nodeId = Object.values(character.nodes)
+      .find((n) => (n.slot?.slotKey ?? n.id) === slotKey)?.id ?? slotKey;
+    const baked = buildParametricSprite(piece.parametric, nodeId, baseSpr);
+    if (baked) return { grid: baked.data, space: (piece.parametric.composite ?? 'generate') === 'generate' ? 'tile' : 'sprite' };
+  }
+  return baseSpr ? { grid: baseSpr.data, space: 'sprite' } : null;
+}
+
 /** silhouette/overlay 的底图：东向精灵（generate 档不需要），无则 undefined */
 function baseSpriteFor(
   app: ParametricAppearance,
@@ -131,6 +186,44 @@ function baseSpriteFor(
 ): RuntimePartBase['baseSprite'] {
   if ((app.composite ?? 'generate') === 'generate') return undefined;
   return eastSpriteOf(piece, character, slotKey, table, true);
+}
+
+/**
+ * 发光场进包：取解析后第一个启用的发光段实例，按该服装集的代表图算
+ * 权重场（选区 + 柔光圈）。多个发光实例时只取第一个（主画布全支持），
+ * 选区为空/无代表图逐条 warning 点名，不静默。
+ */
+function glowEntryFor(
+  character: Character,
+  slotKey: string,
+  dyn: RuntimeDynamicInstance[] | undefined,
+  costumeSetId: string | undefined,
+  externalSprites: Record<string, Sprite> | undefined,
+  warnings: string[],
+): RuntimeGlowEntry | undefined {
+  if (!dyn) return undefined;
+  const glows = dyn.filter((d) => d.params.glowEnabled);
+  if (glows.length === 0) return undefined;
+  const setName = character.costumeSets.find((cs) => cs.id === costumeSetId)?.name ?? costumeSetId ?? '';
+  const where = setName ? `（服装集「${setName}」）` : '';
+  if (glows.length > 1) {
+    warnings.push(`发光段：槽位 ${slotKey}${where} 有 ${glows.length} 个发光实例，运行时包只取第一个（主画布全部生效）`);
+  }
+  const rep = representativeGridForSlotEx(character, slotKey, externalSprites, costumeSetId);
+  if (!rep) {
+    warnings.push(`发光段：槽位 ${slotKey}${where} 没有代表图，选区未进运行时包`);
+    return undefined;
+  }
+  const gf = glowField(glows[0].params, rep.grid);
+  if (!gf) {
+    warnings.push(`发光段：槽位 ${slotKey}${where} 的选区为空（取色无同色像素或未标记），未进运行时包`);
+    return undefined;
+  }
+  const bytes = new Uint8Array(gf.field.length);
+  for (let i = 0; i < gf.field.length; i++) {
+    bytes[i] = Math.round(Math.max(0, Math.min(1, gf.field[i])) * 255);
+  }
+  return { w: gf.w, h: gf.h, space: rep.space, data: packBytesBase64(bytes) };
 }
 
 /** 双挂载解析 → 运行时动态实例（节点为底、服装件同位替换/压制） */
@@ -329,6 +422,7 @@ export function convertCharacterToRuntimePackage(
     if ((baseApp.composite ?? 'generate') !== 'generate' && !baseSprite) {
       warnings.push(`槽位 ${slotKey} 合成方式为 ${baseApp.composite} 但东向无精灵，运行时按独立生成处理`);
     }
+    const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns);
     parts.push({
       key: slotKey,
       drawLayer: node.drawLayer,
@@ -336,7 +430,8 @@ export function convertCharacterToRuntimePackage(
       costumeKeys: [slotKey],
       base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0, baseSprite),
       variants: { 2: {} },
-      dynamic: dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns),
+      dynamic: dyn,
+      glow: glowEntryFor(character, slotKey, dyn, activeSet?.id, externalSprites, warnings),
     });
   }
   // ---- 精灵部件：无参数化外观、但任一服装集里有东向精灵的槽位 ----
@@ -359,6 +454,7 @@ export function convertCharacterToRuntimePackage(
     const pivot: [number, number] = w ? [subToPx(w.worldX), -subToPx(w.worldY)] : [0, 0];
     const base = appearanceToBase(createDefaultParametricAppearance(), pivot, w?.worldAngle ?? 0);
     base.size = [sg.w, sg.h];
+    const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns);
     parts.push({
       key: slotKey,
       drawLayer: node.drawLayer,
@@ -368,7 +464,8 @@ export function convertCharacterToRuntimePackage(
       variants: { 2: {} },
       spriteKind: true,
       sprite: sg,
-      dynamic: dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns),
+      dynamic: dyn,
+      glow: glowEntryFor(character, slotKey, dyn, activeSet?.id, externalSprites, warnings),
     });
   }
   // 动态效果孤儿：挂了动态但槽位既无参数化外观也无精灵 → 不在包内
@@ -390,6 +487,7 @@ export function convertCharacterToRuntimePackage(
   for (const cs of character.costumeSets) {
     const entry: { label: string; [k: string]: unknown } = { label: cs.name };
     const dynMap: Record<string, RuntimeDynamicInstance[]> = {};
+    const glowMap: Record<string, RuntimeGlowEntry> = {};
     for (const slotKey of parametricSlots) {
       const piece = cs.pieces[slotKey];
       const app = piece?.parametric;
@@ -397,6 +495,10 @@ export function convertCharacterToRuntimePackage(
       const node = nodeId ? character.nodes[nodeId] : undefined;
       const dyn = dynFor(node?.dynamicPatterns, piece?.dynamicPatterns);
       if (dyn) dynMap[slotKey] = dyn;
+      const ge = cs.id === activeSet?.id
+        ? parts.find((p) => p.key === slotKey)?.glow
+        : glowEntryFor(character, slotKey, dyn, cs.id, externalSprites, warnings);
+      if (ge) glowMap[slotKey] = ge;
       if (!app) { entry[slotKey] = null; continue; }
       const w = nodeId ? worlds.get(nodeId) : undefined;
       const pivot: [number, number] = w ? [subToPx(w.worldX), -subToPx(w.worldY)] : [0, 0];
@@ -407,8 +509,13 @@ export function convertCharacterToRuntimePackage(
       const node = nodeId ? character.nodes[nodeId] : undefined;
       const dyn = dynFor(node?.dynamicPatterns, cs.pieces[slotKey]?.dynamicPatterns);
       if (dyn) dynMap[slotKey] = dyn;
+      const ge = cs.id === activeSet?.id
+        ? parts.find((p) => p.key === slotKey)?.glow
+        : glowEntryFor(character, slotKey, dyn, cs.id, externalSprites, warnings);
+      if (ge) glowMap[slotKey] = ge;
     }
     if (Object.keys(dynMap).length > 0) entry.__dynamic = dynMap;
+    if (Object.keys(glowMap).length > 0) entry.__glow = glowMap;
     // 精灵回落：该集该槽无参数化外观但有精灵 → 模板走直贴图（参数化
     // 槽位的换装回落与纯精灵部件共用此表）
     const spriteMap: Record<string, NonNullable<RuntimePartBase['baseSprite']>> = {};

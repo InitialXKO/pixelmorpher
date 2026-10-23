@@ -22,6 +22,7 @@ import { collectSubtreeIds, deleteNodeSubtree, findParentNode, ikChainMembership
 import PuppetModifierPanel from './PuppetModifierPanel';
 import ParametricAppearanceEditor from './ParametricAppearanceEditor';
 import DynamicPatternEditor from './DynamicPatternEditor';
+import { representativeGridForSlot } from '@/lib/proc-runtime/convert';
 import GlobalBlueprintEditor from './GlobalBlueprintEditor';
 import CharacterBlueprintEditor from './CharacterBlueprintEditor';
 import StateBlueprintEditor from './StateBlueprintEditor';
@@ -235,6 +236,7 @@ function RigNodeProperties({
 }) {
   const [transposeAngle, setTransposeAngle] = useState(45);
   const character = useProjectStore((s) => (characterId ? s.unifiedCharacters[characterId] : undefined));
+  const spritesRecord = useProjectStore((s) => s.sprites);
   return (
     <div className="space-y-3 bg-[#080818] rounded border border-[#1e1e3a] p-2">
       <div className="flex items-center justify-between">
@@ -486,6 +488,7 @@ function RigNodeProperties({
             instances={node.dynamicPatterns ?? []}
             onChange={(next) => onUpdate({ dynamicPatterns: next })}
             hint="挂在节点上，换装不变；服装件同效果位可替换或压制这里的实例。"
+            previewGrid={character ? representativeGridForSlot(character, node.slot?.slotKey ?? node.id, spritesRecord) : null}
           />
         </div>
       </div>

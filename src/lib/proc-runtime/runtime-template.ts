@@ -443,8 +443,8 @@ function composePerformance(pose, perf, bpOut, w) {
   }
   return next;
 }
-/** 实例打包：21 float —— pos2 size2 rot1 pivotTile2 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 */
-const INSTANCE_FLOATS = 21;
+/** 实例打包：27 float —— pos2 size2 rot1 pivotTile2 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 glowA4(rgb,强度) glowB2(频率,相位) */
+const INSTANCE_FLOATS = 27;
 function packInstances(els) {
   const buf = new Float32Array(els.length * INSTANCE_FLOATS);
   els.forEach((el, i) => {
@@ -460,8 +460,25 @@ function packInstances(els) {
     buf[o + 15] = el.param[0]; buf[o + 16] = el.param[1]; buf[o + 17] = el.param[2]; buf[o + 18] = el.ghost ? 1 : 0;
     buf[o + 19] = el.deform ? el.deform[0] : 1;
     buf[o + 20] = el.deform ? el.deform[1] : 1;
+    buf[o + 21] = el.glow ? el.glow[0] : 0; buf[o + 22] = el.glow ? el.glow[1] : 0;
+    buf[o + 23] = el.glow ? el.glow[2] : 0; buf[o + 24] = el.glow ? el.glow[3] : 0;
+    buf[o + 25] = el.glow ? el.glow[4] : 0; buf[o + 26] = el.glow ? el.glow[5] : 0;
   });
   return buf;
+}
+/** 发光场数据解码（包内 base64 字节 → Uint8Array） */
+function decodeGlowData(b64) {
+  let s = b64;
+  while (s.length % 4) s += '=';
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+/** 部件在某服装集下的发光场：集内 __glow 优先，缺省用部件自带（默认集） */
+function glowEntryOf(part, costume) {
+  const map = costume && costume.__glow;
+  return (map && map[part.key]) || part.glow || null;
 }
 // === PURE END ===
 /*__EVAL__*/
@@ -536,12 +553,13 @@ function ensureAtlas(gl, variant, costumeName) {
       if (!tile) { tile = bakeResolvedTile(resolved, mirrored); tileCache.set(key, tile); }
     }
     tiles.push(tile);
-    entries.push([part.key, tile, resolved, mirrored, spriteGrid]);
+    entries.push([part.key, tile, resolved, mirrored, spriteGrid, glowEntryOf(part, costume)]);
   }
   const pack = packAtlas(tiles, 256);
   const height = pack.height;
   const data = new Uint8Array(256 * height * 4);
   const baseData = new Uint8Array(256 * height * 4);
+  const glowData = new Uint8Array(256 * height * 4);
   tiles.forEach((tile, i) => {
     const ax = pack.placements[i][0], ay = pack.placements[i][1];
     for (let j = 0; j < tile.h; j++) {
@@ -567,10 +585,31 @@ function ensureAtlas(gl, variant, costumeName) {
         }
       }
     }
+    // 发光场：与瓦片同格对齐（R = 权重）。映射与底图同式：代表图行翻转 +
+    // 镜像列翻转；space=tile 的代表图与瓦片同尺寸（边距已含，M=0），
+    // space=sprite 的代表图是精灵原图（边距 M = 2 + halo）。
+    const ge = entries[i][5];
+    if (ge) {
+      const M = ge.space === 'tile' ? 0 : 2 + (resolved.halo || 0);
+      const gw = ge.w, gh = ge.h;
+      const gd = decodeGlowData(ge.data);
+      for (let j = 0; j < tile.h; j++) {
+        for (let ii = 0; ii < tile.w; ii++) {
+          const sx = mirrored ? gw - 1 - (ii - M) : ii - M;
+          const sy = gh - 1 - (j - M);
+          if (sx < 0 || sy < 0 || sx >= gw || sy >= gh) continue;
+          const v = gd[sy * gw + sx] || 0;
+          if (!v) continue;
+          const o = ((ay + j) * 256 + ax + ii) * 4;
+          glowData[o] = v; glowData[o + 3] = 255;
+        }
+      }
+    }
     map.set(entries[i][0], { tile: tile, place: [ax, ay], resolved: entries[i][2] });
   });
   if (atlasState && atlasState.tex) gl.deleteTexture(atlasState.tex);
   if (atlasState && atlasState.baseTex) gl.deleteTexture(atlasState.baseTex);
+  if (atlasState && atlasState.glowTex) gl.deleteTexture(atlasState.glowTex);
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
@@ -581,7 +620,12 @@ function ensureAtlas(gl, variant, costumeName) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, baseData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  atlasState = { variant: variant, costumeName: costumeName, tex: tex, baseTex: baseTex, map: map };
+  const glowTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, glowTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  atlasState = { variant: variant, costumeName: costumeName, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map };
   return atlasState;
 }
 
@@ -623,8 +667,11 @@ layout(location=5) in vec4 iTile;
 layout(location=6) in vec4 iMisc;
 layout(location=7) in vec4 iParam;
 layout(location=8) in vec2 iDeform;
+layout(location=9) in vec4 iGlowA;
+layout(location=10) in vec2 iGlowB;
 uniform vec2 uCam; uniform vec2 uViewHalf; uniform vec2 uRes;
 out vec2 vCenterScreen; out float vRot; out vec4 vTile; out vec2 vTileC; out vec4 vMisc; out vec4 vParam; out vec2 vDeform;
+out vec4 vGlowA; out vec2 vGlowB;
 void main(){
   float c = cos(iRot), s = sin(iRot);
   vec2 local = aCorner * iSize;
@@ -632,13 +679,15 @@ void main(){
   vec2 world = iPos + woff;
   vCenterScreen = ((iPos - uCam) / uViewHalf * 0.5 + 0.5) * uRes;
   vRot = iRot; vTile = iTile; vTileC = iTileC; vMisc = iMisc; vParam = iParam; vDeform = iDeform;
+  vGlowA = iGlowA; vGlowB = iGlowB;
   float z = 0.9 - float(gl_InstanceID) * 0.02;
   gl_Position = vec4((world - uCam) / uViewHalf, z, 1.0);
 }\`,
 \`#version 300 es
 precision highp float;
-uniform sampler2D uAtlas; uniform sampler2D uPal; uniform sampler2D uBase; uniform float uTime;
+uniform sampler2D uAtlas; uniform sampler2D uPal; uniform sampler2D uBase; uniform sampler2D uGlow; uniform float uTime;
 in vec2 vCenterScreen; in float vRot; in vec4 vTile; in vec2 vTileC; in vec4 vMisc; in vec4 vParam; in vec2 vDeform;
+in vec4 vGlowA; in vec2 vGlowB;
 out vec4 oColor;
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 int tileRAt(ivec2 g){
@@ -656,6 +705,11 @@ float tileBAt(ivec2 g){
   if (tp.x < int(vTile.x) || tp.y < int(vTile.y) || tp.x >= int(vTile.x + vTile.z) || tp.y >= int(vTile.y + vTile.w)) return 0.0;
   return texelFetch(uAtlas, tp, 0).b;
 }
+vec3 applyGlow(vec3 col, float f, float k){
+  if (k <= 0.0) return col;
+  if (f >= 0.999) return mix(col, vec3(1.0), 0.35 * min(k, 1.0)) + vGlowA.rgb * (0.25 * k);
+  return col + vGlowA.rgb * (k * 0.8);
+}
 void main(){
   float mp = vMisc.z;
   int lm = int(mod(mp, 8.0));
@@ -669,6 +723,13 @@ void main(){
   vec2 gfv = vec2(lup.x, -lup.y);
   if (vDeform.x != 1.0 || vDeform.y != 1.0) gfv = vec2(gfv.x / max(vDeform.x, 0.05), gfv.y / max(vDeform.y, 0.05));
   ivec2 g = ivec2(floor(gfv + 0.5));
+  float glowF = 0.0;
+  if (vGlowA.w > 0.0) {
+    ivec2 gtp = ivec2(vTile.xy) + ivec2(vTileC) + g;
+    if (gtp.x >= int(vTile.x) && gtp.y >= int(vTile.y) && gtp.x < int(vTile.x + vTile.z) && gtp.y < int(vTile.y + vTile.w)) glowF = texelFetch(uGlow, gtp, 0).r;
+  }
+  float glowPulse = 0.5 + 0.5 * sin(6.2831853 * (vGlowB.x * uTime + vGlowB.y));
+  float glowK = glowF * glowPulse * vGlowA.w;
   int r0 = tileRAt(g);
   bool occ = r0 < 128;
   if (!occ) {
@@ -679,21 +740,22 @@ void main(){
       if (om == 1) draw = nL || nR || nB || nT;
       else if (om == 3) draw = nR || nB;
       else if (om == 4) draw = nT;
-      if (draw) { oColor = vec4(texelFetch(uPal, ivec2(0, family), 0).rgb, 1.0); return; }
+      if (draw) { oColor = vec4(applyGlow(texelFetch(uPal, ivec2(0, family), 0).rgb, glowF, glowK), 1.0); return; }
     }
     int bb = int(tileBAt(g) * 255.0 + 0.5);
     if (bb > 0) {
       int bslot = (bb & 16) != 0 ? 4 : (bb & 15) - 1;
-      oColor = vec4(texelFetch(uPal, ivec2(clamp(bslot, 0, 7), family), 0).rgb, 1.0);
+      oColor = vec4(applyGlow(texelFetch(uPal, ivec2(clamp(bslot, 0, 7), family), 0).rgb, glowF, glowK), 1.0);
       return;
     }
+    if (glowK > 0.01 && glowF < 0.999) { oColor = vec4(vGlowA.rgb * (glowK * 0.8), 1.0); return; }
     discard;
   }
   if (vMisc.w > 2.5) {
     ivec2 tpD = ivec2(vTile.xy) + ivec2(vTileC) + g;
     vec4 baseC = texelFetch(uBase, tpD, 0);
     if (baseC.a < 0.5) discard;
-    oColor = vec4(baseC.rgb, 1.0);
+    oColor = vec4(applyGlow(baseC.rgb, glowF, glowK), 1.0);
     return;
   }
   bool inL = !(tileRAt(g + ivec2(-1, 0)) < 128), inR = !(tileRAt(g + ivec2(1, 0)) < 128);
@@ -737,11 +799,11 @@ void main(){
     vec4 baseC = texelFetch(uBase, tp, 0);
     if (baseC.a > 0.5) {
       float f = slot == 0 ? 0.55 : slot == 1 ? 0.78 : slot == 3 ? 1.22 : 1.0;
-      oColor = vec4(baseC.rgb * f, 1.0);
+      oColor = vec4(applyGlow(baseC.rgb * f, glowF, glowK), 1.0);
       return;
     }
   }
-  oColor = vec4(texelFetch(uPal, ivec2(slot, family), 0).rgb, 1.0);
+  oColor = vec4(applyGlow(texelFetch(uPal, ivec2(slot, family), 0).rgb, glowF, glowK), 1.0);
 }\`);
 const palTex = gl.createTexture();
 {
@@ -769,7 +831,7 @@ const instBuf = gl.createBuffer();
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
-  const strides = [[1, 2, 0], [2, 2, 2], [3, 1, 4], [4, 2, 5], [5, 4, 7], [6, 4, 11], [7, 4, 15], [8, 2, 19]];
+  const strides = [[1, 2, 0], [2, 2, 2], [3, 1, 4], [4, 2, 5], [5, 4, 7], [6, 4, 11], [7, 4, 15], [8, 2, 19], [9, 4, 21], [10, 2, 25]];
   for (const sDef of strides) {
     gl.enableVertexAttribArray(sDef[0]);
     gl.vertexAttribPointer(sDef[0], sDef[1], gl.FLOAT, false, INSTANCE_FLOATS * 4, sDef[2] * 4);
@@ -952,7 +1014,7 @@ if (EMBEDDED.warnings && EMBEDDED.warnings.length) {
 
 // ---------- 主循环：输入 → 程序化姿态 → 表演合成 → 渲染 ----------
 const uLoc = (pr, n) => gl.getUniformLocation(pr, n);
-const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal'), base: uLoc(partProg, 'uBase') };
+const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal'), base: uLoc(partProg, 'uBase'), glow: uLoc(partProg, 'uGlow') };
 const solidU = { cam: uLoc(solidProg, 'uCam'), vh: uLoc(solidProg, 'uViewHalf') };
 let last = performance.now();
 function frame(now) {
@@ -1029,6 +1091,13 @@ function frame(now) {
       dsx *= d.sx; dsy *= d.sy;
       if (inst.params.deformEnabled) hasDeform = true;
     }
+    // 发光段：第一个启用实例供参数（场在图集里，导出时按选区预计算）
+    let glowEl = undefined;
+    const glowInst = dynList.find((x) => x.params.glowEnabled);
+    if (glowInst) {
+      const grgb = particleRgb(glowInst.params.glowColor || '#7dd7ff');
+      glowEl = [grgb[0], grgb[1], grgb[2], glowInst.params.glowStrength || 0, glowInst.params.glowHz || 0, glowInst.params.glowPhase || 0];
+    }
     const comp = resolved.composite === 'overlay' ? 2 : resolved.composite === 'silhouette' ? 1 : resolved.composite === 'sprite' ? 3 : 0;
     const big = comp > 0 || dynList.length > 0;
     const el = {
@@ -1041,6 +1110,7 @@ function frame(now) {
       ghost: false,
       composite: comp,
       deform: hasDeform ? [dsx, dsy] : undefined,
+      glow: glowEl,
     };
     els.push(el);
     elByKey.set(part.key, el);
@@ -1113,6 +1183,7 @@ function frame(now) {
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, state.tex); gl.uniform1i(partU.atlas, 0);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palTex); gl.uniform1i(partU.pal, 1);
   gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, state.baseTex); gl.uniform1i(partU.base, 2);
+  gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, state.glowTex); gl.uniform1i(partU.glow, 3);
   gl.bindVertexArray(partVAO);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
   gl.bufferData(gl.ARRAY_BUFFER, packInstances(els), gl.DYNAMIC_DRAW);

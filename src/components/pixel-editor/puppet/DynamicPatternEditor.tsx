@@ -6,19 +6,25 @@
 // 挂载方负责落盘（节点走 updateUnifiedNode、服装件走服装集写回）。
 // ============================================================
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   DYNAMIC_PARAM_DEFS,
   DYNAMIC_PATTERN_TEMPLATES,
   createDynamicInstance,
   defaultDynamicParams,
   deleteUserDynamicPattern,
+  encodeGlowMask,
+  glowMaskCells,
   loadUserDynamicPatterns,
+  normalizeDynamicParams,
   saveUserDynamicPattern,
+  unpackMaskBits,
   type DynamicPatternInstance,
   type DynamicPatternParams,
   type DynamicPatternTemplate,
+  type GlowMaskData,
 } from '@/lib/dynamic-patterns';
+import type { PixelGrid } from '@/lib/unified-types';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -43,18 +49,22 @@ export default function DynamicPatternEditor({
   instances,
   onChange,
   hint,
+  previewGrid,
 }: {
   instances: DynamicPatternInstance[];
   onChange: (next: DynamicPatternInstance[]) => void;
   hint?: string;
+  /** 当前槽位的代表图（发光段取色/手动标记用；无图时这两项不可用） */
+  previewGrid?: PixelGrid | null;
 }) {
   const [userTemplates, setUserTemplates] = useState<DynamicPatternTemplate[]>(() => loadUserDynamicPatterns());
   const allTemplates = [...DYNAMIC_PATTERN_TEMPLATES, ...userTemplates];
 
   const patchInstance = (id: string, patch: Partial<DynamicPatternInstance>) =>
     onChange(instances.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-  const patchParam = (id: string, key: keyof DynamicPatternParams, value: number | boolean | string) =>
-    onChange(instances.map((x) => (x.id === id ? { ...x, params: { ...x.params, [key]: value } } : x)));
+  const patchParam = (id: string, key: keyof DynamicPatternParams, value: number | boolean | string | GlowMaskData) =>
+    onChange(instances.map((x) => (x.id === id ? { ...x, params: { ...normalizeDynamicParams(x.params), [key]: value } } : x)));
+  const np = (inst: DynamicPatternInstance): DynamicPatternParams => normalizeDynamicParams(inst.params);
   const applyTemplate = (id: string, name: string) => {
     const t = allTemplates.find((x) => x.name === name);
     if (!t) return;
@@ -136,15 +146,25 @@ export default function DynamicPatternEditor({
               发射段
             </label>
             <label className="flex items-center gap-1">
+              <input type="checkbox" checked={np(inst).glowEnabled} onChange={(e) => patchParam(inst.id, 'glowEnabled', e.target.checked)} />
+              发光段
+            </label>
+            <label className="flex items-center gap-1">
               颜色
               <input type="color" value={inst.params.color} onChange={(e) => patchParam(inst.id, 'color', e.target.value)} className="h-5 w-8 bg-transparent" />
             </label>
+            {np(inst).glowEnabled && (
+              <label className="flex items-center gap-1">
+                辉光
+                <input type="color" value={np(inst).glowColor} onChange={(e) => patchParam(inst.id, 'glowColor', e.target.value)} className="h-5 w-8 bg-transparent" />
+              </label>
+            )}
           </div>
-          {(['形变', '发射', '粒子'] as const).map((section) => (
+          {(['形变', '发射', '粒子', '发光'] as const).map((section) => (
             <div key={section}>
               <div className="text-[9px] text-gray-600 mt-0.5">{section}</div>
               {DYNAMIC_PARAM_DEFS.filter((d) => d.section === section).map((d) => {
-                const v = inst.params[d.key] as number;
+                const v = np(inst)[d.key] as number;
                 return (
                   <div key={d.key} className="flex items-center gap-1.5">
                     <span className="text-[9px] text-gray-500 w-24 shrink-0">{d.label}</span>
@@ -159,6 +179,13 @@ export default function DynamicPatternEditor({
               })}
             </div>
           ))}
+          {np(inst).glowEnabled && (
+            <GlowSelectionPanel
+              grid={previewGrid}
+              params={np(inst)}
+              onPatch={(key, value) => patchParam(inst.id, key, value)}
+            />
+          )}
         </div>
       ))}
       <div className="flex items-center gap-1.5">
@@ -185,6 +212,156 @@ export default function DynamicPatternEditor({
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 发光选区面板：在槽位代表图上取色（点中哪个颜色就选哪种颜色的全部像素）
+ * 或手动标记（按住拖动刷选区，再点已选格起拖 = 擦除）。选区与渲染同口径：
+ * 取色高亮 = glowMaskCells 的实际选区，标记直接存位打包掩码。
+ */
+function GlowSelectionPanel({
+  grid,
+  params,
+  onPatch,
+}: {
+  grid: PixelGrid | null | undefined;
+  params: DynamicPatternParams;
+  onPatch: (key: keyof DynamicPatternParams, value: number | boolean | string | GlowMaskData) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const dragRef = useRef<{ value: boolean } | null>(null);
+  const h = grid?.length ?? 0;
+  const w = h > 0 ? grid![0].length : 0;
+  const cell = w > 0 ? Math.max(2, Math.min(10, Math.floor(184 / Math.max(w, h)))) : 4;
+  const marked = params.glowMaskSource === 'marked';
+
+  const overlay: Uint8Array | null = React.useMemo(() => {
+    if (!grid || !w || !h) return null;
+    if (marked) {
+      const out = new Uint8Array(w * h);
+      const m = params.glowMask;
+      if (m && m.w && m.h) {
+        const src = unpackMaskBits(m.bits, m.w * m.h);
+        for (let y = 0; y < Math.min(h, m.h); y++) {
+          for (let x = 0; x < Math.min(w, m.w); x++) out[y * w + x] = src[y * m.w + x];
+        }
+      }
+      return out;
+    }
+    return glowMaskCells({ ...params, glowEnabled: true }, grid) ?? new Uint8Array(w * h);
+  }, [grid, marked, params, w, h]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !grid || !overlay) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const c = grid[y][x];
+        ctx.fillStyle = c ?? (((x + y) % 2 === 0) ? '#1a1a2e' : '#141424');
+        ctx.fillRect(x * cell, y * cell, cell, cell);
+        if (overlay[y * w + x]) {
+          ctx.fillStyle = marked ? 'rgba(255,80,180,0.55)' : 'rgba(0,229,255,0.5)';
+          ctx.fillRect(x * cell, y * cell, cell, cell);
+        }
+      }
+    }
+  }, [grid, overlay, cell, w, h, marked]);
+
+  const cellAt = (e: React.PointerEvent): { x: number; y: number } | null => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect || !w || !h) return null;
+    const x = Math.floor((e.clientX - rect.left) / cell);
+    const y = Math.floor((e.clientY - rect.top) / cell);
+    return x >= 0 && y >= 0 && x < w && y < h ? { x, y } : null;
+  };
+  const applyAt = (x: number, y: number, value: boolean) => {
+    if (!grid || !overlay) return;
+    const boolGrid: boolean[][] = [];
+    for (let yy = 0; yy < h; yy++) {
+      const row: boolean[] = [];
+      for (let xx = 0; xx < w; xx++) row.push(!!overlay[yy * w + xx]);
+      boolGrid.push(row);
+    }
+    boolGrid[y][x] = value;
+    onPatch('glowMask', encodeGlowMask(boolGrid));
+  };
+
+  const markedCount = overlay && marked ? overlay.reduce((a, b) => a + b, 0) : 0;
+
+  return (
+    <div className="rounded border border-[#1e1e3a] p-1.5 space-y-1">
+      <div className="flex items-center gap-1.5">
+        <span className="text-[9px] text-gray-500">发光选区</span>
+        <select
+          value={params.glowMaskSource}
+          onChange={(e) => onPatch('glowMaskSource', e.target.value)}
+          className={`${selCls} flex-1`}
+        >
+          <option value="color">取色（按颜色选像素）</option>
+          <option value="marked">手动标记</option>
+        </select>
+        {!marked && (
+          <label className="flex items-center gap-1 text-[9px] text-gray-400">
+            目标色
+            <input
+              type="color" value={params.glowPick}
+              onChange={(e) => onPatch('glowPick', e.target.value)}
+              className="h-5 w-8 bg-transparent"
+            />
+            <span className="text-gray-500">{params.glowPick}</span>
+          </label>
+        )}
+        {marked && overlay && (
+          <>
+            <span className="text-[9px] text-gray-500">已标记 {markedCount} 像素</span>
+            <Button
+              size="sm" variant="ghost" className="h-5 text-[9px] px-1.5"
+              onClick={() => grid && onPatch('glowMask', encodeGlowMask(grid.map((row) => row.map(() => false))))}
+            >
+              清除
+            </Button>
+          </>
+        )}
+      </div>
+      {grid ? (
+        <>
+          <canvas
+            ref={canvasRef}
+            width={w * cell}
+            height={h * cell}
+            className="max-w-full border border-[#1e1e3a] rounded cursor-crosshair touch-none"
+            onPointerDown={(e) => {
+              const p = cellAt(e);
+              if (!p || !grid) return;
+              if (!marked) {
+                const c = grid[p.y][p.x];
+                if (c) onPatch('glowPick', c.toLowerCase());
+                return;
+              }
+              if (!overlay) return;
+              dragRef.current = { value: !overlay[p.y * w + p.x] };
+              applyAt(p.x, p.y, dragRef.current.value);
+              (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
+            }}
+            onPointerMove={(e) => {
+              if (!dragRef.current || !marked) return;
+              const p = cellAt(e);
+              if (p) applyAt(p.x, p.y, dragRef.current.value);
+            }}
+            onPointerUp={() => { dragRef.current = null; }}
+            onPointerLeave={() => { dragRef.current = null; }}
+          />
+          <p className="text-[9px] text-gray-600">
+            {marked ? '在图上按住拖动标记发光像素；从已标记处起拖 = 擦除。' : '在图上点一种颜色，所有同色像素一起发光（高亮即选区）。'}
+          </p>
+        </>
+      ) : (
+        <p className="text-[9px] text-gray-600">当前槽位没有可用的代表图 — 先给这个槽位配上精灵或参数化外观，才能取色/标记。</p>
+      )}
     </div>
   );
 }

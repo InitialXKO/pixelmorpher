@@ -722,4 +722,63 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('P7 修改器摆锤幅值 20 生效（t=4 → -20°）', Math.abs((hatOut.get('hat')?.angle ?? 0) - (-20 * Math.PI / 180)) < 0.01);
 }
 
+// ---------- Q) 发光段：选区（取色/标记）+ 权重场 + 进包 + 模板着色 ----------
+{
+  const { glowMaskCells, glowField, glowPulseAt, encodeGlowMask, packBytesBase64, defaultDynamicParams } = await import('../src/lib/dynamic-patterns');
+  const { createDynamicInstance } = await import('../src/lib/dynamic-patterns');
+  const grid = [
+    ['#111111', '#2ea8ff', '#111111', null],
+    ['#111111', '#2ea8ff', '#111111', '#111111'],
+    [null, '#111111', '#111111', '#111111'],
+  ] as never;
+  const colorParams = { ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color' as const, glowPick: '#2EA8FF', glowHalo: 1 };
+  const cells = glowMaskCells(colorParams, grid);
+  check('Q1 取色选区精确命中同色像素（不分大小写、透明不选）', !!cells && cells[1] === 1 && cells[5] === 1 && cells[0] === 0 && cells[3] === 0);
+  const field = glowField(colorParams, grid);
+  check('Q2 权重场：选区内 1、柔光圈一层衰减到 0.5', !!field && field.field[1] === 1 && Math.abs(field.field[0] - 0.5) < 1e-6 && field.field[3] === 0);
+  check('Q3 呼吸脉冲：相位 0 时 t=0 为 0.5、glowHz=1 时 t=0.25s 达峰值', glowPulseAt({ ...colorParams, glowHz: 1 }, 0) === 0.5 && Math.abs(glowPulseAt({ ...colorParams, glowHz: 1 }, 0.25) - 1) < 1e-9);
+  const maskData = encodeGlowMask([[true, false], [false, true]]);
+  const markedParams = { ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'marked' as const, glowMask: maskData, glowHalo: 0 };
+  const mcells = glowMaskCells(markedParams, [['#000000', '#000000'], ['#000000', '#000000']] as never);
+  check('Q4 手动标记掩码打包往返一致', !!mcells && mcells[0] === 1 && mcells[1] === 0 && mcells[3] === 1);
+  check('Q5 字节 base64 编码形状', packBytesBase64(new Uint8Array([0, 127, 255, 64])) === 'AH//QA');
+
+  // 进包：精灵部件挂发光实例（节点挂载），场与逐集 __glow 都在
+  const spr = {
+    id: 'gspr', width: 4, height: 3,
+    plug: { x: 0 as never, y: 0 as never },
+    data: grid,
+    directions: { 2: { spriteId: 'gspr', mirror: false } },
+  } as never;
+  const glowInst = createDynamicInstance('辉光呼吸', {
+    ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: '#2ea8ff', glowHalo: 1, glowHz: 0.7, emitEnabled: false,
+  }, '辉光');
+  const ch = {
+    id: 'chQ', name: '发光测试',
+    nodes: { gem: { ...makeNode('gem', '宝石', 'gem'), dynamicPatterns: [glowInst] } },
+    rootNodeIds: ['gem'],
+    sprites: { gspr: spr },
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { gem: { ...createDefaultCostumePiece('gem'), sprites: { 2: { spriteId: 'gspr', mirror: false } } } } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  } as unknown as Character;
+  const pkg = convertCharacterToRuntimePackage(ch);
+  const gem = pkg.parts.find((p) => p.key === 'gem');
+  check('Q6 精灵部件发光场进包（space=sprite）', !!gem?.glow && gem.glow.space === 'sprite' && gem.glow.w === 4 && gem.glow.h === 3);
+  check('Q7 逐集 __glow 同步带上', !!(pkg.costumes['set1'] as { __glow?: Record<string, unknown> }).__glow?.['gem']);
+  const emptyInst = createDynamicInstance('辉光呼吸', {
+    ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: '#ffffff', emitEnabled: false,
+  }, '辉光');
+  const ch2 = {
+    ...ch, id: 'chQ2',
+    nodes: { gem: { ...makeNode('gem', '宝石', 'gem'), dynamicPatterns: [emptyInst] } },
+  } as unknown as Character;
+  const pkg2 = convertCharacterToRuntimePackage(ch2);
+  check('Q8 选区为空时不进包且 warning 点名', !pkg2.parts.find((p) => p.key === 'gem')?.glow
+    && pkg2.warnings.some((x) => x.includes('发光段') && x.includes('选区为空')));
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  const html = buildRuntimeHtml(pkg);
+  check('Q9 模板含发光着色接线（uGlow/applyGlow/iGlowA）', html.includes('uGlow') && html.includes('applyGlow') && html.includes('iGlowA'));
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
