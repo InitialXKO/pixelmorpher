@@ -113,11 +113,15 @@ export function getRotationCacheKey(
   stretch: number,
   pivotX: number,
   pivotY: number,
+  scaleX: number = 1,
+  skewsKey: string = '',
 ): string {
   // Quantize angle to 0.01 degree precision (sub-degree changes are invisible at pixel scale)
   const qAngle = Math.round(angle * 100);
   // Quantize stretch to 0.01 precision
   const qStretch = Math.round(stretch * 100);
+  // Quantize scaleX to 0.01 precision（复合仿射路径；默认 1 时与旧键有别，仅内存缓存无持久影响）
+  const qScaleX = Math.round(scaleX * 100);
   // Quantize pivot to 0.1 pixel precision
   const qPivotX = Math.round(pivotX * 10);
   const qPivotY = Math.round(pivotY * 10);
@@ -150,7 +154,7 @@ export function getRotationCacheKey(
     // Canvas may be tainted or not accessible — use dimensions only
   }
 
-  return `${fingerprint}:${qAngle}:${qStretch}:${qPivotX}:${qPivotY}`;
+  return `${fingerprint}:${qAngle}:${qStretch}:${qPivotX}:${qPivotY}:${qScaleX}:${skewsKey}`;
 }
 
 /**

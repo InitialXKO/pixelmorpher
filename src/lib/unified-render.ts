@@ -1981,12 +1981,13 @@ function renderNodeSprite(
   // ========================================================================
   ctx.imageSmoothingEnabled = false;
 
-  // Pixel-perfect rotation only handles rotate + Y-stretch. Parts with X-scale
-  // or skew fall back to the native canvas path (same as the old pipeline).
+  // Pixel-perfect path covers the full local affine: rotate + Y-stretch on the
+  // diagonal fast path; X-scale / skew go through the composite path, which
+  // bakes S·K at 4× first and rotates last (matrix associativity makes this
+  // identical to the native chain). The native canvas path remains only for
+  // rotationStrategy === 'native' or a fully identity transform.
   const usePixelPerfect = rotationStrategy === 'pixel-perfect'
-    && (angle !== 0 || effStretch !== 1.0)
-    && scaleX === 1
-    && skews.length === 0;
+    && (angle !== 0 || effStretch !== 1.0 || scaleX !== 1 || skews.length !== 0);
   if (usePixelPerfect) {
     // Use 4× upscale pixel-perfect rotation — this renders to an offscreen
     // canvas, then we draw that result at the world position.
@@ -2000,6 +2001,7 @@ function renderNodeSprite(
       effStretch,
       pivotX,
       pivotY,
+      { scaleX, skews },
     );
 
     // Draw at world position with half-pixel alignment
