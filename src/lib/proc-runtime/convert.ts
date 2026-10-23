@@ -59,8 +59,11 @@ export interface RuntimeDynamicInstance {
  * 'sprite' = 代表图是精灵原图（瓦片带 2+halo 边距，模板按底图同式映射）。
  */
 export interface RuntimeGlowEntry {
+  /** 场尺寸（含外扩边距；代表图 (0,0) 位于场 (padX, padY)） */
   w: number;
   h: number;
+  padX: number;
+  padY: number;
   space: 'tile' | 'sprite';
   data: string;
 }
@@ -217,25 +220,34 @@ function glowEntryFor(
     warnings.push(`发光段：槽位 ${slotKey}${where} 没有代表图，选区未进运行时包`);
     return undefined;
   }
-  const w = rep.grid[0]?.length ?? 0;
-  const h = rep.grid.length;
-  const bytes = new Uint8Array(w * h * 3);
-  let anyField = false;
-  glows.forEach((inst, idx) => {
-    const ci = idx < 3 ? idx : glowFollowTargetOf(inst.params); // 第 4 个起并入所选组
+  const fields = glows.map((inst, idx) => {
     const gf = glowField(inst.params, rep.grid);
     if (!gf) {
       warnings.push(`发光段：槽位 ${slotKey}${where} 第 ${idx + 1} 个发光实例选区为空（取色无同色像素或未标记），未进运行时包`);
-      return;
     }
-    anyField = true;
-    for (let i = 0; i < gf.field.length; i++) {
-      const v = Math.round(Math.max(0, Math.min(1, gf.field[i])) * 255);
-      if (v > bytes[i * 3 + ci]) bytes[i * 3 + ci] = v;
+    return gf;
+  });
+  if (!fields.some((f) => f)) return undefined;
+  // 场带外扩边距（辉光溢出包围盒）：全组统一到最大边距，逐实例按网格原点对齐
+  const padX = Math.max(...fields.map((f) => f?.padX ?? 0));
+  const padY = Math.max(...fields.map((f) => f?.padY ?? 0));
+  const w = (rep.grid[0]?.length ?? 0) + padX * 2;
+  const h = rep.grid.length + padY * 2;
+  const bytes = new Uint8Array(w * h * 3);
+  fields.forEach((gf, idx) => {
+    if (!gf) return;
+    const ci = idx < 3 ? idx : glowFollowTargetOf(glows[idx]!.params); // 第 4 个起并入所选组
+    const ox = padX - gf.padX, oy = padY - gf.padY;
+    for (let y = 0; y < gf.h; y++) {
+      for (let x = 0; x < gf.w; x++) {
+        const v = Math.round(Math.max(0, Math.min(1, gf.field[y * gf.w + x])) * 255);
+        if (!v) continue;
+        const bi = ((y + oy) * w + (x + ox)) * 3 + ci;
+        if (v > bytes[bi]) bytes[bi] = v;
+      }
     }
   });
-  if (!anyField) return undefined;
-  return { w, h, space: rep.space, data: packBytesBase64(bytes) };
+  return { w, h, padX, padY, space: rep.space, data: packBytesBase64(bytes) };
 }
 
 /** 双挂载解析 → 运行时动态实例（节点为底、服装件同位替换/压制） */

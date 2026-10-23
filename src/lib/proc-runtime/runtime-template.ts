@@ -377,6 +377,16 @@ function gridHashOf(g) {
   return h;
 }
 /** 精灵部件的直贴图瓦片：R=2 占据（供轮廓/动态粒子），颜色走底图图集同格 */
+/** 瓦片四周补空边（R=255 空像素）：发光场外扩边距超过瓦片自带边距时撑大瓦片 */
+function padTile(tile, e) {
+  const w = tile.w + e * 2, h = tile.h + e * 2;
+  const data = new Uint8Array(w * h * 4);
+  for (let q = 0; q < w * h; q++) { data[q * 4] = 255; data[q * 4 + 3] = 255; }
+  for (let j = 0; j < tile.h; j++) {
+    data.set(tile.data.subarray(j * tile.w * 4, (j + 1) * tile.w * 4), ((j + e) * w + e) * 4);
+  }
+  return { ...tile, w: w, h: h, cx: tile.cx + e, cy: tile.cy + e, data: data };
+}
 function spriteTileOf(sg, mirrored) {
   const M = 2;
   const w = sg.w + M * 2, h = sg.h + M * 2;
@@ -443,8 +453,8 @@ function composePerformance(pose, perf, bpOut, w) {
   }
   return next;
 }
-/** 实例打包：39 float —— pos2 size2 rot1 pivotTile2 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 glowA/B/C 各4(rgb,强度)×3实例 glowHz4+glowHz2(频率,相位)×3 */
-const INSTANCE_FLOATS = 39;
+/** 实例打包：43 float —— pos2 size2 rot1 pivotTile2 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 glowA/B/C 各4(rgb,强度)×3实例 glowHz4+glowHz2(频率,相位)×3 glowSpace4(三组方向基准:0=精灵 1=世界,余位) */
+const INSTANCE_FLOATS = 43;
 function packInstances(els) {
   const buf = new Float32Array(els.length * INSTANCE_FLOATS);
   els.forEach((el, i) => {
@@ -466,6 +476,7 @@ function packInstances(els) {
       buf[o + 21 + gi * 4] = g ? g[0] : 0; buf[o + 22 + gi * 4] = g ? g[1] : 0;
       buf[o + 23 + gi * 4] = g ? g[2] : 0; buf[o + 24 + gi * 4] = g ? g[3] : 0;
       buf[o + 33 + gi * 2] = g ? g[4] : 0; buf[o + 34 + gi * 2] = g ? g[5] : 0;
+      buf[o + 39 + gi] = el.glowSpace && el.glowSpace[gi] ? 1 : 0;
     }
   });
   return buf;
@@ -556,8 +567,16 @@ function ensureAtlas(gl, variant, costumeName) {
       tile = tileCache.get(key);
       if (!tile) { tile = bakeResolvedTile(resolved, mirrored); tileCache.set(key, tile); }
     }
+    // 发光场带外扩边距（辉光溢出包围盒）：超出瓦片自带边距的部分撑大瓦片
+    const ge0 = glowEntryOf(part, costume);
+    let tileExtra = 0;
+    if (ge0) {
+      const margin = ge0.space === 'tile' ? 0 : 2 + (resolved.halo || 0);
+      tileExtra = Math.max(0, Math.max(ge0.padX || 0, ge0.padY || 0) - margin);
+      if (tileExtra > 0) tile = padTile(tile, tileExtra);
+    }
     tiles.push(tile);
-    entries.push([part.key, tile, resolved, mirrored, spriteGrid, glowEntryOf(part, costume)]);
+    entries.push([part.key, tile, resolved, mirrored, spriteGrid, ge0, tileExtra]);
   }
   const pack = packAtlas(tiles, 256);
   const height = pack.height;
@@ -575,7 +594,7 @@ function ensureAtlas(gl, variant, costumeName) {
     const bs = resolved.composite === 'overlay' ? resolved.baseSprite
       : resolved.composite === 'sprite' ? entries[i][4] : null;
     if (bs) {
-      const M = 2 + (resolved.halo || 0);
+      const M = 2 + (resolved.halo || 0) + (entries[i][6] || 0);
       for (let j = 0; j < tile.h; j++) {
         for (let ii = 0; ii < tile.w; ii++) {
           const sx = mirrored ? bs.w - 1 - (ii - M) : ii - M;
@@ -594,13 +613,15 @@ function ensureAtlas(gl, variant, costumeName) {
     // space=sprite 的代表图是精灵原图（边距 M = 2 + halo）。
     const ge = entries[i][5];
     if (ge) {
-      const M = ge.space === 'tile' ? 0 : 2 + (resolved.halo || 0);
+      const M = (ge.space === 'tile' ? 0 : 2 + (resolved.halo || 0)) + (entries[i][6] || 0);
       const gw = ge.w, gh = ge.h;
+      const pX = ge.padX || 0, pY = ge.padY || 0;
       const gd = decodeGlowData(ge.data);
       for (let j = 0; j < tile.h; j++) {
         for (let ii = 0; ii < tile.w; ii++) {
-          const sx = mirrored ? gw - 1 - (ii - M) : ii - M;
-          const sy = gh - 1 - (j - M);
+          const u = ii - M, v = j - M;
+          const sx = mirrored ? gw - 1 - u - pX : u + pX;
+          const sy = gh - 1 - v - pY;
           if (sx < 0 || sy < 0 || sx >= gw || sy >= gh) continue;
           const src3 = (sy * gw + sx) * 3;
           const v0 = gd[src3] || 0, v1 = gd[src3 + 1] || 0, v2 = gd[src3 + 2] || 0;
@@ -677,9 +698,10 @@ layout(location=10) in vec4 iGlowB;
 layout(location=11) in vec4 iGlowC;
 layout(location=12) in vec4 iGlowHz;
 layout(location=13) in vec2 iGlowHz2;
+layout(location=14) in vec4 iGlowSpace;
 uniform vec2 uCam; uniform vec2 uViewHalf; uniform vec2 uRes;
 out vec2 vCenterScreen; out float vRot; out vec4 vTile; out vec2 vTileC; out vec4 vMisc; out vec4 vParam; out vec2 vDeform;
-out vec4 vGlowA; out vec4 vGlowB; out vec4 vGlowC; out vec4 vGlowHz; out vec2 vGlowHz2;
+out vec4 vGlowA; out vec4 vGlowB; out vec4 vGlowC; out vec4 vGlowHz; out vec2 vGlowHz2; out vec4 vGlowSpace;
 void main(){
   float c = cos(iRot), s = sin(iRot);
   vec2 local = aCorner * iSize;
@@ -687,7 +709,7 @@ void main(){
   vec2 world = iPos + woff;
   vCenterScreen = ((iPos - uCam) / uViewHalf * 0.5 + 0.5) * uRes;
   vRot = iRot; vTile = iTile; vTileC = iTileC; vMisc = iMisc; vParam = iParam; vDeform = iDeform;
-  vGlowA = iGlowA; vGlowB = iGlowB; vGlowC = iGlowC; vGlowHz = iGlowHz; vGlowHz2 = iGlowHz2;
+  vGlowA = iGlowA; vGlowB = iGlowB; vGlowC = iGlowC; vGlowHz = iGlowHz; vGlowHz2 = iGlowHz2; vGlowSpace = iGlowSpace;
   float z = 0.9 - float(gl_InstanceID) * 0.02;
   gl_Position = vec4((world - uCam) / uViewHalf, z, 1.0);
 }\`,
@@ -695,10 +717,15 @@ void main(){
 precision highp float;
 uniform sampler2D uAtlas; uniform sampler2D uPal; uniform sampler2D uBase; uniform sampler2D uGlow; uniform float uTime;
 in vec2 vCenterScreen; in float vRot; in vec4 vTile; in vec2 vTileC; in vec4 vMisc; in vec4 vParam; in vec2 vDeform;
-in vec4 vGlowA; in vec4 vGlowB; in vec4 vGlowC; in vec4 vGlowHz; in vec2 vGlowHz2;
+in vec4 vGlowA; in vec4 vGlowB; in vec4 vGlowC; in vec4 vGlowHz; in vec2 vGlowHz2; in vec4 vGlowSpace;
 out vec4 oColor;
 vec3 gF3 = vec3(0.0);
 vec3 gK3 = vec3(0.0);
+vec3 fetchGlow(ivec2 gg){
+  ivec2 gtp = ivec2(vTile.xy) + ivec2(vTileC) + gg;
+  if (gtp.x < int(vTile.x) || gtp.y < int(vTile.y) || gtp.x >= int(vTile.x + vTile.z) || gtp.y >= int(vTile.y + vTile.w)) return vec3(0.0);
+  return texelFetch(uGlow, gtp, 0).rgb;
+}
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 int tileRAt(ivec2 g){
   ivec2 tp = ivec2(vTile.xy) + ivec2(vTileC) + g;
@@ -740,8 +767,19 @@ void main(){
   if (vDeform.x != 1.0 || vDeform.y != 1.0) gfv = vec2(gfv.x / max(vDeform.x, 0.05), gfv.y / max(vDeform.y, 0.05));
   ivec2 g = ivec2(floor(gfv + 0.5));
   if (vGlowA.w > 0.0 || vGlowB.w > 0.0 || vGlowC.w > 0.0) {
-    ivec2 gtp = ivec2(vTile.xy) + ivec2(vTileC) + g;
-    if (gtp.x >= int(vTile.x) && gtp.y >= int(vTile.y) && gtp.x < int(vTile.x + vTile.z) && gtp.y < int(vTile.y + vTile.w)) gF3 = texelFetch(uGlow, gtp, 0).rgb;
+    vec3 fS = fetchGlow(g);
+    vec3 fW = fS;
+    if (vGlowSpace.x + vGlowSpace.y + vGlowSpace.z > 0.5) {
+      // 世界基准组：场以部件不旋转时烘焙，采样点绕枢轴按部件转角反向旋转
+      float c = cos(vRot), s = sin(vRot);
+      vec2 o = gfv - vTileC;
+      vec2 ow = vec2(o.x * c + o.y * s, o.x * s - o.y * c);
+      fW = fetchGlow(ivec2(floor(vTileC + ow + 0.5)));
+    }
+    gF3 = vec3(
+      vGlowSpace.x > 0.5 ? fW.r : fS.r,
+      vGlowSpace.y > 0.5 ? fW.g : fS.g,
+      vGlowSpace.z > 0.5 ? fW.b : fS.b);
   }
   gK3 = vec3(
     gF3.r * (0.5 + 0.5 * sin(6.2831853 * (vGlowHz.x * uTime + vGlowHz.y))) * vGlowA.w,
@@ -851,7 +889,7 @@ const instBuf = gl.createBuffer();
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
-  const strides = [[1, 2, 0], [2, 2, 2], [3, 1, 4], [4, 2, 5], [5, 4, 7], [6, 4, 11], [7, 4, 15], [8, 2, 19], [9, 4, 21], [10, 4, 25], [11, 4, 29], [12, 4, 33], [13, 2, 37]];
+  const strides = [[1, 2, 0], [2, 2, 2], [3, 1, 4], [4, 2, 5], [5, 4, 7], [6, 4, 11], [7, 4, 15], [8, 2, 19], [9, 4, 21], [10, 4, 25], [11, 4, 29], [12, 4, 33], [13, 2, 37], [14, 4, 39]];
   for (const sDef of strides) {
     gl.enableVertexAttribArray(sDef[0]);
     gl.vertexAttribPointer(sDef[0], sDef[1], gl.FLOAT, false, INSTANCE_FLOATS * 4, sDef[2] * 4);
@@ -1113,10 +1151,12 @@ function frame(now) {
     }
     // 发光段：前 3 个启用实例各供一组参数（场在图集 RGB 三通道，导出时
     // 按选区预计算；第 4 个起在导出端已按各自所选组并入对应通道）
-    const glowEl = dynList.filter((x) => x.params.glowEnabled).slice(0, 3).map((x) => {
+    const glowInsts = dynList.filter((x) => x.params.glowEnabled).slice(0, 3);
+    const glowEl = glowInsts.map((x) => {
       const grgb = particleRgb(x.params.glowColor || '#7dd7ff');
       return [grgb[0], grgb[1], grgb[2], x.params.glowStrength || 0, x.params.glowHz || 0, x.params.glowPhase || 0];
     });
+    const glowSpace = glowInsts.map((x) => (x.params.glowAngleSpace === 'world' ? 1 : 0));
     const comp = resolved.composite === 'overlay' ? 2 : resolved.composite === 'silhouette' ? 1 : resolved.composite === 'sprite' ? 3 : 0;
     const big = comp > 0 || dynList.length > 0;
     const el = {
@@ -1130,6 +1170,7 @@ function frame(now) {
       composite: comp,
       deform: hasDeform ? [dsx, dsy] : undefined,
       glow: glowEl,
+      glowSpace: glowSpace,
     };
     els.push(el);
     elByKey.set(part.key, el);

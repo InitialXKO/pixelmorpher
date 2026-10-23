@@ -1831,7 +1831,7 @@ function drawDynamicParticles(
 }
 
 /** 发光叠加层缓存：键 = 像素内容哈希 + 发光参数签名 + 脉冲量化步 + 镜像位 */
-const glowOverlayCache = new Map<string, { canvas: HTMLCanvasElement; pad: number } | null>();
+const glowOverlayCache = new Map<string, { canvas: HTMLCanvasElement; padX: number; padY: number } | null>();
 
 /**
  * 动态模式发光段：为一个发光组构建发光叠加层（未镜像空间，pad = 柔光圈外扩）。
@@ -1846,29 +1846,60 @@ function buildGlowOverlay(
   tSec: number,
   contentHash: string,
   mirror: boolean,
-): { canvas: HTMLCanvasElement; pad: number; key: string } | null {
+  frameAngleDeg = 0,
+): { canvas: HTMLCanvasElement; padX: number; padY: number; key: string } | null {
   if (!visualParams.glowEnabled) return null;
   const pulse = glowPulseAt(visualParams, tSec);
   if (pulse <= 0.01 || visualParams.glowStrength <= 0) return null;
   const params = visualParams;
+  const hasWorld = contributors.some((c) => c.glowAngleSpace === 'world');
   const sig = [
     params.glowColor, params.glowStrength,
     ...contributors.flatMap((c) => [
       c.glowHalo, c.glowMaskSource, c.glowPick, c.glowTolerance,
       c.glowMask?.w ?? 0, c.glowMask?.h ?? 0, c.glowMask?.bits ?? '',
       c.glowShape ?? 'square', c.glowShapeKernel?.w ?? 0, c.glowShapeKernel?.h ?? 0, c.glowShapeKernel?.bits ?? '',
+      c.glowStarReach ?? 1.2, c.glowFlameReach ?? 1.8, c.glowAngleDeg ?? 270, c.glowAngleSpace ?? 'sprite',
     ]),
+    hasWorld ? `W${Math.round(frameAngleDeg / 3)}` : '',
   ].join('|');
   const key = `${contentHash}|${sig}|${Math.round(pulse * 24)}|${mirror ? 'M' : ''}`;
   const hit = glowOverlayCache.get(key);
   if (hit !== undefined) return hit ? { ...hit, key } : null;
-  let result: { canvas: HTMLCanvasElement; pad: number } | null = null;
-  let merged: { w: number; h: number; field: Float32Array } | null = null;
+  let result: { canvas: HTMLCanvasElement; padX: number; padY: number } | null = null;
+  let merged: { w: number; h: number; field: Float32Array; padX: number; padY: number } | null = null;
   for (const c of contributors) {
-    const f = glowField(c, pixels);
+    const f = glowField(c, pixels, frameAngleDeg);
     if (!f) continue;
-    if (!merged) merged = { w: f.w, h: f.h, field: new Float32Array(f.field) };
-    else for (let i = 0; i < merged.field.length; i++) if (f.field[i] > merged.field[i]) merged.field[i] = f.field[i];
+    if (!merged) {
+      merged = { w: f.w, h: f.h, field: new Float32Array(f.field), padX: f.padX, padY: f.padY };
+    } else {
+      let m = merged;
+      const padX = Math.max(m.padX, f.padX);
+      const padY = Math.max(m.padY, f.padY);
+      if (padX !== m.padX || padY !== m.padY) {
+        const nm = {
+          w: m.w + (padX - m.padX) * 2, h: m.h + (padY - m.padY) * 2,
+          field: new Float32Array((m.w + (padX - m.padX) * 2) * (m.h + (padY - m.padY) * 2)),
+          padX, padY,
+        };
+        for (let y = 0; y < m.h; y++) {
+          for (let x = 0; x < m.w; x++) {
+            nm.field[(y + padY - m.padY) * nm.w + (x + padX - m.padX)] = m.field[y * m.w + x];
+          }
+        }
+        m = nm;
+        merged = nm;
+      }
+      const ox = m.padX - f.padX, oy = m.padY - f.padY;
+      for (let y = 0; y < f.h; y++) {
+        for (let x = 0; x < f.w; x++) {
+          const v = f.field[y * f.w + x];
+          const ni = (y + oy) * m.w + (x + ox);
+          if (v > m.field[ni]) m.field[ni] = v;
+        }
+      }
+    }
   }
   const gf = merged;
   if (gf) {
@@ -1892,7 +1923,7 @@ function buildGlowOverlay(
         if (f <= 0) continue;
         const o = ((y + pad) * W + (x + pad)) * 4;
         if (f >= 0.999) {
-          const origObj = hexToRgb(pixels[y][x] ?? '');
+          const origObj = hexToRgb(pixels[y - gf.padY]?.[x - gf.padX] ?? '');
           const orig: [number, number, number] = origObj
             ? [origObj.r, origObj.g, origObj.b]
             : glowRgb;
@@ -1920,7 +1951,7 @@ function buildGlowOverlay(
       fctx.drawImage(canvas, 0, 0);
       out = flip;
     }
-    result = { canvas: out, pad };
+    result = { canvas: out, padX: gf.padX + pad, padY: gf.padY + pad };
   }
   if (glowOverlayCache.size > 128) glowOverlayCache.clear();
   glowOverlayCache.set(key, result);
@@ -2235,10 +2266,10 @@ function renderNodeSprite(
   const glowOverlays = previewQuality === 'low' || !instruction.dynamicPatterns?.length
     ? []
     : resolveGlowGroups(instruction.dynamicPatterns.map((r) => r.instance.params))
-      .map((g) => buildGlowOverlay(effectivePixels, g.representative, g.contributors, frame / frameRate, pixelContentHash, mirror))
-      .filter((x): x is { canvas: HTMLCanvasElement; pad: number; key: string } => !!x);
-  const glowPivotX = (g: { canvas: HTMLCanvasElement; pad: number }) =>
-    (mirror ? g.canvas.width - (pivotXRaw + g.pad) : pivotXRaw + g.pad);
+      .map((g) => buildGlowOverlay(effectivePixels, g.representative, g.contributors, frame / frameRate, pixelContentHash, mirror, angle))
+      .filter((x): x is { canvas: HTMLCanvasElement; padX: number; padY: number; key: string } => !!x);
+  const glowPivotX = (g: { canvas: HTMLCanvasElement; padX: number }) =>
+    (mirror ? g.canvas.width - (pivotXRaw + g.padX) : pivotXRaw + g.padX);
 
   // Compute the draw position (where the pivot lands on canvas)
   const drawPivotX = subToPx(worldX);
@@ -2358,7 +2389,7 @@ function renderNodeSprite(
       ctx.globalCompositeOperation = 'lighter';
       for (const g of glowOverlays) {
         const gres = renderPixelPerfectRotation(
-          g.canvas, angle, effStretch, glowPivotX(g), pivotY + g.pad,
+          g.canvas, angle, effStretch, glowPivotX(g), pivotY + g.padY,
           { scaleX, skews, contentHash: g.key },
         );
         ctx.drawImage(
@@ -2401,7 +2432,7 @@ function renderNodeSprite(
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       for (const g of glowOverlays) {
-        ctx.drawImage(g.canvas, -glowPivotX(g), -(pivotY + g.pad));
+        ctx.drawImage(g.canvas, -glowPivotX(g), -(pivotY + g.padY));
       }
       ctx.restore();
     }

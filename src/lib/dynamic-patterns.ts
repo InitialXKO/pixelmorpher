@@ -54,6 +54,11 @@ export interface DynamicPatternParams {
                             // 颜色与呼吸参数跟该组；自己的选区照常生效）。前 3 个不用此字段。
   glowShape: GlowShape;     // 柔光圈形状（衰减印章的几何）；square = 一直以来的方形圈
   glowShapeKernel?: GlowMaskData; // shape=custom 时的自绘印章轮廓（位打包，中心为印章中心）
+  glowStarReach: number;    // 星形伸长：星芒沿轴向可达距离 ÷ 圈宽（1 = 与圈宽同距）
+  glowFlameReach: number;   // 焰形伸长：焰尖向上可达距离 ÷ 圈宽
+  glowAngleDeg: number;     // 辉光主方向（度，屏幕口径 0=东 90=南 180=西 270=北）：
+                            // 星形 = 一条星芒的指向、焰形 = 焰尖指向、自定义 = 印章上方指向
+  glowAngleSpace: 'sprite' | 'world'; // 方向基准：sprite = 跟随精灵旋转（缺省）；world = 恒为世界方向
 }
 
 /** 发光选区来源：color = 按像素颜色取色；marked = 手动标记的像素掩码 */
@@ -95,6 +100,7 @@ export function defaultDynamicParams(): DynamicPatternParams {
     glowPhase: 0, glowHalo: 2, glowMaskSource: 'color', glowPick: '#2ea8ff',
     glowTolerance: 0, glowMask: undefined, glowFollowGroup: 2,
     glowShape: 'square', glowShapeKernel: undefined,
+    glowStarReach: 1.2, glowFlameReach: 1.8, glowAngleDeg: 270, glowAngleSpace: 'sprite',
   };
 }
 
@@ -107,6 +113,13 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
   if (!['square', 'circle', 'star', 'flame', 'custom'].includes(out.glowShape)) {
     out.glowShape = 'square';
   }
+  out.glowStarReach = Number.isFinite(out.glowStarReach)
+    ? Math.max(1, Math.min(2.5, out.glowStarReach)) : 1.2;
+  out.glowFlameReach = Number.isFinite(out.glowFlameReach)
+    ? Math.max(1, Math.min(3.5, out.glowFlameReach)) : 1.8;
+  out.glowAngleDeg = Number.isFinite(out.glowAngleDeg)
+    ? ((out.glowAngleDeg % 360) + 360) % 360 : 270;
+  if (out.glowAngleSpace !== 'world') out.glowAngleSpace = 'sprite';
   return out;
 }
 
@@ -327,18 +340,25 @@ export function glowMaskCells(
   return any ? cells : null;
 }
 
-/**
- * 发光权重场：选区内 1，柔光圈按 glowShape 印章衰减（见 glowStamp），
- * 多个选区像素的印章逐像素取大；场值供画布/运行时两端同口径消费。
- */
 /** 柔光圈印章：相对选区像素的偏移权重表（中心权重 1，向外衰减）。
  * square 与旧逐圈外扩逐值一致（切比雪夫距离、线性衰减）；circle 用欧氏
- * 距离；star 沿横竖轴伸长 1.2 倍、对角收至 0.45 倍；flame 向上拉长
- * （纵向 ÷0.55）且随高度收窄（横向 ×(1+高度×0.3)）、向下压短（×1.7）；
- * custom 用自绘轮廓：权重 = 轮廓内到边界的切比雪夫深度占比。 */
-function glowStamp(params: DynamicPatternParams): { dx: number; dy: number; w: number }[] {
+ * 距离；star 星芒沿轴向伸长（glowStarReach 倍）、对角收至 0.45 倍；flame
+ * 向主方向拉长（glowFlameReach 倍）且随高度收窄（横向 ×(1+高度×0.3)）、
+ * 反向压短（×1.7）；custom 用自绘轮廓：权重 = 轮廓内到边界的深度占比。
+ * 方向：glowAngleDeg 为主方向（屏幕口径）；基准为 world 时再减去
+ * frameAngleDeg（精灵当前世界角，由调用方给），形状不跟随精灵旋转。 */
+function glowStamp(
+  params: DynamicPatternParams,
+  frameAngleDeg = 0,
+): { dx: number; dy: number; w: number }[] {
   const halo = Math.max(0, Math.min(8, Math.round(params.glowHalo || 0)));
   const shape = params.glowShape ?? 'square';
+  const mainDeg = (params.glowAngleDeg ?? 270)
+    - (params.glowAngleSpace === 'world' ? frameAngleDeg : 0);
+  // 印章原生主方向：star 的星芒沿坐标轴（基准 0°），flame/custom 原生向上（基准 270°）
+  const phiDeg = shape === 'star' ? mainDeg : mainDeg - 270;
+  const phi = (phiDeg * Math.PI) / 180;
+  const cosP = Math.cos(phi), sinP = Math.sin(phi);
   if (shape === 'custom') {
     const k = params.glowShapeKernel;
     if (k && k.w > 0 && k.h > 0) {
@@ -367,40 +387,57 @@ function glowStamp(params: DynamicPatternParams): { dx: number; dy: number; w: n
           }
         }
         const cx = Math.floor(k.w / 2), cy = Math.floor(k.h / 2);
-        const out: { dx: number; dy: number; w: number }[] = [];
+        const byKey = new Map<string, { dx: number; dy: number; w: number }>();
         for (let y = 0; y < k.h; y++) {
           for (let x = 0; x < k.w; x++) {
             const d = depth[y * k.w + x];
-            if (d > 0) out.push({ dx: x - cx, dy: y - cy, w: d / maxD });
+            if (d <= 0) continue;
+            const ox = x - cx, oy = y - cy;
+            const rx = Math.round(ox * cosP - oy * sinP);
+            const ry = Math.round(ox * sinP + oy * cosP);
+            const key = `${rx},${ry}`;
+            const wgt = d / maxD;
+            const prev = byKey.get(key);
+            if (!prev || wgt > prev.w) byKey.set(key, { dx: rx, dy: ry, w: wgt });
           }
         }
-        if (out.length > 0) return out;
+        if (byKey.size > 0) return [...byKey.values()];
       }
     }
     // 没有可用印章时回落方形（与缺省形状一致，不静默消失）
   }
   if (halo <= 0) return [{ dx: 0, dy: 0, w: 1 }];
+  const reach = shape === 'star'
+    ? Math.max(1, Math.min(2.5, params.glowStarReach || 1.2))
+    : shape === 'flame'
+      ? Math.max(1, Math.min(3.5, params.glowFlameReach || 1.8))
+      : 1;
   const out: { dx: number; dy: number; w: number }[] = [];
-  const R = shape === 'star' ? Math.ceil(halo * 1.2) : shape === 'flame' ? Math.ceil(halo * 1.82) : halo;
+  const R = shape === 'star' || shape === 'flame' ? Math.ceil(halo * reach) + 1 : halo;
   for (let dy = -R; dy <= R; dy++) {
     for (let dx = -R; dx <= R; dx++) {
       let wgt = 0;
       if (shape === 'circle') {
         const d = Math.hypot(dx, dy);
         if (d <= halo) wgt = 1 - d / (halo + 1);
-      } else if (shape === 'star') {
-        const d = Math.hypot(dx, dy);
-        if (d > 0) {
-          const axis = Math.abs(Math.cos(2 * Math.atan2(dy, dx)));
-          const f = 0.45 + 0.75 * Math.pow(axis, 1.5);
-          const dEff = d / f;
-          if (dEff <= halo) wgt = 1 - dEff / (halo + 1);
-        } else wgt = 1;
-      } else if (shape === 'flame') {
-        const dxs = dy < 0 ? dx * (1 + (-dy) * 0.3) : dx;
-        const dys = dy < 0 ? dy * 0.55 : dy * 1.7;
-        const d = Math.hypot(dxs, dys);
-        if (d <= halo) wgt = 1 - d / (halo + 1);
+      } else if (shape === 'star' || shape === 'flame') {
+        // 先转回印章原生坐标（逆旋转），再按原生形状求值
+        const lx = dx * cosP + dy * sinP;
+        const ly = -dx * sinP + dy * cosP;
+        if (shape === 'star') {
+          const d = Math.hypot(lx, ly);
+          if (d > 0) {
+            const axis = Math.abs(Math.cos(2 * Math.atan2(ly, lx)));
+            const f = 0.45 + (reach - 0.45) * Math.pow(axis, 1.5);
+            const dEff = d / f;
+            if (dEff <= halo) wgt = 1 - dEff / (halo + 1);
+          } else wgt = 1;
+        } else {
+          const dxs = ly < 0 ? lx * (1 + (-ly) * 0.3) : lx;
+          const dys = ly < 0 ? ly / reach : ly * 1.7;
+          const d = Math.hypot(dxs, dys);
+          if (d <= halo) wgt = 1 - d / (halo + 1);
+        }
       } else {
         const r = Math.max(Math.abs(dx), Math.abs(dy));
         if (r <= halo) wgt = 1 - r / (halo + 1);
@@ -411,29 +448,40 @@ function glowStamp(params: DynamicPatternParams): { dx: number; dy: number; w: n
   return out;
 }
 
+/**
+ * 发光权重场：选区内 1，柔光圈按印章盖出。返回的场带外扩边距
+ * （w/h = 网格 + 2×pad，网格像素 (x,y) 位于场 (x+padX, y+padY)），
+ * 辉光可溢出精灵包围盒；frameAngleDeg 供 world 基准方向用（精灵世界角）。
+ */
 export function glowField(
   params: DynamicPatternParams,
   grid: import('./unified-types').PixelGrid,
-): { w: number; h: number; field: Float32Array } | null {
+  frameAngleDeg = 0,
+): { w: number; h: number; field: Float32Array; padX: number; padY: number } | null {
   const cells = glowMaskCells(params, grid);
   if (!cells) return null;
   const h = grid.length;
   const w = grid[0].length;
-  const field = new Float32Array(w * h);
-  for (let i = 0; i < cells.length; i++) if (cells[i]) field[i] = 1;
-  const stamp = glowStamp(params);
+  const stamp = glowStamp(params, frameAngleDeg);
+  let padX = 0, padY = 0;
+  for (const s of stamp) {
+    if (Math.abs(s.dx) > padX) padX = Math.abs(s.dx);
+    if (Math.abs(s.dy) > padY) padY = Math.abs(s.dy);
+  }
+  const W = w + padX * 2;
+  const H = h + padY * 2;
+  const field = new Float32Array(W * H);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (!cells[y * w + x]) continue;
+      field[(y + padY) * W + (x + padX)] = 1;
       for (const s of stamp) {
-        const nx = x + s.dx, ny = y + s.dy;
-        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-        const ni = ny * w + nx;
+        const ni = (y + s.dy + padY) * W + (x + s.dx + padX);
         if (s.w > field[ni]) field[ni] = s.w;
       }
     }
   }
-  return { w, h, field };
+  return { w: W, h: H, field, padX, padY };
 }
 
 // ---- 模板库 ----
@@ -558,4 +606,7 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'glowPhase', label: '呼吸相位', section: '发光', min: 0, max: 1, step: 0.01 },
   { key: 'glowHalo', label: '柔光圈宽（px）', section: '发光', min: 0, max: 6, step: 1 },
   { key: 'glowTolerance', label: '取色容差（0=精确同色）', section: '发光', min: 0, max: 0.6, step: 0.01 },
+  { key: 'glowStarReach', label: '星形伸长（倍）', section: '发光', min: 1, max: 2.5, step: 0.05 },
+  { key: 'glowFlameReach', label: '焰形伸长（倍）', section: '发光', min: 1, max: 3.5, step: 0.05 },
+  { key: 'glowAngleDeg', label: '辉光方向（度，0=东 90=南 180=西 270=北）', section: '发光', min: 0, max: 359, step: 5 },
 ];

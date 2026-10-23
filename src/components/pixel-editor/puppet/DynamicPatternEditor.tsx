@@ -215,10 +215,27 @@ export default function DynamicPatternEditor({
                   </select>
                 </div>
               )}
+              {section === '发光' && ['star', 'flame', 'custom'].includes(np(inst).glowShape) && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[9px] text-gray-500 w-24 shrink-0">方向基准</span>
+                  <select
+                    value={np(inst).glowAngleSpace}
+                    onChange={(e) => patchParam(inst.id, 'glowAngleSpace', e.target.value)}
+                    className={`${selCls} flex-1`}
+                    title="精灵方向：形状跟着精灵一起转；世界方向：精灵怎么转，形状都恒指所设的世界方向"
+                  >
+                    <option value="sprite">精灵方向（跟随精灵旋转）</option>
+                    <option value="world">世界方向（不跟随）</option>
+                  </select>
+                </div>
+              )}
               {DYNAMIC_PARAM_DEFS.filter((d) => d.section === section)
                 .filter((d) => !(section === '发光' && glowOverflowOf(inst)
                   && (d.key === 'glowStrength' || d.key === 'glowHz' || d.key === 'glowPhase')))
                 .filter((d) => !(section === '发光' && d.key === 'glowHalo' && np(inst).glowShape === 'custom'))
+                .filter((d) => !(section === '发光' && d.key === 'glowStarReach' && np(inst).glowShape !== 'star'))
+                .filter((d) => !(section === '发光' && d.key === 'glowFlameReach' && np(inst).glowShape !== 'flame'))
+                .filter((d) => !(section === '发光' && d.key === 'glowAngleDeg' && !['star', 'flame', 'custom'].includes(np(inst).glowShape)))
                 .map((d) => {
                 const v = np(inst)[d.key] as number;
                 return (

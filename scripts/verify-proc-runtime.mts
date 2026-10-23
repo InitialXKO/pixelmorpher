@@ -735,7 +735,10 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   const cells = glowMaskCells(colorParams, grid);
   check('Q1 取色选区精确命中同色像素（不分大小写、透明不选）', !!cells && cells[1] === 1 && cells[5] === 1 && cells[0] === 0 && cells[3] === 0);
   const field = glowField(colorParams, grid);
-  check('Q2 权重场：选区内 1、柔光圈一层衰减到 0.5', !!field && field.field[1] === 1 && Math.abs(field.field[0] - 0.5) < 1e-6 && field.field[3] === 0);
+  const atF = (f: { field: Float32Array; w: number; padX: number; padY: number }, x: number, y: number) =>
+    f.field[(y + f.padY) * f.w + (x + f.padX)];
+  check('Q2 权重场：选区内 1、柔光圈一层衰减到 0.5', !!field && atF(field, 1, 0) === 1 && Math.abs(atF(field, 0, 0) - 0.5) < 1e-6 && atF(field, 3, 0) === 0);
+  check('Q2b 场带外扩边距（圈宽 1 → pad 1、尺寸 6×5）', !!field && field.padX === 1 && field.padY === 1 && field.w === 6 && field.h === 5);
   check('Q3 呼吸脉冲：相位 0 时 t=0 为 0.5、glowHz=1 时 t=0.25s 达峰值', glowPulseAt({ ...colorParams, glowHz: 1 }, 0) === 0.5 && Math.abs(glowPulseAt({ ...colorParams, glowHz: 1 }, 0.25) - 1) < 1e-9);
   const maskData = encodeGlowMask([[true, false], [false, true]]);
   const markedParams = { ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'marked' as const, glowMask: maskData, glowHalo: 0 };
@@ -764,7 +767,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   } as unknown as Character;
   const pkg = convertCharacterToRuntimePackage(ch);
   const gem = pkg.parts.find((p) => p.key === 'gem');
-  check('Q6 精灵部件发光场进包（space=sprite）', !!gem?.glow && gem.glow.space === 'sprite' && gem.glow.w === 4 && gem.glow.h === 3);
+  check('Q6 精灵部件发光场进包（space=sprite，含外扩边距）', !!gem?.glow && gem.glow.space === 'sprite' && gem.glow.w === 6 && gem.glow.h === 5 && gem.glow.padX === 1 && gem.glow.padY === 1);
   check('Q7 逐集 __glow 同步带上', !!(pkg.costumes['set1'] as { __glow?: Record<string, unknown> }).__glow?.['gem']);
   const emptyInst = createDynamicInstance('辉光呼吸', {
     ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: '#ffffff', emitEnabled: false,
@@ -844,7 +847,8 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: '#2ea8ff',
     glowHalo: 2, glowShape: shape, ...over,
   } as never, grid9);
-  const at = (f: { field: Float32Array } | null, x: number, y: number) => f?.field[y * 9 + x] ?? -1;
+  const at = (f: { field: Float32Array; w: number; padX: number; padY: number } | null, x: number, y: number) =>
+    f ? f.field[(y + f.padY) * f.w + (x + f.padX)] : -1;
   const nearV = (a: number, b: number) => Math.abs(a - b) < 1e-6;
   const fSq = shapeField('square');
   check('Q16 方形（缺省）：对角与正交同圈同值', nearV(at(fSq, 6, 4), 1 / 3) && nearV(at(fSq, 6, 6), 1 / 3));
@@ -853,10 +857,29 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   const fSt = shapeField('star');
   check('Q18 十字星形：轴向伸长（0.444）、对角收短归零', nearV(at(fSt, 6, 4), 1 - (2 / 1.2) / 3) && at(fSt, 5, 5) === 0);
   const fFl = shapeField('flame');
-  check('Q19 焰形：向上伸长（3 格外仍有 0.45）、向下压短、向上收尖', nearV(at(fFl, 4, 1), 0.45) && at(fFl, 4, 6) === 0 && at(fFl, 6, 2) === 0);
+  check('Q19 焰形：向上伸长（3 格外仍有 0.444）、向下压短、向上收尖', nearV(at(fFl, 4, 1), 1 - (3 / 1.8) / 3) && at(fFl, 4, 6) === 0 && at(fFl, 6, 2) === 0);
   const kernel = encodeGlowMask([[false, false, false], [true, true, true], [false, false, false]]);
   const fCu = shapeField('custom', { glowHalo: 0, glowShapeKernel: kernel });
   check('Q20 自定义印章：只沿所画轮廓盖（横向有、纵向无），圈宽为 0 也生效', at(fCu, 3, 4) === 1 && at(fCu, 5, 4) === 1 && at(fCu, 4, 3) === 0 && at(fCu, 4, 5) === 0);
+  const fStar2 = shapeField('star', { glowStarReach: 2 });
+  const fFlame3 = shapeField('flame', { glowFlameReach: 3 });
+  check('Q21 伸长可调：星形伸长 2 时轴向 2 格 = 2/3、焰形伸长 3 时上方 4 格 = 5/9',
+    nearV(at(fStar2, 6, 4), 2 / 3) && nearV(at(fFlame3, 4, 0), 5 / 9));
+  const fFlameS = shapeField('flame', { glowAngleDeg: 90 });
+  check('Q22 精灵基准方向：焰形主方向指南时焰尖朝下', nearV(at(fFlameS, 4, 7), 1 - (3 / 1.8) / 3) && at(fFlameS, 4, 1) === 0);
+  const fFlameW = glowField({
+    ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: '#2ea8ff',
+    glowHalo: 2, glowShape: 'flame', glowAngleDeg: 270, glowAngleSpace: 'world',
+  } as never, grid9, 90);
+  check('Q23 世界基准方向：精灵转 90° 时焰尖仍朝西（世界向不变）',
+    nearV(at(fFlameW, 1, 4), 1 - (3 / 1.8) / 3) && at(fFlameW, 7, 4) === 0 && at(fFlameW, 4, 1) === 0);
+  const cornerGrid = [['#ff0000', null, null, null], [null, null, null, null], [null, null, null, null], [null, null, null, null]] as never;
+  const fCorner = glowField({
+    ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: '#ff0000', glowHalo: 2, glowShape: 'square',
+  } as never, cornerGrid);
+  check('Q24 辉光溢出包围盒：角上选区的场扩到网格外（左上角外 2 格 = 1/3）',
+    !!fCorner && fCorner.padX === 2 && Math.abs(fCorner.field[0] - 1 / 3) < 1e-6);
+  check('Q25 模板含方向基准接线（iGlowSpace/fetchGlow）', html.includes('iGlowSpace') && html.includes('fetchGlow'));
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
