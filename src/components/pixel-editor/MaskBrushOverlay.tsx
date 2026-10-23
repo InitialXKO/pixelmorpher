@@ -286,19 +286,36 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
           sctx.fill();
         }
       }
-      // 底色 = 四角 3×3 均值的再均值；用阴影作裁剪把底色只涂进线外
-      let br = 0, bg = 0, bb = 0, bn = 0;
-      for (const [cx0, cy0] of [[0, 0], [iw - 3, 0], [0, ih - 3], [iw - 3, ih - 3]] as const) {
-        const d = ictx.getImageData(Math.max(0, cx0), Math.max(0, cy0), 3, 3).data;
-        for (let i = 0; i < d.length; i += 4) {
-          br += d[i]!; bg += d[i + 1]!; bb += d[i + 2]!; bn++;
-        }
+      // 底色估计：沿原图边框环采样取中位数，并按 alpha 先合成到黑底上——
+      // sam-web 编码前把输入合成到 #000 黑底（createSquareCanvas），透明
+      // 像素在 SAM 眼中就是黑色；向导 SAM 步已抠掉底色的参考图边框全是
+      // 透明像素，合成后自然得黑，与照片底色走同一条口径。用阴影作裁剪
+      // 把底色只涂进线外。
+      const ring: [number, number, number][] = [];
+      const pushSample = (sx: number, sy: number) => {
+        const d = ictx.getImageData(sx, sy, 1, 1).data;
+        const af = d[3]! / 255;
+        ring.push([d[0]! * af, d[1]! * af, d[2]! * af]);
+      };
+      const stepPx = Math.max(1, Math.floor(Math.min(iw, ih) / 64));
+      for (let x = 0; x < iw; x += stepPx) {
+        pushSample(x, 0);
+        pushSample(x, ih - 1);
       }
+      for (let y = 0; y < ih; y += stepPx) {
+        pushSample(0, y);
+        pushSample(iw - 1, y);
+      }
+      const median = (arr: number[]) => {
+        const s = [...arr].sort((a, b) => a - b);
+        return s[Math.floor(s.length / 2)] ?? 0;
+      };
+      const bcol = [0, 1, 2].map((c) => Math.round(median(ring.map((p) => p[c]!))));
       const fillC = document.createElement('canvas');
       fillC.width = iw;
       fillC.height = ih;
       const fctx = fillC.getContext('2d')!;
-      fctx.fillStyle = `rgb(${Math.round(br / bn)},${Math.round(bg / bn)},${Math.round(bb / bn)})`;
+      fctx.fillStyle = `rgb(${bcol[0]},${bcol[1]},${bcol[2]})`;
       fctx.fillRect(0, 0, iw, ih);
       fctx.globalCompositeOperation = 'destination-in';
       fctx.drawImage(shadow, 0, 0);
