@@ -1019,7 +1019,8 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
     return chars.find((c) => c.id === wanted) ?? chars[0];
   }, [procCharId, activeTab]);
   const procPkg = useMemo(
-    () => (procCharacter ? convertCharacterToRuntimePackage(procCharacter) : null),
+    // 精灵引用可能指向工程级全局表，必须随角色一起传给转换器（与主画布同口径）
+    () => (procCharacter ? convertCharacterToRuntimePackage(procCharacter, useProjectStore.getState().sprites) : null),
     [procCharacter],
   );
   const exportProcRuntime = useCallback(() => {

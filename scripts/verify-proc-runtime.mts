@@ -638,4 +638,33 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('N3 模板含跟随 A/B 两遍求值', html.includes('runBehaviorPass') && html.includes("follow || 'prev'"));
 }
 
+// ---------- O) 精灵引用指向工程级全局表（整件不显示事故回归） ----------
+// 事故：装配角色的服装件精灵全是 SpriteRef、指向工程级 sprites 表，
+// 角色自带表为空；转换器只查角色表 → 引用全部落空 → 精灵部件整件不进包。
+{
+  const { pxToSub } = await import('../src/lib/unified-types');
+  const grid5: (string | null)[][] = Array.from({ length: 5 }, () => Array(5).fill('#3366aa'));
+  const extSprite = { width: 5, height: 5, data: grid5, plug: { x: pxToSub(2), y: pxToSub(4) } };
+  const cloakPiece = createDefaultCostumePiece('cloak');
+  // 只存方向 0（装配服装常态）且为引用形式
+  (cloakPiece.sprites as Record<number, unknown>)[0] = { spriteId: 'ext1' };
+  const ch = {
+    id: 'chO', name: '全局表引用',
+    nodes: { cloak: makeNode('cloak', '披风', 'cloak') },
+    rootNodeIds: ['cloak'],
+    sprites: {},
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { cloak: cloakPiece } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  } as unknown as Character;
+
+  const pkgNoTable = convertCharacterToRuntimePackage(ch);
+  check('O1 不传全局表时引用落空（复现事故）', !pkgNoTable.parts.some((p) => p.key === 'cloak'));
+  const pkg = convertCharacterToRuntimePackage(ch, { ext1: extSprite } as never);
+  const cloak = pkg.parts.find((p) => p.key === 'cloak');
+  check('O2 传全局表后精灵部件进包（且方向 0 代表图回落生效）', cloak?.spriteKind === true && cloak?.sprite?.w === 5);
+  const sp = (pkg.costumes['set1'] as { __sprite?: Record<string, { w: number }> }).__sprite;
+  check('O3 逐集 __sprite 同步带上', sp?.['cloak']?.w === 5);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

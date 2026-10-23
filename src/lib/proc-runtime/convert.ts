@@ -6,7 +6,7 @@
 //   坐标转运行时系：x 同向、y 取反（产品 y 下 / 运行时 y 上）、角度同理。
 // - 行为图/表演图的 nodeId（含 nodeRef 目标）一律换算成 slotKey。
 // - 表演图经 graph-translate 采样烘焙；翻译失败/无贡献逐条进 warnings，不静默。
-import type { Character, CostumePiece, ParametricAppearance } from '../unified-types';
+import type { Character, CostumePiece, DirectionIndex, ParametricAppearance } from '../unified-types';
 import { subToPx } from '../unified-types';
 import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
@@ -83,23 +83,40 @@ const TRIGGER_KEY_MAP: Record<string, string> = {
   attack: 'KeyJ', interact: 'KeyE', skill: 'KeyK', dash: 'KeyL', use: 'KeyF',
 };
 
-/** 东向精灵网格（与主画布同解析链：变体→基础→镜像回落），无则 undefined */
+/** 精灵表口径：服装件里的精灵引用（SpriteRef）可能指向角色自带表，
+ *  也可能指向工程级全局表（装配向导等写入方用全局表）——主画布出图时
+ *  用的是全局表。转换器必须拿到同一张表解析，否则引用全部落空、
+ *  精灵部件整件不进包（2026-10-23 实测事故：角色 12 个槽位只剩
+ *  1 个参数化部件进包）。调用方传工程级表，与角色表合并（工程级优先）。 */
+export type SpriteTable = Record<string, import('../unified-types').Sprite>;
+
+/** 代表精灵网格（与主画布同解析链：变体→基础→镜像回落）。
+ *  strictEast=false 时东向缺图按 [2,0,6,4,1,3,5,7] 顺序取该件任一
+ *  方向的图作代表（装配服装常只存一个方向；运行时包本来就只带
+ *  一张代表图）。底图（composite）口径仍严格取东向，不走此回落。 */
 function eastSpriteOf(
   piece: CostumePiece | undefined,
   character: Character,
   slotKey: string,
+  table: SpriteTable,
+  strictEast = true,
 ): RuntimePartBase['baseSprite'] {
   if (!piece) return undefined;
-  const r = resolvePieceSprite(piece, 2, character.slotVariants?.[slotKey], character.sprites, character.latitude ?? 0);
-  if (!r.sprite) return undefined;
-  return {
-    w: r.sprite.width,
-    h: r.sprite.height,
-    plug: r.sprite.plug
-      ? [subToPx(r.sprite.plug.x), subToPx(r.sprite.plug.y)]
-      : [r.sprite.width / 2, r.sprite.height / 2],
-    data: r.sprite.data,
-  };
+  const dirs: DirectionIndex[] = strictEast ? [2] : [2, 0, 6, 4, 1, 3, 5, 7];
+  for (const dir of dirs) {
+    const r = resolvePieceSprite(piece, dir, character.slotVariants?.[slotKey], table, character.latitude ?? 0);
+    if (r.sprite) {
+      return {
+        w: r.sprite.width,
+        h: r.sprite.height,
+        plug: r.sprite.plug
+          ? [subToPx(r.sprite.plug.x), subToPx(r.sprite.plug.y)]
+          : [r.sprite.width / 2, r.sprite.height / 2],
+        data: r.sprite.data,
+      };
+    }
+  }
+  return undefined;
 }
 
 /** silhouette/overlay 的底图：东向精灵（generate 档不需要），无则 undefined */
@@ -108,9 +125,10 @@ function baseSpriteFor(
   piece: CostumePiece | undefined,
   character: Character,
   slotKey: string,
+  table: SpriteTable,
 ): RuntimePartBase['baseSprite'] {
   if ((app.composite ?? 'generate') === 'generate') return undefined;
-  return eastSpriteOf(piece, character, slotKey);
+  return eastSpriteOf(piece, character, slotKey, table, true);
 }
 
 /** 双挂载解析 → 运行时动态实例（节点为底、服装件同位替换/压制） */
@@ -150,8 +168,13 @@ function appearanceToBase(
   };
 }
 
-export function convertCharacterToRuntimePackage(character: Character): ProcRuntimePackage {
+export function convertCharacterToRuntimePackage(
+  character: Character,
+  externalSprites?: SpriteTable,
+): ProcRuntimePackage {
   const warnings: string[] = [];
+  // 精灵引用解析表：角色自带表 + 工程级全局表（全局优先），与主画布同口径
+  const spriteTable: SpriteTable = { ...(character.sprites ?? {}), ...(externalSprites ?? {}) };
   const worlds = computeWorldTransforms(character, 0, 512, 512, 12);
   const activeSet = character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId)
     ?? character.costumeSets[0];
@@ -181,7 +204,7 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
     if (!baseApp) continue;
     const w = worlds.get(node.id);
     const pivot: [number, number] = w ? [subToPx(w.worldX), -subToPx(w.worldY)] : [0, 0];
-    const baseSprite = baseSpriteFor(baseApp, basePiece, character, slotKey);
+    const baseSprite = baseSpriteFor(baseApp, basePiece, character, slotKey, spriteTable);
     if ((baseApp.composite ?? 'generate') !== 'generate' && !baseSprite) {
       warnings.push(`槽位 ${slotKey} 合成方式为 ${baseApp.composite} 但东向无精灵，运行时按独立生成处理`);
     }
@@ -199,7 +222,7 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
   const spriteSlots = new Set<string>();
   for (const cs of character.costumeSets) {
     for (const [slotKey, piece] of Object.entries(cs.pieces)) {
-      if (!parametricSlots.has(slotKey) && eastSpriteOf(piece, character, slotKey)) {
+      if (!parametricSlots.has(slotKey) && eastSpriteOf(piece, character, slotKey, spriteTable, false)) {
         spriteSlots.add(slotKey);
       }
     }
@@ -208,8 +231,8 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
     const nodeId = slotNode.get(slotKey);
     const node = nodeId ? character.nodes[nodeId] : undefined;
     if (!node) { warnings.push(`槽位 ${slotKey} 有精灵但无对应节点，已跳过`); continue; }
-    const sg = eastSpriteOf(activeSet?.pieces[slotKey], character, slotKey)
-      ?? character.costumeSets.map((cs) => eastSpriteOf(cs.pieces[slotKey], character, slotKey)).find(Boolean);
+    const sg = eastSpriteOf(activeSet?.pieces[slotKey], character, slotKey, spriteTable, false)
+      ?? character.costumeSets.map((cs) => eastSpriteOf(cs.pieces[slotKey], character, slotKey, spriteTable, false)).find(Boolean);
     if (!sg) continue;
     const w = worlds.get(node.id);
     const pivot: [number, number] = w ? [subToPx(w.worldX), -subToPx(w.worldY)] : [0, 0];
@@ -256,7 +279,7 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
       if (!app) { entry[slotKey] = null; continue; }
       const w = nodeId ? worlds.get(nodeId) : undefined;
       const pivot: [number, number] = w ? [subToPx(w.worldX), -subToPx(w.worldY)] : [0, 0];
-      entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0, baseSpriteFor(app, piece, character, slotKey));
+      entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0, baseSpriteFor(app, piece, character, slotKey, spriteTable));
     }
     for (const slotKey of spriteSlots) {
       const nodeId = slotNode.get(slotKey);
@@ -271,7 +294,7 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
     for (const slotKey of new Set([...parametricSlots, ...spriteSlots])) {
       const piece = cs.pieces[slotKey];
       if (piece?.parametric) continue;
-      const sg = eastSpriteOf(piece, character, slotKey);
+      const sg = eastSpriteOf(piece, character, slotKey, spriteTable, false);
       if (sg) spriteMap[slotKey] = sg;
     }
     if (Object.keys(spriteMap).length > 0) entry.__sprite = spriteMap;
