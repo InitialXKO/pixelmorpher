@@ -886,6 +886,17 @@ export interface ParametricAppearance {
   surfaceGraph?: SurfaceGraph;
   /** 表面预设名（UI 显示与回选；程序本体以 surface 为准） */
   surfaceName?: string;
+  /**
+   * 合成方式（缺省 'generate'）：
+   * - 'generate'：独立生成——形状即轮廓，精灵图被整个盖过（原行为）。
+   * - 'silhouette'：借精灵轮廓——基础量改从节点精灵的透明掩码算（距离场），
+   *   着色照旧全出调色板色，精灵只贡献剪影。
+   * - 'overlay'：叠加到精灵——精灵像素作底，只让 bump 写出（亮度档位）
+   *   与四个枚举（光照/描边/轮缘光/闪光）生效，图案类写出忽略。
+   * 后两档在节点无精灵时回落 'generate'。主画布先行；导出运行时包暂仍按
+   * 'generate' 处理（第二条战线）。
+   */
+  composite?: 'generate' | 'silhouette' | 'overlay';
   /** 调色板家族名（运行时 PALETTES 的键） */
   palette: string;
   /** 运行时枚举槽位编号（LIGHT / OUTLINE / RIM / GLINT，见 proc-runtime 枚举表） */

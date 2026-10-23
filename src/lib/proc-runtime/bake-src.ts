@@ -606,6 +606,143 @@ function compileTileLayers(shape, program) {
   }
   return { w: w, h: h, cx: cx, cy: cy, data: data };
 }
+// ---- 精灵栅格烘焙（合成方式 silhouette/overlay 用）：基础量改从精灵的
+// 透明掩码算，模式图/层程序与写出规则与形状版完全共用。
+// raster = { w, h, plugX, plugY, solid }：solid 为行优先 0/1（产品空间
+// 自上而下），plug 为像素浮点坐标（产品空间）。
+// 距离 d = 到最近异类像素的距离（两遍 chamfer 近似，权 1/√2）；occ 恒
+// 等于 solid（d 最小正值为 1，occ 的 d<=0.5 分支不触发）；254 外环 =
+// d<=1.5 的外侧邻域，与形状版同口径。
+// 坐标约定与形状版一致（烘焙空间 y 向上）：源行进场时垂直翻转，着色段
+// 统一翻回；lx/ly 以 plug 为原点，u01/v01 为图内相对位置（v 自下而上）。
+function chamferDistB(seed, w, h) {
+  var INF = 1e9, SQ2 = Math.SQRT2;
+  var d = new Float64Array(w * h);
+  var i, x, y, idx, v;
+  for (i = 0; i < w * h; i++) d[i] = seed[i] ? 0 : INF;
+  for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
+    idx = y * w + x; if (d[idx] === 0) continue;
+    v = d[idx];
+    if (x > 0) v = Math.min(v, d[idx - 1] + 1);
+    if (y > 0) v = Math.min(v, d[idx - w] + 1);
+    if (x > 0 && y > 0) v = Math.min(v, d[idx - w - 1] + SQ2);
+    if (x < w - 1 && y > 0) v = Math.min(v, d[idx - w + 1] + SQ2);
+    d[idx] = v;
+  }
+  for (y = h - 1; y >= 0; y--) for (x = w - 1; x >= 0; x--) {
+    idx = y * w + x; if (d[idx] === 0) continue;
+    v = d[idx];
+    if (x < w - 1) v = Math.min(v, d[idx + 1] + 1);
+    if (y < h - 1) v = Math.min(v, d[idx + w] + 1);
+    if (x < w - 1 && y < h - 1) v = Math.min(v, d[idx + w + 1] + SQ2);
+    if (x > 0 && y < h - 1) v = Math.min(v, d[idx + w - 1] + SQ2);
+    d[idx] = v;
+  }
+  return d;
+}
+function rasterFieldGridB(raster) {
+  var M = 2;
+  var rw = raster.w, rh = raster.h;
+  var w = rw + M * 2, h = rh + M * 2;
+  var solidT = new Uint8Array(w * h);
+  var sx, sy;
+  for (sy = 0; sy < rh; sy++) {
+    var ty = rh - 1 - sy;
+    for (sx = 0; sx < rw; sx++) {
+      if (raster.solid[sy * rw + sx]) solidT[(ty + M) * w + (sx + M)] = 1;
+    }
+  }
+  var dOut = chamferDistB(solidT, w, h);
+  var inv = new Uint8Array(w * h);
+  for (var k = 0; k < w * h; k++) inv[k] = solidT[k] ? 0 : 1;
+  var dIn = chamferDistB(inv, w, h);
+  var fields = new Array(w * h);
+  var maxD = 0.0001;
+  for (var j = 0; j < h; j++) for (var i = 0; i < w; i++) {
+    var idx = j * w + i;
+    var inside = solidT[idx] === 1;
+    var dd = inside ? dIn[idx] : dOut[idx];
+    fields[idx] = {
+      lx: (i - M) - raster.plugX,
+      ly: raster.plugY - (rh - 1 - (j - M)),
+      inside: inside, d: dd, gx: 0, gy: 0, sx: i - M, syB: j - M,
+    };
+    if (inside && dd > maxD) maxD = dd;
+  }
+  for (var j2 = 0; j2 < h; j2++) for (var i2 = 0; i2 < w; i2++) {
+    var f = fields[j2 * w + i2];
+    f.gx = fields[j2 * w + Math.min(w - 1, i2 + 1)].d - fields[j2 * w + Math.max(0, i2 - 1)].d;
+    f.gy = fields[Math.min(h - 1, j2 + 1) * w + i2].d - fields[Math.max(0, j2 - 1) * w + i2].d;
+  }
+  return { w: w, h: h, fields: fields, maxD: maxD, rw: rw, rh: rh };
+}
+function compileTileDAGRaster(raster, graph) {
+  var g = rasterFieldGridB(raster);
+  var w = g.w, h = g.h;
+  var fakeShape = { kind: 'rect', size: [g.rw, g.rh] };
+  var compiled = compileSurfaceGraph(graph, fakeShape);
+  var data = new Uint8Array(w * h * 4);
+  for (var j = 0; j < h; j++) for (var i = 0; i < w; i++) {
+    var f = g.fields[j * w + i];
+    var o = (j * w + i) * 4;
+    data[o + 3] = 255;
+    var occ = f.inside || f.d <= 0.5;
+    if (!occ) {
+      data[o] = f.d <= 1.5 ? 254 : 255;
+      data[o + 1] = 255;
+      continue;
+    }
+    var base = {
+      inside: f.inside, d: f.d, sd: f.inside ? f.d : -f.d,
+      gx: f.gx, gy: f.gy, h: f.inside ? f.d / g.maxD : 0,
+      u01: g.rw > 0 ? (f.sx + 0.5) / g.rw : 0.5,
+      v01: g.rh > 0 ? (f.syB + 0.5) / g.rh : 0.5,
+    };
+    var r = compiled.evaluate(f.lx, f.ly, base);
+    data[o] = r.slot;
+    data[o + 1] = compiled.hasGlint ? (r.glint ? 255 : 0) : 255;
+  }
+  return { w: w, h: h, cx: Math.floor(w / 2), cy: Math.floor(h / 2), data: data };
+}
+function compileTileLayersRaster(raster, program) {
+  var g = rasterFieldGridB(raster);
+  var w = g.w, h = g.h;
+  var hasGlint = program.some(function (l) { return l.ch === 'glint'; });
+  var data = new Uint8Array(w * h * 4);
+  for (var j = 0; j < h; j++) for (var i = 0; i < w; i++) {
+    var f = g.fields[j * w + i];
+    var o = (j * w + i) * 4;
+    data[o + 3] = 255;
+    var occ = f.inside || f.d <= 0.5;
+    if (!occ) {
+      data[o] = f.d <= 1.5 ? 254 : 255;
+      data[o + 1] = 255;
+      continue;
+    }
+    var ctx = {
+      px: f.lx, py: f.ly,
+      px01: g.rw > 0 ? (f.sx + 0.5) / g.rw : 0.5,
+      py01: g.rh > 0 ? (f.syB + 0.5) / g.rh : 0.5,
+      inside: f.inside, d: f.d, gx: f.gx, gy: f.gy,
+      h: f.inside ? f.d / g.maxD : 0,
+    };
+    var slot = 2, gl = hasGlint ? 0 : 255;
+    for (var li = 0; li < program.length; li++) {
+      var layer = program[li];
+      if (layer.bumpForm) {
+        var bv = bumpValueB(layer.bumpForm, ctx);
+        slot = bv > 0.66 ? layer.hi : bv > 0.33 ? layer.mid : layer.lo;
+        continue;
+      }
+      if (!maskHitB(layer.mask, ctx)) continue;
+      if (layer.ch === 'glint') gl = 255;
+      else slot = layer.slot;
+    }
+    data[o] = slot;
+    data[o + 1] = gl;
+  }
+  return { w: w, h: h, cx: Math.floor(w / 2), cy: Math.floor(h / 2), data: data };
+}
 
 `;
 
@@ -619,7 +756,15 @@ export function createSurfaceBaker(): {
     shape: { kind: string; size: [number, number]; roundness?: number; points?: [number, number][]; pivot?: [number, number] },
     program: unknown,
   ) => { w: number; h: number; cx: number; cy: number; data: Uint8Array };
+  compileTileDAGRaster: (
+    raster: { w: number; h: number; plugX: number; plugY: number; solid: ArrayLike<number> },
+    graph: unknown,
+  ) => { w: number; h: number; cx: number; cy: number; data: Uint8Array };
+  compileTileLayersRaster: (
+    raster: { w: number; h: number; plugX: number; plugY: number; solid: ArrayLike<number> },
+    program: unknown,
+  ) => { w: number; h: number; cx: number; cy: number; data: Uint8Array };
 } {
-  const factory = new Function(`${BAKE_SRC}\nreturn { compileTileDAG, compileTileLayers };`);
+  const factory = new Function(`${BAKE_SRC}\nreturn { compileTileDAG, compileTileLayers, compileTileDAGRaster, compileTileLayersRaster };`);
   return factory() as never;
 }

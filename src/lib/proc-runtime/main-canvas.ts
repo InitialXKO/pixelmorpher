@@ -9,9 +9,10 @@
 // 方向口径：东向为基，西半向（NW/W/SW = 3/4/5）走渲染器 mirror。
 // ============================================================
 
-import { pxToSub, type ParametricAppearance, type PixelGrid, type Sprite } from '../unified-types';
+import { pxToSub, subToPx, type ParametricAppearance, type PixelGrid, type Sprite } from '../unified-types';
 import { createSurfaceBaker } from './bake-src';
 import { PALETTES } from './palettes';
+import { hashPixelGrid } from '../engine/render-cache';
 
 let bakerSingleton: ReturnType<typeof createSurfaceBaker> | null = null;
 function baker() {
@@ -146,8 +147,140 @@ function cacheKey(app: ParametricAppearance): string {
   return JSON.stringify({ ...app, surfaceGraph: g });
 }
 
+/** overlay 档：精灵原色按档位调亮调暗的系数（档位 2 = 不动） */
+const OVERLAY_SLOT_FACTOR: Record<number, number> = { 0: 0.55, 1: 0.78, 2: 1.0, 3: 1.22 };
+
+function scaleHex(hex: string, f: number): string {
+  if (f === 1) return hex;
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const r = Math.min(255, Math.round(((n >> 16) & 255) * f));
+  const g = Math.min(255, Math.round(((n >> 8) & 255) * f));
+  const b = Math.min(255, Math.round((n & 255) * f));
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
+/**
+ * overlay 着色：精灵像素作底，档位只调亮度；描边环、内描、轮缘光、
+ * 闪光出调色板色。暴露/枚举判定与 shadeTileStatic 逐项同口径（孪生
+ * 实现，改一处须同步另一处）。瓦片来自栅格烘焙（边距 M=2，源图进场
+ * 已垂直翻转），底像素按同一翻转取回，最终行序翻回产品空间——净
+ * 效果 = 原图四周 pad 2px。
+ */
+export function shadeTileOverSprite(tile: Tile, base: Sprite, app: ParametricAppearance, seed: number): PixelGrid {
+  const pal = PALETTES[app.palette] ?? PALETTES.shirt;
+  const { w, h } = tile;
+  const M = 2;
+  const R = (i: number, j: number) => (i < 0 || j < 0 || i >= w || j >= h ? 255 : tile.data[(j * w + i) * 4]);
+  const G = (i: number, j: number) => (i < 0 || j < 0 || i >= w || j >= h ? 0 : tile.data[(j * w + i) * 4 + 1]);
+  const basePx = (i: number, j: number): string | null => {
+    const sx = i - M, syB = j - M;
+    if (sx < 0 || syB < 0 || sx >= base.width || syB >= base.height) return null;
+    return base.data[base.height - 1 - syB]?.[sx] ?? null;
+  };
+  const lm = app.light, om = app.outline, rm = app.rim, gm = app.glint;
+  const rows: PixelGrid = [];
+  for (let j = 0; j < h; j++) {
+    const row: (string | null)[] = [];
+    for (let i = 0; i < w; i++) {
+      const r0 = R(i, j);
+      if (r0 >= 128) {
+        let color: string | null = null;
+        if (r0 === 254) {
+          const nL = R(i - 1, j) < 128, nR = R(i + 1, j) < 128;
+          const nT = R(i, j - 1) < 128, nB = R(i, j + 1) < 128;
+          let draw = false;
+          if (om === 1) draw = nL || nR || nB || nT;
+          else if (om === 3) draw = nR || nB;
+          else if (om === 4) draw = nT;
+          if (draw) color = hexOf(pal[0]);
+        }
+        row.push(color);
+        continue;
+      }
+      const exL = R(i - 1, j) >= 128, exR = R(i + 1, j) >= 128;
+      const exT = R(i, j - 1) >= 128, exB = R(i, j + 1) >= 128;
+      const anyEx = exL || exR || exB || exT;
+      let slot = r0;
+      if (slot >= 1 && slot <= 3) {
+        let isLit = false, isDark = false;
+        if (lm === 1) { isLit = exT; isDark = exB; }
+        else if (lm === 2) { isLit = exT || exL; isDark = exB || exR; }
+        else if (lm === 3) { isLit = exT || exR; isDark = exB || exL; }
+        else if (lm === 4) { isLit = exB; isDark = exT; }
+        else if (lm === 5) { isLit = anyEx; isDark = !anyEx; }
+        else if (lm === 6) { isLit = true; }
+        if (isDark) slot = 1;
+        else if (isLit) slot = 3;
+      }
+      const gx = i - tile.cx, gy = j - tile.cy;
+      let rimHit = false;
+      if (rm === 1) rimHit = exT && exL;
+      else if (rm === 2) rimHit = exT && exR;
+      else if (rm === 3) rimHit = exL || exR;
+      else if (rm === 4) rimHit = exB;
+      else if (rm === 5) rimHit = anyEx;
+      else if (rm === 6) {
+        const yN = gy / Math.max(h - 4, 1) + 0.5;
+        rimHit = anyEx && Math.abs(yN) < 0.12;
+      }
+      let forcePal = -1; // ≥0 时直接出调色板该档（覆盖亮度调制）
+      if (rimHit && hash12(gx + seed, gy + seed) < app.rimI) forcePal = 4;
+      if (G(i, j) > 89) {
+        let gHit = false;
+        if (gm === 1) gHit = exT && exR;
+        else if (gm === 2) gHit = anyEx && hash12(gx, gy) > 0.93;
+        else if (gm === 3) {
+          const along = exL || exR ? gy : gx;
+          const fr = (along * 0.25) % 1;
+          gHit = anyEx && (fr < 0 ? fr + 1 : fr) < 0.18;
+        }
+        if (gHit && hash12(gx * 1.7 + seed, gy * 1.7 + seed) < app.glintI) forcePal = 4;
+      }
+      if (om === 2 && anyEx) forcePal = 0;
+      if (forcePal >= 0) {
+        row.push(hexOf(pal[Math.max(0, Math.min(7, forcePal))]));
+        continue;
+      }
+      const bp = basePx(i, j);
+      if (bp === null || bp === '') {
+        row.push(hexOf(pal[Math.max(0, Math.min(7, slot))]));
+      } else {
+        row.push(scaleHex(bp, OVERLAY_SLOT_FACTOR[slot] ?? 1));
+      }
+    }
+    rows.push(row);
+  }
+  rows.reverse();
+  return rows;
+}
+
+/** overlay 档的写出过滤：只留 bump 写出与 glint 通道（图案写出忽略） */
+function filterGraphForOverlay<T extends { writes: unknown[] }>(graph: T): T {
+  return {
+    ...graph,
+    writes: graph.writes.filter((wr) => {
+      const w = wr as { bump?: unknown; ch?: string };
+      return w.bump !== undefined || w.ch === 'glint';
+    }),
+  };
+}
+
 /** 参数化外观 → 产品 Sprite（带缓存）；烘焙失败返回 null（回落精灵） */
-export function buildParametricSprite(app: ParametricAppearance, seedKey: string): Sprite | null {
+export function buildParametricSprite(
+  app: ParametricAppearance,
+  seedKey: string,
+  baseSprite?: Sprite,
+): Sprite | null {
+  const mode = app.composite ?? 'generate';
+  if (mode !== 'generate' && baseSprite && baseSprite.width > 0 && baseSprite.height > 0) {
+    return buildCompositeSprite(app, seedKey, baseSprite, mode);
+  }
+  return buildGenerateSprite(app, seedKey);
+}
+
+function buildGenerateSprite(app: ParametricAppearance, seedKey: string): Sprite | null {
   const key = `${cacheKey(app)}|${seedKey}`;
   const hit = spriteCache.get(key);
   if (hit) return hit;
@@ -166,6 +299,63 @@ export function buildParametricSprite(app: ParametricAppearance, seedKey: string
       height: tile.h,
       data,
       plug: { x: pxToSub(plugPx[0]), y: pxToSub(plugPx[1]) },
+    };
+    if (spriteCache.size > 96) spriteCache.clear();
+    spriteCache.set(key, sprite);
+    return sprite;
+  } catch {
+    return null;
+  }
+}
+
+/** silhouette / overlay：以节点精灵为轮廓来源烘焙；无实心像素回落独立生成 */
+function buildCompositeSprite(
+  app: ParametricAppearance,
+  seedKey: string,
+  base: Sprite,
+  mode: 'silhouette' | 'overlay',
+): Sprite | null {
+  const key = `${cacheKey(app)}|${seedKey}|C:${mode}|${hashPixelGrid(base.data)}`;
+  const hit = spriteCache.get(key);
+  if (hit) return hit;
+  try {
+    const rw = base.width, rh = base.height;
+    const solid = new Uint8Array(rw * rh);
+    let solidCount = 0;
+    for (let y = 0; y < rh; y++) {
+      for (let x = 0; x < rw; x++) {
+        const c = base.data[y]?.[x];
+        if (c !== null && c !== undefined && c !== '') { solid[y * rw + x] = 1; solidCount++; }
+      }
+    }
+    if (solidCount === 0) return buildGenerateSprite(app, seedKey);
+    const plugPx: [number, number] = base.plug
+      ? [subToPx(base.plug.x), subToPx(base.plug.y)]
+      : [rw / 2, rh / 2];
+    const raster = { w: rw, h: rh, plugX: plugPx[0], plugY: plugPx[1], solid };
+    const tile = app.surfaceGraph
+      ? baker().compileTileDAGRaster(
+          raster,
+          mode === 'overlay' ? filterGraphForOverlay(app.surfaceGraph) : app.surfaceGraph,
+        )
+      : baker().compileTileLayersRaster(
+          raster,
+          mode === 'overlay'
+            ? app.surface.filter(
+                (l) => (l as { bumpForm?: string }).bumpForm !== undefined || (l as { ch?: string }).ch === 'glint',
+              )
+            : app.surface,
+        );
+    const seed = seedFromString(seedKey);
+    const data = mode === 'overlay'
+      ? shadeTileOverSprite(tile, base, app, seed)
+      : shadeTileStatic(tile, app, seed);
+    // 两次垂直翻转相消：产物 = 原图四周 pad 2px，plug 同步平移
+    const sprite: Sprite = {
+      width: tile.w,
+      height: tile.h,
+      data,
+      plug: { x: pxToSub(plugPx[0] + 2), y: pxToSub(plugPx[1] + 2) },
     };
     if (spriteCache.size > 96) spriteCache.clear();
     spriteCache.set(key, sprite);

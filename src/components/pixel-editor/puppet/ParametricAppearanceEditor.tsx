@@ -5,8 +5,8 @@ import { useState } from 'react';
 // ParametricAppearanceEditor — 槽位参数化外观编辑（Rig 面板内）
 // 编辑对象 = 当前服装集 piece.parametric（按服装集存，换集即换外观）。
 // 字段与 proc-runtime 的运行时包同构：形状 / 表面层程序预设 / 调色板 /
-// 四个枚举槽位 / rim·glint 强度。主渲染管线不消费此数据，它服务于
-// 程序化预览与「程序化运行时包」导出。
+// 四个枚举槽位 / rim·glint 强度。主画布按「参数化优先」消费此数据，
+// 另服务于程序化预览与「程序化运行时包」导出。
 // ============================================================
 
 import React from 'react';
@@ -25,6 +25,7 @@ import {
   loadUserPatterns, saveUserPattern, deleteUserPattern, renameUserPattern,
   findPatternTemplate, isUserPattern, deriveParamDefs, type UserPatternTemplate,
 } from '@/lib/proc-runtime/pattern-library';
+import { resolvePieceSprite } from '@/lib/sprite-resolve';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -34,6 +35,7 @@ const numCls = 'h-6 text-[10px] bg-[#111128] border-[#1e1e3a]';
 
 export default function ParametricAppearanceEditor({ characterId, slotKey }: { characterId: string; slotKey: string }) {
   const character = useProjectStore((s) => s.unifiedCharacters[characterId]);
+  const spritesRecord = useProjectStore((s) => s.sprites);
   const [userPatterns, setUserPatterns] = useState<UserPatternTemplate[]>(() => loadUserPatterns());
   const [editorOpen, setEditorOpen] = useState(false);
   const [customDefs, setCustomDefs] = useState<PatternParamDef[] | null>(null);
@@ -52,6 +54,13 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
   const editorShape = app ? (app.shape.kind === 'poly'
     ? { kind: 'poly' as const, size: app.shape.size, points: (app.shape.poly ?? []).map(([x, y]): [number, number] => [x, -y]), pivot: (app.shape.polyPivot ? [app.shape.polyPivot[0], -app.shape.polyPivot[1]] : [0, 0]) as [number, number] }
     : { kind: app.shape.kind, size: app.shape.size, roundness: app.shape.roundness ?? 0 }) : null;
+
+  const mode = app?.composite ?? 'generate';
+  // 借/叠加档：模式编辑器预览形状按东向精灵尺寸的矩形近似（真实轮廓看主画布）
+  const previewBase = app && mode !== 'generate' ? resolvePieceSprite(piece, 0, undefined, spritesRecord).sprite : null;
+  const graphShape = previewBase
+    ? { kind: 'rect' as const, size: [previewBase.width, previewBase.height] as [number, number], roundness: 0 }
+    : editorShape;
 
   const write = (next: ParametricAppearance | undefined) => {
     const store = useProjectStore.getState();
@@ -79,10 +88,26 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
         />
       </div>
       <p className="mt-0.5 text-[9px] text-gray-600">
-        按服装集存（当前：{set.name}）；槽位 {slotKey}。主画布渲染仍走精灵，此数据供程序化预览/导出。
+        按服装集存（当前：{set.name}）；槽位 {slotKey}。主画布参数化优先，改动即时上画布；同时供程序化预览/导出。
       </p>
       {app && (
         <div className="mt-1.5 space-y-1.5">
+          <div>
+            <Label className="text-[9px] text-gray-600">合成方式</Label>
+            <select value={mode} onChange={(e) => patch({ composite: e.target.value as ParametricAppearance['composite'] })} className={selCls}>
+              <option value="generate">独立生成（形状即轮廓）</option>
+              <option value="silhouette">借精灵轮廓（只出剪影，全出参数化色）</option>
+              <option value="overlay">叠加到精灵（精灵作底，只加光影/描边）</option>
+            </select>
+            {mode !== 'generate' && (
+              <p className="mt-0.5 text-[9px] text-gray-600">
+                轮廓{mode === 'overlay' ? '与底图' : ''}取自该槽位各方向的精灵（逐方向烘焙）；无精灵时回落独立生成，形状设置不生效。
+                {mode === 'overlay' && '叠加档下图案类写出不生效，只认 bump 与光照/描边/轮缘光/闪光。'}
+                模式编辑器预览按精灵尺寸矩形近似，真实轮廓看主画布。
+              </p>
+            )}
+          </div>
+          <div className={mode !== 'generate' ? 'opacity-40 pointer-events-none space-y-1.5' : 'space-y-1.5'}>
           <div className="grid grid-cols-2 gap-1.5">
             <div>
               <Label className="text-[9px] text-gray-600">形状</Label>
@@ -138,6 +163,7 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
               </div>
             </div>
           )}
+          </div>
           <div>
             <Label className="text-[9px] text-gray-600">表面程序（层语言预设）</Label>
             <select
@@ -240,12 +266,12 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
                 空白新建模式（打开编辑器）
               </Button>
             )}
-            {editorOpen && app.surfaceGraph && editorShape && (
+            {editorOpen && app.surfaceGraph && graphShape && (
               <SurfaceGraphEditor
                 title={app.surfaceName ?? '自定义模式'}
                 graph={app.surfaceGraph}
                 paramDefs={editorDefs}
-                shape={editorShape}
+                shape={graphShape}
                 onChange={(g, defs, structural) => {
                   setCustomDefs(defs);
                   let name = app.surfaceName;

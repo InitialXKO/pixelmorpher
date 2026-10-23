@@ -962,11 +962,22 @@ function resolveSprite(
 ): { sprite: Sprite | null; mirror: boolean; spriteId: string | null } {
   // 参数化优先（用户拍板）：生效服装件带 parametric 时，主画布以参数化
   // 烘焙精灵渲染，盖过精灵图。件键走产品回退口径 slot.slotKey ?? nodeId。
+  // 合成三档（appearance.composite）：generate 独立生成（形状轮廓）；
+  // silhouette/overlay 先按分层规则解析当前方向的精灵作轮廓/底图，
+  // 按该精灵自身的 mirror 出图；无精灵可借时回落独立生成。
   if (costumeSet) {
     const piece = costumeSet.pieces[node.slot?.slotKey ?? node.id];
     if (piece?.parametric) {
       const { buildParametricSprite, PARAMETRIC_MIRROR_DIRECTIONS } = require('./proc-runtime/main-canvas') as typeof import('./proc-runtime/main-canvas');
-      const spr = buildParametricSprite(piece.parametric, node.id);
+      const app = piece.parametric;
+      if ((app.composite ?? 'generate') !== 'generate' && sprites) {
+        const base = resolvePieceSprite(piece, direction, variantId, sprites, latitude);
+        if (base.sprite) {
+          const spr = buildParametricSprite(app, node.id, base.sprite);
+          if (spr) return { sprite: spr, mirror: base.mirror, spriteId: null };
+        }
+      }
+      const spr = buildParametricSprite(app, node.id);
       if (spr) return { sprite: spr, mirror: PARAMETRIC_MIRROR_DIRECTIONS.has(direction), spriteId: null };
     }
   }
