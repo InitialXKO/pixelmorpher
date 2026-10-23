@@ -23,6 +23,7 @@ import type {
 } from './unified-types';
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
+  directionTrig,
   resolveChainTarget3D,
   mat3Mul, mat3Transpose, mat3Apply, localRotMat, rotMatD, applyFrameRotation, frameViewAngle,
   frameViewAngleForDirection, frameYAxisWorld,
@@ -639,8 +640,8 @@ export function socketOffsetTo3D(socket: Socket, variantIndex: DirectionIndex): 
   const socketOffset = resolveSocketOffset(socket, variantIndex);
   const sx = subToPx(socketOffset.x);
   const sy = subToPx(socketOffset.y);
-  const theta = (((variantIndex + 2) % 8) * Math.PI) / 4;
-  return { x: sx * Math.cos(theta), y: sy, z: sx * Math.sin(theta) };
+  const t = directionTrig(variantIndex);
+  return { x: sx * t.cos, y: sy, z: sx * t.sin };
 }
 
 // ---- Transform Interpolation ----
@@ -1466,8 +1467,8 @@ export function generateRenderPlan(
     let foreshorten: number | undefined;
     if (perspectiveForeshorten) {
       const yw = frameYAxisWorld(worldTf.worldFrame, geometryDirection ?? worldTf.variantIndex);
-      const thR = (((currentDirection + 2) % 8) * Math.PI) / 4;
-      const hr = yw.x * Math.cos(thR) + yw.z * Math.sin(thR);
+      const tR = directionTrig(currentDirection);
+      const hr = yw.x * tR.cos + yw.z * tR.sin;
       foreshorten = Math.min(1, Math.hypot(hr, yw.y));
     }
     nodeInstructions.push({
