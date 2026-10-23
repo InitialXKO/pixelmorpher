@@ -563,4 +563,52 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     html.includes('dynSimulate(') && html.includes('uBase') && html.includes('bakeResolvedTile') && html.includes('__dynamic'));
 }
 
+// ---------- M) 精灵部件进包 ----------
+{
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  const { createDynamicInstance, defaultDynamicParams } = await import('../src/lib/dynamic-patterns');
+  const { pxToSub } = await import('../src/lib/unified-types');
+  const grid5: (string | null)[][] = Array.from({ length: 5 }, () => Array(5).fill('#aa5533'));
+  const sprite5 = { width: 5, height: 5, data: grid5, plug: { x: pxToSub(2), y: pxToSub(4) } };
+  const dynParams = { ...defaultDynamicParams(), rate: 12 };
+
+  const skirt1 = createDefaultCostumePiece('skirt');
+  (skirt1.sprites as Record<number, unknown>)[2] = sprite5;
+  const skirt2 = createDefaultCostumePiece('skirt');
+  (skirt2.sprites as Record<number, unknown>)[2] = sprite5;
+  skirt2.dynamicPatterns = [createDynamicInstance('覆盖', { ...dynParams, rate: 77 }, '氛围')];
+  const torsoP1 = createDefaultCostumePiece('torso');
+  torsoP1.parametric = createDefaultParametricAppearance();
+  const torsoP2 = createDefaultCostumePiece('torso');
+  (torsoP2.sprites as Record<number, unknown>)[2] = sprite5;
+
+  const ch = {
+    id: 'chM', name: '精灵部件',
+    nodes: {
+      torso: makeNode('torso', '躯干', 'torso'),
+      skirt: { ...makeNode('skirt', '裙子', 'skirt', 'torso'), dynamicPatterns: [createDynamicInstance('氛围实例', dynParams, '氛围')] },
+    },
+    rootNodeIds: ['torso'],
+    costumeSets: [
+      { id: 'set1', name: '默认', pieces: { torso: torsoP1, skirt: skirt1 } },
+      { id: 'set2', name: '替换', pieces: { torso: torsoP2, skirt: skirt2 } },
+    ],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  } as unknown as Character;
+
+  const pkg = convertCharacterToRuntimePackage(ch);
+  const skirt = pkg.parts.find((p) => p.key === 'skirt');
+  check('M1 精灵部件进包（spriteKind + 东向网格）', skirt?.spriteKind === true && skirt?.sprite?.w === 5 && skirt?.sprite?.h === 5);
+  check('M2 精灵部件动态进包且无孤儿 warning', skirt?.dynamic?.length === 1
+    && !pkg.warnings.some((w) => w.includes('动态效果') && w.includes('skirt')));
+  const sp2 = (pkg.costumes['set2'] as { __sprite?: Record<string, { w: number }> }).__sprite;
+  const sp1 = (pkg.costumes['set1'] as { __sprite?: Record<string, { w: number }> }).__sprite;
+  check('M3 参数化槽位在无参数化的服装集回落精灵', sp2?.['torso']?.w === 5 && sp1?.['torso'] === undefined);
+  const dyn2 = (pkg.costumes['set2'] as { __dynamic?: Record<string, { params: { rate: number } }[]> }).__dynamic;
+  check('M4 精灵部件逐集动态覆盖进 __dynamic', dyn2?.['skirt']?.[0]?.params.rate === 77);
+  const html = buildRuntimeHtml(pkg);
+  check('M5 导出 HTML 含直贴图瓦片路径', html.includes('spriteTileOf') && html.includes('vMisc.w > 2.5'));
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

@@ -368,6 +368,37 @@ function parseHexRt(hex) {
   const n = parseInt(m[1], 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
+function gridHashOf(g) {
+  let h = 0;
+  for (let y = 0; y < g.h; y++) for (let x = 0; x < g.w; x++) {
+    const c = g.data[y] && g.data[y][x];
+    if (c) for (let q = 0; q < c.length; q++) h = (Math.imul(h, 31) + c.charCodeAt(q)) | 0;
+  }
+  return h;
+}
+/** 精灵部件的直贴图瓦片：R=2 占据（供轮廓/动态粒子），颜色走底图图集同格 */
+function spriteTileOf(sg, mirrored) {
+  const M = 2;
+  const w = sg.w + M * 2, h = sg.h + M * 2;
+  const data = new Uint8Array(w * h * 4);
+  for (let q = 0; q < w * h; q++) { data[q * 4] = 255; data[q * 4 + 3] = 255; }
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < w; i++) {
+      const sx = mirrored ? sg.w - 1 - (i - M) : i - M;
+      const sy = sg.h - 1 - (j - M);
+      if (sx < 0 || sy < 0 || sx >= sg.w || sy >= sg.h) continue;
+      const c = sg.data[sy] && sg.data[sy][sx];
+      if (c === null || c === undefined || c === '') continue;
+      data[(j * w + i) * 4] = 2;
+    }
+  }
+  return {
+    w: w, h: h,
+    cx: M + (mirrored ? sg.w - 1 - sg.plug[0] : sg.plug[0]),
+    cy: M + (sg.h - 1 - sg.plug[1]),
+    data: data,
+  };
+}
 const DRAW_ORDER_MAIN = {
   0: ['cape', 'left_arm', 'left_leg', 'right_leg', 'right_arm', 'torso', 'head'],
   4: ['cape', 'left_arm', 'left_leg', 'right_leg', 'right_arm', 'torso', 'head'],
@@ -481,14 +512,31 @@ function ensureAtlas(gl, variant, costumeName) {
   const tiles = [], entries = [];
   const map = new Map();
   for (const part of PARTS) {
-    const resolved = resolvePart(part, variant, costume);
-    if (resolved.params.hidden) { map.set(part.key, null); continue; }
     const mirrored = variantMirrored(part, variant);
-    const key = tileKeyOf(part, variant, costumeName, resolved) + (mirrored ? '|M' : '');
-    let tile = tileCache.get(key);
-    if (!tile) { tile = bakeResolvedTile(resolved, mirrored); tileCache.set(key, tile); }
+    const centry = costume ? costume[part.key] : undefined;
+    const sgrid = costume && costume.__sprite ? costume.__sprite[part.key] : undefined;
+    let resolved = null, tile = null, spriteGrid = null;
+    if (centry === null && sgrid) {
+      spriteGrid = sgrid; // 参数化槽位在该集回落精灵（与主画布同口径）
+    } else if (part.spriteKind && !centry) {
+      spriteGrid = sgrid || part.sprite || null;
+      if (!spriteGrid) { map.set(part.key, null); continue; }
+    } else {
+      resolved = resolvePart(part, variant, costume);
+      if (resolved.params.hidden) { map.set(part.key, null); continue; }
+    }
+    if (spriteGrid) {
+      resolved = { params: { ...part.base, off: [0, 0] }, composite: 'sprite', halo: 0, baseSprite: null };
+      const key = [part.key, variant, costumeName, 'S', spriteGrid.w, spriteGrid.h, spriteGrid.plug.join(','), gridHashOf(spriteGrid), mirrored ? 'M' : ''].join('|');
+      tile = tileCache.get(key);
+      if (!tile) { tile = spriteTileOf(spriteGrid, mirrored); tileCache.set(key, tile); }
+    } else {
+      const key = tileKeyOf(part, variant, costumeName, resolved) + (mirrored ? '|M' : '');
+      tile = tileCache.get(key);
+      if (!tile) { tile = bakeResolvedTile(resolved, mirrored); tileCache.set(key, tile); }
+    }
     tiles.push(tile);
-    entries.push([part.key, tile, resolved, mirrored]);
+    entries.push([part.key, tile, resolved, mirrored, spriteGrid]);
   }
   const pack = packAtlas(tiles, 256);
   const height = pack.height;
@@ -499,9 +547,12 @@ function ensureAtlas(gl, variant, costumeName) {
     for (let j = 0; j < tile.h; j++) {
       data.set(tile.data.subarray(j * tile.w * 4, (j + 1) * tile.w * 4), ((ay + j) * 256 + ax) * 4);
     }
-    // overlay 底图：与档位瓦片同格对齐（行进场翻转 + 镜像列翻转，同 shadeTileOverSprite 口径）
-    const resolved = entries[i][2], mirrored = entries[i][3], bs = resolved.baseSprite;
-    if (resolved.composite === 'overlay' && bs) {
+    // 底图（overlay 底色 / 精灵直贴图）：与档位瓦片同格对齐
+    // （行进场翻转 + 镜像列翻转，同 shadeTileOverSprite 口径）
+    const resolved = entries[i][2], mirrored = entries[i][3];
+    const bs = resolved.composite === 'overlay' ? resolved.baseSprite
+      : resolved.composite === 'sprite' ? entries[i][4] : null;
+    if (bs) {
       const M = 2 + (resolved.halo || 0);
       for (let j = 0; j < tile.h; j++) {
         for (let ii = 0; ii < tile.w; ii++) {
@@ -637,6 +688,13 @@ void main(){
       return;
     }
     discard;
+  }
+  if (vMisc.w > 2.5) {
+    ivec2 tpD = ivec2(vTile.xy) + ivec2(vTileC) + g;
+    vec4 baseC = texelFetch(uBase, tpD, 0);
+    if (baseC.a < 0.5) discard;
+    oColor = vec4(baseC.rgb, 1.0);
+    return;
   }
   bool inL = !(tileRAt(g + ivec2(-1, 0)) < 128), inR = !(tileRAt(g + ivec2(1, 0)) < 128);
   bool inT = !(tileRAt(g + ivec2(0, -1)) < 128), inB = !(tileRAt(g + ivec2(0, 1)) < 128);
@@ -960,7 +1018,7 @@ function frame(now) {
       dsx *= d.sx; dsy *= d.sy;
       if (inst.params.deformEnabled) hasDeform = true;
     }
-    const comp = resolved.composite === 'overlay' ? 2 : resolved.composite === 'silhouette' ? 1 : 0;
+    const comp = resolved.composite === 'overlay' ? 2 : resolved.composite === 'silhouette' ? 1 : resolved.composite === 'sprite' ? 3 : 0;
     const big = comp > 0 || dynList.length > 0;
     const el = {
       pos: [ctr[0], ctr[1]], size: big ? [tile.w * 3, tile.h * 3] : [tile.w, tile.h], rot: an.a,

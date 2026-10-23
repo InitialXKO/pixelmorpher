@@ -11,6 +11,7 @@ import { subToPx } from '../unified-types';
 import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
+import { createDefaultParametricAppearance } from './surfaces';
 import { PALETTES } from './palettes';
 import {
   translatePerformanceGraph, translateBehaviorGraph,
@@ -56,6 +57,10 @@ export interface RuntimePart {
   variants: { 2: Record<string, never> };
   /** 动态模式（默认服装集下的解析结果；换装集见 costumes[*].__dynamic） */
   dynamic?: RuntimeDynamicInstance[];
+  /** 精灵部件（无参数化外观）：模板按直贴图瓦片绘制 */
+  spriteKind?: boolean;
+  /** 精灵部件在默认服装集下的东向精灵网格（逐集见 costumes[*].__sprite） */
+  sprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][] };
 }
 
 export interface ProcRuntimePackage {
@@ -78,15 +83,13 @@ const TRIGGER_KEY_MAP: Record<string, string> = {
   attack: 'KeyJ', interact: 'KeyE', skill: 'KeyK', dash: 'KeyL', use: 'KeyF',
 };
 
-/** silhouette/overlay 的底图：东向精灵（与主画布同解析链），无则 undefined */
-function baseSpriteFor(
-  app: ParametricAppearance,
+/** 东向精灵网格（与主画布同解析链：变体→基础→镜像回落），无则 undefined */
+function eastSpriteOf(
   piece: CostumePiece | undefined,
   character: Character,
   slotKey: string,
 ): RuntimePartBase['baseSprite'] {
-  const mode = app.composite ?? 'generate';
-  if (mode === 'generate' || !piece) return undefined;
+  if (!piece) return undefined;
   const r = resolvePieceSprite(piece, 2, character.slotVariants?.[slotKey], character.sprites, character.latitude ?? 0);
   if (!r.sprite) return undefined;
   return {
@@ -97,6 +100,17 @@ function baseSpriteFor(
       : [r.sprite.width / 2, r.sprite.height / 2],
     data: r.sprite.data,
   };
+}
+
+/** silhouette/overlay 的底图：东向精灵（generate 档不需要），无则 undefined */
+function baseSpriteFor(
+  app: ParametricAppearance,
+  piece: CostumePiece | undefined,
+  character: Character,
+  slotKey: string,
+): RuntimePartBase['baseSprite'] {
+  if ((app.composite ?? 'generate') === 'generate') return undefined;
+  return eastSpriteOf(piece, character, slotKey);
 }
 
 /** 双挂载解析 → 运行时动态实例（节点为底、服装件同位替换/压制） */
@@ -181,16 +195,48 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
       dynamic: dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns),
     });
   }
-  // 动态效果孤儿：挂了动态但槽位无参数化外观 → 不在包内（包只含参数化部件）
+  // ---- 精灵部件：无参数化外观、但任一服装集里有东向精灵的槽位 ----
+  const spriteSlots = new Set<string>();
+  for (const cs of character.costumeSets) {
+    for (const [slotKey, piece] of Object.entries(cs.pieces)) {
+      if (!parametricSlots.has(slotKey) && eastSpriteOf(piece, character, slotKey)) {
+        spriteSlots.add(slotKey);
+      }
+    }
+  }
+  for (const slotKey of spriteSlots) {
+    const nodeId = slotNode.get(slotKey);
+    const node = nodeId ? character.nodes[nodeId] : undefined;
+    if (!node) { warnings.push(`槽位 ${slotKey} 有精灵但无对应节点，已跳过`); continue; }
+    const sg = eastSpriteOf(activeSet?.pieces[slotKey], character, slotKey)
+      ?? character.costumeSets.map((cs) => eastSpriteOf(cs.pieces[slotKey], character, slotKey)).find(Boolean);
+    if (!sg) continue;
+    const w = worlds.get(node.id);
+    const pivot: [number, number] = w ? [subToPx(w.worldX), -subToPx(w.worldY)] : [0, 0];
+    const base = appearanceToBase(createDefaultParametricAppearance(), pivot, w?.worldAngle ?? 0);
+    base.size = [sg.w, sg.h];
+    parts.push({
+      key: slotKey,
+      drawLayer: node.drawLayer,
+      sortOrder: node.zIndex,
+      costumeKeys: [slotKey],
+      base,
+      variants: { 2: {} },
+      spriteKind: true,
+      sprite: sg,
+      dynamic: dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns),
+    });
+  }
+  // 动态效果孤儿：挂了动态但槽位既无参数化外观也无精灵 → 不在包内
   for (const node of Object.values(character.nodes)) {
     const slotKey = node.slot?.slotKey ?? node.id;
-    if (parametricSlots.has(slotKey)) continue;
+    if (parametricSlots.has(slotKey) || spriteSlots.has(slotKey)) continue;
     const hasDyn = (node.dynamicPatterns?.length ?? 0) > 0
       || character.costumeSets.some((cs) => (cs.pieces[slotKey]?.dynamicPatterns?.length ?? 0) > 0);
-    if (hasDyn) warnings.push(`动态效果：槽位 ${slotKey} 无参数化外观，未进运行时包（运行时包只含参数化部件）`);
+    if (hasDyn) warnings.push(`动态效果：槽位 ${slotKey} 既无参数化外观也无精灵，未进运行时包`);
   }
   parts.sort((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key));
-  if (parts.length === 0) warnings.push('没有任何带参数化外观的槽位：运行时包将没有部件（先在 Rig 面板给槽位启用参数化外观）');
+  if (parts.length === 0) warnings.push('没有任何可进包的部件（参数化外观或精灵）：运行时包将没有部件');
   else if (Object.keys(character.directionDrawOrders ?? {}).length > 0) {
     warnings.push('运行时绘制顺序按节点 zIndex 近似：角色的 directionDrawOrders 未进包（v1）');
   }
@@ -212,7 +258,23 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
       const pivot: [number, number] = w ? [subToPx(w.worldX), -subToPx(w.worldY)] : [0, 0];
       entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0, baseSpriteFor(app, piece, character, slotKey));
     }
+    for (const slotKey of spriteSlots) {
+      const nodeId = slotNode.get(slotKey);
+      const node = nodeId ? character.nodes[nodeId] : undefined;
+      const dyn = dynFor(node?.dynamicPatterns, cs.pieces[slotKey]?.dynamicPatterns);
+      if (dyn) dynMap[slotKey] = dyn;
+    }
     if (Object.keys(dynMap).length > 0) entry.__dynamic = dynMap;
+    // 精灵回落：该集该槽无参数化外观但有精灵 → 模板走直贴图（参数化
+    // 槽位的换装回落与纯精灵部件共用此表）
+    const spriteMap: Record<string, NonNullable<RuntimePartBase['baseSprite']>> = {};
+    for (const slotKey of new Set([...parametricSlots, ...spriteSlots])) {
+      const piece = cs.pieces[slotKey];
+      if (piece?.parametric) continue;
+      const sg = eastSpriteOf(piece, character, slotKey);
+      if (sg) spriteMap[slotKey] = sg;
+    }
+    if (Object.keys(spriteMap).length > 0) entry.__sprite = spriteMap;
     costumes[cs.id] = entry;
   }
 
