@@ -37,6 +37,24 @@ export function applyAffine(m: Affine2D, x: number, y: number): { x: number; y: 
   return { x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f };
 }
 
+/** 求逆；行列式近零（不可逆）时返回 null。 */
+export function invertAffine(m: Affine2D): Affine2D | null {
+  const det = m.a * m.d - m.b * m.c;
+  if (!isFinite(det) || Math.abs(det) < 1e-12) return null;
+  const ia = m.d / det;
+  const ib = -m.b / det;
+  const ic = -m.c / det;
+  const id = m.a / det;
+  return {
+    a: ia,
+    b: ib,
+    c: ic,
+    d: id,
+    e: -(ia * m.e + ic * m.f),
+    f: -(ib * m.e + id * m.f),
+  };
+}
+
 /**
  * 节点局部仿射 S · K1 · K2 …（旋转之外的一切）：
  * 与主渲染原生变换链的后乘顺序逐项一致——先 ctx.scale(scaleX, stretchY)，

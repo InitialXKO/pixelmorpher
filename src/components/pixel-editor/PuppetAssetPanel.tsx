@@ -97,7 +97,13 @@ function RowRenameInput({ initial, onCommit }: { initial: string; onCommit: (nam
 function SpritePropertiesSection({ sprite }: { sprite: Sprite }) {
   const updateSprite = useProjectStore((s) => s.updateSprite);
   const autoEstimatePlug = useProjectStore((s) => s.autoEstimatePlug);
+  const transformSprite = useProjectStore((s) => s.transformSprite);
   const [resizeOpen, setResizeOpen] = useState(false);
+  const [rotAngle, setRotAngle] = useState(90);
+  const [rotStep, setRotStep] = useState(15);
+  const [axisAngle, setAxisAngle] = useState(0);
+  const [axisStep, setAxisStep] = useState(15);
+  const snapAngle = (v: number, step: number) => (step > 1 ? Math.round(v / step) * step : v);
   const spriteId = sprite.id ?? '';
   const plugXPx = sprite.plug ? subToPx(sprite.plug.x) : 0;
   const plugYPx = sprite.plug ? subToPx(sprite.plug.y) : 0;
@@ -160,6 +166,91 @@ function SpritePropertiesSection({ sprite }: { sprite: Sprite }) {
         <Crosshair className="size-3" />
         自动枢轴
       </Button>
+      <div className="space-y-1.5 border-t border-white/5 pt-2">
+        <span className="text-[10px] text-gray-500">变换（绕锚点）</span>
+        <div className="flex flex-wrap gap-1">
+          {(
+            [
+              ['rot90', '↻ 90°'],
+              ['rot270', '↺ 90°'],
+              ['rot180', '180°'],
+              ['flipH', '左右镜像'],
+              ['flipV', '上下镜像'],
+              ['transpose', '主对角'],
+              ['antiTranspose', '副对角'],
+            ] as const
+          ).map(([op, label]) => (
+            <Button
+              key={op}
+              variant="outline"
+              size="sm"
+              className="h-5 px-1.5 text-[10px]"
+              onClick={() => transformSprite(spriteId, { kind: 'd4', op })}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1">
+          <Input
+            type="number"
+            value={rotAngle}
+            onChange={(e) => setRotAngle(parseFloat(e.target.value) || 0)}
+            className="h-6 w-16 text-[10px] px-1.5"
+            title="旋转角（度，正值顺时针）"
+          />
+          <span className="text-[10px] text-gray-500">° 步进</span>
+          <select
+            value={rotStep}
+            onChange={(e) => setRotStep(parseInt(e.target.value, 10))}
+            className="h-6 rounded border border-white/10 bg-transparent px-1 text-[10px] text-gray-300"
+            title="应用时把角度吸附到步进倍数"
+          >
+            <option value={1}>自由</option>
+            <option value={15}>15°</option>
+            <option value={45}>45°</option>
+          </select>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-[10px] ml-auto"
+            onClick={() => transformSprite(spriteId, { kind: 'rotate', angleDeg: snapAngle(rotAngle, rotStep) })}
+          >
+            旋转
+          </Button>
+        </div>
+        <div className="flex items-center gap-1">
+          <Input
+            type="number"
+            value={axisAngle}
+            onChange={(e) => setAxisAngle(parseFloat(e.target.value) || 0)}
+            className="h-6 w-16 text-[10px] px-1.5"
+            title="镜像轴向角（度）：0°=水平轴，90°=竖直轴，45°=主对角"
+          />
+          <span className="text-[10px] text-gray-500">° 步进</span>
+          <select
+            value={axisStep}
+            onChange={(e) => setAxisStep(parseInt(e.target.value, 10))}
+            className="h-6 rounded border border-white/10 bg-transparent px-1 text-[10px] text-gray-300"
+            title="应用时把轴向角吸附到步进倍数"
+          >
+            <option value={1}>自由</option>
+            <option value={15}>15°</option>
+            <option value={45}>45°</option>
+          </select>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-[10px] ml-auto"
+            onClick={() => transformSprite(spriteId, { kind: 'mirrorAxis', axisDeg: snapAngle(axisAngle, axisStep) })}
+          >
+            轴镜像
+          </Button>
+        </div>
+        <p className="text-[9px] leading-relaxed text-gray-600">
+          90° 倍数旋转与 45° 倍数轴走无损置换；任意角/任意轴走 4× 超采样烘焙（与主渲染同口径）。
+        </p>
+      </div>
     </div>
   );
 }
@@ -1031,6 +1122,27 @@ export default function PuppetAssetPanel() {
                         }}
                       >
                         复制精灵
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem
+                        onSelect={() => useProjectStore.getState().transformSprite(sprite.id!, { kind: 'd4', op: 'rot90' })}
+                      >
+                        顺时针旋转 90°
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => useProjectStore.getState().transformSprite(sprite.id!, { kind: 'd4', op: 'rot270' })}
+                      >
+                        逆时针旋转 90°
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => useProjectStore.getState().transformSprite(sprite.id!, { kind: 'd4', op: 'flipH' })}
+                      >
+                        左右镜像
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => useProjectStore.getState().transformSprite(sprite.id!, { kind: 'd4', op: 'flipV' })}
+                      >
+                        上下镜像
                       </ContextMenuItem>
                       <ContextMenuSeparator />
                       <ContextMenuItem

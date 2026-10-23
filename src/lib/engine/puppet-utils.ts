@@ -14,6 +14,7 @@ import { PUPPET_DIRECTIONS, DIRECTION_MIRROR } from '../types';
 import { acquireCanvas, releaseCanvas } from './canvas-pool';
 import { getRotationCacheKey, getCachedRotation, setCachedRotation } from './render-cache';
 import { composeLocalAffine, computeAffineFrame } from './affine';
+import type { Affine2D, AffineFrame } from './affine';
 
 export interface PixelPerfectRotationResult {
   canvas: HTMLCanvasElement;
@@ -200,12 +201,96 @@ export function renderPixelPerfectRotation(
   return { canvas: result, resultPivotX, resultPivotY };
 }
 
+interface AffineUpscaleResult {
+  upCanvas: HTMLCanvasElement;
+  upW: number;
+  upH: number;
+  frame: AffineFrame;
+}
+
+/**
+ * 仿射烘焙第一步（复合旋转路径与编辑侧烘焙共用）：把源画布以任意仿射 m
+ * 在 4× 空间单次采样成 upCanvas（点 p ↦ 4·M(p) − 4·min，smoothing 关闭）。
+ * 必须在 4× 空间做：在 1× 先变换会把剪切/旋转锯齿焊死，后续步骤救不回来。
+ * 包围盒退化时返回 null。调用方负责 releaseCanvas(upCanvas)。
+ */
+function bakeAffineUpscaled(
+  spriteCanvas: HTMLCanvasElement,
+  m: Affine2D,
+  pivotX: number,
+  pivotY: number,
+): AffineUpscaleResult | null {
+  const UPSCALE = 4;
+  const frame = computeAffineFrame(spriteCanvas.width, spriteCanvas.height, pivotX, pivotY, m);
+  if (!(frame.width > 0) || !(frame.height > 0)) return null;
+  const upW = Math.ceil(frame.width * UPSCALE);
+  const upH = Math.ceil(frame.height * UPSCALE);
+  const upCanvas = acquireCanvas(upW, upH);
+  const upCtx = upCanvas.getContext('2d')!;
+  upCtx.clearRect(0, 0, upW, upH);
+  upCtx.imageSmoothingEnabled = false;
+  upCtx.translate(-frame.minX * UPSCALE, -frame.minY * UPSCALE);
+  upCtx.scale(UPSCALE, UPSCALE);
+  upCtx.transform(m.a, m.b, m.c, m.d, m.e, m.f);
+  upCtx.drawImage(spriteCanvas, 0, 0);
+  return { upCanvas, upW, upH, frame };
+}
+
+export interface CanvasAffineBakeResult {
+  /** 普通（非池化）canvas，调用方无需释放 */
+  canvas: HTMLCanvasElement;
+  width: number;
+  height: number;
+  /** 枢轴在结果画布中的位置（px，可为小数） */
+  pivotX: number;
+  pivotY: number;
+  /** 仿射后包围盒左上角（源坐标经 m 映射后的 min），供 heightmap 等同口径重采样 */
+  minX: number;
+  minY: number;
+}
+
+/**
+ * 编辑侧一次性仿射烘焙：对画布施加任意仿射 m（绕枢轴的任意角旋转、
+ * 任意轴镜像等），4× 超采样最近邻，与主渲染像素完美旋转同口径。
+ * 刻意不走渲染缓存——编辑是破坏性落账，缓存指纹碰撞不可接受。
+ * 包围盒退化时返回 null。
+ */
+export function bakeCanvasAffine(
+  spriteCanvas: HTMLCanvasElement,
+  m: Affine2D,
+  pivotX: number,
+  pivotY: number,
+): CanvasAffineBakeResult | null {
+  const baked = bakeAffineUpscaled(spriteCanvas, m, pivotX, pivotY);
+  if (!baked) return null;
+  const { upCanvas, frame } = baked;
+  const nativeW = Math.max(1, Math.round(frame.width));
+  const nativeH = Math.max(1, Math.round(frame.height));
+  const pooled = downsample4x(upCanvas, nativeW, nativeH);
+  releaseCanvas(upCanvas);
+  // 拷成普通 canvas 返回，池化所有权不出本模块
+  const canvas = document.createElement('canvas');
+  canvas.width = pooled.width;
+  canvas.height = pooled.height;
+  canvas.getContext('2d')!.drawImage(pooled, 0, 0);
+  releaseCanvas(pooled);
+  return {
+    canvas,
+    width: nativeW,
+    height: nativeH,
+    pivotX: frame.pivotX,
+    pivotY: frame.pivotY,
+    minX: frame.minX,
+    minY: frame.minY,
+  };
+}
+
 /**
  * 复合路径：scaleX / skew 存在时的像素完美旋转。
  * 先在 4× 空间把局部仿射 S·K（scaleX、stretch、skew）一次烘焙，再绕枢轴
  * 旋转、4× 下采样。变换链 v' = T·R·S·K·v 中旋转本就是最外层，结合律保证
  * 与原生一次画完逐点等价；负 scaleX（动态镜像）由角点 min/max 与仿射
- * 光栅化自然吸收。第一步必须在 4× 空间做：在 1× 先变换会把剪切锯齿焊死。
+ * 光栅化自然吸收。
  */
 function renderCompositeThenRotate(
   spriteCanvas: HTMLCanvasElement,
@@ -218,30 +303,17 @@ function renderCompositeThenRotate(
   cacheKey: string,
 ): PixelPerfectRotationResult {
   const UPSCALE = 4;
-  const sw = spriteCanvas.width;
-  const sh = spriteCanvas.height;
   const m = composeLocalAffine(scaleX, stretchY, skews);
-  const frame = computeAffineFrame(sw, sh, pivotX, pivotY, m);
+  const baked = bakeAffineUpscaled(spriteCanvas, m, pivotX, pivotY);
 
   // 退化（scaleX=0 等使包围盒塌缩）：原生路径下该节点不可见，
   // 返回透明 1×1 而不是把原图画出来。
-  if (!(frame.width > 0) || !(frame.height > 0)) {
+  if (!baked) {
     const blank = acquireCanvas(1, 1);
     blank.getContext('2d')!.clearRect(0, 0, 1, 1);
     return { canvas: blank, resultPivotX: 0, resultPivotY: 0 };
   }
-
-  // Step 1: 4× 空间烘焙 S·K（单次仿射采样；点 p ↦ 4·M(p) − 4·min）
-  const upW = Math.ceil(frame.width * UPSCALE);
-  const upH = Math.ceil(frame.height * UPSCALE);
-  const upCanvas = acquireCanvas(upW, upH);
-  const upCtx = upCanvas.getContext('2d')!;
-  upCtx.clearRect(0, 0, upW, upH);
-  upCtx.imageSmoothingEnabled = false;
-  upCtx.translate(-frame.minX * UPSCALE, -frame.minY * UPSCALE);
-  upCtx.scale(UPSCALE, UPSCALE);
-  upCtx.transform(m.a, m.b, m.c, m.d, 0, 0);
-  upCtx.drawImage(spriteCanvas, 0, 0);
+  const { upCanvas, upW, upH, frame } = baked;
 
   const pivotUpX = frame.pivotX * UPSCALE;
   const pivotUpY = frame.pivotY * UPSCALE;

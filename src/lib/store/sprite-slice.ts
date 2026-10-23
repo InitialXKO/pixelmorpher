@@ -14,8 +14,21 @@ import {
   PixelColor,
   createEmptyPixelGrid,
 } from '../types';
-import { markPartDirty, invalidateAnimModifierCache } from '../engine';
-import { invalidateUnifiedPipelineCache } from '../unified-render';
+import { markPartDirty, invalidateAnimModifierCache, bakeCanvasAffine } from '../engine';
+import { invalidateUnifiedPipelineCache, pixelsToCanvas, canvasToPixels } from '../unified-render';
+import {
+  d4MapPoint,
+  d4TransformGrid,
+  d4TransformLandmarks,
+  affineTransformLandmarks,
+  rotationMatrixAbout,
+  mirrorAxisMatrixAbout,
+  classifyRotate,
+  classifyMirrorAxis,
+  resampleGridAffine,
+} from '../sprite-transform';
+import type { D4Op, SpriteTransformRequest } from '../sprite-transform';
+import type { Affine2D } from '../engine/affine';
 import { rgbaToHexOrNull } from '@/lib/engine/utils';
 
 export type SpriteSlice = {
@@ -27,6 +40,7 @@ export type SpriteSlice = {
   duplicateSprite: ProjectStore['duplicateSprite'];
   importSpriteFromImage: ProjectStore['importSpriteFromImage'];
   resizeSprite: ProjectStore['resizeSprite'];
+  transformSprite: ProjectStore['transformSprite'];
   splitImageToSprites: ProjectStore['splitImageToSprites'];
   autoEstimatePlug: ProjectStore['autoEstimatePlug'];
 };
@@ -205,6 +219,87 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
         },
       };
     });
+  },
+
+  transformSprite: (id, t) => {
+    // 一次快照读全输入、内存里算完、单次 set 落账（Zustand 快照纪律）
+    const sprite = get().sprites[id];
+    if (!sprite) return;
+    const w = sprite.width;
+    const h = sprite.height;
+    const plugX = sprite.plug ? subToPx(sprite.plug.x) : w / 2;
+    const plugY = sprite.plug ? subToPx(sprite.plug.y) : h / 2;
+
+    // ---- 路由：90°/45° 倍数落 D4 无损置换，其余绕锚点走任意仿射 ----
+    let d4: D4Op | null = null;
+    let matrix: Affine2D | null = null;
+    if (t.kind === 'd4') {
+      d4 = t.op;
+    } else if (t.kind === 'rotate') {
+      const c = classifyRotate(t.angleDeg);
+      if (c === 'identity') return;
+      if (c) d4 = c;
+      else matrix = rotationMatrixAbout(t.angleDeg, plugX, plugY);
+    } else {
+      const c = classifyMirrorAxis(t.axisDeg);
+      if (c) d4 = c;
+      else matrix = mirrorAxisMatrixAbout(t.axisDeg, plugX, plugY);
+    }
+
+    if (d4) {
+      const newData = d4TransformGrid(sprite.data, d4, null);
+      const dims = d4MapPoint(d4, 0, 0, w, h);
+      const plugAbs = d4MapPoint(d4, plugX, plugY, w, h);
+      const newHeightmap = sprite.heightmap ? d4TransformGrid(sprite.heightmap, d4, 0) : undefined;
+      const newLandmarks = sprite.landmarks ? d4TransformLandmarks(sprite.landmarks, d4, w, h) : undefined;
+      get().pushUndo('变换精灵');
+      markPartDirty(id);
+      set((s) => (s.sprites[id] ? {
+        sprites: {
+          ...s.sprites,
+          [id]: {
+            ...s.sprites[id]!,
+            width: dims.w,
+            height: dims.h,
+            data: newData,
+            plug: { x: pxToSub(plugAbs.x), y: pxToSub(plugAbs.y) },
+            ...(newHeightmap ? { heightmap: newHeightmap } : {}),
+            ...(newLandmarks ? { landmarks: newLandmarks } : {}),
+          },
+        },
+      } : s));
+      return;
+    }
+
+    // ---- 仿射烘焙：像素走 4× 超采样画布管线（与主渲染同口径），不走渲染缓存 ----
+    if (!matrix) return;
+    const srcCanvas = pixelsToCanvas(sprite.data, w, h);
+    if (!srcCanvas) return;
+    const baked = bakeCanvasAffine(srcCanvas, matrix, plugX, plugY);
+    if (!baked) return;
+    const newData = canvasToPixels(baked.canvas);
+    const newHeightmap = sprite.heightmap
+      ? resampleGridAffine(sprite.heightmap, matrix, baked.minX, baked.minY, baked.width, baked.height, 0) ?? undefined
+      : undefined;
+    const newLandmarks = sprite.landmarks
+      ? affineTransformLandmarks(sprite.landmarks, matrix, baked.minX, baked.minY, baked.width, baked.height, w, h)
+      : undefined;
+    get().pushUndo('变换精灵');
+    markPartDirty(id);
+    set((s) => (s.sprites[id] ? {
+      sprites: {
+        ...s.sprites,
+        [id]: {
+          ...s.sprites[id]!,
+          width: baked.width,
+          height: baked.height,
+          data: newData,
+          plug: { x: pxToSub(baked.pivotX), y: pxToSub(baked.pivotY) },
+          ...(newHeightmap ? { heightmap: newHeightmap } : {}),
+          ...(newLandmarks ? { landmarks: newLandmarks } : {}),
+        },
+      },
+    } : s));
   },
 
   splitImageToSprites: (name, imageData, regions) => {
