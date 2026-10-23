@@ -6,9 +6,11 @@
 //   坐标转运行时系：x 同向、y 取反（产品 y 下 / 运行时 y 上）、角度同理。
 // - 行为图/表演图的 nodeId（含 nodeRef 目标）一律换算成 slotKey。
 // - 表演图经 graph-translate 采样烘焙；翻译失败/无贡献逐条进 warnings，不静默。
-import type { Character, ParametricAppearance } from '../unified-types';
+import type { Character, CostumePiece, ParametricAppearance } from '../unified-types';
 import { subToPx } from '../unified-types';
 import { computeWorldTransforms } from '../unified-render';
+import { resolvePieceSprite } from '../sprite-resolve';
+import { resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
 import { PALETTES } from './palettes';
 import {
   translatePerformanceGraph, translateBehaviorGraph,
@@ -30,6 +32,18 @@ export interface RuntimePartBase {
   surfaceName?: string;
   surface: ParametricAppearance['surface'];
   surfaceGraph?: ParametricAppearance['surfaceGraph'];
+  /** 合成方式（缺省/ generate = 独立生成） */
+  composite?: 'silhouette' | 'overlay';
+  /** 轮廓外延宽度（0..8） */
+  haloWidth?: number;
+  /** silhouette/overlay 的底图精灵（东向解析结果，产品空间像素网格） */
+  baseSprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][] };
+}
+
+/** 运行时动态实例（双挂载解析后，只留效果位 + 参数） */
+export interface RuntimeDynamicInstance {
+  slot: string;
+  params: DynamicPatternParams;
 }
 
 export interface RuntimePart {
@@ -40,6 +54,8 @@ export interface RuntimePart {
   base: RuntimePartBase;
   /** 变体覆盖：base 即东向（2）主形态，标空覆盖使西向走统一镜像（同产品 mirrorMap 口径） */
   variants: { 2: Record<string, never> };
+  /** 动态模式（默认服装集下的解析结果；换装集见 costumes[*].__dynamic） */
+  dynamic?: RuntimeDynamicInstance[];
 }
 
 export interface ProcRuntimePackage {
@@ -48,6 +64,8 @@ export interface ProcRuntimePackage {
   palettes: Record<string, number[]>;
   parts: RuntimePart[];
   costumes: Record<string, { label: string; [slotKey: string]: unknown }>;
+  /** 模板初始服装集（产品当前生效集） */
+  defaultCostume?: string;
   behavior: {
     /** slotKey → 行为迷你图（运行时实时求值） */
     graphs: Record<string, RuntimeGraph>;
@@ -60,11 +78,43 @@ const TRIGGER_KEY_MAP: Record<string, string> = {
   attack: 'KeyJ', interact: 'KeyE', skill: 'KeyK', dash: 'KeyL', use: 'KeyF',
 };
 
+/** silhouette/overlay 的底图：东向精灵（与主画布同解析链），无则 undefined */
+function baseSpriteFor(
+  app: ParametricAppearance,
+  piece: CostumePiece | undefined,
+  character: Character,
+  slotKey: string,
+): RuntimePartBase['baseSprite'] {
+  const mode = app.composite ?? 'generate';
+  if (mode === 'generate' || !piece) return undefined;
+  const r = resolvePieceSprite(piece, 2, character.slotVariants?.[slotKey], character.sprites, character.latitude ?? 0);
+  if (!r.sprite) return undefined;
+  return {
+    w: r.sprite.width,
+    h: r.sprite.height,
+    plug: r.sprite.plug
+      ? [subToPx(r.sprite.plug.x), subToPx(r.sprite.plug.y)]
+      : [r.sprite.width / 2, r.sprite.height / 2],
+    data: r.sprite.data,
+  };
+}
+
+/** 双挂载解析 → 运行时动态实例（节点为底、服装件同位替换/压制） */
+function dynFor(
+  nodeDyn: Parameters<typeof resolveDynamicPatterns>[0],
+  pieceDyn: Parameters<typeof resolveDynamicPatterns>[1],
+): RuntimeDynamicInstance[] | undefined {
+  const r = resolveDynamicPatterns(nodeDyn, pieceDyn);
+  return r.length ? r.map((x) => ({ slot: x.instance.slot, params: x.instance.params })) : undefined;
+}
+
 function appearanceToBase(
   app: ParametricAppearance,
   pivot: [number, number],
   restRotDeg: number,
+  baseSprite?: RuntimePartBase['baseSprite'],
 ): RuntimePartBase {
+  const mode = app.composite ?? 'generate';
   return {
     pivot,
     off: [app.centerOffset[0], -app.centerOffset[1]],
@@ -80,6 +130,9 @@ function appearanceToBase(
     surfaceName: app.surfaceName,
     surface: app.surface,
     surfaceGraph: app.surfaceGraph,
+    composite: mode === 'generate' ? undefined : mode,
+    haloWidth: app.haloWidth ? Math.max(0, Math.min(8, Math.floor(app.haloWidth))) : undefined,
+    baseSprite,
   };
 }
 
@@ -107,19 +160,34 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
     const nodeId = slotNode.get(slotKey);
     const node = nodeId ? character.nodes[nodeId] : undefined;
     if (!node) { warnings.push(`槽位 ${slotKey} 有参数化外观但无对应节点，已跳过`); continue; }
-    const baseApp = (activeSet?.pieces[slotKey]?.parametric)
-      ?? character.costumeSets.map((cs) => cs.pieces[slotKey]?.parametric).find(Boolean);
+    const basePiece = (activeSet?.pieces[slotKey]?.parametric)
+      ? activeSet.pieces[slotKey]
+      : character.costumeSets.map((cs) => cs.pieces[slotKey]).find((p) => p?.parametric);
+    const baseApp = basePiece?.parametric;
     if (!baseApp) continue;
     const w = worlds.get(node.id);
     const pivot: [number, number] = w ? [subToPx(w.worldX), -subToPx(w.worldY)] : [0, 0];
+    const baseSprite = baseSpriteFor(baseApp, basePiece, character, slotKey);
+    if ((baseApp.composite ?? 'generate') !== 'generate' && !baseSprite) {
+      warnings.push(`槽位 ${slotKey} 合成方式为 ${baseApp.composite} 但东向无精灵，运行时按独立生成处理`);
+    }
     parts.push({
       key: slotKey,
       drawLayer: node.drawLayer,
       sortOrder: node.zIndex,
       costumeKeys: [slotKey],
-      base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0),
+      base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0, baseSprite),
       variants: { 2: {} },
+      dynamic: dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns),
     });
+  }
+  // 动态效果孤儿：挂了动态但槽位无参数化外观 → 不在包内（包只含参数化部件）
+  for (const node of Object.values(character.nodes)) {
+    const slotKey = node.slot?.slotKey ?? node.id;
+    if (parametricSlots.has(slotKey)) continue;
+    const hasDyn = (node.dynamicPatterns?.length ?? 0) > 0
+      || character.costumeSets.some((cs) => (cs.pieces[slotKey]?.dynamicPatterns?.length ?? 0) > 0);
+    if (hasDyn) warnings.push(`动态效果：槽位 ${slotKey} 无参数化外观，未进运行时包（运行时包只含参数化部件）`);
   }
   parts.sort((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key));
   if (parts.length === 0) warnings.push('没有任何带参数化外观的槽位：运行时包将没有部件（先在 Rig 面板给槽位启用参数化外观）');
@@ -131,14 +199,20 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
   const costumes: ProcRuntimePackage['costumes'] = {};
   for (const cs of character.costumeSets) {
     const entry: { label: string; [k: string]: unknown } = { label: cs.name };
+    const dynMap: Record<string, RuntimeDynamicInstance[]> = {};
     for (const slotKey of parametricSlots) {
-      const app = cs.pieces[slotKey]?.parametric;
-      if (!app) { entry[slotKey] = null; continue; }
+      const piece = cs.pieces[slotKey];
+      const app = piece?.parametric;
       const nodeId = slotNode.get(slotKey);
+      const node = nodeId ? character.nodes[nodeId] : undefined;
+      const dyn = dynFor(node?.dynamicPatterns, piece?.dynamicPatterns);
+      if (dyn) dynMap[slotKey] = dyn;
+      if (!app) { entry[slotKey] = null; continue; }
       const w = nodeId ? worlds.get(nodeId) : undefined;
       const pivot: [number, number] = w ? [subToPx(w.worldX), -subToPx(w.worldY)] : [0, 0];
-      entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0);
+      entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0, baseSpriteFor(app, piece, character, slotKey));
     }
+    if (Object.keys(dynMap).length > 0) entry.__dynamic = dynMap;
     costumes[cs.id] = entry;
   }
 
@@ -203,6 +277,7 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
     palettes: PALETTES,
     parts,
     costumes,
+    defaultCostume: activeSet?.id,
     behavior,
     performances,
     warnings,

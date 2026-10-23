@@ -476,4 +476,91 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('K3 outline=OUTER 时外环出现 pal[0] 像素（枚举管辖描边）', countPal0(sprOuter) > 10);
 }
 
+// ---------- L) 运行时跟进：三档合成/外延进包 + 动态双挂载进包 + DYNAMIC_SRC 对齐 ----------
+{
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  const { createDynamicRuntime, DYNAMIC_SRC } = await import('../src/lib/proc-runtime/dynamic-src');
+  const { BAKE_SRC } = await import('../src/lib/proc-runtime/bake-src');
+  const { RUNTIME_EVAL_SRC } = await import('../src/lib/proc-runtime/eval-src');
+  const { createDynamicInstance, defaultDynamicParams, dynamicDeformAt, findDynamicTemplate } = await import('../src/lib/dynamic-patterns');
+  const { pxToSub } = await import('../src/lib/unified-types');
+
+  const grid5: (string | null)[][] = Array.from({ length: 5 }, () => Array(5).fill('#3366aa'));
+  const sprite5 = { width: 5, height: 5, data: grid5, plug: { x: pxToSub(1), y: pxToSub(2) } };
+  const heatParams = { ...defaultDynamicParams(), ...(findDynamicTemplate('挤压冒热气')?.params ?? {}), rate: 12 };
+  const torsoPiece = createDefaultCostumePiece('torso');
+  torsoPiece.parametric = {
+    ...createDefaultParametricAppearance(),
+    composite: 'overlay', haloWidth: 2,
+  } as never;
+  (torsoPiece.sprites as Record<number, unknown>)[2] = sprite5;
+  const torsoPiece2 = createDefaultCostumePiece('torso');
+  torsoPiece2.parametric = torsoPiece.parametric;
+  torsoPiece2.dynamicPatterns = [createDynamicInstance('覆盖', { ...heatParams, rate: 99 }, '身体')];
+  const helmPiece = createDefaultCostumePiece('helm');
+  helmPiece.parametric = { ...createDefaultParametricAppearance(), composite: 'silhouette' } as never;
+
+  const ch = {
+    id: 'chL', name: '运行时跟进',
+    nodes: {
+      torso: { ...makeNode('torso', '躯干', 'torso'), dynamicPatterns: [createDynamicInstance('热气', heatParams, '身体')] },
+      helm: makeNode('helm', '头盔', 'helm', 'torso'),
+      cape: { ...makeNode('cape', '披风', null, 'torso'), dynamicPatterns: [createDynamicInstance('x', heatParams, '氛围')] },
+    },
+    rootNodeIds: ['torso'],
+    costumeSets: [
+      { id: 'set1', name: '默认', pieces: { torso: torsoPiece, helm: helmPiece } },
+      { id: 'set2', name: '替换', pieces: { torso: torsoPiece2 } },
+    ],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  } as unknown as Character;
+
+  const pkg = convertCharacterToRuntimePackage(ch);
+  const torso = pkg.parts.find((p) => p.key === 'torso');
+  check('L1 composite 进包', torso?.base.composite === 'overlay');
+  check('L2 haloWidth 进包', torso?.base.haloWidth === 2);
+  check('L3 底图精灵进包（东向 5×5，plug 还原为 px）',
+    torso?.base.baseSprite?.w === 5 && torso?.base.baseSprite?.h === 5
+    && torso?.base.baseSprite?.plug[0] === 1 && torso?.base.baseSprite?.plug[1] === 2);
+  check('L4 节点动态进包（默认集解析）', torso?.dynamic?.length === 1 && torso?.dynamic?.[0]?.params.rate === 12);
+  const dyn2 = (pkg.costumes['set2'] as { __dynamic?: Record<string, { params: { rate: number } }[]> }).__dynamic;
+  check('L5 换装集 __dynamic 同位覆盖', dyn2?.['torso']?.[0]?.params.rate === 99);
+  check('L6 defaultCostume = 生效集', pkg.defaultCostume === 'set1');
+  check('L7 孤儿动态点名 warning（无参数化外观的披风）',
+    pkg.warnings.some((w) => w.includes('动态效果') && w.includes('cape')));
+  check('L8 silhouette 无底图点名 warning', pkg.warnings.some((w) => w.includes('helm') && w.includes('独立生成')));
+
+  const dyn = createDynamicRuntime() as unknown as {
+    dynDeformAt: (p: never, t: number) => { sx: number; sy: number; amount: number };
+    dynContour: (t: never) => unknown[];
+    dynSimulate: (i: never, t: never, f: number, fr: number, l: string, s: string) => { alpha: number }[];
+  };
+  const dTs = dynamicDeformAt(heatParams, 0.31);
+  const dRt = dyn.dynDeformAt(heatParams as never, 0.31);
+  check('L9 形变脉冲与产品侧一致', Math.abs(dTs.sx - dRt.sx) < 1e-9 && Math.abs(dTs.sy - dRt.sy) < 1e-9 && Math.abs(dTs.amount - dRt.amount) < 1e-9);
+  const tileData = new Uint8Array(5 * 5 * 4);
+  for (let q = 0; q < 25; q++) tileData[q * 4] = 2;
+  const tile5 = { w: 5, h: 5, cx: 2, cy: 2, data: tileData };
+  check('L10 运行时轮廓 5×5 = 16 点', dyn.dynContour(tile5 as never).length === 16);
+  const tileData20 = new Uint8Array(20 * 20 * 4);
+  for (let q = 0; q < 400; q++) tileData20[q * 4] = 2;
+  const tile20 = { w: 20, h: 20, cx: 10, cy: 10, data: tileData20 };
+  const instRt = { slot: '身体', params: heatParams };
+  const s1 = dyn.dynSimulate(instRt as never, tile20 as never, 30, 60, 'back', 'torso');
+  const s2 = dyn.dynSimulate(instRt as never, tile20 as never, 30, 60, 'back', 'torso');
+  check('L11 运行时模拟确定性且有粒子', s1.length > 0 && JSON.stringify(s1) === JSON.stringify(s2));
+  check('L12 运行时粒子 alpha 不超上限', s1.every((p) => p.alpha >= 0 && p.alpha <= heatParams.alpha + 1e-9));
+
+  const fnNames = (s: string) => new Set([...s.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1]));
+  const { readFileSync } = await import('node:fs');
+  const tplText = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+  const dynNames = fnNames(DYNAMIC_SRC);
+  const collisions = [...dynNames].filter((x) => fnNames(tplText).has(x) || fnNames(BAKE_SRC).has(x) || fnNames(RUNTIME_EVAL_SRC).has(x));
+  check(`L13 DYNAMIC_SRC 与模板/BAKE/EVAL 无同名冲突（${collisions.join(',') || '无'}）`, collisions.length === 0);
+  const html = buildRuntimeHtml(pkg);
+  check('L14 导出 HTML 含动态模拟与底图采样接线',
+    html.includes('dynSimulate(') && html.includes('uBase') && html.includes('bakeResolvedTile') && html.includes('__dynamic'));
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

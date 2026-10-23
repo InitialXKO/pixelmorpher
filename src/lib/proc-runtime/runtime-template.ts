@@ -8,13 +8,15 @@
 import type { ProcRuntimePackage } from './convert';
 import { RUNTIME_EVAL_SRC } from './eval-src';
 import { BAKE_SRC } from './bake-src';
+import { DYNAMIC_SRC } from './dynamic-src';
 
 export function buildRuntimeHtml(pkg: ProcRuntimePackage): string {
   const json = JSON.stringify(pkg).replace(/</g, '\\u003c');
   return TEMPLATE
     .split('/*__PACKAGE__*/').join(json)
     .split('/*__EVAL__*/').join(RUNTIME_EVAL_SRC)
-    .split('/*__BAKE__*/').join(BAKE_SRC);
+    .split('/*__BAKE__*/').join(BAKE_SRC)
+    .split('/*__DYNAMIC__*/').join(DYNAMIC_SRC);
 }
 
 const TEMPLATE = `<!DOCTYPE html>
@@ -295,6 +297,9 @@ function resolvePart(part, variantIndex, costume) {
       if (c.size) p.size = c.size;
       if (c.roundness !== undefined) p.roundness = c.roundness;
       if (c.surfaceGraph !== undefined) p.surfaceGraph = c.surfaceGraph;
+      if (c.composite !== undefined) p.composite = c.composite;
+      if (c.haloWidth !== undefined) p.haloWidth = c.haloWidth;
+      if (c.baseSprite !== undefined) p.baseSprite = c.baseSprite;
     }
   }
   const shape = p.poly
@@ -304,7 +309,64 @@ function resolvePart(part, variantIndex, costume) {
     params: p, shape,
     program: p.surface || [{ mask: { m: 'inside' }, slot: 2 }],
     graph: p.surfaceGraph || null,
+    composite: p.composite || 'generate',
+    halo: p.haloWidth || 0,
+    baseSprite: p.baseSprite || null,
   };
+}
+/** overlay 档写出过滤（与主画布同口径：只留 bump 写出与 glint 通道） */
+function filterGraphForOverlayRt(graph) {
+  return { ...graph, writes: graph.writes.filter((w) => w.bump !== undefined || w.ch === 'glint') };
+}
+function filterLayersForOverlayRt(program) {
+  return program.filter((l) => l.bumpForm !== undefined || l.ch === 'glint');
+}
+/** 瓦片烘焙：三档合成 + 轮廓外延（与主画布 buildParametricSprite 同口径） */
+function bakeResolvedTile(resolved, mirrored) {
+  const halo = resolved.halo || 0;
+  const bs = resolved.baseSprite;
+  if (resolved.composite !== 'generate' && bs && bs.w > 0 && bs.h > 0) {
+    const solid = new Uint8Array(bs.w * bs.h);
+    let cnt = 0;
+    for (let y = 0; y < bs.h; y++) {
+      for (let x = 0; x < bs.w; x++) {
+        const c = bs.data[y] && bs.data[y][x];
+        if (c !== null && c !== undefined && c !== '') {
+          solid[y * bs.w + (mirrored ? bs.w - 1 - x : x)] = 1;
+          cnt++;
+        }
+      }
+    }
+    if (cnt > 0) {
+      const raster = {
+        w: bs.w, h: bs.h,
+        plugX: mirrored ? bs.w - 1 - bs.plug[0] : bs.plug[0],
+        plugY: bs.plug[1], solid: solid,
+      };
+      const overlay = resolved.composite === 'overlay';
+      const tile = resolved.graph
+        ? compileTileDAGRaster(raster, overlay ? filterGraphForOverlayRt(resolved.graph) : resolved.graph, halo)
+        : compileTileLayersRaster(raster, overlay ? filterLayersForOverlayRt(resolved.program) : resolved.program, halo);
+      if (overlay && halo > 0) {
+        const full = resolved.graph
+          ? compileTileDAGRaster(raster, resolved.graph, halo)
+          : compileTileLayersRaster(raster, resolved.program, halo);
+        for (let q = 0; q < tile.w * tile.h; q++) {
+          if (tile.data[q * 4] >= 128) tile.data[q * 4 + 2] = full.data[q * 4 + 2];
+        }
+      }
+      return tile;
+    }
+  }
+  return resolved.graph
+    ? compileTileDAG(resolved.shape, resolved.graph, halo)
+    : compileTileLayers(resolved.shape, resolved.program, halo);
+}
+function parseHexRt(hex) {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex || '');
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 const DRAW_ORDER_MAIN = {
   0: ['cape', 'left_arm', 'left_leg', 'right_leg', 'right_arm', 'torso', 'head'],
@@ -350,8 +412,8 @@ function composePerformance(pose, perf, bpOut, w) {
   }
   return next;
 }
-/** 实例打包：19 float —— pos2 size2 rot1 pivotTile2 tile4 misc4(family,seed,modes,0) param4(rimI,glintI,phase,ghost) */
-const INSTANCE_FLOATS = 19;
+/** 实例打包：21 float —— pos2 size2 rot1 pivotTile2 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 */
+const INSTANCE_FLOATS = 21;
 function packInstances(els) {
   const buf = new Float32Array(els.length * INSTANCE_FLOATS);
   els.forEach((el, i) => {
@@ -363,14 +425,17 @@ function packInstances(els) {
     buf[o + 7] = el.tile[0]; buf[o + 8] = el.tile[1]; buf[o + 9] = el.tile[2]; buf[o + 10] = el.tile[3];
     buf[o + 11] = el.family; buf[o + 12] = el.seed;
     buf[o + 13] = el.modes[0] + el.modes[1] * 8 + el.modes[2] * 64 + el.modes[3] * 512;
-    buf[o + 14] = 0;
+    buf[o + 14] = el.composite || 0;
     buf[o + 15] = el.param[0]; buf[o + 16] = el.param[1]; buf[o + 17] = el.param[2]; buf[o + 18] = el.ghost ? 1 : 0;
+    buf[o + 19] = el.deform ? el.deform[0] : 1;
+    buf[o + 20] = el.deform ? el.deform[1] : 1;
   });
   return buf;
 }
 // === PURE END ===
 /*__EVAL__*/
 /*__BAKE__*/
+/*__DYNAMIC__*/
 
 // ---------- 数据（来自运行时包） ----------
 const PAL = EMBEDDED.palettes;
@@ -396,8 +461,19 @@ for (const p of PARTS) {
 const tileCache = new Map();
 let atlasState = null;
 function tileKeyOf(part, variant, costumeName, resolved) {
+  let bsKey = '';
+  const bs = resolved.baseSprite;
+  if (bs) {
+    let h = 0;
+    for (let y = 0; y < bs.h; y++) for (let x = 0; x < bs.w; x++) {
+      const c = bs.data[y] && bs.data[y][x];
+      if (c) for (let q = 0; q < c.length; q++) h = (Math.imul(h, 31) + c.charCodeAt(q)) | 0;
+    }
+    bsKey = bs.w + 'x' + bs.h + '@' + bs.plug.join(',') + '#' + h;
+  }
   return [part.key, variant, costumeName, JSON.stringify(resolved.shape),
-    resolved.graph ? 'G' + JSON.stringify(resolved.graph) : JSON.stringify(resolved.program.map((l) => [l.mask ? l.mask.m : l.bumpForm, l.slot, l.ch]))].join('|');
+    resolved.graph ? 'G' + JSON.stringify(resolved.graph) : JSON.stringify(resolved.program.map((l) => [l.mask ? l.mask.m : l.bumpForm, l.slot, l.ch])),
+    resolved.composite, resolved.halo, bsKey].join('|');
 }
 function ensureAtlas(gl, variant, costumeName) {
   if (atlasState && atlasState.variant === variant && atlasState.costumeName === costumeName) return atlasState;
@@ -407,29 +483,54 @@ function ensureAtlas(gl, variant, costumeName) {
   for (const part of PARTS) {
     const resolved = resolvePart(part, variant, costume);
     if (resolved.params.hidden) { map.set(part.key, null); continue; }
-    const key = tileKeyOf(part, variant, costumeName, resolved);
+    const mirrored = variantMirrored(part, variant);
+    const key = tileKeyOf(part, variant, costumeName, resolved) + (mirrored ? '|M' : '');
     let tile = tileCache.get(key);
-    if (!tile) { tile = resolved.graph ? compileTileDAG(resolved.shape, resolved.graph) : compileTile(resolved.shape, resolved.program); tileCache.set(key, tile); }
+    if (!tile) { tile = bakeResolvedTile(resolved, mirrored); tileCache.set(key, tile); }
     tiles.push(tile);
-    entries.push([part.key, tile, resolved]);
+    entries.push([part.key, tile, resolved, mirrored]);
   }
   const pack = packAtlas(tiles, 256);
   const height = pack.height;
   const data = new Uint8Array(256 * height * 4);
+  const baseData = new Uint8Array(256 * height * 4);
   tiles.forEach((tile, i) => {
     const ax = pack.placements[i][0], ay = pack.placements[i][1];
     for (let j = 0; j < tile.h; j++) {
       data.set(tile.data.subarray(j * tile.w * 4, (j + 1) * tile.w * 4), ((ay + j) * 256 + ax) * 4);
     }
+    // overlay 底图：与档位瓦片同格对齐（行进场翻转 + 镜像列翻转，同 shadeTileOverSprite 口径）
+    const resolved = entries[i][2], mirrored = entries[i][3], bs = resolved.baseSprite;
+    if (resolved.composite === 'overlay' && bs) {
+      const M = 2 + (resolved.halo || 0);
+      for (let j = 0; j < tile.h; j++) {
+        for (let ii = 0; ii < tile.w; ii++) {
+          const sx = mirrored ? bs.w - 1 - (ii - M) : ii - M;
+          const sy = bs.h - 1 - (j - M);
+          if (sx < 0 || sy < 0 || sx >= bs.w || sy >= bs.h) continue;
+          const c = bs.data[sy] && bs.data[sy][sx];
+          const rgb = c ? parseHexRt(c) : null;
+          if (!rgb) continue;
+          const o = ((ay + j) * 256 + ax + ii) * 4;
+          baseData[o] = rgb[0]; baseData[o + 1] = rgb[1]; baseData[o + 2] = rgb[2]; baseData[o + 3] = 255;
+        }
+      }
+    }
     map.set(entries[i][0], { tile: tile, place: [ax, ay], resolved: entries[i][2] });
   });
   if (atlasState && atlasState.tex) gl.deleteTexture(atlasState.tex);
+  if (atlasState && atlasState.baseTex) gl.deleteTexture(atlasState.baseTex);
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  atlasState = { variant: variant, costumeName: costumeName, tex: tex, map: map };
+  const baseTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, baseTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, baseData);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  atlasState = { variant: variant, costumeName: costumeName, tex: tex, baseTex: baseTex, map: map };
   return atlasState;
 }
 
@@ -470,22 +571,23 @@ layout(location=4) in vec2 iTileC;
 layout(location=5) in vec4 iTile;
 layout(location=6) in vec4 iMisc;
 layout(location=7) in vec4 iParam;
+layout(location=8) in vec2 iDeform;
 uniform vec2 uCam; uniform vec2 uViewHalf; uniform vec2 uRes;
-out vec2 vCenterScreen; out float vRot; out vec4 vTile; out vec2 vTileC; out vec4 vMisc; out vec4 vParam;
+out vec2 vCenterScreen; out float vRot; out vec4 vTile; out vec2 vTileC; out vec4 vMisc; out vec4 vParam; out vec2 vDeform;
 void main(){
   float c = cos(iRot), s = sin(iRot);
   vec2 local = aCorner * iSize;
   vec2 woff = vec2(local.x * c + local.y * s, local.x * s - local.y * c);
   vec2 world = iPos + woff;
   vCenterScreen = ((iPos - uCam) / uViewHalf * 0.5 + 0.5) * uRes;
-  vRot = iRot; vTile = iTile; vTileC = iTileC; vMisc = iMisc; vParam = iParam;
+  vRot = iRot; vTile = iTile; vTileC = iTileC; vMisc = iMisc; vParam = iParam; vDeform = iDeform;
   float z = 0.9 - float(gl_InstanceID) * 0.02;
   gl_Position = vec4((world - uCam) / uViewHalf, z, 1.0);
 }\`,
 \`#version 300 es
 precision highp float;
-uniform sampler2D uAtlas; uniform sampler2D uPal; uniform float uTime;
-in vec2 vCenterScreen; in float vRot; in vec4 vTile; in vec2 vTileC; in vec4 vMisc; in vec4 vParam;
+uniform sampler2D uAtlas; uniform sampler2D uPal; uniform sampler2D uBase; uniform float uTime;
+in vec2 vCenterScreen; in float vRot; in vec4 vTile; in vec2 vTileC; in vec4 vMisc; in vec4 vParam; in vec2 vDeform;
 out vec4 oColor;
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 int tileRAt(ivec2 g){
@@ -498,6 +600,11 @@ float tileGAt(ivec2 g){
   if (tp.x < int(vTile.x) || tp.y < int(vTile.y) || tp.x >= int(vTile.x + vTile.z) || tp.y >= int(vTile.y + vTile.w)) return 0.0;
   return texelFetch(uAtlas, tp, 0).g;
 }
+float tileBAt(ivec2 g){
+  ivec2 tp = ivec2(vTile.xy) + ivec2(vTileC) + g;
+  if (tp.x < int(vTile.x) || tp.y < int(vTile.y) || tp.x >= int(vTile.x + vTile.z) || tp.y >= int(vTile.y + vTile.w)) return 0.0;
+  return texelFetch(uAtlas, tp, 0).b;
+}
 void main(){
   float mp = vMisc.z;
   int lm = int(mod(mp, 8.0));
@@ -508,7 +615,9 @@ void main(){
   vec2 d = gl_FragCoord.xy - vCenterScreen;
   float c = cos(vRot), s = sin(vRot);
   vec2 lup = vec2(d.x * c + d.y * s, -d.x * s + d.y * c);
-  ivec2 g = ivec2(floor(vec2(lup.x, -lup.y) + 0.5));
+  vec2 gfv = vec2(lup.x, -lup.y);
+  if (vDeform.x != 1.0 || vDeform.y != 1.0) gfv = vec2(gfv.x / max(vDeform.x, 0.05), gfv.y / max(vDeform.y, 0.05));
+  ivec2 g = ivec2(floor(gfv + 0.5));
   int r0 = tileRAt(g);
   bool occ = r0 < 128;
   if (!occ) {
@@ -520,6 +629,12 @@ void main(){
       else if (om == 3) draw = nR || nB;
       else if (om == 4) draw = nT;
       if (draw) { oColor = vec4(texelFetch(uPal, ivec2(0, family), 0).rgb, 1.0); return; }
+    }
+    int bb = int(tileBAt(g) * 255.0 + 0.5);
+    if (bb > 0) {
+      int bslot = (bb & 16) != 0 ? 4 : (bb & 15) - 1;
+      oColor = vec4(texelFetch(uPal, ivec2(clamp(bslot, 0, 7), family), 0).rgb, 1.0);
+      return;
     }
     discard;
   }
@@ -545,7 +660,8 @@ void main(){
     float yN = float(g.y) / max(vTile.w - 4.0, 1.0) + 0.5;
     rimHit = (inL || inR || inB || inT) && abs(yN - band) < 0.12;
   }
-  if (rimHit && hash12(vec2(g) + vMisc.y) < vParam.x) slot = 4;
+  bool forcePal = false;
+  if (rimHit && hash12(vec2(g) + vMisc.y) < vParam.x) { slot = 4; forcePal = true; }
   if (tileGAt(g) > 0.35) {
     bool gHit = false;
     if (gm == 1) gHit = inT && inR;
@@ -554,10 +670,19 @@ void main(){
       float along = (inL || inR) ? float(g.y) : float(g.x);
       gHit = (inL || inR || inB || inT) && fract(along * 0.25 - uTime * 1.5) < 0.18;
     }
-    if (gHit && hash12(vec2(g) * 1.7 + vMisc.y) < vParam.y) slot = 4;
+    if (gHit && hash12(vec2(g) * 1.7 + vMisc.y) < vParam.y) { slot = 4; forcePal = true; }
   }
-  if (om == 2 && (inL || inR || inB || inT)) slot = 0;
+  if (om == 2 && (inL || inR || inB || inT)) { slot = 0; forcePal = true; }
   if (vParam.w > 0.5 && slot >= 1) slot = 1;
+  if (vMisc.w > 1.5 && !forcePal) {
+    ivec2 tp = ivec2(vTile.xy) + ivec2(vTileC) + g;
+    vec4 baseC = texelFetch(uBase, tp, 0);
+    if (baseC.a > 0.5) {
+      float f = slot == 0 ? 0.55 : slot == 1 ? 0.78 : slot == 3 ? 1.22 : 1.0;
+      oColor = vec4(baseC.rgb * f, 1.0);
+      return;
+    }
+  }
   oColor = vec4(texelFetch(uPal, ivec2(slot, family), 0).rgb, 1.0);
 }\`);
 const palTex = gl.createTexture();
@@ -586,7 +711,7 @@ const instBuf = gl.createBuffer();
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
-  const strides = [[1, 2, 0], [2, 2, 2], [3, 1, 4], [4, 2, 5], [5, 4, 7], [6, 4, 11], [7, 4, 15]];
+  const strides = [[1, 2, 0], [2, 2, 2], [3, 1, 4], [4, 2, 5], [5, 4, 7], [6, 4, 11], [7, 4, 15], [8, 2, 19]];
   for (const sDef of strides) {
     gl.enableVertexAttribArray(sDef[0]);
     gl.vertexAttribPointer(sDef[0], sDef[1], gl.FLOAT, false, INSTANCE_FLOATS * 4, sDef[2] * 4);
@@ -647,7 +772,32 @@ function buildScenery(charX, charY, onGround) {
 
 // ---------- 宿主输入与运行时状态 ----------
 const char = { x: 0, y: 0, vy: 0, onGround: true, variant: 0, lockedVariant: false };
-let currentCostume = Object.keys(COSTUMES)[0] || '';
+let currentCostume = (EMBEDDED.defaultCostume && COSTUMES[EMBEDDED.defaultCostume])
+  ? EMBEDDED.defaultCostume
+  : Object.keys(COSTUMES)[0] || '';
+/** 动态模式解析（模板侧）：当前服装集的 __dynamic 优先，缺省用部件自带（默认集解析结果） */
+function dynListFor(part) {
+  const entry = COSTUMES[currentCostume];
+  const map = entry && entry.__dynamic;
+  return (map && map[part.key]) || part.dynamic || [];
+}
+const particleColorCache = new Map();
+function particleRgb(hex) {
+  let c = particleColorCache.get(hex);
+  if (!c) {
+    const rgb = parseHexRt(hex) || [255, 180, 107];
+    c = [rgb[0] / 255, rgb[1] / 255, rgb[2] / 255];
+    particleColorCache.set(hex, c);
+  }
+  return c;
+}
+function pushParticleQuad(verts, x, y, size, rgb, alpha) {
+  const h = Math.max(0.5, size / 2);
+  const corners = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+  for (const cn of corners) {
+    verts.push(x + cn[0] * h, y + cn[1] * h, cn[0], cn[1], rgb[0], rgb[1], rgb[2], alpha, 1);
+  }
+}
 let elapsed = 0;
 let autoWalk = false;
 let autoDir = 1;
@@ -744,7 +894,7 @@ if (EMBEDDED.warnings && EMBEDDED.warnings.length) {
 
 // ---------- 主循环：输入 → 程序化姿态 → 表演合成 → 渲染 ----------
 const uLoc = (pr, n) => gl.getUniformLocation(pr, n);
-const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal') };
+const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal'), base: uLoc(partProg, 'uBase') };
 const solidU = { cam: uLoc(solidProg, 'uCam'), vh: uLoc(solidProg, 'uViewHalf') };
 let last = performance.now();
 function frame(now) {
@@ -792,6 +942,7 @@ function frame(now) {
   const sorted = sortParts(PARTS, char.variant);
   const els = [];
   const elByKey = new Map();
+  const dynAnchors = [];
   sorted.forEach((part, idx) => {
     const entry = state.map.get(part.key);
     if (!entry) return;
@@ -800,18 +951,51 @@ function frame(now) {
     const an0 = pose[part.key] || { a: 0, dy: 0, rim: 0, glint: 0 };
     const an = { a: an0.a + (p.restRot || 0), dx: an0.dx || 0, dy: an0.dy || 0, rim: an0.rim || 0, glint: an0.glint || 0 };
     const ctr = partCenter(p, an);
+    // 动态模式：形变段逐帧求脉冲（多实例相乘）；合成/动态部件放大
+    // 实例面片给足采样余量（片元按瓦片边界丢弃，多余面片无副作用）
+    const dynList = dynListFor(part);
+    let dsx = 1, dsy = 1, hasDeform = false;
+    for (const inst of dynList) {
+      const d = dynDeformAt(inst.params, elapsed);
+      dsx *= d.sx; dsy *= d.sy;
+      if (inst.params.deformEnabled) hasDeform = true;
+    }
+    const comp = resolved.composite === 'overlay' ? 2 : resolved.composite === 'silhouette' ? 1 : 0;
+    const big = comp > 0 || dynList.length > 0;
     const el = {
-      pos: [ctr[0], ctr[1]], size: [tile.w, tile.h], rot: an.a,
+      pos: [ctr[0], ctr[1]], size: big ? [tile.w * 3, tile.h * 3] : [tile.w, tile.h], rot: an.a,
       tileCx: tile.cx, tileCy: tile.cy,
       tile: [place[0], place[1], tile.w, tile.h],
       family: palIndex(p.pal), seed: (idx * 0.137) % 1,
       modes: [p.light, p.outline, p.rim, p.glint],
       param: [Math.min(1, (p.rimI || 0) + (an.rim || 0)), Math.min(1, (p.glintI || 0) + (an.glint || 0)), (idx * 0.137) % 1],
       ghost: false,
+      composite: comp,
+      deform: hasDeform ? [dsx, dsy] : undefined,
     };
     els.push(el);
     elByKey.set(part.key, el);
+    if (dynList.length > 0) dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: an.a, dynList: dynList, dsx: dsx, dsy: dsy });
   });
+  // 动态粒子：瓦片空间模拟（60fps 虚拟帧，与行为层同一时间基），
+  // 发射点随形变缩放，位置经部件旋转落到世界（与片元采样同式）
+  const backVerts = [], frontVerts = [];
+  {
+    const frameIdx = elapsed * 60;
+    for (const a of dynAnchors) {
+      const c = Math.cos(a.rot), s = Math.sin(a.rot);
+      for (const inst of a.dynList) {
+        for (const layer of ['back', 'front']) {
+          const ps = dynSimulate(inst, a.tile, frameIdx, 60, layer, a.part.key);
+          const target = layer === 'back' ? backVerts : frontVerts;
+          for (const pt of ps) {
+            const gx = pt.x * a.dsx, gy = pt.y * a.dsy;
+            pushParticleQuad(target, a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c, pt.size, particleRgb(pt.color), pt.alpha);
+          }
+        }
+      }
+    }
+  }
   for (const act of activePerfs) {
     const ai = act.perf.afterimage;
     if (!ai) continue;
@@ -845,6 +1029,10 @@ function frame(now) {
   const sc = buildScenery(char.x, char.y, char.onGround);
   gl.bufferData(gl.ARRAY_BUFFER, sc, gl.DYNAMIC_DRAW);
   gl.drawArrays(gl.TRIANGLES, 0, sc.length / 9);
+  if (backVerts.length) {
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(backVerts), gl.DYNAMIC_DRAW);
+    gl.drawArrays(gl.TRIANGLES, 0, backVerts.length / 9);
+  }
   gl.disable(gl.BLEND);
   gl.enable(gl.DEPTH_TEST);
   gl.depthFunc(gl.LESS);
@@ -855,11 +1043,26 @@ function frame(now) {
   gl.uniform1f(partU.time, elapsed);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, state.tex); gl.uniform1i(partU.atlas, 0);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palTex); gl.uniform1i(partU.pal, 1);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, state.baseTex); gl.uniform1i(partU.base, 2);
   gl.bindVertexArray(partVAO);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
   gl.bufferData(gl.ARRAY_BUFFER, packInstances(els), gl.DYNAMIC_DRAW);
   gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, els.length);
   gl.bindVertexArray(null);
+  if (frontVerts.length) {
+    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(solidProg);
+    gl.uniform2f(solidU.cam, camX, camY);
+    gl.uniform2f(solidU.vh, lowW / 2, VIEW_H / 2);
+    gl.bindVertexArray(solidVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, solidBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(frontVerts), gl.DYNAMIC_DRAW);
+    gl.drawArrays(gl.TRIANGLES, 0, frontVerts.length / 9);
+    gl.bindVertexArray(null);
+    gl.disable(gl.BLEND);
+  }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
