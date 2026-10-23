@@ -190,6 +190,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
       hat: makeNode('hat', '帽子', null, 'torso'),
       arm: makeNode('arm', '手臂', null, 'torso'),
     },
+    rootNodeId: 'torso',
     rootNodeIds: ['torso'],
     costumeSets: [{
       id: 'set1', name: '默认',
@@ -512,6 +513,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
       helm: makeNode('helm', '头盔', 'helm', 'torso'),
       cape: { ...makeNode('cape', '披风', null, 'torso'), dynamicPatterns: [createDynamicInstance('x', heatParams, '氛围')] },
     },
+    rootNodeId: 'torso',
     rootNodeIds: ['torso'],
     costumeSets: [
       { id: 'set1', name: '默认', pieces: { torso: torsoPiece, helm: helmPiece } },
@@ -967,6 +969,32 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   const armEast = pkgEast.parts.find((p) => p.key === 'arm');
   check('Q32 部件 pivot 经 projectToView 投影（东向：横轴=世界 Z=0、纵轴=世界 Y）',
     !!armEast && Math.abs(armEast.base.pivot[0]) < 1e-9 && Math.abs(armEast.base.pivot[1] + 2) < 1e-9);
+  // 代表精灵取显示方向（根节点朝向 0=东），不是写死的 2（北）：同槽位
+  // 同时有 0 向大图与 2 向小图时必须取 0 向（尺寸/plug 都是那张的）
+  const sprBig = { id: 'sprBig', width: 10, height: 8, plug: { x: 64, y: 32 },
+    data: Array.from({ length: 8 }, () => Array(10).fill('#112233')) } as never;
+  const sprSmall = { id: 'sprSmall', width: 4, height: 3, plug: { x: 16, y: 16 },
+    data: Array.from({ length: 3 }, () => Array(4).fill('#445566')) } as never;
+  const chHome = {
+    id: 'chHome', name: '显示方向',
+    nodes: { arm: { ...makeNode('arm', '手臂', 'arm'), transform: { x: 0, y: 0, angle: 0, variantIndex: 0, stretch: 1 } } },
+    rootNodeId: 'arm',
+    sprites: { sprBig, sprSmall },
+    costumeSets: [{ id: 'set1', name: '默认', pieces: {
+      arm: { ...createDefaultCostumePiece('arm'), sprites: {
+        0: { spriteId: 'sprBig', mirror: false },
+        2: { spriteId: 'sprSmall', mirror: false },
+      } },
+    } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  } as unknown as Character;
+  const pkgHome = convertCharacterToRuntimePackage(chHome);
+  const armHome = pkgHome.parts.find((p) => p.key === 'arm');
+  check('Q33 代表精灵取显示方向的图（0 向 10x8/plug(4,2)，不是 2 向小图）且变体键=显示方向',
+    !!armHome?.sprite && armHome.sprite.w === 10 && armHome.sprite.h === 8
+    && armHome.sprite.plug[0] === 4 && armHome.sprite.plug[1] === 2
+    && Object.keys(armHome.variants).join() === '0');
   check('Q31 父轨道带动子节点：子节点（无本地轨道）也进掩码且带世界增量曲线',
     !!perfPC && perfPC.mask.includes('hand') && !!handTr
     && Math.abs(endV(handTr.angleFrom) + Math.PI / 2) < 0.01

@@ -78,15 +78,16 @@ export interface RuntimePart {
   sortOrder: number;
   costumeKeys: string[];
   base: RuntimePartBase;
-  /** 变体覆盖：base 即东向（2）主形态，标空覆盖使西向走统一镜像（同产品 mirrorMap 口径） */
-  variants: { 2: Record<string, never> };
+  /** 变体覆盖：base 即显示方向（第 0 帧根节点朝向）主形态，标空覆盖使
+   *  对侧方向走统一镜像（同产品 mirrorMap 口径） */
+  variants: Partial<Record<DirectionIndex, Record<string, never>>>;
   /** 动态模式（默认服装集下的解析结果；换装集见 costumes[*].__dynamic） */
   dynamic?: RuntimeDynamicInstance[];
   /** 发光场（默认服装集；换装集见 costumes[*].__glow） */
   glow?: RuntimeGlowEntry;
   /** 精灵部件（无参数化外观）：模板按直贴图瓦片绘制 */
   spriteKind?: boolean;
-  /** 精灵部件在默认服装集下的东向精灵网格（逐集见 costumes[*].__sprite） */
+  /** 精灵部件在默认服装集下的显示方向精灵网格（逐集见 costumes[*].__sprite） */
   sprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][] };
 }
 
@@ -118,18 +119,24 @@ const TRIGGER_KEY_MAP: Record<string, string> = {
 export type SpriteTable = Record<string, import('../unified-types').Sprite>;
 
 /** 代表精灵网格（与主画布同解析链：变体→基础→镜像回落）。
- *  strictEast=false 时东向缺图按 [2,0,6,4,1,3,5,7] 顺序取该件任一
+ *  strictEast=false 时显示方向缺图按 [2,0,6,4,1,3,5,7] 顺序取该件任一
  *  方向的图作代表（装配服装常只存一个方向；运行时包本来就只带
- *  一张代表图）。底图（composite）口径仍严格取东向，不走此回落。 */
-function eastSpriteOf(
+ *  一张代表图）。底图（composite）口径仍严格取显示方向，不走回落。 */
+function displaySpriteOf(
   piece: CostumePiece | undefined,
   character: Character,
   slotKey: string,
   table: SpriteTable,
   strictEast = true,
+  homeDir: DirectionIndex = 2,
 ): RuntimePartBase['baseSprite'] {
   if (!piece) return undefined;
-  const dirs: DirectionIndex[] = strictEast ? [2] : [2, 0, 6, 4, 1, 3, 5, 7];
+  // 代表方向 = 角色第 0 帧的显示方向（根节点 variantIndex），不是写死的
+  // 2——方向编号里 2 是北向，此前误当东向优先，取到的图与编辑器显示的
+  // 不是同一张（尺寸/plug 都对不上，枢轴自然错位）。
+  const dirs: DirectionIndex[] = strictEast
+    ? [homeDir]
+    : [homeDir, ...([2, 0, 6, 4, 1, 3, 5, 7] as DirectionIndex[]).filter((d) => d !== homeDir)];
   for (const dir of dirs) {
     const r = resolvePieceSprite(piece, dir, character.slotVariants?.[slotKey], table, character.latitude ?? 0);
     if (r.sprite) {
@@ -166,14 +173,20 @@ export function representativeGridForSlotEx(
   slotKey: string,
   externalSprites?: Record<string, Sprite>,
   costumeSetId?: string,
+  preferredDir?: DirectionIndex,
 ): { grid: PixelGrid; space: 'tile' | 'sprite' } | null {
   const table: SpriteTable = { ...(character.sprites ?? {}), ...(externalSprites ?? {}) };
   const set = character.costumeSets.find((cs) => cs.id === (costumeSetId ?? character.activeCostumeSetId))
     ?? character.costumeSets[0];
   const piece = set?.pieces[slotKey];
   if (!piece) return null;
+  // 代表方向缺省取根节点静态朝向（编辑器面板无帧上下文时的最佳近似）
+  const homeDir = preferredDir
+    ?? (character.rootNodeId ? character.nodes[character.rootNodeId]?.transform.variantIndex : undefined)
+    ?? 2;
+  const dirOrder = [homeDir, ...([2, 0, 6, 4, 1, 3, 5, 7] as DirectionIndex[]).filter((d) => d !== homeDir)];
   let baseSpr: Sprite | undefined;
-  for (const dir of [2, 0, 6, 4, 1, 3, 5, 7] as DirectionIndex[]) {
+  for (const dir of dirOrder) {
     const r = resolvePieceSprite(piece, dir, character.slotVariants?.[slotKey], table, character.latitude ?? 0);
     if (r.sprite) { baseSpr = r.sprite; break; }
   }
@@ -193,9 +206,10 @@ function baseSpriteFor(
   character: Character,
   slotKey: string,
   table: SpriteTable,
+  homeDir: DirectionIndex = 2,
 ): RuntimePartBase['baseSprite'] {
   if ((app.composite ?? 'generate') === 'generate') return undefined;
-  return eastSpriteOf(piece, character, slotKey, table, true);
+  return displaySpriteOf(piece, character, slotKey, table, true, homeDir);
 }
 
 /**
@@ -457,7 +471,7 @@ export function convertCharacterToRuntimePackage(
     if (!baseApp) continue;
     const w = worlds.get(node.id);
     const pivot = pivotOf(node.id);
-    const baseSprite = baseSpriteFor(baseApp, basePiece, character, slotKey, spriteTable);
+    const baseSprite = baseSpriteFor(baseApp, basePiece, character, slotKey, spriteTable, rootDir as DirectionIndex);
     if ((baseApp.composite ?? 'generate') !== 'generate' && !baseSprite) {
       warnings.push(`槽位 ${slotKey} 合成方式为 ${baseApp.composite} 但东向无精灵，运行时按独立生成处理`);
     }
@@ -468,7 +482,7 @@ export function convertCharacterToRuntimePackage(
       sortOrder: node.zIndex,
       costumeKeys: [slotKey],
       base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0, baseSprite),
-      variants: { 2: {} },
+      variants: { [rootDir]: {} },
       dynamic: dyn,
       glow: glowEntryFor(character, slotKey, dyn, activeSet?.id, externalSprites, warnings),
     });
@@ -477,7 +491,7 @@ export function convertCharacterToRuntimePackage(
   const spriteSlots = new Set<string>();
   for (const cs of character.costumeSets) {
     for (const [slotKey, piece] of Object.entries(cs.pieces)) {
-      if (!parametricSlots.has(slotKey) && eastSpriteOf(piece, character, slotKey, spriteTable, false)) {
+      if (!parametricSlots.has(slotKey) && displaySpriteOf(piece, character, slotKey, spriteTable, false, rootDir as DirectionIndex)) {
         spriteSlots.add(slotKey);
       }
     }
@@ -486,8 +500,8 @@ export function convertCharacterToRuntimePackage(
     const nodeId = slotNode.get(slotKey);
     const node = nodeId ? character.nodes[nodeId] : undefined;
     if (!node) { warnings.push(`槽位 ${slotKey} 有精灵但无对应节点，已跳过`); continue; }
-    const sg = eastSpriteOf(activeSet?.pieces[slotKey], character, slotKey, spriteTable, false)
-      ?? character.costumeSets.map((cs) => eastSpriteOf(cs.pieces[slotKey], character, slotKey, spriteTable, false)).find(Boolean);
+    const sg = displaySpriteOf(activeSet?.pieces[slotKey], character, slotKey, spriteTable, false, rootDir as DirectionIndex)
+      ?? character.costumeSets.map((cs) => displaySpriteOf(cs.pieces[slotKey], character, slotKey, spriteTable, false, rootDir as DirectionIndex)).find(Boolean);
     if (!sg) continue;
     const w = worlds.get(node.id);
     const pivot = pivotOf(node.id);
@@ -500,7 +514,7 @@ export function convertCharacterToRuntimePackage(
       sortOrder: node.zIndex,
       costumeKeys: [slotKey],
       base,
-      variants: { 2: {} },
+      variants: { [rootDir]: {} },
       spriteKind: true,
       sprite: sg,
       dynamic: dyn,
@@ -541,7 +555,7 @@ export function convertCharacterToRuntimePackage(
       if (!app) { entry[slotKey] = null; continue; }
       const w = nodeId ? worlds.get(nodeId) : undefined;
       const pivot = pivotOf(nodeId);
-      entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0, baseSpriteFor(app, piece, character, slotKey, spriteTable));
+      entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0, baseSpriteFor(app, piece, character, slotKey, spriteTable, rootDir as DirectionIndex));
     }
     for (const slotKey of spriteSlots) {
       const nodeId = slotNode.get(slotKey);
@@ -561,7 +575,7 @@ export function convertCharacterToRuntimePackage(
     for (const slotKey of new Set([...parametricSlots, ...spriteSlots])) {
       const piece = cs.pieces[slotKey];
       if (piece?.parametric) continue;
-      const sg = eastSpriteOf(piece, character, slotKey, spriteTable, false);
+      const sg = displaySpriteOf(piece, character, slotKey, spriteTable, false, rootDir as DirectionIndex);
       if (sg) spriteMap[slotKey] = sg;
     }
     if (Object.keys(spriteMap).length > 0) entry.__sprite = spriteMap;
