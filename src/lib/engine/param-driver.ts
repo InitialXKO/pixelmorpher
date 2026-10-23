@@ -326,11 +326,12 @@ function computeAccumulatedPhase(
   driver: ParamDriver,
   frame: number,
   variables: VariableContext,
+  frameRate: number = 12,
 ): number {
   const startFrame = driver.startFrame;
 
   // Initial phase offset: resolve at startFrame, treating phase as constant initial condition
-  const phaseOffset = resolveParamValue(driver, 'phase', startFrame, variables);
+  const phaseOffset = resolveParamValue(driver, 'phase', startFrame, variables, frameRate);
   const phaseRad = (phaseOffset * Math.PI) / 180;
 
   // At or before startFrame: just the initial offset
@@ -338,8 +339,8 @@ function computeAccumulatedPhase(
 
   // Fast path: constant period → analytical formula
   if (!hasDynamicPeriod(driver)) {
-    const period = Math.max(1, driver.period);
-    return (2 * Math.PI * (frame - startFrame)) / period + phaseRad;
+    const period = Math.max(0.01, driver.period);
+    return (2 * Math.PI * ((frame - startFrame) / frameRate)) / period + phaseRad;
   }
 
   // Dynamic period: sequential accumulation with cache
@@ -365,8 +366,8 @@ function computeAccumulatedPhase(
   const newCheckpoints: PhaseCheckpoint[] = [];
 
   for (let f = startFrame_ + 1; f <= frame; f++) {
-    const period = Math.max(1, resolveParamValue(driver, 'period', f, variables));
-    phase += (2 * Math.PI) / period;
+    const period = Math.max(0.01, resolveParamValue(driver, 'period', f, variables, frameRate));
+    phase += (2 * Math.PI) / (period * frameRate);
 
     // Store checkpoint at regular intervals
     const localFrame = f - startFrame;
@@ -400,6 +401,7 @@ function computeAccumulatedPhase(
 function evaluateSecondaryDriver(
   secDriver: SecondaryParamDriver,
   frame: number,
+  frameRate: number = 12,
 ): number {
   const startFrame = secDriver.startFrame;
   const endFrame = secDriver.endFrame >= 0 ? secDriver.endFrame : Infinity;
@@ -409,7 +411,8 @@ function evaluateSecondaryDriver(
   }
 
   const t = frame - startFrame;
-  const period = Math.max(1, secDriver.period);
+  const tS = t / frameRate; // 秒（相位类公式用；斜坡/进度仍按帧数比）
+  const period = Math.max(0.01, secDriver.period);
   const phaseRad = (secDriver.phase * Math.PI) / 180;
 
   let waveValue: number;
@@ -418,21 +421,21 @@ function evaluateSecondaryDriver(
       const totalDuration = endFrame - startFrame;
       const rampUp = Math.min(t / Math.max(1, Math.min(3, totalDuration * 0.1)), 1);
       const rampDown = Math.min((totalDuration - t) / Math.max(1, Math.min(3, totalDuration * 0.1)), 1);
-      waveValue = Math.sin((2 * Math.PI * t) / period + phaseRad) * rampUp * rampDown;
+      waveValue = Math.sin((2 * Math.PI * tS) / period + phaseRad) * rampUp * rampDown;
       break;
     }
     case 'triangle': {
-      const p = ((t / period + secDriver.phase / 360) % 1 + 1) % 1;
+      const p = ((tS / period + secDriver.phase / 360) % 1 + 1) % 1;
       waveValue = p < 0.25 ? 4 * p : p < 0.75 ? 2 - 4 * p : 4 * p - 4;
       break;
     }
     case 'square': {
-      const p = ((t / period + secDriver.phase / 360) % 1 + 1) % 1;
+      const p = ((tS / period + secDriver.phase / 360) % 1 + 1) % 1;
       waveValue = p < 0.5 ? 1 : -1;
       break;
     }
     case 'sawtooth': {
-      const p = ((t / period + secDriver.phase / 360) % 1 + 1) % 1;
+      const p = ((tS / period + secDriver.phase / 360) % 1 + 1) % 1;
       waveValue = 2 * p - 1;
       break;
     }
@@ -453,12 +456,12 @@ function evaluateSecondaryDriver(
     case 'spring_oscillate': {
       const totalDuration = endFrame - startFrame;
       const progress = totalDuration > 0 ? t / totalDuration : 0;
-      waveValue = Math.exp(-secDriver.damping * 5 * progress) * Math.sin((2 * Math.PI * t) / period + phaseRad);
+      waveValue = Math.exp(-secDriver.damping * 5 * progress) * Math.sin((2 * Math.PI * tS) / period + phaseRad);
       break;
     }
     case 'perlin_noise': {
       // Perlin noise: use frame/time as x coordinate, driver id for y variation
-      const noiseX = t / Math.max(1, period);
+      const noiseX = tS / period;
       const noiseY = (hashCode(secDriver.id) % 100) * 0.01;
       waveValue = perlinNoise2D(noiseX, noiseY); // range roughly [-1, 1]
       break;
@@ -507,6 +510,7 @@ export function buildVariableContext(
   allActiveDrivers: ParamDriver[],
   frame: number,
   prevContext?: VariableContext,
+  frameRate: number = 12,
 ): VariableContext {
   const ctx: VariableContext = new Map();
 
@@ -533,7 +537,7 @@ export function buildVariableContext(
       continue;
     }
     // Evaluate writer driver using current context (already-computed vars are available)
-    const writerOutput = evaluateParamDriverWithSources(writer, frame, ctx);
+    const writerOutput = evaluateParamDriverWithSources(writer, frame, ctx, frameRate);
 
     if (variable.mode === 'accumulator') {
       // Accumulator: var[f] = var[f-1] + writer(f)
@@ -682,6 +686,7 @@ function resolveParamValue(
   param: ParamDriverNumericParam,
   frame: number,
   variables: VariableContext,
+  frameRate: number = 12,
 ): number {
   const source = driver.paramSources?.[param];
 
@@ -700,7 +705,7 @@ function resolveParamValue(
 
   // Source 3: secondary driver
   if (source.type === 'secondary_driver') {
-    const modulationValue = evaluateSecondaryDriver(source.driver, frame);
+    const modulationValue = evaluateSecondaryDriver(source.driver, frame, frameRate);
     const baseValue = driver[param] as number;
     if (source.driver.modMode === 'add') {
       return baseValue + modulationValue;
@@ -734,6 +739,7 @@ function evaluateParamDriverWithSources(
   driver: ParamDriver,
   frame: number,
   variables: VariableContext = new Map(),
+  frameRate: number = 12,
 ): number {
   // P8: Check frame-level evaluation cache — skip redundant waveform computation
   // when the same driver is evaluated multiple times per frame (common in playback)
@@ -745,7 +751,7 @@ function evaluateParamDriverWithSources(
 
   // If no paramSources, use the fast path (direct evaluateParamDriver)
   if (!driver.paramSources || Object.keys(driver.paramSources).length === 0) {
-    result = evaluateParamDriver(driver, frame);
+    result = evaluateParamDriver(driver, frame, undefined, frameRate);
   } else {
     // Check active range
     const startFrame = driver.startFrame;
@@ -754,12 +760,12 @@ function evaluateParamDriverWithSources(
       result = resolveParamValue(driver, 'baseValue', frame, variables);
     } else {
       // Resolve non-phase parameters from their sources
-      const amplitude = resolveParamValue(driver, 'amplitude', frame, variables);
-      const baseValue = resolveParamValue(driver, 'baseValue', frame, variables);
-      const endValue = resolveParamValue(driver, 'endValue', frame, variables);
-      const period = resolveParamValue(driver, 'period', frame, variables);
-      const phase = resolveParamValue(driver, 'phase', frame, variables);
-      const damping = resolveParamValue(driver, 'damping', frame, variables);
+      const amplitude = resolveParamValue(driver, 'amplitude', frame, variables, frameRate);
+      const baseValue = resolveParamValue(driver, 'baseValue', frame, variables, frameRate);
+      const endValue = resolveParamValue(driver, 'endValue', frame, variables, frameRate);
+      const period = resolveParamValue(driver, 'period', frame, variables, frameRate);
+      const phase = resolveParamValue(driver, 'phase', frame, variables, frameRate);
+      const damping = resolveParamValue(driver, 'damping', frame, variables, frameRate);
 
       // Build a temporary driver with resolved values for evaluation
       const resolvedDriver: ParamDriver = {
@@ -774,10 +780,10 @@ function evaluateParamDriverWithSources(
 
       // Phase continuity: compute accumulated phase for dynamic period sources.
       if (hasDynamicPeriod(driver)) {
-        const accumulatedPhase = computeAccumulatedPhase(driver, frame, variables);
-        result = evaluateParamDriver(resolvedDriver, frame, accumulatedPhase);
+        const accumulatedPhase = computeAccumulatedPhase(driver, frame, variables, frameRate);
+        result = evaluateParamDriver(resolvedDriver, frame, accumulatedPhase, frameRate);
       } else {
-        result = evaluateParamDriver(resolvedDriver, frame);
+        result = evaluateParamDriver(resolvedDriver, frame, undefined, frameRate);
       }
     }
   }
@@ -804,6 +810,7 @@ function evaluateParamDriver(
   driver: ParamDriver,
   frame: number,
   overridePhase?: number,
+  frameRate: number = 12,
 ): number {
   const startFrame = driver.startFrame;
   const endFrame = driver.endFrame >= 0 ? driver.endFrame : Infinity;
@@ -812,7 +819,8 @@ function evaluateParamDriver(
   }
 
   const t = frame - startFrame;
-  const period = Math.max(1, driver.period);
+  const tS = t / frameRate; // 秒（相位类公式用；斜坡/进度仍按帧数比）
+  const period = Math.max(0.01, driver.period);
   const phaseRad = overridePhase ?? (driver.phase * Math.PI) / 180;
 
   // Compute waveform value
@@ -822,21 +830,21 @@ function evaluateParamDriver(
       const totalDuration = endFrame - startFrame;
       const rampUp = Math.min(t / Math.max(1, Math.min(3, totalDuration * 0.1)), 1);
       const rampDown = Math.min((totalDuration - t) / Math.max(1, Math.min(3, totalDuration * 0.1)), 1);
-      waveValue = Math.sin((2 * Math.PI * t) / period + phaseRad) * rampUp * rampDown;
+      waveValue = Math.sin((2 * Math.PI * tS) / period + phaseRad) * rampUp * rampDown;
       break;
     }
     case 'triangle': {
-      const p = ((t / period + driver.phase / 360) % 1 + 1) % 1;
+      const p = ((tS / period + driver.phase / 360) % 1 + 1) % 1;
       waveValue = p < 0.25 ? 4 * p : p < 0.75 ? 2 - 4 * p : 4 * p - 4;
       break;
     }
     case 'square': {
-      const p = ((t / period + driver.phase / 360) % 1 + 1) % 1;
+      const p = ((tS / period + driver.phase / 360) % 1 + 1) % 1;
       waveValue = p < 0.5 ? 1 : -1;
       break;
     }
     case 'sawtooth': {
-      const p = ((t / period + driver.phase / 360) % 1 + 1) % 1;
+      const p = ((tS / period + driver.phase / 360) % 1 + 1) % 1;
       waveValue = 2 * p - 1;
       break;
     }
@@ -857,7 +865,7 @@ function evaluateParamDriver(
     case 'spring_oscillate': {
       const totalDuration = endFrame - startFrame;
       const progress = totalDuration > 0 ? t / totalDuration : 0;
-      waveValue = Math.exp(-driver.damping * 5 * progress) * Math.sin((2 * Math.PI * t) / period + phaseRad);
+      waveValue = Math.exp(-driver.damping * 5 * progress) * Math.sin((2 * Math.PI * tS) / period + phaseRad);
       break;
     }
     default:

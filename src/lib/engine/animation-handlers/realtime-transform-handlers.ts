@@ -26,7 +26,7 @@ import { DEFAULT_REALTIME_RESULT } from './types';
 // ============================================================
 
 const pendulumHandler: RealtimeTransformHandler = (mod, ctx) => {
-  const { phase, t, weight } = getAnimationPhase(mod, ctx.currentFrame);
+  const { phase, t, weight } = getAnimationPhase(mod, ctx.currentFrame, ctx.frameRate);
   if (weight <= 0) return null;
   const effectiveWeight = weight * ctx.convergeFactor;
   const amplitude = Number(mod.params.amplitude) || 30;
@@ -39,12 +39,12 @@ const pendulumHandler: RealtimeTransformHandler = (mod, ctx) => {
 };
 
 const wheelHandler: RealtimeTransformHandler = (mod, ctx) => {
-  const { phase, relativeFrame: rf, weight } = getAnimationPhase(mod, ctx.currentFrame);
+  const { phase, relativeFrame: rf, weight } = getAnimationPhase(mod, ctx.currentFrame, ctx.frameRate);
   if (weight <= 0) return null;
   const effectiveWeight = weight * ctx.convergeFactor;
   const radiusX = Number(mod.params.radiusX) || 10;
   const radiusY = Number(mod.params.radiusY) || 10;
-  const period = Math.max(2, Number(mod.params.period) || 16);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.267);
   const phaseRad = ((Number(mod.params.phase) || 0) * Math.PI) / 180;
   const dir = mod.params.direction === 'ccw' ? -1 : 1;
   const trajectoryMode = String(mod.params.trajectoryMode ?? 'circular') as WheelTrajectoryMode;
@@ -52,7 +52,7 @@ const wheelHandler: RealtimeTransformHandler = (mod, ctx) => {
   const gearTeeth = Number(mod.params.gearTeeth ?? 8);
   const gearMeshOffset = Number(mod.params.gearMeshOffset ?? 0);
   const traj = computeWheelTrajectory({
-    radiusX, radiusY, relativeFrame: rf, period, phaseRad, direction: dir,
+    radiusX, radiusY, relativeFrame: rf / (ctx.frameRate || 12), period, phaseRad, direction: dir,
     weight: effectiveWeight, trajectoryMode, cornerRadius, gearTeeth, gearMeshOffset,
   });
 
@@ -76,16 +76,17 @@ const wheelHandler: RealtimeTransformHandler = (mod, ctx) => {
 
 const bounceHandler: RealtimeTransformHandler = (mod, ctx) => {
   // V11: Use getAnimationPhase for phase continuity when period changes dynamically
-  const { phase: bouncePhaseVal, t: bounceT, weight: bounceWeight } = getAnimationPhase(mod, ctx.currentFrame);
+  const { phase: bouncePhaseVal, t: bounceT, weight: bounceWeight } = getAnimationPhase(mod, ctx.currentFrame, ctx.frameRate);
   if (bounceWeight <= 0) return null;
   const effectiveWeight = bounceWeight * ctx.convergeFactor;
   const height = Number(mod.params.height) || 20;
-  const period = Math.max(2, Number(mod.params.period) || 12);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.2);
   const bounces = Math.max(1, Number(mod.params.bounces) || 3);
   const damping = Number(mod.params.damping) || 0.5;
   // 与 bake 对齐：每周期内重置 bounceIndex，保证每周期看起来一样
-  const bounceTNorm = (ctx.relativeFrame % period) / (period / bounces);
-  const bounceIndex = Math.floor((ctx.relativeFrame % period) / (period / bounces));
+  const relSec = ctx.relativeFrame / (ctx.frameRate || 12);
+  const bounceTNorm = (relSec % period) / (period / bounces);
+  const bounceIndex = Math.floor((relSec % period) / (period / bounces));
   const withinBounce = bounceTNorm - Math.floor(bounceTNorm);
   const decayFactor = Math.pow(1 - damping, bounceIndex);
   return {
@@ -96,12 +97,12 @@ const bounceHandler: RealtimeTransformHandler = (mod, ctx) => {
 
 const gaitHandler: RealtimeTransformHandler = (mod, ctx) => {
   // V11: Use getAnimationPhase for phase-accumulated normalizedT
-  const { phase: gaitPhase, weight: gaitWeight } = getAnimationPhase(mod, ctx.currentFrame);
+  const { phase: gaitPhase, weight: gaitWeight } = getAnimationPhase(mod, ctx.currentFrame, ctx.frameRate);
   if (gaitWeight <= 0) return null;
   const effectiveWeight = gaitWeight * ctx.convergeFactor;
   // Derive normalizedT from accumulated phase: each 2π = one gait cycle
   const gaitNormT = gaitPhase / (2 * Math.PI);
-  const gaitPeriod = Math.max(4, Number(mod.params.period) || 24);
+  const gaitPeriod = Math.max(0.01, Number(mod.params.period) || 0.4);
   const gaitResult = computeGaitTransform({
     normalizedT: gaitNormT, period: gaitPeriod, weight: effectiveWeight,
     strideLength: Number(mod.params.strideLength) || 20,
@@ -116,9 +117,9 @@ const gaitHandler: RealtimeTransformHandler = (mod, ctx) => {
     contactAngle: Number(mod.params.contactAngle ?? 10),
     angleEasing: String(mod.params.angleEasing ?? 'sine'),
     landBend: Number(mod.params.landBend ?? 0.15),
-    landBendDuration: Number(mod.params.landBendDuration ?? 3),
+    landBendDuration: Number(mod.params.landBendDuration ?? 0.05),
     liftoffBend: Number(mod.params.liftoffBend ?? 0.1),
-    liftoffBendDuration: Number(mod.params.liftoffBendDuration ?? 2),
+    liftoffBendDuration: Number(mod.params.liftoffBendDuration ?? 0.033),
   });
   return {
     translateX: gaitResult.translateX,
@@ -131,7 +132,7 @@ const gaitHandler: RealtimeTransformHandler = (mod, ctx) => {
 };
 
 const breathHandler: RealtimeTransformHandler = (mod, ctx) => {
-  const { phase, weight } = getAnimationPhase(mod, ctx.currentFrame);
+  const { phase, weight } = getAnimationPhase(mod, ctx.currentFrame, ctx.frameRate);
   if (weight <= 0) return null;
   const effectiveWeight = weight * ctx.convergeFactor;
   const amplitude = Number(mod.params.amplitude) || 0.1;
@@ -141,7 +142,7 @@ const breathHandler: RealtimeTransformHandler = (mod, ctx) => {
 };
 
 const wobbleHandler: RealtimeTransformHandler = (mod, ctx) => {
-  const { phase, t, weight } = getAnimationPhase(mod, ctx.currentFrame);
+  const { phase, t, weight } = getAnimationPhase(mod, ctx.currentFrame, ctx.frameRate);
   if (weight <= 0) return null;
   const effectiveWeight = weight * ctx.convergeFactor;
   const angleAmp = Number(mod.params.angleAmplitude) || 5;
@@ -157,7 +158,7 @@ const wobbleHandler: RealtimeTransformHandler = (mod, ctx) => {
 };
 
 const floatHandler: RealtimeTransformHandler = (mod, ctx) => {
-  const { phase, weight } = getAnimationPhase(mod, ctx.currentFrame);
+  const { phase, weight } = getAnimationPhase(mod, ctx.currentFrame, ctx.frameRate);
   if (weight <= 0) return null;
   const effectiveWeight = weight * ctx.convergeFactor;
   const floatHeight = Number(mod.params.height) || 5;
@@ -174,14 +175,15 @@ const shakeHandler: RealtimeTransformHandler = (mod, ctx) => {
   if (weight <= 0) return null;
   const effectiveWeight = weight * ctx.convergeFactor;
   const intensity = Number(mod.params.intensity) || 3;
-  const period = Math.max(1, Number(mod.params.period) || 4);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.067);
   const decay = Number(mod.params.decay) || 0;
   const seed = Number(mod.params.seed) || 0;
-  const step = Math.floor(relativeFrame / period);
+  const relSec = relativeFrame / (ctx.frameRate || 12);
+  const step = Math.floor(relSec / period);
   const rng = seededRandom(seed + step * 7919);
   const dx = (rng() * 2 - 1) * intensity;
   const dy = (rng() * 2 - 1) * intensity;
-  const decayFactor = Math.exp(-decay * relativeFrame * 0.1);
+  const decayFactor = Math.exp(-decay * relSec * 6);
   return {
     translateX: dx * decayFactor * effectiveWeight,
     translateY: dy * decayFactor * effectiveWeight,
@@ -190,7 +192,7 @@ const shakeHandler: RealtimeTransformHandler = (mod, ctx) => {
 };
 
 const elasticHandler: RealtimeTransformHandler = (mod, ctx) => {
-  const { phase, t, weight } = getAnimationPhase(mod, ctx.currentFrame);
+  const { phase, t, weight } = getAnimationPhase(mod, ctx.currentFrame, ctx.frameRate);
   if (weight <= 0) return null;
   const effectiveWeight = weight * ctx.convergeFactor;
   const offset = Number(mod.params.offset) || 20;
@@ -223,16 +225,16 @@ const expressionHandler: RealtimeTransformHandler = (mod, ctx) => {
   if (weight <= 0) return null;
   const effectiveWeight = weight * ctx.convergeFactor;
   const amplitude = Number(mod.params.amplitude) || 10;
-  const period = Math.max(2, Number(mod.params.period) || 16);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.267);
   const phase = Number(mod.params.phase) || 0;
 
   const vars = {
-    t: rf,
-    f: rf,
+    t: rf / (ctx.frameRate || 12),
+    f: rf / (ctx.frameRate || 12),
     period,
     phase,
     amplitude,
-    fps: 12,
+    fps: ctx.frameRate || 12,
     totalFrames: 24,
     PI: Math.PI,
     E: Math.E,
@@ -262,11 +264,11 @@ const noiseHandler: RealtimeTransformHandler = (mod, ctx) => {
   const effectiveWeight = weight * ctx.convergeFactor;
   const result: TransformResult = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
   const amplitude = Number(mod.params.amplitude) || 5;
-  const frequency = Number(mod.params.frequency) || 0.05;
+  const frequency = Number(mod.params.frequency) || 3;
   const octaves = Number(mod.params.octaves) || 2;
   const seed = Number(mod.params.seed) || 42;
   const targetProperty = String(mod.params.targetProperty || 'translateX');
-  const value = fbmNoise(rf * frequency, 0, octaves, seed) * amplitude * effectiveWeight;
+  const value = fbmNoise((rf / (ctx.frameRate || 12)) * frequency, 0, octaves, seed) * amplitude * effectiveWeight;
   applyProceduralToResult(result, targetProperty, value);
   return { ...result, weight: effectiveWeight };
 };
@@ -277,11 +279,11 @@ const waveHandler: RealtimeTransformHandler = (mod, ctx) => {
   const effectiveWeight = weight * ctx.convergeFactor;
   const result: TransformResult = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
   const amplitude = Number(mod.params.amplitude) || 5;
-  const frequency = Number(mod.params.frequency) || 0.1;
+  const frequency = Number(mod.params.frequency) || 6;
   const phase = Number(mod.params.phase) || 0;
   const waveType = String(mod.params.waveType || 'sine');
   const targetProperty = String(mod.params.targetProperty || 'translateY');
-  const t = rf * frequency + (phase / 360);
+  const t = (rf / (ctx.frameRate || 12)) * frequency + (phase / 360);
   const p = t * Math.PI * 2;
   let value: number;
   switch (waveType) {
@@ -323,7 +325,7 @@ const jitterHandler: RealtimeTransformHandler = (mod, ctx) => {
   const frequency = Number(mod.params.frequency) || 0.5;
   const smooth = Boolean(mod.params.smooth);
   const targetProperty = String(mod.params.targetProperty || 'translateX');
-  const jitterSeed = Math.floor(rf * frequency * 100);
+  const jitterSeed = Math.floor((rf / (ctx.frameRate || 12)) * frequency * 100);
   const rng = seededRandom(jitterSeed);
   let value: number;
   if (smooth) {

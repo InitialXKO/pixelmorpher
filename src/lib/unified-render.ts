@@ -228,6 +228,7 @@ export function evaluateBehaviorTransforms(
   // （mapFor 决定）。state 可传一次性 Map 隔离历史污染（上一帧草稿遍）。
   const evalSet = (
     host: ReturnType<typeof behaviorHostVars>,
+    hostFrame: number,
     mapFor: (g: BlueprintGraph) => Map<string, OutputRec> | undefined,
     state: Map<string, unknown>,
   ): Map<string, OutputRec> => {
@@ -240,8 +241,8 @@ export function evaluateBehaviorTransforms(
       const node = character.nodes[nodeId]!;
       try {
         const t = evaluateBlueprint(graph, {
-          frame: host.t * 60,
-          frameRate: 60,
+          frame: hostFrame,
+          frameRate,
           vars,
           nodeOutputs: mapFor(graph),
           nodeState: state,
@@ -267,14 +268,14 @@ export function evaluateBehaviorTransforms(
   if (frame > 0 && entries.some(([, g]) => followOf(g) === 'prev')) {
     const hostPrev = behaviorHostVars(character, frame - 1, frameRate);
     const throwaway = new Map<string, unknown>();
-    const draftPrev = evalSet(hostPrev, () => undefined, throwaway);
-    prevMap = evalSet(hostPrev, () => draftPrev, throwaway);
+    const draftPrev = evalSet(hostPrev, frame - 1, () => undefined, throwaway);
+    prevMap = evalSet(hostPrev, frame - 1, () => draftPrev, throwaway);
   }
 
   // 本帧：A 遍全部图读 prevMap（'prev' 图定稿、'same' 图作草稿），
   // B 遍只重算 'same' 图、nodeRef 改读 A 遍草稿（本帧输出，无延迟）
   const host = behaviorHostVars(character, frame, frameRate);
-  const passA = evalSet(host, () => prevMap, behaviorNodeState);
+  const passA = evalSet(host, frame, () => prevMap, behaviorNodeState);
   let finals = passA;
   if (entries.some(([, g]) => followOf(g) === 'same')) {
     finals = new Map(passA);
@@ -284,8 +285,8 @@ export function evaluateBehaviorTransforms(
       const node = character.nodes[nodeId]!;
       try {
         const t = evaluateBlueprint(graph, {
-          frame: host.t * 60,
-          frameRate: 60,
+          frame,
+          frameRate,
           vars: {
             ...(baseVars ?? {}),
             t: host.t, phase: host.phase, moveX: host.moveX, speed01: host.speed01, grounded: host.grounded,
@@ -338,12 +339,21 @@ export function computeWorldTransforms(
   frame: number,
   canvasWidth: number,
   canvasHeight: number,
-  frameRate: number = 12,
+  frameRate?: number,
   variableContext?: VariableContext,
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
   geometryDirection?: DirectionIndex,
 ): Map<string, WorldTransform> {
+  if (!frameRate || frameRate <= 0) {
+    let resolved = 12;
+    try {
+      // 懒加载避免循环依赖（与 puppet-keyframe-interpolation 同模式）
+      const { useProjectStore } = require('./store') as typeof import('./store');
+      resolved = useProjectStore.getState().frameRate || 12;
+    } catch { /* store 不可用（离线语境）时回退 12 */ }
+    frameRate = resolved;
+  }
   const transforms = new Map<string, WorldTransform>();
 
   const rootNode = character.nodes[character.rootNodeId];
@@ -383,7 +393,7 @@ export function computeWorldTransforms(
   // 链外后代随 frame 复合自动跟随。ikOverrides 已传入时（重算遍）不再求解。
   if (!ikOverrides) {
     if (character.ikBlueprint) {
-      applyBakedIKBlueprint(character, transforms, variableContext?.values);
+      applyBakedIKBlueprint(character, transforms, variableContext?.values, frame, frameRate);
       return transforms;
     }
     const chains = character.ikChains?.filter((c) => c.enabled && !isIKChainSuspended(c.id));
@@ -412,11 +422,13 @@ function applyBakedIKBlueprint(
   character: Character,
   transforms: Map<string, WorldTransform>,
   vars?: Record<string, number>,
+  frame: number = 0,
+  frameRate: number = 12,
 ): void {
   const blueprint = character.ikBlueprint;
   if (!blueprint) return;
 
-  const ctx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: vars ?? {} };
+  const ctx: BlueprintEvalContext = { frame, frameRate, vars: vars ?? {} };
 
   // Evaluate each transform node that has a _jointId param
   for (const node of blueprint.nodes) {
@@ -1428,7 +1440,7 @@ export function generateRenderPlan(
     }
   }
   const variableContext = animationVariables && animationVariables.length > 0
-    ? buildVariableContext(animationVariables, frame, allActiveDrivers)
+    ? buildVariableContext(animationVariables, frame, allActiveDrivers, frameRate)
     : undefined;
 
   // 蓝图变量（变量名 → 本帧值，含 writer 驱动求值）：全部蓝图求值入口统一从此注入
@@ -2787,7 +2799,7 @@ function renderPuppetViaUnifiedPipeline(
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
-    buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame),
+    buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame, undefined, frameRate),
   );
   for (const unifiedCharacter of Object.values(unifiedCharacters)) {
     const unifiedVars = mapStoreAnimationVariables(animationVariables);
@@ -2862,7 +2874,7 @@ export function renderUnified(
   if (motionBlurStrokes) {
     // 动态笔触（蓝图 stroke_emitter / stroke_source 每帧求值）
     const dynamic = globalBlueprint
-      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate, buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame))
+      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate, buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame, undefined, frameRate))
       : { motionBlur: [], effect: [] };
     const overriddenIds = new Set<string>();
     for (const s of [...dynamic.motionBlur, ...dynamic.effect]) {
@@ -2877,7 +2889,7 @@ export function renderUnified(
   }
   if (effectStrokes) {
     const dynamic = globalBlueprint
-      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate, buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame))
+      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate, buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame, undefined, frameRate))
       : { motionBlur: [], effect: [] };
     const overriddenIds = new Set<string>();
     for (const s of [...dynamic.motionBlur, ...dynamic.effect]) {

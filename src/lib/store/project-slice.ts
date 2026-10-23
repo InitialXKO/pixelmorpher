@@ -12,6 +12,7 @@ import { MODIFIER_DEFINITIONS } from '../types';
 import { _isDragActive, _dragPostStackLen, _pendingTrajectorySpriteIds, setDragActive, setDragPostStackLen, resetDragState } from './shared';
 import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '../engine';
 import { resolveChainTarget3D } from '../unified-types';
+import { migrateProjectTimeUnits } from '../blueprint/time-migration';
 
 const defaultProject: Project = {
   id: crypto.randomUUID(),
@@ -26,6 +27,7 @@ const defaultProject: Project = {
   canvasWidth: 256,
   canvasHeight: 256,
   frameRate: 12,
+  timeUnitsVersion: 2,
   totalFrames: 24,
   currentFrame: 0,
   backgroundColor: '#1a1a2e',
@@ -175,6 +177,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       canvasWidth: s.canvasWidth,
       canvasHeight: s.canvasHeight,
       frameRate: s.frameRate,
+      timeUnitsVersion: s.timeUnitsVersion ?? 2,
       totalFrames: s.totalFrames,
       currentFrame: s.currentFrame,
       backgroundColor: s.backgroundColor,
@@ -349,6 +352,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         canvasWidth: state.canvasWidth,
         canvasHeight: state.canvasHeight,
         frameRate: state.frameRate,
+        timeUnitsVersion: state.timeUnitsVersion ?? 2,
         totalFrames: state.totalFrames,
         currentFrame: state.currentFrame,
         backgroundColor: state.backgroundColor,
@@ -473,6 +477,18 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         }
       }
     }
+    // 时间单位迁移（帧制 → 秒制）：旧工程一次性换算全部图与修改器的
+    // 时间参数（行为/表演按 60、节点蓝图/修改器按工程帧率、烘焙 IK
+    // 蓝图按 12），工程级标记 timeUnitsVersion>=2 时跳过。
+    if ((file.project as any).timeUnitsVersion !== 2) {
+      migrateProjectTimeUnits(
+        unifiedCharacters as any,
+        animationClips as any,
+        (file.project.globalModifiers ?? []) as any,
+        file.project.frameRate ?? 12,
+      );
+    }
+
     for (const ch of Object.values(unifiedCharacters) as any[]) {
       if (!ch?.sprites) continue;
       for (const [sid, sp] of Object.entries(ch.sprites) as [string, any][]) {
@@ -499,6 +515,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       animationVariables: file.project.animationVariables || [],
       // Unified Characters (new model; migrated on load if missing)
       unifiedCharacters,
+      timeUnitsVersion: 2,
       selectedCharacterId: file.project.selectedCharacterId ?? null,
       selectedNodeId: file.project.selectedNodeId ?? null,
       // DCC Pipeline

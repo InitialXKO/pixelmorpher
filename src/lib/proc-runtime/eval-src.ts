@@ -1,7 +1,8 @@
 // ============================================================
 // 运行时求值器（单一源）：以 JS 源码字符串形式保存，同一份代码
 // ① 嵌进导出的运行时模板（浏览器里跑）② 被探针加载校验语义。
-// 语义与产品 src/lib/blueprint/eval.ts 的求值器逐节点对齐（帧基时间、
+// 语义与产品 src/lib/blueprint/eval.ts 的求值器逐节点对齐（秒基时间：
+//   time 节点与一切周期/时长参数以秒计，phase 变量以圈数计、
 // 参数回退顺序：连边 > 字面输入 > params > 内置默认；gate<0.5 输出空；
 // 节点失败不拖垮整图）。差异只在边界：无像素、无 IK、无 gait/expression
 // （方言表点名不支持），nodeRef 读 ctx.nodeOutputs（上一遍求值结果）。
@@ -14,9 +15,9 @@
 //   units='main'：通道值为主系统单位（角度=度、y 向下）→ 内部换算；
 //   units='runtime'：已换算（弧度、y 向上），直通。
 // evalRuntimeGraph(graph, ctx) → Map<part, {angle, dx, dy}>（运行时单位）
-//   ctx: { u?, tFrame?, vars?, nodeState?: Map, nodeOutputs?: Map,
-//          statePrefix?: string, frameRate? }
-//   graph.context: 'performance' 时 time 节点输出 ctx.u；否则输出 ctx.tFrame。
+//   ctx: { u?, tSec?, vars?, nodeState?: Map, nodeOutputs?: Map,
+//          statePrefix?: string }
+//   time 节点输出 ctx.tSec（秒）：行为图为行为时钟秒、表演为表演已播秒。
 // ============================================================
 
 export const RUNTIME_EVAL_SRC = `
@@ -26,14 +27,13 @@ function evalRuntimeGraph(graph, ctx) {
   var nodeState = ctx.nodeState || new Map();
   var nodeOutputs = ctx.nodeOutputs || new Map();
   var statePrefix = ctx.statePrefix || '';
-  var frameRate = ctx.frameRate || 60;
   var nodes = (graph && graph.nodes) || [];
   var byId = new Map();
   for (var ni = 0; ni < nodes.length; ni++) byId.set(nodes[ni].id, nodes[ni]);
   var memo = new Map();
   var visiting = new Set();
 
-  function timeValue() { return graph.context === 'performance' ? (ctx.u || 0) : (ctx.tFrame || 0); }
+  function timeValue() { return ctx.tSec || 0; }
 
   function nodeValue(id) {
     if (memo.has(id)) return memo.get(id);
@@ -153,10 +153,10 @@ function evalRuntimeGraph(graph, ctx) {
         var amplitude = Number(prm.amplitude !== undefined ? prm.amplitude : 1);
         var baseValue = Number(prm.baseValue || 0);
         var endValue = Number(prm.endValue !== undefined ? prm.endValue : 1);
-        var period = Math.max(1, Number(prm.period !== undefined ? prm.period : 30));
+        var period = Math.max(0.01, Number(prm.period !== undefined ? prm.period : 0.5));
         var phaseDeg = Number(prm.phase || 0);
         var phase = phaseDeg * Math.PI / 180;
-        var damping = Number(prm.damping !== undefined ? prm.damping : 0.1);
+        var damping = Number(prm.damping !== undefined ? prm.damping : 1);
         var phaseT = 2 * Math.PI * wt / period + phase;
         var value = baseValue;
         if (waveform === 'sine') value = baseValue + amplitude * Math.sin(phaseT);
@@ -177,7 +177,7 @@ function evalRuntimeGraph(graph, ctx) {
         var rt = PN(node, 't', timeValue());
         var rspeed = PN(node, 'speed', Number(prm.speed !== undefined ? prm.speed : 1));
         var roffset = PN(node, 'offset', Number(prm.offset || 0));
-        var rperiod = Math.max(1, Number(prm.period || 0));
+        var rperiod = Math.max(0, Number(prm.period || 0));
         var rout = rt * rspeed + roffset;
         var loop = prm.loop === true || prm.loop === 'true';
         if (loop && Number(prm.period || 0) > 0) rout = ((rout % rperiod) + rperiod) % rperiod;
@@ -216,7 +216,7 @@ function evalRuntimeGraph(graph, ctx) {
       case 'pendulum': {
         var pt = PN(node, 't', timeValue());
         var pamp = PN(node, 'amplitude', Number(prm.amplitude !== undefined ? prm.amplitude : 30));
-        var pperiod = Math.max(2, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 16)));
+        var pperiod = Math.max(0.01, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 0.267)));
         var pphase = Number(prm.phase || 0) * Math.PI / 180;
         var pv = pamp * Math.sin(2 * Math.PI * pt / pperiod + pphase);
         return { out: pv, outRotation: pv };
@@ -224,7 +224,7 @@ function evalRuntimeGraph(graph, ctx) {
       case 'breath': {
         var bt2 = PN(node, 't', timeValue());
         var bamp = PN(node, 'amplitude', Number(prm.amplitude !== undefined ? prm.amplitude : 0.1));
-        var bperiod = Math.max(2, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 48)));
+        var bperiod = Math.max(0.01, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 0.8)));
         return { out: 1 + bamp * Math.sin(2 * Math.PI * bt2 / bperiod) };
       }
       case 'shake': {
@@ -238,7 +238,7 @@ function evalRuntimeGraph(graph, ctx) {
         var ft = PN(node, 't', timeValue());
         var famp = PN(node, 'height', PN(node, 'amplitude', Number(prm.height !== undefined ? prm.height : (prm.amplitude !== undefined ? prm.amplitude : 5))));
         var ftilt = PN(node, 'tilt', Number(prm.tilt !== undefined ? prm.tilt : 3));
-        var fperiod = Math.max(2, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 32)));
+        var fperiod = Math.max(0.01, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 0.533)));
         var fphase = 2 * Math.PI * ft / fperiod;
         return { outY: -famp * (0.5 + 0.5 * Math.sin(fphase)), outRotation: ftilt * Math.sin(fphase) };
       }
@@ -247,7 +247,7 @@ function evalRuntimeGraph(graph, ctx) {
         var wAng = PN(node, 'angleAmplitude', PN(node, 'amplitude', Number(prm.angleAmplitude !== undefined ? prm.angleAmplitude : (prm.amplitude !== undefined ? prm.amplitude : 5))));
         var wMove = PN(node, 'moveAmplitude', Number(prm.moveAmplitude !== undefined ? prm.moveAmplitude : 2));
         var wDamp = PN(node, 'damping', Number(prm.damping || 0));
-        var wPeriod = Math.max(2, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 16)));
+        var wPeriod = Math.max(0.01, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 0.267)));
         var wPhase = 2 * Math.PI * wt2 / wPeriod;
         var wDecay = Math.exp(-wDamp * wt2 * 2 * Math.PI);
         return {
@@ -259,7 +259,7 @@ function evalRuntimeGraph(graph, ctx) {
       case 'bounce': {
         var bot = PN(node, 't', timeValue());
         var boAmp = PN(node, 'height', PN(node, 'amplitude', Number(prm.height !== undefined ? prm.height : (prm.amplitude !== undefined ? prm.amplitude : 20))));
-        var boPeriod = Math.max(2, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 12)));
+        var boPeriod = Math.max(0.01, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 0.2)));
         var boBounces = Math.max(1, PN(node, 'bounces', Number(prm.bounces !== undefined ? prm.bounces : 3)));
         var boDamp = PN(node, 'damping', Number(prm.damping !== undefined ? prm.damping : 0.5));
         var bounceT = (bot % boPeriod) / (boPeriod / boBounces);
@@ -273,7 +273,7 @@ function evalRuntimeGraph(graph, ctx) {
         var eOff = PN(node, 'offset', Number(prm.offset !== undefined ? prm.offset : 20));
         var eOver = PN(node, 'overshoot', Number(prm.overshoot !== undefined ? prm.overshoot : 0.3));
         var eDamp = PN(node, 'damping', Number(prm.damping !== undefined ? prm.damping : 0.5));
-        var ePeriod = Math.max(2, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 16)));
+        var ePeriod = Math.max(0.01, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 0.267)));
         var ePhase = 2 * Math.PI * et / ePeriod;
         var eDecay = Math.exp(-eDamp * et * 2 * Math.PI);
         var eVal = eOff * (1 - Math.cos(ePhase) * eDecay * (1 + eOver));
@@ -287,7 +287,7 @@ function evalRuntimeGraph(graph, ctx) {
         var wht = PN(node, 't', timeValue());
         var whRX = PN(node, 'radiusX', Number(prm.radiusX !== undefined ? prm.radiusX : 10));
         var whRY = PN(node, 'radiusY', Number(prm.radiusY !== undefined ? prm.radiusY : 10));
-        var whPeriod = Math.max(2, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 16)));
+        var whPeriod = Math.max(0.01, PN(node, 'period', Number(prm.period !== undefined ? prm.period : 0.267)));
         var whPhase = Number(prm.phase || 0) * Math.PI / 180;
         var whDir = prm.direction === 'ccw' ? -1 : 1;
         var whAngle = whDir * (2 * Math.PI * wht / whPeriod) + whPhase;
@@ -296,7 +296,7 @@ function evalRuntimeGraph(graph, ctx) {
       case 'noise': {
         var nt = PN(node, 't', timeValue());
         var nAmp = PN(node, 'amplitude', Number(prm.amplitude !== undefined ? prm.amplitude : 5));
-        var nv = nAmp * (0.5 * Math.sin(nt * 0.7) + 0.3 * Math.sin(nt * 1.3 + 1.7) + 0.2 * Math.sin(nt * 2.9 + 4.1));
+        var nv = nAmp * (0.5 * Math.sin(nt * 42) + 0.3 * Math.sin(nt * 78 + 1.7) + 0.2 * Math.sin(nt * 174 + 4.1));
         var nTarget = String(prm.targetProperty || 'translateY');
         if (nTarget === 'translateX') return { outX: nv };
         if (nTarget === 'rotation') return { outRotation: nv };
@@ -306,7 +306,7 @@ function evalRuntimeGraph(graph, ctx) {
       case 'wave': {
         var wvt = PN(node, 't', timeValue());
         var wvAmp = PN(node, 'amplitude', Number(prm.amplitude !== undefined ? prm.amplitude : 5));
-        var wvFreq = PN(node, 'frequency', Number(prm.frequency !== undefined ? prm.frequency : 0.1));
+        var wvFreq = PN(node, 'frequency', Number(prm.frequency !== undefined ? prm.frequency : 1));
         var wvPhase = Number(prm.phase || 0) * Math.PI / 180;
         var wvType = String(prm.waveType || 'sine');
         var wvPh = 2 * Math.PI * wvFreq * wvt + wvPhase;
@@ -329,7 +329,7 @@ function evalRuntimeGraph(graph, ctx) {
         var spRest = PN(node, 'restLength', Number(prm.restLength || 0));
         var spAmp = PN(node, 'amplitude', Number(prm.amplitude !== undefined ? prm.amplitude : 10));
         var spTarget = String(prm.targetProperty || 'translateY');
-        var timeSec = spt / frameRate;
+        var timeSec = spt; // t 已是秒
         var omega = Math.sqrt(spStiff / spMass);
         var gamma = spDamp / (2 * spMass);
         var dOmega = Math.sqrt(Math.max(0, omega * omega - gamma * gamma));

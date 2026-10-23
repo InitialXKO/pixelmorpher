@@ -1,13 +1,13 @@
 // ============================================================
 // behavior-host — 主画布的行为宿主变量（纯函数）
 // 行为图的宿主契约与运行时包一致：var 节点读
-// t（秒）/ phase（步态相位，60fps 帧）/ moveX（-1..1）/
+// t（秒）/ phase（步态相位，圈数）/ moveX（-1..1）/
 // speed01（0..1）/ grounded（1/0）。
 // 输入来源 = 角色输入轨（Character.inputTracks，时间线角色级三轨），
 // 缺轨取静止缺省（moveX=0、speed01=0、grounded=1）。
 // phase 是输入轨的积分：从第 0 帧逐帧累加速率——任意帧的值只由
-// 输入轨决定，拖动时间轴可复现。速率口径与运行时宿主一致：
-// 在地面移动 4+26×speed01（满速 30/s）、静止 4/s、腾空 18/s。
+// 输入轨决定，拖动时间轴可复现。速率口径与运行时宿主一致（圈/秒）：
+// 在地面移动 (4+26×speed01)/60（满速 0.5 圈/秒）、静止 1/15、腾空 0.3。
 // ============================================================
 
 import type { Character, KeyframeTrack } from './unified-types';
@@ -59,11 +59,11 @@ export function behaviorInputAt(
   };
 }
 
-/** 相位速率（相位帧/秒） */
+/** 相位速率（圈/秒）：1 圈 = 旧口径 60 相位帧 */
 export function behaviorPhaseRate(input: { moveX: number; speed01: number; grounded: number }): number {
-  if (input.grounded < 0.5) return 18;
+  if (input.grounded < 0.5) return 18 / 60;
   const moving = Math.abs(input.moveX) > 0.05 || input.speed01 > 0.05;
-  return moving ? 4 + 26 * input.speed01 : 4;
+  return moving ? (4 + 26 * input.speed01) / 60 : 4 / 60;
 }
 
 /** 完整宿主变量：t + 当前帧输入 + phase 积分（0→当前帧逐帧累加） */

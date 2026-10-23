@@ -83,6 +83,7 @@ function interpolateCharacterInternal(
   character: Character,
   currentFrame: number,
   nodeKeyframes: NodeKeyframe[] = [],
+  frameRate: number = 12,
 ): Map<string, InterpolatedNodeValues> {
   const result = new Map<string, InterpolatedNodeValues>();
 
@@ -106,7 +107,7 @@ function interpolateCharacterInternal(
           }
         }
       }
-      blueprintVars = buildBlueprintVars(mapStoreAnimationVariables(storeVars), currentFrame, drivers as any);
+      blueprintVars = buildBlueprintVars(mapStoreAnimationVariables(storeVars), currentFrame, drivers as any, frameRate);
     }
   } catch { /* store 不可用（测试/SSR）：保持空 vars */ }
 
@@ -132,7 +133,7 @@ function interpolateCharacterInternal(
       if (blueprint) {
         const t = evaluateBlueprint(blueprint, {
           frame: currentFrame,
-          frameRate: 12,
+          frameRate,
           vars: blueprintVars,
           nodeOutputs: pass === 1 ? nodeOutputs : undefined,
           nodeState: blueprintNodeState,
@@ -184,23 +185,28 @@ export function interpolateNodeKeyframes(
   character: Character,
   currentFrame: number,
   nodeKeyframes?: NodeKeyframe[],
+  frameRate?: number,
 ): Map<string, InterpolatedNodeValues> {
   // 未传入时从 store 取 active clip 的 nodeKeyframes（用于 per-keyframe modifiers）
   let kfs = nodeKeyframes;
-  if (!kfs) {
-    try {
-      // 懒加载避免循环依赖
-      const { useProjectStore } = require('../../store') as typeof import('../../store');
-      const s = useProjectStore.getState();
+  // 帧率与主渲染同口径：显式传入优先，否则读 store 的工程帧率
+  // （此前写死 12，蓝图里按秒计的节点在拖拽/面板路径与主画布算得不一致）
+  let rate = frameRate;
+  try {
+    // 懒加载避免循环依赖
+    const { useProjectStore } = require('../../store') as typeof import('../../store');
+    const s = useProjectStore.getState();
+    if (!kfs) {
       const clips = (s as any).animationClips ?? [];
       const activeId = (s as any).activeAnimationClipId;
       const clip = clips.find((c: any) => c.id === activeId) ?? clips[0];
       kfs = clip?.nodeKeyframes ?? [];
-    } catch {
-      kfs = [];
     }
+    if (rate === undefined) rate = (s as any).frameRate;
+  } catch {
+    if (!kfs) kfs = [];
   }
-  return interpolateCharacterInternal(character, currentFrame, kfs);
+  return interpolateCharacterInternal(character, currentFrame, kfs ?? [], rate && rate > 0 ? rate : 12);
 }
 
 // ---- Per-keyframe modifier interpolation ----

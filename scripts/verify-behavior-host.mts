@@ -31,7 +31,7 @@ check('A4 无轨回退缺省', sampleInputTrack(undefined, 5, 1) === 1 && sample
 const bare = { inputTracks: undefined } as unknown as Character;
 const hv0 = behaviorHostVars(bare, 30, 30);
 check('B1 无输入轨 = 静止待机', hv0.moveX === 0 && hv0.speed01 === 0 && hv0.grounded === 1);
-check('B2 待机 phase = 4/s 积分', approx(hv0.phase, 4, 1e-6), `phase=${hv0.phase}`);
+check('B2 待机 phase = (4/60) 圈/s 积分', approx(hv0.phase, 4 / 60, 1e-6), `phase=${hv0.phase}`);
 check('B3 t = 帧/帧率', approx(hv0.t, 1));
 
 const walker = {
@@ -42,11 +42,11 @@ const walker = {
   },
 } as unknown as Character;
 const hvWalk = behaviorHostVars(walker, 30, 30);
-check('B4 满速在地面 phase = 30/s', approx(hvWalk.phase, 30, 1e-6), `phase=${hvWalk.phase}`);
+check('B4 满速在地面 phase = 0.5 圈/s', approx(hvWalk.phase, 0.5, 1e-6), `phase=${hvWalk.phase}`);
 check('B5 腾空段输入', behaviorInputAt(walker, 45).grounded === 0 && behaviorInputAt(walker, 45).moveX === 1);
-check('B6 腾空速率 18/s', behaviorPhaseRate({ moveX: 1, speed01: 1, grounded: 0 }) === 18);
+check('B6 腾空速率 0.3 圈/s', behaviorPhaseRate({ moveX: 1, speed01: 1, grounded: 0 }) === 18 / 60);
 const hvJump = behaviorHostVars(walker, 60, 30);
-check('B7 混合段 phase 积分 = 30×1s + 18×1s', approx(hvJump.phase, 48, 1e-6), `phase=${hvJump.phase}`);
+check('B7 混合段 phase 积分 = (30×1s + 18×1s)/60 圈', approx(hvJump.phase, 48 / 60, 1e-6), `phase=${hvJump.phase}`);
 check('B8 phase 拖动可复现（同帧同值）', behaviorHostVars(walker, 60, 30).phase === hvJump.phase);
 
 // ---- C) 主画布行为求值层（generateRenderPlan） ----
@@ -112,14 +112,14 @@ check('D2 直调与出图同值（未双重叠加）', approx(worldAngleAt(chWal
 check('D3 直调在输入打开前为 0', approx(worldAngleAt(chWalk as Character, 5), 0, 1e-6));
 
 // ---- E) 跟随开关（nodeRef 读上一帧 / 同帧，由图决定） ----
-// src 图：rotation = phase × 30（无输入轨时 phase 每帧 +4/30 → rotation 每帧 +4°）
+// src 图：rotation = phase × 1800（无输入轨时 phase 每帧 +(4/60)/30 圈 → rotation 每帧 +4°）
 // fol 图：nodeRef 读 src 的 rotation 作自身 rotation（fol 是 src 的子节点，世界角 = src + fol 本地）
 {
   const srcGraph: any = {
     version: 1, outputId: 'out',
     nodes: [
       { id: 'v', type: 'var', inputs: {}, params: { name: 'phase', default: 0 } },
-      { id: 'm', type: 'mul', inputs: { a: { nodeId: 'v' }, b: { type: 'number', value: 30 } }, params: {} },
+      { id: 'm', type: 'mul', inputs: { a: { nodeId: 'v' }, b: { type: 'number', value: 1800 } }, params: {} },
       { id: 'out', type: 'transform', inputs: { rotation: { nodeId: 'm' } }, params: {} },
     ],
   };

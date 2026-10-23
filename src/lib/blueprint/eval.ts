@@ -22,6 +22,12 @@ import { rotatePseudo3D } from '../unified-types';
  * 给定 x (0-1) 和控制点，返回缓动后的 y。
  * 使用牛顿迭代法求解。
  */
+/** 求值上下文的秒：图内一切连续时间以秒计。帧只是时间线的编辑
+ *  格子，秒 = frame / frameRate 是全系统唯一的帧↔秒换算。 */
+export function ctxSeconds(ctx: BlueprintEvalContext): number {
+  return ctx.frame / (ctx.frameRate || 12);
+}
+
 function cubicBezier(x: number, x1: number, y1: number, x2: number, y2: number): number {
   // 牛顿迭代求 t
   let t = x;
@@ -103,7 +109,7 @@ function applyLutPreset(color: string, preset: string): string {
 /** 内置节点类型 */
 export const EVALUATORS: Record<string, NodeEvaluator> = {
   // ---- 源 ----
-  time: (_n, _i, ctx) => ({ out: num(ctx.frame) }),
+  time: (_n, _i, ctx) => ({ out: num(ctxSeconds(ctx)) }),
   // timeGate: 时间范围门控
   // start/end: 生效帧范围（-1 表示无限制）
   // fadeIn/fadeOut: 淡入淡出帧数（smoothstep）
@@ -319,7 +325,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   //         interpolation ('linear' | 'step')
   // 输入 t，输出插值后的值
   keyframes: (n, i, ctx): Record<string, BlueprintValue> => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const interpolation = String(n.params.interpolation ?? 'linear');
     let frames: number[] = [];
     let values: number[] = [];
@@ -355,15 +361,15 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     return { out: num(pairs[pairs.length - 1]!.v) };
   },
   waveform: (n, i, ctx): Record<string, BlueprintValue> => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const waveform = String(n.params.waveform ?? 'sine');
     const amplitude = Number(n.params.amplitude ?? 1);
     const baseValue = Number(n.params.baseValue ?? 0);
     const endValue = Number(n.params.endValue ?? 1);
-    const period = Math.max(1, Number(n.params.period ?? 30));
+    const period = Math.max(0.01, Number(n.params.period ?? 0.5));
     const phaseDeg = Number(n.params.phase ?? 0);
     const phase = (phaseDeg * Math.PI) / 180;
-    const damping = Number(n.params.damping ?? 0.1);
+    const damping = Number(n.params.damping ?? 1);
     
     const phaseT = (2 * Math.PI * t) / period + phase;
     let value = 0;
@@ -433,11 +439,11 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // timeRemap: 时间重映射，输出 = (t * speed + offset)，可选循环
   // 借鉴 keyframe-engine 的 time remapping
   timeRemap: (n, i, ctx) => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const speed = asNumber(i.speed ?? num(Number(n.params.speed ?? 1)));
     const offset = asNumber(i.offset ?? num(Number(n.params.offset ?? 0)));
     const loop = n.params.loop === true || n.params.loop === 'true';
-    const period = Math.max(1, Number(n.params.period ?? 0));
+    const period = Math.max(0, Number(n.params.period ?? 0));
     let out = t * speed + offset;
     if (loop && period > 0) {
       out = ((out % period) + period) % period;
@@ -551,9 +557,9 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // ---- 程序化动画（复用老修改器语义） ----
   // pendulum: rotation = amplitude * sin(2π * t / period + phase)
   pendulum: (n, i, ctx): Record<string, BlueprintValue> => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const amplitude = asNumber(i.amplitude ?? num(Number(n.params.amplitude ?? 30)));
-    const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 16))));
+    const period = Math.max(0.01, asNumber(i.period ?? num(Number(n.params.period ?? 0.267))));
     const phase = ((Number(n.params.phase ?? 0) * Math.PI) / 180);
     const value = num(amplitude * Math.sin((2 * Math.PI * t) / period + phase));
     // 同时返回 out (兼容旧蓝图) 和 outRotation (标准)
@@ -565,9 +571,9 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   },
   // breath: scale = 1 + amplitude * sin(2π * t / period)，与原 breathHandler 对齐
   breath: (n, i, ctx): Record<string, BlueprintValue> => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const amplitude = asNumber(i.amplitude ?? num(Number(n.params.amplitude ?? 0.1)));
-    const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 48))));
+    const period = Math.max(0.01, asNumber(i.period ?? num(Number(n.params.period ?? 0.8))));
     const result: Record<string, BlueprintValue> = { out: num(1 + amplitude * Math.sin((2 * Math.PI * t) / period)) };
     // 仅当 pixels 输出有后继连接时才输出（无连接不输出，避免浪费）
     if (i.pixels && (ctx as any).pixelsOutputConnected?.has(n.id)) result.pixels = i.pixels as BlueprintValue;
@@ -575,7 +581,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   },
   // shake: translate = amplitude * (noise)
   shake: (n, i, ctx) => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const amplitude = asNumber(i.amplitude ?? num(Number(n.params.amplitude ?? 2)));
     // 确定性伪随机（帧相关）
     const r1 = Math.sin(t * 12.9898) * 43758.5453;
@@ -590,11 +596,11 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // float: translateY = -amplitude * (0.5 + 0.5*sin), rotation = tilt * sin
   // 与原 floatHandler 对齐
   float: (n, i, ctx): Record<string, BlueprintValue> => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     // amplitude 为主，height 仅兼容旧蓝图
     const amplitude = asNumber(i.height ?? i.amplitude ?? num(Number(n.params.height ?? n.params.amplitude ?? 5)));
     const tilt = asNumber(i.tilt ?? num(Number(n.params.tilt ?? 3)));
-    const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 32))));
+    const period = Math.max(0.01, asNumber(i.period ?? num(Number(n.params.period ?? 0.533))));
     const phase = (2 * Math.PI * t) / period;
     const result: Record<string, BlueprintValue> = {
       outY: num(-amplitude * (0.5 + 0.5 * Math.sin(phase))),
@@ -606,12 +612,12 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   },
   // wobble: rotation + translateX/Y，与原 wobbleHandler 对齐
   wobble: (n, i, ctx): Record<string, BlueprintValue> => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     // amplitude 为主，angleAmplitude 仅兼容旧蓝图
     const angleAmp = asNumber(i.angleAmplitude ?? i.amplitude ?? num(Number(n.params.angleAmplitude ?? n.params.amplitude ?? 5)));
     const moveAmp = asNumber(i.moveAmplitude ?? num(Number(n.params.moveAmplitude ?? 2)));
     const damping = asNumber(i.damping ?? num(Number(n.params.damping ?? 0)));
-    const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 16))));
+    const period = Math.max(0.01, asNumber(i.period ?? num(Number(n.params.period ?? 0.267))));
     const phase = (2 * Math.PI * t) / period;
     const decay = Math.exp(-damping * t * 2 * Math.PI);
     const outX = moveAmp * Math.sin(phase + Math.PI / 3) * decay;
@@ -653,9 +659,9 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
 
   // bounce: translateY = -amplitude * decay * sin²(π * withinBounce)，与原 bounceHandler 对齐
   bounce: (n, i, ctx): Record<string, BlueprintValue> => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const amplitude = asNumber(i.height ?? i.amplitude ?? num(Number(n.params.height ?? n.params.amplitude ?? 20)));
-    const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 12))));
+    const period = Math.max(0.01, asNumber(i.period ?? num(Number(n.params.period ?? 0.2))));
     const bounces = Math.max(1, asNumber(i.bounces ?? num(Number(n.params.bounces ?? 3))));
     const damping = asNumber(i.damping ?? num(Number(n.params.damping ?? 0.5)));
     const bounceT = (t % period) / (period / bounces);
@@ -669,11 +675,11 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   },
   // elastic: 弹性过冲，与原 elasticHandler 对齐
   elastic: (n, i, ctx) => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const offset = asNumber(i.offset ?? num(Number(n.params.offset ?? 20)));
     const overshoot = asNumber(i.overshoot ?? num(Number(n.params.overshoot ?? 0.3)));
     const damping = asNumber(i.damping ?? num(Number(n.params.damping ?? 0.5)));
-    const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 16))));
+    const period = Math.max(0.01, asNumber(i.period ?? num(Number(n.params.period ?? 0.267))));
     const phase = (2 * Math.PI * t) / period;
     const decay = Math.exp(-damping * t * 2 * Math.PI);
     const osc = 1 - Math.cos(phase) * decay * (1 + overshoot);
@@ -691,10 +697,10 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   },
   // wheel: 圆形轨迹，与原 wheelHandler 简化版对齐（circular 模式）
   wheel: (n, i, ctx) => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const radiusX = asNumber(i.radiusX ?? num(Number(n.params.radiusX ?? 10)));
     const radiusY = asNumber(i.radiusY ?? num(Number(n.params.radiusY ?? 10)));
-    const period = Math.max(2, asNumber(i.period ?? num(Number(n.params.period ?? 16))));
+    const period = Math.max(0.01, asNumber(i.period ?? num(Number(n.params.period ?? 0.267))));
     const phaseRad = (Number(n.params.phase ?? 0) * Math.PI) / 180;
     const dir = n.params.direction === 'ccw' ? -1 : 1;
     const angle = dir * ((2 * Math.PI * t) / period) + phaseRad;
@@ -706,14 +712,14 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   },
   // noise: fbm 噪声，与原 noiseHandler 对齐（简化版）
   noise: (n, i, ctx) => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const amplitude = asNumber(i.amplitude ?? num(Number(n.params.amplitude ?? 5)));
     const targetProperty = String(n.params.targetProperty ?? 'translateY');
     // 简单伪噪声：多正弦叠加
     const v = amplitude * (
-      0.5 * Math.sin(t * 0.7) +
-      0.3 * Math.sin(t * 1.3 + 1.7) +
-      0.2 * Math.sin(t * 2.9 + 4.1)
+      0.5 * Math.sin(t * 42) +
+      0.3 * Math.sin(t * 78 + 1.7) +
+      0.2 * Math.sin(t * 174 + 4.1)
     );
     const out: Record<string, BlueprintValue> = {};
     if (targetProperty === 'translateX') out.outX = num(v);
@@ -724,9 +730,9 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   },
   // wave: 波形，与原 waveHandler 对齐
   wave: (n, i, ctx) => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const amplitude = asNumber(i.amplitude ?? num(Number(n.params.amplitude ?? 5)));
-    const frequency = asNumber(i.frequency ?? num(Number(n.params.frequency ?? 0.1)));
+    const frequency = asNumber(i.frequency ?? num(Number(n.params.frequency ?? 1)));
     const phase = (Number(n.params.phase ?? 0) * Math.PI) / 180;
     const waveType = String(n.params.waveType ?? 'sine');
     const targetProperty = String(n.params.targetProperty ?? 'translateY');
@@ -747,15 +753,14 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   },
   // spring: 弹簧阻尼，与原 springHandler 对齐
   spring: (n, i, ctx) => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const stiffness = asNumber(i.stiffness ?? num(Number(n.params.stiffness ?? 0.3)));
     const damping = asNumber(i.damping ?? num(Number(n.params.damping ?? 0.1)));
     const mass = asNumber(i.mass ?? num(Number(n.params.mass ?? 1)));
     const restLength = asNumber(i.restLength ?? num(Number(n.params.restLength ?? 0)));
     const amplitude = asNumber(i.amplitude ?? num(Number(n.params.amplitude ?? 10)));
     const targetProperty = String(n.params.targetProperty ?? 'translateY');
-    const frameRate = ctx.frameRate || 12;
-    const timeSec = t / frameRate;
+    const timeSec = t; // t 已是秒（统一口径），不再二次换算
     const omega = Math.sqrt(stiffness / mass);
     const gamma = damping / (2 * mass);
     const dampedOmega = Math.sqrt(Math.max(0, omega * omega - gamma * gamma));
@@ -768,7 +773,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   },
   // jitter: 随机抖动，与原 jitterHandler 对齐
   jitter: (n, i, ctx) => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const amplitudeX = asNumber(i.amplitudeX ?? num(Number(n.params.amplitudeX ?? 2)));
     const amplitudeY = asNumber(i.amplitudeY ?? num(Number(n.params.amplitudeY ?? 2)));
     const seed = Number(n.params.seed ?? 0);
@@ -784,8 +789,8 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   },
   // gait: 直接调原 computeGaitTransform，保证行为一致
   gait: (n, i, ctx) => {
-    const t = asNumber(i.t ?? num(ctx.frame));
-    const period = Math.max(4, asNumber(i.period ?? num(Number(n.params.period ?? 24))));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
+    const period = Math.max(0.01, asNumber(i.period ?? num(Number(n.params.period ?? 0.4))));
     // normalizedT: 每 period 一周期
     const normalizedT = (t % period) / period;
     const result = computeGaitTransform({
@@ -804,9 +809,9 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
       contactAngle: Number(n.params.contactAngle ?? 10),
       angleEasing: String(n.params.angleEasing ?? 'sine'),
       landBend: Number(n.params.landBend ?? 0.15),
-      landBendDuration: Number(n.params.landBendDuration ?? 3),
+      landBendDuration: Number(n.params.landBendDuration ?? 0.05),
       liftoffBend: Number(n.params.liftoffBend ?? 0.1),
-      liftoffBendDuration: Number(n.params.liftoffBendDuration ?? 2),
+      liftoffBendDuration: Number(n.params.liftoffBendDuration ?? 0.033),
     });
     return {
       outX: num(result.translateX ?? 0),
@@ -818,9 +823,9 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   },
   // expression: 直接调原 evalExpression，保证行为一致
   expression: (n, i, ctx) => {
-    const t = asNumber(i.t ?? num(ctx.frame));
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const amplitude = Number(n.params.amplitude ?? 10);
-    const period = Math.max(2, Number(n.params.period ?? 16));
+    const period = Math.max(0.01, Number(n.params.period ?? 0.267));
     const phase = Number(n.params.phase ?? 0);
     const vars = {
       t, f: t, period, phase, amplitude,
@@ -1626,10 +1631,10 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const angleRad = (angleDeg * Math.PI) / 180;
     const dirX = Math.cos(angleRad);
     const dirY = Math.sin(angleRad);
-    const life = Math.max(1, Number(n.params.life ?? 30));
+    const life = Math.max(0.01, Number(n.params.life ?? 0.5)); // 秒
     const color = String(n.params.color ?? '#ffffff');
     const gravity = Number(n.params.gravity ?? 0.1);
-    const frame = ctx.frame;
+    const frame = ctxSeconds(ctx); // 秒（下方 age/seed 均以秒计，位移系数按 60fps 旧口径折算）
     // 复制原图
     const result: import('../types').PixelGrid = inputPixels
       ? inputPixels.map((row) => [...row])
@@ -1638,14 +1643,14 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const numParticles = Math.round(rate);
     for (let p = 0; p < numParticles; p++) {
       const seed = (p * 997 + Math.floor(frame / life) * 571) % 1000;
-      const age = frame % life;
+      const age = frame % life; // 秒
       const px0 = (seed * 13) % w;
       const py0 = (seed * 7) % h;
       // 粒子运动：按 angle 方向 + 重力（向下）
       // 扩散：垂直于发射方向加随机偏移
       const spread = Math.sin(seed * 3.7) * 0.5;
-      const px = Math.round(px0 + (dirX * speed + -dirY * spread) * age * 0.3);
-      const py = Math.round(py0 + (dirY * speed + dirX * spread) * age * 0.3 + gravity * age * age * 0.01);
+      const px = Math.round(px0 + (dirX * speed + -dirY * spread) * age * 18);
+      const py = Math.round(py0 + (dirY * speed + dirX * spread) * age * 18 + gravity * age * age * 36);
       if (px >= 0 && px < result[0]!.length && py >= 0 && py < result.length) {
         const fade = 1 - age / life;
         if (fade > 0.3) {
@@ -1769,7 +1774,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
       const p = n.params[key];
       return typeof p === 'string' ? p : def;
     };
-    const t = asNumber(i.t as BlueprintValue ?? num(ctx.frame));
+    const t = asNumber(i.t as BlueprintValue ?? num(ctxSeconds(ctx)));
     const shape = getStr('shape', 'circle');
     const pointCount = Math.max(2, Math.round(getNum('pointCount', 24)));
     const cx = getNum('centerX', 0);
@@ -1895,14 +1900,14 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
       const p = n.params[key];
       return typeof p === 'string' ? p : def;
     };
-    const t = asNumber(i.t as BlueprintValue ?? num(ctx.frame));
+    const t = asNumber(i.t as BlueprintValue ?? num(ctxSeconds(ctx)));
     const shape = getStr('shape', 'circle');
     const pointCount = Math.max(2, Math.round(getNum('pointCount', 32)));
     const cx = getNum('centerX', 0);
     const cy = getNum('centerY', 0);
     const rx = getNum('radiusX', 60);
     const ry = getNum('radiusY', 60);
-    const period = Math.max(1, getNum('period', 24));
+    const period = Math.max(0.01, getNum('period', 0.4));
     const phase = (t / period) * Math.PI * 2 + (getNum('phase', 0) * Math.PI) / 180;
 
     const points: Array<{ x: number; y: number }> = [];

@@ -1094,9 +1094,9 @@ function frame(now) {
   // phase 为步态相位帧：移动约 30/s、静止 4/s、腾空 18/s；
   // nodeRef 读哪帧由每张图的 follow 开关决定：'prev'（缺省）读上一帧
   // 输出（纯延迟一帧），'same' 读本帧第一遍的输出（无延迟））
-  phaseAcc += dt * (char.onGround ? (ix !== 0 ? 30 : 4) : 18);
-  // 行为时钟 = 表演纪元起算的秒（唯一交换单位）；图内帧由各图
-  // 自带 fps 从秒换算（行为图 60、纯节点蓝图工程帧率），不混用。
+  phaseAcc += dt * (char.onGround ? (ix !== 0 ? 30 : 4) : 18) / 60; // 圈/秒（1 圈 = 旧 60 相位帧）
+  // 行为时钟 = 表演纪元起算的秒。图内时间一律秒（time 节点、
+  // 周期参数、phase 圈数），全系统不再出现帧制时间。
   const behaviorT = elapsed - behaviorEpoch;
   const hostVars = {
     t: behaviorT, phase: phaseAcc, moveX: ix,
@@ -1109,9 +1109,8 @@ function frame(now) {
     for (const key of Object.keys(BEHAVIOR_GRAPHS)) {
       const isSame = (BEHAVIOR_GRAPHS[key].follow || 'prev') === 'same';
       if (onlySame !== null && onlySame !== isSame) continue;
-      const graphFps = BEHAVIOR_GRAPHS[key].fps || 60;
       const out = evalRuntimeGraph(BEHAVIOR_GRAPHS[key], {
-        tFrame: behaviorT * graphFps, vars: hostVars, nodeState: behaviorState,
+        tSec: behaviorT, vars: hostVars, nodeState: behaviorState,
         nodeOutputs: nodeOutputsMap, statePrefix: key + ':',
       });
       const rec = out.get(key);
@@ -1137,7 +1136,7 @@ function frame(now) {
     act.t += dt;
     const w = envelopeWeight(act.t, act.perf.duration, act.perf.envelope.in, act.perf.envelope.out);
     if (w > 0) {
-      const bpOut = evalRuntimeGraph(act.perf.graph, { u: Math.min(1, act.t / act.perf.duration) });
+      const bpOut = evalRuntimeGraph(act.perf.graph, { u: Math.min(1, act.t / act.perf.duration), tSec: act.t });
       pose = composePerformance(pose, act.perf, bpOut, w);
     }
     if (act.t > act.perf.duration) activePerfs.splice(i, 1);

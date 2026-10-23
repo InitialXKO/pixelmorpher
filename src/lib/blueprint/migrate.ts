@@ -144,9 +144,9 @@ export function modifiersToBlueprint(
             amplitude: Number(driver.amplitude ?? 1),
             baseValue: Number(driver.baseValue ?? 0),
             endValue: Number(driver.endValue ?? 1),
-            period: Number(driver.period ?? 30),
+            period: Number(driver.period ?? 0.5), // 秒
             phase: Number(driver.phase ?? 0),
-            damping: Number(driver.damping ?? 0.1),
+            damping: Number(driver.damping ?? 0),
           },
         });
         // 连到修改器节点的参数输入（覆盖静态 params）
@@ -397,9 +397,9 @@ export function addModifierNodeToBlueprint(
               amplitude: Number(driver.amplitude ?? 1),
               baseValue: Number(driver.baseValue ?? 0),
               endValue: Number(driver.endValue ?? 1),
-              period: Number(driver.period ?? 30),
+              period: Number(driver.period ?? 0.5), // 秒
               phase: Number(driver.phase ?? 0),
-              damping: Number(driver.damping ?? 0.1),
+              damping: Number(driver.damping ?? 0),
             },
           });
         }
@@ -464,9 +464,9 @@ export function addModifierNodeToBlueprint(
               amplitude: Number(driver.amplitude ?? 1),
               baseValue: Number(driver.baseValue ?? 0),
               endValue: Number(driver.endValue ?? 1),
-              period: Number(driver.period ?? 30),
+              period: Number(driver.period ?? 0.5), // 秒
               phase: Number(driver.phase ?? 0),
-              damping: Number(driver.damping ?? 0.1),
+              damping: Number(driver.damping ?? 0),
             },
           });
         }

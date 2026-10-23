@@ -47,7 +47,7 @@ const spinGraph: BlueprintGraph = {
     {
       id: 'kf', type: 'keyframes',
       inputs: { t: { nodeId: 't', output: 'out' } },
-      params: { frames: '[0,60]', values: '[0,60]', interpolation: 'linear' },
+      params: { frames: '[0,1]', values: '[0,60]', interpolation: 'linear' },
       ui: { x: 0, y: 0 },
     },
     { id: 'pm', type: 'pixelate', inputs: {}, params: {}, ui: { x: 0, y: 0 } },
@@ -81,7 +81,7 @@ const gaitBehaviorGraph: BlueprintGraph = {
     {
       id: 'pend', type: 'pendulum',
       inputs: { t: { nodeId: 'ph', output: 'out' } },
-      params: { amplitude: 30, period: 16 },
+      params: { amplitude: 30, period: 1 },
       ui: { x: 0, y: 0 },
     },
     { id: 'g', type: 'gait', inputs: {}, params: {}, ui: { x: 0, y: 0 } },
@@ -115,11 +115,11 @@ const gaitBehaviorGraph: BlueprintGraph = {
   const evaluate = createRuntimeEvaluator();
   const res = translateBehaviorGraph(gaitBehaviorGraph, 'legL', 'b_', (id) => id);
   const graph = { context: 'behavior' as const, nodes: res.nodes };
-  // phase=4、period=16 → pendulum 相位 π/2 → 30°；units=main → angle=-30°=-π/6
-  const out1 = evaluate(graph, { tFrame: 0, vars: { phase: 4 } });
+  // phase=0.25 圈、period=1 圈 → pendulum 相位 π/2 → 30°；units=main → angle=-30°=-π/6
+  const out1 = evaluate(graph, { tSec: 0, vars: { phase: 0.25 } });
   check('D1 行为图求值：phase 驱动 pendulum，角度换算 -π/6', Math.abs((out1.get('legL')?.angle ?? 0) - (-Math.PI / 6)) < 1e-9);
-  const out2 = evaluate(graph, { tFrame: 0, vars: { phase: 12 } });
-  check('D2 phase=12 → +π/6（反相）', Math.abs((out2.get('legL')?.angle ?? 0) - (Math.PI / 6)) < 1e-9);
+  const out2 = evaluate(graph, { tSec: 0, vars: { phase: 0.75 } });
+  check('D2 phase=0.75 圈 → +π/6（反相）', Math.abs((out2.get('legL')?.angle ?? 0) - (Math.PI / 6)) < 1e-9);
 
   // hold：trigger 上升沿冻结
   const holdGraph = {
@@ -159,12 +159,12 @@ const gaitBehaviorGraph: BlueprintGraph = {
   const kfGraph = {
     context: 'behavior' as const,
     nodes: [
-      { id: 'k', type: 'keyframes', params: { frames: '[0,10]', values: '[3,7]', interpolation: 'linear' }, inputs: {} },
+      { id: 'k', type: 'keyframes', params: { frames: '[0,0.5]', values: '[3,7]', interpolation: 'linear' }, inputs: {} },
       { id: 'tr', type: 'transform', part: 'p', units: 'runtime' as const, dxFrom: { n: 'k' } },
     ],
   };
   check('D6 keyframes t=0 取首值 3（time 缺省）',
-    evaluate(kfGraph, { tFrame: 0 }).get('p')?.dx === 3);
+    evaluate(kfGraph, { tSec: 0 }).get('p')?.dx === 3);
 }
 
 // ---------- E) 转换器 ----------
@@ -680,7 +680,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     version: 1, outputId: 'out',
     nodes: [
       { id: 't', type: 'time', inputs: {}, params: {}, ui: { x: 0, y: 0 } },
-      { id: 'pm', type: 'pendulum', inputs: { t: { nodeId: 't', output: 'out' } }, params: { amplitude: 30, period: 16 }, ui: { x: 0, y: 0 } },
+      { id: 'pm', type: 'pendulum', inputs: { t: { nodeId: 't', output: 'out' } }, params: { amplitude: 30, period: 0.267 }, ui: { x: 0, y: 0 } },
       { id: 'out', type: 'transform', inputs: { rotation: { nodeId: 'pm', output: 'out' } }, params: {}, ui: { x: 0, y: 0 } },
     ],
   };
@@ -704,7 +704,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
       arm: { ...makeNode('arm', '手臂', 'arm'), blueprint: pendulumGraph },
       leg: { ...makeNode('leg', '腿', 'leg'), blueprint: pendulumGraph },
       cape: { ...makeNode('cape', '披风', 'cape'), blueprint: pixelGraph },
-      hat: { ...makeNode('hat', '帽子', 'hat'), modifiers: [{ id: 'm1', type: 'pendulum', enabled: true, params: { amplitude: 20, period: 16 } }] },
+      hat: { ...makeNode('hat', '帽子', 'hat'), modifiers: [{ id: 'm1', type: 'pendulum', enabled: true, params: { amplitude: 20, period: 0.267 } }] },
     },
     rootNodeIds: ['arm', 'leg', 'cape', 'hat'],
     sprites: {},
@@ -716,17 +716,17 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
 
   const pkg = convertCharacterToRuntimePackage(ch);
   const evaluate = createRuntimeEvaluator();
-  const ctx4 = { tFrame: 4, vars: { t: 4 / 60, phase: 0, moveX: 0, speed01: 0, grounded: 1 } };
+  const ctx4 = { tSec: 0.267 / 4, vars: { t: 0.267 / 4, phase: 0, moveX: 0, speed01: 0, grounded: 1 } };
   check('P1 只有节点蓝图的节点也进包', !!pkg.behavior.graphs['arm']);
   const armOut = evaluate(pkg.behavior.graphs['arm'] as never, ctx4 as never);
-  check('P2 节点蓝图摆锤在运行时求值（t=4 → -30°）', Math.abs((armOut.get('arm')?.angle ?? 0) - (-30 * Math.PI / 180)) < 0.01);
+  check('P2 节点蓝图摆锤在运行时求值（t=周期/4 → -30°）', Math.abs((armOut.get('arm')?.angle ?? 0) - (-30 * Math.PI / 180)) < 0.01);
   check('P3 行为图+节点蓝图合并含求和节点', (pkg.behavior.graphs['leg']?.nodes ?? []).some((n) => n.type === 'add'));
   const legOut = evaluate(pkg.behavior.graphs['leg'] as never, ctx4 as never);
   check('P4 合并后求和生效（10° + 摆锤 30° = -40°）', Math.abs((legOut.get('leg')?.angle ?? 0) - (-40 * Math.PI / 180)) < 0.01);
   check('P5 像素类节点蓝图不进包且 warning 点名', !pkg.behavior.graphs['cape'] && pkg.warnings.some((w) => w.includes('节点蓝图「披风」') && w.includes('无 transform 输出')));
   check('P6 修改器生成图（无 blueprint 字段）也进包', !!pkg.behavior.graphs['hat']);
   const hatOut = evaluate(pkg.behavior.graphs['hat'] as never, ctx4 as never);
-  check('P7 修改器摆锤幅值 20 生效（t=4 → -20°）', Math.abs((hatOut.get('hat')?.angle ?? 0) - (-20 * Math.PI / 180)) < 0.01);
+  check('P7 修改器摆锤幅值 20 生效（t=周期/4 → -20°）', Math.abs((hatOut.get('hat')?.angle ?? 0) - (-20 * Math.PI / 180)) < 0.01);
 }
 
 // ---------- Q) 发光段：选区（取色/标记）+ 权重场 + 进包 + 模板着色 ----------
@@ -1002,13 +1002,13 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     && Math.abs(endV(handTr.dyFrom) - 10) < 0.3);
 }
 
-// ---------- R) 时间单位统一：秒是唯一交换单位，帧由各图自带 fps 换算 ----------
+// ---------- R) 时间单位统一（丙）：图内时间一律秒、相位圈数，包内图不带 fps ----------
 {
   const pendulumGraph: BlueprintGraph = {
     version: 1, outputId: 'out',
     nodes: [
       { id: 't', type: 'time', inputs: {}, params: {}, ui: { x: 0, y: 0 } },
-      { id: 'pm', type: 'pendulum', inputs: { t: { nodeId: 't', output: 'out' } }, params: { amplitude: 30, period: 16 }, ui: { x: 0, y: 0 } },
+      { id: 'pm', type: 'pendulum', inputs: { t: { nodeId: 't', output: 'out' } }, params: { amplitude: 30, period: 2 }, ui: { x: 0, y: 0 } },
       { id: 'out', type: 'transform', inputs: { rotation: { nodeId: 'pm', output: 'out' } }, params: {}, ui: { x: 0, y: 0 } },
     ],
   };
@@ -1023,18 +1023,19 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     variants: {},
   } as unknown as Character;
   const pkg = convertCharacterToRuntimePackage(ch, undefined, { frameRate: 8 });
-  const g = pkg.behavior.graphs['arm'] as { fps?: number } | undefined;
-  check('Q34 纯节点蓝图的图带工程帧率 fps=8（不再按行为口径 60fps 帧计时）', g?.fps === 8);
+  const g = pkg.behavior.graphs['arm'] as { fps?: number; nodes: Array<{ type: string; params?: { period?: number } }> } | undefined;
+  check('Q34 包内图不带 fps 字段且周期以秒原样进包（period=2）', g !== undefined && g.fps === undefined
+    && g.nodes.find((n) => n.type === 'pendulum')?.params?.period === 2);
   const evaluate = createRuntimeEvaluator();
   const vars = { t: 0, phase: 0, moveX: 0, speed01: 0, grounded: 1 };
-  // 模板口径：tFrame = 秒 × fps。0.5 秒处 = 第 4 帧（工程帧率 8）→ 摆锤满幅 30°
-  const outHalf = evaluate(pkg.behavior.graphs['arm'] as never, { tFrame: 0.5 * (g?.fps ?? 60), vars } as never);
-  check('Q35 按 fps 换算后 0.5 秒处摆锤满幅（与主画布工程帧率第 4 帧一致）',
+  // 模板口径：tSec = 秒。周期 2 秒的摆锤在 0.5 秒处满幅（与主画布工程帧率 8 的第 4 帧一致）
+  const outHalf = evaluate(pkg.behavior.graphs['arm'] as never, { tSec: 0.5, vars } as never);
+  check('Q35 tSec=0.5 处摆锤满幅（与主画布工程帧率第 4 帧一致）',
     Math.abs((outHalf.get('arm')?.angle ?? 0) - (-30 * Math.PI / 180)) < 0.01);
-  // 产品对照：同一蓝图在主系统以 frame=4/frameRate=8 求值也是 30°
+  // 产品对照：同一蓝图在主系统以 frame=4/frameRate=8 求值（t=0.5 秒）也是 30°
   const { evaluateBlueprint } = await import('../src/lib/blueprint/eval');
   const prod = evaluateBlueprint(pendulumGraph as never, { frame: 4, frameRate: 8, vars: {} } as never);
-  check('Q36 产品口径对照成立（frame=4 → rotation 30°）', Math.abs(prod.rotation - 30) < 0.01);
+  check('Q36 产品口径对照成立（frame=4/帧率 8 → t=0.5 秒 → rotation 30°）', Math.abs(prod.rotation - 30) < 0.01);
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

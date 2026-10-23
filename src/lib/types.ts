@@ -687,7 +687,7 @@ export const GLOBAL_MODIFIER_DEFINITIONS: { type: GlobalModifierType; label: str
     category: 'animation',
     params: [
       { name: 'height', label: '振幅', type: 'number', default: 10, min: 0, max: 100, step: 1 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 16, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.267, min: 0.01, max: 10, step: 0.01 },
       { name: 'phase', label: '相位', type: 'number', default: 0, min: 0, max: 360, step: 1 },
     ],
   },
@@ -698,7 +698,7 @@ export const GLOBAL_MODIFIER_DEFINITIONS: { type: GlobalModifierType; label: str
     category: 'animation',
     params: [
       { name: 'amplitude', label: '振幅', type: 'number', default: 0.1, min: 0, max: 1, step: 0.01 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 30, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.5, min: 0.01, max: 10, step: 0.01 },
       { name: 'phase', label: '相位', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       { name: 'pivotOffsetX', label: '枢轴偏移X', type: 'number', default: 0, min: -500, max: 500, step: 1 },
       { name: 'pivotOffsetY', label: '枢轴偏移Y', type: 'number', default: 0, min: -500, max: 500, step: 1 },
@@ -711,7 +711,7 @@ export const GLOBAL_MODIFIER_DEFINITIONS: { type: GlobalModifierType; label: str
     category: 'animation',
     params: [
       { name: 'height', label: '振幅', type: 'number', default: 5, min: 0, max: 50, step: 0.5 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 30, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.5, min: 0.01, max: 10, step: 0.01 },
       { name: 'phase', label: '相位', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       { name: 'pivotOffsetX', label: '枢轴偏移X', type: 'number', default: 0, min: -500, max: 500, step: 1 },
       { name: 'pivotOffsetY', label: '枢轴偏移Y', type: 'number', default: 0, min: -500, max: 500, step: 1 },
@@ -724,7 +724,7 @@ export const GLOBAL_MODIFIER_DEFINITIONS: { type: GlobalModifierType; label: str
     category: 'animation',
     params: [
       { name: 'angleAmplitude', label: '振幅', type: 'number', default: 5, min: 0, max: 45, step: 0.5 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 20, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.333, min: 0.01, max: 10, step: 0.01 },
       { name: 'phase', label: '相位', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       { name: 'pivotOffsetX', label: '枢轴偏移X', type: 'number', default: 0, min: -500, max: 500, step: 1 },
       { name: 'pivotOffsetY', label: '枢轴偏移Y', type: 'number', default: 0, min: -500, max: 500, step: 1 },
@@ -737,7 +737,7 @@ export const GLOBAL_MODIFIER_DEFINITIONS: { type: GlobalModifierType; label: str
     category: 'animation',
     params: [
       { name: 'amplitude', label: '振幅', type: 'number', default: 10, min: 0, max: 90, step: 1 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 24, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.4, min: 0.01, max: 10, step: 0.01 },
       { name: 'phase', label: '相位', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       { name: 'damping', label: '阻尼', type: 'number', default: 0, min: 0, max: 1, step: 0.01 },
       { name: 'pivotOffsetX', label: '枢轴偏移X', type: 'number', default: 0, min: -500, max: 500, step: 1 },
@@ -1115,6 +1115,8 @@ export interface Project {
   canvasWidth: number;
   canvasHeight: number;
   frameRate: number;  // Default frame rate for new clips
+  /** 图内时间单位版本：2 = 秒制（time/周期/相位圈数）；缺失/1 = 旧帧制，加载时一次性迁移 */
+  timeUnitsVersion?: number;
   totalFrames: number; // Default total frames for new clips
   currentFrame: number;
   backgroundColor: string;
@@ -1956,7 +1958,7 @@ export function createDefaultParamDriver(
     amplitude: Math.abs(baseValue) > 0.01 ? Math.abs(baseValue) * 0.5 : 5,
     baseValue,
     endValue: baseValue,
-    period: 16,
+    period: 1,
     phase: 0,
     damping: 0,
     startFrame,
@@ -2248,7 +2250,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
       { name: 'rate', label: '发射速率', type: 'number', default: 10, min: 1, max: 100, step: 1 },
       { name: 'speed', label: '速度', type: 'number', default: 2, min: 0.5, max: 10, step: 0.5 },
       { name: 'angle', label: '发射方向(°)', type: 'number', default: 270, min: 0, max: 360, step: 1 },
-      { name: 'life', label: '寿命(帧)', type: 'number', default: 10, min: 1, max: 60, step: 1 },
+      { name: 'life', label: '寿命(秒)', type: 'number', default: 0.5, min: 0.05, max: 5, step: 0.05 },
       { name: 'color', label: '颜色', type: 'color', default: '#ff8800' },
       { name: 'gravity', label: '重力', type: 'number', default: 0.5, min: 0, max: 5, step: 0.1 },
     ],
@@ -2385,7 +2387,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     category: 'animation',
     params: [
       { name: 'amplitude', label: '摆幅(°)', type: 'number', default: 30, min: 1, max: 180, step: 1 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 16, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.267, min: 0.01, max: 10, step: 0.01 },
       { name: 'phase', label: '相位(°)', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       { name: 'damping', label: '阻尼', type: 'number', default: 0, min: 0, max: 1, step: 0.01 },
       // V3.2: Converge blend mode parameter
@@ -2412,7 +2414,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
       ]},
       { name: 'radiusX', label: '水平半径', type: 'number', default: 10, min: 1, max: 200, step: 1 },
       { name: 'radiusY', label: '垂直半径', type: 'number', default: 10, min: 1, max: 200, step: 1 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 16, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.267, min: 0.01, max: 10, step: 0.01 },
       { name: 'phase', label: '相位(°)', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       { name: 'direction', label: '方向', type: 'select', default: 'cw', options: [
         { label: '顺时针', value: 'cw' },
@@ -2450,7 +2452,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
       // ---- Trajectory (轨迹) ----
       { name: 'strideLength', label: '步幅(px)', type: 'number', default: 20, min: 1, max: 100, step: 1 },
       { name: 'liftHeight', label: '抬步高度(px)', type: 'number', default: 12, min: 1, max: 80, step: 1 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 24, min: 4, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.4, min: 0.01, max: 10, step: 0.01 },
       { name: 'phase', label: '腿偏移(°)', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       { name: 'stanceRatio', label: '支撑比', type: 'number', default: 0.6, min: 0.15, max: 0.85, step: 0.05 },
       { name: 'direction', label: '行进方向', type: 'select', default: 'forward', options: [
@@ -2485,7 +2487,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     category: 'animation',
     params: [
       { name: 'height', label: '弹跳高度', type: 'number', default: 20, min: 1, max: 200, step: 1 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 12, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.2, min: 0.01, max: 10, step: 0.01 },
       { name: 'bounces', label: '弹跳次数', type: 'number', default: 3, min: 1, max: 20, step: 1 },
       { name: 'damping', label: '衰减', type: 'number', default: 0.5, min: 0, max: 1, step: 0.01 },
       // V3.2: Converge blend mode parameter
@@ -2499,7 +2501,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     category: 'animation',
     params: [
       { name: 'amplitude', label: '缩放幅度', type: 'number', default: 0.1, min: 0.01, max: 1, step: 0.01 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 24, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.4, min: 0.01, max: 10, step: 0.01 },
       { name: 'phase', label: '相位(°)', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       // V3.2: Converge blend mode parameter
       { name: 'convergeSpeed', label: '收敛速度', type: 'number', default: 0.5, min: 0.01, max: 3, step: 0.01 },
@@ -2515,7 +2517,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     params: [
       { name: 'angleAmplitude', label: '摆角(°)', type: 'number', default: 5, min: 0.5, max: 45, step: 0.5 },
       { name: 'moveAmplitude', label: '位移幅度', type: 'number', default: 2, min: 0, max: 50, step: 0.5 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 12, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.2, min: 0.01, max: 10, step: 0.01 },
       { name: 'phase', label: '相位(°)', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       { name: 'damping', label: '阻尼', type: 'number', default: 0, min: 0, max: 1, step: 0.01 },
       // V3.2: Converge blend mode parameter
@@ -2531,7 +2533,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     category: 'animation',
     params: [
       { name: 'height', label: '浮动高度', type: 'number', default: 5, min: 0.5, max: 50, step: 0.5 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 24, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.4, min: 0.01, max: 10, step: 0.01 },
       { name: 'tilt', label: '倾斜(°)', type: 'number', default: 3, min: 0, max: 30, step: 0.5 },
       { name: 'phase', label: '相位(°)', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       // V3.2: Converge blend mode parameter
@@ -2547,7 +2549,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     category: 'animation',
     params: [
       { name: 'intensity', label: '强度', type: 'number', default: 3, min: 0.5, max: 30, step: 0.5 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 4, min: 1, max: 30, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.067, min: 0.01, max: 10, step: 0.01 },
       { name: 'decay', label: '衰减', type: 'number', default: 0, min: 0, max: 1, step: 0.01 },
       { name: 'seed', label: '随机种子', type: 'number', default: 0, min: 0, max: 9999, step: 1 },
       // V3.2: Converge blend mode parameter
@@ -2561,7 +2563,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
     category: 'animation',
     params: [
       { name: 'offset', label: '偏移量', type: 'number', default: 20, min: 1, max: 200, step: 1 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 12, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.2, min: 0.01, max: 10, step: 0.01 },
       { name: 'overshoot', label: '过冲量', type: 'number', default: 0.3, min: 0, max: 1, step: 0.01 },
       { name: 'damping', label: '阻尼', type: 'number', default: 0.5, min: 0, max: 1, step: 0.01 },
       { name: 'axis', label: '轴向', type: 'select', default: 'y', options: [
@@ -2603,7 +2605,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
         { label: '呼吸', value: '1 + amplitude * sin(2 * PI * t / period + phase * PI / 180)' },
       ]},
       { name: 'amplitude', label: '振幅', type: 'number', default: 10, min: 0.1, max: 200, step: 0.5 },
-      { name: 'period', label: '周期(帧)', type: 'number', default: 16, min: 2, max: 120, step: 1 },
+      { name: 'period', label: '周期(秒)', type: 'number', default: 0.267, min: 0.01, max: 10, step: 0.01 },
       { name: 'phase', label: '相位(°)', type: 'number', default: 0, min: 0, max: 360, step: 1 },
       // V3.2: Converge blend mode parameter
       { name: 'convergeSpeed', label: '收敛速度', type: 'number', default: 0.5, min: 0.01, max: 3, step: 0.01 },

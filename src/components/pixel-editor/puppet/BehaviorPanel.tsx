@@ -8,7 +8,7 @@
 // - 表演 character.performances：有限时长触发式，导出时采样烘焙。
 // 行为图在主画布播放时同样生效（行为求值层）：输入来自时间线
 // 输入轨（Character.inputTracks），缺轨时静止待机（moveX=0/speed01=0/
-// grounded=1，phase 按 4/s 推进）。表演仍只在导出时采样烘焙。
+// grounded=1，phase 按 1/15 圈/s 推进）。表演仍只在导出时采样烘焙。
 // ============================================================
 
 import React, { useState } from 'react';
@@ -75,7 +75,7 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
         <Label className="text-[10px] text-gray-500 uppercase tracking-wider">行为蓝图（按节点）</Label>
         <p className="mt-0.5 text-[9px] text-gray-600 leading-relaxed">
           时间基 = 60fps 帧（time 节点输出帧数）。宿主 vars（用 var 节点读）：
-          t=秒、phase=步态相位帧（移动约 30/s、静止 4/s、腾空 18/s）、
+          t=秒、phase=步态相位圈数（移动约 0.5 圈/s、静止约 0.067 圈/s、腾空 0.3 圈/s）、
           moveX=-1/0/1、speed01、grounded=1/0。跨节点跟随用 nodeRef，读上一帧
           还是同帧由每张图自己的「跟随」开关决定（上一帧 = 纯延迟一帧）。
           节点徽标为行为语境方言：可求值 / 不支持（gait、expression 暂未移植）。
