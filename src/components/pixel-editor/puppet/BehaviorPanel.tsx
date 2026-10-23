@@ -6,7 +6,9 @@
 // - 行为 character.behaviorGraphs[nodeId]：输入驱动的无限过程，
 //   运行时实时求值；宿主 vars = t/phase/moveX/speed01/grounded。
 // - 表演 character.performances：有限时长触发式，导出时采样烘焙。
-// 服务于程序化预览与「程序化运行时包」导出；编辑器关键帧系统不消费。
+// 行为图在主画布播放时同样生效（行为求值层）：输入来自时间线
+// 输入轨（Character.inputTracks），缺轨时静止待机（moveX=0/speed01=0/
+// grounded=1，phase 按 4/s 推进）。表演仍只在导出时采样烘焙。
 // ============================================================
 
 import React, { useState } from 'react';
@@ -64,7 +66,8 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
     <div className="space-y-3">
       <p className="text-[9px] text-gray-600 leading-relaxed">
         行为与表演都是蓝图（按节点存图、同一个编辑器）：行为是输入驱动的无限过程，
-        运行时实时求值；表演是有限时长，导出时采样烘焙。编辑器关键帧不消费这些数据。
+        运行时与主画布播放都实时求值（主画布输入来自时间线输入轨，缺轨静止待机）；
+        表演是有限时长，导出时采样烘焙。
       </p>
 
       {/* ---------- 行为蓝图 ---------- */}

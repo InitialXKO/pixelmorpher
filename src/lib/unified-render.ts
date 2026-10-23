@@ -79,6 +79,7 @@ import { simulateDynamicParticles } from './dynamic-pattern-sim';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
 import { evaluateBlueprint, collectDynamicStrokes, evaluateCostumeState } from './blueprint/eval';
+import { behaviorHostVars } from './behavior-host';
 import { modifiersToBlueprint } from './blueprint/migrate';
 import type { BlueprintEvalContext } from './blueprint/ir';
 import { isIKChainSuspended } from './ik-drag-state';
@@ -185,6 +186,74 @@ export function evaluateBlueprintTransforms(
         }
       } catch {
         // Single node failure doesn't break the whole graph
+      }
+    }
+  }
+  return result;
+}
+
+// ---- 行为求值层（主画布宿主） ----
+// 行为图（character.behaviorGraphs）与运行时包同一批图：运行时由真
+// 宿主（键盘）喂 vars 实时求值；主画布此前无消费者，现按同一契约接：
+// 时间基 60fps（ctx.frame = 秒×60、frameRate=60）、vars = 输入轨采样
+// （behavior-host：t/phase/moveX/speed01/grounded，缺轨静止缺省）。
+// 只取 transform 的 rotation/translateX/translateY 三通道（与运行时
+// 翻译契约一致），由 generateRenderPlan 叠加在节点蓝图结果之后。
+const behaviorNodeState = new Map<string, unknown>();
+let behaviorLastFrame = -1;
+
+export function evaluateBehaviorTransforms(
+  character: Character,
+  frame: number,
+  frameRate: number,
+  baseVars?: Record<string, number | string | boolean>,
+): Map<string, { rotation: number; translateX: number; translateY: number }> {
+  const result = new Map<string, { rotation: number; translateX: number; translateY: number }>();
+  const graphs = character.behaviorGraphs;
+  if (!graphs || Object.keys(graphs).length === 0) return result;
+  if (frame < behaviorLastFrame || frame > behaviorLastFrame + 5) {
+    behaviorNodeState.clear();
+  }
+  behaviorLastFrame = frame;
+
+  const host = behaviorHostVars(character, frame, frameRate);
+  const vars: Record<string, number | string | boolean> = {
+    ...(baseVars ?? {}),
+    t: host.t, phase: host.phase, moveX: host.moveX, speed01: host.speed01, grounded: host.grounded,
+  };
+  const nodeOutputs = new Map<string, {
+    rotation: number; tilt: number; translateX: number; translateY: number; translateZ: number;
+    scaleX: number; scaleY: number; skewX: number; skewY: number; zIndex: number;
+  }>();
+
+  for (let pass = 0; pass < 2; pass++) {
+    for (const [nodeId, graph] of Object.entries(graphs)) {
+      const node = character.nodes[nodeId];
+      if (!node || !graph) continue;
+      try {
+        const t = evaluateBlueprint(graph, {
+          frame: host.t * 60,
+          frameRate: 60,
+          vars,
+          nodeOutputs: pass === 1 ? nodeOutputs : undefined,
+          nodeState: behaviorNodeState,
+          costumes: character.costumeSets,
+          costumeSlot: node.slot?.slotKey,
+        } as any);
+        if (pass === 0) {
+          nodeOutputs.set(nodeId, {
+            rotation: t.rotation, tilt: t.tilt ?? 0,
+            translateX: t.translateX, translateY: t.translateY, translateZ: t.translateZ ?? 0,
+            scaleX: t.scaleX, scaleY: t.scaleY, skewX: t.skewX, skewY: t.skewY,
+            zIndex: (t as any).zIndex ?? 0,
+          });
+        } else {
+          result.set(nodeId, {
+            rotation: t.rotation, translateX: t.translateX, translateY: t.translateY,
+          });
+        }
+      } catch {
+        // 单图失败不拖垮整角色
       }
     }
   }
@@ -1297,12 +1366,37 @@ export function generateRenderPlan(
   // Phase 0 (path B): Evaluate node blueprints for transform values (two-pass)
   const blueprintTransforms = blueprintTransformsOverride ?? evaluateBlueprintTransforms(character, frame, frameRate, blueprintVars);
 
+  // 行为层：行为图 transform 输出（三通道）叠加在节点蓝图结果之后
+  let mergedTransforms = blueprintTransforms;
+  if (character.behaviorGraphs && Object.keys(character.behaviorGraphs).length > 0) {
+    const behavior = evaluateBehaviorTransforms(character, frame, frameRate, blueprintVars);
+    if (behavior.size > 0) {
+      mergedTransforms = new Map(blueprintTransforms);
+      for (const [nodeId, b] of behavior) {
+        const base = mergedTransforms.get(nodeId);
+        if (base) {
+          mergedTransforms.set(nodeId, {
+            ...base,
+            rotation: base.rotation + b.rotation,
+            translateX: base.translateX + b.translateX,
+            translateY: base.translateY + b.translateY,
+          });
+        } else {
+          mergedTransforms.set(nodeId, {
+            translateX: b.translateX, translateY: b.translateY, translateZ: 0,
+            rotation: b.rotation, tilt: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0,
+          });
+        }
+      }
+    }
+  }
+
   // 生效服装状态：静态字段 → clip 状态轨道 → 状态蓝图（三层增量叠加）
   const effCostume = resolveEffectiveCostumeState(character, frame, frameRate, stateKeyframes, blueprintVars);
 
   // Step 1: World transforms (includes blueprint-evaluated modifier contributions)
   const worldTransforms = computeWorldTransforms(
-    character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
+    character, frame, canvasWidth, canvasHeight, frameRate, variableContext, mergedTransforms,
     undefined, geometryDirection,
   );
 

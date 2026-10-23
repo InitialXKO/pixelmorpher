@@ -1,0 +1,104 @@
+// verify-behavior-host — 输入轨采样 / 宿主变量 / 主画布行为求值层
+// 运行: bun scripts/verify-behavior-host.mts
+import { sampleInputTrack, behaviorInputAt, behaviorPhaseRate, behaviorHostVars } from '../src/lib/behavior-host';
+import { generateRenderPlan } from '../src/lib/unified-render';
+import type { Character, KeyframeTrack } from '../src/lib/unified-types';
+
+let passed = 0;
+function check(name: string, cond: boolean, detail = '') {
+  if (!cond) throw new Error(`✗ ${name}${detail ? ` — ${detail}` : ''}`);
+  passed++;
+  console.log(`✓ ${name}`);
+}
+const approx = (a: number, b: number, eps = 1e-6) => Math.abs(a - b) <= eps;
+
+const stepTrack = (pts: [number, number][]): KeyframeTrack<number> => ({
+  keyframes: pts.map(([frame, value]) => ({ frame, value })),
+  interpolation: 'step',
+});
+const linTrack = (pts: [number, number][]): KeyframeTrack<number> => ({
+  keyframes: pts.map(([frame, value]) => ({ frame, value })),
+  interpolation: 'linear',
+});
+
+// ---- A) 采样 ----
+check('A1 step 轨段内保持', sampleInputTrack(stepTrack([[0, 0], [10, 1]]), 9, -9) === 0 && sampleInputTrack(stepTrack([[0, 0], [10, 1]]), 10, -9) === 1);
+check('A2 线性轨中点插值', approx(sampleInputTrack(linTrack([[0, 0], [20, 1]]), 10, -9), 0.5));
+check('A3 首尾外钳制端值', sampleInputTrack(linTrack([[5, 3], [10, 4]]), 0, -9) === 3 && sampleInputTrack(linTrack([[5, 3], [10, 4]]), 99, -9) === 4);
+check('A4 无轨回退缺省', sampleInputTrack(undefined, 5, 1) === 1 && sampleInputTrack({ keyframes: [], interpolation: 'step' }, 5, 0) === 0);
+
+// ---- B) 宿主变量 ----
+const bare = { inputTracks: undefined } as unknown as Character;
+const hv0 = behaviorHostVars(bare, 30, 30);
+check('B1 无输入轨 = 静止待机', hv0.moveX === 0 && hv0.speed01 === 0 && hv0.grounded === 1);
+check('B2 待机 phase = 4/s 积分', approx(hv0.phase, 4, 1e-6), `phase=${hv0.phase}`);
+check('B3 t = 帧/帧率', approx(hv0.t, 1));
+
+const walker = {
+  inputTracks: {
+    moveX: stepTrack([[0, 1]]),
+    speed01: linTrack([[0, 1]]),
+    grounded: stepTrack([[0, 1], [31, 0], [61, 1]]),
+  },
+} as unknown as Character;
+const hvWalk = behaviorHostVars(walker, 30, 30);
+check('B4 满速在地面 phase = 30/s', approx(hvWalk.phase, 30, 1e-6), `phase=${hvWalk.phase}`);
+check('B5 腾空段输入', behaviorInputAt(walker, 45).grounded === 0 && behaviorInputAt(walker, 45).moveX === 1);
+check('B6 腾空速率 18/s', behaviorPhaseRate({ moveX: 1, speed01: 1, grounded: 0 }) === 18);
+const hvJump = behaviorHostVars(walker, 60, 30);
+check('B7 混合段 phase 积分 = 30×1s + 18×1s', approx(hvJump.phase, 48, 1e-6), `phase=${hvJump.phase}`);
+check('B8 phase 拖动可复现（同帧同值）', behaviorHostVars(walker, 60, 30).phase === hvJump.phase);
+
+// ---- C) 主画布行为求值层（generateRenderPlan） ----
+function makeNode(id: string): any {
+  return {
+    id, name: id, parentId: undefined, children: [],
+    transform: { x: 0, y: 0, angle: 0, tilt: 0, stretch: 1, scaleX: 1 },
+    socket: { x: 0, y: 0 }, visible: true, drawLayer: 'main', zIndex: 0,
+    tracks: {}, modifiers: [],
+  };
+}
+const behaviorGraph: any = {
+  version: 1, outputId: 'out',
+  nodes: [
+    { id: 'v', type: 'var', inputs: {}, params: { name: 'moveX', default: 0 } },
+    { id: 'm', type: 'mul', inputs: { a: { nodeId: 'v' }, b: { type: 'number', value: 30 } }, params: {} },
+    { id: 'out', type: 'transform', inputs: { rotation: { nodeId: 'm' } }, params: {} },
+  ],
+};
+function angleAt(ch: Character, frame: number): number {
+  const plan = generateRenderPlan(ch, frame, 200, 200, 30);
+  const ins = plan.nodeInstructions.find((i: any) => i.nodeId === 'n1');
+  return ins ? ins.angle : NaN;
+}
+const spr2: any = {
+  width: 2, height: 2,
+  data: [['#ff0000', '#ff0000'], ['#ff0000', '#ff0000']],
+  plug: { x: 16, y: 16 },
+};
+const pieceN1: any = {
+  slotKey: 'n1',
+  sprites: { 0: spr2, 1: spr2, 2: spr2, 3: spr2, 4: spr2, 5: spr2, 6: spr2, 7: spr2 },
+};
+const nodeN1 = makeNode('n1');
+nodeN1.slot = { slotKey: 'n1' };
+const chBase: any = {
+  id: 'chB', name: '行为测试',
+  nodes: { n1: nodeN1 },
+  rootNodeId: 'n1',
+  costumeSets: [{ id: 'cs1', name: '默认', pieces: { n1: pieceN1 } }],
+  activeCostumeSetId: 'cs1',
+  behaviorGraphs: { n1: behaviorGraph },
+  variants: {},
+};
+check('C1 无输入轨时行为图 moveX=0 → 不转', approx(angleAt(chBase as Character, 20), 0, 1e-6), `angle=${angleAt(chBase as Character, 20)}`);
+const chWalk: any = {
+  ...chBase,
+  inputTracks: { moveX: stepTrack([[0, 0], [10, 1]]) },
+};
+check('C2 输入轨 moveX 打开前行为不转', approx(angleAt(chWalk as Character, 5), 0, 1e-6), `angle=${angleAt(chWalk as Character, 5)}`);
+check('C3 输入轨 moveX=1 → 行为旋转 30°', approx(angleAt(chWalk as Character, 15), 30, 1e-4), `angle=${angleAt(chWalk as Character, 15)}`);
+const chNoBehavior: any = { ...chBase, behaviorGraphs: undefined, inputTracks: chWalk.inputTracks };
+check('C4 无行为图时输入轨不影响姿态', approx(angleAt(chNoBehavior as Character, 15), 0, 1e-6));
+
+console.log(`\nverify-behavior-host: ${passed} passed, 0 failed`);

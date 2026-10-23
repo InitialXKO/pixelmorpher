@@ -1160,11 +1160,21 @@ export interface Character {
    *  （costume_state 节点）。生效状态叠加顺序：静态字段 → clip 状态轨道 → 状态蓝图 */
   stateBlueprint?: BlueprintGraph | null;
 
-  // ---- 程序化运行时（导出/预览专用，编辑器关键帧系统不消费） ----
+  // ---- 程序化行为与表演（蓝图；行为图运行时实时求值，
+  // 主画布经行为求值层消费，输入来自 inputTracks 或静止缺省） ----
   /** 程序化行为蓝图：nodeId → 该节点的行为图（运行时实时求值） */
   behaviorGraphs?: Record<string, BlueprintGraph>;
   /** 作者型表演清单（挂蓝图，见 ProcPerformance） */
   performances?: ProcPerformance[];
+  /** 编辑器输入轨（时间线角色级三轨）：主画布播放/拖动时逐帧采样，
+   *  作为行为图的宿主输入（var 节点读 moveX/speed01/grounded）。
+   *  缺轨/缺省：moveX=0、speed01=0、grounded=1（静止待机）。
+   *  运行时包用真实输入（键盘），不读此数据。 */
+  inputTracks?: {
+    moveX?: KeyframeTrack<number>;
+    speed01?: KeyframeTrack<number>;
+    grounded?: KeyframeTrack<number>;
+  };
 
   // ---- Face Turn Config (Spine-style pseudo-3D) ----
   faceTurnConfig?: {

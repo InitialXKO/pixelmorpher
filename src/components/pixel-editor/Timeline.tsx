@@ -22,6 +22,7 @@ import TimelineControls from './timeline/TimelineControls';
 import TrackLabelsColumn from './timeline/TrackLabelsColumn';
 import TrackLanesColumn from './timeline/TrackLanesColumn';
 import EffectKeyframeEditDialog from './timeline/dialogs/EffectKeyframeEditDialog';
+import InputTracksStrip from './timeline/InputTracksStrip';
 import useVirtualScroll from './timeline/useVirtualScroll';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
@@ -301,6 +302,7 @@ export default function Timeline() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const labelScrollRef = useRef<HTMLDivElement>(null);
   const rulerScrollRef = useRef<HTMLDivElement>(null);
+  const inputStripScrollRef = useRef<HTMLDivElement>(null);
 
   // ---- Virtual Scroll ----
   // Part 轨道已删除：tracks 传空数组（原 tracks 恒为空）
@@ -376,6 +378,9 @@ export default function Timeline() {
     }
     if (rulerScrollRef.current && scrollContainerRef.current) {
       rulerScrollRef.current.scrollLeft = scrollContainerRef.current.scrollLeft;
+    }
+    if (inputStripScrollRef.current && scrollContainerRef.current) {
+      inputStripScrollRef.current.scrollLeft = scrollContainerRef.current.scrollLeft;
     }
     handleVirtualScroll();
   }, [handleVirtualScroll]);
@@ -557,6 +562,18 @@ export default function Timeline() {
         snapConfig={snapConfig}
         onToggleSnap={() => updateSnapConfig({ enabled: !snapConfig.enabled })}
       />
+
+      {/* 输入轨（角色级：行为图宿主输入） */}
+      {puppetCharacter && (
+        <InputTracksStrip
+          character={puppetCharacter}
+          totalFrames={totalFrames}
+          currentFrame={currentFrame}
+          frameWidth={FRAME_WIDTH}
+          timelineWidth={timelineWidth}
+          scrollRef={inputStripScrollRef}
+        />
+      )}
 
       {/* Timeline Body */}
       <div className="flex flex-1 overflow-hidden">
