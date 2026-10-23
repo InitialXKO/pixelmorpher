@@ -432,7 +432,9 @@ export function convertCharacterToRuntimePackage(
   const warnings: string[] = [];
   // 精灵引用解析表：角色自带表 + 工程级全局表（全局优先），与主画布同口径
   const spriteTable: SpriteTable = { ...(character.sprites ?? {}), ...(externalSprites ?? {}) };
-  const worlds = computeWorldTransforms(character, 0, 512, 512, 12);
+  // 工程帧率：一切帧↔秒换算的唯一来源（调用方传入；缺省 12 仅兜底）
+  const projectFpsTop = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
+  const worlds = computeWorldTransforms(character, 0, 512, 512, projectFpsTop);
   // 世界位姿 → 2D 摆放：必须走与主画布同一投影（projectToView 按根节点
   // 朝向把 3D 世界坐标投到视平面）——直接拿 worldX 当横坐标会把深度轴
   // 当成横轴，东/北等朝向的角色整幅错位/镜像。
@@ -591,6 +593,14 @@ export function convertCharacterToRuntimePackage(
   const behavior: ProcRuntimePackage['behavior'] = { graphs: {} };
   {
     let gi = 0;
+    // 时间单位口径（帧/秒不混用）：图内时间节点一律是「帧」，帧的
+    // 速率由求值语境定——行为图在主系统按 60fps 帧（宿主把秒换算
+    // 成 60fps 帧喂入）；节点蓝图在主画布按工程帧率帧。进包后每张
+    // 图带自己的 fps，模板以「秒 × 该图 fps」喂帧，秒是唯一交换
+    // 单位。两图合并时只能共用一个时钟：行为口径 60 优先，蓝图含
+    // 帧式时间节点时点名警告速度差异。
+    const projectFps = projectFpsTop;
+    const FRAME_TIME_TYPES = new Set(['time', 'timeGate', 'waveform', 'pendulum', 'breath', 'keyframes']);
     // 姿态来源有两路：行为图（behaviorGraphs）与节点蓝图
     // （node.blueprint ?? 修改器生成图，与主画布 Phase 0 同一口径）。
     // 主画布上两者叠加求和（行为在节点蓝图之后），进包保持一致：
@@ -620,7 +630,14 @@ export function convertCharacterToRuntimePackage(
       const res = translateBehaviorGraph(graph, slot, `b${gi++}_`, (refId) => toSlot(refId));
       for (const w of res.warnings) warnings.push(`${srcLabel}「${nodeName}」：${w}`);
       if (!res.ok) { warnings.push(`${srcLabel}「${nodeName}」翻译失败：${res.reason}`); continue; }
-      behavior.graphs[slot] = { context: 'behavior', nodes: res.nodes, ...(graph.followMode ? { follow: graph.followMode } : {}) };
+      // 纯节点蓝图按工程帧率帧计时；行为图与合并图按 60fps 帧。
+      let graphFps: number | undefined;
+      if (!bg && nb) {
+        graphFps = projectFps;
+      } else if (bg && nb && nb.nodes.some((n) => FRAME_TIME_TYPES.has(n.type))) {
+        warnings.push(`节点蓝图「${nodeName}」：含帧式时间节点且与行为图合并，包内按行为口径 60fps 帧计时（主画布为工程帧率 ${projectFps}），时间类效果速度不同`);
+      }
+      behavior.graphs[slot] = { context: 'behavior', nodes: res.nodes, ...(graph.followMode ? { follow: graph.followMode } : {}), ...(graphFps && graphFps !== 60 ? { fps: graphFps } : {}) };
     }
   }
 
@@ -708,7 +725,7 @@ export function convertCharacterToRuntimePackage(
       const D = totalFrames;
       const samples = new Map<string, Array<{ a: number; x: number; y: number }>>();
       for (let f = 0; f <= D; f++) {
-        const wf = computeWorldTransforms(stripped, f, 512, 512, 12);
+        const wf = computeWorldTransforms(stripped, f, 512, 512, projectFpsTop);
         const dirF = (character.rootNodeId ? wf.get(character.rootNodeId)?.variantIndex : undefined) ?? rootDir;
         for (const node of Object.values(character.nodes)) {
           const w = wf.get(node.id);

@@ -1002,4 +1002,39 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     && Math.abs(endV(handTr.dyFrom) - 10) < 0.3);
 }
 
+// ---------- R) 时间单位统一：秒是唯一交换单位，帧由各图自带 fps 换算 ----------
+{
+  const pendulumGraph: BlueprintGraph = {
+    version: 1, outputId: 'out',
+    nodes: [
+      { id: 't', type: 'time', inputs: {}, params: {}, ui: { x: 0, y: 0 } },
+      { id: 'pm', type: 'pendulum', inputs: { t: { nodeId: 't', output: 'out' } }, params: { amplitude: 30, period: 16 }, ui: { x: 0, y: 0 } },
+      { id: 'out', type: 'transform', inputs: { rotation: { nodeId: 'pm', output: 'out' } }, params: {}, ui: { x: 0, y: 0 } },
+    ],
+  };
+  const piece = (slot: string) => ({ ...createDefaultCostumePiece(slot), parametric: createDefaultParametricAppearance() });
+  const ch = {
+    id: 'chR', name: '时间单位',
+    nodes: { arm: { ...makeNode('arm', '手臂', 'arm'), blueprint: pendulumGraph } },
+    rootNodeIds: ['arm'],
+    sprites: {},
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { arm: piece('arm') } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  } as unknown as Character;
+  const pkg = convertCharacterToRuntimePackage(ch, undefined, { frameRate: 8 });
+  const g = pkg.behavior.graphs['arm'] as { fps?: number } | undefined;
+  check('Q34 纯节点蓝图的图带工程帧率 fps=8（不再按行为口径 60fps 帧计时）', g?.fps === 8);
+  const evaluate = createRuntimeEvaluator();
+  const vars = { t: 0, phase: 0, moveX: 0, speed01: 0, grounded: 1 };
+  // 模板口径：tFrame = 秒 × fps。0.5 秒处 = 第 4 帧（工程帧率 8）→ 摆锤满幅 30°
+  const outHalf = evaluate(pkg.behavior.graphs['arm'] as never, { tFrame: 0.5 * (g?.fps ?? 60), vars } as never);
+  check('Q35 按 fps 换算后 0.5 秒处摆锤满幅（与主画布工程帧率第 4 帧一致）',
+    Math.abs((outHalf.get('arm')?.angle ?? 0) - (-30 * Math.PI / 180)) < 0.01);
+  // 产品对照：同一蓝图在主系统以 frame=4/frameRate=8 求值也是 30°
+  const { evaluateBlueprint } = await import('../src/lib/blueprint/eval');
+  const prod = evaluateBlueprint(pendulumGraph as never, { frame: 4, frameRate: 8, vars: {} } as never);
+  check('Q36 产品口径对照成立（frame=4 → rotation 30°）', Math.abs(prod.rotation - 30) < 0.01);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

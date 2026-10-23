@@ -985,11 +985,19 @@ let autoDir = 1;
 const behaviorState = new Map();
 let prevBehaviorOutputs = new Map();
 let phaseAcc = 0;
+// 行为时钟纪元：与编辑器同一口径——时间线只有一个时钟，表演从 0 帧
+// 起播时行为的 t/phase 也从 0 起。此前行为按页面打开后的墙钟自由跑，
+// 按 T 时摆锤停在任意相位，与轨道永远对不齐（同步缺陷）。
+let behaviorEpoch = 0;
 const activePerfs = [];
 const keys = Object.create(null);
 function startPerf(perf) {
   if (activePerfs.some((a) => a.perf === perf)) return;
   activePerfs.push({ perf: perf, t: 0, snapTimer: 0, snaps: [] });
+  behaviorEpoch = elapsed;
+  phaseAcc = 0;
+  behaviorState.clear();
+  prevBehaviorOutputs = new Map();
 }
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
@@ -1087,8 +1095,11 @@ function frame(now) {
   // nodeRef 读哪帧由每张图的 follow 开关决定：'prev'（缺省）读上一帧
   // 输出（纯延迟一帧），'same' 读本帧第一遍的输出（无延迟））
   phaseAcc += dt * (char.onGround ? (ix !== 0 ? 30 : 4) : 18);
+  // 行为时钟 = 表演纪元起算的秒（唯一交换单位）；图内帧由各图
+  // 自带 fps 从秒换算（行为图 60、纯节点蓝图工程帧率），不混用。
+  const behaviorT = elapsed - behaviorEpoch;
   const hostVars = {
-    t: elapsed, phase: phaseAcc, moveX: ix,
+    t: behaviorT, phase: phaseAcc, moveX: ix,
     speed01: ix !== 0 ? 1 : 0, grounded: char.onGround ? 1 : 0,
   };
   let pose = {};
@@ -1098,8 +1109,9 @@ function frame(now) {
     for (const key of Object.keys(BEHAVIOR_GRAPHS)) {
       const isSame = (BEHAVIOR_GRAPHS[key].follow || 'prev') === 'same';
       if (onlySame !== null && onlySame !== isSame) continue;
+      const graphFps = BEHAVIOR_GRAPHS[key].fps || 60;
       const out = evalRuntimeGraph(BEHAVIOR_GRAPHS[key], {
-        tFrame: elapsed * 60, vars: hostVars, nodeState: behaviorState,
+        tFrame: behaviorT * graphFps, vars: hostVars, nodeState: behaviorState,
         nodeOutputs: nodeOutputsMap, statePrefix: key + ':',
       });
       const rec = out.get(key);

@@ -23,6 +23,9 @@ export interface RuntimeGraph {
   nodes: RuntimeGraphNode[];
   /** 仅行为图：nodeRef 读上一帧（'prev'，缺省）还是本帧（'same'）输出 */
   follow?: 'prev' | 'same';
+  /** 仅行为图：图内帧式时间节点的帧率（帧 = 秒 × fps）。行为图缺省
+   * 60（主系统行为口径）；纯节点蓝图为工程帧率（主画布口径）。 */
+  fps?: number;
 }
 
 export interface GraphTranslateResult {
