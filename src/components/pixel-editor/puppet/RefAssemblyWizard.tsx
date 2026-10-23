@@ -9,7 +9,8 @@ import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import type { PixelGrid } from '@/lib/types';
 import { initSAM, isSAMReady, setSAMImage } from '@/lib/sam';
 import { inpaintPixels } from '@/lib/inpainting';
-import type { DirectionIndex, NodeTransform, NodeTracks } from '@/lib/unified-types';
+import type { DirectionIndex, NodeTransform, NodeTracks, Sprite } from '@/lib/unified-types';
+import PivotEditor from './PivotEditor';
 
 // ============================================================
 // RefAssemblyWizard - 参考图装配向导
@@ -174,8 +175,10 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const [deriveAxis, setDeriveAxis] = useState(90);
   const [deriveDarkenOn, setDeriveDarkenOn] = useState(false);
   const [deriveDarken, setDeriveDarken] = useState(0.7);
-  // 旋转已抠精灵（甲1）的角度
+  // 旋转已抠精灵的角度
   const [rotExtractAngle, setRotExtractAngle] = useState(90);
+  // 已抠精灵事后重开枢轴编辑（PivotEditor 弹窗，取打开时刻的最新精灵快照）
+  const [pivotSprite, setPivotSprite] = useState<Sprite | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // SAM 状态
   const [samStatus, setSamStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -908,6 +911,36 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                     </Button>
                   </div>
                 </div>
+                {/* 已抠精灵再编辑：不必重抠——像素直接进精灵编辑（改的是同一精灵 ID，
+                    画布横幅确认/取消），枢轴重开 PivotEditor 点击调整 */}
+                {targetSpriteId && (
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 text-[11px]"
+                      onClick={() => {
+                        const es = useEditorStore.getState();
+                        // 若正开着遮罩绘制，先收掉，避免两种画布模式叠加
+                        if (es.editMode === 'mask') es.setMaskNodeId(null);
+                        es.enterSpriteEditMode(targetSpriteId);
+                      }}
+                    >
+                      编辑像素
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 text-[11px]"
+                      onClick={() => {
+                        const sp = useProjectStore.getState().sprites[targetSpriteId];
+                        if (sp) setPivotSprite(sp);
+                      }}
+                    >
+                      调整枢轴
+                    </Button>
+                  </div>
+                )}
                 {/* 旋转已抠精灵（绕锚点）：事后手动再转，直接改精灵本体 */}
                 {targetSpriteId && (
                   <div className="p-2 rounded bg-white/5 border border-white/10 space-y-2">
@@ -1041,6 +1074,11 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
           </div>
         )}
       </div>
+
+      {/* 已抠精灵枢轴重开编辑（弹窗自带确认/取消，直接写全局精灵表） */}
+      {pivotSprite && (
+        <PivotEditor sprite={pivotSprite} onClose={() => setPivotSprite(null)} />
+      )}
 
         {/* Footer */}
         <div className="flex justify-between p-3 border-t border-white/10 shrink-0">
