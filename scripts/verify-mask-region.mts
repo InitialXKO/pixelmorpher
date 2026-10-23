@@ -1,5 +1,6 @@
-// 防溢出洪泛区域探针：密封性由模型保证（区域 4 连通 ↔ 墙 8 连通）。
-import { computeFloodRegion } from '../src/lib/mask-region';
+// 防溢出笔画栅栏模型探针（v3，取代全局洪泛版）：
+// 线是栅栏不是隔断墙——开放线段也必须在笔尖附近封严，且贴墙无死区。
+import { computeDiskPaintSet, segmentCrossesWall } from '../src/lib/mask-region';
 
 let pass = 0;
 let fail = 0;
@@ -8,78 +9,80 @@ const ok = (name: string, cond: boolean) => {
   else { fail++; console.log(`  ✗ ${name}`); }
 };
 
-const W = 10;
-const H = 10;
+const W = 16;
+const H = 16;
 const blank = () => new Uint8Array(W * H);
-const at = (r: Uint8Array, x: number, y: number) => r[y * W + x] === 1;
 const wall = (a: Uint8Array, x: number, y: number) => { a[y * W + x] = 255; };
+const has = (set: number[], x: number, y: number) => set.includes(y * W + x);
 
-// R1 无墙：全域可达
+// 开放竖线段 x=8, y=4..11（起点终点都在图内——v2 全局洪泛在此完全失效）
+const openSeg = () => {
+  const a = blank();
+  for (let y = 4; y <= 11; y++) wall(a, 8, y);
+  return a;
+};
+
+// D1 笔尖在线左侧、圆盘压线：只涂锚点侧（左），线本身和右侧都不涂
 {
-  const r = computeFloodRegion(blank(), W, H, 0, 0);
-  ok('R1 无墙全域可达', r.every((v) => v === 1));
+  const a = openSeg();
+  const set = computeDiskPaintSet(a, W, H, 7, 8, 3, 7, 8);
+  ok('D1 锚点侧可涂', has(set, 5, 8) && has(set, 7, 8));
+  ok('D1 线像素不可涂', !has(set, 8, 8));
+  ok('D1 线右侧不可涂（开放线段也封）', !has(set, 9, 8) && !has(set, 10, 8));
+  ok('D1 贴墙像素可涂（无死区）', has(set, 7, 5) && has(set, 7, 11));
 }
 
-// R2 直线墙（竖线 x=5 贯通上下）：左半可达、右半不可达、墙本身不可涂
+// D2 笔尖中心已越到线右侧，但锚点还在左侧：只涂左侧月牙，中心脚下不涂
+{
+  const a = openSeg();
+  const set = computeDiskPaintSet(a, W, H, 10, 8, 3, 7, 8);
+  ok('D2 越线中心：盘内锚点侧仅剩贴线格可涂', has(set, 7, 8) && !has(set, 6, 8));
+  ok('D2 越线中心：中心脚下不可涂', !has(set, 10, 8) && !has(set, 11, 8));
+}
+
+// D3 角接阶梯墙（对角线 y=x 一段）：圆盘内不得斜穿
 {
   const a = blank();
-  for (let y = 0; y < H; y++) wall(a, 5, y);
-  const r = computeFloodRegion(a, W, H, 2, 5);
-  ok('R2 直线墙内侧可达', at(r, 0, 0) && at(r, 4, 9));
-  ok('R2 直线墙外侧不可达', !at(r, 6, 5) && !at(r, 9, 0));
-  ok('R2 墙像素本身不可涂', !at(r, 5, 5));
-  ok('R2 贴墙像素可涂（无死区）', at(r, 4, 5));
+  for (let i = 3; i <= 12; i++) wall(a, i, i);
+  const set = computeDiskPaintSet(a, W, H, 5, 8, 3, 5, 8);
+  ok('D3 阶梯墙：种子侧可涂', has(set, 4, 8) && has(set, 5, 9));
+  ok('D3 阶梯墙：对侧不可涂（不斜穿）', !has(set, 8, 5) && !has(set, 9, 6));
 }
 
-// R3 角接墙（对角阶梯 y=x）：旧射线模型在此斜穿，洪泛必须封死
+// D4 绕线端：笔尖移到线段端点之外（开放空间），圆盘不再被线切开，可涂对侧
 {
-  const a = blank();
-  for (let i = 0; i < 10; i++) wall(a, i, i);
-  const r = computeFloodRegion(a, W, H, 0, 5); // 左下侧
-  ok('R3 角接墙：种子侧可达', at(r, 0, 9) && at(r, 1, 5));
-  ok('R3 角接墙：对侧不可达（不斜穿）', !at(r, 9, 0) && !at(r, 5, 1) && !at(r, 9, 4));
+  const a = openSeg();
+  // 中心在线段上端之外 (8,2)，锚点同处——盘内可达 (9,3)（线端外侧的对面）
+  const set = computeDiskPaintSet(a, W, H, 8, 2, 2, 8, 2);
+  ok('D4 线端之外可绕行', has(set, 9, 2) && has(set, 9, 3));
 }
 
-// R4 封闭框：内部种子 → 只有内部；外部种子 → 只有外部
+// D5 锚点在墙上 → 回退圆心；圆心也在墙上 → 空集
 {
-  const a = blank();
-  for (let x = 2; x <= 7; x++) { wall(a, x, 2); wall(a, x, 7); }
-  for (let y = 2; y <= 7; y++) { wall(a, 2, y); wall(a, 7, y); }
-  const rin = computeFloodRegion(a, W, H, 5, 5);
-  ok('R4 框内种子：内部可达外部不可达', at(rin, 3, 3) && at(rin, 6, 6) && !at(rin, 0, 0) && !at(rin, 9, 9));
-  const rout = computeFloodRegion(a, W, H, 0, 0);
-  ok('R4 框外种子：外部可达内部不可达', at(rout, 9, 9) && !at(rout, 5, 5));
+  const a = openSeg();
+  const fallback = computeDiskPaintSet(a, W, H, 6, 8, 2, 8, 8);
+  ok('D5 锚点在墙上回退圆心', has(fallback, 6, 8) && !has(fallback, 9, 8));
+  const empty = computeDiskPaintSet(a, W, H, 8, 8, 2, 8, 8);
+  ok('D5 圆心也在墙上为空集', empty.length === 0);
 }
 
-// R5 开口墙（竖线留一格缺口）：洪泛正当地从缺口绕过——墙没封口不是泄漏
+// D6 无墙：整盘可涂
 {
-  const a = blank();
-  for (let y = 0; y < H; y++) { if (y !== 4) wall(a, 5, y); }
-  const r = computeFloodRegion(a, W, H, 2, 5);
-  ok('R5 开口处可绕行到对侧', at(r, 8, 5));
-  ok('R5 缺口格本身可涂', at(r, 5, 4));
+  const set = computeDiskPaintSet(blank(), W, H, 8, 8, 2, 8, 8);
+  ok('D6 无墙整盘可涂', has(set, 6, 8) && has(set, 8, 6) && has(set, 9, 9) && set.length === 13);
 }
 
-// R6 种子落在墙上 → 全 0（本笔画无可涂区）
+// S1 中心轨迹越墙截断：直线穿过竖线 → true；同侧移动 → false；
+//    从角接墙的两墙像素角缝挤过（对角 (4,6)→(6,4)，墙在 (5,6)? 用经典角例）
+//    墙在 (5,5) 与 (6,6) 时轨迹 (4,7)→(7,4) 擦角 → 2×2 邻域必含墙 → true
 {
-  const a = blank();
-  for (let y = 0; y < H; y++) wall(a, 5, y);
-  const r = computeFloodRegion(a, W, H, 5, 5);
-  ok('R6 种子在墙上全 0', r.every((v) => v === 0));
-}
-
-// R7 种子越界 → 全 0
-{
-  const r = computeFloodRegion(blank(), W, H, -1, 99);
-  ok('R7 种子越界全 0', r.every((v) => v === 0));
-}
-
-// R8 稀疏 alpha（半透明线像素 alpha=100 > 阈值 10）同样算墙
-{
-  const a = blank();
-  for (let y = 0; y < H; y++) a[y * W + 5] = 100;
-  const r = computeFloodRegion(a, W, H, 2, 5);
-  ok('R8 半透明线像素仍为墙', !at(r, 8, 5));
+  const a = openSeg();
+  ok('S1 正面穿线为 true', segmentCrossesWall(a, W, H, 6, 8, 10, 8) === true);
+  ok('S1 同侧移动为 false', segmentCrossesWall(a, W, H, 4, 4, 6, 12) === false);
+  const diag = blank();
+  wall(diag, 5, 5); wall(diag, 6, 6);
+  ok('S1 角缝挤过为 true', segmentCrossesWall(diag, W, H, 4, 7, 7, 4) === true);
+  ok('S1 远离墙为 false', segmentCrossesWall(diag, W, H, 0, 0, 3, 0) === false);
 }
 
 console.log(`合计：${pass} 过 / ${fail} 败`);
