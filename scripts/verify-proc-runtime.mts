@@ -913,8 +913,8 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     !!perfT && perfT.mode === 'add' && perfT.triggerKey === 'KeyT' && Math.abs(perfT.duration - 1) < 1e-9
     && perfT.mask.join() === 'arm' && curvesT.length === 2);
   const angCurve = curvesT.find((c) => Math.abs((c.points?.[1]?.[1] ?? 0) + Math.PI / 2) < 0.01);
-  const dxCurve = curvesT.find((c) => Math.abs((c.points?.[1]?.[1] ?? 0) - 12) < 1e-9);
-  check('Q27 轨道曲线是相对第 0 帧的世界增量（角度 10→100 的增量 90°→-π/2、x 192 Sub→12px）',
+  const dxCurve = curvesT.find((c) => Math.abs((c.points?.[1]?.[1] ?? 0) + 12) < 1e-9);
+  check('Q27 轨道曲线是相对第 0 帧的世界增量（角度 10→100 的增量 90°→-π/2、x 经北向投影 192 Sub→-12px）',
     !!angCurve && Math.abs(angCurve.points?.[0]?.[1] ?? 0) < 1e-9 && !!dxCurve);
   check('Q28 tilt 轨道无对应通道被点名', pkgT.warnings.some((w) => w.includes('tilt') && w.includes('未进包')));
   const pkgT2 = convertCharacterToRuntimePackage(mkTrackChar({
@@ -960,10 +960,17 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     { angleFrom?: { n: string }; dxFrom?: { n: string }; dyFrom?: { n: string } } | undefined;
   const curveById = new Map((perfPC?.graph.nodes ?? []).filter((n) => n.type === 'curve').map((n) => [(n as { id: string }).id, n.points]));
   const endV = (ref?: { n: string }) => { const pts = ref ? curveById.get(ref.n) : undefined; return pts ? pts[pts.length - 1][1] : NaN; };
+  // 部件摆放走视平面投影：东向（dir 0）时横坐标取世界 Z、不是世界 X
+  const pkgEast = convertCharacterToRuntimePackage(mkTrackChar({
+    transform: { x: 160, y: 32, angle: 0, variantIndex: 0, stretch: 1 },
+  }));
+  const armEast = pkgEast.parts.find((p) => p.key === 'arm');
+  check('Q32 部件 pivot 经 projectToView 投影（东向：横轴=世界 Z=0、纵轴=世界 Y）',
+    !!armEast && Math.abs(armEast.base.pivot[0]) < 1e-9 && Math.abs(armEast.base.pivot[1] + 2) < 1e-9);
   check('Q31 父轨道带动子节点：子节点（无本地轨道）也进掩码且带世界增量曲线',
     !!perfPC && perfPC.mask.includes('hand') && !!handTr
     && Math.abs(endV(handTr.angleFrom) + Math.PI / 2) < 0.01
-    && Math.abs(endV(handTr.dxFrom) + 10) < 0.3
+    && Math.abs(endV(handTr.dxFrom) - 10) < 0.3
     && Math.abs(endV(handTr.dyFrom) - 10) < 0.3);
 }
 

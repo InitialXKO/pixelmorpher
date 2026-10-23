@@ -12,7 +12,7 @@
 //   轨道运行时无对应通道，逐条点名不静默。
 import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, Sprite } from '../unified-types';
 import { buildParametricSprite } from './main-canvas';
-import { subToPx } from '../unified-types';
+import { subToPx, projectToView } from '../unified-types';
 import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { modifiersToBlueprint } from '../blueprint/migrate';
@@ -419,6 +419,16 @@ export function convertCharacterToRuntimePackage(
   // 精灵引用解析表：角色自带表 + 工程级全局表（全局优先），与主画布同口径
   const spriteTable: SpriteTable = { ...(character.sprites ?? {}), ...(externalSprites ?? {}) };
   const worlds = computeWorldTransforms(character, 0, 512, 512, 12);
+  // 世界位姿 → 2D 摆放：必须走与主画布同一投影（projectToView 按根节点
+  // 朝向把 3D 世界坐标投到视平面）——直接拿 worldX 当横坐标会把深度轴
+  // 当成横轴，东/北等朝向的角色整幅错位/镜像。
+  const rootDir = (character.rootNodeId ? worlds.get(character.rootNodeId)?.variantIndex : undefined) ?? 0;
+  const pivotOf = (nodeId: string | undefined): [number, number] => {
+    const w = nodeId ? worlds.get(nodeId) : undefined;
+    if (!w) return [0, 0];
+    const proj = projectToView(w.worldX, w.worldY, w.worldZ, rootDir as DirectionIndex);
+    return [subToPx(proj.canvasX), -subToPx(proj.canvasY)];
+  };
   const activeSet = character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId)
     ?? character.costumeSets[0];
 
@@ -446,7 +456,7 @@ export function convertCharacterToRuntimePackage(
     const baseApp = basePiece?.parametric;
     if (!baseApp) continue;
     const w = worlds.get(node.id);
-    const pivot: [number, number] = w ? [subToPx(w.worldX), -subToPx(w.worldY)] : [0, 0];
+    const pivot = pivotOf(node.id);
     const baseSprite = baseSpriteFor(baseApp, basePiece, character, slotKey, spriteTable);
     if ((baseApp.composite ?? 'generate') !== 'generate' && !baseSprite) {
       warnings.push(`槽位 ${slotKey} 合成方式为 ${baseApp.composite} 但东向无精灵，运行时按独立生成处理`);
@@ -480,7 +490,7 @@ export function convertCharacterToRuntimePackage(
       ?? character.costumeSets.map((cs) => eastSpriteOf(cs.pieces[slotKey], character, slotKey, spriteTable, false)).find(Boolean);
     if (!sg) continue;
     const w = worlds.get(node.id);
-    const pivot: [number, number] = w ? [subToPx(w.worldX), -subToPx(w.worldY)] : [0, 0];
+    const pivot = pivotOf(node.id);
     const base = appearanceToBase(createDefaultParametricAppearance(), pivot, w?.worldAngle ?? 0);
     base.size = [sg.w, sg.h];
     const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns);
@@ -530,7 +540,7 @@ export function convertCharacterToRuntimePackage(
       if (ge) glowMap[slotKey] = ge;
       if (!app) { entry[slotKey] = null; continue; }
       const w = nodeId ? worlds.get(nodeId) : undefined;
-      const pivot: [number, number] = w ? [subToPx(w.worldX), -subToPx(w.worldY)] : [0, 0];
+      const pivot = pivotOf(nodeId);
       entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0, baseSpriteFor(app, piece, character, slotKey, spriteTable));
     }
     for (const slotKey of spriteSlots) {
@@ -679,17 +689,20 @@ export function convertCharacterToRuntimePackage(
           n.id, { ...n, blueprint: null, modifiers: [] },
         ])),
       };
-      // 逐帧采样全部节点的世界位姿（运行时系：角度弧度、y 取反、单位 px）
+      // 逐帧采样全部节点的世界位姿：与部件摆放同一投影（projectToView，
+      // 朝向取当帧根节点 variantIndex），运行时系（角度弧度、y 取反、px）
       const D = totalFrames;
       const samples = new Map<string, Array<{ a: number; x: number; y: number }>>();
       for (let f = 0; f <= D; f++) {
         const wf = computeWorldTransforms(stripped, f, 512, 512, 12);
+        const dirF = (character.rootNodeId ? wf.get(character.rootNodeId)?.variantIndex : undefined) ?? rootDir;
         for (const node of Object.values(character.nodes)) {
           const w = wf.get(node.id);
           if (!w) continue;
           let arr = samples.get(node.id);
           if (!arr) { arr = []; samples.set(node.id, arr); }
-          arr.push({ a: -w.worldAngle * Math.PI / 180, x: subToPx(w.worldX), y: -subToPx(w.worldY) });
+          const proj = projectToView(w.worldX, w.worldY, w.worldZ, dirF as DirectionIndex);
+          arr.push({ a: -w.worldAngle * Math.PI / 180, x: subToPx(proj.canvasX), y: -subToPx(proj.canvasY) });
         }
       }
       const mask: string[] = [];
