@@ -1020,7 +1020,10 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
   }, [procCharId, activeTab]);
   const procPkg = useMemo(
     // 精灵引用可能指向工程级全局表，必须随角色一起传给转换器（与主画布同口径）
-    () => (procCharacter ? convertCharacterToRuntimePackage(procCharacter, useProjectStore.getState().sprites) : null),
+    () => (procCharacter ? convertCharacterToRuntimePackage(procCharacter, useProjectStore.getState().sprites, {
+      frameRate: useProjectStore.getState().frameRate,
+      totalFrames: useProjectStore.getState().totalFrames,
+    }) : null),
     [procCharacter],
   );
   const exportProcRuntime = useCallback(() => {
@@ -1507,7 +1510,8 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
               <div className="text-xs text-gray-500 bg-white/[0.03] rounded-md p-3 space-y-1">
                 <div className="font-medium text-gray-400">程序化运行时包（自包含 HTML）</div>
                 <div>
-                  不导帧、不导轨道：导出参数化角色 + 行为蓝图与节点蓝图的变换通道（运行时实时求值）+ 表演蓝图（采样烘焙）+ 运行时本体。
+                  不导帧：导出参数化角色 + 行为蓝图与节点蓝图的变换通道（运行时实时求值）+ 表演蓝图（采样烘焙）+ 关键帧轨道（采样烘焙成增量曲线，合成「轨道」表演，T 键触发）+ 运行时本体。
+                  轨道的 tilt/拉伸/横向缩放/方向通道运行时无对应变换通道，不进包并会在下方报告中点名。
                   宿主只喂输入（移动/跳跃/触发），姿态由运行时程序化合成。与「程序化预览」同一本体，所见即所得。
                 </div>
                 {procPkg && (

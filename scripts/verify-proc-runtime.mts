@@ -880,6 +880,53 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('Q24 辉光溢出包围盒：角上选区的场扩到网格外（左上角外 2 格 = 1/3）',
     !!fCorner && fCorner.padX === 2 && Math.abs(fCorner.field[0] - 1 / 3) < 1e-6);
   check('Q25 模板含方向基准接线（iGlowSpace/fetchGlow）', html.includes('iGlowSpace') && html.includes('fetchGlow'));
+
+  // 轨道采样烘焙：增量曲线合成一条「轨道」表演（add 模式，T 键）
+  const mkTrackChar = (nodeOver: Record<string, unknown>) => ({
+    id: 'chT', name: '轨道测试',
+    nodes: { arm: { ...makeNode('arm', '手臂', 'arm'), ...nodeOver } },
+    rootNodeIds: ['arm'],
+    sprites: { gspr: spr },
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { arm: { ...createDefaultCostumePiece('arm'), sprites: { 2: { spriteId: 'gspr', mirror: false } } } } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  }) as unknown as Character;
+  const pkgT = convertCharacterToRuntimePackage(mkTrackChar({
+    tracks: {
+      angle: { interpolation: 'linear', keyframes: [{ frame: 0, value: 10 }, { frame: 12, value: 100 }] },
+      x: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 12, value: 192 }] },
+      tilt: { interpolation: 'step', keyframes: [{ frame: 0, value: 5 }] },
+    },
+  }));
+  const perfT = pkgT.performances.find((p) => (p as { id?: string }).id === 'tracks') as unknown as {
+    mode: string; triggerKey: string; duration: number; mask: string[];
+    graph: { nodes: Array<{ type: string; points?: [number, number][] }> };
+  } | undefined;
+  const curvesT = (perfT?.graph.nodes ?? []).filter((n) => n.type === 'curve');
+  check('Q26 轨道进包：合成「轨道」表演（add/KeyT/时长=帧数÷12/掩码=轨道节点）',
+    !!perfT && perfT.mode === 'add' && perfT.triggerKey === 'KeyT' && Math.abs(perfT.duration - 1) < 1e-9
+    && perfT.mask.join() === 'arm' && curvesT.length === 2);
+  const angCurve = curvesT.find((c) => Math.abs((c.points?.[1]?.[1] ?? 0) + 100 * Math.PI / 180) < 1e-6);
+  const dxCurve = curvesT.find((c) => Math.abs((c.points?.[1]?.[1] ?? 0) - 12) < 1e-9);
+  check('Q27 轨道曲线是增量且单位已换算（角度 100°→-100°弧度、x 192 Sub→12px）',
+    !!angCurve && Math.abs((angCurve.points?.[0]?.[1] ?? 0) + 10 * Math.PI / 180) < 1e-6 && !!dxCurve);
+  check('Q28 tilt 轨道无对应通道被点名', pkgT.warnings.some((w) => w.includes('tilt') && w.includes('未进包')));
+  const pkgT2 = convertCharacterToRuntimePackage(mkTrackChar({
+    tracks: { angle: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 6, value: 0 }] } },
+  }));
+  check('Q29 与静态姿态无差异的轨道不进包且被点名',
+    !pkgT2.performances.some((p) => (p as { id?: string }).id === 'tracks')
+    && pkgT2.warnings.some((w) => w.includes('无姿态贡献')));
+  const pkgT3 = convertCharacterToRuntimePackage(mkTrackChar({
+    tracks: {
+      angle: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 6, value: 30 }] },
+      stretch: { interpolation: 'linear', keyframes: [{ frame: 0, value: 1 }, { frame: 6, value: 1 }] },
+      scaleX: { interpolation: 'linear', keyframes: [{ frame: 0, value: 1 }] },
+    },
+  }));
+  check('Q30 不支持通道的关键帧恒等于静态值时不点名（空转不算损失）',
+    pkgT3.performances.some((p) => (p as { id?: string }).id === 'tracks')
+    && !pkgT3.warnings.some((w) => w.includes('stretch') || w.includes('scaleX')));
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

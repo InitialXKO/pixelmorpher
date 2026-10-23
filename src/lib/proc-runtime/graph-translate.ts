@@ -8,6 +8,8 @@ import type { BlueprintGraph, BlueprintInput } from '../blueprint/ir';
 import { isRef } from '../blueprint/ir';
 import { evaluateBlueprint } from '../blueprint/eval';
 import { dialectOf } from './dialect';
+import { interpolateTrack } from '../unified-render';
+import type { Node } from '../unified-types';
 
 /** 运行时引用：节点 id + 输出口（缺省 'out'） */
 export interface RuntimeRef { n: string; o?: string }
@@ -108,6 +110,74 @@ export function translatePerformanceGraph(
   addCurve(dyPts, 'dy', 'dyFrom', 0.15);
   if (tr.angleFrom || tr.dxFrom || tr.dyFrom) nodes.push(tr);
   return { ok: true, nodes, typeReport, maxAmp, warnings: [] };
+}
+
+// ================= 轨道：采样烘焙 =================
+
+/** 运行时变换只有 angle/dx/dy 三通道，这四个轨道通道无对应——逐条点名不静默 */
+const TRACK_UNSUPPORTED_CHANNELS = ['tilt', 'stretch', 'scaleX', 'variantIndex'] as const;
+
+/**
+ * 节点关键帧轨道 → 采样烘焙曲线（与表演路同格式：curve + transform）。
+ * 主画布口径：轨道值是姿态基础层（按通道替换静态 transform），蓝图/行为
+ * 在其上加算；运行时包的静态姿态已含 transform，故烘焙的是增量
+ * （采样值 − 静态值），以 add 模式合成后与主画布等价。
+ * 通道换算与表演路一致：角度 度→弧度取负、y SubPixel→px 取负、x SubPixel→px。
+ */
+export function translateNodeTracks(
+  node: Node,
+  partKey: string,
+  totalFrames: number,
+  idPrefix: string,
+): GraphTranslateResult {
+  const warnings: string[] = [];
+  const unsupported: string[] = [];
+  const unsupportedBase: Record<string, number> = {
+    tilt: node.transform.tilt ?? 0,
+    stretch: node.transform.stretch,
+    scaleX: node.transform.scaleX ?? 1,
+    variantIndex: node.transform.variantIndex,
+  };
+  for (const ch of TRACK_UNSUPPORTED_CHANNELS) {
+    const kfs = node.tracks[ch]?.keyframes ?? [];
+    // 关键帧恒等于静态值的通道是空转，不算损失、不点名
+    if (kfs.length > 0 && kfs.some((kf) => Math.abs(kf.value - unsupportedBase[ch]) > 1e-9)) {
+      unsupported.push(ch);
+    }
+  }
+  if (unsupported.length) {
+    warnings.push(`轨道通道 ${unsupported.join('、')} 运行时无对应变换通道，未进包`);
+  }
+  const D = Math.max(1, Math.round(totalFrames));
+  const channels: Array<{
+    track: Node['tracks']['angle']; base: number; suffix: string;
+    field: 'angleFrom' | 'dxFrom' | 'dyFrom'; conv: (delta: number) => number; eps: number;
+  }> = [
+    { track: node.tracks.angle, base: node.transform.angle, suffix: 'ang', field: 'angleFrom', conv: (d) => -d * Math.PI / 180, eps: 0.01 },
+    { track: node.tracks.x, base: node.transform.x, suffix: 'dx', field: 'dxFrom', conv: (d) => d / 16, eps: 0.15 },
+    { track: node.tracks.y, base: node.transform.y, suffix: 'dy', field: 'dyFrom', conv: (d) => -d / 16, eps: 0.15 },
+  ];
+  const nodes: RuntimeGraphNode[] = [{ id: `${idPrefix}t`, type: 'time' }];
+  const tr: Extract<RuntimeGraphNode, { type: 'transform' }> = {
+    id: `${idPrefix}tr`, type: 'transform', part: partKey, units: 'runtime',
+  };
+  let maxAmp = 0;
+  for (const ch of channels) {
+    if (!ch.track || ch.track.keyframes.length === 0) continue;
+    const pts: [number, number][] = [];
+    for (let f = 0; f <= D; f++) {
+      const v = ch.conv(interpolateTrack(ch.track, f, ch.base) - ch.base);
+      pts.push([f / D, v]);
+      if (Math.abs(v) > maxAmp) maxAmp = Math.abs(v);
+    }
+    if (pts.every(([, v]) => Math.abs(v) < 1e-4)) continue;
+    const id = `${idPrefix}${ch.suffix}`;
+    nodes.push({ id, type: 'curve', points: simplify(pts, ch.eps) });
+    tr[ch.field] = { n: id };
+  }
+  if (tr.angleFrom || tr.dxFrom || tr.dyFrom) nodes.push(tr);
+  else nodes.length = 0;
+  return { ok: true, nodes, typeReport: {}, maxAmp, warnings };
 }
 
 // ================= 行为：结构翻译 =================

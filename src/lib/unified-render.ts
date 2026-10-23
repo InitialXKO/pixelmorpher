@@ -917,7 +917,7 @@ function isAnimationModifier(type: string): boolean {
  *    Newton-Raphson iteration finds the bezier parameter s
  *    where Bx(s) = t, then evaluates By(s) for the value fraction)
  */
-function interpolateTrack<T extends number>(
+export function interpolateTrack<T extends number>(
   track: KeyframeTrack<T> | undefined,
   frame: number,
   baseValue: T,

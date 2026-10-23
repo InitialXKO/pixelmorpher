@@ -28,7 +28,10 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
   const built = useMemo(() => {
     if (!character) return null;
     // 精灵引用可能指向工程级全局表，必须随角色一起传给转换器（与主画布同口径）
-    const pkg = convertCharacterToRuntimePackage(character, projectSprites);
+    const pkg = convertCharacterToRuntimePackage(character, projectSprites, {
+      frameRate: useProjectStore.getState().frameRate,
+      totalFrames: useProjectStore.getState().totalFrames,
+    });
     const html = buildRuntimeHtml(pkg);
     return { pkg, html, key: hashString(html) };
   }, [character, projectSprites]);

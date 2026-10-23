@@ -6,6 +6,8 @@
 //   坐标转运行时系：x 同向、y 取反（产品 y 下 / 运行时 y 上）、角度同理。
 // - 行为图/表演图的 nodeId（含 nodeRef 目标）一律换算成 slotKey。
 // - 表演图经 graph-translate 采样烘焙；翻译失败/无贡献逐条进 warnings，不静默。
+// - 节点关键帧轨道同样采样烘焙：增量曲线合成一条「轨道」表演（add 模式）；
+//   tilt/stretch/scaleX/variantIndex 轨道运行时无对应通道，逐条点名不静默。
 import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, Sprite } from '../unified-types';
 import { buildParametricSprite } from './main-canvas';
 import { subToPx } from '../unified-types';
@@ -17,7 +19,7 @@ import { glowField, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns,
 import { createDefaultParametricAppearance } from './surfaces';
 import { PALETTES } from './palettes';
 import {
-  translatePerformanceGraph, translateBehaviorGraph,
+  translatePerformanceGraph, translateBehaviorGraph, translateNodeTracks,
   type RuntimeGraph, type RuntimeGraphNode,
 } from './graph-translate';
 
@@ -409,6 +411,7 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
+  opts?: { frameRate?: number; totalFrames?: number },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
   // 精灵引用解析表：角色自带表 + 工程级全局表（全局优先），与主画布同口径
@@ -628,6 +631,56 @@ export function convertCharacterToRuntimePackage(
       afterimage: afterSlot ? { part: afterSlot, count: 3, interval: 0.035 } : undefined,
       graph: { context: 'performance', nodes: graphNodes },
     });
+  }
+
+  // ---- 轨道：全角色关键帧轨道采样烘焙成增量曲线，合成一条「轨道」表演 ----
+  {
+    const trackNodes = Object.values(character.nodes).filter((n) =>
+      n.tracks && Object.values(n.tracks).some((t) => (t?.keyframes?.length ?? 0) > 0));
+    if (trackNodes.length > 0) {
+      // 时长：工程总帧数优先（时间线长度，末帧后保持）；缺省取最晚关键帧
+      let totalFrames = Math.max(1, Math.round(opts?.totalFrames ?? 0));
+      if (!opts?.totalFrames) {
+        totalFrames = 1;
+        for (const n of trackNodes) {
+          for (const t of Object.values(n.tracks)) {
+            for (const kf of t?.keyframes ?? []) if (kf.frame > totalFrames) totalFrames = kf.frame;
+          }
+        }
+      }
+      const frameRate = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
+      const partKeys = new Set(parts.map((p) => p.key));
+      const mask: string[] = [];
+      const graphNodes: RuntimeGraphNode[] = [];
+      trackNodes.forEach((node, i) => {
+        const slot = toSlot(node.id);
+        if (!slot || !partKeys.has(slot)) {
+          warnings.push(`轨道：节点 ${node.name} 不在运行时部件内，其轨道未进包`);
+          return;
+        }
+        const res = translateNodeTracks(node, slot, totalFrames, `t${i}_`);
+        for (const w of res.warnings) warnings.push(`轨道：节点 ${node.name}：${w}`);
+        if (res.nodes.length === 0) {
+          warnings.push(`轨道：节点 ${node.name} 的轨道采样后无姿态贡献（与静态姿态无差异或仅有不支持通道）`);
+          return;
+        }
+        mask.push(slot);
+        graphNodes.push(...res.nodes);
+      });
+      if (graphNodes.length > 0) {
+        performances.push({
+          id: 'tracks',
+          name: '轨道',
+          trigger: 'tracks',
+          triggerKey: 'KeyT',
+          duration: totalFrames / frameRate,
+          envelope: { in: 0, out: 0 },
+          mode: 'add',
+          mask,
+          graph: { context: 'performance', nodes: graphNodes },
+        });
+      }
+    }
   }
 
   return {
