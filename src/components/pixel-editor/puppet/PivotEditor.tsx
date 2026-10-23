@@ -30,6 +30,16 @@ export default function PivotEditor({ sprite, onClose }: Props) {
 
   const updateSprite = useProjectStore((s) => s.updateSprite);
 
+  // 显示尺寸：保持宽高比塞进适配盒（宽 ≤ 对话框内容区 288，高 ≤ 视口
+  // 55%）。早先 canvas 用 w-full 定宽、高按位图比例自适应——高瘦精灵
+  // （如 40×400）会被撑到数千 px 高顶出视口且弹窗不可滚、按钮点不到。
+  // 点选换算走 rect 比例，与显示尺寸无关，缩放显示不影响落点精度。
+  const viewportH = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const dispMaxH = Math.max(120, Math.min(420, Math.floor(viewportH * 0.55)));
+  const dispScale = Math.min(288 / sprite.width, dispMaxH / sprite.height);
+  const dispW = Math.max(1, Math.round(sprite.width * dispScale));
+  const dispH = Math.max(1, Math.round(sprite.height * dispScale));
+
   // 绘制 Sprite + 轴心十字线
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -95,12 +105,12 @@ export default function PivotEditor({ sprite, onClose }: Props) {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60">
-      <div className="bg-[#1a1a2e] border border-white/10 rounded-lg p-4 w-[320px]">
+      <div className="bg-[#1a1a2e] border border-white/10 rounded-lg p-4 w-[320px] max-h-[calc(100vh-2rem)] overflow-y-auto">
         <h3 className="text-sm font-semibold text-gray-200 mb-3">调整轴心：{sprite.name}</h3>
         <canvas
           ref={canvasRef}
-          className="w-full border border-white/10 rounded cursor-crosshair"
-          style={{ imageRendering: 'pixelated' }}
+          className="block mx-auto border border-white/10 rounded cursor-crosshair"
+          style={{ imageRendering: 'pixelated', width: dispW, height: dispH }}
           onMouseDown={handleDown}
           onMouseMove={handleMove}
           onMouseUp={handleUp}
