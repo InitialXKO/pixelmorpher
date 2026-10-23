@@ -1,6 +1,6 @@
 // 旋转缓存键探针：全图哈希必须对任意单像素变化敏感（旧 5 点采样指纹的反例），
 // 且 getRotationCacheKey 在给出 contentHash 时必须以它区分内容相同尺寸的图。
-import { hashPixelGrid, getRotationCacheKey } from '../src/lib/engine/render-cache';
+import { hashPixelGrid, getRotationCacheKey, createPixelGridHasher } from '../src/lib/engine/render-cache';
 
 let pass = 0;
 let fail = 0;
@@ -42,6 +42,25 @@ ok('H6 null/空串同哈希', hashPixelGrid(emptyStr) === hashPixelGrid(nullCell
 // H7 尺寸不同（同前缀内容）→ 变
 const taller = [...clone().map((r) => [...r]), Array(8).fill(null)];
 ok('H7 尺寸变化哈希变', hashPixelGrid(taller) !== hashPixelGrid(base));
+
+// ---- 增量哈希器等价性：pixelsToCanvas 折叠路径喂的序列必须与整表哈希同值 ----
+const feedAll = (grid: (string | null)[][]): string => {
+  const h = grid.length;
+  const w = h > 0 ? grid[0]!.length : 0;
+  const hasher = createPixelGridHasher(w, h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) hasher.cell(grid[y]?.[x]);
+  return hasher.digest();
+};
+
+// E1 常规网格等价
+ok('E1 增量==整表（常规）', feedAll(base) === hashPixelGrid(base));
+// E2 含空串格等价
+ok('E2 增量==整表（空串）', feedAll(emptyStr) === hashPixelGrid(emptyStr));
+// E3 参差行（短行缺格按透明）等价
+const ragged: (string | null)[][] = [['#ff0000'], ['#00ff00', '#0000ff', null], []];
+ok('E3 增量==整表（参差行）', feedAll(ragged) === hashPixelGrid(ragged));
+// E4 空网格等价
+ok('E4 增量==整表（空网格）', feedAll([]) === hashPixelGrid([]));
 
 // ---- 缓存键：假 canvas（getContext 返回 null → 回退路径不采样） ----
 const fakeCanvas = { width: 8, height: 8, getContext: () => null } as any;

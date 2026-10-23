@@ -34,7 +34,7 @@ import { releaseCanvas } from './engine/canvas-pool';
 import { sampleJointDiscColor, getPlugJointWidth } from './engine/render-helpers/puppet-joint-color';
 import {
   getDiscCacheKey, getCachedDisc, setCachedDisc,
-  clearRenderCaches, hashPixelGrid,
+  clearRenderCaches, createPixelGridHasher,
 } from './engine/render-cache';
 import {
   applyPixelModifiers,
@@ -1877,9 +1877,10 @@ function renderNodeSprite(
   // 像素内容全图哈希：定稿像素（列表像素修改器+蓝图像素链+蒙皮弯曲全过完）
   // 的同一性凭证，随旋转调用进缓存键——像素可变的精灵不得用 5 点采样指纹，
   // 否则改参数不碰采样点时旋转缓存返回旧图（改参数/播放都不生效的原凶）。
-  const pixelContentHash = hashPixelGrid(effectivePixels);
-
-  let spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height);
+  // 哈希折进 pixelsToCanvas 本来就要做的全图遍历，不单独再跑一遍。
+  const pixelHashOut = { value: '' };
+  let spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height, pixelHashOut);
+  const pixelContentHash = pixelHashOut.value;
   if (!spriteCanvas || spriteCanvas.width === 0 || spriteCanvas.height === 0) return;
   // 若尺度不一致，重采样到全局像素（一次，非每帧；记录的系数保证可逆）
   if (Math.abs(scaleFactor - 1) > 0.001) {
@@ -2114,7 +2115,15 @@ function renderDisc(
  * Convert a PixelGrid to an offscreen HTMLCanvasElement.
  * This is the raw pixel→canvas conversion without modifier processing.
  */
-export function pixelsToCanvas(pixels: PixelGrid, width: number, height: number): HTMLCanvasElement | null {
+export function pixelsToCanvas(
+  pixels: PixelGrid,
+  width: number,
+  height: number,
+  // 给出时顺路算全图内容哈希（createPixelGridHasher，与 hashPixelGrid 同值）：
+  // 本函数本来就要逐格遍历建 ImageData，哈希折进同一遍、零额外遍历。
+  // 渲染主路径靠它给旋转缓存供键，不再单独跑一遍 hashPixelGrid。
+  hashOut?: { value: string },
+): HTMLCanvasElement | null {
   if (!pixels || pixels.length === 0) return null;
   if (width <= 0 || height <= 0) return null;
 
@@ -2126,10 +2135,12 @@ export function pixelsToCanvas(pixels: PixelGrid, width: number, height: number)
   canvas.height = canvasH;
   const ctx = canvas.getContext('2d')!;
 
+  const hasher = hashOut ? createPixelGridHasher(canvasW, canvasH) : null;
   const imageData = ctx.createImageData(canvasW, canvasH);
   for (let y = 0; y < canvasH; y++) {
     for (let x = 0; x < canvasW; x++) {
       const color = pixels[y]?.[x];
+      if (hasher) hasher.cell(color);
       if (color) {
         const idx = (y * canvasW + x) * 4;
         const rgb = hexToRgb(color);
@@ -2143,6 +2154,7 @@ export function pixelsToCanvas(pixels: PixelGrid, width: number, height: number)
     }
   }
 
+  if (hasher && hashOut) hashOut.value = hasher.digest();
   ctx.putImageData(imageData, 0, 0);
   return canvas;
 }

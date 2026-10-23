@@ -102,30 +102,49 @@ export interface RotationCacheEntry {
  * 只有别的操作顺带整表清缓存才显形。凡是像素内容可变的精灵（经像素
  * 修改器/蓝图像素链/蒙皮弯曲加工）必须用全图哈希做键，不得用采样指纹。
  * null 与 '' 同为透明，哈希同等对待（视觉同一）。
+ *
+ * 增量式（createPixelGridHasher）是唯一实现：渲染路径由 pixelsToCanvas
+ * 在它本来就要做的全图遍历里逐格喂入，哈希零额外遍历；hashPixelGrid
+ * 是同一哈希器的整表便捷封装（探针与离线校验用）。两者结果必须一致，
+ * 由 verify-rotation-cache 的等价用例锁死。
  */
-export function hashPixelGrid(grid: PixelGrid): string {
-  const h = grid?.length ?? 0;
-  const w = h > 0 ? (grid[0]?.length ?? 0) : 0;
+export function createPixelGridHasher(width: number, height: number): {
+  cell: (cell: string | null | undefined) => void;
+  digest: () => string;
+} {
   let hash = 0x811c9dc5;
   const mix = (n: number) => {
     hash ^= n;
     hash = Math.imul(hash, 0x01000193);
   };
-  mix(w);
-  mix(h);
-  for (let y = 0; y < h; y++) {
-    const row = grid[y];
-    for (let x = 0; x < w; x++) {
-      const cell = row?.[x];
+  mix(width);
+  mix(height);
+  return {
+    cell(cell: string | null | undefined): void {
       if (!cell) {
         mix(0);
-        continue;
+        return;
       }
       for (let i = 0; i < cell.length; i++) mix(cell.charCodeAt(i));
       mix(0x2f);
+    },
+    digest(): string {
+      return (hash >>> 0).toString(36);
+    },
+  };
+}
+
+export function hashPixelGrid(grid: PixelGrid): string {
+  const h = grid?.length ?? 0;
+  const w = h > 0 ? (grid[0]?.length ?? 0) : 0;
+  const hasher = createPixelGridHasher(w, h);
+  for (let y = 0; y < h; y++) {
+    const row = grid[y];
+    for (let x = 0; x < w; x++) {
+      hasher.cell(row?.[x]);
     }
   }
-  return (hash >>> 0).toString(36);
+  return hasher.digest();
 }
 
 const rotationCache = new LRUCache<RotationCacheEntry>(512);
