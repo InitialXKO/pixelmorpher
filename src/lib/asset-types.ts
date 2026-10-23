@@ -1,73 +1,10 @@
 // ============================================================
-// PixelMorpher - Three-Layer Asset Management Types
+// PixelMorpher - Asset Management Types
 //
-// Layer 1: Asset Library (资产库) — global, persistent, cross-project
 // Layer 2: Project Assets (项目资产) — per-project, persisted with project
 // Layer 3: Workflow Assets (当前工作流资产) — ephemeral, session-scoped
+// （Layer 1 跨项目资产库已退役，相关类型一并删除。）
 // ============================================================
-
-import type { PixelGrid, PixelAnimModifier, ModifierInstance, PartAnimationModifier } from './types';
-
-// ============================================================
-// Layer 1: Asset Library
-// ============================================================
-
-export type LibraryAssetType = 'sprite' | 'tileset' | 'skeleton_template' | 'modifier_preset';
-
-/** A reusable asset in the global library */
-export interface LibraryAsset {
-  id: string;
-  name: string;
-  type: LibraryAssetType;
-  /** User-defined tags for search/filter */
-  tags: string[];
-  /** Base64-encoded thumbnail for quick preview */
-  thumbnail: string;
-  /** ISO timestamp */
-  createdAt: number;
-  /** ISO timestamp */
-  updatedAt: number;
-  /** Type-specific payload */
-  data: SpriteAssetData | TilesetAssetData | SkeletonTemplateData | ModifierPresetData;
-}
-
-export interface SpriteAssetData {
-  pixels: PixelGrid;
-  width: number;
-  height: number;
-  /** Optional pivot point */
-  pivotX?: number;
-  pivotY?: number;
-}
-
-export interface TilesetAssetData {
-  tileWidth: number;
-  tileHeight: number;
-  tiles: TilesetTileData[];
-}
-
-export interface TilesetTileData {
-  pixels: PixelGrid;
-  animModifiers: PixelAnimModifier[];
-  /** Property tags for game logic (e.g. 'solid', 'water') */
-  tags: string[];
-}
-
-export interface SkeletonTemplateData {
-  /** Serialized skeleton structure (bones, poses, constraints) */
-  json: string;
-  /** Number of bones for quick preview */
-  boneCount: number;
-}
-
-export interface ModifierPresetData {
-  /** Keyframe-level modifiers */
-  modifiers: ModifierInstance[];
-  /** Part-level animation modifiers */
-  animationModifiers?: PartAnimationModifier[];
-  /** Description of what this preset does */
-  description: string;
-}
 
 // ============================================================
 // Layer 2: Project Assets
@@ -87,14 +24,6 @@ export interface ProjectMeta {
   frameCount: number;
   frameRate: number;
   spriteCount: number;
-}
-
-/** Reference from a project asset back to its library source */
-export interface AssetSourceRef {
-  /** ID of the source library asset, if this was derived from one */
-  libraryAssetId?: string;
-  /** Whether the project asset has been modified from the library source */
-  isModified: boolean;
 }
 
 // ============================================================
@@ -120,28 +49,4 @@ export interface WorkflowSummary {
   animPartCount?: number;
   animKeyframeCount?: number;
   animSkeletonCount?: number;
-}
-
-// ============================================================
-// Asset Search & Filter
-// ============================================================
-
-export interface AssetFilter {
-  type?: LibraryAssetType;
-  tags?: string[];
-  searchText?: string;
-}
-
-// ============================================================
-// UI State for Asset Panels
-// ============================================================
-
-export type AssetViewMode = 'library' | 'project_assets' | 'workflow';
-
-export interface AssetPanelState {
-  viewMode: AssetViewMode;
-  filter: AssetFilter;
-  selectedAssetId: string | null;
-  /** Whether the project home screen is shown (replaces editor) */
-  showProjectHome: boolean;
 }

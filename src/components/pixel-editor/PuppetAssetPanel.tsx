@@ -37,6 +37,16 @@ import RefAssemblyWizard from './puppet/RefAssemblyWizard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 // ============================================================
 // PuppetAssetPanel — Left panel for puppet mode
@@ -104,6 +114,22 @@ export default function PuppetAssetPanel() {
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [threeBakeOpen, setThreeBakeOpen] = useState(false);
+  // 新建空白精灵（从零绘制的入口；此前只有死面板 AssetLibraryPanel 里有，已退役）
+  const [newSpriteOpen, setNewSpriteOpen] = useState(false);
+  const [newSpriteName, setNewSpriteName] = useState('');
+  const [newSpriteW, setNewSpriteW] = useState(32);
+  const [newSpriteH, setNewSpriteH] = useState(32);
+  const handleCreateSprite = () => {
+    const w = Math.max(1, Math.min(512, newSpriteW || 32));
+    const h = Math.max(1, Math.min(512, newSpriteH || 32));
+    const name = newSpriteName.trim() || `精灵 ${Object.keys(sprites).length + 1}`;
+    const sprite = useProjectStore.getState().addSprite(name, w, h);
+    setNewSpriteOpen(false);
+    setNewSpriteName('');
+    setNewSpriteW(32);
+    setNewSpriteH(32);
+    if (sprite.id) useEditorStore.getState().enterSpriteEditMode(sprite.id);
+  };
   const refWizardOpen = useEditorStore((s) => s.refWizardOpen);
   const setRefWizardOpen = useEditorStore((s) => s.setRefWizardOpen);
   const [expandedChars, setExpandedChars] = useState<Set<string>>(new Set());
@@ -312,6 +338,59 @@ export default function PuppetAssetPanel() {
       </div>
 
       <ThreeBakeDialog open={threeBakeOpen} onClose={() => setThreeBakeOpen(false)} />
+
+      {/* 新建空白精灵：建完直接进像素编辑从零画 */}
+      <Dialog open={newSpriteOpen} onOpenChange={setNewSpriteOpen}>
+        <DialogContent className="sm:max-w-[320px]">
+          <DialogHeader>
+            <DialogTitle>新建精灵</DialogTitle>
+            <DialogDescription>创建一张空白像素精灵，创建后直接进入像素编辑。</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="new-sprite-name" className="text-xs">名称</Label>
+              <Input
+                id="new-sprite-name"
+                value={newSpriteName}
+                onChange={(e) => setNewSpriteName(e.target.value)}
+                placeholder={`精灵 ${Object.keys(sprites).length + 1}`}
+                className="h-8 text-sm"
+                onKeyDown={(e) => { if (e.key === 'Enter') handleCreateSprite(); }}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="new-sprite-w" className="text-xs">宽度</Label>
+                <Input
+                  id="new-sprite-w"
+                  type="number"
+                  min={1}
+                  max={512}
+                  value={newSpriteW}
+                  onChange={(e) => setNewSpriteW(Number(e.target.value))}
+                  className="h-8 text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="new-sprite-h" className="text-xs">高度</Label>
+                <Input
+                  id="new-sprite-h"
+                  type="number"
+                  min={1}
+                  max={512}
+                  value={newSpriteH}
+                  onChange={(e) => setNewSpriteH(Number(e.target.value))}
+                  className="h-8 text-sm"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setNewSpriteOpen(false)}>取消</Button>
+            <Button size="sm" onClick={handleCreateSprite}>创建并编辑</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <PuppetCreationWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
       {refWizardOpen ? (
@@ -744,18 +823,28 @@ export default function PuppetAssetPanel() {
 
           {/* ---- Sprite Parts Section ---- */}
           <div>
-            <button
-              className="flex items-center gap-1 w-full px-1 py-1 text-[10px] text-gray-500 uppercase tracking-wider hover:text-gray-300 transition-colors"
-              onClick={() => toggleSection('sprites')}
-            >
-              {sectionExpanded.sprites ? (
-                <ChevronDown className="size-2.5" />
-              ) : (
-                <ChevronRight className="size-2.5" />
-              )}
-              <Image className="size-2.5" />
-              精灵 ({Object.keys(sprites).length})
-            </button>
+            <div className="flex items-center">
+              <button
+                className="flex items-center gap-1 flex-1 px-1 py-1 text-[10px] text-gray-500 uppercase tracking-wider hover:text-gray-300 transition-colors"
+                onClick={() => toggleSection('sprites')}
+              >
+                {sectionExpanded.sprites ? (
+                  <ChevronDown className="size-2.5" />
+                ) : (
+                  <ChevronRight className="size-2.5" />
+                )}
+                <Image className="size-2.5" />
+                精灵 ({Object.keys(sprites).length})
+              </button>
+              <button
+                title="新建精灵"
+                aria-label="新建精灵"
+                className="p-1 mr-1 text-gray-500 hover:text-gray-200 hover:bg-white/5 rounded transition-colors"
+                onClick={() => setNewSpriteOpen(true)}
+              >
+                <Plus className="size-3" />
+              </button>
+            </div>
 
             {sectionExpanded.sprites && (
               <div className="space-y-0.5 mt-0.5 max-h-32 overflow-y-auto">

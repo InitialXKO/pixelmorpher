@@ -13,7 +13,6 @@ import PluginPanel from '@/components/pixel-editor/PluginPanel';
 import CanvasModifierPanel from '@/components/pixel-editor/CanvasModifierPanel';
 import AnimationClipPanel from '@/components/pixel-editor/AnimationClipPanel';
 import GlobalModifierPanel from '@/components/pixel-editor/GlobalModifierPanel';
-import AssetLibraryPanel from '@/components/pixel-editor/AssetLibraryPanel';
 import ProjectHomeScreen from '@/components/pixel-editor/ProjectHomeScreen';
 import Timeline from '@/components/pixel-editor/Timeline';
 import Toolbar from '@/components/pixel-editor/Toolbar';
@@ -53,7 +52,7 @@ export default function Home() {
   const { layouts } = useWorkspaceStore();
   const [exportOpen, setExportOpen] = useState(false);
   const initializedRef = useRef(false);
-  const { showProjectHome, setShowProjectHome, loadProjectList, loadLibrary } = useAssetStore();
+  const { showProjectHome, setShowProjectHome, loadProjectList } = useAssetStore();
 
   // 单一编辑器布局（workspace mode 已退役，puppet 是唯一工作流）
   const currentLayout = layouts['puppet'];
@@ -64,11 +63,10 @@ export default function Home() {
   // ---- Check for autosave on startup ----
   const [autosaveDialogOpen, setAutosaveDialogOpen] = useState(false);
 
-  // Load asset library and project list on mount
+  // Load project list on mount
   useEffect(() => {
-    loadLibrary();
     loadProjectList();
-  }, [loadLibrary, loadProjectList]);
+  }, [loadProjectList]);
 
   // Check for autosave after mount (avoids SSR issues)
   // Uses OPFS; migrates legacy localStorage autosave on first run.
