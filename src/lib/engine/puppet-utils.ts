@@ -62,7 +62,9 @@ export function renderPixelPerfectRotation(
   pivotY: number = 0,
   // 复合局部仿射（旋转之外）：scaleX ≠ 1 或带 skew 时走复合路径——
   // 在 4× 空间先烘焙 S·K、旋转殿后（结合律保证与原生一次画完逐点等价）。
-  extra?: { scaleX?: number; skews?: Array<{ skewX: number; skewY: number }> },
+  // contentHash：源像素网格的全图哈希（hashPixelGrid）——像素内容可变时
+  // 必须给，否则缓存键退回 5 点采样指纹、改像素不改采样点就会吃旧图。
+  extra?: { scaleX?: number; skews?: Array<{ skewX: number; skewY: number }>; contentHash?: string },
 ): PixelPerfectRotationResult {
   const scaleX = extra?.scaleX ?? 1;
   const skews = extra?.skews ?? [];
@@ -87,7 +89,7 @@ export function renderPixelPerfectRotation(
   // H13: 缓存里存的是独立 canvas（非池化），命中时再拷一份池化 canvas 返回，
   // 这样调用方沿用既有的 release 语义永远安全，不会污染缓存。
   const skewsKey = skews.map(s => `${Math.round(s.skewX * 100)},${Math.round(s.skewY * 100)}`).join(';');
-  const cacheKey = getRotationCacheKey(spriteCanvas, angle, stretchY, pivotX, pivotY, scaleX, skewsKey);
+  const cacheKey = getRotationCacheKey(spriteCanvas, angle, stretchY, pivotX, pivotY, scaleX, skewsKey, extra?.contentHash);
   const cached = getCachedRotation(cacheKey);
   if (cached) {
     const copy = acquireCanvas(cached.canvas.width, cached.canvas.height);

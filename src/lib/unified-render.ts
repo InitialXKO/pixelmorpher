@@ -34,7 +34,7 @@ import { releaseCanvas } from './engine/canvas-pool';
 import { sampleJointDiscColor, getPlugJointWidth } from './engine/render-helpers/puppet-joint-color';
 import {
   getDiscCacheKey, getCachedDisc, setCachedDisc,
-  clearRenderCaches,
+  clearRenderCaches, hashPixelGrid,
 } from './engine/render-cache';
 import {
   applyPixelModifiers,
@@ -1874,6 +1874,11 @@ function renderNodeSprite(
   const globalCH = sprite.globalCameraHalf ?? 1.0;
   const scaleFactor = 1.0; // partCH / globalCH;
 
+  // 像素内容全图哈希：定稿像素（列表像素修改器+蓝图像素链+蒙皮弯曲全过完）
+  // 的同一性凭证，随旋转调用进缓存键——像素可变的精灵不得用 5 点采样指纹，
+  // 否则改参数不碰采样点时旋转缓存返回旧图（改参数/播放都不生效的原凶）。
+  const pixelContentHash = hashPixelGrid(effectivePixels);
+
   let spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height);
   if (!spriteCanvas || spriteCanvas.width === 0 || spriteCanvas.height === 0) return;
   // 若尺度不一致，重采样到全局像素（一次，非每帧；记录的系数保证可逆）
@@ -2001,7 +2006,8 @@ function renderNodeSprite(
       effStretch,
       pivotX,
       pivotY,
-      { scaleX, skews },
+      // 镜像在旋转前已翻进 workingCanvas：内容哈希补镜像位，防镜像/原图同键串图
+      { scaleX, skews, contentHash: mirror ? `${pixelContentHash}M` : pixelContentHash },
     );
 
     // Draw at world position with half-pixel alignment

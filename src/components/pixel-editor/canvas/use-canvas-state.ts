@@ -116,6 +116,7 @@ export function useCanvasState() {
   const setCanvasSize = useProjectStore((s) => s.setCanvasSize);
   const animationVariables = useProjectStore((s) => s.animationVariables);
   const globalModifiers = useProjectStore((s) => s.globalModifiers);
+  const globalBlueprint = useProjectStore((s) => s.globalBlueprint);
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
   // All parts are non-puppet now (puppet system deleted)
   const nonPuppetParts = parts;
@@ -650,7 +651,7 @@ export function useCanvasState() {
     onionDataVersionRef.current++;
     invalidateUnifiedPipelineCache();
     dirtyRef.current = true;
-  }, [parts, keyframes, backgroundColor, onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, spriteEditModifiers, unifiedCharacters]);
+  }, [parts, keyframes, backgroundColor, onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, spriteEditModifiers, unifiedCharacters, globalModifiers, globalBlueprint]);
 
   // ---- Container size / canvas dimension effects ----
   useEffect(() => {
