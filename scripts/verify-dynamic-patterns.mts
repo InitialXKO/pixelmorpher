@@ -17,7 +17,10 @@ import {
   defaultDynamicParams,
   dynamicDeformAt,
   findDynamicTemplate,
+  glowFollowTargetOf,
+  glowRankByInstanceId,
   resolveDynamicPatterns,
+  resolveGlowGroups,
   type DynamicPatternInstance,
   type DynamicPatternParams,
 } from '../src/lib/dynamic-patterns';
@@ -147,6 +150,30 @@ function instructionFor(ch: Character, frame: number) {
   const off = { ...pieceInst, enabled: false };
   const ins3 = instructionFor(buildChar([nodeInst], [off]), 3);
   check('D5 服装件关闭压制', ins3?.dynamicPatterns === undefined && near(ins3?.stretch ?? 0, 1, 1e-9));
+}
+
+// ---- D6：发光分组（前 3 独立、第 4 起按所选组并入） ----
+{
+  const gp = (over: Partial<DynamicPatternParams>): DynamicPatternParams =>
+    ({ ...defaultDynamicParams(), glowEnabled: true, ...over });
+  const list = [
+    gp({ glowColor: '#111111' }), gp({ glowColor: '#222222' }), gp({ glowColor: '#333333' }),
+    gp({ glowColor: '#444444', glowFollowGroup: 0 }), gp({ glowColor: '#555555' }),
+  ];
+  const groups = resolveGlowGroups(list);
+  check('D6 前 3 个各成一组', groups.length === 3
+    && groups[0]!.representative.glowColor === '#111111'
+    && groups[2]!.representative.glowColor === '#333333');
+  check('D6 第 4 个按所选并入第 1 组（只贡献选区）', groups[0]!.contributors.length === 2
+    && groups[0]!.contributors[1] === list[3]);
+  check('D6 第 5 个未选时并入第 3 组', groups[2]!.contributors.length === 2
+    && groups[2]!.contributors[1] === list[4]);
+  check('D6 非法跟随值回落第 3 组', glowFollowTargetOf(gp({ glowFollowGroup: 9 })) === 2);
+  const rmap = glowRankByInstanceId(
+    [inst('a', { glowEnabled: true }), inst('b', {}), inst('c', { glowEnabled: true })],
+    undefined,
+  );
+  check('D6 组序只数启用发光的实例', rmap.get('t_a_true') === 0 && rmap.get('t_c_true') === 1 && !rmap.has('t_b_true'));
 }
 
 console.log(`verify-dynamic-patterns: ${pass} passed, ${fail} failed`);

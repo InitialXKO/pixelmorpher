@@ -784,6 +784,58 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
   const html = buildRuntimeHtml(pkg);
   check('Q9 模板含发光着色接线（uGlow/applyGlow/iGlowA）', html.includes('uGlow') && html.includes('applyGlow') && html.includes('iGlowA'));
+  check('Q12 模板含第三组发光参数（iGlowC）', html.includes('iGlowC'));
+
+  // 多实例进包：4 个发光实例 → 前 2 独立通道、第 3 个起合并进 B 通道
+  const grid4 = [['#ff0000', '#00ff00'], ['#0000ff', '#ffff00']] as never;
+  const spr4 = {
+    id: 'gspr4', width: 2, height: 2, plug: { x: 0 as never, y: 0 as never }, data: grid4,
+    directions: { 2: { spriteId: 'gspr4', mirror: false } },
+  } as never;
+  const mkGlow = (pick: string, slot: string) => createDynamicInstance('辉光呼吸', {
+    ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: pick, glowHalo: 0, emitEnabled: false,
+  }, slot);
+  const ch4 = {
+    id: 'chQ4', name: '多发光',
+    nodes: {
+      gem: {
+        ...makeNode('gem', '宝石', 'gem'),
+        dynamicPatterns: [mkGlow('#ff0000', '辉光一'), mkGlow('#00ff00', '辉光二'), mkGlow('#0000ff', '辉光三'), mkGlow('#ffff00', '辉光四')],
+      },
+    },
+    rootNodeIds: ['gem'],
+    sprites: { gspr4: spr4 },
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { gem: { ...createDefaultCostumePiece('gem'), sprites: { 2: { spriteId: 'gspr4', mirror: false } } } } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  } as unknown as Character;
+  const pkg4 = convertCharacterToRuntimePackage(ch4);
+  const glow4 = pkg4.parts.find((p) => p.key === 'gem')?.glow;
+  const bytes4 = glow4 ? Buffer.from(glow4.data, 'base64') : null;
+  check('Q13 四实例进包：第 1/2 独立、第 3 起合并进第三通道', !!bytes4
+    && bytes4[0 * 3 + 0] === 255 && bytes4[1 * 3 + 1] === 255
+    && bytes4[2 * 3 + 2] === 255 && bytes4[3 * 3 + 2] === 255
+    && bytes4[0 * 3 + 1] === 0 && bytes4[0 * 3 + 2] === 0);
+  check('Q14 超 3 个时点名按所选组并入（不是丢弃）', pkg4.warnings.some((x) => x.includes('按各自所选的发光组并入')));
+  // 第 4 个改选第 1 组 → 它的选区（黄）并入 R 通道，不再进 B 通道
+  const mkGlowF = (pick: string, slot: string, follow?: number) => createDynamicInstance('辉光呼吸', {
+    ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: pick, glowHalo: 0, emitEnabled: false,
+    ...(follow !== undefined ? { glowFollowGroup: follow } : {}),
+  }, slot);
+  const ch5 = {
+    ...ch4, id: 'chQ5',
+    nodes: {
+      gem: {
+        ...makeNode('gem', '宝石', 'gem'),
+        dynamicPatterns: [mkGlowF('#ff0000', '辉光一'), mkGlowF('#00ff00', '辉光二'), mkGlowF('#0000ff', '辉光三'), mkGlowF('#ffff00', '辉光四', 0)],
+      },
+    },
+  } as unknown as Character;
+  const pkg5 = convertCharacterToRuntimePackage(ch5);
+  const glow5 = pkg5.parts.find((p) => p.key === 'gem')?.glow;
+  const bytes5 = glow5 ? Buffer.from(glow5.data, 'base64') : null;
+  check('Q15 第 4 个选第 1 组：黄选区并入 R 通道、B 通道只剩蓝', !!bytes5
+    && bytes5[3 * 3 + 0] === 255 && bytes5[3 * 3 + 2] === 0 && bytes5[2 * 3 + 2] === 255);
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

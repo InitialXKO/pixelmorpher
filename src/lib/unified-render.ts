@@ -74,7 +74,7 @@ import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from 
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
-import { resolveDynamicPatterns, dynamicDeformAt, glowField, glowPulseAt, type DynamicPatternParams } from './dynamic-patterns';
+import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, glowField, glowPulseAt, type DynamicPatternParams } from './dynamic-patterns';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
@@ -1834,31 +1834,45 @@ function drawDynamicParticles(
 const glowOverlayCache = new Map<string, { canvas: HTMLCanvasElement; pad: number } | null>();
 
 /**
- * 动态模式发光段：为一个实例构建发光叠加层（未镜像空间，pad = 柔光圈外扩）。
- * 选区内：原色提亮并染向辉光色；柔光圈：辉光色淡出。脉冲决定整体明暗。
- * 返回 null = 本帧无可见发光（未启用 / 脉冲近 0 / 选区为空）。
+ * 动态模式发光段：为一个发光组构建发光叠加层（未镜像空间，pad = 柔光圈外扩）。
+ * 颜色/强度/呼吸脉冲以组参数（visualParams）为准；权重场 = 本组全部选区
+ * 来源（contributors）的场逐像素取大合并。选区内：原色提亮并染向辉光色；
+ * 柔光圈：辉光色淡出。返回 null = 本帧无可见发光（脉冲近 0 / 选区全空）。
  */
 function buildGlowOverlay(
   pixels: PixelGrid,
-  params: DynamicPatternParams,
+  visualParams: DynamicPatternParams,
+  contributors: DynamicPatternParams[],
   tSec: number,
   contentHash: string,
   mirror: boolean,
 ): { canvas: HTMLCanvasElement; pad: number; key: string } | null {
-  if (!params.glowEnabled) return null;
-  const pulse = glowPulseAt(params, tSec);
-  if (pulse <= 0.01 || params.glowStrength <= 0) return null;
+  if (!visualParams.glowEnabled) return null;
+  const pulse = glowPulseAt(visualParams, tSec);
+  if (pulse <= 0.01 || visualParams.glowStrength <= 0) return null;
+  const params = visualParams;
   const sig = [
-    params.glowColor, params.glowStrength, params.glowHalo, params.glowMaskSource,
-    params.glowPick, params.glowTolerance, params.glowMask?.w ?? 0, params.glowMask?.h ?? 0, params.glowMask?.bits ?? '',
+    params.glowColor, params.glowStrength,
+    ...contributors.flatMap((c) => [
+      c.glowHalo, c.glowMaskSource, c.glowPick, c.glowTolerance,
+      c.glowMask?.w ?? 0, c.glowMask?.h ?? 0, c.glowMask?.bits ?? '',
+    ]),
   ].join('|');
   const key = `${contentHash}|${sig}|${Math.round(pulse * 24)}|${mirror ? 'M' : ''}`;
   const hit = glowOverlayCache.get(key);
   if (hit !== undefined) return hit ? { ...hit, key } : null;
   let result: { canvas: HTMLCanvasElement; pad: number } | null = null;
-  const gf = glowField(params, pixels);
+  let merged: { w: number; h: number; field: Float32Array } | null = null;
+  for (const c of contributors) {
+    const f = glowField(c, pixels);
+    if (!f) continue;
+    if (!merged) merged = { w: f.w, h: f.h, field: new Float32Array(f.field) };
+    else for (let i = 0; i < merged.field.length; i++) if (f.field[i] > merged.field[i]) merged.field[i] = f.field[i];
+  }
+  const gf = merged;
   if (gf) {
-    const pad = Math.max(0, Math.min(8, Math.round(params.glowHalo || 0)));
+    const pad = contributors.reduce(
+      (m, c) => Math.max(m, Math.max(0, Math.min(8, Math.round(c.glowHalo || 0)))), 0);
     const W = gf.w + pad * 2;
     const H = gf.h + pad * 2;
     const canvas = document.createElement('canvas');
@@ -2215,11 +2229,12 @@ function renderNodeSprite(
   // (translate + rotate + scale around pivot), then render effects + sprite
   // ========================================================================
 
-  // 动态模式发光段：叠加层与精灵同像素空间（scaleFactor ≡ 1 前提，与绘制口径一致）
+  // 动态模式发光段：叠加层与精灵同像素空间（scaleFactor ≡ 1 前提，与绘制口径一致）。
+  // 按发光组建层：前 3 个各一组，第 4 个起按所选组并入（resolveGlowGroups）。
   const glowOverlays = previewQuality === 'low' || !instruction.dynamicPatterns?.length
     ? []
-    : instruction.dynamicPatterns
-      .map((r) => buildGlowOverlay(effectivePixels, r.instance.params, frame / frameRate, pixelContentHash, mirror))
+    : resolveGlowGroups(instruction.dynamicPatterns.map((r) => r.instance.params))
+      .map((g) => buildGlowOverlay(effectivePixels, g.representative, g.contributors, frame / frameRate, pixelContentHash, mirror))
       .filter((x): x is { canvas: HTMLCanvasElement; pad: number; key: string } => !!x);
   const glowPivotX = (g: { canvas: HTMLCanvasElement; pad: number }) =>
     (mirror ? g.canvas.width - (pivotXRaw + g.pad) : pivotXRaw + g.pad);

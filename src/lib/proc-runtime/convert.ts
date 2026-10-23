@@ -13,7 +13,7 @@ import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
-import { glowField, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
+import { glowField, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
 import { createDefaultParametricAppearance } from './surfaces';
 import { PALETTES } from './palettes';
 import {
@@ -52,6 +52,9 @@ export interface RuntimeDynamicInstance {
 
 /**
  * 运行时发光场（导出时按代表图预计算：选区 1 + 柔光圈衰减，权重 0..255）。
+ * data 为每像素 3 字节打包：前 3 个发光实例的场依次存 R/G/B 通道，第 4 个起
+ * 按各自所选的发光组（glowFollowGroup）并入对应通道（与模板 dynList 解析序
+ * 一致）；无对应实例的通道全 0。
  * space: 'tile' = 代表图是参数化烘焙图（与瓦片同尺寸同朝向关系）；
  * 'sprite' = 代表图是精灵原图（瓦片带 2+halo 边距，模板按底图同式映射）。
  */
@@ -189,9 +192,9 @@ function baseSpriteFor(
 }
 
 /**
- * 发光场进包：取解析后第一个启用的发光段实例，按该服装集的代表图算
- * 权重场（选区 + 柔光圈）。多个发光实例时只取第一个（主画布全支持），
- * 选区为空/无代表图逐条 warning 点名，不静默。
+ * 发光场进包：前 3 个发光实例各占一个通道（R/G/B）独立进包；第 4 个起
+ * 按各自所选的发光组并入对应通道（场逐像素取大，颜色与呼吸参数跟所选组，
+ * 与主画布 resolveGlowGroups 同口径）。某实例选区为空、无代表图，逐条点名。
  */
 function glowEntryFor(
   character: Character,
@@ -206,24 +209,33 @@ function glowEntryFor(
   if (glows.length === 0) return undefined;
   const setName = character.costumeSets.find((cs) => cs.id === costumeSetId)?.name ?? costumeSetId ?? '';
   const where = setName ? `（服装集「${setName}」）` : '';
-  if (glows.length > 1) {
-    warnings.push(`发光段：槽位 ${slotKey}${where} 有 ${glows.length} 个发光实例，运行时包只取第一个（主画布全部生效）`);
+  if (glows.length > 3) {
+    warnings.push(`发光段：槽位 ${slotKey}${where} 有 ${glows.length} 个发光实例，第 4 个起按各自所选的发光组并入运行时包（选区叠加取大、颜色与呼吸参数跟所选组；主画布同口径）`);
   }
   const rep = representativeGridForSlotEx(character, slotKey, externalSprites, costumeSetId);
   if (!rep) {
     warnings.push(`发光段：槽位 ${slotKey}${where} 没有代表图，选区未进运行时包`);
     return undefined;
   }
-  const gf = glowField(glows[0].params, rep.grid);
-  if (!gf) {
-    warnings.push(`发光段：槽位 ${slotKey}${where} 的选区为空（取色无同色像素或未标记），未进运行时包`);
-    return undefined;
-  }
-  const bytes = new Uint8Array(gf.field.length);
-  for (let i = 0; i < gf.field.length; i++) {
-    bytes[i] = Math.round(Math.max(0, Math.min(1, gf.field[i])) * 255);
-  }
-  return { w: gf.w, h: gf.h, space: rep.space, data: packBytesBase64(bytes) };
+  const w = rep.grid[0]?.length ?? 0;
+  const h = rep.grid.length;
+  const bytes = new Uint8Array(w * h * 3);
+  let anyField = false;
+  glows.forEach((inst, idx) => {
+    const ci = idx < 3 ? idx : glowFollowTargetOf(inst.params); // 第 4 个起并入所选组
+    const gf = glowField(inst.params, rep.grid);
+    if (!gf) {
+      warnings.push(`发光段：槽位 ${slotKey}${where} 第 ${idx + 1} 个发光实例选区为空（取色无同色像素或未标记），未进运行时包`);
+      return;
+    }
+    anyField = true;
+    for (let i = 0; i < gf.field.length; i++) {
+      const v = Math.round(Math.max(0, Math.min(1, gf.field[i])) * 255);
+      if (v > bytes[i * 3 + ci]) bytes[i * 3 + ci] = v;
+    }
+  });
+  if (!anyField) return undefined;
+  return { w, h, space: rep.space, data: packBytesBase64(bytes) };
 }
 
 /** 双挂载解析 → 运行时动态实例（节点为底、服装件同位替换/压制） */

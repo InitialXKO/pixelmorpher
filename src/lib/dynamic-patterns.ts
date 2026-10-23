@@ -50,6 +50,8 @@ export interface DynamicPatternParams {
   glowPick: string;         // 取色选区：目标颜色（#rrggbb）
   glowTolerance: number;    // 取色容差 0..1（RGB 距离归一化；0 = 精确同色）
   glowMask?: GlowMaskData;  // 手动标记选区：位打包掩码（行优先，1 = 选中）
+  glowFollowGroup: number;  // 第 4 个起的发光实例并入哪一组（0/1/2 = 第 1/2/3 组，
+                            // 颜色与呼吸参数跟该组；自己的选区照常生效）。前 3 个不用此字段。
 }
 
 /** 发光选区来源：color = 按像素颜色取色；marked = 手动标记的像素掩码 */
@@ -85,13 +87,17 @@ export function defaultDynamicParams(): DynamicPatternParams {
     color: '#ffb46b', alpha: 0.5, maxParticles: 90,
     glowEnabled: false, glowColor: '#7dd7ff', glowStrength: 1, glowHz: 0.8,
     glowPhase: 0, glowHalo: 2, glowMaskSource: 'color', glowPick: '#2ea8ff',
-    glowTolerance: 0, glowMask: undefined,
+    glowTolerance: 0, glowMask: undefined, glowFollowGroup: 2,
   };
 }
 
 /** 补齐缺省字段（旧工程存的实例没有发光段等新字段，读取处一律过这里） */
 export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternParams {
-  return { ...defaultDynamicParams(), ...p };
+  const out = { ...defaultDynamicParams(), ...p };
+  if (out.glowFollowGroup !== 0 && out.glowFollowGroup !== 1 && out.glowFollowGroup !== 2) {
+    out.glowFollowGroup = 2;
+  }
+  return out;
 }
 
 export function createDynamicInstance(
@@ -127,6 +133,48 @@ export function resolveDynamicPatterns(
     map.set(inst.slot, { instance: norm(inst), origin: 'costume' });
   }
   return [...map.values()];
+}
+
+/** 发光分组：解析序里前 3 个启用发光的实例各成一组（颜色/强度/频率/相位
+ * 以它为准）；第 4 个起不再独立成组，按各自的 glowFollowGroup 并入所选组，
+ * 只贡献自己的选区（取色/标记/圈宽）。主画布与运行时包共用此口径。 */
+export interface ResolvedGlowGroup {
+  /** 组参数来源（前 3 个实例之一）：颜色、强度、呼吸频率/相位以它为准 */
+  representative: DynamicPatternParams;
+  /** 本组全部选区来源（含 representative 自己），按解析序 */
+  contributors: DynamicPatternParams[];
+}
+
+/** 第 4 个起的实例并入哪一组（0/1/2，非法值回落第 3 组） */
+export function glowFollowTargetOf(params: DynamicPatternParams): 0 | 1 | 2 {
+  const v = Math.round(params.glowFollowGroup ?? 2);
+  return v === 0 || v === 1 ? (v as 0 | 1) : 2;
+}
+
+export function resolveGlowGroups(paramsList: DynamicPatternParams[]): ResolvedGlowGroup[] {
+  const glows = paramsList.filter((p) => p.glowEnabled);
+  const groups: ResolvedGlowGroup[] = glows.slice(0, 3).map((p) => ({
+    representative: p,
+    contributors: [p],
+  }));
+  for (const p of glows.slice(3)) {
+    const g = groups[glowFollowTargetOf(p)];
+    if (g) g.contributors.push(p);
+  }
+  return groups;
+}
+
+/** 双挂载解析后，各启用发光实例的组序（实例 id → 0 起序数；编辑器判「超过第 3 个」用） */
+export function glowRankByInstanceId(
+  nodeList?: DynamicPatternInstance[],
+  pieceList?: DynamicPatternInstance[],
+): Map<string, number> {
+  const map = new Map<string, number>();
+  let rank = 0;
+  for (const r of resolveDynamicPatterns(nodeList, pieceList)) {
+    if (r.instance.params.glowEnabled) map.set(r.instance.id, rank++);
+  }
+  return map;
 }
 
 /** 形变段在 t 秒的取值：脉冲 p∈0..1 驱动缩放，amount=p 供发射调制 */

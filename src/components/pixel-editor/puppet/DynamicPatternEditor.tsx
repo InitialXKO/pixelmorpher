@@ -50,21 +50,40 @@ export default function DynamicPatternEditor({
   onChange,
   hint,
   previewGrid,
+  glowRankById,
 }: {
   instances: DynamicPatternInstance[];
   onChange: (next: DynamicPatternInstance[]) => void;
   hint?: string;
   /** 当前槽位的代表图（发光段取色/手动标记用；无图时这两项不可用） */
   previewGrid?: PixelGrid | null;
+  /** 双挂载解析后的发光组序（实例 id → 0 起序数）：判「超过第 3 个」用；
+   *  挂载方按当前服装集解析传入，缺省按本列表顺序自算 */
+  glowRankById?: ReadonlyMap<string, number>;
 }) {
   const [userTemplates, setUserTemplates] = useState<DynamicPatternTemplate[]>(() => loadUserDynamicPatterns());
   const allTemplates = [...DYNAMIC_PATTERN_TEMPLATES, ...userTemplates];
+  const localGlowRankById = new Map<string, number>();
+  {
+    let r = 0;
+    for (const x of instances) {
+      if (x.enabled && normalizeDynamicParams(x.params).glowEnabled) localGlowRankById.set(x.id, r++);
+    }
+  }
 
   const patchInstance = (id: string, patch: Partial<DynamicPatternInstance>) =>
     onChange(instances.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   const patchParam = (id: string, key: keyof DynamicPatternParams, value: number | boolean | string | GlowMaskData) =>
     onChange(instances.map((x) => (x.id === id ? { ...x, params: { ...normalizeDynamicParams(x.params), [key]: value } } : x)));
   const np = (inst: DynamicPatternInstance): DynamicPatternParams => normalizeDynamicParams(inst.params);
+  const glowRankOf = (inst: DynamicPatternInstance): number | undefined =>
+    glowRankById?.get(inst.id) ?? localGlowRankById.get(inst.id);
+  /** 发光组只有前 3 个独立：第 4 个起改选「并入哪一组」，不再给独立参数 */
+  const glowOverflowOf = (inst: DynamicPatternInstance): boolean => {
+    if (!np(inst).glowEnabled) return false;
+    const rank = glowRankOf(inst);
+    return rank !== undefined && rank >= 3;
+  };
   const applyTemplate = (id: string, name: string) => {
     const t = allTemplates.find((x) => x.name === name);
     if (!t) return;
@@ -153,7 +172,7 @@ export default function DynamicPatternEditor({
               颜色
               <input type="color" value={inst.params.color} onChange={(e) => patchParam(inst.id, 'color', e.target.value)} className="h-5 w-8 bg-transparent" />
             </label>
-            {np(inst).glowEnabled && (
+            {np(inst).glowEnabled && !glowOverflowOf(inst) && (
               <label className="flex items-center gap-1">
                 辉光
                 <input type="color" value={np(inst).glowColor} onChange={(e) => patchParam(inst.id, 'glowColor', e.target.value)} className="h-5 w-8 bg-transparent" />
@@ -163,7 +182,26 @@ export default function DynamicPatternEditor({
           {(['形变', '发射', '粒子', '发光'] as const).map((section) => (
             <div key={section}>
               <div className="text-[9px] text-gray-600 mt-0.5">{section}</div>
-              {DYNAMIC_PARAM_DEFS.filter((d) => d.section === section).map((d) => {
+              {section === '发光' && glowOverflowOf(inst) && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[9px] text-gray-500 w-24 shrink-0">并入发光组</span>
+                  <select
+                    value={np(inst).glowFollowGroup}
+                    onChange={(e) => patchParam(inst.id, 'glowFollowGroup', Number(e.target.value))}
+                    className={`${selCls} flex-1`}
+                    title="发光组只有前 3 个独立：第 4 个起只贡献选区，颜色与呼吸参数跟所选组"
+                  >
+                    <option value={0}>第 1 组</option>
+                    <option value={1}>第 2 组</option>
+                    <option value={2}>第 3 组</option>
+                  </select>
+                  <span className="text-[9px] text-gray-500">第 {(glowRankOf(inst) ?? 3) + 1} 个</span>
+                </div>
+              )}
+              {DYNAMIC_PARAM_DEFS.filter((d) => d.section === section)
+                .filter((d) => !(section === '发光' && glowOverflowOf(inst)
+                  && (d.key === 'glowStrength' || d.key === 'glowHz' || d.key === 'glowPhase')))
+                .map((d) => {
                 const v = np(inst)[d.key] as number;
                 return (
                   <div key={d.key} className="flex items-center gap-1.5">

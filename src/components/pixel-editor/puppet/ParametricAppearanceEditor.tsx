@@ -28,7 +28,7 @@ import {
 import { resolvePieceSprite } from '@/lib/sprite-resolve';
 import { representativeGridForSlot } from '@/lib/proc-runtime/convert';
 import DynamicPatternEditor from './DynamicPatternEditor';
-import type { DynamicPatternInstance } from '@/lib/dynamic-patterns';
+import { glowRankByInstanceId, type DynamicPatternInstance } from '@/lib/dynamic-patterns';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -112,6 +112,10 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
             onChange={writeDynamic}
             hint="挂在当前服装集的这个槽位上，换集即换；与节点挂载按效果位合并：同位替换、关闭压制、不同位叠加。"
             previewGrid={representativeGridForSlot(character, slotKey, spritesRecord)}
+            glowRankById={glowRankByInstanceId(
+              Object.values(character.nodes).find((n) => (n.slot?.slotKey ?? n.id) === slotKey)?.dynamicPatterns,
+              piece?.dynamicPatterns,
+            )}
           />
         </div>
       </div>
