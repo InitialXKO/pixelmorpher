@@ -111,6 +111,7 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   importSpriteFromImage: (name: string, imageData: ImageData) => Sprite;
   resizeSprite: (id: string, newWidth: number, newHeight: number, cropOffsetX?: number, cropOffsetY?: number) => void;
   transformSprite: (id: string, t: import('../sprite-transform').SpriteTransformRequest) => void;
+  deriveSpriteFrom: (sourceSpriteId: string, opts: import('../sprite-transform').DeriveSpriteOptions) => Sprite | undefined;
   splitImageToSprites: (name: string, imageData: ImageData, regions: {x: number; y: number}[][]) => Sprite[];
   autoEstimatePlug: (spriteId: string) => void;
 

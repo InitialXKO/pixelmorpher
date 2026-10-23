@@ -43,6 +43,123 @@ interface DressPanelProps {
   hideNodeList?: boolean;
 }
 
+// ---- 镜像/复制生成管理：从同服装其他部位的基础层精灵烘焙派生，写入当前编辑层 ----
+function MirrorDeriveSection({
+  nodes,
+  targetNode,
+  getBaseSpriteFor,
+  onAssign,
+}: {
+  nodes: Node[];
+  targetNode: Node;
+  getBaseSpriteFor: (nodeId: string, dir: DirectionIndex) => Sprite | null;
+  onAssign: (dir: DirectionIndex, spriteId: string) => void;
+}) {
+  const [dir, setDir] = useState<DirectionIndex>(6);
+  const [sourceId, setSourceId] = useState<string>('');
+  const [axis, setAxis] = useState(90);
+  const [darkenOn, setDarkenOn] = useState(false);
+  const [darken, setDarken] = useState(0.7);
+  const candidates = nodes.filter((n) => n.id !== targetNode.id && getBaseSpriteFor(n.id, dir));
+  const effectiveSource = candidates.some((c) => c.id === sourceId) ? sourceId : (candidates[0]?.id ?? '');
+  const handleDerive = (mode: 'copy' | 'mirror') => {
+    const srcNode = candidates.find((c) => c.id === effectiveSource);
+    if (!srcNode) return;
+    const srcSprite = getBaseSpriteFor(srcNode.id, dir);
+    if (!srcSprite?.id) return;
+    const derived = useProjectStore.getState().deriveSpriteFrom(srcSprite.id, {
+      mode,
+      axisDeg: axis,
+      darken: darkenOn ? darken : 1,
+      name: `${mode === 'mirror' ? '镜像' : '复制'}_${targetNode.name}`,
+    });
+    if (derived?.id) onAssign(dir, derived.id);
+  };
+  const selectCls =
+    'bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-1 text-[10px] text-gray-300';
+  return (
+    <div className="bg-[#080818] rounded border border-[#1e1e3a] p-2 space-y-2">
+      <Label className="text-[10px] text-gray-500 uppercase tracking-wider">
+        {targetNode.name} — 复制/镜像生成（烘焙式）
+      </Label>
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] text-gray-500 shrink-0">方向</span>
+        <select
+          value={dir}
+          onChange={(e) => setDir(Number(e.target.value) as DirectionIndex)}
+          className={selectCls}
+        >
+          {DIRECTIONS.map((d) => (
+            <option key={d.value} value={d.value}>
+              {d.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={effectiveSource}
+          onChange={(e) => setSourceId(e.target.value)}
+          className={`${selectCls} flex-1 min-w-0`}
+        >
+          {candidates.length === 0 && <option value="">无可用源（同方向基础层）</option>}
+          {candidates.map((n) => (
+            <option key={n.id} value={n.id}>
+              {n.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] text-gray-500 shrink-0">镜像轴</span>
+        {([[90, '竖直'], [0, '水平'], [45, '主对角'], [135, '副对角']] as const).map(([v, label]) => (
+          <button
+            key={v}
+            onClick={() => setAxis(v)}
+            className={`h-5 px-1.5 text-[10px] rounded border ${axis === v ? 'border-cyan-400 text-cyan-300' : 'border-[#2a2a4a] text-gray-400'}`}
+          >
+            {label}
+          </button>
+        ))}
+        <input
+          type="number"
+          value={axis}
+          onChange={(e) => setAxis(parseFloat(e.target.value) || 0)}
+          className="h-6 w-14 px-1 text-[10px] bg-[#0a0a1a] border border-[#2a2a4a] rounded text-gray-300"
+          title="自定义轴向角（度）：预设轴按整图翻转，任意角绕源锚点"
+        />
+        <span className="text-[10px] text-gray-500">°</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <label className="flex items-center gap-1 text-[10px] text-gray-400">
+          <input type="checkbox" checked={darkenOn} onChange={(e) => setDarkenOn(e.target.checked)} />
+          压暗
+        </label>
+        <input
+          type="range"
+          min={0.3}
+          max={1}
+          step={0.05}
+          value={darken}
+          disabled={!darkenOn}
+          onChange={(e) => setDarken(parseFloat(e.target.value))}
+          className="flex-1 h-1"
+        />
+        <span className="text-[10px] text-gray-500 w-8 text-right">{Math.round(darken * 100)}%</span>
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" variant="outline" className="flex-1 h-6 text-[10px]" disabled={!effectiveSource} onClick={() => handleDerive('copy')}>
+          复制生成
+        </Button>
+        <Button size="sm" variant="outline" className="flex-1 h-6 text-[10px]" disabled={!effectiveSource} onClick={() => handleDerive('mirror')}>
+          镜像生成
+        </Button>
+      </div>
+      <p className="text-[9px] leading-relaxed text-gray-600">
+        源取同服装基础层同方向精灵，生成后写入当前编辑层；源后续修改不跟随。
+      </p>
+    </div>
+  );
+}
+
 /**
  * DressPanel — 穿衣阶段（新模型）。
  * 节点驱动：选角色 → 选服装集 → 选节点 → 给四个方向配精灵。
@@ -526,6 +643,12 @@ export default function DressPanel({
             getSpriteFor={getSpriteFor}
             getBaseSpriteFor={editVariant ? getBaseSpriteFor : undefined}
             layerLabel={editVariant?.name}
+            onAssign={(dir, spriteId) => handleSpriteAssign(selectedNode.id, dir, spriteId)}
+          />
+          <MirrorDeriveSection
+            nodes={characterNodes}
+            targetNode={selectedNode}
+            getBaseSpriteFor={getBaseSpriteFor}
             onAssign={(dir, spriteId) => handleSpriteAssign(selectedNode.id, dir, spriteId)}
           />
         </div>

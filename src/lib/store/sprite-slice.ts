@@ -26,6 +26,7 @@ import {
   classifyRotate,
   classifyMirrorAxis,
   resampleGridAffine,
+  darkenPixelGrid,
 } from '../sprite-transform';
 import type { D4Op, SpriteTransformRequest } from '../sprite-transform';
 import type { Affine2D } from '../engine/affine';
@@ -41,6 +42,7 @@ export type SpriteSlice = {
   importSpriteFromImage: ProjectStore['importSpriteFromImage'];
   resizeSprite: ProjectStore['resizeSprite'];
   transformSprite: ProjectStore['transformSprite'];
+  deriveSpriteFrom: ProjectStore['deriveSpriteFrom'];
   splitImageToSprites: ProjectStore['splitImageToSprites'];
   autoEstimatePlug: ProjectStore['autoEstimatePlug'];
 };
@@ -300,6 +302,87 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
         },
       },
     } : s));
+  },
+
+  deriveSpriteFrom: (sourceSpriteId, opts) => {
+    // 烘焙式派生：从源精灵一次性生成独立新精灵（复制/镜像 + 可选压暗），
+    // 源后续修改不跟随。镜像的轴/plug/heightmap/landmarks 口径与 transformSprite 一致。
+    const src = get().sprites[sourceSpriteId];
+    if (!src) return undefined;
+    const w = src.width;
+    const h = src.height;
+    const plugX = src.plug ? subToPx(src.plug.x) : w / 2;
+    const plugY = src.plug ? subToPx(src.plug.y) : h / 2;
+    const cloneLandmarks = () =>
+      src.landmarks
+        ? {
+            leftEye: src.landmarks.leftEye && { ...src.landmarks.leftEye },
+            rightEye: src.landmarks.rightEye && { ...src.landmarks.rightEye },
+            nose: src.landmarks.nose && { ...src.landmarks.nose },
+            mouth: src.landmarks.mouth && { ...src.landmarks.mouth },
+          }
+        : undefined;
+
+    let data: PixelGrid;
+    let newW = w;
+    let newH = h;
+    let newPlugX = plugX;
+    let newPlugY = plugY;
+    let heightmap = src.heightmap?.map((r) => r.slice());
+    let landmarks: import('../unified-types').SpriteLandmarks | undefined = cloneLandmarks();
+
+    if (opts.mode === 'copy') {
+      data = src.data.map((r) => r.slice());
+    } else {
+      const axisDeg = opts.axisDeg ?? 90;
+      const d4 = classifyMirrorAxis(axisDeg);
+      if (d4) {
+        data = d4TransformGrid(src.data, d4, null);
+        const dims = d4MapPoint(d4, 0, 0, w, h);
+        const pa = d4MapPoint(d4, plugX, plugY, w, h);
+        newW = dims.w;
+        newH = dims.h;
+        newPlugX = pa.x;
+        newPlugY = pa.y;
+        heightmap = src.heightmap ? d4TransformGrid(src.heightmap, d4, 0) : undefined;
+        landmarks = src.landmarks ? d4TransformLandmarks(src.landmarks, d4, w, h) : undefined;
+      } else {
+        const m = mirrorAxisMatrixAbout(axisDeg, plugX, plugY);
+        const srcCanvas = pixelsToCanvas(src.data, w, h);
+        if (!srcCanvas) return undefined;
+        const baked = bakeCanvasAffine(srcCanvas, m, plugX, plugY);
+        if (!baked) return undefined;
+        data = canvasToPixels(baked.canvas);
+        newW = baked.width;
+        newH = baked.height;
+        newPlugX = baked.pivotX;
+        newPlugY = baked.pivotY;
+        heightmap = src.heightmap
+          ? resampleGridAffine(src.heightmap, m, baked.minX, baked.minY, baked.width, baked.height, 0) ?? undefined
+          : undefined;
+        landmarks = src.landmarks
+          ? affineTransformLandmarks(src.landmarks, m, baked.minX, baked.minY, baked.width, baked.height, w, h)
+          : undefined;
+      }
+    }
+
+    const darkenF = opts.darken ?? 1;
+    if (darkenF < 1) data = darkenPixelGrid(data, darkenF);
+
+    const newId = crypto.randomUUID();
+    const sprite: Sprite = {
+      id: newId,
+      name: opts.name ?? `${opts.mode === 'mirror' ? '镜像' : '复制'}_${src.name ?? sourceSpriteId}`,
+      width: newW,
+      height: newH,
+      data,
+      plug: { x: pxToSub(newPlugX), y: pxToSub(newPlugY) },
+      ...(heightmap ? { heightmap } : {}),
+      ...(landmarks ? { landmarks } : {}),
+    };
+    get().pushUndo(opts.mode === 'mirror' ? '镜像生成精灵' : '复制生成精灵');
+    set((s) => ({ sprites: { ...s.sprites, [newId]: sprite } }));
+    return sprite;
   },
 
   splitImageToSprites: (name, imageData, regions) => {

@@ -16,6 +16,7 @@
 import { applyAffine, invertAffine } from './engine/affine';
 import type { Affine2D } from './engine/affine';
 import type { SpriteLandmarks } from './unified-types';
+import type { PixelGrid } from './types';
 
 export type D4Op =
   | 'rot90' // 顺时针 90°（屏幕视角，Y 向下）
@@ -30,6 +31,55 @@ export type SpriteTransformRequest =
   | { kind: 'd4'; op: D4Op }
   | { kind: 'rotate'; angleDeg: number }
   | { kind: 'mirrorAxis'; axisDeg: number };
+
+/** 派生生成（复制/镜像）的参数：烘焙式，生成独立精灵，源改不跟随。 */
+export interface DeriveSpriteOptions {
+  mode: 'copy' | 'mirror';
+  /** 镜像轴向角（度）；45° 倍数走 D4 无损，其余绕源 plug 走仿射烘焙。默认 90（竖直轴） */
+  axisDeg?: number;
+  /** 压暗系数（RGB 乘法，0..1）；1 = 不压暗。默认 1 */
+  darken?: number;
+  /** 新精灵名；默认「镜像_/复制_ + 源名」 */
+  name?: string;
+}
+
+/** 压暗：全部不透明像素 RGB 乘 factor（0..1）。透明（null/''）不动。 */
+export function darkenPixelGrid(grid: PixelGrid, factor: number): PixelGrid {
+  const f = Math.max(0, Math.min(1, factor));
+  if (f === 1) return grid;
+  const scaleChannel = (v: number) =>
+    Math.round(v * f).toString(16).padStart(2, '0');
+  return grid.map((row) =>
+    row.map((c) => {
+      if (typeof c !== 'string' || c.length !== 7 || !c.startsWith('#')) return c;
+      const r = parseInt(c.slice(1, 3), 16);
+      const g = parseInt(c.slice(3, 5), 16);
+      const b = parseInt(c.slice(5, 7), 16);
+      return `#${scaleChannel(r)}${scaleChannel(g)}${scaleChannel(b)}`;
+    }),
+  );
+}
+
+/**
+ * 甲1 反调：精灵内容旋转 +θ 后，把节点的对位偏移角 −θ 写回 nodeOffsets，
+ * 使「模板角 + 偏移角 + 精灵内旋」的合成记录保持不变。
+ * 偏移归零的条目按既有约定删除（缺省即零偏移）。
+ */
+export function counterRotateNodeOffset(
+  offsets: Record<string, { x: number; y: number; angle: number }> | undefined,
+  nodeId: string,
+  thetaDeg: number,
+): Record<string, { x: number; y: number; angle: number }> {
+  const next = { ...(offsets ?? {}) };
+  const cur = next[nodeId] ?? { x: 0, y: 0, angle: 0 };
+  const updated = { ...cur, angle: cur.angle - thetaDeg };
+  if (updated.x === 0 && updated.y === 0 && updated.angle === 0) {
+    delete next[nodeId];
+  } else {
+    next[nodeId] = updated;
+  }
+  return next;
+}
 
 export interface D4Mapped {
   x: number;

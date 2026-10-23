@@ -6,9 +6,11 @@ import { Slider } from '@/components/ui/slider';
 import { ArrowLeft, ArrowRight, X, Upload } from 'lucide-react';
 import { useEditorStore, useProjectStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
-import type { PixelGrid, PixelColor } from '@/lib/types';
+import type { PixelGrid } from '@/lib/types';
 import { initSAM, isSAMReady, setSAMImage } from '@/lib/sam';
 import { inpaintPixels } from '@/lib/inpainting';
+import { counterRotateNodeOffset } from '@/lib/sprite-transform';
+import type { DirectionIndex } from '@/lib/unified-types';
 
 // ============================================================
 // RefAssemblyWizard - 参考图装配向导
@@ -196,8 +198,15 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const [newLimbSocketId, setNewLimbSocketId] = useState('');
   const [newLimbPlugX, setNewLimbPlugX] = useState(0);
   const [newLimbPlugY, setNewLimbPlugY] = useState(0);
-  // 已处理的节点 ID → 方式 ('mask' | 'mirror')
+  // 已处理的节点 ID → 方式 ('mask' | 'mirror' | 'copy')
   const [processedNodes, setProcessedNodes] = useState<Map<string, string>>(new Map());
+  // 复制/镜像派生面板状态
+  const [deriveSourceId, setDeriveSourceId] = useState<string | null>(null);
+  const [deriveAxis, setDeriveAxis] = useState(90);
+  const [deriveDarkenOn, setDeriveDarkenOn] = useState(false);
+  const [deriveDarken, setDeriveDarken] = useState(0.7);
+  // 旋转已抠精灵（甲1）的角度
+  const [rotExtractAngle, setRotExtractAngle] = useState(90);
   const fileRef = useRef<HTMLInputElement>(null);
   // SAM 状态
   const [samStatus, setSamStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -360,6 +369,59 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     // 源节点必须已有精灵（已遮罩或模板自带）
     if (src && ((src as any).sprite || src.slot || processedNodes.has(src.id))) return src.id;
     return null;
+  };
+
+  // ---- 抠图方向与精灵解析（与 MaskBrushOverlay 同口径：根节点 variantIndex，缺省南 6） ----
+  const wizardDirIndex = (selectedCharacter?.nodes[selectedCharacter.rootNodeId]?.transform.variantIndex ?? 6) as DirectionIndex;
+  const workingCostume = selectedCharacter?.costumeSets.find((cs) => cs.id === workingCostumeId) ?? null;
+  // 节点在工作服装（优先）或模板槽位中的精灵 ID（SpriteRef 才可解析，与 DressPanel 同口径）
+  const resolveNodeSpriteId = (node: (typeof sortedNodes)[number]): string | null => {
+    const key = node.slot?.slotKey ?? node.id;
+    const refCostume = workingCostume?.pieces[key]?.sprites[wizardDirIndex];
+    if (refCostume && 'spriteId' in refCostume) return refCostume.spriteId;
+    const refSlot = node.slot?.sprites?.[wizardDirIndex];
+    if (refSlot && 'spriteId' in refSlot) return refSlot.spriteId;
+    return null;
+  };
+  const targetSpriteId = targetNode ? resolveNodeSpriteId(targetNode) : null;
+  const deriveCandidates = sortedNodes.filter((n) => n.id !== targetNode?.id && resolveNodeSpriteId(n));
+
+  // 目标节点变化时，派生源默认预选名称镜像匹配，其次第一个可用源
+  useEffect(() => {
+    if (!targetNode) {
+      setDeriveSourceId(null);
+      return;
+    }
+    setDeriveSourceId(findMirrorSource(targetNode) ?? deriveCandidates[0]?.id ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetNode?.id]);
+
+  // 复制/镜像生成（烘焙式）：生成新精灵并写入工作服装的目标节点槽位
+  const handleDerive = (mode: 'copy' | 'mirror') => {
+    if (!targetNode || !deriveSourceId || !selectedCharacterId || !workingCostumeId) return;
+    const srcNode = sortedNodes.find((n) => n.id === deriveSourceId);
+    if (!srcNode) return;
+    const srcSpriteId = resolveNodeSpriteId(srcNode);
+    if (!srcSpriteId) return;
+    const ps = useProjectStore.getState();
+    const derived = ps.deriveSpriteFrom(srcSpriteId, {
+      mode,
+      axisDeg: deriveAxis,
+      darken: deriveDarkenOn ? deriveDarken : 1,
+      name: `${mode === 'mirror' ? '镜像' : '复制'}_${targetNode.name}`,
+    });
+    if (!derived?.id) return;
+    ps.setUnifiedCostumeSprite(selectedCharacterId, workingCostumeId, targetNode.id, wizardDirIndex, derived.id);
+    setProcessedNodes((m) => new Map(m).set(targetNode.id, mode));
+  };
+
+  // 甲1：旋转已抠精灵并反调对位偏移角（nodeOffsets.angle -= θ），合成记录不变
+  const handleRotateExtracted = (theta: number) => {
+    if (!targetNode || !targetSpriteId || !selectedCharacterId || !workingCostumeId) return;
+    const ps = useProjectStore.getState();
+    ps.transformSprite(targetSpriteId, { kind: 'rotate', angleDeg: theta });
+    const next = counterRotateNodeOffset(workingCostume?.nodeOffsets, targetNode.id, theta);
+    ps.updateUnifiedCostumeSet(selectedCharacterId, workingCostumeId, { nodeOffsets: next });
   };
 
   // 父节点变化时，重置 socket 选择
@@ -785,81 +847,135 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             {/* 操作选项 */}
             {targetNode && (
               <div className="space-y-2">
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="flex-1 text-[11px]"
-                    onClick={() => {
-                      const store = useEditorStore.getState();
-                      store.setMaskNodeId(targetNode.id);
-                      store.setEditMode('mask');
-                      // 向导保持挂载（不卸载），mask 画布在主区域，侧边栏不冲突
-                    }}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full text-[11px]"
+                  onClick={() => {
+                    const store = useEditorStore.getState();
+                    store.setMaskNodeId(targetNode.id);
+                    store.setEditMode('mask');
+                    // 向导保持挂载（不卸载），mask 画布在主区域，侧边栏不冲突
+                  }}
+                >
+                  绘制遮罩
+                </Button>
+                {/* 复制/镜像生成（烘焙式）：源可选、镜像轴可自定义、可选压暗 */}
+                <div className="p-2 rounded bg-white/5 border border-white/10 space-y-2">
+                  <div className="text-[10px] text-gray-500">从已抠节点复制/镜像生成（烘焙式，源改不跟随）</div>
+                  <select
+                    value={deriveSourceId ?? ''}
+                    onChange={(e) => setDeriveSourceId(e.target.value || null)}
+                    className="w-full h-7 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
                   >
-                    绘制遮罩
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="flex-1 text-[11px]"
-                    disabled={!findMirrorSource(targetNode)}
-                    onClick={() => {
-                      const src = findMirrorSource(targetNode);
-                      if (!src || !activeSkeleton) return;
-                      const projectStore = useProjectStore.getState();
-                      const srcNode = sortedNodes.find((n) => n.id === src);
-                      // New model: get sprite from node.sprite or costumePiece
-                      const srcSprite = (srcNode as any)?.sprite ?? null;
-                      if (!srcSprite?.data) return;
-                      const srcPart = { width: srcSprite.width, height: srcSprite.height, pixels: srcSprite.data, pivotX: srcSprite.plug?.x ?? 0, pivotY: srcSprite.plug?.y ?? 0 };
-                      // 真镜像：水平翻转像素，建新 Part
-                      const w = srcPart.width;
-                      const h = srcPart.height;
-                      const flipped: PixelGrid = [];
-                      for (let y = 0; y < h; y++) {
-                        const row: PixelColor[] = [];
-                        for (let x = 0; x < w; x++) {
-                          row.push(srcPart.pixels[y][w - 1 - x]);
-                        }
-                        flipped.push(row);
-                      }
-                      // 新模型：精灵直写全局 sprites 表（s.sprites）
-                      const spriteId = `sprite_mirror_${targetNode.id}_${Date.now().toString(36)}`;
-                      useProjectStore.setState((s: any) => ({
-                        sprites: {
-                          ...s.sprites,
-                          [spriteId]: {
-                            id: spriteId,
-                            name: `镜像_${targetNode.name ?? targetNode.id}`,
-                            width: w,
-                            height: h,
-                            data: flipped,
-                          },
-                        },
-                      }));
-                      // 写进工作服装的 pieces，不改模板节点
-                      if (workingCostumeId && selectedCharacterId) {
-                        // 'S' → DirectionIndex 0
-                        projectStore.setUnifiedCostumeSprite(
-                          selectedCharacterId,
-                          workingCostumeId,
-                          targetNode.id,
-                          0,
-                          spriteId
-                        );
-                        projectStore.updateUnifiedNode(activeSkeletonKey!, targetNode.id, {
-                        });
-                      }
-                      setProcessedNodes((m) => new Map(m).set(targetNode.id, 'mirror'));
-                    }}
-                  >
-                    镜像对侧
-                  </Button>
+                    <option value="">— 选择源节点 —</option>
+                    {deriveCandidates.map((n) => (
+                      <option key={n.id} value={n.id}>{n.name}</option>
+                    ))}
+                  </select>
+                  {deriveCandidates.length === 0 && (
+                    <div className="text-[10px] text-amber-500">暂无可用源：先遮罩抠出至少一个其他节点</div>
+                  )}
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-gray-500 shrink-0">镜像轴</span>
+                    {([[90, '竖直'], [0, '水平'], [45, '主对角'], [135, '副对角']] as const).map(([v, label]) => (
+                      <button
+                        key={v}
+                        onClick={() => setDeriveAxis(v)}
+                        className={`h-5 px-1.5 text-[10px] rounded border ${deriveAxis === v ? 'border-cyan-400 text-cyan-300' : 'border-white/10 text-gray-400'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    <input
+                      type="number"
+                      value={deriveAxis}
+                      onChange={(e) => setDeriveAxis(parseFloat(e.target.value) || 0)}
+                      className="h-6 w-14 px-1 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
+                      title="自定义轴向角（度）：预设轴按整图翻转，任意角绕源锚点"
+                    />
+                    <span className="text-[10px] text-gray-500">°</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1 text-[10px] text-gray-400">
+                      <input
+                        type="checkbox"
+                        checked={deriveDarkenOn}
+                        onChange={(e) => setDeriveDarkenOn(e.target.checked)}
+                      />
+                      压暗
+                    </label>
+                    <Slider
+                      className="flex-1"
+                      value={[deriveDarken]}
+                      min={0.3}
+                      max={1}
+                      step={0.05}
+                      disabled={!deriveDarkenOn}
+                      onValueChange={([v]) => setDeriveDarken(v)}
+                    />
+                    <span className="text-[10px] text-gray-500 w-8 text-right">{Math.round(deriveDarken * 100)}%</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 text-[11px]"
+                      disabled={!deriveSourceId}
+                      onClick={() => handleDerive('copy')}
+                    >
+                      复制生成
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 text-[11px]"
+                      disabled={!deriveSourceId}
+                      onClick={() => handleDerive('mirror')}
+                    >
+                      镜像生成
+                    </Button>
+                  </div>
                 </div>
+                {/* 旋转已抠精灵（甲1）：同步反调对位偏移角，装配合成记录不变 */}
+                {targetSpriteId && (
+                  <div className="p-2 rounded bg-white/5 border border-white/10 space-y-2">
+                    <div className="text-[10px] text-gray-500">旋转已抠精灵（绕锚点，同步反调对位偏移）</div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleRotateExtracted(90)}
+                        className="h-6 px-2 text-[10px] rounded border border-white/10 text-gray-300"
+                      >
+                        ↻ 90°
+                      </button>
+                      <button
+                        onClick={() => handleRotateExtracted(-90)}
+                        className="h-6 px-2 text-[10px] rounded border border-white/10 text-gray-300"
+                      >
+                        ↺ 90°
+                      </button>
+                      <input
+                        type="number"
+                        value={rotExtractAngle}
+                        onChange={(e) => setRotExtractAngle(parseFloat(e.target.value) || 0)}
+                        className="h-6 w-14 px-1 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
+                        title="旋转角（度，正值顺时针）"
+                      />
+                      <span className="text-[10px] text-gray-500">°</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2 text-[10px] ml-auto"
+                        onClick={() => handleRotateExtracted(rotExtractAngle)}
+                      >
+                        旋转
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 {processedNodes.get(targetNode.id) && (
                   <div className="text-[10px] text-emerald-400">
-                    ✓ 已处理（{processedNodes.get(targetNode.id) === 'mask' ? '遮罩' : '镜像'}）
+                    ✓ 已处理（{processedNodes.get(targetNode.id) === 'mask' ? '遮罩' : processedNodes.get(targetNode.id) === 'copy' ? '复制' : '镜像'}）
                   </div>
                 )}
               </div>
@@ -940,7 +1056,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   <div key={n.id} className="flex items-center gap-2 text-xs px-2 py-1 rounded bg-white/5">
                     <span className="flex-1 text-gray-300">{n.name}</span>
                     <span className={status ? 'text-emerald-400' : 'text-gray-600'}>
-                      {status === 'mask' ? '✓ 遮罩' : status === 'mirror' ? '✓ 镜像' : '○ 未处理'}
+                      {status === 'mask' ? '✓ 遮罩' : status === 'mirror' ? '✓ 镜像' : status === 'copy' ? '✓ 复制' : '○ 未处理'}
                     </span>
                   </div>
                 );
