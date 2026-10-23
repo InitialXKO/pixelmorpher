@@ -1,7 +1,7 @@
 // verify-behavior-host — 输入轨采样 / 宿主变量 / 主画布行为求值层
 // 运行: bun scripts/verify-behavior-host.mts
 import { sampleInputTrack, behaviorInputAt, behaviorPhaseRate, behaviorHostVars } from '../src/lib/behavior-host';
-import { generateRenderPlan } from '../src/lib/unified-render';
+import { generateRenderPlan, computeWorldTransforms } from '../src/lib/unified-render';
 import type { Character, KeyframeTrack } from '../src/lib/unified-types';
 
 let passed = 0;
@@ -100,5 +100,15 @@ check('C2 输入轨 moveX 打开前行为不转', approx(angleAt(chWalk as Chara
 check('C3 输入轨 moveX=1 → 行为旋转 30°', approx(angleAt(chWalk as Character, 15), 30, 1e-4), `angle=${angleAt(chWalk as Character, 15)}`);
 const chNoBehavior: any = { ...chBase, behaviorGraphs: undefined, inputTracks: chWalk.inputTracks };
 check('C4 无行为图时输入轨不影响姿态', approx(angleAt(chNoBehavior as Character, 15), 0, 1e-6));
+
+// ---- D) 点选/标签路径（computeWorldTransforms 直调方）与出图同源 ----
+function worldAngleAt(ch: Character, frame: number): number {
+  // 与点选/枢轴/覆盖层相同的调用口径：不经 generateRenderPlan、不传蓝图变换
+  const wts = computeWorldTransforms(ch, frame, 200, 200, 30);
+  return wts.get('n1')?.worldAngle ?? NaN;
+}
+check('D1 直调世界变换含行为旋转', approx(worldAngleAt(chWalk as Character, 15), 30, 1e-4), `angle=${worldAngleAt(chWalk as Character, 15)}`);
+check('D2 直调与出图同值（未双重叠加）', approx(worldAngleAt(chWalk as Character, 15), angleAt(chWalk as Character, 15), 1e-6));
+check('D3 直调在输入打开前为 0', approx(worldAngleAt(chWalk as Character, 5), 0, 1e-6));
 
 console.log(`\nverify-behavior-host: ${passed} passed, 0 failed`);

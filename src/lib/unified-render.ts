@@ -198,7 +198,8 @@ export function evaluateBlueprintTransforms(
 // 时间基 60fps（ctx.frame = 秒×60、frameRate=60）、vars = 输入轨采样
 // （behavior-host：t/phase/moveX/speed01/grounded，缺轨静止缺省）。
 // 只取 transform 的 rotation/translateX/translateY 三通道（与运行时
-// 翻译契约一致），由 generateRenderPlan 叠加在节点蓝图结果之后。
+// 翻译契约一致），由 computeWorldTransforms 在节点本地变换层叠加——
+// 出图、点选、枢轴、骨骼覆盖层共用同一份世界变换，行为偏移处处一致。
 const behaviorNodeState = new Map<string, unknown>();
 let behaviorLastFrame = -1;
 
@@ -296,8 +297,13 @@ export function computeWorldTransforms(
   const rootNode = character.nodes[character.rootNodeId];
   if (!rootNode) return transforms;
 
+  // 行为层在此统一求值：任何调用方（出图/点选/枢轴/覆盖层）都同源
+  const behaviorTransforms = character.behaviorGraphs && Object.keys(character.behaviorGraphs).length > 0
+    ? evaluateBehaviorTransforms(character, frame, frameRate, variableContext?.values)
+    : undefined;
+
   // Root node: center of canvas + node's own offset
-  const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides);
+  const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides, behaviorTransforms?.get(rootNode.id));
   const rootFrame = localRotMat(rootInterpolated.angle, rootInterpolated.tilt ?? 0);
   const rootWorld: WorldTransform = {
     nodeId: rootNode.id,
@@ -319,7 +325,7 @@ export function computeWorldTransforms(
   transforms.set(rootNode.id, rootWorld);
 
   // Recursively compute children
-  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection);
+  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms);
 
   // IK（乙：真 3D）：首遍 FK 后解出各链关节的局部 (angle, tilt) 覆写，整树重算 FK——
   // 链外后代随 frame 复合自动跟随。ikOverrides 已传入时（重算遍）不再求解。
@@ -588,12 +594,13 @@ function computeChildTransforms(
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
   geometryDirection?: DirectionIndex,
+  behaviorTransforms?: Map<string, { rotation: number; translateX: number; translateY: number }>,
 ): void {
   for (const childId of parentNode.children) {
     const childNode = character.nodes[childId];
     if (!childNode) continue;
 
-    const childInterpolated = interpolateTransform(childNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides);
+    const childInterpolated = interpolateTransform(childNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides, behaviorTransforms?.get(childId));
     let childWorldX: SubPixel;
     let childWorldY: SubPixel;
     let childWorldZ: SubPixel;
@@ -674,7 +681,7 @@ function computeChildTransforms(
     transforms.set(childId, childWorld);
 
     // Recurse into children
-    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection);
+    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms);
   }
 }
 
@@ -730,8 +737,20 @@ function interpolateTransform(
   variableContext?: VariableContext,
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
+  behavior?: { rotation: number; translateX: number; translateY: number },
 ): NodeTransform {
-  const r = interpolateTransformImpl(node, frame, frameRate, variableContext, blueprintTransforms);
+  const r0 = interpolateTransformImpl(node, frame, frameRate, variableContext, blueprintTransforms);
+  // 行为层：行为图输出叠加在关键帧/蓝图/旧修改器之上（单位与蓝图路径
+  // 一致：平移 px→SubPixel、旋转度）；所有走 computeWorldTransforms 的
+  // 路径（出图/点选/枢轴/覆盖层）同源生效
+  const r = behavior
+    ? {
+        ...r0,
+        x: r0.x + pxToSub(behavior.translateX),
+        y: r0.y + pxToSub(behavior.translateY),
+        angle: r0.angle + behavior.rotation,
+      }
+    : r0;
   // IK 覆写：求解出的局部 (angle, tilt) 绝对替换（乙的注入层，与蓝图同一层级之上）
   const ov = ikOverrides?.get(node.id);
   return ov ? { ...r, angle: ov.angle, tilt: ov.tilt } : r;
@@ -1366,37 +1385,13 @@ export function generateRenderPlan(
   // Phase 0 (path B): Evaluate node blueprints for transform values (two-pass)
   const blueprintTransforms = blueprintTransformsOverride ?? evaluateBlueprintTransforms(character, frame, frameRate, blueprintVars);
 
-  // 行为层：行为图 transform 输出（三通道）叠加在节点蓝图结果之后
-  let mergedTransforms = blueprintTransforms;
-  if (character.behaviorGraphs && Object.keys(character.behaviorGraphs).length > 0) {
-    const behavior = evaluateBehaviorTransforms(character, frame, frameRate, blueprintVars);
-    if (behavior.size > 0) {
-      mergedTransforms = new Map(blueprintTransforms);
-      for (const [nodeId, b] of behavior) {
-        const base = mergedTransforms.get(nodeId);
-        if (base) {
-          mergedTransforms.set(nodeId, {
-            ...base,
-            rotation: base.rotation + b.rotation,
-            translateX: base.translateX + b.translateX,
-            translateY: base.translateY + b.translateY,
-          });
-        } else {
-          mergedTransforms.set(nodeId, {
-            translateX: b.translateX, translateY: b.translateY, translateZ: 0,
-            rotation: b.rotation, tilt: 0, scaleX: 1, scaleY: 1, skewX: 0, skewY: 0,
-          });
-        }
-      }
-    }
-  }
-
   // 生效服装状态：静态字段 → clip 状态轨道 → 状态蓝图（三层增量叠加）
   const effCostume = resolveEffectiveCostumeState(character, frame, frameRate, stateKeyframes, blueprintVars);
 
   // Step 1: World transforms (includes blueprint-evaluated modifier contributions)
+  // 行为层在 computeWorldTransforms 内统一叠加（出图/点选/覆盖层同源）
   const worldTransforms = computeWorldTransforms(
-    character, frame, canvasWidth, canvasHeight, frameRate, variableContext, mergedTransforms,
+    character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
     undefined, geometryDirection,
   );
 
