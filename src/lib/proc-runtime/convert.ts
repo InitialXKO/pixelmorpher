@@ -294,7 +294,7 @@ export function convertCharacterToRuntimePackage(character: Character): ProcRunt
       const res = translateBehaviorGraph(graph, slot, `b${gi++}_`, (refId) => toSlot(refId));
       for (const w of res.warnings) warnings.push(`行为图「${nodeName}」：${w}`);
       if (!res.ok) { warnings.push(`行为图「${nodeName}」翻译失败：${res.reason}`); continue; }
-      behavior.graphs[slot] = { context: 'behavior', nodes: res.nodes };
+      behavior.graphs[slot] = { context: 'behavior', nodes: res.nodes, ...(graph.followMode ? { follow: graph.followMode } : {}) };
     }
   }
 

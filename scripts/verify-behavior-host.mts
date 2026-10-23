@@ -53,7 +53,7 @@ check('B8 phase 拖动可复现（同帧同值）', behaviorHostVars(walker, 60,
 function makeNode(id: string): any {
   return {
     id, name: id, parentId: undefined, children: [],
-    transform: { x: 0, y: 0, angle: 0, tilt: 0, stretch: 1, scaleX: 1 },
+    transform: { x: 0, y: 0, angle: 0, tilt: 0, stretch: 1, scaleX: 1, variantIndex: 6 },
     socket: { x: 0, y: 0 }, visible: true, drawLayer: 'main', zIndex: 0,
     tracks: {}, modifiers: [],
   };
@@ -110,5 +110,46 @@ function worldAngleAt(ch: Character, frame: number): number {
 check('D1 直调世界变换含行为旋转', approx(worldAngleAt(chWalk as Character, 15), 30, 1e-4), `angle=${worldAngleAt(chWalk as Character, 15)}`);
 check('D2 直调与出图同值（未双重叠加）', approx(worldAngleAt(chWalk as Character, 15), angleAt(chWalk as Character, 15), 1e-6));
 check('D3 直调在输入打开前为 0', approx(worldAngleAt(chWalk as Character, 5), 0, 1e-6));
+
+// ---- E) 跟随开关（nodeRef 读上一帧 / 同帧，由图决定） ----
+// src 图：rotation = phase × 30（无输入轨时 phase 每帧 +4/30 → rotation 每帧 +4°）
+// fol 图：nodeRef 读 src 的 rotation 作自身 rotation（fol 是 src 的子节点，世界角 = src + fol 本地）
+{
+  const srcGraph: any = {
+    version: 1, outputId: 'out',
+    nodes: [
+      { id: 'v', type: 'var', inputs: {}, params: { name: 'phase', default: 0 } },
+      { id: 'm', type: 'mul', inputs: { a: { nodeId: 'v' }, b: { type: 'number', value: 30 } }, params: {} },
+      { id: 'out', type: 'transform', inputs: { rotation: { nodeId: 'm' } }, params: {} },
+    ],
+  };
+  const folGraph = (followMode?: 'prev' | 'same'): any => ({
+    version: 1, outputId: 'out', ...(followMode ? { followMode } : {}),
+    nodes: [
+      { id: 'r', type: 'nodeRef', inputs: {}, params: { nodeId: 'src', output: 'rotation' } },
+      { id: 'out', type: 'transform', inputs: { rotation: { nodeId: 'r' } }, params: {} },
+    ],
+  });
+  const mkChar = (followMode?: 'prev' | 'same'): any => {
+    const src = makeNode('src'); src.children = ['fol'];
+    const fol = makeNode('fol'); fol.parentId = 'src'; fol.attachment = { type: 'offset' };
+    return {
+      id: 'chE', name: '跟随测试',
+      nodes: { src, fol },
+      rootNodeId: 'src',
+      costumeSets: [{ id: 'cs1', name: '默认', pieces: {} }],
+      activeCostumeSetId: 'cs1',
+      behaviorGraphs: { src: srcGraph, fol: folGraph(followMode) },
+      variants: {},
+    };
+  };
+  const worldAt = (ch: any, nodeId: string, frame: number) =>
+    computeWorldTransforms(ch as Character, frame, 200, 200, 30).get(nodeId)?.worldAngle ?? NaN;
+  // f=15：src 本地 = 4×15 = 60；fol 世界 = src(60) + fol 本地
+  check('E1 同帧：fol 读本帧 src(60) → 世界 120', approx(worldAt(mkChar('same'), 'fol', 15), 120, 1e-4), `angle=${worldAt(mkChar('same'), 'fol', 15)}`);
+  check('E2 上一帧：fol 读 f-1 的 src(56) → 世界 116', approx(worldAt(mkChar('prev'), 'fol', 15), 116, 1e-4), `angle=${worldAt(mkChar('prev'), 'fol', 15)}`);
+  check('E3 缺省 = 上一帧（与运行时既有语义一致）', approx(worldAt(mkChar(undefined), 'fol', 15), 116, 1e-4), `angle=${worldAt(mkChar(undefined), 'fol', 15)}`);
+  check('E4 第 0 帧无上一帧：prev 读 0 → 世界 = src(0)+0', approx(worldAt(mkChar('prev'), 'fol', 0), 0, 1e-4), `angle=${worldAt(mkChar('prev'), 'fol', 0)}`);
+}
 
 console.log(`\nverify-behavior-host: ${passed} passed, 0 failed`);

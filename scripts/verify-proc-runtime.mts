@@ -611,4 +611,31 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('M5 导出 HTML 含直贴图瓦片路径', html.includes('spriteTileOf') && html.includes('vMisc.w > 2.5'));
 }
 
+// ---------- N) 跟随开关进包 ----------
+{
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  const followGraph = (followMode?: 'prev' | 'same'): any => ({
+    version: 1, outputId: 'out', ...(followMode ? { followMode } : {}),
+    nodes: [
+      { id: 't', type: 'time', inputs: {}, params: {} },
+      { id: 'out', type: 'transform', inputs: {}, params: {} },
+    ],
+  });
+  const mkCh = (followMode?: 'prev' | 'same'): any => ({
+    id: 'chN', name: '跟随开关',
+    nodes: { torso: makeNode('torso', '躯干', 'torso') },
+    rootNodeIds: ['torso'],
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { torso: { nodeId: 'torso', zIndex: 0, parametric: createDefaultParametricAppearance() } } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+    behaviorGraphs: { torso: followGraph(followMode) },
+  });
+  const pkgSame = convertCharacterToRuntimePackage(mkCh('same') as Character);
+  check('N1 followMode=same 进包为 follow: same', (pkgSame.behavior.graphs['torso'] as { follow?: string }).follow === 'same');
+  const pkgDef = convertCharacterToRuntimePackage(mkCh(undefined) as Character);
+  check('N2 缺省不写 follow（运行时按 prev 解释）', (pkgDef.behavior.graphs['torso'] as { follow?: string }).follow === undefined);
+  const html = buildRuntimeHtml(pkgSame);
+  check('N3 模板含跟随 A/B 两遍求值', html.includes('runBehaviorPass') && html.includes("follow || 'prev'"));
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

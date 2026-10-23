@@ -217,46 +217,98 @@ export function evaluateBehaviorTransforms(
   }
   behaviorLastFrame = frame;
 
-  const host = behaviorHostVars(character, frame, frameRate);
-  const vars: Record<string, number | string | boolean> = {
-    ...(baseVars ?? {}),
-    t: host.t, phase: host.phase, moveX: host.moveX, speed01: host.speed01, grounded: host.grounded,
-  };
-  const nodeOutputs = new Map<string, {
+  type OutputRec = {
     rotation: number; tilt: number; translateX: number; translateY: number; translateZ: number;
     scaleX: number; scaleY: number; skewX: number; skewY: number; zIndex: number;
-  }>();
+  };
+  const entries = Object.entries(graphs).filter(([nodeId, g]) => g && character.nodes[nodeId]);
+  const followOf = (g: BlueprintGraph) => g.followMode ?? 'prev';
 
-  for (let pass = 0; pass < 2; pass++) {
-    for (const [nodeId, graph] of Object.entries(graphs)) {
-      const node = character.nodes[nodeId];
-      if (!node || !graph) continue;
+  // 求值一遍全部行为图：每张图按自己的 followMode 选 nodeRef 来源
+  // （mapFor 决定）。state 可传一次性 Map 隔离历史污染（上一帧草稿遍）。
+  const evalSet = (
+    host: ReturnType<typeof behaviorHostVars>,
+    mapFor: (g: BlueprintGraph) => Map<string, OutputRec> | undefined,
+    state: Map<string, unknown>,
+  ): Map<string, OutputRec> => {
+    const outs = new Map<string, OutputRec>();
+    const vars: Record<string, number | string | boolean> = {
+      ...(baseVars ?? {}),
+      t: host.t, phase: host.phase, moveX: host.moveX, speed01: host.speed01, grounded: host.grounded,
+    };
+    for (const [nodeId, graph] of entries) {
+      const node = character.nodes[nodeId]!;
       try {
         const t = evaluateBlueprint(graph, {
           frame: host.t * 60,
           frameRate: 60,
           vars,
-          nodeOutputs: pass === 1 ? nodeOutputs : undefined,
-          nodeState: behaviorNodeState,
+          nodeOutputs: mapFor(graph),
+          nodeState: state,
           costumes: character.costumeSets,
           costumeSlot: node.slot?.slotKey,
         } as any);
-        if (pass === 0) {
-          nodeOutputs.set(nodeId, {
-            rotation: t.rotation, tilt: t.tilt ?? 0,
-            translateX: t.translateX, translateY: t.translateY, translateZ: t.translateZ ?? 0,
-            scaleX: t.scaleX, scaleY: t.scaleY, skewX: t.skewX, skewY: t.skewY,
-            zIndex: (t as any).zIndex ?? 0,
-          });
-        } else {
-          result.set(nodeId, {
-            rotation: t.rotation, translateX: t.translateX, translateY: t.translateY,
-          });
-        }
+        outs.set(nodeId, {
+          rotation: t.rotation, tilt: t.tilt ?? 0,
+          translateX: t.translateX, translateY: t.translateY, translateZ: t.translateZ ?? 0,
+          scaleX: t.scaleX, scaleY: t.scaleY, skewX: t.skewX, skewY: t.skewY,
+          zIndex: (t as any).zIndex ?? 0,
+        });
       } catch {
         // 单图失败不拖垮整角色
       }
     }
+    return outs;
+  };
+
+  // 上一帧输出（'prev' 图的 nodeRef 来源）：在 frame-1 处按同帧口径
+  // 求值一遍得到——延迟恰好一帧且逐帧确定，拖动可复现。第 0 帧无上一帧。
+  let prevMap = new Map<string, OutputRec>();
+  if (frame > 0 && entries.some(([, g]) => followOf(g) === 'prev')) {
+    const hostPrev = behaviorHostVars(character, frame - 1, frameRate);
+    const throwaway = new Map<string, unknown>();
+    const draftPrev = evalSet(hostPrev, () => undefined, throwaway);
+    prevMap = evalSet(hostPrev, () => draftPrev, throwaway);
+  }
+
+  // 本帧：A 遍全部图读 prevMap（'prev' 图定稿、'same' 图作草稿），
+  // B 遍只重算 'same' 图、nodeRef 改读 A 遍草稿（本帧输出，无延迟）
+  const host = behaviorHostVars(character, frame, frameRate);
+  const passA = evalSet(host, () => prevMap, behaviorNodeState);
+  let finals = passA;
+  if (entries.some(([, g]) => followOf(g) === 'same')) {
+    finals = new Map(passA);
+    const draft = passA;
+    for (const [nodeId, graph] of entries) {
+      if (followOf(graph) !== 'same') continue;
+      const node = character.nodes[nodeId]!;
+      try {
+        const t = evaluateBlueprint(graph, {
+          frame: host.t * 60,
+          frameRate: 60,
+          vars: {
+            ...(baseVars ?? {}),
+            t: host.t, phase: host.phase, moveX: host.moveX, speed01: host.speed01, grounded: host.grounded,
+          },
+          nodeOutputs: draft,
+          nodeState: behaviorNodeState,
+          costumes: character.costumeSets,
+          costumeSlot: node.slot?.slotKey,
+        } as any);
+        finals.set(nodeId, {
+          rotation: t.rotation, tilt: t.tilt ?? 0,
+          translateX: t.translateX, translateY: t.translateY, translateZ: t.translateZ ?? 0,
+          scaleX: t.scaleX, scaleY: t.scaleY, skewX: t.skewX, skewY: t.skewY,
+          zIndex: (t as any).zIndex ?? 0,
+        });
+      } catch {
+        // 单图失败保留 A 遍结果
+      }
+    }
+  }
+
+  for (const [nodeId, rec] of finals) {
+    result.set(nodeId, { rotation: rec.rotation, translateX: rec.translateX, translateY: rec.translateY });
   }
   return result;
 }

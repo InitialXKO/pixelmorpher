@@ -961,7 +961,8 @@ function frame(now) {
   updateCharacter(dt, ix);
   // 行为层：宿主喂 vars，逐部件行为图实时求值（时间基 = 60fps 帧；
   // phase 为步态相位帧：移动约 30/s、静止 4/s、腾空 18/s；
-  // nodeRef 读上一帧各部件输出，与主系统语义一致）
+  // nodeRef 读哪帧由每张图的 follow 开关决定：'prev'（缺省）读上一帧
+  // 输出（纯延迟一帧），'same' 读本帧第一遍的输出（无延迟））
   phaseAcc += dt * (char.onGround ? (ix !== 0 ? 30 : 4) : 18);
   const hostVars = {
     t: elapsed, phase: phaseAcc, moveX: ix,
@@ -970,19 +971,29 @@ function frame(now) {
   let pose = {};
   for (const part of PARTS) pose[part.key] = { a: 0, dy: 0, rim: 0, glint: 0 };
   const behaviorOutputs = new Map();
-  for (const key of Object.keys(BEHAVIOR_GRAPHS)) {
-    const out = evalRuntimeGraph(BEHAVIOR_GRAPHS[key], {
-      tFrame: elapsed * 60, vars: hostVars, nodeState: behaviorState,
-      nodeOutputs: prevBehaviorOutputs, statePrefix: key + ':',
-    });
-    const rec = out.get(key);
-    if (rec) {
-      pose[key] = { a: rec.angle, dx: rec.dx, dy: rec.dy, rim: 0, glint: 0 };
-      behaviorOutputs.set(key, {
-        rotation: -rec.angle * 180 / Math.PI, translateX: rec.dx, translateY: -rec.dy,
-        scaleX: 1, scaleY: 1,
+  const runBehaviorPass = (nodeOutputsMap, onlySame) => {
+    for (const key of Object.keys(BEHAVIOR_GRAPHS)) {
+      const isSame = (BEHAVIOR_GRAPHS[key].follow || 'prev') === 'same';
+      if (onlySame !== null && onlySame !== isSame) continue;
+      const out = evalRuntimeGraph(BEHAVIOR_GRAPHS[key], {
+        tFrame: elapsed * 60, vars: hostVars, nodeState: behaviorState,
+        nodeOutputs: nodeOutputsMap, statePrefix: key + ':',
       });
+      const rec = out.get(key);
+      if (rec) {
+        pose[key] = { a: rec.angle, dx: rec.dx, dy: rec.dy, rim: 0, glint: 0 };
+        behaviorOutputs.set(key, {
+          rotation: -rec.angle * 180 / Math.PI, translateX: rec.dx, translateY: -rec.dy,
+          scaleX: 1, scaleY: 1,
+        });
+      }
     }
+  };
+  // A 遍：全部图读上一帧输出（'prev' 图定稿、'same' 图作草稿）
+  runBehaviorPass(prevBehaviorOutputs, null);
+  // B 遍：'same' 图改读 A 遍草稿（本帧输出）重算
+  if (Object.keys(BEHAVIOR_GRAPHS).some((k) => (BEHAVIOR_GRAPHS[k].follow || 'prev') === 'same')) {
+    runBehaviorPass(new Map(behaviorOutputs), true);
   }
   prevBehaviorOutputs = behaviorOutputs;
   // 表演层：包络权重内合成到行为姿态之上

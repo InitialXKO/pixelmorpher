@@ -21,6 +21,8 @@ export type RuntimeGraphNode =
 export interface RuntimeGraph {
   context: 'performance' | 'behavior';
   nodes: RuntimeGraphNode[];
+  /** 仅行为图：nodeRef 读上一帧（'prev'，缺省）还是本帧（'same'）输出 */
+  follow?: 'prev' | 'same';
 }
 
 export interface GraphTranslateResult {

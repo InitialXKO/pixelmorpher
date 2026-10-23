@@ -49,6 +49,12 @@ export interface BlueprintGraph {
   nodes: BlueprintNode[];
   /** 输出节点 ID（类型必须为 'transform'） */
   outputId: string;
+  /** 仅行为图：跨节点引用（nodeRef）读哪一帧的输出——由作者开关决定，
+   *  不由宿主求值算法决定。'prev' = 上一帧输出（纯延迟一帧：对方停，
+   *  本图晚一帧停，动作形状不变）；'same' = 本帧输出（无延迟）。
+   *  缺省 'prev'（与运行时包既有语义一致）。带自身动力学的晃动
+   *  （弹簧/摆锤）是图内节点的事，与此开关无关。 */
+  followMode?: 'prev' | 'same';
 }
 
 /** 求值上下文（每帧） */

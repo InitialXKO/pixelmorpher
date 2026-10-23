@@ -76,7 +76,8 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
         <p className="mt-0.5 text-[9px] text-gray-600 leading-relaxed">
           时间基 = 60fps 帧（time 节点输出帧数）。宿主 vars（用 var 节点读）：
           t=秒、phase=步态相位帧（移动约 30/s、静止 4/s、腾空 18/s）、
-          moveX=-1/0/1、speed01、grounded=1/0。跨节点跟随用 nodeRef（读上一帧输出）。
+          moveX=-1/0/1、speed01、grounded=1/0。跨节点跟随用 nodeRef，读上一帧
+          还是同帧由每张图自己的「跟随」开关决定（上一帧 = 纯延迟一帧）。
           节点徽标为行为语境方言：可求值 / 不支持（gait、expression 暂未移植）。
         </p>
         <div className="mt-1 max-h-56 overflow-y-auto space-y-1 pr-1">
@@ -88,6 +89,22 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
                 {g
                   ? <span className="text-gray-500">{g.nodes.length} 节点</span>
                   : <span className="text-gray-600">无行为图</span>}
+                {g && (
+                  <select
+                    className="h-5 text-[9px] bg-[#111128] border border-[#1e1e3a] rounded text-gray-300 px-0.5"
+                    title="nodeRef 跟随：读上一帧输出（纯延迟一帧）还是同帧输出（无延迟）。主画布与运行时包同口径"
+                    value={g.followMode ?? 'prev'}
+                    onChange={(e) => {
+                      patchCharacter(
+                        { behaviorGraphs: { ...behaviorGraphs, [n.id]: { ...g, followMode: e.target.value as 'prev' | 'same' } } },
+                        '行为图跟随模式',
+                      );
+                    }}
+                  >
+                    <option value="prev">跟随·上一帧</option>
+                    <option value="same">跟随·同帧</option>
+                  </select>
+                )}
                 <Button
                   size="sm" variant="outline" className="h-5 text-[9px] px-1.5"
                   onClick={() => setEditingBehavior({ nodeId: n.id, graph: g ?? emptyGraph() })}
