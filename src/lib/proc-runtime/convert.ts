@@ -10,6 +10,8 @@ import type { Character, CostumePiece, DirectionIndex, ParametricAppearance } fr
 import { subToPx } from '../unified-types';
 import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
+import { modifiersToBlueprint } from '../blueprint/migrate';
+import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
 import { resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
 import { createDefaultParametricAppearance } from './surfaces';
 import { PALETTES } from './palettes';
@@ -168,6 +170,125 @@ function appearanceToBase(
   };
 }
 
+/**
+ * 输出归一：修改器生成图的终点是 screen 节点（同时承载像素与变换通道），
+ * 编辑器图终点是 transform。把 screen 输出换成只带变换通道的 transform
+ * 输出（像素输入丢弃——像素链运行时无对应物），两路图自此同形。
+ */
+function normalizeGraphOutput(g: BlueprintGraph): BlueprintGraph {
+  const out = g.nodes.find((x) => x.id === g.outputId);
+  if (!out || out.type !== 'screen') return g;
+  const keep: Record<string, BlueprintInput> = {};
+  for (const ch of ['translateX', 'translateY', 'translateZ', 'rotation', 'tilt', 'scaleX', 'scaleY', 'skewX', 'skewY', 'zIndex']) {
+    const inp = out.inputs?.[ch];
+    if (inp) keep[ch] = inp;
+  }
+  return {
+    ...g,
+    nodes: g.nodes.map((n) => (n.id === out.id
+      ? { ...n, type: 'transform', inputs: keep } as BlueprintNode
+      : n)),
+  };
+}
+
+/**
+ * 只保留能到达输出 transform 的节点（沿连边反向走）。节点蓝图里的像素链
+ * 与变换通道互不相干，剪掉后翻译器就不会为注定丢弃的像素节点刷警告。
+ */
+function pruneToTransform(g: BlueprintGraph): BlueprintGraph {
+  const out = graphTransformNode(g);
+  if (!out) return g;
+  const byId = new Map(g.nodes.map((n) => [n.id, n]));
+  const keep = new Set<string>([out.id]);
+  const queue: BlueprintNode[] = [out];
+  while (queue.length > 0) {
+    const n = queue.pop()!;
+    for (const inp of Object.values(n.inputs ?? {})) {
+      const ref = inp as { nodeId?: unknown };
+      if (ref && typeof ref === 'object' && typeof ref.nodeId === 'string' && !keep.has(ref.nodeId)) {
+        keep.add(ref.nodeId);
+        const src = byId.get(ref.nodeId);
+        if (src) queue.push(src);
+      }
+    }
+  }
+  return { ...g, nodes: g.nodes.filter((n) => keep.has(n.id)) };
+}
+
+/** 图的输出节点是否为 transform（无 transform 输出的图没有姿态贡献）。 */
+function graphTransformNode(g: BlueprintGraph): BlueprintNode | null {
+  const n = g.nodes.find((x) => x.id === g.outputId);
+  return n && n.type === 'transform' ? n : null;
+}
+
+type TransformChannel = 'rotation' | 'translateX' | 'translateY';
+
+/**
+ * 某图某变换通道的取值表达式：输出 transform 节点的该通道输入——
+ * 连边原样（改前缀）、数字字面量原样、缺失时取节点参数（默认 0）。
+ */
+function channelExpr(g: BlueprintGraph, pfx: string, channel: TransformChannel): BlueprintInput {
+  const t = graphTransformNode(g)!;
+  const inp = t.inputs?.[channel];
+  if (inp && typeof inp === 'object') {
+    const ref = inp as { nodeId?: unknown; output?: string };
+    if (typeof ref.nodeId === 'string') {
+      return { nodeId: pfx + ref.nodeId, ...(ref.output ? { output: ref.output } : {}) } as BlueprintInput;
+    }
+    const lit = inp as { type?: string; value?: unknown };
+    if (lit.type === 'number' && typeof lit.value === 'number') return inp;
+  }
+  const pv = Number((t.params as Record<string, unknown> | undefined)?.[channel] ?? 0);
+  return { type: 'number', value: Number.isFinite(pv) ? pv : 0 } as BlueprintInput;
+}
+
+/** 复制一张图的非输出节点：id 与连边统一加前缀（nodeRef 的目标在 params 里，不动）。 */
+function remapGraphNodes(g: BlueprintGraph, pfx: string): BlueprintNode[] {
+  return g.nodes
+    .filter((n) => n.id !== g.outputId)
+    .map((n) => ({
+      ...n,
+      id: pfx + n.id,
+      inputs: Object.fromEntries(
+        Object.entries(n.inputs ?? {}).map(([port, inp]) => {
+          const ref = inp as { nodeId?: unknown };
+          return [port, ref && typeof ref === 'object' && typeof ref.nodeId === 'string'
+            ? { ...(inp as object), nodeId: pfx + (ref.nodeId as string) }
+            : inp];
+        }),
+      ) as BlueprintNode['inputs'],
+      params: { ...(n.params ?? {}) },
+    }));
+}
+
+/**
+ * 行为图 + 节点蓝图合并：两图节点并置（各自加前缀），变换三通道在
+ * 输入端逐通道相加后喂给一个新的 transform 输出——与主画布「行为
+ * 叠加在节点蓝图之上」的求和语义一致，且合并产物仍是普通产品图，
+ * 可直接走行为翻译。follow 取行为图优先。
+ */
+function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): BlueprintGraph {
+  const nodes: BlueprintNode[] = [...remapGraphNodes(a, 'a_'), ...remapGraphNodes(b, 'b_')];
+  const sumIds: Record<TransformChannel, string> = { rotation: 'sum_rot', translateX: 'sum_tx', translateY: 'sum_ty' };
+  for (const ch of Object.keys(sumIds) as TransformChannel[]) {
+    nodes.push({
+      id: sumIds[ch], type: 'add',
+      inputs: { a: channelExpr(a, 'a_', ch), b: channelExpr(b, 'b_', ch) },
+      params: {},
+    } as BlueprintNode);
+  }
+  nodes.push({
+    id: 'out', type: 'transform',
+    inputs: {
+      rotation: { nodeId: 'sum_rot' },
+      translateX: { nodeId: 'sum_tx' },
+      translateY: { nodeId: 'sum_ty' },
+    },
+    params: {},
+  } as BlueprintNode);
+  return pruneToTransform({ version: 1, outputId: 'out', nodes, followMode: a.followMode ?? b.followMode } as BlueprintGraph);
+}
+
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
@@ -310,13 +431,35 @@ export function convertCharacterToRuntimePackage(
   const behavior: ProcRuntimePackage['behavior'] = { graphs: {} };
   {
     let gi = 0;
-    for (const [nodeId, graph] of Object.entries(character.behaviorGraphs ?? {})) {
+    // 姿态来源有两路：行为图（behaviorGraphs）与节点蓝图
+    // （node.blueprint ?? 修改器生成图，与主画布 Phase 0 同一口径）。
+    // 主画布上两者叠加求和（行为在节点蓝图之后），进包保持一致：
+    // 两者都有时先在产品图层把变换三通道求和合并，再整体按行为口径
+    // 翻译；节点蓝图的像素链运行时无对应物，只取变换通道。
+    const nodeIds = new Set<string>([
+      ...Object.keys(character.behaviorGraphs ?? {}),
+      ...Object.values(character.nodes)
+        .filter((n) => n.blueprint || (n.modifiers?.length ?? 0) > 0)
+        .map((n) => n.id),
+    ]);
+    for (const nodeId of nodeIds) {
       const slot = toSlot(nodeId);
-      const nodeName = character.nodes[nodeId]?.name ?? nodeId;
-      if (!slot) { warnings.push(`行为图：节点 ${nodeName} 不存在，未进包`); continue; }
+      const node = character.nodes[nodeId];
+      const nodeName = node?.name ?? nodeId;
+      if (!slot || !node) { warnings.push(`行为图：节点 ${nodeName} 不存在，未进包`); continue; }
+      const bgRaw = character.behaviorGraphs?.[nodeId];
+      const bg = bgRaw ? normalizeGraphOutput(bgRaw) : undefined;
+      const nbRaw0 = node.blueprint
+        ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers as never) : null);
+      const nbRaw = nbRaw0 ? normalizeGraphOutput(nbRaw0) : null;
+      const nb = nbRaw && graphTransformNode(nbRaw) ? pruneToTransform(nbRaw) : null;
+      if (nbRaw && !nb) warnings.push(`节点蓝图「${nodeName}」：无 transform 输出（像素类蓝图），未进包`);
+      if (!bg && !nb) continue;
+      const graph = bg && nb ? combineTransformGraphs(bg, nb) : (bg ?? nb)!;
+      const srcLabel = bg && nb ? '行为图+节点蓝图' : bg ? '行为图' : '节点蓝图';
       const res = translateBehaviorGraph(graph, slot, `b${gi++}_`, (refId) => toSlot(refId));
-      for (const w of res.warnings) warnings.push(`行为图「${nodeName}」：${w}`);
-      if (!res.ok) { warnings.push(`行为图「${nodeName}」翻译失败：${res.reason}`); continue; }
+      for (const w of res.warnings) warnings.push(`${srcLabel}「${nodeName}」：${w}`);
+      if (!res.ok) { warnings.push(`${srcLabel}「${nodeName}」翻译失败：${res.reason}`); continue; }
       behavior.graphs[slot] = { context: 'behavior', nodes: res.nodes, ...(graph.followMode ? { follow: graph.followMode } : {}) };
     }
   }

@@ -1507,7 +1507,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
               <div className="text-xs text-gray-500 bg-white/[0.03] rounded-md p-3 space-y-1">
                 <div className="font-medium text-gray-400">程序化运行时包（自包含 HTML）</div>
                 <div>
-                  不导帧、不导轨道：导出参数化角色 + 行为蓝图（运行时实时求值）+ 表演蓝图（采样烘焙）+ 运行时本体。
+                  不导帧、不导轨道：导出参数化角色 + 行为蓝图与节点蓝图的变换通道（运行时实时求值）+ 表演蓝图（采样烘焙）+ 运行时本体。
                   宿主只喂输入（移动/跳跃/触发），姿态由运行时程序化合成。与「程序化预览」同一本体，所见即所得。
                 </div>
                 {procPkg && (

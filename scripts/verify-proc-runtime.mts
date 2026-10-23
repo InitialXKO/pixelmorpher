@@ -667,4 +667,59 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('O3 逐集 __sprite 同步带上', sp?.['cloak']?.w === 5);
 }
 
+// ---------- P) 节点蓝图进包：变换通道按行为口径（单独/与行为图求和/像素图跳过/修改器生成图） ----------
+{
+  const pendulumGraph: BlueprintGraph = {
+    version: 1, outputId: 'out',
+    nodes: [
+      { id: 't', type: 'time', inputs: {}, params: {}, ui: { x: 0, y: 0 } },
+      { id: 'pm', type: 'pendulum', inputs: { t: { nodeId: 't', output: 'out' } }, params: { amplitude: 30, period: 16 }, ui: { x: 0, y: 0 } },
+      { id: 'out', type: 'transform', inputs: { rotation: { nodeId: 'pm', output: 'out' } }, params: {}, ui: { x: 0, y: 0 } },
+    ],
+  };
+  const constGraph: BlueprintGraph = {
+    version: 1, outputId: 'out',
+    nodes: [
+      { id: 'c', type: 'const', inputs: {}, params: { value: 10 }, ui: { x: 0, y: 0 } },
+      { id: 'out', type: 'transform', inputs: { rotation: { nodeId: 'c', output: 'out' } }, params: {}, ui: { x: 0, y: 0 } },
+    ],
+  };
+  const pixelGraph: BlueprintGraph = {
+    version: 1, outputId: 'tx',
+    nodes: [
+      { id: 'tx', type: 'texture_scroll', inputs: {}, params: {}, ui: { x: 0, y: 0 } },
+    ],
+  };
+  const piece = (slot: string) => ({ ...createDefaultCostumePiece(slot), parametric: createDefaultParametricAppearance() });
+  const ch = {
+    id: 'chP', name: '节点蓝图进包',
+    nodes: {
+      arm: { ...makeNode('arm', '手臂', 'arm'), blueprint: pendulumGraph },
+      leg: { ...makeNode('leg', '腿', 'leg'), blueprint: pendulumGraph },
+      cape: { ...makeNode('cape', '披风', 'cape'), blueprint: pixelGraph },
+      hat: { ...makeNode('hat', '帽子', 'hat'), modifiers: [{ id: 'm1', type: 'pendulum', enabled: true, params: { amplitude: 20, period: 16 } }] },
+    },
+    rootNodeIds: ['arm', 'leg', 'cape', 'hat'],
+    sprites: {},
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { arm: piece('arm'), leg: piece('leg'), cape: piece('cape'), hat: piece('hat') } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+    behaviorGraphs: { leg: constGraph },
+  } as unknown as Character;
+
+  const pkg = convertCharacterToRuntimePackage(ch);
+  const evaluate = createRuntimeEvaluator();
+  const ctx4 = { tFrame: 4, vars: { t: 4 / 60, phase: 0, moveX: 0, speed01: 0, grounded: 1 } };
+  check('P1 只有节点蓝图的节点也进包', !!pkg.behavior.graphs['arm']);
+  const armOut = evaluate(pkg.behavior.graphs['arm'] as never, ctx4 as never);
+  check('P2 节点蓝图摆锤在运行时求值（t=4 → -30°）', Math.abs((armOut.get('arm')?.angle ?? 0) - (-30 * Math.PI / 180)) < 0.01);
+  check('P3 行为图+节点蓝图合并含求和节点', (pkg.behavior.graphs['leg']?.nodes ?? []).some((n) => n.type === 'add'));
+  const legOut = evaluate(pkg.behavior.graphs['leg'] as never, ctx4 as never);
+  check('P4 合并后求和生效（10° + 摆锤 30° = -40°）', Math.abs((legOut.get('leg')?.angle ?? 0) - (-40 * Math.PI / 180)) < 0.01);
+  check('P5 像素类节点蓝图不进包且 warning 点名', !pkg.behavior.graphs['cape'] && pkg.warnings.some((w) => w.includes('节点蓝图「披风」') && w.includes('无 transform 输出')));
+  check('P6 修改器生成图（无 blueprint 字段）也进包', !!pkg.behavior.graphs['hat']);
+  const hatOut = evaluate(pkg.behavior.graphs['hat'] as never, ctx4 as never);
+  check('P7 修改器摆锤幅值 20 生效（t=4 → -20°）', Math.abs((hatOut.get('hat')?.angle ?? 0) - (-20 * Math.PI / 180)) < 0.01);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
