@@ -12,6 +12,7 @@ import {
   type DirectionIndex,
   type ParametricAppearance,
   type Sprite,
+  type SurfaceGraph,
 } from '../src/lib/unified-types';
 import { generateRenderPlan } from '../src/lib/unified-render';
 import { createSurfaceBaker } from '../src/lib/proc-runtime/bake-src';
@@ -185,6 +186,51 @@ function instructionFor(ch: Character, dir: DirectionIndex) {
   const ch = buildChar({}, domeApp({}));
   const ins = instructionFor(ch, 6);
   check('I 无精灵回落独立生成（8×8）', ins?.sprite?.width === 8 && ins?.sprite?.height === 8);
+}
+
+// ---- H：轮廓外延（外圈按距离选环写出；halo=0 不写；overlay 内外分工）----
+{
+  const bandGraph = {
+    version: 1,
+    nodes: [
+      { id: 'd', op: 'dist' },
+      { id: 'b', op: 'levelBand', params: { level: -3, w: 1 }, inputs: { in: 'd' } },
+    ],
+    writes: [{ from: 'b', slot: 6, at: 0.5 }],
+    params: {},
+  } as unknown as SurfaceGraph;
+  const app = appOf({
+    shape: { kind: 'rect', size: [10, 10], roundness: 0 },
+    surfaceGraph: bandGraph,
+    haloWidth: 4,
+  });
+  const out = buildParametricSprite(app, 'nodeH1')!;
+  check('H1 生成档外延尺寸 22', out.width === 22 && out.height === 22);
+  check('H1 距轮廓3px环=pal[6]', out.data[2]?.[11] === palHex(SHIRT[6]!));
+  check('H1 距1px不写（带外）', out.data[4]?.[11] === null);
+  check('H1 距5px不写（超外延宽）', out.data[0]?.[11] === null);
+  check('H1 轮廓内默认档 pal[2]', out.data[11]?.[11] === palHex(SHIRT[2]!));
+}
+{
+  const bandSurface = [{ mask: { m: 'band', w0: 2, w1: 3.5 }, slot: 6 }] as ParametricAppearance['surface'];
+  const app = appOf({ composite: 'silhouette', surface: bandSurface, haloWidth: 3 });
+  const out = buildParametricSprite(app, 'nodeH2', spriteB)!;
+  check('H2 借轮廓外延尺寸 15', out.width === 15 && out.height === 15);
+  check('H2 plug 平移 (+5,+5)', out.plug?.x === pxToSub(7) && out.plug?.y === pxToSub(7));
+  check('H2 距3px=pal[6]', out.data[2]?.[7] === palHex(SHIRT[6]!));
+  check('H2 斜向2.83px=pal[6]', out.data[3]?.[3] === palHex(SHIRT[6]!));
+  check('H2 距1px不写', out.data[4]?.[7] === null);
+  const app0 = appOf({ composite: 'silhouette', surface: bandSurface, haloWidth: 0 });
+  const out0 = buildParametricSprite(app0, 'nodeH2b', spriteB)!;
+  check('H2 halo=0 尺寸 9 且不写外圈', out0.width === 9 && out0.data[0]?.[4] === null);
+}
+{
+  const bandSurface = [{ mask: { m: 'band', w0: 2, w1: 3.5 }, slot: 6 }] as ParametricAppearance['surface'];
+  const app = appOf({ composite: 'overlay', surface: bandSurface, haloWidth: 3 });
+  const out = buildParametricSprite(app, 'nodeH3', spriteB)!;
+  check('H3 overlay 轮廓内图案仍忽略', out.data[7]?.[7] === '#808080');
+  check('H3 overlay 轮廓外图案生效', out.data[2]?.[7] === palHex(SHIRT[6]!));
+  check('H3 overlay 距1px不写', out.data[4]?.[7] === null);
 }
 
 console.log(`verify-parametric-composite: ${pass} passed, ${fail} failed`);

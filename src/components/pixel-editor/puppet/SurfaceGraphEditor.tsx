@@ -35,6 +35,8 @@ interface Props {
   graph: SurfaceGraph;
   paramDefs: PatternParamDef[];
   shape: EditorRuntimeShape;
+  /** 轮廓外延宽度（与外观 haloWidth 同步，预览含外圈写出） */
+  haloWidth?: number;
   onChange: (graph: SurfaceGraph, defs: PatternParamDef[], structural: boolean) => void;
   onSaveTemplate: (name: string) => void;
   onClose: () => void;
@@ -50,7 +52,7 @@ function baker() {
 const selCls = 'h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded text-gray-300 px-1';
 const numCls = 'h-6 w-14 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded text-gray-300 px-1';
 
-export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, onChange, onSaveTemplate, onClose }: Props) {
+export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, haloWidth, onChange, onSaveTemplate, onClose }: Props) {
   const [viewMode, setViewMode] = useState<'canvas' | 'list'>('canvas');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -86,11 +88,11 @@ export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, onC
 
   const tile = useMemo(() => {
     try {
-      return baker().compileTileDAG(shape, graph);
+      return baker().compileTileDAG(shape, graph, haloWidth ?? 0);
     } catch {
       return null;
     }
-  }, [graph, shape]);
+  }, [graph, shape, haloWidth]);
 
   useEffect(() => {
     const cv = canvasRef.current;
@@ -103,7 +105,17 @@ export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, onC
       const r = tile.data[i * 4], g = tile.data[i * 4 + 1];
       const o = i * 4;
       if (r >= 254) {
-        img.data[o + 3] = 0;
+        // 轮廓外延写出（B 通道编码）：与主画布着色同一解码
+        const hb = tile.data[i * 4 + 2]!;
+        if (hb > 0) {
+          const hex = TIER_COLORS[(hb & 16) ? 4 : Math.max(0, Math.min(7, (hb & 15) - 1))]!;
+          img.data[o] = parseInt(hex.slice(1, 3), 16);
+          img.data[o + 1] = parseInt(hex.slice(3, 5), 16);
+          img.data[o + 2] = parseInt(hex.slice(5, 7), 16);
+          img.data[o + 3] = 255;
+        } else {
+          img.data[o + 3] = 0;
+        }
         continue;
       }
       const hex = TIER_COLORS[Math.min(7, Math.max(0, r))] ?? '#888';

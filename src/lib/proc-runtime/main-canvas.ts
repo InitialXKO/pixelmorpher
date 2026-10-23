@@ -70,6 +70,7 @@ export function shadeTileStatic(tile: Tile, app: ParametricAppearance, seed: num
   const { w, h } = tile;
   const R = (i: number, j: number) => (i < 0 || j < 0 || i >= w || j >= h ? 255 : tile.data[(j * w + i) * 4]);
   const G = (i: number, j: number) => (i < 0 || j < 0 || i >= w || j >= h ? 0 : tile.data[(j * w + i) * 4 + 1]);
+  const B = (i: number, j: number) => (i < 0 || j < 0 || i >= w || j >= h ? 0 : tile.data[(j * w + i) * 4 + 2]);
   const lm = app.light, om = app.outline, rm = app.rim, gm = app.glint;
   const rows: PixelGrid = [];
   for (let j = 0; j < h; j++) {
@@ -86,6 +87,10 @@ export function shadeTileStatic(tile: Tile, app: ParametricAppearance, seed: num
           else if (om === 3) draw = nR || nB;
           else if (om === 4) draw = nT;
           if (draw) color = hexOf(pal[0]);
+        }
+        if (!color) {
+          const hb = B(i, j);
+          if (hb > 0) color = hexOf(pal[(hb & 16) ? 4 : Math.max(0, Math.min(7, (hb & 15) - 1))]);
         }
         row.push(color);
         continue;
@@ -147,6 +152,11 @@ function cacheKey(app: ParametricAppearance): string {
   return JSON.stringify({ ...app, surfaceGraph: g });
 }
 
+/** 轮廓外延宽度（0..8，烘焙边距 = 2 + 此值） */
+function haloOf(app: ParametricAppearance): number {
+  return Math.max(0, Math.min(8, Math.floor(app.haloWidth ?? 0)));
+}
+
 /** overlay 档：精灵原色按档位调亮调暗的系数（档位 2 = 不动） */
 const OVERLAY_SLOT_FACTOR: Record<number, number> = { 0: 0.55, 1: 0.78, 2: 1.0, 3: 1.22 };
 
@@ -171,9 +181,10 @@ function scaleHex(hex: string, f: number): string {
 export function shadeTileOverSprite(tile: Tile, base: Sprite, app: ParametricAppearance, seed: number): PixelGrid {
   const pal = PALETTES[app.palette] ?? PALETTES.shirt;
   const { w, h } = tile;
-  const M = 2;
+  const M = 2 + haloOf(app);
   const R = (i: number, j: number) => (i < 0 || j < 0 || i >= w || j >= h ? 255 : tile.data[(j * w + i) * 4]);
   const G = (i: number, j: number) => (i < 0 || j < 0 || i >= w || j >= h ? 0 : tile.data[(j * w + i) * 4 + 1]);
+  const B = (i: number, j: number) => (i < 0 || j < 0 || i >= w || j >= h ? 0 : tile.data[(j * w + i) * 4 + 2]);
   const basePx = (i: number, j: number): string | null => {
     const sx = i - M, syB = j - M;
     if (sx < 0 || syB < 0 || sx >= base.width || syB >= base.height) return null;
@@ -195,6 +206,10 @@ export function shadeTileOverSprite(tile: Tile, base: Sprite, app: ParametricApp
           else if (om === 3) draw = nR || nB;
           else if (om === 4) draw = nT;
           if (draw) color = hexOf(pal[0]);
+        }
+        if (!color) {
+          const hb = B(i, j);
+          if (hb > 0) color = hexOf(pal[(hb & 16) ? 4 : Math.max(0, Math.min(7, (hb & 15) - 1))]);
         }
         row.push(color);
         continue;
@@ -287,8 +302,8 @@ function buildGenerateSprite(app: ParametricAppearance, seedKey: string): Sprite
   try {
     const shape = runtimeShape(app);
     const tile = app.surfaceGraph
-      ? baker().compileTileDAG(shape, app.surfaceGraph)
-      : baker().compileTileLayers(shape, app.surface);
+      ? baker().compileTileDAG(shape, app.surfaceGraph, haloOf(app))
+      : baker().compileTileLayers(shape, app.surface, haloOf(app));
     const seed = seedFromString(seedKey);
     const data = shadeTileStatic(tile, app, seed);
     // plug：节点原点在瓦片中的位置（形状中心 − 运行时中心偏移），翻回产品空间
@@ -333,10 +348,12 @@ function buildCompositeSprite(
       ? [subToPx(base.plug.x), subToPx(base.plug.y)]
       : [rw / 2, rh / 2];
     const raster = { w: rw, h: rh, plugX: plugPx[0], plugY: plugPx[1], solid };
+    const halo = haloOf(app);
     const tile = app.surfaceGraph
       ? baker().compileTileDAGRaster(
           raster,
           mode === 'overlay' ? filterGraphForOverlay(app.surfaceGraph) : app.surfaceGraph,
+          halo,
         )
       : baker().compileTileLayersRaster(
           raster,
@@ -345,17 +362,29 @@ function buildCompositeSprite(
                 (l) => (l as { bumpForm?: string }).bumpForm !== undefined || (l as { ch?: string }).ch === 'glint',
               )
             : app.surface,
+          halo,
         );
+    // overlay 档轮廓内过滤掉的图案写出，在轮廓外照常生效（外圈无底
+    // 像素）：用未过滤程序再烘一遍，只把非占据像素的 B 通道（外延
+    // 写出编码）并进来。
+    if (mode === 'overlay' && halo > 0) {
+      const full = app.surfaceGraph
+        ? baker().compileTileDAGRaster(raster, app.surfaceGraph, halo)
+        : baker().compileTileLayersRaster(raster, app.surface, halo);
+      for (let p = 0; p < tile.w * tile.h; p++) {
+        if (tile.data[p * 4]! >= 128) tile.data[p * 4 + 2] = full.data[p * 4 + 2]!;
+      }
+    }
     const seed = seedFromString(seedKey);
     const data = mode === 'overlay'
       ? shadeTileOverSprite(tile, base, app, seed)
       : shadeTileStatic(tile, app, seed);
-    // 两次垂直翻转相消：产物 = 原图四周 pad 2px，plug 同步平移
+    // 两次垂直翻转相消：产物 = 原图四周 pad (2+halo)px，plug 同步平移
     const sprite: Sprite = {
       width: tile.w,
       height: tile.h,
       data,
-      plug: { x: pxToSub(plugPx[0] + 2), y: pxToSub(plugPx[1] + 2) },
+      plug: { x: pxToSub(plugPx[0] + 2 + halo), y: pxToSub(plugPx[1] + 2 + halo) },
     };
     if (spriteCache.size > 96) spriteCache.clear();
     spriteCache.set(key, sprite);

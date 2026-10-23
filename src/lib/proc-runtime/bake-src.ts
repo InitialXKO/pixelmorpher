@@ -459,11 +459,32 @@ function compileSurfaceGraph(graph, shape) {
       }
       return { slot: slot, glint: glint };
     },
+    // 轮廓外延专用：只认图案/glint 写出的命中（bump 不向外画），
+    // 返回 hit 供烘焙器把外圈写出编码进 B 通道。
+    evaluateOutside: function (lx, ly, base) {
+      var env = { base: base, cell: defaultCell() };
+      var slot = 2, glint = false, hit = false;
+      var cache = new Map();
+      for (var i = 0; i < graph.writes.length; i++) {
+        var w = graph.writes[i];
+        if (w.bump) continue;
+        var node = byId.get(w.from);
+        if (!node) continue;
+        var v = ev(node, lx, ly, env, cache);
+        if (v >= (w.at !== undefined ? w.at : 0.5)) {
+          hit = true;
+          if (w.ch === 'glint') glint = true;
+          else slot = w.slot;
+        }
+      }
+      return { slot: slot, glint: glint, hit: hit };
+    },
   };
 }
 
-function compileTileDAG(shape, graph) {
-  var M = 2;
+function compileTileDAG(shape, graph, halo) {
+  var haloW = Math.max(0, Math.floor(halo || 0));
+  var M = 2 + haloW;
   var w = Math.ceil(shape.size[0]) + M * 2;
   var h = Math.ceil(shape.size[1]) + M * 2;
   var cx = Math.floor(w / 2), cy = Math.floor(h / 2);
@@ -486,18 +507,22 @@ function compileTileDAG(shape, graph) {
       var f = fields[j2 * w + i2];
       var o = (j2 * w + i2) * 4;
       data[o + 3] = 255;
-      var occ = f.inside || f.d <= 0.5;
-      if (!occ) {
-        data[o] = f.d <= 1.5 ? 254 : 255;
-        data[o + 1] = 255;
-        continue;
-      }
       var base = {
         inside: f.inside, d: f.d, sd: f.inside ? f.d : -f.d,
         gx: f.gx, gy: f.gy, h: f.inside ? f.d / maxD : 0,
         u01: shape.size[0] > 0 ? (f.lx + shape.size[0] / 2) / shape.size[0] : 0.5,
         v01: shape.size[1] > 0 ? (f.ly + shape.size[1] / 2) / shape.size[1] : 0.5,
       };
+      var occ = f.inside || f.d <= 0.5;
+      if (!occ) {
+        data[o] = f.d <= 1.5 ? 254 : 255;
+        data[o + 1] = 255;
+        if (haloW > 0 && f.d <= haloW) {
+          var ro = compiled.evaluateOutside(f.lx, f.ly, base);
+          if (ro.hit) data[o + 2] = (ro.glint ? 16 : 0) + ro.slot + 1;
+        }
+        continue;
+      }
       var r = compiled.evaluate(f.lx, f.ly, base);
       data[o] = r.slot;
       data[o + 1] = compiled.hasGlint ? (r.glint ? 255 : 0) : 255;
@@ -551,8 +576,9 @@ function bumpValueB(form, ctx) {
   }
   return 0;
 }
-function compileTileLayers(shape, program) {
-  var M = 2;
+function compileTileLayers(shape, program, halo) {
+  var haloW = Math.max(0, Math.floor(halo || 0));
+  var M = 2 + haloW;
   var w = Math.ceil(shape.size[0]) + M * 2;
   var h = Math.ceil(shape.size[1]) + M * 2;
   var cx = Math.floor(w / 2), cy = Math.floor(h / 2);
@@ -575,12 +601,6 @@ function compileTileLayers(shape, program) {
       var f = fields[j2 * w + i2];
       var o = (j2 * w + i2) * 4;
       data[o + 3] = 255;
-      var occ = f.inside || f.d <= 0.5;
-      if (!occ) {
-        data[o] = f.d <= 1.5 ? 254 : 255;
-        data[o + 1] = 255;
-        continue;
-      }
       var ctx = {
         px: f.lx, py: f.ly,
         px01: shape.size[0] > 0 ? (f.lx + shape.size[0] / 2) / shape.size[0] : 0.5,
@@ -588,6 +608,24 @@ function compileTileLayers(shape, program) {
         inside: f.inside, d: f.d, gx: f.gx, gy: f.gy,
         h: f.inside ? f.d / maxD : 0,
       };
+      var occ = f.inside || f.d <= 0.5;
+      if (!occ) {
+        data[o] = f.d <= 1.5 ? 254 : 255;
+        data[o + 1] = 255;
+        if (haloW > 0 && f.d <= haloW) {
+          var oSlot = 2, oGlint = false, oHit = false;
+          for (var oi = 0; oi < program.length; oi++) {
+            var ol = program[oi];
+            if (ol.bumpForm) continue;
+            if (!maskHitB(ol.mask, ctx)) continue;
+            oHit = true;
+            if (ol.ch === 'glint') oGlint = true;
+            else oSlot = ol.slot;
+          }
+          if (oHit) data[o + 2] = (oGlint ? 16 : 0) + oSlot + 1;
+        }
+        continue;
+      }
       var slot = 2, g = hasGlint ? 0 : 255;
       for (var li = 0; li < program.length; li++) {
         var layer = program[li];
@@ -640,8 +678,8 @@ function chamferDistB(seed, w, h) {
   }
   return d;
 }
-function rasterFieldGridB(raster) {
-  var M = 2;
+function rasterFieldGridB(raster, haloW) {
+  var M = 2 + (haloW || 0);
   var rw = raster.w, rh = raster.h;
   var w = rw + M * 2, h = rh + M * 2;
   var solidT = new Uint8Array(w * h);
@@ -676,8 +714,9 @@ function rasterFieldGridB(raster) {
   }
   return { w: w, h: h, fields: fields, maxD: maxD, rw: rw, rh: rh };
 }
-function compileTileDAGRaster(raster, graph) {
-  var g = rasterFieldGridB(raster);
+function compileTileDAGRaster(raster, graph, halo) {
+  var haloW = Math.max(0, Math.floor(halo || 0));
+  var g = rasterFieldGridB(raster, haloW);
   var w = g.w, h = g.h;
   var fakeShape = { kind: 'rect', size: [g.rw, g.rh] };
   var compiled = compileSurfaceGraph(graph, fakeShape);
@@ -686,26 +725,31 @@ function compileTileDAGRaster(raster, graph) {
     var f = g.fields[j * w + i];
     var o = (j * w + i) * 4;
     data[o + 3] = 255;
-    var occ = f.inside || f.d <= 0.5;
-    if (!occ) {
-      data[o] = f.d <= 1.5 ? 254 : 255;
-      data[o + 1] = 255;
-      continue;
-    }
     var base = {
       inside: f.inside, d: f.d, sd: f.inside ? f.d : -f.d,
       gx: f.gx, gy: f.gy, h: f.inside ? f.d / g.maxD : 0,
       u01: g.rw > 0 ? (f.sx + 0.5) / g.rw : 0.5,
       v01: g.rh > 0 ? (f.syB + 0.5) / g.rh : 0.5,
     };
+    var occ = f.inside || f.d <= 0.5;
+    if (!occ) {
+      data[o] = f.d <= 1.5 ? 254 : 255;
+      data[o + 1] = 255;
+      if (haloW > 0 && f.d <= haloW) {
+        var ro = compiled.evaluateOutside(f.lx, f.ly, base);
+        if (ro.hit) data[o + 2] = (ro.glint ? 16 : 0) + ro.slot + 1;
+      }
+      continue;
+    }
     var r = compiled.evaluate(f.lx, f.ly, base);
     data[o] = r.slot;
     data[o + 1] = compiled.hasGlint ? (r.glint ? 255 : 0) : 255;
   }
   return { w: w, h: h, cx: Math.floor(w / 2), cy: Math.floor(h / 2), data: data };
 }
-function compileTileLayersRaster(raster, program) {
-  var g = rasterFieldGridB(raster);
+function compileTileLayersRaster(raster, program, halo) {
+  var haloW = Math.max(0, Math.floor(halo || 0));
+  var g = rasterFieldGridB(raster, haloW);
   var w = g.w, h = g.h;
   var hasGlint = program.some(function (l) { return l.ch === 'glint'; });
   var data = new Uint8Array(w * h * 4);
@@ -713,12 +757,6 @@ function compileTileLayersRaster(raster, program) {
     var f = g.fields[j * w + i];
     var o = (j * w + i) * 4;
     data[o + 3] = 255;
-    var occ = f.inside || f.d <= 0.5;
-    if (!occ) {
-      data[o] = f.d <= 1.5 ? 254 : 255;
-      data[o + 1] = 255;
-      continue;
-    }
     var ctx = {
       px: f.lx, py: f.ly,
       px01: g.rw > 0 ? (f.sx + 0.5) / g.rw : 0.5,
@@ -726,6 +764,24 @@ function compileTileLayersRaster(raster, program) {
       inside: f.inside, d: f.d, gx: f.gx, gy: f.gy,
       h: f.inside ? f.d / g.maxD : 0,
     };
+    var occ = f.inside || f.d <= 0.5;
+    if (!occ) {
+      data[o] = f.d <= 1.5 ? 254 : 255;
+      data[o + 1] = 255;
+      if (haloW > 0 && f.d <= haloW) {
+        var oSlot = 2, oGlint = false, oHit = false;
+        for (var oi = 0; oi < program.length; oi++) {
+          var ol = program[oi];
+          if (ol.bumpForm) continue;
+          if (!maskHitB(ol.mask, ctx)) continue;
+          oHit = true;
+          if (ol.ch === 'glint') oGlint = true;
+          else oSlot = ol.slot;
+        }
+        if (oHit) data[o + 2] = (oGlint ? 16 : 0) + oSlot + 1;
+      }
+      continue;
+    }
     var slot = 2, gl = hasGlint ? 0 : 255;
     for (var li = 0; li < program.length; li++) {
       var layer = program[li];
@@ -751,18 +807,22 @@ export function createSurfaceBaker(): {
   compileTileDAG: (
     shape: { kind: string; size: [number, number]; roundness?: number; points?: [number, number][]; pivot?: [number, number] },
     graph: unknown,
+    halo?: number,
   ) => { w: number; h: number; cx: number; cy: number; data: Uint8Array };
   compileTileLayers: (
     shape: { kind: string; size: [number, number]; roundness?: number; points?: [number, number][]; pivot?: [number, number] },
     program: unknown,
+    halo?: number,
   ) => { w: number; h: number; cx: number; cy: number; data: Uint8Array };
   compileTileDAGRaster: (
     raster: { w: number; h: number; plugX: number; plugY: number; solid: ArrayLike<number> },
     graph: unknown,
+    halo?: number,
   ) => { w: number; h: number; cx: number; cy: number; data: Uint8Array };
   compileTileLayersRaster: (
     raster: { w: number; h: number; plugX: number; plugY: number; solid: ArrayLike<number> },
     program: unknown,
+    halo?: number,
   ) => { w: number; h: number; cx: number; cy: number; data: Uint8Array };
 } {
   const factory = new Function(`${BAKE_SRC}\nreturn { compileTileDAG, compileTileLayers, compileTileDAGRaster, compileTileLayersRaster };`);

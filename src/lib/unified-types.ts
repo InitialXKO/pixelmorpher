@@ -897,6 +897,13 @@ export interface ParametricAppearance {
    * 'generate' 处理（第二条战线）。
    */
   composite?: 'generate' | 'silhouette' | 'overlay';
+  /**
+   * 轮廓外延宽度（px，0..8，缺省 0=关）：>0 时烘焙边距放大，模式图/
+   * 层程序可在轮廓外这圈带内继续写出（按带符号距离选环），产物精灵
+   * 相应变大、plug 同步平移。bump 写出不向外画（高度在轮廓外为 0）；
+   * overlay 档下外圈按图案写出原样出色（外圈无底像素）。
+   */
+  haloWidth?: number;
   /** 调色板家族名（运行时 PALETTES 的键） */
   palette: string;
   /** 运行时枚举槽位编号（LIGHT / OUTLINE / RIM / GLINT，见 proc-runtime 枚举表） */

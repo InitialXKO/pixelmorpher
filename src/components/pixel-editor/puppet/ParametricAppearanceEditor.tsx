@@ -107,6 +107,16 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
               </p>
             )}
           </div>
+          <div>
+            <Label className="text-[9px] text-gray-600">轮廓外延宽度（px，0=关）</Label>
+            <Input
+              type="number" min={0} max={8} step={1}
+              value={app.haloWidth ?? 0}
+              onChange={(e) => patch({ haloWidth: Math.max(0, Math.min(8, Math.floor(Number(e.target.value) || 0))) })}
+              className={numCls}
+            />
+            <p className="mt-0.5 text-[9px] text-gray-600">模式可在轮廓外这圈内继续写出（按离轮廓距离选环，如悬环、火焰边）；产物精灵随之变大，枢轴自动补偿。</p>
+          </div>
           <div className={mode !== 'generate' ? 'opacity-40 pointer-events-none space-y-1.5' : 'space-y-1.5'}>
           <div className="grid grid-cols-2 gap-1.5">
             <div>
@@ -272,6 +282,7 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
                 graph={app.surfaceGraph}
                 paramDefs={editorDefs}
                 shape={graphShape}
+                haloWidth={app.haloWidth ?? 0}
                 onChange={(g, defs, structural) => {
                   setCustomDefs(defs);
                   let name = app.surfaceName;
