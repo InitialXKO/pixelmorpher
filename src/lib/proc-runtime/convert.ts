@@ -6,8 +6,10 @@
 //   坐标转运行时系：x 同向、y 取反（产品 y 下 / 运行时 y 上）、角度同理。
 // - 行为图/表演图的 nodeId（含 nodeRef 目标）一律换算成 slotKey。
 // - 表演图经 graph-translate 采样烘焙；翻译失败/无贡献逐条进 warnings，不静默。
-// - 节点关键帧轨道同样采样烘焙：增量曲线合成一条「轨道」表演（add 模式）；
-//   tilt/stretch/scaleX/variantIndex 轨道运行时无对应通道，逐条点名不静默。
+// - 节点关键帧轨道同样采样烘焙：剥离行为/蓝图后逐帧 FK，烘世界位姿增量
+//   曲线合成一条「轨道」表演（add 模式；运行时部件扁平摆放、无父子跟随，
+//   世界增量才能带上父轨道对子孙的带动）；tilt/stretch/scaleX/variantIndex
+//   轨道运行时无对应通道，逐条点名不静默。
 import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, Sprite } from '../unified-types';
 import { buildParametricSprite } from './main-canvas';
 import { subToPx } from '../unified-types';
@@ -19,7 +21,7 @@ import { glowField, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns,
 import { createDefaultParametricAppearance } from './surfaces';
 import { PALETTES } from './palettes';
 import {
-  translatePerformanceGraph, translateBehaviorGraph, translateNodeTracks,
+  translatePerformanceGraph, translateBehaviorGraph, simplify,
   type RuntimeGraph, type RuntimeGraphNode,
 } from './graph-translate';
 
@@ -633,7 +635,11 @@ export function convertCharacterToRuntimePackage(
     });
   }
 
-  // ---- 轨道：全角色关键帧轨道采样烘焙成增量曲线，合成一条「轨道」表演 ----
+  // ---- 轨道：采样烘焙成曲线，合成一条「轨道」表演 ----
+  // 运行时部件是扁平摆放（各自钉在第 0 帧世界位姿、无父子跟随），而轨道在
+  // 主画布是局部量（父轨道会带动子孙）。故不能逐节点烘局部增量：须把行为/
+  // 蓝图/修改器/IK 全部剥离后逐帧跑主画布同源 FK，烘每个部件的世界位姿
+  // 增量（相对第 0 帧）——父轨道的带动自动体现在子孙部件的曲线里。
   {
     const trackNodes = Object.values(character.nodes).filter((n) =>
       n.tracks && Object.values(n.tracks).some((t) => (t?.keyframes?.length ?? 0) > 0));
@@ -650,23 +656,80 @@ export function convertCharacterToRuntimePackage(
       }
       const frameRate = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
       const partKeys = new Set(parts.map((p) => p.key));
+      // 不支持通道点名（仅在关键帧真偏离静态值时；恒等空转不算损失）
+      for (const node of trackNodes) {
+        const baseOf: Record<string, number> = {
+          tilt: node.transform.tilt ?? 0, stretch: node.transform.stretch,
+          scaleX: node.transform.scaleX ?? 1, variantIndex: node.transform.variantIndex,
+        };
+        const bad = (['tilt', 'stretch', 'scaleX', 'variantIndex'] as const).filter((ch) => {
+          const kfs = node.tracks[ch]?.keyframes ?? [];
+          return kfs.length > 0 && kfs.some((kf) => Math.abs(kf.value - baseOf[ch]) > 1e-9);
+        });
+        if (bad.length) {
+          warnings.push(`轨道：节点 ${node.name}：轨道通道 ${bad.join('、')} 运行时无对应变换通道，未进包`);
+        }
+      }
+      // 剥离克隆（浅拷贝：只换掉驱动姿态的输入，几何/轨道/层级原样共享）
+      const stripped: Character = {
+        ...character,
+        behaviorGraphs: {},
+        ikChains: [],
+        nodes: Object.fromEntries(Object.values(character.nodes).map((n) => [
+          n.id, { ...n, blueprint: null, modifiers: [] },
+        ])),
+      };
+      // 逐帧采样全部节点的世界位姿（运行时系：角度弧度、y 取反、单位 px）
+      const D = totalFrames;
+      const samples = new Map<string, Array<{ a: number; x: number; y: number }>>();
+      for (let f = 0; f <= D; f++) {
+        const wf = computeWorldTransforms(stripped, f, 512, 512, 12);
+        for (const node of Object.values(character.nodes)) {
+          const w = wf.get(node.id);
+          if (!w) continue;
+          let arr = samples.get(node.id);
+          if (!arr) { arr = []; samples.set(node.id, arr); }
+          arr.push({ a: -w.worldAngle * Math.PI / 180, x: subToPx(w.worldX), y: -subToPx(w.worldY) });
+        }
+      }
       const mask: string[] = [];
       const graphNodes: RuntimeGraphNode[] = [];
-      trackNodes.forEach((node, i) => {
+      let gi = 0;
+      for (const node of Object.values(character.nodes)) {
         const slot = toSlot(node.id);
-        if (!slot || !partKeys.has(slot)) {
-          warnings.push(`轨道：节点 ${node.name} 不在运行时部件内，其轨道未进包`);
-          return;
+        const arr = samples.get(node.id);
+        if (!slot || !arr || arr.length === 0) continue;
+        if (!partKeys.has(slot)) {
+          if (trackNodes.includes(node)) warnings.push(`轨道：节点 ${node.name} 不在运行时部件内，其轨道未进包`);
+          continue;
         }
-        const res = translateNodeTracks(node, slot, totalFrames, `t${i}_`);
-        for (const w of res.warnings) warnings.push(`轨道：节点 ${node.name}：${w}`);
-        if (res.nodes.length === 0) {
+        const base = arr[0];
+        const mkPts = (pick: (s: { a: number; x: number; y: number }) => number) =>
+          arr.map((s, f) => [f / D, pick(s) - pick(base)] as [number, number]);
+        const chans: Array<{ pts: [number, number][]; suffix: string; field: 'angleFrom' | 'dxFrom' | 'dyFrom'; eps: number }> = [
+          { pts: mkPts((s) => s.a), suffix: 'ang', field: 'angleFrom', eps: 0.01 },
+          { pts: mkPts((s) => s.x), suffix: 'dx', field: 'dxFrom', eps: 0.15 },
+          { pts: mkPts((s) => s.y), suffix: 'dy', field: 'dyFrom', eps: 0.15 },
+        ];
+        const prefix = `t${gi++}_`;
+        const nodes: RuntimeGraphNode[] = [{ id: `${prefix}t`, type: 'time' }];
+        const tr: Extract<RuntimeGraphNode, { type: 'transform' }> = {
+          id: `${prefix}tr`, type: 'transform', part: slot, units: 'runtime',
+        };
+        for (const ch of chans) {
+          if (ch.pts.every(([, v]) => Math.abs(v) < 1e-4)) continue;
+          const id = `${prefix}${ch.suffix}`;
+          nodes.push({ id, type: 'curve', points: simplify(ch.pts, ch.eps) });
+          tr[ch.field] = { n: id };
+        }
+        if (tr.angleFrom || tr.dxFrom || tr.dyFrom) {
+          nodes.push(tr);
+          mask.push(slot);
+          graphNodes.push(...nodes);
+        } else if (trackNodes.includes(node)) {
           warnings.push(`轨道：节点 ${node.name} 的轨道采样后无姿态贡献（与静态姿态无差异或仅有不支持通道）`);
-          return;
         }
-        mask.push(slot);
-        graphNodes.push(...res.nodes);
-      });
+      }
       if (graphNodes.length > 0) {
         performances.push({
           id: 'tracks',

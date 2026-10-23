@@ -173,7 +173,12 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     id, name, parentId,
     role: 'bone',
     slot: slotKey ? { slotKey } : undefined,
-    transform: { x: 0, y: 0, angle: 0 },
+    transform: { x: 0, y: 0, angle: 0, variantIndex: 2, stretch: 1 },
+    attachment: { type: 'fixed' },
+    sockets: [],
+    tracks: {},
+    modifiers: [],
+    children: [],
     sprite: undefined as never,
   } as unknown as UnifiedNode;
 }
@@ -885,6 +890,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   const mkTrackChar = (nodeOver: Record<string, unknown>) => ({
     id: 'chT', name: '轨道测试',
     nodes: { arm: { ...makeNode('arm', '手臂', 'arm'), ...nodeOver } },
+    rootNodeId: 'arm',
     rootNodeIds: ['arm'],
     sprites: { gspr: spr },
     costumeSets: [{ id: 'set1', name: '默认', pieces: { arm: { ...createDefaultCostumePiece('arm'), sprites: { 2: { spriteId: 'gspr', mirror: false } } } } }],
@@ -906,10 +912,10 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('Q26 轨道进包：合成「轨道」表演（add/KeyT/时长=帧数÷12/掩码=轨道节点）',
     !!perfT && perfT.mode === 'add' && perfT.triggerKey === 'KeyT' && Math.abs(perfT.duration - 1) < 1e-9
     && perfT.mask.join() === 'arm' && curvesT.length === 2);
-  const angCurve = curvesT.find((c) => Math.abs((c.points?.[1]?.[1] ?? 0) + 100 * Math.PI / 180) < 1e-6);
+  const angCurve = curvesT.find((c) => Math.abs((c.points?.[1]?.[1] ?? 0) + Math.PI / 2) < 0.01);
   const dxCurve = curvesT.find((c) => Math.abs((c.points?.[1]?.[1] ?? 0) - 12) < 1e-9);
-  check('Q27 轨道曲线是增量且单位已换算（角度 100°→-100°弧度、x 192 Sub→12px）',
-    !!angCurve && Math.abs((angCurve.points?.[0]?.[1] ?? 0) + 10 * Math.PI / 180) < 1e-6 && !!dxCurve);
+  check('Q27 轨道曲线是相对第 0 帧的世界增量（角度 10→100 的增量 90°→-π/2、x 192 Sub→12px）',
+    !!angCurve && Math.abs(angCurve.points?.[0]?.[1] ?? 0) < 1e-9 && !!dxCurve);
   check('Q28 tilt 轨道无对应通道被点名', pkgT.warnings.some((w) => w.includes('tilt') && w.includes('未进包')));
   const pkgT2 = convertCharacterToRuntimePackage(mkTrackChar({
     tracks: { angle: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 6, value: 0 }] } },
@@ -927,6 +933,38 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('Q30 不支持通道的关键帧恒等于静态值时不点名（空转不算损失）',
     pkgT3.performances.some((p) => (p as { id?: string }).id === 'tracks')
     && !pkgT3.warnings.some((w) => w.includes('stretch') || w.includes('scaleX')));
+  // 父轨道带动子孙：子节点无本地轨道，世界增量曲线也必须进包
+  const chPC = {
+    id: 'chPC', name: '父子轨道',
+    nodes: {
+      arm: { ...makeNode('arm', '手臂', 'arm'), children: ['hand'], tracks: {
+        angle: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 12, value: 90 }] },
+      } },
+      hand: { ...makeNode('hand', '手', 'hand', 'arm'), transform: { x: 160, y: 0, angle: 0, variantIndex: 2, stretch: 1 } },
+    },
+    rootNodeId: 'arm',
+    rootNodeIds: ['arm'],
+    sprites: { gspr: spr },
+    costumeSets: [{ id: 'set1', name: '默认', pieces: {
+      arm: { ...createDefaultCostumePiece('arm'), sprites: { 2: { spriteId: 'gspr', mirror: false } } },
+      hand: { ...createDefaultCostumePiece('hand'), sprites: { 2: { spriteId: 'gspr', mirror: false } } },
+    } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  } as unknown as Character;
+  const pkgPC = convertCharacterToRuntimePackage(chPC);
+  const perfPC = pkgPC.performances.find((p) => (p as { id?: string }).id === 'tracks') as unknown as {
+    mask: string[]; graph: { nodes: Array<{ type: string; part?: string; points?: [number, number][] }> };
+  } | undefined;
+  const handTr = perfPC?.graph.nodes.find((n) => n.type === 'transform' && n.part === 'hand') as unknown as
+    { angleFrom?: { n: string }; dxFrom?: { n: string }; dyFrom?: { n: string } } | undefined;
+  const curveById = new Map((perfPC?.graph.nodes ?? []).filter((n) => n.type === 'curve').map((n) => [(n as { id: string }).id, n.points]));
+  const endV = (ref?: { n: string }) => { const pts = ref ? curveById.get(ref.n) : undefined; return pts ? pts[pts.length - 1][1] : NaN; };
+  check('Q31 父轨道带动子节点：子节点（无本地轨道）也进掩码且带世界增量曲线',
+    !!perfPC && perfPC.mask.includes('hand') && !!handTr
+    && Math.abs(endV(handTr.angleFrom) + Math.PI / 2) < 0.01
+    && Math.abs(endV(handTr.dxFrom) + 10) < 0.3
+    && Math.abs(endV(handTr.dyFrom) - 10) < 0.3);
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
