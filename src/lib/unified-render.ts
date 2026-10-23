@@ -1363,6 +1363,7 @@ export function generateRenderPlan(
           rotationStrategy,
           mirror: false,
           zIndex: projSnap.depth,
+          authoredZ: node.zIndex ?? 0,
           drawLayer: node.drawLayer,
           modifiers: [],
           frame,
@@ -1480,8 +1481,10 @@ export function generateRenderPlan(
       variantIndex: worldTf.variantIndex,
       rotationStrategy: strategy,
       mirror: mirror || worldTf.mirror,
-      // 3D 深度排序替代 zIndex：depth 越大越靠前（后绘制）
+      // 排序键：投影深度为主（depth 越大越靠前、后绘制），作者 zIndex
+      // 为次（见 Step 6）——纯 2D 时深度恒同值，画序由 zIndex 决定
       zIndex: proj.depth,
+      authoredZ: node.zIndex ?? 0,
       drawLayer: node.drawLayer,
       generated: undefined, // Discs are handled separately
       modifiers: nodeModifiers,
@@ -1518,10 +1521,16 @@ export function generateRenderPlan(
   // Step 5: Generate disc instructions
   const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots, activeCostumeSet, spriteTable, geometryDirection);
 
-  // Step 6: 节点指令按 zIndex（投影深度）排序；关节盘不进排序流，
-  // 由执行端从 discInstructions 单独先行绘制（无视深度、始终被遮挡）
+  // Step 6: 节点指令复合排序——主键投影深度（3D 遮挡），次键作者
+  // zIndex（node.zIndex），再同则稳定排序保持生成序（层级遍历序）。
+  // 纯 2D 时 socket 2D 偏移沿视平面右向量映射、与深度轴正交，各节点
+  // 深度恒同值（只剩三角函数浮点尘埃），画序实际由作者 zIndex 决定
+  // （RigPanel 可编辑、烘焙按骨骼层级写入、运行时包同口径），不退化为
+  // 遍历事故。故深度比较先取整到 SubPixel 整数分桶：尘埃落回同桶、
+  // 交给 zIndex，真深度差（≥1/16px）不受影响。关节盘不进排序流，
+  // 由执行端从 discInstructions 单独先行绘制（无视深度、始终被遮挡）。
   const allInstructions: NodeRenderInstruction[] = [...nodeInstructions];
-  allInstructions.sort((a, b) => a.zIndex - b.zIndex);
+  allInstructions.sort((a, b) => (Math.round(a.zIndex) - Math.round(b.zIndex)) || ((a.authoredZ ?? 0) - (b.authoredZ ?? 0)));
 
   return {
     nodeInstructions,

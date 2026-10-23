@@ -1310,7 +1310,12 @@ export interface NodeRenderInstruction {
   variantIndex: DirectionIndex;
   rotationStrategy: RotationStrategy;
   mirror: boolean;               // Whether to flip horizontally
+  /** 排序主键：投影深度（projectToView.depth）——字段名沿用 zIndex，值不是作者 zIndex */
   zIndex: number;
+  /** 排序次键：作者画序（node.zIndex）。纯 2D 时各节点投影深度恒为同一
+   *  常量（2D 偏移沿视平面右向量映射，与深度轴正交），画序实际由本键
+   *  决定，不退化为层级遍历序；3D 时仅在深度相等时打破平局。 */
+  authoredZ?: number;
   drawLayer: string;
   generated?: DiscRenderInstruction;
   modifiers: ModifierInstance[];  // Pixel-level modifiers to apply before drawing
