@@ -568,6 +568,34 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   const html = buildRuntimeHtml(pkg);
   check('L14 导出 HTML 含动态模拟与底图采样接线',
     html.includes('dynSimulate(') && html.includes('uBase') && html.includes('bakeResolvedTile') && html.includes('__dynamic'));
+
+  // 帧率进包 + 实例 id 保留（种子对齐）：粒子帧量化基数与编辑器同口径
+  check('L15 包带工程帧率（convert 入参直达包字段）',
+    convertCharacterToRuntimePackage(ch, undefined, { frameRate: 8 }).frameRate === 8 && pkg.frameRate === 12);
+  check('L16 运行时动态实例保留 id（createDynamicInstance 的 dyn_ 前缀）',
+    typeof torso?.dynamic?.[0]?.id === 'string' && (torso?.dynamic?.[0]?.id ?? '').startsWith('dyn_'));
+  check('L17 模板粒子帧量化用包帧率（不再写死 60）',
+    html.includes('EMBEDDED.frameRate') && !html.includes('elapsed * 60'));
+  // 两套模拟逐值对齐：同一实心网格（产品吃精灵、运行时吃等价瓦片）、
+  // 同参数、同帧、同帧率、同种子（部件键 + 实例 id）→ 粒子逐项相等
+  {
+    const { simulateDynamicParticles } = await import('../src/lib/dynamic-pattern-sim');
+    const grid20: (string | null)[][] = Array.from({ length: 20 }, () => Array(20).fill('#3366aa'));
+    const sprite20 = { width: 20, height: 20, data: grid20, plug: { x: pxToSub(10), y: pxToSub(10) } };
+    const instEq = { id: 'dyn_eq_1', slot: '身体', enabled: true, params: heatParams };
+    // 帧 30 恰逢形变脉冲谷底（两边同为零粒子），故多帧断言 + 至少一帧非空作见证
+    let eqAll = true, eqWitness = 0;
+    for (const f of [30, 60, 90, 120, 200, 300]) {
+      const prod = simulateDynamicParticles(
+        { instance: instEq, origin: 'node' } as never, sprite20 as never, f, 8, false, 'back', 'torso');
+      const rt = dyn.dynSimulate(
+        { id: 'dyn_eq_1', slot: '身体', params: heatParams } as never, tile20 as never, f, 8, 'back', 'torso');
+      if (JSON.stringify(prod) !== JSON.stringify(rt)) eqAll = false;
+      if (prod.length > 0) eqWitness++;
+    }
+    check('L18 运行时模拟与产品模拟逐值一致（同网格/参数/帧/帧率/种子）',
+      eqAll && eqWitness >= 3);
+  }
 }
 
 // ---------- M) 精灵部件进包 ----------

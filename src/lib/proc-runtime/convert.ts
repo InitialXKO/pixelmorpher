@@ -49,8 +49,11 @@ export interface RuntimePartBase {
   baseSprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][] };
 }
 
-/** 运行时动态实例（双挂载解析后，只留效果位 + 参数） */
+/** 运行时动态实例（双挂载解析后：实例 id + 效果位 + 参数）。
+ * id 必须保留：粒子模拟的随机种子 = f(部件键, 实例 id)，与编辑器
+ * 同源——丢了 id 改用效果位做种子，两边粒子花纹就不是同一批。 */
 export interface RuntimeDynamicInstance {
+  id: string;
   slot: string;
   params: DynamicPatternParams;
 }
@@ -112,6 +115,8 @@ export interface RuntimePart {
 export interface ProcRuntimePackage {
   format: 'procedural-pixel-runtime-1';
   characterName: string;
+  /** 工程帧率：粒子模拟的帧量化基数（出生帧/生命帧与编辑器同口径） */
+  frameRate: number;
   palettes: Record<string, number[]>;
   parts: RuntimePart[];
   costumes: Record<string, { label: string; [slotKey: string]: unknown }>;
@@ -378,7 +383,7 @@ function dynFor(
   pieceDyn: Parameters<typeof resolveDynamicPatterns>[1],
 ): RuntimeDynamicInstance[] | undefined {
   const r = resolveDynamicPatterns(nodeDyn, pieceDyn);
-  return r.length ? r.map((x) => ({ slot: x.instance.slot, params: x.instance.params })) : undefined;
+  return r.length ? r.map((x) => ({ id: x.instance.id, slot: x.instance.slot, params: x.instance.params })) : undefined;
 }
 
 function appearanceToBase(
@@ -951,6 +956,7 @@ export function convertCharacterToRuntimePackage(
   return {
     format: 'procedural-pixel-runtime-1',
     characterName: character.name,
+    frameRate: projectFpsTop,
     palettes: PALETTES,
     parts,
     costumes,
