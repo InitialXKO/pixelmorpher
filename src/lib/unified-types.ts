@@ -776,6 +776,15 @@ export interface Node {
 }
 
 /** Animation tracks for a node's transform properties */
+/** 父级切换键值：从该帧起节点改挂到 parentId（空串 = 角色根）。
+ *  socketId：undefined = 沿用节点原 attachment；字符串 = 新父级的
+ *  该插槽；null = 固定连接（fixedOffset 缺省沿用原 attachment 的） */
+export interface ParentKeyValue {
+  parentId: string;
+  socketId?: string | null;
+  fixedOffset?: { x: SubPixel; y: SubPixel };
+}
+
 export interface NodeTracks {
   angle?: KeyframeTrack<number>;
   tilt?: KeyframeTrack<number>;
@@ -792,6 +801,10 @@ export interface NodeTracks {
   modifierKeys?: KeyframeTrack<ModifierInstance[]>;
   /** 转面轨：点值 = 该帧的 yaw/pitch，点间数值 lerp；优先于 node.faceTurn 静态值。 */
   faceTurnKeys?: KeyframeTrack<{ yaw: number; pitch: number }>;
+  /** 父级切换轨（step 取值：≤当前帧的最后一点）：抓握/放下等重挂。
+   *  FK（computeWorldTransforms）按帧解析有效父级；包侧部件是扁平
+   *  世界曲线，烘焙采样同一 FK，重挂前后的跟随自动进曲线、包无新机制。 */
+  parentKeys?: KeyframeTrack<ParentKeyValue>;
 }
 
 

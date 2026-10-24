@@ -10,7 +10,7 @@ import { FRAME_WIDTH as STATIC_FRAME_WIDTH, TRACK_HEIGHT } from './constants';
 /** 轨道帧键的合成 id：`${nodeId}@${frame}` */
 export const trackKeyId = (nodeId: string, frame: number) => `${nodeId}@${frame}`;
 
-const TRACK_KEYS = ['angle', 'tilt', 'x', 'y', 'stretch', 'scaleX', 'variantIndex', 'zIndex', 'modifierKeys', 'faceTurnKeys'] as const;
+const TRACK_KEYS = ['angle', 'tilt', 'x', 'y', 'stretch', 'scaleX', 'variantIndex', 'zIndex', 'modifierKeys', 'faceTurnKeys', 'parentKeys'] as const;
 
 /** 节点全部轨道（通道+附件）上有点帧的并集，升序 */
 export function trackKeyFrames(tracks: NodeTracks | undefined): number[] {

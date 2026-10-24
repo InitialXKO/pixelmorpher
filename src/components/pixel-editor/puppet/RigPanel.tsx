@@ -19,6 +19,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { NodeTreeItemWrapper } from './NodeTree';
 import { collectSubtreeIds, deleteNodeSubtree, findParentNode, ikChainMembership, reparentNode } from '@/lib/node-actions';
+import { planParentSwitch } from '@/lib/parent-switch';
 import PuppetModifierPanel from './PuppetModifierPanel';
 import ParametricAppearanceEditor from './ParametricAppearanceEditor';
 import DynamicPatternEditor from './DynamicPatternEditor';
@@ -211,6 +212,108 @@ export default function RigPanel({
         <div className="text-[10px] text-gray-500 mb-1">IK 烘焙</div>
         <IKBakeButton character={selectedCharacter} />
       </div>
+    </div>
+  );
+}
+
+/** 抓握切换：在当前帧把节点重挂到新父级（自动补位姿键保持不动），
+ *  之后节点跟随新父级；父级键列表可删。静态父级仍走上面的连接区。 */
+function ParentSwitchSection({
+  character,
+  node,
+  onUpdate,
+}: {
+  character: Character;
+  node: Node;
+  onUpdate: (updates: Partial<Node>) => void;
+}) {
+  const currentFrame = useProjectStore((s) => s.currentFrame);
+  const frameRate = useProjectStore((s) => s.frameRate);
+  const [target, setTarget] = useState<string>('');
+  const subtreeIds = new Set(collectSubtreeIds(character.nodes, node.id));
+  const candidates = Object.values(character.nodes).filter((n) => !subtreeIds.has(n.id) && n.id !== node.id);
+  const keys = [...(node.tracks?.parentKeys?.keyframes ?? [])].sort((a, b) => a.frame - b.frame);
+  const nameOf = (id: string) => (id === '' ? '（角色根）' : character.nodes[id]?.name ?? id);
+
+  const apply = () => {
+    if (!target) return;
+    if (ikChainMembership(character, node.id) === 'member') {
+      alert('该节点是 IK 链的中间关节，重挂会破坏 IK 链的层级，请先删除或调整 IK 链');
+      return;
+    }
+    let parentId: string;
+    let socketId: string | null | undefined;
+    if (target.startsWith('fixed:')) {
+      parentId = target.slice(6);
+      socketId = null;
+    } else if (target.startsWith('keep:')) {
+      parentId = target.slice(5);
+      socketId = undefined;
+    } else {
+      socketId = target;
+      const owner = candidates.find((n) => (n.sockets ?? []).some((sk) => sk.id === target));
+      if (!owner) return;
+      parentId = owner.id;
+    }
+    const plan = planParentSwitch(character, node.id, currentFrame, parentId === character.rootNodeId ? '' : parentId, socketId, frameRate || 12);
+    if (!plan) {
+      alert('无法在此帧重挂：目标无效或会形成循环引用');
+      return;
+    }
+    onUpdate({ tracks: plan.tracks });
+    if (Math.abs(plan.zResidualPx) > 1) {
+      alert(`已重挂。注意：深度（z）方向差 ${plan.zResidualPx.toFixed(1)}px 无法用轨道补偿（无 z 轨道），3D 场景请检查切换帧的前后深度`);
+    }
+  };
+
+  const removeKey = (frame: number) => {
+    if (!node.tracks?.parentKeys) return;
+    const rest = node.tracks.parentKeys.keyframes.filter((k) => k.frame !== frame);
+    onUpdate({
+      tracks: {
+        ...node.tracks,
+        parentKeys: rest.length > 0 ? { ...node.tracks.parentKeys, keyframes: rest } : undefined,
+      },
+    });
+  };
+
+  return (
+    <div>
+      <Label className="text-[10px] text-gray-500 uppercase tracking-wider">抓握切换（当前帧重挂）</Label>
+      <div className="flex gap-1 mt-1">
+        <select
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          className="h-6 flex-1 rounded border border-[#2a2a4a] bg-[#12122a] px-1 text-[11px] text-gray-300"
+        >
+          <option value="">选择新父级…</option>
+          {candidates.map((p) => (
+            <optgroup key={p.id} label={p.id === character.rootNodeId ? `${p.name}（根节点）` : p.name}>
+              {(p.sockets ?? []).map((sk) => (
+                <option key={sk.id} value={sk.id}>插槽：{sk.name}</option>
+              ))}
+              <option value={`fixed:${p.id}`}>（固定连接，不插槽）</option>
+              <option value={`keep:${p.id}`}>（沿用原连接方式）</option>
+            </optgroup>
+          ))}
+        </select>
+        <Button size="sm" className="h-6 text-[10px] px-2" disabled={!target} onClick={apply}>
+          在第 {currentFrame} 帧重挂
+        </Button>
+      </div>
+      <p className="mt-0.5 text-[9px] text-gray-600">
+        切换帧自动补位移/角度键保持位姿不变，之后跟随新父级（如剑柄从腰带改挂到手）；再挂回去同理。
+      </p>
+      {keys.length > 0 && (
+        <div className="mt-1 space-y-0.5">
+          {keys.map((k) => (
+            <div key={k.frame} className="flex items-center justify-between text-[10px] text-gray-400 bg-[#111128] rounded px-1.5 py-0.5">
+              <span>第 {k.frame} 帧 → {nameOf(k.value.parentId)}{k.value.socketId ? '（插槽）' : k.value.socketId === null ? '（固定）' : ''}</span>
+              <button type="button" className="text-red-400 hover:text-red-300" onClick={() => removeKey(k.frame)}>删除</button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -421,6 +524,11 @@ function RigNodeProperties({
             );
           })()}
         </div>
+      )}
+
+      {/* 抓握切换（在当前帧重挂，保持世界位姿） */}
+      {character && !isRoot && (
+        <ParentSwitchSection character={character} node={node} onUpdate={onUpdate} />
       )}
 
       {/* 关节 */}

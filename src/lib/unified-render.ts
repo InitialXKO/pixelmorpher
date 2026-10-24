@@ -19,7 +19,7 @@ import type {
   NodeRenderInstruction, DiscRenderInstruction, RenderPlan,
   KeyframeTrack, KeyframePoint, InterpolationMode,
   ModifierInstance, GeneratedItem, AnimationVariable, ParamDriver,
-  IKChain, Mat3,
+  IKChain, Mat3, ParentKeyValue,
 } from './unified-types';
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
@@ -335,6 +335,133 @@ export interface WorldTransform {
  * Step 1: Compute world transforms for all nodes in a character.
  * Traverses the node tree depth-first from the root.
  */
+/** 父级切换轨在 frame 处的生效键（step：≤frame 的最后一点） */
+export function parentKeyAt(node: Node, frame: number): ParentKeyValue | undefined {
+  const kfs = node.tracks?.parentKeys?.keyframes;
+  if (!kfs || kfs.length === 0) return undefined;
+  let best: ParentKeyValue | undefined;
+  let bestFrame = -Infinity;
+  for (const kf of kfs) {
+    if (kf.frame <= frame && kf.frame >= bestFrame) {
+      best = kf.value;
+      bestFrame = kf.frame;
+    }
+  }
+  return best;
+}
+
+/**
+ * 按帧重挂后的有效角色：任一节点带父级切换轨时，返回一份层级按
+ * 本帧有效父级重写的浅克隆（节点数据共享、只换 parentId /
+ * attachment / children），FK 的既有组成公式原样跑。有效父级成环
+ * （著者错误）时，把环中最近切换的节点回退到静态父级；链条够不到
+ * 根的节点挂到根兜底。无切换轨时原样返回（零开销）。
+ */
+export function effectiveCharacterAt(character: Character, frame: number): Character {
+  const nodes = character.nodes;
+  const anyKeys = Object.values(nodes).some((n) => (n.tracks?.parentKeys?.keyframes.length ?? 0) > 0);
+  if (!anyKeys) return character;
+  const rootId = character.rootNodeId;
+  const staticParent = new Map<string, string | null>();
+  const effParent = new Map<string, string | null>();
+  const effKey = new Map<string, ParentKeyValue | undefined>();
+  for (const n of Object.values(nodes)) {
+    staticParent.set(n.id, n.id === rootId ? null : (n.parentId ?? null));
+    const key = n.id === rootId ? undefined : parentKeyAt(n, frame);
+    effKey.set(n.id, key);
+    effParent.set(n.id, key ? (key.parentId === '' ? rootId : key.parentId) : staticParent.get(n.id) ?? null);
+  }
+  const keyFrameOf = (id: string): number => {
+    const kfs = nodes[id]?.tracks?.parentKeys?.keyframes ?? [];
+    let f = -Infinity;
+    for (const kf of kfs) if (kf.frame <= frame && kf.frame > f) f = kf.frame;
+    return f;
+  };
+  // 环回退：DFS 找环，环中最近切换者回退静态父级（静态结构是树、必收敛）
+  for (let iter = 0; iter < 64; iter++) {
+    const state = new Map<string, number>(); // 1 = 在栈上, 2 = 完成
+    let cycle: string[] | null = null;
+    const visit = (id: string, path: string[]): void => {
+      if (cycle) return;
+      const st = state.get(id) ?? 0;
+      if (st === 2) return;
+      if (st === 1) {
+        cycle = path.slice(path.indexOf(id));
+        return;
+      }
+      state.set(id, 1);
+      const p = effParent.get(id);
+      if (p && nodes[p] && p !== id) visit(p, [...path, id]);
+      state.set(id, 2);
+    };
+    for (const id of Object.keys(nodes)) {
+      visit(id, []);
+      if (cycle) break;
+    }
+    const found = cycle as string[] | null;
+    if (!found) break;
+    let victim = found[0]!;
+    for (const id of found) if (keyFrameOf(id) >= keyFrameOf(victim)) victim = id;
+    effParent.set(victim, staticParent.get(victim) ?? null);
+    effKey.set(victim, undefined);
+  }
+  // 够不到根的节点挂到根兜底
+  const childrenOf = new Map<string, string[]>();
+  for (const n of Object.values(nodes)) {
+    const p = effParent.get(n.id);
+    if (p && nodes[p] && p !== n.id) {
+      const arr = childrenOf.get(p) ?? [];
+      arr.push(n.id);
+      childrenOf.set(p, arr);
+    }
+  }
+  const reachable = new Set<string>();
+  const stack = [rootId];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (reachable.has(id)) continue;
+    reachable.add(id);
+    for (const c of childrenOf.get(id) ?? []) stack.push(c);
+  }
+  for (const n of Object.values(nodes)) {
+    if (n.id !== rootId && !reachable.has(n.id)) {
+      effParent.set(n.id, rootId);
+      effKey.set(n.id, undefined);
+    }
+  }
+  const effChildren = new Map<string, string[]>();
+  for (const n of Object.values(nodes)) {
+    const p = effParent.get(n.id);
+    if (p && nodes[p] && p !== n.id) {
+      const arr = effChildren.get(p) ?? [];
+      arr.push(n.id);
+      effChildren.set(p, arr);
+    }
+  }
+  const effNodes: Record<string, Node> = {};
+  for (const n of Object.values(nodes)) {
+    const key = effKey.get(n.id);
+    let attachment = n.attachment;
+    if (key) {
+      if (key.socketId === null) {
+        attachment = {
+          ...n.attachment, type: 'fixed', parentSocketId: undefined,
+          fixedOffset: key.fixedOffset ?? n.attachment.fixedOffset,
+        };
+      } else if (key.socketId !== undefined) {
+        attachment = { ...n.attachment, type: 'socket', parentSocketId: key.socketId };
+      }
+    }
+    effNodes[n.id] = {
+      ...n,
+      parentId: effParent.get(n.id) ?? undefined,
+      attachment,
+      children: effChildren.get(n.id) ?? [],
+    };
+  }
+  return { ...character, nodes: effNodes };
+}
+
 export function computeWorldTransforms(
   character: Character,
   frame: number,
@@ -346,6 +473,8 @@ export function computeWorldTransforms(
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
   geometryDirection?: DirectionIndex,
 ): Map<string, WorldTransform> {
+  // 父级切换轨：FK 全程在按本帧有效父级重写的层级上跑
+  character = effectiveCharacterAt(character, frame);
   if (!frameRate || frameRate <= 0) {
     let resolved = 12;
     try {
