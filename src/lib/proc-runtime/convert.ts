@@ -134,7 +134,7 @@ const TRIGGER_KEY_MAP: Record<string, string> = {
 /** 默认状态机：常驻三态（idle/move/air，只读宿主变量判定）+ 包内每条
  *  表演一个表演状态（意图进入、播完自动退出回落）。作者在角色上写了
  *  stateMachine 规格时不用此默认机（convert 直通，见函数末尾） */
-function defaultStateMachine(performances: Array<Record<string, unknown>>): StateMachineSpec {
+export function defaultStateMachine(performances: Array<Record<string, unknown>>): StateMachineSpec {
   return {
     version: 1,
     initial: 'idle',

@@ -18,6 +18,7 @@ import { useProjectStore, useEditorStore } from '@/lib/store';
 import RigPanel from './puppet/RigPanel';
 import DressPanel from './puppet/DressPanel';
 import PerformPanel from './puppet/PerformPanel';
+import StateMachinePanel from './puppet/StateMachinePanel';
 import BehaviorPanel from './puppet/BehaviorPanel';
 import ProcPreview from './puppet/ProcPreview';
 import type { DirectionIndex } from '@/lib/unified-types';
@@ -250,6 +251,16 @@ export default function PuppetPanel() {
               </summary>
               <div className="p-2 pt-0">
                 <BehaviorPanel unifiedCharacters={unifiedCharacters} />
+              </div>
+            </details>
+
+            {/* ============ 状态机编排 STATE MACHINE ============ */}
+            <details className="bg-white/[0.02] border border-white/10 rounded">
+              <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
+                🧠 状态机编排
+              </summary>
+              <div className="p-2 pt-0">
+                <StateMachinePanel unifiedCharacters={unifiedCharacters} />
               </div>
             </details>
 
