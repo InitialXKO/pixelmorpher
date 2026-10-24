@@ -96,7 +96,11 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, us
     if (!mesh.isMesh) return;
     // SkinnedMesh 的包围盒是 bind pose 的，关掉 frustum culling 防误裁
     mesh.frustumCulled = false;
-    const old = mesh.material as THREE.MeshStandardMaterial | undefined;
+    // PMX/PMD 场景是材质数组：基色/贴图取首个材质，释放逐个来（数组无 dispose）
+    const olds = Array.isArray(mesh.material)
+      ? mesh.material
+      : mesh.material ? [mesh.material] : [];
+    const old = olds[0] as THREE.MeshStandardMaterial | undefined;
     const baseColor =
       old && 'color' in old && (old as THREE.MeshStandardMaterial).color
         ? ((old as THREE.MeshStandardMaterial).color as THREE.Color).clone()
@@ -113,7 +117,7 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, us
         gradientMap,
       });
     // 旧材质释放(贴图保留,新材质在用)
-    if (old && old !== mesh.material) old.dispose();
+    for (const o of olds) if (o !== mesh.material) o.dispose();
   });
 }
 

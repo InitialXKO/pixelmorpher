@@ -167,7 +167,7 @@ interface BakedMesh {
  * 统计每 bone 的蒙皮权重和（遍历所有 SkinnedMesh）。
  * 非蒙皮 Mesh 若刚性挂在 bone 下，给该 bone 记 1（视为有效）。
  */
-function computeBoneWeightSums(
+export function computeBoneWeightSums(
   model: THREE.Object3D,
   bones: THREE.Bone[],
   indexByBone: Map<THREE.Bone, number>,
@@ -213,8 +213,11 @@ function computeBoneWeightSums(
 /**
  * 把 SkinnedMesh 的当前姿态烘焙为静态几何。
  * 返回每顶点的世界坐标 + 主导 bone。
+ * 法线保留模型原始法线做同样的蒙皮混合（与整模双遍 three 着色器的口径一致）：
+ * 原先整模 computeVertexNormals 重算会丢掉作者法线（PMX 脸部尤甚）、且两条
+ * 烘焙线明暗口径不一致。姿态由骨骼矩阵驱动，蒙皮后的法线本身就是姿态正确的。
  */
-function bakeSkinnedMesh(
+export function bakeSkinnedMesh(
   mesh: THREE.Mesh,
   bones: THREE.Bone[],
   indexByBone: Map<THREE.Bone, number>,
@@ -229,6 +232,7 @@ function bakeSkinnedMesh(
   const vCount = posAttr.count;
 
   const outPos = new Float32Array(vCount * 3);
+  const outNorm = normAttr ? new Float32Array(vCount * 3) : null;
   const vertBone = new Int32Array(vCount).fill(-1);
   const vertBones: number[][] = new Array(vCount);
 
@@ -240,9 +244,14 @@ function bakeSkinnedMesh(
     const bm = skeleton.boneMatrices; // Float32Array，每 bone 16 个 float
     const m = new THREE.Matrix4();
     const tv = new THREE.Vector3();
+    const nv = new THREE.Vector3();
     for (let i = 0; i < vCount; i++) {
       v.fromBufferAttribute(posAttr, i);
       tv.set(0, 0, 0);
+      nv.set(0, 0, 0);
+      const nx = normAttr ? normAttr.getX(i) : 0;
+      const ny = normAttr ? normAttr.getY(i) : 0;
+      const nz = normAttr ? normAttr.getZ(i) : 0;
       let bestJ = -1;
       let bestW = -Infinity;
       for (let j = 0; j < 4; j++) {
@@ -261,6 +270,17 @@ function bakeSkinnedMesh(
         const ty = e[1] * px + e[5] * py + e[9] * pz + e[13];
         const tz = e[2] * px + e[6] * py + e[10] * pz + e[14];
         tv.x += tx * w; tv.y += ty * w; tv.z += tz * w;
+        // 法线：同一骨骼矩阵的上 3×3 混合（three 着色器蒙皮法线同口径）
+        if (outNorm) {
+          nv.x += (e[0] * nx + e[4] * ny + e[8] * nz) * w;
+          nv.y += (e[1] * nx + e[5] * ny + e[9] * nz) * w;
+          nv.z += (e[2] * nx + e[6] * ny + e[10] * nz) * w;
+        }
+      }
+      if (outNorm) {
+        const len = Math.hypot(nv.x, nv.y, nv.z);
+        if (len > 1e-9) { nv.x /= len; nv.y /= len; nv.z /= len; }
+        outNorm[i * 3] = nv.x; outNorm[i * 3 + 1] = nv.y; outNorm[i * 3 + 2] = nv.z;
       }
       // mesh 的世界矩阵（model 在 group 里可能有变换，此处先取模型空间）
       outPos[i * 3] = tv.x; outPos[i * 3 + 1] = tv.y; outPos[i * 3 + 2] = tv.z;
@@ -283,17 +303,23 @@ function bakeSkinnedMesh(
       vertBones[i] = multi;
     }
   } else {
-    // 非蒙皮：直接拷贝
+    // 非蒙皮：直接拷贝（法线同源拷贝，保持与位置一致的原始法线）
     for (let i = 0; i < vCount; i++) {
       outPos[i * 3] = posAttr.getX(i);
       outPos[i * 3 + 1] = posAttr.getY(i);
       outPos[i * 3 + 2] = posAttr.getZ(i);
+      if (outNorm && normAttr) {
+        outNorm[i * 3] = normAttr.getX(i);
+        outNorm[i * 3 + 1] = normAttr.getY(i);
+        outNorm[i * 3 + 2] = normAttr.getZ(i);
+      }
       vertBones[i] = [];
     }
   }
 
   const out = new THREE.BufferGeometry();
   out.setAttribute('position', new THREE.BufferAttribute(outPos, 3));
+  if (outNorm) out.setAttribute('normal', new THREE.BufferAttribute(outNorm, 3));
   if (uvAttr) {
     const uv = new Float32Array(vCount * 2);
     for (let i = 0; i < vCount; i++) { uv[i * 2] = uvAttr.getX(i); uv[i * 2 + 1] = uvAttr.getY(i); }
@@ -302,8 +328,6 @@ function bakeSkinnedMesh(
   if (index) {
     out.setIndex(index.clone());
   }
-  // 法线稍后用 computeVertexNormals 重算（姿态变化后原法线不准）
-  void normAttr;
   return { geometry: out, material: mesh.material as THREE.Material | null, vertBone, vertBones };
 }
 
@@ -777,8 +801,10 @@ export async function bakeSixParts(
     });
     if (bakedMeshes.length === 0) throw new Error('模型中没有找到 Mesh');
 
-    // 法线：整模统一算一次（最终姿态），各部件索引视图共享
-    for (const bm of bakedMeshes) bm.geometry.computeVertexNormals();
+    // 法线：bakeSkinnedMesh 已按原始法线蒙皮混合产出；只有源几何无法线时才几何重算兜底
+    for (const bm of bakedMeshes) {
+      if (!bm.geometry.getAttribute('normal')) bm.geometry.computeVertexNormals();
+    }
 
     // ---- 构建 6 部件（索引视图，不复制几何） ----
     // 无归属三角形计数是分组口径（全模型，六次调用同值），取第一次构建的即可

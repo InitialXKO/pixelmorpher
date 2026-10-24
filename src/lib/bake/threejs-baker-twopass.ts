@@ -678,13 +678,18 @@ function makeGradientMap(steps: number): THREE.DataTexture {
 }
 
 /** 换卡通材质（保留原贴图/基色），返回 mesh→toon 材质映射 */
-function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, usePmxNpr?: boolean): Map<THREE.Mesh, THREE.Material> {
+export function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, usePmxNpr?: boolean): Map<THREE.Mesh, THREE.Material> {
   const map = new Map<THREE.Mesh, THREE.Material>();
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
     if (!mesh.isMesh) return;
     mesh.frustumCulled = false;
-    const old = mesh.material as THREE.MeshStandardMaterial | undefined;
+    // PMX/PMD 场景是单网格多材质（材质数组）：基色/贴图取首个材质，释放逐个来
+    // （数组没有 dispose 方法，直接对数组调 dispose 会抛 TypeError）
+    const olds = Array.isArray(mesh.material)
+      ? mesh.material
+      : mesh.material ? [mesh.material] : [];
+    const old = olds[0] as THREE.MeshStandardMaterial | undefined;
     const baseColor =
       old && 'color' in old && (old as THREE.MeshStandardMaterial).color
         ? ((old as THREE.MeshStandardMaterial).color as THREE.Color).clone()
@@ -701,7 +706,7 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, us
       });
     map.set(mesh, tm);
     mesh.material = tm;
-    if (old && old !== tm) old.dispose();
+    for (const o of olds) if (o !== tm) o.dispose();
   });
   return map;
 }

@@ -66,6 +66,72 @@ export interface SplitOptions {
   minCrop?: number;
   /** 调色板颜色数，默认 16 */
   paletteSize?: number;
+  /**
+   * 小碎片清理：每骨骼每方向的归属掩码里，除最大连通域外面积小于此值的
+   * 连通域整域清除（ID 噪声产生的孤点）。默认 4；设 0 关闭。
+   * 眼/眉/口等小部件骨骼（名字命中 isProtectedDetailBone）豁免不清。
+   */
+  fragmentMinArea?: number;
+}
+
+/** 小部件豁免名单：这些骨骼的细节本身就小而独立，碎片清理会误伤 */
+const PROTECTED_DETAIL_RE = /eye|brow|lash|mouth|lip|tooth|teeth|tongue|pupil|瞳|目|眼|眉|睫|口|嘴|唇|舌|歯/;
+export function isProtectedDetailBone(name: string): boolean {
+  return PROTECTED_DETAIL_RE.test(name.toLowerCase());
+}
+
+/**
+ * 清理归属掩码里的小碎片连通域（8 连通）：保留最大域，其余面积 < minArea
+ * 的整域从 mask 清除。就地修改 mask，返回清除的像素数。
+ */
+export function filterSmallMaskComponents(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  minArea = 4,
+): number {
+  if (minArea <= 1 || width <= 0 || height <= 0) return 0;
+  const total = width * height;
+  const labels = new Int32Array(total).fill(-1);
+  const sizes: number[] = [];
+  const stack: number[] = [];
+  let largest = -1;
+  let largestSize = 0;
+  for (let s = 0; s < total; s++) {
+    if (!mask[s] || labels[s] >= 0) continue;
+    const id = sizes.length;
+    let size = 0;
+    stack.length = 0;
+    stack.push(s);
+    labels[s] = id;
+    while (stack.length > 0) {
+      const p = stack.pop()!;
+      size++;
+      const x = p % width;
+      const y = (p / width) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const q = ny * width + nx;
+          if (mask[q] && labels[q] < 0) { labels[q] = id; stack.push(q); }
+        }
+      }
+    }
+    sizes.push(size);
+    if (size > largestSize) { largestSize = size; largest = id; }
+  }
+  let removed = 0;
+  for (let p = 0; p < total; p++) {
+    const id = labels[p];
+    if (id >= 0 && id !== largest && sizes[id] < minArea) {
+      mask[p] = 0;
+      removed++;
+    }
+  }
+  return removed;
 }
 
 /**
@@ -210,6 +276,10 @@ export function splitByBoneId(
     for (const [bi, e] of perBone) {
       const bone = bake.bones[bi];
       const pb = result.get(bi)!;
+      // 小碎片清理（裁 bbox 前，免得孤点撑大裁剪框）；小部件骨骼豁免
+      if (!isProtectedDetailBone(bone.name)) {
+        filterSmallMaskComponents(e.mask, W, H, opts.fragmentMinArea ?? 4);
+      }
       // bbox
       let minX = W, maxX = -1, minY = H, maxY = -1;
       for (let y = 0; y < H; y++) {
@@ -840,6 +910,10 @@ export function splitSixParts(
       for (const [bi, e] of perBone) {
         const bone = bake.bones[bi];
         const pb = result.get(bi)!;
+        // 小碎片清理（同 splitByBoneId）；小部件骨骼豁免
+        if (!isProtectedDetailBone(bone.name)) {
+          filterSmallMaskComponents(e.mask, W, H, opts.fragmentMinArea ?? 4);
+        }
         let minX = W, maxX = -1, minY = H, maxY = -1;
         for (let y = 0; y < H; y++) {
           for (let x = 0; x < W; x++) {
