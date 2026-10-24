@@ -116,6 +116,10 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
               Object.values(character.nodes).find((n) => (n.slot?.slotKey ?? n.id) === slotKey)?.dynamicPatterns,
               piece?.dynamicPatterns,
             )}
+            followSourceOptions={[...new Map(Object.values(character.nodes)
+              .filter((n) => n.slot?.slotKey)
+              .map((n) => [n.slot!.slotKey as string, n.name] as const)).entries()]
+              .map(([key, label]) => ({ key, label }))}
           />
         </div>
       </div>

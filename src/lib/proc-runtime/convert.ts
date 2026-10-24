@@ -18,7 +18,7 @@ import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
-import { glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
+import { followDeltaAt, glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
 import { createDefaultParametricAppearance } from './surfaces';
 import { expandSurfaceGraph, graphHasRefs, subgraphLibraryOf } from './graph-expand';
 import { PATTERN_TEMPLATES, type PatternTemplate } from './pattern-templates';
@@ -58,6 +58,15 @@ export interface RuntimeDynamicInstance {
   id: string;
   slot: string;
   params: DynamicPatternParams;
+  /** 追随段烘焙增量曲线（u = 全程窗进度 0..1 → 增量；运行时空间：
+   * dx/dy 为 px、da 为弧度）。导出时由源部件的全程窗轨道样本按
+   * 「滞后位姿 − 当前位姿 × 强度」逐帧算好——运行时只采样本曲线，
+   * 不回头取样源部件（与编辑器的轨道位姿取样同源同值）。 */
+  followCurve?: {
+    dx?: [number, number][];
+    dy?: [number, number][];
+    da?: [number, number][];
+  };
 }
 
 /**
@@ -910,7 +919,8 @@ export function convertCharacterToRuntimePackage(
           }
         }
       }
-      const full = curvesForWindow(sampleWindow(0, totalFrames), totalFrames, 't', true);
+      const fullSamples = sampleWindow(0, totalFrames);
+      const full = curvesForWindow(fullSamples, totalFrames, 't', true);
       if (full.graphNodes.length > 0) {
         performances.push({
           id: 'tracks',
@@ -923,6 +933,58 @@ export function convertCharacterToRuntimePackage(
           mask: full.mask,
           graph: { context: 'performance', nodes: full.graphNodes },
         });
+      }
+      // ---- 追随段：增量曲线烘焙 ----
+      // 源部件的全程窗轨道样本（运行时空间绝对位姿）逐帧算「滞后位姿 −
+      // 当前位姿 × 强度」（followDeltaAt，与编辑器实时取样同一公式），
+      // 烘成增量曲线挂到每个启用追随的动态实例上——默认集 parts 与各
+      // 服装集 __dynamic 全覆盖，同源同参的实例共享一份曲线对象。
+      {
+        const bags: { inst: RuntimeDynamicInstance; slotKey: string }[] = [];
+        for (const p of parts) for (const d of p.dynamic ?? []) bags.push({ inst: d, slotKey: p.key });
+        for (const cs of Object.values(costumes)) {
+          const dm = (cs as { __dynamic?: Record<string, RuntimeDynamicInstance[]> }).__dynamic;
+          if (dm) for (const [slotKey, arr] of Object.entries(dm)) {
+            for (const d of arr) bags.push({ inst: d, slotKey });
+          }
+        }
+        const curveCache = new Map<string, RuntimeDynamicInstance['followCurve']>();
+        for (const { inst, slotKey } of bags) {
+          const fp = inst.params;
+          if (!fp.followEnabled) continue;
+          if (!fp.followSource) {
+            warnings.push(`追随：部件 ${slotKey} 的动态实例已启用追随但未选源部件，未烘焙`);
+            continue;
+          }
+          const srcNode = Object.values(character.nodes).find(
+            (n) => (n.slot?.slotKey ?? n.id) === fp.followSource);
+          const srcSamples = srcNode ? fullSamples.get(srcNode.id) : undefined;
+          if (!srcSamples) {
+            warnings.push(`追随：部件 ${slotKey} 的源部件「${fp.followSource}」不存在，未烘焙`);
+            continue;
+          }
+          const delayFrames = Math.round(fp.followDelaySec * frameRate);
+          const cacheKey = `${fp.followSource}|${delayFrames}|${fp.followAmount}|${fp.followRotate}`;
+          let curve = curveCache.get(cacheKey);
+          if (curve === undefined) {
+            const dxPts: [number, number][] = [], dyPts: [number, number][] = [], daPts: [number, number][] = [];
+            for (let f = 0; f <= totalFrames; f++) {
+              const cur = srcSamples[f];
+              const lag = srcSamples[Math.max(0, f - delayFrames)];
+              if (!cur || !lag) continue;
+              const d = followDeltaAt(cur, lag, fp.followAmount, fp.followRotate);
+              dxPts.push([f / totalFrames, d.dx]);
+              dyPts.push([f / totalFrames, d.dy]);
+              daPts.push([f / totalFrames, d.da]);
+            }
+            const keep = (pts: [number, number][], eps: number) =>
+              pts.every(([, v]) => Math.abs(v) < 1e-4) ? undefined : simplify(pts, eps);
+            const dx = keep(dxPts, 0.15), dy = keep(dyPts, 0.15), da = keep(daPts, 0.01);
+            curve = dx || dy || da ? { dx, dy, da } : undefined;
+            curveCache.set(cacheKey, curve);
+          }
+          if (curve) inst.followCurve = curve;
+        }
       }
       // 片段窗 → 段表演（按窗起点排序，状态机/宿主按 id 或名触发）
       let ci = 0;

@@ -497,6 +497,12 @@ function RigNodeProperties({
                   ?.pieces[node.slot?.slotKey ?? node.id]?.dynamicPatterns,
               )
               : undefined}
+            followSourceOptions={character
+              ? [...new Map(Object.values(character.nodes)
+                .filter((n) => n.slot?.slotKey)
+                .map((n) => [n.slot!.slotKey as string, n.name] as const)).entries()]
+                .map(([key, label]) => ({ key, label }))
+              : undefined}
           />
         </div>
       </div>

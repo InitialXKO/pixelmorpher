@@ -19,6 +19,15 @@ export interface DynamicPatternParams {
   stretchX: number;   // 脉冲峰值时的 X 缩放（>1 拉宽）
   deformHz: number;   // 频率（次/秒）
   deformPhase: number; // 相位（周期数 0..1）
+  // 追随段（形变段的跨部件驱动）：本部件渲染时叠加「源部件位姿的
+  // 滞后差」——源部件当前位姿与 delay 秒前位姿之差 × amount，
+  // 本部件就像被源部件拖着、慢半拍跟上（垂饰/披风/头发的次级运动）。
+  // 无状态纯函数：任意帧只由源部件在 t 与 t−delay 的位姿决定。
+  followEnabled: boolean;
+  followSource: string;   // 源部件槽位键（slotKey）；空 = 未选源、不生效
+  followDelaySec: number; // 滞后（秒）
+  followAmount: number;   // 跟随强度 0..1（1 = 完全按滞后位姿走）
+  followRotate: boolean;  // 是否连源部件的旋转滞后一起跟
   // 发射段
   emitEnabled: boolean;
   source: DynamicEmitSource;
@@ -61,6 +70,28 @@ export interface DynamicPatternParams {
   glowAngleSpace: 'sprite' | 'world'; // 方向基准：sprite = 跟随精灵旋转（缺省）；world = 恒为世界方向
 }
 
+/** 追随段的位姿（弧度 + px；空间由调用方定：编辑器画布系/运行时系，
+ * 同一公式、各自空间内取样与应用，增量在两系间只差 y 与角度的符号约定） */
+export interface FollowPose { a: number; x: number; y: number }
+
+/** 追随增量：源部件滞后位姿 − 当前位姿，按强度缩放；角度差归一到
+ * [−π, π]（跨 ±π 时取近路）。运行时孪生 = DYNAMIC_SRC 的 dynFollowDelta。 */
+export function followDeltaAt(
+  now: FollowPose,
+  lag: FollowPose,
+  amount: number,
+  rotate: boolean,
+): { dx: number; dy: number; da: number } {
+  const k = Math.max(0, Math.min(1, amount));
+  const raw = lag.a - now.a;
+  const da = Math.atan2(Math.sin(raw), Math.cos(raw));
+  return {
+    dx: (lag.x - now.x) * k,
+    dy: (lag.y - now.y) * k,
+    da: rotate ? da * k : 0,
+  };
+}
+
 /** 发光选区来源：color = 按像素颜色取色；marked = 手动标记的像素掩码 */
 export type GlowMaskSource = 'color' | 'marked';
 
@@ -92,6 +123,7 @@ export interface ResolvedDynamicPattern {
 export function defaultDynamicParams(): DynamicPatternParams {
   return {
     deformEnabled: false, squashY: 0.85, stretchX: 1.1, deformHz: 1, deformPhase: 0,
+    followEnabled: false, followSource: '', followDelaySec: 0.12, followAmount: 0.7, followRotate: true,
     emitEnabled: true, source: 'contour', rate: 12, linkToDeform: 0, speed: 6,
     directionDeg: 270, spreadDeg: 60, layer: 'both', frontRatio: 0.35,
     life: 0.9, sizeStart: 3, sizeEnd: 8, rise: 12, buoy: 0, turbulence: 4,
@@ -120,6 +152,12 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
   out.glowAngleDeg = Number.isFinite(out.glowAngleDeg)
     ? ((out.glowAngleDeg % 360) + 360) % 360 : 270;
   if (out.glowAngleSpace !== 'world') out.glowAngleSpace = 'sprite';
+  if (typeof out.followSource !== 'string') out.followSource = '';
+  out.followDelaySec = Number.isFinite(out.followDelaySec)
+    ? Math.max(0, Math.min(1, out.followDelaySec)) : 0.12;
+  out.followAmount = Number.isFinite(out.followAmount)
+    ? Math.max(0, Math.min(1, out.followAmount)) : 0.7;
+  out.followRotate = out.followRotate !== false;
   return out;
 }
 
@@ -511,6 +549,10 @@ export const DYNAMIC_PATTERN_TEMPLATES: DynamicPatternTemplate[] = [
     deformEnabled: true, squashY: 0.78, stretchX: 1.18, deformHz: 1.8,
     emitEnabled: false,
   }),
+  tpl('垂饰滞后', '形变', {
+    followEnabled: true, followDelaySec: 0.12, followAmount: 0.7, followRotate: true,
+    emitEnabled: false,
+  }),
   tpl('火焰环绕', '元素', {
     source: 'contour', rate: 26, speed: 7, life: 0.6,
     sizeStart: 2, sizeEnd: 5, rise: 20, turbulence: 3,
@@ -587,6 +629,8 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'stretchX', label: '横向拉伸（峰值）', section: '形变', min: 0.9, max: 1.5, step: 0.01 },
   { key: 'deformHz', label: '形变频率（次/秒）', section: '形变', min: 0, max: 4, step: 0.05 },
   { key: 'deformPhase', label: '形变相位', section: '形变', min: 0, max: 1, step: 0.01 },
+  { key: 'followDelaySec', label: '追随延迟（秒）', section: '形变', min: 0, max: 1, step: 0.01 },
+  { key: 'followAmount', label: '追随强度', section: '形变', min: 0, max: 1, step: 0.05 },
   { key: 'rate', label: '发射率（个/秒）', section: '发射', min: 0, max: 60, step: 1 },
   { key: 'linkToDeform', label: '发射随形变调制', section: '发射', min: 0, max: 1, step: 0.05 },
   { key: 'speed', label: '初速（px/秒）', section: '发射', min: 0, max: 40, step: 0.5 },

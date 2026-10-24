@@ -1503,4 +1503,94 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   }
 }
 
+// ---------- P) 追随段：增量曲线烘焙进包 + 模板采样应用 ----------
+{
+  const { createDynamicInstance, defaultDynamicParams } = await import('../src/lib/dynamic-patterns');
+  const { readFileSync } = await import('node:fs');
+  const followParams = (over: Record<string, unknown>) => ({
+    ...defaultDynamicParams(), emitEnabled: false,
+    followEnabled: true, followSource: 'arm', followDelaySec: 0.3, followAmount: 1, followRotate: true,
+    ...over,
+  }) as never;
+  const paraPiece = (slot: string, dyn?: unknown[]) => {
+    const p = createDefaultCostumePiece(slot);
+    p.parametric = { ...createDefaultParametricAppearance() } as never;
+    if (dyn) (p as { dynamicPatterns?: unknown[] }).dynamicPatterns = dyn as never;
+    return p;
+  };
+  const mkChar = (capeNodeDyn: unknown[] | undefined, capePieceDyn: unknown[] | undefined, src: string) => ({
+    id: 'chP', name: '追随',
+    nodes: {
+      torso: {
+        ...makeNode('torso', '躯干', 'torso'),
+        children: ['arm', 'cape'],
+        transform: { x: 0, y: 0, angle: 0, variantIndex: 6, stretch: 1 },
+      },
+      arm: {
+        ...makeNode('arm', '手臂', 'arm', 'torso'),
+        tracks: { x: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 12, value: 192 }] } },
+      },
+      cape: { ...makeNode('cape', '披风', 'cape', 'torso'), dynamicPatterns: capeNodeDyn },
+    },
+    rootNodeId: 'torso',
+    rootNodeIds: ['torso'],
+    costumeSets: [
+      { id: 'set1', name: '默认', pieces: { torso: paraPiece('torso'), arm: paraPiece('arm'), cape: paraPiece('cape', capePieceDyn) } },
+      { id: 'set2', name: '替换', pieces: { torso: paraPiece('torso'), arm: paraPiece('arm'), cape: paraPiece('cape', capePieceDyn) } },
+    ],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  }) as unknown as Character;
+  const samplePts = (pts: [number, number][] | undefined, u: number): number => {
+    if (!pts || pts.length === 0) return 0;
+    if (u <= pts[0]![0]) return pts[0]![1];
+    for (let i = 1; i < pts.length; i++) {
+      if (u <= pts[i]![0]) {
+        const [x0, y0] = pts[i - 1]!, [x1, y1] = pts[i]!;
+        return x1 > x0 ? y0 + ((y1 - y0) * (u - x0)) / (x1 - x0) : y1;
+      }
+    }
+    return pts[pts.length - 1]![1];
+  };
+
+  const instNode = createDynamicInstance('追随', followParams({}), '身体');
+  const pkg = convertCharacterToRuntimePackage(
+    mkChar([instNode], undefined, 'arm'), undefined, { frameRate: 10, totalFrames: 12 });
+  const capeDyn = pkg.parts.find((p) => p.key === 'cape')?.dynamic?.[0];
+  const fc = capeDyn?.followCurve;
+  check('P1 追随增量曲线进包（dx 有、dy/da 无）', !!fc?.dx && !fc?.dy && !fc?.da);
+  check('P1 u=0 增量为 0', Math.abs(samplePts(fc?.dx, 0)) < 0.25);
+  check('P1 u=1/6（第 2 帧，滞后未满）增量 −2', Math.abs(samplePts(fc?.dx, 1 / 6) + 2) < 0.25);
+  check('P1 u=0.5（第 6 帧）增量 −3', Math.abs(samplePts(fc?.dx, 0.5) + 3) < 0.25);
+  check('P1 u=1（末帧）增量 −3', Math.abs(samplePts(fc?.dx, 1) + 3) < 0.25);
+  const set2Dyn = (pkg.costumes['set2'] as { __dynamic?: Record<string, { followCurve?: unknown }[]> })?.__dynamic?.['cape']?.[0];
+  check('P2 服装集 __dynamic 的同实例也挂曲线', !!set2Dyn?.followCurve);
+
+  const pkgBad = convertCharacterToRuntimePackage(
+    mkChar([createDynamicInstance('追随', followParams({ followSource: 'nope' }), '身体')], undefined, 'nope'),
+    undefined, { frameRate: 10, totalFrames: 12 });
+  check('P3 坏源部件点名警告', pkgBad.warnings.some((w) => w.includes('追随') && w.includes('nope')));
+  check('P3 坏源不挂曲线', !pkgBad.parts.find((p) => p.key === 'cape')?.dynamic?.[0]?.followCurve);
+  const pkgEmpty = convertCharacterToRuntimePackage(
+    mkChar([createDynamicInstance('追随', followParams({ followSource: '' }), '身体')], undefined, ''),
+    undefined, { frameRate: 10, totalFrames: 12 });
+  check('P3 未选源点名警告', pkgEmpty.warnings.some((w) => w.includes('追随') && w.includes('未选源')));
+  const pkgStill = convertCharacterToRuntimePackage(
+    mkChar([createDynamicInstance('追随', followParams({ followSource: 'torso' }), '身体')], undefined, 'torso'),
+    undefined, { frameRate: 10, totalFrames: 12 });
+  check('P4 源静止时无曲线、无警告（不是错误）',
+    !pkgStill.parts.find((p) => p.key === 'cape')?.dynamic?.[0]?.followCurve
+    && !pkgStill.warnings.some((w) => w.includes('追随')));
+
+  const tplText = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+  check('P5 模板含追随采样与应用接线', tplText.includes('followSampleAt') && tplText.includes('inst.followCurve'));
+  const m = tplText.match(/function followSampleAt\(points, u\) \{[\s\S]*?\n\}/);
+  check('P5 followSampleAt 可提取', !!m);
+  if (m && fc?.dx) {
+    const sampler = new Function(`${m[0]}\nreturn followSampleAt;`)() as (p: [number, number][], u: number) => number;
+    check('P5 模板采样器采烘焙曲线 u=0.5 得 −3', Math.abs(sampler(fc.dx, 0.5) + 3) < 0.25);
+    check('P5 模板采样器两端钳制', sampler(fc.dx, -1) === sampler(fc.dx, 0) && sampler(fc.dx, 2) === sampler(fc.dx, 1));
+  }
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

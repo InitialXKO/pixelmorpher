@@ -429,6 +429,20 @@ function sortParts(parts, v) {
 /** 蓝图小求值器（运行时方言：time/const/curve/math/sin/transform；enabled 短路）
  *  graph = { nodes: [{id, type, enabled?, ...}] }；ctx = { u }（0..1 表演进度）
  *  返回 Map partKey -> { angle?, dx?, dy? } */
+/** 追随增量曲线采样：[[u, v], ...] 线性插值、两端钳制；无曲线 = 0 */
+function followSampleAt(points, u) {
+  if (!points || points.length === 0) return 0;
+  if (u <= points[0][0]) return points[0][1];
+  for (let i = 1; i < points.length; i++) {
+    if (u <= points[i][0]) {
+      const p0 = points[i - 1], p1 = points[i];
+      const span = p1[0] - p0[0];
+      const k = span > 0 ? (u - p0[0]) / span : 0;
+      return p0[1] + (p1[1] - p0[1]) * k;
+    }
+  }
+  return points[points.length - 1][1];
+}
 /** 表演包络权重：tSec 内淡入、duration-out 前淡出 */
 function envelopeWeight(tSec, duration, envIn, envOut) {
   if (tSec < 0 || tSec > duration) return 0;
@@ -1351,6 +1365,10 @@ function frame(now) {
     }
   }
   const state = ensureAtlas(gl, char.variant, currentCostume);
+  // 追随段进度：与「轨道」表演同一时间轴（全程窗 u ∈ 0..1，两端钳制）
+  const tracksPerf = PERFORMANCES.find((p) => p.id === 'tracks');
+  const followU = tracksPerf && tracksPerf.duration > 0
+    ? Math.min(1, Math.max(0, elapsed / tracksPerf.duration)) : -1;
   const sorted = sortParts(PARTS, char.variant);
   const els = [];
   const elByKey = new Map();
@@ -1362,10 +1380,21 @@ function frame(now) {
     const p = resolved.params;
     const an0 = pose[part.key] || { a: 0, dy: 0, rim: 0, glint: 0 };
     const an = { a: an0.a + (p.restRot || 0), dx: an0.dx || 0, dy: an0.dy || 0, rim: an0.rim || 0, glint: an0.glint || 0 };
+    const dynList = dynListFor(part);
+    // 追随段：导出时烘好的增量曲线按轨道进度采样，叠进本部件位姿
+    // （位置 + 角度；粒子锚点用同一 an/ctr，自动跟随）
+    if (followU >= 0) {
+      for (const inst of dynList) {
+        const fc = inst.followCurve;
+        if (!fc) continue;
+        an.dx += followSampleAt(fc.dx, followU);
+        an.dy += followSampleAt(fc.dy, followU);
+        an.a += followSampleAt(fc.da, followU);
+      }
+    }
     const ctr = partCenter(p, an);
     // 动态模式：形变段逐帧求脉冲（多实例相乘）；合成/动态部件放大
     // 实例面片给足采样余量（片元按瓦片边界丢弃，多余面片无副作用）
-    const dynList = dynListFor(part);
     let dsx = 1, dsy = 1, hasDeform = false;
     for (const inst of dynList) {
       const d = dynDeformAt(inst.params, elapsed);

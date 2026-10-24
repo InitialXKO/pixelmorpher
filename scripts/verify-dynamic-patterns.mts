@@ -25,6 +25,9 @@ import {
   type DynamicPatternParams,
 } from '../src/lib/dynamic-patterns';
 import { extractContour, simulateDynamicParticles } from '../src/lib/dynamic-pattern-sim';
+import { followDeltaAt } from '../src/lib/dynamic-patterns';
+import { createDynamicRuntime } from '../src/lib/proc-runtime/dynamic-src';
+import { subToPx } from '../src/lib/unified-types';
 
 let pass = 0;
 let fail = 0;
@@ -174,6 +177,83 @@ function instructionFor(ch: Character, frame: number) {
     undefined,
   );
   check('D6 组序只数启用发光的实例', rmap.get('t_a_true') === 0 && rmap.get('t_c_true') === 1 && !rmap.has('t_b_true'));
+}
+
+// ---- D7：追随段（纯函数孪生 + 主画布应用） ----
+{
+  const rt = createDynamicRuntime();
+  const cases: { now: { a: number; x: number; y: number }; lag: { a: number; x: number; y: number }; amt: number; rot: boolean }[] = [
+    { now: { a: 0.3, x: 10, y: -4 }, lag: { a: 0.9, x: 2, y: 7 }, amt: 0.7, rot: true },
+    { now: { a: 0, x: 0, y: 0 }, lag: { a: 0, x: 0, y: 0 }, amt: 1, rot: true },
+    { now: { a: 1, x: -5, y: 3 }, lag: { a: -2, x: 8, y: -9 }, amt: 0, rot: true },
+    { now: { a: 0.5, x: 1, y: 1 }, lag: { a: 2.5, x: 4, y: -6 }, amt: 1.5, rot: false },
+  ];
+  let twinOk = true;
+  for (const c of cases) {
+    const a = followDeltaAt(c.now, c.lag, c.amt, c.rot);
+    const b = (rt.dynFollowDelta as (n: never, l: never, amt: number, rot: boolean) => { dx: number; dy: number; da: number })(c.now as never, c.lag as never, c.amt, c.rot);
+    if (!near(a.dx, b.dx, 1e-12) || !near(a.dy, b.dy, 1e-12) || !near(a.da, b.da, 1e-12)) twinOk = false;
+  }
+  check('D7 追随增量双侧孪生逐值一致', twinOk);
+  const zero = followDeltaAt({ a: 1, x: 5, y: 5 }, { a: 1, x: 5, y: 5 }, 0.8, true);
+  check('D7 滞后位姿=当前位姿时增量为零', zero.dx === 0 && zero.dy === 0 && zero.da === 0);
+  const wrap = followDeltaAt(
+    { a: (-170 * Math.PI) / 180, x: 0, y: 0 },
+    { a: (170 * Math.PI) / 180, x: 0, y: 0 }, 1, true);
+  check('D7 角度差跨 ±π 取近路（−170°→+170° 应为 −20°）',
+    near(wrap.da, (-20 * Math.PI) / 180, 1e-9));
+  const noRot = followDeltaAt({ a: 0, x: 0, y: 0 }, { a: 1.2, x: 3, y: 4 }, 0.5, false);
+  check('D7 关旋转时 da=0、平移照常', noRot.da === 0 && near(noRot.dx, 1.5) && near(noRot.dy, 2));
+  const tplF = findDynamicTemplate('垂饰滞后');
+  check('D7 内置模板「垂饰滞后」在库', !!tplF && tplF.params.followEnabled === true && tplF.params.followAmount === 0.7);
+}
+{
+  // 主画布应用：源节点 S 的 x 轨 0→192 亚像素（=12px，帧 0..12，
+  // 1px/帧），跟随者 N 挂追随（源 slotS、延迟 0.3s、强度 1、fps 10
+  // → 滞后 3 帧）。第 6 帧期望 Δx = x(3) − x(6) = 3 − 6 = −3px。
+  // 取整像素增量是为避开 halfPixelAlignSub 的整数像素 +0.5 对齐移位
+  // （增量非整像素时对齐移位消失、读数差 0.5px，非机制误差）。
+  const buildFollowChar = (followOn: boolean): Character => {
+    const ch = createDefaultCharacter('cf', '追随测试');
+    const root = ch.nodes[ch.rootNodeId]!;
+    const mk = (id: string, slotKey: string, parent: string) => {
+      const n = createDefaultNode(id, id);
+      (n as unknown as { parentId: string }).parentId = parent;
+      const piece = createDefaultCostumePiece(slotKey);
+      piece.sprites[6 as DirectionIndex] = spriteB;
+      n.slot = piece;
+      ch.nodes[id] = n;
+      return { n, piece };
+    };
+    const src = mk('S', 'slotS', ch.rootNodeId);
+    src.n.tracks = {
+      x: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 12, value: 192 }] },
+    } as never;
+    const fol = mk('N', 'slotN', ch.rootNodeId);
+    fol.n.dynamicPatterns = [inst('身体', {
+      emitEnabled: false,
+      followEnabled: followOn, followSource: 'slotS',
+      followDelaySec: 0.3, followAmount: 1, followRotate: true,
+    })];
+    root.children.push('S', 'N');
+    ch.costumeSets = [{
+      id: 'cs', name: '默认',
+      pieces: { slotS: src.piece, slotN: fol.piece },
+    } as unknown as Character['costumeSets'][number]];
+    ch.activeCostumeSetId = 'cs';
+    ch.nodes[ch.rootNodeId]!.transform.variantIndex = 6;
+    return ch;
+  };
+  const planAt = (ch: Character) => generateRenderPlan(ch, 6, 200, 200, undefined, 10)
+    .sortedInstructions.find((i) => i.nodeId === 'N');
+  const on = planAt(buildFollowChar(true));
+  const off = planAt(buildFollowChar(false));
+  check('D7 跟随者指令存在（开/关）', !!on && !!off);
+  const dX = subToPx(on!.worldX) - subToPx(off!.worldX);
+  const dY = subToPx(on!.worldY) - subToPx(off!.worldY);
+  check(`D7 第 6 帧 Δx = −3（实测 ${dX.toFixed(2)}）`, near(dX, -3, 0.05));
+  check(`D7 第 6 帧 Δy = 0（实测 ${dY.toFixed(2)}）`, near(dY, 0, 0.05));
+  check('D7 无角度轨时 Δangle = 0', near((on!.angle ?? 0) - (off!.angle ?? 0), 0, 0.01));
 }
 
 console.log(`verify-dynamic-patterns: ${pass} passed, ${fail} failed`);

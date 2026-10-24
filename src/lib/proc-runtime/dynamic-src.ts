@@ -32,6 +32,16 @@ function dynDeformAt(params, tSec) {
     amount: p,
   };
 }
+function dynFollowDelta(now, lag, amount, rotate) {
+  const k = Math.max(0, Math.min(1, amount));
+  const raw = lag.a - now.a;
+  const da = Math.atan2(Math.sin(raw), Math.cos(raw));
+  return {
+    dx: (lag.x - now.x) * k,
+    dy: (lag.y - now.y) * k,
+    da: rotate ? da * k : 0,
+  };
+}
 function dynOccAt(tile, x, y) {
   if (x < 0 || y < 0 || x >= tile.w || y >= tile.h) return false;
   return tile.data[(y * tile.w + x) * 4] < 128;
@@ -133,7 +143,8 @@ export function createDynamicRuntime(): {
   dynDeformAt: (params: never, t: number) => { sx: number; sy: number; amount: number };
   dynContour: (tile: never) => { x: number; y: number; nx: number; ny: number }[];
   dynSimulate: (inst: never, tile: never, frame: number, frameRate: number, layer: string, seedKey: string) => { x: number; y: number; size: number; alpha: number; color: string }[];
+  dynFollowDelta: (now: never, lag: never, amount: number, rotate: boolean) => { dx: number; dy: number; da: number };
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynFollowDelta };`);
   return factory() as never;
 }

@@ -51,12 +51,15 @@ export default function DynamicPatternEditor({
   hint,
   previewGrid,
   glowRankById,
+  followSourceOptions,
 }: {
   instances: DynamicPatternInstance[];
   onChange: (next: DynamicPatternInstance[]) => void;
   hint?: string;
   /** 当前槽位的代表图（发光段取色/手动标记用；无图时这两项不可用） */
   previewGrid?: PixelGrid | null;
+  /** 追随段可选的源部件（槽位键 + 显示名）；缺省时源部件退化为文本输入 */
+  followSourceOptions?: { key: string; label: string }[];
   /** 双挂载解析后的发光组序（实例 id → 0 起序数）：判「超过第 3 个」用；
    *  挂载方按当前服装集解析传入，缺省按本列表顺序自算 */
   glowRankById?: ReadonlyMap<string, number>;
@@ -182,6 +185,38 @@ export default function DynamicPatternEditor({
           {(['形变', '发射', '粒子', '发光'] as const).map((section) => (
             <div key={section}>
               <div className="text-[9px] text-gray-600 mt-0.5">{section}</div>
+              {section === '形变' && (
+                <div className="flex items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0">
+                    <input type="checkbox" checked={np(inst).followEnabled} onChange={(e) => patchParam(inst.id, 'followEnabled', e.target.checked)} />
+                    追随源部件
+                  </label>
+                  {followSourceOptions ? (
+                    <select
+                      value={np(inst).followSource}
+                      onChange={(e) => patchParam(inst.id, 'followSource', e.target.value)}
+                      className={`${selCls} flex-1`}
+                      title="本部件慢半拍跟随源部件的运动（垂饰/披风/头发的次级运动）：源部件动得越快、延迟越大，拖尾越明显"
+                    >
+                      <option value="">（未选源）</option>
+                      {followSourceOptions.map((o) => (
+                        <option key={o.key} value={o.key}>{o.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={np(inst).followSource}
+                      onChange={(e) => patchParam(inst.id, 'followSource', e.target.value)}
+                      className={`${numCls} flex-1 rounded px-1`}
+                      placeholder="源部件槽位键"
+                    />
+                  )}
+                  <label className="flex items-center gap-1 text-[9px] text-gray-500 shrink-0" title="连源部件的旋转滞后一起跟">
+                    <input type="checkbox" checked={np(inst).followRotate} onChange={(e) => patchParam(inst.id, 'followRotate', e.target.checked)} />
+                    连旋转
+                  </label>
+                </div>
+              )}
               {section === '发光' && glowOverflowOf(inst) && (
                 <div className="flex items-center gap-1.5">
                   <span className="text-[9px] text-gray-500 w-24 shrink-0">并入发光组</span>
@@ -230,6 +265,8 @@ export default function DynamicPatternEditor({
                 </div>
               )}
               {DYNAMIC_PARAM_DEFS.filter((d) => d.section === section)
+                .filter((d) => !(section === '形变' && !np(inst).followEnabled
+                  && (d.key === 'followDelaySec' || d.key === 'followAmount')))
                 .filter((d) => !(section === '发光' && glowOverflowOf(inst)
                   && (d.key === 'glowStrength' || d.key === 'glowHz' || d.key === 'glowPhase')))
                 .filter((d) => !(section === '发光' && d.key === 'glowHalo' && np(inst).glowShape === 'custom'))

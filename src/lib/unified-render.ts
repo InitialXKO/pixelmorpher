@@ -74,7 +74,7 @@ import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from 
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
-import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, glowField, glowPulseAt, type DynamicPatternParams } from './dynamic-patterns';
+import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followDeltaAt, glowField, glowPulseAt, type DynamicPatternParams } from './dynamic-patterns';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
@@ -1473,6 +1473,44 @@ export function generateRenderPlan(
   const rootTransform = worldTransforms.get(character.rootNodeId);
   const currentDirection = rootTransform?.variantIndex ?? 0;
 
+  // 追随段取样（动态模式跨部件驱动）：源部件位姿取「轨道位姿」——与
+  // 导出烘焙同源的剥离 FK（去行为/蓝图/修改器/IK），当前帧与滞后帧
+  // 各一份。无追随实例时整块跳过。增量在画布空间算、画布空间用。
+  const followSlotToNode = new Map<string, string>();
+  for (const n of Object.values(character.nodes)) {
+    followSlotToNode.set(n.slot?.slotKey ?? n.id, n.id);
+  }
+  const anyFollow = Object.values(character.nodes).some((n) => {
+    const lists = [n.dynamicPatterns, ...(character.costumeSets ?? []).map(
+      (cs) => cs.pieces[n.slot?.slotKey ?? n.id]?.dynamicPatterns)];
+    return lists.some((l) => (l ?? []).some((i) => i.enabled && i.params.followEnabled && i.params.followSource));
+  });
+  let followStripped: Character | undefined;
+  const followMaps = new Map<number, Map<string, WorldTransform>>();
+  const followPoseAt = (srcId: string, atFrame: number) => {
+    let map = followMaps.get(atFrame);
+    if (!map) {
+      followStripped ??= {
+        ...character,
+        behaviorGraphs: {},
+        ikChains: [],
+        nodes: Object.fromEntries(Object.values(character.nodes).map((n) => [
+          n.id, { ...n, blueprint: null, modifiers: [] },
+        ])),
+      } as Character;
+      map = computeWorldTransforms(
+        followStripped, atFrame, canvasWidth, canvasHeight, frameRate,
+        undefined, undefined, undefined, geometryDirection,
+      );
+      followMaps.set(atFrame, map);
+    }
+    const w = map.get(srcId);
+    if (!w) return undefined;
+    const dir = (map.get(character.rootNodeId)?.variantIndex ?? currentDirection) as DirectionIndex;
+    const p = projectToView(w.worldX, w.worldY, w.worldZ, dir);
+    return { a: (w.worldAngle * Math.PI) / 180, x: subToPx(p.canvasX), y: subToPx(p.canvasY) };
+  };
+
   // 方向间过渡（蒙皮转面 A）：facingAngle 为连续角度时，计算相邻两方向及混合系数
   // 单图模式（蒙皮转面 C）：不切换精灵，用 faceTurn 的 yaw 模拟转头
   const singleImageMode = character.faceTurnConfig?.singleImageMode === true;
@@ -1648,20 +1686,32 @@ export function generateRenderPlan(
       activeCostumeSet?.pieces[node.slot?.slotKey ?? node.id]?.dynamicPatterns,
     );
     let dynSx = 1, dynSy = 1;
+    let folDx = 0, folDy = 0, folDa = 0;
     if (dynResolved.length > 0) {
       const tSec = frame / frameRate;
       for (const r of dynResolved) {
         const d = dynamicDeformAt(r.instance.params, tSec);
         dynSx *= d.sx;
         dynSy *= d.sy;
+        // 追随段：源部件滞后位姿差（轨道位姿取样，见 followPoseAt）
+        const fp = r.instance.params;
+        if (anyFollow && fp.followEnabled && fp.followSource) {
+          const srcId = followSlotToNode.get(fp.followSource);
+          const now = srcId ? followPoseAt(srcId, frame) : undefined;
+          const lag = srcId ? followPoseAt(srcId, frame - fp.followDelaySec * frameRate) : undefined;
+          if (now && lag) {
+            const fd = followDeltaAt(now, lag, fp.followAmount, fp.followRotate);
+            folDx += fd.dx; folDy += fd.dy; folDa += fd.da;
+          }
+        }
       }
     }
     nodeInstructions.push({
       nodeId,
       sprite: effectiveSprite,
-      worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel)) as SubPixel,
-      worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel)) as SubPixel,
-      angle: worldTf.worldAngle,
+      worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel) + pxToSub(folDx)) as SubPixel,
+      worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel) + pxToSub(folDy)) as SubPixel,
+      angle: worldTf.worldAngle + (folDa * 180) / Math.PI,
       stretch: dynResolved.length > 0 ? worldTf.worldStretch * dynSy : worldTf.worldStretch,
       foreshorten,
       variantIndex: worldTf.variantIndex,
