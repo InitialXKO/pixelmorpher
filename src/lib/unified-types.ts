@@ -759,6 +759,14 @@ export interface Node {
   // ---- Visibility ----
   visible: boolean;
 
+  // ---- 裁剪面（半平面裁剪，渲染本节点视觉时生效，子节点不受影响）----
+  // 平面定义在锚点节点的精灵图空间：以锚点精灵中心为原点、x 右
+  // y 下（图坐标），法线角 angleDeg、沿法线偏移 offset px，保留
+  // 法线正侧（n·p >= offset）。典型用法：光束节点锚定持剑手节点，
+  // 平面贴在剑柄出口——光束滑动时柄内段被裁掉（移动+部分隐藏）。
+  // 锚点 = 本节点自身时为静态本地裁剪。锚点须为同角色节点。
+  clipPlane?: { anchor: string; angleDeg: number; offset: number };
+
   // ---- Costume Reference ----
   slot?: CostumePiece;            // Optional: costume slot definition (links node to a costume slot)
 
@@ -768,6 +776,15 @@ export interface Node {
 }
 
 /** Animation tracks for a node's transform properties */
+/** 父级切换键值：从该帧起节点改挂到 parentId（空串 = 角色根）。
+ *  socketId：undefined = 沿用节点原 attachment；字符串 = 新父级的
+ *  该插槽；null = 固定连接（fixedOffset 缺省沿用原 attachment 的） */
+export interface ParentKeyValue {
+  parentId: string;
+  socketId?: string | null;
+  fixedOffset?: { x: SubPixel; y: SubPixel };
+}
+
 export interface NodeTracks {
   angle?: KeyframeTrack<number>;
   tilt?: KeyframeTrack<number>;
@@ -784,6 +801,10 @@ export interface NodeTracks {
   modifierKeys?: KeyframeTrack<ModifierInstance[]>;
   /** 转面轨：点值 = 该帧的 yaw/pitch，点间数值 lerp；优先于 node.faceTurn 静态值。 */
   faceTurnKeys?: KeyframeTrack<{ yaw: number; pitch: number }>;
+  /** 父级切换轨（step 取值：≤当前帧的最后一点）：抓握/放下等重挂。
+   *  FK（computeWorldTransforms）按帧解析有效父级；包侧部件是扁平
+   *  世界曲线，烘焙采样同一 FK，重挂前后的跟随自动进曲线、包无新机制。 */
+  parentKeys?: KeyframeTrack<ParentKeyValue>;
 }
 
 
@@ -1003,6 +1024,8 @@ export interface ProcPerformance {
   graphs: Record<string, BlueprintGraph>;
   /** 残影部件（nodeId，可选）：表演期间该部件发历史残影（实例流效果） */
   afterimageNodeId?: string;
+  /** 刀光（可选）：椭圆扇形状衰减特效，表演开始时定格锚点位姿播放 */
+  slashEffect?: import('./slash-fan').SlashFanSpec;
   enabled: boolean;
 }
 
@@ -1327,6 +1350,9 @@ export interface NodeRenderInstruction {
   modifiers: ModifierInstance[];  // Pixel-level modifiers to apply before drawing
   frame: number;                 // Current frame (for modifier param resolution)
   frameRate: number;             // Frame rate (for modifier param resolution)
+  /** 裁剪多边形（画布 px 坐标）：执行端在本指令绘制前 clip、绘后
+   * restore。由计划生成端按 node.clipPlane 与锚点节点当帧位姿算出。 */
+  clipPath?: [number, number][];
   /** X-axis scale factor (default 1). `stretch` covers the Y axis. */
   scaleX?: number;
   /** Skew transforms in degrees, applied after scale (matches old pipeline order). */
@@ -1413,6 +1439,15 @@ export interface RenderPlan {
   frameRate?: number;
   /** Character-level blueprint (whole-character post-processing). Null = legacy per-node path. */
   characterBlueprint?: import('./blueprint/ir').BlueprintGraph | null;
+  /** 刀光（椭圆扇）：本帧应绘制的刀光帧与定格位姿（画布 px） */
+  slashFx?: {
+    spec: import('./slash-fan').SlashFanSpec;
+    frameIdx: number;
+    worldX: number;
+    worldY: number;
+    angleDeg: number;
+    mirror: boolean;
+  };
   /** 本帧蓝图变量（变量名 → 值）：generateRenderPlan 从 AnimationVariable 求值后注入，
    *  供 executeRenderPlan/renderNodeSprite 的蓝图求值 ctx.vars 使用 */
   blueprintVars?: Record<string, number>;

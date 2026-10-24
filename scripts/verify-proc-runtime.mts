@@ -1960,5 +1960,181 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   if (thumb) for (let i = 3; i < thumb.data.length; i += 4) if (thumb.data[i]! > 0) thumbAlpha++;
   check('V5 装甲钢板缩略图（ref 展开后烘焙）非空', !!thumb && thumbAlpha > 300);
 }
+// ---------- X) 裁剪面（main 侧，合并时由 U 改名避撞）：convert 透传 + 模板平面合成 ----------
+{
+  const appU = createDefaultParametricAppearance();
+  const handU = makeNode('handU', '持剑手', 'hand');
+  const bladeU = makeNode('bladeU', '光束', 'blade', 'handU');
+  (bladeU as unknown as { clipPlane?: unknown }).clipPlane = { anchor: 'handU', angleDeg: 90, offset: 3 };
+  const chU = {
+    id: 'chU', name: '裁剪面',
+    nodes: { handU, bladeU },
+    rootNodeId: 'handU', rootNodeIds: ['handU'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: {
+        hand: { ...createDefaultCostumePiece('hand'), parametric: appU },
+        blade: { ...createDefaultCostumePiece('blade'), parametric: appU },
+      },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkgU = convertCharacterToRuntimePackage(chU, undefined, { frameRate: 8 });
+  const bladePart = pkgU.parts.find((p) => p.key === 'blade');
+  check('X1 裁剪面进包（锚点/角度/偏移直译为平面系数）',
+    !!bladePart?.clip && bladePart.clip.by === 'hand'
+      && Math.abs(bladePart.clip.a) < 1e-9 && Math.abs(bladePart.clip.b - 1) < 1e-9
+      && Math.abs(bladePart.clip.c + 3) < 1e-9,
+    JSON.stringify(bladePart?.clip));
+  const bladeBad = makeNode('bladeBad', '光束坏锚', 'blade', 'handU');
+  (bladeBad as unknown as { clipPlane?: unknown }).clipPlane = { anchor: 'noSlotNode', angleDeg: 0, offset: 0 };
+  const noSlot = makeNode('noSlotNode', '无槽节点', null);
+  const chU2 = {
+    ...chU,
+    nodes: { handU, bladeBad, noSlotNode: noSlot },
+  } as unknown as Character;
+  const pkgU2 = convertCharacterToRuntimePackage(chU2, undefined, { frameRate: 8 });
+  check('X2 锚点不是部件槽位 → 点名警告且不带裁剪',
+    pkgU2.warnings.some((w) => w.includes('裁剪面'))
+      && !pkgU2.parts.find((p) => p.key === 'blade')?.clip,
+    pkgU2.warnings.filter((w) => w.includes('裁剪')).join('；'));
+
+  // 模板平面合成纯函数：性质检验——随机位姿/平面/采样点下，
+  // 「按锚点空间定义判保留」与「按合成平面判保留」必须一致
+  {
+    const { readFileSync } = await import('node:fs');
+    const tplSrc = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+    const start = tplSrc.indexOf('function clipPlaneForPart');
+    check('X3 模板含裁剪面合成函数', start >= 0);
+    if (start >= 0) {
+      let depth = 0, end = start;
+      for (let i = tplSrc.indexOf('{', start); i < tplSrc.length; i++) {
+        if (tplSrc[i] === '{') depth++;
+        else if (tplSrc[i] === '}' && --depth === 0) { end = i + 1; break; }
+      }
+      const fn = new Function(`${tplSrc.slice(start, end)}\nreturn clipPlaneForPart;`)() as
+        (clip: { a: number; b: number; c: number }, s: { pos: number[]; rot: number }, a2: { pos: number[]; rot: number }, mir: boolean) => number[];
+      const M = (rot: number, x: number, y: number) => {
+        const c = Math.cos(rot), s = Math.sin(rot);
+        return [c * x + s * y, s * x - c * y];
+      };
+      let seed = 42;
+      const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+      let consistent = true;
+      for (let trial = 0; trial < 300 && consistent; trial++) {
+        const selfEl = { pos: [rnd() * 40 - 20, rnd() * 40 - 20], rot: rnd() * Math.PI * 2 };
+        const anchEl = { pos: [rnd() * 40 - 20, rnd() * 40 - 20], rot: rnd() * Math.PI * 2 };
+        const th = rnd() * Math.PI * 2;
+        const clip = { a: Math.cos(th), b: Math.sin(th), c: rnd() * 10 - 5 };
+        const mir = trial % 3 === 0;
+        const comp = fn(clip, selfEl, anchEl, mir);
+        for (let s2 = 0; s2 < 8; s2++) {
+          const w: [number, number] = [rnd() * 60 - 30, rnd() * 60 - 30];
+          // 锚点空间判定：世界点 → 锚点图空间（镜像时 x 取反）
+          const ao = M(anchEl.rot, w[0] - anchEl.pos[0], w[1] - anchEl.pos[1]);
+          const lhs = (mir ? -clip.a : clip.a) * ao[0] + clip.b * ao[1] + clip.c >= 0;
+          const so = M(selfEl.rot, w[0] - selfEl.pos[0], w[1] - selfEl.pos[1]);
+          const rhs = comp[0] * so[0] + comp[1] * so[1] + comp[2] >= 0;
+          if (lhs !== rhs) { consistent = false; break; }
+        }
+      }
+      check('X4 平面合成与锚点空间定义逐点一致（300 组随机位姿×8 点，含镜像）', consistent);
+    }
+    check('X5 实例布局 58 float + 片元裁剪 discard + vClip 通道',
+      tplSrc.includes('const INSTANCE_FLOATS = 58')
+        && tplSrc.includes('vClip.x * gfv.x + vClip.y * gfv.y + vClip.z < 0.0) discard')
+        && tplSrc.includes('buf[o + 7] = el.clip ? el.clip[2] : 1')
+        && tplSrc.includes('buf[o + 22] = el.clip ? el.clip[0] : 0'));
+  }
+}
+
+// ---------- W) 刀光：生成器双实现对拍 + 进包 ----------
+{
+  const { generateSlashFrame, SLASH_PRESETS, defaultSlashSpec } = await import('../src/lib/slash-fan');
+  const { readFileSync } = await import('node:fs');
+  const tplSrc = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+  const grabFn = (src: string, marker: string): string => {
+    const start = src.indexOf(marker);
+    assert.ok(start >= 0, `模板缺 ${marker}`);
+    let depth = 0;
+    for (let i = src.indexOf('{', start); i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
+    }
+    throw new Error('花括号不配平');
+  };
+  const palLine = tplSrc.slice(tplSrc.indexOf('const SLASH_PALETTE_RT'), tplSrc.indexOf(';', tplSrc.indexOf('const SLASH_PALETTE_RT')) + 1);
+  const rtGen = new Function(
+    `${palLine}\n${grabFn(tplSrc, 'function slashHexRgb')}\n${grabFn(tplSrc, 'function slashSmooth01')}\n${grabFn(tplSrc, 'function slashFanFrame')}\nreturn slashFanFrame;`,
+  )() as (spec: never, p: number, mir: boolean) => { w: number; h: number; data: Uint8Array };
+  const specs: Record<string, unknown>[] = [
+    { ...defaultSlashSpec('a') },
+    ...SLASH_PRESETS.map((pr) => ({ ...defaultSlashSpec('a'), ...pr.params })),
+    { ...defaultSlashSpec('a'), w: 48, h: 80, cx: 20, cy: 60, colors: ['#ffffff', '#ffee00', '#ff0000'] },
+  ];
+  let parity = true;
+  let midNonEmpty = 0;
+  for (const spec of specs) {
+    for (const p of [0, 0.2, 0.45, 0.58, 0.8, 1]) {
+      for (const mir of [false, true]) {
+        const a = generateSlashFrame(spec as never, p, mir);
+        const b = rtGen(spec as never, p, mir);
+        if (a.w !== b.w || a.h !== b.h || a.rgba.length !== b.data.length) { parity = false; break; }
+        for (let i = 0; i < a.rgba.length; i++) if (a.rgba[i] !== b.data[i]) { parity = false; break; }
+        if (!parity) break;
+        if (p === 0.45 && !mir) for (let i = 3; i < a.rgba.length; i += 4) if (a.rgba[i]! > 0) midNonEmpty++;
+      }
+      if (!parity) break;
+    }
+    if (!parity) break;
+  }
+  check('W1 刀光生成器双实现逐字节一致（默认+四预设+自定义色/尺寸 × 6 进度 × 镜像）', parity);
+  check('W2 中间进度帧非空（扇形真生成）', midNonEmpty > 200, String(midNonEmpty));
+  const endFrame = generateSlashFrame(defaultSlashSpec('a'), 1, false);
+  check('W3 进度 1 时扇形已收完（全透明）', endFrame.rgba.every((v) => v === 0));
+  check('W4 模板特效通道 + 刀光瓦片/定格接线在位',
+    tplSrc.includes('vMisc.w > 3.5') && tplSrc.includes('slashTiles')
+      && tplSrc.includes('act.slashSpawn') && tplSrc.includes('composite: 4'));
+
+  // 进包：无轨道角色 + 纯刀光片段（采样块跳过时仍生成段表演）
+  const appW = createDefaultParametricAppearance();
+  const handW = makeNode('handW', '持剑手', 'hand');
+  const slashSpec = { ...defaultSlashSpec('handW'), frameCount: 8 };
+  const chW = {
+    id: 'chW', name: '刀光',
+    nodes: { handW },
+    rootNodeId: 'handW', rootNodeIds: ['handW'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: { hand: { ...createDefaultCostumePiece('hand'), parametric: appW } },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+    performances: [{
+      id: 'perfSlash', name: '拔刀斩', trigger: 'attack', duration: 0.8, enabled: true,
+      mode: 'add', envelopeIn: 0, envelopeOut: 0, maskNodeIds: [], graphs: {},
+      slashEffect: slashSpec,
+    }],
+  } as unknown as Character;
+  const clipW = {
+    id: 'clipW', name: '挥砍', puppetCharacterId: 'chW', startFrame: 2, endFrame: 9, loop: false,
+    slashEffect: slashSpec,
+  } as never;
+  const pkgW = convertCharacterToRuntimePackage(chW, undefined, { frameRate: 12, clips: [clipW] });
+  const segW = pkgW.performances.find((p) => (p as { id?: string }).id === 'clip_clipW') as unknown as { slash?: { anchor: string; frameCount: number } };
+  check('W5 纯刀光片段（无轨道）仍生成段表演且刀光进包',
+    !!segW?.slash && segW.slash.anchor === 'hand' && segW.slash.frameCount === 8,
+    JSON.stringify(segW?.slash ?? null));
+  const perfW = pkgW.performances.find((p) => (p as { id?: string }).id === 'perfSlash') as unknown as { slash?: { anchor: string } };
+  check('W6 作者表演刀光进包', perfW?.slash?.anchor === 'hand');
+  const clipBad = {
+    id: 'clipBad', name: '坏锚', puppetCharacterId: 'chW', startFrame: 0, endFrame: 5, loop: false,
+    slashEffect: { ...slashSpec, anchorNodeId: 'ghost-node' },
+  } as never;
+  const pkgW2 = convertCharacterToRuntimePackage(chW, undefined, { frameRate: 12, clips: [clipBad] });
+  check('W7 坏锚点点名警告且不带刀光',
+    pkgW2.warnings.some((w) => w.includes('刀光'))
+      && !(pkgW2.performances.find((p) => (p as { id?: string }).id === 'clip_clipBad') as unknown as { slash?: unknown })?.slash,
+    pkgW2.warnings.filter((w) => w.includes('刀光')).join('；'));
+}
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

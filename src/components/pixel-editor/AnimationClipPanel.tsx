@@ -6,6 +6,7 @@ import { Plus, Trash2, Film, Settings, ChevronRight, Clock, Tag } from 'lucide-r
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useState, useCallback } from 'react';
+import SlashEffectEditor from './puppet/SlashEffectEditor';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -301,6 +302,13 @@ export default function AnimationClipPanel() {
               />
               窗内循环
             </label>
+            <div className="mt-2">
+              <SlashEffectEditor
+                value={activeClip.slashEffect}
+                onChange={(next) => updateAnimationClip(activeClip.id, { slashEffect: next })}
+                nodes={Object.values(unifiedCharacters?.[activeClip.puppetCharacterId]?.nodes ?? {}).map((n) => ({ id: n.id, name: n.name }))}
+              />
+            </div>
           </div>
         </div>
       )}

@@ -19,7 +19,7 @@ import type {
   NodeRenderInstruction, DiscRenderInstruction, RenderPlan,
   KeyframeTrack, KeyframePoint, InterpolationMode,
   ModifierInstance, GeneratedItem, AnimationVariable, ParamDriver,
-  IKChain, Mat3,
+  IKChain, Mat3, ParentKeyValue,
 } from './unified-types';
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
@@ -30,6 +30,7 @@ import {
   worldToViewBasis, MAT3_IDENTITY,
 } from './unified-types';
 import { solveIK2Bone3D, solveIKFabrik3D } from './blueprint/ik';
+import { slashFrameCanvas } from './slash-fan';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
 import { sampleJointDiscColor, getPlugJointWidth } from './engine/render-helpers/puppet-joint-color';
@@ -334,6 +335,133 @@ export interface WorldTransform {
  * Step 1: Compute world transforms for all nodes in a character.
  * Traverses the node tree depth-first from the root.
  */
+/** 父级切换轨在 frame 处的生效键（step：≤frame 的最后一点） */
+export function parentKeyAt(node: Node, frame: number): ParentKeyValue | undefined {
+  const kfs = node.tracks?.parentKeys?.keyframes;
+  if (!kfs || kfs.length === 0) return undefined;
+  let best: ParentKeyValue | undefined;
+  let bestFrame = -Infinity;
+  for (const kf of kfs) {
+    if (kf.frame <= frame && kf.frame >= bestFrame) {
+      best = kf.value;
+      bestFrame = kf.frame;
+    }
+  }
+  return best;
+}
+
+/**
+ * 按帧重挂后的有效角色：任一节点带父级切换轨时，返回一份层级按
+ * 本帧有效父级重写的浅克隆（节点数据共享、只换 parentId /
+ * attachment / children），FK 的既有组成公式原样跑。有效父级成环
+ * （著者错误）时，把环中最近切换的节点回退到静态父级；链条够不到
+ * 根的节点挂到根兜底。无切换轨时原样返回（零开销）。
+ */
+export function effectiveCharacterAt(character: Character, frame: number): Character {
+  const nodes = character.nodes;
+  const anyKeys = Object.values(nodes).some((n) => (n.tracks?.parentKeys?.keyframes.length ?? 0) > 0);
+  if (!anyKeys) return character;
+  const rootId = character.rootNodeId;
+  const staticParent = new Map<string, string | null>();
+  const effParent = new Map<string, string | null>();
+  const effKey = new Map<string, ParentKeyValue | undefined>();
+  for (const n of Object.values(nodes)) {
+    staticParent.set(n.id, n.id === rootId ? null : (n.parentId ?? null));
+    const key = n.id === rootId ? undefined : parentKeyAt(n, frame);
+    effKey.set(n.id, key);
+    effParent.set(n.id, key ? (key.parentId === '' ? rootId : key.parentId) : staticParent.get(n.id) ?? null);
+  }
+  const keyFrameOf = (id: string): number => {
+    const kfs = nodes[id]?.tracks?.parentKeys?.keyframes ?? [];
+    let f = -Infinity;
+    for (const kf of kfs) if (kf.frame <= frame && kf.frame > f) f = kf.frame;
+    return f;
+  };
+  // 环回退：DFS 找环，环中最近切换者回退静态父级（静态结构是树、必收敛）
+  for (let iter = 0; iter < 64; iter++) {
+    const state = new Map<string, number>(); // 1 = 在栈上, 2 = 完成
+    let cycle: string[] | null = null;
+    const visit = (id: string, path: string[]): void => {
+      if (cycle) return;
+      const st = state.get(id) ?? 0;
+      if (st === 2) return;
+      if (st === 1) {
+        cycle = path.slice(path.indexOf(id));
+        return;
+      }
+      state.set(id, 1);
+      const p = effParent.get(id);
+      if (p && nodes[p] && p !== id) visit(p, [...path, id]);
+      state.set(id, 2);
+    };
+    for (const id of Object.keys(nodes)) {
+      visit(id, []);
+      if (cycle) break;
+    }
+    const found = cycle as string[] | null;
+    if (!found) break;
+    let victim = found[0]!;
+    for (const id of found) if (keyFrameOf(id) >= keyFrameOf(victim)) victim = id;
+    effParent.set(victim, staticParent.get(victim) ?? null);
+    effKey.set(victim, undefined);
+  }
+  // 够不到根的节点挂到根兜底
+  const childrenOf = new Map<string, string[]>();
+  for (const n of Object.values(nodes)) {
+    const p = effParent.get(n.id);
+    if (p && nodes[p] && p !== n.id) {
+      const arr = childrenOf.get(p) ?? [];
+      arr.push(n.id);
+      childrenOf.set(p, arr);
+    }
+  }
+  const reachable = new Set<string>();
+  const stack = [rootId];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (reachable.has(id)) continue;
+    reachable.add(id);
+    for (const c of childrenOf.get(id) ?? []) stack.push(c);
+  }
+  for (const n of Object.values(nodes)) {
+    if (n.id !== rootId && !reachable.has(n.id)) {
+      effParent.set(n.id, rootId);
+      effKey.set(n.id, undefined);
+    }
+  }
+  const effChildren = new Map<string, string[]>();
+  for (const n of Object.values(nodes)) {
+    const p = effParent.get(n.id);
+    if (p && nodes[p] && p !== n.id) {
+      const arr = effChildren.get(p) ?? [];
+      arr.push(n.id);
+      effChildren.set(p, arr);
+    }
+  }
+  const effNodes: Record<string, Node> = {};
+  for (const n of Object.values(nodes)) {
+    const key = effKey.get(n.id);
+    let attachment = n.attachment;
+    if (key) {
+      if (key.socketId === null) {
+        attachment = {
+          ...n.attachment, type: 'fixed', parentSocketId: undefined,
+          fixedOffset: key.fixedOffset ?? n.attachment.fixedOffset,
+        };
+      } else if (key.socketId !== undefined) {
+        attachment = { ...n.attachment, type: 'socket', parentSocketId: key.socketId };
+      }
+    }
+    effNodes[n.id] = {
+      ...n,
+      parentId: effParent.get(n.id) ?? undefined,
+      attachment,
+      children: effChildren.get(n.id) ?? [],
+    };
+  }
+  return { ...character, nodes: effNodes };
+}
+
 export function computeWorldTransforms(
   character: Character,
   frame: number,
@@ -345,6 +473,8 @@ export function computeWorldTransforms(
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
   geometryDirection?: DirectionIndex,
 ): Map<string, WorldTransform> {
+  // 父级切换轨：FK 全程在按本帧有效父级重写的层级上跑
+  character = effectiveCharacterAt(character, frame);
   if (!frameRate || frameRate <= 0) {
     let resolved = 12;
     try {
@@ -1403,6 +1533,73 @@ export function pickClipStateKeyframes(
   return clip.stateKeyframes;
 }
 
+/** 激活片段的刀光（与状态轨道同一门控口径：激活片段 + 归属角色 + 帧在窗内） */
+export function pickSlashClip(
+  clips: AnimationClip[] | undefined,
+  activeClipId: string | null | undefined,
+  characterId: string,
+  frame: number,
+): AnimationClip | undefined {
+  if (!clips || !activeClipId) return undefined;
+  const clip = clips.find((c) => c.id === activeClipId);
+  if (!clip || clip.puppetCharacterId !== characterId || !clip.slashEffect) return undefined;
+  if (frame < clip.startFrame || frame > clip.endFrame) return undefined;
+  return clip;
+}
+
+/** 裁剪面 → 画布 px 多边形：平面定义在锚点精灵图空间（相对图
+ * 中心、x 右 y 下，保留法线正侧 n·p >= offset）。经锚点指令的当
+ * 帧位姿（位置/角度/镜像/缩放，与 renderNodeSprite 的变换链同
+ * 式：镜像先翻进位图、再旋转）映射到画布，再与画布大矩形求交
+ * （Sutherland–Hodgman 单边裁剪）。 */
+function clipPolygonFor(
+  cp: { angleDeg: number; offset: number },
+  anchor: NodeRenderInstruction,
+  canvasWidth: number,
+  canvasHeight: number,
+): [number, number][] | undefined {
+  const spr = anchor.sprite;
+  const plugX = spr.plug ? subToPx(spr.plug.x) : spr.width / 2;
+  const plugY = spr.plug ? subToPx(spr.plug.y) : spr.height / 2;
+  const rad = (cp.angleDeg * Math.PI) / 180;
+  const nx = Math.cos(rad), ny = Math.sin(rad);
+  const diag = Math.hypot(spr.width, spr.height) + Math.hypot(canvasWidth, canvasHeight);
+  const lx = spr.width / 2 + nx * cp.offset, ly = spr.height / 2 + ny * cp.offset;
+  const dx = -ny, dy = nx;
+  const aRad = (anchor.angle * Math.PI) / 180;
+  const cos = Math.cos(aRad), sin = Math.sin(aRad);
+  const ax = subToPx(anchor.worldX), ay = subToPx(anchor.worldY);
+  const sx = anchor.scaleX ?? 1, sy = anchor.stretch || 1;
+  const toCanvas = (qx: number, qy: number): [number, number] => {
+    let ox = (qx - plugX) * sx, oy = (qy - plugY) * sy;
+    if (anchor.mirror) ox = -ox;
+    return [ax + ox * cos - oy * sin, ay + ox * sin + oy * cos];
+  };
+  const p1 = toCanvas(lx - dx * diag, ly - dy * diag);
+  const p2 = toCanvas(lx + dx * diag, ly + dy * diag);
+  const keep = toCanvas(lx + nx * diag, ly + ny * diag);
+  const side = (p: [number, number]) =>
+    (p2[0] - p1[0]) * (p[1] - p1[1]) - (p2[1] - p1[1]) * (p[0] - p1[0]);
+  const kSign = side(keep) >= 0 ? 1 : -1;
+  let poly: [number, number][] = [
+    [-canvasWidth, -canvasHeight], [canvasWidth * 2, -canvasHeight],
+    [canvasWidth * 2, canvasHeight * 2], [-canvasWidth, canvasHeight * 2],
+  ];
+  const out: [number, number][] = [];
+  for (let i = 0; i < poly.length; i++) {
+    const cur = poly[i]!, prev = poly[(i + poly.length - 1) % poly.length]!;
+    const sc = side(cur), sp = side(prev);
+    const curIn = sc * kSign >= 0, prevIn = sp * kSign >= 0;
+    if (curIn !== prevIn) {
+      const t = sp / (sp - sc);
+      out.push([prev[0] + (cur[0] - prev[0]) * t, prev[1] + (cur[1] - prev[1]) * t]);
+    }
+    if (curIn) out.push(cur);
+  }
+  poly = out;
+  return poly.length >= 3 ? poly : undefined;
+}
+
 export function generateRenderPlan(
   character: Character,
   frame: number,
@@ -1429,6 +1626,8 @@ export function generateRenderPlan(
   stateKeyframes?: import('./unified-types').CostumeStateKeyframe[],
   // 节点转向（乙案）：几何基准朝向；undefined = 现行口径（几何基 = 节点 variantIndex）
   geometryDirection?: DirectionIndex,
+  // 激活片段的刀光（pickSlashClip 门控后传入）：窗内按起始帧定格锚点位姿播放
+  slashClip?: AnimationClip | null,
 ): RenderPlan {
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
@@ -1755,6 +1954,51 @@ export function generateRenderPlan(
     });
   }
 
+  // 裁剪面第二遍：指令齐备后，按锚点指令的当帧位姿把平面映射到
+  // 画布并求多边形（锚点当帧无指令 = 无精灵可锚 → 不裁）
+  {
+    const byId = new Map(nodeInstructions.map((i) => [i.nodeId, i]));
+    for (const ins of nodeInstructions) {
+      const cp = character.nodes[ins.nodeId]?.clipPlane;
+      if (!cp) continue;
+      const anchorIns = byId.get(cp.anchor);
+      if (!anchorIns) continue;
+      ins.clipPath = clipPolygonFor(cp, anchorIns, canvasWidth, canvasHeight);
+    }
+  }
+
+  // 刀光：位姿在片段起始帧定格（锚点其后怎么动都不跟随），进度
+  // 按窗内帧走；时长单独设了秒数时先于窗结束
+  let slashFx: RenderPlan['slashFx'];
+  if (slashClip?.slashEffect && frame >= slashClip.startFrame && frame <= slashClip.endFrame) {
+    const spec = slashClip.slashEffect;
+    const spawnTransforms = computeWorldTransforms(
+      character, slashClip.startFrame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
+      undefined, geometryDirection,
+    );
+    const anchorWt = spawnTransforms.get(spec.anchorNodeId);
+    if (anchorWt) {
+      const spawnDir = spawnTransforms.get(character.rootNodeId)?.variantIndex ?? currentDirection;
+      const proj = projectToView(anchorWt.worldX, anchorWt.worldY, anchorWt.worldZ, spawnDir as DirectionIndex);
+      const winLen = Math.max(1, slashClip.endFrame - slashClip.startFrame + 1);
+      const durFrames = spec.durationSec && spec.durationSec > 0
+        ? Math.max(1, spec.durationSec * frameRate)
+        : winLen;
+      const p = (frame - slashClip.startFrame) / durFrames;
+      if (p < 1) {
+        const n = Math.max(2, Math.round(spec.frameCount || 6));
+        slashFx = {
+          spec,
+          frameIdx: Math.min(n - 1, Math.floor(p * n)),
+          worldX: canvasWidth / 2 + subToPx(proj.canvasX),
+          worldY: canvasHeight / 2 + subToPx(proj.canvasY),
+          angleDeg: anchorWt.worldAngle,
+          mirror: anchorWt.mirror,
+        };
+      }
+    }
+  }
+
   // Step 5: Generate disc instructions
   const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots, activeCostumeSet, spriteTable, geometryDirection);
 
@@ -1784,6 +2028,7 @@ export function generateRenderPlan(
     frameRate,
     characterBlueprint: character.blueprint ?? null,
     blueprintVars,
+    slashFx,
   };
 }
 
@@ -1805,22 +2050,48 @@ export function executeRenderPlan(
 
   // Character blueprint path: composite to offscreen → post-process → draw.
   // Falls through to legacy path when blueprint is missing or evaluation fails.
+  const drawOne = (c: CanvasRenderingContext2D, instruction: NodeRenderInstruction) => {
+    if (instruction.clipPath && instruction.clipPath.length >= 3) {
+      c.save();
+      c.beginPath();
+      instruction.clipPath.forEach(([x, y], i) => (i === 0 ? c.moveTo(x, y) : c.lineTo(x, y)));
+      c.closePath();
+      c.clip();
+      renderNodeSprite(c, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
+      c.restore();
+    } else {
+      renderNodeSprite(c, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
+    }
+  };
   const useCharBlueprint = !!plan.characterBlueprint;
   if (useCharBlueprint) {
-    const ok = renderCharacterWithBlueprint(ctx, plan, canvasWidth, canvasHeight);
+    const ok = renderCharacterWithBlueprint(ctx, plan, canvasWidth, canvasHeight, drawOne);
     if (!ok) {
       // Fallback: legacy per-node draw (blueprint invalid — don't lose the frame)
       // 关节盘先行（不参与深度排序、始终被遮挡），节点随后按深度序绘制
       for (const disc of plan.discInstructions) renderDisc(ctx, disc);
       for (const instruction of plan.sortedInstructions) {
-        renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
+        drawOne(ctx, instruction);
       }
     }
   } else {
     for (const disc of plan.discInstructions) renderDisc(ctx, disc);
     for (const instruction of plan.sortedInstructions) {
-      renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
+      drawOne(ctx, instruction);
     }
+  }
+
+  // 刀光最后绘制（盖在角色之上）：帧图以对位点 (cx, cy) 钉在定格
+  // 位姿处、按定格角度旋转（镜像帧已预翻，与精灵同口径）
+  if (plan.slashFx) {
+    const fx = plan.slashFx;
+    const fc = slashFrameCanvas(fx.spec, fx.frameIdx, fx.mirror);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.translate(fx.worldX, fx.worldY);
+    ctx.rotate((fx.angleDeg * Math.PI) / 180);
+    ctx.drawImage(fc, -fx.spec.cx, -fx.spec.cy);
+    ctx.restore();
   }
 
   // Render effects (overlays, not tied to specific nodes)
@@ -2678,6 +2949,7 @@ function renderCharacterWithBlueprint(
   plan: RenderPlan,
   canvasWidth: number,
   canvasHeight: number,
+  drawOne?: (c: CanvasRenderingContext2D, instruction: NodeRenderInstruction) => void,
 ): boolean {
   const blueprint = plan.characterBlueprint;
   if (!blueprint) return false;
@@ -2693,7 +2965,8 @@ function renderCharacterWithBlueprint(
   // 关节盘先行（不参与深度排序、始终被遮挡），节点随后按深度序绘制
   for (const disc of plan.discInstructions) renderDisc(offCtx, disc);
   for (const instruction of plan.sortedInstructions) {
-    renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
+    if (drawOne) drawOne(offCtx, instruction);
+    else renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
   }
 
   // Step 2: read back → character_source pixels
@@ -2865,6 +3138,7 @@ function renderPuppetViaUnifiedPipeline(
       undefined, perspectiveForeshorten,
       pickClipStateKeyframes(animationClips, activeClipId, unifiedCharacter.id, currentFrame),
       geometryDirection,
+      pickSlashClip(animationClips, activeClipId, unifiedCharacter.id, currentFrame) ?? null,
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }
