@@ -1011,6 +1011,8 @@ export interface ProcPerformance {
   graphs: Record<string, BlueprintGraph>;
   /** 残影部件（nodeId，可选）：表演期间该部件发历史残影（实例流效果） */
   afterimageNodeId?: string;
+  /** 刀光（可选）：椭圆扇形状衰减特效，表演开始时定格锚点位姿播放 */
+  slashEffect?: import('./slash-fan').SlashFanSpec;
   enabled: boolean;
 }
 
@@ -1424,6 +1426,15 @@ export interface RenderPlan {
   frameRate?: number;
   /** Character-level blueprint (whole-character post-processing). Null = legacy per-node path. */
   characterBlueprint?: import('./blueprint/ir').BlueprintGraph | null;
+  /** 刀光（椭圆扇）：本帧应绘制的刀光帧与定格位姿（画布 px） */
+  slashFx?: {
+    spec: import('./slash-fan').SlashFanSpec;
+    frameIdx: number;
+    worldX: number;
+    worldY: number;
+    angleDeg: number;
+    mirror: boolean;
+  };
   /** 本帧蓝图变量（变量名 → 值）：generateRenderPlan 从 AnimationVariable 求值后注入，
    *  供 executeRenderPlan/renderNodeSprite 的蓝图求值 ctx.vars 使用 */
   blueprintVars?: Record<string, number>;

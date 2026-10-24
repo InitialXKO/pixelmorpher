@@ -1451,4 +1451,93 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   }
 }
 
+// ---------- W) 刀光：生成器双实现对拍 + 进包 ----------
+{
+  const { generateSlashFrame, SLASH_PRESETS, defaultSlashSpec } = await import('../src/lib/slash-fan');
+  const { readFileSync } = await import('node:fs');
+  const tplSrc = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+  const grabFn = (src: string, marker: string): string => {
+    const start = src.indexOf(marker);
+    assert.ok(start >= 0, `模板缺 ${marker}`);
+    let depth = 0;
+    for (let i = src.indexOf('{', start); i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
+    }
+    throw new Error('花括号不配平');
+  };
+  const palLine = tplSrc.slice(tplSrc.indexOf('const SLASH_PALETTE_RT'), tplSrc.indexOf(';', tplSrc.indexOf('const SLASH_PALETTE_RT')) + 1);
+  const rtGen = new Function(
+    `${palLine}\n${grabFn(tplSrc, 'function slashHexRgb')}\n${grabFn(tplSrc, 'function slashSmooth01')}\n${grabFn(tplSrc, 'function slashFanFrame')}\nreturn slashFanFrame;`,
+  )() as (spec: never, p: number, mir: boolean) => { w: number; h: number; data: Uint8Array };
+  const specs: Record<string, unknown>[] = [
+    { ...defaultSlashSpec('a') },
+    ...SLASH_PRESETS.map((pr) => ({ ...defaultSlashSpec('a'), ...pr.params })),
+    { ...defaultSlashSpec('a'), w: 48, h: 80, cx: 20, cy: 60, colors: ['#ffffff', '#ffee00', '#ff0000'] },
+  ];
+  let parity = true;
+  let midNonEmpty = 0;
+  for (const spec of specs) {
+    for (const p of [0, 0.2, 0.45, 0.58, 0.8, 1]) {
+      for (const mir of [false, true]) {
+        const a = generateSlashFrame(spec as never, p, mir);
+        const b = rtGen(spec as never, p, mir);
+        if (a.w !== b.w || a.h !== b.h || a.rgba.length !== b.data.length) { parity = false; break; }
+        for (let i = 0; i < a.rgba.length; i++) if (a.rgba[i] !== b.data[i]) { parity = false; break; }
+        if (!parity) break;
+        if (p === 0.45 && !mir) for (let i = 3; i < a.rgba.length; i += 4) if (a.rgba[i]! > 0) midNonEmpty++;
+      }
+      if (!parity) break;
+    }
+    if (!parity) break;
+  }
+  check('W1 刀光生成器双实现逐字节一致（默认+四预设+自定义色/尺寸 × 6 进度 × 镜像）', parity);
+  check('W2 中间进度帧非空（扇形真生成）', midNonEmpty > 200, String(midNonEmpty));
+  const endFrame = generateSlashFrame(defaultSlashSpec('a'), 1, false);
+  check('W3 进度 1 时扇形已收完（全透明）', endFrame.rgba.every((v) => v === 0));
+  check('W4 模板特效通道 + 刀光瓦片/定格接线在位',
+    tplSrc.includes('vMisc.w > 3.5') && tplSrc.includes('slashTiles')
+      && tplSrc.includes('act.slashSpawn') && tplSrc.includes('composite: 4'));
+
+  // 进包：无轨道角色 + 纯刀光片段（采样块跳过时仍生成段表演）
+  const appW = createDefaultParametricAppearance();
+  const handW = makeNode('handW', '持剑手', 'hand');
+  const slashSpec = { ...defaultSlashSpec('handW'), frameCount: 8 };
+  const chW = {
+    id: 'chW', name: '刀光',
+    nodes: { handW },
+    rootNodeId: 'handW', rootNodeIds: ['handW'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: { hand: { ...createDefaultCostumePiece('hand'), parametric: appW } },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+    performances: [{
+      id: 'perfSlash', name: '拔刀斩', trigger: 'attack', duration: 0.8, enabled: true,
+      mode: 'add', envelopeIn: 0, envelopeOut: 0, maskNodeIds: [], graphs: {},
+      slashEffect: slashSpec,
+    }],
+  } as unknown as Character;
+  const clipW = {
+    id: 'clipW', name: '挥砍', puppetCharacterId: 'chW', startFrame: 2, endFrame: 9, loop: false,
+    slashEffect: slashSpec,
+  } as never;
+  const pkgW = convertCharacterToRuntimePackage(chW, undefined, { frameRate: 12, clips: [clipW] });
+  const segW = pkgW.performances.find((p) => (p as { id?: string }).id === 'clip_clipW') as unknown as { slash?: { anchor: string; frameCount: number } };
+  check('W5 纯刀光片段（无轨道）仍生成段表演且刀光进包',
+    !!segW?.slash && segW.slash.anchor === 'hand' && segW.slash.frameCount === 8,
+    JSON.stringify(segW?.slash ?? null));
+  const perfW = pkgW.performances.find((p) => (p as { id?: string }).id === 'perfSlash') as unknown as { slash?: { anchor: string } };
+  check('W6 作者表演刀光进包', perfW?.slash?.anchor === 'hand');
+  const clipBad = {
+    id: 'clipBad', name: '坏锚', puppetCharacterId: 'chW', startFrame: 0, endFrame: 5, loop: false,
+    slashEffect: { ...slashSpec, anchorNodeId: 'ghost-node' },
+  } as never;
+  const pkgW2 = convertCharacterToRuntimePackage(chW, undefined, { frameRate: 12, clips: [clipBad] });
+  check('W7 坏锚点点名警告且不带刀光',
+    pkgW2.warnings.some((w) => w.includes('刀光'))
+      && !(pkgW2.performances.find((p) => (p as { id?: string }).id === 'clip_clipBad') as unknown as { slash?: unknown })?.slash,
+    pkgW2.warnings.filter((w) => w.includes('刀光')).join('；'));
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

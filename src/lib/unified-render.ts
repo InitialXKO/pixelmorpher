@@ -30,6 +30,7 @@ import {
   worldToViewBasis, MAT3_IDENTITY,
 } from './unified-types';
 import { solveIK2Bone3D, solveIKFabrik3D } from './blueprint/ik';
+import { slashFrameCanvas } from './slash-fan';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
 import { sampleJointDiscColor, getPlugJointWidth } from './engine/render-helpers/puppet-joint-color';
@@ -1403,6 +1404,20 @@ export function pickClipStateKeyframes(
   return clip.stateKeyframes;
 }
 
+/** 激活片段的刀光（与状态轨道同一门控口径：激活片段 + 归属角色 + 帧在窗内） */
+export function pickSlashClip(
+  clips: AnimationClip[] | undefined,
+  activeClipId: string | null | undefined,
+  characterId: string,
+  frame: number,
+): AnimationClip | undefined {
+  if (!clips || !activeClipId) return undefined;
+  const clip = clips.find((c) => c.id === activeClipId);
+  if (!clip || clip.puppetCharacterId !== characterId || !clip.slashEffect) return undefined;
+  if (frame < clip.startFrame || frame > clip.endFrame) return undefined;
+  return clip;
+}
+
 /** 裁剪面 → 画布 px 多边形：平面定义在锚点精灵图空间（相对图
  * 中心、x 右 y 下，保留法线正侧 n·p >= offset）。经锚点指令的当
  * 帧位姿（位置/角度/镜像/缩放，与 renderNodeSprite 的变换链同
@@ -1482,6 +1497,8 @@ export function generateRenderPlan(
   stateKeyframes?: import('./unified-types').CostumeStateKeyframe[],
   // 节点转向（乙案）：几何基准朝向；undefined = 现行口径（几何基 = 节点 variantIndex）
   geometryDirection?: DirectionIndex,
+  // 激活片段的刀光（pickSlashClip 门控后传入）：窗内按起始帧定格锚点位姿播放
+  slashClip?: AnimationClip | null,
 ): RenderPlan {
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
@@ -1771,6 +1788,38 @@ export function generateRenderPlan(
     }
   }
 
+  // 刀光：位姿在片段起始帧定格（锚点其后怎么动都不跟随），进度
+  // 按窗内帧走；时长单独设了秒数时先于窗结束
+  let slashFx: RenderPlan['slashFx'];
+  if (slashClip?.slashEffect && frame >= slashClip.startFrame && frame <= slashClip.endFrame) {
+    const spec = slashClip.slashEffect;
+    const spawnTransforms = computeWorldTransforms(
+      character, slashClip.startFrame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
+      undefined, geometryDirection,
+    );
+    const anchorWt = spawnTransforms.get(spec.anchorNodeId);
+    if (anchorWt) {
+      const spawnDir = spawnTransforms.get(character.rootNodeId)?.variantIndex ?? currentDirection;
+      const proj = projectToView(anchorWt.worldX, anchorWt.worldY, anchorWt.worldZ, spawnDir as DirectionIndex);
+      const winLen = Math.max(1, slashClip.endFrame - slashClip.startFrame + 1);
+      const durFrames = spec.durationSec && spec.durationSec > 0
+        ? Math.max(1, spec.durationSec * frameRate)
+        : winLen;
+      const p = (frame - slashClip.startFrame) / durFrames;
+      if (p < 1) {
+        const n = Math.max(2, Math.round(spec.frameCount || 6));
+        slashFx = {
+          spec,
+          frameIdx: Math.min(n - 1, Math.floor(p * n)),
+          worldX: canvasWidth / 2 + subToPx(proj.canvasX),
+          worldY: canvasHeight / 2 + subToPx(proj.canvasY),
+          angleDeg: anchorWt.worldAngle,
+          mirror: anchorWt.mirror,
+        };
+      }
+    }
+  }
+
   // Step 5: Generate disc instructions
   const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots, activeCostumeSet, spriteTable, geometryDirection);
 
@@ -1800,6 +1849,7 @@ export function generateRenderPlan(
     frameRate,
     characterBlueprint: character.blueprint ?? null,
     blueprintVars,
+    slashFx,
   };
 }
 
@@ -1850,6 +1900,19 @@ export function executeRenderPlan(
     for (const instruction of plan.sortedInstructions) {
       drawOne(ctx, instruction);
     }
+  }
+
+  // 刀光最后绘制（盖在角色之上）：帧图以对位点 (cx, cy) 钉在定格
+  // 位姿处、按定格角度旋转（镜像帧已预翻，与精灵同口径）
+  if (plan.slashFx) {
+    const fx = plan.slashFx;
+    const fc = slashFrameCanvas(fx.spec, fx.frameIdx, fx.mirror);
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.translate(fx.worldX, fx.worldY);
+    ctx.rotate((fx.angleDeg * Math.PI) / 180);
+    ctx.drawImage(fc, -fx.spec.cx, -fx.spec.cy);
+    ctx.restore();
   }
 
   // Render effects (overlays, not tied to specific nodes)
@@ -2896,6 +2959,7 @@ function renderPuppetViaUnifiedPipeline(
       undefined, perspectiveForeshorten,
       pickClipStateKeyframes(animationClips, activeClipId, unifiedCharacter.id, currentFrame),
       geometryDirection,
+      pickSlashClip(animationClips, activeClipId, unifiedCharacter.id, currentFrame) ?? null,
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }

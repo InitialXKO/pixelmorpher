@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import BlueprintEditor from './BlueprintEditor';
+import SlashEffectEditor from './SlashEffectEditor';
 
 const selCls = 'h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded text-gray-300 px-1';
 const numCls = 'h-6 text-[10px] bg-[#111128] border-[#1e1e3a]';
@@ -219,6 +220,13 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
                         <option value="">（无）</option>
                         {nodes.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
                       </select>
+                    </div>
+                    <div className="col-span-2">
+                      <SlashEffectEditor
+                        value={perf.slashEffect}
+                        onChange={(next) => patchPerf(perf.id, { slashEffect: next })}
+                        nodes={nodes}
+                      />
                     </div>
                     <div>
                       <Label className="text-[9px] text-gray-600">淡入（秒）</Label>

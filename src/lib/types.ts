@@ -840,6 +840,10 @@ export interface AnimationClip {
    *  （再往上是角色状态蓝图）。仅当此 clip 为激活 clip 且 puppetCharacterId 属于该角色时生效 */
   stateKeyframes?: import('./unified-types').CostumeStateKeyframe[];
 
+  /** 刀光（可选）：椭圆扇形状衰减特效，片段窗内播放、起始帧定格锚点位姿；
+   *  导出时随段表演进包 */
+  slashEffect?: import('./slash-fan').SlashFanSpec;
+
   // ---- Per-clip effects ----
   effectTracks: EffectTrack[];
   canvasModifierTracks: CanvasModifierTrack[];

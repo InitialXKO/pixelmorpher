@@ -715,6 +715,33 @@ export function convertCharacterToRuntimePackage(
     const n = character.nodes[nodeId];
     return n ? (n.slot?.slotKey ?? nodeId) : null;
   };
+  /** 刀光规格进包：锚点必须是包内真实部件（槽位键或节点 id 命中
+   * 部件键），否则点名警告并丢弃——模板侧靠部件位姿定格刀光。 */
+  const slashForPkg = (
+    spec: import('../slash-fan').SlashFanSpec | undefined,
+    ownerLabel: string,
+  ): Record<string, unknown> | undefined => {
+    if (!spec) return undefined;
+    const anchorNode = character.nodes[spec.anchorNodeId];
+    const candidates = anchorNode
+      ? [anchorNode.slot?.slotKey, spec.anchorNodeId].filter((v): v is string => !!v)
+      : [];
+    const slot = candidates.find((k) => parts.some((p) => p.key === k));
+    if (!slot) {
+      warnings.push(`刀光：${ownerLabel} 的锚点节点 ${anchorNode?.name ?? spec.anchorNodeId} 不是部件，未进包`);
+      return undefined;
+    }
+    return {
+      anchor: slot,
+      durationSec: spec.durationSec ?? 0,
+      frameCount: Math.max(2, Math.min(12, Math.round(spec.frameCount || 6))),
+      w: spec.w, h: spec.h, cx: spec.cx, cy: spec.cy,
+      rx: spec.rx, ry: spec.ry, rotDeg: spec.rotDeg,
+      a0Deg: spec.a0Deg, sweepDeg: spec.sweepDeg,
+      thick: spec.thick, gammaAng: spec.gammaAng, softRad: spec.softRad,
+      ...(spec.colors && spec.colors.length >= 2 ? { colors: spec.colors } : {}),
+    };
+  };
   const behavior: ProcRuntimePackage['behavior'] = { graphs: {} };
   {
     let gi = 0;
@@ -785,6 +812,7 @@ export function convertCharacterToRuntimePackage(
       mode: perf.mode,
       mask,
       afterimage: afterSlot ? { part: afterSlot, count: 3, interval: 0.035 } : undefined,
+      slash: slashForPkg(perf.slashEffect, `表演「${perf.name}」`),
       graph: { context: 'performance', nodes: graphNodes },
     });
   }
@@ -805,6 +833,7 @@ export function convertCharacterToRuntimePackage(
       c.puppetCharacterId === character.id
       && typeof c.startFrame === 'number' && typeof c.endFrame === 'number'
       && c.endFrame >= c.startFrame);
+    const emittedClipPerfIds = new Set<string>();
     if (trackNodes.length > 0) {
       const frameRate = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
       const partKeys = new Set(parts.map((p) => p.key));
@@ -930,7 +959,7 @@ export function convertCharacterToRuntimePackage(
       for (const clip of [...clipList].sort((a, b) => a.startFrame - b.startFrame)) {
         const len = clip.endFrame - clip.startFrame + 1;
         const seg = curvesForWindow(sampleWindow(clip.startFrame, len), len, `c${ci++}_`, false);
-        if (seg.graphNodes.length === 0) {
+        if (seg.graphNodes.length === 0 && !clip.slashEffect) {
           warnings.push(`片段「${clip.name}」：时间窗内轨道无姿态贡献，未生成段表演`);
           continue;
         }
@@ -943,9 +972,29 @@ export function convertCharacterToRuntimePackage(
           mode: 'add',
           loop: clip.loop === true,
           mask: seg.mask,
+          slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
           graph: { context: 'performance', nodes: seg.graphNodes },
         });
+        emittedClipPerfIds.add(`clip_${clip.id}`);
       }
+    }
+    // 刀光专用片段：角色全无姿态轨道时采样块整体跳过，段表演仍须
+    // 生成（刀光本身就是该片段的内容），否则引用悬空且无声丢失
+    for (const clip of clipList) {
+      if (!clip.slashEffect || emittedClipPerfIds.has(`clip_${clip.id}`)) continue;
+      const rate = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
+      performances.push({
+        id: `clip_${clip.id}`,
+        name: clip.name,
+        trigger: 'clip',
+        duration: (clip.endFrame - clip.startFrame + 1) / rate,
+        envelope: { in: 0, out: 0 },
+        mode: 'add',
+        loop: clip.loop === true,
+        mask: [],
+        slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
+        graph: { context: 'performance', nodes: [] },
+      });
     }
   }
 

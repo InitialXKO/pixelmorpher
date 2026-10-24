@@ -469,6 +469,88 @@ function clipPlaneForPart(clip, selfEl, anchorEl, anchorMirrored) {
     c0 + vx * (selfEl.pos[0] - anchorEl.pos[0]) + vy * (selfEl.pos[1] - anchorEl.pos[1]),
   ];
 }
+/** 刀光生成器（椭圆扇形状衰减；与主画布 slash-fan.ts 孪生，探针逐
+ * 字节对拍）：外弧为界、内界随角向形状因子向尾部收尖，头部先展
+ * 开、尾部后收走；返回 {w, h, data: RGBA} */
+const SLASH_PALETTE_RT = ['#ffffff', '#fff8d6', '#ffeba1', '#ffd166', '#ffab2e', '#ff7a00', '#e8481f', '#b01a33'];
+function slashHexRgb(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function slashSmooth01(t) { t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); }
+function slashFanFrame(spec, p, mirrored) {
+  const outW = Math.max(4, Math.round(spec.w)), outH = Math.max(4, Math.round(spec.h));
+  const buf = new Uint8Array(outW * outH * 4);
+  const palette = (spec.colors && spec.colors.length >= 2 ? spec.colors : SLASH_PALETTE_RT).map(slashHexRgb);
+  const cx = spec.cx, cy = spec.cy;
+  const rx = Math.max(2, spec.rx), ry = Math.max(2, spec.ry);
+  const rotRad = spec.rotDeg * Math.PI / 180;
+  const a0 = spec.a0Deg * Math.PI / 180;
+  const sweep = Math.max(0.06, Math.min(5.8, spec.sweepDeg * Math.PI / 180));
+  const thick = Math.max(0.04, Math.min(0.97, spec.thick));
+  const gammaAng = Math.max(0.25, spec.gammaAng);
+  const softRad = Math.max(0.01, spec.softRad);
+  const TWO_PI = Math.PI * 2;
+  const cosR = Math.cos(-rotRad), sinR = Math.sin(-rotRad);
+  const head = 0.14 + 0.86 * slashSmooth01(p / 0.58);
+  const tail = slashSmooth01((p - 0.44) / 0.56) * 1.06;
+  if (head - tail >= 0.018) {
+    for (let y = 0; y < outH; y++) {
+      for (let x = 0; x < outW; x++) {
+        const px = x + 0.5 - cx, py = y + 0.5 - cy;
+        const lx = px * cosR - py * sinR, ly = px * sinR + py * cosR;
+        const ex = lx / rx, ey = ly / ry;
+        const rho = Math.sqrt(ex * ex + ey * ey);
+        if (rho > 1.22) continue;
+        const t = Math.atan2(ey, ex);
+        let rel = t - a0;
+        rel = ((rel % TWO_PI) + TWO_PI) % TWO_PI;
+        if (rel > sweep) continue;
+        const u = rel / sweep;
+        if (u < tail || u > head) continue;
+        const uNorm = (u - tail) / Math.max(0.001, head - tail);
+        let A = Math.pow(Math.max(0, uNorm), gammaAng);
+        A *= slashSmooth01(0.15 + 0.85 * uNorm);
+        if (A < 0.004) continue;
+        const inner = 1 - thick * A;
+        const o = (y * outW + x) * 4;
+        if (rho <= 1) {
+          if (rho < inner - 0.015) continue;
+          const s = (rho - inner) / Math.max(0.001, 1 - inner);
+          if (s < 0) continue;
+          const edge = slashSmooth01(s / softRad);
+          if (edge < 0.02) continue;
+          const radB = Math.pow(Math.min(1, s), 0.75);
+          const angB = Math.pow(uNorm, 0.55);
+          const bright = edge * (0.35 + 0.65 * radB) * (0.35 + 0.65 * angB);
+          let colIdx = Math.floor((1 - s) * palette.length);
+          colIdx += Math.floor((1 - uNorm) * 2.2);
+          if (colIdx > palette.length - 1) colIdx = palette.length - 1;
+          if (colIdx < 0) colIdx = 0;
+          const rgb = palette[colIdx];
+          const a8 = (bright * 255) | 0;
+          if (a8 < 6) continue;
+          buf[o] = rgb[0]; buf[o + 1] = rgb[1]; buf[o + 2] = rgb[2]; buf[o + 3] = a8;
+        } else {
+          const glow = slashSmooth01(1 - (rho - 1) / 0.28);
+          if (glow < 0.04) continue;
+          const g = glow * 0.24 * A;
+          if (g < 0.02) continue;
+          const rgb = palette[palette.length - 1];
+          const a8 = (g * 255) | 0;
+          buf[o] = rgb[0]; buf[o + 1] = rgb[1]; buf[o + 2] = rgb[2]; buf[o + 3] = a8;
+        }
+      }
+    }
+  }
+  if (mirrored) {
+    for (let y = 0; y < outH; y++) {
+      for (let x = 0; x < (outW >> 1); x++) {
+        const a = (y * outW + x) * 4, b = (y * outW + (outW - 1 - x)) * 4;
+        for (let k = 0; k < 4; k++) { const tmp = buf[a + k]; buf[a + k] = buf[b + k]; buf[b + k] = tmp; }
+      }
+    }
+  }
+  return { w: outW, h: outH, data: buf };
+}
+
 /** 实例打包：58 float —— pos2 size2 rot1 pivotTile2 clipC1 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 clipAB2 glowA/B/C 各4(rgb,强度)×3组 glowHz4+glowHz2(频率,相位)×3 glowSpace4(三组方向基准:0=精灵 1=世界,余位) glowStamp 每组4(形状,光晕,主方向,伸长)×3。裁剪面占 iRotTileC.w（c）与 iDeform.zw（a,b）——扩宽既有属性、不新增属性（守 16 属性上限） */
 const INSTANCE_FLOATS = 58;
 function packInstances(els) {
@@ -600,8 +682,30 @@ function ensureAtlas(gl, variant, costumeName) {
     tiles.push(tile);
     entries.push([part.key, tile, resolved, mirrored, spriteGrid, ge0, tileExtra]);
   }
+  // 刀光帧瓦片：按当前朝向（锚点部件镜像与否）现生成 RGBA 帧，
+  // 与部件瓦片同图集（底图纹理承载像素，特效通道 composite=4 直读）
+  for (const perf of PERFORMANCES) {
+    const sl = perf.slash;
+    if (!sl) continue;
+    const anchorPart = PARTS.find((p) => p.key === sl.anchor);
+    const mir = anchorPart ? variantMirrored(anchorPart, variant) : false;
+    const n = Math.max(2, Math.min(12, sl.frameCount || 6));
+    for (let fi = 0; fi < n; fi++) {
+      const fr = slashFanFrame(sl, n > 1 ? fi / (n - 1) : 0.5, mir);
+      const M = 2;
+      const tile = {
+        w: fr.w + M * 2, h: fr.h + M * 2,
+        cx: M + (mir ? fr.w - 1 - sl.cx : sl.cx), cy: M + sl.cy,
+        data: new Uint8Array((fr.w + M * 2) * (fr.h + M * 2) * 4),
+      };
+      for (let q = 0; q < tile.w * tile.h; q++) { tile.data[q * 4] = 255; tile.data[q * 4 + 3] = 255; }
+      tiles.push(tile);
+      entries.push(['slash:' + perf.id + ':' + fi, tile, { composite: 'slashfx', params: { hidden: false } }, false, fr, null, 0]);
+    }
+  }
   const pack = packAtlas(tiles, 256);
   const height = pack.height;
+  const slashTiles = {};
   const data = new Uint8Array(256 * height * 4);
   const baseData = new Uint8Array(256 * height * 4);
   const glowData = new Uint8Array(256 * height * 4);
@@ -656,6 +760,18 @@ function ensureAtlas(gl, variant, costumeName) {
         }
       }
     }
+    if (resolved.composite === 'slashfx') {
+      const fr = entries[i][4];
+      for (let j = 0; j < fr.h; j++) {
+        baseData.set(fr.data.subarray(j * fr.w * 4, (j + 1) * fr.w * 4), ((ay + 2 + j) * 256 + ax + 2) * 4);
+      }
+      const key = entries[i][0];
+      const perfId = key.slice(6, key.lastIndexOf(':'));
+      const fi = Number(key.slice(key.lastIndexOf(':') + 1));
+      (slashTiles[perfId] = slashTiles[perfId] || [])[fi] = {
+        tile: [ax, ay, tile.w, tile.h], tileCx: tile.cx, tileCy: tile.cy, size: [tile.w, tile.h],
+      };
+    }
     map.set(entries[i][0], { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null });
   });
   if (atlasState && atlasState.tex) gl.deleteTexture(atlasState.tex);
@@ -676,7 +792,7 @@ function ensureAtlas(gl, variant, costumeName) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  atlasState = { variant: variant, costumeName: costumeName, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map };
+  atlasState = { variant: variant, costumeName: costumeName, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles };
   return atlasState;
 }
 
@@ -846,6 +962,16 @@ void main(){
   // 裁剪面（本部件图空间，几何切：按未形变的本地坐标判，保留
   // vClip.x·x + vClip.y·y + vClip.z >= 0 侧；无裁剪时为 (0,0,1)）
   if (vClip.x * gfv.x + vClip.y * gfv.y + vClip.z < 0.0) discard;
+  // 刀光特效通道（composite=4）：底图 RGBA 直出（带真 alpha）
+  if (vMisc.w > 3.5) {
+    ivec2 g0 = ivec2(floor(gfv + 0.5));
+    ivec2 tpF = ivec2(vTile.xy) + ivec2(vTileC) + g0;
+    if (tpF.x < int(vTile.x) || tpF.y < int(vTile.y) || tpF.x >= int(vTile.x + vTile.z) || tpF.y >= int(vTile.y + vTile.w)) discard;
+    vec4 fc = texelFetch(uBase, tpF, 0);
+    if (fc.a < 0.004) discard;
+    oColor = fc;
+    return;
+  }
   if (vDeform.x != 1.0 || vDeform.y != 1.0) gfv = vec2(gfv.x / max(vDeform.x, 0.05), gfv.y / max(vDeform.y, 0.05));
   ivec2 g = ivec2(floor(gfv + 0.5));
   if (vGlowA.w > 0.0 || vGlowB.w > 0.0 || vGlowC.w > 0.0) {
@@ -1467,6 +1593,33 @@ function frame(now) {
       .filter((s) => elapsed - s.born < ai.interval * ai.count * 1.8)
       .map((s) => Object.assign({}, s.el, { ghost: true }));
     els.splice(idx, 0, ...ghosts);
+  }
+  // 刀光：表演开始帧定格锚点部件位姿（位置+角度），其后不跟随；
+  // 进度按表演本地时间走，帧图自图集刀光瓦片取（最后绘制、在最上层）
+  for (const act of activePerfs) {
+    const sl = act.perf.slash;
+    if (!sl) continue;
+    if (act.slashT !== undefined && act.t < act.slashT) act.slashSpawn = undefined;
+    act.slashT = act.t;
+    if (!act.slashSpawn) {
+      const aEl = elByKey.get(sl.anchor);
+      if (!aEl) continue;
+      act.slashSpawn = { pos: [aEl.pos[0], aEl.pos[1]], rot: aEl.rot };
+    }
+    const dur = sl.durationSec > 0 ? sl.durationSec : (act.perf.duration || 0);
+    if (!(dur > 0)) continue;
+    const p = act.t / dur;
+    if (p >= 1) continue;
+    const frames = state.slashTiles ? state.slashTiles[act.perf.id] : null;
+    if (!frames || !frames.length) continue;
+    const ft = frames[Math.min(frames.length - 1, Math.floor(p * frames.length))];
+    els.push({
+      pos: [act.slashSpawn.pos[0], act.slashSpawn.pos[1]],
+      size: [ft.size[0] * 3, ft.size[1] * 3], rot: act.slashSpawn.rot,
+      tileCx: ft.tileCx, tileCy: ft.tileCy, tile: ft.tile,
+      family: 0, seed: 0, modes: [0, 0, 0, 0], param: [0, 0, 0],
+      ghost: false, composite: 4, deform: undefined, glow: [], glowSpace: [], glowStamps: undefined,
+    });
   }
   const camX = char.x, camY = 52 + char.y * 0.35;
   gl.viewport(0, 0, lowW, VIEW_H);
