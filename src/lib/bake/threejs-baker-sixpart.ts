@@ -139,6 +139,8 @@ export interface SixPartBakeData {
   droppedTriCount: number;
   /** 无归属三角形按邻近投票归入部件的数量（absorbUnassigned 关闭时为 0） */
   absorbedTriCount: number;
+  /** 归入时权重集暂时改到邻近骨骼的三角形数量（使像素真正落入归入部件） */
+  absorbedReweightedCount: number;
 }
 
 export interface SixPartBakeOptions extends BakeOptions {
@@ -321,7 +323,7 @@ export function groupTrianglesByPart(
   baked: BakedMesh,
   boneToPart: (PartName | null)[],
   absorbUnassigned = false,
-): { groups: Map<PartName, PartTriangles>; droppedTris: number; absorbedTris: number } {
+): { groups: Map<PartName, PartTriangles>; droppedTris: number; absorbedTris: number; reweightedTris: number } {
   const geo = baked.geometry;
   const index = geo.getIndex();
   const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
@@ -366,7 +368,12 @@ export function groupTrianglesByPart(
 
   // 归入邻近部件（选项开启时）：按共享顶点投票——孤儿的顶点被哪些部件的已归属
   // 三角形共用得最多，就归哪个部件；完全孤立（无共享顶点）仍丢弃并计入 droppedTris。
+  // 归入的同时把孤儿顶点的权重集暂时改到邻近骨骼（本烘焙内有效，不回写模型）：
+  // 邻近骨骼 = 获胜部件中与孤儿共享顶点的那些三角形里出现最多的该部件骨骼。
+  // 不加这一步，孤儿即使进了部件视图，其 ID 掩码里也没有该部件的骨骼，
+  // 拆分时像素仍无归属——加完之后掩码以邻近骨骼为归属，像素真正落入该部件。
   let absorbedTris = 0;
+  let reweightedTris = 0;
   if (absorbUnassigned && orphans.length > 0) {
     const vertParts = new Map<number, Map<PartName, number>>();
     for (const p of ALL_PARTS) {
@@ -397,13 +404,38 @@ export function groupTrianglesByPart(
         pt.tris.push(o.tri);
         pt.triBone.push(o.bestBone);
         absorbedTris++;
+        // 邻近骨骼：获胜部件里与孤儿共享顶点的三角形，其顶点骨骼集（含主导骨）
+        // 中属于获胜部件的骨骼出现最多者
+        const sharedVerts = new Set(o.tri);
+        const boneCounts = new Map<number, number>();
+        for (const tri of pt.tris) {
+          if (!tri.some((vi) => sharedVerts.has(vi))) continue;
+          for (const vi of tri) {
+            const cand = new Set<number>(baked.vertBones[vi] ?? []);
+            if (baked.vertBone[vi] >= 0) cand.add(baked.vertBone[vi]);
+            for (const gi of cand) {
+              if (boneToPart[gi] === winner) boneCounts.set(gi, (boneCounts.get(gi) ?? 0) + 1);
+            }
+          }
+        }
+        let neighborBone = -1;
+        let bestCount = 0;
+        for (const [gi, n] of boneCounts) {
+          if (n > bestCount) { bestCount = n; neighborBone = gi; }
+        }
+        if (neighborBone >= 0) {
+          for (const vi of o.tri) {
+            if (!baked.vertBones[vi].includes(neighborBone)) baked.vertBones[vi].push(neighborBone);
+          }
+          reweightedTris++;
+        }
       } else {
         remaining.push(o);
       }
     }
-    return { groups: result, droppedTris: remaining.length, absorbedTris };
+    return { groups: result, droppedTris: remaining.length, absorbedTris, reweightedTris };
   }
-  return { groups: result, droppedTris: orphans.length, absorbedTris };
+  return { groups: result, droppedTris: orphans.length, absorbedTris, reweightedTris };
 }
 
 
@@ -424,6 +456,8 @@ interface BuiltPart {
   droppedTris?: number;
   /** 分组口径（全模型）：按邻近投票归入部件的无归属三角形数 */
   absorbedTris?: number;
+  /** 分组口径（全模型）：归入时权重集暂时改到邻近骨骼的三角形数 */
+  reweightedTris?: number;
 }
 
 /**
@@ -440,10 +474,12 @@ export function buildPartGeometry(
   const views: BuiltPartView[] = [];
   let droppedTris = 0;
   let absorbedTris = 0;
+  let reweightedTris = 0;
   for (const bm of bakedMeshes) {
     const grouped = groupTrianglesByPart(bm, boneToPart, absorbUnassigned);
     droppedTris += grouped.droppedTris;
     absorbedTris += grouped.absorbedTris;
+    reweightedTris += grouped.reweightedTris;
     const pt = grouped.groups.get(part)!;
     if (pt.tris.length === 0) continue;
     const index: number[] = [];
@@ -458,7 +494,7 @@ export function buildPartGeometry(
   for (let bi = 0; bi < boneToPart.length; bi++) {
     if (boneToPart[bi] === part) partBones.push(bi);
   }
-  return { part, views, partBones, droppedTris, absorbedTris };
+  return { part, views, partBones, droppedTris, absorbedTris, reweightedTris };
 }
 
 /** 由索引视图生成渲染用几何：属性对象与源几何共享（不复制数据），只装本视图的索引。 */
@@ -746,7 +782,7 @@ export async function bakeSixParts(
 
     // ---- 构建 6 部件（索引视图，不复制几何） ----
     // 无归属三角形计数是分组口径（全模型，六次调用同值），取第一次构建的即可
-    const triStats = { dropped: 0, absorbed: 0 };
+    const triStats = { dropped: 0, absorbed: 0, reweighted: 0 };
     let triStatsTaken = false;
     const parts = new Map<PartName, BuiltPart>();
     for (const p of ALL_PARTS) {
@@ -756,6 +792,7 @@ export async function bakeSixParts(
         if (!triStatsTaken) {
           triStats.dropped = built.droppedTris ?? 0;
           triStats.absorbed = built.absorbedTris ?? 0;
+          triStats.reweighted = built.reweightedTris ?? 0;
           triStatsTaken = true;
         }
       }
@@ -1413,6 +1450,7 @@ export async function bakeSixParts(
       globalCameraHalf: 1.0,
       droppedTriCount: triStats.dropped,
       absorbedTriCount: triStats.absorbed,
+      absorbedReweightedCount: triStats.reweighted,
     };
   } finally {
     renderer.dispose();

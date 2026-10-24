@@ -58,15 +58,20 @@ const check = (name: string, ok: boolean, detail = '') => {
   const baked = { geometry: geo, material: null, vertBone, vertBones: [[], [], [], [], [], [], [], []] } as never;
   const boneToPart = ['torso', null] as never;
 
+  const vb = (baked as unknown as { vertBones: number[][] }).vertBones;
   const off = groupTrianglesByPart(baked, boneToPart, false);
   check('六部件 absorb 关：torso 只含 tri0', off.groups.get('torso')!.tris.length === 1);
   check('六部件 absorb 关：丢弃 2', off.droppedTris === 2, `dropped=${off.droppedTris}`);
   check('六部件 absorb 关：归入 0', off.absorbedTris === 0);
+  check('六部件 absorb 关：不改任何顶点权重集', vb.every((s) => s.length === 0));
 
   const on = groupTrianglesByPart(baked, boneToPart, true);
   const tris = on.groups.get('torso')!.tris;
   check('六部件 absorb 开：共享顶点的孤儿 tri1 归入 torso', tris.length === 2 && tris.some((t) => t[0] === 2 && t[1] === 3 && t[2] === 4), `tris=${JSON.stringify(tris)}`);
   check('六部件 absorb 开：归入 1、孤立仍丢弃 1', on.absorbedTris === 1 && on.droppedTris === 1, `absorbed=${on.absorbedTris} dropped=${on.droppedTris}`);
+  check('六部件 absorb 开：归入 tri 计入改权重', on.reweightedTris === 1, `reweighted=${on.reweightedTris}`);
+  check('六部件 absorb 开：孤儿顶点权重集暂时改到邻近骨骼 bone0', [2, 3, 4].every((v) => vb[v].includes(0)), `vertBones=${JSON.stringify(vb)}`);
+  check('六部件 absorb 开：孤立三角形顶点权重集不动', [5, 6, 7].every((v) => vb[v].length === 0));
 }
 
 // ---------- 三-b、手动未分配网格归入 ----------
