@@ -1817,4 +1817,33 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     && refs[1]!.id === 'y' && refs[1]!.version === undefined);
 }
 
+// ============ T 组：模式库缩略图（烘焙图 + 动态定格图） ============
+{
+  const TH = await import('../src/lib/library-thumbs');
+  const LE = await import('../src/lib/library-entries');
+  const { findDynamicTemplate: fdt } = await import('../src/lib/dynamic-patterns');
+  const alphaCount = (img: { data: Uint8ClampedArray }) => {
+    let n = 0;
+    for (let i = 3; i < img.data.length; i += 4) if (img.data[i]! > 0) n++;
+    return n;
+  };
+  const scalesEntry = LE.BUILTIN_ENTRIES.find((e) => e.id === 'scales')!;
+  const surfDef = scalesEntry.versions[1] as import('../src/lib/library-entries').SurfaceEntryDef;
+  const s1 = TH.surfaceThumbRGBA(surfDef)!;
+  const s2 = TH.surfaceThumbRGBA(surfDef)!;
+  check('T1 表面缩略图非空且确定性（两烘逐字节同）',
+    !!s1 && alphaCount(s1) > 400 && Buffer.from(s1.data).equals(Buffer.from(s2.data)));
+  const poster1 = TH.dynamicPosterRGBA(fdt('挤压冒热气')!.params);
+  const poster2 = TH.dynamicPosterRGBA(fdt('挤压冒热气')!.params);
+  check('T2 动态定格图非空且确定性（挤压冒热气：精灵+粒子）',
+    alphaCount(poster1) > 900 && Buffer.from(poster1.data).equals(Buffer.from(poster2.data)));
+  const glowPoster = TH.dynamicPosterRGBA(fdt('辉光呼吸')!.params);
+  const plainPoster = TH.dynamicPosterRGBA(fdt('呼吸起伏')!.params);
+  check('T3 发光定格图覆盖面大于纯形变（辉光溢出精灵外）',
+    alphaCount(glowPoster) > alphaCount(plainPoster));
+  const spr = TH.sampleSpriteGrid();
+  check('T4 示例精灵 20×20 且有实体像素',
+    spr.length === 20 && spr.flat().filter(Boolean).length > 150);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

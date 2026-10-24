@@ -11,11 +11,17 @@
 
 import React, { useMemo, useState } from 'react';
 import {
-  BUILTIN_ENTRIES, deleteVersion, entryDeleteBlockers, loadUserEntries,
+  BUILTIN_ENTRIES, defOf, deleteVersion, entryDeleteBlockers, libraryIndexOf, loadUserEntries,
   publishDraft, reverseIndex, saveUserEntries, versionPinned, withDraft,
   type CoordinationEdge, type DynamicEntryDef, type DynamicParentDef,
-  type DynChildRef, type EntryDef, type LibraryEntry,
+  type DynChildRef, type EntryDef, type LibraryEntry, type SurfaceEntryDef,
 } from '@/lib/library-entries';
+import { expandDynamicEntry } from '@/lib/dynamic-expand';
+import { cachedThumb, dynamicPosterRGBA, surfaceThumbRGBA } from '@/lib/library-thumbs';
+import { convertCharacterToRuntimePackage } from '@/lib/proc-runtime/convert';
+import { buildRuntimeHtml } from '@/lib/proc-runtime/runtime-template';
+import { createDefaultParametricAppearance } from '@/lib/proc-runtime/surfaces';
+import type { Character } from '@/lib/unified-types';
 import {
   defaultDynamicParams, normalizeDynamicParams,
   type DynamicPatternInstance, type DynamicPatternParams,
@@ -156,6 +162,10 @@ export default function PatternLibraryPanel({
                   onClick={() => { setSelectedId(e.id); setDraftWork(null); }}
                   className={`w-full text-left rounded px-1.5 py-1 ${selectedId === e.id ? 'bg-[#1b1b38]' : 'hover:bg-[#14142a]'}`}
                 >
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <EntryThumb entry={e} index={libraryIndexOf(all)} size={30} />
+                    <span className="text-[8px] text-gray-600">{e.kind === 'dynamic' ? '定格图' : '烘焙图'}</span>
+                  </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] text-gray-200 flex-1 truncate">{e.name}</span>
                     <span className="text-[8px] text-gray-500">{e.kind === 'dynamic' ? '动态' : '表面'}</span>
@@ -216,6 +226,15 @@ export default function PatternLibraryPanel({
                     </Button>
                   )}
                 </div>
+                <div className="flex items-start gap-2">
+                  <EntryThumb entry={selected} index={libraryIndexOf(all)} size={84} />
+                  {selected.kind === 'dynamic'
+                    ? <p className="text-[9px] text-gray-600 leading-relaxed">左图为定格图（峰值帧）；下方有动态预览。</p>
+                    : <p className="text-[9px] text-gray-600 leading-relaxed">标准瓦片烘焙图；实际部件形状不同，图案按同一图生成。</p>}
+                </div>
+                {selected.kind === 'dynamic' && (
+                  <EntryLivePreview entry={selected} allEntries={all} />
+                )}
                 {/* 影响面 */}
                 <div>
                   <Label className="text-[9px] text-gray-600">影响面（谁钉了这个条目）</Label>
@@ -283,6 +302,78 @@ export default function PatternLibraryPanel({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** 条目缩略图：表面=烘焙图、动态=定格图（按 id@最新版缓存） */
+function EntryThumb({ entry, index, size }: {
+  entry: LibraryEntry;
+  index: ReturnType<typeof libraryIndexOf>;
+  size: number;
+}) {
+  const url = React.useMemo(() => {
+    if (entry.kind === 'surface') {
+      const found = defOf(index, entry.id);
+      if (!found || 'kind' in found.def) return undefined;
+      return cachedThumb(`surf:${entry.id}@${found.version}`, () => surfaceThumbRGBA(found.def as SurfaceEntryDef));
+    }
+    const ex = expandDynamicEntry(index, entry.id, entry.latest);
+    if (!ex.params) return undefined;
+    return cachedThumb(`dyn:${entry.id}@${entry.latest}`, () => dynamicPosterRGBA(ex.params!));
+  }, [entry, index]);
+  if (!url) return <div style={{ width: size, height: size }} className="shrink-0 rounded bg-[#14142a]" />;
+  return (
+    <img src={url} alt="" width={size} height={size}
+      className="shrink-0 rounded bg-[#14142a]" style={{ imageRendering: 'pixelated' }} />
+  );
+}
+
+/** 动态条目动态预览：示例角色挂上钉版本引用 → 与导出同一套
+ * 程序化预览（整包 iframe）。追随类只有单部件时显不出跟随，
+ * 展开参数带 followEnabled 时在下方注明。 */
+function EntryLivePreview({ entry, allEntries }: { entry: LibraryEntry; allEntries: LibraryEntry[] }) {
+  const built = React.useMemo(() => {
+    const index = libraryIndexOf(allEntries);
+    const ex = expandDynamicEntry(index, entry.id, entry.latest);
+    const inst = {
+      id: 'preview', slot: 'main', enabled: true,
+      params: ex.params ?? defaultDynamicParams(),
+      patternRef: { id: entry.id, version: entry.latest },
+    };
+    const character = {
+      id: 'preview-char', name: '预览',
+      nodes: {
+        torso: {
+          id: 'torso', name: '躯干', role: 'bone',
+          slot: { slotKey: 'torso' }, dynamicPatterns: [inst],
+        },
+      },
+      rootNodeId: 'torso', rootNodeIds: ['torso'],
+      costumeSets: [{
+        id: 'set1', name: '默认',
+        pieces: { torso: { nodeId: 'torso', zIndex: 0, parametric: createDefaultParametricAppearance() } },
+      }],
+      activeCostumeSetId: 'set1', variants: {},
+    } as unknown as Character;
+    const pkg = convertCharacterToRuntimePackage(character, undefined, {
+      frameRate: 12, totalFrames: 48, libraryEntries: allEntries,
+    });
+    return { html: buildRuntimeHtml(pkg), follow: !!ex.params?.followEnabled };
+  }, [entry, allEntries]);
+  return (
+    <div>
+      <Label className="text-[9px] text-gray-600">动态预览（与导出同一运行时）</Label>
+      <iframe
+        title="条目动态预览"
+        srcDoc={built.html}
+        sandbox="allow-scripts"
+        className="w-full rounded border border-[#1e1e3a] bg-[#12122a] mt-1"
+        style={{ height: 180, pointerEvents: 'none' }}
+      />
+      {built.follow && (
+        <p className="text-[9px] text-gray-600 mt-0.5">追随效果需要两个部件：此预览只有示例部件，跟随不显形；在真实角色上生效。</p>
+      )}
     </div>
   );
 }
