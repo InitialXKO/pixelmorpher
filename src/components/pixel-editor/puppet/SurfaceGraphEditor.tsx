@@ -151,7 +151,7 @@ export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, hal
     const name = window.prompt('子图名称（存入模式库「我的」，之后可被任意图引用）', `${title.replace(/·改$/, '')}·子图`);
     if (!name) return;
     const tpl = saveUserPattern(name, analysis.subgraph.graph, analysis.subgraph.paramDefs, analysis.subgraph.outputs);
-    emit(rewriteWithSubgraphRefs(graph, packSel, tpl.id, analysis.boundary, analysis.exposedKeys), true);
+    emit(rewriteWithSubgraphRefs(graph, packSel, `${tpl.id}@1`, analysis.boundary, analysis.exposedKeys), true);
     setPackSel(null);
   };
   const setNode = (id: string, fn: (nd: SurfaceGraphNode) => SurfaceGraphNode, structural = false) =>

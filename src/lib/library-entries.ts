@@ -314,50 +314,73 @@ const ENTRIES_KEY = 'pm-library-entries-v1';
 const LEGACY_DYN_KEY = 'pm-user-dynamic-patterns-v1';
 const LEGACY_SURFACE_KEY = 'pm-user-patterns-v1';
 
+/** 旧动态模板 → 叶子条目（纯函数） */
+export function legacyDynToEntries(
+  arr: { name: string; cluster?: string; params: DynamicPatternParams }[],
+): LibraryEntry[] {
+  const out: LibraryEntry[] = [];
+  for (const t of arr) {
+    if (!t?.name || !t.params) continue;
+    const def = defaultDynamicParams();
+    const segments: Partial<DynamicPatternParams> = {};
+    for (const k of Object.keys(t.params) as DynParamKey[]) {
+      if (JSON.stringify(t.params[k]) !== JSON.stringify(def[k])) {
+        (segments as Record<string, unknown>)[k] = t.params[k];
+      }
+    }
+    out.push({
+      id: `user-dyn-${t.name}`, kind: 'dynamic', name: t.name,
+      cluster: t.cluster ?? '我的', latest: 1,
+      versions: { 1: { kind: 'leaf', segments, expose: Object.keys(segments) as DynParamKey[] } },
+    });
+  }
+  return out;
+}
+
+/** 旧表面模板 → 表面条目（纯函数） */
+export function legacySurfaceToEntries(arr: PatternTemplate[]): LibraryEntry[] {
+  const out: LibraryEntry[] = [];
+  for (const t of arr) {
+    if (!t?.id || !t.graph) continue;
+    out.push({
+      id: t.id, kind: 'surface', name: t.name, cluster: t.cluster ?? '我的', latest: 1,
+      versions: { 1: { params: t.params ?? [], graph: t.graph, outputs: t.outputs } },
+    });
+  }
+  return out;
+}
+
+/** 增量并入：legacy 来的条目按 id 去重补进已有条目表（旧保存流
+ * 还在写旧 key，每次加载都补一次，保证两边不发散；纯函数） */
+export function mergeLegacyEntries(
+  existing: readonly LibraryEntry[], legacy: readonly LibraryEntry[],
+): LibraryEntry[] {
+  const have = new Set(existing.map((e) => e.id));
+  const add = legacy.filter((e) => !have.has(e.id));
+  return add.length > 0 ? [...existing, ...add] : [...existing];
+}
+
 export function loadUserEntries(): LibraryEntry[] {
+  let stored: LibraryEntry[] = [];
   try {
     const raw = localStorage.getItem(ENTRIES_KEY);
     if (raw) {
       const arr = JSON.parse(raw) as LibraryEntry[];
-      if (Array.isArray(arr)) return arr.filter((e) => e && e.id && e.versions);
+      if (Array.isArray(arr)) stored = arr.filter((e) => e && e.id && e.versions);
     }
-  } catch { /* 存储不可用 → 走迁移/空 */ }
-  // 首次：从旧 key 迁移（旧 key 保留一代做回滚，不删）
-  const migrated: LibraryEntry[] = [];
+  } catch { /* 存储不可用 → 仅走 legacy 补入 */ }
+  // 旧 key 增量补入（旧 key 保留做回滚，不删）
+  let merged = stored;
   try {
+    const legacy: LibraryEntry[] = [];
     const dynRaw = localStorage.getItem(LEGACY_DYN_KEY);
-    if (dynRaw) {
-      const arr = JSON.parse(dynRaw) as { name: string; cluster?: string; params: DynamicPatternParams }[];
-      for (const t of arr) {
-        if (!t?.name || !t.params) continue;
-        const def = defaultDynamicParams();
-        const segments: Partial<DynamicPatternParams> = {};
-        for (const k of Object.keys(t.params) as DynParamKey[]) {
-          if (JSON.stringify(t.params[k]) !== JSON.stringify(def[k])) {
-            (segments as Record<string, unknown>)[k] = t.params[k];
-          }
-        }
-        migrated.push({
-          id: `user-dyn-${t.name}`, kind: 'dynamic', name: t.name,
-          cluster: t.cluster ?? '我的', latest: 1,
-          versions: { 1: { kind: 'leaf', segments, expose: Object.keys(segments) as DynParamKey[] } },
-        });
-      }
-    }
+    if (dynRaw) legacy.push(...legacyDynToEntries(JSON.parse(dynRaw)));
     const surfRaw = localStorage.getItem(LEGACY_SURFACE_KEY);
-    if (surfRaw) {
-      const arr = JSON.parse(surfRaw) as PatternTemplate[];
-      for (const t of arr) {
-        if (!t?.id || !t.graph) continue;
-        migrated.push({
-          id: t.id, kind: 'surface', name: t.name, cluster: t.cluster ?? '我的', latest: 1,
-          versions: { 1: { params: t.params ?? [], graph: t.graph, outputs: t.outputs } },
-        });
-      }
-    }
-  } catch { /* 迁移失败 → 空库起步，旧 key 还在 */ }
-  if (migrated.length > 0) saveUserEntries(migrated);
-  return migrated;
+    if (surfRaw) legacy.push(...legacySurfaceToEntries(JSON.parse(surfRaw)));
+    merged = mergeLegacyEntries(stored, legacy);
+  } catch { /* 补入失败 → 用已存条目 */ }
+  if (merged.length !== stored.length) saveUserEntries(merged);
+  return merged;
 }
 
 export function saveUserEntries(entries: readonly LibraryEntry[]): void {

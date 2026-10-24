@@ -1774,4 +1774,47 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     && dynQ2.some((d) => d.params.rate === 44));
 }
 
+// ============ R 组：条目治理纯函数（管理面板地基） ============
+{
+  const LE = await import('../src/lib/library-entries');
+  const { defaultDynamicParams: ddp } = await import('../src/lib/dynamic-patterns');
+  const eA: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-a', kind: 'dynamic', name: '原', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: { rate: 1 }, expose: ['rate'] } },
+  };
+  const legacyDup = { ...eA, name: '旧副本' };
+  const eB: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-b', kind: 'dynamic', name: '新', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: {}, expose: [] } },
+  };
+  const merged = LE.mergeLegacyEntries([eA], [legacyDup, eB]);
+  check('R1 legacy 增量并入按 id 去重且不覆盖已有条目',
+    merged.length === 2 && merged[0]!.name === '原' && merged[1]!.id === 'u-b');
+  const dynLegacy = LE.legacyDynToEntries([{
+    name: '旧动态', params: { ...ddp(), rate: 5 },
+  }]);
+  check('R2 旧动态模板转叶子条目（仅差量键、id 按名）',
+    dynLegacy[0]!.id === 'user-dyn-旧动态'
+    && JSON.stringify((dynLegacy[0]!.versions[1] as { segments: object }).segments) === '{"rate":5}');
+  const surfLegacy = LE.legacySurfaceToEntries([{
+    id: 'user-zz', name: '旧表面', cluster: '我的',
+    params: [], graph: { version: 1, nodes: [], writes: [], params: {} } as never,
+  }]);
+  check('R3 旧表面模板转条目 v1', surfLegacy[0]!.kind === 'surface' && surfLegacy[0]!.latest === 1);
+  const refs = LE.refsOfDef({
+    params: [], graph: {
+      version: 1,
+      nodes: [
+        { id: 'a', op: 'ref', params: { ref: 'x@2' } },
+        { id: 'b', op: 'ref', params: { ref: 'y' } },
+        { id: 'c', op: 'const', params: { v: 1 } },
+      ],
+      writes: [], params: {},
+    } as never,
+  });
+  check('R4 表面 def 引用扫描（钉版与浮动都收）',
+    refs.length === 2 && refs[0]!.id === 'x' && refs[0]!.version === 2
+    && refs[1]!.id === 'y' && refs[1]!.version === undefined);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

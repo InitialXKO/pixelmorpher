@@ -30,6 +30,7 @@ import {
   type LibraryEntry,
 } from '@/lib/library-entries';
 import { expandDynamicEntry } from '@/lib/dynamic-expand';
+import PatternLibraryPanel from './PatternLibraryPanel';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -73,6 +74,7 @@ export default function DynamicPatternEditor({
   const allTemplates = [...DYNAMIC_PATTERN_TEMPLATES, ...userTemplates];
   // 模式库条目（统一条目模型）：应用条目 = 钉版本引用 + 展开快照
   const [libEntries, setLibEntries] = useState<LibraryEntry[]>(() => allLibraryEntries());
+  const [libPanelOpen, setLibPanelOpen] = useState(false);
   const libIndex = libraryIndexOf(libEntries);
   const dynEntries = libEntries.filter((e) => e.kind === 'dynamic');
   const applyEntry = (inst: DynamicPatternInstance, entryId: string) => {
@@ -145,6 +147,20 @@ export default function DynamicPatternEditor({
   return (
     <div className="space-y-1.5">
       {hint && <p className="text-[9px] text-gray-600">{hint}</p>}
+      <div className="flex items-center gap-1.5">
+        <span className="text-[9px] text-gray-600">模式库条目可钉版本引用；条目出新版不影响已钉实例，升级在实例上手动点。</span>
+        <div className="flex-1" />
+        <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5 text-violet-300"
+          onClick={() => setLibPanelOpen(true)}>
+          模式库管理
+        </Button>
+      </div>
+      {libPanelOpen && (
+        <PatternLibraryPanel
+          onClose={() => setLibPanelOpen(false)}
+          onChanged={() => setLibEntries(allLibraryEntries())}
+        />
+      )}
       {instances.map((inst) => (
         <div key={inst.id} className="rounded border border-[#1e1e3a] p-1.5 space-y-1.5">
           <div className="flex items-center gap-1.5">
