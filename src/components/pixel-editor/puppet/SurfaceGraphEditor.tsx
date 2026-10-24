@@ -18,8 +18,11 @@ import {
   SURFACE_OP_SPECS, SURFACE_OP_SPEC_MAP,
   createSurfaceNode, nextSurfaceNodeId,
 } from '@/lib/proc-runtime/surface-ops';
+import { expandSurfaceGraph, graphHasRefs, subgraphLibraryOf } from '@/lib/proc-runtime/graph-expand';
+import { allPatternTemplates, saveUserPattern } from '@/lib/proc-runtime/pattern-library';
+import { analyzePackSelection, rewriteWithSubgraphRefs } from '@/lib/proc-runtime/graph-pack';
 import SurfaceGraphCanvas, { AddNodeMenu } from './SurfaceGraphCanvas';
-import type { PatternParamDef } from '@/lib/proc-runtime/pattern-templates';
+import type { PatternParamDef, PatternTemplate } from '@/lib/proc-runtime/pattern-templates';
 import type { SurfaceGraph, SurfaceGraphNode, SurfaceGraphWrite } from '@/lib/unified-types';
 
 export interface EditorRuntimeShape {
@@ -55,6 +58,8 @@ const numCls = 'h-6 w-14 text-[10px] bg-[#111128] border border-[#1e1e3a] rounde
 export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, haloWidth, onChange, onSaveTemplate, onClose }: Props) {
   const [viewMode, setViewMode] = useState<'canvas' | 'list'>('canvas');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 打包成子图：null = 未进入打包模式；Set = 已勾选的节点 id
+  const [packSel, setPackSel] = useState<ReadonlySet<string> | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ids = useMemo(() => new Set(graph.nodes.map((x) => x.id)), [graph.nodes]);
   const specOf = (op: string) => SURFACE_OP_SPEC_MAP.get(op);
@@ -88,7 +93,11 @@ export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, hal
 
   const tile = useMemo(() => {
     try {
-      return baker().compileTileDAG(shape, graph, haloWidth ?? 0);
+      // 含子图引用的图先按当前模式库展开再烘焙（与导出/主画布同口径）
+      const g = graphHasRefs(graph)
+        ? expandSurfaceGraph(graph, subgraphLibraryOf(allPatternTemplates())).graph
+        : graph;
+      return baker().compileTileDAG(shape, g, haloWidth ?? 0);
     } catch {
       return null;
     }
@@ -132,6 +141,19 @@ export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, hal
 
   const emit = (next: SurfaceGraph, structural: boolean, defs: PatternParamDef[] = paramDefs) =>
     onChange(next, defs, structural);
+  const doPack = () => {
+    if (!packSel) return;
+    const analysis = analyzePackSelection(graph, packSel, paramDefs);
+    if (!analysis.ok || !analysis.subgraph) {
+      window.alert(analysis.reason ?? '无法打包');
+      return;
+    }
+    const name = window.prompt('子图名称（存入模式库「我的」，之后可被任意图引用）', `${title.replace(/·改$/, '')}·子图`);
+    if (!name) return;
+    const tpl = saveUserPattern(name, analysis.subgraph.graph, analysis.subgraph.paramDefs, analysis.subgraph.outputs);
+    emit(rewriteWithSubgraphRefs(graph, packSel, tpl.id, analysis.boundary, analysis.exposedKeys), true);
+    setPackSel(null);
+  };
   const setNode = (id: string, fn: (nd: SurfaceGraphNode) => SurfaceGraphNode, structural = false) =>
     emit({ ...graph, nodes: graph.nodes.map((x) => (x.id === id ? fn(x) : x)) }, structural);
   const setWrites = (writes: SurfaceGraphWrite[], structural = true) =>
@@ -199,6 +221,24 @@ export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, hal
             <div className="mb-1 flex items-center gap-1.5">
               <Label className="text-[9px] text-gray-500">节点（紫框 = 作用域，其子图缩进）</Label>
               <div className="flex-1" />
+              {packSel === null ? (
+                <Button size="sm" variant="ghost" className="h-6 text-[9px] px-1.5"
+                  onClick={() => setPackSel(new Set())}>
+                  打包成子图…
+                </Button>
+              ) : (
+                <>
+                  <span className="text-[9px] text-cyan-300">已选 {packSel.size} 个节点</span>
+                  <Button size="sm" variant="ghost" className="h-6 text-[9px] px-1.5 text-cyan-200"
+                    onClick={doPack}>
+                    完成打包
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-6 text-[9px] px-1.5"
+                    onClick={() => setPackSel(null)}>
+                    取消
+                  </Button>
+                </>
+              )}
               <AddNodeMenu onAdd={(op) => {
                 const nd = createSurfaceNode(op, nextSurfaceNodeId(ids));
                 emit({ ...graph, nodes: [...graph.nodes, nd] }, true);
@@ -212,6 +252,13 @@ export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, hal
                   depth={depthOf.get(nd.id) ?? 0}
                   allIds={[...ids]}
                   graphParams={graph.params ?? {}}
+                  packChecked={packSel ? packSel.has(nd.id) : undefined}
+                  onTogglePack={packSel ? () => setPackSel((prev) => {
+                    const next = new Set(prev ?? []);
+                    if (next.has(nd.id)) next.delete(nd.id);
+                    else next.add(nd.id);
+                    return next;
+                  }) : undefined}
                   onChange={(next, structural) => setNode(nd.id, () => next, structural)}
                   onDuplicate={() => {
                     const copy: SurfaceGraphNode = JSON.parse(JSON.stringify(nd));
@@ -352,7 +399,7 @@ export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, hal
 }
 
 function NodeRow({
-  nd, depth, allIds, graphParams, onChange, onDuplicate, onDelete,
+  nd, depth, allIds, graphParams, onChange, onDuplicate, onDelete, packChecked, onTogglePack,
 }: {
   nd: SurfaceGraphNode;
   depth: number;
@@ -361,6 +408,8 @@ function NodeRow({
   onChange: (next: SurfaceGraphNode, structural: boolean) => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  packChecked?: boolean;
+  onTogglePack?: () => void;
 }) {
   const spec = SURFACE_OP_SPEC_MAP.get(nd.op);
   const setInput = (port: string, target: string) => {
@@ -378,6 +427,10 @@ function NodeRow({
       style={{ marginLeft: Math.min(depth, 6) * 14 }}
     >
       <div className="flex flex-wrap items-center gap-1">
+        {onTogglePack && (
+          <input type="checkbox" checked={!!packChecked} onChange={onTogglePack}
+            className="h-3 w-3 accent-cyan-400" title="打包成子图：勾选要收进子图的节点" />
+        )}
         <span className="text-[9px] font-mono text-gray-500">{nd.id}</span>
         <select
           value={nd.op}
@@ -419,7 +472,12 @@ function NodeRow({
         </div>
       )}
 
-      {spec && spec.params.length > 0 && (
+      {nd.op === 'ref' && (
+        <RefNodeFields nd={nd} graphParams={graphParams} setParam={setParam}
+          replaceParams={(params) => onChange({ ...nd, params }, true)} />
+      )}
+
+      {nd.op !== 'ref' && spec && spec.params.length > 0 && (
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
           {spec.params.map((p) => {
             const raw = nd.params?.[p.key];
@@ -467,6 +525,89 @@ function NodeRow({
         </div>
       )}
       {!spec && <p className="mt-1 text-[9px] text-red-400">未知算子 {nd.op}（求值时按 0 处理）</p>}
+    </div>
+  );
+}
+
+/** ref 节点专属字段：子图选择 + 输出选择 + 暴露参数覆盖（数值/$ 绑定，
+ * 与普通节点参数同一三态口径）。切换目标会重置覆盖（旧目标的参数键
+ * 对新目标无意义）。 */
+function RefNodeFields({
+  nd, graphParams, setParam, replaceParams,
+}: {
+  nd: SurfaceGraphNode;
+  graphParams: Record<string, number>;
+  setParam: (key: string, v: number | string) => void;
+  replaceParams: (params: Record<string, number | string>) => void;
+}) {
+  const templates = useMemo(() => allPatternTemplates(), []);
+  const refId = typeof nd.params?.ref === 'string' ? nd.params.ref : '';
+  const target = templates.find((t) => t.id === refId);
+  const outNames = target
+    ? (Object.keys(target.outputs ?? {}).length > 0 ? Object.keys(target.outputs!) : ['main'])
+    : ['main'];
+  return (
+    <div className="mt-1 space-y-1">
+      <div className="flex flex-wrap items-center gap-1">
+        <label className="flex items-center gap-0.5 text-[9px] text-gray-500">
+          子图
+          <select value={refId} className={`${selCls} ${refId && !target ? 'border-red-500 text-red-300' : ''}`}
+            onChange={(e) => { if (e.target.value) replaceParams({ ref: e.target.value, out: 'main' }); }}>
+            <option value="">（未选）</option>
+            {refId && !target && <option value={refId}>⚠ {refId}（不存在）</option>}
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}（{(t as { user?: boolean }).user ? '我的' : '内置'}）</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-0.5 text-[9px] text-gray-500">
+          输出
+          <select value={String(nd.params?.out ?? 'main')} className={selCls}
+            onChange={(e) => setParam('out', e.target.value)}>
+            {outNames.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </label>
+      </div>
+      {refId && !target && (
+        <p className="text-[9px] text-red-400">目标模板不存在（被删除或改名），烘焙时该节点按零场处理并在导出时点名。</p>
+      )}
+      {!refId && <p className="text-[9px] text-gray-600">选一个模板作为子图实例；同图同参数的多个引用共享一份展开（不会复制成树）。</p>}
+      {target && target.params.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          {target.params.map((p) => {
+            const raw = nd.params?.[p.key];
+            const isRef = typeof raw === 'string' && raw.startsWith('$');
+            if (isRef) {
+              const key = (raw as string).slice(1);
+              return (
+                <span key={p.key} className="flex items-center gap-0.5 text-[9px] text-cyan-300">
+                  {p.label}=${key}
+                  <span className="text-gray-500">({graphParams[key] ?? '?'})</span>
+                  <button className="text-gray-500 hover:text-gray-300"
+                    onClick={() => setParam(p.key, graphParams[key] ?? p.def)}>
+                    解绑
+                  </button>
+                </span>
+              );
+            }
+            return (
+              <label key={p.key} className="flex items-center gap-0.5 text-[9px] text-gray-500">
+                {p.label}
+                <input type="number" value={typeof raw === 'number' ? raw : p.def}
+                  min={p.min} max={p.max} step={p.step} className={numCls} style={{ width: 52 }}
+                  onChange={(e) => setParam(p.key, Number(e.target.value))} />
+                {Object.keys(graphParams).length > 0 && (
+                  <select value="" className={selCls} style={{ width: 44 }} title="绑定到本图参数"
+                    onChange={(e) => { if (e.target.value) setParam(p.key, `$${e.target.value}`); }}>
+                    <option value="">$</option>
+                    {Object.keys(graphParams).map((k) => <option key={k} value={k}>${k}</option>)}
+                  </select>
+                )}
+              </label>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

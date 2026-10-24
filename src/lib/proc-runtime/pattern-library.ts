@@ -59,6 +59,7 @@ export function saveUserPattern(
   name: string,
   graph: SurfaceGraph,
   paramDefs?: PatternParamDef[],
+  outputs?: Record<string, string>,
 ): UserPatternTemplate {
   const g = JSON.parse(JSON.stringify(graph)) as SurfaceGraph;
   const t: UserPatternTemplate = {
@@ -68,6 +69,7 @@ export function saveUserPattern(
     cluster: '我的',
     params: paramDefs && paramDefs.length > 0 ? paramDefs : deriveParamDefs(g),
     graph: g,
+    ...(outputs && Object.keys(outputs).length > 0 ? { outputs } : {}),
   };
   const list = loadUserPatterns();
   list.push(t);

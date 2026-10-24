@@ -20,6 +20,8 @@ import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
 import { glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
 import { createDefaultParametricAppearance } from './surfaces';
+import { expandSurfaceGraph, graphHasRefs, subgraphLibraryOf } from './graph-expand';
+import { PATTERN_TEMPLATES, type PatternTemplate } from './pattern-templates';
 import { PALETTES } from './palettes';
 import {
   translatePerformanceGraph, translateBehaviorGraph, simplify,
@@ -391,6 +393,7 @@ function appearanceToBase(
   pivot: [number, number],
   restRotDeg: number,
   baseSprite?: RuntimePartBase['baseSprite'],
+  graphOverride?: ParametricAppearance['surfaceGraph'],
 ): RuntimePartBase {
   const mode = app.composite ?? 'generate';
   return {
@@ -407,7 +410,7 @@ function appearanceToBase(
     rimI: app.rimI, glintI: app.glintI,
     surfaceName: app.surfaceName,
     surface: app.surface,
-    surfaceGraph: app.surfaceGraph,
+    surfaceGraph: graphOverride ?? app.surfaceGraph,
     composite: mode === 'generate' ? undefined : mode,
     haloWidth: app.haloWidth ? Math.max(0, Math.min(8, Math.floor(app.haloWidth))) : undefined,
     baseSprite,
@@ -536,9 +539,19 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[] },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[] },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
+  // 子图库：调用方传全库（内置 + 用户模板）快照；缺省只认内置
+  //（同 SpriteTable 由调用方传工程级表的先例，convert 不读存储）。
+  const subLib = subgraphLibraryOf(opts?.patternLibrary ?? PATTERN_TEMPLATES);
+  /** 进包图：含 ref 时展开成平图（包自包含，运行时模板不认 ref），警告点名 */
+  const expandPkg = (g: ParametricAppearance['surfaceGraph'], where: string) => {
+    if (!g || !graphHasRefs(g)) return g;
+    const r = expandSurfaceGraph(g, subLib);
+    for (const w of r.warnings) warnings.push(`${where}：${w}`);
+    return r.graph;
+  };
   // 精灵引用解析表：角色自带表 + 工程级全局表（全局优先），与主画布同口径
   const spriteTable: SpriteTable = { ...(character.sprites ?? {}), ...(externalSprites ?? {}) };
   // 工程帧率：一切帧↔秒换算的唯一来源（调用方传入；缺省 12 仅兜底）
@@ -592,7 +605,8 @@ export function convertCharacterToRuntimePackage(
       drawLayer: node.drawLayer,
       sortOrder: node.zIndex,
       costumeKeys: [slotKey],
-      base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0, baseSprite),
+      base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0, baseSprite,
+        expandPkg(baseApp.surfaceGraph, `子图（槽位 ${slotKey}）`)),
       variants: { [rootDir]: {} },
       dynamic: dyn,
       glow: glowEntryFor(character, slotKey, dyn, activeSet?.id, externalSprites, warnings),
@@ -666,7 +680,8 @@ export function convertCharacterToRuntimePackage(
       if (!app) { entry[slotKey] = null; continue; }
       const w = nodeId ? worlds.get(nodeId) : undefined;
       const pivot = pivotOf(nodeId);
-      entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0, baseSpriteFor(app, piece, character, slotKey, spriteTable, rootDir as DirectionIndex));
+      entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0, baseSpriteFor(app, piece, character, slotKey, spriteTable, rootDir as DirectionIndex),
+        expandPkg(app.surfaceGraph, `子图（槽位 ${slotKey}，服装集「${cs.name}」）`));
     }
     for (const slotKey of spriteSlots) {
       const nodeId = slotNode.get(slotKey);

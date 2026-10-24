@@ -1391,4 +1391,116 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   }
 }
 
+// ---------- N) 子图实例化（方向甲）：展开/进包/打包全链 ----------
+{
+  const { expandSurfaceGraph, subgraphLibraryOf, graphHasRefs } = await import('../src/lib/proc-runtime/graph-expand');
+  const { PATTERN_TEMPLATES, instantiatePattern } = await import('../src/lib/proc-runtime/pattern-templates');
+  const { analyzePackSelection, rewriteWithSubgraphRefs } = await import('../src/lib/proc-runtime/graph-pack');
+  const { createSurfaceBaker } = await import('../src/lib/proc-runtime/bake-src');
+  const bakerN = createSurfaceBaker();
+  const shapeN = { kind: 'rect', size: [24, 24] as [number, number], roundness: 0 };
+  const bakeHex = (g: unknown) => Buffer.from(bakerN.compileTileDAG(shapeN as never, g as never, 0).data).toString('hex');
+  const scalesTpl = PATTERN_TEMPLATES.find((t) => t.id === 'scales')!;
+  const libN = subgraphLibraryOf(PATTERN_TEMPLATES);
+  const scalesApplied = instantiatePattern(scalesTpl);
+  const scalesHex = bakeHex(scalesApplied);
+
+  const hostN = {
+    version: 1 as const,
+    nodes: [
+      { id: 'in', op: 'inside' },
+      { id: 'r1', op: 'ref', params: { ref: 'scales', out: 'main' } },
+      { id: 'r2', op: 'ref', params: { ref: 'scales', out: 'shadow' } },
+      { id: 'r3', op: 'ref', params: { ref: 'scales', out: 'edge' } },
+    ],
+    writes: [
+      { from: 'in', slot: 2, at: 0.5 },
+      { from: 'r1', slot: 3, at: 0 },
+      { from: 'r2', slot: 2, at: 0.35 },
+      { from: 'r3', slot: 5, at: 0.45 },
+    ],
+    params: {},
+  };
+  const expN = expandSurfaceGraph(hostN as never, libN);
+  check('N1 三引用同实例展开烘焙 == 鳞片原图（逐字节）', bakeHex(expN.graph) === scalesHex && expN.warnings.length === 0);
+  check(`N2 按实例去重不退化成树（展开 ${expN.graph.nodes.length} 节点 == 宿主 1 + 鳞片 ${scalesTpl.graph.nodes.length}）`,
+    expN.graph.nodes.length === 1 + scalesTpl.graph.nodes.length);
+  check('N3 无 ref 图展开恒等', (() => {
+    const e = expandSurfaceGraph(scalesApplied as never, libN);
+    return bakeHex(e.graph) === scalesHex && e.graph.nodes.length === scalesApplied.nodes.length;
+  })());
+  check('N4 参数覆盖逐字节等值（cw=14）', (() => {
+    const h = structuredClone(hostN);
+    for (const nd of h.nodes) if (nd.op === 'ref') nd.params = { ...nd.params, cw: 14 };
+    const truth = { ...scalesApplied, params: { ...scalesApplied.params, cw: 14 } };
+    return bakeHex(expandSurfaceGraph(h as never, libN).graph) === bakeHex(truth);
+  })());
+  check('N5 环/未解析点名 + 零场', (() => {
+    const bad = {
+      version: 1 as const,
+      nodes: [
+        { id: 'x', op: 'ref', params: { ref: 'nope' } },
+        { id: 'y', op: 'ref', params: { ref: 'scales', out: 'main', cw: '$cw' } },
+      ],
+      writes: [{ from: 'x', slot: 2 }, { from: 'y', slot: 3, at: 0 }],
+      params: {},
+    };
+    const e = expandSurfaceGraph(bad as never, libN);
+    return e.warnings.some((w) => w.includes('未解析')) && bakeHex(e.graph).length > 0;
+  })());
+
+  // convert 进包：ref 图展开后落包（包内无 ref），烘焙与原图一致
+  const appRef = { ...createDefaultParametricAppearance(), surfaceGraph: structuredClone(hostN) };
+  const chN = {
+    id: 'chN', name: '子图进包',
+    nodes: { torso: makeNode('torso', '躯干', 'torso') },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: appRef } } }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkgN = convertCharacterToRuntimePackage(chN, undefined, { frameRate: 8 });
+  const pkgGraph = pkgN.parts.find((p) => p.key === 'torso')?.base.surfaceGraph;
+  check('N6 进包图已展开（无 ref 算子残留）',
+    !!pkgGraph && !graphHasRefs(pkgGraph as never) && pkgGraph.nodes.every((n) => n.op !== 'ref'));
+  check('N7 进包图烘焙 == 鳞片原图', !!pkgGraph && bakeHex(pkgGraph) === scalesHex);
+  const appBad = { ...createDefaultParametricAppearance(), surfaceGraph: {
+    version: 1 as const,
+    nodes: [{ id: 'x', op: 'ref', params: { ref: 'ghost-tpl' } }],
+    writes: [{ from: 'x', slot: 2 }],
+    params: {},
+  } };
+  const chN2 = {
+    ...chN,
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: appBad } } }],
+  } as unknown as Character;
+  const pkgN2 = convertCharacterToRuntimePackage(chN2, undefined, { frameRate: 8 });
+  check('N8 未解析引用进包点名警告', pkgN2.warnings.some((w) => w.includes('未解析') && w.includes('ghost-tpl')));
+
+  // 主画布烘焙 parity：ref 外观与平图外观产物逐像素一致
+  {
+    const { buildParametricSprite } = await import('../src/lib/proc-runtime/main-canvas');
+    const sprRef = buildParametricSprite(appRef as never, 'nkey');
+    const sprFlat = buildParametricSprite({ ...createDefaultParametricAppearance(), surfaceGraph: scalesApplied } as never, 'nkey');
+    check('N9 主画布 ref 外观烘焙 == 平图外观', !!sprRef && !!sprFlat
+      && JSON.stringify(sprRef.data) === JSON.stringify(sprFlat.data));
+  }
+
+  // 打包：选区校验 + 重写往返烘焙等值
+  {
+    const selAll = new Set(scalesApplied.nodes.map((n) => n.id).filter((id) => id !== 'in'));
+    const ana = analyzePackSelection(scalesApplied as never, selAll, scalesTpl.params);
+    check('N10 打包分析通过（边界=写出消费节点、暴露参数齐）',
+      ana.ok && ana.boundary.length === 3 && ana.exposedKeys.join(',') === 'cw,ch,gap,shadow');
+    const libPack = subgraphLibraryOf([...PATTERN_TEMPLATES, {
+      id: 'user-pack-test', params: ana.subgraph!.paramDefs,
+      graph: ana.subgraph!.graph, outputs: ana.subgraph!.outputs,
+    }]);
+    const rewritten = rewriteWithSubgraphRefs(scalesApplied as never, selAll, 'user-pack-test', ana.boundary, ana.exposedKeys);
+    check('N11 打包往返：重写图展开烘焙 == 原图逐字节',
+      bakeHex(expandSurfaceGraph(rewritten, libPack).graph) === scalesHex);
+    const anaBad = analyzePackSelection(scalesApplied as never, new Set(['rep']), scalesTpl.params);
+    check('N12 带外部输入边的选区被拒（子图无字段输入口）', !anaBad.ok && (anaBad.reason ?? '').includes('输入边'));
+  }
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

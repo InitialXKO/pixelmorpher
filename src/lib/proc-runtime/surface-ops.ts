@@ -20,7 +20,7 @@ export interface OpParamSpec {
 export interface OpSpec {
   op: string;
   label: string;
-  cat: '场源' | '单元' | '组合' | '作用域' | '生成';
+  cat: '场源' | '单元' | '组合' | '作用域' | '生成' | '引用';
   /** 输入口名（顺序即编辑器展示序）；作用域算子的 in/b 为子图口 */
   ports: string[];
   /** 是否坐标修饰（作用域框语义，编辑器以缩进+紫框呈现） */
@@ -117,6 +117,14 @@ export const SURFACE_OP_SPECS: OpSpec[] = [
   },
   { op: 'blur', label: '平滑', cat: '作用域', ports: ['in'], scope: true, params: [num('r', '半径', 1, 0.4, 4, 0.2)] },
   { op: 'fadeEdge', label: '边缘溶入', cat: '作用域', ports: ['in'], scope: true, params: [num('w', '溶宽', 2, 0.2, 12, 0.25)] },
+  // ---- 引用（子图实例化，方向甲）：params 的 ref/out 是结构键，
+  // 其余键 = 目标模板的暴露参数覆盖（编辑器按目标动态生成参数面，
+  // 此处两行只是 createSurfaceNode 的缺省骨架）。展开在烘焙期完成
+  // （graph-expand），求值器只留 case 'ref' 零场兜底。
+  {
+    op: 'ref', label: '引用子图', cat: '引用', ports: [],
+    params: [en('ref', '子图', '', []), en('out', '输出', 'main', [])],
+  },
 ];
 
 export const SURFACE_OP_SPEC_MAP = new Map(SURFACE_OP_SPECS.map((s) => [s.op, s]));

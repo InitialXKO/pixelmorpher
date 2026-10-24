@@ -22,6 +22,9 @@ export interface PatternTemplate {
   cluster: string;
   params: PatternParamDef[];
   graph: SurfaceGraph;
+  /** 子图命名输出（输出名 → 图内节点 id）：被 ref 算子引用时用；
+   * 缺省 main = 首条写出的 from（见 graph-expand） */
+  outputs?: Record<string, string>;
 }
 
 type N = SurfaceGraphNode;
@@ -42,6 +45,7 @@ const baseIn = (slot: number): N[] => [n('in', 'inside')];
 export const PATTERN_TEMPLATES: PatternTemplate[] = [
   {
     id: 'scales', name: '鳞片', cluster: '重复',
+    outputs: { main: 'rep', shadow: 'shadowG', edge: 'edge' },
     params: [
       P('cw', '鳞宽', 6, 18, 1, 10), P('ch', '鳞高', 5, 14, 1, 8),
       P('gap', '鳞间隙', 0, 1.5, 0.1, 0.4), P('shadow', '压盖阴影', 0, 1, 0.05, 0.6),
