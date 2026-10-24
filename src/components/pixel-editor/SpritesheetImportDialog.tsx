@@ -330,7 +330,7 @@ export default function SpritesheetImportDialog({ open, onOpenChange }: Spritesh
     // Optionally create animation clip（统一为木偶模型，不再创建部件轨道）
     if (createClip && createdSpriteIds.length > 0) {
       const name = clipName || `${prefix}动画`;
-      addAnimationClip(name);
+      addAnimationClip(name, '');
     }
 
     onOpenChange(false);

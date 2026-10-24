@@ -2,39 +2,41 @@
 
 import React, { useMemo } from 'react';
 import { useProjectStore } from '@/lib/store';
-import type { Node, NodeKeyframe, ModifierType, ModifierInstance, ModifierParamKeyframe } from '@/lib/unified-types';
+import type { Node, ModifierType, ModifierParamKeyframe } from '@/lib/unified-types';
 import { MODIFIER_DEFINITIONS } from '@/lib/types';
 import { SUB_TRACK_HEIGHT, CATEGORY_COLOR_MAP } from './constants';
 
-// ---- Node Keyframe Modifier Sub-Track Lane ----
-// 为 Node 的 per-keyframe modifiers 显示子轨道
-// 每个 modifier type 一行，显示拥有该 modifier 的关键帧及其 param keyframes
+// ---- Node Modifier-Key Sub-Track Lane ----
+// 为 Node 修饰器组轨（tracks.modifierKeys）显示子轨道
+// 每个 modifier type 一行，显示拥有该 modifier 的轨点及其 param keyframes
 export const NodeKeyframeModifierSubTrackLane = React.memo(function NodeKeyframeModifierSubTrackLane({
   node,
-  nodeKeyframes,
   totalFrames,
   frameWidth,
   onEditModifierParams,
 }: {
   node: Node;
-  nodeKeyframes: NodeKeyframe[];
   totalFrames: number;
   frameWidth?: number;
-  onEditModifierParams: (keyframeId: string, modifierId: string) => void;
+  onEditModifierParams: (nodeId: string, frame: number, modifierId: string) => void;
 }) {
   const fw = frameWidth ?? 24;
   const width = totalFrames * fw;
+  const points = useMemo(
+    () => [...(node.tracks?.modifierKeys?.keyframes ?? [])].sort((a, b) => a.frame - b.frame),
+    [node.tracks?.modifierKeys]
+  );
 
   // 收集所有 modifier types
   const modifierTypes = useMemo(() => {
     const types = new Set<ModifierType>();
-    for (const kf of nodeKeyframes) {
-      for (const mod of kf.modifiers ?? []) {
+    for (const pt of points) {
+      for (const mod of pt.value ?? []) {
         types.add(mod.type);
       }
     }
     return Array.from(types);
-  }, [nodeKeyframes]);
+  }, [points]);
 
   if (modifierTypes.length === 0) return null;
 
@@ -46,17 +48,17 @@ export const NodeKeyframeModifierSubTrackLane = React.memo(function NodeKeyframe
         const color = CATEGORY_COLOR_MAP[category] ?? '#3b82f6';
         const label = def?.label ?? modType;
 
-        // 拥有该 modifier 的关键帧
-        const kfsWithMod = nodeKeyframes.filter((kf) =>
-          (kf.modifiers ?? []).some((m) => m.type === modType)
+        // 拥有该 modifier 的轨点
+        const ptsWithMod = points.filter((pt) =>
+          (pt.value ?? []).some((m) => m.type === modType)
         );
 
         // 收集所有 param keyframes
-        const allParamKfs: { frame: number; kfId: string; modId: string; pkf: ModifierParamKeyframe }[] = [];
-        for (const kf of kfsWithMod) {
-          const mod = kf.modifiers!.find((m) => m.type === modType)!;
-          for (const pkf of mod.paramKeyframes ?? []) {
-            allParamKfs.push({ frame: pkf.frame, kfId: kf.id, modId: mod.id, pkf });
+        const allParamKfs: { frame: number; ptFrame: number; modId: string; pkf: ModifierParamKeyframe }[] = [];
+        for (const pt of ptsWithMod) {
+          const mod = pt.value!.find((m) => m.type === modType)!;
+          for (const pkf of (Array.isArray(mod.paramKeyframes) ? mod.paramKeyframes : []) as ModifierParamKeyframe[]) {
+            allParamKfs.push({ frame: pkf.frame, ptFrame: pt.frame, modId: mod.id, pkf });
           }
         }
         allParamKfs.sort((a, b) => a.frame - b.frame);
@@ -77,30 +79,30 @@ export const NodeKeyframeModifierSubTrackLane = React.memo(function NodeKeyframe
             </div>
 
             {/* Keyframe markers that have this modifier */}
-            {kfsWithMod.map((kf) => {
-              const mod = kf.modifiers!.find((m) => m.type === modType)!;
+            {ptsWithMod.map((pt) => {
+              const mod = pt.value!.find((m) => m.type === modType)!;
               return (
                 <button
-                  key={`mod-kf-${kf.id}`}
+                  key={`mod-kf-${pt.frame}`}
                   className="absolute top-1/2 -translate-y-1/2 size-2.5 rotate-45 rounded-[2px] hover:scale-125 transition-transform"
                   style={{
-                    left: kf.frame * fw + fw / 2 - 5,
+                    left: pt.frame * fw + fw / 2 - 5,
                     backgroundColor: color,
                     opacity: mod.enabled ? 1 : 0.4,
                   }}
-                  title={`${label} @ 帧 ${kf.frame}（点击编辑参数）`}
+                  title={`${label} @ 帧 ${pt.frame}（点击定位）`}
                   onClick={(e) => {
                     e.stopPropagation();
-                    onEditModifierParams(kf.id, mod.id);
+                    onEditModifierParams(node.id, pt.frame, mod.id);
                   }}
                 />
               );
             })}
 
             {/* Param keyframe markers (diamonds) */}
-            {allParamKfs.map(({ frame, kfId, modId, pkf }, idx) => (
+            {allParamKfs.map(({ frame, ptFrame, modId }, idx) => (
               <div
-                key={`pkf-${kfId}-${modId}-${idx}`}
+                key={`pkf-${ptFrame}-${modId}-${idx}`}
                 className="absolute top-1/2 -translate-y-1/2 size-1.5 rotate-45 pointer-events-none"
                 style={{
                   left: frame * fw + fw / 2 - 3,
@@ -118,47 +120,47 @@ export const NodeKeyframeModifierSubTrackLane = React.memo(function NodeKeyframe
 });
 
 // ---- Node ParamDriver Sub-Track Lane ----
-// 为 Node modifier 的 paramDrivers 显示子轨道
+// 为修饰器组轨内 modifier 的 paramDrivers 显示子轨道
 export const NodeParamDriverSubTrackLane = React.memo(function NodeParamDriverSubTrackLane({
   node,
-  nodeKeyframes,
+  characterId,
   totalFrames,
   frameWidth,
   onEditParamDriver,
 }: {
   node: Node;
-  nodeKeyframes: NodeKeyframe[];
+  characterId: string;
   totalFrames: number;
   frameWidth?: number;
-  onEditParamDriver: (keyframeId: string, modifierId: string, driverId: string) => void;
+  onEditParamDriver: (nodeId: string, frame: number, modifierId: string, driverId: string) => void;
 }) {
-  const { updateParamDriver, removeParamDriver, toggleParamDriver } = useProjectStore();
+  const toggleTrackParamDriver = useProjectStore((s) => s.toggleTrackParamDriver);
   const fw = frameWidth ?? 24;
   const width = totalFrames * fw;
 
-  // 收集所有 param drivers
+  // 收集所有 param drivers（定位 = 节点 + 轨点帧 + modifier）
   const driverEntries = useMemo(() => {
-    const entries: { kfId: string; modId: string; modType: ModifierType; driver: import('@/lib/unified-types').ParamDriver }[] = [];
-    for (const kf of nodeKeyframes) {
-      for (const mod of kf.modifiers ?? []) {
+    const entries: { frame: number; modId: string; modType: ModifierType; driver: import('@/lib/unified-types').ParamDriver }[] = [];
+    for (const pt of node.tracks?.modifierKeys?.keyframes ?? []) {
+      for (const mod of pt.value ?? []) {
         for (const driver of mod.paramDrivers ?? []) {
-          entries.push({ kfId: kf.id, modId: mod.id, modType: mod.type, driver });
+          entries.push({ frame: pt.frame, modId: mod.id, modType: mod.type, driver });
         }
       }
     }
     return entries;
-  }, [nodeKeyframes]);
+  }, [node.tracks?.modifierKeys]);
 
   if (driverEntries.length === 0) return null;
 
   return (
     <>
-      {driverEntries.map(({ kfId, modId, modType, driver }) => {
+      {driverEntries.map(({ frame, modId, modType, driver }) => {
         const def = MODIFIER_DEFINITIONS.find((d) => d.type === modType);
         const label = def?.label ?? modType;
         return (
           <div
-            key={`driver-${driver.id}`}
+            key={`driver-${frame}-${driver.id}`}
             className="relative border-b border-[#1a1a2e] flex items-center"
             style={{ height: SUB_TRACK_HEIGHT, width, minWidth: width, background: '#0a0a18' }}
           >
@@ -170,7 +172,7 @@ export const NodeParamDriverSubTrackLane = React.memo(function NodeParamDriverSu
               className="absolute right-1 top-1/2 -translate-y-1/2 text-[9px] px-1.5 py-0.5 rounded bg-purple-900/50 text-purple-300 hover:bg-purple-800"
               onClick={(e) => {
                 e.stopPropagation();
-                onEditParamDriver(kfId, modId, driver.id);
+                onEditParamDriver(node.id, frame, modId, driver.id);
               }}
             >
               编辑
@@ -179,7 +181,7 @@ export const NodeParamDriverSubTrackLane = React.memo(function NodeParamDriverSu
               className="absolute right-12 top-1/2 -translate-y-1/2 text-[9px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 hover:bg-gray-700"
               onClick={(e) => {
                 e.stopPropagation();
-                toggleParamDriver(kfId, modId, driver.id);
+                toggleTrackParamDriver(characterId, node.id, frame, modId, driver.id);
               }}
               title={driver.enabled ? '禁用' : '启用'}
             >

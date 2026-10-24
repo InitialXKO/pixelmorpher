@@ -1040,21 +1040,125 @@ const keys = Object.create(null);
 function startPerf(perf) {
   if (activePerfs.some((a) => a.perf === perf)) return;
   activePerfs.push({ perf: perf, t: 0, snapTimer: 0, snaps: [] });
+  emitRuntimeEvent('perfstart', { id: perf.id, name: perf.name });
   behaviorEpoch = elapsed;
   phaseAcc = 0;
   behaviorState.clear();
   prevBehaviorOutputs = new Map();
 }
+// ---------- 运行时状态机 ----------
+// 只判身体状态：材料都在包内（宿主变量 + 表演清单）。世界判定（行为树）
+// 不进包，归宿主。宿主可绕过状态机：setVar 直写变量，状态机每帧读最终
+// 值跟随判定；意图（intent）是建议入口，不是唯一入口。
+const SM = EMBEDDED.stateMachine || null;
+const smStateById = new Map();
+let smCurrent = null;
+if (SM) {
+  for (const s of SM.states || []) smStateById.set(s.id, s);
+  smCurrent = SM.initial || (SM.states && SM.states[0] ? SM.states[0].id : null);
+}
+const runtimeEventCbs = [];
+function emitRuntimeEvent(type, data) {
+  const ev = Object.assign({ type: type, t: elapsed }, data || {});
+  for (const cb of runtimeEventCbs) { try { cb(ev); } catch (err) { /* 宿主回调出错不拖垮渲染 */ } }
+}
+let lastHostVars = { moveX: 0, speed01: 0, grounded: 1 };
+let hostMoveX = null;
+let prevOnGround = true;
+function smCondOk(when, vars) {
+  for (const c of when || []) {
+    const v = vars[c.var];
+    if (typeof v !== 'number') return false;
+    if (c.op === 'lt' && !(v < c.value)) return false;
+    if (c.op === 'lte' && !(v <= c.value)) return false;
+    if (c.op === 'gt' && !(v > c.value)) return false;
+    if (c.op === 'gte' && !(v >= c.value)) return false;
+    if (c.op === 'eq' && v !== c.value) return false;
+    if (c.op === 'neq' && v === c.value) return false;
+  }
+  return true;
+}
+function smSetState(to) {
+  if (!SM || !to || to === smCurrent) return;
+  const from = smCurrent;
+  smCurrent = to;
+  emitRuntimeEvent('statechange', { from: from, to: to });
+  const st = smStateById.get(to);
+  if (st && st.performanceId) {
+    const perf = PERFORMANCES.find((p) => p.id === st.performanceId);
+    if (perf) startPerf(perf);
+  }
+}
+function smPickResident(vars) {
+  for (const tr of SM.transitions || []) {
+    if (tr.from !== '*' && tr.from !== smCurrent) continue;
+    const target = smStateById.get(tr.to);
+    if (!target || target.performanceId) continue;
+    if (smCondOk(tr.when, vars)) return tr.to;
+  }
+  return smCurrent;
+}
+function smUpdate(vars) {
+  if (!SM || !smCurrent) return;
+  const cur = smStateById.get(smCurrent);
+  if (cur && cur.performanceId) {
+    // 表演状态：表演播完（或循环表演被停）后按当前信号回落常驻状态
+    if (!activePerfs.some((a) => a.perf.id === cur.performanceId)) smSetState(smPickResident(vars));
+    return;
+  }
+  for (const tr of SM.transitions || []) {
+    if (tr.from !== '*' && tr.from !== smCurrent) continue;
+    if (tr.to === smCurrent) continue;
+    const target = smStateById.get(tr.to);
+    if (!target || target.performanceId) continue; // 表演状态只经意图进入
+    if (smCondOk(tr.when, vars)) { smSetState(tr.to); break; }
+  }
+}
+/** 表演统一入口：有对应状态先走状态机（状态变化与事件保持一致），否则直触发 */
+function enterPerformance(perf) {
+  if (SM) {
+    const st = (SM.states || []).find((s) => s.performanceId === perf.id);
+    if (st && st.id !== smCurrent) { smSetState(st.id); return; }
+  }
+  startPerf(perf);
+}
+// 宿主接口：意图进、事件出、变量可绕过直写
+window.procRuntime = {
+  intent: function (name) {
+    if (name === 'jump') {
+      if (char.onGround) { char.vy = JUMP_V; char.onGround = false; }
+      return true;
+    }
+    const perf = PERFORMANCES.find((p) => p.id === name || p.name === name || p.trigger === name);
+    if (perf) { enterPerformance(perf); return true; }
+    return false;
+  },
+  setVar: function (name, value) {
+    if (name === 'moveX') {
+      hostMoveX = value === null || value === undefined ? null : Math.max(-1, Math.min(1, Number(value) || 0));
+      return true;
+    }
+    if (name === 'autoWalk') { autoWalk = !!value; return true; }
+    return false;
+  },
+  setMove: function (x) {
+    hostMoveX = x === null || x === undefined ? null : Math.max(-1, Math.min(1, Number(x) || 0));
+  },
+  state: function () { return smCurrent; },
+  onEvent: function (cb) { runtimeEventCbs.push(cb); },
+};
+
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   const d = parseInt(e.key);
   if (d >= 1 && d <= 8) { char.variant = d - 1; char.lockedVariant = true; refreshBar(); }
-  for (const perf of PERFORMANCES) if (perf.triggerKey === e.code) startPerf(perf);
+  for (const perf of PERFORMANCES) if (perf.triggerKey === e.code) enterPerformance(perf);
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 const MOVE_SPEED = 72, JUMP_V = 200, GRAVITY = 720;
 function readMoveX() {
+  if (hostMoveX !== null) return hostMoveX; // 宿主直写优先于键盘（绕过口）
   let ix = 0;
   if (keys['KeyA'] || keys['ArrowLeft']) ix -= 1;
   if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
@@ -1106,7 +1210,7 @@ function mkRow(label) {
   for (const perf of PERFORMANCES) {
     const b = document.createElement('button');
     b.textContent = perf.name + ' (' + String(perf.triggerKey || '').replace('Key', '') + ')';
-    b.onclick = () => startPerf(perf);
+    b.onclick = () => enterPerformance(perf);
     row3.appendChild(b);
   }
   const aw = document.createElement('button');
@@ -1136,6 +1240,10 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now; elapsed += dt;
   const ix = readMoveX();
   updateCharacter(dt, ix);
+  if (char.onGround !== prevOnGround) {
+    emitRuntimeEvent(char.onGround ? 'land' : 'takeoff', {});
+    prevOnGround = char.onGround;
+  }
   // 行为层：宿主喂 vars，逐部件行为图实时求值（时间基 = 60fps 帧；
   // phase 为步态相位帧：移动约 30/s、静止 4/s、腾空 18/s；
   // nodeRef 读哪帧由每张图的 follow 开关决定：'prev'（缺省）读上一帧
@@ -1148,6 +1256,8 @@ function frame(now) {
     t: behaviorT, phase: phaseAcc, moveX: ix,
     speed01: ix !== 0 ? 1 : 0, grounded: char.onGround ? 1 : 0,
   };
+  lastHostVars = hostVars;
+  smUpdate(hostVars);
   let pose = {};
   for (const part of PARTS) pose[part.key] = { a: 0, dy: 0, rim: 0, glint: 0 };
   const behaviorOutputs = new Map();
@@ -1180,12 +1290,17 @@ function frame(now) {
   for (let i = activePerfs.length - 1; i >= 0; i--) {
     const act = activePerfs[i];
     act.t += dt;
+    // 循环表演（片段 loop）到尾回绕，不结束、不发 perfend
+    if (act.perf.loop && act.t > act.perf.duration) act.t = act.t % act.perf.duration;
     const w = envelopeWeight(act.t, act.perf.duration, act.perf.envelope.in, act.perf.envelope.out);
     if (w > 0) {
       const bpOut = evalRuntimeGraph(act.perf.graph, { u: Math.min(1, act.t / act.perf.duration), tSec: act.t });
       pose = composePerformance(pose, act.perf, bpOut, w);
     }
-    if (act.t > act.perf.duration) activePerfs.splice(i, 1);
+    if (act.t > act.perf.duration) {
+      activePerfs.splice(i, 1);
+      emitRuntimeEvent('perfend', { id: act.perf.id, name: act.perf.name });
+    }
   }
   const state = ensureAtlas(gl, char.variant, currentCostume);
   const sorted = sortParts(PARTS, char.variant);

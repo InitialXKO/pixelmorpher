@@ -6,7 +6,6 @@ import { renderUnifiedCharactersToCanvas } from '@/lib/unified-render';
 import { convertCharacterToRuntimePackage } from '@/lib/proc-runtime/convert';
 import { buildRuntimeHtml } from '@/lib/proc-runtime/runtime-template';
 import type { AnimationClip } from '@/lib/types';
-import type { NodeKeyframe } from '@/lib/unified-types';
 import { subToPx } from '@/lib/unified-types';
 import GIF from 'gif.js';
 import {
@@ -437,22 +436,6 @@ function generateLottieJSON(
 }
 
 // ============================================================
-// Helper: Collect node keyframes from animation clips
-// ============================================================
-
-/** Collect all node keyframes from animation clips (new Character/Node model). */
-function collectNodeKeyframes(
-  animationClips: AnimationClip[],
-): NodeKeyframe[] {
-  const allKeyframes: NodeKeyframe[] = [];
-  for (const clip of animationClips) {
-    if (clip.nodeKeyframes) {
-      allKeyframes.push(...clip.nodeKeyframes);
-    }
-  }
-  return allKeyframes;
-}
-
 // ============================================================
 // ExportDialog Component
 // ============================================================
@@ -482,11 +465,6 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
   // Filter out puppet sprite sprites from the standard render pipeline.
   // Puppet sprites are rendered by the puppet rendering pipeline, not renderFrame.
   const nonPuppetParts = useMemo(() => Object.values(sprites), [sprites]);
-
-  // Collect node keyframes from animation clips (new model)
-  const nodeKeyframes = useMemo(() => {
-    return collectNodeKeyframes(animationClips);
-  }, [animationClips]);
 
   // 获取所有统一角色（用于导出渲染）— 新模型直读，无需同步
   const getAllUnifiedCharacters = useCallback(() => {
@@ -1023,8 +1001,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
     () => (procCharacter ? convertCharacterToRuntimePackage(procCharacter, useProjectStore.getState().sprites, {
       frameRate: useProjectStore.getState().frameRate,
       totalFrames: useProjectStore.getState().totalFrames,
+      clips: animationClips.filter((c) => c.puppetCharacterId === procCharacter.id),
     }) : null),
-    [procCharacter],
+    [procCharacter, animationClips],
   );
   const exportProcRuntime = useCallback(() => {
     if (!procCharacter || !procPkg) return;

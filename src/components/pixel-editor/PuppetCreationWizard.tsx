@@ -687,17 +687,10 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
       activeCostumeSetId: costumeSetId,
     });
 
-    // Optionally create animation clip
+    // Optionally create animation clip（归属在新建时直接给定）
     if (createClip) {
       const name = clipName || `${characterName || '新角色'}_动画`;
-      const clip = addAnimationClip(name);
-      useProjectStore.setState((s) => ({
-        animationClips: s.animationClips.map((c) =>
-          c.id === clip.id
-            ? { ...c, isPuppetClip: true, puppetCharacterId: newCharacter.id }
-            : c
-        ),
-      }));
+      addAnimationClip(name, newCharacter.id);
     }
 
     onClose();

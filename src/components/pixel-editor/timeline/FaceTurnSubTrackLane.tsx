@@ -2,19 +2,17 @@
 
 import React, { useMemo } from 'react';
 import { useProjectStore } from '@/lib/store';
-import type { Node, NodeKeyframe } from '@/lib/unified-types';
+import type { Node } from '@/lib/unified-types';
 import { SUB_TRACK_HEIGHT } from './constants';
 
 // ---- Node FaceTurn Sub-Track Lane ----
-// 显示有 faceTurn 的关键帧（菱形标记），点击跳转到该帧
+// 显示转面轨（tracks.faceTurnKeys）上的点（菱形标记），点击跳转到该帧
 export const FaceTurnSubTrackLane = React.memo(function FaceTurnSubTrackLane({
   node,
-  nodeKeyframes,
   totalFrames,
   frameWidth,
 }: {
   node: Node;
-  nodeKeyframes: NodeKeyframe[];
   totalFrames: number;
   frameWidth?: number;
 }) {
@@ -22,12 +20,14 @@ export const FaceTurnSubTrackLane = React.memo(function FaceTurnSubTrackLane({
   const width = totalFrames * fw;
   const setCurrentFrame = useProjectStore((s) => s.setCurrentFrame);
 
-  const kfsWithFaceTurn = useMemo(
-    () => nodeKeyframes.filter((kf) => kf.faceTurn && (Math.abs(kf.faceTurn.yaw) > 1e-6 || Math.abs(kf.faceTurn.pitch) > 1e-6)),
-    [nodeKeyframes]
+  const ptsWithFaceTurn = useMemo(
+    () => (node.tracks?.faceTurnKeys?.keyframes ?? []).filter(
+      (pt) => Math.abs(pt.value.yaw) > 1e-6 || Math.abs(pt.value.pitch) > 1e-6,
+    ),
+    [node.tracks?.faceTurnKeys]
   );
 
-  if (kfsWithFaceTurn.length === 0) return null;
+  if (ptsWithFaceTurn.length === 0) return null;
 
   return (
     <div
@@ -38,17 +38,17 @@ export const FaceTurnSubTrackLane = React.memo(function FaceTurnSubTrackLane({
       <div className="absolute left-0 top-0 bottom-0 flex items-center pl-1 pointer-events-none">
         <span className="text-[8px] text-orange-400/80">转面</span>
       </div>
-      {kfsWithFaceTurn.map((kf) => {
-        const x = kf.frame * fw + fw / 2;
-        const yaw = kf.faceTurn!.yaw.toFixed(1);
-        const pitch = kf.faceTurn!.pitch.toFixed(1);
+      {ptsWithFaceTurn.map((pt) => {
+        const x = pt.frame * fw + fw / 2;
+        const yaw = pt.value.yaw.toFixed(1);
+        const pitch = pt.value.pitch.toFixed(1);
         return (
           <button
-            key={kf.id}
+            key={pt.frame}
             className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 hover:scale-125 transition-transform"
             style={{ left: x }}
-            title={`第 ${kf.frame} 帧 yaw=${yaw} pitch=${pitch}（点击跳转）`}
-            onClick={() => setCurrentFrame(kf.frame)}
+            title={`第 ${pt.frame} 帧 yaw=${yaw} pitch=${pitch}（点击跳转）`}
+            onClick={() => setCurrentFrame(pt.frame)}
           >
             {/* 菱形标记 */}
             <div

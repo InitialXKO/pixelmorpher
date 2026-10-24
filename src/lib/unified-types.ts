@@ -776,33 +776,16 @@ export interface NodeTracks {
   stretch?: KeyframeTrack<number>;
   scaleX?: KeyframeTrack<number>;
   variantIndex?: KeyframeTrack<number>;
+  /** 图层顺序覆盖（step 取值：≤当前帧的最后一点，无点回落 node.zIndex） */
+  zIndex?: KeyframeTrack<number>;
+  /** 修饰器组轨：点值 = 该帧的修饰器组快照。点间按参数插值——同 type 逐参数
+   *  lerp、只在一侧出现的按强度淡入/淡出（interpolateNodeKeyframeModifiers）。
+   *  求值时同 type 覆盖 node.modifiers 的同名项（关键帧优先）。 */
+  modifierKeys?: KeyframeTrack<ModifierInstance[]>;
+  /** 转面轨：点值 = 该帧的 yaw/pitch，点间数值 lerp；优先于 node.faceTurn 静态值。 */
+  faceTurnKeys?: KeyframeTrack<{ yaw: number; pitch: number }>;
 }
 
-/**
- * NodeKeyframe: a single keyframe for a Node in a clip timeline.
- * New model replacement for PuppetNodeKeyframe.
- * Field names align with NodeTracks (x/y not offsetX/offsetY, variantIndex not direction).
- */
-export interface NodeKeyframe {
-  id: string;
-  nodeId: string;
-  frame: number;
-  angle?: number;
-  tilt?: number;
-  stretch?: number;
-  scaleX?: number;
-  x?: number;
-  y?: number;
-  variantIndex?: number;
-  /** zIndex override (step interpolation) */
-  zIndex?: number;
-  /** Interpolation mode for this keyframe */
-  interpolationMode?: import('./types').InterpolationMode;
-  /** Per-keyframe modifiers (interpolated between keyframes by param) */
-  modifiers?: ModifierInstance[];
-  /** Per-keyframe face turn (Spine-style pseudo-3D head turning, lerped) */
-  faceTurn?: { yaw: number; pitch: number };
-}
 
 // ---- Parametric Appearance（参数化外观：程序化运行时的槽位外观来源） ----
 
@@ -937,6 +920,30 @@ export interface ParametricAppearance {
  * 所属节点），在蓝图编辑器里以该节点为语境编辑；导出时经方言翻译
  * （可求值子集直译、程序运动类采样烘焙成曲线）进入运行时包。
  */
+/** 运行时状态机条件（声明式，AND 组合）：读宿主变量（speed01/grounded/moveX 等） */
+export interface StateMachineCondition {
+  var: string;
+  op: 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'neq';
+  value: number;
+}
+
+/** 运行时状态机一条转移：from 为 '*' 表示任意状态；按数组顺序首个命中生效 */
+export interface StateMachineTransition {
+  from: string;
+  to: string;
+  when: StateMachineCondition[];
+}
+
+/** 运行时状态机规格（进运行时包的数据形状）：
+ *  带 performanceId 的状态是表演状态——进入即触发该表演，表演播完自动
+ *  退出、按当前信号回落到某个非表演状态；其余状态为常驻状态 */
+export interface StateMachineSpec {
+  version: 1;
+  initial: string;
+  states: { id: string; performanceId?: string }[];
+  transitions: StateMachineTransition[];
+}
+
 export interface ProcPerformance {
   id: string;
   name: string;
@@ -1166,6 +1173,11 @@ export interface Character {
   behaviorGraphs?: Record<string, BlueprintGraph>;
   /** 作者型表演清单（挂蓝图，见 ProcPerformance） */
   performances?: ProcPerformance[];
+  /** 运行时状态机规格（作者编排，可选）：convert 直通进运行时包；
+   *  缺省由 convert 按包内表演自动生成默认机（idle/move/air + 表演状态）。
+   *  状态机只判身体状态（材料在包内：宿主变量 + 表演清单）；世界判定
+   *  （行为树）归宿主，不进包。编辑器编排界面后置，先以数据规格存在 */
+  stateMachine?: StateMachineSpec;
   /** 编辑器输入轨（时间线角色级三轨）：主画布播放/拖动时逐帧采样，
    *  作为行为图的宿主输入（var 节点读 moveX/speed01/grounded）。
    *  缺轨/缺省：moveX=0、speed01=0、grounded=1（静止待机）。
@@ -1201,104 +1213,6 @@ export interface CostumeStateKeyframe {
   costumeSetId?: string;
   /** 逐槽增量：variantId = 指派该变体；null = 该槽从此回基础 */
   slotChanges?: Record<string, string | null>;
-}
-
-// ---- Animation Clip (Unified) ----
-
-/**
- * AnimationClip: an independent animation resource.
- * Contains keyframe data for node tracks, plus effect/canvas modifier data.
- * Replaces the old dual AnimationClip (sprite + puppet).
- */
-export interface UnifiedAnimationClip {
-  id: string;
-  name: string;
-  characterId: string;           // Which character this clip animates
-
-  // Frame settings
-  frameRate: number;
-  startFrame: number;
-  endFrame: number;
-  loop: boolean;
-
-  // Node track data (per-node per-property keyframes)
-  nodeTracks: Record<string, NodeTracks>; // nodeId → tracks
-
-  // Effect tracks (global, not per-node)
-  effectTracks: EffectTrack[];
-
-  // Canvas modifier tracks
-  canvasModifierTracks: CanvasModifierTrack[];
-
-  // Metadata
-  createdAt: number;
-  updatedAt: number;
-}
-
-// ---- Effect & Canvas Modifier (reused from old system) ----
-
-export interface EffectTrack {
-  id: string;
-  type: string;
-  name: string;
-  keyframes: EffectKeyframe[];
-  visible: boolean;
-  locked: boolean;
-}
-
-export interface EffectKeyframe {
-  frame: number;
-  params: Record<string, ModifierParamValue>;
-}
-
-export interface CanvasModifierTrack {
-  id: string;
-  type: string;
-  name: string;
-  keyframes: CanvasModifierKeyframe[];
-  enabled: boolean;
-}
-
-export interface CanvasModifierKeyframe {
-  frame: number;
-  params: Record<string, ModifierParamValue>;
-}
-
-// ---- Project (Unified) ----
-
-/**
- * UnifiedProject: top-level container for all creative data.
- * Replaces the old Project type.
- */
-export interface UnifiedProject {
-  id: string;
-  name: string;
-
-  // ---- Characters ----
-  characters: Character[];
-
-  // ---- Animation Clips ----
-  animationClips: UnifiedAnimationClip[];
-  activeAnimationClipId?: string;
-
-  // ---- Global Modifiers ----
-  globalModifiers: GlobalModifier[];
-
-  // ---- Animation Variables ----
-  animationVariables: AnimationVariable[];
-
-  // ---- Canvas Settings ----
-  canvasWidth: number;
-  canvasHeight: number;
-  backgroundColor: string;
-  frameRate: number;
-
-  // ---- Palettes ----
-  palettes: Palette[];
-
-  // ---- Metadata ----
-  createdAt: number;
-  updatedAt: number;
 }
 
 // ---- Shared Types (reused) ----

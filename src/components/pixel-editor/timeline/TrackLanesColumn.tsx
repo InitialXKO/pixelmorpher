@@ -3,7 +3,6 @@
 import React, { useRef } from 'react';
 import type { EffectTrack, CanvasModifierTrack } from '@/lib/types';
 import type { Node } from '@/lib/unified-types';
-import type { NodeKeyframe } from '@/lib/unified-types';
 import type { SnapConfig, TrackTimelineDisplay } from '@/lib/v15-types';
 import { getFrameWidth, TRACK_HEIGHT, RULER_HEIGHT } from './constants';
 import FrameRuler from './FrameRuler';
@@ -38,14 +37,19 @@ interface TrackLanesColumnProps {
   onPlayheadMouseDown: (e: React.MouseEvent) => void;
   isPuppetClip: boolean;
   nodeList: Node[];
-  nodeKeyframes: NodeKeyframe[];
+  /** 木偶节点所属角色 id（轨道数据的所有者） */
+  characterId: string | null;
+  /** 激活片段的时间窗（节点行上的可视标记） */
+  clipWindow?: { startFrame: number; endFrame: number } | null;
   selectedNodeKeyframeId: string | null;
   onSelectNodeKeyframe: (id: string) => void;
   onAddNodeKeyframe: (nodeId: string, frame: number) => void;
-  onDeleteNodeKeyframe: (keyframeId: string) => void;
-  onDuplicateNodeKeyframe: (keyframeId: string) => void;
-  onMoveNodeKeyframeToFrame: (keyframeId: string) => void;
-  onUpdateNodeKeyframe: (keyframeId: string, updates: Partial<NodeKeyframe>) => void;
+  onDeleteNodeKeyframe: (keyId: string) => void;
+  onDuplicateNodeKeyframe: (keyId: string) => void;
+  onMoveNodeKeyframeToFrame: (keyId: string) => void;
+  onUpdateNodeKeyframe: (keyId: string, updates: { frame?: number }) => void;
+  onEditModifierParams?: (nodeId: string, frame: number, modifierId: string) => void;
+  onEditParamDriver?: (nodeId: string, frame: number, modifierId: string, driverId: string) => void;
   // V15: Dynamic zoom, snap, colors, thumbnails, frame step
   FRAME_WIDTH?: number;
   snapConfig?: SnapConfig;
@@ -69,9 +73,9 @@ export default function TrackLanesColumn({
   onScroll, onRulerClick, onSelectEffectTrack,
   onAddEffectKeyframe, onDeleteEffectKeyframe, onEditEffectKeyframe,
   onPlayheadMouseDown,
-  isPuppetClip, nodeList, nodeKeyframes, selectedNodeKeyframeId,
+  isPuppetClip, nodeList, characterId, clipWindow, selectedNodeKeyframeId,
   onSelectNodeKeyframe, onAddNodeKeyframe, onDeleteNodeKeyframe, onDuplicateNodeKeyframe,
-  onMoveNodeKeyframeToFrame, onUpdateNodeKeyframe,
+  onMoveNodeKeyframeToFrame, onUpdateNodeKeyframe, onEditModifierParams, onEditParamDriver,
   // V15
   FRAME_WIDTH: propFrameWidth,
   snapConfig, snapFrame,
@@ -173,14 +177,16 @@ export default function TrackLanesColumn({
                 {nodeList.map((node, nodeIdx) => {
                   const rowIdx = puppetSepIdx + 1 + nodeIdx;
                   if (rowIdx < visibleRange.startIndex || rowIdx > visibleRange.endIndex) return null;
-                  const nodeKfs = nodeKeyframes.filter((kf) => kf.nodeId === node.id);
                   return (
                     <NodeTrackLane
-                      key={`node-lane-${node.id}`} node={node} nodeKeyframes={nodeKfs}
+                      key={`node-lane-${node.id}`} node={node} characterId={characterId ?? ''}
                       selectedNodeKeyframeId={selectedNodeKeyframeId} totalFrames={totalFrames}
+                      clipWindow={clipWindow}
                       onSelectNodeKeyframe={onSelectNodeKeyframe} onAddNodeKeyframe={onAddNodeKeyframe}
                       onDeleteNodeKeyframe={onDeleteNodeKeyframe} onDuplicateNodeKeyframe={onDuplicateNodeKeyframe} onMoveNodeKeyframeToFrame={onMoveNodeKeyframeToFrame}
                       onUpdateNodeKeyframe={onUpdateNodeKeyframe}
+                      onEditModifierParams={onEditModifierParams}
+                      onEditParamDriver={onEditParamDriver}
                       frameWidth={fw}
                       snapConfig={snapConfig}
                       snapFrame={snapFrame}

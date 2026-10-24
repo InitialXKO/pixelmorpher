@@ -15,7 +15,8 @@ import {
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { startPlayback, stopPlayback } from '@/lib/playback-scheduler';
 import type { InterpolationMode } from '@/lib/types';
-import type { NodeKeyframe } from '@/lib/unified-types';
+import { writePuppetPoseKeyframe } from './canvas/tool-handlers';
+import { trackKeyFrames, trackKeyId } from './timeline/NodeTrackLane';
 import type { SnapTarget } from '@/lib/v15-types';
 import { DEFAULT_FRAME_WIDTH, getFrameWidth, TRACK_COLOR_HUES } from './timeline/constants';
 import TimelineControls from './timeline/TimelineControls';
@@ -66,9 +67,10 @@ export default function Timeline() {
   const activeAnimationClipId = useProjectStore((s) => s.activeAnimationClipId);
   const animationClips = useProjectStore((s) => s.animationClips);
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
-  const addNodeKeyframe = useProjectStore((s) => s.addNodeKeyframe);
-  const removeNodeKeyframe = useProjectStore((s) => s.removeNodeKeyframe);
-  const updateNodeKeyframe = useProjectStore((s) => s.updateNodeKeyframe);
+  const clearNodeFrameKeys = useProjectStore((s) => s.clearNodeFrameKeys);
+  const copyNodeFrameKeys = useProjectStore((s) => s.copyNodeFrameKeys);
+  const moveNodeFrameKeys = useProjectStore((s) => s.moveNodeFrameKeys);
+  const setNodeFrameInterpolation = useProjectStore((s) => s.setNodeFrameInterpolation);
   const updateAnimationClip = useProjectStore((s) => s.updateAnimationClip);
 
   // ---- Derived puppet data ----
@@ -86,10 +88,22 @@ export default function Timeline() {
     return puppetCharacter;
   }, [puppetCharacter]);
   const puppetNodes = useMemo(() => (puppetSkeleton ? Object.values(puppetSkeleton.nodes) : []), [puppetSkeleton]);
-  const nodeKeyframes = useMemo(
-    () => activeClip?.nodeKeyframes ?? [],
-    [activeClip]
-  );
+  // 全部节点的轨道键（帧并集）：选择/复制/吸附的统一坐标，id = `${nodeId}@${frame}`
+  const allTrackKeys = useMemo(() => {
+    const out: { id: string; nodeId: string; frame: number }[] = [];
+    for (const n of puppetNodes) {
+      for (const f of trackKeyFrames(n.tracks)) out.push({ id: trackKeyId(n.id, f), nodeId: n.id, frame: f });
+    }
+    return out;
+  }, [puppetNodes]);
+  const parseTrackKey = useCallback((key: string | null): { nodeId: string; frame: number } | null => {
+    if (!key) return null;
+    const at = key.lastIndexOf('@');
+    if (at <= 0) return null;
+    const frame = Number(key.slice(at + 1));
+    if (!Number.isFinite(frame)) return null;
+    return { nodeId: key.slice(0, at), frame };
+  }, []);
 
   // ---- Puppet keyframe selection state ----
   const [selectedNodeKeyframeId, setSelectedNodeKeyframeId] = useState<string | null>(null);
@@ -102,39 +116,91 @@ export default function Timeline() {
 
   const handleAddNodeKeyframe = useCallback(
     (nodeId: string, frame: number) => {
-      if (!activeClip) return;
-      // H2: 用当前帧的插值姿态填充，而不是空对象（避免节点弹回静止姿态）
-      const skeleton = Object.values(unifiedCharacters).find((ch) =>
-        Object.values(ch.nodes).some((n) => n.id === nodeId)
-      );
-      const node = skeleton?.nodes[nodeId];
-      let values: Partial<Pick<import('@/lib/unified-types').NodeKeyframe, 'angle' | 'stretch' | 'scaleX' | 'x' | 'y' | 'variantIndex' | 'zIndex'>> = {};
-      // 从新 store 获取 Character，用新签名
-      const unifiedCharacter = useProjectStore.getState().unifiedCharacters[activeClip.puppetCharacterId ?? ''];
-      if (unifiedCharacter) {
-        const ivMap = interpolateNodeKeyframes(unifiedCharacter, frame);
-        const iv = ivMap.get(nodeId);
-        const uniNode = unifiedCharacter.nodes[nodeId];
-        values = {
-          angle: iv?.angle ?? uniNode?.transform?.angle ?? 0,
-          stretch: iv?.stretch ?? 1,
-          scaleX: iv?.scaleX ?? uniNode?.transform?.scaleX ?? 1,
-          x: iv?.x ?? 0,
-          y: iv?.y ?? 0,
-          variantIndex: 0,
-        };
-      }
-      addNodeKeyframe(activeClip.id, nodeId, frame, values);
+      if (!puppetCharacter) return;
+      // 用当前帧的插值姿态填充各通道轨点，而不是空值（避免节点弹回静止姿态）
+      const iv = interpolateNodeKeyframes(puppetCharacter, frame).get(nodeId);
+      const node = puppetCharacter.nodes[nodeId];
+      useProjectStore.getState().pushUndo('添加节点关键帧');
+      writePuppetPoseKeyframe(puppetCharacter.id, '', nodeId, frame, {
+        angle: iv?.angle ?? node?.transform?.angle ?? 0,
+        stretch: iv?.stretch ?? node?.transform?.stretch ?? 1,
+        scaleX: iv?.scaleX ?? node?.transform?.scaleX ?? 1,
+        x: iv?.x ?? node?.transform?.x ?? 0,
+        y: iv?.y ?? node?.transform?.y ?? 0,
+      }, 0);
     },
-    [activeClip, addNodeKeyframe, unifiedCharacters]
+    [puppetCharacter]
   );
 
   const handleDeleteNodeKeyframe = useCallback(
-    (keyframeId: string) => {
-      if (!activeClip) return;
-      removeNodeKeyframe(activeClip.id, keyframeId);
+    (keyId: string) => {
+      if (!puppetCharacter) return;
+      const parsed = parseTrackKey(keyId);
+      if (!parsed) return;
+      clearNodeFrameKeys(puppetCharacter.id, parsed.nodeId, parsed.frame);
+      setSelectedNodeKeyframeId((cur) => (cur === keyId ? null : cur));
     },
-    [activeClip, removeNodeKeyframe]
+    [puppetCharacter, parseTrackKey, clearNodeFrameKeys]
+  );
+
+  const handleDuplicateNodeKeyframe = useCallback(
+    (keyId: string) => {
+      if (!puppetCharacter) return;
+      const parsed = parseTrackKey(keyId);
+      if (!parsed) return;
+      const node = puppetCharacter.nodes[parsed.nodeId];
+      if (!node) return;
+      // 新帧 = 原帧+1（若冲突则找下一个空位）
+      const usedFrames = new Set(trackKeyFrames(node.tracks));
+      let newFrame = parsed.frame + 1;
+      while (usedFrames.has(newFrame) && newFrame < totalFrames) newFrame++;
+      if (newFrame >= totalFrames) return;
+      copyNodeFrameKeys(puppetCharacter.id, parsed.nodeId, parsed.frame, newFrame);
+    },
+    [puppetCharacter, parseTrackKey, totalFrames, copyNodeFrameKeys]
+  );
+
+  const handleMoveNodeKeyframeToFrame = useCallback(
+    (keyId: string) => {
+      const parsed = parseTrackKey(keyId);
+      if (parsed) {
+        setNodeMoveToFrameKfId(keyId);
+        setNodeMoveToFrameValue(parsed.frame);
+      }
+    },
+    [parseTrackKey]
+  );
+
+  const handleUpdateNodeKeyframe = useCallback(
+    (keyId: string, updates: { frame?: number }) => {
+      if (!puppetCharacter) return;
+      const parsed = parseTrackKey(keyId);
+      if (!parsed) return;
+      if (updates.frame !== undefined && updates.frame !== parsed.frame) {
+        // 目标帧已有该节点的点时 move 内部拒绝（与拖拽碰撞口径一致）
+        if (moveNodeFrameKeys(puppetCharacter.id, parsed.nodeId, parsed.frame, updates.frame)) {
+          setSelectedNodeKeyframeId((cur) => (cur === keyId ? trackKeyId(parsed.nodeId, updates.frame!) : cur));
+        }
+      }
+    },
+    [puppetCharacter, parseTrackKey, moveNodeFrameKeys]
+  );
+
+  const handleNodeMoveToFrameConfirm = useCallback(() => {
+    if (nodeMoveToFrameKfId) {
+      handleUpdateNodeKeyframe(nodeMoveToFrameKfId, { frame: nodeMoveToFrameValue });
+      setNodeMoveToFrameKfId(null);
+    }
+  }, [nodeMoveToFrameKfId, nodeMoveToFrameValue, handleUpdateNodeKeyframe]);
+
+  /** 子车道点击定位：跳到该帧、选中该轨道键与节点 */
+  const handleSeekTrackKey = useCallback(
+    (nodeId: string, frame: number) => {
+      setCurrentFrame(frame);
+      setSelectedNodeKeyframeId(trackKeyId(nodeId, frame));
+      useProjectStore.getState().setSelectedNodeId(nodeId);
+    },
+    [setCurrentFrame]
   );
 
   // ---- 服装/变体状态轨道（clip 级） ----
@@ -190,57 +256,6 @@ export default function Timeline() {
     },
     [activeClip, stateKeyframes, selectedStateKfFrame, updateAnimationClip]
   );
-
-  const handleDuplicateNodeKeyframe = useCallback(
-    (keyframeId: string) => {
-      if (!activeClip) return;
-      const kf = nodeKeyframes.find((k) => k.id === keyframeId);
-      if (!kf) return;
-      // 新帧 = 原帧+1（若冲突则找下一个空位）
-      let newFrame = kf.frame + 1;
-      const usedFrames = new Set(nodeKeyframes.filter((k) => k.nodeId === kf.nodeId).map((k) => k.frame));
-      while (usedFrames.has(newFrame) && newFrame < totalFrames) newFrame++;
-      if (newFrame >= totalFrames) return;
-      addNodeKeyframe(activeClip.id, kf.nodeId, newFrame, {
-        angle: kf.angle,
-        stretch: kf.stretch,
-        scaleX: kf.scaleX,
-        x: kf.x,
-        y: kf.y,
-        variantIndex: kf.variantIndex,
-        zIndex: kf.zIndex,
-        interpolationMode: kf.interpolationMode,
-        modifiers: kf.modifiers ? JSON.parse(JSON.stringify(kf.modifiers)) : undefined,
-      });
-    },
-    [activeClip, nodeKeyframes, totalFrames, addNodeKeyframe]
-  );
-
-  const handleMoveNodeKeyframeToFrame = useCallback(
-    (keyframeId: string) => {
-      const kf = nodeKeyframes.find((k) => k.id === keyframeId);
-      if (kf) {
-        setNodeMoveToFrameKfId(keyframeId);
-        setNodeMoveToFrameValue(kf.frame);
-      }
-    },
-    [nodeKeyframes]
-  );
-
-  const handleUpdateNodeKeyframe = useCallback(
-    (keyframeId: string, updates: Partial<NodeKeyframe>) => {
-      if (!activeClip) return;
-      updateNodeKeyframe(activeClip.id, keyframeId, updates);
-    },
-    [activeClip, updateNodeKeyframe]
-  );
-
-  const handleNodeMoveToFrameConfirm = useCallback(() => {
-    if (nodeMoveToFrameKfId) {
-      handleUpdateNodeKeyframe(nodeMoveToFrameKfId, { frame: nodeMoveToFrameValue });
-      setNodeMoveToFrameKfId(null);
-    }
-  }, [nodeMoveToFrameKfId, nodeMoveToFrameValue, handleUpdateNodeKeyframe]);
 
   const playState = useEditorStore((s) => s.playState);
   const selectedEffectTrackId = useEditorStore((s) => s.selectedEffectTrackId);
@@ -308,7 +323,7 @@ export default function Timeline() {
   // Part 轨道已删除：tracks 传空数组（原 tracks 恒为空）
   const { visibleRange, rowOffsets, rowHeights, totalHeight, onScroll: handleVirtualScroll } = useVirtualScroll(
     scrollContainerRef, [], [], effectTracks, canvasModifierTracks, () => [],
-    puppetNodes as any, isPuppetClip, nodeKeyframes as any,
+    puppetNodes as any, isPuppetClip,
     !!(activeClip && puppetCharacter && puppetNodes.length > 0)
   );
 
@@ -334,10 +349,9 @@ export default function Timeline() {
       switch (e.key) {
         case 'Delete':
         case 'Backspace': {
-          if (selectedNodeKeyframeId && activeClip) {
+          if (selectedNodeKeyframeId) {
             e.preventDefault();
-            removeNodeKeyframe(activeClip.id, selectedNodeKeyframeId);
-            setSelectedNodeKeyframeId(null);
+            handleDeleteNodeKeyframe(selectedNodeKeyframeId);
           }
           break;
         }
@@ -369,7 +383,7 @@ export default function Timeline() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNodeKeyframeId, activeClip, playState, totalFrames, removeNodeKeyframe, setPlayState, setCurrentFrame, timelineZoom, setTimelineZoom]);
+  }, [selectedNodeKeyframeId, handleDeleteNodeKeyframe, playState, totalFrames, setPlayState, setCurrentFrame, timelineZoom, setTimelineZoom]);
 
   // ---- Scroll sync ----
   const handleTrackScroll = useCallback(() => {
@@ -452,11 +466,19 @@ export default function Timeline() {
 
   const editTrack = editKfTrackId ? effectTracks.find((t) => t.id === editKfTrackId) ?? null : null;
 
-  // Selected node keyframe interpolation mode
-  const selectedNodeKf = nodeKeyframes.find((k) => k.id === selectedNodeKeyframeId);
-  const selectedKfInterpolationMode = selectedNodeKeyframeId
-    ? (selectedNodeKf?.interpolationMode ?? 'linear')
-    : undefined;
+  // Selected track key interpolation mode（读该帧第一个数值通道点的覆盖，无则轨缺省）
+  const selectedKfInterpolationMode = (() => {
+    const parsed = parseTrackKey(selectedNodeKeyframeId);
+    if (!parsed || !puppetCharacter) return undefined;
+    const tracks = puppetCharacter.nodes[parsed.nodeId]?.tracks;
+    if (!tracks) return 'linear';
+    for (const key of ['angle', 'x', 'y', 'stretch', 'scaleX', 'tilt', 'variantIndex', 'zIndex'] as const) {
+      const track = tracks[key];
+      const pt = track?.keyframes.find((k) => k.frame === parsed.frame);
+      if (pt) return pt.interpolation ?? track?.interpolation ?? 'linear';
+    }
+    return 'linear';
+  })();
 
   // ---- V15: Smart snap helper (returns frame with snap applied) ----
   const snapFrame = useCallback(
@@ -481,9 +503,9 @@ export default function Timeline() {
         if (distEnd < bestDist) { bestDist = distEnd; bestFrame = totalFrames - 1; }
       }
 
-      // Snap to other keyframes (node keyframes in puppet mode)
+      // Snap to other track keys (puppet node tracks)
       if (snapConfig.snapToKeyframes) {
-        for (const kf of nodeKeyframes) {
+        for (const kf of allTrackKeys) {
           if (excludeKeyframeId && kf.id === excludeKeyframeId) continue;
           const dist = Math.abs(rawFrame - kf.frame);
           if (dist < bestDist) { bestDist = dist; bestFrame = kf.frame; }
@@ -502,7 +524,7 @@ export default function Timeline() {
 
       return bestFrame;
     },
-    [snapConfig, timelineZoom, totalFrames, nodeKeyframes]
+    [snapConfig, timelineZoom, totalFrames, allTrackKeys]
   );
 
   return (
@@ -539,14 +561,14 @@ export default function Timeline() {
           }
         }}
         onDeleteKeyframe={() => {
-          if (selectedNodeKeyframeId && activeClip) {
-            removeNodeKeyframe(activeClip.id, selectedNodeKeyframeId);
-            setSelectedNodeKeyframeId(null);
+          if (selectedNodeKeyframeId) {
+            handleDeleteNodeKeyframe(selectedNodeKeyframeId);
           }
         }}
         onInterpolationChange={(mode: InterpolationMode) => {
-          if (selectedNodeKeyframeId && activeClip) {
-            updateNodeKeyframe(activeClip.id, selectedNodeKeyframeId, { interpolationMode: mode });
+          const parsed = parseTrackKey(selectedNodeKeyframeId);
+          if (parsed && puppetCharacter) {
+            setNodeFrameInterpolation(puppetCharacter.id, parsed.nodeId, parsed.frame, mode);
           }
         }}
         onEditFpsStart={() => { setFpsInput(String(frameRate)); setIsEditingFps(true); }}
@@ -631,7 +653,10 @@ export default function Timeline() {
           onPlayheadMouseDown={handlePlayheadMouseDown}
           isPuppetClip={isPuppetClip}
           nodeList={puppetNodes as any}
-          nodeKeyframes={nodeKeyframes}
+          characterId={puppetCharacter?.id ?? null}
+          clipWindow={activeClip && puppetCharacter && activeClip.puppetCharacterId === puppetCharacter.id
+            ? { startFrame: activeClip.startFrame, endFrame: activeClip.endFrame }
+            : null}
           selectedNodeKeyframeId={selectedNodeKeyframeId}
           onSelectNodeKeyframe={handleSelectNodeKeyframe}
           onAddNodeKeyframe={handleAddNodeKeyframe}
@@ -639,6 +664,8 @@ export default function Timeline() {
           onDuplicateNodeKeyframe={handleDuplicateNodeKeyframe}
           onMoveNodeKeyframeToFrame={handleMoveNodeKeyframeToFrame}
           onUpdateNodeKeyframe={handleUpdateNodeKeyframe}
+          onEditModifierParams={handleSeekTrackKey}
+          onEditParamDriver={(nodeId, frame) => handleSeekTrackKey(nodeId, frame)}
           // V15: Pass zoom, snap, and frame step props
           FRAME_WIDTH={FRAME_WIDTH}
           snapConfig={snapConfig}

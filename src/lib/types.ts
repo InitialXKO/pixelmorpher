@@ -826,14 +826,15 @@ export interface AnimationClip {
   id: string;
   name: string;
   description?: string;
-  /** Frame rate for this clip (frames per second) */
-  frameRate: number;
-  /** Total number of frames in this clip */
-  totalFrames: number;
-
-  // ---- Per-clip timeline data（统一为 Character/Node 模型）----
-  /** Per-node keyframes — 唯一的动画数据源（新模型） */
-  nodeKeyframes: import('./unified-types').NodeKeyframe[];
+  /** 归属角色（必填）：片段是该角色身上的一段——服装状态轨道、事件与
+   *  时间窗都只对这个角色有意义。旧文件无此字段时由导入迁移补绑。 */
+  puppetCharacterId: string;
+  /** 时间窗（帧，含端点）：片段在工程时间轴上的起止。帧只是编辑格，
+   *  时长到导出时才按工程帧率换算成秒；片段不自带帧率。 */
+  startFrame: number;
+  endFrame: number;
+  /** 窗内循环（编辑器播放与运行时段表演的缺省行为） */
+  loop: boolean;
 
   /** 服装/变体状态轨道：离散切换的关键帧，渲染时叠加在角色静态服装状态之上
    *  （再往上是角色状态蓝图）。仅当此 clip 为激活 clip 且 puppetCharacterId 属于该角色时生效 */
@@ -851,10 +852,6 @@ export interface AnimationClip {
   tags: string[];
   createdAt: number;
   updatedAt: number;
-
-  // ---- Concrete Puppet ----
-  /** Linked puppet character ID */
-  puppetCharacterId?: string;
 
   // ---- DCC Pipeline ----
   /** Animation events for game logic */

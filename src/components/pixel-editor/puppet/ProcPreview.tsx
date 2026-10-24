@@ -25,16 +25,18 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
   const character = activePuppetSkeletonId ? (unifiedCharacters[activePuppetSkeletonId] ?? null) : null;
 
   const projectSprites = useProjectStore((s) => s.sprites);
+  const animationClips = useProjectStore((s) => s.animationClips);
   const built = useMemo(() => {
     if (!character) return null;
     // 精灵引用可能指向工程级全局表，必须随角色一起传给转换器（与主画布同口径）
     const pkg = convertCharacterToRuntimePackage(character, projectSprites, {
       frameRate: useProjectStore.getState().frameRate,
       totalFrames: useProjectStore.getState().totalFrames,
+      clips: animationClips.filter((c) => c.puppetCharacterId === character.id),
     });
     const html = buildRuntimeHtml(pkg);
     return { pkg, html, key: hashString(html) };
-  }, [character, projectSprites]);
+  }, [character, projectSprites, animationClips]);
 
   if (!character) return <p className="text-[10px] text-gray-500">先在左侧选择一个角色。</p>;
   if (!built) return null;

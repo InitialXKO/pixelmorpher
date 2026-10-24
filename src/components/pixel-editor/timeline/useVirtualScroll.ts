@@ -14,9 +14,8 @@ export default function useVirtualScroll(
   effectTracks: EffectTrack[],
   canvasModifierTracks: CanvasModifierTrack[],
   getKeyframesForPart: (spriteId: string) => Keyframe[],
-  puppetNodes: Array<{ id: string }> = [],
+  puppetNodes: Array<{ id: string; tracks?: import('@/lib/unified-types').NodeTracks }> = [],
   isPuppetClip: boolean = false,
-  nodeKeyframes: Array<{ nodeId: string; modifiers?: Array<{ type: string; paramDrivers?: Array<unknown> }> }> = [],
   showCostumeStateRow: boolean = false,
 ): {
   visibleRange: { startIndex: number; endIndex: number };
@@ -62,18 +61,18 @@ export default function useVirtualScroll(
       for (const node of puppetNodes) {
         // 基础行高
         let height = TRACK_HEIGHT;
-        // 子轨道：统计该节点所有 keyframe 的 modifier types、paramDrivers、faceTurn
-        const nks = nodeKeyframes.filter((kf) => kf.nodeId === node.id);
+        // 子轨道：统计该节点修饰器组轨的 modifier types、paramDrivers 与转面轨
         const modTypes = new Set<string>();
         let paramDriverCount = 0;
-        let hasFaceTurn = false;
-        for (const kf of nks) {
-          for (const mod of kf.modifiers ?? []) {
+        for (const pt of node.tracks?.modifierKeys?.keyframes ?? []) {
+          for (const mod of pt.value ?? []) {
             modTypes.add(mod.type);
             paramDriverCount += (mod.paramDrivers ?? []).length;
           }
-          if ((kf as any).faceTurn) hasFaceTurn = true;
         }
+        const hasFaceTurn = (node.tracks?.faceTurnKeys?.keyframes ?? []).some(
+          (pt) => Math.abs(pt.value.yaw) > 1e-6 || Math.abs(pt.value.pitch) > 1e-6,
+        );
         height += modTypes.size * SUB_TRACK_HEIGHT;
         height += paramDriverCount * SUB_TRACK_HEIGHT;
         if (hasFaceTurn) height += SUB_TRACK_HEIGHT;
@@ -87,7 +86,7 @@ export default function useVirtualScroll(
     }
 
     return groups;
-  }, [tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart, puppetNodes, isPuppetClip, nodeKeyframes, showCostumeStateRow]);
+  }, [tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart, puppetNodes, isPuppetClip, showCostumeStateRow]);
 
   const { rowOffsets, rowHeights, totalHeight } = useMemo(() => {
     const offsets: number[] = [];

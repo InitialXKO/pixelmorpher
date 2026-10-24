@@ -155,9 +155,9 @@ export default function Home() {
     // V3.0: Ensure an animation clip exists — auto-migrate if needed
     if (store.animationClips.length === 0) {
       // Create a default animation clip for the demo
-      const clip = store.addAnimationClip('行走动画');
-      // Project settings: 8fps, 16 frames for a smooth walk cycle
-      store.updateAnimationClip(clip.id, { frameRate: 8, totalFrames: 16 });
+      const clip = store.addAnimationClip('行走动画', '');
+      // 片段时间窗：16 帧行走循环（工程帧率/总帧数在工程设置里另行给定）
+      store.updateAnimationClip(clip.id, { startFrame: 0, endFrame: 15 });
     } else if (!store.activeAnimationClipId) {
       store.setActiveAnimationClip(store.animationClips[0].id);
     }

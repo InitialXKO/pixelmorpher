@@ -269,7 +269,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
             const plan = generateRenderPlan(character, previewFrame, offW, offH, 'pixel-perfect', frameRate,
               undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
               spritesTable as any, bpOverrides, undefined,
-              pickClipStateKeyframes(useProjectStore.getState().animationClips, useProjectStore.getState().activeAnimationClipId, character.id));
+              pickClipStateKeyframes(useProjectStore.getState().animationClips, useProjectStore.getState().activeAnimationClipId, character.id, previewFrame));
             executeRenderPlan(octx, plan, offW, offH);
             ctx.drawImage(off, 0, 0, W, H);
           }
@@ -416,7 +416,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           const plan = generateRenderPlan({ ...character, blueprint: null }, previewFrame, offW, offH, 'pixel-perfect', frameRate,
             undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
             spritesTable as any, bpOverrides, undefined,
-            pickClipStateKeyframes(useProjectStore.getState().animationClips, useProjectStore.getState().activeAnimationClipId, character.id));
+            pickClipStateKeyframes(useProjectStore.getState().animationClips, useProjectStore.getState().activeAnimationClipId, character.id, previewFrame));
           executeRenderPlan(octx, plan, offW, offH);
           return canvasToPixels(off);
         } catch { return undefined; }
