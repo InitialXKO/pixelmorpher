@@ -28,7 +28,8 @@ import useVirtualScroll from './timeline/useVirtualScroll';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { resolveTrackCostumeState } from '@/lib/unified-render';
-import type { CostumeStateKeyframe } from '@/lib/unified-types';
+import type { CostumeStateKeyframe, ParamDriver, ParamDriverWaveform, ParamSource } from '@/lib/unified-types';
+import { MODIFIER_DEFINITIONS } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
 
 // ---- Main Timeline Component ----
@@ -107,6 +108,10 @@ export default function Timeline() {
 
   // ---- Puppet keyframe selection state ----
   const [selectedNodeKeyframeId, setSelectedNodeKeyframeId] = useState<string | null>(null);
+  // 正在编辑的轨道参数驱动器（定位 = 角色 + 节点 + 轨点帧 + 修饰器 + 驱动器）
+  const [editingDriver, setEditingDriver] = useState<{
+    nodeId: string; frame: number; modifierId: string; driverId: string;
+  } | null>(null);
   const [nodeMoveToFrameKfId, setNodeMoveToFrameKfId] = useState<string | null>(null);
   const [nodeMoveToFrameValue, setNodeMoveToFrameValue] = useState(0);
 
@@ -202,6 +207,31 @@ export default function Timeline() {
     },
     [setCurrentFrame]
   );
+
+  // 驱动器「编辑」：先跳帧+选中（保留旧导航行为），再打开编辑器。
+  // 旧实现只跳帧、把 modifierId/driverId 丢掉，编辑器从未存在，按钮是死路。
+  const handleEditParamDriver = useCallback(
+    (nodeId: string, frame: number, modifierId: string, driverId: string) => {
+      handleSeekTrackKey(nodeId, frame);
+      if (puppetCharacter) setEditingDriver({ nodeId, frame, modifierId, driverId });
+    },
+    [handleSeekTrackKey, puppetCharacter]
+  );
+
+  // 编辑器目标驱动器（store 直读，删改后实时一致；目标消失则自动关窗）
+  const editingDriverData = useMemo(() => {
+    if (!editingDriver || !puppetCharacter) return null;
+    const node = puppetCharacter.nodes[editingDriver.nodeId];
+    const pt = node?.tracks?.modifierKeys?.keyframes.find((k) => k.frame === editingDriver.frame);
+    const mod = pt?.value.find((m) => m.id === editingDriver.modifierId);
+    const driver = mod?.paramDrivers?.find((d) => d.id === editingDriver.driverId);
+    if (!node || !mod || !driver) return null;
+    const modLabel = MODIFIER_DEFINITIONS.find((d) => d.type === mod.type)?.label ?? mod.type;
+    return { characterId: puppetCharacter.id, node, mod, driver, modLabel };
+  }, [editingDriver, puppetCharacter]);
+  useEffect(() => {
+    if (editingDriver && !editingDriverData) setEditingDriver(null);
+  }, [editingDriver, editingDriverData]);
 
   // ---- 服装/变体状态轨道（clip 级） ----
   const [selectedStateKfFrame, setSelectedStateKfFrame] = useState<number | null>(null);
@@ -665,7 +695,7 @@ export default function Timeline() {
           onMoveNodeKeyframeToFrame={handleMoveNodeKeyframeToFrame}
           onUpdateNodeKeyframe={handleUpdateNodeKeyframe}
           onEditModifierParams={handleSeekTrackKey}
-          onEditParamDriver={(nodeId, frame) => handleSeekTrackKey(nodeId, frame)}
+          onEditParamDriver={handleEditParamDriver}
           // V15: Pass zoom, snap, and frame step props
           FRAME_WIDTH={FRAME_WIDTH}
           snapConfig={snapConfig}
@@ -716,6 +746,180 @@ export default function Timeline() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Node keyframe: ParamDriver editor */}
+      {editingDriver && editingDriverData && (
+        <ParamDriverEditorDialog
+          key={`${editingDriver.nodeId}-${editingDriver.frame}-${editingDriver.driverId}`}
+          characterId={editingDriverData.characterId}
+          nodeId={editingDriver.nodeId}
+          frame={editingDriver.frame}
+          modifierId={editingDriver.modifierId}
+          driver={editingDriverData.driver}
+          nodeName={editingDriverData.node.name}
+          modLabel={editingDriverData.modLabel}
+          nodes={puppetNodes.map((n: any) => ({ id: n.id, name: n.name }))}
+          onClose={() => setEditingDriver(null)}
+        />
+      )}
     </div>
+  );
+}
+
+const WAVEFORM_LABELS: Record<ParamDriverWaveform, string> = {
+  sine: '正弦', square: '方波', triangle: '三角波', sawtooth: '锯齿波',
+  noise: '噪声', bounce: '弹跳', spring: '弹簧', custom: '自定义',
+};
+
+type DriverSourceKind = 'none' | 'constant' | 'node_angle' | 'node_stretch' | 'variable';
+
+function sourceKindOf(source: ParamSource | undefined): DriverSourceKind {
+  if (!source) return 'none';
+  return source.type;
+}
+
+/** 轨道参数驱动器编辑器：改波形/幅值/频率/相位/偏移/启用/来源，或删除驱动器。
+ *  保存与删除各走一次 store 动作（各压一条撤销），不逐字段写。 */
+function ParamDriverEditorDialog({
+  characterId, nodeId, frame, modifierId, driver, nodeName, modLabel, nodes, onClose,
+}: {
+  characterId: string; nodeId: string; frame: number; modifierId: string;
+  driver: ParamDriver; nodeName: string; modLabel: string;
+  nodes: { id: string; name: string }[];
+  onClose: () => void;
+}) {
+  const updateTrackParamDriver = useProjectStore((s) => s.updateTrackParamDriver);
+  const removeTrackParamDriver = useProjectStore((s) => s.removeTrackParamDriver);
+  const [waveform, setWaveform] = useState<ParamDriverWaveform>(driver.waveform);
+  const [amplitude, setAmplitude] = useState(driver.amplitude);
+  const [frequency, setFrequency] = useState(driver.frequency);
+  const [phase, setPhase] = useState(driver.phase);
+  const [offset, setOffset] = useState(driver.offset);
+  const [enabled, setEnabled] = useState(driver.enabled);
+  const [sourceKind, setSourceKind] = useState<DriverSourceKind>(sourceKindOf(driver.source));
+  const [sourceValue, setSourceValue] = useState(
+    driver.source?.type === 'constant' ? driver.source.value : 0);
+  const [sourceNodeId, setSourceNodeId] = useState(
+    (driver.source?.type === 'node_angle' || driver.source?.type === 'node_stretch')
+      ? driver.source.nodeId : (nodes[0]?.id ?? ''));
+  const [sourceVariable, setSourceVariable] = useState(
+    driver.source?.type === 'variable' ? driver.source.variableName : '');
+
+  const num = (setter: (v: number) => void) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = parseFloat(e.target.value);
+    if (!Number.isNaN(v)) setter(v);
+  };
+  const buildSource = (): ParamSource | undefined => {
+    if (sourceKind === 'constant') return { type: 'constant', value: sourceValue };
+    if (sourceKind === 'node_angle') return { type: 'node_angle', nodeId: sourceNodeId };
+    if (sourceKind === 'node_stretch') return { type: 'node_stretch', nodeId: sourceNodeId };
+    if (sourceKind === 'variable') return { type: 'variable', variableName: sourceVariable };
+    return undefined;
+  };
+  const handleSave = () => {
+    updateTrackParamDriver(characterId, nodeId, frame, modifierId, driver.id, {
+      waveform, amplitude, frequency, phase, offset, enabled, source: buildSource(),
+    });
+    onClose();
+  };
+  const handleDelete = () => {
+    removeTrackParamDriver(characterId, nodeId, frame, modifierId, driver.id);
+    onClose();
+  };
+
+  const fieldCls = 'h-7 text-xs bg-white/5 border-white/10 text-gray-300 px-2';
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="bg-[#1a1a2e] border-white/10 text-gray-200 max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="text-sm text-gray-100">编辑参数驱动器</DialogTitle>
+          <DialogDescription className="text-xs text-gray-400">
+            {nodeName} · 第 {frame} 帧 · {modLabel}.{driver.targetParam}
+            （目标参数创建时确定，此处不改）
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 py-2">
+          <div>
+            <Label className="text-xs text-gray-400">波形</Label>
+            <select
+              value={waveform}
+              onChange={(e) => setWaveform(e.target.value as ParamDriverWaveform)}
+              className={`w-full rounded ${fieldCls}`}
+            >
+              {(Object.keys(WAVEFORM_LABELS) as ParamDriverWaveform[]).map((w) => (
+                <option key={w} value={w}>{WAVEFORM_LABELS[w]}</option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label className="text-xs text-gray-400">幅值</Label>
+              <Input type="number" value={amplitude} onChange={num(setAmplitude)} className={fieldCls} />
+            </div>
+            <div>
+              <Label className="text-xs text-gray-400">频率</Label>
+              <Input type="number" value={frequency} onChange={num(setFrequency)} className={fieldCls} step="0.1" />
+            </div>
+            <div>
+              <Label className="text-xs text-gray-400">相位</Label>
+              <Input type="number" value={phase} onChange={num(setPhase)} className={fieldCls} step="0.1" />
+            </div>
+            <div>
+              <Label className="text-xs text-gray-400">偏移</Label>
+              <Input type="number" value={offset} onChange={num(setOffset)} className={fieldCls} />
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-xs text-gray-300">
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            启用驱动器
+          </label>
+          <div>
+            <Label className="text-xs text-gray-400">来源</Label>
+            <select
+              value={sourceKind}
+              onChange={(e) => setSourceKind(e.target.value as DriverSourceKind)}
+              className={`w-full rounded ${fieldCls}`}
+            >
+              <option value="none">无（波形直驱）</option>
+              <option value="constant">常量</option>
+              <option value="node_angle">节点角度</option>
+              <option value="node_stretch">节点拉伸</option>
+              <option value="variable">变量</option>
+            </select>
+          </div>
+          {sourceKind === 'constant' && (
+            <div>
+              <Label className="text-xs text-gray-400">常量值</Label>
+              <Input type="number" value={sourceValue} onChange={num(setSourceValue)} className={fieldCls} />
+            </div>
+          )}
+          {(sourceKind === 'node_angle' || sourceKind === 'node_stretch') && (
+            <div>
+              <Label className="text-xs text-gray-400">来源节点</Label>
+              <select
+                value={sourceNodeId}
+                onChange={(e) => setSourceNodeId(e.target.value)}
+                className={`w-full rounded ${fieldCls}`}
+              >
+                {nodes.map((n) => (
+                  <option key={n.id} value={n.id}>{n.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          {sourceKind === 'variable' && (
+            <div>
+              <Label className="text-xs text-gray-400">变量名</Label>
+              <Input value={sourceVariable} onChange={(e) => setSourceVariable(e.target.value)} className={fieldCls} />
+            </div>
+          )}
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="ghost" size="sm" className="text-xs text-red-400 hover:text-red-300 mr-auto" onClick={handleDelete}>删除驱动器</Button>
+          <Button variant="ghost" size="sm" className="text-xs text-gray-400 hover:text-gray-200" onClick={onClose}>取消</Button>
+          <Button size="sm" className="text-xs bg-purple-600 hover:bg-purple-500 text-white" onClick={handleSave}>保存</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
