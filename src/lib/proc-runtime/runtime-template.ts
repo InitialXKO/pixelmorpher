@@ -1041,6 +1041,23 @@ function startPerf(perf) {
   if (activePerfs.some((a) => a.perf === perf)) return;
   activePerfs.push({ perf: perf, t: 0, snapTimer: 0, snaps: [] });
   emitRuntimeEvent('perfstart', { id: perf.id, name: perf.name });
+}
+/** 停表演：按对象或 id/名/触发名匹配，移除后发 perfend（stopped: true）。
+ *  循环表演没有自然结束，只能经此停下；状态机下一帧见表演 inactive 即回落。 */
+function stopPerf(perfOrId) {
+  for (let i = activePerfs.length - 1; i >= 0; i--) {
+    const p = activePerfs[i].perf;
+    if (p === perfOrId || p.id === perfOrId || p.name === perfOrId || p.trigger === perfOrId) {
+      activePerfs.splice(i, 1);
+      emitRuntimeEvent('perfend', { id: p.id, name: p.name, stopped: true });
+    }
+  }
+}
+function stopAllPerfs() {
+  const ids = activePerfs.map((a) => a.perf);
+  activePerfs.length = 0;
+  for (const p of ids) emitRuntimeEvent('perfend', { id: p.id, name: p.name, stopped: true });
+}
   behaviorEpoch = elapsed;
   phaseAcc = 0;
   behaviorState.clear();
@@ -1090,12 +1107,20 @@ function smSetState(to) {
   }
 }
 function smPickResident(vars) {
+  // 回落是按信号重推常驻态，不是沿转移表走一步：表演结束时当前态就是表演态，
+  // 若按 from 过滤，默认机唯一的 '*' 转移（→air，需 grounded=0）在地面上无候选，
+  // 就会返回表演态本身、smSetState 因目标等于当前直接返回，从此卡死在表演态。
+  // 故只看「目标是常驻态且条件成立」，按表顺序首个命中。作者机若要 from 敏感
+  // 的回落，应把分区条件写进 when（信号分区），而不是依赖 from。
   for (const tr of SM.transitions || []) {
-    if (tr.from !== '*' && tr.from !== smCurrent) continue;
     const target = smStateById.get(tr.to);
     if (!target || target.performanceId) continue;
     if (smCondOk(tr.when, vars)) return tr.to;
   }
+  // 表里没有任何常驻转移命中时，退回初始态（初始态本身是表演态时保持当前，
+  // 避免在两个表演态之间横跳）
+  const initial = smStateById.get(SM.initial);
+  if (initial && !initial.performanceId) return SM.initial;
   return smCurrent;
 }
 function smUpdate(vars) {
@@ -1146,6 +1171,8 @@ window.procRuntime = {
   },
   state: function () { return smCurrent; },
   onEvent: function (cb) { runtimeEventCbs.push(cb); },
+  stop: function (nameOrId) { stopPerf(nameOrId); },
+  stopAll: function () { stopAllPerfs(); },
 };
 
 window.addEventListener('keydown', (e) => {
@@ -1209,7 +1236,7 @@ function mkRow(label) {
   const row3 = mkRow('表演');
   for (const perf of PERFORMANCES) {
     const b = document.createElement('button');
-    b.textContent = perf.name + ' (' + String(perf.triggerKey || '').replace('Key', '') + ')';
+    b.textContent = perf.triggerKey ? perf.name + ' (' + String(perf.triggerKey).replace('Key', '') + ')' : perf.name;
     b.onclick = () => enterPerformance(perf);
     row3.appendChild(b);
   }
@@ -1218,6 +1245,10 @@ function mkRow(label) {
   aw.id = 'btnAuto';
   aw.onclick = () => { autoWalk = !autoWalk; aw.classList.toggle('on', autoWalk); };
   row3.appendChild(aw);
+  const sp = document.createElement('button');
+  sp.textContent = '停表演';
+  sp.onclick = () => stopAllPerfs();
+  row3.appendChild(sp);
 }
 function refreshBar() {
   barState.dirs.forEach((b, i) => b.classList.toggle('on', i === char.variant));

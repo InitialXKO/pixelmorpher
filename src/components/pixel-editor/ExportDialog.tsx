@@ -989,24 +989,27 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
 
   // ---- Export: 程序化运行时包（自包含 HTML：运行时本体 + 角色数据） ----
   const [procCharId, setProcCharId] = useState<string | null>(null);
+  const [procExportError, setProcExportError] = useState<string | null>(null);
+  const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const procCharacter = useMemo(() => {
-    const store = useProjectStore.getState();
-    const chars = Object.values(store.unifiedCharacters ?? {});
+    // 依赖订阅值而非 getState：对话框开着时改角色/切选中，包必须跟着刷新
+    const chars = Object.values(unifiedCharacters ?? {});
     if (chars.length === 0) return null;
-    const wanted = procCharId ?? useEditorStore.getState().activePuppetSkeletonId;
+    const wanted = procCharId ?? activePuppetSkeletonId;
     return chars.find((c) => c.id === wanted) ?? chars[0];
-  }, [procCharId, activeTab]);
+  }, [procCharId, activeTab, unifiedCharacters, activePuppetSkeletonId]);
   const procPkg = useMemo(
     // 精灵引用可能指向工程级全局表，必须随角色一起传给转换器（与主画布同口径）
-    () => (procCharacter ? convertCharacterToRuntimePackage(procCharacter, useProjectStore.getState().sprites, {
-      frameRate: useProjectStore.getState().frameRate,
-      totalFrames: useProjectStore.getState().totalFrames,
+    () => (procCharacter ? convertCharacterToRuntimePackage(procCharacter, sprites, {
+      frameRate,
+      totalFrames,
       clips: animationClips.filter((c) => c.puppetCharacterId === procCharacter.id),
     }) : null),
-    [procCharacter, animationClips],
+    [procCharacter, animationClips, sprites, frameRate, totalFrames],
   );
   const exportProcRuntime = useCallback(() => {
     if (!procCharacter || !procPkg) return;
+    setProcExportError(null);
     try {
       const html = buildRuntimeHtml(procPkg);
       const blob = new Blob([html], { type: 'text/html' });
@@ -1019,7 +1022,10 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (err) {
+      // 失败不关窗、不静默：错误留在页签内给用户看
       console.error('Proc runtime export failed:', err);
+      setProcExportError(err instanceof Error ? err.message : '导出失败，未知错误');
+      return;
     }
     onOpenChange(false);
   }, [procCharacter, procPkg, onOpenChange]);
@@ -1489,8 +1495,8 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
               <div className="text-xs text-gray-500 bg-white/[0.03] rounded-md p-3 space-y-1">
                 <div className="font-medium text-gray-400">程序化运行时包（自包含 HTML）</div>
                 <div>
-                  不导帧：导出参数化角色 + 行为蓝图与节点蓝图的变换通道（运行时实时求值）+ 表演蓝图（采样烘焙）+ 关键帧轨道（采样烘焙成增量曲线，合成「轨道」表演，T 键触发）+ 运行时本体。
-                  轨道的 tilt/拉伸/横向缩放/方向通道运行时无对应变换通道，不进包并会在下方报告中点名。
+                  不导帧：导出参数化角色 + 行为蓝图与节点蓝图的变换通道（运行时实时求值）+ 表演蓝图（采样烘焙）+ 关键帧轨道（采样烘焙成增量曲线，合成「轨道」表演，T 键触发）+ 片段时间窗（每片段另烘一条段表演，状态机/宿主按名触发）+ 默认状态机（待机/移动/腾空常驻态与表演态，意图进、事件出、可绕过直写）+ 运行时本体。
+                  轨道的 tilt/拉伸/横向缩放/方向/图层通道运行时无对应变换通道，不进包并会在下方报告中点名。
                   宿主只喂输入（移动/跳跃/触发），姿态由运行时程序化合成。与「程序化预览」同一本体，所见即所得。
                 </div>
                 {procPkg && (
@@ -1520,6 +1526,11 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
                   {procPkg.warnings.map((w, i) => (
                     <div key={i} className="text-[11px] text-amber-300/90">⚠ {w}</div>
                   ))}
+                </div>
+              )}
+              {procExportError && (
+                <div className="rounded-md border border-red-900/50 bg-red-950/20 p-3 text-[11px] text-red-300">
+                  导出失败：{procExportError}
                 </div>
               )}
               <Button

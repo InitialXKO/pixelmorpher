@@ -1287,6 +1287,10 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('T10 模板含事件出口与循环回绕（perfend/perfstart/loop）',
     htmlT.includes("'perfend'") && htmlT.includes("'perfstart'") && htmlT.includes('act.perf.loop'));
   check('T11 包内嵌状态机数据（stateMachine 序列化进页面）', htmlT.includes('"stateMachine"'));
+  check('T12 状态机回落与停表演接线（smPickResident 按信号重推、stopPerf/stopAll/procRuntime.stop、触发键缺失时按钮不带空括号）',
+    htmlT.includes('function smPickResident') && htmlT.includes('function stopPerf') && htmlT.includes('function stopAllPerfs')
+    && htmlT.includes('stop: function') && htmlT.includes('停表演')
+    && htmlT.includes('perf.triggerKey ?') && !htmlT.includes("perf.triggerKey || ''"));
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
