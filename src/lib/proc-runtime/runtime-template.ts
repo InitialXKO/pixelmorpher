@@ -1041,6 +1041,10 @@ function startPerf(perf) {
   if (activePerfs.some((a) => a.perf === perf)) return;
   activePerfs.push({ perf: perf, t: 0, snapTimer: 0, snaps: [] });
   emitRuntimeEvent('perfstart', { id: perf.id, name: perf.name });
+  behaviorEpoch = elapsed;
+  phaseAcc = 0;
+  behaviorState.clear();
+  prevBehaviorOutputs = new Map();
 }
 /** 停表演：按对象或 id/名/触发名匹配，移除后发 perfend（stopped: true）。
  *  循环表演没有自然结束，只能经此停下；状态机下一帧见表演 inactive 即回落。 */
@@ -1057,11 +1061,6 @@ function stopAllPerfs() {
   const ids = activePerfs.map((a) => a.perf);
   activePerfs.length = 0;
   for (const p of ids) emitRuntimeEvent('perfend', { id: p.id, name: p.name, stopped: true });
-}
-  behaviorEpoch = elapsed;
-  phaseAcc = 0;
-  behaviorState.clear();
-  prevBehaviorOutputs = new Map();
 }
 // ---------- 运行时状态机 ----------
 // 只判身体状态：材料都在包内（宿主变量 + 表演清单）。世界判定（行为树）

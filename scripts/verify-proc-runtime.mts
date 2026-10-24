@@ -1291,6 +1291,15 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     htmlT.includes('function smPickResident') && htmlT.includes('function stopPerf') && htmlT.includes('function stopAllPerfs')
     && htmlT.includes('stop: function') && htmlT.includes('停表演')
     && htmlT.includes('perf.triggerKey ?') && !htmlT.includes("perf.triggerKey || ''"));
+  // T13 语法门：模板是 TS 字面量里的 JS，tsc 不解析它；标记探针也拦不住断裂。
+  // 故直接对生成的页面抽脚本做解析（只解析不执行，EMBEDDED 等运行时名字不影响解析）。
+  let scriptParseError: string | null = null;
+  try {
+    const s = htmlT.indexOf('<script>') + '<script>'.length;
+    const e = htmlT.indexOf('</script>');
+    new Function(htmlT.slice(s, e));
+  } catch (err) { scriptParseError = err instanceof Error ? err.message : String(err); }
+  check('T13 生成页面内嵌脚本可解析（模板字面量语法门，防游离括号类断裂）', scriptParseError === null, scriptParseError ?? '');
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
