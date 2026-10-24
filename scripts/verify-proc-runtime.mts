@@ -1189,4 +1189,178 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('S6 模板含印章重算接线且旧旋转采样已除', htmlS.includes('glowChannelF') && htmlS.includes('glowStampW') && htmlS.includes('iGlowStampA') && !htmlS.includes('vec2 ow'));
 }
 
+
+// ---------- T) 片段段表演 + 运行时状态机 ----------
+{
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  const gridT = [
+    ['#2ea8ff', '#2ea8ff', '#2ea8ff', '#2ea8ff'],
+    ['#2ea8ff', '#2ea8ff', '#2ea8ff', '#2ea8ff'],
+    ['#2ea8ff', '#2ea8ff', '#2ea8ff', '#2ea8ff'],
+  ] as never;
+  const sprT = {
+    id: 'gsprT', width: 4, height: 3,
+    plug: { x: 0 as never, y: 0 as never },
+    data: gridT,
+    directions: { 2: { spriteId: 'gsprT', mirror: false } },
+  } as never;
+  const mkSegChar = (nodeOver: Record<string, unknown>) => ({
+    id: 'chT', name: '段表演测试',
+    nodes: { arm: { ...makeNode('arm', '手臂', 'arm'), ...nodeOver } },
+    rootNodeId: 'arm',
+    rootNodeIds: ['arm'],
+    sprites: { gsprT: sprT },
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { arm: { ...createDefaultCostumePiece('arm'), sprites: { 2: { spriteId: 'gsprT', mirror: false } } } } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  }) as unknown as Character;
+  const triTracks = {
+    angle: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 6, value: 60 }, { frame: 12, value: 0 }] },
+  };
+  const clipOf = (over: Record<string, unknown>) => ({
+    id: 'clipA', name: '挥手', puppetCharacterId: 'chT', startFrame: 3, endFrame: 8, loop: true,
+    stateKeyframes: [], ...over,
+  }) as never;
+  const pkgSeg = convertCharacterToRuntimePackage(
+    mkSegChar({ tracks: triTracks }), undefined,
+    { frameRate: 12, totalFrames: 24, clips: [clipOf({})] },
+  );
+  const seg = pkgSeg.performances.find((p) => (p as { id?: string }).id === 'clip_clipA') as unknown as {
+    duration: number; loop?: boolean; trigger?: string; mask: string[];
+    graph: { nodes: Array<{ type: string; points?: [number, number][] }> };
+  } | undefined;
+  check('T1 片段窗烘成段表演（trigger=clip/时长=窗长÷帧率/loop 随片段）',
+    !!seg && seg.trigger === 'clip' && Math.abs(seg.duration - 0.5) < 1e-9 && seg.loop === true && seg.mask.join() === 'arm');
+  const segCurves = (seg?.graph.nodes ?? []).filter((n) => n.type === 'curve');
+  const peak = segCurves.flatMap((c) => c.points ?? []).find(([x, y]) => Math.abs(x - 0.5) < 0.01 && Math.abs(y + Math.PI / 6) < 0.02);
+  check('T2 段曲线是窗内相对增量（窗首帧为零点、窗中点=第 6 帧相对第 3 帧的 +30°）',
+    segCurves.length > 0 && Math.abs(segCurves[0].points?.[0]?.[1] ?? 9) < 1e-9 && !!peak);
+  const pkgFlat = convertCharacterToRuntimePackage(
+    mkSegChar({ tracks: triTracks }), undefined,
+    { frameRate: 12, totalFrames: 24, clips: [clipOf({ id: 'clipB', name: '静止段', startFrame: 14, endFrame: 20, loop: false })] },
+  );
+  check('T3 窗内无姿态变化的片段不生成段表演且点名',
+    !pkgFlat.performances.some((p) => (p as { id?: string }).id === 'clip_clipB')
+    && pkgFlat.warnings.some((w) => w.includes('静止段') && w.includes('未生成段表演')));
+  const pkgForeign = convertCharacterToRuntimePackage(
+    mkSegChar({ tracks: triTracks }), undefined,
+    { frameRate: 12, totalFrames: 24, clips: [clipOf({ puppetCharacterId: 'someone-else' })] },
+  );
+  check('T4 归属他人的片段不进本角色包', !pkgForeign.performances.some((p) => (p as { id?: string }).id === 'clip_clipA'));
+
+  const sm = pkgSeg.stateMachine;
+  check('T5 默认状态机进包（initial=idle、三常驻态、每表演一个表演状态）',
+    !!sm && sm.initial === 'idle'
+    && ['idle', 'move', 'air'].every((id) => sm.states.some((s) => s.id === id && !s.performanceId))
+    && sm.states.some((s) => s.performanceId === 'clip_clipA')
+    && sm.states.some((s) => s.performanceId === 'tracks'));
+  check('T6 默认机转移表（腾空由 grounded=0 从任意态进入、idle 与 move 由 speed01 互转）',
+    !!sm && sm.transitions.some((t) => t.from === '*' && t.to === 'air' && t.when.some((c) => c.var === 'grounded' && c.op === 'eq' && c.value === 0))
+    && sm.transitions.some((t) => t.from === 'idle' && t.to === 'move')
+    && sm.transitions.some((t) => t.from === 'move' && t.to === 'idle'));
+
+  const customChar = {
+    ...mkSegChar({ tracks: triTracks }),
+    stateMachine: {
+      version: 1, initial: 'move',
+      states: [{ id: 'move' }, { id: 'perf:ghost', performanceId: 'no-such-perf' }],
+      transitions: [],
+    },
+  } as unknown as Character;
+  const pkgCustom = convertCharacterToRuntimePackage(customChar, undefined, { frameRate: 12, totalFrames: 24 });
+  check('T7 作者状态机直通；悬空表演引用降为常驻并点名',
+    pkgCustom.stateMachine?.initial === 'move'
+    && pkgCustom.stateMachine?.states.find((s) => s.id === 'perf:ghost')?.performanceId === undefined
+    && pkgCustom.warnings.some((w) => w.includes('不在包内')));
+
+  const pkgZ = convertCharacterToRuntimePackage(mkSegChar({
+    tracks: {
+      angle: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 6, value: 30 }] },
+      zIndex: { interpolation: 'step', keyframes: [{ frame: 2, value: 5 }] },
+    },
+  }));
+  check('T8 zIndex 轨偏离静态值被点名为未进包', pkgZ.warnings.some((w) => w.includes('zIndex') && w.includes('未进包')));
+
+  const htmlT = buildRuntimeHtml(pkgSeg);
+  check('T9 模板含状态机与宿主接口（procRuntime/smUpdate/enterPerformance）',
+    htmlT.includes('window.procRuntime') && htmlT.includes('smUpdate') && htmlT.includes('enterPerformance'));
+  check('T10 模板含事件出口与循环回绕（perfend/perfstart/loop）',
+    htmlT.includes("'perfend'") && htmlT.includes("'perfstart'") && htmlT.includes('act.perf.loop'));
+  check('T11 包内嵌状态机数据（stateMachine 序列化进页面）', htmlT.includes('"stateMachine"'));
+  check('T12 状态机回落与停表演接线（smPickResident 按信号重推、stopPerf/stopAll/procRuntime.stop、触发键缺失时按钮不带空括号）',
+    htmlT.includes('function smPickResident') && htmlT.includes('function stopPerf') && htmlT.includes('function stopAllPerfs')
+    && htmlT.includes('stop: function') && htmlT.includes('停表演')
+    && htmlT.includes('perf.triggerKey ?') && !htmlT.includes("perf.triggerKey || ''"));
+  // T13 语法门：模板是 TS 字面量里的 JS，tsc 不解析它；标记探针也拦不住断裂。
+  // 故直接对生成的页面抽脚本做解析（只解析不执行，EMBEDDED 等运行时名字不影响解析）。
+  let scriptParseError: string | null = null;
+  try {
+    const s = htmlT.indexOf('<script>') + '<script>'.length;
+    const e = htmlT.indexOf('</script>');
+    new Function(htmlT.slice(s, e));
+  } catch (err) { scriptParseError = err instanceof Error ? err.message : String(err); }
+  check('T13 生成页面内嵌脚本可解析（模板字面量语法门，防游离括号类断裂）', scriptParseError === null, scriptParseError ?? '');
+  // T14 属性预算门：WebGL 只保证 16 个顶点属性；顶点着色器声明数与最大 location 必须守住 0-15。
+  const vsStart = htmlT.indexOf('layout(location=0) in vec2 aCorner');
+  const vsEnd = htmlT.indexOf('void main(){', vsStart);
+  const vsLocs = [...htmlT.slice(vsStart, vsEnd).matchAll(/layout\(location=(\d+)\)/g)].map((m) => +m[1]);
+  check('T14 顶点着色器属性数≤16 且最大 location≤15（防属性超限致着色器编译失败）',
+    vsLocs.length === 16 && Math.max(...vsLocs) === 15, `locs=${vsLocs.join(',')}`);
+  // T15 setVar 通用变量行为门：从模板源码抽 setVar 真身与每帧 hostVars 构造，在桩环境真执行。
+  // 静态标记证明不了三件事：通用变量真进表、保留名真拒收、并入时计算值真覆盖。
+  {
+    const { readFileSync } = await import('node:fs');
+    const tplSrc = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+    const extractBalanced = (src: string, marker: string): string => {
+      const start = src.indexOf(marker);
+      if (start < 0) return '';
+      let depth = 0; let inStr: string | null = null;
+      for (let j = src.indexOf('{', start); j < src.length; j++) {
+        const ch = src[j];
+        if (inStr) { if (ch === '\\') j++; else if (ch === inStr) inStr = null; continue; }
+        if (ch === "'" || ch === '"' || ch === '`') { inStr = ch; continue; }
+        if (ch === '{') depth++;
+        else if (ch === '}') { depth--; if (depth === 0) return src.slice(start, j + 1); }
+      }
+      return '';
+    };
+    const setVarText = extractBalanced(tplSrc, 'setVar: function (name, value)').replace(/^setVar:\s*/, '');
+    let sv: any = null; let svErr = '';
+    try {
+      sv = new Function(`
+        let hostMoveX = null; let autoWalk = false; const hostCustomVars = {};
+        const setVar = ${setVarText};
+        const out = {};
+        out.generic = setVar('rage', 1) === true && hostCustomVars.rage === 1;
+        out.coerce = setVar('rage', '2.5') === true && hostCustomVars.rage === 2.5;
+        out.reserved = setVar('grounded', 0) === false && !('grounded' in hostCustomVars)
+          && setVar('phase', 1) === false && setVar('t', 1) === false && setVar('speed01', 1) === false;
+        out.nan = setVar('rage', 'abc') === false && hostCustomVars.rage === 2.5;
+        out.del = setVar('rage', null) === true && !('rage' in hostCustomVars);
+        out.moveX = setVar('moveX', 0.5) === true && hostMoveX === 0.5;
+        out.autoWalk = setVar('autoWalk', 1) === true && autoWalk === true;
+        return out;
+      `)();
+    } catch (err) { svErr = err instanceof Error ? err.message : String(err); }
+    check('T15a setVar 行为：通用变量进表/字符串转数/保留名拒收/NaN 拒收/null 删除/moveX 与 autoWalk 旧通道不变',
+      !!sv && Object.values(sv).every(Boolean), svErr || JSON.stringify(sv));
+    const hvStart = tplSrc.indexOf('const hostVars = Object.assign({}, hostCustomVars,');
+    const hvStmt = hvStart >= 0 ? tplSrc.slice(hvStart, tplSrc.indexOf('});', hvStart) + 3) : '';
+    let hv: any = null; let hvErr = '';
+    try {
+      hv = new Function(`
+        const hostCustomVars = { rage: 5, grounded: 0 };
+        const behaviorT = 1.2, phaseAcc = 0.5, ix = 0;
+        const char = { onGround: true };
+        ${hvStmt}
+        return hostVars;
+      `)();
+    } catch (err) { hvErr = err instanceof Error ? err.message : String(err); }
+    check('T15b hostVars 并入：通用变量可读、逐帧计算值覆盖同名（预置 grounded=0 仍以本帧 1 为准）',
+      !!hv && hv.rage === 5 && hv.grounded === 1 && hv.t === 1.2 && hv.moveX === 0 && hv.speed01 === 0,
+      hvErr || JSON.stringify(hv));
+    check('T15c 生成页面含通用变量表接线', htmlT.includes('hostCustomVars[name] = num') && htmlT.includes('Object.assign({}, hostCustomVars,'));
+  }
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

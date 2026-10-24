@@ -30,6 +30,7 @@ import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { captureSkinningSnapshot } from '@/lib/skin/snapshot-capture';
 import { writePuppetPoseKeyframe } from '../canvas/tool-handlers';
+import { trackKeyFrames } from '../timeline/NodeTrackLane';
 import DirectionWheel from '../DirectionWheel';
 import BlueprintTemplateLoader from './BlueprintTemplateLoader';
 import { Button } from '@/components/ui/button';
@@ -75,9 +76,13 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
     () => (unifiedSkeleton ? Object.values(unifiedSkeleton.nodes) : []),
     [unifiedSkeleton]
   );
+  const activeAnimationClipId = useProjectStore((s) => s.activeAnimationClipId);
   const clip = useMemo(
-    () => animationClips.find((c) => c.puppetCharacterId === performCharacterId) ?? null,
-    [animationClips, performCharacterId]
+    () =>
+      animationClips.find((c) => c.id === activeAnimationClipId && c.puppetCharacterId === performCharacterId) ??
+      animationClips.find((c) => c.puppetCharacterId === performCharacterId) ??
+      null,
+    [animationClips, activeAnimationClipId, performCharacterId]
   );
 
   // 每节点在当前帧的插值姿态（面板读数用，与画布一致）
@@ -88,14 +93,23 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
     return interpolateNodeKeyframes(unifiedCharacter, currentFrame);
   }, [unifiedCharacter, currentFrame]);
 
-  // 该角色全部关键帧所在帧（排序去重），用于上一/下一关键帧导航
+  // 该角色全部轨道键所在帧（排序去重），用于上一/下一关键帧导航；
+  // 有归属片段时只算其时间窗内的帧（窗外不属于这一段）
   const keyframedFrames = useMemo(() => {
     const frames = new Set<number>();
-    for (const kf of clip?.nodeKeyframes ?? []) frames.add(kf.frame);
+    if (unifiedCharacter) {
+      for (const node of Object.values(unifiedCharacter.nodes)) {
+        for (const f of trackKeyFrames(node.tracks)) {
+          if (clip && (f < clip.startFrame || f > clip.endFrame)) continue;
+          frames.add(f);
+        }
+      }
+    }
     return [...frames].sort((a, b) => a - b);
-  }, [clip]);
+  }, [unifiedCharacter, clip]);
 
-  const totalFrames = clip?.totalFrames ?? 24;
+  const projectTotalFrames = useProjectStore((s) => s.totalFrames);
+  const totalFrames = clip ? clip.endFrame + 1 : projectTotalFrames;
 
   // 选中角色时自动进入操控（无需"开始操控"按钮）
   useEffect(() => {
@@ -258,9 +272,7 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
             <div className="bg-[#080818] rounded border border-[#1e1e3a] p-1 max-h-44 overflow-y-auto">
               {skeletonNodes.map((node) => {
                 const iv = interpolated.get(node.id);
-                const hasKf = (clip?.nodeKeyframes ?? []).some(
-                  (kf) => kf.nodeId === node.id && kf.frame === currentFrame
-                );
+                const hasKf = trackKeyFrames(node.tracks).includes(currentFrame);
                 const isRoot = node.attachment.type === 'fixed' && !node.attachment.parentSocketId;
                 return (
                   <div
@@ -466,7 +478,7 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
           })()}
 
           {/* ---- 图层顺序（关键帧，step 插值） ---- */}
-          {performNodeId && unifiedSkeleton && clip && (() => {
+          {performNodeId && unifiedSkeleton && (() => {
             const node = unifiedSkeleton.nodes[performNodeId];
             const iv = interpolated.get(performNodeId);
             const curZ = iv?.zIndex ?? node?.zIndex ?? 0;
@@ -499,16 +511,8 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
                         const curZ = iv?.zIndex ?? node.zIndex;
                         const allZ = skeletonNodes.map((n) => interpolated.get(n.id)?.zIndex ?? n.zIndex);
                         const newZ = getZ(curZ, allZ);
-                        const store = useProjectStore.getState();
-                        // 找当前帧已有关键帧则更新，否则新建
-                        const existing = (clip.nodeKeyframes ?? []).find(
-                          (kf) => kf.nodeId === performNodeId && kf.frame === currentFrame
-                        );
-                        if (existing) {
-                          store.updateNodeKeyframe(clip.id, existing.id, { zIndex: newZ });
-                        } else {
-                          store.addNodeKeyframe(clip.id, performNodeId, currentFrame, { zIndex: newZ });
-                        }
+                        // 写图层顺序轨在当前帧的点（step 取值，面板/拖拽管线即时生效）
+                        useProjectStore.getState().setNodeZIndexKey(unifiedSkeleton.id, performNodeId, currentFrame, newZ);
                       }}
                     >
                       <Icon className="size-3" />

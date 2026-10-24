@@ -328,7 +328,7 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   resetProject: () => void;
 
   // ---- V3.0: AnimationClip CRUD ----
-  addAnimationClip: (name: string) => AnimationClip;
+  addAnimationClip: (name: string, characterId: string) => AnimationClip;
   removeAnimationClip: (clipId: string) => void;
   updateAnimationClip: (clipId: string, updates: Partial<AnimationClip>) => void;
   setActiveAnimationClip: (clipId: string | null) => void;

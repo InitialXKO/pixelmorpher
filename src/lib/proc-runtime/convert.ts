@@ -10,7 +10,8 @@
 //   曲线合成一条「轨道」表演（add 模式；运行时部件扁平摆放、无父子跟随，
 //   世界增量才能带上父轨道对子孙的带动）；tilt/stretch/scaleX/variantIndex
 //   轨道运行时无对应通道，逐条点名不静默。
-import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, Sprite } from '../unified-types';
+import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, Sprite, StateMachineSpec } from '../unified-types';
+import type { AnimationClip } from '../types';
 import { buildParametricSprite } from './main-canvas';
 import { subToPx, projectToView } from '../unified-types';
 import { computeWorldTransforms } from '../unified-render';
@@ -121,12 +122,37 @@ export interface ProcRuntimePackage {
     graphs: Record<string, RuntimeGraph>;
   };
   performances: Array<Record<string, unknown>>;
+  /** 运行时状态机（作者规格直通或默认机；模板据此编排表演与身体状态） */
+  stateMachine?: StateMachineSpec;
   warnings: string[];
 }
 
 const TRIGGER_KEY_MAP: Record<string, string> = {
   attack: 'KeyJ', interact: 'KeyE', skill: 'KeyK', dash: 'KeyL', use: 'KeyF',
 };
+
+/** 默认状态机：常驻三态（idle/move/air，只读宿主变量判定）+ 包内每条
+ *  表演一个表演状态（意图进入、播完自动退出回落）。作者在角色上写了
+ *  stateMachine 规格时不用此默认机（convert 直通，见函数末尾） */
+export function defaultStateMachine(performances: Array<Record<string, unknown>>): StateMachineSpec {
+  return {
+    version: 1,
+    initial: 'idle',
+    states: [
+      { id: 'idle' },
+      { id: 'move' },
+      { id: 'air' },
+      ...performances.map((p) => ({ id: `perf:${String(p.id)}`, performanceId: String(p.id) })),
+    ],
+    transitions: [
+      { from: '*', to: 'air', when: [{ var: 'grounded', op: 'eq', value: 0 }] },
+      { from: 'air', to: 'move', when: [{ var: 'grounded', op: 'eq', value: 1 }, { var: 'speed01', op: 'gte', value: 0.05 }] },
+      { from: 'air', to: 'idle', when: [{ var: 'grounded', op: 'eq', value: 1 }, { var: 'speed01', op: 'lt', value: 0.05 }] },
+      { from: 'idle', to: 'move', when: [{ var: 'speed01', op: 'gte', value: 0.05 }] },
+      { from: 'move', to: 'idle', when: [{ var: 'speed01', op: 'lt', value: 0.05 }] },
+    ],
+  };
+}
 
 /** 精灵表口径：服装件里的精灵引用（SpriteRef）可能指向角色自带表，
  *  也可能指向工程级全局表（装配向导等写入方用全局表）——主画布出图时
@@ -505,7 +531,7 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[] },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
   // 精灵引用解析表：角色自带表 + 工程级全局表（全局优先），与主画布同口径
@@ -742,34 +768,35 @@ export function convertCharacterToRuntimePackage(
     });
   }
 
-  // ---- 轨道：采样烘焙成曲线，合成一条「轨道」表演 ----
+  // ---- 轨道：采样烘焙成曲线 ----
   // 运行时部件是扁平摆放（各自钉在第 0 帧世界位姿、无父子跟随），而轨道在
   // 主画布是局部量（父轨道会带动子孙）。故不能逐节点烘局部增量：须把行为/
   // 蓝图/修改器/IK 全部剥离后逐帧跑主画布同源 FK，烘每个部件的世界位姿
-  // 增量（相对第 0 帧）——父轨道的带动自动体现在子孙部件的曲线里。
+  // 增量（相对采样窗首帧）——父轨道的带动自动体现在子孙部件的曲线里。
+  // 采样窗参数化：全程窗合成一条「轨道」表演；每个片段的时间窗
+  // （AnimationClip.startFrame–endFrame）另烘一条段表演（窗内相对帧、
+  // 时长=窗长/帧率、循环标记随片段），供运行时状态机/宿主按名触发。
   {
+    const POSE_CHANNELS = ['angle', 'tilt', 'x', 'y', 'stretch', 'scaleX', 'variantIndex'] as const;
     const trackNodes = Object.values(character.nodes).filter((n) =>
-      n.tracks && Object.values(n.tracks).some((t) => (t?.keyframes?.length ?? 0) > 0));
+      n.tracks && POSE_CHANNELS.some((ch) => (n.tracks[ch]?.keyframes?.length ?? 0) > 0));
+    const clipList = (opts?.clips ?? []).filter((c) =>
+      c.puppetCharacterId === character.id
+      && typeof c.startFrame === 'number' && typeof c.endFrame === 'number'
+      && c.endFrame >= c.startFrame);
     if (trackNodes.length > 0) {
-      // 时长：工程总帧数优先（时间线长度，末帧后保持）；缺省取最晚关键帧
-      let totalFrames = Math.max(1, Math.round(opts?.totalFrames ?? 0));
-      if (!opts?.totalFrames) {
-        totalFrames = 1;
-        for (const n of trackNodes) {
-          for (const t of Object.values(n.tracks)) {
-            for (const kf of t?.keyframes ?? []) if (kf.frame > totalFrames) totalFrames = kf.frame;
-          }
-        }
-      }
       const frameRate = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
       const partKeys = new Set(parts.map((p) => p.key));
-      // 不支持通道点名（仅在关键帧真偏离静态值时；恒等空转不算损失）
-      for (const node of trackNodes) {
+      // 不支持通道点名（仅在关键帧真偏离静态值时；恒等空转不算损失）。
+      // zIndex 轨同理：主渲染画序未消费该轨，运行时包也不烘它。
+      for (const node of Object.values(character.nodes)) {
+        if (!node.tracks) continue;
         const baseOf: Record<string, number> = {
           tilt: node.transform.tilt ?? 0, stretch: node.transform.stretch,
           scaleX: node.transform.scaleX ?? 1, variantIndex: node.transform.variantIndex,
+          zIndex: node.zIndex ?? 0,
         };
-        const bad = (['tilt', 'stretch', 'scaleX', 'variantIndex'] as const).filter((ch) => {
+        const bad = (['tilt', 'stretch', 'scaleX', 'variantIndex', 'zIndex'] as const).filter((ch) => {
           const kfs = node.tracks[ch]?.keyframes ?? [];
           return kfs.length > 0 && kfs.some((kf) => Math.abs(kf.value - baseOf[ch]) > 1e-9);
         });
@@ -786,61 +813,85 @@ export function convertCharacterToRuntimePackage(
           n.id, { ...n, blueprint: null, modifiers: [] },
         ])),
       };
-      // 逐帧采样全部节点的世界位姿：与部件摆放同一投影（projectToView，
-      // 朝向取当帧根节点 variantIndex），运行时系（角度弧度、y 取反、px）
-      const D = totalFrames;
-      const samples = new Map<string, Array<{ a: number; x: number; y: number }>>();
-      for (let f = 0; f <= D; f++) {
-        const wf = computeWorldTransforms(stripped, f, 512, 512, projectFpsTop);
-        const dirF = (character.rootNodeId ? wf.get(character.rootNodeId)?.variantIndex : undefined) ?? rootDir;
+      // 采样一个窗：工程帧 [startF, startF + D] 共 D+1 个样本（末样本为循环接点）；
+      // 与部件摆放同一投影（projectToView，朝向取当帧根节点 variantIndex），
+      // 运行时系（角度弧度、y 取反、px）
+      const sampleWindow = (startF: number, D: number) => {
+        const samples = new Map<string, Array<{ a: number; x: number; y: number }>>();
+        for (let f = startF; f <= startF + D; f++) {
+          const wf = computeWorldTransforms(stripped, f, 512, 512, projectFpsTop);
+          const dirF = (character.rootNodeId ? wf.get(character.rootNodeId)?.variantIndex : undefined) ?? rootDir;
+          for (const node of Object.values(character.nodes)) {
+            const w = wf.get(node.id);
+            if (!w) continue;
+            let arr = samples.get(node.id);
+            if (!arr) { arr = []; samples.set(node.id, arr); }
+            const proj = projectToView(w.worldX, w.worldY, w.worldZ, dirF as DirectionIndex);
+            arr.push({ a: -w.worldAngle * Math.PI / 180, x: subToPx(proj.canvasX), y: -subToPx(proj.canvasY) });
+          }
+        }
+        return samples;
+      };
+      // 样本 → 曲线图节点（增量相对窗首样本）；warnNodes 时逐节点报无贡献
+      const curvesForWindow = (
+        samples: Map<string, Array<{ a: number; x: number; y: number }>>,
+        D: number,
+        prefixBase: string,
+        warnNodes: boolean,
+      ) => {
+        const mask: string[] = [];
+        const graphNodes: RuntimeGraphNode[] = [];
+        let gi = 0;
         for (const node of Object.values(character.nodes)) {
-          const w = wf.get(node.id);
-          if (!w) continue;
-          let arr = samples.get(node.id);
-          if (!arr) { arr = []; samples.set(node.id, arr); }
-          const proj = projectToView(w.worldX, w.worldY, w.worldZ, dirF as DirectionIndex);
-          arr.push({ a: -w.worldAngle * Math.PI / 180, x: subToPx(proj.canvasX), y: -subToPx(proj.canvasY) });
+          const slot = toSlot(node.id);
+          const arr = samples.get(node.id);
+          if (!slot || !arr || arr.length === 0) continue;
+          if (!partKeys.has(slot)) {
+            if (warnNodes && trackNodes.includes(node)) warnings.push(`轨道：节点 ${node.name} 不在运行时部件内，其轨道未进包`);
+            continue;
+          }
+          const base = arr[0];
+          const mkPts = (pick: (s: { a: number; x: number; y: number }) => number) =>
+            arr.map((s, f) => [f / D, pick(s) - pick(base)] as [number, number]);
+          const chans: Array<{ pts: [number, number][]; suffix: string; field: 'angleFrom' | 'dxFrom' | 'dyFrom'; eps: number }> = [
+            { pts: mkPts((s) => s.a), suffix: 'ang', field: 'angleFrom', eps: 0.01 },
+            { pts: mkPts((s) => s.x), suffix: 'dx', field: 'dxFrom', eps: 0.15 },
+            { pts: mkPts((s) => s.y), suffix: 'dy', field: 'dyFrom', eps: 0.15 },
+          ];
+          const prefix = `${prefixBase}${gi++}_`;
+          const nodes: RuntimeGraphNode[] = [{ id: `${prefix}t`, type: 'time' }];
+          const tr: Extract<RuntimeGraphNode, { type: 'transform' }> = {
+            id: `${prefix}tr`, type: 'transform', part: slot, units: 'runtime',
+          };
+          for (const ch of chans) {
+            if (ch.pts.every(([, v]) => Math.abs(v) < 1e-4)) continue;
+            const id = `${prefix}${ch.suffix}`;
+            nodes.push({ id, type: 'curve', points: simplify(ch.pts, ch.eps) });
+            tr[ch.field] = { n: id };
+          }
+          if (tr.angleFrom || tr.dxFrom || tr.dyFrom) {
+            nodes.push(tr);
+            mask.push(slot);
+            graphNodes.push(...nodes);
+          } else if (warnNodes && trackNodes.includes(node)) {
+            warnings.push(`轨道：节点 ${node.name} 的轨道采样后无姿态贡献（与静态姿态无差异或仅有不支持通道）`);
+          }
+        }
+        return { graphNodes, mask };
+      };
+      // 全程窗 →「轨道」表演。时长：工程总帧数优先（时间线长度，末帧后
+      // 保持）；缺省取最晚关键帧
+      let totalFrames = Math.max(1, Math.round(opts?.totalFrames ?? 0));
+      if (!opts?.totalFrames) {
+        totalFrames = 1;
+        for (const n of trackNodes) {
+          for (const t of Object.values(n.tracks)) {
+            for (const kf of t?.keyframes ?? []) if (kf.frame > totalFrames) totalFrames = kf.frame;
+          }
         }
       }
-      const mask: string[] = [];
-      const graphNodes: RuntimeGraphNode[] = [];
-      let gi = 0;
-      for (const node of Object.values(character.nodes)) {
-        const slot = toSlot(node.id);
-        const arr = samples.get(node.id);
-        if (!slot || !arr || arr.length === 0) continue;
-        if (!partKeys.has(slot)) {
-          if (trackNodes.includes(node)) warnings.push(`轨道：节点 ${node.name} 不在运行时部件内，其轨道未进包`);
-          continue;
-        }
-        const base = arr[0];
-        const mkPts = (pick: (s: { a: number; x: number; y: number }) => number) =>
-          arr.map((s, f) => [f / D, pick(s) - pick(base)] as [number, number]);
-        const chans: Array<{ pts: [number, number][]; suffix: string; field: 'angleFrom' | 'dxFrom' | 'dyFrom'; eps: number }> = [
-          { pts: mkPts((s) => s.a), suffix: 'ang', field: 'angleFrom', eps: 0.01 },
-          { pts: mkPts((s) => s.x), suffix: 'dx', field: 'dxFrom', eps: 0.15 },
-          { pts: mkPts((s) => s.y), suffix: 'dy', field: 'dyFrom', eps: 0.15 },
-        ];
-        const prefix = `t${gi++}_`;
-        const nodes: RuntimeGraphNode[] = [{ id: `${prefix}t`, type: 'time' }];
-        const tr: Extract<RuntimeGraphNode, { type: 'transform' }> = {
-          id: `${prefix}tr`, type: 'transform', part: slot, units: 'runtime',
-        };
-        for (const ch of chans) {
-          if (ch.pts.every(([, v]) => Math.abs(v) < 1e-4)) continue;
-          const id = `${prefix}${ch.suffix}`;
-          nodes.push({ id, type: 'curve', points: simplify(ch.pts, ch.eps) });
-          tr[ch.field] = { n: id };
-        }
-        if (tr.angleFrom || tr.dxFrom || tr.dyFrom) {
-          nodes.push(tr);
-          mask.push(slot);
-          graphNodes.push(...nodes);
-        } else if (trackNodes.includes(node)) {
-          warnings.push(`轨道：节点 ${node.name} 的轨道采样后无姿态贡献（与静态姿态无差异或仅有不支持通道）`);
-        }
-      }
-      if (graphNodes.length > 0) {
+      const full = curvesForWindow(sampleWindow(0, totalFrames), totalFrames, 't', true);
+      if (full.graphNodes.length > 0) {
         performances.push({
           id: 'tracks',
           name: '轨道',
@@ -849,11 +900,52 @@ export function convertCharacterToRuntimePackage(
           duration: totalFrames / frameRate,
           envelope: { in: 0, out: 0 },
           mode: 'add',
-          mask,
-          graph: { context: 'performance', nodes: graphNodes },
+          mask: full.mask,
+          graph: { context: 'performance', nodes: full.graphNodes },
+        });
+      }
+      // 片段窗 → 段表演（按窗起点排序，状态机/宿主按 id 或名触发）
+      let ci = 0;
+      for (const clip of [...clipList].sort((a, b) => a.startFrame - b.startFrame)) {
+        const len = clip.endFrame - clip.startFrame + 1;
+        const seg = curvesForWindow(sampleWindow(clip.startFrame, len), len, `c${ci++}_`, false);
+        if (seg.graphNodes.length === 0) {
+          warnings.push(`片段「${clip.name}」：时间窗内轨道无姿态贡献，未生成段表演`);
+          continue;
+        }
+        performances.push({
+          id: `clip_${clip.id}`,
+          name: clip.name,
+          trigger: 'clip',
+          duration: len / frameRate,
+          envelope: { in: 0, out: 0 },
+          mode: 'add',
+          loop: clip.loop === true,
+          mask: seg.mask,
+          graph: { context: 'performance', nodes: seg.graphNodes },
         });
       }
     }
+  }
+
+
+  // ---- 状态机：作者规格直通（表演状态引用的表演必须在包内，悬空的
+  // 降为常驻状态并点名）；缺省生成默认机 ----
+  let stateMachine: StateMachineSpec;
+  if (character.stateMachine) {
+    const perfIds = new Set(performances.map((p) => String(p.id)));
+    stateMachine = {
+      ...character.stateMachine,
+      states: character.stateMachine.states.map((s) => {
+        if (s.performanceId && !perfIds.has(s.performanceId)) {
+          warnings.push(`状态机：状态「${s.id}」引用的表演 ${s.performanceId} 不在包内，已降为常驻状态`);
+          return { id: s.id };
+        }
+        return s;
+      }),
+    };
+  } else {
+    stateMachine = defaultStateMachine(performances);
   }
 
   return {
@@ -865,6 +957,7 @@ export function convertCharacterToRuntimePackage(
     defaultCostume: activeSet?.id,
     behavior,
     performances,
+    stateMachine,
     warnings,
   };
 }

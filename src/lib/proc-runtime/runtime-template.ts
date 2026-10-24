@@ -690,35 +690,36 @@ function makeProgram(vs, fs) {
 }
 const partProg = makeProgram(
 \`#version 300 es
+// 属性预算：WebGL 只保证 16 个顶点属性（location 0-15），18 个会编译失败。
+// 故合并两对相邻字段（实例数据 55 float 的顺序与 packInstances 完全一致，
+// 只改声明与绑定，不动写入）：iPos+iSize→vec4，iRot+iTileC→vec3。
 layout(location=0) in vec2 aCorner;
-layout(location=1) in vec2 iPos;
-layout(location=2) in vec2 iSize;
-layout(location=3) in float iRot;
-layout(location=4) in vec2 iTileC;
-layout(location=5) in vec4 iTile;
-layout(location=6) in vec4 iMisc;
-layout(location=7) in vec4 iParam;
-layout(location=8) in vec2 iDeform;
-layout(location=9) in vec4 iGlowA;
-layout(location=10) in vec4 iGlowB;
-layout(location=11) in vec4 iGlowC;
-layout(location=12) in vec4 iGlowHz;
-layout(location=13) in vec2 iGlowHz2;
-layout(location=14) in vec4 iGlowSpace;
-layout(location=15) in vec4 iGlowStampA;
-layout(location=16) in vec4 iGlowStampB;
-layout(location=17) in vec4 iGlowStampC;
+layout(location=1) in vec4 iPosSize;
+layout(location=2) in vec3 iRotTileC;
+layout(location=3) in vec4 iTile;
+layout(location=4) in vec4 iMisc;
+layout(location=5) in vec4 iParam;
+layout(location=6) in vec2 iDeform;
+layout(location=7) in vec4 iGlowA;
+layout(location=8) in vec4 iGlowB;
+layout(location=9) in vec4 iGlowC;
+layout(location=10) in vec4 iGlowHz;
+layout(location=11) in vec2 iGlowHz2;
+layout(location=12) in vec4 iGlowSpace;
+layout(location=13) in vec4 iGlowStampA;
+layout(location=14) in vec4 iGlowStampB;
+layout(location=15) in vec4 iGlowStampC;
 uniform vec2 uCam; uniform vec2 uViewHalf; uniform vec2 uRes;
 out vec2 vCenterScreen; out float vRot; out vec4 vTile; out vec2 vTileC; out vec4 vMisc; out vec4 vParam; out vec2 vDeform;
 out vec4 vGlowA; out vec4 vGlowB; out vec4 vGlowC; out vec4 vGlowHz; out vec2 vGlowHz2; out vec4 vGlowSpace;
 out vec4 vGlowStampA; out vec4 vGlowStampB; out vec4 vGlowStampC;
 void main(){
-  float c = cos(iRot), s = sin(iRot);
-  vec2 local = aCorner * iSize;
+  float c = cos(iRotTileC.x), s = sin(iRotTileC.x);
+  vec2 local = aCorner * iPosSize.zw;
   vec2 woff = vec2(local.x * c + local.y * s, local.x * s - local.y * c);
-  vec2 world = iPos + woff;
-  vCenterScreen = ((iPos - uCam) / uViewHalf * 0.5 + 0.5) * uRes;
-  vRot = iRot; vTile = iTile; vTileC = iTileC; vMisc = iMisc; vParam = iParam; vDeform = iDeform;
+  vec2 world = iPosSize.xy + woff;
+  vCenterScreen = ((iPosSize.xy - uCam) / uViewHalf * 0.5 + 0.5) * uRes;
+  vRot = iRotTileC.x; vTile = iTile; vTileC = iRotTileC.yz; vMisc = iMisc; vParam = iParam; vDeform = iDeform;
   vGlowA = iGlowA; vGlowB = iGlowB; vGlowC = iGlowC; vGlowHz = iGlowHz; vGlowHz2 = iGlowHz2; vGlowSpace = iGlowSpace;
   vGlowStampA = iGlowStampA; vGlowStampB = iGlowStampB; vGlowStampC = iGlowStampC;
   float z = 0.9 - float(gl_InstanceID) * 0.02;
@@ -938,7 +939,7 @@ const instBuf = gl.createBuffer();
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
-  const strides = [[1, 2, 0], [2, 2, 2], [3, 1, 4], [4, 2, 5], [5, 4, 7], [6, 4, 11], [7, 4, 15], [8, 2, 19], [9, 4, 21], [10, 4, 25], [11, 4, 29], [12, 4, 33], [13, 2, 37], [14, 4, 39], [15, 4, 43], [16, 4, 47], [17, 4, 51]];
+  const strides = [[1, 4, 0], [2, 3, 4], [3, 4, 7], [4, 4, 11], [5, 4, 15], [6, 2, 19], [7, 4, 21], [8, 4, 25], [9, 4, 29], [10, 4, 33], [11, 2, 37], [12, 4, 39], [13, 4, 43], [14, 4, 47], [15, 4, 51]];
   for (const sDef of strides) {
     gl.enableVertexAttribArray(sDef[0]);
     gl.vertexAttribPointer(sDef[0], sDef[1], gl.FLOAT, false, INSTANCE_FLOATS * 4, sDef[2] * 4);
@@ -1040,21 +1041,163 @@ const keys = Object.create(null);
 function startPerf(perf) {
   if (activePerfs.some((a) => a.perf === perf)) return;
   activePerfs.push({ perf: perf, t: 0, snapTimer: 0, snaps: [] });
+  emitRuntimeEvent('perfstart', { id: perf.id, name: perf.name });
   behaviorEpoch = elapsed;
   phaseAcc = 0;
   behaviorState.clear();
   prevBehaviorOutputs = new Map();
 }
+/** 停表演：按对象或 id/名/触发名匹配，移除后发 perfend（stopped: true）。
+ *  循环表演没有自然结束，只能经此停下；状态机下一帧见表演 inactive 即回落。 */
+function stopPerf(perfOrId) {
+  for (let i = activePerfs.length - 1; i >= 0; i--) {
+    const p = activePerfs[i].perf;
+    if (p === perfOrId || p.id === perfOrId || p.name === perfOrId || p.trigger === perfOrId) {
+      activePerfs.splice(i, 1);
+      emitRuntimeEvent('perfend', { id: p.id, name: p.name, stopped: true });
+    }
+  }
+}
+function stopAllPerfs() {
+  const ids = activePerfs.map((a) => a.perf);
+  activePerfs.length = 0;
+  for (const p of ids) emitRuntimeEvent('perfend', { id: p.id, name: p.name, stopped: true });
+}
+// ---------- 运行时状态机 ----------
+// 只判身体状态：材料都在包内（宿主变量 + 表演清单）。世界判定（行为树）
+// 不进包，归宿主。宿主可绕过状态机：setVar 直写变量（通用名存入变量表、
+// 每帧并入 hostVars；保留名 t/phase/speed01/grounded 拒收），状态机每帧
+// 读最终值跟随判定；意图（intent）是建议入口，不是唯一入口。
+const SM = EMBEDDED.stateMachine || null;
+const smStateById = new Map();
+let smCurrent = null;
+if (SM) {
+  for (const s of SM.states || []) smStateById.set(s.id, s);
+  smCurrent = SM.initial || (SM.states && SM.states[0] ? SM.states[0].id : null);
+}
+const runtimeEventCbs = [];
+function emitRuntimeEvent(type, data) {
+  const ev = Object.assign({ type: type, t: elapsed }, data || {});
+  for (const cb of runtimeEventCbs) { try { cb(ev); } catch (err) { /* 宿主回调出错不拖垮渲染 */ } }
+}
+let lastHostVars = { moveX: 0, speed01: 0, grounded: 1 };
+let hostMoveX = null;
+// 宿主通用变量（setVar 写入）：每帧并入 hostVars 供状态机条件与行为图读。
+// 只存数；保留名 t/phase/speed01/grounded 由模板逐帧计算，setVar 拒收，
+// 并入时计算值也排在后面覆盖，外部写不进来、盖不住身体真相。
+const hostCustomVars = {};
+let prevOnGround = true;
+function smCondOk(when, vars) {
+  for (const c of when || []) {
+    const v = vars[c.var];
+    if (typeof v !== 'number') return false;
+    if (c.op === 'lt' && !(v < c.value)) return false;
+    if (c.op === 'lte' && !(v <= c.value)) return false;
+    if (c.op === 'gt' && !(v > c.value)) return false;
+    if (c.op === 'gte' && !(v >= c.value)) return false;
+    if (c.op === 'eq' && v !== c.value) return false;
+    if (c.op === 'neq' && v === c.value) return false;
+  }
+  return true;
+}
+function smSetState(to) {
+  if (!SM || !to || to === smCurrent) return;
+  const from = smCurrent;
+  smCurrent = to;
+  emitRuntimeEvent('statechange', { from: from, to: to });
+  const st = smStateById.get(to);
+  if (st && st.performanceId) {
+    const perf = PERFORMANCES.find((p) => p.id === st.performanceId);
+    if (perf) startPerf(perf);
+  }
+}
+function smPickResident(vars) {
+  // 回落是按信号重推常驻态，不是沿转移表走一步：表演结束时当前态就是表演态，
+  // 若按 from 过滤，默认机唯一的 '*' 转移（→air，需 grounded=0）在地面上无候选，
+  // 就会返回表演态本身、smSetState 因目标等于当前直接返回，从此卡死在表演态。
+  // 故只看「目标是常驻态且条件成立」，按表顺序首个命中。作者机若要 from 敏感
+  // 的回落，应把分区条件写进 when（信号分区），而不是依赖 from。
+  for (const tr of SM.transitions || []) {
+    const target = smStateById.get(tr.to);
+    if (!target || target.performanceId) continue;
+    if (smCondOk(tr.when, vars)) return tr.to;
+  }
+  // 表里没有任何常驻转移命中时，退回初始态（初始态本身是表演态时保持当前，
+  // 避免在两个表演态之间横跳）
+  const initial = smStateById.get(SM.initial);
+  if (initial && !initial.performanceId) return SM.initial;
+  return smCurrent;
+}
+function smUpdate(vars) {
+  if (!SM || !smCurrent) return;
+  const cur = smStateById.get(smCurrent);
+  if (cur && cur.performanceId) {
+    // 表演状态：表演播完（或循环表演被停）后按当前信号回落常驻状态
+    if (!activePerfs.some((a) => a.perf.id === cur.performanceId)) smSetState(smPickResident(vars));
+    return;
+  }
+  for (const tr of SM.transitions || []) {
+    if (tr.from !== '*' && tr.from !== smCurrent) continue;
+    if (tr.to === smCurrent) continue;
+    const target = smStateById.get(tr.to);
+    if (!target || target.performanceId) continue; // 表演状态只经意图进入
+    if (smCondOk(tr.when, vars)) { smSetState(tr.to); break; }
+  }
+}
+/** 表演统一入口：有对应状态先走状态机（状态变化与事件保持一致），否则直触发 */
+function enterPerformance(perf) {
+  if (SM) {
+    const st = (SM.states || []).find((s) => s.performanceId === perf.id);
+    if (st && st.id !== smCurrent) { smSetState(st.id); return; }
+  }
+  startPerf(perf);
+}
+// 宿主接口：意图进、事件出、变量可绕过直写
+window.procRuntime = {
+  intent: function (name) {
+    if (name === 'jump') {
+      if (char.onGround) { char.vy = JUMP_V; char.onGround = false; }
+      return true;
+    }
+    const perf = PERFORMANCES.find((p) => p.id === name || p.name === name || p.trigger === name);
+    if (perf) { enterPerformance(perf); return true; }
+    return false;
+  },
+  setVar: function (name, value) {
+    if (name === 'moveX') {
+      hostMoveX = value === null || value === undefined ? null : Math.max(-1, Math.min(1, Number(value) || 0));
+      return true;
+    }
+    if (name === 'autoWalk') { autoWalk = !!value; return true; }
+    // 保留名是身体真相（逐帧由物理/输入算出），不接受外部写入
+    if (name === 't' || name === 'phase' || name === 'speed01' || name === 'grounded') return false;
+    // 通用变量：null/undefined = 删除（条件随之读不到、按缺失处理）；只存数
+    if (value === null || value === undefined) { delete hostCustomVars[name]; return true; }
+    const num = Number(value);
+    if (Number.isNaN(num)) return false;
+    hostCustomVars[name] = num;
+    return true;
+  },
+  setMove: function (x) {
+    hostMoveX = x === null || x === undefined ? null : Math.max(-1, Math.min(1, Number(x) || 0));
+  },
+  state: function () { return smCurrent; },
+  onEvent: function (cb) { runtimeEventCbs.push(cb); },
+  stop: function (nameOrId) { stopPerf(nameOrId); },
+  stopAll: function () { stopAllPerfs(); },
+};
+
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   const d = parseInt(e.key);
   if (d >= 1 && d <= 8) { char.variant = d - 1; char.lockedVariant = true; refreshBar(); }
-  for (const perf of PERFORMANCES) if (perf.triggerKey === e.code) startPerf(perf);
+  for (const perf of PERFORMANCES) if (perf.triggerKey === e.code) enterPerformance(perf);
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 const MOVE_SPEED = 72, JUMP_V = 200, GRAVITY = 720;
 function readMoveX() {
+  if (hostMoveX !== null) return hostMoveX; // 宿主直写优先于键盘（绕过口）
   let ix = 0;
   if (keys['KeyA'] || keys['ArrowLeft']) ix -= 1;
   if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
@@ -1105,8 +1248,8 @@ function mkRow(label) {
   const row3 = mkRow('表演');
   for (const perf of PERFORMANCES) {
     const b = document.createElement('button');
-    b.textContent = perf.name + ' (' + String(perf.triggerKey || '').replace('Key', '') + ')';
-    b.onclick = () => startPerf(perf);
+    b.textContent = perf.triggerKey ? perf.name + ' (' + String(perf.triggerKey).replace('Key', '') + ')' : perf.name;
+    b.onclick = () => enterPerformance(perf);
     row3.appendChild(b);
   }
   const aw = document.createElement('button');
@@ -1114,6 +1257,10 @@ function mkRow(label) {
   aw.id = 'btnAuto';
   aw.onclick = () => { autoWalk = !autoWalk; aw.classList.toggle('on', autoWalk); };
   row3.appendChild(aw);
+  const sp = document.createElement('button');
+  sp.textContent = '停表演';
+  sp.onclick = () => stopAllPerfs();
+  row3.appendChild(sp);
 }
 function refreshBar() {
   barState.dirs.forEach((b, i) => b.classList.toggle('on', i === char.variant));
@@ -1136,6 +1283,10 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now; elapsed += dt;
   const ix = readMoveX();
   updateCharacter(dt, ix);
+  if (char.onGround !== prevOnGround) {
+    emitRuntimeEvent(char.onGround ? 'land' : 'takeoff', {});
+    prevOnGround = char.onGround;
+  }
   // 行为层：宿主喂 vars，逐部件行为图实时求值（时间基 = 60fps 帧；
   // phase 为步态相位帧：移动约 30/s、静止 4/s、腾空 18/s；
   // nodeRef 读哪帧由每张图的 follow 开关决定：'prev'（缺省）读上一帧
@@ -1144,10 +1295,14 @@ function frame(now) {
   // 行为时钟 = 表演纪元起算的秒。图内时间一律秒（time 节点、
   // 周期参数、phase 圈数），全系统不再出现帧制时间。
   const behaviorT = elapsed - behaviorEpoch;
-  const hostVars = {
+  // 宿主通用变量垫底、逐帧计算值在后覆盖：setVar 的变量状态机/行为图可读，
+  // 但 t/phase/moveX/speed01/grounded 永远以本帧计算为准。
+  const hostVars = Object.assign({}, hostCustomVars, {
     t: behaviorT, phase: phaseAcc, moveX: ix,
     speed01: ix !== 0 ? 1 : 0, grounded: char.onGround ? 1 : 0,
-  };
+  });
+  lastHostVars = hostVars;
+  smUpdate(hostVars);
   let pose = {};
   for (const part of PARTS) pose[part.key] = { a: 0, dy: 0, rim: 0, glint: 0 };
   const behaviorOutputs = new Map();
@@ -1180,12 +1335,17 @@ function frame(now) {
   for (let i = activePerfs.length - 1; i >= 0; i--) {
     const act = activePerfs[i];
     act.t += dt;
+    // 循环表演（片段 loop）到尾回绕，不结束、不发 perfend
+    if (act.perf.loop && act.t > act.perf.duration) act.t = act.t % act.perf.duration;
     const w = envelopeWeight(act.t, act.perf.duration, act.perf.envelope.in, act.perf.envelope.out);
     if (w > 0) {
       const bpOut = evalRuntimeGraph(act.perf.graph, { u: Math.min(1, act.t / act.perf.duration), tSec: act.t });
       pose = composePerformance(pose, act.perf, bpOut, w);
     }
-    if (act.t > act.perf.duration) activePerfs.splice(i, 1);
+    if (act.t > act.perf.duration) {
+      activePerfs.splice(i, 1);
+      emitRuntimeEvent('perfend', { id: act.perf.id, name: act.perf.name });
+    }
   }
   const state = ensureAtlas(gl, char.variant, currentCostume);
   const sorted = sortParts(PARTS, char.variant);

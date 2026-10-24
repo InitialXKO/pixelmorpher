@@ -6,7 +6,7 @@
  * blueprint/modifiers and adds to values.
  */
 
-import type { Character, Node, KeyframeTrack, ModifierInstance, NodeKeyframe, ModifierParamValue } from '../../unified-types';
+import type { Character, Node, KeyframeTrack, ModifierInstance, ModifierParamValue } from '../../unified-types';
 import type { InterpolatedNodeValues } from './types';
 import { computePartAnimationTransform } from '../animation-dispatch';
 import { evaluateBlueprint } from '../../blueprint/eval';
@@ -34,6 +34,17 @@ function interpolateTrack(track: KeyframeTrack<number> | undefined, frame: numbe
   return prev.value + (next.value - prev.value) * t;
 }
 
+/** step 插值：取 ≤frame 的最后一点，无点用缺省（离散量不用线性插值） */
+function interpolateTrackStep(track: KeyframeTrack<number> | undefined, frame: number, defaultValue: number): number {
+  if (!track || track.keyframes.length === 0) return defaultValue;
+  let v = defaultValue;
+  for (const kf of track.keyframes) {
+    if (kf.frame <= frame) v = kf.value;
+    else break;
+  }
+  return v;
+}
+
 function interpolateSingleNode(node: Node, currentFrame: number): InterpolatedNodeValues {
   const tracks = node.tracks;
   let x = interpolateTrack(tracks?.x, currentFrame, 0);
@@ -51,7 +62,7 @@ function interpolateSingleNode(node: Node, currentFrame: number): InterpolatedNo
     x,
     y,
     variantIndex: 0,
-    zIndex: node.zIndex ?? 0,
+    zIndex: interpolateTrackStep(tracks?.zIndex, currentFrame, node.zIndex ?? 0),
     skewX: 0,
     skewY: 0,
     scaleX: interpolateTrack(tracks?.scaleX, currentFrame, node.transform.scaleX ?? 1),
@@ -82,7 +93,6 @@ function interpolateTrajectoryPoints(
 function interpolateCharacterInternal(
   character: Character,
   currentFrame: number,
-  nodeKeyframes: NodeKeyframe[] = [],
   frameRate: number = 12,
 ): Map<string, InterpolatedNodeValues> {
   const result = new Map<string, InterpolatedNodeValues>();
@@ -117,11 +127,11 @@ function interpolateCharacterInternal(
     for (const nodeId of Object.keys(character.nodes)) {
       const node = character.nodes[nodeId]!;
       const values = interpolateSingleNode(node, currentFrame);
-      // 合并 node.faceTurn 和 keyframe faceTurn（keyframe 优先）
-      const kfFaceTurn = getInterpolatedKeyframeFaceTurn(nodeKeyframes, nodeId, currentFrame);
+      // 合并 node.faceTurn 和转面轨（轨优先）
+      const kfFaceTurn = getInterpolatedTrackFaceTurn(node, currentFrame);
       values.faceTurn = kfFaceTurn ?? node.faceTurn;
-      // 合并 node.modifiers 和 keyframe modifiers（keyframe 优先，同 type 去重）
-      const kfModifiers = getInterpolatedKeyframeModifiers(nodeKeyframes, nodeId, currentFrame);
+      // 合并 node.modifiers 和修饰器组轨（轨优先，同 type 去重）
+      const kfModifiers = getInterpolatedTrackModifiers(node, currentFrame);
       const nodeMods = node.modifiers ?? [];
       const kfTypes = new Set(kfModifiers.map((m) => m.type));
       const mergedModifiers = [
@@ -184,29 +194,19 @@ function interpolateCharacterInternal(
 export function interpolateNodeKeyframes(
   character: Character,
   currentFrame: number,
-  nodeKeyframes?: NodeKeyframe[],
   frameRate?: number,
 ): Map<string, InterpolatedNodeValues> {
-  // 未传入时从 store 取 active clip 的 nodeKeyframes（用于 per-keyframe modifiers）
-  let kfs = nodeKeyframes;
   // 帧率与主渲染同口径：显式传入优先，否则读 store 的工程帧率
   // （此前写死 12，蓝图里按秒计的节点在拖拽/面板路径与主画布算得不一致）
   let rate = frameRate;
-  try {
-    // 懒加载避免循环依赖
-    const { useProjectStore } = require('../../store') as typeof import('../../store');
-    const s = useProjectStore.getState();
-    if (!kfs) {
-      const clips = (s as any).animationClips ?? [];
-      const activeId = (s as any).activeAnimationClipId;
-      const clip = clips.find((c: any) => c.id === activeId) ?? clips[0];
-      kfs = clip?.nodeKeyframes ?? [];
-    }
-    if (rate === undefined) rate = (s as any).frameRate;
-  } catch {
-    if (!kfs) kfs = [];
+  if (rate === undefined) {
+    try {
+      // 懒加载避免循环依赖
+      const { useProjectStore } = require('../../store') as typeof import('../../store');
+      rate = (useProjectStore.getState() as any).frameRate;
+    } catch { /* store 不可用（测试/SSR）：用缺省 */ }
   }
-  return interpolateCharacterInternal(character, currentFrame, kfs ?? [], rate && rate > 0 ? rate : 12);
+  return interpolateCharacterInternal(character, currentFrame, rate && rate > 0 ? rate : 12);
 }
 
 // ---- Per-keyframe modifier interpolation ----
@@ -315,77 +315,72 @@ export function interpolateNodeKeyframeModifiers(
 }
 
 /**
- * 在两个 NodeKeyframe 之间插值 modifiers 的便捷函数。
+ * 在两个修饰器组点之间插值（点值 = 修饰器组快照）。
  */
-export function interpolateKeyframesModifiers(
-  prevKf: NodeKeyframe | null,
-  nextKf: NodeKeyframe | null,
+export function interpolateModifierPoints(
+  prevMods: ModifierInstance[] | null,
+  nextMods: ModifierInstance[] | null,
+  prevFrame: number,
+  nextFrame: number,
   frame: number,
 ): ModifierInstance[] {
-  if (!prevKf && !nextKf) return [];
-  if (!prevKf) return (nextKf!.modifiers ?? []).map((m) => ({ ...m }));
-  if (!nextKf) return (prevKf.modifiers ?? []).map((m) => ({ ...m }));
-  if (prevKf.frame === nextKf.frame) return (prevKf.modifiers ?? []).map((m) => ({ ...m }));
-  const t = Math.max(0, Math.min(1, (frame - prevKf.frame) / (nextKf.frame - prevKf.frame)));
-  return interpolateNodeKeyframeModifiers(prevKf.modifiers, nextKf.modifiers, t);
+  if (!prevMods && !nextMods) return [];
+  if (!prevMods) return (nextMods ?? []).map((m) => ({ ...m }));
+  if (!nextMods) return prevMods.map((m) => ({ ...m }));
+  if (prevFrame === nextFrame) return prevMods.map((m) => ({ ...m }));
+  const t = Math.max(0, Math.min(1, (frame - prevFrame) / (nextFrame - prevFrame)));
+  return interpolateNodeKeyframeModifiers(prevMods, nextMods, t);
+}
+
+/**  bracket 查找：返回 ≤frame 的最后一点与 ≥frame 的第一点（同一引用表示恰在点上） */
+function bracketPoint<T>(points: { frame: number; value: T }[] | undefined, frame: number): {
+  prev: { frame: number; value: T } | null;
+  next: { frame: number; value: T } | null;
+} {
+  if (!points || points.length === 0) return { prev: null, next: null };
+  const sorted = [...points].sort((a, b) => a.frame - b.frame);
+  let prev: { frame: number; value: T } | null = null;
+  let next: { frame: number; value: T } | null = null;
+  for (const pt of sorted) {
+    if (pt.frame <= frame) prev = pt;
+    if (pt.frame >= frame && !next) next = pt;
+  }
+  if (!prev) prev = next;
+  if (!next) next = prev;
+  return { prev, next };
 }
 
 /**
- * 获取某节点在指定帧的插值后 keyframe modifiers。
+ * 获取某节点在指定帧的插值后修饰器组（读 node.tracks.modifierKeys）。
  * 供 interpolateCharacterInternal 调用，与 node.modifiers 合并。
  */
-function getInterpolatedKeyframeModifiers(
-  nodeKeyframes: NodeKeyframe[],
-  nodeId: string,
+function getInterpolatedTrackModifiers(
+  node: Node,
   currentFrame: number,
 ): ModifierInstance[] {
-  const kfs = nodeKeyframes
-    .filter((kf) => kf.nodeId === nodeId)
-    .sort((a, b) => a.frame - b.frame);
-  if (kfs.length === 0) return [];
-
-  let prevKf: NodeKeyframe | null = null;
-  let nextKf: NodeKeyframe | null = null;
-  for (const kf of kfs) {
-    if (kf.frame <= currentFrame) prevKf = kf;
-    if (kf.frame >= currentFrame && !nextKf) nextKf = kf;
-  }
-  // 边界：都在一侧时用最近的
-  if (!prevKf) prevKf = nextKf;
-  if (!nextKf) nextKf = prevKf;
-
-  return interpolateKeyframesModifiers(prevKf, nextKf, currentFrame);
+  const { prev, next } = bracketPoint(node.tracks?.modifierKeys?.keyframes, currentFrame);
+  if (!prev && !next) return [];
+  return interpolateModifierPoints(
+    prev?.value ?? null, next?.value ?? null,
+    prev?.frame ?? currentFrame, next?.frame ?? currentFrame,
+    currentFrame,
+  );
 }
 
 /**
- * 获取某节点在指定帧的插值后 faceTurn（yaw/pitch 数值 lerp）。
- * 供 interpolateCharacterInternal 调用，与 node.faceTurn 合并（keyframe 优先）。
+ * 获取某节点在指定帧的插值后 faceTurn（读 node.tracks.faceTurnKeys，yaw/pitch 数值 lerp）。
+ * 供 interpolateCharacterInternal 调用，与 node.faceTurn 合并（轨优先）。
  */
-function getInterpolatedKeyframeFaceTurn(
-  nodeKeyframes: NodeKeyframe[],
-  nodeId: string,
+function getInterpolatedTrackFaceTurn(
+  node: Node,
   currentFrame: number,
 ): { yaw: number; pitch: number } | undefined {
-  const kfs = nodeKeyframes
-    .filter((kf) => kf.nodeId === nodeId && kf.faceTurn)
-    .sort((a, b) => a.frame - b.frame);
-  if (kfs.length === 0) return undefined;
-
-  let prevKf: NodeKeyframe | null = null;
-  let nextKf: NodeKeyframe | null = null;
-  for (const kf of kfs) {
-    if (kf.frame <= currentFrame) prevKf = kf;
-    if (kf.frame >= currentFrame && !nextKf) nextKf = kf;
-  }
-  if (!prevKf) prevKf = nextKf;
-  if (!nextKf) nextKf = prevKf;
-
-  const prev = prevKf!.faceTurn!;
-  const next = nextKf!.faceTurn!;
-  if (prevKf!.frame === nextKf!.frame) return { ...prev };
-  const t = Math.max(0, Math.min(1, (currentFrame - prevKf!.frame) / (nextKf!.frame - prevKf!.frame)));
+  const { prev, next } = bracketPoint(node.tracks?.faceTurnKeys?.keyframes, currentFrame);
+  if (!prev || !next) return undefined;
+  if (prev.frame === next.frame) return { ...prev.value };
+  const t = Math.max(0, Math.min(1, (currentFrame - prev.frame) / (next.frame - prev.frame)));
   return {
-    yaw: prev.yaw + (next.yaw - prev.yaw) * t,
-    pitch: prev.pitch + (next.pitch - prev.pitch) * t,
+    yaw: prev.value.yaw + (next.value.yaw - prev.value.yaw) * t,
+    pitch: prev.value.pitch + (next.value.pitch - prev.value.pitch) * t,
   };
 }

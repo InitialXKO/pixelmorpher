@@ -23,6 +23,14 @@ export default function AnimationClipPanel() {
     updateAnimationClip,
     setActiveAnimationClip,
   } = useProjectStore();
+  const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
+  const selectedCharacterId = useProjectStore((s) => s.selectedCharacterId);
+  const characterList = Object.values(unifiedCharacters ?? {});
+  // 新片段的缺省归属：当前选中角色，否则第一个角色；无角色时不可建
+  const defaultOwnerId =
+    (selectedCharacterId && unifiedCharacters[selectedCharacterId] ? selectedCharacterId : null) ??
+    characterList[0]?.id ??
+    null;
 
   const [editingClipId, setEditingClipId] = useState<string | null>(null);
   const [newClipName, setNewClipName] = useState('');
@@ -30,10 +38,11 @@ export default function AnimationClipPanel() {
   const activeClip = animationClips.find(c => c.id === activeAnimationClipId) ?? null;
 
   const handleAddClip = useCallback(() => {
+    if (!defaultOwnerId) return;
     const name = newClipName.trim() || `动画 ${animationClips.length + 1}`;
-    addAnimationClip(name);
+    addAnimationClip(name, defaultOwnerId);
     setNewClipName('');
-  }, [addAnimationClip, animationClips.length, newClipName]);
+  }, [addAnimationClip, animationClips.length, newClipName, defaultOwnerId]);
 
   const handleSelectClip = useCallback((clipId: string) => {
     setActiveAnimationClip(clipId);
@@ -43,7 +52,7 @@ export default function AnimationClipPanel() {
     if (animationClips.length <= 1) return; // Don't delete the last clip
     const clip = animationClips.find((c) => c.id === clipId);
     const name = clip?.name ?? '该片段';
-    if (!confirm(`确定删除动画片段「${name}」吗？其中的关键帧将一并删除，此操作不可撤销。`)) return;
+    if (!confirm(`确定删除动画片段「${name}」吗？片段的状态轨道、事件与时间窗将一并删除（节点轨道属于角色，不受影响），此操作不可撤销。`)) return;
     removeAnimationClip(clipId);
   }, [removeAnimationClip, animationClips]);
 
@@ -53,12 +62,12 @@ export default function AnimationClipPanel() {
   }, [updateAnimationClip]);
 
   const handleDuplicateClip = useCallback((clip: AnimationClip) => {
-    const copy = addAnimationClip(`${clip.name} 副本`);
+    const copy = addAnimationClip(`${clip.name} 副本`, clip.puppetCharacterId);
     updateAnimationClip(copy.id, {
-      frameRate: clip.frameRate,
-      totalFrames: clip.totalFrames,
-      puppetCharacterId: clip.puppetCharacterId,
-      nodeKeyframes: structuredClone(clip.nodeKeyframes ?? []),
+      startFrame: clip.startFrame,
+      endFrame: clip.endFrame,
+      loop: clip.loop,
+      description: clip.description,
       stateKeyframes: structuredClone(clip.stateKeyframes ?? []),
       effectTracks: structuredClone(clip.effectTracks ?? []),
       canvasModifierTracks: structuredClone(clip.canvasModifierTracks ?? []),
@@ -66,6 +75,9 @@ export default function AnimationClipPanel() {
       motionBlurStrokes: structuredClone(clip.motionBlurStrokes ?? []),
       effectStrokes: structuredClone(clip.effectStrokes ?? []),
       tags: [...(clip.tags ?? [])],
+      events: structuredClone(clip.events ?? []),
+      frameTags: structuredClone(clip.frameTags ?? []),
+      hitboxMap: structuredClone(clip.hitboxMap ?? {}),
     });
   }, [addAnimationClip, updateAnimationClip]);
 
@@ -86,7 +98,8 @@ export default function AnimationClipPanel() {
       <div className="flex-1 min-h-0 overflow-y-auto">
         {animationClips.map(clip => {
           const isActive = clip.id === activeAnimationClipId;
-          const keyframeCount = clip.nodeKeyframes.length;
+          const stateKeyCount = clip.stateKeyframes?.length ?? 0;
+          const ownerName = unifiedCharacters[clip.puppetCharacterId]?.name ?? '（归属失效）';
 
           return (
           <ContextMenu key={clip.id}>
@@ -161,10 +174,10 @@ export default function AnimationClipPanel() {
                 <div className="flex items-center gap-3 px-2 pb-1.5 pl-6">
                   <span className="text-[9px] text-zinc-500 flex items-center gap-0.5">
                     <Clock className="size-2.5" />
-                    {clip.frameRate}fps · {clip.totalFrames}帧
+                    {clip.startFrame}–{clip.endFrame}帧{clip.loop ? ' · 循环' : ''}
                   </span>
                   <span className="text-[9px] text-zinc-500">
-                    {keyframeCount}关键帧
+                    {ownerName} · {stateKeyCount}状态键
                   </span>
                 </div>
               )}
@@ -215,6 +228,8 @@ export default function AnimationClipPanel() {
           size="sm"
           className="h-6 w-6 p-0 text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
           onClick={handleAddClip}
+          disabled={!defaultOwnerId}
+          title={defaultOwnerId ? '新建片段' : '先创建角色——片段必须归属一个角色'}
         >
           <Plus className="size-3.5" />
         </Button>
@@ -226,35 +241,66 @@ export default function AnimationClipPanel() {
           <div className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1.5">
             片段设置
           </div>
-          <div className="grid grid-cols-2 gap-1.5">
+          <div className="space-y-1.5">
             <div>
-              <label className="text-[9px] text-zinc-500 block mb-0.5">帧率</label>
-              <Input
-                type="number"
-                className="h-5 text-[10px] bg-zinc-900 border-zinc-700 px-1.5 w-full"
-                value={activeClip.frameRate}
-                min={1}
-                max={60}
-                onChange={(e) => {
-                  const fps = parseInt(e.target.value) || 12;
-                  updateAnimationClip(activeClip.id, { frameRate: Math.max(1, Math.min(60, fps)) });
-                }}
-              />
+              <label className="text-[9px] text-zinc-500 block mb-0.5">归属角色</label>
+              <select
+                className="h-5 text-[10px] bg-zinc-900 border border-zinc-700 rounded px-1 w-full text-zinc-300"
+                value={activeClip.puppetCharacterId}
+                onChange={(e) => updateAnimationClip(activeClip.id, { puppetCharacterId: e.target.value })}
+              >
+                {!characterList.some((c) => c.id === activeClip.puppetCharacterId) && (
+                  <option value={activeClip.puppetCharacterId}>（归属失效，请改绑）</option>
+                )}
+                {characterList.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
             </div>
-            <div>
-              <label className="text-[9px] text-zinc-500 block mb-0.5">总帧数</label>
-              <Input
-                type="number"
-                className="h-5 text-[10px] bg-zinc-900 border-zinc-700 px-1.5 w-full"
-                value={activeClip.totalFrames}
-                min={1}
-                max={600}
-                onChange={(e) => {
-                  const frames = parseInt(e.target.value) || 24;
-                  updateAnimationClip(activeClip.id, { totalFrames: Math.max(1, Math.min(600, frames)) });
-                }}
-              />
+            <div className="grid grid-cols-2 gap-1.5">
+              <div>
+                <label className="text-[9px] text-zinc-500 block mb-0.5">开始帧</label>
+                <Input
+                  type="number"
+                  className="h-5 text-[10px] bg-zinc-900 border-zinc-700 px-1.5 w-full"
+                  value={activeClip.startFrame}
+                  min={0}
+                  max={600}
+                  onChange={(e) => {
+                    const v = Math.max(0, Math.min(600, parseInt(e.target.value) || 0));
+                    updateAnimationClip(activeClip.id, {
+                      startFrame: v,
+                      endFrame: Math.max(v, activeClip.endFrame),
+                    });
+                  }}
+                />
+              </div>
+              <div>
+                <label className="text-[9px] text-zinc-500 block mb-0.5">结束帧</label>
+                <Input
+                  type="number"
+                  className="h-5 text-[10px] bg-zinc-900 border-zinc-700 px-1.5 w-full"
+                  value={activeClip.endFrame}
+                  min={0}
+                  max={600}
+                  onChange={(e) => {
+                    const v = Math.max(0, Math.min(600, parseInt(e.target.value) || 0));
+                    updateAnimationClip(activeClip.id, {
+                      endFrame: Math.max(activeClip.startFrame, v),
+                    });
+                  }}
+                />
+              </div>
             </div>
+            <label className="flex items-center gap-1.5 text-[10px] text-zinc-400 cursor-pointer">
+              <input
+                type="checkbox"
+                className="size-3 accent-amber-500"
+                checked={activeClip.loop}
+                onChange={(e) => updateAnimationClip(activeClip.id, { loop: e.target.checked })}
+              />
+              窗内循环
+            </label>
           </div>
         </div>
       )}

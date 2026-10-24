@@ -813,7 +813,7 @@ export default function PuppetAssetPanel() {
                                 <Film className="size-2" />
                                 <span className="truncate">{clip.name}</span>
                                 <span className="text-gray-700">
-                                  {(clip.nodeKeyframes ?? []).length} K帧
+                                  {clip.endFrame - clip.startFrame + 1} 帧
                                 </span>
                               </div>
                             )}
@@ -1227,7 +1227,7 @@ export default function PuppetAssetPanel() {
                               </span>
                             )}
                             <span className="text-[8px] text-gray-600">
-                              {(clip.nodeKeyframes ?? []).length} K帧
+                              {clip.endFrame - clip.startFrame + 1} 帧
                             </span>
                           </div>
                         </ContextMenuTrigger>

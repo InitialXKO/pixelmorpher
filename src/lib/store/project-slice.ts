@@ -13,6 +13,7 @@ import { _isDragActive, _dragPostStackLen, _pendingTrajectorySpriteIds, setDragA
 import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '../engine';
 import { resolveChainTarget3D } from '../unified-types';
 import { migrateProjectTimeUnits } from '../blueprint/time-migration';
+import { migrateClipStructure } from '../clip-migration';
 
 const defaultProject: Project = {
   id: crypto.randomUUID(),
@@ -428,12 +429,14 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
 
     if (animationClips.length === 0) {
       // 创建默认木偶动画 clip（旧部件关键帧系统已统一为木偶模型，不再迁移）
+      // 归属必填：绑工程的第一个角色（无角色时 '' 占位，建角色后在片段面板改绑）
       const migratedClip: AnimationClip = {
         id: crypto.randomUUID(),
         name: file.project.name || '默认动画',
-        frameRate: file.project.frameRate ?? 12,
-        totalFrames: file.project.totalFrames ?? 24,
-        nodeKeyframes: [],
+        puppetCharacterId: Object.keys(file.project.unifiedCharacters ?? {})[0] ?? '',
+        startFrame: 0,
+        endFrame: (file.project.totalFrames ?? 24) - 1,
+        loop: false,
         effectTracks: file.project.effectTracks || [],
         canvasModifierTracks: file.project.canvasModifierTracks || [],
         trajectories: file.project.trajectories || [],
@@ -464,7 +467,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         heightmap: p.heightmap,
       };
     }
-    const unifiedCharacters = file.project.unifiedCharacters || {};
+    let unifiedCharacters = file.project.unifiedCharacters || {};
     // IK target3D 填充：旧项目链只有 target（链朝向画布平面上的点），按文件画布尺寸与
     // 链根节点朝向反投影换算为原点中心 3D 目标（东向时 x 分量落入 z）。填充后 target 原样保留作旧义镜像。
     const fileCanvasW = file.project.canvasWidth ?? 256;
@@ -477,6 +480,23 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         }
       }
     }
+    // 片段结构迁移（一次性、幂等）：片段归属补绑 + 时间窗换算 + 旧片段
+    // 关键帧里的修饰器/转面/图层数据迁入节点轨道。必须在时间单位迁移
+    // 之前跑——迁入轨道的修饰器还要吃时间换算（其循环已改走轨道）。
+    {
+      const clipMig = migrateClipStructure(
+        animationClips as unknown as Array<Record<string, any>>,
+        unifiedCharacters as any,
+        { projectTotalFrames: file.project.totalFrames ?? 24, activeClipId: activeAnimationClipId },
+      );
+      animationClips = clipMig.clips;
+      unifiedCharacters = clipMig.characters as typeof unifiedCharacters;
+      const r = clipMig.report;
+      if (r.boundClips.length > 0 || r.dropped.length > 0 || r.phantomFieldsRemoved > 0) {
+        console.warn('[clip-migration] 片段结构迁移', JSON.stringify(r));
+      }
+    }
+
     // 时间单位迁移（帧制 → 秒制）：旧工程一次性换算全部图与修改器的
     // 时间参数（行为/表演按 60、节点蓝图/修改器按工程帧率、烘焙 IK
     // 蓝图按 12），工程级标记 timeUnitsVersion>=2 时跳过。
@@ -631,15 +651,16 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
   // V3.0: AnimationClip CRUD
   // ============================================================
 
-  addAnimationClip: (name: string) => {
+  addAnimationClip: (name: string, characterId: string) => {
     get().pushUndo('添加动画片段');
     const s = get();
     const clip: AnimationClip = {
       id: crypto.randomUUID(),
       name,
-      frameRate: s.frameRate,
-      totalFrames: s.totalFrames,
-      nodeKeyframes: [],
+      puppetCharacterId: characterId,
+      startFrame: 0,
+      endFrame: Math.max(0, s.totalFrames - 1),
+      loop: false,
       effectTracks: [],
       canvasModifierTracks: [],
       trajectories: [],
@@ -684,9 +705,9 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
   },
 
   setActiveAnimationClip: (clipId: string | null) => {
+    // 校验存在：指向不存在片段的激活 id 会让消费端各自回退、口径分叉
+    if (clipId !== null && !get().animationClips.some((c) => c.id === clipId)) return;
     set({ activeAnimationClipId: clipId });
-    if (clipId) {
-    }
   },
 
   getActiveAnimationClip: () => {
@@ -700,7 +721,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
 
 
   createClipFromCharacter: (characterId: string, clipName: string): AnimationClip => {
-    // 统一为木偶模型：直接创建空木偶 clip（旧部件轨道系统已删除）
-    return get().addAnimationClip(clipName);
+    // 统一为木偶模型：建一个归属该角色的空片段（时间窗缺省全程）
+    return get().addAnimationClip(clipName, characterId);
   },
 });

@@ -161,7 +161,7 @@ export default function PixelCanvas() {
       offCtx.clearRect(0, 0, s.canvasWidth, s.canvasHeight);
       const curVersion = s.onionDataVersionRef.current;
       const kfHash = s.keyframes.map(kf => `${kf.id}:${kf.frame}:${kf.modifiers.length}`).join('|')
-        + `|node:${useProjectStore.getState().animationClips.map(c => c.nodeKeyframes?.length ?? 0).join(",")}`;
+        + `|tracks:${JSON.stringify(Object.values(useProjectStore.getState().unifiedCharacters).map((c) => Object.values(c.nodes).map((n) => n.tracks ?? null)))}`;
 
       // 木偶洋葱皮：把指定帧的木偶角色渲染进洋葱缓存画布（新模型）
       // 与顶端开关同构：外层 s.onionSkinEnabled 已控制，此处不再单独检查
@@ -183,7 +183,7 @@ export default function PixelCanvas() {
             // 新模型：Character 已包含 tracks（sync 时合并），无需单独传 keyframes
             renderCharacterOnionFrameFromCharacter(
               cacheCtx, s.canvasWidth, s.canvasHeight, character,
-              [], frame,
+              frame,
               s.frameRate, s.globalModifiers, s.animationVariables, undefined,
               geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D)
             );

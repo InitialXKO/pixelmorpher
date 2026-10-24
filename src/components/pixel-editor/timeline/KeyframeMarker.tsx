@@ -9,7 +9,6 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import { Trash2, SkipForward, Copy } from 'lucide-react';
-import type { NodeKeyframe } from '@/lib/unified-types';
 import {
   DEFAULT_FRAME_WIDTH,
   TRACK_HEIGHT,
@@ -110,15 +109,16 @@ export const NodeKeyframeMarker = React.memo(function NodeKeyframeMarker({
   snapConfig,
   snapFrame,
 }: {
-  keyframe: NodeKeyframe;
+  /** 轨道帧键：id 为合成键 `${nodeId}@${frame}`，frame 为该帧位 */
+  keyframe: { id: string; frame: number };
   isSelected: boolean;
   onSelect: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
   onMoveToFrame: () => void;
   totalFrames: number;
-  siblingKeyframes: NodeKeyframe[];
-  onUpdateNodeKeyframe: (id: string, updates: Partial<NodeKeyframe>) => void;
+  siblingKeyframes: { id: string; frame: number }[];
+  onUpdateNodeKeyframe: (id: string, updates: { frame?: number }) => void;
   frameWidth?: number;
   snapConfig?: import('@/lib/v15-types').SnapConfig;
   snapFrame?: (rawFrame: number, excludeKeyframeId?: string) => number;

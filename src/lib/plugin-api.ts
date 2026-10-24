@@ -91,8 +91,41 @@ export function createAPI(): PixelMorpherAPI {
     updateNode: (characterId, nodeId, updates) =>
       getStore().updateUnifiedNode(characterId, nodeId, updates as never),
 
-    addNodeKeyframe: (clipId, nodeId, frame, values) =>
-      getStore().addNodeKeyframe(clipId, nodeId, frame, values as never).id,
+    // 插件契约不变，落点已统一到节点轨道：姿态通道写通道点，
+    // modifiers/faceTurn/zIndex 分别写三条附件轨。角色由片段归属解析
+    // （归属失效时按节点所在角色兜底）。返回合成键 id `${nodeId}@${frame}`。
+    addNodeKeyframe: (clipId, nodeId, frame, values) => {
+      const store = getStore();
+      const v = (values ?? {}) as Record<string, any>;
+      const clip = store.animationClips.find((c) => c.id === clipId);
+      let characterId = clip?.puppetCharacterId && store.unifiedCharacters[clip.puppetCharacterId]
+        ? clip.puppetCharacterId
+        : undefined;
+      if (!characterId) {
+        characterId = Object.values(store.unifiedCharacters).find((ch) => ch.nodes[nodeId])?.id;
+      }
+      if (!characterId) return '';
+      const node = store.unifiedCharacters[characterId]?.nodes[nodeId];
+      if (!node) return '';
+      const channels = ['angle', 'tilt', 'x', 'y', 'stretch', 'scaleX', 'variantIndex'] as const;
+      let tracks: Record<string, any> = { ...(node.tracks ?? {}) };
+      let touched = false;
+      for (const chName of channels) {
+        if (typeof v[chName] !== 'number') continue;
+        const track = tracks[chName] ?? { keyframes: [], interpolation: 'linear' };
+        const idx = track.keyframes.findIndex((k: any) => k.frame === frame);
+        const keyframes = idx >= 0
+          ? track.keyframes.map((k: any, i: number) => (i === idx ? { ...k, value: v[chName] } : k))
+          : [...track.keyframes, { frame, value: v[chName] }].sort((a: any, b: any) => a.frame - b.frame);
+        tracks = { ...tracks, [chName]: { ...track, keyframes } };
+        touched = true;
+      }
+      if (touched) store.updateUnifiedNode(characterId, nodeId, { tracks } as never);
+      if (Array.isArray(v.modifiers)) store.setNodeModifierKey(characterId, nodeId, frame, v.modifiers);
+      if (v.faceTurn) store.setNodeFaceTurnKey(characterId, nodeId, frame, v.faceTurn);
+      if (typeof v.zIndex === 'number') store.setNodeZIndexKey(characterId, nodeId, frame, v.zIndex);
+      return `${nodeId}@${frame}`;
+    },
 
     getNodeBlueprint: (characterId, nodeId) =>
       getStore().unifiedCharacters[characterId]?.nodes[nodeId]?.blueprint ?? null,

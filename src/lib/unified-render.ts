@@ -1389,13 +1389,17 @@ export function resolveEffectiveCostumeState(
  * 其余情况返回 undefined（该角色本帧只受静态字段+状态蓝图影响）。
  */
 export function pickClipStateKeyframes(
-  clips: Array<{ id: string; puppetCharacterId?: string; stateKeyframes?: import('./unified-types').CostumeStateKeyframe[] }> | undefined,
+  clips: Array<{ id: string; puppetCharacterId?: string; startFrame?: number; endFrame?: number; stateKeyframes?: import('./unified-types').CostumeStateKeyframe[] }> | undefined,
   activeClipId: string | null | undefined,
   characterId: string,
+  frame: number,
 ): import('./unified-types').CostumeStateKeyframe[] | undefined {
   if (!clips || !activeClipId) return undefined;
   const clip = clips.find((c) => c.id === activeClipId);
   if (!clip || clip.puppetCharacterId !== characterId) return undefined;
+  // 时间窗门控：当前帧不在片段窗内时，该片段什么都不贡献
+  if (typeof clip.startFrame === 'number' && frame < clip.startFrame) return undefined;
+  if (typeof clip.endFrame === 'number' && frame > clip.endFrame) return undefined;
   return clip.stateKeyframes;
 }
 
@@ -2809,7 +2813,7 @@ function renderPuppetViaUnifiedPipeline(
       undefined, undefined, undefined, undefined, undefined,
       undefined, undefined, proceduralAnimations, sprites,
       undefined, perspectiveForeshorten,
-      pickClipStateKeyframes(animationClips, activeClipId, unifiedCharacter.id),
+      pickClipStateKeyframes(animationClips, activeClipId, unifiedCharacter.id, currentFrame),
       geometryDirection,
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
@@ -2963,7 +2967,6 @@ export function renderCharacterOnionFrameFromCharacter(
   canvasWidth: number,
   canvasHeight: number,
   character: Character,
-  nodeKeyframes: any[],
   frame: number,
   frameRate: number,
   globalModifiers?: GlobalModifier[],
@@ -3022,7 +3025,7 @@ export function renderUnifiedCharactersToCanvas(
       undefined, undefined, undefined, undefined, undefined,
       undefined, undefined, undefined, sprites,
       undefined, undefined,
-      pickClipStateKeyframes(animationClips, activeClipId, character.id),
+      pickClipStateKeyframes(animationClips, activeClipId, character.id, frame),
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }

@@ -31,10 +31,28 @@ export type CharacterSlice = {
   /** 纯复制子树（不转位）：与转位克隆同一套引用跟随，仅不挂 rotate 修改器。返回新根 id */
   cloneNodeSubtree: (characterId: string, rootNodeId: string) => string | null;
 
-  // ---- Node Keyframes ----
-  addNodeKeyframe: (clipId: string, nodeId: string, frame: number, values: Partial<Pick<import('../unified-types').NodeKeyframe, 'angle' | 'stretch' | 'scaleX' | 'x' | 'y' | 'variantIndex' | 'zIndex' | 'interpolationMode' | 'modifiers' | 'faceTurn'>>) => import('../unified-types').NodeKeyframe;
-  removeNodeKeyframe: (clipId: string, keyframeId: string) => void;
-  updateNodeKeyframe: (clipId: string, keyframeId: string, updates: Partial<import('../unified-types').NodeKeyframe>) => void;
+  // ---- Node Track Keys（轨道附件轨与帧级操作；姿态通道点由 writePuppetPoseKeyframe 等直写） ----
+  /** 写修饰器组轨上某帧的点（空数组 = 删点） */
+  setNodeModifierKey: (characterId: string, nodeId: string, frame: number, modifiers: import('../unified-types').ModifierInstance[]) => void;
+  removeNodeModifierKey: (characterId: string, nodeId: string, frame: number) => void;
+  /** 写转面轨上某帧的点 */
+  setNodeFaceTurnKey: (characterId: string, nodeId: string, frame: number, faceTurn: { yaw: number; pitch: number }) => void;
+  removeNodeFaceTurnKey: (characterId: string, nodeId: string, frame: number) => void;
+  /** 写图层顺序轨上某帧的点 */
+  setNodeZIndexKey: (characterId: string, nodeId: string, frame: number, zIndex: number) => void;
+  removeNodeZIndexKey: (characterId: string, nodeId: string, frame: number) => void;
+  /** 删除某帧在全部轨道（通道+附件）上的点 */
+  clearNodeFrameKeys: (characterId: string, nodeId: string, frame: number) => void;
+  /** 把某帧的全部轨道点复制到目标帧；目标帧已有该节点的点或源帧无点时返回 false */
+  copyNodeFrameKeys: (characterId: string, nodeId: string, fromFrame: number, toFrame: number) => boolean;
+  /** 把某帧的全部轨道点移到目标帧；目标帧已有该节点的点或源帧无点时返回 false */
+  moveNodeFrameKeys: (characterId: string, nodeId: string, fromFrame: number, toFrame: number) => boolean;
+  /** 给某帧全部数值通道点设插值模式覆盖（作用于以该帧结尾的段） */
+  setNodeFrameInterpolation: (characterId: string, nodeId: string, frame: number, mode: import('../types').InterpolationMode) => void;
+  // ---- 修饰器组轨内的 ParamDriver（按 节点+帧 定位，旧 keyframes 版在 modifier-slice 不动） ----
+  toggleTrackParamDriver: (characterId: string, nodeId: string, frame: number, modifierId: string, driverId: string) => void;
+  updateTrackParamDriver: (characterId: string, nodeId: string, frame: number, modifierId: string, driverId: string, updates: Partial<import('../unified-types').ParamDriver>) => void;
+  removeTrackParamDriver: (characterId: string, nodeId: string, frame: number, modifierId: string, driverId: string) => void;
 
   // ---- Node CRUD ----
   addUnifiedNode: (characterId: string, name: string, opts?: Partial<Node>) => Node;
@@ -65,6 +83,48 @@ export type CharacterSlice = {
 
 function generateId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+
+// ---- 轨道点操作（纯函数，供本 slice 的帧级动作共用） ----
+type AnyTrack = import('../unified-types').KeyframeTrack<any>;
+const ALL_TRACK_KEYS = ['angle', 'tilt', 'x', 'y', 'stretch', 'scaleX', 'variantIndex', 'zIndex', 'modifierKeys', 'faceTurnKeys'] as const;
+
+function upsertPoint(tracks: NodeTracks, key: (typeof ALL_TRACK_KEYS)[number], frame: number, value: unknown): NodeTracks {
+  const track = (tracks[key] as AnyTrack | undefined) ?? { keyframes: [], interpolation: 'linear' as const };
+  const idx = track.keyframes.findIndex((k) => k.frame === frame);
+  const keyframes = idx >= 0
+    ? track.keyframes.map((k, i) => (i === idx ? { ...k, value } : k))
+    : [...track.keyframes, { frame, value }].sort((a, b) => a.frame - b.frame);
+  return { ...tracks, [key]: { ...track, keyframes } };
+}
+
+function removePoint(tracks: NodeTracks, key: (typeof ALL_TRACK_KEYS)[number], frame: number): NodeTracks {
+  const track = tracks[key] as AnyTrack | undefined;
+  if (!track) return tracks;
+  return { ...tracks, [key]: { ...track, keyframes: track.keyframes.filter((k) => k.frame !== frame) } };
+}
+
+/** 某帧在任一轨道上有点 */
+function frameHasPoints(tracks: NodeTracks | undefined, frame: number): boolean {
+  if (!tracks) return false;
+  return ALL_TRACK_KEYS.some((key) => ((tracks[key] as AnyTrack | undefined)?.keyframes ?? []).some((k) => k.frame === frame));
+}
+
+/** 把 from 帧的全部轨道点搬到 to 帧（copy 时保留源）；目标已有该节点点或源无点返回 null */
+function shiftFramePoints(tracks: NodeTracks, from: number, to: number, copy: boolean): NodeTracks | null {
+  if (!frameHasPoints(tracks, from) || frameHasPoints(tracks, to)) return null;
+  let next: NodeTracks = { ...tracks };
+  for (const key of ALL_TRACK_KEYS) {
+    const track = next[key] as AnyTrack | undefined;
+    if (!track) continue;
+    const pt = track.keyframes.find((k) => k.frame === from);
+    if (!pt) continue;
+    const moved = { ...pt, frame: to, value: pt.value !== null && typeof pt.value === 'object' ? structuredClone(pt.value) : pt.value };
+    const rest = copy ? track.keyframes : track.keyframes.filter((k) => k.frame !== from);
+    next = { ...next, [key]: { ...track, keyframes: [...rest, moved].sort((a, b) => a.frame - b.frame) } };
+  }
+  return next;
 }
 
 export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterSlice> = (set, get) => ({
@@ -104,7 +164,12 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
     set((s) => {
       const unifiedCharacters = { ...s.unifiedCharacters };
       delete unifiedCharacters[id];
-      return { unifiedCharacters };
+      // 片段归属必填 → 角色删除时其名下片段级联删除，激活片段被删时回落首个剩余（无则 null）
+      const animationClips = s.animationClips.filter((c) => c.puppetCharacterId !== id);
+      const activeAnimationClipId = animationClips.some((c) => c.id === s.activeAnimationClipId)
+        ? s.activeAnimationClipId
+        : (animationClips[0]?.id ?? null);
+      return { unifiedCharacters, animationClips, activeAnimationClipId };
     });
   },
 
@@ -321,46 +386,141 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
   setSelectedCharacterId: (id) => set({ selectedCharacterId: id }),
   setSelectedNodeId: (id) => set({ selectedNodeId: id }),
 
-  // ---- Node Keyframes ----
-  addNodeKeyframe: (clipId, nodeId, frame, values) => {
-    const state = get();
-    state.pushUndo('添加节点关键帧');
-    const kf = {
-      id: crypto.randomUUID(),
-      nodeId,
-      frame,
-      ...values,
-    };
-    set((s) => ({
-      animationClips: s.animationClips.map((c) =>
-        c.id === clipId
-          ? { ...c, nodeKeyframes: [...(c.nodeKeyframes ?? []), kf] }
-          : c
-      ),
-    }));
-    return kf;
+  // ---- Node Track Keys ----
+  setNodeModifierKey: (characterId, nodeId, frame, modifiers) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    if (!node) return;
+    get().pushUndo('编辑关键帧修饰器');
+    const tracks = modifiers.length > 0
+      ? upsertPoint(node.tracks ?? {}, 'modifierKeys', frame, structuredClone(modifiers))
+      : removePoint(node.tracks ?? {}, 'modifierKeys', frame);
+    get().updateUnifiedNode(characterId, nodeId, { tracks });
   },
 
-  removeNodeKeyframe: (clipId, keyframeId) => {
-    const state = get();
-    state.pushUndo('删除节点关键帧');
-    set((s) => ({
-      animationClips: s.animationClips.map((c) =>
-        c.id === clipId
-          ? { ...c, nodeKeyframes: (c.nodeKeyframes ?? []).filter((k) => k.id !== keyframeId) }
-          : c
-      ),
-    }));
+  removeNodeModifierKey: (characterId, nodeId, frame) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    if (!node) return;
+    get().pushUndo('删除关键帧修饰器');
+    get().updateUnifiedNode(characterId, nodeId, { tracks: removePoint(node.tracks ?? {}, 'modifierKeys', frame) });
   },
 
-  updateNodeKeyframe: (clipId, keyframeId, updates) => {
-    set((s) => ({
-      animationClips: s.animationClips.map((c) =>
-        c.id === clipId
-          ? { ...c, nodeKeyframes: (c.nodeKeyframes ?? []).map((k) => k.id === keyframeId ? { ...k, ...updates } : k) }
-          : c
-      ),
-    }));
+  setNodeFaceTurnKey: (characterId, nodeId, frame, faceTurn) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    if (!node) return;
+    get().pushUndo('编辑转面关键帧');
+    get().updateUnifiedNode(characterId, nodeId, {
+      tracks: upsertPoint(node.tracks ?? {}, 'faceTurnKeys', frame, { yaw: faceTurn.yaw, pitch: faceTurn.pitch }),
+    });
+  },
+
+  removeNodeFaceTurnKey: (characterId, nodeId, frame) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    if (!node) return;
+    get().pushUndo('删除转面关键帧');
+    get().updateUnifiedNode(characterId, nodeId, { tracks: removePoint(node.tracks ?? {}, 'faceTurnKeys', frame) });
+  },
+
+  setNodeZIndexKey: (characterId, nodeId, frame, zIndex) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    if (!node) return;
+    get().pushUndo('编辑图层顺序关键帧');
+    get().updateUnifiedNode(characterId, nodeId, {
+      tracks: upsertPoint(node.tracks ?? {}, 'zIndex', frame, zIndex),
+    });
+  },
+
+  removeNodeZIndexKey: (characterId, nodeId, frame) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    if (!node) return;
+    get().pushUndo('删除图层顺序关键帧');
+    get().updateUnifiedNode(characterId, nodeId, { tracks: removePoint(node.tracks ?? {}, 'zIndex', frame) });
+  },
+
+  clearNodeFrameKeys: (characterId, nodeId, frame) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    if (!node?.tracks) return;
+    get().pushUndo('删除节点关键帧');
+    let tracks = node.tracks;
+    for (const key of ALL_TRACK_KEYS) tracks = removePoint(tracks, key, frame);
+    get().updateUnifiedNode(characterId, nodeId, { tracks });
+  },
+
+  copyNodeFrameKeys: (characterId, nodeId, fromFrame, toFrame) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    if (!node?.tracks) return false;
+    const next = shiftFramePoints(node.tracks, fromFrame, toFrame, true);
+    if (!next) return false;
+    get().pushUndo('复制节点关键帧');
+    get().updateUnifiedNode(characterId, nodeId, { tracks: next });
+    return true;
+  },
+
+  moveNodeFrameKeys: (characterId, nodeId, fromFrame, toFrame) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    if (!node?.tracks) return false;
+    const next = shiftFramePoints(node.tracks, fromFrame, toFrame, false);
+    if (!next) return false;
+    get().pushUndo('移动节点关键帧');
+    get().updateUnifiedNode(characterId, nodeId, { tracks: next });
+    return true;
+  },
+
+  setNodeFrameInterpolation: (characterId, nodeId, frame, mode) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    if (!node?.tracks) return;
+    let tracks = node.tracks;
+    for (const key of ALL_TRACK_KEYS) {
+      if (key === 'modifierKeys' || key === 'faceTurnKeys') continue;
+      const track = tracks[key] as AnyTrack | undefined;
+      if (!track?.keyframes.some((k) => k.frame === frame)) continue;
+      tracks = {
+        ...tracks,
+        [key]: { ...track, keyframes: track.keyframes.map((k) => (k.frame === frame ? { ...k, interpolation: mode } : k)) },
+      };
+    }
+    get().updateUnifiedNode(characterId, nodeId, { tracks });
+  },
+
+  toggleTrackParamDriver: (characterId, nodeId, frame, modifierId, driverId) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    const pt = node?.tracks?.modifierKeys?.keyframes.find((k) => k.frame === frame);
+    if (!node || !pt) return;
+    get().pushUndo('切换参数驱动器');
+    const modifiers = pt.value.map((m) => m.id !== modifierId ? m : {
+      ...m,
+      paramDrivers: (m.paramDrivers ?? []).map((d) => (d.id === driverId ? { ...d, enabled: !d.enabled } : d)),
+    });
+    get().updateUnifiedNode(characterId, nodeId, {
+      tracks: upsertPoint(node.tracks ?? {}, 'modifierKeys', frame, modifiers),
+    });
+  },
+
+  updateTrackParamDriver: (characterId, nodeId, frame, modifierId, driverId, updates) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    const pt = node?.tracks?.modifierKeys?.keyframes.find((k) => k.frame === frame);
+    if (!node || !pt) return;
+    get().pushUndo('更新参数驱动器');
+    const modifiers = pt.value.map((m) => m.id !== modifierId ? m : {
+      ...m,
+      paramDrivers: (m.paramDrivers ?? []).map((d) => (d.id === driverId ? { ...d, ...updates } : d)),
+    });
+    get().updateUnifiedNode(characterId, nodeId, {
+      tracks: upsertPoint(node.tracks ?? {}, 'modifierKeys', frame, modifiers),
+    });
+  },
+
+  removeTrackParamDriver: (characterId, nodeId, frame, modifierId, driverId) => {
+    const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
+    const pt = node?.tracks?.modifierKeys?.keyframes.find((k) => k.frame === frame);
+    if (!node || !pt) return;
+    get().pushUndo('删除参数驱动器');
+    const modifiers = pt.value.map((m) => m.id !== modifierId ? m : {
+      ...m,
+      paramDrivers: (m.paramDrivers ?? []).filter((d) => d.id !== driverId),
+    });
+    get().updateUnifiedNode(characterId, nodeId, {
+      tracks: upsertPoint(node.tracks ?? {}, 'modifierKeys', frame, modifiers),
+    });
   },
 
   autoTagNodeDirections: (characterId) => {

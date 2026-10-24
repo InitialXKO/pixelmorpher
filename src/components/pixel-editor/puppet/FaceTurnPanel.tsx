@@ -10,7 +10,7 @@ import type { Node, Character } from '@/lib/unified-types';
 
 // ---- Node FaceTurn Panel（蒙皮转面：方向内微动） ----
 // yaw/pitch 滑杆 → node.faceTurn（updateUnifiedNode，带撤销）
-// "打关键帧" → addNodeKeyframe(nodeId, frame, { faceTurn })
+// "打关键帧" → 写转面轨在当前帧的点（setNodeFaceTurnKey）
 // "标注特征点" → 进 sprite_edit + landmark 工具（标注该节点当前方向的精灵）
 
 export function FaceTurnPanel({
@@ -21,9 +21,8 @@ export function FaceTurnPanel({
   node: Node;
 }) {
   const updateUnifiedNode = useProjectStore((s) => s.updateUnifiedNode);
-  const addNodeKeyframe = useProjectStore((s) => s.addNodeKeyframe);
+  const setNodeFaceTurnKey = useProjectStore((s) => s.setNodeFaceTurnKey);
   const currentFrame = useProjectStore((s) => s.currentFrame);
-  const activeClipId = useProjectStore((s: any) => s.activeAnimationClipId);
   const setTool = useEditorStore((s) => s.setTool);
   const enterSpriteEditMode = useEditorStore((s) => s.enterSpriteEditMode);
 
@@ -48,11 +47,10 @@ export function FaceTurnPanel({
   );
 
   const handleKeyframe = useCallback(() => {
-    if (!activeClipId) return;
-    addNodeKeyframe(activeClipId, node.id, currentFrame, {
-      faceTurn: { yaw: faceTurn.yaw, pitch: faceTurn.pitch },
+    setNodeFaceTurnKey(character.id, node.id, currentFrame, {
+      yaw: faceTurn.yaw, pitch: faceTurn.pitch,
     });
-  }, [activeClipId, node.id, currentFrame, faceTurn, addNodeKeyframe]);
+  }, [character.id, node.id, currentFrame, faceTurn, setNodeFaceTurnKey]);
 
   // 找到该节点当前方向的精灵，进 sprite_edit 标注
   const handleAnnotate = useCallback(() => {
@@ -125,8 +123,7 @@ export function FaceTurnPanel({
           variant="outline"
           className="flex-1 h-7 text-[10px] border-[#1e1e3a] text-gray-300 hover:text-white gap-1"
           onClick={handleKeyframe}
-          disabled={!activeClipId}
-          title={activeClipId ? `在第 ${currentFrame} 帧记录转面` : '无激活片段'}
+          title={`在第 ${currentFrame} 帧记录转面`}
         >
           <KeyRound className="size-3" />
           打关键帧

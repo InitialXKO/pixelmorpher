@@ -48,7 +48,7 @@ export interface PuppetSessionState {
 
   /**
    * 确保角色的木偶动画片段存在，返回 clip id。
-   * 不存在则创建（12fps / 24 帧默认值）。
+   * 不存在则创建一个归属该角色的片段（时间窗缺省为工程全程）。
    */
   ensurePuppetClip: (characterId: string) => string | null;
 
@@ -95,12 +95,7 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
       }
       return existing.id;
     }
-    const clip = project.addAnimationClip(`${character.name}动画`);
-    project.updateAnimationClip(clip.id, {
-      puppetCharacterId: characterId,
-      frameRate: 12,
-      totalFrames: 24,
-    });
+    const clip = project.addAnimationClip(`${character.name}动画`, characterId);
     return clip.id;
   },
 
@@ -140,71 +135,84 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
     const { performCharacterId } = get();
     if (!performCharacterId) return;
     const project = useProjectStore.getState();
-    const character = Object.values(project.unifiedCharacters ?? {}).find((c) => c.id === performCharacterId);
-    const clipId = get().ensurePuppetClip(performCharacterId);
-    if (!character || !clipId) return;
+    const character = project.unifiedCharacters[performCharacterId];
+    if (!character) return;
 
     const frame = project.currentFrame;
-    const direction = 0;
-    const latitude = 0;
 
     // 录制“当前可见姿态”：用关键帧插值求出每节点在当前帧的实际值，
-    // 而不是 rest pose（perform 阶段拖动只写关键帧，不碰 rest pose）。
-    const clip = project.animationClips.find((c) => c.id === clipId);
-    const _uc = project.unifiedCharacters[performCharacterId];
-    const interpolated = _uc ? interpolateNodeKeyframes(_uc, frame) : new Map();
+    // 而不是 rest pose（perform 阶段拖动只写轨道，不碰 rest pose）。
+    // 姿态写入节点轨道的通道点（渲染的唯一姿态数据源）；同帧的修饰器/
+    // 转面/图层附件点不属于姿态，保持不动。
+    const interpolated = interpolateNodeKeyframes(character, frame);
 
     project.pushUndo('录制姿态');
-    useProjectStore.setState((st) => ({
-      animationClips: st.animationClips.map((c) => {
-        if (c.id !== clipId) return c;
-        const existing = c.nodeKeyframes ?? [];
-        // 该帧该节点的旧关键帧全部替换
-        const nodeIds = new Set(Object.keys(_uc?.nodes ?? {}));
-        const kept = existing.filter((kf) => !(kf.frame === frame && nodeIds.has(kf.nodeId)));
-        const fresh = Object.values(_uc?.nodes ?? {}).map((node) => {
-          const iv = interpolated.get(node.id);
-          return {
-            id: crypto.randomUUID(),
-            nodeId: node.id,
-            frame,
-            angle: iv?.angle ?? node.transform.angle,
-            stretch: iv?.stretch ?? node.transform.stretch,
-            scaleX: iv?.scaleX ?? node.transform.scaleX ?? 1,
-            x: iv?.x ?? node.transform.x,
-            y: iv?.y ?? node.transform.y,
-            variantIndex: 0,
-          };
-        });
-        return { ...c, puppetNodeKeyframes: [...kept, ...fresh] };
-      }),
-    }));
+    useProjectStore.setState((st) => {
+      const ch = st.unifiedCharacters[performCharacterId];
+      if (!ch) return st;
+      const nodes: typeof ch.nodes = {};
+      for (const node of Object.values(ch.nodes)) {
+        const iv = interpolated.get(node.id);
+        const setTrack = (
+          tracks: typeof node.tracks,
+          name: 'angle' | 'x' | 'y' | 'stretch' | 'scaleX',
+          value: number,
+        ) => {
+          const track = tracks?.[name] ?? { keyframes: [], interpolation: 'linear' as const };
+          const idx = track.keyframes.findIndex((k) => k.frame === frame);
+          const keyframes = idx >= 0
+            ? track.keyframes.map((k, i) => (i === idx ? { ...k, value } : k))
+            : [...track.keyframes, { frame, value }].sort((a, b) => a.frame - b.frame);
+          return { ...track, keyframes };
+        };
+        let tracks = node.tracks ?? {};
+        tracks = { ...tracks, angle: setTrack(tracks, 'angle', iv?.angle ?? node.transform.angle) };
+        tracks = { ...tracks, stretch: setTrack(tracks, 'stretch', iv?.stretch ?? node.transform.stretch) };
+        tracks = { ...tracks, scaleX: setTrack(tracks, 'scaleX', iv?.scaleX ?? node.transform.scaleX ?? 1) };
+        tracks = { ...tracks, x: setTrack(tracks, 'x', iv?.x ?? node.transform.x) };
+        tracks = { ...tracks, y: setTrack(tracks, 'y', iv?.y ?? node.transform.y) };
+        nodes[node.id] = { ...node, tracks };
+      }
+      return {
+        unifiedCharacters: {
+          ...st.unifiedCharacters,
+          [performCharacterId]: { ...ch, nodes },
+        },
+      };
+    });
   },
 
   clearFramePose: () => {
     const { performCharacterId } = get();
     if (!performCharacterId) return;
     const project = useProjectStore.getState();
-    const character = Object.values(project.unifiedCharacters ?? {}).find((c) => c.id === performCharacterId);
-    const clip = project.animationClips.find(
-      (c) => true && c.puppetCharacterId === performCharacterId
-    );
-    if (!character || !clip) return;
+    const character = project.unifiedCharacters[performCharacterId];
+    if (!character) return;
 
     const frame = project.currentFrame;
-    const nodeIds = new Set(Object.keys(character.nodes ?? {}));
     project.pushUndo('清除本帧姿态');
-    useProjectStore.setState((st) => ({
-      animationClips: st.animationClips.map((c) =>
-        c.id === clip.id
-          ? {
-              ...c,
-              puppetNodeKeyframes: (c.nodeKeyframes ?? []).filter(
-                (kf) => !(kf.frame === frame && nodeIds.has(kf.nodeId))
-              ),
-            }
-          : c
-      ),
-    }));
+    useProjectStore.setState((st) => {
+      const ch = st.unifiedCharacters[performCharacterId];
+      if (!ch) return st;
+      const nodes: typeof ch.nodes = {};
+      for (const node of Object.values(ch.nodes)) {
+        if (!node.tracks) { nodes[node.id] = node; continue; }
+        const tracks: typeof node.tracks = {};
+        for (const [key, track] of Object.entries(node.tracks)) {
+          if (!track) continue;
+          tracks[key as keyof typeof tracks] = {
+            ...track,
+            keyframes: track.keyframes.filter((k: { frame: number }) => k.frame !== frame),
+          } as never;
+        }
+        nodes[node.id] = { ...node, tracks };
+      }
+      return {
+        unifiedCharacters: {
+          ...st.unifiedCharacters,
+          [performCharacterId]: { ...ch, nodes },
+        },
+      };
+    });
   },
 }));

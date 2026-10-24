@@ -21,7 +21,7 @@
 //   求解之前，绕链根当前世界位把图输出转 θ（改在 IK 蓝图的输入端）。
 // - 角色级蓝图（角色/状态/全局）里指向原节点的引用不改（外部引用留在原肢体）。
 
-import type { Character, Node, IKChain, NodeKeyframe, CostumeStateKeyframe, ModifierInstance } from './unified-types';
+import type { Character, Node, IKChain, CostumeStateKeyframe, ModifierInstance } from './unified-types';
 import { computeWorldTransforms } from './unified-render';
 import { subToPx, ikTargetMirror } from './unified-types';
 import { addModifierNodeToBlueprint } from './blueprint/migrate';
@@ -303,36 +303,20 @@ export function cloneSubtreeTransposed(
 }
 
 /**
- * 剪辑级跟随（纯函数）：把属于该角色的 nodeKeyframes 按 idMap 原样复制一份
- * （角度不改——转位由克隆根的 rotate 修改器在渲染期叠加），并给状态关键帧
- * 的 slotChanges 补新 slotKey 同值。无可复制内容时返回 null（剪辑不变）。
+ * 剪辑级跟随（纯函数）：给状态关键帧的 slotChanges 补新 slotKey 同值。
+ * （关键帧修饰器/转面/姿态自片段统一后都在节点轨道里，随节点克隆自动
+ * 跟随，不再有剪辑级关键帧复制。）
  */
-export function cloneClipDataForTranspose<T extends { puppetCharacterId?: string; nodeKeyframes?: NodeKeyframe[]; stateKeyframes?: CostumeStateKeyframe[] }>(
+export function cloneClipDataForTranspose<T extends { puppetCharacterId?: string; stateKeyframes?: CostumeStateKeyframe[] }>(
   clip: T,
   characterId: string,
   result: TransposeCloneResult,
-  nextId: IdFactory = defaultId,
+  // 保留形参位：调用方按位置传 id 工厂（关键帧复制删除后暂无用武之地）
+  _nextId: IdFactory = defaultId,
 ): T | null {
   if (clip.puppetCharacterId !== characterId) return null;
-  const { idMap, slotKeyMap } = result;
+  const { slotKeyMap } = result;
   let changed = false;
-
-  const srcKfs = clip.nodeKeyframes ?? [];
-  const additions: NodeKeyframe[] = [];
-  for (const kf of srcKfs) {
-    const newNodeId = idMap.get(kf.nodeId);
-    if (!newNodeId) continue;
-    additions.push({
-      ...deepClone(kf),
-      id: nextId('kf'),
-      nodeId: newNodeId,
-    });
-  }
-  let nodeKeyframes = clip.nodeKeyframes;
-  if (additions.length > 0) {
-    nodeKeyframes = [...srcKfs, ...additions];
-    changed = true;
-  }
 
   let stateKeyframes = clip.stateKeyframes;
   if (clip.stateKeyframes && slotKeyMap.size > 0) {
@@ -357,5 +341,5 @@ export function cloneClipDataForTranspose<T extends { puppetCharacterId?: string
     }
   }
 
-  return changed ? { ...clip, nodeKeyframes, stateKeyframes } : null;
+  return changed ? { ...clip, stateKeyframes } : null;
 }
