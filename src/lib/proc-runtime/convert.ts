@@ -103,6 +103,9 @@ export interface RuntimePart {
   dynamic?: RuntimeDynamicInstance[];
   /** 发光场（默认服装集；换装集见 costumes[*].__glow） */
   glow?: RuntimeGlowEntry;
+  /** 裁剪面（锚点部件图空间，相对锚点瓦片中心、x 右 y 下）：
+   * 保留 a·x + b·y + c >= 0 侧；模板逐帧按两位姿合成到本部件图空间 */
+  clip?: { by: string; a: number; b: number; c: number };
   /** 精灵部件（无参数化外观）：模板按直贴图瓦片绘制 */
   spriteKind?: boolean;
   /** 精灵部件在默认服装集下的显示方向精灵网格（逐集见 costumes[*].__sprite） */
@@ -686,6 +689,24 @@ export function convertCharacterToRuntimePackage(
     }
     if (Object.keys(spriteMap).length > 0) entry.__sprite = spriteMap;
     costumes[cs.id] = entry;
+  }
+
+  // ---- 裁剪面：node.clipPlane → part.clip ----
+  // 数据口径：平面定义在锚点精灵图空间（相对图中心、x 右 y 下），
+  // convert 只做角度/偏移 → (a, b, c) 的直译（保留 a·x+b·y+c >= 0
+  // 侧），逐帧位姿合成在模板侧。锚点不是部件槽位则点名丢弃。
+  for (const part of parts) {
+    const node = Object.values(character.nodes).find((n) => n.slot?.slotKey === part.key);
+    const cp = node?.clipPlane;
+    if (!node || !cp) continue;
+    const anchorNode = character.nodes[cp.anchor];
+    const anchorSlot = anchorNode?.slot?.slotKey;
+    if (!anchorNode || !anchorSlot || !parts.some((p) => p.key === anchorSlot)) {
+      warnings.push(`裁剪面：节点 ${node.name} 的锚点 ${anchorNode?.name ?? cp.anchor} 不是部件槽位，裁剪未进包`);
+      continue;
+    }
+    const rad = (cp.angleDeg ?? 0) * Math.PI / 180;
+    part.clip = { by: anchorSlot, a: Math.cos(rad), b: Math.sin(rad), c: -(cp.offset ?? 0) };
   }
 
   // ---- 行为蓝图：nodeId → slotKey，逐图结构翻译 ----

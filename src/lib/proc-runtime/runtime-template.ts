@@ -453,8 +453,24 @@ function composePerformance(pose, perf, bpOut, w) {
   }
   return next;
 }
-/** 实例打包：55 float —— pos2 size2 rot1 pivotTile2 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 glowA/B/C 各4(rgb,强度)×3组 glowHz4+glowHz2(频率,相位)×3 glowSpace4(三组方向基准:0=精灵 1=世界,余位) glowStamp 每组4(形状,光晕,主方向,伸长)×3 */
-const INSTANCE_FLOATS = 55;
+/** 裁剪面合成：把锚点部件图空间的平面（相对锚点瓦片中心、x 右
+ * y 下，保留 a·x+b·y+c >= 0 侧）按两位姿变换到本部件图空间。
+ * el 只有 pos（瓦片中心世界位）与 rot；图空间坐标 g 与世界偏移
+ * 的关系 g = M(rot)·offset、M(θ)=[[c,s],[s,−c]]（与片元同式，
+ * M 对称且自逆）。锚点瓦片被镜像时其图空间 x 取反 → a 取反。 */
+function clipPlaneForPart(clip, selfEl, anchorEl, anchorMirrored) {
+  const a = anchorMirrored ? -clip.a : clip.a, b = clip.b, c0 = clip.c;
+  const ca = Math.cos(anchorEl.rot), sa = Math.sin(anchorEl.rot);
+  const vx = ca * a + sa * b, vy = sa * a - ca * b;
+  const cb = Math.cos(selfEl.rot), sb = Math.sin(selfEl.rot);
+  return [
+    cb * vx + sb * vy,
+    sb * vx - cb * vy,
+    c0 + vx * (selfEl.pos[0] - anchorEl.pos[0]) + vy * (selfEl.pos[1] - anchorEl.pos[1]),
+  ];
+}
+/** 实例打包：58 float —— pos2 size2 rot1 pivotTile2 clipC1 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 clipAB2 glowA/B/C 各4(rgb,强度)×3组 glowHz4+glowHz2(频率,相位)×3 glowSpace4(三组方向基准:0=精灵 1=世界,余位) glowStamp 每组4(形状,光晕,主方向,伸长)×3。裁剪面占 iRotTileC.w（c）与 iDeform.zw（a,b）——扩宽既有属性、不新增属性（守 16 属性上限） */
+const INSTANCE_FLOATS = 58;
 function packInstances(els) {
   const buf = new Float32Array(els.length * INSTANCE_FLOATS);
   els.forEach((el, i) => {
@@ -463,23 +479,26 @@ function packInstances(els) {
     buf[o + 2] = el.size[0]; buf[o + 3] = el.size[1];
     buf[o + 4] = el.rot;
     buf[o + 5] = el.tileCx; buf[o + 6] = el.tileCy;
-    buf[o + 7] = el.tile[0]; buf[o + 8] = el.tile[1]; buf[o + 9] = el.tile[2]; buf[o + 10] = el.tile[3];
-    buf[o + 11] = el.family; buf[o + 12] = el.seed;
-    buf[o + 13] = el.modes[0] + el.modes[1] * 8 + el.modes[2] * 64 + el.modes[3] * 512;
-    buf[o + 14] = el.composite || 0;
-    buf[o + 15] = el.param[0]; buf[o + 16] = el.param[1]; buf[o + 17] = el.param[2]; buf[o + 18] = el.ghost ? 1 : 0;
-    buf[o + 19] = el.deform ? el.deform[0] : 1;
-    buf[o + 20] = el.deform ? el.deform[1] : 1;
+    buf[o + 7] = el.clip ? el.clip[2] : 1;
+    buf[o + 8] = el.tile[0]; buf[o + 9] = el.tile[1]; buf[o + 10] = el.tile[2]; buf[o + 11] = el.tile[3];
+    buf[o + 12] = el.family; buf[o + 13] = el.seed;
+    buf[o + 14] = el.modes[0] + el.modes[1] * 8 + el.modes[2] * 64 + el.modes[3] * 512;
+    buf[o + 15] = el.composite || 0;
+    buf[o + 16] = el.param[0]; buf[o + 17] = el.param[1]; buf[o + 18] = el.param[2]; buf[o + 19] = el.ghost ? 1 : 0;
+    buf[o + 20] = el.deform ? el.deform[0] : 1;
+    buf[o + 21] = el.deform ? el.deform[1] : 1;
+    buf[o + 22] = el.clip ? el.clip[0] : 0;
+    buf[o + 23] = el.clip ? el.clip[1] : 0;
     const gl = el.glow || [];
     for (let gi = 0; gi < 3; gi++) {
       const g = gl[gi];
-      buf[o + 21 + gi * 4] = g ? g[0] : 0; buf[o + 22 + gi * 4] = g ? g[1] : 0;
-      buf[o + 23 + gi * 4] = g ? g[2] : 0; buf[o + 24 + gi * 4] = g ? g[3] : 0;
-      buf[o + 33 + gi * 2] = g ? g[4] : 0; buf[o + 34 + gi * 2] = g ? g[5] : 0;
-      buf[o + 39 + gi] = el.glowSpace && el.glowSpace[gi] ? 1 : 0;
+      buf[o + 24 + gi * 4] = g ? g[0] : 0; buf[o + 25 + gi * 4] = g ? g[1] : 0;
+      buf[o + 26 + gi * 4] = g ? g[2] : 0; buf[o + 27 + gi * 4] = g ? g[3] : 0;
+      buf[o + 36 + gi * 2] = g ? g[4] : 0; buf[o + 37 + gi * 2] = g ? g[5] : 0;
+      buf[o + 42 + gi] = el.glowSpace && el.glowSpace[gi] ? 1 : 0;
       const st = el.glowStamps && el.glowStamps[gi];
-      buf[o + 43 + gi * 4] = st ? st[0] : 4; buf[o + 44 + gi * 4] = st ? st[1] : 0;
-      buf[o + 45 + gi * 4] = st ? st[2] : 0; buf[o + 46 + gi * 4] = st ? st[3] : 0;
+      buf[o + 46 + gi * 4] = st ? st[0] : 4; buf[o + 47 + gi * 4] = st ? st[1] : 0;
+      buf[o + 48 + gi * 4] = st ? st[2] : 0; buf[o + 49 + gi * 4] = st ? st[3] : 0;
     }
   });
   return buf;
@@ -695,11 +714,11 @@ const partProg = makeProgram(
 // 只改声明与绑定，不动写入）：iPos+iSize→vec4，iRot+iTileC→vec3。
 layout(location=0) in vec2 aCorner;
 layout(location=1) in vec4 iPosSize;
-layout(location=2) in vec3 iRotTileC;
+layout(location=2) in vec4 iRotTileC;
 layout(location=3) in vec4 iTile;
 layout(location=4) in vec4 iMisc;
 layout(location=5) in vec4 iParam;
-layout(location=6) in vec2 iDeform;
+layout(location=6) in vec4 iDeform;
 layout(location=7) in vec4 iGlowA;
 layout(location=8) in vec4 iGlowB;
 layout(location=9) in vec4 iGlowC;
@@ -712,14 +731,15 @@ layout(location=15) in vec4 iGlowStampC;
 uniform vec2 uCam; uniform vec2 uViewHalf; uniform vec2 uRes;
 out vec2 vCenterScreen; out float vRot; out vec4 vTile; out vec2 vTileC; out vec4 vMisc; out vec4 vParam; out vec2 vDeform;
 out vec4 vGlowA; out vec4 vGlowB; out vec4 vGlowC; out vec4 vGlowHz; out vec2 vGlowHz2; out vec4 vGlowSpace;
-out vec4 vGlowStampA; out vec4 vGlowStampB; out vec4 vGlowStampC;
+out vec4 vGlowStampA; out vec4 vGlowStampB; out vec4 vGlowStampC; out vec3 vClip;
 void main(){
   float c = cos(iRotTileC.x), s = sin(iRotTileC.x);
   vec2 local = aCorner * iPosSize.zw;
   vec2 woff = vec2(local.x * c + local.y * s, local.x * s - local.y * c);
   vec2 world = iPosSize.xy + woff;
   vCenterScreen = ((iPosSize.xy - uCam) / uViewHalf * 0.5 + 0.5) * uRes;
-  vRot = iRotTileC.x; vTile = iTile; vTileC = iRotTileC.yz; vMisc = iMisc; vParam = iParam; vDeform = iDeform;
+  vRot = iRotTileC.x; vTile = iTile; vTileC = iRotTileC.yz; vMisc = iMisc; vParam = iParam; vDeform = iDeform.xy;
+  vClip = vec3(iDeform.z, iDeform.w, iRotTileC.w);
   vGlowA = iGlowA; vGlowB = iGlowB; vGlowC = iGlowC; vGlowHz = iGlowHz; vGlowHz2 = iGlowHz2; vGlowSpace = iGlowSpace;
   vGlowStampA = iGlowStampA; vGlowStampB = iGlowStampB; vGlowStampC = iGlowStampC;
   float z = 0.9 - float(gl_InstanceID) * 0.02;
@@ -730,7 +750,7 @@ precision highp float;
 uniform sampler2D uAtlas; uniform sampler2D uPal; uniform sampler2D uBase; uniform sampler2D uGlow; uniform float uTime;
 in vec2 vCenterScreen; in float vRot; in vec4 vTile; in vec2 vTileC; in vec4 vMisc; in vec4 vParam; in vec2 vDeform;
 in vec4 vGlowA; in vec4 vGlowB; in vec4 vGlowC; in vec4 vGlowHz; in vec2 vGlowHz2; in vec4 vGlowSpace;
-in vec4 vGlowStampA; in vec4 vGlowStampB; in vec4 vGlowStampC;
+in vec4 vGlowStampA; in vec4 vGlowStampB; in vec4 vGlowStampC; in vec3 vClip;
 out vec4 oColor;
 vec3 gF3 = vec3(0.0);
 vec3 gK3 = vec3(0.0);
@@ -823,6 +843,9 @@ void main(){
   float c = cos(vRot), s = sin(vRot);
   vec2 lup = vec2(d.x * c + d.y * s, -d.x * s + d.y * c);
   vec2 gfv = vec2(lup.x, -lup.y);
+  // 裁剪面（本部件图空间，几何切：按未形变的本地坐标判，保留
+  // vClip.x·x + vClip.y·y + vClip.z >= 0 侧；无裁剪时为 (0,0,1)）
+  if (vClip.x * gfv.x + vClip.y * gfv.y + vClip.z < 0.0) discard;
   if (vDeform.x != 1.0 || vDeform.y != 1.0) gfv = vec2(gfv.x / max(vDeform.x, 0.05), gfv.y / max(vDeform.y, 0.05));
   ivec2 g = ivec2(floor(gfv + 0.5));
   if (vGlowA.w > 0.0 || vGlowB.w > 0.0 || vGlowC.w > 0.0) {
@@ -939,7 +962,7 @@ const instBuf = gl.createBuffer();
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
-  const strides = [[1, 4, 0], [2, 3, 4], [3, 4, 7], [4, 4, 11], [5, 4, 15], [6, 2, 19], [7, 4, 21], [8, 4, 25], [9, 4, 29], [10, 4, 33], [11, 2, 37], [12, 4, 39], [13, 4, 43], [14, 4, 47], [15, 4, 51]];
+  const strides = [[1, 4, 0], [2, 4, 4], [3, 4, 8], [4, 4, 12], [5, 4, 16], [6, 4, 20], [7, 4, 24], [8, 4, 28], [9, 4, 32], [10, 4, 36], [11, 2, 40], [12, 4, 42], [13, 4, 46], [14, 4, 50], [15, 4, 54]];
   for (const sDef of strides) {
     gl.enableVertexAttribArray(sDef[0]);
     gl.vertexAttribPointer(sDef[0], sDef[1], gl.FLOAT, false, INSTANCE_FLOATS * 4, sDef[2] * 4);
@@ -1417,6 +1440,16 @@ function frame(now) {
         }
       }
     }
+  }
+  // 裁剪面逐帧合成：锚点部件与本部件的当前位姿 → 本部件图空间
+  // 平面（挂到 el 上，残影快照随后拷贝 el 时一并带走）
+  for (const part of PARTS) {
+    if (!part.clip) continue;
+    const selfEl = elByKey.get(part.key);
+    const anchorEl = elByKey.get(part.clip.by);
+    if (!selfEl || !anchorEl) continue;
+    const anchorPart = PARTS.find((p) => p.key === part.clip.by);
+    selfEl.clip = clipPlaneForPart(part.clip, selfEl, anchorEl, anchorPart ? variantMirrored(anchorPart, char.variant) : false);
   }
   for (const act of activePerfs) {
     const ai = act.perf.afterimage;

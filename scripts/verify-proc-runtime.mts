@@ -1363,4 +1363,92 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   }
 }
 
+// ---------- U) 裁剪面：convert 透传 + 模板平面合成 ----------
+{
+  const appU = createDefaultParametricAppearance();
+  const handU = makeNode('handU', '持剑手', 'hand');
+  const bladeU = makeNode('bladeU', '光束', 'blade', 'handU');
+  (bladeU as unknown as { clipPlane?: unknown }).clipPlane = { anchor: 'handU', angleDeg: 90, offset: 3 };
+  const chU = {
+    id: 'chU', name: '裁剪面',
+    nodes: { handU, bladeU },
+    rootNodeId: 'handU', rootNodeIds: ['handU'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: {
+        hand: { ...createDefaultCostumePiece('hand'), parametric: appU },
+        blade: { ...createDefaultCostumePiece('blade'), parametric: appU },
+      },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkgU = convertCharacterToRuntimePackage(chU, undefined, { frameRate: 8 });
+  const bladePart = pkgU.parts.find((p) => p.key === 'blade');
+  check('U1 裁剪面进包（锚点/角度/偏移直译为平面系数）',
+    !!bladePart?.clip && bladePart.clip.by === 'hand'
+      && Math.abs(bladePart.clip.a) < 1e-9 && Math.abs(bladePart.clip.b - 1) < 1e-9
+      && Math.abs(bladePart.clip.c + 3) < 1e-9,
+    JSON.stringify(bladePart?.clip));
+  const bladeBad = makeNode('bladeBad', '光束坏锚', 'blade', 'handU');
+  (bladeBad as unknown as { clipPlane?: unknown }).clipPlane = { anchor: 'noSlotNode', angleDeg: 0, offset: 0 };
+  const noSlot = makeNode('noSlotNode', '无槽节点', null);
+  const chU2 = {
+    ...chU,
+    nodes: { handU, bladeBad, noSlotNode: noSlot },
+  } as unknown as Character;
+  const pkgU2 = convertCharacterToRuntimePackage(chU2, undefined, { frameRate: 8 });
+  check('U2 锚点不是部件槽位 → 点名警告且不带裁剪',
+    pkgU2.warnings.some((w) => w.includes('裁剪面'))
+      && !pkgU2.parts.find((p) => p.key === 'blade')?.clip,
+    pkgU2.warnings.filter((w) => w.includes('裁剪')).join('；'));
+
+  // 模板平面合成纯函数：性质检验——随机位姿/平面/采样点下，
+  // 「按锚点空间定义判保留」与「按合成平面判保留」必须一致
+  {
+    const { readFileSync } = await import('node:fs');
+    const tplSrc = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+    const start = tplSrc.indexOf('function clipPlaneForPart');
+    check('U3 模板含裁剪面合成函数', start >= 0);
+    if (start >= 0) {
+      let depth = 0, end = start;
+      for (let i = tplSrc.indexOf('{', start); i < tplSrc.length; i++) {
+        if (tplSrc[i] === '{') depth++;
+        else if (tplSrc[i] === '}' && --depth === 0) { end = i + 1; break; }
+      }
+      const fn = new Function(`${tplSrc.slice(start, end)}\nreturn clipPlaneForPart;`)() as
+        (clip: { a: number; b: number; c: number }, s: { pos: number[]; rot: number }, a2: { pos: number[]; rot: number }, mir: boolean) => number[];
+      const M = (rot: number, x: number, y: number) => {
+        const c = Math.cos(rot), s = Math.sin(rot);
+        return [c * x + s * y, s * x - c * y];
+      };
+      let seed = 42;
+      const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+      let consistent = true;
+      for (let trial = 0; trial < 300 && consistent; trial++) {
+        const selfEl = { pos: [rnd() * 40 - 20, rnd() * 40 - 20], rot: rnd() * Math.PI * 2 };
+        const anchEl = { pos: [rnd() * 40 - 20, rnd() * 40 - 20], rot: rnd() * Math.PI * 2 };
+        const th = rnd() * Math.PI * 2;
+        const clip = { a: Math.cos(th), b: Math.sin(th), c: rnd() * 10 - 5 };
+        const mir = trial % 3 === 0;
+        const comp = fn(clip, selfEl, anchEl, mir);
+        for (let s2 = 0; s2 < 8; s2++) {
+          const w: [number, number] = [rnd() * 60 - 30, rnd() * 60 - 30];
+          // 锚点空间判定：世界点 → 锚点图空间（镜像时 x 取反）
+          const ao = M(anchEl.rot, w[0] - anchEl.pos[0], w[1] - anchEl.pos[1]);
+          const lhs = (mir ? -clip.a : clip.a) * ao[0] + clip.b * ao[1] + clip.c >= 0;
+          const so = M(selfEl.rot, w[0] - selfEl.pos[0], w[1] - selfEl.pos[1]);
+          const rhs = comp[0] * so[0] + comp[1] * so[1] + comp[2] >= 0;
+          if (lhs !== rhs) { consistent = false; break; }
+        }
+      }
+      check('U4 平面合成与锚点空间定义逐点一致（300 组随机位姿×8 点，含镜像）', consistent);
+    }
+    check('U5 实例布局 58 float + 片元裁剪 discard + vClip 通道',
+      tplSrc.includes('const INSTANCE_FLOATS = 58')
+        && tplSrc.includes('vClip.x * gfv.x + vClip.y * gfv.y + vClip.z < 0.0) discard')
+        && tplSrc.includes('buf[o + 7] = el.clip ? el.clip[2] : 1')
+        && tplSrc.includes('buf[o + 22] = el.clip ? el.clip[0] : 0'));
+  }
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

@@ -481,6 +481,61 @@ function RigNodeProperties({
         />
       </div>
 
+      {/* 裁剪面：以锚点精灵上的一条线为界，裁掉本节点法线负侧。
+          光束类用法：本节点挂光束、锚点选持剑手，线贴剑柄出口——
+          光束滑动伸出时柄内段被裁掉（移动+部分隐藏）。 */}
+      <div>
+        <div className="flex items-center gap-2">
+          <Label className="text-[10px] text-gray-500">裁剪面</Label>
+          <input
+            type="checkbox"
+            checked={!!node.clipPlane}
+            onChange={(e) => onUpdate({
+              clipPlane: e.target.checked
+                ? { anchor: node.parentId ?? node.id, angleDeg: 0, offset: 0 }
+                : undefined,
+            })}
+          />
+          <span className="text-[9px] text-gray-500">以锚点精灵上的一条线裁掉本节点的负侧</span>
+        </div>
+        {node.clipPlane && character && (
+          <div className="mt-1 space-y-1">
+            <select
+              value={node.clipPlane.anchor}
+              onChange={(e) => onUpdate({ clipPlane: { ...node.clipPlane!, anchor: e.target.value } })}
+              className="h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded w-full"
+            >
+              {Object.values(character.nodes).map((n) => (
+                <option key={n.id} value={n.id}>{n.name}{n.id === node.id ? '（自身：静态裁剪）' : ''}</option>
+              ))}
+            </select>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-[9px] text-gray-600">法线角度 °</Label>
+                <Input
+                  type="number"
+                  value={node.clipPlane.angleDeg}
+                  onChange={(e) => onUpdate({ clipPlane: { ...node.clipPlane!, angleDeg: Number(e.target.value) || 0 } })}
+                  className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
+                  title="相对锚点精灵图坐标（x 右 y 下，角度顺时针为正）；保留法线指向的一侧"
+                />
+              </div>
+              <div>
+                <Label className="text-[9px] text-gray-600">偏移 px</Label>
+                <Input
+                  type="number"
+                  value={node.clipPlane.offset}
+                  onChange={(e) => onUpdate({ clipPlane: { ...node.clipPlane!, offset: Number(e.target.value) || 0 } })}
+                  className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
+                  title="裁剪线沿法线距锚点精灵中心的距离（px）"
+                />
+              </div>
+            </div>
+            <p className="text-[9px] text-gray-600">线的位置以锚点精灵的图为准：法线从图中心出发转到角度方向、再沿法线移偏移量，过该点垂直于法线的直线即裁剪线。</p>
+          </div>
+        )}
+      </div>
+
       {/* 动态模式（节点挂载：角色固有，不随换装变；与服装件挂载按效果位合并） */}
       <div>
         <Label className="text-[10px] text-gray-500 uppercase tracking-wider">动态效果（节点）</Label>

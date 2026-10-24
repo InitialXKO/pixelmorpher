@@ -1403,6 +1403,59 @@ export function pickClipStateKeyframes(
   return clip.stateKeyframes;
 }
 
+/** 裁剪面 → 画布 px 多边形：平面定义在锚点精灵图空间（相对图
+ * 中心、x 右 y 下，保留法线正侧 n·p >= offset）。经锚点指令的当
+ * 帧位姿（位置/角度/镜像/缩放，与 renderNodeSprite 的变换链同
+ * 式：镜像先翻进位图、再旋转）映射到画布，再与画布大矩形求交
+ * （Sutherland–Hodgman 单边裁剪）。 */
+function clipPolygonFor(
+  cp: { angleDeg: number; offset: number },
+  anchor: NodeRenderInstruction,
+  canvasWidth: number,
+  canvasHeight: number,
+): [number, number][] | undefined {
+  const spr = anchor.sprite;
+  const plugX = spr.plug ? subToPx(spr.plug.x) : spr.width / 2;
+  const plugY = spr.plug ? subToPx(spr.plug.y) : spr.height / 2;
+  const rad = (cp.angleDeg * Math.PI) / 180;
+  const nx = Math.cos(rad), ny = Math.sin(rad);
+  const diag = Math.hypot(spr.width, spr.height) + Math.hypot(canvasWidth, canvasHeight);
+  const lx = spr.width / 2 + nx * cp.offset, ly = spr.height / 2 + ny * cp.offset;
+  const dx = -ny, dy = nx;
+  const aRad = (anchor.angle * Math.PI) / 180;
+  const cos = Math.cos(aRad), sin = Math.sin(aRad);
+  const ax = subToPx(anchor.worldX), ay = subToPx(anchor.worldY);
+  const sx = anchor.scaleX ?? 1, sy = anchor.stretch || 1;
+  const toCanvas = (qx: number, qy: number): [number, number] => {
+    let ox = (qx - plugX) * sx, oy = (qy - plugY) * sy;
+    if (anchor.mirror) ox = -ox;
+    return [ax + ox * cos - oy * sin, ay + ox * sin + oy * cos];
+  };
+  const p1 = toCanvas(lx - dx * diag, ly - dy * diag);
+  const p2 = toCanvas(lx + dx * diag, ly + dy * diag);
+  const keep = toCanvas(lx + nx * diag, ly + ny * diag);
+  const side = (p: [number, number]) =>
+    (p2[0] - p1[0]) * (p[1] - p1[1]) - (p2[1] - p1[1]) * (p[0] - p1[0]);
+  const kSign = side(keep) >= 0 ? 1 : -1;
+  let poly: [number, number][] = [
+    [-canvasWidth, -canvasHeight], [canvasWidth * 2, -canvasHeight],
+    [canvasWidth * 2, canvasHeight * 2], [-canvasWidth, canvasHeight * 2],
+  ];
+  const out: [number, number][] = [];
+  for (let i = 0; i < poly.length; i++) {
+    const cur = poly[i]!, prev = poly[(i + poly.length - 1) % poly.length]!;
+    const sc = side(cur), sp = side(prev);
+    const curIn = sc * kSign >= 0, prevIn = sp * kSign >= 0;
+    if (curIn !== prevIn) {
+      const t = sp / (sp - sc);
+      out.push([prev[0] + (cur[0] - prev[0]) * t, prev[1] + (cur[1] - prev[1]) * t]);
+    }
+    if (curIn) out.push(cur);
+  }
+  poly = out;
+  return poly.length >= 3 ? poly : undefined;
+}
+
 export function generateRenderPlan(
   character: Character,
   frame: number,
@@ -1705,6 +1758,19 @@ export function generateRenderPlan(
     });
   }
 
+  // 裁剪面第二遍：指令齐备后，按锚点指令的当帧位姿把平面映射到
+  // 画布并求多边形（锚点当帧无指令 = 无精灵可锚 → 不裁）
+  {
+    const byId = new Map(nodeInstructions.map((i) => [i.nodeId, i]));
+    for (const ins of nodeInstructions) {
+      const cp = character.nodes[ins.nodeId]?.clipPlane;
+      if (!cp) continue;
+      const anchorIns = byId.get(cp.anchor);
+      if (!anchorIns) continue;
+      ins.clipPath = clipPolygonFor(cp, anchorIns, canvasWidth, canvasHeight);
+    }
+  }
+
   // Step 5: Generate disc instructions
   const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots, activeCostumeSet, spriteTable, geometryDirection);
 
@@ -1755,21 +1821,34 @@ export function executeRenderPlan(
 
   // Character blueprint path: composite to offscreen → post-process → draw.
   // Falls through to legacy path when blueprint is missing or evaluation fails.
+  const drawOne = (c: CanvasRenderingContext2D, instruction: NodeRenderInstruction) => {
+    if (instruction.clipPath && instruction.clipPath.length >= 3) {
+      c.save();
+      c.beginPath();
+      instruction.clipPath.forEach(([x, y], i) => (i === 0 ? c.moveTo(x, y) : c.lineTo(x, y)));
+      c.closePath();
+      c.clip();
+      renderNodeSprite(c, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
+      c.restore();
+    } else {
+      renderNodeSprite(c, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
+    }
+  };
   const useCharBlueprint = !!plan.characterBlueprint;
   if (useCharBlueprint) {
-    const ok = renderCharacterWithBlueprint(ctx, plan, canvasWidth, canvasHeight);
+    const ok = renderCharacterWithBlueprint(ctx, plan, canvasWidth, canvasHeight, drawOne);
     if (!ok) {
       // Fallback: legacy per-node draw (blueprint invalid — don't lose the frame)
       // 关节盘先行（不参与深度排序、始终被遮挡），节点随后按深度序绘制
       for (const disc of plan.discInstructions) renderDisc(ctx, disc);
       for (const instruction of plan.sortedInstructions) {
-        renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
+        drawOne(ctx, instruction);
       }
     }
   } else {
     for (const disc of plan.discInstructions) renderDisc(ctx, disc);
     for (const instruction of plan.sortedInstructions) {
-      renderNodeSprite(ctx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
+      drawOne(ctx, instruction);
     }
   }
 
@@ -2628,6 +2707,7 @@ function renderCharacterWithBlueprint(
   plan: RenderPlan,
   canvasWidth: number,
   canvasHeight: number,
+  drawOne?: (c: CanvasRenderingContext2D, instruction: NodeRenderInstruction) => void,
 ): boolean {
   const blueprint = plan.characterBlueprint;
   if (!blueprint) return false;
@@ -2643,7 +2723,8 @@ function renderCharacterWithBlueprint(
   // 关节盘先行（不参与深度排序、始终被遮挡），节点随后按深度序绘制
   for (const disc of plan.discInstructions) renderDisc(offCtx, disc);
   for (const instruction of plan.sortedInstructions) {
-    renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
+    if (drawOne) drawOne(offCtx, instruction);
+    else renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
   }
 
   // Step 2: read back → character_source pixels

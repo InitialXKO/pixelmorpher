@@ -759,6 +759,14 @@ export interface Node {
   // ---- Visibility ----
   visible: boolean;
 
+  // ---- 裁剪面（半平面裁剪，渲染本节点视觉时生效，子节点不受影响）----
+  // 平面定义在锚点节点的精灵图空间：以锚点精灵中心为原点、x 右
+  // y 下（图坐标），法线角 angleDeg、沿法线偏移 offset px，保留
+  // 法线正侧（n·p >= offset）。典型用法：光束节点锚定持剑手节点，
+  // 平面贴在剑柄出口——光束滑动时柄内段被裁掉（移动+部分隐藏）。
+  // 锚点 = 本节点自身时为静态本地裁剪。锚点须为同角色节点。
+  clipPlane?: { anchor: string; angleDeg: number; offset: number };
+
   // ---- Costume Reference ----
   slot?: CostumePiece;            // Optional: costume slot definition (links node to a costume slot)
 
@@ -1327,6 +1335,9 @@ export interface NodeRenderInstruction {
   modifiers: ModifierInstance[];  // Pixel-level modifiers to apply before drawing
   frame: number;                 // Current frame (for modifier param resolution)
   frameRate: number;             // Frame rate (for modifier param resolution)
+  /** 裁剪多边形（画布 px 坐标）：执行端在本指令绘制前 clip、绘后
+   * restore。由计划生成端按 node.clipPlane 与锚点节点当帧位姿算出。 */
+  clipPath?: [number, number][];
   /** X-axis scale factor (default 1). `stretch` covers the Y axis. */
   scaleX?: number;
   /** Skew transforms in degrees, applied after scale (matches old pipeline order). */
