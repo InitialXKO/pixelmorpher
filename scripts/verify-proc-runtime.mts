@@ -1300,6 +1300,12 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     new Function(htmlT.slice(s, e));
   } catch (err) { scriptParseError = err instanceof Error ? err.message : String(err); }
   check('T13 生成页面内嵌脚本可解析（模板字面量语法门，防游离括号类断裂）', scriptParseError === null, scriptParseError ?? '');
+  // T14 属性预算门：WebGL 只保证 16 个顶点属性；顶点着色器声明数与最大 location 必须守住 0-15。
+  const vsStart = htmlT.indexOf('layout(location=0) in vec2 aCorner');
+  const vsEnd = htmlT.indexOf('void main(){', vsStart);
+  const vsLocs = [...htmlT.slice(vsStart, vsEnd).matchAll(/layout\(location=(\d+)\)/g)].map((m) => +m[1]);
+  check('T14 顶点着色器属性数≤16 且最大 location≤15（防属性超限致着色器编译失败）',
+    vsLocs.length === 16 && Math.max(...vsLocs) === 15, `locs=${vsLocs.join(',')}`);
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

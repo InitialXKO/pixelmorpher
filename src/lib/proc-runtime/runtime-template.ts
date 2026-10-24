@@ -690,35 +690,36 @@ function makeProgram(vs, fs) {
 }
 const partProg = makeProgram(
 \`#version 300 es
+// 属性预算：WebGL 只保证 16 个顶点属性（location 0-15），18 个会编译失败。
+// 故合并两对相邻字段（实例数据 55 float 的顺序与 packInstances 完全一致，
+// 只改声明与绑定，不动写入）：iPos+iSize→vec4，iRot+iTileC→vec3。
 layout(location=0) in vec2 aCorner;
-layout(location=1) in vec2 iPos;
-layout(location=2) in vec2 iSize;
-layout(location=3) in float iRot;
-layout(location=4) in vec2 iTileC;
-layout(location=5) in vec4 iTile;
-layout(location=6) in vec4 iMisc;
-layout(location=7) in vec4 iParam;
-layout(location=8) in vec2 iDeform;
-layout(location=9) in vec4 iGlowA;
-layout(location=10) in vec4 iGlowB;
-layout(location=11) in vec4 iGlowC;
-layout(location=12) in vec4 iGlowHz;
-layout(location=13) in vec2 iGlowHz2;
-layout(location=14) in vec4 iGlowSpace;
-layout(location=15) in vec4 iGlowStampA;
-layout(location=16) in vec4 iGlowStampB;
-layout(location=17) in vec4 iGlowStampC;
+layout(location=1) in vec4 iPosSize;
+layout(location=2) in vec3 iRotTileC;
+layout(location=3) in vec4 iTile;
+layout(location=4) in vec4 iMisc;
+layout(location=5) in vec4 iParam;
+layout(location=6) in vec2 iDeform;
+layout(location=7) in vec4 iGlowA;
+layout(location=8) in vec4 iGlowB;
+layout(location=9) in vec4 iGlowC;
+layout(location=10) in vec4 iGlowHz;
+layout(location=11) in vec2 iGlowHz2;
+layout(location=12) in vec4 iGlowSpace;
+layout(location=13) in vec4 iGlowStampA;
+layout(location=14) in vec4 iGlowStampB;
+layout(location=15) in vec4 iGlowStampC;
 uniform vec2 uCam; uniform vec2 uViewHalf; uniform vec2 uRes;
 out vec2 vCenterScreen; out float vRot; out vec4 vTile; out vec2 vTileC; out vec4 vMisc; out vec4 vParam; out vec2 vDeform;
 out vec4 vGlowA; out vec4 vGlowB; out vec4 vGlowC; out vec4 vGlowHz; out vec2 vGlowHz2; out vec4 vGlowSpace;
 out vec4 vGlowStampA; out vec4 vGlowStampB; out vec4 vGlowStampC;
 void main(){
-  float c = cos(iRot), s = sin(iRot);
-  vec2 local = aCorner * iSize;
+  float c = cos(iRotTileC.x), s = sin(iRotTileC.x);
+  vec2 local = aCorner * iPosSize.zw;
   vec2 woff = vec2(local.x * c + local.y * s, local.x * s - local.y * c);
-  vec2 world = iPos + woff;
-  vCenterScreen = ((iPos - uCam) / uViewHalf * 0.5 + 0.5) * uRes;
-  vRot = iRot; vTile = iTile; vTileC = iTileC; vMisc = iMisc; vParam = iParam; vDeform = iDeform;
+  vec2 world = iPosSize.xy + woff;
+  vCenterScreen = ((iPosSize.xy - uCam) / uViewHalf * 0.5 + 0.5) * uRes;
+  vRot = iRotTileC.x; vTile = iTile; vTileC = iRotTileC.yz; vMisc = iMisc; vParam = iParam; vDeform = iDeform;
   vGlowA = iGlowA; vGlowB = iGlowB; vGlowC = iGlowC; vGlowHz = iGlowHz; vGlowHz2 = iGlowHz2; vGlowSpace = iGlowSpace;
   vGlowStampA = iGlowStampA; vGlowStampB = iGlowStampB; vGlowStampC = iGlowStampC;
   float z = 0.9 - float(gl_InstanceID) * 0.02;
@@ -938,7 +939,7 @@ const instBuf = gl.createBuffer();
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
-  const strides = [[1, 2, 0], [2, 2, 2], [3, 1, 4], [4, 2, 5], [5, 4, 7], [6, 4, 11], [7, 4, 15], [8, 2, 19], [9, 4, 21], [10, 4, 25], [11, 4, 29], [12, 4, 33], [13, 2, 37], [14, 4, 39], [15, 4, 43], [16, 4, 47], [17, 4, 51]];
+  const strides = [[1, 4, 0], [2, 3, 4], [3, 4, 7], [4, 4, 11], [5, 4, 15], [6, 2, 19], [7, 4, 21], [8, 4, 25], [9, 4, 29], [10, 4, 33], [11, 2, 37], [12, 4, 39], [13, 4, 43], [14, 4, 47], [15, 4, 51]];
   for (const sDef of strides) {
     gl.enableVertexAttribArray(sDef[0]);
     gl.vertexAttribPointer(sDef[0], sDef[1], gl.FLOAT, false, INSTANCE_FLOATS * 4, sDef[2] * 4);
