@@ -18,6 +18,8 @@ import { useProjectStore, useEditorStore } from '@/lib/store';
 import RigPanel from './puppet/RigPanel';
 import DressPanel from './puppet/DressPanel';
 import PerformPanel from './puppet/PerformPanel';
+import BehaviorPanel from './puppet/BehaviorPanel';
+import ProcPreview from './puppet/ProcPreview';
 import type { DirectionIndex } from '@/lib/unified-types';
 
 // ---- Main Component ----
@@ -87,6 +89,8 @@ export default function PuppetPanel() {
   const handleSelectNodeWithSync = (nodeId: string | null) => {
     setSelectedNodeId(nodeId);
     setSelectedNodeId(nodeId);
+    // 节点树点选同样进入锁定（与画布中键命中同一状态）
+    useEditorStore.getState().setNodeLockId(nodeId);
   };
 
   // M1: rig 阶段纬度写入 store，渲染端读的是 character.latitude
@@ -236,6 +240,26 @@ export default function PuppetPanel() {
               </summary>
               <div className="p-2 pt-0">
                 <PerformPanel hideNodeList={true} />
+              </div>
+            </details>
+
+            {/* ============ 程序化行为 PROC ============ */}
+            <details className="bg-white/[0.02] border border-white/10 rounded">
+              <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
+                🎭 程序化行为
+              </summary>
+              <div className="p-2 pt-0">
+                <BehaviorPanel unifiedCharacters={unifiedCharacters} />
+              </div>
+            </details>
+
+            {/* ============ 程序化预览 PREVIEW ============ */}
+            <details className="bg-white/[0.02] border border-white/10 rounded">
+              <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
+                🕹 程序化预览
+              </summary>
+              <div className="p-2 pt-0">
+                <ProcPreview unifiedCharacters={unifiedCharacters} />
               </div>
             </details>
           </div>

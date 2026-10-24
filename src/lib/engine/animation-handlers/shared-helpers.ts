@@ -161,7 +161,7 @@ export function computeWheelTrajectory(opts: {
     trajectoryMode, cornerRadius, gearTeeth, gearMeshOffset,
   } = opts;
 
-  const periodSafe = Math.max(2, period);
+  const periodSafe = Math.max(0.01, period); // 秒
   const frameInPeriod = ((relativeFrame % periodSafe) + periodSafe) % periodSafe;
   const normalizedT = frameInPeriod / periodSafe; // 0→1 within one period
   const baseAngle = (2 * Math.PI * normalizedT) * direction + phaseRad;
@@ -457,7 +457,7 @@ export function getWheelSegmentAtFrame(
   }
 
   // For caterpillar and rounded_rect, compute the trajectory and extract segment
-  const periodSafe = Math.max(2, period);
+  const periodSafe = Math.max(0.01, period); // 秒
   const frameInPeriod = ((relativeFrame % periodSafe) + periodSafe) % periodSafe;
   const normalizedT = frameInPeriod / periodSafe;
 
@@ -573,7 +573,7 @@ export function getGaitPhaseAtFrame(
   period: number,
   stanceRatio: number,
 ): GaitPhase {
-  const periodSafe = Math.max(4, period);
+  const periodSafe = Math.max(0.01, period); // period 已是秒（统一口径）
   const frameInPeriod = ((relativeFrame % periodSafe) + periodSafe) % periodSafe;
   const normalizedT = frameInPeriod / periodSafe;
   const stanceEnd = Math.max(0.15, Math.min(0.85, stanceRatio));
@@ -683,7 +683,7 @@ export function computeGaitTransform(opts: {
     liftoffBend, liftoffBendDuration,
   } = opts;
 
-  const periodSafe = Math.max(4, period);
+  const periodSafe = Math.max(0.01, period); // 秒
 
   // normalizedT is already computed by the caller (from accumulated phase or analytical formula).
   // It represents position within the gait cycle [0, 1), with phase offset already applied.

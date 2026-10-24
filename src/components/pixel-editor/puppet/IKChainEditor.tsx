@@ -440,6 +440,7 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
               </div>
               <div className="flex-1 overflow-hidden">
                 <BlueprintEditor
+                  frameRate={useProjectStore.getState().frameRate}
                   graph={graph}
                   onChange={(g) => handleTargetBlueprintChange(chain.id, g)}
                   title={`${chain.name} 目标`}

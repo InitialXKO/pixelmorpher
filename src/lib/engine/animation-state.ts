@@ -140,7 +140,7 @@ const CHECKPOINT_INTERVAL = 10; // Save checkpoint every 10 frames
 interface AnimationPhaseResult {
   /** Current oscillation phase in radians (including initial phase offset) */
   phase: number;
-  /** Time parameter t = relativeFrame / period (for decay calculations) */
+  /** Time parameter t = 已过周期数（relativeSeconds / period，无量纲，供衰减计算） */
   t: number;
   /** Frame count since the modifier became active */
   relativeFrame: number;
@@ -171,10 +171,11 @@ interface AnimationPhaseResult {
  * @param currentFrame The current global frame number
  * @returns Phase result including phase angle, time parameter, and weight
  */
-export function getAnimationPhase(mod: ModifierInstance | PartAnimationModifier, currentFrame: number): AnimationPhaseResult {
+export function getAnimationPhase(mod: ModifierInstance | PartAnimationModifier, currentFrame: number, frameRate: number = 12): AnimationPhaseResult {
   const { relativeFrame, weight } = getAnimationFrameAndWeight(mod, currentFrame);
 
-  const period = Math.max(2, Number(mod.params.period) || 16);
+  // period 以秒计（统一口径）；相位按秒积分：每帧推进 angularVelocity/frameRate
+  const period = Math.max(0.01, Number(mod.params.period) || 0.267);
   const phaseRad = ((Number(mod.params.phase) || 0) * Math.PI) / 180;
 
   // Compute angular velocity based on modifier type
@@ -199,7 +200,7 @@ export function getAnimationPhase(mod: ModifierInstance | PartAnimationModifier,
 
   if (weight <= 0) {
     // Modifier is inactive at this frame — don't update phase
-    rawPhase = angularVelocity * relativeFrame;
+    rawPhase = angularVelocity * (relativeFrame / frameRate);
     if (cached) {
       // Preserve cache but mark as inactive
       _animStateCache.set(cacheKey, {
@@ -211,12 +212,12 @@ export function getAnimationPhase(mod: ModifierInstance | PartAnimationModifier,
         },
       });
     }
-    return { phase: rawPhase + phaseRad, t: relativeFrame / period, relativeFrame, weight };
+    return { phase: rawPhase + phaseRad, t: (relativeFrame / frameRate) / period, relativeFrame, weight };
   }
 
   if (cached && cached.current.lastFrame === currentFrame - 1 && cached.current.wasActive) {
     // Normal playback (frame N → N+1): increment phase smoothly
-    rawPhase = cached.current.phase + angularVelocity;
+    rawPhase = cached.current.phase + angularVelocity / frameRate;
 
     // Save checkpoint periodically during forward playback
     // P7: Mutate checkpoints array in place instead of spreading to reduce GC pressure
@@ -272,10 +273,10 @@ export function getAnimationPhase(mod: ModifierInstance | PartAnimationModifier,
       // Integrate forward from checkpoint using its angularVelocity
       const cp = cached.checkpoints[bestCheckpoint];
       const framesToAdvance = currentFrame - cp.frame;
-      rawPhase = cp.phase + cp.angularVelocity * framesToAdvance;
+      rawPhase = cp.phase + cp.angularVelocity * (framesToAdvance / frameRate);
     } else {
       // All checkpoints are after currentFrame (shouldn't happen often)
-      rawPhase = angularVelocity * relativeFrame;
+      rawPhase = angularVelocity * (relativeFrame / frameRate);
     }
 
     // Save checkpoint on seek too — P7: mutate in place
@@ -300,7 +301,7 @@ export function getAnimationPhase(mod: ModifierInstance | PartAnimationModifier,
     });
   } else {
     // First activation or cache miss: compute from scratch
-    rawPhase = angularVelocity * relativeFrame;
+    rawPhase = angularVelocity * (relativeFrame / frameRate);
     _animStateCache.set(cacheKey, {
       current: {
         phase: rawPhase,
@@ -319,7 +320,7 @@ export function getAnimationPhase(mod: ModifierInstance | PartAnimationModifier,
 
   return {
     phase: rawPhase + phaseRad,
-    t: relativeFrame / period,
+    t: (relativeFrame / frameRate) / period,
     relativeFrame,
     weight,
   };

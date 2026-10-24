@@ -12,6 +12,7 @@ import type { BlueprintGraph, BlueprintNode } from '@/lib/blueprint/ir';
 import { listBlueprintNodeTypes, getBlueprintNodeLabel, evaluateBlueprint, evaluateNodeOutput } from '@/lib/blueprint/eval';
 import { getDefaultOutputForPort, getNodeInputs, getNodeOutputs, getNodeParamPorts, getPortColor, getPortDataType, canConnectPorts } from '@/lib/blueprint/specs';
 import { getModifierDef } from '@/lib/types';
+import { dialectOf, DIALECT_LABEL } from '@/lib/proc-runtime/dialect';
 import { useProjectStore } from '@/lib/store';
 import { buildBlueprintVars, mapStoreAnimationVariables } from '@/lib/unified-animation-resolver';
 import type { ParamDriver } from '@/lib/unified-types';
@@ -62,7 +63,7 @@ interface BlueprintEditorProps {
   /** 图语境：'ik-target' = IK 链目标蓝图——图内 transform 节点的
    *  translateX/Y/Z 是 target3D 同空间（原点中心渲染世界），端子/参数标签
    *  带罗盘后缀、Y 按展示空间（上为正）翻转显示（与 Vec3Field 同口径） */
-  spaceContext?: 'ik-target';
+  spaceContext?: 'ik-target' | 'performance' | 'behavior';
   /** 帧率（预览播放用） */
   frameRate?: number;
   /** 整角色预览用：真实 Character（有它时预览走主渲染管线，与主画布一致） */
@@ -193,6 +194,9 @@ function BlueprintNodeParams({ selected, updateNode, onExposePort }: {
 export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, character, characterNodes, costumeSets, activeCostumeSetId, slotVariants, spritesTable, spaceContext }: BlueprintEditorProps) {
   // IK 目标蓝图语境的轴向标注/翻转（仅 transform 节点的 translate* 键）
   const inIkTarget = spaceContext === 'ik-target';
+  const inPerformance = spaceContext === 'performance';
+  const inBehavior = spaceContext === 'behavior';
+  const inRuntime = inPerformance || inBehavior;
   const axisSuffixFor = (nodeType: string, key: string): string => {
     if (!inIkTarget || nodeType !== 'transform') return '';
     if (key === 'translateX') return '（东）';
@@ -1051,6 +1055,17 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                 <span className="text-[10px] font-medium text-gray-200 truncate" title={node.type}>
                   {getBlueprintNodeLabel(node.type)}
                   {isOutput && <span className="text-[8px] text-emerald-400 ml-1">输出</span>}
+                  {inRuntime && (() => {
+                    const cls = dialectOf(node.type, inBehavior ? 'behavior' : 'performance');
+                    return (
+                      <span
+                        className={`text-[8px] ml-1 ${cls === 'direct' ? 'text-emerald-400' : cls === 'sample' ? 'text-amber-400' : 'text-red-400'}`}
+                        title={`程序化运行时方言：${DIALECT_LABEL[cls]}`}
+                      >
+                        {cls === 'direct' ? '可求值' : cls === 'sample' ? '采样' : '不支持'}
+                      </span>
+                    );
+                  })()}
                 </span>
                 {!isOutput && (
                   <button

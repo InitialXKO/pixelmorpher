@@ -14,6 +14,8 @@ import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
 import { renderMotionBlurStroke, renderEffectStroke } from '@/lib/engine';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
+import { cycleHitNodeId, lockNodeExists } from '@/lib/node-cycle';
+import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { isStrokeToolCheck } from './canvas-utils';
 import { getToolHandler } from './tool-handlers';
 import type { CanvasState } from './use-canvas-state';
@@ -73,10 +75,22 @@ export function useCanvasInteraction(s: CanvasState) {
       if (e.button === 1 || (s.spaceHeldRef.current && e.button === 0)) {
         s.isPanningRef.current = true; s.markDirty();
         s.panStartRef.current = { x: e.clientX, y: e.clientY, panX: s.panX, panY: s.panY };
+        // 中键按下点记下：抬起位移小 = 中键点击（循环命中），大 = 拖动平移
+        s.middleClickRef.current = e.button === 1 ? { x: e.clientX, y: e.clientY } : null;
         return;
       }
       if (e.button !== 0) return;
       const { px, py } = s.screenToPixel(e.clientX, e.clientY);
+      // 锁定中记录左键按下点是否命中节点，供抬起时判「空白单击解锁」
+      if (useEditorStore.getState().nodeLockId) {
+        s.leftPressRef.current = {
+          clientX: e.clientX,
+          clientY: e.clientY,
+          hitNode: !!s.findPuppetNodeAtPixel(px, py),
+        };
+      } else {
+        s.leftPressRef.current = null;
+      }
 
       // Delegate to tool handler
       const handler = getToolHandler(s.tool, s.editMode === 'sprite_edit');
@@ -106,7 +120,43 @@ export function useCanvasInteraction(s: CanvasState) {
   );
 
   // ---- Mouse Up ----
-  const handleMouseUp = useCallback(() => {
+  const handleMouseUp = useCallback((e?: React.MouseEvent<HTMLCanvasElement>) => {
+    // ---- 节点锁定手势（先于工具 mouseUp 处理） ----
+    const CLICK_SLOP = 5;
+    // 中键点击（按下后几乎没动）：循环切换命中节点并锁定
+    if (s.middleClickRef.current && e) {
+      const dx = e.clientX - s.middleClickRef.current.x;
+      const dy = e.clientY - s.middleClickRef.current.y;
+      if (Math.hypot(dx, dy) < CLICK_SLOP) {
+        const { px, py } = s.screenToPixel(s.middleClickRef.current.x, s.middleClickRef.current.y);
+        const hits = s.findAllPuppetNodesAtPixel(px, py);
+        const editor = useEditorStore.getState();
+        const project = useProjectStore.getState();
+        const current = lockNodeExists(project.unifiedCharacters, editor.nodeLockId)
+          ? editor.nodeLockId
+          : project.selectedNodeId;
+        const nextId = cycleHitNodeId(hits.map((h) => h.node.id), current);
+        const nextHit = nextId ? hits.find((h) => h.node.id === nextId) : null;
+        if (nextHit) {
+          project.setSelectedNodeId(nextHit.node.id);
+          editor.setActivePuppetSkeletonId(nextHit.character.id);
+          editor.setNodeLockId(nextHit.node.id);
+          try { usePuppetSessionStore.setState({ performNodeId: nextHit.node.id }); } catch { /* noop */ }
+          s.markDirty();
+        }
+      }
+    }
+    s.middleClickRef.current = null;
+    // 锁定中、左键在空白处按下且未拖动：解除锁定（选择保持不变）
+    if (s.leftPressRef.current && e) {
+      const moved = Math.hypot(e.clientX - s.leftPressRef.current.clientX, e.clientY - s.leftPressRef.current.clientY);
+      if (!s.leftPressRef.current.hitNode && moved < CLICK_SLOP) {
+        useEditorStore.getState().setNodeLockId(null);
+        s.markDirty();
+      }
+    }
+    s.leftPressRef.current = null;
+
     // Stroke commit (kept here because it uses hook-local commitStroke)
     if (s.isDrawingRef.current && isStrokeTool()) commitStroke();
 

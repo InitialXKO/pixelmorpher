@@ -83,12 +83,68 @@ class LRUCache<V> {
   }
 }
 
+import type { PixelGrid } from '../types';
+
 // ---- Sprite Rotation Cache ----
 
 export interface RotationCacheEntry {
   canvas: HTMLCanvasElement;
   resultPivotX: number;
   resultPivotY: number;
+}
+
+/**
+ * 像素网格全图哈希（FNV-1a，逐格累进）：尺寸 + 每一格的颜色字符串。
+ *
+ * 旋转缓存的旧指纹只采样四角+中心 5 个点——四角基本恒透明、中心只是单点，
+ * 绝大多数像素改动（换色/抖动/描边/位移等）不碰这 5 点，于是改完参数
+ * 指纹不变、缓存返回改前烘焙的旋转图：改参数不生效、播放也不生效，
+ * 只有别的操作顺带整表清缓存才显形。凡是像素内容可变的精灵（经像素
+ * 修改器/蓝图像素链/蒙皮弯曲加工）必须用全图哈希做键，不得用采样指纹。
+ * null 与 '' 同为透明，哈希同等对待（视觉同一）。
+ *
+ * 增量式（createPixelGridHasher）是唯一实现：渲染路径由 pixelsToCanvas
+ * 在它本来就要做的全图遍历里逐格喂入，哈希零额外遍历；hashPixelGrid
+ * 是同一哈希器的整表便捷封装（探针与离线校验用）。两者结果必须一致，
+ * 由 verify-rotation-cache 的等价用例锁死。
+ */
+export function createPixelGridHasher(width: number, height: number): {
+  cell: (cell: string | null | undefined) => void;
+  digest: () => string;
+} {
+  let hash = 0x811c9dc5;
+  const mix = (n: number) => {
+    hash ^= n;
+    hash = Math.imul(hash, 0x01000193);
+  };
+  mix(width);
+  mix(height);
+  return {
+    cell(cell: string | null | undefined): void {
+      if (!cell) {
+        mix(0);
+        return;
+      }
+      for (let i = 0; i < cell.length; i++) mix(cell.charCodeAt(i));
+      mix(0x2f);
+    },
+    digest(): string {
+      return (hash >>> 0).toString(36);
+    },
+  };
+}
+
+export function hashPixelGrid(grid: PixelGrid): string {
+  const h = grid?.length ?? 0;
+  const w = h > 0 ? (grid[0]?.length ?? 0) : 0;
+  const hasher = createPixelGridHasher(w, h);
+  for (let y = 0; y < h; y++) {
+    const row = grid[y];
+    for (let x = 0; x < w; x++) {
+      hasher.cell(row?.[x]);
+    }
+  }
+  return hasher.digest();
 }
 
 const rotationCache = new LRUCache<RotationCacheEntry>(512);
@@ -113,11 +169,18 @@ export function getRotationCacheKey(
   stretch: number,
   pivotX: number,
   pivotY: number,
+  scaleX: number = 1,
+  skewsKey: string = '',
+  // 像素内容全图哈希（hashPixelGrid）：给出时以它为内容指纹并跳过采样——
+  // 采样指纹（四角+中心）对像素可变的精灵不成立，仅作无网格来源时的回退。
+  contentHash?: string,
 ): string {
   // Quantize angle to 0.01 degree precision (sub-degree changes are invisible at pixel scale)
   const qAngle = Math.round(angle * 100);
   // Quantize stretch to 0.01 precision
   const qStretch = Math.round(stretch * 100);
+  // Quantize scaleX to 0.01 precision（复合仿射路径；默认 1 时与旧键有别，仅内存缓存无持久影响）
+  const qScaleX = Math.round(scaleX * 100);
   // Quantize pivot to 0.1 pixel precision
   const qPivotX = Math.round(pivotX * 10);
   const qPivotY = Math.round(pivotY * 10);
@@ -127,6 +190,12 @@ export function getRotationCacheKey(
   const w = spriteCanvas.width;
   const h = spriteCanvas.height;
   let fingerprint = `${w}:${h}`;
+
+  if (contentHash) {
+    // 全图哈希在手：内容同一性由它判定，采样既冗余又不可靠，直接采用
+    fingerprint = `G${contentHash}`;
+    return `${fingerprint}:${qAngle}:${qStretch}:${qPivotX}:${qPivotY}:${qScaleX}:${skewsKey}`;
+  }
 
   try {
     const ctx = spriteCanvas.getContext('2d');
@@ -150,7 +219,7 @@ export function getRotationCacheKey(
     // Canvas may be tainted or not accessible — use dimensions only
   }
 
-  return `${fingerprint}:${qAngle}:${qStretch}:${qPivotX}:${qPivotY}`;
+  return `${fingerprint}:${qAngle}:${qStretch}:${qPivotX}:${qPivotY}:${qScaleX}:${skewsKey}`;
 }
 
 /**

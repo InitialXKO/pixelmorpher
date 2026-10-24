@@ -34,7 +34,7 @@ export default function RepairPanel({ sprite, onClose }: Props) {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60">
-      <div className="bg-[#1a1a2e] border border-white/10 rounded-lg p-4 w-[360px]">
+      <div className="bg-[#1a1a2e] border border-white/10 rounded-lg p-4 w-[360px] max-h-[calc(100vh-2rem)] overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-gray-200">修补：{sprite.name}</h3>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-300">
@@ -137,11 +137,20 @@ function CloneStampCanvas({ sprite, onApply }: { sprite: Sprite; onApply: (p: Pi
     onApply(newPixels);
   };
 
+  // 显示尺寸：保持宽高比塞进适配盒（与 PivotEditor 同一口径）。早先
+  // w-full + aspectRatio 定宽按比例撑高，高瘦精灵会把面板顶出视口；
+  // getPos 走 rect 比例换算，缩放显示不影响落点。
+  const viewportH = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const dispMaxH = Math.max(120, Math.min(360, Math.floor(viewportH * 0.45)));
+  const dispScale = Math.min(312 / w, dispMaxH / h);
+  const dispW = Math.max(1, Math.round(w * dispScale));
+  const dispH = Math.max(1, Math.round(h * dispScale));
+
   return (
     <canvas
       ref={canvasRef}
-      className="w-full border border-white/10 rounded cursor-crosshair"
-      style={{ imageRendering: 'pixelated', aspectRatio: `${w}/${h}` }}
+      className="block mx-auto border border-white/10 rounded cursor-crosshair"
+      style={{ imageRendering: 'pixelated', width: dispW, height: dispH }}
       onMouseDown={(e) => {
         const p = getPos(e);
         if (e.altKey) {

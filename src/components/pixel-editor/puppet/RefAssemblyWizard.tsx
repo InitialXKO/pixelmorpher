@@ -6,9 +6,12 @@ import { Slider } from '@/components/ui/slider';
 import { ArrowLeft, ArrowRight, X, Upload } from 'lucide-react';
 import { useEditorStore, useProjectStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
-import type { PixelGrid, PixelColor } from '@/lib/types';
+import type { PixelGrid } from '@/lib/types';
 import { initSAM, isSAMReady, setSAMImage } from '@/lib/sam';
 import { inpaintPixels } from '@/lib/inpainting';
+import type { DirectionIndex, NodeTransform, NodeTracks, Sprite } from '@/lib/unified-types';
+import { collectSubtreeIds, deleteNodeSubtree } from '@/lib/node-actions';
+import PivotEditor from './PivotEditor';
 
 // ============================================================
 // RefAssemblyWizard - 参考图装配向导
@@ -17,12 +20,24 @@ import { inpaintPixels } from '@/lib/inpainting';
 
 type Step = 'upload' | 'sam' | 'align' | 'mask' | 'cleanup' | 'confirm';
 
-// 模块级持久化：防组件卸载导致状态丢失
+// 模块级持久化：防组件卸载导致状态丢失（左栏隐藏即卸载本向导）。
+// 工作服装 ID 与姿态快照也必须在此层：只存组件 state/ref 时，重挂后选模板
+// 的 effect 会再建一套工作服装（旧的一套连同已抠精灵成孤儿、生效集被换走）
+// 并把已对位过的姿态当原姿态重拍快照——关闭时「恢复」的就是污染后的姿态。
 let persistedStep: Step = 'upload';
 let persistedSelectedCharacterId: string | null = null;
+let persistedWorkingCostumeId: string | null = null;
+let persistedProcessedNodes: Map<string, string> = new Map();
+let persistedPoseSnapshot: {
+  charKey: string;
+  nodes: Map<string, { transform: NodeTransform; tracks: NodeTracks }>;
+} | null = null;
 export function resetRefWizardStep() {
   persistedStep = 'upload';
   persistedSelectedCharacterId = null;
+  persistedWorkingCostumeId = null;
+  persistedProcessedNodes = new Map();
+  persistedPoseSnapshot = null;
 }
 
 const STEPS: { id: Step; label: string; optional?: boolean }[] = [
@@ -46,53 +61,23 @@ const BUILT_IN_REFS = [
 ];
 
 export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) {
-  // 恢复模板节点到原始 transform
-  const restoreTemplateNodes = () => {
+  // 恢复模板姿态快照（transform + tracks 整表写回）。
+  // 对位拖动经操控管线写的是当前帧的姿态关键帧（node.tracks），不写 transform——
+  // 早先只快照/恢复 transform 且把差值存进无人消费的 nodeOffsets，等于对位成果
+  // 既存不进服装、又以关键帧形式污染模板轨道。现行口径：对位姿态只是抠图的
+  // 取样条件，抠图时按节点世界角把精灵转正（见 MaskBrushOverlay），姿态本身
+  // 不落盘；快照在选模板时拍下，关闭/完成/换模板时整表恢复，模板不留痕迹。
+  const restoreTemplatePose = () => {
+    const snap = persistedPoseSnapshot;
+    if (!snap) return;
+    persistedPoseSnapshot = null;
     const ps = useProjectStore.getState();
-    const char = Object.values(ps.unifiedCharacters ?? {}).find((c: any) => c.id === selectedCharacterId);
-    if (!char) return;
-    const skeletonId = Object.keys(ps.unifiedCharacters ?? {}).find((k) => ps.unifiedCharacters[k]?.id === selectedCharacterId);
-    if (!skeletonId) return;
-    originalTransformsRef.current.forEach((orig, nodeId) => {
-      const nd = ps.unifiedCharacters[skeletonId]?.nodes[nodeId];
-      ps.updateUnifiedNode(skeletonId, nodeId, {
-        transform: {
-          ...(nd?.transform ?? { x: 0, y: 0, angle: 0, stretch: 1, variantIndex: 0 }),
-          x: orig.offsetX,
-          y: orig.offsetY,
-          angle: orig.angle,
-        },
+    snap.nodes.forEach((entry, nodeId) => {
+      ps.updateUnifiedNode(snap.charKey, nodeId, {
+        transform: structuredClone(entry.transform),
+        tracks: structuredClone(entry.tracks),
       });
     });
-    originalTransformsRef.current.clear();
-  };
-
-  // 计算对位偏移差值，存进服装，恢复模板节点
-  // 在离开 align 步骤时调用
-  const saveAlignmentToCostume = () => {
-    if (!workingCostumeId || !selectedCharacterId) return;
-    const ps = useProjectStore.getState();
-    const char = Object.values(ps.unifiedCharacters ?? {}).find((c: any) => c.id === selectedCharacterId);
-    if (!char) return;
-    const skeleton = char;
-    if (!skeleton) return;
-
-    const nodeOffsets: Record<string, { x: number; y: number; angle: number }> = {};
-    const originals = originalTransformsRef.current;
-    for (const n of Object.values(skeleton.nodes)) {
-      const orig = originals.get(n.id);
-      if (!orig) continue;
-      const dx = (n.transform?.x ?? 0) - orig.offsetX;
-      const dy = (n.transform?.y ?? 0) - orig.offsetY;
-      const da = (n.transform?.angle ?? 0) - orig.angle;
-      // 只存非零偏移
-      if (dx !== 0 || dy !== 0 || da !== 0) {
-        nodeOffsets[n.id] = { x: dx, y: dy, angle: da };
-      }
-    }
-    ps.updateUnifiedCostumeSet(selectedCharacterId, workingCostumeId, { nodeOffsets });
-    // 恢复模板节点
-    restoreTemplateNodes();
   };
 
   // 内部关闭：恢复模板，删工作服装（取消时），清参考图
@@ -102,7 +87,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
       ps.removeUnifiedCostumeSet(selectedCharacterId, workingCostumeId);
     }
     setWorkingCostumeIdState(null);
-    restoreTemplateNodes();
+    restoreTemplatePose();
     // 清参考图（否则第二次进入时残留旧 URL）
     const oldUrl = useEditorStore.getState().referenceImageUrl;
     if (oldUrl && oldUrl.startsWith('blob:')) {
@@ -196,8 +181,22 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const [newLimbSocketId, setNewLimbSocketId] = useState('');
   const [newLimbPlugX, setNewLimbPlugX] = useState(0);
   const [newLimbPlugY, setNewLimbPlugY] = useState(0);
-  // 已处理的节点 ID → 方式 ('mask' | 'mirror')
-  const [processedNodes, setProcessedNodes] = useState<Map<string, string>>(new Map());
+  // 已处理的节点 ID → 方式 ('mask' | 'mirror' | 'copy')；模块级镜像防重挂丢标记
+  const [processedNodes, setProcessedNodes] = useState<Map<string, string>>(() => new Map(persistedProcessedNodes));
+  useEffect(() => {
+    persistedProcessedNodes = processedNodes;
+  }, [processedNodes]);
+  // 复制/镜像派生面板状态
+  const [deriveSourceId, setDeriveSourceId] = useState<string | null>(null);
+  const [deriveAxis, setDeriveAxis] = useState(90);
+  const [deriveDarkenOn, setDeriveDarkenOn] = useState(false);
+  const [deriveDarken, setDeriveDarken] = useState(0.7);
+  // 旋转已抠精灵的角度
+  const [rotExtractAngle, setRotExtractAngle] = useState(90);
+  // 已抠精灵事后重开枢轴编辑（PivotEditor 弹窗，取打开时刻的最新精灵快照）
+  const [pivotSprite, setPivotSprite] = useState<Sprite | null>(null);
+  // AI 清理步的执行结果（界面反馈，替代原先只有 console.info 的做法）
+  const [cleanupResult, setCleanupResult] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // SAM 状态
   const [samStatus, setSamStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -217,19 +216,19 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
 
   // 获取当前角色及其骨架节点（按 zIndex 排序，从后往前）
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
-  const updateUnifiedNode = useProjectStore((s) => s.updateUnifiedNode);
-  const updateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
   const addUnifiedNode = useProjectStore((s) => s.addUnifiedNode);
-  const removeUnifiedNode = useProjectStore((s) => s.removeUnifiedNode);
   const [selectedCharacterId, setSelectedCharacterIdState] = useState<string | null>(persistedSelectedCharacterId);
   const setSelectedCharacterId = (id: string | null) => {
     persistedSelectedCharacterId = id;
     setSelectedCharacterIdState(id);
   };
-  // 工作服装 ID（选模板时创建）
-  const [workingCostumeId, setWorkingCostumeIdState] = useState<string | null>(null);
-  // 原始节点 transform（选模板时保存，用于计算偏移差值和恢复模板）
-  const originalTransformsRef = useRef<Map<string, { offsetX: number; offsetY: number; angle: number }>>(new Map());
+  // 工作服装 ID（选模板时创建；初值与变更都同步模块级持久化，防重挂重建）
+  const [workingCostumeId, setWorkingCostumeIdState] = useState<string | null>(persistedWorkingCostumeId);
+  useEffect(() => {
+    persistedWorkingCostumeId = workingCostumeId;
+  }, [workingCostumeId]);
+  // 模板姿态快照存模块级 persistedPoseSnapshot（选模板时拍下：
+  // 每节点 transform + tracks 深拷贝 + 角色字典键），理由同文件头注释。
 
   // 向导直接使用选中的模板（不克隆）
   const effectiveCharacterId = selectedCharacterId;
@@ -251,53 +250,47 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   // 抠图目标节点：直接用画布全局选中的，不再用向导内部的 targetNodeIndex
   const targetNode = (activeSkeleton && selectedNodeId ? activeSkeleton.nodes[selectedNodeId] : null) ?? null;
 
-  // 选中模板：保存原始 transform，创建工作服装，直接进入对位
+  // 选中模板：拍姿态快照，创建工作服装，直接进入对位
   // 不需要"开始对位"按钮：选即开始，直接拖
-  // 不克隆：对位偏移最终存进服装的 nodeOffsets，模板节点在关闭时恢复
+  // 不克隆：对位姿态只是抠图取样条件，快照在关闭/完成/换模板时整表恢复
   useEffect(() => {
     if (!selectedCharacterId) return;
     const ps = useProjectStore.getState();
-    const sc = Object.values(ps.unifiedCharacters ?? {}).find((c: any) => c.id === selectedCharacterId);
-    if (!sc) return;
+    const charKey = Object.keys(ps.unifiedCharacters ?? {}).find((k) => ps.unifiedCharacters[k]?.id === selectedCharacterId);
+    const sc = charKey ? ps.unifiedCharacters[charKey] : undefined;
+    if (!sc || !charKey) return;
     const skeleton = sc;
-    if (!skeleton) return;
 
     // 如果已有工作服装且对应当前模板，跳过（避免重复）
     if (workingCostumeId) {
       const existing = sc.costumeSets.find((cs) => cs.id === workingCostumeId);
       if (existing) return;
-      // 否则是重选模板：恢复旧模板节点，删旧服装
-      restoreTemplateNodes();
-      ps.removeUnifiedCostumeSet(selectedCharacterId, workingCostumeId);
+      // 否则是重选模板：恢复旧模板姿态，删旧服装（旧服装挂旧角色名下，用快照里的键）
+      const oldCharKey = persistedPoseSnapshot?.charKey;
+      restoreTemplatePose();
+      if (oldCharKey) ps.removeUnifiedCostumeSet(oldCharKey, workingCostumeId);
     }
 
-    // 保存原始 transform
-    originalTransformsRef.current.clear();
-    for (const n of Object.values(skeleton.nodes)) {
-      originalTransformsRef.current.set(n.id, {
-        offsetX: n.transform?.x ?? 0,
-        offsetY: n.transform?.y ?? 0,
-        angle: n.transform?.angle ?? 0,
-      });
-    }
+    // 拍姿态快照（transform + tracks 深拷贝）
+    persistedPoseSnapshot = {
+      charKey,
+      nodes: new Map(
+        Object.values(skeleton.nodes).map((n) => [
+          n.id,
+          { transform: structuredClone(n.transform), tracks: structuredClone(n.tracks) },
+        ]),
+      ),
+    };
 
     // 创建工作服装
     const costume = ps.addUnifiedCostumeSet(selectedCharacterId, `${sc.name}（装配）`);
     setWorkingCostumeIdState(costume.id);
     // 设为当前服装（渲染时应用）
-    const charKey203 = Object.keys(ps.unifiedCharacters ?? {}).find((k) => ps.unifiedCharacters[k]?.id === selectedCharacterId);
-    if (charKey203) ps.updateUnifiedCharacter(charKey203, { activeCostumeSetId: costume.id });
+    ps.updateUnifiedCharacter(charKey, { activeCostumeSetId: costume.id });
     // 进入操控（画布只显示该角色）
     usePuppetSessionStore.getState().enterPerform(selectedCharacterId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCharacterId]);
-
-  // 监听对位完成事件，跳到 mask 步骤
-  useEffect(() => {
-    const handler = () => setStep('mask');
-    window.addEventListener('ref-assembly:align-done', handler);
-    return () => window.removeEventListener('ref-assembly:align-done', handler);
-  }, []);
 
   // 监听遮罩完成事件，更新进度并自动推进到下一肢体
   useEffect(() => {
@@ -320,10 +313,15 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
 
   const handleAddLimb = () => {
     if (!activeSkeleton || !newLimbName.trim()) return;
+    // 父节点有插槽时必须选插槽：不选则 attachment 落成 fixed、节点挂到根下，
+    // 与用户选的父节点毫无关系（addUnifiedNode 按 attachment 推导父级写全挂接）
+    if (parentNodeForSocket && parentNodeForSocket.sockets.length > 0 && !newLimbSocketId) return;
     const attachment = newLimbSocketId
       ? { type: 'socket' as const, parentSocketId: newLimbSocketId, plug: { x: newLimbPlugX, y: newLimbPlugY } }
       : { type: 'fixed' as const, fixedOffset: { x: 0, y: 0 }, inheritRotation: true };
-    addUnifiedNode(activeSkeletonKey!, newLimbName.trim(), {
+    // addUnifiedNode 返回新节点，直接选中——旧实现 setTimeout 后读渲染闭包里
+    // 的旧角色快照（根本没有新节点），选中的恒是添加前的末位节点
+    const newNode = addUnifiedNode(activeSkeletonKey!, newLimbName.trim(), {
       attachment,
       zIndex: (targetNode?.zIndex ?? 0) + 1,
     });
@@ -333,15 +331,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     setNewLimbPlugX(0);
     setNewLimbPlugY(0);
     setShowAddLimb(false);
-    // 新节点会出现在列表末尾，选中它（画布全局）
-    // 注意：这里需要新节点的 ID，暂时用 setTimeout 等待 store 更新后查找
-    setTimeout(() => {
-      const ps = useProjectStore.getState();
-      const sk = activeSkeleton;
-      const skNodes = sk ? Object.values(sk.nodes) : [];
-      const newNode = skNodes[skNodes.length - 1];
-      if (newNode) setSelectedNodeId(newNode.id);
-    }, 100);
+    setSelectedNodeId(newNode.id);
   };
 
   // 找镜像源：按名称匹配 left/right/L/R
@@ -360,6 +350,57 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     // 源节点必须已有精灵（已遮罩或模板自带）
     if (src && ((src as any).sprite || src.slot || processedNodes.has(src.id))) return src.id;
     return null;
+  };
+
+  // ---- 抠图方向与精灵解析（与 MaskBrushOverlay 同口径：根节点 variantIndex，缺省南 6） ----
+  const wizardDirIndex = (selectedCharacter?.nodes[selectedCharacter.rootNodeId]?.transform.variantIndex ?? 6) as DirectionIndex;
+  const workingCostume = selectedCharacter?.costumeSets.find((cs) => cs.id === workingCostumeId) ?? null;
+  // 节点在工作服装（优先）或模板槽位中的精灵 ID（SpriteRef 才可解析，与 DressPanel 同口径）
+  const resolveNodeSpriteId = (node: (typeof sortedNodes)[number]): string | null => {
+    const key = node.slot?.slotKey ?? node.id;
+    const refCostume = workingCostume?.pieces[key]?.sprites[wizardDirIndex];
+    if (refCostume && 'spriteId' in refCostume) return refCostume.spriteId;
+    const refSlot = node.slot?.sprites?.[wizardDirIndex];
+    if (refSlot && 'spriteId' in refSlot) return refSlot.spriteId;
+    return null;
+  };
+  const targetSpriteId = targetNode ? resolveNodeSpriteId(targetNode) : null;
+  const deriveCandidates = sortedNodes.filter((n) => n.id !== targetNode?.id && resolveNodeSpriteId(n));
+
+  // 目标节点变化时，派生源默认预选名称镜像匹配，其次第一个可用源
+  useEffect(() => {
+    if (!targetNode) {
+      setDeriveSourceId(null);
+      return;
+    }
+    setDeriveSourceId(findMirrorSource(targetNode) ?? deriveCandidates[0]?.id ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetNode?.id]);
+
+  // 复制/镜像生成（烘焙式）：生成新精灵并写入工作服装的目标节点槽位
+  const handleDerive = (mode: 'copy' | 'mirror') => {
+    if (!targetNode || !deriveSourceId || !selectedCharacterId || !workingCostumeId) return;
+    const srcNode = sortedNodes.find((n) => n.id === deriveSourceId);
+    if (!srcNode) return;
+    const srcSpriteId = resolveNodeSpriteId(srcNode);
+    if (!srcSpriteId) return;
+    const ps = useProjectStore.getState();
+    const derived = ps.deriveSpriteFrom(srcSpriteId, {
+      mode,
+      axisDeg: deriveAxis,
+      darken: deriveDarkenOn ? deriveDarken : 1,
+      name: `${mode === 'mirror' ? '镜像' : '复制'}_${targetNode.name}`,
+    });
+    if (!derived?.id) return;
+    ps.setUnifiedCostumeSprite(selectedCharacterId, workingCostumeId, targetNode.id, wizardDirIndex, derived.id);
+    setProcessedNodes((m) => new Map(m).set(targetNode.id, mode));
+  };
+
+  // 旋转已抠精灵（绕锚点）：抠图时已按对位姿态转正，此处是事后手动再转，
+  // 直接改精灵本体即可——不再有 nodeOffsets 反调（该通道已随对位落盘一并退役）
+  const handleRotateExtracted = (theta: number) => {
+    if (!targetNode || !targetSpriteId) return;
+    useProjectStore.getState().transformSprite(targetSpriteId, { kind: 'rotate', angleDeg: theta });
   };
 
   // 父节点变化时，重置 socket 选择
@@ -389,7 +430,14 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
         {/* Header */}
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-gray-200">参考图装配</h2>
-          <button onClick={() => handleClose(false)} className="text-gray-500 hover:text-gray-300">
+          <button
+            onClick={() => {
+              // X = 放弃装配：工作服装连同已抠成果一并删除，有成果时先确认防误点
+              if (processedNodes.size > 0 && !confirm('关闭将删除本次装配的工作服装（含已抠出的精灵），确定关闭？')) return;
+              handleClose(false);
+            }}
+            className="text-gray-500 hover:text-gray-300"
+          >
             <X className="size-4" />
           </button>
         </div>
@@ -455,7 +503,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
         {step === 'sam' && (
           <div className="space-y-3">
             <p className="text-xs text-gray-400">
-              可选：用 SAM 智能分割。先点角色整体抠出背景，再点各肢体分别分割。
+              可选：用 SAM 点选角色、抠除背景，生成一张干净底图，后续对位与逐肢体手绘遮罩更省事。分割结果是整图级的，不直接生成各肢体精灵。
             </p>
             {samStatus === 'idle' && (
               <Button
@@ -488,7 +536,12 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
               <div className="text-xs text-gray-400">加载模型中… {Math.round(samProgress)}%</div>
             )}
             {samStatus === 'error' && (
-              <div className="text-xs text-red-400">SAM 初始化失败，可跳过此步骤</div>
+              <div className="space-y-2">
+                <div className="text-xs text-red-400">SAM 初始化失败，可跳过此步骤</div>
+                <Button size="sm" variant="outline" className="w-full" onClick={() => setSamStatus('idle')}>
+                  重试初始化
+                </Button>
+              </div>
             )}
             {samStatus === 'ready' && (
               <div className="space-y-2">
@@ -633,26 +686,33 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   模板角色「{selectedCharacter.name}」已覆盖在底图上，
                   直接在画布上拖动角色肢体（拖动旋转，Shift+拖动平移）对准底图。
                 </p>
-                {/* 方向选择：遮罩只应用于此方向 */}
+                {/* 方向选择：直接读写角色当前方向（根节点 variantIndex），
+                    遮罩保存时按同一口径落进该方向的精灵槽位 */}
                 <div>
                   <label className="text-xs text-gray-500 block mb-1">对位方向（遮罩将应用于此方向）</label>
                   <select
-                    value={'S'}
-                    onChange={() => {}}
+                    value={wizardDirIndex}
+                    onChange={(e) => {
+                      if (!selectedCharacterId) return;
+                      useProjectStore.getState().setUnifiedDirection(
+                        selectedCharacterId,
+                        Number(e.target.value) as DirectionIndex,
+                      );
+                    }}
                     className="w-full h-8 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
                   >
-                    <option value="S">南 (S) - 正面</option>
-                    <option value="N">北 (N) - 背面</option>
-                    <option value="E">东 (E) - 右侧</option>
-                    <option value="W">西 (W) - 左侧</option>
-                    <option value="NE">东北 (NE)</option>
-                    <option value="SE">东南 (SE)</option>
-                    <option value="SW">西南 (SW)</option>
-                    <option value="NW">西北 (NW)</option>
+                    <option value={6}>南 (S) - 正面</option>
+                    <option value={2}>北 (N) - 背面</option>
+                    <option value={0}>东 (E) - 右侧</option>
+                    <option value={4}>西 (W) - 左侧</option>
+                    <option value={1}>东北 (NE)</option>
+                    <option value={7}>东南 (SE)</option>
+                    <option value={5}>西南 (SW)</option>
+                    <option value={3}>西北 (NW)</option>
                   </select>
                 </div>
                 <p className="text-[11px] text-gray-400">
-                  已为「{selectedCharacter?.name}」创建新服装，直接在画布上拖动肢体对位（拖动旋转，Shift+拖动平移）。对位偏移将存入服装。
+                  已为「{selectedCharacter?.name}」创建新服装，直接在画布上拖动肢体对位（拖动旋转，Shift+拖动平移）。对位姿态只是抠图的取样条件：抠图时精灵按对位角度自动转正、锚点落在关节上；离开向导后模板姿态自动恢复，不留痕迹。
                 </p>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-500">底图不透明度</span>
@@ -681,26 +741,29 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
           <div className="space-y-3">
             <p className="text-xs text-gray-400">
               目标肢体（画布上点选）：{targetNode?.name ?? '未选中'}
-            </p>
-            <p className="text-xs text-gray-400">
-              目标肢体（画布上点选）：{targetNode?.name ?? '未选中'}
               {targetNode && (
                 <span className="ml-2 text-[10px] text-gray-500">
                   z:{targetNode.zIndex ?? 0}
                 </span>
               )}
             </p>
-            {/* 节点管理：删除 */}
-            {targetNode && activeSkeleton && (
+            {/* 节点管理：删除（走 node-actions 的级联删除：摘父 children、整子树
+                一并删、清选中——旧实现只删单个节点却在文案里承诺连子节点，
+                且被删节点的子节点会成孤儿留在字典里） */}
+            {targetNode && activeSkeleton && targetNode.id !== activeSkeleton.rootNodeId && (
               <div className="flex gap-1.5">
                 <Button
                   size="sm"
                   variant="ghost"
                   className="flex-1 text-[10px] h-6 text-red-400 hover:text-red-300"
                   onClick={() => {
-                    if (!confirm(`删除节点「${targetNode.name}」？其子节点将一并删除。`)) return;
-                    useProjectStore.getState().removeUnifiedNode(activeSkeletonKey!, targetNode.id);
-                    setSelectedNodeId(null);
+                    const subtreeIds = collectSubtreeIds(activeSkeleton.nodes, targetNode.id);
+                    if (!deleteNodeSubtree(activeSkeletonKey!, targetNode.id)) return;
+                    setProcessedNodes((m) => {
+                      const next = new Map(m);
+                      for (const id of subtreeIds) next.delete(id);
+                      return next;
+                    });
                   }}
                 >
                   删除节点
@@ -770,10 +833,21 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   </>
                 )}
                 {parentNodeForSocket && parentNodeForSocket.sockets.length === 0 && (
-                  <div className="text-[10px] text-amber-500">父节点无插槽，将作为根节点添加（无父连接）</div>
+                  <div className="text-[10px] text-amber-500">父节点无插槽，将挂到根节点下（固定连接）</div>
+                )}
+                {parentNodeForSocket && parentNodeForSocket.sockets.length > 0 && !newLimbSocketId && (
+                  <div className="text-[10px] text-amber-500">父节点有插槽，必须先选一个插槽——不选会挂到根下、与所选父节点无关</div>
+                )}
+                {!newLimbParentId && (
+                  <div className="text-[10px] text-gray-500">未选父节点时挂到根节点下</div>
                 )}
                 <div className="flex gap-2">
-                  <Button size="sm" className="flex-1" onClick={handleAddLimb} disabled={!newLimbName.trim()}>
+                  <Button
+                    size="sm"
+                    className="flex-1"
+                    onClick={handleAddLimb}
+                    disabled={!newLimbName.trim() || (!!parentNodeForSocket && parentNodeForSocket.sockets.length > 0 && !newLimbSocketId)}
+                  >
                     添加
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => setShowAddLimb(false)}>
@@ -785,81 +859,165 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             {/* 操作选项 */}
             {targetNode && (
               <div className="space-y-2">
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="flex-1 text-[11px]"
-                    onClick={() => {
-                      const store = useEditorStore.getState();
-                      store.setMaskNodeId(targetNode.id);
-                      store.setEditMode('mask');
-                      // 向导保持挂载（不卸载），mask 画布在主区域，侧边栏不冲突
-                    }}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full text-[11px]"
+                  onClick={() => {
+                    const store = useEditorStore.getState();
+                    store.setMaskNodeId(targetNode.id);
+                    store.setEditMode('mask');
+                    // 向导保持挂载（不卸载），mask 画布在主区域，侧边栏不冲突
+                  }}
+                >
+                  绘制遮罩
+                </Button>
+                {/* 复制/镜像生成（烘焙式）：源可选、镜像轴可自定义、可选压暗 */}
+                <div className="p-2 rounded bg-white/5 border border-white/10 space-y-2">
+                  <div className="text-[10px] text-gray-500">从已抠节点复制/镜像生成（烘焙式，源改不跟随）</div>
+                  <select
+                    value={deriveSourceId ?? ''}
+                    onChange={(e) => setDeriveSourceId(e.target.value || null)}
+                    className="w-full h-7 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
                   >
-                    绘制遮罩
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="flex-1 text-[11px]"
-                    disabled={!findMirrorSource(targetNode)}
-                    onClick={() => {
-                      const src = findMirrorSource(targetNode);
-                      if (!src || !activeSkeleton) return;
-                      const projectStore = useProjectStore.getState();
-                      const srcNode = sortedNodes.find((n) => n.id === src);
-                      // New model: get sprite from node.sprite or costumePiece
-                      const srcSprite = (srcNode as any)?.sprite ?? null;
-                      if (!srcSprite?.data) return;
-                      const srcPart = { width: srcSprite.width, height: srcSprite.height, pixels: srcSprite.data, pivotX: srcSprite.plug?.x ?? 0, pivotY: srcSprite.plug?.y ?? 0 };
-                      // 真镜像：水平翻转像素，建新 Part
-                      const w = srcPart.width;
-                      const h = srcPart.height;
-                      const flipped: PixelGrid = [];
-                      for (let y = 0; y < h; y++) {
-                        const row: PixelColor[] = [];
-                        for (let x = 0; x < w; x++) {
-                          row.push(srcPart.pixels[y][w - 1 - x]);
-                        }
-                        flipped.push(row);
-                      }
-                      // 新模型：精灵直写全局 sprites 表（s.sprites）
-                      const spriteId = `sprite_mirror_${targetNode.id}_${Date.now().toString(36)}`;
-                      useProjectStore.setState((s: any) => ({
-                        sprites: {
-                          ...s.sprites,
-                          [spriteId]: {
-                            id: spriteId,
-                            name: `镜像_${targetNode.name ?? targetNode.id}`,
-                            width: w,
-                            height: h,
-                            data: flipped,
-                          },
-                        },
-                      }));
-                      // 写进工作服装的 pieces，不改模板节点
-                      if (workingCostumeId && selectedCharacterId) {
-                        // 'S' → DirectionIndex 0
-                        projectStore.setUnifiedCostumeSprite(
-                          selectedCharacterId,
-                          workingCostumeId,
-                          targetNode.id,
-                          0,
-                          spriteId
-                        );
-                        projectStore.updateUnifiedNode(activeSkeletonKey!, targetNode.id, {
-                        });
-                      }
-                      setProcessedNodes((m) => new Map(m).set(targetNode.id, 'mirror'));
-                    }}
-                  >
-                    镜像对侧
-                  </Button>
+                    <option value="">— 选择源节点 —</option>
+                    {deriveCandidates.map((n) => (
+                      <option key={n.id} value={n.id}>{n.name}</option>
+                    ))}
+                  </select>
+                  {deriveCandidates.length === 0 && (
+                    <div className="text-[10px] text-amber-500">暂无可用源：先遮罩抠出至少一个其他节点</div>
+                  )}
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-gray-500 shrink-0">镜像轴</span>
+                    {([[90, '竖直'], [0, '水平'], [45, '主对角'], [135, '副对角']] as const).map(([v, label]) => (
+                      <button
+                        key={v}
+                        onClick={() => setDeriveAxis(v)}
+                        className={`h-5 px-1.5 text-[10px] rounded border ${deriveAxis === v ? 'border-cyan-400 text-cyan-300' : 'border-white/10 text-gray-400'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    <input
+                      type="number"
+                      value={deriveAxis}
+                      onChange={(e) => setDeriveAxis(parseFloat(e.target.value) || 0)}
+                      className="h-6 w-14 px-1 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
+                      title="自定义轴向角（度）：预设轴按整图翻转，任意角绕源锚点"
+                    />
+                    <span className="text-[10px] text-gray-500">°</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1 text-[10px] text-gray-400">
+                      <input
+                        type="checkbox"
+                        checked={deriveDarkenOn}
+                        onChange={(e) => setDeriveDarkenOn(e.target.checked)}
+                      />
+                      压暗
+                    </label>
+                    <Slider
+                      className="flex-1"
+                      value={[deriveDarken]}
+                      min={0.3}
+                      max={1}
+                      step={0.05}
+                      disabled={!deriveDarkenOn}
+                      onValueChange={([v]) => setDeriveDarken(v)}
+                    />
+                    <span className="text-[10px] text-gray-500 w-8 text-right">{Math.round(deriveDarken * 100)}%</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 text-[11px]"
+                      disabled={!deriveSourceId}
+                      onClick={() => handleDerive('copy')}
+                    >
+                      复制生成
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 text-[11px]"
+                      disabled={!deriveSourceId}
+                      onClick={() => handleDerive('mirror')}
+                    >
+                      镜像生成
+                    </Button>
+                  </div>
                 </div>
+                {/* 已抠精灵再编辑：不必重抠——像素直接进精灵编辑（改的是同一精灵 ID，
+                    画布横幅确认/取消），枢轴重开 PivotEditor 点击调整 */}
+                {targetSpriteId && (
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 text-[11px]"
+                      onClick={() => {
+                        const es = useEditorStore.getState();
+                        // 若正开着遮罩绘制，先收掉，避免两种画布模式叠加
+                        if (es.editMode === 'mask') es.setMaskNodeId(null);
+                        es.enterSpriteEditMode(targetSpriteId);
+                      }}
+                    >
+                      编辑像素
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1 text-[11px]"
+                      onClick={() => {
+                        const sp = useProjectStore.getState().sprites[targetSpriteId];
+                        if (sp) setPivotSprite(sp);
+                      }}
+                    >
+                      调整枢轴
+                    </Button>
+                  </div>
+                )}
+                {/* 旋转已抠精灵（绕锚点）：事后手动再转，直接改精灵本体 */}
+                {targetSpriteId && (
+                  <div className="p-2 rounded bg-white/5 border border-white/10 space-y-2">
+                    <div className="text-[10px] text-gray-500">旋转已抠精灵（绕锚点）</div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleRotateExtracted(90)}
+                        className="h-6 px-2 text-[10px] rounded border border-white/10 text-gray-300"
+                      >
+                        ↻ 90°
+                      </button>
+                      <button
+                        onClick={() => handleRotateExtracted(-90)}
+                        className="h-6 px-2 text-[10px] rounded border border-white/10 text-gray-300"
+                      >
+                        ↺ 90°
+                      </button>
+                      <input
+                        type="number"
+                        value={rotExtractAngle}
+                        onChange={(e) => setRotExtractAngle(parseFloat(e.target.value) || 0)}
+                        className="h-6 w-14 px-1 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
+                        title="旋转角（度，正值顺时针）"
+                      />
+                      <span className="text-[10px] text-gray-500">°</span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2 text-[10px] ml-auto"
+                        onClick={() => handleRotateExtracted(rotExtractAngle)}
+                      >
+                        旋转
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 {processedNodes.get(targetNode.id) && (
                   <div className="text-[10px] text-emerald-400">
-                    ✓ 已处理（{processedNodes.get(targetNode.id) === 'mask' ? '遮罩' : '镜像'}）
+                    ✓ 已处理（{processedNodes.get(targetNode.id) === 'mask' ? '遮罩' : processedNodes.get(targetNode.id) === 'copy' ? '复制' : '镜像'}）
                   </div>
                 )}
               </div>
@@ -877,30 +1035,37 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             </p>
             <Button
               size="sm" variant="outline" className="w-full"
+              disabled={processedNodes.size === 0}
               onClick={() => {
                 const projectStore = useProjectStore.getState();
-                let cleaned = 0;
+                let cleanedSprites = 0;
+                let filledHoles = 0;
+                let skipped = 0;
                 for (const nodeId of processedNodes.keys()) {
                   const node = sortedNodes.find((n) => n.id === nodeId);
                   if (!node) continue;
-                  // 取节点精灵
-                  const spriteId = (node as any).slot?.sprites?.[0]?.spriteId
-                    ?? (node as any).spriteId;
+                  // 与抠图步同一解析口径：工作服装当前方向优先、模板槽位回退。
+                  // 旧实现读 slot.sprites[0]/node.spriteId——抠图成果根本不在那，
+                  // 清的是模板自带精灵或直接跳过，本步等于白跑还可能误伤模板。
+                  const spriteId = resolveNodeSpriteId(node);
                   const sprite = spriteId ? projectStore.sprites[spriteId] : null;
-                  if (!sprite?.data) continue;
+                  if (!spriteId || !sprite?.data) {
+                    skipped++;
+                    continue;
+                  }
                   const pixels = sprite.data as PixelGrid;
                   const h = pixels.length;
                   const w = h > 0 ? pixels[0].length : 0;
-                  // 检测洞：透明像素且四邻域全不透明
+                  // 检测洞：透明像素（null 与 '' 同为透明）且四邻域全不透明
                   const holes = new Set<string>();
                   for (let y = 1; y < h - 1; y++) {
                     for (let x = 1; x < w - 1; x++) {
-                      if (pixels[y][x] !== null) continue;
+                      if (pixels[y][x]) continue;
                       const neighbors = [
                         pixels[y-1][x], pixels[y+1][x],
                         pixels[y][x-1], pixels[y][x+1],
                       ];
-                      if (neighbors.every((n) => n !== null)) {
+                      if (neighbors.every((n) => !!n)) {
                         holes.add(`${x},${y}`);
                       }
                     }
@@ -908,14 +1073,23 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   if (holes.size > 0) {
                     const cleanedPixels = inpaintPixels(pixels, holes, 3);
                     projectStore.setSpritePixels(spriteId, cleanedPixels);
-                    cleaned++;
+                    cleanedSprites++;
+                    filledHoles += holes.size;
                   }
                 }
-                console.info(`[cleanup] Inpainting 清理完成，处理 ${cleaned} 个精灵`);
+                setCleanupResult(
+                  `清理完成：${cleanedSprites} 个精灵共填补 ${filledHoles} 个洞` +
+                    (skipped > 0 ? `；${skipped} 个节点未解析到精灵，已跳过` : '') +
+                    (cleanedSprites === 0 && skipped === 0 ? '（未检测到可填补的洞）' : ''),
+                );
               }}
             >
               对已抠肢体跑 Inpainting 清理
             </Button>
+            {cleanupResult && <div className="text-[11px] text-emerald-400">{cleanupResult}</div>}
+            {processedNodes.size === 0 && (
+              <div className="text-[11px] text-amber-500">尚无已处理肢体，先到抠图步抠出或派生至少一个节点。</div>
+            )}
             <Button
               size="sm" variant="ghost" className="w-full text-[11px]"
               onClick={() => {
@@ -940,7 +1114,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   <div key={n.id} className="flex items-center gap-2 text-xs px-2 py-1 rounded bg-white/5">
                     <span className="flex-1 text-gray-300">{n.name}</span>
                     <span className={status ? 'text-emerald-400' : 'text-gray-600'}>
-                      {status === 'mask' ? '✓ 遮罩' : status === 'mirror' ? '✓ 镜像' : '○ 未处理'}
+                      {status === 'mask' ? '✓ 遮罩' : status === 'mirror' ? '✓ 镜像' : status === 'copy' ? '✓ 复制' : '○ 未处理'}
                     </span>
                   </div>
                 );
@@ -954,6 +1128,11 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
           </div>
         )}
       </div>
+
+      {/* 已抠精灵枢轴重开编辑（弹窗自带确认/取消，直接写全局精灵表） */}
+      {pivotSprite && (
+        <PivotEditor sprite={pivotSprite} onClose={() => setPivotSprite(null)} />
+      )}
 
         {/* Footer */}
         <div className="flex justify-between p-3 border-t border-white/10 shrink-0">
@@ -973,13 +1152,11 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             }
             onClick={() => {
               if (stepIndex >= 0 && stepIndex < STEPS.length - 1) {
-                // 离开 align 步骤：保存对位偏移到服装，恢复模板
-                if (step === 'align') {
-                  saveAlignmentToCostume();
-                }
+                // 对位姿态跨 align/mask 两步保留（抠图取样要用），不中途恢复
                 setStep(STEPS[stepIndex + 1].id);
               } else if (stepIndex === STEPS.length - 1) {
-                // 完成：保留工作服装，只关向导
+                // 完成：保留工作服装，恢复模板姿态，关向导
+                restoreTemplatePose();
                 setWorkingCostumeIdState(null);
                 resetRefWizardStep();
                 onClose();

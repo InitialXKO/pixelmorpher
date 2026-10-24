@@ -482,6 +482,7 @@ export function buildVariableContext(
   variables: AnimationVariable[],
   frame: number,
   allActiveDrivers: ParamDriver[] = [],
+  frameRate: number = 12,
 ): VariableContext {
   if (variables.length === 0) return EMPTY_VARIABLE_CONTEXT;
 
@@ -500,6 +501,8 @@ export function buildVariableContext(
     storeVars,
     allActiveDrivers as unknown as import('./types').ParamDriver[],
     frame,
+    undefined,
+    frameRate,
   );
   const values: Record<string, number> = {};
   for (const v of variables) {
@@ -544,9 +547,10 @@ export function buildBlueprintVars(
   variables: AnimationVariable[] | undefined,
   frame: number,
   allActiveDrivers: ParamDriver[] = [],
+  frameRate: number = 12,
 ): Record<string, number> {
   if (!variables || variables.length === 0) return {};
-  return buildVariableContext(variables, frame, allActiveDrivers).values;
+  return buildVariableContext(variables, frame, allActiveDrivers, frameRate).values;
 }
 
 // ============================================================

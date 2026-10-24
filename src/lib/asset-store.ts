@@ -1,25 +1,19 @@
 // ============================================================
 // PixelMorpher - Asset Store
-// Three-layer asset management: Library → Project → Workflow
+// Two-layer asset management: Project → Workflow
 //
-// Layer 1 (Asset Library): Global reusable assets persisted in IndexedDB
 // Layer 2 (Project Assets): Project metadata list + current project state
 // Layer 3 (Workflow Assets): Current editing workflow summary
+// （Layer 1 跨项目资产库已退役：存的单位是单个精灵/tileset，与现行
+//  以角色为单位的工作流错位，面板与库动作一并删除。）
 // ============================================================
 
 import { create } from 'zustand';
 import type {
-  LibraryAsset,
-  LibraryAssetType,
   ProjectMeta,
-  AssetFilter,
-  AssetViewMode,
   WorkflowSummary,
   WorkflowType,
-  SpriteAssetData,
-  TilesetAssetData,
 } from './asset-types';
-import type { PixelGrid, PixelAnimModifier } from './types';
 import {
   dbGet,
   dbPut,
@@ -33,10 +27,6 @@ import {
 // ============================================================
 
 export interface AssetStore {
-  // ---- Layer 1: Asset Library ----
-  libraryAssets: LibraryAsset[];
-  libraryLoaded: boolean;
-
   // ---- Layer 2: Project Assets ----
   projectList: ProjectMeta[];
   projectListLoaded: boolean;
@@ -46,23 +36,7 @@ export interface AssetStore {
   workflowSummary: WorkflowSummary;
 
   // ---- UI State ----
-  viewMode: AssetViewMode;
-  filter: AssetFilter;
-  selectedAssetId: string | null;
   showProjectHome: boolean;
-
-  // ---- Layer 1 Actions ----
-  loadLibrary: () => Promise<void>;
-  addAssetToLibrary: (asset: Omit<LibraryAsset, 'id' | 'createdAt' | 'updatedAt'>) => Promise<LibraryAsset>;
-  updateAssetInLibrary: (id: string, updates: Partial<Pick<LibraryAsset, 'name' | 'tags' | 'thumbnail' | 'data'>>) => Promise<void>;
-  removeAssetFromLibrary: (id: string) => Promise<void>;
-  /** Save a sprite (pixel grid) to the library */
-  saveSpriteToLibrary: (name: string, pixels: PixelGrid, width: number, height: number, thumbnail: string, tags?: string[]) => Promise<LibraryAsset>;
-  /** Save a tile set to the library */
-  saveTilesetToLibrary: (name: string, tileWidth: number, tileHeight: number, tiles: { pixels: PixelGrid; animModifiers: PixelAnimModifier[]; tags: string[] }[], thumbnail: string, tags?: string[]) => Promise<LibraryAsset>;
-  /** Import a library asset into the current project as a Part */
-  importAssetToProject: (assetId: string) => Promise<void>;
-  getFilteredAssets: () => LibraryAsset[];
 
   // ---- Layer 2 Actions ----
   loadProjectList: () => Promise<void>;
@@ -81,9 +55,6 @@ export interface AssetStore {
   refreshWorkflowSummary: () => void;
 
   // ---- UI Actions ----
-  setViewMode: (mode: AssetViewMode) => void;
-  setFilter: (filter: Partial<AssetFilter>) => void;
-  setSelectedAssetId: (id: string | null) => void;
   setShowProjectHome: (show: boolean) => void;
 }
 
@@ -93,8 +64,6 @@ export interface AssetStore {
 
 export const useAssetStore = create<AssetStore>((set, get) => ({
   // ---- Initial State ----
-  libraryAssets: [],
-  libraryLoaded: false,
 
   projectList: [],
   projectListLoaded: false,
@@ -102,156 +71,9 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
 
   workflowSummary: { type: 'none' },
 
-  viewMode: 'library',
-  filter: {},
-  selectedAssetId: null,
   showProjectHome: true, // Start on project home screen
 
   // ============================================================
-  // Layer 1: Asset Library Actions
-  // ============================================================
-
-  loadLibrary: async () => {
-    try {
-      const assets = await dbGetAll<LibraryAsset>('assetLibrary');
-      set({ libraryAssets: assets || [], libraryLoaded: true });
-    } catch {
-      // IndexedDB might not be available (SSR) — fail silently
-      set({ libraryLoaded: true });
-    }
-  },
-
-  addAssetToLibrary: async (assetInput) => {
-    const now = Date.now();
-    const asset: LibraryAsset = {
-      ...assetInput,
-      id: crypto.randomUUID(),
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    await dbPut('assetLibrary', asset);
-    set((s) => ({ libraryAssets: [...s.libraryAssets, asset] }));
-    return asset;
-  },
-
-  updateAssetInLibrary: async (id, updates) => {
-    const asset = get().libraryAssets.find((a) => a.id === id);
-    if (!asset) return;
-
-    const updated: LibraryAsset = {
-      ...asset,
-      ...updates,
-      updatedAt: Date.now(),
-    };
-
-    await dbPut('assetLibrary', updated);
-    set((s) => ({
-      libraryAssets: s.libraryAssets.map((a) => (a.id === id ? updated : a)),
-    }));
-  },
-
-  removeAssetFromLibrary: async (id) => {
-    await dbDelete('assetLibrary', id);
-    set((s) => ({
-      libraryAssets: s.libraryAssets.filter((a) => a.id !== id),
-      selectedAssetId: s.selectedAssetId === id ? null : s.selectedAssetId,
-    }));
-  },
-
-  saveSpriteToLibrary: async (name, pixels, width, height, thumbnail, tags = []) => {
-    return get().addAssetToLibrary({
-      name,
-      type: 'sprite',
-      tags,
-      thumbnail,
-      data: { pixels, width, height } as SpriteAssetData,
-    });
-  },
-
-  saveTilesetToLibrary: async (name, tileWidth, tileHeight, tiles, thumbnail, tags = []) => {
-    return get().addAssetToLibrary({
-      name,
-      type: 'tileset',
-      tags,
-      thumbnail,
-      data: { tileWidth, tileHeight, tiles } as TilesetAssetData,
-    });
-  },
-
-  importAssetToProject: async (assetId) => {
-    const asset = get().libraryAssets.find((a) => a.id === assetId);
-    if (!asset) return;
-
-    // Lazy import to avoid circular dependency
-    const { useProjectStore } = await import('./store');
-    const projectStore = useProjectStore.getState();
-
-    switch (asset.type) {
-      case 'sprite': {
-        const spriteData = asset.data as SpriteAssetData;
-        projectStore.pushUndo('从资产库导入精灵');
-        const sprite = projectStore.addSprite(
-          asset.name,
-          spriteData.width,
-          spriteData.height,
-        );
-        projectStore.setSpritePixels(sprite.id!, spriteData.pixels.map((row) => [...row]));
-        if (spriteData.pivotX != null && spriteData.pivotY != null) {
-          const { pxToSub } = require('./unified-types');
-          projectStore.updateSprite(sprite.id!, { plug: { x: pxToSub(spriteData.pivotX), y: pxToSub(spriteData.pivotY) } });
-        }
-        break;
-      }
-      case 'tileset': {
-        const tilesetData = asset.data as TilesetAssetData;
-        // Import tiles as individual parts
-        projectStore.pushUndo('从资产库导入瓦片集');
-        for (let i = 0; i < tilesetData.tiles.length; i++) {
-          const tile = tilesetData.tiles[i];
-          const sprite = projectStore.addSprite(
-            `${asset.name}_${i}`,
-            tilesetData.tileWidth,
-            tilesetData.tileHeight,
-          );
-          projectStore.setSpritePixels(sprite.id!, tile.pixels.map((r) => [...r]));
-        }
-        break;
-      }
-      case 'modifier_preset': {
-        // Apply modifiers to the currently selected part's current keyframe
-        // This is more contextual — handled by the UI directly
-        break;
-      }
-      case 'skeleton_template': {
-        // Skeleton templates are handled by the skeleton panel
-        break;
-      }
-    }
-  },
-
-  getFilteredAssets: () => {
-    const { libraryAssets, filter } = get();
-    let result = libraryAssets;
-
-    if (filter.type) {
-      result = result.filter((a) => a.type === filter.type);
-    }
-    if (filter.tags && filter.tags.length > 0) {
-      result = result.filter((a) => filter.tags!.some((t) => a.tags.includes(t)));
-    }
-    if (filter.searchText) {
-      const search = filter.searchText.toLowerCase();
-      result = result.filter(
-        (a) =>
-          a.name.toLowerCase().includes(search) ||
-          a.tags.some((t) => t.toLowerCase().includes(search)),
-      );
-    }
-
-    return result;
-  },
-
   // ============================================================
   // Layer 2: Project Assets Actions
   // ============================================================
@@ -532,8 +354,5 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
   // UI Actions
   // ============================================================
 
-  setViewMode: (mode) => set({ viewMode: mode }),
-  setFilter: (filter) => set((s) => ({ filter: { ...s.filter, ...filter } })),
-  setSelectedAssetId: (id) => set({ selectedAssetId: id }),
   setShowProjectHome: (show) => set({ showProjectHome: show }),
 }));

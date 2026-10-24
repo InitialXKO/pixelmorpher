@@ -40,7 +40,7 @@ export interface QuadrupedRunSlots {
 export interface QuadrupedRunParams {
   /** 腿摆动幅度（度） */
   legAmplitude?: number;
-  /** 步态周期（帧） */
+  /** 步态周期（秒） */
   stridePeriod?: number;
   /** 尾巴摇摆幅度 */
   tailAmplitude?: number;
@@ -63,7 +63,7 @@ export function createQuadrupedRunBlueprint(
 ): Map<string, BlueprintGraph> {
   const {
     legAmplitude = 25,
-    stridePeriod = 12,
+    stridePeriod = 0.5,
     tailAmplitude = 15,
     bodyBob = 2,
   } = params;

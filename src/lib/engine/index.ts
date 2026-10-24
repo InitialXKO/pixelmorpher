@@ -51,7 +51,8 @@ export { renderMotionBlurStroke, renderEffectStroke } from './brush-render';
 
 
 // Puppet utils (moved from puppet-render.ts, now deleted)
-export { renderPixelPerfectRotation, resolvePuppetNodeSprite } from './puppet-utils';
+export { renderPixelPerfectRotation, resolvePuppetNodeSprite, bakeCanvasAffine } from './puppet-utils';
+export type { CanvasAffineBakeResult } from './puppet-utils';
 
 // Utilities
 export { imageDataToPixelGrid, floodFill } from './utils';

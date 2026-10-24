@@ -142,16 +142,48 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
     const node = createDefaultNode(generateId('node'), name);
     Object.assign(node, opts);
 
-    set((s) => ({
-      unifiedCharacters: {
-        ...s.unifiedCharacters,
-        [characterId]: {
-          ...s.unifiedCharacters[characterId]!,
-          nodes: { ...s.unifiedCharacters[characterId]!.nodes, [node.id]: node },
-          updatedAt: Date.now(),
+    // 挂接关系写全（node.parentId + 父节点 children）：渲染按 root→children
+    // 遍历，只写 attachment 的节点不可达、永远不显示（向导/资产面板添加的
+    // 肢体曾全中招）。父级推导：显式 parentId > socket 属主 > 根节点；
+    // 根不存在（自建骨架拼装中）或父级不在表中时不挂，留给调用方自理。
+    let parentId: string | undefined = node.parentId ?? undefined;
+    if (!parentId && node.attachment?.type === 'socket' && node.attachment.parentSocketId) {
+      const owner = Object.values(character.nodes).find((n) =>
+        n.sockets?.some((s) => s.id === node.attachment.parentSocketId),
+      );
+      if (owner) parentId = owner.id;
+    }
+    if (
+      !parentId &&
+      character.rootNodeId &&
+      character.nodes[character.rootNodeId] &&
+      node.id !== character.rootNodeId
+    ) {
+      parentId = character.rootNodeId;
+    }
+    const parent = parentId ? character.nodes[parentId] : undefined;
+    if (parent && parent.id !== node.id) {
+      node.parentId = parent.id;
+    } else {
+      parentId = undefined;
+    }
+
+    set((s) => {
+      const ch = s.unifiedCharacters[characterId]!;
+      const nodes = { ...ch.nodes, [node.id]: node };
+      if (parentId) {
+        const p = nodes[parentId];
+        if (p && !p.children.includes(node.id)) {
+          nodes[parentId] = { ...p, children: [...p.children, node.id] };
+        }
+      }
+      return {
+        unifiedCharacters: {
+          ...s.unifiedCharacters,
+          [characterId]: { ...ch, nodes, updatedAt: Date.now() },
         },
-      },
-    }));
+      };
+    });
     return node;
   },
 

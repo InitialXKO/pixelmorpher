@@ -105,6 +105,7 @@ export default function CharacterBlueprintEditor({ character }: CharacterBluepri
       </div>
       {graph && (
         <BlueprintEditor
+          frameRate={useProjectStore.getState().frameRate}
           graph={graph}
           onChange={setLocalGraph}
           title={`${character.name} 的角色蓝图`}

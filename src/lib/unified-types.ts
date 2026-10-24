@@ -41,6 +41,29 @@ export function halfPixelAlignSub(v: SubPixel): SubPixel {
 }
 
 /**
+ * 8 方向的 (cosθ, sinθ) 常量表（θ = ((direction+2)%8)·45°，按方向索引）。
+ * 离散方向一律查表、不现算 Math.cos/sin：正交向（东南西北）的三角值本
+ * 应精确为 0/±1（本质是轴交换+符号翻转），浮点现算会带进 sin(π)≈1.22e-16
+ * 的残留——曾让北向投影深度出现 1e-13 量级的假差、抢占画序次键；斜向
+ * 用 Math.SQRT1_2，与现算同精度。连续角（节点角/倾角等）不走本表。
+ */
+const SQRT1_2 = Math.SQRT1_2;
+export const DIRECTION_TRIG: ReadonlyArray<{ cos: number; sin: number }> = [
+  { cos: 0, sin: 1 },              // 0 East      θ=90°
+  { cos: -SQRT1_2, sin: SQRT1_2 }, // 1 Northeast θ=135°
+  { cos: -1, sin: 0 },             // 2 North     θ=180°
+  { cos: -SQRT1_2, sin: -SQRT1_2 },// 3 Northwest θ=225°
+  { cos: 0, sin: -1 },             // 4 West      θ=270°
+  { cos: SQRT1_2, sin: -SQRT1_2 }, // 5 Southwest θ=315°
+  { cos: 1, sin: 0 },              // 6 South     θ=0°
+  { cos: SQRT1_2, sin: SQRT1_2 },  // 7 Southeast θ=45°
+];
+
+export function directionTrig(direction: DirectionIndex): { cos: number; sin: number } {
+  return DIRECTION_TRIG[direction]!;
+}
+
+/**
  * 3D → 2D 投影：按朝向将 3D 节点坐标投影到画布 2D
  * @param x 3D X（东西向，SubPixel）
  * @param y 3D Y（垂直，SubPixel）
@@ -54,10 +77,8 @@ export function projectToView(
   z: SubPixel,
   direction: DirectionIndex,
 ): { canvasX: SubPixel; canvasY: SubPixel; depth: number } {
-  // 朝向 → 旋转角（与烘焙一致：南向 0°，东向 90°，逆时针）
-  const theta = (((direction + 2) % 8) * Math.PI) / 4;
-  const cos = Math.cos(theta);
-  const sin = Math.sin(theta);
+  // 朝向旋转（与烘焙一致：南向 0°，东向 90°，逆时针）——查常量表
+  const { cos, sin } = directionTrig(direction);
   // 旋转投影：x' = x·cosθ + z·sinθ，深度 = -x·sinθ + z·cosθ
   const canvasX = x * cos + z * sin;
   const depth = -x * sin + z * cos;
@@ -76,9 +97,7 @@ export function mapDragTo3D(
   dy: SubPixel,
   direction: DirectionIndex,
 ): { dx3: SubPixel; dy3: SubPixel; dz3: SubPixel } {
-  const theta = (((direction + 2) % 8) * Math.PI) / 4;
-  const cos = Math.cos(theta);
-  const sin = Math.sin(theta);
+  const { cos, sin } = directionTrig(direction);
   // 逆映射：dx 分配到 x/z，dy 直接到 y
   const dx3 = dx * cos;
   const dz3 = dx * sin;
@@ -102,9 +121,7 @@ export function rotateInViewPlane(
   angleDeg: number,
   direction: DirectionIndex,
 ): { x: number; y: number; z: number } {
-  const theta = (((direction + 2) % 8) * Math.PI) / 4;
-  const cosT = Math.cos(theta);
-  const sinT = Math.sin(theta);
+  const { cos: cosT, sin: sinT } = directionTrig(direction);
   // 3D → 视平面坐标：h = x·cosθ + z·sinθ（横），d = -x·sinθ + z·cosθ（深）
   const h = x * cosT + z * sinT;
   const d = -x * sinT + z * cosT;
@@ -144,9 +161,7 @@ export function rotatePseudo3D(
   angleDeg: number,
   direction: DirectionIndex,
 ): { x: number; y: number; z: number } {
-  const theta = (((direction + 2) % 8) * Math.PI) / 4;
-  const cosT = Math.cos(theta);
-  const sinT = Math.sin(theta);
+  const { cos: cosT, sin: sinT } = directionTrig(direction);
   // 3D → (h=视水平, d=深度)
   const h = x * cosT + z * sinT;
   const d = -x * sinT + z * cosT;
@@ -228,9 +243,7 @@ export function localRotMat(angleDeg: number, tiltDeg: number): Mat3 {
 export function worldToViewBasis(
   x: number, y: number, z: number, direction: DirectionIndex,
 ): { h: number; y: number; d: number } {
-  const theta = (((direction + 2) % 8) * Math.PI) / 4;
-  const cosT = Math.cos(theta);
-  const sinT = Math.sin(theta);
+  const { cos: cosT, sin: sinT } = directionTrig(direction);
   return { h: x * cosT + z * sinT, y, d: -x * sinT + z * cosT };
 }
 
@@ -238,9 +251,7 @@ export function worldToViewBasis(
 export function viewBasisToWorld(
   h: number, y: number, d: number, direction: DirectionIndex,
 ): { x: number; y: number; z: number } {
-  const theta = (((direction + 2) % 8) * Math.PI) / 4;
-  const cosT = Math.cos(theta);
-  const sinT = Math.sin(theta);
+  const { cos: cosT, sin: sinT } = directionTrig(direction);
   return { x: h * cosT - d * sinT, y, z: h * sinT + d * cosT };
 }
 
@@ -279,8 +290,8 @@ export function frameViewAngleForDirection(
   m: Mat3, geometryDirection: DirectionIndex, viewDirection: DirectionIndex,
 ): number {
   const y = frameYAxisWorld(m, geometryDirection);
-  const th = (((viewDirection + 2) % 8) * Math.PI) / 4;
-  const h = y.x * Math.cos(th) + y.z * Math.sin(th);
+  const vt = directionTrig(viewDirection);
+  const h = y.x * vt.cos + y.z * vt.sin;
   return (Math.atan2(-h, y.y) * 180) / Math.PI;
 }
 
@@ -724,6 +735,11 @@ export interface Node {
   // When present, renderer interpolates x/y from trajectory instead of tracks.
   trajectory?: { frame: number; x: number; y: number }[];
 
+  // ---- 动态模式（节点挂载：角色固有效果，不随换装变）----
+  // 与服装件的同名字段双挂载：按效果位合并，服装件同位替换、
+  // 同位关闭压制（见 dynamic-patterns 的 resolveDynamicPatterns）。
+  dynamicPatterns?: import('./dynamic-patterns').DynamicPatternInstance[];
+
   // ---- Face Turn (Spine-style pseudo-3D head turning) ----
   // 用单张静态图 + 网格变形模拟转头/转身，不用画多角度差分。
   // yaw: -1（左）~ 1（右）；pitch: -1（上）~ 1（下）
@@ -788,6 +804,159 @@ export interface NodeKeyframe {
   faceTurn?: { yaw: number; pitch: number };
 }
 
+// ---- Parametric Appearance（参数化外观：程序化运行时的槽位外观来源） ----
+
+/**
+ * pattern 层语言的 mask 原语（烘焙期求值，与运行时 compileTile 的 maskHit 同构）。
+ * 层程序是数据：层按序求值，后层覆盖先层（同像素 ch='glint' 的层写 glint 候选通道）。
+ */
+export type ParametricMask =
+  | { m: 'all' }
+  | { m: 'inside' }
+  | { m: 'edge'; w: number }
+  | { m: 'band'; w0: number; w1: number }
+  | { m: 'bands'; axis: 'x' | 'y' | 'd'; f: number; ph?: number; duty?: number }
+  | { m: 'checker'; f: number }
+  | { m: 'noise'; f: number; seed?: number; gt?: number }
+  | { m: 'gradLt'; axis: 'x' | 'y'; t: number }
+  | { m: 'facing'; deg: number; tol?: number; w?: number };
+
+/** 层程序的一层：mask 层（写表面档位/glint 候选）或 bump 形式层
+ *  （bump 是枚举的连续光照公式：以形状距离场为伪高度图，公式输出按两阈值量化成 lo/mid/hi 三档） */
+export type ParametricLayer =
+  | { mask: ParametricMask; slot: number; ch?: 'glint' }
+  | { bumpForm: 'dome' | 'top' | 'side' | 'edge'; hi: number; mid: number; lo: number };
+
+export interface ParametricShapeDef {
+  kind: 'rect' | 'ellipse' | 'capsule' | 'poly';
+  /** 逻辑尺寸（px）；瓦片按此 +2px 边距烘焙 */
+  size: [number, number];
+  /** rect/capsule 圆角（0..1，相对半短边） */
+  roundness?: number;
+  /** kind='poly' 的轮廓点（部件局部 px，原点=形状中心，x 右 y 下） */
+  poly?: [number, number][];
+  polyPivot?: [number, number];
+}
+
+/**
+ * 参数化外观：挂在 CostumePiece 上（随服装集变化——同一槽位在不同服装集可有
+ * 不同的参数化外观，即服装覆盖）。存在 = 该槽在此服装下以参数化形式进入
+ * 程序化运行时包；主渲染管线不消费此字段（仍走 sprites），它服务于程序化
+ * 预览与「程序化运行时包」导出。
+ */
+/**
+ * 表面模式 DAG（场代数）：节点值 = (x,y) → 标量场，掩码是场的阈值化。
+ * 算子可任意嵌套/扇出（真 DAG），烘焙期逐像素求值成档位图集，
+ * 运行时仍 O(1) 采样。模板库 = 存好的图 + 暴露参数（graph.params，
+ * 节点参数以 "$key" 引用）。与旧层程序并存：有 surfaceGraph 时优先。
+ */
+export interface SurfaceGraphNode {
+  id: string;
+  op: string;
+  /** 输入口 → 上游节点 id（口名按 op 定义：a/b/in/fx/fy 等） */
+  inputs?: Record<string, string>;
+  /** 参数：数值或 "$paramKey"（从 graph.params 取） */
+  params?: Record<string, number | string>;
+}
+export interface SurfaceGraphWrite {
+  from: string;
+  /** 写档位（1..7）；ch='glint' 时写 glint 通道；bump 时按高度三档量化 */
+  slot: number;
+  /** 命中阈值（场 ≥ at 命中；缺省 0.5，距离场通常用 0） */
+  at?: number;
+  ch?: 'glint';
+  bump?: { hi: number; mid: number; lo: number };
+}
+export interface SurfaceGraph {
+  version: 1;
+  nodes: SurfaceGraphNode[];
+  /** 按序写出（后写覆盖先写，与层程序同一口径） */
+  writes: SurfaceGraphWrite[];
+  /** 模板暴露参数的当前值 */
+  params?: Record<string, number>;
+  /** 编辑器布局（v2 画布）：节点坐标 + 作用域框矩形；烘焙/运行时忽略 */
+  ui?: {
+    pos?: Record<string, { x: number; y: number }>;
+    frames?: Record<string, { x: number; y: number; w: number; h: number }>;
+  };
+}
+
+export interface ParametricAppearance {
+  shape: ParametricShapeDef;
+  /** 形状中心相对节点原点的偏移（px，x 右 y 下，节点局部） */
+  centerOffset: [number, number];
+  /** 表面层程序（pattern 层语言）；有 surfaceGraph 时让位 */
+  surface: ParametricLayer[];
+  /** 表面模式 DAG（模板库的本体）；存在时烘焙优先走它 */
+  surfaceGraph?: SurfaceGraph;
+  /** 表面预设名（UI 显示与回选；程序本体以 surface 为准） */
+  surfaceName?: string;
+  /**
+   * 合成方式（缺省 'generate'）：
+   * - 'generate'：独立生成——形状即轮廓，精灵图被整个盖过（原行为）。
+   * - 'silhouette'：借精灵轮廓——基础量改从节点精灵的透明掩码算（距离场），
+   *   着色照旧全出调色板色，精灵只贡献剪影。
+   * - 'overlay'：叠加到精灵——精灵像素作底，只让 bump 写出（亮度档位）
+   *   与四个枚举（光照/描边/轮缘光/闪光）生效，图案类写出忽略。
+   * 后两档在节点无精灵时回落 'generate'。主画布先行；导出运行时包暂仍按
+   * 'generate' 处理（第二条战线）。
+   */
+  composite?: 'generate' | 'silhouette' | 'overlay';
+  /**
+   * 轮廓外延宽度（px，0..8，缺省 0=关）：>0 时烘焙边距放大，模式图/
+   * 层程序可在轮廓外这圈带内继续写出（按带符号距离选环），产物精灵
+   * 相应变大、plug 同步平移。bump 写出不向外画（高度在轮廓外为 0）；
+   * overlay 档下外圈按图案写出原样出色（外圈无底像素）。
+   */
+  haloWidth?: number;
+  /** 调色板家族名（运行时 PALETTES 的键） */
+  palette: string;
+  /** 运行时枚举槽位编号（LIGHT / OUTLINE / RIM / GLINT，见 proc-runtime 枚举表） */
+  light: number;
+  outline: number;
+  rim: number;
+  glint: number;
+  /** rim / glint 强度（0..1，运行时作哈希门） */
+  rimI: number;
+  glintI: number;
+}
+
+// ---- Procedural Runtime（程序化行为与表演：角色级，导出运行时消费） ----
+
+/**
+ * 程序化行为 = 按节点的蓝图（behaviorGraphs[nodeId]）：与表演同源同工具，
+ * 区别只在时间形态——行为是输入驱动的无限过程，图在运行时被实时求值
+ * （宿主喂 vars：t/phase/moveX/speed01/grounded，见 proc-runtime 方言表
+ * 的 behavior 语境）；表演是有限时长、触发式，导出时采样烘焙成曲线。
+ * 编辑器关键帧系统不消费这两者。
+ */
+
+/**
+ * 作者型表演（挂蓝图）：程序化层产基础姿态，表演按包络权重淡入/淡出。
+ * 图按节点存（graphs[nodeId]）——主系统蓝图本就是按节点的（图隐含目标=
+ * 所属节点），在蓝图编辑器里以该节点为语境编辑；导出时经方言翻译
+ * （可求值子集直译、程序运动类采样烘焙成曲线）进入运行时包。
+ */
+export interface ProcPerformance {
+  id: string;
+  name: string;
+  /** 宿主输入动作名（如 'attack'）；运行时模板默认映射到按键，可由宿主改绑 */
+  trigger: string;
+  /** 时长（秒） */
+  duration: number;
+  envelopeIn: number;
+  envelopeOut: number;
+  /** 合成口径：override=按包络权重接管掩码部件；add=加算 */
+  mode: 'add' | 'override';
+  /** 部件掩码（nodeId 列表）：掩码外节点程序化照旧 */
+  maskNodeIds: string[];
+  /** nodeId → 该节点的表演图（主系统 BlueprintGraph） */
+  graphs: Record<string, BlueprintGraph>;
+  /** 残影部件（nodeId，可选）：表演期间该部件发历史残影（实例流效果） */
+  afterimageNodeId?: string;
+  enabled: boolean;
+}
+
 // ---- Costume System ----
 
 /**
@@ -821,6 +990,10 @@ export interface CostumePiece {
   scaleVariants: Partial<Record<number, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>>;
   mirrorMap: MirrorMap;                         // Direction mirror mapping
   crossSections: CrossSection[];                // Cross section definitions for disc gen
+  /** 参数化外观（可选）：该槽在此服装集下的程序化形式，见 ParametricAppearance */
+  parametric?: ParametricAppearance;
+  /** 动态模式（服装件挂载：随本服装集生效，与节点挂载双挂载合并） */
+  dynamicPatterns?: import('./dynamic-patterns').DynamicPatternInstance[];
 }
 
 /**
@@ -986,6 +1159,22 @@ export interface Character {
   /** 状态蓝图：纯状态图（无像素），每帧在服装解析前求值，输出服装集/槽位变体指令
    *  （costume_state 节点）。生效状态叠加顺序：静态字段 → clip 状态轨道 → 状态蓝图 */
   stateBlueprint?: BlueprintGraph | null;
+
+  // ---- 程序化行为与表演（蓝图；行为图运行时实时求值，
+  // 主画布经行为求值层消费，输入来自 inputTracks 或静止缺省） ----
+  /** 程序化行为蓝图：nodeId → 该节点的行为图（运行时实时求值） */
+  behaviorGraphs?: Record<string, BlueprintGraph>;
+  /** 作者型表演清单（挂蓝图，见 ProcPerformance） */
+  performances?: ProcPerformance[];
+  /** 编辑器输入轨（时间线角色级三轨）：主画布播放/拖动时逐帧采样，
+   *  作为行为图的宿主输入（var 节点读 moveX/speed01/grounded）。
+   *  缺轨/缺省：moveX=0、speed01=0、grounded=1（静止待机）。
+   *  运行时包用真实输入（键盘），不读此数据。 */
+  inputTracks?: {
+    moveX?: KeyframeTrack<number>;
+    speed01?: KeyframeTrack<number>;
+    grounded?: KeyframeTrack<number>;
+  };
 
   // ---- Face Turn Config (Spine-style pseudo-3D) ----
   faceTurnConfig?: {
@@ -1167,7 +1356,12 @@ export interface NodeRenderInstruction {
   variantIndex: DirectionIndex;
   rotationStrategy: RotationStrategy;
   mirror: boolean;               // Whether to flip horizontally
+  /** 排序主键：投影深度（projectToView.depth）——字段名沿用 zIndex，值不是作者 zIndex */
   zIndex: number;
+  /** 排序次键：作者画序（node.zIndex）。纯 2D 时各节点投影深度恒为同一
+   *  常量（2D 偏移沿视平面右向量映射，与深度轴正交），画序实际由本键
+   *  决定，不退化为层级遍历序；3D 时仅在深度相等时打破平局。 */
+  authoredZ?: number;
   drawLayer: string;
   generated?: DiscRenderInstruction;
   modifiers: ModifierInstance[];  // Pixel-level modifiers to apply before drawing
@@ -1191,6 +1385,8 @@ export interface NodeRenderInstruction {
   costumes?: CostumeSet[];
   /** Costume slot key for costume node (node.slot.slotKey) */
   costumeSlot?: string;
+  /** 动态模式（双挂载解析后）：形变已乘进 stretch/scaleX，粒子由执行端按此绘制 */
+  dynamicPatterns?: import('./dynamic-patterns').ResolvedDynamicPattern[];
   /** Shared sprite table for SpriteRef resolution (character.sprites) */
   sprites?: Record<string, Sprite>;
   /** 蒙皮快照弯曲参数（attachment.skinningSnapshot 生效时填充，renderNodeSprite 用） */

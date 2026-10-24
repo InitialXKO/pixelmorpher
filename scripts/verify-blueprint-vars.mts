@@ -5,6 +5,7 @@
 // D) IK 目标蓝图：computeWorldTransforms 的 variableContext 驱动 targetBlueprint 的 var
 // E) 状态蓝图：var → costume_state 的 gate 随 vars 开关
 import { readFileSync } from 'fs';
+import { migrateProjectTimeUnits } from '../src/lib/blueprint/time-migration';
 import { buildBlueprintVars, mapStoreAnimationVariables, buildVariableContext } from '../src/lib/unified-animation-resolver';
 import { evaluateBlueprintTransforms, generateRenderPlan, computeWorldTransforms, resolveEffectiveCostumeState } from '../src/lib/unified-render';
 import { getIKChainJointIds } from '../src/lib/ik-tip';
@@ -89,6 +90,10 @@ const proj = raw.project;
 const W = proj.canvasWidth ?? 256;
 const H = proj.canvasHeight ?? 256;
 useProjectStore.setState({ canvasWidth: W, canvasHeight: H, currentFrame: 0 });
+// 与应用导入同口径：旧工程先做时间单位迁移（帧制 → 秒制）
+if ((proj as any).timeUnitsVersion !== 2) {
+  migrateProjectTimeUnits(proj.unifiedCharacters, [], (proj as any).globalModifiers ?? [], proj.frameRate ?? 12);
+}
 const charD: any = clone((Object.values(proj.unifiedCharacters) as any[])[0]);
 charD.ikChains = charD.ikChains.map((c: any, i: number) => ({ ...c, enabled: i === 0 }));
 const chain = charD.ikChains[0];

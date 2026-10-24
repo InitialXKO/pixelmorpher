@@ -144,6 +144,10 @@ interface EditorStore extends EditorState {
   // Puppet skeleton overlay
   togglePuppetSkeleton: () => void;
   setActivePuppetSkeletonId: (id: string | null) => void;
+  // 节点锁定（中键循环命中/节点树点选时置位）：锁定期间左键只作用于该
+  // 节点、不再命中其他节点；画布空白处单击（不拖动）解除。
+  nodeLockId: string | null;
+  setNodeLockId: (id: string | null) => void;
   // 参考图装配
   referenceImageUrl: string | null;
   referenceImageOpacity: number;
@@ -218,6 +222,7 @@ const defaultEditor: EditorState = {
   moveTargetLevel: 'keyframe',
   showPuppetSkeleton: false,
   activePuppetSkeletonId: null,
+  nodeLockId: null,
   selectedHitboxId: null,
   paletteConstrained: false,
   selectedPaletteSlot: null,
@@ -308,6 +313,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setSelectedHitboxId: (id) => set({ selectedHitboxId: id }),
   togglePuppetSkeleton: () => set((s) => ({ showPuppetSkeleton: !s.showPuppetSkeleton })),
   setActivePuppetSkeletonId: (id) => set({ activePuppetSkeletonId: id }),
+  setNodeLockId: (id) => set({ nodeLockId: id }),
   setReferenceImageUrl: (url) => set({ referenceImageUrl: url }),
   setReferenceImageOpacity: (v) => set({ referenceImageOpacity: v }),
   setReferenceImageVisible: (v) => set({ referenceImageVisible: v }),

@@ -23,10 +23,10 @@ import type { BakeTransformHandler, TransformResult } from './types';
 
 const pendulumHandler: BakeTransformHandler = (mod, ctx) => {
   const amplitude = Number(mod.params.amplitude) || 30;
-  const period = Math.max(2, Number(mod.params.period) || 16);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.267);
   const phaseRad = ((Number(mod.params.phase) || 0) * Math.PI) / 180;
   const damping = Number(mod.params.damping) || 0;
-  const t = ctx.relativeFrame / period;
+  const t = (ctx.relativeFrame / (ctx.frameRate || 12)) / period; // 已过周期数
   const decay = Math.exp(-damping * t * 2 * Math.PI);
   const angle = amplitude * Math.sin(2 * Math.PI * t + phaseRad) * decay;
   return { rotation: angle * ctx.effectiveWeight };
@@ -35,7 +35,7 @@ const pendulumHandler: BakeTransformHandler = (mod, ctx) => {
 const wheelHandler: BakeTransformHandler = (mod, ctx) => {
   const radiusX = Number(mod.params.radiusX) || 10;
   const radiusY = Number(mod.params.radiusY) || 10;
-  const period = Math.max(2, Number(mod.params.period) || 16);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.267);
   const phaseRad = ((Number(mod.params.phase) || 0) * Math.PI) / 180;
   const dir = mod.params.direction === 'ccw' ? -1 : 1;
   const trajectoryMode = String(mod.params.trajectoryMode ?? 'circular') as WheelTrajectoryMode;
@@ -44,7 +44,7 @@ const wheelHandler: BakeTransformHandler = (mod, ctx) => {
   const gearMeshOffset = Number(mod.params.gearMeshOffset ?? 0);
 
   const traj = computeWheelTrajectory({
-    radiusX, radiusY, relativeFrame: ctx.relativeFrame, period, phaseRad, direction: dir,
+    radiusX, radiusY, relativeFrame: ctx.relativeFrame / (ctx.frameRate || 12), period, phaseRad, direction: dir,
     weight: ctx.effectiveWeight, trajectoryMode, cornerRadius, gearTeeth, gearMeshOffset,
   });
 
@@ -67,11 +67,12 @@ const wheelHandler: BakeTransformHandler = (mod, ctx) => {
 
 const bounceHandler: BakeTransformHandler = (mod, ctx) => {
   const height = Number(mod.params.height) || 20;
-  const period = Math.max(2, Number(mod.params.period) || 12);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.2);
   const bounces = Math.max(1, Number(mod.params.bounces) || 3);
   const damping = Number(mod.params.damping) || 0.5;
-  const bounceT = (ctx.relativeFrame % period) / (period / bounces);
-  const bounceIndex = Math.floor((ctx.relativeFrame % period) / (period / bounces));
+  const relSec = ctx.relativeFrame / (ctx.frameRate || 12);
+  const bounceT = (relSec % period) / (period / bounces);
+  const bounceIndex = Math.floor((relSec % period) / (period / bounces));
   const decayFactor = Math.pow(1 - damping, bounceIndex);
   const bouncePhase = bounceT - Math.floor(bounceT);
   const yOffset = -height * decayFactor * Math.pow(Math.sin(Math.PI * bouncePhase), 2);
@@ -79,10 +80,11 @@ const bounceHandler: BakeTransformHandler = (mod, ctx) => {
 };
 
 const gaitHandler: BakeTransformHandler = (mod, ctx) => {
-  const gaitPeriod = Math.max(4, Number(mod.params.period) || 24);
+  const gaitPeriod = Math.max(0.01, Number(mod.params.period) || 0.4);
   const phaseRad = ((Number(mod.params.phase) || 0) * Math.PI) / 180;
-  // Deterministic path: analytical normalizedT from relativeFrame
-  const frameInPeriod = ((ctx.relativeFrame % gaitPeriod) + gaitPeriod) % gaitPeriod;
+  // Deterministic path: analytical normalizedT from relative seconds
+  const relSec = ctx.relativeFrame / (ctx.frameRate || 12);
+  const frameInPeriod = ((relSec % gaitPeriod) + gaitPeriod) % gaitPeriod;
   const gaitNormT = frameInPeriod / gaitPeriod + phaseRad / (2 * Math.PI);
   return computeGaitTransform({
     normalizedT: gaitNormT, period: gaitPeriod, weight: ctx.effectiveWeight,
@@ -98,17 +100,17 @@ const gaitHandler: BakeTransformHandler = (mod, ctx) => {
     contactAngle: Number(mod.params.contactAngle ?? 10),
     angleEasing: String(mod.params.angleEasing ?? 'sine'),
     landBend: Number(mod.params.landBend ?? 0.15),
-    landBendDuration: Number(mod.params.landBendDuration ?? 3),
+    landBendDuration: Number(mod.params.landBendDuration ?? 0.05),
     liftoffBend: Number(mod.params.liftoffBend ?? 0.1),
-    liftoffBendDuration: Number(mod.params.liftoffBendDuration ?? 2),
+    liftoffBendDuration: Number(mod.params.liftoffBendDuration ?? 0.033),
   });
 };
 
 const breathHandler: BakeTransformHandler = (mod, ctx) => {
   const amplitude = Number(mod.params.amplitude) || 0.1;
-  const period = Math.max(2, Number(mod.params.period) || 24);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.4);
   const phaseRad = ((Number(mod.params.phase) || 0) * Math.PI) / 180;
-  const scale = 1 + amplitude * Math.sin(2 * Math.PI * ctx.relativeFrame / period + phaseRad);
+  const scale = 1 + amplitude * Math.sin(2 * Math.PI * (ctx.relativeFrame / (ctx.frameRate || 12)) / period + phaseRad);
   const s = Math.max(0.01, scale) * ctx.effectiveWeight + (1 - ctx.effectiveWeight);
   return { scaleX: s, scaleY: s };
 };
@@ -116,10 +118,10 @@ const breathHandler: BakeTransformHandler = (mod, ctx) => {
 const wobbleHandler: BakeTransformHandler = (mod, ctx) => {
   const angleAmp = Number(mod.params.angleAmplitude) || 5;
   const moveAmp = Number(mod.params.moveAmplitude) || 2;
-  const period = Math.max(2, Number(mod.params.period) || 12);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.2);
   const phaseRad = ((Number(mod.params.phase) || 0) * Math.PI) / 180;
   const damping = Number(mod.params.damping) || 0;
-  const t = ctx.relativeFrame / period;
+  const t = (ctx.relativeFrame / (ctx.frameRate || 12)) / period;
   const decay = Math.exp(-damping * t * 2 * Math.PI);
   const rot = angleAmp * Math.sin(2 * Math.PI * t + phaseRad) * decay;
   const dx = moveAmp * Math.sin(2 * Math.PI * t + phaseRad + Math.PI / 3) * decay;
@@ -133,10 +135,10 @@ const wobbleHandler: BakeTransformHandler = (mod, ctx) => {
 
 const floatHandler: BakeTransformHandler = (mod, ctx) => {
   const floatHeight = Number(mod.params.height) || 5;
-  const period = Math.max(2, Number(mod.params.period) || 24);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.4);
   const tiltDeg = Number(mod.params.tilt) || 3;
   const phaseRad = ((Number(mod.params.phase) || 0) * Math.PI) / 180;
-  const t = 2 * Math.PI * ctx.relativeFrame / period + phaseRad;
+  const t = 2 * Math.PI * (ctx.relativeFrame / (ctx.frameRate || 12)) / period + phaseRad;
   const dy = -floatHeight * (0.5 + 0.5 * Math.sin(t));
   const rot = tiltDeg * Math.sin(t);
   return {
@@ -147,14 +149,15 @@ const floatHandler: BakeTransformHandler = (mod, ctx) => {
 
 const shakeHandler: BakeTransformHandler = (mod, ctx) => {
   const intensity = Number(mod.params.intensity) || 3;
-  const period = Math.max(1, Number(mod.params.period) || 4);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.067);
   const decay = Number(mod.params.decay) || 0;
   const seed = Number(mod.params.seed) || 0;
-  const step = Math.floor(ctx.relativeFrame / period);
+  const relSec = ctx.relativeFrame / (ctx.frameRate || 12);
+  const step = Math.floor(relSec / period);
   const rng = seededRandom(seed + step * 7919);
   const dx = (rng() * 2 - 1) * intensity;
   const dy = (rng() * 2 - 1) * intensity;
-  const decayFactor = Math.exp(-decay * ctx.relativeFrame * 0.1);
+  const decayFactor = Math.exp(-decay * relSec * 6);
   return {
     translateX: dx * decayFactor * ctx.effectiveWeight,
     translateY: dy * decayFactor * ctx.effectiveWeight,
@@ -163,11 +166,11 @@ const shakeHandler: BakeTransformHandler = (mod, ctx) => {
 
 const elasticHandler: BakeTransformHandler = (mod, ctx) => {
   const offset = Number(mod.params.offset) || 20;
-  const period = Math.max(2, Number(mod.params.period) || 12);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.2);
   const overshoot = Number(mod.params.overshoot) || 0.3;
   const damping = Number(mod.params.damping) || 0.5;
   const axis = String(mod.params.axis) || 'y';
-  const t = ctx.relativeFrame / period;
+  const t = (ctx.relativeFrame / (ctx.frameRate || 12)) / period;
   const decayVal = Math.exp(-damping * t * 2 * Math.PI);
   const osc = 1 - Math.cos(2 * Math.PI * t) * decayVal * (1 + overshoot);
   const value = offset * osc * ctx.effectiveWeight;
@@ -185,7 +188,7 @@ const elasticHandler: BakeTransformHandler = (mod, ctx) => {
 
 const expressionHandler: BakeTransformHandler = (mod, ctx) => {
   const amplitude = Number(mod.params.amplitude) || 10;
-  const period = Math.max(2, Number(mod.params.period) || 16);
+  const period = Math.max(0.01, Number(mod.params.period) || 0.267);
   const phase = Number(mod.params.phase) || 0;
 
   // Feature 5: CSV waveform support
@@ -197,12 +200,12 @@ const expressionHandler: BakeTransformHandler = (mod, ctx) => {
   }
 
   const vars = {
-    t: ctx.relativeFrame,
-    f: ctx.relativeFrame,
+    t: ctx.relativeFrame / (ctx.frameRate || 12),
+    f: ctx.relativeFrame / (ctx.frameRate || 12),
     period,
     phase,
     amplitude,
-    fps: 12,
+    fps: ctx.frameRate || 12,
     totalFrames: 24,
     PI: Math.PI,
     E: Math.E,
@@ -232,11 +235,11 @@ const noopHandler: BakeTransformHandler = () => ({});
 const noiseHandler: BakeTransformHandler = (mod, ctx) => {
   const result: TransformResult = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
   const amplitude = Number(mod.params.amplitude) || 5;
-  const frequency = Number(mod.params.frequency) || 0.05;
+  const frequency = Number(mod.params.frequency) || 3;
   const octaves = Number(mod.params.octaves) || 2;
   const seed = Number(mod.params.seed) || 42;
   const targetProperty = String(mod.params.targetProperty || 'translateX');
-  const value = fbmNoise(ctx.relativeFrame * frequency, 0, octaves, seed) * amplitude * ctx.effectiveWeight;
+  const value = fbmNoise((ctx.relativeFrame / (ctx.frameRate || 12)) * frequency, 0, octaves, seed) * amplitude * ctx.effectiveWeight;
   applyProceduralToResult(result, targetProperty, value);
   return result;
 };
@@ -244,11 +247,11 @@ const noiseHandler: BakeTransformHandler = (mod, ctx) => {
 const waveHandler: BakeTransformHandler = (mod, ctx) => {
   const result: TransformResult = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1 };
   const amplitude = Number(mod.params.amplitude) || 5;
-  const frequency = Number(mod.params.frequency) || 0.1;
+  const frequency = Number(mod.params.frequency) || 6;
   const phase = Number(mod.params.phase) || 0;
   const waveType = String(mod.params.waveType || 'sine');
   const targetProperty = String(mod.params.targetProperty || 'translateY');
-  const t = ctx.relativeFrame * frequency + (phase / 360);
+  const t = (ctx.relativeFrame / (ctx.frameRate || 12)) * frequency + (phase / 360);
   const p = t * Math.PI * 2;
   let value: number;
   switch (waveType) {
@@ -284,7 +287,7 @@ const jitterHandler: BakeTransformHandler = (mod, ctx) => {
   const frequency = Number(mod.params.frequency) || 0.5;
   const smooth = Boolean(mod.params.smooth);
   const targetProperty = String(mod.params.targetProperty || 'translateX');
-  const jitterSeed = Math.floor(ctx.relativeFrame * frequency * 100);
+  const jitterSeed = Math.floor((ctx.relativeFrame / (ctx.frameRate || 12)) * frequency * 100);
   const rng = seededRandom(jitterSeed);
   let value: number;
   if (smooth) {

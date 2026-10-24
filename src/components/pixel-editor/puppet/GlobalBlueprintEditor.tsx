@@ -124,6 +124,7 @@ export default function GlobalBlueprintEditor({ character }: GlobalBlueprintEdit
         各部件蓝图已合并显示（按部件分组排列）。拖动节点、连线、改参数均可。保存时自动拆分回各部件。跨部件连线会被丢弃。
       </p>
       <BlueprintEditor
+        frameRate={useProjectStore.getState().frameRate}
         graph={mergedGraph}
         onChange={setMergedGraph}
         skeleton={{ nodes: nodeList.map((n) => ({ id: n.id, name: n.name })) }}

@@ -20,6 +20,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { NodeTreeItemWrapper } from './NodeTree';
 import { collectSubtreeIds, deleteNodeSubtree, findParentNode, ikChainMembership, reparentNode } from '@/lib/node-actions';
 import PuppetModifierPanel from './PuppetModifierPanel';
+import ParametricAppearanceEditor from './ParametricAppearanceEditor';
+import DynamicPatternEditor from './DynamicPatternEditor';
+import { glowRankByInstanceId } from '@/lib/dynamic-patterns';
+import { representativeGridForSlot } from '@/lib/proc-runtime/convert';
 import GlobalBlueprintEditor from './GlobalBlueprintEditor';
 import CharacterBlueprintEditor from './CharacterBlueprintEditor';
 import StateBlueprintEditor from './StateBlueprintEditor';
@@ -233,6 +237,7 @@ function RigNodeProperties({
 }) {
   const [transposeAngle, setTransposeAngle] = useState(45);
   const character = useProjectStore((s) => (characterId ? s.unifiedCharacters[characterId] : undefined));
+  const spritesRecord = useProjectStore((s) => s.sprites);
   return (
     <div className="space-y-3 bg-[#080818] rounded border border-[#1e1e3a] p-2">
       <div className="flex items-center justify-between">
@@ -476,6 +481,26 @@ function RigNodeProperties({
         />
       </div>
 
+      {/* 动态模式（节点挂载：角色固有，不随换装变；与服装件挂载按效果位合并） */}
+      <div>
+        <Label className="text-[10px] text-gray-500 uppercase tracking-wider">动态效果（节点）</Label>
+        <div className="mt-1">
+          <DynamicPatternEditor
+            instances={node.dynamicPatterns ?? []}
+            onChange={(next) => onUpdate({ dynamicPatterns: next })}
+            hint="挂在节点上，换装不变；服装件同效果位可替换或压制这里的实例。"
+            previewGrid={character ? representativeGridForSlot(character, node.slot?.slotKey ?? node.id, spritesRecord) : null}
+            glowRankById={character
+              ? glowRankByInstanceId(
+                node.dynamicPatterns,
+                (character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId) ?? character.costumeSets[0])
+                  ?.pieces[node.slot?.slotKey ?? node.id]?.dynamicPatterns,
+              )
+              : undefined}
+          />
+        </div>
+      </div>
+
       {/* 方向排序标记 */}
       <div className="grid grid-cols-2 gap-2">
         <div>
@@ -620,6 +645,15 @@ function RigNodeProperties({
           })}
         </div>
       </div>
+
+      {/* 参数化外观（程序化运行时）：按槽位 × 服装集存；槽位键与换装同一
+          口径（node.slot.slotKey ?? nodeId）——slot 只由烘焙导入写入，
+          手建节点没有 slot 时以 nodeId 为键，两边读写一致 */}
+      {character && characterId && (
+        <div className="pt-2 border-t border-[#1e1e3a]">
+          <ParametricAppearanceEditor characterId={characterId} slotKey={node.slot?.slotKey ?? node.id} />
+        </div>
+      )}
 
       {/* ---- 程序化修改器 / 蓝图 ---- */}
       <div className="pt-2 border-t border-[#1e1e3a] space-y-2">

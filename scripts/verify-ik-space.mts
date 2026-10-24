@@ -17,6 +17,7 @@ import { solveIKFabrik } from '../src/lib/blueprint/ik';
 import { computeIKChainTip } from '../src/lib/ik-tip';
 import { resolveChainTarget3D, ikTargetMirror, subToPx, pxToSub, frameYAxisWorld } from '../src/lib/unified-types';
 import { useProjectStore } from '../src/lib/store';
+import { migrateProjectTimeUnits } from '../src/lib/blueprint/time-migration';
 
 const raw = JSON.parse(readFileSync('/home/hatch/workspace/user/files/1_0_hzs0.pxm', 'utf-8'));
 const proj = raw.project;
@@ -24,7 +25,11 @@ const W = proj.canvasWidth ?? 256;
 const H = proj.canvasHeight ?? 256;
 const character = (Object.values(proj.unifiedCharacters) as any[])[0];
 const frameRate = proj.frameRate ?? 12;
-useProjectStore.setState({ canvasWidth: W, canvasHeight: H, currentFrame: 0 });
+// 与应用导入同口径：旧工程先做时间单位迁移（帧制 → 秒制）
+if ((proj as any).timeUnitsVersion !== 2) {
+  migrateProjectTimeUnits(proj.unifiedCharacters, [], (proj as any).globalModifiers ?? [], frameRate);
+}
+useProjectStore.setState({ canvasWidth: W, canvasHeight: H, currentFrame: 0, frameRate });
 
 let fail = 0;
 function check(label: string, ok: boolean, detail: string) {

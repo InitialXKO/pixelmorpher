@@ -12,6 +12,8 @@ import {
   Eye,
   EyeOff,
   Image,
+  ImagePlus,
+  Crosshair,
   Film,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
@@ -31,12 +33,23 @@ import { pxToSub, subToPx, type Socket } from '@/lib/unified-types';
 import type {
   PuppetDirection,
 } from '@/lib/types';
-import type { Character, Node } from '@/lib/unified-types';
+import type { Character, Node, Sprite } from '@/lib/unified-types';
+import ResizePreviewDialog from './ResizePreviewDialog';
 import PuppetCreationWizard from './PuppetCreationWizard';
 import RefAssemblyWizard from './puppet/RefAssemblyWizard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 // ============================================================
 // PuppetAssetPanel — Left panel for puppet mode
@@ -80,6 +93,168 @@ function RowRenameInput({ initial, onCommit }: { initial: string; onCommit: (nam
   );
 }
 
+// ---- 精灵属性区（自退役的 PartPanel/SpritePanel 平移：锚点编辑/自动枢轴/调整尺寸） ----
+function SpritePropertiesSection({ sprite }: { sprite: Sprite }) {
+  const updateSprite = useProjectStore((s) => s.updateSprite);
+  const autoEstimatePlug = useProjectStore((s) => s.autoEstimatePlug);
+  const transformSprite = useProjectStore((s) => s.transformSprite);
+  const [resizeOpen, setResizeOpen] = useState(false);
+  const [rotAngle, setRotAngle] = useState(90);
+  const [rotStep, setRotStep] = useState(15);
+  const [axisAngle, setAxisAngle] = useState(0);
+  const [axisStep, setAxisStep] = useState(15);
+  const snapAngle = (v: number, step: number) => (step > 1 ? Math.round(v / step) * step : v);
+  const spriteId = sprite.id ?? '';
+  const plugXPx = sprite.plug ? subToPx(sprite.plug.x) : 0;
+  const plugYPx = sprite.plug ? subToPx(sprite.plug.y) : 0;
+  const handlePlugChange = (axis: 'x' | 'y', value: string) => {
+    const num = parseInt(value, 10);
+    if (isNaN(num)) return;
+    const clamped = Math.max(0, num);
+    const cur = useProjectStore.getState().sprites[spriteId]?.plug ?? { x: 0, y: 0 };
+    updateSprite(spriteId, {
+      plug: axis === 'x' ? { x: pxToSub(clamped), y: cur.y } : { x: cur.x, y: pxToSub(clamped) },
+    });
+  };
+  return (
+    <div className="space-y-2 px-1 py-1.5">
+      <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
+        精灵属性 · {sprite.name ?? '未命名精灵'}
+      </h4>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <Label className="text-[10px] text-gray-500">锚点 X</Label>
+          <Input
+            type="number"
+            min={0}
+            max={sprite.width - 1}
+            value={plugXPx}
+            onChange={(e) => handlePlugChange('x', e.target.value)}
+            className="h-7 text-xs px-2"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-[10px] text-gray-500">锚点 Y</Label>
+          <Input
+            type="number"
+            min={0}
+            max={sprite.height - 1}
+            value={plugYPx}
+            onChange={(e) => handlePlugChange('y', e.target.value)}
+            className="h-7 text-xs px-2"
+          />
+        </div>
+      </div>
+      <div className="flex items-center gap-2 text-[10px] text-gray-500">
+        <span>{sprite.width} x {sprite.height} px</span>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-5 px-1.5 text-[10px] gap-0.5 ml-auto"
+          onClick={() => setResizeOpen(true)}
+        >
+          调整尺寸
+        </Button>
+      </div>
+      <ResizePreviewDialog open={resizeOpen} onOpenChange={setResizeOpen} sprite={sprite} />
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-6 w-full text-[10px] gap-1"
+        onClick={() => autoEstimatePlug(spriteId)}
+      >
+        <Crosshair className="size-3" />
+        自动枢轴
+      </Button>
+      <div className="space-y-1.5 border-t border-white/5 pt-2">
+        <span className="text-[10px] text-gray-500">变换（绕锚点）</span>
+        <div className="flex flex-wrap gap-1">
+          {(
+            [
+              ['rot90', '↻ 90°'],
+              ['rot270', '↺ 90°'],
+              ['rot180', '180°'],
+              ['flipH', '左右镜像'],
+              ['flipV', '上下镜像'],
+              ['transpose', '主对角'],
+              ['antiTranspose', '副对角'],
+            ] as const
+          ).map(([op, label]) => (
+            <Button
+              key={op}
+              variant="outline"
+              size="sm"
+              className="h-5 px-1.5 text-[10px]"
+              onClick={() => transformSprite(spriteId, { kind: 'd4', op })}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1">
+          <Input
+            type="number"
+            value={rotAngle}
+            onChange={(e) => setRotAngle(parseFloat(e.target.value) || 0)}
+            className="h-6 w-16 text-[10px] px-1.5"
+            title="旋转角（度，正值顺时针）"
+          />
+          <span className="text-[10px] text-gray-500">° 步进</span>
+          <select
+            value={rotStep}
+            onChange={(e) => setRotStep(parseInt(e.target.value, 10))}
+            className="h-6 rounded border border-white/10 bg-transparent px-1 text-[10px] text-gray-300"
+            title="应用时把角度吸附到步进倍数"
+          >
+            <option value={1}>自由</option>
+            <option value={15}>15°</option>
+            <option value={45}>45°</option>
+          </select>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-[10px] ml-auto"
+            onClick={() => transformSprite(spriteId, { kind: 'rotate', angleDeg: snapAngle(rotAngle, rotStep) })}
+          >
+            旋转
+          </Button>
+        </div>
+        <div className="flex items-center gap-1">
+          <Input
+            type="number"
+            value={axisAngle}
+            onChange={(e) => setAxisAngle(parseFloat(e.target.value) || 0)}
+            className="h-6 w-16 text-[10px] px-1.5"
+            title="镜像轴向角（度）：0°=水平轴，90°=竖直轴，45°=主对角"
+          />
+          <span className="text-[10px] text-gray-500">° 步进</span>
+          <select
+            value={axisStep}
+            onChange={(e) => setAxisStep(parseInt(e.target.value, 10))}
+            className="h-6 rounded border border-white/10 bg-transparent px-1 text-[10px] text-gray-300"
+            title="应用时把轴向角吸附到步进倍数"
+          >
+            <option value={1}>自由</option>
+            <option value={15}>15°</option>
+            <option value={45}>45°</option>
+          </select>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-[10px] ml-auto"
+            onClick={() => transformSprite(spriteId, { kind: 'mirrorAxis', axisDeg: snapAngle(axisAngle, axisStep) })}
+          >
+            轴镜像
+          </Button>
+        </div>
+        <p className="text-[9px] leading-relaxed text-gray-600">
+          90° 倍数旋转与 45° 倍数轴走无损置换；任意角/任意轴走 4× 超采样烘焙（与主渲染同口径）。
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function PuppetAssetPanel() {
   // ---- New Character model ----
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters) ?? {};
@@ -104,6 +279,50 @@ export default function PuppetAssetPanel() {
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [threeBakeOpen, setThreeBakeOpen] = useState(false);
+  // 新建空白精灵（从零绘制的入口；此前只有死面板 AssetLibraryPanel 里有，已退役）
+  const [newSpriteOpen, setNewSpriteOpen] = useState(false);
+  const [newSpriteName, setNewSpriteName] = useState('');
+  const [newSpriteW, setNewSpriteW] = useState(32);
+  const [newSpriteH, setNewSpriteH] = useState(32);
+  const handleCreateSprite = () => {
+    const w = Math.max(1, Math.min(512, newSpriteW || 32));
+    const h = Math.max(1, Math.min(512, newSpriteH || 32));
+    const name = newSpriteName.trim() || `精灵 ${Object.keys(sprites).length + 1}`;
+    const sprite = useProjectStore.getState().addSprite(name, w, h);
+    setNewSpriteOpen(false);
+    setNewSpriteName('');
+    setNewSpriteW(32);
+    setNewSpriteH(32);
+    if (sprite.id) useEditorStore.getState().enterSpriteEditMode(sprite.id);
+  };
+  // 属性区跟随编辑器选中精灵（点行进编辑时同步写入 selectedSpriteId）
+  const selectedSpriteId = useEditorStore((s) => s.selectedSpriteId);
+  const selectedSprite = selectedSpriteId ? (sprites[selectedSpriteId] ?? null) : null;
+  // 导入 PNG（单张进精灵表，自退役的 PartPanel 平移）
+  const spriteFileRef = React.useRef<HTMLInputElement>(null);
+  const handleImportSpritePNG = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new window.Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, img.width, img.height);
+        const name = file.name.replace(/\.[^/.]+$/, '') || '导入图像';
+        const sprite = useProjectStore.getState().importSpriteFromImage(name, imageData);
+        if (sprite.id) useEditorStore.getState().enterSpriteEditMode(sprite.id);
+      };
+      img.src = ev.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
   const refWizardOpen = useEditorStore((s) => s.refWizardOpen);
   const setRefWizardOpen = useEditorStore((s) => s.setRefWizardOpen);
   const [expandedChars, setExpandedChars] = useState<Set<string>>(new Set());
@@ -312,6 +531,59 @@ export default function PuppetAssetPanel() {
       </div>
 
       <ThreeBakeDialog open={threeBakeOpen} onClose={() => setThreeBakeOpen(false)} />
+
+      {/* 新建空白精灵：建完直接进像素编辑从零画 */}
+      <Dialog open={newSpriteOpen} onOpenChange={setNewSpriteOpen}>
+        <DialogContent className="sm:max-w-[320px]">
+          <DialogHeader>
+            <DialogTitle>新建精灵</DialogTitle>
+            <DialogDescription>创建一张空白像素精灵，创建后直接进入像素编辑。</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="new-sprite-name" className="text-xs">名称</Label>
+              <Input
+                id="new-sprite-name"
+                value={newSpriteName}
+                onChange={(e) => setNewSpriteName(e.target.value)}
+                placeholder={`精灵 ${Object.keys(sprites).length + 1}`}
+                className="h-8 text-sm"
+                onKeyDown={(e) => { if (e.key === 'Enter') handleCreateSprite(); }}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="new-sprite-w" className="text-xs">宽度</Label>
+                <Input
+                  id="new-sprite-w"
+                  type="number"
+                  min={1}
+                  max={512}
+                  value={newSpriteW}
+                  onChange={(e) => setNewSpriteW(Number(e.target.value))}
+                  className="h-8 text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="new-sprite-h" className="text-xs">高度</Label>
+                <Input
+                  id="new-sprite-h"
+                  type="number"
+                  min={1}
+                  max={512}
+                  value={newSpriteH}
+                  onChange={(e) => setNewSpriteH(Number(e.target.value))}
+                  className="h-8 text-sm"
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setNewSpriteOpen(false)}>取消</Button>
+            <Button size="sm" onClick={handleCreateSprite}>创建并编辑</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <PuppetCreationWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
       {refWizardOpen ? (
@@ -635,6 +907,8 @@ export default function PuppetAssetPanel() {
                         selectedNodeId={selectedNodeId}
                         onSelect={(id) => {
                           setSelectedNodeId(id);
+                          // 节点树点选同样进入锁定（与画布中键命中同一状态）
+                          useEditorStore.getState().setNodeLockId(id);
                         }}
                         allNodes={nodes}
                         menuHandlers={nodeMenuHandlers}
@@ -744,18 +1018,43 @@ export default function PuppetAssetPanel() {
 
           {/* ---- Sprite Parts Section ---- */}
           <div>
-            <button
-              className="flex items-center gap-1 w-full px-1 py-1 text-[10px] text-gray-500 uppercase tracking-wider hover:text-gray-300 transition-colors"
-              onClick={() => toggleSection('sprites')}
-            >
-              {sectionExpanded.sprites ? (
-                <ChevronDown className="size-2.5" />
-              ) : (
-                <ChevronRight className="size-2.5" />
-              )}
-              <Image className="size-2.5" />
-              精灵 ({Object.keys(sprites).length})
-            </button>
+            <div className="flex items-center">
+              <button
+                className="flex items-center gap-1 flex-1 px-1 py-1 text-[10px] text-gray-500 uppercase tracking-wider hover:text-gray-300 transition-colors"
+                onClick={() => toggleSection('sprites')}
+              >
+                {sectionExpanded.sprites ? (
+                  <ChevronDown className="size-2.5" />
+                ) : (
+                  <ChevronRight className="size-2.5" />
+                )}
+                <Image className="size-2.5" />
+                精灵 ({Object.keys(sprites).length})
+              </button>
+              <button
+                title="新建精灵"
+                aria-label="新建精灵"
+                className="p-1 text-gray-500 hover:text-gray-200 hover:bg-white/5 rounded transition-colors"
+                onClick={() => setNewSpriteOpen(true)}
+              >
+                <Plus className="size-3" />
+              </button>
+              <button
+                title="导入 PNG"
+                aria-label="导入 PNG"
+                className="p-1 mr-1 text-gray-500 hover:text-gray-200 hover:bg-white/5 rounded transition-colors"
+                onClick={() => spriteFileRef.current?.click()}
+              >
+                <ImagePlus className="size-3" />
+              </button>
+              <input
+                ref={spriteFileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={handleImportSpritePNG}
+              />
+            </div>
 
             {sectionExpanded.sprites && (
               <div className="space-y-0.5 mt-0.5 max-h-32 overflow-y-auto">
@@ -816,6 +1115,35 @@ export default function PuppetAssetPanel() {
                       <ContextMenuItem onSelect={() => setRenaming({ kind: 'sprite', id: sprite.id! })}>
                         重命名
                       </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => {
+                          const dup = useProjectStore.getState().duplicateSprite(sprite.id!);
+                          if (dup?.id) useEditorStore.getState().enterSpriteEditMode(dup.id);
+                        }}
+                      >
+                        复制精灵
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem
+                        onSelect={() => useProjectStore.getState().transformSprite(sprite.id!, { kind: 'd4', op: 'rot90' })}
+                      >
+                        顺时针旋转 90°
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => useProjectStore.getState().transformSprite(sprite.id!, { kind: 'd4', op: 'rot270' })}
+                      >
+                        逆时针旋转 90°
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => useProjectStore.getState().transformSprite(sprite.id!, { kind: 'd4', op: 'flipH' })}
+                      >
+                        左右镜像
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => useProjectStore.getState().transformSprite(sprite.id!, { kind: 'd4', op: 'flipV' })}
+                      >
+                        上下镜像
+                      </ContextMenuItem>
                       <ContextMenuSeparator />
                       <ContextMenuItem
                         className="text-red-400 focus:text-red-300"
@@ -833,6 +1161,11 @@ export default function PuppetAssetPanel() {
                     </ContextMenuContent>
                   </ContextMenu>
                 ))}
+              </div>
+            )}
+            {sectionExpanded.sprites && selectedSprite && (
+              <div className="border-t border-white/5 mt-0.5">
+                <SpritePropertiesSection sprite={selectedSprite} />
               </div>
             )}
           </div>

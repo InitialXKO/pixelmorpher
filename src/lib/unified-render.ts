@@ -23,6 +23,7 @@ import type {
 } from './unified-types';
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
+  directionTrig,
   resolveChainTarget3D,
   mat3Mul, mat3Transpose, mat3Apply, localRotMat, rotMatD, applyFrameRotation, frameViewAngle,
   frameViewAngleForDirection, frameYAxisWorld,
@@ -34,7 +35,7 @@ import { releaseCanvas } from './engine/canvas-pool';
 import { sampleJointDiscColor, getPlugJointWidth } from './engine/render-helpers/puppet-joint-color';
 import {
   getDiscCacheKey, getCachedDisc, setCachedDisc,
-  clearRenderCaches,
+  clearRenderCaches, createPixelGridHasher,
 } from './engine/render-cache';
 import {
   applyPixelModifiers,
@@ -73,9 +74,12 @@ import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from 
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
+import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, glowField, glowPulseAt, type DynamicPatternParams } from './dynamic-patterns';
+import { simulateDynamicParticles } from './dynamic-pattern-sim';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
 import { evaluateBlueprint, collectDynamicStrokes, evaluateCostumeState } from './blueprint/eval';
+import { behaviorHostVars } from './behavior-host';
 import { modifiersToBlueprint } from './blueprint/migrate';
 import type { BlueprintEvalContext } from './blueprint/ir';
 import { isIKChainSuspended } from './ik-drag-state';
@@ -188,6 +192,128 @@ export function evaluateBlueprintTransforms(
   return result;
 }
 
+// ---- 行为求值层（主画布宿主） ----
+// 行为图（character.behaviorGraphs）与运行时包同一批图：运行时由真
+// 宿主（键盘）喂 vars 实时求值；主画布此前无消费者，现按同一契约接：
+// 时间基 60fps（ctx.frame = 秒×60、frameRate=60）、vars = 输入轨采样
+// （behavior-host：t/phase/moveX/speed01/grounded，缺轨静止缺省）。
+// 只取 transform 的 rotation/translateX/translateY 三通道（与运行时
+// 翻译契约一致），由 computeWorldTransforms 在节点本地变换层叠加——
+// 出图、点选、枢轴、骨骼覆盖层共用同一份世界变换，行为偏移处处一致。
+const behaviorNodeState = new Map<string, unknown>();
+let behaviorLastFrame = -1;
+
+export function evaluateBehaviorTransforms(
+  character: Character,
+  frame: number,
+  frameRate: number,
+  baseVars?: Record<string, number | string | boolean>,
+): Map<string, { rotation: number; translateX: number; translateY: number }> {
+  const result = new Map<string, { rotation: number; translateX: number; translateY: number }>();
+  const graphs = character.behaviorGraphs;
+  if (!graphs || Object.keys(graphs).length === 0) return result;
+  if (frame < behaviorLastFrame || frame > behaviorLastFrame + 5) {
+    behaviorNodeState.clear();
+  }
+  behaviorLastFrame = frame;
+
+  type OutputRec = {
+    rotation: number; tilt: number; translateX: number; translateY: number; translateZ: number;
+    scaleX: number; scaleY: number; skewX: number; skewY: number; zIndex: number;
+  };
+  const entries = Object.entries(graphs).filter(([nodeId, g]) => g && character.nodes[nodeId]);
+  const followOf = (g: BlueprintGraph) => g.followMode ?? 'prev';
+
+  // 求值一遍全部行为图：每张图按自己的 followMode 选 nodeRef 来源
+  // （mapFor 决定）。state 可传一次性 Map 隔离历史污染（上一帧草稿遍）。
+  const evalSet = (
+    host: ReturnType<typeof behaviorHostVars>,
+    hostFrame: number,
+    mapFor: (g: BlueprintGraph) => Map<string, OutputRec> | undefined,
+    state: Map<string, unknown>,
+  ): Map<string, OutputRec> => {
+    const outs = new Map<string, OutputRec>();
+    const vars: Record<string, number | string | boolean> = {
+      ...(baseVars ?? {}),
+      t: host.t, phase: host.phase, moveX: host.moveX, speed01: host.speed01, grounded: host.grounded,
+    };
+    for (const [nodeId, graph] of entries) {
+      const node = character.nodes[nodeId]!;
+      try {
+        const t = evaluateBlueprint(graph, {
+          frame: hostFrame,
+          frameRate,
+          vars,
+          nodeOutputs: mapFor(graph),
+          nodeState: state,
+          costumes: character.costumeSets,
+          costumeSlot: node.slot?.slotKey,
+        } as any);
+        outs.set(nodeId, {
+          rotation: t.rotation, tilt: t.tilt ?? 0,
+          translateX: t.translateX, translateY: t.translateY, translateZ: t.translateZ ?? 0,
+          scaleX: t.scaleX, scaleY: t.scaleY, skewX: t.skewX, skewY: t.skewY,
+          zIndex: (t as any).zIndex ?? 0,
+        });
+      } catch {
+        // 单图失败不拖垮整角色
+      }
+    }
+    return outs;
+  };
+
+  // 上一帧输出（'prev' 图的 nodeRef 来源）：在 frame-1 处按同帧口径
+  // 求值一遍得到——延迟恰好一帧且逐帧确定，拖动可复现。第 0 帧无上一帧。
+  let prevMap = new Map<string, OutputRec>();
+  if (frame > 0 && entries.some(([, g]) => followOf(g) === 'prev')) {
+    const hostPrev = behaviorHostVars(character, frame - 1, frameRate);
+    const throwaway = new Map<string, unknown>();
+    const draftPrev = evalSet(hostPrev, frame - 1, () => undefined, throwaway);
+    prevMap = evalSet(hostPrev, frame - 1, () => draftPrev, throwaway);
+  }
+
+  // 本帧：A 遍全部图读 prevMap（'prev' 图定稿、'same' 图作草稿），
+  // B 遍只重算 'same' 图、nodeRef 改读 A 遍草稿（本帧输出，无延迟）
+  const host = behaviorHostVars(character, frame, frameRate);
+  const passA = evalSet(host, frame, () => prevMap, behaviorNodeState);
+  let finals = passA;
+  if (entries.some(([, g]) => followOf(g) === 'same')) {
+    finals = new Map(passA);
+    const draft = passA;
+    for (const [nodeId, graph] of entries) {
+      if (followOf(graph) !== 'same') continue;
+      const node = character.nodes[nodeId]!;
+      try {
+        const t = evaluateBlueprint(graph, {
+          frame,
+          frameRate,
+          vars: {
+            ...(baseVars ?? {}),
+            t: host.t, phase: host.phase, moveX: host.moveX, speed01: host.speed01, grounded: host.grounded,
+          },
+          nodeOutputs: draft,
+          nodeState: behaviorNodeState,
+          costumes: character.costumeSets,
+          costumeSlot: node.slot?.slotKey,
+        } as any);
+        finals.set(nodeId, {
+          rotation: t.rotation, tilt: t.tilt ?? 0,
+          translateX: t.translateX, translateY: t.translateY, translateZ: t.translateZ ?? 0,
+          scaleX: t.scaleX, scaleY: t.scaleY, skewX: t.skewX, skewY: t.skewY,
+          zIndex: (t as any).zIndex ?? 0,
+        });
+      } catch {
+        // 单图失败保留 A 遍结果
+      }
+    }
+  }
+
+  for (const [nodeId, rec] of finals) {
+    result.set(nodeId, { rotation: rec.rotation, translateX: rec.translateX, translateY: rec.translateY });
+  }
+  return result;
+}
+
 /** Computed world transform for a node */
 export interface WorldTransform {
   nodeId: string;
@@ -213,19 +339,33 @@ export function computeWorldTransforms(
   frame: number,
   canvasWidth: number,
   canvasHeight: number,
-  frameRate: number = 12,
+  frameRate?: number,
   variableContext?: VariableContext,
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
   geometryDirection?: DirectionIndex,
 ): Map<string, WorldTransform> {
+  if (!frameRate || frameRate <= 0) {
+    let resolved = 12;
+    try {
+      // 懒加载避免循环依赖（与 puppet-keyframe-interpolation 同模式）
+      const { useProjectStore } = require('./store') as typeof import('./store');
+      resolved = useProjectStore.getState().frameRate || 12;
+    } catch { /* store 不可用（离线语境）时回退 12 */ }
+    frameRate = resolved;
+  }
   const transforms = new Map<string, WorldTransform>();
 
   const rootNode = character.nodes[character.rootNodeId];
   if (!rootNode) return transforms;
 
+  // 行为层在此统一求值：任何调用方（出图/点选/枢轴/覆盖层）都同源
+  const behaviorTransforms = character.behaviorGraphs && Object.keys(character.behaviorGraphs).length > 0
+    ? evaluateBehaviorTransforms(character, frame, frameRate, variableContext?.values)
+    : undefined;
+
   // Root node: center of canvas + node's own offset
-  const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides);
+  const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides, behaviorTransforms?.get(rootNode.id));
   const rootFrame = localRotMat(rootInterpolated.angle, rootInterpolated.tilt ?? 0);
   const rootWorld: WorldTransform = {
     nodeId: rootNode.id,
@@ -247,13 +387,13 @@ export function computeWorldTransforms(
   transforms.set(rootNode.id, rootWorld);
 
   // Recursively compute children
-  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection);
+  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms);
 
   // IK（乙：真 3D）：首遍 FK 后解出各链关节的局部 (angle, tilt) 覆写，整树重算 FK——
   // 链外后代随 frame 复合自动跟随。ikOverrides 已传入时（重算遍）不再求解。
   if (!ikOverrides) {
     if (character.ikBlueprint) {
-      applyBakedIKBlueprint(character, transforms, variableContext?.values);
+      applyBakedIKBlueprint(character, transforms, variableContext?.values, frame, frameRate);
       return transforms;
     }
     const chains = character.ikChains?.filter((c) => c.enabled && !isIKChainSuspended(c.id));
@@ -282,11 +422,13 @@ function applyBakedIKBlueprint(
   character: Character,
   transforms: Map<string, WorldTransform>,
   vars?: Record<string, number>,
+  frame: number = 0,
+  frameRate: number = 12,
 ): void {
   const blueprint = character.ikBlueprint;
   if (!blueprint) return;
 
-  const ctx: BlueprintEvalContext = { frame: 0, frameRate: 12, vars: vars ?? {} };
+  const ctx: BlueprintEvalContext = { frame, frameRate, vars: vars ?? {} };
 
   // Evaluate each transform node that has a _jointId param
   for (const node of blueprint.nodes) {
@@ -516,12 +658,13 @@ function computeChildTransforms(
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
   geometryDirection?: DirectionIndex,
+  behaviorTransforms?: Map<string, { rotation: number; translateX: number; translateY: number }>,
 ): void {
   for (const childId of parentNode.children) {
     const childNode = character.nodes[childId];
     if (!childNode) continue;
 
-    const childInterpolated = interpolateTransform(childNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides);
+    const childInterpolated = interpolateTransform(childNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides, behaviorTransforms?.get(childId));
     let childWorldX: SubPixel;
     let childWorldY: SubPixel;
     let childWorldZ: SubPixel;
@@ -602,7 +745,7 @@ function computeChildTransforms(
     transforms.set(childId, childWorld);
 
     // Recurse into children
-    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection);
+    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms);
   }
 }
 
@@ -639,8 +782,8 @@ export function socketOffsetTo3D(socket: Socket, variantIndex: DirectionIndex): 
   const socketOffset = resolveSocketOffset(socket, variantIndex);
   const sx = subToPx(socketOffset.x);
   const sy = subToPx(socketOffset.y);
-  const theta = (((variantIndex + 2) % 8) * Math.PI) / 4;
-  return { x: sx * Math.cos(theta), y: sy, z: sx * Math.sin(theta) };
+  const t = directionTrig(variantIndex);
+  return { x: sx * t.cos, y: sy, z: sx * t.sin };
 }
 
 // ---- Transform Interpolation ----
@@ -658,8 +801,20 @@ function interpolateTransform(
   variableContext?: VariableContext,
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
+  behavior?: { rotation: number; translateX: number; translateY: number },
 ): NodeTransform {
-  const r = interpolateTransformImpl(node, frame, frameRate, variableContext, blueprintTransforms);
+  const r0 = interpolateTransformImpl(node, frame, frameRate, variableContext, blueprintTransforms);
+  // 行为层：行为图输出叠加在关键帧/蓝图/旧修改器之上（单位与蓝图路径
+  // 一致：平移 px→SubPixel、旋转度）；所有走 computeWorldTransforms 的
+  // 路径（出图/点选/枢轴/覆盖层）同源生效
+  const r = behavior
+    ? {
+        ...r0,
+        x: r0.x + pxToSub(behavior.translateX),
+        y: r0.y + pxToSub(behavior.translateY),
+        angle: r0.angle + behavior.rotation,
+      }
+    : r0;
   // IK 覆写：求解出的局部 (angle, tilt) 绝对替换（乙的注入层，与蓝图同一层级之上）
   const ov = ikOverrides?.get(node.id);
   return ov ? { ...r, angle: ov.angle, tilt: ov.tilt } : r;
@@ -959,6 +1114,27 @@ function resolveSprite(
   variantId?: string,
   latitude?: number,
 ): { sprite: Sprite | null; mirror: boolean; spriteId: string | null } {
+  // 参数化优先（用户拍板）：生效服装件带 parametric 时，主画布以参数化
+  // 烘焙精灵渲染，盖过精灵图。件键走产品回退口径 slot.slotKey ?? nodeId。
+  // 合成三档（appearance.composite）：generate 独立生成（形状轮廓）；
+  // silhouette/overlay 先按分层规则解析当前方向的精灵作轮廓/底图，
+  // 按该精灵自身的 mirror 出图；无精灵可借时回落独立生成。
+  if (costumeSet) {
+    const piece = costumeSet.pieces[node.slot?.slotKey ?? node.id];
+    if (piece?.parametric) {
+      const { buildParametricSprite, PARAMETRIC_MIRROR_DIRECTIONS } = require('./proc-runtime/main-canvas') as typeof import('./proc-runtime/main-canvas');
+      const app = piece.parametric;
+      if ((app.composite ?? 'generate') !== 'generate' && sprites) {
+        const base = resolvePieceSprite(piece, direction, variantId, sprites, latitude);
+        if (base.sprite) {
+          const spr = buildParametricSprite(app, node.id, base.sprite);
+          if (spr) return { sprite: spr, mirror: base.mirror, spriteId: null };
+        }
+      }
+      const spr = buildParametricSprite(app, node.id);
+      if (spr) return { sprite: spr, mirror: PARAMETRIC_MIRROR_DIRECTIONS.has(direction), spriteId: null };
+    }
+  }
   // 只走服装集：node.slot 只定义槽位，不存精灵。
   // 分层解析（纬度→变体→基础）走 sprite-resolve 的共同实现，与蓝图预览逐级一致。
   if (costumeSet && node.slot) {
@@ -1264,7 +1440,7 @@ export function generateRenderPlan(
     }
   }
   const variableContext = animationVariables && animationVariables.length > 0
-    ? buildVariableContext(animationVariables, frame, allActiveDrivers)
+    ? buildVariableContext(animationVariables, frame, allActiveDrivers, frameRate)
     : undefined;
 
   // 蓝图变量（变量名 → 本帧值，含 writer 驱动求值）：全部蓝图求值入口统一从此注入
@@ -1277,6 +1453,7 @@ export function generateRenderPlan(
   const effCostume = resolveEffectiveCostumeState(character, frame, frameRate, stateKeyframes, blueprintVars);
 
   // Step 1: World transforms (includes blueprint-evaluated modifier contributions)
+  // 行为层在 computeWorldTransforms 内统一叠加（出图/点选/覆盖层同源）
   const worldTransforms = computeWorldTransforms(
     character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
     undefined, geometryDirection,
@@ -1353,6 +1530,7 @@ export function generateRenderPlan(
           rotationStrategy,
           mirror: false,
           zIndex: projSnap.depth,
+          authoredZ: node.zIndex ?? 0,
           drawLayer: node.drawLayer,
           modifiers: [],
           frame,
@@ -1455,9 +1633,24 @@ export function generateRenderPlan(
     let foreshorten: number | undefined;
     if (perspectiveForeshorten) {
       const yw = frameYAxisWorld(worldTf.worldFrame, geometryDirection ?? worldTf.variantIndex);
-      const thR = (((currentDirection + 2) % 8) * Math.PI) / 4;
-      const hr = yw.x * Math.cos(thR) + yw.z * Math.sin(thR);
+      const tR = directionTrig(currentDirection);
+      const hr = yw.x * tR.cos + yw.z * tR.sin;
       foreshorten = Math.min(1, Math.hypot(hr, yw.y));
+    }
+    // 动态模式（双挂载解析）：形变段乘进本指令的 stretch/scaleX——
+    // 只动本节点精灵、不沿层级传播；粒子由执行端按 dynamicPatterns 绘制
+    const dynResolved = resolveDynamicPatterns(
+      node.dynamicPatterns,
+      activeCostumeSet?.pieces[node.slot?.slotKey ?? node.id]?.dynamicPatterns,
+    );
+    let dynSx = 1, dynSy = 1;
+    if (dynResolved.length > 0) {
+      const tSec = frame / frameRate;
+      for (const r of dynResolved) {
+        const d = dynamicDeformAt(r.instance.params, tSec);
+        dynSx *= d.sx;
+        dynSy *= d.sy;
+      }
     }
     nodeInstructions.push({
       nodeId,
@@ -1465,13 +1658,15 @@ export function generateRenderPlan(
       worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel)) as SubPixel,
       worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel)) as SubPixel,
       angle: worldTf.worldAngle,
-      stretch: worldTf.worldStretch,
+      stretch: dynResolved.length > 0 ? worldTf.worldStretch * dynSy : worldTf.worldStretch,
       foreshorten,
       variantIndex: worldTf.variantIndex,
       rotationStrategy: strategy,
       mirror: mirror || worldTf.mirror,
-      // 3D 深度排序替代 zIndex：depth 越大越靠前（后绘制）
+      // 排序键：投影深度为主（depth 越大越靠前、后绘制），作者 zIndex
+      // 为次（见 Step 6）——纯 2D 时深度恒同值，画序由 zIndex 决定
       zIndex: proj.depth,
+      authoredZ: node.zIndex ?? 0,
       drawLayer: node.drawLayer,
       generated: undefined, // Discs are handled separately
       modifiers: nodeModifiers,
@@ -1493,7 +1688,8 @@ export function generateRenderPlan(
         return node.faceTurn;
       })(),
       // t.scaleX 修复：蓝图 scaleX 独立 plumbing，不再平均吃掉
-      scaleX: worldTf.scaleX,
+      scaleX: dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX,
+      dynamicPatterns: dynResolved.length > 0 ? dynResolved : undefined,
       // 蓝图 skew：有倾斜量时才填，避免空数组污染
       skews: (worldTf.skewX || worldTf.skewY) ? [{ skewX: worldTf.skewX ?? 0, skewY: worldTf.skewY ?? 0 }] : undefined,
       // STEP2 合并：plumbing 蓝图给 renderNodeSprite，替代手拼像素链
@@ -1508,10 +1704,16 @@ export function generateRenderPlan(
   // Step 5: Generate disc instructions
   const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots, activeCostumeSet, spriteTable, geometryDirection);
 
-  // Step 6: 节点指令按 zIndex（投影深度）排序；关节盘不进排序流，
-  // 由执行端从 discInstructions 单独先行绘制（无视深度、始终被遮挡）
+  // Step 6: 节点指令复合排序——主键投影深度（3D 遮挡），次键作者
+  // zIndex（node.zIndex），再同则稳定排序保持生成序（层级遍历序）。
+  // 纯 2D 时 socket 2D 偏移沿视平面右向量映射、与深度轴正交，各节点
+  // 深度恒同值（只剩三角函数浮点尘埃），画序实际由作者 zIndex 决定
+  // （RigPanel 可编辑、烘焙按骨骼层级写入、运行时包同口径），不退化为
+  // 遍历事故。故深度比较先取整到 SubPixel 整数分桶：尘埃落回同桶、
+  // 交给 zIndex，真深度差（≥1/16px）不受影响。关节盘不进排序流，
+  // 由执行端从 discInstructions 单独先行绘制（无视深度、始终被遮挡）。
   const allInstructions: NodeRenderInstruction[] = [...nodeInstructions];
-  allInstructions.sort((a, b) => a.zIndex - b.zIndex);
+  allInstructions.sort((a, b) => (Math.round(a.zIndex) - Math.round(b.zIndex)) || ((a.authoredZ ?? 0) - (b.authoredZ ?? 0)));
 
   return {
     nodeInstructions,
@@ -1608,6 +1810,165 @@ const PIXEL_MOD_TYPES: ModifierType[] = [
   'color_replace', 'outline', 'dither', 'pixel_displace',
   'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip', 'pixel_edit',
 ];
+
+/** 动态模式粒子绘制（本地坐标：原点 = 枢轴，与精灵同一变换空间） */
+function drawDynamicParticles(
+  ctx: CanvasRenderingContext2D,
+  instruction: NodeRenderInstruction,
+  layer: 'back' | 'front',
+): void {
+  const list = instruction.dynamicPatterns;
+  if (!list || list.length === 0) return;
+  for (const resolved of list) {
+    const particles = simulateDynamicParticles(
+      resolved, instruction.sprite, instruction.frame, instruction.frameRate,
+      instruction.mirror, layer, instruction.nodeId,
+    );
+    for (const p of particles) {
+      if (p.size <= 0 || p.alpha <= 0) continue;
+      const r = Math.max(0.5, p.size / 2);
+      const m = /^#([0-9a-fA-F]{6})$/.exec(p.color);
+      const rgb = m
+        ? `${parseInt(m[1].slice(0, 2), 16)},${parseInt(m[1].slice(2, 4), 16)},${parseInt(m[1].slice(4, 6), 16)}`
+        : '255,180,107';
+      const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+      grad.addColorStop(0, `rgba(${rgb},${Math.min(1, p.alpha)})`);
+      grad.addColorStop(1, `rgba(${rgb},0)`);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+/** 发光叠加层缓存：键 = 像素内容哈希 + 发光参数签名 + 脉冲量化步 + 镜像位 */
+const glowOverlayCache = new Map<string, { canvas: HTMLCanvasElement; padX: number; padY: number } | null>();
+
+/**
+ * 动态模式发光段：为一个发光组构建发光叠加层（未镜像空间，pad = 柔光圈外扩）。
+ * 颜色/强度/呼吸脉冲以组参数（visualParams）为准；权重场 = 本组全部选区
+ * 来源（contributors）的场逐像素取大合并。选区内：原色提亮并染向辉光色；
+ * 柔光圈：辉光色淡出。返回 null = 本帧无可见发光（脉冲近 0 / 选区全空）。
+ */
+function buildGlowOverlay(
+  pixels: PixelGrid,
+  visualParams: DynamicPatternParams,
+  contributors: DynamicPatternParams[],
+  tSec: number,
+  contentHash: string,
+  mirror: boolean,
+  frameAngleDeg = 0,
+): { canvas: HTMLCanvasElement; padX: number; padY: number; key: string } | null {
+  if (!visualParams.glowEnabled) return null;
+  const pulse = glowPulseAt(visualParams, tSec);
+  if (pulse <= 0.01 || visualParams.glowStrength <= 0) return null;
+  const params = visualParams;
+  const hasWorld = contributors.some((c) => c.glowAngleSpace === 'world');
+  const sig = [
+    params.glowColor, params.glowStrength,
+    ...contributors.flatMap((c) => [
+      c.glowHalo, c.glowMaskSource, c.glowPick, c.glowTolerance,
+      c.glowMask?.w ?? 0, c.glowMask?.h ?? 0, c.glowMask?.bits ?? '',
+      c.glowShape ?? 'square', c.glowShapeKernel?.w ?? 0, c.glowShapeKernel?.h ?? 0, c.glowShapeKernel?.bits ?? '',
+      c.glowStarReach ?? 1.2, c.glowFlameReach ?? 1.8, c.glowAngleDeg ?? 270, c.glowAngleSpace ?? 'sprite',
+    ]),
+    hasWorld ? `W${Math.round(frameAngleDeg / 3)}` : '',
+  ].join('|');
+  const key = `${contentHash}|${sig}|${Math.round(pulse * 24)}|${mirror ? 'M' : ''}`;
+  const hit = glowOverlayCache.get(key);
+  if (hit !== undefined) return hit ? { ...hit, key } : null;
+  let result: { canvas: HTMLCanvasElement; padX: number; padY: number } | null = null;
+  let merged: { w: number; h: number; field: Float32Array; padX: number; padY: number } | null = null;
+  for (const c of contributors) {
+    const f = glowField(c, pixels, frameAngleDeg);
+    if (!f) continue;
+    if (!merged) {
+      merged = { w: f.w, h: f.h, field: new Float32Array(f.field), padX: f.padX, padY: f.padY };
+    } else {
+      let m = merged;
+      const padX = Math.max(m.padX, f.padX);
+      const padY = Math.max(m.padY, f.padY);
+      if (padX !== m.padX || padY !== m.padY) {
+        const nm = {
+          w: m.w + (padX - m.padX) * 2, h: m.h + (padY - m.padY) * 2,
+          field: new Float32Array((m.w + (padX - m.padX) * 2) * (m.h + (padY - m.padY) * 2)),
+          padX, padY,
+        };
+        for (let y = 0; y < m.h; y++) {
+          for (let x = 0; x < m.w; x++) {
+            nm.field[(y + padY - m.padY) * nm.w + (x + padX - m.padX)] = m.field[y * m.w + x];
+          }
+        }
+        m = nm;
+        merged = nm;
+      }
+      const ox = m.padX - f.padX, oy = m.padY - f.padY;
+      for (let y = 0; y < f.h; y++) {
+        for (let x = 0; x < f.w; x++) {
+          const v = f.field[y * f.w + x];
+          const ni = (y + oy) * m.w + (x + ox);
+          if (v > m.field[ni]) m.field[ni] = v;
+        }
+      }
+    }
+  }
+  const gf = merged;
+  if (gf) {
+    const pad = contributors.reduce(
+      (m, c) => Math.max(m, Math.max(0, Math.min(8, Math.round(c.glowHalo || 0)))), 0);
+    const W = gf.w + pad * 2;
+    const H = gf.h + pad * 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const c2d = canvas.getContext('2d')!;
+    const img = c2d.createImageData(W, H);
+    const glowRgbObj = hexToRgb(params.glowColor);
+    const glowRgb: [number, number, number] = glowRgbObj
+      ? [glowRgbObj.r, glowRgbObj.g, glowRgbObj.b]
+      : [125, 215, 255];
+    const k = Math.min(1, pulse * params.glowStrength);
+    for (let y = 0; y < gf.h; y++) {
+      for (let x = 0; x < gf.w; x++) {
+        const f = gf.field[y * gf.w + x];
+        if (f <= 0) continue;
+        const o = ((y + pad) * W + (x + pad)) * 4;
+        if (f >= 0.999) {
+          const origObj = hexToRgb(pixels[y - gf.padY]?.[x - gf.padX] ?? '');
+          const orig: [number, number, number] = origObj
+            ? [origObj.r, origObj.g, origObj.b]
+            : glowRgb;
+          img.data[o] = Math.min(255, Math.round(orig[0] + (255 - orig[0]) * 0.35 * k + glowRgb[0] * 0.25 * k));
+          img.data[o + 1] = Math.min(255, Math.round(orig[1] + (255 - orig[1]) * 0.35 * k + glowRgb[1] * 0.25 * k));
+          img.data[o + 2] = Math.min(255, Math.round(orig[2] + (255 - orig[2]) * 0.35 * k + glowRgb[2] * 0.25 * k));
+          img.data[o + 3] = Math.round(235 * k);
+        } else {
+          img.data[o] = glowRgb[0];
+          img.data[o + 1] = glowRgb[1];
+          img.data[o + 2] = glowRgb[2];
+          img.data[o + 3] = Math.round(200 * f * k);
+        }
+      }
+    }
+    c2d.putImageData(img, 0, 0);
+    let out = canvas;
+    if (mirror) {
+      const flip = document.createElement('canvas');
+      flip.width = W;
+      flip.height = H;
+      const fctx = flip.getContext('2d')!;
+      fctx.translate(W, 0);
+      fctx.scale(-1, 1);
+      fctx.drawImage(canvas, 0, 0);
+      out = flip;
+    }
+    result = { canvas: out, padX: gf.padX + pad, padY: gf.padY + pad };
+  }
+  if (glowOverlayCache.size > 128) glowOverlayCache.clear();
+  glowOverlayCache.set(key, result);
+  return result ? { ...result, key } : null;
+}
 
 /**
  * Render a single node sprite to the canvas.
@@ -1864,7 +2225,13 @@ function renderNodeSprite(
   const globalCH = sprite.globalCameraHalf ?? 1.0;
   const scaleFactor = 1.0; // partCH / globalCH;
 
-  let spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height);
+  // 像素内容全图哈希：定稿像素（列表像素修改器+蓝图像素链+蒙皮弯曲全过完）
+  // 的同一性凭证，随旋转调用进缓存键——像素可变的精灵不得用 5 点采样指纹，
+  // 否则改参数不碰采样点时旋转缓存返回旧图（改参数/播放都不生效的原凶）。
+  // 哈希折进 pixelsToCanvas 本来就要做的全图遍历，不单独再跑一遍。
+  const pixelHashOut = { value: '' };
+  let spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height, pixelHashOut);
+  const pixelContentHash = pixelHashOut.value;
   if (!spriteCanvas || spriteCanvas.width === 0 || spriteCanvas.height === 0) return;
   // 若尺度不一致，重采样到全局像素（一次，非每帧；记录的系数保证可逆）
   if (Math.abs(scaleFactor - 1) > 0.001) {
@@ -1885,6 +2252,8 @@ function renderNodeSprite(
   let pivotX = (sprite.plug?.x !== undefined ? subToPx(sprite.plug.x) * scaleFactor : spriteCanvas.width / 2) + modOffsetX;
   const pivotY = (sprite.plug?.y !== undefined ? subToPx(sprite.plug.y) * scaleFactor : spriteCanvas.height / 2) + modOffsetY;
 
+  const pivotXRaw = pivotX; // 未镜像口径的枢轴（发光叠加层按此对位）
+
   // Step 3: Apply horizontal flip if mirrored (STATIC mirror: flip BEFORE rotation)
   let workingCanvas: HTMLCanvasElement = spriteCanvas;
   if (mirror) {
@@ -1903,6 +2272,16 @@ function renderNodeSprite(
   // STEP 4: Set up canvas transform for this sprite's world position
   // (translate + rotate + scale around pivot), then render effects + sprite
   // ========================================================================
+
+  // 动态模式发光段：叠加层与精灵同像素空间（scaleFactor ≡ 1 前提，与绘制口径一致）。
+  // 按发光组建层：前 3 个各一组，第 4 个起按所选组并入（resolveGlowGroups）。
+  const glowOverlays = previewQuality === 'low' || !instruction.dynamicPatterns?.length
+    ? []
+    : resolveGlowGroups(instruction.dynamicPatterns.map((r) => r.instance.params))
+      .map((g) => buildGlowOverlay(effectivePixels, g.representative, g.contributors, frame / frameRate, pixelContentHash, mirror, angle))
+      .filter((x): x is { canvas: HTMLCanvasElement; padX: number; padY: number; key: string } => !!x);
+  const glowPivotX = (g: { canvas: HTMLCanvasElement; padX: number }) =>
+    (mirror ? g.canvas.width - (pivotXRaw + g.padX) : pivotXRaw + g.padX);
 
   // Compute the draw position (where the pivot lands on canvas)
   const drawPivotX = subToPx(worldX);
@@ -1965,18 +2344,24 @@ function renderNodeSprite(
     );
   }
 
+  // 动态模式粒子（身后层）：与身后效果同空间，精灵之前绘制
+  if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
+    drawDynamicParticles(ctx, instruction, 'back');
+  }
+
   // ========================================================================
   // STEP 4b: Draw the main sprite
   // In the transformed coordinate space, the sprite's top-left is at (-pivotX, -pivotY)
   // ========================================================================
   ctx.imageSmoothingEnabled = false;
 
-  // Pixel-perfect rotation only handles rotate + Y-stretch. Parts with X-scale
-  // or skew fall back to the native canvas path (same as the old pipeline).
+  // Pixel-perfect path covers the full local affine: rotate + Y-stretch on the
+  // diagonal fast path; X-scale / skew go through the composite path, which
+  // bakes S·K at 4× first and rotates last (matrix associativity makes this
+  // identical to the native chain). The native canvas path remains only for
+  // rotationStrategy === 'native' or a fully identity transform.
   const usePixelPerfect = rotationStrategy === 'pixel-perfect'
-    && (angle !== 0 || effStretch !== 1.0)
-    && scaleX === 1
-    && skews.length === 0;
+    && (angle !== 0 || effStretch !== 1.0 || scaleX !== 1 || skews.length !== 0);
   if (usePixelPerfect) {
     // Use 4× upscale pixel-perfect rotation — this renders to an offscreen
     // canvas, then we draw that result at the world position.
@@ -1990,6 +2375,8 @@ function renderNodeSprite(
       effStretch,
       pivotX,
       pivotY,
+      // 镜像在旋转前已翻进 workingCanvas：内容哈希补镜像位，防镜像/原图同键串图
+      { scaleX, skews, contentHash: mirror ? `${pixelContentHash}M` : pixelContentHash },
     );
 
     // Draw at world position with half-pixel alignment
@@ -2008,18 +2395,40 @@ function renderNodeSprite(
       releaseCanvas(result.canvas);
     }
 
+    // 动态模式发光段（pixel-perfect 路径）：叠加层过同一旋转机器后加色叠加
+    if (glowOverlays.length > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const g of glowOverlays) {
+        const gres = renderPixelPerfectRotation(
+          g.canvas, angle, effStretch, glowPivotX(g), pivotY + g.padY,
+          { scaleX, skews, contentHash: g.key },
+        );
+        ctx.drawImage(
+          gres.canvas,
+          Math.round(subToPx(worldX) - gres.resultPivotX),
+          Math.round(subToPx(worldY) - gres.resultPivotY),
+        );
+        if (gres.canvas !== g.canvas) releaseCanvas(gres.canvas);
+      }
+      ctx.restore();
+    }
+
     // Render "on top" effects after the sprite for pixel-perfect rotation path
     // Preview quality: skip particle effects in low quality mode (old parity).
     const topEffectMods = previewQuality === 'low' ? [] : modifiers.filter(m =>
       m.enabled && m.type === 'particle'
     );
-    if (topEffectMods.length > 0) {
+    if (topEffectMods.length > 0 || (previewQuality !== 'low' && instruction.dynamicPatterns?.length)) {
       ctx.save();
       ctx.translate(Math.round(drawPivotX), Math.round(drawPivotY));
       ctx.rotate((angle * Math.PI) / 180);
       ctx.scale(scaleX, effStretch);
       for (const { skewX, skewY } of skews) {
         ctx.transform(1, Math.tan((skewY * Math.PI) / 180), Math.tan((skewX * Math.PI) / 180), 1, 0, 0);
+      }
+      if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
+        drawDynamicParticles(ctx, instruction, 'front');
       }
       for (const mod of topEffectMods) {
         renderParticleEffect(ctx, nodeId, sprite, mod as any, frame);
@@ -2029,6 +2438,21 @@ function renderNodeSprite(
   } else {
     // Native Canvas2D or no rotation: draw in the already-transformed space
     ctx.drawImage(workingCanvas, -pivotX, -pivotY);
+
+    // 动态模式发光段：与精灵同一变换空间，加色叠加在精灵之上
+    if (glowOverlays.length > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const g of glowOverlays) {
+        ctx.drawImage(g.canvas, -glowPivotX(g), -(pivotY + g.padY));
+      }
+      ctx.restore();
+    }
+
+    // 动态模式粒子（身前层）
+    if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
+      drawDynamicParticles(ctx, instruction, 'front');
+    }
 
     // ========================================================================
     // STEP 4c: Render "on top" effects (after the part itself)
@@ -2096,7 +2520,15 @@ function renderDisc(
  * Convert a PixelGrid to an offscreen HTMLCanvasElement.
  * This is the raw pixel→canvas conversion without modifier processing.
  */
-export function pixelsToCanvas(pixels: PixelGrid, width: number, height: number): HTMLCanvasElement | null {
+export function pixelsToCanvas(
+  pixels: PixelGrid,
+  width: number,
+  height: number,
+  // 给出时顺路算全图内容哈希（createPixelGridHasher，与 hashPixelGrid 同值）：
+  // 本函数本来就要逐格遍历建 ImageData，哈希折进同一遍、零额外遍历。
+  // 渲染主路径靠它给旋转缓存供键，不再单独跑一遍 hashPixelGrid。
+  hashOut?: { value: string },
+): HTMLCanvasElement | null {
   if (!pixels || pixels.length === 0) return null;
   if (width <= 0 || height <= 0) return null;
 
@@ -2108,10 +2540,12 @@ export function pixelsToCanvas(pixels: PixelGrid, width: number, height: number)
   canvas.height = canvasH;
   const ctx = canvas.getContext('2d')!;
 
+  const hasher = hashOut ? createPixelGridHasher(canvasW, canvasH) : null;
   const imageData = ctx.createImageData(canvasW, canvasH);
   for (let y = 0; y < canvasH; y++) {
     for (let x = 0; x < canvasW; x++) {
       const color = pixels[y]?.[x];
+      if (hasher) hasher.cell(color);
       if (color) {
         const idx = (y * canvasW + x) * 4;
         const rgb = hexToRgb(color);
@@ -2125,6 +2559,7 @@ export function pixelsToCanvas(pixels: PixelGrid, width: number, height: number)
     }
   }
 
+  if (hasher && hashOut) hashOut.value = hasher.digest();
   ctx.putImageData(imageData, 0, 0);
   return canvas;
 }
@@ -2364,7 +2799,7 @@ function renderPuppetViaUnifiedPipeline(
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
-    buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame),
+    buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame, undefined, frameRate),
   );
   for (const unifiedCharacter of Object.values(unifiedCharacters)) {
     const unifiedVars = mapStoreAnimationVariables(animationVariables);
@@ -2439,7 +2874,7 @@ export function renderUnified(
   if (motionBlurStrokes) {
     // 动态笔触（蓝图 stroke_emitter / stroke_source 每帧求值）
     const dynamic = globalBlueprint
-      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate, buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame))
+      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate, buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame, undefined, frameRate))
       : { motionBlur: [], effect: [] };
     const overriddenIds = new Set<string>();
     for (const s of [...dynamic.motionBlur, ...dynamic.effect]) {
@@ -2454,7 +2889,7 @@ export function renderUnified(
   }
   if (effectStrokes) {
     const dynamic = globalBlueprint
-      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate, buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame))
+      ? collectDynamicStrokes(globalBlueprint, currentFrame, frameRate, buildBlueprintVars(mapStoreAnimationVariables(animationVariables), currentFrame, undefined, frameRate))
       : { motionBlur: [], effect: [] };
     const overriddenIds = new Set<string>();
     for (const s of [...dynamic.motionBlur, ...dynamic.effect]) {

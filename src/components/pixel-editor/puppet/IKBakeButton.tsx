@@ -98,7 +98,7 @@ export default function IKBakeButton({ character }: IKBakeButtonProps) {
             </div>
           </div>
           <div className="flex-1 overflow-hidden">
-            <BlueprintEditor graph={localGraph} onChange={setLocalGraph} />
+            <BlueprintEditor frameRate={useProjectStore.getState().frameRate} graph={localGraph} onChange={setLocalGraph} />
           </div>
         </div>
       </div>

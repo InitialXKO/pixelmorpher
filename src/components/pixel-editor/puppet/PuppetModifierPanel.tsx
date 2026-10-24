@@ -315,6 +315,7 @@ export default function PuppetModifierPanel() {
         <>
           {blueprint ? (
             <BlueprintEditor
+              frameRate={useProjectStore((s) => s.frameRate)}
               graph={blueprint}
               onChange={updateBlueprint}
               title={`${node.name} 的蓝图`}

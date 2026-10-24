@@ -44,6 +44,10 @@ export function useCanvasState() {
   const fpsLastTimeRef = useRef(typeof performance !== 'undefined' ? performance.now() : 0);
   const lastPixelRef = useRef<{ x: number; y: number } | null>(null);
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  // 中键按下点（client 坐标）：抬起时位移小于阈值 = 中键点击（循环命中），否则是中键拖动平移
+  const middleClickRef = useRef<{ x: number; y: number } | null>(null);
+  // 左键按下信息：供「锁定中空白单击解锁」判定（按下点是否命中节点 + 客户位移）
+  const leftPressRef = useRef<{ clientX: number; clientY: number; hitNode: boolean } | null>(null);
   const moveStartRef = useRef<{ x: number; y: number; offsetX: number; offsetY: number; targetLevel: 'keyframe' | 'part_global'; partGlobalOffsetX: number; partGlobalOffsetY: number } | null>(null);
   const spaceHeldRef = useRef(false);
   const altToggleBackupRef = useRef<'keyframe' | 'part_global' | null>(null);
@@ -112,6 +116,7 @@ export function useCanvasState() {
   const setCanvasSize = useProjectStore((s) => s.setCanvasSize);
   const animationVariables = useProjectStore((s) => s.animationVariables);
   const globalModifiers = useProjectStore((s) => s.globalModifiers);
+  const globalBlueprint = useProjectStore((s) => s.globalBlueprint);
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
   // All parts are non-puppet now (puppet system deleted)
   const nonPuppetParts = parts;
@@ -422,8 +427,8 @@ export function useCanvasState() {
   );
 
   // ---- Puppet node hit-testing (Character model) ----
-  const findPuppetNodeAtPixel = useCallback(
-    (px: number, py: number): { node: Node; character: Character; clipId: string | null } | null => {
+  const collectPuppetNodeHits = useCallback(
+    (px: number, py: number): { node: Node; character: Character; clipId: string | null; score: number }[] => {
       // 单位统一：内部全 SubPixel。px/py（画布像素）、hitRadius（画布像素）入口转 SubPixel。
       const hitRadius = pxToSub(Math.max(20 / zoom, 8));
       const clickX = pxToSub(px);
@@ -431,7 +436,7 @@ export function useCanvasState() {
       const state = useProjectStore.getState();
       const characters = state.unifiedCharacters;
       const clips = state.animationClips;
-      let bestHit: { node: Node; character: Character; clipId: string | null; score: number } | null = null;
+      const hits: { node: Node; character: Character; clipId: string | null; score: number }[] = [];
 
       for (const character of Object.values(characters)) {
         const clip = clips.find(c => c.puppetCharacterId === character.id);
@@ -494,13 +499,32 @@ export function useCanvasState() {
           }
           const spriteExtent = pxToSub(sprite ? Math.max(sprite.width, sprite.height) / 2 : 5);
           const maxDist = hitRadius + spriteExtent;
-          if (score <= maxDist && (!bestHit || score < bestHit.score)) {
-            bestHit = { node, character, clipId: clip?.id ?? null, score };
+          if (score <= maxDist) {
+            hits.push({ node, character, clipId: clip?.id ?? null, score });
           }
         }
       }
-      return bestHit ? { node: bestHit.node, character: bestHit.character, clipId: bestHit.clipId } : null;
+      hits.sort((a, b) => a.score - b.score);
+      return hits;
     }, [canvasWidth, canvasHeight, zoom],
+  );
+
+  /** 命中栈顶（原 findPuppetNodeAtPixel 语义） */
+  const findPuppetNodeAtPixel = useCallback(
+    (px: number, py: number): { node: Node; character: Character; clipId: string | null } | null => {
+      const hits = collectPuppetNodeHits(px, py);
+      const top = hits[0];
+      return top ? { node: top.node, character: top.character, clipId: top.clipId } : null;
+    },
+    [collectPuppetNodeHits],
+  );
+
+  /** 全部命中（按分数升序），供中键循环切换 */
+  const findAllPuppetNodesAtPixel = useCallback(
+    (px: number, py: number): { node: Node; character: Character; clipId: string | null }[] => {
+      return collectPuppetNodeHits(px, py).map((h) => ({ node: h.node, character: h.character, clipId: h.clipId }));
+    },
+    [collectPuppetNodeHits],
   );
 
   // ---- Find trajectory control point handle ----
@@ -627,7 +651,7 @@ export function useCanvasState() {
     onionDataVersionRef.current++;
     invalidateUnifiedPipelineCache();
     dirtyRef.current = true;
-  }, [parts, keyframes, backgroundColor, onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, spriteEditModifiers, unifiedCharacters]);
+  }, [parts, keyframes, backgroundColor, onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, spriteEditModifiers, unifiedCharacters, globalModifiers, globalBlueprint]);
 
   // ---- Container size / canvas dimension effects ----
   useEffect(() => {
@@ -686,7 +710,8 @@ export function useCanvasState() {
     getFullTranslateOffset, getInterpolatedTranslateOffset, getInterpolatedModifiers,
     screenToPixel, canvasToPartLocal, findPartAtPixel,
     applyBrush, applyFill, applyEyedropper,
-    findBoneAtPixel, computePivotWorldPosition, findPuppetNodeAtPixel,
+    findBoneAtPixel, computePivotWorldPosition, findPuppetNodeAtPixel, findAllPuppetNodesAtPixel,
+    middleClickRef, leftPressRef,
     findTrajectoryCpAtPixel, applyWeightPaint, extractSelectionAsPart,
     // Canvas size
     canvasSizeEditing, setCanvasSizeEditing, canvasSizeW, setCanvasSizeW, canvasSizeH, setCanvasSizeH, applyCanvasSize,

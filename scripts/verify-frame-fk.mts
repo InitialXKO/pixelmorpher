@@ -8,6 +8,7 @@ import { readFileSync } from 'fs';
 import { computeWorldTransforms, generateRenderPlan, evaluateBlueprintTransforms, socketOffsetTo3D } from '../src/lib/unified-render';
 import { rotateInViewPlane, pxToSub, subToPx } from '../src/lib/unified-types';
 import { useProjectStore } from '../src/lib/store';
+import { migrateProjectTimeUnits } from '../src/lib/blueprint/time-migration';
 
 let fail = 0;
 function check(label: string, ok: boolean, detail: string) {
@@ -143,7 +144,11 @@ function compareFK(label: string, ch: any) {
   const raw = JSON.parse(readFileSync('/home/hatch/workspace/user/files/1_0_hzs0.pxm', 'utf-8'));
   const proj = raw.project;
   const W = proj.canvasWidth ?? 256, H = proj.canvasHeight ?? 256, frameRate = proj.frameRate ?? 12;
-  useProjectStore.setState({ canvasWidth: W, canvasHeight: H, currentFrame: 0 });
+  // 与应用导入同口径：旧工程先做时间单位迁移（帧制 → 秒制）
+  if ((proj as any).timeUnitsVersion !== 2) {
+    migrateProjectTimeUnits(proj.unifiedCharacters, [], (proj as any).globalModifiers ?? [], frameRate);
+  }
+  useProjectStore.setState({ canvasWidth: W, canvasHeight: H, currentFrame: 0, frameRate });
   // 基线是 P1 的一次性产物（/tmp 已清）；缺失时跳过。P2 起 IK 求解按乙更换，
   // ikOn 与旧基线必然不同——只打印差异，不再断言；ikOff（纯 FK）仍须逐值一致。
   let base: any = null;
@@ -225,6 +230,9 @@ for (const src of ['base', 'track', 'blueprint'] as const) {
   const raw = JSON.parse(readFileSync('/home/hatch/workspace/user/files/1_0_hzs0.pxm', 'utf-8'));
   const proj = raw.project;
   const W = proj.canvasWidth ?? 256, H = proj.canvasHeight ?? 256;
+  if ((proj as any).timeUnitsVersion !== 2) {
+    migrateProjectTimeUnits(proj.unifiedCharacters, [], (proj as any).globalModifiers ?? [], proj.frameRate ?? 12);
+  }
   const mk = (tilt: number) => {
     const c = clone((Object.values(proj.unifiedCharacters) as any[])[0]);
     const root = c.nodes[c.rootNodeId];
