@@ -453,8 +453,8 @@ function composePerformance(pose, perf, bpOut, w) {
   }
   return next;
 }
-/** 实例打包：43 float —— pos2 size2 rot1 pivotTile2 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 glowA/B/C 各4(rgb,强度)×3实例 glowHz4+glowHz2(频率,相位)×3 glowSpace4(三组方向基准:0=精灵 1=世界,余位) */
-const INSTANCE_FLOATS = 43;
+/** 实例打包：55 float —— pos2 size2 rot1 pivotTile2 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 glowA/B/C 各4(rgb,强度)×3组 glowHz4+glowHz2(频率,相位)×3 glowSpace4(三组方向基准:0=精灵 1=世界,余位) glowStamp 每组4(形状,光晕,主方向,伸长)×3 */
+const INSTANCE_FLOATS = 55;
 function packInstances(els) {
   const buf = new Float32Array(els.length * INSTANCE_FLOATS);
   els.forEach((el, i) => {
@@ -477,6 +477,9 @@ function packInstances(els) {
       buf[o + 23 + gi * 4] = g ? g[2] : 0; buf[o + 24 + gi * 4] = g ? g[3] : 0;
       buf[o + 33 + gi * 2] = g ? g[4] : 0; buf[o + 34 + gi * 2] = g ? g[5] : 0;
       buf[o + 39 + gi] = el.glowSpace && el.glowSpace[gi] ? 1 : 0;
+      const st = el.glowStamps && el.glowStamps[gi];
+      buf[o + 43 + gi * 4] = st ? st[0] : 4; buf[o + 44 + gi * 4] = st ? st[1] : 0;
+      buf[o + 45 + gi * 4] = st ? st[2] : 0; buf[o + 46 + gi * 4] = st ? st[3] : 0;
     }
   });
   return buf;
@@ -634,7 +637,7 @@ function ensureAtlas(gl, variant, costumeName) {
         }
       }
     }
-    map.set(entries[i][0], { tile: tile, place: [ax, ay], resolved: entries[i][2] });
+    map.set(entries[i][0], { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null });
   });
   if (atlasState && atlasState.tex) gl.deleteTexture(atlasState.tex);
   if (atlasState && atlasState.baseTex) gl.deleteTexture(atlasState.baseTex);
@@ -702,9 +705,13 @@ layout(location=11) in vec4 iGlowC;
 layout(location=12) in vec4 iGlowHz;
 layout(location=13) in vec2 iGlowHz2;
 layout(location=14) in vec4 iGlowSpace;
+layout(location=15) in vec4 iGlowStampA;
+layout(location=16) in vec4 iGlowStampB;
+layout(location=17) in vec4 iGlowStampC;
 uniform vec2 uCam; uniform vec2 uViewHalf; uniform vec2 uRes;
 out vec2 vCenterScreen; out float vRot; out vec4 vTile; out vec2 vTileC; out vec4 vMisc; out vec4 vParam; out vec2 vDeform;
 out vec4 vGlowA; out vec4 vGlowB; out vec4 vGlowC; out vec4 vGlowHz; out vec2 vGlowHz2; out vec4 vGlowSpace;
+out vec4 vGlowStampA; out vec4 vGlowStampB; out vec4 vGlowStampC;
 void main(){
   float c = cos(iRot), s = sin(iRot);
   vec2 local = aCorner * iSize;
@@ -713,6 +720,7 @@ void main(){
   vCenterScreen = ((iPos - uCam) / uViewHalf * 0.5 + 0.5) * uRes;
   vRot = iRot; vTile = iTile; vTileC = iTileC; vMisc = iMisc; vParam = iParam; vDeform = iDeform;
   vGlowA = iGlowA; vGlowB = iGlowB; vGlowC = iGlowC; vGlowHz = iGlowHz; vGlowHz2 = iGlowHz2; vGlowSpace = iGlowSpace;
+  vGlowStampA = iGlowStampA; vGlowStampB = iGlowStampB; vGlowStampC = iGlowStampC;
   float z = 0.9 - float(gl_InstanceID) * 0.02;
   gl_Position = vec4((world - uCam) / uViewHalf, z, 1.0);
 }\`,
@@ -721,6 +729,7 @@ precision highp float;
 uniform sampler2D uAtlas; uniform sampler2D uPal; uniform sampler2D uBase; uniform sampler2D uGlow; uniform float uTime;
 in vec2 vCenterScreen; in float vRot; in vec4 vTile; in vec2 vTileC; in vec4 vMisc; in vec4 vParam; in vec2 vDeform;
 in vec4 vGlowA; in vec4 vGlowB; in vec4 vGlowC; in vec4 vGlowHz; in vec2 vGlowHz2; in vec4 vGlowSpace;
+in vec4 vGlowStampA; in vec4 vGlowStampB; in vec4 vGlowStampC;
 out vec4 oColor;
 vec3 gF3 = vec3(0.0);
 vec3 gK3 = vec3(0.0);
@@ -728,6 +737,52 @@ vec3 fetchGlow(ivec2 gg){
   ivec2 gtp = ivec2(vTile.xy) + ivec2(vTileC) + gg;
   if (gtp.x < int(vTile.x) || gtp.y < int(vTile.y) || gtp.x >= int(vTile.x + vTile.z) || gtp.y >= int(vTile.y + vTile.w)) return vec3(0.0);
   return texelFetch(uGlow, gtp, 0).rgb;
+}
+// 印章权重（与主画布 dynamic-patterns 的 glowStamp 解析形状同式）：
+// st = (形状 0方 1圆 2星 3焰, 光晕, 主方向度, 伸长)；cosP/sinP 为主方向相位
+float glowStampW(vec4 st, float cosP, float sinP, vec2 dxy){
+  float halo = st.y; float reach = st.w;
+  if (halo <= 0.0) return (dxy.x == 0.0 && dxy.y == 0.0) ? 1.0 : 0.0;
+  if (st.x < 0.5) { float r = max(abs(dxy.x), abs(dxy.y)); return r <= halo ? 1.0 - r / (halo + 1.0) : 0.0; }
+  if (st.x < 1.5) { float d = length(dxy); return d <= halo ? 1.0 - d / (halo + 1.0) : 0.0; }
+  float lx = dxy.x * cosP + dxy.y * sinP;
+  float ly = -dxy.x * sinP + dxy.y * cosP;
+  if (st.x < 2.5) {
+    float d = length(vec2(lx, ly));
+    if (d <= 0.0) return 1.0;
+    float axis = abs(cos(2.0 * atan(ly, lx)));
+    float f = 0.45 + (reach - 0.45) * pow(axis, 1.5);
+    float dEff = d / f;
+    return dEff <= halo ? 1.0 - dEff / (halo + 1.0) : 0.0;
+  }
+  float dxs = ly < 0.0 ? lx * (1.0 + (-ly) * 0.3) : lx;
+  float dys = ly < 0.0 ? ly / reach : ly * 1.7;
+  float d = length(vec2(dxs, dys));
+  return d <= halo ? 1.0 - d / (halo + 1.0) : 0.0;
+}
+// 一个发光通道在当前像素的权重：解析形状按选区掩码+印章现算（世界基准只
+// 改印章主方向、选区始终贴精灵，与主画布同口径）；烘焙通道（形状 4）直用场
+float glowChannelF(vec4 st, float world, int ch, ivec2 g){
+  if (st.x > 3.5) { vec3 f = fetchGlow(g); return ch == 0 ? f.r : ch == 1 ? f.g : f.b; }
+  float mainDeg = st.z - (world > 0.5 ? -vRot * 57.29577951308232 : 0.0);
+  float phiDeg = (st.x > 1.5 && st.x < 2.5) ? mainDeg : mainDeg - 270.0;
+  float phi = phiDeg * 0.017453292519943295;
+  float cosP = cos(phi), sinP = sin(phi);
+  float Rf = st.x > 1.5 ? ceil(st.y * st.w) + 1.0 : st.y;
+  int Ri = int(Rf + 0.5);
+  float f = 0.0;
+  for (int dy = -29; dy <= 29; dy++) {
+    if (dy > Ri || dy < -Ri) continue;
+    for (int dx = -29; dx <= 29; dx++) {
+      if (dx > Ri || dx < -Ri) continue;
+      float w = glowStampW(st, cosP, sinP, vec2(float(dx), float(dy)));
+      if (w <= 0.0) continue;
+      vec3 m = fetchGlow(g - ivec2(dx, dy));
+      float mv = ch == 0 ? m.r : ch == 1 ? m.g : m.b;
+      if (mv > 0.5 && w > f) f = w;
+    }
+  }
+  return f;
 }
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 int tileRAt(ivec2 g){
@@ -770,19 +825,10 @@ void main(){
   if (vDeform.x != 1.0 || vDeform.y != 1.0) gfv = vec2(gfv.x / max(vDeform.x, 0.05), gfv.y / max(vDeform.y, 0.05));
   ivec2 g = ivec2(floor(gfv + 0.5));
   if (vGlowA.w > 0.0 || vGlowB.w > 0.0 || vGlowC.w > 0.0) {
-    vec3 fS = fetchGlow(g);
-    vec3 fW = fS;
-    if (vGlowSpace.x + vGlowSpace.y + vGlowSpace.z > 0.5) {
-      // 世界基准组：场以部件不旋转时烘焙，采样点绕枢轴按部件转角反向旋转
-      float c = cos(vRot), s = sin(vRot);
-      vec2 o = gfv - vTileC;
-      vec2 ow = vec2(o.x * c + o.y * s, o.x * s - o.y * c);
-      fW = fetchGlow(ivec2(floor(vTileC + ow + 0.5)));
-    }
     gF3 = vec3(
-      vGlowSpace.x > 0.5 ? fW.r : fS.r,
-      vGlowSpace.y > 0.5 ? fW.g : fS.g,
-      vGlowSpace.z > 0.5 ? fW.b : fS.b);
+      vGlowA.w > 0.0 ? glowChannelF(vGlowStampA, vGlowSpace.x, 0, g) : 0.0,
+      vGlowB.w > 0.0 ? glowChannelF(vGlowStampB, vGlowSpace.y, 1, g) : 0.0,
+      vGlowC.w > 0.0 ? glowChannelF(vGlowStampC, vGlowSpace.z, 2, g) : 0.0);
   }
   gK3 = vec3(
     gF3.r * (0.5 + 0.5 * sin(6.2831853 * (vGlowHz.x * uTime + vGlowHz.y))) * vGlowA.w,
@@ -892,7 +938,7 @@ const instBuf = gl.createBuffer();
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
-  const strides = [[1, 2, 0], [2, 2, 2], [3, 1, 4], [4, 2, 5], [5, 4, 7], [6, 4, 11], [7, 4, 15], [8, 2, 19], [9, 4, 21], [10, 4, 25], [11, 4, 29], [12, 4, 33], [13, 2, 37], [14, 4, 39]];
+  const strides = [[1, 2, 0], [2, 2, 2], [3, 1, 4], [4, 2, 5], [5, 4, 7], [6, 4, 11], [7, 4, 15], [8, 2, 19], [9, 4, 21], [10, 4, 25], [11, 4, 29], [12, 4, 33], [13, 2, 37], [14, 4, 39], [15, 4, 43], [16, 4, 47], [17, 4, 51]];
   for (const sDef of strides) {
     gl.enableVertexAttribArray(sDef[0]);
     gl.vertexAttribPointer(sDef[0], sDef[1], gl.FLOAT, false, INSTANCE_FLOATS * 4, sDef[2] * 4);
@@ -1171,6 +1217,8 @@ function frame(now) {
       return [grgb[0], grgb[1], grgb[2], x.params.glowStrength || 0, x.params.glowHz || 0, x.params.glowPhase || 0];
     });
     const glowSpace = glowInsts.map((x) => (x.params.glowAngleSpace === 'world' ? 1 : 0));
+    // 印章参数随图集条目走（导出端按服装集算好：解析形状=选区掩码+参数，片元重算）
+    const glowStamps = entry.glowStamps ? entry.glowStamps.map((st) => (st ? [st.shape, st.halo, st.angleDeg, st.reach] : [4, 0, 0, 0])) : undefined;
     const comp = resolved.composite === 'overlay' ? 2 : resolved.composite === 'silhouette' ? 1 : resolved.composite === 'sprite' ? 3 : 0;
     const big = comp > 0 || dynList.length > 0;
     const el = {
@@ -1185,6 +1233,7 @@ function frame(now) {
       deform: hasDeform ? [dsx, dsy] : undefined,
       glow: glowEl,
       glowSpace: glowSpace,
+      glowStamps: glowStamps,
     };
     els.push(el);
     elByKey.set(part.key, el);

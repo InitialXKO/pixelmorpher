@@ -1038,4 +1038,155 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('Q36 产品口径对照成立（frame=4/帧率 8 → t=0.5 秒 → rotation 30°）', Math.abs(prod.rotation - 30) < 0.01);
 }
 
+// ---------- S) 发光片元重算：解析形状存掩码+印章参数，片元与主画布逐格一致 ----------
+{
+  const { glowField, defaultDynamicParams, createDynamicInstance, encodeGlowMask } = await import('../src/lib/dynamic-patterns');
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  // 片元算法镜像（与 runtime-template 的 glowStampW/glowChannelF 逐式对应）
+  const stampW = (st: { shape: number; halo: number; reach: number }, cosP: number, sinP: number, dx: number, dy: number): number => {
+    const halo = st.halo, reach = st.reach;
+    if (halo <= 0) return dx === 0 && dy === 0 ? 1 : 0;
+    if (st.shape === 0) { const r = Math.max(Math.abs(dx), Math.abs(dy)); return r <= halo ? 1 - r / (halo + 1) : 0; }
+    if (st.shape === 1) { const d = Math.hypot(dx, dy); return d <= halo ? 1 - d / (halo + 1) : 0; }
+    const lx = dx * cosP + dy * sinP, ly = -dx * sinP + dy * cosP;
+    if (st.shape === 2) {
+      const d = Math.hypot(lx, ly);
+      if (d <= 0) return 1;
+      const axis = Math.abs(Math.cos(2 * Math.atan2(ly, lx)));
+      const f = 0.45 + (reach - 0.45) * Math.pow(axis, 1.5);
+      const dEff = d / f;
+      return dEff <= halo ? 1 - dEff / (halo + 1) : 0;
+    }
+    const dxs = ly < 0 ? lx * (1 + (-ly) * 0.3) : lx;
+    const dys = ly < 0 ? ly / reach : ly * 1.7;
+    const d = Math.hypot(dxs, dys);
+    return d <= halo ? 1 - d / (halo + 1) : 0;
+  };
+  const channelF = (st: { shape: number; halo: number; angleDeg: number; reach: number }, world: boolean,
+    maskAt: (x: number, y: number) => boolean, vRot: number, gx: number, gy: number): number => {
+    const mainDeg = st.angleDeg - (world ? -vRot * 180 / Math.PI : 0);
+    const phiDeg = st.shape === 2 ? mainDeg : mainDeg - 270;
+    const phi = phiDeg * Math.PI / 180, cosP = Math.cos(phi), sinP = Math.sin(phi);
+    const R = st.shape > 1 ? Math.ceil(st.halo * st.reach) + 1 : st.halo;
+    let f = 0;
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      const w = stampW(st, cosP, sinP, dx, dy);
+      if (w > 0 && maskAt(gx - dx, gy - dy)) f = Math.max(f, w);
+    }
+    return f;
+  };
+  const gridS = Array.from({ length: 9 }, (_, y) =>
+    Array.from({ length: 9 }, (_, x) => ((x === 4 && y === 4) || (x === 6 && y === 2) ? '#2ea8ff' : '#111111'))) as never;
+  const sprS = {
+    id: 'gsprS', width: 9, height: 9, plug: { x: 0 as never, y: 0 as never }, data: gridS,
+    directions: { 2: { spriteId: 'gsprS', mirror: false } },
+  } as never;
+  const mkCharS = (insts: unknown[]) => ({
+    id: 'chS', name: '片元重算',
+    nodes: { gem: { ...makeNode('gem', '宝石', 'gem'), dynamicPatterns: insts } },
+    rootNodeIds: ['gem'],
+    sprites: { gsprS: sprS },
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { gem: { ...createDefaultCostumePiece('gem'), sprites: { 2: { spriteId: 'gsprS', mirror: false } } } } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  }) as unknown as Character;
+  const mkInstS = (over: Record<string, unknown>) => createDynamicInstance('辉光呼吸', {
+    ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: '#2ea8ff', emitEnabled: false, ...over,
+  } as never, '辉光');
+  const shapeCode: Record<string, number> = { square: 0, circle: 1, star: 2, flame: 3 };
+  const cases: [string, Record<string, unknown>][] = [
+    ['方形/精灵基准', { glowShape: 'square', glowHalo: 2 }],
+    ['圆形/世界基准', { glowShape: 'circle', glowHalo: 2, glowAngleDeg: 100, glowAngleSpace: 'world' }],
+    ['星形/世界基准', { glowShape: 'star', glowHalo: 2, glowStarReach: 2, glowAngleDeg: 45, glowAngleSpace: 'world' }],
+    ['焰形/世界基准', { glowShape: 'flame', glowHalo: 3, glowFlameReach: 2.5, glowAngleDeg: 200, glowAngleSpace: 'world' }],
+    ['星形/圈宽0/世界基准', { glowShape: 'star', glowHalo: 0, glowAngleSpace: 'world' }],
+    ['焰形/精灵基准', { glowShape: 'flame', glowHalo: 1, glowAngleDeg: 90 }],
+  ];
+  let sBad = 0;
+  for (const [label, over] of cases) {
+    const pkgS = convertCharacterToRuntimePackage(mkCharS([mkInstS(over)]));
+    const partS = pkgS.parts.find((x) => x.key === 'gem');
+    const entry = partS?.glow;
+    const st = entry?.stamps?.[0];
+    const resolved = partS?.dynamic?.[0]?.params as never as Record<string, unknown>;
+    if (!entry || !st || st.shape !== shapeCode[over.glowShape as string]) { sBad++; console.log('  S 形状代码不符:', label, JSON.stringify(st)); continue; }
+    const bytes = Buffer.from(entry.data, 'base64');
+    const maskAt = (x: number, y: number) => {
+      const bx = x + entry.padX, by = y + entry.padY;
+      return bx >= 0 && by >= 0 && bx < entry.w && by < entry.h && bytes[(by * entry.w + bx) * 3] > 127;
+    };
+    const world = (resolved.glowAngleSpace as string) === 'world';
+    for (const theta of [0, 40, -75, 160]) {
+      const truth = glowField(resolved as never, gridS as never, theta);
+      if (!truth) { sBad++; continue; }
+      const vRot = -theta * Math.PI / 180;
+      for (let gy = -6; gy < 15; gy++) for (let gx = -6; gx < 15; gx++) {
+        const mine = channelF(st, world, maskAt, vRot, gx, gy);
+        const tx = gx + truth.padX, ty = gy + truth.padY;
+        const t = tx >= 0 && ty >= 0 && tx < truth.w && ty < truth.h ? truth.field[ty * truth.w + tx] : 0;
+        if (Math.abs(mine - t) > 1e-6) sBad++;
+      }
+    }
+  }
+  check('S1 解析形状×基准×多角度：片元重算与主画布 glowField 逐格一致', sBad === 0);
+  // 掩码语义：选中格 255、印章边缘格（场权重在 0..1 之间）存 0（不是烘焙场）
+  {
+    const pkgS = convertCharacterToRuntimePackage(mkCharS([mkInstS({ glowShape: 'star', glowHalo: 2, glowStarReach: 2 })]));
+    const entry = pkgS.parts.find((x) => x.key === 'gem')?.glow;
+    const bytes = entry ? Buffer.from(entry.data, 'base64') : null;
+    const atB = (x: number, y: number) => (entry && bytes ? bytes[((y + entry.padY) * entry.w + (x + entry.padX)) * 3] : -1);
+    check('S2 解析形状通道存选区掩码（选中=255、边缘=0）', atB(4, 4) === 255 && atB(5, 4) === 0 && atB(3, 3) === 0);
+  }
+  // 自绘印章 → 烘焙场通道：字节与 glowField 权重逐格相等
+  {
+    const kernel = encodeGlowMask([[false, true, false], [true, true, true], [false, true, false]]);
+    const inst = mkInstS({ glowShape: 'custom', glowShapeKernel: kernel, glowHalo: 0 });
+    const pkgS = convertCharacterToRuntimePackage(mkCharS([inst]));
+    const partS = pkgS.parts.find((x) => x.key === 'gem');
+    const entry = partS?.glow;
+    const resolved = partS?.dynamic?.[0]?.params as never;
+    const truth = glowField(resolved, gridS as never, 0);
+    const bytes = entry ? Buffer.from(entry.data, 'base64') : null;
+    let ok = !!entry && entry.stamps?.[0]?.shape === 4 && !!truth && !!bytes;
+    if (ok && entry && truth && bytes) {
+      for (let gy = 0; gy < 9 && ok; gy++) for (let gx = 0; gx < 9; gx++) {
+        const expect = Math.round(Math.max(0, Math.min(1, truth.field[(gy + truth.padY) * truth.w + (gx + truth.padX)])) * 255);
+        if (bytes[((gy + entry.padY) * entry.w + (gx + entry.padX)) * 3] !== expect) { ok = false; break; }
+      }
+    }
+    check('S3 自绘印章通道存烘焙场（形状代码 4、字节与权重场逐格相等）', ok);
+  }
+  // 同通道并入：参数一致 → 掩码并集+重算；参数不一致 → 烘焙场
+  {
+    const mkF = (pick: string, over: Record<string, unknown>, slot: string) => createDynamicInstance('辉光呼吸', {
+      ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: pick, emitEnabled: false, glowFollowGroup: 0, ...over,
+    } as never, slot);
+    const gridM = [['#ff0000', '#00ff00'], ['#0000ff', '#ffff00']] as never;
+    const sprM = { id: 'gsprM', width: 2, height: 2, plug: { x: 0 as never, y: 0 as never }, data: gridM, directions: { 2: { spriteId: 'gsprM', mirror: false } } } as never;
+    const mkCharM = (insts: unknown[]) => ({
+      id: 'chSM', name: '并入', nodes: { gem: { ...makeNode('gem', '宝石', 'gem'), dynamicPatterns: insts } },
+      rootNodeIds: ['gem'], sprites: { gsprM: sprM },
+      costumeSets: [{ id: 'set1', name: '默认', pieces: { gem: { ...createDefaultCostumePiece('gem'), sprites: { 2: { spriteId: 'gsprM', mirror: false } } } } }],
+      activeCostumeSetId: 'set1', variants: {},
+    }) as unknown as Character;
+    const homo = convertCharacterToRuntimePackage(mkCharM([
+      mkF('#ff0000', { glowShape: 'square', glowHalo: 1 }, '辉光一'), mkF('#00ff00', { glowShape: 'square', glowHalo: 1 }, '辉光二'),
+      mkF('#0000ff', { glowShape: 'square', glowHalo: 1 }, '辉光三'), mkF('#ffff00', { glowShape: 'square', glowHalo: 1 }, '辉光四'),
+    ]));
+    const homoEntry = homo.parts.find((x) => x.key === 'gem')?.glow;
+    check('S4 同通道并入且参数一致 → 掩码并集（形状代码 0、两选区都在 R 通道）',
+      homoEntry?.stamps?.[0]?.shape === 0 && !!homoEntry
+      && Buffer.from(homoEntry.data, 'base64')[((0 + homoEntry.padY) * homoEntry.w + (0 + homoEntry.padX)) * 3] === 255
+      && Buffer.from(homoEntry.data, 'base64')[((1 + homoEntry.padY) * homoEntry.w + (1 + homoEntry.padX)) * 3] === 255);
+    const hetero = convertCharacterToRuntimePackage(mkCharM([
+      mkF('#ff0000', { glowShape: 'square', glowHalo: 1 }, '辉光一'), mkF('#00ff00', { glowShape: 'square', glowHalo: 1 }, '辉光二'),
+      mkF('#0000ff', { glowShape: 'square', glowHalo: 1 }, '辉光三'), mkF('#ffff00', { glowShape: 'circle', glowHalo: 1 }, '辉光四'),
+    ]));
+    check('S5 同通道并入但参数不一致 → 烘焙场（形状代码 4）',
+      hetero.parts.find((x) => x.key === 'gem')?.glow?.stamps?.[0]?.shape === 4);
+  }
+  const htmlS = buildRuntimeHtml(convertCharacterToRuntimePackage(mkCharS([mkInstS({ glowShape: 'star', glowHalo: 1 })])));
+  check('S6 模板含印章重算接线且旧旋转采样已除', htmlS.includes('glowChannelF') && htmlS.includes('glowStampW') && htmlS.includes('iGlowStampA') && !htmlS.includes('vec2 ow'));
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

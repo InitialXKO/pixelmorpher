@@ -17,7 +17,7 @@ import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
-import { glowField, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
+import { glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
 import { createDefaultParametricAppearance } from './surfaces';
 import { PALETTES } from './palettes';
 import {
@@ -70,6 +70,23 @@ export interface RuntimeGlowEntry {
   padY: number;
   space: 'tile' | 'sprite';
   data: string;
+  /**
+   * 逐通道印章参数（片元重算用，与 data 三通道一一对应）：
+   * shape 0=方形 1=圆形 2=星形 3=焰形 → data 该通道存选区掩码（选中=255），
+   * 片元按主画布 glowStamp 同式现算印章（世界基准在片元按转角调方向，
+   * 选区始终贴精灵）；shape 4=烘焙场（自绘印章或同通道并入了参数不一致
+   * 的实例，无法用单个印章重算）→ data 该通道存烘焙好的权重场，片元直用。
+   * 无该通道时为 null。
+   */
+  stamps: (RuntimeGlowStamp | null)[];
+}
+
+/** 片元重算印章参数（值域已按 glowStamp 同口径钳制） */
+export interface RuntimeGlowStamp {
+  shape: 0 | 1 | 2 | 3 | 4;
+  halo: number;
+  angleDeg: number;
+  reach: number;
 }
 
 export interface RuntimePart {
@@ -217,6 +234,37 @@ function baseSpriteFor(
  * 按各自所选的发光组并入对应通道（场逐像素取大，颜色与呼吸参数跟所选组，
  * 与主画布 resolveGlowGroups 同口径）。某实例选区为空、无代表图，逐条点名。
  */
+/** 形状名 → 片元印章代码（自绘印章走烘焙场，代码 4 在通道判定处处理） */
+function glowShapeCodeOf(params: DynamicPatternParams): 0 | 1 | 2 | 3 {
+  switch (params.glowShape ?? 'square') {
+    case 'circle': return 1;
+    case 'star': return 2;
+    case 'flame': return 3;
+    default: return 0;
+  }
+}
+
+/** 印章参数签名：同通道并入的实例只有签名全同时才能共用一个印章重算 */
+function glowStampSignature(params: DynamicPatternParams): string {
+  const shape = params.glowShape ?? 'square';
+  const reach = shape === 'star' ? (params.glowStarReach ?? 1.2)
+    : shape === 'flame' ? (params.glowFlameReach ?? 1.8) : 1;
+  return [shape, Math.round(params.glowHalo || 0), params.glowAngleDeg ?? 270,
+    params.glowAngleSpace ?? 'sprite', reach].join('|');
+}
+
+/** 片元重算印章参数（钳制口径与 dynamic-patterns 的 glowStamp 一致） */
+function glowStampOf(params: DynamicPatternParams): RuntimeGlowStamp {
+  const shape = glowShapeCodeOf(params);
+  const halo = Math.max(0, Math.min(8, Math.round(params.glowHalo || 0)));
+  const reach = shape === 2
+    ? Math.max(1, Math.min(2.5, params.glowStarReach || 1.2))
+    : shape === 3
+      ? Math.max(1, Math.min(3.5, params.glowFlameReach || 1.8))
+      : 1;
+  return { shape, halo, angleDeg: params.glowAngleDeg ?? 270, reach };
+}
+
 function glowEntryFor(
   character: Character,
   slotKey: string,
@@ -249,23 +297,53 @@ function glowEntryFor(
   // 场带外扩边距（辉光溢出包围盒）：全组统一到最大边距，逐实例按网格原点对齐
   const padX = Math.max(...fields.map((f) => f?.padX ?? 0));
   const padY = Math.max(...fields.map((f) => f?.padY ?? 0));
-  const w = (rep.grid[0]?.length ?? 0) + padX * 2;
-  const h = rep.grid.length + padY * 2;
+  const gw = rep.grid[0]?.length ?? 0;
+  const gh = rep.grid.length;
+  const w = gw + padX * 2;
+  const h = gh + padY * 2;
   const bytes = new Uint8Array(w * h * 3);
-  fields.forEach((gf, idx) => {
-    if (!gf) return;
-    const ci = idx < 3 ? idx : glowFollowTargetOf(glows[idx]!.params); // 第 4 个起并入所选组
-    const ox = padX - gf.padX, oy = padY - gf.padY;
-    for (let y = 0; y < gf.h; y++) {
-      for (let x = 0; x < gf.w; x++) {
-        const v = Math.round(Math.max(0, Math.min(1, gf.field[y * gf.w + x])) * 255);
-        if (!v) continue;
-        const bi = ((y + oy) * w + (x + ox)) * 3 + ci;
-        if (v > bytes[bi]) bytes[bi] = v;
+  // 逐通道组装：通道内实例印章参数一致且都是解析形状 → 存选区掩码（并集），
+  // 片元按印章参数现算（世界基准的方向在片元按部件转角调，位置始终贴精灵）；
+  // 含自绘印章或参数不一致的通道 → 存烘焙权重场（逐实例场取大合并，同旧口径）。
+  const stamps: (RuntimeGlowStamp | null)[] = [null, null, null];
+  for (let ci = 0; ci < 3; ci++) {
+    const idxs = glows.map((g, idx) => (idx < 3 ? idx : glowFollowTargetOf(g.params)) === ci ? idx : -1).filter((i) => i >= 0);
+    const live = idxs.filter((idx) => fields[idx]);
+    if (live.length === 0) continue;
+    const first = glows[live[0]!]!.params;
+    const recomputable = live.every((idx) => {
+      const pp = glows[idx]!.params;
+      return (pp.glowShape ?? 'square') !== 'custom'
+        && glowStampSignature(pp) === glowStampSignature(first);
+    });
+    if (recomputable) {
+      stamps[ci] = glowStampOf(first);
+      for (const idx of live) {
+        const cells = glowMaskCells(glows[idx]!.params, rep.grid);
+        if (!cells) continue;
+        for (let y = 0; y < gh; y++) {
+          for (let x = 0; x < gw; x++) {
+            if (cells[y * gw + x]) bytes[((y + padY) * w + (x + padX)) * 3 + ci] = 255;
+          }
+        }
+      }
+    } else {
+      stamps[ci] = { shape: 4, halo: 0, angleDeg: 0, reach: 0 };
+      for (const idx of live) {
+        const gf = fields[idx]!;
+        const ox = padX - gf.padX, oy = padY - gf.padY;
+        for (let y = 0; y < gf.h; y++) {
+          for (let x = 0; x < gf.w; x++) {
+            const v = Math.round(Math.max(0, Math.min(1, gf.field[y * gf.w + x])) * 255);
+            if (!v) continue;
+            const bi = ((y + oy) * w + (x + ox)) * 3 + ci;
+            if (v > bytes[bi]) bytes[bi] = v;
+          }
+        }
       }
     }
-  });
-  return { w, h, padX, padY, space: rep.space, data: packBytesBase64(bytes) };
+  }
+  return { w, h, padX, padY, space: rep.space, data: packBytesBase64(bytes), stamps };
 }
 
 /** 双挂载解析 → 运行时动态实例（节点为底、服装件同位替换/压制） */
