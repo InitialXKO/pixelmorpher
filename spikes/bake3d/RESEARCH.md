@@ -280,3 +280,9 @@ P5 一直悬置的原因。成本：小，但语义代价最大。
 ## 八、主界面导出补 Live2D 页签（2026-10-25 用户点名「主界面右上角那个导出按钮」）
 
 上一轮把 moc3 入口只放进了烘焙对话框，用户问「主界面右上角那个导出按钮里加了新导出格式没有」——答案是没有，本节补上。主 ExportDialog 新增「Live2D」页签（在「运行时」之后）：`live2d/build-from-character.ts` 从编辑器角色构建——几何与画序直接取 generateRenderPlan 的 sortedInstructions（与主画布同一消费链），每条带精灵指令成一个图元：纹理 = 精灵网格，位置 = 指令位姿作用于以枢轴（sprite.plug + attachment.plug、无则居中，与计划生成端同口径）为原点的四角，镜像并入横向缩放符号。参数只声明 AngleX/AngleY/BodyAngleX（无关键形族，静态绑定追踪画序——探针验每图元关键形数 ≥3）。与 PMX 路径的分工写进了页签文案：本页签 = 第 0 帧静态姿态版；带骨骼关键形的走烘焙对话框。探针 probe-live2d-character 11 项（两图元/纹理颜色/上下关系/画序/旋转 90° 宽高互换/无精灵抛错/moc3 魔数与静态绑定）全过；tsc + build + 既有回归过。未验证：真机点按与导出包在 Cubism/VTS 的加载（并入真机批）。
+
+## 九、六部件真机崩溃「reading 'elements'」定案并修复（2026-10-25）
+
+根因：PMX 的 SkinnedMesh.material 是材质**数组**。bakeSkinnedMesh 把数组整体存进 BakedMesh.material（类型断言掩盖），makeToonFromSource 用 `'map' in src && src.map` 取贴图——`in` 命中数组继承的 Array.prototype.map（函数），函数被当贴图塞进 MeshToonMaterial；three 渲染时 refreshTransformUniform 读 map.matrix.elements，matrix 为 undefined → 崩溃。单材质网格（GLB 常见）不触发；手动路径早已逐个材质调用所以不中招；双遍不走此函数。复现与验证靠本机软件 GL 台（Xvfb + Playwright Firefox 非 headless，llvmpipe WebGL2）：修复前同堆栈（copy ← refreshTransformUniform ← bakeSixParts），修复后 reze 全流程 SIXPART OK（148 骨 / 48 组）。
+修法（结构层）：BakedMesh 增 materials + triMaterial（按 geometry.groups 逐三角形记材质号）；buildPartGeometry 按材质拆视图、视图自带单个 material；两处颜色遍改用 view.material。单材质网格行为不变。makeToonFromSource 另加数组防御（取第一个）兜底误传。探针 probe-material-groups 8 项（数组防御/triMaterial 分组/视图拆分/颜色对位）+ 既有回归 + tsc + build 全过。
+同轮 GL 台顺带验掉两笔旧账：双遍在真实 GL 下完整跑通（ID 遍 alpha 像素 2502，甲的两半 ID 读回有数）；Live2D 的 renderDrawableWebGL 真实隔离渲染出图（34 图元、不透明贴图像素 13276、zip 2.24MB）——余下未验只剩 Cubism/VTS 加载与 ID 解码逐骨正确性（探针已在编码层验过）。

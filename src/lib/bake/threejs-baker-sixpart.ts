@@ -156,7 +156,13 @@ export interface SixPartBakeOptions extends BakeOptions {
 // ---- 内部：蒙皮烘焙为静态几何 ----
 interface BakedMesh {
   geometry: THREE.BufferGeometry; // 静态，世界（模型）空间，已应用当前姿态
-  material: THREE.Material | null; // 原材质（取色用）
+  material: THREE.Material | null; // 原材质（取色用；多材质网格时为第一个，逐组材质看 materials/triMaterial）
+  /** 网格的全部材质（单材质时长度 1）；PMX 等多材质网格的 mesh.material 是数组，
+   * 曾被整体塞进 material 字段骗过 makeToonFromSource 的 'map' in 检查
+   * （数组继承 Array.prototype.map），视图必须按 triMaterial 取单个材质 */
+  materials: (THREE.Material | null)[];
+  /** 每三角形（索引序，与 groupTrianglesByPart 的枚举一致）的材质下标（geometry.groups 派生，无组时全 0） */
+  triMaterial: Int32Array;
   /** 每顶点主导 bone 的全局 index（-1=无） */
   vertBone: Int32Array;
   /** 每顶点 weight>阈值（BakeOptions.weightThreshold，默认 0.2）的 bones（全局 index，用于 ID 位掩码重叠） */
@@ -328,7 +334,17 @@ export function bakeSkinnedMesh(
   if (index) {
     out.setIndex(index.clone());
   }
-  return { geometry: out, material: mesh.material as THREE.Material | null, vertBone, vertBones };
+  const materials: (THREE.Material | null)[] = Array.isArray(mesh.material)
+    ? [...mesh.material]
+    : mesh.material ? [mesh.material] : [];
+  const triCount = index ? index.count / 3 : Math.floor(posAttr.count / 3);
+  const triMaterial = new Int32Array(triCount);
+  for (const g of geo.groups) {
+    const start = Math.floor(g.start / 3);
+    const end = Math.min(triCount, Math.floor((g.start + g.count) / 3));
+    for (let t = start; t < end; t++) triMaterial[t] = g.materialIndex ?? 0;
+  }
+  return { geometry: out, material: materials[0] ?? null, materials, triMaterial, vertBone, vertBones };
 }
 
 // ---- 部件拆分 ----
@@ -337,6 +353,8 @@ interface PartTriangles {
   tris: number[][];
   /** 三角形主导 bone（全局 index） */
   triBone: number[];
+  /** 三角形在原几何中的序号（索引序，与 tris/triBone 平行；按材质拆视图用） */
+  triOrd: number[];
 }
 
 /**
@@ -353,10 +371,10 @@ export function groupTrianglesByPart(
   const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
   const triCount = index ? index.count / 3 : Math.floor(posAttr.count / 3);
   const result = new Map<PartName, PartTriangles>();
-  for (const p of ALL_PARTS) result.set(p, { tris: [], triBone: [] });
+  for (const p of ALL_PARTS) result.set(p, { tris: [], triBone: [], triOrd: [] });
 
   // 无归属三角形：三顶点的主导 bone 都不属于任何部件（或无主导 bone）
-  const orphans: { tri: [number, number, number]; bestBone: number }[] = [];
+  const orphans: { tri: [number, number, number]; bestBone: number; ord: number }[] = [];
   for (let t = 0; t < triCount; t++) {
     const a = index ? index.getX(t * 3) : t * 3;
     const b = index ? index.getX(t * 3 + 1) : t * 3 + 1;
@@ -380,13 +398,14 @@ export function groupTrianglesByPart(
     // 跨部件三角形不跳过：归入它涉及的每个部件——在交界破洞处由这块真实三角形本身遮挡，
     // 不再造封盖假面；像素归属在 2D 拆分时按 ID 掩码精确决定，不会双算
     if (parts.size === 0 || bestBone < 0) {
-      orphans.push({ tri: [a, b, c], bestBone });
+      orphans.push({ tri: [a, b, c], bestBone, ord: t });
       continue;
     }
     for (const p of parts) {
       const pt = result.get(p)!;
       pt.tris.push([a, b, c]);
       pt.triBone.push(bestBone);
+      pt.triOrd.push(t);
     }
   }
 
@@ -427,6 +446,7 @@ export function groupTrianglesByPart(
         const pt = result.get(winner)!;
         pt.tris.push(o.tri);
         pt.triBone.push(o.bestBone);
+        pt.triOrd.push(o.ord);
         absorbedTris++;
         // 邻近骨骼：获胜部件里与孤儿共享顶点的三角形，其顶点骨骼集（含主导骨）
         // 中属于获胜部件的骨骼出现最多者
@@ -469,6 +489,8 @@ interface BuiltPartView {
   source: BakedMesh;
   /** 本部件在此源几何上的三角形索引序列（原顶点序，本部件的「剔除」结果即这份视图） */
   index: number[];
+  /** 本视图的单个源材质（视图按材质组拆分，多材质网格不再整组共用一份） */
+  material: THREE.Material | null;
 }
 
 interface BuiltPart {
@@ -506,9 +528,18 @@ export function buildPartGeometry(
     reweightedTris += grouped.reweightedTris;
     const pt = grouped.groups.get(part)!;
     if (pt.tris.length === 0) continue;
-    const index: number[] = [];
-    for (const [a, b, c] of pt.tris) index.push(a, b, c);
-    views.push({ source: bm, index });
+    // 按材质组拆视图：同一部件里不同材质的三角形各自成视图、用各自的源材质
+    // （PMX 等多材质网格的 mesh.material 是数组，共用一份会把数组当单个材质用）
+    const byMat = new Map<number, number[]>();
+    pt.tris.forEach(([a, b, c], i) => {
+      const mi = bm.triMaterial[pt.triOrd[i]] ?? 0;
+      let arr = byMat.get(mi);
+      if (!arr) { arr = []; byMat.set(mi, arr); }
+      arr.push(a, b, c);
+    });
+    for (const [mi, index] of byMat) {
+      views.push({ source: bm, index, material: bm.materials[mi] ?? bm.materials[0] ?? null });
+    }
   }
   if (views.length === 0) return null;
 
@@ -541,6 +572,10 @@ export function makeToonFromSource(
   gradientMap: THREE.DataTexture,
   usePmxNpr?: boolean,
 ): THREE.Material {
+  // 防御：调用方误传材质数组时取第一个——数组继承 Array.prototype.map，
+  // 'map' in 检查会把那个函数当贴图传进材质，渲染时在 three 的
+  // refreshTransformUniform 里读 undefined.matrix.elements 崩掉（真机实测）
+  if (Array.isArray(source)) source = source[0] ?? null;
   // PMX 原味着色（开关开）：走参考版 NPR 着色，不做 toon 转换
   if (usePmxNpr) {
     const npr = makeNprFromSource(source);
@@ -1048,7 +1083,7 @@ export async function bakeSixParts(
       // 颜色遍：部件的每个索引视图用其源材质派生 toon 材质（各自的 map/color），不再全部件共用一份
       const inner = new THREE.Group();
       for (const view of bp.views) {
-        const toonMat = makeToonFromSource(view.source.material, gradientMap, options.usePmxNpr);
+        const toonMat = makeToonFromSource(view.material, gradientMap, options.usePmxNpr);
         const mesh = new THREE.Mesh(makeViewGeometry(view), toonMat);
         mesh.frustumCulled = false;
         inner.add(mesh);
@@ -1276,7 +1311,7 @@ export async function bakeSixParts(
         const idInnerG = new THREE.Group();
         for (const view of views) {
           const geo = makeViewGeometry(view);
-          const tmat = makeToonFromSource(view.source.material, gradientMap, options.usePmxNpr);
+          const tmat = makeToonFromSource(view.material, gradientMap, options.usePmxNpr);
           gateByDirection(tmat, dirShared, ci);
           mats.push(tmat);
           const cm = new THREE.Mesh(geo, tmat);
