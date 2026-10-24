@@ -5,9 +5,9 @@
 // 编辑 Character.behaviorTree（作者规格）：不进运行时包，宿主侧运行。
 // 语义（与 behavior-tree.ts 一致）：树是"大脑"、状态机是"身体"；
 // 每 tick 从根重跑，按世界变量决策，只输出意图/移动/写变量。
-// 试运行用模拟世界变量步进 tick；mock 按模板现状实现：
-// 意图命中=可选表演或 jump；写变量转发仅 moveX/autoWalk 被运行时
-// 接受，其余只留黑板——面板把这点明写，不替模板圆场。
+// 试运行用模拟世界变量步进 tick；mock 按模板口径实现：
+// 意图命中=可选表演或 jump；写变量转发进运行时变量表（状态机条件
+// 随后能读到），保留名 t/phase/speed01/grounded 拒收只留黑板。
 // ============================================================
 
 import React, { useRef, useState } from 'react';
@@ -314,8 +314,8 @@ export default function BehaviorTreePanel({ unifiedCharacters }: { unifiedCharac
         },
         setMove: (x) => { calls.push(`setMove(${x})`); },
         setVar: (name, value) => {
-          const ok = name === 'moveX' || name === 'autoWalk';
-          calls.push(`setVar(${name}, ${value}) → ${ok ? '模板接受' : '模板拒收（只留黑板）'}`);
+          const ok = !['t', 'phase', 'speed01', 'grounded'].includes(name);
+          calls.push(`setVar(${name}, ${value}) → ${ok ? '模板接受（进变量表）' : '模板拒收（保留名，只留黑板）'}`);
           return ok;
         },
       },
@@ -334,7 +334,7 @@ export default function BehaviorTreePanel({ unifiedCharacters }: { unifiedCharac
       <p className="text-[9px] text-gray-600 leading-relaxed">
         行为树是决策层（大脑），状态机是身体：每 tick 从根重跑，按世界变量决策，只输出意图、移动、写变量。
         树不进运行时包，宿主侧运行；世界变量的名字由宿主定，树只按名字读。
-        写变量会转发运行时，但模板目前只接受 moveX/autoWalk，其余变量只留在黑板（供树内条件读）。
+        写变量会转发运行时并进变量表，状态机条件和行为图随后能读到；保留名 t/phase/speed01/grounded 由模板逐帧计算，不接受外部写入。
       </p>
       <div className="flex items-center gap-2">
         <span className="text-[10px] text-gray-400">

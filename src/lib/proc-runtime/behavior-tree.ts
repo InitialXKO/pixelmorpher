@@ -14,10 +14,10 @@
 // - 空选择器恒失败、空顺序器恒成功；修饰节点无子节点恒失败；
 // - spec 结构变化（删/加节点致 id 复用）后，黑板内部区的旧进度可能残留，
 //   宿主应在结构变化后重置运行状态（createBTState）。
-// 模板现状（2026-10-24 实测，设计前提勘误）：模板的 setVar 只认 moveX/autoWalk，
-// 其它名字转发过去返回 false 且不进状态机变量空间——SetVar 的"桥"在 v1 只对
-// moveX/autoWalk 生效；自定义变量想进状态机条件，需改模板把通用变量并入
-// hostVars（那是改包行为，v1 不做）。试运行的 mock 按模板现状实现。
+// 模板口径（2026-10-24 晚改包后）：setVar 的通用名存入变量表、每帧并入
+// hostVars，状态机条件与行为图都能读到——SetVar 是脑到身体的桥；保留名
+// t/phase/speed01/grounded 由模板逐帧计算，setVar 拒收（返回 false）。
+// 试运行的 mock 按此口径实现。
 // ============================================================
 
 import type {
@@ -277,7 +277,8 @@ export interface BTTraceEntry {
 
 /** 运行时适配器：宿主把 procRuntime 包一层传进来；试运行传 mock。
  *  intent 返回布尔（模板 intent 同口径：命中表演/jump 为 true，否则 false）；
- *  setVar 返回布尔（模板现状：仅 moveX/autoWalk 为 true，其余 false）。 */
+ *  setVar 返回布尔（模板口径：moveX/autoWalk 旧通道、通用名进变量表为 true；
+ *  保留名 t/phase/speed01/grounded 与非数字值为 false）。 */
 export interface BTRuntimeAdapter {
   intent?: (name: string) => boolean;
   setMove?: (x: number) => void;

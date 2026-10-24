@@ -1065,8 +1065,9 @@ function stopAllPerfs() {
 }
 // ---------- 运行时状态机 ----------
 // 只判身体状态：材料都在包内（宿主变量 + 表演清单）。世界判定（行为树）
-// 不进包，归宿主。宿主可绕过状态机：setVar 直写变量，状态机每帧读最终
-// 值跟随判定；意图（intent）是建议入口，不是唯一入口。
+// 不进包，归宿主。宿主可绕过状态机：setVar 直写变量（通用名存入变量表、
+// 每帧并入 hostVars；保留名 t/phase/speed01/grounded 拒收），状态机每帧
+// 读最终值跟随判定；意图（intent）是建议入口，不是唯一入口。
 const SM = EMBEDDED.stateMachine || null;
 const smStateById = new Map();
 let smCurrent = null;
@@ -1081,6 +1082,10 @@ function emitRuntimeEvent(type, data) {
 }
 let lastHostVars = { moveX: 0, speed01: 0, grounded: 1 };
 let hostMoveX = null;
+// 宿主通用变量（setVar 写入）：每帧并入 hostVars 供状态机条件与行为图读。
+// 只存数；保留名 t/phase/speed01/grounded 由模板逐帧计算，setVar 拒收，
+// 并入时计算值也排在后面覆盖，外部写不进来、盖不住身体真相。
+const hostCustomVars = {};
 let prevOnGround = true;
 function smCondOk(when, vars) {
   for (const c of when || []) {
@@ -1164,7 +1169,14 @@ window.procRuntime = {
       return true;
     }
     if (name === 'autoWalk') { autoWalk = !!value; return true; }
-    return false;
+    // 保留名是身体真相（逐帧由物理/输入算出），不接受外部写入
+    if (name === 't' || name === 'phase' || name === 'speed01' || name === 'grounded') return false;
+    // 通用变量：null/undefined = 删除（条件随之读不到、按缺失处理）；只存数
+    if (value === null || value === undefined) { delete hostCustomVars[name]; return true; }
+    const num = Number(value);
+    if (Number.isNaN(num)) return false;
+    hostCustomVars[name] = num;
+    return true;
   },
   setMove: function (x) {
     hostMoveX = x === null || x === undefined ? null : Math.max(-1, Math.min(1, Number(x) || 0));
@@ -1283,10 +1295,12 @@ function frame(now) {
   // 行为时钟 = 表演纪元起算的秒。图内时间一律秒（time 节点、
   // 周期参数、phase 圈数），全系统不再出现帧制时间。
   const behaviorT = elapsed - behaviorEpoch;
-  const hostVars = {
+  // 宿主通用变量垫底、逐帧计算值在后覆盖：setVar 的变量状态机/行为图可读，
+  // 但 t/phase/moveX/speed01/grounded 永远以本帧计算为准。
+  const hostVars = Object.assign({}, hostCustomVars, {
     t: behaviorT, phase: phaseAcc, moveX: ix,
     speed01: ix !== 0 ? 1 : 0, grounded: char.onGround ? 1 : 0,
-  };
+  });
   lastHostVars = hostVars;
   smUpdate(hostVars);
   let pose = {};

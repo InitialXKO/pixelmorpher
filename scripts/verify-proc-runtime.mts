@@ -1306,6 +1306,61 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   const vsLocs = [...htmlT.slice(vsStart, vsEnd).matchAll(/layout\(location=(\d+)\)/g)].map((m) => +m[1]);
   check('T14 顶点着色器属性数≤16 且最大 location≤15（防属性超限致着色器编译失败）',
     vsLocs.length === 16 && Math.max(...vsLocs) === 15, `locs=${vsLocs.join(',')}`);
+  // T15 setVar 通用变量行为门：从模板源码抽 setVar 真身与每帧 hostVars 构造，在桩环境真执行。
+  // 静态标记证明不了三件事：通用变量真进表、保留名真拒收、并入时计算值真覆盖。
+  {
+    const { readFileSync } = await import('node:fs');
+    const tplSrc = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+    const extractBalanced = (src: string, marker: string): string => {
+      const start = src.indexOf(marker);
+      if (start < 0) return '';
+      let depth = 0; let inStr: string | null = null;
+      for (let j = src.indexOf('{', start); j < src.length; j++) {
+        const ch = src[j];
+        if (inStr) { if (ch === '\\') j++; else if (ch === inStr) inStr = null; continue; }
+        if (ch === "'" || ch === '"' || ch === '`') { inStr = ch; continue; }
+        if (ch === '{') depth++;
+        else if (ch === '}') { depth--; if (depth === 0) return src.slice(start, j + 1); }
+      }
+      return '';
+    };
+    const setVarText = extractBalanced(tplSrc, 'setVar: function (name, value)').replace(/^setVar:\s*/, '');
+    let sv: any = null; let svErr = '';
+    try {
+      sv = new Function(`
+        let hostMoveX = null; let autoWalk = false; const hostCustomVars = {};
+        const setVar = ${setVarText};
+        const out = {};
+        out.generic = setVar('rage', 1) === true && hostCustomVars.rage === 1;
+        out.coerce = setVar('rage', '2.5') === true && hostCustomVars.rage === 2.5;
+        out.reserved = setVar('grounded', 0) === false && !('grounded' in hostCustomVars)
+          && setVar('phase', 1) === false && setVar('t', 1) === false && setVar('speed01', 1) === false;
+        out.nan = setVar('rage', 'abc') === false && hostCustomVars.rage === 2.5;
+        out.del = setVar('rage', null) === true && !('rage' in hostCustomVars);
+        out.moveX = setVar('moveX', 0.5) === true && hostMoveX === 0.5;
+        out.autoWalk = setVar('autoWalk', 1) === true && autoWalk === true;
+        return out;
+      `)();
+    } catch (err) { svErr = err instanceof Error ? err.message : String(err); }
+    check('T15a setVar 行为：通用变量进表/字符串转数/保留名拒收/NaN 拒收/null 删除/moveX 与 autoWalk 旧通道不变',
+      !!sv && Object.values(sv).every(Boolean), svErr || JSON.stringify(sv));
+    const hvStart = tplSrc.indexOf('const hostVars = Object.assign({}, hostCustomVars,');
+    const hvStmt = hvStart >= 0 ? tplSrc.slice(hvStart, tplSrc.indexOf('});', hvStart) + 3) : '';
+    let hv: any = null; let hvErr = '';
+    try {
+      hv = new Function(`
+        const hostCustomVars = { rage: 5, grounded: 0 };
+        const behaviorT = 1.2, phaseAcc = 0.5, ix = 0;
+        const char = { onGround: true };
+        ${hvStmt}
+        return hostVars;
+      `)();
+    } catch (err) { hvErr = err instanceof Error ? err.message : String(err); }
+    check('T15b hostVars 并入：通用变量可读、逐帧计算值覆盖同名（预置 grounded=0 仍以本帧 1 为准）',
+      !!hv && hv.rage === 5 && hv.grounded === 1 && hv.t === 1.2 && hv.moveX === 0 && hv.speed01 === 0,
+      hvErr || JSON.stringify(hv));
+    check('T15c 生成页面含通用变量表接线', htmlT.includes('hostCustomVars[name] = num') && htmlT.includes('Object.assign({}, hostCustomVars,'));
+  }
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
