@@ -4,7 +4,7 @@
 // ============================================================
 
 import type { TwoPassBakeData } from './threejs-baker-twopass';
-import { decodeBoneMask } from './threejs-baker-twopass';
+import { decodeBoneMask64 } from './threejs-baker-twopass';
 import type { PartName } from './threejs-baker-sixpart';
 import { medianCut, nearestPaletteIndex } from './threejs-baker';
 import { rgbaToHexOrNull } from '../engine/utils';
@@ -109,9 +109,14 @@ export function splitByBoneId(
   for (const b of bake.bones) effSet.add(merge0 ? (merge0.effectiveIndex[b.index] ?? b.index) : b.index);
   const effList = [...effSet].sort((a, b) => a - b);
   // 返回合并后全局 bone index 列表（[] = 背景）
-  const decodeBones = (r: number, g: number, b: number): number[] => {
+  // 64 位掩码：lo = idPixels（字节 0..3）、hi = idPixelsHi（字节 4..7），o = 像素字节偏移
+  const decodeBones = (lo: Uint8ClampedArray, hi: Uint8ClampedArray | undefined, o: number): number[] => {
     const out: number[] = [];
-    for (const ci of decodeBoneMask(r, g, b)) {
+    const bytes = [
+      lo[o]!, lo[o + 1]!, lo[o + 2]!, lo[o + 3]!,
+      hi ? hi[o]! : 0, hi ? hi[o + 1]! : 0, hi ? hi[o + 2]! : 0, hi ? hi[o + 3]! : 0,
+    ];
+    for (const ci of decodeBoneMask64(bytes)) {
       const gi = effList[ci];
       if (gi !== undefined) out.push(gi);
     }
@@ -190,12 +195,12 @@ export function splitByBoneId(
       // 占住，其像素只存在于 back 遍，被整批丢弃（侧面方向远侧小臂/手全缺）。
       // 透明像素跳过（颜色无意义），两遍各自判定。
       if (front.colorPixels[o + 3] > 8) {
-        for (const bi of decodeBones(front.idPixels[o], front.idPixels[o + 1], front.idPixels[o + 2])) {
+        for (const bi of decodeBones(front.idPixels, front.idPixelsHi, o)) {
           addPixel(bi, front.colorPixels, o, p);
         }
       }
       if (back.colorPixels[o + 3] > 8) {
-        for (const bi of decodeBones(back.idPixels[o], back.idPixels[o + 1], back.idPixels[o + 2])) {
+        for (const bi of decodeBones(back.idPixels, back.idPixelsHi, o)) {
           addPixelBack(bi, back.colorPixels, o, p);
         }
       }
@@ -725,9 +730,14 @@ export function splitSixParts(
     const localToGlobal = bake.partBoneMap[part];
     if (!localToGlobal || localToGlobal.length === 0) continue;
     // 位掩码解码：局部索引位 → 全局 bone（[] = 背景）
-    const decodeBones = (r: number, g: number, b: number): number[] => {
+    // 64 位掩码：lo = idPixels（字节 0..3）、hi = idPixelsHi（字节 4..7），o = 像素字节偏移
+    const decodeBones = (lo: Uint8ClampedArray, hi: Uint8ClampedArray | undefined, o: number): number[] => {
       const out: number[] = [];
-      for (const li of decodeBoneMask(r, g, b)) {
+      const bytes = [
+        lo[o]!, lo[o + 1]!, lo[o + 2]!, lo[o + 3]!,
+        hi ? hi[o]! : 0, hi ? hi[o + 1]! : 0, hi ? hi[o + 2]! : 0, hi ? hi[o + 3]! : 0,
+      ];
+      for (const li of decodeBoneMask64(bytes)) {
         const gi = localToGlobal[li];
         if (gi !== undefined) out.push(gi);
       }
@@ -779,7 +789,7 @@ export function splitSixParts(
           if (gi0 === undefined) continue;
           addPixel(gi0, o, p);
         } else {
-          const bones = decodeBones(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
+          const bones = decodeBones(g.idPixels, g.idPixelsHi, o);
           if (bones.length === 0) continue;
           for (const bi of bones) addPixel(bi, o, p);
         }
@@ -790,7 +800,7 @@ export function splitSixParts(
         const idCount = new Map<number, number>();
         for (let p = 0; p < W * H; p++) {
           const o = p * 4;
-          for (const bi of decodeBones(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2])) {
+          for (const bi of decodeBones(g.idPixels, g.idPixelsHi, o)) {
             const eff = merge ? (merge.effectiveIndex[bi] ?? bi) : bi;
             idCount.set(eff, (idCount.get(eff) ?? 0) + 1);
           }
@@ -807,7 +817,7 @@ export function splitSixParts(
         const maskA: number[] = [];
         for (let p = 0; p < W * H; p++) {
           const o = p * 4;
-          const bones = decodeBones(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
+          const bones = decodeBones(g.idPixels, g.idPixelsHi, o);
           if (bones.some((bi) => (merge ? (merge.effectiveIndex[bi] ?? bi) : bi) === arm2Eff)) maskA.push(p);
         }
         let bestOff = '', bestN = -1;

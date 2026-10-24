@@ -12,9 +12,10 @@ import { makeNprFromSource } from './pmx-npr';
 import {
   BakedBoneInfo,
   BoneMergeInfo,
+  boneMaskSet,
   computeBoneMerge,
   computeTopologyMerge,
-  encodeBoneId,
+  encodeBoneQuad,
   type BoneGranularity,
 } from './threejs-baker-twopass';
 import type { BakeOptions } from './threejs-baker';
@@ -112,8 +113,10 @@ export interface SixPartGroup {
   /** 本组（纬度,方向）下本部件各 bone 的关节像素（全局 bone index → 像素） */
   jointPixels?: Record<number, { x: number; y: number }>;
   colorPixels: Uint8ClampedArray;
-  /** 块内局部 bone ID（0,1,2…，见 partBoneMap）；单节点部件可省略（无需拆分） */
+  /** 块内局部 bone ID 低半（字节 0..3 = 局部 bone 0..31，见 partBoneMap）；单节点部件可省略（无需拆分） */
   idPixels?: Uint8ClampedArray;
+  /** 块内局部 bone ID 高半（字节 4..7 = 局部 bone 32..63） */
+  idPixelsHi?: Uint8ClampedArray;
   /** 相机半宽（归一化单位），用于跨部件尺寸归一化 */
   cameraHalf: number;
 }
@@ -796,6 +799,8 @@ export async function bakeSixParts(
       uCount: { value: number };
       uContour: { value: THREE.DataTexture };
       uRtSize: { value: number };
+      /** ID 掩码渲染半区（0=低半 bone 0..31，1=高半 32..63），与部件 ID 材质共享同一对象 */
+      uPass: { value: number };
     }
     const DIR_GATE_GLSL = `
       if (texture2D(uContour, gl_FragCoord.xy / uRtSize).r < 0.5) discard;
@@ -856,10 +861,17 @@ export async function bakeSixParts(
       mat.customProgramCacheKey = () => 'dir-gate';
     };
     /** 遮挡者在 ID 遍的材质：整块输出本部件骨骼的 ID 色（与 ID 帧同一 RGB 掩码格式） */
-    const makeCandIdMaterial = (rgb: [number, number, number], shared: DirShared, own: number): THREE.ShaderMaterial => {
+    const makeCandIdMaterial = (
+      lo: [number, number, number, number],
+      hi: [number, number, number, number],
+      shared: DirShared,
+      own: number,
+    ): THREE.ShaderMaterial => {
       const mat = new THREE.ShaderMaterial({
         uniforms: {
-          uColor: { value: new THREE.Vector3(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255) },
+          uColorLo: { value: new THREE.Vector4(lo[0] / 255, lo[1] / 255, lo[2] / 255, lo[3] / 255) },
+          uColorHi: { value: new THREE.Vector4(hi[0] / 255, hi[1] / 255, hi[2] / 255, hi[3] / 255) },
+          uPass: shared.uPass,
           uJoints: shared.uJoints,
           uDirs: shared.uDirs,
           uCount: shared.uCount,
@@ -875,7 +887,9 @@ export async function bakeSixParts(
           }
         `,
         fragmentShader: `
-          uniform vec3 uColor;
+          uniform vec4 uColorLo;
+          uniform vec4 uColorHi;
+          uniform float uPass;
           uniform vec3 uJoints[8];
           uniform vec3 uDirs[8];
           uniform int uCount;
@@ -885,7 +899,7 @@ export async function bakeSixParts(
           varying vec3 vPos;
           void main() {
             ${DIR_GATE_GLSL}
-            gl_FragColor = vec4(uColor, 1.0);
+            gl_FragColor = uPass < 0.5 ? uColorLo : uColorHi;
           }
         `,
         side: THREE.DoubleSide,
@@ -918,6 +932,8 @@ export async function bakeSixParts(
       // 部件的每个子几何各建一份 ID 几何/纹理（数据源为该子几何自己的 vertBones/vertBone）
       const localIndex = new Map<number, number>();
       bp.partBones.forEach((gi, li) => localIndex.set(gi, li));
+      // ID 掩码渲染半区（0=低半/1=高半）：本部件全部 ID 材质共享同一 uniform 对象
+      const idPassUniform = { value: 0 };
       const idInner = new THREE.Group();
       // 旋转必须挂在父组上（与颜色遍 partGroup>inner 同构：R·(T+S·p)）。
       // 若 idInner 单对象同时带 position/rotation/scale，three 组合为
@@ -931,7 +947,8 @@ export async function bakeSixParts(
         if (triCount === 0) continue;
         const idPositions = new Float32Array(triCount * 9);
         const idTriIds = new Float32Array(triCount * 3);
-        const idTexData = new Uint8Array(triCount * 4);
+        // 每三角形 2 个 texel：低半（字节 0..3）+ 高半（字节 4..7）
+        const idTexData = new Uint8Array(triCount * 2 * 4);
         for (let t = 0; t < triCount; t++) {
           // 三角形 bone 集：3 顶点 vertBones 并集 → 过滤非邻接 → 局部索引 → 按位或
           // 过滤：只保留与主 bone 邻接的（parent/child/self），防大腿含脚等跨级泄漏
@@ -970,19 +987,17 @@ export async function bakeSixParts(
             // 若过滤后为空（不应发生），回退到主 bone
             if (filtered.size === 0) filtered.add(primaryGi);
           }
-          let r = 0, g = 0, b = 0;
+          const maskBytes = new Uint8Array(8);
           const seenLi = new Set<number>();
           for (const gi of filtered) {
             const li = localIndex.get(gi);
-            if (li === undefined || li < 0 || li > 23 || seenLi.has(li)) continue;
+            if (li === undefined || seenLi.has(li)) continue;
             seenLi.add(li);
-            const [br, bg, bb] = encodeBoneId(li);
-            r |= br; g |= bg; b |= bb;
+            boneMaskSet(maskBytes, li); // 64 位：局部编号 0..63 全部可编码
           }
-          if ((r | g | b) === 0 && filtered.size > 0) {
-            // 掩码为空兜底：过滤集全是局部编号 ≥24 的骨骼（手臂部件骨骼数
-            // 可达 50+，掩码只有 24 位，手指多节/肩部辅助骨骼全在界外）——
-            // 这类三角形像素解码为空、从所有精灵消失（指尖整片丢失）。
+          if (maskBytes.every((v) => v === 0) && filtered.size > 0) {
+            // 掩码为空兜底：过滤集全是局部编号 ≥64 的骨骼（64 位仍装不下
+            // 的极端部件）——这类三角形像素解码为空、从所有精灵消失。
             // 改按合并后的有效骨骼编码：像素仍归属到正确精灵（手/大臂），
             // 代价只是这些像素的 contrib 贡献锚粒度降到有效骨骼。
             const seenEff = new Set<number>();
@@ -991,20 +1006,20 @@ export async function bakeSixParts(
               if (seenEff.has(eff)) continue;
               seenEff.add(eff);
               const li = localIndex.get(eff);
-              if (li === undefined || li < 0 || li > 23) continue;
-              const [br, bg, bb] = encodeBoneId(li);
-              r |= br; g |= bg; b |= bb;
+              if (li === undefined) continue;
+              boneMaskSet(maskBytes, li);
             }
           }
-          idTexData[t * 4] = r; idTexData[t * 4 + 1] = g;
-          idTexData[t * 4 + 2] = b; idTexData[t * 4 + 3] = 255;
+          idTexData.set(maskBytes.subarray(0, 4), t * 8);
+          idTexData.set(maskBytes.subarray(4, 8), t * 8 + 4);
         }
         const idGeo = new THREE.BufferGeometry();
         idGeo.setAttribute('position', new THREE.BufferAttribute(idPositions, 3));
         idGeo.setAttribute('aTriId', new THREE.BufferAttribute(idTriIds, 1));
-        // 一维排布宽度 = triCount，高面数部件会超 GPU 最大纹理尺寸（常见 8192/16384）→ 折成近方形二维
-        const idTexW = Math.max(1, Math.ceil(Math.sqrt(triCount)));
-        const idTexH = Math.max(1, Math.ceil(triCount / idTexW));
+        // 一维排布宽度 = texel 数（每三角形 2 个），高面数部件会超 GPU 最大纹理尺寸（常见 8192/16384）→ 折成近方形二维
+        const texelCount = triCount * 2;
+        const idTexW = Math.max(1, Math.ceil(Math.sqrt(texelCount)));
+        const idTexH = Math.max(1, Math.ceil(texelCount / idTexW));
         const idTexFull = new Uint8Array(idTexW * idTexH * 4);
         idTexFull.set(idTexData);
         const idTex = new THREE.DataTexture(idTexFull, idTexW, idTexH, THREE.RGBAFormat, THREE.UnsignedByteType);
@@ -1013,7 +1028,7 @@ export async function bakeSixParts(
         idTex.needsUpdate = true;
         const idMat = new THREE.ShaderMaterial({
           glslVersion: THREE.GLSL3,
-          uniforms: { uIdTex: { value: idTex } },
+          uniforms: { uIdTex: { value: idTex }, uPass: idPassUniform },
           vertexShader: `
             in float aTriId;
             flat out int vTriId;
@@ -1026,9 +1041,11 @@ export async function bakeSixParts(
             precision highp float;
             flat in int vTriId;
             uniform sampler2D uIdTex;
+            uniform float uPass;
             out vec4 outColor;
             void main() {
-              outColor = texelFetch(uIdTex, ivec2(vTriId % textureSize(uIdTex, 0).x, vTriId / textureSize(uIdTex, 0).x), 0);
+              int idx = vTriId * 2 + int(uPass + 0.5);
+              outColor = texelFetch(uIdTex, ivec2(idx % textureSize(uIdTex, 0).x, idx / textureSize(uIdTex, 0).x), 0);
             }
           `,
           side: THREE.DoubleSide,
@@ -1109,6 +1126,7 @@ export async function bakeSixParts(
         uCount: { value: Math.min(conns.length, 8) },
         uContour: { value: contourTex },
         uRtSize: { value: size },
+        uPass: idPassUniform,
       };
       const candSets: CandSet[] = [];
       for (let ci = 0; ci < conns.length; ci++) {
@@ -1120,7 +1138,7 @@ export async function bakeSixParts(
         const li = localIndex.get(bP);
         if (li === undefined) continue;
         const mats: THREE.Material[] = [];
-        const candIdMat = makeCandIdMaterial(encodeBoneId(li) as [number, number, number], dirShared, ci);
+        const candIdMat = makeCandIdMaterial(encodeBoneQuad(li, 0), encodeBoneQuad(li, 1), dirShared, ci);
         mats.push(candIdMat);
         const colorInner = new THREE.Group();
         const idInnerG = new THREE.Group();
@@ -1261,27 +1279,35 @@ export async function bakeSixParts(
         onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${lat !== 0 ? `纬度 ${lat}° ` : ''}${d * 45}° 颜色`);
         await new Promise((r) => setTimeout(r, 0));
 
-        // ID 一遍：单节点部件跳过。结构同颜色遍：候选先写「本部件骨骼」的 ID（共用
-        // 本方向颜色遍已建好的填充轮廓纹理），再清深度由本部件自己的 ID 覆写其表面
+        // ID 渲染：单节点部件跳过。64 位掩码分两半（低半 bone 0..31 /
+        // 高半 32..63，uPass 切换），每半结构同颜色遍：候选先写「本部件
+        // 骨骼」的 ID（共用本方向颜色遍已建好的填充轮廓纹理），再清深度
+        // 由本部件自己的 ID 覆写其表面
         let idPixels: Uint8ClampedArray | undefined;
+        let idPixelsHi: Uint8ClampedArray | undefined;
         if (partNeedsId.get(pname)) {
-          scene.remove(partGroup);
-          for (const cs of candSets) scene.add(cs.id);
-          renderer.clear(true, true, true);
-          renderer.render(scene, camera);
-          for (const cs of candSets) scene.remove(cs.id);
-          scene.add(idPartGroup);
-          idPartGroup.updateMatrixWorld(true);
-          renderer.clear(false, true, false);
-          renderer.autoClear = false;
-          renderer.render(scene, camera);
-          renderer.autoClear = true;
-          idPixels = readFlipped();
+          for (const half of [0, 1] as const) {
+            idPassUniform.value = half;
+            scene.remove(partGroup);
+            for (const cs of candSets) scene.add(cs.id);
+            renderer.clear(true, true, true);
+            renderer.render(scene, camera);
+            for (const cs of candSets) scene.remove(cs.id);
+            scene.add(idPartGroup);
+            idPartGroup.updateMatrixWorld(true);
+            renderer.clear(false, true, false);
+            renderer.autoClear = false;
+            renderer.render(scene, camera);
+            renderer.autoClear = true;
+            scene.remove(idPartGroup);
+            if (half === 0) idPixels = readFlipped();
+            else idPixelsHi = readFlipped();
+          }
           onProgress?.(++done, total, `${SIX_PART_LABEL[pname]} ${lat !== 0 ? `纬度 ${lat}° ` : ''}${d * 45}° ID`);
           await new Promise((r) => setTimeout(r, 0));
         }
 
-        groups.push({ part: pname, direction: ((d + 6) % 8), latitude: lat, jointPixels: groupJoints, colorPixels, idPixels, cameraHalf: half });
+        groups.push({ part: pname, direction: ((d + 6) % 8), latitude: lat, jointPixels: groupJoints, colorPixels, idPixels, idPixelsHi, cameraHalf: half });
         renderer.setRenderTarget(null);
       }
 

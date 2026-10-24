@@ -35,7 +35,10 @@ export interface TwoPassGroup {
   /** 0=前（LessEqualDepth），1=后（GreaterDepth） */
   pass: 0 | 1;
   colorPixels: Uint8ClampedArray;
+  /** ID 掩码低半（字节 0..3 = bone 0..31，A 通道为字节 3） */
   idPixels: Uint8ClampedArray;
+  /** ID 掩码高半（字节 4..7 = bone 32..63） */
+  idPixelsHi: Uint8ClampedArray;
   /** 本组（纬度,方向）下各 bone 的关节像素（按 bone index）；拆分优先用它，回落 bones[].jointPixels[方向] */
   jointPixels?: Array<{ x: number; y: number } | undefined>;
 }
@@ -512,39 +515,47 @@ function countBoneVertices(
   return counts;
 }
 
-/** bone index → RGB 位掩码（1248 形式，支持 ID 重叠）
- * Bone i → 第 (i%8) 位，第 floor(i/8) 通道
- * Bone 0 → (1,0,0), Bone 7 → (128,0,0), Bone 8 → (0,1,0), Bone 23 → (0,0,128)
- * 上限 24；-1/越界 → 黑（背景）
- */
-export function encodeBoneId(index: number): [number, number, number] {
-  if (index < 0 || index > 23) return [0, 0, 0];
-  const bit = index % 8;
-  const ch = Math.floor(index / 8);
-  const rgb: [number, number, number] = [0, 0, 0];
-  rgb[ch] = 1 << bit;
-  return rgb;
+/** bone 位掩码：64 位（8 字节），支持 ID 重叠。
+ * Bone i → 第 floor(i/8) 字节的第 (i%8) 位。Bone 0 → 字节0 的 1，
+ * Bone 8 → 字节1 的 1，Bone 63 → 字节7 的 128。越界（<0 或 >63）不置位。
+ * 传递分两半（quad）：低半 = 字节 0..3（bone 0..31），高半 = 字节 4..7
+ * （bone 32..63）；每遍 ID 渲染输出一个 RGBA quad（A 通道即第 4 字节，
+ * 经 4 分量顶点色 / shader 输出抵达读回缓冲）。旧 24 位上限时 Z23 单臂
+ * 52 根骨骼有 28 根编码为黑、三角形整片丢失——扩位即为治本（PR #41）。 */
+export const BONE_MASK_BITS = 64;
+
+/** 把 bone index 的位或进 8 字节掩码（越界忽略） */
+export function boneMaskSet(bytes: Uint8Array, index: number): void {
+  if (index < 0 || index >= BONE_MASK_BITS) return;
+  bytes[Math.floor(index / 8)] |= 1 << (index % 8);
 }
 
-/** 位掩码解码：返回所有置位的 bone index（[] = 背景/无效）
- * 输入为精确整数（纹理无插值），直接位运算，无需阈值/容差
- */
-export function decodeBoneMask(r: number, g: number, b: number): number[] {
+/** 单个 bone 在某一半的 RGBA quad（该半不含此 bone 时全 0） */
+export function encodeBoneQuad(index: number, half: 0 | 1): [number, number, number, number] {
+  const bytes = new Uint8Array(8);
+  boneMaskSet(bytes, index);
+  const o = half * 4;
+  return [bytes[o]!, bytes[o + 1]!, bytes[o + 2]!, bytes[o + 3]!];
+}
+
+/** 8 字节掩码的某一半 quad（渲染一遍输出用） */
+export function maskQuad(bytes: ArrayLike<number>, half: 0 | 1): [number, number, number, number] {
+  const o = half * 4;
+  return [bytes[o] ?? 0, bytes[o + 1] ?? 0, bytes[o + 2] ?? 0, bytes[o + 3] ?? 0];
+}
+
+/** 64 位掩码解码：8 字节 → 所有置位的 bone index（[] = 背景/无效）。
+ * 输入为精确整数（纹理无插值），直接位运算，无需阈值/容差。 */
+export function decodeBoneMask64(bytes: ArrayLike<number>): number[] {
   const bones: number[] = [];
-  const channels = [r, g, b];
-  for (let c = 0; c < 3; c++) {
-    const iv = Math.round(channels[c]);
+  for (let c = 0; c < 8; c++) {
+    const iv = Math.round(bytes[c] ?? 0);
     if (iv === 0) continue;
     for (let i = 0; i < 8; i++) {
       if (iv & (1 << i)) bones.push(c * 8 + i);
     }
   }
   return bones;
-}
-
-/** RGB → bone index 列表（位掩码版；兼容旧名单骨调用，返回 [] 表背景） */
-export function decodeBoneId(r: number, g: number, b: number): number[] {
-  return decodeBoneMask(r, g, b);
 }
 
 /** 收集场景中所有 Bone，建立全局索引 */
@@ -584,10 +595,22 @@ function assignBoneVertexColors(
 ): void {
   const geo = mesh.geometry;
   const pos = geo.getAttribute('position');
-  const colors = new Float32Array(pos.count * 3);
+  // 64 位掩码分两半存：color 属性（4 分量）= 低半字节 0..3，
+  // userData.idColorHi（4 分量）= 高半字节 4..7，ID 遍渲高半时换绑。
+  const colorsLo = new Float32Array(pos.count * 4);
+  const colorsHi = new Float32Array(pos.count * 4);
+  const mask = new Uint8Array(8);
+  const writeVertex = (v: number) => {
+    const [lr, lg, lb, la] = maskQuad(mask, 0);
+    const [hr, hg, hb, ha] = maskQuad(mask, 1);
+    colorsLo[v * 4] = lr / 255; colorsLo[v * 4 + 1] = lg / 255;
+    colorsLo[v * 4 + 2] = lb / 255; colorsLo[v * 4 + 3] = la / 255;
+    colorsHi[v * 4] = hr / 255; colorsHi[v * 4 + 1] = hg / 255;
+    colorsHi[v * 4 + 2] = hb / 255; colorsHi[v * 4 + 3] = ha / 255;
+  };
   const sm = mesh as THREE.SkinnedMesh;
 
-  // 合并后 bone 的紧凑索引（0..M-1，用于位掩码；M ≤ 24）
+  // 合并后 bone 的紧凑索引（0..M-1，用于位掩码；M ≤ 64）
   // 与 skeleton-mapper.ts 的重建逻辑一致（排序保证顺序相同）
   const effSet = new Set<number>();
   for (let i = 0; i < effectiveIndex.length; i++) effSet.add(effectiveIndex[i] ?? i);
@@ -600,7 +623,7 @@ function assignBoneVertexColors(
     const skeleton = sm.skeleton;
     for (let v = 0; v < pos.count; v++) {
       // weight > 0.2 的 bones 全部按位或（边界重叠）
-      let r = 0, g = 0, b = 0;
+      mask.fill(0);
       for (let j = 0; j < 4; j++) {
         const w = skinWeight.getComponent(v, j);
         if (w <= 0.2) continue;
@@ -612,12 +635,9 @@ function assignBoneVertexColors(
         const ei = effectiveIndex[gi] ?? gi;
         const ci = compactByMerged.get(ei);
         if (ci === undefined) continue;
-        const [br, bg, bb] = encodeBoneId(ci);
-        r |= br; g |= bg; b |= bb;
+        boneMaskSet(mask, ci);
       }
-      colors[v * 3] = r / 255;
-      colors[v * 3 + 1] = g / 255;
-      colors[v * 3 + 2] = b / 255;
+      writeVertex(v);
     }
   } else {
     // 非蒙皮 mesh：质心找最近 bone
@@ -633,14 +653,14 @@ function assignBoneVertexColors(
     }
     const ei = effectiveIndex[best] ?? best;
     const ci = compactByMerged.get(ei) ?? 0;
-    const [r, g, b] = encodeBoneId(ci);
-    for (let v = 0; v < pos.count; v++) {
-      colors[v * 3] = r / 255;
-      colors[v * 3 + 1] = g / 255;
-      colors[v * 3 + 2] = b / 255;
-    }
+    mask.fill(0);
+    boneMaskSet(mask, ci);
+    for (let v = 0; v < pos.count; v++) writeVertex(v);
   }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const loAttr = new THREE.BufferAttribute(colorsLo, 4);
+  geo.setAttribute('color', loAttr);
+  geo.userData.idColorLo = loAttr;
+  geo.userData.idColorHi = new THREE.BufferAttribute(colorsHi, 4);
 }
 
 /** 卡通渐变贴图（复用 MVP 逻辑） */
@@ -864,6 +884,17 @@ export async function bakeModelTwoPass(
       });
     };
 
+    // ID 掩码 64 位分两半渲染：换绑几何的 color 属性（低半/高半，
+    // assignBoneVertexColors 预备），ID 材质与深度状态不变。
+    const setIdHalf = (half: 0 | 1) => {
+      group.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        const attr = half === 0 ? m.geometry.userData.idColorLo : m.geometry.userData.idColorHi;
+        if (attr) m.geometry.setAttribute('color', attr as THREE.BufferAttribute);
+      });
+    };
+
     // ---- 场景/相机 ----
     const scene = new THREE.Scene();
     scene.add(group);
@@ -942,8 +973,14 @@ export async function bakeModelTwoPass(
         colorBack = new Uint8ClampedArray(0); // 占位，下面覆盖
       }
       setMaterials('id', THREE.LessEqualDepth);
+      setIdHalf(0);
       renderer.render(scene, camera);
       const idFront = readFlipped();
+      // 高半（bone 32..63）：只清颜色不清深度——同几何同深度，LessEqual 必过
+      renderer.clear(true, false, false);
+      setIdHalf(1);
+      renderer.render(scene, camera);
+      const idFrontHi = readFlipped();
       onProgress?.(++done, total, `${lat !== 0 ? `纬度 ${lat}° ` : ''}方向 ${d * 45}° ${idOnly ? 'ID' : '前'}`);
       await new Promise((r) => setTimeout(r, 0)); // 让 UI 更新
 
@@ -958,14 +995,19 @@ export async function bakeModelTwoPass(
       // idBack 里没被 ID 覆盖的像素残留 toon 颜色，拆分按并集读 back 时会被
       // 解码成幻影骨骼
       renderer.clear(true, false, false);
+      setIdHalf(0);
       renderer.render(scene, camera);
       const idBack = readFlipped();
+      renderer.clear(true, false, false);
+      setIdHalf(1);
+      renderer.render(scene, camera);
+      const idBackHi = readFlipped();
       onProgress?.(++done, total, `${lat !== 0 ? `纬度 ${lat}° ` : ''}方向 ${d * 45}° ${idOnly ? 'ID后' : '后'}`);
       await new Promise((r) => setTimeout(r, 0));
 
       groups.push(
-        { direction: ((d + 6) % 8), latitude: lat, pass: 0, colorPixels: colorFront, idPixels: idFront, jointPixels: frameJoints },
-        { direction: ((d + 6) % 8), latitude: lat, pass: 1, colorPixels: colorBack, idPixels: idBack, jointPixels: frameJoints },
+        { direction: ((d + 6) % 8), latitude: lat, pass: 0, colorPixels: colorFront, idPixels: idFront, idPixelsHi: idFrontHi, jointPixels: frameJoints },
+        { direction: ((d + 6) % 8), latitude: lat, pass: 1, colorPixels: colorBack, idPixels: idBack, idPixelsHi: idBackHi, jointPixels: frameJoints },
       );
       renderer.setRenderTarget(null);
     }
