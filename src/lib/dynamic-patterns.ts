@@ -113,6 +113,12 @@ export interface DynamicPatternInstance {
   templateName?: string;
   enabled: boolean;
   params: DynamicPatternParams;
+  /** 库引用（钉版本，DESIGN-DAG-LIBRARY）：params 是该引用的展开
+   * 快照——编辑器在引用/覆盖变化时重展开保持新鲜，convert 拿到
+   * 条目库时按钉版本权威重展开；缺省 = 内联实例（params 即定义） */
+  patternRef?: { id: string; version: number };
+  /** 挂载覆盖（链末裁决，不受参数口限）：展开时最后应用 */
+  overrides?: Partial<DynamicPatternParams>;
 }
 
 export interface ResolvedDynamicPattern {

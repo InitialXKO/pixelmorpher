@@ -14,8 +14,7 @@ import { createSurfaceBaker } from './bake-src';
 import { PALETTES } from './palettes';
 import { hashPixelGrid } from '../engine/render-cache';
 import { expandSurfaceGraph, graphHasRefs, subgraphLibraryOf } from './graph-expand';
-import { PATTERN_TEMPLATES } from './pattern-templates';
-import { loadUserPatterns } from './pattern-library';
+import { allLibraryEntries, surfaceLibEntriesOf } from '../library-entries';
 
 /** 烘焙用图：含子图引用（ref）时按当前模式库（内置 + 我的模板）
  * 展开成平图；警告不在此报——进包路径由 convert 逐条点名，
@@ -23,7 +22,7 @@ import { loadUserPatterns } from './pattern-library';
 function bakeGraphOf(app: ParametricAppearance): SurfaceGraph | undefined {
   const g = app.surfaceGraph;
   if (!g || !graphHasRefs(g)) return g;
-  const lib = subgraphLibraryOf([...PATTERN_TEMPLATES, ...loadUserPatterns()]);
+  const lib = subgraphLibraryOf(surfaceLibEntriesOf(allLibraryEntries()));
   return expandSurfaceGraph(g, lib).graph;
 }
 

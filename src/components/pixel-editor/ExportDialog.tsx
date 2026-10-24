@@ -6,6 +6,7 @@ import { renderUnifiedCharactersToCanvas } from '@/lib/unified-render';
 import { convertCharacterToRuntimePackage } from '@/lib/proc-runtime/convert';
 import { buildRuntimeHtml } from '@/lib/proc-runtime/runtime-template';
 import { allPatternTemplates } from '@/lib/proc-runtime/pattern-library';
+import { allLibraryEntries } from '@/lib/library-entries';
 import type { AnimationClip } from '@/lib/types';
 import { subToPx } from '@/lib/unified-types';
 import GIF from 'gif.js';
@@ -1006,6 +1007,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       totalFrames,
       clips: animationClips.filter((c) => c.puppetCharacterId === procCharacter.id),
       patternLibrary: allPatternTemplates(),
+      libraryEntries: allLibraryEntries(),
     }) : null),
     [procCharacter, animationClips, sprites, frameRate, totalFrames],
   );

@@ -19,6 +19,8 @@ import { resolvePieceSprite } from '../sprite-resolve';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
 import { followDeltaAt, glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
+import { BUILTIN_ENTRIES, libraryIndexOf, surfaceLibEntriesOf } from '../library-entries';
+import { expandDynamicEntry } from '../dynamic-expand';
 import { createDefaultParametricAppearance } from './surfaces';
 import { expandSurfaceGraph, graphHasRefs, subgraphLibraryOf } from './graph-expand';
 import { PATTERN_TEMPLATES, type PatternTemplate } from './pattern-templates';
@@ -388,13 +390,27 @@ function glowEntryFor(
   return { w, h, padX, padY, space: rep.space, data: packBytesBase64(bytes), stamps };
 }
 
-/** 双挂载解析 → 运行时动态实例（节点为底、服装件同位替换/压制） */
+/** 双挂载解析 → 运行时动态实例（节点为底、服装件同位替换/压制）。
+ * 带库引用的实例按钉版本权威重展开（快照只作展开失败时的回退，
+ * 失败点名不静默）。 */
 function dynFor(
   nodeDyn: Parameters<typeof resolveDynamicPatterns>[0],
   pieceDyn: Parameters<typeof resolveDynamicPatterns>[1],
+  dynLib?: import('../library-entries').LibraryIndex,
+  warnings?: string[],
 ): RuntimeDynamicInstance[] | undefined {
   const r = resolveDynamicPatterns(nodeDyn, pieceDyn);
-  return r.length ? r.map((x) => ({ id: x.instance.id, slot: x.instance.slot, params: x.instance.params })) : undefined;
+  if (!r.length) return undefined;
+  return r.map((x) => {
+    let params = x.instance.params;
+    const ref = x.instance.patternRef;
+    if (ref && dynLib) {
+      const ex = expandDynamicEntry(dynLib, ref.id, ref.version, x.instance.overrides);
+      if (ex.params) params = ex.params;
+      else warnings?.push(`模式库：动态实例（效果位 ${x.instance.slot}）引用 ${ref.id}@${ref.version} 展开失败，沿用快照——${ex.errors.join('；')}`);
+    }
+    return { id: x.instance.id, slot: x.instance.slot, params };
+  });
 }
 
 function appearanceToBase(
@@ -548,12 +564,17 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[] },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[] },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
-  // 子图库：调用方传全库（内置 + 用户模板）快照；缺省只认内置
-  //（同 SpriteTable 由调用方传工程级表的先例，convert 不读存储）。
-  const subLib = subgraphLibraryOf(opts?.patternLibrary ?? PATTERN_TEMPLATES);
+  // 子图库：调用方传全库快照；给了统一条目库时按版本展开成
+  // id@版本 条目（钉版本纪律），否则走平铺模板（同 SpriteTable
+  // 由调用方传工程级表的先例，convert 不读存储）。
+  const subLib = opts?.libraryEntries
+    ? subgraphLibraryOf(surfaceLibEntriesOf(opts.libraryEntries))
+    : subgraphLibraryOf(opts?.patternLibrary ?? PATTERN_TEMPLATES);
+  // 动态条目索引：实例钉版本引用按此权威重展开（缺省只认内置）
+  const dynLib = libraryIndexOf(opts?.libraryEntries ?? BUILTIN_ENTRIES);
   /** 进包图：含 ref 时展开成平图（包自包含，运行时模板不认 ref），警告点名 */
   const expandPkg = (g: ParametricAppearance['surfaceGraph'], where: string) => {
     if (!g || !graphHasRefs(g)) return g;
@@ -608,7 +629,7 @@ export function convertCharacterToRuntimePackage(
     if ((baseApp.composite ?? 'generate') !== 'generate' && !baseSprite) {
       warnings.push(`槽位 ${slotKey} 合成方式为 ${baseApp.composite} 但东向无精灵，运行时按独立生成处理`);
     }
-    const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns);
+    const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
     parts.push({
       key: slotKey,
       drawLayer: node.drawLayer,
@@ -641,7 +662,7 @@ export function convertCharacterToRuntimePackage(
     const pivot = pivotOf(node.id);
     const base = appearanceToBase(createDefaultParametricAppearance(), pivot, w?.worldAngle ?? 0);
     base.size = [sg.w, sg.h];
-    const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns);
+    const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
     parts.push({
       key: slotKey,
       drawLayer: node.drawLayer,
@@ -680,7 +701,7 @@ export function convertCharacterToRuntimePackage(
       const app = piece?.parametric;
       const nodeId = slotNode.get(slotKey);
       const node = nodeId ? character.nodes[nodeId] : undefined;
-      const dyn = dynFor(node?.dynamicPatterns, piece?.dynamicPatterns);
+      const dyn = dynFor(node?.dynamicPatterns, piece?.dynamicPatterns, dynLib, warnings);
       if (dyn) dynMap[slotKey] = dyn;
       const ge = cs.id === activeSet?.id
         ? parts.find((p) => p.key === slotKey)?.glow
@@ -695,7 +716,7 @@ export function convertCharacterToRuntimePackage(
     for (const slotKey of spriteSlots) {
       const nodeId = slotNode.get(slotKey);
       const node = nodeId ? character.nodes[nodeId] : undefined;
-      const dyn = dynFor(node?.dynamicPatterns, cs.pieces[slotKey]?.dynamicPatterns);
+      const dyn = dynFor(node?.dynamicPatterns, cs.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
       if (dyn) dynMap[slotKey] = dyn;
       const ge = cs.id === activeSet?.id
         ? parts.find((p) => p.key === slotKey)?.glow

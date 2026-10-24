@@ -25,6 +25,11 @@ import {
   type GlowMaskData,
 } from '@/lib/dynamic-patterns';
 import type { PixelGrid } from '@/lib/unified-types';
+import {
+  allLibraryEntries, libraryIndexOf, loadUserEntries, saveUserEntries,
+  type LibraryEntry,
+} from '@/lib/library-entries';
+import { expandDynamicEntry } from '@/lib/dynamic-expand';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -66,6 +71,40 @@ export default function DynamicPatternEditor({
 }) {
   const [userTemplates, setUserTemplates] = useState<DynamicPatternTemplate[]>(() => loadUserDynamicPatterns());
   const allTemplates = [...DYNAMIC_PATTERN_TEMPLATES, ...userTemplates];
+  // 模式库条目（统一条目模型）：应用条目 = 钉版本引用 + 展开快照
+  const [libEntries, setLibEntries] = useState<LibraryEntry[]>(() => allLibraryEntries());
+  const libIndex = libraryIndexOf(libEntries);
+  const dynEntries = libEntries.filter((e) => e.kind === 'dynamic');
+  const applyEntry = (inst: DynamicPatternInstance, entryId: string) => {
+    const entry = libEntries.find((e) => e.id === entryId);
+    if (!entry) return;
+    const ex = expandDynamicEntry(libIndex, entry.id, entry.latest, inst.overrides);
+    if (!ex.params) { window.alert(`展开失败：${ex.errors.join('；')}`); return; }
+    patchInstance(inst.id, {
+      patternRef: { id: entry.id, version: entry.latest },
+      templateName: entry.name,
+      params: ex.params,
+    });
+  };
+  const saveToLibrary = (inst: DynamicPatternInstance) => {
+    const name = window.prompt('存入模式库，名称', inst.templateName ?? '我的模式');
+    if (!name) return;
+    const base = defaultDynamicParams();
+    const segments: Partial<DynamicPatternParams> = {};
+    for (const k of Object.keys(inst.params) as (keyof DynamicPatternParams)[]) {
+      if (JSON.stringify(inst.params[k]) !== JSON.stringify(base[k])) {
+        (segments as Record<string, unknown>)[k] = inst.params[k];
+      }
+    }
+    const entry: LibraryEntry = {
+      id: `user-dyn-${Date.now().toString(36)}`, kind: 'dynamic', name,
+      cluster: '我的', latest: 1,
+      versions: { 1: { kind: 'leaf', segments, expose: Object.keys(segments) as (keyof DynamicPatternParams)[] } },
+    };
+    saveUserEntries([...loadUserEntries(), entry]);
+    setLibEntries(allLibraryEntries());
+    patchInstance(inst.id, { patternRef: { id: entry.id, version: 1 }, templateName: name });
+  };
   const localGlowRankById = new Map<string, number>();
   {
     let r = 0;
@@ -77,7 +116,17 @@ export default function DynamicPatternEditor({
   const patchInstance = (id: string, patch: Partial<DynamicPatternInstance>) =>
     onChange(instances.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   const patchParam = (id: string, key: keyof DynamicPatternParams, value: number | boolean | string | GlowMaskData) =>
-    onChange(instances.map((x) => (x.id === id ? { ...x, params: { ...normalizeDynamicParams(x.params), [key]: value } } : x)));
+    onChange(instances.map((x) => {
+      if (x.id !== id) return x;
+      // 库引用实例：参数改动记为挂载覆盖并重展开快照；展开失败
+      // 时退回直接改快照（覆盖不动，下次成功展开会再生效）
+      if (x.patternRef) {
+        const overrides = { ...(x.overrides ?? {}), [key]: value };
+        const ex = expandDynamicEntry(libIndex, x.patternRef.id, x.patternRef.version, overrides);
+        if (ex.params) return { ...x, overrides, params: ex.params };
+      }
+      return { ...x, params: { ...normalizeDynamicParams(x.params), [key]: value } };
+    }));
   const np = (inst: DynamicPatternInstance): DynamicPatternParams => normalizeDynamicParams(inst.params);
   const glowRankOf = (inst: DynamicPatternInstance): number | undefined =>
     glowRankById?.get(inst.id) ?? localGlowRankById.get(inst.id);
@@ -90,7 +139,7 @@ export default function DynamicPatternEditor({
   const applyTemplate = (id: string, name: string) => {
     const t = allTemplates.find((x) => x.name === name);
     if (!t) return;
-    patchInstance(id, { templateName: name, params: structuredClone(t.params) });
+    patchInstance(id, { templateName: name, params: structuredClone(t.params), patternRef: undefined, overrides: undefined });
   };
 
   return (
@@ -125,6 +174,21 @@ export default function DynamicPatternEditor({
                 </optgroup>
               ))}
             </select>
+            <select
+              value=""
+              onChange={(e) => { if (e.target.value) applyEntry(inst, e.target.value); }}
+              className={`${selCls} flex-1`}
+              title="从模式库条目应用（钉版本引用：条目出新版不影响本实例，升级要手动点）"
+            >
+              <option value="">（模式库条目…）</option>
+              {[...new Set(dynEntries.map((t) => t.cluster))].map((cluster) => (
+                <optgroup key={cluster} label={cluster}>
+                  {dynEntries.filter((t) => t.cluster === cluster).map((t) => (
+                    <option key={t.id} value={t.id}>{t.name} v{t.latest}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
             <Button
               size="sm" variant="ghost" className="h-5 text-[9px] px-1.5"
               onClick={() => {
@@ -144,6 +208,34 @@ export default function DynamicPatternEditor({
               删除
             </Button>
           </div>
+          {inst.patternRef && (() => {
+            const entry = libEntries.find((e) => e.id === inst.patternRef!.id);
+            return (
+              <div className="flex items-center gap-1.5 text-[9px] text-gray-500">
+                <span>库引用 {entry?.name ?? inst.patternRef.id}@{inst.patternRef.version}</span>
+                {entry && entry.latest > inst.patternRef.version && (
+                  <Button size="sm" variant="ghost" className="h-4 text-[9px] px-1 text-cyan-300"
+                    onClick={() => applyEntry(inst, entry.id)}>
+                    升到 v{entry.latest}
+                  </Button>
+                )}
+                {!entry && <span className="text-amber-400">条目已不存在，沿用快照</span>}
+                <Button size="sm" variant="ghost" className="h-4 text-[9px] px-1"
+                  onClick={() => patchInstance(inst.id, { patternRef: undefined, overrides: undefined })}>
+                  转内联
+                </Button>
+              </div>
+            );
+          })()}
+          {!inst.patternRef && (
+            <div className="flex items-center gap-1.5 text-[9px] text-gray-500">
+              <span>内联参数（不引用模式库）</span>
+              <Button size="sm" variant="ghost" className="h-4 text-[9px] px-1 text-cyan-300"
+                onClick={() => saveToLibrary(inst)}>
+                存入库
+              </Button>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-1.5">
             <div>
               <Label className="text-[9px] text-gray-600">发射来源</Label>

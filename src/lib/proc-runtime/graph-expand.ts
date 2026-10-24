@@ -35,11 +35,25 @@ export interface SubgraphLibEntry {
 
 export type SubgraphLibrary = ReadonlyMap<string, SubgraphLibEntry>;
 
-/** 模板数组 → 展开用库（按 id 索引；同 id 后者胜） */
+/** 模板数组 → 展开用库（按 id 索引；同 id 后者胜）。
+ * 版本纪律（DESIGN-DAG-LIBRARY）：平铺模板视为 v1，同时以
+ * `id@1` 别名注册，写成钉版本形式的 ref 也能解析；带多版本
+ * 的条目由调用方按版本逐个展开成 `id@版本` 条目传入。 */
 export function subgraphLibraryOf(templates: readonly SubgraphLibEntry[]): Map<string, SubgraphLibEntry> {
   const map = new Map<string, SubgraphLibEntry>();
-  for (const t of templates) map.set(t.id, t);
+  for (const t of templates) {
+    map.set(t.id, t);
+    // @1 别名只补缺：已有显式 id@1 条目（多版本库）时不许覆盖
+    if (!t.id.includes('@') && !map.has(`${t.id}@1`)) map.set(`${t.id}@1`, t);
+  }
   return map;
+}
+
+/** ref 串的条目 id 部分（剥掉 @版本） */
+function refBaseId(s: string): string {
+  const at = s.lastIndexOf('@');
+  if (at > 0 && Number.isInteger(Number(s.slice(at + 1)))) return s.slice(0, at);
+  return s;
 }
 
 const MAX_DEPTH = 16;
@@ -85,7 +99,8 @@ export function expandSurfaceGraph(
       }
       const tplId = String(node.params?.ref ?? '');
       const tpl = lib.get(tplId);
-      if (!tpl || stack.includes(tplId) || stack.length >= MAX_DEPTH) {
+      // 环检按条目 id（跨版本同 id 亦算环：A@1→B→A@2 照样成环）
+      if (!tpl || stack.some((s) => refBaseId(s) === refBaseId(tplId)) || stack.length >= MAX_DEPTH) {
         warnings.push(!tpl
           ? `子图：未解析的引用「${tplId || '(空)'}」，按零场处理`
           : `子图：引用「${tplId}」成环或嵌套过深，按零场处理`);

@@ -1593,4 +1593,185 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   }
 }
 
+// ============ Q 组：模式库 DAG 分层（条目版本 + 动态图化展开） ============
+{
+  const LE = await import('../src/lib/library-entries');
+  const DE = await import('../src/lib/dynamic-expand');
+  const { findDynamicTemplate: fdt } = await import('../src/lib/dynamic-patterns');
+  const paramsEq = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+    Object.keys(b).every((k) => JSON.stringify(a[k]) === JSON.stringify(b[k]));
+
+  // Q1 样板等值：组合展开 == 原「挤压冒热气」扁平模板（逐键）
+  const exQ = DE.expandDynamicEntry(LE.BUILTIN_INDEX, 'dyn-squeeze-steam', 1);
+  check('Q1 样板展开无误', !!exQ.params && exQ.errors.length === 0);
+  check('Q1 样板展开逐键等值原模板（含调制边折出的 linkToDeform）',
+    !!exQ.params && paramsEq(exQ.params as never, fdt('挤压冒热气')!.params as never));
+  // Q2 其余内置叶子展开等值各自模板
+  let leavesOk = true;
+  for (const [id, name] of [['dyn-breath', '呼吸起伏'], ['dyn-fire-ring', '火焰环绕'], ['dyn-lag', '垂饰滞后'], ['dyn-glow-breath', '辉光呼吸']] as const) {
+    const r = DE.expandDynamicEntry(LE.BUILTIN_INDEX, id, 1);
+    if (!r.params || !paramsEq(r.params as never, fdt(name)!.params as never)) leavesOk = false;
+  }
+  check('Q2 内置叶子展开等值模板（呼吸/火焰环/垂饰滞后/辉光呼吸）', leavesOk);
+  // Q3 草稿/发布：已发布版本不可变
+  const eBase: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-x', kind: 'dynamic', name: 'x', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: { rate: 5 }, expose: ['rate'] } },
+  };
+  const v1Snapshot = JSON.stringify(eBase.versions[1]);
+  const drafted = LE.withDraft(eBase, { kind: 'leaf', segments: { rate: 9 }, expose: ['rate'] });
+  const published = LE.publishDraft(drafted)!;
+  check('Q3 发布后 latest=2 且 v1 内容不变、草稿清空',
+    published.latest === 2 && JSON.stringify(published.versions[1]) === v1Snapshot
+    && (published.versions[2] as { segments: { rate: number } }).segments.rate === 9
+    && published.draft === undefined && LE.publishDraft(eBase) === undefined);
+  check('Q3 钉 v1 展开仍得 rate 5、钉 v2 得 9',
+    DE.expandDynamicEntry(LE.libraryIndexOf([published]), 'u-x', 1).params?.rate === 5
+    && DE.expandDynamicEntry(LE.libraryIndexOf([published]), 'u-x', 2).params?.rate === 9);
+  // Q4 段冲突拒绝 + followParams 裁决豁免
+  const leafA: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-a', kind: 'dynamic', name: 'a', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: { rate: 5, color: '#111111' }, expose: ['rate', 'color'] } },
+  };
+  const leafB: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-b', kind: 'dynamic', name: 'b', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: { rate: 7, life: 2 }, expose: ['rate', 'life'] } },
+  };
+  const parentConflict: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-p', kind: 'dynamic', name: 'p', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-a', version: 1 }, { entry: 'u-b', version: 1 }], coordination: [] } },
+  };
+  const idxC = LE.libraryIndexOf([leafA, leafB, parentConflict]);
+  const exC = DE.expandDynamicEntry(idxC, 'u-p', 1);
+  check('Q4 两子模式同写 rate → 段冲突点名拒绝', !exC.params && exC.errors.some((e) => e.includes('段冲突') && e.includes('rate')));
+  const parentAdj: import('../src/lib/library-entries').LibraryEntry = {
+    ...parentConflict, id: 'u-p2',
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-a', version: 1 }, { entry: 'u-b', version: 1 }], coordination: [{ type: 'followParams', leader: 0, follower: 1, keys: ['rate'] }] } },
+  };
+  const exAdj = DE.expandDynamicEntry(LE.libraryIndexOf([leafA, leafB, parentAdj]), 'u-p2', 1);
+  check('Q4 followParams 裁决后免冲突且取 leader 值（rate 5、life 2 并存）',
+    exAdj.params?.rate === 5 && exAdj.params?.life === 2);
+  // Q5 环检（跨版本同 id 亦算环）+ 去重
+  const cycA: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-ca', kind: 'dynamic', name: 'ca', cluster: '我的', latest: 2,
+    versions: {
+      1: { kind: 'leaf', segments: { rate: 1 }, expose: ['rate'] },
+      2: { kind: 'parent', children: [{ entry: 'u-cb', version: 1 }], coordination: [] },
+    },
+  };
+  const cycB: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-cb', kind: 'dynamic', name: 'cb', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-ca', version: 1 }], coordination: [] } },
+  };
+  const exCyc = DE.expandDynamicEntry(LE.libraryIndexOf([cycA, cycB]), 'u-ca', 2);
+  check('Q5 A@2→B→A@1 按 id 判环拒绝', !exCyc.params && exCyc.errors.some((e) => e.includes('成环')));
+  const dupParent: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-dp', kind: 'dynamic', name: 'dp', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-a', version: 1 }, { entry: 'u-a', version: 1 }], coordination: [] } },
+  };
+  const exDup = DE.expandDynamicEntry(LE.libraryIndexOf([leafA, dupParent]), 'u-dp', 1);
+  check('Q5 同实例两引用去重展开（不自冲突）', exDup.params?.rate === 5 && exDup.errors.length === 0);
+  // Q6 phase 折叠（跨段相位对齐到基准）
+  const phA: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-pa', kind: 'dynamic', name: 'pa', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: { deformEnabled: true, deformPhase: 0.2 }, expose: ['deformPhase'] } },
+  };
+  const phB: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-pb', kind: 'dynamic', name: 'pb', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: { glowEnabled: true, glowPhase: 0 }, expose: ['glowPhase'] } },
+  };
+  const phParent: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-pp', kind: 'dynamic', name: 'pp', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-pa', version: 1 }, { entry: 'u-pb', version: 1 }], coordination: [{ type: 'phase', baseChild: 0, offsets: { 1: 0.3 } }] } },
+  };
+  const exPh = DE.expandDynamicEntry(LE.libraryIndexOf([phA, phB, phParent]), 'u-pp', 1);
+  check('Q6 相位边：发光相位对齐到形变基准 0.2 + 偏移 0.3 = 0.5', Math.abs((exPh.params?.glowPhase ?? -1) - 0.5) < 1e-9);
+  // Q7 调制不支持通道点名 + 参数口拦截
+  const modBad: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-mb', kind: 'dynamic', name: 'mb', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-pa', version: 1 }, { entry: 'u-pb', version: 1 }], coordination: [{ type: 'modulate', fromChild: 1, from: 'glowPulse', toChild: 0, toKey: 'rate', depth: 0.5 }] } },
+  };
+  const exMb = DE.expandDynamicEntry(LE.libraryIndexOf([phA, phB, modBad]), 'u-mb', 1);
+  check('Q7 发光脉冲调制 v1 无通道 → 点名拒绝', !exMb.params && exMb.errors.some((e) => e.includes('无对应通道')));
+  const exposeBad: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-eb', kind: 'dynamic', name: 'eb', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-a', version: 1, overrides: { life: 3 } }], coordination: [] } },
+  };
+  const exEb = DE.expandDynamicEntry(LE.libraryIndexOf([leafA, exposeBad]), 'u-eb', 1);
+  check('Q7 覆盖参数口外的键（life 不在 u-a 口内）→ 点名拒绝', !exEb.params && exEb.errors.some((e) => e.includes('参数口')));
+  // Q8 表面 ref 钉版本：@1/@2/无@ 各取其版
+  const surfEntry: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-surf', kind: 'surface', name: 's', cluster: '我的', latest: 2,
+    versions: {
+      1: { params: [], graph: { version: 1, nodes: [{ id: 'c', op: 'const', params: { v: 1 } }], writes: [{ from: 'c', slot: 3, at: 0.25 }], params: {} } as never },
+      2: { params: [], graph: { version: 1, nodes: [{ id: 'c', op: 'const', params: { v: 2 } }], writes: [{ from: 'c', slot: 3, at: 0.25 }], params: {} } as never },
+    },
+  };
+  const { expandSurfaceGraph: expS, subgraphLibraryOf: subLibOf } = await import('../src/lib/proc-runtime/graph-expand');
+  const libS = subLibOf(LE.surfaceLibEntriesOf([surfEntry]));
+  const hostOf = (ref: string) => ({
+    version: 1 as const,
+    nodes: [{ id: 'r', op: 'ref', params: { ref } }],
+    writes: [{ from: 'r', slot: 3 }],
+    params: {},
+  });
+  const vOf = (ref: string) => {
+    const r = expS(hostOf(ref) as never, libS);
+    return (r.graph.nodes.find((n) => n.op === 'const')?.params as { v?: number } | undefined)?.v;
+  };
+  check('Q8 ref 钉 u-surf@1 得 v1、@2 得 v2、无@ 得最新版 v2',
+    vOf('u-surf@1') === 1 && vOf('u-surf@2') === 2 && vOf('u-surf') === 2);
+  // Q9 反向索引与版本回收
+  const bEntry: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-rb', kind: 'dynamic', name: 'rb', cluster: '我的', latest: 3,
+    versions: {
+      1: { kind: 'leaf', segments: { rate: 1 }, expose: ['rate'] },
+      2: { kind: 'leaf', segments: { rate: 2 }, expose: ['rate'] },
+      3: { kind: 'leaf', segments: { rate: 3 }, expose: ['rate'] },
+    },
+  };
+  const aRef: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-ra', kind: 'dynamic', name: 'ra', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-rb', version: 1 }], coordination: [] } },
+  };
+  const rIdx = LE.reverseIndex([aRef, bEntry]);
+  check('Q9 被钉版本与最新版不可删、中间游离版本可删',
+    LE.versionPinned(rIdx, bEntry, 1) && LE.versionPinned(rIdx, bEntry, 3)
+    && !LE.versionPinned(rIdx, bEntry, 2)
+    && LE.deleteVersion(bEntry, 1, rIdx) === undefined
+    && LE.deleteVersion(bEntry, 2, rIdx)?.versions[2] === undefined);
+  check('Q9 条目删除拦截：u-rb 被 u-ra 钉住', LE.entryDeleteBlockers(bEntry, rIdx).includes('u-ra')
+    && LE.entryDeleteBlockers(aRef, rIdx).length === 0);
+  // Q10 convert 权威重展开：快照错也要按钉版本展开；悬空引用点名回退
+  const mkCharQ = (inst: unknown) => ({
+    id: 'chQ', name: 'Q骑士',
+    nodes: {
+      torso: { ...makeNode('torso', '躯干', 'torso'), dynamicPatterns: [inst] },
+    },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: { torso: { nodeId: 'torso', zIndex: 0, parametric: createDefaultParametricAppearance() } },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character);
+  const pkgQ = convertCharacterToRuntimePackage(mkCharQ({
+    id: 'dq1', slot: 'main', enabled: true,
+    params: { ...fdt('呼吸起伏')!.params, rate: 999 },
+    patternRef: { id: 'dyn-breath', version: 1 },
+    overrides: { rate: 33 },
+  }), undefined, { frameRate: 8, totalFrames: 8, libraryEntries: LE.BUILTIN_ENTRIES });
+  const dynQ = (pkgQ.parts as unknown as { dynamic?: { params: { rate: number } }[] }[]).flatMap((p) => p.dynamic ?? []);
+  check('Q10 convert 按钉版本+覆盖权威展开（rate 33，非快照 999）', dynQ.some((d) => d.params.rate === 33));
+  const pkgQ2 = convertCharacterToRuntimePackage(mkCharQ({
+    id: 'dq2', slot: 'main', enabled: true,
+    params: { ...fdt('呼吸起伏')!.params, rate: 44 },
+    patternRef: { id: 'dyn-ghost', version: 1 },
+  }), undefined, { frameRate: 8, totalFrames: 8, libraryEntries: LE.BUILTIN_ENTRIES });
+  const dynQ2 = (pkgQ2.parts as unknown as { dynamic?: { params: { rate: number } }[] }[]).flatMap((p) => p.dynamic ?? []);
+  check('Q10 悬空引用点名警告且沿用快照（rate 44）',
+    pkgQ2.warnings.some((w) => w.includes('展开失败') && w.includes('dyn-ghost'))
+    && dynQ2.some((d) => d.params.rate === 44));
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
