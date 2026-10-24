@@ -13,6 +13,7 @@ import { useEditorStore, useProjectStore } from '@/lib/store';
 import type { Character } from '@/lib/unified-types';
 import { convertCharacterToRuntimePackage } from '@/lib/proc-runtime/convert';
 import { buildRuntimeHtml } from '@/lib/proc-runtime/runtime-template';
+import { allPatternTemplates } from '@/lib/proc-runtime/pattern-library';
 
 function hashString(s: string): string {
   let h = 0;
@@ -33,6 +34,7 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
       frameRate: useProjectStore.getState().frameRate,
       totalFrames: useProjectStore.getState().totalFrames,
       clips: animationClips.filter((c) => c.puppetCharacterId === character.id),
+      patternLibrary: allPatternTemplates(),
     });
     const html = buildRuntimeHtml(pkg);
     return { pkg, html, key: hashString(html) };

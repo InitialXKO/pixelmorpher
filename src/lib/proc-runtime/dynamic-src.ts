@@ -6,6 +6,8 @@
 // 差异：模拟在瓦片空间跑（轮廓从瓦片 R 通道占据读，坐标 =
 // 瓦片像素相对 (cx, cy)、y 向下）——模板里的瓦片已含镜像
 // 几何，故无镜像翻转（产品侧画布是预翻转绘制才需要翻 x）。
+// 种子与产品同源：seedKey（部件键）+ 实例 id；帧量化基数由
+// 调用方传包帧率（EMBEDDED.frameRate），与编辑器同口径。
 // ============================================================
 
 export const DYNAMIC_SRC = `
@@ -76,7 +78,7 @@ function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
   const contour = dynContour(tile);
   const pts = dynSourcePoints(params, tile, contour);
   if (pts.length === 0) return [];
-  const seedBase = dynSeedOf(seedKey + '|' + inst.slot);
+  const seedBase = dynSeedOf(seedKey + '|' + (inst.id || inst.slot));
   const lifeFrames = params.life * frameRate;
   const firstBirth = Math.max(0, Math.ceil(frame - lifeFrames));
   const lastBirth = Math.floor(frame);

@@ -511,6 +511,9 @@ const PARTS = EMBEDDED.parts;
 const COSTUMES = EMBEDDED.costumes;
 const BEHAVIOR_GRAPHS = (EMBEDDED.behavior && EMBEDDED.behavior.graphs) || {};
 const PERFORMANCES = EMBEDDED.performances || [];
+/** 工程帧率（包内字段）：粒子模拟的帧量化基数，与编辑器同口径；
+ * 旧包无此字段时回落 60。时间本身走连续钟 elapsed，不重置。 */
+const FRAME_RATE = EMBEDDED.frameRate || 60;
 // 绘制顺序 v1：按部件 sortOrder（= 产品节点 zIndex）稳定排序
 sortParts = function (parts) {
   return parts.slice().sort((a, b) => (a.sortOrder - b.sortOrder) || (a.key < b.key ? -1 : 1));
@@ -1399,16 +1402,17 @@ function frame(now) {
     elByKey.set(part.key, el);
     if (dynList.length > 0) dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: an.a, dynList: dynList, dsx: dsx, dsy: dsy });
   });
-  // 动态粒子：瓦片空间模拟（60fps 虚拟帧，与行为层同一时间基），
-  // 发射点随形变缩放，位置经部件旋转落到世界（与片元采样同式）
+  // 动态粒子：瓦片空间模拟（连续钟 elapsed × 包帧率量化帧，
+  // 与编辑器同一帧基），发射点随形变缩放，位置经部件旋转落到
+  // 世界（与片元采样同式）；绘制分身后/身前两遍夹住部件一遍。
   const backVerts = [], frontVerts = [];
   {
-    const frameIdx = elapsed * 60;
+    const frameIdx = elapsed * FRAME_RATE;
     for (const a of dynAnchors) {
       const c = Math.cos(a.rot), s = Math.sin(a.rot);
       for (const inst of a.dynList) {
         for (const layer of ['back', 'front']) {
-          const ps = dynSimulate(inst, a.tile, frameIdx, 60, layer, a.part.key);
+          const ps = dynSimulate(inst, a.tile, frameIdx, FRAME_RATE, layer, a.part.key);
           const target = layer === 'back' ? backVerts : frontVerts;
           for (const pt of ps) {
             const gx = pt.x * a.dsx, gy = pt.y * a.dsy;
