@@ -264,15 +264,20 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
 {
   const baker = createSurfaceBaker();
   const shape = { kind: 'rect', size: [40, 32] as [number, number], roundness: 0.15 };
+  // 含 ref 的组合模板按真实管线先展开再烘（烘焙器不认 ref）
+  const { expandSurfaceGraph: expG, subgraphLibraryOf: subG, graphHasRefs: hasRefG } = await import('../src/lib/proc-runtime/graph-expand');
+  const LE_G = await import('../src/lib/library-entries');
+  const libG = subG(LE_G.surfaceLibEntriesOf(LE_G.allLibraryEntries()));
   check('G1 模板数量 ≥ 22', PATTERN_TEMPLATES.length >= 22);
   for (const t of PATTERN_TEMPLATES) {
-    const g = instantiatePattern(t);
-    const ids = new Set(g.nodes.map((x) => x.id));
-    const refsOk = g.nodes.every((x) => Object.values(x.inputs ?? {}).every((r) => ids.has(r)))
-      && g.writes.every((x) => ids.has(x.from));
+    const g0 = instantiatePattern(t);
+    const ids = new Set(g0.nodes.map((x) => x.id));
+    const refsOk = g0.nodes.every((x) => Object.values(x.inputs ?? {}).every((r) => ids.has(r)))
+      && g0.writes.every((x) => ids.has(x.from));
     const paramKeys = new Set(t.params.map((p) => p.key));
-    const dollarOk = JSON.stringify(g.nodes).match(/"\$[a-zA-Z]+"/g)?.every((s) => paramKeys.has(s.slice(2, -1))) ?? true;
+    const dollarOk = JSON.stringify(g0.nodes).match(/"\$[a-zA-Z]+"/g)?.every((s) => paramKeys.has(s.slice(2, -1))) ?? true;
     check(`G2 模板 ${t.name}：引用完整 + $参数有定义`, refsOk && dollarOk);
+    const g = hasRefG(g0) ? expG(g0, libG).graph : g0;
     const tile = baker.compileTileDAG(shape, g);
     const tiers = new Set<number>();
     let rangeOk = true;
@@ -568,6 +573,34 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   const html = buildRuntimeHtml(pkg);
   check('L14 导出 HTML 含动态模拟与底图采样接线',
     html.includes('dynSimulate(') && html.includes('uBase') && html.includes('bakeResolvedTile') && html.includes('__dynamic'));
+
+  // 帧率进包 + 实例 id 保留（种子对齐）：粒子帧量化基数与编辑器同口径
+  check('L15 包带工程帧率（convert 入参直达包字段）',
+    convertCharacterToRuntimePackage(ch, undefined, { frameRate: 8 }).frameRate === 8 && pkg.frameRate === 12);
+  check('L16 运行时动态实例保留 id（createDynamicInstance 的 dyn_ 前缀）',
+    typeof torso?.dynamic?.[0]?.id === 'string' && (torso?.dynamic?.[0]?.id ?? '').startsWith('dyn_'));
+  check('L17 模板粒子帧量化用包帧率（不再写死 60）',
+    html.includes('EMBEDDED.frameRate') && !html.includes('elapsed * 60'));
+  // 两套模拟逐值对齐：同一实心网格（产品吃精灵、运行时吃等价瓦片）、
+  // 同参数、同帧、同帧率、同种子（部件键 + 实例 id）→ 粒子逐项相等
+  {
+    const { simulateDynamicParticles } = await import('../src/lib/dynamic-pattern-sim');
+    const grid20: (string | null)[][] = Array.from({ length: 20 }, () => Array(20).fill('#3366aa'));
+    const sprite20 = { width: 20, height: 20, data: grid20, plug: { x: pxToSub(10), y: pxToSub(10) } };
+    const instEq = { id: 'dyn_eq_1', slot: '身体', enabled: true, params: heatParams };
+    // 帧 30 恰逢形变脉冲谷底（两边同为零粒子），故多帧断言 + 至少一帧非空作见证
+    let eqAll = true, eqWitness = 0;
+    for (const f of [30, 60, 90, 120, 200, 300]) {
+      const prod = simulateDynamicParticles(
+        { instance: instEq, origin: 'node' } as never, sprite20 as never, f, 8, false, 'back', 'torso');
+      const rt = dyn.dynSimulate(
+        { id: 'dyn_eq_1', slot: '身体', params: heatParams } as never, tile20 as never, f, 8, 'back', 'torso');
+      if (JSON.stringify(prod) !== JSON.stringify(rt)) eqAll = false;
+      if (prod.length > 0) eqWitness++;
+    }
+    check('L18 运行时模拟与产品模拟逐值一致（同网格/参数/帧/帧率/种子）',
+      eqAll && eqWitness >= 3);
+  }
 }
 
 // ---------- M) 精灵部件进包 ----------
@@ -1363,7 +1396,571 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   }
 }
 
-// ---------- U) 裁剪面：convert 透传 + 模板平面合成 ----------
+// ---------- N) 子图实例化（方向甲）：展开/进包/打包全链 ----------
+{
+  const { expandSurfaceGraph, subgraphLibraryOf, graphHasRefs } = await import('../src/lib/proc-runtime/graph-expand');
+  const { PATTERN_TEMPLATES, instantiatePattern } = await import('../src/lib/proc-runtime/pattern-templates');
+  const { analyzePackSelection, rewriteWithSubgraphRefs } = await import('../src/lib/proc-runtime/graph-pack');
+  const { createSurfaceBaker } = await import('../src/lib/proc-runtime/bake-src');
+  const bakerN = createSurfaceBaker();
+  const shapeN = { kind: 'rect', size: [24, 24] as [number, number], roundness: 0 };
+  const bakeHex = (g: unknown) => Buffer.from(bakerN.compileTileDAG(shapeN as never, g as never, 0).data).toString('hex');
+  const scalesTpl = PATTERN_TEMPLATES.find((t) => t.id === 'scales')!;
+  const libN = subgraphLibraryOf(PATTERN_TEMPLATES);
+  const scalesApplied = instantiatePattern(scalesTpl);
+  const scalesHex = bakeHex(scalesApplied);
+
+  const hostN = {
+    version: 1 as const,
+    nodes: [
+      { id: 'in', op: 'inside' },
+      { id: 'r1', op: 'ref', params: { ref: 'scales', out: 'main' } },
+      { id: 'r2', op: 'ref', params: { ref: 'scales', out: 'shadow' } },
+      { id: 'r3', op: 'ref', params: { ref: 'scales', out: 'edge' } },
+    ],
+    writes: [
+      { from: 'in', slot: 2, at: 0.5 },
+      { from: 'r1', slot: 3, at: 0 },
+      { from: 'r2', slot: 2, at: 0.35 },
+      { from: 'r3', slot: 5, at: 0.45 },
+    ],
+    params: {},
+  };
+  const expN = expandSurfaceGraph(hostN as never, libN);
+  check('N1 三引用同实例展开烘焙 == 鳞片原图（逐字节）', bakeHex(expN.graph) === scalesHex && expN.warnings.length === 0);
+  check(`N2 按实例去重不退化成树（展开 ${expN.graph.nodes.length} 节点 == 宿主 1 + 鳞片 ${scalesTpl.graph.nodes.length}）`,
+    expN.graph.nodes.length === 1 + scalesTpl.graph.nodes.length);
+  check('N3 无 ref 图展开恒等', (() => {
+    const e = expandSurfaceGraph(scalesApplied as never, libN);
+    return bakeHex(e.graph) === scalesHex && e.graph.nodes.length === scalesApplied.nodes.length;
+  })());
+  check('N4 参数覆盖逐字节等值（cw=14）', (() => {
+    const h = structuredClone(hostN);
+    for (const nd of h.nodes) if (nd.op === 'ref') nd.params = { ...nd.params, cw: 14 };
+    const truth = { ...scalesApplied, params: { ...scalesApplied.params, cw: 14 } };
+    return bakeHex(expandSurfaceGraph(h as never, libN).graph) === bakeHex(truth);
+  })());
+  check('N5 环/未解析点名 + 零场', (() => {
+    const bad = {
+      version: 1 as const,
+      nodes: [
+        { id: 'x', op: 'ref', params: { ref: 'nope' } },
+        { id: 'y', op: 'ref', params: { ref: 'scales', out: 'main', cw: '$cw' } },
+      ],
+      writes: [{ from: 'x', slot: 2 }, { from: 'y', slot: 3, at: 0 }],
+      params: {},
+    };
+    const e = expandSurfaceGraph(bad as never, libN);
+    return e.warnings.some((w) => w.includes('未解析')) && bakeHex(e.graph).length > 0;
+  })());
+
+  // convert 进包：ref 图展开后落包（包内无 ref），烘焙与原图一致
+  const appRef = { ...createDefaultParametricAppearance(), surfaceGraph: structuredClone(hostN) };
+  const chN = {
+    id: 'chN', name: '子图进包',
+    nodes: { torso: makeNode('torso', '躯干', 'torso') },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: appRef } } }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkgN = convertCharacterToRuntimePackage(chN, undefined, { frameRate: 8 });
+  const pkgGraph = pkgN.parts.find((p) => p.key === 'torso')?.base.surfaceGraph;
+  check('N6 进包图已展开（无 ref 算子残留）',
+    !!pkgGraph && !graphHasRefs(pkgGraph as never) && pkgGraph.nodes.every((n) => n.op !== 'ref'));
+  check('N7 进包图烘焙 == 鳞片原图', !!pkgGraph && bakeHex(pkgGraph) === scalesHex);
+  const appBad = { ...createDefaultParametricAppearance(), surfaceGraph: {
+    version: 1 as const,
+    nodes: [{ id: 'x', op: 'ref', params: { ref: 'ghost-tpl' } }],
+    writes: [{ from: 'x', slot: 2 }],
+    params: {},
+  } };
+  const chN2 = {
+    ...chN,
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: appBad } } }],
+  } as unknown as Character;
+  const pkgN2 = convertCharacterToRuntimePackage(chN2, undefined, { frameRate: 8 });
+  check('N8 未解析引用进包点名警告', pkgN2.warnings.some((w) => w.includes('未解析') && w.includes('ghost-tpl')));
+
+  // 主画布烘焙 parity：ref 外观与平图外观产物逐像素一致
+  {
+    const { buildParametricSprite } = await import('../src/lib/proc-runtime/main-canvas');
+    const sprRef = buildParametricSprite(appRef as never, 'nkey');
+    const sprFlat = buildParametricSprite({ ...createDefaultParametricAppearance(), surfaceGraph: scalesApplied } as never, 'nkey');
+    check('N9 主画布 ref 外观烘焙 == 平图外观', !!sprRef && !!sprFlat
+      && JSON.stringify(sprRef.data) === JSON.stringify(sprFlat.data));
+  }
+
+  // 打包：选区校验 + 重写往返烘焙等值
+  {
+    const selAll = new Set(scalesApplied.nodes.map((n) => n.id).filter((id) => id !== 'in'));
+    const ana = analyzePackSelection(scalesApplied as never, selAll, scalesTpl.params);
+    check('N10 打包分析通过（边界=写出消费节点、暴露参数齐）',
+      ana.ok && ana.boundary.length === 3 && ana.exposedKeys.join(',') === 'cw,ch,gap,shadow');
+    const libPack = subgraphLibraryOf([...PATTERN_TEMPLATES, {
+      id: 'user-pack-test', params: ana.subgraph!.paramDefs,
+      graph: ana.subgraph!.graph, outputs: ana.subgraph!.outputs,
+    }]);
+    const rewritten = rewriteWithSubgraphRefs(scalesApplied as never, selAll, 'user-pack-test', ana.boundary, ana.exposedKeys);
+    check('N11 打包往返：重写图展开烘焙 == 原图逐字节',
+      bakeHex(expandSurfaceGraph(rewritten, libPack).graph) === scalesHex);
+    const anaBad = analyzePackSelection(scalesApplied as never, new Set(['rep']), scalesTpl.params);
+    check('N12 带外部输入边的选区被拒（子图无字段输入口）', !anaBad.ok && (anaBad.reason ?? '').includes('输入边'));
+  }
+}
+
+// ---------- P) 追随段：增量曲线烘焙进包 + 模板采样应用 ----------
+{
+  const { createDynamicInstance, defaultDynamicParams } = await import('../src/lib/dynamic-patterns');
+  const { readFileSync } = await import('node:fs');
+  const followParams = (over: Record<string, unknown>) => ({
+    ...defaultDynamicParams(), emitEnabled: false,
+    followEnabled: true, followSource: 'arm', followDelaySec: 0.3, followAmount: 1, followRotate: true,
+    ...over,
+  }) as never;
+  const paraPiece = (slot: string, dyn?: unknown[]) => {
+    const p = createDefaultCostumePiece(slot);
+    p.parametric = { ...createDefaultParametricAppearance() } as never;
+    if (dyn) (p as { dynamicPatterns?: unknown[] }).dynamicPatterns = dyn as never;
+    return p;
+  };
+  const mkChar = (capeNodeDyn: unknown[] | undefined, capePieceDyn: unknown[] | undefined, src: string) => ({
+    id: 'chP', name: '追随',
+    nodes: {
+      torso: {
+        ...makeNode('torso', '躯干', 'torso'),
+        children: ['arm', 'cape'],
+        transform: { x: 0, y: 0, angle: 0, variantIndex: 6, stretch: 1 },
+      },
+      arm: {
+        ...makeNode('arm', '手臂', 'arm', 'torso'),
+        tracks: { x: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 12, value: 192 }] } },
+      },
+      cape: { ...makeNode('cape', '披风', 'cape', 'torso'), dynamicPatterns: capeNodeDyn },
+    },
+    rootNodeId: 'torso',
+    rootNodeIds: ['torso'],
+    costumeSets: [
+      { id: 'set1', name: '默认', pieces: { torso: paraPiece('torso'), arm: paraPiece('arm'), cape: paraPiece('cape', capePieceDyn) } },
+      { id: 'set2', name: '替换', pieces: { torso: paraPiece('torso'), arm: paraPiece('arm'), cape: paraPiece('cape', capePieceDyn) } },
+    ],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  }) as unknown as Character;
+  const samplePts = (pts: [number, number][] | undefined, u: number): number => {
+    if (!pts || pts.length === 0) return 0;
+    if (u <= pts[0]![0]) return pts[0]![1];
+    for (let i = 1; i < pts.length; i++) {
+      if (u <= pts[i]![0]) {
+        const [x0, y0] = pts[i - 1]!, [x1, y1] = pts[i]!;
+        return x1 > x0 ? y0 + ((y1 - y0) * (u - x0)) / (x1 - x0) : y1;
+      }
+    }
+    return pts[pts.length - 1]![1];
+  };
+
+  const instNode = createDynamicInstance('追随', followParams({}), '身体');
+  const pkg = convertCharacterToRuntimePackage(
+    mkChar([instNode], undefined, 'arm'), undefined, { frameRate: 10, totalFrames: 12 });
+  const capeDyn = pkg.parts.find((p) => p.key === 'cape')?.dynamic?.[0];
+  const fc = capeDyn?.followCurve;
+  check('P1 追随增量曲线进包（dx 有、dy/da 无）', !!fc?.dx && !fc?.dy && !fc?.da);
+  check('P1 u=0 增量为 0', Math.abs(samplePts(fc?.dx, 0)) < 0.25);
+  check('P1 u=1/6（第 2 帧，滞后未满）增量 −2', Math.abs(samplePts(fc?.dx, 1 / 6) + 2) < 0.25);
+  check('P1 u=0.5（第 6 帧）增量 −3', Math.abs(samplePts(fc?.dx, 0.5) + 3) < 0.25);
+  check('P1 u=1（末帧）增量 −3', Math.abs(samplePts(fc?.dx, 1) + 3) < 0.25);
+  const set2Dyn = (pkg.costumes['set2'] as { __dynamic?: Record<string, { followCurve?: unknown }[]> })?.__dynamic?.['cape']?.[0];
+  check('P2 服装集 __dynamic 的同实例也挂曲线', !!set2Dyn?.followCurve);
+
+  const pkgBad = convertCharacterToRuntimePackage(
+    mkChar([createDynamicInstance('追随', followParams({ followSource: 'nope' }), '身体')], undefined, 'nope'),
+    undefined, { frameRate: 10, totalFrames: 12 });
+  check('P3 坏源部件点名警告', pkgBad.warnings.some((w) => w.includes('追随') && w.includes('nope')));
+  check('P3 坏源不挂曲线', !pkgBad.parts.find((p) => p.key === 'cape')?.dynamic?.[0]?.followCurve);
+  const pkgEmpty = convertCharacterToRuntimePackage(
+    mkChar([createDynamicInstance('追随', followParams({ followSource: '' }), '身体')], undefined, ''),
+    undefined, { frameRate: 10, totalFrames: 12 });
+  check('P3 未选源点名警告', pkgEmpty.warnings.some((w) => w.includes('追随') && w.includes('未选源')));
+  const pkgStill = convertCharacterToRuntimePackage(
+    mkChar([createDynamicInstance('追随', followParams({ followSource: 'torso' }), '身体')], undefined, 'torso'),
+    undefined, { frameRate: 10, totalFrames: 12 });
+  check('P4 源静止时无曲线、无警告（不是错误）',
+    !pkgStill.parts.find((p) => p.key === 'cape')?.dynamic?.[0]?.followCurve
+    && !pkgStill.warnings.some((w) => w.includes('追随')));
+
+  const tplText = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+  check('P5 模板含追随采样与应用接线', tplText.includes('followSampleAt') && tplText.includes('inst.followCurve'));
+  const m = tplText.match(/function followSampleAt\(points, u\) \{[\s\S]*?\n\}/);
+  check('P5 followSampleAt 可提取', !!m);
+  if (m && fc?.dx) {
+    const sampler = new Function(`${m[0]}\nreturn followSampleAt;`)() as (p: [number, number][], u: number) => number;
+    check('P5 模板采样器采烘焙曲线 u=0.5 得 −3', Math.abs(sampler(fc.dx, 0.5) + 3) < 0.25);
+    check('P5 模板采样器两端钳制', sampler(fc.dx, -1) === sampler(fc.dx, 0) && sampler(fc.dx, 2) === sampler(fc.dx, 1));
+  }
+}
+
+// ============ Q 组：模式库 DAG 分层（条目版本 + 动态图化展开） ============
+{
+  const LE = await import('../src/lib/library-entries');
+  const DE = await import('../src/lib/dynamic-expand');
+  const { findDynamicTemplate: fdt } = await import('../src/lib/dynamic-patterns');
+  const paramsEq = (a: Record<string, unknown>, b: Record<string, unknown>) =>
+    Object.keys(b).every((k) => JSON.stringify(a[k]) === JSON.stringify(b[k]));
+
+  // Q1 样板等值：组合展开 == 原「挤压冒热气」扁平模板（逐键）
+  const exQ = DE.expandDynamicEntry(LE.BUILTIN_INDEX, 'dyn-squeeze-steam', 1);
+  check('Q1 样板展开无误', !!exQ.params && exQ.errors.length === 0);
+  check('Q1 样板展开逐键等值原模板（含调制边折出的 linkToDeform）',
+    !!exQ.params && paramsEq(exQ.params as never, fdt('挤压冒热气')!.params as never));
+  // Q2 其余内置叶子展开等值各自模板
+  let leavesOk = true;
+  for (const [id, name] of [['dyn-breath', '呼吸起伏'], ['dyn-fire-ring', '火焰环绕'], ['dyn-lag', '垂饰滞后'], ['dyn-glow-breath', '辉光呼吸']] as const) {
+    const r = DE.expandDynamicEntry(LE.BUILTIN_INDEX, id, 1);
+    if (!r.params || !paramsEq(r.params as never, fdt(name)!.params as never)) leavesOk = false;
+  }
+  check('Q2 内置叶子展开等值模板（呼吸/火焰环/垂饰滞后/辉光呼吸）', leavesOk);
+  // Q3 草稿/发布：已发布版本不可变
+  const eBase: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-x', kind: 'dynamic', name: 'x', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: { rate: 5 }, expose: ['rate'] } },
+  };
+  const v1Snapshot = JSON.stringify(eBase.versions[1]);
+  const drafted = LE.withDraft(eBase, { kind: 'leaf', segments: { rate: 9 }, expose: ['rate'] });
+  const published = LE.publishDraft(drafted)!;
+  check('Q3 发布后 latest=2 且 v1 内容不变、草稿清空',
+    published.latest === 2 && JSON.stringify(published.versions[1]) === v1Snapshot
+    && (published.versions[2] as { segments: { rate: number } }).segments.rate === 9
+    && published.draft === undefined && LE.publishDraft(eBase) === undefined);
+  check('Q3 钉 v1 展开仍得 rate 5、钉 v2 得 9',
+    DE.expandDynamicEntry(LE.libraryIndexOf([published]), 'u-x', 1).params?.rate === 5
+    && DE.expandDynamicEntry(LE.libraryIndexOf([published]), 'u-x', 2).params?.rate === 9);
+  // Q4 段冲突拒绝 + followParams 裁决豁免
+  const leafA: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-a', kind: 'dynamic', name: 'a', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: { rate: 5, color: '#111111' }, expose: ['rate', 'color'] } },
+  };
+  const leafB: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-b', kind: 'dynamic', name: 'b', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: { rate: 7, life: 2 }, expose: ['rate', 'life'] } },
+  };
+  const parentConflict: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-p', kind: 'dynamic', name: 'p', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-a', version: 1 }, { entry: 'u-b', version: 1 }], coordination: [] } },
+  };
+  const idxC = LE.libraryIndexOf([leafA, leafB, parentConflict]);
+  const exC = DE.expandDynamicEntry(idxC, 'u-p', 1);
+  check('Q4 两子模式同写 rate → 段冲突点名拒绝', !exC.params && exC.errors.some((e) => e.includes('段冲突') && e.includes('rate')));
+  const parentAdj: import('../src/lib/library-entries').LibraryEntry = {
+    ...parentConflict, id: 'u-p2',
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-a', version: 1 }, { entry: 'u-b', version: 1 }], coordination: [{ type: 'followParams', leader: 0, follower: 1, keys: ['rate'] }] } },
+  };
+  const exAdj = DE.expandDynamicEntry(LE.libraryIndexOf([leafA, leafB, parentAdj]), 'u-p2', 1);
+  check('Q4 followParams 裁决后免冲突且取 leader 值（rate 5、life 2 并存）',
+    exAdj.params?.rate === 5 && exAdj.params?.life === 2);
+  // Q5 环检（跨版本同 id 亦算环）+ 去重
+  const cycA: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-ca', kind: 'dynamic', name: 'ca', cluster: '我的', latest: 2,
+    versions: {
+      1: { kind: 'leaf', segments: { rate: 1 }, expose: ['rate'] },
+      2: { kind: 'parent', children: [{ entry: 'u-cb', version: 1 }], coordination: [] },
+    },
+  };
+  const cycB: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-cb', kind: 'dynamic', name: 'cb', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-ca', version: 1 }], coordination: [] } },
+  };
+  const exCyc = DE.expandDynamicEntry(LE.libraryIndexOf([cycA, cycB]), 'u-ca', 2);
+  check('Q5 A@2→B→A@1 按 id 判环拒绝', !exCyc.params && exCyc.errors.some((e) => e.includes('成环')));
+  const dupParent: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-dp', kind: 'dynamic', name: 'dp', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-a', version: 1 }, { entry: 'u-a', version: 1 }], coordination: [] } },
+  };
+  const exDup = DE.expandDynamicEntry(LE.libraryIndexOf([leafA, dupParent]), 'u-dp', 1);
+  check('Q5 同实例两引用去重展开（不自冲突）', exDup.params?.rate === 5 && exDup.errors.length === 0);
+  // Q6 phase 折叠（跨段相位对齐到基准）
+  const phA: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-pa', kind: 'dynamic', name: 'pa', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: { deformEnabled: true, deformPhase: 0.2 }, expose: ['deformPhase'] } },
+  };
+  const phB: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-pb', kind: 'dynamic', name: 'pb', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: { glowEnabled: true, glowPhase: 0 }, expose: ['glowPhase'] } },
+  };
+  const phParent: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-pp', kind: 'dynamic', name: 'pp', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-pa', version: 1 }, { entry: 'u-pb', version: 1 }], coordination: [{ type: 'phase', baseChild: 0, offsets: { 1: 0.3 } }] } },
+  };
+  const exPh = DE.expandDynamicEntry(LE.libraryIndexOf([phA, phB, phParent]), 'u-pp', 1);
+  check('Q6 相位边：发光相位对齐到形变基准 0.2 + 偏移 0.3 = 0.5', Math.abs((exPh.params?.glowPhase ?? -1) - 0.5) < 1e-9);
+  // Q7 调制不支持通道点名 + 参数口拦截
+  const modBad: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-mb', kind: 'dynamic', name: 'mb', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-pa', version: 1 }, { entry: 'u-pb', version: 1 }], coordination: [{ type: 'modulate', fromChild: 1, from: 'glowPulse', toChild: 0, toKey: 'rate', depth: 0.5 }] } },
+  };
+  const exMb = DE.expandDynamicEntry(LE.libraryIndexOf([phA, phB, modBad]), 'u-mb', 1);
+  check('Q7 发光脉冲调制 v1 无通道 → 点名拒绝', !exMb.params && exMb.errors.some((e) => e.includes('无对应通道')));
+  const exposeBad: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-eb', kind: 'dynamic', name: 'eb', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-a', version: 1, overrides: { life: 3 } }], coordination: [] } },
+  };
+  const exEb = DE.expandDynamicEntry(LE.libraryIndexOf([leafA, exposeBad]), 'u-eb', 1);
+  check('Q7 覆盖参数口外的键（life 不在 u-a 口内）→ 点名拒绝', !exEb.params && exEb.errors.some((e) => e.includes('参数口')));
+  // Q8 表面 ref 钉版本：@1/@2/无@ 各取其版
+  const surfEntry: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-surf', kind: 'surface', name: 's', cluster: '我的', latest: 2,
+    versions: {
+      1: { params: [], graph: { version: 1, nodes: [{ id: 'c', op: 'const', params: { v: 1 } }], writes: [{ from: 'c', slot: 3, at: 0.25 }], params: {} } as never },
+      2: { params: [], graph: { version: 1, nodes: [{ id: 'c', op: 'const', params: { v: 2 } }], writes: [{ from: 'c', slot: 3, at: 0.25 }], params: {} } as never },
+    },
+  };
+  const { expandSurfaceGraph: expS, subgraphLibraryOf: subLibOf } = await import('../src/lib/proc-runtime/graph-expand');
+  const libS = subLibOf(LE.surfaceLibEntriesOf([surfEntry]));
+  const hostOf = (ref: string) => ({
+    version: 1 as const,
+    nodes: [{ id: 'r', op: 'ref', params: { ref } }],
+    writes: [{ from: 'r', slot: 3 }],
+    params: {},
+  });
+  const vOf = (ref: string) => {
+    const r = expS(hostOf(ref) as never, libS);
+    return (r.graph.nodes.find((n) => n.op === 'const')?.params as { v?: number } | undefined)?.v;
+  };
+  check('Q8 ref 钉 u-surf@1 得 v1、@2 得 v2、无@ 得最新版 v2',
+    vOf('u-surf@1') === 1 && vOf('u-surf@2') === 2 && vOf('u-surf') === 2);
+  // Q9 反向索引与版本回收
+  const bEntry: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-rb', kind: 'dynamic', name: 'rb', cluster: '我的', latest: 3,
+    versions: {
+      1: { kind: 'leaf', segments: { rate: 1 }, expose: ['rate'] },
+      2: { kind: 'leaf', segments: { rate: 2 }, expose: ['rate'] },
+      3: { kind: 'leaf', segments: { rate: 3 }, expose: ['rate'] },
+    },
+  };
+  const aRef: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-ra', kind: 'dynamic', name: 'ra', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'parent', children: [{ entry: 'u-rb', version: 1 }], coordination: [] } },
+  };
+  const rIdx = LE.reverseIndex([aRef, bEntry]);
+  check('Q9 被钉版本与最新版不可删、中间游离版本可删',
+    LE.versionPinned(rIdx, bEntry, 1) && LE.versionPinned(rIdx, bEntry, 3)
+    && !LE.versionPinned(rIdx, bEntry, 2)
+    && LE.deleteVersion(bEntry, 1, rIdx) === undefined
+    && LE.deleteVersion(bEntry, 2, rIdx)?.versions[2] === undefined);
+  check('Q9 条目删除拦截：u-rb 被 u-ra 钉住', LE.entryDeleteBlockers(bEntry, rIdx).includes('u-ra')
+    && LE.entryDeleteBlockers(aRef, rIdx).length === 0);
+  // Q10 convert 权威重展开：快照错也要按钉版本展开；悬空引用点名回退
+  const mkCharQ = (inst: unknown) => ({
+    id: 'chQ', name: 'Q骑士',
+    nodes: {
+      torso: { ...makeNode('torso', '躯干', 'torso'), dynamicPatterns: [inst] },
+    },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: { torso: { nodeId: 'torso', zIndex: 0, parametric: createDefaultParametricAppearance() } },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character);
+  const pkgQ = convertCharacterToRuntimePackage(mkCharQ({
+    id: 'dq1', slot: 'main', enabled: true,
+    params: { ...fdt('呼吸起伏')!.params, rate: 999 },
+    patternRef: { id: 'dyn-breath', version: 1 },
+    overrides: { rate: 33 },
+  }), undefined, { frameRate: 8, totalFrames: 8, libraryEntries: LE.BUILTIN_ENTRIES });
+  const dynQ = (pkgQ.parts as unknown as { dynamic?: { params: { rate: number } }[] }[]).flatMap((p) => p.dynamic ?? []);
+  check('Q10 convert 按钉版本+覆盖权威展开（rate 33，非快照 999）', dynQ.some((d) => d.params.rate === 33));
+  const pkgQ2 = convertCharacterToRuntimePackage(mkCharQ({
+    id: 'dq2', slot: 'main', enabled: true,
+    params: { ...fdt('呼吸起伏')!.params, rate: 44 },
+    patternRef: { id: 'dyn-ghost', version: 1 },
+  }), undefined, { frameRate: 8, totalFrames: 8, libraryEntries: LE.BUILTIN_ENTRIES });
+  const dynQ2 = (pkgQ2.parts as unknown as { dynamic?: { params: { rate: number } }[] }[]).flatMap((p) => p.dynamic ?? []);
+  check('Q10 悬空引用点名警告且沿用快照（rate 44）',
+    pkgQ2.warnings.some((w) => w.includes('展开失败') && w.includes('dyn-ghost'))
+    && dynQ2.some((d) => d.params.rate === 44));
+}
+
+// ============ R 组：条目治理纯函数（管理面板地基） ============
+{
+  const LE = await import('../src/lib/library-entries');
+  const { defaultDynamicParams: ddp } = await import('../src/lib/dynamic-patterns');
+  const eA: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-a', kind: 'dynamic', name: '原', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: { rate: 1 }, expose: ['rate'] } },
+  };
+  const legacyDup = { ...eA, name: '旧副本' };
+  const eB: import('../src/lib/library-entries').LibraryEntry = {
+    id: 'u-b', kind: 'dynamic', name: '新', cluster: '我的', latest: 1,
+    versions: { 1: { kind: 'leaf', segments: {}, expose: [] } },
+  };
+  const merged = LE.mergeLegacyEntries([eA], [legacyDup, eB]);
+  check('R1 legacy 增量并入按 id 去重且不覆盖已有条目',
+    merged.length === 2 && merged[0]!.name === '原' && merged[1]!.id === 'u-b');
+  const dynLegacy = LE.legacyDynToEntries([{
+    name: '旧动态', params: { ...ddp(), rate: 5 },
+  }]);
+  check('R2 旧动态模板转叶子条目（仅差量键、id 按名）',
+    dynLegacy[0]!.id === 'user-dyn-旧动态'
+    && JSON.stringify((dynLegacy[0]!.versions[1] as { segments: object }).segments) === '{"rate":5}');
+  const surfLegacy = LE.legacySurfaceToEntries([{
+    id: 'user-zz', name: '旧表面', cluster: '我的',
+    params: [], graph: { version: 1, nodes: [], writes: [], params: {} } as never,
+  }]);
+  check('R3 旧表面模板转条目 v1', surfLegacy[0]!.kind === 'surface' && surfLegacy[0]!.latest === 1);
+  const refs = LE.refsOfDef({
+    params: [], graph: {
+      version: 1,
+      nodes: [
+        { id: 'a', op: 'ref', params: { ref: 'x@2' } },
+        { id: 'b', op: 'ref', params: { ref: 'y' } },
+        { id: 'c', op: 'const', params: { v: 1 } },
+      ],
+      writes: [], params: {},
+    } as never,
+  });
+  check('R4 表面 def 引用扫描（钉版与浮动都收）',
+    refs.length === 2 && refs[0]!.id === 'x' && refs[0]!.version === 2
+    && refs[1]!.id === 'y' && refs[1]!.version === undefined);
+}
+
+// ============ T 组：模式库缩略图（烘焙图 + 动态定格图） ============
+{
+  const TH = await import('../src/lib/library-thumbs');
+  const LE = await import('../src/lib/library-entries');
+  const { findDynamicTemplate: fdt } = await import('../src/lib/dynamic-patterns');
+  const alphaCount = (img: { data: Uint8ClampedArray }) => {
+    let n = 0;
+    for (let i = 3; i < img.data.length; i += 4) if (img.data[i]! > 0) n++;
+    return n;
+  };
+  const scalesEntry = LE.BUILTIN_ENTRIES.find((e) => e.id === 'scales')!;
+  const surfDef = scalesEntry.versions[1] as import('../src/lib/library-entries').SurfaceEntryDef;
+  const s1 = TH.surfaceThumbRGBA(surfDef)!;
+  const s2 = TH.surfaceThumbRGBA(surfDef)!;
+  check('T1 表面缩略图非空且确定性（两烘逐字节同）',
+    !!s1 && alphaCount(s1) > 400 && Buffer.from(s1.data).equals(Buffer.from(s2.data)));
+  const poster1 = TH.dynamicPosterRGBA(fdt('挤压冒热气')!.params);
+  const poster2 = TH.dynamicPosterRGBA(fdt('挤压冒热气')!.params);
+  check('T2 动态定格图非空且确定性（挤压冒热气：精灵+粒子）',
+    alphaCount(poster1) > 900 && Buffer.from(poster1.data).equals(Buffer.from(poster2.data)));
+  const glowPoster = TH.dynamicPosterRGBA(fdt('辉光呼吸')!.params);
+  const plainPoster = TH.dynamicPosterRGBA(fdt('呼吸起伏')!.params);
+  check('T3 定格图覆盖：辉光呼吸 > 呼吸起伏（注：此式较弱，强口径见 U4 关发光对照）',
+    alphaCount(glowPoster) > alphaCount(plainPoster));
+  const spr = TH.sampleSpriteGrid();
+  check('T4 示例精灵 20×20 且有实体像素',
+    spr.length === 20 && spr.flat().filter(Boolean).length > 150);
+}
+
+// ============ U 组：模式库扩充（子模式组合父模式） ============
+{
+  const LE = await import('../src/lib/library-entries');
+  const DE = await import('../src/lib/dynamic-expand');
+  const TH = await import('../src/lib/library-thumbs');
+  const { glowField } = await import('../src/lib/dynamic-patterns');
+  // U1 全库动态条目展开无误（冲突/环/悬空全指出来）
+  const failures: string[] = [];
+  let dynCount = 0;
+  for (const e of LE.BUILTIN_ENTRIES) {
+    if (e.kind !== 'dynamic') continue;
+    dynCount++;
+    const r = DE.expandDynamicEntry(LE.BUILTIN_INDEX, e.id, e.latest);
+    if (!r.params) failures.push(`${e.id}: ${r.errors.join('；')}`);
+  }
+  check(`U1 全库 ${dynCount} 个动态条目展开成功`, failures.length === 0);
+  if (failures.length > 0) console.log('   展开失败明细:', failures.join(' | '));
+  const ex = (id: string) => DE.expandDynamicEntry(LE.BUILTIN_INDEX, id, 1).params!;
+  // U2 配合边折叠到位
+  check('U2 燃烧：调制边折出 linkToDeform 0.5 且焰形+火星色都在',
+    ex('dyn-burning').linkToDeform === 0.5
+    && ex('dyn-burning').glowShape === 'flame'
+    && ex('dyn-burning').color === '#ffb347');
+  check('U2 熔岩沸腾（父套父）：脉冲形变+灰烬+余烬辉光齐备',
+    ex('dyn-magma').deformHz === 3
+    && ex('dyn-magma').color === '#9a9a9a'
+    && ex('dyn-magma').glowColor === '#ff7a33'
+    && ex('dyn-magma').linkToDeform === 0.5);
+  check('U2 星尘环绕：相位边把星芒相位对齐到胀缩基准 +0.25',
+    Math.abs(ex('dyn-stardust').glowPhase - 0.25) < 1e-9
+    && ex('dyn-stardust').linkToDeform === 0.6);
+  check('U2 暴雨：雨色跟寒色调（followParams 裁决）',
+    ex('dyn-rainstorm').color === '#a8d8ff' && ex('dyn-rainstorm').glowColor === '#9fd8ff');
+  check('U2 染烟：烟色跟暖色调', ex('dyn-dyed-smoke').color === '#ffb37a');
+  // U3 发光叶子在示例精灵上真出场（取色靶区命中）
+  const glowLeaves = ['dyn-glow-flame', 'dyn-glow-ember', 'dyn-glow-frost', 'dyn-glow-star', 'dyn-glow-toxic', 'dyn-glow-breath'];
+  const missed = glowLeaves.filter((id) => !glowField(ex(id), TH.sampleSpriteGrid()));
+  check('U3 全部发光叶子的取色在示例精灵上命中（定格图真发光）', missed.length === 0);
+  if (missed.length > 0) console.log('   未命中:', missed.join(','));
+  // U4 定格图发光真验证：关发光后覆盖严格变小（强于旧 T3 口径）
+  const onPoster = TH.dynamicPosterRGBA(ex('dyn-glow-ember'));
+  const offPoster = TH.dynamicPosterRGBA({ ...ex('dyn-glow-ember'), glowEnabled: false });
+  const cov = (img: { data: Uint8ClampedArray }) => {
+    let n = 0;
+    for (let i = 3; i < img.data.length; i += 4) if (img.data[i]! > 0) n++;
+    return n;
+  };
+  check('U4 余烬辉光定格图覆盖 > 同参数关发光版', cov(onPoster) > cov(offPoster));
+  // U5 父模式数量与清单
+  const parentIds = LE.BUILTIN_ENTRIES.filter((e) => {
+    const d = e.versions[e.latest];
+    return e.kind === 'dynamic' && 'kind' in d && d.kind === 'parent';
+  }).map((e) => e.id);
+  check('U5 内置父模式 ≥10 个（含样板与嵌套）', parentIds.length >= 10);
+}
+
+// ============ V 组：静态库扩充（构件子图 + 组合父模板） ============
+{
+  const { PATTERN_TEMPLATES: PT, instantiatePattern: instP } = await import('../src/lib/proc-runtime/pattern-templates');
+  const { expandSurfaceGraph: expS, subgraphLibraryOf: subOf, graphHasRefs: hasRefs } = await import('../src/lib/proc-runtime/graph-expand');
+  const { createSurfaceBaker: csb } = await import('../src/lib/proc-runtime/bake-src');
+  const LE = await import('../src/lib/library-entries');
+  const bakerV = csb();
+  const shapeV = { kind: 'rect', size: [36, 36] as [number, number], roundness: 0.1 };
+  const libV = subOf(LE.surfaceLibEntriesOf(LE.allLibraryEntries()));
+  const bakeOf = (tplId: string) => {
+    const t = PT.find((x) => x.id === tplId)!;
+    let g = instP(t);
+    if (hasRefs(g)) g = expS(g, libV).graph;
+    return Buffer.from(bakerV.compileTileDAG(shapeV as never, g as never, 0).data);
+  };
+  const nonBlank = (b: Buffer) => {
+    const s = new Set<number>();
+    for (let i = 0; i < b.length; i += 4) s.add(b[i]!);
+    return s.size > 3;
+  };
+  // V1 全部表面模板（含新构件/父模板）烘焙非空且确定
+  const badBake: string[] = [];
+  for (const t of PT) {
+    const b1 = bakeOf(t.id);
+    const b2 = bakeOf(t.id);
+    if (!nonBlank(b1) || !b1.equals(b2)) badBake.push(t.id);
+  }
+  check(`V1 全 ${PT.length} 个表面模板烘焙非空+确定`, badBake.length === 0);
+  if (badBake.length > 0) console.log('   烘焙异常:', badBake.join(','));
+  // V2 都市迷彩：同一构件两实例（不同种子）展开后两份 blob 节点
+  const camo = PT.find((x) => x.id === 'camo-urban')!;
+  const camoExp = expS(instP(camo), libV);
+  const blobNodes = camoExp.graph.nodes.filter((nd) => nd.op === 'blob');
+  check('V2 同构件双实例展开（种子不同→两份节点，不合并）',
+    blobNodes.length === 2 && camoExp.warnings.length === 0);
+  // V3 组合 ≠ 任一构件单独（装甲板 ≠ 铆钉阵/斑团）
+  check('V3 装甲钢板烘焙区别于其构件',
+    !bakeOf('armor').equals(bakeOf('part-rivets')) && !bakeOf('armor').equals(bakeOf('part-blob')));
+  // V4 菱格的 rotate 生效：与未旋转的同构图烘焙不同
+  const dia = PT.find((x) => x.id === 'part-diamond')!;
+  const diaFlat = JSON.parse(JSON.stringify(instP(dia))) as typeof dia.graph;
+  diaFlat.nodes = diaFlat.nodes.filter((nd) => nd.id !== 'rot');
+  diaFlat.writes = diaFlat.writes.map((wr) => (wr.from === 'rot' ? { ...wr, from: 'rep' } : wr));
+  const diaNoRot = Buffer.from(bakerV.compileTileDAG(shapeV as never, diaFlat as never, 0).data);
+  check('V4 菱格旋转生效（与未旋转版烘焙不同）', !bakeOf('part-diamond').equals(diaNoRot));
+  // V5 缩略图路径：组合模板经 surfaceThumbRGBA（内部展开）非空
+  const TH = await import('../src/lib/library-thumbs');
+  const armorEntry = LE.BUILTIN_ENTRIES.find((e) => e.id === 'armor')!;
+  const thumb = TH.surfaceThumbRGBA(armorEntry.versions[1] as import('../src/lib/library-entries').SurfaceEntryDef);
+  let thumbAlpha = 0;
+  if (thumb) for (let i = 3; i < thumb.data.length; i += 4) if (thumb.data[i]! > 0) thumbAlpha++;
+  check('V5 装甲钢板缩略图（ref 展开后烘焙）非空', !!thumb && thumbAlpha > 300);
+}
+// ---------- X) 裁剪面（main 侧，合并时由 U 改名避撞）：convert 透传 + 模板平面合成 ----------
 {
   const appU = createDefaultParametricAppearance();
   const handU = makeNode('handU', '持剑手', 'hand');
@@ -1384,7 +1981,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   } as unknown as Character;
   const pkgU = convertCharacterToRuntimePackage(chU, undefined, { frameRate: 8 });
   const bladePart = pkgU.parts.find((p) => p.key === 'blade');
-  check('U1 裁剪面进包（锚点/角度/偏移直译为平面系数）',
+  check('X1 裁剪面进包（锚点/角度/偏移直译为平面系数）',
     !!bladePart?.clip && bladePart.clip.by === 'hand'
       && Math.abs(bladePart.clip.a) < 1e-9 && Math.abs(bladePart.clip.b - 1) < 1e-9
       && Math.abs(bladePart.clip.c + 3) < 1e-9,
@@ -1397,7 +1994,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     nodes: { handU, bladeBad, noSlotNode: noSlot },
   } as unknown as Character;
   const pkgU2 = convertCharacterToRuntimePackage(chU2, undefined, { frameRate: 8 });
-  check('U2 锚点不是部件槽位 → 点名警告且不带裁剪',
+  check('X2 锚点不是部件槽位 → 点名警告且不带裁剪',
     pkgU2.warnings.some((w) => w.includes('裁剪面'))
       && !pkgU2.parts.find((p) => p.key === 'blade')?.clip,
     pkgU2.warnings.filter((w) => w.includes('裁剪')).join('；'));
@@ -1408,7 +2005,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     const { readFileSync } = await import('node:fs');
     const tplSrc = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
     const start = tplSrc.indexOf('function clipPlaneForPart');
-    check('U3 模板含裁剪面合成函数', start >= 0);
+    check('X3 模板含裁剪面合成函数', start >= 0);
     if (start >= 0) {
       let depth = 0, end = start;
       for (let i = tplSrc.indexOf('{', start); i < tplSrc.length; i++) {
@@ -1441,9 +2038,9 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
           if (lhs !== rhs) { consistent = false; break; }
         }
       }
-      check('U4 平面合成与锚点空间定义逐点一致（300 组随机位姿×8 点，含镜像）', consistent);
+      check('X4 平面合成与锚点空间定义逐点一致（300 组随机位姿×8 点，含镜像）', consistent);
     }
-    check('U5 实例布局 58 float + 片元裁剪 discard + vClip 通道',
+    check('X5 实例布局 58 float + 片元裁剪 discard + vClip 通道',
       tplSrc.includes('const INSTANCE_FLOATS = 58')
         && tplSrc.includes('vClip.x * gfv.x + vClip.y * gfv.y + vClip.z < 0.0) discard')
         && tplSrc.includes('buf[o + 7] = el.clip ? el.clip[2] : 1')

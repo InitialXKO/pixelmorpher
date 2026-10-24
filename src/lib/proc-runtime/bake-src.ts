@@ -198,6 +198,7 @@ function compileSurfaceGraph(graph, shape) {
     var base = env.base, cell = env.cell || defaultCell();
     switch (node.op) {
       case 'const': return P(node, 'v', 0);
+      case 'ref': return 0; // 子图引用：烘焙期已展开（graph-expand），漏网的按零场兜底
       case 'inside': return base.inside ? 1 : 0;
       case 'dist': return base.sd;
       case 'h': return base.h;

@@ -6,6 +6,8 @@
 // 差异：模拟在瓦片空间跑（轮廓从瓦片 R 通道占据读，坐标 =
 // 瓦片像素相对 (cx, cy)、y 向下）——模板里的瓦片已含镜像
 // 几何，故无镜像翻转（产品侧画布是预翻转绘制才需要翻 x）。
+// 种子与产品同源：seedKey（部件键）+ 实例 id；帧量化基数由
+// 调用方传包帧率（EMBEDDED.frameRate），与编辑器同口径。
 // ============================================================
 
 export const DYNAMIC_SRC = `
@@ -28,6 +30,16 @@ function dynDeformAt(params, tSec) {
     sx: 1 + (params.stretchX - 1) * p,
     sy: 1 + (params.squashY - 1) * p,
     amount: p,
+  };
+}
+function dynFollowDelta(now, lag, amount, rotate) {
+  const k = Math.max(0, Math.min(1, amount));
+  const raw = lag.a - now.a;
+  const da = Math.atan2(Math.sin(raw), Math.cos(raw));
+  return {
+    dx: (lag.x - now.x) * k,
+    dy: (lag.y - now.y) * k,
+    da: rotate ? da * k : 0,
   };
 }
 function dynOccAt(tile, x, y) {
@@ -76,7 +88,7 @@ function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
   const contour = dynContour(tile);
   const pts = dynSourcePoints(params, tile, contour);
   if (pts.length === 0) return [];
-  const seedBase = dynSeedOf(seedKey + '|' + inst.slot);
+  const seedBase = dynSeedOf(seedKey + '|' + (inst.id || inst.slot));
   const lifeFrames = params.life * frameRate;
   const firstBirth = Math.max(0, Math.ceil(frame - lifeFrames));
   const lastBirth = Math.floor(frame);
@@ -131,7 +143,8 @@ export function createDynamicRuntime(): {
   dynDeformAt: (params: never, t: number) => { sx: number; sy: number; amount: number };
   dynContour: (tile: never) => { x: number; y: number; nx: number; ny: number }[];
   dynSimulate: (inst: never, tile: never, frame: number, frameRate: number, layer: string, seedKey: string) => { x: number; y: number; size: number; alpha: number; color: string }[];
+  dynFollowDelta: (now: never, lag: never, amount: number, rotate: boolean) => { dx: number; dy: number; da: number };
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynFollowDelta };`);
   return factory() as never;
 }

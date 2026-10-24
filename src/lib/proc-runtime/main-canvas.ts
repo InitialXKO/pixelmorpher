@@ -9,10 +9,22 @@
 // 方向口径：东向为基，西半向（NW/W/SW = 3/4/5）走渲染器 mirror。
 // ============================================================
 
-import { pxToSub, subToPx, type ParametricAppearance, type PixelGrid, type Sprite } from '../unified-types';
+import { pxToSub, subToPx, type ParametricAppearance, type PixelGrid, type Sprite, type SurfaceGraph } from '../unified-types';
 import { createSurfaceBaker } from './bake-src';
 import { PALETTES } from './palettes';
 import { hashPixelGrid } from '../engine/render-cache';
+import { expandSurfaceGraph, graphHasRefs, subgraphLibraryOf } from './graph-expand';
+import { allLibraryEntries, surfaceLibEntriesOf } from '../library-entries';
+
+/** 烘焙用图：含子图引用（ref）时按当前模式库（内置 + 我的模板）
+ * 展开成平图；警告不在此报——进包路径由 convert 逐条点名，
+ * 编辑器侧以 ref 节点自身的目标缺失提示为准。 */
+function bakeGraphOf(app: ParametricAppearance): SurfaceGraph | undefined {
+  const g = app.surfaceGraph;
+  if (!g || !graphHasRefs(g)) return g;
+  const lib = subgraphLibraryOf(surfaceLibEntriesOf(allLibraryEntries()));
+  return expandSurfaceGraph(g, lib).graph;
+}
 
 let bakerSingleton: ReturnType<typeof createSurfaceBaker> | null = null;
 function baker() {
@@ -146,8 +158,9 @@ export function shadeTileStatic(tile: Tile, app: ParametricAppearance, seed: num
 const spriteCache = new Map<string, Sprite>();
 
 function cacheKey(app: ParametricAppearance): string {
-  const g = app.surfaceGraph
-    ? { ...app.surfaceGraph, ui: undefined }
+  const baked = bakeGraphOf(app);
+  const g = baked
+    ? { ...baked, ui: undefined }
     : undefined;
   return JSON.stringify({ ...app, surfaceGraph: g });
 }
@@ -301,8 +314,9 @@ function buildGenerateSprite(app: ParametricAppearance, seedKey: string): Sprite
   if (hit) return hit;
   try {
     const shape = runtimeShape(app);
-    const tile = app.surfaceGraph
-      ? baker().compileTileDAG(shape, app.surfaceGraph, haloOf(app))
+    const bakeGraph = bakeGraphOf(app);
+    const tile = bakeGraph
+      ? baker().compileTileDAG(shape, bakeGraph, haloOf(app))
       : baker().compileTileLayers(shape, app.surface, haloOf(app));
     const seed = seedFromString(seedKey);
     const data = shadeTileStatic(tile, app, seed);
@@ -349,10 +363,11 @@ function buildCompositeSprite(
       : [rw / 2, rh / 2];
     const raster = { w: rw, h: rh, plugX: plugPx[0], plugY: plugPx[1], solid };
     const halo = haloOf(app);
-    const tile = app.surfaceGraph
+    const bakeGraph = bakeGraphOf(app);
+    const tile = bakeGraph
       ? baker().compileTileDAGRaster(
           raster,
-          mode === 'overlay' ? filterGraphForOverlay(app.surfaceGraph) : app.surfaceGraph,
+          mode === 'overlay' ? filterGraphForOverlay(bakeGraph) : bakeGraph,
           halo,
         )
       : baker().compileTileLayersRaster(
@@ -368,8 +383,8 @@ function buildCompositeSprite(
     // 像素）：用未过滤程序再烘一遍，只把非占据像素的 B 通道（外延
     // 写出编码）并进来。
     if (mode === 'overlay' && halo > 0) {
-      const full = app.surfaceGraph
-        ? baker().compileTileDAGRaster(raster, app.surfaceGraph, halo)
+      const full = bakeGraph
+        ? baker().compileTileDAGRaster(raster, bakeGraph, halo)
         : baker().compileTileLayersRaster(raster, app.surface, halo);
       for (let p = 0; p < tile.w * tile.h; p++) {
         if (tile.data[p * 4]! >= 128) tile.data[p * 4 + 2] = full.data[p * 4 + 2]!;

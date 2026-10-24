@@ -21,6 +21,7 @@ import { SURFACE_PRESETS, SURFACE_PRESET_NAMES, createDefaultParametricAppearanc
 import PolyContourEditor from './PolyContourEditor';
 import { PATTERN_TEMPLATES, instantiatePattern, type PatternParamDef } from '@/lib/proc-runtime/pattern-templates';
 import SurfaceGraphEditor from './SurfaceGraphEditor';
+import PatternLibraryPanel from './PatternLibraryPanel';
 import {
   loadUserPatterns, saveUserPattern, deleteUserPattern, renameUserPattern,
   findPatternTemplate, isUserPattern, deriveParamDefs, type UserPatternTemplate,
@@ -41,6 +42,7 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
   const spritesRecord = useProjectStore((s) => s.sprites);
   const [userPatterns, setUserPatterns] = useState<UserPatternTemplate[]>(() => loadUserPatterns());
   const [editorOpen, setEditorOpen] = useState(false);
+  const [libPanelOpen, setLibPanelOpen] = useState(false);
   const [customDefs, setCustomDefs] = useState<PatternParamDef[] | null>(null);
   const refreshUserPatterns = () => setUserPatterns(loadUserPatterns());
   if (!character) return null;
@@ -116,6 +118,10 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
               Object.values(character.nodes).find((n) => (n.slot?.slotKey ?? n.id) === slotKey)?.dynamicPatterns,
               piece?.dynamicPatterns,
             )}
+            followSourceOptions={[...new Map(Object.values(character.nodes)
+              .filter((n) => n.slot?.slotKey)
+              .map((n) => [n.slot!.slotKey as string, n.name] as const)).entries()]
+              .map(([key, label]) => ({ key, label }))}
           />
         </div>
       </div>
@@ -230,6 +236,10 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
                     onClick={() => { setCustomDefs(editorDefs); setEditorOpen(true); }}>
                     打开模式编辑器
                   </Button>
+                  <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5 text-violet-300"
+                    onClick={() => setLibPanelOpen(true)}>
+                    模式库管理
+                  </Button>
                   <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5"
                     onClick={() => {
                       const name = window.prompt('存为我的模板，名称', app.surfaceName ?? '我的模式');
@@ -305,6 +315,11 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
                 空白新建模式（打开编辑器）
               </Button>
             )}
+            <Button size="sm" variant="ghost" className="mt-1 ml-1 h-5 text-[9px] px-1.5 text-violet-300"
+              onClick={() => setLibPanelOpen(true)}>
+              模式库管理
+            </Button>
+            {libPanelOpen && <PatternLibraryPanel onClose={() => setLibPanelOpen(false)} />}
             {editorOpen && app.surfaceGraph && graphShape && (
               <SurfaceGraphEditor
                 title={app.surfaceName ?? '自定义模式'}

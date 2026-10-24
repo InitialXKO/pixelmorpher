@@ -18,8 +18,12 @@ import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
-import { glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
+import { followDeltaAt, glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
+import { BUILTIN_ENTRIES, libraryIndexOf, surfaceLibEntriesOf } from '../library-entries';
+import { expandDynamicEntry } from '../dynamic-expand';
 import { createDefaultParametricAppearance } from './surfaces';
+import { expandSurfaceGraph, graphHasRefs, subgraphLibraryOf } from './graph-expand';
+import { PATTERN_TEMPLATES, type PatternTemplate } from './pattern-templates';
 import { PALETTES } from './palettes';
 import {
   translatePerformanceGraph, translateBehaviorGraph, simplify,
@@ -49,10 +53,22 @@ export interface RuntimePartBase {
   baseSprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][] };
 }
 
-/** 运行时动态实例（双挂载解析后，只留效果位 + 参数） */
+/** 运行时动态实例（双挂载解析后：实例 id + 效果位 + 参数）。
+ * id 必须保留：粒子模拟的随机种子 = f(部件键, 实例 id)，与编辑器
+ * 同源——丢了 id 改用效果位做种子，两边粒子花纹就不是同一批。 */
 export interface RuntimeDynamicInstance {
+  id: string;
   slot: string;
   params: DynamicPatternParams;
+  /** 追随段烘焙增量曲线（u = 全程窗进度 0..1 → 增量；运行时空间：
+   * dx/dy 为 px、da 为弧度）。导出时由源部件的全程窗轨道样本按
+   * 「滞后位姿 − 当前位姿 × 强度」逐帧算好——运行时只采样本曲线，
+   * 不回头取样源部件（与编辑器的轨道位姿取样同源同值）。 */
+  followCurve?: {
+    dx?: [number, number][];
+    dy?: [number, number][];
+    da?: [number, number][];
+  };
 }
 
 /**
@@ -115,6 +131,8 @@ export interface RuntimePart {
 export interface ProcRuntimePackage {
   format: 'procedural-pixel-runtime-1';
   characterName: string;
+  /** 工程帧率：粒子模拟的帧量化基数（出生帧/生命帧与编辑器同口径） */
+  frameRate: number;
   palettes: Record<string, number[]>;
   parts: RuntimePart[];
   costumes: Record<string, { label: string; [slotKey: string]: unknown }>;
@@ -375,13 +393,27 @@ function glowEntryFor(
   return { w, h, padX, padY, space: rep.space, data: packBytesBase64(bytes), stamps };
 }
 
-/** 双挂载解析 → 运行时动态实例（节点为底、服装件同位替换/压制） */
+/** 双挂载解析 → 运行时动态实例（节点为底、服装件同位替换/压制）。
+ * 带库引用的实例按钉版本权威重展开（快照只作展开失败时的回退，
+ * 失败点名不静默）。 */
 function dynFor(
   nodeDyn: Parameters<typeof resolveDynamicPatterns>[0],
   pieceDyn: Parameters<typeof resolveDynamicPatterns>[1],
+  dynLib?: import('../library-entries').LibraryIndex,
+  warnings?: string[],
 ): RuntimeDynamicInstance[] | undefined {
   const r = resolveDynamicPatterns(nodeDyn, pieceDyn);
-  return r.length ? r.map((x) => ({ slot: x.instance.slot, params: x.instance.params })) : undefined;
+  if (!r.length) return undefined;
+  return r.map((x) => {
+    let params = x.instance.params;
+    const ref = x.instance.patternRef;
+    if (ref && dynLib) {
+      const ex = expandDynamicEntry(dynLib, ref.id, ref.version, x.instance.overrides);
+      if (ex.params) params = ex.params;
+      else warnings?.push(`模式库：动态实例（效果位 ${x.instance.slot}）引用 ${ref.id}@${ref.version} 展开失败，沿用快照——${ex.errors.join('；')}`);
+    }
+    return { id: x.instance.id, slot: x.instance.slot, params };
+  });
 }
 
 function appearanceToBase(
@@ -389,6 +421,7 @@ function appearanceToBase(
   pivot: [number, number],
   restRotDeg: number,
   baseSprite?: RuntimePartBase['baseSprite'],
+  graphOverride?: ParametricAppearance['surfaceGraph'],
 ): RuntimePartBase {
   const mode = app.composite ?? 'generate';
   return {
@@ -405,7 +438,7 @@ function appearanceToBase(
     rimI: app.rimI, glintI: app.glintI,
     surfaceName: app.surfaceName,
     surface: app.surface,
-    surfaceGraph: app.surfaceGraph,
+    surfaceGraph: graphOverride ?? app.surfaceGraph,
     composite: mode === 'generate' ? undefined : mode,
     haloWidth: app.haloWidth ? Math.max(0, Math.min(8, Math.floor(app.haloWidth))) : undefined,
     baseSprite,
@@ -534,9 +567,24 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[] },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[] },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
+  // 子图库：调用方传全库快照；给了统一条目库时按版本展开成
+  // id@版本 条目（钉版本纪律），否则走平铺模板（同 SpriteTable
+  // 由调用方传工程级表的先例，convert 不读存储）。
+  const subLib = opts?.libraryEntries
+    ? subgraphLibraryOf(surfaceLibEntriesOf(opts.libraryEntries))
+    : subgraphLibraryOf(opts?.patternLibrary ?? PATTERN_TEMPLATES);
+  // 动态条目索引：实例钉版本引用按此权威重展开（缺省只认内置）
+  const dynLib = libraryIndexOf(opts?.libraryEntries ?? BUILTIN_ENTRIES);
+  /** 进包图：含 ref 时展开成平图（包自包含，运行时模板不认 ref），警告点名 */
+  const expandPkg = (g: ParametricAppearance['surfaceGraph'], where: string) => {
+    if (!g || !graphHasRefs(g)) return g;
+    const r = expandSurfaceGraph(g, subLib);
+    for (const w of r.warnings) warnings.push(`${where}：${w}`);
+    return r.graph;
+  };
   // 精灵引用解析表：角色自带表 + 工程级全局表（全局优先），与主画布同口径
   const spriteTable: SpriteTable = { ...(character.sprites ?? {}), ...(externalSprites ?? {}) };
   // 工程帧率：一切帧↔秒换算的唯一来源（调用方传入；缺省 12 仅兜底）
@@ -584,13 +632,14 @@ export function convertCharacterToRuntimePackage(
     if ((baseApp.composite ?? 'generate') !== 'generate' && !baseSprite) {
       warnings.push(`槽位 ${slotKey} 合成方式为 ${baseApp.composite} 但东向无精灵，运行时按独立生成处理`);
     }
-    const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns);
+    const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
     parts.push({
       key: slotKey,
       drawLayer: node.drawLayer,
       sortOrder: node.zIndex,
       costumeKeys: [slotKey],
-      base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0, baseSprite),
+      base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0, baseSprite,
+        expandPkg(baseApp.surfaceGraph, `子图（槽位 ${slotKey}）`)),
       variants: { [rootDir]: {} },
       dynamic: dyn,
       glow: glowEntryFor(character, slotKey, dyn, activeSet?.id, externalSprites, warnings),
@@ -616,7 +665,7 @@ export function convertCharacterToRuntimePackage(
     const pivot = pivotOf(node.id);
     const base = appearanceToBase(createDefaultParametricAppearance(), pivot, w?.worldAngle ?? 0);
     base.size = [sg.w, sg.h];
-    const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns);
+    const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
     parts.push({
       key: slotKey,
       drawLayer: node.drawLayer,
@@ -655,7 +704,7 @@ export function convertCharacterToRuntimePackage(
       const app = piece?.parametric;
       const nodeId = slotNode.get(slotKey);
       const node = nodeId ? character.nodes[nodeId] : undefined;
-      const dyn = dynFor(node?.dynamicPatterns, piece?.dynamicPatterns);
+      const dyn = dynFor(node?.dynamicPatterns, piece?.dynamicPatterns, dynLib, warnings);
       if (dyn) dynMap[slotKey] = dyn;
       const ge = cs.id === activeSet?.id
         ? parts.find((p) => p.key === slotKey)?.glow
@@ -664,12 +713,13 @@ export function convertCharacterToRuntimePackage(
       if (!app) { entry[slotKey] = null; continue; }
       const w = nodeId ? worlds.get(nodeId) : undefined;
       const pivot = pivotOf(nodeId);
-      entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0, baseSpriteFor(app, piece, character, slotKey, spriteTable, rootDir as DirectionIndex));
+      entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0, baseSpriteFor(app, piece, character, slotKey, spriteTable, rootDir as DirectionIndex),
+        expandPkg(app.surfaceGraph, `子图（槽位 ${slotKey}，服装集「${cs.name}」）`));
     }
     for (const slotKey of spriteSlots) {
       const nodeId = slotNode.get(slotKey);
       const node = nodeId ? character.nodes[nodeId] : undefined;
-      const dyn = dynFor(node?.dynamicPatterns, cs.pieces[slotKey]?.dynamicPatterns);
+      const dyn = dynFor(node?.dynamicPatterns, cs.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
       if (dyn) dynMap[slotKey] = dyn;
       const ge = cs.id === activeSet?.id
         ? parts.find((p) => p.key === slotKey)?.glow
@@ -940,7 +990,8 @@ export function convertCharacterToRuntimePackage(
           }
         }
       }
-      const full = curvesForWindow(sampleWindow(0, totalFrames), totalFrames, 't', true);
+      const fullSamples = sampleWindow(0, totalFrames);
+      const full = curvesForWindow(fullSamples, totalFrames, 't', true);
       if (full.graphNodes.length > 0) {
         performances.push({
           id: 'tracks',
@@ -953,6 +1004,58 @@ export function convertCharacterToRuntimePackage(
           mask: full.mask,
           graph: { context: 'performance', nodes: full.graphNodes },
         });
+      }
+      // ---- 追随段：增量曲线烘焙 ----
+      // 源部件的全程窗轨道样本（运行时空间绝对位姿）逐帧算「滞后位姿 −
+      // 当前位姿 × 强度」（followDeltaAt，与编辑器实时取样同一公式），
+      // 烘成增量曲线挂到每个启用追随的动态实例上——默认集 parts 与各
+      // 服装集 __dynamic 全覆盖，同源同参的实例共享一份曲线对象。
+      {
+        const bags: { inst: RuntimeDynamicInstance; slotKey: string }[] = [];
+        for (const p of parts) for (const d of p.dynamic ?? []) bags.push({ inst: d, slotKey: p.key });
+        for (const cs of Object.values(costumes)) {
+          const dm = (cs as { __dynamic?: Record<string, RuntimeDynamicInstance[]> }).__dynamic;
+          if (dm) for (const [slotKey, arr] of Object.entries(dm)) {
+            for (const d of arr) bags.push({ inst: d, slotKey });
+          }
+        }
+        const curveCache = new Map<string, RuntimeDynamicInstance['followCurve']>();
+        for (const { inst, slotKey } of bags) {
+          const fp = inst.params;
+          if (!fp.followEnabled) continue;
+          if (!fp.followSource) {
+            warnings.push(`追随：部件 ${slotKey} 的动态实例已启用追随但未选源部件，未烘焙`);
+            continue;
+          }
+          const srcNode = Object.values(character.nodes).find(
+            (n) => (n.slot?.slotKey ?? n.id) === fp.followSource);
+          const srcSamples = srcNode ? fullSamples.get(srcNode.id) : undefined;
+          if (!srcSamples) {
+            warnings.push(`追随：部件 ${slotKey} 的源部件「${fp.followSource}」不存在，未烘焙`);
+            continue;
+          }
+          const delayFrames = Math.round(fp.followDelaySec * frameRate);
+          const cacheKey = `${fp.followSource}|${delayFrames}|${fp.followAmount}|${fp.followRotate}`;
+          let curve = curveCache.get(cacheKey);
+          if (curve === undefined) {
+            const dxPts: [number, number][] = [], dyPts: [number, number][] = [], daPts: [number, number][] = [];
+            for (let f = 0; f <= totalFrames; f++) {
+              const cur = srcSamples[f];
+              const lag = srcSamples[Math.max(0, f - delayFrames)];
+              if (!cur || !lag) continue;
+              const d = followDeltaAt(cur, lag, fp.followAmount, fp.followRotate);
+              dxPts.push([f / totalFrames, d.dx]);
+              dyPts.push([f / totalFrames, d.dy]);
+              daPts.push([f / totalFrames, d.da]);
+            }
+            const keep = (pts: [number, number][], eps: number) =>
+              pts.every(([, v]) => Math.abs(v) < 1e-4) ? undefined : simplify(pts, eps);
+            const dx = keep(dxPts, 0.15), dy = keep(dyPts, 0.15), da = keep(daPts, 0.01);
+            curve = dx || dy || da ? { dx, dy, da } : undefined;
+            curveCache.set(cacheKey, curve);
+          }
+          if (curve) inst.followCurve = curve;
+        }
       }
       // 片段窗 → 段表演（按窗起点排序，状态机/宿主按 id 或名触发）
       let ci = 0;
@@ -1021,6 +1124,7 @@ export function convertCharacterToRuntimePackage(
   return {
     format: 'procedural-pixel-runtime-1',
     characterName: character.name,
+    frameRate: projectFpsTop,
     palettes: PALETTES,
     parts,
     costumes,

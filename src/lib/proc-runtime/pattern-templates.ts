@@ -22,6 +22,9 @@ export interface PatternTemplate {
   cluster: string;
   params: PatternParamDef[];
   graph: SurfaceGraph;
+  /** 子图命名输出（输出名 → 图内节点 id）：被 ref 算子引用时用；
+   * 缺省 main = 首条写出的 from（见 graph-expand） */
+  outputs?: Record<string, string>;
 }
 
 type N = SurfaceGraphNode;
@@ -42,6 +45,7 @@ const baseIn = (slot: number): N[] => [n('in', 'inside')];
 export const PATTERN_TEMPLATES: PatternTemplate[] = [
   {
     id: 'scales', name: '鳞片', cluster: '重复',
+    outputs: { main: 'rep', shadow: 'shadowG', edge: 'edge' },
     params: [
       P('cw', '鳞宽', 6, 18, 1, 10), P('ch', '鳞高', 5, 14, 1, 8),
       P('gap', '鳞间隙', 0, 1.5, 0.1, 0.4), P('shadow', '压盖阴影', 0, 1, 0.05, 0.6),
@@ -493,6 +497,263 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       w('in', 1, { at: 0.5 }),
       w('echoed', 3, { at: 0 }),
       w('ring', 5, { at: 0.4 }),
+    ]),
+  },
+  // ==========================================================
+  // 构件子图（cluster 构件）：小而专的场源，供父模板以 ref
+  // 组合（方向甲子图实例化）。每件声明 outputs.main 指向其
+  // 场节点；单独应用时也有可读的写出。
+  // ==========================================================
+  {
+    id: 'part-rivets', name: '构件·铆钉阵', cluster: '构件',
+    outputs: { main: 'rep' },
+    params: [P('cw', '钉距', 10, 30, 1, 16), P('gap', '钉间隙', 0, 9, 0.1, 5.5)],
+    graph: graph([
+      ...baseIn(2),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 21 }),
+      n('cs', 'cellShape', undefined, { kind: 'circle', gap: '$gap' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rep', 0, { bump: { hi: 5, mid: 3, lo: 2 } }),
+    ]),
+  },
+  {
+    id: 'part-holes', name: '构件·孔阵', cluster: '构件',
+    outputs: { main: 'rep' },
+    params: [P('cw', '孔距', 8, 24, 1, 13), P('gap', '孔间隙', 0, 8, 0.1, 4.5)],
+    graph: graph([
+      ...baseIn(2),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 23 }),
+      n('cs', 'cellShape', undefined, { kind: 'circle', gap: '$gap' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rep', 0, { bump: { hi: 2, mid: 3, lo: 5 } }),
+    ]),
+  },
+  {
+    id: 'part-cracks', name: '构件·裂纹网', cluster: '构件',
+    outputs: { main: 'band' },
+    params: [P('f', '胞大小', 3, 16, 0.5, 7), P('w', '裂宽', 0.4, 3, 0.1, 1.1)],
+    graph: graph([
+      ...baseIn(2),
+      n('vor', 'voronoi', undefined, { f: '$f', seed: 22, mode: 'edge' }),
+      n('band', 'levelBand', { in: 'vor' }, { level: 0, w: '$w' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('band', 4, { at: 0.35 }),
+    ]),
+  },
+  {
+    id: 'part-grain', name: '构件·颗粒噪点', cluster: '构件',
+    outputs: { main: 'nz' },
+    params: [P('f', '频率', 0.2, 1.2, 0.05, 0.65), P('seed', '种子', 0, 99, 1, 5)],
+    graph: graph([
+      ...baseIn(2),
+      n('nz', 'noise', undefined, { f: '$f', seed: '$seed' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('nz', 4, { at: 0.22 }),
+    ]),
+  },
+  {
+    id: 'part-wear', name: '构件·边缘磨损', cluster: '构件',
+    outputs: { main: 'wearF' },
+    params: [P('amt', '磨损量', 0, 1, 0.05, 0.6), P('w', '磨损带宽', 0.5, 5, 0.1, 2)],
+    graph: graph([
+      ...baseIn(2),
+      n('dist', 'dist'),
+      n('edge', 'levelBand', { in: 'dist' }, { level: 0, w: '$w' }),
+      n('nz', 'noise', undefined, { f: 0.35, seed: 17 }),
+      n('gate', 'threshold', { in: 'nz' }, { at: 0.45, soft: 0.1 }),
+      n('wear0', 'mul', { a: 'edge', b: 'gate' }),
+      n('wearF', 'mul', { a: 'wear0', b: 'amtK' }),
+      n('amtK', 'const', undefined, { v: '$amt' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('wearF', 4, { at: 0.35 }),
+    ]),
+  },
+  {
+    id: 'part-panel', name: '构件·面板分格', cluster: '构件',
+    outputs: { main: 'lines' },
+    params: [P('cw', '格宽', 14, 44, 1, 26)],
+    graph: graph([
+      ...baseIn(2),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 29 }),
+      n('cs', 'cellShape', undefined, { kind: 'rect', gap: 0.5 }),
+      n('lines', 'levelBand', { in: 'rep' }, { level: 0, w: 0.8 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rep', 3, { at: 0.1 }),
+      w('lines', 0, { at: 0.45 }),
+    ]),
+  },
+  {
+    id: 'part-diamond', name: '构件·菱格', cluster: '构件',
+    outputs: { main: 'rot' },
+    params: [P('cw', '格距', 10, 30, 1, 17)],
+    graph: graph([
+      ...baseIn(2),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 31 }),
+      n('cs', 'cellShape', undefined, { kind: 'rect', gap: 1.1 }),
+      n('rot', 'rotate', { in: 'rep' }, { deg: 45 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rot', 3, { at: 0 }),
+    ]),
+  },
+  {
+    id: 'part-blob', name: '构件·斑团', cluster: '构件',
+    outputs: { main: 'bl' },
+    params: [P('f', '团块频率', 0.03, 0.3, 0.01, 0.14), P('seed', '种子', 0, 99, 1, 41)],
+    graph: graph([
+      ...baseIn(2),
+      n('bl', 'blob', undefined, { f: '$f', seed: '$seed', contrast: 0.8 }),
+      n('blT', 'threshold', { in: 'bl' }, { at: 0.62, soft: 0.04 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('bl', 3, { at: 0 }),
+      w('blT', 5, { at: 0.3 }),
+    ]),
+  },
+  // ==========================================================
+  // 组合父模板：以 ref 拼构件 + 本地图合成（展开后自包含）
+  // ==========================================================
+  {
+    id: 'armor', name: '装甲钢板', cluster: '工业',
+    params: [
+      P('cw', '板宽', 18, 44, 2, 30), P('rust', '锈量', 0, 1, 0.05, 0.35),
+    ],
+    graph: graph([
+      ...baseIn(2),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 11 }),
+      n('cs', 'cellShape', undefined, { kind: 'bevelRect', gap: 0.7, bevel: 1.5 }),
+      n('riv', 'ref', undefined, { ref: 'part-rivets', cw: 18 }),
+      n('wear', 'ref', undefined, { ref: 'part-wear' }),
+      n('blob', 'ref', undefined, { ref: 'part-blob', seed: 7, f: 0.09 }),
+      n('rustT', 'threshold', { in: 'blob' }, { at: 0.6, soft: 0.08 }),
+      n('rustG', 'mul', { a: 'rustT', b: 'rustK' }),
+      n('rustK', 'const', undefined, { v: '$rust' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rep', 3, { at: 0 }),
+      w('riv', 0, { bump: { hi: 5, mid: 3, lo: 2 } }),
+      w('rustG', 1, { at: 0.3 }),
+      w('wear', 4, { at: 0.35 }),
+    ]),
+  },
+  {
+    id: 'mech-pro', name: '精密机甲板', cluster: '工业',
+    params: [P('grain', '颗粒感', 0, 0.4, 0.02, 0.16)],
+    graph: graph([
+      ...baseIn(2),
+      n('lines', 'ref', undefined, { ref: 'part-panel', cw: 24 }),
+      n('riv', 'ref', undefined, { ref: 'part-rivets', cw: 12, gap: 6.2 }),
+      n('gr', 'ref', undefined, { ref: 'part-grain', seed: 8 }),
+      n('grG', 'mul', { a: 'gr', b: 'grK' }),
+      n('grK', 'const', undefined, { v: '$grain' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('lines', 0, { at: 0.45 }),
+      w('riv', 5, { at: 0.35 }),
+      w('grG', 3, { at: 0.1 }),
+    ]),
+  },
+  {
+    id: 'stone-floor', name: '石板地砖', cluster: '建筑',
+    params: [P('cw', '砖宽', 22, 48, 2, 34), P('crack', '裂纹量', 0, 1, 0.05, 0.5)],
+    graph: graph([
+      ...baseIn(2),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 37 }),
+      n('cs', 'cellShape', undefined, { kind: 'bevelRect', gap: 1.2, bevel: 2.5 }),
+      n('cr', 'ref', undefined, { ref: 'part-cracks', f: 9 }),
+      n('crG', 'mul', { a: 'cr', b: 'crK' }),
+      n('crK', 'const', undefined, { v: '$crack' }),
+      n('gr', 'ref', undefined, { ref: 'part-grain', seed: 3, f: 0.4 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rep', 3, { at: 0 }),
+      w('crG', 4, { at: 0.3 }),
+      w('gr', 1, { at: 0.16 }),
+    ]),
+  },
+  {
+    id: 'quilt', name: '菱格软包', cluster: '织物',
+    params: [P('cw', '格距', 12, 30, 1, 19)],
+    graph: graph([
+      ...baseIn(2),
+      n('dia', 'ref', undefined, { ref: 'part-diamond', cw: '$cw' }),
+      n('gr', 'ref', undefined, { ref: 'part-grain', seed: 12, f: 0.5 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('dia', 3, { at: 0 }),
+      w('dia', 0, { bump: { hi: 4, mid: 3, lo: 2 } }),
+      w('gr', 4, { at: 0.12 }),
+    ]),
+  },
+  {
+    id: 'vent-pro', name: '重型散热板', cluster: '工业',
+    params: [P('cw', '孔距', 9, 20, 1, 13)],
+    graph: graph([
+      ...baseIn(2),
+      n('holes', 'ref', undefined, { ref: 'part-holes', cw: '$cw' }),
+      n('lines', 'ref', undefined, { ref: 'part-panel', cw: 30 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('holes', 3, { at: 0 }),
+      w('holes', 0, { bump: { hi: 2, mid: 3, lo: 5 } }),
+      w('lines', 4, { at: 0.3 }),
+    ]),
+  },
+  {
+    id: 'rune-stone', name: '符文石碑', cluster: '自然',
+    params: [P('r', '符环半径', 6, 18, 0.5, 11)],
+    graph: graph([
+      ...baseIn(2),
+      n('bl', 'blob', undefined, { f: 0.05, seed: 31, contrast: 1.2 }),
+      n('rock', 'remap', { in: 'bl' }, { lo: 0.25, hi: 0.75 }),
+      n('ring', 'focal', undefined, { mode: 'ring', r: '$r', w: 1.1 }),
+      n('cr', 'ref', undefined, { ref: 'part-cracks', f: 12, w: 0.7 }),
+      n('wear', 'ref', undefined, { ref: 'part-wear', amt: 0.4 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rock', 3, { at: 0 }),
+      w('ring', 5, { at: 0.4 }),
+      w('cr', 4, { at: 0.25 }),
+      w('wear', 1, { at: 0.2 }),
+    ]),
+  },
+  {
+    id: 'camo-urban', name: '都市迷彩', cluster: '自然',
+    params: [P('scale', '团块尺度', 0.5, 2, 0.1, 1)],
+    graph: graph([
+      ...baseIn(2),
+      n('b1', 'ref', undefined, { ref: 'part-blob', seed: 41, f: 0.09 }),
+      n('b2', 'ref', undefined, { ref: 'part-blob', seed: 97, f: 0.11 }),
+      n('t1', 'threshold', { in: 'b1' }, { at: 0.55, soft: 0.03 }),
+      n('t2', 'threshold', { in: 'b2' }, { at: 0.6, soft: 0.03 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('t1', 3, { at: 0 }),
+      w('t2', 1, { at: 0.15 }),
+    ]),
+  },
+  {
+    id: 'carbon', name: '碳纤维编织', cluster: '工业',
+    params: [P('f', '编织密度', 2, 9, 0.5, 4.5)],
+    graph: graph([
+      ...baseIn(2),
+      n('sa', 'stripes', undefined, { axis: 'x', f: '$f', duty: 0.82 }),
+      n('sb', 'stripes', undefined, { axis: 'y', f: '$f', duty: 0.82 }),
+      n('wv', 'weave', { a: 'sa', b: 'sb' }, { cw: '$f', ch: '$f' }),
+      n('gr', 'ref', undefined, { ref: 'part-grain', seed: 19, f: 0.9 }),
+      n('grG', 'mul', { a: 'gr', b: 'grK' }),
+      n('grK', 'const', undefined, { v: 0.1 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('wv', 3, { at: 0 }),
+      w('wv', 0, { bump: { hi: 4, mid: 3, lo: 2 } }),
+      w('grG', 4, { at: 0.2 }),
     ]),
   },
 ];
