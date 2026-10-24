@@ -90,7 +90,7 @@ export const NodeKeyframeModifierSubTrackLane = React.memo(function NodeKeyframe
                     backgroundColor: color,
                     opacity: mod.enabled ? 1 : 0.4,
                   }}
-                  title={`${label} @ 帧 ${pt.frame}（点击定位）`}
+                  title={`${label} @ 帧 ${pt.frame}（点击编辑参数）`}
                   onClick={(e) => {
                     e.stopPropagation();
                     onEditModifierParams(node.id, pt.frame, mod.id);

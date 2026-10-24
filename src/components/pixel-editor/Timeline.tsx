@@ -28,8 +28,9 @@ import useVirtualScroll from './timeline/useVirtualScroll';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { resolveTrackCostumeState } from '@/lib/unified-render';
-import type { CostumeStateKeyframe, ParamDriver, ParamDriverWaveform, ParamSource } from '@/lib/unified-types';
+import type { CostumeStateKeyframe, ModifierInstance, ParamDriver, ParamDriverWaveform, ParamSource } from '@/lib/unified-types';
 import { MODIFIER_DEFINITIONS } from '@/lib/types';
+import type { ModifierDefinition } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
 
 // ---- Main Timeline Component ----
@@ -111,6 +112,10 @@ export default function Timeline() {
   // 正在编辑的轨道参数驱动器（定位 = 角色 + 节点 + 轨点帧 + 修饰器 + 驱动器）
   const [editingDriver, setEditingDriver] = useState<{
     nodeId: string; frame: number; modifierId: string; driverId: string;
+  } | null>(null);
+  // 正在编辑的轨点修饰器参数（定位 = 角色 + 节点 + 轨点帧 + 修饰器）
+  const [editingModifier, setEditingModifier] = useState<{
+    nodeId: string; frame: number; modifierId: string;
   } | null>(null);
   const [nodeMoveToFrameKfId, setNodeMoveToFrameKfId] = useState<string | null>(null);
   const [nodeMoveToFrameValue, setNodeMoveToFrameValue] = useState(0);
@@ -217,6 +222,31 @@ export default function Timeline() {
     },
     [handleSeekTrackKey, puppetCharacter]
   );
+
+  // 修饰器参数「编辑」：先跳帧+选中（保留旧导航行为），再打开参数编辑器。
+  // 旧实现只跳帧、把 modifierId 丢掉，编辑器从未存在，菱形标记只是定位入口。
+  const handleEditModifierParams = useCallback(
+    (nodeId: string, frame: number, modifierId: string) => {
+      handleSeekTrackKey(nodeId, frame);
+      if (puppetCharacter) setEditingModifier({ nodeId, frame, modifierId });
+    },
+    [handleSeekTrackKey, puppetCharacter]
+  );
+
+  // 编辑器目标修饰器（store 直读；目标消失则自动关窗）
+  const editingModifierData = useMemo(() => {
+    if (!editingModifier || !puppetCharacter) return null;
+    const node = puppetCharacter.nodes[editingModifier.nodeId];
+    const pt = node?.tracks?.modifierKeys?.keyframes.find((k) => k.frame === editingModifier.frame);
+    const modifiers = pt?.value ?? [];
+    const mod = modifiers.find((m) => m.id === editingModifier.modifierId);
+    if (!node || !mod) return null;
+    const def = MODIFIER_DEFINITIONS.find((d) => d.type === mod.type) ?? null;
+    return { characterId: puppetCharacter.id, node, modifiers, mod, def };
+  }, [editingModifier, puppetCharacter]);
+  useEffect(() => {
+    if (editingModifier && !editingModifierData) setEditingModifier(null);
+  }, [editingModifier, editingModifierData]);
 
   // 编辑器目标驱动器（store 直读，删改后实时一致；目标消失则自动关窗）
   const editingDriverData = useMemo(() => {
@@ -694,7 +724,7 @@ export default function Timeline() {
           onDuplicateNodeKeyframe={handleDuplicateNodeKeyframe}
           onMoveNodeKeyframeToFrame={handleMoveNodeKeyframeToFrame}
           onUpdateNodeKeyframe={handleUpdateNodeKeyframe}
-          onEditModifierParams={handleSeekTrackKey}
+          onEditModifierParams={handleEditModifierParams}
           onEditParamDriver={handleEditParamDriver}
           // V15: Pass zoom, snap, and frame step props
           FRAME_WIDTH={FRAME_WIDTH}
@@ -746,6 +776,21 @@ export default function Timeline() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Node keyframe: Modifier params editor */}
+      {editingModifier && editingModifierData && (
+        <ModifierParamsEditorDialog
+          key={`${editingModifier.nodeId}-${editingModifier.frame}-${editingModifier.modifierId}`}
+          characterId={editingModifierData.characterId}
+          nodeId={editingModifier.nodeId}
+          frame={editingModifier.frame}
+          modifiers={editingModifierData.modifiers}
+          mod={editingModifierData.mod}
+          def={editingModifierData.def}
+          nodeName={editingModifierData.node.name}
+          onClose={() => setEditingModifier(null)}
+        />
+      )}
 
       {/* Node keyframe: ParamDriver editor */}
       {editingDriver && editingDriverData && (
@@ -916,6 +961,127 @@ function ParamDriverEditorDialog({
         </div>
         <DialogFooter className="gap-2">
           <Button variant="ghost" size="sm" className="text-xs text-red-400 hover:text-red-300 mr-auto" onClick={handleDelete}>删除驱动器</Button>
+          <Button variant="ghost" size="sm" className="text-xs text-gray-400 hover:text-gray-200" onClick={onClose}>取消</Button>
+          <Button size="sm" className="text-xs bg-purple-600 hover:bg-purple-500 text-white" onClick={handleSave}>保存</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** 轨点修饰器参数编辑器：按修饰器类型定义动态出表单，改完整组写回该帧。
+ *  保存与移除各走一次 store 动作（各压一条撤销）；空组写回即删点（setNodeModifierKey 语义）。
+ *  路径/复合值参数不在此编辑（只读显示），避免把数组值塞进数字框写坏。 */
+function ModifierParamsEditorDialog({
+  characterId, nodeId, frame, modifiers, mod, def, nodeName, onClose,
+}: {
+  characterId: string; nodeId: string; frame: number;
+  modifiers: ModifierInstance[]; mod: ModifierInstance;
+  def: ModifierDefinition | null; nodeName: string;
+  onClose: () => void;
+}) {
+  const setNodeModifierKey = useProjectStore((s) => s.setNodeModifierKey);
+  const [params, setParams] = useState<ModifierInstance['params']>(() => ({ ...(mod.params ?? {}) }));
+  const [enabled, setEnabled] = useState(mod.enabled);
+  const setParam = (name: string, value: ModifierInstance['params'][string]) =>
+    setParams((prev) => ({ ...prev, [name]: value }));
+  const num = (name: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = parseFloat(e.target.value);
+    if (!Number.isNaN(v)) setParam(name, v);
+  };
+  const handleSave = () => {
+    const next = modifiers.map((m) => (m.id === mod.id ? { ...m, params, enabled } : m));
+    setNodeModifierKey(characterId, nodeId, frame, next);
+    onClose();
+  };
+  const handleRemove = () => {
+    setNodeModifierKey(characterId, nodeId, frame, modifiers.filter((m) => m.id !== mod.id));
+    onClose();
+  };
+
+  const fieldCls = 'h-7 text-xs bg-white/5 border-white/10 text-gray-300 px-2';
+  const isScalar = (v: unknown) =>
+    typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean';
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="bg-[#1a1a2e] border-white/10 text-gray-200 max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="text-sm text-gray-100">编辑修饰器参数</DialogTitle>
+          <DialogDescription className="text-xs text-gray-400">
+            {nodeName} · 第 {frame} 帧 · {def?.label ?? mod.type}
+            {def ? '' : '（该类型无参数定义，只可开关与移除）'}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 py-2">
+          <label className="flex items-center gap-2 text-xs text-gray-300">
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            启用修饰器
+          </label>
+          {(def?.params ?? []).map((param) => {
+            const raw = params[param.name] ?? param.default;
+            if (param.type === 'path' || !isScalar(raw)) {
+              return (
+                <div key={param.name} className="flex items-center gap-2">
+                  <label className="text-xs text-gray-400 w-20 shrink-0 truncate" title={param.label}>{param.label}</label>
+                  <span className="text-xs text-gray-500">该参数不在此编辑（路径/复合值）</span>
+                </div>
+              );
+            }
+            return (
+              <div key={param.name} className="flex items-center gap-2">
+                <label className="text-xs text-gray-400 w-20 shrink-0 truncate" title={param.label}>{param.label}</label>
+                {param.type === 'boolean' ? (
+                  <Button
+                    variant="ghost" size="sm"
+                    className={`h-6 text-xs px-2 ${raw ? 'text-purple-400' : 'text-zinc-500'}`}
+                    onClick={() => setParam(param.name, !raw)}
+                  >
+                    {raw ? '开' : '关'}
+                  </Button>
+                ) : param.type === 'select' ? (
+                  <select
+                    value={String(raw)}
+                    onChange={(e) => {
+                      const opt = param.options?.find((o) => String(o.value) === e.target.value);
+                      setParam(param.name, opt ? opt.value : e.target.value);
+                    }}
+                    className={`flex-1 rounded ${fieldCls}`}
+                  >
+                    {param.options?.map((opt) => (
+                      <option key={String(opt.value)} value={String(opt.value)}>{opt.label}</option>
+                    ))}
+                  </select>
+                ) : param.type === 'color' ? (
+                  <input
+                    type="color"
+                    value={typeof raw === 'string' ? raw : String(param.default)}
+                    onChange={(e) => setParam(param.name, e.target.value)}
+                    className="h-6 w-10 bg-transparent border-0 cursor-pointer"
+                  />
+                ) : param.type === 'string' ? (
+                  <Input value={String(raw)} onChange={(e) => setParam(param.name, e.target.value)} className={`flex-1 ${fieldCls}`} />
+                ) : (
+                  <div className="flex items-center gap-1 flex-1">
+                    <Input
+                      type="number" value={Number(raw)} onChange={num(param.name)}
+                      step={param.step ?? 1} min={param.min} max={param.max}
+                      className={`flex-1 ${fieldCls}`}
+                    />
+                    {param.min !== undefined && param.max !== undefined && (
+                      <input
+                        type="range" value={Number(raw)} onChange={(e) => setParam(param.name, Number(e.target.value))}
+                        min={param.min} max={param.max} step={param.step ?? 1}
+                        className="flex-1 h-1 accent-purple-500"
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="ghost" size="sm" className="text-xs text-red-400 hover:text-red-300 mr-auto" onClick={handleRemove}>从该帧移除修饰器</Button>
           <Button variant="ghost" size="sm" className="text-xs text-gray-400 hover:text-gray-200" onClick={onClose}>取消</Button>
           <Button size="sm" className="text-xs bg-purple-600 hover:bg-purple-500 text-white" onClick={handleSave}>保存</Button>
         </DialogFooter>

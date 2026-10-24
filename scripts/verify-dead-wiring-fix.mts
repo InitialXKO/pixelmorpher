@@ -74,5 +74,26 @@ check('静态：驱动器编辑接通四参处理（非仅跳帧）',
 check('静态：时间线不再调用旧工程级驱动器动作',
   !timeline.includes('toggleParamDriver(') || timeline.includes('toggleTrackParamDriver'));
 
+// ---------- 修饰器参数编辑：轨点修饰器整组写回（编辑器的数据通路） ----------
+{
+  const modP: any = { id: 'mp1', type: 'pendulum', enabled: true, params: { amplitude: 10, period: 2 } };
+  useProjectStore.getState().setNodeModifierKey('c1', 'n1', 7, [modP]);
+  const readMod = () => useProjectStore.getState().unifiedCharacters['c1'].nodes['n1'].tracks.modifierKeys.keyframes.find((k: any) => k.frame === 7).value[0];
+  check('修饰器参数写回前置：第 7 帧点存在', readMod().params.amplitude === 10);
+  // 模拟编辑器保存：读出整组、改其中一个修饰器的 params、整组写回
+  const pts = useProjectStore.getState().unifiedCharacters['c1'].nodes['n1'].tracks.modifierKeys.keyframes.find((k: any) => k.frame === 7).value;
+  useProjectStore.getState().setNodeModifierKey('c1', 'n1', 7, pts.map((m: any) => (m.id === 'mp1' ? { ...m, params: { ...m.params, amplitude: 45 } } : m)));
+  check('修饰器参数编辑生效：amplitude 改为 45', readMod().params.amplitude === 45);
+  // 模拟编辑器移除：整组去掉该修饰器后写回
+  useProjectStore.getState().setNodeModifierKey('c1', 'n1', 7, []);
+  check('修饰器从帧移除：空组写回即删点',
+    !useProjectStore.getState().unifiedCharacters['c1'].nodes['n1'].tracks.modifierKeys.keyframes.some((k: any) => k.frame === 7));
+  check('静态：修饰器参数编辑接通三参处理与编辑器组件',
+    timeline.includes('onEditModifierParams={handleEditModifierParams}')
+    && timeline.includes('setEditingModifier({ nodeId, frame, modifierId })')
+    && timeline.includes('ModifierParamsEditorDialog')
+    && timeline.includes('setNodeModifierKey'));
+}
+
 console.log(fail === 0 ? '\n全部通过' : `\n${fail} 项失败`);
 process.exit(fail === 0 ? 0 : 1);
