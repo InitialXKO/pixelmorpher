@@ -587,11 +587,12 @@ function collectBones(scene: THREE.Object3D): {
  * 普通 Mesh：按质心找最近 bone，全顶点同色。
  * ID 颜色使用合并后的有效 bone 索引（effectiveIndex），不是原始 bone。
  */
-function assignBoneVertexColors(
+export function assignBoneVertexColors(
   mesh: THREE.Mesh,
   indexByBone: Map<THREE.Bone, number>,
   boneBindPos: THREE.Vector3[],
   effectiveIndex: number[],
+  weightThreshold = 0.2,
 ): void {
   const geo = mesh.geometry;
   const pos = geo.getAttribute('position');
@@ -622,11 +623,11 @@ function assignBoneVertexColors(
     const skinWeight = geo.getAttribute('skinWeight') as THREE.BufferAttribute;
     const skeleton = sm.skeleton;
     for (let v = 0; v < pos.count; v++) {
-      // weight > 0.2 的 bones 全部按位或（边界重叠）
+      // weight > 阈值（BakeOptions.weightThreshold，默认 0.2）的 bones 全部按位或（边界重叠）
       mask.fill(0);
       for (let j = 0; j < 4; j++) {
         const w = skinWeight.getComponent(v, j);
-        if (w <= 0.2) continue;
+        if (w <= weightThreshold) continue;
         const jointIdx = Math.round(skinIndex.getComponent(v, j));
         const bone = skeleton.bones[jointIdx];
         const gi = bone ? (indexByBone.get(bone) ?? -1) : -1;
@@ -839,7 +840,7 @@ export async function bakeModelTwoPass(
     }
     model.traverse((o) => {
       const m = o as THREE.Mesh;
-      if (m.isMesh) assignBoneVertexColors(m, indexByBone, bindPos, merge.effectiveIndex);
+      if (m.isMesh) assignBoneVertexColors(m, indexByBone, bindPos, merge.effectiveIndex, options.weightThreshold ?? 0.2);
     });
 
     // ---- 归一化 ----
@@ -1335,16 +1336,25 @@ function isThumbName(n: string): boolean {
   return THUMB_RES.some((re) => re.test(n));
 }
 
-/** 从根 bone 向下走单链（手指） */
+const HELPER_RE = /helper/i;
+
+/** 从根 bone 向下走单链（手指）。Helper 骨不入链：与指节同名的 Helper（如 Z23 的
+ * 「…2Helper」）会误命中 acceptRe 抢走下一节、令链提前终止丢掉后续指节——故选孩子时
+ * 先跳过 Helper；若 Helper 是唯一孩子（串在链中间），穿过它继续往下找真指节。 */
 function buildDownChain(root: THREE.Bone, acceptRe: RegExp): THREE.Bone[] {
   const chain = [root];
   let cur = root;
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 12; i++) {
     const kids = getBoneChildren(cur);
     if (kids.length === 0) break;
-    let next = kids.find((k) => acceptRe.test(k.name || ''));
-    if (!next && kids.length === 1) next = kids[0];
+    let next = kids.find((k) => acceptRe.test(k.name || '') && !HELPER_RE.test(k.name || ''));
+    if (!next) {
+      const nonHelper = kids.filter((k) => !HELPER_RE.test(k.name || ''));
+      if (nonHelper.length === 1) next = nonHelper[0];
+      else if (kids.length === 1) next = kids[0]; // 唯一孩子是 Helper，下面穿过它
+    }
     if (!next) break;
+    if (HELPER_RE.test(next.name || '')) { cur = next; continue; } // 穿过 Helper，不入链
     chain.push(next);
     cur = next;
   }

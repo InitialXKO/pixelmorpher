@@ -60,6 +60,16 @@ export interface BakeOptions {
   thumbBoneName?: string;
   /** 手动指定的手指 bone 名列表（优先于自动匹配） */
   fingerBoneNames?: string[];
+  /**
+   * 骨骼权重阈值（用户可调，默认 0.2）：顶点权重超过该值的骨骼都计入 ID 归属。
+   * 调低 = 关节处重叠多（弯曲不裂、边缘偏糊）；调高 = 重叠少（边缘干净、弯曲易露缝）。
+   */
+  weightThreshold?: number;
+  /**
+   * 无归属三角形归入邻近部件（默认关 = 丢弃，与旧行径一致）：六部件里主导骨骼
+   * 不属于任何部件的三角形，按共享顶点投票归入相邻部件。
+   */
+  absorbUnassigned?: boolean;
 }
 
 const DIRECTIONS = 8;

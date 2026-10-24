@@ -157,9 +157,40 @@ P5 一直悬置的原因。成本：小，但语义代价最大。
   texelFetch 高半取样）shell 无 GL 上下文，只能真机烘焙 Z23
   对照（指节/肩 Helper 三角形是否回归）——这是本项的真机闸门。
 
+### 三裁定落地（2026-10-25，用户拍板）
+
+1. **P4 不做实验，改用户可调参数**：`BakeOptions.weightThreshold`
+   （默认 0.2 = 旧行径），贯通双遍 assignBoneVertexColors 与六部件
+   bakeSkinnedMesh 两处写死点；对话框顶栏加「权重阈值」下拉
+   （0.10/0.15/0.20/0.25/0.30，非手动模式可见）。手动模式不用权重。
+2. **P5 并入本线已修**：buildDownChain 选孩子时跳过 Helper
+   （/helper/i）——同名 Helper 不再抢走下一节；Helper 是唯一孩子时
+   穿过它继续下探、且不入链。verify-finger-curl 补两条 Z23 型合成
+   夹具（抢链/串中）全过，Xbot 原断言无回归。
+3. **警告可见化改为「标出 + 用户自决归入」**（取代乙的弹窗警告）：
+   - 标出：手动点选面板三视图里未分配网格由暗灰改醒目红，图例
+     计数变红并注明「烘焙将丢失」。
+   - 选项 `absorbUnassigned`（默认关 = 丢弃）：六部件
+     groupTrianglesByPart 对无归属三角形按共享顶点投票归入邻近
+     部件，完全孤立的仍丢弃；SixPartBakeData 新增 droppedTriCount/
+     absorbedTriCount 计数。手动 prepareManualParts 对未分配网格
+     同口径归入（共享顶点投票优先，无共享时包围盒中心最近），
+     PreparedManual.absorbedMeshes 记录归入结果。对话框加「无归属
+     归入邻近部件」勾选（六部件/手动模式可见）。
+   - 边界：六部件归入只改几何归属；被归入三角形的像素能否在拆分
+     时落到该部件，仍取决于其顶点权重集里有没有该部件的骨骼
+     （边界混合权重三角形可以；零影响的孤立体只能靠手动模式的
+     网格级归入）。
+- **验证**：新探针 probe-bake-options 15 项全过（阈值三档归属集、
+  六部件 absorb 开/关、手动 absorb 投票优先于距离）；verify-3d-
+  pipeline 9、probe-id-capacity 6、verify-finger-curl（含新夹具）、
+  verify-proc-runtime 322 回归全过；tsc + 真实 build 过。
+  **未验证**：对话框新控件与三视图红标的真机观感、阈值改档后的
+  实际烘焙重叠变化、Z23 真模型握拳（Helper 修复的真机闸门与甲
+  的 WebGL 闸门同一批）。
+
 ## 五、仍待用户拍板
 
-1. P4 阈值实验是否做。
-2. P5 Helper 截断链是否并入本线。
-3. 乙的「烘焙警告可见化」还做不做（甲后仅剩 ≥64 极端部件与
-   其他静默丢弃需要它）。
+（本节三项已于 2026-10-25 全部裁定并落地，见上「三裁定落地」。）
+后续悬置：P3 编号顺序（甲后紧迫性低）、P2 中 ≥64 极端部件的
+兜底提示。

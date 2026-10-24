@@ -81,5 +81,41 @@ console.log(`${thumbOk ? 'PASS' : 'FAIL'} thumb 对掌落点: relHand=(${relT.to
 const tt = tipOf(detAll.thumb!.bones);
 const tSide = Math.sign(n.dot(tt.clone().sub(mcpC)));
 if (tSide !== thumbSide) { fail++; console.log('FAIL thumb side', tSide); } else console.log('PASS thumb 掌侧');
+// ---- Helper 截断回归（Z23 型）：同名 Helper 抢链 + Helper 串链中间 ----
+// 中指：2 节的孩子 [2Helper, 3]（Helper 在孩子序在前）——旧串法先命中 Helper 提前终止，丢第 3/4 节
+// 食指：Helper 串在 2 与 3 之间（唯一孩子）——应穿过它继续找真指节，且 Helper 不入链
+{
+  const mk = (name: string, parent?: THREE.Bone) => {
+    const b = new THREE.Bone();
+    b.name = name;
+    if (parent) parent.add(b);
+    return b;
+  };
+  const hand = mk('b_L_Hand');
+  const mid1 = mk('b_L_Middle1', hand);
+  const mid2 = mk('b_L_Middle2', mid1);
+  mk('b_L_Middle2Helper', mid2);
+  const mid3 = mk('b_L_Middle3', mid2);
+  mk('b_L_Middle4', mid3);
+  const idx1 = mk('b_L_Index1', hand);
+  const idx2 = mk('b_L_Index2', idx1);
+  const idxHelper = mk('b_L_Index2Helper', idx2);
+  mk('b_L_Index3', idxHelper);
+  const all: THREE.Bone[] = [];
+  hand.traverse((o) => { if ((o as THREE.Bone).isBone) all.push(o as THREE.Bone); });
+  const detH = detectFingers(all, {});
+  const names = (f?: { bones: THREE.Bone[] } | null) => (f ? f.bones.map((b) => b.name).join('>') : '(none)');
+  const mid = detH.fingers.find((f) => f.label.includes('Middle'));
+  const midExpect = 'b_L_Middle1>b_L_Middle2>b_L_Middle3>b_L_Middle4';
+  const midOk = names(mid) === midExpect;
+  if (!midOk) fail++;
+  console.log(`${midOk ? 'PASS' : 'FAIL'} Helper 抢链（中指）: ${names(mid)} 期望 ${midExpect}`);
+  const idx = detH.fingers.find((f) => f.label.includes('Index'));
+  const idxExpect = 'b_L_Index1>b_L_Index2>b_L_Index3';
+  const idxOk = names(idx) === idxExpect;
+  if (!idxOk) fail++;
+  console.log(`${idxOk ? 'PASS' : 'FAIL'} Helper 串中（食指）: ${names(idx)} 期望 ${idxExpect}`);
+}
+
 console.log(fail === 0 ? 'ALL PASS' : `${fail} FAILURES`);
 process.exit(fail ? 1 : 0);

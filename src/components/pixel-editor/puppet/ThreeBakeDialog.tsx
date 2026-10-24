@@ -742,6 +742,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const lastBakeRef = useRef<{ key: string; data: TwoPassBakeData } | null>(null);
   const [size, setSize] = useState(64);
   const [paletteSize, setPaletteSize] = useState(16);
+  const [weightThreshold, setWeightThreshold] = useState(0.2);
+  const [absorbUnassigned, setAbsorbUnassigned] = useState(false);
   const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
   /** 烘焙模式：twopass=整模 ID 双遍（16 遍），sixpart=六部件（96 遍） */
   const [bakeMode, setBakeMode] = useState<'twopass' | 'sixpart' | 'manual'>('sixpart');
@@ -872,6 +874,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         && lastBakeRef.current.data.width === size;
       const data = await bakeModelTwoPass(inp, {
         size,
+        weightThreshold,
         granularity,
         manualMerges,
         manualUnmerges,
@@ -895,7 +898,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor]);
+  }, [fileData, url, size, paletteSize, weightThreshold, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor]);
 
   /** 六部件烘焙：6 部件 × 8 方向 ×（颜色+ID）= 96 遍 */
   const handleBakeSixPart = useCallback(async () => {
@@ -913,6 +916,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       const t0 = performance.now();
       const data = await bakeSixParts(inp, {
         size,
+        weightThreshold,
+        absorbUnassigned,
         granularity,
         manualMerges,
         manualUnmerges,
@@ -934,7 +939,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor]);
+  }, [fileData, url, size, paletteSize, weightThreshold, absorbUnassigned, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor]);
 
   /** 读取网格清单（手动模式） */
   /** 分组草案 → 部件草稿（名称消重，枢轴默认首网格原点） */
@@ -1109,6 +1114,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       const proc = await bakeManualParts(inp, specs, {
         size,
         paletteSize,
+        absorbUnassigned,
         pmxTextures: pmxTexturesRef.current ?? undefined,
         usePmxNpr: pmxFlavor,
         extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
@@ -1123,7 +1129,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [manualCatalog, manualParts, resolveInput, size, paletteSize, fullAngle, pmxFlavor]);
+  }, [manualCatalog, manualParts, resolveInput, size, paletteSize, absorbUnassigned, fullAngle, pmxFlavor]);
 
   /** 按当前模式分发烘焙 */
   const handleBakeDispatch = useCallback(() => {
@@ -1388,6 +1394,22 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                 <option value={32}>32 色</option>
               </select>
             </label>
+            {bakeMode !== 'manual' && (
+            <label className="flex items-center gap-1" title="顶点权重超过该值的骨骼都算归属：调低关节重叠多（弯曲不裂、边缘偏糊），调高重叠少（边缘干净、弯曲易露缝）">
+              权重阈值
+              <select
+                value={weightThreshold}
+                onChange={(e) => setWeightThreshold(Number(e.target.value))}
+                className="h-6 rounded border border-[#2a2a4a] bg-[#0d0d1f] px-1 text-gray-300"
+              >
+                <option value={0.1}>0.10</option>
+                <option value={0.15}>0.15</option>
+                <option value={0.2}>0.20</option>
+                <option value={0.25}>0.25</option>
+                <option value={0.3}>0.30</option>
+              </select>
+            </label>
+            )}
             <label className="flex items-center gap-1" title="整模 ID 双遍：16 遍，整模一次渲染；六部件：96 遍，6 块独立渲染无遮挡">
               烘焙模式
               <select
@@ -1404,6 +1426,12 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               <input type="checkbox" checked={fullAngle} onChange={(e) => setFullAngle(e.target.checked)} />
               全角度（±45°/±90°）
             </label>
+            {bakeMode !== 'twopass' && (
+            <label className="flex cursor-pointer items-center gap-1" title="不属于任何部件的内容（六部件：主导骨骼无部件的三角形；手动：未分配的网格）按邻近关系归入相邻部件，而不是直接丢弃">
+              <input type="checkbox" checked={absorbUnassigned} onChange={(e) => setAbsorbUnassigned(e.target.checked)} />
+              无归属归入邻近部件
+            </label>
+            )}
             {isMmd && (
               <label className="flex cursor-pointer items-center gap-1" title="开：颜色遍用参考版 NPR 着色——材质按名称分类（脸/发/肌/眼/衣/金属等）套 toon ramp + rim 预设；关：全走管线统一 toon 转换（共享 gradientMap，与 GLB 同一口径）">
                 <input type="checkbox" checked={pmxFlavor} onChange={(e) => setPmxFlavor(e.target.checked)} />

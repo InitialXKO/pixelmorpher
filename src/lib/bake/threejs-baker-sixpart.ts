@@ -135,6 +135,10 @@ export interface SixPartBakeData {
   merge: BoneMergeInfo;
   /** 整模相机半宽（归一化单位），用于全局统一尺度（可逆性：记录尺度差） */
   globalCameraHalf: number;
+  /** 无归属三角形丢弃数（主导骨骼不属于任何部件；开启 absorbUnassigned 后为仍无法归入的孤立数） */
+  droppedTriCount: number;
+  /** 无归属三角形按邻近投票归入部件的数量（absorbUnassigned 关闭时为 0） */
+  absorbedTriCount: number;
 }
 
 export interface SixPartBakeOptions extends BakeOptions {
@@ -153,7 +157,7 @@ interface BakedMesh {
   material: THREE.Material | null; // 原材质（取色用）
   /** 每顶点主导 bone 的全局 index（-1=无） */
   vertBone: Int32Array;
-  /** 每顶点 weight>0.2 的 bones（全局 index，用于 ID 位掩码重叠） */
+  /** 每顶点 weight>阈值（BakeOptions.weightThreshold，默认 0.2）的 bones（全局 index，用于 ID 位掩码重叠） */
   vertBones: number[][];
 }
 
@@ -212,6 +216,7 @@ function bakeSkinnedMesh(
   mesh: THREE.Mesh,
   bones: THREE.Bone[],
   indexByBone: Map<THREE.Bone, number>,
+  weightThreshold = 0.2,
 ): BakedMesh {
   const geo = mesh.geometry;
   const sm = mesh as THREE.SkinnedMesh;
@@ -263,11 +268,11 @@ function bakeSkinnedMesh(
         const bone = skeleton.bones[ji];
         vertBone[i] = bone ? (indexByBone.get(bone) ?? -1) : -1;
       }
-      // weight>0.2 的全部 bones（ID 位掩码重叠用）
+      // weight>阈值的全部 bones（ID 位掩码重叠用）
       const multi: number[] = [];
       for (let j = 0; j < 4; j++) {
         const w = skinWeight.getComponent(i, j);
-        if (w <= 0.2) continue;
+        if (w <= weightThreshold) continue;
         const ji = Math.round(skinIndex.getComponent(i, j));
         const bone = skeleton.bones[ji];
         const gi = bone ? (indexByBone.get(bone) ?? -1) : -1;
@@ -315,7 +320,8 @@ interface PartTriangles {
 export function groupTrianglesByPart(
   baked: BakedMesh,
   boneToPart: (PartName | null)[],
-): Map<PartName, PartTriangles> {
+  absorbUnassigned = false,
+): { groups: Map<PartName, PartTriangles>; droppedTris: number; absorbedTris: number } {
   const geo = baked.geometry;
   const index = geo.getIndex();
   const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
@@ -323,6 +329,8 @@ export function groupTrianglesByPart(
   const result = new Map<PartName, PartTriangles>();
   for (const p of ALL_PARTS) result.set(p, { tris: [], triBone: [] });
 
+  // 无归属三角形：三顶点的主导 bone 都不属于任何部件（或无主导 bone）
+  const orphans: { tri: [number, number, number]; bestBone: number }[] = [];
   for (let t = 0; t < triCount; t++) {
     const a = index ? index.getX(t * 3) : t * 3;
     const b = index ? index.getX(t * 3 + 1) : t * 3 + 1;
@@ -338,22 +346,64 @@ export function groupTrianglesByPart(
         if (p) parts.add(p);
       }
     }
-    // 跨部件三角形不跳过：归入它涉及的每个部件——在交界破洞处由这块真实三角形本身遮挡，
-    // 不再造封盖假面；像素归属在 2D 拆分时按 ID 掩码精确决定，不会双算
-    if (parts.size === 0) continue;
     let bestBone = -1;
     let bestVotes = 0;
     for (const [bi, n] of votes) {
       if (n > bestVotes) { bestVotes = n; bestBone = bi; }
     }
-    if (bestBone < 0) continue;
+    // 跨部件三角形不跳过：归入它涉及的每个部件——在交界破洞处由这块真实三角形本身遮挡，
+    // 不再造封盖假面；像素归属在 2D 拆分时按 ID 掩码精确决定，不会双算
+    if (parts.size === 0 || bestBone < 0) {
+      orphans.push({ tri: [a, b, c], bestBone });
+      continue;
+    }
     for (const p of parts) {
       const pt = result.get(p)!;
       pt.tris.push([a, b, c]);
       pt.triBone.push(bestBone);
     }
   }
-  return result;
+
+  // 归入邻近部件（选项开启时）：按共享顶点投票——孤儿的顶点被哪些部件的已归属
+  // 三角形共用得最多，就归哪个部件；完全孤立（无共享顶点）仍丢弃并计入 droppedTris。
+  let absorbedTris = 0;
+  if (absorbUnassigned && orphans.length > 0) {
+    const vertParts = new Map<number, Map<PartName, number>>();
+    for (const p of ALL_PARTS) {
+      for (const tri of result.get(p)!.tris) {
+        for (const vi of tri) {
+          let m = vertParts.get(vi);
+          if (!m) { m = new Map(); vertParts.set(vi, m); }
+          m.set(p, (m.get(p) ?? 0) + 1);
+        }
+      }
+    }
+    const remaining: typeof orphans = [];
+    for (const o of orphans) {
+      const votes = new Map<PartName, number>();
+      for (const vi of o.tri) {
+        const m = vertParts.get(vi);
+        if (!m) continue;
+        for (const [p, n] of m) votes.set(p, (votes.get(p) ?? 0) + n);
+      }
+      let winner: PartName | null = null;
+      let best = 0;
+      for (const p of ALL_PARTS) {
+        const n = votes.get(p) ?? 0;
+        if (n > best) { best = n; winner = p; }
+      }
+      if (winner) {
+        const pt = result.get(winner)!;
+        pt.tris.push(o.tri);
+        pt.triBone.push(o.bestBone);
+        absorbedTris++;
+      } else {
+        remaining.push(o);
+      }
+    }
+    return { groups: result, droppedTris: remaining.length, absorbedTris };
+  }
+  return { groups: result, droppedTris: orphans.length, absorbedTris };
 }
 
 
@@ -370,6 +420,10 @@ interface BuiltPart {
   views: BuiltPartView[];
   /** 部件内 bone 列表（全局 index，按首次出现序） */
   partBones: number[];
+  /** 分组口径（全模型，各部件调用同值）：丢弃的无归属三角形数（开启归入后为仍无法归入的孤立数） */
+  droppedTris?: number;
+  /** 分组口径（全模型）：按邻近投票归入部件的无归属三角形数 */
+  absorbedTris?: number;
 }
 
 /**
@@ -381,11 +435,16 @@ export function buildPartGeometry(
   bakedMeshes: BakedMesh[],
   part: PartName,
   boneToPart: (PartName | null)[],
+  absorbUnassigned = false,
 ): BuiltPart | null {
   const views: BuiltPartView[] = [];
+  let droppedTris = 0;
+  let absorbedTris = 0;
   for (const bm of bakedMeshes) {
-    const grouped = groupTrianglesByPart(bm, boneToPart);
-    const pt = grouped.get(part)!;
+    const grouped = groupTrianglesByPart(bm, boneToPart, absorbUnassigned);
+    droppedTris += grouped.droppedTris;
+    absorbedTris += grouped.absorbedTris;
+    const pt = grouped.groups.get(part)!;
     if (pt.tris.length === 0) continue;
     const index: number[] = [];
     for (const [a, b, c] of pt.tris) index.push(a, b, c);
@@ -399,7 +458,7 @@ export function buildPartGeometry(
   for (let bi = 0; bi < boneToPart.length; bi++) {
     if (boneToPart[bi] === part) partBones.push(bi);
   }
-  return { part, views, partBones };
+  return { part, views, partBones, droppedTris, absorbedTris };
 }
 
 /** 由索引视图生成渲染用几何：属性对象与源几何共享（不复制数据），只装本视图的索引。 */
@@ -678,7 +737,7 @@ export async function bakeSixParts(
       m.frustumCulled = false;
       const sm = o as THREE.SkinnedMesh;
       if (sm.isSkinnedMesh) sm.skeleton.update();
-      bakedMeshes.push(bakeSkinnedMesh(m, bones, indexByBone));
+      bakedMeshes.push(bakeSkinnedMesh(m, bones, indexByBone, options.weightThreshold ?? 0.2));
     });
     if (bakedMeshes.length === 0) throw new Error('模型中没有找到 Mesh');
 
@@ -686,10 +745,20 @@ export async function bakeSixParts(
     for (const bm of bakedMeshes) bm.geometry.computeVertexNormals();
 
     // ---- 构建 6 部件（索引视图，不复制几何） ----
+    // 无归属三角形计数是分组口径（全模型，六次调用同值），取第一次构建的即可
+    const triStats = { dropped: 0, absorbed: 0 };
+    let triStatsTaken = false;
     const parts = new Map<PartName, BuiltPart>();
     for (const p of ALL_PARTS) {
-      const built = buildPartGeometry(bakedMeshes, p, boneToPart);
-      if (built) parts.set(p, built);
+      const built = buildPartGeometry(bakedMeshes, p, boneToPart, options.absorbUnassigned ?? false);
+      if (built) {
+        parts.set(p, built);
+        if (!triStatsTaken) {
+          triStats.dropped = built.droppedTris ?? 0;
+          triStats.absorbed = built.absorbedTris ?? 0;
+          triStatsTaken = true;
+        }
+      }
     }
     if (parts.size === 0) throw new Error('六部件拆分后没有可用几何');
 
@@ -1342,6 +1411,8 @@ export async function bakeSixParts(
       merge,
       // 整模归一化到 [-1,1]，globalCameraHalf = 1.0（归一化单位）
       globalCameraHalf: 1.0,
+      droppedTriCount: triStats.dropped,
+      absorbedTriCount: triStats.absorbed,
     };
   } finally {
     renderer.dispose();

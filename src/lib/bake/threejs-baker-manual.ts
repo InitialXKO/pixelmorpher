@@ -71,6 +71,8 @@ export interface ManualBakeOptions {
   toonSteps?: number;
   /** 每部件相机 padding 系数，默认 1.25（与六部件一致） */
   partPadding?: number;
+  /** 未分配网格归入邻近部件（默认关 = 不烘焙、丢失）：按共享顶点投票归入相邻部件，无共享顶点时按包围盒中心最近归入 */
+  absorbUnassigned?: boolean;
   onProgress?: (done: number, total: number, label: string) => void;
 }
 
@@ -232,6 +234,8 @@ export interface PreparedManual {
   normalization: { center: { x: number; y: number; z: number }; scale: number };
   /** 根节点 joint3D（模型原点的归一化坐标） */
   rootJoint3D: { x: number; y: number; z: number };
+  /** 归入邻近部件的未分配网格（absorbUnassigned 开启时）；关闭或无未分配时为空 */
+  absorbedMeshes: { meshIndex: number; partIndex: number }[];
 }
 
 /** 父部件解析（与 prepareManualParts 同一口径的纯函数版，供对话框层级预览复用）：
@@ -318,6 +322,7 @@ export function prepareManualParts(
   statics: StaticMesh[],
   specs: ManualPartSpec[],
   partPadding = 1.25,
+  absorbUnassigned = false,
 ): PreparedManual {
   // 整模归一化（与六部件同口径：全部静态顶点 bbox 中心 + 包围球半径）
   const fullBox = new THREE.Box3();
@@ -347,6 +352,81 @@ export function prepareManualParts(
       specIndexByMesh.set(mi, i);
     }
   });
+
+  // 未分配网格归入邻近部件（选项开启时）：共享顶点投票优先（同一顶点位置被哪个
+  // 部件的网格共用得最多归哪个），无共享顶点时按包围盒中心距离最近归入。
+  // 在父部件解析之前做，归入的网格按新归属参与层级解析。
+  const absorbedMeshes: { meshIndex: number; partIndex: number }[] = [];
+  if (absorbUnassigned) {
+    const unassigned = statics.filter((s) => !specIndexByMesh.has(s.info.meshIndex));
+    if (unassigned.length > 0 && specs.length > 0) {
+      const keyOf = (x: number, y: number, z: number) =>
+        `${Math.round(x * 1e4)},${Math.round(y * 1e4)},${Math.round(z * 1e4)}`;
+      const vertOwners = new Map<string, number[]>();
+      for (const s of statics) {
+        const seen = new Set<string>();
+        for (let i = 0; i < s.positions.length; i += 3) {
+          const k = keyOf(s.positions[i], s.positions[i + 1], s.positions[i + 2]);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          const arr = vertOwners.get(k);
+          if (arr) arr.push(s.info.meshIndex);
+          else vertOwners.set(k, [s.info.meshIndex]);
+        }
+      }
+      const partCenters = specs.map((sp) => {
+        const box = new THREE.Box3();
+        for (const mi of sp.meshIndices) {
+          const sm = byMeshIndex.get(mi);
+          if (!sm) continue;
+          for (let i = 0; i < sm.positions.length; i += 3) {
+            tv.set(sm.positions[i], sm.positions[i + 1], sm.positions[i + 2]);
+            box.expandByPoint(tv);
+          }
+        }
+        return box.getCenter(new THREE.Vector3());
+      });
+      const effSpecs = specs.map((sp) => ({ ...sp, meshIndices: [...sp.meshIndices] }));
+      for (const u of unassigned) {
+        const votes = new Array<number>(specs.length).fill(0);
+        const seen = new Set<string>();
+        for (let i = 0; i < u.positions.length; i += 3) {
+          const k = keyOf(u.positions[i], u.positions[i + 1], u.positions[i + 2]);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          for (const owner of vertOwners.get(k) ?? []) {
+            if (owner === u.info.meshIndex) continue;
+            const p = specIndexByMesh.get(owner);
+            if (p !== undefined) votes[p]++;
+          }
+        }
+        let winner = -1;
+        let best = 0;
+        for (let p = 0; p < votes.length; p++) {
+          if (votes[p] > best) { best = votes[p]; winner = p; }
+        }
+        if (winner < 0) {
+          const ub = new THREE.Box3();
+          for (let i = 0; i < u.positions.length; i += 3) {
+            tv.set(u.positions[i], u.positions[i + 1], u.positions[i + 2]);
+            ub.expandByPoint(tv);
+          }
+          const uc = ub.getCenter(new THREE.Vector3());
+          let bestD = Infinity;
+          for (let p = 0; p < partCenters.length; p++) {
+            const d = uc.distanceToSquared(partCenters[p]);
+            if (d < bestD) { bestD = d; winner = p; }
+          }
+        }
+        if (winner >= 0) {
+          effSpecs[winner].meshIndices.push(u.info.meshIndex);
+          specIndexByMesh.set(u.info.meshIndex, winner);
+          absorbedMeshes.push({ meshIndex: u.info.meshIndex, partIndex: winner });
+        }
+      }
+      specs = effSpecs;
+    }
+  }
 
   const parentIndices = resolveManualParentIndices(statics.map((s) => s.info), specs);
 
@@ -484,6 +564,7 @@ export function prepareManualParts(
     parts,
     normalization: { center: { x: center.x, y: center.y, z: center.z }, scale },
     rootJoint3D: norm(0, 0, 0),
+    absorbedMeshes,
   };
 }
 
@@ -598,7 +679,7 @@ export async function bakeManualParts(
 
   const model = await loadModel(input, options.pmxTextures);
   const { statics } = collectStaticMeshes(model);
-  const prepared = prepareManualParts(statics, specs, partPadding);
+  const prepared = prepareManualParts(statics, specs, partPadding, options.absorbUnassigned ?? false);
 
   const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
   renderer.setClearColor(0x000000, 0);
