@@ -1839,11 +1839,67 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     alphaCount(poster1) > 900 && Buffer.from(poster1.data).equals(Buffer.from(poster2.data)));
   const glowPoster = TH.dynamicPosterRGBA(fdt('辉光呼吸')!.params);
   const plainPoster = TH.dynamicPosterRGBA(fdt('呼吸起伏')!.params);
-  check('T3 发光定格图覆盖面大于纯形变（辉光溢出精灵外）',
+  check('T3 定格图覆盖：辉光呼吸 > 呼吸起伏（注：此式较弱，强口径见 U4 关发光对照）',
     alphaCount(glowPoster) > alphaCount(plainPoster));
   const spr = TH.sampleSpriteGrid();
   check('T4 示例精灵 20×20 且有实体像素',
     spr.length === 20 && spr.flat().filter(Boolean).length > 150);
+}
+
+// ============ U 组：模式库扩充（子模式组合父模式） ============
+{
+  const LE = await import('../src/lib/library-entries');
+  const DE = await import('../src/lib/dynamic-expand');
+  const TH = await import('../src/lib/library-thumbs');
+  const { glowField } = await import('../src/lib/dynamic-patterns');
+  // U1 全库动态条目展开无误（冲突/环/悬空全指出来）
+  const failures: string[] = [];
+  let dynCount = 0;
+  for (const e of LE.BUILTIN_ENTRIES) {
+    if (e.kind !== 'dynamic') continue;
+    dynCount++;
+    const r = DE.expandDynamicEntry(LE.BUILTIN_INDEX, e.id, e.latest);
+    if (!r.params) failures.push(`${e.id}: ${r.errors.join('；')}`);
+  }
+  check(`U1 全库 ${dynCount} 个动态条目展开成功`, failures.length === 0);
+  if (failures.length > 0) console.log('   展开失败明细:', failures.join(' | '));
+  const ex = (id: string) => DE.expandDynamicEntry(LE.BUILTIN_INDEX, id, 1).params!;
+  // U2 配合边折叠到位
+  check('U2 燃烧：调制边折出 linkToDeform 0.5 且焰形+火星色都在',
+    ex('dyn-burning').linkToDeform === 0.5
+    && ex('dyn-burning').glowShape === 'flame'
+    && ex('dyn-burning').color === '#ffb347');
+  check('U2 熔岩沸腾（父套父）：脉冲形变+灰烬+余烬辉光齐备',
+    ex('dyn-magma').deformHz === 3
+    && ex('dyn-magma').color === '#9a9a9a'
+    && ex('dyn-magma').glowColor === '#ff7a33'
+    && ex('dyn-magma').linkToDeform === 0.5);
+  check('U2 星尘环绕：相位边把星芒相位对齐到胀缩基准 +0.25',
+    Math.abs(ex('dyn-stardust').glowPhase - 0.25) < 1e-9
+    && ex('dyn-stardust').linkToDeform === 0.6);
+  check('U2 暴雨：雨色跟寒色调（followParams 裁决）',
+    ex('dyn-rainstorm').color === '#a8d8ff' && ex('dyn-rainstorm').glowColor === '#9fd8ff');
+  check('U2 染烟：烟色跟暖色调', ex('dyn-dyed-smoke').color === '#ffb37a');
+  // U3 发光叶子在示例精灵上真出场（取色靶区命中）
+  const glowLeaves = ['dyn-glow-flame', 'dyn-glow-ember', 'dyn-glow-frost', 'dyn-glow-star', 'dyn-glow-toxic', 'dyn-glow-breath'];
+  const missed = glowLeaves.filter((id) => !glowField(ex(id), TH.sampleSpriteGrid()));
+  check('U3 全部发光叶子的取色在示例精灵上命中（定格图真发光）', missed.length === 0);
+  if (missed.length > 0) console.log('   未命中:', missed.join(','));
+  // U4 定格图发光真验证：关发光后覆盖严格变小（强于旧 T3 口径）
+  const onPoster = TH.dynamicPosterRGBA(ex('dyn-glow-ember'));
+  const offPoster = TH.dynamicPosterRGBA({ ...ex('dyn-glow-ember'), glowEnabled: false });
+  const cov = (img: { data: Uint8ClampedArray }) => {
+    let n = 0;
+    for (let i = 3; i < img.data.length; i += 4) if (img.data[i]! > 0) n++;
+    return n;
+  };
+  check('U4 余烬辉光定格图覆盖 > 同参数关发光版', cov(onPoster) > cov(offPoster));
+  // U5 父模式数量与清单
+  const parentIds = LE.BUILTIN_ENTRIES.filter((e) => {
+    const d = e.versions[e.latest];
+    return e.kind === 'dynamic' && 'kind' in d && d.kind === 'parent';
+  }).map((e) => e.id);
+  check('U5 内置父模式 ≥10 个（含样板与嵌套）', parentIds.length >= 10);
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

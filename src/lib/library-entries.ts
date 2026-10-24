@@ -179,6 +179,173 @@ function buildBuiltinEntries(): LibraryEntry[] {
     const e = dynLeafFromTemplate(id, tpl.name);
     if (e) out.push(e);
   }
+  // ---- 扩充（2026-10-24）：单段子模式叶子 + 组合父模式 ----
+  // 发光叶子的取色对示例精灵的靶区（围巾 #ff8a3c / 宝石 #2ea8ff /
+  // 符文 #8dff57 / 高光 #a8dcf0），真实部件上由作者改取色。
+  const leaf = (
+    id: string, name: string, cluster: string,
+    segments: Partial<DynamicPatternParams>,
+  ): LibraryEntry => ({
+    id, kind: 'dynamic', name, cluster, builtin: true, latest: 1,
+    versions: {
+      1: {
+        kind: 'leaf', segments,
+        expose: Object.keys(segments) as DynParamKey[],
+      } satisfies DynamicLeafDef,
+    },
+  });
+  const parent = (
+    id: string, name: string,
+    children: DynChildRef[], coordination: CoordinationEdge[],
+  ): LibraryEntry => ({
+    id, kind: 'dynamic', name, cluster: '组合', builtin: true, latest: 1,
+    versions: { 1: { kind: 'parent', children, coordination } satisfies DynamicParentDef },
+  });
+  out.push(
+    // 形变叶子
+    leaf('dyn-pulse', '脉冲挤压', '形变', {
+      deformEnabled: true, squashY: 0.7, stretchX: 1.25, deformHz: 3, deformPhase: 0,
+    }),
+    leaf('dyn-swell', '缓慢胀缩', '形变', {
+      deformEnabled: true, squashY: 0.9, stretchX: 1.08, deformHz: 0.35, deformPhase: 0,
+    }),
+    // 粒子叶子
+    leaf('dyn-ember', '火星上飘', '粒子', {
+      emitEnabled: true, source: 'contour', rate: 14, speed: 3, directionDeg: 270,
+      life: 1.6, sizeStart: 2, sizeEnd: 0.5, rise: 12, turbulence: 8,
+      color: '#ffb347', alpha: 0.9, spreadDeg: 30,
+    }),
+    leaf('dyn-bubbles', '气泡上升', '粒子', {
+      emitEnabled: true, source: 'inside', rate: 8, speed: 1, directionDeg: 270,
+      life: 2.2, sizeStart: 1.5, sizeEnd: 4, rise: 14, turbulence: 3,
+      color: '#bfe8ff', alpha: 0.5, spreadDeg: 10,
+    }),
+    leaf('dyn-petals', '花瓣飘落', '粒子', {
+      emitEnabled: true, source: 'contour-top', rate: 10, speed: 3, directionDeg: 90,
+      life: 3, sizeStart: 2.5, sizeEnd: 2, rise: -2, turbulence: 14,
+      color: '#ffb7d5', alpha: 0.85, spreadDeg: 50,
+    }),
+    leaf('dyn-rain', '细雨', '粒子', {
+      emitEnabled: true, source: 'contour-top', rate: 42, speed: 26, directionDeg: 90,
+      life: 1.1, sizeStart: 1, sizeEnd: 1, rise: 0, buoy: -25, turbulence: 0,
+      color: '#9db8d9', alpha: 0.4, spreadDeg: 4,
+    }),
+    leaf('dyn-snow', '雪花飘落', '粒子', {
+      emitEnabled: true, source: 'contour-top', rate: 12, speed: 4, directionDeg: 90,
+      life: 3.4, sizeStart: 1.5, sizeEnd: 2.5, rise: -1, turbulence: 10,
+      color: '#eaf6ff', alpha: 0.75, spreadDeg: 30,
+    }),
+    leaf('dyn-ash', '灰烬飘散', '粒子', {
+      emitEnabled: true, source: 'contour', rate: 7, speed: 1, directionDeg: 270,
+      life: 3, sizeStart: 2, sizeEnd: 3.5, rise: 5, turbulence: 16,
+      color: '#9a9a9a', alpha: 0.35, spreadDeg: 60,
+    }),
+    // 发光叶子
+    leaf('dyn-glow-flame', '焰形辉光', '发光', {
+      glowEnabled: true, glowColor: '#ff9a3c', glowStrength: 1.3, glowHz: 3, glowPhase: 0,
+      glowHalo: 3, glowShape: 'flame', glowPick: '#ff8a3c', glowTolerance: 0.18,
+    }),
+    leaf('dyn-glow-ember', '余烬辉光', '发光', {
+      glowEnabled: true, glowColor: '#ff7a33', glowStrength: 1.2, glowHz: 2.4, glowPhase: 0,
+      glowHalo: 3, glowShape: 'circle', glowPick: '#ff8a3c', glowTolerance: 0.18,
+    }),
+    leaf('dyn-glow-frost', '寒霜辉光', '发光', {
+      glowEnabled: true, glowColor: '#9fd8ff', glowStrength: 0.95, glowHz: 0.5, glowPhase: 0,
+      glowHalo: 3, glowShape: 'circle', glowPick: '#2ea8ff', glowTolerance: 0.15,
+    }),
+    leaf('dyn-glow-star', '星芒辉光', '发光', {
+      glowEnabled: true, glowColor: '#fff3b0', glowStrength: 1.3, glowHz: 1.6, glowPhase: 0,
+      glowHalo: 3, glowShape: 'star', glowPick: '#a8dcf0', glowTolerance: 0.1,
+    }),
+    leaf('dyn-glow-toxic', '毒雾辉光', '发光', {
+      glowEnabled: true, glowColor: '#8dff57', glowStrength: 1.05, glowHz: 0.9, glowPhase: 0,
+      glowHalo: 4, glowShape: 'circle', glowPick: '#8dff57', glowTolerance: 0.15,
+    }),
+    // 追随叶子
+    leaf('dyn-lag-soft', '柔和垂随', '追随', {
+      followEnabled: true, followDelaySec: 0.2, followAmount: 0.45, followRotate: true, emitEnabled: false,
+    }),
+    leaf('dyn-lag-stiff', '紧跟垂随', '追随', {
+      followEnabled: true, followDelaySec: 0.05, followAmount: 0.9, followRotate: true, emitEnabled: false,
+    }),
+  );
+  // 着色叶子（只写一个键：给同段叶子染色，配合 followParams 用）
+  out.push(
+    leaf('dyn-tint-warm', '暖色调', '着色', { color: '#ffb37a' }),
+    leaf('dyn-tint-frost', '寒色调', '着色', { color: '#a8d8ff' }),
+  );
+  // 组合父模式（配合边见各条 coordination）。展开产物是一份扁平
+  // 参数，故同段叶子至多一个（写了同段多键的两个叶子必冲突，
+  // 这是模型约束、不是内容疏漏）；嵌套同理：内层父模式占的段，
+  // 外层不能再放同段叶子。
+  out.push(
+    parent('dyn-burning', '燃烧', [
+      { entry: 'dyn-glow-flame', version: 1 },
+      { entry: 'dyn-ember', version: 1 },
+      { entry: 'dyn-swell', version: 1 },
+    ], [
+      { type: 'modulate', fromChild: 2, from: 'deformAmount', toChild: 1, toKey: 'rate', depth: 0.5 },
+    ]),
+    parent('dyn-bonfire', '篝火', [
+      { entry: 'dyn-glow-flame', version: 1 },
+      { entry: 'dyn-ember', version: 1 },
+    ], []),
+    parent('dyn-boil', '沸腾', [
+      { entry: 'dyn-pulse', version: 1 },
+      { entry: 'dyn-ash', version: 1 },
+    ], [
+      { type: 'modulate', fromChild: 0, from: 'deformAmount', toChild: 1, toKey: 'rate', depth: 0.5 },
+    ]),
+    // 父套父：熔岩沸腾 = 沸腾（父） + 余烬辉光（沸腾未占发光段）
+    parent('dyn-magma', '熔岩沸腾', [
+      { entry: 'dyn-boil', version: 1 },
+      { entry: 'dyn-glow-ember', version: 1 },
+    ], []),
+    parent('dyn-frost-aegis', '寒霜结界', [
+      { entry: 'dyn-glow-frost', version: 1 },
+      { entry: 'dyn-snow', version: 1 },
+      { entry: 'dyn-swell', version: 1 },
+    ], [
+      { type: 'modulate', fromChild: 2, from: 'deformAmount', toChild: 1, toKey: 'rate', depth: 0.3 },
+    ]),
+    parent('dyn-stardust', '星尘环绕', [
+      { entry: 'dyn-glow-star', version: 1 },
+      { entry: 'dyn-sparkle', version: 1 },
+      { entry: 'dyn-swell', version: 1 },
+    ], [
+      { type: 'modulate', fromChild: 2, from: 'deformAmount', toChild: 1, toKey: 'rate', depth: 0.6 },
+      { type: 'phase', baseChild: 2, offsets: { 0: 0.25 } },
+    ]),
+    parent('dyn-toxic-mire', '剧毒沼气', [
+      { entry: 'dyn-glow-toxic', version: 1 },
+      { entry: 'dyn-bubbles', version: 1 },
+      { entry: 'dyn-swell', version: 1 },
+    ], [
+      { type: 'modulate', fromChild: 2, from: 'deformAmount', toChild: 1, toKey: 'rate', depth: 0.5 },
+    ]),
+    parent('dyn-sakura', '樱花吹雪', [
+      { entry: 'dyn-petals', version: 1 },
+      { entry: 'dyn-breath', version: 1 },
+    ], [
+      // 呼吸叶子自带 emitEnabled=false（单用时关发射），与花瓣的
+      // 发射开关相撞：以花瓣为准（跟随边即裁决，不改叶子本体）
+      { type: 'followParams', leader: 0, follower: 1, keys: ['emitEnabled'] },
+      { type: 'modulate', fromChild: 1, from: 'deformAmount', toChild: 0, toKey: 'rate', depth: 0.4 },
+    ]),
+    parent('dyn-rainstorm', '暴雨', [
+      { entry: 'dyn-rain', version: 1 },
+      { entry: 'dyn-glow-frost', version: 1 },
+      { entry: 'dyn-tint-frost', version: 1 },
+    ], [
+      { type: 'followParams', leader: 2, follower: 0, keys: ['color'] },
+    ]),
+    parent('dyn-dyed-smoke', '染烟', [
+      { entry: 'dyn-smoke', version: 1 },
+      { entry: 'dyn-tint-warm', version: 1 },
+    ], [
+      { type: 'followParams', leader: 1, follower: 0, keys: ['color'] },
+    ]),
+  );
   return out;
 }
 

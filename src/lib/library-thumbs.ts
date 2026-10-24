@@ -51,6 +51,13 @@ export function sampleSpriteGrid(): PixelGrid {
   grid[7]![6] = SLIME_LIGHT;
   grid[7]![7] = SLIME_LIGHT;
   grid[8]![6] = SLIME_LIGHT;
+  // 取色靶区（发光叶子靠取色选区：示例精灵带几个标准靶色，
+  // 发光定格图因此是真渲染而非示意）：暖色围巾、胸口蓝宝石
+  // （与内置「辉光呼吸」的取色同值）、两侧毒绿符文。
+  for (let x = 5; x <= 14; x++) grid[6]![x] = '#ff8a3c';
+  for (const [gx, gy] of [[9, 13], [10, 13], [9, 14], [10, 14]] as const) grid[gy]![gx] = '#2ea8ff';
+  grid[12]![4] = '#8dff57';
+  grid[12]![15] = '#8dff57';
   return grid;
 }
 
