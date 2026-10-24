@@ -204,3 +204,75 @@ P5 一直悬置的原因。成本：小，但语义代价最大。
 （本节三项已于 2026-10-25 全部裁定并落地，见上「三裁定落地」。）
 后续悬置：P3 编号顺序（甲后紧迫性低）、P2 中 ≥64 极端部件的
 兜底提示。
+
+## 六、3Dto2Dshape 借用落地 + 双遍真机报错修复（2026-10-25，用户令「按此结论开工」）
+
+调研对象 ANGJustinl/3Dto2Dshape（MIT）四项可借中的三项已落地：
+
+- **一、原始法线蒙皮变换**：sixpart 的 bakeSkinnedMesh 原先丢弃源
+  法线、整模 computeVertexNormals 几何重算（与 twopass 的原生蒙皮
+  法线口径不一致，PMX 脸部吃亏）。改为法线与位置同口径做骨骼矩阵
+  3×3 混合并归一化；无源法线时才几何重算兜底。探针
+  probe-authored-normals 6 项（旋转骨骼下法线随转、非蒙皮原样、
+  无源不产出）全过。
+- **二、PMX 重合加算附加层剔除**：新模块 bake/material-overlays.ts
+  （移植上游判定）：候选 = 有球面贴图且 sphereMode=2（加算）的材质
+  组；仅当其每个三角形能在非候选组找到位置完全重合、蒙皮权重与
+  morph 逐顶点一致的孪生三角形时整组剔除。pmx-scene 加载时执行
+  （材质置 visible=false，被剔除名单记 mesh.userData）。探针
+  probe-material-overlays 8 项（重合剔除/微偏不剔/权重不同不剔/
+  乘算不剔/本体半透明不剔/场景级生效）全过。
+- **三、拆分小碎片清理**：skeleton-mapper 两条 ID 拆分路径共用
+  filterSmallMaskComponents——每骨骼每方向的归属掩码在裁 bbox 前做
+  连通域（8 连通）清理：除最大域外面积 <4 的整域清除；眼/眉/口等
+  小部件骨骼（isProtectedDetailBone，中英日名）豁免；
+  SplitOptions.fragmentMinArea 可调（0 关闭）。探针
+  probe-fragment-filter 8 项全过（首版曾因名单漏「目」字被探针抓出
+  并已补）。
+
+- **双遍真机报错「t.dispose is not a function」已修**：PMX 场景是
+  单网格材质数组，twopass 与 threejs-baker 两份 applyToonMaterials
+  都把 mesh.material 当单个材质调 dispose——数组无此方法，换材质
+  第一步即抛。改为基色/贴图取首个材质、旧材质逐个 dispose。
+  探针 probe-material-array-dispose 5 项全过。
+- **六部件真机报错「reading 'elements'」未定位**：拿用户上传的
+  三个 PMX（reze/塞尔凯特/武器）实跑全部 CPU 阶段（解析→骨骼→
+  拓扑→下垂→蒙皮静态化→部件几何）无此错；六部件渲染段与双遍/
+  手动确实不同（部件相机、块内 ID 纹理着色器、轮廓掩码、候选
+  方向线门控），嫌疑在此段内，但本环境无 WebGL 未能复现——
+  已用无头 Firefox 软件 GL 实跑复现中/待真机堆栈。
+
+- **验证**：新探针 6 个全过（见上）；probe-bake-options 19、
+  probe-id-capacity 6、verify-3d-pipeline 9、verify-finger-curl、
+  verify-proc-runtime 322 回归全过；tsc + 真实 build 过。
+  **未验证（真机闸门）**：法线口径变化后的实际明暗观感、附加层
+  剔除的实际烘焙对照、碎片清理对真实精灵的影响、双遍修复后
+  PMX 完整烘焙。
+
+## 七、Live2D / moc3 导出（2026-10-25，用户令加到现有导出功能）
+
+- **写入器移植**：src/lib/live2d/ 整体移植上游 live2d 内核
+  （moc3.ts 写入器 + serialize.ts 往返 + keyforms.ts 求值器 +
+  model/types/zip/order/decomposition 等 12 文件，MIT 声明头已加；
+  modelParts 仅类型存根）。本地适配仅一处：FaceParamId 词表扩入
+  全身标准参数（BodyAngle/Breath/EyeBall/Brow 等）。探针
+  probe-moc3-writer 13 项全过：魔数/版本、关键形绑定口径（静止
+  图元也绑 AngleX 追踪绘制顺序——上游既定策略、无 AngleX 时静止
+  图元 1 关键形）、buildMoc3Archive 三件套结构、serialize 往返
+  零差异。
+- **模型构建器**：live2d/build-from-model.ts——与六部件同口径的
+  骨骼/拓扑/垂臂后静态烘焙，按（网格×材质组×部件）拆图元，
+  中立姿态正交投影，隔离贴图经注入渲染（浏览器实现
+  renderDrawableWebGL 与六部件同光照口径），骨骼姿态采样三族
+  关键形（頭 AngleX/AngleY、上半身 BodyAngleX；驱动不了任何
+  顶点的参数自动不生成）。探针 probe-live2d-builder 用真 PMX
+  （reze）+ 存根渲染跑通：34 图元/34558 三角形，头部图元 ±30°
+  位移 ±6.9px 反对称、腿部零驱动，buildMoc3 产出 2.2MB 二进制。
+- **导出入口**：ThreeBakeDialog 在 MMD 模型时于烘焙按钮旁加
+  「导出 Live2D (.moc3)」——加载当前模型 → 构建 → 打包 zip
+  （文件夹/model.moc3 + texture_00.png + model3.json）下载。
+- **v1 边界（诚实口径）**：眼/口表情参数依赖 PMX morph，本管线
+  PMX 场景未接 morphAttributes，未生成（不假造）；绘制顺序按
+  中立深度中位数静态排，无动态顺序关键形；刚性道具暂归 torso。
+  **未验证**：导出包在 Cubism/VTube Studio 的实际加载（本环境
+  无 Cubism Core），与隔离渲染的真机像素正确性，同批真机验。

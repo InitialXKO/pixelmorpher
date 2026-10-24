@@ -46,6 +46,12 @@ import {
   type ManualPartSpec,
   type ManualPivotSpec,
 } from '@/lib/bake/threejs-baker-manual';
+import { loadModelScene } from '@/lib/bake/load-model';
+import {
+  buildLive2dModel,
+  buildLive2dArchive,
+  renderDrawableWebGL,
+} from '@/lib/live2d/build-from-model';
 
 /** 手动拆分的部件草稿（对话框编辑态） */
 interface ManualPartDraft {
@@ -941,6 +947,45 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     }
   }, [fileData, url, size, paletteSize, weightThreshold, absorbUnassigned, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor]);
 
+  /** 导出 Live2D (.moc3)：当前 MMD 模型 → 拆分图元 + 骨骼姿态采样关键形 → 打包下载 */
+  const handleExportLive2d = useCallback(async () => {
+    setBaking(true);
+    setError(null);
+    setImportMsg(null);
+    try {
+      const inp = await resolveInput();
+      setProgress('加载模型…');
+      await new Promise((r) => setTimeout(r, 30));
+      const scene = await loadModelScene(inp, pmxTexturesRef.current ?? undefined);
+      const name = fileName ? fileName.replace(/\.(pmx|pmd|glb|gltf|zip)$/i, '') : 'model';
+      setProgress('构建 Live2D 模型…');
+      await new Promise((r) => setTimeout(r, 30));
+      const model = buildLive2dModel(scene, {
+        modelName: name,
+        usePmxNpr: pmxFlavor,
+        renderDrawable: renderDrawableWebGL,
+        onProgress: (m) => setProgress(m),
+      });
+      setProgress('打包 moc3…');
+      const zip = await buildLive2dArchive(model);
+      const blob = new Blob([zip.buffer as ArrayBuffer], { type: 'application/zip' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${name}_live2d.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      setImportMsg(
+        `Live2D 已导出：${model.drawables.length} 个图元、参数 ${model.params.length > 0 ? model.params.map((p) => p.id).join(' / ') : '无（骨骼名未命中头/上半身）'}`,
+      );
+      setProgress('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setProgress('');
+    } finally {
+      setBaking(false);
+    }
+  }, [fileData, url, fileName, pmxFlavor]);
+
   /** 读取网格清单（手动模式） */
   /** 分组草案 → 部件草稿（名称消重，枢轴默认首网格原点） */
   const draftsFromGroups = useCallback((groups: { name: string; meshIndices: number[] }[]): ManualPartDraft[] => {
@@ -1458,6 +1503,16 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             >
               {baking ? '烘焙中…' : bakeMode === 'sixpart' ? '六部件烘焙' : bakeMode === 'manual' ? '手动拆分烘焙' : '按骨骼烘焙'}
             </button>
+            {isMmd && (
+              <button
+                onClick={handleExportLive2d}
+                disabled={baking}
+                className="h-7 rounded border border-fuchsia-700 px-3 text-[11px] text-fuchsia-300 hover:bg-fuchsia-900 disabled:opacity-50"
+                title="把当前 MMD 模型导出为 Live2D 包（.moc3 + 贴图图集 + model3.json 的 zip）：按部件×材质拆分图元，头/上半身骨骼姿态采样成参数关键形"
+              >
+                导出 Live2D (.moc3)
+              </button>
+            )}
             {bakeMode === 'sixpart' && sixPart && (
               <button
                 onClick={() => {
