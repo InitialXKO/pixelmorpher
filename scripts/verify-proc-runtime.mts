@@ -2137,4 +2137,75 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     pkgW2.warnings.filter((w) => w.includes('刀光')).join('；'));
 }
 
+// ============ Y 组：面板动态预览全库不崩（示例角色走工厂构造） ============
+// 上线实测：EntryLivePreview 手写角色字面量缺 tracks/transform，
+// convert 的 FK 求值读 node.tracks.x 当场崩（全部动态条目中招，
+// 因这条路径此前无探针跑过）。构建器已收入 library-thumbs 与面板共用。
+{
+  const LE = await import('../src/lib/library-entries');
+  const DE = await import('../src/lib/dynamic-expand');
+  const TH = await import('../src/lib/library-thumbs');
+  const RT = await import('../src/lib/proc-runtime/runtime-template');
+  const { defaultDynamicParams } = await import('../src/lib/dynamic-patterns');
+  const dynEntries = LE.BUILTIN_ENTRIES.filter((e) => e.kind === 'dynamic');
+  const bad: string[] = [];
+  let okCount = 0;
+  for (const entry of dynEntries) {
+    try {
+      const ex = DE.expandDynamicEntry(LE.BUILTIN_INDEX, entry.id, entry.latest);
+      const inst = {
+        id: 'preview', slot: 'main', enabled: true,
+        params: ex.params ?? defaultDynamicParams(),
+        patternRef: { id: entry.id, version: entry.latest },
+      };
+      const ch = TH.samplePreviewCharacter(inst as never);
+      const pkg = convertCharacterToRuntimePackage(ch as never, undefined, {
+        frameRate: 12, totalFrames: 48, libraryEntries: LE.BUILTIN_ENTRIES });
+      if (RT.buildRuntimeHtml(pkg).length > 1000) okCount++;
+      else bad.push(`${entry.id}:html 过短`);
+    } catch (err) {
+      bad.push(`${entry.id}:${(err as Error).message}`);
+    }
+  }
+  check('Y1 全部动态条目面板预览（convert+整包）不抛错', bad.length === 0 && okCount === dynEntries.length, bad.join('；'));
+  const posterBad: string[] = [];
+  for (const entry of dynEntries) {
+    try {
+      const ex = DE.expandDynamicEntry(LE.BUILTIN_INDEX, entry.id, entry.latest);
+      if (ex.params) TH.dynamicPosterRGBA(ex.params);
+    } catch (err) {
+      posterBad.push(`${entry.id}:${(err as Error).message}`);
+    }
+  }
+  check('Y2 全部动态条目定格图不抛错', posterBad.length === 0, posterBad.join('；'));
+  // 表面缩略图必须是着色后的真实观感，不是档位索引图原样显示
+  // （索引图签名：G 通道恒 255、B 恒 0 的一片绿——上线实测踩过；
+  // 当时 V5 只验非空、T 组只验确定性，都没看颜色）
+  const surfEntries = LE.BUILTIN_ENTRIES.filter((e) => e.kind === 'surface');
+  const surfBad: string[] = [];
+  const meanColors = new Set<string>();
+  for (const entry of surfEntries) {
+    const found = LE.defOf(LE.BUILTIN_INDEX, entry.id);
+    if (!found || 'kind' in found.def) { surfBad.push(`${entry.id}:无 def`); continue; }
+    const img = TH.surfaceThumbRGBA(found.def as never);
+    if (!img) { surfBad.push(`${entry.id}:烘焙失败`); continue; }
+    let r = 0, g = 0, b = 0, n = 0;
+    const colors = new Set<string>();
+    for (let i = 0; i < img.data.length; i += 4) {
+      if (img.data[i + 3]! > 0) {
+        r += img.data[i]!; g += img.data[i + 1]!; b += img.data[i + 2]!; n++;
+        colors.add(`${img.data[i]},${img.data[i + 1]},${img.data[i + 2]}`);
+      }
+    }
+    if (n === 0) { surfBad.push(`${entry.id}:全透明`); continue; }
+    const mg = Math.round(g / n);
+    if (mg > 250) surfBad.push(`${entry.id}:疑似索引图未着色（平均 G=${mg}）`);
+    if (colors.size < 3) surfBad.push(`${entry.id}:不同色仅 ${colors.size}`);
+    meanColors.add(`${Math.round(r / n)},${mg},${Math.round(b / n)}`);
+  }
+  check('Y3 全部表面条目缩略图已着色（非索引图）且各有图案',
+    surfBad.length === 0 && meanColors.size >= 15,
+    `${surfBad.join('；')} 平均色种类 ${meanColors.size}`);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

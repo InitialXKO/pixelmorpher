@@ -10,13 +10,18 @@
 // ============================================================
 
 import {
-  dynamicDeformAt, glowField, glowPulseAt, type DynamicPatternParams,
+  dynamicDeformAt, glowField, glowPulseAt, type DynamicPatternInstance, type DynamicPatternParams,
 } from './dynamic-patterns';
 import { createSurfaceBaker } from './proc-runtime/bake-src';
+import { shadeTileStatic } from './proc-runtime/main-canvas';
 import { createDynamicRuntime } from './proc-runtime/dynamic-src';
 import { expandSurfaceGraph, graphHasRefs, subgraphLibraryOf } from './proc-runtime/graph-expand';
+import { createDefaultParametricAppearance } from './proc-runtime/surfaces';
 import { allLibraryEntries, surfaceLibEntriesOf, type SurfaceEntryDef } from './library-entries';
-import type { PixelGrid } from './unified-types';
+import {
+  createDefaultCharacter, createDefaultCostumePiece, createDefaultNode,
+  type Character, type PixelGrid,
+} from './unified-types';
 
 export interface RGBAImage {
   w: number;
@@ -69,11 +74,40 @@ function hexToRgb(hex: string): [number, number, number] {
   return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
 
+/** 条目动态预览用示例角色：单躯干部件挂一个动态实例。
+ * 节点/角色必须走工厂构造——手写字面量缺 tracks/transform，
+ * convert 的 FK 求值（interpolateTransformImpl 读 node.tracks.x）
+ * 会当场崩；面板预览上线时正是因为没人跑过这条路径而漏掉。 */
+export function samplePreviewCharacter(inst: DynamicPatternInstance): Character {
+  const node = createDefaultNode('torso', '躯干');
+  node.slot = createDefaultCostumePiece('torso');
+  node.dynamicPatterns = [inst];
+  const character = createDefaultCharacter('preview-char', '预览');
+  character.nodes = { torso: node };
+  character.rootNodeId = 'torso';
+  character.costumeSets = [{
+    id: 'set1', name: '默认',
+    pieces: {
+      torso: {
+        nodeId: 'torso', zIndex: 0,
+        parametric: createDefaultParametricAppearance(),
+      } as unknown as Character['costumeSets'][number]['pieces'][string],
+    },
+  }];
+  character.activeCostumeSetId = 'set1';
+  return character;
+}
+
 // ---------------- 表面缩略图 ----------------
 
 let bakerSingleton: ReturnType<typeof createSurfaceBaker> | null = null;
 
-/** 表面条目某版 def → 标准瓦片烘焙图（48×48 圆角矩形） */
+/** 表面条目某版 def → 标准瓦片预览图（48×48 圆角矩形）。
+ * 注意 compileTileDAG 的 data 是档位索引编码（R=调色板档位、
+ * G=闪光标志、B=轮廓外延），不是颜色图——必须再走主画布同款
+ * 着色（shadeTileStatic：调色板+光照/描边，默认外观）才是真实
+ * 观感。直接把索引图当 RGBA 显示会是一片绿色（档位值 ~33、
+ * 闪光字节 255 落在 G 通道），上线实测踩过。 */
 export function surfaceThumbRGBA(def: SurfaceEntryDef, size = 48): RGBAImage | null {
   try {
     bakerSingleton ??= createSurfaceBaker();
@@ -86,9 +120,19 @@ export function surfaceThumbRGBA(def: SurfaceEntryDef, size = 48): RGBAImage | n
     }
     const tile = bakerSingleton.compileTileDAG(
       { kind: 'rect', size: [size, size], roundness: 0.18 }, graph, 0);
-    const data = new Uint8ClampedArray(tile.data.length);
-    data.set(tile.data);
-    return { w: tile.w, h: tile.h, data };
+    const grid = shadeTileStatic(tile, createDefaultParametricAppearance(), 0);
+    const h = grid.length, w = grid[0]?.length ?? 0;
+    const data = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const c = grid[y]![x];
+        if (!c) continue;
+        const [r, g, b] = hexToRgb(c);
+        const o = (y * w + x) * 4;
+        data[o] = r; data[o + 1] = g; data[o + 2] = b; data[o + 3] = 255;
+      }
+    }
+    return { w, h, data };
   } catch {
     return null;
   }

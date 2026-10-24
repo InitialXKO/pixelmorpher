@@ -17,10 +17,9 @@ import {
   type DynChildRef, type EntryDef, type LibraryEntry, type SurfaceEntryDef,
 } from '@/lib/library-entries';
 import { expandDynamicEntry } from '@/lib/dynamic-expand';
-import { cachedThumb, dynamicPosterRGBA, surfaceThumbRGBA } from '@/lib/library-thumbs';
+import { cachedThumb, dynamicPosterRGBA, samplePreviewCharacter, surfaceThumbRGBA } from '@/lib/library-thumbs';
 import { convertCharacterToRuntimePackage } from '@/lib/proc-runtime/convert';
 import { buildRuntimeHtml } from '@/lib/proc-runtime/runtime-template';
-import { createDefaultParametricAppearance } from '@/lib/proc-runtime/surfaces';
 import type { Character } from '@/lib/unified-types';
 import {
   defaultDynamicParams, normalizeDynamicParams,
@@ -341,21 +340,7 @@ function EntryLivePreview({ entry, allEntries }: { entry: LibraryEntry; allEntri
       params: ex.params ?? defaultDynamicParams(),
       patternRef: { id: entry.id, version: entry.latest },
     };
-    const character = {
-      id: 'preview-char', name: '预览',
-      nodes: {
-        torso: {
-          id: 'torso', name: '躯干', role: 'bone',
-          slot: { slotKey: 'torso' }, dynamicPatterns: [inst],
-        },
-      },
-      rootNodeId: 'torso', rootNodeIds: ['torso'],
-      costumeSets: [{
-        id: 'set1', name: '默认',
-        pieces: { torso: { nodeId: 'torso', zIndex: 0, parametric: createDefaultParametricAppearance() } },
-      }],
-      activeCostumeSetId: 'set1', variants: {},
-    } as unknown as Character;
+    const character = samplePreviewCharacter(inst);
     const pkg = convertCharacterToRuntimePackage(character, undefined, {
       frameRate: 12, totalFrames: 48, libraryEntries: allEntries,
     });
