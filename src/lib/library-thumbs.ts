@@ -14,7 +14,8 @@ import {
 } from './dynamic-patterns';
 import { createSurfaceBaker } from './proc-runtime/bake-src';
 import { createDynamicRuntime } from './proc-runtime/dynamic-src';
-import type { SurfaceEntryDef } from './library-entries';
+import { expandSurfaceGraph, graphHasRefs, subgraphLibraryOf } from './proc-runtime/graph-expand';
+import { allLibraryEntries, surfaceLibEntriesOf, type SurfaceEntryDef } from './library-entries';
 import type { PixelGrid } from './unified-types';
 
 export interface RGBAImage {
@@ -76,9 +77,13 @@ let bakerSingleton: ReturnType<typeof createSurfaceBaker> | null = null;
 export function surfaceThumbRGBA(def: SurfaceEntryDef, size = 48): RGBAImage | null {
   try {
     bakerSingleton ??= createSurfaceBaker();
-    const graph = JSON.parse(JSON.stringify(def.graph)) as typeof def.graph;
+    let graph = JSON.parse(JSON.stringify(def.graph)) as typeof def.graph;
     graph.params = {};
     for (const p of def.params) graph.params[p.key] = p.def;
+    // 组合模板含 ref：先按条目库展开成平图再烘（与进包/主画布同路）
+    if (graphHasRefs(graph)) {
+      graph = expandSurfaceGraph(graph, subgraphLibraryOf(surfaceLibEntriesOf(allLibraryEntries()))).graph;
+    }
     const tile = bakerSingleton.compileTileDAG(
       { kind: 'rect', size: [size, size], roundness: 0.18 }, graph, 0);
     const data = new Uint8ClampedArray(tile.data.length);

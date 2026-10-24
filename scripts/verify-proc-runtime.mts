@@ -264,15 +264,20 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
 {
   const baker = createSurfaceBaker();
   const shape = { kind: 'rect', size: [40, 32] as [number, number], roundness: 0.15 };
+  // 含 ref 的组合模板按真实管线先展开再烘（烘焙器不认 ref）
+  const { expandSurfaceGraph: expG, subgraphLibraryOf: subG, graphHasRefs: hasRefG } = await import('../src/lib/proc-runtime/graph-expand');
+  const LE_G = await import('../src/lib/library-entries');
+  const libG = subG(LE_G.surfaceLibEntriesOf(LE_G.allLibraryEntries()));
   check('G1 模板数量 ≥ 22', PATTERN_TEMPLATES.length >= 22);
   for (const t of PATTERN_TEMPLATES) {
-    const g = instantiatePattern(t);
-    const ids = new Set(g.nodes.map((x) => x.id));
-    const refsOk = g.nodes.every((x) => Object.values(x.inputs ?? {}).every((r) => ids.has(r)))
-      && g.writes.every((x) => ids.has(x.from));
+    const g0 = instantiatePattern(t);
+    const ids = new Set(g0.nodes.map((x) => x.id));
+    const refsOk = g0.nodes.every((x) => Object.values(x.inputs ?? {}).every((r) => ids.has(r)))
+      && g0.writes.every((x) => ids.has(x.from));
     const paramKeys = new Set(t.params.map((p) => p.key));
-    const dollarOk = JSON.stringify(g.nodes).match(/"\$[a-zA-Z]+"/g)?.every((s) => paramKeys.has(s.slice(2, -1))) ?? true;
+    const dollarOk = JSON.stringify(g0.nodes).match(/"\$[a-zA-Z]+"/g)?.every((s) => paramKeys.has(s.slice(2, -1))) ?? true;
     check(`G2 模板 ${t.name}：引用完整 + $参数有定义`, refsOk && dollarOk);
+    const g = hasRefG(g0) ? expG(g0, libG).graph : g0;
     const tile = baker.compileTileDAG(shape, g);
     const tiers = new Set<number>();
     let rangeOk = true;
@@ -1900,6 +1905,60 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     return e.kind === 'dynamic' && 'kind' in d && d.kind === 'parent';
   }).map((e) => e.id);
   check('U5 内置父模式 ≥10 个（含样板与嵌套）', parentIds.length >= 10);
+}
+
+// ============ V 组：静态库扩充（构件子图 + 组合父模板） ============
+{
+  const { PATTERN_TEMPLATES: PT, instantiatePattern: instP } = await import('../src/lib/proc-runtime/pattern-templates');
+  const { expandSurfaceGraph: expS, subgraphLibraryOf: subOf, graphHasRefs: hasRefs } = await import('../src/lib/proc-runtime/graph-expand');
+  const { createSurfaceBaker: csb } = await import('../src/lib/proc-runtime/bake-src');
+  const LE = await import('../src/lib/library-entries');
+  const bakerV = csb();
+  const shapeV = { kind: 'rect', size: [36, 36] as [number, number], roundness: 0.1 };
+  const libV = subOf(LE.surfaceLibEntriesOf(LE.allLibraryEntries()));
+  const bakeOf = (tplId: string) => {
+    const t = PT.find((x) => x.id === tplId)!;
+    let g = instP(t);
+    if (hasRefs(g)) g = expS(g, libV).graph;
+    return Buffer.from(bakerV.compileTileDAG(shapeV as never, g as never, 0).data);
+  };
+  const nonBlank = (b: Buffer) => {
+    const s = new Set<number>();
+    for (let i = 0; i < b.length; i += 4) s.add(b[i]!);
+    return s.size > 3;
+  };
+  // V1 全部表面模板（含新构件/父模板）烘焙非空且确定
+  const badBake: string[] = [];
+  for (const t of PT) {
+    const b1 = bakeOf(t.id);
+    const b2 = bakeOf(t.id);
+    if (!nonBlank(b1) || !b1.equals(b2)) badBake.push(t.id);
+  }
+  check(`V1 全 ${PT.length} 个表面模板烘焙非空+确定`, badBake.length === 0);
+  if (badBake.length > 0) console.log('   烘焙异常:', badBake.join(','));
+  // V2 都市迷彩：同一构件两实例（不同种子）展开后两份 blob 节点
+  const camo = PT.find((x) => x.id === 'camo-urban')!;
+  const camoExp = expS(instP(camo), libV);
+  const blobNodes = camoExp.graph.nodes.filter((nd) => nd.op === 'blob');
+  check('V2 同构件双实例展开（种子不同→两份节点，不合并）',
+    blobNodes.length === 2 && camoExp.warnings.length === 0);
+  // V3 组合 ≠ 任一构件单独（装甲板 ≠ 铆钉阵/斑团）
+  check('V3 装甲钢板烘焙区别于其构件',
+    !bakeOf('armor').equals(bakeOf('part-rivets')) && !bakeOf('armor').equals(bakeOf('part-blob')));
+  // V4 菱格的 rotate 生效：与未旋转的同构图烘焙不同
+  const dia = PT.find((x) => x.id === 'part-diamond')!;
+  const diaFlat = JSON.parse(JSON.stringify(instP(dia))) as typeof dia.graph;
+  diaFlat.nodes = diaFlat.nodes.filter((nd) => nd.id !== 'rot');
+  diaFlat.writes = diaFlat.writes.map((wr) => (wr.from === 'rot' ? { ...wr, from: 'rep' } : wr));
+  const diaNoRot = Buffer.from(bakerV.compileTileDAG(shapeV as never, diaFlat as never, 0).data);
+  check('V4 菱格旋转生效（与未旋转版烘焙不同）', !bakeOf('part-diamond').equals(diaNoRot));
+  // V5 缩略图路径：组合模板经 surfaceThumbRGBA（内部展开）非空
+  const TH = await import('../src/lib/library-thumbs');
+  const armorEntry = LE.BUILTIN_ENTRIES.find((e) => e.id === 'armor')!;
+  const thumb = TH.surfaceThumbRGBA(armorEntry.versions[1] as import('../src/lib/library-entries').SurfaceEntryDef);
+  let thumbAlpha = 0;
+  if (thumb) for (let i = 3; i < thumb.data.length; i += 4) if (thumb.data[i]! > 0) thumbAlpha++;
+  check('V5 装甲钢板缩略图（ref 展开后烘焙）非空', !!thumb && thumbAlpha > 300);
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
