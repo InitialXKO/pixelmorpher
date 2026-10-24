@@ -28,13 +28,16 @@ import {
 import {
   splitByBoneId,
   splitSixParts,
+  splitSixPartsLayered,
   mapBonesToNodes,
+  mapBonesToNodesLayered,
   rgbaToGrid,
   alignLimbToRest,
   scaleGridNearest,
   cropGridToContent,
   type ProcessedBone,
   type ProcessedBoneDirection,
+  type ProcessedBoneLayered,
 } from '@/lib/bake/skeleton-mapper';
 import {
   bakeManualParts,
@@ -752,7 +755,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [absorbUnassigned, setAbsorbUnassigned] = useState(false);
   const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
   /** 烘焙模式：twopass=整模 ID 双遍（16 遍），sixpart=六部件（96 遍） */
-  const [bakeMode, setBakeMode] = useState<'twopass' | 'sixpart' | 'manual'>('sixpart');
+  const [bakeMode, setBakeMode] = useState<'twopass' | 'sixpart' | 'manual' | 'layer'>('sixpart');
+  const [processedLayered, setProcessedLayered] = useState<Map<number, ProcessedBoneLayered> | null>(null);
   // 全角度模式：额外 ±45°（各 8 方向）与 ±90°（各 1 个朝向）纬度的整套精灵
   const [fullAngle, setFullAngle] = useState(false);
   // PMX 导入：zip 解包的贴图文件表 + 原味着色开关（参考版 NPR，默认关）
@@ -801,6 +805,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setTwoPass(null);
     setSixPart(null);
     setProcessed(null);
+    setProcessedLayered(null);
     setError(null);
     setImportMsg(null);
     setManualMerges(new Map());
@@ -865,6 +870,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setTwoPass(null);
     setSixPart(null);
     setProcessed(null);
+    setProcessedLayered(null);
     setImportMsg(null);
     setRebakeTarget(null);
     try {
@@ -906,13 +912,14 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     }
   }, [fileData, url, size, paletteSize, weightThreshold, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor]);
 
-  /** 六部件烘焙：6 部件 × 8 方向 ×（颜色+ID）= 96 遍 */
-  const handleBakeSixPart = useCallback(async () => {
+  /** 六部件烘焙：6 部件 × 8 方向 ×（颜色+ID）= 96 遍；layerMode 时多渲图层 ID 遍并按（骨骼×图层）拆分 */
+  const handleBakeSixPart = useCallback(async (layerMode = false) => {
     setBaking(true);
     setError(null);
     setSixPart(null);
     setTwoPass(null);
     setProcessed(null);
+    setProcessedLayered(null);
     setImportMsg(null);
     setRebakeTarget(null);
     try {
@@ -922,6 +929,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       const t0 = performance.now();
       const data = await bakeSixParts(inp, {
         size,
+        layerPass: layerMode,
         weightThreshold,
         absorbUnassigned,
         granularity,
@@ -935,9 +943,24 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       setTotalMs(performance.now() - t0);
       setProgress('按部件拆分…');
       await new Promise((r) => setTimeout(r, 30));
-      const proc = splitSixParts(data, { paletteSize });
       setSixPart(data);
-      setProcessed(proc);
+      if (layerMode) {
+        const layered = splitSixPartsLayered(data, { paletteSize });
+        setProcessedLayered(layered);
+        // 预览/列表用合并视图：每骨骼取基底图层（像素最多）的方向集
+        const mergedView = new Map<number, ProcessedBone>();
+        for (const [bi, pb] of layered) {
+          let best = pb.layers[0];
+          for (const l of pb.layers) {
+            if (!best || l.pixelCount > best.pixelCount) best = l;
+          }
+          mergedView.set(bi, { ...pb, directions: best?.directions ?? [] });
+        }
+        setProcessed(mergedView);
+      } else {
+        const proc = splitSixParts(data, { paletteSize });
+        setProcessed(proc);
+      }
       setProgress('');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1140,6 +1163,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setTwoPass(null);
     setSixPart(null);
     setProcessed(null);
+    setProcessedLayered(null);
     setImportMsg(null);
     setRebakeTarget(null);
     try {
@@ -1178,7 +1202,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
 
   /** 按当前模式分发烘焙 */
   const handleBakeDispatch = useCallback(() => {
-    if (bakeMode === 'sixpart') handleBakeSixPart();
+    if (bakeMode === 'sixpart' || bakeMode === 'layer') handleBakeSixPart(bakeMode === 'layer');
     else if (bakeMode === 'manual') handleBakeManual();
     else handleBake();
   }, [bakeMode, handleBakeSixPart, handleBake, handleBakeManual]);
@@ -1276,7 +1300,9 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         enlargeNote = `；分辨率 ${size} 超出项目尺寸，已自动放大画布为 ${needW}×${needH}`;
       }
       const char = store.addUnifiedCharacter(name, { skipPlaceholderRoot: true });
-      const mapped = mapBonesToNodes(processed, char.id, name);
+      const mapped = processedLayered
+        ? mapBonesToNodesLayered(processedLayered, char.id, name)
+        : mapBonesToNodes(processed, char.id, name);
       // 一次写入：节点树 + 服装集（不中途回读，见 AGENTS.md 快照坑）
       store.updateUnifiedCharacter(char.id, {
         nodes: mapped.character.nodes,
@@ -1295,7 +1321,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [processed, fileName, size]);
+  }, [processed, processedLayered, fileName, size]);
 
   // 手动替换服装：用预览的某方向精灵替换已导入角色的对应精灵
   const handleReplaceSprite = useCallback((
@@ -1366,7 +1392,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         }));
 
   /** 当前模式的 bones（重烘按钮用） */
-  const curBones = bakeMode === 'sixpart' ? sixPart?.bones : bakeMode === 'twopass' ? twoPass?.bones : undefined;
+  const curBones = (bakeMode === 'sixpart' || bakeMode === 'layer') ? sixPart?.bones : bakeMode === 'twopass' ? twoPass?.bones : undefined;
 
   const boneList = processed ? [...processed.values()].sort((a, b) => a.boneIndex - b.boneIndex) : [];
 
@@ -1381,7 +1407,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       >
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-bold text-gray-200">
-            3D 烘焙 <span className="font-normal text-gray-500">（{bakeMode === 'sixpart' ? '六部件 → 块内 ID 拆分' : bakeMode === 'manual' ? '手动拆分（按网格）' : 'ID 双遍 → 拆分'} → 导入角色）</span>
+            3D 烘焙 <span className="font-normal text-gray-500">（{bakeMode === 'sixpart' ? '六部件 → 块内 ID 拆分' : bakeMode === 'layer' ? '六部件 → 骨骼×材质图层拆分' : bakeMode === 'manual' ? '手动拆分（按网格）' : 'ID 双遍 → 拆分'} → 导入角色）</span>
           </h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-200">✕</button>
         </div>
@@ -1459,10 +1485,11 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               烘焙模式
               <select
                 value={bakeMode}
-                onChange={(e) => setBakeMode(e.target.value as 'twopass' | 'sixpart' | 'manual')}
+                onChange={(e) => setBakeMode(e.target.value as 'twopass' | 'sixpart' | 'manual' | 'layer')}
                 className="h-6 rounded border border-[#2a2a4a] bg-[#0d0d1f] px-1 text-gray-300"
               >
                 <option value="sixpart">六部件（96 遍）</option>
+                <option value="layer">图层（六部件 + 按材质分层）</option>
                 <option value="twopass">整模 ID 双遍（16 遍）</option>
                 <option value="manual">手动拆分（按网格）</option>
               </select>
@@ -1501,7 +1528,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               disabled={baking}
               className="h-7 rounded bg-cyan-700 px-4 text-[11px] font-bold text-white hover:bg-cyan-600 disabled:opacity-50"
             >
-              {baking ? '烘焙中…' : bakeMode === 'sixpart' ? '六部件烘焙' : bakeMode === 'manual' ? '手动拆分烘焙' : '按骨骼烘焙'}
+              {baking ? '烘焙中…' : bakeMode === 'sixpart' ? '六部件烘焙' : bakeMode === 'layer' ? '图层烘焙' : bakeMode === 'manual' ? '手动拆分烘焙' : '按骨骼烘焙'}
             </button>
             {isMmd && (
               <button
@@ -1513,17 +1540,33 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                 导出 Live2D (.moc3)
               </button>
             )}
-            {bakeMode === 'sixpart' && sixPart && (
+            {(bakeMode === 'sixpart' || bakeMode === 'layer') && sixPart && (
               <button
                 onClick={() => {
                   const t0 = performance.now();
-                  const proc = splitSixParts(sixPart, { paletteSize });
-                  setProcessed(proc);
+                  if (bakeMode === 'layer') {
+                    const layered = splitSixPartsLayered(sixPart, { paletteSize });
+                    setProcessedLayered(layered);
+                    const mergedView = new Map<number, ProcessedBone>();
+                    for (const [bi, pb] of layered) {
+                      let best = pb.layers[0];
+                      for (const l of pb.layers) {
+                        if (!best || l.pixelCount > best.pixelCount) best = l;
+                      }
+                      mergedView.set(bi, { ...pb, directions: best?.directions ?? [] });
+                    }
+                    setProcessed(mergedView);
+                    setImportMsg(`2D 重拆完成（${layered.size} 骨骼，图层模式），未重跑 3D`);
+                  } else {
+                    setProcessedLayered(null);
+                    const proc = splitSixParts(sixPart, { paletteSize });
+                    setProcessed(proc);
+                    setImportMsg(`2D 重拆完成（${proc.size} 骨骼），未重跑 3D`);
+                  }
                   setTotalMs(performance.now() - t0);
-                  setImportMsg(`2D 重拆完成（${proc.size} 骨骼），未重跑 3D`);
                 }}
                 className="h-7 rounded border border-cyan-700 px-3 text-[11px] text-cyan-300 hover:bg-cyan-900 disabled:opacity-50"
-                title="对已有 sixPart 数据重跑 splitSixParts，不跑 96 遍 3D"
+                title="对已有 sixPart 数据重跑 2D 拆分，不跑 96 遍 3D"
               >
                 重新拆分 2D
               </button>
@@ -1532,9 +1575,11 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             <span className="text-gray-600">
               {bakeMode === 'sixpart'
                 ? '6 部件 × 8 方向 ×（颜色+ID）= 96 遍，分块独立渲染无遮挡'
-                : bakeMode === 'manual'
-                  ? '每部件 8 方向独立渲染；枢轴 = 网格原点，层级按场景图网格祖先'
-                  : '每方向 2 遍（前/后）× 8 方向 = 16 遍，用模型原始姿态'}
+                : bakeMode === 'layer'
+                  ? '六部件 96 遍 + 每帧多一遍图层 ID（共 144 遍）：按（骨骼 × 材质组）分层，图层挂骨骼节点下成子节点'
+                  : bakeMode === 'manual'
+                    ? '每部件 8 方向独立渲染；枢轴 = 网格原点，层级按场景图网格祖先'
+                    : '每方向 2 遍（前/后）× 8 方向 = 16 遍，用模型原始姿态'}
             </span>
           </div>
         </div>
@@ -1977,7 +2022,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
           <div className="mb-3">
             <div className="mb-2 flex items-center gap-3 text-[11px] text-gray-400">
               <span>
-                {sixPart!.bones.length} bones · {processed?.size ?? 0} 有效肢体 · 总耗时 {totalMs.toFixed(0)}ms · {size}×{size} · 六部件
+                {sixPart!.bones.length} bones · {processed?.size ?? 0} 有效肢体 · 总耗时 {totalMs.toFixed(0)}ms · {size}×{size} · 六部件{processedLayered ? ` · 图层 ${[...processedLayered.values()].reduce((n, pb) => n + pb.layers.length, 0)} 层` : ''}
               </span>
               <label className="flex cursor-pointer items-center gap-1">
                 <input
@@ -2058,7 +2103,9 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
           <div className="py-8 text-center text-[11px] text-gray-600">
             {bakeMode === 'sixpart'
               ? '选择模型后点「六部件烘焙」：6 部件 × 8 方向 ×（颜色+ID）= 96 遍 → 块内 ID 拆分 → 可导入为角色'
-              : bakeMode === 'manual'
+              : bakeMode === 'layer'
+                ? '选择模型后点「图层烘焙」：六部件烘焙 + 图层 ID 遍 → 按（骨骼 × 材质组）分层拆分 → 导入为分层角色（图层是骨骼节点的子节点）'
+                : bakeMode === 'manual'
                 ? '选择模型后在部件清单里勾选网格，点「手动拆分烘焙」：每部件 8 方向 → 可导入为角色（适合非人形 / 无骨骼绑定的模型）'
                 : '选择模型后点「按骨骼烘焙」：16 遍渲染（ID 双遍 × 8 方向）→ 自动按 bone 拆分 → 可导入为角色'}
           </div>

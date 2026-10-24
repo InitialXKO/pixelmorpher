@@ -117,6 +117,9 @@ export interface SixPartGroup {
   idPixels?: Uint8ClampedArray;
   /** 块内局部 bone ID 高半（字节 4..7 = 局部 bone 32..63） */
   idPixelsHi?: Uint8ClampedArray;
+  /** 图层 ID（R 通道 = 视图号+1，0=无图层像素）：图层模式（layerPass）才有，
+   * 视图 = (网格 × 材质组)，拆分按（骨骼 × 图层）再分一次 */
+  layerPixels?: Uint8ClampedArray;
   /** 相机半宽（归一化单位），用于跨部件尺寸归一化 */
   cameraHalf: number;
 }
@@ -135,6 +138,9 @@ export interface SixPartBakeData {
   merge: BoneMergeInfo;
   /** 整模相机半宽（归一化单位），用于全局统一尺度（可逆性：记录尺度差） */
   globalCameraHalf: number;
+  /** 图层模式元数据：部件 → 视图（图层）清单（顺序 = layerPixels 里的层号-1）；
+   * rank = 正面帧相机深度中位数定的画序（0 = 最远、先画） */
+  partLayers?: Partial<Record<PartName, { key: string; label: string; rank: number }[]>>;
   /** 无归属三角形丢弃数（主导骨骼不属于任何部件；开启 absorbUnassigned 后为仍无法归入的孤立数） */
   droppedTriCount: number;
   /** 无归属三角形按邻近投票归入部件的数量（absorbUnassigned 关闭时为 0） */
@@ -145,6 +151,8 @@ export interface SixPartBakeData {
 
 export interface SixPartBakeOptions extends BakeOptions {
   onProgress?: (done: number, total: number, label: string) => void;
+  /** 图层模式：每部件每方向多渲一遍图层 ID（视图号），拆分产出分层精灵 */
+  layerPass?: boolean;
   granularity?: BoneGranularity;
   smallBoneThreshold?: number;
   manualMerges?: Map<number, number>;
@@ -924,6 +932,7 @@ export async function bakeSixParts(
     };
 
     const groups: SixPartGroup[] = [];
+    const partLayersAcc: Partial<Record<PartName, { key: string; label: string; rank: number }[]>> = {};
 
     const partBoneMap = {} as Record<PartName, number[]>;
     // 单节点部件（合并后只剩一个有效骨骼）跳过 ID 遍：无需按骨骼拆分
@@ -1224,6 +1233,60 @@ export async function bakeSixParts(
       idInner.position.copy(inner.position);
       idInner.scale.setScalar(scale);
 
+      // 图层 ID 组（图层模式）：与 ID 组同构（组 > 内层同变换），每视图一张
+      // 位置汤网格、aLayer = 视图号+1，片元直出层号到 R 通道
+      const layerPartGroup = new THREE.Group();
+      const layerInner = new THREE.Group();
+      layerPartGroup.add(layerInner);
+      const layerViewLabels: string[] = [];
+      let layerMat: THREE.ShaderMaterial | null = null;
+      let layerRanks: number[] | null = null;
+      if (options.layerPass) {
+        layerMat = new THREE.ShaderMaterial({
+          glslVersion: THREE.GLSL3,
+          vertexShader: `
+            in float aLayer;
+            flat out float vLayer;
+            void main() {
+              vLayer = aLayer;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: `
+            precision highp float;
+            flat in float vLayer;
+            out vec4 outColor;
+            void main() { outColor = vec4(vLayer / 255.0, 0.0, 0.0, 1.0); }
+          `,
+          side: THREE.DoubleSide,
+        });
+        bp.views.forEach((view, vi) => {
+          const mi = view.source.materials.indexOf(view.material ?? null);
+          layerViewLabels.push(view.material?.name || `材质${mi >= 0 ? mi + 1 : vi + 1}`);
+          const srcPos = view.source.geometry.getAttribute('position') as THREE.BufferAttribute;
+          const triCount = Math.floor(view.index.length / 3);
+          const pos = new Float32Array(triCount * 9);
+          const lay = new Float32Array(triCount * 3);
+          for (let t = 0; t < triCount; t++) {
+            for (let k = 0; k < 3; k++) {
+              const v = view.index[t * 3 + k];
+              pos[(t * 3 + k) * 3] = srcPos.getX(v);
+              pos[(t * 3 + k) * 3 + 1] = srcPos.getY(v);
+              pos[(t * 3 + k) * 3 + 2] = srcPos.getZ(v);
+              lay[t * 3 + k] = vi + 1;
+            }
+          }
+          const g = new THREE.BufferGeometry();
+          g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+          g.setAttribute('aLayer', new THREE.BufferAttribute(lay, 1));
+          const mesh = new THREE.Mesh(g, layerMat!);
+          mesh.frustumCulled = false;
+          layerInner.add(mesh);
+        });
+        layerInner.position.copy(inner.position);
+        layerInner.scale.setScalar(scale);
+      }
+
       // 外轮廓标记组：本部件双面渲进 stencil（不出颜色/深度）——候选的二维剔除区域
       const markMat = new THREE.MeshBasicMaterial({
         color: 0xffffff, depthWrite: false, depthTest: false, side: THREE.DoubleSide,
@@ -1474,8 +1537,56 @@ export async function bakeSixParts(
           await new Promise((r) => setTimeout(r, 0));
         }
 
-        groups.push({ part: pname, direction: ((d + 6) % 8), latitude: lat, jointPixels: groupJoints, colorPixels, idPixels, idPixelsHi, cameraHalf: half });
+        // 图层 ID 渲染（图层模式）：单独渲图层组读回；正面帧顺带按相机
+        // 深度中位数给本部件各视图定画序 rank（远→近）
+        let layerPixels: Uint8ClampedArray | undefined;
+        if (options.layerPass) {
+          const hadPart = scene.children.includes(partGroup);
+          if (hadPart) scene.remove(partGroup);
+          layerPartGroup.rotation.order = 'YXZ';
+          layerPartGroup.rotation.y = ang;
+          layerPartGroup.rotation.x = pitch;
+          scene.add(layerPartGroup);
+          layerPartGroup.updateMatrixWorld(true);
+          renderer.clear(true, true, true);
+          renderer.render(scene, camera);
+          scene.remove(layerPartGroup);
+          if (hadPart) scene.add(partGroup);
+          layerPixels = readFlipped();
+          if (lat === 0 && d === 0 && !layerRanks) {
+            const medians = layerInner.children.map((m) => {
+              const pa = (m as THREE.Mesh).geometry.getAttribute('position');
+              if (!pa || pa.count === 0) return Number.POSITIVE_INFINITY;
+              const step = Math.max(1, Math.floor(pa.count / 200));
+              const v = new THREE.Vector3();
+              const zs: number[] = [];
+              for (let i = 0; i < pa.count; i += step) {
+                v.fromBufferAttribute(pa, i)
+                  .applyMatrix4((m as THREE.Mesh).matrixWorld)
+                  .applyMatrix4(camera.matrixWorldInverse);
+                zs.push(v.z);
+              }
+              zs.sort((a, b) => a - b);
+              return zs[Math.floor(zs.length / 2)];
+            });
+            // 视图空间 z 越小（越负）越远 → rank 0 先画
+            const order = medians.map((_, i) => i).sort((a, b) => medians[a] - medians[b]);
+            layerRanks = new Array<number>(medians.length).fill(0);
+            order.forEach((vi, rank) => { layerRanks![vi] = rank; });
+          }
+          await new Promise((r) => setTimeout(r, 0));
+        }
+
+        groups.push({ part: pname, direction: ((d + 6) % 8), latitude: lat, jointPixels: groupJoints, colorPixels, idPixels, idPixelsHi, layerPixels, cameraHalf: half });
         renderer.setRenderTarget(null);
+      }
+
+      if (options.layerPass) {
+        partLayersAcc[pname] = layerViewLabels.map((label, vi) => ({
+          key: `${pname}|${vi}`,
+          label,
+          rank: layerRanks?.[vi] ?? vi,
+        }));
       }
 
       // 清理本部件的颜色/ID 资源（视图几何与源几何共享属性数据，不在此释放）
@@ -1483,6 +1594,13 @@ export async function bakeSixParts(
         const m = o as THREE.Mesh;
         if (m.isMesh) (m.material as THREE.Material).dispose();
       });
+      if (layerMat) {
+        layerInner.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (m.isMesh) m.geometry.dispose();
+        });
+        layerMat.dispose();
+      }
       idInner.traverse((o) => {
         const m = o as THREE.Mesh;
         if (!m.isMesh) return;
@@ -1506,6 +1624,7 @@ export async function bakeSixParts(
       width: size,
       height: size,
       normalization: { center: { x: center.x, y: center.y, z: center.z }, scale },
+      partLayers: options.layerPass ? partLayersAcc : undefined,
       merge,
       // 整模归一化到 [-1,1]，globalCameraHalf = 1.0（归一化单位）
       globalCameraHalf: 1.0,
