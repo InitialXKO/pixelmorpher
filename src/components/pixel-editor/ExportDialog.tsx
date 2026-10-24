@@ -5,6 +5,8 @@ import { useProjectStore, useEditorStore } from '@/lib/store';
 import { renderUnifiedCharactersToCanvas } from '@/lib/unified-render';
 import { convertCharacterToRuntimePackage } from '@/lib/proc-runtime/convert';
 import { buildRuntimeHtml } from '@/lib/proc-runtime/runtime-template';
+import { buildLive2dModelFromCharacter } from '@/lib/live2d/build-from-character';
+import { buildLive2dArchive } from '@/lib/live2d/build-from-model';
 import { allPatternTemplates } from '@/lib/proc-runtime/pattern-library';
 import { allLibraryEntries } from '@/lib/library-entries';
 import type { AnimationClip } from '@/lib/types';
@@ -42,6 +44,7 @@ import {
   FolderOpen,
   Package,
   Gamepad2,
+  Box,
   Upload,
   FileUp,
 } from 'lucide-react';
@@ -56,7 +59,7 @@ interface ExportDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-type ExportFormat = 'spritesheet' | 'png' | 'gif' | 'video' | 'lottie' | 'project' | 'procruntime';
+type ExportFormat = 'spritesheet' | 'png' | 'gif' | 'video' | 'lottie' | 'project' | 'procruntime' | 'live2d';
 type BackgroundMode = 'transparent' | 'custom';
 type SpritesheetDirection = 'horizontal' | 'vertical';
 type VideoFormat = 'webm' | 'mp4';
@@ -1034,6 +1037,43 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
     onOpenChange(false);
   }, [procCharacter, procPkg, onOpenChange]);
 
+  // ---- Export: Live2D (.moc3)：编辑器角色第 0 帧静态姿态 → Cubism zip ----
+  const [live2dCharId, setLive2dCharId] = useState<string | null>(null);
+  const [live2dError, setLive2dError] = useState<string | null>(null);
+  const [live2dBusy, setLive2dBusy] = useState(false);
+  const [live2dDone, setLive2dDone] = useState<string | null>(null);
+  const live2dCharacter = useMemo(() => {
+    const chars = Object.values(unifiedCharacters ?? {});
+    if (chars.length === 0) return null;
+    const wanted = live2dCharId ?? activePuppetSkeletonId;
+    return chars.find((c) => c.id === wanted) ?? chars[0];
+  }, [live2dCharId, unifiedCharacters, activePuppetSkeletonId]);
+  const exportLive2d = useCallback(async () => {
+    if (!live2dCharacter || live2dBusy) return;
+    setLive2dBusy(true);
+    setLive2dError(null);
+    setLive2dDone(null);
+    try {
+      const model = buildLive2dModelFromCharacter(live2dCharacter, sprites, { frameRate });
+      const zip = await buildLive2dArchive(model);
+      const blob = new Blob([zip as unknown as BlobPart], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${live2dCharacter.name}_live2d.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setLive2dDone(`已导出：图元 ${model.drawables.length} 个（节点精灵），参数 ${model.params.length} 个（静态声明）`);
+    } catch (err) {
+      console.error('Live2D export failed:', err);
+      setLive2dError(err instanceof Error ? err.message : '导出失败，未知错误');
+    } finally {
+      setLive2dBusy(false);
+    }
+  }, [live2dCharacter, sprites, frameRate, live2dBusy]);
+
   // ---- Handle export button click ----
   const handleExport = useCallback(() => {
     switch (activeTab) {
@@ -1058,8 +1098,11 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       case 'procruntime':
         exportProcRuntime();
         break;
+      case 'live2d':
+        void exportLive2d();
+        break;
     }
-  }, [activeTab, exportPngSequence, exportSpritesheet, exportGif, exportVideo, exportLottie, exportProjectFile, exportProcRuntime]);
+  }, [activeTab, exportPngSequence, exportSpritesheet, exportGif, exportVideo, exportLottie, exportProjectFile, exportProcRuntime, exportLive2d]);
 
   // ---- Get export button label ----
   const getExportLabel = useCallback(() => {
@@ -1072,6 +1115,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       case 'lottie': return 'Export Lottie';
       case 'project': return 'Export Project';
       case 'procruntime': return 'Export Runtime';
+      case 'live2d': return 'Export Live2D';
     }
   }, [activeTab, isExporting]);
 
@@ -1149,6 +1193,10 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
             <TabsTrigger value="procruntime" className="flex-1 min-w-[70px] gap-1 text-[10px] sm:text-xs data-[state=active]:bg-purple-600/30 data-[state=active]:text-purple-300 px-1.5 py-1.5">
               <Gamepad2 className="size-3" />
               运行时
+            </TabsTrigger>
+            <TabsTrigger value="live2d" className="flex-1 min-w-[70px] gap-1 text-[10px] sm:text-xs data-[state=active]:bg-purple-600/30 data-[state=active]:text-purple-300 px-1.5 py-1.5">
+              <Box className="size-3" />
+              Live2D
             </TabsTrigger>
           </TabsList>
 
@@ -1547,12 +1595,60 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
               </Button>
             </div>
           </TabsContent>
+
+          <TabsContent value="live2d" className="space-y-4 mt-4">
+            <div className="space-y-3">
+              <div className="text-xs text-gray-500 bg-white/[0.03] rounded-md p-3 space-y-1">
+                <div className="font-medium text-gray-400">Live2D 模型（.moc3，Cubism zip）</div>
+                <div>
+                  把所选角色按编辑器渲染计划的第 0 帧姿态导出：每个节点精灵是一个图元（ArtMesh），
+                  位置/转角/缩放/画序与主画布一致，打包 model.moc3 + texture_00.png + model3.json，
+                  可直接拖进 Cubism / VTube Studio。本页签是静态姿态版：角度参数只声明不带关键形；
+                  要带骨骼关键形（头/身体角度驱动）的版本，在 3D 烘焙对话框里对 PMX 模型导出。
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-gray-400">角色</Label>
+                <Select
+                  value={live2dCharacter?.id ?? ''}
+                  onValueChange={(v) => setLive2dCharId(v)}
+                >
+                  <SelectTrigger className="h-8 text-xs bg-white/5 border-white/10 text-gray-300">
+                    <SelectValue placeholder="选择角色" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-[#1a1a2e] border-white/10">
+                    {Object.values(unifiedCharacters ?? {}).map((c) => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {live2dError && (
+                <div className="rounded-md border border-red-900/50 bg-red-950/20 p-3 text-[11px] text-red-300">
+                  导出失败：{live2dError}
+                </div>
+              )}
+              {live2dDone && (
+                <div className="rounded-md border border-fuchsia-900/50 bg-fuchsia-950/20 p-3 text-[11px] text-fuchsia-300">
+                  {live2dDone}
+                </div>
+              )}
+              <Button
+                onClick={() => void exportLive2d()}
+                className="w-full bg-fuchsia-600 hover:bg-fuchsia-500 text-white gap-2"
+                disabled={!live2dCharacter || live2dBusy}
+              >
+                <Download className="size-3.5" />
+                {live2dBusy ? '导出中…' : 'Export Live2D (.moc3)'}
+              </Button>
+            </div>
+          </TabsContent>
         </Tabs>
 
         <Separator className="bg-white/10" />
 
         {/* ---- Common: Background ---- */}
-        {activeTab !== 'project' && activeTab !== 'procruntime' && (
+        {activeTab !== 'project' && activeTab !== 'procruntime' && activeTab !== 'live2d' && (
           <div className="space-y-2">
             <Label className="text-xs text-gray-400">Background</Label>
             <div className="flex items-center gap-3">
