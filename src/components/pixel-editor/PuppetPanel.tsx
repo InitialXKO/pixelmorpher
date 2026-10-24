@@ -19,6 +19,7 @@ import RigPanel from './puppet/RigPanel';
 import DressPanel from './puppet/DressPanel';
 import PerformPanel from './puppet/PerformPanel';
 import StateMachinePanel from './puppet/StateMachinePanel';
+import BehaviorTreePanel from './puppet/BehaviorTreePanel';
 import BehaviorPanel from './puppet/BehaviorPanel';
 import ProcPreview from './puppet/ProcPreview';
 import type { DirectionIndex } from '@/lib/unified-types';
@@ -261,6 +262,16 @@ export default function PuppetPanel() {
               </summary>
               <div className="p-2 pt-0">
                 <StateMachinePanel unifiedCharacters={unifiedCharacters} />
+              </div>
+            </details>
+
+            {/* ============ 行为树 BEHAVIOR TREE ============ */}
+            <details className="bg-white/[0.02] border border-white/10 rounded">
+              <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
+                🌳 行为树
+              </summary>
+              <div className="p-2 pt-0">
+                <BehaviorTreePanel unifiedCharacters={unifiedCharacters} />
               </div>
             </details>
 

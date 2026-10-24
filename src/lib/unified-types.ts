@@ -944,6 +944,48 @@ export interface StateMachineSpec {
   transitions: StateMachineTransition[];
 }
 
+/** 行为树节点类型（宿主侧决策，不进运行时包）：
+ *  selector=按序试任一成功即成功；sequence=按序跑任一失败即失败；
+ *  inverter=成败翻转；repeat=子节点跑 N 遍（0=一直跑）；
+ *  condition=黑板变量比较（与状态机条件同口径）；intent/setMove/setVar/wait=动作叶 */
+export type BehaviorTreeNodeType =
+  | 'selector' | 'sequence' | 'inverter' | 'repeat'
+  | 'condition' | 'intent' | 'setMove' | 'setVar' | 'wait';
+
+/** 行为树节点：树形，children 只对组合/修饰节点有意义（修饰节点至多 1 个子节点）。
+ *  条件用 var/op/value（与 StateMachineCondition 同名同义）；动作叶各用专属字段。 */
+export interface BehaviorTreeNode {
+  id: string;
+  type: BehaviorTreeNodeType;
+  children?: BehaviorTreeNode[];
+  /** 条件：变量名（读黑板） */
+  var?: string;
+  /** 条件：算符 */
+  op?: StateMachineCondition['op'];
+  /** 条件：比较值 */
+  value?: number;
+  /** 动作：意图名（调 procRuntime.intent，返回布尔定成败） */
+  intentName?: string;
+  /** 动作：移动值（调 procRuntime.setMove） */
+  moveX?: number;
+  /** 动作：写变量名（写黑板，并转发 procRuntime.setVar） */
+  setVarName?: string;
+  /** 动作：写变量值 */
+  setVarValue?: number;
+  /** 修饰：重复遍数（0=一直跑） */
+  repeatCount?: number;
+  /** 动作：等待秒数 */
+  waitSeconds?: number;
+}
+
+/** 行为树规格（作者编排，宿主侧跑）：root 为 null 表空树。
+ *  注意：本规格不进运行时包，convert 不读它；宿主用 behavior-tree.ts 的
+ *  tick 求值，每 tick 喂世界变量、把意图/移动/变量调进 procRuntime。 */
+export interface BehaviorTreeSpec {
+  version: 1;
+  root: BehaviorTreeNode | null;
+}
+
 export interface ProcPerformance {
   id: string;
   name: string;
@@ -1178,6 +1220,10 @@ export interface Character {
    *  状态机只判身体状态（材料在包内：宿主变量 + 表演清单）；世界判定
    *  （行为树）归宿主，不进包。编辑器编排界面后置，先以数据规格存在 */
   stateMachine?: StateMachineSpec;
+  /** 行为树规格（作者编排，宿主侧决策）：不进运行时包，convert 不读；
+   *  树是"大脑"、状态机是"身体"——树每 tick 按世界状态决策，只输出意图、
+   *  移动、变量，走 procRuntime 口子。编辑器见 BehaviorTreePanel。 */
+  behaviorTree?: BehaviorTreeSpec;
   /** 编辑器输入轨（时间线角色级三轨）：主画布播放/拖动时逐帧采样，
    *  作为行为图的宿主输入（var 节点读 moveX/speed01/grounded）。
    *  缺轨/缺省：moveX=0、speed01=0、grounded=1（静止待机）。
