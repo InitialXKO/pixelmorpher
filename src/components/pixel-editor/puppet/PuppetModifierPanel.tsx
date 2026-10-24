@@ -96,6 +96,9 @@ export default function PuppetModifierPanel() {
 
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
+  // 注意：frameRate 必须在顶层取——之前它写在蓝图分支的 JSX 里现取，
+  // 切 tab 时 hook 数变化，React 报 Rendered more hooks（2026-10-24 实测）。
+  const frameRate = useProjectStore((s) => s.frameRate);
 
   const character = useMemo(
     () => (activePuppetSkeletonId ? unifiedCharacters[activePuppetSkeletonId] ?? null : null),
@@ -315,7 +318,7 @@ export default function PuppetModifierPanel() {
         <>
           {blueprint ? (
             <BlueprintEditor
-              frameRate={useProjectStore((s) => s.frameRate)}
+              frameRate={frameRate}
               graph={blueprint}
               onChange={updateBlueprint}
               title={`${node.name} 的蓝图`}
