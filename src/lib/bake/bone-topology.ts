@@ -199,21 +199,26 @@ export function analyzeTopology(bones: TopoBone[], opts: TopologyOptions = {}): 
       const sides: number[] = [];
       for (const c of struct) {
         const dc = classify(chainDir(c));
-        if (dc === 'up') ups.push(c);
+        // up 双视野：4 步主链走进长发链会把脖子链压成 side/down（塞尔凯特
+        // 頭下挂 15 节发链实测），2 步视野能看见脖子本身的朝向，任一朝上即算 up
+        if (dc === 'up' || classify(chainDir(c, 2)) === 'up') ups.push(c);
         else if (dc === 'side') sides.push(c);
       }
       if (ups.length < 1 || sides.length < 2) continue;
       const pair = oppositePair(i, sides);
       if (!pair) continue;
+      // 头分支 = 最高的 up 分支；它若吞掉全骨架七成以上，那是整条身体链
+      // 不是脖子（根节点拿 IK 亲当胳膊、センター当头链的假十字），拒收
+      let bu = ups[0], bdy = -Infinity;
+      for (const u of ups) {
+        const dy = bones[u].worldPos.y - bones[i].worldPos.y;
+        if (dy > bdy) { bdy = dy; bu = u; }
+      }
+      if (subSize(bu) > n * 0.7) continue;
       const y = bones[i].worldPos.y;
       if (y > bestY) {
         bestY = y;
         cross = i;
-        let bu = ups[0], bdy = -Infinity;
-        for (const u of ups) {
-          const dy = bones[u].worldPos.y - bones[i].worldPos.y;
-          if (dy > bdy) { bdy = dy; bu = u; }
-        }
         headChild = bu;
         armPair = pair;
       }
@@ -240,8 +245,45 @@ export function analyzeTopology(bones: TopoBone[], opts: TopologyOptions = {}): 
     const struct = children[node].filter(isStructural);
     const downs = struct.filter((c) => classify(chainDir(c)) === 'down');
     if (downs.length < 2) return false;
-    const pair = oppositePair(node, downs);
-    if (!pair) return false;
+    // 候选对（三选一准入）：XZ 互反（原点夹角或链走向），或 XZ 偏移互为
+    // 左右镜像——髋原点在 Z 上偏置时两腿向量同向前指、夹角口径会全灭
+    // （与肩部假十字同病）。多对时取链末端最低的一对：脚落到全模最低处，
+    // 裙摆物理链（塞尔凯特 qz 一排十几根）末端停在半空（实测 6.5+ vs 0.43）。
+    const endY = (c: number): number => {
+      // 沿最大子树主链走到底（followChain 只跟单孩子链，腿在膝/踝处分叉
+      // 会一步停住、末端高度失真——必须用主链口径）
+      let cur = c;
+      const seen = new Set<number>();
+      for (;;) {
+        if (seen.has(cur)) break;
+        seen.add(cur);
+        const ch = children[cur];
+        if (ch.length === 0) break;
+        cur = ch.reduce((a, b) => (subSize(a) >= subSize(b) ? a : b));
+      }
+      return bones[cur].worldPos.y;
+    };
+    const p = bones[node].worldPos;
+    const pairs: Array<[number, number]> = [];
+    for (let a = 0; a < downs.length; a++) {
+      for (let b = a + 1; b < downs.length; b++) {
+        const va = bones[downs[a]].worldPos, vb = bones[downs[b]].worldPos;
+        const oax = va.x - p.x, oaz = va.z - p.z, obx = vb.x - p.x, obz = vb.z - p.z;
+        const no = Math.hypot(oax, oaz) * Math.hypot(obx, obz);
+        const cosO = no > 1e-9 ? (oax * obx + oaz * obz) / no : 1;
+        const da = chainDir(downs[a]), db = chainDir(downs[b]);
+        const nd = Math.hypot(da.x, da.z) * Math.hypot(db.x, db.z);
+        const cosD = nd > 1e-9 ? (da.x * db.x + da.z * db.z) / nd : 1;
+        const mirror =
+          Math.abs(oax + obx) <= 0.35 * (Math.abs(oax) + Math.abs(obx)) + 0.05 &&
+          Math.abs(oaz - obz) <= 0.35 * (Math.abs(oaz) + Math.abs(obz)) + 0.05 &&
+          Math.abs(oax) > 0.1 && Math.abs(obx) > 0.1;
+        if (cosO < -0.3 || cosD < -0.3 || mirror) pairs.push([downs[a], downs[b]]);
+      }
+    }
+    if (pairs.length === 0) return false;
+    pairs.sort((p1, p2) => (endY(p1[0]) + endY(p1[1])) - (endY(p2[0]) + endY(p2[1])));
+    const pair = pairs[0];
     hipFork = node;
     legPair = pair;
     hipExtras = downs.filter((d) => d !== pair[0] && d !== pair[1]);
@@ -302,8 +344,11 @@ export function analyzeTopology(bones: TopoBone[], opts: TopologyOptions = {}): 
   const findHand = (armRoot: number): { hand: number | null; fingers: number[][]; others: number[] } => {
     let cur = armRoot;
     const seen = new Set<number>();
+    // 沿主链走到头，取最深的合格节点：手在手臂末端；上臂/肘部挂的中等
+    // 辅助链（袖饰等）也会凑够 ≥3 条候选链，先到先得会把手认在胳膊中间
+    let found: { hand: number; fingers: number[][]; others: number[] } | null = null;
     for (;;) {
-      if (seen.has(cur)) return { hand: null, fingers: [], others: [] };
+      if (seen.has(cur)) break;
       seen.add(cur);
       const ch = children[cur];
       const fingerCands: number[][] = [];
@@ -314,9 +359,9 @@ export function analyzeTopology(bones: TopoBone[], opts: TopologyOptions = {}): 
         else others.push(c);
       }
       if (fingerCands.length >= 3) {
-        return { hand: cur, fingers: fingerCands, others };
+        found = { hand: cur, fingers: fingerCands, others };
       }
-      if (ch.length === 0) return { hand: null, fingers: [], others: [] };
+      if (ch.length === 0) break;
       let best = ch[0], bestSize = -1;
       for (const c of ch) {
         const s = subSize(c);
@@ -324,6 +369,7 @@ export function analyzeTopology(bones: TopoBone[], opts: TopologyOptions = {}): 
       }
       cur = best;
     }
+    return found ?? { hand: null, fingers: [], others: [] };
   };
   const handLRes = findHand(armL);
   const handRRes = findHand(armR);
