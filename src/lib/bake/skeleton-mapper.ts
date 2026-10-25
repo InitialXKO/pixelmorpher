@@ -8,6 +8,7 @@ import { decodeBoneMask64 } from './threejs-baker-twopass';
 import type { PartName } from './threejs-baker-sixpart';
 import { medianCut, nearestPaletteIndex } from './threejs-baker';
 import { rgbaToHexOrNull } from '../engine/utils';
+import { directionFolder } from '../sprite-folder';
 import {
   pxToSub,
   createDefaultNode,
@@ -630,6 +631,8 @@ export function mapBonesToNodes(
         // 可逆性：记录分部件与全局的尺度差，渲染时换算
         partCameraHalf: dir.cameraHalf,
         globalCameraHalf: dir.globalCameraHalf ?? 1.0,
+        // 出生方向归档（sprite-folder）：烘焙时按方向落夹
+        folder: directionFolder(dir.direction) ?? undefined,
       };
       sprites[spriteId] = sprite;
       if (dirLat === 0) {
@@ -828,6 +831,7 @@ export function mapBonesToNodesLayered(
           plug: { x: pxToSub(dir.plugX), y: pxToSub(dir.plugY) },
           partCameraHalf: dir.cameraHalf,
           globalCameraHalf: dir.globalCameraHalf ?? 1.0,
+          folder: directionFolder(dir.direction) ?? undefined,
         };
         sprites[spriteId] = sprite;
         if (dirLat === 0) {

@@ -14,6 +14,7 @@
 import { useMemo, useState } from 'react';
 import type { Sprite } from '@/lib/unified-types';
 import { filterSpritesByQuery } from '@/lib/sprite-thumb';
+import { compareFolderKeys, NO_FOLDER_LABEL } from '@/lib/sprite-folder';
 import SpriteThumb from './SpriteThumb';
 
 export default function SpritePicker({
@@ -43,7 +44,9 @@ export default function SpritePicker({
       arr.push(sp);
       map.set(g, arr);
     }
-    return [...map.entries()].map(([name, items]) => ({ name, items }));
+    return [...map.entries()]
+      .sort(([a], [b]) => compareFolderKeys(a, b))
+      .map(([name, items]) => ({ name: name === '' ? NO_FOLDER_LABEL : name, items }));
   }, [filtered, groupBy]);
 
   return (

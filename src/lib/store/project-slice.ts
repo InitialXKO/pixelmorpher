@@ -14,6 +14,7 @@ import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '..
 import { resolveChainTarget3D } from '../unified-types';
 import { migrateProjectTimeUnits } from '../blueprint/time-migration';
 import { migrateClipStructure } from '../clip-migration';
+import { backfillSpriteFolders } from '../sprite-folder';
 
 const defaultProject: Project = {
   id: crypto.randomUUID(),
@@ -520,10 +521,16 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       delete ch.sprites;
     }
 
+    // 精灵文件夹回填（一次性、幂等）：存量烘焙精灵按 id 约定
+    // （spr_<角色>_<骨序>_…_<方向>）补出生方向夹；只填未设
+    // folder 的，用户手动移过的夹不覆盖（sprite-folder.ts）。
+    const backfilled = backfillSpriteFolders(migratedSprites);
+    const finalSprites = backfilled.changed > 0 ? backfilled.sprites : migratedSprites;
+
     set({
       ...file.project,
       keyframes: processedKeyframes,
-      sprites: migratedSprites,
+      sprites: finalSprites,
       animationClips,
       activeAnimationClipId,
       id: file.project.id || crypto.randomUUID(),

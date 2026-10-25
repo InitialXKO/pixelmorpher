@@ -702,6 +702,7 @@ function DirectionSpriteEditor({
           </div>
           <SpritePicker
             sprites={sprites}
+            groupBy={(sp) => sp.folder ?? ''}
             onPick={(spriteId) => {
               onAssign(pickerDir, spriteId);
               setPickerDir(null);

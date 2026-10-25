@@ -23,12 +23,16 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import { collectSubtreeIds, deleteNodeSubtree, addSocketToNode } from '@/lib/node-actions';
 import { SocketEditor, type SocketInfo } from './SocketEditor';
 import SpriteThumb from './SpriteThumb';
 import { filterSpritesByQuery } from '@/lib/sprite-thumb';
+import { groupSpritesByFolder, directionFolder, DIRECTION_FOLDER_NAMES, NO_FOLDER_LABEL } from '@/lib/sprite-folder';
 import ThreeBakeDialog from './puppet/ThreeBakeDialog';
 import { Box } from 'lucide-react';
 import { pxToSub, subToPx, type Socket } from '@/lib/unified-types';
@@ -301,6 +305,8 @@ export default function PuppetAssetPanel() {
   // 属性区跟随编辑器选中精灵（点行进编辑时同步写入 selectedSpriteId）
   const selectedSpriteId = useEditorStore((s) => s.selectedSpriteId);
   const selectedSprite = selectedSpriteId ? (sprites[selectedSpriteId] ?? null) : null;
+  // 精灵列表呈现：搜索过滤后按文件夹分组（方向夹在前、未分方向最后）
+  const spriteGroups = groupSpritesByFolder(filterSpritesByQuery(Object.values(sprites), spriteQuery));
   // 导入 PNG（单张进精灵表，自退役的 PartPanel 平移）
   const spriteFileRef = React.useRef<HTMLInputElement>(null);
   const handleImportSpritePNG = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1072,7 +1078,14 @@ export default function PuppetAssetPanel() {
             )}
             {sectionExpanded.sprites && (
               <div className="space-y-0.5 mt-0.5 max-h-32 overflow-y-auto">
-                {filterSpritesByQuery(Object.values(sprites), spriteQuery).map((sprite) => (
+                {spriteGroups.map((group) => (
+                  <React.Fragment key={group.folder || '__none'}>
+                    {spriteGroups.length > 1 && (
+                      <div className="px-1.5 pt-1 text-[9px] text-gray-600">
+                        {group.label}（{group.items.length}）
+                      </div>
+                    )}
+                    {group.items.map((sprite) => (
                   <ContextMenu key={sprite.id}>
                     <ContextMenuTrigger asChild>
                   <div
@@ -1129,6 +1142,25 @@ export default function PuppetAssetPanel() {
                       <ContextMenuItem onSelect={() => setRenaming({ kind: 'sprite', id: sprite.id! })}>
                         重命名
                       </ContextMenuItem>
+                      <ContextMenuSub>
+                        <ContextMenuSubTrigger>移入文件夹</ContextMenuSubTrigger>
+                        <ContextMenuSubContent>
+                          {Object.entries(DIRECTION_FOLDER_NAMES).map(([idx, label]) => (
+                            <ContextMenuItem
+                              key={idx}
+                              onSelect={() => useProjectStore.getState().updateSprite(sprite.id!, { folder: directionFolder(Number(idx)) ?? undefined })}
+                            >
+                              方向/{label}{sprite.folder === directionFolder(Number(idx)) ? ' ✓' : ''}
+                            </ContextMenuItem>
+                          ))}
+                          <ContextMenuSeparator />
+                          <ContextMenuItem
+                            onSelect={() => useProjectStore.getState().updateSprite(sprite.id!, { folder: undefined })}
+                          >
+                            {NO_FOLDER_LABEL}{!sprite.folder ? ' ✓' : ''}
+                          </ContextMenuItem>
+                        </ContextMenuSubContent>
+                      </ContextMenuSub>
                       <ContextMenuItem
                         onSelect={() => {
                           const dup = useProjectStore.getState().duplicateSprite(sprite.id!);
@@ -1174,6 +1206,8 @@ export default function PuppetAssetPanel() {
                       </ContextMenuItem>
                     </ContextMenuContent>
                   </ContextMenu>
+                    ))}
+                  </React.Fragment>
                 ))}
               </div>
             )}
