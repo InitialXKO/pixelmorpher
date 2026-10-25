@@ -44,6 +44,7 @@ export const SURFACE_OP_SPECS: OpSpec[] = [
   { op: 'px', label: '横坐标 px', cat: '场源', ports: [], params: [] },
   { op: 'py', label: '纵坐标 px', cat: '场源', ports: [], params: [] },
   { op: 'facing', label: '朝向光', cat: '场源', ports: [], params: [num('deg', '角度', -45, -180, 180, 5)] },
+  { op: 'phase', label: '动画相位 0..1', cat: '场源', ports: [], params: [] },
   { op: 'noise', label: '值噪声', cat: '场源', ports: [], params: [num('f', '频率', 0.25, 0.01, 1.5, 0.01), num('seed', '种子', 0, 0, 99, 1)] },
   { op: 'blob', label: '团块噪声', cat: '场源', ports: [], params: [num('f', '频率', 0.06, 0.005, 0.4, 0.005), num('seed', '种子', 0, 0, 99, 1), num('contrast', '对比', 1.2, 0.2, 3, 0.1)] },
   { op: 'stripes', label: '条纹', cat: '场源', ports: [], params: [en('axis', '轴', 'y', ['x', 'y', 'd']), num('f', '周期', 4, 0.5, 30, 0.5), num('duty', '占空', 0.5, 0, 1, 0.05), num('ph', '相位', 0, 0, 1, 0.05)] },
@@ -110,6 +111,10 @@ export const SURFACE_OP_SPECS: OpSpec[] = [
   {
     op: 'rotate', label: '旋转（作用域）', cat: '作用域', ports: ['in'], scope: true,
     params: [num('deg', '角度', 45, -180, 180, 1)],
+  },
+  {
+    op: 'scroll', label: '流动（作用域）', cat: '作用域', ports: ['in'], scope: true,
+    params: [num('dx', '横向每圈位移 px', 0, -120, 120, 0.5), num('dy', '纵向每圈位移 px', 0, -120, 120, 0.5)],
   },
   {
     op: 'overlay2', label: '自我叠印·回声（作用域）', cat: '作用域', ports: ['in'], scope: true,

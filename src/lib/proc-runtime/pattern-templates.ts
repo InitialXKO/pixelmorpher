@@ -35,8 +35,12 @@ const w = (from: string, slot: number, extra?: Partial<SurfaceGraphWrite>): Surf
 const P = (key: string, label: string, min: number, max: number, step: number, def: number): PatternParamDef =>
   ({ key, label, min, max, step, def });
 
-function graph(nodes: N[], writes: SurfaceGraphWrite[]): SurfaceGraph {
-  return { version: 1, nodes, writes, params: {} };
+function graph(
+  nodes: N[],
+  writes: SurfaceGraphWrite[],
+  animation?: { cycleSec: number; frames: number },
+): SurfaceGraph {
+  return { version: 1, nodes, writes, params: {}, ...(animation ? { animation } : {}) };
 }
 
 /** 常用底：形状内全覆盖写出（作 writes[0]） */
@@ -755,6 +759,102 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       w('wv', 0, { bump: { hi: 4, mid: 3, lo: 2 } }),
       w('grG', 4, { at: 0.2 }),
     ]),
+  },
+  // ---- 动态表面（D1）：图带 animation 规格，相位经 $phase/$phaseDeg 注入。
+  // 无缝口径：条纹 ph 吃 $phase（每圈滑一整周期）、rotate 吃 $phaseDeg
+  // （转满 360° 恒等），循环点逐像素无跳变；溶解为阈值扫过全程、
+  // 圈末复原（溶解类效果的固有口径）。
+  {
+    id: 'flow-water', name: '流动水面', cluster: '动态',
+    params: [
+      P('f', '波距', 3, 8, 0.5, 5), P('warp', '波纹扭曲', 0, 5, 0.5, 2.5),
+    ],
+    graph: graph([
+      ...baseIn(2),
+      n('nz', 'noise', undefined, { f: 0.1, seed: 17 }),
+      n('wv', 'stripes', undefined, { axis: 'y', f: '$f', duty: 0.4, ph: '$phase' }),
+      n('ww', 'warp', { in: 'wv', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
+      n('crest', 'levelBand', { in: 'ww' }, { level: 0.5, w: 0.5 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('ww', 3, { at: 0.5 }),
+      w('crest', 0, { at: 0.5, ch: 'glint' }),
+    ], { cycleSec: 2.4, frames: 12 }),
+  },
+  {
+    id: 'flame-tex', name: '火焰纹理', cluster: '动态',
+    params: [
+      P('f', '焰带距', 3, 9, 0.5, 5.5), P('warp', '焰形扭曲', 0, 6, 0.5, 3.5),
+    ],
+    graph: graph([
+      ...baseIn(1),
+      n('nz', 'blob', undefined, { f: 0.09, seed: 23, contrast: 1.3 }),
+      n('bands', 'stripes', undefined, { axis: 'y', f: '$f', duty: 0.55, ph: '$phase' }),
+      n('ww', 'warp', { in: 'bands', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
+      n('core', 'levelBand', { in: 'ww' }, { level: 0.5, w: 0.45 }),
+      n('shade', 'grad', undefined, { axis: 'y' }),
+      n('hot', 'mul', { a: 'core', b: 'shade' }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('ww', 4, { at: 0.5 }),
+      w('hot', 5, { at: 0.35 }),
+      w('core', 0, { at: 0.5, ch: 'glint' }),
+    ], { cycleSec: 1.6, frames: 12 }),
+  },
+  {
+    id: 'aurora-tex', name: '极光带', cluster: '动态',
+    params: [
+      P('f', '光带距', 4, 12, 0.5, 7), P('warp', '飘移扭曲', 0, 7, 0.5, 4),
+    ],
+    graph: graph([
+      ...baseIn(1),
+      n('nz', 'blob', undefined, { f: 0.06, seed: 29, contrast: 1.2 }),
+      n('bands', 'stripes', undefined, { axis: 'x', f: '$f', duty: 0.45, ph: '$phase' }),
+      n('ww', 'warp', { in: 'bands', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
+      n('gv', 'grad', undefined, { axis: 'y' }),
+      n('gate', 'levelBand', { in: 'gv' }, { level: 0.5, w: 0.85 }),
+      n('body', 'mul', { a: 'ww', b: 'gate' }),
+      n('crest', 'levelBand', { in: 'ww' }, { level: 0.5, w: 0.4 }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('body', 4, { at: 0.5 }),
+      w('crest', 0, { at: 0.5, ch: 'glint' }),
+    ], { cycleSec: 5, frames: 20 }),
+  },
+  {
+    id: 'swirl-rune', name: '旋转法阵', cluster: '动态',
+    params: [
+      P('seg', '扇区数', 4, 24, 1, 10), P('arcW', '弧宽', 3, 12, 0.5, 6),
+    ],
+    graph: graph([
+      ...baseIn(2),
+      n('rp', 'repeatPolar', { in: 'cs' }, { seg: '$seg', arcW: '$arcW', r0: 2, seed: 31 }),
+      n('cs', 'cellShape', undefined, { kind: 'ring', gap: 0.3, th: 2.2 }),
+      n('rot', 'rotate', { in: 'rp' }, { deg: '$phaseDeg' }),
+      n('core', 'focal', undefined, { cx: 0, cy: 0, r: 5, w: 1.2, mode: 'ring' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rot', 4, { at: 0 }),
+      w('core', 0, { at: 0.45, ch: 'glint' }),
+    ], { cycleSec: 6, frames: 24 }),
+  },
+  {
+    id: 'dissolve-tex', name: '溶解纹理', cluster: '动态',
+    params: [
+      P('scale', '蚀斑大小', 0.04, 0.14, 0.01, 0.08),
+    ],
+    graph: graph([
+      ...baseIn(1),
+      n('bl', 'blob', undefined, { f: '$scale', seed: 37, contrast: 1.35 }),
+      n('body', 'threshold', { in: 'bl' }, { at: '$phase', soft: 0.05 }),
+      n('edge', 'levelBand', { in: 'bl' }, { level: '$phase', w: 0.14 }),
+      n('ash', 'threshold', { in: 'bl' }, { at: 0.8, soft: 0.05 }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('body', 3, { at: 0.5 }),
+      w('ash', 4, { at: 0.5 }),
+      w('edge', 5, { at: 0.4 }),
+    ], { cycleSec: 3, frames: 16 }),
   },
 ];
 

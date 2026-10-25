@@ -273,6 +273,48 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
                 {editorDefs.length === 0 && (
                   <p className="text-[9px] text-gray-600">此图尚无暴露参数：在模式编辑器里把节点参数绑定到 $参数后，这里会出现滑杆。</p>
                 )}
+                {/* 动态表面（D1）：图随时间循环；图内用 phase 场源 / $phase / $phaseDeg / 流动作用域消费相位 */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <label className="flex items-center gap-1 text-[9px] text-gray-400">
+                    <input
+                      type="checkbox"
+                      checked={!!app.surfaceGraph.animation}
+                      onChange={(e) => {
+                        const g = app.surfaceGraph!;
+                        patch({
+                          surfaceGraph: e.target.checked
+                            ? { ...g, animation: g.animation ?? { cycleSec: 2, frames: 8 } }
+                            : { ...g, animation: undefined },
+                        });
+                      }}
+                    />
+                    动态表面（随时间循环）
+                  </label>
+                  {app.surfaceGraph.animation && (
+                    <>
+                      <span className="text-[9px] text-gray-500">周期秒</span>
+                      <input
+                        type="number" min={0.1} max={120} step={0.1}
+                        value={app.surfaceGraph.animation.cycleSec}
+                        onChange={(e) => {
+                          const g = app.surfaceGraph!;
+                          patch({ surfaceGraph: { ...g, animation: { ...g.animation!, cycleSec: Number(e.target.value) } } });
+                        }}
+                        className="w-14 rounded border border-[#2e2e55] bg-[#101024] px-1 py-0.5 text-[10px] text-gray-200"
+                      />
+                      <span className="text-[9px] text-gray-500">步数</span>
+                      <input
+                        type="number" min={2} max={60} step={1}
+                        value={app.surfaceGraph.animation.frames}
+                        onChange={(e) => {
+                          const g = app.surfaceGraph!;
+                          patch({ surfaceGraph: { ...g, animation: { ...g.animation!, frames: Number(e.target.value) } } });
+                        }}
+                        className="w-12 rounded border border-[#2e2e55] bg-[#101024] px-1 py-0.5 text-[10px] text-gray-200"
+                      />
+                    </>
+                  )}
+                </div>
               </div>
             ) : (
               <select

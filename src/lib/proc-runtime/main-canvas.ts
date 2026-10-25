@@ -295,28 +295,31 @@ function filterGraphForOverlay<T extends { writes: unknown[] }>(graph: T): T {
   };
 }
 
-/** 参数化外观 → 产品 Sprite（带缓存）；烘焙失败返回 null（回落精灵） */
+/** 参数化外观 → 产品 Sprite（带缓存）；烘焙失败返回 null（回落精灵）。
+ * phase（动态表面 D1）：本帧的离散相位 0..1，静态图恒 0；
+ * 相位进缓存键，不同相位各缓存一份。 */
 export function buildParametricSprite(
   app: ParametricAppearance,
   seedKey: string,
   baseSprite?: Sprite,
+  phase = 0,
 ): Sprite | null {
   const mode = app.composite ?? 'generate';
   if (mode !== 'generate' && baseSprite && baseSprite.width > 0 && baseSprite.height > 0) {
-    return buildCompositeSprite(app, seedKey, baseSprite, mode);
+    return buildCompositeSprite(app, seedKey, baseSprite, mode, phase);
   }
-  return buildGenerateSprite(app, seedKey);
+  return buildGenerateSprite(app, seedKey, phase);
 }
 
-function buildGenerateSprite(app: ParametricAppearance, seedKey: string): Sprite | null {
-  const key = `${cacheKey(app)}|${seedKey}`;
+function buildGenerateSprite(app: ParametricAppearance, seedKey: string, phase = 0): Sprite | null {
+  const key = `${cacheKey(app)}|${seedKey}|P:${phase}`;
   const hit = spriteCache.get(key);
   if (hit) return hit;
   try {
     const shape = runtimeShape(app);
     const bakeGraph = bakeGraphOf(app);
     const tile = bakeGraph
-      ? baker().compileTileDAG(shape, bakeGraph, haloOf(app))
+      ? baker().compileTileDAG(shape, bakeGraph, haloOf(app), phase)
       : baker().compileTileLayers(shape, app.surface, haloOf(app));
     const seed = seedFromString(seedKey);
     const data = shadeTileStatic(tile, app, seed);
@@ -343,8 +346,9 @@ function buildCompositeSprite(
   seedKey: string,
   base: Sprite,
   mode: 'silhouette' | 'overlay',
+  phase = 0,
 ): Sprite | null {
-  const key = `${cacheKey(app)}|${seedKey}|C:${mode}|${hashPixelGrid(base.data)}`;
+  const key = `${cacheKey(app)}|${seedKey}|C:${mode}|P:${phase}|${hashPixelGrid(base.data)}`;
   const hit = spriteCache.get(key);
   if (hit) return hit;
   try {
@@ -357,7 +361,7 @@ function buildCompositeSprite(
         if (c !== null && c !== undefined && c !== '') { solid[y * rw + x] = 1; solidCount++; }
       }
     }
-    if (solidCount === 0) return buildGenerateSprite(app, seedKey);
+    if (solidCount === 0) return buildGenerateSprite(app, seedKey, phase);
     const plugPx: [number, number] = base.plug
       ? [subToPx(base.plug.x), subToPx(base.plug.y)]
       : [rw / 2, rh / 2];
@@ -369,6 +373,7 @@ function buildCompositeSprite(
           raster,
           mode === 'overlay' ? filterGraphForOverlay(bakeGraph) : bakeGraph,
           halo,
+          phase,
         )
       : baker().compileTileLayersRaster(
           raster,
@@ -384,7 +389,7 @@ function buildCompositeSprite(
     // 写出编码）并进来。
     if (mode === 'overlay' && halo > 0) {
       const full = bakeGraph
-        ? baker().compileTileDAGRaster(raster, bakeGraph, halo)
+        ? baker().compileTileDAGRaster(raster, bakeGraph, halo, phase)
         : baker().compileTileLayersRaster(raster, app.surface, halo);
       for (let p = 0; p < tile.w * tile.h; p++) {
         if (tile.data[p * 4]! >= 128) tile.data[p * 4 + 2] = full.data[p * 4 + 2]!;

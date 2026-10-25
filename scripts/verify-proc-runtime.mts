@@ -275,7 +275,11 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     const refsOk = g0.nodes.every((x) => Object.values(x.inputs ?? {}).every((r) => ids.has(r)))
       && g0.writes.every((x) => ids.has(x.from));
     const paramKeys = new Set(t.params.map((p) => p.key));
-    const dollarOk = JSON.stringify(g0.nodes).match(/"\$[a-zA-Z]+"/g)?.every((s) => paramKeys.has(s.slice(2, -1))) ?? true;
+    // $phase / $phaseDeg 是求值器注入的保留参数（动态表面 D1），不要求模板定义
+    const dollarOk = JSON.stringify(g0.nodes).match(/"\$[a-zA-Z]+"/g)?.every((s) => {
+      const k = s.slice(2, -1);
+      return paramKeys.has(k) || k === 'phase' || k === 'phaseDeg';
+    }) ?? true;
     check(`G2 模板 ${t.name}：引用完整 + $参数有定义`, refsOk && dollarOk);
     const g = hasRefG(g0) ? expG(g0, libG).graph : g0;
     const tile = baker.compileTileDAG(shape, g);
@@ -2206,6 +2210,125 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('Y3 全部表面条目缩略图已着色（非索引图）且各有图案',
     surfBad.length === 0 && meanColors.size >= 15,
     `${surfBad.join('；')} 平均色种类 ${meanColors.size}`);
+}
+
+// ---------- Q) D1 动态表面：相位注入 / 流动无缝 / 溶解单调 / 全链透传 ----------
+{
+  const { createSurfaceBaker: csbQ } = await import('../src/lib/proc-runtime/bake-src');
+  const { surfacePhaseAt, surfaceAnimationOf, normalizeSurfaceAnimation } = await import('../src/lib/proc-runtime/surface-animation');
+  const { PATTERN_TEMPLATES: PTQ, instantiatePattern: ipQ } = await import('../src/lib/proc-runtime/pattern-templates');
+  const bakerQ = csbQ();
+  const shapeQ = { kind: 'rect', size: [28, 28] as [number, number], roundness: 0 };
+  const hexQ = (g: unknown, phase: number) =>
+    Buffer.from(bakerQ.compileTileDAG(shapeQ as never, g as never, 0, phase).data).toString('hex');
+
+  // Q1 相位量化口径（步进 + 周期闭合 + 负时间回绕）
+  const animQ = { cycleSec: 2, frames: 8 };
+  check('Q1 surfacePhaseAt 步进量化与周期闭合',
+    surfacePhaseAt(animQ, 0) === 0 && surfacePhaseAt(animQ, 0.26) === 0.125
+    && surfacePhaseAt(animQ, 2) === 0 && surfacePhaseAt(animQ, -0.26) === 0.75
+    && surfacePhaseAt(undefined, 3) === 0);
+  check('Q1b 动画规格规范化（钳制/非法回落）',
+    normalizeSurfaceAnimation({ cycleSec: 999, frames: 999 })?.frames === 60
+    && normalizeSurfaceAnimation({ cycleSec: -1, frames: 8 }) === undefined
+    && surfaceAnimationOf({ animation: animQ } as never)?.frames === 8);
+
+  // Q2 静态图对相位免疫（无相位消费者的图传任何相位结果不变）
+  const scalesQ = ipQ(PTQ.find((t) => t.id === 'scales')!);
+  check('Q2 静态图传相位结果不变', hexQ(scalesQ, 0) === hexQ(scalesQ, 0.5));
+
+  // Q3 流动无缝：scroll(条纹, dy=周期) 与 条纹 ph=$phase 逐像素等值
+  const scrollG = {
+    version: 1 as const,
+    nodes: [
+      { id: 'in', op: 'inside' },
+      { id: 'st', op: 'stripes', params: { axis: 'y', f: 5, duty: 0.4 } },
+      { id: 'sc', op: 'scroll', inputs: { in: 'st' }, params: { dx: 0, dy: -5 } },
+    ],
+    writes: [{ from: 'in', slot: 2, at: 0.5 }, { from: 'sc', slot: 4, at: 0.5 }],
+    params: {},
+  };
+  const phG = {
+    version: 1 as const,
+    nodes: [
+      { id: 'in', op: 'inside' },
+      { id: 'st', op: 'stripes', params: { axis: 'y', f: 5, duty: 0.4, ph: '$phase' } },
+    ],
+    writes: [{ from: 'in', slot: 2, at: 0.5 }, { from: 'st', slot: 4, at: 0.5 }],
+    params: {},
+  };
+  check('Q3 scroll 与 $phase 条纹在 0/0.3/0.7 三相位逐像素等值',
+    [0, 0.3, 0.7].every((p) => hexQ(scrollG, p) === hexQ(phG, p)));
+  check('Q3b 流动图相位 0 ≠ 相位 0.5（确实在动）', hexQ(scrollG, 0) !== hexQ(scrollG, 0.5));
+
+  // Q4 phase 场源：阈值 0.5 写出随相位翻转
+  const phaseG = {
+    version: 1 as const,
+    nodes: [
+      { id: 'in', op: 'inside' },
+      { id: 'ph', op: 'phase' },
+    ],
+    writes: [{ from: 'in', slot: 2, at: 0.5 }, { from: 'ph', slot: 5, at: 0.5 }],
+    params: {},
+  };
+  const slotCountQ = (g: unknown, phase: number, slot: number) => {
+    const t = bakerQ.compileTileDAG(shapeQ as never, g as never, 0, phase);
+    let n = 0;
+    for (let i = 0; i < t.w * t.h; i++) if (t.data[i * 4] === slot) n++;
+    return n;
+  };
+  check('Q4 phase 场源驱动写出（0.25 无命中、0.75 全命中）',
+    slotCountQ(phaseG, 0.25, 5) === 0 && slotCountQ(phaseG, 0.75, 5) > 600);
+
+  // Q5 溶解模板：主体像素随相位单调减少
+  const dissolveQ = ipQ(PTQ.find((t) => t.id === 'dissolve-tex')!);
+  const bodyCounts = [0, 0.25, 0.5, 0.75].map((p) => slotCountQ(dissolveQ, p, 3));
+  check(`Q5 溶解主体随相位单调减少（${bodyCounts.join('→')}）`,
+    bodyCounts.every((v, i) => i === 0 || v <= bodyCounts[i - 1]!) && bodyCounts[0]! > bodyCounts[3]!);
+
+  // Q6 内置动态模板：规格齐 + 相位 0 ≠ 半圈（法阵转 180° 图案应变）
+  const animTpls = ['flow-water', 'flame-tex', 'aurora-tex', 'swirl-rune', 'dissolve-tex'];
+  check('Q6 五个动态表面模板带合法 animation 规格',
+    animTpls.every((id) => !!surfaceAnimationOf(PTQ.find((t) => t.id === id)?.graph)));
+  // 法阵 seg=10 时转 180° 恰为扇区整数倍（对称回位），故验四分之一圈
+  check('Q6b 流动水面半圈 / 旋转法阵四分之一圈 ≠ 起点',
+    hexQ(ipQ(PTQ.find((t) => t.id === 'flow-water')!), 0) !== hexQ(ipQ(PTQ.find((t) => t.id === 'flow-water')!), 0.5)
+    && hexQ(ipQ(PTQ.find((t) => t.id === 'swirl-rune')!), 0) !== hexQ(ipQ(PTQ.find((t) => t.id === 'swirl-rune')!), 0.25));
+
+  // Q7 展开保留根图动画规格
+  const { expandSurfaceGraph: expQ, subgraphLibraryOf: libOfQ } = await import('../src/lib/proc-runtime/graph-expand');
+  const hostQ = {
+    version: 1 as const,
+    nodes: [
+      { id: 'in', op: 'inside' },
+      { id: 'r1', op: 'ref', params: { ref: 'scales' } },
+    ],
+    writes: [{ from: 'r1', slot: 3, at: 0 }],
+    params: {},
+    animation: { cycleSec: 3, frames: 10 },
+  };
+  check('Q7 子图展开保留根图 animation',
+    expQ(hostQ as never, libOfQ(PTQ)).graph.animation?.frames === 10);
+
+  // Q8 进包透传 + 整包运行时含多相位瓦片机制
+  const appQ = { ...createDefaultParametricAppearance(), surfaceGraph: ipQ(PTQ.find((t) => t.id === 'flow-water')!) };
+  const chQ = {
+    id: 'chQ', name: '动态表面进包',
+    nodes: { torso: makeNode('torso', '躯干', 'torso') },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: appQ } } }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkgQ = convertCharacterToRuntimePackage(chQ, undefined, { frameRate: 12 });
+  const pkgGraphQ = pkgQ.parts.find((p) => p.key === 'torso')?.base.surfaceGraph as { animation?: { frames: number } } | undefined;
+  check('Q8a 进包图保留 animation', pkgGraphQ?.animation?.frames === 12);
+  const { buildRuntimeHtml: brhQ } = await import('../src/lib/proc-runtime/runtime-template');
+  const htmlQ = brhQ(pkgQ);
+  check('Q8b 整包运行时含多相位瓦片与选步逻辑',
+    htmlQ.includes('surfaceAnimOfRt') && htmlQ.includes('#anim') && htmlQ.includes('surfaceStepAtRt')
+    && htmlQ.includes('animFrames'));
+  check('Q8c 包内图烘焙随相位变化（同源求值器）',
+    !!pkgGraphQ && hexQ(pkgGraphQ, 0) !== hexQ(pkgGraphQ, 0.5));
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

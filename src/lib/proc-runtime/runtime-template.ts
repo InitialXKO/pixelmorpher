@@ -321,8 +321,9 @@ function filterGraphForOverlayRt(graph) {
 function filterLayersForOverlayRt(program) {
   return program.filter((l) => l.bumpForm !== undefined || l.ch === 'glint');
 }
-/** 瓦片烘焙：三档合成 + 轮廓外延（与主画布 buildParametricSprite 同口径） */
-function bakeResolvedTile(resolved, mirrored) {
+/** 瓦片烘焙：三档合成 + 轮廓外延（与主画布 buildParametricSprite 同口径）。
+ * phase（动态表面 D1）：本瓦片的相位 0..1，静态部件恒 0。 */
+function bakeResolvedTile(resolved, mirrored, phase) {
   const halo = resolved.halo || 0;
   const bs = resolved.baseSprite;
   if (resolved.composite !== 'generate' && bs && bs.w > 0 && bs.h > 0) {
@@ -345,11 +346,11 @@ function bakeResolvedTile(resolved, mirrored) {
       };
       const overlay = resolved.composite === 'overlay';
       const tile = resolved.graph
-        ? compileTileDAGRaster(raster, overlay ? filterGraphForOverlayRt(resolved.graph) : resolved.graph, halo)
+        ? compileTileDAGRaster(raster, overlay ? filterGraphForOverlayRt(resolved.graph) : resolved.graph, halo, phase || 0)
         : compileTileLayersRaster(raster, overlay ? filterLayersForOverlayRt(resolved.program) : resolved.program, halo);
       if (overlay && halo > 0) {
         const full = resolved.graph
-          ? compileTileDAGRaster(raster, resolved.graph, halo)
+          ? compileTileDAGRaster(raster, resolved.graph, halo, phase || 0)
           : compileTileLayersRaster(raster, resolved.program, halo);
         for (let q = 0; q < tile.w * tile.h; q++) {
           if (tile.data[q * 4] >= 128) tile.data[q * 4 + 2] = full.data[q * 4 + 2];
@@ -359,8 +360,24 @@ function bakeResolvedTile(resolved, mirrored) {
     }
   }
   return resolved.graph
-    ? compileTileDAG(resolved.shape, resolved.graph, halo)
+    ? compileTileDAG(resolved.shape, resolved.graph, halo, phase || 0)
     : compileTileLayers(resolved.shape, resolved.program, halo);
+}
+/** 动态表面（D1）规格读取：与编辑器 surface-animation 同口径规范化 */
+function surfaceAnimOfRt(resolved) {
+  const a = resolved && resolved.graph ? resolved.graph.animation : undefined;
+  if (!a) return null;
+  const cycleSec = Number(a.cycleSec), frames = Math.round(Number(a.frames));
+  if (!isFinite(cycleSec) || cycleSec <= 0 || !isFinite(frames)) return null;
+  return {
+    cycleSec: Math.min(120, Math.max(0.1, cycleSec)),
+    frames: Math.min(60, Math.max(2, frames)),
+  };
+}
+/** elapsed（秒）→ 当前步序号（0..frames-1），与编辑器 surfacePhaseAt 同口径 */
+function surfaceStepAtRt(anim, elapsed) {
+  const frac = (((elapsed || 0) / anim.cycleSec) % 1 + 1) % 1;
+  return Math.min(anim.frames - 1, Math.floor(frac * anim.frames));
 }
 function parseHexRt(hex) {
   const m = /^#([0-9a-fA-F]{6})$/.exec(hex || '');
@@ -678,15 +695,32 @@ function ensureAtlas(gl, variant, costumeName) {
       resolved = resolvePart(part, variant, costume);
       if (resolved.params.hidden) { map.set(part.key, null); continue; }
     }
+    // 动态表面（D1）：带 animation 的图按 frames 步各烘一张瓦片，
+    // 帧循环按 elapsed 选步（见 animFrames 组装与帧循环取瓦片处）
+    let tileList = null, anim = null;
     if (spriteGrid) {
       resolved = { params: { ...part.base, off: [0, 0] }, composite: 'sprite', halo: 0, baseSprite: null };
       const key = [part.key, variant, costumeName, 'S', spriteGrid.w, spriteGrid.h, spriteGrid.plug.join(','), gridHashOf(spriteGrid), mirrored ? 'M' : ''].join('|');
       tile = tileCache.get(key);
       if (!tile) { tile = spriteTileOf(spriteGrid, mirrored); tileCache.set(key, tile); }
+      tileList = [tile];
     } else {
       const key = tileKeyOf(part, variant, costumeName, resolved) + (mirrored ? '|M' : '');
-      tile = tileCache.get(key);
-      if (!tile) { tile = bakeResolvedTile(resolved, mirrored); tileCache.set(key, tile); }
+      anim = surfaceAnimOfRt(resolved);
+      if (anim) {
+        tileList = [];
+        for (let fi = 0; fi < anim.frames; fi++) {
+          const fk = key + '|F' + fi;
+          let ft = tileCache.get(fk);
+          if (!ft) { ft = bakeResolvedTile(resolved, mirrored, fi / anim.frames); tileCache.set(fk, ft); }
+          tileList.push(ft);
+        }
+        tile = tileList[0];
+      } else {
+        tile = tileCache.get(key);
+        if (!tile) { tile = bakeResolvedTile(resolved, mirrored, 0); tileCache.set(key, tile); }
+        tileList = [tile];
+      }
     }
     // 发光场带外扩边距（辉光溢出包围盒）：超出瓦片自带边距的部分撑大瓦片
     const ge0 = glowEntryOf(part, costume);
@@ -694,10 +728,12 @@ function ensureAtlas(gl, variant, costumeName) {
     if (ge0) {
       const margin = ge0.space === 'tile' ? 0 : 2 + (resolved.halo || 0);
       tileExtra = Math.max(0, Math.max(ge0.padX || 0, ge0.padY || 0) - margin);
-      if (tileExtra > 0) tile = padTile(tile, tileExtra);
+      if (tileExtra > 0) tileList = tileList.map((t) => padTile(t, tileExtra));
     }
-    tiles.push(tile);
-    entries.push([part.key, tile, resolved, mirrored, spriteGrid, ge0, tileExtra]);
+    for (let fi = 0; fi < tileList.length; fi++) {
+      tiles.push(tileList[fi]);
+      entries.push([fi === 0 ? part.key : part.key + '#anim' + fi, tileList[fi], resolved, mirrored, spriteGrid, ge0, tileExtra, anim]);
+    }
   }
   // 刀光帧瓦片：按当前朝向（锚点部件镜像与否）现生成 RGBA 帧，
   // 与部件瓦片同图集（底图纹理承载像素，特效通道 composite=4 直读）
@@ -723,6 +759,7 @@ function ensureAtlas(gl, variant, costumeName) {
   const pack = packAtlas(tiles, 256);
   const height = pack.height;
   const slashTiles = {};
+  const animFrameMap = {};
   const data = new Uint8Array(256 * height * 4);
   const baseData = new Uint8Array(256 * height * 4);
   const glowData = new Uint8Array(256 * height * 4);
@@ -789,8 +826,21 @@ function ensureAtlas(gl, variant, costumeName) {
         tile: [ax, ay, tile.w, tile.h], tileCx: tile.cx, tileCy: tile.cy, size: [tile.w, tile.h],
       };
     }
-    map.set(entries[i][0], { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null });
+    const ekey = entries[i][0];
+    const animPos = ekey.indexOf('#anim');
+    if (animPos >= 0 && entries[i][7]) {
+      // 动态表面第 2..N 步瓦片：不单独成条目，挂到部件条目的 animFrames
+      // （下标 = 步序号 − 1；步 0 即条目自身的 tile/place）
+      const bk = ekey.slice(0, animPos);
+      (animFrameMap[bk] = animFrameMap[bk] || []).push({ tile: tile, place: [ax, ay] });
+    } else {
+      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null });
+    }
   });
+  for (const bk in animFrameMap) {
+    const baseEntry = map.get(bk);
+    if (baseEntry) baseEntry.animFrames = animFrameMap[bk];
+  }
   if (atlasState && atlasState.tex) gl.deleteTexture(atlasState.tex);
   if (atlasState && atlasState.baseTex) gl.deleteTexture(atlasState.baseTex);
   if (atlasState && atlasState.glowTex) gl.deleteTexture(atlasState.glowTex);
@@ -1525,7 +1575,16 @@ function frame(now) {
   sorted.forEach((part, idx) => {
     const entry = state.map.get(part.key);
     if (!entry) return;
-    const tile = entry.tile, place = entry.place, resolved = entry.resolved;
+    let tile = entry.tile, place = entry.place;
+    const resolved = entry.resolved;
+    // 动态表面（D1）：按 elapsed 选当前步瓦片（步 0 = 条目自身）
+    if (entry.anim && entry.animFrames) {
+      const step = surfaceStepAtRt(entry.anim, elapsed);
+      if (step > 0 && entry.animFrames[step - 1]) {
+        tile = entry.animFrames[step - 1].tile;
+        place = entry.animFrames[step - 1].place;
+      }
+    }
     const p = resolved.params;
     const an0 = pose[part.key] || { a: 0, dy: 0, rim: 0, glint: 0 };
     const an = { a: an0.a + (p.restRot || 0), dx: an0.dx || 0, dy: an0.dy || 0, rim: an0.rim || 0, glint: an0.glint || 0 };

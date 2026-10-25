@@ -1243,6 +1243,10 @@ function resolveSprite(
   sprites?: Record<string, import('./unified-types').Sprite>,
   variantId?: string,
   latitude?: number,
+  // 动态表面（D1）：当前帧与工程帧率——表面图带 animation 时按
+  // frame/frameRate 算离散相位取对应烘焙；缺省 = 相位 0（静态口径）
+  frame?: number,
+  frameRate?: number,
 ): { sprite: Sprite | null; mirror: boolean; spriteId: string | null } {
   // 参数化优先（用户拍板）：生效服装件带 parametric 时，主画布以参数化
   // 烘焙精灵渲染，盖过精灵图。件键走产品回退口径 slot.slotKey ?? nodeId。
@@ -1253,15 +1257,18 @@ function resolveSprite(
     const piece = costumeSet.pieces[node.slot?.slotKey ?? node.id];
     if (piece?.parametric) {
       const { buildParametricSprite, PARAMETRIC_MIRROR_DIRECTIONS } = require('./proc-runtime/main-canvas') as typeof import('./proc-runtime/main-canvas');
+      const { surfaceAnimationOf, surfacePhaseAt } = require('./proc-runtime/surface-animation') as typeof import('./proc-runtime/surface-animation');
       const app = piece.parametric;
+      const anim = surfaceAnimationOf(app.surfaceGraph);
+      const phase = anim ? surfacePhaseAt(anim, (frame ?? 0) / (frameRate ?? 12)) : 0;
       if ((app.composite ?? 'generate') !== 'generate' && sprites) {
         const base = resolvePieceSprite(piece, direction, variantId, sprites, latitude);
         if (base.sprite) {
-          const spr = buildParametricSprite(app, node.id, base.sprite);
+          const spr = buildParametricSprite(app, node.id, base.sprite, phase);
           if (spr) return { sprite: spr, mirror: base.mirror, spriteId: null };
         }
       }
-      const spr = buildParametricSprite(app, node.id);
+      const spr = buildParametricSprite(app, node.id, undefined, phase);
       if (spr) return { sprite: spr, mirror: PARAMETRIC_MIRROR_DIRECTIONS.has(direction), spriteId: null };
     }
   }
@@ -1795,14 +1802,14 @@ export function generateRenderPlan(
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
     // 方向混合时：先按 dirA 解析主精灵
     const resolveDir = dirBlend ? dirBlend.dirA : currentDirection;
-    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0);
+    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0, frame, frameRate);
     if (!sprite) continue;
 
     // 方向间过渡（蒙皮转面 A）：blend 不为 0/1 时，双精灵 faceTurn + alpha 混合
     // 只在需要时双采样，避免性能开销
     let blendedSprite: typeof sprite | null = null;
     if (dirBlend && sprite.data) {
-      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0);
+      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0, frame, frameRate);
       if (spriteB && spriteB.data) {
         try {
           const { applyFaceTurn, alphaBlendGrids } = require('./skin/face-turn') as typeof import('./skin/face-turn');

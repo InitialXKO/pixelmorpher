@@ -871,6 +871,15 @@ export interface SurfaceGraphWrite {
   ch?: 'glint';
   bump?: { hi: number; mid: number; lo: number };
 }
+/** 动态表面规格（D1）：表面图随时间循环。相位在周期内离散为
+ * frames 步（步进式，便于编辑器与导出运行时按步缓存瓦片）；
+ * 图内经 phase 场源 / $phase / $phaseDeg / scroll 作用域消费相位。 */
+export interface SurfaceAnimationSpec {
+  /** 一圈秒数（>0） */
+  cycleSec: number;
+  /** 一圈离散步数（2..60） */
+  frames: number;
+}
 export interface SurfaceGraph {
   version: 1;
   nodes: SurfaceGraphNode[];
@@ -878,6 +887,8 @@ export interface SurfaceGraph {
   writes: SurfaceGraphWrite[];
   /** 模板暴露参数的当前值 */
   params?: Record<string, number>;
+  /** 动态表面：存在 = 本图随时间循环播放（见 SurfaceAnimationSpec） */
+  animation?: SurfaceAnimationSpec;
   /** 编辑器布局（v2 画布）：节点坐标 + 作用域框矩形；烘焙/运行时忽略 */
   ui?: {
     pos?: Record<string, { x: number; y: number }>;

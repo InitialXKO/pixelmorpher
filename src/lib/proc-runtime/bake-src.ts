@@ -81,8 +81,11 @@ function mulberry(seed) {
 
 // 编译一张表面图为求值器：prep(graph, shape) 做一次性准备（藤蔓路径等），
 // evaluate(x, y, base) → {slot, glint} 其中 base 为形状基础场。
-function compileSurfaceGraph(graph, shape) {
-  var gparams = graph.params || {};
+// phase（动态表面 D1）：本轮烘焙的相位 0..1，注入保留参数
+// $phase / $phaseDeg，并经 env.phase 供 phase 场源与 scroll 作用域消费。
+function compileSurfaceGraph(graph, shape, phase) {
+  var phaseN = (typeof phase === 'number' && isFinite(phase)) ? ((phase % 1) + 1) % 1 : 0;
+  var gparams = Object.assign({}, graph.params || {}, { phase: phaseN, phaseDeg: phaseN * 360 });
   var byId = new Map();
   for (var i = 0; i < graph.nodes.length; i++) byId.set(graph.nodes[i].id, graph.nodes[i]);
   var prepCache = new Map();
@@ -199,6 +202,7 @@ function compileSurfaceGraph(graph, shape) {
     switch (node.op) {
       case 'const': return P(node, 'v', 0);
       case 'ref': return 0; // 子图引用：烘焙期已展开（graph-expand），漏网的按零场兜底
+      case 'phase': return env.phase || 0;
       case 'inside': return base.inside ? 1 : 0;
       case 'dist': return base.sd;
       case 'h': return base.h;
@@ -349,6 +353,14 @@ function compileSurfaceGraph(graph, shape) {
         var rch2 = node.inputs ? byId.get(node.inputs.in) : undefined;
         return rch2 ? ev(rch2, x * rc - y * rs, x * rs + y * rc, env, null) : 0;
       }
+      case 'scroll': {
+        // 流动：子图在「坐标 − 相位×每圈位移」处求值；位移取图案
+        // 自身周期整数倍时相位 1 与相位 0 逐像素一致（无缝循环）。
+        var sdx = P(node, 'dx', 0), sdy = P(node, 'dy', 0);
+        var sch = node.inputs ? byId.get(node.inputs.in) : undefined;
+        var sph = env.phase || 0;
+        return sch ? ev(sch, x - sph * sdx, y - sph * sdy, env, null) : 0;
+      }
       case 'overlay2': {
         // 回声/尺度层级：同一子场在缩放坐标再求值一次，按权重取大叠印
         var ok = P(node, 'k', 2.2), ow = P(node, 'w', 0.8);
@@ -418,7 +430,7 @@ function compileSurfaceGraph(graph, shape) {
         // 交替重复 AB：奇偶行用 B 程序（Alexander 交替重复的完整式）
         var child2 = node.inputs ? byId.get(node.inputs.in) : undefined;
         if (parity === 1 && node.inputs && node.inputs.b) child2 = byId.get(node.inputs.b);
-        return child2 ? ev(child2, lx, ly, { base: base, cell: cell2 }, null) : 0;
+        return child2 ? ev(child2, lx, ly, { base: base, cell: cell2, phase: env.phase || 0 }, null) : 0;
       }
       case 'repeatPolar': {
         var seg = Math.max(2, Math.round(P(node, 'seg', 8)));
@@ -432,7 +444,7 @@ function compileSurfaceGraph(graph, shape) {
           hash: hashN(segi, 3, P(node, 'seed', 0)), rand: hashN(segi, 9, P(node, 'seed', 0) + 41),
         };
         var child3 = node.inputs ? byId.get(node.inputs.in) : undefined;
-        return child3 ? ev(child3, la * P(node, 'arcW', 6) / 2, rad - P(node, 'r0', 0), { base: base, cell: cell3 }, null) : 0;
+        return child3 ? ev(child3, la * P(node, 'arcW', 6) / 2, rad - P(node, 'r0', 0), { base: base, cell: cell3, phase: env.phase || 0 }, null) : 0;
       }
     }
     return 0;
@@ -442,7 +454,7 @@ function compileSurfaceGraph(graph, shape) {
   return {
     hasGlint: hasGlint,
     evaluate: function (lx, ly, base) {
-      var env = { base: base, cell: defaultCell() };
+      var env = { base: base, cell: defaultCell(), phase: phaseN };
       var slot = 2, glint = false;
       var cache = new Map();
       for (var i = 0; i < graph.writes.length; i++) {
@@ -463,7 +475,7 @@ function compileSurfaceGraph(graph, shape) {
     // 轮廓外延专用：只认图案/glint 写出的命中（bump 不向外画），
     // 返回 hit 供烘焙器把外圈写出编码进 B 通道。
     evaluateOutside: function (lx, ly, base) {
-      var env = { base: base, cell: defaultCell() };
+      var env = { base: base, cell: defaultCell(), phase: phaseN };
       var slot = 2, glint = false, hit = false;
       var cache = new Map();
       for (var i = 0; i < graph.writes.length; i++) {
@@ -483,13 +495,13 @@ function compileSurfaceGraph(graph, shape) {
   };
 }
 
-function compileTileDAG(shape, graph, halo) {
+function compileTileDAG(shape, graph, halo, phase) {
   var haloW = Math.max(0, Math.floor(halo || 0));
   var M = 2 + haloW;
   var w = Math.ceil(shape.size[0]) + M * 2;
   var h = Math.ceil(shape.size[1]) + M * 2;
   var cx = Math.floor(w / 2), cy = Math.floor(h / 2);
-  var compiled = compileSurfaceGraph(graph, shape);
+  var compiled = compileSurfaceGraph(graph, shape, phase);
   var fields = new Array(w * h);
   var maxD = 0.0001;
   for (var j = 0; j < h; j++) {
@@ -715,12 +727,12 @@ function rasterFieldGridB(raster, haloW) {
   }
   return { w: w, h: h, fields: fields, maxD: maxD, rw: rw, rh: rh };
 }
-function compileTileDAGRaster(raster, graph, halo) {
+function compileTileDAGRaster(raster, graph, halo, phase) {
   var haloW = Math.max(0, Math.floor(halo || 0));
   var g = rasterFieldGridB(raster, haloW);
   var w = g.w, h = g.h;
   var fakeShape = { kind: 'rect', size: [g.rw, g.rh] };
-  var compiled = compileSurfaceGraph(graph, fakeShape);
+  var compiled = compileSurfaceGraph(graph, fakeShape, phase);
   var data = new Uint8Array(w * h * 4);
   for (var j = 0; j < h; j++) for (var i = 0; i < w; i++) {
     var f = g.fields[j * w + i];
@@ -809,6 +821,7 @@ export function createSurfaceBaker(): {
     shape: { kind: string; size: [number, number]; roundness?: number; points?: [number, number][]; pivot?: [number, number] },
     graph: unknown,
     halo?: number,
+    phase?: number,
   ) => { w: number; h: number; cx: number; cy: number; data: Uint8Array };
   compileTileLayers: (
     shape: { kind: string; size: [number, number]; roundness?: number; points?: [number, number][]; pivot?: [number, number] },
@@ -819,6 +832,7 @@ export function createSurfaceBaker(): {
     raster: { w: number; h: number; plugX: number; plugY: number; solid: ArrayLike<number> },
     graph: unknown,
     halo?: number,
+    phase?: number,
   ) => { w: number; h: number; cx: number; cy: number; data: Uint8Array };
   compileTileLayersRaster: (
     raster: { w: number; h: number; plugX: number; plugY: number; solid: ArrayLike<number> },
