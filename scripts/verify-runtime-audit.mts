@@ -145,8 +145,43 @@ check('缺口4·运行时仍无网格蒙皮（修复后更新文档）',
   !template.includes('skinning') && !dynSrc.includes('skinning'));
 check('缺口5·画布修改轨仍未成包字段（点名代码引用字段名不算进包；修复后更新文档）',
   !convert.includes('canvasModifierTracks?:'));
-check('缺口6·片段状态切换仍未成包字段（修复后更新文档）',
-  !convert.includes('stateSwitches'));
+check('缺口6·已修：段表演带 stateFx 且模板按快照累计应用/恢复',
+  convert.includes('stateFxOf') && template.includes('act.perf.stateFx') && template.includes('restoreFxSnapshot'));
+{
+  const { defaultSlashSpec } = await import('../src/lib/slash-fan');
+  const mkNode = (id: string) => ({
+    id, name: id, parentId: null, children: [], modifiers: [],
+    slot: { slotKey: id }, transform: {}, sockets: [], tracks: { keyframes: [] },
+  });
+  const ch = {
+    id: 'fx1', name: '状态轨测试',
+    nodes: { hand: mkNode('hand') },
+    rootNodeId: 'hand', rootNodeIds: ['hand'],
+    costumeSets: [
+      { id: 'set1', name: '默认', pieces: { hand: { ...createDefaultCostumePiece('hand'), parametric: createDefaultParametricAppearance() } } },
+      { id: 'set2', name: '二套', pieces: { hand: { ...createDefaultCostumePiece('hand'), parametric: createDefaultParametricAppearance() } } },
+    ],
+    activeCostumeSetId: 'set1', variants: {},
+  } as never;
+  const clip = {
+    id: 'c1', name: '变身段', puppetCharacterId: 'fx1', startFrame: 2, endFrame: 9, loop: false,
+    slashEffect: { ...defaultSlashSpec('hand'), frameCount: 4 },
+    stateKeyframes: [
+      { frame: 5, slotChanges: { hand: 'v2' } },
+      { frame: 2, costumeSetId: 'set2' },
+      { frame: 3, costumeSetId: 'nope' },
+    ],
+  } as never;
+  const pkg = convertCharacterToRuntimePackage(ch, undefined, { frameRate: 10, clips: [clip] });
+  const seg = pkg.performances.find((p) => (p as { id?: string }).id === 'clip_c1') as { stateFx?: Array<Record<string, unknown>> } | undefined;
+  check('缺口6·状态键按片段本地秒换算（帧2→0、帧5→0.3@10fps）且排序',
+    !!seg?.stateFx && seg.stateFx.length === 2
+    && seg.stateFx[0].t === 0 && seg.stateFx[0].costume === 'set2'
+    && Math.abs((seg.stateFx[1].t as number) - 0.3) < 1e-9
+    && (seg.stateFx[1].slots as Record<string, string>).hand === 'v2');
+  check('缺口6·指向不存在服装集的状态键被点名丢弃',
+    pkg.warnings.some((w) => w.includes('指向不存在的服装集')));
+}
 
 // ---- 已点名近似（点名消失 = 口径变化，须更新文档）----
 check('近似·directionDrawOrders 仍有点名 warning',

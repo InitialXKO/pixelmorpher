@@ -126,6 +126,9 @@ export interface RuntimePart {
   spriteKind?: boolean;
   /** 精灵部件在默认服装集下的显示方向精灵网格（逐集见 costumes[*].__sprite） */
   sprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] };
+  /** 变体替代精灵（缺口 6）：仅当某片段状态轨给该槽指派过变体时才带；
+   * variantId → 该变体解析后的代表精灵（与基础解析不同才收） */
+  altSprites?: Record<string, { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] }>;
 }
 
 export interface ProcRuntimePackage {
@@ -788,6 +791,53 @@ export function convertCharacterToRuntimePackage(
     part.clip = { by: anchorSlot, a: Math.cos(rad), b: Math.sin(rad), c: -(cp.offset ?? 0) };
   }
 
+  // ---- 变体替代精灵回填（缺口 6）：片段状态轨给某槽指派过的变体，
+  // 逐个按与代表图同一解析链（变体直达→镜像→基础回落）解析成代表
+  // 精灵进 part.altSprites；与基础解析同一张图的跳过。只取生效集的
+  // 服装件（运行时覆盖叠在当前集之上，跨集+变体同时切换时变体图仍
+  // 取生效集件——近似，已知会点名在 AUDIT）。 ----
+  {
+    const needed = new Map<string, Set<string>>();
+    for (const c of opts?.clips ?? []) {
+      for (const k of c.stateKeyframes ?? []) {
+        for (const [slot, v] of Object.entries(k.slotChanges ?? {})) {
+          if (v === null) continue;
+          if (!needed.has(slot)) needed.set(slot, new Set());
+          needed.get(slot)!.add(v);
+        }
+      }
+    }
+    if (needed.size > 0) {
+      const dirOrder: DirectionIndex[] = [rootDir, ...([2, 0, 6, 4, 1, 3, 5, 7] as DirectionIndex[]).filter((d) => d !== rootDir)];
+      const resolveWith = (piece: CostumePiece, variantId: string | undefined) => {
+        for (const dir of dirOrder) {
+          const r = resolvePieceSprite(piece, dir, variantId, spriteTable, character.latitude ?? 0);
+          if (r.sprite) return r.sprite;
+        }
+        return undefined;
+      };
+      for (const part of parts) {
+        const vids = needed.get(part.key);
+        if (!vids) continue;
+        const piece = activeSet?.pieces[part.key];
+        if (!piece) continue;
+        const baseSpr = resolveWith(piece, character.slotVariants?.[part.key]);
+        const alt: NonNullable<RuntimePart['altSprites']> = {};
+        for (const vid of vids) {
+          const spr = resolveWith(piece, vid);
+          if (spr && spr.id !== baseSpr?.id) {
+            alt[vid] = {
+              w: spr.width, h: spr.height,
+              plug: spr.plug ? [subToPx(spr.plug.x), subToPx(spr.plug.y)] : [spr.width / 2, spr.height / 2],
+              data: spr.data, marks: spr.marks,
+            };
+          }
+        }
+        if (Object.keys(alt).length > 0) part.altSprites = alt;
+      }
+    }
+  }
+
   // ---- 行为蓝图：nodeId → slotKey，逐图结构翻译 ----
   // 同一回退口径：无 slot 的节点以 nodeId 为部件键；节点不存在才判死。
   const toSlot = (nodeId: string): string | null => {
@@ -910,10 +960,29 @@ export function convertCharacterToRuntimePackage(
       n.tracks && POSE_CHANNELS.some((ch) => (n.tracks[ch]?.keyframes?.length ?? 0) > 0));
     // ---- 片段级点名（缺口 5/6）：片段内的状态切换与特效数据不进包 ----
     for (const c of opts?.clips ?? []) {
-      if ((c.stateKeyframes?.length ?? 0) > 0) warnings.push(`片段「${c.name}」内的服装/变体状态切换未进运行时包（v1）：段内按片段开始时的状态播放`);
       const clipFx = (c.effectTracks?.length ?? 0) + (c.canvasModifierTracks?.length ?? 0) + (c.motionBlurStrokes?.length ?? 0) + (c.effectStrokes?.length ?? 0) + (c.trajectories?.length ?? 0);
       if (clipFx > 0) warnings.push(`片段「${c.name}」内的特效轨/笔触/轨迹未进运行时包（v1）`);
     }
+  // ---- 片段状态轨（缺口 6）：状态键 → 段表演内的定时状态切换 ----
+  // 帧为工程绝对帧，换算为片段本地秒；窗外（起点之前）的键折叠到 0。
+  // costumeSetId 指向不存在的集时点名丢弃；slotChanges 原样带（槽位
+  // 变体在运行时经 altSprites 解析，见 parts 组装后的回填）。
+  const stateFxOf = (clip: AnimationClip) => {
+    const keys = [...(clip.stateKeyframes ?? [])].sort((a, b) => a.frame - b.frame);
+    if (keys.length === 0) return undefined;
+    const fx: Array<Record<string, unknown>> = [];
+    for (const k of keys) {
+      const e: Record<string, unknown> = { t: Math.max(0, (k.frame - clip.startFrame) / projectFpsTop) };
+      if (k.costumeSetId) {
+        if (character.costumeSets.some((cs) => cs.id === k.costumeSetId)) e.costume = k.costumeSetId;
+        else warnings.push(`片段「${clip.name}」状态键指向不存在的服装集 ${k.costumeSetId}，已丢弃`);
+      }
+      if (k.slotChanges && Object.keys(k.slotChanges).length > 0) e.slots = k.slotChanges;
+      if ('costume' in e || 'slots' in e) fx.push(e);
+    }
+    return fx.length > 0 ? fx : undefined;
+  };
+
     const clipList = (opts?.clips ?? []).filter((c) =>
       c.puppetCharacterId === character.id
       && typeof c.startFrame === 'number' && typeof c.endFrame === 'number'
@@ -1112,6 +1181,7 @@ export function convertCharacterToRuntimePackage(
           mask: seg.mask,
           slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
           graph: { context: 'performance', nodes: seg.graphNodes },
+          stateFx: stateFxOf(clip),
         });
         emittedClipPerfIds.add(`clip_${clip.id}`);
       }
@@ -1132,6 +1202,7 @@ export function convertCharacterToRuntimePackage(
         mask: [],
         slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
         graph: { context: 'performance', nodes: [] },
+        stateFx: stateFxOf(clip),
       });
     }
   }
@@ -1155,6 +1226,7 @@ export function convertCharacterToRuntimePackage(
   } else {
     stateMachine = defaultStateMachine(performances);
   }
+
 
   // ---- 程序化动画（缺口 2）：与编辑器同口径——PA 只在目标节点挂有
   // 对应类型的启用修改器时才生效（applyProceduralAnimations 的查找

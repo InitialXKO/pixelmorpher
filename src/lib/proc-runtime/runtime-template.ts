@@ -735,7 +735,8 @@ function tileKeyOf(part, variant, costumeName, resolved) {
     resolved.composite, resolved.halo, bsKey].join('|');
 }
 function ensureAtlas(gl, variant, costumeName) {
-  if (atlasState && atlasState.variant === variant && atlasState.costumeName === costumeName) return atlasState;
+  const osig = overrideSig();
+  if (atlasState && atlasState.variant === variant && atlasState.costumeName === costumeName && atlasState.osig === osig) return atlasState;
   const costume = COSTUMES[costumeName];
   const tiles = [], entries = [];
   const map = new Map();
@@ -744,6 +745,7 @@ function ensureAtlas(gl, variant, costumeName) {
     const centry = costume ? costume[part.key] : undefined;
     const sgrid = costume && costume.__sprite ? costume.__sprite[part.key] : undefined;
     let resolved = null, tile = null, spriteGrid = null;
+    const altSpr = slotOverrides[part.key] ? (part.altSprites || {})[slotOverrides[part.key]] : undefined;
     if (centry === null && sgrid) {
       spriteGrid = sgrid; // 参数化槽位在该集回落精灵（与主画布同口径）
     } else if (part.spriteKind && !centry) {
@@ -752,6 +754,11 @@ function ensureAtlas(gl, variant, costumeName) {
     } else {
       resolved = resolvePart(part, variant, costume);
       if (resolved.params.hidden) { map.set(part.key, null); continue; }
+    }
+    if (altSpr) {
+      // 逐槽变体覆盖：精灵部件换图；参数化部件只换底图（外观仍属当前集）
+      if (spriteGrid) spriteGrid = altSpr;
+      else if (resolved) resolved.baseSprite = altSpr;
     }
     // 动态表面（D1）：带 animation 的图按 frames 步各烘一张瓦片，
     // 帧循环按 elapsed 选步（见 animFrames 组装与帧循环取瓦片处）
@@ -1004,7 +1011,7 @@ function ensureAtlas(gl, variant, costumeName) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  atlasState = { variant: variant, costumeName: costumeName, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles };
+  atlasState = { variant: variant, costumeName: costumeName, osig: osig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles };
   return atlasState;
 }
 
@@ -1364,6 +1371,12 @@ const char = { x: 0, y: 0, vy: 0, onGround: true, variant: 0, lockedVariant: fal
 let currentCostume = (EMBEDDED.defaultCostume && COSTUMES[EMBEDDED.defaultCostume])
   ? EMBEDDED.defaultCostume
   : Object.keys(COSTUMES)[0] || '';
+/** 逐槽变体覆盖（缺口 6）：片段状态轨在段表演期间写入；图集缓存键含其签名 */
+let slotOverrides = {};
+function overrideSig() {
+  const ks = Object.keys(slotOverrides).sort();
+  return ks.map((k) => k + '=' + slotOverrides[k]).join(',');
+}
 /** 动态模式解析（模板侧）：当前服装集的 __dynamic 优先，缺省用部件自带（默认集解析结果） */
 function dynListFor(part) {
   const entry = COSTUMES[currentCostume];
@@ -1401,7 +1414,12 @@ const activePerfs = [];
 const keys = Object.create(null);
 function startPerf(perf) {
   if (activePerfs.some((a) => a.perf === perf)) return;
-  activePerfs.push({ perf: perf, t: 0, snapTimer: 0, snaps: [] });
+  const act0 = { perf: perf, t: 0, snapTimer: 0, snaps: [] };
+  if (perf.stateFx) {
+    act0.fxSnapshot = { costume: currentCostume, overrides: { ...slotOverrides } };
+    act0.fxApplied = -1;
+  }
+  activePerfs.push(act0);
   emitRuntimeEvent('perfstart', { id: perf.id, name: perf.name });
   behaviorEpoch = elapsed;
   phaseAcc = 0;
@@ -1410,10 +1428,16 @@ function startPerf(perf) {
 }
 /** 停表演：按对象或 id/名/触发名匹配，移除后发 perfend（stopped: true）。
  *  循环表演没有自然结束，只能经此停下；状态机下一帧见表演 inactive 即回落。 */
+function restoreFxSnapshot(act) {
+  if (!act || !act.fxSnapshot) return;
+  currentCostume = act.fxSnapshot.costume;
+  slotOverrides = { ...act.fxSnapshot.overrides };
+}
 function stopPerf(perfOrId) {
   for (let i = activePerfs.length - 1; i >= 0; i--) {
     const p = activePerfs[i].perf;
     if (p === perfOrId || p.id === perfOrId || p.name === perfOrId || p.trigger === perfOrId) {
+      restoreFxSnapshot(activePerfs[i]);
       activePerfs.splice(i, 1);
       emitRuntimeEvent('perfend', { id: p.id, name: p.name, stopped: true });
     }
@@ -1421,6 +1445,7 @@ function stopPerf(perfOrId) {
 }
 function stopAllPerfs() {
   const ids = activePerfs.map((a) => a.perf);
+  for (const a of activePerfs) restoreFxSnapshot(a);
   activePerfs.length = 0;
   for (const p of ids) emitRuntimeEvent('perfend', { id: p.id, name: p.name, stopped: true });
 }
@@ -1703,7 +1728,33 @@ function frame(now) {
       const bpOut = evalRuntimeGraph(act.perf.graph, { u: Math.min(1, act.t / act.perf.duration), tSec: act.t });
       pose = composePerformance(pose, act.perf, bpOut, w);
     }
+    // 片段状态轨（缺口 6）：段表演期间按本地时间累计应用状态键——
+    // 从开始时的快照出发，逐键叠加（整覆服装集 + 逐槽变体增删），
+    // 索引推进时才重算；表演结束恢复快照（见 restoreFxSnapshot）。
+    if (act.perf.stateFx && act.fxSnapshot) {
+      let idx = -1;
+      for (let k = 0; k < act.perf.stateFx.length; k++) {
+        if (act.perf.stateFx[k].t <= act.t) idx = k; else break;
+      }
+      if (idx !== act.fxApplied) {
+        act.fxApplied = idx;
+        let cs = act.fxSnapshot.costume;
+        const ov = { ...act.fxSnapshot.overrides };
+        for (let k = 0; k <= idx; k++) {
+          const e = act.perf.stateFx[k];
+          if (e.costume) cs = e.costume;
+          if (e.slots) {
+            for (const sk of Object.keys(e.slots)) {
+              if (e.slots[sk] === null) delete ov[sk]; else ov[sk] = e.slots[sk];
+            }
+          }
+        }
+        currentCostume = cs;
+        slotOverrides = ov;
+      }
+    }
     if (act.t > act.perf.duration) {
+      restoreFxSnapshot(act);
       activePerfs.splice(i, 1);
       emitRuntimeEvent('perfend', { id: act.perf.id, name: act.perf.name });
     }
