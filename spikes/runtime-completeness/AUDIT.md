@@ -83,3 +83,16 @@ dynamic-src 的 dynFollowDelta（注入页面但模板无调用点）。
 scripts/verify-runtime-audit.mts 把上述分类逐项锁成断言（字段存在
 性/消费点 grep 级接线 + resolvePart 覆盖字段集）：将来任何一项被
 修复或恶化，探针会红，迫使本文档同步更新。
+
+## 七、更正（2026-10-26，用户问「用户端难道不能消费吗」）
+
+「死字段」一刀切不成立，按消费方分三类：
+- **契约字段（保留）**：format 是包格式的标识/版本，播放器不读，但
+  外部宿主识别包靠它——属格式表面，不删。
+- **真死（可删）**：follow/发光形状的 params 本体（生效数据已烘成
+  followCurve/stamps，照 params 读会与播放器不一致）、drawLayer
+  （播放器实际按 sortOrder 画）、behavior 图 context 来源标记、
+  dynFollowDelta（运行时内部代码，无包数据面）。
+- **漏接（归缺口）**：baseSprite.marks——与 sprite.marks 同一份数据
+  的另一载体，应在底图路径消费，列为缺口 8，随全修处理。
+  surfaceName 为纯展示名，弱契约，保留。

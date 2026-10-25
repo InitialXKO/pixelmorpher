@@ -293,13 +293,12 @@ function resolvePart(part, variantIndex, costume) {
     const c = costume[part.costumeKeys[0]];
     if (c === null) { p.size = [0.001, 0.001]; p.hidden = true; }
     else if (c) {
-      if (c.pal) p.pal = c.pal;
-      if (c.size) p.size = c.size;
-      if (c.roundness !== undefined) p.roundness = c.roundness;
-      if (c.surfaceGraph !== undefined) p.surfaceGraph = c.surfaceGraph;
-      if (c.composite !== undefined) p.composite = c.composite;
-      if (c.haloWidth !== undefined) p.haloWidth = c.haloWidth;
-      if (c.baseSprite !== undefined) p.baseSprite = c.baseSprite;
+      // 服装件派生字段全量覆盖（与编辑器整件换外观对齐）：此前只覆盖 7 项，
+      // 图层程序/形状/光照/描边等被静默留在默认集（运行时完备性审计缺口 1）。
+      // pivot/restRot 由节点位姿派生、各集相同，不在此列。
+      for (const f of ['pal', 'size', 'shapeKind', 'roundness', 'poly', 'polyPivot', 'off', 'light', 'outline', 'rim', 'glint', 'rimI', 'glintI', 'surface', 'surfaceGraph', 'composite', 'haloWidth', 'baseSprite']) {
+        if (c[f] !== undefined) p[f] = c[f];
+      }
     }
   }
   const shape = p.poly
@@ -692,6 +691,7 @@ const PARTS = EMBEDDED.parts;
 const COSTUMES = EMBEDDED.costumes;
 const BEHAVIOR_GRAPHS = (EMBEDDED.behavior && EMBEDDED.behavior.graphs) || {};
 const PERFORMANCES = EMBEDDED.performances || [];
+const PROCEDURAL = EMBEDDED.procedural || [];
 /** 工程帧率（包内字段）：粒子模拟的帧量化基数，与编辑器同口径；
  * 旧包无此字段时回落 60。时间本身走连续钟 elapsed，不重置。 */
 const FRAME_RATE = EMBEDDED.frameRate || 60;
@@ -1739,6 +1739,21 @@ function frame(now) {
         an.a += followSampleAt(fc.da, followU);
       }
     }
+    // 程序化动画（缺口 2）：与编辑器同口径叠加到位姿——平移 px、旋转
+    // 度→弧度、缩放以 (1 + v/10) 相乘（编辑器是加到 uniform_scale 的
+    // scale 参数上，无其他缩放修改器时等价；钳制与编辑器同为 ≥0.1）。
+    let paScale = 1;
+    if (PROCEDURAL.length > 0) {
+      const fIdx = elapsed * FRAME_RATE;
+      for (const pa of PROCEDURAL) {
+        if (pa.slot !== part.key || fIdx < pa.startFrame || fIdx > pa.endFrame) continue;
+        const v = dynProceduralValue(pa.cfg, fIdx);
+        if (pa.target === 'translateX') an.dx += v;
+        else if (pa.target === 'translateY') an.dy += v;
+        else if (pa.target === 'rotation') an.a += v * Math.PI / 180;
+        else if (pa.target === 'scale') paScale *= Math.max(0.1, 1 + v / 10);
+      }
+    }
     const ctr = partCenter(p, an);
     // 动态模式：形变段逐帧求脉冲（多实例相乘）；合成/动态部件放大
     // 实例面片给足采样余量（片元按瓦片边界丢弃，多余面片无副作用）
@@ -1751,6 +1766,7 @@ function frame(now) {
       // 锚点角，不进 partCenter（部件中心不被自转搬动）
       spinRad += dynSpinRadAt(inst.params, elapsed);
     }
+    if (paScale !== 1) { dsx *= paScale; dsy *= paScale; hasDeform = true; }
     const rotA = an.a + spinRad;
     // 发光段：前 3 个启用实例各供一组参数（场在图集 RGB 三通道，导出时
     // 按选区预计算；第 4 个起在导出端已按各自所选组并入对应通道）

@@ -1010,8 +1010,17 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       clips: animationClips.filter((c) => c.puppetCharacterId === procCharacter.id),
       patternLibrary: allPatternTemplates(),
       libraryEntries: allLibraryEntries(),
+      projectData: { proceduralAnimations },
+      projectExtras: {
+        globalModifierCount: useProjectStore.getState().globalModifiers?.length ?? 0,
+        hasGlobalBlueprint: !!useProjectStore.getState().globalBlueprint,
+        canvasModifierTrackCount: canvasModifierTracks?.length ?? 0,
+        effectTrackCount: effectTracks?.length ?? 0,
+        strokeCount: (motionBlurStrokes?.length ?? 0) + (effectStrokes?.length ?? 0),
+        perspectiveForeshorten: useEditorStore.getState().perspectiveForeshorten,
+      },
     }) : null),
-    [procCharacter, animationClips, sprites, frameRate, totalFrames],
+    [procCharacter, animationClips, sprites, frameRate, totalFrames, proceduralAnimations, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes],
   );
   const exportProcRuntime = useCallback(() => {
     if (!procCharacter || !procPkg) return;

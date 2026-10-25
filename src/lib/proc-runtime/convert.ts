@@ -145,6 +145,9 @@ export interface ProcRuntimePackage {
   performances: Array<Record<string, unknown>>;
   /** 运行时状态机（作者规格直通或默认机；模板据此编排表演与身体状态） */
   stateMachine?: StateMachineSpec;
+  /** 程序化动画（工程级数据经 opts.projectData 传入；仅保留在编辑器内
+   *  确有对应启用修改器、因而确实生效的条目，其余逐条点名） */
+  procedural?: Array<{ slot: string; target: string; cfg: Record<string, unknown>; startFrame: number; endFrame: number }>;
   warnings: string[];
 }
 
@@ -568,9 +571,32 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[] },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[] }; projectExtras?: { globalModifierCount?: number; hasGlobalBlueprint?: boolean; canvasModifierTrackCount?: number; effectTrackCount?: number; strokeCount?: number; perspectiveForeshorten?: boolean } },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
+  // ---- 工程级数据点名（运行时完备性审计缺口 3/5/7，未修项）：convert
+  // 结构上拿不到工程级 store，调用方把计数经 projectExtras 传入，有
+  // 则点名，不再静默丢弃。 ----
+  {
+    const ex = opts?.projectExtras;
+    if (ex?.globalModifierCount) warnings.push(`工程级全局修改器 ${ex.globalModifierCount} 条未进运行时包（v1）`);
+    if (ex?.hasGlobalBlueprint) warnings.push('工程级全局蓝图未进运行时包（v1）：其变换效果播放时不生效');
+    if (ex?.canvasModifierTrackCount) warnings.push(`画布修改轨 ${ex.canvasModifierTrackCount} 条未进运行时包（v1）`);
+    if (ex?.effectTrackCount) warnings.push(`特效轨 ${ex.effectTrackCount} 条未进运行时包（v1）`);
+    if (ex?.strokeCount) warnings.push(`手绘笔触（动态模糊/特效）未进运行时包（v1）`);
+    if (ex?.perspectiveForeshorten) warnings.push('透视缩短未进运行时包（v1）：播放时按平面角绘制');
+  }
+  // ---- 网格蒙皮点名（缺口 4）：任一节点的父槽位 skinning=mesh 时点名 ----
+  {
+    const byId = new Map(Object.values(character.nodes).map((n) => [n.id, n]));
+    let meshSlots = 0;
+    for (const n of Object.values(character.nodes)) {
+      const parent = n.parentId ? byId.get(n.parentId) : undefined;
+      const socket = parent?.sockets?.find((s) => s.id === n.attachment?.parentSocketId);
+      if (socket?.skinning === 'mesh') meshSlots++;
+    }
+    if (meshSlots > 0) warnings.push(`网格蒙皮槽位 ${meshSlots} 个未进运行时包（v1）：对应部件按刚性绘制`);
+  }
   // 子图库：调用方传全库快照；给了统一条目库时按版本展开成
   // id@版本 条目（钉版本纪律），否则走平铺模板（同 SpriteTable
   // 由调用方传工程级表的先例，convert 不读存储）。
@@ -880,6 +906,12 @@ export function convertCharacterToRuntimePackage(
     const POSE_CHANNELS = ['angle', 'tilt', 'x', 'y', 'stretch', 'scaleX', 'variantIndex'] as const;
     const trackNodes = Object.values(character.nodes).filter((n) =>
       n.tracks && POSE_CHANNELS.some((ch) => (n.tracks[ch]?.keyframes?.length ?? 0) > 0));
+    // ---- 片段级点名（缺口 5/6）：片段内的状态切换与特效数据不进包 ----
+    for (const c of opts?.clips ?? []) {
+      if ((c.stateKeyframes?.length ?? 0) > 0) warnings.push(`片段「${c.name}」内的服装/变体状态切换未进运行时包（v1）：段内按片段开始时的状态播放`);
+      const clipFx = (c.effectTracks?.length ?? 0) + (c.canvasModifierTracks?.length ?? 0) + (c.motionBlurStrokes?.length ?? 0) + (c.effectStrokes?.length ?? 0) + (c.trajectories?.length ?? 0);
+      if (clipFx > 0) warnings.push(`片段「${c.name}」内的特效轨/笔触/轨迹未进运行时包（v1）`);
+    }
     const clipList = (opts?.clips ?? []).filter((c) =>
       c.puppetCharacterId === character.id
       && typeof c.startFrame === 'number' && typeof c.endFrame === 'number'
@@ -1122,6 +1154,31 @@ export function convertCharacterToRuntimePackage(
     stateMachine = defaultStateMachine(performances);
   }
 
+  // ---- 程序化动画（缺口 2）：与编辑器同口径——PA 只在目标节点挂有
+  // 对应类型的启用修改器时才生效（applyProceduralAnimations 的查找
+  // 规则），不满足的在编辑器内同样无效，逐条点名不进包；只认
+  // nodeId 的条目（编辑器主渲染只按 nodeId 匹配，spriteId-only 的
+  // 历史条目在编辑器内亦不生效，同口径点名）。 ----
+  const procedural: NonNullable<ProcRuntimePackage['procedural']> = [];
+  for (const pa of opts?.projectData?.proceduralAnimations ?? []) {
+    if (!pa.enabled) continue;
+    if (!pa.nodeId) { warnings.push(`程序化动画「${pa.name}」只有 spriteId 无 nodeId：编辑器主渲染亦不生效，未进包`); continue; }
+    const node = character.nodes[pa.nodeId];
+    if (!node) { warnings.push(`程序化动画「${pa.name}」目标节点不存在，未进包`); continue; }
+    const need = pa.config.targetProperty === 'rotation' ? 'rotate' : pa.config.targetProperty === 'scale' ? 'uniform_scale' : 'translate';
+    if (!(node.modifiers ?? []).some((m) => m.type === need && m.enabled)) {
+      warnings.push(`程序化动画「${pa.name}」目标节点无启用的 ${need} 修改器：编辑器内同样不生效，未进包`);
+      continue;
+    }
+    procedural.push({
+      slot: node.slot?.slotKey ?? node.id,
+      target: pa.config.targetProperty,
+      cfg: pa.config as unknown as Record<string, unknown>,
+      startFrame: pa.startFrame,
+      endFrame: pa.endFrame,
+    });
+  }
+
   return {
     format: 'procedural-pixel-runtime-1',
     characterName: character.name,
@@ -1133,6 +1190,7 @@ export function convertCharacterToRuntimePackage(
     behavior,
     performances,
     stateMachine,
+    procedural: procedural.length > 0 ? procedural : undefined,
     warnings,
   };
 }

@@ -2,11 +2,16 @@
  * verify-runtime-audit.mts — 运行时完备性审计锁定探针
  *
  * 把 spikes/runtime-completeness/AUDIT.md 的分类逐项锁成断言：
- * 某项被修复（缺口关闭）或恶化（完善面断裂）时本探针变红，
- * 提示同步更新 AUDIT.md 的分类，而不是让文档与代码悄悄分叉。
- * 风格：源码接线级断言（与 verify-sprite-mgmt 同级），不做渲染断言。
+ * 缺口被修复或完善面恶化时本探针变红，提示同步更新 AUDIT.md。
+ * 2026-10-26 全修进度：缺口 1（服装覆盖）、缺口 2（程序化动画）已关，
+ * 相应断言改为「已修」形态 + 数值对拍；其余缺口仍以「未修」形态锁定。
  */
 import { readFileSync } from 'node:fs';
+import { convertCharacterToRuntimePackage } from '../src/lib/proc-runtime/convert';
+import { createDynamicRuntime } from '../src/lib/proc-runtime/dynamic-src';
+import { computeProceduralValue } from '../src/lib/engine/procedural';
+import { createDefaultParametricAppearance } from '../src/lib/proc-runtime/surfaces';
+import { createDefaultCostumePiece } from '../src/lib/unified-types';
 
 let passed = 0;
 function check(name: string, ok: boolean) {
@@ -30,19 +35,74 @@ check('完善·裁剪面进包且运行时消费',
 check('完善·标记进包且运行时换算',
   convert.includes('marks') && template.includes('marksDir'));
 
-// ---- 静默缺口（关了 = 有人修了，须更新 AUDIT 分类）----
-check('缺口1·服装集条目 surface 仍未被 resolvePart 消费（修复后更新文档）',
-  !/if \(c\.surface\)/.test(template));
-check('缺口2·程序化动画仍未进 convert（修复后更新文档）',
-  !convert.includes('proceduralAnimations'));
+// ---- 缺口 1（已修）：服装件派生字段全量覆盖 ----
+check('缺口1·已修：resolvePart 全量覆盖服装件派生字段（含 surface）',
+  template.includes("'surface', 'surfaceGraph'") && template.includes('c[f] !== undefined'));
+
+// ---- 缺口 2（已修）：程序化动画进包 + 运行时取值逐值对拍 ----
+{
+  const rt = createDynamicRuntime();
+  const cfgs: Array<Record<string, unknown>> = [
+    { type: 'noise', amplitude: 3, frequency: 0.05, octaves: 3, seed: 7, targetProperty: 'translateX' },
+    { type: 'wave', amplitude: 2, frequency: 0.1, phase: 30, waveType: 'triangle', targetProperty: 'rotation' },
+    { type: 'wave', amplitude: 1.5, frequency: 0.2, phase: 0, waveType: 'square', targetProperty: 'translateY' },
+    { type: 'spring', stiffness: 40, damping: 2, mass: 1.5, restLength: 0.5, targetProperty: 'scale' },
+    { type: 'jitter', amount: 1.2, frequency: 0.3, smooth: true, targetProperty: 'translateX' },
+    { type: 'jitter', amount: 0.8, frequency: 0.7, smooth: false, targetProperty: 'translateY' },
+  ];
+  let parity = true;
+  for (const cfg of cfgs) {
+    for (const f of [0, 1, 7, 33, 120, 599]) {
+      const a = computeProceduralValue(cfg as never, f);
+      const b = rt.dynProceduralValue(cfg as never, f);
+      if (Math.abs(a - b) > 1e-9) { parity = false; console.error('  对拍不一致', cfg.type, f, a, b); }
+    }
+  }
+  check('缺口2·运行时程序化取值与编辑器逐值一致（6 配置 × 6 帧）', parity);
+
+  const mkNode = (id: string, mods: unknown[]) => ({
+    id, name: id, parentId: null, children: [], modifiers: mods,
+    slot: { slotKey: id }, transform: {}, sockets: [], tracks: { keyframes: [] },
+  });
+  const ch = {
+    id: 'pa1', name: 'PA测试',
+    nodes: {
+      withMod: mkNode('withMod', [{ id: 'm1', type: 'translate', enabled: true, params: {} }]),
+      noMod: mkNode('noMod', []),
+    },
+    rootNodeId: 'withMod', rootNodeIds: ['withMod'],
+    costumeSets: [{
+      id: 's1', name: '默认',
+      pieces: {
+        withMod: { nodeId: 'withMod', zIndex: 0, parametric: createDefaultParametricAppearance() },
+        noMod: { ...createDefaultCostumePiece('noMod'), parametric: createDefaultParametricAppearance() },
+      },
+    }],
+    activeCostumeSetId: 's1', variants: {},
+  } as never;
+  const pas = [
+    { id: 'p1', name: '有修改器', spriteId: '', nodeId: 'withMod', enabled: true, startFrame: 0, endFrame: 60, config: { type: 'wave', amplitude: 2, frequency: 0.1, phase: 0, waveType: 'sine', targetProperty: 'translateX' } },
+    { id: 'p2', name: '无修改器', spriteId: '', nodeId: 'noMod', enabled: true, startFrame: 0, endFrame: 60, config: { type: 'wave', amplitude: 2, frequency: 0.1, phase: 0, waveType: 'sine', targetProperty: 'translateX' } },
+    { id: 'p3', name: '只有精灵id', spriteId: 'spr_x', enabled: true, startFrame: 0, endFrame: 60, config: { type: 'wave', amplitude: 2, frequency: 0.1, phase: 0, waveType: 'sine', targetProperty: 'translateX' } },
+  ] as never[];
+  const pkg = convertCharacterToRuntimePackage(ch, undefined, { projectData: { proceduralAnimations: pas } });
+  check('缺口2·有对应修改器的 PA 进包且槽位/目标正确',
+    pkg.procedural?.length === 1 && pkg.procedural[0].slot === 'withMod' && pkg.procedural[0].target === 'translateX');
+  check('缺口2·无修改器与 spriteId-only 的 PA 被点名不进包',
+    pkg.warnings.some((w) => w.includes('无修改器') && w.includes('同样不生效'))
+    && pkg.warnings.some((w) => w.includes('只有精灵id') && w.includes('亦不生效')));
+  check('缺口2·运行时模板消费 PROCEDURAL', template.includes('const PROCEDURAL = EMBEDDED.procedural') && template.includes('dynProceduralValue(pa.cfg'));
+}
+
+// ---- 未修缺口（关了 = 有人修了，须更新 AUDIT 分类）----
 check('缺口3·全局修改器仍未进 convert（修复后更新文档）',
   !convert.includes('globalModifiers'));
 check('缺口4·运行时仍无网格蒙皮（修复后更新文档）',
   !template.includes('skinning') && !dynSrc.includes('skinning'));
-check('缺口5·画布修改轨仍未进 convert（修复后更新文档）',
-  !convert.includes('canvasModifierTracks'));
-check('缺口6·片段状态轨道仍未进 convert（修复后更新文档）',
-  !convert.includes('stateKeyframes'));
+check('缺口5·画布修改轨仍未成包字段（点名代码引用字段名不算进包；修复后更新文档）',
+  !convert.includes('canvasModifierTracks?:'));
+check('缺口6·片段状态切换仍未成包字段（修复后更新文档）',
+  !convert.includes('stateSwitches'));
 
 // ---- 已点名近似（点名消失 = 口径变化，须更新文档）----
 check('近似·directionDrawOrders 仍有点名 warning',
