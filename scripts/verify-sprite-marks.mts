@@ -147,6 +147,16 @@ check('2 点/值解析与缺失回落 undefined',
   const html = buildRuntimeHtml(pkg);
   check('7 导出运行时含 marksN 挂载（条目 [10] + 帧循环浅并 tile）',
     html.includes('marksN: entries[i][10]') && html.includes('marksN: a.marksN'));
+  check('8 plugN 下标修复：条目 [11] 写读一致、[6] 不再被当 plugN',
+    html.includes('plugN: entries[i][11]') && !html.includes('plugN: entries[i][6]')
+    && html.includes('[vt.cx / vt.w, vt.cy / vt.h]'));
+  check('8b plugN 口径恒等：plugC 公式 = [cx − w/2, h/2 − cy]（插头相对瓦片中心、y-up）',
+    (() => {
+      const w = 24, h = 24, cx = 7, cy = 12;
+      const plugN = [cx / w, cy / h];
+      const plugC = [plugN[0] * w - w / 2, (1 - plugN[1]) * h - h / 2];
+      return plugC[0] === cx - w / 2 && plugC[1] === h / 2 - cy;
+    })());
 }
 
 console.log(`\n精灵标记探针全过（${passed} 项）`);

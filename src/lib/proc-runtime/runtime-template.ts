@@ -803,7 +803,11 @@ function ensureAtlas(gl, variant, costumeName) {
           fi === 0 && di === 0 && disp
             ? { speed: disp.displaceSpeed || 0, phase: disp.displacePhase || 0, steps: dispSteps }
             : null,
-          marksPx]);
+          marksPx,
+          // [11] plugN：瓦片归一化插头位（cx/w, cy/h，y 向下存、
+          // 消费端 (1-y) 翻成 y-up 中心偏移）。原误挂 [6]（那是
+          // tileExtra 数字）已修复，见 spikes/sprite-marks 第六节
+          [vt.cx / vt.w, vt.cy / vt.h]]);
       }
     }
   }
@@ -926,7 +930,7 @@ function ensureAtlas(gl, variant, costumeName) {
       const rec = (animFrameMap[bk] = animFrameMap[bk] || {});
       rec[fi + ',' + di] = { tile: tile, place: [ax, ay] };
     } else {
-      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][6] || null, marksN: entries[i][10] || null });
+      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][11] || null, marksN: entries[i][10] || null });
     }
   });
   for (const bk in animFrameMap) {
