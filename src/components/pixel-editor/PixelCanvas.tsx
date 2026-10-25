@@ -17,6 +17,7 @@ import {
   renderCanvasBorder,
   renderSelectionOverlay,
   renderLandmarkOverlay,
+  renderMarkOverlay,
   renderLassoPreview,
   renderHandDrawnTrajectoryPreview,
   renderCropPreview,
@@ -351,6 +352,11 @@ export default function PixelCanvas() {
       const lmSprite = useProjectStore.getState().sprites[spriteEditSpriteId];
       if (lmSprite?.landmarks) {
         renderLandmarkOverlay(rc, lmSprite.landmarks, lmSprite.width, lmSprite.height, selOrigin.x, selOrigin.y);
+      }
+      // 精灵标记（点/选区/矢量/方向）：拖拽中按工作副本预览
+      if (lmSprite && (lmSprite.marks?.length || useEditorStore.getState().markDrag)) {
+        const es = useEditorStore.getState();
+        renderMarkOverlay(rc, lmSprite, selOrigin.x, selOrigin.y, es.selectedMarkId, es.markDrag);
       }
     }
 

@@ -230,4 +230,27 @@ check('2 点/值解析与缺失回落 undefined',
     })());
 }
 
+// ---------- 6) 标记编辑 UI 的纯逻辑（命名/矩形/涂画往返） ----------
+{
+  const { uniqueMarkName, rectSpecFromCorners, paintedSpecFromCells, cellsFromPaintedSpec, newMarkId } =
+    await import('../src/lib/sprite-marks');
+  check('10a 唯一命名：空闲直用、占用递增序号',
+    uniqueMarkName([], '标记') === '标记'
+    && uniqueMarkName([{ name: '标记' }], '标记') === '标记2'
+    && uniqueMarkName([{ name: '标记' }, { name: '标记2' }], '标记') === '标记3');
+  check('10b 矩形拖拽：反向拖拽自动排序、越界钳制',
+    (() => {
+      const r = rectSpecFromCorners(0.8, 0.9, 0.2, 0.1);
+      return r.x === 0.2 && r.y === 0.1 && Math.abs(r.w - 0.6) < 1e-9 && Math.abs(r.h - 0.8) < 1e-9;
+    })());
+  check('10c 涂画往返：逐格 → 打包 → 解包逐格一致（含尺寸对齐）',
+    (() => {
+      const cells = new Uint8Array(12); cells[0] = 1; cells[5] = 1; cells[11] = 1;
+      const spec = paintedSpecFromCells(cells, 4, 3);
+      const back = cellsFromPaintedSpec(spec, 4, 3);
+      return back.every((v, i) => v === cells[i]);
+    })());
+  check('10d 标记 id 不重复', newMarkId() !== newMarkId());
+}
+
 console.log(`\n精灵标记探针全过（${passed} 项）`);

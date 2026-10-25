@@ -38,6 +38,7 @@ import {
   SmartSelectStatus,
   InpaintControls,
   LandmarkControls,
+  MarkControls,
   MotionBlurBrushControls,
   EffectBrushControls,
   MoveToolControls,
@@ -537,6 +538,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
       {tool === 'smart_select' && <SmartSelectStatus />}
       {tool === 'inpaint' && <InpaintControls />}
       {tool === 'landmark' && <LandmarkControls />}
+      {tool === 'mark' && <MarkControls />}
       {isMotionBlurBrush && <MotionBlurBrushControls blendMode={blendMode} setBlendMode={setBlendMode} />}
       {isEffectBrush && <EffectBrushControls blendMode={blendMode} setBlendMode={setBlendMode} />}
       {isMoveTool && <MoveToolControls />}

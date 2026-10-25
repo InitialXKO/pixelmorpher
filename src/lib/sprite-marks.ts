@@ -38,6 +38,58 @@ export function unpackMaskBits(bits: string, count: number): Uint8Array {
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
+/** 新标记 id（时间戳 + 计数，单会话内不重复即可） */
+let markIdCounter = 0;
+export function newMarkId(): string {
+  markIdCounter += 1;
+  return `mark_${Date.now().toString(36)}_${markIdCounter}`;
+}
+
+/** 不重名的标记名：base 已占用时依次加序号（标记2、标记3…） */
+export function uniqueMarkName(marks: readonly { name: string }[], base: string): string {
+  if (!marks.some((m) => m.name === base)) return base;
+  for (let i = 2; ; i++) {
+    const cand = `${base}${i}`;
+    if (!marks.some((m) => m.name === cand)) return cand;
+  }
+}
+
+/** 拖拽两角（归一坐标）→ 矩形选区定义（自动排序、最小 1 格感） */
+export function rectSpecFromCorners(
+  x0: number, y0: number, x1: number, y1: number,
+): { by: 'rect'; x: number; y: number; w: number; h: number } {
+  const x = clamp01(Math.min(x0, x1));
+  const y = clamp01(Math.min(y0, y1));
+  return {
+    by: 'rect', x, y,
+    w: Math.max(0, clamp01(Math.max(x0, x1)) - x),
+    h: Math.max(0, clamp01(Math.max(y0, y1)) - y),
+  };
+}
+
+/** 逐格数组 → 涂画选区定义（位打包） */
+export function paintedSpecFromCells(
+  cells: Uint8Array, w: number, h: number,
+): { by: 'painted'; mask: { w: number; h: number; bits: string } } {
+  return { by: 'painted', mask: { w, h, bits: packMaskBits(cells) } };
+}
+
+/** 涂画选区定义 → 逐格数组（按目标网格尺寸对齐，越界丢弃） */
+export function cellsFromPaintedSpec(
+  spec: { mask: { w: number; h: number; bits: string } }, w: number, h: number,
+): Uint8Array {
+  const out = new Uint8Array(w * h);
+  const src = unpackMaskBits(spec.mask.bits, spec.mask.w * spec.mask.h);
+  const mw = Math.min(w, spec.mask.w);
+  const mh = Math.min(h, spec.mask.h);
+  for (let y = 0; y < mh; y++) {
+    for (let x = 0; x < mw; x++) {
+      if (src[y * spec.mask.w + x]) out[y * w + x] = 1;
+    }
+  }
+  return out;
+}
+
 /** 载入时规整标记表：丢弃无名/非法条目，数值钳制到合法域 */
 export function normalizeSpriteMarks(marks: unknown): SpriteMark[] {
   if (!Array.isArray(marks)) return [];

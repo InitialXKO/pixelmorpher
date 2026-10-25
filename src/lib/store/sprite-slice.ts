@@ -37,6 +37,7 @@ export type SpriteSlice = {
   removeSprite: ProjectStore['removeSprite'];
   updateSprite: ProjectStore['updateSprite'];
   updateSpriteLandmarks: ProjectStore['updateSpriteLandmarks'];
+  updateSpriteMarks: ProjectStore['updateSpriteMarks'];
   setSpritePixels: ProjectStore['setSpritePixels'];
   duplicateSprite: ProjectStore['duplicateSprite'];
   importSpriteFromImage: ProjectStore['importSpriteFromImage'];
@@ -88,6 +89,14 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
     markPartDirty(id);
     set((s) => ({
       sprites: s.sprites[id] ? { ...s.sprites, [id]: { ...s.sprites[id]!, landmarks } } : s.sprites,
+    }));
+  },
+
+  updateSpriteMarks: (id, marks) => {
+    get().pushUndo('更新精灵标记', 'updateSpriteMarks');
+    markPartDirty(id);
+    set((s) => ({
+      sprites: s.sprites[id] ? { ...s.sprites, [id]: { ...s.sprites[id]!, marks } } : s.sprites,
     }));
   },
 

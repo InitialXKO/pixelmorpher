@@ -9,6 +9,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import type { MotionBlurBrushType } from '@/lib/types';
+import { newMarkId, uniqueMarkName, normalizeSpriteMarks } from '@/lib/sprite-marks';
 
 // ============================================================
 // Tool-Specific Option Panels
@@ -421,6 +422,167 @@ export function LandmarkControls() {
         >
           清除
         </button>
+      )}
+    </div>
+  );
+}
+
+// ---- Sprite Mark Controls（精灵标记：点/选区/值/方向/矢量） ----
+const MARK_KIND_LABEL: Record<string, string> = {
+  point: '点', region: '选区', value: '值', direction: '方向', vector: '矢量',
+};
+const MARK_MODES = [
+  { v: 'point', label: '点' },
+  { v: 'paint', label: '涂选区' },
+  { v: 'rect', label: '矩形选区' },
+  { v: 'vector', label: '矢量' },
+] as const;
+
+export function MarkControls() {
+  const markToolMode = useEditorStore((s) => s.markToolMode);
+  const setMarkToolMode = useEditorStore((s) => s.setMarkToolMode);
+  const selectedMarkId = useEditorStore((s) => s.selectedMarkId);
+  const setSelectedMarkId = useEditorStore((s) => s.setSelectedMarkId);
+  const selectedSpriteId = useEditorStore((s) => s.selectedSpriteId);
+  const sprite = useProjectStore((s) => (selectedSpriteId ? s.sprites[selectedSpriteId] : undefined));
+  const updateSpriteMarks = useProjectStore((s) => s.updateSpriteMarks);
+  const marks = sprite?.marks ?? [];
+  const selected = marks.find((m) => m.id === selectedMarkId);
+
+  const commit = (next: typeof marks) => {
+    if (selectedSpriteId) updateSpriteMarks(selectedSpriteId, normalizeSpriteMarks(next));
+  };
+  const patchMark = (id: string, patch: Record<string, unknown>) => {
+    commit(marks.map((m) => (m.id === id ? ({ ...m, ...patch } as typeof m) : m)));
+  };
+  const addMark = (kind: 'value' | 'direction') => {
+    if (!sprite) return;
+    const m = kind === 'value'
+      ? { id: newMarkId(), name: uniqueMarkName(marks, '数值'), kind: 'value' as const, value: 1 }
+      : { id: newMarkId(), name: uniqueMarkName(marks, '方向'), kind: 'direction' as const, angleDeg: 0 };
+    commit([...marks, m]);
+    setSelectedMarkId(m.id);
+  };
+  const numCls = 'h-6 w-16 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-1 text-gray-300';
+
+  if (!sprite) {
+    return <div className="flex items-center gap-1 mx-1 shrink-0 text-[10px] text-gray-500">先在左侧选择一张精灵</div>;
+  }
+  return (
+    <div className="flex flex-col gap-1 mx-1 shrink-0">
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] text-gray-500 uppercase tracking-wide">标记</span>
+        <ToggleGroup
+          type="single"
+          value={markToolMode}
+          onValueChange={(val) => { if (val) setMarkToolMode(val as typeof markToolMode); }}
+          className="gap-0.5"
+        >
+          {MARK_MODES.map(({ v, label }) => (
+            <ToggleGroupItem
+              key={v} value={v} aria-label={label}
+              className={`h-6 px-1.5 text-[10px] border border-white/10 rounded ${
+                markToolMode === v ? 'bg-fuchsia-600/30 text-fuchsia-300 border-fuchsia-500/50' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'}`}
+            >
+              {label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <button className="text-[10px] text-gray-400 hover:text-gray-100 px-1" onClick={() => addMark('value')}>＋值</button>
+        <button className="text-[10px] text-gray-400 hover:text-gray-100 px-1" onClick={() => addMark('direction')}>＋方向</button>
+        <span className="text-[10px] text-gray-600">{marks.length} 个</span>
+      </div>
+      {marks.length > 0 && (
+        <div className="flex items-center gap-1 flex-wrap max-w-[520px]">
+          {marks.map((m) => (
+            <button
+              key={m.id}
+              onClick={() => setSelectedMarkId(m.id)}
+              className={`h-6 px-1.5 text-[10px] border rounded ${
+                m.id === selectedMarkId
+                  ? 'bg-yellow-600/25 text-yellow-200 border-yellow-500/50'
+                  : 'border-white/10 text-gray-400 hover:text-gray-200'}`}
+            >
+              {MARK_KIND_LABEL[m.kind]}·{m.name}
+            </button>
+          ))}
+        </div>
+      )}
+      {selected && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <input
+            value={selected.name}
+            onChange={(e) => patchMark(selected.id, { name: e.target.value })}
+            className="h-6 w-24 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-1 text-gray-200"
+            aria-label="标记名"
+          />
+          {selected.kind === 'point' && (
+            <>
+              <label className="text-[10px] text-gray-500">X<input type="number" step={0.01} min={0} max={1} value={Math.round(selected.x * 100) / 100} onChange={(e) => patchMark(selected.id, { x: Number(e.target.value) })} className={numCls} /></label>
+              <label className="text-[10px] text-gray-500">Y<input type="number" step={0.01} min={0} max={1} value={Math.round(selected.y * 100) / 100} onChange={(e) => patchMark(selected.id, { y: Number(e.target.value) })} className={numCls} /></label>
+            </>
+          )}
+          {selected.kind === 'value' && (
+            <label className="text-[10px] text-gray-500">值<input type="number" step={0.1} value={selected.value} onChange={(e) => patchMark(selected.id, { value: Number(e.target.value) })} className={numCls} /></label>
+          )}
+          {selected.kind === 'direction' && (
+            <label className="flex items-center gap-1 text-[10px] text-gray-500">角度
+              <input type="range" min={0} max={359} step={1} value={selected.angleDeg} onChange={(e) => patchMark(selected.id, { angleDeg: Number(e.target.value) })} className="w-24 accent-fuchsia-500" />
+              <span className="text-gray-400 w-8">{Math.round(selected.angleDeg)}°</span>
+            </label>
+          )}
+          {selected.kind === 'vector' && (
+            <>
+              <label className="text-[10px] text-gray-500">dX<input type="number" step={0.05} value={Math.round(selected.dx * 100) / 100} onChange={(e) => patchMark(selected.id, { dx: Number(e.target.value) })} className={numCls} /></label>
+              <label className="text-[10px] text-gray-500">dY<input type="number" step={0.05} value={Math.round(selected.dy * 100) / 100} onChange={(e) => patchMark(selected.id, { dy: Number(e.target.value) })} className={numCls} /></label>
+            </>
+          )}
+          {selected.kind === 'region' && (
+            <>
+              <select
+                value={selected.region.by}
+                onChange={(e) => {
+                  const by = e.target.value;
+                  const spec = by === 'painted'
+                    ? { by: 'painted' as const, mask: { w: sprite.width, h: sprite.height, bits: '' } }
+                    : by === 'color'
+                      ? { by: 'color' as const, color: '#ff0000', tolerance: 0 }
+                      : by === 'circle'
+                        ? { by: 'circle' as const, cx: 0.5, cy: 0.5, r: 0.3 }
+                        : { by: 'rect' as const, x: 0.25, y: 0.25, w: 0.5, h: 0.5 };
+                  patchMark(selected.id, { region: spec });
+                }}
+                className="h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded text-gray-300"
+              >
+                <option value="painted">涂画</option>
+                <option value="color">取色</option>
+                <option value="rect">矩形</option>
+                <option value="circle">圆形</option>
+              </select>
+              {selected.region.by === 'color' && (
+                <>
+                  <input type="color" value={selected.region.color} onChange={(e) => patchMark(selected.id, { region: { ...selected.region, color: e.target.value } })} className="h-5 w-8 bg-transparent" />
+                  <label className="flex items-center gap-1 text-[10px] text-gray-500">容差
+                    <input type="range" min={0} max={1} step={0.05} value={selected.region.tolerance} onChange={(e) => patchMark(selected.id, { region: { ...selected.region, tolerance: Number(e.target.value) } })} className="w-16 accent-fuchsia-500" />
+                  </label>
+                </>
+              )}
+              {selected.region.by === 'circle' && (
+                <label className="flex items-center gap-1 text-[10px] text-gray-500">半径
+                  <input type="range" min={0.05} max={0.7} step={0.01} value={selected.region.r} onChange={(e) => patchMark(selected.id, { region: { ...selected.region, r: Number(e.target.value) } })} className="w-16 accent-fuchsia-500" />
+                </label>
+              )}
+              {selected.region.by === 'rect' && <span className="text-[10px] text-gray-600">切到「矩形选区」子模式在画布上拖</span>}
+              {selected.region.by === 'painted' && <span className="text-[10px] text-gray-600">切到「涂选区」子模式在画布上涂</span>}
+            </>
+          )}
+          <button
+            className="text-[10px] text-gray-500 hover:text-red-400 px-1"
+            onClick={() => { commit(marks.filter((m) => m.id !== selected.id)); setSelectedMarkId(null); }}
+          >
+            删除
+          </button>
+        </div>
       )}
     </div>
   );
