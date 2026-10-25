@@ -1331,22 +1331,89 @@ const solidBuf = gl.createBuffer();
   }
   gl.bindVertexArray(null);
 }
-function buildScenery(charX, charY, onGround) {
+const bgProg = makeProgram(
+\`#version 300 es
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec2 aUv;
+uniform vec2 uCam; uniform vec2 uViewHalf;
+out vec2 vUv;
+void main(){ vUv = aUv; gl_Position = vec4((aPos - uCam) / uViewHalf, 0.995, 1.0); }\`,
+\`#version 300 es
+precision highp float;
+in vec2 vUv; uniform sampler2D uTex;
+out vec4 oColor;
+void main(){ oColor = vec4(texture(uTex, vUv).rgb, 1.0); }\`);
+const bgVAO = gl.createVertexArray();
+const bgBuf = gl.createBuffer();
+{
+  gl.bindVertexArray(bgVAO);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bgBuf);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 4 * 4, 0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 4 * 4, 2 * 4);
+  gl.bindVertexArray(null);
+}
+const bgU = { cam: gl.getUniformLocation(bgProg, 'uCam'), vh: gl.getUniformLocation(bgProg, 'uViewHalf'), tex: gl.getUniformLocation(bgProg, 'uTex') };
+function drawBackground(camX, camY) {
+  // 背景图四边形：0.85 倍视差跟随、1.4 倍视口大小（留出视差边距）
+  const cx = camX * 0.85, cy = camY * 0.85;
+  const w = lowW * 1.4, h = VIEW_H * 1.4;
+  const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2;
+  const v = new Float32Array([
+    x0, y0, 0, 0, x1, y0, 1, 0, x1, y1, 1, 1,
+    x0, y0, 0, 0, x1, y1, 1, 1, x0, y1, 0, 1,
+  ]);
+  gl.useProgram(bgProg);
+  gl.uniform2f(bgU.cam, camX, camY);
+  gl.uniform2f(bgU.vh, lowW / 2, VIEW_H / 2);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, bgTex); gl.uniform1i(bgU.tex, 0);
+  gl.bindVertexArray(bgVAO);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bgBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, v, gl.DYNAMIC_DRAW);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+  // 复位到场景（solid）绘制状态，调用方随后照常画 scenery
+  gl.useProgram(solidProg);
+  gl.uniform2f(solidU.cam, camX, camY);
+  gl.uniform2f(solidU.vh, lowW / 2, VIEW_H / 2);
+  gl.bindVertexArray(solidVAO);
+  gl.bindBuffer(gl.ARRAY_BUFFER, solidBuf);
+}
+function buildScenery(charX) {
   const verts = [];
   const quad = (cx, cy, w, h, color, mode) => {
     const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2;
     const corners = [[x0, y0, -1, -1], [x1, y0, 1, -1], [x1, y1, 1, 1], [x0, y0, -1, -1], [x1, y1, 1, 1], [x0, y1, -1, 1]];
     for (const cn of corners) verts.push(cn[0], cn[1], cn[2], cn[3], color[0], color[1], color[2], color[3], mode);
   };
-  const base = Math.floor(charX / 24) * 24;
-  for (let i = -10; i <= 10; i++) {
-    const gx = base + i * 24;
-    const hh = 1.5 + (Math.abs(i * 7 + Math.floor(charX / 24)) % 3);
-    quad(gx, hh / 2, 4, hh, [0.118, 0.118, 0.243, 1], 0);
+  if (!bgTex) {
+    const base = Math.floor(charX / 24) * 24;
+    for (let i = -10; i <= 10; i++) {
+      const gx = base + i * 24;
+      const hh = 1.5 + (Math.abs(i * 7 + Math.floor(charX / 24)) % 3);
+      quad(gx, hh / 2, 4, hh, [0.118, 0.118, 0.243, 1], 0);
+    }
+    if (moveMode === 'side') quad(charX, -0.75, 4000, 1.5, [0.165, 0.165, 0.322, 1], 0);
   }
-  quad(charX, -0.75, 4000, 1.5, [0.165, 0.165, 0.322, 1], 0);
-  const shrink = onGround ? 1 : Math.max(0.5, 1 - charY / 50);
-  quad(charX, 0.4, 20 * shrink, 5 * shrink, [0.031, 0.031, 0.078, 0.5 * shrink], 1);
+  // 场景实体（横版体块 / 俯视平面块同一画法）；顶边亮线 = 可站立面
+  for (let i = 0; i < solids.length; i++) {
+    const q = solids[i];
+    const sel = sceneEdit && i === selSolid;
+    if (sel) quad(q.x + q.w / 2, q.y + q.h / 2, q.w + 1.6, q.h + 1.6, [0.98, 0.75, 0.2, 0.55], 0);
+    quad(q.x + q.w / 2, q.y + q.h / 2, q.w, q.h, sel ? [0.36, 0.33, 0.19, 1] : [0.22, 0.21, 0.38, 1], 0);
+    quad(q.x + q.w / 2, q.y + q.h - 0.6, q.w, 1.2, [0.45, 0.43, 0.62, 1], 0);
+  }
+  // 接触阴影：落在脚下最高支撑面上（俯视时即平面点）
+  const fy = charFeetY();
+  let supY = fy;
+  if (moveMode === 'side') {
+    supY = 0;
+    for (const q of solids) {
+      const top = q.y + q.h;
+      const overX = char.x + CHAR_HW > q.x && char.x - CHAR_HW < q.x + q.w;
+      if (overX && top <= fy + 0.01 && top > supY) supY = top;
+    }
+  }
+  const shrink = char.onGround ? 1 : Math.max(0.5, 1 - (fy - supY) / 50);
+  quad(char.x, supY + 0.4, 20 * shrink, 5 * shrink, [0.031, 0.031, 0.078, 0.5 * shrink], 1);
   return new Float32Array(verts);
 }
 
@@ -1626,7 +1693,35 @@ function fxRunPostChain(rawList, state, elByKey, camX, camY) {
 }
 
 // ---------- 宿主输入与运行时状态 ----------
-const char = { x: 0, y: 0, vy: 0, onGround: true, variant: 0, lockedVariant: false };
+const char = { x: 0, y: 0, py: 0, vy: 0, onGround: true, variant: 0, lockedVariant: false, wallDir: 0, ledge: null };
+// 现场可调参数（控制条「手感」面板直改；宿主包 pkg.scene 可给初值）
+const PHYS = { speed: 72, jumpV: 200, gravity: 720, camFollow: 10, camLockX: false, camLockY: false };
+// 按键绑定（控制条「按键」面板可重绑；方向键恒为备用）
+const KEYMAP = { left: 'KeyA', right: 'KeyD', jump: 'KeyW', down: 'KeyS' };
+let rebindTarget = null; // {kind:'move', act} | {kind:'perf', perf}
+// 移动模式：'side' 横版（重力+跳跃）/ 'top' 俯视（无重力平面移动驱动 8 方向）
+let moveMode = 'side';
+// 场景实体（AABB，左下角 x/y + 宽高，世界单位、y 向上）：包内 scene 优先，
+// 否则用内置默认关卡（一块台阶、两块平台、一面可贴可抓的高块）。
+let solids = (EMBEDDED.scene && Array.isArray(EMBEDDED.scene.solids) && EMBEDDED.scene.solids.length)
+  ? EMBEDDED.scene.solids.map((q) => ({ x: +q.x || 0, y: +q.y || 0, w: Math.max(2, +q.w || 2), h: Math.max(2, +q.h || 2) }))
+  : [
+      { x: -40, y: 0, w: 30, h: 14 },
+      { x: -108, y: 26, w: 52, h: 6 },
+      { x: 34, y: 48, w: 56, h: 6 },
+      { x: 116, y: 0, w: 12, h: 62 },
+    ];
+let sceneEdit = false, selSolid = -1, bgTex = null;
+// 相机状态（平滑跟随；camSnap 时本帧直接对齐目标）
+const camState = { x: 0, y: 52, snap: true };
+// 输入录制/回放：帧级记录 {dt, ix, jump, down, trig, variant, locked, costume, aw}，
+// 回放按记录 dt 与输入序列重演（模拟确定性重放；粒子随机仅影响观感）
+const pendingTriggers = [];
+const rec = { active: false, frames: [], start: null };
+const replay = { active: false, idx: 0, frames: [], gif: false };
+function charFeetY() { return moveMode === 'top' ? char.py : char.y; }
+function charOriginY() { return charFeetY() - localGround; }
+function charBoxH() { return -localGround + 8; }
 let currentCostume = (EMBEDDED.defaultCostume && COSTUMES[EMBEDDED.defaultCostume])
   ? EMBEDDED.defaultCostume
   : Object.keys(COSTUMES)[0] || '';
@@ -1802,7 +1897,7 @@ function enterPerformance(perf) {
 window.procRuntime = {
   intent: function (name) {
     if (name === 'jump') {
-      if (char.onGround) { char.vy = JUMP_V; char.onGround = false; }
+      if (moveMode === 'side' && char.onGround) { char.vy = PHYS.jumpV; char.onGround = false; }
       return true;
     }
     const perf = PERFORMANCES.find((p) => p.id === name || p.name === name || p.trigger === name);
@@ -1816,7 +1911,7 @@ window.procRuntime = {
     }
     if (name === 'autoWalk') { autoWalk = !!value; return true; }
     // 保留名是身体真相（逐帧由物理/输入算出），不接受外部写入
-    if (name === 't' || name === 'phase' || name === 'speed01' || name === 'grounded') return false;
+    if (name === 't' || name === 'phase' || name === 'speed01' || name === 'grounded' || name === 'wall' || name === 'ledge') return false;
     // 通用变量：null/undefined = 删除（条件随之读不到、按缺失处理）；只存数
     if (value === null || value === undefined) { delete hostCustomVars[name]; return true; }
     const num = Number(value);
@@ -1834,42 +1929,161 @@ window.procRuntime = {
 };
 
 window.addEventListener('keydown', (e) => {
+  if (rebindTarget) {
+    e.preventDefault();
+    if (e.code === 'Escape') { rebindTarget = null; refreshKeyPanel(); return; }
+    if (rebindTarget.kind === 'move') KEYMAP[rebindTarget.act] = e.code;
+    else if (rebindTarget.kind === 'perf') {
+      rebindTarget.perf.triggerKey = e.code;
+      const b = barState.perfBtns[rebindTarget.perf.id];
+      if (b) b.textContent = rebindTarget.perf.name + ' (' + String(e.code).replace('Key', '') + ')';
+    }
+    rebindTarget = null; refreshKeyPanel();
+    return;
+  }
   keys[e.code] = true;
   const d = parseInt(e.key);
   if (d >= 1 && d <= 8) { char.variant = d - 1; char.lockedVariant = true; refreshBar(); }
-  for (const perf of PERFORMANCES) if (perf.triggerKey === e.code) enterPerformance(perf);
+  for (const perf of PERFORMANCES) if (perf.triggerKey === e.code) pendingTriggers.push(perf.id);
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
-const MOVE_SPEED = 72, JUMP_V = 200, GRAVITY = 720;
+function keyHeld(code, alt) { return !!(keys[code] || (alt && keys[alt])); }
 function readMoveX() {
   if (hostMoveX !== null) return hostMoveX; // 宿主直写优先于键盘（绕过口）
   let ix = 0;
-  if (keys['KeyA'] || keys['ArrowLeft']) ix -= 1;
-  if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
-  if (ix === 0 && autoWalk) ix = autoDir;
+  if (keyHeld(KEYMAP.left, 'ArrowLeft')) ix -= 1;
+  if (keyHeld(KEYMAP.right, 'ArrowRight')) ix += 1;
+  if (ix === 0 && autoWalk && moveMode === 'side') ix = autoDir;
   return ix;
 }
-function updateCharacter(dt, ix) {
-  if (ix !== 0 && !char.lockedVariant) char.variant = ix > 0 ? 2 : 6;
-  char.x += ix * MOVE_SPEED * dt;
-  if (autoWalk && Math.abs(char.x) > 110) autoDir = char.x > 0 ? -1 : 1;
-  if ((keys['KeyW'] || keys['ArrowUp']) && char.onGround) { char.vy = JUMP_V; char.onGround = false; }
-  if (!char.onGround) {
-    char.vy -= GRAVITY * dt; char.y += char.vy * dt;
-    if (char.y <= 0) { char.y = 0; char.vy = 0; char.onGround = true; }
+function readMoveY() { // 俯视平面纵向（+1 = 向北/屏幕上）
+  let iy = 0;
+  if (keyHeld(KEYMAP.jump, 'ArrowUp')) iy += 1;
+  if (keyHeld(KEYMAP.down, 'ArrowDown')) iy -= 1;
+  return iy;
+}
+// 角色碰撞盒：脚底中心 x、半宽 HW、盒高 charBoxH（原点上方留头顶余量）
+const CHAR_HW = 7;
+function updateCharacterTop(dt, ix, iy) {
+  const len = Math.hypot(ix, iy);
+  if (len > 0) {
+    const vx = ix / (len || 1) * PHYS.speed, vy = iy / (len || 1) * PHYS.speed;
+    // 逐轴解算：先 x 后 y，实体当平面障碍
+    let nx = char.x + vx * dt;
+    for (const q of solids) {
+      if (nx + CHAR_HW > q.x && nx - CHAR_HW < q.x + q.w && char.py + CHAR_HW > q.y && char.py - CHAR_HW < q.y + q.h) {
+        nx = vx > 0 ? q.x - CHAR_HW : q.x + q.w + CHAR_HW;
+      }
+    }
+    char.x = nx;
+    let ny = char.py + vy * dt;
+    for (const q of solids) {
+      if (char.x + CHAR_HW > q.x && char.x - CHAR_HW < q.x + q.w && ny + CHAR_HW > q.y && ny - CHAR_HW < q.y + q.h) {
+        ny = vy > 0 ? q.y - CHAR_HW : q.y + q.h + CHAR_HW;
+      }
+    }
+    char.py = ny;
+    if (!char.lockedVariant) {
+      char.variant = ((Math.round((Math.atan2(iy, ix) * 180 / Math.PI + 90) / 45) % 8) + 8) % 8;
+    }
   }
+  char.onGround = true; char.wallDir = 0; char.ledge = null;
+}
+function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
+  const H = charBoxH();
+  // —— 抓边中：物理暂停，等爬上/落下 ——
+  if (char.ledge) {
+    const q = char.ledge.s, side = char.ledge.side; // side=+1 抓的是实体左缘（人在实体左侧）
+    if (jumpHeld || keyHeld(KEYMAP.jump, 'ArrowUp')) {
+      char.y = q.y + q.h; char.x = q.x + (side > 0 ? CHAR_HW + 1 : q.w - CHAR_HW - 1);
+      char.vy = 0; char.onGround = true; char.ledge = null;
+    } else if (downHeld || (side > 0 && ix < 0) || (side < 0 && ix > 0)) {
+      char.ledge = null; char.vy = 0; char.onGround = false;
+    }
+    return;
+  }
+  if (ix !== 0 && !char.lockedVariant) char.variant = ix > 0 ? 2 : 6;
+  // —— 水平：先走后堵（实体侧面） ——
+  char.wallDir = 0;
+  let nx = char.x + ix * PHYS.speed * dt;
+  if (ix !== 0) {
+    for (const q of solids) {
+      const overlapY = char.y < q.y + q.h - 0.01 && char.y + H > q.y + 0.01;
+      if (overlapY && nx + CHAR_HW > q.x && nx - CHAR_HW < q.x + q.w) {
+        if (ix > 0 && char.x + CHAR_HW <= q.x + 0.01) { nx = q.x - CHAR_HW; char.wallDir = 1; }
+        else if (ix < 0 && char.x - CHAR_HW >= q.x + q.w - 0.01) { nx = q.x + q.w + CHAR_HW; char.wallDir = -1; }
+      }
+    }
+  }
+  char.x = nx;
+  if (autoWalk && Math.abs(char.x) > 110) autoDir = char.x > 0 ? -1 : 1;
+  // —— 跳跃 ——
+  if (jumpHeld && char.onGround) { char.vy = PHYS.jumpV; char.onGround = false; }
+  // —— 垂直：重力积分后按跨越判定落地/顶头 ——
+  const prevFeet = char.y, prevHead = char.y + H;
+  if (!char.onGround) char.vy -= PHYS.gravity * dt;
+  else if (!jumpHeld || char.vy <= 0) char.vy = 0;
+  let ny = char.y + char.vy * dt;
+  let landed = false;
+  if (char.vy <= 0) {
+    let best = 0; // 地面 y=0 恒为支撑
+    for (const q of solids) {
+      const top = q.y + q.h;
+      const overX = char.x + CHAR_HW * 0.7 > q.x && char.x - CHAR_HW * 0.7 < q.x + q.w;
+      if (overX && top <= prevFeet + 0.01 && top >= ny && top > best) best = top;
+    }
+    if (ny <= best) { ny = best; char.vy = 0; landed = true; }
+  } else {
+    for (const q of solids) {
+      const overX = char.x + CHAR_HW * 0.7 > q.x && char.x - CHAR_HW * 0.7 < q.x + q.w;
+      if (overX && q.y >= prevHead - 0.01 && q.y <= ny + H) { ny = q.y - H; char.vy = 0; }
+    }
+  }
+  // 支撑复查：站在支撑面上（vy=0 且脚下 0.6 内有支撑）才算在地
+  if (!landed && char.vy === 0) {
+    let support = (ny <= 0.01) ? 0 : -Infinity;
+    for (const q of solids) {
+      const top = q.y + q.h;
+      const overX = char.x + CHAR_HW * 0.7 > q.x && char.x - CHAR_HW * 0.7 < q.x + q.w;
+      if (overX && top <= ny + 0.01 && top >= ny - 0.6 && top > support) support = top;
+    }
+    if (support > -Infinity) { ny = support; landed = true; }
+  }
+  char.y = ny;
+  char.onGround = landed;
+  // —— 贴墙滑落：空中触墙且朝墙推 → 下滑钳速，进状态机变量 wall ——
+  if (!char.onGround && char.wallDir !== 0 && ix === char.wallDir && char.vy < -30) char.vy = -30;
+  // —— 抓边：下落中手高（脚 + 盒高 - 6）跨过实体顶边且身体贴在实体侧缘外 ——
+  if (!char.onGround && char.vy < 0) {
+    const handPrev = prevFeet + H - 6, handNow = char.y + H - 6;
+    for (const q of solids) {
+      const top = q.y + q.h;
+      if (handPrev > top && handNow <= top) {
+        if (char.x + CHAR_HW >= q.x - 2 && char.x + CHAR_HW <= q.x + 5 && ix >= 0) {
+          char.ledge = { s: q, side: 1 }; char.y = top - (H - 6); char.x = q.x - CHAR_HW; char.vy = 0; break;
+        }
+        if (char.x - CHAR_HW <= q.x + q.w + 2 && char.x - CHAR_HW >= q.x + q.w - 5 && ix <= 0) {
+          char.ledge = { s: q, side: -1 }; char.y = top - (H - 6); char.x = q.x + q.w + CHAR_HW; char.vy = 0; break;
+        }
+      }
+    }
+  }
+}
+function updateCharacter(dt, inp) {
+  if (moveMode === 'top') updateCharacterTop(dt, inp.ix, inp.iy);
+  else updateCharacterSide(dt, inp.ix, inp.jump, inp.down);
 }
 function partCenter(params, an) {
   const c = Math.cos(an.a), s = Math.sin(an.a);
   const rx = params.off[0] * c - params.off[1] * s;
   const ry = params.off[0] * s + params.off[1] * c;
-  return [char.x + params.pivot[0] + rx + (an.dx || 0), char.y - localGround + params.pivot[1] + ry + (an.dy || 0)];
+  return [char.x + params.pivot[0] + rx + (an.dx || 0), charOriginY() + params.pivot[1] + ry + (an.dy || 0)];
 }
 
 // ---------- 控制条 ----------
 const bar = document.getElementById('bar');
-const barState = { dirs: [], costs: [] };
+const barState = { dirs: [], costs: [], perfBtns: {} };
 function mkRow(label) {
   const row = document.createElement('div'); row.className = 'row';
   const lab = document.createElement('span'); lab.className = 'lab'; lab.textContent = label;
@@ -1895,7 +2109,8 @@ function mkRow(label) {
   for (const perf of PERFORMANCES) {
     const b = document.createElement('button');
     b.textContent = perf.triggerKey ? perf.name + ' (' + String(perf.triggerKey).replace('Key', '') + ')' : perf.name;
-    b.onclick = () => enterPerformance(perf);
+    b.onclick = () => pendingTriggers.push(perf.id);
+    barState.perfBtns[perf.id] = b;
     row3.appendChild(b);
   }
   const aw = document.createElement('button');
@@ -1919,9 +2134,337 @@ function refreshBar() {
 refreshBar();
 document.getElementById('hud').innerHTML =
   '<b>' + EMBEDDED.characterName + '</b> · 程序化运行时<br>' +
-  'A/D 或方向键移动 · W 跳跃 · 数字键锁方向 · 表演键见右上';
+  'A/D 或方向键移动 · W 跳跃 · 数字键锁方向 · 表演键见右上<br>控制条可切俯视、改手感、重绑键、编辑场景、录制回放/GIF';
 if (EMBEDDED.warnings && EMBEDDED.warnings.length) {
   document.getElementById('warn').textContent = '导出提示：\\n' + EMBEDDED.warnings.join('\\n');
+}
+
+
+// ---------- 预览工具面板：模式 / 手感 / 按键 / 场景 / 录制 ----------
+function mkPanelDiv() {
+  const d = document.createElement('div');
+  d.style.display = 'none'; d.style.padding = '4px 2px'; d.style.maxWidth = '560px';
+  return d;
+}
+function mkBtn(label) { const b = document.createElement('button'); b.textContent = label; return b; }
+const feelPanel = mkPanelDiv(), keyPanel = mkPanelDiv(), scenePanel = mkPanelDiv(), recPanel = mkPanelDiv();
+{
+  const row = mkRow('工具');
+  const bMode = mkBtn('俯视模式');
+  bMode.onclick = () => {
+    if (moveMode === 'side') { moveMode = 'top'; char.py = char.y; char.ledge = null; char.wallDir = 0; }
+    else { moveMode = 'side'; char.y = 0; char.vy = 0; char.onGround = true; }
+    camState.snap = true;
+    bMode.classList.toggle('on', moveMode === 'top');
+    bMode.textContent = moveMode === 'top' ? '横版模式' : '俯视模式';
+  };
+  row.appendChild(bMode);
+  const panels = [[feelPanel, '手感'], [keyPanel, '按键'], [scenePanel, '场景'], [recPanel, '录制']];
+  for (const [d, lab] of panels) {
+    const b = mkBtn(lab);
+    b.onclick = () => {
+      const on = d.style.display === 'none';
+      for (const [q] of panels) q.style.display = 'none';
+      d.style.display = on ? 'block' : 'none';
+      b.classList.toggle('on', on);
+    };
+    row.appendChild(b);
+    bar.appendChild(d);
+  }
+}
+// 手感：滑杆直改 PHYS（走速/跳速/重力/相机跟随率）+ 相机横纵锁定
+{
+  const defs = [
+    ['speed', '移动速度', 20, 220, 1], ['jumpV', '跳跃初速', 50, 420, 1],
+    ['gravity', '重力', 100, 2400, 10], ['camFollow', '相机跟随率', 0.5, 24, 0.5],
+  ];
+  for (const [k, lab, mn, mx, st] of defs) {
+    const line = document.createElement('div');
+    const name = document.createElement('span'); name.className = 'lab'; name.textContent = lab;
+    const rng = document.createElement('input');
+    rng.type = 'range'; rng.min = String(mn); rng.max = String(mx); rng.step = String(st); rng.value = String(PHYS[k]);
+    const val = document.createElement('span'); val.className = 'lab'; val.textContent = String(PHYS[k]);
+    rng.oninput = () => { PHYS[k] = parseFloat(rng.value); val.textContent = rng.value; };
+    line.appendChild(name); line.appendChild(rng); line.appendChild(val);
+    feelPanel.appendChild(line);
+  }
+  for (const [k, lab] of [['camLockX', '锁相机横向'], ['camLockY', '锁相机纵向']]) {
+    const b = mkBtn(lab);
+    b.onclick = () => { PHYS[k] = !PHYS[k]; b.classList.toggle('on', PHYS[k]); };
+    feelPanel.appendChild(b);
+  }
+}
+// 按键：移动键与表演触发键都可重绑（点一项 → 按新键）
+function refreshKeyPanel() {
+  keyPanel.innerHTML = '';
+  const hint = document.createElement('div');
+  hint.className = 'lab';
+  hint.textContent = rebindTarget ? '按下新键完成重绑（Esc 取消）…' : '点击一项再按新键重绑；方向键恒为备用。';
+  keyPanel.appendChild(hint);
+  const acts = [['left', '左移'], ['right', '右移'], ['jump', '跳跃/上'], ['down', '下']];
+  for (const [act, lab] of acts) {
+    const b = mkBtn(lab + '：' + String(KEYMAP[act]).replace('Key', ''));
+    b.onclick = () => { rebindTarget = { kind: 'move', act }; refreshKeyPanel(); };
+    keyPanel.appendChild(b);
+  }
+  for (const perf of PERFORMANCES) {
+    const b = mkBtn(perf.name + '：' + (perf.triggerKey ? String(perf.triggerKey).replace('Key', '') : '未绑'));
+    b.onclick = () => { rebindTarget = { kind: 'perf', perf }; refreshKeyPanel(); };
+    keyPanel.appendChild(b);
+  }
+}
+refreshKeyPanel();
+// 场景：增删实体、背景图；拖拽在画布上完成（编辑开关打开后）
+const sceneInfo = document.createElement('div');
+sceneInfo.className = 'lab';
+function refreshScenePanel() {
+  const q = solids[selSolid];
+  sceneInfo.textContent = q
+    ? '选中块 ' + (selSolid + 1) + '：x ' + Math.round(q.x) + '、y ' + Math.round(q.y) + '、' + Math.round(q.w) + '×' + Math.round(q.h) + '（拖动移动、拖右上角改大小）'
+    : '未选中块：在画布上点一个块选中。';
+}
+{
+  const bEdit = mkBtn('编辑场景');
+  bEdit.onclick = () => { sceneEdit = !sceneEdit; if (!sceneEdit) selSolid = -1; bEdit.classList.toggle('on', sceneEdit); refreshScenePanel(); };
+  scenePanel.appendChild(bEdit);
+  const bAdd = mkBtn('添加块');
+  bAdd.onclick = () => {
+    solids.push({ x: Math.round(camState.x - 15), y: moveMode === 'top' ? Math.round(camState.y - 3) : 0, w: 30, h: 6 });
+    selSolid = solids.length - 1; sceneEdit = true; bEdit.classList.add('on'); refreshScenePanel();
+  };
+  scenePanel.appendChild(bAdd);
+  const bDel = mkBtn('删除选中');
+  bDel.onclick = () => { if (selSolid >= 0) { solids.splice(selSolid, 1); selSolid = -1; refreshScenePanel(); } };
+  scenePanel.appendChild(bDel);
+  const bgInput = document.createElement('input');
+  bgInput.type = 'file'; bgInput.accept = 'image/*'; bgInput.style.display = 'none';
+  bgInput.onchange = () => {
+    const f = bgInput.files && bgInput.files[0];
+    if (!f) return;
+    const img = new Image();
+    img.onload = () => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      bgTex = t;
+      URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(f);
+  };
+  scenePanel.appendChild(bgInput);
+  const bBg = mkBtn('背景图…');
+  bBg.onclick = () => bgInput.click();
+  scenePanel.appendChild(bBg);
+  const bBgOff = mkBtn('清除背景');
+  bBgOff.onclick = () => { if (bgTex) { gl.deleteTexture(bgTex); bgTex = null; } };
+  scenePanel.appendChild(bBgOff);
+  scenePanel.appendChild(sceneInfo);
+  refreshScenePanel();
+}
+// 场景拖拽：屏幕 → 世界（相机中心 + 视口一半）
+function screenToWorld(e) {
+  const r = canvas.getBoundingClientRect();
+  return [
+    camState.x + ((e.clientX - r.left) / r.width - 0.5) * lowW,
+    camState.y + (0.5 - (e.clientY - r.top) / r.height) * VIEW_H,
+  ];
+}
+let sceneDrag = null;
+canvas.addEventListener('pointerdown', (e) => {
+  if (!sceneEdit) return;
+  const [wx, wy] = screenToWorld(e);
+  selSolid = -1;
+  for (let i = solids.length - 1; i >= 0; i--) {
+    const q = solids[i];
+    if (wx >= q.x && wx <= q.x + q.w && wy >= q.y && wy <= q.y + q.h) {
+      selSolid = i;
+      const corner = Math.hypot(wx - (q.x + q.w), wy - (q.y + q.h)) < 7;
+      sceneDrag = { mode: corner ? 'resize' : 'move', dx: wx - q.x, dy: wy - q.y };
+      break;
+    }
+  }
+  refreshScenePanel();
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!sceneDrag || selSolid < 0 || !solids[selSolid]) return;
+  const [wx, wy] = screenToWorld(e);
+  const q = solids[selSolid];
+  if (sceneDrag.mode === 'move') { q.x = Math.round(wx - sceneDrag.dx); q.y = Math.round(wy - sceneDrag.dy); }
+  else { q.w = Math.max(4, Math.round(wx - q.x)); q.h = Math.max(4, Math.round(wy - q.y)); }
+  refreshScenePanel();
+});
+window.addEventListener('pointerup', () => { sceneDrag = null; });
+// ---------- 录制 / 回放 / GIF ----------
+function snapshotChar() {
+  return { x: char.x, y: char.y, py: char.py, variant: char.variant, locked: char.lockedVariant, costume: currentCostume, aw: autoWalk };
+}
+function restoreChar(sn) {
+  char.x = sn.x; char.y = sn.y; char.py = sn.py; char.vy = 0;
+  char.ledge = null; char.wallDir = 0;
+  char.variant = sn.variant; char.lockedVariant = sn.locked;
+  currentCostume = sn.costume; autoWalk = sn.aw;
+  char.onGround = moveMode === 'top' ? true : sn.y <= 0.01;
+  camState.snap = true; refreshBar();
+}
+function startRecording() {
+  if (replay.active) endReplay();
+  stopAllPerfs(); behaviorEpoch = elapsed;
+  rec.frames = []; rec.start = snapshotChar(); rec.active = true;
+  refreshRecPanel();
+}
+function startReplay(withGif) {
+  if (!rec.frames.length || !rec.start) return;
+  rec.active = false;
+  restoreChar(rec.start);
+  stopAllPerfs(); behaviorEpoch = elapsed;
+  replay.frames = rec.frames; replay.idx = 0; replay.gif = !!withGif; replay.active = true;
+  gifFrames.length = 0; gifAcc = 0;
+  refreshRecPanel();
+}
+function endReplay() {
+  const wasGif = replay.gif;
+  replay.active = false; replay.gif = false;
+  if (wasGif && gifFrames.length) { try { downloadGif(); } catch (err) { /* 编码失败不打断预览 */ } }
+  gifFrames.length = 0;
+  refreshRecPanel();
+}
+const recInfo = document.createElement('span');
+recInfo.className = 'lab';
+let recBtn = null, replayBtns = [];
+function refreshRecPanel() {
+  recInfo.textContent = rec.active
+    ? '录制中 · ' + rec.frames.length + ' 帧'
+    : replay.active ? '回放中 · ' + replay.idx + '/' + replay.frames.length
+    : rec.frames.length ? '已录 ' + rec.frames.length + ' 帧（可回放）' : '未录制';
+  if (recBtn) { recBtn.textContent = rec.active ? '停止录制' : '开始录制'; recBtn.classList.toggle('on', rec.active); }
+  for (const b of replayBtns) b.disabled = !rec.frames.length || rec.active;
+}
+{
+  recBtn = mkBtn('开始录制');
+  recBtn.onclick = () => { if (rec.active) { rec.active = false; refreshRecPanel(); } else startRecording(); };
+  recPanel.appendChild(recBtn);
+  const bPlay = mkBtn('回放');
+  bPlay.onclick = () => startReplay(false);
+  recPanel.appendChild(bPlay); replayBtns.push(bPlay);
+  const bGif = mkBtn('回放并导出 GIF');
+  bGif.onclick = () => startReplay(true);
+  recPanel.appendChild(bGif); replayBtns.push(bGif);
+  const bStop = mkBtn('停止回放');
+  bStop.onclick = () => { if (replay.active) endReplay(); };
+  recPanel.appendChild(bStop);
+  recPanel.appendChild(recInfo);
+  refreshRecPanel();
+}
+// GIF：回放时按 30fps 节拍从帧缓冲抓帧（回放结束编码下载）
+const gifFrames = [];
+let gifAcc = 0;
+const gifSrc = document.createElement('canvas');
+const gifDst = document.createElement('canvas');
+function gifCaptureFrame(dt) {
+  gifAcc += dt;
+  if (gifAcc < 1 / 30) return;
+  const delay = Math.max(2, Math.round(gifAcc * 100));
+  gifAcc = 0;
+  const px = new Uint8Array(lowW * VIEW_H * 4);
+  gl.readPixels(0, 0, lowW, VIEW_H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  const flipped = new Uint8ClampedArray(px.length);
+  const stride = lowW * 4;
+  for (let y = 0; y < VIEW_H; y++) flipped.set(px.subarray((VIEW_H - 1 - y) * stride, (VIEW_H - y) * stride), y * stride);
+  gifSrc.width = lowW; gifSrc.height = VIEW_H;
+  gifSrc.getContext('2d').putImageData(new ImageData(flipped, lowW, VIEW_H), 0, 0);
+  const W = Math.min(320, lowW), H = Math.max(1, Math.round(VIEW_H * W / lowW));
+  gifDst.width = W; gifDst.height = H;
+  const cx2 = gifDst.getContext('2d');
+  cx2.imageSmoothingEnabled = false;
+  cx2.drawImage(gifSrc, 0, 0, W, H);
+  gifFrames.push({ data: cx2.getImageData(0, 0, W, H).data, w: W, h: H, delay });
+}
+function gifLzw(idx) {
+  const out = [];
+  let bitBuf = 0, bitCnt = 0;
+  let dict = new Map(), freeEnt = 258, nBits = 9, maxCode = 511;
+  const emit = (code) => {
+    bitBuf |= code << bitCnt; bitCnt += nBits;
+    while (bitCnt >= 8) { out.push(bitBuf & 255); bitBuf >>= 8; bitCnt -= 8; }
+  };
+  const resetDict = () => { dict = new Map(); freeEnt = 258; nBits = 9; maxCode = 511; };
+  emit(256);
+  let entKey = String(idx[0]);
+  for (let i = 1; i < idx.length; i++) {
+    const c = idx[i], comb = entKey + ',' + c;
+    if (dict.has(comb)) { entKey = comb; continue; }
+    emit(entKey.indexOf(',') >= 0 ? dict.get(entKey) : parseInt(entKey, 10));
+    if (freeEnt < 4096) {
+      dict.set(comb, freeEnt++);
+      if (freeEnt > maxCode && freeEnt < 4096) { nBits++; maxCode = (1 << nBits) - 1; }
+    } else {
+      emit(256); resetDict();
+    }
+    entKey = String(c);
+  }
+  emit(entKey.indexOf(',') >= 0 ? dict.get(entKey) : parseInt(entKey, 10));
+  emit(257);
+  if (bitCnt > 0) out.push(bitBuf & 255);
+  return out;
+}
+function downloadGif() {
+  const W = gifFrames[0].w, H = gifFrames[0].h;
+  // 调色板：全帧抽样统计 5-5-5 颜色频次取前 256，LUT 就近映射
+  const hist = new Map();
+  for (const f of gifFrames) {
+    const d = f.data;
+    for (let i = 0; i < d.length; i += 64) {
+      const k = ((d[i] >> 3) << 10) | ((d[i + 1] >> 3) << 5) | (d[i + 2] >> 3);
+      hist.set(k, (hist.get(k) || 0) + 1);
+    }
+  }
+  const keys = [...hist.entries()].sort((a, b) => b[1] - a[1]).slice(0, 256).map((e) => e[0]);
+  while (keys.length < 256) keys.push(0);
+  const pal = keys.map((k) => [((k >> 10) & 31) * 8 + 4, ((k >> 5) & 31) * 8 + 4, (k & 31) * 8 + 4]);
+  const lut = new Int16Array(32768).fill(-1);
+  const palIndex = (r, g, b) => {
+    const k = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+    const hit = lut[k];
+    if (hit >= 0) return hit;
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < 256; i++) {
+      const dr = pal[i][0] - r, dg = pal[i][1] - g, db = pal[i][2] - b;
+      const dd = dr * dr + dg * dg + db * db;
+      if (dd < bd) { bd = dd; best = i; }
+    }
+    lut[k] = best; return best;
+  };
+  const bytes = [];
+  const pushStr = (t) => { for (let i = 0; i < t.length; i++) bytes.push(t.charCodeAt(i) & 255); };
+  const push16 = (v) => { bytes.push(v & 255, (v >> 8) & 255); };
+  pushStr('GIF89a'); push16(W); push16(H); bytes.push(0xF7, 0, 0);
+  for (const c of pal) bytes.push(c[0], c[1], c[2]);
+  pushStr('!\xFF\x0BNETSCAPE2.0\x03\x01\x00\x00\x00');
+  for (const f of gifFrames) {
+    bytes.push(0x21, 0xF9, 4, 0); push16(Math.max(2, f.delay)); bytes.push(0, 0);
+    bytes.push(0x2C); push16(0); push16(0); push16(W); push16(H); bytes.push(0);
+    const d = f.data, idx = new Uint8Array(W * H);
+    for (let j = 0, q = 0; q < d.length; q += 4, j++) idx[j] = palIndex(d[q], d[q + 1], d[q + 2]);
+    const comp = gifLzw(idx);
+    bytes.push(8);
+    for (let i = 0; i < comp.length; i += 255) {
+      const chunk = comp.slice(i, i + 255);
+      bytes.push(chunk.length);
+      for (const b of chunk) bytes.push(b);
+    }
+    bytes.push(0);
+  }
+  bytes.push(0x3B);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'image/gif' }));
+  a.download = (EMBEDDED.characterName || 'preview') + '.gif';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
 // ---------- 主循环：输入 → 程序化姿态 → 表演合成 → 渲染 ----------
@@ -1958,7 +2501,7 @@ function fxSeg(verts, w0, w1, wdt, rgb, a) {
   ];
   for (const cn of cs) verts.push(cn[0], cn[1], cn[2], cn[3], rgb[0], rgb[1], rgb[2], a, 0);
 }
-function fxW2(px, py) { return [char.x + (px - FXW / 2), char.y + (FXH / 2 - py)]; }
+function fxW2(px, py) { return [char.x + (px - FXW / 2), charFeetY() + (FXH / 2 - py)]; }
 function fxRenderSet(set, frame, verts, occAt) {
   if (!set) return;
   const num = (v, d) => (v === undefined || v === null || !Number.isFinite(Number(v)) ? d : Number(v));
@@ -2084,10 +2627,37 @@ function fxRenderSet(set, frame, verts, occAt) {
   }
 }
 
+let recPendingFrame = null;
 function frame(now) {
-  const dt = Math.min(0.05, (now - last) / 1000); last = now; elapsed += dt;
-  const ix = readMoveX();
-  updateCharacter(dt, ix);
+  let dt = Math.min(0.05, (now - last) / 1000); last = now;
+  // 本帧输入：回放时取记录帧（dt/方向/跳/触发/位姿快照），否则实时读键
+  let inp, trigNow;
+  if (replay.active) {
+    const rf = replay.frames[replay.idx];
+    if (!rf) {
+      endReplay();
+      inp = { ix: readMoveX(), iy: readMoveY(), jump: keyHeld(KEYMAP.jump, 'ArrowUp'), down: keyHeld(KEYMAP.down, 'ArrowDown') };
+      trigNow = pendingTriggers.splice(0);
+    } else {
+      replay.idx++;
+      dt = rf.dt;
+      inp = { ix: rf.ix, iy: rf.iy || 0, jump: rf.jump, down: rf.down };
+      trigNow = rf.trig.slice();
+      char.variant = rf.variant; char.lockedVariant = rf.locked;
+      if (rf.costume && COSTUMES[rf.costume] && rf.costume !== currentCostume) { currentCostume = rf.costume; refreshBar(); }
+      autoWalk = !!rf.aw;
+    }
+  } else {
+    inp = { ix: readMoveX(), iy: readMoveY(), jump: keyHeld(KEYMAP.jump, 'ArrowUp'), down: keyHeld(KEYMAP.down, 'ArrowDown') };
+    trigNow = pendingTriggers.splice(0);
+  }
+  elapsed += dt;
+  const ix = inp.ix;
+  for (const id of trigNow) { const pf = PERFORMANCES.find((q) => q.id === id); if (pf) enterPerformance(pf); }
+  updateCharacter(dt, inp);
+  if (rec.active && !replay.active) {
+    recPendingFrame = { dt, ix: inp.ix, iy: inp.iy, jump: inp.jump, down: inp.down, trig: trigNow.slice() };
+  }
   if (char.onGround !== prevOnGround) {
     emitRuntimeEvent(char.onGround ? 'land' : 'takeoff', {});
     prevOnGround = char.onGround;
@@ -2096,7 +2666,7 @@ function frame(now) {
   // phase 为步态相位帧：移动约 30/s、静止 4/s、腾空 18/s；
   // nodeRef 读哪帧由每张图的 follow 开关决定：'prev'（缺省）读上一帧
   // 输出（纯延迟一帧），'same' 读本帧第一遍的输出（无延迟））
-  phaseAcc += dt * (char.onGround ? (ix !== 0 ? 30 : 4) : 18) / 60; // 圈/秒（1 圈 = 旧 60 相位帧）
+  phaseAcc += dt * (char.onGround ? ((ix !== 0 || inp.iy !== 0) ? 30 : 4) : 18) / 60; // 圈/秒（1 圈 = 旧 60 相位帧）
   // 行为时钟 = 表演纪元起算的秒。图内时间一律秒（time 节点、
   // 周期参数、phase 圈数），全系统不再出现帧制时间。
   const behaviorT = elapsed - behaviorEpoch;
@@ -2104,7 +2674,8 @@ function frame(now) {
   // 但 t/phase/moveX/speed01/grounded 永远以本帧计算为准。
   const hostVars = Object.assign({}, hostCustomVars, {
     t: behaviorT, phase: phaseAcc, moveX: ix,
-    speed01: ix !== 0 ? 1 : 0, grounded: char.onGround ? 1 : 0,
+    speed01: (ix !== 0 || inp.iy !== 0) ? 1 : 0, grounded: char.onGround ? 1 : 0,
+    wall: (!char.onGround && char.wallDir !== 0) ? 1 : 0, ledge: char.ledge ? 1 : 0,
   });
   lastHostVars = hostVars;
   smUpdate(hostVars);
@@ -2560,7 +3131,14 @@ function frame(now) {
       }
     }
   }
-  const camX = char.x, camY = 52 + char.y * 0.35;
+  // 相机：指数平滑跟随（速率 PHYS.camFollow），横/纵可锁定；俯视跟平面点
+  const camTX = char.x;
+  const camTY = moveMode === 'top' ? char.py : 52 + char.y * 0.35;
+  if (camState.snap) { camState.x = camTX; camState.y = camTY; camState.snap = false; }
+  const camK = 1 - Math.exp(-PHYS.camFollow * dt);
+  if (!PHYS.camLockX) camState.x += (camTX - camState.x) * camK;
+  if (!PHYS.camLockY) camState.y += (camTY - camState.y) * camK;
+  const camX = camState.x, camY = camState.y;
   // 画布修改轨（缺口 5-2）：本帧生效的修改器链（工程轨 + 各活跃段
   // 表演的片段轨）；非空时场景改画进后处理目标，帧末跑全屏链。
   const postList = [];
@@ -2587,7 +3165,8 @@ function frame(now) {
   gl.uniform2f(solidU.vh, lowW / 2, VIEW_H / 2);
   gl.bindVertexArray(solidVAO);
   gl.bindBuffer(gl.ARRAY_BUFFER, solidBuf);
-  const sc = buildScenery(char.x, char.y, char.onGround);
+  if (bgTex) drawBackground(camX, camY);
+  const sc = buildScenery(camX);
   gl.bufferData(gl.ARRAY_BUFFER, sc, gl.DYNAMIC_DRAW);
   gl.drawArrays(gl.TRIANGLES, 0, sc.length / 9);
   if (backVerts.length) {
@@ -2626,6 +3205,16 @@ function frame(now) {
     gl.disable(gl.BLEND);
   }
   if (postList.length > 0) fxRunPostChain(postList, state, elByKey, camX, camY);
+  if (recPendingFrame) {
+    recPendingFrame.variant = char.variant;
+    recPendingFrame.locked = char.lockedVariant;
+    recPendingFrame.costume = currentCostume;
+    recPendingFrame.aw = autoWalk ? 1 : 0;
+    rec.frames.push(recPendingFrame);
+    recPendingFrame = null;
+    refreshRecPanel();
+  }
+  if (replay.active && replay.gif) gifCaptureFrame(dt);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

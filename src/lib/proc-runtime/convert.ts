@@ -169,6 +169,9 @@ export interface ProcRuntimePackage {
     effectStrokes?: import('../types').EffectStroke[];
     canvasTracks?: import('../types').CanvasModifierTrack[];
   };
+  /** 场景实体（AABB，左下角 + 宽高，世界单位 y 向上）：随包播放器据此
+   * 做落地/顶头/堵墙/贴墙/抓边与俯视阻挡；缺省时播放器用内置默认关卡 */
+  scene?: { solids: Array<{ x: number; y: number; w: number; h: number }> };
   warnings: string[];
 }
 
@@ -592,7 +595,7 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number }; projectExtras?: { perspectiveForeshorten?: boolean } },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number; scene?: { solids?: Array<{ x: number; y: number; w: number; h: number }> } }; projectExtras?: { perspectiveForeshorten?: boolean } },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
   // ---- 工程级数据点名（运行时完备性审计缺口 5/7，未修项）：convert
@@ -1342,6 +1345,19 @@ export function convertCharacterToRuntimePackage(
   // 包的用户端，其代码可读这些原始参数做自己的处理，不按播放器
   // 读没读判死删除（2026-10-26 用户纠正）。
 
+  // 场景实体透传：只收有限数、宽高至少 2，其余条目点名丢弃
+  const scenePkg = ((): ProcRuntimePackage['scene'] => {
+    const list = opts?.projectData?.scene?.solids;
+    if (!Array.isArray(list) || list.length === 0) return undefined;
+    const solids: Array<{ x: number; y: number; w: number; h: number }> = [];
+    for (const q of list) {
+      const x = Number(q?.x), y = Number(q?.y), w = Number(q?.w), h = Number(q?.h);
+      if ([x, y, w, h].every(Number.isFinite) && w >= 2 && h >= 2) solids.push({ x, y, w, h });
+      else warnings.push('场景实体被丢弃（坐标非有限数或宽高小于 2）：' + JSON.stringify(q));
+    }
+    return solids.length > 0 ? { solids } : undefined;
+  })();
+
   return {
     format: 'procedural-pixel-runtime-1',
     characterName: character.name,
@@ -1356,6 +1372,7 @@ export function convertCharacterToRuntimePackage(
     procedural: procedural.length > 0 ? procedural : undefined,
     globalGraph,
     fx: fxPkg,
+    scene: scenePkg,
     warnings,
   };
 }

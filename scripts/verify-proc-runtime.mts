@@ -1393,7 +1393,8 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
         out.generic = setVar('rage', 1) === true && hostCustomVars.rage === 1;
         out.coerce = setVar('rage', '2.5') === true && hostCustomVars.rage === 2.5;
         out.reserved = setVar('grounded', 0) === false && !('grounded' in hostCustomVars)
-          && setVar('phase', 1) === false && setVar('t', 1) === false && setVar('speed01', 1) === false;
+          && setVar('phase', 1) === false && setVar('t', 1) === false && setVar('speed01', 1) === false
+          && setVar('wall', 1) === false && setVar('ledge', 1) === false;
         out.nan = setVar('rage', 'abc') === false && hostCustomVars.rage === 2.5;
         out.del = setVar('rage', null) === true && !('rage' in hostCustomVars);
         out.moveX = setVar('moveX', 0.5) === true && hostMoveX === 0.5;
@@ -1410,13 +1411,14 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
       hv = new Function(`
         const hostCustomVars = { rage: 5, grounded: 0 };
         const behaviorT = 1.2, phaseAcc = 0.5, ix = 0;
-        const char = { onGround: true };
+        const inp = { iy: 0 };
+        const char = { onGround: true, wallDir: 0, ledge: null };
         ${hvStmt}
         return hostVars;
       `)();
     } catch (err) { hvErr = err instanceof Error ? err.message : String(err); }
     check('T15b hostVars 并入：通用变量可读、逐帧计算值覆盖同名（预置 grounded=0 仍以本帧 1 为准）',
-      !!hv && hv.rage === 5 && hv.grounded === 1 && hv.t === 1.2 && hv.moveX === 0 && hv.speed01 === 0,
+      !!hv && hv.rage === 5 && hv.grounded === 1 && hv.t === 1.2 && hv.moveX === 0 && hv.speed01 === 0 && hv.wall === 0 && hv.ledge === 0,
       hvErr || JSON.stringify(hv));
     check('T15c 生成页面含通用变量表接线', htmlT.includes('hostCustomVars[name] = num') && htmlT.includes('Object.assign({}, hostCustomVars,'));
   }
@@ -3121,6 +3123,35 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('数据面·发光印章仍按原参数烘焙（星形代码 2）', partD?.glow?.stamps?.[0]?.shape === 2);
   check('数据面·部件带 drawLayer（节点遮挡层名原样进包）',
     !!partD && partD.drawLayer === 'main');
+}
+
+
+// ---------- S) 场景透传 + 玩法补缺接线（Asemulator 缺口补上） ----------
+{
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  const emptyChar = { id: 'e2', name: '空2', nodes: {}, rootNodeIds: [], costumeSets: [], variants: {} } as unknown as Character;
+  const pkgS = convertCharacterToRuntimePackage(emptyChar, {}, {
+    projectData: { scene: { solids: [
+      { x: -40, y: 0, w: 30, h: 14 },
+      { x: 1.5, y: 2.5, w: 1, h: 9 },
+      { x: NaN, y: 0, w: 5, h: 5 },
+    ] } },
+  });
+  check('S1 pkg.scene 透传合法实体（逐值对拍）',
+    !!pkgS.scene && pkgS.scene.solids.length === 1
+    && pkgS.scene.solids[0].x === -40 && pkgS.scene.solids[0].y === 0
+    && pkgS.scene.solids[0].w === 30 && pkgS.scene.solids[0].h === 14);
+  check('S2 非法实体点名丢弃（宽<2 与 NaN 各一条）',
+    pkgS.warnings.filter((w) => w.includes('场景实体被丢弃')).length === 2);
+  const pkgS0 = convertCharacterToRuntimePackage(emptyChar, {});
+  check('S3 无 scene 时包不带 scene 字段（播放器回落默认关卡）', pkgS0.scene === undefined);
+  const htmlS = buildRuntimeHtml(pkgS);
+  check('S4 生成页含碰撞/俯视/场景/手感/重绑/录制接线',
+    htmlS.includes('updateCharacterSide') && htmlS.includes('updateCharacterTop')
+    && htmlS.includes('const KEYMAP') && htmlS.includes('const PHYS')
+    && htmlS.includes('drawBackground') && htmlS.includes('gifLzw')
+    && htmlS.includes('wall: (!char.onGround') && htmlS.includes('startReplay')
+    && htmlS.includes('EMBEDDED.scene'));
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

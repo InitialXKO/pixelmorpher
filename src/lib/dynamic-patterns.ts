@@ -125,8 +125,9 @@ export interface DynamicPatternParams {
  * 同一公式、各自空间内取样与应用，增量在两系间只差 y 与角度的符号约定） */
 export interface FollowPose { a: number; x: number; y: number }
 
-/** 追随增量：源部件滞后位姿 − 当前位姿，按强度缩放；角度差归一到
- * [−π, π]（跨 ±π 时取近路）。运行时不现算：导出端按此式烘成 followCurve。 */
+/** 追随增量（原始定义）：源部件滞后位姿 − 当前位姿，按强度缩放；
+ * 角度差归一到 [−π, π]（跨 ±π 时取近路）。产品落点已改用锚定版
+ * followAnchoredDeltaAt，本函数保留为原始增量的定义与探针参照。 */
 export function followDeltaAt(
   now: FollowPose,
   lag: FollowPose,
@@ -141,6 +142,37 @@ export function followDeltaAt(
     dy: (lag.y - now.y) * k,
     da: rotate ? da * k : 0,
   };
+}
+
+/** 追随增量（锚定版，2026-10-26 用户拍板）：连接点（插头）锚死不动，
+ * 只让远端滞后。原始平移增量 d 不再整体平移跟随者，而是换算成绕
+ * 插头的摆角：取跟随者主轴单位向量 u（插头→远端方向，调用方按各自
+ * 坐标系给出）与臂长 reach（插头到远端距离 px），让远端尖点转到
+ * 「原位置 + d」所指的方向——摆角 θ = atan2(cross(u, d), reach +
+ * dot(u, d))，半径保持 reach 不拉伸。垂直于轴向的拖拽全额变摆角；
+ * 沿轴向的一份只影响方向角大小、不产生伸缩。源部件自身的角度滞后
+ * （rotate 时）照旧叠加。返回 dx/dy 恒 0。reach ≤ 0 时只保留角度
+ * 滞后（无从换算摆角）。 */
+export function followAnchoredDeltaAt(
+  now: FollowPose,
+  lag: FollowPose,
+  amount: number,
+  rotate: boolean,
+  ux: number,
+  uy: number,
+  reach: number,
+): { dx: number; dy: number; da: number } {
+  const k = Math.max(0, Math.min(1, amount));
+  const dx = (lag.x - now.x) * k;
+  const dy = (lag.y - now.y) * k;
+  const raw = lag.a - now.a;
+  let da = rotate ? Math.atan2(Math.sin(raw), Math.cos(raw)) * k : 0;
+  if (reach > 0 && (dx !== 0 || dy !== 0)) {
+    const cross = ux * dy - uy * dx;
+    const dot = ux * dx + uy * dy;
+    da += Math.atan2(cross, reach + dot);
+  }
+  return { dx: 0, dy: 0, da };
 }
 
 /** 发光选区来源：color = 按像素颜色取色；marked = 手动标记的像素掩码 */

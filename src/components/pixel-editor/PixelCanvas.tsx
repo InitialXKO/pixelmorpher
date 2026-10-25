@@ -568,7 +568,7 @@ export default function PixelCanvas() {
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-    <div ref={s.containerRef} className="relative w-full h-full overflow-hidden" style={{ background: '#0f0f1a' }} onContextMenu={handleCanvasContextMenu}>
+    <div id="pixel-canvas-root" ref={s.containerRef} className="relative w-full h-full overflow-hidden" style={{ background: '#0f0f1a' }} onContextMenu={handleCanvasContextMenu}>
       {/* Correction mode border */}
       {s.editMode === 'correction' && (
         <div className="absolute inset-0 pointer-events-none z-50" style={{ boxShadow: 'inset 0 0 0 3px rgba(34, 211, 238, 0.6)', borderRadius: '4px' }} />
