@@ -279,6 +279,10 @@ export default function DynamicPatternEditor({
               <input type="checkbox" checked={np(inst).spinEnabled} onChange={(e) => patchParam(inst.id, 'spinEnabled', e.target.checked)} />
               自转段
             </label>
+            <label className="flex items-center gap-1" title="过去位姿的残影拖尾；同部件多个残影只取第一个启用">
+              <input type="checkbox" checked={np(inst).trailEnabled} onChange={(e) => patchParam(inst.id, 'trailEnabled', e.target.checked)} />
+              残影段
+            </label>
             <label className="flex items-center gap-1">
               <input type="checkbox" checked={inst.params.emitEnabled} onChange={(e) => patchParam(inst.id, 'emitEnabled', e.target.checked)} />
               发射段

@@ -2487,4 +2487,54 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     urText.includes('spinAngleDegAt') && urText.includes('spinDeg'));
 }
 
+// ---------- AC) D5 残影段：归一化 / 展开 / 进包与两端接线 ----------
+{
+  const DP5 = await import('../src/lib/dynamic-patterns');
+  // TR1 归一化钳制
+  const n5 = DP5.normalizeDynamicParams({
+    ...DP5.defaultDynamicParams(), trailCount: 99, trailIntervalSec: 9, trailOpacity: 0,
+  });
+  check('TR1 残影归一化（个数钳 6、间隔钳 0.3、不透明度钳 0.05）',
+    n5.trailCount === 6 && n5.trailIntervalSec === 0.3 && n5.trailOpacity === 0.05);
+
+  // TR2 条目展开
+  const LE5 = await import('../src/lib/library-entries');
+  const DE5 = await import('../src/lib/dynamic-expand');
+  const exT = DE5.expandDynamicEntry(LE5.BUILTIN_INDEX, 'dyn-trail', 1);
+  const exTL = DE5.expandDynamicEntry(LE5.BUILTIN_INDEX, 'dyn-trail-long', 1);
+  const exDash = DE5.expandDynamicEntry(LE5.BUILTIN_INDEX, 'dyn-dash-trail', 1);
+  check('TR2 残影叶子展开', !!exT.params && exT.errors.length === 0
+    && exT.params.trailEnabled && exT.params.trailCount === 3 && !exT.params.emitEnabled);
+  check('TR2b 长残影展开（5 个）', !!exTL.params && exTL.params.trailCount === 5);
+  check('TR2c 冲刺残影 = 残影 + 胀缩形变共存', !!exDash.params && exDash.errors.length === 0
+    && exDash.params.trailEnabled && exDash.params.deformEnabled);
+
+  // TR3 进包 + 两端接线（字符串级：编辑器计划/绘制 + 运行时快照环）
+  const inst5 = DP5.createDynamicInstance('残影', exT.params!, '身体');
+  const ch5 = {
+    id: 'ch5', name: '残影进包',
+    nodes: { torso: { ...makeNode('torso', '躯干', 'torso'), dynamicPatterns: [inst5] } },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: createDefaultParametricAppearance() } },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkg5 = convertCharacterToRuntimePackage(ch5, undefined, { frameRate: 12 });
+  const dyn5 = pkg5.parts.find((p) => p.key === 'torso')?.dynamic?.[0];
+  check('TR3 残影参数进包不丢', !!dyn5
+    && (dyn5.params as { trailEnabled?: boolean }).trailEnabled === true
+    && (dyn5.params as { trailCount?: number }).trailCount === 3);
+  const { buildRuntimeHtml: brh5 } = await import('../src/lib/proc-runtime/runtime-template');
+  const html5 = brh5(pkg5);
+  check('TR3b 整包运行时含快照环接线（trailState + 清环 + ghost 排活 el 前）',
+    html5.includes('trailState') && html5.includes('rings.clear()')
+    && html5.includes('trailEnabled') && html5.includes('ghost: true'));
+  const { readFileSync: rfs5 } = await import('node:fs');
+  const ur5 = rfs5(new URL('../src/lib/unified-render.ts', import.meta.url), 'utf8');
+  check('TR3c 编辑器两端在位（计划算 trailGhosts + 绘制消费）',
+    ur5.includes('trailGhosts') && ur5.includes('followPoseAt(nodeId, frame - k'));
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

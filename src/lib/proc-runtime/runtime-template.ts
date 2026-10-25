@@ -690,6 +690,10 @@ for (const p of PARTS) {
 // ---------- 瓦片图集 ----------
 const tileCache = new Map();
 let atlasState = null;
+/** 残影段（D5）运行时状态：部件 el 快照环（有界；换装/变体/
+ * 时间倒流时清环）。与表演残影同机制，区别是它由动态实例
+ * 驱动、对任何在演部件常开。 */
+const trailState = { epoch: '', lastElapsed: -1, rings: new Map() };
 function tileKeyOf(part, variant, costumeName, resolved) {
   let bsKey = '';
   const bs = resolved.baseSprite;
@@ -1789,6 +1793,37 @@ function frame(now) {
       family: 0, seed: 0, modes: [0, 0, 0, 0], param: [0, 0, 0],
       ghost: false, composite: 4, deform: undefined, glow: [], glowSpace: [], glowStamps: undefined,
     });
+  }
+  // 残影段（D5）：动态实例驱动的部件快照环。快照在裁剪面与表演
+  // 残影都处理完之后取（el 已定稿）；ghosts 排在活 el 之前，
+  // 以残影色剪影绘制（ghost 标志，与表演残影同一渲染口径）。
+  {
+    const epoch = char.variant + '|' + currentCostume;
+    if (trailState.epoch !== epoch || elapsed < trailState.lastElapsed - 0.01) {
+      trailState.epoch = epoch;
+      trailState.rings.clear();
+    }
+    trailState.lastElapsed = elapsed;
+    for (const a of dynAnchors) {
+      let tp = null;
+      for (const x of a.dynList) { if (x.params && x.params.trailEnabled) { tp = x.params; break; } }
+      if (!tp) continue;
+      const live = elByKey.get(a.part.key);
+      if (!live) continue;
+      let ring = trailState.rings.get(a.part.key);
+      if (!ring) { ring = { last: -1, snaps: [] }; trailState.rings.set(a.part.key, ring); }
+      const interval = Math.max(0.02, tp.trailIntervalSec || 0.06);
+      const count = Math.max(1, Math.min(6, Math.round(tp.trailCount || 3)));
+      if (ring.last < 0 || elapsed - ring.last >= interval) {
+        ring.last = elapsed;
+        ring.snaps.push({ el: Object.assign({}, live), born: elapsed });
+        if (ring.snaps.length > count) ring.snaps.shift();
+      }
+      const ghosts = ring.snaps
+        .filter((s) => s.born < elapsed && elapsed - s.born < interval * count * 1.8)
+        .map((s) => Object.assign({}, s.el, { ghost: true }));
+      if (ghosts.length) els.splice(els.indexOf(live), 0, ...ghosts);
+    }
   }
   const camX = char.x, camY = 52 + char.y * 0.35;
   gl.viewport(0, 0, lowW, VIEW_H);

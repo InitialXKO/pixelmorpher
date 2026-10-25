@@ -300,6 +300,13 @@ function buildBuiltinEntries(): LibraryEntry[] {
     leaf('dyn-spin-vortex', '旋涡急转', '形变', {
       spinEnabled: true, spinSpeedDeg: 120, spinPhaseDeg: 0, emitEnabled: false,
     }),
+    // 残影叶子（D5）
+    leaf('dyn-trail', '残影拖尾', '形变', {
+      trailEnabled: true, trailCount: 3, trailIntervalSec: 0.06, trailOpacity: 0.35, emitEnabled: false,
+    }),
+    leaf('dyn-trail-long', '长残影', '形变', {
+      trailEnabled: true, trailCount: 5, trailIntervalSec: 0.05, trailOpacity: 0.3, emitEnabled: false,
+    }),
   );
   // 着色叶子（只写一个键：给同段叶子染色，配合 followParams 用）
   out.push(
@@ -395,6 +402,11 @@ function buildBuiltinEntries(): LibraryEntry[] {
     parent('dyn-spin-aegis', '旋转护盾', [
       { entry: 'dyn-spin-rune', version: 1, overrides: { spinSpeedDeg: 18 } },
       { entry: 'dyn-glow-frost', version: 1 },
+    ], []),
+    // 冲刺残影（D5）：残影 + 缓慢胀缩（键集不交）
+    parent('dyn-dash-trail', '冲刺残影', [
+      { entry: 'dyn-trail', version: 1 },
+      { entry: 'dyn-swell', version: 1 },
     ], []),
   );
   return out;

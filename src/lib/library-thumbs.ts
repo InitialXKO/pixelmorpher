@@ -273,24 +273,35 @@ export function dynamicPosterRGBA(params: DynamicPatternParams): RGBAImage {
   const dy0 = bottomY - dh;
   const spinRad = (spinAngleDegAt(params, t) * Math.PI) / 180;
   const spinCos = Math.cos(spinRad), spinSin = Math.sin(spinRad);
-  for (let y = 0; y < OUT; y++) {
-    for (let x = 0; x < OUT; x++) {
-      if (x < dx0 || x >= dx0 + dw || y < dy0 || y >= dy0 + dh) continue;
-      let fx = ((x - dx0) / dw) * gw;
-      let fy = ((y - dy0) / dh) * gh;
-      if (spinRad !== 0) {
-        const lx = fx - gw / 2, ly = fy - gh / 2;
-        fx = lx * spinCos + ly * spinSin + gw / 2;
-        fy = -lx * spinSin + ly * spinCos + gh / 2;
+  const drawBody = (alphaMul: number, offX: number) => {
+    for (let y = 0; y < OUT; y++) {
+      for (let x = 0; x < OUT; x++) {
+        if (x < dx0 || x >= dx0 + dw || y < dy0 || y >= dy0 + dh) continue;
+        let fx = ((x - dx0) / dw) * gw;
+        let fy = ((y - dy0) / dh) * gh;
+        if (spinRad !== 0) {
+          const lx = fx - gw / 2, ly = fy - gh / 2;
+          fx = lx * spinCos + ly * spinSin + gw / 2;
+          fy = -lx * spinSin + ly * spinCos + gh / 2;
+        }
+        const sx = Math.floor(fx);
+        const sy = Math.floor(fy);
+        const c = drawGrid[sy]?.[sx];
+        if (!c) continue;
+        const [r, g, b] = hexToRgb(c);
+        plot(x + offX, y, r, g, b, alphaMul);
       }
-      const sx = Math.floor(fx);
-      const sy = Math.floor(fy);
-      const c = drawGrid[sy]?.[sx];
-      if (!c) continue;
-      const [r, g, b] = hexToRgb(c);
-      plot(x, y, r, g, b, 1);
+    }
+  };
+  // 残影段（D5）定格近似：无位姿历史可采，按蓝图残影的缺省口径
+  // 向左拖影两道（旧→新），仅示意
+  if (params.trailEnabled) {
+    const n = Math.max(1, Math.min(6, Math.round(params.trailCount || 3)));
+    for (let k = n; k >= 1; k--) {
+      drawBody((params.trailOpacity || 0.35) * (1 - (k - 1) / n) * 0.8, -k * Math.max(2, Math.round(gw * SS * 0.14)));
     }
   }
+  drawBody(1, 0);
   if (params.emitEnabled) drawParticles('front');
   const data = new Uint8ClampedArray(OUT * OUT * 4);
   for (let i = 0; i < acc.length; i++) data[i] = Math.round(Math.max(0, Math.min(1, acc[i]!)) * 255);

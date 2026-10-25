@@ -1384,6 +1384,9 @@ export interface NodeRenderInstruction {
   costumeSlot?: string;
   /** 动态模式（双挂载解析后）：形变已乘进 stretch/scaleX，粒子由执行端按此绘制 */
   dynamicPatterns?: import('./dynamic-patterns').ResolvedDynamicPattern[];
+  /** 残影段（D5）：过去位姿相对当前位姿的增量（画布 px / 度），
+   * 由渲染计划按过去帧轨道位姿算出；执行端在本精灵之前逐个绘制 */
+  trailGhosts?: { dx: number; dy: number; daDeg: number; alpha: number }[];
   /** Shared sprite table for SpriteRef resolution (character.sprites) */
   sprites?: Record<string, Sprite>;
   /** 蒙皮快照弯曲参数（attachment.skinningSnapshot 生效时填充，renderNodeSprite 用） */

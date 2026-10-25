@@ -36,6 +36,16 @@ export interface DynamicPatternParams {
   spinEnabled: boolean;
   spinSpeedDeg: number;  // 角速度（度/秒，可负 = 反向）
   spinPhaseDeg: number;  // 相位偏置（度）
+  // 残影段（D5）：过去位姿的残影。两端都不破纯函数口径——
+  // 编辑器在渲染计划里按过去帧的世界位姿差生成 ghost 增量
+  // （与追随段同 machinery，位姿取剥离蓝图的轨道位姿，故
+  // 蓝图驱动的运动不入残影）；导出运行时用部件 el 快照环
+  // （与表演残影同机制，有界状态：个数 × 间隔，换装/跳时清环）。
+  // 多实例只取第一个启用残影。
+  trailEnabled: boolean;
+  trailCount: number;       // 残影个数 1..6
+  trailIntervalSec: number; // 残影间隔（秒）
+  trailOpacity: number;     // 最近残影不透明度（编辑器口径；运行时为残影色剪影）
   // 追随段（形变段的跨部件驱动）：本部件渲染时叠加「源部件位姿的
   // 滞后差」——源部件当前位姿与 delay 秒前位姿之差 × amount，
   // 本部件就像被源部件拖着、慢半拍跟上（垂饰/披风/头发的次级运动）。
@@ -149,6 +159,7 @@ export function defaultDynamicParams(): DynamicPatternParams {
     displaceEnabled: false, displaceAmp: 2.5, displaceFreq: 0.12, displaceDeg: 270,
     displaceSpeed: 0.25, displacePhase: 0,
     spinEnabled: false, spinSpeedDeg: 45, spinPhaseDeg: 0,
+    trailEnabled: false, trailCount: 3, trailIntervalSec: 0.06, trailOpacity: 0.35,
     followEnabled: false, followSource: '', followDelaySec: 0.12, followAmount: 0.7, followRotate: true,
     emitEnabled: true, source: 'contour', rate: 12, linkToDeform: 0, speed: 6,
     directionDeg: 270, spreadDeg: 60, layer: 'both', frontRatio: 0.35,
@@ -200,6 +211,13 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
     ? Math.max(-360, Math.min(360, out.spinSpeedDeg)) : 45;
   out.spinPhaseDeg = Number.isFinite(out.spinPhaseDeg)
     ? ((out.spinPhaseDeg % 360) + 360) % 360 : 0;
+  out.trailEnabled = out.trailEnabled === true;
+  out.trailCount = Number.isFinite(out.trailCount)
+    ? Math.max(1, Math.min(6, Math.round(out.trailCount))) : 3;
+  out.trailIntervalSec = Number.isFinite(out.trailIntervalSec)
+    ? Math.max(0.02, Math.min(0.3, out.trailIntervalSec)) : 0.06;
+  out.trailOpacity = Number.isFinite(out.trailOpacity)
+    ? Math.max(0.05, Math.min(0.8, out.trailOpacity)) : 0.35;
   return out;
 }
 
@@ -785,6 +803,9 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'displacePhase', label: '置换相位', section: '形变', min: 0, max: 1, step: 0.01 },
   { key: 'spinSpeedDeg', label: '自转速度（度/秒，可负）', section: '形变', min: -360, max: 360, step: 5 },
   { key: 'spinPhaseDeg', label: '自转相位（度）', section: '形变', min: 0, max: 359, step: 5 },
+  { key: 'trailCount', label: '残影个数', section: '形变', min: 1, max: 6, step: 1 },
+  { key: 'trailIntervalSec', label: '残影间隔（秒）', section: '形变', min: 0.02, max: 0.3, step: 0.01 },
+  { key: 'trailOpacity', label: '残影不透明度', section: '形变', min: 0.05, max: 0.8, step: 0.05 },
   { key: 'followDelaySec', label: '追随延迟（秒）', section: '形变', min: 0, max: 1, step: 0.01 },
   { key: 'followAmount', label: '追随强度', section: '形变', min: 0, max: 1, step: 0.05 },
   { key: 'rate', label: '发射率（个/秒）', section: '发射', min: 0, max: 60, step: 1 },

@@ -1915,6 +1915,31 @@ export function generateRenderPlan(
         }
       }
     }
+    // 残影段（D5）：过去帧的世界位姿差（与追随段同一 followPoseAt
+    // machinery——剥离蓝图的轨道位姿、当前帧同口径相减，增量由此
+    // 只含轨道运动；蓝图驱动的运动不入残影，与追随段同一近似）
+    let trailGhosts: NodeRenderInstruction['trailGhosts'];
+    if (dynResolved.length > 0) {
+      const tp = dynResolved.map((r) => r.instance.params).find((p) => p.trailEnabled);
+      if (tp) {
+        const nowP = followPoseAt(nodeId, frame);
+        if (nowP) {
+          const count = Math.max(1, Math.min(6, Math.round(tp.trailCount || 3)));
+          const list: NonNullable<NodeRenderInstruction['trailGhosts']> = [];
+          for (let k = count; k >= 1; k--) {
+            const past = followPoseAt(nodeId, frame - k * (tp.trailIntervalSec || 0.06) * frameRate);
+            if (!past) continue;
+            list.push({
+              dx: past.x - nowP.x,
+              dy: past.y - nowP.y,
+              daDeg: ((past.a - nowP.a) * 180) / Math.PI,
+              alpha: (tp.trailOpacity || 0.35) * (1 - (k - 1) / count),
+            });
+          }
+          if (list.length) trailGhosts = list;
+        }
+      }
+    }
     nodeInstructions.push({
       nodeId,
       sprite: effectiveSprite,
@@ -1953,6 +1978,7 @@ export function generateRenderPlan(
       // t.scaleX 修复：蓝图 scaleX 独立 plumbing，不再平均吃掉
       scaleX: dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX,
       dynamicPatterns: dynResolved.length > 0 ? dynResolved : undefined,
+      trailGhosts,
       // 蓝图 skew：有倾斜量时才填，避免空数组污染
       skews: (worldTf.skewX || worldTf.skewY) ? [{ skewX: worldTf.skewX ?? 0, skewY: worldTf.skewY ?? 0 }] : undefined,
       // STEP2 合并：plumbing 蓝图给 renderNodeSprite，替代手拼像素链
@@ -2636,6 +2662,24 @@ function renderNodeSprite(
   // Compute the draw position (where the pivot lands on canvas)
   const drawPivotX = subToPx(worldX);
   const drawPivotY = subToPx(worldY);
+
+  // 残影段（D5）：在本节点一切绘制之前，按过去位姿增量逐个画同一
+  // 份 workingCanvas（旧→新、逐个变淡）。走原生变换路径——残影
+  // 半透明，像素完美旋转的差异不可见。
+  if (previewQuality !== 'low' && instruction.trailGhosts?.length) {
+    for (const g of instruction.trailGhosts) {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(1, g.alpha));
+      ctx.translate(Math.round(drawPivotX + g.dx), Math.round(drawPivotY + g.dy));
+      ctx.rotate(((angle + g.daDeg) * Math.PI) / 180);
+      ctx.scale(scaleX, effStretch);
+      for (const { skewX, skewY } of skews) {
+        ctx.transform(1, Math.tan((skewY * Math.PI) / 180), Math.tan((skewX * Math.PI) / 180), 1, 0, 0);
+      }
+      ctx.drawImage(workingCanvas, -pivotX, -pivotY);
+      ctx.restore();
+    }
+  }
 
   // We need ctx.save/restore to isolate the transform for effect rendering
   ctx.save();
