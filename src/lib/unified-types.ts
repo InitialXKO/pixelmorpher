@@ -316,6 +316,24 @@ export interface SpriteLandmarks {
   mouth?: { x: number; y: number };
 }
 
+/** 精灵标记的选区定义：涂画掩码或逻辑规则（二选一）。
+ * 坐标全归一 0..1；painted 的位打包与发光选区同格式。 */
+export type SpriteRegionSpec =
+  | { by: 'painted'; mask: { w: number; h: number; bits: string } }
+  | { by: 'color'; color: string; tolerance: number }
+  | { by: 'rect'; x: number; y: number; w: number; h: number }
+  | { by: 'circle'; cx: number; cy: number; r: number };
+
+/** 精灵标记（研究线 research/sprite-marks）：挂在精灵上的
+ * 命名语义标记，消费端按 name 引用、经 sprite-marks 解析层
+ * 取值。坐标归一 0..1、方向无关（与 landmarks 同口径）。 */
+export type SpriteMark =
+  | { id: string; name: string; kind: 'point'; x: number; y: number }
+  | { id: string; name: string; kind: 'region'; region: SpriteRegionSpec }
+  | { id: string; name: string; kind: 'value'; value: number }
+  | { id: string; name: string; kind: 'direction'; angleDeg: number }
+  | { id: string; name: string; kind: 'vector'; x: number; y: number; dx: number; dy: number };
+
 export interface Sprite {
   id?: string;                   // Global table key (s.sprites); optional for inline literals
   name?: string;                 // Asset library display name
@@ -325,6 +343,7 @@ export interface Sprite {
   plug?: Point;                  // Optional: override node's default plug
   heightmap?: number[][];        // Optional: hand-painted heightmap for bump_light
   landmarks?: SpriteLandmarks;   // Optional: 手动标注的特征点（眼/鼻/嘴），用于蒙皮转面
+  marks?: SpriteMark[];          // Optional: 命名语义标记（点/选区/值/方向/矢量），消费端按名引用
   /** 分部件相机半宽（归一化单位），用于渲染时换算到全局尺度（可逆性：记录尺度差） */
   partCameraHalf?: number;
   /** 整模相机半宽（归一化单位），全局统一尺度基准 */
@@ -1399,6 +1418,9 @@ export interface NodeRenderInstruction {
   /** 弧线双锚点（D4 二期）：实例序号 → 终点（本节点本地 px，
    * 计划期按目标部件轨道位姿算好；无目标的实例不入表） */
   arcEnds?: Record<number, { x: number; y: number }>;
+  /** 弧线原点标记（sprite-marks）：实例序号 → 原点偏移（本地
+   * px，相对插头；计划期按精灵点标记算好，镜像时 x 取反） */
+  arcOrigins?: Record<number, { x: number; y: number }>;
   /** Shared sprite table for SpriteRef resolution (character.sprites) */
   sprites?: Record<string, Sprite>;
   /** 蒙皮快照弯曲参数（attachment.skinningSnapshot 生效时填充，renderNodeSprite 用） */

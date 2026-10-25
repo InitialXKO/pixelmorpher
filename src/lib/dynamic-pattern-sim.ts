@@ -9,6 +9,7 @@
 // ============================================================
 
 import { subToPx, type PixelGrid, type Sprite } from './unified-types';
+import { markPointPx, markDirAngleDeg } from './sprite-marks';
 import { hashPixelGrid } from './engine/render-cache';
 import {
   dynamicDeformAt,
@@ -109,6 +110,15 @@ function sourcePoints(params: DynamicPatternParams, sprite: Sprite): ContourPoin
       const py = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
       return [{ x: px - 0.5, y: py - 0.5, nx: 0, ny: -1 }];
     }
+    case 'mark': {
+      // 精灵标记点（研究线 sprite-marks）：按名解析点标记；
+      // 缺失/种类不符 → 回落 plug 点（解析层约定，永不崩）
+      const mp = markPointPx(sprite, params.emitMark);
+      if (mp) return [{ x: mp.x - 0.5, y: mp.y - 0.5, nx: 0, ny: -1 }];
+      const px = sprite.plug ? subToPx(sprite.plug.x) : sprite.width / 2;
+      const py = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
+      return [{ x: px - 0.5, y: py - 0.5, nx: 0, ny: -1 }];
+    }
     default:
       return all;
   }
@@ -138,7 +148,12 @@ export function simulateDynamicParticles(
   const lifeFrames = params.life * frameRate;
   const firstBirth = Math.max(0, Math.ceil(frame - lifeFrames));
   const lastBirth = Math.floor(frame);
-  const dirRad = (params.directionDeg * Math.PI) / 180;
+  // 发射方向绑定（sprite-marks）：emitDirMark 命中 direction/
+  // vector 标记时以标记角为准，未命中回落 directionDeg
+  const dirDeg = params.emitDirMark
+    ? (markDirAngleDeg(sprite, params.emitDirMark) ?? params.directionDeg)
+    : params.directionDeg;
+  const dirRad = (dirDeg * Math.PI) / 180;
   const dirX = Math.cos(dirRad), dirY = Math.sin(dirRad);
   // 存活上限是单实例总量：both 分层时按身前比例拆给两层
   const cap = params.layer === 'both'

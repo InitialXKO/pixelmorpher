@@ -8,6 +8,7 @@ import { drawDiamond, catmullRomToBezier, evaluateBezier, computeSpriteEndPoint,
 import type { Skeleton, Bone, TrajectoryCurvePoint, PuppetSkeleton, PuppetNode, PuppetNodeKeyframe, PuppetCharacter } from '@/lib/types';
 import type { Sprite } from '@/lib/unified-types';
 import { computeBoneTransforms } from '@/lib/engine';
+import { resolveRegionCells } from '@/lib/sprite-marks';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 
 // ============================================================
@@ -629,6 +630,102 @@ const LANDMARK_LABELS: Record<string, string> = {
   nose: '鼻',
   mouth: '嘴',
 };
+
+/**
+ * 在 sprite_edit 模式下绘制精灵标记（sprite-marks）。
+ * marks 为精灵上的命名标记；drag 为拖拽中的工作副本（按 id
+ * 替换显示，paintCells 为涂画中的逐格预览）。值标记无空间
+ * 形态，不在画布绘制（只在标记面板列出）。
+ */
+export function renderMarkOverlay(
+  rc: RenderContext,
+  sprite: import('@/lib/unified-types').Sprite,
+  offsetX: number,
+  offsetY: number,
+  selectedMarkId: string | null,
+  drag: { markId: string; working: import('@/lib/unified-types').SpriteMark; paintCells?: Uint8Array } | null,
+): void {
+  const raw = sprite.marks ?? [];
+  if (raw.length === 0 && !drag) return;
+  const marks = drag
+    ? [...raw.filter((m) => m.id !== drag.markId), drag.working]
+    : raw;
+  const { ctx, zoom, panX, panY } = rc;
+  const W = sprite.width, H = sprite.height;
+  const toScreen = (nx: number, ny: number) => ({
+    x: panX + (nx * W + offsetX) * zoom,
+    y: panY + (ny * H + offsetY) * zoom,
+  });
+  ctx.save();
+  for (const m of marks) {
+    const selected = m.id === selectedMarkId;
+    const color = selected ? '#facc15' : '#ff50b4';
+    if (m.kind === 'region') {
+      const cells = drag && drag.markId === m.id && drag.paintCells
+        ? drag.paintCells
+        : resolveRegionCells(sprite, m.name, sprite.data);
+      if (cells) {
+        ctx.fillStyle = selected ? 'rgba(250,204,21,0.4)' : 'rgba(255,80,180,0.35)';
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            if (!cells[y * W + x]) continue;
+            const sx = panX + (x + offsetX) * zoom;
+            const sy = panY + (y + offsetY) * zoom;
+            ctx.fillRect(sx, sy, Math.max(1, zoom), Math.max(1, zoom));
+          }
+        }
+      }
+      continue;
+    }
+    if (m.kind === 'value') continue;
+    if (m.kind === 'direction') {
+      const c = toScreen(0.5, 0.5);
+      const len = Math.min(W, H) * 0.3 * zoom;
+      const rad = (m.angleDeg * Math.PI) / 180;
+      const tx = c.x + Math.cos(rad) * len;
+      const ty = c.y + Math.sin(rad) * len;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(1.5, zoom * 0.4);
+      ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(tx, ty); ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.font = `${Math.max(9, 10 * zoom * 0.5)}px sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.fillText(m.name, tx + 3, ty + 3);
+      continue;
+    }
+    // point / vector
+    const a = toScreen(m.x, m.y);
+    const r = Math.max(3, 4 * zoom * 0.5);
+    if (m.kind === 'vector') {
+      const t = toScreen(m.x + m.dx, m.y + m.dy);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(1.5, zoom * 0.4);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(t.x, t.y); ctx.stroke();
+      // 箭头
+      const ang = Math.atan2(t.y - a.y, t.x - a.x);
+      const ah = Math.max(5, zoom * 1.2);
+      ctx.beginPath();
+      ctx.moveTo(t.x, t.y);
+      ctx.lineTo(t.x - ah * Math.cos(ang - 0.45), t.y - ah * Math.sin(ang - 0.45));
+      ctx.moveTo(t.x, t.y);
+      ctx.lineTo(t.x - ah * Math.cos(ang + 0.45), t.y - ah * Math.sin(ang + 0.45));
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, r + 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(a.x, a.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = `${Math.max(9, 10 * zoom * 0.5)}px sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.fillText(m.name, a.x + r + 3, a.y + 3);
+  }
+  ctx.restore();
+}
 
 /**
  * 在 sprite_edit 模式下绘制已标注的特征点。

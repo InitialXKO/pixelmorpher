@@ -27,7 +27,7 @@ import {
   findPatternTemplate, isUserPattern, deriveParamDefs, type UserPatternTemplate,
 } from '@/lib/proc-runtime/pattern-library';
 import { resolvePieceSprite } from '@/lib/sprite-resolve';
-import { representativeGridForSlot } from '@/lib/proc-runtime/convert';
+import { representativeGridForSlot, representativeGridForSlotEx } from '@/lib/proc-runtime/convert';
 import DynamicPatternEditor from './DynamicPatternEditor';
 import { glowRankByInstanceId, type DynamicPatternInstance } from '@/lib/dynamic-patterns';
 import { Label } from '@/components/ui/label';
@@ -114,6 +114,7 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
             onChange={writeDynamic}
             hint="挂在当前服装集的这个槽位上，换集即换；与节点挂载按效果位合并：同位替换、关闭压制、不同位叠加。"
             previewGrid={representativeGridForSlot(character, slotKey, spritesRecord)}
+            previewMarks={representativeGridForSlotEx(character, slotKey, spritesRecord)?.marks}
             glowRankById={glowRankByInstanceId(
               Object.values(character.nodes).find((n) => (n.slot?.slotKey ?? n.id) === slotKey)?.dynamicPatterns,
               piece?.dynamicPatterns,

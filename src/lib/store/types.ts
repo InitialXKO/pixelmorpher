@@ -106,6 +106,7 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   removeSprite: (id: string) => void;
   updateSprite: (id: string, updates: Partial<Sprite>) => void;
   updateSpriteLandmarks: (id: string, landmarks: import('../unified-types').SpriteLandmarks | undefined) => void;
+  updateSpriteMarks: (id: string, marks: import('../unified-types').SpriteMark[] | undefined) => void;
   setSpritePixels: (id: string, pixels: PixelGrid) => void;
   duplicateSprite: (id: string) => Sprite | undefined;
   importSpriteFromImage: (name: string, imageData: ImageData) => Sprite;

@@ -66,6 +66,15 @@ interface EditorStore extends EditorState {
   setMagicWandTolerance: (tolerance: number) => void;
   landmarkTarget: 'leftEye' | 'rightEye' | 'nose' | 'mouth';
   setLandmarkTarget: (target: 'leftEye' | 'rightEye' | 'nose' | 'mouth') => void;
+  // 精灵标记工具（sprite-marks）：状态字段在 EditorState（types.ts），此处只声明动作
+  setMarkToolMode: (mode: 'point' | 'paint' | 'rect' | 'vector') => void;
+  setSelectedMarkId: (id: string | null) => void;
+  setMarkDrag: (drag: {
+    markId: string;
+    working: import('../unified-types').SpriteMark;
+    paintCells?: Uint8Array;
+    paintValue?: boolean;
+  } | null) => void;
   // V2.0: Skeleton / Bone editor state
   activeSkeletonId: string | null;
   setActiveSkeletonId: (id: string | null) => void;
@@ -198,6 +207,9 @@ const defaultEditor: EditorState = {
   previewQuality: 'high' as const,
   magicWandTolerance: 32,
   landmarkTarget: 'leftEye' as const,
+  markToolMode: 'point' as const,
+  selectedMarkId: null,
+  markDrag: null,
   trajectorySnap: false,
   samState: {
     status: 'idle' as SAMStatus,
@@ -307,6 +319,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   toggleProcedural: () => set((s) => ({ showProcedural: !s.showProcedural })),
   setMagicWandTolerance: (tolerance) => set({ magicWandTolerance: tolerance }),
   setLandmarkTarget: (target) => set({ landmarkTarget: target }),
+  setMarkToolMode: (mode) => set({ markToolMode: mode }),
+  setSelectedMarkId: (id) => set({ selectedMarkId: id }),
+  setMarkDrag: (drag) => set({ markDrag: drag }),
   setMoveTargetLevel: (level) => set({ moveTargetLevel: level }),
   setPaletteConstrained: (enabled) => set({ paletteConstrained: enabled }),
   setSelectedPaletteSlot: (index) => set({ selectedPaletteSlot: index }),

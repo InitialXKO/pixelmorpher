@@ -16,6 +16,11 @@ import { computeWorldTransforms, geometryDirectionFromToggle } from '@/lib/unifi
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
+import {
+  newMarkId, uniqueMarkName, rectSpecFromCorners, paintedSpecFromCells,
+  cellsFromPaintedSpec, normalizeSpriteMarks,
+} from '@/lib/sprite-marks';
+import type { SpriteMark } from '@/lib/unified-types';
 import { suspendIKChain, resumeIKChain, suspendedIKChains } from '@/lib/ik-drag-state';
 import { computeIKChainTip, getIKChainJointIds } from '@/lib/ik-tip';
 import {
@@ -700,6 +705,182 @@ export const landmarkHandler: ToolHandler = {
       ...existing,
       [target]: { x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)) },
     });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Sprite Mark Handler（精灵标记：点/选区/矢量，供消费端按名复用）
+// ---------------------------------------------------------------------------
+// 仅 sprite_edit 有效。交互模型：子模式 point/paint/rect/vector。
+// 拖拽全程只改 editor-store 的 markDrag 工作副本（覆盖层实时
+// 预览），mouseUp 一次性提交（一次撤销）。点模式点空位新建、
+// 抓已有标记拖动；paint 只落选中的涂画选区（无则新建）；
+// rect 落选中的选区标记（改其定义为矩形）或新建；vector 拖
+// 出锚点→尖端，点击不移动时保留原有分量（防误清）。
+
+type MarkDragMeta = {
+  spriteId: string;
+  startNx: number; startNy: number;
+  lastCx: number; lastCy: number;
+  moved: boolean;
+};
+let markDragState: MarkDragMeta | null = null;
+
+function markLocal(s: CanvasState, px: number, py: number) {
+  const selPart = s.selectedPart;
+  if (!selPart) return null;
+  const offsetX = Math.floor((s.canvasWidth - selPart.width) / 2);
+  const offsetY = Math.floor((s.canvasHeight - selPart.height) / 2);
+  const lx = px - offsetX;
+  const ly = py - offsetY;
+  return {
+    lx, ly,
+    nx: lx / selPart.width, ny: ly / selPart.height,
+    inside: lx >= 0 && ly >= 0 && lx < selPart.width && ly < selPart.height,
+    w: selPart.width, h: selPart.height,
+  };
+}
+
+export const markHandler: ToolHandler = {
+  onMouseDown(s, _e, px, py) {
+    if (s.editMode !== 'sprite_edit' || !s.selectedSpriteId || !s.selectedPart) return;
+    const loc = markLocal(s, px, py);
+    if (!loc || !loc.inside) return;
+    const es = s.editorStore.getState();
+    const store = useProjectStore.getState();
+    const sprite = store.sprites[s.selectedSpriteId];
+    if (!sprite) return;
+    const marks = sprite.marks ?? [];
+    const mode = es.markToolMode;
+    const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+    markDragState = {
+      spriteId: s.selectedSpriteId,
+      startNx: clamp01(loc.nx), startNy: clamp01(loc.ny),
+      lastCx: loc.lx, lastCy: loc.ly, moved: false,
+    };
+
+    if (mode === 'point') {
+      let hit: SpriteMark | undefined;
+      let best = 4; // 抓取半径（精灵 px）
+      for (const m of marks) {
+        if (m.kind !== 'point') continue;
+        const d = Math.hypot(m.x * loc.w - loc.lx, m.y * loc.h - loc.ly);
+        if (d < best) { best = d; hit = m; }
+      }
+      const working: SpriteMark = hit
+        ? { ...hit }
+        : { id: newMarkId(), name: uniqueMarkName(marks, '标记'), kind: 'point', x: clamp01(loc.nx), y: clamp01(loc.ny) };
+      es.setSelectedMarkId(working.id);
+      es.setMarkDrag({ markId: working.id, working });
+    } else if (mode === 'vector') {
+      let hit: SpriteMark | undefined;
+      let best = 4;
+      for (const m of marks) {
+        if (m.kind !== 'vector') continue;
+        const d = Math.hypot(m.x * loc.w - loc.lx, m.y * loc.h - loc.ly);
+        if (d < best) { best = d; hit = m; }
+      }
+      const working: SpriteMark = hit
+        ? { ...hit }
+        : { id: newMarkId(), name: uniqueMarkName(marks, '矢量'), kind: 'vector', x: clamp01(loc.nx), y: clamp01(loc.ny), dx: 0.2, dy: 0 };
+      es.setSelectedMarkId(working.id);
+      es.setMarkDrag({ markId: working.id, working });
+    } else if (mode === 'paint') {
+      const sel = marks.find((m) => m.id === es.selectedMarkId);
+      const target = sel?.kind === 'region' && sel.region.by === 'painted'
+        ? sel
+        : marks.find((m) => m.kind === 'region' && m.region.by === 'painted');
+      const working: SpriteMark = target
+        ? { ...target }
+        : {
+            id: newMarkId(), name: uniqueMarkName(marks, '选区'), kind: 'region',
+            region: { by: 'painted', mask: { w: loc.w, h: loc.h, bits: '' } },
+          };
+      const cells = working.kind === 'region' && working.region.by === 'painted'
+        ? cellsFromPaintedSpec(working.region, loc.w, loc.h)
+        : new Uint8Array(loc.w * loc.h);
+      const paintValue = !cells[loc.ly * loc.w + loc.lx];
+      cells[loc.ly * loc.w + loc.lx] = paintValue ? 1 : 0;
+      es.setSelectedMarkId(working.id);
+      es.setMarkDrag({ markId: working.id, working, paintCells: cells, paintValue });
+    } else {
+      // rect
+      const sel = marks.find((m) => m.id === es.selectedMarkId);
+      const working: SpriteMark = sel?.kind === 'region'
+        ? { ...sel, region: rectSpecFromCorners(loc.nx, loc.ny, loc.nx, loc.ny) }
+        : {
+            id: newMarkId(), name: uniqueMarkName(marks, '选区'), kind: 'region',
+            region: rectSpecFromCorners(loc.nx, loc.ny, loc.nx, loc.ny),
+          };
+      es.setSelectedMarkId(working.id);
+      es.setMarkDrag({ markId: working.id, working });
+    }
+    s.markDirty();
+  },
+
+  onMouseMove(s, _e, px, py) {
+    const es = s.editorStore.getState();
+    const drag = es.markDrag;
+    if (!drag || !markDragState) return;
+    const loc = markLocal(s, px, py);
+    if (!loc) return;
+    const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+    if (Math.abs(loc.nx - markDragState.startNx) > 0.001 || Math.abs(loc.ny - markDragState.startNy) > 0.001) {
+      markDragState.moved = true;
+    }
+    const mode = es.markToolMode;
+    if (mode === 'point' && drag.working.kind === 'point') {
+      es.setMarkDrag({ ...drag, working: { ...drag.working, x: clamp01(loc.nx), y: clamp01(loc.ny) } });
+    } else if (mode === 'vector' && drag.working.kind === 'vector') {
+      es.setMarkDrag({
+        ...drag,
+        working: { ...drag.working, dx: clamp01(loc.nx) - drag.working.x, dy: clamp01(loc.ny) - drag.working.y },
+      });
+    } else if (mode === 'paint' && drag.paintCells) {
+      const cells = new Uint8Array(drag.paintCells);
+      const v = drag.paintValue ? 1 : 0;
+      for (const p of getLinePixels(markDragState.lastCx, markDragState.lastCy, loc.lx, loc.ly)) {
+        if (p.x >= 0 && p.y >= 0 && p.x < loc.w && p.y < loc.h) cells[p.y * loc.w + p.x] = v;
+      }
+      markDragState.lastCx = loc.lx; markDragState.lastCy = loc.ly;
+      es.setMarkDrag({ ...drag, paintCells: cells });
+    } else if (mode === 'rect' && drag.working.kind === 'region') {
+      es.setMarkDrag({
+        ...drag,
+        working: {
+          ...drag.working,
+          region: rectSpecFromCorners(markDragState.startNx, markDragState.startNy, clamp01(loc.nx), clamp01(loc.ny)),
+        },
+      });
+    }
+    s.markDirty();
+  },
+
+  onMouseUp(s) {
+    const es = s.editorStore.getState();
+    const drag = es.markDrag;
+    if (!drag || !markDragState) { es.setMarkDrag(null); markDragState = null; return; }
+    const store = useProjectStore.getState();
+    const sprite = store.sprites[markDragState.spriteId];
+    es.setMarkDrag(null);
+    const meta = markDragState;
+    markDragState = null;
+    if (!sprite) return;
+    let working = drag.working;
+    // vector 点击未移动：保留原分量（新建的保留缺省分量），不写成零矢量
+    if (working.kind === 'vector' && !meta.moved) {
+      const orig = (sprite.marks ?? []).find((m) => m.id === working.id);
+      if (orig?.kind === 'vector') working = orig;
+    }
+    if (working.kind === 'region' && drag.paintCells && sprite.width && sprite.height) {
+      working = { ...working, region: paintedSpecFromCells(drag.paintCells, sprite.width, sprite.height) };
+    }
+    const marks = [...(sprite.marks ?? [])];
+    const idx = marks.findIndex((m) => m.id === working.id);
+    if (idx >= 0) marks[idx] = working;
+    else marks.push(working);
+    store.updateSpriteMarks(meta.spriteId, normalizeSpriteMarks(marks));
+    s.markDirty();
   },
 };
 
@@ -1833,6 +2014,7 @@ export function getToolHandler(
     if (tool === 'fill') return fillToolHandler;
     if (tool === 'eyedropper') return eyedropperHandler;
     if (tool === 'landmark') return landmarkHandler;
+    if (tool === 'mark') return markHandler;
   }
 
   // Node 级分发（新架构；旧画布精灵层分发已随 workspace mode 退役）
@@ -1840,6 +2022,7 @@ export function getToolHandler(
     case 'puppet': return puppetHandler;
     case 'pseudo3d_rotate': return puppetHandler; // 复用 puppet 拖拽，onMouseDown 内按工具名设伪3D标志
     case 'landmark': return landmarkHandler; // 精灵编辑模式外 no-op（handler 内 early return）
+    case 'mark': return markHandler; // 同上
     case 'select': return nodeSelectHandler;
     case 'move': return nodeMoveHandler;
     case 'trajectory': return nodeTrajectoryHandler;

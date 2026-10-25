@@ -384,7 +384,27 @@ function displaceOfRt(part) {
   const list = dynListFor(part);
   for (let ii = 0; ii < list.length; ii++) {
     const p = list[ii].params;
-    if (p && p.displaceEnabled && (p.displaceAmp || 0) > 0) return p;
+    if (p && p.displaceEnabled && (p.displaceAmp || 0) > 0) {
+      // 置换方向绑定（sprite-marks）：displaceDirMark 命中包内
+      // 精灵的 direction/vector 标记时以标记角为准（direction
+      // 直取；vector 按精灵像素分量取 atan2，y 向下——与编辑器
+      // markDirAngleDeg 同口径），未命中用 displaceDeg
+      if (p.displaceDirMark && part.sprite && Array.isArray(part.sprite.marks)) {
+        for (const mk of part.sprite.marks) {
+          if (!mk || mk.name !== p.displaceDirMark) continue;
+          if (mk.kind === 'direction') return { ...p, displaceDeg: ((mk.angleDeg % 360) + 360) % 360 };
+          if (mk.kind === 'vector') {
+            const dx = mk.dx * part.sprite.w, dy = mk.dy * part.sprite.h;
+            if (dx !== 0 || dy !== 0) {
+              const a = (Math.atan2(dy, dx) * 180) / Math.PI;
+              return { ...p, displaceDeg: ((a % 360) + 360) % 360 };
+            }
+          }
+          break;
+        }
+      }
+      return p;
+    }
   }
   return null;
 }
@@ -774,6 +794,41 @@ function ensureAtlas(gl, variant, costumeName) {
         dispMaps.push(dynDisplaceSrcMap(disp, tileList[0].w, tileList[0].h, di / dispSteps));
       }
     }
+    // 精灵标记点（研究线 sprite-marks）：点/矢量标记按瓦片几何
+    // 换算成瓦片像素位（名 → [x, y]），挂条目新下标 [10]
+    // （[6] 已被 tileExtra 占用，勿复用——见 spikes/sprite-marks）；
+    // 方向角（direction 标记直取、vector 标记按精灵像素分量取
+    // atan2，y 向下屏幕口径，与编辑器 markDirAngleDeg 同口径）
+    // 挂 [12]（名 → 角度）
+    let marksPx = null;
+    let marksDir = null;
+    if (spriteGrid && Array.isArray(spriteGrid.marks) && tileList.length) {
+      const t0 = tileList[0];
+      const mx0 = (t0.w - spriteGrid.w) / 2, my0 = (t0.h - spriteGrid.h) / 2;
+      marksPx = {};
+      marksDir = {};
+      for (const mk of spriteGrid.marks) {
+        if (!mk || typeof mk.name !== 'string') continue;
+        if ((mk.kind === 'point' || mk.kind === 'vector') && !(mk.name in marksPx)) {
+          let px = mx0 + mk.x * spriteGrid.w;
+          const py = my0 + mk.y * spriteGrid.h;
+          if (mirrored) px = t0.w - 1 - px;
+          marksPx[mk.name] = [px, py];
+        }
+        if (mk.kind === 'direction' && !(mk.name in marksDir)) {
+          marksDir[mk.name] = ((mk.angleDeg % 360) + 360) % 360;
+        }
+        if (mk.kind === 'vector' && !(mk.name in marksDir)) {
+          const dx = mk.dx * spriteGrid.w, dy = mk.dy * spriteGrid.h;
+          if (dx !== 0 || dy !== 0) {
+            const a = (Math.atan2(dy, dx) * 180) / Math.PI;
+            marksDir[mk.name] = ((a % 360) + 360) % 360;
+          }
+        }
+      }
+      if (!Object.keys(marksPx).length) marksPx = null;
+      if (!Object.keys(marksDir).length) marksDir = null;
+    }
     for (let fi = 0; fi < tileList.length; fi++) {
       const diMax = disp ? dispSteps : 1;
       for (let di = 0; di < diMax; di++) {
@@ -785,7 +840,13 @@ function ensureAtlas(gl, variant, costumeName) {
           di > 0 ? dispMaps[di] : null,
           fi === 0 && di === 0 && disp
             ? { speed: disp.displaceSpeed || 0, phase: disp.displacePhase || 0, steps: dispSteps }
-            : null]);
+            : null,
+          marksPx,
+          // [11] plugN：瓦片归一化插头位（cx/w, cy/h，y 向下存、
+          // 消费端 (1-y) 翻成 y-up 中心偏移）。原误挂 [6]（那是
+          // tileExtra 数字）已修复，见 spikes/sprite-marks 第六节
+          [vt.cx / vt.w, vt.cy / vt.h],
+          marksDir]);
       }
     }
   }
@@ -908,7 +969,7 @@ function ensureAtlas(gl, variant, costumeName) {
       const rec = (animFrameMap[bk] = animFrameMap[bk] || {});
       rec[fi + ',' + di] = { tile: tile, place: [ax, ay] };
     } else {
-      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][6] || null });
+      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][11] || null, marksN: entries[i][10] || null, marksDir: entries[i][12] || null });
     }
   });
   for (const bk in animFrameMap) {
@@ -1726,7 +1787,7 @@ function frame(now) {
     // 双锚点查表：全部部件的锚点信息（目标部件未必挂动态模式）
     partAnchorsByKey.set(part.key, { ctr: ctr, rot: rotA, plugC: plugC, dsx: dsx, dsy: dsy });
     if (dynList.length > 0) {
-      dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: rotA, dynList: dynList, dsx: dsx, dsy: dsy, plugC: plugC });
+      dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: rotA, dynList: dynList, dsx: dsx, dsy: dsy, plugC: plugC, marksN: entry.marksN || null, marksDir: entry.marksDir || null });
     }
   });
   // 动态粒子：瓦片空间模拟（连续钟 elapsed × 包帧率量化帧，
@@ -1743,6 +1804,11 @@ function frame(now) {
       for (const inst of a.dynList) {
         const p = inst.params;
         if (!p.arcEnabled) continue;
+        // 弧线原点：实例指定点标记时用标记位（相对瓦片中心、
+        // y-up，与 plugC 同帧），否则插头位
+        const orgC = (p.arcOriginMark && a.marksN && a.marksN[p.arcOriginMark])
+          ? [a.marksN[p.arcOriginMark][0] - a.tile.w / 2, a.tile.h / 2 - a.marksN[p.arcOriginMark][1]]
+          : a.plugC;
         // 双锚点（D4 二期）：目标部件插头的世界位 → 本部件本地终点
         let endX = 0, endY = 0, hasEnd = false;
         if (p.arcTarget && partAnchorsByKey.has(p.arcTarget)) {
@@ -1754,13 +1820,13 @@ function frame(now) {
           const rx = wx - a.ctr[0], ry = wy - a.ctr[1];
           // toWorld 的变换矩阵是自逆的（[[c,s],[s,−c]]），逆变换同式
           const lx = (rx * c + ry * s) / (a.dsx || 1), ly = (rx * s - ry * c) / (a.dsy || 1);
-          endX = lx - a.plugC[0]; endY = ly - a.plugC[1];
+          endX = lx - orgC[0]; endY = ly - orgC[1];
           hasEnd = true;
         }
         const shape = dynArcPoints(p, elapsed, endX, endY, hasEnd);
         const rgb = particleRgb(p.arcColor || '#bfe3ff');
         const toWorld = (qx, qy) => {
-          const gx = (a.plugC[0] + qx) * a.dsx, gy = (a.plugC[1] + qy) * a.dsy;
+          const gx = (orgC[0] + qx) * a.dsx, gy = (orgC[1] + qy) * a.dsy;
           return [a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c];
         };
         const pushSeg = (w0, w1, wdt, alpha) => {
@@ -1795,7 +1861,7 @@ function frame(now) {
       }
       for (const inst of a.dynList) {
         for (const layer of ['back', 'front']) {
-          const ps = dynSimulate(inst, a.tile, frameIdx, FRAME_RATE, layer, a.part.key);
+          const ps = dynSimulate(inst, (a.marksN || a.marksDir) ? { ...a.tile, marksN: a.marksN, marksDir: a.marksDir } : a.tile, frameIdx, FRAME_RATE, layer, a.part.key);
           const target = layer === 'back' ? backVerts : frontVerts;
           for (const pt of ps) {
             const gx = pt.x * a.dsx, gy = pt.y * a.dsy;

@@ -50,7 +50,7 @@ export interface RuntimePartBase {
   /** 轮廓外延宽度（0..8） */
   haloWidth?: number;
   /** silhouette/overlay 的底图精灵（东向解析结果，产品空间像素网格） */
-  baseSprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][] };
+  baseSprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] };
 }
 
 /** 运行时动态实例（双挂载解析后：实例 id + 效果位 + 参数）。
@@ -125,7 +125,7 @@ export interface RuntimePart {
   /** 精灵部件（无参数化外观）：模板按直贴图瓦片绘制 */
   spriteKind?: boolean;
   /** 精灵部件在默认服装集下的显示方向精灵网格（逐集见 costumes[*].__sprite） */
-  sprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][] };
+  sprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] };
 }
 
 export interface ProcRuntimePackage {
@@ -211,6 +211,7 @@ function displaySpriteOf(
           ? [subToPx(r.sprite.plug.x), subToPx(r.sprite.plug.y)]
           : [r.sprite.width / 2, r.sprite.height / 2],
         data: r.sprite.data,
+        marks: r.sprite.marks,
       };
     }
   }
@@ -238,7 +239,7 @@ export function representativeGridForSlotEx(
   externalSprites?: Record<string, Sprite>,
   costumeSetId?: string,
   preferredDir?: DirectionIndex,
-): { grid: PixelGrid; space: 'tile' | 'sprite' } | null {
+): { grid: PixelGrid; space: 'tile' | 'sprite'; marks?: import('../unified-types').SpriteMark[] } | null {
   const table: SpriteTable = { ...(character.sprites ?? {}), ...(externalSprites ?? {}) };
   const set = character.costumeSets.find((cs) => cs.id === (costumeSetId ?? character.activeCostumeSetId))
     ?? character.costumeSets[0];
@@ -258,9 +259,9 @@ export function representativeGridForSlotEx(
     const nodeId = Object.values(character.nodes)
       .find((n) => (n.slot?.slotKey ?? n.id) === slotKey)?.id ?? slotKey;
     const baked = buildParametricSprite(piece.parametric, nodeId, baseSpr);
-    if (baked) return { grid: baked.data, space: (piece.parametric.composite ?? 'generate') === 'generate' ? 'tile' : 'sprite' };
+    if (baked) return { grid: baked.data, space: (piece.parametric.composite ?? 'generate') === 'generate' ? 'tile' : 'sprite', marks: baseSpr?.marks };
   }
-  return baseSpr ? { grid: baseSpr.data, space: 'sprite' } : null;
+  return baseSpr ? { grid: baseSpr.data, space: 'sprite', marks: baseSpr.marks } : null;
 }
 
 /** silhouette/overlay 的底图：东向精灵（generate 档不需要），无则 undefined */
@@ -334,7 +335,7 @@ function glowEntryFor(
     return undefined;
   }
   const fields = glows.map((inst, idx) => {
-    const gf = glowField(inst.params, rep.grid);
+    const gf = glowField(inst.params, rep.grid, 0, rep.marks);
     if (!gf) {
       warnings.push(`发光段：槽位 ${slotKey}${where} 第 ${idx + 1} 个发光实例选区为空（取色无同色像素或未标记），未进运行时包`);
     }
@@ -366,7 +367,7 @@ function glowEntryFor(
     if (recomputable) {
       stamps[ci] = glowStampOf(first);
       for (const idx of live) {
-        const cells = glowMaskCells(glows[idx]!.params, rep.grid);
+        const cells = glowMaskCells(glows[idx]!.params, rep.grid, rep.marks);
         if (!cells) continue;
         for (let y = 0; y < gh; y++) {
           for (let x = 0; x < gw; x++) {
