@@ -37,11 +37,8 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
       clips: animationClips.filter((c) => c.puppetCharacterId === character.id),
       patternLibrary: allPatternTemplates(),
       libraryEntries: allLibraryEntries(),
-      projectData: { proceduralAnimations: useProjectStore.getState().proceduralAnimations, globalModifiers: useProjectStore.getState().globalModifiers, globalBlueprint: useProjectStore.getState().globalBlueprint },
+      projectData: { proceduralAnimations: useProjectStore.getState().proceduralAnimations, globalModifiers: useProjectStore.getState().globalModifiers, globalBlueprint: useProjectStore.getState().globalBlueprint, canvasModifierTracks: useProjectStore.getState().canvasModifierTracks, effectTracks: useProjectStore.getState().effectTracks, motionBlurStrokes: useProjectStore.getState().motionBlurStrokes, effectStrokes: useProjectStore.getState().effectStrokes, canvasWidth: useProjectStore.getState().canvasWidth, canvasHeight: useProjectStore.getState().canvasHeight },
       projectExtras: {
-        canvasModifierTrackCount: useProjectStore.getState().canvasModifierTracks?.length ?? 0,
-        effectTrackCount: useProjectStore.getState().effectTracks?.length ?? 0,
-        strokeCount: (useProjectStore.getState().motionBlurStrokes?.length ?? 0) + (useProjectStore.getState().effectStrokes?.length ?? 0),
         perspectiveForeshorten: useEditorStore.getState().perspectiveForeshorten,
       },
     });

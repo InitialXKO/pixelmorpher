@@ -154,6 +154,16 @@ export interface ProcRuntimePackage {
   /** 全局变换图（工程级全局修改器/全局蓝图翻译；运行时逐帧求值后
    *  对整场施加平移/旋转/缩放，与编辑器 applyGlobalTransformWrapper 同口径） */
   globalGraph?: RuntimeGraph;
+  /** 画布级特效数据（缺口 5）：工程级特效轨/笔触/画布修改轨原样带入，
+   * 运行时按工程时间线帧消费；片段级同类数据挂在段表演的 fx 上 */
+  fx?: {
+    canvas: { w: number; h: number };
+    totalFrames: number;
+    effectTracks?: import('../types').EffectTrack[];
+    motionBlurStrokes?: import('../types').MotionBlurStroke[];
+    effectStrokes?: import('../types').EffectStroke[];
+    canvasTracks?: import('../types').CanvasModifierTrack[];
+  };
   warnings: string[];
 }
 
@@ -577,7 +587,7 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null }; projectExtras?: { canvasModifierTrackCount?: number; effectTrackCount?: number; strokeCount?: number; perspectiveForeshorten?: boolean } },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number }; projectExtras?: { perspectiveForeshorten?: boolean } },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
   // ---- 工程级数据点名（运行时完备性审计缺口 5/7，未修项）：convert
@@ -586,9 +596,6 @@ export function convertCharacterToRuntimePackage(
   // 真进包，见函数末尾 globalGraph。） ----
   {
     const ex = opts?.projectExtras;
-    if (ex?.canvasModifierTrackCount) warnings.push(`画布修改轨 ${ex.canvasModifierTrackCount} 条未进运行时包（v1）`);
-    if (ex?.effectTrackCount) warnings.push(`特效轨 ${ex.effectTrackCount} 条未进运行时包（v1）`);
-    if (ex?.strokeCount) warnings.push(`手绘笔触（动态模糊/特效）未进运行时包（v1）`);
     if (ex?.perspectiveForeshorten) warnings.push('透视缩短未进运行时包（v1）：播放时按平面角绘制');
   }
   // ---- 网格蒙皮点名（缺口 4）：任一节点的父槽位 skinning=mesh 时点名 ----
@@ -960,13 +967,22 @@ export function convertCharacterToRuntimePackage(
       n.tracks && POSE_CHANNELS.some((ch) => (n.tracks[ch]?.keyframes?.length ?? 0) > 0));
     // ---- 片段级点名（缺口 5/6）：片段内的状态切换与特效数据不进包 ----
     for (const c of opts?.clips ?? []) {
-      const clipFx = (c.effectTracks?.length ?? 0) + (c.canvasModifierTracks?.length ?? 0) + (c.motionBlurStrokes?.length ?? 0) + (c.effectStrokes?.length ?? 0) + (c.trajectories?.length ?? 0);
-      if (clipFx > 0) warnings.push(`片段「${c.name}」内的特效轨/笔触/轨迹未进运行时包（v1）`);
+      if ((c.trajectories?.length ?? 0) > 0) warnings.push(`片段「${c.name}」内的轨迹未进运行时包（v1）`);
     }
   // ---- 片段状态轨（缺口 6）：状态键 → 段表演内的定时状态切换 ----
   // 帧为工程绝对帧，换算为片段本地秒；窗外（起点之前）的键折叠到 0。
   // costumeSetId 指向不存在的集时点名丢弃；slotChanges 原样带（槽位
   // 变体在运行时经 altSprites 解析，见 parts 组装后的回填）。
+  // 片段级特效数据（缺口 5）：挂段表演 fx，键帧/笔触帧均为工程绝对帧，
+  // 运行时以 clip.startFrame + 本地帧求值（与状态轨同一帧口径）。
+  const clipFxOf = (clip: AnimationClip) => {
+    const fx: Record<string, unknown> = {};
+    if (clip.effectTracks?.length) fx.effectTracks = clip.effectTracks;
+    if (clip.canvasModifierTracks?.length) fx.canvasTracks = clip.canvasModifierTracks;
+    if (clip.motionBlurStrokes?.length) fx.motionBlurStrokes = clip.motionBlurStrokes;
+    if (clip.effectStrokes?.length) fx.effectStrokes = clip.effectStrokes;
+    return Object.keys(fx).length > 0 ? fx : undefined;
+  };
   const stateFxOf = (clip: AnimationClip) => {
     const keys = [...(clip.stateKeyframes ?? [])].sort((a, b) => a.frame - b.frame);
     if (keys.length === 0) return undefined;
@@ -1182,6 +1198,8 @@ export function convertCharacterToRuntimePackage(
           slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
           graph: { context: 'performance', nodes: seg.graphNodes },
           stateFx: stateFxOf(clip),
+          fx: clipFxOf(clip),
+          fxStart: clip.startFrame,
         });
         emittedClipPerfIds.add(`clip_${clip.id}`);
       }
@@ -1203,6 +1221,8 @@ export function convertCharacterToRuntimePackage(
         slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
         graph: { context: 'performance', nodes: [] },
         stateFx: stateFxOf(clip),
+        fx: clipFxOf(clip),
+        fxStart: clip.startFrame,
       });
     }
   }
@@ -1277,6 +1297,19 @@ export function convertCharacterToRuntimePackage(
     }
   }
 
+  const fxPkg: ProcRuntimePackage['fx'] = (() => {
+    const pd = opts?.projectData;
+    if (!pd) return undefined;
+    return {
+      canvas: { w: pd.canvasWidth ?? 512, h: pd.canvasHeight ?? 512 },
+      totalFrames: opts?.totalFrames && opts.totalFrames > 0 ? opts.totalFrames : 1,
+      effectTracks: pd.effectTracks,
+      canvasTracks: pd.canvasModifierTracks,
+      motionBlurStrokes: pd.motionBlurStrokes,
+      effectStrokes: pd.effectStrokes,
+    };
+  })();
+
   return {
     format: 'procedural-pixel-runtime-1',
     characterName: character.name,
@@ -1290,6 +1323,7 @@ export function convertCharacterToRuntimePackage(
     stateMachine,
     procedural: procedural.length > 0 ? procedural : undefined,
     globalGraph,
+    fx: fxPkg,
     warnings,
   };
 }

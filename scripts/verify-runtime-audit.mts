@@ -143,8 +143,30 @@ check('缺口8·置换方向标记来源含 base.baseSprite',
 // ---- 未修缺口（关了 = 有人修了，须更新 AUDIT 分类）----
 check('缺口4·运行时仍无网格蒙皮（修复后更新文档）',
   !template.includes('skinning') && !dynSrc.includes('skinning'));
-check('缺口5·画布修改轨仍未成包字段（点名代码引用字段名不算进包；修复后更新文档）',
-  !convert.includes('canvasModifierTracks?:'));
+check('缺口5·特效轨/笔触已进包且模板消费（画布修改轨的后处理在 5-2）',
+  convert.includes('fxPkg') && convert.includes('clipFxOf')
+  && template.includes('fxRenderSet') && template.includes("tr.type === 'particle'")
+  && template.includes('afterimage_brush'));
+{
+  const ch = {
+    id: 'fxp', name: '特效包测试',
+    nodes: { root: { id: 'root', name: 'root', parentId: null, children: [], modifiers: [], slot: { slotKey: 'root' }, transform: {}, sockets: [], tracks: { keyframes: [] } } },
+    rootNodeId: 'root', rootNodeIds: ['root'],
+    costumeSets: [{ id: 's1', name: '默认', pieces: { root: { nodeId: 'root', zIndex: 0, parametric: createDefaultParametricAppearance() } } }],
+    activeCostumeSetId: 's1', variants: {},
+  } as never;
+  const pkg = convertCharacterToRuntimePackage(ch, undefined, {
+    frameRate: 12, totalFrames: 48,
+    projectData: {
+      canvasWidth: 640, canvasHeight: 360,
+      effectTracks: [{ id: 'et1', type: 'glow', name: '辉光', visible: true, keyframes: [{ id: 'k1', frame: 0, params: { radius: 3 } }] }],
+      motionBlurStrokes: [{ id: 'mb1', frame: 4, spriteId: 'root', points: [{ x: 1, y: 2 }, { x: 30, y: 2 }], brushType: 'linear', intensity: 5, direction: 0 }],
+    } as never,
+  });
+  check('缺口5·工程 fx 进包（画布尺寸/总帧/轨/笔触）',
+    pkg.fx?.canvas.w === 640 && pkg.fx?.canvas.h === 360 && pkg.fx?.totalFrames === 48
+    && pkg.fx?.effectTracks?.length === 1 && pkg.fx?.motionBlurStrokes?.length === 1);
+}
 check('缺口6·已修：段表演带 stateFx 且模板按快照累计应用/恢复',
   convert.includes('stateFxOf') && template.includes('act.perf.stateFx') && template.includes('restoreFxSnapshot'));
 {

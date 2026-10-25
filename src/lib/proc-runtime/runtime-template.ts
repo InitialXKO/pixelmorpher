@@ -1665,6 +1665,161 @@ const uLoc = (pr, n) => gl.getUniformLocation(pr, n);
 const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal'), base: uLoc(partProg, 'uBase'), glow: uLoc(partProg, 'uGlow') };
 const solidU = { cam: uLoc(solidProg, 'uCam'), vh: uLoc(solidProg, 'uViewHalf') };
 let last = performance.now();
+// ---------- 画布级特效（缺口 5）：特效轨 + 笔触 ----------
+// 与编辑器同语义：特效轨取 ≤ 当前帧的最近键（不插值）、笔触自其帧起
+// 常驻。编辑器画布坐标 → 运行时世界坐标：画布中心 = 角色原点、
+// x 同向、y 翻转（世界 y 向上）。全部走 solid 顶点（mode 0 方块 /
+// mode 1 圆点），与粒子同路绘制（普通混合；编辑器的 lighter/overlay
+// 等混合模式在此路下不区分，已知会近似）。
+const FX = EMBEDDED.fx || null;
+const FXW = FX && FX.canvas ? FX.canvas.w : 512;
+const FXH = FX && FX.canvas ? FX.canvas.h : 512;
+function fxHexRgb(hex) {
+  const n = parseInt(String(hex || '#ffffff').replace('#', ''), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+function fxQuad(verts, cx, cy, w, h, rgb, a, mode) {
+  const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2;
+  const cs = [[x0, y0, -1, -1], [x1, y0, 1, -1], [x1, y1, 1, 1], [x0, y0, -1, -1], [x1, y1, 1, 1], [x0, y1, -1, 1]];
+  for (const cn of cs) verts.push(cn[0], cn[1], cn[2], cn[3], rgb[0], rgb[1], rgb[2], a, mode);
+}
+function fxSeg(verts, w0, w1, wdt, rgb, a) {
+  const dx = w1[0] - w0[0], dy = w1[1] - w0[1];
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len * wdt / 2, ny = dx / len * wdt / 2;
+  const cs = [
+    [w0[0] + nx, w0[1] + ny, -1, -1], [w1[0] + nx, w1[1] + ny, 1, -1],
+    [w1[0] - nx, w1[1] - ny, 1, 1], [w0[0] + nx, w0[1] + ny, -1, -1],
+    [w1[0] - nx, w1[1] - ny, 1, 1], [w0[0] - nx, w0[1] - ny, -1, 1],
+  ];
+  for (const cn of cs) verts.push(cn[0], cn[1], cn[2], cn[3], rgb[0], rgb[1], rgb[2], a, 0);
+}
+function fxW2(px, py) { return [char.x + (px - FXW / 2), char.y + (FXH / 2 - py)]; }
+function fxRenderSet(set, frame, verts, occAt) {
+  if (!set) return;
+  const num = (v, d) => (v === undefined || v === null || !Number.isFinite(Number(v)) ? d : Number(v));
+  for (const tr of set.effectTracks || []) {
+    if (!tr.visible) continue;
+    let kf = null;
+    for (const k of tr.keyframes || []) if (k.frame <= frame && (!kf || k.frame > kf.frame)) kf = k;
+    if (!kf) continue;
+    const P = kf.params || {};
+    if (tr.type === 'glow') {
+      const radius = num(P.radius, 3), inten = num(P.intensity, 0.5), rgb = fxHexRgb(P.color || '#ffff00');
+      const step = Math.max(1, Math.floor(radius / 2));
+      for (let ring = radius * 4; ring >= 1; ring -= step) {
+        const t = ring / (radius * 4);
+        fxQuad(verts, char.x, char.y, ring * 16, ring * 16, rgb, inten * 0.15 * (1 - t), 1);
+      }
+    } else if (tr.type === 'particle') {
+      const rate = num(P.rate, 10), speed = num(P.speed, 2), life = Math.max(1, num(P.life, 10));
+      const grav = num(P.gravity, 0.5), rgb = fxHexRgb(P.color || '#ff8800');
+      const seed = dynSeedOf(tr.id);
+      for (let birth = Math.max(0, frame - life + 1); birth <= frame; birth++) {
+        const rng = dynProcSeededRandom(seed + birth * 7919);
+        for (let i = 0; i < rate; i++) {
+          const age = frame - birth;
+          const ang = rng() * Math.PI * 2;
+          const sv = speed * (0.5 + rng() * 0.5);
+          const sizeVar = 1 + Math.floor(rng() * 3);
+          const wx = char.x + Math.cos(ang) * sv * age;
+          const wy = char.y - (Math.sin(ang) * sv * age + 0.5 * grav * age * age);
+          const alpha = Math.max(0, 1 - age / life) * 0.6;
+          if (alpha > 0) fxQuad(verts, wx, wy, sizeVar, sizeVar, rgb, alpha, 0);
+        }
+      }
+    } else if (tr.type === 'afterimage') {
+      const count = num(P.count, 3), opacity = num(P.opacity, 0.3), spacing = num(P.spacing, 5);
+      for (let i = 1; i <= count; i++) fxQuad(verts, char.x - i * spacing, char.y, FXW, FXH, [128 / 255, 0, 1], opacity * 0.015, 0);
+    } else if (tr.type === 'pixel_displace') {
+      const inten = num(P.intensity, 2), freq = num(P.frequency, 0.1);
+      for (let y = 0; y < FXH; y += 4) {
+        const dx = Math.sin((y * freq + frame * freq * Math.PI * 2) * Math.PI * 2) * inten;
+        const w = fxW2(FXW / 2 + dx, y);
+        fxQuad(verts, w[0], w[1], FXW, 1, [100 / 255, 1, 200 / 255], 0.01, 0);
+      }
+    } else if (tr.type === 'motion_blur') {
+      const length = num(P.length, 5), decay = num(P.decay, 0.5);
+      for (let i = 1; i <= length; i++) {
+        const a = Math.pow(1 - i / length, (1 - decay) * 4 + 1) * 0.1;
+        fxQuad(verts, char.x - i, char.y, FXW, FXH, [200 / 255, 200 / 255, 1], a * 0.1, 0);
+      }
+    }
+  }
+  for (const st of set.motionBlurStrokes || []) {
+    if (st.frame > frame || !st.points || st.points.length < 2) continue;
+    const inten = st.intensity || 0, white = [1, 1, 1];
+    const steps = Math.max(1, Math.floor(inten));
+    const dots = (pt, dirX, dirY, f) => {
+      for (let s2 = 1; s2 <= steps; s2++) {
+        const w = fxW2(pt.x + dirX * s2 * 2, pt.y + dirY * s2 * 2);
+        fxQuad(verts, w[0], w[1], 2, 2, white, (1 - s2 / steps) * f * (inten / 10), 0);
+      }
+    };
+    if (st.brushType === 'linear') {
+      for (let i = 0; i + 1 < st.points.length; i++) {
+        const p1 = st.points[i], p2 = st.points[i + 1];
+        const dx = p2.x - p1.x, dy = p2.y - p1.y, len = Math.hypot(dx, dy);
+        if (len < 0.01) continue;
+        dots(p1, dx / len, dy / len, 0.4);
+        fxSeg(verts, fxW2(p1.x, p1.y), fxW2(p2.x, p2.y), 2, white, 0.3 * (inten / 10) * 0.5);
+      }
+    } else if (st.brushType === 'radial') {
+      let cx = 0, cy = 0;
+      for (const pt of st.points) { cx += pt.x; cy += pt.y; }
+      cx /= st.points.length; cy /= st.points.length;
+      for (const pt of st.points) {
+        const dx = pt.x - cx, dy = pt.y - cy, d = Math.hypot(dx, dy);
+        if (d < 0.01) continue;
+        dots(pt, dx / d, dy / d, 0.35);
+      }
+    } else if (st.brushType === 'directional') {
+      const rad = (st.direction || 0) * Math.PI / 180;
+      for (const pt of st.points) dots(pt, Math.cos(rad), Math.sin(rad), 0.35);
+    }
+  }
+  for (const st of set.effectStrokes || []) {
+    if (st.frame > frame || !st.points || st.points.length === 0) continue;
+    const rgb = fxHexRgb(st.color || '#ffffff'), inten = st.intensity || 0;
+    if (st.type === 'glow_brush') {
+      for (const pt of st.points) {
+        const w = fxW2(pt.x, pt.y);
+        fxQuad(verts, w[0], w[1], (st.radius || 3) * 2, (st.radius || 3) * 2, rgb, inten * 0.3, 1);
+      }
+    } else if (st.type === 'particle_brush') {
+      const density = st.density ?? 10, spread = st.spread ?? 5;
+      for (let i = 0; i < st.points.length; i++) {
+        const pt = st.points[i];
+        const rng = dynProcSeededRandom(dynSeedOf(st.id + i.toString()));
+        for (let d = 0; d < density; d++) {
+          const ox = (rng() - 0.5) * spread * 2, oy = (rng() - 0.5) * spread * 2;
+          const size = rng() > 0.5 ? 2 : 1;
+          const alpha = inten * (0.5 + rng() * 0.5);
+          const w = fxW2(pt.x + ox, pt.y + oy);
+          fxQuad(verts, w[0], w[1], size, size, rgb, alpha, 0);
+        }
+      }
+    } else if (st.type === 'afterimage_brush' && occAt) {
+      if (st.points.length < 2) continue;
+      const spread = st.spread ?? 5;
+      const f0 = st.points[0], l0 = st.points[st.points.length - 1];
+      let dirX = l0.x - f0.x, dirY = l0.y - f0.y;
+      const len = Math.hypot(dirX, dirY);
+      if (len > 0.01) { dirX /= len; dirY /= len; } else { dirX = -1; dirY = 0; }
+      const copies = Math.max(1, Math.floor(spread));
+      for (let c = 1; c <= copies; c++) {
+        const alpha = inten * (1 - c / (copies + 1)) * 0.5;
+        for (const pt of st.points) {
+          const src = fxW2(pt.x, pt.y);
+          if (!occAt(src[0], src[1])) continue;
+          const dst = fxW2(pt.x + dirX * c * 2, pt.y + dirY * c * 2);
+          fxQuad(verts, dst[0], dst[1], 1, 1, rgb, alpha, 0);
+        }
+      }
+    }
+  }
+}
+
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now; elapsed += dt;
   const ix = readMoveX();
@@ -2032,6 +2187,33 @@ function frame(now) {
         .filter((s) => s.born < elapsed && elapsed - s.born < interval * count * 1.8)
         .map((s) => Object.assign({}, s.el, { ghost: true }));
       if (ghosts.length) els.splice(els.indexOf(live), 0, ...ghosts);
+    }
+  }
+  // 画布级特效（缺口 5）：工程级按时间线帧（循环）、片段级按段表演
+  // 本地帧换算的绝对帧；生成的顶点进 frontVerts，与场景一并受全局
+  // 变换（编辑器同一层级）。afterimage 笔触的采样以部件瓦片 alpha
+  // 近似编辑器的画布采样。
+  {
+    const occAt = (wx, wy) => {
+      for (const [key, el] of elByKey) {
+        const entry = state.map.get(key);
+        if (!entry || !entry.tile || !entry.tile.data) continue;
+        const tile = entry.tile;
+        const dx = wx - el.pos[0], dy = wy - el.pos[1];
+        const c = Math.cos(el.rot), s = Math.sin(el.rot);
+        const gx = c * dx + s * dy, gy = s * dx - c * dy;
+        const px = Math.round(gx + tile.cx), py = Math.round(tile.cy - gy);
+        if (px < 0 || py < 0 || px >= tile.w || py >= tile.h) continue;
+        if (tile.data[(py * tile.w + px) * 4 + 3] > 8) return true;
+      }
+      return false;
+    };
+    if (FX) {
+      const total = Math.max(1, FX.totalFrames || 1);
+      fxRenderSet(FX, Math.floor(elapsed * FRAME_RATE) % total, frontVerts, occAt);
+    }
+    for (const act of activePerfs) {
+      if (act.perf.fx) fxRenderSet(act.perf.fx, (act.perf.fxStart || 0) + Math.floor(act.t * FRAME_RATE), frontVerts, occAt);
     }
   }
   // 全局变换（缺口 3）：与编辑器 applyGlobalTransformWrapper 同口径——
