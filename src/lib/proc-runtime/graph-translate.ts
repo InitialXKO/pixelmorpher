@@ -16,7 +16,7 @@ export interface RuntimeRef { n: string; o?: string }
 export type RuntimeGraphNode =
   | { id: string; type: string; params?: Record<string, unknown>; inputs?: Record<string, RuntimeRef | { v: number }> }
   | { id: string; type: 'curve'; points: [number, number][] }
-  | { id: string; type: 'transform'; part: string; units: 'main' | 'runtime'; angleFrom?: RuntimeRef; dxFrom?: RuntimeRef; dyFrom?: RuntimeRef; scaleXFrom?: RuntimeRef; scaleYFrom?: RuntimeRef };
+  | { id: string; type: 'transform'; part: string; units: 'main' | 'runtime'; angleFrom?: RuntimeRef; dxFrom?: RuntimeRef; dyFrom?: RuntimeRef; scaleXFrom?: RuntimeRef; scaleYFrom?: RuntimeRef; foreFrom?: RuntimeRef };
 
 export interface RuntimeGraph {
   context: 'performance' | 'behavior';

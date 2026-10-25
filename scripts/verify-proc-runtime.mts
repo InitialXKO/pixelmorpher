@@ -13,7 +13,8 @@ import { translatePerformanceGraph, translateBehaviorGraph } from '../src/lib/pr
 import { dialectOf } from '../src/lib/proc-runtime/dialect';
 import { createRuntimeEvaluator } from '../src/lib/proc-runtime/eval-src';
 import { convertCharacterToRuntimePackage } from '../src/lib/proc-runtime/convert';
-import { createDefaultCostumePiece } from '../src/lib/unified-types';
+import { createDefaultCostumePiece, frameYAxisWorld, directionTrig } from '../src/lib/unified-types';
+import { computeWorldTransforms } from '../src/lib/unified-render';
 import { createSurfaceBaker } from '../src/lib/proc-runtime/bake-src';
 import { PATTERN_TEMPLATES, instantiatePattern } from '../src/lib/proc-runtime/pattern-templates';
 import type { SurfaceGraph } from '../src/lib/unified-types';
@@ -948,14 +949,33 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     graph: { nodes: Array<{ type: string; points?: [number, number][] }> };
   } | undefined;
   const curvesT = (perfT?.graph.nodes ?? []).filter((n) => n.type === 'curve');
+  const trT = (perfT?.graph.nodes ?? []).find((n) => n.type === 'transform') as unknown as
+    { foreFrom?: { n: string } } | undefined;
+  const foreCurveT = curvesT.find((c) => (c as { id?: string }).id === trT?.foreFrom?.n);
   check('Q26 轨道进包：合成「轨道」表演（add/KeyT/时长=帧数÷12/掩码=轨道节点）',
     !!perfT && perfT.mode === 'add' && perfT.triggerKey === 'KeyT' && Math.abs(perfT.duration - 1) < 1e-9
-    && perfT.mask.join() === 'arm' && curvesT.length === 2);
+    && perfT.mask.join() === 'arm' && curvesT.length === 3 && !!foreCurveT);
   const angCurve = curvesT.find((c) => Math.abs((c.points?.[1]?.[1] ?? 0) + Math.PI / 2) < 0.01);
   const dxCurve = curvesT.find((c) => Math.abs((c.points?.[1]?.[1] ?? 0) + 12) < 1e-9);
   check('Q27 轨道曲线是相对第 0 帧的世界增量（角度 10→100 的增量 90°→-π/2、x 经北向投影 192 Sub→-12px）',
     !!angCurve && Math.abs(angCurve.points?.[0]?.[1] ?? 0) < 1e-9 && !!dxCurve);
-  check('Q28 tilt 轨道无对应通道被点名', pkgT.warnings.some((w) => w.includes('tilt') && w.includes('未进包')));
+  check('Q28 tilt 轨道不再点名缺失（位姿经世界采样、缩短经 fore 通道进包）',
+    !pkgT.warnings.some((w) => w.includes('tilt') && w.includes('未进包')));
+  {
+    // fore 因子对拍：用编辑器同源函数（generateRenderPlan 同式）对同
+    // 角色第 0 帧世界变换重算，应与烘焙曲线首点一致（简化容差内）
+    const chF = mkTrackChar({
+      tracks: { tilt: { interpolation: 'step', keyframes: [{ frame: 0, value: 5 }] } },
+    });
+    const wfF = computeWorldTransforms(chF as never, 0, 512, 512, 12);
+    const wF = wfF.get('arm');
+    const dirFF = (chF.rootNodeId ? wfF.get(chF.rootNodeId)?.variantIndex : undefined) ?? 2;
+    const ywF = frameYAxisWorld(wF!.worldFrame, (wF!.variantIndex ?? dirFF) as never);
+    const trigFF = directionTrig(dirFF as never);
+    const expectF = Math.min(1, Math.hypot(ywF.x * trigFF.cos + ywF.z * trigFF.sin, ywF.y));
+    check('Q28b fore 烘焙因子与编辑器同式重算一致（tilt=5°）',
+      !!foreCurveT && Math.abs((foreCurveT.points?.[0]?.[1] ?? 1) - expectF) < 0.01 && expectF < 0.999);
+  }
   const pkgT2 = convertCharacterToRuntimePackage(mkTrackChar({
     tracks: { angle: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 6, value: 0 }] } },
   }));
@@ -3013,6 +3033,30 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
       ...chHairBaked,
       nodes: { ...chHairBaked.nodes, scalp: { ...chHairBaked.nodes.scalp, transform: { ...chHairBaked.nodes.scalp.transform, x: 150 } } },
     } as unknown as Character, detH!, 12).length >= 1);
+}
+
+// ---- 透视缩短求值（缺口 7）：foreFrom 进位姿记录、钳制 0..1 ----
+{
+  const ev = createRuntimeEvaluator();
+  const g = { nodes: [
+    { id: 't', type: 'time' },
+    { id: 'c', type: 'curve', points: [[0, 0.42], [1, 0.42]] },
+    { id: 'tr', type: 'transform', part: 'arm', units: 'runtime', foreFrom: { n: 'c' } },
+  ] };
+  const out = ev(g, { t: 0.5 });
+  check('缺口7·求值器 fore 通道输出绝对因子', Math.abs((out.get('arm')?.fore ?? -1) - 0.42) < 1e-9);
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  const sprF = { id: 'gsprF', name: 'g', width: 4, height: 4, plug: { x: 32, y: 32 }, pixels: Array.from({ length: 4 }, () => Array(4).fill('#c83232')), direction: 2 } as never;
+  const chFore = {
+    id: 'chFore', name: '缩短测试',
+    nodes: { arm: makeNode('arm', '手臂', 'arm') },
+    rootNodeId: 'arm', rootNodeIds: ['arm'],
+    sprites: { gsprF: sprF },
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { arm: { ...createDefaultCostumePiece('arm'), sprites: { 2: { spriteId: 'gsprF', mirror: false } } } } }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const html = buildRuntimeHtml(convertCharacterToRuntimePackage(chFore));
+  check('缺口7·模板含透视缩短开关与 dsy 落点', html.includes('foreOn') && html.includes('透视缩短') && html.includes('an.fore'));
 }
 
 // ---- 网格蒙皮对拍（缺口 4）：运行时 RGBA 孪生 vs 编辑器 applyMeshSkin ----

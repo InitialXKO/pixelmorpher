@@ -13,7 +13,7 @@
 import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, Sprite, StateMachineSpec } from '../unified-types';
 import type { AnimationClip } from '../types';
 import { buildParametricSprite } from './main-canvas';
-import { subToPx, projectToView } from '../unified-types';
+import { subToPx, projectToView, frameYAxisWorld, directionTrig } from '../unified-types';
 import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { modifiersToBlueprint } from '../blueprint/migrate';
@@ -599,7 +599,8 @@ export function convertCharacterToRuntimePackage(
   // 真进包，见函数末尾 globalGraph。） ----
   {
     const ex = opts?.projectExtras;
-    if (ex?.perspectiveForeshorten) warnings.push('透视缩短未进运行时包（v1）：播放时按平面角绘制');
+    // 透视缩短（缺口 7）：因子已随轨道采样进包（fore 通道），播放器
+    // 自带开关（默认关，与编辑器缺省一致），此处不再点名缺失。
   }
   // 子图库：调用方传全库快照；给了统一条目库时按版本展开成
   // id@版本 条目（钉版本纪律），否则走平铺模板（同 SpriteTable
@@ -1022,11 +1023,13 @@ export function convertCharacterToRuntimePackage(
       for (const node of Object.values(character.nodes)) {
         if (!node.tracks) continue;
         const baseOf: Record<string, number> = {
-          tilt: node.transform.tilt ?? 0, stretch: node.transform.stretch,
+          stretch: node.transform.stretch,
           scaleX: node.transform.scaleX ?? 1, variantIndex: node.transform.variantIndex,
           zIndex: node.zIndex ?? 0,
         };
-        const bad = (['tilt', 'stretch', 'scaleX', 'variantIndex', 'zIndex'] as const).filter((ch) => {
+        // tilt 不再列缺失：其位姿效应经世界变换采样进 a/x/y，其精灵
+        // 缩短效应经 fore 通道进包（缺口 7）。
+        const bad = (['stretch', 'scaleX', 'variantIndex', 'zIndex'] as const).filter((ch) => {
           const kfs = node.tracks[ch]?.keyframes ?? [];
           return kfs.length > 0 && kfs.some((kf) => Math.abs(kf.value - baseOf[ch]) > 1e-9);
         });
@@ -1047,7 +1050,7 @@ export function convertCharacterToRuntimePackage(
       // 与部件摆放同一投影（projectToView，朝向取当帧根节点 variantIndex），
       // 运行时系（角度弧度、y 取反、px）
       const sampleWindow = (startF: number, D: number) => {
-        const samples = new Map<string, Array<{ a: number; x: number; y: number }>>();
+        const samples = new Map<string, Array<{ a: number; x: number; y: number; fore: number }>>();
         for (let f = startF; f <= startF + D; f++) {
           const wf = computeWorldTransforms(stripped, f, 512, 512, projectFpsTop);
           const dirF = (character.rootNodeId ? wf.get(character.rootNodeId)?.variantIndex : undefined) ?? rootDir;
@@ -1057,14 +1060,19 @@ export function convertCharacterToRuntimePackage(
             let arr = samples.get(node.id);
             if (!arr) { arr = []; samples.set(node.id, arr); }
             const proj = projectToView(w.worldX, w.worldY, w.worldZ, dirF as DirectionIndex);
-            arr.push({ a: -w.worldAngle * Math.PI / 180, x: subToPx(proj.canvasX), y: -subToPx(proj.canvasY) });
+            // 透视缩短因子（缺口 7）：与主画布 generateRenderPlan 同式——
+            // 节点 +Y 轴（骨骼主轴）世界向量的视平面投影长度比，钳制 ≤1。
+            const yw = frameYAxisWorld(w.worldFrame, (w.variantIndex ?? dirF) as DirectionIndex);
+            const trigF = directionTrig(dirF as DirectionIndex);
+            const fore = Math.min(1, Math.hypot(yw.x * trigF.cos + yw.z * trigF.sin, yw.y));
+            arr.push({ a: -w.worldAngle * Math.PI / 180, x: subToPx(proj.canvasX), y: -subToPx(proj.canvasY), fore });
           }
         }
         return samples;
       };
       // 样本 → 曲线图节点（增量相对窗首样本）；warnNodes 时逐节点报无贡献
       const curvesForWindow = (
-        samples: Map<string, Array<{ a: number; x: number; y: number }>>,
+        samples: Map<string, Array<{ a: number; x: number; y: number; fore: number }>>,
         D: number,
         prefixBase: string,
         warnNodes: boolean,
@@ -1081,7 +1089,7 @@ export function convertCharacterToRuntimePackage(
             continue;
           }
           const base = arr[0];
-          const mkPts = (pick: (s: { a: number; x: number; y: number }) => number) =>
+          const mkPts = (pick: (s: { a: number; x: number; y: number; fore: number }) => number) =>
             arr.map((s, f) => [f / D, pick(s) - pick(base)] as [number, number]);
           const chans: Array<{ pts: [number, number][]; suffix: string; field: 'angleFrom' | 'dxFrom' | 'dyFrom'; eps: number }> = [
             { pts: mkPts((s) => s.a), suffix: 'ang', field: 'angleFrom', eps: 0.01 },
@@ -1099,7 +1107,14 @@ export function convertCharacterToRuntimePackage(
             nodes.push({ id, type: 'curve', points: simplify(ch.pts, ch.eps) });
             tr[ch.field] = { n: id };
           }
-          if (tr.angleFrom || tr.dxFrom || tr.dyFrom) {
+          // fore 通道：绝对因子点（非相对增量）；全程 ≈1 时不发（无倾斜）
+          const forePts = arr.map((sm, f) => [f / D, sm.fore] as [number, number]);
+          if (forePts.some(([, v]) => Math.abs(v - 1) > 1e-3)) {
+            const id = `${prefix}fre`;
+            nodes.push({ id, type: 'curve', points: simplify(forePts, 0.01) });
+            tr.foreFrom = { n: id };
+          }
+          if (tr.angleFrom || tr.dxFrom || tr.dyFrom || tr.foreFrom) {
             nodes.push(tr);
             mask.push(slot);
             graphNodes.push(...nodes);

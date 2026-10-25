@@ -531,6 +531,7 @@ function composePerformance(pose, perf, bpOut, w) {
     if (rec.dx !== undefined) m.dx = (cur.dx || 0) + rec.dx * w;
     if (rec.scaleX !== undefined) m.sx = (cur.sx || 1) * (1 + (rec.scaleX - 1) * w);
     if (rec.scaleY !== undefined) m.sy = (cur.sy || 1) * (1 + (rec.scaleY - 1) * w);
+    if (rec.fore !== undefined) m.fore = (cur.fore || 1) * (1 + (rec.fore - 1) * w);
     next[key] = m;
   }
   return next;
@@ -1677,6 +1678,7 @@ function pushParticleQuad(verts, x, y, size, rgb, alpha) {
 }
 let elapsed = 0;
 let autoWalk = false;
+let foreOn = false; // 透视缩短开关（缺口 7）：默认关，与编辑器缺省一致
 let autoDir = 1;
 const behaviorState = new Map();
 let prevBehaviorOutputs = new Map();
@@ -1922,6 +1924,10 @@ function mkRow(label) {
   sp.textContent = '停表演';
   sp.onclick = () => stopAllPerfs();
   row3.appendChild(sp);
+  const fb = document.createElement('button');
+  fb.textContent = '透视缩短';
+  fb.onclick = () => { foreOn = !foreOn; fb.classList.toggle('on', foreOn); };
+  row3.appendChild(fb);
 }
 function refreshBar() {
   barState.dirs.forEach((b, i) => b.classList.toggle('on', i === char.variant));
@@ -2260,6 +2266,9 @@ function frame(now) {
     }
     if (paScale !== 1) { dsx *= paScale; dsy *= paScale; hasDeform = true; }
     if (an.sx !== 1 || an.sy !== 1) { dsx *= an.sx; dsy *= an.sy; hasDeform = true; }
+    // 透视缩短（缺口 7）：沿骨骼方向（局部 Y）乘烘焙因子，与编辑器
+    // effStretch 同落点；开关关时因子不生效
+    if (foreOn && an.fore !== undefined && an.fore !== 1) { dsy *= an.fore; hasDeform = true; }
     const rotA = an.a + spinRad;
     // 发光段：前 3 个启用实例各供一组参数（场在图集 RGB 三通道，导出时
     // 按选区预计算；第 4 个起在导出端已按各自所选组并入对应通道）
