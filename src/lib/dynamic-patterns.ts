@@ -19,6 +19,52 @@ export interface DynamicPatternParams {
   stretchX: number;   // 脉冲峰值时的 X 缩放（>1 拉宽）
   deformHz: number;   // 频率（次/秒）
   deformPhase: number; // 相位（周期数 0..1）
+  // 置换段（D2，形变段的逐像素子段）：按值噪声场沿方向逐像素
+  // 偏移采样——热浪/水面波动/火焰摇曳类。纯函数：相位由
+  // frac(t×流速 + 相位) 给出，场在流动方向上以 K 个噪声格为
+  // 周期（相位 1 ≡ 相位 0 逐像素恒等）。多实例同挂时只取第一
+  // 个启用置换（编辑器与导出运行时同一口径）。
+  displaceEnabled: boolean;
+  displaceAmp: number;   // 置换幅度（px，沿方向峰值；垂直分量为其半）
+  displaceFreq: number;  // 噪声频率（格/px）
+  displaceDeg: number;   // 置换方向角（度，屏幕口径：0=东 90=南 180=西 270=北）
+  displaceSpeed: number; // 场流动速度（圈/秒，0 = 冻结的静态扭曲）
+  displacePhase: number; // 相位（周期数 0..1）
+  // 自转段（D3，形变段子段）：精灵绕自身枢轴原地自转（不沿
+  // 层级传播、不挪部件中心）——法阵/传送门/护盾类。纯函数：
+  // 角 = 速度 × t + 相位；多实例的角度在消费端求和。
+  spinEnabled: boolean;
+  spinSpeedDeg: number;  // 角速度（度/秒，可负 = 反向）
+  spinPhaseDeg: number;  // 相位偏置（度）
+  // 残影段（D5）：过去位姿的残影。两端都不破纯函数口径——
+  // 编辑器在渲染计划里按过去帧的世界位姿差生成 ghost 增量
+  // （与追随段同 machinery，位姿取剥离蓝图的轨道位姿，故
+  // 蓝图驱动的运动不入残影）；导出运行时用部件 el 快照环
+  // （与表演残影同机制，有界状态：个数 × 间隔，换装/跳时清环）。
+  // 多实例只取第一个启用残影。
+  trailEnabled: boolean;
+  trailCount: number;       // 残影个数 1..6
+  trailIntervalSec: number; // 残影间隔（秒）
+  trailOpacity: number;     // 最近残影不透明度（编辑器口径；运行时为残影色剪影）
+  // 弧线段（D4 一期，PROPOSAL spikes/arc-gen）：中点置换的折线
+  // 几何（闪电弧）。生成是时间的纯函数（形状按 flicker 步进
+  // 量化、种子确定性）；点列以部件插头为原点、部件本地像素
+  // 坐标（x 右、y 下，方向角 0=东顺时针 90=南）。同部件多弧线
+  // 全部生效（与粒子段同口径，可叠多条）。
+  arcEnabled: boolean;
+  arcLengthPx: number;  // 主弧长（px）
+  arcDirDeg: number;    // 主弧方向（度）
+  arcDisplace: number;  // 中点置换幅度（占段长比，0 = 直线）
+  arcBranches: number;  // 分叉数 0..3
+  arcWidthPx: number;   // 根部线宽（px，向尖端收细）
+  arcFlicker: number;   // 形状步进（步/秒，0 = 静止形状）
+  arcSeed: number;      // 形状种子
+  arcColor: string;     // 弧线颜色
+  // 二期（D4）：生成模式 / 生长 / 双锚点 / 细节数
+  arcMode: 'arc' | 'vine' | 'stars'; // 弧线（闪电）/ 藤蔓 / 星座连线
+  arcGrowHz: number;    // 生长循环（次/秒，0 = 恒满长）；周期内先生长后保持
+  arcTarget: string;    // 双锚点：终点锚定的目标部件槽位键（仅弧线模式；空 = 方向+弧长）
+  arcDetail: number;    // 细节数：藤蔓叶数 / 星座星数（0 = 按模式缺省）
   // 追随段（形变段的跨部件驱动）：本部件渲染时叠加「源部件位姿的
   // 滞后差」——源部件当前位姿与 delay 秒前位姿之差 × amount，
   // 本部件就像被源部件拖着、慢半拍跟上（垂饰/披风/头发的次级运动）。
@@ -129,6 +175,14 @@ export interface ResolvedDynamicPattern {
 export function defaultDynamicParams(): DynamicPatternParams {
   return {
     deformEnabled: false, squashY: 0.85, stretchX: 1.1, deformHz: 1, deformPhase: 0,
+    displaceEnabled: false, displaceAmp: 2.5, displaceFreq: 0.12, displaceDeg: 270,
+    displaceSpeed: 0.25, displacePhase: 0,
+    spinEnabled: false, spinSpeedDeg: 45, spinPhaseDeg: 0,
+    trailEnabled: false, trailCount: 3, trailIntervalSec: 0.06, trailOpacity: 0.35,
+    arcEnabled: false, arcLengthPx: 26, arcDirDeg: 0, arcDisplace: 0.35,
+    arcBranches: 1, arcWidthPx: 1.2, arcFlicker: 10, arcSeed: 7,
+    arcColor: '#bfe3ff',
+    arcMode: 'arc', arcGrowHz: 0, arcTarget: '', arcDetail: 0,
     followEnabled: false, followSource: '', followDelaySec: 0.12, followAmount: 0.7, followRotate: true,
     emitEnabled: true, source: 'contour', rate: 12, linkToDeform: 0, speed: 6,
     directionDeg: 270, spreadDeg: 60, layer: 'both', frontRatio: 0.35,
@@ -164,6 +218,53 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
   out.followAmount = Number.isFinite(out.followAmount)
     ? Math.max(0, Math.min(1, out.followAmount)) : 0.7;
   out.followRotate = out.followRotate !== false;
+  out.displaceEnabled = out.displaceEnabled === true;
+  out.displaceAmp = Number.isFinite(out.displaceAmp)
+    ? Math.max(0, Math.min(8, out.displaceAmp)) : 2.5;
+  out.displaceFreq = Number.isFinite(out.displaceFreq)
+    ? Math.max(0.02, Math.min(0.6, out.displaceFreq)) : 0.12;
+  out.displaceDeg = Number.isFinite(out.displaceDeg)
+    ? ((out.displaceDeg % 360) + 360) % 360 : 270;
+  out.displaceSpeed = Number.isFinite(out.displaceSpeed)
+    ? Math.max(0, Math.min(2, out.displaceSpeed)) : 0.25;
+  out.displacePhase = Number.isFinite(out.displacePhase)
+    ? ((out.displacePhase % 1) + 1) % 1 : 0;
+  out.spinEnabled = out.spinEnabled === true;
+  out.spinSpeedDeg = Number.isFinite(out.spinSpeedDeg)
+    ? Math.max(-360, Math.min(360, out.spinSpeedDeg)) : 45;
+  out.spinPhaseDeg = Number.isFinite(out.spinPhaseDeg)
+    ? ((out.spinPhaseDeg % 360) + 360) % 360 : 0;
+  out.trailEnabled = out.trailEnabled === true;
+  out.trailCount = Number.isFinite(out.trailCount)
+    ? Math.max(1, Math.min(6, Math.round(out.trailCount))) : 3;
+  out.trailIntervalSec = Number.isFinite(out.trailIntervalSec)
+    ? Math.max(0.02, Math.min(0.3, out.trailIntervalSec)) : 0.06;
+  out.trailOpacity = Number.isFinite(out.trailOpacity)
+    ? Math.max(0.05, Math.min(0.8, out.trailOpacity)) : 0.35;
+  out.arcEnabled = out.arcEnabled === true;
+  out.arcLengthPx = Number.isFinite(out.arcLengthPx)
+    ? Math.max(4, Math.min(96, out.arcLengthPx)) : 26;
+  out.arcDirDeg = Number.isFinite(out.arcDirDeg)
+    ? ((out.arcDirDeg % 360) + 360) % 360 : 0;
+  out.arcDisplace = Number.isFinite(out.arcDisplace)
+    ? Math.max(0, Math.min(0.8, out.arcDisplace)) : 0.35;
+  out.arcBranches = Number.isFinite(out.arcBranches)
+    ? Math.max(0, Math.min(3, Math.round(out.arcBranches))) : 1;
+  out.arcWidthPx = Number.isFinite(out.arcWidthPx)
+    ? Math.max(0.4, Math.min(4, out.arcWidthPx)) : 1.2;
+  out.arcFlicker = Number.isFinite(out.arcFlicker)
+    ? Math.max(0, Math.min(30, out.arcFlicker)) : 10;
+  out.arcSeed = Number.isFinite(out.arcSeed)
+    ? Math.max(1, Math.min(9999, Math.round(out.arcSeed))) : 7;
+  if (typeof out.arcColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(out.arcColor)) {
+    out.arcColor = '#bfe3ff';
+  }
+  if (out.arcMode !== 'vine' && out.arcMode !== 'stars') out.arcMode = 'arc';
+  out.arcGrowHz = Number.isFinite(out.arcGrowHz)
+    ? Math.max(0, Math.min(2, out.arcGrowHz)) : 0;
+  if (typeof out.arcTarget !== 'string') out.arcTarget = '';
+  out.arcDetail = Number.isFinite(out.arcDetail)
+    ? Math.max(0, Math.min(12, Math.round(out.arcDetail))) : 0;
   return out;
 }
 
@@ -256,6 +357,281 @@ export function dynamicDeformAt(
     sy: 1 + (params.squashY - 1) * p,
     amount: p,
   };
+}
+
+// ---- 置换段（D2）：值噪声置换场。运行时孪生 = DYNAMIC_SRC 的
+// dynValueNoiseU / dynDisplaceSrcMap（探针 R 组逐值对齐）。 ----
+
+/** 与 dynHash01 / dynamic-pattern-sim 的 hash01 同一 FNV 混合 */
+function displaceHash01(...nums: number[]): number {
+  let h = 2166136261;
+  for (const n of nums) {
+    h ^= (n | 0) + 0x9e3779b9;
+    h = Math.imul(h ^ (h >>> 15), 16777619);
+  }
+  h ^= h >>> 13;
+  h = Math.imul(h, 16777619);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
+/** u 轴周期值噪声：格点哈希的 u 索引按 period 取模（跨界插值
+ * 回绕），故采样坐标 u 平移整数个 period 时场逐点恒等。 */
+export function displaceNoiseU(u: number, v: number, period: number, seed: number): number {
+  const xi = Math.floor(u), yi = Math.floor(v);
+  const xf = u - xi, yf = v - yi;
+  const su = xf * xf * (3 - 2 * xf), sv = yf * yf * (3 - 2 * yf);
+  const x0 = ((xi % period) + period) % period, x1 = (x0 + 1) % period;
+  const a = displaceHash01(x0, yi, seed), b = displaceHash01(x1, yi, seed);
+  const c = displaceHash01(x0, yi + 1, seed), d = displaceHash01(x1, yi + 1, seed);
+  return a + (b - a) * su + (c - a) * sv + (a - b - c + d) * su * sv;
+}
+
+/** 置换场的流动周期（噪声格数）：相位每圈沿方向平移此格数 */
+export const DISPLACE_PERIOD_CELLS = 8;
+
+/**
+ * 置换源图（图像空间：x 右、y 下，行优先）：dst 像素 i 的值 =
+ * src[srcMap[i]]，-1 = 空。phase ∈ 0..1（1 ≡ 0，周期闭合）。
+ * 后向采样 + 就近取整（像素风不插值）；位移 = 方向分量
+ * （噪声1，峰值 amp）+ 垂直分量（噪声2，峰值 amp/2）。
+ */
+export function displaceSrcMap(
+  params: DynamicPatternParams,
+  w: number,
+  h: number,
+  phase: number,
+): Int32Array {
+  const out = new Int32Array(w * h);
+  const amp = params.displaceEnabled ? Math.max(0, params.displaceAmp || 0) : 0;
+  if (amp <= 0) {
+    for (let i = 0; i < w * h; i++) out[i] = i;
+    return out;
+  }
+  const f = Math.max(0.005, params.displaceFreq || 0.12);
+  const rad = ((params.displaceDeg || 0) * Math.PI) / 180;
+  const dirX = Math.cos(rad), dirY = Math.sin(rad);
+  const K = DISPLACE_PERIOD_CELLS;
+  const ph = ((phase % 1) + 1) % 1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const u = x * dirX + y * dirY;   // 沿方向坐标（px）
+      const v = -x * dirY + y * dirX;  // 垂直坐标（px）
+      const n1 = displaceNoiseU(u * f + ph * K, v * f, K, 7717);
+      // 周期纪律：两路噪声的相位偏移都必须是周期 K 的整数倍，
+      // 否则相位 1 ≠ 相位 0（n2 走 2 倍速 = 偏移 2K，仍恒等）
+      const n2 = displaceNoiseU(u * f * 1.7 + ph * K * 2, v * f * 1.7 + 13.31, K, 31337);
+      const a = (n1 - 0.5) * 2 * amp;
+      const b = (n2 - 0.5) * 2 * amp * 0.5;
+      const dx = dirX * a - dirY * b;
+      const dy = dirY * a + dirX * b;
+      const sx = Math.round(x - dx), sy = Math.round(y - dy);
+      out[y * w + x] = sx < 0 || sy < 0 || sx >= w || sy >= h ? -1 : sy * w + sx;
+    }
+  }
+  return out;
+}
+
+/** 把置换场作用到像素格（编辑器主画布 / 定格图用）：返回新格 */
+export function displacePixelGrid<T>(
+  grid: readonly (readonly T[])[],
+  params: DynamicPatternParams,
+  phase: number,
+): T[][] {
+  const h = grid.length;
+  const w = h > 0 ? grid[0]!.length : 0;
+  const map = displaceSrcMap(params, w, h, phase);
+  const out: T[][] = new Array(h);
+  for (let y = 0; y < h; y++) {
+    const row = new Array<T>(w);
+    for (let x = 0; x < w; x++) {
+      const s = map[y * w + x]!;
+      row[x] = s < 0 ? (null as T) : grid[Math.floor(s / w)]![s % w]!;
+    }
+    out[y] = row;
+  }
+  return out;
+}
+
+/** t 秒 → 置换相位（圈）：frac(t × 流速 + 相位偏置） */
+export function displacePhaseAt(params: DynamicPatternParams, tSec: number): number {
+  const raw = tSec * (params.displaceSpeed || 0) + (params.displacePhase || 0);
+  return ((raw % 1) + 1) % 1;
+}
+
+/** 自转段在 t 秒的角度（度，未取模——消费端多实例求和后自行
+ * 取模/转弧度）。运行时孪生 = DYNAMIC_SRC 的 dynSpinRadAt。 */
+export function spinAngleDegAt(params: DynamicPatternParams, tSec: number): number {
+  if (!params.spinEnabled) return 0;
+  return (params.spinSpeedDeg || 0) * tSec + (params.spinPhaseDeg || 0);
+}
+
+// ---- 弧线段（D4 一期）：中点置换折线生成。运行时孪生 =
+// DYNAMIC_SRC 的 dynArcPoints（探针 AD 组逐点对拍）。 ----
+
+export interface ArcPoint { x: number; y: number; w: number }
+export interface ArcShape { main: ArcPoint[]; branches: ArcPoint[][]; dots: ArcPoint[]; alpha: number }
+
+/** 生长系数 0..1：growHz ≤ 0 恒满长；否则每个周期内前 70%
+ * 时间平滑长满、其余保持（到周期尾跳回 0——藤蔓/弧线的循环
+ * 生长以跳变收尾，与跳动步进口径一致）。 */
+export function arcGrowFrac(p: DynamicPatternParams, t: number): number {
+  if (!(p.arcGrowHz > 0)) return 1;
+  const ph = ((Math.max(0, t) * p.arcGrowHz) % 1 + 1) % 1;
+  const f = Math.min(1, ph / 0.7);
+  return f * f * (3 - 2 * f);
+}
+
+/** 按弧长把点列截断到 frac（端点线性插值，宽度同步插值） */
+function arcClipToFrac(pts: ArcPoint[], frac: number): ArcPoint[] {
+  if (frac >= 1 || pts.length < 2) return pts;
+  if (frac <= 0) return pts.slice(0, 1);
+  let total = 0;
+  for (let i = 0; i + 1 < pts.length; i++) total += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+  let want = total * frac;
+  const out: ArcPoint[] = [pts[0]];
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const seg = Math.hypot(b.x - a.x, b.y - a.y);
+    if (want >= seg) { out.push(b); want -= seg; continue; }
+    const f = seg > 0 ? want / seg : 0;
+    out.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, w: a.w + (b.w - a.w) * f });
+    break;
+  }
+  return out;
+}
+
+/** 一条直线的中点置换细分：每级在每段中点沿法线偏移
+ * (哈希 − 0.5) × 段长 × disp × 衰减；哈希计数 k 贯穿主弧与
+ * 分叉，保证同一 (种子, 步进) 下全图逐点确定。 */
+function arcDisplaceLine(
+  x0: number, y0: number, x1: number, y1: number,
+  disp: number, levels: number, seed: number, step: number, kStart: number,
+): { pts: { x: number; y: number }[]; k: number } {
+  let pts = [{ x: x0, y: y0 }, { x: x1, y: y1 }];
+  let k = kStart;
+  for (let lv = 0; lv < levels; lv++) {
+    const next: { x: number; y: number }[] = [pts[0]];
+    const decay = Math.pow(0.72, lv);
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const segLen = Math.hypot(dx, dy) || 1;
+      const off = (displaceHash01(seed, step, k++) - 0.5) * segLen * disp * decay;
+      next.push({
+        x: (a.x + b.x) / 2 + (-dy / segLen) * off,
+        y: (a.y + b.y) / 2 + (dx / segLen) * off,
+      });
+      next.push(b);
+    }
+    pts = next;
+  }
+  return { pts, k };
+}
+
+/** t 时刻的弧线形状（插头原点、部件本地 px）：主弧 + 分叉 +
+ * 光点 + 本步的不透明度（闪烁）。flicker = 0 时形状静止、
+ * alpha 恒定。endOverride（双锚点）由消费端按目标部件位姿
+ * 算好传入（本地坐标终点），仅弧线模式用；生长系数对三种
+ * 模式都生效（主线按弧长截断、分叉/光点按出现位置过滤）。 */
+export function arcPointsAt(
+  p: DynamicPatternParams, t: number, endOverride?: { x: number; y: number },
+): ArcShape {
+  const step = p.arcFlicker > 0 ? Math.floor(Math.max(0, t) * p.arcFlicker) : 0;
+  const dir = (p.arcDirDeg * Math.PI) / 180;
+  const grow = arcGrowFrac(p, t);
+  const alpha = p.arcFlicker > 0 ? 0.55 + 0.45 * displaceHash01(p.arcSeed, step, 999) : 0.9;
+
+  if (p.arcMode === 'vine') {
+    // 藤蔓：等步长链 + 逐节角度漂移（哈希决定弯向，无跳动量化
+    // ——藤蔓不抖）；叶子 = 主链旁的光点（分叉让位给叶）
+    const segLen = 6;
+    const segs = Math.max(2, Math.round(p.arcLengthPx / segLen));
+    const pts: ArcPoint[] = [{ x: 0, y: 0, w: p.arcWidthPx }];
+    let cx = 0, cy = 0, ang = dir;
+    for (let i = 1; i <= segs; i++) {
+      ang += (displaceHash01(p.arcSeed, 0, 500 + i) - 0.5) * 0.55;
+      cx += Math.cos(ang) * segLen; cy += Math.sin(ang) * segLen;
+      pts.push({ x: cx, y: cy, w: Math.max(0.15, p.arcWidthPx * (1 - 0.6 * (i / segs))) });
+    }
+    const leaves = p.arcDetail > 0 ? p.arcDetail : 5;
+    const dots: ArcPoint[] = [];
+    for (let j = 0; j < leaves; j++) {
+      const s = 0.15 + 0.8 * ((j + 0.5) / leaves);
+      const fi = s * segs;
+      const i0 = Math.min(segs - 1, Math.floor(fi));
+      const fr = fi - i0;
+      const qx = pts[i0].x + (pts[i0 + 1].x - pts[i0].x) * fr;
+      const qy = pts[i0].y + (pts[i0 + 1].y - pts[i0].y) * fr;
+      const side = displaceHash01(p.arcSeed, 0, 700 + j) < 0.5 ? -1 : 1;
+      const off = 2 + 2.5 * displaceHash01(p.arcSeed, 0, 720 + j);
+      const nx = -(pts[i0 + 1].y - pts[i0].y), ny = pts[i0 + 1].x - pts[i0].x;
+      const nl = Math.hypot(nx, ny) || 1;
+      if (s <= grow) dots.push({ x: qx + (nx / nl) * off * side, y: qy + (ny / nl) * off * side, w: 1.5 });
+    }
+    return { main: arcClipToFrac(pts, grow), branches: [], dots, alpha };
+  }
+
+  if (p.arcMode === 'stars') {
+    // 星座：盘内哈希散点 + 贪心最近邻串成连线；星点即光点
+    const count = p.arcDetail > 0 ? p.arcDetail : 6;
+    const raw: { x: number; y: number; r: number }[] = [];
+    for (let i = 0; i < count; i++) {
+      const rr = p.arcLengthPx * Math.sqrt(displaceHash01(p.arcSeed, 0, 300 + i));
+      const th = displaceHash01(p.arcSeed, 0, 340 + i) * Math.PI * 2;
+      raw.push({ x: Math.cos(th) * rr, y: Math.sin(th) * rr, r: rr });
+    }
+    const order: number[] = [0];
+    const seen = new Set([0]);
+    while (order.length < count) {
+      const last = raw[order[order.length - 1]];
+      let best = -1, bestD = Infinity;
+      for (let i = 0; i < count; i++) {
+        if (seen.has(i)) continue;
+        const d = Math.hypot(raw[i].x - last.x, raw[i].y - last.y);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      order.push(best); seen.add(best);
+    }
+    const mainFull: ArcPoint[] = order.map((i) => ({ x: raw[i].x, y: raw[i].y, w: Math.max(0.3, p.arcWidthPx * 0.7) }));
+    const dots: ArcPoint[] = order
+      .filter((i) => raw[i].r <= p.arcLengthPx * grow + 1e-6)
+      .map((i) => ({ x: raw[i].x, y: raw[i].y, w: 1.3 + 1.1 * displaceHash01(p.arcSeed, step, 380 + i) }));
+    return { main: arcClipToFrac(mainFull, grow), branches: [], dots, alpha };
+  }
+
+  // 弧线（闪电）：中点置换 + 分叉（双锚点时终点由消费端给）
+  const ex = endOverride ? endOverride.x : Math.cos(dir) * p.arcLengthPx;
+  const ey = endOverride ? endOverride.y : Math.sin(dir) * p.arcLengthPx;
+  const mainLen = Math.hypot(ex, ey);
+  const disp = p.arcDisplace * 2;
+  const main0 = arcDisplaceLine(0, 0, ex, ey, disp, 4, p.arcSeed, step, 0);
+  const n = main0.pts.length;
+  const mainFull: ArcPoint[] = main0.pts.map((q, i) => ({
+    x: q.x, y: q.y, w: Math.max(0.15, p.arcWidthPx * (1 - 0.72 * (i / (n - 1)))),
+  }));
+  const branches: ArcPoint[][] = [];
+  let k = main0.k;
+  for (let b = 0; b < p.arcBranches; b++) {
+    const s = 0.25 + 0.55 * displaceHash01(p.arcSeed, step, k++);
+    if (s > grow) { k += 3; continue; }
+    const fi = s * (n - 1);
+    const i0 = Math.min(n - 2, Math.floor(fi));
+    const fr = fi - i0;
+    const bx = main0.pts[i0].x + (main0.pts[i0 + 1].x - main0.pts[i0].x) * fr;
+    const by = main0.pts[i0].y + (main0.pts[i0 + 1].y - main0.pts[i0].y) * fr;
+    const side = displaceHash01(p.arcSeed, step, k++) < 0.5 ? -1 : 1;
+    const bang = dir + (side * (24 + 22 * displaceHash01(p.arcSeed, step, k++)) * Math.PI) / 180;
+    const blen = mainLen * (1 - s) * (0.45 + 0.3 * displaceHash01(p.arcSeed, step, k++));
+    const bp = arcDisplaceLine(bx, by, bx + Math.cos(bang) * blen, by + Math.sin(bang) * blen, disp, 3, p.arcSeed, step, k);
+    k = bp.k;
+    const m = bp.pts.length;
+    const branchFull = bp.pts.map((q, i) => ({
+      x: q.x, y: q.y, w: Math.max(0.1, p.arcWidthPx * 0.62 * (1 - 0.85 * (i / (m - 1)))),
+    }));
+    branches.push(arcClipToFrac(branchFull, Math.min(1, (grow - s) / Math.max(0.01, 1 - s))));
+  }
+  return { main: arcClipToFrac(mainFull, grow), branches, dots: [], alpha };
 }
 
 // ---- 发光段：呼吸脉冲 + 选区掩码 + 带柔光圈的权重场 ----
@@ -624,7 +1000,7 @@ export function deleteUserDynamicPattern(name: string): void {
 export interface DynamicParamDef {
   key: keyof DynamicPatternParams;
   label: string;
-  section: '形变' | '发射' | '粒子' | '发光';
+  section: '形变' | '发射' | '粒子' | '发光' | '弧线';
   min: number;
   max: number;
   step: number;
@@ -635,6 +1011,25 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'stretchX', label: '横向拉伸（峰值）', section: '形变', min: 0.9, max: 1.5, step: 0.01 },
   { key: 'deformHz', label: '形变频率（次/秒）', section: '形变', min: 0, max: 4, step: 0.05 },
   { key: 'deformPhase', label: '形变相位', section: '形变', min: 0, max: 1, step: 0.01 },
+  { key: 'displaceAmp', label: '置换幅度（px）', section: '形变', min: 0, max: 8, step: 0.25 },
+  { key: 'displaceFreq', label: '置换频率（格/px）', section: '形变', min: 0.02, max: 0.6, step: 0.01 },
+  { key: 'displaceDeg', label: '置换方向（度，0=东 90=南 180=西 270=北）', section: '形变', min: 0, max: 359, step: 5 },
+  { key: 'displaceSpeed', label: '置换流速（圈/秒）', section: '形变', min: 0, max: 2, step: 0.05 },
+  { key: 'displacePhase', label: '置换相位', section: '形变', min: 0, max: 1, step: 0.01 },
+  { key: 'spinSpeedDeg', label: '自转速度（度/秒，可负）', section: '形变', min: -360, max: 360, step: 5 },
+  { key: 'spinPhaseDeg', label: '自转相位（度）', section: '形变', min: 0, max: 359, step: 5 },
+  { key: 'trailCount', label: '残影个数', section: '形变', min: 1, max: 6, step: 1 },
+  { key: 'trailIntervalSec', label: '残影间隔（秒）', section: '形变', min: 0.02, max: 0.3, step: 0.01 },
+  { key: 'trailOpacity', label: '残影不透明度', section: '形变', min: 0.05, max: 0.8, step: 0.05 },
+  { key: 'arcLengthPx', label: '弧长（像素）', section: '弧线', min: 4, max: 96, step: 1 },
+  { key: 'arcDirDeg', label: '弧线方向（度）', section: '弧线', min: 0, max: 359, step: 5 },
+  { key: 'arcDisplace', label: '曲折幅度', section: '弧线', min: 0, max: 0.8, step: 0.05 },
+  { key: 'arcBranches', label: '分叉数', section: '弧线', min: 0, max: 3, step: 1 },
+  { key: 'arcWidthPx', label: '线宽（像素）', section: '弧线', min: 0.4, max: 4, step: 0.2 },
+  { key: 'arcFlicker', label: '跳动（步/秒，0=静止）', section: '弧线', min: 0, max: 30, step: 1 },
+  { key: 'arcSeed', label: '形状种子', section: '弧线', min: 1, max: 9999, step: 1 },
+  { key: 'arcGrowHz', label: '生长循环（次/秒，0=恒满长）', section: '弧线', min: 0, max: 2, step: 0.05 },
+  { key: 'arcDetail', label: '细节数（藤蔓叶/星座星，0=缺省）', section: '弧线', min: 0, max: 12, step: 1 },
   { key: 'followDelaySec', label: '追随延迟（秒）', section: '形变', min: 0, max: 1, step: 0.01 },
   { key: 'followAmount', label: '追随强度', section: '形变', min: 0, max: 1, step: 0.05 },
   { key: 'rate', label: '发射率（个/秒）', section: '发射', min: 0, max: 60, step: 1 },

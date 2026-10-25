@@ -35,8 +35,12 @@ const w = (from: string, slot: number, extra?: Partial<SurfaceGraphWrite>): Surf
 const P = (key: string, label: string, min: number, max: number, step: number, def: number): PatternParamDef =>
   ({ key, label, min, max, step, def });
 
-function graph(nodes: N[], writes: SurfaceGraphWrite[]): SurfaceGraph {
-  return { version: 1, nodes, writes, params: {} };
+function graph(
+  nodes: N[],
+  writes: SurfaceGraphWrite[],
+  animation?: { cycleSec: number; frames: number },
+): SurfaceGraph {
+  return { version: 1, nodes, writes, params: {}, ...(animation ? { animation } : {}) };
 }
 
 /** 常用底：形状内全覆盖写出（作 writes[0]） */
@@ -216,6 +220,9 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
   },
   {
     id: 'wood', name: '木纹', cluster: '自然',
+    // outputs.main = 扭曲后的纹线场（被 ref 组装时用，如木地板；
+    // 缺省 main 会落到首条写出的 in 场 = 常量，组装即退化）
+    outputs: { main: 'w1' },
     params: [
       P('grain', '纹距', 2.5, 6, 0.5, 3.5), P('warp', '扭曲', 0, 6, 0.5, 3),
       P('knots', '结眼密度', 0, 1, 0.1, 0.4),
@@ -337,7 +344,8 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       n('nz', 'noise', undefined, { f: 0.1, seed: 17 }),
       n('wv', 'stripes', undefined, { axis: 'y', f: '$f', duty: 0.4 }),
       n('ww', 'warp', { in: 'wv', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
-      n('crest', 'levelBand', { in: 'ww' }, { level: 0.5, w: 0.5 }),
+      n('crestB', 'levelBand', { in: 'nz' }, { level: 0.62, w: 0.25 }),
+      n('crest', 'mul', { a: 'ww', b: 'crestB' }),
     ], [
       w('in', 2, { at: 0.5 }),
       w('ww', 3, { at: 0.5 }),
@@ -585,7 +593,8 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
     ], [
       w('in', 2, { at: 0.5 }),
       w('rep', 3, { at: 0.1 }),
-      w('lines', 0, { at: 0.45 }),
+      // 线场在像素中心采样下峰值常 <0.45，阈值 0.15 才画得出（审计实测）
+      w('lines', 0, { at: 0.15 }),
     ]),
   },
   {
@@ -648,13 +657,13 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
     graph: graph([
       ...baseIn(2),
       n('lines', 'ref', undefined, { ref: 'part-panel', cw: 24 }),
-      n('riv', 'ref', undefined, { ref: 'part-rivets', cw: 12, gap: 6.2 }),
+      n('riv', 'ref', undefined, { ref: 'part-rivets', cw: 16, gap: 5.2 }),
       n('gr', 'ref', undefined, { ref: 'part-grain', seed: 8 }),
       n('grG', 'mul', { a: 'gr', b: 'grK' }),
       n('grK', 'const', undefined, { v: '$grain' }),
     ], [
       w('in', 2, { at: 0.5 }),
-      w('lines', 0, { at: 0.45 }),
+      w('lines', 0, { at: 0.15 }),
       w('riv', 5, { at: 0.35 }),
       w('grG', 3, { at: 0.1 }),
     ]),
@@ -689,6 +698,134 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       w('dia', 3, { at: 0 }),
       w('dia', 0, { bump: { hi: 4, mid: 3, lo: 2 } }),
       w('gr', 4, { at: 0.12 }),
+    ]),
+  },
+  // 批次 1 · C 组（Pixel Composer 映射）：木地板 = 木纹 + 面板分格组装
+  {
+    id: 'wood-floor', name: '木地板', cluster: '建筑',
+    params: [P('cw', '板宽', 14, 44, 1, 26), P('grain', '纹距', 2.5, 6, 0.5, 3.5)],
+    graph: graph([
+      ...baseIn(3),
+      n('wd', 'ref', undefined, { ref: 'wood', grain: '$grain', warp: 3, knots: 0.25 }),
+      n('pl', 'ref', undefined, { ref: 'part-panel', cw: '$cw' }),
+    ], [
+      w('in', 3, { at: 0.5 }),
+      w('wd', 2, { at: 0.55 }),
+      // 分格线场（levelBand）峰值约 0.2–0.4，阈值须压低才画得出
+      w('pl', 0, { at: 0.15 }),
+    ]),
+  },
+  // 星空：高频噪声阈值成星点（像素尺度下单像素星即正解），两层亮度
+  {
+    id: 'starfield', name: '星空', cluster: '自然',
+    params: [P('density', '星密度', 0.85, 0.98, 0.01, 0.93), P('seed', '种子', 0, 99, 1, 7)],
+    graph: graph([
+      ...baseIn(1),
+      n('nz1', 'noise', undefined, { f: 0.85, seed: '$seed' }),
+      n('st1', 'threshold', { in: 'nz1' }, { at: '$density', soft: 0.02 }),
+      n('nz2', 'noise', undefined, { f: 0.45, seed: 31 }),
+      n('st2', 'threshold', { in: 'nz2' }, { at: 0.965, soft: 0.02 }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('st1', 3, { at: 0.5 }),
+      w('st2', 4, { at: 0.55 }),
+    ]),
+  },
+  // 点阵：均匀圆点阵（ tonal 半调需「以场调制单元尺寸」通道，现有算子无此口）
+  {
+    id: 'dot-matrix', name: '点阵', cluster: '重复',
+    params: [P('cw', '点距', 4, 12, 0.5, 6), P('gap', '点径间隙', 0.2, 2.5, 0.1, 0.9)],
+    graph: graph([
+      ...baseIn(2),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 5 }),
+      n('cs', 'cellShape', undefined, { kind: 'circle', gap: '$gap' }),
+      n('edge', 'levelBand', { in: 'rep' }, { level: 0, w: 0.7 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rep', 3, { at: 0.5 }),
+      w('edge', 0, { at: 0.4 }),
+    ]),
+  },
+  // 点阵半调：圆 SDF × 明暗场（归一深度）后定阈值写出——点径随
+  // 明暗涨缩（亮处大、暗处灭），不需要新算子，靠图组合实现调制
+  {
+    id: 'halftone', name: '点阵半调', cluster: '重复',
+    params: [P('cw', '点距', 4, 12, 0.5, 6), P('depth', '调制深度', 0, 1, 0.05, 0.85)],
+    graph: graph([
+      ...baseIn(2),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 5 }),
+      n('cs', 'cellShape', undefined, { kind: 'circle', gap: 0.4 }),
+      n('hf', 'h'),
+      n('one', 'const', undefined, { v: 1 }),
+      n('invh', 'sub', { a: 'one', b: 'hf' }),
+      n('dk', 'mul', { a: 'invh', b: 'dkK' }),
+      n('dkK', 'const', undefined, { v: '$depth' }),
+      n('bright', 'sub', { a: 'one', b: 'dk' }),
+      n('gain', 'mul', { a: 'rep', b: 'bright' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('gain', 3, { at: 0.3 }),
+      w('gain', 4, { at: 1.1 }),
+    ]),
+  },
+  // 人字纹：repeat 奇偶旋转（(行+列) 奇偶交替转 90°）+ 长条单元
+  {
+    id: 'herringbone', name: '人字纹', cluster: '织物',
+    params: [P('cw', '条长', 8, 20, 1, 12), P('th', '条宽', 1.2, 4.5, 0.2, 2.4)],
+    graph: graph([
+      ...baseIn(2),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 9, prot: 90 }),
+      n('cs', 'cellShape', undefined, { kind: 'slat', dir: 'x', th: '$th', gap: 0.4 }),
+      n('edge', 'levelBand', { in: 'rep' }, { level: 0, w: 0.7 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rep', 3, { at: 0 }),
+      w('edge', 0, { at: 0.15 }),
+    ]),
+  },
+  // 上升烟雾（D6 三期评估的实证件）：相位场驱动扭曲偏移
+  // （采样点随相位上行 = 图案上升），同一噪声场再取一份
+  // 预移两倍升程的拷贝按相位交叉淡化——任意非周期场都能
+  // 无缝循环（相位 1 恰好落回相位 0 的第一层）；纵向带通
+  // 门控出烟团的上下消散。证明「烟」在 D1 动态表面口径内
+  // 可表达，不需要格子法求解器（见 spikes/simulation）。
+  {
+    id: 'smoke-tex', name: '上升烟雾', cluster: '动态',
+    params: [],
+    graph: graph([
+      ...baseIn(2),
+      n('bl', 'blob', undefined, { f: 0.085, seed: 41, contrast: 1.15 }),
+      n('ph', 'phase'),
+      n('c05', 'const', undefined, { v: 0.5 }),
+      n('c0', 'const', undefined, { v: 0 }),
+      n('pre', 'warp', { in: 'bl', fx: 'c05', fy: 'c0' }, { amp: 24 }),
+      n('l1', 'warp', { in: 'bl', fx: 'c05', fy: 'ph' }, { amp: 12 }),
+      n('l2', 'warp', { in: 'pre', fx: 'c05', fy: 'ph' }, { amp: 12 }),
+      n('body', 'mix', { a: 'l1', b: 'l2', t: 'ph' }),
+      n('gv', 'grad', undefined, { axis: 'y' }),
+      n('fall', 'levelBand', { in: 'gv' }, { level: 0.45, w: 0.8 }),
+      n('smk', 'mul', { a: 'body', b: 'fall' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('smk', 3, { at: 0.42 }),
+      w('smk', 4, { at: 0.58 }),
+      w('smk', 5, { at: 0.72 }),
+    ], { cycleSec: 4, frames: 16 }),
+  },
+  // 焦散纹（近似）：双层 Voronoi 边场叠成的网状亮纹，无专用焦散噪声
+  {
+    id: 'caustics', name: '焦散纹（近似）', cluster: '自然',
+    params: [P('scale', '胞大小', 3, 10, 0.5, 5.5), P('seed', '种子', 0, 99, 1, 13)],
+    graph: graph([
+      ...baseIn(1),
+      n('v1', 'voronoi', undefined, { f: '$scale', seed: '$seed', mode: 'edge' }),
+      n('v2', 'voronoi', undefined, { f: 7.5, seed: 47, mode: 'edge' }),
+      n('web', 'max', { a: 'v1', b: 'v2' }),
+      n('glow', 'remap', { in: 'web' }, { lo: 0.35, hi: 1, gamma: 1.6, steps: 0 }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('glow', 3, { at: 0.55 }),
+      w('v1', 4, { at: 0.5 }),
     ]),
   },
   {
@@ -753,8 +890,103 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       w('in', 2, { at: 0.5 }),
       w('wv', 3, { at: 0 }),
       w('wv', 0, { bump: { hi: 4, mid: 3, lo: 2 } }),
-      w('grG', 4, { at: 0.2 }),
+      w('grG', 4, { at: 0.08 }),
     ]),
+  },
+  // ---- 动态表面（D1）：图带 animation 规格，相位经 $phase/$phaseDeg 注入。
+  // 无缝口径：条纹 ph 吃 $phase（每圈滑一整周期）、rotate 吃 $phaseDeg
+  // （转满 360° 恒等），循环点逐像素无跳变；溶解为阈值扫过全程、
+  // 圈末复原（溶解类效果的固有口径）。
+  {
+    id: 'flow-water', name: '流动水面', cluster: '动态',
+    params: [
+      P('f', '波距', 3, 8, 0.5, 5), P('warp', '波纹扭曲', 0, 5, 0.5, 2.5),
+    ],
+    graph: graph([
+      ...baseIn(2),
+      n('nz', 'noise', undefined, { f: 0.1, seed: 17 }),
+      n('wv', 'stripes', undefined, { axis: 'y', f: '$f', duty: 0.4, ph: '$phase' }),
+      n('ww', 'warp', { in: 'wv', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
+      n('crestB', 'levelBand', { in: 'nz' }, { level: 0.62, w: 0.25 }),
+      n('crest', 'mul', { a: 'ww', b: 'crestB' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('ww', 3, { at: 0.5 }),
+      w('crest', 0, { at: 0.5, ch: 'glint' }),
+    ], { cycleSec: 2.4, frames: 12 }),
+  },
+  {
+    id: 'flame-tex', name: '火焰纹理', cluster: '动态',
+    params: [
+      P('f', '焰带距', 3, 9, 0.5, 5.5), P('warp', '焰形扭曲', 0, 6, 0.5, 3.5),
+    ],
+    graph: graph([
+      ...baseIn(1),
+      n('nz', 'blob', undefined, { f: 0.09, seed: 23, contrast: 1.3 }),
+      n('bands', 'stripes', undefined, { axis: 'y', f: '$f', duty: 0.55, ph: '$phase' }),
+      n('ww', 'warp', { in: 'bands', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
+      n('shade', 'grad', undefined, { axis: 'y' }),
+      n('hot', 'mul', { a: 'ww', b: 'shade' }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('ww', 4, { at: 0.5 }),
+      w('hot', 5, { at: 0.35 }),
+      w('hot', 0, { at: 0.65, ch: 'glint' }),
+    ], { cycleSec: 1.6, frames: 12 }),
+  },
+  {
+    id: 'aurora-tex', name: '极光带', cluster: '动态',
+    params: [
+      P('f', '光带距', 4, 12, 0.5, 7), P('warp', '飘移扭曲', 0, 7, 0.5, 4),
+    ],
+    graph: graph([
+      ...baseIn(1),
+      n('nz', 'blob', undefined, { f: 0.06, seed: 29, contrast: 1.2 }),
+      n('bands', 'stripes', undefined, { axis: 'x', f: '$f', duty: 0.45, ph: '$phase' }),
+      n('ww', 'warp', { in: 'bands', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
+      n('gv', 'grad', undefined, { axis: 'y' }),
+      n('gate', 'levelBand', { in: 'gv' }, { level: 0.5, w: 0.85 }),
+      n('body', 'mul', { a: 'ww', b: 'gate' }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('body', 4, { at: 0.5 }),
+      w('body', 0, { at: 0.75, ch: 'glint' }),
+    ], { cycleSec: 5, frames: 20 }),
+  },
+  {
+    id: 'swirl-rune', name: '旋转法阵', cluster: '动态',
+    params: [
+      P('seg', '扇区数', 4, 24, 1, 10), P('arcW', '弧宽', 3, 12, 0.5, 6),
+    ],
+    graph: graph([
+      ...baseIn(2),
+      n('rp', 'repeatPolar', { in: 'cs' }, { seg: '$seg', arcW: '$arcW', r0: 2, seed: 31 }),
+      n('cs', 'cellShape', undefined, { kind: 'ring', gap: 0.3, th: 2.2 }),
+      n('rot', 'rotate', { in: 'rp' }, { deg: '$phaseDeg' }),
+      n('core', 'focal', undefined, { cx: 0, cy: 0, r: 5, w: 1.2, mode: 'ring' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rot', 4, { at: 0 }),
+      w('core', 0, { at: 0.45, ch: 'glint' }),
+    ], { cycleSec: 6, frames: 24 }),
+  },
+  {
+    id: 'dissolve-tex', name: '溶解纹理', cluster: '动态',
+    params: [
+      P('scale', '蚀斑大小', 0.04, 0.14, 0.01, 0.08),
+    ],
+    graph: graph([
+      ...baseIn(1),
+      n('bl', 'blob', undefined, { f: '$scale', seed: 37, contrast: 1.35 }),
+      n('body', 'threshold', { in: 'bl' }, { at: '$phase', soft: 0.05 }),
+      n('edge', 'levelBand', { in: 'bl' }, { level: '$phase', w: 0.14 }),
+      n('ash', 'threshold', { in: 'bl' }, { at: 0.8, soft: 0.05 }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('body', 3, { at: 0.5 }),
+      w('ash', 4, { at: 0.5 }),
+      w('edge', 5, { at: 0.4 }),
+    ], { cycleSec: 3, frames: 16 }),
   },
 ];
 

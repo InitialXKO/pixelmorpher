@@ -29,6 +29,7 @@ import GlobalBlueprintEditor from './GlobalBlueprintEditor';
 import CharacterBlueprintEditor from './CharacterBlueprintEditor';
 import StateBlueprintEditor from './StateBlueprintEditor';
 import IKBakeButton from './IKBakeButton';
+import ChainBakePanel from './ChainBakePanel';
 import IKChainEditor from './IKChainEditor';
 import ThreeBakeDialog from './ThreeBakeDialog';
 
@@ -211,6 +212,12 @@ export default function RigPanel({
       <div className="pt-2 border-t border-[#1e1e3a]">
         <div className="text-[10px] text-gray-500 mb-1">IK 烘焙</div>
         <IKBakeButton character={selectedCharacter} />
+      </div>
+
+      {/* ---- 链摆烘焙（D6 一期） ---- */}
+      <div className="pt-2 border-t border-[#1e1e3a]">
+        <div className="text-[10px] text-gray-500 mb-1">链摆烘焙（模拟）</div>
+        <ChainBakePanel character={selectedCharacter} />
       </div>
     </div>
   );

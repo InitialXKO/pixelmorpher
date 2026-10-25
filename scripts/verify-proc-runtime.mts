@@ -275,7 +275,11 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     const refsOk = g0.nodes.every((x) => Object.values(x.inputs ?? {}).every((r) => ids.has(r)))
       && g0.writes.every((x) => ids.has(x.from));
     const paramKeys = new Set(t.params.map((p) => p.key));
-    const dollarOk = JSON.stringify(g0.nodes).match(/"\$[a-zA-Z]+"/g)?.every((s) => paramKeys.has(s.slice(2, -1))) ?? true;
+    // $phase / $phaseDeg 是求值器注入的保留参数（动态表面 D1），不要求模板定义
+    const dollarOk = JSON.stringify(g0.nodes).match(/"\$[a-zA-Z]+"/g)?.every((s) => {
+      const k = s.slice(2, -1);
+      return paramKeys.has(k) || k === 'phase' || k === 'phaseDeg';
+    }) ?? true;
     check(`G2 模板 ${t.name}：引用完整 + $参数有定义`, refsOk && dollarOk);
     const g = hasRefG(g0) ? expG(g0, libG).graph : g0;
     const tile = baker.compileTileDAG(shape, g);
@@ -2206,6 +2210,809 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('Y3 全部表面条目缩略图已着色（非索引图）且各有图案',
     surfBad.length === 0 && meanColors.size >= 15,
     `${surfBad.join('；')} 平均色种类 ${meanColors.size}`);
+}
+
+// ---------- Q) D1 动态表面：相位注入 / 流动无缝 / 溶解单调 / 全链透传 ----------
+{
+  const { createSurfaceBaker: csbQ } = await import('../src/lib/proc-runtime/bake-src');
+  const { surfacePhaseAt, surfaceAnimationOf, normalizeSurfaceAnimation } = await import('../src/lib/proc-runtime/surface-animation');
+  const { PATTERN_TEMPLATES: PTQ, instantiatePattern: ipQ } = await import('../src/lib/proc-runtime/pattern-templates');
+  const bakerQ = csbQ();
+  const shapeQ = { kind: 'rect', size: [28, 28] as [number, number], roundness: 0 };
+  const hexQ = (g: unknown, phase: number) =>
+    Buffer.from(bakerQ.compileTileDAG(shapeQ as never, g as never, 0, phase).data).toString('hex');
+
+  // Q1 相位量化口径（步进 + 周期闭合 + 负时间回绕）
+  const animQ = { cycleSec: 2, frames: 8 };
+  check('Q1 surfacePhaseAt 步进量化与周期闭合',
+    surfacePhaseAt(animQ, 0) === 0 && surfacePhaseAt(animQ, 0.26) === 0.125
+    && surfacePhaseAt(animQ, 2) === 0 && surfacePhaseAt(animQ, -0.26) === 0.75
+    && surfacePhaseAt(undefined, 3) === 0);
+  check('Q1b 动画规格规范化（钳制/非法回落）',
+    normalizeSurfaceAnimation({ cycleSec: 999, frames: 999 })?.frames === 60
+    && normalizeSurfaceAnimation({ cycleSec: -1, frames: 8 }) === undefined
+    && surfaceAnimationOf({ animation: animQ } as never)?.frames === 8);
+
+  // Q2 静态图对相位免疫（无相位消费者的图传任何相位结果不变）
+  const scalesQ = ipQ(PTQ.find((t) => t.id === 'scales')!);
+  check('Q2 静态图传相位结果不变', hexQ(scalesQ, 0) === hexQ(scalesQ, 0.5));
+
+  // Q3 流动无缝：scroll(条纹, dy=周期) 与 条纹 ph=$phase 逐像素等值
+  const scrollG = {
+    version: 1 as const,
+    nodes: [
+      { id: 'in', op: 'inside' },
+      { id: 'st', op: 'stripes', params: { axis: 'y', f: 5, duty: 0.4 } },
+      { id: 'sc', op: 'scroll', inputs: { in: 'st' }, params: { dx: 0, dy: -5 } },
+    ],
+    writes: [{ from: 'in', slot: 2, at: 0.5 }, { from: 'sc', slot: 4, at: 0.5 }],
+    params: {},
+  };
+  const phG = {
+    version: 1 as const,
+    nodes: [
+      { id: 'in', op: 'inside' },
+      { id: 'st', op: 'stripes', params: { axis: 'y', f: 5, duty: 0.4, ph: '$phase' } },
+    ],
+    writes: [{ from: 'in', slot: 2, at: 0.5 }, { from: 'st', slot: 4, at: 0.5 }],
+    params: {},
+  };
+  check('Q3 scroll 与 $phase 条纹在 0/0.3/0.7 三相位逐像素等值',
+    [0, 0.3, 0.7].every((p) => hexQ(scrollG, p) === hexQ(phG, p)));
+  check('Q3b 流动图相位 0 ≠ 相位 0.5（确实在动）', hexQ(scrollG, 0) !== hexQ(scrollG, 0.5));
+
+  // Q4 phase 场源：阈值 0.5 写出随相位翻转
+  const phaseG = {
+    version: 1 as const,
+    nodes: [
+      { id: 'in', op: 'inside' },
+      { id: 'ph', op: 'phase' },
+    ],
+    writes: [{ from: 'in', slot: 2, at: 0.5 }, { from: 'ph', slot: 5, at: 0.5 }],
+    params: {},
+  };
+  const slotCountQ = (g: unknown, phase: number, slot: number) => {
+    const t = bakerQ.compileTileDAG(shapeQ as never, g as never, 0, phase);
+    let n = 0;
+    for (let i = 0; i < t.w * t.h; i++) if (t.data[i * 4] === slot) n++;
+    return n;
+  };
+  check('Q4 phase 场源驱动写出（0.25 无命中、0.75 全命中）',
+    slotCountQ(phaseG, 0.25, 5) === 0 && slotCountQ(phaseG, 0.75, 5) > 600);
+
+  // Q5 溶解模板：主体像素随相位单调减少
+  const dissolveQ = ipQ(PTQ.find((t) => t.id === 'dissolve-tex')!);
+  const bodyCounts = [0, 0.25, 0.5, 0.75].map((p) => slotCountQ(dissolveQ, p, 3));
+  check(`Q5 溶解主体随相位单调减少（${bodyCounts.join('→')}）`,
+    bodyCounts.every((v, i) => i === 0 || v <= bodyCounts[i - 1]!) && bodyCounts[0]! > bodyCounts[3]!);
+
+  // Q6 内置动态模板：规格齐 + 相位 0 ≠ 半圈（法阵转 180° 图案应变）
+  const animTpls = ['flow-water', 'flame-tex', 'aurora-tex', 'swirl-rune', 'dissolve-tex'];
+  check('Q6 五个动态表面模板带合法 animation 规格',
+    animTpls.every((id) => !!surfaceAnimationOf(PTQ.find((t) => t.id === id)?.graph)));
+  // 法阵 seg=10 时转 180° 恰为扇区整数倍（对称回位），故验四分之一圈
+  check('Q6b 流动水面半圈 / 旋转法阵四分之一圈 ≠ 起点',
+    hexQ(ipQ(PTQ.find((t) => t.id === 'flow-water')!), 0) !== hexQ(ipQ(PTQ.find((t) => t.id === 'flow-water')!), 0.5)
+    && hexQ(ipQ(PTQ.find((t) => t.id === 'swirl-rune')!), 0) !== hexQ(ipQ(PTQ.find((t) => t.id === 'swirl-rune')!), 0.25));
+
+  // Q7 展开保留根图动画规格
+  const { expandSurfaceGraph: expQ, subgraphLibraryOf: libOfQ } = await import('../src/lib/proc-runtime/graph-expand');
+  const hostQ = {
+    version: 1 as const,
+    nodes: [
+      { id: 'in', op: 'inside' },
+      { id: 'r1', op: 'ref', params: { ref: 'scales' } },
+    ],
+    writes: [{ from: 'r1', slot: 3, at: 0 }],
+    params: {},
+    animation: { cycleSec: 3, frames: 10 },
+  };
+  check('Q7 子图展开保留根图 animation',
+    expQ(hostQ as never, libOfQ(PTQ)).graph.animation?.frames === 10);
+
+  // Q8 进包透传 + 整包运行时含多相位瓦片机制
+  const appQ = { ...createDefaultParametricAppearance(), surfaceGraph: ipQ(PTQ.find((t) => t.id === 'flow-water')!) };
+  const chQ = {
+    id: 'chQ', name: '动态表面进包',
+    nodes: { torso: makeNode('torso', '躯干', 'torso') },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: appQ } } }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkgQ = convertCharacterToRuntimePackage(chQ, undefined, { frameRate: 12 });
+  const pkgGraphQ = pkgQ.parts.find((p) => p.key === 'torso')?.base.surfaceGraph as { animation?: { frames: number } } | undefined;
+  check('Q8a 进包图保留 animation', pkgGraphQ?.animation?.frames === 12);
+  const { buildRuntimeHtml: brhQ } = await import('../src/lib/proc-runtime/runtime-template');
+  const htmlQ = brhQ(pkgQ);
+  check('Q8b 整包运行时含多相位瓦片与选步逻辑',
+    htmlQ.includes('surfaceAnimOfRt') && htmlQ.includes('#anim') && htmlQ.includes('surfaceStepAtRt')
+    && htmlQ.includes('animFrames'));
+  check('Q8c 包内图烘焙随相位变化（同源求值器）',
+    !!pkgGraphQ && hexQ(pkgGraphQ, 0) !== hexQ(pkgGraphQ, 0.5));
+}
+
+// ---------- Z) D2 置换形变段：孪生对齐 / 周期闭合 / 展开与进包 ----------
+{
+  const DP = await import('../src/lib/dynamic-patterns');
+  const { createDynamicRuntime: cdrZ } = await import('../src/lib/proc-runtime/dynamic-src');
+  const rtZ = cdrZ();
+  const baseZ = {
+    ...DP.defaultDynamicParams(),
+    displaceEnabled: true, displaceAmp: 3, displaceFreq: 0.14,
+    displaceDeg: 270, displaceSpeed: 0.35, displacePhase: 0,
+  } as never;
+
+  // Z1 孪生逐值对齐（TS 版 vs DYNAMIC_SRC 版，含噪声函数）
+  let twinOk = true;
+  for (const ph of [0, 0.37, 0.83]) {
+    const a = DP.displaceSrcMap(baseZ as never, 24, 20, ph);
+    const b = rtZ.dynDisplaceSrcMap(baseZ, 24, 20, ph);
+    if (a.length !== b.length || ![...a].every((v, i) => v === b[i])) twinOk = false;
+  }
+  check('Z1 置换源图 TS/运行时孪生逐值一致（三相位）', twinOk);
+  check('Z1b 值噪声孪生逐值一致',
+    [0.3, 2.7, 9.13].every((u) => DP.displaceNoiseU(u, 1.7, 8, 7717) === rtZ.dynNoiseU(u, 1.7, 8, 7717)));
+
+  // Z2 关闭/零幅度 = 恒等映射
+  const idZ = DP.displaceSrcMap({ ...baseZ, displaceEnabled: false } as never, 8, 6, 0.4);
+  check('Z2 置换关闭时源图恒等', [...idZ].every((v, i) => v === i));
+
+  // Z3 周期闭合（相位 1 ≡ 0）+ 半相位确实不同 + 位移有界（源索引合法）
+  const m0 = DP.displaceSrcMap(baseZ as never, 24, 20, 0);
+  const m1 = DP.displaceSrcMap(baseZ as never, 24, 20, 1);
+  const mH = DP.displaceSrcMap(baseZ as never, 24, 20, 0.5);
+  check('Z3 相位 1 ≡ 相位 0 逐值恒等', [...m0].every((v, i) => v === m1[i]));
+  check('Z3b 半相位与起点不同（场在动）', [...m0].some((v, i) => v !== mH[i]));
+  check('Z3c 源索引合法（-1 或图内）', [...m0].every((v) => v === -1 || (v >= 0 && v < 24 * 20)));
+
+  // Z4 像素格置换：5×5 色块经置换后仍有像（后向采样对单像素不
+  // 保证存活——采样点可跳过孤点，故用块验）、尺寸不变、像被挪动
+  const gridZ: (string | null)[][] = Array.from({ length: 16 }, () => Array(16).fill(null));
+  for (let y = 6; y <= 10; y++) for (let x = 6; x <= 10; x++) gridZ[y]![x] = '#ffffff';
+  const warpedZ = DP.displacePixelGrid(gridZ, { ...baseZ, displaceFreq: 0.3, displaceAmp: 4 } as never, 0.37);
+  let filledZ = 0;
+  const filledAt: string[] = [];
+  warpedZ.forEach((row, y) => row.forEach((c, x) => { if (c) { filledZ++; filledAt.push(`${x},${y}`); } }));
+  const movedZ = filledAt.some((p) => {
+    const [x, y] = p.split(',').map(Number);
+    return x! < 6 || x! > 10 || y! < 6 || y! > 10;
+  });
+  check('Z4 置换后块仍有像、尺寸不变、且有像素被挪出原块',
+    filledZ >= 4 && warpedZ.length === 16 && warpedZ[0]!.length === 16 && movedZ);
+
+  // Z5 归一化钳制
+  const normZ = DP.normalizeDynamicParams({
+    ...DP.defaultDynamicParams(), displaceAmp: 99, displaceDeg: -90, displaceSpeed: -3,
+  });
+  check('Z5 置换参数归一化（幅度钳 8、角度回绕 270、流速钳 0）',
+    normZ.displaceAmp === 8 && normZ.displaceDeg === 270 && normZ.displaceSpeed === 0);
+
+  // Z6 条目展开：置换叶子与置换火焰父模式
+  const LEZ = await import('../src/lib/library-entries');
+  const DEZ = await import('../src/lib/dynamic-expand');
+  const exHeat = DEZ.expandDynamicEntry(LEZ.BUILTIN_INDEX, 'dyn-disp-heat', 1);
+  const exFlame = DEZ.expandDynamicEntry(LEZ.BUILTIN_INDEX, 'dyn-flame-disp', 1);
+  check('Z6 置换叶子展开带置换键、无发射',
+    !!exHeat.params && exHeat.errors.length === 0
+    && exHeat.params.displaceEnabled && exHeat.params.displaceAmp === 3
+    && !exHeat.params.emitEnabled);
+  check('Z6b 置换火焰父模式展开（置换 + 粒子环绕共存）',
+    !!exFlame.params && exFlame.errors.length === 0
+    && exFlame.params.displaceEnabled && exFlame.params.emitEnabled);
+
+  // Z7 进包透传 + 整包含置换接线
+  const instZ = DP.createDynamicInstance('热浪', baseZ as never, '身体');
+  const chZ = {
+    id: 'chZ', name: '置换进包',
+    nodes: { torso: { ...makeNode('torso', '躯干', 'torso'), dynamicPatterns: [instZ] } },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: createDefaultParametricAppearance() } },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkgZ = convertCharacterToRuntimePackage(chZ, undefined, { frameRate: 12 });
+  const dynZ = pkgZ.parts.find((p) => p.key === 'torso')?.dynamic?.[0];
+  check('Z7 置换参数进包不丢', !!dynZ && (dynZ.params as { displaceEnabled?: boolean }).displaceEnabled === true
+    && (dynZ.params as { displaceAmp?: number }).displaceAmp === 3);
+  const { buildRuntimeHtml: brhZ } = await import('../src/lib/proc-runtime/runtime-template');
+  const htmlZ = brhZ(pkgZ);
+  check('Z7b 整包运行时含置换变体接线',
+    htmlZ.includes('dynDisplaceSrcMap') && htmlZ.includes('displaceOfRt')
+    && htmlZ.includes('displaceTileRt') && htmlZ.includes('entry.disp'));
+}
+
+// ---------- AB) D3 自转段：孪生对齐 / 展开 / 进包与两端接线 ----------
+{
+  const DP3 = await import('../src/lib/dynamic-patterns');
+  const { createDynamicRuntime: cdr3 } = await import('../src/lib/proc-runtime/dynamic-src');
+  const rt3 = cdr3();
+  const spinP = {
+    ...DP3.defaultDynamicParams(), spinEnabled: true, spinSpeedDeg: 45, spinPhaseDeg: 30,
+  } as never;
+
+  // SP1 孪生对齐（TS 度 vs 运行时弧度）+ 关闭为 0
+  check('SP1 自转孪生逐值一致（t=0/0.7/2.3）',
+    [0, 0.7, 2.3].every((t) => Math.abs(
+      DP3.spinAngleDegAt(spinP as never, t) * Math.PI / 180 - rt3.dynSpinRadAt(spinP, t)) < 1e-12));
+  check('SP1b 自转关闭恒 0、负速反向',
+    DP3.spinAngleDegAt({ ...spinP, spinEnabled: false } as never, 5) === 0
+    && rt3.dynSpinRadAt({ ...spinP, spinEnabled: false } as never, 5) === 0
+    && DP3.spinAngleDegAt({ ...spinP, spinSpeedDeg: -45, spinPhaseDeg: 0 } as never, 2) === -90);
+
+  // SP2 归一化钳制
+  const n3 = DP3.normalizeDynamicParams({
+    ...DP3.defaultDynamicParams(), spinSpeedDeg: 999, spinPhaseDeg: -90,
+  });
+  check('SP2 自转归一化（速度钳 360、相位回绕 270）',
+    n3.spinSpeedDeg === 360 && n3.spinPhaseDeg === 270);
+
+  // SP3 条目展开：叶子 + 两父模式（护盾覆盖调慢速度）
+  const LE3 = await import('../src/lib/library-entries');
+  const DE3 = await import('../src/lib/dynamic-expand');
+  const exRune = DE3.expandDynamicEntry(LE3.BUILTIN_INDEX, 'dyn-spin-rune', 1);
+  const exPortal = DE3.expandDynamicEntry(LE3.BUILTIN_INDEX, 'dyn-portal', 1);
+  const exAegis = DE3.expandDynamicEntry(LE3.BUILTIN_INDEX, 'dyn-spin-aegis', 1);
+  check('SP3 法阵自转叶子展开', !!exRune.params && exRune.errors.length === 0
+    && exRune.params.spinEnabled && exRune.params.spinSpeedDeg === 30);
+  check('SP3b 旋转法阵 = 自转 + 星芒辉光', !!exPortal.params && exPortal.errors.length === 0
+    && exPortal.params.spinEnabled && exPortal.params.glowEnabled
+    && exPortal.params.glowShape === 'star');
+  check('SP3c 旋转护盾覆盖调慢（18 度/秒）+ 寒霜辉光', !!exAegis.params && exAegis.errors.length === 0
+    && exAegis.params.spinSpeedDeg === 18 && exAegis.params.glowShape === 'circle');
+
+  // SP4 进包 + 两端接线（运行时帧循环 / 编辑器渲染计划）
+  const inst3 = DP3.createDynamicInstance('法阵', spinP as never, '身体');
+  const ch3 = {
+    id: 'ch3', name: '自转进包',
+    nodes: { torso: { ...makeNode('torso', '躯干', 'torso'), dynamicPatterns: [inst3] } },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: createDefaultParametricAppearance() } },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkg3 = convertCharacterToRuntimePackage(ch3, undefined, { frameRate: 12 });
+  const dyn3 = pkg3.parts.find((p) => p.key === 'torso')?.dynamic?.[0];
+  check('SP4 自转参数进包不丢', !!dyn3
+    && (dyn3.params as { spinEnabled?: boolean }).spinEnabled === true
+    && (dyn3.params as { spinSpeedDeg?: number }).spinSpeedDeg === 45);
+  const { buildRuntimeHtml: brh3 } = await import('../src/lib/proc-runtime/runtime-template');
+  check('SP4b 整包运行时含自转接线', brh3(pkg3).includes('dynSpinRadAt') && brh3(pkg3).includes('rotA'));
+  const { readFileSync: rfs3 } = await import('node:fs');
+  const urText = rfs3(new URL('../src/lib/unified-render.ts', import.meta.url), 'utf8');
+  check('SP4c 编辑器渲染计划含自转接线（spinAngleDegAt 叠进 instruction.angle）',
+    urText.includes('spinAngleDegAt') && urText.includes('spinDeg'));
+}
+
+// ---------- AC) D5 残影段：归一化 / 展开 / 进包与两端接线 ----------
+{
+  const DP5 = await import('../src/lib/dynamic-patterns');
+  // TR1 归一化钳制
+  const n5 = DP5.normalizeDynamicParams({
+    ...DP5.defaultDynamicParams(), trailCount: 99, trailIntervalSec: 9, trailOpacity: 0,
+  });
+  check('TR1 残影归一化（个数钳 6、间隔钳 0.3、不透明度钳 0.05）',
+    n5.trailCount === 6 && n5.trailIntervalSec === 0.3 && n5.trailOpacity === 0.05);
+
+  // TR2 条目展开
+  const LE5 = await import('../src/lib/library-entries');
+  const DE5 = await import('../src/lib/dynamic-expand');
+  const exT = DE5.expandDynamicEntry(LE5.BUILTIN_INDEX, 'dyn-trail', 1);
+  const exTL = DE5.expandDynamicEntry(LE5.BUILTIN_INDEX, 'dyn-trail-long', 1);
+  const exDash = DE5.expandDynamicEntry(LE5.BUILTIN_INDEX, 'dyn-dash-trail', 1);
+  check('TR2 残影叶子展开', !!exT.params && exT.errors.length === 0
+    && exT.params.trailEnabled && exT.params.trailCount === 3 && !exT.params.emitEnabled);
+  check('TR2b 长残影展开（5 个）', !!exTL.params && exTL.params.trailCount === 5);
+  check('TR2c 冲刺残影 = 残影 + 胀缩形变共存', !!exDash.params && exDash.errors.length === 0
+    && exDash.params.trailEnabled && exDash.params.deformEnabled);
+
+  // TR3 进包 + 两端接线（字符串级：编辑器计划/绘制 + 运行时快照环）
+  const inst5 = DP5.createDynamicInstance('残影', exT.params!, '身体');
+  const ch5 = {
+    id: 'ch5', name: '残影进包',
+    nodes: { torso: { ...makeNode('torso', '躯干', 'torso'), dynamicPatterns: [inst5] } },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: createDefaultParametricAppearance() } },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkg5 = convertCharacterToRuntimePackage(ch5, undefined, { frameRate: 12 });
+  const dyn5 = pkg5.parts.find((p) => p.key === 'torso')?.dynamic?.[0];
+  check('TR3 残影参数进包不丢', !!dyn5
+    && (dyn5.params as { trailEnabled?: boolean }).trailEnabled === true
+    && (dyn5.params as { trailCount?: number }).trailCount === 3);
+  const { buildRuntimeHtml: brh5 } = await import('../src/lib/proc-runtime/runtime-template');
+  const html5 = brh5(pkg5);
+  check('TR3b 整包运行时含快照环接线（trailState + 清环 + ghost 排活 el 前）',
+    html5.includes('trailState') && html5.includes('rings.clear()')
+    && html5.includes('trailEnabled') && html5.includes('ghost: true'));
+  const { readFileSync: rfs5 } = await import('node:fs');
+  const ur5 = rfs5(new URL('../src/lib/unified-render.ts', import.meta.url), 'utf8');
+  check('TR3c 编辑器两端在位（计划算 trailGhosts + 绘制消费）',
+    ur5.includes('trailGhosts') && ur5.includes('followPoseAt(nodeId, frame - k'));
+}
+
+// ---------- AD) D4 一期弧线段：生成器孪生 / 确定性 / 条目 / 接线 ----------
+{
+  const DP6 = await import('../src/lib/dynamic-patterns');
+  const DS6 = await import('../src/lib/proc-runtime/dynamic-src');
+  const RT6 = DS6.createDynamicRuntime();
+  const arcParams = DP6.normalizeDynamicParams({
+    ...DP6.defaultDynamicParams(),
+    arcEnabled: true, arcLengthPx: 30, arcDirDeg: 40, arcDisplace: 0.4,
+    arcBranches: 2, arcWidthPx: 1.3, arcFlicker: 10, arcSeed: 11,
+  });
+  // AD1 孪生逐点一致（多个时刻）
+  let twinOk = true;
+  for (const tt of [0, 0.13, 0.57, 1.9]) {
+    const a = DP6.arcPointsAt(arcParams, tt);
+    const b = RT6.dynArcPoints(arcParams as never, tt);
+    if (Math.abs(a.alpha - b.alpha) > 1e-9 || a.main.length !== b.main.length
+      || a.branches.length !== b.branches.length) { twinOk = false; break; }
+    for (let i = 0; i < a.main.length; i++) {
+      if (Math.abs(a.main[i].x - b.main[i][0]) > 1e-9 || Math.abs(a.main[i].y - b.main[i][1]) > 1e-9
+        || Math.abs(a.main[i].w - b.main[i][2]) > 1e-9) { twinOk = false; break; }
+    }
+    for (let j = 0; j < a.branches.length && twinOk; j++) {
+      for (let i = 0; i < a.branches[j].length; i++) {
+        if (Math.abs(a.branches[j][i].x - b.branches[j][i][0]) > 1e-9
+          || Math.abs(a.branches[j][i].y - b.branches[j][i][1]) > 1e-9) { twinOk = false; break; }
+      }
+    }
+    if (!twinOk) break;
+  }
+  check('AD1 弧线生成器两端逐点一致（4 时刻）', twinOk);
+  // AD2 确定性 + 步进量化（同一步内形状不变、跨步变）
+  const s1 = DP6.arcPointsAt(arcParams, 0.21);
+  const s2 = DP6.arcPointsAt(arcParams, 0.24);
+  const s3 = DP6.arcPointsAt(arcParams, 0.31);
+  check('AD2 同步进内形状恒定、跨步进变化',
+    JSON.stringify(s1.main) === JSON.stringify(s2.main)
+    && JSON.stringify(s1.main) !== JSON.stringify(s3.main));
+  // AD3 结构：主弧 17 点、分叉数与根/尖宽度衰减
+  check('AD3 主弧 17 点 + 2 分叉（各 9 点）+ 宽度收细',
+    s1.main.length === 17 && s1.branches.length === 2
+    && s1.branches.every((br) => br.length === 9)
+    && s1.main[0].w > s1.main[16].w && s1.main[0].x === 0 && s1.main[0].y === 0);
+  // AD4 disp=0 时主弧为直线（点落在起点→终点线段上）
+  const straight = DP6.arcPointsAt({ ...arcParams, arcDisplace: 0, arcBranches: 0 }, 0.3);
+  const dirR = (40 * Math.PI) / 180;
+  const crossOk = straight.main.every((q) => Math.abs(q.x * Math.sin(dirR) - q.y * Math.cos(dirR)) < 1e-9);
+  check('AD4 曲折幅度 0 → 主弧严格直线', crossOk && straight.branches.length === 0);
+  // AD5 条目展开
+  const LE6 = await import('../src/lib/library-entries');
+  const DE6 = await import('../src/lib/dynamic-expand');
+  const exArc = DE6.expandDynamicEntry(LE6.BUILTIN_INDEX, 'dyn-arc-bolt', 1);
+  const exStorm = DE6.expandDynamicEntry(LE6.BUILTIN_INDEX, 'dyn-arc-storm', 1);
+  check('AD5 电弧叶子展开', !!exArc.params && exArc.params.arcEnabled
+    && exArc.params.arcLengthPx === 26 && !exArc.params.emitEnabled);
+  check('AD5b 雷暴电弧折叠：弧线参数 + 火星发射开关（跟随边裁决）共存',
+    exStorm.errors.length === 0 && !!exStorm.params
+    && exStorm.params.arcEnabled && exStorm.params.arcLengthPx === 44
+    && exStorm.params.emitEnabled);
+  // AD6 进包 + 整包接线
+  const inst6 = DP6.createDynamicInstance('电弧', exArc.params!, '身体');
+  const ch6 = {
+    id: 'ch6', name: '弧线进包',
+    nodes: { torso: { ...makeNode('torso', '躯干', 'torso'), dynamicPatterns: [inst6] } },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: createDefaultParametricAppearance() } },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkg6 = convertCharacterToRuntimePackage(ch6, undefined, { frameRate: 12 });
+  const dyn6 = pkg6.parts.find((p) => p.key === 'torso')?.dynamic?.[0];
+  const { buildRuntimeHtml: brh6 } = await import('../src/lib/proc-runtime/runtime-template');
+  const html6 = brh6(pkg6);
+  check('AD6 弧线参数进包 + 整包含 dynArcPoints 与 plugC 接线',
+    !!dyn6 && (dyn6.params as { arcEnabled?: boolean }).arcEnabled === true
+    && html6.includes('dynArcPoints') && html6.includes('plugC'));
+  const { readFileSync: rfs6 } = await import('node:fs');
+  const ur6 = rfs6(new URL('../src/lib/unified-render.ts', import.meta.url), 'utf8');
+  check('AD6b 编辑器绘制在位（drawDynamicArcs 双路调用）',
+    ur6.includes('drawDynamicArcs') && (ur6.match(/drawDynamicArcs\(ctx, instruction\)/g) ?? []).length === 2);
+}
+
+// ---------- AE) D6 一期链摆烘焙：求解器物理 / 烘焙折算 / 指纹 ----------
+{
+  const SIM = await import('../src/lib/sim/verlet-chain');
+  const P = SIM.defaultChainBakeParams();
+  // AE1 求解器：静止钉点 + 重力 → 链垂下、段长守恒、尖端落正下方
+  const pins = Array.from({ length: 40 }, () => ({ x: 0, y: 0 }));
+  const lens = Array.from({ length: 40 }, () => [10, 10]);
+  const solved = SIM.solveVerletChain(pins, lens, [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }], P, 12);
+  const tip = solved[39][2];
+  const seg1 = Math.hypot(solved[39][1].x, solved[39][1].y);
+  const seg2 = Math.hypot(solved[39][2].x - solved[39][1].x, solved[39][2].y - solved[39][1].y);
+  check('AE1 静止链在重力下垂直到正下方（尖端 ~(0,20)、段长守恒）',
+    Math.abs(tip.x) < 0.5 && Math.abs(tip.y - 20) < 0.5
+    && Math.abs(seg1 - 10) < 0.1 && Math.abs(seg2 - 10) < 0.1);
+  // AE2 第 0 帧 = 初始姿态（烘焙起点连续）
+  check('AE2 求解第 0 帧保持初始姿态',
+    solved[0][1].x === 10 && solved[0][2].x === 20 && solved[0][2].y === 0);
+  // AE3 确定性：同输入同输出
+  const solved2 = SIM.solveVerletChain(pins, lens, [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }], P, 12);
+  check('AE3 求解确定性（逐值一致）', JSON.stringify(solved) === JSON.stringify(solved2));
+
+  // AE4 全链烘焙：水平链在静止角色上烘焙 → 根角趋于 90°（垂下）、
+  // 子节点本地角 ~0（直链延续）、第 0 帧为基准角（连续）
+  const mkChainNode = (id: string, x: number, parentId: string | undefined, children: string[]) => {
+    const n = makeNode(id, id, null, parentId);
+    n.transform = { ...n.transform, x };
+    n.children = children;
+    return n;
+  };
+  const chSim = {
+    id: 'chsim', name: '链摆',
+    nodes: {
+      croot: mkChainNode('croot', 100, undefined, ['c1']),
+      c1: mkChainNode('c1', 10, 'croot', ['c2']),
+      c2: mkChainNode('c2', 10, 'c1', []),
+    },
+    rootNodeId: 'croot', rootNodeIds: ['croot'],
+    costumeSets: [], variants: {},
+  } as unknown as Character;
+  // croot 的 x=100 需放在 root 位置：root 节点 transform.x 即其位置
+  const collected = SIM.collectChain(chSim, 'croot');
+  check('AE4a collectChain 沿子节点成链', collected.nodeIds.join(',') === 'croot,c1,c2' && !collected.truncated);
+  const bake = SIM.bakeChainSwing(chSim, collected.nodeIds, P, 0, 23, 12);
+  const rootKfs = bake.angleTracks['croot'].keyframes;
+  const lastRoot = rootKfs[rootKfs.length - 1];
+  const c1Vals = bake.angleTracks['c1'].keyframes.map((k) => k.value);
+  check('AE4 烘焙：根角末帧趋于 90°（垂下）、子节点本地角 ~0、第 0 帧连续',
+    Math.abs(lastRoot.value - 90) < 3
+    && c1Vals.every((v) => Math.abs(v) < 3)
+    && rootKfs[0].frame === 0 && rootKfs[0].value === 0
+    && rootKfs.length === 24);
+  // AE5 指纹：烘焙后即新鲜；驱动变化（根节点移位）后过期
+  const chBaked = {
+    ...chSim,
+    nodes: Object.fromEntries(Object.entries(chSim.nodes).map(([id, n]) => [
+      id, { ...n, tracks: { ...n.tracks, angle: bake.angleTracks[id] } },
+    ])),
+    chainBakes: { croot: bake.record },
+  } as unknown as Character;
+  check('AE5a 烘焙后指纹新鲜', SIM.isChainBakeFresh(chBaked, bake.record, 12));
+  const chMoved = {
+    ...chBaked,
+    nodes: {
+      ...chBaked.nodes,
+      croot: { ...chBaked.nodes.croot, transform: { ...chBaked.nodes.croot.transform, x: 130 } },
+    },
+  } as unknown as Character;
+  check('AE5b 驱动变化后指纹过期（点名不静默）', !SIM.isChainBakeFresh(chMoved, bake.record, 12));
+  // AE6 参数进指纹：改重力 → 指纹变
+  const bake2 = SIM.bakeChainSwing(chSim, collected.nodeIds, { ...P, gravity: 400 }, 0, 23, 12);
+  check('AE6 参数变化指纹必变', bake2.record.fingerprint !== bake.record.fingerprint);
+}
+
+// ---------- AF) 批次 1（Pixel Composer 映射 A/B/C 组） ----------
+{
+  const LE7 = await import('../src/lib/library-entries');
+  const DE7 = await import('../src/lib/dynamic-expand');
+  const ex7 = (id: string) => DE7.expandDynamicEntry(LE7.BUILTIN_INDEX, id, 1);
+  // AF1 A 组叶子展开与关键参数
+  const ff = ex7('dyn-fireflies');
+  check('AF1 萤火虫 = 低速长命发射 + 慢脉冲辉光同叶', !!ff.params && ff.errors.length === 0
+    && ff.params.emitEnabled && ff.params.glowEnabled && ff.params.life === 4 && ff.params.glowHz === 0.5);
+  const splash = ex7('dyn-splash');
+  check('AF1b 水花飞溅（近似）：上抛 + 负浮力 + 短命', !!splash.params
+    && splash.params.directionDeg === 270 && splash.params.buoy === -30 && splash.params.life === 0.55);
+  const beam = ex7('dyn-glow-beam');
+  check('AF1c 光束辉光 = 星形满伸长（2.5 为系统上限）', !!beam.params && beam.params.glowShape === 'star'
+    && beam.params.glowStarReach === 2.5);
+  // AF2 B 组父模式展开
+  const aura = ex7('dyn-aura');
+  check('AF2 灵气光环 = 辉光 + 发射 + 胀缩调制联动', !!aura.params && aura.errors.length === 0
+    && aura.params.glowEnabled && aura.params.emitEnabled && aura.params.linkToDeform === 0.5);
+  const lvl = ex7('dyn-levelup');
+  check('AF2b 升级光效：火星覆盖（金色/高率）+ 星芒辉光共存', !!lvl.params && lvl.errors.length === 0
+    && lvl.params.color === '#ffe066' && lvl.params.rate === 26 && lvl.params.glowEnabled);
+  const thunder = ex7('dyn-thunderstorm');
+  check('AF2c 雷暴 = 雨 + 频闪辉光（7Hz）+ 寒霜着色', !!thunder.params && thunder.errors.length === 0
+    && thunder.params.glowHz === 7 && thunder.params.emitEnabled);
+  const fountain = ex7('dyn-fountain');
+  const waterfall = ex7('dyn-waterfall');
+  check('AF2d 喷泉/瀑布展开（覆盖生效）', !!fountain.params && fountain.errors.length === 0
+    && fountain.params.rate === 36 && fountain.params.speed === 9
+    && !!waterfall.params && waterfall.params.rate === 55 && waterfall.params.speed === 20);
+  // AF3 C 组表面模板：存在 + 烘焙行为
+  const baker7 = createSurfaceBaker();
+  const shape7 = { kind: 'rect', size: [40, 32] as [number, number], roundness: 0.15 };
+  const { expandSurfaceGraph: expG7, subgraphLibraryOf: subG7 } = await import('../src/lib/proc-runtime/graph-expand');
+  const lib7 = subG7(LE7.surfaceLibEntriesOf(LE7.allLibraryEntries()));
+  const bake7 = (id: string) => {
+    const t = PATTERN_TEMPLATES.find((x) => x.id === id)!;
+    const g = expG7(instantiatePattern(t), lib7).graph;
+    return baker7.compileTileDAG(shape7, g);
+  };
+  const tiers7 = (data: Uint8Array) => {
+    const s = new Set<number>();
+    for (let i = 0; i < data.length; i += 4) s.add(data[i]);
+    return s;
+  };
+  const woodT = bake7('wood');
+  const floorT = bake7('wood-floor');
+  check('AF3 木地板 ≠ 木纹（分格线生效）', !Buffer.from(woodT.data).equals(Buffer.from(floorT.data))
+    && tiers7(floorT.data).has(0));
+  const starT = bake7('starfield');
+  let starBright = 0;
+  for (let i = 0; i < starT.data.length; i += 4) if (starT.data[i] >= 3) starBright++;
+  const starTotal = starT.data.length / 4;
+  check('AF3b 星空：亮星稀疏（>0 且 <30%）且有两层亮度', starBright > 0 && starBright / starTotal < 0.3
+    && tiers7(starT.data).has(3) && tiers7(starT.data).has(4));
+  const dotT = bake7('dot-matrix');
+  check('AF3c 点阵：圆点档 3 出现且非均匀', tiers7(dotT.data).has(3) && tiers7(dotT.data).size >= 3);
+  const cauT = bake7('caustics');
+  check('AF3d 焦散纹（近似）：网状亮纹档出现且非均匀', tiers7(cauT.data).has(3) && tiers7(cauT.data).size >= 3);
+}
+
+// ---------- AG) 既有问题修复回归门：写出可达性审计 ----------
+// 每条非底涂、非 bump 的写出单独烘焙必须至少画出 1 个像素
+// （含 glint 通道）——防「阈值高于场峰值 / 二值场套 levelBand
+// 恒零 / 极坐标单元局部系错位」这类静默失效再次混入。
+{
+  const baker8 = createSurfaceBaker();
+  const shape8 = { kind: 'rect', size: [40, 32] as [number, number], roundness: 0.15 };
+  const { expandSurfaceGraph: expG8, subgraphLibraryOf: subG8, graphHasRefs: hasRef8 } = await import('../src/lib/proc-runtime/graph-expand');
+  const LE8 = await import('../src/lib/library-entries');
+  const lib8 = subG8(LE8.surfaceLibEntriesOf(LE8.allLibraryEntries()));
+  const dead: string[] = [];
+  for (const t of PATTERN_TEMPLATES) {
+    t.graph.writes.forEach((w, i) => {
+      if (w.from === 'in' || w.bump) return;
+      let g0 = instantiatePattern(t);
+      g0 = { ...g0, writes: [g0.writes[i]] };
+      const g = hasRef8(g0) ? expG8(g0, lib8).graph : g0;
+      const data = baker8.compileTileDAG(shape8, g).data;
+      let painted = 0;
+      for (let p = 0; p < data.length; p += 4) {
+        if (w.ch === 'glint' ? data[p + 1] === 255 : data[p] === w.slot) painted++;
+      }
+      if (painted === 0) dead.push(`${t.id}#${i}:${w.from}`);
+    });
+  }
+  check('AG1 全模板无永不触发的写出（阈值/二值带/极坐标三类病已清）', dead.length === 0);
+  if (dead.length > 0) console.log('  死写出：', dead.join(' '));
+  // AG2 极坐标局部系：放射齿纹的齿写出应大面积出现（旧实现只剩中心点）
+  const gearT = PATTERN_TEMPLATES.find((t) => t.id === 'gear')!;
+  const gearTile = baker8.compileTileDAG(shape8, expG8(instantiatePattern(gearT), lib8).graph);
+  let gearTeeth = 0;
+  for (let p = 0; p < gearTile.data.length; p += 4) if (gearTile.data[p] === 3) gearTeeth++;
+  check('AG2 放射齿纹齿面回归（极坐标居中修复）', gearTeeth > 200);
+}
+
+// ---------- AH) 半调 + 人字纹（批次 1 C 组补完） ----------
+{
+  const baker9 = createSurfaceBaker();
+  const shape9 = { kind: 'rect', size: [48, 36] as [number, number], roundness: 0.1 };
+  const { expandSurfaceGraph: expG9, subgraphLibraryOf: subG9 } = await import('../src/lib/proc-runtime/graph-expand');
+  const LE9 = await import('../src/lib/library-entries');
+  const lib9 = subG9(LE9.surfaceLibEntriesOf(LE9.allLibraryEntries()));
+  const bake9 = (t: (typeof PATTERN_TEMPLATES)[number]) =>
+    baker9.compileTileDAG(shape9, expG9(instantiatePattern(t), lib9).graph);
+  // AH1 半调：点覆盖随归一深度变化（边缘行无点、中心行密）
+  const ht = bake9(PATTERN_TEMPLATES.find((t) => t.id === 'halftone')!);
+  const rowDots = (tile: { w: number; h: number; data: Uint8Array }, r: number) => {
+    let n = 0;
+    for (let i = 0; i < tile.w; i++) if (tile.data[(r * tile.w + i) * 4] >= 3 && tile.data[(r * tile.w + i) * 4] <= 4) n++;
+    return n;
+  };
+  const htEdge = rowDots(ht, 2);
+  const htMid = rowDots(ht, Math.floor(ht.h / 2));
+  check('AH1 点阵半调：点径/覆盖随明暗场变化（边缘 < 中心）', htMid > htEdge + 6);
+  // AH2 人字纹：奇偶旋转开/关图案不同（prot 真生效）
+  const hbT = PATTERN_TEMPLATES.find((t) => t.id === 'herringbone')!;
+  const hbOn = bake9(hbT);
+  const hbOffGraph = instantiatePattern(hbT);
+  for (const n of hbOffGraph.nodes) if (n.op === 'repeat') n.params = { ...n.params, prot: 0 };
+  const hbOff = baker9.compileTileDAG(shape9, expG9(hbOffGraph, lib9).graph);
+  check('AH2 人字纹：奇偶旋转改变图案（prot 生效）',
+    !Buffer.from(hbOn.data).equals(Buffer.from(hbOff.data)));
+}
+
+// ---------- AI) D4 二期：藤蔓 / 星座 / 生长 / 双锚点 ----------
+{
+  const DP9 = await import('../src/lib/dynamic-patterns');
+  const { createDynamicRuntime: mkRt9 } = await import('../src/lib/proc-runtime/dynamic-src');
+  const rt9 = mkRt9();
+  const base9 = DP9.normalizeDynamicParams({ ...DP9.defaultDynamicParams(), arcEnabled: true });
+  const eq9 = (a: { x: number; y: number; w: number }[], b: [number, number, number][]) =>
+    a.length === b.length && a.every((q, i) => Math.abs(q.x - b[i][0]) < 1e-9 && Math.abs(q.y - b[i][1]) < 1e-9 && Math.abs(q.w - b[i][2]) < 1e-9);
+  const shapeEq9 = (p: never, t: number, ex?: number, ey?: number, has?: boolean) => {
+    const a = DP9.arcPointsAt(p as never, t, has ? { x: ex!, y: ey! } : undefined);
+    const b = rt9.dynArcPoints(p, t, ex, ey, has);
+    return eq9(a.main, b.main) && a.branches.length === b.branches.length
+      && a.branches.every((br, i) => eq9(br, b.branches[i]))
+      && eq9(a.dots, b.dots) && Math.abs(a.alpha - b.alpha) < 1e-9;
+  };
+  // AI1 三模式两端逐点一致
+  const vine9 = { ...base9, arcMode: 'vine', arcLengthPx: 42, arcDirDeg: 270, arcGrowHz: 0.3, arcDetail: 6 } as never;
+  const stars9 = { ...base9, arcMode: 'stars', arcLengthPx: 34, arcDetail: 7, arcFlicker: 6 } as never;
+  check('AI1 藤蔓/星座两端逐点一致（多时刻）',
+    shapeEq9(vine9, 0.7) && shapeEq9(vine9, 2.9) && shapeEq9(stars9, 0.4) && shapeEq9(stars9, 1.3));
+  // AI2 藤蔓结构：主链节数 = 长/步长，叶点数 = 细节数（满生长）
+  const vFull = DP9.arcPointsAt({ ...(vine9 as object), arcGrowHz: 0 } as never, 0);
+  check('AI2 藤蔓满生长：主链 8 点 + 叶点 6', vFull.main.length === 8 && vFull.dots.length === 6);
+  // AI3 星座结构：连线串全点、星点齐
+  const sFull = DP9.arcPointsAt(stars9 as never, 0);
+  check('AI3 星座：主线 7 点串全星 + 星点 7', sFull.main.length === 7 && sFull.dots.length === 7);
+  // AI4 生长：周期起点主线收为一点、中段变长、满段与无生长等长
+  const grow9 = { ...base9, arcGrowHz: 0.5, arcLengthPx: 40, arcFlicker: 0 } as never;
+  const lineLen = (pts: { x: number; y: number }[]) => pts.reduce((acc, q, i) => (i === 0 ? 0 : acc + Math.hypot(q.x - pts[i - 1].x, q.y - pts[i - 1].y)), 0);
+  const g0 = DP9.arcPointsAt(grow9, 0);
+  const gMid = DP9.arcPointsAt(grow9, 0.6);
+  const gFull = DP9.arcPointsAt(grow9, 1.6);
+  const gRef = DP9.arcPointsAt({ ...(grow9 as object), arcGrowHz: 0 } as never, 0);
+  check('AI4 生长：起步一点、中段半长、满段等长（两端同）',
+    g0.main.length === 1 && lineLen(gMid.main) > 5 && lineLen(gMid.main) < lineLen(gRef.main) - 3
+    && Math.abs(lineLen(gFull.main) - lineLen(gRef.main)) < 1e-6 && shapeEq9(grow9, 0.6));
+  // AI5 双锚点：终点覆盖（无曲折时主弧终点 = 给定终点，两端同）
+  const anch9 = { ...base9, arcDisplace: 0 } as never;
+  const aShape = DP9.arcPointsAt(anch9, 0, { x: 30, y: 12 });
+  const aLast = aShape.main[aShape.main.length - 1];
+  check('AI5 双锚点：主弧终点落在目标点（两端逐点同）',
+    Math.abs(aLast.x - 30) < 1e-9 && Math.abs(aLast.y - 12) < 1e-9 && shapeEq9(anch9, 0, 30, 12, true));
+  // AI6 条目展开 + 整包接线
+  const LE10 = await import('../src/lib/library-entries');
+  const DE10 = await import('../src/lib/dynamic-expand');
+  const vineE = DE10.expandDynamicEntry(LE10.BUILTIN_INDEX, 'dyn-vine', 1);
+  const wreathE = DE10.expandDynamicEntry(LE10.BUILTIN_INDEX, 'dyn-vine-wreath', 1);
+  check('AI6 藤蔓/藤蔓花环展开（模式与生长参数透传）', !!vineE.params && vineE.params.arcMode === 'vine'
+    && vineE.params.arcGrowHz === 0.3 && !!wreathE.params && wreathE.errors.length === 0 && wreathE.params.glowEnabled);
+  const { readFileSync: rfs10 } = await import('node:fs');
+  const RT10 = rfs10(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+  const UR10 = rfs10(new URL('../src/lib/unified-render.ts', import.meta.url), 'utf8');
+  check('AI6b 运行时双锚查表 + 编辑器计划期终点接线在位',
+    RT10.includes('partAnchorsByKey') && RT10.includes('hasEnd')
+    && UR10.includes('arcEnds') && UR10.includes('followSlotToNode.get(p.arcTarget)'));
+}
+
+// ---------- AJ) D6 二期布料：网格生成 / 求解 / 烘焙折算 / 指纹 ----------
+{
+  const CL = await import('../src/lib/sim/cloth-bake');
+  const VC = await import('../src/lib/sim/verlet-chain');
+  const P = VC.defaultChainBakeParams();
+  // AJ1 网格生成与找回
+  const gen = CL.generateClothGrid('waist', 3, 3, 8, 8);
+  check('AJ1 网格生成：9 节点、列根挂 root、列内成链',
+    Object.keys(gen.nodes).length === 9
+    && gen.gridIds.length === 3 && gen.gridIds[0].length === 3
+    && gen.nodes['waist_cloth_0_0'].parentId === 'waist'
+    && gen.nodes['waist_cloth_0_1'].parentId === 'waist_cloth_0_0');
+  const mkN = (id: string, x: number, y: number, parentId: string | undefined, children: string[]) => {
+    const n = makeNode(id, id, null, parentId);
+    n.transform = { ...n.transform, x, y };
+    n.children = children;
+    return n;
+  };
+  const waist = mkN('waist', 100, 20, undefined, gen.gridIds.map((c) => c[0]));
+  // 根节点带摆动轨道（驱动）：±35° 摇摆，布料应滞后产生增量
+  waist.tracks = {
+    angle: { keyframes: [{ frame: 0, value: 0 }, { frame: 6, value: 35 }, { frame: 12, value: -35 }, { frame: 18, value: 0 }], interpolation: 'linear' },
+  } as never;
+  const chCloth = {
+    id: 'chcloth', name: '布料',
+    nodes: { waist, ...gen.nodes },
+    rootNodeId: 'waist', rootNodeIds: ['waist'], costumeSets: [], variants: {},
+  } as unknown as Character;
+  const detected = CL.detectClothGrid(chCloth, 'waist');
+  check('AJ1b 网格找回与生成一致', JSON.stringify(detected) === JSON.stringify(gen.gridIds));
+  // AJ2 求解器：静止钉点下布料保持垂悬（参考即垂悬）、横向间距守恒
+  const refGrid = [0, 1, 2].map((c) => [0, 1, 2].map((r) => ({ x: c * 8, y: r * 8 })));
+  const pinsAJ = Array.from({ length: 20 }, () => [0, 1, 2].map((c) => ({ x: c * 8, y: 0 })));
+  const refAJ = Array.from({ length: 20 }, () => refGrid);
+  const solvedAJ = CL.solveVerletCloth(pinsAJ, refAJ, P, 12);
+  const lastAJ = solvedAJ[19];
+  check('AJ2 静止布料垂悬稳定：底行 y≈16、横向距≈8',
+    Math.abs(lastAJ[0][2].y - 16) < 1.5 && Math.abs(lastAJ[2][2].y - 16) < 1.5
+    && Math.abs((lastAJ[1][2].x - lastAJ[0][2].x) - 8) < 1.2);
+  // AJ3 烘焙：驱动摇摆下产生非平凡增量 + 指纹新鲜/过期
+  const bakeC = CL.bakeClothSwing(chCloth, gen.gridIds, P, 0, 23, 12);
+  let maxDev = 0;
+  for (const [id, tr] of Object.entries(bakeC.angleTracks)) {
+    for (const kf of tr.keyframes) maxDev = Math.max(maxDev, Math.abs(kf.value - 0));
+  }
+  check('AJ3 布料烘焙：摇摆驱动下网格节点角度有实质增量', maxDev > 3);
+  const chBakedC = {
+    ...chCloth,
+    nodes: Object.fromEntries(Object.entries(chCloth.nodes).map(([id, n]) => [
+      id, bakeC.angleTracks[id] ? { ...n, tracks: { ...n.tracks, angle: bakeC.angleTracks[id] } } : n,
+    ])),
+    clothBakes: { waist: bakeC.record },
+  } as unknown as Character;
+  check('AJ3b 烘焙后指纹新鲜', CL.isClothBakeFresh(chBakedC, bakeC.record, 12));
+  const chMovedC = {
+    ...chBakedC,
+    nodes: { ...chBakedC.nodes, waist: { ...chBakedC.nodes.waist, transform: { ...chBakedC.nodes.waist.transform, x: 140 } } },
+  } as unknown as Character;
+  check('AJ3c 驱动变化后布料指纹过期', !CL.isClothBakeFresh(chMovedC, bakeC.record, 12));
+}
+
+// ---------- AK) D6 三期评估实证：烟雾走动态表面（无缝循环） ----------
+{
+  const bakerA = createSurfaceBaker();
+  const shapeA = { kind: 'rect', size: [40, 32] as [number, number], roundness: 0.15 };
+  const { expandSurfaceGraph: expGA, subgraphLibraryOf: subGA, graphHasRefs: hasRefA } = await import('../src/lib/proc-runtime/graph-expand');
+  const LEA = await import('../src/lib/library-entries');
+  const libA = subGA(LEA.surfaceLibEntriesOf(LEA.allLibraryEntries()));
+  const smokeT = PATTERN_TEMPLATES.find((t) => t.id === 'smoke-tex')!;
+  const sg0 = instantiatePattern(smokeT);
+  const sg = hasRefA(sg0) ? expGA(sg0, libA).graph : sg0;
+  const bakePh = (ph: number) => bakerA.compileTileDAG(shapeA, sg, 0, ph).data;
+  const diffPx = (a: Uint8Array, b: Uint8Array) => {
+    let n = 0;
+    for (let i = 0; i < a.length; i += 4) if (a[i] !== b[i]) n++;
+    return n;
+  };
+  const s0 = bakePh(0), s50 = bakePh(0.5), s97 = bakePh(0.97);
+  const tiersA = new Set<number>();
+  for (let i = 0; i < s50.length; i += 4) if (s50[i] < 200) tiersA.add(s50[i]);
+  check('AK1 上升烟雾：中相位四档烟色俱全', tiersA.size >= 4);
+  check('AK2 烟雾循环连续：近周期尾与周期头的差远小于半周期差',
+    diffPx(s97, s0) < diffPx(s0, s50) / 3 && diffPx(s0, s50) > 200);
+  check('AK3 烟雾带动画元数据（4 秒 / 16 步）',
+    smokeT.graph.animation?.cycleSec === 4 && smokeT.graph.animation?.frames === 16);
+}
+
+// ---------- AL) D6 毛发：发束生成 / 整束烘焙 / 聚合新鲜度 ----------
+{
+  const HB = await import('../src/lib/sim/strand-bake');
+  const VC2 = await import('../src/lib/sim/verlet-chain');
+  const P2 = VC2.defaultChainBakeParams();
+  // AL1 生成：5 丝 × 4 节；中丝直下、外丝外倾、发根对称均布
+  const genH = HB.generateHairStrands('scalp', 5, 4);
+  const rootX = (c: number) => genH.nodes[`scalp_hair_${c}_0`].transform.x;
+  const segDx = (c: number) => genH.nodes[`scalp_hair_${c}_1`].transform.x;
+  check('AL1 发束生成：20 节点、根位对称、中丝直下外丝外倾',
+    Object.keys(genH.nodes).length === 20
+    && rootX(0) === -10 && rootX(4) === 10 && rootX(2) === 0
+    && Math.abs(segDx(2)) < 0.01 && segDx(0) < -2 && segDx(4) > 2);
+  // AL2 找回 + 整束烘焙（根带摇摆驱动）
+  const mkN2 = (id: string, x: number, y: number, parentId: string | undefined, children: string[]) => {
+    const n = makeNode(id, id, null, parentId);
+    n.transform = { ...n.transform, x, y };
+    n.children = children;
+    return n;
+  };
+  const scalp = mkN2('scalp', 100, 20, undefined, genH.strandIds.map((s) => s[0]));
+  scalp.tracks = {
+    angle: { keyframes: [{ frame: 0, value: 0 }, { frame: 6, value: 30 }, { frame: 12, value: -30 }, { frame: 18, value: 0 }], interpolation: 'linear' },
+  } as never;
+  const chHair = {
+    id: 'chhair', name: '毛发',
+    nodes: { scalp, ...genH.nodes },
+    rootNodeId: 'scalp', rootNodeIds: ['scalp'], costumeSets: [], variants: {},
+  } as unknown as Character;
+  const detH = HB.detectHairStrands(chHair, 'scalp');
+  check('AL2 发束找回：5 根 × 4 节', !!detH && detH.length === 5 && detH[0].length === 4);
+  const bakeH = HB.bakeHairSwing(chHair, detH!, P2, 0, 23, 12);
+  let maxDevH = 0;
+  for (const tr of Object.values(bakeH.angleTracks)) {
+    for (const kf of tr.keyframes) maxDevH = Math.max(maxDevH, Math.abs(kf.value));
+  }
+  check('AL2b 整束烘焙：5 根各有档案、角度增量非平凡',
+    Object.keys(bakeH.records).length === 5 && maxDevH > 2);
+  const chHairBaked = {
+    ...chHair,
+    nodes: Object.fromEntries(Object.entries(chHair.nodes).map(([id, n]) => [
+      id, bakeH.angleTracks[id] ? { ...n, tracks: { ...n.tracks, angle: bakeH.angleTracks[id] } } : n,
+    ])),
+    chainBakes: bakeH.records,
+  } as unknown as Character;
+  check('AL3 烘焙后整束新鲜；驱动移位后出现过期发丝',
+    HB.hairStaleStrands(chHairBaked, detH!, 12).length === 0
+    && HB.hairStaleStrands({
+      ...chHairBaked,
+      nodes: { ...chHairBaked.nodes, scalp: { ...chHairBaked.nodes.scalp, transform: { ...chHairBaked.nodes.scalp.transform, x: 150 } } },
+    } as unknown as Character, detH!, 12).length >= 1);
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

@@ -871,6 +871,15 @@ export interface SurfaceGraphWrite {
   ch?: 'glint';
   bump?: { hi: number; mid: number; lo: number };
 }
+/** 动态表面规格（D1）：表面图随时间循环。相位在周期内离散为
+ * frames 步（步进式，便于编辑器与导出运行时按步缓存瓦片）；
+ * 图内经 phase 场源 / $phase / $phaseDeg / scroll 作用域消费相位。 */
+export interface SurfaceAnimationSpec {
+  /** 一圈秒数（>0） */
+  cycleSec: number;
+  /** 一圈离散步数（2..60） */
+  frames: number;
+}
 export interface SurfaceGraph {
   version: 1;
   nodes: SurfaceGraphNode[];
@@ -878,6 +887,8 @@ export interface SurfaceGraph {
   writes: SurfaceGraphWrite[];
   /** 模板暴露参数的当前值 */
   params?: Record<string, number>;
+  /** 动态表面：存在 = 本图随时间循环播放（见 SurfaceAnimationSpec） */
+  animation?: SurfaceAnimationSpec;
   /** 编辑器布局（v2 画布）：节点坐标 + 作用域框矩形；烘焙/运行时忽略 */
   ui?: {
     pos?: Record<string, { x: number; y: number }>;
@@ -1199,6 +1210,15 @@ export interface Character {
   // at render time if present.
   ikBlueprint?: BlueprintGraph | null;
 
+  // ---- 链摆烘焙档案（D6 一期）----
+  // 链根节点 id → 烘焙记录（指纹/帧窗/参数/链）。指纹与当前
+  // 状态重算不一致 = 烘焙过期，面板点名提示，不静默沿用。
+  chainBakes?: Record<string, import('./sim/verlet-chain').ChainBakeRecord>;
+
+  // ---- 布料烘焙档案（D6 二期）----
+  // 挂载根节点 id → 布料记录（网格节点阵列 + 指纹 + 基准角）。
+  clothBakes?: Record<string, import('./sim/cloth-bake').ClothBakeRecord>;
+
   // ---- Sprite Table (retired) ----
   // Sprites moved to the global s.sprites table. Kept as optional for
   // backward compat during migration; readers must use the global table.
@@ -1373,6 +1393,12 @@ export interface NodeRenderInstruction {
   costumeSlot?: string;
   /** 动态模式（双挂载解析后）：形变已乘进 stretch/scaleX，粒子由执行端按此绘制 */
   dynamicPatterns?: import('./dynamic-patterns').ResolvedDynamicPattern[];
+  /** 残影段（D5）：过去位姿相对当前位姿的增量（画布 px / 度），
+   * 由渲染计划按过去帧轨道位姿算出；执行端在本精灵之前逐个绘制 */
+  trailGhosts?: { dx: number; dy: number; daDeg: number; alpha: number }[];
+  /** 弧线双锚点（D4 二期）：实例序号 → 终点（本节点本地 px，
+   * 计划期按目标部件轨道位姿算好；无目标的实例不入表） */
+  arcEnds?: Record<number, { x: number; y: number }>;
   /** Shared sprite table for SpriteRef resolution (character.sprites) */
   sprites?: Record<string, Sprite>;
   /** 蒙皮快照弯曲参数（attachment.skinningSnapshot 生效时填充，renderNodeSprite 用） */

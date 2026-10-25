@@ -10,6 +10,7 @@
 // ============================================================
 
 import {
+  displacePhaseAt, displacePixelGrid, spinAngleDegAt, arcPointsAt,
   dynamicDeformAt, glowField, glowPulseAt, type DynamicPatternInstance, type DynamicPatternParams,
 } from './dynamic-patterns';
 import { createSurfaceBaker } from './proc-runtime/bake-src';
@@ -185,6 +186,10 @@ export function dynamicPosterRGBA(params: DynamicPatternParams): RGBAImage {
   }
   const t = bestT;
   const deform = dynamicDeformAt(params, t);
+  // 置换段（D2）：定格图同样过置换场（相位取峰值时刻口径）
+  const drawGrid = params.displaceEnabled
+    ? displacePixelGrid(grid, params, displacePhaseAt(params, t))
+    : grid;
   // 合成缓冲（float RGBA，src-over）
   const acc = new Float32Array(OUT * OUT * 4);
   const plot = (x: number, y: number, r: number, g: number, b: number, a: number) => {
@@ -260,20 +265,78 @@ export function dynamicPosterRGBA(params: DynamicPatternParams): RGBAImage {
     }
   };
   if (params.emitEnabled) drawParticles('back');
-  // 2) 精灵本体（形变 = 底边中心锚的整体缩放）
+  // 2) 精灵本体（形变 = 底边中心锚的整体缩放；自转 = 绕精灵
+  // 中心后向旋转采样，仅本体近似——发光/粒子层不跟着转）
   const dw = gw * SS * deform.sx;
   const dh = gh * SS * deform.sy;
   const dx0 = cxPx - dw / 2;
   const dy0 = bottomY - dh;
-  for (let y = 0; y < OUT; y++) {
-    for (let x = 0; x < OUT; x++) {
-      if (x < dx0 || x >= dx0 + dw || y < dy0 || y >= dy0 + dh) continue;
-      const sx = Math.floor(((x - dx0) / dw) * gw);
-      const sy = Math.floor(((y - dy0) / dh) * gh);
-      const c = grid[sy]?.[sx];
-      if (!c) continue;
-      const [r, g, b] = hexToRgb(c);
-      plot(x, y, r, g, b, 1);
+  const spinRad = (spinAngleDegAt(params, t) * Math.PI) / 180;
+  const spinCos = Math.cos(spinRad), spinSin = Math.sin(spinRad);
+  const drawBody = (alphaMul: number, offX: number) => {
+    for (let y = 0; y < OUT; y++) {
+      for (let x = 0; x < OUT; x++) {
+        if (x < dx0 || x >= dx0 + dw || y < dy0 || y >= dy0 + dh) continue;
+        let fx = ((x - dx0) / dw) * gw;
+        let fy = ((y - dy0) / dh) * gh;
+        if (spinRad !== 0) {
+          const lx = fx - gw / 2, ly = fy - gh / 2;
+          fx = lx * spinCos + ly * spinSin + gw / 2;
+          fy = -lx * spinSin + ly * spinCos + gh / 2;
+        }
+        const sx = Math.floor(fx);
+        const sy = Math.floor(fy);
+        const c = drawGrid[sy]?.[sx];
+        if (!c) continue;
+        const [r, g, b] = hexToRgb(c);
+        plot(x + offX, y, r, g, b, alphaMul);
+      }
+    }
+  };
+  // 残影段（D5）定格近似：无位姿历史可采，按蓝图残影的缺省口径
+  // 向左拖影两道（旧→新），仅示意
+  if (params.trailEnabled) {
+    const n = Math.max(1, Math.min(6, Math.round(params.trailCount || 3)));
+    for (let k = n; k >= 1; k--) {
+      drawBody((params.trailOpacity || 0.35) * (1 - (k - 1) / n) * 0.8, -k * Math.max(2, Math.round(gw * SS * 0.14)));
+    }
+  }
+  drawBody(1, 0);
+  // 弧线段（D4 一期）定格：与编辑器同一生成器，沿折线逐段盖点
+  // （原点 = 精灵中心近似插头，缩放 = 本体输出比例）
+  if (params.arcEnabled) {
+    const shape = arcPointsAt(params, t);
+    const [ar, ag, ab] = hexToRgb(params.arcColor || '#bfe3ff');
+    const ox = dx0 + dw / 2, oy = dy0 + dh / 2, k = dw / gw;
+    const stampLine = (pts: { x: number; y: number; w: number }[], alphaMul: number, widthMul: number) => {
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const x0 = ox + pts[i].x * k, y0 = oy + pts[i].y * k;
+        const x1 = ox + pts[i + 1].x * k, y1 = oy + pts[i + 1].y * k;
+        const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0)));
+        const rad = Math.max(0.6, (pts[i].w * k * widthMul) / 2);
+        for (let s2 = 0; s2 <= steps; s2++) {
+          const cx = x0 + ((x1 - x0) * s2) / steps, cy = y0 + ((y1 - y0) * s2) / steps;
+          for (let yy = Math.floor(cy - rad); yy <= cy + rad; yy++) {
+            for (let xx = Math.floor(cx - rad); xx <= cx + rad; xx++) {
+              if ((xx - cx) ** 2 + (yy - cy) ** 2 <= rad * rad) plot(xx, yy, ar, ag, ab, shape.alpha * alphaMul);
+            }
+          }
+        }
+      }
+    };
+    for (const line of [shape.main, ...shape.branches]) {
+      stampLine(line, 0.22, 2.6);
+      stampLine(line, 1, 1);
+    }
+    // 光点（藤蔓叶/星座星）：单点盖圆
+    for (const d of shape.dots) {
+      const cx = ox + d.x * k, cy = oy + d.y * k;
+      const rad = Math.max(0.6, d.w * k);
+      for (let yy = Math.floor(cy - rad); yy <= cy + rad; yy++) {
+        for (let xx = Math.floor(cx - rad); xx <= cx + rad; xx++) {
+          if ((xx - cx) ** 2 + (yy - cy) ** 2 <= rad * rad) plot(xx, yy, ar, ag, ab, shape.alpha);
+        }
+      }
     }
   }
   if (params.emitEnabled) drawParticles('front');

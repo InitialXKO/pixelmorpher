@@ -75,7 +75,7 @@ import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from 
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
-import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followDeltaAt, glowField, glowPulseAt, type DynamicPatternParams } from './dynamic-patterns';
+import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
@@ -1243,6 +1243,10 @@ function resolveSprite(
   sprites?: Record<string, import('./unified-types').Sprite>,
   variantId?: string,
   latitude?: number,
+  // 动态表面（D1）：当前帧与工程帧率——表面图带 animation 时按
+  // frame/frameRate 算离散相位取对应烘焙；缺省 = 相位 0（静态口径）
+  frame?: number,
+  frameRate?: number,
 ): { sprite: Sprite | null; mirror: boolean; spriteId: string | null } {
   // 参数化优先（用户拍板）：生效服装件带 parametric 时，主画布以参数化
   // 烘焙精灵渲染，盖过精灵图。件键走产品回退口径 slot.slotKey ?? nodeId。
@@ -1253,15 +1257,18 @@ function resolveSprite(
     const piece = costumeSet.pieces[node.slot?.slotKey ?? node.id];
     if (piece?.parametric) {
       const { buildParametricSprite, PARAMETRIC_MIRROR_DIRECTIONS } = require('./proc-runtime/main-canvas') as typeof import('./proc-runtime/main-canvas');
+      const { surfaceAnimationOf, surfacePhaseAt } = require('./proc-runtime/surface-animation') as typeof import('./proc-runtime/surface-animation');
       const app = piece.parametric;
+      const anim = surfaceAnimationOf(app.surfaceGraph);
+      const phase = anim ? surfacePhaseAt(anim, (frame ?? 0) / (frameRate ?? 12)) : 0;
       if ((app.composite ?? 'generate') !== 'generate' && sprites) {
         const base = resolvePieceSprite(piece, direction, variantId, sprites, latitude);
         if (base.sprite) {
-          const spr = buildParametricSprite(app, node.id, base.sprite);
+          const spr = buildParametricSprite(app, node.id, base.sprite, phase);
           if (spr) return { sprite: spr, mirror: base.mirror, spriteId: null };
         }
       }
-      const spr = buildParametricSprite(app, node.id);
+      const spr = buildParametricSprite(app, node.id, undefined, phase);
       if (spr) return { sprite: spr, mirror: PARAMETRIC_MIRROR_DIRECTIONS.has(direction), spriteId: null };
     }
   }
@@ -1795,14 +1802,14 @@ export function generateRenderPlan(
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
     // 方向混合时：先按 dirA 解析主精灵
     const resolveDir = dirBlend ? dirBlend.dirA : currentDirection;
-    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0);
+    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0, frame, frameRate);
     if (!sprite) continue;
 
     // 方向间过渡（蒙皮转面 A）：blend 不为 0/1 时，双精灵 faceTurn + alpha 混合
     // 只在需要时双采样，避免性能开销
     let blendedSprite: typeof sprite | null = null;
     if (dirBlend && sprite.data) {
-      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0);
+      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0, frame, frameRate);
       if (spriteB && spriteB.data) {
         try {
           const { applyFaceTurn, alphaBlendGrids } = require('./skin/face-turn') as typeof import('./skin/face-turn');
@@ -1886,12 +1893,15 @@ export function generateRenderPlan(
     );
     let dynSx = 1, dynSy = 1;
     let folDx = 0, folDy = 0, folDa = 0;
+    let spinDeg = 0;
     if (dynResolved.length > 0) {
       const tSec = frame / frameRate;
       for (const r of dynResolved) {
         const d = dynamicDeformAt(r.instance.params, tSec);
         dynSx *= d.sx;
         dynSy *= d.sy;
+        // 自转段（D3）：角度叠进本指令（多实例求和），只动本节点
+        spinDeg += spinAngleDegAt(r.instance.params, tSec);
         // 追随段：源部件滞后位姿差（轨道位姿取样，见 followPoseAt）
         const fp = r.instance.params;
         if (anyFollow && fp.followEnabled && fp.followSource) {
@@ -1905,12 +1915,58 @@ export function generateRenderPlan(
         }
       }
     }
+    // 弧线双锚点（D4 二期）：目标部件当前帧轨道位姿 → 本节点
+    // 本地系终点（与追随/残影同一 followPoseAt 口径：剥离蓝图、
+    // 视图投影后的画布 px 差逆旋回本地；投影压扁不补偿，同近似）
+    let arcEnds: NodeRenderInstruction['arcEnds'];
+    if (dynResolved.length > 0 && dynResolved.some((r) => r.instance.params.arcEnabled && r.instance.params.arcTarget)) {
+      const selfPose = followPoseAt(nodeId, frame);
+      if (selfPose) {
+        const ends: NonNullable<NodeRenderInstruction['arcEnds']> = {};
+        dynResolved.forEach((r, ri) => {
+          const p = r.instance.params;
+          if (!p.arcEnabled || !p.arcTarget) return;
+          const srcId = followSlotToNode.get(p.arcTarget);
+          const tp = srcId ? followPoseAt(srcId, frame) : undefined;
+          if (!tp) return;
+          const dx = tp.x - selfPose.x, dy = tp.y - selfPose.y;
+          const ca = Math.cos(selfPose.a), sa = Math.sin(selfPose.a);
+          ends[ri] = { x: dx * ca + dy * sa, y: -dx * sa + dy * ca };
+        });
+        if (Object.keys(ends).length > 0) arcEnds = ends;
+      }
+    }
+    // 残影段（D5）：过去帧的世界位姿差（与追随段同一 followPoseAt
+    // machinery——剥离蓝图的轨道位姿、当前帧同口径相减，增量由此
+    // 只含轨道运动；蓝图驱动的运动不入残影，与追随段同一近似）
+    let trailGhosts: NodeRenderInstruction['trailGhosts'];
+    if (dynResolved.length > 0) {
+      const tp = dynResolved.map((r) => r.instance.params).find((p) => p.trailEnabled);
+      if (tp) {
+        const nowP = followPoseAt(nodeId, frame);
+        if (nowP) {
+          const count = Math.max(1, Math.min(6, Math.round(tp.trailCount || 3)));
+          const list: NonNullable<NodeRenderInstruction['trailGhosts']> = [];
+          for (let k = count; k >= 1; k--) {
+            const past = followPoseAt(nodeId, frame - k * (tp.trailIntervalSec || 0.06) * frameRate);
+            if (!past) continue;
+            list.push({
+              dx: past.x - nowP.x,
+              dy: past.y - nowP.y,
+              daDeg: ((past.a - nowP.a) * 180) / Math.PI,
+              alpha: (tp.trailOpacity || 0.35) * (1 - (k - 1) / count),
+            });
+          }
+          if (list.length) trailGhosts = list;
+        }
+      }
+    }
     nodeInstructions.push({
       nodeId,
       sprite: effectiveSprite,
       worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel) + pxToSub(folDx)) as SubPixel,
       worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel) + pxToSub(folDy)) as SubPixel,
-      angle: worldTf.worldAngle + (folDa * 180) / Math.PI,
+      angle: worldTf.worldAngle + (folDa * 180) / Math.PI + spinDeg,
       stretch: dynResolved.length > 0 ? worldTf.worldStretch * dynSy : worldTf.worldStretch,
       foreshorten,
       variantIndex: worldTf.variantIndex,
@@ -1943,6 +1999,8 @@ export function generateRenderPlan(
       // t.scaleX 修复：蓝图 scaleX 独立 plumbing，不再平均吃掉
       scaleX: dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX,
       dynamicPatterns: dynResolved.length > 0 ? dynResolved : undefined,
+      trailGhosts,
+      arcEnds,
       // 蓝图 skew：有倾斜量时才填，避免空数组污染
       skews: (worldTf.skewX || worldTf.skewY) ? [{ skewX: worldTf.skewX ?? 0, skewY: worldTf.skewY ?? 0 }] : undefined,
       // STEP2 合并：plumbing 蓝图给 renderNodeSprite，替代手拼像素链
@@ -2165,6 +2223,48 @@ function drawDynamicParticles(
       ctx.fill();
     }
   }
+}
+
+/** 动态模式弧线段（D4 一期）：本地坐标（原点 = 枢轴，与粒子同一
+ * 变换空间）。先宽线低透明作晕，再细线本体，逐段线宽随点位收细。 */
+function drawDynamicArcs(
+  ctx: CanvasRenderingContext2D,
+  instruction: NodeRenderInstruction,
+): void {
+  const list = instruction.dynamicPatterns;
+  if (!list || list.length === 0) return;
+  const tSec = (instruction.frame ?? 0) / (instruction.frameRate || 12);
+  list.forEach((resolved, ri) => {
+    const p = resolved.instance.params;
+    if (!p.arcEnabled) return;
+    const shape = arcPointsAt(p, tSec, instruction.arcEnds?.[ri]);
+    const rgb = hexToRgb(p.arcColor || '#bfe3ff') ?? { r: 191, g: 227, b: 255 };
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const strokeLine = (pts: { x: number; y: number; w: number }[], widthMul: number, alphaMul: number) => {
+      ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${(shape.alpha * alphaMul).toFixed(3)})`;
+      for (let i = 0; i + 1 < pts.length; i++) {
+        ctx.lineWidth = Math.max(0.4, pts[i].w * widthMul);
+        ctx.beginPath();
+        ctx.moveTo(pts[i].x, pts[i].y);
+        ctx.lineTo(pts[i + 1].x, pts[i + 1].y);
+        ctx.stroke();
+      }
+    };
+    for (const line of [shape.main, ...shape.branches]) {
+      strokeLine(line, 2.6, 0.22);
+      strokeLine(line, 1, 1);
+    }
+    // 光点（藤蔓叶 / 星座星）：实心圆，半径 = 点宽
+    for (const d of shape.dots) {
+      ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${shape.alpha.toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, Math.max(0.5, d.w), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  });
 }
 
 /** 发光叠加层缓存：键 = 像素内容哈希 + 发光参数签名 + 脉冲量化步 + 镜像位 */
@@ -2541,6 +2641,21 @@ function renderNodeSprite(
     );
   }
 
+  // 动态模式置换段（D2）：全部像素加工完成后、成画布之前按噪声场
+  // 逐像素重采样。多实例只取第一个启用置换（与导出运行时同口径）；
+  // 发光叠加层在下方用同一份 effectivePixels 构建，自动同场对齐。
+  if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
+    const disp = instruction.dynamicPatterns
+      .map((r) => r.instance.params)
+      .find((p) => p.displaceEnabled && (p.displaceAmp ?? 0) > 0);
+    if (disp) {
+      const { displacePixelGrid, displacePhaseAt } = require('./dynamic-patterns') as typeof import('./dynamic-patterns');
+      effectivePixels = displacePixelGrid(
+        effectivePixels, disp, displacePhaseAt(disp, frame / frameRate),
+      ) as PixelGrid;
+    }
+  }
+
   // Create offscreen canvas from (possibly modified) sprite data
   // 可逆性：分部件尺度差换算。精灵是分部件像素（相机紧→图里大），节点是全局像素，
   // 绘制时按比例缩放对齐。scaleFactor = partCameraHalf / globalCameraHalf（记录的尺度差，可逆）
@@ -2611,6 +2726,24 @@ function renderNodeSprite(
   // Compute the draw position (where the pivot lands on canvas)
   const drawPivotX = subToPx(worldX);
   const drawPivotY = subToPx(worldY);
+
+  // 残影段（D5）：在本节点一切绘制之前，按过去位姿增量逐个画同一
+  // 份 workingCanvas（旧→新、逐个变淡）。走原生变换路径——残影
+  // 半透明，像素完美旋转的差异不可见。
+  if (previewQuality !== 'low' && instruction.trailGhosts?.length) {
+    for (const g of instruction.trailGhosts) {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(1, g.alpha));
+      ctx.translate(Math.round(drawPivotX + g.dx), Math.round(drawPivotY + g.dy));
+      ctx.rotate(((angle + g.daDeg) * Math.PI) / 180);
+      ctx.scale(scaleX, effStretch);
+      for (const { skewX, skewY } of skews) {
+        ctx.transform(1, Math.tan((skewY * Math.PI) / 180), Math.tan((skewX * Math.PI) / 180), 1, 0, 0);
+      }
+      ctx.drawImage(workingCanvas, -pivotX, -pivotY);
+      ctx.restore();
+    }
+  }
 
   // We need ctx.save/restore to isolate the transform for effect rendering
   ctx.save();
@@ -2754,6 +2887,7 @@ function renderNodeSprite(
       }
       if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
         drawDynamicParticles(ctx, instruction, 'front');
+        drawDynamicArcs(ctx, instruction);
       }
       for (const mod of topEffectMods) {
         renderParticleEffect(ctx, nodeId, sprite, mod as any, frame);
@@ -2774,9 +2908,10 @@ function renderNodeSprite(
       ctx.restore();
     }
 
-    // 动态模式粒子（身前层）
+    // 动态模式粒子（身前层）+ 弧线段
     if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
       drawDynamicParticles(ctx, instruction, 'front');
+      drawDynamicArcs(ctx, instruction);
     }
 
     // ========================================================================

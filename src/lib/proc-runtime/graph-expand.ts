@@ -148,7 +148,11 @@ export function expandSurfaceGraph(
 
   const rootMap = processGraph(root, '', []);
   const writes = root.writes.map((wr) => ({ ...wr, from: rootMap.get(wr.from) ?? wr.from }));
-  return { graph: { version: 1, nodes: outNodes, writes, params: {} }, warnings };
+  // 动画规格随根图走（相位是全局量：子图内的 phase/scroll 消费根图相位）
+  return {
+    graph: { version: 1, nodes: outNodes, writes, params: {}, ...(root.animation ? { animation: root.animation } : {}) },
+    warnings,
+  };
 }
 
 /** 图里是否含 ref 节点（调用方据此决定要不要展开/传库） */

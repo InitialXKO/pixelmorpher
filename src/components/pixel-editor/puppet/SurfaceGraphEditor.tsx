@@ -58,6 +58,8 @@ const numCls = 'h-6 w-14 text-[10px] bg-[#111128] border border-[#1e1e3a] rounde
 export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, haloWidth, onChange, onSaveTemplate, onClose }: Props) {
   const [viewMode, setViewMode] = useState<'canvas' | 'list'>('canvas');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 动态表面（D1）预览相位：手动拨动查看各相位烘焙（不写回图）
+  const [previewPhase, setPreviewPhase] = useState(0);
   // 打包成子图：null = 未进入打包模式；Set = 已勾选的节点 id
   const [packSel, setPackSel] = useState<ReadonlySet<string> | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -97,11 +99,11 @@ export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, hal
       const g = graphHasRefs(graph)
         ? expandSurfaceGraph(graph, subgraphLibraryOf(allPatternTemplates())).graph
         : graph;
-      return baker().compileTileDAG(shape, g, haloWidth ?? 0);
+      return baker().compileTileDAG(shape, g, haloWidth ?? 0, previewPhase);
     } catch {
       return null;
     }
-  }, [graph, shape, haloWidth]);
+  }, [graph, shape, haloWidth, previewPhase]);
 
   useEffect(() => {
     const cv = canvasRef.current;
@@ -282,6 +284,19 @@ export default function SurfaceGraphEditor({ title, graph, paramDefs, shape, hal
               >
                 <canvas ref={canvasRef} style={{ imageRendering: 'pixelated', width: 168, height: 132, objectFit: 'contain' }} />
               </div>
+              <div className="mt-1 flex items-center gap-1.5">
+                <span className="text-[9px] text-gray-500">预览相位</span>
+                <input
+                  type="range" min={0} max={1} step={graph.animation ? 1 / Math.max(2, graph.animation.frames) : 0.02}
+                  value={previewPhase}
+                  onChange={(e) => setPreviewPhase(Number(e.target.value))}
+                  className="h-1 flex-1 accent-cyan-400"
+                />
+                <span className="w-8 text-right text-[9px] text-gray-400">{previewPhase.toFixed(2)}</span>
+              </div>
+              {!graph.animation && (
+                <p className="text-[8px] text-gray-600">图未开启动态表面：相位只影响预览，正式烘焙恒为相位 0。在外观面板勾选「动态表面」后生效。</p>
+              )}
             </div>
 
             <div>
