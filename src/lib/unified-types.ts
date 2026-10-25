@@ -1215,6 +1215,10 @@ export interface Character {
   // 状态重算不一致 = 烘焙过期，面板点名提示，不静默沿用。
   chainBakes?: Record<string, import('./sim/verlet-chain').ChainBakeRecord>;
 
+  // ---- 布料烘焙档案（D6 二期）----
+  // 挂载根节点 id → 布料记录（网格节点阵列 + 指纹 + 基准角）。
+  clothBakes?: Record<string, import('./sim/cloth-bake').ClothBakeRecord>;
+
   // ---- Sprite Table (retired) ----
   // Sprites moved to the global s.sprites table. Kept as optional for
   // backward compat during migration; readers must use the global table.
@@ -1392,6 +1396,9 @@ export interface NodeRenderInstruction {
   /** 残影段（D5）：过去位姿相对当前位姿的增量（画布 px / 度），
    * 由渲染计划按过去帧轨道位姿算出；执行端在本精灵之前逐个绘制 */
   trailGhosts?: { dx: number; dy: number; daDeg: number; alpha: number }[];
+  /** 弧线双锚点（D4 二期）：实例序号 → 终点（本节点本地 px，
+   * 计划期按目标部件轨道位姿算好；无目标的实例不入表） */
+  arcEnds?: Record<number, { x: number; y: number }>;
   /** Shared sprite table for SpriteRef resolution (character.sprites) */
   sprites?: Record<string, Sprite>;
   /** 蒙皮快照弯曲参数（attachment.skinningSnapshot 生效时填充，renderNodeSprite 用） */

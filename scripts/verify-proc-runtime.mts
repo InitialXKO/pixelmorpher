@@ -2754,4 +2754,186 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('AF3d 焦散纹（近似）：网状亮纹档出现且非均匀', tiers7(cauT.data).has(3) && tiers7(cauT.data).size >= 3);
 }
 
+// ---------- AG) 既有问题修复回归门：写出可达性审计 ----------
+// 每条非底涂、非 bump 的写出单独烘焙必须至少画出 1 个像素
+// （含 glint 通道）——防「阈值高于场峰值 / 二值场套 levelBand
+// 恒零 / 极坐标单元局部系错位」这类静默失效再次混入。
+{
+  const baker8 = createSurfaceBaker();
+  const shape8 = { kind: 'rect', size: [40, 32] as [number, number], roundness: 0.15 };
+  const { expandSurfaceGraph: expG8, subgraphLibraryOf: subG8, graphHasRefs: hasRef8 } = await import('../src/lib/proc-runtime/graph-expand');
+  const LE8 = await import('../src/lib/library-entries');
+  const lib8 = subG8(LE8.surfaceLibEntriesOf(LE8.allLibraryEntries()));
+  const dead: string[] = [];
+  for (const t of PATTERN_TEMPLATES) {
+    t.graph.writes.forEach((w, i) => {
+      if (w.from === 'in' || w.bump) return;
+      let g0 = instantiatePattern(t);
+      g0 = { ...g0, writes: [g0.writes[i]] };
+      const g = hasRef8(g0) ? expG8(g0, lib8).graph : g0;
+      const data = baker8.compileTileDAG(shape8, g).data;
+      let painted = 0;
+      for (let p = 0; p < data.length; p += 4) {
+        if (w.ch === 'glint' ? data[p + 1] === 255 : data[p] === w.slot) painted++;
+      }
+      if (painted === 0) dead.push(`${t.id}#${i}:${w.from}`);
+    });
+  }
+  check('AG1 全模板无永不触发的写出（阈值/二值带/极坐标三类病已清）', dead.length === 0);
+  if (dead.length > 0) console.log('  死写出：', dead.join(' '));
+  // AG2 极坐标局部系：放射齿纹的齿写出应大面积出现（旧实现只剩中心点）
+  const gearT = PATTERN_TEMPLATES.find((t) => t.id === 'gear')!;
+  const gearTile = baker8.compileTileDAG(shape8, expG8(instantiatePattern(gearT), lib8).graph);
+  let gearTeeth = 0;
+  for (let p = 0; p < gearTile.data.length; p += 4) if (gearTile.data[p] === 3) gearTeeth++;
+  check('AG2 放射齿纹齿面回归（极坐标居中修复）', gearTeeth > 200);
+}
+
+// ---------- AH) 半调 + 人字纹（批次 1 C 组补完） ----------
+{
+  const baker9 = createSurfaceBaker();
+  const shape9 = { kind: 'rect', size: [48, 36] as [number, number], roundness: 0.1 };
+  const { expandSurfaceGraph: expG9, subgraphLibraryOf: subG9 } = await import('../src/lib/proc-runtime/graph-expand');
+  const LE9 = await import('../src/lib/library-entries');
+  const lib9 = subG9(LE9.surfaceLibEntriesOf(LE9.allLibraryEntries()));
+  const bake9 = (t: (typeof PATTERN_TEMPLATES)[number]) =>
+    baker9.compileTileDAG(shape9, expG9(instantiatePattern(t), lib9).graph);
+  // AH1 半调：点覆盖随归一深度变化（边缘行无点、中心行密）
+  const ht = bake9(PATTERN_TEMPLATES.find((t) => t.id === 'halftone')!);
+  const rowDots = (tile: { w: number; h: number; data: Uint8Array }, r: number) => {
+    let n = 0;
+    for (let i = 0; i < tile.w; i++) if (tile.data[(r * tile.w + i) * 4] >= 3 && tile.data[(r * tile.w + i) * 4] <= 4) n++;
+    return n;
+  };
+  const htEdge = rowDots(ht, 2);
+  const htMid = rowDots(ht, Math.floor(ht.h / 2));
+  check('AH1 点阵半调：点径/覆盖随明暗场变化（边缘 < 中心）', htMid > htEdge + 6);
+  // AH2 人字纹：奇偶旋转开/关图案不同（prot 真生效）
+  const hbT = PATTERN_TEMPLATES.find((t) => t.id === 'herringbone')!;
+  const hbOn = bake9(hbT);
+  const hbOffGraph = instantiatePattern(hbT);
+  for (const n of hbOffGraph.nodes) if (n.op === 'repeat') n.params = { ...n.params, prot: 0 };
+  const hbOff = baker9.compileTileDAG(shape9, expG9(hbOffGraph, lib9).graph);
+  check('AH2 人字纹：奇偶旋转改变图案（prot 生效）',
+    !Buffer.from(hbOn.data).equals(Buffer.from(hbOff.data)));
+}
+
+// ---------- AI) D4 二期：藤蔓 / 星座 / 生长 / 双锚点 ----------
+{
+  const DP9 = await import('../src/lib/dynamic-patterns');
+  const { createDynamicRuntime: mkRt9 } = await import('../src/lib/proc-runtime/dynamic-src');
+  const rt9 = mkRt9();
+  const base9 = DP9.normalizeDynamicParams({ ...DP9.defaultDynamicParams(), arcEnabled: true });
+  const eq9 = (a: { x: number; y: number; w: number }[], b: [number, number, number][]) =>
+    a.length === b.length && a.every((q, i) => Math.abs(q.x - b[i][0]) < 1e-9 && Math.abs(q.y - b[i][1]) < 1e-9 && Math.abs(q.w - b[i][2]) < 1e-9);
+  const shapeEq9 = (p: never, t: number, ex?: number, ey?: number, has?: boolean) => {
+    const a = DP9.arcPointsAt(p as never, t, has ? { x: ex!, y: ey! } : undefined);
+    const b = rt9.dynArcPoints(p, t, ex, ey, has);
+    return eq9(a.main, b.main) && a.branches.length === b.branches.length
+      && a.branches.every((br, i) => eq9(br, b.branches[i]))
+      && eq9(a.dots, b.dots) && Math.abs(a.alpha - b.alpha) < 1e-9;
+  };
+  // AI1 三模式两端逐点一致
+  const vine9 = { ...base9, arcMode: 'vine', arcLengthPx: 42, arcDirDeg: 270, arcGrowHz: 0.3, arcDetail: 6 } as never;
+  const stars9 = { ...base9, arcMode: 'stars', arcLengthPx: 34, arcDetail: 7, arcFlicker: 6 } as never;
+  check('AI1 藤蔓/星座两端逐点一致（多时刻）',
+    shapeEq9(vine9, 0.7) && shapeEq9(vine9, 2.9) && shapeEq9(stars9, 0.4) && shapeEq9(stars9, 1.3));
+  // AI2 藤蔓结构：主链节数 = 长/步长，叶点数 = 细节数（满生长）
+  const vFull = DP9.arcPointsAt({ ...(vine9 as object), arcGrowHz: 0 } as never, 0);
+  check('AI2 藤蔓满生长：主链 8 点 + 叶点 6', vFull.main.length === 8 && vFull.dots.length === 6);
+  // AI3 星座结构：连线串全点、星点齐
+  const sFull = DP9.arcPointsAt(stars9 as never, 0);
+  check('AI3 星座：主线 7 点串全星 + 星点 7', sFull.main.length === 7 && sFull.dots.length === 7);
+  // AI4 生长：周期起点主线收为一点、中段变长、满段与无生长等长
+  const grow9 = { ...base9, arcGrowHz: 0.5, arcLengthPx: 40, arcFlicker: 0 } as never;
+  const lineLen = (pts: { x: number; y: number }[]) => pts.reduce((acc, q, i) => (i === 0 ? 0 : acc + Math.hypot(q.x - pts[i - 1].x, q.y - pts[i - 1].y)), 0);
+  const g0 = DP9.arcPointsAt(grow9, 0);
+  const gMid = DP9.arcPointsAt(grow9, 0.6);
+  const gFull = DP9.arcPointsAt(grow9, 1.6);
+  const gRef = DP9.arcPointsAt({ ...(grow9 as object), arcGrowHz: 0 } as never, 0);
+  check('AI4 生长：起步一点、中段半长、满段等长（两端同）',
+    g0.main.length === 1 && lineLen(gMid.main) > 5 && lineLen(gMid.main) < lineLen(gRef.main) - 3
+    && Math.abs(lineLen(gFull.main) - lineLen(gRef.main)) < 1e-6 && shapeEq9(grow9, 0.6));
+  // AI5 双锚点：终点覆盖（无曲折时主弧终点 = 给定终点，两端同）
+  const anch9 = { ...base9, arcDisplace: 0 } as never;
+  const aShape = DP9.arcPointsAt(anch9, 0, { x: 30, y: 12 });
+  const aLast = aShape.main[aShape.main.length - 1];
+  check('AI5 双锚点：主弧终点落在目标点（两端逐点同）',
+    Math.abs(aLast.x - 30) < 1e-9 && Math.abs(aLast.y - 12) < 1e-9 && shapeEq9(anch9, 0, 30, 12, true));
+  // AI6 条目展开 + 整包接线
+  const LE10 = await import('../src/lib/library-entries');
+  const DE10 = await import('../src/lib/dynamic-expand');
+  const vineE = DE10.expandDynamicEntry(LE10.BUILTIN_INDEX, 'dyn-vine', 1);
+  const wreathE = DE10.expandDynamicEntry(LE10.BUILTIN_INDEX, 'dyn-vine-wreath', 1);
+  check('AI6 藤蔓/藤蔓花环展开（模式与生长参数透传）', !!vineE.params && vineE.params.arcMode === 'vine'
+    && vineE.params.arcGrowHz === 0.3 && !!wreathE.params && wreathE.errors.length === 0 && wreathE.params.glowEnabled);
+  const { readFileSync: rfs10 } = await import('node:fs');
+  const RT10 = rfs10(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+  const UR10 = rfs10(new URL('../src/lib/unified-render.ts', import.meta.url), 'utf8');
+  check('AI6b 运行时双锚查表 + 编辑器计划期终点接线在位',
+    RT10.includes('partAnchorsByKey') && RT10.includes('hasEnd')
+    && UR10.includes('arcEnds') && UR10.includes('followSlotToNode.get(p.arcTarget)'));
+}
+
+// ---------- AJ) D6 二期布料：网格生成 / 求解 / 烘焙折算 / 指纹 ----------
+{
+  const CL = await import('../src/lib/sim/cloth-bake');
+  const VC = await import('../src/lib/sim/verlet-chain');
+  const P = VC.defaultChainBakeParams();
+  // AJ1 网格生成与找回
+  const gen = CL.generateClothGrid('waist', 3, 3, 8, 8);
+  check('AJ1 网格生成：9 节点、列根挂 root、列内成链',
+    Object.keys(gen.nodes).length === 9
+    && gen.gridIds.length === 3 && gen.gridIds[0].length === 3
+    && gen.nodes['waist_cloth_0_0'].parentId === 'waist'
+    && gen.nodes['waist_cloth_0_1'].parentId === 'waist_cloth_0_0');
+  const mkN = (id: string, x: number, y: number, parentId: string | undefined, children: string[]) => {
+    const n = makeNode(id, id, null, parentId);
+    n.transform = { ...n.transform, x, y };
+    n.children = children;
+    return n;
+  };
+  const waist = mkN('waist', 100, 20, undefined, gen.gridIds.map((c) => c[0]));
+  // 根节点带摆动轨道（驱动）：±35° 摇摆，布料应滞后产生增量
+  waist.tracks = {
+    angle: { keyframes: [{ frame: 0, value: 0 }, { frame: 6, value: 35 }, { frame: 12, value: -35 }, { frame: 18, value: 0 }], interpolation: 'linear' },
+  } as never;
+  const chCloth = {
+    id: 'chcloth', name: '布料',
+    nodes: { waist, ...gen.nodes },
+    rootNodeId: 'waist', rootNodeIds: ['waist'], costumeSets: [], variants: {},
+  } as unknown as Character;
+  const detected = CL.detectClothGrid(chCloth, 'waist');
+  check('AJ1b 网格找回与生成一致', JSON.stringify(detected) === JSON.stringify(gen.gridIds));
+  // AJ2 求解器：静止钉点下布料保持垂悬（参考即垂悬）、横向间距守恒
+  const refGrid = [0, 1, 2].map((c) => [0, 1, 2].map((r) => ({ x: c * 8, y: r * 8 })));
+  const pinsAJ = Array.from({ length: 20 }, () => [0, 1, 2].map((c) => ({ x: c * 8, y: 0 })));
+  const refAJ = Array.from({ length: 20 }, () => refGrid);
+  const solvedAJ = CL.solveVerletCloth(pinsAJ, refAJ, P, 12);
+  const lastAJ = solvedAJ[19];
+  check('AJ2 静止布料垂悬稳定：底行 y≈16、横向距≈8',
+    Math.abs(lastAJ[0][2].y - 16) < 1.5 && Math.abs(lastAJ[2][2].y - 16) < 1.5
+    && Math.abs((lastAJ[1][2].x - lastAJ[0][2].x) - 8) < 1.2);
+  // AJ3 烘焙：驱动摇摆下产生非平凡增量 + 指纹新鲜/过期
+  const bakeC = CL.bakeClothSwing(chCloth, gen.gridIds, P, 0, 23, 12);
+  let maxDev = 0;
+  for (const [id, tr] of Object.entries(bakeC.angleTracks)) {
+    for (const kf of tr.keyframes) maxDev = Math.max(maxDev, Math.abs(kf.value - 0));
+  }
+  check('AJ3 布料烘焙：摇摆驱动下网格节点角度有实质增量', maxDev > 3);
+  const chBakedC = {
+    ...chCloth,
+    nodes: Object.fromEntries(Object.entries(chCloth.nodes).map(([id, n]) => [
+      id, bakeC.angleTracks[id] ? { ...n, tracks: { ...n.tracks, angle: bakeC.angleTracks[id] } } : n,
+    ])),
+    clothBakes: { waist: bakeC.record },
+  } as unknown as Character;
+  check('AJ3b 烘焙后指纹新鲜', CL.isClothBakeFresh(chBakedC, bakeC.record, 12));
+  const chMovedC = {
+    ...chBakedC,
+    nodes: { ...chBakedC.nodes, waist: { ...chBakedC.nodes.waist, transform: { ...chBakedC.nodes.waist.transform, x: 140 } } },
+  } as unknown as Character;
+  check('AJ3c 驱动变化后布料指纹过期', !CL.isClothBakeFresh(chMovedC, bakeC.record, 12));
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

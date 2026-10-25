@@ -328,6 +328,16 @@ export function dynamicPosterRGBA(params: DynamicPatternParams): RGBAImage {
       stampLine(line, 0.22, 2.6);
       stampLine(line, 1, 1);
     }
+    // 光点（藤蔓叶/星座星）：单点盖圆
+    for (const d of shape.dots) {
+      const cx = ox + d.x * k, cy = oy + d.y * k;
+      const rad = Math.max(0.6, d.w * k);
+      for (let yy = Math.floor(cy - rad); yy <= cy + rad; yy++) {
+        for (let xx = Math.floor(cx - rad); xx <= cx + rad; xx++) {
+          if ((xx - cx) ** 2 + (yy - cy) ** 2 <= rad * rad) plot(xx, yy, ar, ag, ab, shape.alpha);
+        }
+      }
+    }
   }
   if (params.emitEnabled) drawParticles('front');
   const data = new Uint8ClampedArray(OUT * OUT * 4);

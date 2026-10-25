@@ -85,6 +85,8 @@ function mulberry(seed) {
 // $phase / $phaseDeg，并经 env.phase 供 phase 场源与 scroll 作用域消费。
 function compileSurfaceGraph(graph, shape, phase) {
   var phaseN = (typeof phase === 'number' && isFinite(phase)) ? ((phase % 1) + 1) % 1 : 0;
+  // 形状外接半径：极坐标重复的径向跨度（单元局部系居中要用）
+  var shapeMaxRad = (shape && shape.size) ? Math.hypot(shape.size[0], shape.size[1]) / 2 : 30;
   var gparams = Object.assign({}, graph.params || {}, { phase: phaseN, phaseDeg: phaseN * 360 });
   var byId = new Map();
   for (var i = 0; i < graph.nodes.length; i++) byId.set(graph.nodes[i].id, graph.nodes[i]);
@@ -427,10 +429,18 @@ function compileSurfaceGraph(graph, shape, phase) {
           var tx = lx * rc2 - ly * rs2, ty = lx * rs2 + ly * rc2;
           lx = tx; ly = ty;
         }
+        // 奇偶旋转（人字纹）：(行+列) 为奇数的单元整体转 prot 度
+        var prot = P(node, 'prot', 0);
+        if (prot !== 0 && Math.abs(row + col) % 2 === 1) {
+          var pa = prot * Math.PI / 180;
+          var pc = Math.cos(pa), ps = Math.sin(pa);
+          var px2 = lx * pc - ly * ps, py2 = lx * ps + ly * pc;
+          lx = px2; ly = py2;
+        }
         // 交替重复 AB：奇偶行用 B 程序（Alexander 交替重复的完整式）
         var child2 = node.inputs ? byId.get(node.inputs.in) : undefined;
         if (parity === 1 && node.inputs && node.inputs.b) child2 = byId.get(node.inputs.b);
-        return child2 ? ev(child2, lx, ly, { base: base, cell: cell2, phase: env.phase || 0 }, null) : 0;
+        return child2 ? ev(child2, lx, ly, { base: base, cell: cell2, phase: env.phase || 0, maxRad: env.maxRad }, null) : 0;
       }
       case 'repeatPolar': {
         var seg = Math.max(2, Math.round(P(node, 'seg', 8)));
@@ -439,12 +449,17 @@ function compileSurfaceGraph(graph, shape, phase) {
         var segi = Math.floor(a01 * seg);
         var la = ((a01 * seg) % 1) * 2 - 1;
         var rad = Math.hypot(x, y);
+        // 单元局部系与 repeat 对齐：横向居中、纵向按径向跨度
+        // [r0, 形状外接半径] 居中——旧实现纵向 0 基（rad−r0），
+        // cellShape 的居中假设落空，花瓣/齿形只剩中心一点能画
+        var r0p = P(node, 'r0', 0);
+        var span = Math.max(1, (env.maxRad || 30) - r0p);
         var cell3 = {
-          w: P(node, 'arcW', 6), h: Math.max(1, rad), row: segi, col: 0, parity: Math.abs(segi) % 2,
+          w: P(node, 'arcW', 6), h: span, row: segi, col: 0, parity: Math.abs(segi) % 2,
           hash: hashN(segi, 3, P(node, 'seed', 0)), rand: hashN(segi, 9, P(node, 'seed', 0) + 41),
         };
         var child3 = node.inputs ? byId.get(node.inputs.in) : undefined;
-        return child3 ? ev(child3, la * P(node, 'arcW', 6) / 2, rad - P(node, 'r0', 0), { base: base, cell: cell3, phase: env.phase || 0 }, null) : 0;
+        return child3 ? ev(child3, la * P(node, 'arcW', 6) / 2, (rad - r0p) - span / 2, { base: base, cell: cell3, phase: env.phase || 0, maxRad: env.maxRad }, null) : 0;
       }
     }
     return 0;
@@ -454,7 +469,7 @@ function compileSurfaceGraph(graph, shape, phase) {
   return {
     hasGlint: hasGlint,
     evaluate: function (lx, ly, base) {
-      var env = { base: base, cell: defaultCell(), phase: phaseN };
+      var env = { base: base, cell: defaultCell(), phase: phaseN, maxRad: shapeMaxRad };
       var slot = 2, glint = false;
       var cache = new Map();
       for (var i = 0; i < graph.writes.length; i++) {
@@ -475,7 +490,7 @@ function compileSurfaceGraph(graph, shape, phase) {
     // 轮廓外延专用：只认图案/glint 写出的命中（bump 不向外画），
     // 返回 hit 供烘焙器把外圈写出编码进 B 通道。
     evaluateOutside: function (lx, ly, base) {
-      var env = { base: base, cell: defaultCell(), phase: phaseN };
+      var env = { base: base, cell: defaultCell(), phase: phaseN, maxRad: shapeMaxRad };
       var slot = 2, glint = false, hit = false;
       var cache = new Map();
       for (var i = 0; i < graph.writes.length; i++) {

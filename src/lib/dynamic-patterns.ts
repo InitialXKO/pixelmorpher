@@ -60,6 +60,11 @@ export interface DynamicPatternParams {
   arcFlicker: number;   // 形状步进（步/秒，0 = 静止形状）
   arcSeed: number;      // 形状种子
   arcColor: string;     // 弧线颜色
+  // 二期（D4）：生成模式 / 生长 / 双锚点 / 细节数
+  arcMode: 'arc' | 'vine' | 'stars'; // 弧线（闪电）/ 藤蔓 / 星座连线
+  arcGrowHz: number;    // 生长循环（次/秒，0 = 恒满长）；周期内先生长后保持
+  arcTarget: string;    // 双锚点：终点锚定的目标部件槽位键（仅弧线模式；空 = 方向+弧长）
+  arcDetail: number;    // 细节数：藤蔓叶数 / 星座星数（0 = 按模式缺省）
   // 追随段（形变段的跨部件驱动）：本部件渲染时叠加「源部件位姿的
   // 滞后差」——源部件当前位姿与 delay 秒前位姿之差 × amount，
   // 本部件就像被源部件拖着、慢半拍跟上（垂饰/披风/头发的次级运动）。
@@ -177,6 +182,7 @@ export function defaultDynamicParams(): DynamicPatternParams {
     arcEnabled: false, arcLengthPx: 26, arcDirDeg: 0, arcDisplace: 0.35,
     arcBranches: 1, arcWidthPx: 1.2, arcFlicker: 10, arcSeed: 7,
     arcColor: '#bfe3ff',
+    arcMode: 'arc', arcGrowHz: 0, arcTarget: '', arcDetail: 0,
     followEnabled: false, followSource: '', followDelaySec: 0.12, followAmount: 0.7, followRotate: true,
     emitEnabled: true, source: 'contour', rate: 12, linkToDeform: 0, speed: 6,
     directionDeg: 270, spreadDeg: 60, layer: 'both', frontRatio: 0.35,
@@ -253,6 +259,12 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
   if (typeof out.arcColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(out.arcColor)) {
     out.arcColor = '#bfe3ff';
   }
+  if (out.arcMode !== 'vine' && out.arcMode !== 'stars') out.arcMode = 'arc';
+  out.arcGrowHz = Number.isFinite(out.arcGrowHz)
+    ? Math.max(0, Math.min(2, out.arcGrowHz)) : 0;
+  if (typeof out.arcTarget !== 'string') out.arcTarget = '';
+  out.arcDetail = Number.isFinite(out.arcDetail)
+    ? Math.max(0, Math.min(12, Math.round(out.arcDetail))) : 0;
   return out;
 }
 
@@ -458,7 +470,36 @@ export function spinAngleDegAt(params: DynamicPatternParams, tSec: number): numb
 // DYNAMIC_SRC 的 dynArcPoints（探针 AD 组逐点对拍）。 ----
 
 export interface ArcPoint { x: number; y: number; w: number }
-export interface ArcShape { main: ArcPoint[]; branches: ArcPoint[][]; alpha: number }
+export interface ArcShape { main: ArcPoint[]; branches: ArcPoint[][]; dots: ArcPoint[]; alpha: number }
+
+/** 生长系数 0..1：growHz ≤ 0 恒满长；否则每个周期内前 70%
+ * 时间平滑长满、其余保持（到周期尾跳回 0——藤蔓/弧线的循环
+ * 生长以跳变收尾，与跳动步进口径一致）。 */
+export function arcGrowFrac(p: DynamicPatternParams, t: number): number {
+  if (!(p.arcGrowHz > 0)) return 1;
+  const ph = ((Math.max(0, t) * p.arcGrowHz) % 1 + 1) % 1;
+  const f = Math.min(1, ph / 0.7);
+  return f * f * (3 - 2 * f);
+}
+
+/** 按弧长把点列截断到 frac（端点线性插值，宽度同步插值） */
+function arcClipToFrac(pts: ArcPoint[], frac: number): ArcPoint[] {
+  if (frac >= 1 || pts.length < 2) return pts;
+  if (frac <= 0) return pts.slice(0, 1);
+  let total = 0;
+  for (let i = 0; i + 1 < pts.length; i++) total += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+  let want = total * frac;
+  const out: ArcPoint[] = [pts[0]];
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const seg = Math.hypot(b.x - a.x, b.y - a.y);
+    if (want >= seg) { out.push(b); want -= seg; continue; }
+    const f = seg > 0 ? want / seg : 0;
+    out.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, w: a.w + (b.w - a.w) * f });
+    break;
+  }
+  return out;
+}
 
 /** 一条直线的中点置换细分：每级在每段中点沿法线偏移
  * (哈希 − 0.5) × 段长 × disp × 衰减；哈希计数 k 贯穿主弧与
@@ -489,21 +530,91 @@ function arcDisplaceLine(
 }
 
 /** t 时刻的弧线形状（插头原点、部件本地 px）：主弧 + 分叉 +
- * 本步的不透明度（闪烁）。flicker = 0 时形状静止、alpha 恒定。 */
-export function arcPointsAt(p: DynamicPatternParams, t: number): ArcShape {
+ * 光点 + 本步的不透明度（闪烁）。flicker = 0 时形状静止、
+ * alpha 恒定。endOverride（双锚点）由消费端按目标部件位姿
+ * 算好传入（本地坐标终点），仅弧线模式用；生长系数对三种
+ * 模式都生效（主线按弧长截断、分叉/光点按出现位置过滤）。 */
+export function arcPointsAt(
+  p: DynamicPatternParams, t: number, endOverride?: { x: number; y: number },
+): ArcShape {
   const step = p.arcFlicker > 0 ? Math.floor(Math.max(0, t) * p.arcFlicker) : 0;
   const dir = (p.arcDirDeg * Math.PI) / 180;
-  const ex = Math.cos(dir) * p.arcLengthPx, ey = Math.sin(dir) * p.arcLengthPx;
+  const grow = arcGrowFrac(p, t);
+  const alpha = p.arcFlicker > 0 ? 0.55 + 0.45 * displaceHash01(p.arcSeed, step, 999) : 0.9;
+
+  if (p.arcMode === 'vine') {
+    // 藤蔓：等步长链 + 逐节角度漂移（哈希决定弯向，无跳动量化
+    // ——藤蔓不抖）；叶子 = 主链旁的光点（分叉让位给叶）
+    const segLen = 6;
+    const segs = Math.max(2, Math.round(p.arcLengthPx / segLen));
+    const pts: ArcPoint[] = [{ x: 0, y: 0, w: p.arcWidthPx }];
+    let cx = 0, cy = 0, ang = dir;
+    for (let i = 1; i <= segs; i++) {
+      ang += (displaceHash01(p.arcSeed, 0, 500 + i) - 0.5) * 0.55;
+      cx += Math.cos(ang) * segLen; cy += Math.sin(ang) * segLen;
+      pts.push({ x: cx, y: cy, w: Math.max(0.15, p.arcWidthPx * (1 - 0.6 * (i / segs))) });
+    }
+    const leaves = p.arcDetail > 0 ? p.arcDetail : 5;
+    const dots: ArcPoint[] = [];
+    for (let j = 0; j < leaves; j++) {
+      const s = 0.15 + 0.8 * ((j + 0.5) / leaves);
+      const fi = s * segs;
+      const i0 = Math.min(segs - 1, Math.floor(fi));
+      const fr = fi - i0;
+      const qx = pts[i0].x + (pts[i0 + 1].x - pts[i0].x) * fr;
+      const qy = pts[i0].y + (pts[i0 + 1].y - pts[i0].y) * fr;
+      const side = displaceHash01(p.arcSeed, 0, 700 + j) < 0.5 ? -1 : 1;
+      const off = 2 + 2.5 * displaceHash01(p.arcSeed, 0, 720 + j);
+      const nx = -(pts[i0 + 1].y - pts[i0].y), ny = pts[i0 + 1].x - pts[i0].x;
+      const nl = Math.hypot(nx, ny) || 1;
+      if (s <= grow) dots.push({ x: qx + (nx / nl) * off * side, y: qy + (ny / nl) * off * side, w: 1.5 });
+    }
+    return { main: arcClipToFrac(pts, grow), branches: [], dots, alpha };
+  }
+
+  if (p.arcMode === 'stars') {
+    // 星座：盘内哈希散点 + 贪心最近邻串成连线；星点即光点
+    const count = p.arcDetail > 0 ? p.arcDetail : 6;
+    const raw: { x: number; y: number; r: number }[] = [];
+    for (let i = 0; i < count; i++) {
+      const rr = p.arcLengthPx * Math.sqrt(displaceHash01(p.arcSeed, 0, 300 + i));
+      const th = displaceHash01(p.arcSeed, 0, 340 + i) * Math.PI * 2;
+      raw.push({ x: Math.cos(th) * rr, y: Math.sin(th) * rr, r: rr });
+    }
+    const order: number[] = [0];
+    const seen = new Set([0]);
+    while (order.length < count) {
+      const last = raw[order[order.length - 1]];
+      let best = -1, bestD = Infinity;
+      for (let i = 0; i < count; i++) {
+        if (seen.has(i)) continue;
+        const d = Math.hypot(raw[i].x - last.x, raw[i].y - last.y);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      order.push(best); seen.add(best);
+    }
+    const mainFull: ArcPoint[] = order.map((i) => ({ x: raw[i].x, y: raw[i].y, w: Math.max(0.3, p.arcWidthPx * 0.7) }));
+    const dots: ArcPoint[] = order
+      .filter((i) => raw[i].r <= p.arcLengthPx * grow + 1e-6)
+      .map((i) => ({ x: raw[i].x, y: raw[i].y, w: 1.3 + 1.1 * displaceHash01(p.arcSeed, step, 380 + i) }));
+    return { main: arcClipToFrac(mainFull, grow), branches: [], dots, alpha };
+  }
+
+  // 弧线（闪电）：中点置换 + 分叉（双锚点时终点由消费端给）
+  const ex = endOverride ? endOverride.x : Math.cos(dir) * p.arcLengthPx;
+  const ey = endOverride ? endOverride.y : Math.sin(dir) * p.arcLengthPx;
+  const mainLen = Math.hypot(ex, ey);
   const disp = p.arcDisplace * 2;
   const main0 = arcDisplaceLine(0, 0, ex, ey, disp, 4, p.arcSeed, step, 0);
   const n = main0.pts.length;
-  const main: ArcPoint[] = main0.pts.map((q, i) => ({
+  const mainFull: ArcPoint[] = main0.pts.map((q, i) => ({
     x: q.x, y: q.y, w: Math.max(0.15, p.arcWidthPx * (1 - 0.72 * (i / (n - 1)))),
   }));
   const branches: ArcPoint[][] = [];
   let k = main0.k;
   for (let b = 0; b < p.arcBranches; b++) {
     const s = 0.25 + 0.55 * displaceHash01(p.arcSeed, step, k++);
+    if (s > grow) { k += 3; continue; }
     const fi = s * (n - 1);
     const i0 = Math.min(n - 2, Math.floor(fi));
     const fr = fi - i0;
@@ -511,16 +622,16 @@ export function arcPointsAt(p: DynamicPatternParams, t: number): ArcShape {
     const by = main0.pts[i0].y + (main0.pts[i0 + 1].y - main0.pts[i0].y) * fr;
     const side = displaceHash01(p.arcSeed, step, k++) < 0.5 ? -1 : 1;
     const bang = dir + (side * (24 + 22 * displaceHash01(p.arcSeed, step, k++)) * Math.PI) / 180;
-    const blen = p.arcLengthPx * (1 - s) * (0.45 + 0.3 * displaceHash01(p.arcSeed, step, k++));
+    const blen = mainLen * (1 - s) * (0.45 + 0.3 * displaceHash01(p.arcSeed, step, k++));
     const bp = arcDisplaceLine(bx, by, bx + Math.cos(bang) * blen, by + Math.sin(bang) * blen, disp, 3, p.arcSeed, step, k);
     k = bp.k;
     const m = bp.pts.length;
-    branches.push(bp.pts.map((q, i) => ({
+    const branchFull = bp.pts.map((q, i) => ({
       x: q.x, y: q.y, w: Math.max(0.1, p.arcWidthPx * 0.62 * (1 - 0.85 * (i / (m - 1)))),
-    })));
+    }));
+    branches.push(arcClipToFrac(branchFull, Math.min(1, (grow - s) / Math.max(0.01, 1 - s))));
   }
-  const alpha = p.arcFlicker > 0 ? 0.55 + 0.45 * displaceHash01(p.arcSeed, step, 999) : 0.9;
-  return { main, branches, alpha };
+  return { main: arcClipToFrac(mainFull, grow), branches, dots: [], alpha };
 }
 
 // ---- 发光段：呼吸脉冲 + 选区掩码 + 带柔光圈的权重场 ----
@@ -917,6 +1028,8 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'arcWidthPx', label: '线宽（像素）', section: '弧线', min: 0.4, max: 4, step: 0.2 },
   { key: 'arcFlicker', label: '跳动（步/秒，0=静止）', section: '弧线', min: 0, max: 30, step: 1 },
   { key: 'arcSeed', label: '形状种子', section: '弧线', min: 1, max: 9999, step: 1 },
+  { key: 'arcGrowHz', label: '生长循环（次/秒，0=恒满长）', section: '弧线', min: 0, max: 2, step: 0.05 },
+  { key: 'arcDetail', label: '细节数（藤蔓叶/星座星，0=缺省）', section: '弧线', min: 0, max: 12, step: 1 },
   { key: 'followDelaySec', label: '追随延迟（秒）', section: '形变', min: 0, max: 1, step: 0.01 },
   { key: 'followAmount', label: '追随强度', section: '形变', min: 0, max: 1, step: 0.05 },
   { key: 'rate', label: '发射率（个/秒）', section: '发射', min: 0, max: 60, step: 1 },

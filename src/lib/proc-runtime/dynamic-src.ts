@@ -94,19 +94,100 @@ function dynArcDisplaceLine(x0, y0, x1, y1, disp, levels, seed, step, kStart) {
   }
   return { pts: pts, k: k };
 }
-function dynArcPoints(params, tSec) {
+function dynArcGrowFrac(p, tSec) {
+  if (!(p.arcGrowHz > 0)) return 1;
+  const ph = ((Math.max(0, tSec) * p.arcGrowHz) % 1 + 1) % 1;
+  const f = Math.min(1, ph / 0.7);
+  return f * f * (3 - 2 * f);
+}
+function dynArcClip(pts, frac) {
+  if (frac >= 1 || pts.length < 2) return pts;
+  if (frac <= 0) return pts.slice(0, 1);
+  let total = 0;
+  for (let i = 0; i + 1 < pts.length; i++) total += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+  let want = total * frac;
+  const out = [pts[0]];
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (want >= seg) { out.push(b); want -= seg; continue; }
+    const f = seg > 0 ? want / seg : 0;
+    out.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]);
+    break;
+  }
+  return out;
+}
+function dynArcPoints(params, tSec, endX, endY, hasEnd) {
   const p = params;
   const step = p.arcFlicker > 0 ? Math.floor(Math.max(0, tSec) * p.arcFlicker) : 0;
   const dir = (p.arcDirDeg * Math.PI) / 180;
-  const ex = Math.cos(dir) * p.arcLengthPx, ey = Math.sin(dir) * p.arcLengthPx;
+  const grow = dynArcGrowFrac(p, tSec);
+  const alpha = p.arcFlicker > 0 ? 0.55 + 0.45 * dynHash01(p.arcSeed, step, 999) : 0.9;
+  if (p.arcMode === 'vine') {
+    const segLen = 6;
+    const segs = Math.max(2, Math.round(p.arcLengthPx / segLen));
+    const pts = [[0, 0, p.arcWidthPx]];
+    let cx = 0, cy = 0, ang = dir;
+    for (let i = 1; i <= segs; i++) {
+      ang += (dynHash01(p.arcSeed, 0, 500 + i) - 0.5) * 0.55;
+      cx += Math.cos(ang) * segLen; cy += Math.sin(ang) * segLen;
+      pts.push([cx, cy, Math.max(0.15, p.arcWidthPx * (1 - 0.6 * (i / segs)))]);
+    }
+    const leaves = p.arcDetail > 0 ? p.arcDetail : 5;
+    const dots = [];
+    for (let j = 0; j < leaves; j++) {
+      const s = 0.15 + 0.8 * ((j + 0.5) / leaves);
+      const fi = s * segs;
+      const i0 = Math.min(segs - 1, Math.floor(fi));
+      const fr = fi - i0;
+      const qx = pts[i0][0] + (pts[i0 + 1][0] - pts[i0][0]) * fr;
+      const qy = pts[i0][1] + (pts[i0 + 1][1] - pts[i0][1]) * fr;
+      const side = dynHash01(p.arcSeed, 0, 700 + j) < 0.5 ? -1 : 1;
+      const off = 2 + 2.5 * dynHash01(p.arcSeed, 0, 720 + j);
+      const nx = -(pts[i0 + 1][1] - pts[i0][1]), ny = pts[i0 + 1][0] - pts[i0][0];
+      const nl = Math.hypot(nx, ny) || 1;
+      if (s <= grow) dots.push([qx + (nx / nl) * off * side, qy + (ny / nl) * off * side, 1.5]);
+    }
+    return { main: dynArcClip(pts, grow), branches: [], dots: dots, alpha: alpha };
+  }
+  if (p.arcMode === 'stars') {
+    const count = p.arcDetail > 0 ? p.arcDetail : 6;
+    const raw = [];
+    for (let i = 0; i < count; i++) {
+      const rr = p.arcLengthPx * Math.sqrt(dynHash01(p.arcSeed, 0, 300 + i));
+      const th = dynHash01(p.arcSeed, 0, 340 + i) * Math.PI * 2;
+      raw.push([Math.cos(th) * rr, Math.sin(th) * rr, rr]);
+    }
+    const order = [0];
+    const seen = new Set([0]);
+    while (order.length < count) {
+      const last = raw[order[order.length - 1]];
+      let best = -1, bestD = Infinity;
+      for (let i = 0; i < count; i++) {
+        if (seen.has(i)) continue;
+        const d = Math.hypot(raw[i][0] - last[0], raw[i][1] - last[1]);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      order.push(best); seen.add(best);
+    }
+    const mainFull = order.map((i) => [raw[i][0], raw[i][1], Math.max(0.3, p.arcWidthPx * 0.7)]);
+    const dots = order
+      .filter((i) => raw[i][2] <= p.arcLengthPx * grow + 1e-6)
+      .map((i) => [raw[i][0], raw[i][1], 1.3 + 1.1 * dynHash01(p.arcSeed, step, 380 + i)]);
+    return { main: dynArcClip(mainFull, grow), branches: [], dots: dots, alpha: alpha };
+  }
+  const ex = hasEnd ? endX : Math.cos(dir) * p.arcLengthPx;
+  const ey = hasEnd ? endY : Math.sin(dir) * p.arcLengthPx;
+  const mainLen = Math.hypot(ex, ey);
   const disp = p.arcDisplace * 2;
   const main0 = dynArcDisplaceLine(0, 0, ex, ey, disp, 4, p.arcSeed, step, 0);
   const n = main0.pts.length;
-  const main = main0.pts.map((q, i) => [q[0], q[1], Math.max(0.15, p.arcWidthPx * (1 - 0.72 * (i / (n - 1))))]);
+  const mainFull = main0.pts.map((q, i) => [q[0], q[1], Math.max(0.15, p.arcWidthPx * (1 - 0.72 * (i / (n - 1))))]);
   const branches = [];
   let k = main0.k;
   for (let b = 0; b < p.arcBranches; b++) {
     const s = 0.25 + 0.55 * dynHash01(p.arcSeed, step, k++);
+    if (s > grow) { k += 3; continue; }
     const fi = s * (n - 1);
     const i0 = Math.min(n - 2, Math.floor(fi));
     const fr = fi - i0;
@@ -114,14 +195,14 @@ function dynArcPoints(params, tSec) {
     const by = main0.pts[i0][1] + (main0.pts[i0 + 1][1] - main0.pts[i0][1]) * fr;
     const side = dynHash01(p.arcSeed, step, k++) < 0.5 ? -1 : 1;
     const bang = dir + (side * (24 + 22 * dynHash01(p.arcSeed, step, k++)) * Math.PI) / 180;
-    const blen = p.arcLengthPx * (1 - s) * (0.45 + 0.3 * dynHash01(p.arcSeed, step, k++));
+    const blen = mainLen * (1 - s) * (0.45 + 0.3 * dynHash01(p.arcSeed, step, k++));
     const bp = dynArcDisplaceLine(bx, by, bx + Math.cos(bang) * blen, by + Math.sin(bang) * blen, disp, 3, p.arcSeed, step, k);
     k = bp.k;
     const m = bp.pts.length;
-    branches.push(bp.pts.map((q, i) => [q[0], q[1], Math.max(0.1, p.arcWidthPx * 0.62 * (1 - 0.85 * (i / (m - 1))))]));
+    const branchFull = bp.pts.map((q, i) => [q[0], q[1], Math.max(0.1, p.arcWidthPx * 0.62 * (1 - 0.85 * (i / (m - 1))))]);
+    branches.push(dynArcClip(branchFull, Math.min(1, (grow - s) / Math.max(0.01, 1 - s))));
   }
-  const alpha = p.arcFlicker > 0 ? 0.55 + 0.45 * dynHash01(p.arcSeed, step, 999) : 0.9;
-  return { main: main, branches: branches, alpha: alpha };
+  return { main: dynArcClip(mainFull, grow), branches: branches, dots: [], alpha: alpha };
 }
 function dynFollowDelta(now, lag, amount, rotate) {
   const k = Math.max(0, Math.min(1, amount));
@@ -238,7 +319,7 @@ export function createDynamicRuntime(): {
   dynDisplaceSrcMap: (params: never, w: number, h: number, phase: number) => Int32Array;
   dynNoiseU: (u: number, v: number, period: number, seed: number) => number;
   dynSpinRadAt: (params: never, t: number) => number;
-  dynArcPoints: (params: never, t: number) => { main: [number, number, number][]; branches: [number, number, number][][]; alpha: number };
+  dynArcPoints: (params: never, t: number, endX?: number, endY?: number, hasEnd?: boolean) => { main: [number, number, number][]; branches: [number, number, number][][]; dots: [number, number, number][]; alpha: number };
 } {
   const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynFollowDelta, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints };`);
   return factory() as never;

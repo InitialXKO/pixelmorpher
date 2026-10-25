@@ -293,6 +293,35 @@ export default function DynamicPatternEditor({
                 <input type="color" value={np(inst).arcColor} onChange={(e) => patchParam(inst.id, 'arcColor', e.target.value)} className="h-5 w-8 bg-transparent" />
               </label>
             )}
+            {np(inst).arcEnabled && (
+              <label className="flex items-center gap-1" title="弧线 / 藤蔓 / 星座连线">
+                模式
+                <select
+                  value={np(inst).arcMode}
+                  onChange={(e) => patchParam(inst.id, 'arcMode', e.target.value)}
+                  className="bg-[#12122a] border border-[#2a2a4a] rounded px-1 py-0.5"
+                >
+                  <option value="arc">弧线</option>
+                  <option value="vine">藤蔓</option>
+                  <option value="stars">星座</option>
+                </select>
+              </label>
+            )}
+            {np(inst).arcEnabled && np(inst).arcMode === 'arc' && followSourceOptions && followSourceOptions.length > 0 && (
+              <label className="flex items-center gap-1" title="双锚点：弧线终点锚到目标部件的插头（空 = 按方向+弧长）">
+                终点锚
+                <select
+                  value={np(inst).arcTarget}
+                  onChange={(e) => patchParam(inst.id, 'arcTarget', e.target.value)}
+                  className="bg-[#12122a] border border-[#2a2a4a] rounded px-1 py-0.5"
+                >
+                  <option value="">（方向+弧长）</option>
+                  {followSourceOptions.map((o) => (
+                    <option key={o.key} value={o.key}>{o.label}</option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="flex items-center gap-1">
               <input type="checkbox" checked={inst.params.emitEnabled} onChange={(e) => patchParam(inst.id, 'emitEnabled', e.target.checked)} />
               发射段

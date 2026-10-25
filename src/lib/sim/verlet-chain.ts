@@ -109,7 +109,7 @@ export function solveVerletChain(
 /** 参考采样：把链上节点的 angle 轨道钉在基准值（fromFrame 处
  * 的本地角）后逐帧 FK，得到参考关节位置与各节点参考世界角。
  * 这定义了「没有链摆时链该在哪」，烘焙量是相对它的增量。 */
-function sampleReference(
+export function sampleReference(
   character: Character,
   chainNodeIds: string[],
   fromFrame: number,

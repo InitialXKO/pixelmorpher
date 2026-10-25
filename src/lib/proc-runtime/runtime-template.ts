@@ -1645,6 +1645,7 @@ function frame(now) {
   const sorted = sortParts(PARTS, char.variant);
   const els = [];
   const elByKey = new Map();
+  const partAnchorsByKey = new Map();
   const dynAnchors = [];
   sorted.forEach((part, idx) => {
     const entry = state.map.get(part.key);
@@ -1718,11 +1719,13 @@ function frame(now) {
     };
     els.push(el);
     elByKey.set(part.key, el);
+    // 弧线段原点 = 插头：换成相对瓦片中心的偏移（粒子系以中心为原点）
+    const plugC = entry.plugN
+      ? [entry.plugN[0] * tile.w - tile.w / 2, (1 - entry.plugN[1]) * tile.h - tile.h / 2]
+      : [0, 0];
+    // 双锚点查表：全部部件的锚点信息（目标部件未必挂动态模式）
+    partAnchorsByKey.set(part.key, { ctr: ctr, rot: rotA, plugC: plugC, dsx: dsx, dsy: dsy });
     if (dynList.length > 0) {
-      // 弧线段原点 = 插头：换成相对瓦片中心的偏移（粒子系以中心为原点）
-      const plugC = entry.plugN
-        ? [entry.plugN[0] * tile.w - tile.w / 2, (1 - entry.plugN[1]) * tile.h - tile.h / 2]
-        : [0, 0];
       dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: rotA, dynList: dynList, dsx: dsx, dsy: dsy, plugC: plugC });
     }
   });
@@ -1740,7 +1743,21 @@ function frame(now) {
       for (const inst of a.dynList) {
         const p = inst.params;
         if (!p.arcEnabled) continue;
-        const shape = dynArcPoints(p, elapsed);
+        // 双锚点（D4 二期）：目标部件插头的世界位 → 本部件本地终点
+        let endX = 0, endY = 0, hasEnd = false;
+        if (p.arcTarget && partAnchorsByKey.has(p.arcTarget)) {
+          const ta = partAnchorsByKey.get(p.arcTarget);
+          const tc = Math.cos(ta.rot), ts = Math.sin(ta.rot);
+          const tgx = ta.plugC[0] * ta.dsx, tgy = ta.plugC[1] * ta.dsy;
+          const wx = ta.ctr[0] + tgx * tc + tgy * ts;
+          const wy = ta.ctr[1] + tgx * ts - tgy * tc;
+          const rx = wx - a.ctr[0], ry = wy - a.ctr[1];
+          // toWorld 的变换矩阵是自逆的（[[c,s],[s,−c]]），逆变换同式
+          const lx = (rx * c + ry * s) / (a.dsx || 1), ly = (rx * s - ry * c) / (a.dsy || 1);
+          endX = lx - a.plugC[0]; endY = ly - a.plugC[1];
+          hasEnd = true;
+        }
+        const shape = dynArcPoints(p, elapsed, endX, endY, hasEnd);
         const rgb = particleRgb(p.arcColor || '#bfe3ff');
         const toWorld = (qx, qy) => {
           const gx = (a.plugC[0] + qx) * a.dsx, gy = (a.plugC[1] + qy) * a.dsy;
@@ -1768,6 +1785,12 @@ function frame(now) {
             pushSeg(w0, w1, line[i][2] * 2.6, shape.alpha * 0.22);
             pushSeg(w0, w1, line[i][2], shape.alpha);
           }
+        }
+        // 光点（藤蔓叶/星座星）：极短粗段近似圆点
+        for (const d of shape.dots || []) {
+          const w0 = toWorld(d[0] - 0.01, d[1]);
+          const w1 = toWorld(d[0] + 0.01, d[1]);
+          pushSeg(w0, w1, d[2] * 2, shape.alpha);
         }
       }
       for (const inst of a.dynList) {

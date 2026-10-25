@@ -344,7 +344,8 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       n('nz', 'noise', undefined, { f: 0.1, seed: 17 }),
       n('wv', 'stripes', undefined, { axis: 'y', f: '$f', duty: 0.4 }),
       n('ww', 'warp', { in: 'wv', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
-      n('crest', 'levelBand', { in: 'ww' }, { level: 0.5, w: 0.5 }),
+      n('crestB', 'levelBand', { in: 'nz' }, { level: 0.62, w: 0.25 }),
+      n('crest', 'mul', { a: 'ww', b: 'crestB' }),
     ], [
       w('in', 2, { at: 0.5 }),
       w('ww', 3, { at: 0.5 }),
@@ -592,7 +593,8 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
     ], [
       w('in', 2, { at: 0.5 }),
       w('rep', 3, { at: 0.1 }),
-      w('lines', 0, { at: 0.45 }),
+      // 线场在像素中心采样下峰值常 <0.45，阈值 0.15 才画得出（审计实测）
+      w('lines', 0, { at: 0.15 }),
     ]),
   },
   {
@@ -655,13 +657,13 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
     graph: graph([
       ...baseIn(2),
       n('lines', 'ref', undefined, { ref: 'part-panel', cw: 24 }),
-      n('riv', 'ref', undefined, { ref: 'part-rivets', cw: 12, gap: 6.2 }),
+      n('riv', 'ref', undefined, { ref: 'part-rivets', cw: 16, gap: 5.2 }),
       n('gr', 'ref', undefined, { ref: 'part-grain', seed: 8 }),
       n('grG', 'mul', { a: 'gr', b: 'grK' }),
       n('grK', 'const', undefined, { v: '$grain' }),
     ], [
       w('in', 2, { at: 0.5 }),
-      w('lines', 0, { at: 0.45 }),
+      w('lines', 0, { at: 0.15 }),
       w('riv', 5, { at: 0.35 }),
       w('grG', 3, { at: 0.1 }),
     ]),
@@ -744,6 +746,43 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       w('edge', 0, { at: 0.4 }),
     ]),
   },
+  // 点阵半调：圆 SDF × 明暗场（归一深度）后定阈值写出——点径随
+  // 明暗涨缩（亮处大、暗处灭），不需要新算子，靠图组合实现调制
+  {
+    id: 'halftone', name: '点阵半调', cluster: '重复',
+    params: [P('cw', '点距', 4, 12, 0.5, 6), P('depth', '调制深度', 0, 1, 0.05, 0.85)],
+    graph: graph([
+      ...baseIn(2),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 5 }),
+      n('cs', 'cellShape', undefined, { kind: 'circle', gap: 0.4 }),
+      n('hf', 'h'),
+      n('one', 'const', undefined, { v: 1 }),
+      n('invh', 'sub', { a: 'one', b: 'hf' }),
+      n('dk', 'mul', { a: 'invh', b: 'dkK' }),
+      n('dkK', 'const', undefined, { v: '$depth' }),
+      n('bright', 'sub', { a: 'one', b: 'dk' }),
+      n('gain', 'mul', { a: 'rep', b: 'bright' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('gain', 3, { at: 0.3 }),
+      w('gain', 4, { at: 1.1 }),
+    ]),
+  },
+  // 人字纹：repeat 奇偶旋转（(行+列) 奇偶交替转 90°）+ 长条单元
+  {
+    id: 'herringbone', name: '人字纹', cluster: '织物',
+    params: [P('cw', '条长', 8, 20, 1, 12), P('th', '条宽', 1.2, 4.5, 0.2, 2.4)],
+    graph: graph([
+      ...baseIn(2),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 9, prot: 90 }),
+      n('cs', 'cellShape', undefined, { kind: 'slat', dir: 'x', th: '$th', gap: 0.4 }),
+      n('edge', 'levelBand', { in: 'rep' }, { level: 0, w: 0.7 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rep', 3, { at: 0 }),
+      w('edge', 0, { at: 0.15 }),
+    ]),
+  },
   // 焦散纹（近似）：双层 Voronoi 边场叠成的网状亮纹，无专用焦散噪声
   {
     id: 'caustics', name: '焦散纹（近似）', cluster: '自然',
@@ -822,7 +861,7 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       w('in', 2, { at: 0.5 }),
       w('wv', 3, { at: 0 }),
       w('wv', 0, { bump: { hi: 4, mid: 3, lo: 2 } }),
-      w('grG', 4, { at: 0.2 }),
+      w('grG', 4, { at: 0.08 }),
     ]),
   },
   // ---- 动态表面（D1）：图带 animation 规格，相位经 $phase/$phaseDeg 注入。
@@ -839,7 +878,8 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       n('nz', 'noise', undefined, { f: 0.1, seed: 17 }),
       n('wv', 'stripes', undefined, { axis: 'y', f: '$f', duty: 0.4, ph: '$phase' }),
       n('ww', 'warp', { in: 'wv', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
-      n('crest', 'levelBand', { in: 'ww' }, { level: 0.5, w: 0.5 }),
+      n('crestB', 'levelBand', { in: 'nz' }, { level: 0.62, w: 0.25 }),
+      n('crest', 'mul', { a: 'ww', b: 'crestB' }),
     ], [
       w('in', 2, { at: 0.5 }),
       w('ww', 3, { at: 0.5 }),
@@ -856,14 +896,13 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       n('nz', 'blob', undefined, { f: 0.09, seed: 23, contrast: 1.3 }),
       n('bands', 'stripes', undefined, { axis: 'y', f: '$f', duty: 0.55, ph: '$phase' }),
       n('ww', 'warp', { in: 'bands', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
-      n('core', 'levelBand', { in: 'ww' }, { level: 0.5, w: 0.45 }),
       n('shade', 'grad', undefined, { axis: 'y' }),
-      n('hot', 'mul', { a: 'core', b: 'shade' }),
+      n('hot', 'mul', { a: 'ww', b: 'shade' }),
     ], [
       w('in', 1, { at: 0.5 }),
       w('ww', 4, { at: 0.5 }),
       w('hot', 5, { at: 0.35 }),
-      w('core', 0, { at: 0.5, ch: 'glint' }),
+      w('hot', 0, { at: 0.65, ch: 'glint' }),
     ], { cycleSec: 1.6, frames: 12 }),
   },
   {
@@ -879,11 +918,10 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       n('gv', 'grad', undefined, { axis: 'y' }),
       n('gate', 'levelBand', { in: 'gv' }, { level: 0.5, w: 0.85 }),
       n('body', 'mul', { a: 'ww', b: 'gate' }),
-      n('crest', 'levelBand', { in: 'ww' }, { level: 0.5, w: 0.4 }),
     ], [
       w('in', 1, { at: 0.5 }),
       w('body', 4, { at: 0.5 }),
-      w('crest', 0, { at: 0.5, ch: 'glint' }),
+      w('body', 0, { at: 0.75, ch: 'glint' }),
     ], { cycleSec: 5, frames: 20 }),
   },
   {

@@ -425,6 +425,26 @@ function buildBuiltinEntries(): LibraryEntry[] {
       arcBranches: 0, arcWidthPx: 0.8, arcFlicker: 18, arcSeed: 3,
       arcColor: '#ffe9a8', emitEnabled: false,
     }),
+    // 弧线二期（D4）：藤蔓（生长链 + 叶点）/ 星座（散点最近邻连线）
+    leaf('dyn-vine', '藤蔓生长', '弧线', {
+      arcEnabled: true, arcMode: 'vine', arcLengthPx: 42, arcDirDeg: 270,
+      arcDisplace: 0.35, arcBranches: 0, arcWidthPx: 1.6, arcFlicker: 0,
+      arcSeed: 11, arcColor: '#7dd069', arcGrowHz: 0.3, arcDetail: 6,
+      emitEnabled: false,
+    }),
+    leaf('dyn-stars', '星座连线', '弧线', {
+      arcEnabled: true, arcMode: 'stars', arcLengthPx: 34, arcDirDeg: 0,
+      arcDisplace: 0.35, arcBranches: 0, arcWidthPx: 0.8, arcFlicker: 6,
+      arcSeed: 5, arcColor: '#cfe4ff', arcGrowHz: 0, arcDetail: 7,
+      emitEnabled: false,
+    }),
+    // 藤蔓花环：两边都显式写 emitEnabled=false 也算段冲突，跟随边裁决
+    parent('dyn-vine-wreath', '藤蔓花环', [
+      { entry: 'dyn-vine', version: 1 },
+      { entry: 'dyn-glow-breath', version: 1 },
+    ], [
+      { type: 'followParams', leader: 0, follower: 1, keys: ['emitEnabled'] },
+    ]),
     // 雷暴电弧（D4 一期）：雷击链 + 火星粒子（emitEnabled 两边
     // 都显式写、跟随边裁决归火星——与置换火焰同例）
     parent('dyn-arc-storm', '雷暴电弧', [

@@ -94,7 +94,7 @@ export const SURFACE_OP_SPECS: OpSpec[] = [
   // ---- 作用域（坐标修饰） ----
   {
     op: 'repeat', label: '重复（作用域）', cat: '作用域', ports: ['in', 'b'], scope: true,
-    params: [num('cw', '单元宽', 10, 1, 60, 0.5), num('ch', '单元高', 8, 1, 60, 0.5), num('alt', '交替偏移', 0, 0, 1, 0.05), num('seed', '种子', 0, 0, 99, 1), num('jit', '抖动', 0, 0, 5, 0.1), num('rot', '旋转抖动', 0, 0, 1.5, 0.05)],
+    params: [num('cw', '单元宽', 10, 1, 60, 0.5), num('ch', '单元高', 8, 1, 60, 0.5), num('alt', '交替偏移', 0, 0, 1, 0.05), num('seed', '种子', 0, 0, 99, 1), num('jit', '抖动', 0, 0, 5, 0.1), num('rot', '旋转抖动', 0, 0, 1.5, 0.05), num('prot', '奇偶旋转（度）', 0, -180, 180, 5)],
   },
   {
     op: 'repeatPolar', label: '极坐标重复（作用域）', cat: '作用域', ports: ['in'], scope: true,

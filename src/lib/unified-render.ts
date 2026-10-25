@@ -1915,6 +1915,27 @@ export function generateRenderPlan(
         }
       }
     }
+    // 弧线双锚点（D4 二期）：目标部件当前帧轨道位姿 → 本节点
+    // 本地系终点（与追随/残影同一 followPoseAt 口径：剥离蓝图、
+    // 视图投影后的画布 px 差逆旋回本地；投影压扁不补偿，同近似）
+    let arcEnds: NodeRenderInstruction['arcEnds'];
+    if (dynResolved.length > 0 && dynResolved.some((r) => r.instance.params.arcEnabled && r.instance.params.arcTarget)) {
+      const selfPose = followPoseAt(nodeId, frame);
+      if (selfPose) {
+        const ends: NonNullable<NodeRenderInstruction['arcEnds']> = {};
+        dynResolved.forEach((r, ri) => {
+          const p = r.instance.params;
+          if (!p.arcEnabled || !p.arcTarget) return;
+          const srcId = followSlotToNode.get(p.arcTarget);
+          const tp = srcId ? followPoseAt(srcId, frame) : undefined;
+          if (!tp) return;
+          const dx = tp.x - selfPose.x, dy = tp.y - selfPose.y;
+          const ca = Math.cos(selfPose.a), sa = Math.sin(selfPose.a);
+          ends[ri] = { x: dx * ca + dy * sa, y: -dx * sa + dy * ca };
+        });
+        if (Object.keys(ends).length > 0) arcEnds = ends;
+      }
+    }
     // 残影段（D5）：过去帧的世界位姿差（与追随段同一 followPoseAt
     // machinery——剥离蓝图的轨道位姿、当前帧同口径相减，增量由此
     // 只含轨道运动；蓝图驱动的运动不入残影，与追随段同一近似）
@@ -1979,6 +2000,7 @@ export function generateRenderPlan(
       scaleX: dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX,
       dynamicPatterns: dynResolved.length > 0 ? dynResolved : undefined,
       trailGhosts,
+      arcEnds,
       // 蓝图 skew：有倾斜量时才填，避免空数组污染
       skews: (worldTf.skewX || worldTf.skewY) ? [{ skewX: worldTf.skewX ?? 0, skewY: worldTf.skewY ?? 0 }] : undefined,
       // STEP2 合并：plumbing 蓝图给 renderNodeSprite，替代手拼像素链
@@ -2212,10 +2234,10 @@ function drawDynamicArcs(
   const list = instruction.dynamicPatterns;
   if (!list || list.length === 0) return;
   const tSec = (instruction.frame ?? 0) / (instruction.frameRate || 12);
-  for (const resolved of list) {
+  list.forEach((resolved, ri) => {
     const p = resolved.instance.params;
-    if (!p.arcEnabled) continue;
-    const shape = arcPointsAt(p, tSec);
+    if (!p.arcEnabled) return;
+    const shape = arcPointsAt(p, tSec, instruction.arcEnds?.[ri]);
     const rgb = hexToRgb(p.arcColor || '#bfe3ff') ?? { r: 191, g: 227, b: 255 };
     ctx.save();
     ctx.lineCap = 'round';
@@ -2234,8 +2256,15 @@ function drawDynamicArcs(
       strokeLine(line, 2.6, 0.22);
       strokeLine(line, 1, 1);
     }
+    // 光点（藤蔓叶 / 星座星）：实心圆，半径 = 点宽
+    for (const d of shape.dots) {
+      ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${shape.alpha.toFixed(3)})`;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, Math.max(0.5, d.w), 0, Math.PI * 2);
+      ctx.fill();
+    }
     ctx.restore();
-  }
+  });
 }
 
 /** 发光叠加层缓存：键 = 像素内容哈希 + 发光参数签名 + 脉冲量化步 + 镜像位 */
