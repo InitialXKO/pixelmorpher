@@ -143,10 +143,14 @@ check('缺口8·置换方向标记来源含 base.baseSprite',
 // ---- 未修缺口（关了 = 有人修了，须更新 AUDIT 分类）----
 check('缺口4·运行时仍无网格蒙皮（修复后更新文档）',
   !template.includes('skinning') && !dynSrc.includes('skinning'));
-check('缺口5·特效轨/笔触已进包且模板消费（画布修改轨的后处理在 5-2）',
+check('缺口5·特效轨/笔触已进包且模板消费',
   convert.includes('fxPkg') && convert.includes('clipFxOf')
   && template.includes('fxRenderSet') && template.includes("tr.type === 'particle'")
   && template.includes('afterimage_brush'));
+check('缺口5·画布修改轨后处理链已接线（参数解析+六类通道+掩码+场景目标）',
+  template.includes('fxResolveCanvasParams') && template.includes('fxCollectCanvasMods')
+  && template.includes('fxRunPostChain') && template.includes('ensurePostSys')
+  && template.includes('fxBuildMask') && template.includes('uEffect == 7'));
 {
   const ch = {
     id: 'fxp', name: '特效包测试',

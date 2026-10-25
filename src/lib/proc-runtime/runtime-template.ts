@@ -1366,6 +1366,281 @@ function buildScenery(charX, charY, onGround) {
   return new Float32Array(verts);
 }
 
+// ---------- 画布修改轨后处理（缺口 5-2） ----------
+// 参数解析与编辑器 resolveCanvasModifierParams 同口径（键帧间数值
+// 线性插值、非数值在中点跳变）；六种修改器逐个以全屏着色器通道施加
+// （顺序 = 工程轨序 × 轨内序，片段轨接在工程轨之后）。
+function fxResolveCanvasParams(track, modifier, frame) {
+  const kfs = [...(track.keyframes || [])].sort((a, b) => a.frame - b.frame);
+  if (kfs.length === 0) return modifier.params || {};
+  let prevKf = kfs[0], nextKf = null;
+  for (const kf of kfs) {
+    if (kf.frame <= frame) prevKf = kf;
+    if (kf.frame > frame && !nextKf) nextKf = kf;
+  }
+  if (!nextKf) return { ...(modifier.params || {}), ...(prevKf.params || {}) };
+  const t = (frame - prevKf.frame) / (nextKf.frame - prevKf.frame);
+  const result = { ...(modifier.params || {}) };
+  for (const key of Object.keys(prevKf.params || {})) {
+    const pv = prevKf.params[key], nv = (nextKf.params || {})[key];
+    if (typeof pv === 'number' && typeof nv === 'number') result[key] = pv + (nv - pv) * t;
+    else result[key] = t < 0.5 ? pv : nv;
+  }
+  return result;
+}
+function fxCollectCanvasMods(set, frame, out) {
+  for (const track of (set && set.canvasTracks) || []) {
+    if (!track.visible || !track.enabled) continue;
+    for (const m of track.modifiers || []) {
+      if (!m.enabled) continue;
+      out.push({ type: m.type, params: fxResolveCanvasParams(track, m, frame) });
+    }
+  }
+}
+let postSys = null;
+function ensurePostSys() {
+  if (postSys && postSys.w === lowW && postSys.h === VIEW_H) return postSys;
+  const mkRT = () => {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, lowW, VIEW_H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    return { tex: tex, fbo: fbo };
+  };
+  const A = mkRT(), B = mkRT(), C = mkRT(), D = mkRT();
+  const depthRb = gl.createRenderbuffer();
+  gl.bindRenderbuffer(gl.RENDERBUFFER, depthRb);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, lowW, VIEW_H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, A.fbo);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthRb);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const prog = makeProgram(
+    '#version 300 es\\nvoid main(){ vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }',
+    '#version 300 es\\nprecision highp float;\\n'
+    + 'uniform sampler2D uTex; uniform sampler2D uAux; uniform vec2 uRes; uniform int uEffect;\\n'
+    + 'uniform vec4 uP0; uniform vec4 uP1; uniform vec3 uColor; uniform vec3 uColor2;\\n'
+    + 'out vec4 oColor;\\n'
+    + 'void main(){\\n'
+    + '  vec2 uv = gl_FragCoord.xy / uRes;\\n'
+    + '  vec4 c = texture(uTex, uv);\\n'
+    + '  if (uEffect == 0) { oColor = c; return; }\\n'
+    + '  if (uEffect == 1) {\\n' // color_lut：uP0.x=预设号(1 retro 2 mono 3 night 4 warm 5 cool 6 invert)，uP0.y=强度
+    + '    if (c.a == 0.0) { oColor = c; return; }\\n'
+    + '    vec3 v = c.rgb * 255.0; vec3 n2 = v; int pr = int(uP0.x + 0.5);\\n'
+    + '    if (pr == 1) { n2 = vec3(min(255.0, floor(v.r / 32.0 + 0.5) * 32.0 + 20.0), min(255.0, floor(v.g / 32.0 + 0.5) * 32.0 + 10.0), floor(v.b / 48.0 + 0.5) * 48.0); }\\n'
+    + '    else if (pr == 2) { float g = floor(0.299 * v.r + 0.587 * v.g + 0.114 * v.b + 0.5); n2 = vec3(g); }\\n'
+    + '    else if (pr == 3) { float lum = (0.299 * v.r + 0.587 * v.g + 0.114 * v.b) / 255.0; float b2 = min(1.0, lum * 1.5); n2 = vec3(floor(b2 * 50.0 + 0.5), floor(b2 * 255.0 + 0.5), floor(b2 * 50.0 + 0.5)); }\\n'
+    + '    else if (pr == 4) { n2 = vec3(min(255.0, v.r + 25.0), v.g + 5.0, max(0.0, v.b - 15.0)); }\\n'
+    + '    else if (pr == 5) { n2 = vec3(max(0.0, v.r - 15.0), v.g + 5.0, min(255.0, v.b + 25.0)); }\\n'
+    + '    else if (pr == 6) { n2 = 255.0 - v; }\\n'
+    + '    oColor = vec4(mix(c.rgb, n2 / 255.0, uP0.y), c.a); return;\\n'
+    + '  }\\n'
+    + '  if (uEffect == 2) {\\n' // scanlines：uP0.x=行距 uP0.y=不透明度 uP0.z=暗角开关 uP0.w=暗角强度，uColor=线色
+    + '    vec3 rgb = c.rgb;\\n'
+    + '    float row = floor(gl_FragCoord.y);\\n'
+    + '    if (mod(row, max(1.0, uP0.x)) == 0.0 && c.a > 0.0) rgb = mix(rgb, uColor, uP0.y);\\n'
+    + '    if (uP0.z > 0.5) { vec2 d = (gl_FragCoord.xy - uRes * 0.5) / length(uRes * 0.5); float dk = max(0.0, 1.0 - dot(d, d) * uP0.w * 2.0); rgb *= dk; }\\n'
+    + '    oColor = vec4(rgb, c.a); return;\\n'
+    + '  }\\n'
+    + '  if (uEffect == 3) {\\n' // pixel_zoom：uP0.x=缩放；界外填 uColor（舞台底色）
+    + '    vec2 zuv = (uv - 0.5) / uP0.x + 0.5;\\n'
+    + '    if (zuv.x < 0.0 || zuv.x > 1.0 || zuv.y < 0.0 || zuv.y > 1.0) { oColor = vec4(uColor, 1.0); return; }\\n'
+    + '    oColor = texture(uTex, zuv); return;\\n'
+    + '  }\\n'
+    + '  if (uEffect == 4) {\\n' // canvas_mask：uP0.x=形状(0圆 1星 2圆角矩形 3菱形) uP0.y=边距px uP0.z=羽化px
+    + '    float mg = uP0.y; float w2 = uRes.x - mg * 2.0; float h2 = uRes.y - mg * 2.0;\\n'
+    + '    if (w2 <= 0.0 || h2 <= 0.0) { oColor = c; return; }\\n'
+    + '    vec2 np = (gl_FragCoord.xy - uRes * 0.5) / vec2(w2 * 0.5, h2 * 0.5);\\n'
+    + '    float inside = 0.0; float edge = 0.0; int sh = int(uP0.x + 0.5);\\n'
+    + '    if (sh == 0) { float d = length(np); inside = d <= 1.0 ? 1.0 : 0.0; edge = 1.0 - d; }\\n'
+    + '    else if (sh == 1) { float ang = atan(np.y, np.x); float r = length(np); float sr = 0.4 + 0.6 * pow(abs(cos(2.5 * ang)), 2.0); inside = r <= sr ? 1.0 : 0.0; edge = sr - r; }\\n'
+    + '    else if (sh == 3) { float d = abs(np.x) + abs(np.y); inside = d <= 1.0 ? 1.0 : 0.0; edge = 1.0 - d; }\\n'
+    + '    else { float cr = 0.2; vec2 an2 = abs(np); if (an2.x <= 1.0 - cr && an2.y <= 1.0) { inside = 1.0; edge = min(1.0 - an2.x, 1.0 - an2.y); } else if (an2.x <= 1.0 && an2.y <= 1.0 - cr) { inside = 1.0; edge = min(1.0 - an2.x, 1.0 - an2.y); } else if (an2.x <= 1.0 && an2.y <= 1.0) { float cd = length(an2 - (1.0 - cr)); inside = cd <= cr ? 1.0 : 0.0; edge = cr - cd; } }\\n'
+    + '    if (inside < 0.5) { oColor = vec4(c.rgb, 0.0); return; }\\n'
+    + '    float a = c.a;\\n'
+    + '    if (uP0.z > 0.0) a *= clamp(edge / (uP0.z / (w2 * 0.5)), 0.0, 1.0);\\n'
+    + '    oColor = vec4(c.rgb, a); return;\\n'
+    + '  }\\n'
+    + '  if (uEffect == 5) { oColor = vec4(c.rgb + texture(uAux, uv).rgb * texture(uAux, uv).a, c.a); return; }\\n' // bloom 合成
+    + '  if (uEffect == 6) {\\n' // outline：uAux=掩码；uP0.x=厚度px uP0.y=方向集(4/8) uP0.z=模式(0实色 1暗版 2渐变) uP1.xy=光向 uColor=描边色
+    + '    if (texture(uAux, uv).r > 0.5) { oColor = c; return; }\\n'
+    + '    vec2 tp = 1.0 / uRes; float th = max(1.0, uP0.x); bool hit = false; vec2 hd = vec2(0.0);\\n'
+    + '    for (int k = 1; k <= 5 && !hit; k++) { if (float(k) > th) break;\\n'
+    + '      for (int di = 0; di < 8; di++) { if (uP0.y < 7.5 && di >= 4) break;\\n'
+    + '        vec2 dir = di == 0 ? vec2(-1.0, 0.0) : di == 1 ? vec2(1.0, 0.0) : di == 2 ? vec2(0.0, -1.0) : di == 3 ? vec2(0.0, 1.0) : di == 4 ? vec2(-1.0, -1.0) : di == 5 ? vec2(-1.0, 1.0) : di == 6 ? vec2(1.0, -1.0) : vec2(1.0, 1.0);\\n'
+    + '        if (texture(uAux, uv + dir * float(k) * tp).r > 0.5) { hit = true; hd = dir; break; } } }\\n'
+    + '    if (!hit) { oColor = c; return; }\\n'
+    + '    vec3 oc = uColor;\\n'
+    + '    if (uP0.z > 1.5) { float f = dot(normalize(hd), uP1.xy) * 0.5 + 0.5; oc = mix(uColor * 0.7, mix(uColor, vec3(1.0), 0.5), f); }\\n'
+    + '    else if (uP0.z > 0.5) oc = uColor * 0.7;\\n'
+    + '    oColor = vec4(oc, 1.0); return;\\n'
+    + '  }\\n'
+    + '  if (uEffect == 7) {\\n' // bloom 亮部提取：uP0.x=阈值，uColor=辉光色
+    + '    float lum = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;\\n'
+    + '    float f = lum >= uP0.x ? (lum - uP0.x) / max(0.001, 1.0 - uP0.x) : 0.0;\\n'
+    + '    oColor = vec4(uColor, c.a * f * uP0.y); return;\\n'
+    + '  }\\n'
+    + '  if (uEffect == 8 || uEffect == 9) {\\n' // 盒式模糊（8 横 9 纵）：uP0.x=半径px
+    + '    vec2 dir = uEffect == 8 ? vec2(1.0 / uRes.x, 0.0) : vec2(0.0, 1.0 / uRes.y);\\n'
+    + '    float r = clamp(uP0.x, 0.0, 16.0); vec4 sum = vec4(0.0); float cnt = 0.0;\\n'
+    + '    for (int i = -16; i <= 16; i++) { if (abs(float(i)) > r) continue; sum += texture(uTex, uv + dir * float(i)); cnt += 1.0; }\\n'
+    + '    oColor = sum / max(1.0, cnt); return;\\n'
+    + '  }\\n'
+    + '  oColor = c;\\n'
+    + '}\\n');
+  const U = {};
+  for (const n of ['uTex', 'uAux', 'uRes', 'uEffect', 'uP0', 'uP1', 'uColor', 'uColor2']) U[n] = gl.getUniformLocation(prog, n);
+  const maskTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, maskTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  postSys = { w: lowW, h: VIEW_H, A: A, B: B, C: C, D: D, prog: prog, U: U, maskTex: maskTex, vao: gl.createVertexArray() };
+  return postSys;
+}
+/** 掩码栅格化（CPU，低清）：把各部件瓦片 alpha 按位姿印到覆盖视野的
+ *  网格上，供描边通道采样（编辑器以全画布 alpha 为准；此处以部件
+ *  瓦片为准，笔触/粒子不进掩码）。 */
+function fxBuildMask(state, elByKey, camX, camY) {
+  const sys = postSys;
+  const mw = 256, mh = Math.max(2, Math.round(256 * VIEW_H / lowW));
+  const data = new Uint8Array(mw * mh * 4);
+  const sx = mw / lowW, sy = mh / VIEW_H;
+  for (const [key, el] of elByKey) {
+    const entry = state.map.get(key);
+    if (!entry || !entry.tile || !entry.tile.data) continue;
+    const tile = entry.tile;
+    const co = Math.cos(el.rot), si = Math.sin(el.rot);
+    const dsx = el.deform ? el.deform[0] : 1, dsy = el.deform ? el.deform[1] : 1;
+    for (let py = 0; py < tile.h; py++) {
+      for (let px = 0; px < tile.w; px++) {
+        if (tile.data[(py * tile.w + px) * 4 + 3] <= 8) continue;
+        const gx = (px - tile.cx) * dsx, gy = (tile.cy - py) * dsy;
+        const wx = el.pos[0] + co * gx + si * gy;
+        const wy = el.pos[1] + si * gx - co * gy;
+        const mx = Math.floor((wx - (camX - lowW / 2)) * sx);
+        const my = Math.floor((wy - (camY - VIEW_H / 2)) * sy);
+        if (mx < 0 || my < 0 || mx >= mw || my >= mh) continue;
+        data[(my * mw + mx) * 4] = 255;
+        data[(my * mw + mx) * 4 + 3] = 255;
+      }
+    }
+  }
+  gl.bindTexture(gl.TEXTURE_2D, sys.maskTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, mw, mh, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+}
+function fxRunPostChain(rawList, state, elByKey, camX, camY) {
+  const sys = ensurePostSys();
+  // 静态无效的修改器先滤掉（剩下全是空链时仍须把场景平贴到屏幕）
+  const list = rawList.filter((m) => {
+    const P = m.params || {};
+    if (m.type === 'color_lut') {
+      const presets = { retro: 1, monochrome: 2, nightvision: 3, warm: 4, cool: 5, invert: 6 };
+      return (presets[String(P.preset || 'none')] || 0) !== 0 && Number(P.intensity ?? 1) !== 0;
+    }
+    if (m.type === 'pixel_zoom') return Number(P.scale || 1) !== 1;
+    return true;
+  });
+  let src = sys.A;
+  let needMask = list.some((m) => m.type === 'outline_emphasis');
+  if (needMask) fxBuildMask(state, elByKey, camX, camY);
+  gl.disable(gl.DEPTH_TEST);
+  gl.disable(gl.BLEND);
+  gl.bindVertexArray(sys.vao);
+  const pass = (dst, effect, setup, auxTex) => {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst ? dst.fbo : null);
+    gl.viewport(0, 0, lowW, VIEW_H);
+    gl.useProgram(sys.prog);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform1i(sys.U.uTex, 0);
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, auxTex || sys.C.tex);
+    gl.uniform1i(sys.U.uAux, 4);
+    gl.uniform2f(sys.U.uRes, lowW, VIEW_H);
+    gl.uniform1i(sys.U.uEffect, effect);
+    gl.uniform4f(sys.U.uP0, 0, 0, 0, 0);
+    gl.uniform4f(sys.U.uP1, 0, 0, 0, 0);
+    gl.uniform3f(sys.U.uColor, 0, 0, 0);
+    gl.uniform3f(sys.U.uColor2, 0, 0, 0);
+    if (setup) setup();
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.activeTexture(gl.TEXTURE0);
+    if (dst) src = dst;
+  };
+  const other = () => (src === sys.A ? sys.B : sys.A);
+  if (list.length === 0) { pass(null, 0); gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.bindVertexArray(null); return; }
+  list.forEach((m, mi) => {
+    const last = mi === list.length - 1;
+    const dst = last ? null : other();
+    const P = m.params || {};
+    const n = (v, d) => (v === undefined || v === null || !Number.isFinite(Number(v)) ? d : Number(v));
+    if (m.type === 'color_lut') {
+      const presets = { retro: 1, monochrome: 2, nightvision: 3, warm: 4, cool: 5, invert: 6 };
+      const pr = presets[String(P.preset || 'none')] || 0;
+      if (pr === 0 || n(P.intensity, 1) === 0) { if (!last) pass(dst, 0); return; }
+      pass(dst, 1, () => { gl.uniform4f(sys.U.uP0, pr, n(P.intensity, 1), 0, 0); });
+    } else if (m.type === 'scanlines') {
+      const lc = fxHexRgb(P.lineColor || '#000000');
+      pass(dst, 2, () => {
+        gl.uniform4f(sys.U.uP0, n(P.lineSpacing, 2), n(P.lineOpacity, 0.3), P.vignette ? 1 : 0, n(P.vignetteIntensity, 0.3));
+        gl.uniform3f(sys.U.uColor, lc[0], lc[1], lc[2]);
+      });
+    } else if (m.type === 'pixel_zoom') {
+      const scale = n(P.scale, 1);
+      if (scale === 1) { if (!last) pass(dst, 0); return; }
+      const zoomSrc = src;
+      gl.bindTexture(gl.TEXTURE_2D, zoomSrc.tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, P.antiAlias && scale < 1 ? gl.LINEAR : gl.NEAREST);
+      pass(dst, 3, () => {
+        gl.uniform4f(sys.U.uP0, scale, 0, 0, 0);
+        gl.uniform3f(sys.U.uColor, 0.070, 0.070, 0.157);
+      });
+      gl.bindTexture(gl.TEXTURE_2D, zoomSrc.tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    } else if (m.type === 'canvas_mask') {
+      const shapes = { circle: 0, star: 1, rounded_rect: 2, diamond: 3 };
+      pass(dst, 4, () => {
+        gl.uniform4f(sys.U.uP0, shapes[String(P.shape || 'circle')] ?? 0, n(P.margin, 0), n(P.feather, 0), 0);
+      });
+    } else if (m.type === 'bloom') {
+      const bc = fxHexRgb(P.color || '#ffffff');
+      // 亮部提取（色调先行与编辑器后着色等价：模糊只搬运 alpha 与
+      // 均匀色调）；intensity 折进亮部 alpha（编辑器在着色时乘）。
+      pass(sys.C, 7, () => {
+        gl.uniform4f(sys.U.uP0, n(P.threshold, 0.7), n(P.intensity, 0.5), 0, 0);
+        gl.uniform3f(sys.U.uColor, bc[0], bc[1], bc[2]);
+      });
+      const keepSrc = src;
+      src = sys.C;
+      pass(sys.D, 8, () => { gl.uniform4f(sys.U.uP0, n(P.radius, 3), 0, 0, 0); });
+      pass(sys.C, 9, () => { gl.uniform4f(sys.U.uP0, n(P.radius, 3), 0, 0, 0); });
+      src = keepSrc;
+      pass(dst, 5, null, sys.C.tex);
+    } else if (m.type === 'outline_emphasis') {
+      const oc = fxHexRgb(P.color || '#000000');
+      const modes = { solid: 0, darken: 1, gradient: 2 };
+      const la = n(P.lightAngle, 315) * Math.PI / 180;
+      pass(dst, 6, () => {
+        gl.uniform4f(sys.U.uP0, n(P.thickness, 1), String(P.directions) === '4' ? 4 : 8, modes[String(P.outlineMode || 'solid')] ?? 0, 0);
+        gl.uniform4f(sys.U.uP1, Math.cos(la), -Math.sin(la), 0, 0);
+        gl.uniform3f(sys.U.uColor, oc[0], oc[1], oc[2]);
+      }, sys.maskTex);
+    } else {
+      if (!last) pass(dst, 0);
+    }
+  });
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.bindVertexArray(null);
+}
+
 // ---------- 宿主输入与运行时状态 ----------
 const char = { x: 0, y: 0, vy: 0, onGround: true, variant: 0, lockedVariant: false };
 let currentCostume = (EMBEDDED.defaultCostume && COSTUMES[EMBEDDED.defaultCostume])
@@ -2252,6 +2527,20 @@ function frame(now) {
     }
   }
   const camX = char.x, camY = 52 + char.y * 0.35;
+  // 画布修改轨（缺口 5-2）：本帧生效的修改器链（工程轨 + 各活跃段
+  // 表演的片段轨）；非空时场景改画进后处理目标，帧末跑全屏链。
+  const postList = [];
+  if (FX) {
+    const total = Math.max(1, FX.totalFrames || 1);
+    fxCollectCanvasMods(FX, Math.floor(elapsed * FRAME_RATE) % total, postList);
+  }
+  for (const act of activePerfs) {
+    if (act.perf.fx) fxCollectCanvasMods(act.perf.fx, (act.perf.fxStart || 0) + Math.floor(act.t * FRAME_RATE), postList);
+  }
+  if (postList.length > 0) {
+    const sys = ensurePostSys();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, sys.A.fbo);
+  }
   gl.viewport(0, 0, lowW, VIEW_H);
   gl.clearColor(0.070, 0.070, 0.157, 1);
   gl.clearDepth(1);
@@ -2302,6 +2591,7 @@ function frame(now) {
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
   }
+  if (postList.length > 0) fxRunPostChain(postList, state, elByKey, camX, camY);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
