@@ -6,7 +6,35 @@
 // ============================================================
 
 import type { PixelGrid, Sprite, SpriteMark } from './unified-types';
-import { unpackMaskBits } from './dynamic-patterns';
+
+/** 位打包 base64 字母表（掩码/字节共用，与历史格式一致；
+ * 本文件是 pack/unpack 的唯一实现，dynamic-patterns 转出） */
+export const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** 位打包掩码 → base64（行优先，每像素 1 位） */
+export function packMaskBits(cells: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < cells.length; i += 6) {
+    let v = 0;
+    for (let k = 0; k < 6; k++) if (cells[i + k]) v |= 1 << (5 - k);
+    out += B64_ALPHABET[v];
+  }
+  return out;
+}
+
+/** base64 → 位打包掩码（count = w*h，多余位丢弃） */
+export function unpackMaskBits(bits: string, count: number): Uint8Array {
+  const cells = new Uint8Array(count);
+  for (let i = 0; i < bits.length; i++) {
+    const v = B64_ALPHABET.indexOf(bits[i]);
+    if (v < 0) continue;
+    for (let k = 0; k < 6; k++) {
+      const idx = i * 6 + k;
+      if (idx < count && (v & (1 << (5 - k)))) cells[idx] = 1;
+    }
+  }
+  return cells;
+}
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
@@ -81,6 +109,23 @@ export function markValue(sprite: Pick<Sprite, 'marks'> | undefined, name: strin
 /** 方向标记 → 角度（度，精灵本地口径 0=东顺时针 90=南） */
 export function markDirectionDeg(sprite: Pick<Sprite, 'marks'> | undefined, name: string): number | undefined {
   return findMark(sprite, name, 'direction')?.angleDeg;
+}
+
+/** 方向绑定解析：direction 标记优先，其次 vector 标记的
+ * 角度（分量按精灵宽高换像素后取 atan2，y 向下屏幕口径）。
+ * 消费端（发射/置换方向）统一走此口径。 */
+export function markDirAngleDeg(
+  sprite: Pick<Sprite, 'marks' | 'width' | 'height'>,
+  name: string,
+): number | undefined {
+  const d = findMark(sprite, name, 'direction');
+  if (d) return d.angleDeg;
+  const v = findMark(sprite, name, 'vector');
+  if (!v) return undefined;
+  const dx = v.dx * sprite.width;
+  const dy = v.dy * sprite.height;
+  if (dx === 0 && dy === 0) return undefined;
+  return ((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360;
 }
 
 /** 矢量标记 → 锚点像素坐标 + 分量（像素）+ 角度/长度 */

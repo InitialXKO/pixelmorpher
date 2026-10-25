@@ -28,6 +28,7 @@ export interface DynamicPatternParams {
   displaceAmp: number;   // 置换幅度（px，沿方向峰值；垂直分量为其半）
   displaceFreq: number;  // 噪声频率（格/px）
   displaceDeg: number;   // 置换方向角（度，屏幕口径：0=东 90=南 180=西 270=北）
+  displaceDirMark: string; // 置换方向绑定的精灵 direction/vector 标记名（空 = 用 displaceDeg）
   displaceSpeed: number; // 场流动速度（圈/秒，0 = 冻结的静态扭曲）
   displacePhase: number; // 相位（周期数 0..1）
   // 自转段（D3，形变段子段）：精灵绕自身枢轴原地自转（不沿
@@ -64,6 +65,7 @@ export interface DynamicPatternParams {
   arcMode: 'arc' | 'vine' | 'stars'; // 弧线（闪电）/ 藤蔓 / 星座连线
   arcGrowHz: number;    // 生长循环（次/秒，0 = 恒满长）；周期内先生长后保持
   arcTarget: string;    // 双锚点：终点锚定的目标部件槽位键（仅弧线模式；空 = 方向+弧长）
+  arcOriginMark: string; // 弧线原点绑定的精灵点标记名（空 = 插头）
   arcDetail: number;    // 细节数：藤蔓叶数 / 星座星数（0 = 按模式缺省）
   // 追随段（形变段的跨部件驱动）：本部件渲染时叠加「源部件位姿的
   // 滞后差」——源部件当前位姿与 delay 秒前位姿之差 × amount，
@@ -82,6 +84,7 @@ export interface DynamicPatternParams {
   linkToDeform: number;  // 发射率随形变脉冲的调制深度 0..1（0=恒定）
   speed: number;         // 初速（px/秒，沿发射方向 + 法线混合）
   directionDeg: number;  // 发射方向角（度，屏幕口径：0=东 90=南 180=西 270=北）
+  emitDirMark: string;   // 发射方向绑定的精灵 direction/vector 标记名（空 = 用 directionDeg）
   spreadDeg: number;     // 方向散布（度）
   layer: DynamicLayer;   // 绘制层：身后 / 身前 / 两层按比例
   frontRatio: number;    // layer=both 时落身前的比例
@@ -102,7 +105,8 @@ export interface DynamicPatternParams {
   glowHz: number;           // 呼吸频率（次/秒）
   glowPhase: number;        // 相位（周期数 0..1）
   glowHalo: number;         // 柔光圈宽（px，0 = 只亮选区内）
-  glowMaskSource: GlowMaskSource; // 选区来源：取色 / 手动标记
+  glowMaskSource: GlowMaskSource; // 选区来源：取色 / 手动标记 / 精灵选区标记
+  glowMarkName: string;  // glowMaskSource='mark' 时引用的精灵选区标记名
   glowPick: string;         // 取色选区：目标颜色（#rrggbb）
   glowTolerance: number;    // 取色容差 0..1（RGB 距离归一化；0 = 精确同色）
   glowMask?: GlowMaskData;  // 手动标记选区：位打包掩码（行优先，1 = 选中）
@@ -140,7 +144,7 @@ export function followDeltaAt(
 }
 
 /** 发光选区来源：color = 按像素颜色取色；marked = 手动标记的像素掩码 */
-export type GlowMaskSource = 'color' | 'marked';
+export type GlowMaskSource = 'color' | 'marked' | 'mark';
 
 /** 柔光圈形状：square 方形圈（八邻域逐圈外扩）/ circle 圆形 / star 十字星形
  * （沿横竖轴伸长、对角收短）/ flame 焰形（向上伸长收尖、下方收短）/ custom 自绘印章 */
@@ -176,22 +180,22 @@ export interface ResolvedDynamicPattern {
 export function defaultDynamicParams(): DynamicPatternParams {
   return {
     deformEnabled: false, squashY: 0.85, stretchX: 1.1, deformHz: 1, deformPhase: 0,
-    displaceEnabled: false, displaceAmp: 2.5, displaceFreq: 0.12, displaceDeg: 270,
+    displaceEnabled: false, displaceAmp: 2.5, displaceFreq: 0.12, displaceDeg: 270, displaceDirMark: '',
     displaceSpeed: 0.25, displacePhase: 0,
     spinEnabled: false, spinSpeedDeg: 45, spinPhaseDeg: 0,
     trailEnabled: false, trailCount: 3, trailIntervalSec: 0.06, trailOpacity: 0.35,
     arcEnabled: false, arcLengthPx: 26, arcDirDeg: 0, arcDisplace: 0.35,
     arcBranches: 1, arcWidthPx: 1.2, arcFlicker: 10, arcSeed: 7,
     arcColor: '#bfe3ff',
-    arcMode: 'arc', arcGrowHz: 0, arcTarget: '', arcDetail: 0,
+    arcMode: 'arc', arcGrowHz: 0, arcTarget: '', arcOriginMark: '', arcDetail: 0,
     followEnabled: false, followSource: '', followDelaySec: 0.12, followAmount: 0.7, followRotate: true,
     emitEnabled: true, source: 'contour', emitMark: '', rate: 12, linkToDeform: 0, speed: 6,
-    directionDeg: 270, spreadDeg: 60, layer: 'both', frontRatio: 0.35,
+    directionDeg: 270, emitDirMark: '', spreadDeg: 60, layer: 'both', frontRatio: 0.35,
     life: 0.9, sizeStart: 3, sizeEnd: 8, rise: 12, buoy: 0, turbulence: 4,
     color: '#ffb46b', alpha: 0.5, maxParticles: 90,
     glowEnabled: false, glowColor: '#7dd7ff', glowStrength: 1, glowHz: 0.8,
     glowPhase: 0, glowHalo: 2, glowMaskSource: 'color', glowPick: '#2ea8ff',
-    glowTolerance: 0, glowMask: undefined, glowFollowGroup: 2,
+    glowTolerance: 0, glowMask: undefined, glowMarkName: '', glowFollowGroup: 2,
     glowShape: 'square', glowShapeKernel: undefined,
     glowStarReach: 1.2, glowFlameReach: 1.8, glowAngleDeg: 270, glowAngleSpace: 'sprite',
   };
@@ -215,6 +219,10 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
   if (out.glowAngleSpace !== 'world') out.glowAngleSpace = 'sprite';
   if (typeof out.followSource !== 'string') out.followSource = '';
   if (typeof out.emitMark !== 'string') out.emitMark = '';
+  if (typeof out.emitDirMark !== 'string') out.emitDirMark = '';
+  if (typeof out.displaceDirMark !== 'string') out.displaceDirMark = '';
+  if (typeof out.arcOriginMark !== 'string') out.arcOriginMark = '';
+  if (typeof out.glowMarkName !== 'string') out.glowMarkName = '';
   out.followDelaySec = Number.isFinite(out.followDelaySec)
     ? Math.max(0, Math.min(1, out.followDelaySec)) : 0.12;
   out.followAmount = Number.isFinite(out.followAmount)
@@ -644,18 +652,8 @@ export function glowPulseAt(params: DynamicPatternParams, tSec: number): number 
   return (Math.sin(2 * Math.PI * (params.glowHz * tSec + params.glowPhase)) + 1) / 2;
 }
 
-const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-
-/** 位打包掩码 → base64（行优先，每像素 1 位） */
-export function packMaskBits(cells: Uint8Array): string {
-  let out = '';
-  for (let i = 0; i < cells.length; i += 6) {
-    let v = 0;
-    for (let k = 0; k < 6; k++) if (cells[i + k]) v |= 1 << (5 - k);
-    out += B64_ALPHABET[v];
-  }
-  return out;
-}
+import { B64_ALPHABET, packMaskBits, unpackMaskBits, resolveRegionCells } from './sprite-marks';
+export { packMaskBits, unpackMaskBits } from './sprite-marks';
 
 /** 字节数组 → base64（无填充；解码端用 atob 补填充） */
 export function packBytesBase64(bytes: Uint8Array): string {
@@ -669,20 +667,6 @@ export function packBytesBase64(bytes: Uint8Array): string {
     if (i + 2 < bytes.length) out += B64_ALPHABET[c & 63];
   }
   return out;
-}
-
-/** base64 → 位打包掩码（count = w*h，多余位丢弃） */
-export function unpackMaskBits(bits: string, count: number): Uint8Array {
-  const cells = new Uint8Array(count);
-  for (let i = 0; i < bits.length; i++) {
-    const v = B64_ALPHABET.indexOf(bits[i]);
-    if (v < 0) continue;
-    for (let k = 0; k < 6; k++) {
-      const idx = i * 6 + k;
-      if (idx < count && (v & (1 << (5 - k)))) cells[idx] = 1;
-    }
-  }
-  return cells;
 }
 
 /** 布尔网格 → 手动标记掩码数据 */
@@ -703,15 +687,22 @@ function normHex(c: string): string {
  * 按选区来源算出部件网格上的发光选区（1 = 选中）。无选中返回 null。
  * 取色：与 glowPick 的 RGB 距离 ≤ glowTolerance（0 = 精确同色，不分大小写；透明格不选）。
  * 手动标记：读 glowMask 位打包，坐标对齐网格左上，越界丢弃。
+ * 精灵选区标记：按 glowMarkName 读精灵上的 region 标记（需
+ * 调用方把该精灵的 marks 传入；解析走 sprite-marks 唯一口径）。
  */
 export function glowMaskCells(
   params: DynamicPatternParams,
   grid: import('./unified-types').PixelGrid,
+  marks?: import('./unified-types').SpriteMark[],
 ): Uint8Array | null {
   if (!params.glowEnabled) return null;
   const h = grid.length;
   const w = h > 0 ? grid[0].length : 0;
   if (!w || !h) return null;
+  if (params.glowMaskSource === 'mark') {
+    if (!marks || !params.glowMarkName) return null;
+    return resolveRegionCells({ marks }, params.glowMarkName, grid);
+  }
   const cells = new Uint8Array(w * h);
   let any = false;
   if (params.glowMaskSource === 'marked') {
@@ -879,8 +870,9 @@ export function glowField(
   params: DynamicPatternParams,
   grid: import('./unified-types').PixelGrid,
   frameAngleDeg = 0,
+  marks?: import('./unified-types').SpriteMark[],
 ): { w: number; h: number; field: Float32Array; padX: number; padY: number } | null {
-  const cells = glowMaskCells(params, grid);
+  const cells = glowMaskCells(params, grid, marks);
   if (!cells) return null;
   const h = grid.length;
   const w = grid[0].length;

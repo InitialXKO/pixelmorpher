@@ -239,7 +239,7 @@ export function representativeGridForSlotEx(
   externalSprites?: Record<string, Sprite>,
   costumeSetId?: string,
   preferredDir?: DirectionIndex,
-): { grid: PixelGrid; space: 'tile' | 'sprite' } | null {
+): { grid: PixelGrid; space: 'tile' | 'sprite'; marks?: import('../unified-types').SpriteMark[] } | null {
   const table: SpriteTable = { ...(character.sprites ?? {}), ...(externalSprites ?? {}) };
   const set = character.costumeSets.find((cs) => cs.id === (costumeSetId ?? character.activeCostumeSetId))
     ?? character.costumeSets[0];
@@ -259,9 +259,9 @@ export function representativeGridForSlotEx(
     const nodeId = Object.values(character.nodes)
       .find((n) => (n.slot?.slotKey ?? n.id) === slotKey)?.id ?? slotKey;
     const baked = buildParametricSprite(piece.parametric, nodeId, baseSpr);
-    if (baked) return { grid: baked.data, space: (piece.parametric.composite ?? 'generate') === 'generate' ? 'tile' : 'sprite' };
+    if (baked) return { grid: baked.data, space: (piece.parametric.composite ?? 'generate') === 'generate' ? 'tile' : 'sprite', marks: baseSpr?.marks };
   }
-  return baseSpr ? { grid: baseSpr.data, space: 'sprite' } : null;
+  return baseSpr ? { grid: baseSpr.data, space: 'sprite', marks: baseSpr.marks } : null;
 }
 
 /** silhouette/overlay 的底图：东向精灵（generate 档不需要），无则 undefined */
@@ -335,7 +335,7 @@ function glowEntryFor(
     return undefined;
   }
   const fields = glows.map((inst, idx) => {
-    const gf = glowField(inst.params, rep.grid);
+    const gf = glowField(inst.params, rep.grid, 0, rep.marks);
     if (!gf) {
       warnings.push(`发光段：槽位 ${slotKey}${where} 第 ${idx + 1} 个发光实例选区为空（取色无同色像素或未标记），未进运行时包`);
     }
@@ -367,7 +367,7 @@ function glowEntryFor(
     if (recomputable) {
       stamps[ci] = glowStampOf(first);
       for (const idx of live) {
-        const cells = glowMaskCells(glows[idx]!.params, rep.grid);
+        const cells = glowMaskCells(glows[idx]!.params, rep.grid, rep.marks);
         if (!cells) continue;
         for (let y = 0; y < gh; y++) {
           for (let x = 0; x < gw; x++) {

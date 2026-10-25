@@ -76,6 +76,7 @@ import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
 import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
+import { markPointPx, markDirAngleDeg } from './sprite-marks';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
@@ -1936,6 +1937,24 @@ export function generateRenderPlan(
         if (Object.keys(ends).length > 0) arcEnds = ends;
       }
     }
+    // 弧线原点标记（sprite-marks）：点标记相对插头的本地偏移
+    // （镜像时标记与插头同翻，偏移 x 取反）
+    let arcOrigins: NodeRenderInstruction['arcOrigins'];
+    if (dynResolved.length > 0 && effectiveSprite?.marks?.length) {
+      const origins: NonNullable<NodeRenderInstruction['arcOrigins']> = {};
+      dynResolved.forEach((r, ri) => {
+        const p = r.instance.params;
+        if (!p.arcEnabled || !p.arcOriginMark) return;
+        const mp = markPointPx(effectiveSprite, p.arcOriginMark);
+        if (!mp) return;
+        const plugPx = effectiveSprite.plug ? subToPx(effectiveSprite.plug.x) : effectiveSprite.width / 2;
+        const plugPy = effectiveSprite.plug ? subToPx(effectiveSprite.plug.y) : effectiveSprite.height / 2;
+        let ox = mp.x - plugPx;
+        if (mirror || worldTf.mirror) ox = -ox;
+        origins[ri] = { x: ox, y: mp.y - plugPy };
+      });
+      if (Object.keys(origins).length > 0) arcOrigins = origins;
+    }
     // 残影段（D5）：过去帧的世界位姿差（与追随段同一 followPoseAt
     // machinery——剥离蓝图的轨道位姿、当前帧同口径相减，增量由此
     // 只含轨道运动；蓝图驱动的运动不入残影，与追随段同一近似）
@@ -2001,6 +2020,7 @@ export function generateRenderPlan(
       dynamicPatterns: dynResolved.length > 0 ? dynResolved : undefined,
       trailGhosts,
       arcEnds,
+      arcOrigins,
       // 蓝图 skew：有倾斜量时才填，避免空数组污染
       skews: (worldTf.skewX || worldTf.skewY) ? [{ skewX: worldTf.skewX ?? 0, skewY: worldTf.skewY ?? 0 }] : undefined,
       // STEP2 合并：plumbing 蓝图给 renderNodeSprite，替代手拼像素链
@@ -2238,6 +2258,15 @@ function drawDynamicArcs(
     const p = resolved.instance.params;
     if (!p.arcEnabled) return;
     const shape = arcPointsAt(p, tSec, instruction.arcEnds?.[ri]);
+    // 原点标记偏移（计划期算好）：整形平移到标记点
+    const org = instruction.arcOrigins?.[ri];
+    if (org) {
+      const sh = (pts: { x: number; y: number; w: number }[]) =>
+        pts.map((pt) => ({ ...pt, x: pt.x + org.x, y: pt.y + org.y }));
+      shape.main = sh(shape.main);
+      shape.branches = shape.branches.map(sh);
+      shape.dots = sh(shape.dots);
+    }
     const rgb = hexToRgb(p.arcColor || '#bfe3ff') ?? { r: 191, g: 227, b: 255 };
     ctx.save();
     ctx.lineCap = 'round';
@@ -2284,6 +2313,7 @@ function buildGlowOverlay(
   contentHash: string,
   mirror: boolean,
   frameAngleDeg = 0,
+  marks?: import('./unified-types').SpriteMark[],
 ): { canvas: HTMLCanvasElement; padX: number; padY: number; key: string } | null {
   if (!visualParams.glowEnabled) return null;
   const pulse = glowPulseAt(visualParams, tSec);
@@ -2293,12 +2323,14 @@ function buildGlowOverlay(
   const sig = [
     params.glowColor, params.glowStrength,
     ...contributors.flatMap((c) => [
-      c.glowHalo, c.glowMaskSource, c.glowPick, c.glowTolerance,
+      c.glowHalo, c.glowMaskSource, c.glowMarkName ?? '', c.glowPick, c.glowTolerance,
       c.glowMask?.w ?? 0, c.glowMask?.h ?? 0, c.glowMask?.bits ?? '',
       c.glowShape ?? 'square', c.glowShapeKernel?.w ?? 0, c.glowShapeKernel?.h ?? 0, c.glowShapeKernel?.bits ?? '',
       c.glowStarReach ?? 1.2, c.glowFlameReach ?? 1.8, c.glowAngleDeg ?? 270, c.glowAngleSpace ?? 'sprite',
     ]),
     hasWorld ? `W${Math.round(frameAngleDeg / 3)}` : '',
+    // 选区来源为精灵标记时，标记几何本身进签名（改标记不改像素也要失效缓存）
+    contributors.some((c) => c.glowMaskSource === 'mark') ? JSON.stringify(marks ?? null) : '',
   ].join('|');
   const key = `${contentHash}|${sig}|${Math.round(pulse * 24)}|${mirror ? 'M' : ''}`;
   const hit = glowOverlayCache.get(key);
@@ -2306,7 +2338,7 @@ function buildGlowOverlay(
   let result: { canvas: HTMLCanvasElement; padX: number; padY: number } | null = null;
   let merged: { w: number; h: number; field: Float32Array; padX: number; padY: number } | null = null;
   for (const c of contributors) {
-    const f = glowField(c, pixels, frameAngleDeg);
+    const f = glowField(c, pixels, frameAngleDeg, marks);
     if (!f) continue;
     if (!merged) {
       merged = { w: f.w, h: f.h, field: new Float32Array(f.field), padX: f.padX, padY: f.padY };
@@ -2650,8 +2682,12 @@ function renderNodeSprite(
       .find((p) => p.displaceEnabled && (p.displaceAmp ?? 0) > 0);
     if (disp) {
       const { displacePixelGrid, displacePhaseAt } = require('./dynamic-patterns') as typeof import('./dynamic-patterns');
+      // 置换方向绑定（sprite-marks）：命中标记时以标记角为准
+      const dispEff = disp.displaceDirMark && sprite
+        ? { ...disp, displaceDeg: markDirAngleDeg(sprite, disp.displaceDirMark) ?? disp.displaceDeg }
+        : disp;
       effectivePixels = displacePixelGrid(
-        effectivePixels, disp, displacePhaseAt(disp, frame / frameRate),
+        effectivePixels, dispEff, displacePhaseAt(dispEff, frame / frameRate),
       ) as PixelGrid;
     }
   }
@@ -2718,7 +2754,7 @@ function renderNodeSprite(
   const glowOverlays = previewQuality === 'low' || !instruction.dynamicPatterns?.length
     ? []
     : resolveGlowGroups(instruction.dynamicPatterns.map((r) => r.instance.params))
-      .map((g) => buildGlowOverlay(effectivePixels, g.representative, g.contributors, frame / frameRate, pixelContentHash, mirror, angle))
+      .map((g) => buildGlowOverlay(effectivePixels, g.representative, g.contributors, frame / frameRate, pixelContentHash, mirror, angle, sprite?.marks))
       .filter((x): x is { canvas: HTMLCanvasElement; padX: number; padY: number; key: string } => !!x);
   const glowPivotX = (g: { canvas: HTMLCanvasElement; padX: number }) =>
     (mirror ? g.canvas.width - (pivotXRaw + g.padX) : pivotXRaw + g.padX);

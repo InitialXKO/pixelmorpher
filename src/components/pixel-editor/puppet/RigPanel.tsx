@@ -24,7 +24,7 @@ import PuppetModifierPanel from './PuppetModifierPanel';
 import ParametricAppearanceEditor from './ParametricAppearanceEditor';
 import DynamicPatternEditor from './DynamicPatternEditor';
 import { glowRankByInstanceId } from '@/lib/dynamic-patterns';
-import { representativeGridForSlot } from '@/lib/proc-runtime/convert';
+import { representativeGridForSlot, representativeGridForSlotEx } from '@/lib/proc-runtime/convert';
 import GlobalBlueprintEditor from './GlobalBlueprintEditor';
 import CharacterBlueprintEditor from './CharacterBlueprintEditor';
 import StateBlueprintEditor from './StateBlueprintEditor';
@@ -660,6 +660,7 @@ function RigNodeProperties({
             onChange={(next) => onUpdate({ dynamicPatterns: next })}
             hint="挂在节点上，换装不变；服装件同效果位可替换或压制这里的实例。"
             previewGrid={character ? representativeGridForSlot(character, node.slot?.slotKey ?? node.id, spritesRecord) : null}
+            previewMarks={character ? representativeGridForSlotEx(character, node.slot?.slotKey ?? node.id, spritesRecord)?.marks : undefined}
             glowRankById={character
               ? glowRankByInstanceId(
                 node.dynamicPatterns,

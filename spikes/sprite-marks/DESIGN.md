@@ -84,11 +84,31 @@ RegionSpec（选区 = 涂画或逻辑，二选一存）：
   dynSimulate；DYNAMIC_SRC 的 dynSourcePoints 加 'mark'
   分支。两端出生点探针对拍。
 
-其余消费端（设计已定口径、未在本 spike 接线）：弧线原
-点可指定点标记（替代 plug）、发光选区来源加 'mark'
-（按名读 region 标记，替代实例内 glowMask）、置换/发
-射方向可绑定 direction/vector 标记——都走第三节的同
-一解析层，后续逐个接。
+其余三个消费端已于 2026-10-25 晚（用户令「其余消费端
+也接进运行时」）全部接完，同走第三节解析层：
+
+- **弧线原点**：参数 arcOriginMark（点标记名，空 = 插
+  头）。编辑器计划期算原点相对插头的本地偏移（镜像时
+  x 取反）挂 instruction.arcOrigins，绘制时整形平移；
+  运行时帧循环按 marksN 算标记的中心相对位 orgC 替代
+  plugC（双锚点终点同以 orgC 为原点重算）。
+- **发光选区来源 'mark'**：参数 glowMarkName。解析点在
+  编辑器与 convert 两处（glowMaskCells/glowField 加可选
+  marks 形参，'mark' 分支走 resolveRegionCells）；运行
+  时不逐帧解析，选区在 convert 期烘进发光条目（与
+  'marked' 来源同路）。编辑器选区面板经 previewMarks
+  （代表精灵标记，由两处宿主从 representativeGridFor-
+  SlotEx 传入）可预览。
+- **方向绑定**：参数 emitDirMark / displaceDirMark，解
+  析统一走 markDirAngleDeg（direction 直取、vector 按
+  精灵像素分量取 atan2）。发射：编辑器模拟与运行时孪
+  生同改（运行时角由图集期算好挂条目 [12] marksDir）；
+  置换：编辑器在 displacePixelGrid 前换有效参数、运行
+  时在 displaceOfRt 读包内精灵标记解析——两端同口径。
+
+另：位打包 pack/unpack 的唯一实现已迁入 sprite-
+marks.ts（dynamic-patterns 改为转出），避免解析层与
+模式库循环依赖。
 
 ## 五、作者端（本 spike 不做，设计留口）
 

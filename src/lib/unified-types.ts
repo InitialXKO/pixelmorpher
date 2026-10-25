@@ -1418,6 +1418,9 @@ export interface NodeRenderInstruction {
   /** 弧线双锚点（D4 二期）：实例序号 → 终点（本节点本地 px，
    * 计划期按目标部件轨道位姿算好；无目标的实例不入表） */
   arcEnds?: Record<number, { x: number; y: number }>;
+  /** 弧线原点标记（sprite-marks）：实例序号 → 原点偏移（本地
+   * px，相对插头；计划期按精灵点标记算好，镜像时 x 取反） */
+  arcOrigins?: Record<number, { x: number; y: number }>;
   /** Shared sprite table for SpriteRef resolution (character.sprites) */
   sprites?: Record<string, Sprite>;
   /** 蒙皮快照弯曲参数（attachment.skinningSnapshot 生效时填充，renderNodeSprite 用） */

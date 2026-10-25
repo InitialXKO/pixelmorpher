@@ -9,7 +9,7 @@
 // ============================================================
 
 import { subToPx, type PixelGrid, type Sprite } from './unified-types';
-import { markPointPx } from './sprite-marks';
+import { markPointPx, markDirAngleDeg } from './sprite-marks';
 import { hashPixelGrid } from './engine/render-cache';
 import {
   dynamicDeformAt,
@@ -148,7 +148,12 @@ export function simulateDynamicParticles(
   const lifeFrames = params.life * frameRate;
   const firstBirth = Math.max(0, Math.ceil(frame - lifeFrames));
   const lastBirth = Math.floor(frame);
-  const dirRad = (params.directionDeg * Math.PI) / 180;
+  // 发射方向绑定（sprite-marks）：emitDirMark 命中 direction/
+  // vector 标记时以标记角为准，未命中回落 directionDeg
+  const dirDeg = params.emitDirMark
+    ? (markDirAngleDeg(sprite, params.emitDirMark) ?? params.directionDeg)
+    : params.directionDeg;
+  const dirRad = (dirDeg * Math.PI) / 180;
   const dirX = Math.cos(dirRad), dirY = Math.sin(dirRad);
   // 存活上限是单实例总量：both 分层时按身前比例拆给两层
   const cap = params.layer === 'both'

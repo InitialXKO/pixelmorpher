@@ -271,7 +271,12 @@ function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
   const lifeFrames = params.life * frameRate;
   const firstBirth = Math.max(0, Math.ceil(frame - lifeFrames));
   const lastBirth = Math.floor(frame);
-  const dirRad = (params.directionDeg * Math.PI) / 180;
+  // 发射方向绑定：tile.marksDir（名 → 角度，图集期由精灵标记
+  // 算好）命中时以标记角为准，未命中回落 directionDeg（同编辑器）
+  const dirDeg = params.emitDirMark && tile.marksDir && tile.marksDir[params.emitDirMark] !== undefined
+    ? tile.marksDir[params.emitDirMark]
+    : params.directionDeg;
+  const dirRad = (dirDeg * Math.PI) / 180;
   const dirX = Math.cos(dirRad), dirY = Math.sin(dirRad);
   const cap = params.layer === 'both'
     ? Math.max(1, Math.round(params.maxParticles * (layer === 'front' ? params.frontRatio : 1 - params.frontRatio)))

@@ -57,6 +57,7 @@ export default function DynamicPatternEditor({
   onChange,
   hint,
   previewGrid,
+  previewMarks,
   glowRankById,
   followSourceOptions,
 }: {
@@ -65,6 +66,8 @@ export default function DynamicPatternEditor({
   hint?: string;
   /** 当前槽位的代表图（发光段取色/手动标记用；无图时这两项不可用） */
   previewGrid?: PixelGrid | null;
+  /** 当前槽位代表精灵的标记（发光段「精灵选区标记」来源预览用） */
+  previewMarks?: import('@/lib/unified-types').SpriteMark[];
   /** 追随段可选的源部件（槽位键 + 显示名）；缺省时源部件退化为文本输入 */
   followSourceOptions?: { key: string; label: string }[];
   /** 双挂载解析后的发光组序（实例 id → 0 起序数）：判「超过第 3 个」用；
@@ -278,6 +281,16 @@ export default function DynamicPatternEditor({
                 />
               </div>
             )}
+            <div>
+              <Label className="text-[9px] text-gray-600">发射方向标记（空 = 用方向角）</Label>
+              <input
+                type="text"
+                value={np(inst).emitDirMark}
+                onChange={(e) => patchParam(inst.id, 'emitDirMark', e.target.value)}
+                placeholder="方向/矢量标记名"
+                className="h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded mt-1 w-full text-gray-300 px-1"
+              />
+            </div>
           </div>
           <div className="flex items-center gap-3 text-[10px] text-gray-400">
             <label className="flex items-center gap-1">
@@ -333,6 +346,18 @@ export default function DynamicPatternEditor({
                     <option key={o.key} value={o.key}>{o.label}</option>
                   ))}
                 </select>
+              </label>
+            )}
+            {np(inst).arcEnabled && (
+              <label className="flex items-center gap-1" title="弧线原点改用精灵上的点标记（空 = 插头）">
+                原点标记
+                <input
+                  type="text"
+                  value={np(inst).arcOriginMark}
+                  onChange={(e) => patchParam(inst.id, 'arcOriginMark', e.target.value)}
+                  placeholder="点标记名"
+                  className="h-6 w-20 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-1 text-gray-300"
+                />
               </label>
             )}
             <label className="flex items-center gap-1">
@@ -461,9 +486,22 @@ export default function DynamicPatternEditor({
               })}
             </div>
           ))}
+          {np(inst).displaceEnabled && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[9px] text-gray-500 w-24 shrink-0">置换方向标记</span>
+              <input
+                type="text"
+                value={np(inst).displaceDirMark}
+                onChange={(e) => patchParam(inst.id, 'displaceDirMark', e.target.value)}
+                placeholder="方向/矢量标记名（空 = 用置换方向角）"
+                className="h-6 flex-1 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-1 text-gray-300"
+              />
+            </div>
+          )}
           {np(inst).glowEnabled && (
             <GlowSelectionPanel
               grid={previewGrid}
+              marks={previewMarks}
               params={np(inst)}
               onPatch={(key, value) => patchParam(inst.id, key, value)}
             />
@@ -511,10 +549,12 @@ export default function DynamicPatternEditor({
  */
 function GlowSelectionPanel({
   grid,
+  marks,
   params,
   onPatch,
 }: {
   grid: PixelGrid | null | undefined;
+  marks?: import('@/lib/unified-types').SpriteMark[];
   params: DynamicPatternParams;
   onPatch: (key: keyof DynamicPatternParams, value: number | boolean | string | GlowMaskData) => void;
 }) {
@@ -538,8 +578,8 @@ function GlowSelectionPanel({
       }
       return out;
     }
-    return glowMaskCells({ ...params, glowEnabled: true }, grid) ?? new Uint8Array(w * h);
-  }, [grid, marked, params, w, h]);
+    return glowMaskCells({ ...params, glowEnabled: true }, grid, marks) ?? new Uint8Array(w * h);
+  }, [grid, marked, params, marks, w, h]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -567,7 +607,7 @@ function GlowSelectionPanel({
     return x >= 0 && y >= 0 && x < w && y < h ? { x, y } : null;
   };
   const applyAt = (x: number, y: number, value: boolean) => {
-    if (!grid || !overlay) return;
+    if (!grid || !overlay || !marked) return;
     const boolGrid: boolean[][] = [];
     for (let yy = 0; yy < h; yy++) {
       const row: boolean[] = [];
@@ -591,8 +631,21 @@ function GlowSelectionPanel({
         >
           <option value="color">取色（按颜色选像素）</option>
           <option value="marked">手动标记</option>
+          <option value="mark">精灵选区标记</option>
         </select>
-        {!marked && (
+        {params.glowMaskSource === 'mark' && (
+          <label className="flex items-center gap-1 text-[9px] text-gray-400">
+            标记名
+            <input
+              type="text"
+              value={params.glowMarkName}
+              onChange={(e) => onPatch('glowMarkName', e.target.value)}
+              placeholder="选区标记名"
+              className="h-6 w-24 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-1 text-gray-300"
+            />
+          </label>
+        )}
+        {!marked && params.glowMaskSource !== 'mark' && (
           <label className="flex items-center gap-1 text-[9px] text-gray-400">
             目标色
             <input

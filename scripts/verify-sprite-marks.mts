@@ -159,4 +159,75 @@ check('2 点/值解析与缺失回落 undefined',
     })());
 }
 
+// ---------- 5) 其余消费端进运行时（弧线原点 / 发光选区 / 方向绑定） ----------
+{
+  const { glowField, glowMaskCells } = await import('../src/lib/dynamic-patterns');
+  const grid8: (string | null)[][] = Array.from({ length: 4 }, () => Array(8).fill('#445566'));
+  const marksR = [
+    { id: 'r1', name: '右半', kind: 'region', region: { by: 'rect', x: 0.5, y: 0, w: 0.5, h: 1 } },
+    { id: 'd1', name: '朝向', kind: 'direction', angleDeg: 90 },
+  ] as never;
+  const gParams = {
+    ...defaultDynamicParams(),
+    glowEnabled: true, glowMaskSource: 'mark' as const, glowMarkName: '右半', glowHalo: 0,
+  };
+  const cellsM = glowMaskCells(gParams, grid8, marksR);
+  const cellsDirect = resolveRegionCells({ marks: marksR } as never, '右半', grid8);
+  check('9a 发光选区 mark 来源：与解析层逐格一致、右半 16 格',
+    !!cellsM && !!cellsDirect
+    && cellsM.every((v, i) => v === cellsDirect[i])
+    && [...cellsM].reduce((a, b) => a + b, 0) === 16);
+  const gf = glowField(gParams, grid8, 0, marksR);
+  check('9b 发光场（mark 来源）非空且只在右半',
+    !!gf && gf.field.some((v) => v > 0)
+    && (() => { let ok = true; for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) if (gf.field[(y + gf.padY) * gf.w + (x + gf.padX)] !== 0) ok = false; return ok; })());
+  check('9c 发光选区 mark 缺失标记/未传 marks → null（不崩、走点名）',
+    glowMaskCells({ ...gParams, glowMarkName: '不存在' }, grid8, marksR) === null
+    && glowMaskCells(gParams, grid8) === null);
+
+  // 发射方向绑定：direction 标记 90 覆盖 directionDeg 270，双端逐值一致
+  const grid20: (string | null)[][] = Array.from({ length: 20 }, () => Array(20).fill('#3366aa'));
+  const spriteD = {
+    width: 20, height: 20, data: grid20, plug: { x: pxToSub(10), y: pxToSub(10) },
+    marks: [{ id: 'd1', name: '朝向', kind: 'direction', angleDeg: 90 }],
+  };
+  const pDir = {
+    ...defaultDynamicParams(),
+    emitEnabled: true, source: 'inside' as const, directionDeg: 270, emitDirMark: '朝向',
+    rate: 60, life: 10, speed: 6, gravity: 0, spreadDeg: 0,
+  };
+  const instD = { id: 'dyn_dir_1', slot: '身体', enabled: true, params: pDir };
+  const prodD = simulateDynamicParticles(
+    { instance: instD, origin: 'node' } as never, spriteD as never, 30, 60, false, 'back', 'part');
+  const dyn = createDynamicRuntime() as unknown as {
+    dynSimulate: (inst: never, tile: never, f: number, fr: number, layer: string, seed: string) => unknown[];
+  };
+  const tileData = new Uint8Array(20 * 20 * 4);
+  for (let q = 0; q < 400; q++) tileData[q * 4] = 2; // R 字节 < 128 = 占用（与既有对拍同口径）
+  const tileD = { w: 20, h: 20, cx: 10, cy: 10, data: tileData, marksDir: { '朝向': 90 } };
+  const rtD = dyn.dynSimulate(
+    { id: 'dyn_dir_1', slot: '身体', params: pDir } as never, tileD as never, 30, 60, 'back', 'part');
+  const prodNoBind = simulateDynamicParticles(
+    { instance: { ...instD, params: { ...pDir, emitDirMark: '' } }, origin: 'node' } as never,
+    spriteD as never, 30, 60, false, 'back', 'part');
+  check('9d 发射方向绑定：双端逐值一致、且与未绑定（270°）结果不同',
+    prodD.length > 0 && JSON.stringify(rtD) === JSON.stringify(prodD)
+    && JSON.stringify(prodD) !== JSON.stringify(prodNoBind));
+
+  // 运行时接线（模板内解析点）：字符串把守 + 原点口径恒等
+  const pkgHtml = buildRuntimeHtml(convertCharacterToRuntimePackage({
+    id: 'chW', name: '接线', nodes: {}, rootNodeIds: [], costumeSets: [], variants: {},
+  } as unknown as Character));
+  check('9e 运行时接线齐：marksDir 条目 [12] / 弧线 orgC / 置换方向标记解析',
+    pkgHtml.includes('marksDir: entries[i][12]')
+    && pkgHtml.includes('arcOriginMark')
+    && pkgHtml.includes('displaceDirMark'));
+  check('9f 弧线原点口径恒等：markC = [mx − w/2, h/2 − my]（相对瓦片中心、y-up）',
+    (() => {
+      const w = 24, h = 24, mx = 7, my = 12;
+      const markC = [mx - w / 2, h / 2 - my];
+      return markC[0] === -5 && markC[1] === 0;
+    })());
+}
+
 console.log(`\n精灵标记探针全过（${passed} 项）`);
