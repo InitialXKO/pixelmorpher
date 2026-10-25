@@ -1676,12 +1676,16 @@ function frame(now) {
     const ctr = partCenter(p, an);
     // 动态模式：形变段逐帧求脉冲（多实例相乘）；合成/动态部件放大
     // 实例面片给足采样余量（片元按瓦片边界丢弃，多余面片无副作用）
-    let dsx = 1, dsy = 1, hasDeform = false;
+    let dsx = 1, dsy = 1, hasDeform = false, spinRad = 0;
     for (const inst of dynList) {
       const d = dynDeformAt(inst.params, elapsed);
       dsx *= d.sx; dsy *= d.sy;
       if (inst.params.deformEnabled) hasDeform = true;
+      // 自转段（D3）：原地自转（多实例求和）——只进 el.rot 与粒子
+      // 锚点角，不进 partCenter（部件中心不被自转搬动）
+      spinRad += dynSpinRadAt(inst.params, elapsed);
     }
+    const rotA = an.a + spinRad;
     // 发光段：前 3 个启用实例各供一组参数（场在图集 RGB 三通道，导出时
     // 按选区预计算；第 4 个起在导出端已按各自所选组并入对应通道）
     const glowInsts = dynList.filter((x) => x.params.glowEnabled).slice(0, 3);
@@ -1695,7 +1699,7 @@ function frame(now) {
     const comp = resolved.composite === 'overlay' ? 2 : resolved.composite === 'silhouette' ? 1 : resolved.composite === 'sprite' ? 3 : 0;
     const big = comp > 0 || dynList.length > 0;
     const el = {
-      pos: [ctr[0], ctr[1]], size: big ? [tile.w * 3, tile.h * 3] : [tile.w, tile.h], rot: an.a,
+      pos: [ctr[0], ctr[1]], size: big ? [tile.w * 3, tile.h * 3] : [tile.w, tile.h], rot: rotA,
       tileCx: tile.cx, tileCy: tile.cy,
       tile: [place[0], place[1], tile.w, tile.h],
       family: palIndex(p.pal), seed: (idx * 0.137) % 1,
@@ -1710,7 +1714,7 @@ function frame(now) {
     };
     els.push(el);
     elByKey.set(part.key, el);
-    if (dynList.length > 0) dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: an.a, dynList: dynList, dsx: dsx, dsy: dsy });
+    if (dynList.length > 0) dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: rotA, dynList: dynList, dsx: dsx, dsy: dsy });
   });
   // 动态粒子：瓦片空间模拟（连续钟 elapsed × 包帧率量化帧，
   // 与编辑器同一帧基），发射点随形变缩放，位置经部件旋转落到

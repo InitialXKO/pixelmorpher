@@ -275,6 +275,10 @@ export default function DynamicPatternEditor({
               <input type="checkbox" checked={np(inst).displaceEnabled} onChange={(e) => patchParam(inst.id, 'displaceEnabled', e.target.checked)} />
               置换段
             </label>
+            <label className="flex items-center gap-1" title="精灵绕自身枢轴原地自转（法阵/传送门/护盾）；不带动子部件">
+              <input type="checkbox" checked={np(inst).spinEnabled} onChange={(e) => patchParam(inst.id, 'spinEnabled', e.target.checked)} />
+              自转段
+            </label>
             <label className="flex items-center gap-1">
               <input type="checkbox" checked={inst.params.emitEnabled} onChange={(e) => patchParam(inst.id, 'emitEnabled', e.target.checked)} />
               发射段

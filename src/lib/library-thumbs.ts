@@ -10,7 +10,7 @@
 // ============================================================
 
 import {
-  displacePhaseAt, displacePixelGrid,
+  displacePhaseAt, displacePixelGrid, spinAngleDegAt,
   dynamicDeformAt, glowField, glowPulseAt, type DynamicPatternInstance, type DynamicPatternParams,
 } from './dynamic-patterns';
 import { createSurfaceBaker } from './proc-runtime/bake-src';
@@ -265,16 +265,26 @@ export function dynamicPosterRGBA(params: DynamicPatternParams): RGBAImage {
     }
   };
   if (params.emitEnabled) drawParticles('back');
-  // 2) 精灵本体（形变 = 底边中心锚的整体缩放）
+  // 2) 精灵本体（形变 = 底边中心锚的整体缩放；自转 = 绕精灵
+  // 中心后向旋转采样，仅本体近似——发光/粒子层不跟着转）
   const dw = gw * SS * deform.sx;
   const dh = gh * SS * deform.sy;
   const dx0 = cxPx - dw / 2;
   const dy0 = bottomY - dh;
+  const spinRad = (spinAngleDegAt(params, t) * Math.PI) / 180;
+  const spinCos = Math.cos(spinRad), spinSin = Math.sin(spinRad);
   for (let y = 0; y < OUT; y++) {
     for (let x = 0; x < OUT; x++) {
       if (x < dx0 || x >= dx0 + dw || y < dy0 || y >= dy0 + dh) continue;
-      const sx = Math.floor(((x - dx0) / dw) * gw);
-      const sy = Math.floor(((y - dy0) / dh) * gh);
+      let fx = ((x - dx0) / dw) * gw;
+      let fy = ((y - dy0) / dh) * gh;
+      if (spinRad !== 0) {
+        const lx = fx - gw / 2, ly = fy - gh / 2;
+        fx = lx * spinCos + ly * spinSin + gw / 2;
+        fy = -lx * spinSin + ly * spinCos + gh / 2;
+      }
+      const sx = Math.floor(fx);
+      const sy = Math.floor(fy);
       const c = drawGrid[sy]?.[sx];
       if (!c) continue;
       const [r, g, b] = hexToRgb(c);

@@ -2423,4 +2423,68 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     && htmlZ.includes('displaceTileRt') && htmlZ.includes('entry.disp'));
 }
 
+// ---------- AB) D3 自转段：孪生对齐 / 展开 / 进包与两端接线 ----------
+{
+  const DP3 = await import('../src/lib/dynamic-patterns');
+  const { createDynamicRuntime: cdr3 } = await import('../src/lib/proc-runtime/dynamic-src');
+  const rt3 = cdr3();
+  const spinP = {
+    ...DP3.defaultDynamicParams(), spinEnabled: true, spinSpeedDeg: 45, spinPhaseDeg: 30,
+  } as never;
+
+  // SP1 孪生对齐（TS 度 vs 运行时弧度）+ 关闭为 0
+  check('SP1 自转孪生逐值一致（t=0/0.7/2.3）',
+    [0, 0.7, 2.3].every((t) => Math.abs(
+      DP3.spinAngleDegAt(spinP as never, t) * Math.PI / 180 - rt3.dynSpinRadAt(spinP, t)) < 1e-12));
+  check('SP1b 自转关闭恒 0、负速反向',
+    DP3.spinAngleDegAt({ ...spinP, spinEnabled: false } as never, 5) === 0
+    && rt3.dynSpinRadAt({ ...spinP, spinEnabled: false } as never, 5) === 0
+    && DP3.spinAngleDegAt({ ...spinP, spinSpeedDeg: -45, spinPhaseDeg: 0 } as never, 2) === -90);
+
+  // SP2 归一化钳制
+  const n3 = DP3.normalizeDynamicParams({
+    ...DP3.defaultDynamicParams(), spinSpeedDeg: 999, spinPhaseDeg: -90,
+  });
+  check('SP2 自转归一化（速度钳 360、相位回绕 270）',
+    n3.spinSpeedDeg === 360 && n3.spinPhaseDeg === 270);
+
+  // SP3 条目展开：叶子 + 两父模式（护盾覆盖调慢速度）
+  const LE3 = await import('../src/lib/library-entries');
+  const DE3 = await import('../src/lib/dynamic-expand');
+  const exRune = DE3.expandDynamicEntry(LE3.BUILTIN_INDEX, 'dyn-spin-rune', 1);
+  const exPortal = DE3.expandDynamicEntry(LE3.BUILTIN_INDEX, 'dyn-portal', 1);
+  const exAegis = DE3.expandDynamicEntry(LE3.BUILTIN_INDEX, 'dyn-spin-aegis', 1);
+  check('SP3 法阵自转叶子展开', !!exRune.params && exRune.errors.length === 0
+    && exRune.params.spinEnabled && exRune.params.spinSpeedDeg === 30);
+  check('SP3b 旋转法阵 = 自转 + 星芒辉光', !!exPortal.params && exPortal.errors.length === 0
+    && exPortal.params.spinEnabled && exPortal.params.glowEnabled
+    && exPortal.params.glowShape === 'star');
+  check('SP3c 旋转护盾覆盖调慢（18 度/秒）+ 寒霜辉光', !!exAegis.params && exAegis.errors.length === 0
+    && exAegis.params.spinSpeedDeg === 18 && exAegis.params.glowShape === 'circle');
+
+  // SP4 进包 + 两端接线（运行时帧循环 / 编辑器渲染计划）
+  const inst3 = DP3.createDynamicInstance('法阵', spinP as never, '身体');
+  const ch3 = {
+    id: 'ch3', name: '自转进包',
+    nodes: { torso: { ...makeNode('torso', '躯干', 'torso'), dynamicPatterns: [inst3] } },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: createDefaultParametricAppearance() } },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkg3 = convertCharacterToRuntimePackage(ch3, undefined, { frameRate: 12 });
+  const dyn3 = pkg3.parts.find((p) => p.key === 'torso')?.dynamic?.[0];
+  check('SP4 自转参数进包不丢', !!dyn3
+    && (dyn3.params as { spinEnabled?: boolean }).spinEnabled === true
+    && (dyn3.params as { spinSpeedDeg?: number }).spinSpeedDeg === 45);
+  const { buildRuntimeHtml: brh3 } = await import('../src/lib/proc-runtime/runtime-template');
+  check('SP4b 整包运行时含自转接线', brh3(pkg3).includes('dynSpinRadAt') && brh3(pkg3).includes('rotA'));
+  const { readFileSync: rfs3 } = await import('node:fs');
+  const urText = rfs3(new URL('../src/lib/unified-render.ts', import.meta.url), 'utf8');
+  check('SP4c 编辑器渲染计划含自转接线（spinAngleDegAt 叠进 instruction.angle）',
+    urText.includes('spinAngleDegAt') && urText.includes('spinDeg'));
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

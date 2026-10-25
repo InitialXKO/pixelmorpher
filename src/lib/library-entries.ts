@@ -293,6 +293,13 @@ function buildBuiltinEntries(): LibraryEntry[] {
       displaceEnabled: true, displaceAmp: 3.5, displaceFreq: 0.16, displaceDeg: 270,
       displaceSpeed: 0.55, displacePhase: 0, emitEnabled: false,
     }),
+    // 自转叶子（D3）
+    leaf('dyn-spin-rune', '法阵自转', '形变', {
+      spinEnabled: true, spinSpeedDeg: 30, spinPhaseDeg: 0, emitEnabled: false,
+    }),
+    leaf('dyn-spin-vortex', '旋涡急转', '形变', {
+      spinEnabled: true, spinSpeedDeg: 120, spinPhaseDeg: 0, emitEnabled: false,
+    }),
   );
   // 着色叶子（只写一个键：给同段叶子染色，配合 followParams 用）
   out.push(
@@ -379,6 +386,16 @@ function buildBuiltinEntries(): LibraryEntry[] {
     ], [
       { type: 'followParams', leader: 1, follower: 0, keys: ['emitEnabled'] },
     ]),
+    // 旋转法阵 / 旋转护盾（D3）：自转 + 发光（键集不交、无需配合边；
+    // 护盾把自转速度经覆盖调慢——覆盖在子叶子的参数口内）
+    parent('dyn-portal', '旋转法阵', [
+      { entry: 'dyn-spin-rune', version: 1 },
+      { entry: 'dyn-glow-star', version: 1 },
+    ], []),
+    parent('dyn-spin-aegis', '旋转护盾', [
+      { entry: 'dyn-spin-rune', version: 1, overrides: { spinSpeedDeg: 18 } },
+      { entry: 'dyn-glow-frost', version: 1 },
+    ], []),
   );
   return out;
 }

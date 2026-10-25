@@ -75,7 +75,7 @@ import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from 
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
-import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followDeltaAt, glowField, glowPulseAt, type DynamicPatternParams } from './dynamic-patterns';
+import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followDeltaAt, glowField, glowPulseAt, spinAngleDegAt, type DynamicPatternParams } from './dynamic-patterns';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
@@ -1893,12 +1893,15 @@ export function generateRenderPlan(
     );
     let dynSx = 1, dynSy = 1;
     let folDx = 0, folDy = 0, folDa = 0;
+    let spinDeg = 0;
     if (dynResolved.length > 0) {
       const tSec = frame / frameRate;
       for (const r of dynResolved) {
         const d = dynamicDeformAt(r.instance.params, tSec);
         dynSx *= d.sx;
         dynSy *= d.sy;
+        // 自转段（D3）：角度叠进本指令（多实例求和），只动本节点
+        spinDeg += spinAngleDegAt(r.instance.params, tSec);
         // 追随段：源部件滞后位姿差（轨道位姿取样，见 followPoseAt）
         const fp = r.instance.params;
         if (anyFollow && fp.followEnabled && fp.followSource) {
@@ -1917,7 +1920,7 @@ export function generateRenderPlan(
       sprite: effectiveSprite,
       worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel) + pxToSub(folDx)) as SubPixel,
       worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel) + pxToSub(folDy)) as SubPixel,
-      angle: worldTf.worldAngle + (folDa * 180) / Math.PI,
+      angle: worldTf.worldAngle + (folDa * 180) / Math.PI + spinDeg,
       stretch: dynResolved.length > 0 ? worldTf.worldStretch * dynSy : worldTf.worldStretch,
       foreshorten,
       variantIndex: worldTf.variantIndex,

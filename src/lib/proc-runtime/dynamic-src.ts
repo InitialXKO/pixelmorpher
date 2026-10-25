@@ -70,6 +70,10 @@ function dynDisplaceSrcMap(params, w, h, phase) {
   }
   return out;
 }
+function dynSpinRadAt(params, tSec) {
+  if (!params.spinEnabled) return 0;
+  return ((params.spinSpeedDeg || 0) * tSec + (params.spinPhaseDeg || 0)) * Math.PI / 180;
+}
 function dynFollowDelta(now, lag, amount, rotate) {
   const k = Math.max(0, Math.min(1, amount));
   const raw = lag.a - now.a;
@@ -184,7 +188,8 @@ export function createDynamicRuntime(): {
   dynFollowDelta: (now: never, lag: never, amount: number, rotate: boolean) => { dx: number; dy: number; da: number };
   dynDisplaceSrcMap: (params: never, w: number, h: number, phase: number) => Int32Array;
   dynNoiseU: (u: number, v: number, period: number, seed: number) => number;
+  dynSpinRadAt: (params: never, t: number) => number;
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynFollowDelta, dynDisplaceSrcMap, dynNoiseU };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynFollowDelta, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt };`);
   return factory() as never;
 }
