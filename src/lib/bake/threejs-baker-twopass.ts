@@ -493,16 +493,18 @@ export function computeTopologyMerge(
   processLeg(findLegRoot('legL'), '左');
   processLeg(findLegRoot('legR'), '右');
 
-  // ---- 尾巴：默认并入躯干（可手动拆分） ----
-  if (torsoRep !== null && topology.tail.length > 0) {
-    // 尾巴根：tail 中 parent 不在 tail 里的
+  // ---- 尾巴/裙摆链：每条链只留根节点，链身并入根（用户定案丙） ----
+  // 旧口径整链并入躯干是按「一条动物尾巴」设想的；整片裙摆（塞尔凯特
+  // 15 条链 174 骨）会被长死在躯干上、没有任何可动节点。链根保留为
+  // 独立节点（父级经合并祖先解析挂到躯干下），链身逐级并入父级、
+  // 传递闭包到链根。
+  if (topology.tail.length > 0) {
     const tailSet = new Set(topology.tail);
     for (const t of topology.tail) {
       const p = parentIndex[t];
       if (p === null || !tailSet.has(p)) {
-        setMerge(t, torsoRep, `尾巴并入 ${boneNames[torsoRep]}（可手动拆分）`);
+        keep(t);
       } else {
-        // 尾巴内部链：并入父级（传递到尾巴根）
         setMerge(t, p, `尾段并入 ${boneNames[p]}`);
       }
     }

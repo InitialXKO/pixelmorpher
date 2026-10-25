@@ -199,6 +199,12 @@ check('手动合并：親指１经父链闭包到手首', withManual.effectiveIn
   check('B：手 = 手首（袖饰链不抢认）', tb.handR === idxB('右手首') && tb.handL === idxB('左手首'),
     `R=${tb.handR !== null ? D[tb.handR][0] : 'null'} L=${tb.handL !== null ? D[tb.handL][0] : 'null'}`);
   check('B：IK 亲不算胳膊', tb.boneToPart[idxB('右腕')] === 'armR' && tb.boneToPart[idxB('右足IK親')] !== 'armR');
+  // 尾巴/裙摆链（丙）：链根保留为节点、链身并入根，不再整链吞进躯干
+  const namesB = D.map((d) => d[0]);
+  const tmB = computeTopologyMerge(tb, namesB, parentsB);
+  check('B：裙摆链根保留为节点（丙）', tmB.effectiveIndex[idxB('qz_0_0')] === idxB('qz_0_0') && tmB.effectiveIndex[idxB('qz_0_3')] === idxB('qz_0_3'),
+    `tail=${tb.tail.length}`);
+  check('B：裙摆链身并入链根', tmB.effectiveIndex[idxB('qz_2_0')] === idxB('qz_0_0') && tmB.effectiveIndex[idxB('qz_3_3')] === idxB('qz_0_3'));
 }
 
 console.log(failures === 0 ? '\n全部通过' : `\n${failures} 项失败`);

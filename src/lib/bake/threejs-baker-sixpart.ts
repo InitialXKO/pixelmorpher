@@ -1085,6 +1085,16 @@ export async function bakeSixParts(
 
     // 部件内局部 ID → 全局 bone：用 partBones 顺序
     for (const [pname, bp] of parts) {
+      // 局部编号把合并后的有效骨骼排在最前：ID 掩码只有 64 位，原始骨骼
+      // 超过 64 的部件（如塞尔凯特尾巴 174 骨）靠后段骨骼编不进掩码；
+      // 有效骨骼（精灵的实际归属单位）占住低位后，原始集全 ≥64 的三角形
+      // 兜底改按有效骨骼编码才落得进去（兜底逻辑在建 ID 纹理处）
+      const effSet = new Set(merge.effectiveBones);
+      bp.partBones.sort((a, b) => {
+        const ea = effSet.has(a) ? 0 : 1;
+        const eb = effSet.has(b) ? 0 : 1;
+        return ea - eb;
+      });
       partBoneMap[pname] = [...bp.partBones];
 
       // 归一化变换：整模 center/scale
