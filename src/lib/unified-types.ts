@@ -1210,6 +1210,11 @@ export interface Character {
   // at render time if present.
   ikBlueprint?: BlueprintGraph | null;
 
+  // ---- 链摆烘焙档案（D6 一期）----
+  // 链根节点 id → 烘焙记录（指纹/帧窗/参数/链）。指纹与当前
+  // 状态重算不一致 = 烘焙过期，面板点名提示，不静默沿用。
+  chainBakes?: Record<string, import('./sim/verlet-chain').ChainBakeRecord>;
+
   // ---- Sprite Table (retired) ----
   // Sprites moved to the global s.sprites table. Kept as optional for
   // backward compat during migration; readers must use the global table.

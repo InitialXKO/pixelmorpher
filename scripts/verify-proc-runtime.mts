@@ -2620,4 +2620,77 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     ur6.includes('drawDynamicArcs') && (ur6.match(/drawDynamicArcs\(ctx, instruction\)/g) ?? []).length === 2);
 }
 
+// ---------- AE) D6 一期链摆烘焙：求解器物理 / 烘焙折算 / 指纹 ----------
+{
+  const SIM = await import('../src/lib/sim/verlet-chain');
+  const P = SIM.defaultChainBakeParams();
+  // AE1 求解器：静止钉点 + 重力 → 链垂下、段长守恒、尖端落正下方
+  const pins = Array.from({ length: 40 }, () => ({ x: 0, y: 0 }));
+  const lens = Array.from({ length: 40 }, () => [10, 10]);
+  const solved = SIM.solveVerletChain(pins, lens, [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }], P, 12);
+  const tip = solved[39][2];
+  const seg1 = Math.hypot(solved[39][1].x, solved[39][1].y);
+  const seg2 = Math.hypot(solved[39][2].x - solved[39][1].x, solved[39][2].y - solved[39][1].y);
+  check('AE1 静止链在重力下垂直到正下方（尖端 ~(0,20)、段长守恒）',
+    Math.abs(tip.x) < 0.5 && Math.abs(tip.y - 20) < 0.5
+    && Math.abs(seg1 - 10) < 0.1 && Math.abs(seg2 - 10) < 0.1);
+  // AE2 第 0 帧 = 初始姿态（烘焙起点连续）
+  check('AE2 求解第 0 帧保持初始姿态',
+    solved[0][1].x === 10 && solved[0][2].x === 20 && solved[0][2].y === 0);
+  // AE3 确定性：同输入同输出
+  const solved2 = SIM.solveVerletChain(pins, lens, [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }], P, 12);
+  check('AE3 求解确定性（逐值一致）', JSON.stringify(solved) === JSON.stringify(solved2));
+
+  // AE4 全链烘焙：水平链在静止角色上烘焙 → 根角趋于 90°（垂下）、
+  // 子节点本地角 ~0（直链延续）、第 0 帧为基准角（连续）
+  const mkChainNode = (id: string, x: number, parentId: string | undefined, children: string[]) => {
+    const n = makeNode(id, id, null, parentId);
+    n.transform = { ...n.transform, x };
+    n.children = children;
+    return n;
+  };
+  const chSim = {
+    id: 'chsim', name: '链摆',
+    nodes: {
+      croot: mkChainNode('croot', 100, undefined, ['c1']),
+      c1: mkChainNode('c1', 10, 'croot', ['c2']),
+      c2: mkChainNode('c2', 10, 'c1', []),
+    },
+    rootNodeId: 'croot', rootNodeIds: ['croot'],
+    costumeSets: [], variants: {},
+  } as unknown as Character;
+  // croot 的 x=100 需放在 root 位置：root 节点 transform.x 即其位置
+  const collected = SIM.collectChain(chSim, 'croot');
+  check('AE4a collectChain 沿子节点成链', collected.nodeIds.join(',') === 'croot,c1,c2' && !collected.truncated);
+  const bake = SIM.bakeChainSwing(chSim, collected.nodeIds, P, 0, 23, 12);
+  const rootKfs = bake.angleTracks['croot'].keyframes;
+  const lastRoot = rootKfs[rootKfs.length - 1];
+  const c1Vals = bake.angleTracks['c1'].keyframes.map((k) => k.value);
+  check('AE4 烘焙：根角末帧趋于 90°（垂下）、子节点本地角 ~0、第 0 帧连续',
+    Math.abs(lastRoot.value - 90) < 3
+    && c1Vals.every((v) => Math.abs(v) < 3)
+    && rootKfs[0].frame === 0 && rootKfs[0].value === 0
+    && rootKfs.length === 24);
+  // AE5 指纹：烘焙后即新鲜；驱动变化（根节点移位）后过期
+  const chBaked = {
+    ...chSim,
+    nodes: Object.fromEntries(Object.entries(chSim.nodes).map(([id, n]) => [
+      id, { ...n, tracks: { ...n.tracks, angle: bake.angleTracks[id] } },
+    ])),
+    chainBakes: { croot: bake.record },
+  } as unknown as Character;
+  check('AE5a 烘焙后指纹新鲜', SIM.isChainBakeFresh(chBaked, bake.record, 12));
+  const chMoved = {
+    ...chBaked,
+    nodes: {
+      ...chBaked.nodes,
+      croot: { ...chBaked.nodes.croot, transform: { ...chBaked.nodes.croot.transform, x: 130 } },
+    },
+  } as unknown as Character;
+  check('AE5b 驱动变化后指纹过期（点名不静默）', !SIM.isChainBakeFresh(chMoved, bake.record, 12));
+  // AE6 参数进指纹：改重力 → 指纹变
+  const bake2 = SIM.bakeChainSwing(chSim, collected.nodeIds, { ...P, gravity: 400 }, 0, 23, 12);
+  check('AE6 参数变化指纹必变', bake2.record.fingerprint !== bake.record.fingerprint);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
