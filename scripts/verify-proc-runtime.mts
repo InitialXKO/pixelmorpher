@@ -2936,4 +2936,30 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('AJ3c 驱动变化后布料指纹过期', !CL.isClothBakeFresh(chMovedC, bakeC.record, 12));
 }
 
+// ---------- AK) D6 三期评估实证：烟雾走动态表面（无缝循环） ----------
+{
+  const bakerA = createSurfaceBaker();
+  const shapeA = { kind: 'rect', size: [40, 32] as [number, number], roundness: 0.15 };
+  const { expandSurfaceGraph: expGA, subgraphLibraryOf: subGA, graphHasRefs: hasRefA } = await import('../src/lib/proc-runtime/graph-expand');
+  const LEA = await import('../src/lib/library-entries');
+  const libA = subGA(LEA.surfaceLibEntriesOf(LEA.allLibraryEntries()));
+  const smokeT = PATTERN_TEMPLATES.find((t) => t.id === 'smoke-tex')!;
+  const sg0 = instantiatePattern(smokeT);
+  const sg = hasRefA(sg0) ? expGA(sg0, libA).graph : sg0;
+  const bakePh = (ph: number) => bakerA.compileTileDAG(shapeA, sg, 0, ph).data;
+  const diffPx = (a: Uint8Array, b: Uint8Array) => {
+    let n = 0;
+    for (let i = 0; i < a.length; i += 4) if (a[i] !== b[i]) n++;
+    return n;
+  };
+  const s0 = bakePh(0), s50 = bakePh(0.5), s97 = bakePh(0.97);
+  const tiersA = new Set<number>();
+  for (let i = 0; i < s50.length; i += 4) if (s50[i] < 200) tiersA.add(s50[i]);
+  check('AK1 上升烟雾：中相位四档烟色俱全', tiersA.size >= 4);
+  check('AK2 烟雾循环连续：近周期尾与周期头的差远小于半周期差',
+    diffPx(s97, s0) < diffPx(s0, s50) / 3 && diffPx(s0, s50) > 200);
+  check('AK3 烟雾带动画元数据（4 秒 / 16 步）',
+    smokeT.graph.animation?.cycleSec === 4 && smokeT.graph.animation?.frames === 16);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

@@ -783,6 +783,35 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       w('edge', 0, { at: 0.15 }),
     ]),
   },
+  // 上升烟雾（D6 三期评估的实证件）：相位场驱动扭曲偏移
+  // （采样点随相位上行 = 图案上升），同一噪声场再取一份
+  // 预移两倍升程的拷贝按相位交叉淡化——任意非周期场都能
+  // 无缝循环（相位 1 恰好落回相位 0 的第一层）；纵向带通
+  // 门控出烟团的上下消散。证明「烟」在 D1 动态表面口径内
+  // 可表达，不需要格子法求解器（见 spikes/simulation）。
+  {
+    id: 'smoke-tex', name: '上升烟雾', cluster: '动态',
+    params: [],
+    graph: graph([
+      ...baseIn(2),
+      n('bl', 'blob', undefined, { f: 0.085, seed: 41, contrast: 1.15 }),
+      n('ph', 'phase'),
+      n('c05', 'const', undefined, { v: 0.5 }),
+      n('c0', 'const', undefined, { v: 0 }),
+      n('pre', 'warp', { in: 'bl', fx: 'c05', fy: 'c0' }, { amp: 24 }),
+      n('l1', 'warp', { in: 'bl', fx: 'c05', fy: 'ph' }, { amp: 12 }),
+      n('l2', 'warp', { in: 'pre', fx: 'c05', fy: 'ph' }, { amp: 12 }),
+      n('body', 'mix', { a: 'l1', b: 'l2', t: 'ph' }),
+      n('gv', 'grad', undefined, { axis: 'y' }),
+      n('fall', 'levelBand', { in: 'gv' }, { level: 0.45, w: 0.8 }),
+      n('smk', 'mul', { a: 'body', b: 'fall' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('smk', 3, { at: 0.42 }),
+      w('smk', 4, { at: 0.58 }),
+      w('smk', 5, { at: 0.72 }),
+    ], { cycleSec: 4, frames: 16 }),
+  },
   // 焦散纹（近似）：双层 Voronoi 边场叠成的网状亮纹，无专用焦散噪声
   {
     id: 'caustics', name: '焦散纹（近似）', cluster: '自然',
