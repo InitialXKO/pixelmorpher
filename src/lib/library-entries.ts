@@ -166,9 +166,17 @@ function buildBuiltinEntries(): LibraryEntry[] {
       },
     });
   }
+  // 火焰环绕单独建叶：显式带上 emitEnabled/source 两键——值虽与
+  // 缺省同，但段归属是语义；置换火焰父模式靠它裁决发射开关
+  // （置换叶子自带 emitEnabled=false，见 dyn-flame-disp 的跟随边）
+  const fireRing = dynLeafFromTemplate('dyn-fire-ring', '火焰环绕', [
+    'emitEnabled', 'source', 'rate', 'speed', 'life', 'sizeStart', 'sizeEnd',
+    'rise', 'turbulence', 'color', 'alpha',
+  ]);
+  if (fireRing) out.push(fireRing);
   // 其余动态模板：叶子条目 v1（segments = 相对缺省的差量键）
   const leafIds: Record<string, string> = {
-    '呼吸起伏': 'dyn-breath', '弹跳挤压': 'dyn-bounce', '火焰环绕': 'dyn-fire-ring',
+    '呼吸起伏': 'dyn-breath', '弹跳挤压': 'dyn-bounce',
     '水滴滴落': 'dyn-drips', '烟雾缭绕': 'dyn-smoke', '星光闪烁': 'dyn-sparkle',
     '辉光呼吸': 'dyn-glow-breath', '垂饰滞后': 'dyn-lag',
   };
@@ -268,6 +276,23 @@ function buildBuiltinEntries(): LibraryEntry[] {
     leaf('dyn-lag-stiff', '紧跟垂随', '追随', {
       followEnabled: true, followDelaySec: 0.05, followAmount: 0.9, followRotate: true, emitEnabled: false,
     }),
+    // 置换叶子（D2）：置换段属形变段的键集，与压拉键同段共存
+    leaf('dyn-disp-heat', '热浪升腾', '形变', {
+      displaceEnabled: true, displaceAmp: 3, displaceFreq: 0.14, displaceDeg: 270,
+      displaceSpeed: 0.35, displacePhase: 0, emitEnabled: false,
+    }),
+    leaf('dyn-disp-wave', '水波荡漾', '形变', {
+      displaceEnabled: true, displaceAmp: 2, displaceFreq: 0.1, displaceDeg: 0,
+      displaceSpeed: 0.2, displacePhase: 0, emitEnabled: false,
+    }),
+    leaf('dyn-disp-flag', '旗帜飘动', '形变', {
+      displaceEnabled: true, displaceAmp: 2.5, displaceFreq: 0.07, displaceDeg: 0,
+      displaceSpeed: 0.5, displacePhase: 0, emitEnabled: false,
+    }),
+    leaf('dyn-disp-flame', '火焰摇曳', '形变', {
+      displaceEnabled: true, displaceAmp: 3.5, displaceFreq: 0.16, displaceDeg: 270,
+      displaceSpeed: 0.55, displacePhase: 0, emitEnabled: false,
+    }),
   );
   // 着色叶子（只写一个键：给同段叶子染色，配合 followParams 用）
   out.push(
@@ -344,6 +369,15 @@ function buildBuiltinEntries(): LibraryEntry[] {
       { entry: 'dyn-tint-warm', version: 1 },
     ], [
       { type: 'followParams', leader: 1, follower: 0, keys: ['color'] },
+    ]),
+    // 置换火焰（D2）：置换摇曳 + 火焰粒子环绕。置换叶子自带
+    // emitEnabled=false（单用时纯置换），与火焰环绕的发射开关
+    // 相撞——以火焰环绕为准（跟随边裁决，与樱花吹雪同例）
+    parent('dyn-flame-disp', '置换火焰', [
+      { entry: 'dyn-disp-flame', version: 1 },
+      { entry: 'dyn-fire-ring', version: 1 },
+    ], [
+      { type: 'followParams', leader: 1, follower: 0, keys: ['emitEnabled'] },
     ]),
   );
   return out;

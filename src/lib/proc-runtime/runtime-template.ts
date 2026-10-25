@@ -379,6 +379,35 @@ function surfaceStepAtRt(anim, elapsed) {
   const frac = (((elapsed || 0) / anim.cycleSec) % 1 + 1) % 1;
   return Math.min(anim.frames - 1, Math.floor(frac * anim.frames));
 }
+/** 置换段（D2）：本部件第一个启用置换的动态实例参数（与编辑器同口径） */
+function displaceOfRt(part) {
+  const list = dynListFor(part);
+  for (let ii = 0; ii < list.length; ii++) {
+    const p = list[ii].params;
+    if (p && p.displaceEnabled && (p.displaceAmp || 0) > 0) return p;
+  }
+  return null;
+}
+/** 按置换源图重采样瓦片：源图在图像空间（x 右 y 下）定义，瓦片
+ * 存储行序与图像行序上下相反，故两侧都经 (h-1-row) 换算对齐；
+ * 场函数本身两端同源（dynDisplaceSrcMap）。源为 -1 处写空像素
+ * （R=255，与 padTile 同编码）。 */
+function displaceTileRt(tile, srcMap) {
+  const w = tile.w, h = tile.h;
+  const data = new Uint8Array(w * h * 4);
+  for (let q = 0; q < w * h; q++) { data[q * 4] = 255; data[q * 4 + 3] = 255; }
+  for (let row = 0; row < h; row++) {
+    for (let col = 0; col < w; col++) {
+      const sImg = srcMap[(h - 1 - row) * w + col];
+      if (sImg < 0) continue;
+      const sCol = sImg % w, sRow = h - 1 - Math.floor(sImg / w);
+      const src = (sRow * w + sCol) * 4, dst = (row * w + col) * 4;
+      data[dst] = tile.data[src]; data[dst + 1] = tile.data[src + 1];
+      data[dst + 2] = tile.data[src + 2]; data[dst + 3] = tile.data[src + 3];
+    }
+  }
+  return { w: w, h: h, cx: tile.cx, cy: tile.cy, data: data };
+}
 function parseHexRt(hex) {
   const m = /^#([0-9a-fA-F]{6})$/.exec(hex || '');
   if (!m) return null;
@@ -730,9 +759,30 @@ function ensureAtlas(gl, variant, costumeName) {
       tileExtra = Math.max(0, Math.max(ge0.padX || 0, ge0.padY || 0) - margin);
       if (tileExtra > 0) tileList = tileList.map((t) => padTile(t, tileExtra));
     }
+    // 置换段（D2）：对（已垫边距的）瓦片按步进相位重采样出变体；
+    // 与表面动画共享变体预算（表面步数 >4 时置换步数降为 4，否则 8）
+    const disp = displaceOfRt(part);
+    let dispSteps = 0, dispMaps = null;
+    if (disp) {
+      dispSteps = tileList.length > 4 ? 4 : 8;
+      dispMaps = [];
+      for (let di = 0; di < dispSteps; di++) {
+        dispMaps.push(dynDisplaceSrcMap(disp, tileList[0].w, tileList[0].h, di / dispSteps));
+      }
+    }
     for (let fi = 0; fi < tileList.length; fi++) {
-      tiles.push(tileList[fi]);
-      entries.push([fi === 0 ? part.key : part.key + '#anim' + fi, tileList[fi], resolved, mirrored, spriteGrid, ge0, tileExtra, anim]);
+      const diMax = disp ? dispSteps : 1;
+      for (let di = 0; di < diMax; di++) {
+        const vt = di === 0 ? tileList[fi] : displaceTileRt(tileList[fi], dispMaps[di]);
+        tiles.push(vt);
+        const key2 = fi === 0 && di === 0 ? part.key
+          : part.key + '#anim' + fi + (di > 0 ? 'd' + di : '');
+        entries.push([key2, vt, resolved, mirrored, spriteGrid, ge0, tileExtra, anim,
+          di > 0 ? dispMaps[di] : null,
+          fi === 0 && di === 0 && disp
+            ? { speed: disp.displaceSpeed || 0, phase: disp.displacePhase || 0, steps: dispSteps }
+            : null]);
+      }
     }
   }
   // 刀光帧瓦片：按当前朝向（锚点部件镜像与否）现生成 RGBA 帧，
@@ -777,10 +827,18 @@ function ensureAtlas(gl, variant, costumeName) {
     if (bs) {
       const M = 2 + (resolved.halo || 0) + (entries[i][6] || 0);
       const flipY = resolved.composite !== 'sprite';
+      const wmB = entries[i][8];
       for (let j = 0; j < tile.h; j++) {
         for (let ii = 0; ii < tile.w; ii++) {
-          const sx = mirrored ? bs.w - 1 - (ii - M) : ii - M;
-          const sy = flipY ? bs.h - 1 - (j - M) : j - M;
+          // 置换变体：先经源图换到未置换瓦片坐标（与 displaceTileRt 同换算）
+          let ei = ii, ej = j;
+          if (wmB) {
+            const sImg = wmB[(tile.h - 1 - j) * tile.w + ii];
+            if (sImg < 0) continue;
+            ei = sImg % tile.w; ej = tile.h - 1 - Math.floor(sImg / tile.w);
+          }
+          const sx = mirrored ? bs.w - 1 - (ei - M) : ei - M;
+          const sy = flipY ? bs.h - 1 - (ej - M) : ej - M;
           if (sx < 0 || sy < 0 || sx >= bs.w || sy >= bs.h) continue;
           const c = bs.data[sy] && bs.data[sy][sx];
           const rgb = c ? parseHexRt(c) : null;
@@ -800,9 +858,16 @@ function ensureAtlas(gl, variant, costumeName) {
       const pX = ge.padX || 0, pY = ge.padY || 0;
       const gd = decodeGlowData(ge.data);
       const flipY = !entries[i][4];
+      const wmG = entries[i][8];
       for (let j = 0; j < tile.h; j++) {
         for (let ii = 0; ii < tile.w; ii++) {
-          const u = ii - M, v = j - M;
+          let ei = ii, ej = j;
+          if (wmG) {
+            const sImg = wmG[(tile.h - 1 - j) * tile.w + ii];
+            if (sImg < 0) continue;
+            ei = sImg % tile.w; ej = tile.h - 1 - Math.floor(sImg / tile.w);
+          }
+          const u = ei - M, v = ej - M;
           const sx = mirrored ? gw - 1 - u - pX : u + pX;
           const sy = flipY ? gh - 1 - v - pY : v + pY;
           if (sx < 0 || sy < 0 || sx >= gw || sy >= gh) continue;
@@ -828,13 +893,18 @@ function ensureAtlas(gl, variant, costumeName) {
     }
     const ekey = entries[i][0];
     const animPos = ekey.indexOf('#anim');
-    if (animPos >= 0 && entries[i][7]) {
-      // 动态表面第 2..N 步瓦片：不单独成条目，挂到部件条目的 animFrames
-      // （下标 = 步序号 − 1；步 0 即条目自身的 tile/place）
+    if (animPos >= 0) {
+      // 变体瓦片（动态表面步 fi × 置换步 di）：不单独成条目，挂到
+      // 部件条目的 animFrames（键 "fi,di"；步 0,0 即条目自身）
       const bk = ekey.slice(0, animPos);
-      (animFrameMap[bk] = animFrameMap[bk] || []).push({ tile: tile, place: [ax, ay] });
+      const rest = ekey.slice(animPos + 5);
+      const dPos = rest.indexOf('d');
+      const fi = dPos >= 0 ? Number(rest.slice(0, dPos)) : Number(rest);
+      const di = dPos >= 0 ? Number(rest.slice(dPos + 1)) : 0;
+      const rec = (animFrameMap[bk] = animFrameMap[bk] || {});
+      rec[fi + ',' + di] = { tile: tile, place: [ax, ay] };
     } else {
-      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null });
+      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null });
     }
   });
   for (const bk in animFrameMap) {
@@ -1577,13 +1647,16 @@ function frame(now) {
     if (!entry) return;
     let tile = entry.tile, place = entry.place;
     const resolved = entry.resolved;
-    // 动态表面（D1）：按 elapsed 选当前步瓦片（步 0 = 条目自身）
-    if (entry.anim && entry.animFrames) {
-      const step = surfaceStepAtRt(entry.anim, elapsed);
-      if (step > 0 && entry.animFrames[step - 1]) {
-        tile = entry.animFrames[step - 1].tile;
-        place = entry.animFrames[step - 1].place;
+    // 变体瓦片（动态表面 D1 × 置换 D2）：按 elapsed 算两维步号取变体
+    if (entry.animFrames) {
+      let fi = 0, di = 0;
+      if (entry.anim) fi = surfaceStepAtRt(entry.anim, elapsed);
+      if (entry.disp && entry.disp.steps > 1) {
+        const fr = (((elapsed * entry.disp.speed + entry.disp.phase) % 1) + 1) % 1;
+        di = Math.min(entry.disp.steps - 1, Math.floor(fr * entry.disp.steps));
       }
+      const v = entry.animFrames[fi + ',' + di];
+      if (v) { tile = v.tile; place = v.place; }
     }
     const p = resolved.params;
     const an0 = pose[part.key] || { a: 0, dy: 0, rim: 0, glint: 0 };

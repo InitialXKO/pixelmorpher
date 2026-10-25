@@ -32,6 +32,44 @@ function dynDeformAt(params, tSec) {
     amount: p,
   };
 }
+function dynNoiseU(u, v, period, seed) {
+  const xi = Math.floor(u), yi = Math.floor(v);
+  const xf = u - xi, yf = v - yi;
+  const su = xf * xf * (3 - 2 * xf), sv = yf * yf * (3 - 2 * yf);
+  const x0 = ((xi % period) + period) % period, x1 = (x0 + 1) % period;
+  const a = dynHash01(x0, yi, seed), b = dynHash01(x1, yi, seed);
+  const c = dynHash01(x0, yi + 1, seed), d = dynHash01(x1, yi + 1, seed);
+  return a + (b - a) * su + (c - a) * sv + (a - b - c + d) * su * sv;
+}
+const DYN_DISPLACE_PERIOD = 8;
+function dynDisplaceSrcMap(params, w, h, phase) {
+  const out = new Int32Array(w * h);
+  const amp = params.displaceEnabled ? Math.max(0, params.displaceAmp || 0) : 0;
+  if (amp <= 0) {
+    for (let i = 0; i < w * h; i++) out[i] = i;
+    return out;
+  }
+  const f = Math.max(0.005, params.displaceFreq || 0.12);
+  const rad = ((params.displaceDeg || 0) * Math.PI) / 180;
+  const dirX = Math.cos(rad), dirY = Math.sin(rad);
+  const K = DYN_DISPLACE_PERIOD;
+  const ph = ((phase % 1) + 1) % 1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const u = x * dirX + y * dirY;
+      const v = -x * dirY + y * dirX;
+      const n1 = dynNoiseU(u * f + ph * K, v * f, K, 7717);
+      const n2 = dynNoiseU(u * f * 1.7 + ph * K * 2, v * f * 1.7 + 13.31, K, 31337);
+      const a = (n1 - 0.5) * 2 * amp;
+      const b = (n2 - 0.5) * 2 * amp * 0.5;
+      const dx = dirX * a - dirY * b;
+      const dy = dirY * a + dirX * b;
+      const sx = Math.round(x - dx), sy = Math.round(y - dy);
+      out[y * w + x] = sx < 0 || sy < 0 || sx >= w || sy >= h ? -1 : sy * w + sx;
+    }
+  }
+  return out;
+}
 function dynFollowDelta(now, lag, amount, rotate) {
   const k = Math.max(0, Math.min(1, amount));
   const raw = lag.a - now.a;
@@ -144,7 +182,9 @@ export function createDynamicRuntime(): {
   dynContour: (tile: never) => { x: number; y: number; nx: number; ny: number }[];
   dynSimulate: (inst: never, tile: never, frame: number, frameRate: number, layer: string, seedKey: string) => { x: number; y: number; size: number; alpha: number; color: string }[];
   dynFollowDelta: (now: never, lag: never, amount: number, rotate: boolean) => { dx: number; dy: number; da: number };
+  dynDisplaceSrcMap: (params: never, w: number, h: number, phase: number) => Int32Array;
+  dynNoiseU: (u: number, v: number, period: number, seed: number) => number;
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynFollowDelta };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynFollowDelta, dynDisplaceSrcMap, dynNoiseU };`);
   return factory() as never;
 }

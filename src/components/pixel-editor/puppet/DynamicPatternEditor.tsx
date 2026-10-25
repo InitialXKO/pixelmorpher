@@ -271,6 +271,10 @@ export default function DynamicPatternEditor({
               <input type="checkbox" checked={inst.params.deformEnabled} onChange={(e) => patchParam(inst.id, 'deformEnabled', e.target.checked)} />
               形变段
             </label>
+            <label className="flex items-center gap-1" title="按噪声场逐像素偏移采样（热浪/水面/火焰摇曳）；同部件多个置换只取第一个启用">
+              <input type="checkbox" checked={np(inst).displaceEnabled} onChange={(e) => patchParam(inst.id, 'displaceEnabled', e.target.checked)} />
+              置换段
+            </label>
             <label className="flex items-center gap-1">
               <input type="checkbox" checked={inst.params.emitEnabled} onChange={(e) => patchParam(inst.id, 'emitEnabled', e.target.checked)} />
               发射段

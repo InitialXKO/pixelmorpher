@@ -10,6 +10,7 @@
 // ============================================================
 
 import {
+  displacePhaseAt, displacePixelGrid,
   dynamicDeformAt, glowField, glowPulseAt, type DynamicPatternInstance, type DynamicPatternParams,
 } from './dynamic-patterns';
 import { createSurfaceBaker } from './proc-runtime/bake-src';
@@ -185,6 +186,10 @@ export function dynamicPosterRGBA(params: DynamicPatternParams): RGBAImage {
   }
   const t = bestT;
   const deform = dynamicDeformAt(params, t);
+  // 置换段（D2）：定格图同样过置换场（相位取峰值时刻口径）
+  const drawGrid = params.displaceEnabled
+    ? displacePixelGrid(grid, params, displacePhaseAt(params, t))
+    : grid;
   // 合成缓冲（float RGBA，src-over）
   const acc = new Float32Array(OUT * OUT * 4);
   const plot = (x: number, y: number, r: number, g: number, b: number, a: number) => {
@@ -270,7 +275,7 @@ export function dynamicPosterRGBA(params: DynamicPatternParams): RGBAImage {
       if (x < dx0 || x >= dx0 + dw || y < dy0 || y >= dy0 + dh) continue;
       const sx = Math.floor(((x - dx0) / dw) * gw);
       const sy = Math.floor(((y - dy0) / dh) * gh);
-      const c = grid[sy]?.[sx];
+      const c = drawGrid[sy]?.[sx];
       if (!c) continue;
       const [r, g, b] = hexToRgb(c);
       plot(x, y, r, g, b, 1);

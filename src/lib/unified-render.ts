@@ -2548,6 +2548,21 @@ function renderNodeSprite(
     );
   }
 
+  // 动态模式置换段（D2）：全部像素加工完成后、成画布之前按噪声场
+  // 逐像素重采样。多实例只取第一个启用置换（与导出运行时同口径）；
+  // 发光叠加层在下方用同一份 effectivePixels 构建，自动同场对齐。
+  if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
+    const disp = instruction.dynamicPatterns
+      .map((r) => r.instance.params)
+      .find((p) => p.displaceEnabled && (p.displaceAmp ?? 0) > 0);
+    if (disp) {
+      const { displacePixelGrid, displacePhaseAt } = require('./dynamic-patterns') as typeof import('./dynamic-patterns');
+      effectivePixels = displacePixelGrid(
+        effectivePixels, disp, displacePhaseAt(disp, frame / frameRate),
+      ) as PixelGrid;
+    }
+  }
+
   // Create offscreen canvas from (possibly modified) sprite data
   // 可逆性：分部件尺度差换算。精灵是分部件像素（相机紧→图里大），节点是全局像素，
   // 绘制时按比例缩放对齐。scaleFactor = partCameraHalf / globalCameraHalf（记录的尺度差，可逆）

@@ -19,6 +19,17 @@ export interface DynamicPatternParams {
   stretchX: number;   // 脉冲峰值时的 X 缩放（>1 拉宽）
   deformHz: number;   // 频率（次/秒）
   deformPhase: number; // 相位（周期数 0..1）
+  // 置换段（D2，形变段的逐像素子段）：按值噪声场沿方向逐像素
+  // 偏移采样——热浪/水面波动/火焰摇曳类。纯函数：相位由
+  // frac(t×流速 + 相位) 给出，场在流动方向上以 K 个噪声格为
+  // 周期（相位 1 ≡ 相位 0 逐像素恒等）。多实例同挂时只取第一
+  // 个启用置换（编辑器与导出运行时同一口径）。
+  displaceEnabled: boolean;
+  displaceAmp: number;   // 置换幅度（px，沿方向峰值；垂直分量为其半）
+  displaceFreq: number;  // 噪声频率（格/px）
+  displaceDeg: number;   // 置换方向角（度，屏幕口径：0=东 90=南 180=西 270=北）
+  displaceSpeed: number; // 场流动速度（圈/秒，0 = 冻结的静态扭曲）
+  displacePhase: number; // 相位（周期数 0..1）
   // 追随段（形变段的跨部件驱动）：本部件渲染时叠加「源部件位姿的
   // 滞后差」——源部件当前位姿与 delay 秒前位姿之差 × amount，
   // 本部件就像被源部件拖着、慢半拍跟上（垂饰/披风/头发的次级运动）。
@@ -129,6 +140,8 @@ export interface ResolvedDynamicPattern {
 export function defaultDynamicParams(): DynamicPatternParams {
   return {
     deformEnabled: false, squashY: 0.85, stretchX: 1.1, deformHz: 1, deformPhase: 0,
+    displaceEnabled: false, displaceAmp: 2.5, displaceFreq: 0.12, displaceDeg: 270,
+    displaceSpeed: 0.25, displacePhase: 0,
     followEnabled: false, followSource: '', followDelaySec: 0.12, followAmount: 0.7, followRotate: true,
     emitEnabled: true, source: 'contour', rate: 12, linkToDeform: 0, speed: 6,
     directionDeg: 270, spreadDeg: 60, layer: 'both', frontRatio: 0.35,
@@ -164,6 +177,17 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
   out.followAmount = Number.isFinite(out.followAmount)
     ? Math.max(0, Math.min(1, out.followAmount)) : 0.7;
   out.followRotate = out.followRotate !== false;
+  out.displaceEnabled = out.displaceEnabled === true;
+  out.displaceAmp = Number.isFinite(out.displaceAmp)
+    ? Math.max(0, Math.min(8, out.displaceAmp)) : 2.5;
+  out.displaceFreq = Number.isFinite(out.displaceFreq)
+    ? Math.max(0.02, Math.min(0.6, out.displaceFreq)) : 0.12;
+  out.displaceDeg = Number.isFinite(out.displaceDeg)
+    ? ((out.displaceDeg % 360) + 360) % 360 : 270;
+  out.displaceSpeed = Number.isFinite(out.displaceSpeed)
+    ? Math.max(0, Math.min(2, out.displaceSpeed)) : 0.25;
+  out.displacePhase = Number.isFinite(out.displacePhase)
+    ? ((out.displacePhase % 1) + 1) % 1 : 0;
   return out;
 }
 
@@ -256,6 +280,106 @@ export function dynamicDeformAt(
     sy: 1 + (params.squashY - 1) * p,
     amount: p,
   };
+}
+
+// ---- 置换段（D2）：值噪声置换场。运行时孪生 = DYNAMIC_SRC 的
+// dynValueNoiseU / dynDisplaceSrcMap（探针 R 组逐值对齐）。 ----
+
+/** 与 dynHash01 / dynamic-pattern-sim 的 hash01 同一 FNV 混合 */
+function displaceHash01(...nums: number[]): number {
+  let h = 2166136261;
+  for (const n of nums) {
+    h ^= (n | 0) + 0x9e3779b9;
+    h = Math.imul(h ^ (h >>> 15), 16777619);
+  }
+  h ^= h >>> 13;
+  h = Math.imul(h, 16777619);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
+/** u 轴周期值噪声：格点哈希的 u 索引按 period 取模（跨界插值
+ * 回绕），故采样坐标 u 平移整数个 period 时场逐点恒等。 */
+export function displaceNoiseU(u: number, v: number, period: number, seed: number): number {
+  const xi = Math.floor(u), yi = Math.floor(v);
+  const xf = u - xi, yf = v - yi;
+  const su = xf * xf * (3 - 2 * xf), sv = yf * yf * (3 - 2 * yf);
+  const x0 = ((xi % period) + period) % period, x1 = (x0 + 1) % period;
+  const a = displaceHash01(x0, yi, seed), b = displaceHash01(x1, yi, seed);
+  const c = displaceHash01(x0, yi + 1, seed), d = displaceHash01(x1, yi + 1, seed);
+  return a + (b - a) * su + (c - a) * sv + (a - b - c + d) * su * sv;
+}
+
+/** 置换场的流动周期（噪声格数）：相位每圈沿方向平移此格数 */
+export const DISPLACE_PERIOD_CELLS = 8;
+
+/**
+ * 置换源图（图像空间：x 右、y 下，行优先）：dst 像素 i 的值 =
+ * src[srcMap[i]]，-1 = 空。phase ∈ 0..1（1 ≡ 0，周期闭合）。
+ * 后向采样 + 就近取整（像素风不插值）；位移 = 方向分量
+ * （噪声1，峰值 amp）+ 垂直分量（噪声2，峰值 amp/2）。
+ */
+export function displaceSrcMap(
+  params: DynamicPatternParams,
+  w: number,
+  h: number,
+  phase: number,
+): Int32Array {
+  const out = new Int32Array(w * h);
+  const amp = params.displaceEnabled ? Math.max(0, params.displaceAmp || 0) : 0;
+  if (amp <= 0) {
+    for (let i = 0; i < w * h; i++) out[i] = i;
+    return out;
+  }
+  const f = Math.max(0.005, params.displaceFreq || 0.12);
+  const rad = ((params.displaceDeg || 0) * Math.PI) / 180;
+  const dirX = Math.cos(rad), dirY = Math.sin(rad);
+  const K = DISPLACE_PERIOD_CELLS;
+  const ph = ((phase % 1) + 1) % 1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const u = x * dirX + y * dirY;   // 沿方向坐标（px）
+      const v = -x * dirY + y * dirX;  // 垂直坐标（px）
+      const n1 = displaceNoiseU(u * f + ph * K, v * f, K, 7717);
+      // 周期纪律：两路噪声的相位偏移都必须是周期 K 的整数倍，
+      // 否则相位 1 ≠ 相位 0（n2 走 2 倍速 = 偏移 2K，仍恒等）
+      const n2 = displaceNoiseU(u * f * 1.7 + ph * K * 2, v * f * 1.7 + 13.31, K, 31337);
+      const a = (n1 - 0.5) * 2 * amp;
+      const b = (n2 - 0.5) * 2 * amp * 0.5;
+      const dx = dirX * a - dirY * b;
+      const dy = dirY * a + dirX * b;
+      const sx = Math.round(x - dx), sy = Math.round(y - dy);
+      out[y * w + x] = sx < 0 || sy < 0 || sx >= w || sy >= h ? -1 : sy * w + sx;
+    }
+  }
+  return out;
+}
+
+/** 把置换场作用到像素格（编辑器主画布 / 定格图用）：返回新格 */
+export function displacePixelGrid<T>(
+  grid: readonly (readonly T[])[],
+  params: DynamicPatternParams,
+  phase: number,
+): T[][] {
+  const h = grid.length;
+  const w = h > 0 ? grid[0]!.length : 0;
+  const map = displaceSrcMap(params, w, h, phase);
+  const out: T[][] = new Array(h);
+  for (let y = 0; y < h; y++) {
+    const row = new Array<T>(w);
+    for (let x = 0; x < w; x++) {
+      const s = map[y * w + x]!;
+      row[x] = s < 0 ? (null as T) : grid[Math.floor(s / w)]![s % w]!;
+    }
+    out[y] = row;
+  }
+  return out;
+}
+
+/** t 秒 → 置换相位（圈）：frac(t × 流速 + 相位偏置） */
+export function displacePhaseAt(params: DynamicPatternParams, tSec: number): number {
+  const raw = tSec * (params.displaceSpeed || 0) + (params.displacePhase || 0);
+  return ((raw % 1) + 1) % 1;
 }
 
 // ---- 发光段：呼吸脉冲 + 选区掩码 + 带柔光圈的权重场 ----
@@ -635,6 +759,11 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'stretchX', label: '横向拉伸（峰值）', section: '形变', min: 0.9, max: 1.5, step: 0.01 },
   { key: 'deformHz', label: '形变频率（次/秒）', section: '形变', min: 0, max: 4, step: 0.05 },
   { key: 'deformPhase', label: '形变相位', section: '形变', min: 0, max: 1, step: 0.01 },
+  { key: 'displaceAmp', label: '置换幅度（px）', section: '形变', min: 0, max: 8, step: 0.25 },
+  { key: 'displaceFreq', label: '置换频率（格/px）', section: '形变', min: 0.02, max: 0.6, step: 0.01 },
+  { key: 'displaceDeg', label: '置换方向（度，0=东 90=南 180=西 270=北）', section: '形变', min: 0, max: 359, step: 5 },
+  { key: 'displaceSpeed', label: '置换流速（圈/秒）', section: '形变', min: 0, max: 2, step: 0.05 },
+  { key: 'displacePhase', label: '置换相位', section: '形变', min: 0, max: 1, step: 0.01 },
   { key: 'followDelaySec', label: '追随延迟（秒）', section: '形变', min: 0, max: 1, step: 0.01 },
   { key: 'followAmount', label: '追随强度', section: '形变', min: 0, max: 1, step: 0.05 },
   { key: 'rate', label: '发射率（个/秒）', section: '发射', min: 0, max: 60, step: 1 },

@@ -2331,4 +2331,96 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     !!pkgGraphQ && hexQ(pkgGraphQ, 0) !== hexQ(pkgGraphQ, 0.5));
 }
 
+// ---------- Z) D2 置换形变段：孪生对齐 / 周期闭合 / 展开与进包 ----------
+{
+  const DP = await import('../src/lib/dynamic-patterns');
+  const { createDynamicRuntime: cdrZ } = await import('../src/lib/proc-runtime/dynamic-src');
+  const rtZ = cdrZ();
+  const baseZ = {
+    ...DP.defaultDynamicParams(),
+    displaceEnabled: true, displaceAmp: 3, displaceFreq: 0.14,
+    displaceDeg: 270, displaceSpeed: 0.35, displacePhase: 0,
+  } as never;
+
+  // Z1 孪生逐值对齐（TS 版 vs DYNAMIC_SRC 版，含噪声函数）
+  let twinOk = true;
+  for (const ph of [0, 0.37, 0.83]) {
+    const a = DP.displaceSrcMap(baseZ as never, 24, 20, ph);
+    const b = rtZ.dynDisplaceSrcMap(baseZ, 24, 20, ph);
+    if (a.length !== b.length || ![...a].every((v, i) => v === b[i])) twinOk = false;
+  }
+  check('Z1 置换源图 TS/运行时孪生逐值一致（三相位）', twinOk);
+  check('Z1b 值噪声孪生逐值一致',
+    [0.3, 2.7, 9.13].every((u) => DP.displaceNoiseU(u, 1.7, 8, 7717) === rtZ.dynNoiseU(u, 1.7, 8, 7717)));
+
+  // Z2 关闭/零幅度 = 恒等映射
+  const idZ = DP.displaceSrcMap({ ...baseZ, displaceEnabled: false } as never, 8, 6, 0.4);
+  check('Z2 置换关闭时源图恒等', [...idZ].every((v, i) => v === i));
+
+  // Z3 周期闭合（相位 1 ≡ 0）+ 半相位确实不同 + 位移有界（源索引合法）
+  const m0 = DP.displaceSrcMap(baseZ as never, 24, 20, 0);
+  const m1 = DP.displaceSrcMap(baseZ as never, 24, 20, 1);
+  const mH = DP.displaceSrcMap(baseZ as never, 24, 20, 0.5);
+  check('Z3 相位 1 ≡ 相位 0 逐值恒等', [...m0].every((v, i) => v === m1[i]));
+  check('Z3b 半相位与起点不同（场在动）', [...m0].some((v, i) => v !== mH[i]));
+  check('Z3c 源索引合法（-1 或图内）', [...m0].every((v) => v === -1 || (v >= 0 && v < 24 * 20)));
+
+  // Z4 像素格置换：5×5 色块经置换后仍有像（后向采样对单像素不
+  // 保证存活——采样点可跳过孤点，故用块验）、尺寸不变、像被挪动
+  const gridZ: (string | null)[][] = Array.from({ length: 16 }, () => Array(16).fill(null));
+  for (let y = 6; y <= 10; y++) for (let x = 6; x <= 10; x++) gridZ[y]![x] = '#ffffff';
+  const warpedZ = DP.displacePixelGrid(gridZ, { ...baseZ, displaceFreq: 0.3, displaceAmp: 4 } as never, 0.37);
+  let filledZ = 0;
+  const filledAt: string[] = [];
+  warpedZ.forEach((row, y) => row.forEach((c, x) => { if (c) { filledZ++; filledAt.push(`${x},${y}`); } }));
+  const movedZ = filledAt.some((p) => {
+    const [x, y] = p.split(',').map(Number);
+    return x! < 6 || x! > 10 || y! < 6 || y! > 10;
+  });
+  check('Z4 置换后块仍有像、尺寸不变、且有像素被挪出原块',
+    filledZ >= 4 && warpedZ.length === 16 && warpedZ[0]!.length === 16 && movedZ);
+
+  // Z5 归一化钳制
+  const normZ = DP.normalizeDynamicParams({
+    ...DP.defaultDynamicParams(), displaceAmp: 99, displaceDeg: -90, displaceSpeed: -3,
+  });
+  check('Z5 置换参数归一化（幅度钳 8、角度回绕 270、流速钳 0）',
+    normZ.displaceAmp === 8 && normZ.displaceDeg === 270 && normZ.displaceSpeed === 0);
+
+  // Z6 条目展开：置换叶子与置换火焰父模式
+  const LEZ = await import('../src/lib/library-entries');
+  const DEZ = await import('../src/lib/dynamic-expand');
+  const exHeat = DEZ.expandDynamicEntry(LEZ.BUILTIN_INDEX, 'dyn-disp-heat', 1);
+  const exFlame = DEZ.expandDynamicEntry(LEZ.BUILTIN_INDEX, 'dyn-flame-disp', 1);
+  check('Z6 置换叶子展开带置换键、无发射',
+    !!exHeat.params && exHeat.errors.length === 0
+    && exHeat.params.displaceEnabled && exHeat.params.displaceAmp === 3
+    && !exHeat.params.emitEnabled);
+  check('Z6b 置换火焰父模式展开（置换 + 粒子环绕共存）',
+    !!exFlame.params && exFlame.errors.length === 0
+    && exFlame.params.displaceEnabled && exFlame.params.emitEnabled);
+
+  // Z7 进包透传 + 整包含置换接线
+  const instZ = DP.createDynamicInstance('热浪', baseZ as never, '身体');
+  const chZ = {
+    id: 'chZ', name: '置换进包',
+    nodes: { torso: { ...makeNode('torso', '躯干', 'torso'), dynamicPatterns: [instZ] } },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: createDefaultParametricAppearance() } },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkgZ = convertCharacterToRuntimePackage(chZ, undefined, { frameRate: 12 });
+  const dynZ = pkgZ.parts.find((p) => p.key === 'torso')?.dynamic?.[0];
+  check('Z7 置换参数进包不丢', !!dynZ && (dynZ.params as { displaceEnabled?: boolean }).displaceEnabled === true
+    && (dynZ.params as { displaceAmp?: number }).displaceAmp === 3);
+  const { buildRuntimeHtml: brhZ } = await import('../src/lib/proc-runtime/runtime-template');
+  const htmlZ = brhZ(pkgZ);
+  check('Z7b 整包运行时含置换变体接线',
+    htmlZ.includes('dynDisplaceSrcMap') && htmlZ.includes('displaceOfRt')
+    && htmlZ.includes('displaceTileRt') && htmlZ.includes('entry.disp'));
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
