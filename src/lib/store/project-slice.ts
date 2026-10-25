@@ -14,6 +14,7 @@ import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '..
 import { resolveChainTarget3D } from '../unified-types';
 import { migrateProjectTimeUnits } from '../blueprint/time-migration';
 import { migrateClipStructure } from '../clip-migration';
+import { backfillSpriteBirth } from '../sprite-folder';
 
 const defaultProject: Project = {
   id: crypto.randomUUID(),
@@ -94,11 +95,8 @@ export type ProjectSlice = Project & {
   setMaxUndoLevels: ProjectStore['setMaxUndoLevels'];
   resetProject: ProjectStore['resetProject'];
   motionAnalysisSplit: ProjectStore['motionAnalysisSplit'];
-  // Skeleton state (initialized here, actions in skeleton-slice)
-  selectedBoneId: string | null;
+  // 程序化动画初始状态（actions 在 procedural-slice）
   proceduralAnimations: import('../types').ProceduralAnimation[];
-  weightMaps: import('../types').WeightMap[];
-  skeletons: import('../types').Skeleton[];
 };
 
 export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<ProjectStore>> = (set, get) => ({
@@ -172,9 +170,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       trajectories: s.trajectories,
       motionBlurStrokes: s.motionBlurStrokes,
       effectStrokes: s.effectStrokes,
-      skeletons: s.skeletons,
       proceduralAnimations: s.proceduralAnimations,
-      weightMaps: s.weightMaps,
       canvasWidth: s.canvasWidth,
       canvasHeight: s.canvasHeight,
       frameRate: s.frameRate,
@@ -184,7 +180,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       backgroundColor: s.backgroundColor,
       onionSkinEnabled: s.onionSkinEnabled,
       onionSkinFrames: s.onionSkinFrames,
-      selectedBoneId: s.selectedBoneId,
       customModifiers: s.customModifiers,
       brushPresets: s.brushPresets,
       maxUndoLevels: s.maxUndoLevels,
@@ -377,9 +372,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         palettes: state.palettes,
         activePaletteId: state.activePaletteId,
       },
-      skeletons: state.skeletons,
       proceduralAnimations: state.proceduralAnimations,
-      weightMaps: state.weightMaps,
       history: state.undoStack,
     };
   },
@@ -520,17 +513,22 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       delete ch.sprites;
     }
 
+    // 精灵出生信息回填（一次性、幂等）：存量烘焙精灵按
+    // id 约定（spr_<角色>_<骨序>_…_<方向>）补出生方向夹
+    // 与出生标签（角色/骨）；只填未设的，用户手动改过
+    // 的不覆盖（sprite-folder.ts）。
+    const backfilled = backfillSpriteBirth(migratedSprites);
+    const finalSprites = backfilled.changed > 0 ? backfilled.sprites : migratedSprites;
+
     set({
       ...file.project,
       keyframes: processedKeyframes,
-      sprites: migratedSprites,
+      sprites: finalSprites,
       animationClips,
       activeAnimationClipId,
       id: file.project.id || crypto.randomUUID(),
       description: file.project.description ?? '',
-      skeletons: file.skeletons || [],
       proceduralAnimations: file.proceduralAnimations || [],
-      weightMaps: file.weightMaps || [],
       globalModifiers: file.project.globalModifiers || [],
       animationVariables: file.project.animationVariables || [],
       // Unified Characters (new model; migrated on load if missing)
@@ -617,9 +615,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     set((s) => ({
       ...defaultProject,
       id: crypto.randomUUID(),
-      skeletons: [],
       proceduralAnimations: [],
-      weightMaps: [],
       // Concrete Puppet: already included in defaultProject via puppetSkeletons/puppetCharacters
       // DCC Pipeline: already included in defaultProject via palettes/activePaletteId
       undoStack: [...s.undoStack.slice(-(s.maxUndoLevels - 1)), snapshot],
@@ -641,7 +637,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       ],
       maxUndoLevels: 50,
       _dragActive: false,
-      selectedBoneId: null,
       globalModifiers: [],
     }));
     resetDragState();

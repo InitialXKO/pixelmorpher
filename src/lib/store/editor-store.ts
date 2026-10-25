@@ -75,18 +75,9 @@ interface EditorStore extends EditorState {
     paintCells?: Uint8Array;
     paintValue?: boolean;
   } | null) => void;
-  // V2.0: Skeleton / Bone editor state
-  activeSkeletonId: string | null;
-  setActiveSkeletonId: (id: string | null) => void;
-  showSkeletons: boolean;
-  toggleSkeletons: () => void;
   // 真 3D FK：透视缩短开关（精灵沿骨骼方向按投影长度比缩放；默认关）
   perspectiveForeshorten: boolean;
   togglePerspectiveForeshorten: () => void;
-  showWeightPaint: boolean;
-  toggleWeightPaint: () => void;
-  weightPaintBoneId: string | null;
-  setWeightPaintBoneId: (id: string | null) => void;
   showProcedural: boolean;
   toggleProcedural: () => void;
   // SAM / Smart Selection
@@ -262,11 +253,7 @@ function getProjectStore() {
 export const useEditorStore = create<EditorStore>((set, get) => ({
   ...defaultEditor,
   moveTargetLevel: 'keyframe' as const,
-  activeSkeletonId: null,
-  showSkeletons: false,
   perspectiveForeshorten: false,
-  showWeightPaint: false,
-  weightPaintBoneId: null,
   showProcedural: false,
 
   samState: {
@@ -311,11 +298,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setEffectCoordinateMode: (mode) => set({ effectCoordinateMode: mode }),
   setTrajectorySnap: (enabled) => set({ trajectorySnap: enabled }),
   setPreviewQuality: (quality) => set({ previewQuality: quality }),
-  setActiveSkeletonId: (id) => set({ activeSkeletonId: id }),
-  toggleSkeletons: () => set((s) => ({ showSkeletons: !s.showSkeletons })),
   togglePerspectiveForeshorten: () => set((s) => ({ perspectiveForeshorten: !s.perspectiveForeshorten })),
-  toggleWeightPaint: () => set((s) => ({ showWeightPaint: !s.showWeightPaint })),
-  setWeightPaintBoneId: (id) => set({ weightPaintBoneId: id }),
   toggleProcedural: () => set((s) => ({ showProcedural: !s.showProcedural })),
   setMagicWandTolerance: (tolerance) => set({ magicWandTolerance: tolerance }),
   setLandmarkTarget: (target) => set({ landmarkTarget: target }),

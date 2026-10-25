@@ -21,8 +21,6 @@ import {
   renderLassoPreview,
   renderHandDrawnTrajectoryPreview,
   renderCropPreview,
-  renderBoneOverlay,
-  renderWeightPaintOverlay,
   renderTrajectoryOverlay,
 } from './canvas/canvas-render-helpers';
 import {
@@ -280,7 +278,7 @@ export default function PixelCanvas() {
       const animationClips = useProjectStore.getState().animationClips;
       // 角色显示互斥过滤
       const puppetSession = usePuppetSessionStore.getState();
-      // 必须从 store 直接读最新的 characters 和 skeletons：闭包里的 s.puppetCharacters/s.puppetSkeletons
+      // 必须从 store 直接读最新的 characters：闭包里的引用在蓝图挂载后可能还是旧的
       // 在蓝图挂载后可能还是旧引用，导致播放时读不到 blueprint
       const freshStore = useProjectStore.getState();
       // 新模型：数据直写 unifiedCharacters，无需每帧同步
@@ -290,7 +288,7 @@ export default function PixelCanvas() {
       const bgColor = (s.referenceImageUrl && s.referenceImageVisible) ? 'transparent' : s.backgroundColor;
       renderUnified(offCtx, s.canvasWidth, s.canvasHeight, Object.values(freshStore.sprites), s.keyframes, currentFrame, bgColor,
         s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
-        s.skeletons, s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
+        s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
         s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint,
         freshStore.sprites, s.perspectiveForeshorten, freshStore.activeAnimationClipId,
         geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
@@ -364,11 +362,6 @@ export default function PixelCanvas() {
     if (s.isDrawingRef.current && s.tool === 'trajectory') renderHandDrawnTrajectoryPreview(rc, s.handDrawTrajectoryRef.current);
     if (s.isDrawingRef.current && s.tool === 'crop') renderCropPreview(rc, s.cropRectRef.current);
 
-    // 精灵编辑模式下不画骨骼覆盖层（精灵居中显示，与角色坐标系不同，会误导）
-    if (s.editMode !== 'sprite_edit') {
-      renderBoneOverlay(rc, { skeletons: s.skeletons, showSkeletons: s.showSkeletons, selectedBoneId: s.selectedBoneId, activeSkeletonId: s.activeSkeletonId });
-    }
-    renderWeightPaintOverlay(rc, { showWeightPaint: s.showWeightPaint, weightPaintBoneId: s.weightPaintBoneId, skeletons: s.skeletons, sprites: Object.values(useProjectStore.getState().sprites), getInterpolatedTranslateOffset: s.getInterpolatedTranslateOffset });
     renderTrajectoryOverlay(rc, { showTrajectories: s.showTrajectories, trajectories: s.trajectories, selectedSpriteId: s.selectedSpriteId, editMode: s.editMode, trajectorySnap: s.trajectorySnap, totalFrames: useProjectStore.getState().totalFrames });
 
     // Skip puppet skeleton overlay during playback — reduces non-essential drawing overhead
@@ -413,8 +406,7 @@ export default function PixelCanvas() {
     s.onionSkinEnabled, s.onionSkinFrames, s.showGrid, s.showTrajectories, s.editMode,
     s.trajectories, s.selectedPart, s.selectedSpriteId, s.motionBlurStrokes, s.effectStrokes,
     s.effectTracks, s.autoMotionBlur, s.autoMotionBlurIntensity, s.tool,
-    s.skeletons, s.showSkeletons, s.showPuppetSkeleton, s.selectedBoneId, s.activeSkeletonId,
-    s.showWeightPaint, s.weightPaintBoneId, s.unifiedCharacters,
+    s.showPuppetSkeleton, s.unifiedCharacters,
     s.canvasModifierTracks, spriteEditSpriteId, s.spriteEditModifiers,
     interaction.renderStrokePreview, s.getInterpolatedTranslateOffset,
     showAllCharacters, performCharacterId, storeCurrentFrame,
@@ -434,7 +426,7 @@ export default function PixelCanvas() {
   // 覆盖层开关变化时标记重绘（网格/骨骼/轨迹等）
   useEffect(() => {
     s.markDirty();
-  }, [s.showGrid, s.showPuppetSkeleton, s.showTrajectories, s.showSkeletons, s.perspectiveForeshorten]);
+  }, [s.showGrid, s.showPuppetSkeleton, s.showTrajectories, s.perspectiveForeshorten]);
 
   // 节点关键帧变化时标记重绘
   const animationClips = useProjectStore((s) => s.animationClips);

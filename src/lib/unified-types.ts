@@ -344,6 +344,8 @@ export interface Sprite {
   heightmap?: number[][];        // Optional: hand-painted heightmap for bump_light
   landmarks?: SpriteLandmarks;   // Optional: 手动标注的特征点（眼/鼻/嘴），用于蒙皮转面
   marks?: SpriteMark[];          // Optional: 命名语义标记（点/选区/值/方向/矢量），消费端按名引用
+  folder?: string;               // Optional: 归档文件夹（路径式，如「方向/南」=出生方向）；无 = 未分方向
+  origin?: { characterId: string; boneName?: string }; // Optional: 出生标签（烘焙时写入，复用不追加——Q1 定案）
   /** 分部件相机半宽（归一化单位），用于渲染时换算到全局尺度（可逆性：记录尺度差） */
   partCameraHalf?: number;
   /** 整模相机半宽（归一化单位），全局统一尺度基准 */

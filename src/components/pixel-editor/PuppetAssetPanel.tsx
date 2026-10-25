@@ -23,10 +23,16 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import { collectSubtreeIds, deleteNodeSubtree, addSocketToNode } from '@/lib/node-actions';
 import { SocketEditor, type SocketInfo } from './SocketEditor';
+import SpriteThumb from './SpriteThumb';
+import { filterSpritesByQuery } from '@/lib/sprite-thumb';
+import { groupSpritesByFolder, directionFolder, DIRECTION_FOLDER_NAMES, NO_FOLDER_LABEL } from '@/lib/sprite-folder';
 import ThreeBakeDialog from './puppet/ThreeBakeDialog';
 import { Box } from 'lucide-react';
 import { pxToSub, subToPx, type Socket } from '@/lib/unified-types';
@@ -121,6 +127,14 @@ function SpritePropertiesSection({ sprite }: { sprite: Sprite }) {
       <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
         精灵属性 · {sprite.name ?? '未命名精灵'}
       </h4>
+      {(sprite.folder || sprite.origin) && (
+        <div className="text-[9px] text-gray-600">
+          {sprite.folder && <span>文件夹：{sprite.folder}</span>}
+          {sprite.origin && (
+            <span>{sprite.folder ? ' · ' : ''}出身：{sprite.origin.characterId}{sprite.origin.boneName ? ` / ${sprite.origin.boneName}` : ''}</span>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
           <Label className="text-[10px] text-gray-500">锚点 X</Label>
@@ -279,6 +293,7 @@ export default function PuppetAssetPanel() {
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [threeBakeOpen, setThreeBakeOpen] = useState(false);
+  const [spriteQuery, setSpriteQuery] = useState('');
   // 新建空白精灵（从零绘制的入口；此前只有死面板 AssetLibraryPanel 里有，已退役）
   const [newSpriteOpen, setNewSpriteOpen] = useState(false);
   const [newSpriteName, setNewSpriteName] = useState('');
@@ -298,6 +313,8 @@ export default function PuppetAssetPanel() {
   // 属性区跟随编辑器选中精灵（点行进编辑时同步写入 selectedSpriteId）
   const selectedSpriteId = useEditorStore((s) => s.selectedSpriteId);
   const selectedSprite = selectedSpriteId ? (sprites[selectedSpriteId] ?? null) : null;
+  // 精灵列表呈现：搜索过滤后按文件夹分组（方向夹在前、未分方向最后）
+  const spriteGroups = groupSpritesByFolder(filterSpritesByQuery(Object.values(sprites), spriteQuery));
   // 导入 PNG（单张进精灵表，自退役的 PartPanel 平移）
   const spriteFileRef = React.useRef<HTMLInputElement>(null);
   const handleImportSpritePNG = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1057,18 +1074,48 @@ export default function PuppetAssetPanel() {
             </div>
 
             {sectionExpanded.sprites && (
-              <div className="space-y-0.5 mt-0.5 max-h-32 overflow-y-auto">
-                {Object.values(sprites).map((sprite) => (
+              <div className="px-1 pb-0.5">
+                <input
+                  type="text"
+                  value={spriteQuery}
+                  onChange={(e) => setSpriteQuery(e.target.value)}
+                  placeholder="搜索精灵"
+                  className="h-6 w-full text-[10px] bg-[#0a0a1e] border border-[#1e1e3a] rounded px-1.5 text-gray-300"
+                />
+              </div>
+            )}
+            {sectionExpanded.sprites && (
+              <div className="space-y-0.5 mt-0.5 max-h-64 overflow-y-auto">
+                {spriteGroups.map((group) => (
+                  <React.Fragment key={group.folder || '__none'}>
+                    {spriteGroups.length > 1 && (
+                      <div className="px-1.5 pt-1 text-[9px] text-gray-600">
+                        {group.label}（{group.items.length}）
+                      </div>
+                    )}
+                    <div className="grid grid-cols-3 gap-1 px-0.5">
+                    {group.items.map((sprite) => (
                   <ContextMenu key={sprite.id}>
                     <ContextMenuTrigger asChild>
                   <div
-                    className="group flex items-center gap-1.5 px-1.5 py-0.5 text-[9px] text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded cursor-pointer transition-colors"
-                    title="编辑像素"
+                    className={`relative flex flex-col items-center gap-0.5 p-1 text-[9px] text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded cursor-pointer transition-colors ${
+                      sprite.id && sprite.id === selectedSpriteId ? 'bg-cyan-500/15 outline outline-1 outline-cyan-500/40' : ''
+                    }`}
+                    title={`${sprite.name ?? ''}（编辑像素）`}
                     onClick={() => {
                       useEditorStore.getState().enterSpriteEditMode(sprite.id!);
                     }}
                   >
-                    <div className="size-2 rounded-sm border border-gray-700 bg-gray-800 flex-shrink-0" />
+                    <SpriteThumb sprite={sprite} size={44} className="rounded-sm bg-black/50" />
+                    {(() => {
+                      const lm = (sprite as any).landmarks;
+                      const n = lm ? ['leftEye', 'rightEye', 'nose', 'mouth'].filter((k) => (lm as any)[k]).length : 0;
+                      return n > 0 ? (
+                        <span className="absolute top-0.5 right-0.5 text-[8px] text-cyan-400/90" title="特征点标注">
+                          ◉{n}/4
+                        </span>
+                      ) : null;
+                    })()}
                     {renaming?.kind === 'sprite' && renaming.id === sprite.id ? (
                       <RowRenameInput
                         initial={sprite.name ?? ''}
@@ -1080,30 +1127,11 @@ export default function PuppetAssetPanel() {
                         }}
                       />
                     ) : (
-                      <span className="truncate flex-1 min-w-0">{sprite.name}</span>
+                      <span className="truncate w-full text-center">{sprite.name}</span>
                     )}
-                    {(() => {
-                      const lm = (sprite as any).landmarks;
-                      const n = lm ? ['leftEye', 'rightEye', 'nose', 'mouth'].filter((k) => (lm as any)[k]).length : 0;
-                      return n > 0 ? (
-                        <span className="text-cyan-500/80" title="特征点标注">
-                          ◉{n}/4
-                        </span>
-                      ) : null;
-                    })()}
-                    <span className="text-gray-700">
+                    <span className="text-[8px] text-gray-700">
                       {sprite.width}x{sprite.height}
                     </span>
-                    <button
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 hover:text-white"
-                      title="编辑像素"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        useEditorStore.getState().enterSpriteEditMode(sprite.id!);
-                      }}
-                    >
-                      ✏️
-                    </button>
                   </div>
                     </ContextMenuTrigger>
                     <ContextMenuContent className="min-w-36">
@@ -1115,6 +1143,25 @@ export default function PuppetAssetPanel() {
                       <ContextMenuItem onSelect={() => setRenaming({ kind: 'sprite', id: sprite.id! })}>
                         重命名
                       </ContextMenuItem>
+                      <ContextMenuSub>
+                        <ContextMenuSubTrigger>移入文件夹</ContextMenuSubTrigger>
+                        <ContextMenuSubContent>
+                          {Object.entries(DIRECTION_FOLDER_NAMES).map(([idx, label]) => (
+                            <ContextMenuItem
+                              key={idx}
+                              onSelect={() => useProjectStore.getState().updateSprite(sprite.id!, { folder: directionFolder(Number(idx)) ?? undefined })}
+                            >
+                              方向/{label}{sprite.folder === directionFolder(Number(idx)) ? ' ✓' : ''}
+                            </ContextMenuItem>
+                          ))}
+                          <ContextMenuSeparator />
+                          <ContextMenuItem
+                            onSelect={() => useProjectStore.getState().updateSprite(sprite.id!, { folder: undefined })}
+                          >
+                            {NO_FOLDER_LABEL}{!sprite.folder ? ' ✓' : ''}
+                          </ContextMenuItem>
+                        </ContextMenuSubContent>
+                      </ContextMenuSub>
                       <ContextMenuItem
                         onSelect={() => {
                           const dup = useProjectStore.getState().duplicateSprite(sprite.id!);
@@ -1160,6 +1207,9 @@ export default function PuppetAssetPanel() {
                       </ContextMenuItem>
                     </ContextMenuContent>
                   </ContextMenu>
+                    ))}
+                    </div>
+                  </React.Fragment>
                 ))}
               </div>
             )}

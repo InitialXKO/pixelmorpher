@@ -73,13 +73,11 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
   const brushSize = useEditorStore((s) => s.brushSize);
   const brushColor = useEditorStore((s) => s.brushColor);
   const showTrajectories = useEditorStore((s) => s.showTrajectories);
-  const showSkeletons = useEditorStore((s) => s.showSkeletons);
   const setTool = useEditorStore((s) => s.setTool);
   const setBrushSize = useEditorStore((s) => s.setBrushSize);
   const setBrushColor = useEditorStore((s) => s.setBrushColor);
   const setEditMode = useEditorStore((s) => s.setEditMode);
   const toggleTrajectories = useEditorStore((s) => s.toggleTrajectories);
-  const toggleSkeletons = useEditorStore((s) => s.toggleSkeletons);
   const editMode = useEditorStore((s) => s.editMode);
   // Brush style
   const brushStyle = useEditorStore((s) => s.brushStyle);

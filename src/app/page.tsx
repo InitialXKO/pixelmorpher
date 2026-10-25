@@ -337,32 +337,6 @@ export default function Home() {
     addKf(leftFoot.id!, 12, -4,  -1);
     addKf(rightFoot.id!,12,  2,  -1);
 
-    // ============================================================
-    // Skeleton
-    // ============================================================
-    const skeleton = store.addSkeleton('角色骨骼');
-    useEditorStore.getState().setActiveSkeletonId(skeleton.id);
-
-    // Spine — center of body
-    const spine = store.addBone(skeleton.id, '脊椎', null, 128, 118, 128, 100);
-    store.bindPartToBone(skeleton.id, spine.id, body.id!, 1.0);
-
-    // Left arm bone
-    const leftArmBone = store.addBone(skeleton.id, '左臂骨骼', spine.id, 116, 104, 104, 110);
-    store.bindPartToBone(skeleton.id, leftArmBone.id, leftArm.id!, 1.0);
-
-    // Right arm bone
-    const rightArmBone = store.addBone(skeleton.id, '右臂骨骼', spine.id, 140, 104, 152, 110);
-    store.bindPartToBone(skeleton.id, rightArmBone.id, rightArm.id!, 1.0);
-
-    // Left leg bone
-    const leftLegBone = store.addBone(skeleton.id, '左脚骨骼', spine.id, 122, 130, 122, 140);
-    store.bindPartToBone(skeleton.id, leftLegBone.id, leftFoot.id!, 1.0);
-
-    // Right leg bone
-    const rightLegBone = store.addBone(skeleton.id, '右脚骨骼', spine.id, 134, 130, 134, 140);
-    store.bindPartToBone(skeleton.id, rightLegBone.id, rightFoot.id!, 1.0);
-
     // Select body part by default
     selectPart(body.id!);
 

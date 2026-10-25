@@ -29,13 +29,8 @@ import type {
   ModifierType,
   PixelColor,
   // V2.0 imports
-  Bone,
-  BonePose,
-  Skeleton,
-  BoneConstraint,
   ProceduralAnimation,
   ProceduralConfig,
-  WeightMap,
   HistoryEntry,
   ProjectFile,
   // V2.4 imports
@@ -200,33 +195,12 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   toggleOnionSkin: () => void;
   setOnionSkinFrames: (n: number) => void;
 
-  // V2.0: Skeleton / Bone actions
-  addSkeleton: (name: string) => Skeleton;
-  removeSkeleton: (id: string) => void;
-  addBone: (skeletonId: string, name: string, parentId: string | null, headX: number, headY: number, tailX: number, tailY: number, color?: string) => Bone;
-  removeBone: (skeletonId: string, boneId: string) => void;
-  updateBone: (skeletonId: string, boneId: string, updates: Partial<Bone>) => void;
-  bindPartToBone: (skeletonId: string, boneId: string, spriteId: string, weight: number) => void;
-  unbindPartFromBone: (skeletonId: string, boneId: string, spriteId: string) => void;
-  addBoneConstraint: (skeletonId: string, boneId: string, constraint: BoneConstraint) => void;
-  removeBoneConstraint: (skeletonId: string, boneId: string, constraintIndex: number) => void;
-  addBonePose: (skeletonId: string, boneId: string, frame: number, rotation: number, ikTargetX?: number, ikTargetY?: number) => void;
-  removeBonePose: (skeletonId: string, boneId: string, frame: number) => void;
-  toggleSkeletonVisibility: (skeletonId: string) => void;
-  setSelectedBoneId: (boneId: string | null) => void;
-  selectedBoneId: string | null;
-
-  // V2.0: Procedural Animation actions
+  // Procedural Animation actions（旧骨骼系统已删除，2026-10-26；程序化动画为活功能保留）
   addProceduralAnimation: (spriteId: string, name: string, config: ProceduralConfig, startFrame: number, endFrame: number) => ProceduralAnimation;
   removeProceduralAnimation: (id: string) => void;
   updateProceduralAnimation: (id: string, updates: Partial<ProceduralAnimation>) => void;
   toggleProceduralAnimation: (id: string) => void;
   proceduralAnimations: ProceduralAnimation[];
-
-  // V2.0: Weight Map actions
-  weightMaps: WeightMap[];
-  setWeightMap: (spriteId: string, weights: (string | null)[][]) => void;
-  getWeightMap: (spriteId: string) => WeightMap | undefined;
 
   // V12: Global Modifier actions
   addGlobalModifier: (type: GlobalModifierType) => GlobalModifier;
@@ -235,9 +209,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   updateGlobalModifierParams: (id: string, params: Record<string, ModifierParamValue>) => void;
   toggleGlobalModifier: (id: string) => void;
   reorderGlobalModifier: (id: string, direction: 'up' | 'down') => void;
-
-  // V2.0: Skeletons state
-  skeletons: Skeleton[];
 
   // V2.0: Undo/Redo
   undoStack: HistoryEntry[];

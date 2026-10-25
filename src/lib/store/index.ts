@@ -12,7 +12,7 @@ import { createModifierSlice } from './modifier-slice';
 import { createAnimationSlice } from './animation-slice';
 import { createEffectSlice } from './effect-slice';
 import { createTrajectorySlice } from './trajectory-slice';
-import { createSkeletonSlice } from './skeleton-slice';
+import { createProceduralSlice } from './procedural-slice';
 import { createProjectSlice } from './project-slice';
 import { createCorrectionSlice } from './correction-slice';
 import { createGlobalModifierSlice } from './global-modifier-slice';
@@ -35,7 +35,7 @@ export const useProjectStore = create<ProjectStore>()(
     ...createAnimationSlice(...a),
     ...createEffectSlice(...a),
     ...createTrajectorySlice(...a),
-    ...createSkeletonSlice(...a),
+    ...createProceduralSlice(...a),
     ...createCorrectionSlice(...a),
     ...createGlobalModifierSlice(...a),
     ...createCharacterSlice(...a),

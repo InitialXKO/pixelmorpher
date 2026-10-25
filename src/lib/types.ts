@@ -1792,83 +1792,7 @@ export interface HistoryEntry {
   coalesceKey?: string; // If set, consecutive entries with the same key within COALESCE_WINDOW_MS are merged (replace top-of-stack instead of pushing)
 }
 
-// ---- V2.0: Skeleton / Bone System ----
-
-export type BoneConstraintType = 'ik_solver' | 'copy_rotation' | 'limit_rotation' | 'stretch_to';
-
-export interface BoneIKConstraint {
-  type: 'ik_solver';
-  targetX: number;
-  targetY: number;
-  chainLength: number; // number of bones in IK chain
-  iterations: number; // solver iterations
-  poleAngle: number; // pole angle for IK
-}
-
-export interface BoneLimitConstraint {
-  type: 'limit_rotation';
-  minAngle: number;
-  maxAngle: number;
-}
-
-export interface BoneCopyRotationConstraint {
-  type: 'copy_rotation';
-  targetBoneId: string;
-  influence: number; // 0-1
-}
-
-export interface BoneStretchToConstraint {
-  type: 'stretch_to';
-  targetX: number;
-  targetY: number;
-  maxLength: number;
-}
-
-export type BoneConstraint = BoneIKConstraint | BoneLimitConstraint | BoneCopyRotationConstraint | BoneStretchToConstraint;
-
-export interface Bone {
-  id: string;
-  name: string;
-  parentId: string | null;
-  /** Head (start) position relative to canvas */
-  headX: number;
-  headY: number;
-  /** Tail (end) position relative to canvas */
-  tailX: number;
-  tailY: number;
-  /** Rest rotation angle in degrees */
-  restRotation: number;
-  /** Current pose rotation (animated) */
-  poseRotation: number;
-  /** Bone length */
-  length: number;
-  /** Connected parts with weights */
-  boundParts: { spriteId: string; weight: number }[];
-  /** Constraints on this bone */
-  constraints: BoneConstraint[];
-  visible: boolean;
-  locked: boolean;
-  color: string; // bone display color
-}
-
-export interface BonePose {
-  boneId: string;
-  frame: number;
-  rotation: number;
-  /** IK target position (if IK constraint active) */
-  ikTargetX?: number;
-  ikTargetY?: number;
-}
-
-export interface Skeleton {
-  id: string;
-  name: string;
-  bones: Bone[];
-  poses: BonePose[];
-  visible: boolean;
-}
-
-// ---- V2.0: Procedural Animation System ----
+// ---- V2.0: Procedural Animation System ----（旧 Skeleton/Bone 系统已删除，2026-10-26）
 
 export type ProceduralType = 'noise' | 'wave' | 'spring' | 'jitter';
 
@@ -1921,22 +1845,12 @@ export interface ProceduralAnimation {
   endFrame: number;
 }
 
-// ---- V2.0: Weight Map ----
-
-export interface WeightMap {
-  spriteId: string;
-  /** weights[y][x] = boneId or null */
-  weights: (string | null)[][];
-}
-
 // ---- V2.0: Project Save/Load ----
 
 export interface ProjectFile {
   version: string;
   project: Project;
-  skeletons: Skeleton[];
   proceduralAnimations: ProceduralAnimation[];
-  weightMaps: WeightMap[];
   history: HistoryEntry[];
 }
 

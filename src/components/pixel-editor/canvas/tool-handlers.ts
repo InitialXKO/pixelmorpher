@@ -1217,7 +1217,7 @@ export const smartSelectHandler: ToolHandler = {
               s.canvasWidth, s.canvasHeight,
               Object.values(pst.sprites), s.keyframes, currentFrame, s.backgroundColor,
               s.effectTracks, undefined, undefined, false, 0.5,
-              undefined, undefined, undefined, 'low',
+              undefined, undefined, 'low',
               s.globalModifiers, undefined,
               s.frameRate,
               pst.unifiedCharacters,

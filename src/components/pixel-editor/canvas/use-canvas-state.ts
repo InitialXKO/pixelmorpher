@@ -19,7 +19,7 @@ import {
 import { generateBrushStamp, applyBrushStamp } from '@/lib/brush-engine';
 import { inpaintPixels } from '@/lib/inpainting';
 import { catmullRomToBezier, isPixelInPart, getPixelAt, computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
-import type { PixelColor, PixelGrid, Bone, PuppetNode, PuppetSkeleton, PuppetCharacter, PuppetNodeKeyframe, BrushCommand, ModifierInstance } from '@/lib/types';
+import type { PixelColor, PixelGrid, PuppetNode, PuppetSkeleton, PuppetCharacter, PuppetNodeKeyframe, BrushCommand, ModifierInstance } from '@/lib/types';
 import type { Node, Character, Sprite } from '@/lib/unified-types';
 import { pxToSub, subToPx, projectToView } from '@/lib/unified-types';
 import { createEmptyPixelGrid } from '@/lib/types';
@@ -107,7 +107,6 @@ export function useCanvasState() {
   const motionBlurStrokes = useProjectStore((s) => s.motionBlurStrokes);
   const effectStrokes = useProjectStore((s) => s.effectStrokes);
   const effectTracks = useProjectStore((s) => s.effectTracks);
-  const skeletons = useProjectStore((s) => s.skeletons);
   const proceduralAnimations = useProjectStore((s) => s.proceduralAnimations);
   const canvasModifierTracks = useProjectStore((s) => s.canvasModifierTracks);
   const setPartPixels = useProjectStore((s) => s.setSpritePixels);
@@ -165,12 +164,7 @@ export function useCanvasState() {
   const effectBrushDensity = useEditorStore((s) => s.effectBrushDensity);
   const effectBrushSpread = useEditorStore((s) => s.effectBrushSpread);
   const strokeBlendMode = useEditorStore((s) => s.strokeBlendMode);
-  const showSkeletons = useEditorStore((s) => s.showSkeletons);
   const perspectiveForeshorten = useEditorStore((s) => s.perspectiveForeshorten);
-  const selectedBoneId = useProjectStore((s) => s.selectedBoneId);
-  const activeSkeletonId = useEditorStore((s) => s.activeSkeletonId);
-  const showWeightPaint = useEditorStore((s) => s.showWeightPaint);
-  const weightPaintBoneId = useEditorStore((s) => s.weightPaintBoneId);
   const showPuppetSkeleton = useEditorStore((s) => s.showPuppetSkeleton);
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
@@ -377,35 +371,6 @@ export function useCanvasState() {
     }, [parts, canvasWidth, canvasHeight, editorStore, getInterpolatedTranslateOffset],
   );
 
-  // ---- V2.0: Find bone at pixel position ----
-  const findBoneAtPixel = useCallback(
-    (px: number, py: number): { bone: Bone; skeletonId: string; endpoint: 'head' | 'tail' | 'ik_target'; targetX?: number; targetY?: number } | null => {
-      const currentFrame = currentFrameRef.current;
-      const hitRadius = Math.max(6 / zoom, 2);
-      for (const skeleton of skeletons) {
-        if (!skeleton.visible) continue;
-        for (const bone of skeleton.bones) {
-          if (!bone.visible) continue;
-          for (const constraint of bone.constraints) {
-            if (constraint.type === 'ik_solver') {
-              const pose = skeleton.poses.find(p => p.boneId === bone.id && p.frame === currentFrame);
-              const targetX = pose?.ikTargetX ?? constraint.targetX;
-              const targetY = pose?.ikTargetY ?? constraint.targetY;
-              if (Math.sqrt(Math.pow(px - targetX, 2) + Math.pow(py - targetY, 2)) <= hitRadius) {
-                return { bone, skeletonId: skeleton.id, endpoint: 'ik_target', targetX, targetY };
-              }
-            }
-          }
-          if (Math.sqrt(Math.pow(px - bone.headX, 2) + Math.pow(py - bone.headY, 2)) <= hitRadius)
-            return { bone, skeletonId: skeleton.id, endpoint: 'head' };
-          if (Math.sqrt(Math.pow(px - bone.tailX, 2) + Math.pow(py - bone.tailY, 2)) <= hitRadius)
-            return { bone, skeletonId: skeleton.id, endpoint: 'tail' };
-        }
-      }
-      return null;
-    }, [skeletons, zoom],
-  );
-
   // ---- Compute puppet node world pivot position ----
   // 单位统一：内部全 SubPixel，返回画布像素（调用方按像素用）
   // 复用主渲染的 computeWorldTransforms（与绘制、命中同源）；此前私有 2D 计算不认 offset3D，
@@ -560,19 +525,6 @@ export function useCanvasState() {
     }, [trajectories, selectedSpriteId, canvasWidth, canvasHeight, zoom, panX, panY],
   );
 
-  // ---- Apply weight paint ----
-  const applyWeightPaint = useCallback(
-    (px: number, py: number) => {
-      if (!weightPaintBoneId) return;
-      const hitPart = findPartAtPixel(px, py);
-      if (!hitPart) return;
-      for (const skeleton of skeletons) {
-        const bone = skeleton.bones.find(b => b.id === weightPaintBoneId);
-        if (bone) { useProjectStore.getState().bindPartToBone(skeleton.id, weightPaintBoneId, hitPart.id!, 1.0); break; }
-      }
-    }, [weightPaintBoneId, findPartAtPixel, skeletons],
-  );
-
   // ---- Extract selection pixels as a new part ----
   const extractSelectionAsPart = useCallback((mode: 'keep' | 'transparent' | 'fill' | 'inpaint' = 'keep', fillColor: string = '#000000', partName: string = '选区') => {
     const mask = selectionMaskRef.current;
@@ -651,7 +603,7 @@ export function useCanvasState() {
     onionDataVersionRef.current++;
     invalidateUnifiedPipelineCache();
     dirtyRef.current = true;
-  }, [parts, keyframes, backgroundColor, onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, spriteEditModifiers, unifiedCharacters, globalModifiers, globalBlueprint]);
+  }, [parts, keyframes, backgroundColor, onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, spriteEditModifiers, unifiedCharacters, globalModifiers, globalBlueprint]);
 
   // ---- Container size / canvas dimension effects ----
   useEffect(() => {
@@ -689,7 +641,7 @@ export function useCanvasState() {
     // Store values
     parts, keyframes, canvasWidth, canvasHeight, backgroundColor,
     onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes,
-    effectTracks, skeletons, proceduralAnimations, canvasModifierTracks,
+    effectTracks, proceduralAnimations, canvasModifierTracks,
     setPartPixels, setCorrection, frameRate, setCanvasSize, animationVariables,
     globalModifiers,
     nonPuppetParts, unifiedCharacters,
@@ -698,7 +650,7 @@ export function useCanvasState() {
     editMode, selectedSpriteId, setZoom, setPan,
     autoMotionBlur, autoMotionBlurIntensity, motionBlurBrushType, motionBlurIntensity, motionBlurDirection,
     effectBrushColor, effectBrushRadius, effectBrushIntensity, effectBrushDensity, effectBrushSpread, strokeBlendMode,
-    showSkeletons, perspectiveForeshorten, selectedBoneId, activeSkeletonId, showWeightPaint, weightPaintBoneId,
+    perspectiveForeshorten,
     showPuppetSkeleton, activePuppetSkeletonId, selectedNodeId,
     referenceImageUrl, referenceImageOpacity, referenceImageVisible, maskNodeId,
     refWizardOpen,
@@ -710,9 +662,9 @@ export function useCanvasState() {
     getFullTranslateOffset, getInterpolatedTranslateOffset, getInterpolatedModifiers,
     screenToPixel, canvasToPartLocal, findPartAtPixel,
     applyBrush, applyFill, applyEyedropper,
-    findBoneAtPixel, computePivotWorldPosition, findPuppetNodeAtPixel, findAllPuppetNodesAtPixel,
+    computePivotWorldPosition, findPuppetNodeAtPixel, findAllPuppetNodesAtPixel,
     middleClickRef, leftPressRef,
-    findTrajectoryCpAtPixel, applyWeightPaint, extractSelectionAsPart,
+    findTrajectoryCpAtPixel, extractSelectionAsPart,
     // Canvas size
     canvasSizeEditing, setCanvasSizeEditing, canvasSizeW, setCanvasSizeW, canvasSizeH, setCanvasSizeH, applyCanvasSize,
     // Container
