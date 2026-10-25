@@ -147,6 +147,9 @@ check('缺口5·特效轨/笔触已进包且模板消费',
   convert.includes('fxPkg') && convert.includes('clipFxOf')
   && template.includes('fxRenderSet') && template.includes("tr.type === 'particle'")
   && template.includes('afterimage_brush'));
+check('缺口4·网格蒙皮已进包且模板逐帧变形回传图集（还原制）',
+  convert.includes('part.skin = {') && template.includes('skinWarpTile')
+  && template.includes('skinDirty') && template.includes('skinJobs'));
 check('缺口5·画布修改轨后处理链已接线（参数解析+六类通道+掩码+场景目标）',
   template.includes('fxResolveCanvasParams') && template.includes('fxCollectCanvasMods')
   && template.includes('fxRunPostChain') && template.includes('ensurePostSys')

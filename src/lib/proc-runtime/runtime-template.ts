@@ -986,7 +986,7 @@ function ensureAtlas(gl, variant, costumeName) {
       const rec = (animFrameMap[bk] = animFrameMap[bk] || {});
       rec[fi + ',' + di] = { tile: tile, place: [ax, ay] };
     } else {
-      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][11] || null, marksN: entries[i][10] || null, marksDir: entries[i][12] || null });
+      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][11] || null, marksN: entries[i][10] || null, marksDir: entries[i][12] || null, fam: entries[i][4] ? 1 : 0 });
     }
   });
   for (const bk in animFrameMap) {
@@ -2197,6 +2197,7 @@ function frame(now) {
   const sorted = sortParts(PARTS, char.variant);
   const els = [];
   const elByKey = new Map();
+  const skinJobs = [];
   const partAnchorsByKey = new Map();
   const dynAnchors = [];
   sorted.forEach((part, idx) => {
@@ -2288,6 +2289,14 @@ function frame(now) {
     };
     els.push(el);
     elByKey.set(part.key, el);
+    // 网格蒙皮（缺口 4）：收集变形活儿，循环后父子位姿齐了再执行
+    if (part.skin && tile && place) {
+      skinJobs.push({
+        tile: tile, place: place, key: part.key, family: !!entry.fam,
+        plugX: tileCx + (mirr ? -part.skin.plugOff[0] : part.skin.plugOff[0]),
+        plugY: tileCy + part.skin.plugOff[1],
+      });
+    }
     // 弧线段原点 = 插头：换成相对瓦片中心的偏移（粒子系以中心为原点）
     const plugC = entry.plugN
       ? [entry.plugN[0] * tile.w - tile.w / 2, (1 - entry.plugN[1]) * tile.h - tile.h / 2]
@@ -2405,6 +2414,39 @@ function frame(now) {
       .filter((s) => elapsed - s.born < ai.interval * ai.count * 1.8)
       .map((s) => Object.assign({}, s.el, { ghost: true }));
     els.splice(idx, 0, ...ghosts);
+  }
+  // ---- 网格蒙皮执行（缺口 4）：按子/父世界角差变形当前瓦片并回传
+  // 图集（每帧从干净瓦片数据重算，不累积）。角的换算：运行时世界角
+  // （y 向上、逆时针为正）→ 编辑器关节角（画布口径）取负；精灵族
+  // 瓦片行序自顶向下与编辑器同空间直接用，参数化族行序自底向上再翻
+  // 一次符号。发光/底图两张副图集不跟随变形（已知近似）。
+  // 先把上一帧变形过的图集区域还原为干净瓦片（变形不累积、角回
+  // 零即恢复原图），再执行本帧变形并登记。
+  if (skinJobs.length > 0 || (state.skinDirty && state.skinDirty.size > 0)) {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, state.tex);
+    if (state.skinDirty) {
+      for (const rec of state.skinDirty.values()) {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, rec.place[0], rec.place[1], rec.tile.w, rec.tile.h, gl.RGBA, gl.UNSIGNED_BYTE, rec.tile.data);
+      }
+      state.skinDirty.clear();
+    } else state.skinDirty = new Map();
+  }
+  for (const job of skinJobs) {
+    const skinPart = PARTS.find((pp) => pp.key === job.key);
+    const childEl = elByKey.get(job.key);
+    const parentEl = skinPart ? elByKey.get(skinPart.skin.parent) : undefined;
+    if (!skinPart || !childEl || !parentEl) continue;
+    let dRot = childEl.rot - parentEl.rot;
+    while (dRot > Math.PI) dRot -= Math.PI * 2;
+    while (dRot < -Math.PI) dRot += Math.PI * 2;
+    if (Math.abs(dRot) < 0.0002) continue;
+    const tileAngle = job.family ? -dRot : dRot;
+    const warped = skinWarpTile(job.tile.data, job.tile.w, job.tile.h, job.plugX, job.plugY, tileAngle, skinPart.skin.radius, skinPart.skin.curve);
+    if (warped) {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, job.place[0], job.place[1], job.tile.w, job.tile.h, gl.RGBA, gl.UNSIGNED_BYTE, warped);
+      state.skinDirty.set(job.place[0] + ',' + job.place[1], { tile: job.tile, place: job.place });
+    }
   }
   // 刀光：表演开始帧定格锚点部件位姿（位置+角度），其后不跟随；
   // 进度按表演本地时间走，帧图自图集刀光瓦片取（最后绘制、在最上层）

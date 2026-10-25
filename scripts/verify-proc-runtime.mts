@@ -3015,4 +3015,33 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     } as unknown as Character, detH!, 12).length >= 1);
 }
 
+// ---- 网格蒙皮对拍（缺口 4）：运行时 RGBA 孪生 vs 编辑器 applyMeshSkin ----
+{
+  const { applyMeshSkin } = await import('../src/lib/skin/mesh-skin');
+  const baker = createSurfaceBaker();
+  const W = 12, H = 12;
+  const grid: (string | null)[][] = [];
+  const data = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    const row: (string | null)[] = [];
+    for (let x = 0; x < W; x++) {
+      const hex = x < 6 ? '#c83232' : '#282828';
+      row.push(hex);
+      const o = (y * W + x) * 4;
+      data[o] = parseInt(hex.slice(1, 3), 16); data[o + 1] = parseInt(hex.slice(3, 5), 16); data[o + 2] = parseInt(hex.slice(5, 7), 16); data[o + 3] = 255;
+    }
+    grid.push(row);
+  }
+  const ed = applyMeshSkin(grid, 6, 6, 40, 5, 'smoothstep') as (string | null)[][];
+  const rt = baker.skinWarpTile(data, W, H, 6, 6, 40 * Math.PI / 180, 5, 'smoothstep');
+  check('缺口4·运行时蒙皮变形与编辑器 applyMeshSkin 逐像素一致（红/灰竖界弯曲）',
+    !!rt && ed.every((row, y) => row.every((c, x) => {
+      const o = (y * W + x) * 4;
+      if (c === null) return rt[o + 3] === 0;
+      const r = parseInt(c.slice(1, 3), 16), g = parseInt(c.slice(3, 5), 16), b = parseInt(c.slice(5, 7), 16);
+      return Math.abs(rt[o] - r) <= 1 && Math.abs(rt[o + 1] - g) <= 1 && Math.abs(rt[o + 2] - b) <= 1;
+    })));
+  check('缺口4·零角度返回 null（不做无谓回传）', baker.skinWarpTile(data, W, H, 6, 6, 0, 5, 'smoothstep') === null);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

@@ -129,6 +129,9 @@ export interface RuntimePart {
   /** 变体替代精灵（缺口 6）：仅当某片段状态轨给该槽指派过变体时才带；
    * variantId → 该变体解析后的代表精灵（与基础解析不同才收） */
   altSprites?: Record<string, { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] }>;
+  /** 网格蒙皮（缺口 4）：父槽位 skinning='mesh' 时带；parent 为父部件
+   * 键，plugOff 为 attachment.plug 偏移（px，叠加在瓦片 cx/cy 上） */
+  skin?: { parent: string; radius: number; curve: 'linear' | 'smoothstep'; plugOff: [number, number] };
 }
 
 export interface ProcRuntimePackage {
@@ -598,17 +601,6 @@ export function convertCharacterToRuntimePackage(
     const ex = opts?.projectExtras;
     if (ex?.perspectiveForeshorten) warnings.push('透视缩短未进运行时包（v1）：播放时按平面角绘制');
   }
-  // ---- 网格蒙皮点名（缺口 4）：任一节点的父槽位 skinning=mesh 时点名 ----
-  {
-    const byId = new Map(Object.values(character.nodes).map((n) => [n.id, n]));
-    let meshSlots = 0;
-    for (const n of Object.values(character.nodes)) {
-      const parent = n.parentId ? byId.get(n.parentId) : undefined;
-      const socket = parent?.sockets?.find((s) => s.id === n.attachment?.parentSocketId);
-      if (socket?.skinning === 'mesh') meshSlots++;
-    }
-    if (meshSlots > 0) warnings.push(`网格蒙皮槽位 ${meshSlots} 个未进运行时包（v1）：对应部件按刚性绘制`);
-  }
   // 子图库：调用方传全库快照；给了统一条目库时按版本展开成
   // id@版本 条目（钉版本纪律），否则走平铺模板（同 SpriteTable
   // 由调用方传工程级表的先例，convert 不读存储）。
@@ -796,6 +788,24 @@ export function convertCharacterToRuntimePackage(
     }
     const rad = (cp.angleDeg ?? 0) * Math.PI / 180;
     part.clip = { by: anchorSlot, a: Math.cos(rad), b: Math.sin(rad), c: -(cp.offset ?? 0) };
+  }
+
+  // ---- 网格蒙皮回填（缺口 4）：节点 attachment 指向的父槽位
+  // skinning='mesh' → 部件带 skin（父部件键 + 半径/曲线 + plug 偏移）；
+  // 运行时逐帧按子/父世界角差对当前瓦片做同编辑器公式的变形。 ----
+  for (const part of parts) {
+    const nodeId = slotNode.get(part.key);
+    const node = nodeId ? character.nodes[nodeId] : undefined;
+    if (!node || node.attachment?.type !== 'socket' || !node.attachment.parentSocketId || !node.parentId) continue;
+    const parentNode = character.nodes[node.parentId];
+    const socket = parentNode?.sockets?.find((sk) => sk.id === node.attachment!.parentSocketId);
+    if (socket?.skinning !== 'mesh') continue;
+    part.skin = {
+      parent: parentNode.slot?.slotKey ?? parentNode.id,
+      radius: socket.skinRadius ?? 8,
+      curve: socket.skinCurve ?? 'smoothstep',
+      plugOff: node.attachment.plug ? [subToPx(node.attachment.plug.x), subToPx(node.attachment.plug.y)] : [0, 0],
+    };
   }
 
   // ---- 变体替代精灵回填（缺口 6）：片段状态轨给某槽指派过的变体，
