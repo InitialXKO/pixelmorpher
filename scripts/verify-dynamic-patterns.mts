@@ -25,7 +25,7 @@ import {
   type DynamicPatternParams,
 } from '../src/lib/dynamic-patterns';
 import { extractContour, simulateDynamicParticles } from '../src/lib/dynamic-pattern-sim';
-import { followDeltaAt } from '../src/lib/dynamic-patterns';
+import { followDeltaAt, followAnchoredDeltaAt } from '../src/lib/dynamic-patterns';
 import { createDynamicRuntime } from '../src/lib/proc-runtime/dynamic-src';
 import { subToPx } from '../src/lib/unified-types';
 
@@ -200,15 +200,29 @@ function instructionFor(ch: Character, frame: number) {
     near(wrap.da, (-20 * Math.PI) / 180, 1e-9));
   const noRot = followDeltaAt({ a: 0, x: 0, y: 0 }, { a: 1.2, x: 3, y: 4 }, 0.5, false);
   check('D7 关旋转时 da=0、平移照常', noRot.da === 0 && near(noRot.dx, 1.5) && near(noRot.dy, 2));
+  // 锚定版（甲）：连接点锚死——平移全部换算为摆角 + 沿轴缩放
+  const aZero = followAnchoredDeltaAt({ a: 1, x: 5, y: 5 }, { a: 1, x: 5, y: 5 }, 0.8, true, 0, 1, 3);
+  check('D7 锚定：滞后=当前时 da=0、ds=1、平移恒 0',
+    aZero.da === 0 && aZero.ds === 1 && aZero.dx === 0 && aZero.dy === 0);
+  const aSide = followAnchoredDeltaAt({ a: 0, x: 6, y: 0 }, { a: 0, x: 3, y: 0 }, 1, true, 0, 1, 3);
+  check('D7 锚定：侧向拖拽 −3（u=(0,1)、reach=3）→ 摆角 +45°、ds=√2、尖端恰落原位移点',
+    near(aSide.da, Math.PI / 4, 1e-9) && near(aSide.ds, Math.SQRT2, 1e-9) && aSide.dx === 0 && aSide.dy === 0);
+  const aAxial = followAnchoredDeltaAt({ a: 0, x: 0, y: 0 }, { a: 0, x: 0, y: 3 }, 1, true, 0, 1, 3);
+  check('D7 锚定：纯沿轴拖拽 +3 → 不摆角、ds=2（伸长一倍）',
+    near(aAxial.da, 0, 1e-9) && near(aAxial.ds, 2, 1e-9));
+  const aNoReach = followAnchoredDeltaAt({ a: 0, x: 0, y: 0 }, { a: 0.4, x: 3, y: 0 }, 1, true, 0, 1, 0);
+  check('D7 锚定：reach=0 时只剩源角度滞后、ds=1',
+    near(aNoReach.da, 0.4, 1e-9) && aNoReach.ds === 1);
   const tplF = findDynamicTemplate('垂饰滞后');
   check('D7 内置模板「垂饰滞后」在库', !!tplF && tplF.params.followEnabled === true && tplF.params.followAmount === 0.7);
 }
 {
   // 主画布应用：源节点 S 的 x 轨 0→192 亚像素（=12px，帧 0..12，
   // 1px/帧），跟随者 N 挂追随（源 slotS、延迟 0.3s、强度 1、fps 10
-  // → 滞后 3 帧）。第 6 帧期望 Δx = x(3) − x(6) = 3 − 6 = −3px。
-  // 取整像素增量是为避开 halfPixelAlignSub 的整数像素 +0.5 对齐移位
-  // （增量非整像素时对齐移位消失、读数差 0.5px，非机制误差）。
+  // → 滞后 3 帧）。第 6 帧平移增量 d = x(3) − x(6) = −3px；锚定版
+  // （甲）下连接点不动（Δx=Δy=0），d 按跟随者主轴 u=(0,1)、臂长
+  // reach = 精灵高 5 − plug y 2 = 3 换算：摆角 atan2(3, 3) = +45°，
+  // 沿轴缩放 hypot(3, 3)/3 = √2（stretch 通道比值）。
   const buildFollowChar = (followOn: boolean): Character => {
     const ch = createDefaultCharacter('cf', '追随测试');
     const root = ch.nodes[ch.rootNodeId]!;
@@ -247,9 +261,12 @@ function instructionFor(ch: Character, frame: number) {
   check('D7 跟随者指令存在（开/关）', !!on && !!off);
   const dX = subToPx(on!.worldX) - subToPx(off!.worldX);
   const dY = subToPx(on!.worldY) - subToPx(off!.worldY);
-  check(`D7 第 6 帧 Δx = −3（实测 ${dX.toFixed(2)}）`, near(dX, -3, 0.05));
-  check(`D7 第 6 帧 Δy = 0（实测 ${dY.toFixed(2)}）`, near(dY, 0, 0.05));
-  check('D7 无角度轨时 Δangle = 0', near((on!.angle ?? 0) - (off!.angle ?? 0), 0, 0.01));
+  check(`D7 第 6 帧锚定 Δx = 0（连接点不动，实测 ${dX.toFixed(2)}）`, near(dX, 0, 0.05));
+  check(`D7 第 6 帧锚定 Δy = 0（实测 ${dY.toFixed(2)}）`, near(dY, 0, 0.05));
+  check(`D7 第 6 帧锚定 Δangle = +45°（实测 ${((on!.angle ?? 0) - (off!.angle ?? 0)).toFixed(2)}）`,
+    near((on!.angle ?? 0) - (off!.angle ?? 0), 45, 0.5));
+  const sRatio = (on!.stretch ?? 1) / (off!.stretch ?? 1);
+  check(`D7 第 6 帧锚定 stretch 比值 = √2（实测 ${sRatio.toFixed(3)}）`, near(sRatio, Math.SQRT2, 0.02));
 }
 
 console.log(`verify-dynamic-patterns: ${pass} passed, ${fail} failed`);

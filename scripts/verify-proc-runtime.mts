@@ -1591,11 +1591,19 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     mkChar([instNode], undefined, 'arm'), undefined, { frameRate: 10, totalFrames: 12 });
   const capeDyn = pkg.parts.find((p) => p.key === 'cape')?.dynamic?.[0];
   const fc = capeDyn?.followCurve;
-  check('P1 追随增量曲线进包（dx 有、dy/da 无）', !!fc?.dx && !fc?.dy && !fc?.da);
-  check('P1 u=0 增量为 0', Math.abs(samplePts(fc?.dx, 0)) < 0.25);
-  check('P1 u=1/6（第 2 帧，滞后未满）增量 −2', Math.abs(samplePts(fc?.dx, 1 / 6) + 2) < 0.25);
-  check('P1 u=0.5（第 6 帧）增量 −3', Math.abs(samplePts(fc?.dx, 0.5) + 3) < 0.25);
-  check('P1 u=1（末帧）增量 −3', Math.abs(samplePts(fc?.dx, 1) + 3) < 0.25);
+  // 锚定版（甲）：只烘 da（摆角）+ ds（沿轴缩放），不再有 dx/dy。
+  // 臂长 L 由披风参数化件几何换算（size 高/2 + pivot y），从包内读。
+  const capeBase = pkg.parts.find((p) => p.key === 'cape')?.base;
+  const L = (capeBase?.size[1] ?? 0) / 2 + (capeBase?.pivot[1] ?? 0);
+  check('P1 追随锚定曲线进包（da/ds 有、dx/dy 无）', !!fc?.da && !!fc?.ds && !fc?.dx && !fc?.dy);
+  check('P1 u=0 摆角为 0、缩放为 1', Math.abs(samplePts(fc?.da, 0)) < 0.03 && Math.abs(samplePts(fc?.ds, 0) - 1) < 0.02);
+  check('P1 u=1/6（第 2 帧，滞后未满）摆角 = atan2(−2, L)',
+    Math.abs(samplePts(fc?.da, 1 / 6) - Math.atan2(-2, L)) < 0.03);
+  check('P1 u=0.5（第 6 帧）摆角 = atan2(−3, L)、缩放 = hypot(L, 3)/L',
+    Math.abs(samplePts(fc?.da, 0.5) - Math.atan2(-3, L)) < 0.03
+    && Math.abs(samplePts(fc?.ds, 0.5) - Math.hypot(L, 3) / L) < 0.02);
+  check('P1 u=1（末帧）摆角仍 = atan2(−3, L)（匀速下滞后恒定）',
+    Math.abs(samplePts(fc?.da, 1) - Math.atan2(-3, L)) < 0.03);
   const set2Dyn = (pkg.costumes['set2'] as { __dynamic?: Record<string, { followCurve?: unknown }[]> })?.__dynamic?.['cape']?.[0];
   check('P2 服装集 __dynamic 的同实例也挂曲线', !!set2Dyn?.followCurve);
 
@@ -1619,10 +1627,13 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('P5 模板含追随采样与应用接线', tplText.includes('followSampleAt') && tplText.includes('inst.followCurve'));
   const m = tplText.match(/function followSampleAt\(points, u\) \{[\s\S]*?\n\}/);
   check('P5 followSampleAt 可提取', !!m);
-  if (m && fc?.dx) {
+  if (m && fc?.da) {
     const sampler = new Function(`${m[0]}\nreturn followSampleAt;`)() as (p: [number, number][], u: number) => number;
-    check('P5 模板采样器采烘焙曲线 u=0.5 得 −3', Math.abs(sampler(fc.dx, 0.5) + 3) < 0.25);
-    check('P5 模板采样器两端钳制', sampler(fc.dx, -1) === sampler(fc.dx, 0) && sampler(fc.dx, 2) === sampler(fc.dx, 1));
+    const capeBase2 = pkg.parts.find((p) => p.key === 'cape')?.base;
+    const L2 = (capeBase2?.size[1] ?? 0) / 2 + (capeBase2?.pivot[1] ?? 0);
+    check('P5 模板采样器采锚定摆角曲线 u=0.5 得 atan2(−3, L)',
+      Math.abs(sampler(fc.da, 0.5) - Math.atan2(-3, L2)) < 0.05);
+    check('P5 模板采样器两端钳制', sampler(fc.da, -1) === sampler(fc.da, 0) && sampler(fc.da, 2) === sampler(fc.da, 1));
   }
 }
 

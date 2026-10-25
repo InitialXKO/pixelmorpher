@@ -75,7 +75,7 @@ import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from 
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/procedural';
-import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
+import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followAnchoredDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
 import { markPointPx, markDirAngleDeg } from './sprite-marks';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
@@ -1893,7 +1893,7 @@ export function generateRenderPlan(
       activeCostumeSet?.pieces[node.slot?.slotKey ?? node.id]?.dynamicPatterns,
     );
     let dynSx = 1, dynSy = 1;
-    let folDx = 0, folDy = 0, folDa = 0;
+    let folDx = 0, folDy = 0, folDa = 0, folDs = 1;
     let spinDeg = 0;
     if (dynResolved.length > 0) {
       const tSec = frame / frameRate;
@@ -1910,8 +1910,19 @@ export function generateRenderPlan(
           const now = srcId ? followPoseAt(srcId, frame) : undefined;
           const lag = srcId ? followPoseAt(srcId, frame - fp.followDelaySec * frameRate) : undefined;
           if (now && lag) {
-            const fd = followDeltaAt(now, lag, fp.followAmount, fp.followRotate);
-            folDx += fd.dx; folDy += fd.dy; folDa += fd.da;
+            // 锚定版（甲）：连接点锚死——平移增量换算为绕插头的摆角
+            // 与沿轴缩放。本节点主轴（画布系）u = (−sinθ, cosθ)，
+            // 臂长 = 精灵高 − 有效插头 Y（精灵 plug + attachment 偏移，
+            // 与蒙皮同一口径）；无精灵时臂长 0、只剩角度滞后。
+            const th = (worldTf.worldAngle * Math.PI) / 180;
+            let reach = 0;
+            if (effectiveSprite) {
+              const plugEffY = (effectiveSprite.plug ? subToPx(effectiveSprite.plug.y) : effectiveSprite.height / 2)
+                + (node.attachment?.plug ? subToPx(node.attachment.plug.y) : 0);
+              reach = Math.max(0, effectiveSprite.height - plugEffY);
+            }
+            const fd = followAnchoredDeltaAt(now, lag, fp.followAmount, fp.followRotate, -Math.sin(th), Math.cos(th), reach);
+            folDa += fd.da; folDs *= fd.ds;
           }
         }
       }
@@ -1986,7 +1997,7 @@ export function generateRenderPlan(
       worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel) + pxToSub(folDx)) as SubPixel,
       worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel) + pxToSub(folDy)) as SubPixel,
       angle: worldTf.worldAngle + (folDa * 180) / Math.PI + spinDeg,
-      stretch: dynResolved.length > 0 ? worldTf.worldStretch * dynSy : worldTf.worldStretch,
+      stretch: dynResolved.length > 0 ? worldTf.worldStretch * dynSy * folDs : worldTf.worldStretch,
       foreshorten,
       variantIndex: worldTf.variantIndex,
       rotationStrategy: strategy,

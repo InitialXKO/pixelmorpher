@@ -18,7 +18,7 @@ import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
-import { followDeltaAt, glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
+import { followAnchoredDeltaAt, glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
 import { BUILTIN_ENTRIES, libraryIndexOf, surfaceLibEntriesOf } from '../library-entries';
 import { expandDynamicEntry } from '../dynamic-expand';
 import { createDefaultParametricAppearance } from './surfaces';
@@ -61,13 +61,17 @@ export interface RuntimeDynamicInstance {
   slot: string;
   params: DynamicPatternParams;
   /** 追随段烘焙增量曲线（u = 全程窗进度 0..1 → 增量；运行时空间：
-   * dx/dy 为 px、da 为弧度）。导出时由源部件的全程窗轨道样本按
-   * 「滞后位姿 − 当前位姿 × 强度」逐帧算好——运行时只采样本曲线，
-   * 不回头取样源部件（与编辑器的轨道位姿取样同源同值）。 */
+   * da 为弧度、ds 为沿轴缩放倍乘）。导出时由源部件的全程窗轨道样本
+   * 按锚定换算逐帧算好（连接点锚死，平移增量按跟随者主轴与臂长换
+   * 算为摆角 + 缩放，与编辑器实时落点同一公式）——运行时只采样本
+   * 曲线，不回头取样源部件。dx/dy 为旧整件平移烘焙的遗留字段，
+   * 现行烘焙不再产出，运行时保留消费以兼容旧包。 */
   followCurve?: {
     dx?: [number, number][];
     dy?: [number, number][];
     da?: [number, number][];
+    /** 锚定版沿轴缩放因子（倍乘，缺省 1）：与 da 同为锚定换算产物 */
+    ds?: [number, number][];
   };
 }
 
@@ -1155,11 +1159,12 @@ export function convertCharacterToRuntimePackage(
           graph: { context: 'performance', nodes: full.graphNodes },
         });
       }
-      // ---- 追随段：增量曲线烘焙 ----
-      // 源部件的全程窗轨道样本（运行时空间绝对位姿）逐帧算「滞后位姿 −
-      // 当前位姿 × 强度」（followDeltaAt，与编辑器实时取样同一公式），
-      // 烘成增量曲线挂到每个启用追随的动态实例上——默认集 parts 与各
-      // 服装集 __dynamic 全覆盖，同源同参的实例共享一份曲线对象。
+      // ---- 追随段：锚定增量曲线烘焙（甲：摆角 + 沿轴缩放） ----
+      // 连接点锚死：源部件轨道样本的平移增量不再整件平移跟随者，
+      // 而是按「跟随者自己的主轴方向 × 臂长」逐件换算成摆角 da 与
+      // 沿轴缩放 ds（followAnchoredDeltaAt，与编辑器实时落点同一
+      // 公式、同一尖端落点）。曲线因此逐跟随者一份（缓存键含跟随
+      // 者与臂长），不再同源同参共享。源静止时仍不产曲线。
       {
         const bags: { inst: RuntimeDynamicInstance; slotKey: string }[] = [];
         for (const p of parts) for (const d of p.dynamic ?? []) bags.push({ inst: d, slotKey: p.key });
@@ -1184,24 +1189,40 @@ export function convertCharacterToRuntimePackage(
             warnings.push(`追随：部件 ${slotKey} 的源部件「${fp.followSource}」不存在，未烘焙`);
             continue;
           }
+          // 跟随者自身样本（算主轴方向）与臂长（精灵件取代表图高 −
+          // plug y；参数化件由编辑器 plug 定义换算 size/2 + pivot）
+          const folNode = Object.values(character.nodes).find(
+            (n) => (n.slot?.slotKey ?? n.id) === slotKey);
+          const folSamples = folNode ? fullSamples.get(folNode.id) : undefined;
+          const folPart = parts.find((p) => p.key === slotKey);
+          let reach = 0;
+          if (folPart?.sprite) {
+            reach = Math.max(0, folPart.sprite.h - (folPart.sprite.plug ? folPart.sprite.plug[1] : folPart.sprite.h / 2));
+          } else if (folPart?.base) {
+            reach = Math.max(0, folPart.base.size[1] / 2 + folPart.base.pivot[1]);
+          }
           const delayFrames = Math.round(fp.followDelaySec * frameRate);
-          const cacheKey = `${fp.followSource}|${delayFrames}|${fp.followAmount}|${fp.followRotate}`;
+          const cacheKey = `${fp.followSource}|${delayFrames}|${fp.followAmount}|${fp.followRotate}|${slotKey}|${Math.round(reach * 10)}`;
           let curve = curveCache.get(cacheKey);
           if (curve === undefined) {
-            const dxPts: [number, number][] = [], dyPts: [number, number][] = [], daPts: [number, number][] = [];
+            const daPts: [number, number][] = [], dsPts: [number, number][] = [];
             for (let f = 0; f <= totalFrames; f++) {
               const cur = srcSamples[f];
               const lag = srcSamples[Math.max(0, f - delayFrames)];
               if (!cur || !lag) continue;
-              const d = followDeltaAt(cur, lag, fp.followAmount, fp.followRotate);
-              dxPts.push([f / totalFrames, d.dx]);
-              dyPts.push([f / totalFrames, d.dy]);
+              // 采样空间主轴：a 为跟随者自身样本角（x 同画布、y 取反、
+              // a = −画布角），u = (sin a, −cos a)
+              const fa = folSamples?.[f]?.a ?? 0;
+              const d = followAnchoredDeltaAt(cur, lag, fp.followAmount, fp.followRotate, Math.sin(fa), -Math.cos(fa), reach);
               daPts.push([f / totalFrames, d.da]);
+              dsPts.push([f / totalFrames, d.ds]);
             }
-            const keep = (pts: [number, number][], eps: number) =>
-              pts.every(([, v]) => Math.abs(v) < 1e-4) ? undefined : simplify(pts, eps);
-            const dx = keep(dxPts, 0.15), dy = keep(dyPts, 0.15), da = keep(daPts, 0.01);
-            curve = dx || dy || da ? { dx, dy, da } : undefined;
+            const keepDa = (pts: [number, number][]) =>
+              pts.every(([, v]) => Math.abs(v) < 1e-4) ? undefined : simplify(pts, 0.01);
+            const keepDs = (pts: [number, number][]) =>
+              pts.every(([, v]) => Math.abs(v - 1) < 1e-3) ? undefined : simplify(pts, 0.01);
+            const da = keepDa(daPts), ds = keepDs(dsPts);
+            curve = da || ds ? { da, ds } : undefined;
             curveCache.set(cacheKey, curve);
           }
           if (curve) inst.followCurve = curve;

@@ -146,13 +146,15 @@ export function followDeltaAt(
 
 /** 追随增量（锚定版，2026-10-26 用户拍板）：连接点（插头）锚死不动，
  * 只让远端滞后。原始平移增量 d 不再整体平移跟随者，而是换算成绕
- * 插头的摆角：取跟随者主轴单位向量 u（插头→远端方向，调用方按各自
- * 坐标系给出）与臂长 reach（插头到远端距离 px），让远端尖点转到
- * 「原位置 + d」所指的方向——摆角 θ = atan2(cross(u, d), reach +
- * dot(u, d))，半径保持 reach 不拉伸。垂直于轴向的拖拽全额变摆角；
- * 沿轴向的一份只影响方向角大小、不产生伸缩。源部件自身的角度滞后
- * （rotate 时）照旧叠加。返回 dx/dy 恒 0。reach ≤ 0 时只保留角度
- * 滞后（无从换算摆角）。 */
+ * 插头的摆角 + 沿轴缩放（甲：混合，用户拍板）：取跟随者主轴单位
+ * 向量 u（插头→远端方向，调用方按各自坐标系给出）与臂长 reach
+ * （插头到远端距离 px），把平移增量 d 分解为垂直/平行于主轴的两
+ * 份：垂直份全额变摆角 θ = atan2(cross(u, d), reach + dot(u, d))，
+ * 平行份变沿轴缩放 ds = hypot(reach + dot, cross) / reach——两者
+ * 合成后远端尖点恰好落在「插头 + reach·u + d」，与旧整件平移时
+ * 的尖端位置一致，只是连接点不再脱开。源部件自身的角度滞后
+ * （rotate 时）照旧叠加。返回 dx/dy 恒 0；reach ≤ 0 时只保留角度
+ * 滞后、ds = 1（无从换算）。 */
 export function followAnchoredDeltaAt(
   now: FollowPose,
   lag: FollowPose,
@@ -161,18 +163,20 @@ export function followAnchoredDeltaAt(
   ux: number,
   uy: number,
   reach: number,
-): { dx: number; dy: number; da: number } {
+): { dx: number; dy: number; da: number; ds: number } {
   const k = Math.max(0, Math.min(1, amount));
   const dx = (lag.x - now.x) * k;
   const dy = (lag.y - now.y) * k;
   const raw = lag.a - now.a;
   let da = rotate ? Math.atan2(Math.sin(raw), Math.cos(raw)) * k : 0;
+  let ds = 1;
   if (reach > 0 && (dx !== 0 || dy !== 0)) {
     const cross = ux * dy - uy * dx;
     const dot = ux * dx + uy * dy;
     da += Math.atan2(cross, reach + dot);
+    ds = Math.hypot(reach + dot, cross) / reach;
   }
-  return { dx: 0, dy: 0, da };
+  return { dx: 0, dy: 0, da, ds };
 }
 
 /** 发光选区来源：color = 按像素颜色取色；marked = 手动标记的像素掩码 */

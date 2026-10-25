@@ -2789,6 +2789,8 @@ function frame(now) {
         an.dx += followSampleAt(fc.dx, followU);
         an.dy += followSampleAt(fc.dy, followU);
         an.a += followSampleAt(fc.da, followU);
+        // 锚定版沿轴缩放（甲）：乘进 sy 通道（与透视缩短同为沿轴倍乘）
+        if (fc.ds) an.sy *= followSampleAt(fc.ds, followU);
       }
     }
     // 程序化动画（缺口 2）：与编辑器同口径叠加到位姿——平移 px、旋转
