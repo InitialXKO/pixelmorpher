@@ -15,7 +15,35 @@ import { makeToonFromSource, makeGradientMap } from './threejs-baker-sixpart';
 import { dirsForLatitude, latitudePitchRad, medianCut, nearestPaletteIndex } from './threejs-baker';
 import { rgbaToHexOrNull } from '../engine/utils';
 import type { PixelGrid, DirectionIndex } from '../unified-types';
-import type { ProcessedBone, ProcessedBoneDirection } from './skeleton-mapper';
+import type { ProcessedBone, ProcessedBoneDirection, ProcessedBoneLayered, ProcessedBoneLayer } from './skeleton-mapper';
+
+/** 手动烘焙结果：parts = 部件/组条目映射；layered 仅 bonePrefixSplit='layers' 时给出 */
+export interface ManualBakeResult {
+  parts: Map<number, ProcessedBone>;
+  layered?: ProcessedBoneLayered[];
+}
+
+/** 骨骼 ID 材质：aBone（局部骨骼下标 + 1）→ RG 16 位直出（与 sixpart 图层 ID 遍同风格） */
+function makeBoneIdMaterial16(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    vertexShader: `
+      attribute float aBone;
+      varying float vBone;
+      void main() {
+        vBone = aBone;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying float vBone;
+      void main() {
+        float v = vBone;
+        gl_FragColor = vec4(mod(v, 256.0) / 255.0, floor(v / 256.0) / 255.0, 0.0, 1.0);
+      }
+    `,
+    side: THREE.DoubleSide,
+  });
+}
 
 // ---- 网格清单（对话框勾选用） ----
 
@@ -59,7 +87,26 @@ export interface ManualPartSpec {
   droop?: boolean;
 }
 
+/** 骨骼名前缀词干：反复去掉尾部序号段（半角/全角数字 + 分隔符），如 右親指１→右親指、Arm_2→Arm、yb_0_1→yb */
+export function boneNameStem(name: string): string {
+  let s = name;
+  for (;;) {
+    const t = s.replace(/[\s._\-·]*[0-9０-９]+$/, '');
+    if (t === s || t === '') break;
+    s = t;
+  }
+  s = s.replace(/[\s._\-·]+$/, '');
+  return s || name;
+}
+
 export interface ManualBakeOptions {
+  /**
+   * 按骨骼前缀拆分（部件内再按主导骨骼名的词干分组）：
+   * 'none' 不拆；'parts' 前缀组成为独立部件（最大组留在原部件，其余组挂其下、
+   * 枢轴取组主导骨骼关节）；'layers' 前缀组作原部件的分层（与六部件图层模式同构）。
+   * 部件没有蒙皮骨骼数据时自动回落 'none'。
+   */
+  bonePrefixSplit?: 'none' | 'parts' | 'layers';
   /** PMX 导入的贴图文件表（zip 解包：路径→Blob）；仅 PMX 输入时用 */
   pmxTextures?: Map<string, Blob>;
   /** PMX 原味着色：开时颜色遍用参考版 NPR 着色（pmx-npr.ts），关时统一 toon 转换 */
@@ -78,6 +125,14 @@ export interface ManualBakeOptions {
 
 // ---- 静态网格数据（文件世界空间） ----
 
+/** 模型骨骼表条目（文件世界空间，绑定姿势） */
+export interface ManualModelBone {
+  name: string;
+  parentName: string | null;
+  /** 关节世界坐标 */
+  joint: { x: number; y: number; z: number };
+}
+
 interface StaticMesh {
   info: ManualMeshInfo;
   /** 世界空间顶点位置（已应用骨骼绑定姿势 + 节点世界变换） */
@@ -86,6 +141,10 @@ interface StaticMesh {
   index: Uint32Array | null;
   material: THREE.Material | THREE.Material[];
   groups: THREE.BufferGeometry['groups'];
+  /** 逐顶点主导骨骼（模型骨骼表下标，-1 = 无蒙皮）；仅蒙皮网格有 */
+  vertBones?: Int32Array;
+  /** 模型骨骼表（同模型的所有网格共享同一份） */
+  boneTable?: ManualModelBone[];
 }
 
 async function loadModel(input: string | ArrayBuffer, pmxTextures?: Map<string, Blob>): Promise<THREE.Group> {
@@ -98,6 +157,23 @@ function collectStaticMeshes(model: THREE.Object3D): { statics: StaticMesh[]; ha
   let hasBones = false;
   model.traverse((o) => {
     if ((o as THREE.Bone).isBone) hasBones = true;
+  });
+  // 模型骨骼表：名字 → 关节世界位/父骨骼名（骨骼前缀拆分的数据源）
+  const boneTable: ManualModelBone[] = [];
+  const boneObjToTableIdx = new Map<THREE.Object3D, number>();
+  model.traverse((o) => {
+    const b = o as THREE.Bone;
+    if (!b.isBone) return;
+    const wp = new THREE.Vector3();
+    b.getWorldPosition(wp);
+    let parentName: string | null = null;
+    let anc: THREE.Object3D | null = b.parent;
+    while (anc) {
+      if ((anc as THREE.Bone).isBone) { parentName = anc.name || null; break; }
+      anc = anc.parent;
+    }
+    boneObjToTableIdx.set(b, boneTable.length);
+    boneTable.push({ name: b.name || `bone_${boneTable.length}`, parentName, joint: { x: wp.x, y: wp.y, z: wp.z } });
   });
 
   const statics: StaticMesh[] = [];
@@ -115,11 +191,27 @@ function collectStaticMeshes(model: THREE.Object3D): { statics: StaticMesh[]; ha
     const positions = new Float32Array(vCount * 3);
     const v = new THREE.Vector3();
     const sm = mesh as THREE.SkinnedMesh;
+    let vertBones: Int32Array | undefined;
     if (sm.isSkinnedMesh && geo.getAttribute('skinIndex') && sm.skeleton) {
       // 绑定姿势：boneMatrix 蒙皮后再应用节点世界变换（与六部件静态烘焙同口径）
       sm.skeleton.update();
       const skinIndex = geo.getAttribute('skinIndex') as THREE.BufferAttribute;
       const skinWeight = geo.getAttribute('skinWeight') as THREE.BufferAttribute;
+      // 逐顶点主导骨骼（最大权重）→ 模型骨骼表下标；骨骼前缀拆分用
+      vertBones = new Int32Array(vCount).fill(-1);
+      for (let i = 0; i < vCount; i++) {
+        let bestW = 0;
+        let bestJi = -1;
+        for (let j = 0; j < 4; j++) {
+          const w = skinWeight.getComponent(i, j);
+          if (w > bestW) { bestW = w; bestJi = Math.round(skinIndex.getComponent(i, j)); }
+        }
+        if (bestJi >= 0) {
+          const boneObj = sm.skeleton.bones[bestJi];
+          const ti = boneObj ? boneObjToTableIdx.get(boneObj) : undefined;
+          if (ti !== undefined) vertBones[i] = ti;
+        }
+      }
       const bm = sm.skeleton.boneMatrices;
       const m = new THREE.Matrix4();
       for (let i = 0; i < vCount; i++) {
@@ -183,6 +275,8 @@ function collectStaticMeshes(model: THREE.Object3D): { statics: StaticMesh[]; ha
       index,
       material: mesh.material as THREE.Material | THREE.Material[],
       groups: geo.groups,
+      vertBones,
+      boneTable: vertBones ? boneTable : undefined,
     });
   });
   return { statics, hasBones };
@@ -213,6 +307,17 @@ export interface PreparedManualPartMesh {
   index: Uint32Array | null;
   material: THREE.Material | THREE.Material[];
   groups: THREE.BufferGeometry['groups'];
+  /** 逐顶点主导骨骼（部件骨骼表下标，-1 = 无）；仅蒙皮网格有 */
+  vertBones?: Int32Array;
+}
+
+/** 部件骨骼表条目（归一化空间，关节已随部件几何一同做过朝向调整） */
+export interface PreparedManualBone {
+  name: string;
+  parentName: string | null;
+  jointNorm: { x: number; y: number; z: number };
+  /** 本部件内引用到这根骨骼的顶点数 */
+  vertexCount: number;
 }
 
 export interface PreparedManualPart {
@@ -220,6 +325,8 @@ export interface PreparedManualPart {
   meshes: PreparedManualPartMesh[];
   /** 枢轴（归一化空间） */
   pivotNorm: { x: number; y: number; z: number };
+  /** 本部件用到的骨骼（vertBones 的下标空间）；无蒙皮数据为空数组 */
+  bones: PreparedManualBone[];
   /** 取景：球心（归一化空间）+ 相机半宽 */
   frameCenter: { x: number; y: number; z: number };
   half: number;
@@ -434,10 +541,14 @@ export function prepareManualParts(
   interface RawManualPart {
     meshes: PreparedManualPartMesh[];
     pivotNorm: { x: number; y: number; z: number };
+    bones: PreparedManualBone[];
   }
   const rawParts: RawManualPart[] = specs.map((spec) => {
     const meshes: PreparedManualPartMesh[] = [];
     const worldBox = new THREE.Box3();
+    // 部件骨骼表：本部件网格引用到的模型骨骼（首次出现序），vertBones 重映射到此表
+    const partBones: PreparedManualBone[] = [];
+    const localBoneOf = new Map<number, number>();
     for (const mi of spec.meshIndices) {
       const sm = byMeshIndex.get(mi);
       if (!sm) throw new Error(`手动拆分：找不到网格 ${mi}`);
@@ -448,12 +559,32 @@ export function prepareManualParts(
         tv.set(sm.positions[i], sm.positions[i + 1], sm.positions[i + 2]);
         worldBox.expandByPoint(tv);
       }
+      let localVertBones: Int32Array | undefined;
+      if (sm.vertBones && sm.boneTable) {
+        const table = sm.boneTable;
+        localVertBones = new Int32Array(sm.vertBones.length);
+        for (let vi = 0; vi < sm.vertBones.length; vi++) {
+          const mb = sm.vertBones[vi];
+          if (mb < 0) { localVertBones[vi] = -1; continue; }
+          let li = localBoneOf.get(mb);
+          if (li === undefined) {
+            const info = table[mb];
+            const jn = norm(info.joint.x, info.joint.y, info.joint.z);
+            li = partBones.length;
+            localBoneOf.set(mb, li);
+            partBones.push({ name: info.name, parentName: info.parentName, jointNorm: jn, vertexCount: 0 });
+          }
+          localVertBones[vi] = li;
+          partBones[li].vertexCount++;
+        }
+      }
       meshes.push({
         positions,
         uvs: sm.uvs,
         index: sm.index,
         material: sm.material,
         groups: sm.groups,
+        vertBones: localVertBones,
       });
     }
     // 枢轴解析（世界坐标 → 归一化）
@@ -469,7 +600,7 @@ export function prepareManualParts(
       if (!ps) throw new Error(`手动拆分：找不到枢轴网格 ${pivotSpec.meshIndex}`);
       pivotWorld = ps.info.pivot;
     }
-    return { meshes, pivotNorm: norm(pivotWorld.x, pivotWorld.y, pivotWorld.z) };
+    return { meshes, pivotNorm: norm(pivotWorld.x, pivotWorld.y, pivotWorld.z), bones: partBones };
   });
 
   // 朝向调整（垂臂，与 sixpart droopArmPose 同语义）：按层级自上而下——先应用祖先
@@ -549,10 +680,20 @@ export function prepareManualParts(
       }
     }
     const partSphere = box.getBoundingSphere(new THREE.Sphere());
+    // 骨骼关节随本部件几何一同施加朝向调整序列（与顶点同变换，组枢轴才对得上）
+    const bones = raw.bones.map((b) => {
+      const p = { ...b.jointNorm };
+      for (const xf of seqOf[specIdx]) {
+        pv.set(p.x - xf.px, p.y - xf.py, p.z - xf.pz).applyQuaternion(xf.q);
+        p.x = pv.x + xf.px; p.y = pv.y + xf.py; p.z = pv.z + xf.pz;
+      }
+      return { ...b, jointNorm: p };
+    });
     return {
       spec,
       meshes: raw.meshes,
       pivotNorm: raw.pivotNorm,
+      bones,
       frameCenter: { x: partSphere.center.x, y: partSphere.center.y, z: partSphere.center.z },
       half: Math.max(0.02, partSphere.radius * partPadding),
       parentSpecIndex: parentIndices[specIdx],
@@ -578,12 +719,15 @@ function buildDirection(
   jy: number,
   half: number,
   paletteSize: number,
+  mask?: Uint8Array | null,
 ): ProcessedBoneDirection | null {
   const W = size, H = size;
+  const opaque = (p: number): boolean =>
+    colorPixels[p * 4 + 3] > 8 && (!mask || mask[p] === 1);
   let minX = W, maxX = -1, minY = H, maxY = -1, count = 0;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      if (colorPixels[(y * W + x) * 4 + 3] > 8) {
+      if (opaque(y * W + x)) {
         count++;
         if (x < minX) minX = x;
         if (x > maxX) maxX = x;
@@ -609,7 +753,7 @@ function buildDirection(
     for (let x = 0; x < cw; x++) {
       const so = ((y0 + y) * W + (x0 + x)) * 4;
       const do_ = (y * cw + x) * 4;
-      if (colorPixels[so + 3] <= 8) { crop[do_ + 3] = 0; continue; }
+      if (!opaque((y0 + y) * W + (x0 + x))) { crop[do_ + 3] = 0; continue; }
       crop[do_] = colorPixels[so];
       crop[do_ + 1] = colorPixels[so + 1];
       crop[do_ + 2] = colorPixels[so + 2];
@@ -666,7 +810,7 @@ export async function bakeManualParts(
   input: string | ArrayBuffer,
   specs: ManualPartSpec[],
   options: ManualBakeOptions = {},
-): Promise<Map<number, ProcessedBone>> {
+): Promise<ManualBakeResult> {
   const size = options.size ?? 128;
   const paletteSize = options.paletteSize ?? 16;
   const toonSteps = options.toonSteps ?? 3;
@@ -723,6 +867,10 @@ export async function bakeManualParts(
     let done = 0;
     const projV = new THREE.Vector3();
 
+    const prefixSplitMode = options.bonePrefixSplit ?? 'none';
+    const layeredParts: ProcessedBoneLayered[] = [];
+    let nextGroupBoneIndex = prepared.parts.length + 1;
+
     for (let pi = 0; pi < prepared.parts.length; pi++) {
       const part = prepared.parts[pi];
       if (part.droopAngleDeg > 0) {
@@ -756,6 +904,76 @@ export async function bakeManualParts(
       camera.lookAt(fc.x, fc.y, fc.z);
       camera.updateMatrixWorld(true);
 
+      // ---- 按骨骼前缀拆分（部件内按主导骨骼词干分组）----
+      const splitMode = prefixSplitMode;
+      interface StemGroup {
+        stem: string;
+        boneIdxs: number[];
+        vertTotal: number;
+        domBone: number;
+        dirs: ProcessedBoneDirection[];
+        pixelTotal: number;
+      }
+      let stemGroups: StemGroup[] = [];
+      let baseGroupIdx = -1;
+      let boneToGroup: Int32Array | null = null;
+      const soupMeshes: THREE.Mesh[] = [];
+      if (splitMode !== 'none' && part.bones.length > 0) {
+        const byStem = new Map<string, StemGroup>();
+        boneToGroup = new Int32Array(part.bones.length).fill(-1);
+        part.bones.forEach((b, bi) => {
+          const stem = boneNameStem(b.name);
+          let g = byStem.get(stem);
+          if (!g) {
+            g = { stem, boneIdxs: [], vertTotal: 0, domBone: bi, dirs: [], pixelTotal: 0 };
+            byStem.set(stem, g);
+            stemGroups.push(g);
+          }
+          g.boneIdxs.push(bi);
+          g.vertTotal += b.vertexCount;
+          if (b.vertexCount > part.bones[g.domBone].vertexCount) g.domBone = bi;
+          boneToGroup![bi] = stemGroups.indexOf(g);
+        });
+        if (stemGroups.length < 2) {
+          stemGroups = [];
+          boneToGroup = null;
+        } else {
+          baseGroupIdx = stemGroups.reduce((bi, g, gi) => (g.vertTotal > stemGroups[bi].vertTotal ? gi : bi), 0);
+          // 骨骼 ID 遍几何：逐三角形展开（soup），aBone = 局部骨骼下标 + 1
+          const idMat = makeBoneIdMaterial16();
+          disposables.push(idMat);
+          for (const pm of part.meshes) {
+            if (!pm.vertBones) continue;
+            const pos = pm.positions;
+            const triCount = pm.index ? pm.index.length / 3 : pos.length / 9;
+            const soupPos = new Float32Array(triCount * 9);
+            const soupBone = new Float32Array(triCount * 3);
+            for (let t = 0; t < triCount; t++) {
+              for (let k = 0; k < 3; k++) {
+                const vi = pm.index ? pm.index[t * 3 + k] : t * 3 + k;
+                soupPos.set([pos[vi * 3], pos[vi * 3 + 1], pos[vi * 3 + 2]], (t * 3 + k) * 3);
+                soupBone[t * 3 + k] = pm.vertBones[vi] >= 0 ? pm.vertBones[vi] + 1 : 0;
+              }
+            }
+            const sgeo = new THREE.BufferGeometry();
+            sgeo.setAttribute('position', new THREE.BufferAttribute(soupPos, 3));
+            sgeo.setAttribute('aBone', new THREE.BufferAttribute(soupBone, 1));
+            const smesh = new THREE.Mesh(sgeo, idMat);
+            smesh.frustumCulled = false;
+            smesh.visible = false;
+            rotGroup.add(smesh);
+            soupMeshes.push(smesh);
+            disposables.push(sgeo);
+          }
+          if (soupMeshes.length === 0) {
+            stemGroups = [];
+            boneToGroup = null;
+          }
+        }
+      }
+      const splitActive = stemGroups.length >= 2 && boneToGroup !== null;
+      const colorMeshes = rotGroup.children.filter((c) => !soupMeshes.includes(c as THREE.Mesh));
+
       const directions: ProcessedBoneDirection[] = [];
       rotGroup.rotation.order = 'YXZ';
       for (const { lat, d } of frames) {
@@ -774,10 +992,57 @@ export async function bakeManualParts(
         renderer.render(scene, camera);
         const colorPixels = readFlipped();
         renderer.setRenderTarget(null);
-        const dir = buildDirection(colorPixels, size, ((d + 6) % 8), jx, jy, part.half, paletteSize);
-        if (dir) {
-          dir.latitude = lat;
-          directions.push(dir);
+        if (!splitActive) {
+          const dir = buildDirection(colorPixels, size, ((d + 6) % 8), jx, jy, part.half, paletteSize);
+          if (dir) {
+            dir.latitude = lat;
+            directions.push(dir);
+          }
+        } else {
+          // 骨骼 ID 遍（同帧同变换）：颜色网格藏起、ID 汤网格显示
+          for (const m of colorMeshes) m.visible = false;
+          for (const m of soupMeshes) m.visible = true;
+          renderer.setRenderTarget(rt);
+          renderer.clear(true, true, false);
+          renderer.render(scene, camera);
+          const bonePixels = readFlipped();
+          renderer.setRenderTarget(null);
+          for (const m of soupMeshes) m.visible = false;
+          for (const m of colorMeshes) m.visible = true;
+          const npix = size * size;
+          const masks = stemGroups.map(() => new Uint8Array(npix));
+          for (let p = 0; p < npix; p++) {
+            if (colorPixels[p * 4 + 3] <= 8) continue;
+            const v = bonePixels[p * 4] | (bonePixels[p * 4 + 1] << 8);
+            const lb = v - 1;
+            const gi = lb >= 0 && boneToGroup![lb] >= 0 ? boneToGroup![lb] : baseGroupIdx;
+            masks[gi][p] = 1;
+            stemGroups[gi].pixelTotal++;
+          }
+          const dispDir = ((d + 6) % 8) as DirectionIndex;
+          const baseDir = buildDirection(colorPixels, size, dispDir, jx, jy, part.half, paletteSize, masks[baseGroupIdx]);
+          if (baseDir) {
+            baseDir.latitude = lat;
+            directions.push(baseDir);
+          }
+          stemGroups.forEach((g, gi) => {
+            if (gi === baseGroupIdx) {
+              if (baseDir) g.dirs.push(baseDir);
+              return;
+            }
+            let gjx = jx, gjy = jy;
+            if (splitMode === 'parts') {
+              const jn = part.bones[g.domBone].jointNorm;
+              projV.set(jn.x, jn.y, jn.z).applyMatrix4(rotGroup.matrixWorld).project(camera);
+              gjx = ((projV.x + 1) / 2) * size;
+              gjy = ((1 - projV.y) / 2) * size;
+            }
+            const gd = buildDirection(colorPixels, size, dispDir, gjx, gjy, part.half, paletteSize, masks[gi]);
+            if (gd) {
+              gd.latitude = lat;
+              g.dirs.push(gd);
+            }
+          });
         }
         onProgress?.(++done, total, `${part.spec.name} ${lat !== 0 ? `纬度 ${lat}° ` : ''}${d * 45}°`);
         await new Promise((r) => setTimeout(r, 0));
@@ -786,20 +1051,81 @@ export async function bakeManualParts(
       scene.remove(rotGroup);
       disposables.forEach((d) => d.dispose());
 
+      const worldToPixels = (size / 2) / part.half;
+      const parentIndex = part.parentSpecIndex >= 0 ? part.parentSpecIndex + 1 : 0;
       result.set(pi + 1, {
         boneIndex: pi + 1,
         boneName: part.spec.name,
-        parentIndex: part.parentSpecIndex >= 0 ? part.parentSpecIndex + 1 : 0,
+        parentIndex,
         directions,
         joint3D: part.pivotNorm,
         bakeWidth: size,
-        worldToPixels: (size / 2) / part.half,
+        worldToPixels,
       });
+      if (splitActive && splitMode === 'parts') {
+        // 甲：非基底组成为独立部件。先分配全部组条目下标，再按骨骼链定父
+        const entryOfGroup = new Map<number, number>();
+        stemGroups.forEach((g, gi) => {
+          if (gi !== baseGroupIdx && g.dirs.length > 0) entryOfGroup.set(gi, nextGroupBoneIndex++);
+        });
+        stemGroups.forEach((g, gi) => {
+          const entryIdx = entryOfGroup.get(gi);
+          if (entryIdx === undefined) return;
+          let parentEntry = pi + 1;
+          const dom = part.bones[g.domBone];
+          const seenNames = new Set<string>();
+          let ancName = dom.parentName;
+          while (ancName && !seenNames.has(ancName)) {
+            seenNames.add(ancName);
+            const ancBoneIdx = part.bones.findIndex((b) => b.name === ancName);
+            if (ancBoneIdx < 0) break;
+            const agi = boneToGroup![ancBoneIdx];
+            if (agi === baseGroupIdx) { parentEntry = pi + 1; break; }
+            const ancEntry = entryOfGroup.get(agi);
+            if (ancEntry !== undefined) { parentEntry = ancEntry; break; }
+            ancName = part.bones[ancBoneIdx].parentName;
+          }
+          result.set(entryIdx, {
+            boneIndex: entryIdx,
+            boneName: g.stem,
+            parentIndex: parentEntry,
+            directions: g.dirs,
+            joint3D: part.bones[g.domBone].jointNorm,
+            bakeWidth: size,
+            worldToPixels,
+          });
+        });
+      } else if (splitMode === 'layers') {
+        const layers: ProcessedBoneLayer[] = [...stemGroups]
+          .sort((a, b) => b.pixelTotal - a.pixelTotal)
+          .filter((g) => g.dirs.length > 0)
+          .map((g, li) => ({
+            layerIndex: li,
+            key: g.stem,
+            label: g.stem,
+            rank: li,
+            pixelCount: g.pixelTotal,
+            directions: g.dirs,
+          }));
+        // 分层条目的 directions 与装配口径一致：取像素最多层（基底）——流式构建时
+        // 基底按顶点数选（供部件条目预览），这里按像素数对齐最终基底
+        const baseLayer = layers[0];
+        layeredParts.push({
+          boneIndex: pi + 1,
+          boneName: part.spec.name,
+          parentIndex,
+          directions: baseLayer ? baseLayer.directions : directions,
+          joint3D: part.pivotNorm,
+          bakeWidth: size,
+          worldToPixels,
+          layers,
+        });
+      }
     }
 
     rt.dispose();
     gradientMap.dispose();
-    return result;
+    return { parts: result, layered: prefixSplitMode === 'layers' ? layeredParts : undefined };
   } finally {
     renderer.dispose();
     try { renderer.forceContextLoss(); } catch { /* noop */ }

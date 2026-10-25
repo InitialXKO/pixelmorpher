@@ -804,6 +804,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [paletteSize, setPaletteSize] = useState(16);
   const [weightThreshold, setWeightThreshold] = useState(0.2);
   const [absorbUnassigned, setAbsorbUnassigned] = useState(false);
+  const [manualPrefixSplit, setManualPrefixSplit] = useState<'none' | 'parts' | 'layers'>('none');
   const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
   /** 烘焙模式：twopass=整模 ID 双遍（16 遍），sixpart=六部件（96 遍） */
   const [bakeMode, setBakeMode] = useState<'twopass' | 'sixpart' | 'manual' | 'layer'>('sixpart');
@@ -1235,13 +1236,15 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         size,
         paletteSize,
         absorbUnassigned,
+        bonePrefixSplit: manualPrefixSplit,
         pmxTextures: pmxTexturesRef.current ?? undefined,
         usePmxNpr: pmxFlavor,
         extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
         onProgress: (done, total) => setProgress(`${done}/${total} 遍`),
       });
       setTotalMs(performance.now() - t0);
-      setProcessed(proc);
+      setProcessed(proc.parts);
+      setProcessedLayered(proc.layered ? new Map(proc.layered.map((l) => [l.boneIndex, l])) : null);
       setProgress('');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1249,7 +1252,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [manualCatalog, manualParts, resolveInput, size, paletteSize, absorbUnassigned, fullAngle, pmxFlavor]);
+  }, [manualCatalog, manualParts, resolveInput, size, paletteSize, absorbUnassigned, manualPrefixSplit, fullAngle, pmxFlavor]);
 
   /** 按当前模式分发烘焙 */
   const handleBakeDispatch = useCallback(() => {
@@ -1553,6 +1556,20 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             <label className="flex cursor-pointer items-center gap-1" title="不属于任何部件的内容（六部件：主导骨骼无部件的三角形；手动：未分配的网格）按邻近关系归入相邻部件，而不是直接丢弃">
               <input type="checkbox" checked={absorbUnassigned} onChange={(e) => setAbsorbUnassigned(e.target.checked)} />
               无归属归入邻近部件
+            </label>
+            )}
+            {bakeMode === 'manual' && (
+            <label className="flex items-center gap-1" title="部件内的像素再按主导骨骼名的前缀（去掉尾部序号）分组。需要模型带蒙皮；无蒙皮的部件自动不拆">
+              按骨骼前缀拆分
+              <select
+                value={manualPrefixSplit}
+                onChange={(e) => setManualPrefixSplit(e.target.value as 'none' | 'parts' | 'layers')}
+                className="h-6 rounded border border-[#3a3a5a] bg-[#1a1a30] px-1 text-[11px] text-gray-300"
+              >
+                <option value="none">不拆分</option>
+                <option value="parts">拆成独立部件（甲）</option>
+                <option value="layers">分层挂部件下（乙）</option>
+              </select>
             </label>
             )}
             {isMmd && (
