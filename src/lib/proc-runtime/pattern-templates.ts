@@ -220,6 +220,9 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
   },
   {
     id: 'wood', name: '木纹', cluster: '自然',
+    // outputs.main = 扭曲后的纹线场（被 ref 组装时用，如木地板；
+    // 缺省 main 会落到首条写出的 in 场 = 常量，组装即退化）
+    outputs: { main: 'w1' },
     params: [
       P('grain', '纹距', 2.5, 6, 0.5, 3.5), P('warp', '扭曲', 0, 6, 0.5, 3),
       P('knots', '结眼密度', 0, 1, 0.1, 0.4),
@@ -693,6 +696,68 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       w('dia', 3, { at: 0 }),
       w('dia', 0, { bump: { hi: 4, mid: 3, lo: 2 } }),
       w('gr', 4, { at: 0.12 }),
+    ]),
+  },
+  // 批次 1 · C 组（Pixel Composer 映射）：木地板 = 木纹 + 面板分格组装
+  {
+    id: 'wood-floor', name: '木地板', cluster: '建筑',
+    params: [P('cw', '板宽', 14, 44, 1, 26), P('grain', '纹距', 2.5, 6, 0.5, 3.5)],
+    graph: graph([
+      ...baseIn(3),
+      n('wd', 'ref', undefined, { ref: 'wood', grain: '$grain', warp: 3, knots: 0.25 }),
+      n('pl', 'ref', undefined, { ref: 'part-panel', cw: '$cw' }),
+    ], [
+      w('in', 3, { at: 0.5 }),
+      w('wd', 2, { at: 0.55 }),
+      // 分格线场（levelBand）峰值约 0.2–0.4，阈值须压低才画得出
+      w('pl', 0, { at: 0.15 }),
+    ]),
+  },
+  // 星空：高频噪声阈值成星点（像素尺度下单像素星即正解），两层亮度
+  {
+    id: 'starfield', name: '星空', cluster: '自然',
+    params: [P('density', '星密度', 0.85, 0.98, 0.01, 0.93), P('seed', '种子', 0, 99, 1, 7)],
+    graph: graph([
+      ...baseIn(1),
+      n('nz1', 'noise', undefined, { f: 0.85, seed: '$seed' }),
+      n('st1', 'threshold', { in: 'nz1' }, { at: '$density', soft: 0.02 }),
+      n('nz2', 'noise', undefined, { f: 0.45, seed: 31 }),
+      n('st2', 'threshold', { in: 'nz2' }, { at: 0.965, soft: 0.02 }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('st1', 3, { at: 0.5 }),
+      w('st2', 4, { at: 0.55 }),
+    ]),
+  },
+  // 点阵：均匀圆点阵（ tonal 半调需「以场调制单元尺寸」通道，现有算子无此口）
+  {
+    id: 'dot-matrix', name: '点阵', cluster: '重复',
+    params: [P('cw', '点距', 4, 12, 0.5, 6), P('gap', '点径间隙', 0.2, 2.5, 0.1, 0.9)],
+    graph: graph([
+      ...baseIn(2),
+      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 5 }),
+      n('cs', 'cellShape', undefined, { kind: 'circle', gap: '$gap' }),
+      n('edge', 'levelBand', { in: 'rep' }, { level: 0, w: 0.7 }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('rep', 3, { at: 0.5 }),
+      w('edge', 0, { at: 0.4 }),
+    ]),
+  },
+  // 焦散纹（近似）：双层 Voronoi 边场叠成的网状亮纹，无专用焦散噪声
+  {
+    id: 'caustics', name: '焦散纹（近似）', cluster: '自然',
+    params: [P('scale', '胞大小', 3, 10, 0.5, 5.5), P('seed', '种子', 0, 99, 1, 13)],
+    graph: graph([
+      ...baseIn(1),
+      n('v1', 'voronoi', undefined, { f: '$scale', seed: '$seed', mode: 'edge' }),
+      n('v2', 'voronoi', undefined, { f: 7.5, seed: 47, mode: 'edge' }),
+      n('web', 'max', { a: 'v1', b: 'v2' }),
+      n('glow', 'remap', { in: 'web' }, { lo: 0.35, hi: 1, gamma: 1.6, steps: 0 }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('glow', 3, { at: 0.55 }),
+      w('v1', 4, { at: 0.5 }),
     ]),
   },
   {

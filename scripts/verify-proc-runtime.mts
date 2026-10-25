@@ -2693,4 +2693,65 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('AE6 参数变化指纹必变', bake2.record.fingerprint !== bake.record.fingerprint);
 }
 
+// ---------- AF) 批次 1（Pixel Composer 映射 A/B/C 组） ----------
+{
+  const LE7 = await import('../src/lib/library-entries');
+  const DE7 = await import('../src/lib/dynamic-expand');
+  const ex7 = (id: string) => DE7.expandDynamicEntry(LE7.BUILTIN_INDEX, id, 1);
+  // AF1 A 组叶子展开与关键参数
+  const ff = ex7('dyn-fireflies');
+  check('AF1 萤火虫 = 低速长命发射 + 慢脉冲辉光同叶', !!ff.params && ff.errors.length === 0
+    && ff.params.emitEnabled && ff.params.glowEnabled && ff.params.life === 4 && ff.params.glowHz === 0.5);
+  const splash = ex7('dyn-splash');
+  check('AF1b 水花飞溅（近似）：上抛 + 负浮力 + 短命', !!splash.params
+    && splash.params.directionDeg === 270 && splash.params.buoy === -30 && splash.params.life === 0.55);
+  const beam = ex7('dyn-glow-beam');
+  check('AF1c 光束辉光 = 星形满伸长（2.5 为系统上限）', !!beam.params && beam.params.glowShape === 'star'
+    && beam.params.glowStarReach === 2.5);
+  // AF2 B 组父模式展开
+  const aura = ex7('dyn-aura');
+  check('AF2 灵气光环 = 辉光 + 发射 + 胀缩调制联动', !!aura.params && aura.errors.length === 0
+    && aura.params.glowEnabled && aura.params.emitEnabled && aura.params.linkToDeform === 0.5);
+  const lvl = ex7('dyn-levelup');
+  check('AF2b 升级光效：火星覆盖（金色/高率）+ 星芒辉光共存', !!lvl.params && lvl.errors.length === 0
+    && lvl.params.color === '#ffe066' && lvl.params.rate === 26 && lvl.params.glowEnabled);
+  const thunder = ex7('dyn-thunderstorm');
+  check('AF2c 雷暴 = 雨 + 频闪辉光（7Hz）+ 寒霜着色', !!thunder.params && thunder.errors.length === 0
+    && thunder.params.glowHz === 7 && thunder.params.emitEnabled);
+  const fountain = ex7('dyn-fountain');
+  const waterfall = ex7('dyn-waterfall');
+  check('AF2d 喷泉/瀑布展开（覆盖生效）', !!fountain.params && fountain.errors.length === 0
+    && fountain.params.rate === 36 && fountain.params.speed === 9
+    && !!waterfall.params && waterfall.params.rate === 55 && waterfall.params.speed === 20);
+  // AF3 C 组表面模板：存在 + 烘焙行为
+  const baker7 = createSurfaceBaker();
+  const shape7 = { kind: 'rect', size: [40, 32] as [number, number], roundness: 0.15 };
+  const { expandSurfaceGraph: expG7, subgraphLibraryOf: subG7 } = await import('../src/lib/proc-runtime/graph-expand');
+  const lib7 = subG7(LE7.surfaceLibEntriesOf(LE7.allLibraryEntries()));
+  const bake7 = (id: string) => {
+    const t = PATTERN_TEMPLATES.find((x) => x.id === id)!;
+    const g = expG7(instantiatePattern(t), lib7).graph;
+    return baker7.compileTileDAG(shape7, g);
+  };
+  const tiers7 = (data: Uint8Array) => {
+    const s = new Set<number>();
+    for (let i = 0; i < data.length; i += 4) s.add(data[i]);
+    return s;
+  };
+  const woodT = bake7('wood');
+  const floorT = bake7('wood-floor');
+  check('AF3 木地板 ≠ 木纹（分格线生效）', !Buffer.from(woodT.data).equals(Buffer.from(floorT.data))
+    && tiers7(floorT.data).has(0));
+  const starT = bake7('starfield');
+  let starBright = 0;
+  for (let i = 0; i < starT.data.length; i += 4) if (starT.data[i] >= 3) starBright++;
+  const starTotal = starT.data.length / 4;
+  check('AF3b 星空：亮星稀疏（>0 且 <30%）且有两层亮度', starBright > 0 && starBright / starTotal < 0.3
+    && tiers7(starT.data).has(3) && tiers7(starT.data).has(4));
+  const dotT = bake7('dot-matrix');
+  check('AF3c 点阵：圆点档 3 出现且非均匀', tiers7(dotT.data).has(3) && tiers7(dotT.data).size >= 3);
+  const cauT = bake7('caustics');
+  check('AF3d 焦散纹（近似）：网状亮纹档出现且非均匀', tiers7(cauT.data).has(3) && tiers7(cauT.data).size >= 3);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

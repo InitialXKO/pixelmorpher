@@ -433,6 +433,82 @@ function buildBuiltinEntries(): LibraryEntry[] {
     ], [
       { type: 'followParams', leader: 1, follower: 0, keys: ['emitEnabled'] },
     ]),
+    // 批次 1 · A 组（Pixel Composer 映射，现成段拼装、零新能力）
+    leaf('dyn-fireflies', '萤火虫', '粒子', {
+      emitEnabled: true, source: 'inside', rate: 5, speed: 0.7, directionDeg: 270,
+      life: 4, sizeStart: 1.5, sizeEnd: 1, rise: 2, turbulence: 22,
+      color: '#d8ffa8', alpha: 0.8, spreadDeg: 80, layer: 'front',
+      glowEnabled: true, glowColor: '#c4ff7a', glowStrength: 0.7, glowHz: 0.5, glowPhase: 0,
+      glowHalo: 2, glowShape: 'circle', glowPick: '#d8ffa8', glowTolerance: 0.2,
+    }),
+    leaf('dyn-dust', '漂浮尘埃', '粒子', {
+      emitEnabled: true, source: 'inside', rate: 6, speed: 0.4, directionDeg: 270,
+      life: 5, sizeStart: 1, sizeEnd: 1.5, rise: 1, turbulence: 6,
+      color: '#e8e4da', alpha: 0.18, spreadDeg: 40, layer: 'both',
+    }),
+    // 水花飞溅（近似）：上抛后靠负浮力回落、短生命截断，不做真重力弧线
+    leaf('dyn-splash', '水花飞溅', '粒子', {
+      emitEnabled: true, source: 'contour-top', rate: 26, speed: 7, directionDeg: 270,
+      life: 0.55, sizeStart: 1.5, sizeEnd: 0.5, buoy: -30, turbulence: 4,
+      color: '#bfe8ff', alpha: 0.8, spreadDeg: 35,
+    }),
+    leaf('dyn-leaves', '落叶', '粒子', {
+      emitEnabled: true, source: 'contour-top', rate: 8, speed: 2.5, directionDeg: 90,
+      life: 3.6, sizeStart: 2.5, sizeEnd: 2, rise: -1, turbulence: 16,
+      color: '#d9a441', alpha: 0.9, spreadDeg: 55,
+      deformEnabled: true, squashY: 0.97, stretchX: 1.03, deformHz: 0.9, deformPhase: 0,
+    }),
+    leaf('dyn-glow-beam', '光束辉光', '发光', {
+      glowEnabled: true, glowColor: '#ffeec2', glowStrength: 1.15, glowHz: 1.2, glowPhase: 0,
+      glowHalo: 4, glowShape: 'star', glowStarReach: 2.5, glowAngleDeg: 0,
+      glowPick: '#fff2b0', glowTolerance: 0.12,
+    }),
+    leaf('dyn-glow-flash', '频闪辉光', '发光', {
+      glowEnabled: true, glowColor: '#e8f1ff', glowStrength: 1.5, glowHz: 7, glowPhase: 0,
+      glowHalo: 5, glowShape: 'circle', glowPick: '#cfe4ff', glowTolerance: 0.2,
+    }),
+    // 批次 1 · B 组（父模式：单发射/单发光折叠口径内组合）
+    // 灵气光环：辉光呼吸模板自带 emitEnabled=false（单用时纯辉光），
+    // 会压掉发射——发射侧须用显式写下 emitEnabled 的叶子（火星换
+    // 星光参数：覆盖只许动其参数口内的键）+ 跟随边裁决（同例）
+    parent('dyn-aura', '灵气光环', [
+      { entry: 'dyn-glow-breath', version: 1 },
+      { entry: 'dyn-ember', version: 1, overrides: {
+        source: 'inside', rate: 8, speed: 0.5, directionDeg: 270, life: 0.7,
+        sizeStart: 1, sizeEnd: 2, rise: 0, turbulence: 0,
+        color: '#ffe9a0', alpha: 0.85, spreadDeg: 60,
+      } },
+      { entry: 'dyn-swell', version: 1 },
+    ], [
+      { type: 'followParams', leader: 1, follower: 0, keys: ['emitEnabled'] },
+      { type: 'modulate', fromChild: 2, from: 'deformAmount', toChild: 1, toKey: 'rate', depth: 0.5 },
+      { type: 'phase', baseChild: 2, offsets: { 0: 0.3 } },
+    ]),
+    // 升级光效：调研原案的「发射率→辉光强度」调制边在 v1 无通道，
+    // 以相位边错开辉光与胀缩代替（强度联动待配合边扩围）
+    parent('dyn-levelup', '升级光效', [
+      { entry: 'dyn-ember', version: 1, overrides: { color: '#ffe066', rate: 26, speed: 5, rise: 20 } },
+      { entry: 'dyn-glow-star', version: 1 },
+      { entry: 'dyn-swell', version: 1 },
+    ], [
+      { type: 'phase', baseChild: 2, offsets: { 1: 0.2 } },
+    ]),
+    parent('dyn-thunderstorm', '雷暴', [
+      { entry: 'dyn-rain', version: 1 },
+      { entry: 'dyn-glow-flash', version: 1 },
+      { entry: 'dyn-tint-frost', version: 1 },
+    ], [
+      { type: 'followParams', leader: 2, follower: 0, keys: ['color'] },
+    ]),
+    parent('dyn-fountain', '喷泉', [
+      { entry: 'dyn-splash', version: 1, overrides: { rate: 36, speed: 9, spreadDeg: 22, life: 0.8 } },
+      { entry: 'dyn-glow-frost', version: 1, overrides: { glowColor: '#bfe8ff', glowStrength: 0.6 } },
+    ], []),
+    // 瀑布（近似）：线状发射源以顶部轮廓源近似，底部水花以微辉光代
+    parent('dyn-waterfall', '瀑布（近似）', [
+      { entry: 'dyn-rain', version: 1, overrides: { rate: 55, speed: 20, life: 1.6, sizeStart: 1.5, sizeEnd: 2, color: '#cfeaff', alpha: 0.55, spreadDeg: 6 } },
+      { entry: 'dyn-glow-frost', version: 1, overrides: { glowColor: '#dff4ff', glowStrength: 0.6 } },
+    ], []),
   );
   return out;
 }
