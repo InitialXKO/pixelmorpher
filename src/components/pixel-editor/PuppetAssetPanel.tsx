@@ -27,6 +27,8 @@ import {
 } from '@/components/ui/context-menu';
 import { collectSubtreeIds, deleteNodeSubtree, addSocketToNode } from '@/lib/node-actions';
 import { SocketEditor, type SocketInfo } from './SocketEditor';
+import SpriteThumb from './SpriteThumb';
+import { filterSpritesByQuery } from '@/lib/sprite-thumb';
 import ThreeBakeDialog from './puppet/ThreeBakeDialog';
 import { Box } from 'lucide-react';
 import { pxToSub, subToPx, type Socket } from '@/lib/unified-types';
@@ -279,6 +281,7 @@ export default function PuppetAssetPanel() {
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [threeBakeOpen, setThreeBakeOpen] = useState(false);
+  const [spriteQuery, setSpriteQuery] = useState('');
   // 新建空白精灵（从零绘制的入口；此前只有死面板 AssetLibraryPanel 里有，已退役）
   const [newSpriteOpen, setNewSpriteOpen] = useState(false);
   const [newSpriteName, setNewSpriteName] = useState('');
@@ -1057,8 +1060,19 @@ export default function PuppetAssetPanel() {
             </div>
 
             {sectionExpanded.sprites && (
+              <div className="px-1 pb-0.5">
+                <input
+                  type="text"
+                  value={spriteQuery}
+                  onChange={(e) => setSpriteQuery(e.target.value)}
+                  placeholder="搜索精灵"
+                  className="h-6 w-full text-[10px] bg-[#0a0a1e] border border-[#1e1e3a] rounded px-1.5 text-gray-300"
+                />
+              </div>
+            )}
+            {sectionExpanded.sprites && (
               <div className="space-y-0.5 mt-0.5 max-h-32 overflow-y-auto">
-                {Object.values(sprites).map((sprite) => (
+                {filterSpritesByQuery(Object.values(sprites), spriteQuery).map((sprite) => (
                   <ContextMenu key={sprite.id}>
                     <ContextMenuTrigger asChild>
                   <div
@@ -1068,7 +1082,7 @@ export default function PuppetAssetPanel() {
                       useEditorStore.getState().enterSpriteEditMode(sprite.id!);
                     }}
                   >
-                    <div className="size-2 rounded-sm border border-gray-700 bg-gray-800 flex-shrink-0" />
+                    <SpriteThumb sprite={sprite} size={18} className="rounded-sm bg-black/50 flex-shrink-0" />
                     {renaming?.kind === 'sprite' && renaming.id === sprite.id ? (
                       <RowRenameInput
                         initial={sprite.name ?? ''}

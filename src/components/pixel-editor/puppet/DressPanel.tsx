@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState, useRef, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Plus,
   Trash2,
@@ -10,6 +10,8 @@ import {
   Layers,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
+import SpriteThumb from '../SpriteThumb';
+import SpritePicker from '../SpritePicker';
 import type {
   Character,
   Node,
@@ -166,38 +168,7 @@ function MirrorDeriveSection({
  * 写入 Character.sprites 表 + CostumeSet.pieces（SpriteRef），不再用 spriteMap。
  */
 
-/** 精灵缩略图：canvas 绘制 PixelGrid */
-function SpriteThumbnail({ sprite, size = 32 }: { sprite: Sprite; size?: number }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !sprite.data) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const w = sprite.width, h = sprite.height;
-    canvas.width = w;
-    canvas.height = h;
-    ctx.clearRect(0, 0, w, h);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const c = sprite.data[y]?.[x];
-        if (c && c !== '#00000000' && !c.endsWith('00')) {
-          ctx.fillStyle = c;
-          ctx.fillRect(x, y, 1, 1);
-        }
-      }
-    }
-  }, [sprite]);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      style={{ width: size, height: size, imageRendering: 'pixelated' }}
-      className="rounded bg-black/50"
-    />
-  );
-}
+/** 精灵缩略图已收拢为共用组件 SpriteThumb（对象身份缓存 + 等比适配） */
 
 export default function DressPanel({
   unifiedCharacters,
@@ -709,10 +680,10 @@ function DirectionSpriteEditor({
                 className="h-12 rounded bg-black/30 border border-dashed border-gray-700 flex items-center justify-center cursor-pointer hover:border-cyan-500/50 overflow-hidden"
               >
                 {sprite ? (
-                  <SpriteThumbnail sprite={sprite} size={40} />
+                  <SpriteThumb sprite={sprite} size={40} />
                 ) : baseSprite ? (
                   <div className="opacity-40">
-                    <SpriteThumbnail sprite={baseSprite} size={40} />
+                    <SpriteThumb sprite={baseSprite} size={40} />
                   </div>
                 ) : (
                   <Plus className="size-4 text-gray-700" />
@@ -723,28 +694,19 @@ function DirectionSpriteEditor({
         })}
       </div>
 
-      {/* 精灵选择器 */}
+      {/* 精灵选择器（共用组件 SpritePicker：搜索 + 缩略图网格） */}
       {pickerDir !== null && (
-        <div className="mt-2 bg-[#111128] rounded border border-[#1e1e3a] p-1.5 max-h-40 overflow-y-auto">
+        <div className="mt-2 bg-[#111128] rounded border border-[#1e1e3a] p-1.5">
           <div className="text-[9px] text-gray-600 mb-1">
             选择精灵 → {DIRECTIONS.find((d) => d.value === pickerDir)?.label}
           </div>
-          <div className="grid grid-cols-3 gap-1">
-            {sprites.map((sp) => (
-              <div
-                key={sp.id ?? sp.name}
-                onClick={() => {
-                  onAssign(pickerDir, sp.id ?? null);
-                  setPickerDir(null);
-                }}
-                className="p-1 rounded bg-black/30 hover:bg-cyan-500/20 cursor-pointer flex flex-col items-center gap-0.5"
-                title={sp.name ?? sp.id}
-              >
-                <SpriteThumbnail sprite={sp} size={36} />
-                <span className="text-[8px] text-gray-400 truncate w-full text-center">{sp.name ?? sp.id?.slice(0, 12)}</span>
-              </div>
-            ))}
-          </div>
+          <SpritePicker
+            sprites={sprites}
+            onPick={(spriteId) => {
+              onAssign(pickerDir, spriteId);
+              setPickerDir(null);
+            }}
+          />
         </div>
       )}
     </div>
