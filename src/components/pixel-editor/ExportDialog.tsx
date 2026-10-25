@@ -1010,10 +1010,8 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       clips: animationClips.filter((c) => c.puppetCharacterId === procCharacter.id),
       patternLibrary: allPatternTemplates(),
       libraryEntries: allLibraryEntries(),
-      projectData: { proceduralAnimations },
+      projectData: { proceduralAnimations, globalModifiers: useProjectStore.getState().globalModifiers, globalBlueprint: useProjectStore.getState().globalBlueprint },
       projectExtras: {
-        globalModifierCount: useProjectStore.getState().globalModifiers?.length ?? 0,
-        hasGlobalBlueprint: !!useProjectStore.getState().globalBlueprint,
         canvasModifierTrackCount: canvasModifierTracks?.length ?? 0,
         effectTrackCount: effectTracks?.length ?? 0,
         strokeCount: (motionBlurStrokes?.length ?? 0) + (effectStrokes?.length ?? 0),

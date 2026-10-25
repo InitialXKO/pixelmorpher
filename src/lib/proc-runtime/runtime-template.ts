@@ -528,6 +528,8 @@ function composePerformance(pose, perf, bpOut, w) {
     if (rec.angle !== undefined) m.a = perf.mode === 'override' ? cur.a * (1 - w) + rec.angle * w : cur.a + rec.angle * w;
     if (rec.dy !== undefined) m.dy = perf.mode === 'override' ? cur.dy * (1 - w) + rec.dy * w : cur.dy + rec.dy * w;
     if (rec.dx !== undefined) m.dx = (cur.dx || 0) + rec.dx * w;
+    if (rec.scaleX !== undefined) m.sx = (cur.sx || 1) * (1 + (rec.scaleX - 1) * w);
+    if (rec.scaleY !== undefined) m.sy = (cur.sy || 1) * (1 + (rec.scaleY - 1) * w);
     next[key] = m;
   }
   return next;
@@ -692,6 +694,8 @@ const COSTUMES = EMBEDDED.costumes;
 const BEHAVIOR_GRAPHS = (EMBEDDED.behavior && EMBEDDED.behavior.graphs) || {};
 const PERFORMANCES = EMBEDDED.performances || [];
 const PROCEDURAL = EMBEDDED.procedural || [];
+const GLOBAL_GRAPH = EMBEDDED.globalGraph || null;
+const globalGraphState = new Map();
 /** 工程帧率（包内字段）：粒子模拟的帧量化基数，与编辑器同口径；
  * 旧包无此字段时回落 60。时间本身走连续钟 elapsed，不重置。 */
 const FRAME_RATE = EMBEDDED.frameRate || 60;
@@ -1667,10 +1671,10 @@ function frame(now) {
       });
       const rec = out.get(key);
       if (rec) {
-        pose[key] = { a: rec.angle, dx: rec.dx, dy: rec.dy, rim: 0, glint: 0 };
+        pose[key] = { a: rec.angle, dx: rec.dx, dy: rec.dy, rim: 0, glint: 0, sx: rec.scaleX ?? 1, sy: rec.scaleY ?? 1 };
         behaviorOutputs.set(key, {
           rotation: -rec.angle * 180 / Math.PI, translateX: rec.dx, translateY: -rec.dy,
-          scaleX: 1, scaleY: 1,
+          scaleX: rec.scaleX ?? 1, scaleY: rec.scaleY ?? 1,
         });
       }
     }
@@ -1726,7 +1730,7 @@ function frame(now) {
     }
     const p = resolved.params;
     const an0 = pose[part.key] || { a: 0, dy: 0, rim: 0, glint: 0 };
-    const an = { a: an0.a + (p.restRot || 0), dx: an0.dx || 0, dy: an0.dy || 0, rim: an0.rim || 0, glint: an0.glint || 0 };
+    const an = { a: an0.a + (p.restRot || 0), dx: an0.dx || 0, dy: an0.dy || 0, rim: an0.rim || 0, glint: an0.glint || 0, sx: an0.sx || 1, sy: an0.sy || 1 };
     const dynList = dynListFor(part);
     // 追随段：导出时烘好的增量曲线按轨道进度采样，叠进本部件位姿
     // （位置 + 角度；粒子锚点用同一 an/ctr，自动跟随）
@@ -1767,6 +1771,7 @@ function frame(now) {
       spinRad += dynSpinRadAt(inst.params, elapsed);
     }
     if (paScale !== 1) { dsx *= paScale; dsy *= paScale; hasDeform = true; }
+    if (an.sx !== 1 || an.sy !== 1) { dsx *= an.sx; dsy *= an.sy; hasDeform = true; }
     const rotA = an.a + spinRad;
     // 发光段：前 3 个启用实例各供一组参数（场在图集 RGB 三通道，导出时
     // 按选区预计算；第 4 个起在导出端已按各自所选组并入对应通道）
@@ -1970,6 +1975,41 @@ function frame(now) {
         .filter((s) => s.born < elapsed && elapsed - s.born < interval * count * 1.8)
         .map((s) => Object.assign({}, s.el, { ghost: true }));
       if (ghosts.length) els.splice(els.indexOf(live), 0, ...ghosts);
+    }
+  }
+  // 全局变换（缺口 3）：与编辑器 applyGlobalTransformWrapper 同口径——
+  // 整场绕中心平移/旋转/缩放。枢轴取角色原点（编辑器取画布中心，角色
+  // 在编辑器画布中的位置不定，此为对应近似）；部件实例与粒子/弧线
+  // 顶点一并变换，背景场景为模板自带、不在包内，不变换。
+  if (GLOBAL_GRAPH) {
+    const gout = evalRuntimeGraph(GLOBAL_GRAPH, {
+      tSec: elapsed, vars: hostVars, nodeState: globalGraphState,
+      nodeOutputs: new Map(), statePrefix: 'gl:',
+    });
+    const grec = gout.get('__global');
+    if (grec) {
+      const gtx = grec.dx || 0, gty = grec.dy || 0, grot = grec.angle || 0;
+      const gsx = grec.scaleX ?? 1, gsy = grec.scaleY ?? 1;
+      if (gtx !== 0 || gty !== 0 || grot !== 0 || gsx !== 1 || gsy !== 1) {
+        const px = char.x, py = char.y;
+        const gc = Math.cos(grot), gs = Math.sin(grot);
+        const gPt = (x, y) => {
+          const lx = (x - px) * gsx, ly = (y - py) * gsy;
+          return [px + lx * gc - ly * gs + gtx, py + lx * gs + ly * gc + gty];
+        };
+        for (const el of els) {
+          const np = gPt(el.pos[0], el.pos[1]);
+          el.pos[0] = np[0]; el.pos[1] = np[1];
+          el.rot += grot;
+          el.size[0] *= gsx; el.size[1] *= gsy;
+        }
+        for (const verts of [backVerts, frontVerts]) {
+          for (let i = 0; i + 1 < verts.length; i += 9) {
+            const np = gPt(verts[i], verts[i + 1]);
+            verts[i] = np[0]; verts[i + 1] = np[1];
+          }
+        }
+      }
     }
   }
   const camX = char.x, camY = 52 + char.y * 0.35;

@@ -404,10 +404,12 @@ function evalRuntimeGraph(graph, ctx) {
     var ang = tn.angleFrom ? refVal(tn.angleFrom) : 0;
     var dx = tn.dxFrom ? refVal(tn.dxFrom) : 0;
     var dy = tn.dyFrom ? refVal(tn.dyFrom) : 0;
+    var sx = tn.scaleXFrom ? refVal(tn.scaleXFrom) : 1;
+    var sy = tn.scaleYFrom ? refVal(tn.scaleYFrom) : 1;
     if (tn.units === 'main') {
-      result.set(tn.part, { angle: -ang * Math.PI / 180, dx: dx, dy: -dy });
+      result.set(tn.part, { angle: -ang * Math.PI / 180, dx: dx, dy: -dy, scaleX: sx, scaleY: sy });
     } else {
-      result.set(tn.part, { angle: ang, dx: dx, dy: dy });
+      result.set(tn.part, { angle: ang, dx: dx, dy: dy, scaleX: sx, scaleY: sy });
     }
   }
   return result;
@@ -418,7 +420,7 @@ function evalRuntimeGraph(graph, ctx) {
 export function createRuntimeEvaluator(): (
   graph: unknown,
   ctx?: Record<string, unknown>,
-) => Map<string, { angle: number; dx: number; dy: number }> {
+) => Map<string, { angle: number; dx: number; dy: number; scaleX: number; scaleY: number }> {
   const factory = new Function(`${RUNTIME_EVAL_SRC}\nreturn evalRuntimeGraph;`);
   return factory() as never;
 }

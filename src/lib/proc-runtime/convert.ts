@@ -148,6 +148,9 @@ export interface ProcRuntimePackage {
   /** 程序化动画（工程级数据经 opts.projectData 传入；仅保留在编辑器内
    *  确有对应启用修改器、因而确实生效的条目，其余逐条点名） */
   procedural?: Array<{ slot: string; target: string; cfg: Record<string, unknown>; startFrame: number; endFrame: number }>;
+  /** 全局变换图（工程级全局修改器/全局蓝图翻译；运行时逐帧求值后
+   *  对整场施加平移/旋转/缩放，与编辑器 applyGlobalTransformWrapper 同口径） */
+  globalGraph?: RuntimeGraph;
   warnings: string[];
 }
 
@@ -571,16 +574,15 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[] }; projectExtras?: { globalModifierCount?: number; hasGlobalBlueprint?: boolean; canvasModifierTrackCount?: number; effectTrackCount?: number; strokeCount?: number; perspectiveForeshorten?: boolean } },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null }; projectExtras?: { canvasModifierTrackCount?: number; effectTrackCount?: number; strokeCount?: number; perspectiveForeshorten?: boolean } },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
-  // ---- 工程级数据点名（运行时完备性审计缺口 3/5/7，未修项）：convert
+  // ---- 工程级数据点名（运行时完备性审计缺口 5/7，未修项）：convert
   // 结构上拿不到工程级 store，调用方把计数经 projectExtras 传入，有
-  // 则点名，不再静默丢弃。 ----
+  // 则点名，不再静默丢弃。（缺口 3 全局修改器/蓝图已改走 projectData
+  // 真进包，见函数末尾 globalGraph。） ----
   {
     const ex = opts?.projectExtras;
-    if (ex?.globalModifierCount) warnings.push(`工程级全局修改器 ${ex.globalModifierCount} 条未进运行时包（v1）`);
-    if (ex?.hasGlobalBlueprint) warnings.push('工程级全局蓝图未进运行时包（v1）：其变换效果播放时不生效');
     if (ex?.canvasModifierTrackCount) warnings.push(`画布修改轨 ${ex.canvasModifierTrackCount} 条未进运行时包（v1）`);
     if (ex?.effectTrackCount) warnings.push(`特效轨 ${ex.effectTrackCount} 条未进运行时包（v1）`);
     if (ex?.strokeCount) warnings.push(`手绘笔触（动态模糊/特效）未进运行时包（v1）`);
@@ -1179,6 +1181,30 @@ export function convertCharacterToRuntimePackage(
     });
   }
 
+  // ---- 全局变换（缺口 3）：与编辑器 applyGlobalTransformWrapper 同
+  // 口径——全局蓝图只在全局修改器非空时才被使用（编辑器同一闸门）；
+  // 图经剪变换通道后按行为图同一翻译器进包，运行时逐帧求值施加于
+  // 整场。图里引用节点输出的通道在翻译器内按不支持处理并点名。 ----
+  let globalGraph: RuntimeGraph | undefined;
+  {
+    const gMods = opts?.projectData?.globalModifiers ?? [];
+    if (gMods.length > 0) {
+      const gRaw0 = opts?.projectData?.globalBlueprint
+        ?? modifiersToBlueprint(gMods as never);
+      const gRaw = gRaw0 ? normalizeGraphOutput(gRaw0) : null;
+      const gPruned = gRaw && graphTransformNode(gRaw) ? pruneToTransform(gRaw) : null;
+      if (gRaw && !gPruned) warnings.push('全局蓝图/全局修改器：无 transform 输出（像素类），未进包');
+      else if (gPruned) {
+        const res = translateBehaviorGraph(gPruned, '__global', 'gl_', () => null);
+        for (const w of res.warnings) warnings.push(`全局变换：${w}`);
+        if (!res.ok) warnings.push(`全局变换翻译失败：${res.reason}`);
+        else globalGraph = { context: 'behavior', nodes: res.nodes };
+      }
+    } else if (opts?.projectData?.globalBlueprint) {
+      warnings.push('工程级全局蓝图未进运行时包：编辑器内全局蓝图仅在全局修改器非空时生效，现无全局修改器（同口径）');
+    }
+  }
+
   return {
     format: 'procedural-pixel-runtime-1',
     characterName: character.name,
@@ -1191,6 +1217,7 @@ export function convertCharacterToRuntimePackage(
     performances,
     stateMachine,
     procedural: procedural.length > 0 ? procedural : undefined,
+    globalGraph,
     warnings,
   };
 }

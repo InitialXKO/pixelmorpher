@@ -12,6 +12,7 @@ import { createDynamicRuntime } from '../src/lib/proc-runtime/dynamic-src';
 import { computeProceduralValue } from '../src/lib/engine/procedural';
 import { createDefaultParametricAppearance } from '../src/lib/proc-runtime/surfaces';
 import { createDefaultCostumePiece } from '../src/lib/unified-types';
+import { createRuntimeEvaluator } from '../src/lib/proc-runtime/eval-src';
 
 let passed = 0;
 function check(name: string, ok: boolean) {
@@ -94,9 +95,46 @@ check('缺口1·已修：resolvePart 全量覆盖服装件派生字段（含 sur
   check('缺口2·运行时模板消费 PROCEDURAL', template.includes('const PROCEDURAL = EMBEDDED.procedural') && template.includes('dynProceduralValue(pa.cfg'));
 }
 
+// ---- 缺口 3（已修）：全局变换图进包 + 求值器 scale 通道 ----
+{
+  const ev = createRuntimeEvaluator();
+  const g = {
+    nodes: [
+      { id: 'v', type: 'uniform_scale', params: { scale: 1.5 } },
+      { id: 'tr', type: 'transform', part: '__global', units: 'runtime', scaleXFrom: { n: 'v', o: 'outScaleX' }, scaleYFrom: { n: 'v', o: 'outScaleY' } },
+    ],
+  };
+  const rec = ev(g as never, {} as never).get('__global');
+  check('缺口3·求值器 transform 记录带 scaleX/scaleY', !!rec && Math.abs(rec.scaleX - 1.5) < 1e-9 && Math.abs(rec.scaleY - 1.5) < 1e-9);
+
+  const mkNode = (id: string) => ({
+    id, name: id, parentId: null, children: [], modifiers: [],
+    slot: { slotKey: id }, transform: {}, sockets: [], tracks: { keyframes: [] },
+  });
+  const ch = {
+    id: 'g1', name: '全局测试',
+    nodes: { root: mkNode('root') },
+    rootNodeId: 'root', rootNodeIds: ['root'],
+    costumeSets: [{
+      id: 's1', name: '默认',
+      pieces: { root: { nodeId: 'root', zIndex: 0, parametric: createDefaultParametricAppearance() } },
+    }],
+    activeCostumeSetId: 's1', variants: {},
+  } as never;
+  const pkg = convertCharacterToRuntimePackage(ch, undefined, {
+    projectData: { globalModifiers: [{ id: 'gm1', type: 'translate', enabled: true, params: { offsetX: 5, offsetY: 0 } }] as never },
+  });
+  check('缺口3·全局修改器经翻译进包为 globalGraph（__global transform 节点）',
+    !!pkg.globalGraph && pkg.globalGraph.nodes.some((n) => n.type === 'transform' && (n as { part?: string }).part === '__global'));
+  const pkg2 = convertCharacterToRuntimePackage(ch, undefined, {
+    projectData: { globalBlueprint: { version: 1, outputId: 'o', nodes: [] } as never },
+  });
+  check('缺口3·只有全局蓝图无修改器时同编辑器口径点名不进包',
+    !pkg2.globalGraph && pkg2.warnings.some((w) => w.includes('仅在全局修改器非空时生效')));
+  check('缺口3·运行时模板消费 GLOBAL_GRAPH', template.includes('const GLOBAL_GRAPH = EMBEDDED.globalGraph') && template.includes("gout.get('__global')"));
+}
+
 // ---- 未修缺口（关了 = 有人修了，须更新 AUDIT 分类）----
-check('缺口3·全局修改器仍未进 convert（修复后更新文档）',
-  !convert.includes('globalModifiers'));
 check('缺口4·运行时仍无网格蒙皮（修复后更新文档）',
   !template.includes('skinning') && !dynSrc.includes('skinning'));
 check('缺口5·画布修改轨仍未成包字段（点名代码引用字段名不算进包；修复后更新文档）',
