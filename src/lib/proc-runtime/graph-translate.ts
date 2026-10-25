@@ -16,10 +16,10 @@ export interface RuntimeRef { n: string; o?: string }
 export type RuntimeGraphNode =
   | { id: string; type: string; params?: Record<string, unknown>; inputs?: Record<string, RuntimeRef | { v: number }> }
   | { id: string; type: 'curve'; points: [number, number][] }
-  | { id: string; type: 'transform'; part: string; units: 'main' | 'runtime'; angleFrom?: RuntimeRef; dxFrom?: RuntimeRef; dyFrom?: RuntimeRef };
+  | { id: string; type: 'transform'; part: string; units: 'main' | 'runtime'; angleFrom?: RuntimeRef; dxFrom?: RuntimeRef; dyFrom?: RuntimeRef; scaleXFrom?: RuntimeRef; scaleYFrom?: RuntimeRef; foreFrom?: RuntimeRef };
 
 export interface RuntimeGraph {
-  context: 'performance' | 'behavior';
+  context?: 'performance' | 'behavior'; // 来源标记（可选）：播放器不读，仅编辑器侧构造时自带
   nodes: RuntimeGraphNode[];
   /** 仅行为图：nodeRef 读上一帧（'prev'，缺省）还是本帧（'same'）输出 */
   follow?: 'prev' | 'same';
@@ -160,7 +160,7 @@ export function translateBehaviorGraph(
       const tr: Extract<RuntimeGraphNode, { type: 'transform' }> = {
         id: idPrefix + n.id, type: 'transform', part: partKey, units: 'main',
       };
-      const channel = (port: string, field: 'angleFrom' | 'dxFrom' | 'dyFrom') => {
+      const channel = (port: string, field: 'angleFrom' | 'dxFrom' | 'dyFrom' | 'scaleXFrom' | 'scaleYFrom') => {
         const inp = n.inputs[port];
         if (!inp) return;
         const c = convertInput(inp, idPrefix, warnings, port);
@@ -170,9 +170,11 @@ export function translateBehaviorGraph(
       channel('rotation', 'angleFrom');
       channel('translateX', 'dxFrom');
       channel('translateY', 'dyFrom');
+      channel('scaleX', 'scaleXFrom');
+      channel('scaleY', 'scaleYFrom');
       for (const port of Object.keys(n.inputs)) {
-        if (!['rotation', 'translateX', 'translateY'].includes(port)) {
-          warnings.push(`transform 通道 ${port} 运行时不支持（只带 rotation/translateX/translateY），未进包`);
+        if (!['rotation', 'translateX', 'translateY', 'scaleX', 'scaleY'].includes(port)) {
+          warnings.push(`transform 通道 ${port} 运行时不支持（只带 rotation/translateX/translateY/scaleX/scaleY），未进包`);
         }
       }
       nodes.push(tr);

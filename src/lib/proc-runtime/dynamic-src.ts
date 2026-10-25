@@ -204,16 +204,7 @@ function dynArcPoints(params, tSec, endX, endY, hasEnd) {
   }
   return { main: dynArcClip(mainFull, grow), branches: branches, dots: [], alpha: alpha };
 }
-function dynFollowDelta(now, lag, amount, rotate) {
-  const k = Math.max(0, Math.min(1, amount));
-  const raw = lag.a - now.a;
-  const da = Math.atan2(Math.sin(raw), Math.cos(raw));
-  return {
-    dx: (lag.x - now.x) * k,
-    dy: (lag.y - now.y) * k,
-    da: rotate ? da * k : 0,
-  };
-}
+// 追随已由导出端烘成 followCurve，播放器不再现算增量（原追随增量函数已删）。
 function dynOccAt(tile, x, y) {
   if (x < 0 || y < 0 || x >= tile.w || y >= tile.h) return false;
   return tile.data[(y * tile.w + x) * 4] < 128;
@@ -320,6 +311,59 @@ function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
   }
   return out;
 }
+function dynProcSeededRandom(seed) {
+  let s = seed | 0;
+  return () => { s = (s * 1664525 + 1013904223) | 0; return (s >>> 0) / 4294967295; };
+}
+function dynProcNoise2D(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const smooth = (t) => t * t * (3 - 2 * t);
+  const sfx = smooth(fx), sfy = smooth(fy);
+  const hash = (a, b) => { let h = a * 374761393 + b * 668265263; h = (h ^ (h >> 13)) * 1274126177; return (h ^ (h >> 16)) / 2147483648; };
+  const nx0 = hash(ix, iy) + (hash(ix + 1, iy) - hash(ix, iy)) * sfx;
+  const nx1 = hash(ix, iy + 1) + (hash(ix + 1, iy + 1) - hash(ix, iy + 1)) * sfx;
+  return nx0 + (nx1 - nx0) * sfy;
+}
+function dynProcFbm(x, y, octaves, seed) {
+  let value = 0, amplitude = 1, frequency = 1, maxValue = 0;
+  for (let i = 0; i < octaves; i++) {
+    value += amplitude * dynProcNoise2D(x * frequency + seed, y * frequency + seed * 0.7);
+    maxValue += amplitude; amplitude *= 0.5; frequency *= 2;
+  }
+  return value / maxValue;
+}
+// 程序化动画取值：与编辑器 engine/procedural.computeProceduralValue 逐值同源
+// （噪声/弹簧/抖动公式逐行移植，探针逐值对拍）。
+function dynProceduralValue(cfg, frame) {
+  switch (cfg.type) {
+    case 'noise': return dynProcFbm(frame * cfg.frequency, 0, cfg.octaves, cfg.seed) * cfg.amplitude;
+    case 'wave': {
+      const t = frame * cfg.frequency + (cfg.phase / 360);
+      const phase = t * Math.PI * 2;
+      switch (cfg.waveType) {
+        case 'sine': return Math.sin(phase) * cfg.amplitude;
+        case 'triangle': return (2 * Math.abs(2 * (t % 1 - 0.5)) - 1) * cfg.amplitude;
+        case 'square': return (Math.sin(phase) >= 0 ? 1 : -1) * cfg.amplitude;
+        case 'sawtooth': return (2 * (t % 1) - 1) * cfg.amplitude;
+        default: return Math.sin(phase) * cfg.amplitude;
+      }
+    }
+    case 'spring': {
+      const omega = Math.sqrt(cfg.stiffness / cfg.mass);
+      const gamma = cfg.damping / (2 * cfg.mass);
+      const dampedOmega = Math.sqrt(Math.max(0, omega * omega - gamma * gamma));
+      const t = frame / 60;
+      return (cfg.restLength > 0 ? cfg.restLength : 1) * Math.exp(-gamma * t) * Math.cos(dampedOmega * t) + cfg.restLength;
+    }
+    case 'jitter': {
+      const seed = Math.floor(frame * cfg.frequency * 100);
+      const rng = dynProcSeededRandom(seed);
+      if (cfg.smooth) return (dynProcNoise2D(frame * cfg.frequency, 0) * 2 - 1) * cfg.amount;
+      return (rng() * 2 - 1) * cfg.amount;
+    }
+    default: return 0;
+  }
+}
 `;
 
 /** 探针用：把 DYNAMIC_SRC 装成可调用对象 */
@@ -327,12 +371,12 @@ export function createDynamicRuntime(): {
   dynDeformAt: (params: never, t: number) => { sx: number; sy: number; amount: number };
   dynContour: (tile: never) => { x: number; y: number; nx: number; ny: number }[];
   dynSimulate: (inst: never, tile: never, frame: number, frameRate: number, layer: string, seedKey: string) => { x: number; y: number; size: number; alpha: number; color: string }[];
-  dynFollowDelta: (now: never, lag: never, amount: number, rotate: boolean) => { dx: number; dy: number; da: number };
   dynDisplaceSrcMap: (params: never, w: number, h: number, phase: number) => Int32Array;
   dynNoiseU: (u: number, v: number, period: number, seed: number) => number;
   dynSpinRadAt: (params: never, t: number) => number;
   dynArcPoints: (params: never, t: number, endX?: number, endY?: number, hasEnd?: boolean) => { main: [number, number, number][]; branches: [number, number, number][][]; dots: [number, number, number][]; alpha: number };
+  dynProceduralValue: (cfg: never, frame: number) => number;
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynFollowDelta, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue };`);
   return factory() as never;
 }

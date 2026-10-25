@@ -293,13 +293,12 @@ function resolvePart(part, variantIndex, costume) {
     const c = costume[part.costumeKeys[0]];
     if (c === null) { p.size = [0.001, 0.001]; p.hidden = true; }
     else if (c) {
-      if (c.pal) p.pal = c.pal;
-      if (c.size) p.size = c.size;
-      if (c.roundness !== undefined) p.roundness = c.roundness;
-      if (c.surfaceGraph !== undefined) p.surfaceGraph = c.surfaceGraph;
-      if (c.composite !== undefined) p.composite = c.composite;
-      if (c.haloWidth !== undefined) p.haloWidth = c.haloWidth;
-      if (c.baseSprite !== undefined) p.baseSprite = c.baseSprite;
+      // 服装件派生字段全量覆盖（与编辑器整件换外观对齐）：此前只覆盖 7 项，
+      // 图层程序/形状/光照/描边等被静默留在默认集（运行时完备性审计缺口 1）。
+      // pivot/restRot 由节点位姿派生、各集相同，不在此列。
+      for (const f of ['pal', 'size', 'shapeKind', 'roundness', 'poly', 'polyPivot', 'off', 'light', 'outline', 'rim', 'glint', 'rimI', 'glintI', 'surface', 'surfaceGraph', 'composite', 'haloWidth', 'baseSprite']) {
+        if (c[f] !== undefined) p[f] = c[f];
+      }
     }
   }
   const shape = p.poly
@@ -389,12 +388,13 @@ function displaceOfRt(part) {
       // 精灵的 direction/vector 标记时以标记角为准（direction
       // 直取；vector 按精灵像素分量取 atan2，y 向下——与编辑器
       // markDirAngleDeg 同口径），未命中用 displaceDeg
-      if (p.displaceDirMark && part.sprite && Array.isArray(part.sprite.marks)) {
-        for (const mk of part.sprite.marks) {
+      const dirSrc = part.sprite || (part.base && part.base.baseSprite) || null;
+      if (p.displaceDirMark && dirSrc && Array.isArray(dirSrc.marks)) {
+        for (const mk of dirSrc.marks) {
           if (!mk || mk.name !== p.displaceDirMark) continue;
           if (mk.kind === 'direction') return { ...p, displaceDeg: ((mk.angleDeg % 360) + 360) % 360 };
           if (mk.kind === 'vector') {
-            const dx = mk.dx * part.sprite.w, dy = mk.dy * part.sprite.h;
+            const dx = mk.dx * dirSrc.w, dy = mk.dy * dirSrc.h;
             if (dx !== 0 || dy !== 0) {
               const a = (Math.atan2(dy, dx) * 180) / Math.PI;
               return { ...p, displaceDeg: ((a % 360) + 360) % 360 };
@@ -475,23 +475,6 @@ function spriteTileOf(sg, mirrored) {
     data: data,
   };
 }
-const DRAW_ORDER_MAIN = {
-  0: ['cape', 'left_arm', 'left_leg', 'right_leg', 'right_arm', 'torso', 'head'],
-  4: ['cape', 'left_arm', 'left_leg', 'right_leg', 'right_arm', 'torso', 'head'],
-  2: ['cape', 'left_arm', 'left_leg', 'torso', 'head', 'right_leg', 'right_arm'],
-  6: ['cape', 'right_arm', 'right_leg', 'torso', 'head', 'left_leg', 'left_arm'],
-};
-const DRAW_ORDER_MAP = { 0: 0, 1: 2, 2: 2, 3: 4, 4: 4, 5: 4, 6: 6, 7: 6 };
-function sortParts(parts, v) {
-  const order = DRAW_ORDER_MAIN[DRAW_ORDER_MAP[v]];
-  const result = [];
-  for (const layer of order) {
-    const inLayer = parts.filter((p) => p.drawLayer === layer);
-    inLayer.sort((a, b) => a.sortOrder - b.sortOrder);
-    result.push(...inLayer);
-  }
-  return result;
-}
 /** 蓝图小求值器（运行时方言：time/const/curve/math/sin/transform；enabled 短路）
  *  graph = { nodes: [{id, type, enabled?, ...}] }；ctx = { u }（0..1 表演进度）
  *  返回 Map partKey -> { angle?, dx?, dy? } */
@@ -529,6 +512,9 @@ function composePerformance(pose, perf, bpOut, w) {
     if (rec.angle !== undefined) m.a = perf.mode === 'override' ? cur.a * (1 - w) + rec.angle * w : cur.a + rec.angle * w;
     if (rec.dy !== undefined) m.dy = perf.mode === 'override' ? cur.dy * (1 - w) + rec.dy * w : cur.dy + rec.dy * w;
     if (rec.dx !== undefined) m.dx = (cur.dx || 0) + rec.dx * w;
+    if (rec.scaleX !== undefined) m.sx = (cur.sx || 1) * (1 + (rec.scaleX - 1) * w);
+    if (rec.scaleY !== undefined) m.sy = (cur.sy || 1) * (1 + (rec.scaleY - 1) * w);
+    if (rec.fore !== undefined) m.fore = (cur.fore || 1) * (1 + (rec.fore - 1) * w);
     next[key] = m;
   }
   return next;
@@ -692,13 +678,16 @@ const PARTS = EMBEDDED.parts;
 const COSTUMES = EMBEDDED.costumes;
 const BEHAVIOR_GRAPHS = (EMBEDDED.behavior && EMBEDDED.behavior.graphs) || {};
 const PERFORMANCES = EMBEDDED.performances || [];
+const PROCEDURAL = EMBEDDED.procedural || [];
+const GLOBAL_GRAPH = EMBEDDED.globalGraph || null;
+const globalGraphState = new Map();
 /** 工程帧率（包内字段）：粒子模拟的帧量化基数，与编辑器同口径；
  * 旧包无此字段时回落 60。时间本身走连续钟 elapsed，不重置。 */
 const FRAME_RATE = EMBEDDED.frameRate || 60;
-// 绘制顺序 v1：按部件 sortOrder（= 产品节点 zIndex）稳定排序
-sortParts = function (parts) {
+// 绘制顺序：按部件 sortOrder（= 产品节点 zIndex）稳定排序
+function sortParts(parts) {
   return parts.slice().sort((a, b) => (a.sortOrder - b.sortOrder) || (a.key < b.key ? -1 : 1));
-};
+}
 // 局部地面（角色原点坐标系）：所有部件最低点再下压 4px（运行时坐标 y 向上）。
 // 世界地面固定在 y=0；角色原点世界高度 = -localGround（脚落地面）。
 let localGround = -40;
@@ -730,7 +719,8 @@ function tileKeyOf(part, variant, costumeName, resolved) {
     resolved.composite, resolved.halo, bsKey].join('|');
 }
 function ensureAtlas(gl, variant, costumeName) {
-  if (atlasState && atlasState.variant === variant && atlasState.costumeName === costumeName) return atlasState;
+  const osig = overrideSig();
+  if (atlasState && atlasState.variant === variant && atlasState.costumeName === costumeName && atlasState.osig === osig) return atlasState;
   const costume = COSTUMES[costumeName];
   const tiles = [], entries = [];
   const map = new Map();
@@ -739,6 +729,7 @@ function ensureAtlas(gl, variant, costumeName) {
     const centry = costume ? costume[part.key] : undefined;
     const sgrid = costume && costume.__sprite ? costume.__sprite[part.key] : undefined;
     let resolved = null, tile = null, spriteGrid = null;
+    const altSpr = slotOverrides[part.key] ? (part.altSprites || {})[slotOverrides[part.key]] : undefined;
     if (centry === null && sgrid) {
       spriteGrid = sgrid; // 参数化槽位在该集回落精灵（与主画布同口径）
     } else if (part.spriteKind && !centry) {
@@ -747,6 +738,11 @@ function ensureAtlas(gl, variant, costumeName) {
     } else {
       resolved = resolvePart(part, variant, costume);
       if (resolved.params.hidden) { map.set(part.key, null); continue; }
+    }
+    if (altSpr) {
+      // 逐槽变体覆盖：精灵部件换图；参数化部件只换底图（外观仍属当前集）
+      if (spriteGrid) spriteGrid = altSpr;
+      else if (resolved) resolved.baseSprite = altSpr;
     }
     // 动态表面（D1）：带 animation 的图按 frames 步各烘一张瓦片，
     // 帧循环按 elapsed 选步（见 animFrames 组装与帧循环取瓦片处）
@@ -802,16 +798,21 @@ function ensureAtlas(gl, variant, costumeName) {
     // 挂 [12]（名 → 角度）
     let marksPx = null;
     let marksDir = null;
-    if (spriteGrid && Array.isArray(spriteGrid.marks) && tileList.length) {
+    // 标记来源：精灵部件走 spriteGrid；参数化部件走代表图 baseSprite
+    // （缺口 8：此前 baseSprite.marks 无人读，底图路径的发射点/弧线
+    // 原点/发光选区标记全部失效）。两者标记都按各自精灵归一化，同一
+    // 换算口径（瓦片内居中偏移 + 镜像翻 x）。
+    const markSrc = spriteGrid || (resolved && resolved.baseSprite) || null;
+    if (markSrc && Array.isArray(markSrc.marks) && tileList.length) {
       const t0 = tileList[0];
-      const mx0 = (t0.w - spriteGrid.w) / 2, my0 = (t0.h - spriteGrid.h) / 2;
+      const mx0 = (t0.w - markSrc.w) / 2, my0 = (t0.h - markSrc.h) / 2;
       marksPx = {};
       marksDir = {};
-      for (const mk of spriteGrid.marks) {
+      for (const mk of markSrc.marks) {
         if (!mk || typeof mk.name !== 'string') continue;
         if ((mk.kind === 'point' || mk.kind === 'vector') && !(mk.name in marksPx)) {
-          let px = mx0 + mk.x * spriteGrid.w;
-          const py = my0 + mk.y * spriteGrid.h;
+          let px = mx0 + mk.x * markSrc.w;
+          const py = my0 + mk.y * markSrc.h;
           if (mirrored) px = t0.w - 1 - px;
           marksPx[mk.name] = [px, py];
         }
@@ -819,7 +820,7 @@ function ensureAtlas(gl, variant, costumeName) {
           marksDir[mk.name] = ((mk.angleDeg % 360) + 360) % 360;
         }
         if (mk.kind === 'vector' && !(mk.name in marksDir)) {
-          const dx = mk.dx * spriteGrid.w, dy = mk.dy * spriteGrid.h;
+          const dx = mk.dx * markSrc.w, dy = mk.dy * markSrc.h;
           if (dx !== 0 || dy !== 0) {
             const a = (Math.atan2(dy, dx) * 180) / Math.PI;
             marksDir[mk.name] = ((a % 360) + 360) % 360;
@@ -969,7 +970,7 @@ function ensureAtlas(gl, variant, costumeName) {
       const rec = (animFrameMap[bk] = animFrameMap[bk] || {});
       rec[fi + ',' + di] = { tile: tile, place: [ax, ay] };
     } else {
-      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][11] || null, marksN: entries[i][10] || null, marksDir: entries[i][12] || null });
+      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][11] || null, marksN: entries[i][10] || null, marksDir: entries[i][12] || null, fam: entries[i][4] ? 1 : 0 });
     }
   });
   for (const bk in animFrameMap) {
@@ -994,7 +995,7 @@ function ensureAtlas(gl, variant, costumeName) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  atlasState = { variant: variant, costumeName: costumeName, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles };
+  atlasState = { variant: variant, costumeName: costumeName, osig: osig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles };
   return atlasState;
 }
 
@@ -1330,30 +1331,406 @@ const solidBuf = gl.createBuffer();
   }
   gl.bindVertexArray(null);
 }
-function buildScenery(charX, charY, onGround) {
+const bgProg = makeProgram(
+\`#version 300 es
+layout(location=0) in vec2 aPos;
+layout(location=1) in vec2 aUv;
+uniform vec2 uCam; uniform vec2 uViewHalf;
+out vec2 vUv;
+void main(){ vUv = aUv; gl_Position = vec4((aPos - uCam) / uViewHalf, 0.995, 1.0); }\`,
+\`#version 300 es
+precision highp float;
+in vec2 vUv; uniform sampler2D uTex;
+out vec4 oColor;
+void main(){ oColor = vec4(texture(uTex, vUv).rgb, 1.0); }\`);
+const bgVAO = gl.createVertexArray();
+const bgBuf = gl.createBuffer();
+{
+  gl.bindVertexArray(bgVAO);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bgBuf);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 4 * 4, 0);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 4 * 4, 2 * 4);
+  gl.bindVertexArray(null);
+}
+const bgU = { cam: gl.getUniformLocation(bgProg, 'uCam'), vh: gl.getUniformLocation(bgProg, 'uViewHalf'), tex: gl.getUniformLocation(bgProg, 'uTex') };
+function drawBackground(camX, camY) {
+  // 背景图四边形：0.85 倍视差跟随、1.4 倍视口大小（留出视差边距）
+  const cx = camX * 0.85, cy = camY * 0.85;
+  const w = lowW * 1.4, h = VIEW_H * 1.4;
+  const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2;
+  const v = new Float32Array([
+    x0, y0, 0, 0, x1, y0, 1, 0, x1, y1, 1, 1,
+    x0, y0, 0, 0, x1, y1, 1, 1, x0, y1, 0, 1,
+  ]);
+  gl.useProgram(bgProg);
+  gl.uniform2f(bgU.cam, camX, camY);
+  gl.uniform2f(bgU.vh, lowW / 2, VIEW_H / 2);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, bgTex); gl.uniform1i(bgU.tex, 0);
+  gl.bindVertexArray(bgVAO);
+  gl.bindBuffer(gl.ARRAY_BUFFER, bgBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, v, gl.DYNAMIC_DRAW);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+  // 复位到场景（solid）绘制状态，调用方随后照常画 scenery
+  gl.useProgram(solidProg);
+  gl.uniform2f(solidU.cam, camX, camY);
+  gl.uniform2f(solidU.vh, lowW / 2, VIEW_H / 2);
+  gl.bindVertexArray(solidVAO);
+  gl.bindBuffer(gl.ARRAY_BUFFER, solidBuf);
+}
+function buildScenery(charX) {
   const verts = [];
   const quad = (cx, cy, w, h, color, mode) => {
     const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2;
     const corners = [[x0, y0, -1, -1], [x1, y0, 1, -1], [x1, y1, 1, 1], [x0, y0, -1, -1], [x1, y1, 1, 1], [x0, y1, -1, 1]];
     for (const cn of corners) verts.push(cn[0], cn[1], cn[2], cn[3], color[0], color[1], color[2], color[3], mode);
   };
-  const base = Math.floor(charX / 24) * 24;
-  for (let i = -10; i <= 10; i++) {
-    const gx = base + i * 24;
-    const hh = 1.5 + (Math.abs(i * 7 + Math.floor(charX / 24)) % 3);
-    quad(gx, hh / 2, 4, hh, [0.118, 0.118, 0.243, 1], 0);
+  if (!bgTex) {
+    const base = Math.floor(charX / 24) * 24;
+    for (let i = -10; i <= 10; i++) {
+      const gx = base + i * 24;
+      const hh = 1.5 + (Math.abs(i * 7 + Math.floor(charX / 24)) % 3);
+      quad(gx, hh / 2, 4, hh, [0.118, 0.118, 0.243, 1], 0);
+    }
+    if (moveMode === 'side') quad(charX, -0.75, 4000, 1.5, [0.165, 0.165, 0.322, 1], 0);
   }
-  quad(charX, -0.75, 4000, 1.5, [0.165, 0.165, 0.322, 1], 0);
-  const shrink = onGround ? 1 : Math.max(0.5, 1 - charY / 50);
-  quad(charX, 0.4, 20 * shrink, 5 * shrink, [0.031, 0.031, 0.078, 0.5 * shrink], 1);
+  // 场景实体（横版体块 / 俯视平面块同一画法）；顶边亮线 = 可站立面
+  for (let i = 0; i < solids.length; i++) {
+    const q = solids[i];
+    const sel = sceneEdit && i === selSolid;
+    if (sel) quad(q.x + q.w / 2, q.y + q.h / 2, q.w + 1.6, q.h + 1.6, [0.98, 0.75, 0.2, 0.55], 0);
+    quad(q.x + q.w / 2, q.y + q.h / 2, q.w, q.h, sel ? [0.36, 0.33, 0.19, 1] : [0.22, 0.21, 0.38, 1], 0);
+    quad(q.x + q.w / 2, q.y + q.h - 0.6, q.w, 1.2, [0.45, 0.43, 0.62, 1], 0);
+  }
+  // 接触阴影：落在脚下最高支撑面上（俯视时即平面点）
+  const fy = charFeetY();
+  let supY = fy;
+  if (moveMode === 'side') {
+    supY = 0;
+    for (const q of solids) {
+      const top = q.y + q.h;
+      const overX = char.x + CHAR_HW > q.x && char.x - CHAR_HW < q.x + q.w;
+      if (overX && top <= fy + 0.01 && top > supY) supY = top;
+    }
+  }
+  const shrink = char.onGround ? 1 : Math.max(0.5, 1 - (fy - supY) / 50);
+  quad(char.x, supY + 0.4, 20 * shrink, 5 * shrink, [0.031, 0.031, 0.078, 0.5 * shrink], 1);
   return new Float32Array(verts);
 }
 
+// ---------- 画布修改轨后处理（缺口 5-2） ----------
+// 参数解析与编辑器 resolveCanvasModifierParams 同口径（键帧间数值
+// 线性插值、非数值在中点跳变）；六种修改器逐个以全屏着色器通道施加
+// （顺序 = 工程轨序 × 轨内序，片段轨接在工程轨之后）。
+function fxResolveCanvasParams(track, modifier, frame) {
+  const kfs = [...(track.keyframes || [])].sort((a, b) => a.frame - b.frame);
+  if (kfs.length === 0) return modifier.params || {};
+  let prevKf = kfs[0], nextKf = null;
+  for (const kf of kfs) {
+    if (kf.frame <= frame) prevKf = kf;
+    if (kf.frame > frame && !nextKf) nextKf = kf;
+  }
+  if (!nextKf) return { ...(modifier.params || {}), ...(prevKf.params || {}) };
+  const t = (frame - prevKf.frame) / (nextKf.frame - prevKf.frame);
+  const result = { ...(modifier.params || {}) };
+  for (const key of Object.keys(prevKf.params || {})) {
+    const pv = prevKf.params[key], nv = (nextKf.params || {})[key];
+    if (typeof pv === 'number' && typeof nv === 'number') result[key] = pv + (nv - pv) * t;
+    else result[key] = t < 0.5 ? pv : nv;
+  }
+  return result;
+}
+function fxCollectCanvasMods(set, frame, out) {
+  for (const track of (set && set.canvasTracks) || []) {
+    if (!track.visible || !track.enabled) continue;
+    for (const m of track.modifiers || []) {
+      if (!m.enabled) continue;
+      out.push({ type: m.type, params: fxResolveCanvasParams(track, m, frame) });
+    }
+  }
+}
+let postSys = null;
+function ensurePostSys() {
+  if (postSys && postSys.w === lowW && postSys.h === VIEW_H) return postSys;
+  const mkRT = () => {
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, lowW, VIEW_H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    return { tex: tex, fbo: fbo };
+  };
+  const A = mkRT(), B = mkRT(), C = mkRT(), D = mkRT();
+  const depthRb = gl.createRenderbuffer();
+  gl.bindRenderbuffer(gl.RENDERBUFFER, depthRb);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, lowW, VIEW_H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, A.fbo);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthRb);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const prog = makeProgram(
+    '#version 300 es\\nvoid main(){ vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }',
+    '#version 300 es\\nprecision highp float;\\n'
+    + 'uniform sampler2D uTex; uniform sampler2D uAux; uniform vec2 uRes; uniform int uEffect;\\n'
+    + 'uniform vec4 uP0; uniform vec4 uP1; uniform vec3 uColor; uniform vec3 uColor2;\\n'
+    + 'out vec4 oColor;\\n'
+    + 'void main(){\\n'
+    + '  vec2 uv = gl_FragCoord.xy / uRes;\\n'
+    + '  vec4 c = texture(uTex, uv);\\n'
+    + '  if (uEffect == 0) { oColor = c; return; }\\n'
+    + '  if (uEffect == 1) {\\n' // color_lut：uP0.x=预设号(1 retro 2 mono 3 night 4 warm 5 cool 6 invert)，uP0.y=强度
+    + '    if (c.a == 0.0) { oColor = c; return; }\\n'
+    + '    vec3 v = c.rgb * 255.0; vec3 n2 = v; int pr = int(uP0.x + 0.5);\\n'
+    + '    if (pr == 1) { n2 = vec3(min(255.0, floor(v.r / 32.0 + 0.5) * 32.0 + 20.0), min(255.0, floor(v.g / 32.0 + 0.5) * 32.0 + 10.0), floor(v.b / 48.0 + 0.5) * 48.0); }\\n'
+    + '    else if (pr == 2) { float g = floor(0.299 * v.r + 0.587 * v.g + 0.114 * v.b + 0.5); n2 = vec3(g); }\\n'
+    + '    else if (pr == 3) { float lum = (0.299 * v.r + 0.587 * v.g + 0.114 * v.b) / 255.0; float b2 = min(1.0, lum * 1.5); n2 = vec3(floor(b2 * 50.0 + 0.5), floor(b2 * 255.0 + 0.5), floor(b2 * 50.0 + 0.5)); }\\n'
+    + '    else if (pr == 4) { n2 = vec3(min(255.0, v.r + 25.0), v.g + 5.0, max(0.0, v.b - 15.0)); }\\n'
+    + '    else if (pr == 5) { n2 = vec3(max(0.0, v.r - 15.0), v.g + 5.0, min(255.0, v.b + 25.0)); }\\n'
+    + '    else if (pr == 6) { n2 = 255.0 - v; }\\n'
+    + '    oColor = vec4(mix(c.rgb, n2 / 255.0, uP0.y), c.a); return;\\n'
+    + '  }\\n'
+    + '  if (uEffect == 2) {\\n' // scanlines：uP0.x=行距 uP0.y=不透明度 uP0.z=暗角开关 uP0.w=暗角强度，uColor=线色
+    + '    vec3 rgb = c.rgb;\\n'
+    + '    float row = floor(gl_FragCoord.y);\\n'
+    + '    if (mod(row, max(1.0, uP0.x)) == 0.0 && c.a > 0.0) rgb = mix(rgb, uColor, uP0.y);\\n'
+    + '    if (uP0.z > 0.5) { vec2 d = (gl_FragCoord.xy - uRes * 0.5) / length(uRes * 0.5); float dk = max(0.0, 1.0 - dot(d, d) * uP0.w * 2.0); rgb *= dk; }\\n'
+    + '    oColor = vec4(rgb, c.a); return;\\n'
+    + '  }\\n'
+    + '  if (uEffect == 3) {\\n' // pixel_zoom：uP0.x=缩放；界外填 uColor（舞台底色）
+    + '    vec2 zuv = (uv - 0.5) / uP0.x + 0.5;\\n'
+    + '    if (zuv.x < 0.0 || zuv.x > 1.0 || zuv.y < 0.0 || zuv.y > 1.0) { oColor = vec4(uColor, 1.0); return; }\\n'
+    + '    oColor = texture(uTex, zuv); return;\\n'
+    + '  }\\n'
+    + '  if (uEffect == 4) {\\n' // canvas_mask：uP0.x=形状(0圆 1星 2圆角矩形 3菱形) uP0.y=边距px uP0.z=羽化px
+    + '    float mg = uP0.y; float w2 = uRes.x - mg * 2.0; float h2 = uRes.y - mg * 2.0;\\n'
+    + '    if (w2 <= 0.0 || h2 <= 0.0) { oColor = c; return; }\\n'
+    + '    vec2 np = (gl_FragCoord.xy - uRes * 0.5) / vec2(w2 * 0.5, h2 * 0.5);\\n'
+    + '    float inside = 0.0; float edge = 0.0; int sh = int(uP0.x + 0.5);\\n'
+    + '    if (sh == 0) { float d = length(np); inside = d <= 1.0 ? 1.0 : 0.0; edge = 1.0 - d; }\\n'
+    + '    else if (sh == 1) { float ang = atan(np.y, np.x); float r = length(np); float sr = 0.4 + 0.6 * pow(abs(cos(2.5 * ang)), 2.0); inside = r <= sr ? 1.0 : 0.0; edge = sr - r; }\\n'
+    + '    else if (sh == 3) { float d = abs(np.x) + abs(np.y); inside = d <= 1.0 ? 1.0 : 0.0; edge = 1.0 - d; }\\n'
+    + '    else { float cr = 0.2; vec2 an2 = abs(np); if (an2.x <= 1.0 - cr && an2.y <= 1.0) { inside = 1.0; edge = min(1.0 - an2.x, 1.0 - an2.y); } else if (an2.x <= 1.0 && an2.y <= 1.0 - cr) { inside = 1.0; edge = min(1.0 - an2.x, 1.0 - an2.y); } else if (an2.x <= 1.0 && an2.y <= 1.0) { float cd = length(an2 - (1.0 - cr)); inside = cd <= cr ? 1.0 : 0.0; edge = cr - cd; } }\\n'
+    + '    if (inside < 0.5) { oColor = vec4(c.rgb, 0.0); return; }\\n'
+    + '    float a = c.a;\\n'
+    + '    if (uP0.z > 0.0) a *= clamp(edge / (uP0.z / (w2 * 0.5)), 0.0, 1.0);\\n'
+    + '    oColor = vec4(c.rgb, a); return;\\n'
+    + '  }\\n'
+    + '  if (uEffect == 5) { oColor = vec4(c.rgb + texture(uAux, uv).rgb * texture(uAux, uv).a, c.a); return; }\\n' // bloom 合成
+    + '  if (uEffect == 6) {\\n' // outline：uAux=掩码；uP0.x=厚度px uP0.y=方向集(4/8) uP0.z=模式(0实色 1暗版 2渐变) uP1.xy=光向 uColor=描边色
+    + '    if (texture(uAux, uv).r > 0.5) { oColor = c; return; }\\n'
+    + '    vec2 tp = 1.0 / uRes; float th = max(1.0, uP0.x); bool hit = false; vec2 hd = vec2(0.0);\\n'
+    + '    for (int k = 1; k <= 5 && !hit; k++) { if (float(k) > th) break;\\n'
+    + '      for (int di = 0; di < 8; di++) { if (uP0.y < 7.5 && di >= 4) break;\\n'
+    + '        vec2 dir = di == 0 ? vec2(-1.0, 0.0) : di == 1 ? vec2(1.0, 0.0) : di == 2 ? vec2(0.0, -1.0) : di == 3 ? vec2(0.0, 1.0) : di == 4 ? vec2(-1.0, -1.0) : di == 5 ? vec2(-1.0, 1.0) : di == 6 ? vec2(1.0, -1.0) : vec2(1.0, 1.0);\\n'
+    + '        if (texture(uAux, uv + dir * float(k) * tp).r > 0.5) { hit = true; hd = dir; break; } } }\\n'
+    + '    if (!hit) { oColor = c; return; }\\n'
+    + '    vec3 oc = uColor;\\n'
+    + '    if (uP0.z > 1.5) { float f = dot(normalize(hd), uP1.xy) * 0.5 + 0.5; oc = mix(uColor * 0.7, mix(uColor, vec3(1.0), 0.5), f); }\\n'
+    + '    else if (uP0.z > 0.5) oc = uColor * 0.7;\\n'
+    + '    oColor = vec4(oc, 1.0); return;\\n'
+    + '  }\\n'
+    + '  if (uEffect == 7) {\\n' // bloom 亮部提取：uP0.x=阈值，uColor=辉光色
+    + '    float lum = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;\\n'
+    + '    float f = lum >= uP0.x ? (lum - uP0.x) / max(0.001, 1.0 - uP0.x) : 0.0;\\n'
+    + '    oColor = vec4(uColor, c.a * f * uP0.y); return;\\n'
+    + '  }\\n'
+    + '  if (uEffect == 8 || uEffect == 9) {\\n' // 盒式模糊（8 横 9 纵）：uP0.x=半径px
+    + '    vec2 dir = uEffect == 8 ? vec2(1.0 / uRes.x, 0.0) : vec2(0.0, 1.0 / uRes.y);\\n'
+    + '    float r = clamp(uP0.x, 0.0, 16.0); vec4 sum = vec4(0.0); float cnt = 0.0;\\n'
+    + '    for (int i = -16; i <= 16; i++) { if (abs(float(i)) > r) continue; sum += texture(uTex, uv + dir * float(i)); cnt += 1.0; }\\n'
+    + '    oColor = sum / max(1.0, cnt); return;\\n'
+    + '  }\\n'
+    + '  oColor = c;\\n'
+    + '}\\n');
+  const U = {};
+  for (const n of ['uTex', 'uAux', 'uRes', 'uEffect', 'uP0', 'uP1', 'uColor', 'uColor2']) U[n] = gl.getUniformLocation(prog, n);
+  const maskTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, maskTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  postSys = { w: lowW, h: VIEW_H, A: A, B: B, C: C, D: D, prog: prog, U: U, maskTex: maskTex, vao: gl.createVertexArray() };
+  return postSys;
+}
+/** 掩码栅格化（CPU，低清）：把各部件瓦片 alpha 按位姿印到覆盖视野的
+ *  网格上，供描边通道采样（编辑器以全画布 alpha 为准；此处以部件
+ *  瓦片为准，笔触/粒子不进掩码）。 */
+function fxBuildMask(state, elByKey, camX, camY) {
+  const sys = postSys;
+  const mw = 256, mh = Math.max(2, Math.round(256 * VIEW_H / lowW));
+  const data = new Uint8Array(mw * mh * 4);
+  const sx = mw / lowW, sy = mh / VIEW_H;
+  for (const [key, el] of elByKey) {
+    const entry = state.map.get(key);
+    if (!entry || !entry.tile || !entry.tile.data) continue;
+    const tile = entry.tile;
+    const co = Math.cos(el.rot), si = Math.sin(el.rot);
+    const dsx = el.deform ? el.deform[0] : 1, dsy = el.deform ? el.deform[1] : 1;
+    for (let py = 0; py < tile.h; py++) {
+      for (let px = 0; px < tile.w; px++) {
+        if (tile.data[(py * tile.w + px) * 4 + 3] <= 8) continue;
+        const gx = (px - tile.cx) * dsx, gy = (tile.cy - py) * dsy;
+        const wx = el.pos[0] + co * gx + si * gy;
+        const wy = el.pos[1] + si * gx - co * gy;
+        const mx = Math.floor((wx - (camX - lowW / 2)) * sx);
+        const my = Math.floor((wy - (camY - VIEW_H / 2)) * sy);
+        if (mx < 0 || my < 0 || mx >= mw || my >= mh) continue;
+        data[(my * mw + mx) * 4] = 255;
+        data[(my * mw + mx) * 4 + 3] = 255;
+      }
+    }
+  }
+  gl.bindTexture(gl.TEXTURE_2D, sys.maskTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, mw, mh, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+}
+function fxRunPostChain(rawList, state, elByKey, camX, camY) {
+  const sys = ensurePostSys();
+  // 静态无效的修改器先滤掉（剩下全是空链时仍须把场景平贴到屏幕）
+  const list = rawList.filter((m) => {
+    const P = m.params || {};
+    if (m.type === 'color_lut') {
+      const presets = { retro: 1, monochrome: 2, nightvision: 3, warm: 4, cool: 5, invert: 6 };
+      return (presets[String(P.preset || 'none')] || 0) !== 0 && Number(P.intensity ?? 1) !== 0;
+    }
+    if (m.type === 'pixel_zoom') return Number(P.scale || 1) !== 1;
+    return true;
+  });
+  let src = sys.A;
+  let needMask = list.some((m) => m.type === 'outline_emphasis');
+  if (needMask) fxBuildMask(state, elByKey, camX, camY);
+  gl.disable(gl.DEPTH_TEST);
+  gl.disable(gl.BLEND);
+  gl.bindVertexArray(sys.vao);
+  const pass = (dst, effect, setup, auxTex) => {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst ? dst.fbo : null);
+    gl.viewport(0, 0, lowW, VIEW_H);
+    gl.useProgram(sys.prog);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform1i(sys.U.uTex, 0);
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, auxTex || sys.C.tex);
+    gl.uniform1i(sys.U.uAux, 4);
+    gl.uniform2f(sys.U.uRes, lowW, VIEW_H);
+    gl.uniform1i(sys.U.uEffect, effect);
+    gl.uniform4f(sys.U.uP0, 0, 0, 0, 0);
+    gl.uniform4f(sys.U.uP1, 0, 0, 0, 0);
+    gl.uniform3f(sys.U.uColor, 0, 0, 0);
+    gl.uniform3f(sys.U.uColor2, 0, 0, 0);
+    if (setup) setup();
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.activeTexture(gl.TEXTURE0);
+    if (dst) src = dst;
+  };
+  const other = () => (src === sys.A ? sys.B : sys.A);
+  if (list.length === 0) { pass(null, 0); gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.bindVertexArray(null); return; }
+  list.forEach((m, mi) => {
+    const last = mi === list.length - 1;
+    const dst = last ? null : other();
+    const P = m.params || {};
+    const n = (v, d) => (v === undefined || v === null || !Number.isFinite(Number(v)) ? d : Number(v));
+    if (m.type === 'color_lut') {
+      const presets = { retro: 1, monochrome: 2, nightvision: 3, warm: 4, cool: 5, invert: 6 };
+      const pr = presets[String(P.preset || 'none')] || 0;
+      if (pr === 0 || n(P.intensity, 1) === 0) { if (!last) pass(dst, 0); return; }
+      pass(dst, 1, () => { gl.uniform4f(sys.U.uP0, pr, n(P.intensity, 1), 0, 0); });
+    } else if (m.type === 'scanlines') {
+      const lc = fxHexRgb(P.lineColor || '#000000');
+      pass(dst, 2, () => {
+        gl.uniform4f(sys.U.uP0, n(P.lineSpacing, 2), n(P.lineOpacity, 0.3), P.vignette ? 1 : 0, n(P.vignetteIntensity, 0.3));
+        gl.uniform3f(sys.U.uColor, lc[0], lc[1], lc[2]);
+      });
+    } else if (m.type === 'pixel_zoom') {
+      const scale = n(P.scale, 1);
+      if (scale === 1) { if (!last) pass(dst, 0); return; }
+      const zoomSrc = src;
+      gl.bindTexture(gl.TEXTURE_2D, zoomSrc.tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, P.antiAlias && scale < 1 ? gl.LINEAR : gl.NEAREST);
+      pass(dst, 3, () => {
+        gl.uniform4f(sys.U.uP0, scale, 0, 0, 0);
+        gl.uniform3f(sys.U.uColor, 0.070, 0.070, 0.157);
+      });
+      gl.bindTexture(gl.TEXTURE_2D, zoomSrc.tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    } else if (m.type === 'canvas_mask') {
+      const shapes = { circle: 0, star: 1, rounded_rect: 2, diamond: 3 };
+      pass(dst, 4, () => {
+        gl.uniform4f(sys.U.uP0, shapes[String(P.shape || 'circle')] ?? 0, n(P.margin, 0), n(P.feather, 0), 0);
+      });
+    } else if (m.type === 'bloom') {
+      const bc = fxHexRgb(P.color || '#ffffff');
+      // 亮部提取（色调先行与编辑器后着色等价：模糊只搬运 alpha 与
+      // 均匀色调）；intensity 折进亮部 alpha（编辑器在着色时乘）。
+      pass(sys.C, 7, () => {
+        gl.uniform4f(sys.U.uP0, n(P.threshold, 0.7), n(P.intensity, 0.5), 0, 0);
+        gl.uniform3f(sys.U.uColor, bc[0], bc[1], bc[2]);
+      });
+      const keepSrc = src;
+      src = sys.C;
+      pass(sys.D, 8, () => { gl.uniform4f(sys.U.uP0, n(P.radius, 3), 0, 0, 0); });
+      pass(sys.C, 9, () => { gl.uniform4f(sys.U.uP0, n(P.radius, 3), 0, 0, 0); });
+      src = keepSrc;
+      pass(dst, 5, null, sys.C.tex);
+    } else if (m.type === 'outline_emphasis') {
+      const oc = fxHexRgb(P.color || '#000000');
+      const modes = { solid: 0, darken: 1, gradient: 2 };
+      const la = n(P.lightAngle, 315) * Math.PI / 180;
+      pass(dst, 6, () => {
+        gl.uniform4f(sys.U.uP0, n(P.thickness, 1), String(P.directions) === '4' ? 4 : 8, modes[String(P.outlineMode || 'solid')] ?? 0, 0);
+        gl.uniform4f(sys.U.uP1, Math.cos(la), -Math.sin(la), 0, 0);
+        gl.uniform3f(sys.U.uColor, oc[0], oc[1], oc[2]);
+      }, sys.maskTex);
+    } else {
+      if (!last) pass(dst, 0);
+    }
+  });
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.bindVertexArray(null);
+}
+
 // ---------- 宿主输入与运行时状态 ----------
-const char = { x: 0, y: 0, vy: 0, onGround: true, variant: 0, lockedVariant: false };
+const char = { x: 0, y: 0, py: 0, vy: 0, onGround: true, variant: 0, lockedVariant: false, wallDir: 0, ledge: null };
+// 现场可调参数（控制条「手感」面板直改；宿主包 pkg.scene 可给初值）
+const PHYS = { speed: 72, jumpV: 200, gravity: 720, camFollow: 10, camLockX: false, camLockY: false };
+// 按键绑定（控制条「按键」面板可重绑；方向键恒为备用）
+const KEYMAP = { left: 'KeyA', right: 'KeyD', jump: 'KeyW', down: 'KeyS' };
+let rebindTarget = null; // {kind:'move', act} | {kind:'perf', perf}
+// 移动模式：'side' 横版（重力+跳跃）/ 'top' 俯视（无重力平面移动驱动 8 方向）
+let moveMode = 'side';
+// 场景实体（AABB，左下角 x/y + 宽高，世界单位、y 向上）：包内 scene 优先，
+// 否则用内置默认关卡（一块台阶、两块平台、一面可贴可抓的高块）。
+let solids = (EMBEDDED.scene && Array.isArray(EMBEDDED.scene.solids) && EMBEDDED.scene.solids.length)
+  ? EMBEDDED.scene.solids.map((q) => ({ x: +q.x || 0, y: +q.y || 0, w: Math.max(2, +q.w || 2), h: Math.max(2, +q.h || 2) }))
+  : [
+      { x: -40, y: 0, w: 30, h: 14 },
+      { x: -108, y: 26, w: 52, h: 6 },
+      { x: 34, y: 48, w: 56, h: 6 },
+      { x: 116, y: 0, w: 12, h: 62 },
+    ];
+let sceneEdit = false, selSolid = -1, bgTex = null;
+// 相机状态（平滑跟随；camSnap 时本帧直接对齐目标）
+const camState = { x: 0, y: 52, snap: true };
+// 输入录制/回放：帧级记录 {dt, ix, jump, down, trig, variant, locked, costume, aw}，
+// 回放按记录 dt 与输入序列重演（模拟确定性重放；粒子随机仅影响观感）
+const pendingTriggers = [];
+const rec = { active: false, frames: [], start: null };
+const replay = { active: false, idx: 0, frames: [], gif: false };
+function charFeetY() { return moveMode === 'top' ? char.py : char.y; }
+function charOriginY() { return charFeetY() - localGround; }
+function charBoxH() { return -localGround + 8; }
 let currentCostume = (EMBEDDED.defaultCostume && COSTUMES[EMBEDDED.defaultCostume])
   ? EMBEDDED.defaultCostume
   : Object.keys(COSTUMES)[0] || '';
+/** 逐槽变体覆盖（缺口 6）：片段状态轨在段表演期间写入；图集缓存键含其签名 */
+let slotOverrides = {};
+function overrideSig() {
+  const ks = Object.keys(slotOverrides).sort();
+  return ks.map((k) => k + '=' + slotOverrides[k]).join(',');
+}
 /** 动态模式解析（模板侧）：当前服装集的 __dynamic 优先，缺省用部件自带（默认集解析结果） */
 function dynListFor(part) {
   const entry = COSTUMES[currentCostume];
@@ -1379,6 +1756,7 @@ function pushParticleQuad(verts, x, y, size, rgb, alpha) {
 }
 let elapsed = 0;
 let autoWalk = false;
+let foreOn = false; // 透视缩短开关（缺口 7）：默认关，与编辑器缺省一致
 let autoDir = 1;
 const behaviorState = new Map();
 let prevBehaviorOutputs = new Map();
@@ -1391,7 +1769,12 @@ const activePerfs = [];
 const keys = Object.create(null);
 function startPerf(perf) {
   if (activePerfs.some((a) => a.perf === perf)) return;
-  activePerfs.push({ perf: perf, t: 0, snapTimer: 0, snaps: [] });
+  const act0 = { perf: perf, t: 0, snapTimer: 0, snaps: [] };
+  if (perf.stateFx) {
+    act0.fxSnapshot = { costume: currentCostume, overrides: { ...slotOverrides } };
+    act0.fxApplied = -1;
+  }
+  activePerfs.push(act0);
   emitRuntimeEvent('perfstart', { id: perf.id, name: perf.name });
   behaviorEpoch = elapsed;
   phaseAcc = 0;
@@ -1400,10 +1783,16 @@ function startPerf(perf) {
 }
 /** 停表演：按对象或 id/名/触发名匹配，移除后发 perfend（stopped: true）。
  *  循环表演没有自然结束，只能经此停下；状态机下一帧见表演 inactive 即回落。 */
+function restoreFxSnapshot(act) {
+  if (!act || !act.fxSnapshot) return;
+  currentCostume = act.fxSnapshot.costume;
+  slotOverrides = { ...act.fxSnapshot.overrides };
+}
 function stopPerf(perfOrId) {
   for (let i = activePerfs.length - 1; i >= 0; i--) {
     const p = activePerfs[i].perf;
     if (p === perfOrId || p.id === perfOrId || p.name === perfOrId || p.trigger === perfOrId) {
+      restoreFxSnapshot(activePerfs[i]);
       activePerfs.splice(i, 1);
       emitRuntimeEvent('perfend', { id: p.id, name: p.name, stopped: true });
     }
@@ -1411,6 +1800,7 @@ function stopPerf(perfOrId) {
 }
 function stopAllPerfs() {
   const ids = activePerfs.map((a) => a.perf);
+  for (const a of activePerfs) restoreFxSnapshot(a);
   activePerfs.length = 0;
   for (const p of ids) emitRuntimeEvent('perfend', { id: p.id, name: p.name, stopped: true });
 }
@@ -1507,7 +1897,7 @@ function enterPerformance(perf) {
 window.procRuntime = {
   intent: function (name) {
     if (name === 'jump') {
-      if (char.onGround) { char.vy = JUMP_V; char.onGround = false; }
+      if (moveMode === 'side' && char.onGround) { char.vy = PHYS.jumpV; char.onGround = false; }
       return true;
     }
     const perf = PERFORMANCES.find((p) => p.id === name || p.name === name || p.trigger === name);
@@ -1521,7 +1911,7 @@ window.procRuntime = {
     }
     if (name === 'autoWalk') { autoWalk = !!value; return true; }
     // 保留名是身体真相（逐帧由物理/输入算出），不接受外部写入
-    if (name === 't' || name === 'phase' || name === 'speed01' || name === 'grounded') return false;
+    if (name === 't' || name === 'phase' || name === 'speed01' || name === 'grounded' || name === 'wall' || name === 'ledge') return false;
     // 通用变量：null/undefined = 删除（条件随之读不到、按缺失处理）；只存数
     if (value === null || value === undefined) { delete hostCustomVars[name]; return true; }
     const num = Number(value);
@@ -1539,42 +1929,161 @@ window.procRuntime = {
 };
 
 window.addEventListener('keydown', (e) => {
+  if (rebindTarget) {
+    e.preventDefault();
+    if (e.code === 'Escape') { rebindTarget = null; refreshKeyPanel(); return; }
+    if (rebindTarget.kind === 'move') KEYMAP[rebindTarget.act] = e.code;
+    else if (rebindTarget.kind === 'perf') {
+      rebindTarget.perf.triggerKey = e.code;
+      const b = barState.perfBtns[rebindTarget.perf.id];
+      if (b) b.textContent = rebindTarget.perf.name + ' (' + String(e.code).replace('Key', '') + ')';
+    }
+    rebindTarget = null; refreshKeyPanel();
+    return;
+  }
   keys[e.code] = true;
   const d = parseInt(e.key);
   if (d >= 1 && d <= 8) { char.variant = d - 1; char.lockedVariant = true; refreshBar(); }
-  for (const perf of PERFORMANCES) if (perf.triggerKey === e.code) enterPerformance(perf);
+  for (const perf of PERFORMANCES) if (perf.triggerKey === e.code) pendingTriggers.push(perf.id);
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
-const MOVE_SPEED = 72, JUMP_V = 200, GRAVITY = 720;
+function keyHeld(code, alt) { return !!(keys[code] || (alt && keys[alt])); }
 function readMoveX() {
   if (hostMoveX !== null) return hostMoveX; // 宿主直写优先于键盘（绕过口）
   let ix = 0;
-  if (keys['KeyA'] || keys['ArrowLeft']) ix -= 1;
-  if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
-  if (ix === 0 && autoWalk) ix = autoDir;
+  if (keyHeld(KEYMAP.left, 'ArrowLeft')) ix -= 1;
+  if (keyHeld(KEYMAP.right, 'ArrowRight')) ix += 1;
+  if (ix === 0 && autoWalk && moveMode === 'side') ix = autoDir;
   return ix;
 }
-function updateCharacter(dt, ix) {
-  if (ix !== 0 && !char.lockedVariant) char.variant = ix > 0 ? 2 : 6;
-  char.x += ix * MOVE_SPEED * dt;
-  if (autoWalk && Math.abs(char.x) > 110) autoDir = char.x > 0 ? -1 : 1;
-  if ((keys['KeyW'] || keys['ArrowUp']) && char.onGround) { char.vy = JUMP_V; char.onGround = false; }
-  if (!char.onGround) {
-    char.vy -= GRAVITY * dt; char.y += char.vy * dt;
-    if (char.y <= 0) { char.y = 0; char.vy = 0; char.onGround = true; }
+function readMoveY() { // 俯视平面纵向（+1 = 向北/屏幕上）
+  let iy = 0;
+  if (keyHeld(KEYMAP.jump, 'ArrowUp')) iy += 1;
+  if (keyHeld(KEYMAP.down, 'ArrowDown')) iy -= 1;
+  return iy;
+}
+// 角色碰撞盒：脚底中心 x、半宽 HW、盒高 charBoxH（原点上方留头顶余量）
+const CHAR_HW = 7;
+function updateCharacterTop(dt, ix, iy) {
+  const len = Math.hypot(ix, iy);
+  if (len > 0) {
+    const vx = ix / (len || 1) * PHYS.speed, vy = iy / (len || 1) * PHYS.speed;
+    // 逐轴解算：先 x 后 y，实体当平面障碍
+    let nx = char.x + vx * dt;
+    for (const q of solids) {
+      if (nx + CHAR_HW > q.x && nx - CHAR_HW < q.x + q.w && char.py + CHAR_HW > q.y && char.py - CHAR_HW < q.y + q.h) {
+        nx = vx > 0 ? q.x - CHAR_HW : q.x + q.w + CHAR_HW;
+      }
+    }
+    char.x = nx;
+    let ny = char.py + vy * dt;
+    for (const q of solids) {
+      if (char.x + CHAR_HW > q.x && char.x - CHAR_HW < q.x + q.w && ny + CHAR_HW > q.y && ny - CHAR_HW < q.y + q.h) {
+        ny = vy > 0 ? q.y - CHAR_HW : q.y + q.h + CHAR_HW;
+      }
+    }
+    char.py = ny;
+    if (!char.lockedVariant) {
+      char.variant = ((Math.round((Math.atan2(iy, ix) * 180 / Math.PI + 90) / 45) % 8) + 8) % 8;
+    }
   }
+  char.onGround = true; char.wallDir = 0; char.ledge = null;
+}
+function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
+  const H = charBoxH();
+  // —— 抓边中：物理暂停，等爬上/落下 ——
+  if (char.ledge) {
+    const q = char.ledge.s, side = char.ledge.side; // side=+1 抓的是实体左缘（人在实体左侧）
+    if (jumpHeld || keyHeld(KEYMAP.jump, 'ArrowUp')) {
+      char.y = q.y + q.h; char.x = q.x + (side > 0 ? CHAR_HW + 1 : q.w - CHAR_HW - 1);
+      char.vy = 0; char.onGround = true; char.ledge = null;
+    } else if (downHeld || (side > 0 && ix < 0) || (side < 0 && ix > 0)) {
+      char.ledge = null; char.vy = 0; char.onGround = false;
+    }
+    return;
+  }
+  if (ix !== 0 && !char.lockedVariant) char.variant = ix > 0 ? 2 : 6;
+  // —— 水平：先走后堵（实体侧面） ——
+  char.wallDir = 0;
+  let nx = char.x + ix * PHYS.speed * dt;
+  if (ix !== 0) {
+    for (const q of solids) {
+      const overlapY = char.y < q.y + q.h - 0.01 && char.y + H > q.y + 0.01;
+      if (overlapY && nx + CHAR_HW > q.x && nx - CHAR_HW < q.x + q.w) {
+        if (ix > 0 && char.x + CHAR_HW <= q.x + 0.01) { nx = q.x - CHAR_HW; char.wallDir = 1; }
+        else if (ix < 0 && char.x - CHAR_HW >= q.x + q.w - 0.01) { nx = q.x + q.w + CHAR_HW; char.wallDir = -1; }
+      }
+    }
+  }
+  char.x = nx;
+  if (autoWalk && Math.abs(char.x) > 110) autoDir = char.x > 0 ? -1 : 1;
+  // —— 跳跃 ——
+  if (jumpHeld && char.onGround) { char.vy = PHYS.jumpV; char.onGround = false; }
+  // —— 垂直：重力积分后按跨越判定落地/顶头 ——
+  const prevFeet = char.y, prevHead = char.y + H;
+  if (!char.onGround) char.vy -= PHYS.gravity * dt;
+  else if (!jumpHeld || char.vy <= 0) char.vy = 0;
+  let ny = char.y + char.vy * dt;
+  let landed = false;
+  if (char.vy <= 0) {
+    let best = 0; // 地面 y=0 恒为支撑
+    for (const q of solids) {
+      const top = q.y + q.h;
+      const overX = char.x + CHAR_HW * 0.7 > q.x && char.x - CHAR_HW * 0.7 < q.x + q.w;
+      if (overX && top <= prevFeet + 0.01 && top >= ny && top > best) best = top;
+    }
+    if (ny <= best) { ny = best; char.vy = 0; landed = true; }
+  } else {
+    for (const q of solids) {
+      const overX = char.x + CHAR_HW * 0.7 > q.x && char.x - CHAR_HW * 0.7 < q.x + q.w;
+      if (overX && q.y >= prevHead - 0.01 && q.y <= ny + H) { ny = q.y - H; char.vy = 0; }
+    }
+  }
+  // 支撑复查：站在支撑面上（vy=0 且脚下 0.6 内有支撑）才算在地
+  if (!landed && char.vy === 0) {
+    let support = (ny <= 0.01) ? 0 : -Infinity;
+    for (const q of solids) {
+      const top = q.y + q.h;
+      const overX = char.x + CHAR_HW * 0.7 > q.x && char.x - CHAR_HW * 0.7 < q.x + q.w;
+      if (overX && top <= ny + 0.01 && top >= ny - 0.6 && top > support) support = top;
+    }
+    if (support > -Infinity) { ny = support; landed = true; }
+  }
+  char.y = ny;
+  char.onGround = landed;
+  // —— 贴墙滑落：空中触墙且朝墙推 → 下滑钳速，进状态机变量 wall ——
+  if (!char.onGround && char.wallDir !== 0 && ix === char.wallDir && char.vy < -30) char.vy = -30;
+  // —— 抓边：下落中手高（脚 + 盒高 - 6）跨过实体顶边且身体贴在实体侧缘外 ——
+  if (!char.onGround && char.vy < 0) {
+    const handPrev = prevFeet + H - 6, handNow = char.y + H - 6;
+    for (const q of solids) {
+      const top = q.y + q.h;
+      if (handPrev > top && handNow <= top) {
+        if (char.x + CHAR_HW >= q.x - 2 && char.x + CHAR_HW <= q.x + 5 && ix >= 0) {
+          char.ledge = { s: q, side: 1 }; char.y = top - (H - 6); char.x = q.x - CHAR_HW; char.vy = 0; break;
+        }
+        if (char.x - CHAR_HW <= q.x + q.w + 2 && char.x - CHAR_HW >= q.x + q.w - 5 && ix <= 0) {
+          char.ledge = { s: q, side: -1 }; char.y = top - (H - 6); char.x = q.x + q.w + CHAR_HW; char.vy = 0; break;
+        }
+      }
+    }
+  }
+}
+function updateCharacter(dt, inp) {
+  if (moveMode === 'top') updateCharacterTop(dt, inp.ix, inp.iy);
+  else updateCharacterSide(dt, inp.ix, inp.jump, inp.down);
 }
 function partCenter(params, an) {
   const c = Math.cos(an.a), s = Math.sin(an.a);
   const rx = params.off[0] * c - params.off[1] * s;
   const ry = params.off[0] * s + params.off[1] * c;
-  return [char.x + params.pivot[0] + rx + (an.dx || 0), char.y - localGround + params.pivot[1] + ry + (an.dy || 0)];
+  return [char.x + params.pivot[0] + rx + (an.dx || 0), charOriginY() + params.pivot[1] + ry + (an.dy || 0)];
 }
 
 // ---------- 控制条 ----------
 const bar = document.getElementById('bar');
-const barState = { dirs: [], costs: [] };
+const barState = { dirs: [], costs: [], perfBtns: {} };
 function mkRow(label) {
   const row = document.createElement('div'); row.className = 'row';
   const lab = document.createElement('span'); lab.className = 'lab'; lab.textContent = label;
@@ -1600,7 +2109,8 @@ function mkRow(label) {
   for (const perf of PERFORMANCES) {
     const b = document.createElement('button');
     b.textContent = perf.triggerKey ? perf.name + ' (' + String(perf.triggerKey).replace('Key', '') + ')' : perf.name;
-    b.onclick = () => enterPerformance(perf);
+    b.onclick = () => pendingTriggers.push(perf.id);
+    barState.perfBtns[perf.id] = b;
     row3.appendChild(b);
   }
   const aw = document.createElement('button');
@@ -1612,6 +2122,10 @@ function mkRow(label) {
   sp.textContent = '停表演';
   sp.onclick = () => stopAllPerfs();
   row3.appendChild(sp);
+  const fb = document.createElement('button');
+  fb.textContent = '透视缩短';
+  fb.onclick = () => { foreOn = !foreOn; fb.classList.toggle('on', foreOn); };
+  row3.appendChild(fb);
 }
 function refreshBar() {
   barState.dirs.forEach((b, i) => b.classList.toggle('on', i === char.variant));
@@ -1620,9 +2134,337 @@ function refreshBar() {
 refreshBar();
 document.getElementById('hud').innerHTML =
   '<b>' + EMBEDDED.characterName + '</b> · 程序化运行时<br>' +
-  'A/D 或方向键移动 · W 跳跃 · 数字键锁方向 · 表演键见右上';
+  'A/D 或方向键移动 · W 跳跃 · 数字键锁方向 · 表演键见右上<br>控制条可切俯视、改手感、重绑键、编辑场景、录制回放/GIF';
 if (EMBEDDED.warnings && EMBEDDED.warnings.length) {
   document.getElementById('warn').textContent = '导出提示：\\n' + EMBEDDED.warnings.join('\\n');
+}
+
+
+// ---------- 预览工具面板：模式 / 手感 / 按键 / 场景 / 录制 ----------
+function mkPanelDiv() {
+  const d = document.createElement('div');
+  d.style.display = 'none'; d.style.padding = '4px 2px'; d.style.maxWidth = '560px';
+  return d;
+}
+function mkBtn(label) { const b = document.createElement('button'); b.textContent = label; return b; }
+const feelPanel = mkPanelDiv(), keyPanel = mkPanelDiv(), scenePanel = mkPanelDiv(), recPanel = mkPanelDiv();
+{
+  const row = mkRow('工具');
+  const bMode = mkBtn('俯视模式');
+  bMode.onclick = () => {
+    if (moveMode === 'side') { moveMode = 'top'; char.py = char.y; char.ledge = null; char.wallDir = 0; }
+    else { moveMode = 'side'; char.y = 0; char.vy = 0; char.onGround = true; }
+    camState.snap = true;
+    bMode.classList.toggle('on', moveMode === 'top');
+    bMode.textContent = moveMode === 'top' ? '横版模式' : '俯视模式';
+  };
+  row.appendChild(bMode);
+  const panels = [[feelPanel, '手感'], [keyPanel, '按键'], [scenePanel, '场景'], [recPanel, '录制']];
+  for (const [d, lab] of panels) {
+    const b = mkBtn(lab);
+    b.onclick = () => {
+      const on = d.style.display === 'none';
+      for (const [q] of panels) q.style.display = 'none';
+      d.style.display = on ? 'block' : 'none';
+      b.classList.toggle('on', on);
+    };
+    row.appendChild(b);
+    bar.appendChild(d);
+  }
+}
+// 手感：滑杆直改 PHYS（走速/跳速/重力/相机跟随率）+ 相机横纵锁定
+{
+  const defs = [
+    ['speed', '移动速度', 20, 220, 1], ['jumpV', '跳跃初速', 50, 420, 1],
+    ['gravity', '重力', 100, 2400, 10], ['camFollow', '相机跟随率', 0.5, 24, 0.5],
+  ];
+  for (const [k, lab, mn, mx, st] of defs) {
+    const line = document.createElement('div');
+    const name = document.createElement('span'); name.className = 'lab'; name.textContent = lab;
+    const rng = document.createElement('input');
+    rng.type = 'range'; rng.min = String(mn); rng.max = String(mx); rng.step = String(st); rng.value = String(PHYS[k]);
+    const val = document.createElement('span'); val.className = 'lab'; val.textContent = String(PHYS[k]);
+    rng.oninput = () => { PHYS[k] = parseFloat(rng.value); val.textContent = rng.value; };
+    line.appendChild(name); line.appendChild(rng); line.appendChild(val);
+    feelPanel.appendChild(line);
+  }
+  for (const [k, lab] of [['camLockX', '锁相机横向'], ['camLockY', '锁相机纵向']]) {
+    const b = mkBtn(lab);
+    b.onclick = () => { PHYS[k] = !PHYS[k]; b.classList.toggle('on', PHYS[k]); };
+    feelPanel.appendChild(b);
+  }
+}
+// 按键：移动键与表演触发键都可重绑（点一项 → 按新键）
+function refreshKeyPanel() {
+  keyPanel.innerHTML = '';
+  const hint = document.createElement('div');
+  hint.className = 'lab';
+  hint.textContent = rebindTarget ? '按下新键完成重绑（Esc 取消）…' : '点击一项再按新键重绑；方向键恒为备用。';
+  keyPanel.appendChild(hint);
+  const acts = [['left', '左移'], ['right', '右移'], ['jump', '跳跃/上'], ['down', '下']];
+  for (const [act, lab] of acts) {
+    const b = mkBtn(lab + '：' + String(KEYMAP[act]).replace('Key', ''));
+    b.onclick = () => { rebindTarget = { kind: 'move', act }; refreshKeyPanel(); };
+    keyPanel.appendChild(b);
+  }
+  for (const perf of PERFORMANCES) {
+    const b = mkBtn(perf.name + '：' + (perf.triggerKey ? String(perf.triggerKey).replace('Key', '') : '未绑'));
+    b.onclick = () => { rebindTarget = { kind: 'perf', perf }; refreshKeyPanel(); };
+    keyPanel.appendChild(b);
+  }
+}
+refreshKeyPanel();
+// 场景：增删实体、背景图；拖拽在画布上完成（编辑开关打开后）
+const sceneInfo = document.createElement('div');
+sceneInfo.className = 'lab';
+function refreshScenePanel() {
+  const q = solids[selSolid];
+  sceneInfo.textContent = q
+    ? '选中块 ' + (selSolid + 1) + '：x ' + Math.round(q.x) + '、y ' + Math.round(q.y) + '、' + Math.round(q.w) + '×' + Math.round(q.h) + '（拖动移动、拖右上角改大小）'
+    : '未选中块：在画布上点一个块选中。';
+}
+{
+  const bEdit = mkBtn('编辑场景');
+  bEdit.onclick = () => { sceneEdit = !sceneEdit; if (!sceneEdit) selSolid = -1; bEdit.classList.toggle('on', sceneEdit); refreshScenePanel(); };
+  scenePanel.appendChild(bEdit);
+  const bAdd = mkBtn('添加块');
+  bAdd.onclick = () => {
+    solids.push({ x: Math.round(camState.x - 15), y: moveMode === 'top' ? Math.round(camState.y - 3) : 0, w: 30, h: 6 });
+    selSolid = solids.length - 1; sceneEdit = true; bEdit.classList.add('on'); refreshScenePanel();
+  };
+  scenePanel.appendChild(bAdd);
+  const bDel = mkBtn('删除选中');
+  bDel.onclick = () => { if (selSolid >= 0) { solids.splice(selSolid, 1); selSolid = -1; refreshScenePanel(); } };
+  scenePanel.appendChild(bDel);
+  const bgInput = document.createElement('input');
+  bgInput.type = 'file'; bgInput.accept = 'image/*'; bgInput.style.display = 'none';
+  bgInput.onchange = () => {
+    const f = bgInput.files && bgInput.files[0];
+    if (!f) return;
+    const img = new Image();
+    img.onload = () => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      bgTex = t;
+      URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(f);
+  };
+  scenePanel.appendChild(bgInput);
+  const bBg = mkBtn('背景图…');
+  bBg.onclick = () => bgInput.click();
+  scenePanel.appendChild(bBg);
+  const bBgOff = mkBtn('清除背景');
+  bBgOff.onclick = () => { if (bgTex) { gl.deleteTexture(bgTex); bgTex = null; } };
+  scenePanel.appendChild(bBgOff);
+  scenePanel.appendChild(sceneInfo);
+  refreshScenePanel();
+}
+// 场景拖拽：屏幕 → 世界（相机中心 + 视口一半）
+function screenToWorld(e) {
+  const r = canvas.getBoundingClientRect();
+  return [
+    camState.x + ((e.clientX - r.left) / r.width - 0.5) * lowW,
+    camState.y + (0.5 - (e.clientY - r.top) / r.height) * VIEW_H,
+  ];
+}
+let sceneDrag = null;
+canvas.addEventListener('pointerdown', (e) => {
+  if (!sceneEdit) return;
+  const [wx, wy] = screenToWorld(e);
+  selSolid = -1;
+  for (let i = solids.length - 1; i >= 0; i--) {
+    const q = solids[i];
+    if (wx >= q.x && wx <= q.x + q.w && wy >= q.y && wy <= q.y + q.h) {
+      selSolid = i;
+      const corner = Math.hypot(wx - (q.x + q.w), wy - (q.y + q.h)) < 7;
+      sceneDrag = { mode: corner ? 'resize' : 'move', dx: wx - q.x, dy: wy - q.y };
+      break;
+    }
+  }
+  refreshScenePanel();
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!sceneDrag || selSolid < 0 || !solids[selSolid]) return;
+  const [wx, wy] = screenToWorld(e);
+  const q = solids[selSolid];
+  if (sceneDrag.mode === 'move') { q.x = Math.round(wx - sceneDrag.dx); q.y = Math.round(wy - sceneDrag.dy); }
+  else { q.w = Math.max(4, Math.round(wx - q.x)); q.h = Math.max(4, Math.round(wy - q.y)); }
+  refreshScenePanel();
+});
+window.addEventListener('pointerup', () => { sceneDrag = null; });
+// ---------- 录制 / 回放 / GIF ----------
+function snapshotChar() {
+  return { x: char.x, y: char.y, py: char.py, variant: char.variant, locked: char.lockedVariant, costume: currentCostume, aw: autoWalk };
+}
+function restoreChar(sn) {
+  char.x = sn.x; char.y = sn.y; char.py = sn.py; char.vy = 0;
+  char.ledge = null; char.wallDir = 0;
+  char.variant = sn.variant; char.lockedVariant = sn.locked;
+  currentCostume = sn.costume; autoWalk = sn.aw;
+  char.onGround = moveMode === 'top' ? true : sn.y <= 0.01;
+  camState.snap = true; refreshBar();
+}
+function startRecording() {
+  if (replay.active) endReplay();
+  stopAllPerfs(); behaviorEpoch = elapsed;
+  rec.frames = []; rec.start = snapshotChar(); rec.active = true;
+  refreshRecPanel();
+}
+function startReplay(withGif) {
+  if (!rec.frames.length || !rec.start) return;
+  rec.active = false;
+  restoreChar(rec.start);
+  stopAllPerfs(); behaviorEpoch = elapsed;
+  replay.frames = rec.frames; replay.idx = 0; replay.gif = !!withGif; replay.active = true;
+  gifFrames.length = 0; gifAcc = 0;
+  refreshRecPanel();
+}
+function endReplay() {
+  const wasGif = replay.gif;
+  replay.active = false; replay.gif = false;
+  if (wasGif && gifFrames.length) { try { downloadGif(); } catch (err) { /* 编码失败不打断预览 */ } }
+  gifFrames.length = 0;
+  refreshRecPanel();
+}
+const recInfo = document.createElement('span');
+recInfo.className = 'lab';
+let recBtn = null, replayBtns = [];
+function refreshRecPanel() {
+  recInfo.textContent = rec.active
+    ? '录制中 · ' + rec.frames.length + ' 帧'
+    : replay.active ? '回放中 · ' + replay.idx + '/' + replay.frames.length
+    : rec.frames.length ? '已录 ' + rec.frames.length + ' 帧（可回放）' : '未录制';
+  if (recBtn) { recBtn.textContent = rec.active ? '停止录制' : '开始录制'; recBtn.classList.toggle('on', rec.active); }
+  for (const b of replayBtns) b.disabled = !rec.frames.length || rec.active;
+}
+{
+  recBtn = mkBtn('开始录制');
+  recBtn.onclick = () => { if (rec.active) { rec.active = false; refreshRecPanel(); } else startRecording(); };
+  recPanel.appendChild(recBtn);
+  const bPlay = mkBtn('回放');
+  bPlay.onclick = () => startReplay(false);
+  recPanel.appendChild(bPlay); replayBtns.push(bPlay);
+  const bGif = mkBtn('回放并导出 GIF');
+  bGif.onclick = () => startReplay(true);
+  recPanel.appendChild(bGif); replayBtns.push(bGif);
+  const bStop = mkBtn('停止回放');
+  bStop.onclick = () => { if (replay.active) endReplay(); };
+  recPanel.appendChild(bStop);
+  recPanel.appendChild(recInfo);
+  refreshRecPanel();
+}
+// GIF：回放时按 30fps 节拍从帧缓冲抓帧（回放结束编码下载）
+const gifFrames = [];
+let gifAcc = 0;
+const gifSrc = document.createElement('canvas');
+const gifDst = document.createElement('canvas');
+function gifCaptureFrame(dt) {
+  gifAcc += dt;
+  if (gifAcc < 1 / 30) return;
+  const delay = Math.max(2, Math.round(gifAcc * 100));
+  gifAcc = 0;
+  const px = new Uint8Array(lowW * VIEW_H * 4);
+  gl.readPixels(0, 0, lowW, VIEW_H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  const flipped = new Uint8ClampedArray(px.length);
+  const stride = lowW * 4;
+  for (let y = 0; y < VIEW_H; y++) flipped.set(px.subarray((VIEW_H - 1 - y) * stride, (VIEW_H - y) * stride), y * stride);
+  gifSrc.width = lowW; gifSrc.height = VIEW_H;
+  gifSrc.getContext('2d').putImageData(new ImageData(flipped, lowW, VIEW_H), 0, 0);
+  const W = Math.min(320, lowW), H = Math.max(1, Math.round(VIEW_H * W / lowW));
+  gifDst.width = W; gifDst.height = H;
+  const cx2 = gifDst.getContext('2d');
+  cx2.imageSmoothingEnabled = false;
+  cx2.drawImage(gifSrc, 0, 0, W, H);
+  gifFrames.push({ data: cx2.getImageData(0, 0, W, H).data, w: W, h: H, delay });
+}
+function gifLzw(idx) {
+  const out = [];
+  let bitBuf = 0, bitCnt = 0;
+  let dict = new Map(), freeEnt = 258, nBits = 9, maxCode = 511;
+  const emit = (code) => {
+    bitBuf |= code << bitCnt; bitCnt += nBits;
+    while (bitCnt >= 8) { out.push(bitBuf & 255); bitBuf >>= 8; bitCnt -= 8; }
+  };
+  const resetDict = () => { dict = new Map(); freeEnt = 258; nBits = 9; maxCode = 511; };
+  emit(256);
+  let entKey = String(idx[0]);
+  for (let i = 1; i < idx.length; i++) {
+    const c = idx[i], comb = entKey + ',' + c;
+    if (dict.has(comb)) { entKey = comb; continue; }
+    emit(entKey.indexOf(',') >= 0 ? dict.get(entKey) : parseInt(entKey, 10));
+    if (freeEnt < 4096) {
+      dict.set(comb, freeEnt++);
+      if (freeEnt > maxCode && freeEnt < 4096) { nBits++; maxCode = (1 << nBits) - 1; }
+    } else {
+      emit(256); resetDict();
+    }
+    entKey = String(c);
+  }
+  emit(entKey.indexOf(',') >= 0 ? dict.get(entKey) : parseInt(entKey, 10));
+  emit(257);
+  if (bitCnt > 0) out.push(bitBuf & 255);
+  return out;
+}
+function downloadGif() {
+  const W = gifFrames[0].w, H = gifFrames[0].h;
+  // 调色板：全帧抽样统计 5-5-5 颜色频次取前 256，LUT 就近映射
+  const hist = new Map();
+  for (const f of gifFrames) {
+    const d = f.data;
+    for (let i = 0; i < d.length; i += 64) {
+      const k = ((d[i] >> 3) << 10) | ((d[i + 1] >> 3) << 5) | (d[i + 2] >> 3);
+      hist.set(k, (hist.get(k) || 0) + 1);
+    }
+  }
+  const keys = [...hist.entries()].sort((a, b) => b[1] - a[1]).slice(0, 256).map((e) => e[0]);
+  while (keys.length < 256) keys.push(0);
+  const pal = keys.map((k) => [((k >> 10) & 31) * 8 + 4, ((k >> 5) & 31) * 8 + 4, (k & 31) * 8 + 4]);
+  const lut = new Int16Array(32768).fill(-1);
+  const palIndex = (r, g, b) => {
+    const k = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+    const hit = lut[k];
+    if (hit >= 0) return hit;
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < 256; i++) {
+      const dr = pal[i][0] - r, dg = pal[i][1] - g, db = pal[i][2] - b;
+      const dd = dr * dr + dg * dg + db * db;
+      if (dd < bd) { bd = dd; best = i; }
+    }
+    lut[k] = best; return best;
+  };
+  const bytes = [];
+  const pushStr = (t) => { for (let i = 0; i < t.length; i++) bytes.push(t.charCodeAt(i) & 255); };
+  const push16 = (v) => { bytes.push(v & 255, (v >> 8) & 255); };
+  pushStr('GIF89a'); push16(W); push16(H); bytes.push(0xF7, 0, 0);
+  for (const c of pal) bytes.push(c[0], c[1], c[2]);
+  pushStr('!\xFF\x0BNETSCAPE2.0\x03\x01\x00\x00\x00');
+  for (const f of gifFrames) {
+    bytes.push(0x21, 0xF9, 4, 0); push16(Math.max(2, f.delay)); bytes.push(0, 0);
+    bytes.push(0x2C); push16(0); push16(0); push16(W); push16(H); bytes.push(0);
+    const d = f.data, idx = new Uint8Array(W * H);
+    for (let j = 0, q = 0; q < d.length; q += 4, j++) idx[j] = palIndex(d[q], d[q + 1], d[q + 2]);
+    const comp = gifLzw(idx);
+    bytes.push(8);
+    for (let i = 0; i < comp.length; i += 255) {
+      const chunk = comp.slice(i, i + 255);
+      bytes.push(chunk.length);
+      for (const b of chunk) bytes.push(b);
+    }
+    bytes.push(0);
+  }
+  bytes.push(0x3B);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'image/gif' }));
+  a.download = (EMBEDDED.characterName || 'preview') + '.gif';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
 // ---------- 主循环：输入 → 程序化姿态 → 表演合成 → 渲染 ----------
@@ -1630,10 +2472,192 @@ const uLoc = (pr, n) => gl.getUniformLocation(pr, n);
 const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal'), base: uLoc(partProg, 'uBase'), glow: uLoc(partProg, 'uGlow') };
 const solidU = { cam: uLoc(solidProg, 'uCam'), vh: uLoc(solidProg, 'uViewHalf') };
 let last = performance.now();
+// ---------- 画布级特效（缺口 5）：特效轨 + 笔触 ----------
+// 与编辑器同语义：特效轨取 ≤ 当前帧的最近键（不插值）、笔触自其帧起
+// 常驻。编辑器画布坐标 → 运行时世界坐标：画布中心 = 角色原点、
+// x 同向、y 翻转（世界 y 向上）。全部走 solid 顶点（mode 0 方块 /
+// mode 1 圆点），与粒子同路绘制（普通混合；编辑器的 lighter/overlay
+// 等混合模式在此路下不区分，已知会近似）。
+const FX = EMBEDDED.fx || null;
+const FXW = FX && FX.canvas ? FX.canvas.w : 512;
+const FXH = FX && FX.canvas ? FX.canvas.h : 512;
+function fxHexRgb(hex) {
+  const n = parseInt(String(hex || '#ffffff').replace('#', ''), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+function fxQuad(verts, cx, cy, w, h, rgb, a, mode) {
+  const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2;
+  const cs = [[x0, y0, -1, -1], [x1, y0, 1, -1], [x1, y1, 1, 1], [x0, y0, -1, -1], [x1, y1, 1, 1], [x0, y1, -1, 1]];
+  for (const cn of cs) verts.push(cn[0], cn[1], cn[2], cn[3], rgb[0], rgb[1], rgb[2], a, mode);
+}
+function fxSeg(verts, w0, w1, wdt, rgb, a) {
+  const dx = w1[0] - w0[0], dy = w1[1] - w0[1];
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len * wdt / 2, ny = dx / len * wdt / 2;
+  const cs = [
+    [w0[0] + nx, w0[1] + ny, -1, -1], [w1[0] + nx, w1[1] + ny, 1, -1],
+    [w1[0] - nx, w1[1] - ny, 1, 1], [w0[0] + nx, w0[1] + ny, -1, -1],
+    [w1[0] - nx, w1[1] - ny, 1, 1], [w0[0] - nx, w0[1] - ny, -1, 1],
+  ];
+  for (const cn of cs) verts.push(cn[0], cn[1], cn[2], cn[3], rgb[0], rgb[1], rgb[2], a, 0);
+}
+function fxW2(px, py) { return [char.x + (px - FXW / 2), charFeetY() + (FXH / 2 - py)]; }
+function fxRenderSet(set, frame, verts, occAt) {
+  if (!set) return;
+  const num = (v, d) => (v === undefined || v === null || !Number.isFinite(Number(v)) ? d : Number(v));
+  for (const tr of set.effectTracks || []) {
+    if (!tr.visible) continue;
+    let kf = null;
+    for (const k of tr.keyframes || []) if (k.frame <= frame && (!kf || k.frame > kf.frame)) kf = k;
+    if (!kf) continue;
+    const P = kf.params || {};
+    if (tr.type === 'glow') {
+      const radius = num(P.radius, 3), inten = num(P.intensity, 0.5), rgb = fxHexRgb(P.color || '#ffff00');
+      const step = Math.max(1, Math.floor(radius / 2));
+      for (let ring = radius * 4; ring >= 1; ring -= step) {
+        const t = ring / (radius * 4);
+        fxQuad(verts, char.x, char.y, ring * 16, ring * 16, rgb, inten * 0.15 * (1 - t), 1);
+      }
+    } else if (tr.type === 'particle') {
+      const rate = num(P.rate, 10), speed = num(P.speed, 2), life = Math.max(1, num(P.life, 10));
+      const grav = num(P.gravity, 0.5), rgb = fxHexRgb(P.color || '#ff8800');
+      const seed = dynSeedOf(tr.id);
+      for (let birth = Math.max(0, frame - life + 1); birth <= frame; birth++) {
+        const rng = dynProcSeededRandom(seed + birth * 7919);
+        for (let i = 0; i < rate; i++) {
+          const age = frame - birth;
+          const ang = rng() * Math.PI * 2;
+          const sv = speed * (0.5 + rng() * 0.5);
+          const sizeVar = 1 + Math.floor(rng() * 3);
+          const wx = char.x + Math.cos(ang) * sv * age;
+          const wy = char.y - (Math.sin(ang) * sv * age + 0.5 * grav * age * age);
+          const alpha = Math.max(0, 1 - age / life) * 0.6;
+          if (alpha > 0) fxQuad(verts, wx, wy, sizeVar, sizeVar, rgb, alpha, 0);
+        }
+      }
+    } else if (tr.type === 'afterimage') {
+      const count = num(P.count, 3), opacity = num(P.opacity, 0.3), spacing = num(P.spacing, 5);
+      for (let i = 1; i <= count; i++) fxQuad(verts, char.x - i * spacing, char.y, FXW, FXH, [128 / 255, 0, 1], opacity * 0.015, 0);
+    } else if (tr.type === 'pixel_displace') {
+      const inten = num(P.intensity, 2), freq = num(P.frequency, 0.1);
+      for (let y = 0; y < FXH; y += 4) {
+        const dx = Math.sin((y * freq + frame * freq * Math.PI * 2) * Math.PI * 2) * inten;
+        const w = fxW2(FXW / 2 + dx, y);
+        fxQuad(verts, w[0], w[1], FXW, 1, [100 / 255, 1, 200 / 255], 0.01, 0);
+      }
+    } else if (tr.type === 'motion_blur') {
+      const length = num(P.length, 5), decay = num(P.decay, 0.5);
+      for (let i = 1; i <= length; i++) {
+        const a = Math.pow(1 - i / length, (1 - decay) * 4 + 1) * 0.1;
+        fxQuad(verts, char.x - i, char.y, FXW, FXH, [200 / 255, 200 / 255, 1], a * 0.1, 0);
+      }
+    }
+  }
+  for (const st of set.motionBlurStrokes || []) {
+    if (st.frame > frame || !st.points || st.points.length < 2) continue;
+    const inten = st.intensity || 0, white = [1, 1, 1];
+    const steps = Math.max(1, Math.floor(inten));
+    const dots = (pt, dirX, dirY, f) => {
+      for (let s2 = 1; s2 <= steps; s2++) {
+        const w = fxW2(pt.x + dirX * s2 * 2, pt.y + dirY * s2 * 2);
+        fxQuad(verts, w[0], w[1], 2, 2, white, (1 - s2 / steps) * f * (inten / 10), 0);
+      }
+    };
+    if (st.brushType === 'linear') {
+      for (let i = 0; i + 1 < st.points.length; i++) {
+        const p1 = st.points[i], p2 = st.points[i + 1];
+        const dx = p2.x - p1.x, dy = p2.y - p1.y, len = Math.hypot(dx, dy);
+        if (len < 0.01) continue;
+        dots(p1, dx / len, dy / len, 0.4);
+        fxSeg(verts, fxW2(p1.x, p1.y), fxW2(p2.x, p2.y), 2, white, 0.3 * (inten / 10) * 0.5);
+      }
+    } else if (st.brushType === 'radial') {
+      let cx = 0, cy = 0;
+      for (const pt of st.points) { cx += pt.x; cy += pt.y; }
+      cx /= st.points.length; cy /= st.points.length;
+      for (const pt of st.points) {
+        const dx = pt.x - cx, dy = pt.y - cy, d = Math.hypot(dx, dy);
+        if (d < 0.01) continue;
+        dots(pt, dx / d, dy / d, 0.35);
+      }
+    } else if (st.brushType === 'directional') {
+      const rad = (st.direction || 0) * Math.PI / 180;
+      for (const pt of st.points) dots(pt, Math.cos(rad), Math.sin(rad), 0.35);
+    }
+  }
+  for (const st of set.effectStrokes || []) {
+    if (st.frame > frame || !st.points || st.points.length === 0) continue;
+    const rgb = fxHexRgb(st.color || '#ffffff'), inten = st.intensity || 0;
+    if (st.type === 'glow_brush') {
+      for (const pt of st.points) {
+        const w = fxW2(pt.x, pt.y);
+        fxQuad(verts, w[0], w[1], (st.radius || 3) * 2, (st.radius || 3) * 2, rgb, inten * 0.3, 1);
+      }
+    } else if (st.type === 'particle_brush') {
+      const density = st.density ?? 10, spread = st.spread ?? 5;
+      for (let i = 0; i < st.points.length; i++) {
+        const pt = st.points[i];
+        const rng = dynProcSeededRandom(dynSeedOf(st.id + i.toString()));
+        for (let d = 0; d < density; d++) {
+          const ox = (rng() - 0.5) * spread * 2, oy = (rng() - 0.5) * spread * 2;
+          const size = rng() > 0.5 ? 2 : 1;
+          const alpha = inten * (0.5 + rng() * 0.5);
+          const w = fxW2(pt.x + ox, pt.y + oy);
+          fxQuad(verts, w[0], w[1], size, size, rgb, alpha, 0);
+        }
+      }
+    } else if (st.type === 'afterimage_brush' && occAt) {
+      if (st.points.length < 2) continue;
+      const spread = st.spread ?? 5;
+      const f0 = st.points[0], l0 = st.points[st.points.length - 1];
+      let dirX = l0.x - f0.x, dirY = l0.y - f0.y;
+      const len = Math.hypot(dirX, dirY);
+      if (len > 0.01) { dirX /= len; dirY /= len; } else { dirX = -1; dirY = 0; }
+      const copies = Math.max(1, Math.floor(spread));
+      for (let c = 1; c <= copies; c++) {
+        const alpha = inten * (1 - c / (copies + 1)) * 0.5;
+        for (const pt of st.points) {
+          const src = fxW2(pt.x, pt.y);
+          if (!occAt(src[0], src[1])) continue;
+          const dst = fxW2(pt.x + dirX * c * 2, pt.y + dirY * c * 2);
+          fxQuad(verts, dst[0], dst[1], 1, 1, rgb, alpha, 0);
+        }
+      }
+    }
+  }
+}
+
+let recPendingFrame = null;
 function frame(now) {
-  const dt = Math.min(0.05, (now - last) / 1000); last = now; elapsed += dt;
-  const ix = readMoveX();
-  updateCharacter(dt, ix);
+  let dt = Math.min(0.05, (now - last) / 1000); last = now;
+  // 本帧输入：回放时取记录帧（dt/方向/跳/触发/位姿快照），否则实时读键
+  let inp, trigNow;
+  if (replay.active) {
+    const rf = replay.frames[replay.idx];
+    if (!rf) {
+      endReplay();
+      inp = { ix: readMoveX(), iy: readMoveY(), jump: keyHeld(KEYMAP.jump, 'ArrowUp'), down: keyHeld(KEYMAP.down, 'ArrowDown') };
+      trigNow = pendingTriggers.splice(0);
+    } else {
+      replay.idx++;
+      dt = rf.dt;
+      inp = { ix: rf.ix, iy: rf.iy || 0, jump: rf.jump, down: rf.down };
+      trigNow = rf.trig.slice();
+      char.variant = rf.variant; char.lockedVariant = rf.locked;
+      if (rf.costume && COSTUMES[rf.costume] && rf.costume !== currentCostume) { currentCostume = rf.costume; refreshBar(); }
+      autoWalk = !!rf.aw;
+    }
+  } else {
+    inp = { ix: readMoveX(), iy: readMoveY(), jump: keyHeld(KEYMAP.jump, 'ArrowUp'), down: keyHeld(KEYMAP.down, 'ArrowDown') };
+    trigNow = pendingTriggers.splice(0);
+  }
+  elapsed += dt;
+  const ix = inp.ix;
+  for (const id of trigNow) { const pf = PERFORMANCES.find((q) => q.id === id); if (pf) enterPerformance(pf); }
+  updateCharacter(dt, inp);
+  if (rec.active && !replay.active) {
+    recPendingFrame = { dt, ix: inp.ix, iy: inp.iy, jump: inp.jump, down: inp.down, trig: trigNow.slice() };
+  }
   if (char.onGround !== prevOnGround) {
     emitRuntimeEvent(char.onGround ? 'land' : 'takeoff', {});
     prevOnGround = char.onGround;
@@ -1642,7 +2666,7 @@ function frame(now) {
   // phase 为步态相位帧：移动约 30/s、静止 4/s、腾空 18/s；
   // nodeRef 读哪帧由每张图的 follow 开关决定：'prev'（缺省）读上一帧
   // 输出（纯延迟一帧），'same' 读本帧第一遍的输出（无延迟））
-  phaseAcc += dt * (char.onGround ? (ix !== 0 ? 30 : 4) : 18) / 60; // 圈/秒（1 圈 = 旧 60 相位帧）
+  phaseAcc += dt * (char.onGround ? ((ix !== 0 || inp.iy !== 0) ? 30 : 4) : 18) / 60; // 圈/秒（1 圈 = 旧 60 相位帧）
   // 行为时钟 = 表演纪元起算的秒。图内时间一律秒（time 节点、
   // 周期参数、phase 圈数），全系统不再出现帧制时间。
   const behaviorT = elapsed - behaviorEpoch;
@@ -1650,7 +2674,8 @@ function frame(now) {
   // 但 t/phase/moveX/speed01/grounded 永远以本帧计算为准。
   const hostVars = Object.assign({}, hostCustomVars, {
     t: behaviorT, phase: phaseAcc, moveX: ix,
-    speed01: ix !== 0 ? 1 : 0, grounded: char.onGround ? 1 : 0,
+    speed01: (ix !== 0 || inp.iy !== 0) ? 1 : 0, grounded: char.onGround ? 1 : 0,
+    wall: (!char.onGround && char.wallDir !== 0) ? 1 : 0, ledge: char.ledge ? 1 : 0,
   });
   lastHostVars = hostVars;
   smUpdate(hostVars);
@@ -1667,10 +2692,10 @@ function frame(now) {
       });
       const rec = out.get(key);
       if (rec) {
-        pose[key] = { a: rec.angle, dx: rec.dx, dy: rec.dy, rim: 0, glint: 0 };
+        pose[key] = { a: rec.angle, dx: rec.dx, dy: rec.dy, rim: 0, glint: 0, sx: rec.scaleX ?? 1, sy: rec.scaleY ?? 1 };
         behaviorOutputs.set(key, {
           rotation: -rec.angle * 180 / Math.PI, translateX: rec.dx, translateY: -rec.dy,
-          scaleX: 1, scaleY: 1,
+          scaleX: rec.scaleX ?? 1, scaleY: rec.scaleY ?? 1,
         });
       }
     }
@@ -1693,7 +2718,33 @@ function frame(now) {
       const bpOut = evalRuntimeGraph(act.perf.graph, { u: Math.min(1, act.t / act.perf.duration), tSec: act.t });
       pose = composePerformance(pose, act.perf, bpOut, w);
     }
+    // 片段状态轨（缺口 6）：段表演期间按本地时间累计应用状态键——
+    // 从开始时的快照出发，逐键叠加（整覆服装集 + 逐槽变体增删），
+    // 索引推进时才重算；表演结束恢复快照（见 restoreFxSnapshot）。
+    if (act.perf.stateFx && act.fxSnapshot) {
+      let idx = -1;
+      for (let k = 0; k < act.perf.stateFx.length; k++) {
+        if (act.perf.stateFx[k].t <= act.t) idx = k; else break;
+      }
+      if (idx !== act.fxApplied) {
+        act.fxApplied = idx;
+        let cs = act.fxSnapshot.costume;
+        const ov = { ...act.fxSnapshot.overrides };
+        for (let k = 0; k <= idx; k++) {
+          const e = act.perf.stateFx[k];
+          if (e.costume) cs = e.costume;
+          if (e.slots) {
+            for (const sk of Object.keys(e.slots)) {
+              if (e.slots[sk] === null) delete ov[sk]; else ov[sk] = e.slots[sk];
+            }
+          }
+        }
+        currentCostume = cs;
+        slotOverrides = ov;
+      }
+    }
     if (act.t > act.perf.duration) {
+      restoreFxSnapshot(act);
       activePerfs.splice(i, 1);
       emitRuntimeEvent('perfend', { id: act.perf.id, name: act.perf.name });
     }
@@ -1706,6 +2757,7 @@ function frame(now) {
   const sorted = sortParts(PARTS, char.variant);
   const els = [];
   const elByKey = new Map();
+  const skinJobs = [];
   const partAnchorsByKey = new Map();
   const dynAnchors = [];
   sorted.forEach((part, idx) => {
@@ -1726,7 +2778,7 @@ function frame(now) {
     }
     const p = resolved.params;
     const an0 = pose[part.key] || { a: 0, dy: 0, rim: 0, glint: 0 };
-    const an = { a: an0.a + (p.restRot || 0), dx: an0.dx || 0, dy: an0.dy || 0, rim: an0.rim || 0, glint: an0.glint || 0 };
+    const an = { a: an0.a + (p.restRot || 0), dx: an0.dx || 0, dy: an0.dy || 0, rim: an0.rim || 0, glint: an0.glint || 0, sx: an0.sx || 1, sy: an0.sy || 1 };
     const dynList = dynListFor(part);
     // 追随段：导出时烘好的增量曲线按轨道进度采样，叠进本部件位姿
     // （位置 + 角度；粒子锚点用同一 an/ctr，自动跟随）
@@ -1737,6 +2789,23 @@ function frame(now) {
         an.dx += followSampleAt(fc.dx, followU);
         an.dy += followSampleAt(fc.dy, followU);
         an.a += followSampleAt(fc.da, followU);
+        // 锚定版沿轴缩放（甲）：乘进 sy 通道（与透视缩短同为沿轴倍乘）
+        if (fc.ds) an.sy *= followSampleAt(fc.ds, followU);
+      }
+    }
+    // 程序化动画（缺口 2）：与编辑器同口径叠加到位姿——平移 px、旋转
+    // 度→弧度、缩放以 (1 + v/10) 相乘（编辑器是加到 uniform_scale 的
+    // scale 参数上，无其他缩放修改器时等价；钳制与编辑器同为 ≥0.1）。
+    let paScale = 1;
+    if (PROCEDURAL.length > 0) {
+      const fIdx = elapsed * FRAME_RATE;
+      for (const pa of PROCEDURAL) {
+        if (pa.slot !== part.key || fIdx < pa.startFrame || fIdx > pa.endFrame) continue;
+        const v = dynProceduralValue(pa.cfg, fIdx);
+        if (pa.target === 'translateX') an.dx += v;
+        else if (pa.target === 'translateY') an.dy += v;
+        else if (pa.target === 'rotation') an.a += v * Math.PI / 180;
+        else if (pa.target === 'scale') paScale *= Math.max(0.1, 1 + v / 10);
       }
     }
     const ctr = partCenter(p, an);
@@ -1751,6 +2820,11 @@ function frame(now) {
       // 锚点角，不进 partCenter（部件中心不被自转搬动）
       spinRad += dynSpinRadAt(inst.params, elapsed);
     }
+    if (paScale !== 1) { dsx *= paScale; dsy *= paScale; hasDeform = true; }
+    if (an.sx !== 1 || an.sy !== 1) { dsx *= an.sx; dsy *= an.sy; hasDeform = true; }
+    // 透视缩短（缺口 7）：沿骨骼方向（局部 Y）乘烘焙因子，与编辑器
+    // effStretch 同落点；开关关时因子不生效
+    if (foreOn && an.fore !== undefined && an.fore !== 1) { dsy *= an.fore; hasDeform = true; }
     const rotA = an.a + spinRad;
     // 发光段：前 3 个启用实例各供一组参数（场在图集 RGB 三通道，导出时
     // 按选区预计算；第 4 个起在导出端已按各自所选组并入对应通道）
@@ -1780,6 +2854,14 @@ function frame(now) {
     };
     els.push(el);
     elByKey.set(part.key, el);
+    // 网格蒙皮（缺口 4）：收集变形活儿，循环后父子位姿齐了再执行
+    if (part.skin && tile && place) {
+      skinJobs.push({
+        tile: tile, place: place, key: part.key, family: !!entry.fam,
+        plugX: tileCx + (mirr ? -part.skin.plugOff[0] : part.skin.plugOff[0]),
+        plugY: tileCy + part.skin.plugOff[1],
+      });
+    }
     // 弧线段原点 = 插头：换成相对瓦片中心的偏移（粒子系以中心为原点）
     const plugC = entry.plugN
       ? [entry.plugN[0] * tile.w - tile.w / 2, (1 - entry.plugN[1]) * tile.h - tile.h / 2]
@@ -1898,6 +2980,39 @@ function frame(now) {
       .map((s) => Object.assign({}, s.el, { ghost: true }));
     els.splice(idx, 0, ...ghosts);
   }
+  // ---- 网格蒙皮执行（缺口 4）：按子/父世界角差变形当前瓦片并回传
+  // 图集（每帧从干净瓦片数据重算，不累积）。角的换算：运行时世界角
+  // （y 向上、逆时针为正）→ 编辑器关节角（画布口径）取负；精灵族
+  // 瓦片行序自顶向下与编辑器同空间直接用，参数化族行序自底向上再翻
+  // 一次符号。发光/底图两张副图集不跟随变形（已知近似）。
+  // 先把上一帧变形过的图集区域还原为干净瓦片（变形不累积、角回
+  // 零即恢复原图），再执行本帧变形并登记。
+  if (skinJobs.length > 0 || (state.skinDirty && state.skinDirty.size > 0)) {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, state.tex);
+    if (state.skinDirty) {
+      for (const rec of state.skinDirty.values()) {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, rec.place[0], rec.place[1], rec.tile.w, rec.tile.h, gl.RGBA, gl.UNSIGNED_BYTE, rec.tile.data);
+      }
+      state.skinDirty.clear();
+    } else state.skinDirty = new Map();
+  }
+  for (const job of skinJobs) {
+    const skinPart = PARTS.find((pp) => pp.key === job.key);
+    const childEl = elByKey.get(job.key);
+    const parentEl = skinPart ? elByKey.get(skinPart.skin.parent) : undefined;
+    if (!skinPart || !childEl || !parentEl) continue;
+    let dRot = childEl.rot - parentEl.rot;
+    while (dRot > Math.PI) dRot -= Math.PI * 2;
+    while (dRot < -Math.PI) dRot += Math.PI * 2;
+    if (Math.abs(dRot) < 0.0002) continue;
+    const tileAngle = job.family ? -dRot : dRot;
+    const warped = skinWarpTile(job.tile.data, job.tile.w, job.tile.h, job.plugX, job.plugY, tileAngle, skinPart.skin.radius, skinPart.skin.curve);
+    if (warped) {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, job.place[0], job.place[1], job.tile.w, job.tile.h, gl.RGBA, gl.UNSIGNED_BYTE, warped);
+      state.skinDirty.set(job.place[0] + ',' + job.place[1], { tile: job.tile, place: job.place });
+    }
+  }
   // 刀光：表演开始帧定格锚点部件位姿（位置+角度），其后不跟随；
   // 进度按表演本地时间走，帧图自图集刀光瓦片取（最后绘制、在最上层）
   for (const act of activePerfs) {
@@ -1956,7 +3071,90 @@ function frame(now) {
       if (ghosts.length) els.splice(els.indexOf(live), 0, ...ghosts);
     }
   }
-  const camX = char.x, camY = 52 + char.y * 0.35;
+  // 画布级特效（缺口 5）：工程级按时间线帧（循环）、片段级按段表演
+  // 本地帧换算的绝对帧；生成的顶点进 frontVerts，与场景一并受全局
+  // 变换（编辑器同一层级）。afterimage 笔触的采样以部件瓦片 alpha
+  // 近似编辑器的画布采样。
+  {
+    const occAt = (wx, wy) => {
+      for (const [key, el] of elByKey) {
+        const entry = state.map.get(key);
+        if (!entry || !entry.tile || !entry.tile.data) continue;
+        const tile = entry.tile;
+        const dx = wx - el.pos[0], dy = wy - el.pos[1];
+        const c = Math.cos(el.rot), s = Math.sin(el.rot);
+        const gx = c * dx + s * dy, gy = s * dx - c * dy;
+        const px = Math.round(gx + tile.cx), py = Math.round(tile.cy - gy);
+        if (px < 0 || py < 0 || px >= tile.w || py >= tile.h) continue;
+        if (tile.data[(py * tile.w + px) * 4 + 3] > 8) return true;
+      }
+      return false;
+    };
+    if (FX) {
+      const total = Math.max(1, FX.totalFrames || 1);
+      fxRenderSet(FX, Math.floor(elapsed * FRAME_RATE) % total, frontVerts, occAt);
+    }
+    for (const act of activePerfs) {
+      if (act.perf.fx) fxRenderSet(act.perf.fx, (act.perf.fxStart || 0) + Math.floor(act.t * FRAME_RATE), frontVerts, occAt);
+    }
+  }
+  // 全局变换（缺口 3）：与编辑器 applyGlobalTransformWrapper 同口径——
+  // 整场绕中心平移/旋转/缩放。枢轴取角色原点（编辑器取画布中心，角色
+  // 在编辑器画布中的位置不定，此为对应近似）；部件实例与粒子/弧线
+  // 顶点一并变换，背景场景为模板自带、不在包内，不变换。
+  if (GLOBAL_GRAPH) {
+    const gout = evalRuntimeGraph(GLOBAL_GRAPH, {
+      tSec: elapsed, vars: hostVars, nodeState: globalGraphState,
+      nodeOutputs: new Map(), statePrefix: 'gl:',
+    });
+    const grec = gout.get('__global');
+    if (grec) {
+      const gtx = grec.dx || 0, gty = grec.dy || 0, grot = grec.angle || 0;
+      const gsx = grec.scaleX ?? 1, gsy = grec.scaleY ?? 1;
+      if (gtx !== 0 || gty !== 0 || grot !== 0 || gsx !== 1 || gsy !== 1) {
+        const px = char.x, py = char.y;
+        const gc = Math.cos(grot), gs = Math.sin(grot);
+        const gPt = (x, y) => {
+          const lx = (x - px) * gsx, ly = (y - py) * gsy;
+          return [px + lx * gc - ly * gs + gtx, py + lx * gs + ly * gc + gty];
+        };
+        for (const el of els) {
+          const np = gPt(el.pos[0], el.pos[1]);
+          el.pos[0] = np[0]; el.pos[1] = np[1];
+          el.rot += grot;
+          el.size[0] *= gsx; el.size[1] *= gsy;
+        }
+        for (const verts of [backVerts, frontVerts]) {
+          for (let i = 0; i + 1 < verts.length; i += 9) {
+            const np = gPt(verts[i], verts[i + 1]);
+            verts[i] = np[0]; verts[i + 1] = np[1];
+          }
+        }
+      }
+    }
+  }
+  // 相机：指数平滑跟随（速率 PHYS.camFollow），横/纵可锁定；俯视跟平面点
+  const camTX = char.x;
+  const camTY = moveMode === 'top' ? char.py : 52 + char.y * 0.35;
+  if (camState.snap) { camState.x = camTX; camState.y = camTY; camState.snap = false; }
+  const camK = 1 - Math.exp(-PHYS.camFollow * dt);
+  if (!PHYS.camLockX) camState.x += (camTX - camState.x) * camK;
+  if (!PHYS.camLockY) camState.y += (camTY - camState.y) * camK;
+  const camX = camState.x, camY = camState.y;
+  // 画布修改轨（缺口 5-2）：本帧生效的修改器链（工程轨 + 各活跃段
+  // 表演的片段轨）；非空时场景改画进后处理目标，帧末跑全屏链。
+  const postList = [];
+  if (FX) {
+    const total = Math.max(1, FX.totalFrames || 1);
+    fxCollectCanvasMods(FX, Math.floor(elapsed * FRAME_RATE) % total, postList);
+  }
+  for (const act of activePerfs) {
+    if (act.perf.fx) fxCollectCanvasMods(act.perf.fx, (act.perf.fxStart || 0) + Math.floor(act.t * FRAME_RATE), postList);
+  }
+  if (postList.length > 0) {
+    const sys = ensurePostSys();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, sys.A.fbo);
+  }
   gl.viewport(0, 0, lowW, VIEW_H);
   gl.clearColor(0.070, 0.070, 0.157, 1);
   gl.clearDepth(1);
@@ -1969,7 +3167,8 @@ function frame(now) {
   gl.uniform2f(solidU.vh, lowW / 2, VIEW_H / 2);
   gl.bindVertexArray(solidVAO);
   gl.bindBuffer(gl.ARRAY_BUFFER, solidBuf);
-  const sc = buildScenery(char.x, char.y, char.onGround);
+  if (bgTex) drawBackground(camX, camY);
+  const sc = buildScenery(camX);
   gl.bufferData(gl.ARRAY_BUFFER, sc, gl.DYNAMIC_DRAW);
   gl.drawArrays(gl.TRIANGLES, 0, sc.length / 9);
   if (backVerts.length) {
@@ -2007,6 +3206,17 @@ function frame(now) {
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
   }
+  if (postList.length > 0) fxRunPostChain(postList, state, elByKey, camX, camY);
+  if (recPendingFrame) {
+    recPendingFrame.variant = char.variant;
+    recPendingFrame.locked = char.lockedVariant;
+    recPendingFrame.costume = currentCostume;
+    recPendingFrame.aw = autoWalk ? 1 : 0;
+    rec.frames.push(recPendingFrame);
+    recPendingFrame = null;
+    refreshRecPanel();
+  }
+  if (replay.active && replay.gif) gifCaptureFrame(dt);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

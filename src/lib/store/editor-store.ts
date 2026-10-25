@@ -77,7 +77,9 @@ interface EditorStore extends EditorState {
   } | null) => void;
   // 真 3D FK：透视缩短开关（精灵沿骨骼方向按投影长度比缩放；默认关）
   perspectiveForeshorten: boolean;
+  procPreviewDock: 'panel' | 'main';
   togglePerspectiveForeshorten: () => void;
+  setProcPreviewDock: (dock: 'panel' | 'main') => void;
   showProcedural: boolean;
   toggleProcedural: () => void;
   // SAM / Smart Selection
@@ -254,6 +256,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   ...defaultEditor,
   moveTargetLevel: 'keyframe' as const,
   perspectiveForeshorten: false,
+  procPreviewDock: 'panel',
   showProcedural: false,
 
   samState: {
@@ -299,6 +302,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setTrajectorySnap: (enabled) => set({ trajectorySnap: enabled }),
   setPreviewQuality: (quality) => set({ previewQuality: quality }),
   togglePerspectiveForeshorten: () => set((s) => ({ perspectiveForeshorten: !s.perspectiveForeshorten })),
+  setProcPreviewDock: (dock) => set({ procPreviewDock: dock }),
   toggleProcedural: () => set((s) => ({ showProcedural: !s.showProcedural })),
   setMagicWandTolerance: (tolerance) => set({ magicWandTolerance: tolerance }),
   setLandmarkTarget: (target) => set({ landmarkTarget: target }),

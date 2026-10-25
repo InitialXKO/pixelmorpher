@@ -9,7 +9,7 @@ import { fbmNoise, seededRandom, simplex2D } from './noise';
 // V2.0: Procedural Animation System
 // ============================================================
 
-function computeProceduralValue(
+export function computeProceduralValue(
   config: ProceduralConfig,
   frame: number,
 ): number {

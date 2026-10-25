@@ -828,6 +828,50 @@ function compileTileLayersRaster(raster, program, halo) {
   return { w: w, h: h, cx: Math.floor(w / 2), cy: Math.floor(h / 2), data: data };
 }
 
+function skinBilinearB(data, w, h, x, y) {
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const fx = x - x0, fy = y - y0;
+  let r = 0, g = 0, b = 0, a = 0, wSum = 0;
+  const corners = [[x0, y0, (1 - fx) * (1 - fy)], [x0 + 1, y0, fx * (1 - fy)], [x0, y0 + 1, (1 - fx) * fy], [x0 + 1, y0 + 1, fx * fy]];
+  for (const cn of corners) {
+    const cx = cn[0], cy = cn[1], cw = cn[2];
+    if (cx < 0 || cy < 0 || cx >= w || cy >= h) continue;
+    const o = (cy * w + cx) * 4;
+    if (data[o + 3] === 0) continue;
+    r += data[o] * cw; g += data[o + 1] * cw; b += data[o + 2] * cw; a += data[o + 3] * cw; wSum += cw;
+  }
+  if (wSum <= 0) return null;
+  return [r / wSum, g / wSum, b / wSum, a / wSum];
+}
+// 网格蒙皮瓦片变形：编辑器 skin/mesh-skin.applyMeshSkin 的 RGBA 孪生
+// （同逆映射：半径内采样点绕 plug 反向旋转 angle·w，w 按距 plug 的
+// 曲线权重；采样全透明保留原像素）。angleRad 为瓦片数据行空间的角。
+function skinWarpTile(data, w, h, plugX, plugY, angleRad, radius, curve) {
+  if (radius <= 0 || Math.abs(angleRad) < 1e-6) return null;
+  const out = new Uint8Array(data);
+  const r2 = radius * radius;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const dx = x - plugX, dy = y - plugY;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= r2) continue;
+      const d = Math.sqrt(d2);
+      let wgt = 1 - d / radius;
+      if (curve === 'smoothstep') wgt = wgt * wgt * (3 - 2 * wgt);
+      if (wgt <= 0) continue;
+      const back = -angleRad * wgt;
+      const cosB = Math.cos(back), sinB = Math.sin(back);
+      const sx = plugX + dx * cosB - dy * sinB;
+      const sy = plugY + dx * sinB + dy * cosB;
+      const s = skinBilinearB(data, w, h, sx, sy);
+      if (s) {
+        const o = (y * w + x) * 4;
+        out[o] = Math.round(s[0]); out[o + 1] = Math.round(s[1]); out[o + 2] = Math.round(s[2]); out[o + 3] = Math.round(s[3]);
+      }
+    }
+  }
+  return out;
+}
 `;
 
 /** 探针/测试用：加载同一份烘焙源 */
@@ -854,7 +898,8 @@ export function createSurfaceBaker(): {
     program: unknown,
     halo?: number,
   ) => { w: number; h: number; cx: number; cy: number; data: Uint8Array };
+  skinWarpTile: (data: Uint8Array, w: number, h: number, plugX: number, plugY: number, angleRad: number, radius: number, curve: string) => Uint8Array | null;
 } {
-  const factory = new Function(`${BAKE_SRC}\nreturn { compileTileDAG, compileTileLayers, compileTileDAGRaster, compileTileLayersRaster };`);
+  const factory = new Function(`${BAKE_SRC}\nreturn { compileTileDAG, compileTileLayers, compileTileDAGRaster, compileTileLayersRaster, skinWarpTile };`);
   return factory() as never;
 }

@@ -13,12 +13,12 @@
 import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, Sprite, StateMachineSpec } from '../unified-types';
 import type { AnimationClip } from '../types';
 import { buildParametricSprite } from './main-canvas';
-import { subToPx, projectToView } from '../unified-types';
+import { subToPx, projectToView, frameYAxisWorld, directionTrig } from '../unified-types';
 import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
-import { followDeltaAt, glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
+import { followAnchoredDeltaAt, glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
 import { BUILTIN_ENTRIES, libraryIndexOf, surfaceLibEntriesOf } from '../library-entries';
 import { expandDynamicEntry } from '../dynamic-expand';
 import { createDefaultParametricAppearance } from './surfaces';
@@ -61,13 +61,17 @@ export interface RuntimeDynamicInstance {
   slot: string;
   params: DynamicPatternParams;
   /** 追随段烘焙增量曲线（u = 全程窗进度 0..1 → 增量；运行时空间：
-   * dx/dy 为 px、da 为弧度）。导出时由源部件的全程窗轨道样本按
-   * 「滞后位姿 − 当前位姿 × 强度」逐帧算好——运行时只采样本曲线，
-   * 不回头取样源部件（与编辑器的轨道位姿取样同源同值）。 */
+   * da 为弧度、ds 为沿轴缩放倍乘）。导出时由源部件的全程窗轨道样本
+   * 按锚定换算逐帧算好（连接点锚死，平移增量按跟随者主轴与臂长换
+   * 算为摆角 + 缩放，与编辑器实时落点同一公式）——运行时只采样本
+   * 曲线，不回头取样源部件。dx/dy 为旧整件平移烘焙的遗留字段，
+   * 现行烘焙不再产出，运行时保留消费以兼容旧包。 */
   followCurve?: {
     dx?: [number, number][];
     dy?: [number, number][];
     da?: [number, number][];
+    /** 锚定版沿轴缩放因子（倍乘，缺省 1）：与 da 同为锚定换算产物 */
+    ds?: [number, number][];
   };
 }
 
@@ -108,8 +112,10 @@ export interface RuntimeGlowStamp {
 
 export interface RuntimePart {
   key: string;
-  drawLayer: string;
   sortOrder: number;
+  /** 节点遮挡层名：随包播放器现行画序不读，但属包的对外数据面
+   * （用户端可按层名做自己的排序/分组），保留原样进包 */
+  drawLayer: string;
   costumeKeys: string[];
   base: RuntimePartBase;
   /** 变体覆盖：base 即显示方向（第 0 帧根节点朝向）主形态，标空覆盖使
@@ -126,6 +132,12 @@ export interface RuntimePart {
   spriteKind?: boolean;
   /** 精灵部件在默认服装集下的显示方向精灵网格（逐集见 costumes[*].__sprite） */
   sprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] };
+  /** 变体替代精灵（缺口 6）：仅当某片段状态轨给该槽指派过变体时才带；
+   * variantId → 该变体解析后的代表精灵（与基础解析不同才收） */
+  altSprites?: Record<string, { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] }>;
+  /** 网格蒙皮（缺口 4）：父槽位 skinning='mesh' 时带；parent 为父部件
+   * 键，plugOff 为 attachment.plug 偏移（px，叠加在瓦片 cx/cy 上） */
+  skin?: { parent: string; radius: number; curve: 'linear' | 'smoothstep'; plugOff: [number, number] };
 }
 
 export interface ProcRuntimePackage {
@@ -145,6 +157,25 @@ export interface ProcRuntimePackage {
   performances: Array<Record<string, unknown>>;
   /** 运行时状态机（作者规格直通或默认机；模板据此编排表演与身体状态） */
   stateMachine?: StateMachineSpec;
+  /** 程序化动画（工程级数据经 opts.projectData 传入；仅保留在编辑器内
+   *  确有对应启用修改器、因而确实生效的条目，其余逐条点名） */
+  procedural?: Array<{ slot: string; target: string; cfg: Record<string, unknown>; startFrame: number; endFrame: number }>;
+  /** 全局变换图（工程级全局修改器/全局蓝图翻译；运行时逐帧求值后
+   *  对整场施加平移/旋转/缩放，与编辑器 applyGlobalTransformWrapper 同口径） */
+  globalGraph?: RuntimeGraph;
+  /** 画布级特效数据（缺口 5）：工程级特效轨/笔触/画布修改轨原样带入，
+   * 运行时按工程时间线帧消费；片段级同类数据挂在段表演的 fx 上 */
+  fx?: {
+    canvas: { w: number; h: number };
+    totalFrames: number;
+    effectTracks?: import('../types').EffectTrack[];
+    motionBlurStrokes?: import('../types').MotionBlurStroke[];
+    effectStrokes?: import('../types').EffectStroke[];
+    canvasTracks?: import('../types').CanvasModifierTrack[];
+  };
+  /** 场景实体（AABB，左下角 + 宽高，世界单位 y 向上）：随包播放器据此
+   * 做落地/顶头/堵墙/贴墙/抓边与俯视阻挡；缺省时播放器用内置默认关卡 */
+  scene?: { solids: Array<{ x: number; y: number; w: number; h: number }> };
   warnings: string[];
 }
 
@@ -568,9 +599,18 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[] },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number; scene?: { solids?: Array<{ x: number; y: number; w: number; h: number }> } }; projectExtras?: { perspectiveForeshorten?: boolean } },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
+  // ---- 工程级数据点名（运行时完备性审计缺口 5/7，未修项）：convert
+  // 结构上拿不到工程级 store，调用方把计数经 projectExtras 传入，有
+  // 则点名，不再静默丢弃。（缺口 3 全局修改器/蓝图已改走 projectData
+  // 真进包，见函数末尾 globalGraph。） ----
+  {
+    const ex = opts?.projectExtras;
+    // 透视缩短（缺口 7）：因子已随轨道采样进包（fore 通道），播放器
+    // 自带开关（默认关，与编辑器缺省一致），此处不再点名缺失。
+  }
   // 子图库：调用方传全库快照；给了统一条目库时按版本展开成
   // id@版本 条目（钉版本纪律），否则走平铺模板（同 SpriteTable
   // 由调用方传工程级表的先例，convert 不读存储）。
@@ -636,8 +676,8 @@ export function convertCharacterToRuntimePackage(
     const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
     parts.push({
       key: slotKey,
-      drawLayer: node.drawLayer,
       sortOrder: node.zIndex,
+      drawLayer: node.drawLayer,
       costumeKeys: [slotKey],
       base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0, baseSprite,
         expandPkg(baseApp.surfaceGraph, `子图（槽位 ${slotKey}）`)),
@@ -669,8 +709,8 @@ export function convertCharacterToRuntimePackage(
     const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
     parts.push({
       key: slotKey,
-      drawLayer: node.drawLayer,
       sortOrder: node.zIndex,
+      drawLayer: node.drawLayer,
       costumeKeys: [slotKey],
       base,
       variants: { [rootDir]: {} },
@@ -758,6 +798,71 @@ export function convertCharacterToRuntimePackage(
     }
     const rad = (cp.angleDeg ?? 0) * Math.PI / 180;
     part.clip = { by: anchorSlot, a: Math.cos(rad), b: Math.sin(rad), c: -(cp.offset ?? 0) };
+  }
+
+  // ---- 网格蒙皮回填（缺口 4）：节点 attachment 指向的父槽位
+  // skinning='mesh' → 部件带 skin（父部件键 + 半径/曲线 + plug 偏移）；
+  // 运行时逐帧按子/父世界角差对当前瓦片做同编辑器公式的变形。 ----
+  for (const part of parts) {
+    const nodeId = slotNode.get(part.key);
+    const node = nodeId ? character.nodes[nodeId] : undefined;
+    if (!node || node.attachment?.type !== 'socket' || !node.attachment.parentSocketId || !node.parentId) continue;
+    const parentNode = character.nodes[node.parentId];
+    const socket = parentNode?.sockets?.find((sk) => sk.id === node.attachment!.parentSocketId);
+    if (socket?.skinning !== 'mesh') continue;
+    part.skin = {
+      parent: parentNode.slot?.slotKey ?? parentNode.id,
+      radius: socket.skinRadius ?? 8,
+      curve: socket.skinCurve ?? 'smoothstep',
+      plugOff: node.attachment.plug ? [subToPx(node.attachment.plug.x), subToPx(node.attachment.plug.y)] : [0, 0],
+    };
+  }
+
+  // ---- 变体替代精灵回填（缺口 6）：片段状态轨给某槽指派过的变体，
+  // 逐个按与代表图同一解析链（变体直达→镜像→基础回落）解析成代表
+  // 精灵进 part.altSprites；与基础解析同一张图的跳过。只取生效集的
+  // 服装件（运行时覆盖叠在当前集之上，跨集+变体同时切换时变体图仍
+  // 取生效集件——近似，已知会点名在 AUDIT）。 ----
+  {
+    const needed = new Map<string, Set<string>>();
+    for (const c of opts?.clips ?? []) {
+      for (const k of c.stateKeyframes ?? []) {
+        for (const [slot, v] of Object.entries(k.slotChanges ?? {})) {
+          if (v === null) continue;
+          if (!needed.has(slot)) needed.set(slot, new Set());
+          needed.get(slot)!.add(v);
+        }
+      }
+    }
+    if (needed.size > 0) {
+      const dirOrder: DirectionIndex[] = [rootDir, ...([2, 0, 6, 4, 1, 3, 5, 7] as DirectionIndex[]).filter((d) => d !== rootDir)];
+      const resolveWith = (piece: CostumePiece, variantId: string | undefined) => {
+        for (const dir of dirOrder) {
+          const r = resolvePieceSprite(piece, dir, variantId, spriteTable, character.latitude ?? 0);
+          if (r.sprite) return r.sprite;
+        }
+        return undefined;
+      };
+      for (const part of parts) {
+        const vids = needed.get(part.key);
+        if (!vids) continue;
+        const piece = activeSet?.pieces[part.key];
+        if (!piece) continue;
+        const baseSpr = resolveWith(piece, character.slotVariants?.[part.key]);
+        const alt: NonNullable<RuntimePart['altSprites']> = {};
+        for (const vid of vids) {
+          const spr = resolveWith(piece, vid);
+          if (spr && spr.id !== baseSpr?.id) {
+            alt[vid] = {
+              w: spr.width, h: spr.height,
+              plug: spr.plug ? [subToPx(spr.plug.x), subToPx(spr.plug.y)] : [spr.width / 2, spr.height / 2],
+              data: spr.data, marks: spr.marks,
+            };
+          }
+        }
+        if (Object.keys(alt).length > 0) part.altSprites = alt;
+      }
+    }
   }
 
   // ---- 行为蓝图：nodeId → slotKey，逐图结构翻译 ----
@@ -880,6 +985,40 @@ export function convertCharacterToRuntimePackage(
     const POSE_CHANNELS = ['angle', 'tilt', 'x', 'y', 'stretch', 'scaleX', 'variantIndex'] as const;
     const trackNodes = Object.values(character.nodes).filter((n) =>
       n.tracks && POSE_CHANNELS.some((ch) => (n.tracks[ch]?.keyframes?.length ?? 0) > 0));
+    // ---- 片段级点名（缺口 5/6）：片段内的状态切换与特效数据不进包 ----
+    for (const c of opts?.clips ?? []) {
+      if ((c.trajectories?.length ?? 0) > 0) warnings.push(`片段「${c.name}」内的轨迹未进运行时包（v1）`);
+    }
+  // ---- 片段状态轨（缺口 6）：状态键 → 段表演内的定时状态切换 ----
+  // 帧为工程绝对帧，换算为片段本地秒；窗外（起点之前）的键折叠到 0。
+  // costumeSetId 指向不存在的集时点名丢弃；slotChanges 原样带（槽位
+  // 变体在运行时经 altSprites 解析，见 parts 组装后的回填）。
+  // 片段级特效数据（缺口 5）：挂段表演 fx，键帧/笔触帧均为工程绝对帧，
+  // 运行时以 clip.startFrame + 本地帧求值（与状态轨同一帧口径）。
+  const clipFxOf = (clip: AnimationClip) => {
+    const fx: Record<string, unknown> = {};
+    if (clip.effectTracks?.length) fx.effectTracks = clip.effectTracks;
+    if (clip.canvasModifierTracks?.length) fx.canvasTracks = clip.canvasModifierTracks;
+    if (clip.motionBlurStrokes?.length) fx.motionBlurStrokes = clip.motionBlurStrokes;
+    if (clip.effectStrokes?.length) fx.effectStrokes = clip.effectStrokes;
+    return Object.keys(fx).length > 0 ? fx : undefined;
+  };
+  const stateFxOf = (clip: AnimationClip) => {
+    const keys = [...(clip.stateKeyframes ?? [])].sort((a, b) => a.frame - b.frame);
+    if (keys.length === 0) return undefined;
+    const fx: Array<Record<string, unknown>> = [];
+    for (const k of keys) {
+      const e: Record<string, unknown> = { t: Math.max(0, (k.frame - clip.startFrame) / projectFpsTop) };
+      if (k.costumeSetId) {
+        if (character.costumeSets.some((cs) => cs.id === k.costumeSetId)) e.costume = k.costumeSetId;
+        else warnings.push(`片段「${clip.name}」状态键指向不存在的服装集 ${k.costumeSetId}，已丢弃`);
+      }
+      if (k.slotChanges && Object.keys(k.slotChanges).length > 0) e.slots = k.slotChanges;
+      if ('costume' in e || 'slots' in e) fx.push(e);
+    }
+    return fx.length > 0 ? fx : undefined;
+  };
+
     const clipList = (opts?.clips ?? []).filter((c) =>
       c.puppetCharacterId === character.id
       && typeof c.startFrame === 'number' && typeof c.endFrame === 'number'
@@ -893,11 +1032,13 @@ export function convertCharacterToRuntimePackage(
       for (const node of Object.values(character.nodes)) {
         if (!node.tracks) continue;
         const baseOf: Record<string, number> = {
-          tilt: node.transform.tilt ?? 0, stretch: node.transform.stretch,
+          stretch: node.transform.stretch,
           scaleX: node.transform.scaleX ?? 1, variantIndex: node.transform.variantIndex,
           zIndex: node.zIndex ?? 0,
         };
-        const bad = (['tilt', 'stretch', 'scaleX', 'variantIndex', 'zIndex'] as const).filter((ch) => {
+        // tilt 不再列缺失：其位姿效应经世界变换采样进 a/x/y，其精灵
+        // 缩短效应经 fore 通道进包（缺口 7）。
+        const bad = (['stretch', 'scaleX', 'variantIndex', 'zIndex'] as const).filter((ch) => {
           const kfs = node.tracks[ch]?.keyframes ?? [];
           return kfs.length > 0 && kfs.some((kf) => Math.abs(kf.value - baseOf[ch]) > 1e-9);
         });
@@ -918,7 +1059,7 @@ export function convertCharacterToRuntimePackage(
       // 与部件摆放同一投影（projectToView，朝向取当帧根节点 variantIndex），
       // 运行时系（角度弧度、y 取反、px）
       const sampleWindow = (startF: number, D: number) => {
-        const samples = new Map<string, Array<{ a: number; x: number; y: number }>>();
+        const samples = new Map<string, Array<{ a: number; x: number; y: number; fore: number }>>();
         for (let f = startF; f <= startF + D; f++) {
           const wf = computeWorldTransforms(stripped, f, 512, 512, projectFpsTop);
           const dirF = (character.rootNodeId ? wf.get(character.rootNodeId)?.variantIndex : undefined) ?? rootDir;
@@ -928,14 +1069,19 @@ export function convertCharacterToRuntimePackage(
             let arr = samples.get(node.id);
             if (!arr) { arr = []; samples.set(node.id, arr); }
             const proj = projectToView(w.worldX, w.worldY, w.worldZ, dirF as DirectionIndex);
-            arr.push({ a: -w.worldAngle * Math.PI / 180, x: subToPx(proj.canvasX), y: -subToPx(proj.canvasY) });
+            // 透视缩短因子（缺口 7）：与主画布 generateRenderPlan 同式——
+            // 节点 +Y 轴（骨骼主轴）世界向量的视平面投影长度比，钳制 ≤1。
+            const yw = frameYAxisWorld(w.worldFrame, (w.variantIndex ?? dirF) as DirectionIndex);
+            const trigF = directionTrig(dirF as DirectionIndex);
+            const fore = Math.min(1, Math.hypot(yw.x * trigF.cos + yw.z * trigF.sin, yw.y));
+            arr.push({ a: -w.worldAngle * Math.PI / 180, x: subToPx(proj.canvasX), y: -subToPx(proj.canvasY), fore });
           }
         }
         return samples;
       };
       // 样本 → 曲线图节点（增量相对窗首样本）；warnNodes 时逐节点报无贡献
       const curvesForWindow = (
-        samples: Map<string, Array<{ a: number; x: number; y: number }>>,
+        samples: Map<string, Array<{ a: number; x: number; y: number; fore: number }>>,
         D: number,
         prefixBase: string,
         warnNodes: boolean,
@@ -952,7 +1098,7 @@ export function convertCharacterToRuntimePackage(
             continue;
           }
           const base = arr[0];
-          const mkPts = (pick: (s: { a: number; x: number; y: number }) => number) =>
+          const mkPts = (pick: (s: { a: number; x: number; y: number; fore: number }) => number) =>
             arr.map((s, f) => [f / D, pick(s) - pick(base)] as [number, number]);
           const chans: Array<{ pts: [number, number][]; suffix: string; field: 'angleFrom' | 'dxFrom' | 'dyFrom'; eps: number }> = [
             { pts: mkPts((s) => s.a), suffix: 'ang', field: 'angleFrom', eps: 0.01 },
@@ -970,7 +1116,14 @@ export function convertCharacterToRuntimePackage(
             nodes.push({ id, type: 'curve', points: simplify(ch.pts, ch.eps) });
             tr[ch.field] = { n: id };
           }
-          if (tr.angleFrom || tr.dxFrom || tr.dyFrom) {
+          // fore 通道：绝对因子点（非相对增量）；全程 ≈1 时不发（无倾斜）
+          const forePts = arr.map((sm, f) => [f / D, sm.fore] as [number, number]);
+          if (forePts.some(([, v]) => Math.abs(v - 1) > 1e-3)) {
+            const id = `${prefix}fre`;
+            nodes.push({ id, type: 'curve', points: simplify(forePts, 0.01) });
+            tr.foreFrom = { n: id };
+          }
+          if (tr.angleFrom || tr.dxFrom || tr.dyFrom || tr.foreFrom) {
             nodes.push(tr);
             mask.push(slot);
             graphNodes.push(...nodes);
@@ -1006,11 +1159,12 @@ export function convertCharacterToRuntimePackage(
           graph: { context: 'performance', nodes: full.graphNodes },
         });
       }
-      // ---- 追随段：增量曲线烘焙 ----
-      // 源部件的全程窗轨道样本（运行时空间绝对位姿）逐帧算「滞后位姿 −
-      // 当前位姿 × 强度」（followDeltaAt，与编辑器实时取样同一公式），
-      // 烘成增量曲线挂到每个启用追随的动态实例上——默认集 parts 与各
-      // 服装集 __dynamic 全覆盖，同源同参的实例共享一份曲线对象。
+      // ---- 追随段：锚定增量曲线烘焙（甲：摆角 + 沿轴缩放） ----
+      // 连接点锚死：源部件轨道样本的平移增量不再整件平移跟随者，
+      // 而是按「跟随者自己的主轴方向 × 臂长」逐件换算成摆角 da 与
+      // 沿轴缩放 ds（followAnchoredDeltaAt，与编辑器实时落点同一
+      // 公式、同一尖端落点）。曲线因此逐跟随者一份（缓存键含跟随
+      // 者与臂长），不再同源同参共享。源静止时仍不产曲线。
       {
         const bags: { inst: RuntimeDynamicInstance; slotKey: string }[] = [];
         for (const p of parts) for (const d of p.dynamic ?? []) bags.push({ inst: d, slotKey: p.key });
@@ -1035,24 +1189,40 @@ export function convertCharacterToRuntimePackage(
             warnings.push(`追随：部件 ${slotKey} 的源部件「${fp.followSource}」不存在，未烘焙`);
             continue;
           }
+          // 跟随者自身样本（算主轴方向）与臂长（精灵件取代表图高 −
+          // plug y；参数化件由编辑器 plug 定义换算 size/2 + pivot）
+          const folNode = Object.values(character.nodes).find(
+            (n) => (n.slot?.slotKey ?? n.id) === slotKey);
+          const folSamples = folNode ? fullSamples.get(folNode.id) : undefined;
+          const folPart = parts.find((p) => p.key === slotKey);
+          let reach = 0;
+          if (folPart?.sprite) {
+            reach = Math.max(0, folPart.sprite.h - (folPart.sprite.plug ? folPart.sprite.plug[1] : folPart.sprite.h / 2));
+          } else if (folPart?.base) {
+            reach = Math.max(0, folPart.base.size[1] / 2 + folPart.base.pivot[1]);
+          }
           const delayFrames = Math.round(fp.followDelaySec * frameRate);
-          const cacheKey = `${fp.followSource}|${delayFrames}|${fp.followAmount}|${fp.followRotate}`;
+          const cacheKey = `${fp.followSource}|${delayFrames}|${fp.followAmount}|${fp.followRotate}|${slotKey}|${Math.round(reach * 10)}`;
           let curve = curveCache.get(cacheKey);
           if (curve === undefined) {
-            const dxPts: [number, number][] = [], dyPts: [number, number][] = [], daPts: [number, number][] = [];
+            const daPts: [number, number][] = [], dsPts: [number, number][] = [];
             for (let f = 0; f <= totalFrames; f++) {
               const cur = srcSamples[f];
               const lag = srcSamples[Math.max(0, f - delayFrames)];
               if (!cur || !lag) continue;
-              const d = followDeltaAt(cur, lag, fp.followAmount, fp.followRotate);
-              dxPts.push([f / totalFrames, d.dx]);
-              dyPts.push([f / totalFrames, d.dy]);
+              // 采样空间主轴：a 为跟随者自身样本角（x 同画布、y 取反、
+              // a = −画布角），u = (sin a, −cos a)
+              const fa = folSamples?.[f]?.a ?? 0;
+              const d = followAnchoredDeltaAt(cur, lag, fp.followAmount, fp.followRotate, Math.sin(fa), -Math.cos(fa), reach);
               daPts.push([f / totalFrames, d.da]);
+              dsPts.push([f / totalFrames, d.ds]);
             }
-            const keep = (pts: [number, number][], eps: number) =>
-              pts.every(([, v]) => Math.abs(v) < 1e-4) ? undefined : simplify(pts, eps);
-            const dx = keep(dxPts, 0.15), dy = keep(dyPts, 0.15), da = keep(daPts, 0.01);
-            curve = dx || dy || da ? { dx, dy, da } : undefined;
+            const keepDa = (pts: [number, number][]) =>
+              pts.every(([, v]) => Math.abs(v) < 1e-4) ? undefined : simplify(pts, 0.01);
+            const keepDs = (pts: [number, number][]) =>
+              pts.every(([, v]) => Math.abs(v - 1) < 1e-3) ? undefined : simplify(pts, 0.01);
+            const da = keepDa(daPts), ds = keepDs(dsPts);
+            curve = da || ds ? { da, ds } : undefined;
             curveCache.set(cacheKey, curve);
           }
           if (curve) inst.followCurve = curve;
@@ -1078,6 +1248,9 @@ export function convertCharacterToRuntimePackage(
           mask: seg.mask,
           slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
           graph: { context: 'performance', nodes: seg.graphNodes },
+          stateFx: stateFxOf(clip),
+          fx: clipFxOf(clip),
+          fxStart: clip.startFrame,
         });
         emittedClipPerfIds.add(`clip_${clip.id}`);
       }
@@ -1098,6 +1271,9 @@ export function convertCharacterToRuntimePackage(
         mask: [],
         slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
         graph: { context: 'performance', nodes: [] },
+        stateFx: stateFxOf(clip),
+        fx: clipFxOf(clip),
+        fxStart: clip.startFrame,
       });
     }
   }
@@ -1122,6 +1298,87 @@ export function convertCharacterToRuntimePackage(
     stateMachine = defaultStateMachine(performances);
   }
 
+
+  // ---- 程序化动画（缺口 2）：与编辑器同口径——PA 只在目标节点挂有
+  // 对应类型的启用修改器时才生效（applyProceduralAnimations 的查找
+  // 规则），不满足的在编辑器内同样无效，逐条点名不进包；只认
+  // nodeId 的条目（编辑器主渲染只按 nodeId 匹配，spriteId-only 的
+  // 历史条目在编辑器内亦不生效，同口径点名）。 ----
+  const procedural: NonNullable<ProcRuntimePackage['procedural']> = [];
+  for (const pa of opts?.projectData?.proceduralAnimations ?? []) {
+    if (!pa.enabled) continue;
+    if (!pa.nodeId) { warnings.push(`程序化动画「${pa.name}」只有 spriteId 无 nodeId：编辑器主渲染亦不生效，未进包`); continue; }
+    const node = character.nodes[pa.nodeId];
+    if (!node) { warnings.push(`程序化动画「${pa.name}」目标节点不存在，未进包`); continue; }
+    const need = pa.config.targetProperty === 'rotation' ? 'rotate' : pa.config.targetProperty === 'scale' ? 'uniform_scale' : 'translate';
+    if (!(node.modifiers ?? []).some((m) => m.type === need && m.enabled)) {
+      warnings.push(`程序化动画「${pa.name}」目标节点无启用的 ${need} 修改器：编辑器内同样不生效，未进包`);
+      continue;
+    }
+    procedural.push({
+      slot: node.slot?.slotKey ?? node.id,
+      target: pa.config.targetProperty,
+      cfg: pa.config as unknown as Record<string, unknown>,
+      startFrame: pa.startFrame,
+      endFrame: pa.endFrame,
+    });
+  }
+
+  // ---- 全局变换（缺口 3）：与编辑器 applyGlobalTransformWrapper 同
+  // 口径——全局蓝图只在全局修改器非空时才被使用（编辑器同一闸门）；
+  // 图经剪变换通道后按行为图同一翻译器进包，运行时逐帧求值施加于
+  // 整场。图里引用节点输出的通道在翻译器内按不支持处理并点名。 ----
+  let globalGraph: RuntimeGraph | undefined;
+  {
+    const gMods = opts?.projectData?.globalModifiers ?? [];
+    if (gMods.length > 0) {
+      const gRaw0 = opts?.projectData?.globalBlueprint
+        ?? modifiersToBlueprint(gMods as never);
+      const gRaw = gRaw0 ? normalizeGraphOutput(gRaw0) : null;
+      const gPruned = gRaw && graphTransformNode(gRaw) ? pruneToTransform(gRaw) : null;
+      if (gRaw && !gPruned) warnings.push('全局蓝图/全局修改器：无 transform 输出（像素类），未进包');
+      else if (gPruned) {
+        const res = translateBehaviorGraph(gPruned, '__global', 'gl_', () => null);
+        for (const w of res.warnings) warnings.push(`全局变换：${w}`);
+        if (!res.ok) warnings.push(`全局变换翻译失败：${res.reason}`);
+        else globalGraph = { context: 'behavior', nodes: res.nodes };
+      }
+    } else if (opts?.projectData?.globalBlueprint) {
+      warnings.push('工程级全局蓝图未进运行时包：编辑器内全局蓝图仅在全局修改器非空时生效，现无全局修改器（同口径）');
+    }
+  }
+
+  const fxPkg: ProcRuntimePackage['fx'] = (() => {
+    const pd = opts?.projectData;
+    if (!pd) return undefined;
+    return {
+      canvas: { w: pd.canvasWidth ?? 512, h: pd.canvasHeight ?? 512 },
+      totalFrames: opts?.totalFrames && opts.totalFrames > 0 ? opts.totalFrames : 1,
+      effectTracks: pd.effectTracks,
+      canvasTracks: pd.canvasModifierTracks,
+      motionBlurStrokes: pd.motionBlurStrokes,
+      effectStrokes: pd.effectStrokes,
+    };
+  })();
+
+  // 注：动态实例 params 整份进包——追随/发光形状等键随包播放器不读
+  // （生效数据已烘成 followCurve / 印章与场），但包的消费方还有拿到
+  // 包的用户端，其代码可读这些原始参数做自己的处理，不按播放器
+  // 读没读判死删除（2026-10-26 用户纠正）。
+
+  // 场景实体透传：只收有限数、宽高至少 2，其余条目点名丢弃
+  const scenePkg = ((): ProcRuntimePackage['scene'] => {
+    const list = opts?.projectData?.scene?.solids;
+    if (!Array.isArray(list) || list.length === 0) return undefined;
+    const solids: Array<{ x: number; y: number; w: number; h: number }> = [];
+    for (const q of list) {
+      const x = Number(q?.x), y = Number(q?.y), w = Number(q?.w), h = Number(q?.h);
+      if ([x, y, w, h].every(Number.isFinite) && w >= 2 && h >= 2) solids.push({ x, y, w, h });
+      else warnings.push('场景实体被丢弃（坐标非有限数或宽高小于 2）：' + JSON.stringify(q));
+    }
+    return solids.length > 0 ? { solids } : undefined;
+  })();
+
   return {
     format: 'procedural-pixel-runtime-1',
     characterName: character.name,
@@ -1133,6 +1390,10 @@ export function convertCharacterToRuntimePackage(
     behavior,
     performances,
     stateMachine,
+    procedural: procedural.length > 0 ? procedural : undefined,
+    globalGraph,
+    fx: fxPkg,
+    scene: scenePkg,
     warnings,
   };
 }

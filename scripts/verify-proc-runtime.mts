@@ -13,7 +13,8 @@ import { translatePerformanceGraph, translateBehaviorGraph } from '../src/lib/pr
 import { dialectOf } from '../src/lib/proc-runtime/dialect';
 import { createRuntimeEvaluator } from '../src/lib/proc-runtime/eval-src';
 import { convertCharacterToRuntimePackage } from '../src/lib/proc-runtime/convert';
-import { createDefaultCostumePiece } from '../src/lib/unified-types';
+import { createDefaultCostumePiece, frameYAxisWorld, directionTrig } from '../src/lib/unified-types';
+import { computeWorldTransforms } from '../src/lib/unified-render';
 import { createSurfaceBaker } from '../src/lib/proc-runtime/bake-src';
 import { PATTERN_TEMPLATES, instantiatePattern } from '../src/lib/proc-runtime/pattern-templates';
 import type { SurfaceGraph } from '../src/lib/unified-types';
@@ -948,14 +949,33 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     graph: { nodes: Array<{ type: string; points?: [number, number][] }> };
   } | undefined;
   const curvesT = (perfT?.graph.nodes ?? []).filter((n) => n.type === 'curve');
+  const trT = (perfT?.graph.nodes ?? []).find((n) => n.type === 'transform') as unknown as
+    { foreFrom?: { n: string } } | undefined;
+  const foreCurveT = curvesT.find((c) => (c as { id?: string }).id === trT?.foreFrom?.n);
   check('Q26 轨道进包：合成「轨道」表演（add/KeyT/时长=帧数÷12/掩码=轨道节点）',
     !!perfT && perfT.mode === 'add' && perfT.triggerKey === 'KeyT' && Math.abs(perfT.duration - 1) < 1e-9
-    && perfT.mask.join() === 'arm' && curvesT.length === 2);
+    && perfT.mask.join() === 'arm' && curvesT.length === 3 && !!foreCurveT);
   const angCurve = curvesT.find((c) => Math.abs((c.points?.[1]?.[1] ?? 0) + Math.PI / 2) < 0.01);
   const dxCurve = curvesT.find((c) => Math.abs((c.points?.[1]?.[1] ?? 0) + 12) < 1e-9);
   check('Q27 轨道曲线是相对第 0 帧的世界增量（角度 10→100 的增量 90°→-π/2、x 经北向投影 192 Sub→-12px）',
     !!angCurve && Math.abs(angCurve.points?.[0]?.[1] ?? 0) < 1e-9 && !!dxCurve);
-  check('Q28 tilt 轨道无对应通道被点名', pkgT.warnings.some((w) => w.includes('tilt') && w.includes('未进包')));
+  check('Q28 tilt 轨道不再点名缺失（位姿经世界采样、缩短经 fore 通道进包）',
+    !pkgT.warnings.some((w) => w.includes('tilt') && w.includes('未进包')));
+  {
+    // fore 因子对拍：用编辑器同源函数（generateRenderPlan 同式）对同
+    // 角色第 0 帧世界变换重算，应与烘焙曲线首点一致（简化容差内）
+    const chF = mkTrackChar({
+      tracks: { tilt: { interpolation: 'step', keyframes: [{ frame: 0, value: 5 }] } },
+    });
+    const wfF = computeWorldTransforms(chF as never, 0, 512, 512, 12);
+    const wF = wfF.get('arm');
+    const dirFF = (chF.rootNodeId ? wfF.get(chF.rootNodeId)?.variantIndex : undefined) ?? 2;
+    const ywF = frameYAxisWorld(wF!.worldFrame, (wF!.variantIndex ?? dirFF) as never);
+    const trigFF = directionTrig(dirFF as never);
+    const expectF = Math.min(1, Math.hypot(ywF.x * trigFF.cos + ywF.z * trigFF.sin, ywF.y));
+    check('Q28b fore 烘焙因子与编辑器同式重算一致（tilt=5°）',
+      !!foreCurveT && Math.abs((foreCurveT.points?.[0]?.[1] ?? 1) - expectF) < 0.01 && expectF < 0.999);
+  }
   const pkgT2 = convertCharacterToRuntimePackage(mkTrackChar({
     tracks: { angle: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 6, value: 0 }] } },
   }));
@@ -1077,7 +1097,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
 
 // ---------- S) 发光片元重算：解析形状存掩码+印章参数，片元与主画布逐格一致 ----------
 {
-  const { glowField, defaultDynamicParams, createDynamicInstance, encodeGlowMask } = await import('../src/lib/dynamic-patterns');
+  const { glowField, defaultDynamicParams, createDynamicInstance, encodeGlowMask, resolveDynamicPatterns } = await import('../src/lib/dynamic-patterns');
   const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
   // 片元算法镜像（与 runtime-template 的 glowStampW/glowChannelF 逐式对应）
   const stampW = (st: { shape: number; halo: number; reach: number }, cosP: number, sinP: number, dx: number, dy: number): number => {
@@ -1141,11 +1161,13 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   ];
   let sBad = 0;
   for (const [label, over] of cases) {
-    const pkgS = convertCharacterToRuntimePackage(mkCharS([mkInstS(over)]));
+    const chS = mkCharS([mkInstS(over)]);
+    const pkgS = convertCharacterToRuntimePackage(chS);
     const partS = pkgS.parts.find((x) => x.key === 'gem');
     const entry = partS?.glow;
     const st = entry?.stamps?.[0];
-    const resolved = partS?.dynamic?.[0]?.params as never as Record<string, unknown>;
+    // 真值参数取编辑器侧解析结果（包内 params 已删发光形状键，见死字段清理）
+    const resolved = resolveDynamicPatterns((chS as never as { nodes: { gem: { dynamicPatterns: never } } }).nodes.gem.dynamicPatterns, undefined)[0]!.instance.params as never as Record<string, unknown>;
     if (!entry || !st || st.shape !== shapeCode[over.glowShape as string]) { sBad++; console.log('  S 形状代码不符:', label, JSON.stringify(st)); continue; }
     const bytes = Buffer.from(entry.data, 'base64');
     const maskAt = (x: number, y: number) => {
@@ -1181,7 +1203,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     const pkgS = convertCharacterToRuntimePackage(mkCharS([inst]));
     const partS = pkgS.parts.find((x) => x.key === 'gem');
     const entry = partS?.glow;
-    const resolved = partS?.dynamic?.[0]?.params as never;
+    const resolved = (inst as { params: never }).params; // 真值取编辑器侧实例参数（包内已删发光形状键）
     const truth = glowField(resolved, gridS as never, 0);
     const bytes = entry ? Buffer.from(entry.data, 'base64') : null;
     let ok = !!entry && entry.stamps?.[0]?.shape === 4 && !!truth && !!bytes;
@@ -1371,7 +1393,8 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
         out.generic = setVar('rage', 1) === true && hostCustomVars.rage === 1;
         out.coerce = setVar('rage', '2.5') === true && hostCustomVars.rage === 2.5;
         out.reserved = setVar('grounded', 0) === false && !('grounded' in hostCustomVars)
-          && setVar('phase', 1) === false && setVar('t', 1) === false && setVar('speed01', 1) === false;
+          && setVar('phase', 1) === false && setVar('t', 1) === false && setVar('speed01', 1) === false
+          && setVar('wall', 1) === false && setVar('ledge', 1) === false;
         out.nan = setVar('rage', 'abc') === false && hostCustomVars.rage === 2.5;
         out.del = setVar('rage', null) === true && !('rage' in hostCustomVars);
         out.moveX = setVar('moveX', 0.5) === true && hostMoveX === 0.5;
@@ -1388,13 +1411,14 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
       hv = new Function(`
         const hostCustomVars = { rage: 5, grounded: 0 };
         const behaviorT = 1.2, phaseAcc = 0.5, ix = 0;
-        const char = { onGround: true };
+        const inp = { iy: 0 };
+        const char = { onGround: true, wallDir: 0, ledge: null };
         ${hvStmt}
         return hostVars;
       `)();
     } catch (err) { hvErr = err instanceof Error ? err.message : String(err); }
     check('T15b hostVars 并入：通用变量可读、逐帧计算值覆盖同名（预置 grounded=0 仍以本帧 1 为准）',
-      !!hv && hv.rage === 5 && hv.grounded === 1 && hv.t === 1.2 && hv.moveX === 0 && hv.speed01 === 0,
+      !!hv && hv.rage === 5 && hv.grounded === 1 && hv.t === 1.2 && hv.moveX === 0 && hv.speed01 === 0 && hv.wall === 0 && hv.ledge === 0,
       hvErr || JSON.stringify(hv));
     check('T15c 生成页面含通用变量表接线', htmlT.includes('hostCustomVars[name] = num') && htmlT.includes('Object.assign({}, hostCustomVars,'));
   }
@@ -1567,11 +1591,19 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     mkChar([instNode], undefined, 'arm'), undefined, { frameRate: 10, totalFrames: 12 });
   const capeDyn = pkg.parts.find((p) => p.key === 'cape')?.dynamic?.[0];
   const fc = capeDyn?.followCurve;
-  check('P1 追随增量曲线进包（dx 有、dy/da 无）', !!fc?.dx && !fc?.dy && !fc?.da);
-  check('P1 u=0 增量为 0', Math.abs(samplePts(fc?.dx, 0)) < 0.25);
-  check('P1 u=1/6（第 2 帧，滞后未满）增量 −2', Math.abs(samplePts(fc?.dx, 1 / 6) + 2) < 0.25);
-  check('P1 u=0.5（第 6 帧）增量 −3', Math.abs(samplePts(fc?.dx, 0.5) + 3) < 0.25);
-  check('P1 u=1（末帧）增量 −3', Math.abs(samplePts(fc?.dx, 1) + 3) < 0.25);
+  // 锚定版（甲）：只烘 da（摆角）+ ds（沿轴缩放），不再有 dx/dy。
+  // 臂长 L 由披风参数化件几何换算（size 高/2 + pivot y），从包内读。
+  const capeBase = pkg.parts.find((p) => p.key === 'cape')?.base;
+  const L = (capeBase?.size[1] ?? 0) / 2 + (capeBase?.pivot[1] ?? 0);
+  check('P1 追随锚定曲线进包（da/ds 有、dx/dy 无）', !!fc?.da && !!fc?.ds && !fc?.dx && !fc?.dy);
+  check('P1 u=0 摆角为 0、缩放为 1', Math.abs(samplePts(fc?.da, 0)) < 0.03 && Math.abs(samplePts(fc?.ds, 0) - 1) < 0.02);
+  check('P1 u=1/6（第 2 帧，滞后未满）摆角 = atan2(−2, L)',
+    Math.abs(samplePts(fc?.da, 1 / 6) - Math.atan2(-2, L)) < 0.03);
+  check('P1 u=0.5（第 6 帧）摆角 = atan2(−3, L)、缩放 = hypot(L, 3)/L',
+    Math.abs(samplePts(fc?.da, 0.5) - Math.atan2(-3, L)) < 0.03
+    && Math.abs(samplePts(fc?.ds, 0.5) - Math.hypot(L, 3) / L) < 0.02);
+  check('P1 u=1（末帧）摆角仍 = atan2(−3, L)（匀速下滞后恒定）',
+    Math.abs(samplePts(fc?.da, 1) - Math.atan2(-3, L)) < 0.03);
   const set2Dyn = (pkg.costumes['set2'] as { __dynamic?: Record<string, { followCurve?: unknown }[]> })?.__dynamic?.['cape']?.[0];
   check('P2 服装集 __dynamic 的同实例也挂曲线', !!set2Dyn?.followCurve);
 
@@ -1595,10 +1627,13 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('P5 模板含追随采样与应用接线', tplText.includes('followSampleAt') && tplText.includes('inst.followCurve'));
   const m = tplText.match(/function followSampleAt\(points, u\) \{[\s\S]*?\n\}/);
   check('P5 followSampleAt 可提取', !!m);
-  if (m && fc?.dx) {
+  if (m && fc?.da) {
     const sampler = new Function(`${m[0]}\nreturn followSampleAt;`)() as (p: [number, number][], u: number) => number;
-    check('P5 模板采样器采烘焙曲线 u=0.5 得 −3', Math.abs(sampler(fc.dx, 0.5) + 3) < 0.25);
-    check('P5 模板采样器两端钳制', sampler(fc.dx, -1) === sampler(fc.dx, 0) && sampler(fc.dx, 2) === sampler(fc.dx, 1));
+    const capeBase2 = pkg.parts.find((p) => p.key === 'cape')?.base;
+    const L2 = (capeBase2?.size[1] ?? 0) / 2 + (capeBase2?.pivot[1] ?? 0);
+    check('P5 模板采样器采锚定摆角曲线 u=0.5 得 atan2(−3, L)',
+      Math.abs(sampler(fc.da, 0.5) - Math.atan2(-3, L2)) < 0.05);
+    check('P5 模板采样器两端钳制', sampler(fc.da, -1) === sampler(fc.da, 0) && sampler(fc.da, 2) === sampler(fc.da, 1));
   }
 }
 
@@ -3013,6 +3048,121 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
       ...chHairBaked,
       nodes: { ...chHairBaked.nodes, scalp: { ...chHairBaked.nodes.scalp, transform: { ...chHairBaked.nodes.scalp.transform, x: 150 } } },
     } as unknown as Character, detH!, 12).length >= 1);
+}
+
+// ---- 透视缩短求值（缺口 7）：foreFrom 进位姿记录、钳制 0..1 ----
+{
+  const ev = createRuntimeEvaluator();
+  const g = { nodes: [
+    { id: 't', type: 'time' },
+    { id: 'c', type: 'curve', points: [[0, 0.42], [1, 0.42]] },
+    { id: 'tr', type: 'transform', part: 'arm', units: 'runtime', foreFrom: { n: 'c' } },
+  ] };
+  const out = ev(g, { t: 0.5 });
+  check('缺口7·求值器 fore 通道输出绝对因子', Math.abs((out.get('arm')?.fore ?? -1) - 0.42) < 1e-9);
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  const sprF = { id: 'gsprF', name: 'g', width: 4, height: 4, plug: { x: 32, y: 32 }, pixels: Array.from({ length: 4 }, () => Array(4).fill('#c83232')), direction: 2 } as never;
+  const chFore = {
+    id: 'chFore', name: '缩短测试',
+    nodes: { arm: makeNode('arm', '手臂', 'arm') },
+    rootNodeId: 'arm', rootNodeIds: ['arm'],
+    sprites: { gsprF: sprF },
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { arm: { ...createDefaultCostumePiece('arm'), sprites: { 2: { spriteId: 'gsprF', mirror: false } } } } }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const html = buildRuntimeHtml(convertCharacterToRuntimePackage(chFore));
+  check('缺口7·模板含透视缩短开关与 dsy 落点', html.includes('foreOn') && html.includes('透视缩短') && html.includes('an.fore'));
+}
+
+// ---- 网格蒙皮对拍（缺口 4）：运行时 RGBA 孪生 vs 编辑器 applyMeshSkin ----
+{
+  const { applyMeshSkin } = await import('../src/lib/skin/mesh-skin');
+  const baker = createSurfaceBaker();
+  const W = 12, H = 12;
+  const grid: (string | null)[][] = [];
+  const data = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    const row: (string | null)[] = [];
+    for (let x = 0; x < W; x++) {
+      const hex = x < 6 ? '#c83232' : '#282828';
+      row.push(hex);
+      const o = (y * W + x) * 4;
+      data[o] = parseInt(hex.slice(1, 3), 16); data[o + 1] = parseInt(hex.slice(3, 5), 16); data[o + 2] = parseInt(hex.slice(5, 7), 16); data[o + 3] = 255;
+    }
+    grid.push(row);
+  }
+  const ed = applyMeshSkin(grid, 6, 6, 40, 5, 'smoothstep') as (string | null)[][];
+  const rt = baker.skinWarpTile(data, W, H, 6, 6, 40 * Math.PI / 180, 5, 'smoothstep');
+  check('缺口4·运行时蒙皮变形与编辑器 applyMeshSkin 逐像素一致（红/灰竖界弯曲）',
+    !!rt && ed.every((row, y) => row.every((c, x) => {
+      const o = (y * W + x) * 4;
+      if (c === null) return rt[o + 3] === 0;
+      const r = parseInt(c.slice(1, 3), 16), g = parseInt(c.slice(3, 5), 16), b = parseInt(c.slice(5, 7), 16);
+      return Math.abs(rt[o] - r) <= 1 && Math.abs(rt[o + 1] - g) <= 1 && Math.abs(rt[o + 2] - b) <= 1;
+    })));
+  check('缺口4·零角度返回 null（不做无谓回传）', baker.skinWarpTile(data, W, H, 6, 6, 0, 5, 'smoothstep') === null);
+}
+
+// ---- 包数据面锁定（2026-10-26 用户纠正）：播放器不读的字段仍是
+// 用户端可消费的数据面——params 原始键、drawLayer、context 标记整份
+// 进包；删的只是播放器内部死代码（dynFollowDelta 等，不在此断言） ----
+{
+  const { createDynamicInstance, defaultDynamicParams } = await import('../src/lib/dynamic-patterns');
+  const gridD = Array.from({ length: 9 }, (_, y) => Array.from({ length: 9 }, (_, x) => (x === 4 && y === 4 ? '#2ea8ff' : '#111111')));
+  const sprD = {
+    id: 'gsprD', width: 9, height: 9, plug: { x: 0 as never, y: 0 as never }, data: gridD,
+    directions: { 2: { spriteId: 'gsprD', mirror: false } },
+  } as never;
+  const instD = createDynamicInstance('辉光呼吸', {
+    ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: '#2ea8ff',
+    glowShape: 'star', glowHalo: 2, followEnabled: true, followSource: '', followDelaySec: 0.3,
+  } as never, '辉光');
+  const chD = {
+    id: 'chD', name: '死字段测试',
+    nodes: { gem: { ...makeNode('gem', '宝石', 'gem'), drawLayer: 'main', dynamicPatterns: [instD] } },
+    rootNodeId: 'gem', rootNodeIds: ['gem'],
+    sprites: { gsprD: sprD },
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { gem: { ...createDefaultCostumePiece('gem'), sprites: { 2: { spriteId: 'gsprD', mirror: false } } } } }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkgD = convertCharacterToRuntimePackage(chD);
+  const partD = pkgD.parts.find((x) => x.key === 'gem');
+  const paramsD = (partD?.dynamic?.[0]?.params ?? {}) as unknown as Record<string, unknown>;
+  check('数据面·包内实例 params 原始键完整（追随/发光形状键在包）',
+    paramsD.followEnabled === true && paramsD.followDelaySec === 0.3 && paramsD.glowShape === 'star'
+    && paramsD.glowHalo === 2 && paramsD.glowPick === '#2ea8ff' && paramsD.glowEnabled === true);
+  check('数据面·发光印章仍按原参数烘焙（星形代码 2）', partD?.glow?.stamps?.[0]?.shape === 2);
+  check('数据面·部件带 drawLayer（节点遮挡层名原样进包）',
+    !!partD && partD.drawLayer === 'main');
+}
+
+
+// ---------- S) 场景透传 + 玩法补缺接线（Asemulator 缺口补上） ----------
+{
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  const emptyChar = { id: 'e2', name: '空2', nodes: {}, rootNodeIds: [], costumeSets: [], variants: {} } as unknown as Character;
+  const pkgS = convertCharacterToRuntimePackage(emptyChar, {}, {
+    projectData: { scene: { solids: [
+      { x: -40, y: 0, w: 30, h: 14 },
+      { x: 1.5, y: 2.5, w: 1, h: 9 },
+      { x: NaN, y: 0, w: 5, h: 5 },
+    ] } },
+  });
+  check('S1 pkg.scene 透传合法实体（逐值对拍）',
+    !!pkgS.scene && pkgS.scene.solids.length === 1
+    && pkgS.scene.solids[0].x === -40 && pkgS.scene.solids[0].y === 0
+    && pkgS.scene.solids[0].w === 30 && pkgS.scene.solids[0].h === 14);
+  check('S2 非法实体点名丢弃（宽<2 与 NaN 各一条）',
+    pkgS.warnings.filter((w) => w.includes('场景实体被丢弃')).length === 2);
+  const pkgS0 = convertCharacterToRuntimePackage(emptyChar, {});
+  check('S3 无 scene 时包不带 scene 字段（播放器回落默认关卡）', pkgS0.scene === undefined);
+  const htmlS = buildRuntimeHtml(pkgS);
+  check('S4 生成页含碰撞/俯视/场景/手感/重绑/录制接线',
+    htmlS.includes('updateCharacterSide') && htmlS.includes('updateCharacterTop')
+    && htmlS.includes('const KEYMAP') && htmlS.includes('const PHYS')
+    && htmlS.includes('drawBackground') && htmlS.includes('gifLzw')
+    && htmlS.includes('wall: (!char.onGround') && htmlS.includes('startReplay')
+    && htmlS.includes('EMBEDDED.scene'));
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);
