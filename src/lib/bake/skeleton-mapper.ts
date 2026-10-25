@@ -4,7 +4,7 @@
 // ============================================================
 
 import type { TwoPassBakeData } from './threejs-baker-twopass';
-import { decodeBoneMask } from './threejs-baker-twopass';
+import { decodeBoneMask64 } from './threejs-baker-twopass';
 import type { PartName } from './threejs-baker-sixpart';
 import { medianCut, nearestPaletteIndex } from './threejs-baker';
 import { rgbaToHexOrNull } from '../engine/utils';
@@ -66,6 +66,72 @@ export interface SplitOptions {
   minCrop?: number;
   /** 调色板颜色数，默认 16 */
   paletteSize?: number;
+  /**
+   * 小碎片清理：每骨骼每方向的归属掩码里，除最大连通域外面积小于此值的
+   * 连通域整域清除（ID 噪声产生的孤点）。默认 4；设 0 关闭。
+   * 眼/眉/口等小部件骨骼（名字命中 isProtectedDetailBone）豁免不清。
+   */
+  fragmentMinArea?: number;
+}
+
+/** 小部件豁免名单：这些骨骼的细节本身就小而独立，碎片清理会误伤 */
+const PROTECTED_DETAIL_RE = /eye|brow|lash|mouth|lip|tooth|teeth|tongue|pupil|瞳|目|眼|眉|睫|口|嘴|唇|舌|歯/;
+export function isProtectedDetailBone(name: string): boolean {
+  return PROTECTED_DETAIL_RE.test(name.toLowerCase());
+}
+
+/**
+ * 清理归属掩码里的小碎片连通域（8 连通）：保留最大域，其余面积 < minArea
+ * 的整域从 mask 清除。就地修改 mask，返回清除的像素数。
+ */
+export function filterSmallMaskComponents(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  minArea = 4,
+): number {
+  if (minArea <= 1 || width <= 0 || height <= 0) return 0;
+  const total = width * height;
+  const labels = new Int32Array(total).fill(-1);
+  const sizes: number[] = [];
+  const stack: number[] = [];
+  let largest = -1;
+  let largestSize = 0;
+  for (let s = 0; s < total; s++) {
+    if (!mask[s] || labels[s] >= 0) continue;
+    const id = sizes.length;
+    let size = 0;
+    stack.length = 0;
+    stack.push(s);
+    labels[s] = id;
+    while (stack.length > 0) {
+      const p = stack.pop()!;
+      size++;
+      const x = p % width;
+      const y = (p / width) | 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const q = ny * width + nx;
+          if (mask[q] && labels[q] < 0) { labels[q] = id; stack.push(q); }
+        }
+      }
+    }
+    sizes.push(size);
+    if (size > largestSize) { largestSize = size; largest = id; }
+  }
+  let removed = 0;
+  for (let p = 0; p < total; p++) {
+    const id = labels[p];
+    if (id >= 0 && id !== largest && sizes[id] < minArea) {
+      mask[p] = 0;
+      removed++;
+    }
+  }
+  return removed;
 }
 
 /**
@@ -109,9 +175,14 @@ export function splitByBoneId(
   for (const b of bake.bones) effSet.add(merge0 ? (merge0.effectiveIndex[b.index] ?? b.index) : b.index);
   const effList = [...effSet].sort((a, b) => a - b);
   // 返回合并后全局 bone index 列表（[] = 背景）
-  const decodeBones = (r: number, g: number, b: number): number[] => {
+  // 64 位掩码：lo = idPixels（字节 0..3）、hi = idPixelsHi（字节 4..7），o = 像素字节偏移
+  const decodeBones = (lo: Uint8ClampedArray, hi: Uint8ClampedArray | undefined, o: number): number[] => {
     const out: number[] = [];
-    for (const ci of decodeBoneMask(r, g, b)) {
+    const bytes = [
+      lo[o]!, lo[o + 1]!, lo[o + 2]!, lo[o + 3]!,
+      hi ? hi[o]! : 0, hi ? hi[o + 1]! : 0, hi ? hi[o + 2]! : 0, hi ? hi[o + 3]! : 0,
+    ];
+    for (const ci of decodeBoneMask64(bytes)) {
       const gi = effList[ci];
       if (gi !== undefined) out.push(gi);
     }
@@ -190,12 +261,12 @@ export function splitByBoneId(
       // 占住，其像素只存在于 back 遍，被整批丢弃（侧面方向远侧小臂/手全缺）。
       // 透明像素跳过（颜色无意义），两遍各自判定。
       if (front.colorPixels[o + 3] > 8) {
-        for (const bi of decodeBones(front.idPixels[o], front.idPixels[o + 1], front.idPixels[o + 2])) {
+        for (const bi of decodeBones(front.idPixels, front.idPixelsHi, o)) {
           addPixel(bi, front.colorPixels, o, p);
         }
       }
       if (back.colorPixels[o + 3] > 8) {
-        for (const bi of decodeBones(back.idPixels[o], back.idPixels[o + 1], back.idPixels[o + 2])) {
+        for (const bi of decodeBones(back.idPixels, back.idPixelsHi, o)) {
           addPixelBack(bi, back.colorPixels, o, p);
         }
       }
@@ -205,6 +276,10 @@ export function splitByBoneId(
     for (const [bi, e] of perBone) {
       const bone = bake.bones[bi];
       const pb = result.get(bi)!;
+      // 小碎片清理（裁 bbox 前，免得孤点撑大裁剪框）；小部件骨骼豁免
+      if (!isProtectedDetailBone(bone.name)) {
+        filterSmallMaskComponents(e.mask, W, H, opts.fragmentMinArea ?? 4);
+      }
       // bbox
       let minX = W, maxX = -1, minY = H, maxY = -1;
       for (let y = 0; y < H; y++) {
@@ -670,6 +745,112 @@ export function mapBonesToNodes(
   };
 }
 
+/**
+ * 图层装配（乙）：先按基底图层（像素最多的一层）走 mapBonesToNodes 建骨骼树，
+ * 其余图层逐层建成子节点，挂在所属骨骼节点的专用 socket 下（offset3D 全零、
+ * 变换归零 → 与骨骼节点同帧同位），画序 = 骨骼 zIndex + 层序小数（同深度桶内
+ * 按 authoredZ 分先后，不越过下一层级）。图层精灵的 plug 与骨骼精灵同注册
+ * （关节全帧坐标 − 各自裁剪原点），叠加后逐像素对位。
+ */
+export function mapBonesToNodesLayered(
+  processed: Map<number, ProcessedBoneLayered>,
+  characterId: string,
+  characterName: string,
+): MappedImport {
+  // 基底图层选择：像素最多者（同数取画序靠前）
+  const baseOf = (pb: ProcessedBoneLayered): ProcessedBoneLayer | undefined => {
+    let best: ProcessedBoneLayer | undefined;
+    for (const l of pb.layers) {
+      if (!best || l.pixelCount > best.pixelCount
+        || (l.pixelCount === best.pixelCount && l.rank < best.rank)) best = l;
+    }
+    return best;
+  };
+  const merged = new Map<number, ProcessedBone>();
+  for (const [bi, pb] of processed) {
+    merged.set(bi, { ...pb, directions: baseOf(pb)?.directions ?? [] });
+  }
+  const mapped = mapBonesToNodes(merged, characterId, characterName);
+  const nodes = mapped.character.nodes;
+  const sprites = mapped.sprites;
+  const pieces = mapped.character.costumeSets[0]?.pieces ?? {};
+  let extraNodes = 0;
+
+  const sorted = [...processed.values()].sort((a, b) => a.boneIndex - b.boneIndex);
+  for (const pb of sorted) {
+    if (pb.layers.length < 2) continue;
+    const base = baseOf(pb)!;
+    const boneNodeId = `node_${characterId}_${pb.boneIndex}`;
+    const boneNode = nodes[boneNodeId];
+    if (!boneNode) continue;
+    const byRank = [...pb.layers].sort((a, b) => a.rank - b.rank);
+    for (const layer of byRank) {
+      if (layer === base) continue;
+      const rankPos = byRank.indexOf(layer);
+      const nodeId = `node_${characterId}_${pb.boneIndex}_layer${layer.layerIndex}`;
+      const node = createDefaultNode(nodeId, `${pb.boneName}·${layer.label}`);
+      node.parentId = boneNodeId;
+      node.transform.variantIndex = 6 as any;
+      node.transform.x = 0;
+      node.transform.y = 0;
+      node.transform.z = 0;
+      node.zIndex = (boneNode.zIndex ?? 0) + (rankPos + 1) / (byRank.length + 1);
+      const socketId = `sock_${characterId}_${pb.boneIndex}_layer${layer.layerIndex}`;
+      node.attachment = {
+        type: 'socket',
+        parentSocketId: socketId,
+        plug: { x: 0, y: 0 },
+      };
+      boneNode.sockets.push({
+        id: socketId,
+        name: `${pb.boneName}·${layer.label}`,
+        basePosition: { x: 0, y: 0 },
+        directionOffsets: {},
+        offset3D: { x: 0, y: 0, z: 0 },
+      });
+      boneNode.children.push(nodeId);
+
+      const slotKey = `slot_${characterId}_${pb.boneIndex}_layer${layer.layerIndex}`;
+      const piece = createDefaultCostumePiece(slotKey, '#ffffff');
+      for (const dir of layer.directions) {
+        const dirLat = dir.latitude ?? 0;
+        const spriteId = dirLat === 0
+          ? `spr_${characterId}_${pb.boneIndex}_layer${layer.layerIndex}_${dir.direction}`
+          : `spr_${characterId}_${pb.boneIndex}_layer${layer.layerIndex}_lat${dirLat}_${dir.direction}`;
+        const sprite: Sprite = {
+          id: spriteId,
+          name: dirLat === 0
+            ? `${pb.boneName}·${layer.label} d${dir.direction}`
+            : `${pb.boneName}·${layer.label} lat${dirLat} d${dir.direction}`,
+          width: dir.width,
+          height: dir.height,
+          data: dir.grid,
+          plug: { x: pxToSub(dir.plugX), y: pxToSub(dir.plugY) },
+          partCameraHalf: dir.cameraHalf,
+          globalCameraHalf: dir.globalCameraHalf ?? 1.0,
+        };
+        sprites[spriteId] = sprite;
+        if (dirLat === 0) {
+          piece.sprites[dir.direction] = { spriteId };
+        } else {
+          (piece.latitudeSprites ??= {})[dirLat] ??= {};
+          piece.latitudeSprites[dirLat][dir.direction] = { spriteId };
+        }
+      }
+      pieces[slotKey] = piece;
+      node.slot = piece;
+      nodes[nodeId] = node;
+      extraNodes++;
+    }
+  }
+  mapped.stats = {
+    bones: mapped.stats.bones,
+    nodes: mapped.stats.nodes + extraNodes,
+    sprites: Object.keys(sprites).length,
+  };
+  return mapped;
+}
+
 // ---- 六部件 2D 拆分 ----
 
 import type { SixPartBakeData } from './threejs-baker-sixpart';
@@ -725,9 +906,14 @@ export function splitSixParts(
     const localToGlobal = bake.partBoneMap[part];
     if (!localToGlobal || localToGlobal.length === 0) continue;
     // 位掩码解码：局部索引位 → 全局 bone（[] = 背景）
-    const decodeBones = (r: number, g: number, b: number): number[] => {
+    // 64 位掩码：lo = idPixels（字节 0..3）、hi = idPixelsHi（字节 4..7），o = 像素字节偏移
+    const decodeBones = (lo: Uint8ClampedArray, hi: Uint8ClampedArray | undefined, o: number): number[] => {
       const out: number[] = [];
-      for (const li of decodeBoneMask(r, g, b)) {
+      const bytes = [
+        lo[o]!, lo[o + 1]!, lo[o + 2]!, lo[o + 3]!,
+        hi ? hi[o]! : 0, hi ? hi[o + 1]! : 0, hi ? hi[o + 2]! : 0, hi ? hi[o + 3]! : 0,
+      ];
+      for (const li of decodeBoneMask64(bytes)) {
         const gi = localToGlobal[li];
         if (gi !== undefined) out.push(gi);
       }
@@ -779,7 +965,7 @@ export function splitSixParts(
           if (gi0 === undefined) continue;
           addPixel(gi0, o, p);
         } else {
-          const bones = decodeBones(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
+          const bones = decodeBones(g.idPixels, g.idPixelsHi, o);
           if (bones.length === 0) continue;
           for (const bi of bones) addPixel(bi, o, p);
         }
@@ -790,7 +976,7 @@ export function splitSixParts(
         const idCount = new Map<number, number>();
         for (let p = 0; p < W * H; p++) {
           const o = p * 4;
-          for (const bi of decodeBones(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2])) {
+          for (const bi of decodeBones(g.idPixels, g.idPixelsHi, o)) {
             const eff = merge ? (merge.effectiveIndex[bi] ?? bi) : bi;
             idCount.set(eff, (idCount.get(eff) ?? 0) + 1);
           }
@@ -807,7 +993,7 @@ export function splitSixParts(
         const maskA: number[] = [];
         for (let p = 0; p < W * H; p++) {
           const o = p * 4;
-          const bones = decodeBones(g.idPixels[o], g.idPixels[o + 1], g.idPixels[o + 2]);
+          const bones = decodeBones(g.idPixels, g.idPixelsHi, o);
           if (bones.some((bi) => (merge ? (merge.effectiveIndex[bi] ?? bi) : bi) === arm2Eff)) maskA.push(p);
         }
         let bestOff = '', bestN = -1;
@@ -830,6 +1016,10 @@ export function splitSixParts(
       for (const [bi, e] of perBone) {
         const bone = bake.bones[bi];
         const pb = result.get(bi)!;
+        // 小碎片清理（同 splitByBoneId）；小部件骨骼豁免
+        if (!isProtectedDetailBone(bone.name)) {
+          filterSmallMaskComponents(e.mask, W, H, opts.fragmentMinArea ?? 4);
+        }
         let minX = W, maxX = -1, minY = H, maxY = -1;
         for (let y = 0; y < H; y++) {
           for (let x = 0; x < W; x++) {
@@ -1005,6 +1195,319 @@ export function splitSixParts(
   }
   // 回填 worldToPixels（可逆性：记录 bake 时的转换系数）
   fillWorldToPixels(result, W, bake.normalization.scale);
+  return result;
+}
+
+/** 图层拆分结果：一根骨骼按（材质组视图）分出的若干层，每层一套方向精灵 */
+export interface ProcessedBoneLayer {
+  /** 部件内视图号（= partLayers 里的下标） */
+  layerIndex: number;
+  key: string;
+  label: string;
+  /** 画序（0 = 最远、先画），来自烘焙的深度中位数 rank */
+  rank: number;
+  /** 全部方向归属像素总数（装配端选基底图层用） */
+  pixelCount: number;
+  directions: ProcessedBoneDirection[];
+}
+
+export interface ProcessedBoneLayered extends ProcessedBone {
+  layers: ProcessedBoneLayer[];
+}
+
+/**
+ * 图层拆分（乙：进木偶装配）：与 splitSixParts 同一像素归属/裁剪/调色口径，
+ * 只是归属多一维——（骨骼 × 图层）。layerPixels 的 R=视图号+1；R=0 的像素
+ * （候选填充等无图层归属）并入视图 0 层。骨骼合并、碎片清理、跨部件帧重锚
+ * 叠回等规则与 splitSixParts 一致（[split-debug] 诊断块不复制）。
+ */
+export function splitSixPartsLayered(
+  bake: SixPartBakeData,
+  opts: SplitOptions = {},
+): Map<number, ProcessedBoneLayered> {
+  const padding = opts.padding ?? 1.35;
+  void padding;
+  const paletteSize = opts.paletteSize ?? 16;
+  const W = bake.width;
+  const H = bake.height;
+
+  const result = new Map<number, ProcessedBoneLayered>();
+  const merge = bake.merge;
+  const effectiveSet = new Set<number>();
+  for (const b of bake.bones) {
+    const eff = merge ? (merge.effectiveIndex[b.index] ?? b.index) : b.index;
+    effectiveSet.add(eff);
+  }
+  for (const b of bake.bones) {
+    if (!effectiveSet.has(b.index)) continue;
+    let pIdx = b.parentIndex;
+    if (merge && pIdx !== null && pIdx !== undefined) {
+      const effP = merge.effectiveIndex[pIdx] ?? pIdx;
+      const effSelf = merge.effectiveIndex[b.index] ?? b.index;
+      pIdx = effP === effSelf ? null : effP;
+    }
+    result.set(b.index, {
+      boneIndex: b.index,
+      boneName: b.name,
+      parentIndex: pIdx,
+      directions: [],
+      joint3D: b.joint3D,
+      bakeWidth: W,
+      worldToPixels: undefined,
+      layers: [],
+    });
+  }
+  const layerOf = (pb: ProcessedBoneLayered, part: PartName, vi: number): ProcessedBoneLayer => {
+    let l = pb.layers.find((x) => x.layerIndex === vi);
+    if (!l) {
+      const meta = bake.partLayers?.[part]?.[vi];
+      l = {
+        layerIndex: vi,
+        key: meta?.key ?? `${part}|${vi}`,
+        label: meta?.label ?? `材质${vi + 1}`,
+        rank: meta?.rank ?? vi,
+        pixelCount: 0,
+        directions: [],
+      };
+      pb.layers.push(l);
+    }
+    return l;
+  };
+
+  for (const part of ALL_PARTS) {
+    const localToGlobal = bake.partBoneMap[part];
+    if (!localToGlobal || localToGlobal.length === 0) continue;
+    const decodeBones = (lo: Uint8ClampedArray, hi: Uint8ClampedArray | undefined, o: number): number[] => {
+      const out: number[] = [];
+      const bytes = [
+        lo[o]!, lo[o + 1]!, lo[o + 2]!, lo[o + 3]!,
+        hi ? hi[o]! : 0, hi ? hi[o + 1]! : 0, hi ? hi[o + 2]! : 0, hi ? hi[o + 3]! : 0,
+      ];
+      for (const li of decodeBoneMask64(bytes)) {
+        const gi = localToGlobal[li];
+        if (gi !== undefined) out.push(gi);
+      }
+      return out;
+    };
+
+    const partPairs: Array<{ lat: number; d: number }> = [];
+    {
+      const seen = new Set<string>();
+      for (const x of bake.groups) {
+        if (x.part !== part) continue;
+        const lat = x.latitude ?? 0;
+        const key = `${lat}|${x.direction}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          partPairs.push({ lat, d: x.direction });
+        }
+      }
+    }
+    for (const { lat, d } of partPairs) {
+      const g = bake.groups.find((x) => x.part === part && x.direction === d && (x.latitude ?? 0) === lat);
+      if (!g) continue;
+      type Acc = { bi: number; vi: number; rgba: Uint8ClampedArray; mask: Uint8Array; count: number; contrib: Map<number, number> };
+      const perEntry = new Map<string, Acc>();
+      const addPixel = (bi0: number, vi: number, o: number, p: number) => {
+        let bi = bi0;
+        if (merge) bi = merge.effectiveIndex[bi] ?? bi;
+        const key = `${bi}|${vi}`;
+        let e = perEntry.get(key);
+        if (!e) {
+          e = { bi, vi, rgba: new Uint8ClampedArray(W * H * 4), mask: new Uint8Array(W * H), count: 0, contrib: new Map() };
+          perEntry.set(key, e);
+        }
+        e.contrib.set(bi0, (e.contrib.get(bi0) ?? 0) + 1);
+        e.mask[p] = 1;
+        e.count++;
+        e.rgba[o] = g.colorPixels[o];
+        e.rgba[o + 1] = g.colorPixels[o + 1];
+        e.rgba[o + 2] = g.colorPixels[o + 2];
+        e.rgba[o + 3] = 255;
+      };
+      for (let p = 0; p < W * H; p++) {
+        const o = p * 4;
+        if (g.colorPixels[o + 3] <= 8) continue;
+        const rawLayer = g.layerPixels ? g.layerPixels[o] : 0;
+        const vi = rawLayer > 0 ? rawLayer - 1 : 0;
+        if (!g.idPixels) {
+          const gi0 = localToGlobal?.[0];
+          if (gi0 === undefined) continue;
+          addPixel(gi0, vi, o, p);
+        } else {
+          const bones = decodeBones(g.idPixels, g.idPixelsHi, o);
+          if (bones.length === 0) continue;
+          for (const bi of bones) addPixel(bi, vi, o, p);
+        }
+      }
+
+      for (const e of perEntry.values()) {
+        const bone = bake.bones[e.bi];
+        const pb = result.get(e.bi)!;
+        if (!isProtectedDetailBone(bone.name)) {
+          filterSmallMaskComponents(e.mask, W, H, opts.fragmentMinArea ?? 4);
+        }
+        let minX = W, maxX = -1, minY = H, maxY = -1;
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            if (e.mask[y * W + x]) {
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        if (maxX < 0) continue;
+        const layer = layerOf(pb, part, e.vi);
+        layer.pixelCount += e.count;
+        const exist = layer.directions.find((dd) => dd.direction === d && (dd.latitude ?? 0) === lat);
+        let domBi = e.bi;
+        if (exist) {
+          let best = -1;
+          for (const [cbi, n] of e.contrib) {
+            if (n > best) { best = n; domBi = cbi; }
+          }
+        }
+        const jp = g.jointPixels?.[domBi] ?? (exist ? bake.bones[domBi] : bone).jointPixels[d];
+        if (!jp) continue;
+        const jx = jp.x;
+        const jy = jp.y;
+        const pad = 2;
+        let x0 = Math.max(0, Math.floor(minX - pad));
+        let y0 = Math.max(0, Math.floor(minY - pad));
+        let x1 = Math.min(W, Math.ceil(maxX + pad));
+        let y1 = Math.min(H, Math.ceil(maxY + pad));
+        x0 = Math.min(x0, Math.floor(jx));
+        y0 = Math.min(y0, Math.floor(jy));
+        x1 = Math.max(x1, Math.ceil(jx) + 1);
+        y1 = Math.max(y1, Math.ceil(jy) + 1);
+        const cw = x1 - x0;
+        const ch = y1 - y0;
+
+        const crop = new Uint8ClampedArray(cw * ch * 4);
+        for (let y = 0; y < ch; y++) {
+          for (let x = 0; x < cw; x++) {
+            const sx = x0 + x, sy = y0 + y;
+            const so = (sy * W + sx) * 4;
+            const do_ = (y * cw + x) * 4;
+            if (sx < 0 || sx >= W || sy < 0 || sy >= H || !e.mask[sy * W + sx]) {
+              crop[do_ + 3] = 0;
+              continue;
+            }
+            crop[do_] = e.rgba[so];
+            crop[do_ + 1] = e.rgba[so + 1];
+            crop[do_ + 2] = e.rgba[so + 2];
+            crop[do_ + 3] = 255;
+          }
+        }
+
+        const palette = medianCut(crop, paletteSize);
+        const cwN = Math.max(1, Math.round(cw * g.cameraHalf));
+        const chN = Math.max(1, Math.round(ch * g.cameraHalf));
+        const grid: PixelGrid = [];
+        for (let y = 0; y < chN; y++) {
+          const row: (string | null)[] = [];
+          const sy = Math.min(ch - 1, Math.floor((y * ch) / chN));
+          for (let x = 0; x < cwN; x++) {
+            const sx = Math.min(cw - 1, Math.floor((x * cw) / cwN));
+            const o = (sy * cw + sx) * 4;
+            row.push(rgbaToHexOrNull(crop[o], crop[o + 1], crop[o + 2], crop[o + 3]));
+          }
+          grid.push(row);
+        }
+        if (palette.length > 0) {
+          for (let y = 0; y < chN; y++) {
+            for (let x = 0; x < cwN; x++) {
+              const c = grid[y][x];
+              if (!c) continue;
+              const r = parseInt(c.slice(1, 3), 16);
+              const gg = parseInt(c.slice(3, 5), 16);
+              const b = parseInt(c.slice(5, 7), 16);
+              const idx = nearestPaletteIndex(r, gg, b, palette);
+              const pc = palette[idx];
+              grid[y][x] = '#' + [pc[0], pc[1], pc[2]].map((v) => v.toString(16).padStart(2, '0')).join('');
+            }
+          }
+        }
+
+        if (exist) {
+          const domJoint = bake.bones[domBi].joint3D;
+          const biJoint = bone.joint3D;
+          if (domJoint && biJoint) {
+            const loopAng = (((d + 2) % 8) / 8) * Math.PI * 2;
+            const cosA = Math.cos(loopAng);
+            const sinA = Math.sin(loopAng);
+            const dx = domJoint.x - biJoint.x;
+            const dy = domJoint.y - biJoint.y;
+            const dz = domJoint.z - biJoint.z;
+            const rx = dx * cosA + dz * sinA;
+            const ry = dy;
+            const rz = -dx * sinA + dz * cosA;
+            const hP = exist.cameraHalf;
+            const nn = Math.hypot(0.25 * hP, 4);
+            const zy = (0.25 * hP) / nn;
+            const zz = 4 / nn;
+            const deltaPxX = rx * (W / 2);
+            const deltaPxY = -(ry * zz - rz * zy) * (W / 2);
+            const dupPlugX = (jx - x0) * g.cameraHalf;
+            const dupPlugY = (jy - y0) * g.cameraHalf;
+            const offX = Math.round(exist.plugX - dupPlugX + deltaPxX);
+            const offY = Math.round(exist.plugY - dupPlugY + deltaPxY);
+            for (let y = 0; y < grid.length; y++) {
+              const ty = y + offY;
+              if (ty < 0 || ty >= exist.grid.length) continue;
+              for (let x = 0; x < grid[y].length; x++) {
+                const c = grid[y][x];
+                if (!c) continue;
+                const tx = x + offX;
+                if (tx < 0 || tx >= exist.grid[ty].length) continue;
+                if (exist.grid[ty][tx] === null) {
+                  exist.grid[ty][tx] = c;
+                }
+              }
+            }
+          }
+          continue;
+        }
+        if (!pb.part) pb.part = part;
+        layer.directions.push({
+          direction: d as DirectionIndex,
+          latitude: lat,
+          grid,
+          width: cwN,
+          height: chN,
+          cropX: x0,
+          cropY: y0,
+          jointX: jx,
+          jointY: jy,
+          plugX: (jx - x0) * g.cameraHalf,
+          plugY: (jy - y0) * g.cameraHalf,
+          cameraHalf: g.cameraHalf,
+          globalCameraHalf: bake.globalCameraHalf,
+        });
+      }
+    }
+  }
+
+  const referencedParents = new Set<number>();
+  for (const pb of result.values()) {
+    if (pb.parentIndex !== null && pb.parentIndex !== undefined) {
+      referencedParents.add(pb.parentIndex);
+    }
+  }
+  for (const [bi, pb] of [...result]) {
+    const totalDirs = pb.layers.reduce((n, l) => n + l.directions.length, 0);
+    if (totalDirs === 0 && !referencedParents.has(bi)) {
+      result.delete(bi);
+      continue;
+    }
+    pb.layers = pb.layers.filter((l) => l.directions.length > 0);
+    pb.layers.sort((a, b) => a.rank - b.rank);
+    const d6 = pb.layers.flatMap((l) => l.directions).find((dd) => dd.direction === 6)
+      ?? pb.layers[0]?.directions[0];
+    if (d6 && d6.cameraHalf > 0) pb.worldToPixels = (W / 2) / d6.cameraHalf;
+  }
   return result;
 }
 

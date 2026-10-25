@@ -60,6 +60,18 @@ export interface BakeOptions {
   thumbBoneName?: string;
   /** 手动指定的手指 bone 名列表（优先于自动匹配） */
   fingerBoneNames?: string[];
+  /**
+   * 骨骼权重阈值（用户可调，默认 0.2）：顶点权重超过该值的骨骼都计入 ID 归属。
+   * 调低 = 关节处重叠多（弯曲不裂、边缘偏糊）；调高 = 重叠少（边缘干净、弯曲易露缝）。
+   */
+  weightThreshold?: number;
+  /**
+   * 无归属三角形归入邻近部件（默认关 = 丢弃，与旧行径一致）：六部件里主导骨骼
+   * 不属于任何部件的三角形，按共享顶点投票归入相邻部件；归入时其顶点权重集
+   * 暂时加上邻近骨骼（邻近部件中出现最多的骨骼，本烘焙内有效、不回写模型），
+   * 使其像素在拆分时真正落入该部件。
+   */
+  absorbUnassigned?: boolean;
 }
 
 const DIRECTIONS = 8;
@@ -84,7 +96,11 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, us
     if (!mesh.isMesh) return;
     // SkinnedMesh 的包围盒是 bind pose 的，关掉 frustum culling 防误裁
     mesh.frustumCulled = false;
-    const old = mesh.material as THREE.MeshStandardMaterial | undefined;
+    // PMX/PMD 场景是材质数组：基色/贴图取首个材质，释放逐个来（数组无 dispose）
+    const olds = Array.isArray(mesh.material)
+      ? mesh.material
+      : mesh.material ? [mesh.material] : [];
+    const old = olds[0] as THREE.MeshStandardMaterial | undefined;
     const baseColor =
       old && 'color' in old && (old as THREE.MeshStandardMaterial).color
         ? ((old as THREE.MeshStandardMaterial).color as THREE.Color).clone()
@@ -101,7 +117,7 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, us
         gradientMap,
       });
     // 旧材质释放(贴图保留,新材质在用)
-    if (old && old !== mesh.material) old.dispose();
+    for (const o of olds) if (o !== mesh.material) o.dispose();
   });
 }
 

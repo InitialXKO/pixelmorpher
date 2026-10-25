@@ -8,6 +8,7 @@
 
 import * as THREE from 'three';
 import type { PMXParsedData } from './pmx-parser';
+import { omitRedundantOverlayMaterials } from './material-overlays';
 
 export type PMXTextureResolver = (texPath: string) => Promise<THREE.Texture | null>;
 
@@ -113,6 +114,7 @@ export async function buildPMXScene(
       const sphereTex = await resolveTexture(data.textures[mat.sphereTextureIndex]);
       if (sphereTex) m.userData.pmxSphereMap = sphereTex;
     }
+    m.userData.pmxSphereMode = mat.sphereMode;
     materials.push(m);
   }
 
@@ -123,6 +125,8 @@ export async function buildPMXScene(
   skinnedMesh.add(boneRoot);
   skinnedMesh.bind(skeleton);
   skinnedMesh.frustumCulled = false;
+  // 与本体完全重合的加算球面层在平涂下会变成不透明覆盖，加载时剔除
+  omitRedundantOverlayMaterials(skinnedMesh);
 
   const root = new THREE.Group();
   root.name = 'PMX_Model';

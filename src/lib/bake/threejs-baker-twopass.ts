@@ -35,7 +35,10 @@ export interface TwoPassGroup {
   /** 0=前（LessEqualDepth），1=后（GreaterDepth） */
   pass: 0 | 1;
   colorPixels: Uint8ClampedArray;
+  /** ID 掩码低半（字节 0..3 = bone 0..31，A 通道为字节 3） */
   idPixels: Uint8ClampedArray;
+  /** ID 掩码高半（字节 4..7 = bone 32..63） */
+  idPixelsHi: Uint8ClampedArray;
   /** 本组（纬度,方向）下各 bone 的关节像素（按 bone index）；拆分优先用它，回落 bones[].jointPixels[方向] */
   jointPixels?: Array<{ x: number; y: number } | undefined>;
 }
@@ -87,8 +90,12 @@ export interface BoneMergeInfo {
   manualUnmerges: Set<number>;
 }
 
-const FINGER_TOE_RE = /finger|thumb|index|middle|ring|pinky|little|digit|toe/i;
-const HAND_FOOT_RE = /hand|foot|wrist|ankle/i;
+// 英文 + MMD 日文/中文骨骼名：指（含親指/人指/中指/薬指/小指/足指/手指）
+// つま先 = 脚尖；手首/足首 = 腕/踝。HAND_FOOT 侧的「手/足」单字覆盖
+// 手掌/手腕/脚掌等，但目标判定要求不含「指」（见 computeBoneMerge 规则 1），
+// 左手首这类正名优先于链上更远的同名单字骨骼（向上走取最近）。
+const FINGER_TOE_RE = /finger|thumb|index|middle|ring|pinky|little|digit|toe|指|つま先/i;
+const HAND_FOOT_RE = /hand|foot|wrist|ankle|手首|手|足首|足|手掌|脚掌/i;
 
 /**
  * 计算 bone 合并映射。
@@ -304,7 +311,57 @@ export function computeTopologyMerge(
     }
   }
 
-  // ---- 手臂：肩→躯干，链分 3 段，手指→手 ----
+  // ---- 肢体分段共用：链上按代表分段 + 链外按关节距离就近归段 ----
+  // 段代表优先按关节名认（ひじ/肘、ひざ/膝、足首/踝——MMD/通用 rig 的
+  // 标准命名）；认不到时按链弧长比例取最近节点。旧口径按链上位置数
+  // （倒数第二个 = 前臂代表）会被捩骨顶掉真关节：MMD 臂链是
+  // [肩, 腕, 腕捩×N, ひじ, 手捩, 手首]，手捩是空壳代表、ひじ反被吞进上臂。
+  const ELBOW_RE = /ひじ|肘|elbow/i;
+  const KNEE_RE = /ひざ|膝|knee/i;
+  const ANKLE_RE = /足首|踝|ankle/i;
+  /** chain 中段（不含首尾）里按弧长比例 ratio 定位的节点下标 */
+  const arcPick = (chain: number[], ratio: number): number => {
+    const pos = (k: number) => topology.boneWorldPos[chain[k]];
+    let total = 0;
+    const cum: number[] = [0];
+    for (let k = 1; k < chain.length; k++) {
+      const a = pos(k - 1), b = pos(k);
+      const d = a && b ? Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) : 1;
+      total += d;
+      cum.push(total);
+    }
+    const target = total * ratio;
+    let best = 1, bd = Infinity;
+    for (let k = 1; k < chain.length - 1; k++) {
+      const dd = Math.abs(cum[k] - target);
+      if (dd < bd) { bd = dd; best = k; }
+    }
+    return best;
+  };
+  /** 把 root 子树里未被认领的骨骼按关节距离就近归入 reps 之一（D 系链/补助/饰品） */
+  const claimOffChainByDistance = (root: number, reps: number[], label: string): void => {
+    const stack = [root];
+    const seen = new Set<number>();
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (seen.has(i)) continue;
+      seen.add(i);
+      for (let j = 0; j < n; j++) if (parentIndex[j] === i) stack.push(j);
+      if (i === root || directTarget[i] !== i || kept.has(i)) continue;
+      const p = topology.boneWorldPos[i];
+      if (!p) continue;
+      let bestRep = -1, bd = Infinity;
+      for (const r of reps) {
+        const rp = topology.boneWorldPos[r];
+        if (!rp) continue;
+        const d = (rp.x - p.x) ** 2 + (rp.y - p.y) ** 2 + (rp.z - p.z) ** 2;
+        if (d < bd) { bd = d; bestRep = r; }
+      }
+      if (bestRep >= 0) setMerge(i, bestRep, `${label}就近并入 ${boneNames[bestRep]}`);
+    }
+  };
+
+  // ---- 手臂：肩→躯干，链分 3 段（上臂/前臂/手），手指→手 ----
   const processArm = (armRoot: number | null, hand: number | null, fingers: number[][], side: string): void => {
     if (armRoot === null || hand === null) return;
     // 肩（armRoot，cross 的直接子）→ 躯干
@@ -318,18 +375,22 @@ export function computeTopologyMerge(
       chain.unshift(cur);
       cur = parentIndex[cur];
     }
-    // chain = [上臂, ..., 前臂, 手]，保持 3 段
-    if (chain.length > 3) {
-      const first = chain[0];
-      const secondLast = chain[chain.length - 2];
-      keep(first); keep(secondLast); keep(chain[chain.length - 1]);
-      // 中间多余的并入第一段（上臂）
-      for (let k = 1; k < chain.length - 2; k++) {
-        setMerge(chain[k], first, `臂多余段并入 ${boneNames[first]}`);
-      }
-      void secondLast;
-    } else {
+    if (chain.length === 0) return;
+    const upper = chain[0];
+    let elbow: number | null = null;
+    if (chain.length <= 3) {
       for (const c of chain) keep(c);
+    } else {
+      // 前臂代表：链中段里名字是肘的节点；没有则取弧长中点节点
+      let elbowIdx = -1;
+      for (let k = 1; k < chain.length - 1; k++) {
+        if (ELBOW_RE.test(boneNames[chain[k]])) { elbowIdx = k; break; }
+      }
+      if (elbowIdx < 0) elbowIdx = arcPick(chain, 0.5);
+      elbow = chain[elbowIdx];
+      keep(upper); keep(elbow); keep(hand);
+      for (let k = 1; k < elbowIdx; k++) setMerge(chain[k], upper, `上臂段并入 ${boneNames[upper]}`);
+      for (let k = elbowIdx + 1; k < chain.length - 1; k++) setMerge(chain[k], elbow, `前臂段并入 ${boneNames[elbow]}`);
     }
     // 手指全并入手
     for (const finger of fingers) {
@@ -337,6 +398,9 @@ export function computeTopologyMerge(
         setMerge(fi, hand, `手指并入 ${boneNames[hand]}`);
       }
     }
+    // 链外（肩C/补助/饰品）：按关节距离就近归段
+    claimOffChainByDistance(armRoot, elbow !== null ? [upper, elbow, hand] : chain.slice(), '臂');
+    void side;
   };
   // armRoot：cross 的子中属于对应臂的那个。topology 没直接给，用 boneToPart 反推：
   // 找到 part 为 armL/R 且 parent 为 cross（或 parent 链上经过 cross）的最顶层 bone
@@ -360,47 +424,63 @@ export function computeTopologyMerge(
   processArm(findArmRoot('armL'), topology.handL, topology.fingersL, '左');
   processArm(findArmRoot('armR'), topology.handR, topology.fingersR, '右');
 
-  // ---- 腿：保持 3 段 [大腿, 小腿, 脚]，脚趾→脚 ----
+  // ---- 腿：分 3 段 [大腿, 小腿, 脚]，脚趾→脚，髋辅助（腰キャンセル）→大腿 ----
   const processLeg = (legRoot: number | null, side: string): void => {
     if (legRoot === null) return;
-    // 主链：沿最大子树（这里简化：沿第一个子走，拓扑已保证结构干净）
-    // 用 parent 链反推更稳：找到 legRoot 子树中最深的叶，走 parent 链回 legRoot
     const childrenOf = (i: number): number[] => {
       const out: number[] = [];
       for (let j = 0; j < n; j++) if (parentIndex[j] === i) out.push(j);
       return out;
     };
-    // 找最深叶（DFS）
-    let deepest = legRoot;
-    let maxDepth = -1;
-    const dfs = (i: number, d: number): void => {
-      if (d > maxDepth) { maxDepth = d; deepest = i; }
-      for (const c of childrenOf(i)) dfs(c, d + 1);
+    const subSz = new Map<number, number>();
+    const calcSub = (i: number): number => {
+      const got = subSz.get(i);
+      if (got !== undefined) return got;
+      let s = 1;
+      for (const c of childrenOf(i)) s += calcSub(c);
+      subSz.set(i, s);
+      return s;
     };
-    dfs(legRoot, 0);
-    // 从最深叶沿 parent 走回 legRoot
-    const path: number[] = [];
-    let cur: number | null = deepest;
-    const seen = new Set<number>();
-    while (cur !== null && !seen.has(cur)) {
-      seen.add(cur);
-      path.unshift(cur);
-      if (cur === legRoot) break;
-      cur = parentIndex[cur];
-    }
-    // path = [大腿, ..., 脚, ...脚趾]，脚 = path[2]（若长度≥3），之后的全并入脚
-    if (path.length >= 3) {
-      const foot = path[2];
-      keep(path[0]); keep(path[1]); keep(foot);
-      for (let k = 3; k < path.length; k++) {
-        setMerge(path[k], foot, `脚趾并入 ${boneNames[foot]}`);
+    // 主链：从 legRoot 沿最大子树走到底 [髋辅助, 大腿, ..., 脚, 脚趾]
+    const chain: number[] = [legRoot];
+    {
+      let cur = legRoot;
+      const seen = new Set<number>([legRoot]);
+      for (;;) {
+        const ch = childrenOf(cur);
+        if (ch.length === 0) break;
+        cur = ch.reduce((a, b) => (calcSub(a) >= calcSub(b) ? a : b));
+        if (seen.has(cur)) break;
+        seen.add(cur);
+        chain.push(cur);
       }
-      // path[0..2] 保持独立（大腿/小腿/脚），不合并
-      void side;
-    } else {
-      for (const c of path) keep(c);
     }
-    // path 长度 < 3：保持原样（不合并）
+    if (chain.length < 3) {
+      for (const c of chain) keep(c);
+      return;
+    }
+    // 段代表：踝（足首）先认（名字含「足」会与大腿的足相撞），膝次之，
+    // 大腿 = 膝之前的第一个主链节点；认不到按弧长比例兜底
+    let ankleIdx = -1, kneeIdx = -1;
+    for (let k = 1; k < chain.length; k++) {
+      if (ankleIdx < 0 && ANKLE_RE.test(boneNames[chain[k]])) ankleIdx = k;
+    }
+    for (let k = 1; k < (ankleIdx > 0 ? ankleIdx : chain.length); k++) {
+      if (KNEE_RE.test(boneNames[chain[k]])) { kneeIdx = k; break; }
+    }
+    if (ankleIdx < 0) ankleIdx = arcPick(chain, 0.78);
+    if (kneeIdx < 0 || kneeIdx >= ankleIdx) kneeIdx = Math.max(1, arcPick(chain.slice(0, ankleIdx + 1), 0.55));
+    const thigh = chain[1];
+    const knee = chain[kneeIdx];
+    const ankle = chain[ankleIdx];
+    keep(thigh); keep(knee); keep(ankle);
+    if (legRoot !== thigh) setMerge(legRoot, thigh, `髋辅助并入 ${boneNames[thigh]}`);
+    for (let k = 2; k < kneeIdx; k++) setMerge(chain[k], thigh, `大腿段并入 ${boneNames[thigh]}`);
+    for (let k = kneeIdx + 1; k < ankleIdx; k++) setMerge(chain[k], knee, `小腿段并入 ${boneNames[knee]}`);
+    for (let k = ankleIdx + 1; k < chain.length; k++) setMerge(chain[k], ankle, `脚趾并入 ${boneNames[ankle]}`);
+    // 链外（D 系平行链/足先EX 分叉等）：按关节距离就近归段
+    claimOffChainByDistance(legRoot, [thigh, knee, ankle], '腿');
+    void side;
   };
   // legRoot：hipFork 的子中属于对应腿的
   const findLegRoot = (part: 'legL' | 'legR'): number | null => {
@@ -413,16 +493,18 @@ export function computeTopologyMerge(
   processLeg(findLegRoot('legL'), '左');
   processLeg(findLegRoot('legR'), '右');
 
-  // ---- 尾巴：默认并入躯干（可手动拆分） ----
-  if (torsoRep !== null && topology.tail.length > 0) {
-    // 尾巴根：tail 中 parent 不在 tail 里的
+  // ---- 尾巴/裙摆链：每条链只留根节点，链身并入根（用户定案丙） ----
+  // 旧口径整链并入躯干是按「一条动物尾巴」设想的；整片裙摆（塞尔凯特
+  // 15 条链 174 骨）会被长死在躯干上、没有任何可动节点。链根保留为
+  // 独立节点（父级经合并祖先解析挂到躯干下），链身逐级并入父级、
+  // 传递闭包到链根。
+  if (topology.tail.length > 0) {
     const tailSet = new Set(topology.tail);
     for (const t of topology.tail) {
       const p = parentIndex[t];
       if (p === null || !tailSet.has(p)) {
-        setMerge(t, torsoRep, `尾巴并入 ${boneNames[torsoRep]}（可手动拆分）`);
+        keep(t);
       } else {
-        // 尾巴内部链：并入父级（传递到尾巴根）
         setMerge(t, p, `尾段并入 ${boneNames[p]}`);
       }
     }
@@ -512,39 +594,47 @@ function countBoneVertices(
   return counts;
 }
 
-/** bone index → RGB 位掩码（1248 形式，支持 ID 重叠）
- * Bone i → 第 (i%8) 位，第 floor(i/8) 通道
- * Bone 0 → (1,0,0), Bone 7 → (128,0,0), Bone 8 → (0,1,0), Bone 23 → (0,0,128)
- * 上限 24；-1/越界 → 黑（背景）
- */
-export function encodeBoneId(index: number): [number, number, number] {
-  if (index < 0 || index > 23) return [0, 0, 0];
-  const bit = index % 8;
-  const ch = Math.floor(index / 8);
-  const rgb: [number, number, number] = [0, 0, 0];
-  rgb[ch] = 1 << bit;
-  return rgb;
+/** bone 位掩码：64 位（8 字节），支持 ID 重叠。
+ * Bone i → 第 floor(i/8) 字节的第 (i%8) 位。Bone 0 → 字节0 的 1，
+ * Bone 8 → 字节1 的 1，Bone 63 → 字节7 的 128。越界（<0 或 >63）不置位。
+ * 传递分两半（quad）：低半 = 字节 0..3（bone 0..31），高半 = 字节 4..7
+ * （bone 32..63）；每遍 ID 渲染输出一个 RGBA quad（A 通道即第 4 字节，
+ * 经 4 分量顶点色 / shader 输出抵达读回缓冲）。旧 24 位上限时 Z23 单臂
+ * 52 根骨骼有 28 根编码为黑、三角形整片丢失——扩位即为治本（PR #41）。 */
+export const BONE_MASK_BITS = 64;
+
+/** 把 bone index 的位或进 8 字节掩码（越界忽略） */
+export function boneMaskSet(bytes: Uint8Array, index: number): void {
+  if (index < 0 || index >= BONE_MASK_BITS) return;
+  bytes[Math.floor(index / 8)] |= 1 << (index % 8);
 }
 
-/** 位掩码解码：返回所有置位的 bone index（[] = 背景/无效）
- * 输入为精确整数（纹理无插值），直接位运算，无需阈值/容差
- */
-export function decodeBoneMask(r: number, g: number, b: number): number[] {
+/** 单个 bone 在某一半的 RGBA quad（该半不含此 bone 时全 0） */
+export function encodeBoneQuad(index: number, half: 0 | 1): [number, number, number, number] {
+  const bytes = new Uint8Array(8);
+  boneMaskSet(bytes, index);
+  const o = half * 4;
+  return [bytes[o]!, bytes[o + 1]!, bytes[o + 2]!, bytes[o + 3]!];
+}
+
+/** 8 字节掩码的某一半 quad（渲染一遍输出用） */
+export function maskQuad(bytes: ArrayLike<number>, half: 0 | 1): [number, number, number, number] {
+  const o = half * 4;
+  return [bytes[o] ?? 0, bytes[o + 1] ?? 0, bytes[o + 2] ?? 0, bytes[o + 3] ?? 0];
+}
+
+/** 64 位掩码解码：8 字节 → 所有置位的 bone index（[] = 背景/无效）。
+ * 输入为精确整数（纹理无插值），直接位运算，无需阈值/容差。 */
+export function decodeBoneMask64(bytes: ArrayLike<number>): number[] {
   const bones: number[] = [];
-  const channels = [r, g, b];
-  for (let c = 0; c < 3; c++) {
-    const iv = Math.round(channels[c]);
+  for (let c = 0; c < 8; c++) {
+    const iv = Math.round(bytes[c] ?? 0);
     if (iv === 0) continue;
     for (let i = 0; i < 8; i++) {
       if (iv & (1 << i)) bones.push(c * 8 + i);
     }
   }
   return bones;
-}
-
-/** RGB → bone index 列表（位掩码版；兼容旧名单骨调用，返回 [] 表背景） */
-export function decodeBoneId(r: number, g: number, b: number): number[] {
-  return decodeBoneMask(r, g, b);
 }
 
 /** 收集场景中所有 Bone，建立全局索引 */
@@ -576,18 +666,31 @@ function collectBones(scene: THREE.Object3D): {
  * 普通 Mesh：按质心找最近 bone，全顶点同色。
  * ID 颜色使用合并后的有效 bone 索引（effectiveIndex），不是原始 bone。
  */
-function assignBoneVertexColors(
+export function assignBoneVertexColors(
   mesh: THREE.Mesh,
   indexByBone: Map<THREE.Bone, number>,
   boneBindPos: THREE.Vector3[],
   effectiveIndex: number[],
+  weightThreshold = 0.2,
 ): void {
   const geo = mesh.geometry;
   const pos = geo.getAttribute('position');
-  const colors = new Float32Array(pos.count * 3);
+  // 64 位掩码分两半存：color 属性（4 分量）= 低半字节 0..3，
+  // userData.idColorHi（4 分量）= 高半字节 4..7，ID 遍渲高半时换绑。
+  const colorsLo = new Float32Array(pos.count * 4);
+  const colorsHi = new Float32Array(pos.count * 4);
+  const mask = new Uint8Array(8);
+  const writeVertex = (v: number) => {
+    const [lr, lg, lb, la] = maskQuad(mask, 0);
+    const [hr, hg, hb, ha] = maskQuad(mask, 1);
+    colorsLo[v * 4] = lr / 255; colorsLo[v * 4 + 1] = lg / 255;
+    colorsLo[v * 4 + 2] = lb / 255; colorsLo[v * 4 + 3] = la / 255;
+    colorsHi[v * 4] = hr / 255; colorsHi[v * 4 + 1] = hg / 255;
+    colorsHi[v * 4 + 2] = hb / 255; colorsHi[v * 4 + 3] = ha / 255;
+  };
   const sm = mesh as THREE.SkinnedMesh;
 
-  // 合并后 bone 的紧凑索引（0..M-1，用于位掩码；M ≤ 24）
+  // 合并后 bone 的紧凑索引（0..M-1，用于位掩码；M ≤ 64）
   // 与 skeleton-mapper.ts 的重建逻辑一致（排序保证顺序相同）
   const effSet = new Set<number>();
   for (let i = 0; i < effectiveIndex.length; i++) effSet.add(effectiveIndex[i] ?? i);
@@ -599,11 +702,11 @@ function assignBoneVertexColors(
     const skinWeight = geo.getAttribute('skinWeight') as THREE.BufferAttribute;
     const skeleton = sm.skeleton;
     for (let v = 0; v < pos.count; v++) {
-      // weight > 0.2 的 bones 全部按位或（边界重叠）
-      let r = 0, g = 0, b = 0;
+      // weight > 阈值（BakeOptions.weightThreshold，默认 0.2）的 bones 全部按位或（边界重叠）
+      mask.fill(0);
       for (let j = 0; j < 4; j++) {
         const w = skinWeight.getComponent(v, j);
-        if (w <= 0.2) continue;
+        if (w <= weightThreshold) continue;
         const jointIdx = Math.round(skinIndex.getComponent(v, j));
         const bone = skeleton.bones[jointIdx];
         const gi = bone ? (indexByBone.get(bone) ?? -1) : -1;
@@ -612,12 +715,9 @@ function assignBoneVertexColors(
         const ei = effectiveIndex[gi] ?? gi;
         const ci = compactByMerged.get(ei);
         if (ci === undefined) continue;
-        const [br, bg, bb] = encodeBoneId(ci);
-        r |= br; g |= bg; b |= bb;
+        boneMaskSet(mask, ci);
       }
-      colors[v * 3] = r / 255;
-      colors[v * 3 + 1] = g / 255;
-      colors[v * 3 + 2] = b / 255;
+      writeVertex(v);
     }
   } else {
     // 非蒙皮 mesh：质心找最近 bone
@@ -633,14 +733,14 @@ function assignBoneVertexColors(
     }
     const ei = effectiveIndex[best] ?? best;
     const ci = compactByMerged.get(ei) ?? 0;
-    const [r, g, b] = encodeBoneId(ci);
-    for (let v = 0; v < pos.count; v++) {
-      colors[v * 3] = r / 255;
-      colors[v * 3 + 1] = g / 255;
-      colors[v * 3 + 2] = b / 255;
-    }
+    mask.fill(0);
+    boneMaskSet(mask, ci);
+    for (let v = 0; v < pos.count; v++) writeVertex(v);
   }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const loAttr = new THREE.BufferAttribute(colorsLo, 4);
+  geo.setAttribute('color', loAttr);
+  geo.userData.idColorLo = loAttr;
+  geo.userData.idColorHi = new THREE.BufferAttribute(colorsHi, 4);
 }
 
 /** 卡通渐变贴图（复用 MVP 逻辑） */
@@ -657,13 +757,18 @@ function makeGradientMap(steps: number): THREE.DataTexture {
 }
 
 /** 换卡通材质（保留原贴图/基色），返回 mesh→toon 材质映射 */
-function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, usePmxNpr?: boolean): Map<THREE.Mesh, THREE.Material> {
+export function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, usePmxNpr?: boolean): Map<THREE.Mesh, THREE.Material> {
   const map = new Map<THREE.Mesh, THREE.Material>();
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
     if (!mesh.isMesh) return;
     mesh.frustumCulled = false;
-    const old = mesh.material as THREE.MeshStandardMaterial | undefined;
+    // PMX/PMD 场景是单网格多材质（材质数组）：基色/贴图取首个材质，释放逐个来
+    // （数组没有 dispose 方法，直接对数组调 dispose 会抛 TypeError）
+    const olds = Array.isArray(mesh.material)
+      ? mesh.material
+      : mesh.material ? [mesh.material] : [];
+    const old = olds[0] as THREE.MeshStandardMaterial | undefined;
     const baseColor =
       old && 'color' in old && (old as THREE.MeshStandardMaterial).color
         ? ((old as THREE.MeshStandardMaterial).color as THREE.Color).clone()
@@ -680,7 +785,7 @@ function applyToonMaterials(root: THREE.Object3D, gradientMap: THREE.Texture, us
       });
     map.set(mesh, tm);
     mesh.material = tm;
-    if (old && old !== tm) old.dispose();
+    for (const o of olds) if (o !== tm) o.dispose();
   });
   return map;
 }
@@ -819,7 +924,7 @@ export async function bakeModelTwoPass(
     }
     model.traverse((o) => {
       const m = o as THREE.Mesh;
-      if (m.isMesh) assignBoneVertexColors(m, indexByBone, bindPos, merge.effectiveIndex);
+      if (m.isMesh) assignBoneVertexColors(m, indexByBone, bindPos, merge.effectiveIndex, options.weightThreshold ?? 0.2);
     });
 
     // ---- 归一化 ----
@@ -861,6 +966,17 @@ export async function bakeModelTwoPass(
         } else {
           m.material = idMaterial;
         }
+      });
+    };
+
+    // ID 掩码 64 位分两半渲染：换绑几何的 color 属性（低半/高半，
+    // assignBoneVertexColors 预备），ID 材质与深度状态不变。
+    const setIdHalf = (half: 0 | 1) => {
+      group.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        const attr = half === 0 ? m.geometry.userData.idColorLo : m.geometry.userData.idColorHi;
+        if (attr) m.geometry.setAttribute('color', attr as THREE.BufferAttribute);
       });
     };
 
@@ -942,8 +1058,14 @@ export async function bakeModelTwoPass(
         colorBack = new Uint8ClampedArray(0); // 占位，下面覆盖
       }
       setMaterials('id', THREE.LessEqualDepth);
+      setIdHalf(0);
       renderer.render(scene, camera);
       const idFront = readFlipped();
+      // 高半（bone 32..63）：只清颜色不清深度——同几何同深度，LessEqual 必过
+      renderer.clear(true, false, false);
+      setIdHalf(1);
+      renderer.render(scene, camera);
+      const idFrontHi = readFlipped();
       onProgress?.(++done, total, `${lat !== 0 ? `纬度 ${lat}° ` : ''}方向 ${d * 45}° ${idOnly ? 'ID' : '前'}`);
       await new Promise((r) => setTimeout(r, 0)); // 让 UI 更新
 
@@ -958,14 +1080,19 @@ export async function bakeModelTwoPass(
       // idBack 里没被 ID 覆盖的像素残留 toon 颜色，拆分按并集读 back 时会被
       // 解码成幻影骨骼
       renderer.clear(true, false, false);
+      setIdHalf(0);
       renderer.render(scene, camera);
       const idBack = readFlipped();
+      renderer.clear(true, false, false);
+      setIdHalf(1);
+      renderer.render(scene, camera);
+      const idBackHi = readFlipped();
       onProgress?.(++done, total, `${lat !== 0 ? `纬度 ${lat}° ` : ''}方向 ${d * 45}° ${idOnly ? 'ID后' : '后'}`);
       await new Promise((r) => setTimeout(r, 0));
 
       groups.push(
-        { direction: ((d + 6) % 8), latitude: lat, pass: 0, colorPixels: colorFront, idPixels: idFront, jointPixels: frameJoints },
-        { direction: ((d + 6) % 8), latitude: lat, pass: 1, colorPixels: colorBack, idPixels: idBack, jointPixels: frameJoints },
+        { direction: ((d + 6) % 8), latitude: lat, pass: 0, colorPixels: colorFront, idPixels: idFront, idPixelsHi: idFrontHi, jointPixels: frameJoints },
+        { direction: ((d + 6) % 8), latitude: lat, pass: 1, colorPixels: colorBack, idPixels: idBack, idPixelsHi: idBackHi, jointPixels: frameJoints },
       );
       renderer.setRenderTarget(null);
     }
@@ -1293,16 +1420,25 @@ function isThumbName(n: string): boolean {
   return THUMB_RES.some((re) => re.test(n));
 }
 
-/** 从根 bone 向下走单链（手指） */
+const HELPER_RE = /helper/i;
+
+/** 从根 bone 向下走单链（手指）。Helper 骨不入链：与指节同名的 Helper（如 Z23 的
+ * 「…2Helper」）会误命中 acceptRe 抢走下一节、令链提前终止丢掉后续指节——故选孩子时
+ * 先跳过 Helper；若 Helper 是唯一孩子（串在链中间），穿过它继续往下找真指节。 */
 function buildDownChain(root: THREE.Bone, acceptRe: RegExp): THREE.Bone[] {
   const chain = [root];
   let cur = root;
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 12; i++) {
     const kids = getBoneChildren(cur);
     if (kids.length === 0) break;
-    let next = kids.find((k) => acceptRe.test(k.name || ''));
-    if (!next && kids.length === 1) next = kids[0];
+    let next = kids.find((k) => acceptRe.test(k.name || '') && !HELPER_RE.test(k.name || ''));
+    if (!next) {
+      const nonHelper = kids.filter((k) => !HELPER_RE.test(k.name || ''));
+      if (nonHelper.length === 1) next = nonHelper[0];
+      else if (kids.length === 1) next = kids[0]; // 唯一孩子是 Helper，下面穿过它
+    }
     if (!next) break;
+    if (HELPER_RE.test(next.name || '')) { cur = next; continue; } // 穿过 Helper，不入链
     chain.push(next);
     cur = next;
   }

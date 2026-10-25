@@ -44,7 +44,8 @@ const VIEWS: { key: ViewKey; label: string }[] = [
   { key: 'top', label: '顶面' },
 ];
 
-const UNASSIGNED = new THREE.Color(0.32, 0.32, 0.37);
+// 未分配网格 = 烘焙将丢失的内容，用醒目红色标出（原灰色太容易漏看）
+const UNASSIGNED = new THREE.Color(0.85, 0.16, 0.12);
 function partColor(idx: number): THREE.Color {
   return new THREE.Color().setHSL((idx * 0.61803) % 1, 0.6, 0.55);
 }
@@ -512,9 +513,10 @@ export default function ManualPickPanel({
                 {p.name || '部件'} · {p.meshIndices.length}
               </button>
             ))}
-            <span className="flex items-center gap-1 px-1.5 py-0.5 text-gray-500">
+            <span className={`flex items-center gap-1 px-1.5 py-0.5 ${unassignedCount > 0 ? 'text-red-400' : 'text-gray-500'}`}>
               <span className="inline-block size-2.5 rounded-sm" style={{ background: UNASSIGNED.getStyle() }} />
               未分配 · {unassignedCount}
+              {unassignedCount > 0 && <span>（烘焙将丢失，或开「无归属归入邻近部件」）</span>}
             </span>
             <span className="flex-1" />
             {hoverInfo && (
