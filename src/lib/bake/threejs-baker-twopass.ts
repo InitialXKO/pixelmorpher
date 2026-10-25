@@ -311,7 +311,57 @@ export function computeTopologyMerge(
     }
   }
 
-  // ---- 手臂：肩→躯干，链分 3 段，手指→手 ----
+  // ---- 肢体分段共用：链上按代表分段 + 链外按关节距离就近归段 ----
+  // 段代表优先按关节名认（ひじ/肘、ひざ/膝、足首/踝——MMD/通用 rig 的
+  // 标准命名）；认不到时按链弧长比例取最近节点。旧口径按链上位置数
+  // （倒数第二个 = 前臂代表）会被捩骨顶掉真关节：MMD 臂链是
+  // [肩, 腕, 腕捩×N, ひじ, 手捩, 手首]，手捩是空壳代表、ひじ反被吞进上臂。
+  const ELBOW_RE = /ひじ|肘|elbow/i;
+  const KNEE_RE = /ひざ|膝|knee/i;
+  const ANKLE_RE = /足首|踝|ankle/i;
+  /** chain 中段（不含首尾）里按弧长比例 ratio 定位的节点下标 */
+  const arcPick = (chain: number[], ratio: number): number => {
+    const pos = (k: number) => topology.boneWorldPos[chain[k]];
+    let total = 0;
+    const cum: number[] = [0];
+    for (let k = 1; k < chain.length; k++) {
+      const a = pos(k - 1), b = pos(k);
+      const d = a && b ? Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) : 1;
+      total += d;
+      cum.push(total);
+    }
+    const target = total * ratio;
+    let best = 1, bd = Infinity;
+    for (let k = 1; k < chain.length - 1; k++) {
+      const dd = Math.abs(cum[k] - target);
+      if (dd < bd) { bd = dd; best = k; }
+    }
+    return best;
+  };
+  /** 把 root 子树里未被认领的骨骼按关节距离就近归入 reps 之一（D 系链/补助/饰品） */
+  const claimOffChainByDistance = (root: number, reps: number[], label: string): void => {
+    const stack = [root];
+    const seen = new Set<number>();
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (seen.has(i)) continue;
+      seen.add(i);
+      for (let j = 0; j < n; j++) if (parentIndex[j] === i) stack.push(j);
+      if (i === root || directTarget[i] !== i || kept.has(i)) continue;
+      const p = topology.boneWorldPos[i];
+      if (!p) continue;
+      let bestRep = -1, bd = Infinity;
+      for (const r of reps) {
+        const rp = topology.boneWorldPos[r];
+        if (!rp) continue;
+        const d = (rp.x - p.x) ** 2 + (rp.y - p.y) ** 2 + (rp.z - p.z) ** 2;
+        if (d < bd) { bd = d; bestRep = r; }
+      }
+      if (bestRep >= 0) setMerge(i, bestRep, `${label}就近并入 ${boneNames[bestRep]}`);
+    }
+  };
+
+  // ---- 手臂：肩→躯干，链分 3 段（上臂/前臂/手），手指→手 ----
   const processArm = (armRoot: number | null, hand: number | null, fingers: number[][], side: string): void => {
     if (armRoot === null || hand === null) return;
     // 肩（armRoot，cross 的直接子）→ 躯干
@@ -325,18 +375,22 @@ export function computeTopologyMerge(
       chain.unshift(cur);
       cur = parentIndex[cur];
     }
-    // chain = [上臂, ..., 前臂, 手]，保持 3 段
-    if (chain.length > 3) {
-      const first = chain[0];
-      const secondLast = chain[chain.length - 2];
-      keep(first); keep(secondLast); keep(chain[chain.length - 1]);
-      // 中间多余的并入第一段（上臂）
-      for (let k = 1; k < chain.length - 2; k++) {
-        setMerge(chain[k], first, `臂多余段并入 ${boneNames[first]}`);
-      }
-      void secondLast;
-    } else {
+    if (chain.length === 0) return;
+    const upper = chain[0];
+    let elbow: number | null = null;
+    if (chain.length <= 3) {
       for (const c of chain) keep(c);
+    } else {
+      // 前臂代表：链中段里名字是肘的节点；没有则取弧长中点节点
+      let elbowIdx = -1;
+      for (let k = 1; k < chain.length - 1; k++) {
+        if (ELBOW_RE.test(boneNames[chain[k]])) { elbowIdx = k; break; }
+      }
+      if (elbowIdx < 0) elbowIdx = arcPick(chain, 0.5);
+      elbow = chain[elbowIdx];
+      keep(upper); keep(elbow); keep(hand);
+      for (let k = 1; k < elbowIdx; k++) setMerge(chain[k], upper, `上臂段并入 ${boneNames[upper]}`);
+      for (let k = elbowIdx + 1; k < chain.length - 1; k++) setMerge(chain[k], elbow, `前臂段并入 ${boneNames[elbow]}`);
     }
     // 手指全并入手
     for (const finger of fingers) {
@@ -344,6 +398,9 @@ export function computeTopologyMerge(
         setMerge(fi, hand, `手指并入 ${boneNames[hand]}`);
       }
     }
+    // 链外（肩C/补助/饰品）：按关节距离就近归段
+    claimOffChainByDistance(armRoot, elbow !== null ? [upper, elbow, hand] : chain.slice(), '臂');
+    void side;
   };
   // armRoot：cross 的子中属于对应臂的那个。topology 没直接给，用 boneToPart 反推：
   // 找到 part 为 armL/R 且 parent 为 cross（或 parent 链上经过 cross）的最顶层 bone
@@ -367,47 +424,63 @@ export function computeTopologyMerge(
   processArm(findArmRoot('armL'), topology.handL, topology.fingersL, '左');
   processArm(findArmRoot('armR'), topology.handR, topology.fingersR, '右');
 
-  // ---- 腿：保持 3 段 [大腿, 小腿, 脚]，脚趾→脚 ----
+  // ---- 腿：分 3 段 [大腿, 小腿, 脚]，脚趾→脚，髋辅助（腰キャンセル）→大腿 ----
   const processLeg = (legRoot: number | null, side: string): void => {
     if (legRoot === null) return;
-    // 主链：沿最大子树（这里简化：沿第一个子走，拓扑已保证结构干净）
-    // 用 parent 链反推更稳：找到 legRoot 子树中最深的叶，走 parent 链回 legRoot
     const childrenOf = (i: number): number[] => {
       const out: number[] = [];
       for (let j = 0; j < n; j++) if (parentIndex[j] === i) out.push(j);
       return out;
     };
-    // 找最深叶（DFS）
-    let deepest = legRoot;
-    let maxDepth = -1;
-    const dfs = (i: number, d: number): void => {
-      if (d > maxDepth) { maxDepth = d; deepest = i; }
-      for (const c of childrenOf(i)) dfs(c, d + 1);
+    const subSz = new Map<number, number>();
+    const calcSub = (i: number): number => {
+      const got = subSz.get(i);
+      if (got !== undefined) return got;
+      let s = 1;
+      for (const c of childrenOf(i)) s += calcSub(c);
+      subSz.set(i, s);
+      return s;
     };
-    dfs(legRoot, 0);
-    // 从最深叶沿 parent 走回 legRoot
-    const path: number[] = [];
-    let cur: number | null = deepest;
-    const seen = new Set<number>();
-    while (cur !== null && !seen.has(cur)) {
-      seen.add(cur);
-      path.unshift(cur);
-      if (cur === legRoot) break;
-      cur = parentIndex[cur];
-    }
-    // path = [大腿, ..., 脚, ...脚趾]，脚 = path[2]（若长度≥3），之后的全并入脚
-    if (path.length >= 3) {
-      const foot = path[2];
-      keep(path[0]); keep(path[1]); keep(foot);
-      for (let k = 3; k < path.length; k++) {
-        setMerge(path[k], foot, `脚趾并入 ${boneNames[foot]}`);
+    // 主链：从 legRoot 沿最大子树走到底 [髋辅助, 大腿, ..., 脚, 脚趾]
+    const chain: number[] = [legRoot];
+    {
+      let cur = legRoot;
+      const seen = new Set<number>([legRoot]);
+      for (;;) {
+        const ch = childrenOf(cur);
+        if (ch.length === 0) break;
+        cur = ch.reduce((a, b) => (calcSub(a) >= calcSub(b) ? a : b));
+        if (seen.has(cur)) break;
+        seen.add(cur);
+        chain.push(cur);
       }
-      // path[0..2] 保持独立（大腿/小腿/脚），不合并
-      void side;
-    } else {
-      for (const c of path) keep(c);
     }
-    // path 长度 < 3：保持原样（不合并）
+    if (chain.length < 3) {
+      for (const c of chain) keep(c);
+      return;
+    }
+    // 段代表：踝（足首）先认（名字含「足」会与大腿的足相撞），膝次之，
+    // 大腿 = 膝之前的第一个主链节点；认不到按弧长比例兜底
+    let ankleIdx = -1, kneeIdx = -1;
+    for (let k = 1; k < chain.length; k++) {
+      if (ankleIdx < 0 && ANKLE_RE.test(boneNames[chain[k]])) ankleIdx = k;
+    }
+    for (let k = 1; k < (ankleIdx > 0 ? ankleIdx : chain.length); k++) {
+      if (KNEE_RE.test(boneNames[chain[k]])) { kneeIdx = k; break; }
+    }
+    if (ankleIdx < 0) ankleIdx = arcPick(chain, 0.78);
+    if (kneeIdx < 0 || kneeIdx >= ankleIdx) kneeIdx = Math.max(1, arcPick(chain.slice(0, ankleIdx + 1), 0.55));
+    const thigh = chain[1];
+    const knee = chain[kneeIdx];
+    const ankle = chain[ankleIdx];
+    keep(thigh); keep(knee); keep(ankle);
+    if (legRoot !== thigh) setMerge(legRoot, thigh, `髋辅助并入 ${boneNames[thigh]}`);
+    for (let k = 2; k < kneeIdx; k++) setMerge(chain[k], thigh, `大腿段并入 ${boneNames[thigh]}`);
+    for (let k = kneeIdx + 1; k < ankleIdx; k++) setMerge(chain[k], knee, `小腿段并入 ${boneNames[knee]}`);
+    for (let k = ankleIdx + 1; k < chain.length; k++) setMerge(chain[k], ankle, `脚趾并入 ${boneNames[ankle]}`);
+    // 链外（D 系平行链/足先EX 分叉等）：按关节距离就近归段
+    claimOffChainByDistance(legRoot, [thigh, knee, ankle], '腿');
+    void side;
   };
   // legRoot：hipFork 的子中属于对应腿的
   const findLegRoot = (part: 'legL' | 'legR'): number | null => {

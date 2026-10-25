@@ -48,6 +48,8 @@ export interface TopologyResult {
   props: number[];
   /** 诊断信息（调试/展示用） */
   notes: string[];
+  /** 各骨骼关节世界坐标（合并分段按弧长/距离用） */
+  boneWorldPos: { x: number; y: number; z: number }[];
 }
 
 export interface TopologyOptions {
@@ -76,6 +78,7 @@ export function analyzeTopology(bones: TopoBone[], opts: TopologyOptions = {}): 
     cross: null, hipFork: null, handL: null, handR: null, headRoot: null,
     fingersL: [], fingersR: [], tail: [], props: [],
     notes: [reason],
+    boneWorldPos: bones.map((b) => ({ ...b.worldPos })),
   });
   if (n === 0) return empty('没有骨骼');
 
@@ -452,5 +455,6 @@ export function analyzeTopology(bones: TopoBone[], opts: TopologyOptions = {}): 
     tail: [...tailSet],
     props,
     notes,
+    boneWorldPos: bones.map((b) => ({ ...b.worldPos })),
   };
 }

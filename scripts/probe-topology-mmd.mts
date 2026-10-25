@@ -85,6 +85,12 @@ const tm = computeTopologyMerge(topo, names, parents);
 const fingerIdxs = names.map((nm, i) => [nm, i] as const).filter(([nm]) => /指/.test(nm));
 check('拓扑合并：全部手指并入手首', fingerIdxs.every(([nm, i]) => names[tm.effectiveIndex[i]] === (nm.startsWith('左') ? '左手首' : '右手首')),
   `有效骨骼 ${tm.effectiveBones.length}`);
+// 分段：前臂代表必须是ひじ（不是捩骨空壳）、腕/捩归上臂；腿三段齐全、
+// 脚（足首）独立于小腿（ひざ）、腰キャンセル并入大腿
+check('分段：ひじ是前臂代表且独立', tm.effectiveIndex[idxOf('右ひじ')] === idxOf('右ひじ') && tm.effectiveIndex[idxOf('左ひじ')] === idxOf('左ひじ'));
+check('分段：腕+捩归上臂（肩）', tm.effectiveIndex[idxOf('右腕')] === idxOf('右肩') && tm.effectiveIndex[idxOf('右腕捩2')] === idxOf('右肩'));
+check('分段：足首独立成脚、ひざ是小腿代表', tm.effectiveIndex[idxOf('右足首')] === idxOf('右足首') && tm.effectiveIndex[idxOf('右ひざ')] === idxOf('右ひざ'));
+check('分段：腰キャンセル并入大腿（足）', tm.effectiveIndex[idxOf('腰キャンセル右')] === idxOf('右足'));
 
 // 名字回退（拓扑失败时）：日文手指并手首、脚趾并足首、大腿不误并
 const nm2 = ['左手首', '左親指０', '左親指１', '左人指１', '左足首', '左つま先', '左足', '左ひざ'];
