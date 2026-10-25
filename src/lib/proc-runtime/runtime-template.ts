@@ -475,23 +475,6 @@ function spriteTileOf(sg, mirrored) {
     data: data,
   };
 }
-const DRAW_ORDER_MAIN = {
-  0: ['cape', 'left_arm', 'left_leg', 'right_leg', 'right_arm', 'torso', 'head'],
-  4: ['cape', 'left_arm', 'left_leg', 'right_leg', 'right_arm', 'torso', 'head'],
-  2: ['cape', 'left_arm', 'left_leg', 'torso', 'head', 'right_leg', 'right_arm'],
-  6: ['cape', 'right_arm', 'right_leg', 'torso', 'head', 'left_leg', 'left_arm'],
-};
-const DRAW_ORDER_MAP = { 0: 0, 1: 2, 2: 2, 3: 4, 4: 4, 5: 4, 6: 6, 7: 6 };
-function sortParts(parts, v) {
-  const order = DRAW_ORDER_MAIN[DRAW_ORDER_MAP[v]];
-  const result = [];
-  for (const layer of order) {
-    const inLayer = parts.filter((p) => p.drawLayer === layer);
-    inLayer.sort((a, b) => a.sortOrder - b.sortOrder);
-    result.push(...inLayer);
-  }
-  return result;
-}
 /** 蓝图小求值器（运行时方言：time/const/curve/math/sin/transform；enabled 短路）
  *  graph = { nodes: [{id, type, enabled?, ...}] }；ctx = { u }（0..1 表演进度）
  *  返回 Map partKey -> { angle?, dx?, dy? } */
@@ -701,10 +684,10 @@ const globalGraphState = new Map();
 /** 工程帧率（包内字段）：粒子模拟的帧量化基数，与编辑器同口径；
  * 旧包无此字段时回落 60。时间本身走连续钟 elapsed，不重置。 */
 const FRAME_RATE = EMBEDDED.frameRate || 60;
-// 绘制顺序 v1：按部件 sortOrder（= 产品节点 zIndex）稳定排序
-sortParts = function (parts) {
+// 绘制顺序：按部件 sortOrder（= 产品节点 zIndex）稳定排序
+function sortParts(parts) {
   return parts.slice().sort((a, b) => (a.sortOrder - b.sortOrder) || (a.key < b.key ? -1 : 1));
-};
+}
 // 局部地面（角色原点坐标系）：所有部件最低点再下压 4px（运行时坐标 y 向上）。
 // 世界地面固定在 y=0；角色原点世界高度 = -localGround（脚落地面）。
 let localGround = -40;

@@ -108,7 +108,6 @@ export interface RuntimeGlowStamp {
 
 export interface RuntimePart {
   key: string;
-  drawLayer: string;
   sortOrder: number;
   costumeKeys: string[];
   base: RuntimePartBase;
@@ -667,7 +666,6 @@ export function convertCharacterToRuntimePackage(
     const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
     parts.push({
       key: slotKey,
-      drawLayer: node.drawLayer,
       sortOrder: node.zIndex,
       costumeKeys: [slotKey],
       base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0, baseSprite,
@@ -700,7 +698,6 @@ export function convertCharacterToRuntimePackage(
     const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
     parts.push({
       key: slotKey,
-      drawLayer: node.drawLayer,
       sortOrder: node.zIndex,
       costumeKeys: [slotKey],
       base,
@@ -924,7 +921,7 @@ export function convertCharacterToRuntimePackage(
       const res = translateBehaviorGraph(graph, slot, `b${gi++}_`, (refId) => toSlot(refId));
       for (const w of res.warnings) warnings.push(`${srcLabel}「${nodeName}」：${w}`);
       if (!res.ok) { warnings.push(`${srcLabel}「${nodeName}」翻译失败：${res.reason}`); continue; }
-      behavior.graphs[slot] = { context: 'behavior', nodes: res.nodes, ...(graph.followMode ? { follow: graph.followMode } : {}) };
+      behavior.graphs[slot] = { nodes: res.nodes, ...(graph.followMode ? { follow: graph.followMode } : {}) };
     }
   }
 
@@ -960,7 +957,7 @@ export function convertCharacterToRuntimePackage(
       mask,
       afterimage: afterSlot ? { part: afterSlot, count: 3, interval: 0.035 } : undefined,
       slash: slashForPkg(perf.slashEffect, `表演「${perf.name}」`),
-      graph: { context: 'performance', nodes: graphNodes },
+      graph: { nodes: graphNodes },
     });
   }
 
@@ -1147,7 +1144,7 @@ export function convertCharacterToRuntimePackage(
           envelope: { in: 0, out: 0 },
           mode: 'add',
           mask: full.mask,
-          graph: { context: 'performance', nodes: full.graphNodes },
+          graph: { nodes: full.graphNodes },
         });
       }
       // ---- 追随段：增量曲线烘焙 ----
@@ -1221,7 +1218,7 @@ export function convertCharacterToRuntimePackage(
           loop: clip.loop === true,
           mask: seg.mask,
           slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
-          graph: { context: 'performance', nodes: seg.graphNodes },
+          graph: { nodes: seg.graphNodes },
           stateFx: stateFxOf(clip),
           fx: clipFxOf(clip),
           fxStart: clip.startFrame,
@@ -1244,7 +1241,7 @@ export function convertCharacterToRuntimePackage(
         loop: clip.loop === true,
         mask: [],
         slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
-        graph: { context: 'performance', nodes: [] },
+        graph: { nodes: [] },
         stateFx: stateFxOf(clip),
         fx: clipFxOf(clip),
         fxStart: clip.startFrame,
@@ -1315,7 +1312,7 @@ export function convertCharacterToRuntimePackage(
         const res = translateBehaviorGraph(gPruned, '__global', 'gl_', () => null);
         for (const w of res.warnings) warnings.push(`全局变换：${w}`);
         if (!res.ok) warnings.push(`全局变换翻译失败：${res.reason}`);
-        else globalGraph = { context: 'behavior', nodes: res.nodes };
+        else globalGraph = { nodes: res.nodes };
       }
     } else if (opts?.projectData?.globalBlueprint) {
       warnings.push('工程级全局蓝图未进运行时包：编辑器内全局蓝图仅在全局修改器非空时生效，现无全局修改器（同口径）');
@@ -1334,6 +1331,30 @@ export function convertCharacterToRuntimePackage(
       effectStrokes: pd.effectStrokes,
     };
   })();
+
+  // 死字段清理（真死类）：追随参数与发光形状/选区参数在播放器无读
+  // 点——生效数据已在上面烘成 followCurve / 发光印章与场。此刻烘焙
+  // 全部完成，统一从待发包的实例 params 里删（拷贝后删，不动原对象；
+  // 照 params 读只会与烘焙结果不一致）。
+  {
+    const DEAD_DYN_PARAMS = [
+      'followEnabled', 'followSource', 'followDelaySec', 'followAmount', 'followRotate',
+      'glowShape', 'glowShapeKernel', 'glowStarReach', 'glowFlameReach', 'glowAngleDeg',
+      'glowHalo', 'glowMaskSource', 'glowPick',
+    ];
+    const stripDyn = (list?: RuntimeDynamicInstance[]) => {
+      for (const inst of list ?? []) {
+        const clean = { ...inst.params } as unknown as Record<string, unknown>;
+        for (const k of DEAD_DYN_PARAMS) delete clean[k];
+        inst.params = clean as unknown as typeof inst.params;
+      }
+    };
+    for (const part of parts) stripDyn(part.dynamic);
+    for (const cs of Object.values(costumes)) {
+      const dm = (cs as { __dynamic?: Record<string, RuntimeDynamicInstance[]> }).__dynamic;
+      if (dm) for (const list of Object.values(dm)) stripDyn(list);
+    }
+  }
 
   return {
     format: 'procedural-pixel-runtime-1',

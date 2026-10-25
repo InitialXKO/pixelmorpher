@@ -19,7 +19,7 @@ export type RuntimeGraphNode =
   | { id: string; type: 'transform'; part: string; units: 'main' | 'runtime'; angleFrom?: RuntimeRef; dxFrom?: RuntimeRef; dyFrom?: RuntimeRef; scaleXFrom?: RuntimeRef; scaleYFrom?: RuntimeRef; foreFrom?: RuntimeRef };
 
 export interface RuntimeGraph {
-  context: 'performance' | 'behavior';
+  context?: 'performance' | 'behavior'; // 来源标记（可选）：播放器不读，仅编辑器侧构造时自带
   nodes: RuntimeGraphNode[];
   /** 仅行为图：nodeRef 读上一帧（'prev'，缺省）还是本帧（'same'）输出 */
   follow?: 'prev' | 'same';

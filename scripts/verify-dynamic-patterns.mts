@@ -188,13 +188,9 @@ function instructionFor(ch: Character, frame: number) {
     { now: { a: 1, x: -5, y: 3 }, lag: { a: -2, x: 8, y: -9 }, amt: 0, rot: true },
     { now: { a: 0.5, x: 1, y: 1 }, lag: { a: 2.5, x: 4, y: -6 }, amt: 1.5, rot: false },
   ];
-  let twinOk = true;
-  for (const c of cases) {
-    const a = followDeltaAt(c.now, c.lag, c.amt, c.rot);
-    const b = (rt.dynFollowDelta as (n: never, l: never, amt: number, rot: boolean) => { dx: number; dy: number; da: number })(c.now as never, c.lag as never, c.amt, c.rot);
-    if (!near(a.dx, b.dx, 1e-12) || !near(a.dy, b.dy, 1e-12) || !near(a.da, b.da, 1e-12)) twinOk = false;
-  }
-  check('D7 追随增量双侧孪生逐值一致', twinOk);
+  // 运行时不再现算追随增量（导出端烘 followCurve），孪生已删；
+  // 编辑器侧 followDeltaAt 的性质由下方用例单独锁。
+  void cases; void rt;
   const zero = followDeltaAt({ a: 1, x: 5, y: 5 }, { a: 1, x: 5, y: 5 }, 0.8, true);
   check('D7 滞后位姿=当前位姿时增量为零', zero.dx === 0 && zero.dy === 0 && zero.da === 0);
   const wrap = followDeltaAt(

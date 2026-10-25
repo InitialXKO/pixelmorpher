@@ -126,7 +126,7 @@ export interface DynamicPatternParams {
 export interface FollowPose { a: number; x: number; y: number }
 
 /** 追随增量：源部件滞后位姿 − 当前位姿，按强度缩放；角度差归一到
- * [−π, π]（跨 ±π 时取近路）。运行时孪生 = DYNAMIC_SRC 的 dynFollowDelta。 */
+ * [−π, π]（跨 ±π 时取近路）。运行时不现算：导出端按此式烘成 followCurve。 */
 export function followDeltaAt(
   now: FollowPose,
   lag: FollowPose,

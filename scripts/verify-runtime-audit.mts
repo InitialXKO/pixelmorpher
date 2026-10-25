@@ -147,6 +147,10 @@ check('缺口5·特效轨/笔触已进包且模板消费',
   convert.includes('fxPkg') && convert.includes('clipFxOf')
   && template.includes('fxRenderSet') && template.includes("tr.type === 'particle'")
   && template.includes('afterimage_brush'));
+check('死字段清理：包内实例 params 无追随/发光形状键、部件无 drawLayer、图无 context、模板无 dynFollowDelta 与旧画序表',
+  !convert.includes('drawLayer: node.drawLayer') && !convert.includes("context: 'performance'")
+  && !template.includes('dynFollowDelta') && !template.includes('DRAW_ORDER_MAIN')
+  && convert.includes('DEAD_DYN_PARAMS'));
 check('缺口7·透视缩短因子随轨道进包（fore 通道）且 tilt 不再点名缺失',
   convert.includes('frameYAxisWorld') && convert.includes('foreFrom')
   && !convert.includes("'tilt', 'stretch'"));

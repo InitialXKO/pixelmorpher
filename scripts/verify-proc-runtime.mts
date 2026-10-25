@@ -214,11 +214,11 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('E1 包格式标识', pkg.format === 'procedural-pixel-runtime-1');
   check('E2 参数化部件进包', pkg.parts.some((p) => p.key === 'torso' && p.base.shapeKind === 'rect'));
   const graphs = pkg.behavior.graphs;
-  check('E3 行为图按 slotKey 进包', !!graphs.torso && graphs.torso.context === 'behavior');
+  check('E3 行为图按 slotKey 进包（context 来源标记已删：播放器不读）', !!graphs.torso && graphs.torso.context === undefined);
   check('E4 行为图含结构翻译的 pendulum 节点', graphs.torso.nodes.some((n) => n.type === 'pendulum'));
   check('E5 表演进包且触发键映射 KeyJ', pkg.performances.length === 1 && (pkg.performances[0] as { triggerKey?: string }).triggerKey === 'KeyJ');
   const perfNodes = pkg.performances[0].graph.nodes;
-  check('E6 表演图 context=performance 且含曲线', pkg.performances[0].graph.context === 'performance' && perfNodes.some((n) => n.type === 'curve'));
+  check('E6 表演图含曲线（context 来源标记已删：播放器不读）', pkg.performances[0].graph.context === undefined && perfNodes.some((n) => n.type === 'curve'));
   check('E7 无 slot 节点（帽子）的行为图以 nodeId 为键进包（产品回退口径）', 'hat' in graphs);
   check('E10 无 slot 节点（手臂）的参数化件以 nodeId 为键进包', pkg.parts.some((p) => p.key === 'arm'));
   check('E11 无 slot 节点（手臂）的行为图进包', 'arm' in graphs);
@@ -1097,7 +1097,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
 
 // ---------- S) 发光片元重算：解析形状存掩码+印章参数，片元与主画布逐格一致 ----------
 {
-  const { glowField, defaultDynamicParams, createDynamicInstance, encodeGlowMask } = await import('../src/lib/dynamic-patterns');
+  const { glowField, defaultDynamicParams, createDynamicInstance, encodeGlowMask, resolveDynamicPatterns } = await import('../src/lib/dynamic-patterns');
   const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
   // 片元算法镜像（与 runtime-template 的 glowStampW/glowChannelF 逐式对应）
   const stampW = (st: { shape: number; halo: number; reach: number }, cosP: number, sinP: number, dx: number, dy: number): number => {
@@ -1161,11 +1161,13 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   ];
   let sBad = 0;
   for (const [label, over] of cases) {
-    const pkgS = convertCharacterToRuntimePackage(mkCharS([mkInstS(over)]));
+    const chS = mkCharS([mkInstS(over)]);
+    const pkgS = convertCharacterToRuntimePackage(chS);
     const partS = pkgS.parts.find((x) => x.key === 'gem');
     const entry = partS?.glow;
     const st = entry?.stamps?.[0];
-    const resolved = partS?.dynamic?.[0]?.params as never as Record<string, unknown>;
+    // 真值参数取编辑器侧解析结果（包内 params 已删发光形状键，见死字段清理）
+    const resolved = resolveDynamicPatterns((chS as never as { nodes: { gem: { dynamicPatterns: never } } }).nodes.gem.dynamicPatterns, undefined)[0]!.instance.params as never as Record<string, unknown>;
     if (!entry || !st || st.shape !== shapeCode[over.glowShape as string]) { sBad++; console.log('  S 形状代码不符:', label, JSON.stringify(st)); continue; }
     const bytes = Buffer.from(entry.data, 'base64');
     const maskAt = (x: number, y: number) => {
@@ -1201,7 +1203,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     const pkgS = convertCharacterToRuntimePackage(mkCharS([inst]));
     const partS = pkgS.parts.find((x) => x.key === 'gem');
     const entry = partS?.glow;
-    const resolved = partS?.dynamic?.[0]?.params as never;
+    const resolved = (inst as { params: never }).params; // 真值取编辑器侧实例参数（包内已删发光形状键）
     const truth = glowField(resolved, gridS as never, 0);
     const bytes = entry ? Buffer.from(entry.data, 'base64') : null;
     let ok = !!entry && entry.stamps?.[0]?.shape === 4 && !!truth && !!bytes;
@@ -3086,6 +3088,37 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
       return Math.abs(rt[o] - r) <= 1 && Math.abs(rt[o + 1] - g) <= 1 && Math.abs(rt[o + 2] - b) <= 1;
     })));
   check('缺口4·零角度返回 null（不做无谓回传）', baker.skinWarpTile(data, W, H, 6, 6, 0, 5, 'smoothstep') === null);
+}
+
+// ---- 死字段清理锁定：实例 params 死键不进包、烘焙产物（印章）不受影响 ----
+{
+  const { createDynamicInstance, defaultDynamicParams } = await import('../src/lib/dynamic-patterns');
+  const gridD = Array.from({ length: 9 }, (_, y) => Array.from({ length: 9 }, (_, x) => (x === 4 && y === 4 ? '#2ea8ff' : '#111111')));
+  const sprD = {
+    id: 'gsprD', width: 9, height: 9, plug: { x: 0 as never, y: 0 as never }, data: gridD,
+    directions: { 2: { spriteId: 'gsprD', mirror: false } },
+  } as never;
+  const instD = createDynamicInstance('辉光呼吸', {
+    ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: '#2ea8ff',
+    glowShape: 'star', glowHalo: 2, followEnabled: true, followSource: '', followDelaySec: 0.3,
+  } as never, '辉光');
+  const chD = {
+    id: 'chD', name: '死字段测试',
+    nodes: { gem: { ...makeNode('gem', '宝石', 'gem'), dynamicPatterns: [instD] } },
+    rootNodeId: 'gem', rootNodeIds: ['gem'],
+    sprites: { gsprD: sprD },
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { gem: { ...createDefaultCostumePiece('gem'), sprites: { 2: { spriteId: 'gsprD', mirror: false } } } } }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkgD = convertCharacterToRuntimePackage(chD);
+  const partD = pkgD.parts.find((x) => x.key === 'gem');
+  const paramsD = (partD?.dynamic?.[0]?.params ?? {}) as unknown as Record<string, unknown>;
+  check('死字段·包内实例 params 已删追随/发光形状键（活键保留）',
+    !('followEnabled' in paramsD) && !('followDelaySec' in paramsD) && !('glowShape' in paramsD)
+    && !('glowHalo' in paramsD) && !('glowPick' in paramsD) && paramsD.glowEnabled === true);
+  check('死字段·发光印章仍按原参数烘焙（星形代码 2）', partD?.glow?.stamps?.[0]?.shape === 2);
+  check('死字段·部件无 drawLayer、图无 context 标记',
+    !!partD && !('drawLayer' in partD) && pkgD.performances.every((pf) => !('context' in pf.graph)));
 }
 
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

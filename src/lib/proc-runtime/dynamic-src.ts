@@ -204,16 +204,7 @@ function dynArcPoints(params, tSec, endX, endY, hasEnd) {
   }
   return { main: dynArcClip(mainFull, grow), branches: branches, dots: [], alpha: alpha };
 }
-function dynFollowDelta(now, lag, amount, rotate) {
-  const k = Math.max(0, Math.min(1, amount));
-  const raw = lag.a - now.a;
-  const da = Math.atan2(Math.sin(raw), Math.cos(raw));
-  return {
-    dx: (lag.x - now.x) * k,
-    dy: (lag.y - now.y) * k,
-    da: rotate ? da * k : 0,
-  };
-}
+// 追随已由导出端烘成 followCurve，播放器不再现算增量（原追随增量函数已删）。
 function dynOccAt(tile, x, y) {
   if (x < 0 || y < 0 || x >= tile.w || y >= tile.h) return false;
   return tile.data[(y * tile.w + x) * 4] < 128;
@@ -380,13 +371,12 @@ export function createDynamicRuntime(): {
   dynDeformAt: (params: never, t: number) => { sx: number; sy: number; amount: number };
   dynContour: (tile: never) => { x: number; y: number; nx: number; ny: number }[];
   dynSimulate: (inst: never, tile: never, frame: number, frameRate: number, layer: string, seedKey: string) => { x: number; y: number; size: number; alpha: number; color: string }[];
-  dynFollowDelta: (now: never, lag: never, amount: number, rotate: boolean) => { dx: number; dy: number; da: number };
   dynDisplaceSrcMap: (params: never, w: number, h: number, phase: number) => Int32Array;
   dynNoiseU: (u: number, v: number, period: number, seed: number) => number;
   dynSpinRadAt: (params: never, t: number) => number;
   dynArcPoints: (params: never, t: number, endX?: number, endY?: number, hasEnd?: boolean) => { main: [number, number, number][]; branches: [number, number, number][][]; dots: [number, number, number][]; alpha: number };
   dynProceduralValue: (cfg: never, frame: number) => number;
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynFollowDelta, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue };`);
   return factory() as never;
 }
