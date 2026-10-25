@@ -2962,4 +2962,57 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     smokeT.graph.animation?.cycleSec === 4 && smokeT.graph.animation?.frames === 16);
 }
 
+// ---------- AL) D6 毛发：发束生成 / 整束烘焙 / 聚合新鲜度 ----------
+{
+  const HB = await import('../src/lib/sim/strand-bake');
+  const VC2 = await import('../src/lib/sim/verlet-chain');
+  const P2 = VC2.defaultChainBakeParams();
+  // AL1 生成：5 丝 × 4 节；中丝直下、外丝外倾、发根对称均布
+  const genH = HB.generateHairStrands('scalp', 5, 4);
+  const rootX = (c: number) => genH.nodes[`scalp_hair_${c}_0`].transform.x;
+  const segDx = (c: number) => genH.nodes[`scalp_hair_${c}_1`].transform.x;
+  check('AL1 发束生成：20 节点、根位对称、中丝直下外丝外倾',
+    Object.keys(genH.nodes).length === 20
+    && rootX(0) === -10 && rootX(4) === 10 && rootX(2) === 0
+    && Math.abs(segDx(2)) < 0.01 && segDx(0) < -2 && segDx(4) > 2);
+  // AL2 找回 + 整束烘焙（根带摇摆驱动）
+  const mkN2 = (id: string, x: number, y: number, parentId: string | undefined, children: string[]) => {
+    const n = makeNode(id, id, null, parentId);
+    n.transform = { ...n.transform, x, y };
+    n.children = children;
+    return n;
+  };
+  const scalp = mkN2('scalp', 100, 20, undefined, genH.strandIds.map((s) => s[0]));
+  scalp.tracks = {
+    angle: { keyframes: [{ frame: 0, value: 0 }, { frame: 6, value: 30 }, { frame: 12, value: -30 }, { frame: 18, value: 0 }], interpolation: 'linear' },
+  } as never;
+  const chHair = {
+    id: 'chhair', name: '毛发',
+    nodes: { scalp, ...genH.nodes },
+    rootNodeId: 'scalp', rootNodeIds: ['scalp'], costumeSets: [], variants: {},
+  } as unknown as Character;
+  const detH = HB.detectHairStrands(chHair, 'scalp');
+  check('AL2 发束找回：5 根 × 4 节', !!detH && detH.length === 5 && detH[0].length === 4);
+  const bakeH = HB.bakeHairSwing(chHair, detH!, P2, 0, 23, 12);
+  let maxDevH = 0;
+  for (const tr of Object.values(bakeH.angleTracks)) {
+    for (const kf of tr.keyframes) maxDevH = Math.max(maxDevH, Math.abs(kf.value));
+  }
+  check('AL2b 整束烘焙：5 根各有档案、角度增量非平凡',
+    Object.keys(bakeH.records).length === 5 && maxDevH > 2);
+  const chHairBaked = {
+    ...chHair,
+    nodes: Object.fromEntries(Object.entries(chHair.nodes).map(([id, n]) => [
+      id, bakeH.angleTracks[id] ? { ...n, tracks: { ...n.tracks, angle: bakeH.angleTracks[id] } } : n,
+    ])),
+    chainBakes: bakeH.records,
+  } as unknown as Character;
+  check('AL3 烘焙后整束新鲜；驱动移位后出现过期发丝',
+    HB.hairStaleStrands(chHairBaked, detH!, 12).length === 0
+    && HB.hairStaleStrands({
+      ...chHairBaked,
+      nodes: { ...chHairBaked.nodes, scalp: { ...chHairBaked.nodes.scalp, transform: { ...chHairBaked.nodes.scalp.transform, x: 150 } } },
+    } as unknown as Character, detH!, 12).length >= 1);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

@@ -18,6 +18,9 @@ import {
 import {
   generateClothGrid, detectClothGrid, bakeClothSwing, isClothBakeFresh,
 } from '@/lib/sim/cloth-bake';
+import {
+  generateHairStrands, detectHairStrands, bakeHairSwing, hairStaleStrands,
+} from '@/lib/sim/strand-bake';
 
 export default function ChainBakePanel({ character }: { character: Character | null }) {
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
@@ -29,6 +32,9 @@ export default function ChainBakePanel({ character }: { character: Character | n
   const [clothCols, setClothCols] = useState(4);
   const [clothRows, setClothRows] = useState(4);
   const [clothNote, setClothNote] = useState<string>('');
+  const [hairStrands, setHairStrands] = useState(5);
+  const [hairSegs, setHairSegs] = useState(4);
+  const [hairNote, setHairNote] = useState<string>('');
 
   const chain = useMemo(
     () => (character && selectedNodeId ? collectChain(character, selectedNodeId) : null),
@@ -131,6 +137,117 @@ export default function ChainBakePanel({ character }: { character: Character | n
         updateUnifiedCharacter={updateUnifiedCharacter}
         cols={clothCols} rows={clothRows} setCols={setClothCols} setRows={setClothRows}
         note={clothNote} setNote={setClothNote} />
+      <HairSection character={character} rootId={selectedNodeId} params={params}
+        totalFrames={totalFrames} frameRate={frameRate}
+        updateUnifiedCharacter={updateUnifiedCharacter}
+        strands={hairStrands} segs={hairSegs} setStrands={setHairStrands} setSegs={setHairSegs}
+        note={hairNote} setNote={setHairNote} />
+    </div>
+  );
+}
+
+function HairSection(props: {
+  character: Character; rootId: string | null | undefined;
+  params: ChainBakeParams; totalFrames: number; frameRate: number;
+  updateUnifiedCharacter: (id: string, patch: Partial<Character>) => void;
+  strands: number; segs: number; setStrands: (n: number) => void; setSegs: (n: number) => void;
+  note: string; setNote: (s: string) => void;
+}) {
+  const { character, rootId, params, totalFrames, frameRate, updateUnifiedCharacter } = props;
+  const strands = useMemo(
+    () => (rootId ? detectHairStrands(character, rootId) : null),
+    [character, rootId],
+  );
+  const stale = useMemo(
+    () => (strands ? hairStaleStrands(character, strands, frameRate) : []),
+    [character, strands, frameRate],
+  );
+  if (!rootId) return null;
+  const bakedCount = strands ? strands.length - stale.length : 0;
+
+  const handleGenerate = () => {
+    const gen = generateHairStrands(rootId, props.strands, props.segs);
+    const root = character.nodes[rootId];
+    if (!root) return;
+    const nodes = { ...character.nodes, ...gen.nodes };
+    nodes[rootId] = {
+      ...root,
+      children: [...(root.children ?? []), ...gen.strandIds.map((s) => s[0])],
+    };
+    updateUnifiedCharacter(character.id, { nodes });
+    props.setNote(`已生成 ${props.strands} 根发丝 × ${props.segs} 节（扇形张开）`);
+  };
+
+  const handleBake = () => {
+    if (!strands) return;
+    const res = bakeHairSwing(character, strands, params, 0, Math.max(0, totalFrames - 1), frameRate);
+    const nodes = { ...character.nodes };
+    for (const [id, track] of Object.entries(res.angleTracks)) {
+      const node = nodes[id];
+      if (node) nodes[id] = { ...node, tracks: { ...node.tracks, angle: track } };
+    }
+    updateUnifiedCharacter(character.id, {
+      nodes,
+      chainBakes: { ...(character.chainBakes ?? {}), ...res.records },
+    });
+    props.setNote(`已烘焙整束 ${strands.length} 根发丝 × ${totalFrames} 帧`);
+  };
+
+  const handleRemove = () => {
+    const nodes = { ...character.nodes };
+    const root = nodes[rootId];
+    const allIds = strands?.flat() ?? [];
+    for (const id of allIds) delete nodes[id];
+    if (root) {
+      nodes[rootId] = { ...root, children: (root.children ?? []).filter((ch) => !allIds.includes(ch)) };
+    }
+    const chainBakes = { ...(character.chainBakes ?? {}) };
+    for (const s of strands ?? []) delete chainBakes[s[0]];
+    updateUnifiedCharacter(character.id, { nodes, chainBakes });
+    props.setNote('已删除发束');
+  };
+
+  return (
+    <div className="mt-2 pt-2 border-t border-[#1e1e3a] flex flex-col gap-1.5">
+      <div className="text-[10px] text-gray-500">毛发（一束独立链，同一烘焙通道）</div>
+      {!strands && (
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1 text-[10px] text-gray-400">
+            发丝
+            <input type="number" value={props.strands} min={1} max={12}
+              onChange={(e) => props.setStrands(Number(e.target.value))}
+              className="w-12 bg-[#12122a] border border-[#2a2a4a] rounded px-1 py-0.5 text-gray-200" />
+          </label>
+          <label className="flex items-center gap-1 text-[10px] text-gray-400">
+            节数
+            <input type="number" value={props.segs} min={2} max={8}
+              onChange={(e) => props.setSegs(Number(e.target.value))}
+              className="w-12 bg-[#12122a] border border-[#2a2a4a] rounded px-1 py-0.5 text-gray-200" />
+          </label>
+          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={handleGenerate}>
+            生成发束
+          </Button>
+        </div>
+      )}
+      {strands && (
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-gray-400">发束 {strands.length} 根 × {strands[0].length} 节</span>
+          <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={handleBake}>
+            烘焙整束（上方参数）
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 text-[11px] text-red-400" onClick={handleRemove}>
+            删除发束
+          </Button>
+        </div>
+      )}
+      {strands && (
+        <div className={`text-[10px] ${stale.length === 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+          {stale.length === 0
+            ? `整束已烘焙（${bakedCount}/${strands.length}），与当前驱动一致`
+            : `未烘焙/已过期发丝 ${stale.length}/${strands.length} 根，重烘整束即可`}
+        </div>
+      )}
+      {props.note && <div className="text-[10px] text-gray-500">{props.note}</div>}
     </div>
   );
 }
