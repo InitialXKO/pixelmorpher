@@ -283,6 +283,16 @@ export default function DynamicPatternEditor({
               <input type="checkbox" checked={np(inst).trailEnabled} onChange={(e) => patchParam(inst.id, 'trailEnabled', e.target.checked)} />
               残影段
             </label>
+            <label className="flex items-center gap-1" title="从部件插头长出的程序化闪电弧（中点置换折线）；多条可叠">
+              <input type="checkbox" checked={np(inst).arcEnabled} onChange={(e) => patchParam(inst.id, 'arcEnabled', e.target.checked)} />
+              弧线段
+            </label>
+            {np(inst).arcEnabled && (
+              <label className="flex items-center gap-1">
+                弧色
+                <input type="color" value={np(inst).arcColor} onChange={(e) => patchParam(inst.id, 'arcColor', e.target.value)} className="h-5 w-8 bg-transparent" />
+              </label>
+            )}
             <label className="flex items-center gap-1">
               <input type="checkbox" checked={inst.params.emitEnabled} onChange={(e) => patchParam(inst.id, 'emitEnabled', e.target.checked)} />
               发射段
@@ -302,7 +312,7 @@ export default function DynamicPatternEditor({
               </label>
             )}
           </div>
-          {(['形变', '发射', '粒子', '发光'] as const).map((section) => (
+          {(['形变', '发射', '粒子', '发光', '弧线'] as const).map((section) => (
             <div key={section}>
               <div className="text-[9px] text-gray-600 mt-0.5">{section}</div>
               {section === '形变' && (

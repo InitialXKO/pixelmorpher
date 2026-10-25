@@ -2537,4 +2537,87 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     ur5.includes('trailGhosts') && ur5.includes('followPoseAt(nodeId, frame - k'));
 }
 
+// ---------- AD) D4 一期弧线段：生成器孪生 / 确定性 / 条目 / 接线 ----------
+{
+  const DP6 = await import('../src/lib/dynamic-patterns');
+  const DS6 = await import('../src/lib/proc-runtime/dynamic-src');
+  const RT6 = DS6.createDynamicRuntime();
+  const arcParams = DP6.normalizeDynamicParams({
+    ...DP6.defaultDynamicParams(),
+    arcEnabled: true, arcLengthPx: 30, arcDirDeg: 40, arcDisplace: 0.4,
+    arcBranches: 2, arcWidthPx: 1.3, arcFlicker: 10, arcSeed: 11,
+  });
+  // AD1 孪生逐点一致（多个时刻）
+  let twinOk = true;
+  for (const tt of [0, 0.13, 0.57, 1.9]) {
+    const a = DP6.arcPointsAt(arcParams, tt);
+    const b = RT6.dynArcPoints(arcParams as never, tt);
+    if (Math.abs(a.alpha - b.alpha) > 1e-9 || a.main.length !== b.main.length
+      || a.branches.length !== b.branches.length) { twinOk = false; break; }
+    for (let i = 0; i < a.main.length; i++) {
+      if (Math.abs(a.main[i].x - b.main[i][0]) > 1e-9 || Math.abs(a.main[i].y - b.main[i][1]) > 1e-9
+        || Math.abs(a.main[i].w - b.main[i][2]) > 1e-9) { twinOk = false; break; }
+    }
+    for (let j = 0; j < a.branches.length && twinOk; j++) {
+      for (let i = 0; i < a.branches[j].length; i++) {
+        if (Math.abs(a.branches[j][i].x - b.branches[j][i][0]) > 1e-9
+          || Math.abs(a.branches[j][i].y - b.branches[j][i][1]) > 1e-9) { twinOk = false; break; }
+      }
+    }
+    if (!twinOk) break;
+  }
+  check('AD1 弧线生成器两端逐点一致（4 时刻）', twinOk);
+  // AD2 确定性 + 步进量化（同一步内形状不变、跨步变）
+  const s1 = DP6.arcPointsAt(arcParams, 0.21);
+  const s2 = DP6.arcPointsAt(arcParams, 0.24);
+  const s3 = DP6.arcPointsAt(arcParams, 0.31);
+  check('AD2 同步进内形状恒定、跨步进变化',
+    JSON.stringify(s1.main) === JSON.stringify(s2.main)
+    && JSON.stringify(s1.main) !== JSON.stringify(s3.main));
+  // AD3 结构：主弧 17 点、分叉数与根/尖宽度衰减
+  check('AD3 主弧 17 点 + 2 分叉（各 9 点）+ 宽度收细',
+    s1.main.length === 17 && s1.branches.length === 2
+    && s1.branches.every((br) => br.length === 9)
+    && s1.main[0].w > s1.main[16].w && s1.main[0].x === 0 && s1.main[0].y === 0);
+  // AD4 disp=0 时主弧为直线（点落在起点→终点线段上）
+  const straight = DP6.arcPointsAt({ ...arcParams, arcDisplace: 0, arcBranches: 0 }, 0.3);
+  const dirR = (40 * Math.PI) / 180;
+  const crossOk = straight.main.every((q) => Math.abs(q.x * Math.sin(dirR) - q.y * Math.cos(dirR)) < 1e-9);
+  check('AD4 曲折幅度 0 → 主弧严格直线', crossOk && straight.branches.length === 0);
+  // AD5 条目展开
+  const LE6 = await import('../src/lib/library-entries');
+  const DE6 = await import('../src/lib/dynamic-expand');
+  const exArc = DE6.expandDynamicEntry(LE6.BUILTIN_INDEX, 'dyn-arc-bolt', 1);
+  const exStorm = DE6.expandDynamicEntry(LE6.BUILTIN_INDEX, 'dyn-arc-storm', 1);
+  check('AD5 电弧叶子展开', !!exArc.params && exArc.params.arcEnabled
+    && exArc.params.arcLengthPx === 26 && !exArc.params.emitEnabled);
+  check('AD5b 雷暴电弧折叠：弧线参数 + 火星发射开关（跟随边裁决）共存',
+    exStorm.errors.length === 0 && !!exStorm.params
+    && exStorm.params.arcEnabled && exStorm.params.arcLengthPx === 44
+    && exStorm.params.emitEnabled);
+  // AD6 进包 + 整包接线
+  const inst6 = DP6.createDynamicInstance('电弧', exArc.params!, '身体');
+  const ch6 = {
+    id: 'ch6', name: '弧线进包',
+    nodes: { torso: { ...makeNode('torso', '躯干', 'torso'), dynamicPatterns: [inst6] } },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: { torso: { ...createDefaultCostumePiece('torso'), parametric: createDefaultParametricAppearance() } },
+    }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as unknown as Character;
+  const pkg6 = convertCharacterToRuntimePackage(ch6, undefined, { frameRate: 12 });
+  const dyn6 = pkg6.parts.find((p) => p.key === 'torso')?.dynamic?.[0];
+  const { buildRuntimeHtml: brh6 } = await import('../src/lib/proc-runtime/runtime-template');
+  const html6 = brh6(pkg6);
+  check('AD6 弧线参数进包 + 整包含 dynArcPoints 与 plugC 接线',
+    !!dyn6 && (dyn6.params as { arcEnabled?: boolean }).arcEnabled === true
+    && html6.includes('dynArcPoints') && html6.includes('plugC'));
+  const { readFileSync: rfs6 } = await import('node:fs');
+  const ur6 = rfs6(new URL('../src/lib/unified-render.ts', import.meta.url), 'utf8');
+  check('AD6b 编辑器绘制在位（drawDynamicArcs 双路调用）',
+    ur6.includes('drawDynamicArcs') && (ur6.match(/drawDynamicArcs\(ctx, instruction\)/g) ?? []).length === 2);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

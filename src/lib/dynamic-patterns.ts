@@ -46,6 +46,20 @@ export interface DynamicPatternParams {
   trailCount: number;       // 残影个数 1..6
   trailIntervalSec: number; // 残影间隔（秒）
   trailOpacity: number;     // 最近残影不透明度（编辑器口径；运行时为残影色剪影）
+  // 弧线段（D4 一期，PROPOSAL spikes/arc-gen）：中点置换的折线
+  // 几何（闪电弧）。生成是时间的纯函数（形状按 flicker 步进
+  // 量化、种子确定性）；点列以部件插头为原点、部件本地像素
+  // 坐标（x 右、y 下，方向角 0=东顺时针 90=南）。同部件多弧线
+  // 全部生效（与粒子段同口径，可叠多条）。
+  arcEnabled: boolean;
+  arcLengthPx: number;  // 主弧长（px）
+  arcDirDeg: number;    // 主弧方向（度）
+  arcDisplace: number;  // 中点置换幅度（占段长比，0 = 直线）
+  arcBranches: number;  // 分叉数 0..3
+  arcWidthPx: number;   // 根部线宽（px，向尖端收细）
+  arcFlicker: number;   // 形状步进（步/秒，0 = 静止形状）
+  arcSeed: number;      // 形状种子
+  arcColor: string;     // 弧线颜色
   // 追随段（形变段的跨部件驱动）：本部件渲染时叠加「源部件位姿的
   // 滞后差」——源部件当前位姿与 delay 秒前位姿之差 × amount，
   // 本部件就像被源部件拖着、慢半拍跟上（垂饰/披风/头发的次级运动）。
@@ -160,6 +174,9 @@ export function defaultDynamicParams(): DynamicPatternParams {
     displaceSpeed: 0.25, displacePhase: 0,
     spinEnabled: false, spinSpeedDeg: 45, spinPhaseDeg: 0,
     trailEnabled: false, trailCount: 3, trailIntervalSec: 0.06, trailOpacity: 0.35,
+    arcEnabled: false, arcLengthPx: 26, arcDirDeg: 0, arcDisplace: 0.35,
+    arcBranches: 1, arcWidthPx: 1.2, arcFlicker: 10, arcSeed: 7,
+    arcColor: '#bfe3ff',
     followEnabled: false, followSource: '', followDelaySec: 0.12, followAmount: 0.7, followRotate: true,
     emitEnabled: true, source: 'contour', rate: 12, linkToDeform: 0, speed: 6,
     directionDeg: 270, spreadDeg: 60, layer: 'both', frontRatio: 0.35,
@@ -218,6 +235,24 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
     ? Math.max(0.02, Math.min(0.3, out.trailIntervalSec)) : 0.06;
   out.trailOpacity = Number.isFinite(out.trailOpacity)
     ? Math.max(0.05, Math.min(0.8, out.trailOpacity)) : 0.35;
+  out.arcEnabled = out.arcEnabled === true;
+  out.arcLengthPx = Number.isFinite(out.arcLengthPx)
+    ? Math.max(4, Math.min(96, out.arcLengthPx)) : 26;
+  out.arcDirDeg = Number.isFinite(out.arcDirDeg)
+    ? ((out.arcDirDeg % 360) + 360) % 360 : 0;
+  out.arcDisplace = Number.isFinite(out.arcDisplace)
+    ? Math.max(0, Math.min(0.8, out.arcDisplace)) : 0.35;
+  out.arcBranches = Number.isFinite(out.arcBranches)
+    ? Math.max(0, Math.min(3, Math.round(out.arcBranches))) : 1;
+  out.arcWidthPx = Number.isFinite(out.arcWidthPx)
+    ? Math.max(0.4, Math.min(4, out.arcWidthPx)) : 1.2;
+  out.arcFlicker = Number.isFinite(out.arcFlicker)
+    ? Math.max(0, Math.min(30, out.arcFlicker)) : 10;
+  out.arcSeed = Number.isFinite(out.arcSeed)
+    ? Math.max(1, Math.min(9999, Math.round(out.arcSeed))) : 7;
+  if (typeof out.arcColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(out.arcColor)) {
+    out.arcColor = '#bfe3ff';
+  }
   return out;
 }
 
@@ -417,6 +452,75 @@ export function displacePhaseAt(params: DynamicPatternParams, tSec: number): num
 export function spinAngleDegAt(params: DynamicPatternParams, tSec: number): number {
   if (!params.spinEnabled) return 0;
   return (params.spinSpeedDeg || 0) * tSec + (params.spinPhaseDeg || 0);
+}
+
+// ---- 弧线段（D4 一期）：中点置换折线生成。运行时孪生 =
+// DYNAMIC_SRC 的 dynArcPoints（探针 AD 组逐点对拍）。 ----
+
+export interface ArcPoint { x: number; y: number; w: number }
+export interface ArcShape { main: ArcPoint[]; branches: ArcPoint[][]; alpha: number }
+
+/** 一条直线的中点置换细分：每级在每段中点沿法线偏移
+ * (哈希 − 0.5) × 段长 × disp × 衰减；哈希计数 k 贯穿主弧与
+ * 分叉，保证同一 (种子, 步进) 下全图逐点确定。 */
+function arcDisplaceLine(
+  x0: number, y0: number, x1: number, y1: number,
+  disp: number, levels: number, seed: number, step: number, kStart: number,
+): { pts: { x: number; y: number }[]; k: number } {
+  let pts = [{ x: x0, y: y0 }, { x: x1, y: y1 }];
+  let k = kStart;
+  for (let lv = 0; lv < levels; lv++) {
+    const next: { x: number; y: number }[] = [pts[0]];
+    const decay = Math.pow(0.72, lv);
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const segLen = Math.hypot(dx, dy) || 1;
+      const off = (displaceHash01(seed, step, k++) - 0.5) * segLen * disp * decay;
+      next.push({
+        x: (a.x + b.x) / 2 + (-dy / segLen) * off,
+        y: (a.y + b.y) / 2 + (dx / segLen) * off,
+      });
+      next.push(b);
+    }
+    pts = next;
+  }
+  return { pts, k };
+}
+
+/** t 时刻的弧线形状（插头原点、部件本地 px）：主弧 + 分叉 +
+ * 本步的不透明度（闪烁）。flicker = 0 时形状静止、alpha 恒定。 */
+export function arcPointsAt(p: DynamicPatternParams, t: number): ArcShape {
+  const step = p.arcFlicker > 0 ? Math.floor(Math.max(0, t) * p.arcFlicker) : 0;
+  const dir = (p.arcDirDeg * Math.PI) / 180;
+  const ex = Math.cos(dir) * p.arcLengthPx, ey = Math.sin(dir) * p.arcLengthPx;
+  const disp = p.arcDisplace * 2;
+  const main0 = arcDisplaceLine(0, 0, ex, ey, disp, 4, p.arcSeed, step, 0);
+  const n = main0.pts.length;
+  const main: ArcPoint[] = main0.pts.map((q, i) => ({
+    x: q.x, y: q.y, w: Math.max(0.15, p.arcWidthPx * (1 - 0.72 * (i / (n - 1)))),
+  }));
+  const branches: ArcPoint[][] = [];
+  let k = main0.k;
+  for (let b = 0; b < p.arcBranches; b++) {
+    const s = 0.25 + 0.55 * displaceHash01(p.arcSeed, step, k++);
+    const fi = s * (n - 1);
+    const i0 = Math.min(n - 2, Math.floor(fi));
+    const fr = fi - i0;
+    const bx = main0.pts[i0].x + (main0.pts[i0 + 1].x - main0.pts[i0].x) * fr;
+    const by = main0.pts[i0].y + (main0.pts[i0 + 1].y - main0.pts[i0].y) * fr;
+    const side = displaceHash01(p.arcSeed, step, k++) < 0.5 ? -1 : 1;
+    const bang = dir + (side * (24 + 22 * displaceHash01(p.arcSeed, step, k++)) * Math.PI) / 180;
+    const blen = p.arcLengthPx * (1 - s) * (0.45 + 0.3 * displaceHash01(p.arcSeed, step, k++));
+    const bp = arcDisplaceLine(bx, by, bx + Math.cos(bang) * blen, by + Math.sin(bang) * blen, disp, 3, p.arcSeed, step, k);
+    k = bp.k;
+    const m = bp.pts.length;
+    branches.push(bp.pts.map((q, i) => ({
+      x: q.x, y: q.y, w: Math.max(0.1, p.arcWidthPx * 0.62 * (1 - 0.85 * (i / (m - 1)))),
+    })));
+  }
+  const alpha = p.arcFlicker > 0 ? 0.55 + 0.45 * displaceHash01(p.arcSeed, step, 999) : 0.9;
+  return { main, branches, alpha };
 }
 
 // ---- 发光段：呼吸脉冲 + 选区掩码 + 带柔光圈的权重场 ----
@@ -785,7 +889,7 @@ export function deleteUserDynamicPattern(name: string): void {
 export interface DynamicParamDef {
   key: keyof DynamicPatternParams;
   label: string;
-  section: '形变' | '发射' | '粒子' | '发光';
+  section: '形变' | '发射' | '粒子' | '发光' | '弧线';
   min: number;
   max: number;
   step: number;
@@ -806,6 +910,13 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'trailCount', label: '残影个数', section: '形变', min: 1, max: 6, step: 1 },
   { key: 'trailIntervalSec', label: '残影间隔（秒）', section: '形变', min: 0.02, max: 0.3, step: 0.01 },
   { key: 'trailOpacity', label: '残影不透明度', section: '形变', min: 0.05, max: 0.8, step: 0.05 },
+  { key: 'arcLengthPx', label: '弧长（像素）', section: '弧线', min: 4, max: 96, step: 1 },
+  { key: 'arcDirDeg', label: '弧线方向（度）', section: '弧线', min: 0, max: 359, step: 5 },
+  { key: 'arcDisplace', label: '曲折幅度', section: '弧线', min: 0, max: 0.8, step: 0.05 },
+  { key: 'arcBranches', label: '分叉数', section: '弧线', min: 0, max: 3, step: 1 },
+  { key: 'arcWidthPx', label: '线宽（像素）', section: '弧线', min: 0.4, max: 4, step: 0.2 },
+  { key: 'arcFlicker', label: '跳动（步/秒，0=静止）', section: '弧线', min: 0, max: 30, step: 1 },
+  { key: 'arcSeed', label: '形状种子', section: '弧线', min: 1, max: 9999, step: 1 },
   { key: 'followDelaySec', label: '追随延迟（秒）', section: '形变', min: 0, max: 1, step: 0.01 },
   { key: 'followAmount', label: '追随强度', section: '形变', min: 0, max: 1, step: 0.05 },
   { key: 'rate', label: '发射率（个/秒）', section: '发射', min: 0, max: 60, step: 1 },

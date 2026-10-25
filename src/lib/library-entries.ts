@@ -408,6 +408,31 @@ function buildBuiltinEntries(): LibraryEntry[] {
       { entry: 'dyn-trail', version: 1 },
       { entry: 'dyn-swell', version: 1 },
     ], []),
+    // 弧线叶子（D4 一期）：电弧/雷击链/静电火花（同段多实例可叠，
+    // 展开为同部件的独立实例——弧线段键与粒子的发射段键不相交）
+    leaf('dyn-arc-bolt', '电弧', '弧线', {
+      arcEnabled: true, arcLengthPx: 26, arcDirDeg: 0, arcDisplace: 0.35,
+      arcBranches: 1, arcWidthPx: 1.2, arcFlicker: 10, arcSeed: 7,
+      arcColor: '#bfe3ff', emitEnabled: false,
+    }),
+    leaf('dyn-arc-chain', '雷击链', '弧线', {
+      arcEnabled: true, arcLengthPx: 44, arcDirDeg: 90, arcDisplace: 0.42,
+      arcBranches: 3, arcWidthPx: 1.5, arcFlicker: 12, arcSeed: 21,
+      arcColor: '#cfe8ff', emitEnabled: false,
+    }),
+    leaf('dyn-arc-spark', '静电火花', '弧线', {
+      arcEnabled: true, arcLengthPx: 12, arcDirDeg: 0, arcDisplace: 0.5,
+      arcBranches: 0, arcWidthPx: 0.8, arcFlicker: 18, arcSeed: 3,
+      arcColor: '#ffe9a8', emitEnabled: false,
+    }),
+    // 雷暴电弧（D4 一期）：雷击链 + 火星粒子（emitEnabled 两边
+    // 都显式写、跟随边裁决归火星——与置换火焰同例）
+    parent('dyn-arc-storm', '雷暴电弧', [
+      { entry: 'dyn-arc-chain', version: 1 },
+      { entry: 'dyn-ember', version: 1 },
+    ], [
+      { type: 'followParams', leader: 1, follower: 0, keys: ['emitEnabled'] },
+    ]),
   );
   return out;
 }

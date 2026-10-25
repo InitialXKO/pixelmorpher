@@ -10,7 +10,7 @@
 // ============================================================
 
 import {
-  displacePhaseAt, displacePixelGrid, spinAngleDegAt,
+  displacePhaseAt, displacePixelGrid, spinAngleDegAt, arcPointsAt,
   dynamicDeformAt, glowField, glowPulseAt, type DynamicPatternInstance, type DynamicPatternParams,
 } from './dynamic-patterns';
 import { createSurfaceBaker } from './proc-runtime/bake-src';
@@ -302,6 +302,33 @@ export function dynamicPosterRGBA(params: DynamicPatternParams): RGBAImage {
     }
   }
   drawBody(1, 0);
+  // 弧线段（D4 一期）定格：与编辑器同一生成器，沿折线逐段盖点
+  // （原点 = 精灵中心近似插头，缩放 = 本体输出比例）
+  if (params.arcEnabled) {
+    const shape = arcPointsAt(params, t);
+    const [ar, ag, ab] = hexToRgb(params.arcColor || '#bfe3ff');
+    const ox = dx0 + dw / 2, oy = dy0 + dh / 2, k = dw / gw;
+    const stampLine = (pts: { x: number; y: number; w: number }[], alphaMul: number, widthMul: number) => {
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const x0 = ox + pts[i].x * k, y0 = oy + pts[i].y * k;
+        const x1 = ox + pts[i + 1].x * k, y1 = oy + pts[i + 1].y * k;
+        const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0)));
+        const rad = Math.max(0.6, (pts[i].w * k * widthMul) / 2);
+        for (let s2 = 0; s2 <= steps; s2++) {
+          const cx = x0 + ((x1 - x0) * s2) / steps, cy = y0 + ((y1 - y0) * s2) / steps;
+          for (let yy = Math.floor(cy - rad); yy <= cy + rad; yy++) {
+            for (let xx = Math.floor(cx - rad); xx <= cx + rad; xx++) {
+              if ((xx - cx) ** 2 + (yy - cy) ** 2 <= rad * rad) plot(xx, yy, ar, ag, ab, shape.alpha * alphaMul);
+            }
+          }
+        }
+      }
+    };
+    for (const line of [shape.main, ...shape.branches]) {
+      stampLine(line, 0.22, 2.6);
+      stampLine(line, 1, 1);
+    }
+  }
   if (params.emitEnabled) drawParticles('front');
   const data = new Uint8ClampedArray(OUT * OUT * 4);
   for (let i = 0; i < acc.length; i++) data[i] = Math.round(Math.max(0, Math.min(1, acc[i]!)) * 255);

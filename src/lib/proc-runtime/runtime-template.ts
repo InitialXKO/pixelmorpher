@@ -908,7 +908,7 @@ function ensureAtlas(gl, variant, costumeName) {
       const rec = (animFrameMap[bk] = animFrameMap[bk] || {});
       rec[fi + ',' + di] = { tile: tile, place: [ax, ay] };
     } else {
-      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null });
+      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][6] || null });
     }
   });
   for (const bk in animFrameMap) {
@@ -1718,7 +1718,13 @@ function frame(now) {
     };
     els.push(el);
     elByKey.set(part.key, el);
-    if (dynList.length > 0) dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: rotA, dynList: dynList, dsx: dsx, dsy: dsy });
+    if (dynList.length > 0) {
+      // 弧线段原点 = 插头：换成相对瓦片中心的偏移（粒子系以中心为原点）
+      const plugC = entry.plugN
+        ? [entry.plugN[0] * tile.w - tile.w / 2, (1 - entry.plugN[1]) * tile.h - tile.h / 2]
+        : [0, 0];
+      dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: rotA, dynList: dynList, dsx: dsx, dsy: dsy, plugC: plugC });
+    }
   });
   // 动态粒子：瓦片空间模拟（连续钟 elapsed × 包帧率量化帧，
   // 与编辑器同一帧基），发射点随形变缩放，位置经部件旋转落到
@@ -1728,6 +1734,42 @@ function frame(now) {
     const frameIdx = elapsed * FRAME_RATE;
     for (const a of dynAnchors) {
       const c = Math.cos(a.rot), s = Math.sin(a.rot);
+      // 弧线段（D4 一期）：折线逐段拆 quad 条带进前层（宽线低透明
+      // 作晕 + 细线本体）；点位以插头为原点，先平移到部件中心系，
+      // 再经与粒子同一变换落到世界
+      for (const inst of a.dynList) {
+        const p = inst.params;
+        if (!p.arcEnabled) continue;
+        const shape = dynArcPoints(p, elapsed);
+        const rgb = particleRgb(p.arcColor || '#bfe3ff');
+        const toWorld = (qx, qy) => {
+          const gx = (a.plugC[0] + qx) * a.dsx, gy = (a.plugC[1] + qy) * a.dsy;
+          return [a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c];
+        };
+        const pushSeg = (w0, w1, wdt, alpha) => {
+          const dx = w1[0] - w0[0], dy = w1[1] - w0[1];
+          const len = Math.hypot(dx, dy) || 1;
+          const ux = dx / len, uy = dy / len;
+          const nx = -uy * wdt / 2, ny = ux * wdt / 2;
+          const ex = ux * wdt * 0.3, ey = uy * wdt * 0.3;
+          const cs = [
+            [w0[0] - ex + nx, w0[1] - ey + ny], [w1[0] + ex + nx, w1[1] + ey + ny],
+            [w1[0] + ex - nx, w1[1] + ey - ny], [w0[0] - ex - nx, w0[1] - ey - ny],
+          ];
+          const locals = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+          for (const oi of [0, 1, 2, 0, 2, 3]) {
+            frontVerts.push(cs[oi][0], cs[oi][1], locals[oi][0], locals[oi][1], rgb[0], rgb[1], rgb[2], alpha, 0);
+          }
+        };
+        for (const line of [shape.main].concat(shape.branches)) {
+          for (let i = 0; i + 1 < line.length; i++) {
+            const w0 = toWorld(line[i][0], line[i][1]);
+            const w1 = toWorld(line[i + 1][0], line[i + 1][1]);
+            pushSeg(w0, w1, line[i][2] * 2.6, shape.alpha * 0.22);
+            pushSeg(w0, w1, line[i][2], shape.alpha);
+          }
+        }
+      }
       for (const inst of a.dynList) {
         for (const layer of ['back', 'front']) {
           const ps = dynSimulate(inst, a.tile, frameIdx, FRAME_RATE, layer, a.part.key);

@@ -74,6 +74,55 @@ function dynSpinRadAt(params, tSec) {
   if (!params.spinEnabled) return 0;
   return ((params.spinSpeedDeg || 0) * tSec + (params.spinPhaseDeg || 0)) * Math.PI / 180;
 }
+// 弧线段（D4 一期）孪生：与 dynamic-patterns.ts 的 arcPointsAt /
+// arcDisplaceLine 逐点同式（点以 [x, y, w] 数组返回）
+function dynArcDisplaceLine(x0, y0, x1, y1, disp, levels, seed, step, kStart) {
+  let pts = [[x0, y0], [x1, y1]];
+  let k = kStart;
+  for (let lv = 0; lv < levels; lv++) {
+    const next = [pts[0]];
+    const decay = Math.pow(0.72, lv);
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const segLen = Math.hypot(dx, dy) || 1;
+      const off = (dynHash01(seed, step, k++) - 0.5) * segLen * disp * decay;
+      next.push([(a[0] + b[0]) / 2 + (-dy / segLen) * off, (a[1] + b[1]) / 2 + (dx / segLen) * off]);
+      next.push(b);
+    }
+    pts = next;
+  }
+  return { pts: pts, k: k };
+}
+function dynArcPoints(params, tSec) {
+  const p = params;
+  const step = p.arcFlicker > 0 ? Math.floor(Math.max(0, tSec) * p.arcFlicker) : 0;
+  const dir = (p.arcDirDeg * Math.PI) / 180;
+  const ex = Math.cos(dir) * p.arcLengthPx, ey = Math.sin(dir) * p.arcLengthPx;
+  const disp = p.arcDisplace * 2;
+  const main0 = dynArcDisplaceLine(0, 0, ex, ey, disp, 4, p.arcSeed, step, 0);
+  const n = main0.pts.length;
+  const main = main0.pts.map((q, i) => [q[0], q[1], Math.max(0.15, p.arcWidthPx * (1 - 0.72 * (i / (n - 1))))]);
+  const branches = [];
+  let k = main0.k;
+  for (let b = 0; b < p.arcBranches; b++) {
+    const s = 0.25 + 0.55 * dynHash01(p.arcSeed, step, k++);
+    const fi = s * (n - 1);
+    const i0 = Math.min(n - 2, Math.floor(fi));
+    const fr = fi - i0;
+    const bx = main0.pts[i0][0] + (main0.pts[i0 + 1][0] - main0.pts[i0][0]) * fr;
+    const by = main0.pts[i0][1] + (main0.pts[i0 + 1][1] - main0.pts[i0][1]) * fr;
+    const side = dynHash01(p.arcSeed, step, k++) < 0.5 ? -1 : 1;
+    const bang = dir + (side * (24 + 22 * dynHash01(p.arcSeed, step, k++)) * Math.PI) / 180;
+    const blen = p.arcLengthPx * (1 - s) * (0.45 + 0.3 * dynHash01(p.arcSeed, step, k++));
+    const bp = dynArcDisplaceLine(bx, by, bx + Math.cos(bang) * blen, by + Math.sin(bang) * blen, disp, 3, p.arcSeed, step, k);
+    k = bp.k;
+    const m = bp.pts.length;
+    branches.push(bp.pts.map((q, i) => [q[0], q[1], Math.max(0.1, p.arcWidthPx * 0.62 * (1 - 0.85 * (i / (m - 1))))]));
+  }
+  const alpha = p.arcFlicker > 0 ? 0.55 + 0.45 * dynHash01(p.arcSeed, step, 999) : 0.9;
+  return { main: main, branches: branches, alpha: alpha };
+}
 function dynFollowDelta(now, lag, amount, rotate) {
   const k = Math.max(0, Math.min(1, amount));
   const raw = lag.a - now.a;
@@ -189,7 +238,8 @@ export function createDynamicRuntime(): {
   dynDisplaceSrcMap: (params: never, w: number, h: number, phase: number) => Int32Array;
   dynNoiseU: (u: number, v: number, period: number, seed: number) => number;
   dynSpinRadAt: (params: never, t: number) => number;
+  dynArcPoints: (params: never, t: number) => { main: [number, number, number][]; branches: [number, number, number][][]; alpha: number };
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynFollowDelta, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynFollowDelta, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints };`);
   return factory() as never;
 }

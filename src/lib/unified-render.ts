@@ -75,7 +75,7 @@ import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from 
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/skeleton';
-import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followDeltaAt, glowField, glowPulseAt, spinAngleDegAt, type DynamicPatternParams } from './dynamic-patterns';
+import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
 // Blueprint evaluation (path B: unified transform + pixel via blueprint)
@@ -2203,6 +2203,41 @@ function drawDynamicParticles(
   }
 }
 
+/** 动态模式弧线段（D4 一期）：本地坐标（原点 = 枢轴，与粒子同一
+ * 变换空间）。先宽线低透明作晕，再细线本体，逐段线宽随点位收细。 */
+function drawDynamicArcs(
+  ctx: CanvasRenderingContext2D,
+  instruction: NodeRenderInstruction,
+): void {
+  const list = instruction.dynamicPatterns;
+  if (!list || list.length === 0) return;
+  const tSec = (instruction.frame ?? 0) / (instruction.frameRate || 12);
+  for (const resolved of list) {
+    const p = resolved.instance.params;
+    if (!p.arcEnabled) continue;
+    const shape = arcPointsAt(p, tSec);
+    const rgb = hexToRgb(p.arcColor || '#bfe3ff') ?? { r: 191, g: 227, b: 255 };
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const strokeLine = (pts: { x: number; y: number; w: number }[], widthMul: number, alphaMul: number) => {
+      ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${(shape.alpha * alphaMul).toFixed(3)})`;
+      for (let i = 0; i + 1 < pts.length; i++) {
+        ctx.lineWidth = Math.max(0.4, pts[i].w * widthMul);
+        ctx.beginPath();
+        ctx.moveTo(pts[i].x, pts[i].y);
+        ctx.lineTo(pts[i + 1].x, pts[i + 1].y);
+        ctx.stroke();
+      }
+    };
+    for (const line of [shape.main, ...shape.branches]) {
+      strokeLine(line, 2.6, 0.22);
+      strokeLine(line, 1, 1);
+    }
+    ctx.restore();
+  }
+}
+
 /** 发光叠加层缓存：键 = 像素内容哈希 + 发光参数签名 + 脉冲量化步 + 镜像位 */
 const glowOverlayCache = new Map<string, { canvas: HTMLCanvasElement; padX: number; padY: number } | null>();
 
@@ -2823,6 +2858,7 @@ function renderNodeSprite(
       }
       if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
         drawDynamicParticles(ctx, instruction, 'front');
+        drawDynamicArcs(ctx, instruction);
       }
       for (const mod of topEffectMods) {
         renderParticleEffect(ctx, nodeId, sprite, mod as any, frame);
@@ -2843,9 +2879,10 @@ function renderNodeSprite(
       ctx.restore();
     }
 
-    // 动态模式粒子（身前层）
+    // 动态模式粒子（身前层）+ 弧线段
     if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
       drawDynamicParticles(ctx, instruction, 'front');
+      drawDynamicArcs(ctx, instruction);
     }
 
     // ========================================================================
