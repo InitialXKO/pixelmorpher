@@ -144,26 +144,41 @@ export function analyzeTopology(bones: TopoBone[], opts: TopologyOptions = {}): 
   };
 
   // ---- 在候选中找 XZ 平面最反向的一对 ----
+  // 先看子骨骼原点相对候选节点的偏移；原点判定失效时（候选节点原点比肩线
+  // 靠后，MMD 脊椎骨常见，两肩偏移都朝前）回退到主链走向判定——胳膊/腿的
+  // 链走向在 XZ 上始终互反，与原点位置无关。
   const oppositePair = (node: number, cands: number[]): [number, number] | null => {
     const p = bones[node].worldPos;
-    let best: [number, number] | null = null;
-    let bestCos = Infinity;
-    for (let a = 0; a < cands.length; a++) {
-      for (let b = a + 1; b < cands.length; b++) {
-        const pa = bones[cands[a]].worldPos;
-        const pb = bones[cands[b]].worldPos;
-        const vax = pa.x - p.x, vaz = pa.z - p.z;
-        const vbx = pb.x - p.x, vbz = pb.z - p.z;
-        const na = Math.hypot(vax, vaz), nb = Math.hypot(vbx, vbz);
-        if (na < 1e-9 || nb < 1e-9) continue;
-        const cos = (vax * vbx + vaz * vbz) / (na * nb);
-        if (cos < -0.3 && cos < bestCos) {
-          bestCos = cos;
-          best = [cands[a], cands[b]];
+    const bestPairBy = (
+      vecOf: (c: number) => { x: number; z: number } | null,
+    ): [number, number] | null => {
+      let best: [number, number] | null = null;
+      let bestCos = Infinity;
+      for (let a = 0; a < cands.length; a++) {
+        for (let b = a + 1; b < cands.length; b++) {
+          const va = vecOf(cands[a]);
+          const vb = vecOf(cands[b]);
+          if (!va || !vb) continue;
+          const na = Math.hypot(va.x, va.z), nb = Math.hypot(vb.x, vb.z);
+          if (na < 1e-9 || nb < 1e-9) continue;
+          const cos = (va.x * vb.x + va.z * vb.z) / (na * nb);
+          if (cos < -0.3 && cos < bestCos) {
+            bestCos = cos;
+            best = [cands[a], cands[b]];
+          }
         }
       }
-    }
-    return best;
+      return best;
+    };
+    const byOrigin = bestPairBy((c) => {
+      const pc = bones[c].worldPos;
+      return { x: pc.x - p.x, z: pc.z - p.z };
+    });
+    if (byOrigin) return byOrigin;
+    return bestPairBy((c) => {
+      const d = chainDir(c);
+      return { x: d.x, z: d.z };
+    });
   };
 
   // ================= 找十字（肩） =================
@@ -215,27 +230,57 @@ export function analyzeTopology(bones: TopoBone[], opts: TopologyOptions = {}): 
   const armR = armL === armPair[0] ? armPair[1] : armPair[0];
 
   // ================= 找髋部分岔 =================
-  // 从十字沿 parent 下行，第一个有 ≥2 down 结构分支且能配对的节点
+  // 先沿 parent 上行找（骨盆即脊椎祖先的骨架，如 Mixamo）；找不到再全局扫
+  // 十字以下、含 ≥2 个 down 结构分支可配对的最高节点（MMD 的下半身是
+  // 十字的叔叔节点，不在祖先链上，祖先走法永远够不到）。
   let hipFork: number | null = null;
   let legPair: [number, number] | null = null;
   let hipExtras: number[] = [];
+  const tryFork = (node: number): boolean => {
+    const struct = children[node].filter(isStructural);
+    const downs = struct.filter((c) => classify(chainDir(c)) === 'down');
+    if (downs.length < 2) return false;
+    const pair = oppositePair(node, downs);
+    if (!pair) return false;
+    hipFork = node;
+    legPair = pair;
+    hipExtras = downs.filter((d) => d !== pair[0] && d !== pair[1]);
+    return true;
+  };
   {
     let cur: number | null = parentOf(crossNode);
     const seen = new Set<number>();
     while (cur !== null && !seen.has(cur)) {
       seen.add(cur);
-      const struct = children[cur].filter(isStructural);
-      const downs = struct.filter((c) => classify(chainDir(c)) === 'down');
-      if (downs.length >= 2) {
-        const pair = oppositePair(cur, downs);
-        if (pair) {
-          hipFork = cur;
-          legPair = pair;
-          hipExtras = downs.filter((d) => d !== pair[0] && d !== pair[1]);
-          break;
+      if (tryFork(cur)) break;
+      cur = parentOf(cur);
+    }
+    if (hipFork === null) {
+      let bestY = -Infinity;
+      for (let i = 0; i < n; i++) {
+        if (i === crossNode) continue;
+        if (bones[i].worldPos.y >= bones[crossNode].worldPos.y) continue;
+        // 候选子树不得包含十字（排除十字下方的手掌等分岔）
+        let containsCross = false;
+        {
+          let c: number | null = crossNode;
+          const guard = new Set<number>();
+          while (c !== null && !guard.has(c)) {
+            if (c === i) { containsCross = true; break; }
+            guard.add(c);
+            c = parentOf(c);
+          }
+        }
+        if (containsCross) continue;
+        const struct = children[i].filter(isStructural);
+        const downs = struct.filter((c) => classify(chainDir(c)) === 'down');
+        if (downs.length < 2) continue;
+        if (!oppositePair(i, downs)) continue;
+        if (bones[i].worldPos.y > bestY) {
+          bestY = bones[i].worldPos.y;
+          if (tryFork(i)) { /* 已记录 */ }
         }
       }
-      cur = parentOf(cur);
     }
   }
   let legL = -1, legR = -1;

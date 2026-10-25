@@ -90,8 +90,12 @@ export interface BoneMergeInfo {
   manualUnmerges: Set<number>;
 }
 
-const FINGER_TOE_RE = /finger|thumb|index|middle|ring|pinky|little|digit|toe/i;
-const HAND_FOOT_RE = /hand|foot|wrist|ankle/i;
+// 英文 + MMD 日文/中文骨骼名：指（含親指/人指/中指/薬指/小指/足指/手指）
+// つま先 = 脚尖；手首/足首 = 腕/踝。HAND_FOOT 侧的「手/足」单字覆盖
+// 手掌/手腕/脚掌等，但目标判定要求不含「指」（见 computeBoneMerge 规则 1），
+// 左手首这类正名优先于链上更远的同名单字骨骼（向上走取最近）。
+const FINGER_TOE_RE = /finger|thumb|index|middle|ring|pinky|little|digit|toe|指|つま先/i;
+const HAND_FOOT_RE = /hand|foot|wrist|ankle|手首|手|足首|足|手掌|脚掌/i;
 
 /**
  * 计算 bone 合并映射。

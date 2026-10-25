@@ -569,10 +569,42 @@ function BoneMergePanel({ input, pmxTextures, granularity, smallBoneThreshold = 
   const handleClearUnmerge = useCallback(() => {
     if (selected.size === 0) return;
     const unmerges = new Set(manualUnmerges);
-    for (const src of selected) unmerges.delete(src);
-    updateMerges(new Map(manualMerges), unmerges);
+    const merges = new Map(manualMerges);
+    for (const src of selected) {
+      unmerges.delete(src);
+      merges.delete(src);
+    }
+    updateMerges(merges, unmerges);
     setSelected(new Set());
   }, [selected, manualMerges, manualUnmerges, updateMerges]);
+
+  /** 单个 bone：手动并入父 bone（闭包解析下子树跟随） */
+  const handleMergeToParentOne = useCallback((idx: number) => {
+    if (!bones) return;
+    const p = bones[idx].parentIndex;
+    if (p === null || p === undefined || p < 0) return;
+    const merges = new Map(manualMerges);
+    const unmerges = new Set(manualUnmerges);
+    merges.set(idx, p);
+    unmerges.delete(idx);
+    updateMerges(merges, unmerges);
+  }, [bones, manualMerges, manualUnmerges, updateMerges]);
+
+  /** 批量并入父：选中 bone 各自并入父 bone。手指整链连选时，指节并入上一节、
+   * 首节并入手腕，闭包解析后整条手指归手腕 */
+  const handleMergeSelectedToParent = useCallback(() => {
+    if (!bones || selected.size === 0) return;
+    const merges = new Map(manualMerges);
+    const unmerges = new Set(manualUnmerges);
+    for (const src of selected) {
+      const p = bones[src].parentIndex;
+      if (p === null || p === undefined || p < 0) continue;
+      merges.set(src, p);
+      unmerges.delete(src);
+    }
+    updateMerges(merges, unmerges);
+    setSelected(new Set());
+  }, [bones, selected, manualMerges, manualUnmerges, updateMerges]);
 
   if (!bones) {
     return (
@@ -586,7 +618,7 @@ function BoneMergePanel({ input, pmxTextures, granularity, smallBoneThreshold = 
             {parsing ? '解析中…' : '解析骨骼（手动合并）'}
           </button>
           <span className="text-[11px] text-gray-600">
-            烘焙前可手动拆分 bone（拓扑自动合并已预应用，默认只拆主关节）
+            烘焙前可手动拆分或并入 bone（拓扑自动合并已预应用，默认只拆主关节）
           </span>
         </div>
         {parseError && <div className="mt-1 text-[11px] text-red-400">{parseError}</div>}
@@ -649,9 +681,20 @@ function BoneMergePanel({ input, pmxTextures, granularity, smallBoneThreshold = 
               </button>
             </>
           ) : (
-            <span className={`shrink-0 rounded px-1 ${isUnmerged ? 'bg-amber-900 text-amber-200' : 'bg-green-950 text-green-400'}`}>
-              {isUnmerged ? '独立 (手动拆分)' : '独立'}
-            </span>
+            <>
+              <span className={`shrink-0 rounded px-1 ${isUnmerged ? 'bg-amber-900 text-amber-200' : 'bg-green-950 text-green-400'}`}>
+                {isUnmerged ? '独立 (手动拆分)' : '独立'}
+              </span>
+              {b.parentIndex !== null && b.parentIndex !== undefined && b.parentIndex >= 0 && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleMergeToParentOne(idx); }}
+                  className="shrink-0 rounded border border-purple-800 bg-purple-950 px-1 text-[10px] text-purple-200 hover:bg-purple-900"
+                  title="手动并入父 bone（子树跟随）"
+                >
+                  并入父
+                </button>
+              )}
+            </>
           )}
         </div>
         {(childrenMap.get(idx) ?? []).map((c) => renderRow(c, depth + 1))}
@@ -711,15 +754,23 @@ function BoneMergePanel({ input, pmxTextures, granularity, smallBoneThreshold = 
               拆分选中 ({selected.size})
             </button>
             <button
+              onClick={handleMergeSelectedToParent}
+              disabled={selected.size === 0}
+              className="h-6 rounded border border-purple-800 bg-purple-950 px-2 text-[10px] text-purple-200 hover:bg-purple-900 disabled:opacity-40"
+              title="选中 bone 各自并入父 bone（手指整链连选可一次并入手腕）"
+            >
+              并入父 ({selected.size})
+            </button>
+            <button
               onClick={handleClearUnmerge}
               disabled={selected.size === 0}
               className="h-6 rounded border border-[#3a3a5a] bg-[#1a1a30] px-2 text-[10px] text-gray-400 hover:bg-[#222240] disabled:opacity-40"
-              title="清除手动拆分，恢复自动合并"
+              title="清除手动拆分与手动并入，恢复自动规则"
             >
               恢复自动
             </button>
             <span className="text-[10px] text-gray-600">
-              每行"拆分"可单独拆分；点选行或复选框多选后批量操作
+              每行"拆分/并入父"可单独操作；点选行或复选框多选后批量操作
             </span>
             <button
               onClick={onBake}
