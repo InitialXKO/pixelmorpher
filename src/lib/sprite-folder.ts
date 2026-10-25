@@ -46,6 +46,56 @@ export function bakedDirectionFromId(id: string | undefined): number | null {
   return Number(last);
 }
 
+/**
+ * 解析烘焙精灵的出生标签（角色/骨）：
+ * id 结构 spr_<角色>_<骨序>_…_<方向>（角色 id 可含下
+ * 划线，骨序 = 首个纯数字段）；骨名从精灵名剥掉
+ * 「 d<方向>」/「 lat<纬度> d<方向>」后缀得到（烘焙命
+ * 名约定），剥不掉则不填骨名。非烘焙 id 返回 null。
+ */
+export function bakedOriginFromIdAndName(
+  id: string | undefined, name: string | undefined,
+): { characterId: string; boneName?: string } | null {
+  if (bakedDirectionFromId(id) === null) return null;
+  const parts = id!.split('_');
+  const boneIdx = parts.findIndex((p, i) => i >= 2 && /^\d+$/.test(p));
+  if (boneIdx < 2) return null;
+  const characterId = parts.slice(1, boneIdx).join('_');
+  if (!characterId) return null;
+  let boneName: string | undefined;
+  if (name) {
+    const base = name.replace(/( lat\S+)? d[0-7]$/, '');
+    if (base && base !== name) boneName = base;
+  }
+  return { characterId, boneName };
+}
+
+/**
+ * 出生信息整表回填（folder + origin）：只填未设者，
+ * 幂等，用户手动改过的不覆盖。返回变更数。
+ */
+export function backfillSpriteBirth(
+  sprites: Record<string, Sprite>,
+): { sprites: Record<string, Sprite>; changed: number } {
+  let changed = 0;
+  const out: Record<string, Sprite> = {};
+  for (const [id, sp] of Object.entries(sprites)) {
+    let next = sp;
+    if (next.folder === undefined) {
+      const dir = bakedDirectionFromId(next.id ?? id);
+      const f = dir !== null ? directionFolder(dir) : null;
+      if (f) next = { ...next, folder: f };
+    }
+    if (next.origin === undefined) {
+      const o = bakedOriginFromIdAndName(next.id ?? id, next.name);
+      if (o) next = { ...next, origin: o };
+    }
+    if (next !== sp) changed++;
+    out[id] = next;
+  }
+  return { sprites: out, changed };
+}
+
 /** 单张精灵的回填后 folder（不回填返回原值） */
 export function backfilledFolder(sprite: Pick<Sprite, 'id' | 'folder'>): string | undefined {
   if (sprite.folder !== undefined) return sprite.folder;

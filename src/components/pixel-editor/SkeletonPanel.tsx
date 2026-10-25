@@ -25,6 +25,8 @@ import type {
   BoneCopyRotationConstraint,
   BoneStretchToConstraint,
 } from '@/lib/types';
+import type { Sprite } from '@/lib/unified-types';
+import SpritePicker from './SpritePicker';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -693,12 +695,12 @@ function BoneProperties({
   bone,
   skeletonId,
   allBones,
-  parts,
+  sprites,
 }: {
   bone: Bone;
   skeletonId: string;
   allBones: Bone[];
-  parts: { id: string; name: string }[];
+  sprites: Sprite[];
 }) {
   const {
     updateBone,
@@ -716,6 +718,7 @@ function BoneProperties({
   const [showAddConstraint, setShowAddConstraint] = useState(false);
   const [bindSpriteId, setBindPartId] = useState<string>('');
   const [bindWeight, setBindWeight] = useState(1);
+  const [showBindPicker, setShowBindPicker] = useState(false);
 
   // Computed rest rotation and length from head/tail
   const computedRestRotation = useMemo(() => {
@@ -933,7 +936,7 @@ function BoneProperties({
         {bone.boundParts.length > 0 && (
           <div className="space-y-1 max-h-32 overflow-y-auto">
             {bone.boundParts.map((bp) => {
-              const part = parts.find((p) => p.id === bp.spriteId);
+              const part = sprites.find((p) => p.id === bp.spriteId);
               return (
                 <div key={bp.spriteId} className="flex items-center gap-1.5 px-1.5 py-1 rounded bg-zinc-800/60 group">
                   <span className="text-[10px] text-zinc-300 flex-1 min-w-0 truncate">
@@ -962,39 +965,48 @@ function BoneProperties({
           </div>
         )}
 
-        {/* Add part binding */}
-        {parts.length > 0 && (
-          <div className="flex items-center gap-1.5">
-            <Select value={bindSpriteId} onValueChange={setBindPartId}>
-              <SelectTrigger className="h-5 text-[10px] bg-zinc-800 border-zinc-700 text-zinc-200 flex-1">
-                <SelectValue placeholder="Select part" />
-              </SelectTrigger>
-              <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-200">
-                {parts
-                  .filter((p) => !bone.boundParts.some((bp) => bp.spriteId === p.id))
-                  .map((p) => (
-                    <SelectItem key={p.id} value={p.id} className="text-[10px]">{p.name}</SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
-            <Input
-              type="number"
-              value={bindWeight}
-              onChange={(e) => setBindWeight(Number(e.target.value))}
-              min={0}
-              max={1}
-              step={0.1}
-              className="h-5 w-12 text-[10px] bg-zinc-800 border-zinc-700 text-zinc-200 px-1 py-0"
-            />
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-5 p-0 text-zinc-500 hover:text-emerald-400"
-              onClick={handleBindPart}
-              disabled={!bindSpriteId}
-            >
-              <Plus className="size-3" />
-            </Button>
+        {/* Add part binding（共用选择器 SpritePicker） */}
+        {sprites.length > 0 && (
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              <button
+                className="h-5 flex-1 text-[10px] bg-zinc-800 border border-zinc-700 text-zinc-200 rounded px-1.5 text-left truncate"
+                onClick={() => setShowBindPicker((v) => !v)}
+              >
+                {bindSpriteId
+                  ? (sprites.find((p) => p.id === bindSpriteId)?.name ?? bindSpriteId)
+                  : '选择精灵…'}
+              </button>
+              <Input
+                type="number"
+                value={bindWeight}
+                onChange={(e) => setBindWeight(Number(e.target.value))}
+                min={0}
+                max={1}
+                step={0.1}
+                className="h-5 w-12 text-[10px] bg-zinc-800 border-zinc-700 text-zinc-200 px-1 py-0"
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-5 p-0 text-zinc-500 hover:text-emerald-400"
+                onClick={() => { handleBindPart(); setShowBindPicker(false); }}
+                disabled={!bindSpriteId}
+              >
+                <Plus className="size-3" />
+              </Button>
+            </div>
+            {showBindPicker && (
+              <SpritePicker
+                sprites={sprites.filter((p) => !bone.boundParts.some((bp) => bp.spriteId === p.id))}
+                selectedId={bindSpriteId || null}
+                groupBy={(sp) => sp.folder ?? ''}
+                onPick={(spriteId) => {
+                  if (spriteId) setBindPartId(spriteId);
+                  setShowBindPicker(false);
+                }}
+              />
+            )}
           </div>
         )}
       </div>
@@ -1150,9 +1162,9 @@ export default function SkeletonPanel() {
     [activeSkeleton],
   );
 
-  // Parts list for binding
-  const partsList = useMemo(
-    () => Object.values(sprites).map((p) => ({ id: p.id!, name: p.name ?? '' })),
+  // 可绑定精灵（共用选择器 SpritePicker 的数据源）
+  const spriteList = useMemo(
+    () => Object.values(sprites).filter((p) => p.id),
     [sprites],
   );
 
@@ -1286,7 +1298,7 @@ export default function SkeletonPanel() {
               bone={selectedBone}
               skeletonId={activeSkeleton.id}
               allBones={activeSkeleton.bones}
-              parts={partsList}
+              sprites={spriteList}
             />
           ) : activeSkeleton ? (
             <div className="flex flex-col items-center justify-center py-6 text-center">

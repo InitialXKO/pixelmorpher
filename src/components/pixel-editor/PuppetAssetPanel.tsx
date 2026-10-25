@@ -127,6 +127,14 @@ function SpritePropertiesSection({ sprite }: { sprite: Sprite }) {
       <h4 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
         精灵属性 · {sprite.name ?? '未命名精灵'}
       </h4>
+      {(sprite.folder || sprite.origin) && (
+        <div className="text-[9px] text-gray-600">
+          {sprite.folder && <span>文件夹：{sprite.folder}</span>}
+          {sprite.origin && (
+            <span>{sprite.folder ? ' · ' : ''}出身：{sprite.origin.characterId}{sprite.origin.boneName ? ` / ${sprite.origin.boneName}` : ''}</span>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
           <Label className="text-[10px] text-gray-500">锚点 X</Label>
@@ -1077,7 +1085,7 @@ export default function PuppetAssetPanel() {
               </div>
             )}
             {sectionExpanded.sprites && (
-              <div className="space-y-0.5 mt-0.5 max-h-32 overflow-y-auto">
+              <div className="space-y-0.5 mt-0.5 max-h-64 overflow-y-auto">
                 {spriteGroups.map((group) => (
                   <React.Fragment key={group.folder || '__none'}>
                     {spriteGroups.length > 1 && (
@@ -1085,17 +1093,29 @@ export default function PuppetAssetPanel() {
                         {group.label}（{group.items.length}）
                       </div>
                     )}
+                    <div className="grid grid-cols-3 gap-1 px-0.5">
                     {group.items.map((sprite) => (
                   <ContextMenu key={sprite.id}>
                     <ContextMenuTrigger asChild>
                   <div
-                    className="group flex items-center gap-1.5 px-1.5 py-0.5 text-[9px] text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded cursor-pointer transition-colors"
-                    title="编辑像素"
+                    className={`relative flex flex-col items-center gap-0.5 p-1 text-[9px] text-gray-500 hover:text-gray-300 hover:bg-white/5 rounded cursor-pointer transition-colors ${
+                      sprite.id && sprite.id === selectedSpriteId ? 'bg-cyan-500/15 outline outline-1 outline-cyan-500/40' : ''
+                    }`}
+                    title={`${sprite.name ?? ''}（编辑像素）`}
                     onClick={() => {
                       useEditorStore.getState().enterSpriteEditMode(sprite.id!);
                     }}
                   >
-                    <SpriteThumb sprite={sprite} size={18} className="rounded-sm bg-black/50 flex-shrink-0" />
+                    <SpriteThumb sprite={sprite} size={44} className="rounded-sm bg-black/50" />
+                    {(() => {
+                      const lm = (sprite as any).landmarks;
+                      const n = lm ? ['leftEye', 'rightEye', 'nose', 'mouth'].filter((k) => (lm as any)[k]).length : 0;
+                      return n > 0 ? (
+                        <span className="absolute top-0.5 right-0.5 text-[8px] text-cyan-400/90" title="特征点标注">
+                          ◉{n}/4
+                        </span>
+                      ) : null;
+                    })()}
                     {renaming?.kind === 'sprite' && renaming.id === sprite.id ? (
                       <RowRenameInput
                         initial={sprite.name ?? ''}
@@ -1107,30 +1127,11 @@ export default function PuppetAssetPanel() {
                         }}
                       />
                     ) : (
-                      <span className="truncate flex-1 min-w-0">{sprite.name}</span>
+                      <span className="truncate w-full text-center">{sprite.name}</span>
                     )}
-                    {(() => {
-                      const lm = (sprite as any).landmarks;
-                      const n = lm ? ['leftEye', 'rightEye', 'nose', 'mouth'].filter((k) => (lm as any)[k]).length : 0;
-                      return n > 0 ? (
-                        <span className="text-cyan-500/80" title="特征点标注">
-                          ◉{n}/4
-                        </span>
-                      ) : null;
-                    })()}
-                    <span className="text-gray-700">
+                    <span className="text-[8px] text-gray-700">
                       {sprite.width}x{sprite.height}
                     </span>
-                    <button
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 hover:text-white"
-                      title="编辑像素"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        useEditorStore.getState().enterSpriteEditMode(sprite.id!);
-                      }}
-                    >
-                      ✏️
-                    </button>
                   </div>
                     </ContextMenuTrigger>
                     <ContextMenuContent className="min-w-36">
@@ -1207,6 +1208,7 @@ export default function PuppetAssetPanel() {
                     </ContextMenuContent>
                   </ContextMenu>
                     ))}
+                    </div>
                   </React.Fragment>
                 ))}
               </div>

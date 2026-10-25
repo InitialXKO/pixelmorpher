@@ -633,6 +633,8 @@ export function mapBonesToNodes(
         globalCameraHalf: dir.globalCameraHalf ?? 1.0,
         // 出生方向归档（sprite-folder）：烘焙时按方向落夹
         folder: directionFolder(dir.direction) ?? undefined,
+        // 出生标签（Q1 定案）：只在烘焙时写入，复用不追加
+        origin: { characterId, boneName: pb.boneName },
       };
       sprites[spriteId] = sprite;
       if (dirLat === 0) {
@@ -832,6 +834,7 @@ export function mapBonesToNodesLayered(
           partCameraHalf: dir.cameraHalf,
           globalCameraHalf: dir.globalCameraHalf ?? 1.0,
           folder: directionFolder(dir.direction) ?? undefined,
+          origin: { characterId, boneName: pb.boneName },
         };
         sprites[spriteId] = sprite;
         if (dirLat === 0) {

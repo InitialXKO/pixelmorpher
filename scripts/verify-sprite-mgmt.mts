@@ -55,8 +55,9 @@ function check(name: string, cond: boolean) {
   check('3b DressPanel：选择器与槽位图走共用组件',
     dress.includes("from '../SpritePicker'") && dress.includes("from '../SpriteThumb'"));
   const panel = readFileSync(new URL('../src/components/pixel-editor/PuppetAssetPanel.tsx', import.meta.url), 'utf8');
-  check('3c 左侧列表：行内共用缩略图 + 搜索过滤',
-    panel.includes('<SpriteThumb sprite={sprite} size={18}')
+  check('3c 左侧列表：缩略图+名字网格（Q2/Q4 定案形态）+ 搜索过滤',
+    panel.includes('<SpriteThumb sprite={sprite} size={44}')
+    && panel.includes('grid grid-cols-3')
     && panel.includes('filterSpritesByQuery(Object.values(sprites), spriteQuery)'));
 }
 
@@ -106,10 +107,51 @@ function check(name: string, cond: boolean) {
   check('4h 烘焙建精灵两处都写方向夹',
     (mapper.match(/folder: directionFolder\(dir\.direction\)/g) ?? []).length === 2);
   const slice = readFileSync(new URL('../src/lib/store/project-slice.ts', import.meta.url), 'utf8');
-  check('4i 导入路径接回填', slice.includes('backfillSpriteFolders(migratedSprites)'));
+  check('4i 导入路径接回填', slice.includes('backfillSpriteBirth(migratedSprites)'));
   const panel = readFileSync(new URL('../src/components/pixel-editor/PuppetAssetPanel.tsx', import.meta.url), 'utf8');
   check('4j 左侧列表按夹分组 + 右键移夹',
     panel.includes('spriteGroups.map') && panel.includes('移入文件夹'));
+}
+
+// ---------- 5) 出生标签（Q1 定案：只烘焙时打、复用不追加） + Q3 全迁 ----------
+{
+  const { bakedOriginFromIdAndName, backfillSpriteBirth } = await import('../src/lib/sprite-folder');
+  check('5a 出生解析：角色 id（含下划线）+ 骨名剥方向后缀',
+    (() => {
+      const o = bakedOriginFromIdAndName('spr_my_char_12_6', '头 d6');
+      return o?.characterId === 'my_char' && o?.boneName === '头';
+    })());
+  check('5b 出生解析：lat 名剥两段后缀、图层名保留层标记',
+    (() => {
+      const o = bakedOriginFromIdAndName('spr_c_3_lat45_2', '臂 lat45 d2');
+      const o2 = bakedOriginFromIdAndName('spr_c_3_layer1_0', '臂·上衣 d0');
+      return o?.boneName === '臂' && o2?.boneName === '臂·上衣';
+    })());
+  check('5c 非烘焙精灵无出生', bakedOriginFromIdAndName('hand_1', '手绘') === null);
+  const spr = (id: string, name: string, origin?: unknown, folder?: string) => ({
+    id, name, folder, origin, width: 4, height: 4, data: [],
+  }) as never;
+  const table = {
+    a: spr('spr_ch_1_6', '头 d6'),
+    b: spr('spr_ch_2_0', '臂 d0', { characterId: '别人' }),
+    c: spr('hand', '手绘'),
+  };
+  const r = backfillSpriteBirth(table);
+  check('5d 出生回填：未设者补、已有 origin 不覆盖、folder 独立回填',
+    r.changed === 2
+    && (r.sprites.a as { origin?: { characterId: string } }).origin?.characterId === 'ch'
+    && (r.sprites.a as { folder?: string }).folder === '方向/南'
+    && (r.sprites.b as { origin?: { characterId: string } }).origin?.characterId === '别人'
+    && (r.sprites.b as { folder?: string }).folder === '方向/东');
+  check('5e 出生回填幂等', backfillSpriteBirth(r.sprites).changed === 0);
+
+  const mapper = readFileSync(new URL('../src/lib/bake/skeleton-mapper.ts', import.meta.url), 'utf8');
+  check('5f 烘焙两处写出生标签',
+    (mapper.match(/origin: \{ characterId, boneName: pb\.boneName \}/g) ?? []).length === 2);
+  const skel = readFileSync(new URL('../src/components/pixel-editor/SkeletonPanel.tsx', import.meta.url), 'utf8');
+  check('5g Q3 全迁：骨骼绑定走共用选择器、无 partsList 文字名单残留',
+    skel.includes("from './SpritePicker'") && !skel.includes('partsList')
+    && !skel.includes('parts: { id: string; name: string }[]'));
 }
 
 console.log(`\n精灵管理探针全过（${passed} 项）`);
