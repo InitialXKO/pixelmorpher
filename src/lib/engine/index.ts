@@ -38,7 +38,7 @@ export {
 export { interpolateModifiers, invalidateInterpolationCache } from './interpolation';
 
 // Skeleton
-export { computeBoneTransforms } from './skeleton';
+export { applyProceduralAnimations } from './procedural';
 
 // Frame cache
 export {

@@ -74,7 +74,7 @@ import {
 import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from './engine/brush-render';
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
-import { applyProceduralAnimations } from './engine/skeleton';
+import { applyProceduralAnimations } from './engine/procedural';
 import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
 import { markPointPx, markDirAngleDeg } from './sprite-marks';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
@@ -88,7 +88,7 @@ import { isIKChainSuspended } from './ik-drag-state';
 import type { BlueprintGraph } from './blueprint/ir';
 import type { VariableContext as EngineVariableContext } from './engine/param-driver';
 import type {
-  PixelGrid, ModifierType, Keyframe, Skeleton, ProceduralAnimation,
+  PixelGrid, ModifierType, Keyframe, ProceduralAnimation,
   EffectTrack, MotionBlurStroke, EffectStroke, GlobalModifier,
   AnimationVariable as StoreAnimationVariable, AnimationClip, CanvasModifierTrack,
 } from './types';
@@ -3332,7 +3332,6 @@ export function renderUnified(
   effectStrokes: EffectStroke[] | undefined,
   autoMotionBlur: boolean,
   autoMotionBlurIntensity: number,
-  skeletons: Skeleton[] | undefined,
   proceduralAnimations: ProceduralAnimation[] | undefined,
   canvasModifierTracks: CanvasModifierTrack[] | undefined,
   frameRate: number,
@@ -3419,7 +3418,6 @@ export function renderUnifiedToCanvas(
   effectStrokes?: EffectStroke[],
   autoMotionBlur: boolean = false,
   autoMotionBlurIntensity: number = 0.5,
-  skeletons?: Skeleton[],
   proceduralAnimations?: ProceduralAnimation[],
   canvasModifierTracks?: CanvasModifierTrack[],
   previewQuality: 'low' | 'medium' | 'high' = 'high',

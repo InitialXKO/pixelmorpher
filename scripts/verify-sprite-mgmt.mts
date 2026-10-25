@@ -148,10 +148,12 @@ function check(name: string, cond: boolean) {
   const mapper = readFileSync(new URL('../src/lib/bake/skeleton-mapper.ts', import.meta.url), 'utf8');
   check('5f 烘焙两处写出生标签',
     (mapper.match(/origin: \{ characterId, boneName: pb\.boneName \}/g) ?? []).length === 2);
-  const skel = readFileSync(new URL('../src/components/pixel-editor/SkeletonPanel.tsx', import.meta.url), 'utf8');
-  check('5g Q3 全迁：骨骼绑定走共用选择器、无 partsList 文字名单残留',
-    skel.includes("from './SpritePicker'") && !skel.includes('partsList')
-    && !skel.includes('parts: { id: string; name: string }[]'));
+  // 5g 更正（2026-10-26）：SkeletonPanel 经查实为无挂载点的孤儿面板，用户下令连同旧骨骼系统删除；
+  // 原「Q3 全迁」检查对象已不存在，改为断言删除干净：文件不在、全仓无引用。
+  const { existsSync } = await import('node:fs');
+  check('5g 旧骨骼面板已删除（Q3 迁移对象经查实为孤儿面板）',
+    !existsSync(new URL('../src/components/pixel-editor/SkeletonPanel.tsx', import.meta.url))
+    && !existsSync(new URL('../src/lib/store/skeleton-slice.ts', import.meta.url)));
 }
 
 console.log(`\n精灵管理探针全过（${passed} 项）`);

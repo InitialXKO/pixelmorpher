@@ -245,9 +245,6 @@ export function getCursorStyle(tool: string, spaceHeld: boolean, puppetArmed: bo
     case 'glow_brush':
     case 'particle_brush':
     case 'afterimage_brush':
-    case 'bone':
-    case 'ik':
-    case 'weight_paint':
     case 'lasso':
     case 'magic_wand':
     case 'smart_select':

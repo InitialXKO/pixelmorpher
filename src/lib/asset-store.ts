@@ -343,7 +343,6 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
       type = 'animation_editing';
       summary.animPartCount = projectStore.parts.length;
       summary.animKeyframeCount = projectStore.keyframes.length;
-      summary.animSkeletonCount = projectStore.skeletons.length;
     }
 
     summary.type = type;

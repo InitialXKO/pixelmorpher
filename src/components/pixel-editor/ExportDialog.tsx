@@ -458,7 +458,6 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
     motionBlurStrokes,
     effectStrokes,
     effectTracks,
-    skeletons,
     proceduralAnimations,
     canvasModifierTracks,
     name: projectName,
@@ -544,7 +543,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
     } catch {
       setPreviewUrl(null);
     }
-  }, [open, settings.scale, settings.backgroundMode, settings.customBgColor, canvasWidth, canvasHeight, sprites, keyframes, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations]);
+  }, [open, settings.scale, settings.backgroundMode, settings.customBgColor, canvasWidth, canvasHeight, sprites, keyframes, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations]);
 
   // ---- Background color for rendering ----
   const getBgColor = useCallback(() => {
@@ -616,7 +615,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations]);
+  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations]);
 
   // ---- Export: Spritesheet ----
   const exportSpritesheet = useCallback(async () => {
@@ -706,7 +705,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations]);
+  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations]);
 
   // ---- Export: GIF (using gif.js encoder) ----
   const exportGif = useCallback(async () => {
@@ -787,7 +786,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, frameRate, projectName]);
+  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations, frameRate, projectName]);
 
   // ---- Export: Video (V2.0) ----
   const exportVideo = useCallback(async () => {
@@ -905,7 +904,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, frameRate, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, skeletons, proceduralAnimations, projectName]);
+  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, frameRate, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations, projectName]);
 
   // ---- Export: Lottie (V2.0) ----
   const exportLottie = useCallback(async () => {
@@ -1446,9 +1445,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
             <div className="space-y-3">
               <div className="text-xs text-gray-500 bg-white/[0.03] rounded-md p-3 space-y-1">
                 <div className="font-medium text-gray-400">Export Project File (.pxm)</div>
-                <div>Save the complete project including all sprites, keyframes, skeletons, and procedural animations.</div>
+                <div>Save the complete project including all sprites, keyframes, and procedural animations.</div>
                 <div className="text-[10px] text-gray-600 mt-1">
-                  {Object.keys(sprites).length} sprites · {keyframes.length} keyframes · {skeletons.length} skeletons · {proceduralAnimations.length} procedural anims
+                  {Object.keys(sprites).length} sprites · {keyframes.length} keyframes · {proceduralAnimations.length} procedural anims
                 </div>
               </div>
               <Button

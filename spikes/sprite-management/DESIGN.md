@@ -272,6 +272,17 @@
    着的选择面只有 DressPanel 与左侧面板，两面均已
    迁完。SkeletonPanel 及旧骨骼系统的去留另候处
    置（旧系统是否已死自 2026-10-13 起未确认）。
+   **处置（同日，用户下令「删」）**：SkeletonPanel、
+   skeleton-slice、engine/skeleton 的 IK/骨骼变换、
+   Bone/Skeleton/WeightMap 类型、画布旧骨骼/权重覆
+   盖层、findBoneAtPixel/applyWeightPaint、editor-
+   store 旧字段、project 存档 skeletons/weightMaps
+   字段、示例工程的旧骨骼段、renderUnified 被忽略
+   的 skeletons 形参，一并删除（净删约 2260 行）。
+   活功能程序化动画从 skeleton-slice/engine/skele-
+   ton 迁出至 procedural-slice/engine/procedural 保
+   留。tsc/build/全部探针过（两支探针因 /tmp 模型
+   夹具缺失失败，与删除无关）。
 4. **Q4**：用户定调「不要二极管，缩略图和文字不
    冲突」——网格格子里图与名并存，即第 2 条形态。
 

@@ -3,7 +3,7 @@
  * SpritePicker — 全仓共用精灵选择器（research/sprite-management）
  *
  * 盘点实锤：选精灵的界面现有三套互不相通的写法（DressPanel
- * 内嵌缩略图网格、SkeletonPanel 文字名单、左侧列表纯文字
+ * 内嵌缩略图网格、骨骼绑定文字名单、左侧列表纯文字
  * 行）。这里收成一个组件：搜索框（名字过滤）+ 缩略图网格
  * + 当前选中高亮，各调用面只给 sprites 与 onPick。
  *
