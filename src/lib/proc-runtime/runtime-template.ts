@@ -388,12 +388,13 @@ function displaceOfRt(part) {
       // 精灵的 direction/vector 标记时以标记角为准（direction
       // 直取；vector 按精灵像素分量取 atan2，y 向下——与编辑器
       // markDirAngleDeg 同口径），未命中用 displaceDeg
-      if (p.displaceDirMark && part.sprite && Array.isArray(part.sprite.marks)) {
-        for (const mk of part.sprite.marks) {
+      const dirSrc = part.sprite || (part.base && part.base.baseSprite) || null;
+      if (p.displaceDirMark && dirSrc && Array.isArray(dirSrc.marks)) {
+        for (const mk of dirSrc.marks) {
           if (!mk || mk.name !== p.displaceDirMark) continue;
           if (mk.kind === 'direction') return { ...p, displaceDeg: ((mk.angleDeg % 360) + 360) % 360 };
           if (mk.kind === 'vector') {
-            const dx = mk.dx * part.sprite.w, dy = mk.dy * part.sprite.h;
+            const dx = mk.dx * dirSrc.w, dy = mk.dy * dirSrc.h;
             if (dx !== 0 || dy !== 0) {
               const a = (Math.atan2(dy, dx) * 180) / Math.PI;
               return { ...p, displaceDeg: ((a % 360) + 360) % 360 };
@@ -806,16 +807,21 @@ function ensureAtlas(gl, variant, costumeName) {
     // 挂 [12]（名 → 角度）
     let marksPx = null;
     let marksDir = null;
-    if (spriteGrid && Array.isArray(spriteGrid.marks) && tileList.length) {
+    // 标记来源：精灵部件走 spriteGrid；参数化部件走代表图 baseSprite
+    // （缺口 8：此前 baseSprite.marks 无人读，底图路径的发射点/弧线
+    // 原点/发光选区标记全部失效）。两者标记都按各自精灵归一化，同一
+    // 换算口径（瓦片内居中偏移 + 镜像翻 x）。
+    const markSrc = spriteGrid || (resolved && resolved.baseSprite) || null;
+    if (markSrc && Array.isArray(markSrc.marks) && tileList.length) {
       const t0 = tileList[0];
-      const mx0 = (t0.w - spriteGrid.w) / 2, my0 = (t0.h - spriteGrid.h) / 2;
+      const mx0 = (t0.w - markSrc.w) / 2, my0 = (t0.h - markSrc.h) / 2;
       marksPx = {};
       marksDir = {};
-      for (const mk of spriteGrid.marks) {
+      for (const mk of markSrc.marks) {
         if (!mk || typeof mk.name !== 'string') continue;
         if ((mk.kind === 'point' || mk.kind === 'vector') && !(mk.name in marksPx)) {
-          let px = mx0 + mk.x * spriteGrid.w;
-          const py = my0 + mk.y * spriteGrid.h;
+          let px = mx0 + mk.x * markSrc.w;
+          const py = my0 + mk.y * markSrc.h;
           if (mirrored) px = t0.w - 1 - px;
           marksPx[mk.name] = [px, py];
         }
@@ -823,7 +829,7 @@ function ensureAtlas(gl, variant, costumeName) {
           marksDir[mk.name] = ((mk.angleDeg % 360) + 360) % 360;
         }
         if (mk.kind === 'vector' && !(mk.name in marksDir)) {
-          const dx = mk.dx * spriteGrid.w, dy = mk.dy * spriteGrid.h;
+          const dx = mk.dx * markSrc.w, dy = mk.dy * markSrc.h;
           if (dx !== 0 || dy !== 0) {
             const a = (Math.atan2(dy, dx) * 180) / Math.PI;
             marksDir[mk.name] = ((a % 360) + 360) % 360;

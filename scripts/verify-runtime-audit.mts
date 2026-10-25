@@ -134,6 +134,12 @@ check('缺口1·已修：resolvePart 全量覆盖服装件派生字段（含 sur
   check('缺口3·运行时模板消费 GLOBAL_GRAPH', template.includes('const GLOBAL_GRAPH = EMBEDDED.globalGraph') && template.includes("gout.get('__global')"));
 }
 
+// ---- 缺口 8（已修）：baseSprite.marks 在底图路径消费 ----
+check('缺口8·标记换算来源含 resolved.baseSprite',
+  template.includes('const markSrc = spriteGrid || (resolved && resolved.baseSprite) || null'));
+check('缺口8·置换方向标记来源含 base.baseSprite',
+  template.includes('part.sprite || (part.base && part.base.baseSprite) || null'));
+
 // ---- 未修缺口（关了 = 有人修了，须更新 AUDIT 分类）----
 check('缺口4·运行时仍无网格蒙皮（修复后更新文档）',
   !template.includes('skinning') && !dynSrc.includes('skinning'));
