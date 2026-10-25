@@ -252,6 +252,13 @@ function dynSourcePoints(params, tile, contour) {
     return pts;
   }
   if (params.source === 'plug') return [{ x: tile.cx - 0.5, y: tile.cy - 0.5, nx: 0, ny: -1 }];
+  if (params.source === 'mark') {
+    // 精灵标记点：瓦片像素位由 ensureAtlas 按瓦片几何算好挂
+    // tile.marksN（名 → [x, y]）；缺失 → 回落 plug 点（同编辑器）
+    const mp = tile.marksN && params.emitMark ? tile.marksN[params.emitMark] : undefined;
+    if (mp) return [{ x: mp[0] - 0.5, y: mp[1] - 0.5, nx: 0, ny: -1 }];
+    return [{ x: tile.cx - 0.5, y: tile.cy - 0.5, nx: 0, ny: -1 }];
+  }
   return contour;
 }
 function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {

@@ -9,6 +9,7 @@
 // ============================================================
 
 import { subToPx, type PixelGrid, type Sprite } from './unified-types';
+import { markPointPx } from './sprite-marks';
 import { hashPixelGrid } from './engine/render-cache';
 import {
   dynamicDeformAt,
@@ -105,6 +106,15 @@ function sourcePoints(params: DynamicPatternParams, sprite: Sprite): ContourPoin
       return pts;
     }
     case 'plug': {
+      const px = sprite.plug ? subToPx(sprite.plug.x) : sprite.width / 2;
+      const py = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
+      return [{ x: px - 0.5, y: py - 0.5, nx: 0, ny: -1 }];
+    }
+    case 'mark': {
+      // 精灵标记点（研究线 sprite-marks）：按名解析点标记；
+      // 缺失/种类不符 → 回落 plug 点（解析层约定，永不崩）
+      const mp = markPointPx(sprite, params.emitMark);
+      if (mp) return [{ x: mp.x - 0.5, y: mp.y - 0.5, nx: 0, ny: -1 }];
       const px = sprite.plug ? subToPx(sprite.plug.x) : sprite.width / 2;
       const py = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
       return [{ x: px - 0.5, y: py - 0.5, nx: 0, ny: -1 }];

@@ -44,6 +44,7 @@ const SOURCE_OPTIONS: { v: DynamicPatternParams['source']; label: string }[] = [
   { v: 'contour-bottom', label: '轮廓下半' },
   { v: 'inside', label: '内部' },
   { v: 'plug', label: '枢轴点' },
+  { v: 'mark', label: '精灵标记点' },
 ];
 const LAYER_OPTIONS: { v: DynamicPatternParams['layer']; label: string }[] = [
   { v: 'back', label: '身后' },
@@ -265,6 +266,18 @@ export default function DynamicPatternEditor({
                 {LAYER_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
               </select>
             </div>
+            {inst.params.source === 'mark' && (
+              <div>
+                <Label className="text-[9px] text-gray-600">标记名（精灵上的点标记）</Label>
+                <input
+                  type="text"
+                  value={np(inst).emitMark}
+                  onChange={(e) => patchParam(inst.id, 'emitMark', e.target.value)}
+                  placeholder="如：枪口"
+                  className="h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded mt-1 w-full text-gray-300 px-1"
+                />
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3 text-[10px] text-gray-400">
             <label className="flex items-center gap-1">

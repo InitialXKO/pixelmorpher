@@ -774,6 +774,23 @@ function ensureAtlas(gl, variant, costumeName) {
         dispMaps.push(dynDisplaceSrcMap(disp, tileList[0].w, tileList[0].h, di / dispSteps));
       }
     }
+    // 精灵标记点（研究线 sprite-marks）：点/矢量标记按瓦片几何
+    // 换算成瓦片像素位（名 → [x, y]），挂条目新下标 [10]
+    // （[6] 已被 tileExtra 占用，勿复用——见 spikes/sprite-marks）
+    let marksPx = null;
+    if (spriteGrid && Array.isArray(spriteGrid.marks) && tileList.length) {
+      const t0 = tileList[0];
+      const mx0 = (t0.w - spriteGrid.w) / 2, my0 = (t0.h - spriteGrid.h) / 2;
+      marksPx = {};
+      for (const mk of spriteGrid.marks) {
+        if (!mk || (mk.kind !== 'point' && mk.kind !== 'vector') || typeof mk.name !== 'string') continue;
+        let px = mx0 + mk.x * spriteGrid.w;
+        const py = my0 + mk.y * spriteGrid.h;
+        if (mirrored) px = t0.w - 1 - px;
+        if (!(mk.name in marksPx)) marksPx[mk.name] = [px, py];
+      }
+      if (!Object.keys(marksPx).length) marksPx = null;
+    }
     for (let fi = 0; fi < tileList.length; fi++) {
       const diMax = disp ? dispSteps : 1;
       for (let di = 0; di < diMax; di++) {
@@ -785,7 +802,8 @@ function ensureAtlas(gl, variant, costumeName) {
           di > 0 ? dispMaps[di] : null,
           fi === 0 && di === 0 && disp
             ? { speed: disp.displaceSpeed || 0, phase: disp.displacePhase || 0, steps: dispSteps }
-            : null]);
+            : null,
+          marksPx]);
       }
     }
   }
@@ -908,7 +926,7 @@ function ensureAtlas(gl, variant, costumeName) {
       const rec = (animFrameMap[bk] = animFrameMap[bk] || {});
       rec[fi + ',' + di] = { tile: tile, place: [ax, ay] };
     } else {
-      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][6] || null });
+      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][6] || null, marksN: entries[i][10] || null });
     }
   });
   for (const bk in animFrameMap) {
@@ -1726,7 +1744,7 @@ function frame(now) {
     // 双锚点查表：全部部件的锚点信息（目标部件未必挂动态模式）
     partAnchorsByKey.set(part.key, { ctr: ctr, rot: rotA, plugC: plugC, dsx: dsx, dsy: dsy });
     if (dynList.length > 0) {
-      dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: rotA, dynList: dynList, dsx: dsx, dsy: dsy, plugC: plugC });
+      dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: rotA, dynList: dynList, dsx: dsx, dsy: dsy, plugC: plugC, marksN: entry.marksN || null });
     }
   });
   // 动态粒子：瓦片空间模拟（连续钟 elapsed × 包帧率量化帧，
@@ -1795,7 +1813,7 @@ function frame(now) {
       }
       for (const inst of a.dynList) {
         for (const layer of ['back', 'front']) {
-          const ps = dynSimulate(inst, a.tile, frameIdx, FRAME_RATE, layer, a.part.key);
+          const ps = dynSimulate(inst, a.marksN ? { ...a.tile, marksN: a.marksN } : a.tile, frameIdx, FRAME_RATE, layer, a.part.key);
           const target = layer === 'back' ? backVerts : frontVerts;
           for (const pt of ps) {
             const gx = pt.x * a.dsx, gy = pt.y * a.dsy;

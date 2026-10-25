@@ -50,7 +50,7 @@ export interface RuntimePartBase {
   /** 轮廓外延宽度（0..8） */
   haloWidth?: number;
   /** silhouette/overlay 的底图精灵（东向解析结果，产品空间像素网格） */
-  baseSprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][] };
+  baseSprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] };
 }
 
 /** 运行时动态实例（双挂载解析后：实例 id + 效果位 + 参数）。
@@ -125,7 +125,7 @@ export interface RuntimePart {
   /** 精灵部件（无参数化外观）：模板按直贴图瓦片绘制 */
   spriteKind?: boolean;
   /** 精灵部件在默认服装集下的显示方向精灵网格（逐集见 costumes[*].__sprite） */
-  sprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][] };
+  sprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] };
 }
 
 export interface ProcRuntimePackage {
@@ -211,6 +211,7 @@ function displaySpriteOf(
           ? [subToPx(r.sprite.plug.x), subToPx(r.sprite.plug.y)]
           : [r.sprite.width / 2, r.sprite.height / 2],
         data: r.sprite.data,
+        marks: r.sprite.marks,
       };
     }
   }

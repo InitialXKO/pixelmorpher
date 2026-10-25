@@ -9,7 +9,7 @@
 // 绘制层（枢轴原点），不写回精灵像素。
 // ============================================================
 
-export type DynamicEmitSource = 'contour' | 'contour-top' | 'contour-bottom' | 'inside' | 'plug';
+export type DynamicEmitSource = 'contour' | 'contour-top' | 'contour-bottom' | 'inside' | 'plug' | 'mark';
 export type DynamicLayer = 'back' | 'front' | 'both';
 
 export interface DynamicPatternParams {
@@ -77,6 +77,7 @@ export interface DynamicPatternParams {
   // 发射段
   emitEnabled: boolean;
   source: DynamicEmitSource;
+  emitMark: string;      // source='mark' 时引用的精灵点标记名（缺失回落 plug 点）
   rate: number;          // 每秒生成数（峰值，受 linkToDeform 调制）
   linkToDeform: number;  // 发射率随形变脉冲的调制深度 0..1（0=恒定）
   speed: number;         // 初速（px/秒，沿发射方向 + 法线混合）
@@ -184,7 +185,7 @@ export function defaultDynamicParams(): DynamicPatternParams {
     arcColor: '#bfe3ff',
     arcMode: 'arc', arcGrowHz: 0, arcTarget: '', arcDetail: 0,
     followEnabled: false, followSource: '', followDelaySec: 0.12, followAmount: 0.7, followRotate: true,
-    emitEnabled: true, source: 'contour', rate: 12, linkToDeform: 0, speed: 6,
+    emitEnabled: true, source: 'contour', emitMark: '', rate: 12, linkToDeform: 0, speed: 6,
     directionDeg: 270, spreadDeg: 60, layer: 'both', frontRatio: 0.35,
     life: 0.9, sizeStart: 3, sizeEnd: 8, rise: 12, buoy: 0, turbulence: 4,
     color: '#ffb46b', alpha: 0.5, maxParticles: 90,
@@ -213,6 +214,7 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
     ? ((out.glowAngleDeg % 360) + 360) % 360 : 270;
   if (out.glowAngleSpace !== 'world') out.glowAngleSpace = 'sprite';
   if (typeof out.followSource !== 'string') out.followSource = '';
+  if (typeof out.emitMark !== 'string') out.emitMark = '';
   out.followDelaySec = Number.isFinite(out.followDelaySec)
     ? Math.max(0, Math.min(1, out.followDelaySec)) : 0.12;
   out.followAmount = Number.isFinite(out.followAmount)
