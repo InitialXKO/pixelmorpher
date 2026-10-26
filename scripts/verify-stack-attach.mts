@@ -110,6 +110,46 @@ const insAfter = planAfter.nodeInstructions.find((i) => i.nodeId === torso.id);
 ok(!!insAfter?.stackRender && insAfter.stackRender.ops.length > 0 && insAfter.stackRender.key.startsWith('stack:'),
   `端到端：计划指令带 stackRender（ops=${insAfter?.stackRender?.ops.length}）`);
 ok(insAfter?.foreshorten === undefined, '端到端：堆叠指令不带透视缩短（合成已含）');
+ok(insAfter?.mirror === false, '端到端：无镜像映射时指令不镜像（对照）');
+// 镜像朝向：当前方向（计划的 currentDirection = 根 variantIndex，
+// 本探针为 0）在 mirrorMap 有条目、且无方向平面图（纯堆叠回落路
+// 径）时，镜像标志不得被回落丢弃——否则堆叠件与全身朝向不一致
+piece.mirrorMap = { 0: 4 } as never;
+const planMirror = generateRenderPlan(character, 0, 256, 256, 'pixel-perfect', 12,
+  undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, sprites);
+const insMirror = planMirror.nodeInstructions.find((i) => i.nodeId === torso.id);
+ok(insMirror?.mirror === true && !!insMirror?.stackRender,
+  '镜像：纯堆叠件在镜像方向仍带 stackRender 且 mirror=true（整图翻转、画序不变）');
+
+// 像素口径：颜色/图案类修改器逐层生效、形变类不进堆叠解析；
+// 摞级 marks 随计划下发（发光定向）
+{
+  const { resolveStackPixelMods, processStackLayerGrid } = await import('../src/lib/unified-render');
+  const mods = [
+    { id: 'm1', type: 'color_replace', enabled: true, params: { sourceColor: '#c81e1e', targetColor: '#1e1ec8', tolerance: 30 } },
+    { id: 'm2', type: 'bend', enabled: true, params: {} },
+    { id: 'm3', type: 'color_replace', enabled: false, params: { sourceColor: '#000000', targetColor: '#ffffff' } },
+    { id: 'm4', type: 'outline', enabled: true, params: {} },
+  ] as never[];
+  const resolved = resolveStackPixelMods(mods, 0) as { id: string }[];
+  ok(resolved.length === 1 && resolved[0]?.id === 'm1',
+    `像素口径：只有启用的颜色类进堆叠解析（实际 ${resolved.map((r) => r.id).join(',')}）`);
+  const stackNow = (piece as { stack?: { layerSpriteIds: string[] } }).stack;
+  const layerSpr = sprites[stackNow!.layerSpriteIds[0]!]!;
+  const before = JSON.stringify(layerSpr.data);
+  const processed = processStackLayerGrid(layerSpr, resolved, 0);
+  ok(JSON.stringify(processed) !== before && processed.length === layerSpr.height,
+    '像素口径：color_replace 真改到层网格（尺寸不变）');
+  ok(processStackLayerGrid(layerSpr, [], 0) === layerSpr.data, '像素口径：无修改器时层网格原样');
+  // marks 下发
+  const st = (piece as { stack?: { marks?: unknown } }).stack;
+  if (st) st.marks = [{ name: 'tip', kind: 'point', x: 1, y: 2 }] as never;
+  const planMarks = generateRenderPlan(character, 0, 256, 256, 'pixel-perfect', 12,
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, sprites);
+  const insMarks = planMarks.nodeInstructions.find((i) => i.nodeId === torso.id);
+  ok((insMarks?.stackRender?.marks as { name: string }[] | undefined)?.[0]?.name === 'tip',
+    '像素口径：摞级 marks 随 stackRender 下发（发光定向）');
+}
 
 console.log(fails === 0 ? 'STACK ATTACH PROBE PASS' : `STACK ATTACH PROBE FAIL (${fails})`);
 process.exit(fails === 0 ? 0 : 1);

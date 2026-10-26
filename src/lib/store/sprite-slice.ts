@@ -35,6 +35,7 @@ import { rgbaToHexOrNull } from '@/lib/engine/utils';
 export type SpriteSlice = {
   addSprite: ProjectStore['addSprite'];
   removeSprite: ProjectStore['removeSprite'];
+  removeSprites: ProjectStore['removeSprites'];
   updateSprite: ProjectStore['updateSprite'];
   updateSpriteLandmarks: ProjectStore['updateSpriteLandmarks'];
   updateSpriteMarks: ProjectStore['updateSpriteMarks'];
@@ -72,6 +73,16 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
     set((s) => {
       const sprites = { ...s.sprites };
       delete sprites[id];
+      return { sprites };
+    });
+  },
+
+  removeSprites: (ids, undoLabel) => {
+    if (ids.length === 0) return;
+    get().pushUndo(undoLabel ?? '删除精灵');
+    set((s) => {
+      const sprites = { ...s.sprites };
+      for (const id of ids) delete sprites[id];
       return { sprites };
     });
   },

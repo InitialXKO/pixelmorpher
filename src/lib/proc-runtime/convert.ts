@@ -16,6 +16,8 @@ import { buildParametricSprite } from './main-canvas';
 import { subToPx, projectToView, frameYAxisWorld, directionTrig } from '../unified-types';
 import { computeWorldTransforms } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
+import { computeStackOps, rasterizeStackOpsData } from '../stack-render';
+import { rgbaToHexOrNull } from '../engine/utils';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
 import { followAnchoredDeltaAt, glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams } from '../dynamic-patterns';
@@ -138,6 +140,29 @@ export interface RuntimePart {
   /** 网格蒙皮（缺口 4）：父槽位 skinning='mesh' 时带；parent 为父部件
    * 键，plugOff 为 attachment.plug 偏移（px，叠加在瓦片 cx/cy 上） */
   skin?: { parent: string; radius: number; curve: 'linear' | 'smoothstep'; plugOff: [number, number] };
+  /** 精灵堆叠（默认服装集口径；与默认集不同的集见 costumes[*].__stack）：
+   * 层图网格 + 摞几何（节点局部坐标，全局像素），全量进包不丢弃。
+   * 模板现行位姿模型是 2D 的、不跑逐帧 3D 合成：带 stack 的件在包里
+   * 的显示图（sprite/__sprite）是 convert 期以第 0 帧世界帧、按编辑
+   * 器同一公式（computeStackOps）合成的静止帧图；能做 3D 的消费方
+   * 可直接用本字段逐帧合成。 */
+  stack?: RuntimeStackPayload;
+}
+
+/** 运行时包中的一摞：层图（根→尖）+ 几何（与编辑器 SpriteStack 同数） */
+export interface RuntimeStackPayload {
+  layerThickness: number;
+  origin: [number, number, number];
+  axis: [number, number, number];
+  uAxis: [number, number, number];
+  vAxis: [number, number, number];
+  marks?: import('../unified-types').SpriteMark[];
+  layers: Array<{
+    w: number; h: number;
+    plug: [number, number];
+    data: (string | null)[][];
+    marks?: import('../unified-types').SpriteMark[];
+  }>;
 }
 
 export interface ProcRuntimePackage {
@@ -644,6 +669,89 @@ export function convertCharacterToRuntimePackage(
   const activeSet = character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId)
     ?? character.costumeSets[0];
 
+  // ---- 精灵堆叠：摞载荷（全量进包）+ 静止帧合成显示图 ----
+  const stackPayloadOf = (piece: CostumePiece | undefined): RuntimeStackPayload | undefined => {
+    const st = piece?.stack;
+    if (!st) return undefined;
+    const layers: RuntimeStackPayload['layers'] = [];
+    for (const id of st.layerSpriteIds) {
+      const spr = spriteTable[id];
+      if (!spr) continue;
+      layers.push({
+        w: spr.width, h: spr.height,
+        plug: spr.plug ? [subToPx(spr.plug.x), subToPx(spr.plug.y)] : [spr.width / 2, spr.height / 2],
+        data: spr.data, marks: spr.marks,
+      });
+    }
+    if (layers.length === 0) return undefined;
+    return {
+      layerThickness: st.layerThickness,
+      origin: [st.origin.x, st.origin.y, st.origin.z],
+      axis: [st.axis.x, st.axis.y, st.axis.z],
+      uAxis: [st.uAxis.x, st.uAxis.y, st.uAxis.z],
+      vAxis: [st.vAxis.x, st.vAxis.y, st.vAxis.z],
+      marks: st.marks,
+      layers,
+    };
+  };
+  const gridToRgba = (spr: Sprite): { rgba: Uint8ClampedArray; width: number; height: number } => {
+    const rgba = new Uint8ClampedArray(spr.width * spr.height * 4);
+    for (let y = 0; y < spr.height; y++) {
+      const row = spr.data[y];
+      for (let x = 0; x < spr.width; x++) {
+        const cell = row?.[x];
+        if (!cell) continue;
+        const o = (y * spr.width + x) * 4;
+        rgba[o] = parseInt(cell.slice(1, 3), 16);
+        rgba[o + 1] = parseInt(cell.slice(3, 5), 16);
+        rgba[o + 2] = parseInt(cell.slice(5, 7), 16);
+        rgba[o + 3] = 255;
+      }
+    }
+    return { rgba, width: spr.width, height: spr.height };
+  };
+  /** 堆叠件的显示图：第 0 帧世界帧下、按编辑器同一公式
+   *（computeStackOps + 同口径栅格化）合成的静止帧图。播放器位姿是
+   * 2D 的，逐帧 3D 合成不在包内——摞本体全量走 part.stack/__stack。 */
+  const stackDisplayOf = (piece: CostumePiece | undefined, nodeId: string | undefined): RuntimePartBase['baseSprite'] => {
+    const st = piece?.stack;
+    if (!st || !nodeId) return undefined;
+    const w = worlds.get(nodeId);
+    if (!w) return undefined;
+    const layerSprites = st.layerSpriteIds.map((id) => spriteTable[id]);
+    if (!layerSprites.some(Boolean)) return undefined;
+    const res = computeStackOps(st, layerSprites, w.worldFrame, w.worldAngle);
+    if (res.ops.length === 0) return undefined;
+    const raster = rasterizeStackOpsData(res, layerSprites.map((spr) => (spr ? gridToRgba(spr) : null)));
+    if (!raster) return undefined;
+    let rgba = raster.rgba;
+    let pivotX = res.pivotX;
+    if (w.mirror) {
+      // 与编辑器执行端口径一致：镜像时合成图整图水平翻转、枢轴随翻
+      const flipped = new Uint8ClampedArray(rgba.length);
+      for (let y = 0; y < raster.height; y++) {
+        for (let x = 0; x < raster.width; x++) {
+          const so = (y * raster.width + x) * 4;
+          const df = (y * raster.width + (raster.width - 1 - x)) * 4;
+          flipped[df] = rgba[so]!; flipped[df + 1] = rgba[so + 1]!;
+          flipped[df + 2] = rgba[so + 2]!; flipped[df + 3] = rgba[so + 3]!;
+        }
+      }
+      rgba = flipped;
+      pivotX = raster.width - pivotX;
+    }
+    const data: PixelGrid = [];
+    for (let y = 0; y < raster.height; y++) {
+      const row: (string | null)[] = [];
+      for (let x = 0; x < raster.width; x++) {
+        const o = (y * raster.width + x) * 4;
+        row.push(rgbaToHexOrNull(rgba[o]!, rgba[o + 1]!, rgba[o + 2]!, rgba[o + 3]!));
+      }
+      data.push(row);
+    }
+    return { w: raster.width, h: raster.height, plug: [pivotX, res.pivotY], data, marks: st.marks };
+  };
+
   // ---- 部件：任一服装集里带 parametric 的槽位 ----
   // 槽位键与换装同一口径（slot.slotKey ?? nodeId）：手建节点没有 slot
   // （slot 只由烘焙导入写入），其 pieces 以 nodeId 为键，必须能反查到节点。
@@ -690,7 +798,8 @@ export function convertCharacterToRuntimePackage(
   const spriteSlots = new Set<string>();
   for (const cs of character.costumeSets) {
     for (const [slotKey, piece] of Object.entries(cs.pieces)) {
-      if (!parametricSlots.has(slotKey) && displaySpriteOf(piece, character, slotKey, spriteTable, false, rootDir as DirectionIndex)) {
+      if (!parametricSlots.has(slotKey)
+        && (displaySpriteOf(piece, character, slotKey, spriteTable, false, rootDir as DirectionIndex) || stackPayloadOf(piece))) {
         spriteSlots.add(slotKey);
       }
     }
@@ -699,8 +808,10 @@ export function convertCharacterToRuntimePackage(
     const nodeId = slotNode.get(slotKey);
     const node = nodeId ? character.nodes[nodeId] : undefined;
     if (!node) { warnings.push(`槽位 ${slotKey} 有精灵但无对应节点，已跳过`); continue; }
-    const sg = displaySpriteOf(activeSet?.pieces[slotKey], character, slotKey, spriteTable, false, rootDir as DirectionIndex)
-      ?? character.costumeSets.map((cs) => displaySpriteOf(cs.pieces[slotKey], character, slotKey, spriteTable, false, rootDir as DirectionIndex)).find(Boolean);
+    const sg = stackDisplayOf(activeSet?.pieces[slotKey], nodeId)
+      ?? displaySpriteOf(activeSet?.pieces[slotKey], character, slotKey, spriteTable, false, rootDir as DirectionIndex)
+      ?? character.costumeSets.map((cs) => stackDisplayOf(cs.pieces[slotKey], nodeId)
+        ?? displaySpriteOf(cs.pieces[slotKey], character, slotKey, spriteTable, false, rootDir as DirectionIndex)).find(Boolean);
     if (!sg) continue;
     const w = worlds.get(node.id);
     const pivot = pivotOf(node.id);
@@ -729,6 +840,20 @@ export function convertCharacterToRuntimePackage(
     if (hasDyn) warnings.push(`动态效果：槽位 ${slotKey} 既无参数化外观也无精灵，未进运行时包`);
   }
   parts.sort((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key));
+  // 精灵堆叠载荷：默认集口径挂 part.stack（来源层 id 串记下，供
+  // __stack 只收与默认口径不同的集，避免整摞层图在每集重复进包）
+  const stackBaseIds = new Map<string, string>();
+  for (const part of parts) {
+    const src = activeSet?.pieces[part.key]?.stack
+      ? activeSet.pieces[part.key]
+      : character.costumeSets.map((cs) => cs.pieces[part.key]).find((p) => p?.stack);
+    const payload = stackPayloadOf(src);
+    if (payload && src?.stack) {
+      part.stack = payload;
+      stackBaseIds.set(part.key, src.stack.layerSpriteIds.join(','));
+      warnings.push(`精灵堆叠：槽位 ${part.key} 的摞已全量进包（part.stack）；播放器位姿为 2D，显示图按第 0 帧静止朝向合成，逐帧 3D 合成不在包内`);
+    }
+  }
   if (parts.length === 0) warnings.push('没有任何可进包的部件（参数化外观或精灵）：运行时包将没有部件');
   else if (Object.keys(character.directionDrawOrders ?? {}).length > 0) {
     warnings.push('运行时绘制顺序按节点 zIndex 近似：角色的 directionDrawOrders 未进包（v1）');
@@ -775,10 +900,20 @@ export function convertCharacterToRuntimePackage(
     for (const slotKey of new Set([...parametricSlots, ...spriteSlots])) {
       const piece = cs.pieces[slotKey];
       if (piece?.parametric) continue;
-      const sg = displaySpriteOf(piece, character, slotKey, spriteTable, false, rootDir as DirectionIndex);
+      const sg = stackDisplayOf(piece, slotNode.get(slotKey)) ?? displaySpriteOf(piece, character, slotKey, spriteTable, false, rootDir as DirectionIndex);
       if (sg) spriteMap[slotKey] = sg;
     }
     if (Object.keys(spriteMap).length > 0) entry.__sprite = spriteMap;
+    // 堆叠旁表：该集此槽的摞与默认口径不同才收（同摞不重复进包）
+    const stackMap: Record<string, RuntimeStackPayload> = {};
+    for (const part of parts) {
+      const piece = cs.pieces[part.key];
+      if (!piece?.stack) continue;
+      if (stackBaseIds.get(part.key) === piece.stack.layerSpriteIds.join(',')) continue;
+      const payload = stackPayloadOf(piece);
+      if (payload) stackMap[part.key] = payload;
+    }
+    if (Object.keys(stackMap).length > 0) entry.__stack = stackMap;
     costumes[cs.id] = entry;
   }
 

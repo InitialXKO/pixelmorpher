@@ -36,8 +36,9 @@ import { releaseCanvas } from './engine/canvas-pool';
 import { sampleJointDiscColor, getPlugJointWidth } from './engine/render-helpers/puppet-joint-color';
 import {
   getDiscCacheKey, getCachedDisc, setCachedDisc,
-  clearRenderCaches, createPixelGridHasher,
+  clearRenderCaches, createPixelGridHasher, hashPixelGrid,
 } from './engine/render-cache';
+import { rgbaToHexOrNull } from './engine/utils';
 import {
   applyPixelModifiers,
   isPixelDeformModifier,
@@ -103,7 +104,7 @@ import {
   getEmptyVariableContext,
 } from './unified-animation-resolver';
 import { resolvePieceSprite } from './sprite-resolve';
-import { computeStackOps, rasterizeStackOps } from './stack-render';
+import { computeStackOps, rasterizeStackOps, rasterizeStackOpsData } from './stack-render';
 
 // ---- World Transform Computation ----
 
@@ -1816,7 +1817,11 @@ export function generateRenderPlan(
       const midSprite = midId ? spriteTable[midId] : undefined;
       if (!midSprite) continue;
       sprite = midSprite;
-      mirror = false;
+      // 镜像不因回落丢弃：本方向在 mirrorMap 里有条目即镜像朝向——
+      // 平面图缺失不改变朝向，堆叠合成图在执行端按同一 mirror 标志
+      // 整图翻转（水平翻转下摞内深度由 y/d 决定、与 h 无关，画序
+      // 不变，整图翻转与逐层镜像等价）。
+      mirror = stackOnlyPiece?.mirrorMap?.[resolveDir] !== undefined;
     }
 
     // 方向间过渡（蒙皮转面 A）：blend 不为 0/1 时，双精灵 faceTurn + alpha 混合
@@ -2014,7 +2019,7 @@ export function generateRenderPlan(
       if (layerSprites.some(Boolean)) {
         const res = computeStackOps(stackPiece.stack, layerSprites, worldTf.worldFrame, worldTf.worldAngle);
         if (res.ops.length > 0) {
-          stackRender = { ops: res.ops, width: res.width, height: res.height, pivotX: res.pivotX, pivotY: res.pivotY, key: res.key, layerSpriteIds: stackPiece.stack.layerSpriteIds };
+          stackRender = { ops: res.ops, width: res.width, height: res.height, pivotX: res.pivotX, pivotY: res.pivotY, key: res.key, layerSpriteIds: stackPiece.stack.layerSpriteIds, marks: stackPiece.stack.marks };
         }
       }
     }
@@ -2748,22 +2753,30 @@ function renderNodeSprite(
   const pixelHashOut = { value: '' };
   let spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height, pixelHashOut);
   let pixelContentHash = pixelHashOut.value;
-  // 堆叠合成图：按计划期算子逐层栅格化为绘制画布（像素链对摞不
-  // 适用，effectivePixels 只是回落精灵）；内容哈希换成朝向量化键，
-  // 防旋转缓存串图。层画布按精灵对象身份缓存（WeakMap）。
+  // 堆叠合成图：按计划期算子逐层栅格化为绘制画布（effectivePixels
+  // 是回落精灵的像素链产物，对摞不适用）。颜色/图案类像素修改器
+  // 逐层套用（口径见 STACK_PIXEL_MOD_TYPES）；内容哈希 = 朝向键 +
+  // 逐层内容哈希——只改像素/参数时也换键，防旋转缓存串旧图。
   const stackPivot = instruction.stackRender
     ? { x: instruction.stackRender.pivotX, y: instruction.stackRender.pivotY }
     : null;
+  let stackLayerGrids: (PixelGrid | null)[] = [];
   if (instruction.stackRender) {
     const table = instruction.sprites ?? {};
-    const canvases = instruction.stackRender.layerSpriteIds.map((id) => {
+    const stackResolved = resolveStackPixelMods(modifiers, frame);
+    const hashParts: string[] = [];
+    const canvases = instruction.stackRender.layerSpriteIds.map((id, li) => {
       const spr = table[id];
-      return spr ? stackLayerCanvas(spr) : null;
+      if (!spr) { hashParts.push('∅'); stackLayerGrids.push(null); return null; }
+      const p = stackLayerProcessed(spr, stackResolved, frame, `${instruction.stackRender!.key}|${li}`);
+      hashParts.push(p.hash);
+      stackLayerGrids.push(p.grid);
+      return p.canvas;
     });
     const raster = rasterizeStackOps(instruction.stackRender, canvases);
     if (raster) {
       spriteCanvas = raster;
-      pixelContentHash = instruction.stackRender.key;
+      pixelContentHash = `${instruction.stackRender.key}|${hashParts.join(',')}`;
     }
   }
   if (!spriteCanvas || spriteCanvas.width === 0 || spriteCanvas.height === 0) return;
@@ -2809,11 +2822,21 @@ function renderNodeSprite(
 
   // 动态模式发光段：叠加层与精灵同像素空间（scaleFactor ≡ 1 前提，与绘制口径一致）。
   // 按发光组建层：前 3 个各一组，第 4 个起按所选组并入（resolveGlowGroups）。
-  const glowOverlays = previewQuality === 'low' || !instruction.dynamicPatterns?.length || instruction.stackRender
+  const glowOverlays = previewQuality === 'low' || !instruction.dynamicPatterns?.length
     ? []
-    : resolveGlowGroups(instruction.dynamicPatterns.map((r) => r.instance.params))
-      .map((g) => buildGlowOverlay(effectivePixels, g.representative, g.contributors, frame / frameRate, pixelContentHash, mirror, angle, sprite?.marks))
-      .filter((x): x is { canvas: HTMLCanvasElement; padX: number; padY: number; key: string } => !!x);
+    : instruction.stackRender
+      ? (() => {
+          // 发光按合成图出（逐层出会互相遮挡/重复发光）：合成网格
+          // 与绘制画布同算子同层料，定向用摞级 marks
+          const grid = stackCompositeGrid(instruction.stackRender, stackLayerGrids, pixelContentHash);
+          if (!grid) return [];
+          return resolveGlowGroups(instruction.dynamicPatterns.map((r) => r.instance.params))
+            .map((g) => buildGlowOverlay(grid, g.representative, g.contributors, frame / frameRate, pixelContentHash, mirror, angle, instruction.stackRender!.marks ?? sprite?.marks))
+            .filter((x): x is { canvas: HTMLCanvasElement; padX: number; padY: number; key: string } => !!x);
+        })()
+      : resolveGlowGroups(instruction.dynamicPatterns.map((r) => r.instance.params))
+        .map((g) => buildGlowOverlay(effectivePixels, g.representative, g.contributors, frame / frameRate, pixelContentHash, mirror, angle, sprite?.marks))
+        .filter((x): x is { canvas: HTMLCanvasElement; padX: number; padY: number; key: string } => !!x);
   const glowPivotX = (g: { canvas: HTMLCanvasElement; padX: number }) =>
     (mirror ? g.canvas.width - (pivotXRaw + g.padX) : pivotXRaw + g.padX);
 
@@ -3083,6 +3106,126 @@ function stackLayerCanvas(sprite: Sprite): HTMLCanvasElement | null {
     stackLayerCanvasCache.set(sprite, cv);
   }
   return cv;
+}
+
+// ---- 堆叠的像素口径 ----
+// 像素修改器里只有「只改格值、不改网格几何」的颜色/图案类能逐层
+// 套用：算子按层图的 plug/尺寸锚定，改色与算子可交换。几何重映射
+// 类（pixel_displace、cylinder/sphere_rotate、mirror、flip）、形变
+// 级修改器与蓝图单图像素链逐层套用会让每层以各自 plug 为原点独
+// 立变形、层间配准被破坏——不适用于堆叠（蓝图链是单图契约：
+// sprite_source 只有一份网格，无从分发到 N 层）。发光不逐层，
+// 按合成图出（见 stackCompositeGrid）。
+const STACK_PIXEL_MOD_TYPES: readonly string[] = ['color_replace', 'dither', 'pixel_edit'];
+
+const stackRawHashCache = new WeakMap<Sprite, string>();
+function stackRawLayerHash(spr: Sprite): string {
+  let h = stackRawHashCache.get(spr);
+  if (!h) { h = hashPixelGrid(spr.data); stackRawHashCache.set(spr, h); }
+  return h;
+}
+
+const stackProcessedCache = new Map<string, { canvas: HTMLCanvasElement | null; hash: string; grid: PixelGrid }>();
+
+/** 堆叠口径的修改器解析：从节点修改器里挑颜色/图案类（见
+ * STACK_PIXEL_MOD_TYPES），走与 STEP 1 同路的格式转换 + 关键帧/
+ * 驱动解析。其余修改器对堆叠不适用（机制见上方口径注释）。 */
+export function resolveStackPixelMods(
+  modifiers: readonly { enabled: boolean; type: string }[],
+  frame: number,
+): unknown[] {
+  const picked = (modifiers as unknown as Record<string, unknown>[]).filter(
+    (m) => m.enabled && STACK_PIXEL_MOD_TYPES.includes(m.type as string),
+  ) as Record<string, unknown>[];
+  if (picked.length === 0) return [];
+  const oldFormat = picked.map((m) => ({
+    id: m.id, type: m.type, enabled: m.enabled, collapsed: m.collapsed ?? false,
+    params: m.params ?? {}, startFrame: m.startFrame, endFrame: m.endFrame,
+    fadeInFrames: m.fadeInFrames, fadeOutFrames: m.fadeOutFrames,
+    blendMode: m.blendMode, coordinateMode: m.coordinateMode,
+    paramKeyframes: m.paramKeyframes, paramDrivers: m.paramDrivers,
+  }));
+  const needsResolve = oldFormat.some((m) =>
+    (Array.isArray(m.paramKeyframes) && m.paramKeyframes.length > 0)
+    || (Array.isArray(m.paramDrivers) && m.paramDrivers.length > 0
+      && m.paramDrivers.some((d) => (d as { enabled?: boolean; isBaked?: boolean }).enabled && !(d as { isBaked?: boolean }).isBaked)));
+  return needsResolve ? resolveKeyframeModifierParams(oldFormat as never, frame) : oldFormat;
+}
+
+/** 层网格过一遍已解析的堆叠口径修改器（纯函数）：尺寸被改则回落
+ * 原网格保层间配准（颜色/图案类本不应改尺寸，这是护栏）。 */
+export function processStackLayerGrid(spr: Sprite, resolvedMods: unknown[], frame: number): PixelGrid {
+  if (resolvedMods.length === 0) return spr.data;
+  const result = applyPixelModifiers(spr.data, resolvedMods as never, frame);
+  return (result.pixels.length === spr.height && (result.pixels[0]?.length ?? 0) === spr.width)
+    ? result.pixels : spr.data;
+}
+
+/** 层图的（可能已过像素修改器的）画布 + 内容哈希 + 网格 */
+function stackLayerProcessed(
+  spr: Sprite,
+  resolvedMods: unknown[],
+  frame: number,
+  keyPrefix: string,
+): { canvas: HTMLCanvasElement | null; hash: string; grid: PixelGrid } {
+  if (resolvedMods.length === 0) {
+    return { canvas: stackLayerCanvas(spr), hash: stackRawLayerHash(spr), grid: spr.data };
+  }
+  const key = `${keyPrefix}|${JSON.stringify(resolvedMods)}|${frame}`;
+  const hit = stackProcessedCache.get(key);
+  if (hit) return hit;
+  const grid = processStackLayerGrid(spr, resolvedMods, frame);
+  const hashOut = { value: '' };
+  const canvas = pixelsToCanvas(grid, spr.width, spr.height, hashOut) as HTMLCanvasElement | null;
+  const entry = { canvas, hash: hashOut.value, grid };
+  if (stackProcessedCache.size > 96) stackProcessedCache.clear();
+  if (canvas) stackProcessedCache.set(key, entry);
+  return entry;
+}
+
+const stackCompositeGridCache = new Map<string, PixelGrid>();
+/** 堆叠的合成网格（发光等需要整图网格的消费方用）：按计划算子对
+ * 加工后层网格纯数据栅格化，与执行层画布栅格化同口径；按内容
+ * 哈希（朝向键 + 逐层哈希）缓存。 */
+function stackCompositeGrid(
+  stackRender: NonNullable<NodeRenderInstruction['stackRender']>,
+  layerGrids: (PixelGrid | null)[],
+  cacheKey: string,
+): PixelGrid | null {
+  const hit = stackCompositeGridCache.get(cacheKey);
+  if (hit) return hit;
+  const rgbaLayers = layerGrids.map((g) => {
+    if (!g || g.length === 0) return null;
+    const h = g.length, w = g[0]?.length ?? 0;
+    if (w === 0) return null;
+    const rgba = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const cell = g[y]?.[x];
+        if (!cell) continue;
+        const o = (y * w + x) * 4;
+        rgba[o] = parseInt(cell.slice(1, 3), 16);
+        rgba[o + 1] = parseInt(cell.slice(3, 5), 16);
+        rgba[o + 2] = parseInt(cell.slice(5, 7), 16);
+        rgba[o + 3] = 255;
+      }
+    }
+    return { rgba, width: w, height: h };
+  });
+  const raster = rasterizeStackOpsData(stackRender, rgbaLayers);
+  if (!raster) return null;
+  const grid: PixelGrid = [];
+  for (let y = 0; y < raster.height; y++) {
+    const row: (string | null)[] = [];
+    for (let x = 0; x < raster.width; x++) {
+      const o = (y * raster.width + x) * 4;
+      row.push(rgbaToHexOrNull(raster.rgba[o]!, raster.rgba[o + 1]!, raster.rgba[o + 2]!, raster.rgba[o + 3]!));
+    }
+    grid.push(row);
+  }
+  if (stackCompositeGridCache.size > 16) stackCompositeGridCache.clear();
+  stackCompositeGridCache.set(cacheKey, grid);
+  return grid;
 }
 
 export function pixelsToCanvas(

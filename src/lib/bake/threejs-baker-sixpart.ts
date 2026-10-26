@@ -176,6 +176,8 @@ export interface SixPartBakeOptions extends BakeOptions {
   withStacks?: boolean;
   /** 堆叠层厚（全局像素），默认 size/128（512 时 4px） */
   stackLayerThicknessPx?: number;
+  /** 只为这些部件产堆叠（缺省 = 全部六部件）；对话框按部件勾选时传入 */
+  stackParts?: readonly SixPartName[];
 }
 
 // ---- 内部：蒙皮烘焙为静态几何 ----
@@ -786,6 +788,7 @@ function buildPartStacks(
   boneNames: string[],
   effectiveIndex: readonly number[] | null,
   layerThicknessPx: number,
+  onlyParts?: readonly SixPartName[],
 ): Map<PartName, PartStackSlice> {
   const K = size / 2; // 归一化单位 → 全局像素（globalCameraHalf = 1）
   const charOf = (x: number, y: number, z: number) => ({
@@ -839,6 +842,7 @@ function buildPartStacks(
 
   const out = new Map<PartName, PartStackSlice>();
   for (const [pname, built] of parts) {
+    if (onlyParts && !(onlyParts as readonly string[]).includes(pname)) continue;
     // 聚合部件几何（展开为逐三角顶点流）
     const posArr: number[] = [];
     const uvArr: number[] = [];
@@ -1086,6 +1090,7 @@ export async function bakeSixParts(
           bakedMeshes, parts, parentIndex, bindPos, center, scale, size,
           bones.map((b) => b.name || ''), merge ? merge.effectiveIndex : null,
           options.stackLayerThicknessPx ?? size / 128,
+          options.stackParts,
         )
       : undefined;
 

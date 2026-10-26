@@ -73,6 +73,16 @@ const outsidePx = pxAt(mid, R - 1, R - 1); // 图内角点：α=β=9，距圆心
 ok(outsidePx[3] === 0, '圆外透明');
 const fillRatio = sliced.filledPixels / (sliced.layers.length * mid.width * mid.height);
 ok(fillRatio > 0.7 && fillRatio < 0.86, `填充比合理（${fillRatio.toFixed(2)}，圆面积/图面积 ≈0.785）`);
+// 覆盖率定边：产品精灵网格只有二值 alpha，覆盖率的价值在定边
+// 位置——填充面积应守真（像素中心二值填充对凸形系统性偏胖，
+// 研究整圈 IoU −0.012）。断言面积比紧贴 1，且边缘像素颜色仍是
+// 覆盖子像素的渗入色均值（不是单点采样）。
+{
+  let mass = 0;
+  for (let o = 3; o < mid.rgba.length; o += 4) mass += mid.rgba[o]! / 255;
+  const massRatio = mass / (Math.PI * R * R);
+  ok(massRatio > 0.96 && massRatio < 1.04, `覆盖率定边：填充面积/圆面积 = ${massRatio.toFixed(3)}（∈[0.96,1.04]）`);
+}
 // 顶层（靠近顶盖）：圆心应带蓝色渗入（顶盖是最近表面之一）
 const topLayer = sliced.layers[0]!;
 const topCenter = pxAt(topLayer, 0, 0);

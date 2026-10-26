@@ -99,6 +99,9 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   sprites: Record<string, Sprite>;
   addSprite: (name: string, width: number, height: number, opts?: { plugX?: number; plugY?: number }) => Sprite;
   removeSprite: (id: string) => void;
+  /** 批量删除精灵（只压一条撤销记录）；undoLabel 可自定义（如「删除整摞」，
+   * 配合调用方在同一步里做的角色侧清理共用这一条撤销） */
+  removeSprites: (ids: string[], undoLabel?: string) => void;
   updateSprite: (id: string, updates: Partial<Sprite>) => void;
   updateSpriteLandmarks: (id: string, landmarks: import('../unified-types').SpriteLandmarks | undefined) => void;
   updateSpriteMarks: (id: string, marks: import('../unified-types').SpriteMark[] | undefined) => void;

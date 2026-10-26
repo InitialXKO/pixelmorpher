@@ -181,6 +181,57 @@ export function computeStackOps(
 }
 
 /**
+ * 纯数据版栅格化（无 DOM）：与 rasterizeStackOps 同口径（逐算子
+ * 逆仿射最近采样 + source-over 合成），供 convert 在无画布环境
+ * （含探针的 node 进程）把堆叠合成成静止帧网格。layerRgba 与摞
+ * 的 layerSpriteIds 同序（缺失层传 null 跳过）。
+ */
+export function rasterizeStackOpsData(
+  res: StackOpsResult,
+  layerRgba: ({ rgba: Uint8ClampedArray; width: number; height: number } | null)[],
+): { width: number; height: number; rgba: Uint8ClampedArray } | null {
+  if (res.ops.length === 0 || res.width === 0 || res.height === 0) return null;
+  const W = res.width, H = res.height;
+  const out = new Uint8ClampedArray(W * H * 4);
+  for (const op of res.ops) {
+    const src = layerRgba[op.layer];
+    if (!src) continue;
+    const [a, b, c, d, e, f] = op.tr;
+    const det = a * d - b * c;
+    if (Math.abs(det) < 1e-9) continue;
+    // 算子包围盒（源图四角）裁剪扫描区
+    let mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
+    for (const [px, py] of [[0, 0], [src.width, 0], [0, src.height], [src.width, src.height]] as const) {
+      const x = a * px + c * py + e, y = b * px + d * py + f;
+      if (x < mnx) mnx = x; if (x > mxx) mxx = x;
+      if (y < mny) mny = y; if (y > mxy) mxy = y;
+    }
+    const x0 = Math.max(0, Math.floor(mnx)), x1 = Math.min(W - 1, Math.ceil(mxx));
+    const y0 = Math.max(0, Math.floor(mny)), y1 = Math.min(H - 1, Math.ceil(mxy));
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dx = x + 0.5 - e, dy = y + 0.5 - f;
+        const sx = Math.floor((d * dx - c * dy) / det);
+        const sy = Math.floor((-b * dx + a * dy) / det);
+        if (sx < 0 || sy < 0 || sx >= src.width || sy >= src.height) continue;
+        const so = (sy * src.width + sx) * 4;
+        const sa = src.rgba[so + 3]! / 255;
+        if (sa <= 0) continue;
+        const oo = (y * W + x) * 4;
+        const da = out[oo + 3]! / 255;
+        const oa = sa + da * (1 - sa);
+        if (oa <= 0) continue;
+        for (let ch = 0; ch < 3; ch++) {
+          out[oo + ch] = Math.round((src.rgba[so + ch]! * sa + out[oo + ch]! * da * (1 - sa)) / oa);
+        }
+        out[oo + 3] = Math.round(oa * 255);
+      }
+    }
+  }
+  return { width: W, height: H, rgba: out };
+}
+
+/**
  * 把算子栅格化为画布（执行层调用）。layerCanvases 与摞的
  * layerSpriteIds 同序（缺失层传 null 跳过）。像素风口径：关闭平滑。
  */

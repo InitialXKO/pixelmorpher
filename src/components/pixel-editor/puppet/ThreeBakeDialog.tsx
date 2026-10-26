@@ -81,6 +81,9 @@ import {
   parseModelTopology,
   type SixPartBakeData,
   type PartName,
+  SIX_PARTS,
+  SIX_PART_LABEL,
+  type SixPartName,
 } from '@/lib/bake/threejs-baker-sixpart';
 import type { TopologyResult } from '@/lib/bake/bone-topology';
 
@@ -806,6 +809,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [weightThreshold, setWeightThreshold] = useState(0.2);
   const [absorbUnassigned, setAbsorbUnassigned] = useState(false);
   const [withStacks, setWithStacks] = useState(false);
+  const [stackParts, setStackParts] = useState<SixPartName[]>([...SIX_PARTS]);
   const [manualPrefixSplit, setManualPrefixSplit] = useState<'none' | 'parts' | 'layers'>('none');
   const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
   /** 烘焙模式：twopass=整模 ID 双遍（16 遍），sixpart=六部件（96 遍） */
@@ -985,6 +989,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         size,
         layerPass: layerMode,
         withStacks,
+        stackParts: withStacks ? stackParts : undefined,
         weightThreshold,
         absorbUnassigned,
         granularity,
@@ -1023,7 +1028,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize, weightThreshold, absorbUnassigned, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor, withStacks]);
+  }, [fileData, url, size, paletteSize, weightThreshold, absorbUnassigned, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor, withStacks, stackParts]);
 
   /** 导出 Live2D (.moc3)：当前 MMD 模型 → 拆分图元 + 骨骼姿态采样关键形 → 打包下载 */
   const handleExportLive2d = useCallback(async () => {
@@ -1569,10 +1574,24 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             </label>
             )}
             {(bakeMode === 'sixpart' || bakeMode === 'layer') && (
-            <label className="flex cursor-pointer items-center gap-1" title="同时把每个部件沿主轴切成一摞截面层图，导入时挂到部件上：呈现时按 3D 朝向逐层合成、可连续转动（第二产线，PR #46 研究定案）；方向平面图照常生成作回落">
+            <label className="flex cursor-pointer items-center gap-1" title="同时把勾选部件沿主轴切成一摞截面层图，导入时挂到部件上：呈现时按 3D 朝向逐层合成、可连续转动（第二产线，PR #46 研究定案）；方向平面图照常生成作回落">
               <input type="checkbox" checked={withStacks} onChange={(e) => setWithStacks(e.target.checked)} />
               生成精灵堆叠
             </label>
+            )}
+            {withStacks && (bakeMode === 'sixpart' || bakeMode === 'layer') && (
+            <span className="flex items-center gap-1" title="只为勾选的部件生成堆叠">
+              {SIX_PARTS.map((p) => (
+                <label key={p} className="flex cursor-pointer items-center gap-0.5">
+                  <input
+                    type="checkbox"
+                    checked={stackParts.includes(p)}
+                    onChange={(e) => setStackParts((prev) => (e.target.checked ? [...prev, p] : prev.filter((x) => x !== p)))}
+                  />
+                  {SIX_PART_LABEL[p]}
+                </label>
+              ))}
+            </span>
             )}
             {bakeMode === 'manual' && (
             <label className="flex items-center gap-1" title="部件内的像素再按主导骨骼名的前缀（去掉尾部序号）分组。需要模型带蒙皮；无蒙皮的部件自动不拆">

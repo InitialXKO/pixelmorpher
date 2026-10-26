@@ -1478,7 +1478,7 @@ export interface NodeRenderInstruction {
    *  有此字段时 renderNodeSprite 按算子逐层栅格化为绘制画布（跳过精灵
    *  像素链），pivot 为算子自带锚点；key = 朝向量化键，作像素完美旋转
    *  的内容哈希（朝向变则缓存失效）。计划层不碰 DOM，栅格化在执行层。 */
-  stackRender?: { ops: import('./stack-render').StackDrawOp[]; width: number; height: number; pivotX: number; pivotY: number; key: string; layerSpriteIds: string[] };
+  stackRender?: { ops: import('./stack-render').StackDrawOp[]; width: number; height: number; pivotX: number; pivotY: number; key: string; layerSpriteIds: string[]; marks?: SpriteMark[] };
   /** Face turn params（Spine 式伪 3D 转头，renderNodeSprite 在 meshSkin 之前应用） */
   faceTurn?: {
     yaw: number;    // -1（左）~ 1（右）

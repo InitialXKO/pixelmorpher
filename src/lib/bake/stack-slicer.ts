@@ -276,11 +276,17 @@ export function sliceStack(input: SliceStackInput): SliceStackResult {
       }
       if (pts.length >= 3) loops.push(pts);
     }
-    // 扫描线偶奇填充（环多边形边与像素中心行求交，成对填）
+    // 扫描线偶奇填充 + 覆盖率定边（验证七定案的产品化项）：像素
+    // 中心二值填充会让剪影系统性胖一圈（整圈 IoU −0.012），改
+    // SS×SS 子像素覆盖定边——覆盖过半才算内，颜色取已覆盖子像
+    // 素的渗入色均值。产品精灵网格本身只有二值 alpha（全仓口径），
+    // 半透明边存不住，覆盖率的价值在定边位置（面积守真）而非
+    // alpha 渐变。子像素的贴图透明（a<128）不计覆盖（那处表面
+    // 是透空的）。
+    const SS = 3;
     const rgba = new Uint8ClampedArray(W * H * 4);
     if (loops.length > 0) {
-      for (let j = 0; j < H; j++) {
-        const be = beMin + (j + 0.5) / s;
+      const spansAt = (be: number): [number, number][] => {
         const xs: number[] = [];
         for (const loop of loops) {
           for (let e = 0; e < loop.length; e++) {
@@ -291,21 +297,45 @@ export function sliceStack(input: SliceStackInput): SliceStackResult {
             }
           }
         }
-        if (xs.length < 2) continue;
         xs.sort((p, q) => p - q);
-        for (let k = 0; k + 1 < xs.length; k += 2) {
-          const iFrom = Math.max(0, Math.ceil((xs[k]! - alMin) * s - 0.5));
-          const iTo = Math.min(W - 1, Math.floor((xs[k + 1]! - alMin) * s - 0.5));
-          for (let i = iFrom; i <= iTo; i++) {
-            const al = alMin + (i + 0.5) / s;
-            const src = bleedSrc(al, hm, be);
-            if (!src) continue;
-            const [r, g, b, a] = sample(src.mat, src.u, src.v);
-            if (a < 128) continue;
-            const o = (j * W + i) * 4;
-            rgba[o] = r; rgba[o + 1] = g; rgba[o + 2] = b; rgba[o + 3] = 255;
-            filledPixels++;
+        const spans: [number, number][] = [];
+        for (let k = 0; k + 1 < xs.length; k += 2) spans.push([xs[k]!, xs[k + 1]!]);
+        return spans;
+      };
+      const cover = new Float64Array(W);
+      const sumR = new Float64Array(W), sumG = new Float64Array(W), sumB = new Float64Array(W);
+      for (let j = 0; j < H; j++) {
+        cover.fill(0); sumR.fill(0); sumG.fill(0); sumB.fill(0);
+        for (let sj = 0; sj < SS; sj++) {
+          const be = beMin + (j + (sj + 0.5) / SS) / s;
+          const spans = spansAt(be);
+          if (spans.length === 0) continue;
+          for (let i = 0; i < W; i++) {
+            for (let si = 0; si < SS; si++) {
+              const al = alMin + (i + (si + 0.5) / SS) / s;
+              let inside = false;
+              for (const [x0, x1] of spans) {
+                if (al >= x0 && al <= x1) { inside = true; break; }
+              }
+              if (!inside) continue;
+              const src = bleedSrc(al, hm, be);
+              if (!src) continue;
+              const [r, g, b, a] = sample(src.mat, src.u, src.v);
+              if (a < 128) continue;
+              cover[i]! += 1;
+              sumR[i]! += r; sumG[i]! += g; sumB[i]! += b;
+            }
           }
+        }
+        for (let i = 0; i < W; i++) {
+          const cnt = cover[i]!;
+          if (cnt * 2 < SS * SS) continue; // 覆盖过半才算内（面积守真）
+          const o = (j * W + i) * 4;
+          rgba[o] = Math.round(sumR[i]! / cnt);
+          rgba[o + 1] = Math.round(sumG[i]! / cnt);
+          rgba[o + 2] = Math.round(sumB[i]! / cnt);
+          rgba[o + 3] = 255;
+          filledPixels++;
         }
       }
     }
