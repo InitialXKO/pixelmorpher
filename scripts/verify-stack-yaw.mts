@@ -8,6 +8,7 @@ import { sliceStack } from '../src/lib/bake/stack-slicer';
 import { attachBoneStacks } from '../src/lib/bake/stack-attach';
 import { rasterizeStackOpsData } from '../src/lib/stack-render';
 import { generateRenderPlan } from '../src/lib/unified-render';
+import { convertCharacterToRuntimePackage } from '../src/lib/proc-runtime/convert';
 import {
   createDefaultNode, createDefaultCostumePiece, pxToSub,
   type Character, type Sprite,
@@ -139,6 +140,22 @@ ok(Math.abs(mid1.endDx - H * Math.sin(Math.PI / 8)) < 2.5, '292.5：子关节位
 const mid2 = measure(315);
 console.log(`    315(SE): endDx=${mid2.endDx.toFixed(1)}`);
 ok(Math.abs(mid2.endDx - H * Math.SQRT1_2) < 2.5, '315（东南 45°）：子关节位移 = 38·sin45° ≈ 26.9');
+
+// ===== 程序化预览链：convert 进包的静止显示图同口径偏航 =====
+{
+  const dispW = (fa: number | undefined): number => {
+    const { character, sprites } = build(fa);
+    const pkg = convertCharacterToRuntimePackage(character, sprites, { frameRate: 12 });
+    const part = pkg.parts.find((p) => (p as unknown as { stack?: unknown }).stack) ?? pkg.parts[0];
+    const p = part as unknown as { base?: { baseSprite?: { w: number } }; sprite?: { w: number } };
+    return (p.base?.baseSprite ?? p.sprite)?.w ?? 0;
+  };
+  const wBase = dispW(undefined);
+  const wEast = dispW(0);
+  console.log(`    convert 显示图宽：未设=${wBase} 东=${wEast}`);
+  ok(wBase > 0 && wBase <= 20, 'convert：未设偏航显示图为圆盘宽');
+  ok(wEast >= 30, 'convert：facingAngle=0 显示图转成横条（程序化预览/导出同源）');
+}
 
 console.log(fails === 0 ? 'STACK YAW PROBE PASS' : `STACK YAW PROBE FAIL (${fails})`);
 process.exit(fails === 0 ? 0 : 1);
