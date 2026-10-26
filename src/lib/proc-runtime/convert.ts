@@ -14,7 +14,7 @@ import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, Pix
 import type { AnimationClip } from '../types';
 import { buildParametricSprite } from './main-canvas';
 import { subToPx, projectToView, frameYAxisWorld, directionTrig } from '../unified-types';
-import { computeWorldTransforms } from '../unified-render';
+import { computeWorldTransforms, rotateWorldTransformsForYaw, facingYawDeltaRad } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { computeStackOps, rasterizeStackOpsData } from '../stack-render';
 import { rgbaToHexOrNull } from '../engine/utils';
@@ -656,6 +656,12 @@ export function convertCharacterToRuntimePackage(
   // 工程帧率：一切帧↔秒换算的唯一来源（调用方传入；缺省 12 仅兜底）
   const projectFpsTop = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
   const worlds = computeWorldTransforms(character, 0, 512, 512, projectFpsTop);
+  // 连续偏航与主画布同口径：facingAngle 给出时整角色先绕竖直轴转，
+  // 静止合成图与 2D 摆放都用转后位姿（运行时包内无逐帧 3D 合成）
+  if (character.facingAngle !== undefined) {
+    const rootDirC = (character.rootNodeId ? worlds.get(character.rootNodeId)?.variantIndex : undefined) ?? 0;
+    rotateWorldTransformsForYaw(worlds, facingYawDeltaRad(character.facingAngle, rootDirC as never));
+  }
   // 世界位姿 → 2D 摆放：必须走与主画布同一投影（projectToView 按根节点
   // 朝向把 3D 世界坐标投到视平面）——直接拿 worldX 当横坐标会把深度轴
   // 当成横轴，东/北等朝向的角色整幅错位/镜像。

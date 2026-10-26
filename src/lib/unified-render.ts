@@ -25,7 +25,7 @@ import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
   directionTrig,
   resolveChainTarget3D,
-  mat3Mul, mat3Transpose, mat3Apply, localRotMat, rotMatD, applyFrameRotation, frameViewAngle,
+  mat3Mul, mat3Transpose, mat3Apply, localRotMat, rotMatD, rotMatY, applyFrameRotation, frameViewAngle,
   frameViewAngleForDirection, frameYAxisWorld,
   worldToViewBasis, MAT3_IDENTITY,
 } from './unified-types';
@@ -1617,6 +1617,40 @@ function clipPolygonFor(
   return poly.length >= 3 ? poly : undefined;
 }
 
+/**
+ * 整个角色绕竖直轴连续偏航：把一组世界变换按 deltaRad（相对当前离散
+ * 朝向的增量）刚性旋转——世界位置 (x, z) 与 frame 同步转，投影与执行端
+ * 仍走离散朝向口径。worldAngle 随新 frame 重算。facingAngle 驱动：
+ * 平面精灵没有连续朝向数据、仍按离散朝向选图；堆叠按 frame 逐层重合成，
+ * 因此只有堆叠（及其关节位置）真正连续转起来。
+ */
+export function rotateWorldTransformsForYaw(
+  transforms: Map<string, WorldTransform>,
+  deltaRad: number,
+  geometryDirection?: DirectionIndex,
+): void {
+  if (deltaRad === 0) return;
+  const c = Math.cos(deltaRad), s = Math.sin(deltaRad);
+  const rot = rotMatY((deltaRad * 180) / Math.PI);
+  for (const [id, wt] of transforms) {
+    const frame = mat3Mul(rot, wt.worldFrame);
+    transforms.set(id, {
+      ...wt,
+      worldX: (wt.worldX * c + wt.worldZ * s) as SubPixel,
+      worldZ: (-wt.worldX * s + wt.worldZ * c) as SubPixel,
+      worldFrame: frame,
+      worldAngle: geometryDirection !== undefined
+        ? frameViewAngleForDirection(frame, geometryDirection, wt.variantIndex)
+        : frameViewAngle(frame),
+    });
+  }
+}
+
+/** facingAngle（0=E, 45=NE, …, 270=S）相对离散朝向的偏航增量（弧度） */
+export function facingYawDeltaRad(facingAngle: number, currentDirection: DirectionIndex): number {
+  return (((facingAngle - 45 * currentDirection) % 360) * Math.PI) / 180;
+}
+
 export function generateRenderPlan(
   character: Character,
   frame: number,
@@ -1688,6 +1722,13 @@ export function generateRenderPlan(
   const nodeInstructions: NodeRenderInstruction[] = [];
   const rootTransform = worldTransforms.get(character.rootNodeId);
   const currentDirection = rootTransform?.variantIndex ?? 0;
+  // 连续偏航（facingAngle）：整个角色绕竖直轴转到连续朝向——位置与
+  // frame 在此统一旋转，后续投影/选图/执行仍按离散 currentDirection 走。
+  // geometryDirection（节点转向）模式下帧基锚不同，口径未定，不适用。
+  const yawDeltaRad = geometryDirection === undefined && character.facingAngle !== undefined
+    ? facingYawDeltaRad(character.facingAngle, currentDirection as DirectionIndex)
+    : 0;
+  if (yawDeltaRad !== 0) rotateWorldTransformsForYaw(worldTransforms, yawDeltaRad, geometryDirection);
 
   // 追随段取样（动态模式跨部件驱动）：源部件位姿取「轨道位姿」——与
   // 导出烘焙同源的剥离 FK（去行为/蓝图/修改器/IK），当前帧与滞后帧
@@ -1723,8 +1764,16 @@ export function generateRenderPlan(
     const w = map.get(srcId);
     if (!w) return undefined;
     const dir = (map.get(character.rootNodeId)?.variantIndex ?? currentDirection) as DirectionIndex;
-    const p = projectToView(w.worldX, w.worldY, w.worldZ, dir);
-    return { a: (w.worldAngle * Math.PI) / 180, x: subToPx(p.canvasX), y: subToPx(p.canvasY) };
+    // 追随源位姿与主变换同一偏航口径（followStripped 的 FK 未经主旋转）
+    let wx = w.worldX, wz = w.worldZ, wa = w.worldAngle;
+    if (yawDeltaRad !== 0) {
+      const c = Math.cos(yawDeltaRad), s = Math.sin(yawDeltaRad);
+      wx = (w.worldX * c + w.worldZ * s) as SubPixel;
+      wz = (-w.worldX * s + w.worldZ * c) as SubPixel;
+      wa = frameViewAngle(mat3Mul(rotMatY((yawDeltaRad * 180) / Math.PI), w.worldFrame));
+    }
+    const p = projectToView(wx, w.worldY, wz, dir);
+    return { a: (wa * Math.PI) / 180, x: subToPx(p.canvasX), y: subToPx(p.canvasY) };
   };
 
   // 方向间过渡（蒙皮转面 A）：facingAngle 为连续角度时，计算相邻两方向及混合系数

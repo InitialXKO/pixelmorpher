@@ -233,6 +233,15 @@ export function rotMatU(tiltDeg: number): Mat3 {
   return [1, 0, 0, 0, c, s, 0, -s, c];
 }
 
+/** 绕竖直轴（y）旋转矩阵 RY（朝向基 (h, y, d) 坐标下）：整角色偏航用
+ * （h' = c·h + s·d；d' = −s·h + c·d，与 projectToView 的 (x,z) 旋转同向） */
+export function rotMatY(yawDeg: number): Mat3 {
+  const rad = (yawDeg * Math.PI) / 180;
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  return [c, 0, s, 0, 1, 0, -s, 0, c];
+}
+
 /** 局部旋转复合：先视平面内 angle、后出平面 tilt（L = RU(tilt)·RD(angle)） */
 export function localRotMat(angleDeg: number, tiltDeg: number): Mat3 {
   if (tiltDeg === 0) return rotMatD(angleDeg);
