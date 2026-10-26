@@ -111,7 +111,7 @@ export interface ManualBakeOptions {
   pmxTextures?: Map<string, Blob>;
   /** PMX 原味着色：开时颜色遍用参考版 NPR 着色（pmx-npr.ts），关时统一 toon 转换 */
   usePmxNpr?: boolean;
-  /** 全角度模式：额外纬度（度），如 [45,-45,90,-90]；基纬度 0 恒渲，|纬度|≥90 只渲一个朝向 */
+  /** 全角度模式：额外纬度（度），如 [45,90]（只有俯角侧）；基纬度 0 恒渲，|纬度|≥90 只渲一个朝向 */
   extraLatitudes?: number[];
   size?: number;
   paletteSize?: number;

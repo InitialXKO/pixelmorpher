@@ -811,7 +811,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   /** 烘焙模式：twopass=整模 ID 双遍（16 遍），sixpart=六部件（96 遍） */
   const [bakeMode, setBakeMode] = useState<'twopass' | 'sixpart' | 'manual' | 'layer'>('sixpart');
   const [processedLayered, setProcessedLayered] = useState<Map<number, ProcessedBoneLayered> | null>(null);
-  // 全角度模式：额外 ±45°（各 8 方向）与 ±90°（各 1 个朝向）纬度的整套精灵
+  // 全角度模式：额外俯角 +45°（8 方向）与 +90°（1 个朝向）纬度的整套精灵（仰角不烘）
   const [fullAngle, setFullAngle] = useState(false);
   // PMX 导入：zip 解包的贴图文件表 + 原味着色开关（参考版 NPR，默认关）
   const pmxTexturesRef = useRef<Map<string, Blob> | null>(null);
@@ -1558,9 +1558,9 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                 <option value="manual">手动拆分（按网格）</option>
               </select>
             </label>
-            <label className="flex cursor-pointer items-center gap-1" title="额外渲染 ±45°（各 8 方向）与 ±90°（各 1 个朝向，正上方/正下方）的整套精灵，导入后按角色纬度自动选用；渲染遍数约 ×3.3">
+            <label className="flex cursor-pointer items-center gap-1" title="额外渲染俯角 +45°（8 方向）与 +90°（1 个朝向，正上方）的整套精灵，导入后按角色纬度自动选用；仰角（负纬度，自下往上看）基本用不上、不烘；渲染遍数约 ×2.1">
               <input type="checkbox" checked={fullAngle} onChange={(e) => setFullAngle(e.target.checked)} />
-              全角度（±45°/±90°）
+              俯角全套（+45°/+90°）
             </label>
             {bakeMode !== 'twopass' && (
             <label className="flex cursor-pointer items-center gap-1" title="不属于任何部件的内容（六部件：主导骨骼无部件的三角形；手动：未分配的网格）按邻近关系归入相邻部件，而不是直接丢弃">
