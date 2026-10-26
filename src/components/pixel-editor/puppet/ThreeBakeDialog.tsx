@@ -84,6 +84,7 @@ import {
   SIX_PARTS,
   SIX_PART_LABEL,
   type SixPartName,
+  type PartStackSlice,
 } from '@/lib/bake/threejs-baker-sixpart';
 import type { TopologyResult } from '@/lib/bake/bone-topology';
 
@@ -809,6 +810,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [weightThreshold, setWeightThreshold] = useState(0.2);
   const [absorbUnassigned, setAbsorbUnassigned] = useState(false);
   const [withStacks, setWithStacks] = useState(false);
+  const [manualStacks, setManualStacks] = useState<Map<number, PartStackSlice> | null>(null);
   const [stackParts, setStackParts] = useState<SixPartName[]>([...SIX_PARTS]);
   const [manualPrefixSplit, setManualPrefixSplit] = useState<'none' | 'parts' | 'layers'>('none');
   const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
@@ -1224,6 +1226,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setSixPart(null);
     setProcessed(null);
     setProcessedLayered(null);
+    setManualStacks(null);
     setImportMsg(null);
     setRebakeTarget(null);
     try {
@@ -1245,6 +1248,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         paletteSize,
         absorbUnassigned,
         bonePrefixSplit: manualPrefixSplit,
+        withStacks,
         pmxTextures: pmxTexturesRef.current ?? undefined,
         usePmxNpr: pmxFlavor,
         extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
@@ -1252,6 +1256,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       });
       setTotalMs(performance.now() - t0);
       setProcessed(proc.parts);
+      setManualStacks(proc.stacks ?? null);
       setProcessedLayered(proc.layered ? new Map(proc.layered.map((l) => [l.boneIndex, l])) : null);
       setProgress('');
     } catch (e) {
@@ -1260,7 +1265,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [manualCatalog, manualParts, resolveInput, size, paletteSize, absorbUnassigned, manualPrefixSplit, fullAngle, pmxFlavor]);
+  }, [manualCatalog, manualParts, resolveInput, size, paletteSize, absorbUnassigned, manualPrefixSplit, fullAngle, pmxFlavor, withStacks]);
 
   /** 按当前模式分发烘焙 */
   const handleBakeDispatch = useCallback(() => {
@@ -1367,10 +1372,11 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         : mapBonesToNodes(processed, char.id, name);
       // 精灵堆叠：把烘焙时的部件切片挂到对应服装件（层图并入 mapped.sprites 一并写入）
       let stackNote = '';
-      if (sixPart?.boneStacks && sixPart.boneStacks.size > 0) {
-        const r = attachBoneStacks(mapped.character, mapped.sprites, sixPart.boneStacks, char.id, name);
-        if (r.attached > 0) stackNote = `；已挂堆叠 ${r.attached} 节肢体（${r.layerSprites} 张层图）`;
-        if (r.skipped > 0) stackNote += `；${r.skipped} 节肢体未挂上（宿主节点缺失）`;
+      const stacksForImport = bakeMode === 'manual' ? manualStacks ?? undefined : sixPart?.boneStacks;
+      if (stacksForImport && stacksForImport.size > 0) {
+        const r = attachBoneStacks(mapped.character, mapped.sprites, stacksForImport, char.id, name);
+        if (r.attached > 0) stackNote = `；已挂堆叠 ${r.attached} 处（${r.layerSprites} 张层图）`;
+        if (r.skipped > 0) stackNote += `；${r.skipped} 处未挂上（宿主节点缺失）`;
       }
       // 一次写入：节点树 + 服装集（不中途回读，见 AGENTS.md 快照坑）
       store.updateUnifiedCharacter(char.id, {
@@ -1390,7 +1396,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [processed, processedLayered, fileName, size, sixPart]);
+  }, [processed, processedLayered, fileName, size, sixPart, bakeMode, manualStacks]);
 
   // 手动替换服装：用预览的某方向精灵替换已导入角色的对应精灵
   const handleReplaceSprite = useCallback((
@@ -1573,8 +1579,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
               无归属归入邻近部件
             </label>
             )}
-            {(bakeMode === 'sixpart' || bakeMode === 'layer') && (
-            <label className="flex cursor-pointer items-center gap-1" title="同时把勾选部件下属的每节肢体沿自身轴切成一摞截面层图，挂到各肢体节点上：呈现时按 3D 朝向逐层合成、可连续转动、关节照常弯（第二产线，PR #46 研究定案）；方向平面图照常生成作回落">
+            {(bakeMode === 'sixpart' || bakeMode === 'layer' || bakeMode === 'manual') && (
+            <label className="flex cursor-pointer items-center gap-1" title="同时把每节肢体（手动模式：每个部件）沿自身轴切成一摞截面层图，挂到对应节点上：呈现时按 3D 朝向逐层合成、可连续转动、关节照常弯（第二产线，PR #46 研究定案）；方向平面图照常生成作回落">
               <input type="checkbox" checked={withStacks} onChange={(e) => setWithStacks(e.target.checked)} />
               生成精灵堆叠
             </label>

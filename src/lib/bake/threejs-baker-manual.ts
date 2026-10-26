@@ -16,11 +16,15 @@ import { dirsForLatitude, latitudePitchRad, medianCut, nearestPaletteIndex } fro
 import { rgbaToHexOrNull } from '../engine/utils';
 import type { PixelGrid, DirectionIndex } from '../unified-types';
 import type { ProcessedBone, ProcessedBoneDirection, ProcessedBoneLayered, ProcessedBoneLayer } from './skeleton-mapper';
+import { sliceStack } from './stack-slicer';
+import type { PartStackSlice } from './threejs-baker-sixpart';
 
 /** 手动烘焙结果：parts = 部件/组条目映射；layered 仅 bonePrefixSplit='layers' 时给出 */
 export interface ManualBakeResult {
   parts: Map<number, ProcessedBone>;
   layered?: ProcessedBoneLayered[];
+  /** 精灵堆叠切片（withStacks 开启时）：键 = 部件条目 boneIndex（pi + 1） */
+  stacks?: Map<number, PartStackSlice>;
 }
 
 /** 骨骼 ID 材质：aBone（局部骨骼下标 + 1）→ RG 16 位直出（与 sixpart 图层 ID 遍同风格） */
@@ -107,6 +111,10 @@ export interface ManualBakeOptions {
    * 部件没有蒙皮骨骼数据时自动回落 'none'。
    */
   bonePrefixSplit?: 'none' | 'parts' | 'layers';
+  /** 生成精灵堆叠：每个部件沿自身轴（父→子枢轴延续方向）切成一摞截面层图 */
+  withStacks?: boolean;
+  /** 堆叠层厚（全局像素），缺省 size/128（512 分辨率 = 4px，与六部件同口径） */
+  stackLayerThicknessPx?: number;
   /** PMX 导入的贴图文件表（zip 解包：路径→Blob）；仅 PMX 输入时用 */
   pmxTextures?: Map<string, Blob>;
   /** PMX 原味着色：开时颜色遍用参考版 NPR 着色（pmx-npr.ts），关时统一 toon 转换 */
@@ -1123,13 +1131,299 @@ export async function bakeManualParts(
       }
     }
 
+    let stacks: Map<number, PartStackSlice> | undefined;
+    if (options.withStacks) {
+      stacks = buildManualPartStacks(
+        prepared,
+        [...result.values()].map((pb) => ({
+          boneIndex: pb.boneIndex,
+          jointNorm: pb.joint3D ?? { x: 0, y: 0, z: 0 },
+          parentIndex: pb.parentIndex,
+        })),
+        { size, layerThicknessPx: options.stackLayerThicknessPx, prefixSplitMode },
+      );
+      if (stacks.size > 0) console.info(`[bake-manual] 精灵堆叠：${stacks.size} 个部件已切片`);
+    }
     rt.dispose();
     gradientMap.dispose();
-    return { parts: result, layered: prefixSplitMode === 'layers' ? layeredParts : undefined };
+    return { parts: result, layered: prefixSplitMode === 'layers' ? layeredParts : undefined, stacks };
   } finally {
     renderer.dispose();
     try { renderer.forceContextLoss(); } catch { /* noop */ }
   }
+}
+
+
+// ---- 精灵堆叠（手动部件）----
+// 轴向口径与六部件 buildBoneStacks 同一条延续规则，搬到部件枢轴层级上：
+// 入向 = 父条目枢轴 → 本部件枢轴；轴向 = 与入向最贴合的子条目方向；
+// 叶子（有真父）用入向；无父无子（挂根的孤立部件）回退几何主轴。
+// 几何与枢轴取 prepareManualParts 的归一化产物（已含朝向调整），与平面
+// 精灵同一状态；归一化 → 角色空间换算与 joint3D → offset3D 同口径（×size/2、Y 翻转）。
+
+type MV3 = { x: number; y: number; z: number };
+const mSub = (a: MV3, b: MV3): MV3 => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+const mDot = (a: MV3, b: MV3): number => a.x * b.x + a.y * b.y + a.z * b.z;
+const mLen = (a: MV3): number => Math.hypot(a.x, a.y, a.z);
+const mNorm = (a: MV3): MV3 => {
+  const l = mLen(a);
+  return l > 1e-9 ? { x: a.x / l, y: a.y / l, z: a.z / l } : { x: 0, y: 0, z: 0 };
+};
+
+/** 骨骼词干分组（与 bakeManualParts 前缀拆分同口径的纯函数版）；不足两组返回 null */
+export function manualStemGroups(part: PreparedManualPart): {
+  baseGroupIdx: number;
+  boneToGroup: Int32Array;
+} | null {
+  if (part.bones.length === 0) return null;
+  const byStem = new Map<string, number>();
+  const vertTotals: number[] = [];
+  const boneToGroup = new Int32Array(part.bones.length).fill(-1);
+  part.bones.forEach((b, bi) => {
+    const stem = boneNameStem(b.name);
+    let gi = byStem.get(stem);
+    if (gi === undefined) {
+      gi = vertTotals.length;
+      byStem.set(stem, gi);
+      vertTotals.push(0);
+    }
+    vertTotals[gi] += b.vertexCount;
+    boneToGroup[bi] = gi;
+  });
+  if (vertTotals.length < 2) return null;
+  let baseGroupIdx = 0;
+  for (let gi = 1; gi < vertTotals.length; gi++) {
+    if (vertTotals[gi] > vertTotals[baseGroupIdx]) baseGroupIdx = gi;
+  }
+  return { baseGroupIdx, boneToGroup };
+}
+
+/** 几何主轴（协方差最大特征向量，幂迭代）；符号朝向几何质心一侧 */
+function principalAxisChar(positions: Float32Array, pivot: MV3): MV3 {
+  const n = positions.length / 3;
+  const stride = Math.max(1, Math.floor(n / 20000));
+  let cx = 0, cy = 0, cz = 0, cnt = 0;
+  for (let i = 0; i < n; i += stride) {
+    cx += positions[i * 3]; cy += positions[i * 3 + 1]; cz += positions[i * 3 + 2];
+    cnt++;
+  }
+  if (cnt === 0) return { x: 0, y: 1, z: 0 };
+  cx /= cnt; cy /= cnt; cz /= cnt;
+  let xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+  for (let i = 0; i < n; i += stride) {
+    const dx = positions[i * 3] - cx, dy = positions[i * 3 + 1] - cy, dz = positions[i * 3 + 2] - cz;
+    xx += dx * dx; xy += dx * dy; xz += dx * dz; yy += dy * dy; yz += dy * dz; zz += dz * dz;
+  }
+  let v: MV3 = xx >= yy && xx >= zz ? { x: 1, y: 0, z: 0 } : yy >= zz ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
+  for (let it = 0; it < 32; it++) {
+    const w: MV3 = {
+      x: xx * v.x + xy * v.y + xz * v.z,
+      y: xy * v.x + yy * v.y + yz * v.z,
+      z: xz * v.x + yz * v.y + zz * v.z,
+    };
+    const l = mLen(w);
+    if (l < 1e-12) break;
+    v = { x: w.x / l, y: w.y / l, z: w.z / l };
+  }
+  if (mDot(v, { x: cx - pivot.x, y: cy - pivot.y, z: cz - pivot.z }) < 0) v = { x: -v.x, y: -v.y, z: -v.z };
+  return v;
+}
+
+interface ManualTexEntry {
+  r: number; g: number; b: number; opacity: number;
+  img: { w: number; h: number; data: Uint8ClampedArray } | null;
+}
+
+function readManualTexPixels(img: unknown): ManualTexEntry['img'] {
+  try {
+    if (typeof document === 'undefined' || !img) return null;
+    const im = img as { width: number; height: number };
+    if (!im.width || !im.height) return null;
+    const cv = document.createElement('canvas');
+    cv.width = im.width; cv.height = im.height;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img as CanvasImageSource, 0, 0);
+    return { w: im.width, h: im.height, data: ctx.getImageData(0, 0, im.width, im.height).data };
+  } catch {
+    return null;
+  }
+}
+
+/** 材质采样表（源材质的 color/map/opacity，与六部件采样同制式） */
+function buildManualTexRegistry(prepared: PreparedManual): { entries: ManualTexEntry[]; baseOf: number[][] } {
+  const entries: ManualTexEntry[] = [];
+  const baseOf: number[][] = [];
+  prepared.parts.forEach((part, pi) => {
+    baseOf[pi] = [];
+    part.meshes.forEach((pm, mi) => {
+      baseOf[pi][mi] = entries.length;
+      const mats = Array.isArray(pm.material) ? pm.material : [pm.material];
+      for (const m of mats) {
+        const mm = m as unknown as {
+          color?: { r: number; g: number; b: number };
+          map?: { image?: unknown } | null;
+          opacity?: number;
+        } | undefined;
+        entries.push({
+          r: (mm?.color?.r ?? 1) * 255,
+          g: (mm?.color?.g ?? 1) * 255,
+          b: (mm?.color?.b ?? 1) * 255,
+          opacity: mm?.opacity ?? 1,
+          img: readManualTexPixels(mm?.map?.image),
+        });
+      }
+    });
+  });
+  return { entries, baseOf };
+}
+
+/** 三角形在多材质网格中的材质下标（组按索引流区间定） */
+function manualTriMaterialIndex(pm: PreparedManualPartMesh, t: number): number {
+  if (!Array.isArray(pm.material)) return 0;
+  const p3 = t * 3;
+  for (const g of pm.groups) {
+    if (p3 >= g.start && p3 < g.start + g.count) return g.materialIndex ?? 0;
+  }
+  return 0;
+}
+
+export interface ManualStackEntryInfo {
+  boneIndex: number;
+  /** joint3D（归一化空间） */
+  jointNorm: MV3;
+  parentIndex: number | null;
+}
+
+/**
+ * 手动部件 → 每部件一摞切片。entries = 装配后的全部条目（含根 0 与前缀
+ * 拆分子条目——子条目本身不产摞（几何归属靠渲染遍的像素掩码，CPU 侧无
+ * 法干净切分），但其枢轴参与父部件的轴向延续判定。
+ * 前缀拆分 'parts' 模式下，主条目只切基底组的三角形（子组几何不重复计入）。
+ */
+export function buildManualPartStacks(
+  prepared: PreparedManual,
+  entries: ManualStackEntryInfo[],
+  opts: { size: number; layerThicknessPx?: number; prefixSplitMode?: 'none' | 'parts' | 'layers' },
+): Map<number, PartStackSlice> {
+  const K = opts.size / 2;
+  const T = opts.layerThicknessPx ?? opts.size / 128;
+  const charOf = (n: MV3): MV3 => ({ x: n.x * K, y: -n.y * K, z: n.z * K });
+  const byIndex = new Map(entries.map((e) => [e.boneIndex, e]));
+  const jointChar = new Map(entries.map((e) => [e.boneIndex, charOf(e.jointNorm)]));
+  const childrenOf = new Map<number, ManualStackEntryInfo[]>();
+  for (const e of entries) {
+    if (e.parentIndex === null || e.parentIndex === undefined) continue;
+    const arr = childrenOf.get(e.parentIndex) ?? [];
+    arr.push(e);
+    childrenOf.set(e.parentIndex, arr);
+  }
+  const { entries: texEntries, baseOf } = buildManualTexRegistry(prepared);
+  const sample = (matIdx: number, u: number, v: number): [number, number, number, number] => {
+    const t = texEntries[matIdx];
+    if (!t) return [255, 255, 255, 255];
+    if (t.img) {
+      const tx = Math.min(t.img.w - 1, Math.max(0, Math.floor(u * t.img.w)));
+      const ty = Math.min(t.img.h - 1, Math.max(0, Math.floor((1 - v) * t.img.h)));
+      const o = (ty * t.img.w + tx) * 4;
+      const d = t.img.data;
+      return [d[o], d[o + 1], d[o + 2], t.opacity * d[o + 3]];
+    }
+    return [t.r, t.g, t.b, t.opacity * 255];
+  };
+
+  const out = new Map<number, PartStackSlice>();
+  for (let pi = 0; pi < prepared.parts.length; pi++) {
+    const boneIndex = pi + 1;
+    const entry = byIndex.get(boneIndex);
+    if (!entry) continue;
+    const part = prepared.parts[pi];
+    const pivot = jointChar.get(boneIndex)!;
+
+    const stem = opts.prefixSplitMode === 'parts' ? manualStemGroups(part) : null;
+    const splitActive = !!stem && part.meshes.some((m) => m.vertBones);
+    const triInBase = (pm: PreparedManualPartMesh, t: number): boolean => {
+      if (!splitActive || !stem || !pm.vertBones) return true;
+      const votes = new Map<number, number>();
+      for (let k = 0; k < 3; k++) {
+        const vi = pm.index ? pm.index[t * 3 + k] : t * 3 + k;
+        const vb = pm.vertBones[vi];
+        const gi = vb >= 0 ? stem.boneToGroup[vb] : stem.baseGroupIdx;
+        votes.set(gi, (votes.get(gi) ?? 0) + 1);
+      }
+      let winner = stem.baseGroupIdx;
+      let best = -1;
+      for (const [gi, c] of votes) if (c > best) { best = c; winner = gi; }
+      return winner === stem.baseGroupIdx;
+    };
+
+    const posArr: number[] = [];
+    const uvArr: number[] = [];
+    const tris: number[] = [];
+    const triMat: number[] = [];
+    part.meshes.forEach((pm, mi) => {
+      const vBase = posArr.length / 3;
+      const vCount = pm.positions.length / 3;
+      for (let vi = 0; vi < vCount; vi++) {
+        const c = charOf({ x: pm.positions[vi * 3], y: pm.positions[vi * 3 + 1], z: pm.positions[vi * 3 + 2] });
+        posArr.push(c.x, c.y, c.z);
+        uvArr.push(pm.uvs ? pm.uvs[vi * 2] : 0, pm.uvs ? pm.uvs[vi * 2 + 1] : 0);
+      }
+      const triCount = pm.index ? pm.index.length / 3 : pm.positions.length / 9;
+      for (let t = 0; t < triCount; t++) {
+        if (!triInBase(pm, t)) continue;
+        for (let k = 0; k < 3; k++) {
+          tris.push(vBase + (pm.index ? pm.index[t * 3 + k] : t * 3 + k));
+        }
+        triMat.push(baseOf[pi][mi] + manualTriMaterialIndex(pm, t));
+      }
+    });
+    if (tris.length === 0) continue;
+    const positions = Float32Array.from(posArr);
+
+    const parentEntry = entry.parentIndex !== null && entry.parentIndex !== undefined
+      ? byIndex.get(entry.parentIndex)
+      : undefined;
+    const parentChar = parentEntry ? jointChar.get(parentEntry.boneIndex)! : charOf(prepared.rootJoint3D);
+    let incoming = mSub(pivot, parentChar);
+    if (mLen(incoming) < 1e-6) incoming = { x: 0, y: -1, z: 0 };
+    const kids = childrenOf.get(boneIndex) ?? [];
+    let axis: MV3 | null = null;
+    let bestDot = -Infinity;
+    const inN = mNorm(incoming);
+    for (const kid of kids) {
+      const d = mSub(jointChar.get(kid.boneIndex)!, pivot);
+      if (mLen(d) < 1e-6) continue;
+      const dt = mDot(mNorm(d), inN);
+      if (dt > bestDot) { bestDot = dt; axis = d; }
+    }
+    if (!axis) {
+      const hasRealParent = !!parentEntry && entry.parentIndex !== 0;
+      axis = hasRealParent || kids.length > 0 ? incoming : principalAxisChar(positions, pivot);
+    }
+    const axisN = mNorm(axis);
+    if (mLen(axisN) < 0.5) continue;
+    const uAxis: MV3 = Math.abs(axisN.x) > 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    const sliced = sliceStack({
+      positions,
+      uvs: Float32Array.from(uvArr),
+      tris: Int32Array.from(tris),
+      triMaterial: Int32Array.from(triMat),
+      sample,
+      pivot,
+      axis,
+      uAxis,
+      layerThickness: T,
+    });
+    if (sliced.layers.length === 0 || sliced.filledPixels === 0) continue;
+    out.set(boneIndex, {
+      rootBoneIndex: boneIndex,
+      rootBoneName: part.spec.name,
+      jointChar: pivot,
+      sliced,
+    });
+  }
+  return out;
 }
 
 // ---- 点选（乙案）纯助手：网格 ID 编解码 + 三视图取景 ----
