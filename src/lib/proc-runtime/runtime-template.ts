@@ -2967,8 +2967,8 @@ function frame(now) {
     if (part.skin && tile && place) {
       skinJobs.push({
         tile: tile, place: place, key: part.key, family: !!entry.fam,
-        plugX: tileCx + (mirr ? -part.skin.plugOff[0] : part.skin.plugOff[0]),
-        plugY: tileCy + part.skin.plugOff[1],
+        plugX: tile.cx + (variantMirrored(part, char.variant) ? -part.skin.plugOff[0] : part.skin.plugOff[0]),
+        plugY: tile.cy + part.skin.plugOff[1],
       });
     }
     if (stackDrive && tile && place) {

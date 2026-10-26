@@ -278,5 +278,89 @@ function buildY(tiltEnd: number, facingAngle?: number): Built {
   ok(html.includes('"stackFrames"'), '包内 stackFrames 序列化进 HTML');
 }
 
+// ---------- 9：发光件不再排除，场 pad 随垫图反向补偿 ----------
+{
+  const { createDynamicInstance, defaultDynamicParams } = await import('../src/lib/dynamic-patterns');
+  const mk = (tilt: number) => {
+    const { character, sprites } = build(tilt);
+    const flat: Sprite = {
+      id: 'midflat', name: 'midflat', width: 12, height: 38,
+      data: Array.from({ length: 38 }, () => Array(12).fill('#cc3333')), plug: { x: 6, y: 19 },
+    } as unknown as Sprite;
+    character.costumeSets[0]!.pieces.mid!.sprites = { 6: flat } as never;
+    const midNode = Object.values(character.nodes).find((n) => n.slot?.slotKey === 'mid')!;
+    (midNode as unknown as { dynamicPatterns: unknown }).dynamicPatterns = [createDynamicInstance('辉光呼吸', {
+      ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: '#cc3333', glowHalo: 1, emitEnabled: false,
+    }, '辉光')];
+    return convertCharacterToRuntimePackage(character, sprites, { frameRate: 12, totalFrames: 10 });
+  };
+  const A = mk(-60), B = mk(0);
+  const pa = A.parts.find((p) => p.key === 'mid')!, pb = B.parts.find((p) => p.key === 'mid')!;
+  ok(!!tracksSf(A), 's9 发光件也烘 stackFrames');
+  ok(!!pa.glow && !!pb.glow, 's9 发光场双份都在');
+  const dx = pa.sprite!.plug[0] - pb.sprite!.plug[0], dy = pa.sprite!.plug[1] - pb.sprite!.plug[1];
+  ok(!!pa.glow && !!pb.glow && pa.glow.padX === pb.glow.padX - dx && pa.glow.padY === pb.glow.padY - dy,
+    `s9 场 pad 按垫量反向补偿 A=(${pa.glow?.padX},${pa.glow?.padY}) B=(${pb.glow?.padX},${pb.glow?.padY}) d=(${dx},${dy})`);
+}
+
+// ---------- 10：摞 marks 不再排除，显示 marks 换算、摞本体不动 ----------
+{
+  const { packMaskBits, unpackMaskBits } = await import('../src/lib/sprite-marks');
+  const mk = (tilt: number) => {
+    const { character, sprites, stack } = build(tilt);
+    const cells = new Uint8Array(5 * 4); cells[1 * 5 + 1] = 1; cells[2 * 5 + 3] = 1;
+    stack.marks = [
+      { id: 'm1', name: 'pt', kind: 'point', x: 0.5, y: 0.25 },
+      { id: 'm2', name: 'vc', kind: 'vector', x: 0.5, y: 0.5, dx: 0.25, dy: 0.125 },
+      { id: 'm3', name: 'rc', kind: 'region', region: { by: 'rect', x: 0.25, y: 0.25, w: 0.5, h: 0.5 } },
+      { id: 'm4', name: 'ci', kind: 'region', region: { by: 'circle', cx: 0.5, cy: 0.5, r: 0.25 } },
+      { id: 'm5', name: 'pn', kind: 'region', region: { by: 'painted', mask: { w: 5, h: 4, bits: packMaskBits(cells) } } },
+      { id: 'm6', name: 'vl', kind: 'value', value: 7 },
+    ] as never;
+    return convertCharacterToRuntimePackage(character, sprites, { frameRate: 12, totalFrames: 10 });
+  };
+  const A = mk(60), B = mk(0);
+  const pa = A.parts.find((p) => p.key === 'mid')!, pb = B.parts.find((p) => p.key === 'mid')!;
+  ok(!!tracksSf(A), 's10 带 marks 件也烘 stackFrames');
+  const Wb = pb.sprite!.w, Hb = pb.sprite!.h, Wa = pa.sprite!.w, Ha = pa.sprite!.h;
+  const dx = pa.sprite!.plug[0] - pb.sprite!.plug[0], dy = pa.sprite!.plug[1] - pb.sprite!.plug[1];
+  const ma = new Map((pa.sprite!.marks ?? []).map((m) => [m.name, m]));
+  const pt = ma.get('pt') as unknown as { x: number; y: number };
+  ok(Math.abs(pt.x - (0.5 * Wb + dx) / Wa) < 1e-9 && Math.abs(pt.y - (0.25 * Hb + dy) / Ha) < 1e-9, `s10 点标记换算 ${JSON.stringify(pt)}`);
+  const vc = ma.get('vc') as unknown as { x: number; y: number; dx: number; dy: number };
+  ok(Math.abs(vc.x - (0.5 * Wb + dx) / Wa) < 1e-9 && Math.abs(vc.dx - 0.25 * Wb / Wa) < 1e-9 && Math.abs(vc.dy - 0.125 * Hb / Ha) < 1e-9, `s10 矢量换算 ${JSON.stringify(vc)}`);
+  const rc = (ma.get('rc') as unknown as { region: { x: number; y: number; w: number; h: number } }).region;
+  ok(Math.abs(rc.x - (0.25 * Wb + dx) / Wa) < 1e-9 && Math.abs(rc.w - 0.5 * Wb / Wa) < 1e-9 && Math.abs(rc.h - 0.5 * Hb / Ha) < 1e-9, `s10 矩形选区换算 ${JSON.stringify(rc)}`);
+  const ci = (ma.get('ci') as unknown as { region: { by: string; mask?: { w: number; h: number } } }).region;
+  ok(ci.by === 'painted' && ci.mask?.w === Wa && ci.mask?.h === Ha, 's10 圆形选区烘成涂画（各向异性垫图保逐格一致）');
+  const pn = (ma.get('pn') as unknown as { region: { mask: { w: number; h: number; bits: string } } }).region.mask;
+  const pc = unpackMaskBits(pn.bits, pn.w * pn.h);
+  let ones = 0; pc.forEach((v) => { if (v) ones++; });
+  ok(pn.w === Wa && pn.h === Ha && ones === 2 && pc[(1 + dy) * Wa + (1 + dx)] === 1 && pc[(2 + dy) * Wa + (3 + dx)] === 1,
+    `s10 涂画选区随图平移 ones=${ones} d=(${dx},${dy})`);
+  ok((ma.get('vl') as unknown as { value: number }).value === 7
+    && JSON.stringify(pa.stack?.marks) === JSON.stringify(pb.stack?.marks)
+    && (pa.stack?.marks?.[0] as unknown as { x: number }).x === 0.5, 's10 值标记原样、摞本体 marks 不动');
+}
+
+// ---------- 11：裁剪锚件不再排除，平面常量 c 按内容位移补偿 ----------
+{
+  const mk = (tilt: number) => {
+    const { character, sprites, midId } = build(tilt);
+    const endNode = Object.values(character.nodes).find((n) => n.slot?.slotKey === 'end')!;
+    (endNode as unknown as { clipPlane: unknown }).clipPlane = { anchor: midId, angleDeg: 90, offset: 3 };
+    return convertCharacterToRuntimePackage(character, sprites, { frameRate: 12, totalFrames: 10 });
+  };
+  const A = mk(-60), B = mk(0);
+  const midA = A.parts.find((p) => p.key === 'mid')!, midB = B.parts.find((p) => p.key === 'mid')!;
+  const clipA = A.parts.find((p) => p.key === 'end')!.clip!, clipB = B.parts.find((p) => p.key === 'end')!.clip!;
+  ok(clipB.by === 'mid' && clipB.c === -3, `s11 无垫图时 c=-offset ${JSON.stringify(clipB)}`);
+  ok(!!tracksSf(A), 's11 锚件（mid）也烘 stackFrames');
+  const dx = midA.sprite!.plug[0] - midB.sprite!.plug[0], dy = midA.sprite!.plug[1] - midB.sprite!.plug[1];
+  const sx = dx - (midA.sprite!.w - midB.sprite!.w) / 2, sy = dy - (midA.sprite!.h - midB.sprite!.h) / 2;
+  const expected = -3 - (clipA.a * sx + clipA.b * sy);
+  ok(Math.abs(clipA.c - expected) < 1e-9, `s11 垫图后 c 补偿 c=${clipA.c} expected=${expected} s=(${sx},${sy})`);
+}
+
 console.log(fails === 0 ? 'STACK FRAMES PROBE PASS' : `STACK FRAMES PROBE FAIL (${fails})`);
 process.exit(fails === 0 ? 0 : 1);

@@ -10,13 +10,14 @@
 //   曲线合成一条「轨道」表演（add 模式；运行时部件扁平摆放、无父子跟随，
 //   世界增量才能带上父轨道对子孙的带动）；tilt/stretch/scaleX/variantIndex
 //   轨道运行时无对应通道，逐条点名不静默。
-import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, Sprite, StateMachineSpec } from '../unified-types';
+import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, Sprite, SpriteMark, StateMachineSpec } from '../unified-types';
 import type { AnimationClip } from '../types';
 import { buildParametricSprite } from './main-canvas';
 import { subToPx, projectToView, frameYAxisWorld, directionTrig } from '../unified-types';
 import { computeWorldTransforms, rotateWorldTransformsForYaw, facingYawDeltaRad } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { computeStackOps, rasterizeStackOpsData, type StackDrawOp } from '../stack-render';
+import { packMaskBits, unpackMaskBits } from '../sprite-marks';
 import { rgbaToHexOrNull } from '../engine/utils';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
@@ -1202,17 +1203,15 @@ export function convertCharacterToRuntimePackage(
       };
       // ---- 堆叠层变换烘焙的采样对象：仅 spriteKind 堆叠件、且显示图
       // 确由同一摞合成（与 stackDisplayOf 几何比对一致）、默认集口径。
-      // 带发光/摞标记/被裁剪面锚定的件不烘：那些数据的坐标系挂在显示
-      // 图上，垫图会错位——回落静止图并在包警告里点名。 ----
+      // 挂在显示图上的发光场/标记/裁剪面在垫图时逐项补偿（坐标随内容
+      // 平移，见 padStackDisplays），不再排除。 ----
       type StackFrameSample = { ops: StackDrawOp[]; pivotX: number; pivotY: number; w: number; h: number; mirror: boolean };
       const stackNodes = new Map<string, { slot: string; stack: NonNullable<CostumePiece['stack']>; layerSprites: (Sprite | undefined)[] }>();
       const stackYawDelta = character.facingAngle !== undefined
         ? facingYawDeltaRad(character.facingAngle, ((character.rootNodeId ? worlds.get(character.rootNodeId)?.variantIndex : undefined) ?? 0) as DirectionIndex)
         : 0;
-      const clipAnchorSlots = new Set(parts.filter((p) => p.clip).map((p) => p.clip!.by));
       for (const part of parts) {
         if (!part.spriteKind || !part.stack || !part.sprite) continue;
-        if (part.glow || (part.stack.marks?.length ?? 0) > 0 || clipAnchorSlots.has(part.key)) continue;
         const piece = activeSet?.pieces[part.key];
         if (!piece?.stack) continue;
         const nodeId = slotNode.get(part.key);
@@ -1390,6 +1389,51 @@ export function convertCharacterToRuntimePackage(
         }
         return Object.keys(out).length > 0 ? out : undefined;
       };
+      // 显示图标记随垫图补偿：标记坐标是归一 0..1（点/矢量原点与分量、
+      // 矩形选区按新旧尺寸换算）；涂画选区是像素位图、逐格平移重打包；
+      // 圆形选区在各向异性垫图下不再是圆，按旧格心判定烘成涂画选区保
+      // 逐格一致；取色/值/方向无坐标不动。摞本体 marks（part.stack）
+      // 是摞自身口径，不随显示呈现垫图而动。
+      const shiftMarks = (marks: SpriteMark[], W: number, H: number, W2: number, H2: number, dx: number, dy: number): SpriteMark[] =>
+        marks.map((m) => {
+          switch (m.kind) {
+            case 'point':
+              return { ...m, x: (m.x * W + dx) / W2, y: (m.y * H + dy) / H2 };
+            case 'vector':
+              return { ...m, x: (m.x * W + dx) / W2, y: (m.y * H + dy) / H2, dx: (m.dx * W) / W2, dy: (m.dy * H) / H2 };
+            case 'region': {
+              const r = m.region;
+              if (r.by === 'rect') {
+                return { ...m, region: { ...r, x: (r.x * W + dx) / W2, y: (r.y * H + dy) / H2, w: (r.w * W) / W2, h: (r.h * H) / H2 } };
+              }
+              if (r.by === 'circle') {
+                const cells = new Uint8Array(W2 * H2);
+                for (let y = 0; y < H; y++) {
+                  for (let x = 0; x < W; x++) {
+                    const nx = (x + 0.5) / W, ny = (y + 0.5) / H;
+                    if (Math.hypot(nx - r.cx, ny - r.cy) <= r.r) cells[(y + dy) * W2 + (x + dx)] = 1;
+                  }
+                }
+                return { ...m, region: { by: 'painted' as const, mask: { w: W2, h: H2, bits: packMaskBits(cells) } } };
+              }
+              if (r.by === 'painted') {
+                const src = unpackMaskBits(r.mask.bits, r.mask.w * r.mask.h);
+                const cells = new Uint8Array(W2 * H2);
+                for (let y = 0; y < r.mask.h; y++) {
+                  for (let x = 0; x < r.mask.w; x++) {
+                    if (!src[y * r.mask.w + x]) continue;
+                    const nx = x + dx, ny = y + dy;
+                    if (nx >= 0 && ny >= 0 && nx < W2 && ny < H2) cells[ny * W2 + nx] = 1;
+                  }
+                }
+                return { ...m, region: { by: 'painted' as const, mask: { w: W2, h: H2, bits: packMaskBits(cells) } } };
+              }
+              return m;
+            }
+            default:
+              return m;
+          }
+        });
       const padStackDisplays = () => {
         for (const slot of stackUnion.keys()) {
           const part = parts.find((p) => p.key === slot);
@@ -1398,6 +1442,7 @@ export function convertCharacterToRuntimePackage(
           const sg = part.sprite;
           if (sg.w === W && sg.h === H && sg.plug[0] === px && sg.plug[1] === py) continue;
           const dx = px - sg.plug[0], dy = py - sg.plug[1];
+          const dW = W - sg.w, dH = H - sg.h;
           const data: PixelGrid = [];
           for (let y = 0; y < H; y++) {
             const row: (string | null)[] = new Array(W).fill(null);
@@ -1411,9 +1456,25 @@ export function convertCharacterToRuntimePackage(
             }
             data.push(row);
           }
-          const padded = { ...sg, w: W, h: H, plug: [px, py] as [number, number], data };
+          const padded = {
+            ...sg, w: W, h: H, plug: [px, py] as [number, number], data,
+            marks: sg.marks ? shiftMarks(sg.marks, sg.w, sg.h, W, H, dx, dy) : sg.marks,
+          };
           part.sprite = padded;
           part.base.size = [W, H];
+          // 发光场补偿：场内容不动、采样窗随显示内容平移（padX/Y 反向
+          // 减垫量；默认集条目与 part.glow 同对象，一处即全）
+          if (part.glow) { part.glow.padX -= dx; part.glow.padY -= dy; }
+          // 裁剪面补偿：锚在本槽的平面随锚图内容平移——内容相对图心
+          // 的位移 = 垫量 − 尺寸增量/2，常量 c 按 a·sx + b·sy 修正
+          const sx = dx - dW / 2, sy = dy - dH / 2;
+          if (sx !== 0 || sy !== 0) {
+            for (const p2 of parts) {
+              if (p2.clip && p2.clip.by === slot) {
+                p2.clip = { ...p2.clip, c: p2.clip.c - (p2.clip.a * sx + p2.clip.b * sy) };
+              }
+            }
+          }
           const sm = (activeSet ? costumes[activeSet.id]?.__sprite : undefined) as Record<string, unknown> | undefined;
           if (sm && sm[slot]) sm[slot] = padded;
         }
