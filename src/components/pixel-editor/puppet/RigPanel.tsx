@@ -42,11 +42,14 @@ interface RigPanelProps {
 }
 
 /** 关节盘当前有效直径（与渲染端 generateDiscInstructions 同口径：
- * attachment.jointWidth 优先，否则回退 4） */
+ * attachment.jointWidth 优先，否则 plug 截面直径，否则 4） */
 function effectiveDiscDiameter(node: Node, ignoreStored = false): number {
   const stored = node.attachment?.jointWidth;
   if (!ignoreStored && typeof stored === 'number' && stored > 0) return stored;
-  return 4;
+  const piece = node.slot;
+  const plugCS = piece?.crossSections.find((cs) => cs.id === (node.generated?.crossSectionId ?? 'plug'));
+  const bottomCS = piece?.crossSections.find((cs) => cs.id === 'bottom');
+  return plugCS?.diameter ?? bottomCS?.diameter ?? 4;
 }
 
 /** 关节盘直径行：写 attachment.jointWidth（渲染端首选来源，改完立即

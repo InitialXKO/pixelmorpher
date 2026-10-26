@@ -1350,6 +1350,12 @@ function generateDiscInstructions(
     // Find parent node to get its crossSectionBottom
     const parentNode = node.parentId ? character.nodes[node.parentId] : undefined;
 
+    // 当前精灵（与下方配色采样同一解析）：直径回退与配色共用。
+    // （旧代码读 node.sprite——现行管线从不赋值，截面回退因此恒走不到、
+    // 无 jointWidth 的节点盘恒为 4px；这里改走 resolveSprite 修活。）
+    const resolved = resolveSprite(node, currentDirection, activeCostumeSet, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? ''], character.latitude ?? 0);
+    const currentSprite = resolved.sprite;
+
     // 关节盘直径 = plug 侧开口宽度（与 carve 同源，不再与 parent bottom 求平均）。
     // 优先用 attachment.jointWidth（创建时写入），否则按 plug 位置回退估算。
     const storedJointWidth = node.attachment?.jointWidth;
@@ -1366,14 +1372,16 @@ function generateDiscInstructions(
             ? { localX: subToPx(node.attachment.plug.x), localY: subToPx(node.attachment.plug.y) }
             : null,
           crossSectionTop: plugCS?.diameter,
-          crossSectionBottom: bottomCS?.diameter,
+          // 现行数据里服装件只有 'plug' 一个截面：'bottom' 缺失时以它兜底，
+          // 否则 plug 位于精灵下半时回退仍然落空
+          crossSectionBottom: bottomCS?.diameter ?? plugCS?.diameter,
         },
-        node.sprite
+        currentSprite
           ? {
-              width: node.sprite.width,
-              height: node.sprite.height,
-              pivotX: subToPx(node.sprite.plug?.x ?? 0),
-              pivotY: subToPx(node.sprite.plug?.y ?? 0),
+              width: currentSprite.width,
+              height: currentSprite.height,
+              pivotX: subToPx(currentSprite.plug?.x ?? 0),
+              pivotY: subToPx(currentSprite.plug?.y ?? 0),
             }
           : null,
       );
@@ -1422,8 +1430,7 @@ function generateDiscInstructions(
     if (typeof customDiscColor === 'string' && customDiscColor) {
       fillColor = customDiscColor;
     } else {
-      const resolved = resolveSprite(node, currentDirection, activeCostumeSet, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? ''], character.latitude ?? 0);
-      const spr = resolved.sprite;
+      const spr = currentSprite;
       if (spr?.data && spr.plug) {
         let sampleX = subToPx(spr.plug.x);
         const sampleY = subToPx(spr.plug.y);
