@@ -175,6 +175,22 @@ function runCase(label: string, swingDeg: number, rootJoint: V3, midJoint: V3) {
   const fl = Math.hypot(fx, fy) || 1;
   const cos = (fx * ex + fy * ey) / (fl * el);
   const deg = Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI;
+  // 关节对接：合成图沿期望方向的最远不透明像素应到达子关节
+  // （段长 = 肩→肘距离；旧口径层心带俯角时只到约 71%）
+  const ux = ex / el, uy = ey / el;
+  let maxProj = -Infinity;
+  for (let y = 0; y < raster.height; y++) for (let x = 0; x < raster.width; x++) {
+    if (raster.rgba[(y * raster.width + x) * 4 + 3]! === 0) continue;
+    const lx = x - sr.pivotX, ly = y - sr.pivotY;
+    const wx = lx * Math.cos(ang) - ly * Math.sin(ang);
+    const wy = lx * Math.sin(ang) + ly * Math.cos(ang);
+    const p = wx * ux + wy * uy;
+    if (p > maxProj) maxProj = p;
+  }
+  const segLenPx = Math.hypot(insEnd.worldX - insMid.worldX, insEnd.worldY - insMid.worldY) / 16;
+  console.log(`    ${label}: 沿段向最远像素=${maxProj.toFixed(1)}px / 段长=${segLenPx.toFixed(1)}px`);
+  ok(maxProj > segLenPx * 0.88 && maxProj < segLenPx * 1.25,
+    `${label}: 段端到达子关节（${maxProj.toFixed(1)} 在 ${segLenPx.toFixed(1)} 的 0.88–1.25 倍内）`);
   console.log(`    ${label}: 合成质心(局部)=(${cx.toFixed(1)},${cy.toFixed(1)}) 指令角=${insMid.angle.toFixed(1)}° 最终向=(${fx.toFixed(1)},${fy.toFixed(1)}) 期望向=(${ex.toFixed(1)},${ey.toFixed(1)}) 夹角=${deg.toFixed(1)}°`);
   ok(deg < 12, `${label}: 手臂指向与肩→肘方向一致（夹角 ${deg.toFixed(1)}° < 12°）`);
 }

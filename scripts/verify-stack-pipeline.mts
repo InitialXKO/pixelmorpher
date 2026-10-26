@@ -102,7 +102,8 @@ const stack: SpriteStack = {
 };
 const layerSprites = [mkSprite(20, 20, 10, 10), mkSprite(20, 20, 10, 10), mkSprite(20, 20, 10, 10), mkSprite(20, 20, 10, 10)];
 
-// 恒等帧 + 俯角 45°：层 k 心在局部 (0, 10k+5, 0) → 屏幕 (0, (10k+5)·cos45)
+// 恒等帧 + 俯角 45°：层 k 心在局部 (0, 10k+5, 0) → 屏幕 (0, 10k+5)
+// （层心与节点同款投影、Y 不乘 cosε；俯角只管层图基的倾斜）
 // 层图基 U=(1,0,0)→screen(1,0)；V=(0,0,1)→screen(0, sin45)
 const idOps = computeStackOps(stack, layerSprites, MAT3_IDENTITY, 0, 45);
 ok(idOps.ops.length >= 4, `恒等帧产算子（${idOps.ops.length} 个，含 slab 子步）`);
@@ -113,8 +114,8 @@ const expE = idOps.pivotX + 0 - 10 * 1; // plug 换算后图左上 x = 心x − 
 void expE;
 ok(Math.abs(layer0.tr[0] - 1) < 1e-6 && Math.abs(layer0.tr[3] - Math.sin(Math.PI / 4)) < 1e-6,
   `恒等帧层仿射 a=1、d=sin45（实际 a=${layer0.tr[0]}, d=${layer0.tr[3].toFixed(3)}）`);
-// 心屏幕 y：第 0 层 = 5·cos45 ≈ 3.54 → 图顶 f = 心y − plugY·d − slab 半步
-ok(Math.abs((layer0MeanF + 10 * layer0.tr[3]) - (idOps.pivotY + 5 * Math.cos(Math.PI / 4))) < 0.6,
+// 心屏幕 y：第 0 层 = 5（不带俯角）→ 图顶 f = 心y − plugY·d − slab 半步
+ok(Math.abs((layer0MeanF + 10 * layer0.tr[3]) - (idOps.pivotY + 5)) < 0.6,
   '层心屏幕位置与手算一致（slab 子步均值回正）');
 
 // 纯视平面角帧（rotMatD(30)）+ worldAngle=30 → 去旋转后与恒等帧同算子

@@ -7,9 +7,12 @@
 //    （worldAngle 由渲染管线自己的 rotate 施加），剩余的出平面
 //    朝向（俯仰/翻滚/偏航）驱动逐层仿射——与普通精灵「只吃平面
 //    角」相比，堆叠部件多吃这一段真实 3D 朝向。
-//  - 层图按固定俯角 ε 投影（研究口径 45°）：产品相机本身无俯
-//    角（纬度 0 的平面图），截面图是俯视切片，没有俯角投影会
-//    压成扁带——ε 是堆叠产线自带的视角，见 STACK_VIEW_ELEVATION_DEG。
+//  - 俯角 ε（研究口径 45°）只作用于层图自身的倾斜与画序深度：
+//    截面图是俯视切片，没有倾斜会压成扁带——ε 是堆叠产线自带
+//    的视角，见 STACK_VIEW_ELEVATION_DEG。层心落位则与节点同款
+//    投影（Y 不乘 cosε）：段端正好落在下一关节上，摞与摞在关节
+//    处对接（此前层心也走俯角投影，每节在 Y 上缩到约 71%，
+//    接头系统性错位）。
 //  - 层片零厚度塌陷（验证三定案）：层轴接近视线垂直时整层投影
 //    高度趋零——slab 沿轴子步扫掠补厚度 + 边沿钳制（|层轴·视线|
 //    < sin25° 时把层图绕弦轴抬到 25°，位置仍按真轴）。
@@ -90,8 +93,11 @@ export function computeStackOps(
   };
   const elev = (elevationDeg * Math.PI) / 180;
   const ce = Math.cos(elev), se = Math.sin(elev);
-  // (h, y, d) → 合成图屏幕坐标：x = h，y = y·cosε + d·sinε（近处更低）
+  // (h, y, d) → 层图自身的屏幕基：x = h，y = y·cosε + d·sinε（近处更低）
   const toScreen = (p: V3): { x: number; y: number } => ({ x: p.x, y: p.y * ce + p.z * se });
+  // 层心落位：与节点位置同款投影（projectToView 口径，Y 不带俯角），
+  // 保证段端与下一关节重合
+  const toScreenCenter = (p: V3): { x: number; y: number } => ({ x: p.x, y: p.y });
   // 朝向观众的单位向量（带俯角 ε）：深度与层轴 facing 都按它量，
   // 不是按 d 轴——ε=45° 时竖直层轴的 facing = sin45，属舒适区
   // （验证三的钳制判据在合成相机系里量，与 spike 同口径）。
@@ -124,7 +130,8 @@ export function computeStackOps(
   }
   const Us = toScreen(U3);
   const Vs = toScreen(V3);
-  const axisScreen = toScreen(A3);
+  // slab 扫掠沿层心连线走（与层心同一投影口径）
+  const axisScreen = toScreenCenter(A3);
 
   const ops: StackDrawOp[] = [];
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -139,7 +146,7 @@ export function computeStackOps(
       z: stack.origin.z + stack.axis.z * dist,
     };
     const c3 = apply(centerLocal);
-    const cs = toScreen(c3);
+    const cs = toScreenCenter(c3);
     const plugX = spr.plug ? subToPx(spr.plug.x) : spr.width / 2;
     const plugY = spr.plug ? subToPx(spr.plug.y) : spr.height / 2;
     const a = Us.x, b = Us.y, c = Vs.x, d = Vs.y;
