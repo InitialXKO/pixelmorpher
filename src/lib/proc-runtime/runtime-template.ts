@@ -475,6 +475,95 @@ function spriteTileOf(sg, mirrored) {
     data: data,
   };
 }
+/** 堆叠层图 RGBA 缓存（part.stack.layers 网格 → RGBA；解析与 convert
+ * 的 gridToRgba 同口径：按位切片取 RGB、alpha 恒 255） */
+const stackLayerCache = new Map();
+function stackLayerRgba(part) {
+  let hit = stackLayerCache.get(part.key);
+  if (hit) return hit;
+  const layers = (part.stack.layers || []).map((lg) => {
+    const rgba = new Uint8ClampedArray(lg.w * lg.h * 4);
+    for (let y = 0; y < lg.h; y++) {
+      const row = lg.data[y] || [];
+      for (let x = 0; x < lg.w; x++) {
+        const cell = row[x];
+        if (!cell) continue;
+        const o = (y * lg.w + x) * 4;
+        rgba[o] = parseInt(cell.slice(1, 3), 16);
+        rgba[o + 1] = parseInt(cell.slice(3, 5), 16);
+        rgba[o + 2] = parseInt(cell.slice(5, 7), 16);
+        rgba[o + 3] = 255;
+      }
+    }
+    return { rgba: rgba, width: lg.w, height: lg.h };
+  });
+  stackLayerCache.set(part.key, layers);
+  return layers;
+}
+/** 堆叠单帧栅格化（与编辑器 rasterizeStackOpsData 同口径：逐算子逆
+ * 仿射最近采样 + source-over 合成；算子已按深度排序、坐标在显示图
+ * （并集画布）空间，条目为 [层序, a, b, c, d, e, f]） */
+function stackRasterizeFrame(ops, layerRgba, W, H) {
+  const out = new Uint8ClampedArray(W * H * 4);
+  for (const op of ops) {
+    const src = layerRgba[op[0]];
+    if (!src) continue;
+    const a = op[1], b = op[2], c = op[3], d = op[4], e = op[5], f = op[6];
+    const det = a * d - b * c;
+    if (Math.abs(det) < 1e-9) continue;
+    let mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
+    const corners = [[0, 0], [src.width, 0], [0, src.height], [src.width, src.height]];
+    for (const [px, py] of corners) {
+      const x = a * px + c * py + e, y = b * px + d * py + f;
+      if (x < mnx) mnx = x; if (x > mxx) mxx = x;
+      if (y < mny) mny = y; if (y > mxy) mxy = y;
+    }
+    const x0 = Math.max(0, Math.floor(mnx)), x1 = Math.min(W - 1, Math.ceil(mxx));
+    const y0 = Math.max(0, Math.floor(mny)), y1 = Math.min(H - 1, Math.ceil(mxy));
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dx = x + 0.5 - e, dy = y + 0.5 - f;
+        const sx = Math.floor((d * dx - c * dy) / det);
+        const sy = Math.floor((-b * dx + a * dy) / det);
+        if (sx < 0 || sy < 0 || sx >= src.width || sy >= src.height) continue;
+        const so = (sy * src.width + sx) * 4;
+        const sa = src.rgba[so + 3] / 255;
+        if (sa <= 0) continue;
+        const oo = (y * W + x) * 4;
+        const da = out[oo + 3] / 255;
+        const oa = sa + da * (1 - sa);
+        if (oa <= 0) continue;
+        for (let ch = 0; ch < 3; ch++) {
+          out[oo + ch] = Math.round((src.rgba[so + ch] * sa + out[oo + ch] * da * (1 - sa)) / oa);
+        }
+        out[oo + 3] = Math.round(oa * 255);
+      }
+    }
+  }
+  return out;
+}
+/** 堆叠件的干净底图瓦片（从 part.sprite 网格按瓦片几何重建，与图集
+ * 打包同格对齐）：动态改写图集后按它还原底图副图集 */
+function stackCleanBase(part, tile) {
+  const sg = part.sprite;
+  const base = new Uint8Array(tile.w * tile.h * 4);
+  if (!sg) return base;
+  const ox = Math.round(tile.cx - sg.plug[0]), oy = Math.round(tile.cy - sg.plug[1]);
+  for (let y = 0; y < sg.h; y++) {
+    const row = sg.data[y] || [];
+    for (let x = 0; x < sg.w; x++) {
+      const c = row[x];
+      if (!c) continue;
+      const rgb = parseHexRt(c);
+      if (!rgb) continue;
+      const tx = x + ox, ty = y + oy;
+      if (tx < 0 || ty < 0 || tx >= tile.w || ty >= tile.h) continue;
+      const o = (ty * tile.w + tx) * 4;
+      base[o] = rgb[0]; base[o + 1] = rgb[1]; base[o + 2] = rgb[2]; base[o + 3] = 255;
+    }
+  }
+  return base;
+}
 /** 蓝图小求值器（运行时方言：time/const/curve/math/sin/transform；enabled 短路）
  *  graph = { nodes: [{id, type, enabled?, ...}] }；ctx = { u }（0..1 表演进度）
  *  返回 Map partKey -> { angle?, dx?, dy? } */
@@ -2708,6 +2797,7 @@ function frame(now) {
   }
   prevBehaviorOutputs = behaviorOutputs;
   // 表演层：包络权重内合成到行为姿态之上
+  const stackPick = new Map();
   for (let i = activePerfs.length - 1; i >= 0; i--) {
     const act = activePerfs[i];
     act.t += dt;
@@ -2717,6 +2807,19 @@ function frame(now) {
     if (w > 0) {
       const bpOut = evalRuntimeGraph(act.perf.graph, { u: Math.min(1, act.t / act.perf.duration), tSec: act.t });
       pose = composePerformance(pose, act.perf, bpOut, w);
+      // 堆叠层变换选帧：带 stackFrames 的表演里取权重最大者（同权取
+      // 最近触发），帧号按表演本地进度对齐烘焙采样格
+      const sf = act.perf.stackFrames;
+      if (sf) {
+        const u = Math.min(1, act.t / act.perf.duration);
+        for (const sk of Object.keys(sf)) {
+          const prev = stackPick.get(sk);
+          if (prev && prev.w >= w) continue;
+          const frames = sf[sk].frames;
+          const idx = Math.max(0, Math.min(frames.length - 1, Math.round(u * (frames.length - 1))));
+          stackPick.set(sk, { w: w, ops: frames[idx], costume: sf[sk].costume });
+        }
+      }
     }
     // 片段状态轨（缺口 6）：段表演期间按本地时间累计应用状态键——
     // 从开始时的快照出发，逐键叠加（整覆服装集 + 逐槽变体增删），
@@ -2758,6 +2861,7 @@ function frame(now) {
   const els = [];
   const elByKey = new Map();
   const skinJobs = [];
+  const stackJobs = [];
   const partAnchorsByKey = new Map();
   const dynAnchors = [];
   sorted.forEach((part, idx) => {
@@ -2779,6 +2883,11 @@ function frame(now) {
     const p = resolved.params;
     const an0 = pose[part.key] || { a: 0, dy: 0, rim: 0, glint: 0 };
     const an = { a: an0.a + (p.restRot || 0), dx: an0.dx || 0, dy: an0.dy || 0, rim: an0.rim || 0, glint: an0.glint || 0, sx: an0.sx || 1, sy: an0.sy || 1 };
+    // 堆叠层变换：主导表演有烘焙帧、当前服装集与烘焙口径一致、当前
+    // 朝向未镜像时，本部件本帧逐层真合成（fore 不再叠加，算子已含
+    // 真几何）；否则回落静止合成图
+    const stackSel = (part.stack && !variantMirrored(part, char.variant)) ? stackPick.get(part.key) : undefined;
+    const stackDrive = (stackSel && stackSel.costume === currentCostume) ? stackSel : undefined;
     const dynList = dynListFor(part);
     // 追随段：导出时烘好的增量曲线按轨道进度采样，叠进本部件位姿
     // （位置 + 角度；粒子锚点用同一 an/ctr，自动跟随）
@@ -2824,7 +2933,7 @@ function frame(now) {
     if (an.sx !== 1 || an.sy !== 1) { dsx *= an.sx; dsy *= an.sy; hasDeform = true; }
     // 透视缩短（缺口 7）：沿骨骼方向（局部 Y）乘烘焙因子，与编辑器
     // effStretch 同落点；开关关时因子不生效
-    if (foreOn && an.fore !== undefined && an.fore !== 1) { dsy *= an.fore; hasDeform = true; }
+    if (!stackDrive && foreOn && an.fore !== undefined && an.fore !== 1) { dsy *= an.fore; hasDeform = true; }
     const rotA = an.a + spinRad;
     // 发光段：前 3 个启用实例各供一组参数（场在图集 RGB 三通道，导出时
     // 按选区预计算；第 4 个起在导出端已按各自所选组并入对应通道）
@@ -2861,6 +2970,9 @@ function frame(now) {
         plugX: tileCx + (mirr ? -part.skin.plugOff[0] : part.skin.plugOff[0]),
         plugY: tileCy + part.skin.plugOff[1],
       });
+    }
+    if (stackDrive && tile && place) {
+      stackJobs.push({ part: part, tile: tile, place: place, ops: stackDrive.ops });
     }
     // 弧线段原点 = 插头：换成相对瓦片中心的偏移（粒子系以中心为原点）
     const plugC = entry.plugN
@@ -3012,6 +3124,57 @@ function frame(now) {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, job.place[0], job.place[1], job.tile.w, job.tile.h, gl.RGBA, gl.UNSIGNED_BYTE, warped);
       state.skinDirty.set(job.place[0] + ',' + job.place[1], { tile: job.tile, place: job.place });
     }
+  }
+  // ---- 堆叠层变换执行：主导表演的烘焙算子逐帧栅格化进瓦片（掩码
+  // 图集 + 底图图集同格回传，与网格蒙皮同一回传模式）；上一帧改过
+  // 的区域先还原干净瓦片（不累积、无表演主导时即回落静止图） ----
+  if (stackJobs.length > 0 || (state.stackDirty && state.stackDirty.size > 0)) {
+    if (state.stackDirty) {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, state.tex);
+      for (const rec of state.stackDirty.values()) {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, rec.place[0], rec.place[1], rec.tile.w, rec.tile.h, gl.RGBA, gl.UNSIGNED_BYTE, rec.mask);
+      }
+      gl.bindTexture(gl.TEXTURE_2D, state.baseTex);
+      for (const rec of state.stackDirty.values()) {
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, rec.place[0], rec.place[1], rec.tile.w, rec.tile.h, gl.RGBA, gl.UNSIGNED_BYTE, rec.base);
+      }
+      state.stackDirty.clear();
+    } else state.stackDirty = new Map();
+  }
+  for (const job of stackJobs) {
+    const part = job.part;
+    const sg = part.sprite;
+    if (!sg) continue;
+    const rgba = stackRasterizeFrame(job.ops, stackLayerRgba(part), sg.w, sg.h);
+    const tile = job.tile;
+    const ox = Math.round(tile.cx - sg.plug[0]), oy = Math.round(tile.cy - sg.plug[1]);
+    const mask = new Uint8Array(tile.w * tile.h * 4);
+    const base = new Uint8Array(tile.w * tile.h * 4);
+    for (let q = 0; q < tile.w * tile.h; q++) { mask[q * 4] = 255; mask[q * 4 + 3] = 255; }
+    let any = false;
+    for (let y = 0; y < sg.h; y++) {
+      for (let x = 0; x < sg.w; x++) {
+        const so = (y * sg.w + x) * 4;
+        if (rgba[so + 3] <= 0) continue;
+        const tx = x + ox, ty = y + oy;
+        if (tx < 0 || ty < 0 || tx >= tile.w || ty >= tile.h) continue;
+        const to = (ty * tile.w + tx) * 4;
+        mask[to] = 2; mask[to + 3] = 255;
+        base[to] = rgba[so]; base[to + 1] = rgba[so + 1]; base[to + 2] = rgba[so + 2]; base[to + 3] = 255;
+        any = true;
+      }
+    }
+    if (!any) continue;
+    const dkey = job.place[0] + ',' + job.place[1];
+    if (!state.stackDirty.has(dkey)) {
+      state.stackDirty.set(dkey, { tile: tile, place: job.place, mask: tile.data, base: stackCleanBase(part, tile) });
+    }
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, state.tex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, job.place[0], job.place[1], tile.w, tile.h, gl.RGBA, gl.UNSIGNED_BYTE, mask);
+    gl.bindTexture(gl.TEXTURE_2D, state.baseTex);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, job.place[0], job.place[1], tile.w, tile.h, gl.RGBA, gl.UNSIGNED_BYTE, base);
   }
   // 刀光：表演开始帧定格锚点部件位姿（位置+角度），其后不跟随；
   // 进度按表演本地时间走，帧图自图集刀光瓦片取（最后绘制、在最上层）

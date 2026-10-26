@@ -16,7 +16,7 @@ import { buildParametricSprite } from './main-canvas';
 import { subToPx, projectToView, frameYAxisWorld, directionTrig } from '../unified-types';
 import { computeWorldTransforms, rotateWorldTransformsForYaw, facingYawDeltaRad } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
-import { computeStackOps, rasterizeStackOpsData } from '../stack-render';
+import { computeStackOps, rasterizeStackOpsData, type StackDrawOp } from '../stack-render';
 import { rgbaToHexOrNull } from '../engine/utils';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
@@ -142,10 +142,12 @@ export interface RuntimePart {
   skin?: { parent: string; radius: number; curve: 'linear' | 'smoothstep'; plugOff: [number, number] };
   /** 精灵堆叠（默认服装集口径；与默认集不同的集见 costumes[*].__stack）：
    * 层图网格 + 摞几何（节点局部坐标，全局像素），全量进包不丢弃。
-   * 模板现行位姿模型是 2D 的、不跑逐帧 3D 合成：带 stack 的件在包里
-   * 的显示图（sprite/__sprite）是 convert 期以第 0 帧世界帧、按编辑
-   * 器同一公式（computeStackOps）合成的静止帧图；能做 3D 的消费方
-   * 可直接用本字段逐帧合成。 */
+   * 显示图（sprite/__sprite）是 convert 期以第 0 帧世界帧、按编辑
+   * 器同一公式（computeStackOps）合成的静止帧图（已按动画全窗并集
+   * 垫边，与层变换帧同画布）；轨道/片段表演另带 stackFrames 逐帧
+   * 层变换（并集画布空间、锚点归一化的仿射算子），模板在这些表演
+   * 主导时逐层真合成；其余位姿来源下回落静止图。能做 3D 的消费方
+   * 也可直接用本字段逐帧合成。 */
   stack?: RuntimeStackPayload;
 }
 
@@ -849,6 +851,8 @@ export function convertCharacterToRuntimePackage(
   // 精灵堆叠载荷：默认集口径挂 part.stack（来源层 id 串记下，供
   // __stack 只收与默认口径不同的集，避免整摞层图在每集重复进包）
   const stackBaseIds = new Map<string, string>();
+  const stackPartSlots: string[] = [];
+  const stackBakedSlots = new Set<string>();
   for (const part of parts) {
     const src = activeSet?.pieces[part.key]?.stack
       ? activeSet.pieces[part.key]
@@ -857,7 +861,7 @@ export function convertCharacterToRuntimePackage(
     if (payload && src?.stack) {
       part.stack = payload;
       stackBaseIds.set(part.key, src.stack.layerSpriteIds.join(','));
-      warnings.push(`精灵堆叠：槽位 ${part.key} 的摞已全量进包（part.stack）；播放器位姿为 2D，显示图按第 0 帧静止朝向合成，逐帧 3D 合成不在包内`);
+      stackPartSlots.push(part.key);
     }
   }
   if (parts.length === 0) warnings.push('没有任何可进包的部件（参数化外观或精灵）：运行时包将没有部件');
@@ -1196,11 +1200,38 @@ export function convertCharacterToRuntimePackage(
           n.id, { ...n, blueprint: null, modifiers: [] },
         ])),
       };
+      // ---- 堆叠层变换烘焙的采样对象：仅 spriteKind 堆叠件、且显示图
+      // 确由同一摞合成（与 stackDisplayOf 几何比对一致）、默认集口径。
+      // 带发光/摞标记/被裁剪面锚定的件不烘：那些数据的坐标系挂在显示
+      // 图上，垫图会错位——回落静止图并在包警告里点名。 ----
+      type StackFrameSample = { ops: StackDrawOp[]; pivotX: number; pivotY: number; w: number; h: number; mirror: boolean };
+      const stackNodes = new Map<string, { slot: string; stack: NonNullable<CostumePiece['stack']>; layerSprites: (Sprite | undefined)[] }>();
+      const stackYawDelta = character.facingAngle !== undefined
+        ? facingYawDeltaRad(character.facingAngle, ((character.rootNodeId ? worlds.get(character.rootNodeId)?.variantIndex : undefined) ?? 0) as DirectionIndex)
+        : 0;
+      const clipAnchorSlots = new Set(parts.filter((p) => p.clip).map((p) => p.clip!.by));
+      for (const part of parts) {
+        if (!part.spriteKind || !part.stack || !part.sprite) continue;
+        if (part.glow || (part.stack.marks?.length ?? 0) > 0 || clipAnchorSlots.has(part.key)) continue;
+        const piece = activeSet?.pieces[part.key];
+        if (!piece?.stack) continue;
+        const nodeId = slotNode.get(part.key);
+        if (!nodeId) continue;
+        const disp = stackDisplayOf(piece, nodeId);
+        if (!disp || disp.w !== part.sprite.w || disp.h !== part.sprite.h
+          || disp.plug[0] !== part.sprite.plug[0] || disp.plug[1] !== part.sprite.plug[1]) continue;
+        stackNodes.set(nodeId, {
+          slot: part.key, stack: piece.stack,
+          layerSprites: piece.stack.layerSpriteIds.map((id) => spriteTable[id]),
+        });
+      }
       // 采样一个窗：工程帧 [startF, startF + D] 共 D+1 个样本（末样本为循环接点）；
       // 与部件摆放同一投影（projectToView，朝向取当帧根节点 variantIndex），
       // 运行时系（角度弧度、y 取反、px）
       const sampleWindow = (startF: number, D: number) => {
         const samples = new Map<string, Array<{ a: number; x: number; y: number; fore: number }>>();
+        const stackSamples = new Map<string, Array<StackFrameSample | null>>();
+        for (const snId of stackNodes.keys()) stackSamples.set(snId, []);
         for (let f = startF; f <= startF + D; f++) {
           const wf = computeWorldTransforms(stripped, f, 512, 512, projectFpsTop);
           const dirF = (character.rootNodeId ? wf.get(character.rootNodeId)?.variantIndex : undefined) ?? rootDir;
@@ -1217,8 +1248,23 @@ export function convertCharacterToRuntimePackage(
             const fore = Math.min(1, Math.hypot(yw.x * trigF.cos + yw.z * trigF.sin, yw.y));
             arr.push({ a: -w.worldAngle * Math.PI / 180, x: subToPx(proj.canvasX), y: -subToPx(proj.canvasY), fore });
           }
+          // 堆叠层算子：与静止显示图同一公式（computeStackOps）；偏航
+          // 与静止口径一致地先转世界变换（姿态样本本身不转）
+          if (stackNodes.size > 0) {
+            let wfS = wf;
+            if (stackYawDelta !== 0) { wfS = new Map(wf); rotateWorldTransformsForYaw(wfS, stackYawDelta); }
+            for (const [snId, info] of stackNodes) {
+              const sArr = stackSamples.get(snId)!;
+              const w = wfS.get(snId);
+              if (!w) { sArr.push(null); continue; }
+              const res = computeStackOps(info.stack, info.layerSprites, w.worldFrame, w.worldAngle);
+              sArr.push(res.ops.length > 0
+                ? { ops: res.ops, pivotX: res.pivotX, pivotY: res.pivotY, w: res.width, h: res.height, mirror: !!w.mirror }
+                : null);
+            }
+          }
         }
-        return samples;
+        return { samples, stackSamples };
       };
       // 样本 → 曲线图节点（增量相对窗首样本）；warnNodes 时逐节点报无贡献
       const curvesForWindow = (
@@ -1274,6 +1320,104 @@ export function convertCharacterToRuntimePackage(
         }
         return { graphNodes, mask };
       };
+      // ---- 堆叠层变换：跨窗并集画布 + 锚点归一化算子 + 垫显示图 ----
+      // 算子原本活在各自帧的紧画布里；统一平移到全窗并集画布（锚点 =
+      // 显示图 plug），播放器才能把任意帧的算子栅格化进同一张瓦片。
+      const stackUnion = new Map<string, { minX: number; minY: number; maxX: number; maxY: number }>();
+      const feedStackBox = (slot: string, minX: number, minY: number, maxX: number, maxY: number) => {
+        let u = stackUnion.get(slot);
+        if (!u) { u = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }; stackUnion.set(slot, u); }
+        u.minX = Math.min(u.minX, minX); u.minY = Math.min(u.minY, minY);
+        u.maxX = Math.max(u.maxX, maxX); u.maxY = Math.max(u.maxY, maxY);
+      };
+      const feedStackUnion = (ss: Map<string, Array<StackFrameSample | null>>) => {
+        for (const [nodeId, arr] of ss) {
+          const slot = stackNodes.get(nodeId)?.slot;
+          if (!slot) continue;
+          for (const sm of arr) {
+            if (!sm) continue;
+            feedStackBox(slot, -sm.pivotX, -sm.pivotY, sm.w - sm.pivotX, sm.h - sm.pivotY);
+          }
+        }
+      };
+      const unionPx = (slot: string) => {
+        const u = stackUnion.get(slot)!;
+        const fx = Math.floor(u.minX), fy = Math.floor(u.minY);
+        return { W: Math.ceil(u.maxX) - fx, H: Math.ceil(u.maxY) - fy, px: -fx, py: -fy };
+      };
+      const r3 = (v: number) => Math.round(v * 1000) / 1000;
+      const stackFrameOps = (sm: StackFrameSample, slot: string): number[][] => {
+        const { px, py } = unionPx(slot);
+        return sm.ops.map((op) => {
+          let a = op.tr[0], b = op.tr[1], c = op.tr[2], d = op.tr[3];
+          let e = op.tr[4] - sm.pivotX, f = op.tr[5] - sm.pivotY;
+          if (sm.mirror) { a = -a; c = -c; e = -e; }
+          return [op.layer, r3(a), r3(b), r3(c), r3(d), r3(e + px), r3(f + py)];
+        });
+      };
+      const stackStaticKeyCache = new Map<string, string>();
+      const stackStaticKey = (slot: string): string => {
+        const hit = stackStaticKeyCache.get(slot);
+        if (hit !== undefined) return hit;
+        let key = '';
+        const nodeId = slotNode.get(slot);
+        const info = nodeId ? stackNodes.get(nodeId) : undefined;
+        const w = nodeId ? worlds.get(nodeId) : undefined;
+        if (info && w) {
+          const res = computeStackOps(info.stack, info.layerSprites, w.worldFrame, w.worldAngle);
+          if (res.ops.length > 0) {
+            key = JSON.stringify(stackFrameOps(
+              { ops: res.ops, pivotX: res.pivotX, pivotY: res.pivotY, w: res.width, h: res.height, mirror: !!w.mirror }, slot));
+          }
+        }
+        stackStaticKeyCache.set(slot, key);
+        return key;
+      };
+      // 一窗的层变换组帧：全窗恒定则塌成一帧；与静止合成一致则整槽略去
+      const stackFramesForWindow = (
+        ss: Map<string, Array<StackFrameSample | null>>,
+      ): Record<string, { costume: string; frames: number[][][] }> | undefined => {
+        const out: Record<string, { costume: string; frames: number[][][] }> = {};
+        for (const [nodeId, arr] of ss) {
+          const info = stackNodes.get(nodeId);
+          if (!info || arr.length === 0) continue;
+          const slot = info.slot;
+          let frames = arr.map((sm) => (sm ? stackFrameOps(sm, slot) : []));
+          const keys = frames.map((fr) => JSON.stringify(fr));
+          if (keys.every((k) => k === keys[0])) frames = [frames[0]!];
+          if (frames.length === 1 && keys[0] === stackStaticKey(slot)) continue;
+          out[slot] = { costume: activeSet?.id ?? '', frames };
+        }
+        return Object.keys(out).length > 0 ? out : undefined;
+      };
+      const padStackDisplays = () => {
+        for (const slot of stackUnion.keys()) {
+          const part = parts.find((p) => p.key === slot);
+          if (!part?.sprite) continue;
+          const { W, H, px, py } = unionPx(slot);
+          const sg = part.sprite;
+          if (sg.w === W && sg.h === H && sg.plug[0] === px && sg.plug[1] === py) continue;
+          const dx = px - sg.plug[0], dy = py - sg.plug[1];
+          const data: PixelGrid = [];
+          for (let y = 0; y < H; y++) {
+            const row: (string | null)[] = new Array(W).fill(null);
+            const oy = y - dy;
+            if (oy >= 0 && oy < sg.h) {
+              const orow = sg.data[oy];
+              if (orow) for (let x = 0; x < W; x++) {
+                const ox = x - dx;
+                if (ox >= 0 && ox < sg.w) row[x] = orow[ox] ?? null;
+              }
+            }
+            data.push(row);
+          }
+          const padded = { ...sg, w: W, h: H, plug: [px, py] as [number, number], data };
+          part.sprite = padded;
+          part.base.size = [W, H];
+          const sm = (activeSet ? costumes[activeSet.id]?.__sprite : undefined) as Record<string, unknown> | undefined;
+          if (sm && sm[slot]) sm[slot] = padded;
+        }
+      };
       // 全程窗 →「轨道」表演。时长：工程总帧数优先（时间线长度，末帧后
       // 保持）；缺省取最晚关键帧
       let totalFrames = Math.max(1, Math.round(opts?.totalFrames ?? 0));
@@ -1286,7 +1430,27 @@ export function convertCharacterToRuntimePackage(
         }
       }
       const fullSamples = sampleWindow(0, totalFrames);
-      const full = curvesForWindow(fullSamples, totalFrames, 't', true);
+      const full = curvesForWindow(fullSamples.samples, totalFrames, 't', true);
+      // 堆叠层变换：片段窗先全部采样（并集画布跨窗算），再统一垫显示图
+      const sortedClips = [...clipList].sort((a, b) => a.startFrame - b.startFrame);
+      const clipSamples = new Map<AnimationClip, ReturnType<typeof sampleWindow>>();
+      for (const clip of sortedClips) {
+        clipSamples.set(clip, sampleWindow(clip.startFrame, clip.endFrame - clip.startFrame + 1));
+      }
+      if (stackNodes.size > 0) {
+        feedStackUnion(fullSamples.stackSamples);
+        for (const cs of clipSamples.values()) feedStackUnion(cs.stackSamples);
+        // 显示图自身内容框并入并集（回落图不被垫图裁掉）
+        for (const info of stackNodes.values()) {
+          const part = parts.find((p) => p.key === info.slot);
+          if (part?.sprite) {
+            feedStackBox(info.slot, -part.sprite.plug[0], -part.sprite.plug[1],
+              part.sprite.w - part.sprite.plug[0], part.sprite.h - part.sprite.plug[1]);
+          }
+        }
+        padStackDisplays();
+      }
+      const fullStackFrames = stackFramesForWindow(fullSamples.stackSamples);
       if (full.graphNodes.length > 0) {
         performances.push({
           id: 'tracks',
@@ -1298,7 +1462,9 @@ export function convertCharacterToRuntimePackage(
           mode: 'add',
           mask: full.mask,
           graph: { context: 'performance', nodes: full.graphNodes },
+          ...(fullStackFrames ? { stackFrames: fullStackFrames } : {}),
         });
+        if (fullStackFrames) for (const slot of Object.keys(fullStackFrames)) stackBakedSlots.add(slot);
       }
       // ---- 追随段：锚定增量曲线烘焙（甲：摆角 + 沿轴缩放） ----
       // 连接点锚死：源部件轨道样本的平移增量不再整件平移跟随者，
@@ -1325,7 +1491,7 @@ export function convertCharacterToRuntimePackage(
           }
           const srcNode = Object.values(character.nodes).find(
             (n) => (n.slot?.slotKey ?? n.id) === fp.followSource);
-          const srcSamples = srcNode ? fullSamples.get(srcNode.id) : undefined;
+          const srcSamples = srcNode ? fullSamples.samples.get(srcNode.id) : undefined;
           if (!srcSamples) {
             warnings.push(`追随：部件 ${slotKey} 的源部件「${fp.followSource}」不存在，未烘焙`);
             continue;
@@ -1334,7 +1500,7 @@ export function convertCharacterToRuntimePackage(
           // plug y；参数化件由编辑器 plug 定义换算 size/2 + pivot）
           const folNode = Object.values(character.nodes).find(
             (n) => (n.slot?.slotKey ?? n.id) === slotKey);
-          const folSamples = folNode ? fullSamples.get(folNode.id) : undefined;
+          const folSamples = folNode ? fullSamples.samples.get(folNode.id) : undefined;
           const folPart = parts.find((p) => p.key === slotKey);
           let reach = 0;
           if (folPart?.sprite) {
@@ -1371,9 +1537,11 @@ export function convertCharacterToRuntimePackage(
       }
       // 片段窗 → 段表演（按窗起点排序，状态机/宿主按 id 或名触发）
       let ci = 0;
-      for (const clip of [...clipList].sort((a, b) => a.startFrame - b.startFrame)) {
+      for (const clip of sortedClips) {
         const len = clip.endFrame - clip.startFrame + 1;
-        const seg = curvesForWindow(sampleWindow(clip.startFrame, len), len, `c${ci++}_`, false);
+        const clipSampled = clipSamples.get(clip)!;
+        const seg = curvesForWindow(clipSampled.samples, len, `c${ci++}_`, false);
+        const segStackFrames = stackFramesForWindow(clipSampled.stackSamples);
         if (seg.graphNodes.length === 0 && !clip.slashEffect) {
           warnings.push(`片段「${clip.name}」：时间窗内轨道无姿态贡献，未生成段表演`);
           continue;
@@ -1389,11 +1557,13 @@ export function convertCharacterToRuntimePackage(
           mask: seg.mask,
           slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
           graph: { context: 'performance', nodes: seg.graphNodes },
+          ...(segStackFrames ? { stackFrames: segStackFrames } : {}),
           stateFx: stateFxOf(clip),
           fx: clipFxOf(clip),
           fxStart: clip.startFrame,
         });
         emittedClipPerfIds.add(`clip_${clip.id}`);
+        if (segStackFrames) for (const slot of Object.keys(segStackFrames)) stackBakedSlots.add(slot);
       }
     }
     // 刀光专用片段：角色全无姿态轨道时采样块整体跳过，段表演仍须
@@ -1419,6 +1589,14 @@ export function convertCharacterToRuntimePackage(
     }
   }
 
+  // ---- 堆叠进包口径点名（逐槽：层变换已烘 / 仅静止图回落） ----
+  for (const slot of stackPartSlots) {
+    if (stackBakedSlots.has(slot)) {
+      warnings.push(`精灵堆叠：槽位 ${slot} 的摞已全量进包（part.stack）；轨道/片段动画的层变换已逐帧烘焙（stackFrames），播放器在这些表演主导时逐层真合成；行为图等其他位姿来源下仍显示第 0 帧静止合成图`);
+    } else {
+      warnings.push(`精灵堆叠：槽位 ${slot} 的摞已全量进包（part.stack）；播放器位姿为 2D，显示图按第 0 帧静止朝向合成，逐帧 3D 合成不在包内`);
+    }
+  }
 
   // ---- 状态机：作者规格直通（表演状态引用的表演必须在包内，悬空的
   // 降为常驻状态并点名）；缺省生成默认机 ----
