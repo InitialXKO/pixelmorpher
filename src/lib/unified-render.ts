@@ -103,6 +103,7 @@ import {
   getEmptyVariableContext,
 } from './unified-animation-resolver';
 import { resolvePieceSprite } from './sprite-resolve';
+import { computeStackOps, rasterizeStackOps } from './stack-render';
 
 // ---- World Transform Computation ----
 
@@ -1804,7 +1805,19 @@ export function generateRenderPlan(
     // 方向混合时：先按 dirA 解析主精灵
     const resolveDir = dirBlend ? dirBlend.dirA : currentDirection;
     let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0, frame, frameRate);
-    if (!sprite) continue;
+    if (!sprite) {
+      // 堆叠部件可以没有方向平面图（纯堆叠件）：以中间层图作替身
+      // 精灵让指令成立（身份/点选/缩略口径），实际绘制由 stackRender
+      // 接管；连层图都没有才跳过本节点。
+      const stackOnlyPiece = activeCostumeSet?.pieces[node.slot?.slotKey ?? node.id];
+      const midId = stackOnlyPiece?.stack?.layerSpriteIds[
+        Math.floor(stackOnlyPiece.stack.layerSpriteIds.length / 2)
+      ];
+      const midSprite = midId ? spriteTable[midId] : undefined;
+      if (!midSprite) continue;
+      sprite = midSprite;
+      mirror = false;
+    }
 
     // 方向间过渡（蒙皮转面 A）：blend 不为 0/1 时，双精灵 faceTurn + alpha 混合
     // 只在需要时双采样，避免性能开销
@@ -1991,14 +2004,30 @@ export function generateRenderPlan(
         }
       }
     }
+    // 精灵堆叠：生效服装件带 stack 时，计划期按当帧朝向算逐层算子
+    // 随指令下发（执行端栅格化；精灵方向图仅回落）。合成在去视平面
+    // 角的帧里做——worldAngle 由执行端 rotate 施加。
+    let stackRender: NodeRenderInstruction['stackRender'];
+    const stackPiece = activeCostumeSet?.pieces[node.slot?.slotKey ?? node.id];
+    if (stackPiece?.stack) {
+      const layerSprites = stackPiece.stack.layerSpriteIds.map((id) => spriteTable[id]);
+      if (layerSprites.some(Boolean)) {
+        const res = computeStackOps(stackPiece.stack, layerSprites, worldTf.worldFrame, worldTf.worldAngle);
+        if (res.ops.length > 0) {
+          stackRender = { ops: res.ops, width: res.width, height: res.height, pivotX: res.pivotX, pivotY: res.pivotY, key: res.key, layerSpriteIds: stackPiece.stack.layerSpriteIds };
+        }
+      }
+    }
+
     nodeInstructions.push({
       nodeId,
       sprite: effectiveSprite,
+      stackRender,
       worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel) + pxToSub(folDx)) as SubPixel,
       worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel) + pxToSub(folDy)) as SubPixel,
       angle: worldTf.worldAngle + (folDa * 180) / Math.PI + spinDeg,
       stretch: dynResolved.length > 0 ? worldTf.worldStretch * dynSy * folDs : worldTf.worldStretch,
-      foreshorten,
+      foreshorten: stackRender ? undefined : foreshorten,
       variantIndex: worldTf.variantIndex,
       rotationStrategy: strategy,
       mirror: mirror || worldTf.mirror,
@@ -2718,7 +2747,25 @@ function renderNodeSprite(
   // 哈希折进 pixelsToCanvas 本来就要做的全图遍历，不单独再跑一遍。
   const pixelHashOut = { value: '' };
   let spriteCanvas = pixelsToCanvas(effectivePixels, sprite.width, sprite.height, pixelHashOut);
-  const pixelContentHash = pixelHashOut.value;
+  let pixelContentHash = pixelHashOut.value;
+  // 堆叠合成图：按计划期算子逐层栅格化为绘制画布（像素链对摞不
+  // 适用，effectivePixels 只是回落精灵）；内容哈希换成朝向量化键，
+  // 防旋转缓存串图。层画布按精灵对象身份缓存（WeakMap）。
+  const stackPivot = instruction.stackRender
+    ? { x: instruction.stackRender.pivotX, y: instruction.stackRender.pivotY }
+    : null;
+  if (instruction.stackRender) {
+    const table = instruction.sprites ?? {};
+    const canvases = instruction.stackRender.layerSpriteIds.map((id) => {
+      const spr = table[id];
+      return spr ? stackLayerCanvas(spr) : null;
+    });
+    const raster = rasterizeStackOps(instruction.stackRender, canvases);
+    if (raster) {
+      spriteCanvas = raster;
+      pixelContentHash = instruction.stackRender.key;
+    }
+  }
   if (!spriteCanvas || spriteCanvas.width === 0 || spriteCanvas.height === 0) return;
   // 若尺度不一致，重采样到全局像素（一次，非每帧；记录的系数保证可逆）
   if (Math.abs(scaleFactor - 1) > 0.001) {
@@ -2736,8 +2783,8 @@ function renderNodeSprite(
   // worldX/Y is where this pivot should land on the output canvas.
   // When mirrored, the plug X is flipped: x → width - x
   // 注意：plug 已在全局像素下（画布已缩放），直接使用
-  let pivotX = (sprite.plug?.x !== undefined ? subToPx(sprite.plug.x) * scaleFactor : spriteCanvas.width / 2) + modOffsetX;
-  const pivotY = (sprite.plug?.y !== undefined ? subToPx(sprite.plug.y) * scaleFactor : spriteCanvas.height / 2) + modOffsetY;
+  let pivotX = stackPivot ? stackPivot.x : (sprite.plug?.x !== undefined ? subToPx(sprite.plug.x) * scaleFactor : spriteCanvas.width / 2) + modOffsetX;
+  const pivotY = stackPivot ? stackPivot.y : (sprite.plug?.y !== undefined ? subToPx(sprite.plug.y) * scaleFactor : spriteCanvas.height / 2) + modOffsetY;
 
   const pivotXRaw = pivotX; // 未镜像口径的枢轴（发光叠加层按此对位）
 
@@ -2762,7 +2809,7 @@ function renderNodeSprite(
 
   // 动态模式发光段：叠加层与精灵同像素空间（scaleFactor ≡ 1 前提，与绘制口径一致）。
   // 按发光组建层：前 3 个各一组，第 4 个起按所选组并入（resolveGlowGroups）。
-  const glowOverlays = previewQuality === 'low' || !instruction.dynamicPatterns?.length
+  const glowOverlays = previewQuality === 'low' || !instruction.dynamicPatterns?.length || instruction.stackRender
     ? []
     : resolveGlowGroups(instruction.dynamicPatterns.map((r) => r.instance.params))
       .map((g) => buildGlowOverlay(effectivePixels, g.representative, g.contributors, frame / frameRate, pixelContentHash, mirror, angle, sprite?.marks))
@@ -3027,6 +3074,17 @@ function renderDisc(
  * Convert a PixelGrid to an offscreen HTMLCanvasElement.
  * This is the raw pixel→canvas conversion without modifier processing.
  */
+const stackLayerCanvasCache = new WeakMap<Sprite, HTMLCanvasElement>();
+function stackLayerCanvas(sprite: Sprite): HTMLCanvasElement | null {
+  let cv = stackLayerCanvasCache.get(sprite);
+  if (!cv) {
+    cv = pixelsToCanvas(sprite.data, sprite.width, sprite.height) ?? undefined as unknown as HTMLCanvasElement;
+    if (!cv) return null;
+    stackLayerCanvasCache.set(sprite, cv);
+  }
+  return cv;
+}
+
 export function pixelsToCanvas(
   pixels: PixelGrid,
   width: number,

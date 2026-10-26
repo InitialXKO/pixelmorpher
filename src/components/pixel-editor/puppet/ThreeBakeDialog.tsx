@@ -39,6 +39,7 @@ import {
   type ProcessedBoneDirection,
   type ProcessedBoneLayered,
 } from '@/lib/bake/skeleton-mapper';
+import { attachPartStacks } from '../../../lib/bake/stack-attach';
 import {
   bakeManualParts,
   listManualMeshes,
@@ -804,6 +805,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [paletteSize, setPaletteSize] = useState(16);
   const [weightThreshold, setWeightThreshold] = useState(0.2);
   const [absorbUnassigned, setAbsorbUnassigned] = useState(false);
+  const [withStacks, setWithStacks] = useState(false);
   const [manualPrefixSplit, setManualPrefixSplit] = useState<'none' | 'parts' | 'layers'>('none');
   const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
   /** 烘焙模式：twopass=整模 ID 双遍（16 遍），sixpart=六部件（96 遍） */
@@ -982,6 +984,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       const data = await bakeSixParts(inp, {
         size,
         layerPass: layerMode,
+        withStacks,
         weightThreshold,
         absorbUnassigned,
         granularity,
@@ -1020,7 +1023,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize, weightThreshold, absorbUnassigned, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor]);
+  }, [fileData, url, size, paletteSize, weightThreshold, absorbUnassigned, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor, withStacks]);
 
   /** 导出 Live2D (.moc3)：当前 MMD 模型 → 拆分图元 + 骨骼姿态采样关键形 → 打包下载 */
   const handleExportLive2d = useCallback(async () => {
@@ -1357,6 +1360,13 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       const mapped = processedLayered
         ? mapBonesToNodesLayered(processedLayered, char.id, name)
         : mapBonesToNodes(processed, char.id, name);
+      // 精灵堆叠：把烘焙时的部件切片挂到对应服装件（层图并入 mapped.sprites 一并写入）
+      let stackNote = '';
+      if (sixPart?.partStacks && sixPart.partStacks.size > 0) {
+        const r = attachPartStacks(mapped.character, mapped.sprites, sixPart.partStacks, char.id, name);
+        if (r.attached > 0) stackNote = `；已挂堆叠 ${r.attached} 个部件（${r.layerSprites} 张层图）`;
+        if (r.skipped > 0) stackNote += `；${r.skipped} 个部件未挂上（宿主节点缺失）`;
+      }
       // 一次写入：节点树 + 服装集（不中途回读，见 AGENTS.md 快照坑）
       store.updateUnifiedCharacter(char.id, {
         nodes: mapped.character.nodes,
@@ -1370,12 +1380,12 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       }));
       setLastImportedCharId(char.id);
       setImportMsg(
-        `已创建角色 ${name}，含 ${mapped.stats.nodes} 个节点，${mapped.stats.sprites} 张精灵${enlargeNote}`,
+        `已创建角色 ${name}，含 ${mapped.stats.nodes} 个节点，${mapped.stats.sprites} 张精灵${enlargeNote}${stackNote}`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [processed, processedLayered, fileName, size]);
+  }, [processed, processedLayered, fileName, size, sixPart]);
 
   // 手动替换服装：用预览的某方向精灵替换已导入角色的对应精灵
   const handleReplaceSprite = useCallback((
@@ -1556,6 +1566,12 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             <label className="flex cursor-pointer items-center gap-1" title="不属于任何部件的内容（六部件：主导骨骼无部件的三角形；手动：未分配的网格）按邻近关系归入相邻部件，而不是直接丢弃">
               <input type="checkbox" checked={absorbUnassigned} onChange={(e) => setAbsorbUnassigned(e.target.checked)} />
               无归属归入邻近部件
+            </label>
+            )}
+            {(bakeMode === 'sixpart' || bakeMode === 'layer') && (
+            <label className="flex cursor-pointer items-center gap-1" title="同时把每个部件沿主轴切成一摞截面层图，导入时挂到部件上：呈现时按 3D 朝向逐层合成、可连续转动（第二产线，PR #46 研究定案）；方向平面图照常生成作回落">
+              <input type="checkbox" checked={withStacks} onChange={(e) => setWithStacks(e.target.checked)} />
+              生成精灵堆叠
             </label>
             )}
             {bakeMode === 'manual' && (
