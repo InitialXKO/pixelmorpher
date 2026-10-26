@@ -75,7 +75,7 @@ const planBefore = generateRenderPlan(character, 0, 256, 256, 'pixel-perfect', 1
   undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, sprites);
 const insBefore = planBefore.nodeInstructions.find((i) => i.nodeId === torso.id);
 ok(!insBefore, '对照：挂摞前躯干无指令（该件此时无任何视觉）');
-const boneStacks = new Map([[4, { rootBoneIndex: 4, rootBoneName: '腰', sliced: sliced2 }]]) as never;
+const boneStacks = new Map([[4, { rootBoneIndex: 4, rootBoneName: '腰', jointChar: { x: 100, y: 50, z: 0 }, sliced: sliced2 }]]) as never;
 const res = attachBoneStacks(character, sprites, boneStacks, charId, '测试');
 ok(res.attached === 1 && res.skipped === 0, `挂载成功（attached=${res.attached}, skipped=${res.skipped}）`);
 ok(res.layerSprites === sliced2.layers.length, `层图数 = ${res.layerSprites}`);
@@ -86,17 +86,16 @@ const stack = piece.stack;
 ok(!!stack, 'piece.stack 已挂');
 if (stack) {
   ok(stack.layerSpriteIds.length === sliced2.layers.length, '层序完整');
-  // 往返校验：局部 origin 经宿主世界帧变回角色空间 == 切片 origin
+  // 局部口径校验：origin = 切片 origin − 关节角色位（纯平移，
+  // 姿态规范化由呈现端当帧世界帧施加，不在挂载时抵消）
+  const err = Math.hypot(
+    stack.origin.x - (sliced2.origin.x - 100),
+    stack.origin.y - (sliced2.origin.y - 50),
+    stack.origin.z - sliced2.origin.z,
+  );
+  ok(err < 0.01, `局部 origin = 切片 origin − 关节位（误差 ${err.toFixed(3)}px）`);
   const wts = computeWorldTransforms(character, 0, 1024, 1024);
   const wt = wts.get(torso.id)!;
-  const dir = wt.variantIndex;
-  const nodeBasis = worldToViewBasis(wt.worldX / 16, wt.worldY / 16, wt.worldZ / 16, dir);
-  const back = mat3Apply(wt.worldFrame, stack.origin.x, stack.origin.y, stack.origin.z);
-  const backChar = { h: back.h + nodeBasis.h, y: back.y + nodeBasis.y, d: back.d + nodeBasis.d };
-  // 比较在帧的朝向基坐标里做（切片原值先变进同一基）
-  const slicedBasis = worldToViewBasis(sliced2.origin.x, sliced2.origin.y, sliced2.origin.z, dir);
-  const err = Math.hypot(backChar.h - slicedBasis.h, backChar.y - slicedBasis.y, backChar.d - slicedBasis.d);
-  ok(err < 0.6, `局部 origin 往返误差 ${err.toFixed(2)}px（<0.6）`);
   // 呈现消费：当帧帧算子非空
   const layerSprites = stack.layerSpriteIds.map((id) => sprites[id]);
   const ops = computeStackOps(stack, layerSprites, wt.worldFrame, wt.worldAngle, 45);

@@ -3,27 +3,24 @@
 // 到映射后角色对应骨骼节点的服装件上——宿主就是这节肢体自己的
 // 节点，与 2D 拆分出的肢体 1:1 对齐（六部件只是烘焙分组）。
 //
-// 关键变换：切片的 origin/axis/u/v 在角色空间（全局像素），
-// SpriteStack 要的是宿主节点局部坐标。用渲染端自己的
-// computeWorldTransforms 在静止帧算出宿主节点的世界帧与位置，
-// 以其逆（旋转转置）把点与方向变进节点局部——与呈现端严格
-// 同源，mapper 的各种规范化（臂链拉直等）自动一致，不另算一份。
+// 局部口径（关键）：SpriteStack 的局部坐标与子节点 socket 的
+// offset3D 同一待遇——以宿主关节为原点、角色空间分量直接作局部
+// 分量，呈现端用节点当帧世界帧施加。于是静止帧的姿态规范化
+// （垂臂摆回的肩 ∓90° 等）与动画都自动跟随，与平面精灵、子关节
+// 落点严格同源。此前用静止帧世界帧求逆换算：摆回角在挂载时被
+// 抵消、呈现时又只按当帧帧施加，摞停留在烘焙垂下姿态，与已经
+// 摆回的节点/子关节脱节（手臂精灵与节点对不上），已废。
 // 层图落全局精灵表：一摞一夹（folder = 堆叠/<骨骼名>），出生标签
 // origin 只在此时写（烘焙来源），复用不追加（精灵管理定案）。
 // ============================================================
 
 import {
-  mat3Apply,
-  mat3Transpose,
   pxToSub,
-  subToPx,
-  worldToViewBasis,
   type Character,
   type PixelGrid,
   type Sprite,
   type SpriteStack,
 } from '../unified-types';
-import { computeWorldTransforms } from '../unified-render';
 import { rgbaToHexOrNull } from '../engine/utils';
 import type { PartStackSlice } from './threejs-baker-sixpart';
 
@@ -58,9 +55,6 @@ export function attachBoneStacks(
     character.costumeSets?.[0];
   if (!activeSet) return { attached: 0, layerSprites: 0, skipped: boneStacks.size };
 
-  // 静止帧世界变换（帧 0、变换归零 = mapper 的静止姿态）
-  const worldTransforms = computeWorldTransforms(character, 0, 1024, 1024);
-
   let attached = 0;
   let layerSprites = 0;
   let skipped = 0;
@@ -68,24 +62,18 @@ export function attachBoneStacks(
     const hostNodeId = `node_${characterId}_${entry.rootBoneIndex}`;
     const node = character.nodes[hostNodeId];
     const piece = node?.slot ? activeSet.pieces[node.slot.slotKey] : undefined;
-    const wt = worldTransforms.get(hostNodeId);
-    if (!node || !piece || !wt) { skipped++; continue; }
+    if (!node || !piece) { skipped++; continue; }
 
-    const dir = wt.variantIndex;
-    const inv = mat3Transpose(wt.worldFrame);
-    // 角色空间点 → 节点局部：先到朝向基坐标、减节点位置、再逆帧旋转
-    const nodeBasis = worldToViewBasis(subToPx(wt.worldX), subToPx(wt.worldY), subToPx(wt.worldZ), dir);
-    const toLocalPoint = (p: { x: number; y: number; z: number }) => {
-      const b = worldToViewBasis(p.x, p.y, p.z, dir);
-      const r = mat3Apply(inv, b.h - nodeBasis.h, b.y - nodeBasis.y, b.d - nodeBasis.d);
-      return { x: r.h, y: r.y, z: r.d };
-    };
-    const toLocalDir = (p: { x: number; y: number; z: number }) => {
-      const b = worldToViewBasis(p.x, p.y, p.z, dir);
-      const r = mat3Apply(inv, b.h, b.y, b.d);
-      const v = { x: r.h, y: r.y, z: r.d };
+    // 关节为原点：切片原点（根侧端面中心）相对关节的偏移即局部原点；
+    // 轴向/u/v 的角色空间分量直接作局部分量（见文件头口径）
+    const unit = (v: { x: number; y: number; z: number }) => {
       const l = Math.hypot(v.x, v.y, v.z) || 1;
       return { x: v.x / l, y: v.y / l, z: v.z / l };
+    };
+    const originLocal = {
+      x: entry.sliced.origin.x - entry.jointChar.x,
+      y: entry.sliced.origin.y - entry.jointChar.y,
+      z: entry.sliced.origin.z - entry.jointChar.z,
     };
 
     const label = entry.rootBoneName;
@@ -110,10 +98,10 @@ export function attachBoneStacks(
     const stack: SpriteStack = {
       layerSpriteIds,
       layerThickness: entry.sliced.layerThickness,
-      origin: toLocalPoint(entry.sliced.origin),
-      axis: toLocalDir(entry.sliced.axis),
-      uAxis: toLocalDir(entry.sliced.uAxis),
-      vAxis: toLocalDir(entry.sliced.vAxis),
+      origin: originLocal,
+      axis: unit(entry.sliced.axis),
+      uAxis: unit(entry.sliced.uAxis),
+      vAxis: unit(entry.sliced.vAxis),
     };
     piece.stack = stack;
     attached++;

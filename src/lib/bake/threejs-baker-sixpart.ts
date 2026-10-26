@@ -126,11 +126,13 @@ export interface SixPartGroup {
 }
 
 /** 部件堆叠切片产物（withStacks 开启时）：切片在角色空间完成，
- *  导入时由 stack-attach 按宿主节点静止帧变换到节点局部并挂上服装件 */
+ *  导入时由 stack-attach 以宿主关节为原点换算到节点局部并挂上服装件 */
 export interface PartStackSlice {
   /** 宿主骨骼（合并后 effective 下标）= 这节肢体自己的骨骼 */
   rootBoneIndex: number;
   rootBoneName: string;
+  /** 宿主关节的角色空间位置（全局像素）= 切片 pivot */
+  jointChar: { x: number; y: number; z: number };
   sliced: SliceStackResult;
 }
 
@@ -941,7 +943,7 @@ function buildBoneStacks(
       layerThickness: layerThicknessPx,
     });
     if (sliced.layers.length === 0 || sliced.filledPixels === 0) continue;
-    out.set(eff, { rootBoneIndex: eff, rootBoneName: boneNames[eff] ?? `bone_${eff}`, sliced });
+    out.set(eff, { rootBoneIndex: eff, rootBoneName: boneNames[eff] ?? `bone_${eff}`, jointChar: joint, sliced });
   }
   return out;
 }
