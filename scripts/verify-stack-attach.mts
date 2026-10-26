@@ -1,10 +1,10 @@
 // 堆叠挂载探针：手工角色（根 + 躯干节点 + 服装件）+ 合成圆柱切片
-// （角色空间）→ attachPartStacks → 断言：层图进精灵表（一摞一夹、
+// （角色空间）→ attachBoneStacks → 断言：层图进精灵表（一摞一夹、
 // 出生标签）、piece.stack 已挂、局部变换正确（静止帧下把 stack
 // 局部几何变回角色空间应与切片原值重合）→ 再走呈现消费路径：
 // 用宿主节点世界帧 computeStackOps 应产出非空算子。
 import { sliceStack } from '../src/lib/bake/stack-slicer';
-import { attachPartStacks } from '../src/lib/bake/stack-attach';
+import { attachBoneStacks } from '../src/lib/bake/stack-attach';
 import { computeStackOps } from '../src/lib/stack-render';
 import { computeWorldTransforms, generateRenderPlan } from '../src/lib/unified-render';
 import {
@@ -75,12 +75,12 @@ const planBefore = generateRenderPlan(character, 0, 256, 256, 'pixel-perfect', 1
   undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, sprites);
 const insBefore = planBefore.nodeInstructions.find((i) => i.nodeId === torso.id);
 ok(!insBefore, '对照：挂摞前躯干无指令（该件此时无任何视觉）');
-const partStacks = new Map([['torso', { rootBoneIndex: 4, rootBoneName: '腰', sliced: sliced2 }]]) as never;
-const res = attachPartStacks(character, sprites, partStacks, charId, '测试');
+const boneStacks = new Map([[4, { rootBoneIndex: 4, rootBoneName: '腰', sliced: sliced2 }]]) as never;
+const res = attachBoneStacks(character, sprites, boneStacks, charId, '测试');
 ok(res.attached === 1 && res.skipped === 0, `挂载成功（attached=${res.attached}, skipped=${res.skipped}）`);
 ok(res.layerSprites === sliced2.layers.length, `层图数 = ${res.layerSprites}`);
-const someLayer = sprites[`spr_stack_${charId}_torso_0`];
-ok(!!someLayer && someLayer.folder === '堆叠/躯干', '层图进精灵表且一摞一夹（堆叠/躯干）');
+const someLayer = sprites[`spr_stack_${charId}_b4_0`];
+ok(!!someLayer && someLayer.folder === '堆叠/腰', '层图进精灵表且一摞一夹（堆叠/<骨骼名>）');
 ok(someLayer?.origin?.boneName === '腰', '出生标签带骨骼名');
 const stack = piece.stack;
 ok(!!stack, 'piece.stack 已挂');

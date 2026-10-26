@@ -39,7 +39,7 @@ import {
   type ProcessedBoneDirection,
   type ProcessedBoneLayered,
 } from '@/lib/bake/skeleton-mapper';
-import { attachPartStacks } from '../../../lib/bake/stack-attach';
+import { attachBoneStacks } from '../../../lib/bake/stack-attach';
 import {
   bakeManualParts,
   listManualMeshes,
@@ -1367,10 +1367,10 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         : mapBonesToNodes(processed, char.id, name);
       // 精灵堆叠：把烘焙时的部件切片挂到对应服装件（层图并入 mapped.sprites 一并写入）
       let stackNote = '';
-      if (sixPart?.partStacks && sixPart.partStacks.size > 0) {
-        const r = attachPartStacks(mapped.character, mapped.sprites, sixPart.partStacks, char.id, name);
-        if (r.attached > 0) stackNote = `；已挂堆叠 ${r.attached} 个部件（${r.layerSprites} 张层图）`;
-        if (r.skipped > 0) stackNote += `；${r.skipped} 个部件未挂上（宿主节点缺失）`;
+      if (sixPart?.boneStacks && sixPart.boneStacks.size > 0) {
+        const r = attachBoneStacks(mapped.character, mapped.sprites, sixPart.boneStacks, char.id, name);
+        if (r.attached > 0) stackNote = `；已挂堆叠 ${r.attached} 节肢体（${r.layerSprites} 张层图）`;
+        if (r.skipped > 0) stackNote += `；${r.skipped} 节肢体未挂上（宿主节点缺失）`;
       }
       // 一次写入：节点树 + 服装集（不中途回读，见 AGENTS.md 快照坑）
       store.updateUnifiedCharacter(char.id, {
@@ -1574,13 +1574,13 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
             </label>
             )}
             {(bakeMode === 'sixpart' || bakeMode === 'layer') && (
-            <label className="flex cursor-pointer items-center gap-1" title="同时把勾选部件沿主轴切成一摞截面层图，导入时挂到部件上：呈现时按 3D 朝向逐层合成、可连续转动（第二产线，PR #46 研究定案）；方向平面图照常生成作回落">
+            <label className="flex cursor-pointer items-center gap-1" title="同时把勾选部件下属的每节肢体沿自身轴切成一摞截面层图，挂到各肢体节点上：呈现时按 3D 朝向逐层合成、可连续转动、关节照常弯（第二产线，PR #46 研究定案）；方向平面图照常生成作回落">
               <input type="checkbox" checked={withStacks} onChange={(e) => setWithStacks(e.target.checked)} />
               生成精灵堆叠
             </label>
             )}
             {withStacks && (bakeMode === 'sixpart' || bakeMode === 'layer') && (
-            <span className="flex items-center gap-1" title="只为勾选的部件生成堆叠">
+            <span className="flex items-center gap-1" title="只为勾选部件下属的肢体生成堆叠">
               {SIX_PARTS.map((p) => (
                 <label key={p} className="flex cursor-pointer items-center gap-0.5">
                   <input

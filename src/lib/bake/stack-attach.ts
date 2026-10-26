@@ -1,13 +1,14 @@
 // ============================================================
-// 堆叠挂载：把六部件烘焙产出的部件切片（角色空间）挂到映射后
-// 角色的服装件上。
+// 堆叠挂载：把六部件烘焙产出的肢体切片（角色空间，一骨一摞）挂
+// 到映射后角色对应骨骼节点的服装件上——宿主就是这节肢体自己的
+// 节点，与 2D 拆分出的肢体 1:1 对齐（六部件只是烘焙分组）。
 //
 // 关键变换：切片的 origin/axis/u/v 在角色空间（全局像素），
 // SpriteStack 要的是宿主节点局部坐标。用渲染端自己的
 // computeWorldTransforms 在静止帧算出宿主节点的世界帧与位置，
 // 以其逆（旋转转置）把点与方向变进节点局部——与呈现端严格
 // 同源，mapper 的各种规范化（臂链拉直等）自动一致，不另算一份。
-// 层图落全局精灵表：一摞一夹（folder = 堆叠/<部件>），出生标签
+// 层图落全局精灵表：一摞一夹（folder = 堆叠/<骨骼名>），出生标签
 // origin 只在此时写（烘焙来源），复用不追加（精灵管理定案）。
 // ============================================================
 
@@ -25,18 +26,6 @@ import {
 import { computeWorldTransforms } from '../unified-render';
 import { rgbaToHexOrNull } from '../engine/utils';
 import type { PartStackSlice } from './threejs-baker-sixpart';
-import type { PartName } from './bone-topology';
-
-const PART_LABEL: Partial<Record<PartName, string>> = {
-  head: '头',
-  torso: '躯干',
-  armL: '左臂',
-  armR: '右臂',
-  legL: '左腿',
-  legR: '右腿',
-  tail: '尾',
-  props: '道具',
-};
 
 /** RGBA 字节流 → PixelGrid（与普通烘焙精灵同一转换口径） */
 function rgbaToGrid(rgba: Uint8ClampedArray, w: number, h: number): PixelGrid {
@@ -53,21 +42,21 @@ function rgbaToGrid(rgba: Uint8ClampedArray, w: number, h: number): PixelGrid {
 }
 
 /**
- * 把部件切片挂到角色。直接修改传入的 character 与 sprites
- * （调用方在一次性写入 store 之前调用）。返回成功挂载的部件数
- * 与层图总数；宿主节点/服装件缺失的部件跳过并计数于 skipped。
+ * 把肢体切片挂到角色。直接修改传入的 character 与 sprites
+ * （调用方在一次性写入 store 之前调用）。返回成功挂载的肢体数
+ * 与层图总数；宿主节点/服装件缺失的肢体跳过并计数于 skipped。
  */
-export function attachPartStacks(
+export function attachBoneStacks(
   character: Character,
   sprites: Record<string, Sprite>,
-  partStacks: Map<PartName, PartStackSlice>,
+  boneStacks: Map<number, PartStackSlice>,
   characterId: string,
   characterName: string,
 ): { attached: number; layerSprites: number; skipped: number } {
   const activeSet =
     character.costumeSets?.find((cs) => cs.id === character.activeCostumeSetId) ??
     character.costumeSets?.[0];
-  if (!activeSet) return { attached: 0, layerSprites: 0, skipped: partStacks.size };
+  if (!activeSet) return { attached: 0, layerSprites: 0, skipped: boneStacks.size };
 
   // 静止帧世界变换（帧 0、变换归零 = mapper 的静止姿态）
   const worldTransforms = computeWorldTransforms(character, 0, 1024, 1024);
@@ -75,7 +64,7 @@ export function attachPartStacks(
   let attached = 0;
   let layerSprites = 0;
   let skipped = 0;
-  for (const [part, entry] of partStacks) {
+  for (const [boneIndex, entry] of boneStacks) {
     const hostNodeId = `node_${characterId}_${entry.rootBoneIndex}`;
     const node = character.nodes[hostNodeId];
     const piece = node?.slot ? activeSet.pieces[node.slot.slotKey] : undefined;
@@ -99,10 +88,10 @@ export function attachPartStacks(
       return { x: v.x / l, y: v.y / l, z: v.z / l };
     };
 
-    const label = PART_LABEL[part] ?? part;
+    const label = entry.rootBoneName;
     const layerSpriteIds: string[] = [];
     entry.sliced.layers.forEach((layer, k) => {
-      const id = `spr_stack_${characterId}_${part}_${k}`;
+      const id = `spr_stack_${characterId}_b${boneIndex}_${k}`;
       const sprite: Sprite = {
         id,
         name: `${characterName}_${label}_层${k}`,
