@@ -864,14 +864,18 @@ import type { SixPartBakeData } from './threejs-baker-sixpart';
 import { ALL_PARTS } from './threejs-baker-sixpart';
 
 
+/** 关节分段只用于臂/腿部件：躯干等部件的破洞填充靠 ID 遍把遮挡
+ * 片元改写成本部件一侧的接通骨骼、再经重锚叠回主图，归属必须走
+ * ID 掩码；臂腿无此依赖，直接在部件精灵上按关节分段更简单。 */
+const LIMB_SEGMENT_PARTS: ReadonlySet<string> = new Set(['armL', 'armR', 'legL', 'legR']);
+
 /**
- * 关节分段归属（部件拆肢体的现行口径，取代旧 ID 掩码解码）：
- * 直接在部件精灵上按关节位置分段——段 = 父关节→子关节连线（归父
- * 骨骼），每像素归离它最近的段；末节骨骼（无子骨骼）沿入向（父关节
- * →本关节方向）延长一段作自己的段，关节处分界即过关节的垂面。
- * 等距时先出现的段优先（真实段排在延长段之前，关节处归父段）。
- * 返回逐像素的有效骨骼下标（-1 = 无归属）。单有效骨骼部件：全部
- * 不透明像素归该骨骼（与旧单节点快路径一致）。
+ * 关节分段归属（仅臂/腿）：直接在部件精灵上按关节位置分段——
+ * 段 = 父关节→子关节连线（归父骨骼），每像素归离它最近的段；
+ * 末节骨骼（无子骨骼）沿入向（父关节→本关节方向）延长一段作
+ * 自己的段，关节处分界即过关节的垂面。等距时先出现的段优先
+ * （真实段排在延长段之前，关节处归父段）。返回逐像素的有效
+ * 骨骼下标（-1 = 无归属）。单有效骨骼时全部不透明像素归该骨骼。
  */
 function segmentPartOwners(
   g: { colorPixels: Uint8ClampedArray; jointPixels?: Record<number, { x: number; y: number }> },
@@ -951,8 +955,9 @@ function segmentPartOwners(
 }
 
 /**
- * 按六部件拆分（关节分段口径）：每部件每方向在部件精灵上按关节
- * 位置分段归属像素（segmentPartOwners）→ 累积 → 裁剪。
+ * 按六部件拆分。归属两种口径：臂/腿在部件精灵上按关节分段
+ * （segmentPartOwners）；其余部件读块内 ID 掩码（破洞填充的遮挡
+ * 片元归属靠它）→ 映射到全局 bone → 累积像素 → 裁剪。
  * 输出与 splitByBoneId 同格式（ProcessedBone），下游 mapBonesToNodes 不用改。
  */
 export function splitSixParts(
@@ -999,6 +1004,20 @@ export function splitSixParts(
   for (const part of ALL_PARTS) {
     const localToGlobal = bake.partBoneMap[part];
     if (!localToGlobal || localToGlobal.length === 0) continue;
+    // 位掩码解码：局部索引位 → 全局 bone（[] = 背景）
+    // 64 位掩码：lo = idPixels（字节 0..3）、hi = idPixelsHi（字节 4..7），o = 像素字节偏移
+    const decodeBones = (lo: Uint8ClampedArray, hi: Uint8ClampedArray | undefined, o: number): number[] => {
+      const out: number[] = [];
+      const bytes = [
+        lo[o]!, lo[o + 1]!, lo[o + 2]!, lo[o + 3]!,
+        hi ? hi[o]! : 0, hi ? hi[o + 1]! : 0, hi ? hi[o + 2]! : 0, hi ? hi[o + 3]! : 0,
+      ];
+      for (const li of decodeBoneMask64(bytes)) {
+        const gi = localToGlobal[li];
+        if (gi !== undefined) out.push(gi);
+      }
+      return out;
+    };
 
     // （纬度,方向）对迭代（同 splitByBoneId）
     const partPairs: Array<{ lat: number; d: number }> = [];
@@ -1017,13 +1036,17 @@ export function splitSixParts(
     for (const { lat, d } of partPairs) {
       const g = bake.groups.find((x) => x.part === part && x.direction === d && (x.latitude ?? 0) === lat);
       if (!g) continue;
-      const perBone = new Map<number, { rgba: Uint8ClampedArray; mask: Uint8Array; count: number }>();
-      const addPixel = (bi: number, o: number, p: number) => {
+      const perBone = new Map<number, { rgba: Uint8ClampedArray; mask: Uint8Array; count: number; contrib: Map<number, number> }>();
+      const addPixel = (bi0: number, o: number, p: number) => {
+        let bi = bi0;
+        // 合并映射：手指等并入手
+        if (merge) bi = merge.effectiveIndex[bi] ?? bi;
         let e = perBone.get(bi);
         if (!e) {
-          e = { rgba: new Uint8ClampedArray(W * H * 4), mask: new Uint8Array(W * H), count: 0 };
+          e = { rgba: new Uint8ClampedArray(W * H * 4), mask: new Uint8Array(W * H), count: 0, contrib: new Map() };
           perBone.set(bi, e);
         }
+        e.contrib.set(bi0, (e.contrib.get(bi0) ?? 0) + 1);
         e.mask[p] = 1;
         e.count++;
         e.rgba[o] = g.colorPixels[o];
@@ -1031,15 +1054,30 @@ export function splitSixParts(
         e.rgba[o + 2] = g.colorPixels[o + 2];
         e.rgba[o + 3] = 255;
       };
-      // 关节分段归属：部件精灵按关节位置分段，一像素归一骨
-      const owners = segmentPartOwners(g, localToGlobal, bake, W, H);
+      const segOwners = LIMB_SEGMENT_PARTS.has(part)
+        ? segmentPartOwners(g, localToGlobal, bake, W, H)
+        : null;
       for (let p = 0; p < W * H; p++) {
         const o = p * 4;
         if (g.colorPixels[o + 3] <= 8) continue; // 透明跳过
-        const bi = owners[p]!;
-        if (bi < 0) continue;
-        addPixel(bi, o, p);
+        if (segOwners) {
+          const bi = segOwners[p]!;
+          if (bi >= 0) addPixel(bi, o, p);
+          continue;
+        }
+        if (!g.idPixels) {
+          // 单节点部件：无 ID 图，所有非透明像素归唯一有效骨骼
+          const localToGlobal = bake.partBoneMap[part];
+          const gi0 = localToGlobal?.[0];
+          if (gi0 === undefined) continue;
+          addPixel(gi0, o, p);
+        } else {
+          const bones = decodeBones(g.idPixels, g.idPixelsHi, o);
+          if (bones.length === 0) continue;
+          for (const bi of bones) addPixel(bi, o, p);
+        }
       }
+
       // 每 bone 裁剪（与 splitByBoneId 同逻辑）
       for (const [bi, e] of perBone) {
         const bone = bake.bones[bi];
@@ -1060,7 +1098,17 @@ export function splitSixParts(
           }
         }
         if (maxX < 0) continue;
-        const jp = g.jointPixels?.[bi] ?? bone.jointPixels[d];
+        const exist = pb.directions.find((dd) => dd.direction === d && (dd.latitude ?? 0) === lat);
+        // 重复条目（同 bone 同方向已有主图）：本帧像素多来自被合并进 bi 的贡献骨骼
+        // （如锁骨并入躯干单元），以像素最多的贡献骨骼为锚在本帧重建，后文重锚叠回主图
+        let domBi = bi;
+        if (exist) {
+          let best = -1;
+          for (const [cbi, n] of e.contrib) {
+            if (n > best) { best = n; domBi = cbi; }
+          }
+        }
+        const jp = g.jointPixels?.[domBi] ?? (exist ? bake.bones[domBi] : bone).jointPixels[d];
         if (!jp) continue;
         const jx = jp.x;
         const jy = jp.y;
@@ -1126,6 +1174,53 @@ export function splitSixParts(
           }
         }
 
+        // 重复条目不再整批丢弃：跨部件帧里属于本骨骼（多为合并进来的贡献骨骼，
+        // 如锁骨归躯干单元但几何在手臂部件）的像素在主图里可能正是缺口
+        //（躯干帧中它只是候选、被方向线门控切掉一部分）。按锚关节的 3D 偏移
+        // 重锚后叠回主图，只填透明处；主图画布不扩张，超出部分裁掉。
+        if (exist) {
+          const domJoint = bake.bones[domBi].joint3D;
+          const biJoint = bone.joint3D;
+          if (domJoint && biJoint) {
+            const loopAng = (((d + 2) % 8) / 8) * Math.PI * 2;
+            const cosA = Math.cos(loopAng);
+            const sinA = Math.sin(loopAng);
+            const dx = domJoint.x - biJoint.x;
+            const dy = domJoint.y - biJoint.y;
+            const dz = domJoint.z - biJoint.z;
+            const rx = dx * cosA + dz * sinA;
+            const ry = dy;
+            const rz = -dx * sinA + dz * cosA;
+            // 相机基（与烘焙同式：相机在中心 + (0, half·0.25, 4) 看向中心；
+            // right=(1,0,0)，up=(0, zz, -zy)）——倾斜差异为二阶小量，取主图 half
+            const hP = exist.cameraHalf;
+            const nn = Math.hypot(0.25 * hP, 4);
+            const zy = (0.25 * hP) / nn;
+            const zz = 4 / nn;
+            const deltaPxX = rx * (W / 2);
+            const deltaPxY = -(ry * zz - rz * zy) * (W / 2);
+            const dupPlugX = (jx - x0) * g.cameraHalf;
+            const dupPlugY = (jy - y0) * g.cameraHalf;
+            const offX = Math.round(exist.plugX - dupPlugX + deltaPxX);
+            const offY = Math.round(exist.plugY - dupPlugY + deltaPxY);
+            let filled = 0;
+            for (let y = 0; y < grid.length; y++) {
+              const ty = y + offY;
+              if (ty < 0 || ty >= exist.grid.length) continue;
+              for (let x = 0; x < grid[y].length; x++) {
+                const c = grid[y][x];
+                if (!c) continue;
+                const tx = x + offX;
+                if (tx < 0 || tx >= exist.grid[ty].length) continue;
+                if (exist.grid[ty][tx] === null) {
+                  exist.grid[ty][tx] = c;
+                  filled++;
+                }
+              }
+            }
+          }
+          continue;
+        }
         if (!pb.part) pb.part = part; // 部件归属（导入时臂链 T-pose 摆回用；首个添加方为归属部件）
         pb.directions.push({
           direction: d as DirectionIndex,
@@ -1181,9 +1276,10 @@ export interface ProcessedBoneLayered extends ProcessedBone {
 }
 
 /**
- * 图层拆分（乙：进木偶装配）：与 splitSixParts 同一关节分段归属/裁剪/
- * 调色口径，只是归属多一维——（骨骼 × 图层）。layerPixels 的 R=视图号+1；
- * R=0 的像素（候选填充等无图层归属）并入视图 0 层。
+ * 图层拆分（乙：进木偶装配）：与 splitSixParts 同一像素归属/裁剪/调色口径，
+ * 只是归属多一维——（骨骼 × 图层）。layerPixels 的 R=视图号+1；R=0 的像素
+ * （候选填充等无图层归属）并入视图 0 层。骨骼合并、碎片清理、跨部件帧重锚
+ * 叠回等规则与 splitSixParts 一致（[split-debug] 诊断块不复制）。
  */
 export function splitSixPartsLayered(
   bake: SixPartBakeData,
@@ -1241,6 +1337,18 @@ export function splitSixPartsLayered(
   for (const part of ALL_PARTS) {
     const localToGlobal = bake.partBoneMap[part];
     if (!localToGlobal || localToGlobal.length === 0) continue;
+    const decodeBones = (lo: Uint8ClampedArray, hi: Uint8ClampedArray | undefined, o: number): number[] => {
+      const out: number[] = [];
+      const bytes = [
+        lo[o]!, lo[o + 1]!, lo[o + 2]!, lo[o + 3]!,
+        hi ? hi[o]! : 0, hi ? hi[o + 1]! : 0, hi ? hi[o + 2]! : 0, hi ? hi[o + 3]! : 0,
+      ];
+      for (const li of decodeBoneMask64(bytes)) {
+        const gi = localToGlobal[li];
+        if (gi !== undefined) out.push(gi);
+      }
+      return out;
+    };
 
     const partPairs: Array<{ lat: number; d: number }> = [];
     {
@@ -1258,7 +1366,7 @@ export function splitSixPartsLayered(
     for (const { lat, d } of partPairs) {
       const g = bake.groups.find((x) => x.part === part && x.direction === d && (x.latitude ?? 0) === lat);
       if (!g) continue;
-      type Acc = { bi: number; vi: number; rgba: Uint8ClampedArray; mask: Uint8Array; count: number };
+      type Acc = { bi: number; vi: number; rgba: Uint8ClampedArray; mask: Uint8Array; count: number; contrib: Map<number, number> };
       const perEntry = new Map<string, Acc>();
       const addPixel = (bi0: number, vi: number, o: number, p: number) => {
         let bi = bi0;
@@ -1266,9 +1374,10 @@ export function splitSixPartsLayered(
         const key = `${bi}|${vi}`;
         let e = perEntry.get(key);
         if (!e) {
-          e = { bi, vi, rgba: new Uint8ClampedArray(W * H * 4), mask: new Uint8Array(W * H), count: 0 };
+          e = { bi, vi, rgba: new Uint8ClampedArray(W * H * 4), mask: new Uint8Array(W * H), count: 0, contrib: new Map() };
           perEntry.set(key, e);
         }
+        e.contrib.set(bi0, (e.contrib.get(bi0) ?? 0) + 1);
         e.mask[p] = 1;
         e.count++;
         e.rgba[o] = g.colorPixels[o];
@@ -1276,15 +1385,28 @@ export function splitSixPartsLayered(
         e.rgba[o + 2] = g.colorPixels[o + 2];
         e.rgba[o + 3] = 255;
       };
-      const owners = segmentPartOwners(g, localToGlobal, bake, W, H);
+      const segOwners = LIMB_SEGMENT_PARTS.has(part)
+        ? segmentPartOwners(g, localToGlobal, bake, W, H)
+        : null;
       for (let p = 0; p < W * H; p++) {
         const o = p * 4;
-        if (g.colorPixels[o + 3] <= 8) continue; // 透明跳过
+        if (g.colorPixels[o + 3] <= 8) continue;
         const rawLayer = g.layerPixels ? g.layerPixels[o] : 0;
         const vi = rawLayer > 0 ? rawLayer - 1 : 0;
-        const bi = owners[p]!;
-        if (bi < 0) continue;
-        addPixel(bi, vi, o, p);
+        if (segOwners) {
+          const bi = segOwners[p]!;
+          if (bi >= 0) addPixel(bi, vi, o, p);
+          continue;
+        }
+        if (!g.idPixels) {
+          const gi0 = localToGlobal?.[0];
+          if (gi0 === undefined) continue;
+          addPixel(gi0, vi, o, p);
+        } else {
+          const bones = decodeBones(g.idPixels, g.idPixelsHi, o);
+          if (bones.length === 0) continue;
+          for (const bi of bones) addPixel(bi, vi, o, p);
+        }
       }
 
       for (const e of perEntry.values()) {
@@ -1307,7 +1429,15 @@ export function splitSixPartsLayered(
         if (maxX < 0) continue;
         const layer = layerOf(pb, part, e.vi);
         layer.pixelCount += e.count;
-        const jp = g.jointPixels?.[e.bi] ?? bone.jointPixels[d];
+        const exist = layer.directions.find((dd) => dd.direction === d && (dd.latitude ?? 0) === lat);
+        let domBi = e.bi;
+        if (exist) {
+          let best = -1;
+          for (const [cbi, n] of e.contrib) {
+            if (n > best) { best = n; domBi = cbi; }
+          }
+        }
+        const jp = g.jointPixels?.[domBi] ?? (exist ? bake.bones[domBi] : bone).jointPixels[d];
         if (!jp) continue;
         const jx = jp.x;
         const jy = jp.y;
@@ -1369,6 +1499,45 @@ export function splitSixPartsLayered(
           }
         }
 
+        if (exist) {
+          const domJoint = bake.bones[domBi].joint3D;
+          const biJoint = bone.joint3D;
+          if (domJoint && biJoint) {
+            const loopAng = (((d + 2) % 8) / 8) * Math.PI * 2;
+            const cosA = Math.cos(loopAng);
+            const sinA = Math.sin(loopAng);
+            const dx = domJoint.x - biJoint.x;
+            const dy = domJoint.y - biJoint.y;
+            const dz = domJoint.z - biJoint.z;
+            const rx = dx * cosA + dz * sinA;
+            const ry = dy;
+            const rz = -dx * sinA + dz * cosA;
+            const hP = exist.cameraHalf;
+            const nn = Math.hypot(0.25 * hP, 4);
+            const zy = (0.25 * hP) / nn;
+            const zz = 4 / nn;
+            const deltaPxX = rx * (W / 2);
+            const deltaPxY = -(ry * zz - rz * zy) * (W / 2);
+            const dupPlugX = (jx - x0) * g.cameraHalf;
+            const dupPlugY = (jy - y0) * g.cameraHalf;
+            const offX = Math.round(exist.plugX - dupPlugX + deltaPxX);
+            const offY = Math.round(exist.plugY - dupPlugY + deltaPxY);
+            for (let y = 0; y < grid.length; y++) {
+              const ty = y + offY;
+              if (ty < 0 || ty >= exist.grid.length) continue;
+              for (let x = 0; x < grid[y].length; x++) {
+                const c = grid[y][x];
+                if (!c) continue;
+                const tx = x + offX;
+                if (tx < 0 || tx >= exist.grid[ty].length) continue;
+                if (exist.grid[ty][tx] === null) {
+                  exist.grid[ty][tx] = c;
+                }
+              }
+            }
+          }
+          continue;
+        }
         if (!pb.part) pb.part = part;
         layer.directions.push({
           direction: d as DirectionIndex,
