@@ -706,8 +706,8 @@ function slashFanFrame(spec, p, mirrored) {
   return { w: outW, h: outH, data: buf };
 }
 
-/** 实例打包：58 float —— pos2 size2 rot1 pivotTile2 clipC1 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 clipAB2 glowA/B/C 各4(rgb,强度)×3组 glowHz4+glowHz2(频率,相位)×3 glowSpace4(三组方向基准:0=精灵 1=世界,余位) glowStamp 每组4(形状,光晕,主方向,伸长)×3。裁剪面占 iRotTileC.w（c）与 iDeform.zw（a,b）——扩宽既有属性、不新增属性（守 16 属性上限） */
-const INSTANCE_FLOATS = 58;
+/** 实例打包：24 float —— pos2 size2 rot1 pivotTile2 clipC1 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 clipAB2。裁剪面占 iRotTileC.w（c）与 iDeform.zw（a,b）。发光全套（34 float）已搬侧车数据纹理（packGlowSidecar），顶点属性只剩 7 个：Mesa 等上报上限低于规范保证的环境也能链上，varying 同步腾空。 */
+const INSTANCE_FLOATS = 24;
 function packInstances(els) {
   const buf = new Float32Array(els.length * INSTANCE_FLOATS);
   els.forEach((el, i) => {
@@ -726,16 +726,27 @@ function packInstances(els) {
     buf[o + 21] = el.deform ? el.deform[1] : 1;
     buf[o + 22] = el.clip ? el.clip[0] : 0;
     buf[o + 23] = el.clip ? el.clip[1] : 0;
+  });
+  return buf;
+}
+/** 发光侧车：每实例一行 9 个 RGBA32F 纹素 —— 0/1/2=三组发光(rgb,强度)，
+ * 3=(频A,相A,频B,相B)，4=(频C,相C,0,0)，5=三组方向基准(xyz,0)，
+ * 6/7/8=三组印章(形状,光晕,主方向,伸长)。片元按实例号 texelFetch。 */
+const GLOW_TEXELS = 9;
+function packGlowSidecar(els) {
+  const buf = new Float32Array(els.length * GLOW_TEXELS * 4);
+  els.forEach((el, i) => {
+    const o = i * GLOW_TEXELS * 4;
     const gl = el.glow || [];
     for (let gi = 0; gi < 3; gi++) {
       const g = gl[gi];
-      buf[o + 24 + gi * 4] = g ? g[0] : 0; buf[o + 25 + gi * 4] = g ? g[1] : 0;
-      buf[o + 26 + gi * 4] = g ? g[2] : 0; buf[o + 27 + gi * 4] = g ? g[3] : 0;
-      buf[o + 36 + gi * 2] = g ? g[4] : 0; buf[o + 37 + gi * 2] = g ? g[5] : 0;
-      buf[o + 42 + gi] = el.glowSpace && el.glowSpace[gi] ? 1 : 0;
+      buf[o + gi * 4] = g ? g[0] : 0; buf[o + gi * 4 + 1] = g ? g[1] : 0;
+      buf[o + gi * 4 + 2] = g ? g[2] : 0; buf[o + gi * 4 + 3] = g ? g[3] : 0;
+      buf[o + 12 + gi * 2] = g ? g[4] : 0; buf[o + 13 + gi * 2] = g ? g[5] : 0;
+      buf[o + 20 + gi] = el.glowSpace && el.glowSpace[gi] ? 1 : 0;
       const st = el.glowStamps && el.glowStamps[gi];
-      buf[o + 46 + gi * 4] = st ? st[0] : 4; buf[o + 47 + gi * 4] = st ? st[1] : 0;
-      buf[o + 48 + gi * 4] = st ? st[2] : 0; buf[o + 49 + gi * 4] = st ? st[3] : 0;
+      buf[o + 24 + gi * 4] = st ? st[0] : 4; buf[o + 25 + gi * 4] = st ? st[1] : 0;
+      buf[o + 26 + gi * 4] = st ? st[2] : 0; buf[o + 27 + gi * 4] = st ? st[3] : 0;
     }
   });
   return buf;
@@ -1157,9 +1168,9 @@ function makeProgram(vs, fs) {
 }
 const partProg = makeProgram(
 \`#version 300 es
-// 属性预算：WebGL 只保证 16 个顶点属性（location 0-15），18 个会编译失败。
-// 故合并两对相邻字段（实例数据 55 float 的顺序与 packInstances 完全一致，
-// 只改声明与绑定，不动写入）：iPos+iSize→vec4，iRot+iTileC→vec3。
+// 属性预算：发光全套已搬侧车数据纹理（uGlowSide，片元按实例号取），
+// 顶点属性只剩 7 个（location 0-6），varying 同步腾空——Mesa 等上报
+// 上限低于规范保证的环境也能链上。实例数据顺序与 packInstances 一致。
 layout(location=0) in vec2 aCorner;
 layout(location=1) in vec4 iPosSize;
 layout(location=2) in vec4 iRotTileC;
@@ -1167,19 +1178,9 @@ layout(location=3) in vec4 iTile;
 layout(location=4) in vec4 iMisc;
 layout(location=5) in vec4 iParam;
 layout(location=6) in vec4 iDeform;
-layout(location=7) in vec4 iGlowA;
-layout(location=8) in vec4 iGlowB;
-layout(location=9) in vec4 iGlowC;
-layout(location=10) in vec4 iGlowHz;
-layout(location=11) in vec2 iGlowHz2;
-layout(location=12) in vec4 iGlowSpace;
-layout(location=13) in vec4 iGlowStampA;
-layout(location=14) in vec4 iGlowStampB;
-layout(location=15) in vec4 iGlowStampC;
 uniform vec2 uCam; uniform vec2 uViewHalf; uniform vec2 uRes;
 out vec2 vCenterScreen; out float vRot; out vec4 vTile; out vec2 vTileC; out vec4 vMisc; out vec4 vParam; out vec2 vDeform;
-out vec4 vGlowA; out vec4 vGlowB; out vec4 vGlowC; out vec4 vGlowHz; out vec2 vGlowHz2; out vec4 vGlowSpace;
-out vec4 vGlowStampA; out vec4 vGlowStampB; out vec4 vGlowStampC; out vec3 vClip;
+out vec3 vClip; flat out int vInstId;
 void main(){
   float c = cos(iRotTileC.x), s = sin(iRotTileC.x);
   vec2 local = aCorner * iPosSize.zw;
@@ -1188,8 +1189,7 @@ void main(){
   vCenterScreen = ((iPosSize.xy - uCam) / uViewHalf * 0.5 + 0.5) * uRes;
   vRot = iRotTileC.x; vTile = iTile; vTileC = iRotTileC.yz; vMisc = iMisc; vParam = iParam; vDeform = iDeform.xy;
   vClip = vec3(iDeform.z, iDeform.w, iRotTileC.w);
-  vGlowA = iGlowA; vGlowB = iGlowB; vGlowC = iGlowC; vGlowHz = iGlowHz; vGlowHz2 = iGlowHz2; vGlowSpace = iGlowSpace;
-  vGlowStampA = iGlowStampA; vGlowStampB = iGlowStampB; vGlowStampC = iGlowStampC;
+  vInstId = gl_InstanceID;
   float z = 0.9 - float(gl_InstanceID) * 0.02;
   gl_Position = vec4((world - uCam) / uViewHalf, z, 1.0);
 }\`,
@@ -1197,8 +1197,11 @@ void main(){
 precision highp float;
 uniform sampler2D uAtlas; uniform sampler2D uPal; uniform sampler2D uBase; uniform sampler2D uGlow; uniform float uTime;
 in vec2 vCenterScreen; in float vRot; in vec4 vTile; in vec2 vTileC; in vec4 vMisc; in vec4 vParam; in vec2 vDeform;
-in vec4 vGlowA; in vec4 vGlowB; in vec4 vGlowC; in vec4 vGlowHz; in vec2 vGlowHz2; in vec4 vGlowSpace;
-in vec4 vGlowStampA; in vec4 vGlowStampB; in vec4 vGlowStampC; in vec3 vClip;
+in vec3 vClip; flat in int vInstId;
+uniform sampler2D uGlowSide;
+// 发光数据（侧车纹理取回后存全局，主体逻辑沿用同名变量）
+vec4 vGlowA; vec4 vGlowB; vec4 vGlowC; vec4 vGlowHz; vec2 vGlowHz2; vec4 vGlowSpace;
+vec4 vGlowStampA; vec4 vGlowStampB; vec4 vGlowStampC;
 out vec4 oColor;
 vec3 gF3 = vec3(0.0);
 vec3 gK3 = vec3(0.0);
@@ -1281,6 +1284,15 @@ vec3 applyGlow(vec3 col){
   return col;
 }
 void main(){
+  vGlowA = texelFetch(uGlowSide, ivec2(0, vInstId), 0);
+  vGlowB = texelFetch(uGlowSide, ivec2(1, vInstId), 0);
+  vGlowC = texelFetch(uGlowSide, ivec2(2, vInstId), 0);
+  vGlowHz = texelFetch(uGlowSide, ivec2(3, vInstId), 0);
+  vGlowHz2 = texelFetch(uGlowSide, ivec2(4, vInstId), 0).xy;
+  vGlowSpace = texelFetch(uGlowSide, ivec2(5, vInstId), 0);
+  vGlowStampA = texelFetch(uGlowSide, ivec2(6, vInstId), 0);
+  vGlowStampB = texelFetch(uGlowSide, ivec2(7, vInstId), 0);
+  vGlowStampC = texelFetch(uGlowSide, ivec2(8, vInstId), 0);
   float mp = vMisc.z;
   int lm = int(mod(mp, 8.0));
   int om = int(mod(mp / 8.0, 8.0));
@@ -1410,6 +1422,14 @@ const palTex = gl.createTexture();
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 }
+const glowSideTex = gl.createTexture();
+{
+  gl.bindTexture(gl.TEXTURE_2D, glowSideTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
 const partVAO = gl.createVertexArray();
 const quadBuf = gl.createBuffer();
 const instBuf = gl.createBuffer();
@@ -1420,7 +1440,7 @@ const instBuf = gl.createBuffer();
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
-  const strides = [[1, 4, 0], [2, 4, 4], [3, 4, 8], [4, 4, 12], [5, 4, 16], [6, 4, 20], [7, 4, 24], [8, 4, 28], [9, 4, 32], [10, 4, 36], [11, 2, 40], [12, 4, 42], [13, 4, 46], [14, 4, 50], [15, 4, 54]];
+  const strides = [[1, 4, 0], [2, 4, 4], [3, 4, 8], [4, 4, 12], [5, 4, 16], [6, 4, 20]];
   for (const sDef of strides) {
     gl.enableVertexAttribArray(sDef[0]);
     gl.vertexAttribPointer(sDef[0], sDef[1], gl.FLOAT, false, INSTANCE_FLOATS * 4, sDef[2] * 4);
@@ -2664,7 +2684,7 @@ function downloadGif() {
 
 // ---------- 主循环：输入 → 程序化姿态 → 表演合成 → 渲染 ----------
 const uLoc = (pr, n) => gl.getUniformLocation(pr, n);
-const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal'), base: uLoc(partProg, 'uBase'), glow: uLoc(partProg, 'uGlow') };
+const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal'), base: uLoc(partProg, 'uBase'), glow: uLoc(partProg, 'uGlow'), glowSide: uLoc(partProg, 'uGlowSide') };
 const solidU = { cam: uLoc(solidProg, 'uCam'), vh: uLoc(solidProg, 'uViewHalf') };
 let last = performance.now();
 // ---------- 画布级特效（缺口 5）：特效轨 + 笔触 ----------
@@ -3546,6 +3566,8 @@ function frame(now) {
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palTex); gl.uniform1i(partU.pal, 1);
   gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, state.baseTex); gl.uniform1i(partU.base, 2);
   gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, state.glowTex); gl.uniform1i(partU.glow, 3);
+  gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, glowSideTex); gl.uniform1i(partU.glowSide, 4);
+  if (els.length > 0) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, GLOW_TEXELS, els.length, 0, gl.RGBA, gl.FLOAT, packGlowSidecar(els));
   gl.bindVertexArray(partVAO);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
   gl.bufferData(gl.ARRAY_BUFFER, packInstances(els), gl.DYNAMIC_DRAW);

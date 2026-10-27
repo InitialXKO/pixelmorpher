@@ -831,8 +831,8 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('Q11 容差 0 仍是精确同色', !!exactCells && exactCells[0] === 1 && exactCells[1] === 0);
   const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
   const html = buildRuntimeHtml(pkg);
-  check('Q9 模板含发光着色接线（uGlow/applyGlow/iGlowA）', html.includes('uGlow') && html.includes('applyGlow') && html.includes('iGlowA'));
-  check('Q12 模板含第三组发光参数（iGlowC）', html.includes('iGlowC'));
+  check('Q9 模板含发光着色接线（uGlow/applyGlow/侧车取数）', html.includes('uGlow') && html.includes('applyGlow') && html.includes('uGlowSide') && html.includes('packGlowSidecar'));
+  check('Q12 模板侧车含第三组发光（纹素 2 写第三组）', html.includes('buf[o + gi * 4 + 2]') && html.includes('ivec2(2, vInstId)'));
 
   // 多实例进包：4 个发光实例 → 前 2 独立通道、第 3 个起合并进 B 通道
   const grid4 = [['#ff0000', '#00ff00'], ['#0000ff', '#ffff00']] as never;
@@ -924,7 +924,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   } as never, cornerGrid);
   check('Q24 辉光溢出包围盒：角上选区的场扩到网格外（左上角外 2 格 = 1/3）',
     !!fCorner && fCorner.padX === 2 && Math.abs(fCorner.field[0] - 1 / 3) < 1e-6);
-  check('Q25 模板含方向基准接线（iGlowSpace/fetchGlow）', html.includes('iGlowSpace') && html.includes('fetchGlow'));
+  check('Q25 模板含方向基准接线（侧车纹素 5/fetchGlow）', html.includes('ivec2(5, vInstId)') && html.includes('fetchGlow') && html.includes('vGlowSpace'));
 
   // 轨道采样烘焙：增量曲线合成一条「轨道」表演（add 模式，T 键）
   const mkTrackChar = (nodeOver: Record<string, unknown>) => ({
@@ -1245,7 +1245,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
       hetero.parts.find((x) => x.key === 'gem')?.glow?.stamps?.[0]?.shape === 4);
   }
   const htmlS = buildRuntimeHtml(convertCharacterToRuntimePackage(mkCharS([mkInstS({ glowShape: 'star', glowHalo: 1 })])));
-  check('S6 模板含印章重算接线且旧旋转采样已除', htmlS.includes('glowChannelF') && htmlS.includes('glowStampW') && htmlS.includes('iGlowStampA') && !htmlS.includes('vec2 ow'));
+  check('S6 模板含印章重算接线且旧旋转采样已除', htmlS.includes('glowChannelF') && htmlS.includes('glowStampW') && htmlS.includes('ivec2(6, vInstId)') && !htmlS.includes('vec2 ow'));
 }
 
 
@@ -1363,8 +1363,8 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   const vsStart = htmlT.indexOf('layout(location=0) in vec2 aCorner');
   const vsEnd = htmlT.indexOf('void main(){', vsStart);
   const vsLocs = [...htmlT.slice(vsStart, vsEnd).matchAll(/layout\(location=(\d+)\)/g)].map((m) => +m[1]);
-  check('T14 顶点着色器属性数≤16 且最大 location≤15（防属性超限致着色器编译失败）',
-    vsLocs.length === 16 && Math.max(...vsLocs) === 15, `locs=${vsLocs.join(',')}`);
+  check('T14 顶点着色器属性数=7 且最大 location=6（发光侧车后远离 16 上限，防回涨）',
+    vsLocs.length === 7 && Math.max(...vsLocs) === 6, `locs=${vsLocs.join(',')}`);
   // T15 setVar 通用变量行为门：从模板源码抽 setVar 真身与每帧 hostVars 构造，在桩环境真执行。
   // 静态标记证明不了三件事：通用变量真进表、保留名真拒收、并入时计算值真覆盖。
   {
@@ -2079,8 +2079,8 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
       }
       check('X4 平面合成与锚点空间定义逐点一致（300 组随机位姿×8 点，含镜像）', consistent);
     }
-    check('X5 实例布局 58 float + 片元裁剪 discard + vClip 通道',
-      tplSrc.includes('const INSTANCE_FLOATS = 58')
+    check('X5 实例布局 24 float（发光侧车）+ 片元裁剪 discard + vClip 通道',
+      tplSrc.includes('const INSTANCE_FLOATS = 24')
         && tplSrc.includes('vClip.x * gfv.x + vClip.y * gfv.y + vClip.z < 0.0) discard')
         && tplSrc.includes('buf[o + 7] = el.clip ? el.clip[2] : 1')
         && tplSrc.includes('buf[o + 22] = el.clip ? el.clip[0] : 0'));
