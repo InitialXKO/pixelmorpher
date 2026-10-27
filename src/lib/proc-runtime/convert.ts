@@ -18,6 +18,7 @@ import { computeWorldTransforms, rotateWorldTransformsForYaw, facingYawDeltaRad 
 import { resolvePieceSprite } from '../sprite-resolve';
 import { computeStackOps, rasterizeStackOpsData, type StackDrawOp } from '../stack-render';
 import { packMaskBits, unpackMaskBits } from '../sprite-marks';
+import { collectDesiredPatterns, effectivePatternGraph, extractPatternInstances } from '../blueprint/pattern-sync';
 import { rgbaToHexOrNull } from '../engine/utils';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
@@ -456,6 +457,21 @@ function glowEntryFor(
 /** 双挂载解析 → 运行时动态实例（节点为底、服装件同位替换/压制）。
  * 带库引用的实例按钉版本权威重展开（快照只作展开失败时的回退，
  * 失败点名不静默）。 */
+/** 图案↔蓝图统一：进包的图案实例从节点生效图提取（节点挂载 +
+ * 指定集的件挂载两列，喂给 dynFor 走既有双挂载合并/库展开口径）。
+ * 接线覆盖是编辑器实时求值，包内按节点 params 固化。 */
+function graphPatternLists(
+  character: Character,
+  node: Character['nodes'][string] | undefined,
+  setId: string | undefined,
+): [DynamicPatternInstance[] | undefined, DynamicPatternInstance[] | undefined] {
+  if (!node) return [undefined, undefined];
+  const graph = effectivePatternGraph(character, node as never);
+  if (!graph) return [node.dynamicPatterns, undefined];
+  const { nodeList, pieceListBySet } = extractPatternInstances(graph);
+  return [nodeList, setId ? pieceListBySet.get(setId) : undefined];
+}
+
 function dynFor(
   nodeDyn: Parameters<typeof resolveDynamicPatterns>[0],
   pieceDyn: Parameters<typeof resolveDynamicPatterns>[1],
@@ -790,7 +806,7 @@ export function convertCharacterToRuntimePackage(
     if ((baseApp.composite ?? 'generate') !== 'generate' && !baseSprite) {
       warnings.push(`槽位 ${slotKey} 合成方式为 ${baseApp.composite} 但东向无精灵，运行时按独立生成处理`);
     }
-    const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
+    const dyn = dynFor(...graphPatternLists(character, node, activeSet?.id), dynLib, warnings);
     parts.push({
       key: slotKey,
       sortOrder: node.zIndex,
@@ -826,7 +842,7 @@ export function convertCharacterToRuntimePackage(
     const pivot = pivotOf(node.id);
     const base = appearanceToBase(createDefaultParametricAppearance(), pivot, w?.worldAngle ?? 0);
     base.size = [sg.w, sg.h];
-    const dyn = dynFor(node.dynamicPatterns, activeSet?.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
+    const dyn = dynFor(...graphPatternLists(character, node, activeSet?.id), dynLib, warnings);
     parts.push({
       key: slotKey,
       sortOrder: node.zIndex,
@@ -844,8 +860,7 @@ export function convertCharacterToRuntimePackage(
   for (const node of Object.values(character.nodes)) {
     const slotKey = node.slot?.slotKey ?? node.id;
     if (parametricSlots.has(slotKey) || spriteSlots.has(slotKey)) continue;
-    const hasDyn = (node.dynamicPatterns?.length ?? 0) > 0
-      || character.costumeSets.some((cs) => (cs.pieces[slotKey]?.dynamicPatterns?.length ?? 0) > 0);
+    const hasDyn = collectDesiredPatterns(character, node as never).length > 0;
     if (hasDyn) warnings.push(`动态效果：槽位 ${slotKey} 既无参数化外观也无精灵，未进运行时包`);
   }
   parts.sort((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key));
@@ -881,7 +896,7 @@ export function convertCharacterToRuntimePackage(
       const app = piece?.parametric;
       const nodeId = slotNode.get(slotKey);
       const node = nodeId ? character.nodes[nodeId] : undefined;
-      const dyn = dynFor(node?.dynamicPatterns, piece?.dynamicPatterns, dynLib, warnings);
+      const dyn = dynFor(...graphPatternLists(character, node, cs.id), dynLib, warnings);
       if (dyn) dynMap[slotKey] = dyn;
       const ge = cs.id === activeSet?.id
         ? parts.find((p) => p.key === slotKey)?.glow
@@ -896,7 +911,7 @@ export function convertCharacterToRuntimePackage(
     for (const slotKey of spriteSlots) {
       const nodeId = slotNode.get(slotKey);
       const node = nodeId ? character.nodes[nodeId] : undefined;
-      const dyn = dynFor(node?.dynamicPatterns, cs.pieces[slotKey]?.dynamicPatterns, dynLib, warnings);
+      const dyn = dynFor(...graphPatternLists(character, node, cs.id), dynLib, warnings);
       if (dyn) dynMap[slotKey] = dyn;
       const ge = cs.id === activeSet?.id
         ? parts.find((p) => p.key === slotKey)?.glow
