@@ -90,6 +90,7 @@ export type ModifierType =
   | 'pillow_stretch'        // Pillow/bulge stretch
   | 'hyperbolic_stretch'    // Hyperbolic curve stretch
   | 'ring_ripple'          // Ring ripple stretch
+  | 'cleanup'               // Jeff 落地：去孤点（删小于阈值的连通块）
   | 'gait'                  // V11: Gait animation (semicircle+chord trajectory)
   | 'local_inflate'          // V12: Local inflation/bulge (radial pixel displacement)
   | 'path_follow'            // V12: Path following deformation (limb bends along path)
@@ -2118,6 +2119,15 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
         { label: '滤色', value: 'screen' },
       ]},
       { name: 'edgesOnly', label: '仅边缘生效', type: 'boolean', default: true },
+    ],
+  },
+  {
+    type: 'cleanup',
+    label: '去孤点',
+    icon: 'Eraser',
+    category: 'color',
+    params: [
+      { name: 'minSize', label: '最小保留块（像素数）', type: 'number', default: 2, min: 1, max: 16, step: 1 },
     ],
   },
   {

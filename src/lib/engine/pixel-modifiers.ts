@@ -100,6 +100,45 @@ modifierRegistry.set('sphere_rotate', (params, pixels) => {
   return applySphereRotate(pixels, angle, mode, centerX, centerY, maxLat, radiusShrinkRatio, backFill);
 });
 
+modifierRegistry.set('cleanup', (params, pixels) => {
+  // 去孤点：四连通连通块小于 minSize 的整块清掉（烘焙碎屑/孤点）
+  const minSize = Math.max(1, Math.round(Number(params.minSize) || 2));
+  if (minSize <= 1) return pixels;
+  const h = pixels.length;
+  const w = h > 0 ? pixels[0]!.length : 0;
+  if (w === 0) return pixels;
+  const solid = (x: number, y: number): boolean => {
+    const c = pixels[y]?.[x];
+    return c !== null && c !== undefined && c !== '';
+  };
+  const seen = new Uint8Array(w * h);
+  const out = pixels.map((row) => [...row]);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!solid(x, y) || seen[y * w + x]) continue;
+      const comp: number[] = [];
+      const stack = [y * w + x];
+      seen[y * w + x] = 1;
+      while (stack.length) {
+        const cur = stack.pop()!;
+        comp.push(cur);
+        const cx = cur % w, cy = (cur / w) | 0;
+        for (const [nx, ny] of [[cx - 1, cy], [cx + 1, cy], [cx, cy - 1], [cx, cy + 1]] as const) {
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const ni = ny * w + nx;
+          if (seen[ni] || !solid(nx, ny)) continue;
+          seen[ni] = 1;
+          stack.push(ni);
+        }
+      }
+      if (comp.length < minSize) {
+        for (const idx of comp) out[(idx / w) | 0]![idx % w] = null;
+      }
+    }
+  }
+  return out;
+});
+
 modifierRegistry.set('mirror', (_params, pixels) => {
   // Horizontal mirror: reverse each row
   return pixels.map(row => [...row].reverse());

@@ -22,7 +22,7 @@ import { collectDesiredPatterns, effectivePatternGraph, extractPatternInstances 
 import { rgbaToHexOrNull } from '../engine/utils';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
-import { followAnchoredDeltaAt, glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternInstance, type DynamicPatternParams } from '../dynamic-patterns';
+import { followAnchoredDeltaAt, glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams, type DynamicPatternInstance } from '../dynamic-patterns';
 import { BUILTIN_ENTRIES, libraryIndexOf, surfaceLibEntriesOf } from '../library-entries';
 import { expandDynamicEntry } from '../dynamic-expand';
 import { createDefaultParametricAppearance } from './surfaces';

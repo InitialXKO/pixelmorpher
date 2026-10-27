@@ -62,11 +62,13 @@ export interface DynamicPatternParams {
   arcSeed: number;      // 形状种子
   arcColor: string;     // 弧线颜色
   // 二期（D4）：生成模式 / 生长 / 双锚点 / 细节数
-  arcMode: 'arc' | 'vine' | 'stars'; // 弧线（闪电）/ 藤蔓 / 星座连线
+  arcMode: 'arc' | 'vine' | 'stars' | 'beam' | 'glyph' | 'stream'; // 弧线/藤蔓/星座/光束/法阵线绘/流光线（乙7 几何三件并入）
   arcGrowHz: number;    // 生长循环（次/秒，0 = 恒满长）；周期内先生长后保持
   arcTarget: string;    // 双锚点：终点锚定的目标部件槽位键（仅弧线模式；空 = 方向+弧长）
   arcOriginMark: string; // 弧线原点绑定的精灵点标记名（空 = 插头）
-  arcDetail: number;    // 细节数：藤蔓叶数 / 星座星数（0 = 按模式缺省）
+  arcDetail: number;    // 细节数：藤蔓叶数 / 星座星数 / 法阵刻度数 / 流光点数（0 = 按模式缺省）
+  arcGlyphSpinDeg: number; // 法阵旋转速度（度/秒，可负）
+  arcFlowHz: number;    // 流光线光点流速（圈/秒）
   // 追随段（形变段的跨部件驱动）：本部件渲染时叠加「源部件位姿的
   // 滞后差」——源部件当前位姿与 delay 秒前位姿之差 × amount，
   // 本部件就像被源部件拖着、慢半拍跟上（垂饰/披风/头发的次级运动）。
@@ -78,6 +80,8 @@ export interface DynamicPatternParams {
   followRotate: boolean;  // 是否连源部件的旋转滞后一起跟
   // 发射段
   emitEnabled: boolean;
+  emitMode: DynamicEmitMode; // out = 向外发射（一直以来的行为）；gather = 汇聚（蓄力/虹流：粒子在外围出生、反向飞向部件）
+  gatherRadius: number;      // gather 时出生点沿外向的偏移距离（px，逐粒子 0.5~1 倍哈希抖动）
   source: DynamicEmitSource;
   emitMark: string;      // source='mark' 时引用的精灵点标记名（缺失回落 plug 点）
   rate: number;          // 每秒生成数（峰值，受 linkToDeform 调制）
@@ -98,6 +102,62 @@ export interface DynamicPatternParams {
   color: string;         // 粒子颜色（#rrggbb，径向渐隐绘制）
   alpha: number;         // 峰值不透明度 0..1
   maxParticles: number;  // 单实例同时存活上限
+  particleShape: ParticleShape; // 粒子形状（只影响绘制，不影响弹道）
+  rampEnabled: boolean;  // 生命期颜色坡道开关（开时按生命比例在三色间过渡，覆盖 color）
+  rampFrom: string;      // 坡道起色（出生）
+  rampMid: string;       // 坡道中色
+  rampTo: string;        // 坡道终色（死亡）
+  rampMidPos: number;    // 中色位置（生命比例 0..1）
+  // 环绕段（Jeff 落地：绕宿主椭圆轨道的光点，闭式求位）
+  orbitEnabled: boolean;
+  orbitCount: number;    // 光点数
+  orbitRadiusX: number;  // 椭圆半轴 X（px）
+  orbitRadiusY: number;  // 椭圆半轴 Y（px）
+  orbitHz: number;       // 转速（圈/秒，可负 = 反向）
+  orbitPhase: number;    // 相位（周期数 0..1）
+  orbitSize: number;     // 光点直径（px）
+  orbitColor: string;    // 光点颜色（#rrggbb）
+  orbitAngleSpace: 'sprite' | 'world'; // sprite = 椭圆随精灵转；world = 椭圆恒对世界（同发光方向基准口径）
+  // 图案级全局后期（Jeff 落地：把蓝图链的色板/抖动能力提为图案
+  // 自身的后期——作用于本图案的全部绘制：粒子全程 + 发光/弧线/
+  // 环绕的颜色主题化）
+  postEnabled: boolean;
+  // 环境场段（乙9：区域样本，不依附精灵轮廓）
+  envEnabled: boolean;
+  envMode: 'fall' | 'drift' | 'ripple'; // 落=坠落样本 / 游=漂浮样本 / 涟漪=落点扩散环
+  envCount: number;    // 样本数
+  envWidth: number;    // 区域宽（px，插头为中心）
+  envHeight: number;   // 区域高（px）
+  envHz: number;       // 样本周期（次/秒）
+  envSize: number;     // 样本大小（px）
+  envColor: string;
+  envAlpha: number;    // 峰值不透明度
+  envSeed: number;
+  envRadius: number;   // 涟漪最大半径（px，仅 ripple）
+  // 团块段（乙8：距离场种子团块 + 烧穿 + 热度色阶，闭式场）
+  blobEnabled: boolean;
+  blobRadius: number;    // 团块半径（px）
+  blobCount: number;     // 种子数
+  blobSeed: number;      // 形状种子
+  blobHz: number;        // 烧穿循环（次/秒）
+  blobBurn: number;      // 烧穿深度 0..1（周期中段侵蚀最深）
+  blobAlpha: number;     // 峰值不透明度
+  blobColorEdge: string; // 低热色
+  blobColorMid: string;  // 中热色
+  blobColorCore: string; // 高热色
+  // 火焰段（乙8：高度场火舌 + 上滚周期噪声撕边，循环无缝）
+  flameEnabled: boolean;
+  flameWidth: number;    // 焰宽（px）
+  flameHeight: number;   // 焰高（px，自插头向上）
+  flameHz: number;       // 上滚循环（次/秒）
+  flameTurbulence: number; // 撕边强度 0..1
+  flameAlpha: number;    // 峰值不透明度
+  flameColorEdge: string;
+  flameColorMid: string;
+  flameColorCore: string;
+  postTheme: PostTheme;    // 色板主题（按亮度映射到主题色阶；none = 不映射）
+  postAlphaLevels: number; // 透明度分级（0 = 关；2~8 = 把粒子透明度量化到该档数）
+  postDither: boolean;     // 抖动消散（粒子按生命包络做确定性哈希掉落，代替平滑淡出）
   // 发光段（原地发光：选区内像素随呼吸曲线提亮，并向外扩一圈柔光）
   glowEnabled: boolean;
   glowColor: string;        // 辉光颜色（#rrggbb）：柔光圈颜色与提亮染色
@@ -181,6 +241,9 @@ export function followAnchoredDeltaAt(
 
 /** 发光选区来源：color = 按像素颜色取色；marked = 手动标记的像素掩码 */
 export type GlowMaskSource = 'color' | 'marked' | 'mark';
+export type DynamicEmitMode = 'out' | 'gather';
+export type PostTheme = 'none' | 'ember' | 'frost' | 'gameboy' | 'dusk' | 'mono';
+export type ParticleShape = 'dot' | 'star' | 'diamond' | 'line';
 
 /** 柔光圈形状：square 方形圈（八邻域逐圈外扩）/ circle 圆形 / star 十字星形
  * （沿横竖轴伸长、对角收短）/ flame 焰形（向上伸长收尖、下方收短）/ custom 自绘印章 */
@@ -224,11 +287,22 @@ export function defaultDynamicParams(): DynamicPatternParams {
     arcBranches: 1, arcWidthPx: 1.2, arcFlicker: 10, arcSeed: 7,
     arcColor: '#bfe3ff',
     arcMode: 'arc', arcGrowHz: 0, arcTarget: '', arcOriginMark: '', arcDetail: 0,
+    arcGlyphSpinDeg: 12, arcFlowHz: 0.6,
     followEnabled: false, followSource: '', followDelaySec: 0.12, followAmount: 0.7, followRotate: true,
-    emitEnabled: true, source: 'contour', emitMark: '', rate: 12, linkToDeform: 0, speed: 6,
+    emitEnabled: true, emitMode: 'out', gatherRadius: 14, source: 'contour', emitMark: '', rate: 12, linkToDeform: 0, speed: 6,
     directionDeg: 270, emitDirMark: '', spreadDeg: 60, layer: 'both', frontRatio: 0.35,
     life: 0.9, sizeStart: 3, sizeEnd: 8, rise: 12, buoy: 0, turbulence: 4,
     color: '#ffb46b', alpha: 0.5, maxParticles: 90,
+    particleShape: 'dot', rampEnabled: false, rampFrom: '#ffffff', rampMid: '#ffb46b', rampTo: '#ff5a2a', rampMidPos: 0.5,
+    orbitEnabled: false, orbitCount: 3, orbitRadiusX: 14, orbitRadiusY: 10, orbitHz: 0.5, orbitPhase: 0,
+    orbitSize: 3, orbitColor: '#aee6ff', orbitAngleSpace: 'sprite',
+    postEnabled: false, postTheme: 'none', postAlphaLevels: 0, postDither: false,
+    blobEnabled: false, blobRadius: 16, blobCount: 5, blobSeed: 3, blobHz: 0.8, blobBurn: 0.55, blobAlpha: 0.85,
+    blobColorEdge: '#7a1e00', blobColorMid: '#ff5a00', blobColorCore: '#fff3c4',
+    flameEnabled: false, flameWidth: 18, flameHeight: 26, flameHz: 1.2, flameTurbulence: 0.55, flameAlpha: 0.85,
+    flameColorEdge: '#8a0e00', flameColorMid: '#ff7a1a', flameColorCore: '#fff3c4',
+    envEnabled: false, envMode: 'fall', envCount: 14, envWidth: 56, envHeight: 44, envHz: 0.9,
+    envSize: 2.2, envColor: '#bcd8ff', envAlpha: 0.8, envSeed: 5, envRadius: 13,
     glowEnabled: false, glowColor: '#7dd7ff', glowStrength: 1, glowHz: 0.8,
     glowPhase: 0, glowHalo: 2, glowMaskSource: 'color', glowPick: '#2ea8ff',
     glowTolerance: 0, glowMask: undefined, glowMarkName: '', glowFollowGroup: 2,
@@ -254,6 +328,20 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
     ? ((out.glowAngleDeg % 360) + 360) % 360 : 270;
   if (out.glowAngleSpace !== 'world') out.glowAngleSpace = 'sprite';
   if (typeof out.followSource !== 'string') out.followSource = '';
+  if (out.emitMode !== 'gather') out.emitMode = 'out';
+  out.gatherRadius = Number.isFinite(out.gatherRadius) ? Math.max(0, Math.min(64, out.gatherRadius)) : 14;
+  if (!['dot', 'star', 'diamond', 'line'].includes(out.particleShape)) out.particleShape = 'dot';
+  out.rampMidPos = Number.isFinite(out.rampMidPos) ? Math.max(0, Math.min(1, out.rampMidPos)) : 0.5;
+  if (out.orbitAngleSpace !== 'world') out.orbitAngleSpace = 'sprite';
+  if (!['none', 'ember', 'frost', 'gameboy', 'dusk', 'mono'].includes(out.postTheme)) out.postTheme = 'none';
+  out.postAlphaLevels = Number.isFinite(out.postAlphaLevels) ? Math.max(0, Math.min(8, Math.round(out.postAlphaLevels))) : 0;
+  out.blobCount = Number.isFinite(out.blobCount) ? Math.max(2, Math.min(8, Math.round(out.blobCount))) : 5;
+  out.blobBurn = Number.isFinite(out.blobBurn) ? Math.max(0, Math.min(1, out.blobBurn)) : 0.55;
+  out.flameTurbulence = Number.isFinite(out.flameTurbulence) ? Math.max(0, Math.min(1, out.flameTurbulence)) : 0.55;
+  if (out.envMode !== 'fall' && out.envMode !== 'drift' && out.envMode !== 'ripple') out.envMode = 'fall';
+  out.envCount = Number.isFinite(out.envCount) ? Math.max(2, Math.min(40, Math.round(out.envCount))) : 14;
+  out.envRadius = Number.isFinite(out.envRadius) ? Math.max(2, Math.min(40, out.envRadius)) : 13;
+  out.orbitCount = Number.isFinite(out.orbitCount) ? Math.max(1, Math.min(12, Math.round(out.orbitCount))) : 3;
   if (typeof out.emitMark !== 'string') out.emitMark = '';
   if (typeof out.emitDirMark !== 'string') out.emitDirMark = '';
   if (typeof out.displaceDirMark !== 'string') out.displaceDirMark = '';
@@ -305,7 +393,9 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
   if (typeof out.arcColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(out.arcColor)) {
     out.arcColor = '#bfe3ff';
   }
-  if (out.arcMode !== 'vine' && out.arcMode !== 'stars') out.arcMode = 'arc';
+  if (!['arc', 'vine', 'stars', 'beam', 'glyph', 'stream'].includes(out.arcMode)) out.arcMode = 'arc';
+  out.arcGlyphSpinDeg = Number.isFinite(out.arcGlyphSpinDeg) ? Math.max(-180, Math.min(180, out.arcGlyphSpinDeg)) : 12;
+  out.arcFlowHz = Number.isFinite(out.arcFlowHz) ? Math.max(0, Math.min(4, out.arcFlowHz)) : 0.6;
   out.arcGrowHz = Number.isFinite(out.arcGrowHz)
     ? Math.max(0, Math.min(2, out.arcGrowHz)) : 0;
   if (typeof out.arcTarget !== 'string') out.arcTarget = '';
@@ -347,6 +437,233 @@ export function resolveDynamicPatterns(
     map.set(inst.slot, { instance: norm(inst), origin: 'costume' });
   }
   return [...map.values()];
+}
+
+function hexRgbOf(hex: string): [number, number, number] {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return [255, 180, 107];
+  return [parseInt(m[1].slice(0, 2), 16), parseInt(m[1].slice(2, 4), 16), parseInt(m[1].slice(4, 6), 16)];
+}
+function rgbHex(r: number, g: number, b: number): string {
+  const c = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+
+/** 粒子在某生命比例处的颜色：坡道关 = 恒 color；开 = 起→中→终三段线性过渡 */
+export function particleColorAt(params: DynamicPatternParams, lifeRatio: number): string {
+  if (!params.rampEnabled) return params.color;
+  const f = Math.max(0, Math.min(1, lifeRatio));
+  const pos = Math.max(0, Math.min(1, params.rampMidPos));
+  const a = hexRgbOf(params.rampFrom), mid = hexRgbOf(params.rampMid), b = hexRgbOf(params.rampTo);
+  if (f <= pos) {
+    const t = pos <= 0 ? 1 : f / pos;
+    return rgbHex(a[0] + (mid[0] - a[0]) * t, a[1] + (mid[1] - a[1]) * t, a[2] + (mid[2] - a[2]) * t);
+  }
+  const t = pos >= 1 ? 1 : (f - pos) / (1 - pos);
+  return rgbHex(mid[0] + (b[0] - mid[0]) * t, mid[1] + (b[1] - mid[1]) * t, mid[2] + (b[2] - mid[2]) * t);
+}
+
+/**
+ * 环绕光点位置（精灵本地 px，原点 = plug，x 右 y 下）：第 i 点
+ * 相位 = orbitPhase + t·orbitHz + i/count（周期数），椭圆参数位。
+ * angleSpace='world' 时按 -worldAngleDeg 反转，椭圆恒对世界
+ * （调用方传部件当前世界角；缺省 0 = sprite 口径）。
+ */
+export function orbitPointsAt(
+  params: DynamicPatternParams,
+  tSec: number,
+  worldAngleDeg = 0,
+): { x: number; y: number }[] {
+  if (!params.orbitEnabled || params.orbitCount <= 0) return [];
+  const out: { x: number; y: number }[] = [];
+  const counter = params.orbitAngleSpace === 'world' ? (-worldAngleDeg * Math.PI) / 180 : 0;
+  const cc = Math.cos(counter), cs = Math.sin(counter);
+  for (let i = 0; i < params.orbitCount; i++) {
+    const ph = params.orbitPhase + tSec * params.orbitHz + i / params.orbitCount;
+    const a = ph * Math.PI * 2;
+    const ex = Math.cos(a) * params.orbitRadiusX;
+    const ey = Math.sin(a) * params.orbitRadiusY;
+    out.push({ x: ex * cc - ey * cs, y: ex * cs + ey * cc });
+  }
+  return out;
+}
+
+/** 色板主题色阶（亮度 0 / .25 / .5 / .75 / 1 五站，站间线性） */
+export const POST_THEME_RAMPS: Record<Exclude<PostTheme, 'none'>, [string, string, string, string, string]> = {
+  ember: ['#1a0500', '#7a1e00', '#ff5a00', '#ffa02a', '#fff3c4'],
+  frost: ['#02101e', '#0e4a7a', '#2a9adf', '#9fdcff', '#ffffff'],
+  gameboy: ['#0f380f', '#306230', '#8bac0f', '#9bbc0f', '#e0f8d0'],
+  dusk: ['#12041f', '#3c1160', '#7a2a9e', '#d76bd7', '#ffd7f4'],
+  mono: ['#000000', '#404040', '#808080', '#c0c0c0', '#ffffff'],
+};
+
+/** 全局后期颜色映射：主题开时按输入色亮度落到主题色阶（保留明暗
+ * 关系、换掉色相家族）；关/none 时原样返回 */
+export function postColorAt(params: DynamicPatternParams, hex: string): string {
+  if (!params.postEnabled || params.postTheme === 'none') return hex;
+  const ramp = POST_THEME_RAMPS[params.postTheme as Exclude<PostTheme, 'none'>];
+  if (!ramp) return hex;
+  const [r, g, b] = hexRgbOf(hex);
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  const pos = Math.max(0, Math.min(0.9999, lum)) * 4;
+  const i = Math.floor(pos);
+  const f = pos - i;
+  const a = hexRgbOf(ramp[i]!), c = hexRgbOf(ramp[Math.min(4, i + 1)]!);
+  return rgbHex(a[0] + (c[0] - a[0]) * f, a[1] + (c[1] - a[1]) * f, a[2] + (c[2] - a[2]) * f);
+}
+
+// ---- 团块/火焰场（乙8）：闭式热度场，heat 0..1 行优先；
+// (ox, oy) = 插头在场内的格坐标。时间只经周期相位进入，
+// 场以 1/Hz 为周期严格循环（噪声相位偏移恒为周期整数倍）。
+// 运行时孪生 = DYNAMIC_SRC 的 dynBlobField / dynFlameField。 ----
+
+export interface DynField {
+  w: number; h: number;
+  heat: Float32Array;
+  ox: number; oy: number;
+}
+
+function smoothstep01(a: number, b: number, x: number): number {
+  const f = Math.max(0, Math.min(1, (x - a) / Math.max(1e-6, b - a)));
+  return f * f * (3 - 2 * f);
+}
+
+/** 热度 → 颜色（低热 edge → 0.55 mid → 高热 core 两段线性） */
+export function fieldColorAt(edge: string, mid: string, core: string, heat: number): [number, number, number] {
+  const f = Math.max(0, Math.min(1, heat));
+  const a = hexRgbOf(edge), m = hexRgbOf(mid), c = hexRgbOf(core);
+  if (f <= 0.55) {
+    const t = f / 0.55;
+    return [a[0] + (m[0] - a[0]) * t, a[1] + (m[1] - a[1]) * t, a[2] + (m[2] - a[2]) * t];
+  }
+  const t = (f - 0.55) / 0.45;
+  return [m[0] + (c[0] - m[0]) * t, m[1] + (c[1] - m[1]) * t, m[2] + (c[2] - m[2]) * t];
+}
+
+// ---- 环境场段（乙9）：区域样本（精灵本地 px，原点 = plug）。
+// 样本位置由种子哈希定、时间只经样本周期相位进入，全闭式。
+// ripple 的涟漪从属于落点：前 30% 周期样本坠向本周期落点，
+// 落地后余下周期在落点扩散成环；落点按周期序号换（同周期内恒定）。
+// 运行时孪生 = DYNAMIC_SRC 的 dynEnvSamples。 ----
+
+export interface EnvQuad { x: number; y: number; size: number; line: boolean; dirX: number; dirY: number; alpha: number }
+export interface EnvRing { x: number; y: number; r: number; alpha: number }
+
+export function envSamplesAt(p: DynamicPatternParams, tSec: number): { quads: EnvQuad[]; rings: EnvRing[] } {
+  const quads: EnvQuad[] = [];
+  const rings: EnvRing[] = [];
+  if (!p.envEnabled) return { quads, rings };
+  const W = p.envWidth, H = p.envHeight, hz = p.envHz, seed = p.envSeed;
+  const K = DISPLACE_PERIOD_CELLS;
+  const frac = (v: number) => v - Math.floor(v);
+  for (let i = 0; i < p.envCount; i++) {
+    if (p.envMode === 'fall') {
+      const h1 = displaceHash01(seed, i, 201);
+      const ph = frac(tSec * hz + h1);
+      const x = (h1 - 0.5) * W + (displaceHash01(seed, i, 202) - 0.5) * 4;
+      const fade = Math.pow(Math.sin(Math.PI * Math.min(1, ph)), 0.7);
+      quads.push({ x, y: -H / 2 + ph * H, size: p.envSize * 2.4, line: true, dirX: 0, dirY: 1, alpha: p.envAlpha * fade });
+    } else if (p.envMode === 'drift') {
+      const bx = (displaceHash01(seed, i, 211) - 0.5) * W;
+      const by = (displaceHash01(seed, i, 212) - 0.5) * H;
+      const ph = frac(tSec * hz + displaceHash01(seed, i, 213));
+      const ox = (displaceNoiseU(ph * K + i * 2.3, i * 1.1, K, 4511) - 0.5) * W * 0.16;
+      const oy = (displaceNoiseU(ph * K + i * 1.9 + 31, i * 0.7, K, 9029) - 0.5) * H * 0.16;
+      const tw = 0.25 + 0.75 * Math.sin(Math.PI * ph);
+      quads.push({ x: bx + ox, y: by + oy, size: p.envSize, line: false, dirX: 1, dirY: 0, alpha: p.envAlpha * tw });
+    } else {
+      const h = displaceHash01(seed, i, 221);
+      const cyc = Math.floor(tSec * hz + h);
+      const ph = frac(tSec * hz + h);
+      const x = (displaceHash01(seed, i, 230 + cyc) - 0.5) * W * 0.9;
+      const gy = H / 2 - 2 - displaceHash01(seed, i, 240 + cyc) * 3;
+      if (ph < 0.3) {
+        const f = ph / 0.3;
+        quads.push({ x, y: -H / 2 + f * (gy + H / 2), size: p.envSize * 2.2, line: true, dirX: 0, dirY: 1, alpha: p.envAlpha });
+      } else {
+        const f = (ph - 0.3) / 0.7;
+        rings.push({ x, y: gy, r: 1.5 + f * p.envRadius, alpha: p.envAlpha * (1 - f) * 0.9 });
+      }
+    }
+  }
+  return { quads, rings };
+}
+
+export function blobFieldAt(p: DynamicPatternParams, tSec: number, dsx = 1, dsy = 1): DynField | null {
+  if (!p.blobEnabled) return null;
+  // 域缩放口径（用户定案）：范围/位置跟随形变、形态不跟——种子
+  // 位置与摆动乘 ds（域变椭圆），种子瓣半径保持自然像素不拉伸。
+  const R = Math.max(4, p.blobRadius);
+  const pad = 2;
+  const RX = Math.ceil(R * Math.max(0.05, dsx)), RY = Math.ceil(R * Math.max(0.05, dsy));
+  const SW = 2 * (RX + pad) + 1, SH = 2 * (RY + pad) + 1;
+  const heat = new Float32Array(SW * SH);
+  const phase = ((tSec * p.blobHz) % 1 + 1) % 1;
+  const K = DISPLACE_PERIOD_CELLS;
+  const theta = p.blobBurn * Math.sin(Math.PI * phase);
+  const seeds: { x: number; y: number; r: number }[] = [];
+  for (let i = 0; i < p.blobCount; i++) {
+    // 第 0 个种子锚在原点当核（团块必须骑在锚点上），其余绕核散布
+    const ang = displaceHash01(p.blobSeed, 0, 100 + i) * Math.PI * 2;
+    const rad = i === 0 ? 0 : R * 0.5 * Math.sqrt(displaceHash01(p.blobSeed, 0, 110 + i));
+    const wx = (displaceNoiseU(phase * K + i * 3.7, i * 1.3, K, 7717) - 0.5) * R * 0.22;
+    const wy = (displaceNoiseU(phase * K + i * 2.9 + 40, i * 1.7, K, 31337) - 0.5) * R * 0.22;
+    seeds.push({
+      x: (Math.cos(ang) * rad + wx) * dsx,
+      y: (Math.sin(ang) * rad + wy) * dsy,
+      r: i === 0 ? R * 0.78 : R * (0.42 + 0.3 * displaceHash01(p.blobSeed, 0, 120 + i)),
+    });
+  }
+  for (let cy = 0; cy < SH; cy++) {
+    for (let cx = 0; cx < SW; cx++) {
+      const lx = cx - (RX + pad), ly = cy - (RY + pad);
+      let raw = 0;
+      for (const sd of seeds) {
+        const d = Math.hypot(lx - sd.x, ly - sd.y);
+        const v = 1 - d / sd.r;
+        if (v > raw) raw = v;
+      }
+      heat[cy * SW + cx] = smoothstep01(theta, theta + 0.38, Math.pow(Math.max(0, raw), 1.3));
+    }
+  }
+  return { w: SW, h: SH, heat, ox: RX + pad, oy: RY + pad };
+}
+
+export function flameFieldAt(p: DynamicPatternParams, tSec: number, dsx = 1, dsy = 1): DynField | null {
+  if (!p.flameEnabled) return null;
+  // 域缩放口径同团块：焰宽/焰高乘 ds（范围跟），噪声频率不变
+  // （火舌保持自然像素宽，宽域里舌数变多而不是舌变胖）。
+  const W = Math.max(4, Math.round(p.flameWidth * Math.max(0.05, dsx)));
+  const H = Math.max(6, Math.round(p.flameHeight * Math.max(0.05, dsy)));
+  const pad = 2;
+  const w = W + 2 * pad + 1;
+  const h = H + pad + 3;
+  const ox = Math.floor(W / 2) + pad;
+  const oy = H + pad;
+  const heat = new Float32Array(w * h);
+  const phase = ((tSec * p.flameHz) % 1 + 1) % 1;
+  const K = DISPLACE_PERIOD_CELLS;
+  const f = 0.16;
+  for (let cy = 0; cy < h; cy++) {
+    const ly = cy - oy;
+    if (ly > 1) continue;
+    const rise = Math.max(0, Math.min(1, -ly / H));
+    const widthMod = 0.82 + 0.36 * displaceNoiseU(phase * K, rise * 3, K, 7717);
+    const halfW = Math.max(1, (W / 2) * (1 - 0.5 * rise) * widthMod);
+    for (let cx = 0; cx < w; cx++) {
+      const lx = cx - ox;
+      const inside = 1 - Math.abs(lx) / halfW;
+      if (inside <= 0) continue;
+      const n1 = displaceNoiseU(-ly * f + phase * K, lx * f, K, 5511);
+      const n2 = displaceNoiseU(-ly * f * 2.1 + phase * K * 2, lx * f * 2.1 + 7.7, K, 9923);
+      let hv = inside * (1 - rise * 0.9)
+        + (n1 - 0.5) * p.flameTurbulence * (0.35 + 0.65 * rise)
+        + (n2 - 0.5) * p.flameTurbulence * 0.35
+        - rise * rise * 0.25;
+      heat[cy * w + cx] = smoothstep01(0.06, 0.62, hv);
+    }
+  }
+  return { w, h, heat, ox, oy };
 }
 
 /** 发光分组：解析序里前 3 个启用发光的实例各成一组（颜色/强度/频率/相位
@@ -643,6 +960,129 @@ export function arcPointsAt(
     const dots: ArcPoint[] = order
       .filter((i) => raw[i].r <= p.arcLengthPx * grow + 1e-6)
       .map((i) => ({ x: raw[i].x, y: raw[i].y, w: 1.3 + 1.1 * displaceHash01(p.arcSeed, step, 380 + i) }));
+    return { main: arcClipToFrac(mainFull, grow), branches: [], dots, alpha };
+  }
+
+  if (p.arcMode === 'beam') {
+    // 光束（乙7）：直束主线（根粗尖细）+ 两条随跳动步漂移的
+    // 流动条纹 + 起点核与落点光斑点
+    const ex = endOverride ? endOverride.x : Math.cos(dir) * p.arcLengthPx;
+    const ey = endOverride ? endOverride.y : Math.sin(dir) * p.arcLengthPx;
+    const len = Math.hypot(ex, ey) || 1;
+    const ux = ex / len, uy = ey / len;
+    const nx = -uy, ny = ux;
+    const SEG = 6;
+    const mainFull: ArcPoint[] = [];
+    for (let i = 0; i <= SEG; i++) {
+      const s = i / SEG;
+      mainFull.push({ x: ux * len * s, y: uy * len * s, w: Math.max(0.2, p.arcWidthPx * (2.6 - 1.5 * s)) });
+    }
+    const drift = (displaceHash01(p.arcSeed, step, 950) - 0.5) * 2.4;
+    const branches: ArcPoint[][] = [];
+    for (const sideSign of [-1, 1]) {
+      const off = sideSign * p.arcWidthPx * 1.05 + drift * 0.4;
+      const line: ArcPoint[] = [];
+      for (let i = 0; i <= SEG; i++) {
+        const s = 0.06 + 0.9 * (i / SEG);
+        line.push({ x: ux * len * s + nx * off, y: uy * len * s + ny * off, w: Math.max(0.15, p.arcWidthPx * 0.5) });
+      }
+      branches.push(arcClipToFrac(line, grow));
+    }
+    const dots: ArcPoint[] = [{ x: 0, y: 0, w: p.arcWidthPx * 2.2 }];
+    if (grow >= 0.9) {
+      for (let j = 0; j < 4; j++) {
+        const a = displaceHash01(p.arcSeed, step, 960 + j) * Math.PI * 2;
+        const rr = p.arcWidthPx * (0.8 + 1.6 * displaceHash01(p.arcSeed, step, 970 + j));
+        dots.push({ x: ex + Math.cos(a) * rr, y: ey + Math.sin(a) * rr, w: 1.1 + displaceHash01(p.arcSeed, step, 980 + j) * 1.3 });
+      }
+    }
+    return { main: arcClipToFrac(mainFull, grow), branches, dots, alpha };
+  }
+
+  if (p.arcMode === 'glyph') {
+    // 法阵线绘（乙7）：外圈 + 内圈 + 五芒星 + 刻度，逐笔出现
+    // （生长系数按笔画总长顺序分摊）；整体以 arcGlyphSpinDeg 旋转
+    const R = Math.max(4, p.arcLengthPx);
+    const rot = dir + ((p.arcGlyphSpinDeg || 0) * t * Math.PI) / 180;
+    const rc = Math.cos(rot), rs = Math.sin(rot);
+    const rotPt = (x: number, y: number, w: number): ArcPoint => ({ x: x * rc - y * rs, y: x * rs + y * rc, w });
+    const circle = (rad: number, n: number, w: number): ArcPoint[] => {
+      const pts: ArcPoint[] = [];
+      for (let i = 0; i <= n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        pts.push(rotPt(Math.cos(a) * rad, Math.sin(a) * rad, w));
+      }
+      return pts;
+    };
+    const strokes: ArcPoint[][] = [];
+    strokes.push(circle(R, 40, p.arcWidthPx));
+    strokes.push(circle(R * 0.72, 32, Math.max(0.15, p.arcWidthPx * 0.7)));
+    const starOrder = [0, 2, 4, 1, 3, 0];
+    strokes.push(starOrder.map((vi) => {
+      const a = -Math.PI / 2 + vi * (Math.PI * 2 / 5);
+      return rotPt(Math.cos(a) * R * 0.72, Math.sin(a) * R * 0.72, Math.max(0.15, p.arcWidthPx * 0.8));
+    }));
+    const ticks = p.arcDetail > 0 ? p.arcDetail : 12;
+    for (let j = 0; j < ticks; j++) {
+      const a = (j / ticks) * Math.PI * 2;
+      const w = Math.max(0.12, p.arcWidthPx * 0.6);
+      strokes.push([rotPt(Math.cos(a) * R * 0.88, Math.sin(a) * R * 0.88, w), rotPt(Math.cos(a) * R, Math.sin(a) * R, w)]);
+    }
+    const lens = strokes.map((ln) => {
+      let L = 0;
+      for (let i = 0; i + 1 < ln.length; i++) L += Math.hypot(ln[i + 1].x - ln[i].x, ln[i + 1].y - ln[i].y);
+      return L;
+    });
+    const total = lens.reduce((a, b) => a + b, 0);
+    let budget = grow * total;
+    const shown: ArcPoint[][] = [];
+    for (let si = 0; si < strokes.length; si++) {
+      if (budget <= 0) break;
+      shown.push(arcClipToFrac(strokes[si], Math.min(1, budget / Math.max(0.0001, lens[si]))));
+      budget -= lens[si];
+    }
+    const dots: ArcPoint[] = [];
+    const runes = 6;
+    for (let j = 0; j < runes; j++) {
+      if (grow < 0.5 + 0.5 * ((j + 0.5) / runes)) continue;
+      const a = displaceHash01(p.arcSeed, 0, 990 + j) * Math.PI * 2;
+      const q = rotPt(Math.cos(a) * R * 0.86, Math.sin(a) * R * 0.86, 0);
+      dots.push({ x: q.x, y: q.y, w: 1.3 });
+    }
+    return {
+      main: shown.length ? shown[0] : [{ x: 0, y: 0, w: p.arcWidthPx }],
+      branches: shown.slice(1),
+      dots, alpha,
+    };
+  }
+
+  if (p.arcMode === 'stream') {
+    // 流光线（乙7）：微弯细线（种子定弯向）+ 沿线流动的光点
+    const ex = endOverride ? endOverride.x : Math.cos(dir) * p.arcLengthPx;
+    const ey = endOverride ? endOverride.y : Math.sin(dir) * p.arcLengthPx;
+    const len = Math.hypot(ex, ey) || 1;
+    const ux = ex / len, uy = ey / len;
+    const nx = -uy, ny = ux;
+    const bow = (displaceHash01(p.arcSeed, 0, 960) - 0.5) * len * 0.18;
+    const SEG = 12;
+    const ptAt = (s: number): { x: number; y: number } => {
+      const bend = Math.sin(s * Math.PI) * bow;
+      return { x: ux * len * s + nx * bend, y: uy * len * s + ny * bend };
+    };
+    const mainFull: ArcPoint[] = [];
+    for (let i = 0; i <= SEG; i++) {
+      const s = i / SEG;
+      const q = ptAt(s);
+      mainFull.push({ x: q.x, y: q.y, w: Math.max(0.15, p.arcWidthPx * (1 - 0.65 * s)) });
+    }
+    const beads = p.arcDetail > 0 ? p.arcDetail : 6;
+    const dots: ArcPoint[] = [];
+    for (let j = 0; j < beads; j++) {
+      const s = ((j / beads) + t * (p.arcFlowHz || 0)) % 1;
+      if (s > grow) continue;
+      const q = ptAt(s);
+      dots.push({ x: q.x, y: q.y, w: Math.max(0.5, p.arcWidthPx * (0.85 + 0.45 * Math.sin(s * Math.PI))) });
+    }
     return { main: arcClipToFrac(mainFull, grow), branches: [], dots, alpha };
   }
 
@@ -989,6 +1429,109 @@ export const DYNAMIC_PATTERN_TEMPLATES: DynamicPatternTemplate[] = [
     glowEnabled: true, glowHz: 0.7, glowStrength: 1.1, glowHalo: 2,
     glowColor: '#7dd7ff', emitEnabled: false,
   }),
+  // ---- Jeff 落地·甲1：组合配方模板 ×13（配方出处 PR #48 附录 A；
+  // 多实例配方以单实例承载其核心段组合，另几路同配方再加实例即可） ----
+  tpl('火焰斩', '战斗', {
+    arcEnabled: true, arcColor: '#ff9a3c', arcLengthPx: 34, arcWidthPx: 2.2, arcDisplace: 0.18, arcFlicker: 12,
+    source: 'contour', rate: 30, speed: 8, life: 0.55, sizeStart: 2, sizeEnd: 4, rise: 14, turbulence: 3,
+    rampEnabled: true, rampFrom: '#fff3c4', rampMid: '#ff8a2a', rampTo: '#8a1e00', rampMidPos: 0.45,
+    color: '#ff8a2a', alpha: 0.7,
+    glowEnabled: true, glowColor: '#ff7a2a', glowStrength: 0.7, glowHz: 2.2, glowHalo: 2,
+  }),
+  tpl('寒冰斩', '战斗', {
+    arcEnabled: true, arcColor: '#aee6ff', arcLengthPx: 34, arcWidthPx: 2, arcDisplace: 0.12, arcFlicker: 8,
+    source: 'contour', rate: 26, speed: 7, life: 0.7, sizeStart: 2, sizeEnd: 3, rise: 2, turbulence: 2,
+    particleShape: 'diamond',
+    rampEnabled: true, rampFrom: '#ffffff', rampMid: '#8fd4ff', rampTo: '#2a6ac8', rampMidPos: 0.5,
+    color: '#8fd4ff', alpha: 0.8,
+    glowEnabled: true, glowColor: '#7dd7ff', glowStrength: 0.7, glowHz: 1.8, glowHalo: 2,
+  }),
+  tpl('暗影斩', '战斗', {
+    arcEnabled: true, arcColor: '#8a5adf', arcLengthPx: 34, arcWidthPx: 2.4, arcDisplace: 0.22, arcFlicker: 10,
+    trailEnabled: true, trailCount: 4, trailIntervalSec: 0.05, trailOpacity: 0.4,
+    source: 'contour', rate: 18, speed: 5, life: 0.8, sizeStart: 2, sizeEnd: 5, rise: -2, turbulence: 4,
+    rampEnabled: true, rampFrom: '#c9a6ff', rampMid: '#6a2adf', rampTo: '#12002a', rampMidPos: 0.5,
+    color: '#6a2adf', alpha: 0.6,
+    glowEnabled: true, glowColor: '#5a2adf', glowStrength: 0.6, glowHz: 1.6, glowHalo: 3,
+  }),
+  tpl('重击', '战斗', {
+    arcEnabled: true, arcColor: '#ffd76b', arcLengthPx: 22, arcWidthPx: 2.6, arcDisplace: 0.3, arcBranches: 2, arcFlicker: 14,
+    source: 'contour', rate: 44, speed: 15, spreadDeg: 160, life: 0.5, sizeStart: 2, sizeEnd: 3, rise: -4, buoy: -30, turbulence: 2,
+    particleShape: 'star',
+    rampEnabled: true, rampFrom: '#ffffff', rampMid: '#ffb42a', rampTo: '#7a3a00', rampMidPos: 0.4,
+    color: '#ffb42a', alpha: 0.85, layer: 'front', frontRatio: 1,
+    glowEnabled: true, glowColor: '#ffb42a', glowStrength: 1.3, glowHz: 3, glowHalo: 2,
+  }),
+  tpl('暴击', '战斗', {
+    arcEnabled: true, arcColor: '#ff5a4a', arcLengthPx: 26, arcWidthPx: 2.8, arcDisplace: 0.38, arcBranches: 3, arcFlicker: 18,
+    source: 'contour', rate: 56, speed: 18, spreadDeg: 170, life: 0.55, sizeStart: 2, sizeEnd: 4, rise: -2, buoy: -24, turbulence: 2,
+    particleShape: 'star',
+    rampEnabled: true, rampFrom: '#ffffff', rampMid: '#ff7a3c', rampTo: '#8a0e00', rampMidPos: 0.35,
+    color: '#ff7a3c', alpha: 0.9, layer: 'front', frontRatio: 1,
+    glowEnabled: true, glowColor: '#ff4a2a', glowStrength: 1.6, glowHz: 3.6, glowHalo: 3,
+  }),
+  tpl('落雷', '战斗', {
+    arcEnabled: true, arcColor: '#cfe9ff', arcLengthPx: 44, arcDirDeg: 90, arcWidthPx: 2.2, arcDisplace: 0.42, arcBranches: 2, arcFlicker: 16, arcGrowHz: 1.4,
+    source: 'contour-bottom', rate: 30, speed: 11, directionDeg: 90, spreadDeg: 70, life: 0.4, sizeStart: 1.5, sizeEnd: 2.5, rise: 0, turbulence: 3,
+    particleShape: 'line',
+    rampEnabled: true, rampFrom: '#ffffff', rampMid: '#9fd0ff', rampTo: '#2a4adf', rampMidPos: 0.5,
+    color: '#9fd0ff', alpha: 0.85, layer: 'front', frontRatio: 1,
+    glowEnabled: true, glowColor: '#7ab8ff', glowStrength: 1, glowHz: 2.6, glowHalo: 2,
+  }),
+  tpl('地面冲击波', '战斗', {
+    source: 'contour-bottom', rate: 34, speed: 13, directionDeg: 90, spreadDeg: 150, life: 0.7,
+    sizeStart: 3, sizeEnd: 6, rise: -6, buoy: -12, turbulence: 2,
+    rampEnabled: true, rampFrom: '#e8dcc4', rampMid: '#b09a72', rampTo: '#5e4c30', rampMidPos: 0.5,
+    color: '#b09a72', alpha: 0.55,
+    glowEnabled: true, glowColor: '#d8c9a3', glowStrength: 0.4, glowHz: 2, glowHalo: 2,
+  }),
+  tpl('治疗', '辅助', {
+    source: 'inside', rate: 16, speed: 1, directionDeg: 270, spreadDeg: 40, life: 1.3,
+    sizeStart: 2, sizeEnd: 3, rise: 13, turbulence: 3,
+    particleShape: 'star',
+    rampEnabled: true, rampFrom: '#eaffea', rampMid: '#7ae88a', rampTo: '#1e9e4a', rampMidPos: 0.5,
+    color: '#7ae88a', alpha: 0.8, layer: 'front', frontRatio: 1,
+    orbitEnabled: true, orbitCount: 3, orbitRadiusX: 13, orbitRadiusY: 9, orbitHz: 0.7, orbitSize: 2.5, orbitColor: '#a6ffc0',
+    glowEnabled: true, glowColor: '#4ade6a', glowStrength: 0.7, glowHz: 0.9, glowHalo: 2,
+  }),
+  tpl('增益光环', '辅助', {
+    source: 'contour-bottom', rate: 12, speed: 2, directionDeg: 270, spreadDeg: 60, life: 1.5,
+    sizeStart: 2, sizeEnd: 3, rise: 11, turbulence: 2,
+    particleShape: 'diamond',
+    rampEnabled: true, rampFrom: '#fffbe0', rampMid: '#ffd76b', rampTo: '#e88a00', rampMidPos: 0.5,
+    color: '#ffd76b', alpha: 0.75, layer: 'front', frontRatio: 1,
+    orbitEnabled: true, orbitCount: 4, orbitRadiusX: 16, orbitRadiusY: 6, orbitHz: 0.5, orbitSize: 3, orbitColor: '#ffe9a0',
+    glowEnabled: true, glowColor: '#ffb42a', glowStrength: 0.55, glowHz: 0.7, glowHalo: 2,
+  }),
+  tpl('拾取闪光', '辅助', {
+    emitEnabled: true, source: 'inside', rate: 10, speed: 0, life: 0.9,
+    sizeStart: 1.5, sizeEnd: 2.5, rise: 3, turbulence: 1,
+    particleShape: 'star',
+    rampEnabled: true, rampFrom: '#ffffff', rampMid: '#ffe9a0', rampTo: '#e8a81e', rampMidPos: 0.4,
+    color: '#ffe9a0', alpha: 0.9, layer: 'front', frontRatio: 1,
+    glowEnabled: true, glowColor: '#ffd76b', glowStrength: 1.2, glowHz: 2.4, glowHalo: 3, glowShape: 'star', glowStarReach: 1.7,
+  }),
+  tpl('冲刺残影', '氛围', {
+    trailEnabled: true, trailCount: 5, trailIntervalSec: 0.045, trailOpacity: 0.42,
+    source: 'contour', rate: 20, speed: 4, directionDeg: 180, spreadDeg: 50, life: 0.5,
+    sizeStart: 2, sizeEnd: 4, rise: 0, turbulence: 2,
+    particleShape: 'line',
+    rampEnabled: true, rampFrom: '#dff4ff', rampMid: '#7ac7ff', rampTo: '#1e4a8a', rampMidPos: 0.5,
+    color: '#7ac7ff', alpha: 0.55,
+  }),
+  tpl('落地尘土', '氛围', {
+    source: 'contour-bottom', rate: 22, speed: 7, directionDeg: 90, spreadDeg: 130, life: 0.8,
+    sizeStart: 3, sizeEnd: 7, rise: -2, buoy: -8, turbulence: 3,
+    rampEnabled: true, rampFrom: '#e3d7c3', rampMid: '#b3a184', rampTo: '#6e5c40', rampMidPos: 0.55,
+    color: '#b3a184', alpha: 0.5,
+  }),
+  tpl('水花', '元素', {
+    source: 'contour-bottom', rate: 36, speed: 10, directionDeg: 270, spreadDeg: 65, life: 0.75,
+    sizeStart: 2, sizeEnd: 2.5, rise: 0, buoy: -85, turbulence: 1,
+    particleShape: 'diamond',
+    rampEnabled: true, rampFrom: '#ffffff', rampMid: '#8fd4ff', rampTo: '#2a7ac8', rampMidPos: 0.45,
+    color: '#8fd4ff', alpha: 0.85, layer: 'front', frontRatio: 1,
+  }),
 ];
 
 export function findDynamicTemplate(name?: string): DynamicPatternTemplate | undefined {
@@ -1030,7 +1573,7 @@ export function deleteUserDynamicPattern(name: string): void {
 export interface DynamicParamDef {
   key: keyof DynamicPatternParams;
   label: string;
-  section: '形变' | '发射' | '粒子' | '发光' | '弧线';
+  section: '形变' | '发射' | '粒子' | '发光' | '弧线' | '环绕' | '后期' | '团块' | '火焰' | '环境';
   min: number;
   max: number;
   step: number;
@@ -1059,7 +1602,9 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'arcFlicker', label: '跳动（步/秒，0=静止）', section: '弧线', min: 0, max: 30, step: 1 },
   { key: 'arcSeed', label: '形状种子', section: '弧线', min: 1, max: 9999, step: 1 },
   { key: 'arcGrowHz', label: '生长循环（次/秒，0=恒满长）', section: '弧线', min: 0, max: 2, step: 0.05 },
-  { key: 'arcDetail', label: '细节数（藤蔓叶/星座星，0=缺省）', section: '弧线', min: 0, max: 12, step: 1 },
+  { key: 'arcDetail', label: '细节数（叶/星/刻度/流光点，0=缺省）', section: '弧线', min: 0, max: 12, step: 1 },
+  { key: 'arcGlyphSpinDeg', label: '法阵转速（度/秒，可负）', section: '弧线', min: -180, max: 180, step: 2 },
+  { key: 'arcFlowHz', label: '流光速度（圈/秒）', section: '弧线', min: 0, max: 4, step: 0.1 },
   { key: 'followDelaySec', label: '追随延迟（秒）', section: '形变', min: 0, max: 1, step: 0.01 },
   { key: 'followAmount', label: '追随强度', section: '形变', min: 0, max: 1, step: 0.05 },
   { key: 'rate', label: '发射率（个/秒）', section: '发射', min: 0, max: 60, step: 1 },
@@ -1068,6 +1613,7 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'directionDeg', label: '发射方向角（度）', section: '发射', min: 0, max: 359, step: 5 },
   { key: 'spreadDeg', label: '方向散布（度）', section: '发射', min: 0, max: 180, step: 5 },
   { key: 'frontRatio', label: '身前比例（两层时）', section: '发射', min: 0, max: 1, step: 0.05 },
+  { key: 'gatherRadius', label: '汇聚出生距（px）', section: '发射', min: 0, max: 48, step: 1 },
   { key: 'life', label: '生命（秒）', section: '粒子', min: 0.2, max: 3, step: 0.05 },
   { key: 'sizeStart', label: '出生直径（px）', section: '粒子', min: 1, max: 12, step: 0.5 },
   { key: 'sizeEnd', label: '死亡直径（px）', section: '粒子', min: 1, max: 20, step: 0.5 },
@@ -1076,6 +1622,33 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'turbulence', label: '横向摆动（px）', section: '粒子', min: 0, max: 12, step: 0.5 },
   { key: 'alpha', label: '不透明度', section: '粒子', min: 0.05, max: 1, step: 0.05 },
   { key: 'maxParticles', label: '存活上限', section: '粒子', min: 8, max: 240, step: 4 },
+  { key: 'rampMidPos', label: '坡道中色位置', section: '粒子', min: 0, max: 1, step: 0.05 },
+  { key: 'orbitCount', label: '光点数', section: '环绕', min: 1, max: 12, step: 1 },
+  { key: 'orbitRadiusX', label: '椭圆半轴 X（px）', section: '环绕', min: 2, max: 48, step: 1 },
+  { key: 'orbitRadiusY', label: '椭圆半轴 Y（px）', section: '环绕', min: 2, max: 48, step: 1 },
+  { key: 'orbitHz', label: '转速（圈/秒，可负）', section: '环绕', min: -2, max: 2, step: 0.05 },
+  { key: 'orbitPhase', label: '环绕相位', section: '环绕', min: 0, max: 1, step: 0.01 },
+  { key: 'orbitSize', label: '光点直径（px）', section: '环绕', min: 1, max: 10, step: 0.5 },
+  { key: 'postAlphaLevels', label: '透明度分级（0=关）', section: '后期', min: 0, max: 8, step: 1 },
+  { key: 'blobRadius', label: '团块半径（px）', section: '团块', min: 6, max: 40, step: 1 },
+  { key: 'blobCount', label: '种子数', section: '团块', min: 2, max: 8, step: 1 },
+  { key: 'blobSeed', label: '形状种子', section: '团块', min: 1, max: 9999, step: 1 },
+  { key: 'blobHz', label: '烧穿循环（次/秒）', section: '团块', min: 0.1, max: 3, step: 0.05 },
+  { key: 'blobBurn', label: '烧穿深度', section: '团块', min: 0, max: 1, step: 0.05 },
+  { key: 'blobAlpha', label: '不透明度', section: '团块', min: 0.05, max: 1, step: 0.05 },
+  { key: 'flameWidth', label: '焰宽（px）', section: '火焰', min: 6, max: 48, step: 1 },
+  { key: 'flameHeight', label: '焰高（px）', section: '火焰', min: 8, max: 64, step: 1 },
+  { key: 'flameHz', label: '上滚循环（次/秒）', section: '火焰', min: 0.2, max: 4, step: 0.05 },
+  { key: 'flameTurbulence', label: '撕边强度', section: '火焰', min: 0, max: 1, step: 0.05 },
+  { key: 'flameAlpha', label: '不透明度', section: '火焰', min: 0.05, max: 1, step: 0.05 },
+  { key: 'envCount', label: '样本数', section: '环境', min: 2, max: 40, step: 1 },
+  { key: 'envWidth', label: '区域宽（px）', section: '环境', min: 12, max: 120, step: 1 },
+  { key: 'envHeight', label: '区域高（px）', section: '环境', min: 12, max: 120, step: 1 },
+  { key: 'envHz', label: '样本周期（次/秒）', section: '环境', min: 0.1, max: 3, step: 0.05 },
+  { key: 'envSize', label: '样本大小（px）', section: '环境', min: 1, max: 6, step: 0.1 },
+  { key: 'envAlpha', label: '不透明度', section: '环境', min: 0.05, max: 1, step: 0.05 },
+  { key: 'envSeed', label: '形状种子', section: '环境', min: 1, max: 9999, step: 1 },
+  { key: 'envRadius', label: '涟漪最大半径（px）', section: '环境', min: 4, max: 30, step: 1 },
   { key: 'glowStrength', label: '发光强度（峰值）', section: '发光', min: 0, max: 2, step: 0.05 },
   { key: 'glowHz', label: '呼吸频率（次/秒）', section: '发光', min: 0, max: 3, step: 0.05 },
   { key: 'glowPhase', label: '呼吸相位', section: '发光', min: 0, max: 1, step: 0.01 },

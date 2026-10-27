@@ -30,6 +30,7 @@ export const PIXEL_DEFORM_MODIFIER_TYPES: ModifierType[] = [
   // V12: 补齐的像素修改器（有旧实现，走 modifierRegistry）
   'color_replace',
   'outline',
+  'cleanup',
   'dither',
   'pixel_displace',
   'mirror',

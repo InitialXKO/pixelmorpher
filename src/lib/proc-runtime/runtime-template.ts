@@ -706,8 +706,8 @@ function slashFanFrame(spec, p, mirrored) {
   return { w: outW, h: outH, data: buf };
 }
 
-/** 实例打包：58 float —— pos2 size2 rot1 pivotTile2 clipC1 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 clipAB2 glowA/B/C 各4(rgb,强度)×3组 glowHz4+glowHz2(频率,相位)×3 glowSpace4(三组方向基准:0=精灵 1=世界,余位) glowStamp 每组4(形状,光晕,主方向,伸长)×3。裁剪面占 iRotTileC.w（c）与 iDeform.zw（a,b）——扩宽既有属性、不新增属性（守 16 属性上限） */
-const INSTANCE_FLOATS = 58;
+/** 实例打包：24 float —— pos2 size2 rot1 pivotTile2 clipC1 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 clipAB2。裁剪面占 iRotTileC.w（c）与 iDeform.zw（a,b）。发光全套（34 float）已搬侧车数据纹理（packGlowSidecar），顶点属性只剩 7 个：Mesa 等上报上限低于规范保证的环境也能链上，varying 同步腾空。 */
+const INSTANCE_FLOATS = 24;
 function packInstances(els) {
   const buf = new Float32Array(els.length * INSTANCE_FLOATS);
   els.forEach((el, i) => {
@@ -726,16 +726,27 @@ function packInstances(els) {
     buf[o + 21] = el.deform ? el.deform[1] : 1;
     buf[o + 22] = el.clip ? el.clip[0] : 0;
     buf[o + 23] = el.clip ? el.clip[1] : 0;
+  });
+  return buf;
+}
+/** 发光侧车：每实例一行 9 个 RGBA32F 纹素 —— 0/1/2=三组发光(rgb,强度)，
+ * 3=(频A,相A,频B,相B)，4=(频C,相C,0,0)，5=三组方向基准(xyz,0)，
+ * 6/7/8=三组印章(形状,光晕,主方向,伸长)。片元按实例号 texelFetch。 */
+const GLOW_TEXELS = 9;
+function packGlowSidecar(els) {
+  const buf = new Float32Array(els.length * GLOW_TEXELS * 4);
+  els.forEach((el, i) => {
+    const o = i * GLOW_TEXELS * 4;
     const gl = el.glow || [];
     for (let gi = 0; gi < 3; gi++) {
       const g = gl[gi];
-      buf[o + 24 + gi * 4] = g ? g[0] : 0; buf[o + 25 + gi * 4] = g ? g[1] : 0;
-      buf[o + 26 + gi * 4] = g ? g[2] : 0; buf[o + 27 + gi * 4] = g ? g[3] : 0;
-      buf[o + 36 + gi * 2] = g ? g[4] : 0; buf[o + 37 + gi * 2] = g ? g[5] : 0;
-      buf[o + 42 + gi] = el.glowSpace && el.glowSpace[gi] ? 1 : 0;
+      buf[o + gi * 4] = g ? g[0] : 0; buf[o + gi * 4 + 1] = g ? g[1] : 0;
+      buf[o + gi * 4 + 2] = g ? g[2] : 0; buf[o + gi * 4 + 3] = g ? g[3] : 0;
+      buf[o + 12 + gi * 2] = g ? g[4] : 0; buf[o + 13 + gi * 2] = g ? g[5] : 0;
+      buf[o + 20 + gi] = el.glowSpace && el.glowSpace[gi] ? 1 : 0;
       const st = el.glowStamps && el.glowStamps[gi];
-      buf[o + 46 + gi * 4] = st ? st[0] : 4; buf[o + 47 + gi * 4] = st ? st[1] : 0;
-      buf[o + 48 + gi * 4] = st ? st[2] : 0; buf[o + 49 + gi * 4] = st ? st[3] : 0;
+      buf[o + 24 + gi * 4] = st ? st[0] : 4; buf[o + 25 + gi * 4] = st ? st[1] : 0;
+      buf[o + 26 + gi * 4] = st ? st[2] : 0; buf[o + 27 + gi * 4] = st ? st[3] : 0;
     }
   });
   return buf;
@@ -961,6 +972,38 @@ function ensureAtlas(gl, variant, costumeName) {
       entries.push(['slash:' + perf.id + ':' + fi, tile, { composite: 'slashfx', params: { hidden: false } }, false, fr, null, 0]);
     }
   }
+  // 团块/火焰场槽（乙8 改造）：跟随口径 = 范围/位置跟、形态不跟
+  // （用户定案）——烘焙帧一缩放就是拉伸形态，故图集只预留定尺寸
+  // 槽位（域上限 = 形变 2 倍时的场尺寸），每帧由场作业按当帧
+  // 形变现算场（域参数乘 ds、特征参数自然）重传槽内区。槽位
+  // 锚点固定（域上限时的插头位），小域场按锚点偏移写入。
+  const fieldSlots = {};
+  const FIELD_DS_CAP = 2;
+  for (const part of PARTS) {
+    const cmapF = costume && costume.__dynamic;
+    const dlF = (cmapF && cmapF[part.key]) || part.dynamic || [];
+    if (!dlF.length) continue;
+    dlF.forEach((inst, ii) => {
+      const pp = (inst && inst.params) || {};
+      const kindsF = [];
+      if (pp.blobEnabled) kindsF.push('blob');
+      if (pp.flameEnabled) kindsF.push('flame');
+      for (const kind of kindsF) {
+        const probe = kind === 'blob' ? dynBlobField(pp, 0, FIELD_DS_CAP, FIELD_DS_CAP) : dynFlameField(pp, 0, FIELD_DS_CAP, FIELD_DS_CAP);
+        if (!probe) continue;
+        const M = 2;
+        const tile = {
+          w: probe.w + M * 2, h: probe.h + M * 2,
+          cx: M + probe.ox, cy: M + probe.oy,
+          data: new Uint8Array((probe.w + M * 2) * (probe.h + M * 2) * 4),
+          slotOx: probe.ox, slotOy: probe.oy, innerW: probe.w, innerH: probe.h,
+        };
+        for (let q = 0; q < tile.w * tile.h; q++) { tile.data[q * 4] = 255; tile.data[q * 4 + 3] = 255; }
+        tiles.push(tile);
+        entries.push(['field:' + part.key + ':' + ii + ':' + kind + ':slot', tile, { composite: 'slashfx', params: { hidden: false } }, false, { w: 0, h: 0, data: new Uint8Array(0) }, null, 0]);
+      }
+    });
+  }
   const pack = packAtlas(tiles, 256);
   const height = pack.height;
   const slashTiles = {};
@@ -1040,12 +1083,20 @@ function ensureAtlas(gl, variant, costumeName) {
         baseData.set(fr.data.subarray(j * fr.w * 4, (j + 1) * fr.w * 4), ((ay + 2 + j) * 256 + ax + 2) * 4);
       }
       const key = entries[i][0];
+      if (key.startsWith('field:')) {
+        const regF = key.slice(6, key.lastIndexOf(':'));
+        fieldSlots[regF] = {
+          tile: [ax, ay, tile.w, tile.h], tileCx: tile.cx, tileCy: tile.cy, size: [tile.w, tile.h],
+          place: [ax, ay], slotOx: tile.slotOx, slotOy: tile.slotOy, innerW: tile.innerW, innerH: tile.innerH,
+        };
+      } else {
       const perfId = key.slice(6, key.lastIndexOf(':'));
       const fi = Number(key.slice(key.lastIndexOf(':') + 1));
       (slashTiles[perfId] = slashTiles[perfId] || [])[fi] = {
         tile: [ax, ay, tile.w, tile.h], tileCx: tile.cx, tileCy: tile.cy, size: [tile.w, tile.h],
       };
     }
+      }
     const ekey = entries[i][0];
     const animPos = ekey.indexOf('#anim');
     if (animPos >= 0) {
@@ -1084,7 +1135,7 @@ function ensureAtlas(gl, variant, costumeName) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  atlasState = { variant: variant, costumeName: costumeName, osig: osig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles };
+  atlasState = { variant: variant, costumeName: costumeName, osig: osig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles, fieldSlots: fieldSlots };
   return atlasState;
 }
 
@@ -1117,9 +1168,9 @@ function makeProgram(vs, fs) {
 }
 const partProg = makeProgram(
 \`#version 300 es
-// 属性预算：WebGL 只保证 16 个顶点属性（location 0-15），18 个会编译失败。
-// 故合并两对相邻字段（实例数据 55 float 的顺序与 packInstances 完全一致，
-// 只改声明与绑定，不动写入）：iPos+iSize→vec4，iRot+iTileC→vec3。
+// 属性预算：发光全套已搬侧车数据纹理（uGlowSide，片元按实例号取），
+// 顶点属性只剩 7 个（location 0-6），varying 同步腾空——Mesa 等上报
+// 上限低于规范保证的环境也能链上。实例数据顺序与 packInstances 一致。
 layout(location=0) in vec2 aCorner;
 layout(location=1) in vec4 iPosSize;
 layout(location=2) in vec4 iRotTileC;
@@ -1127,19 +1178,9 @@ layout(location=3) in vec4 iTile;
 layout(location=4) in vec4 iMisc;
 layout(location=5) in vec4 iParam;
 layout(location=6) in vec4 iDeform;
-layout(location=7) in vec4 iGlowA;
-layout(location=8) in vec4 iGlowB;
-layout(location=9) in vec4 iGlowC;
-layout(location=10) in vec4 iGlowHz;
-layout(location=11) in vec2 iGlowHz2;
-layout(location=12) in vec4 iGlowSpace;
-layout(location=13) in vec4 iGlowStampA;
-layout(location=14) in vec4 iGlowStampB;
-layout(location=15) in vec4 iGlowStampC;
 uniform vec2 uCam; uniform vec2 uViewHalf; uniform vec2 uRes;
 out vec2 vCenterScreen; out float vRot; out vec4 vTile; out vec2 vTileC; out vec4 vMisc; out vec4 vParam; out vec2 vDeform;
-out vec4 vGlowA; out vec4 vGlowB; out vec4 vGlowC; out vec4 vGlowHz; out vec2 vGlowHz2; out vec4 vGlowSpace;
-out vec4 vGlowStampA; out vec4 vGlowStampB; out vec4 vGlowStampC; out vec3 vClip;
+out vec3 vClip; flat out int vInstId;
 void main(){
   float c = cos(iRotTileC.x), s = sin(iRotTileC.x);
   vec2 local = aCorner * iPosSize.zw;
@@ -1148,8 +1189,7 @@ void main(){
   vCenterScreen = ((iPosSize.xy - uCam) / uViewHalf * 0.5 + 0.5) * uRes;
   vRot = iRotTileC.x; vTile = iTile; vTileC = iRotTileC.yz; vMisc = iMisc; vParam = iParam; vDeform = iDeform.xy;
   vClip = vec3(iDeform.z, iDeform.w, iRotTileC.w);
-  vGlowA = iGlowA; vGlowB = iGlowB; vGlowC = iGlowC; vGlowHz = iGlowHz; vGlowHz2 = iGlowHz2; vGlowSpace = iGlowSpace;
-  vGlowStampA = iGlowStampA; vGlowStampB = iGlowStampB; vGlowStampC = iGlowStampC;
+  vInstId = gl_InstanceID;
   float z = 0.9 - float(gl_InstanceID) * 0.02;
   gl_Position = vec4((world - uCam) / uViewHalf, z, 1.0);
 }\`,
@@ -1157,8 +1197,11 @@ void main(){
 precision highp float;
 uniform sampler2D uAtlas; uniform sampler2D uPal; uniform sampler2D uBase; uniform sampler2D uGlow; uniform float uTime;
 in vec2 vCenterScreen; in float vRot; in vec4 vTile; in vec2 vTileC; in vec4 vMisc; in vec4 vParam; in vec2 vDeform;
-in vec4 vGlowA; in vec4 vGlowB; in vec4 vGlowC; in vec4 vGlowHz; in vec2 vGlowHz2; in vec4 vGlowSpace;
-in vec4 vGlowStampA; in vec4 vGlowStampB; in vec4 vGlowStampC; in vec3 vClip;
+in vec3 vClip; flat in int vInstId;
+uniform sampler2D uGlowSide;
+// 发光数据（侧车纹理取回后存全局，主体逻辑沿用同名变量）
+vec4 vGlowA; vec4 vGlowB; vec4 vGlowC; vec4 vGlowHz; vec2 vGlowHz2; vec4 vGlowSpace;
+vec4 vGlowStampA; vec4 vGlowStampB; vec4 vGlowStampC;
 out vec4 oColor;
 vec3 gF3 = vec3(0.0);
 vec3 gK3 = vec3(0.0);
@@ -1241,6 +1284,15 @@ vec3 applyGlow(vec3 col){
   return col;
 }
 void main(){
+  vGlowA = texelFetch(uGlowSide, ivec2(0, vInstId), 0);
+  vGlowB = texelFetch(uGlowSide, ivec2(1, vInstId), 0);
+  vGlowC = texelFetch(uGlowSide, ivec2(2, vInstId), 0);
+  vGlowHz = texelFetch(uGlowSide, ivec2(3, vInstId), 0);
+  vGlowHz2 = texelFetch(uGlowSide, ivec2(4, vInstId), 0).xy;
+  vGlowSpace = texelFetch(uGlowSide, ivec2(5, vInstId), 0);
+  vGlowStampA = texelFetch(uGlowSide, ivec2(6, vInstId), 0);
+  vGlowStampB = texelFetch(uGlowSide, ivec2(7, vInstId), 0);
+  vGlowStampC = texelFetch(uGlowSide, ivec2(8, vInstId), 0);
   float mp = vMisc.z;
   int lm = int(mod(mp, 8.0));
   int om = int(mod(mp / 8.0, 8.0));
@@ -1370,6 +1422,14 @@ const palTex = gl.createTexture();
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 }
+const glowSideTex = gl.createTexture();
+{
+  gl.bindTexture(gl.TEXTURE_2D, glowSideTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
 const partVAO = gl.createVertexArray();
 const quadBuf = gl.createBuffer();
 const instBuf = gl.createBuffer();
@@ -1380,7 +1440,7 @@ const instBuf = gl.createBuffer();
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
-  const strides = [[1, 4, 0], [2, 4, 4], [3, 4, 8], [4, 4, 12], [5, 4, 16], [6, 4, 20], [7, 4, 24], [8, 4, 28], [9, 4, 32], [10, 4, 36], [11, 2, 40], [12, 4, 42], [13, 4, 46], [14, 4, 50], [15, 4, 54]];
+  const strides = [[1, 4, 0], [2, 4, 4], [3, 4, 8], [4, 4, 12], [5, 4, 16], [6, 4, 20]];
   for (const sDef of strides) {
     gl.enableVertexAttribArray(sDef[0]);
     gl.vertexAttribPointer(sDef[0], sDef[1], gl.FLOAT, false, INSTANCE_FLOATS * 4, sDef[2] * 4);
@@ -1826,6 +1886,42 @@ function dynListFor(part) {
   const map = entry && entry.__dynamic;
   return (map && map[part.key]) || part.dynamic || [];
 }
+/** 团块/火焰场逐帧栅格（乙8 改造）：按当帧形变现算场（域乘
+ * ds、特征自然），颜色过图案级后期，写入槽内尺寸的 RGBA 缓冲
+ * （锚点对齐槽位锚点，镜像时水平翻转）。ds 超过槽位上限钳制。 */
+function fieldRasterFor(params, kind, tSec, dsx, dsy, mir, slot) {
+  const cap = 2;
+  const cdx = Math.max(0.05, Math.min(cap, dsx)), cdy = Math.max(0.05, Math.min(cap, dsy));
+  const fld = kind === 'blob' ? dynBlobField(params, tSec, cdx, cdy) : dynFlameField(params, tSec, cdx, cdy);
+  const buf = new Uint8Array(slot.innerW * slot.innerH * 4);
+  if (!fld) return buf;
+  const eHex = kind === 'blob' ? params.blobColorEdge : params.flameColorEdge;
+  const mHex = kind === 'blob' ? params.blobColorMid : params.flameColorMid;
+  const cHex = kind === 'blob' ? params.blobColorCore : params.flameColorCore;
+  const segAlpha = kind === 'blob' ? (params.blobAlpha ?? 0.85) : (params.flameAlpha ?? 0.85);
+  const offX = slot.slotOx - fld.ox, offY = slot.slotOy - fld.oy;
+  for (let cy2 = 0; cy2 < fld.h; cy2++) {
+    const ty = cy2 + offY;
+    if (ty < 0 || ty >= slot.innerH) continue;
+    for (let cx2 = 0; cx2 < fld.w; cx2++) {
+      const scx = mir ? fld.w - 1 - cx2 : cx2;
+      const hv = fld.heat[cy2 * fld.w + scx];
+      if (hv <= 0.003) continue;
+      const tx = cx2 + offX;
+      if (tx < 0 || tx >= slot.innerW) continue;
+      let rgb = dynFieldColorAt(eHex, mHex, cHex, hv);
+      if (params.postEnabled && params.postTheme && params.postTheme !== 'none') {
+        const hexS = '#' + rgb.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+        const mapped = parseHexRt(dynPostColorAt(params, hexS));
+        if (mapped) rgb = mapped;
+      }
+      const o = (ty * slot.innerW + tx) * 4;
+      buf[o] = Math.round(rgb[0]); buf[o + 1] = Math.round(rgb[1]); buf[o + 2] = Math.round(rgb[2]);
+      buf[o + 3] = Math.round(255 * Math.min(1, hv) * segAlpha);
+    }
+  }
+  return buf;
+}
 const particleColorCache = new Map();
 function particleRgb(hex) {
   let c = particleColorCache.get(hex);
@@ -1842,6 +1938,36 @@ function pushParticleQuad(verts, x, y, size, rgb, alpha) {
   for (const cn of corners) {
     verts.push(x + cn[0] * h, y + cn[1] * h, cn[0], cn[1], rgb[0], rgb[1], rgb[2], alpha, 1);
   }
+}
+// 粒子形状（Jeff 落地，与编辑器画布同族）：diamond = 四边形转 45°；
+// star = 两张错开 45° 的小四边形叠成八角星；line = 沿运动方向拉长。
+// (dirX, dirY) 已由调用方变换到世界空间。顶点第二组坐标（衰减口径）
+// 保持原四边形坐标，柔边与 dot 一致。
+function pushParticleQuadShaped(verts, x, y, size, rgb, alpha, shape, dirX, dirY) {
+  if (!shape || shape === 'dot') { pushParticleQuad(verts, x, y, size, rgb, alpha); return; }
+  const h = Math.max(0.5, size / 2);
+  const corners = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+  if (shape === 'diamond' || shape === 'star') {
+    const c45 = Math.SQRT1_2;
+    const emit = (hh, al) => {
+      for (const cn of corners) {
+        verts.push(x + (cn[0] - cn[1]) * c45 * hh, y + (cn[0] + cn[1]) * c45 * hh, cn[0], cn[1], rgb[0], rgb[1], rgb[2], al, 1);
+      }
+    };
+    if (shape === 'diamond') { emit(h, alpha); return; }
+    pushParticleQuad(verts, x, y, size * 0.78, rgb, alpha * 0.85);
+    emit(h * 0.78, alpha * 0.85);
+    return;
+  }
+  if (shape === 'line') {
+    const L = h * 1.9, W = h * 0.5;
+    const pxv = -dirY, pyv = dirX;
+    for (const cn of corners) {
+      verts.push(x + dirX * cn[0] * L + pxv * cn[1] * W, y + dirY * cn[0] * L + pyv * cn[1] * W, cn[0], cn[1], rgb[0], rgb[1], rgb[2], alpha, 1);
+    }
+    return;
+  }
+  pushParticleQuad(verts, x, y, size, rgb, alpha);
 }
 let elapsed = 0;
 let autoWalk = false;
@@ -2558,7 +2684,7 @@ function downloadGif() {
 
 // ---------- 主循环：输入 → 程序化姿态 → 表演合成 → 渲染 ----------
 const uLoc = (pr, n) => gl.getUniformLocation(pr, n);
-const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal'), base: uLoc(partProg, 'uBase'), glow: uLoc(partProg, 'uGlow') };
+const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal'), base: uLoc(partProg, 'uBase'), glow: uLoc(partProg, 'uGlow'), glowSide: uLoc(partProg, 'uGlowSide') };
 const solidU = { cam: uLoc(solidProg, 'uCam'), vh: uLoc(solidProg, 'uViewHalf') };
 let last = performance.now();
 // ---------- 画布级特效（缺口 5）：特效轨 + 笔触 ----------
@@ -2861,6 +2987,7 @@ function frame(now) {
   const els = [];
   const elByKey = new Map();
   const skinJobs = [];
+  const fieldJobs = [];
   const stackJobs = [];
   const partAnchorsByKey = new Map();
   const dynAnchors = [];
@@ -2939,7 +3066,7 @@ function frame(now) {
     // 按选区预计算；第 4 个起在导出端已按各自所选组并入对应通道）
     const glowInsts = dynList.filter((x) => x.params.glowEnabled).slice(0, 3);
     const glowEl = glowInsts.map((x) => {
-      const grgb = particleRgb(x.params.glowColor || '#7dd7ff');
+      const grgb = particleRgb(dynPostColorAt(x.params, x.params.glowColor || '#7dd7ff'));
       return [grgb[0], grgb[1], grgb[2], x.params.glowStrength || 0, x.params.glowHz || 0, x.params.glowPhase || 0];
     });
     const glowSpace = glowInsts.map((x) => (x.params.glowAngleSpace === 'world' ? 1 : 0));
@@ -2963,6 +3090,28 @@ function frame(now) {
     };
     els.push(el);
     elByKey.set(part.key, el);
+    // 团块/火焰场（乙8 改造）：槽位图元贴部件位姿；场内容由
+    // 场作业逐帧按当帧形变现算重传（范围跟、形态不跟）
+    if (state.fieldSlots) {
+      const mirNow = variantMirrored(part, char.variant);
+      dynList.forEach((inst, ii) => {
+        const pp = (inst && inst.params) || {};
+        const kindsR = [];
+        if (pp.blobEnabled) kindsR.push('blob');
+        if (pp.flameEnabled) kindsR.push('flame');
+        for (const kind of kindsR) {
+          const ft = state.fieldSlots[part.key + ':' + ii + ':' + kind];
+          if (!ft) continue;
+          els.push({
+            pos: [el.pos[0], el.pos[1]], size: [ft.size[0] * 3, ft.size[1] * 3], rot: el.rot,
+            tileCx: ft.tileCx, tileCy: ft.tileCy, tile: ft.tile,
+            family: 0, seed: 0, modes: [0, 0, 0, 0], param: [0, 0, 0],
+            ghost: false, composite: 4, deform: undefined, glow: [], glowSpace: [], glowStamps: undefined,
+          });
+          fieldJobs.push({ slot: ft, params: pp, kind: kind, dsx: dsx, dsy: dsy, mir: mirNow });
+        }
+      });
+    }
     // 网格蒙皮（缺口 4）：收集变形活儿，循环后父子位姿齐了再执行
     if (part.skin && tile && place) {
       skinJobs.push({
@@ -3018,7 +3167,7 @@ function frame(now) {
           hasEnd = true;
         }
         const shape = dynArcPoints(p, elapsed, endX, endY, hasEnd);
-        const rgb = particleRgb(p.arcColor || '#bfe3ff');
+        const rgb = particleRgb(dynPostColorAt(p, p.arcColor || '#bfe3ff'));
         const toWorld = (qx, qy) => {
           const gx = (orgC[0] + qx) * a.dsx, gy = (orgC[1] + qy) * a.dsy;
           return [a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c];
@@ -3059,7 +3208,65 @@ function frame(now) {
           const target = layer === 'back' ? backVerts : frontVerts;
           for (const pt of ps) {
             const gx = pt.x * a.dsx, gy = pt.y * a.dsy;
-            pushParticleQuad(target, a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c, pt.size, particleRgb(pt.color), pt.alpha);
+            const wdx0 = (pt.dirX ?? 1) * c + (pt.dirY ?? 0) * s;
+            const wdy0 = (pt.dirX ?? 1) * s - (pt.dirY ?? 0) * c;
+            const wl = Math.hypot(wdx0, wdy0) || 1;
+            pushParticleQuadShaped(target, a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c, pt.size, particleRgb(pt.color), pt.alpha, pt.shape, wdx0 / wl, wdy0 / wl);
+          }
+        }
+        // 环绕光点（Jeff 落地）：身前层一次；world 基准时先用部件
+        // 旋转的自逆变换把椭圆点预转回本地（变换矩阵 [[c,s],[s,−c]]
+        // 自逆，预转与放置两次同变换相消，椭圆恒对世界）
+        if (inst.params.orbitEnabled) {
+          const opts = dynOrbitPoints(inst.params, frameIdx / FRAME_RATE, 0);
+          const orgb = particleRgb(dynPostColorAt(inst.params, inst.params.orbitColor || '#aee6ff'));
+          for (const q of opts) {
+            let qx = q.x * a.dsx, qy = q.y * a.dsy;
+            if (inst.params.orbitAngleSpace === 'world') {
+              const rx = qx * c + qy * s, ry = qx * s - qy * c;
+              qx = rx; qy = ry;
+            }
+            pushParticleQuad(frontVerts, a.ctr[0] + qx * c + qy * s, a.ctr[1] + qx * s - qy * c, inst.params.orbitSize || 3, orgb, 0.95);
+          }
+        }
+        // 环境场（乙9）：区域样本（落/游/涟漪），样本绕插头成
+        // 区域分布、不依附精灵轮廓；涟漪环以椭圆折线段绘制
+        if (inst.params.envEnabled) {
+          const env = dynEnvSamples(inst.params, frameIdx / FRAME_RATE);
+          const ergb = particleRgb(dynPostColorAt(inst.params, inst.params.envColor || '#bcd8ff'));
+          const toW = (lx, ly) => {
+            const gx = lx * a.dsx, gy = ly * a.dsy;
+            return [a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c];
+          };
+          for (const q of env.quads) {
+            const wpt = toW(q[0], q[1]);
+            const wdx = q[4] * c + q[5] * s, wdy = q[4] * s - q[5] * c;
+            const wl = Math.hypot(wdx, wdy) || 1;
+            pushParticleQuadShaped(frontVerts, wpt[0], wpt[1], q[2], ergb, q[6], q[3] === 1 ? 'line' : 'dot', wdx / wl, wdy / wl);
+          }
+          const pushEnvSeg = (w0, w1, alpha) => {
+            const dx = w1[0] - w0[0], dy = w1[1] - w0[1];
+            const len = Math.hypot(dx, dy) || 1;
+            const nx = -dy / len * 0.5, ny = dx / len * 0.5;
+            const cs = [
+              [w0[0] + nx, w0[1] + ny], [w1[0] + nx, w1[1] + ny],
+              [w1[0] - nx, w1[1] - ny], [w0[0] - nx, w0[1] - ny],
+            ];
+            const locals = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+            for (const oi of [0, 1, 2, 0, 2, 3]) {
+              frontVerts.push(cs[oi][0], cs[oi][1], locals[oi][0], locals[oi][1], ergb[0], ergb[1], ergb[2], alpha, 0);
+            }
+          };
+          for (const rg of env.rings) {
+            if (rg[3] <= 0.004) continue;
+            const N = 14;
+            let prev = null;
+            for (let vi = 0; vi <= N; vi++) {
+              const th = (vi / N) * Math.PI * 2;
+              const wpt = toW(rg[0] + Math.cos(th) * rg[2], rg[1] + Math.sin(th) * rg[2] * 0.38);
+              if (prev) pushEnvSeg(prev, wpt, rg[3]);
+              prev = wpt;
+            }
           }
         }
       }
@@ -3123,6 +3330,15 @@ function frame(now) {
     if (warped) {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, job.place[0], job.place[1], job.tile.w, job.tile.h, gl.RGBA, gl.UNSIGNED_BYTE, warped);
       state.skinDirty.set(job.place[0] + ',' + job.place[1], { tile: job.tile, place: job.place });
+    }
+  }
+  // ---- 团块/火焰场作业执行：逐帧栅格重传底图图集槽内区 ----
+  if (fieldJobs.length > 0) {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, state.baseTex);
+    for (const job of fieldJobs) {
+      const raster = fieldRasterFor(job.params, job.kind, elapsed, job.dsx, job.dsy, job.mir, job.slot);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, job.slot.place[0] + 2, job.slot.place[1] + 2, job.slot.innerW, job.slot.innerH, gl.RGBA, gl.UNSIGNED_BYTE, raster);
     }
   }
   // ---- 堆叠层变换执行：主导表演的烘焙算子逐帧栅格化进瓦片（掩码
@@ -3350,6 +3566,8 @@ function frame(now) {
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palTex); gl.uniform1i(partU.pal, 1);
   gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, state.baseTex); gl.uniform1i(partU.base, 2);
   gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, state.glowTex); gl.uniform1i(partU.glow, 3);
+  gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, glowSideTex); gl.uniform1i(partU.glowSide, 4);
+  if (els.length > 0) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, GLOW_TEXELS, els.length, 0, gl.RGBA, gl.FLOAT, packGlowSidecar(els));
   gl.bindVertexArray(partVAO);
   gl.bindBuffer(gl.ARRAY_BUFFER, instBuf);
   gl.bufferData(gl.ARRAY_BUFFER, packInstances(els), gl.DYNAMIC_DRAW);

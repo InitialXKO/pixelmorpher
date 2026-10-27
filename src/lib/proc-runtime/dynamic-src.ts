@@ -176,6 +176,121 @@ function dynArcPoints(params, tSec, endX, endY, hasEnd) {
       .map((i) => [raw[i][0], raw[i][1], 1.3 + 1.1 * dynHash01(p.arcSeed, step, 380 + i)]);
     return { main: dynArcClip(mainFull, grow), branches: [], dots: dots, alpha: alpha };
   }
+  if (p.arcMode === 'beam') {
+    const ex = hasEnd ? endX : Math.cos(dir) * p.arcLengthPx;
+    const ey = hasEnd ? endY : Math.sin(dir) * p.arcLengthPx;
+    const len = Math.hypot(ex, ey) || 1;
+    const ux = ex / len, uy = ey / len;
+    const nx = -uy, ny = ux;
+    const SEG = 6;
+    const mainFull = [];
+    for (let i = 0; i <= SEG; i++) {
+      const sf = i / SEG;
+      mainFull.push([ux * len * sf, uy * len * sf, Math.max(0.2, p.arcWidthPx * (2.6 - 1.5 * sf))]);
+    }
+    const drift = (dynHash01(p.arcSeed, step, 950) - 0.5) * 2.4;
+    const branches = [];
+    for (const sideSign of [-1, 1]) {
+      const off = sideSign * p.arcWidthPx * 1.05 + drift * 0.4;
+      const line = [];
+      for (let i = 0; i <= SEG; i++) {
+        const sf = 0.06 + 0.9 * (i / SEG);
+        line.push([ux * len * sf + nx * off, uy * len * sf + ny * off, Math.max(0.15, p.arcWidthPx * 0.5)]);
+      }
+      branches.push(dynArcClip(line, grow));
+    }
+    const dots = [[0, 0, p.arcWidthPx * 2.2]];
+    if (grow >= 0.9) {
+      for (let j = 0; j < 4; j++) {
+        const a = dynHash01(p.arcSeed, step, 960 + j) * Math.PI * 2;
+        const rr = p.arcWidthPx * (0.8 + 1.6 * dynHash01(p.arcSeed, step, 970 + j));
+        dots.push([ex + Math.cos(a) * rr, ey + Math.sin(a) * rr, 1.1 + dynHash01(p.arcSeed, step, 980 + j) * 1.3]);
+      }
+    }
+    return { main: dynArcClip(mainFull, grow), branches: branches, dots: dots, alpha: alpha };
+  }
+  if (p.arcMode === 'glyph') {
+    const R = Math.max(4, p.arcLengthPx);
+    const rot = dir + (((p.arcGlyphSpinDeg ?? 12)) * tSec * Math.PI) / 180;
+    const rc = Math.cos(rot), rs = Math.sin(rot);
+    const rotPt = (x, y, w) => [x * rc - y * rs, x * rs + y * rc, w];
+    const circle = (rad, n, w) => {
+      const pts = [];
+      for (let i = 0; i <= n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        pts.push(rotPt(Math.cos(a) * rad, Math.sin(a) * rad, w));
+      }
+      return pts;
+    };
+    const strokes = [];
+    strokes.push(circle(R, 40, p.arcWidthPx));
+    strokes.push(circle(R * 0.72, 32, Math.max(0.15, p.arcWidthPx * 0.7)));
+    const starOrder = [0, 2, 4, 1, 3, 0];
+    strokes.push(starOrder.map((vi) => {
+      const a = -Math.PI / 2 + vi * (Math.PI * 2 / 5);
+      return rotPt(Math.cos(a) * R * 0.72, Math.sin(a) * R * 0.72, Math.max(0.15, p.arcWidthPx * 0.8));
+    }));
+    const ticks = p.arcDetail > 0 ? p.arcDetail : 12;
+    for (let j = 0; j < ticks; j++) {
+      const a = (j / ticks) * Math.PI * 2;
+      const w = Math.max(0.12, p.arcWidthPx * 0.6);
+      strokes.push([rotPt(Math.cos(a) * R * 0.88, Math.sin(a) * R * 0.88, w), rotPt(Math.cos(a) * R, Math.sin(a) * R, w)]);
+    }
+    const lens = strokes.map((ln) => {
+      let L = 0;
+      for (let i = 0; i + 1 < ln.length; i++) L += Math.hypot(ln[i + 1][0] - ln[i][0], ln[i + 1][1] - ln[i][1]);
+      return L;
+    });
+    const total = lens.reduce((a, b) => a + b, 0);
+    let budget = grow * total;
+    const shown = [];
+    for (let si = 0; si < strokes.length; si++) {
+      if (budget <= 0) break;
+      shown.push(dynArcClip(strokes[si], Math.min(1, budget / Math.max(0.0001, lens[si]))));
+      budget -= lens[si];
+    }
+    const dots = [];
+    const runes = 6;
+    for (let j = 0; j < runes; j++) {
+      if (grow < 0.5 + 0.5 * ((j + 0.5) / runes)) continue;
+      const a = dynHash01(p.arcSeed, 0, 990 + j) * Math.PI * 2;
+      const q = rotPt(Math.cos(a) * R * 0.86, Math.sin(a) * R * 0.86, 0);
+      dots.push([q[0], q[1], 1.3]);
+    }
+    return {
+      main: shown.length ? shown[0] : [[0, 0, p.arcWidthPx]],
+      branches: shown.slice(1),
+      dots: dots, alpha: alpha,
+    };
+  }
+  if (p.arcMode === 'stream') {
+    const ex = hasEnd ? endX : Math.cos(dir) * p.arcLengthPx;
+    const ey = hasEnd ? endY : Math.sin(dir) * p.arcLengthPx;
+    const len = Math.hypot(ex, ey) || 1;
+    const ux = ex / len, uy = ey / len;
+    const nx = -uy, ny = ux;
+    const bow = (dynHash01(p.arcSeed, 0, 960) - 0.5) * len * 0.18;
+    const SEG = 12;
+    const ptAt = (sf) => {
+      const bend = Math.sin(sf * Math.PI) * bow;
+      return [ux * len * sf + nx * bend, uy * len * sf + ny * bend];
+    };
+    const mainFull = [];
+    for (let i = 0; i <= SEG; i++) {
+      const sf = i / SEG;
+      const q = ptAt(sf);
+      mainFull.push([q[0], q[1], Math.max(0.15, p.arcWidthPx * (1 - 0.65 * sf))]);
+    }
+    const beads = p.arcDetail > 0 ? p.arcDetail : 6;
+    const dots = [];
+    for (let j = 0; j < beads; j++) {
+      const sf = ((j / beads) + tSec * (p.arcFlowHz ?? 0.6)) % 1;
+      if (sf > grow) continue;
+      const q = ptAt(sf);
+      dots.push([q[0], q[1], Math.max(0.5, p.arcWidthPx * (0.85 + 0.45 * Math.sin(sf * Math.PI)))]);
+    }
+    return { main: dynArcClip(mainFull, grow), branches: [], dots: dots, alpha: alpha };
+  }
   const ex = hasEnd ? endX : Math.cos(dir) * p.arcLengthPx;
   const ey = hasEnd ? endY : Math.sin(dir) * p.arcLengthPx;
   const mainLen = Math.hypot(ex, ey);
@@ -252,6 +367,63 @@ function dynSourcePoints(params, tile, contour) {
   }
   return contour;
 }
+function dynHexRgbOf(hex) {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex || '');
+  if (!m) return [255, 180, 107];
+  return [parseInt(m[1].slice(0, 2), 16), parseInt(m[1].slice(2, 4), 16), parseInt(m[1].slice(4, 6), 16)];
+}
+function dynRgbHex(r, g, b) {
+  const c = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+  return '#' + c(r) + c(g) + c(b);
+}
+// 与 dynamic-patterns.ts particleColorAt 逐值同式（探针 J 组对拍）
+function dynParticleColorAt(params, lifeRatio) {
+  if (!params.rampEnabled) return params.color;
+  const f = Math.max(0, Math.min(1, lifeRatio));
+  const pos = Math.max(0, Math.min(1, params.rampMidPos ?? 0.5));
+  const a = dynHexRgbOf(params.rampFrom), mid = dynHexRgbOf(params.rampMid), b = dynHexRgbOf(params.rampTo);
+  if (f <= pos) {
+    const t = pos <= 0 ? 1 : f / pos;
+    return dynRgbHex(a[0] + (mid[0] - a[0]) * t, a[1] + (mid[1] - a[1]) * t, a[2] + (mid[2] - a[2]) * t);
+  }
+  const t = pos >= 1 ? 1 : (f - pos) / (1 - pos);
+  return dynRgbHex(mid[0] + (b[0] - mid[0]) * t, mid[1] + (b[1] - mid[1]) * t, mid[2] + (b[2] - mid[2]) * t);
+}
+const DYN_POST_RAMPS = {
+  ember: ['#1a0500', '#7a1e00', '#ff5a00', '#ffa02a', '#fff3c4'],
+  frost: ['#02101e', '#0e4a7a', '#2a9adf', '#9fdcff', '#ffffff'],
+  gameboy: ['#0f380f', '#306230', '#8bac0f', '#9bbc0f', '#e0f8d0'],
+  dusk: ['#12041f', '#3c1160', '#7a2a9e', '#d76bd7', '#ffd7f4'],
+  mono: ['#000000', '#404040', '#808080', '#c0c0c0', '#ffffff'],
+};
+// 与 dynamic-patterns.ts postColorAt 逐值同式（探针 J 组对拍）
+function dynPostColorAt(params, hex) {
+  if (!params.postEnabled || !params.postTheme || params.postTheme === 'none') return hex;
+  const ramp = DYN_POST_RAMPS[params.postTheme];
+  if (!ramp) return hex;
+  const rgb = dynHexRgbOf(hex);
+  const lum = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+  const pos = Math.max(0, Math.min(0.9999, lum)) * 4;
+  const i = Math.floor(pos);
+  const f = pos - i;
+  const a = dynHexRgbOf(ramp[i]), c = dynHexRgbOf(ramp[Math.min(4, i + 1)]);
+  return dynRgbHex(a[0] + (c[0] - a[0]) * f, a[1] + (c[1] - a[1]) * f, a[2] + (c[2] - a[2]) * f);
+}
+// 与 dynamic-patterns.ts orbitPointsAt 逐点同式（探针 J 组对拍）
+function dynOrbitPoints(params, tSec, worldAngleDeg) {
+  if (!params.orbitEnabled || !(params.orbitCount > 0)) return [];
+  const out = [];
+  const counter = params.orbitAngleSpace === 'world' ? (-(worldAngleDeg || 0) * Math.PI) / 180 : 0;
+  const cc = Math.cos(counter), cs = Math.sin(counter);
+  for (let i = 0; i < params.orbitCount; i++) {
+    const ph = (params.orbitPhase || 0) + tSec * (params.orbitHz || 0) + i / params.orbitCount;
+    const a = ph * Math.PI * 2;
+    const ex = Math.cos(a) * params.orbitRadiusX;
+    const ey = Math.sin(a) * params.orbitRadiusY;
+    out.push({ x: ex * cc - ey * cs, y: ex * cs + ey * cc });
+  }
+  return out;
+}
 function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
   const params = inst.params;
   if (!params.emitEnabled || params.rate <= 0 || params.life <= 0) return [];
@@ -300,16 +472,178 @@ function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
       const cs = Math.cos(spread), sn = Math.sin(spread);
       const rvx = vx * cs - vy * sn, rvy = vx * sn + vy * cs;
       vx = rvx; vy = rvy;
+      // 汇聚模式（与产品侧 dynamic-pattern-sim 同式）
+      let spawnX = sx, spawnY = sy;
+      if (params.emitMode === 'gather') {
+        const vlen0 = Math.hypot(vx, vy);
+        if (vlen0 > 1e-6) {
+          const off = (params.gatherRadius || 0) * (0.5 + 0.5 * dynHash01(seedBase, b, k, 51));
+          spawnX += (vx / vlen0) * off;
+          spawnY += (vy / vlen0) * off;
+        }
+        vx = -vx; vy = -vy;
+      }
       const sway = params.turbulence * Math.sin(age * 3.1 + dynHash01(seedBase, b, k, 41) * Math.PI * 2) * Math.min(1, age);
-      const px = sx + vx * age + sway * -vy * 0.14;
-      const py = sy + vy * age - params.rise * age - 0.5 * params.buoy * age * age + sway * vx * 0.14;
+      const px = spawnX + vx * age + sway * -vy * 0.14;
+      const py = spawnY + vy * age - params.rise * age - 0.5 * params.buoy * age * age + sway * vx * 0.14;
       const size = params.sizeStart + (params.sizeEnd - params.sizeStart) * lifeRatio;
       const env = lifeRatio < 0.15 ? lifeRatio / 0.15 : 1 - (lifeRatio - 0.15) / 0.85;
-      out.push({ x: px, y: py, size: size, alpha: Math.max(0, params.alpha * env), color: params.color });
+      const vlen = Math.hypot(vx, vy);
+      // 图案级全局后期（与产品侧同式）：抖动消散按包络概率掉落
+      // （哈希 61），存活粒子全 alpha 出画；透明度分级量化 alpha
+      if (params.postEnabled && params.postDither) {
+        if (dynHash01(seedBase, b, k, 61) >= env) continue;
+        var postAlpha = params.alpha;
+      } else {
+        var postAlpha = Math.max(0, params.alpha * env);
+        if (params.postEnabled && params.postAlphaLevels >= 2) {
+          const lv = params.postAlphaLevels;
+          postAlpha = Math.round(postAlpha * lv) / lv;
+        }
+      }
+      out.push({
+        x: px, y: py, size: size, alpha: postAlpha,
+        color: dynPostColorAt(params, dynParticleColorAt(params, lifeRatio)),
+        shape: params.particleShape || 'dot',
+        dirX: vlen > 1e-6 ? vx / vlen : dirX,
+        dirY: vlen > 1e-6 ? vy / vlen : dirY,
+      });
       if (out.length >= cap) return out;
     }
   }
   return out;
+}
+function dynSmoothstep01(a, b, x) {
+  const f = Math.max(0, Math.min(1, (x - a) / Math.max(1e-6, b - a)));
+  return f * f * (3 - 2 * f);
+}
+// 与 dynamic-patterns.ts fieldColorAt 逐值同式（探针 F 组对拍）
+function dynFieldColorAt(edge, mid, core, heat) {
+  const f = Math.max(0, Math.min(1, heat));
+  const a = dynHexRgbOf(edge), m = dynHexRgbOf(mid), c = dynHexRgbOf(core);
+  if (f <= 0.55) {
+    const t = f / 0.55;
+    return [a[0] + (m[0] - a[0]) * t, a[1] + (m[1] - a[1]) * t, a[2] + (m[2] - a[2]) * t];
+  }
+  const t = (f - 0.55) / 0.45;
+  return [m[0] + (c[0] - m[0]) * t, m[1] + (c[1] - m[1]) * t, m[2] + (c[2] - m[2]) * t];
+}
+// 与 dynamic-patterns.ts blobFieldAt 逐格同式（探针 F 组对拍）
+function dynBlobField(params, tSec, dsx, dsy) {
+  if (!params.blobEnabled) return null;
+  dsx = dsx === undefined ? 1 : dsx;
+  dsy = dsy === undefined ? 1 : dsy;
+  const R = Math.max(4, params.blobRadius);
+  const pad = 2;
+  const RX = Math.ceil(R * Math.max(0.05, dsx)), RY = Math.ceil(R * Math.max(0.05, dsy));
+  const SW = 2 * (RX + pad) + 1, SH = 2 * (RY + pad) + 1;
+  const heat = new Float32Array(SW * SH);
+  const phase = ((tSec * params.blobHz) % 1 + 1) % 1;
+  const K = DYN_DISPLACE_PERIOD;
+  const theta = params.blobBurn * Math.sin(Math.PI * phase);
+  const seeds = [];
+  for (let i = 0; i < params.blobCount; i++) {
+    const ang = dynHash01(params.blobSeed, 0, 100 + i) * Math.PI * 2;
+    const rad = i === 0 ? 0 : R * 0.5 * Math.sqrt(dynHash01(params.blobSeed, 0, 110 + i));
+    const wx = (dynNoiseU(phase * K + i * 3.7, i * 1.3, K, 7717) - 0.5) * R * 0.22;
+    const wy = (dynNoiseU(phase * K + i * 2.9 + 40, i * 1.7, K, 31337) - 0.5) * R * 0.22;
+    seeds.push({
+      x: (Math.cos(ang) * rad + wx) * dsx,
+      y: (Math.sin(ang) * rad + wy) * dsy,
+      r: i === 0 ? R * 0.78 : R * (0.42 + 0.3 * dynHash01(params.blobSeed, 0, 120 + i)),
+    });
+  }
+  for (let cy = 0; cy < SH; cy++) {
+    for (let cx = 0; cx < SW; cx++) {
+      const lx = cx - (RX + pad), ly = cy - (RY + pad);
+      let raw = 0;
+      for (const sd of seeds) {
+        const d = Math.hypot(lx - sd.x, ly - sd.y);
+        const v = 1 - d / sd.r;
+        if (v > raw) raw = v;
+      }
+      heat[cy * SW + cx] = dynSmoothstep01(theta, theta + 0.38, Math.pow(Math.max(0, raw), 1.3));
+    }
+  }
+  return { w: SW, h: SH, heat: heat, ox: RX + pad, oy: RY + pad };
+}
+// 与 dynamic-patterns.ts flameFieldAt 逐格同式（探针 F 组对拍）
+function dynFlameField(params, tSec, dsx, dsy) {
+  if (!params.flameEnabled) return null;
+  dsx = dsx === undefined ? 1 : dsx;
+  dsy = dsy === undefined ? 1 : dsy;
+  const W = Math.max(4, Math.round(params.flameWidth * Math.max(0.05, dsx)));
+  const H = Math.max(6, Math.round(params.flameHeight * Math.max(0.05, dsy)));
+  const pad = 2;
+  const w = W + 2 * pad + 1;
+  const h = H + pad + 3;
+  const ox = Math.floor(W / 2) + pad;
+  const oy = H + pad;
+  const heat = new Float32Array(w * h);
+  const phase = ((tSec * params.flameHz) % 1 + 1) % 1;
+  const K = DYN_DISPLACE_PERIOD;
+  const f = 0.16;
+  for (let cy = 0; cy < h; cy++) {
+    const ly = cy - oy;
+    if (ly > 1) continue;
+    const rise = Math.max(0, Math.min(1, -ly / H));
+    const widthMod = 0.82 + 0.36 * dynNoiseU(phase * K, rise * 3, K, 7717);
+    const halfW = Math.max(1, (W / 2) * (1 - 0.5 * rise) * widthMod);
+    for (let cx = 0; cx < w; cx++) {
+      const lx = cx - ox;
+      const inside = 1 - Math.abs(lx) / halfW;
+      if (inside <= 0) continue;
+      const n1 = dynNoiseU(-ly * f + phase * K, lx * f, K, 5511);
+      const n2 = dynNoiseU(-ly * f * 2.1 + phase * K * 2, lx * f * 2.1 + 7.7, K, 9923);
+      let hv = inside * (1 - rise * 0.9)
+        + (n1 - 0.5) * (params.flameTurbulence ?? 0.55) * (0.35 + 0.65 * rise)
+        + (n2 - 0.5) * (params.flameTurbulence ?? 0.55) * 0.35
+        - rise * rise * 0.25;
+      heat[cy * w + cx] = dynSmoothstep01(0.06, 0.62, hv);
+    }
+  }
+  return { w: w, h: h, heat: heat, ox: ox, oy: oy };
+}
+// 与 dynamic-patterns.ts envSamplesAt 逐值同式（探针 H 组对拍）。
+// quads: [x, y, size, line(0/1), dirX, dirY, alpha]；rings: [x, y, r, alpha]
+function dynEnvSamples(params, tSec) {
+  const quads = [];
+  const rings = [];
+  if (!params.envEnabled) return { quads: quads, rings: rings };
+  const W = params.envWidth, H = params.envHeight, hz = params.envHz, seed = params.envSeed;
+  const K = DYN_DISPLACE_PERIOD;
+  const frac = (v) => v - Math.floor(v);
+  for (let i = 0; i < params.envCount; i++) {
+    if (params.envMode === 'drift') {
+      const bx = (dynHash01(seed, i, 211) - 0.5) * W;
+      const by = (dynHash01(seed, i, 212) - 0.5) * H;
+      const ph = frac(tSec * hz + dynHash01(seed, i, 213));
+      const ox = (dynNoiseU(ph * K + i * 2.3, i * 1.1, K, 4511) - 0.5) * W * 0.16;
+      const oy = (dynNoiseU(ph * K + i * 1.9 + 31, i * 0.7, K, 9029) - 0.5) * H * 0.16;
+      const tw = 0.25 + 0.75 * Math.sin(Math.PI * ph);
+      quads.push([bx + ox, by + oy, params.envSize, 0, 1, 0, params.envAlpha * tw]);
+    } else if (params.envMode === 'ripple') {
+      const h = dynHash01(seed, i, 221);
+      const cyc = Math.floor(tSec * hz + h);
+      const ph = frac(tSec * hz + h);
+      const x = (dynHash01(seed, i, 230 + cyc) - 0.5) * W * 0.9;
+      const gy = H / 2 - 2 - dynHash01(seed, i, 240 + cyc) * 3;
+      if (ph < 0.3) {
+        const f = ph / 0.3;
+        quads.push([x, -H / 2 + f * (gy + H / 2), params.envSize * 2.2, 1, 0, 1, params.envAlpha]);
+      } else {
+        const f = (ph - 0.3) / 0.7;
+        rings.push([x, gy, 1.5 + f * params.envRadius, params.envAlpha * (1 - f) * 0.9]);
+      }
+    } else {
+      const h1 = dynHash01(seed, i, 201);
+      const ph = frac(tSec * hz + h1);
+      const x = (h1 - 0.5) * W + (dynHash01(seed, i, 202) - 0.5) * 4;
+      const fade = Math.pow(Math.sin(Math.PI * Math.min(1, ph)), 0.7);
+      quads.push([x, -H / 2 + ph * H, params.envSize * 2.4, 1, 0, 1, params.envAlpha * fade]);
+    }
+  }
+  return { quads: quads, rings: rings };
 }
 function dynProcSeededRandom(seed) {
   let s = seed | 0;
@@ -370,13 +704,20 @@ function dynProceduralValue(cfg, frame) {
 export function createDynamicRuntime(): {
   dynDeformAt: (params: never, t: number) => { sx: number; sy: number; amount: number };
   dynContour: (tile: never) => { x: number; y: number; nx: number; ny: number }[];
-  dynSimulate: (inst: never, tile: never, frame: number, frameRate: number, layer: string, seedKey: string) => { x: number; y: number; size: number; alpha: number; color: string }[];
+  dynSimulate: (inst: never, tile: never, frame: number, frameRate: number, layer: string, seedKey: string) => { x: number; y: number; size: number; alpha: number; color: string; shape: string; dirX: number; dirY: number }[];
+  dynParticleColorAt: (params: never, lifeRatio: number) => string;
+  dynPostColorAt: (params: never, hex: string) => string;
+  dynFieldColorAt: (edge: string, mid: string, core: string, heat: number) => [number, number, number];
+  dynEnvSamples: (params: never, tSec: number) => { quads: [number, number, number, number, number, number, number][]; rings: [number, number, number, number][] };
+  dynBlobField: (params: never, tSec: number, dsx?: number, dsy?: number) => { w: number; h: number; heat: Float32Array; ox: number; oy: number } | null;
+  dynFlameField: (params: never, tSec: number, dsx?: number, dsy?: number) => { w: number; h: number; heat: Float32Array; ox: number; oy: number } | null;
+  dynOrbitPoints: (params: never, tSec: number, worldAngleDeg?: number) => { x: number; y: number }[];
   dynDisplaceSrcMap: (params: never, w: number, h: number, phase: number) => Int32Array;
   dynNoiseU: (u: number, v: number, period: number, seed: number) => number;
   dynSpinRadAt: (params: never, t: number) => number;
   dynArcPoints: (params: never, t: number, endX?: number, endY?: number, hasEnd?: boolean) => { main: [number, number, number][]; branches: [number, number, number][][]; dots: [number, number, number][]; alpha: number };
   dynProceduralValue: (cfg: never, frame: number) => number;
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynParticleColorAt, dynOrbitPoints, dynPostColorAt, dynFieldColorAt, dynBlobField, dynFlameField, dynEnvSamples };`);
   return factory() as never;
 }

@@ -34,6 +34,9 @@ const BLOCK_COLORS: Record<string, string> = {
   teleport: 'bg-[#FF6680]', crt_off: 'bg-[#FF6680]', bend: 'bg-[#FF6680]',
   elliptical_compress: 'bg-[#FF6680]', dumbbell_stretch: 'bg-[#FF6680]',
   pillow_stretch: 'bg-[#FF6680]', hyperbolic_stretch: 'bg-[#FF6680]', ring_ripple: 'bg-[#FF6680]',
+  cleanup: 'bg-[#FF6680]',
+  heat_flame: 'bg-[#C77DFF]', crystal_cage: 'bg-[#C77DFF]', void_vortex: 'bg-[#C77DFF]',
+  ground_wave: 'bg-[#C77DFF]', sword_ring: 'bg-[#C77DFF]',
 };
 
 const BLOCK_TEMPLATES: Record<string, string> = {
@@ -61,6 +64,10 @@ const BLOCK_TEMPLATES: Record<string, string> = {
   bend: '弯曲 量 {bendAmount}', elliptical_compress: '椭圆压缩',
   dumbbell_stretch: '哑铃拉伸', pillow_stretch: '枕形拉伸',
   hyperbolic_stretch: '双曲拉伸', ring_ripple: '波纹 幅度 {amplitude}',
+  cleanup: '去孤点 最小块 {minSize}',
+  heat_flame: '热力场焰 高 {heightPx}', crystal_cage: '晶柱笼 数 {count} 长 {lengthPx}',
+  void_vortex: '虚空涡流 臂 {arms}', ground_wave: '裂地劲波 速 {speed}',
+  sword_ring: '御剑环阵 剑 {count}',
 };
 
 export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocksViewProps) {

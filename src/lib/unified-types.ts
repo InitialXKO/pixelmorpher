@@ -1457,6 +1457,8 @@ export interface NodeRenderInstruction {
   /** 残影段（D5）：过去位姿相对当前位姿的增量（画布 px / 度），
    * 由渲染计划按过去帧轨道位姿算出；执行端在本精灵之前逐个绘制 */
   trailGhosts?: { dx: number; dy: number; daDeg: number; alpha: number }[];
+  /** 动态形变段缩放积（dynSx, dynSy）：场段域缩放口径用（范围跟、形态不跟） */
+  dynScale?: [number, number];
   /** 弧线双锚点（D4 二期）：实例序号 → 终点（本节点本地 px，
    * 计划期按目标部件轨道位姿算好；无目标的实例不入表） */
   arcEnds?: Record<number, { x: number; y: number }>;

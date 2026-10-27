@@ -78,6 +78,7 @@ import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/procedural';
 import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followAnchoredDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
 import { effectivePatternGraph, resolvePatternsFromGraph } from './blueprint/pattern-sync';
+import { orbitPointsAt, postColorAt, blobFieldAt, flameFieldAt, fieldColorAt, envSamplesAt } from './dynamic-patterns';
 import { evaluateNodeOutput } from './blueprint/eval';
 import { markPointPx, markDirAngleDeg } from './sprite-marks';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
@@ -2134,6 +2135,7 @@ export function generateRenderPlan(
       })(),
       // t.scaleX 修复：蓝图 scaleX 独立 plumbing，不再平均吃掉
       scaleX: dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX,
+      dynScale: dynResolved.length > 0 ? [dynSx, dynSy] as [number, number] : undefined,
       dynamicPatterns: dynResolved.length > 0 ? dynResolved : undefined,
       trailGhosts,
       arcEnds,
@@ -2327,9 +2329,62 @@ export function executeRenderPlan(
  * These are applied in the sprite → canvas conversion step.
  */
 const PIXEL_MOD_TYPES: ModifierType[] = [
-  'color_replace', 'outline', 'dither', 'pixel_displace',
+  'color_replace', 'outline', 'cleanup', 'dither', 'pixel_displace',
   'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip', 'pixel_edit',
 ];
+
+/** 团块/火焰场画布（乙8）：热度场 → RGBA 画布，颜色过图案级
+ * 后期主题；按键（实例 + 段参数签名 + 时间量化步）缓存 */
+const dynFieldCanvasCache = new Map<string, { canvas: HTMLCanvasElement; ox: number; oy: number } | null>();
+function dynFieldCanvas(
+  kind: 'blob' | 'flame',
+  params: import('./dynamic-patterns').DynamicPatternParams,
+  tSec: number,
+  idKey: string,
+  dsx = 1,
+  dsy = 1,
+): { canvas: HTMLCanvasElement; ox: number; oy: number } | null {
+  const seg = kind === 'blob'
+    ? [params.blobRadius, params.blobCount, params.blobSeed, params.blobHz, params.blobBurn, params.blobAlpha, params.blobColorEdge, params.blobColorMid, params.blobColorCore]
+    : [params.flameWidth, params.flameHeight, params.flameHz, params.flameTurbulence, params.flameAlpha, params.flameColorEdge, params.flameColorMid, params.flameColorCore];
+  const key = `${idKey}|${kind}|${Math.round(tSec * 24)}|${seg.join(',')}|${params.postEnabled ? params.postTheme : ''}|${Math.round(dsx * 24)},${Math.round(dsy * 24)}`;
+  const hit = dynFieldCanvasCache.get(key);
+  if (hit !== undefined) return hit;
+  const field = kind === 'blob' ? blobFieldAt(params, tSec, dsx, dsy) : flameFieldAt(params, tSec, dsx, dsy);
+  let result: { canvas: HTMLCanvasElement; ox: number; oy: number } | null = null;
+  if (field) {
+    const canvas = document.createElement('canvas');
+    canvas.width = field.w;
+    canvas.height = field.h;
+    const c2d = canvas.getContext('2d')!;
+    const img = c2d.createImageData(field.w, field.h);
+    const edge = kind === 'blob' ? params.blobColorEdge : params.flameColorEdge;
+    const mid = kind === 'blob' ? params.blobColorMid : params.flameColorMid;
+    const core = kind === 'blob' ? params.blobColorCore : params.flameColorCore;
+    const segAlpha = kind === 'blob' ? params.blobAlpha : params.flameAlpha;
+    for (let i = 0; i < field.heat.length; i++) {
+      const hv = field.heat[i];
+      if (hv <= 0.003) continue;
+      let [r, g, b] = fieldColorAt(edge, mid, core, hv);
+      if (params.postEnabled && params.postTheme !== 'none') {
+        const hex = `#${[r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('')}`;
+        const mapped = /^#([0-9a-fA-F]{6})$/.exec(postColorAt(params, hex));
+        if (mapped) {
+          r = parseInt(mapped[1].slice(0, 2), 16); g = parseInt(mapped[1].slice(2, 4), 16); b = parseInt(mapped[1].slice(4, 6), 16);
+        }
+      }
+      img.data[i * 4] = r;
+      img.data[i * 4 + 1] = g;
+      img.data[i * 4 + 2] = b;
+      img.data[i * 4 + 3] = Math.round(255 * Math.min(1, hv) * segAlpha);
+    }
+    c2d.putImageData(img, 0, 0);
+    result = { canvas, ox: field.ox, oy: field.oy };
+  }
+  if (dynFieldCanvasCache.size > 96) dynFieldCanvasCache.clear();
+  dynFieldCanvasCache.set(key, result);
+  return result;
+}
 
 /** 动态模式粒子绘制（本地坐标：原点 = 枢轴，与精灵同一变换空间） */
 function drawDynamicParticles(
@@ -2356,8 +2411,119 @@ function drawDynamicParticles(
       grad.addColorStop(1, `rgba(${rgb},0)`);
       ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      // 粒子形状（Jeff 落地）：dot = 径向渐隐圆（原行为）；其余以
+      // 同一渐变填充形状轮廓（柔边由渐变承担，与运行时四边形同族）
+      if (p.shape === 'diamond') {
+        ctx.moveTo(p.x, p.y - r); ctx.lineTo(p.x + r, p.y);
+        ctx.lineTo(p.x, p.y + r); ctx.lineTo(p.x - r, p.y);
+        ctx.closePath();
+      } else if (p.shape === 'star') {
+        for (let i = 0; i < 8; i++) {
+          const a = (i * Math.PI) / 4 - Math.PI / 2;
+          const rad = i % 2 === 0 ? r : r * 0.38;
+          const vx = p.x + Math.cos(a) * rad, vy = p.y + Math.sin(a) * rad;
+          if (i === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
+        }
+        ctx.closePath();
+      } else if (p.shape === 'line') {
+        const dx = p.dirX, dy = p.dirY;
+        const pxv = -dy, pyv = dx;
+        ctx.moveTo(p.x + dx * r * 1.7, p.y + dy * r * 1.7);
+        ctx.lineTo(p.x - dx * r * 0.1 + pxv * r * 0.45, p.y - dy * r * 0.1 + pyv * r * 0.45);
+        ctx.lineTo(p.x - dx * r * 1.1, p.y - dy * r * 1.1);
+        ctx.lineTo(p.x - dx * r * 0.1 - pxv * r * 0.45, p.y - dy * r * 0.1 - pyv * r * 0.45);
+        ctx.closePath();
+      } else {
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      }
       ctx.fill();
+    }
+    // 团块/火焰场（乙8）：身前层、粒子之下先画场画布（带缓存）
+    if (layer === 'front') {
+      const tSecF = instruction.frame / instruction.frameRate;
+      for (const resolved of list) {
+        const dsF = instruction.dynScale ?? [1, 1];
+        for (const kind of ['blob', 'flame'] as const) {
+          const fc = dynFieldCanvas(kind, resolved.instance.params, tSecF, `${instruction.nodeId}|${resolved.instance.id}`, dsF[0], dsF[1]);
+          if (!fc) continue;
+          ctx.save();
+          if (instruction.mirror) ctx.scale(-1, 1);
+          // 域缩放口径：画布内域已按形变放大（范围跟），绘制抵消
+          // ctx 的形变缩放那份，形态（瓣/火舌）保持自然像素不拉伸
+          ctx.scale(1 / Math.max(0.05, dsF[0]), 1 / Math.max(0.05, dsF[1]));
+          ctx.drawImage(fc.canvas, -fc.ox, -fc.oy);
+          ctx.restore();
+        }
+      }
+    }
+    // 环境场样本（乙9）：区域样本（落/游/涟漪），身前层绘制
+    if (layer === 'front') {
+      const tSecE = instruction.frame / instruction.frameRate;
+      for (const resolved of list) {
+        const params = resolved.instance.params;
+        if (!params.envEnabled) continue;
+        const env = envSamplesAt(params, tSecE);
+        const m = /^#([0-9a-fA-F]{6})$/.exec(postColorAt(params, params.envColor));
+        const rgb = m
+          ? `${parseInt(m[1].slice(0, 2), 16)},${parseInt(m[1].slice(2, 4), 16)},${parseInt(m[1].slice(4), 16)}`
+          : '188,216,255';
+        const flipX = (x: number) => (instruction.mirror ? -x : x);
+        for (const q of env.quads) {
+          const gx = flipX(q.x);
+          ctx.fillStyle = `rgba(${rgb},${Math.max(0, Math.min(1, q.alpha)).toFixed(3)})`;
+          if (q.line) {
+            const len = Math.max(2, q.size * 1.6);
+            const dx = instruction.mirror ? -q.dirX : q.dirX;
+            ctx.beginPath();
+            ctx.moveTo(gx - dx * len / 2, q.y - q.dirY * len / 2);
+            ctx.lineTo(gx + dx * len / 2, q.y + q.dirY * len / 2);
+            ctx.lineWidth = Math.max(1, q.size / 2.2);
+            ctx.strokeStyle = ctx.fillStyle;
+            ctx.stroke();
+          } else {
+            const r = Math.max(0.5, q.size / 2);
+            const grad = ctx.createRadialGradient(gx, q.y, 0, gx, q.y, r * 1.6);
+            grad.addColorStop(0, `rgba(${rgb},${Math.max(0, Math.min(1, q.alpha)).toFixed(3)})`);
+            grad.addColorStop(1, `rgba(${rgb},0)`);
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(gx, q.y, r * 1.6, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.lineWidth = 1;
+        for (const rg of env.rings) {
+          if (rg.alpha <= 0.004) continue;
+          ctx.strokeStyle = `rgba(${rgb},${Math.max(0, Math.min(1, rg.alpha)).toFixed(3)})`;
+          ctx.beginPath();
+          ctx.ellipse(flipX(rg.x), rg.y, rg.r, rg.r * 0.38, 0, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+    }
+    // 环绕光点（Jeff 落地）：只在身前层画一次（绕部件的轨道光点）
+    if (layer === 'front') {
+      const tSec = instruction.frame / instruction.frameRate;
+      for (const resolved of list) {
+        const params = resolved.instance.params;
+        if (!params.orbitEnabled) continue;
+        const pts = orbitPointsAt(params, tSec, instruction.angle);
+        const m = /^#([0-9a-fA-F]{6})$/.exec(postColorAt(params, params.orbitColor));
+        const rgb = m
+          ? `${parseInt(m[1].slice(0, 2), 16)},${parseInt(m[1].slice(2, 4), 16)},${parseInt(m[1].slice(4, 6), 16)}`
+          : '174,230,255';
+        const r = Math.max(0.5, params.orbitSize / 2);
+        for (const q of pts) {
+          const gx = instruction.mirror ? -q.x : q.x;
+          const grad = ctx.createRadialGradient(gx, q.y, 0, gx, q.y, r);
+          grad.addColorStop(0, `rgba(${rgb},0.95)`);
+          grad.addColorStop(1, `rgba(${rgb},0)`);
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(gx, q.y, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     }
   }
 }
@@ -2384,7 +2550,7 @@ function drawDynamicArcs(
       shape.branches = shape.branches.map(sh);
       shape.dots = sh(shape.dots);
     }
-    const rgb = hexToRgb(p.arcColor || '#bfe3ff') ?? { r: 191, g: 227, b: 255 };
+    const rgb = hexToRgb(postColorAt(p, p.arcColor || '#bfe3ff')) ?? { r: 191, g: 227, b: 255 };
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -2438,7 +2604,7 @@ function buildGlowOverlay(
   const params = visualParams;
   const hasWorld = contributors.some((c) => c.glowAngleSpace === 'world');
   const sig = [
-    params.glowColor, params.glowStrength,
+    params.glowColor, params.glowStrength, params.postEnabled ? params.postTheme : '',
     ...contributors.flatMap((c) => [
       c.glowHalo, c.glowMaskSource, c.glowMarkName ?? '', c.glowPick, c.glowTolerance,
       c.glowMask?.w ?? 0, c.glowMask?.h ?? 0, c.glowMask?.bits ?? '',
@@ -2498,7 +2664,7 @@ function buildGlowOverlay(
     canvas.height = H;
     const c2d = canvas.getContext('2d')!;
     const img = c2d.createImageData(W, H);
-    const glowRgbObj = hexToRgb(params.glowColor);
+    const glowRgbObj = hexToRgb(postColorAt(params, params.glowColor));
     const glowRgb: [number, number, number] = glowRgbObj
       ? [glowRgbObj.r, glowRgbObj.g, glowRgbObj.b]
       : [125, 215, 255];
