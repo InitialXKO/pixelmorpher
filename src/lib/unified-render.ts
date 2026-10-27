@@ -2133,6 +2133,7 @@ export function generateRenderPlan(
       })(),
       // t.scaleX 修复：蓝图 scaleX 独立 plumbing，不再平均吃掉
       scaleX: dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX,
+      dynScale: dynResolved.length > 0 ? [dynSx, dynSy] as [number, number] : undefined,
       dynamicPatterns: dynResolved.length > 0 ? dynResolved : undefined,
       trailGhosts,
       arcEnds,
@@ -2338,14 +2339,16 @@ function dynFieldCanvas(
   params: import('./dynamic-patterns').DynamicPatternParams,
   tSec: number,
   idKey: string,
+  dsx = 1,
+  dsy = 1,
 ): { canvas: HTMLCanvasElement; ox: number; oy: number } | null {
   const seg = kind === 'blob'
     ? [params.blobRadius, params.blobCount, params.blobSeed, params.blobHz, params.blobBurn, params.blobAlpha, params.blobColorEdge, params.blobColorMid, params.blobColorCore]
     : [params.flameWidth, params.flameHeight, params.flameHz, params.flameTurbulence, params.flameAlpha, params.flameColorEdge, params.flameColorMid, params.flameColorCore];
-  const key = `${idKey}|${kind}|${Math.round(tSec * 24)}|${seg.join(',')}|${params.postEnabled ? params.postTheme : ''}`;
+  const key = `${idKey}|${kind}|${Math.round(tSec * 24)}|${seg.join(',')}|${params.postEnabled ? params.postTheme : ''}|${Math.round(dsx * 24)},${Math.round(dsy * 24)}`;
   const hit = dynFieldCanvasCache.get(key);
   if (hit !== undefined) return hit;
-  const field = kind === 'blob' ? blobFieldAt(params, tSec) : flameFieldAt(params, tSec);
+  const field = kind === 'blob' ? blobFieldAt(params, tSec, dsx, dsy) : flameFieldAt(params, tSec, dsx, dsy);
   let result: { canvas: HTMLCanvasElement; ox: number; oy: number } | null = null;
   if (field) {
     const canvas = document.createElement('canvas');
@@ -2437,11 +2440,15 @@ function drawDynamicParticles(
     if (layer === 'front') {
       const tSecF = instruction.frame / instruction.frameRate;
       for (const resolved of list) {
+        const dsF = instruction.dynScale ?? [1, 1];
         for (const kind of ['blob', 'flame'] as const) {
-          const fc = dynFieldCanvas(kind, resolved.instance.params, tSecF, `${instruction.nodeId}|${resolved.instance.id}`);
+          const fc = dynFieldCanvas(kind, resolved.instance.params, tSecF, `${instruction.nodeId}|${resolved.instance.id}`, dsF[0], dsF[1]);
           if (!fc) continue;
           ctx.save();
           if (instruction.mirror) ctx.scale(-1, 1);
+          // 域缩放口径：画布内域已按形变放大（范围跟），绘制抵消
+          // ctx 的形变缩放那份，形态（瓣/火舌）保持自然像素不拉伸
+          ctx.scale(1 / Math.max(0.05, dsF[0]), 1 / Math.max(0.05, dsF[1]));
           ctx.drawImage(fc.canvas, -fc.ox, -fc.oy);
           ctx.restore();
         }

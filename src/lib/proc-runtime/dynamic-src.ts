@@ -529,12 +529,15 @@ function dynFieldColorAt(edge, mid, core, heat) {
   return [m[0] + (c[0] - m[0]) * t, m[1] + (c[1] - m[1]) * t, m[2] + (c[2] - m[2]) * t];
 }
 // 与 dynamic-patterns.ts blobFieldAt 逐格同式（探针 F 组对拍）
-function dynBlobField(params, tSec) {
+function dynBlobField(params, tSec, dsx, dsy) {
   if (!params.blobEnabled) return null;
+  dsx = dsx === undefined ? 1 : dsx;
+  dsy = dsy === undefined ? 1 : dsy;
   const R = Math.max(4, params.blobRadius);
   const pad = 2;
-  const S = 2 * (R + pad) + 1;
-  const heat = new Float32Array(S * S);
+  const RX = Math.ceil(R * Math.max(0.05, dsx)), RY = Math.ceil(R * Math.max(0.05, dsy));
+  const SW = 2 * (RX + pad) + 1, SH = 2 * (RY + pad) + 1;
+  const heat = new Float32Array(SW * SH);
   const phase = ((tSec * params.blobHz) % 1 + 1) % 1;
   const K = DYN_DISPLACE_PERIOD;
   const theta = params.blobBurn * Math.sin(Math.PI * phase);
@@ -545,30 +548,32 @@ function dynBlobField(params, tSec) {
     const wx = (dynNoiseU(phase * K + i * 3.7, i * 1.3, K, 7717) - 0.5) * R * 0.22;
     const wy = (dynNoiseU(phase * K + i * 2.9 + 40, i * 1.7, K, 31337) - 0.5) * R * 0.22;
     seeds.push({
-      x: Math.cos(ang) * rad + wx,
-      y: Math.sin(ang) * rad + wy,
+      x: (Math.cos(ang) * rad + wx) * dsx,
+      y: (Math.sin(ang) * rad + wy) * dsy,
       r: i === 0 ? R * 0.78 : R * (0.42 + 0.3 * dynHash01(params.blobSeed, 0, 120 + i)),
     });
   }
-  for (let cy = 0; cy < S; cy++) {
-    for (let cx = 0; cx < S; cx++) {
-      const lx = cx - (R + pad), ly = cy - (R + pad);
+  for (let cy = 0; cy < SH; cy++) {
+    for (let cx = 0; cx < SW; cx++) {
+      const lx = cx - (RX + pad), ly = cy - (RY + pad);
       let raw = 0;
       for (const sd of seeds) {
         const d = Math.hypot(lx - sd.x, ly - sd.y);
         const v = 1 - d / sd.r;
         if (v > raw) raw = v;
       }
-      heat[cy * S + cx] = dynSmoothstep01(theta, theta + 0.38, Math.pow(Math.max(0, raw), 1.3));
+      heat[cy * SW + cx] = dynSmoothstep01(theta, theta + 0.38, Math.pow(Math.max(0, raw), 1.3));
     }
   }
-  return { w: S, h: S, heat: heat, ox: R + pad, oy: R + pad };
+  return { w: SW, h: SH, heat: heat, ox: RX + pad, oy: RY + pad };
 }
 // 与 dynamic-patterns.ts flameFieldAt 逐格同式（探针 F 组对拍）
-function dynFlameField(params, tSec) {
+function dynFlameField(params, tSec, dsx, dsy) {
   if (!params.flameEnabled) return null;
-  const W = Math.max(4, Math.round(params.flameWidth));
-  const H = Math.max(6, Math.round(params.flameHeight));
+  dsx = dsx === undefined ? 1 : dsx;
+  dsy = dsy === undefined ? 1 : dsy;
+  const W = Math.max(4, Math.round(params.flameWidth * Math.max(0.05, dsx)));
+  const H = Math.max(6, Math.round(params.flameHeight * Math.max(0.05, dsy)));
   const pad = 2;
   const w = W + 2 * pad + 1;
   const h = H + pad + 3;
@@ -704,8 +709,8 @@ export function createDynamicRuntime(): {
   dynPostColorAt: (params: never, hex: string) => string;
   dynFieldColorAt: (edge: string, mid: string, core: string, heat: number) => [number, number, number];
   dynEnvSamples: (params: never, tSec: number) => { quads: [number, number, number, number, number, number, number][]; rings: [number, number, number, number][] };
-  dynBlobField: (params: never, tSec: number) => { w: number; h: number; heat: Float32Array; ox: number; oy: number } | null;
-  dynFlameField: (params: never, tSec: number) => { w: number; h: number; heat: Float32Array; ox: number; oy: number } | null;
+  dynBlobField: (params: never, tSec: number, dsx?: number, dsy?: number) => { w: number; h: number; heat: Float32Array; ox: number; oy: number } | null;
+  dynFlameField: (params: never, tSec: number, dsx?: number, dsy?: number) => { w: number; h: number; heat: Float32Array; ox: number; oy: number } | null;
   dynOrbitPoints: (params: never, tSec: number, worldAngleDeg?: number) => { x: number; y: number }[];
   dynDisplaceSrcMap: (params: never, w: number, h: number, phase: number) => Int32Array;
   dynNoiseU: (u: number, v: number, period: number, seed: number) => number;

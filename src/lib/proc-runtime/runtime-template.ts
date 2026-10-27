@@ -961,58 +961,35 @@ function ensureAtlas(gl, variant, costumeName) {
       entries.push(['slash:' + perf.id + ':' + fi, tile, { composite: 'slashfx', params: { hidden: false } }, false, fr, null, 0]);
     }
   }
-  // 团块/火焰场帧（乙8）：按当前服装集的动态实例现算一个周期的
-  // 帧图，与刀光同路进图集（composite=4 直读底图、真 alpha）；场
-  // 函数与编辑器逐格同式（DYNAMIC_SRC 孪生），颜色过图案级后期。
-  // 部件镜像时场图水平翻转（与瓦片变体同朝向）。
-  const fieldTiles = {};
-  const FIELD_FRAMES = 12;
+  // 团块/火焰场槽（乙8 改造）：跟随口径 = 范围/位置跟、形态不跟
+  // （用户定案）——烘焙帧一缩放就是拉伸形态，故图集只预留定尺寸
+  // 槽位（域上限 = 形变 2 倍时的场尺寸），每帧由场作业按当帧
+  // 形变现算场（域参数乘 ds、特征参数自然）重传槽内区。槽位
+  // 锚点固定（域上限时的插头位），小域场按锚点偏移写入。
+  const fieldSlots = {};
+  const FIELD_DS_CAP = 2;
   for (const part of PARTS) {
     const cmapF = costume && costume.__dynamic;
     const dlF = (cmapF && cmapF[part.key]) || part.dynamic || [];
     if (!dlF.length) continue;
-    const mirF = variantMirrored(part, variant);
     dlF.forEach((inst, ii) => {
       const pp = (inst && inst.params) || {};
       const kindsF = [];
       if (pp.blobEnabled) kindsF.push('blob');
       if (pp.flameEnabled) kindsF.push('flame');
       for (const kind of kindsF) {
-        const hzF = kind === 'blob' ? (pp.blobHz || 0.8) : (pp.flameHz || 1.2);
-        const eHex = kind === 'blob' ? pp.blobColorEdge : pp.flameColorEdge;
-        const mHex = kind === 'blob' ? pp.blobColorMid : pp.flameColorMid;
-        const cHex = kind === 'blob' ? pp.blobColorCore : pp.flameColorCore;
-        const segAlpha = kind === 'blob' ? (pp.blobAlpha ?? 0.85) : (pp.flameAlpha ?? 0.85);
-        for (let fi = 0; fi < FIELD_FRAMES; fi++) {
-          const fld = kind === 'blob' ? dynBlobField(pp, fi / (FIELD_FRAMES * hzF)) : dynFlameField(pp, fi / (FIELD_FRAMES * hzF));
-          if (!fld) break;
-          const M = 2;
-          const tile = {
-            w: fld.w + M * 2, h: fld.h + M * 2,
-            cx: M + (mirF ? fld.w - 1 - fld.ox : fld.ox), cy: M + fld.oy,
-            data: new Uint8Array((fld.w + M * 2) * (fld.h + M * 2) * 4),
-          };
-          for (let q = 0; q < tile.w * tile.h; q++) { tile.data[q * 4] = 255; tile.data[q * 4 + 3] = 255; }
-          const fr = { w: fld.w, h: fld.h, data: new Uint8Array(fld.w * fld.h * 4) };
-          for (let cy2 = 0; cy2 < fld.h; cy2++) {
-            for (let cx2 = 0; cx2 < fld.w; cx2++) {
-              const scx = mirF ? fld.w - 1 - cx2 : cx2;
-              const hv = fld.heat[cy2 * fld.w + scx];
-              if (hv <= 0.003) continue;
-              let rgb = dynFieldColorAt(eHex, mHex, cHex, hv);
-              if (pp.postEnabled && pp.postTheme && pp.postTheme !== 'none') {
-                const hexS = '#' + rgb.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
-                const mapped = parseHexRt(dynPostColorAt(pp, hexS));
-                if (mapped) rgb = mapped;
-              }
-              const o = (cy2 * fld.w + cx2) * 4;
-              fr.data[o] = Math.round(rgb[0]); fr.data[o + 1] = Math.round(rgb[1]); fr.data[o + 2] = Math.round(rgb[2]);
-              fr.data[o + 3] = Math.round(255 * Math.min(1, hv) * segAlpha);
-            }
-          }
-          tiles.push(tile);
-          entries.push(['field:' + part.key + ':' + ii + ':' + kind + ':' + fi, tile, { composite: 'slashfx', params: { hidden: false } }, false, fr, null, 0]);
-        }
+        const probe = kind === 'blob' ? dynBlobField(pp, 0, FIELD_DS_CAP, FIELD_DS_CAP) : dynFlameField(pp, 0, FIELD_DS_CAP, FIELD_DS_CAP);
+        if (!probe) continue;
+        const M = 2;
+        const tile = {
+          w: probe.w + M * 2, h: probe.h + M * 2,
+          cx: M + probe.ox, cy: M + probe.oy,
+          data: new Uint8Array((probe.w + M * 2) * (probe.h + M * 2) * 4),
+          slotOx: probe.ox, slotOy: probe.oy, innerW: probe.w, innerH: probe.h,
+        };
+        for (let q = 0; q < tile.w * tile.h; q++) { tile.data[q * 4] = 255; tile.data[q * 4 + 3] = 255; }
+        tiles.push(tile);
+        entries.push(['field:' + part.key + ':' + ii + ':' + kind + ':slot', tile, { composite: 'slashfx', params: { hidden: false } }, false, { w: 0, h: 0, data: new Uint8Array(0) }, null, 0]);
       }
     });
   }
@@ -1096,11 +1073,10 @@ function ensureAtlas(gl, variant, costumeName) {
       }
       const key = entries[i][0];
       if (key.startsWith('field:')) {
-        const rest = key.slice(6);
-        const fiF = Number(rest.slice(rest.lastIndexOf(':') + 1));
-        const regF = rest.slice(0, rest.lastIndexOf(':'));
-        (fieldTiles[regF] = fieldTiles[regF] || [])[fiF] = {
+        const regF = key.slice(6, key.lastIndexOf(':'));
+        fieldSlots[regF] = {
           tile: [ax, ay, tile.w, tile.h], tileCx: tile.cx, tileCy: tile.cy, size: [tile.w, tile.h],
+          place: [ax, ay], slotOx: tile.slotOx, slotOy: tile.slotOy, innerW: tile.innerW, innerH: tile.innerH,
         };
       } else {
       const perfId = key.slice(6, key.lastIndexOf(':'));
@@ -1148,7 +1124,7 @@ function ensureAtlas(gl, variant, costumeName) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  atlasState = { variant: variant, costumeName: costumeName, osig: osig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles, fieldTiles: fieldTiles };
+  atlasState = { variant: variant, costumeName: costumeName, osig: osig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles, fieldSlots: fieldSlots };
   return atlasState;
 }
 
@@ -1889,6 +1865,42 @@ function dynListFor(part) {
   const entry = COSTUMES[currentCostume];
   const map = entry && entry.__dynamic;
   return (map && map[part.key]) || part.dynamic || [];
+}
+/** 团块/火焰场逐帧栅格（乙8 改造）：按当帧形变现算场（域乘
+ * ds、特征自然），颜色过图案级后期，写入槽内尺寸的 RGBA 缓冲
+ * （锚点对齐槽位锚点，镜像时水平翻转）。ds 超过槽位上限钳制。 */
+function fieldRasterFor(params, kind, tSec, dsx, dsy, mir, slot) {
+  const cap = 2;
+  const cdx = Math.max(0.05, Math.min(cap, dsx)), cdy = Math.max(0.05, Math.min(cap, dsy));
+  const fld = kind === 'blob' ? dynBlobField(params, tSec, cdx, cdy) : dynFlameField(params, tSec, cdx, cdy);
+  const buf = new Uint8Array(slot.innerW * slot.innerH * 4);
+  if (!fld) return buf;
+  const eHex = kind === 'blob' ? params.blobColorEdge : params.flameColorEdge;
+  const mHex = kind === 'blob' ? params.blobColorMid : params.flameColorMid;
+  const cHex = kind === 'blob' ? params.blobColorCore : params.flameColorCore;
+  const segAlpha = kind === 'blob' ? (params.blobAlpha ?? 0.85) : (params.flameAlpha ?? 0.85);
+  const offX = slot.slotOx - fld.ox, offY = slot.slotOy - fld.oy;
+  for (let cy2 = 0; cy2 < fld.h; cy2++) {
+    const ty = cy2 + offY;
+    if (ty < 0 || ty >= slot.innerH) continue;
+    for (let cx2 = 0; cx2 < fld.w; cx2++) {
+      const scx = mir ? fld.w - 1 - cx2 : cx2;
+      const hv = fld.heat[cy2 * fld.w + scx];
+      if (hv <= 0.003) continue;
+      const tx = cx2 + offX;
+      if (tx < 0 || tx >= slot.innerW) continue;
+      let rgb = dynFieldColorAt(eHex, mHex, cHex, hv);
+      if (params.postEnabled && params.postTheme && params.postTheme !== 'none') {
+        const hexS = '#' + rgb.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+        const mapped = parseHexRt(dynPostColorAt(params, hexS));
+        if (mapped) rgb = mapped;
+      }
+      const o = (ty * slot.innerW + tx) * 4;
+      buf[o] = Math.round(rgb[0]); buf[o + 1] = Math.round(rgb[1]); buf[o + 2] = Math.round(rgb[2]);
+      buf[o + 3] = Math.round(255 * Math.min(1, hv) * segAlpha);
+    }
+  }
+  return buf;
 }
 const particleColorCache = new Map();
 function particleRgb(hex) {
@@ -2955,6 +2967,7 @@ function frame(now) {
   const els = [];
   const elByKey = new Map();
   const skinJobs = [];
+  const fieldJobs = [];
   const stackJobs = [];
   const partAnchorsByKey = new Map();
   const dynAnchors = [];
@@ -3057,17 +3070,17 @@ function frame(now) {
     };
     els.push(el);
     elByKey.set(part.key, el);
-    // 团块/火焰场（乙8）：帧图贴部件位姿（场瓦片以插头为原点）
-    if (state.fieldTiles) {
+    // 团块/火焰场（乙8 改造）：槽位图元贴部件位姿；场内容由
+    // 场作业逐帧按当帧形变现算重传（范围跟、形态不跟）
+    if (state.fieldSlots) {
+      const mirNow = variantMirrored(part, char.variant);
       dynList.forEach((inst, ii) => {
         const pp = (inst && inst.params) || {};
         const kindsR = [];
-        if (pp.blobEnabled) kindsR.push(['blob', pp.blobHz || 0.8]);
-        if (pp.flameEnabled) kindsR.push(['flame', pp.flameHz || 1.2]);
-        for (const [kind, hzR] of kindsR) {
-          const frames = state.fieldTiles[part.key + ':' + ii + ':' + kind];
-          if (!frames || !frames.length) continue;
-          const ft = frames[Math.floor(elapsed * hzR * frames.length) % frames.length];
+        if (pp.blobEnabled) kindsR.push('blob');
+        if (pp.flameEnabled) kindsR.push('flame');
+        for (const kind of kindsR) {
+          const ft = state.fieldSlots[part.key + ':' + ii + ':' + kind];
           if (!ft) continue;
           els.push({
             pos: [el.pos[0], el.pos[1]], size: [ft.size[0] * 3, ft.size[1] * 3], rot: el.rot,
@@ -3075,6 +3088,7 @@ function frame(now) {
             family: 0, seed: 0, modes: [0, 0, 0, 0], param: [0, 0, 0],
             ghost: false, composite: 4, deform: undefined, glow: [], glowSpace: [], glowStamps: undefined,
           });
+          fieldJobs.push({ slot: ft, params: pp, kind: kind, dsx: dsx, dsy: dsy, mir: mirNow });
         }
       });
     }
@@ -3296,6 +3310,15 @@ function frame(now) {
     if (warped) {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, job.place[0], job.place[1], job.tile.w, job.tile.h, gl.RGBA, gl.UNSIGNED_BYTE, warped);
       state.skinDirty.set(job.place[0] + ',' + job.place[1], { tile: job.tile, place: job.place });
+    }
+  }
+  // ---- 团块/火焰场作业执行：逐帧栅格重传底图图集槽内区 ----
+  if (fieldJobs.length > 0) {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, state.baseTex);
+    for (const job of fieldJobs) {
+      const raster = fieldRasterFor(job.params, job.kind, elapsed, job.dsx, job.dsy, job.mir, job.slot);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, job.slot.place[0] + 2, job.slot.place[1] + 2, job.slot.innerW, job.slot.innerH, gl.RGBA, gl.UNSIGNED_BYTE, raster);
     }
   }
   // ---- 堆叠层变换执行：主导表演的烘焙算子逐帧栅格化进瓦片（掩码

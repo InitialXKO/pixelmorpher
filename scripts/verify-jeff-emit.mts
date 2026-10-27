@@ -325,6 +325,27 @@ console.log('F 组：团块/火焰场——双侧逐格对拍 + 周期无缝 + �
     const widthAt = (ly: number) => Array.from(ff.heat.slice((ff.oy + ly) * ff.w, (ff.oy + ly + 1) * ff.w)).filter((v) => v > 0.02).length;
     return widthAt(-Math.round(fp.flameHeight * 0.85)) <= widthAt(-3);
   })());
+  // 域缩放口径（范围/位置跟、形态不跟）：双侧 ds 对拍 + 行为
+  const rtF = rt as unknown as {
+    dynBlobField: (p: unknown, t: number, x?: number, y?: number) => { w: number; h: number; heat: Float32Array } | null;
+    dynFlameField: (p: unknown, t: number, x?: number, y?: number) => { w: number; h: number; heat: Float32Array } | null;
+  };
+  check('F14 域缩放双侧对拍（团块 1.6/0.7、火焰 0.6/1.8）',
+    fieldEq(blobFieldAt(bp, 0.31, 1.6, 0.7), rtF.dynBlobField(bp, 0.31, 1.6, 0.7))
+    && fieldEq(flameFieldAt(fp, 0.43, 0.6, 1.8), rtF.dynFlameField(fp, 0.43, 0.6, 1.8)));
+  const bN = blobFieldAt(bp, 0.31)!;
+  const bW = blobFieldAt(bp, 0.31, 2, 1)!;
+  const hotN = Array.from(bN.heat).filter((v) => v > 0.5).length;
+  const hotW = Array.from(bW.heat).filter((v) => v > 0.5).length;
+  check('F15 范围跟：dsx=2 场变宽、热区面积涨幅 < 拉伸的 2 倍（形态不跟）',
+    bW.w > bN.w && hotW > hotN && hotW < hotN * 1.6, `宽 ${bN.w}→${bW.w}，热格 ${hotN}→${hotW}`);
+  const fN = flameFieldAt(fp, 0.43)!;
+  const fT = flameFieldAt(fp, 0.43, 1, 2)!;
+  const rowHot = (f: { w: number; h: number; heat: Float32Array; oy: number }, dy: number) =>
+    Array.from(f.heat.slice((f.oy + dy) * f.w, (f.oy + dy + 1) * f.w)).filter((v) => v > 0.02).length;
+  check('F16 火焰 dsy=2：焰高翻倍（范围跟）、近根行宽近同（火舌不拉胖）',
+    fT.h > fN.h * 1.7 && Math.abs(rowHot(fT, -3) - rowHot(fN, -3)) <= Math.max(3, rowHot(fN, -3) * 0.45),
+    `高 ${fN.h}→${fT.h}，行宽 ${rowHot(fN, -3)}→${rowHot(fT, -3)}`);
   const c1 = fieldColorAt('#000000', '#ff0000', '#ffffff', 0.55);
   const c2 = rt4.dynFieldColorAt('#000000', '#ff0000', '#ffffff', 0.55);
   check('F13 热度色阶中点 = 中色（双侧）', near(c1[0], 255) && near(c1[1], 0) && JSON.stringify(c1) === JSON.stringify(c2));
@@ -369,29 +390,24 @@ console.log('G 组：场进包携带 + 模板取样点对拍 + 接线在场');
   check('G1 团块/火焰参数随包（动态实例完整携带）',
     !!dp && dp.blobEnabled === true && dp.flameEnabled === true && dp.blobRadius === 12 && dp.flameHeight === 20);
   const html = buildRuntimeHtml(pkg);
-  check('G2 模板接线在场（图集生成场帧 + 注册 + 渲染推入）',
-    html.includes('dynBlobField(pp, fi / (FIELD_FRAMES * hzF))')
+  check('G2 模板接线在场（槽位预留 + 逐帧作业重传 + 槽位图元）',
+    html.includes('fieldRasterFor(job.params, job.kind, elapsed')
     && html.includes("key.startsWith('field:')")
-    && html.includes('state.fieldTiles')
-    && html.includes("part.key + ':' + ii + ':' + kind"));
-  const K = 12;
-  check('G3 帧选择相位误差 < 1/K（0.8Hz 与 1.2Hz 多时刻）', [0.8, 1.2].every((hz) =>
-    [0.13, 0.57, 1.04, 2.39].every((t) => {
-      const idx = Math.floor(t * hz * K) % K;
-      return Math.abs(((t * hz) % 1) - idx / K) <= 1 / K + 1e-9;
-    })));
+    && html.includes('state.fieldSlots')
+    && html.includes("part.key + ':' + ii + ':' + kind")
+    && html.includes('dynBlobField(params, tSec, cdx, cdy)'));
+  check('G3 槽位域上限在场（FIELD_DS_CAP 钳制 + 槽位探针）',
+    html.includes('FIELD_DS_CAP') && html.includes('dynBlobField(pp, 0, FIELD_DS_CAP, FIELD_DS_CAP)'));
   const rtG = rt as unknown as {
-    dynBlobField: (p: unknown, t: number) => { heat: Float32Array } | null;
-    dynFlameField: (p: unknown, t: number) => { heat: Float32Array } | null;
+    dynBlobField: (p: unknown, t: number, x?: number, y?: number) => { w: number; h: number; heat: Float32Array } | null;
+    dynFlameField: (p: unknown, t: number, x?: number, y?: number) => { w: number; h: number; heat: Float32Array } | null;
   };
-  check('G4 模板烘焙取样点（fi/(K·Hz)，12 点）与编辑器场逐格同', (() => {
-    for (let fi = 0; fi < K; fi++) {
-      const tb = fi / (K * 0.8);
-      const a = blobFieldAt(fieldParams, tb), b = rtG.dynBlobField(fieldParams, tb);
-      if (!a || !b || a.heat.length !== b.heat.length || !Array.from(a.heat).every((v, i) => near(v, b.heat[i]!, 1e-6))) return false;
-      const tf = fi / (K * 1.2);
-      const c = flameFieldAt(fieldParams, tf), d = rtG.dynFlameField(fieldParams, tf);
-      if (!c || !d || c.heat.length !== d.heat.length || !Array.from(c.heat).every((v, i) => near(v, d.heat[i]!, 1e-6))) return false;
+  check('G4 场作业取样口径（多时刻 × 多形变）与编辑器逐格同', (() => {
+    for (const [t, dx, dy] of [[0.13, 1, 1], [0.57, 1.6, 0.7], [1.04, 2, 2], [2.39, 0.6, 1.8]] as const) {
+      const a = blobFieldAt(fieldParams, t, dx, dy), b = rtG.dynBlobField(fieldParams, t, dx, dy);
+      if (!a || !b || a.w !== b.w || !Array.from(a.heat).every((v, i) => near(v, b.heat[i]!, 1e-6))) return false;
+      const c = flameFieldAt(fieldParams, t, dx, dy), d = rtG.dynFlameField(fieldParams, t, dx, dy);
+      if (!c || !d || c.w !== d.w || !Array.from(c.heat).every((v, i) => near(v, d.heat[i]!, 1e-6))) return false;
     }
     return true;
   })());

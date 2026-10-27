@@ -589,12 +589,15 @@ export function envSamplesAt(p: DynamicPatternParams, tSec: number): { quads: En
   return { quads, rings };
 }
 
-export function blobFieldAt(p: DynamicPatternParams, tSec: number): DynField | null {
+export function blobFieldAt(p: DynamicPatternParams, tSec: number, dsx = 1, dsy = 1): DynField | null {
   if (!p.blobEnabled) return null;
+  // 域缩放口径（用户定案）：范围/位置跟随形变、形态不跟——种子
+  // 位置与摆动乘 ds（域变椭圆），种子瓣半径保持自然像素不拉伸。
   const R = Math.max(4, p.blobRadius);
   const pad = 2;
-  const S = 2 * (R + pad) + 1;
-  const heat = new Float32Array(S * S);
+  const RX = Math.ceil(R * Math.max(0.05, dsx)), RY = Math.ceil(R * Math.max(0.05, dsy));
+  const SW = 2 * (RX + pad) + 1, SH = 2 * (RY + pad) + 1;
+  const heat = new Float32Array(SW * SH);
   const phase = ((tSec * p.blobHz) % 1 + 1) % 1;
   const K = DISPLACE_PERIOD_CELLS;
   const theta = p.blobBurn * Math.sin(Math.PI * phase);
@@ -606,30 +609,32 @@ export function blobFieldAt(p: DynamicPatternParams, tSec: number): DynField | n
     const wx = (displaceNoiseU(phase * K + i * 3.7, i * 1.3, K, 7717) - 0.5) * R * 0.22;
     const wy = (displaceNoiseU(phase * K + i * 2.9 + 40, i * 1.7, K, 31337) - 0.5) * R * 0.22;
     seeds.push({
-      x: Math.cos(ang) * rad + wx,
-      y: Math.sin(ang) * rad + wy,
+      x: (Math.cos(ang) * rad + wx) * dsx,
+      y: (Math.sin(ang) * rad + wy) * dsy,
       r: i === 0 ? R * 0.78 : R * (0.42 + 0.3 * displaceHash01(p.blobSeed, 0, 120 + i)),
     });
   }
-  for (let cy = 0; cy < S; cy++) {
-    for (let cx = 0; cx < S; cx++) {
-      const lx = cx - (R + pad), ly = cy - (R + pad);
+  for (let cy = 0; cy < SH; cy++) {
+    for (let cx = 0; cx < SW; cx++) {
+      const lx = cx - (RX + pad), ly = cy - (RY + pad);
       let raw = 0;
       for (const sd of seeds) {
         const d = Math.hypot(lx - sd.x, ly - sd.y);
         const v = 1 - d / sd.r;
         if (v > raw) raw = v;
       }
-      heat[cy * S + cx] = smoothstep01(theta, theta + 0.38, Math.pow(Math.max(0, raw), 1.3));
+      heat[cy * SW + cx] = smoothstep01(theta, theta + 0.38, Math.pow(Math.max(0, raw), 1.3));
     }
   }
-  return { w: S, h: S, heat, ox: R + pad, oy: R + pad };
+  return { w: SW, h: SH, heat, ox: RX + pad, oy: RY + pad };
 }
 
-export function flameFieldAt(p: DynamicPatternParams, tSec: number): DynField | null {
+export function flameFieldAt(p: DynamicPatternParams, tSec: number, dsx = 1, dsy = 1): DynField | null {
   if (!p.flameEnabled) return null;
-  const W = Math.max(4, Math.round(p.flameWidth));
-  const H = Math.max(6, Math.round(p.flameHeight));
+  // 域缩放口径同团块：焰宽/焰高乘 ds（范围跟），噪声频率不变
+  // （火舌保持自然像素宽，宽域里舌数变多而不是舌变胖）。
+  const W = Math.max(4, Math.round(p.flameWidth * Math.max(0.05, dsx)));
+  const H = Math.max(6, Math.round(p.flameHeight * Math.max(0.05, dsy)));
   const pad = 2;
   const w = W + 2 * pad + 1;
   const h = H + pad + 3;
