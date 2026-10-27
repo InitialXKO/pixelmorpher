@@ -129,5 +129,29 @@ console.log('N 组：旧数据补齐与守卫');
   check('N2 坏值回落与钳制', bad.emitMode === 'out' && bad.particleShape === 'dot' && bad.orbitCount === 12 && bad.rampMidPos === 1);
 }
 
+// ---- T 组：甲1 组合配方模板 ×13 ----
+console.log('T 组：组合配方模板 ×13 入库（配方核心段断言）');
+{
+  const { DYNAMIC_PATTERN_TEMPLATES, findDynamicTemplate } = await import('../src/lib/dynamic-patterns');
+  check('T1 模板总数 22（原 9 + 新 13）', DYNAMIC_PATTERN_TEMPLATES.length === 22, `实际 ${DYNAMIC_PATTERN_TEMPLATES.length}`);
+  const seg = (name: string, fn: (p: DynamicPatternParams) => boolean, label: string) => {
+    const t = findDynamicTemplate(name);
+    check(`T·${name}：${label}`, !!t && fn(t.params));
+  };
+  seg('火焰斩', (p) => p.arcEnabled && p.glowEnabled && p.rampEnabled, '弧线+发光+火色坡道');
+  seg('寒冰斩', (p) => p.arcEnabled && p.particleShape === 'diamond' && p.rampEnabled, '弧线+菱形冰晶+冰色坡道');
+  seg('暗影斩', (p) => p.arcEnabled && p.trailEnabled, '弧线+残影');
+  seg('重击', (p) => p.arcEnabled && p.particleShape === 'star' && p.glowStrength >= 1.2, '弧线分叉+星形爆射+强发光脉冲');
+  seg('暴击', (p) => p.arcBranches === 3 && p.rate > findDynamicTemplate('重击')!.params.rate, '比重击更多分叉与爆射');
+  seg('落雷', (p) => p.arcEnabled && p.arcDirDeg === 90 && p.arcGrowHz > 0 && p.particleShape === 'line', '向下生长弧线+流光电火花');
+  seg('地面冲击波', (p) => p.source === 'contour-bottom' && p.spreadDeg >= 130, '底部宽散布尘浪');
+  seg('治疗', (p) => p.orbitEnabled && p.rise > 0 && p.glowEnabled, '环绕光点+上升粒子+绿发光');
+  seg('增益光环', (p) => p.orbitEnabled && p.orbitRadiusY < p.orbitRadiusX, '扁椭圆环绕（脚下环）+上升粒子');
+  seg('拾取闪光', (p) => p.particleShape === 'star' && p.glowShape === 'star', '星形粒子+星形辉光');
+  seg('冲刺残影', (p) => p.trailEnabled && p.trailCount >= 5 && p.particleShape === 'line', '多残影+流光线');
+  seg('落地尘土', (p) => p.source === 'contour-bottom' && p.sizeEnd > p.sizeStart, '底部尘土扩散');
+  seg('水花', (p) => p.buoy < -50 && p.particleShape === 'diamond', '强重力水滴（菱形）抛物线');
+}
+
 console.log(`\n合计：${pass} 过 / ${fail} 败`);
 if (fail > 0) process.exit(1);

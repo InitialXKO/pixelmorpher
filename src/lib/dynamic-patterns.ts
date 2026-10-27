@@ -1067,6 +1067,109 @@ export const DYNAMIC_PATTERN_TEMPLATES: DynamicPatternTemplate[] = [
     glowEnabled: true, glowHz: 0.7, glowStrength: 1.1, glowHalo: 2,
     glowColor: '#7dd7ff', emitEnabled: false,
   }),
+  // ---- Jeff 落地·甲1：组合配方模板 ×13（配方出处 PR #48 附录 A；
+  // 多实例配方以单实例承载其核心段组合，另几路同配方再加实例即可） ----
+  tpl('火焰斩', '战斗', {
+    arcEnabled: true, arcColor: '#ff9a3c', arcLengthPx: 34, arcWidthPx: 2.2, arcDisplace: 0.18, arcFlicker: 12,
+    source: 'contour', rate: 30, speed: 8, life: 0.55, sizeStart: 2, sizeEnd: 4, rise: 14, turbulence: 3,
+    rampEnabled: true, rampFrom: '#fff3c4', rampMid: '#ff8a2a', rampTo: '#8a1e00', rampMidPos: 0.45,
+    color: '#ff8a2a', alpha: 0.7,
+    glowEnabled: true, glowColor: '#ff7a2a', glowStrength: 0.7, glowHz: 2.2, glowHalo: 2,
+  }),
+  tpl('寒冰斩', '战斗', {
+    arcEnabled: true, arcColor: '#aee6ff', arcLengthPx: 34, arcWidthPx: 2, arcDisplace: 0.12, arcFlicker: 8,
+    source: 'contour', rate: 26, speed: 7, life: 0.7, sizeStart: 2, sizeEnd: 3, rise: 2, turbulence: 2,
+    particleShape: 'diamond',
+    rampEnabled: true, rampFrom: '#ffffff', rampMid: '#8fd4ff', rampTo: '#2a6ac8', rampMidPos: 0.5,
+    color: '#8fd4ff', alpha: 0.8,
+    glowEnabled: true, glowColor: '#7dd7ff', glowStrength: 0.7, glowHz: 1.8, glowHalo: 2,
+  }),
+  tpl('暗影斩', '战斗', {
+    arcEnabled: true, arcColor: '#8a5adf', arcLengthPx: 34, arcWidthPx: 2.4, arcDisplace: 0.22, arcFlicker: 10,
+    trailEnabled: true, trailCount: 4, trailIntervalSec: 0.05, trailOpacity: 0.4,
+    source: 'contour', rate: 18, speed: 5, life: 0.8, sizeStart: 2, sizeEnd: 5, rise: -2, turbulence: 4,
+    rampEnabled: true, rampFrom: '#c9a6ff', rampMid: '#6a2adf', rampTo: '#12002a', rampMidPos: 0.5,
+    color: '#6a2adf', alpha: 0.6,
+    glowEnabled: true, glowColor: '#5a2adf', glowStrength: 0.6, glowHz: 1.6, glowHalo: 3,
+  }),
+  tpl('重击', '战斗', {
+    arcEnabled: true, arcColor: '#ffd76b', arcLengthPx: 22, arcWidthPx: 2.6, arcDisplace: 0.3, arcBranches: 2, arcFlicker: 14,
+    source: 'contour', rate: 44, speed: 15, spreadDeg: 160, life: 0.5, sizeStart: 2, sizeEnd: 3, rise: -4, buoy: -30, turbulence: 2,
+    particleShape: 'star',
+    rampEnabled: true, rampFrom: '#ffffff', rampMid: '#ffb42a', rampTo: '#7a3a00', rampMidPos: 0.4,
+    color: '#ffb42a', alpha: 0.85, layer: 'front', frontRatio: 1,
+    glowEnabled: true, glowColor: '#ffb42a', glowStrength: 1.3, glowHz: 3, glowHalo: 2,
+  }),
+  tpl('暴击', '战斗', {
+    arcEnabled: true, arcColor: '#ff5a4a', arcLengthPx: 26, arcWidthPx: 2.8, arcDisplace: 0.38, arcBranches: 3, arcFlicker: 18,
+    source: 'contour', rate: 56, speed: 18, spreadDeg: 170, life: 0.55, sizeStart: 2, sizeEnd: 4, rise: -2, buoy: -24, turbulence: 2,
+    particleShape: 'star',
+    rampEnabled: true, rampFrom: '#ffffff', rampMid: '#ff7a3c', rampTo: '#8a0e00', rampMidPos: 0.35,
+    color: '#ff7a3c', alpha: 0.9, layer: 'front', frontRatio: 1,
+    glowEnabled: true, glowColor: '#ff4a2a', glowStrength: 1.6, glowHz: 3.6, glowHalo: 3,
+  }),
+  tpl('落雷', '战斗', {
+    arcEnabled: true, arcColor: '#cfe9ff', arcLengthPx: 44, arcDirDeg: 90, arcWidthPx: 2.2, arcDisplace: 0.42, arcBranches: 2, arcFlicker: 16, arcGrowHz: 1.4,
+    source: 'contour-bottom', rate: 30, speed: 11, directionDeg: 90, spreadDeg: 70, life: 0.4, sizeStart: 1.5, sizeEnd: 2.5, rise: 0, turbulence: 3,
+    particleShape: 'line',
+    rampEnabled: true, rampFrom: '#ffffff', rampMid: '#9fd0ff', rampTo: '#2a4adf', rampMidPos: 0.5,
+    color: '#9fd0ff', alpha: 0.85, layer: 'front', frontRatio: 1,
+    glowEnabled: true, glowColor: '#7ab8ff', glowStrength: 1, glowHz: 2.6, glowHalo: 2,
+  }),
+  tpl('地面冲击波', '战斗', {
+    source: 'contour-bottom', rate: 34, speed: 13, directionDeg: 90, spreadDeg: 150, life: 0.7,
+    sizeStart: 3, sizeEnd: 6, rise: -6, buoy: -12, turbulence: 2,
+    rampEnabled: true, rampFrom: '#e8dcc4', rampMid: '#b09a72', rampTo: '#5e4c30', rampMidPos: 0.5,
+    color: '#b09a72', alpha: 0.55,
+    glowEnabled: true, glowColor: '#d8c9a3', glowStrength: 0.4, glowHz: 2, glowHalo: 2,
+  }),
+  tpl('治疗', '辅助', {
+    source: 'inside', rate: 16, speed: 1, directionDeg: 270, spreadDeg: 40, life: 1.3,
+    sizeStart: 2, sizeEnd: 3, rise: 13, turbulence: 3,
+    particleShape: 'star',
+    rampEnabled: true, rampFrom: '#eaffea', rampMid: '#7ae88a', rampTo: '#1e9e4a', rampMidPos: 0.5,
+    color: '#7ae88a', alpha: 0.8, layer: 'front', frontRatio: 1,
+    orbitEnabled: true, orbitCount: 3, orbitRadiusX: 13, orbitRadiusY: 9, orbitHz: 0.7, orbitSize: 2.5, orbitColor: '#a6ffc0',
+    glowEnabled: true, glowColor: '#4ade6a', glowStrength: 0.7, glowHz: 0.9, glowHalo: 2,
+  }),
+  tpl('增益光环', '辅助', {
+    source: 'contour-bottom', rate: 12, speed: 2, directionDeg: 270, spreadDeg: 60, life: 1.5,
+    sizeStart: 2, sizeEnd: 3, rise: 11, turbulence: 2,
+    particleShape: 'diamond',
+    rampEnabled: true, rampFrom: '#fffbe0', rampMid: '#ffd76b', rampTo: '#e88a00', rampMidPos: 0.5,
+    color: '#ffd76b', alpha: 0.75, layer: 'front', frontRatio: 1,
+    orbitEnabled: true, orbitCount: 4, orbitRadiusX: 16, orbitRadiusY: 6, orbitHz: 0.5, orbitSize: 3, orbitColor: '#ffe9a0',
+    glowEnabled: true, glowColor: '#ffb42a', glowStrength: 0.55, glowHz: 0.7, glowHalo: 2,
+  }),
+  tpl('拾取闪光', '辅助', {
+    emitEnabled: true, source: 'inside', rate: 10, speed: 0, life: 0.9,
+    sizeStart: 1.5, sizeEnd: 2.5, rise: 3, turbulence: 1,
+    particleShape: 'star',
+    rampEnabled: true, rampFrom: '#ffffff', rampMid: '#ffe9a0', rampTo: '#e8a81e', rampMidPos: 0.4,
+    color: '#ffe9a0', alpha: 0.9, layer: 'front', frontRatio: 1,
+    glowEnabled: true, glowColor: '#ffd76b', glowStrength: 1.2, glowHz: 2.4, glowHalo: 3, glowShape: 'star', glowStarReach: 1.7,
+  }),
+  tpl('冲刺残影', '氛围', {
+    trailEnabled: true, trailCount: 5, trailIntervalSec: 0.045, trailOpacity: 0.42,
+    source: 'contour', rate: 20, speed: 4, directionDeg: 180, spreadDeg: 50, life: 0.5,
+    sizeStart: 2, sizeEnd: 4, rise: 0, turbulence: 2,
+    particleShape: 'line',
+    rampEnabled: true, rampFrom: '#dff4ff', rampMid: '#7ac7ff', rampTo: '#1e4a8a', rampMidPos: 0.5,
+    color: '#7ac7ff', alpha: 0.55,
+  }),
+  tpl('落地尘土', '氛围', {
+    source: 'contour-bottom', rate: 22, speed: 7, directionDeg: 90, spreadDeg: 130, life: 0.8,
+    sizeStart: 3, sizeEnd: 7, rise: -2, buoy: -8, turbulence: 3,
+    rampEnabled: true, rampFrom: '#e3d7c3', rampMid: '#b3a184', rampTo: '#6e5c40', rampMidPos: 0.55,
+    color: '#b3a184', alpha: 0.5,
+  }),
+  tpl('水花', '元素', {
+    source: 'contour-bottom', rate: 36, speed: 10, directionDeg: 270, spreadDeg: 65, life: 0.75,
+    sizeStart: 2, sizeEnd: 2.5, rise: 0, buoy: -85, turbulence: 1,
+    particleShape: 'diamond',
+    rampEnabled: true, rampFrom: '#ffffff', rampMid: '#8fd4ff', rampTo: '#2a7ac8', rampMidPos: 0.45,
+    color: '#8fd4ff', alpha: 0.85, layer: 'front', frontRatio: 1,
+  }),
 ];
 
 export function findDynamicTemplate(name?: string): DynamicPatternTemplate | undefined {
@@ -1108,7 +1211,7 @@ export function deleteUserDynamicPattern(name: string): void {
 export interface DynamicParamDef {
   key: keyof DynamicPatternParams;
   label: string;
-  section: '形变' | '发射' | '粒子' | '发光' | '弧线';
+  section: '形变' | '发射' | '粒子' | '发光' | '弧线' | '环绕';
   min: number;
   max: number;
   step: number;
