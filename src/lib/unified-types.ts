@@ -1519,10 +1519,31 @@ export interface DiscRenderInstruction {
   // 始终被遮挡，只透过开口补缝（规格）
 }
 
+/**
+ * 人偶兜底指令（编辑器专用，generateRenderPlan 的 mannequinFallback
+ * 开关开启时才生成）：无精灵节点的一段胶囊体——起点 = 父关节、终点
+ * = 本关节（关节 = 节点世界原点；均为画布 SubPixel 坐标，已含画布
+ * 中心，与关节盘同投影口径），执行端在精灵之前绘制（与关节盘同层）。
+ */
+export interface MannequinRenderInstruction {
+  nodeId: string;
+  x1: SubPixel;
+  y1: SubPixel;
+  x2: SubPixel;
+  y2: SubPixel;
+  /** 起点半径 px（父关节处）/ 终点半径 px（本关节处） */
+  r1: number;
+  r2: number;
+  fillColor: string;
+  outlineColor: string;
+}
+
 /** Complete render plan for a frame */
 export interface RenderPlan {
   nodeInstructions: NodeRenderInstruction[];
   discInstructions: DiscRenderInstruction[];
+  /** 人偶兜底指令（仅编辑器开关开启时非空；缺省 undefined） */
+  mannequinInstructions?: MannequinRenderInstruction[];
   /** 节点指令按 zIndex（投影深度）排序后的绘制序；关节盘不在此列（单独先行绘制） */
   sortedInstructions: NodeRenderInstruction[];
   backgroundColor?: string;

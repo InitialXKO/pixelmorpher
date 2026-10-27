@@ -16,7 +16,7 @@
 import type {
   Node, Character, NodeTransform, Socket, DirectionIndex, SkinningSnapshot,
   SubPixel, Point, Sprite, RotationStrategy, CostumePiece,
-  NodeRenderInstruction, DiscRenderInstruction, RenderPlan,
+  NodeRenderInstruction, DiscRenderInstruction, MannequinRenderInstruction, RenderPlan,
   KeyframeTrack, KeyframePoint, InterpolationMode,
   ModifierInstance, GeneratedItem, AnimationVariable, ParamDriver,
   IKChain, Mat3, ParentKeyValue,
@@ -1458,6 +1458,80 @@ function generateDiscInstructions(
   return discs;
 }
 
+/**
+ * 人偶兜底指令生成（编辑器专用）：给「本帧没有产出任何节点指令」的
+ * 可见节点一段胶囊体（父 socket 连接点 → 本关节），让有骨无形的阶段
+ * （向导新建、拆分中间态、精灵缺失）也有跟随姿态的体量形象。
+ * 段 = 父关节 → 本关节（关节 = 节点世界原点，projectToView + 画布
+ * 中心，与关节盘同投影口径）——胶囊链穿过各关节点位，与 PoseSketcher
+ * 的关节点集同构。半径：attachment.jointWidth/2 首选，缺失时按段长
+ * 16% 估算（钳 1.5–16px，借 PoseSketcher 胶囊半径相对标尺的口径，
+ * 标尺换成本段长）。被蒙皮快照认领的父节点（claimedParents）精灵
+ * 已并入子节点合并图，不算无精灵、跳过。
+ */
+function generateMannequinInstructions(
+  character: Character,
+  worldTransforms: Map<string, WorldTransform>,
+  canvasWidth: number,
+  canvasHeight: number,
+  currentDirection: DirectionIndex,
+  instructedNodeIds: ReadonlySet<string>,
+  claimedParents: ReadonlySet<string>,
+): MannequinRenderInstruction[] {
+  const out: MannequinRenderInstruction[] = [];
+  const centerSubX = pxToSub(canvasWidth / 2);
+  const centerSubY = pxToSub(canvasHeight / 2);
+  const project = (wx: SubPixel, wy: SubPixel, wz: SubPixel) => {
+    const p = projectToView(wx, wy, wz, currentDirection);
+    return {
+      x: (centerSubX + (p.canvasX as SubPixel)) as SubPixel,
+      y: (centerSubY + (p.canvasY as SubPixel)) as SubPixel,
+    };
+  };
+
+  // 第一遍：各节点的关节位置与连接点（起点）
+  const joints = new Map<string, { sx: SubPixel; sy: SubPixel; ex: SubPixel; ey: SubPixel }>();
+  for (const [nodeId, node] of Object.entries(character.nodes)) {
+    if (!node.visible) continue;
+    if (instructedNodeIds.has(nodeId) || claimedParents.has(nodeId)) continue;
+    const worldTf = worldTransforms.get(nodeId);
+    if (!worldTf) continue;
+    const end = project(worldTf.worldX, worldTf.worldY, worldTf.worldZ);
+    let start = end;
+    const parentWorldTf = node.parentId ? worldTransforms.get(node.parentId) : undefined;
+    if (parentWorldTf) {
+      start = project(parentWorldTf.worldX, parentWorldTf.worldY, parentWorldTf.worldZ);
+    }
+    joints.set(nodeId, { sx: start.x, sy: start.y, ex: end.x, ey: end.y });
+  }
+
+  // 半径：jointWidth 首选，否则按本段长估算（根节点无段长 → 5px）
+  const radiusOf = (nodeId: string): number => {
+    const node = character.nodes[nodeId];
+    const jw = node?.attachment?.jointWidth;
+    if (typeof jw === 'number' && jw > 0) return jw / 2;
+    const j = joints.get(nodeId);
+    if (!j) return 5;
+    const lenPx = Math.hypot(subToPx(j.ex) - subToPx(j.sx), subToPx(j.ey) - subToPx(j.sy));
+    if (lenPx <= 0.01) return 5;
+    return Math.min(16, Math.max(1.5, lenPx * 0.16));
+  };
+
+  for (const [nodeId, j] of joints) {
+    const node = character.nodes[nodeId]!;
+    const parentId = node.parentId ?? undefined;
+    out.push({
+      nodeId,
+      x1: j.sx, y1: j.sy, x2: j.ex, y2: j.ey,
+      r1: parentId ? radiusOf(parentId) : radiusOf(nodeId),
+      r2: radiusOf(nodeId),
+      fillColor: '#8f9bb0',
+      outlineColor: '#4a5160',
+    });
+  }
+  return out;
+}
+
 // ---- Render Plan Generation ----
 
 /**
@@ -1684,6 +1758,9 @@ export function generateRenderPlan(
   geometryDirection?: DirectionIndex,
   // 激活片段的刀光（pickSlashClip 门控后传入）：窗内按起始帧定格锚点位姿播放
   slashClip?: AnimationClip | null,
+  // 人偶兜底（编辑器专用开关）：为无精灵节点生成胶囊人偶指令；
+  // 转换/导出路径不传 → 恒为空，运行时包不受影响
+  mannequinFallback?: boolean,
 ): RenderPlan {
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
@@ -2199,6 +2276,14 @@ export function generateRenderPlan(
   // Step 5: Generate disc instructions
   const discInstructions = generateDiscInstructions(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, activeSnapshots, activeCostumeSet, spriteTable, geometryDirection);
 
+  // Step 5.5: 人偶兜底（编辑器开关开启时）：无精灵节点生成胶囊段
+  const mannequinInstructions = mannequinFallback
+    ? generateMannequinInstructions(
+        character, worldTransforms, canvasWidth, canvasHeight, currentDirection,
+        new Set(nodeInstructions.map((i) => i.nodeId)), claimedParents,
+      )
+    : [];
+
   // Step 6: 节点指令复合排序——主键投影深度（3D 遮挡），次键作者
   // zIndex（node.zIndex），再同则稳定排序保持生成序（层级遍历序）。
   // 纯 2D 时 socket 2D 偏移沿视平面右向量映射、与深度轴正交，各节点
@@ -2214,6 +2299,7 @@ export function generateRenderPlan(
     nodeInstructions,
     discInstructions,
     sortedInstructions: allInstructions,
+    mannequinInstructions,
     backgroundColor,
     previewQuality,
     effectTracks,
@@ -2267,12 +2353,14 @@ export function executeRenderPlan(
       // Fallback: legacy per-node draw (blueprint invalid — don't lose the frame)
       // 关节盘先行（不参与深度排序、始终被遮挡），节点随后按深度序绘制
       for (const disc of plan.discInstructions) renderDisc(ctx, disc);
+      for (const mq of plan.mannequinInstructions ?? []) renderMannequin(ctx, mq);
       for (const instruction of plan.sortedInstructions) {
         drawOne(ctx, instruction);
       }
     }
   } else {
     for (const disc of plan.discInstructions) renderDisc(ctx, disc);
+    for (const mq of plan.mannequinInstructions ?? []) renderMannequin(ctx, mq);
     for (const instruction of plan.sortedInstructions) {
       drawOne(ctx, instruction);
     }
@@ -3288,6 +3376,39 @@ function renderNodeSprite(
 /**
  * Render a disc (joint circle) at its world position.
  */
+/** 人偶兜底绘制：胶囊段（圆头粗线，半径取两端均值）+ 终点关节圆，
+ * 先描边色垫底再填主体色。与关节盘同层（精灵之前）。 */
+function renderMannequin(
+  ctx: CanvasRenderingContext2D,
+  instruction: MannequinRenderInstruction,
+): void {
+  const x1 = subToPx(instruction.x1), y1 = subToPx(instruction.y1);
+  const x2 = subToPx(instruction.x2), y2 = subToPx(instruction.y2);
+  const rAvg = Math.max(1, (instruction.r1 + instruction.r2) / 2);
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.strokeStyle = instruction.outlineColor;
+  ctx.lineWidth = rAvg * 2 + 2;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.strokeStyle = instruction.fillColor;
+  ctx.lineWidth = rAvg * 2;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x2, y2, Math.max(1, instruction.r2), 0, Math.PI * 2);
+  ctx.fillStyle = instruction.fillColor;
+  ctx.fill();
+  ctx.strokeStyle = instruction.outlineColor;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+}
+
 function renderDisc(
   ctx: CanvasRenderingContext2D,
   instruction: DiscRenderInstruction,
@@ -3585,6 +3706,7 @@ function renderCharacterWithBlueprint(
   const offCtx = off.getContext('2d')!;
   // 关节盘先行（不参与深度排序、始终被遮挡），节点随后按深度序绘制
   for (const disc of plan.discInstructions) renderDisc(offCtx, disc);
+  for (const mq of plan.mannequinInstructions ?? []) renderMannequin(offCtx, mq);
   for (const instruction of plan.sortedInstructions) {
     if (drawOne) drawOne(offCtx, instruction);
     else renderNodeSprite(offCtx, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
@@ -3744,6 +3866,7 @@ function renderPuppetViaUnifiedPipeline(
   animationClips?: AnimationClip[],
   activeClipId?: string | null,
   geometryDirection?: DirectionIndex,
+  mannequinFallback?: boolean,
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
@@ -3760,6 +3883,7 @@ function renderPuppetViaUnifiedPipeline(
       pickClipStateKeyframes(animationClips, activeClipId, unifiedCharacter.id, currentFrame),
       geometryDirection,
       pickSlashClip(animationClips, activeClipId, unifiedCharacter.id, currentFrame) ?? null,
+      mannequinFallback,
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }
@@ -3796,6 +3920,7 @@ export function renderUnified(
   perspectiveForeshorten?: boolean,
   activeClipId?: string | null,
   geometryDirection?: DirectionIndex,
+  mannequinFallback?: boolean,
 ): void {
   if (backgroundColor !== 'transparent') {
     ctx.fillStyle = backgroundColor;
@@ -3807,6 +3932,7 @@ export function renderUnified(
       currentFrame, frameRate, globalModifiers, animationVariables,
       canvasModifierTracks, proceduralAnimations, globalBlueprint, sprites,
       perspectiveForeshorten, animationClips, activeClipId, geometryDirection,
+      mannequinFallback,
     );
   }
   if (effectTracks) {

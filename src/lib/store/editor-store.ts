@@ -146,6 +146,9 @@ interface EditorStore extends EditorState {
   // Puppet skeleton overlay
   togglePuppetSkeleton: () => void;
   setActivePuppetSkeletonId: (id: string | null) => void;
+  // 人偶兜底（无精灵节点画胶囊人偶，编辑器显示开关）
+  showMannequinFallback: boolean;
+  toggleMannequinFallback: () => void;
   // 节点锁定（中键循环命中/节点树点选时置位）：锁定期间左键只作用于该
   // 节点、不再命中其他节点；画布空白处单击（不拖动）解除。
   nodeLockId: string | null;
@@ -226,6 +229,7 @@ const defaultEditor: EditorState = {
   strokeDrivers: [],
   moveTargetLevel: 'keyframe',
   showPuppetSkeleton: false,
+  showMannequinFallback: false,
   activePuppetSkeletonId: null,
   nodeLockId: null,
   selectedHitboxId: null,
@@ -314,6 +318,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setSelectedPaletteSlot: (index) => set({ selectedPaletteSlot: index }),
   setSelectedHitboxId: (id) => set({ selectedHitboxId: id }),
   togglePuppetSkeleton: () => set((s) => ({ showPuppetSkeleton: !s.showPuppetSkeleton })),
+  toggleMannequinFallback: () => set((s) => ({ showMannequinFallback: !s.showMannequinFallback })),
   setActivePuppetSkeletonId: (id) => set({ activePuppetSkeletonId: id }),
   setNodeLockId: (id) => set({ nodeLockId: id }),
   setReferenceImageUrl: (url) => set({ referenceImageUrl: url }),

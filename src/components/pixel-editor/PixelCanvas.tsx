@@ -291,7 +291,8 @@ export default function PixelCanvas() {
         s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
         s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint,
         freshStore.sprites, s.perspectiveForeshorten, freshStore.activeAnimationClipId,
-        geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
+        geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D),
+        useEditorStore.getState().showMannequinFallback);
     }
 
     // 3. Stroke preview
@@ -503,6 +504,9 @@ export default function PixelCanvas() {
   const nodeTurn3D = useEditorStore((x) => x.nodeTurn3D);
   const activePuppetSkeletonId = useEditorStore((x) => x.activePuppetSkeletonId);
   const showPuppetSkeleton = useEditorStore((x) => x.showPuppetSkeleton);
+  const showMannequinFallback = useEditorStore((x) => x.showMannequinFallback);
+  // 人偶兜底开关变化时标记重绘（render 内部走 getState 读最新值）
+  useEffect(() => { s.markDirty(); }, [showMannequinFallback]); // eslint-disable-line react-hooks/exhaustive-deps
   const onionSkinEnabled = useProjectStore((x) => x.onionSkinEnabled);
 
   const handleCanvasContextMenu = useCallback(
@@ -778,6 +782,9 @@ export default function PixelCanvas() {
             </ContextMenuItem>
             <ContextMenuItem onSelect={() => useEditorStore.getState().togglePuppetSkeleton()}>
               {showPuppetSkeleton && <Check className="size-3.5" />} 骨骼叠加
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => useEditorStore.getState().toggleMannequinFallback()}>
+              {showMannequinFallback && <Check className="size-3.5" />} 人偶兜底
             </ContextMenuItem>
             <ContextMenuItem onSelect={() => useEditorStore.getState().toggleNodeTurn3D()}>
               {nodeTurn3D && <Check className="size-3.5" />} 节点转向
