@@ -9,9 +9,13 @@ import {
   Box,
   Dog,
   FileUp,
+  PenLine,
+  PencilRuler,
 } from 'lucide-react';
 import PuppetCreationWizard from './PuppetCreationWizard';
 import SpineImportDialog from './SpineImportDialog';
+import StrokeBuildWizard from './puppet/StrokeBuildWizard';
+import SketchPoseDialog from './puppet/SketchPoseDialog';
 import { Button } from '@/components/ui/button';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { useProjectStore, useEditorStore } from '@/lib/store';
@@ -45,6 +49,8 @@ export default function PuppetPanel() {
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [spineImportOpen, setSpineImportOpen] = useState(false);
+  const [strokeWizardOpen, setStrokeWizardOpen] = useState(false);
+  const [sketchPoseOpen, setSketchPoseOpen] = useState(false);
 
   const selectedCharacter = activePuppetSkeletonId
     ? (unifiedCharacters[activePuppetSkeletonId] ?? null)
@@ -129,6 +135,24 @@ export default function PuppetPanel() {
           <Button
             variant="ghost"
             size="icon"
+            className="size-6 text-cyan-400 hover:text-cyan-300"
+            onClick={() => setStrokeWizardOpen(true)}
+            title="画火柴人建角"
+          >
+            <PenLine className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6 text-amber-400 hover:text-amber-300"
+            onClick={() => setSketchPoseOpen(true)}
+            title="草图捕姿（选中角色，草划姿态落帧）"
+          >
+            <PencilRuler className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
             className="size-6 text-purple-400 hover:text-purple-300"
             onClick={() => setSpineImportOpen(true)}
             title="导入 Spine 项目"
@@ -154,6 +178,8 @@ export default function PuppetPanel() {
 
       <PuppetCreationWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
       <SpineImportDialog open={spineImportOpen} onClose={() => setSpineImportOpen(false)} />
+      <StrokeBuildWizard open={strokeWizardOpen} onClose={() => setStrokeWizardOpen(false)} />
+      <SketchPoseDialog open={sketchPoseOpen} onClose={() => setSketchPoseOpen(false)} />
 
       {/* Empty state when nothing exists yet */}
       {!hasSkeletons && (

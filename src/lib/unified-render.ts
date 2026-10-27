@@ -638,8 +638,9 @@ function solveLocalAngleTilt(
   return { angle: (a * 180) / Math.PI, tilt: (tilt * 180) / Math.PI };
 }
 
-/** 为一条链在首遍 FK（transforms）上求解各关节的局部 (angle, tilt) 覆写，写入 overrides */
-function solveChainIKOverrides(
+/** 为一条链在首遍 FK（transforms）上求解各关节的局部 (angle, tilt) 覆写，写入 overrides。
+ * 导出供草图捕姿烘焙复用（与渲染路径同一求解口径）。 */
+export function solveChainIKOverrides(
   character: Character,
   chain: IKChain,
   transforms: Map<string, WorldTransform>,
