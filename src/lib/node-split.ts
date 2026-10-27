@@ -14,7 +14,7 @@ import {
   createDefaultNode, createDefaultCostumePiece, pxToSub, subToPx,
   projectToView, computeSpriteEndPoint, applyFrameRotation, frameYAxisWorld, mat3Transpose,
 } from './unified-types';
-import { computeWorldTransforms } from './unified-render';
+import { computeRestWorldTransforms } from './unified-render';
 import type { WorldTransform } from './unified-render';
 import { cropGridToContent } from './bake/skeleton-mapper';
 
@@ -59,20 +59,8 @@ function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`;
 }
 
-/** 静止位世界变换：剥动画片段、关 IK，逐节点变体朝向强制为 dir */
-function restTransforms(character: Character, dir: DirectionIndex): Map<string, WorldTransform> {
-  const nodes: Record<string, Node> = {};
-  for (const n of Object.values(character.nodes)) {
-    // 剥每节点轨道（关键帧住在 node.tracks）+ 强制朝向 → 纯静止位
-    nodes[n.id] = { ...n, tracks: {}, transform: { ...n.transform, variantIndex: dir } };
-  }
-  const clone: Character = {
-    ...character,
-    nodes,
-    ikChains: (character.ikChains ?? []).map((c) => ({ ...c, enabled: false })),
-  };
-  return computeWorldTransforms(clone, 0, 512, 512, 12);
-}
+/** 静止位世界变换：与 unified-render 共用同一助手（同一静止口径） */
+const restTransforms = computeRestWorldTransforms;
 
 function worldPosPx(wt: Map<string, WorldTransform>, id: string, dir: DirectionIndex): { x: number; y: number } {
   const w = wt.get(id)!;

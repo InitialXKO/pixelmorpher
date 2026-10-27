@@ -14,9 +14,9 @@ import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, Pix
 import type { AnimationClip } from '../types';
 import { buildParametricSprite } from './main-canvas';
 import { subToPx, projectToView, frameYAxisWorld, directionTrig } from '../unified-types';
-import { computeWorldTransforms, rotateWorldTransformsForYaw, facingYawDeltaRad } from '../unified-render';
+import { computeWorldTransforms, computeRestWorldTransforms, stackBendForNode, rotateWorldTransformsForYaw, facingYawDeltaRad } from '../unified-render';
 import { resolvePieceSprite } from '../sprite-resolve';
-import { computeStackOps, rasterizeStackOpsData, type StackDrawOp } from '../stack-render';
+import { computeStackOps, rasterizeStackOpsData, STACK_VIEW_ELEVATION_DEG, type StackDrawOp } from '../stack-render';
 import { packMaskBits, unpackMaskBits } from '../sprite-marks';
 import { collectDesiredPatterns, effectivePatternGraph, extractPatternInstances } from '../blueprint/pattern-sync';
 import { rgbaToHexOrNull } from '../engine/utils';
@@ -1294,11 +1294,17 @@ export function convertCharacterToRuntimePackage(
           if (stackNodes.size > 0) {
             let wfS = wf;
             if (stackYawDelta !== 0) { wfS = new Map(wf); rotateWorldTransformsForYaw(wfS, stackYawDelta); }
+            // 接缝插值旋转：与编辑器同一公式——静止帧同源助手，
+            // 偏航口径与当帧 wfS 一致地同步转
+            let restS = computeRestWorldTransforms(stripped, dirF as DirectionIndex);
+            if (stackYawDelta !== 0) { restS = new Map(restS); rotateWorldTransformsForYaw(restS, stackYawDelta); }
             for (const [snId, info] of stackNodes) {
               const sArr = stackSamples.get(snId)!;
               const w = wfS.get(snId);
               if (!w) { sArr.push(null); continue; }
-              const res = computeStackOps(info.stack, info.layerSprites, w.worldFrame, w.worldAngle);
+              const snNode = character.nodes[snId];
+              const bend = snNode ? stackBendForNode(snNode, info.stack, wfS, restS) : undefined;
+              const res = computeStackOps(info.stack, info.layerSprites, w.worldFrame, w.worldAngle, STACK_VIEW_ELEVATION_DEG, bend);
               sArr.push(res.ops.length > 0
                 ? { ops: res.ops, pivotX: res.pivotX, pivotY: res.pivotY, w: res.width, h: res.height, mirror: !!w.mirror }
                 : null);
