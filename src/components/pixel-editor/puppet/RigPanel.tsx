@@ -8,7 +8,7 @@ import {
   Target,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
-import { subToPx, pxToSub } from '@/lib/unified-types';
+import { subToPx, pxToSub, nodeJointDiscDiameter } from '@/lib/unified-types';
 import type {
   Character,
   Node,
@@ -41,15 +41,10 @@ interface RigPanelProps {
   /** 隐藏节点树（用左侧共享树），只显示细节 */
 }
 
-/** 关节盘当前有效直径（与渲染端 generateDiscInstructions 同口径：
+/** 关节盘当前有效直径（数据口径与人偶兜底共用 nodeJointDiscDiameter：
  * attachment.jointWidth 优先，否则 plug 截面直径，否则 4） */
 function effectiveDiscDiameter(node: Node, ignoreStored = false): number {
-  const stored = node.attachment?.jointWidth;
-  if (!ignoreStored && typeof stored === 'number' && stored > 0) return stored;
-  const piece = node.slot;
-  const plugCS = (piece?.crossSections ?? []).find((cs) => cs.id === (node.generated?.crossSectionId ?? 'plug'));
-  const bottomCS = (piece?.crossSections ?? []).find((cs) => cs.id === 'bottom');
-  return plugCS?.diameter ?? bottomCS?.diameter ?? 4;
+  return nodeJointDiscDiameter(node, ignoreStored) ?? 4;
 }
 
 /** 关节盘直径行：写 attachment.jointWidth（渲染端首选来源，改完立即

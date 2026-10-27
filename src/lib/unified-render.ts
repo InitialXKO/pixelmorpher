@@ -27,7 +27,7 @@ import {
   resolveChainTarget3D,
   mat3Mul, mat3Transpose, mat3Apply, localRotMat, rotMatD, rotMatY, applyFrameRotation, frameViewAngle,
   frameViewAngleForDirection, frameYAxisWorld,
-  worldToViewBasis, MAT3_IDENTITY,
+  worldToViewBasis, MAT3_IDENTITY, nodeJointDiscDiameter,
 } from './unified-types';
 import { solveIK2Bone3D, solveIKFabrik3D } from './blueprint/ik';
 import { DEFAULT_FACE_FEATURES, faceFeaturePoints, faceHalfWidths } from './face-features';
@@ -1566,10 +1566,11 @@ function generateDiscInstructions(
  * （向导新建、拆分中间态、精灵缺失）也有跟随姿态的体量形象。
  * 段 = 父关节 → 本关节（关节 = 节点世界原点，projectToView + 画布
  * 中心，与关节盘同投影口径）——胶囊链穿过各关节点位，与 PoseSketcher
- * 的关节点集同构。半径：attachment.jointWidth/2 首选，缺失时按段长
- * 16% 估算（钳 1.5–16px，借 PoseSketcher 胶囊半径相对标尺的口径，
- * 标尺换成本段长）。被蒙皮快照认领的父节点（claimedParents）精灵
- * 已并入子节点合并图，不算无精灵、跳过。
+ * 的关节点集同构。半径：关节盘有效直径/2（nodeJointDiscDiameter，
+ * 与面板显示同口径），无盘数据时按段长 16% 估算（钳 1.5–16px，借
+ * PoseSketcher 胶囊半径相对标尺的口径，标尺换成本段长）。被蒙皮
+ * 快照认领的父节点（claimedParents）精灵已并入子节点合并图，不算
+ * 无精灵、跳过。
  */
 /** 肢体类别（衣物色区用）：沿父链上溯节点名，先命中者胜（近者优先） */
 const MQ_ARM_KEYS = ['arm', 'shoulder', 'wrist', 'hand', '袖', '臂', '肩', '腕', '手'];
@@ -1643,11 +1644,14 @@ function generateMannequinInstructions(
     joints.set(nodeId, { sx: start.x, sy: start.y, ex: end.x, ey: end.y });
   }
 
-  // 半径：jointWidth 首选，否则按本段长估算（根节点无段长 → 5px）
+  // 半径：关节盘有效直径/2（与 RigPanel 显示同口径 nodeJointDiscDiameter：
+  // jointWidth 手动值 > plug 截面 > bottom 截面），无数据才按本段长
+  // 估算（根节点无段长 → 5px）。此前只认 jointWidth——截面定的盘径
+  // 改了胶囊不跟。
   const radiusOf = (nodeId: string): number => {
     const node = character.nodes[nodeId];
-    const jw = node?.attachment?.jointWidth;
-    if (typeof jw === 'number' && jw > 0) return jw / 2;
+    const discD = node ? nodeJointDiscDiameter(node) : null;
+    if (discD !== null) return discD / 2;
     const j = joints.get(nodeId);
     if (!j) return 5;
     const lenPx = Math.hypot(subToPx(j.ex) - subToPx(j.sx), subToPx(j.ey) - subToPx(j.sy));

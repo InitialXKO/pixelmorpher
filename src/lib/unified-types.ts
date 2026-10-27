@@ -560,6 +560,24 @@ export interface Attachment {
 }
 
 /**
+ * 关节盘有效直径的数据口径（RigPanel 显示与人偶兜底共用一份）：
+ * attachment.jointWidth（手动值）> 服装件 plug 截面直径 > bottom
+ * 截面直径 > null（无数据，调用方自行回退）。渲染端关节盘在此之上
+ * 另有按精灵 plug 位置选截面的细化（getPlugJointWidth），只影响有
+ * 精灵的节点；无精灵节点（人偶兜底的对象）以本口径为准。
+ */
+export function nodeJointDiscDiameter(node: Node, ignoreStored = false): number | null {
+  const stored = node.attachment?.jointWidth;
+  if (!ignoreStored && typeof stored === 'number' && stored > 0) return stored;
+  const piece = node.slot;
+  const plugCS = (piece?.crossSections ?? []).find((cs) => cs.id === (node.generated?.crossSectionId ?? 'plug'));
+  if (typeof plugCS?.diameter === 'number' && plugCS.diameter > 0) return plugCS.diameter;
+  const bottomCS = (piece?.crossSections ?? []).find((cs) => cs.id === 'bottom');
+  if (typeof bottomCS?.diameter === 'number' && bottomCS.diameter > 0) return bottomCS.diameter;
+  return null;
+}
+
+/**
  * 蒙皮快照：把子节点与父节点在某个关键帧的姿态合并成一张精灵，
  * 之后子节点旋转时对这张合并精灵做网格弯曲（代替父/子两张精灵 + 关节盘）。
  */

@@ -237,5 +237,24 @@ if (head0?.head && head1?.head) {
 (ankle.transform as any).angle = 0;
 (headN.transform as any).angle = 0;
 
+// ⑪ 截面定的盘径：无 jointWidth、服装件 plug 截面直径 20 → 胶囊该端
+// 半径 10（与面板显示的关节盘直径同口径）；截面改 8 → 半径跟到 4；
+// 清掉截面 → 回段长估算。jointWidth 手动值仍压过截面（④ 的延伸）。
+delete (child.attachment as any).jointWidth;
+piece.crossSections = [{ id: 'plug', mode: 'inside', diameter: 20 }] as never;
+let mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === child.id)!;
+ok(!!mq11 && mq11.r2 === 10, `⑪ plug 截面 20 → 终点半径 10（实际 ${mq11?.r2}）`);
+piece.crossSections = [{ id: 'plug', mode: 'inside', diameter: 8 }] as never;
+mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === child.id)!;
+ok(!!mq11 && mq11.r2 === 4, `⑪ 截面改 8 → 半径跟到 4（实际 ${mq11?.r2}）`);
+(child.attachment as any).jointWidth = 14;
+mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === child.id)!;
+ok(!!mq11 && mq11.r2 === 7, `⑪ jointWidth 14 压过截面 8 → 半径 7（实际 ${mq11?.r2}）`);
+delete (child.attachment as any).jointWidth;
+piece.crossSections = [] as never;
+mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === child.id)!;
+const expectEst = Math.min(16, Math.max(1.5, Math.hypot(30, 10) * 0.16));
+ok(!!mq11 && Math.abs(mq11.r2 - expectEst) < 0.01, `⑪ 无盘数据 → 回段长估算 ${expectEst.toFixed(2)}（实际 ${mq11?.r2.toFixed(2)}）`);
+
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
 process.exit(fails === 0 ? 0 : 1);
