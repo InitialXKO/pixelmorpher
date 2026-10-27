@@ -8,7 +8,8 @@ import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-util
 import type { RenderContext } from './canvas-render-helpers';
 import type { Character, Node } from '@/lib/unified-types';
 import { pxToSub, subToPx, projectToView, rotateInViewPlane, resolveChainTarget3D, applyFrameRotation } from '@/lib/unified-types';
-import { computeWorldTransforms, socketOffsetTo3D, geometryDirectionFromToggle, resolveNodeSpriteId } from '@/lib/unified-render';
+import { computeWorldTransforms, socketOffsetTo3D, geometryDirectionFromToggle, resolveNodeSpriteId, clampAnchorPoints } from '@/lib/unified-render';
+import { peekClampFrozen } from '@/lib/clamp-session';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { DEFAULT_FACE_FEATURES, faceFeaturePoints, faceHalfWidths } from '@/lib/face-features';
 
@@ -65,6 +66,88 @@ export function renderIKTargetHandles(
     ctx.fillStyle = '#00ff88';
     ctx.font = '10px sans-serif';
     ctx.fillText(chain.name, sx + r + 6, sy - r - 2);
+  }
+  ctx.restore();
+}
+
+/**
+ * 钳制锚定 gizmo：触发几何（高度线/目标点/范围）+ 指定点当帧结算位
+ * （空心）+ 冻结位（实心，生效时琥珀色）与两者连线。冻结位读会话层
+ * 最近一次步进状态（peekClampFrozen），与主画布同源。
+ */
+export function renderClampAnchorGizmos(
+  rc: { ctx: CanvasRenderingContext2D; canvasWidth: number; canvasHeight: number; zoom: number; panX: number; panY: number; currentFrame: number },
+  character: Character,
+): void {
+  const anchors = character.clampAnchors?.filter((a) => a.enabled);
+  if (!anchors || anchors.length === 0) return;
+  const { ctx, zoom, panX, panY } = rc;
+  const geoDir = geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D);
+  const worldTransforms = computeWorldTransforms(character, rc.currentFrame, rc.canvasWidth, rc.canvasHeight, undefined, undefined, undefined, undefined, geoDir);
+  const rootDir = geoDir ?? worldTransforms.get(character.rootNodeId)?.variantIndex ?? 6;
+  const sprites = useProjectStore.getState().sprites ?? {};
+  const frozen = peekClampFrozen(character.id);
+  const toScreen = (x: number, y: number, z: number) => {
+    const proj = projectToView(pxToSub(x), pxToSub(y), pxToSub(z), rootDir);
+    return {
+      x: panX + (rc.canvasWidth / 2 + subToPx(proj.canvasX)) * zoom,
+      y: panY + (rc.canvasHeight / 2 + subToPx(proj.canvasY)) * zoom,
+    };
+  };
+  ctx.save();
+  ctx.font = '10px sans-serif';
+  for (const anchor of anchors) {
+    const settled = clampAnchorPoints(character, worldTransforms, anchor, sprites);
+    const froz = frozen?.get(anchor.id);
+    const engaged = !!froz;
+    const main = engaged ? '#f59e0b' : '#38bdf8';
+    // ---- 触发几何 ----
+    ctx.strokeStyle = engaged ? 'rgba(245,158,11,0.85)' : 'rgba(56,189,248,0.55)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([6, 4]);
+    const t = anchor.trigger;
+    if (t.kind === 'height') {
+      const a = toScreen(-rc.canvasWidth / 2, t.y, settled?.points[0].z ?? 0);
+      const b = toScreen(rc.canvasWidth / 2, t.y, settled?.points[0].z ?? 0);
+      ctx.beginPath(); ctx.moveTo(0, a.y); ctx.lineTo(rc.canvasWidth, b.y); ctx.stroke();
+    } else if (t.kind === 'point') {
+      const c = toScreen(t.target.x, t.target.y, t.target.z);
+      ctx.beginPath(); ctx.arc(c.x, c.y, Math.max(2, t.radius * zoom), 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(c.x, c.y, 2, 0, Math.PI * 2); ctx.stroke();
+    } else if (t.kind === 'range') {
+      if (t.shape === 'rect' && t.rect) {
+        const z = settled?.points[0].z ?? 0;
+        const c1 = toScreen(t.rect.x, t.rect.y, z);
+        const c2 = toScreen(t.rect.x + t.rect.w, t.rect.y + t.rect.h, z);
+        ctx.strokeRect(Math.min(c1.x, c2.x), Math.min(c1.y, c2.y), Math.abs(c2.x - c1.x), Math.abs(c2.y - c1.y));
+      } else if (t.shape === 'circle' && t.circle) {
+        const c = toScreen(t.circle.x, t.circle.y, settled?.points[0].z ?? 0);
+        ctx.beginPath(); ctx.arc(c.x, c.y, Math.max(2, t.circle.r * zoom), 0, Math.PI * 2); ctx.stroke();
+      }
+    } else if (t.kind === 'scene') {
+      // scene 触发不在主画布呈示几何（裁决 4：去程序化预览面板看）
+    }
+    ctx.setLineDash([]);
+    // ---- 指定点：结算位空心、冻结位实心、连线 ----
+    if (settled) {
+      settled.points.forEach((p, i) => {
+        const sp = toScreen(p.x, p.y, p.z);
+        ctx.strokeStyle = main;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(sp.x, sp.y, 4, 0, Math.PI * 2); ctx.stroke();
+        const fp = froz?.points[i];
+        if (fp) {
+          const fs = toScreen(fp.x, fp.y, fp.z);
+          ctx.strokeStyle = 'rgba(245,158,11,0.7)';
+          ctx.beginPath(); ctx.moveTo(sp.x, sp.y); ctx.lineTo(fs.x, fs.y); ctx.stroke();
+          ctx.fillStyle = '#f59e0b';
+          ctx.beginPath(); ctx.arc(fs.x, fs.y, 3.5, 0, Math.PI * 2); ctx.fill();
+        }
+      });
+      const label = toScreen(settled.points[0].x, settled.points[0].y, settled.points[0].z);
+      ctx.fillStyle = main;
+      ctx.fillText(engaged ? `⚓ ${anchor.name}` : anchor.name, label.x + 8, label.y - 8);
+    }
   }
   ctx.restore();
 }

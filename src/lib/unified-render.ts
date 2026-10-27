@@ -19,7 +19,7 @@ import type {
   NodeRenderInstruction, DiscRenderInstruction, MannequinRenderInstruction, RenderPlan,
   KeyframeTrack, KeyframePoint, InterpolationMode,
   ModifierInstance, GeneratedItem, AnimationVariable, ParamDriver,
-  IKChain, Mat3, ParentKeyValue, SpriteStack,
+  IKChain, Mat3, ParentKeyValue, SpriteStack, ClampAnchor, ClampTrigger,
 } from './unified-types';
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
@@ -493,6 +493,7 @@ export function computeWorldTransforms(
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
   geometryDirection?: DirectionIndex,
+  clampCtx?: ClampContext,
 ): Map<string, WorldTransform> {
   // 父级切换轨：FK 全程在按本帧有效父级重写的层级上跑
   character = effectiveCharacterAt(character, frame);
@@ -554,9 +555,9 @@ export function computeWorldTransforms(
   const rootWorld: WorldTransform = {
     nodeId: rootNode.id,
     // 3D 世界坐标以原点为中心，不含画布中心（画布中心在投影后 2D 阶段加）
-    worldX: rootInterpolated.x,
-    worldY: rootInterpolated.y,
-    worldZ: rootInterpolated.z ?? 0,
+    worldX: (rootInterpolated.x + (clampCtx?.rootOffset ? pxToSub(clampCtx.rootOffset.x) : 0)) as SubPixel,
+    worldY: (rootInterpolated.y + (clampCtx?.rootOffset ? pxToSub(clampCtx.rootOffset.y) : 0)) as SubPixel,
+    worldZ: ((rootInterpolated.z ?? 0) + (clampCtx?.rootOffset ? pxToSub(clampCtx.rootOffset.z) : 0)) as SubPixel,
     worldAngle: geometryDirection !== undefined
       ? frameViewAngleForDirection(rootFrame, geometryDirection, rootInterpolated.variantIndex)
       : frameViewAngle(rootFrame),
@@ -573,26 +574,53 @@ export function computeWorldTransforms(
   // Recursively compute children
   computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms);
 
+  // 钳制锚定收尾（仅最外层调用执行；IK 重算遍与 resettle 的内层调用跳过）：
+  // 刚性反移 + 节点局部旋转就地施加在结算结果上；resettle 开时以累进
+  // 根偏移整树重算一遍（链目标仍是世界量），再以冻结位兜底施加。
+  const finishWithClamps = (t: Map<string, WorldTransform>): Map<string, WorldTransform> => {
+    if (!clampCtx || ikOverrides || !character.clampAnchors || character.clampAnchors.length === 0) return t;
+    const res = applyClampPass(character, t, clampCtx.frozen, clampCtx.sprites, geometryDirection);
+    // resettle 最多两遍重算：第二遍用第一遍已解 frame 换算尖端目标，
+    // 把关节落位残差压到二阶小量（末遍收尾 Δ 刚性兜底）。
+    if (res.resettleWanted && (clampCtx.resettleDepth ?? 0) < 2) {
+      const ctx2: ClampContext = {
+        frozen: clampCtx.frozen,
+        sprites: clampCtx.sprites,
+        resettleDepth: (clampCtx.resettleDepth ?? 0) + 1,
+        resettleRefTransforms: t,
+        rootOffset: {
+          x: (clampCtx.rootOffset?.x ?? 0) + res.delta.x,
+          y: (clampCtx.rootOffset?.y ?? 0) + res.delta.y,
+          z: (clampCtx.rootOffset?.z ?? 0) + res.delta.z,
+        },
+      };
+      return computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, undefined, geometryDirection, ctx2);
+    }
+    return t;
+  };
+
   // IK（乙：真 3D）：首遍 FK 后解出各链关节的局部 (angle, tilt) 覆写，整树重算 FK——
   // 链外后代随 frame 复合自动跟随。ikOverrides 已传入时（重算遍）不再求解。
   if (!ikOverrides) {
     if (character.ikBlueprint) {
       applyBakedIKBlueprint(character, transforms, variableContext?.values, frame, frameRate);
-      return transforms;
+      return finishWithClamps(transforms);
     }
     const chains = character.ikChains?.filter((c) => c.enabled && !isIKChainSuspended(c.id));
     if (chains && chains.length > 0) {
       const overrides = new Map<string, { angle: number; tilt: number }>();
       for (const chain of chains) {
-        solveChainIKOverrides(character, chain, transforms, canvasWidth, canvasHeight, frame, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection);
+        const effChain = clampCtx?.resettleDepth ? resettleChainOverride(character, chain, clampCtx.frozen, clampCtx.resettleRefTransforms ?? transforms, clampCtx.sprites) : chain;
+        solveChainIKOverrides(character, effChain, transforms, canvasWidth, canvasHeight, frame, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection);
       }
       if (overrides.size > 0) {
-        return computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection);
+        const t2 = computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection, clampCtx);
+        return finishWithClamps(t2);
       }
     }
   }
 
-  return transforms;
+  return finishWithClamps(transforms);
 }
 
 /**
@@ -2235,6 +2263,400 @@ export function computeRestWorldTransforms(
   return hit;
 }
 
+// ==================== 钳制锚定（PR #55 研究定式） ====================
+// 指定点经 IK 结算到达钳制高度/目标点/目标范围时暂时锚定：锚点全位
+// 置冻结不滑动，整角色反向横移把它送回冻结位（结算位姿刚性不动）；
+// 边缘/点对的倾斜只掰锚点所在节点（绕冻结主点转本节点子树）。多锚
+// 硬优先级：Δ 由最高优先的生效锚独占。状态（冻结记录）由会话层
+// （clamp-session）/convert 在平结算位上顺序步进，本段只消费。
+// 语义与裁决全记录见 spikes/clamp-anchor/RESEARCH.md。
+
+export interface ClampFrozen { points: Array<{ x: number; y: number; z: number }> }
+export type ClampStateMap = Map<string, ClampFrozen | null>;
+export interface ClampContext {
+  /** 本帧已步进的冻结记录（会话层/convert 持有并步进） */
+  frozen: ClampStateMap;
+  sprites?: Record<string, Sprite>;
+  /** 内部：resettle 重算时累进的根偏移（px） */
+  rootOffset?: { x: number; y: number; z: number };
+  resettleDepth?: number;
+  /** 内部：resettle 换算尖端目标用的上一遍已解变换（frame 口径） */
+  resettleRefTransforms?: Map<string, WorldTransform>;
+}
+export interface ClampReport { anchorId: string; engaged: boolean; residual: number }
+
+type ClampV3 = { x: number; y: number; z: number };
+const cv3 = (x: number, y: number, z: number): ClampV3 => ({ x, y, z });
+const sub3 = (a: ClampV3, b: ClampV3): ClampV3 => cv3(a.x - b.x, a.y - b.y, a.z - b.z);
+const len3 = (a: ClampV3): number => Math.hypot(a.x, a.y, a.z);
+
+function clampSpriteTable(ctxSprites?: Record<string, Sprite>, character?: Character) {
+  if (ctxSprites) return ctxSprites;
+  try {
+    const { useProjectStore } = require('./store') as typeof import('./store');
+    const st = useProjectStore.getState() as unknown as { sprites?: Record<string, Sprite> };
+    if (st.sprites && Object.keys(st.sprites).length > 0) return st.sprites;
+  } catch { /* 离线语境回退角色自带表 */ }
+  return character?.sprites as Record<string, Sprite> | undefined;
+}
+
+function clampNodeWorld(transforms: Map<string, WorldTransform>, nodeId: string): ClampV3 | null {
+  const w = transforms.get(nodeId);
+  if (!w) return null;
+  return cv3(subToPx(w.worldX), subToPx(w.worldY), subToPx(w.worldZ));
+}
+
+function clampPixelWorld(
+  character: Character,
+  transforms: Map<string, WorldTransform>,
+  nodeId: string,
+  sel: { mark?: string; x?: number; y?: number },
+  sprites?: Record<string, Sprite>,
+): ClampV3 | null {
+  const node = character.nodes[nodeId];
+  const w = transforms.get(nodeId);
+  if (!node || !w) return null;
+  const dir = (w.variantIndex ?? 0) as DirectionIndex;
+  const spriteId = resolveNodeSpriteId(character, nodeId, dir, sprites);
+  if (!spriteId) return null;
+  const table = sprites ?? (character.sprites as Record<string, Sprite> | undefined);
+  const sprite = table?.[spriteId];
+  if (!sprite) return null;
+  let px = sel.x ?? 0, py = sel.y ?? 0;
+  if (sel.mark) {
+    const mp = markPointPx(sprite, sel.mark);
+    if (!mp) return null;
+    px = mp.x; py = mp.y;
+  }
+  const plug = sprite.plug ? { x: subToPx(sprite.plug.x), y: subToPx(sprite.plug.y) } : { x: 0, y: 0 };
+  let lx = px - plug.x;
+  const ly = py - plug.y;
+  if (w.mirror) lx = -lx;
+  const r = applyFrameRotation(w.worldFrame, lx, ly, 0, dir);
+  const base = clampNodeWorld(transforms, nodeId)!;
+  return cv3(base.x + r.x, base.y + r.y, base.z + r.z);
+}
+
+/** 指定点解析：返回世界点列（主点在前）与旋转承担节点（主点所在节点） */
+export function clampAnchorPoints(
+  character: Character,
+  transforms: Map<string, WorldTransform>,
+  anchor: ClampAnchor,
+  sprites?: Record<string, Sprite>,
+): { points: ClampV3[]; ownerNodeId: string; pairSameNode?: boolean } | null {
+  const ref = anchor.point;
+  if (ref.kind === 'node') {
+    const p = clampNodeWorld(transforms, ref.nodeId);
+    return p ? { points: [p], ownerNodeId: ref.nodeId } : null;
+  }
+  if (ref.kind === 'nodePair') {
+    const a = clampNodeWorld(transforms, ref.nodeId);
+    const b = clampNodeWorld(transforms, ref.nodeId2);
+    return a && b ? { points: [a, b], ownerNodeId: ref.nodeId } : null;
+  }
+  if (ref.kind === 'pixel') {
+    const p = clampPixelWorld(character, transforms, ref.nodeId, ref, sprites);
+    return p ? { points: [p], ownerNodeId: ref.nodeId } : null;
+  }
+  if (ref.kind === 'pixelPair') {
+    const a = clampPixelWorld(character, transforms, ref.a.nodeId, ref.a, sprites);
+    const b = clampPixelWorld(character, transforms, ref.b.nodeId, ref.b, sprites);
+    return a && b ? { points: [a, b], ownerNodeId: ref.a.nodeId, pairSameNode: ref.a.nodeId === ref.b.nodeId } : null;
+  }
+  // spriteEdge：精灵矩形一边（plug 相对的两角点）
+  const node = character.nodes[ref.nodeId];
+  const w = transforms.get(ref.nodeId);
+  if (!node || !w) return null;
+  const dir = (w.variantIndex ?? 0) as DirectionIndex;
+  const spriteId = resolveNodeSpriteId(character, ref.nodeId, dir, sprites);
+  if (!spriteId) return null;
+  const table = sprites ?? (character.sprites as Record<string, Sprite> | undefined);
+  const sprite = table?.[spriteId];
+  if (!sprite) return null;
+  const plug = sprite.plug ? { x: subToPx(sprite.plug.x), y: subToPx(sprite.plug.y) } : { x: 0, y: 0 };
+  const W = sprite.width ?? 0, H = sprite.height ?? 0;
+  const corners: Record<string, Array<[number, number]>> = {
+    top: [[0, 0], [W, 0]],
+    bottom: [[0, H], [W, H]],
+    left: [[0, 0], [0, H]],
+    right: [[W, 0], [W, H]],
+  };
+  const base = clampNodeWorld(transforms, ref.nodeId)!;
+  const points = corners[ref.edge].map(([cx, cy]) => {
+    let lx = cx - plug.x;
+    const ly = cy - plug.y;
+    if (w.mirror) lx = -lx;
+    const r = applyFrameRotation(w.worldFrame, lx, ly, 0, dir);
+    return cv3(base.x + r.x, base.y + r.y, base.z + r.z);
+  });
+  return { points, ownerNodeId: ref.nodeId, pairSameNode: true };
+}
+
+/** 触发判定（在平结算位上）：scene 触发在编辑器引擎内不生效（运行时包专属） */
+export function clampTriggerHolds(trigger: ClampTrigger, points: ClampV3[]): boolean {
+  if (trigger.kind === 'height') {
+    return trigger.side === 'below' ? points[0].y >= trigger.y : points[0].y <= trigger.y;
+  }
+  if (trigger.kind === 'point') {
+    return len3(sub3(points[0], trigger.target)) <= trigger.radius;
+  }
+  if (trigger.kind === 'range') {
+    const p = points[0];
+    if (trigger.shape === 'rect' && trigger.rect) {
+      const r = trigger.rect;
+      return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+    }
+    if (trigger.shape === 'circle' && trigger.circle) {
+      const c = trigger.circle;
+      return Math.hypot(p.x - c.x, p.y - c.y) <= c.r;
+    }
+    return false;
+  }
+  return false; // scene
+}
+
+/** 生效帧的冻结位：整位冻结（高度先投影到面、目标点取目标、范围钳进区域） */
+export function clampFreezePoints(trigger: ClampTrigger, settled: ClampV3[]): ClampV3[] {
+  if (trigger.kind === 'height') return settled.map((p) => cv3(p.x, trigger.y, p.z));
+  if (trigger.kind === 'point') return settled.map((p, i) => (i === 0 ? { ...trigger.target } : { ...p }));
+  if (trigger.kind === 'range') {
+    return settled.map((p) => {
+      if (trigger.shape === 'rect' && trigger.rect) {
+        const r = trigger.rect;
+        return cv3(Math.min(Math.max(p.x, r.x), r.x + r.w), Math.min(Math.max(p.y, r.y), r.y + r.h), p.z);
+      }
+      if (trigger.shape === 'circle' && trigger.circle) {
+        const c = trigger.circle;
+        const dx = p.x - c.x, dy = p.y - c.y;
+        const d = Math.hypot(dx, dy);
+        if (d <= c.r || d === 0) return { ...p };
+        return cv3(c.x + (dx / d) * c.r, c.y + (dy / d) * c.r, p.z);
+      }
+      return { ...p };
+    });
+  }
+  return settled.map((p) => ({ ...p }));
+}
+
+/** 在平结算位上步进一帧冻结状态（触发/冻结/释放）。顺序求值确定。 */
+export function stepClampState(
+  character: Character,
+  settledTransforms: Map<string, WorldTransform>,
+  state: ClampStateMap,
+  sprites?: Record<string, Sprite>,
+): void {
+  const anchors = character.clampAnchors;
+  if (!anchors || anchors.length === 0) return;
+  const table = clampSpriteTable(sprites, character);
+  for (const anchor of anchors) {
+    if (!anchor.enabled) { if (state.get(anchor.id)) state.set(anchor.id, null); continue; }
+    const resolved = clampAnchorPoints(character, settledTransforms, anchor, table);
+    if (!resolved) continue;
+    const cur = state.get(anchor.id);
+    if (cur) {
+      if (!clampTriggerHolds(anchor.trigger, resolved.points)) state.set(anchor.id, null);
+    } else if (clampTriggerHolds(anchor.trigger, resolved.points)) {
+      state.set(anchor.id, { points: clampFreezePoints(anchor.trigger, resolved.points) });
+    }
+  }
+}
+
+function clampSubtreeIds(character: Character, rootId: string): string[] {
+  const out: string[] = [];
+  const childrenOf = new Map<string, string[]>();
+  for (const n of Object.values(character.nodes)) {
+    if (n.parentId) {
+      const arr = childrenOf.get(n.parentId) ?? [];
+      arr.push(n.id);
+      childrenOf.set(n.parentId, arr);
+    }
+  }
+  const walk = (id: string) => { out.push(id); for (const c of childrenOf.get(id) ?? []) walk(c); };
+  walk(rootId);
+  return out;
+}
+
+/** 两向量间的旋转（mat3）：把 a 方向转到 b 方向 */
+function clampRotationBetween(a: ClampV3, b: ClampV3): Mat3 | null {
+  const la = len3(a), lb = len3(b);
+  if (la < 1e-6 || lb < 1e-6) return null;
+  const ua = cv3(a.x / la, a.y / la, a.z / la), ub = cv3(b.x / lb, b.y / lb, b.z / lb);
+  const dot = Math.min(1, Math.max(-1, ua.x * ub.x + ua.y * ub.y + ua.z * ub.z));
+  const cx = ua.y * ub.z - ua.z * ub.y, cy = ua.z * ub.x - ua.x * ub.z, cz = ua.x * ub.y - ua.y * ub.x;
+  const cl = Math.hypot(cx, cy, cz);
+  if (cl < 1e-9) {
+    if (dot > 0) return null; // 同向，无需旋转
+    // 反向：任取垂直轴转 π
+    const ax = Math.abs(ua.x) < 0.9 ? cv3(0, ua.z, -ua.y) : cv3(ua.z, 0, -ua.x);
+    const al = len3(ax);
+    const kx = ax.x / al, ky = ax.y / al, kz = ax.z / al;
+    return [1 - 2 * (ky * ky + kz * kz), 2 * kx * ky, 2 * kx * kz,
+            2 * kx * ky, 1 - 2 * (kx * kx + kz * kz), 2 * ky * kz,
+            2 * kx * kz, 2 * ky * kz, 1 - 2 * (kx * kx + ky * ky)];
+  }
+  const kx = cx / cl, ky = cy / cl, kz = cz / cl;
+  const ang = Math.acos(dot);
+  if (ang < 0.5 * Math.PI / 180) return null; // <0.5° 不掰
+  const c = Math.cos(ang), s = Math.sin(ang), t = 1 - c;
+  return [t * kx * kx + c, t * kx * ky - s * kz, t * kx * kz + s * ky,
+          t * kx * ky + s * kz, t * ky * ky + c, t * ky * kz - s * kx,
+          t * kx * kz - s * ky, t * ky * kz + s * kx, t * kz * kz + c];
+}
+
+/** resettle 重算遍专用：末端节点是某生效锚主点所在节点的链，目标换成冻结位 */
+export function resettleChainOverride(
+  character: Character,
+  chain: IKChain,
+  frozen: ClampStateMap,
+  transforms?: Map<string, WorldTransform>,
+  sprites?: Record<string, Sprite>,
+): IKChain {
+  const anchors = character.clampAnchors;
+  if (!anchors || anchors.length === 0) return chain;
+  const ownerOf = (a: ClampAnchor): string | null => {
+    const r = a.point;
+    if (r.kind === 'node' || r.kind === 'nodePair' || r.kind === 'pixel' || r.kind === 'spriteEdge') return r.nodeId;
+    return r.a.nodeId;
+  };
+  const ordered = anchors
+    .map((a, idx) => ({ a, idx }))
+    .filter(({ a }) => a.enabled && frozen.get(a.id))
+    .sort((x, y) => (y.a.priority ?? (anchors.length - y.idx)) - (x.a.priority ?? (anchors.length - x.idx)));
+  for (const { a } of ordered) {
+    if (ownerOf(a) === chain.endNodeId) {
+      const f = frozen.get(a.id)!;
+      // 链目标是「尖端」口径（末关节 + frame +Y × 尖端长），冻结位是
+      // 主点（末关节）口径：按当遍 FK 的末关节 frame 把冻结位换算成
+      // 尖端目标，关节才会落回冻结位（残差由收尾遍刚性兜底）。
+      const endWt = transforms?.get(chain.endNodeId);
+      if (endWt) {
+        const dir = (endWt.variantIndex ?? 0) as DirectionIndex;
+        let tipLen = chain.tipLength ?? 0;
+        if (tipLen <= 0) {
+          tipLen = resolveSpriteTipLength(character, chain.endNodeId, dir, sprites) ?? 0;
+        }
+        if (tipLen <= 0) {
+          // 回退末段长：末关节与其父关节的当遍距离
+          const endNode = character.nodes[chain.endNodeId];
+          const parentWt = endNode?.parentId ? transforms?.get(endNode.parentId) : undefined;
+          if (parentWt) {
+            tipLen = Math.hypot(
+              subToPx(endWt.worldX) - subToPx(parentWt.worldX),
+              subToPx(endWt.worldY) - subToPx(parentWt.worldY),
+              subToPx(endWt.worldZ) - subToPx(parentWt.worldZ),
+            );
+          }
+        }
+        if (tipLen > 1e-6) {
+          const ya = frameYAxisWorld(endWt.worldFrame, dir);
+          return {
+            ...chain,
+            target3D: {
+              x: f.points[0].x + ya.x * tipLen,
+              y: f.points[0].y + ya.y * tipLen,
+              z: f.points[0].z + ya.z * tipLen,
+            },
+          };
+        }
+      }
+      return { ...chain, target3D: { ...f.points[0] } };
+    }
+  }
+  return chain;
+}
+
+export interface ClampPassResult {
+  delta: ClampV3;
+  reports: ClampReport[];
+  resettleWanted: boolean;
+}
+
+/**
+ * 锚定施加遍（就地改 transforms）：硬优先级 Δ 整角色刚性平移 +
+ * 生效点对/边缘的所在节点子树绕冻结主点对齐旋转。返回报告与
+ * resettle 意愿（由 computeWorldTransforms 决定是否重算）。
+ */
+export function applyClampPass(
+  character: Character,
+  transforms: Map<string, WorldTransform>,
+  frozen: ClampStateMap,
+  sprites?: Record<string, Sprite>,
+  geometryDirection?: DirectionIndex,
+): ClampPassResult {
+  const zero: ClampPassResult = { delta: cv3(0, 0, 0), reports: [], resettleWanted: false };
+  const anchors = character.clampAnchors;
+  if (!anchors || anchors.length === 0) return zero;
+  const table = clampSpriteTable(sprites, character);
+  const engaged: Array<{ anchor: ClampAnchor; idx: number; frozenPts: ClampV3[]; settled: { points: ClampV3[]; ownerNodeId: string; pairSameNode?: boolean } }> = [];
+  anchors.forEach((anchor, idx) => {
+    if (!anchor.enabled) return;
+    const f = frozen.get(anchor.id);
+    if (!f) return;
+    const settled = clampAnchorPoints(character, transforms, anchor, table);
+    if (!settled) return;
+    engaged.push({ anchor, idx, frozenPts: f.points, settled });
+  });
+  if (engaged.length === 0) return zero;
+  const effPrio = (e: { anchor: ClampAnchor; idx: number }) => e.anchor.priority ?? (anchors.length - e.idx);
+  engaged.sort((a, b) => effPrio(b) - effPrio(a));
+  const top = engaged[0];
+  // Δ：单点 = 主点残差；同节点双点（精灵边缘/同节点像素对）= 主点残差
+  // （次点由节点局部旋转精确带到位）；跨节点点对 = 两端残差均值
+  let delta = sub3(top.frozenPts[0], top.settled.points[0]);
+  if (top.frozenPts.length > 1 && top.settled.points.length > 1 && !top.settled.pairSameNode) {
+    const d2 = sub3(top.frozenPts[1], top.settled.points[1]);
+    delta = cv3((delta.x + d2.x) / 2, (delta.y + d2.y) / 2, (delta.z + d2.z) / 2);
+  }
+  if (len3(delta) > 1e-9) {
+    for (const [id, w] of transforms) {
+      transforms.set(id, {
+        ...w,
+        worldX: pxToSub(subToPx(w.worldX) + delta.x),
+        worldY: pxToSub(subToPx(w.worldY) + delta.y),
+        worldZ: pxToSub(subToPx(w.worldZ) + delta.z),
+      });
+    }
+  }
+  // 节点局部旋转：每个生效的双点锚，把所在节点子树绕其主点（平移后位）对齐到冻结段向
+  for (const e of engaged) {
+    if (e.frozenPts.length < 2 || e.settled.points.length < 2) continue;
+    const curDir = sub3(e.settled.points[1], e.settled.points[0]);
+    const froDir = sub3(e.frozenPts[1], e.frozenPts[0]);
+    // 旋转在朝向基坐标下算（frame 的 mat3 活在基空间）：段向先换基
+    const rotDir = (geometryDirection ?? transforms.get(e.settled.ownerNodeId)?.variantIndex ?? 0) as DirectionIndex;
+    const toBasis = (vv: ClampV3): ClampV3 => { const b = worldToViewBasis(vv.x, vv.y, vv.z, rotDir); return cv3(b.h, b.y, b.d); };
+    const R = clampRotationBetween(toBasis(curDir), toBasis(froDir));
+    if (!R) continue;
+    const about = cv3(e.settled.points[0].x + delta.x, e.settled.points[0].y + delta.y, e.settled.points[0].z + delta.z);
+    for (const id of clampSubtreeIds(character, e.settled.ownerNodeId)) {
+      const w = transforms.get(id);
+      if (!w) continue;
+      const px = subToPx(w.worldX), py = subToPx(w.worldY), pz = subToPx(w.worldZ);
+      const rr = applyFrameRotation(R, px - about.x, py - about.y, pz - about.z, rotDir);
+      const frame = mat3Mul(R, w.worldFrame);
+      transforms.set(id, {
+        ...w,
+        worldX: pxToSub(about.x + rr.x),
+        worldY: pxToSub(about.y + rr.y),
+        worldZ: pxToSub(about.z + rr.z),
+        worldFrame: frame,
+        worldAngle: geometryDirection !== undefined
+          ? frameViewAngleForDirection(frame, geometryDirection, w.variantIndex)
+          : frameViewAngle(frame),
+      });
+    }
+  }
+  const reports = engaged.map((e) => {
+    let residual = 0;
+    e.frozenPts.forEach((fp, i) => {
+      const sp = e.settled.points[i];
+      if (sp) residual = Math.max(residual, len3(sub3(fp, cv3(sp.x + delta.x, sp.y + delta.y, sp.z + delta.z))));
+    });
+    return { anchorId: e.anchor.id, engaged: true, residual };
+  });
+  return { delta, reports, resettleWanted: engaged.some((e) => !!e.anchor.resettle) };
+}
+
 /**
  * 某节点摞的接缝弯曲带入参：根端取父节点、尖端取关节最贴摞尖端
  * 的子节点（摞轴长与子关节局部位置比对）；当帧帧取 now、静止帧取
@@ -2331,6 +2753,8 @@ export function generateRenderPlan(
   mannequinFallback?: boolean,
   // 编辑器显示效果（仅主画布传）：人偶衣物色区比例 + 空气透视强度
   editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number; faceGuide?: boolean },
+  // 钳制锚定上下文（主画布/导出会话传；不传则不锚定）
+  clampCtx?: ClampContext,
 ): RenderPlan {
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
@@ -2355,7 +2779,7 @@ export function generateRenderPlan(
   // 行为层在 computeWorldTransforms 内统一叠加（出图/点选/覆盖层同源）
   const worldTransforms = computeWorldTransforms(
     character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
-    undefined, geometryDirection,
+    undefined, geometryDirection, clampCtx,
   );
 
   // Step 3: Get active costume set（用生效状态的集 id，含轨道/蓝图覆盖）
@@ -4649,6 +5073,7 @@ function renderPuppetViaUnifiedPipeline(
   geometryDirection?: DirectionIndex,
   mannequinFallback?: boolean,
   editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number; faceGuide?: boolean },
+  clampCtxFor?: (character: Character) => ClampContext | undefined,
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
@@ -4667,6 +5092,7 @@ function renderPuppetViaUnifiedPipeline(
       pickSlashClip(animationClips, activeClipId, unifiedCharacter.id, currentFrame) ?? null,
       mannequinFallback,
       editorFx,
+      clampCtxFor?.(unifiedCharacter),
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }
@@ -4705,6 +5131,7 @@ export function renderUnified(
   geometryDirection?: DirectionIndex,
   mannequinFallback?: boolean,
   editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number; faceGuide?: boolean },
+  clampCtxFor?: (character: Character) => ClampContext | undefined,
 ): void {
   if (backgroundColor !== 'transparent') {
     ctx.fillStyle = backgroundColor;
@@ -4716,7 +5143,7 @@ export function renderUnified(
       currentFrame, frameRate, globalModifiers, animationVariables,
       canvasModifierTracks, proceduralAnimations, globalBlueprint, sprites,
       perspectiveForeshorten, animationClips, activeClipId, geometryDirection,
-      mannequinFallback, editorFx,
+      mannequinFallback, editorFx, clampCtxFor,
     );
   }
   if (effectTracks) {

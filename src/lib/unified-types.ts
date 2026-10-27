@@ -1259,6 +1259,42 @@ export interface IKChain {
   enabled: boolean;
 }
 
+/** 钳制锚定的指定点来源：求值时一律解析为 1–2 个世界点（主点在前）。 */
+export type ClampPointRef =
+  | { kind: 'node'; nodeId: string }
+  | { kind: 'nodePair'; nodeId: string; nodeId2: string }
+  | { kind: 'pixel'; nodeId: string; mark?: string; x?: number; y?: number }
+  | {
+      kind: 'pixelPair';
+      a: { nodeId: string; mark?: string; x?: number; y?: number };
+      b: { nodeId: string; mark?: string; x?: number; y?: number };
+    }
+  | { kind: 'spriteEdge'; nodeId: string; edge: 'top' | 'bottom' | 'left' | 'right' };
+
+/** 钳制触发：高度面 / 目标点 / 目标范围 / 场景固体（仅运行时包内求值）。 */
+export type ClampTrigger =
+  | { kind: 'height'; y: number; side: 'below' | 'above' }
+  | { kind: 'point'; target: { x: number; y: number; z: number }; radius: number }
+  | {
+      kind: 'range';
+      shape: 'rect' | 'circle';
+      rect?: { x: number; y: number; w: number; h: number };
+      circle?: { x: number; y: number; r: number };
+    }
+  | { kind: 'scene' };
+
+export interface ClampAnchor {
+  id: string;
+  name: string;
+  enabled: boolean;
+  point: ClampPointRef;
+  trigger: ClampTrigger;
+  /** 硬优先级（大者先）；缺省按列表序（靠前者优先） */
+  priority?: number;
+  /** 反移后重解（可设置选项，默认关）：开则整角色反移后再重解一遍各链 */
+  resettle?: boolean;
+}
+
 /**
  * IK 链求解目标的唯一解析口径：返回原点中心世界空间的 3D 目标（像素）。
  * - target3D 存在 → 直接用；
@@ -1310,6 +1346,13 @@ export interface Character {
   // determined by walking from rootNodeId to endNodeId via parent links.
   // During render, IK overrides the FK angles for chain joints.
   ikChains?: IKChain[];
+
+  // ---- 钳制锚定 ----
+  // 指定点（节点/节点对/像素/像素对/精灵边缘）由 IK 结算到达钳制
+  // 高度/目标点/目标范围时暂时锚定：锚点全位置冻结不滑动，整角色
+  // 反向横移把它送回冻结位（结算位姿刚性不动）。见 clamp 引擎
+  // （unified-render 钳制段）与 spikes/clamp-anchor/RESEARCH.md。
+  clampAnchors?: ClampAnchor[];
 
   // ---- Baked IK Blueprint ----
   // Persistent blueprint generated from ikChains via the Bake button.

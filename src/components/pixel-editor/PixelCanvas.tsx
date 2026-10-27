@@ -5,6 +5,7 @@ import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
 import { renderCharacterOnionFrameFromCharacter, geometryDirectionFromToggle } from '@/lib/unified-render';
+import { editorClampContextFor } from '@/lib/clamp-session';
 import { clearJointDiscs, regenerateJointDiscs } from '@/lib/joint-discs';
 import { renderSpriteEditUnified } from '@/lib/unified-render';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
@@ -27,6 +28,7 @@ import {
 import {
   renderPuppetSkeletonOverlay,
   renderIKTargetHandles,
+  renderClampAnchorGizmos,
   renderFaceGuideOverlay,
   renderPivotCrosshair,
   renderStrokeCursorIndicator,
@@ -308,7 +310,11 @@ export default function PixelCanvas() {
             pantsRatio: useEditorStore.getState().mannequinPantsRatio,
             fogStrength: useEditorStore.getState().depthFogStrength,
             faceGuide: useEditorStore.getState().showFaceGuide,
-          });
+          },
+          (ch) => editorClampContextFor(ch, currentFrame, animationClips, {
+            canvasWidth: s.canvasWidth, canvasHeight: s.canvasHeight,
+            frameRate: s.frameRate, sprites: freshStore.sprites,
+          }));
       } finally {
         endPickFrame();
       }
@@ -400,6 +406,7 @@ export default function PixelCanvas() {
       const activeChar = charList.find((c) => c.id === s.activePuppetSkeletonId) ?? charList[0];
       if (activeChar && s.showPuppetSkeleton) {
         renderIKTargetHandles(rc, activeChar);
+        renderClampAnchorGizmos(rc, activeChar);
       }
       // 五官参照（选中节点头部框点位）
       if (activeChar && useEditorStore.getState().showFaceGuide) {
