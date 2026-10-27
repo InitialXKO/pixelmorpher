@@ -1083,6 +1083,76 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const result = applyLocalInflate(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
     return { pixels: pixelsVal(result) };
   },
+  heat_flame: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyHeatFlame } = require('../engine/modifier-renderers/line-fx');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyHeatFlame(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  crystal_cage: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyCrystalCage } = require('../engine/modifier-renderers/line-fx');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyCrystalCage(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  void_vortex: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyVoidVortex } = require('../engine/modifier-renderers/line-fx');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyVoidVortex(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  ground_wave: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applyGroundWave } = require('../engine/modifier-renderers/line-fx');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applyGroundWave(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
+  sword_ring: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { applySwordRing } = require('../engine/modifier-renderers/line-fx');
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't') params[k] = asNumber(v as BlueprintValue);
+    }
+    const h = inputPixels.length;
+    const w = inputPixels[0]?.length ?? 0;
+    const result = applySwordRing(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
+    return { pixels: pixelsVal(result) };
+  },
   cleanup: (n, i, ctx): Record<string, BlueprintValue> => {
     const inputPixels = asPixels(i.pixels as BlueprintValue);
     if (!inputPixels) return {};
@@ -2399,6 +2469,11 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   hyperbolic_stretch: '双曲拉伸',
   ring_ripple: '环形波纹',
   cleanup: '去孤点',
+  heat_flame: '热力场焰',
+  crystal_cage: '晶柱笼',
+  void_vortex: '虚空涡流',
+  ground_wave: '裂地劲波',
+  sword_ring: '御剑环阵',
   // 新增补全
   color_replace: '颜色替换',
   cylinder_rotate: '圆柱旋转',
@@ -2445,6 +2520,7 @@ const PIXEL_NODE_TYPES = new Set([
   'shatter_dissolve', 'annihilate', 'teleport', 'crt_off',
   'bend', 'elliptical_compress', 'dumbbell_stretch',
   'pillow_stretch', 'hyperbolic_stretch', 'ring_ripple',
+  'heat_flame', 'crystal_cage', 'void_vortex', 'ground_wave', 'sword_ring',
 ]);
 
 

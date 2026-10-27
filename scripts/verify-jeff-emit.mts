@@ -439,5 +439,65 @@ console.log('H 组：环境场样本——双侧逐值对拍 + 三模式行为')
   check('H12 坏模式归一回落 fall', normalizeDynamicParams({ ...defaultDynamicParams(), envMode: 'zzz' } as DynamicPatternParams).envMode === 'fall');
 }
 
+// ---- J 组：乙10 蓝图线绘节点 ×5 ----
+console.log('J 组：线绘五节点（规格 + 蓝图求值原路 + 行为）');
+{
+  const { BLUEPRINT_NODE_SPECS } = await import('../src/lib/blueprint/specs');
+  const { evaluateNodeOutput, getBlueprintNodeLabel } = await import('../src/lib/blueprint/eval');
+  const { asPixels } = await import('../src/lib/blueprint/ir');
+  const NODES: [string, Record<string, unknown>][] = [
+    ['heat_flame', { heightPx: 12, speed: 1.2 }],
+    ['crystal_cage', { count: 6, lengthPx: 15 }],
+    ['void_vortex', { arms: 3, speed: 0.5 }],
+    ['ground_wave', { speed: 0.9 }],
+    ['sword_ring', { count: 5, speed: 0.45 }],
+  ];
+  check('J1 五节点规格在册（pixels→pixels）+ 中文标签', NODES.every(([tp]) =>
+    BLUEPRINT_NODE_SPECS[tp]?.outputs.includes('pixels') && getBlueprintNodeLabel(tp) !== tp));
+  // 24×24 画布，实体方块（行 8..19、列 7..16）
+  const W = 24, H = 24;
+  const body: (string | null)[][] = Array.from({ length: H }, (_, y) =>
+    Array.from({ length: W }, (_, x) => (y >= 8 && y <= 19 && x >= 7 && x <= 16 ? '#3366aa' : null)));
+  const snapshot = JSON.stringify(body);
+  const run = (type: string, params: Record<string, unknown>, frame: number) => {
+    const graph = {
+      nodes: [
+        { id: 'src', type: 'sprite_source', params: {}, inputs: {}, ui: { x: 0, y: 0 } },
+        { id: 'fx', type, params, inputs: { pixels: { nodeId: 'src', output: 'pixels' } }, ui: { x: 1, y: 0 } },
+      ],
+      outputId: 'fx',
+    };
+    const out = evaluateNodeOutput(graph as never, 'fx', { frame, frameRate: 12, vars: {}, spritePixels: body } as never) as Record<string, unknown> | null;
+    return out ? asPixels(out.pixels as never) : null;
+  };
+  const diff = (g: (string | null)[][] | null) => {
+    if (!g) return { added: [] as { x: number; y: number; c: string }[], changedBody: 0 };
+    const added: { x: number; y: number; c: string }[] = [];
+    let changedBody = 0;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      if (!body[y]![x] && g[y]![x]) added.push({ x, y, c: g[y]![x]! });
+      if (body[y]![x] && g[y]![x] !== body[y]![x]) changedBody++;
+    }
+    return { added, changedBody };
+  };
+  const [hf, cc, vv, gw, sr] = NODES.map(([tp, ps]) => run(tp, ps, 6));
+  const dHF = diff(hf), dCC = diff(cc), dVV = diff(vv), dGW = diff(gw), dSR = diff(sr);
+  check('J2 热力场焰：火焰只在实体上方（y<8）且多色', dHF.added.length > 10 && dHF.added.every((a) => a.y < 8)
+    && new Set(dHF.added.map((a) => a.c)).size >= 2, `新增 ${dHF.added.length}`);
+  check('J3 晶柱笼：晶色在实体外生出', dCC.added.length > 8 && dCC.added.some((a) => a.c === '#9fe8ff' || a.c === '#ffffff'), `新增 ${dCC.added.length}`);
+  check('J4 虚空涡流：紫色螺旋点（蓝分量 > 红分量）', dVV.added.length > 10 && dVV.added.every((a) => {
+    const n = parseInt(a.c.slice(1), 16);
+    return (n & 0xff) > ((n >> 16) & 0xff);
+  }), `新增 ${dVV.added.length}`);
+  check('J5 裂地劲波：波环贴地（新增格 y ≥ 15）且动身体下沿外不改', dGW.added.length > 4 && dGW.added.every((a) => a.y >= 15), `新增 ${dGW.added.length}`);
+  check('J6 御剑环阵：剑色在实体外成阵', dSR.added.length > 10 && dSR.added.some((a) => a.c === '#d9ecff' || a.c === '#5a7ea6'), `新增 ${dSR.added.length}`);
+  check('J7 只盖空格纪律（除劲波贴地带外，实体格不变）', dHF.changedBody === 0 && dCC.changedBody === 0 && dVV.changedBody === 0 && dSR.changedBody === 0);
+  check('J8 原图未被改动（不可变）', JSON.stringify(body) === snapshot);
+  check('J9 时间动画：换帧输出不同（五节点）', NODES.every(([tp, ps]) =>
+    JSON.stringify(run(tp, ps, 6)) !== JSON.stringify(run(tp, ps, 9))));
+  check('J10 确定性：同帧两次求值逐格同', NODES.every(([tp, ps]) =>
+    JSON.stringify(run(tp, ps, 6)) === JSON.stringify(run(tp, ps, 6))));
+}
+
 console.log(`\n合计：${pass} 过 / ${fail} 败`);
 if (fail > 0) process.exit(1);

@@ -299,6 +299,31 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     outputs: ['pixels'],
     params: ['minSize'],
   },
+  heat_flame: {
+    inputs: ['pixels', 't', 'heightPx', 'speed'],
+    outputs: ['pixels'],
+    params: ['heightPx', 'speed', 'seed', 'colorHot', 'colorCool'],
+  },
+  crystal_cage: {
+    inputs: ['pixels', 't', 'count', 'lengthPx', 'speed'],
+    outputs: ['pixels'],
+    params: ['count', 'lengthPx', 'speed', 'seed', 'color', 'coreColor'],
+  },
+  void_vortex: {
+    inputs: ['pixels', 't', 'arms', 'speed'],
+    outputs: ['pixels'],
+    params: ['arms', 'speed', 'seed', 'color', 'colorDeep'],
+  },
+  ground_wave: {
+    inputs: ['pixels', 't', 'speed'],
+    outputs: ['pixels'],
+    params: ['speed', 'seed', 'color', 'colorDeep'],
+  },
+  sword_ring: {
+    inputs: ['pixels', 't', 'count', 'speed'],
+    outputs: ['pixels'],
+    params: ['count', 'speed', 'orbitRX', 'orbitRY', 'color', 'colorEdge'],
+  },
   local_inflate: {
     inputs: ['pixels', 't', 'centerX', 'centerY', 'radius', 'strength'],
     outputs: ['pixels'],
