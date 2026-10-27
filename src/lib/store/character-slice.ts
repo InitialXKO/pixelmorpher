@@ -14,6 +14,7 @@ import type {
 import { createDefaultNode, createDefaultCostumeSet, createDefaultCostumePiece } from '../unified-types';
 import type { DirectionIndex } from '../unified-types';
 import { cloneSubtreeTransposed, cloneClipDataForTranspose } from '../clone-transpose';
+import { syncCharacterPatternBlueprints } from '../blueprint/pattern-sync';
 
 export type CharacterSlice = {
   // ---- Character CRUD ----
@@ -174,12 +175,18 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
   },
 
   updateUnifiedCharacter: (id, updates) => {
-    set((s) => ({
-      unifiedCharacters: {
-        ...s.unifiedCharacters,
-        [id]: { ...s.unifiedCharacters[id]!, ...updates, updatedAt: Date.now() },
-      },
-    }));
+    set((s) => {
+      const merged = { ...s.unifiedCharacters[id]!, ...updates, updatedAt: Date.now() };
+      return {
+        unifiedCharacters: {
+          ...s.unifiedCharacters,
+          // 图案↔蓝图统一：服装集变更（含件挂载图案编辑）→ 图案节点手术式同步落盘
+          [id]: (updates as { costumeSets?: unknown }).costumeSets !== undefined
+            ? syncCharacterPatternBlueprints(merged as never, true) as typeof merged
+            : merged,
+        },
+      };
+    });
   },
 
   setUnifiedDirection: (characterId, variantIndex) => {
@@ -317,14 +324,18 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
       if (!character) return s;
       const node = character.nodes[nodeId];
       if (!node) return s;
+      const mergedChar = {
+        ...character,
+        nodes: { ...character.nodes, [nodeId]: { ...node, ...updates } },
+        updatedAt: Date.now(),
+      };
       return {
         unifiedCharacters: {
           ...s.unifiedCharacters,
-          [characterId]: {
-            ...character,
-            nodes: { ...character.nodes, [nodeId]: { ...node, ...updates } },
-            updatedAt: Date.now(),
-          },
+          // 图案↔蓝图统一：节点图案列表变更 → 图案节点手术式同步落盘
+          [characterId]: (updates as { dynamicPatterns?: unknown }).dynamicPatterns !== undefined
+            ? syncCharacterPatternBlueprints(mergedChar as never, true) as typeof mergedChar
+            : mergedChar,
         },
       };
     });

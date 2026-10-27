@@ -13,7 +13,17 @@ export interface BlueprintNodeSpec {
   params: string[];
 }
 
+import { defaultDynamicParams } from '../dynamic-patterns';
+
 export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
+  // 动态图案（图案↔蓝图统一）：图案实例在图里的化身，params = 图案
+  // 参数全集（+/- 暴露即可接线覆盖）；求值由渲染计划/进包从图提取
+  // 实例后走图案引擎，本节点不产出像素/变换端口
+  dynamic_pattern: {
+    inputs: ['t', 'gate'],
+    outputs: [],
+    params: [...Object.keys(defaultDynamicParams()), 'enabled'],
+  },
   // ---- 源 ----
   time: { inputs: [], outputs: ['out'], params: [] },
   // timeGate: 时间范围门控，输出 0~1 权重

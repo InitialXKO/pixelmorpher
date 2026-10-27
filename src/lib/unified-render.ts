@@ -77,6 +77,8 @@ import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/procedural';
 import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followAnchoredDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
+import { effectivePatternGraph, resolvePatternsFromGraph } from './blueprint/pattern-sync';
+import { evaluateNodeOutput } from './blueprint/eval';
 import { markPointPx, markDirAngleDeg } from './sprite-marks';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
 import { applyCanvasModifiers } from './engine/canvas-modifiers';
@@ -1730,8 +1732,8 @@ export function generateRenderPlan(
     : 0;
   if (yawDeltaRad !== 0) rotateWorldTransformsForYaw(worldTransforms, yawDeltaRad, geometryDirection);
 
-  // 追随段取样（动态模式跨部件驱动）：源部件位姿取「轨道位姿」——与
-  // 导出烘焙同源的剥离 FK（去行为/蓝图/修改器/IK），当前帧与滞后帧
+  // 追随段取样（动态模式跨部件驱动）：源部件位姿取渲染同源的完整
+  // 位姿（轨道+蓝图+行为/IK，2026-10-27 改口径），当前帧与滞后帧
   // 各一份。无追随实例时整块跳过。增量在画布空间算、画布空间用。
   const followSlotToNode = new Map<string, string>();
   for (const n of Object.values(character.nodes)) {
@@ -1742,29 +1744,33 @@ export function generateRenderPlan(
       (cs) => cs.pieces[n.slot?.slotKey ?? n.id]?.dynamicPatterns)];
     return lists.some((l) => (l ?? []).some((i) => i.enabled && i.params.followEnabled && i.params.followSource));
   });
-  let followStripped: Character | undefined;
   const followMaps = new Map<number, Map<string, WorldTransform>>();
   const followPoseAt = (srcId: string, atFrame: number) => {
     let map = followMaps.get(atFrame);
     if (!map) {
-      followStripped ??= {
-        ...character,
-        behaviorGraphs: {},
-        ikChains: [],
-        nodes: Object.fromEntries(Object.values(character.nodes).map((n) => [
-          n.id, { ...n, blueprint: null, modifiers: [] },
-        ])),
-      } as Character;
-      map = computeWorldTransforms(
-        followStripped, atFrame, canvasWidth, canvasHeight, frameRate,
-        undefined, undefined, undefined, geometryDirection,
-      );
+      // 追随读蓝图（2026-10-27 用户拍板）：源部件位姿取渲染同源的
+      // 完整位姿——轨道 + 蓝图变换（按取样帧求值）+ 行为/IK（在
+      // computeWorldTransforms 内叠加），不再剥离成纯轨道位姿。
+      // 图案形变/自旋是精灵局部效果、不进位姿求值，追随不递归。
+      // 蓝图求值带模块级节点状态：取样前后快照/恢复，免得滞后帧
+      // 求值污染主帧的状态节点（hold/step 一类）。
+      const savedState = new Map(blueprintNodeState);
+      try {
+        const bpT = evaluateBlueprintTransforms(character, atFrame, frameRate, blueprintVars);
+        map = computeWorldTransforms(
+          character, atFrame, canvasWidth, canvasHeight, frameRate,
+          variableContext, bpT, undefined, geometryDirection,
+        );
+      } finally {
+        blueprintNodeState.clear();
+        for (const [k, v] of savedState) blueprintNodeState.set(k, v);
+      }
       followMaps.set(atFrame, map);
     }
     const w = map.get(srcId);
     if (!w) return undefined;
     const dir = (map.get(character.rootNodeId)?.variantIndex ?? currentDirection) as DirectionIndex;
-    // 追随源位姿与主变换同一偏航口径（followStripped 的 FK 未经主旋转）
+    // 追随源位姿与主变换同一偏航口径（取样 FK 未经主旋转）
     let wx = w.worldX, wz = w.worldZ, wa = w.worldAngle;
     if (yawDeltaRad !== 0) {
       const c = Math.cos(yawDeltaRad), s = Math.sin(yawDeltaRad);
@@ -1960,12 +1966,20 @@ export function generateRenderPlan(
       const hr = yw.x * tR.cos + yw.z * tR.sin;
       foreshorten = Math.min(1, Math.hypot(hr, yw.y));
     }
-    // 动态模式（双挂载解析）：形变段乘进本指令的 stretch/scaleX——
-    // 只动本节点精灵、不沿层级传播；粒子由执行端按 dynamicPatterns 绘制
-    const dynResolved = resolveDynamicPatterns(
-      node.dynamicPatterns,
-      activeCostumeSet?.pieces[node.slot?.slotKey ?? node.id]?.dynamicPatterns,
-    );
+    // 动态模式（图案↔蓝图统一：从生效图解析，接线参数实时覆盖）：
+    // 形变段乘进本指令的 stretch/scaleX——只动本节点精灵、不沿层
+    // 级传播；粒子由执行端按 dynamicPatterns 绘制
+    const patternGraph = effectivePatternGraph(character, node as never);
+    const dynResolved = patternGraph
+      ? resolvePatternsFromGraph(patternGraph, activeCostumeSet?.id, (srcId) => {
+        try {
+          return evaluateNodeOutput(patternGraph, srcId, {
+            frame, frameRate, vars: blueprintVars,
+            costumes: character.costumeSets, costumeSlot: node.slot?.slotKey,
+          } as never) as Record<string, unknown> | null;
+        } catch { return null; }
+      })
+      : [];
     let dynSx = 1, dynSy = 1;
     let folDx = 0, folDy = 0, folDa = 0, folDs = 1;
     let spinDeg = 0;

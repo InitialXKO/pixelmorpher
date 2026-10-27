@@ -110,6 +110,10 @@ function applyLutPreset(color: string, preset: string): string {
 export const EVALUATORS: Record<string, NodeEvaluator> = {
   // ---- 源 ----
   time: (_n, _i, ctx) => ({ out: num(ctxSeconds(ctx)) }),
+  // 动态图案（图案↔蓝图统一）：实例化身节点，本身不产出值——渲染
+  // 计划/进包经 pattern-sync 从图提取实例后走图案引擎；注册空求值
+  // 器让拓扑求值把它当普通节点（接线源照常求值）
+  dynamic_pattern: () => ({}),
   // timeGate: 时间范围门控
   // start/end: 生效帧范围（-1 表示无限制）
   // fadeIn/fadeOut: 淡入淡出帧数（smoothstep）
@@ -2311,6 +2315,7 @@ export function listBlueprintNodeTypes(): string[] {
 export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   // 源
   time: '时间',
+  dynamic_pattern: '动态图案',
   timeGate: '时间门',
   const: '常量',
   var: '变量',

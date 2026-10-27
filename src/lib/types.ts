@@ -1118,6 +1118,8 @@ export interface Project {
   frameRate: number;  // Default frame rate for new clips
   /** 图内时间单位版本：2 = 秒制（time/周期/相位圈数）；缺失/1 = 旧帧制，加载时一次性迁移 */
   timeUnitsVersion?: number;
+  /** 图案↔蓝图统一迁移标记（1 = 图案实例已镜像进节点蓝图） */
+  patternBlueprintVersion?: number;
   totalFrames: number; // Default total frames for new clips
   currentFrame: number;
   backgroundColor: string;

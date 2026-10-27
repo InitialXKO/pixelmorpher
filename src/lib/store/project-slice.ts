@@ -13,6 +13,7 @@ import { _isDragActive, _dragPostStackLen, _pendingTrajectorySpriteIds, setDragA
 import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '../engine';
 import { resolveChainTarget3D } from '../unified-types';
 import { migrateProjectTimeUnits } from '../blueprint/time-migration';
+import { syncCharacterPatternBlueprints } from '../blueprint/pattern-sync';
 import { migrateClipStructure } from '../clip-migration';
 import { backfillSpriteBirth } from '../sprite-folder';
 
@@ -30,6 +31,7 @@ const defaultProject: Project = {
   canvasHeight: 256,
   frameRate: 12,
   timeUnitsVersion: 2,
+  patternBlueprintVersion: 1,
   totalFrames: 24,
   currentFrame: 0,
   backgroundColor: '#1a1a2e',
@@ -175,6 +177,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       canvasHeight: s.canvasHeight,
       frameRate: s.frameRate,
       timeUnitsVersion: s.timeUnitsVersion ?? 2,
+      patternBlueprintVersion: (s as any).patternBlueprintVersion ?? 1,
       totalFrames: s.totalFrames,
       currentFrame: s.currentFrame,
       backgroundColor: s.backgroundColor,
@@ -349,6 +352,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         canvasHeight: state.canvasHeight,
         frameRate: state.frameRate,
         timeUnitsVersion: state.timeUnitsVersion ?? 2,
+        patternBlueprintVersion: (state as any).patternBlueprintVersion ?? 1,
         totalFrames: state.totalFrames,
         currentFrame: state.currentFrame,
         backgroundColor: state.backgroundColor,
@@ -500,6 +504,15 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         (file.project.globalModifiers ?? []) as any,
         file.project.frameRate ?? 12,
       );
+    }
+
+    // 图案↔蓝图统一迁移（2026-10-27 甲案）：存量工程把图案实例
+    // 镜像进已有节点蓝图（dynamic_pattern 节点，手术式）；无蓝图
+    // 的节点不新建（读侧生成覆盖）。一次性，标记后跳过。
+    if ((file.project as any).patternBlueprintVersion !== 1) {
+      for (const [cid, ch] of Object.entries(unifiedCharacters)) {
+        (unifiedCharacters as any)[cid] = syncCharacterPatternBlueprints(ch as any, false);
+      }
     }
 
     for (const ch of Object.values(unifiedCharacters) as any[]) {
