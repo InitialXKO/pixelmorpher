@@ -803,6 +803,10 @@ export interface Node {
   // yaw: -1（左）~ 1（右）；pitch: -1（上）~ 1（下）
   faceTurn?: { yaw: number; pitch: number };
 
+  // ---- 五官点位（角色级可调参数，相对头部框的比例） ----
+  // 垫图/转面参照按参数现算（见 lib/face-features）；缺省 = 标准三庭组。
+  faceFeatures?: import('./face-features').FaceFeatureParams;
+
   // ---- Dynamic Generated Items ----
   generated?: GeneratedItem;
 

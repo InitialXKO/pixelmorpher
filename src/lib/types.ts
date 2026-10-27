@@ -1753,6 +1753,8 @@ export interface EditorState {
   showPuppetSkeleton: boolean;
   /** 人偶兜底显示开关（无精灵节点画胶囊人偶，编辑器专用） */
   showMannequinFallback: boolean;
+  /** 五官参照显示开关（选中节点头部框点位叠画，编辑器专用） */
+  showFaceGuide: boolean;
   activePuppetSkeletonId: string | null;
   /** 节点锁定（中键循环命中/节点树点选置位；空白单击解除） */
   nodeLockId: string | null;

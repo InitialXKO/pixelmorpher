@@ -17,7 +17,7 @@ import {
   type DynChildRef, type EntryDef, type LibraryEntry, type SurfaceEntryDef,
 } from '@/lib/library-entries';
 import { expandDynamicEntry } from '@/lib/dynamic-expand';
-import { cachedThumb, dynamicPosterRGBA, samplePreviewCharacter, surfaceThumbRGBA } from '@/lib/library-thumbs';
+import { cachedThumb, dynamicPosterRGBA, faceThumbRGBA, samplePreviewCharacter, surfaceThumbRGBA } from '@/lib/library-thumbs';
 import { convertCharacterToRuntimePackage } from '@/lib/proc-runtime/convert';
 import { buildRuntimeHtml } from '@/lib/proc-runtime/runtime-template';
 import type { Character } from '@/lib/unified-types';
@@ -42,7 +42,7 @@ export default function PatternLibraryPanel({
   onChanged?: () => void;
 }) {
   const [userEntries, setUserEntries] = useState<LibraryEntry[]>(() => loadUserEntries());
-  const [kindFilter, setKindFilter] = useState<'all' | 'dynamic' | 'surface' | 'chain'>('all');
+  const [kindFilter, setKindFilter] = useState<'all' | 'dynamic' | 'surface' | 'chain' | 'face'>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   /** 正在编辑的草稿（工作副本；保存才落 withDraft） */
   const [draftWork, setDraftWork] = useState<{ entryId: string; def: DynamicEntryDef } | null>(null);
@@ -146,6 +146,7 @@ export default function PatternLibraryPanel({
             <option value="dynamic">动态</option>
             <option value="surface">表面</option>
             <option value="chain">链</option>
+            <option value="face">脸型</option>
           </select>
           <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2" onClick={() => createEntry('leaf')}>新建动态叶子</Button>
           <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2" onClick={() => createEntry('parent')}>新建动态父模式</Button>
@@ -164,11 +165,11 @@ export default function PatternLibraryPanel({
                 >
                   <div className="flex items-center gap-1.5 mb-0.5">
                     <EntryThumb entry={e} index={libraryIndexOf(all)} size={30} />
-                    <span className="text-[8px] text-gray-600">{e.kind === 'dynamic' ? '定格图' : e.kind === 'chain' ? '链段' : '烘焙图'}</span>
+                    <span className="text-[8px] text-gray-600">{e.kind === 'dynamic' ? '定格图' : e.kind === 'chain' ? '链段' : e.kind === 'face' ? '点位' : '烘焙图'}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] text-gray-200 flex-1 truncate">{e.name}</span>
-                    <span className="text-[8px] text-gray-500">{e.kind === 'dynamic' ? '动态' : e.kind === 'chain' ? '链' : '表面'}</span>
+                    <span className="text-[8px] text-gray-500">{e.kind === 'dynamic' ? '动态' : e.kind === 'chain' ? '链' : e.kind === 'face' ? '脸型' : '表面'}</span>
                     {e.builtin && <span className="text-[8px] text-gray-600">内置</span>}
                   </div>
                   <div className="text-[8px] text-gray-500">
@@ -185,7 +186,7 @@ export default function PatternLibraryPanel({
               <>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[11px] text-gray-100">{selected.name}</span>
-                  <span className="text-[9px] text-gray-500">{selected.id} · {selected.kind === 'dynamic' ? '动态' : selected.kind === 'chain' ? '链' : '表面'} · {selected.cluster}</span>
+                  <span className="text-[9px] text-gray-500">{selected.id} · {selected.kind === 'dynamic' ? '动态' : selected.kind === 'chain' ? '链' : selected.kind === 'face' ? '脸型' : '表面'} · {selected.cluster}</span>
                   <div className="flex-1" />
                   {!selected.builtin && selected.kind === 'dynamic' && !draftWork && (
                     <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5 text-cyan-300"
@@ -232,7 +233,9 @@ export default function PatternLibraryPanel({
                     ? <p className="text-[9px] text-gray-600 leading-relaxed">左图为定格图（峰值帧）；下方有动态预览。</p>
                     : selected.kind === 'chain'
                       ? <p className="text-[9px] text-gray-600 leading-relaxed">像素链预设段：在节点蓝图里「插入」整段使用，或在修改器面板落成参数预设（持续型）。插入后的链进包真跑。</p>
-                      : <p className="text-[9px] text-gray-600 leading-relaxed">标准瓦片烘焙图；实际部件形状不同，图案按同一图生成。</p>}
+                      : selected.kind === 'face'
+                        ? <p className="text-[9px] text-gray-600 leading-relaxed">五官点位参数组（相对头部框的比例）。应用与编辑在头部节点的「转面」面板里：选预设套用、在预览上拖点改比例、可另存为新脸型。</p>
+                        : <p className="text-[9px] text-gray-600 leading-relaxed">标准瓦片烘焙图；实际部件形状不同，图案按同一图生成。</p>}
                 </div>
                 {selected.kind === 'dynamic' && (
                   <EntryLivePreview entry={selected} allEntries={all} />
@@ -256,6 +259,24 @@ export default function PatternLibraryPanel({
                           参数口：{def.expose.map((x) => `${x.label}（${x.node}.${x.key}）`).join('、')}
                         </p>
                       )}
+                    </div>
+                  );
+                })()}
+                {selected.kind === 'face' && (() => {
+                  const found = defOf(libraryIndexOf(all), selected.id);
+                  const def = found && 'kind' in found.def && found.def.kind === 'face' ? found.def : undefined;
+                  if (!def || !found) return null;
+                  const p = def.params;
+                  const rows: [string, number][] = [
+                    ['眉线高', p.browY], ['眼线高', p.eyeY], ['眼距', p.eyeSpacing], ['眼半宽', p.eyeHalfW],
+                    ['鼻底高', p.noseBaseY], ['鼻半宽', p.noseHalfW], ['嘴线高', p.mouthY], ['嘴半宽', p.mouthHalfW],
+                  ];
+                  return (
+                    <div className="space-y-1">
+                      <Label className="text-[9px] text-gray-600">五官点位（v{found.version}，相对头部框比例）</Label>
+                      {rows.map(([k, v]) => (
+                        <p key={k} className="text-[9px] text-gray-400">{k} <span className="text-gray-600">{v.toFixed(2)}</span></p>
+                      ))}
                     </div>
                   );
                 })()}
@@ -337,6 +358,12 @@ function EntryThumb({ entry, index, size }: {
   size: number;
 }) {
   const url = React.useMemo(() => {
+    if (entry.kind === 'face') {
+      const found = defOf(index, entry.id);
+      if (!found || !('kind' in found.def) || found.def.kind !== 'face') return undefined;
+      const faceParams = found.def.params;
+      return cachedThumb(`face:${entry.id}@${found.version}`, () => faceThumbRGBA(faceParams, size));
+    }
     if (entry.kind === 'surface') {
       const found = defOf(index, entry.id);
       if (!found || 'kind' in found.def) return undefined;

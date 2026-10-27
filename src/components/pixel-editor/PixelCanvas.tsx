@@ -26,10 +26,12 @@ import {
 import {
   renderPuppetSkeletonOverlay,
   renderIKTargetHandles,
+  renderFaceGuideOverlay,
   renderPivotCrosshair,
   renderStrokeCursorIndicator,
   renderFpsCounter,
 } from './canvas/canvas-puppet-render';
+import { proportionGuideDataUrl, type ProportionView } from '@/lib/proportion-guide';
 import { acquireCanvas, releaseCanvas } from '@/lib/engine/canvas-pool';
 import { getCursorStyle, isStrokeToolCheck } from './canvas/canvas-utils';
 import { spriteEditCanvasOrigin } from './canvas/tool-handlers';
@@ -382,6 +384,10 @@ export default function PixelCanvas() {
       if (activeChar && s.showPuppetSkeleton) {
         renderIKTargetHandles(rc, activeChar);
       }
+      // 五官参照（选中节点头部框点位）
+      if (activeChar && useEditorStore.getState().showFaceGuide) {
+        renderFaceGuideOverlay(rc, activeChar, s.selectedNodeId);
+      }
     }
 
     renderPivotCrosshair(rc, s.selectedPart, s.getInterpolatedTranslateOffset);
@@ -507,6 +513,15 @@ export default function PixelCanvas() {
   const showMannequinFallback = useEditorStore((x) => x.showMannequinFallback);
   // 人偶兜底开关变化时标记重绘（render 内部走 getState 读最新值）
   useEffect(() => { s.markDirty(); }, [showMannequinFallback]); // eslint-disable-line react-hooks/exhaustive-deps
+  const showFaceGuide = useEditorStore((x) => x.showFaceGuide);
+  useEffect(() => { s.markDirty(); }, [showFaceGuide]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 比例垫图：内置比例人偶生成图 → 走既有参考图通道（与外部图源并列）
+  const applyProportionGuide = useCallback((presetId: string, view: ProportionView) => {
+    const url = proportionGuideDataUrl(presetId, view);
+    useEditorStore.getState().setReferenceImageUrl(url);
+    useEditorStore.getState().setReferenceImageVisible(true);
+    s.markDirty();
+  }, [s]);
   const onionSkinEnabled = useProjectStore((x) => x.onionSkinEnabled);
 
   const handleCanvasContextMenu = useCallback(
@@ -785,6 +800,18 @@ export default function PixelCanvas() {
             </ContextMenuItem>
             <ContextMenuItem onSelect={() => useEditorStore.getState().toggleMannequinFallback()}>
               {showMannequinFallback && <Check className="size-3.5" />} 人偶兜底
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => useEditorStore.getState().toggleFaceGuide()}>
+              {showFaceGuide && <Check className="size-3.5" />} 五官参照
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            {([['realistic', '写实 7.5 头身'], ['standard', '标准 6 头身'], ['chibi', 'Q 版 3 头身']] as const).map(([pid, label]) => (
+              <ContextMenuItem key={pid} onSelect={() => applyProportionGuide(pid, 'front')}>
+                比例垫图·正面（{label}）
+              </ContextMenuItem>
+            ))}
+            <ContextMenuItem onSelect={() => applyProportionGuide('standard', 'side')}>
+              比例垫图·侧面（标准 6 头身）
             </ContextMenuItem>
             <ContextMenuItem onSelect={() => useEditorStore.getState().toggleNodeTurn3D()}>
               {nodeTurn3D && <Check className="size-3.5" />} 节点转向

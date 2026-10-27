@@ -74,11 +74,17 @@ export interface ChainEntryDef {
   expose: ChainExpose[];
 }
 
-export type EntryDef = SurfaceEntryDef | DynamicEntryDef | ChainEntryDef;
+/** 脸型条目定义：五官点位参数组（相对头部框的比例，见 face-features） */
+export interface FaceEntryDef {
+  kind: 'face';
+  params: import('./face-features').FaceFeatureParams;
+}
+
+export type EntryDef = SurfaceEntryDef | DynamicEntryDef | ChainEntryDef | FaceEntryDef;
 
 export interface LibraryEntry {
   id: string;
-  kind: 'surface' | 'dynamic' | 'chain';
+  kind: 'surface' | 'dynamic' | 'chain' | 'face';
   name: string;
   cluster: string;
   versions: Record<number, EntryDef>;
@@ -555,7 +561,37 @@ function buildBuiltinEntries(): LibraryEntry[] {
   // 链条目：环带预设族（甲4）。结构 = 包络数值节点 → ring_ripple，
   // 插入节点蓝图后经像素链进包真跑；也可落成修改器参数预设（无包络）。
   out.push(...buildBuiltinChainEntries());
+  // 脸型条目：五官点位参数预设（在转面面板应用到头部节点）
+  out.push(...buildBuiltinFaceEntries());
   return out;
+}
+
+function faceEntry(
+  id: string, name: string,
+  params: import('./face-features').FaceFeatureParams,
+): LibraryEntry {
+  const def: FaceEntryDef = { kind: 'face', params };
+  return {
+    id, kind: 'face', name, cluster: '脸型', builtin: true, latest: 1,
+    versions: { 1: def },
+  };
+}
+
+function buildBuiltinFaceEntries(): LibraryEntry[] {
+  return [
+    faceEntry('face-standard', '标准三庭', {
+      browY: 0.3, eyeY: 0.38, eyeSpacing: 0.4, eyeHalfW: 0.09,
+      noseBaseY: 0.62, noseHalfW: 0.06, mouthY: 0.78, mouthHalfW: 0.11,
+    }),
+    faceEntry('face-round', '圆脸（低眼线宽眼距）', {
+      browY: 0.34, eyeY: 0.44, eyeSpacing: 0.46, eyeHalfW: 0.1,
+      noseBaseY: 0.64, noseHalfW: 0.07, mouthY: 0.8, mouthHalfW: 0.1,
+    }),
+    faceEntry('face-long', '长脸（点位拉开）', {
+      browY: 0.26, eyeY: 0.34, eyeSpacing: 0.36, eyeHalfW: 0.08,
+      noseBaseY: 0.66, noseHalfW: 0.05, mouthY: 0.84, mouthHalfW: 0.09,
+    }),
+  ];
 }
 
 /** 环带预设的统一构造：env（waveform 包络）驱动 ring 的 amplitude 输入 */
@@ -693,6 +729,7 @@ export function refsOfDef(def: EntryDef): { id: string; version?: number }[] {
   if ('kind' in def) {
     if (def.kind === 'leaf') return [];
     if (def.kind === 'chain') return [];
+    if (def.kind === 'face') return [];
     return def.children.map((c) => ({ id: c.entry, version: c.version }));
   }
   const out: { id: string; version?: number }[] = [];
@@ -851,5 +888,19 @@ export function chainDefOf(
 ): { def: ChainEntryDef; version: number } | undefined {
   const got = defOf(index, id, version);
   if (!got || !('kind' in got.def) || got.def.kind !== 'chain') return undefined;
+  return { def: got.def, version: got.version };
+}
+
+/** 全部脸型条目（内置 + 用户） */
+export function faceEntriesOf(entries: readonly LibraryEntry[]): LibraryEntry[] {
+  return entries.filter((e) => e.kind === 'face');
+}
+
+/** 取脸型条目某版本的定义（非脸型条目/无此版本返回 undefined） */
+export function faceDefOf(
+  index: LibraryIndex, id: string, version?: number,
+): { def: FaceEntryDef; version: number } | undefined {
+  const got = defOf(index, id, version);
+  if (!got || !('kind' in got.def) || got.def.kind !== 'face') return undefined;
   return { def: got.def, version: got.version };
 }

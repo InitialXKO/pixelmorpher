@@ -52,6 +52,10 @@ function expandSegments(
     errors.push(`模式库：「${id}@${version}」是链条目，不能当动态模式展开`);
     return undefined;
   }
+  if (def.kind === 'face') {
+    errors.push(`模式库：「${id}@${version}」是脸型条目，不能当动态模式展开`);
+    return undefined;
+  }
   if (def.kind === 'leaf') {
     return { segments: { ...def.segments }, keySet: new Set(Object.keys(def.segments)) };
   }
