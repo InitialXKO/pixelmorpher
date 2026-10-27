@@ -1,11 +1,15 @@
 // 节点命中挑选（编辑器专用，纯函数）：所见即所点——不再用「到关节
-// 的距离」判命中，改成三遍形状判定，形状全部来自绘制同源数据：
+// 的距离」判命中。最优先的是拾取编号图（pick-buffer：主画布绘制时
+// 并行画下的剪影编号，像素链/像素修改器/蒙皮弯曲后的真实占据）：
+// 调用方读好后以 bufferNodeId/bufferAuthoritative 传入，新鲜时它
+// 取代几何 tier 0 并置顶命中节点。其余时候走几何三遍（形状全部来
+// 自绘制同源数据）：
 //   tier 0：精灵不透明像素（按绘制变换逆映射采样）+ 关节盘圆面；
 //   tier 1：细精灵（短边 ≤ 6px）与堆叠件的胶囊（关节 → 精灵末端）；
 //   tier 2：无精灵节点的兜底胶囊（与人偶绘制同一份形状几何
 //           computeMannequinShapes，含手脚延伸与蛋形头）。
-// 三遍都没有 → 点不中（空地不选任何节点）。排序：tier 优先，tier 内
-// 按贴近程度；中键循环切换按此序轮换候选。
+// 全部落空 → 点不中（空地不选任何节点）。排序：编号图命中最先，
+// 其余 tier 优先、tier 内按贴近程度；中键循环按此序轮换候选。
 import {
   computeWorldTransforms, computeMannequinShapes, resolveNodeSpriteId, socketOffsetTo3D,
 } from './unified-render';
@@ -33,6 +37,15 @@ export interface PickOptions {
   slopPx?: number;
   /** 细精灵判定：短边 ≤ 此值（px）的精灵另走胶囊兜底，缺省 6 */
   thinMaxPx?: number;
+  /** 拾取编号图在该点读到的节点 id（绘制结果口径，见 pick-buffer）：
+   * 命中即为视觉最上层，置于全部几何候选之前（该节点的几何候选
+   * 去重）；编号图未就绪/读空时不传，纯走几何三遍 */
+  bufferNodeId?: string | null;
+  /** 编号图新鲜（戳记一致）：它就是 tier 0 的权威口径——几何的精灵
+   * 像素/关节盘两项不再产生候选（编号图读空 = 此处没画，像素链擦
+   * 掉的区域靠基础图判会误选）；tier 1/2 的形状不在编号图内、不受
+   * 影响 */
+  bufferAuthoritative?: boolean;
 }
 
 function isOpaqueCell(c: string | null | undefined): boolean {
@@ -146,7 +159,7 @@ export function pickNodesAt(
       const piece = activeCs?.pieces?.[node.slot?.slotKey ?? ''] ?? node.slot;
       const hasStack = !!(piece as { stack?: unknown } | undefined)?.stack;
 
-      if (!hasStack) {
+      if (!hasStack && !opts.bufferAuthoritative) {
         // tier 0 · 关节盘圆面（盘画在父 socket 处，属本节点）
         if (node.parentId && node.attachment?.type === 'socket' && node.attachment.parentSocketId
           && node.attachment.autoJointDisc !== false) {
@@ -213,6 +226,19 @@ export function pickNodesAt(
           if (prox <= slop) picks.push({ node, character, tier: 2, score: s.kind === 'joint' ? prox - 0.5 : prox });
         }
       }
+    }
+  }
+
+  // 编号图命中 = 视觉最上层：置顶，并去掉该节点的几何候选防重复
+  if (opts.bufferNodeId) {
+    for (const character of characters) {
+      const node = character.nodes[opts.bufferNodeId];
+      if (!node || !node.visible) continue;
+      for (let i = picks.length - 1; i >= 0; i--) {
+        if (picks[i]!.node.id === node.id) picks.splice(i, 1);
+      }
+      picks.push({ node, character, tier: 0, score: -1e9 });
+      break;
     }
   }
 

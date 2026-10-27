@@ -1563,6 +1563,9 @@ export interface DiscRenderInstruction {
   diameter: number;
   fillColor: string;
   outlineColor: string;
+  /** 盘所属节点（盘画在父 socket 处、属子节点——关节属主）；供拾取
+   * 通道把盘剪影记到该节点名下 */
+  nodeId?: string;
   // 无 zIndex：关节盘不参与深度排序——执行端在全部精灵之前统一先画，
   // 始终被遮挡，只透过开口补缝（规格）
 }

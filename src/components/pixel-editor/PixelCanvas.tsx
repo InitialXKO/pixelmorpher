@@ -9,6 +9,7 @@ import { clearJointDiscs, regenerateJointDiscs } from '@/lib/joint-discs';
 import { renderSpriteEditUnified } from '@/lib/unified-render';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-render';
+import { beginPickFrame, endPickFrame } from '@/lib/pick-buffer';
 import { useCanvasState } from './canvas/use-canvas-state';
 import { useCanvasInteraction } from './canvas/use-canvas-interaction';
 import MaskBrushOverlay from './MaskBrushOverlay';
@@ -288,19 +289,29 @@ export default function PixelCanvas() {
       const globalBlueprint = useProjectStore.getState().globalBlueprint;
       // 参考图可见时用透明背景，让参考图透出来做底
       const bgColor = (s.referenceImageUrl && s.referenceImageVisible) ? 'transparent' : s.backgroundColor;
-      renderUnified(offCtx, s.canvasWidth, s.canvasHeight, Object.values(freshStore.sprites), s.keyframes, currentFrame, bgColor,
-        s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
-        s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
-        s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint,
-        freshStore.sprites, s.perspectiveForeshorten, freshStore.activeAnimationClipId,
-        geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D),
-        useEditorStore.getState().showMannequinFallback,
-        {
-          sleeveRatio: useEditorStore.getState().mannequinSleeveRatio,
-          pantsRatio: useEditorStore.getState().mannequinPantsRatio,
-          fogStrength: useEditorStore.getState().depthFogStrength,
-          faceGuide: useEditorStore.getState().showFaceGuide,
-        });
+      // 拾取编号图与主画布同帧并行绘制（命中读绘制结果，见 pick-buffer）
+      beginPickFrame({
+        characters: unifiedCharacters, sprites: freshStore.sprites,
+        frame: currentFrame, canvasWidth: s.canvasWidth, canvasHeight: s.canvasHeight,
+        nodeTurn3D: useEditorStore.getState().nodeTurn3D,
+      });
+      try {
+        renderUnified(offCtx, s.canvasWidth, s.canvasHeight, Object.values(freshStore.sprites), s.keyframes, currentFrame, bgColor,
+          s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
+          s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
+          s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint,
+          freshStore.sprites, s.perspectiveForeshorten, freshStore.activeAnimationClipId,
+          geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D),
+          useEditorStore.getState().showMannequinFallback,
+          {
+            sleeveRatio: useEditorStore.getState().mannequinSleeveRatio,
+            pantsRatio: useEditorStore.getState().mannequinPantsRatio,
+            fogStrength: useEditorStore.getState().depthFogStrength,
+            faceGuide: useEditorStore.getState().showFaceGuide,
+          });
+      } finally {
+        endPickFrame();
+      }
     }
 
     // 3. Stroke preview

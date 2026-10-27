@@ -10,6 +10,7 @@ import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
 import { invalidateUnifiedPipelineCache, computeWorldTransforms, geometryDirectionFromToggle } from '@/lib/unified-render';
 import { pickNodesAt } from '@/lib/node-picking';
+import { readPick } from '@/lib/pick-buffer';
 import {
   interpolateModifiers,
   computeKeyframeBaseTransform,
@@ -399,6 +400,15 @@ export function useCanvasState() {
     (px: number, py: number): { node: Node; character: Character; clipId: string | null; score: number }[] => {
       const state = useProjectStore.getState();
       const clips = state.animationClips;
+      // 拾取编号图（与主画布同帧绘制的剪影编号）：戳记对上（fresh）
+      // 时它是 tier 0 的权威口径——读到节点即视觉最上层，读到背景
+      // 即此处没画精灵/关节盘（像素链擦掉的区域点不中）
+      const pickRead = readPick(px, py, {
+        characters: state.unifiedCharacters, sprites: state.sprites,
+        frame: state.currentFrame, canvasWidth, canvasHeight,
+        nodeTurn3D: useEditorStore.getState().nodeTurn3D,
+      });
+      const bufferNodeId = pickRead.nodeId;
       const picks = pickNodesAt(Object.values(state.unifiedCharacters), px, py, {
         sprites: state.sprites,
         frame: state.currentFrame,
@@ -407,6 +417,8 @@ export function useCanvasState() {
         geometryDirection: geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D),
         // 容差按屏幕像素定（约 6 屏幕 px），换算到画布坐标
         slopPx: Math.max(6 / zoom, 1.5),
+        bufferNodeId,
+        bufferAuthoritative: pickRead.fresh,
       });
       return picks.map((p, i) => ({
         node: p.node,

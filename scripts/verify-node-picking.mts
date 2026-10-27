@@ -130,5 +130,21 @@ ok(picks[0]?.node.id === cHair.id && picks[0]?.tier === 1, `C2 精灵旁 2px →
 picks = pickC(270, 215); // 远离 12px
 ok(!picks.some((p) => p.node.id === cHair.id), 'C3 远离细精灵 → 不选它');
 
+
+// ---------- D：拾取编号图口径（绘制结果优先） ----------
+// D1 编号图命中 plate（视觉最上层）→ 置顶，几何候选在其后、plate 不重复
+picks = pickNodesAt([charA], 350, 320, { sprites: { [sprPlate.id]: sprPlate, [sprDot.id]: sprDot }, frame: 0, canvasWidth: W, canvasHeight: H, bufferNodeId: aRoot.id });
+ok(picks[0]?.node.id === aRoot.id, `D1 编号图命中根 → 置顶（实际 ${picks[0]?.node.id}）`);
+ok(picks.filter((p) => p.node.id === aRoot.id).length === 1, 'D1 根不重复出现');
+// D2 编号图新鲜 + 读空（此处没画）→ 几何 tier 0 被压制：大精灵像素不产生候选
+picks = pickNodesAt([charA], 350, 320, { sprites: { [sprPlate.id]: sprPlate, [sprDot.id]: sprDot }, frame: 0, canvasWidth: W, canvasHeight: H, bufferNodeId: null, bufferAuthoritative: true });
+ok(!picks.some((p) => p.tier === 0), `D2 编号图新鲜读空 → 无 tier 0 候选（实际 ${picks.map((p) => p.tier).join(',')}）`);
+// D3 编号图不新鲜 → 几何口径不变（A1 结论复现）
+picks = pickNodesAt([charA], 350, 320, { sprites: { [sprPlate.id]: sprPlate, [sprDot.id]: sprDot }, frame: 0, canvasWidth: W, canvasHeight: H, bufferNodeId: null, bufferAuthoritative: false });
+ok(picks[0]?.node.id === aPlate.id && picks[0]?.tier === 0, 'D3 编号图缺席 → 几何 tier 0 照常');
+// D4 编号图命中一个几何上点不中的节点（像素链改过占据的情形）→ 仍置顶
+picks = pickNodesAt([charA], 100, 100, { sprites: { [sprPlate.id]: sprPlate, [sprDot.id]: sprDot }, frame: 0, canvasWidth: W, canvasHeight: H, bufferNodeId: aPlate.id, bufferAuthoritative: true });
+ok(picks[0]?.node.id === aPlate.id, `D4 空地点编号图命中 → 置顶该节点（实际 ${picks[0]?.node.id}）`);
+
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
 process.exit(fails === 0 ? 0 : 1);

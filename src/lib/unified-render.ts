@@ -1554,6 +1554,7 @@ function generateDiscInstructions(
       diameter,
       fillColor: typeof fillColor === 'string' ? fillColor : '#808080',
       outlineColor,
+      nodeId,
     });
   }
 
@@ -3276,6 +3277,87 @@ function buildGlowOverlay(
   return result ? { ...result, key } : null;
 }
 
+// ---- 拾取通道（编辑器专用）----
+// 编辑器主画布绘制期间可开启一条并行通道：每个节点把自己最终画出的
+// 剪影（像素修改器/像素链/蒙皮弯曲/堆叠合成都已作用在 workingCanvas
+// 上）以专属编号色描到一张离屏「编号图」，关节盘同理随后覆盖。命中
+// 直接读编号图——占据以绘制结果为准，不在命中侧重算。
+// 编号：自 1 起递增、拆 RGB 三通道；0/透明 = 无。剪影保留源 alpha，
+// 读取端只认 alpha ≥ 250 的像素（不透明像素的编号往返精确；半透明与
+// 抗锯齿边缘读作未命中，由几何判定兜底——只会漏、不会错选）。
+interface ActivePickPass {
+  ctx: CanvasRenderingContext2D;
+  next: number;
+  ids: Map<number, string>;
+}
+let activePickPass: ActivePickPass | null = null;
+
+export function beginPickPass(ctx: CanvasRenderingContext2D): void {
+  activePickPass = { ctx, next: 1, ids: new Map() };
+}
+
+/** 结束通道并交出编号 → 节点 id 映射（未开启时为空表） */
+export function endPickPass(): Map<number, string> {
+  const ids = activePickPass ? activePickPass.ids : new Map<number, string>();
+  activePickPass = null;
+  return ids;
+}
+
+function pickColorFor(nodeId: string): string {
+  const p = activePickPass!;
+  const id = p.next++;
+  p.ids.set(id, nodeId);
+  return `rgb(${id & 0xff},${(id >> 8) & 0xff},${(id >> 16) & 0xff})`;
+}
+
+let pickScratch: HTMLCanvasElement | null = null;
+
+/** 把 source 的不透明形状染成 nodeId 的编号色、按与正图相同的变换
+ * 画进编号图。旋转走原生仿射（正图的像素完美旋转栅格差 ≤ 1px，命中
+ * 侧有 slop 与几何兜底）。 */
+function drawPickSilhouette(
+  source: HTMLCanvasElement,
+  nodeId: string,
+  drawPivotX: number, drawPivotY: number,
+  pivotX: number, pivotY: number,
+  angleDeg: number, scaleX: number, effStretch: number,
+  skews: Array<{ skewX: number; skewY: number }>,
+  clipPath?: [number, number][],
+): void {
+  const p = activePickPass;
+  if (!p || source.width === 0 || source.height === 0) return;
+  if (!pickScratch) pickScratch = document.createElement('canvas');
+  if (pickScratch.width !== source.width || pickScratch.height !== source.height) {
+    pickScratch.width = source.width;
+    pickScratch.height = source.height;
+  }
+  const sctx = pickScratch.getContext('2d')!;
+  sctx.save();
+  sctx.globalCompositeOperation = 'copy';
+  sctx.drawImage(source, 0, 0);
+  sctx.globalCompositeOperation = 'source-in';
+  sctx.fillStyle = pickColorFor(nodeId);
+  sctx.fillRect(0, 0, pickScratch.width, pickScratch.height);
+  sctx.restore();
+  const ctx = p.ctx;
+  ctx.save();
+  if (clipPath && clipPath.length >= 3) {
+    ctx.beginPath();
+    clipPath.forEach(([cx, cy], i) => (i === 0 ? ctx.moveTo(cx, cy) : ctx.lineTo(cx, cy)));
+    ctx.closePath();
+    ctx.clip();
+  }
+  ctx.imageSmoothingEnabled = false;
+  ctx.translate(Math.round(drawPivotX), Math.round(drawPivotY));
+  ctx.rotate((angleDeg * Math.PI) / 180);
+  ctx.scale(scaleX, effStretch);
+  for (const { skewX, skewY } of skews) {
+    ctx.transform(1, Math.tan((skewY * Math.PI) / 180), Math.tan((skewX * Math.PI) / 180), 1, 0, 0);
+  }
+  ctx.drawImage(pickScratch, -pivotX, -pivotY);
+  ctx.restore();
+}
+
 /**
  * Render a single node sprite to the canvas.
  * Implements the unified rendering flow:
@@ -3681,6 +3763,16 @@ function renderNodeSprite(
     }
   }
 
+  // 拾取通道：正图绘制前把最终剪影以编号色描进编号图（顺序与正图
+  // 绘制序一致，后画的覆盖先画的——读到的就是视觉最上层）
+  if (activePickPass) {
+    drawPickSilhouette(
+      workingCanvas, instruction.nodeId,
+      drawPivotX, drawPivotY, pivotX, pivotY,
+      angle, scaleX, effStretch, skews, instruction.clipPath,
+    );
+  }
+
   // We need ctx.save/restore to isolate the transform for effect rendering
   ctx.save();
 
@@ -3977,6 +4069,18 @@ function renderDisc(
   const x = Math.round(subToPx(worldX));
   const y = Math.round(subToPx(worldY));
   const radius = Math.max(1, diameter / 2);
+
+  // 拾取通道：盘在全部精灵之前画（始终被遮挡），编号图同序——盘的
+  // 编号先落、随后被精灵剪影覆盖，与视觉一致
+  if (activePickPass && instruction.nodeId) {
+    const pctx = activePickPass.ctx;
+    pctx.save();
+    pctx.beginPath();
+    pctx.ellipse(x, y, radius, radius, 0, 0, Math.PI * 2);
+    pctx.fillStyle = pickColorFor(instruction.nodeId);
+    pctx.fill();
+    pctx.restore();
+  }
 
   // ---- Disc bitmap cache ----
   // Discs are pure geometric shapes determined by diameter + fillColor + outlineColor.
