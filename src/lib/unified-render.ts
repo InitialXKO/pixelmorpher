@@ -469,6 +469,20 @@ export function effectiveCharacterAt(character: Character, frame: number): Chara
   return { ...character, nodes: effNodes };
 }
 
+/** 收集角色全部节点修改器上启用的参数驱动器（变量上下文构建用：
+ * generateRenderPlan 与 computeWorldTransforms 的变量兜底共用一份口径） */
+export function collectActiveParamDrivers(character: Character): ParamDriver[] {
+  const drivers: ParamDriver[] = [];
+  for (const node of Object.values(character.nodes)) {
+    for (const mod of node.modifiers ?? []) {
+      for (const d of mod.paramDrivers ?? []) {
+        if (d.enabled) drivers.push(d);
+      }
+    }
+  }
+  return drivers;
+}
+
 export function computeWorldTransforms(
   character: Character,
   frame: number,
@@ -490,6 +504,23 @@ export function computeWorldTransforms(
       resolved = useProjectStore.getState().frameRate || 12;
     } catch { /* store 不可用（离线语境）时回退 12 */ }
     frameRate = resolved;
+  }
+  // 变量上下文兜底：调用方没传 variableContext 时按主渲染同口径
+  // 现建（动画变量取工程 store、驱动器收集与 generateRenderPlan
+  // 共用一份）——否则变量驱动的关键帧/修改器/蓝图/IK 目标在
+  // 覆盖层、命中里按默认值算，与出图对不上。离线语境 store 不
+  // 可用时保持未传（烘焙/导出走 generateRenderPlan 显式传，不受影响）。
+  if (!variableContext) {
+    try {
+      const { useProjectStore } = require('./store') as typeof import('./store');
+      const storeVars = useProjectStore.getState().animationVariables;
+      if (storeVars && storeVars.length > 0) {
+        const mapped = mapStoreAnimationVariables(storeVars);
+        if (mapped && mapped.length > 0) {
+          variableContext = buildVariableContext(mapped, frame, collectActiveParamDrivers(character), frameRate);
+        }
+      }
+    } catch { /* store 不可用（离线语境）时保持未传 */ }
   }
   // 蓝图/修改器求值兜底：调用方没传 blueprintTransforms 时在此求值，
   // 让所有取位路径（覆盖层标签/命中/IK 手柄/五官叠画/捕姿）与主渲染
@@ -2049,16 +2080,9 @@ export function generateRenderPlan(
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
   // H6: 收集角色全部节点的 active param drivers，传入真实求值（之前恒为默认值）
-  const allActiveDrivers: ParamDriver[] = [];
-  if (animationVariables && animationVariables.length > 0) {
-    for (const node of Object.values(character.nodes)) {
-      for (const mod of node.modifiers ?? []) {
-        for (const d of mod.paramDrivers ?? []) {
-          if (d.enabled) allActiveDrivers.push(d);
-        }
-      }
-    }
-  }
+  const allActiveDrivers: ParamDriver[] = animationVariables && animationVariables.length > 0
+    ? collectActiveParamDrivers(character)
+    : [];
   const variableContext = animationVariables && animationVariables.length > 0
     ? buildVariableContext(animationVariables, frame, allActiveDrivers, frameRate)
     : undefined;
