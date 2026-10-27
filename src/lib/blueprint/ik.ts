@@ -332,6 +332,10 @@ function bendAngle3(a: IK3DPoint, b: IK3DPoint): number {
  * 那样落进反向弯的 S 形构型）。分配比对 β1 单调，二分命中；β2 变号
  * 处是同号族的边界，搜索范围钳到那里为止。退化构型返回 null，
  * 调用方回落 FABRIK。
+ *
+ * seed（可选，当前关节位）：一参族内取 β1 最贴当前姿态的解——解析
+ * 解成为当前姿态的连续延拓，目标恰为当前末端时逐点复现当前姿态
+ * （启用链不跳、逐帧不抖）；不给 seed 时按弯曲分配定解。
  */
 export function solveIK3Bone3D(
   root: IK3DPoint,
@@ -340,6 +344,7 @@ export function solveIK3Bone3D(
   len2: number,
   len3_: number,
   pole: IK3DPoint,
+  seed?: { p1: IK3DPoint; p2: IK3DPoint; p3: IK3DPoint },
 ): { p1: IK3DPoint; p2: IK3DPoint; end: IK3DPoint } | null {
   const toT = v3(target, root);
   const dist = len3(toT);
@@ -393,13 +398,54 @@ export function solveIK3Bone3D(
     const A = Math.sqrt(Math.max(0, len1 * len1 + len2 * len2 + 2 * len1 * len2 * Math.cos(b1)));
     const a2 = (A * A - len3_ * len3_ + dist * dist) / (2 * dist);
     const h2 = Math.sqrt(Math.max(0, A * A - a2 * a2));
-    const p2 = add3(root, add3(mul3(dir, a2), mul3(perpU, h2)));
+    // p2 落侧：pole 是第一关节的侧向提示，推不出第二关节的落侧
+    // （肘近 root→target 轴时两者可反侧）；有 seed 时跟 seed 的
+    // p2 实际落侧，否则默认 pole 侧。
+    let side = 1;
+    if (seed) {
+      const off = v3(seed.p2, add3(root, mul3(dir, a2)));
+      if (dot3(off, perpU) < 0) side = -1;
+    }
+    const p2 = add3(root, add3(mul3(dir, a2), mul3(perpU, h2 * side)));
     const p1 = solveIK2Bone3D(root, p2, len1, len2, polePt).mid;
     const d1 = v3(p1, root);
     const d2 = v3(p2, p1);
     const d3 = v3(target, p2);
     return { p1, p2, end: { ...target }, sB1: signedAngle(d1, d2), sB2: signedAngle(d2, d3) };
   };
+  // 姿态种子：族内取与当前弯角对 (β1, β2) 偏差最小的成员——目标恰
+  // 为当前末端时当前构型本身是族成员、偏差 0、逐点复现（启用链不
+  // 跳）；目标移动时解连续跟随当前姿态，不重排弯曲分配。
+  if (seed) {
+    // 当前末端已在目标容差内 → 种子本身即解（近全伸直时圆交几何
+    // 病态：径向 0.1px 误差会被放大成数 px 切向位移；已达标不重解）
+    if (len3(v3(target, seed.p3)) < Math.max(0.25, total * 1e-3)) {
+      return { p1: { ...seed.p1 }, p2: { ...seed.p2 }, end: { ...target } };
+    }
+    const s1 = signedAngle(v3(seed.p1, root), v3(seed.p2, seed.p1));
+    const s2 = signedAngle(v3(seed.p2, seed.p1), v3(seed.p3, seed.p2));
+    const dev = (c: { sB1: number; sB2: number }) =>
+      (c.sB1 - s1) * (c.sB1 - s1) + (c.sB2 - s2) * (c.sB2 - s2);
+    const N = 24;
+    let bi = 0;
+    let bd = Infinity;
+    for (let i = 0; i <= N; i++) {
+      const d = dev(configAt(bLo + ((bHi - bLo) * i) / N));
+      if (d < bd) { bd = d; bi = i; }
+    }
+    let lo = bLo + ((bHi - bLo) * Math.max(0, bi - 1)) / N;
+    let hi = bLo + ((bHi - bLo) * Math.min(N, bi + 1)) / N;
+    const gr = (Math.sqrt(5) - 1) / 2;
+    let x1 = hi - gr * (hi - lo);
+    let x2 = lo + gr * (hi - lo);
+    let f1 = dev(configAt(x1));
+    let f2 = dev(configAt(x2));
+    for (let i = 0; i < 24; i++) {
+      if (f1 <= f2) { hi = x2; x2 = x1; f2 = f1; x1 = hi - gr * (hi - lo); f1 = dev(configAt(x1)); }
+      else { lo = x1; x1 = x2; f1 = f2; x2 = lo + gr * (hi - lo); f2 = dev(configAt(x2)); }
+    }
+    return configAt((lo + hi) / 2);
+  }
   // 同号族边界：β2 变号处（β2 = 0 是该族的自然终点，分配比在那里 = 1）
   {
     const cHi = configAt(bHi);
@@ -496,7 +542,7 @@ export function solveIK3BoneWithTip3D(
   let u = fkTipDir;
   for (let pass = 0; pass < 4; pass++) {
     const jt = add3(target, mul3(u, -tipLen));
-    const r = solveIK3Bone3D(points[0], jt, lengths[0], lengths[1], lengths[2], pole);
+    const r = solveIK3Bone3D(points[0], jt, lengths[0], lengths[1], lengths[2], pole, { p1: points[1], p2: points[2], p3: points[3] });
     if (!r) return null;
     const joints = [points[0], r.p1, r.p2, r.end];
     const segDir = norm3(v3(r.end, r.p2));
@@ -507,7 +553,7 @@ export function solveIK3BoneWithTip3D(
     u = u2;
   }
   const jtF = add3(target, mul3(u, -tipLen));
-  const rF = solveIK3Bone3D(points[0], jtF, lengths[0], lengths[1], lengths[2], pole);
+  const rF = solveIK3Bone3D(points[0], jtF, lengths[0], lengths[1], lengths[2], pole, { p1: points[1], p2: points[2], p3: points[3] });
   if (!rF) return null;
   const jointsF = [points[0], rF.p1, rF.p2, rF.end];
   return [...jointsF, add3(jointsF[3], mul3(u, tipLen))];

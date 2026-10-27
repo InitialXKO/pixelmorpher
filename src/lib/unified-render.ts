@@ -821,7 +821,7 @@ export function solveChainIKOverrides(
       const r = solveIK2Bone3D(points[0], target, lengths[0], lengths[1], pole);
       solved = [points[0], r.mid, r.end];
     } else if (lengths.length === 3) {
-      const r3 = solveIK3Bone3D(points[0], target, lengths[0], lengths[1], lengths[2], pole);
+      const r3 = solveIK3Bone3D(points[0], target, lengths[0], lengths[1], lengths[2], pole, { p1: points[1], p2: points[2], p3: points[3] });
       solved = r3
         ? [points[0], r3.p1, r3.p2, r3.end]
         : solveIKFabrik3D(points, lengths, target);

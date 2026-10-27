@@ -152,7 +152,7 @@ const tipCanvas = (wt: Map<string, WorldTransform>, id: string, tipLen: number) 
   ok(err < 2.5, 'C1 胳膊链尖端达标（3 骨解析）');
   ok(Math.abs(bElbow) < 120 && Math.abs(bWrist) < 120, 'C1 肘/腕弯角无折叠');
   ok(bElbow * bWrist > 0, 'C1 肘/腕同向弯（无锯齿）');
-  ok(Math.abs(bElbow) > Math.abs(bWrist), 'C1 肘分担大于腕（len2:len3 分配）');
+  ok(Math.abs(bElbow) < 40, 'C1 近目标（离 FK 尖端 ~16px）肘不重排：种子连续延拓保 FK 弯角对，腕位形弯含手 frame 与前臂的固有偏角');
 }
 
 // C2：拆分链（肩→M→肘→腕，无精灵尖端回落 30）——旧迭代解折叠 fixture
