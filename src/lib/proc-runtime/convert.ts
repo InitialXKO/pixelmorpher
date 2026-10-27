@@ -30,9 +30,10 @@ import { expandSurfaceGraph, graphHasRefs, subgraphLibraryOf } from './graph-exp
 import { PATTERN_TEMPLATES, type PatternTemplate } from './pattern-templates';
 import { PALETTES } from './palettes';
 import {
-  translatePerformanceGraph, translateBehaviorGraph, simplify,
+  translatePerformanceGraph, translateBehaviorGraph, simplify, extractPixelGraph,
   type RuntimeGraph, type RuntimeGraphNode,
 } from './graph-translate';
+import type { RuntimePixelGraph } from './pixel-src';
 
 export interface RuntimePartBase {
   pivot: [number, number];
@@ -136,6 +137,10 @@ export interface RuntimePart {
   spriteKind?: boolean;
   /** 精灵部件在默认服装集下的显示方向精灵网格（逐集见 costumes[*].__sprite） */
   sprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] };
+  /** 像素链（节点蓝图 screen 像素子图的迷你图）：模板逐帧以部件
+   * 当前精灵网格为源求值、结果写回瓦片。仅精灵部件携带（参数化
+   * 部件 v1 不带，convert 点名）。逐集换图不换链（链挂节点蓝图）。 */
+  pixelGraph?: RuntimePixelGraph;
   /** 变体替代精灵（缺口 6）：仅当某片段状态轨给该槽指派过变体时才带；
    * variantId → 该变体解析后的代表精灵（与基础解析不同才收） */
   altSprites?: Record<string, { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] }>;
@@ -864,6 +869,28 @@ export function convertCharacterToRuntimePackage(
     if (hasDyn) warnings.push(`动态效果：槽位 ${slotKey} 既无参数化外观也无精灵，未进运行时包`);
   }
   parts.sort((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key));
+  // 像素链进包：从节点原始蓝图（normalize 之前）提取 screen 像素
+  // 子图挂 part.pixelGraph（仅精灵部件——链的源与回写都以精灵
+  // 网格为口径；参数化部件 v1 点名不进）。行为图一节的「无
+  // transform 输出」警告据 pixelCarriedNodes 免发（链已进包）。
+  const pixelCarriedNodes = new Set<string>();
+  for (const part of parts) {
+    const nodeId = slotNode.get(part.key);
+    const node = nodeId ? character.nodes[nodeId] : undefined;
+    if (!node) continue;
+    const rawBp = node.blueprint
+      ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers as never) : null);
+    if (!rawBp) continue;
+    const ext = extractPixelGraph(rawBp as BlueprintGraph);
+    for (const w of ext.warnings) warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链：${w}`);
+    if (!ext.graph) continue;
+    if (part.spriteKind) {
+      part.pixelGraph = ext.graph;
+      pixelCarriedNodes.add(node.id);
+    } else {
+      warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链：参数化部件 v1 不带像素链，未进包（编辑器内照常生效）`);
+    }
+  }
   // 精灵堆叠载荷：默认集口径挂 part.stack（来源层 id 串记下，供
   // __stack 只收与默认口径不同的集，避免整摞层图在每集重复进包）
   const stackBaseIds = new Map<string, string>();
@@ -1087,7 +1114,7 @@ export function convertCharacterToRuntimePackage(
         ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers as never) : null);
       const nbRaw = nbRaw0 ? normalizeGraphOutput(nbRaw0) : null;
       const nb = nbRaw && graphTransformNode(nbRaw) ? pruneToTransform(nbRaw) : null;
-      if (nbRaw && !nb) warnings.push(`节点蓝图「${nodeName}」：无 transform 输出（像素类蓝图），未进包`);
+      if (nbRaw && !nb && !pixelCarriedNodes.has(nodeId)) warnings.push(`节点蓝图「${nodeName}」：无 transform 输出（像素类蓝图），未进包`);
       if (!bg && !nb) continue;
       const graph = bg && nb ? combineTransformGraphs(bg, nb) : (bg ?? nb)!;
       const srcLabel = bg && nb ? '行为图+节点蓝图' : bg ? '行为图' : '节点蓝图';
