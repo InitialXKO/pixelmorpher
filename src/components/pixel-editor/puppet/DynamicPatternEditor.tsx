@@ -382,7 +382,7 @@ export default function DynamicPatternEditor({
               </label>
             )}
           </div>
-          {(['形变', '发射', '粒子', '环绕', '发光', '弧线', '团块', '火焰', '后期'] as const).map((section) => (
+          {(['形变', '发射', '粒子', '环绕', '发光', '弧线', '团块', '火焰', '环境', '后期'] as const).map((section) => (
             <div key={section}>
               <div className="text-[9px] text-gray-600 mt-0.5">{section}</div>
               {section === '形变' && (
@@ -514,6 +514,29 @@ export default function DynamicPatternEditor({
                   )}
                 </div>
               )}
+              {section === '环境' && (
+                <div className="flex items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0">
+                    <input type="checkbox" checked={np(inst).envEnabled} onChange={(e) => patchParam(inst.id, 'envEnabled', e.target.checked)} />
+                    环境段
+                  </label>
+                  {np(inst).envEnabled && (
+                    <span className="flex items-center gap-1">
+                      <select
+                        value={np(inst).envMode}
+                        onChange={(e) => patchParam(inst.id, 'envMode', e.target.value)}
+                        className="rounded bg-gray-800 px-1 py-0.5 text-[10px]"
+                        title="样本模式"
+                      >
+                        <option value="fall">落（坠落）</option>
+                        <option value="drift">游（漂浮）</option>
+                        <option value="ripple">涟漪（落点扩散）</option>
+                      </select>
+                      <input type="color" value={np(inst).envColor} onChange={(e) => patchParam(inst.id, 'envColor', e.target.value)} className="h-5 w-8 bg-transparent" title="样本颜色" />
+                    </span>
+                  )}
+                </div>
+              )}
               {section === '后期' && (
                 <div className="flex items-center gap-1.5">
                   <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0">
@@ -605,6 +628,8 @@ export default function DynamicPatternEditor({
                 .filter((d) => !(section === '后期' && !np(inst).postEnabled))
                 .filter((d) => !(section === '团块' && !np(inst).blobEnabled))
                 .filter((d) => !(section === '火焰' && !np(inst).flameEnabled))
+                .filter((d) => !(section === '环境' && !np(inst).envEnabled))
+                .filter((d) => !(section === '环境' && d.key === 'envRadius' && np(inst).envMode !== 'ripple'))
                 .filter((d) => !(section === '弧线' && d.key === 'arcGlyphSpinDeg' && np(inst).arcMode !== 'glyph'))
                 .filter((d) => !(section === '弧线' && d.key === 'arcFlowHz' && np(inst).arcMode !== 'stream'))
                 .map((d) => {

@@ -3195,6 +3195,46 @@ function frame(now) {
             pushParticleQuad(frontVerts, a.ctr[0] + qx * c + qy * s, a.ctr[1] + qx * s - qy * c, inst.params.orbitSize || 3, orgb, 0.95);
           }
         }
+        // 环境场（乙9）：区域样本（落/游/涟漪），样本绕插头成
+        // 区域分布、不依附精灵轮廓；涟漪环以椭圆折线段绘制
+        if (inst.params.envEnabled) {
+          const env = dynEnvSamples(inst.params, frameIdx / FRAME_RATE);
+          const ergb = particleRgb(dynPostColorAt(inst.params, inst.params.envColor || '#bcd8ff'));
+          const toW = (lx, ly) => {
+            const gx = lx * a.dsx, gy = ly * a.dsy;
+            return [a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c];
+          };
+          for (const q of env.quads) {
+            const wpt = toW(q[0], q[1]);
+            const wdx = q[4] * c + q[5] * s, wdy = q[4] * s - q[5] * c;
+            const wl = Math.hypot(wdx, wdy) || 1;
+            pushParticleQuadShaped(frontVerts, wpt[0], wpt[1], q[2], ergb, q[6], q[3] === 1 ? 'line' : 'dot', wdx / wl, wdy / wl);
+          }
+          const pushEnvSeg = (w0, w1, alpha) => {
+            const dx = w1[0] - w0[0], dy = w1[1] - w0[1];
+            const len = Math.hypot(dx, dy) || 1;
+            const nx = -dy / len * 0.5, ny = dx / len * 0.5;
+            const cs = [
+              [w0[0] + nx, w0[1] + ny], [w1[0] + nx, w1[1] + ny],
+              [w1[0] - nx, w1[1] - ny], [w0[0] - nx, w0[1] - ny],
+            ];
+            const locals = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+            for (const oi of [0, 1, 2, 0, 2, 3]) {
+              frontVerts.push(cs[oi][0], cs[oi][1], locals[oi][0], locals[oi][1], ergb[0], ergb[1], ergb[2], alpha, 0);
+            }
+          };
+          for (const rg of env.rings) {
+            if (rg[3] <= 0.004) continue;
+            const N = 14;
+            let prev = null;
+            for (let vi = 0; vi <= N; vi++) {
+              const th = (vi / N) * Math.PI * 2;
+              const wpt = toW(rg[0] + Math.cos(th) * rg[2], rg[1] + Math.sin(th) * rg[2] * 0.38);
+              if (prev) pushEnvSeg(prev, wpt, rg[3]);
+              prev = wpt;
+            }
+          }
+        }
       }
     }
   }

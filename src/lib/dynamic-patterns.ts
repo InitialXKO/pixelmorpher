@@ -122,6 +122,18 @@ export interface DynamicPatternParams {
   // 自身的后期——作用于本图案的全部绘制：粒子全程 + 发光/弧线/
   // 环绕的颜色主题化）
   postEnabled: boolean;
+  // 环境场段（乙9：区域样本，不依附精灵轮廓）
+  envEnabled: boolean;
+  envMode: 'fall' | 'drift' | 'ripple'; // 落=坠落样本 / 游=漂浮样本 / 涟漪=落点扩散环
+  envCount: number;    // 样本数
+  envWidth: number;    // 区域宽（px，插头为中心）
+  envHeight: number;   // 区域高（px）
+  envHz: number;       // 样本周期（次/秒）
+  envSize: number;     // 样本大小（px）
+  envColor: string;
+  envAlpha: number;    // 峰值不透明度
+  envSeed: number;
+  envRadius: number;   // 涟漪最大半径（px，仅 ripple）
   // 团块段（乙8：距离场种子团块 + 烧穿 + 热度色阶，闭式场）
   blobEnabled: boolean;
   blobRadius: number;    // 团块半径（px）
@@ -289,6 +301,8 @@ export function defaultDynamicParams(): DynamicPatternParams {
     blobColorEdge: '#7a1e00', blobColorMid: '#ff5a00', blobColorCore: '#fff3c4',
     flameEnabled: false, flameWidth: 18, flameHeight: 26, flameHz: 1.2, flameTurbulence: 0.55, flameAlpha: 0.85,
     flameColorEdge: '#8a0e00', flameColorMid: '#ff7a1a', flameColorCore: '#fff3c4',
+    envEnabled: false, envMode: 'fall', envCount: 14, envWidth: 56, envHeight: 44, envHz: 0.9,
+    envSize: 2.2, envColor: '#bcd8ff', envAlpha: 0.8, envSeed: 5, envRadius: 13,
     glowEnabled: false, glowColor: '#7dd7ff', glowStrength: 1, glowHz: 0.8,
     glowPhase: 0, glowHalo: 2, glowMaskSource: 'color', glowPick: '#2ea8ff',
     glowTolerance: 0, glowMask: undefined, glowMarkName: '', glowFollowGroup: 2,
@@ -324,6 +338,9 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
   out.blobCount = Number.isFinite(out.blobCount) ? Math.max(2, Math.min(8, Math.round(out.blobCount))) : 5;
   out.blobBurn = Number.isFinite(out.blobBurn) ? Math.max(0, Math.min(1, out.blobBurn)) : 0.55;
   out.flameTurbulence = Number.isFinite(out.flameTurbulence) ? Math.max(0, Math.min(1, out.flameTurbulence)) : 0.55;
+  if (out.envMode !== 'fall' && out.envMode !== 'drift' && out.envMode !== 'ripple') out.envMode = 'fall';
+  out.envCount = Number.isFinite(out.envCount) ? Math.max(2, Math.min(40, Math.round(out.envCount))) : 14;
+  out.envRadius = Number.isFinite(out.envRadius) ? Math.max(2, Math.min(40, out.envRadius)) : 13;
   out.orbitCount = Number.isFinite(out.orbitCount) ? Math.max(1, Math.min(12, Math.round(out.orbitCount))) : 3;
   if (typeof out.emitMark !== 'string') out.emitMark = '';
   if (typeof out.emitDirMark !== 'string') out.emitDirMark = '';
@@ -521,6 +538,55 @@ export function fieldColorAt(edge: string, mid: string, core: string, heat: numb
   }
   const t = (f - 0.55) / 0.45;
   return [m[0] + (c[0] - m[0]) * t, m[1] + (c[1] - m[1]) * t, m[2] + (c[2] - m[2]) * t];
+}
+
+// ---- 环境场段（乙9）：区域样本（精灵本地 px，原点 = plug）。
+// 样本位置由种子哈希定、时间只经样本周期相位进入，全闭式。
+// ripple 的涟漪从属于落点：前 30% 周期样本坠向本周期落点，
+// 落地后余下周期在落点扩散成环；落点按周期序号换（同周期内恒定）。
+// 运行时孪生 = DYNAMIC_SRC 的 dynEnvSamples。 ----
+
+export interface EnvQuad { x: number; y: number; size: number; line: boolean; dirX: number; dirY: number; alpha: number }
+export interface EnvRing { x: number; y: number; r: number; alpha: number }
+
+export function envSamplesAt(p: DynamicPatternParams, tSec: number): { quads: EnvQuad[]; rings: EnvRing[] } {
+  const quads: EnvQuad[] = [];
+  const rings: EnvRing[] = [];
+  if (!p.envEnabled) return { quads, rings };
+  const W = p.envWidth, H = p.envHeight, hz = p.envHz, seed = p.envSeed;
+  const K = DISPLACE_PERIOD_CELLS;
+  const frac = (v: number) => v - Math.floor(v);
+  for (let i = 0; i < p.envCount; i++) {
+    if (p.envMode === 'fall') {
+      const h1 = displaceHash01(seed, i, 201);
+      const ph = frac(tSec * hz + h1);
+      const x = (h1 - 0.5) * W + (displaceHash01(seed, i, 202) - 0.5) * 4;
+      const fade = Math.pow(Math.sin(Math.PI * Math.min(1, ph)), 0.7);
+      quads.push({ x, y: -H / 2 + ph * H, size: p.envSize * 2.4, line: true, dirX: 0, dirY: 1, alpha: p.envAlpha * fade });
+    } else if (p.envMode === 'drift') {
+      const bx = (displaceHash01(seed, i, 211) - 0.5) * W;
+      const by = (displaceHash01(seed, i, 212) - 0.5) * H;
+      const ph = frac(tSec * hz + displaceHash01(seed, i, 213));
+      const ox = (displaceNoiseU(ph * K + i * 2.3, i * 1.1, K, 4511) - 0.5) * W * 0.16;
+      const oy = (displaceNoiseU(ph * K + i * 1.9 + 31, i * 0.7, K, 9029) - 0.5) * H * 0.16;
+      const tw = 0.25 + 0.75 * Math.sin(Math.PI * ph);
+      quads.push({ x: bx + ox, y: by + oy, size: p.envSize, line: false, dirX: 1, dirY: 0, alpha: p.envAlpha * tw });
+    } else {
+      const h = displaceHash01(seed, i, 221);
+      const cyc = Math.floor(tSec * hz + h);
+      const ph = frac(tSec * hz + h);
+      const x = (displaceHash01(seed, i, 230 + cyc) - 0.5) * W * 0.9;
+      const gy = H / 2 - 2 - displaceHash01(seed, i, 240 + cyc) * 3;
+      if (ph < 0.3) {
+        const f = ph / 0.3;
+        quads.push({ x, y: -H / 2 + f * (gy + H / 2), size: p.envSize * 2.2, line: true, dirX: 0, dirY: 1, alpha: p.envAlpha });
+      } else {
+        const f = (ph - 0.3) / 0.7;
+        rings.push({ x, y: gy, r: 1.5 + f * p.envRadius, alpha: p.envAlpha * (1 - f) * 0.9 });
+      }
+    }
+  }
+  return { quads, rings };
 }
 
 export function blobFieldAt(p: DynamicPatternParams, tSec: number): DynField | null {
@@ -1502,7 +1568,7 @@ export function deleteUserDynamicPattern(name: string): void {
 export interface DynamicParamDef {
   key: keyof DynamicPatternParams;
   label: string;
-  section: '形变' | '发射' | '粒子' | '发光' | '弧线' | '环绕' | '后期' | '团块' | '火焰';
+  section: '形变' | '发射' | '粒子' | '发光' | '弧线' | '环绕' | '后期' | '团块' | '火焰' | '环境';
   min: number;
   max: number;
   step: number;
@@ -1570,6 +1636,14 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'flameHz', label: '上滚循环（次/秒）', section: '火焰', min: 0.2, max: 4, step: 0.05 },
   { key: 'flameTurbulence', label: '撕边强度', section: '火焰', min: 0, max: 1, step: 0.05 },
   { key: 'flameAlpha', label: '不透明度', section: '火焰', min: 0.05, max: 1, step: 0.05 },
+  { key: 'envCount', label: '样本数', section: '环境', min: 2, max: 40, step: 1 },
+  { key: 'envWidth', label: '区域宽（px）', section: '环境', min: 12, max: 120, step: 1 },
+  { key: 'envHeight', label: '区域高（px）', section: '环境', min: 12, max: 120, step: 1 },
+  { key: 'envHz', label: '样本周期（次/秒）', section: '环境', min: 0.1, max: 3, step: 0.05 },
+  { key: 'envSize', label: '样本大小（px）', section: '环境', min: 1, max: 6, step: 0.1 },
+  { key: 'envAlpha', label: '不透明度', section: '环境', min: 0.05, max: 1, step: 0.05 },
+  { key: 'envSeed', label: '形状种子', section: '环境', min: 1, max: 9999, step: 1 },
+  { key: 'envRadius', label: '涟漪最大半径（px）', section: '环境', min: 4, max: 30, step: 1 },
   { key: 'glowStrength', label: '发光强度（峰值）', section: '发光', min: 0, max: 2, step: 0.05 },
   { key: 'glowHz', label: '呼吸频率（次/秒）', section: '发光', min: 0, max: 3, step: 0.05 },
   { key: 'glowPhase', label: '呼吸相位', section: '发光', min: 0, max: 1, step: 0.01 },

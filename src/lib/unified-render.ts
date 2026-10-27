@@ -78,7 +78,7 @@ import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/procedural';
 import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followAnchoredDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
 import { effectivePatternGraph, resolvePatternsFromGraph } from './blueprint/pattern-sync';
-import { orbitPointsAt, postColorAt, blobFieldAt, flameFieldAt, fieldColorAt } from './dynamic-patterns';
+import { orbitPointsAt, postColorAt, blobFieldAt, flameFieldAt, fieldColorAt, envSamplesAt } from './dynamic-patterns';
 import { evaluateNodeOutput } from './blueprint/eval';
 import { markPointPx, markDirAngleDeg } from './sprite-marks';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
@@ -2444,6 +2444,51 @@ function drawDynamicParticles(
           if (instruction.mirror) ctx.scale(-1, 1);
           ctx.drawImage(fc.canvas, -fc.ox, -fc.oy);
           ctx.restore();
+        }
+      }
+    }
+    // 环境场样本（乙9）：区域样本（落/游/涟漪），身前层绘制
+    if (layer === 'front') {
+      const tSecE = instruction.frame / instruction.frameRate;
+      for (const resolved of list) {
+        const params = resolved.instance.params;
+        if (!params.envEnabled) continue;
+        const env = envSamplesAt(params, tSecE);
+        const m = /^#([0-9a-fA-F]{6})$/.exec(postColorAt(params, params.envColor));
+        const rgb = m
+          ? `${parseInt(m[1].slice(0, 2), 16)},${parseInt(m[1].slice(2, 4), 16)},${parseInt(m[1].slice(4), 16)}`
+          : '188,216,255';
+        const flipX = (x: number) => (instruction.mirror ? -x : x);
+        for (const q of env.quads) {
+          const gx = flipX(q.x);
+          ctx.fillStyle = `rgba(${rgb},${Math.max(0, Math.min(1, q.alpha)).toFixed(3)})`;
+          if (q.line) {
+            const len = Math.max(2, q.size * 1.6);
+            const dx = instruction.mirror ? -q.dirX : q.dirX;
+            ctx.beginPath();
+            ctx.moveTo(gx - dx * len / 2, q.y - q.dirY * len / 2);
+            ctx.lineTo(gx + dx * len / 2, q.y + q.dirY * len / 2);
+            ctx.lineWidth = Math.max(1, q.size / 2.2);
+            ctx.strokeStyle = ctx.fillStyle;
+            ctx.stroke();
+          } else {
+            const r = Math.max(0.5, q.size / 2);
+            const grad = ctx.createRadialGradient(gx, q.y, 0, gx, q.y, r * 1.6);
+            grad.addColorStop(0, `rgba(${rgb},${Math.max(0, Math.min(1, q.alpha)).toFixed(3)})`);
+            grad.addColorStop(1, `rgba(${rgb},0)`);
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.arc(gx, q.y, r * 1.6, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.lineWidth = 1;
+        for (const rg of env.rings) {
+          if (rg.alpha <= 0.004) continue;
+          ctx.strokeStyle = `rgba(${rgb},${Math.max(0, Math.min(1, rg.alpha)).toFixed(3)})`;
+          ctx.beginPath();
+          ctx.ellipse(flipX(rg.x), rg.y, rg.r, rg.r * 0.38, 0, 0, Math.PI * 2);
+          ctx.stroke();
         }
       }
     }

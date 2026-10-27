@@ -397,5 +397,47 @@ console.log('G 组：场进包携带 + 模板取样点对拍 + 接线在场');
   })());
 }
 
+// ---- H 组：乙9 环境场段 ----
+console.log('H 组：环境场样本——双侧逐值对拍 + 三模式行为');
+{
+  const { envSamplesAt } = await import('../src/lib/dynamic-patterns');
+  const rt5 = rt as unknown as {
+    dynEnvSamples: (p: unknown, t: number) => { quads: [number, number, number, number, number, number, number][]; rings: [number, number, number, number][] };
+  };
+  const eqEnv = (name: string, over: Partial<DynamicPatternParams>, t: number) => {
+    const p = { ...defaultDynamicParams(), envEnabled: true, ...over };
+    const a = envSamplesAt(p, t);
+    const b = rt5.dynEnvSamples(p, t);
+    const okQ = a.quads.length === b.quads.length && a.quads.every((q, i) => {
+      const v = b.quads[i]!;
+      return near(q.x, v[0], 1e-9) && near(q.y, v[1], 1e-9) && near(q.size, v[2], 1e-9)
+        && (q.line ? 1 : 0) === v[3] && near(q.dirX, v[4], 1e-9) && near(q.dirY, v[5], 1e-9) && near(q.alpha, v[6], 1e-9);
+    });
+    const okR = a.rings.length === b.rings.length && a.rings.every((r, i) => {
+      const v = b.rings[i]!;
+      return near(r.x, v[0], 1e-9) && near(r.y, v[1], 1e-9) && near(r.r, v[2], 1e-9) && near(r.alpha, v[3], 1e-9);
+    });
+    check(name, okQ && okR, `quads ${a.quads.length}/${b.quads.length} rings ${a.rings.length}/${b.rings.length}`);
+    return a;
+  };
+  const fall = eqEnv('H1 落模式差分（t=0.42）', { envMode: 'fall', envCount: 10, envHz: 0.9 }, 0.42);
+  check('H2 落样本全在区域内且为线形', fall.quads.length + fall.rings.length > 0
+    && fall.quads.every((q) => Math.abs(q.x) <= 30 && q.y >= -22 && q.y <= 22 && q.line));
+  const fall2 = eqEnv('H3 落模式差分（t=0.83）', { envMode: 'fall', envCount: 10, envHz: 0.9 }, 0.83);
+  check('H4 样本随时间下落（同数样本 y 中位数变大）', (() => {
+    const med = (a: typeof fall) => [...a.quads].sort((u, v) => u.y - v.y)[Math.floor(a.quads.length / 2)]!.y;
+    return med(fall2) !== med(fall);
+  })());
+  const drift = eqEnv('H5 游模式差分（t=0.37）', { envMode: 'drift', envCount: 12, envHz: 0.7 }, 0.37);
+  check('H6 游样本不出区域+漂移范围', drift.quads.every((q) => Math.abs(q.x) <= 28 * 1.09 && Math.abs(q.y) <= 22 * 1.09 && !q.line));
+  const rip = eqEnv('H7 涟漪差分（t=0.55）', { envMode: 'ripple', envCount: 8, envHz: 1.1, envRadius: 15 }, 0.55);
+  const rip2 = eqEnv('H8 涟漪差分（t=0.95）', { envMode: 'ripple', envCount: 8, envHz: 1.1, envRadius: 15 }, 0.95);
+  check('H9 涟漪环半径不超上限+alpha 不超峰值', [...rip.rings, ...rip2.rings].every((r) => r.r <= 16.5 && r.alpha <= 0.8));
+  check('H10 涟漪环心贴近底线（区域下半）', [...rip.rings, ...rip2.rings].every((r) => r.y > 22 - 6));
+  check('H11 关时为空（双侧）', envSamplesAt(defaultDynamicParams(), 0.5).quads.length === 0
+    && rt5.dynEnvSamples(defaultDynamicParams(), 0.5).rings.length === 0);
+  check('H12 坏模式归一回落 fall', normalizeDynamicParams({ ...defaultDynamicParams(), envMode: 'zzz' } as DynamicPatternParams).envMode === 'fall');
+}
+
 console.log(`\n合计：${pass} 过 / ${fail} 败`);
 if (fail > 0) process.exit(1);

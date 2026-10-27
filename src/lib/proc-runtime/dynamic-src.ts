@@ -599,6 +599,47 @@ function dynFlameField(params, tSec) {
   }
   return { w: w, h: h, heat: heat, ox: ox, oy: oy };
 }
+// 与 dynamic-patterns.ts envSamplesAt 逐值同式（探针 H 组对拍）。
+// quads: [x, y, size, line(0/1), dirX, dirY, alpha]；rings: [x, y, r, alpha]
+function dynEnvSamples(params, tSec) {
+  const quads = [];
+  const rings = [];
+  if (!params.envEnabled) return { quads: quads, rings: rings };
+  const W = params.envWidth, H = params.envHeight, hz = params.envHz, seed = params.envSeed;
+  const K = DYN_DISPLACE_PERIOD;
+  const frac = (v) => v - Math.floor(v);
+  for (let i = 0; i < params.envCount; i++) {
+    if (params.envMode === 'drift') {
+      const bx = (dynHash01(seed, i, 211) - 0.5) * W;
+      const by = (dynHash01(seed, i, 212) - 0.5) * H;
+      const ph = frac(tSec * hz + dynHash01(seed, i, 213));
+      const ox = (dynNoiseU(ph * K + i * 2.3, i * 1.1, K, 4511) - 0.5) * W * 0.16;
+      const oy = (dynNoiseU(ph * K + i * 1.9 + 31, i * 0.7, K, 9029) - 0.5) * H * 0.16;
+      const tw = 0.25 + 0.75 * Math.sin(Math.PI * ph);
+      quads.push([bx + ox, by + oy, params.envSize, 0, 1, 0, params.envAlpha * tw]);
+    } else if (params.envMode === 'ripple') {
+      const h = dynHash01(seed, i, 221);
+      const cyc = Math.floor(tSec * hz + h);
+      const ph = frac(tSec * hz + h);
+      const x = (dynHash01(seed, i, 230 + cyc) - 0.5) * W * 0.9;
+      const gy = H / 2 - 2 - dynHash01(seed, i, 240 + cyc) * 3;
+      if (ph < 0.3) {
+        const f = ph / 0.3;
+        quads.push([x, -H / 2 + f * (gy + H / 2), params.envSize * 2.2, 1, 0, 1, params.envAlpha]);
+      } else {
+        const f = (ph - 0.3) / 0.7;
+        rings.push([x, gy, 1.5 + f * params.envRadius, params.envAlpha * (1 - f) * 0.9]);
+      }
+    } else {
+      const h1 = dynHash01(seed, i, 201);
+      const ph = frac(tSec * hz + h1);
+      const x = (h1 - 0.5) * W + (dynHash01(seed, i, 202) - 0.5) * 4;
+      const fade = Math.pow(Math.sin(Math.PI * Math.min(1, ph)), 0.7);
+      quads.push([x, -H / 2 + ph * H, params.envSize * 2.4, 1, 0, 1, params.envAlpha * fade]);
+    }
+  }
+  return { quads: quads, rings: rings };
+}
 function dynProcSeededRandom(seed) {
   let s = seed | 0;
   return () => { s = (s * 1664525 + 1013904223) | 0; return (s >>> 0) / 4294967295; };
@@ -662,6 +703,7 @@ export function createDynamicRuntime(): {
   dynParticleColorAt: (params: never, lifeRatio: number) => string;
   dynPostColorAt: (params: never, hex: string) => string;
   dynFieldColorAt: (edge: string, mid: string, core: string, heat: number) => [number, number, number];
+  dynEnvSamples: (params: never, tSec: number) => { quads: [number, number, number, number, number, number, number][]; rings: [number, number, number, number][] };
   dynBlobField: (params: never, tSec: number) => { w: number; h: number; heat: Float32Array; ox: number; oy: number } | null;
   dynFlameField: (params: never, tSec: number) => { w: number; h: number; heat: Float32Array; ox: number; oy: number } | null;
   dynOrbitPoints: (params: never, tSec: number, worldAngleDeg?: number) => { x: number; y: number }[];
@@ -671,6 +713,6 @@ export function createDynamicRuntime(): {
   dynArcPoints: (params: never, t: number, endX?: number, endY?: number, hasEnd?: boolean) => { main: [number, number, number][]; branches: [number, number, number][][]; dots: [number, number, number][]; alpha: number };
   dynProceduralValue: (cfg: never, frame: number) => number;
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynParticleColorAt, dynOrbitPoints, dynPostColorAt, dynFieldColorAt, dynBlobField, dynFlameField };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynParticleColorAt, dynOrbitPoints, dynPostColorAt, dynFieldColorAt, dynBlobField, dynFlameField, dynEnvSamples };`);
   return factory() as never;
 }
