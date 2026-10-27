@@ -961,6 +961,61 @@ function ensureAtlas(gl, variant, costumeName) {
       entries.push(['slash:' + perf.id + ':' + fi, tile, { composite: 'slashfx', params: { hidden: false } }, false, fr, null, 0]);
     }
   }
+  // 团块/火焰场帧（乙8）：按当前服装集的动态实例现算一个周期的
+  // 帧图，与刀光同路进图集（composite=4 直读底图、真 alpha）；场
+  // 函数与编辑器逐格同式（DYNAMIC_SRC 孪生），颜色过图案级后期。
+  // 部件镜像时场图水平翻转（与瓦片变体同朝向）。
+  const fieldTiles = {};
+  const FIELD_FRAMES = 12;
+  for (const part of PARTS) {
+    const cmapF = costume && costume.__dynamic;
+    const dlF = (cmapF && cmapF[part.key]) || part.dynamic || [];
+    if (!dlF.length) continue;
+    const mirF = variantMirrored(part, variant);
+    dlF.forEach((inst, ii) => {
+      const pp = (inst && inst.params) || {};
+      const kindsF = [];
+      if (pp.blobEnabled) kindsF.push('blob');
+      if (pp.flameEnabled) kindsF.push('flame');
+      for (const kind of kindsF) {
+        const hzF = kind === 'blob' ? (pp.blobHz || 0.8) : (pp.flameHz || 1.2);
+        const eHex = kind === 'blob' ? pp.blobColorEdge : pp.flameColorEdge;
+        const mHex = kind === 'blob' ? pp.blobColorMid : pp.flameColorMid;
+        const cHex = kind === 'blob' ? pp.blobColorCore : pp.flameColorCore;
+        const segAlpha = kind === 'blob' ? (pp.blobAlpha ?? 0.85) : (pp.flameAlpha ?? 0.85);
+        for (let fi = 0; fi < FIELD_FRAMES; fi++) {
+          const fld = kind === 'blob' ? dynBlobField(pp, fi / (FIELD_FRAMES * hzF)) : dynFlameField(pp, fi / (FIELD_FRAMES * hzF));
+          if (!fld) break;
+          const M = 2;
+          const tile = {
+            w: fld.w + M * 2, h: fld.h + M * 2,
+            cx: M + (mirF ? fld.w - 1 - fld.ox : fld.ox), cy: M + fld.oy,
+            data: new Uint8Array((fld.w + M * 2) * (fld.h + M * 2) * 4),
+          };
+          for (let q = 0; q < tile.w * tile.h; q++) { tile.data[q * 4] = 255; tile.data[q * 4 + 3] = 255; }
+          const fr = { w: fld.w, h: fld.h, data: new Uint8Array(fld.w * fld.h * 4) };
+          for (let cy2 = 0; cy2 < fld.h; cy2++) {
+            for (let cx2 = 0; cx2 < fld.w; cx2++) {
+              const scx = mirF ? fld.w - 1 - cx2 : cx2;
+              const hv = fld.heat[cy2 * fld.w + scx];
+              if (hv <= 0.003) continue;
+              let rgb = dynFieldColorAt(eHex, mHex, cHex, hv);
+              if (pp.postEnabled && pp.postTheme && pp.postTheme !== 'none') {
+                const hexS = '#' + rgb.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+                const mapped = parseHexRt(dynPostColorAt(pp, hexS));
+                if (mapped) rgb = mapped;
+              }
+              const o = (cy2 * fld.w + cx2) * 4;
+              fr.data[o] = Math.round(rgb[0]); fr.data[o + 1] = Math.round(rgb[1]); fr.data[o + 2] = Math.round(rgb[2]);
+              fr.data[o + 3] = Math.round(255 * Math.min(1, hv) * segAlpha);
+            }
+          }
+          tiles.push(tile);
+          entries.push(['field:' + part.key + ':' + ii + ':' + kind + ':' + fi, tile, { composite: 'slashfx', params: { hidden: false } }, false, fr, null, 0]);
+        }
+      }
+    });
+  }
   const pack = packAtlas(tiles, 256);
   const height = pack.height;
   const slashTiles = {};
@@ -1040,12 +1095,21 @@ function ensureAtlas(gl, variant, costumeName) {
         baseData.set(fr.data.subarray(j * fr.w * 4, (j + 1) * fr.w * 4), ((ay + 2 + j) * 256 + ax + 2) * 4);
       }
       const key = entries[i][0];
+      if (key.startsWith('field:')) {
+        const rest = key.slice(6);
+        const fiF = Number(rest.slice(rest.lastIndexOf(':') + 1));
+        const regF = rest.slice(0, rest.lastIndexOf(':'));
+        (fieldTiles[regF] = fieldTiles[regF] || [])[fiF] = {
+          tile: [ax, ay, tile.w, tile.h], tileCx: tile.cx, tileCy: tile.cy, size: [tile.w, tile.h],
+        };
+      } else {
       const perfId = key.slice(6, key.lastIndexOf(':'));
       const fi = Number(key.slice(key.lastIndexOf(':') + 1));
       (slashTiles[perfId] = slashTiles[perfId] || [])[fi] = {
         tile: [ax, ay, tile.w, tile.h], tileCx: tile.cx, tileCy: tile.cy, size: [tile.w, tile.h],
       };
     }
+      }
     const ekey = entries[i][0];
     const animPos = ekey.indexOf('#anim');
     if (animPos >= 0) {
@@ -1084,7 +1148,7 @@ function ensureAtlas(gl, variant, costumeName) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  atlasState = { variant: variant, costumeName: costumeName, osig: osig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles };
+  atlasState = { variant: variant, costumeName: costumeName, osig: osig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles, fieldTiles: fieldTiles };
   return atlasState;
 }
 
@@ -2993,6 +3057,27 @@ function frame(now) {
     };
     els.push(el);
     elByKey.set(part.key, el);
+    // 团块/火焰场（乙8）：帧图贴部件位姿（场瓦片以插头为原点）
+    if (state.fieldTiles) {
+      dynList.forEach((inst, ii) => {
+        const pp = (inst && inst.params) || {};
+        const kindsR = [];
+        if (pp.blobEnabled) kindsR.push(['blob', pp.blobHz || 0.8]);
+        if (pp.flameEnabled) kindsR.push(['flame', pp.flameHz || 1.2]);
+        for (const [kind, hzR] of kindsR) {
+          const frames = state.fieldTiles[part.key + ':' + ii + ':' + kind];
+          if (!frames || !frames.length) continue;
+          const ft = frames[Math.floor(elapsed * hzR * frames.length) % frames.length];
+          if (!ft) continue;
+          els.push({
+            pos: [el.pos[0], el.pos[1]], size: [ft.size[0] * 3, ft.size[1] * 3], rot: el.rot,
+            tileCx: ft.tileCx, tileCy: ft.tileCy, tile: ft.tile,
+            family: 0, seed: 0, modes: [0, 0, 0, 0], param: [0, 0, 0],
+            ghost: false, composite: 4, deform: undefined, glow: [], glowSpace: [], glowStamps: undefined,
+          });
+        }
+      });
+    }
     // 网格蒙皮（缺口 4）：收集变形活儿，循环后父子位姿齐了再执行
     if (part.skin && tile && place) {
       skinJobs.push({

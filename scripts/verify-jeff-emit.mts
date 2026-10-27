@@ -330,5 +330,72 @@ console.log('F 组：团块/火焰场——双侧逐格对拍 + 周期无缝 + �
   check('F13 热度色阶中点 = 中色（双侧）', near(c1[0], 255) && near(c1[1], 0) && JSON.stringify(c1) === JSON.stringify(c2));
 }
 
+// ---- G 组：乙8 后半（场进包 + 模板上屏接线） ----
+console.log('G 组：场进包携带 + 模板取样点对拍 + 接线在场');
+{
+  const { convertCharacterToRuntimePackage } = await import('../src/lib/proc-runtime/convert');
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  const { createDynamicInstance } = await import('../src/lib/dynamic-patterns');
+  const { createDefaultCostumePiece, pxToSub } = await import('../src/lib/unified-types');
+  const { createDefaultParametricAppearance } = await import('../src/lib/proc-runtime/surfaces');
+  const { blobFieldAt, flameFieldAt } = await import('../src/lib/dynamic-patterns');
+  const grid8: (string | null)[][] = Array.from({ length: 8 }, () => Array(8).fill('#884422'));
+  const sprite8 = { width: 8, height: 8, data: grid8, plug: { x: pxToSub(4), y: pxToSub(6) } };
+  const fieldParams = {
+    ...defaultDynamicParams(),
+    blobEnabled: true, blobRadius: 12, blobHz: 0.8,
+    flameEnabled: true, flameWidth: 14, flameHeight: 20, flameHz: 1.2,
+  };
+  const piece = createDefaultCostumePiece('torso');
+  piece.parametric = { ...createDefaultParametricAppearance(), composite: 'overlay', haloWidth: 2 } as never;
+  (piece.sprites as Record<number, unknown>)[2] = sprite8;
+  const node = {
+    id: 'torso', name: '躯干', role: 'bone',
+    slot: { slotKey: 'torso' },
+    transform: { x: 0, y: 0, angle: 0, variantIndex: 2, stretch: 1 },
+    attachment: { type: 'fixed' }, sockets: [], tracks: {}, modifiers: [], children: [],
+    dynamicPatterns: [createDynamicInstance('熔火', fieldParams, '身体')],
+  };
+  const ch = {
+    id: 'chG', name: '场测试',
+    nodes: { torso: node },
+    rootNodeId: 'torso', rootNodeIds: ['torso'],
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { torso: piece } }],
+    activeCostumeSetId: 'set1', variants: {},
+  } as never;
+  const pkg = convertCharacterToRuntimePackage(ch);
+  const torso = pkg.parts.find((p) => p.key === 'torso');
+  const dp = torso?.dynamic?.[0]?.params as unknown as Record<string, unknown> | undefined;
+  check('G1 团块/火焰参数随包（动态实例完整携带）',
+    !!dp && dp.blobEnabled === true && dp.flameEnabled === true && dp.blobRadius === 12 && dp.flameHeight === 20);
+  const html = buildRuntimeHtml(pkg);
+  check('G2 模板接线在场（图集生成场帧 + 注册 + 渲染推入）',
+    html.includes('dynBlobField(pp, fi / (FIELD_FRAMES * hzF))')
+    && html.includes("key.startsWith('field:')")
+    && html.includes('state.fieldTiles')
+    && html.includes("part.key + ':' + ii + ':' + kind"));
+  const K = 12;
+  check('G3 帧选择相位误差 < 1/K（0.8Hz 与 1.2Hz 多时刻）', [0.8, 1.2].every((hz) =>
+    [0.13, 0.57, 1.04, 2.39].every((t) => {
+      const idx = Math.floor(t * hz * K) % K;
+      return Math.abs(((t * hz) % 1) - idx / K) <= 1 / K + 1e-9;
+    })));
+  const rtG = rt as unknown as {
+    dynBlobField: (p: unknown, t: number) => { heat: Float32Array } | null;
+    dynFlameField: (p: unknown, t: number) => { heat: Float32Array } | null;
+  };
+  check('G4 模板烘焙取样点（fi/(K·Hz)，12 点）与编辑器场逐格同', (() => {
+    for (let fi = 0; fi < K; fi++) {
+      const tb = fi / (K * 0.8);
+      const a = blobFieldAt(fieldParams, tb), b = rtG.dynBlobField(fieldParams, tb);
+      if (!a || !b || a.heat.length !== b.heat.length || !Array.from(a.heat).every((v, i) => near(v, b.heat[i]!, 1e-6))) return false;
+      const tf = fi / (K * 1.2);
+      const c = flameFieldAt(fieldParams, tf), d = rtG.dynFlameField(fieldParams, tf);
+      if (!c || !d || c.heat.length !== d.heat.length || !Array.from(c.heat).every((v, i) => near(v, d.heat[i]!, 1e-6))) return false;
+    }
+    return true;
+  })());
+}
+
 console.log(`\n合计：${pass} 过 / ${fail} 败`);
 if (fail > 0) process.exit(1);
