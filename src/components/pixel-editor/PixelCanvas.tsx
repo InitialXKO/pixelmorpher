@@ -299,6 +299,7 @@ export default function PixelCanvas() {
           sleeveRatio: useEditorStore.getState().mannequinSleeveRatio,
           pantsRatio: useEditorStore.getState().mannequinPantsRatio,
           fogStrength: useEditorStore.getState().depthFogStrength,
+          faceGuide: useEditorStore.getState().showFaceGuide,
         });
     }
 

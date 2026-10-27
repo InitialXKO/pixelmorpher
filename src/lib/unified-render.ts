@@ -30,6 +30,7 @@ import {
   worldToViewBasis, MAT3_IDENTITY,
 } from './unified-types';
 import { solveIK2Bone3D, solveIKFabrik3D } from './blueprint/ik';
+import { DEFAULT_FACE_FEATURES, faceFeaturePoints, faceHalfWidths } from './face-features';
 import { slashFrameCanvas } from './slash-fan';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
@@ -1537,6 +1538,7 @@ function generateMannequinInstructions(
   instructedNodeIds: ReadonlySet<string>,
   claimedParents: ReadonlySet<string>,
   clothing: { sleeveRatio: number; pantsRatio: number },
+  faceGuide?: boolean,
 ): MannequinRenderInstruction[] {
   const out: MannequinRenderInstruction[] = [];
   const centerSubX = pxToSub(canvasWidth / 2);
@@ -1704,6 +1706,50 @@ function generateMannequinInstructions(
         outlineColor: '#4a5160',
         extremity: 'thumb',
       });
+    }
+  }
+
+  // 蛋形头（借 PoseSketcher 头蛋形）：头部节点的颈→头段上再挂一个蛋
+  // 形——中心 = 头关节，长半轴 = 颈段长一半（头中心→颈上恰半个头
+  // 高），宽半轴 = 长 ×0.7，长轴沿父关节→头关节方向；颈段退化时
+  // 朝上、长半轴按关节半径估。五官参照开关开启时，按头部框口径把
+  // 五官线段现算进指令（节点 faceFeatures/faceTurn 优先，缺省标准
+  // 三庭），与精灵头的五官参照叠画同参数同公式、互为有无精灵两路。
+  for (const [nodeId, j] of joints) {
+    const node = character.nodes[nodeId]!;
+    const lname = node.name.toLowerCase();
+    if (!lname.includes('head') && !lname.includes('头')) continue;
+    const ins = out.find((m) => m.nodeId === nodeId && !m.extremity);
+    if (!ins) continue;
+    const sx = subToPx(j.sx), sy = subToPx(j.sy);
+    const ex = subToPx(j.ex), ey = subToPx(j.ey);
+    const segLen = Math.hypot(ex - sx, ey - sy);
+    let ax = 0, ay = -1;
+    if (segLen > 0.5) { ax = (ex - sx) / segLen; ay = (ey - sy) / segLen; }
+    const a = Math.max(segLen / 2, radiusOf(nodeId) * 1.8, 5);
+    const b = a * 0.7;
+    ins.head = { cx: j.ex, cy: j.ey, a, b, angleRad: Math.atan2(ay, ax) };
+    if (faceGuide) {
+      const fp = node.faceFeatures ?? DEFAULT_FACE_FEATURES;
+      const yaw = node.faceTurn?.yaw ?? 0;
+      const pitch = node.faceTurn?.pitch ?? 0;
+      const pts = faceFeaturePoints(fp, yaw, pitch);
+      const hw = faceHalfWidths(fp, yaw);
+      const rx = -ay, ry = ax;
+      const mapPt = (fx: number, fy: number) => ({
+        x: pxToSub(ex + rx * (fx - 0.5) * 2 * b + ax * (0.5 - fy) * 2 * a),
+        y: pxToSub(ey + ry * (fx - 0.5) * 2 * b + ay * (0.5 - fy) * 2 * a),
+      });
+      const segOf = (p: { x: number; y: number }, halfW: number) => {
+        const p1 = mapPt(p.x - halfW, p.y);
+        const p2 = mapPt(p.x + halfW, p.y);
+        return { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y };
+      };
+      ins.faceSegs = [
+        segOf(pts.browL, hw.eye * 0.8), segOf(pts.browR, hw.eye * 0.8),
+        segOf(pts.eyeL, hw.eye), segOf(pts.eyeR, hw.eye),
+        segOf(pts.noseBase, hw.nose), segOf(pts.mouth, hw.mouth),
+      ];
     }
   }
   return out;
@@ -1939,7 +1985,7 @@ export function generateRenderPlan(
   // 转换/导出路径不传 → 恒为空，运行时包不受影响
   mannequinFallback?: boolean,
   // 编辑器显示效果（仅主画布传）：人偶衣物色区比例 + 空气透视强度
-  editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number },
+  editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number; faceGuide?: boolean },
 ): RenderPlan {
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
@@ -2461,6 +2507,7 @@ export function generateRenderPlan(
         character, worldTransforms, canvasWidth, canvasHeight, currentDirection,
         new Set(nodeInstructions.map((i) => i.nodeId)), claimedParents,
         { sleeveRatio: editorFx?.sleeveRatio ?? 0, pantsRatio: editorFx?.pantsRatio ?? 0 },
+        editorFx?.faceGuide ?? false,
       )
     : [];
 
@@ -3623,13 +3670,38 @@ function renderMannequin(
     ctx.lineWidth = rAvg * 2;
     ctx.stroke();
   }
-  ctx.beginPath();
-  ctx.arc(x2, y2, Math.max(1, instruction.r2), 0, Math.PI * 2);
-  ctx.fillStyle = cloth >= 1 ? '#5b7ea6' : instruction.fillColor;
-  ctx.fill();
-  ctx.strokeStyle = instruction.outlineColor;
-  ctx.lineWidth = 1;
-  ctx.stroke();
+  if (instruction.head) {
+    // 蛋形头替代末端关节圆：长轴沿颈向的椭圆（头不是胶囊段）
+    const h = instruction.head;
+    const cx = subToPx(h.cx), cy = subToPx(h.cy);
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, h.a, h.b, h.angleRad, 0, Math.PI * 2);
+    ctx.fillStyle = instruction.fillColor;
+    ctx.fill();
+    ctx.strokeStyle = instruction.outlineColor;
+    ctx.lineWidth = 1.25;
+    ctx.stroke();
+    // 五官线段（仅五官参照开启时生成端才写入）
+    if (instruction.faceSegs) {
+      ctx.strokeStyle = '#22d3ee';
+      ctx.fillStyle = '#22d3ee';
+      ctx.lineWidth = 1.25;
+      for (const s of instruction.faceSegs) {
+        const fx1 = subToPx(s.x1), fy1 = subToPx(s.y1);
+        const fx2 = subToPx(s.x2), fy2 = subToPx(s.y2);
+        ctx.beginPath(); ctx.moveTo(fx1, fy1); ctx.lineTo(fx2, fy2); ctx.stroke();
+        ctx.beginPath(); ctx.arc((fx1 + fx2) / 2, (fy1 + fy2) / 2, 1.6, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+  } else {
+    ctx.beginPath();
+    ctx.arc(x2, y2, Math.max(1, instruction.r2), 0, Math.PI * 2);
+    ctx.fillStyle = cloth >= 1 ? '#5b7ea6' : instruction.fillColor;
+    ctx.fill();
+    ctx.strokeStyle = instruction.outlineColor;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -4091,7 +4163,7 @@ function renderPuppetViaUnifiedPipeline(
   activeClipId?: string | null,
   geometryDirection?: DirectionIndex,
   mannequinFallback?: boolean,
-  editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number },
+  editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number; faceGuide?: boolean },
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
@@ -4147,7 +4219,7 @@ export function renderUnified(
   activeClipId?: string | null,
   geometryDirection?: DirectionIndex,
   mannequinFallback?: boolean,
-  editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number },
+  editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number; faceGuide?: boolean },
 ): void {
   if (backgroundColor !== 'transparent') {
     ctx.fillStyle = backgroundColor;

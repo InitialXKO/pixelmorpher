@@ -1548,6 +1548,14 @@ export interface MannequinRenderInstruction {
   /** 手脚延伸段（肢体末端叶子节点在腕/踝之外伸出的手掌/脚掌/拇指，
    * nodeId 仍记末端关节节点）；缺省 = 普通骨段 */
   extremity?: 'hand' | 'foot' | 'thumb';
+  /** 蛋形头（头部节点专用，挂在本节点的颈→头段上）：中心 = 头关节
+   * （画布 SubPixel），a/b = 长/宽半轴 px（借 PoseSketcher 头蛋形：
+   * 长半轴 = 颈段长一半、宽 = 长 ×0.7），angleRad = 长轴方向
+   * （自父关节指向头关节）。存在时执行端画蛋形头替代末端关节圆 */
+  head?: { cx: SubPixel; cy: SubPixel; a: number; b: number; angleRad: number };
+  /** 五官线段（画布 SubPixel 坐标）：仅五官参照开关开启时生成，
+   * 按头部框口径（节点 faceFeatures/faceTurn，缺省标准三庭）现算 */
+  faceSegs?: { x1: SubPixel; y1: SubPixel; x2: SubPixel; y2: SubPixel }[];
 }
 
 /** Complete render plan for a frame */

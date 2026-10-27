@@ -110,13 +110,15 @@ const wrist = mkNode('mq2_wrist', 'wrist_L', farm.id);
 const thigh = mkNode('mq2_thigh', 'thigh_R', pelvis.id);
 const shin = mkNode('mq2_shin', 'shin_R', thigh.id);
 const ankle = mkNode('mq2_ankle', 'ankle_R', shin.id);
+const headN = mkNode('mq2_head', 'head', pelvis.id);
 link(pelvis, uarm, -20, 30);
 link(uarm, farm, 0, 30);
 link(farm, wrist, 0, 30);
 link(pelvis, thigh, 15, 40);
 link(thigh, shin, 0, 35);
 link(shin, ankle, 0, 35);
-const nodes2 = Object.fromEntries([pelvis, uarm, farm, wrist, thigh, shin, ankle].map((n) => [n.id, n]));
+link(pelvis, headN, 0, -55);
+const nodes2 = Object.fromEntries([pelvis, uarm, farm, wrist, thigh, shin, ankle, headN].map((n) => [n.id, n]));
 const character2 = {
   id: 'mqchar2', name: '手脚测试', nodes: nodes2, rootNodeId: pelvis.id, sprites: {},
   costumeSets: [], activeCostumeSetId: undefined, direction: 6, latitude: 0,
@@ -154,6 +156,31 @@ if (foot) {
 const ext2 = (plan2().mannequinInstructions ?? []).filter((m) => m.extremity);
 ok(ext2.length === 1 && ext2[0]!.extremity === 'foot', `⑦ finger 叶子：只剩脚延伸（实际 ${ext2.map((m) => m.extremity).join(',')}）`);
 (wrist as any).name = 'wrist_L';
+
+// ⑧ 蛋形头 + 五官开关：头段（颈长 55）挂蛋形（长半轴 27.5 = 段长/2、
+// 宽 = 长 ×0.7、中心 = 头关节）；五官参照关 → 无五官段，开 → 6 段
+// 且眼在中心上方、嘴在眼下方、鼻居中
+const plan2Fx = (faceGuide: boolean) => generateRenderPlan(character2, 0, 256, 256, 'pixel-perfect', 12,
+  undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, {},
+  undefined, undefined, undefined, undefined, undefined, true, { faceGuide });
+const headIns = mq2.find((m) => m.nodeId === headN.id && !m.extremity);
+ok(!!headIns?.head, '⑧ 头段挂蛋形头');
+if (headIns?.head) {
+  ok(Math.abs(headIns.head.a - 27.5) < 0.6, `⑧ 长半轴 = 颈段 55/2 = 27.5（实际 ${headIns.head.a.toFixed(1)}）`);
+  ok(Math.abs(headIns.head.b - headIns.head.a * 0.7) < 0.6, `⑧ 宽半轴 = 长 ×0.7（实际 ${headIns.head.b.toFixed(1)}）`);
+  ok(headIns.head.cx === headIns.x2 && headIns.head.cy === headIns.y2, '⑧ 蛋心 = 头关节');
+  ok(headIns.faceSegs === undefined, '⑧ 五官参照关（缺省）：无五官段');
+}
+const headFx = (plan2Fx(true).mannequinInstructions ?? []).find((m) => m.nodeId === headN.id && !m.extremity);
+ok(!!headFx?.faceSegs && headFx.faceSegs.length === 6, `⑧ 五官参照开：6 段五官（实际 ${headFx?.faceSegs?.length}）`);
+if (headFx?.head && headFx.faceSegs) {
+  const cy = subToPx(headFx.head.cy), cx = subToPx(headFx.head.cx);
+  const midY = (s: (typeof headFx.faceSegs)[number]) => (subToPx(s.y1) + subToPx(s.y2)) / 2;
+  const midX = (s: (typeof headFx.faceSegs)[number]) => (subToPx(s.x1) + subToPx(s.x2)) / 2;
+  ok(midY(headFx.faceSegs[2]!) < cy, '⑧ 眼线在蛋心上方');
+  ok(midY(headFx.faceSegs[5]!) > midY(headFx.faceSegs[2]!), '⑧ 嘴线在眼线下方');
+  ok(Math.abs(midX(headFx.faceSegs[4]!) - cx) < 1.5, '⑧ 鼻居中');
+}
 
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
 process.exit(fails === 0 ? 0 : 1);

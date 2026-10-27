@@ -99,6 +99,7 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
         sleeveRatio: est.mannequinSleeveRatio,
         pantsRatio: est.mannequinPantsRatio,
         fogStrength: est.depthFogStrength,
+        faceGuide: est.showFaceGuide,
       },
     );
     ctx.drawImage(off, 0, 0);
