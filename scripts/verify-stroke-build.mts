@@ -54,9 +54,46 @@ for (const node of Object.values(res.nodes)) {
   maxErr = Math.max(maxErr, Math.abs(subToPx(t.worldX) - j.x), Math.abs(subToPx(t.worldY) - j.y));
 }
 ok(maxErr < 1.5, `FK 往返：全部关节点位误差 < 1.5px（最大 ${maxErr.toFixed(2)}）`);
-// 姿态归零：所有非根节点 transform 角度 0
-const posed = Object.values(res.nodes).filter((n) => n.id !== res.rootNodeId && (n.transform.angle !== 0 || n.transform.x !== 0 || n.transform.y !== 0));
-ok(posed.length === 0, '非根节点姿态归零（偏移全在 socket）');
+// 结构节点（躯干/头）角归零；肢链节点角 = 骨向（2D 约定）
+const byName = (n: string) => Object.values(res.nodes).find((x) => x.name === n)!;
+ok(byName('torso').transform.angle === 0 && byName('head').transform.angle === 0, '结构节点角归零');
+ok(Object.values(res.nodes).every((n) => n.transform.x === 0 || n.id === res.rootNodeId), '非根节点无平移姿态');
+// 关节角与骨向一致：每条肢链节点 frame +Y（画布向）≈ 其骨方向；
+// 末端节点 frame +Y ≈ 末节方向（末端方位相符）
+{
+  const { frameYAxisWorld } = await import('../src/lib/unified-types');
+  const wt2 = computeWorldTransforms(character, 0, 512, 512, 12);
+  // frame +Y 是世界轴向向量，与关节世界坐标同空间，直接比
+  const frameDir = (nodeId: string) => {
+    const t = wt2.get(nodeId)!;
+    const y = frameYAxisWorld(t.worldFrame, 6);
+    return { x: y.x, y: y.y };
+  };
+  const segDir = (a: string, b: string) => {
+    const d = { x: res.joints[b]!.x - res.joints[a]!.x, y: res.joints[b]!.y - res.joints[a]!.y };
+    const l = Math.hypot(d.x, d.y) || 1;
+    return { x: d.x / l, y: d.y / l };
+  };
+  const dot = (u: { x: number; y: number }, v: { x: number; y: number }) => u.x * v.x + u.y * v.y;
+  // 左臂有笔触：上臂 frame ≈ 肩→肘方向；前臂 frame ≈ 肘→腕方向
+  ok(dot(frameDir(byName('upper_arm_L').id), segDir('upper_arm_L', 'lower_arm_L')) > 0.999,
+    '左上臂 frame +Y 对齐骨向（肩→肘）');
+  ok(dot(frameDir(byName('lower_arm_L').id), segDir('lower_arm_L', 'hand_L')) > 0.999,
+    '左前臂 frame +Y 对齐骨向（肘→腕）');
+  // 右臂缺笔（A 势直生）：末端（手）frame ≈ 末节方向
+  const handR = frameDir(byName('hand_R').id);
+  const wristR = res.joints['hand_R']!, elbowR = res.joints['lower_arm_R']!;
+  const tipDir = { x: handR.x, y: handR.y };
+  const lastSeg = { x: wristR.x - elbowR.x, y: wristR.y - elbowR.y };
+  const ll = Math.hypot(lastSeg.x, lastSeg.y) || 1;
+  ok(dot(tipDir, { x: lastSeg.x / ll, y: lastSeg.y / ll }) > 0.999,
+    '右手（末端）frame +Y 对齐末节方向');
+  // 角度数值：左上臂角 = atan2(−dx, dy) 口径
+  const d = { x: res.joints['lower_arm_L']!.x - res.joints['upper_arm_L']!.x, y: res.joints['lower_arm_L']!.y - res.joints['upper_arm_L']!.y };
+  const expect = (Math.atan2(-d.x, d.y) * 180) / Math.PI;
+  ok(Math.abs(byName('upper_arm_L').transform.angle - expect) < 0.01,
+    `左上臂关节角 = 骨向角 ${expect.toFixed(1)}°（实际 ${byName('upper_arm_L').transform.angle.toFixed(1)}°）`);
+}
 
 // 顺手配链：四条 2bone、默认禁用、目标 = 静止尖端位（启用后姿态不跳）
 ok(res.ikChains.length === 4, `配链 4 条（实际 ${res.ikChains.length}）`);

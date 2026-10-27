@@ -2,8 +2,11 @@
 // → pixelmorpher 骨骼节点树。落点/切分用其附录 A 常数：躯干笔长 = 3
 // 单位（头 1 + 躯干 2），沿弧长落头/颈/腰，肩/髋横偏 {.4,.15}/{.3,.15}；
 // 肢内切分肘 .40/腕 .84、膝 .40/踝 .85（占肢笔长）；缺笔肢体按
-// A 势比例（臂 2.6/腿 3.2 单位）直生。静态偏移按 Socket/offset3D 口径
-// 写（角色空间、全局像素、Y-down），初始姿态归零。
+// A 势比例（臂 2.6/腿 3.2 单位）直生。结构链（骨盆/躯干/头/肩/髋）
+// 静态偏移按 Socket/offset3D 口径写（角色空间、全局像素、Y-down），
+// 节点角归零；肢链走手绘 2D 约定：节点角 = 骨向相对父骨（frame +Y
+// 对齐骨向）、子关节 socket 沿局部 +Y 放骨长——关节角与末端方位
+// 与画出的骨向一致。
 import {
   createDefaultNode, projectToView, pxToSub, subToPx,
   type Character, type IKChain, type Node,
@@ -174,13 +177,13 @@ export function buildSkeletonFromStrokes(
       parent.children = [...parent.children, n.id];
     }
   }
-  // Socket/offset3D：子关节 − 父关节（角色空间全局像素，Y-down）
+  // 结构链（骨盆→躯干→头、躯干→肩、骨盆→髋）：Socket/offset3D 写
+  // 子关节 − 父关节（角色空间全局像素，Y-down），节点角归零（与模板
+  // 向导的躯干同款：躯干是参照体，不对齐某一条骨）。
   const parentKeyOf: Record<string, string> = {
     torso: 'pelvis', head: 'torso',
-    upper_arm_L: 'torso', lower_arm_L: 'upper_arm_L', hand_L: 'lower_arm_L',
-    upper_arm_R: 'torso', lower_arm_R: 'upper_arm_R', hand_R: 'lower_arm_R',
-    upper_leg_L: 'pelvis', lower_leg_L: 'upper_leg_L', foot_L: 'lower_leg_L',
-    upper_leg_R: 'pelvis', lower_leg_R: 'upper_leg_R', foot_R: 'lower_leg_R',
+    upper_arm_L: 'torso', upper_arm_R: 'torso',
+    upper_leg_L: 'pelvis', upper_leg_R: 'pelvis',
   };
   for (const [key, parentKey] of Object.entries(parentKeyOf)) {
     const node = nodes[key]!;
@@ -196,12 +199,55 @@ export function buildSkeletonFromStrokes(
     }];
     node.attachment = { type: 'socket', parentSocketId: sockId, plug: { x: 0, y: 0 } } as Node['attachment'];
   }
-  // 根：位移到腰点（角色空间），朝向正面 6，姿态其余归零
-  pelvis.transform = {
-    ...pelvis.transform,
-    x: SUB(J.pelvis!.x), y: SUB(J.pelvis!.y),
-    variantIndex: 6 as Node['transform']['variantIndex'],
+  // 肢链（上臂→前臂→手、大腿→小腿→脚）走手绘 2D 约定（与模板向导
+  // 同款）：节点角 = 本骨方向相对父骨方向（视平面内，frame +Y 对齐
+  // 骨向），子关节 socket 沿本节点局部 +Y 放骨长。这样面板里的关节
+  // 角与画出的骨向一致、末端节点 frame 对齐末节方向（IK 尖端沿肢
+  // 体伸出，不再恒向下）。骨向角 θ(v) = atan2(−dx, dy)（实测口径：
+  // angle θ 时 frame +Y 画布向 = (−sinθ, cosθ)）。
+  const segAngle = (a: Pt, b: Pt): number => {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    if (Math.hypot(dx, dy) < 1e-6) return NaN;
+    return (Math.atan2(-dx, dy) * 180) / Math.PI;
   };
+  const wireLimb = (
+    limb: { pts: [Pt, Pt, Pt, Pt] },
+    upperKey: string, lowerKey: string, endKey: string,
+  ) => {
+    const [p0, p1, p2, p3] = limb.pts;
+    const a0 = segAngle(p0, p1); // 上骨绝对角（父为参照体、角 0）
+    const a1 = segAngle(p1, p2); // 下骨绝对角
+    const a2 = segAngle(p2, p3); // 末节绝对角
+    const rel = (abs: number, parentAbs: number, fallback: number) =>
+      Number.isNaN(abs) ? fallback : abs - (Number.isNaN(parentAbs) ? 0 : parentAbs);
+    nodes[upperKey]!.transform = { ...nodes[upperKey]!.transform, angle: Number.isNaN(a0) ? 0 : a0 };
+    nodes[lowerKey]!.transform = { ...nodes[lowerKey]!.transform, angle: rel(a1, a0, 0) };
+    nodes[endKey]!.transform = { ...nodes[endKey]!.transform, angle: rel(a2, a1, 0) };
+    const wire = (parentKey: string, key: string, lenPx: number) => {
+      const parent = nodes[parentKey]!;
+      const sockId = `sock_${key}`;
+      parent.sockets = [...parent.sockets, {
+        id: sockId, name: key,
+        basePosition: { x: 0, y: SUB(Math.max(0, lenPx)) },
+        directionOffsets: {},
+      }];
+      nodes[key]!.attachment = { type: 'socket', parentSocketId: sockId, plug: { x: 0, y: 0 } } as Node['attachment'];
+    };
+    wire(upperKey, lowerKey, Math.hypot(p1.x - p0.x, p1.y - p0.y));
+    wire(lowerKey, endKey, Math.hypot(p2.x - p1.x, p2.y - p1.y));
+  };
+  wireLimb(armL, 'upper_arm_L', 'lower_arm_L', 'hand_L');
+  wireLimb(armR, 'upper_arm_R', 'lower_arm_R', 'hand_R');
+  wireLimb(legL, 'upper_leg_L', 'lower_leg_L', 'foot_L');
+  wireLimb(legR, 'upper_leg_R', 'lower_leg_R', 'foot_R');
+  // 根：位移到腰点（角色空间），姿态其余归零。
+  // 朝向：全节点统一正面 6——frame 是按节点朝向基复合的，朝向混杂
+  // （根 6、余 0）会让父子 frame 基不一致、肢链角度落错平面（关节
+  // 位置 X 分量掉进 Z）；烘焙/模板角色都是全节点同朝向。
+  for (const n of Object.values(nodes)) {
+    n.transform = { ...n.transform, variantIndex: 6 as Node['transform']['variantIndex'] };
+  }
+  pelvis.transform = { ...pelvis.transform, x: SUB(J.pelvis!.x), y: SUB(J.pelvis!.y) };
 
   // Character.nodes 以 node.id 为键（全仓口径），内部短键在此转正
   const nodesById: Record<string, Node> = {};
@@ -212,10 +258,19 @@ export function buildSkeletonFromStrokes(
   // 静止姿态 frame +Y = 角色空间 +Y（向下），无精灵时尖端长 = 末段骨长。
   // tipLength 不写死：启用后走动态解析（有精灵时按精灵 plug→底端）。
   const canvas = opts.canvasSize ?? { w: opts.center.x * 2, h: opts.center.y * 2 };
-  const mkChain = (key: string, rootKey: string, midKey: string, endKey: string): IKChain => {
+  const mkChain = (
+    key: string, rootKey: string, midKey: string, endKey: string,
+    limb: { pts: [Pt, Pt, Pt, Pt] },
+  ): IKChain => {
     const end = J[endKey]!, mid = J[midKey]!;
     const lastSeg = Math.hypot(end.x - mid.x, end.y - mid.y);
-    const tip = { x: end.x, y: end.y + lastSeg, z: 0 };
+    // 尖端位 = 末关节 + 末节方向 × 尖端长（末节点 frame +Y 已对齐
+    // 末节方向；无精灵时尖端长 = 末段骨长，与求解器回退一致）
+    const s2 = { x: limb.pts[3].x - limb.pts[2].x, y: limb.pts[3].y - limb.pts[2].y };
+    const s2Len = Math.hypot(s2.x, s2.y);
+    const tip = s2Len > 1e-6
+      ? { x: end.x + (s2.x / s2Len) * lastSeg, y: end.y + (s2.y / s2Len) * lastSeg, z: 0 }
+      : { x: end.x, y: end.y + lastSeg, z: 0 };
     const proj = projectToView(pxToSub(tip.x), pxToSub(tip.y), 0, 6);
     return {
       id: `ik_${key}`,
@@ -230,10 +285,10 @@ export function buildSkeletonFromStrokes(
     };
   };
   const ikChains = [
-    mkChain('arm_L', 'upper_arm_L', 'lower_arm_L', 'hand_L'),
-    mkChain('arm_R', 'upper_arm_R', 'lower_arm_R', 'hand_R'),
-    mkChain('leg_L', 'upper_leg_L', 'lower_leg_L', 'foot_L'),
-    mkChain('leg_R', 'upper_leg_R', 'lower_leg_R', 'foot_R'),
+    mkChain('arm_L', 'upper_arm_L', 'lower_arm_L', 'hand_L', armL),
+    mkChain('arm_R', 'upper_arm_R', 'lower_arm_R', 'hand_R', armR),
+    mkChain('leg_L', 'upper_leg_L', 'lower_leg_L', 'foot_L', legL),
+    mkChain('leg_R', 'upper_leg_R', 'lower_leg_R', 'foot_R', legR),
   ];
 
   return {
