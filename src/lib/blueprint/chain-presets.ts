@@ -61,7 +61,8 @@ export function insertChainSegment(
 
   const nodes = bp.nodes.map(cloneNode);
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  const screen = nodes.find((n) => n.id === bp.outputId) ?? nodes.find((n) => n.type === 'screen');
+  const screen = nodes.find((n) => n.id === bp.outputId && n.type === 'screen')
+    ?? nodes.find((n) => n.type === 'screen');
   if (!screen) return { ok: false, error: '图中没有 screen 节点，无处插入' };
 
   // 时间节点：没有就补一个（数值包络的时间来源）
