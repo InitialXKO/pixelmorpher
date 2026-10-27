@@ -5,8 +5,8 @@
 // A 势比例（臂 2.6/腿 3.2 单位）直生。静态偏移按 Socket/offset3D 口径
 // 写（角色空间、全局像素、Y-down），初始姿态归零。
 import {
-  createDefaultNode, pxToSub,
-  type Character, type Node,
+  createDefaultNode, projectToView, pxToSub, subToPx,
+  type Character, type IKChain, type Node,
 } from './unified-types';
 import { pointAtDistance, polylineLength, type Pt } from './arc-length';
 
@@ -29,6 +29,9 @@ export interface StrokeBuildResult {
   rootNodeId: string;
   /** 笔触起笔吸附结果（limb key → 是否吸附到肩/髋热区） */
   snapped: Record<string, boolean>;
+  /** 顺手配的四条 IK 链（镜像 IKChainEditor 建链口径：2bone、默认禁用、
+   * 目标 = 静止姿态尖端位、尖端长不写死走动态解析） */
+  ikChains: IKChain[];
 }
 
 const SUB = (v: number) => pxToSub(v);
@@ -112,7 +115,7 @@ export function strokeLimbJoints(
  */
 export function buildSkeletonFromStrokes(
   input: StrokeBuildInput,
-  opts: { characterId: string; center: Pt },
+  opts: { characterId: string; center: Pt; canvasSize?: { w: number; h: number } },
 ): StrokeBuildResult {
   const rel = (p: Pt): Pt => ({ x: p.x - opts.center.x, y: p.y - opts.center.y });
   const torsoLen = polylineLength(input.torso);
@@ -204,18 +207,48 @@ export function buildSkeletonFromStrokes(
   const nodesById: Record<string, Node> = {};
   for (const n of Object.values(nodes)) nodesById[n.id] = n;
 
+  // 顺手配链：四条肢链（2bone、默认禁用，同 IKChainEditor 建链口径）。
+  // 目标 = 静止姿态的尖端位：末关节 + 其 frame 的 +Y 轴 × 尖端长；
+  // 静止姿态 frame +Y = 角色空间 +Y（向下），无精灵时尖端长 = 末段骨长。
+  // tipLength 不写死：启用后走动态解析（有精灵时按精灵 plug→底端）。
+  const canvas = opts.canvasSize ?? { w: opts.center.x * 2, h: opts.center.y * 2 };
+  const mkChain = (key: string, rootKey: string, midKey: string, endKey: string): IKChain => {
+    const end = J[endKey]!, mid = J[midKey]!;
+    const lastSeg = Math.hypot(end.x - mid.x, end.y - mid.y);
+    const tip = { x: end.x, y: end.y + lastSeg, z: 0 };
+    const proj = projectToView(pxToSub(tip.x), pxToSub(tip.y), 0, 6);
+    return {
+      id: `ik_${key}`,
+      name: `${rootKey} → ${endKey}`,
+      rootNodeId: nodes[rootKey]!.id,
+      endNodeId: nodes[endKey]!.id,
+      target: { x: subToPx(proj.canvasX) + canvas.w / 2, y: subToPx(proj.canvasY) + canvas.h / 2 },
+      target3D: tip,
+      solver: '2bone',
+      bendDir: 1,
+      enabled: false,
+    };
+  };
+  const ikChains = [
+    mkChain('arm_L', 'upper_arm_L', 'lower_arm_L', 'hand_L'),
+    mkChain('arm_R', 'upper_arm_R', 'lower_arm_R', 'hand_R'),
+    mkChain('leg_L', 'upper_leg_L', 'lower_leg_L', 'foot_L'),
+    mkChain('leg_R', 'upper_leg_R', 'lower_leg_R', 'foot_R'),
+  ];
+
   return {
     joints: J,
     nodes: nodesById,
     rootNodeId: pelvis.id,
     snapped: { armL: armL.snapped, armR: armR.snapped, legL: legL.snapped, legR: legR.snapped },
+    ikChains,
   };
 }
 
 /** 组装完整 Character（供向导创建后写入 store） */
 export function buildCharacterFromStrokes(
   input: StrokeBuildInput,
-  opts: { characterId: string; name: string; center: Pt },
+  opts: { characterId: string; name: string; center: Pt; canvasSize?: { w: number; h: number } },
 ): { character: Partial<Character>; result: StrokeBuildResult } {
   const result = buildSkeletonFromStrokes(input, opts);
   return {
@@ -223,6 +256,7 @@ export function buildCharacterFromStrokes(
       name: opts.name,
       nodes: result.nodes,
       rootNodeId: result.rootNodeId,
+      ikChains: result.ikChains,
     },
     result,
   };

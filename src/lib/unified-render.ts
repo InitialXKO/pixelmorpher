@@ -683,7 +683,15 @@ export function solveChainIKOverrides(
   }
 
   // 尖端：末关节 + 其 frame 的 +Y 轴 × tipLength（与 computeIKChainTip 同构造）
+  // 尖端长口径：链上显式值 > 末关节当前精灵（服装解析） > 旧 node.sprite > 末段骨长
   let tipLength = chain.tipLength ?? 0;
+  if (tipLength <= 0) {
+    tipLength = resolveSpriteTipLength(
+      character, chain.endNodeId,
+      geometryDirection ?? fkT[n - 1].variantIndex,
+      storeGlobalSprites(),
+    ) ?? 0;
+  }
   if (tipLength <= 0) {
     const endNode = character.nodes[chain.endNodeId];
     const sprite = endNode?.sprite;
@@ -1293,6 +1301,42 @@ function resolveSprite(
  * Returns null when the sprite is embedded (no table ID) or missing.
  * Used by UI (e.g. heightmap editor) to write back to the global sprites table.
  */
+/**
+ * IK 尖端长（缺省解析）：末关节「当前精灵」的 Y 轴长度（plug 到底端）。
+ * 走 resolveNodeSpriteId 按服装/变体/纬度解析现行精灵——旧实现直读
+ * node.sprite（现行管线从不赋值）导致尖端长恒回退末段骨长。
+ * 解析不到返回 undefined，调用方走各自回退（旧字段/末段长）。
+ */
+export function resolveSpriteTipLength(
+  character: import('./unified-types').Character,
+  endNodeId: string,
+  direction: DirectionIndex,
+  globalSprites?: Record<string, import('./unified-types').Sprite>,
+): number | undefined {
+  // 先按传入精灵表解析；查无此精灵时再按角色自带表解析（离线语境下
+  // 全局表可能是空表，不能让它遮住角色自带表）
+  const lookup = (table?: Record<string, import('./unified-types').Sprite>) => {
+    const effective = table ?? character.sprites;
+    const spriteId = resolveNodeSpriteId(character, endNodeId, direction, table);
+    const sprite = spriteId ? effective?.[spriteId] : undefined;
+    return sprite && sprite.height > 0 ? sprite : undefined;
+  };
+  const sprite = lookup(globalSprites) ?? lookup(character.sprites);
+  if (!sprite) return undefined;
+  const plugY = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
+  return Math.max(1, sprite.height - plugY);
+}
+
+/** 离线/渲染语境下惰性取工程全局精灵表（与帧率回退同一模式） */
+function storeGlobalSprites(): Record<string, import('./unified-types').Sprite> | undefined {
+  try {
+    const { useProjectStore } = require('./store') as typeof import('./store');
+    return useProjectStore.getState().sprites;
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveNodeSpriteId(
   character: import('./unified-types').Character,
   nodeId: string,

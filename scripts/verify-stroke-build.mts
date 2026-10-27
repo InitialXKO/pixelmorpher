@@ -58,5 +58,23 @@ ok(maxErr < 1.5, `FK 往返：全部关节点位误差 < 1.5px（最大 ${maxErr
 const posed = Object.values(res.nodes).filter((n) => n.id !== res.rootNodeId && (n.transform.angle !== 0 || n.transform.x !== 0 || n.transform.y !== 0));
 ok(posed.length === 0, '非根节点姿态归零（偏移全在 socket）');
 
+// 顺手配链：四条 2bone、默认禁用、目标 = 静止尖端位（启用后姿态不跳）
+ok(res.ikChains.length === 4, `配链 4 条（实际 ${res.ikChains.length}）`);
+ok(res.ikChains.every((c) => c.solver === '2bone' && c.enabled === false && c.tipLength === undefined),
+  '链口径：2bone / 默认禁用 / 尖端长不写死');
+const byName2 = (n: string) => Object.values(res.nodes).find((x) => x.name === n)!;
+for (const c of res.ikChains) {
+  ok(res.nodes[c.rootNodeId] !== undefined && res.nodes[c.endNodeId] !== undefined, `链 ${c.id} 根/末节点存在`);
+}
+const charWithChains = { ...character, ikChains: res.ikChains.map((c) => ({ ...c, enabled: true })) } as unknown as Character;
+const wtIk = computeWorldTransforms(charWithChains, 0, 512, 512, 12);
+let maxIkErr = 0;
+for (const node of Object.values(res.nodes)) {
+  const t = wtIk.get(node.id)!;
+  const j = res.joints[node.name]!;
+  maxIkErr = Math.max(maxIkErr, Math.abs(subToPx(t.worldX) - j.x), Math.abs(subToPx(t.worldY) - j.y));
+}
+ok(maxIkErr < 2.5, `四链全启用（目标=静止尖端）姿态基本不动（最大漂移 ${maxIkErr.toFixed(2)}px）`);
+
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
 process.exit(fails === 0 ? 0 : 1);

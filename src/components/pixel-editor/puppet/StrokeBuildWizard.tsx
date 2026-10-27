@@ -160,9 +160,14 @@ export default function StrokeBuildWizard({ open, onClose }: { open: boolean; on
     const character = store.addUnifiedCharacter(name.trim(), { skipPlaceholderRoot: true });
     const built = buildSkeletonFromStrokes(
       { torso: strokes.torso, armL: strokes.armL, armR: strokes.armR, legL: strokes.legL, legR: strokes.legR },
-      { characterId: character.id, center: { x: W / 2, y: H / 2 } },
+      {
+        characterId: character.id, center: { x: W / 2, y: H / 2 },
+        canvasSize: { w: store.canvasWidth, h: store.canvasHeight },
+      },
     );
-    store.updateUnifiedCharacter(character.id, { nodes: built.nodes, rootNodeId: built.rootNodeId });
+    store.updateUnifiedCharacter(character.id, {
+      nodes: built.nodes, rootNodeId: built.rootNodeId, ikChains: built.ikChains,
+    });
     const snapped = Object.entries(built.snapped).filter(([, v]) => v).length;
     setNote(`已创建：15 个节点，${snapped} 条肢体起笔吸附成功`);
     onClose();
