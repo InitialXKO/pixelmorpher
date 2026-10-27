@@ -560,6 +560,30 @@ export interface Attachment {
 }
 
 /**
+/** 精灵「末端点」（局部坐标，相对 plug）：四边中点里离 plug 最远的
+ * 那个——骨骼方向的代表点。绘制朝向、命中胶囊与覆盖层共用一份。 */
+export function computeSpriteEndPoint(
+  width: number, height: number, pivotX: number, pivotY: number,
+): { x: number; y: number } {
+  const edgeCenters = [
+    { x: -pivotX, y: -pivotY + height / 2 },
+    { x: width - pivotX, y: -pivotY + height / 2 },
+    { x: -pivotX + width / 2, y: -pivotY },
+    { x: -pivotX + width / 2, y: height - pivotY },
+  ];
+  let maxDistSq = 0;
+  let endLocal = { x: 0, y: 0 };
+  for (const ec of edgeCenters) {
+    const distSq = ec.x * ec.x + ec.y * ec.y;
+    if (distSq > maxDistSq) {
+      maxDistSq = distSq;
+      endLocal = ec;
+    }
+  }
+  return endLocal;
+}
+
+/**
  * 关节盘有效直径的数据口径（RigPanel 显示与人偶兜底共用一份）：
  * attachment.jointWidth（手动值）> 服装件 plug 截面直径 > bottom
  * 截面直径 > null（无数据，调用方自行回退）。渲染端关节盘在此之上

@@ -1586,19 +1586,27 @@ function mannequinLimbKind(character: Character, node: Node): 'arm' | 'leg' | nu
   return null;
 }
 
-function generateMannequinInstructions(
+/** 人偶兜底的形状几何（画布 px）：指令生成与编辑器命中共用一份——
+ * 画出来的胶囊就是点得中的胶囊，不另算第二套。 */
+export interface MannequinShape {
+  nodeId: string;
+  kind: 'segment' | 'hand' | 'foot' | 'thumb' | 'head';
+  /** 段端点（画布 px）；head 时为颈段，判定走 head 椭圆 */
+  x1: number; y1: number; x2: number; y2: number;
+  r1: number; r2: number;
+  head?: { cx: number; cy: number; a: number; b: number; angleRad: number };
+}
+
+function mannequinShapesInternal(
   character: Character,
   worldTransforms: Map<string, WorldTransform>,
   canvasWidth: number,
   canvasHeight: number,
   currentDirection: DirectionIndex,
-  instructedNodeIds: ReadonlySet<string>,
-  claimedParents: ReadonlySet<string>,
-  clothing: { sleeveRatio: number; pantsRatio: number },
-  faceGuide?: boolean,
+  eligibleNodeIds: ReadonlySet<string>,
   geometryDirection?: DirectionIndex,
-): MannequinRenderInstruction[] {
-  const out: MannequinRenderInstruction[] = [];
+): MannequinShape[] {
+  const shapes: MannequinShape[] = [];
   const centerSubX = pxToSub(canvasWidth / 2);
   const centerSubY = pxToSub(canvasHeight / 2);
   const project = (wx: SubPixel, wy: SubPixel, wz: SubPixel) => {
@@ -1630,9 +1638,9 @@ function generateMannequinInstructions(
 
   // 第一遍：各节点的关节位置与连接点（起点）
   const joints = new Map<string, { sx: SubPixel; sy: SubPixel; ex: SubPixel; ey: SubPixel }>();
-  for (const [nodeId, node] of Object.entries(character.nodes)) {
-    if (!node.visible) continue;
-    if (instructedNodeIds.has(nodeId) || claimedParents.has(nodeId)) continue;
+  for (const nodeId of eligibleNodeIds) {
+    const node = character.nodes[nodeId];
+    if (!node) continue;
     const worldTf = worldTransforms.get(nodeId);
     if (!worldTf) continue;
     const end = project(worldTf.worldX, worldTf.worldY, worldTf.worldZ);
@@ -1659,6 +1667,149 @@ function generateMannequinInstructions(
     return Math.min(16, Math.max(1.5, lenPx * 0.16));
   };
 
+  for (const [nodeId, j] of joints) {
+    const node = character.nodes[nodeId]!;
+    const parentId = node.parentId ?? undefined;
+    shapes.push({
+      nodeId, kind: 'segment',
+      x1: subToPx(j.sx), y1: subToPx(j.sy), x2: subToPx(j.ex), y2: subToPx(j.ey),
+      r1: parentId ? radiusOf(parentId) : radiusOf(nodeId),
+      r2: radiusOf(nodeId),
+    });
+  }
+
+  // 手脚延伸（借 PoseSketcher 口径）：肢体末端叶子关节（腕/踝）的胶囊
+  // 沿末端节点 frame 方向再伸一段——手掌自腕伸末段长 ×(0.16/0.44)、脚掌自踝伸
+  // 末段长 ×(0.15/0.45)（原项目腕 0.84/踝 0.85 切分换算到末段占比），
+  // 末端半径收至 0.64 倍；手另补拇指支段（自腕起：沿手向 0.3 倍手长
+  // + 法向 0.4 倍手长，侧别沿父链名字判左右、判不出取 +1，同原项目
+  // 侧面口径）。手指/脚趾/拇指命名的叶子不延伸，
+  // 免得烘焙骨骼的指节末端冒出手掌。非叶子（其后还有节点）不延伸。
+  const EXTREMITY_EXCLUDE = ['finger', 'thumb', 'toe', 'index', 'middle', 'ring', 'pinky', '指', '趾'];
+  const hasChildNode = new Set<string>();
+  for (const n of Object.values(character.nodes)) if (n.parentId) hasChildNode.add(n.parentId);
+  for (const [nodeId, j] of joints) {
+    if (hasChildNode.has(nodeId)) continue;
+    const node = character.nodes[nodeId]!;
+    if (EXTREMITY_EXCLUDE.some((k) => node.name.toLowerCase().includes(k))) continue;
+    const kind = mannequinLimbKind(character, node);
+    if (!kind) continue;
+    const sx = subToPx(j.sx), sy = subToPx(j.sy);
+    const ex = subToPx(j.ex), ey = subToPx(j.ey);
+    const segLen = Math.hypot(ex - sx, ey - sy);
+    if (segLen < 2) continue;
+    // 延伸方向 = 末端节点 frame 的 +Y（与 IK 尖端同一朝向）：腕/踝
+    // 节点自身旋转时手脚跟着转；段方向（父关节→本关节）只作回退
+    const segDir = { x: (ex - sx) / segLen, y: (ey - sy) / segLen };
+    const dirF = frameDirCanvas(nodeId) ?? segDir;
+    const ux = dirF.x, uy = dirF.y;
+    const r = radiusOf(nodeId);
+    const extLen = kind === 'arm' ? segLen * (0.16 / 0.44) : segLen * (0.15 / 0.45);
+    shapes.push({
+      nodeId, kind: kind === 'arm' ? 'hand' : 'foot',
+      x1: ex, y1: ey,
+      x2: ex + ux * extLen, y2: ey + uy * extLen,
+      r1: r, r2: r * 0.64,
+    });
+    if (kind === 'arm') {
+      let side = 1;
+      let cur: Node | undefined = node;
+      while (cur) {
+        const n = cur.name.toLowerCase();
+        if (n.includes('left') || n.includes('_l') || n.includes('左')) { side = -1; break; }
+        if (n.includes('right') || n.includes('_r') || n.includes('右')) { side = 1; break; }
+        cur = cur.parentId ? character.nodes[cur.parentId] : undefined;
+      }
+      const nx = -uy, ny = ux;
+      shapes.push({
+        nodeId, kind: 'thumb',
+        x1: ex, y1: ey,
+        x2: ex + ux * extLen * 0.3 + nx * side * extLen * 0.4,
+        y2: ey + uy * extLen * 0.3 + ny * side * extLen * 0.4,
+        r1: r * 0.8, r2: r * 0.45,
+      });
+    }
+  }
+
+  // 蛋形头（借 PoseSketcher 头蛋形）：头部节点的颈→头段上再挂一个蛋
+  // 形——中心 = 头关节，长半轴 = 颈段长一半（头中心→颈上恰半个头
+  // 高），宽半轴 = 长 ×0.7，长轴沿父关节→头关节方向；颈段退化时
+  // 朝上、长半轴按关节半径估。
+  for (const [nodeId, j] of joints) {
+    const node = character.nodes[nodeId]!;
+    const lname = node.name.toLowerCase();
+    if (!lname.includes('head') && !lname.includes('头')) continue;
+    const sx = subToPx(j.sx), sy = subToPx(j.sy);
+    const ex = subToPx(j.ex), ey = subToPx(j.ey);
+    const segLen = Math.hypot(ex - sx, ey - sy);
+    let ax = 0, ay = -1;
+    if (segLen > 0.5) { ax = (ex - sx) / segLen; ay = (ey - sy) / segLen; }
+    // 长轴跟头节点 frame 转（点头/歪头都跟）：frame +Y 定轴向，
+    // 段方向只用来定号——保证轴指向冠侧、五官不上下颠倒
+    const fDir = frameDirCanvas(nodeId);
+    if (fDir) {
+      ax = fDir.x; ay = fDir.y;
+      if (segLen > 0.5) {
+        const segX = (ex - sx) / segLen, segY = (ey - sy) / segLen;
+        if (ax * segX + ay * segY < 0) { ax = -ax; ay = -ay; }
+      }
+    }
+    const a = Math.max(segLen / 2, radiusOf(nodeId) * 1.8, 5);
+    const b = a * 0.7;
+    shapes.push({
+      nodeId, kind: 'head',
+      x1: sx, y1: sy, x2: ex, y2: ey,
+      r1: radiusOf(nodeId), r2: radiusOf(nodeId),
+      head: { cx: ex, cy: ey, a, b, angleRad: Math.atan2(ay, ax) },
+    });
+  }
+  return shapes;
+}
+
+/** 人偶形状几何（公开口径）：eligibleNodeIds 决定哪些节点出形状。 */
+export function computeMannequinShapes(
+  character: Character,
+  worldTransforms: Map<string, WorldTransform>,
+  canvasWidth: number,
+  canvasHeight: number,
+  currentDirection: DirectionIndex,
+  eligibleNodeIds: ReadonlySet<string>,
+  geometryDirection?: DirectionIndex,
+): MannequinShape[] {
+  return mannequinShapesInternal(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, eligibleNodeIds, geometryDirection);
+}
+
+function generateMannequinInstructions(
+  character: Character,
+  worldTransforms: Map<string, WorldTransform>,
+  canvasWidth: number,
+  canvasHeight: number,
+  currentDirection: DirectionIndex,
+  instructedNodeIds: ReadonlySet<string>,
+  claimedParents: ReadonlySet<string>,
+  clothing: { sleeveRatio: number; pantsRatio: number },
+  faceGuide?: boolean,
+  geometryDirection?: DirectionIndex,
+): MannequinRenderInstruction[] {
+  const out: MannequinRenderInstruction[] = [];
+  const eligible = new Set<string>();
+  for (const [nodeId, node] of Object.entries(character.nodes)) {
+    if (!node.visible) continue;
+    if (instructedNodeIds.has(nodeId) || claimedParents.has(nodeId)) continue;
+    if (!worldTransforms.has(nodeId)) continue;
+    eligible.add(nodeId);
+  }
+  const shapes = mannequinShapesInternal(character, worldTransforms, canvasWidth, canvasHeight, currentDirection, eligible, geometryDirection);
+
+  const centerSubX = pxToSub(canvasWidth / 2);
+  const centerSubY = pxToSub(canvasHeight / 2);
+  const project = (wx: SubPixel, wy: SubPixel, wz: SubPixel) => {
+    const p = projectToView(wx, wy, wz, currentDirection);
+    return {
+      x: (centerSubX + (p.canvasX as SubPixel)) as SubPixel,
+      y: (centerSubY + (p.canvasY as SubPixel)) as SubPixel,
+    };
+  };
   // 衣物色区：袖口/裤腰比例按肢体全长（弧长）切分到各段。
   // 全部关节点位（px）供链长计算（不限无精灵节点）。
   const posPx = new Map<string, { x: number; y: number }>();
@@ -1718,132 +1869,63 @@ function generateMannequinInstructions(
     return covered;
   };
 
-  for (const [nodeId, j] of joints) {
-    const node = character.nodes[nodeId]!;
-    const parentId = node.parentId ?? undefined;
-    const clothRatio = clothRatioOf(node);
-    out.push({
-      nodeId,
-      x1: j.sx, y1: j.sy, x2: j.ex, y2: j.ey,
-      r1: parentId ? radiusOf(parentId) : radiusOf(nodeId),
-      r2: radiusOf(nodeId),
-      fillColor: '#8f9bb0',
-      outlineColor: '#4a5160',
-      ...(clothRatio > 0 ? { clothRatio } : {}),
-    });
-  }
-
-  // 手脚延伸（借 PoseSketcher 口径）：肢体末端叶子关节（腕/踝）的胶囊
-  // 沿末端节点 frame 方向再伸一段——手掌自腕伸末段长 ×(0.16/0.44)、脚掌自踝伸
-  // 末段长 ×(0.15/0.45)（原项目腕 0.84/踝 0.85 切分换算到末段占比），
-  // 末端半径收至 0.64 倍；手另补拇指支段（自腕起：沿手向 0.3 倍手长
-  // + 法向 0.4 倍手长，侧别沿父链名字判左右、判不出取 +1，同原项目
-  // 侧面口径）。手脚用浅一号的色。手指/脚趾/拇指命名的叶子不延伸，
-  // 免得烘焙骨骼的指节末端冒出手掌。非叶子（其后还有节点）不延伸。
   const EXTREMITY_FILL = '#a7b2c4';
-  const EXTREMITY_EXCLUDE = ['finger', 'thumb', 'toe', 'index', 'middle', 'ring', 'pinky', '指', '趾'];
-  const hasChildNode = new Set<string>();
-  for (const n of Object.values(character.nodes)) if (n.parentId) hasChildNode.add(n.parentId);
-  for (const [nodeId, j] of joints) {
-    if (hasChildNode.has(nodeId)) continue;
-    const node = character.nodes[nodeId]!;
-    if (EXTREMITY_EXCLUDE.some((k) => node.name.toLowerCase().includes(k))) continue;
-    const kind = mannequinLimbKind(character, node);
-    if (!kind) continue;
-    const sx = subToPx(j.sx), sy = subToPx(j.sy);
-    const ex = subToPx(j.ex), ey = subToPx(j.ey);
-    const segLen = Math.hypot(ex - sx, ey - sy);
-    if (segLen < 2) continue;
-    // 延伸方向 = 末端节点 frame 的 +Y（与 IK 尖端同一朝向）：腕/踝
-    // 节点自身旋转时手脚跟着转；段方向（父关节→本关节）只作回退
-    const segDir = { x: (ex - sx) / segLen, y: (ey - sy) / segLen };
-    const dirF = frameDirCanvas(nodeId) ?? segDir;
-    const ux = dirF.x, uy = dirF.y;
-    const r = radiusOf(nodeId);
-    const extLen = kind === 'arm' ? segLen * (0.16 / 0.44) : segLen * (0.15 / 0.45);
-    out.push({
-      nodeId,
-      x1: j.ex, y1: j.ey,
-      x2: pxToSub(ex + ux * extLen), y2: pxToSub(ey + uy * extLen),
-      r1: r, r2: r * 0.64,
-      fillColor: EXTREMITY_FILL,
-      outlineColor: '#4a5160',
-      extremity: kind === 'arm' ? 'hand' : 'foot',
-    });
-    if (kind === 'arm') {
-      let side = 1;
-      let cur: Node | undefined = node;
-      while (cur) {
-        const n = cur.name.toLowerCase();
-        if (n.includes('left') || n.includes('_l') || n.includes('左')) { side = -1; break; }
-        if (n.includes('right') || n.includes('_r') || n.includes('右')) { side = 1; break; }
-        cur = cur.parentId ? character.nodes[cur.parentId] : undefined;
+  const segInsByNode = new Map<string, MannequinRenderInstruction>();
+  for (const s of shapes) {
+    if (s.kind === 'segment') {
+      const node = character.nodes[s.nodeId]!;
+      const clothRatio = clothRatioOf(node);
+      const ins: MannequinRenderInstruction = {
+        nodeId: s.nodeId,
+        x1: pxToSub(s.x1), y1: pxToSub(s.y1), x2: pxToSub(s.x2), y2: pxToSub(s.y2),
+        r1: s.r1, r2: s.r2,
+        fillColor: '#8f9bb0',
+        outlineColor: '#4a5160',
+        ...(clothRatio > 0 ? { clothRatio } : {}),
+      };
+      out.push(ins);
+      segInsByNode.set(s.nodeId, ins);
+    } else if (s.kind === 'head') {
+      const ins = segInsByNode.get(s.nodeId);
+      if (!ins || !s.head) continue;
+      const node = character.nodes[s.nodeId]!;
+      const { cx, cy, a, b, angleRad } = s.head;
+      ins.head = { cx: pxToSub(cx), cy: pxToSub(cy), a, b, angleRad };
+      // 五官参照开关开启时，按头部框口径把五官线段现算进指令（节点
+      // faceFeatures/faceTurn 优先，缺省标准三庭），与精灵头的五官
+      // 参照叠画同参数同公式、互为有无精灵两路。
+      if (faceGuide) {
+        const ax = Math.cos(angleRad), ay = Math.sin(angleRad);
+        const fp = node.faceFeatures ?? DEFAULT_FACE_FEATURES;
+        const yaw = node.faceTurn?.yaw ?? 0;
+        const pitch = node.faceTurn?.pitch ?? 0;
+        const pts = faceFeaturePoints(fp, yaw, pitch);
+        const hw = faceHalfWidths(fp, yaw);
+        const rx = -ay, ry = ax;
+        const mapPt = (fx: number, fy: number) => ({
+          x: pxToSub(cx + rx * (fx - 0.5) * 2 * b + ax * (0.5 - fy) * 2 * a),
+          y: pxToSub(cy + ry * (fx - 0.5) * 2 * b + ay * (0.5 - fy) * 2 * a),
+        });
+        const segOf = (p: { x: number; y: number }, halfW: number) => {
+          const p1 = mapPt(p.x - halfW, p.y);
+          const p2 = mapPt(p.x + halfW, p.y);
+          return { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y };
+        };
+        ins.faceSegs = [
+          segOf(pts.browL, hw.eye * 0.8), segOf(pts.browR, hw.eye * 0.8),
+          segOf(pts.eyeL, hw.eye), segOf(pts.eyeR, hw.eye),
+          segOf(pts.noseBase, hw.nose), segOf(pts.mouth, hw.mouth),
+        ];
       }
-      const nx = -uy, ny = ux;
+    } else {
       out.push({
-        nodeId,
-        x1: j.ex, y1: j.ey,
-        x2: pxToSub(ex + ux * extLen * 0.3 + nx * side * extLen * 0.4),
-        y2: pxToSub(ey + uy * extLen * 0.3 + ny * side * extLen * 0.4),
-        r1: r * 0.8, r2: r * 0.45,
+        nodeId: s.nodeId,
+        x1: pxToSub(s.x1), y1: pxToSub(s.y1), x2: pxToSub(s.x2), y2: pxToSub(s.y2),
+        r1: s.r1, r2: s.r2,
         fillColor: EXTREMITY_FILL,
         outlineColor: '#4a5160',
-        extremity: 'thumb',
+        extremity: s.kind,
       });
-    }
-  }
-
-  // 蛋形头（借 PoseSketcher 头蛋形）：头部节点的颈→头段上再挂一个蛋
-  // 形——中心 = 头关节，长半轴 = 颈段长一半（头中心→颈上恰半个头
-  // 高），宽半轴 = 长 ×0.7，长轴沿父关节→头关节方向；颈段退化时
-  // 朝上、长半轴按关节半径估。五官参照开关开启时，按头部框口径把
-  // 五官线段现算进指令（节点 faceFeatures/faceTurn 优先，缺省标准
-  // 三庭），与精灵头的五官参照叠画同参数同公式、互为有无精灵两路。
-  for (const [nodeId, j] of joints) {
-    const node = character.nodes[nodeId]!;
-    const lname = node.name.toLowerCase();
-    if (!lname.includes('head') && !lname.includes('头')) continue;
-    const ins = out.find((m) => m.nodeId === nodeId && !m.extremity);
-    if (!ins) continue;
-    const sx = subToPx(j.sx), sy = subToPx(j.sy);
-    const ex = subToPx(j.ex), ey = subToPx(j.ey);
-    const segLen = Math.hypot(ex - sx, ey - sy);
-    let ax = 0, ay = -1;
-    if (segLen > 0.5) { ax = (ex - sx) / segLen; ay = (ey - sy) / segLen; }
-    // 长轴跟头节点 frame 转（点头/歪头都跟）：frame +Y 定轴向，
-    // 段方向只用来定号——保证轴指向冠侧、五官不上下颠倒
-    const fDir = frameDirCanvas(nodeId);
-    if (fDir) {
-      ax = fDir.x; ay = fDir.y;
-      if (segLen > 0.5) {
-        const segX = (ex - sx) / segLen, segY = (ey - sy) / segLen;
-        if (ax * segX + ay * segY < 0) { ax = -ax; ay = -ay; }
-      }
-    }
-    const a = Math.max(segLen / 2, radiusOf(nodeId) * 1.8, 5);
-    const b = a * 0.7;
-    ins.head = { cx: j.ex, cy: j.ey, a, b, angleRad: Math.atan2(ay, ax) };
-    if (faceGuide) {
-      const fp = node.faceFeatures ?? DEFAULT_FACE_FEATURES;
-      const yaw = node.faceTurn?.yaw ?? 0;
-      const pitch = node.faceTurn?.pitch ?? 0;
-      const pts = faceFeaturePoints(fp, yaw, pitch);
-      const hw = faceHalfWidths(fp, yaw);
-      const rx = -ay, ry = ax;
-      const mapPt = (fx: number, fy: number) => ({
-        x: pxToSub(ex + rx * (fx - 0.5) * 2 * b + ax * (0.5 - fy) * 2 * a),
-        y: pxToSub(ey + ry * (fx - 0.5) * 2 * b + ay * (0.5 - fy) * 2 * a),
-      });
-      const segOf = (p: { x: number; y: number }, halfW: number) => {
-        const p1 = mapPt(p.x - halfW, p.y);
-        const p2 = mapPt(p.x + halfW, p.y);
-        return { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y };
-      };
-      ins.faceSegs = [
-        segOf(pts.browL, hw.eye * 0.8), segOf(pts.browR, hw.eye * 0.8),
-        segOf(pts.eyeL, hw.eye), segOf(pts.eyeR, hw.eye),
-        segOf(pts.noseBase, hw.nose), segOf(pts.mouth, hw.mouth),
-      ];
     }
   }
   return out;

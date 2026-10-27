@@ -203,27 +203,7 @@ export function pointInPolygon(
   return inside;
 }
 
-/** Compute the "end point" (末端) of a sprite in local coordinates */
-export function computeSpriteEndPoint(
-  width: number, height: number, pivotX: number, pivotY: number,
-): { x: number; y: number } {
-  const edgeCenters = [
-    { x: -pivotX, y: -pivotY + height / 2 },
-    { x: width - pivotX, y: -pivotY + height / 2 },
-    { x: -pivotX + width / 2, y: -pivotY },
-    { x: -pivotX + width / 2, y: height - pivotY },
-  ];
-  let maxDistSq = 0;
-  let endLocal = { x: 0, y: 0 };
-  for (const ec of edgeCenters) {
-    const distSq = ec.x * ec.x + ec.y * ec.y;
-    if (distSq > maxDistSq) {
-      maxDistSq = distSq;
-      endLocal = ec;
-    }
-  }
-  return endLocal;
-}
+export { computeSpriteEndPoint } from '@/lib/unified-types';
 
 /** Check if current tool is a stroke-based tool */
 export function isStrokeToolCheck(tool: string): boolean {

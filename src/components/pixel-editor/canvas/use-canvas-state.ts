@@ -9,6 +9,7 @@ import { useProjectStore } from '@/lib/store';
 import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
 import { invalidateUnifiedPipelineCache, computeWorldTransforms, geometryDirectionFromToggle } from '@/lib/unified-render';
+import { pickNodesAt } from '@/lib/node-picking';
 import {
   interpolateModifiers,
   computeKeyframeBaseTransform,
@@ -392,86 +393,29 @@ export function useCanvasState() {
   );
 
   // ---- Puppet node hit-testing (Character model) ----
+  // 所见即所点：形状判定三遍（精灵像素/关节盘 → 细精灵与堆叠胶囊 →
+  // 无精灵兜底胶囊），纯函数在 lib/node-picking，与绘制同源。
   const collectPuppetNodeHits = useCallback(
     (px: number, py: number): { node: Node; character: Character; clipId: string | null; score: number }[] => {
-      // 单位统一：内部全 SubPixel。px/py（画布像素）、hitRadius（画布像素）入口转 SubPixel。
-      const hitRadius = pxToSub(Math.max(20 / zoom, 8));
-      const clickX = pxToSub(px);
-      const clickY = pxToSub(py);
       const state = useProjectStore.getState();
-      const characters = state.unifiedCharacters;
       const clips = state.animationClips;
-      const hits: { node: Node; character: Character; clipId: string | null; score: number }[] = [];
-
-      for (const character of Object.values(characters)) {
-        const clip = clips.find(c => c.puppetCharacterId === character.id);
-        // 复用主渲染的 computeWorldTransforms（与绘制、骨骼覆盖层同源）：
-        // 此前私有 computeNodeWorldPos 只读 socket 2D 偏移、不认 offset3D，
-        // 3D 角色的子节点命中点全部塌到父/根位置，点击必然不准
-        const worldTransforms = computeWorldTransforms(character, state.currentFrame, canvasWidth, canvasHeight, undefined, undefined, undefined, undefined, geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
-        const centerX = pxToSub(canvasWidth / 2);
-        const centerY = pxToSub(canvasHeight / 2);
-        // 与主渲染 generateRenderPlan 一致：根节点 variantIndex 为当前朝向
-        const rootNodeForDir = character.nodes[character.rootNodeId];
-        const currentDirection = (rootNodeForDir?.transform.variantIndex ?? 0) as 0|1|2|3|4|5|6|7;
-        const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
-        for (const [nodeId, wt] of worldTransforms) {
-          const proj = projectToView(wt.worldX, wt.worldY, wt.worldZ, currentDirection);
-          worldPositions.set(nodeId, { x: proj.canvasX + centerX, y: proj.canvasY + centerY, angle: wt.worldAngle });
-        }
-        const nodes = Object.values(character.nodes);
-
-        const activeCostumeSet = character.activeCostumeSetId
-          ? character.costumeSets.find(cs => cs.id === character.activeCostumeSetId)
-          : null;
-        // Direction from root node transform
-        const rootNode = character.nodes[character.rootNodeId];
-        const direction = (rootNode?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
-
-        for (const node of nodes) {
-          if (!node.visible) continue;
-          const pos = worldPositions.get(node.id);
-          if (!pos) continue;
-          // Resolve sprite from Character.sprites table (via costumePiece or node.sprite)
-          let sprite: import('@/lib/unified-types').Sprite | null = null;
-          if (node.slot && activeCostumeSet) {
-            const piece = activeCostumeSet.pieces[node.slot.slotKey];
-            if (piece) {
-              const ref = piece.sprites[direction] ?? piece.sprites[0];
-              if (ref) {
-                sprite = 'spriteId' in ref ? (useProjectStore.getState().sprites[ref.spriteId] ?? null) : ref;
-              }
-            }
-          }
-          if (!sprite && node.sprite) sprite = node.sprite;
-          let endWorldX: number, endWorldY: number;
-          if (sprite) {
-            // plug 是 SubPixel，转像素后与 width/height（像素）一致计算，再转回 SubPixel
-            const endLocal = computeSpriteEndPoint(sprite.width, sprite.height, subToPx(sprite.plug?.x ?? 0), subToPx(sprite.plug?.y ?? 0));
-            const rad = (pos.angle * Math.PI) / 180;
-            endWorldX = pos.x + pxToSub(endLocal.x * Math.cos(rad) - endLocal.y * Math.sin(rad));
-            endWorldY = pos.y + pxToSub(endLocal.x * Math.sin(rad) + endLocal.y * Math.cos(rad));
-          } else { endWorldX = pos.x; endWorldY = pos.y; }
-
-          let score: number;
-          const isRoot = !node.parentId;
-          if (isRoot) {
-            score = Math.min(Math.sqrt((clickX - endWorldX) ** 2 + (clickY - endWorldY) ** 2), Math.sqrt((clickX - pos.x) ** 2 + (clickY - pos.y) ** 2));
-          } else {
-            const distToEnd = Math.sqrt((clickX - endWorldX) ** 2 + (clickY - endWorldY) ** 2);
-            const midX = (pos.x + endWorldX) / 2; const midY = (pos.y + endWorldY) / 2;
-            score = Math.min(distToEnd * 0.7, Math.sqrt((clickX - midX) ** 2 + (clickY - midY) ** 2));
-          }
-          const spriteExtent = pxToSub(sprite ? Math.max(sprite.width, sprite.height) / 2 : 5);
-          const maxDist = hitRadius + spriteExtent;
-          if (score <= maxDist) {
-            hits.push({ node, character, clipId: clip?.id ?? null, score });
-          }
-        }
-      }
-      hits.sort((a, b) => a.score - b.score);
-      return hits;
-    }, [canvasWidth, canvasHeight, zoom],
+      const picks = pickNodesAt(Object.values(state.unifiedCharacters), px, py, {
+        sprites: state.sprites,
+        frame: state.currentFrame,
+        canvasWidth,
+        canvasHeight,
+        geometryDirection: geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D),
+        // 容差按屏幕像素定（约 6 屏幕 px），换算到画布坐标
+        slopPx: Math.max(6 / zoom, 1.5),
+      });
+      return picks.map((p, i) => ({
+        node: p.node,
+        character: p.character,
+        clipId: clips.find((c) => c.puppetCharacterId === p.character.id)?.id ?? null,
+        score: p.tier * 100000 + i,
+      }));
+    },
+    [canvasWidth, canvasHeight, zoom],
   );
 
   /** 命中栈顶（原 findPuppetNodeAtPixel 语义） */
