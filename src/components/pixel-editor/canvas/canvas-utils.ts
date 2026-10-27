@@ -214,6 +214,7 @@ export function isStrokeToolCheck(tool: string): boolean {
 export function getCursorStyle(tool: string, spaceHeld: boolean, puppetArmed: boolean = true): string {
   if (spaceHeld) return 'grab';
   switch (tool) {
+    case 'split_node': return 'crosshair';
     case 'select': return 'default';
     case 'brush':
     case 'eraser':

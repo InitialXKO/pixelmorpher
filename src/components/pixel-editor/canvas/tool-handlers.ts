@@ -33,7 +33,8 @@ import {
   spritePivotX,
   spritePivotY,
 } from './canvas-utils';
-import { subToPx, pxToSub, mapDragTo3D, ikTargetMirror, type SubPixel } from '@/lib/unified-types';
+import { subToPx, pxToSub, mapDragTo3D, ikTargetMirror, projectToView, type SubPixel } from '@/lib/unified-types';
+import { toast } from '@/hooks/use-toast';
 import type { CanvasState } from './use-canvas-state';
 import type { BrushCommand, ModifierInstance } from '@/lib/types';
 
@@ -2000,6 +2001,79 @@ export const strokeToolHandler: ToolHandler = {
 // Bone Tool Handler
 // ---------------------------------------------------------------------------
 
+
+// ---------------------------------------------------------------------------
+// Split Node Tool Handler — 点中即拆（PR #54 定案）：命中点定段与 t，
+// 核心变换走 store.splitUnifiedNode（lib/node-split），结果点名走 toast
+// ---------------------------------------------------------------------------
+
+export const splitNodeHandler: ToolHandler = {
+  onMouseDown(s, e, px, py) {
+    void e;
+    const hit = s.findPuppetNodeAtPixel(px, py);
+    if (!hit) {
+      toast({ title: '拆分节点', description: '没点中节点——点在要拆的那一段上', variant: 'destructive' });
+      return;
+    }
+    const { node, character } = hit;
+    const project = useProjectStore.getState();
+    const dir = ((character.nodes[character.rootNodeId]?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7);
+    const wt = computeWorldTransforms(character, project.currentFrame, s.canvasWidth, s.canvasHeight, undefined, undefined, undefined, undefined, geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
+    const jointPx = (id: string): { x: number; y: number } | null => {
+      const w = wt.get(id);
+      if (!w) return null;
+      const p = projectToView(w.worldX, w.worldY, w.worldZ, dir);
+      return { x: subToPx(p.canvasX) + s.canvasWidth / 2, y: subToPx(p.canvasY) + s.canvasHeight / 2 };
+    };
+    const sp = jointPx(node.id);
+    if (!sp) return;
+    // 选段：命中点到各子段的垂距最小者（投影须落在段内）
+    let childId: string | null = null;
+    let t = 0.5;
+    let bestDist = Infinity;
+    for (const cid of node.children) {
+      const cp = jointPx(cid);
+      if (!cp) continue;
+      const vx = cp.x - sp.x, vy = cp.y - sp.y;
+      const len2 = vx * vx + vy * vy;
+      if (len2 < 25) continue;
+      const proj = ((px - sp.x) * vx + (py - sp.y) * vy) / len2;
+      if (proj < 0.02 || proj > 1.05) continue;
+      const qx = sp.x + vx * Math.max(0, Math.min(1, proj));
+      const qy = sp.y + vy * Math.max(0, Math.min(1, proj));
+      const dist = Math.hypot(px - qx, py - qy);
+      if (dist < bestDist) { bestDist = dist; childId = cid; t = Math.max(0, Math.min(1, proj)); }
+    }
+    if (!childId) {
+      if (node.children.length > 0) {
+        toast({ title: '拆分节点', description: '点在关节附近或段外——点在段的中部', variant: 'destructive' });
+        return;
+      }
+      // 叶子：t 按命中点距关节 / 精灵尖端长估算（lib 按真尖端长再钳制）
+      const spriteId = resolveNodeSpriteId(character, node.id, dir, project.sprites);
+      const spr = spriteId ? project.sprites[spriteId] : undefined;
+      if (spr) {
+        const plugX = spr.plug ? subToPx(spr.plug.x) : spr.width / 2;
+        const plugY = spr.plug ? subToPx(spr.plug.y) : spr.height / 2;
+        const end = computeSpriteEndPoint(spr.width, spr.height, plugX, plugY);
+        const tipLen = Math.hypot(end.x, end.y);
+        if (tipLen > 1) t = Math.max(0.05, Math.min(0.95, Math.hypot(px - sp.x, py - sp.y) / tipLen));
+      }
+    }
+    const res = project.splitUnifiedNode(character.id, node.id, childId, t);
+    if (!res.ok) {
+      toast({ title: '拆分失败', description: res.error ?? '未知错误', variant: 'destructive' });
+      return;
+    }
+    const newChar = useProjectStore.getState().unifiedCharacters[character.id];
+    const midName = res.midNodeId ? newChar?.nodes[res.midNodeId]?.name : undefined;
+    toast({
+      title: `已拆分「${node.name}」${midName ? ` → 新关节「${midName}」` : ''}`,
+      description: res.report.length > 0 ? res.report.join('；') : '完成（可撤销）',
+    });
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Dispatch: getToolHandler
 // ---------------------------------------------------------------------------
@@ -2020,6 +2094,7 @@ export function getToolHandler(
   // Node 级分发（新架构；旧画布精灵层分发已随 workspace mode 退役）
   switch (tool) {
     case 'puppet': return puppetHandler;
+    case 'split_node': return splitNodeHandler;
     case 'pseudo3d_rotate': return puppetHandler; // 复用 puppet 拖拽，onMouseDown 内按工具名设伪3D标志
     case 'landmark': return landmarkHandler; // 精灵编辑模式外 no-op（handler 内 early return）
     case 'mark': return markHandler; // 同上
