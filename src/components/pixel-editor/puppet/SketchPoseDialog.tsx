@@ -130,7 +130,17 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
     }
   }, [renderCharacter, characterId, onlyCurrent, joints, frame, frameRate, canvasW, canvasH]);
 
-  useEffect(() => { if (open) renderBase(); }, [renderBase, open]);
+  // 底图绘制：打开后先等一帧（对话框挂载时序）再画，并短间隔补画
+  // 两次兜底——主渲染里精灵位图等有首次备图时机，只画一次会赶上
+  // 空窗（主画布靠循环重画掩盖了这一点，对话框一次性的不行）。
+  // 依赖变化（切角色/切帧/开关/预览）同样走这条。
+  useEffect(() => {
+    if (!open) return;
+    const raf = requestAnimationFrame(() => renderBase());
+    const t1 = setTimeout(() => renderBase(), 120);
+    const t2 = setTimeout(() => renderBase(), 450);
+    return () => { cancelAnimationFrame(raf); clearTimeout(t1); clearTimeout(t2); };
+  }, [renderBase, open]);
 
   /** 笔触层 */
   const renderStrokes = useCallback(() => {
@@ -185,7 +195,7 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
     });
     setPreview({
       bake,
-      report: `第 ${frame} 帧预览：${errs.join('；')}${missed > 0 ? `；另有 ${missed} 笔未命中` : ''}——确认写入或重画`,
+      report: `已解算到第 ${frame} 帧（时间轴播放头当前所在帧）：${errs.join('；')}${missed > 0 ? `；另有 ${missed} 笔未命中` : ''}——尚未写入，确认后才落帧`,
     });
     setStrokes([]);
     setNote('');
@@ -221,7 +231,7 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
             <div className="flex items-center gap-3">
               <p className="text-[11px] text-gray-400 flex-1">
                 在金圈关节（链根或链尾）附近起笔，划向末端要去的位置，一笔一条链。
-                解算先出预览，确认后才落成第 {frame} 帧关键帧。
+                解算先出预览，确认后才落成关键帧；写入帧 = 时间轴播放头当前所在的第 {frame} 帧。
               </p>
               <label className="flex items-center gap-1.5 text-[11px] text-gray-300 shrink-0 cursor-pointer">
                 <input type="checkbox" checked={onlyCurrent} onChange={(e) => setOnlyCurrent(e.target.checked)}
@@ -272,6 +282,10 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
               <div className="flex items-center gap-2">
                 <Button variant="ghost" size="sm" className="h-7 text-[11px] text-gray-400" onClick={() => setStrokes([])}>
                   <Eraser className="size-3 mr-1" /> 清除笔触（{strokes.length}）
+                </Button>
+                <Button variant="ghost" size="sm" className="h-7 text-[11px] text-gray-400"
+                  onClick={() => { renderBase(); renderStrokes(); }}>
+                  <RotateCcw className="size-3 mr-1" /> 重新渲染
                 </Button>
                 <div className="flex-1" />
                 <Button size="sm" className="h-7 text-[11px]" disabled={strokes.length === 0} onClick={handleSolve}>
