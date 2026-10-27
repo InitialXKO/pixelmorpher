@@ -62,11 +62,13 @@ export interface DynamicPatternParams {
   arcSeed: number;      // 形状种子
   arcColor: string;     // 弧线颜色
   // 二期（D4）：生成模式 / 生长 / 双锚点 / 细节数
-  arcMode: 'arc' | 'vine' | 'stars'; // 弧线（闪电）/ 藤蔓 / 星座连线
+  arcMode: 'arc' | 'vine' | 'stars' | 'beam' | 'glyph' | 'stream'; // 弧线/藤蔓/星座/光束/法阵线绘/流光线（乙7 几何三件并入）
   arcGrowHz: number;    // 生长循环（次/秒，0 = 恒满长）；周期内先生长后保持
   arcTarget: string;    // 双锚点：终点锚定的目标部件槽位键（仅弧线模式；空 = 方向+弧长）
   arcOriginMark: string; // 弧线原点绑定的精灵点标记名（空 = 插头）
-  arcDetail: number;    // 细节数：藤蔓叶数 / 星座星数（0 = 按模式缺省）
+  arcDetail: number;    // 细节数：藤蔓叶数 / 星座星数 / 法阵刻度数 / 流光点数（0 = 按模式缺省）
+  arcGlyphSpinDeg: number; // 法阵旋转速度（度/秒，可负）
+  arcFlowHz: number;    // 流光线光点流速（圈/秒）
   // 追随段（形变段的跨部件驱动）：本部件渲染时叠加「源部件位姿的
   // 滞后差」——源部件当前位姿与 delay 秒前位姿之差 × amount，
   // 本部件就像被源部件拖着、慢半拍跟上（垂饰/披风/头发的次级运动）。
@@ -252,6 +254,7 @@ export function defaultDynamicParams(): DynamicPatternParams {
     arcBranches: 1, arcWidthPx: 1.2, arcFlicker: 10, arcSeed: 7,
     arcColor: '#bfe3ff',
     arcMode: 'arc', arcGrowHz: 0, arcTarget: '', arcOriginMark: '', arcDetail: 0,
+    arcGlyphSpinDeg: 12, arcFlowHz: 0.6,
     followEnabled: false, followSource: '', followDelaySec: 0.12, followAmount: 0.7, followRotate: true,
     emitEnabled: true, emitMode: 'out', gatherRadius: 14, source: 'contour', emitMark: '', rate: 12, linkToDeform: 0, speed: 6,
     directionDeg: 270, emitDirMark: '', spreadDeg: 60, layer: 'both', frontRatio: 0.35,
@@ -345,7 +348,9 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
   if (typeof out.arcColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(out.arcColor)) {
     out.arcColor = '#bfe3ff';
   }
-  if (out.arcMode !== 'vine' && out.arcMode !== 'stars') out.arcMode = 'arc';
+  if (!['arc', 'vine', 'stars', 'beam', 'glyph', 'stream'].includes(out.arcMode)) out.arcMode = 'arc';
+  out.arcGlyphSpinDeg = Number.isFinite(out.arcGlyphSpinDeg) ? Math.max(-180, Math.min(180, out.arcGlyphSpinDeg)) : 12;
+  out.arcFlowHz = Number.isFinite(out.arcFlowHz) ? Math.max(0, Math.min(4, out.arcFlowHz)) : 0.6;
   out.arcGrowHz = Number.isFinite(out.arcGrowHz)
     ? Math.max(0, Math.min(2, out.arcGrowHz)) : 0;
   if (typeof out.arcTarget !== 'string') out.arcTarget = '';
@@ -756,6 +761,129 @@ export function arcPointsAt(
     const dots: ArcPoint[] = order
       .filter((i) => raw[i].r <= p.arcLengthPx * grow + 1e-6)
       .map((i) => ({ x: raw[i].x, y: raw[i].y, w: 1.3 + 1.1 * displaceHash01(p.arcSeed, step, 380 + i) }));
+    return { main: arcClipToFrac(mainFull, grow), branches: [], dots, alpha };
+  }
+
+  if (p.arcMode === 'beam') {
+    // 光束（乙7）：直束主线（根粗尖细）+ 两条随跳动步漂移的
+    // 流动条纹 + 起点核与落点光斑点
+    const ex = endOverride ? endOverride.x : Math.cos(dir) * p.arcLengthPx;
+    const ey = endOverride ? endOverride.y : Math.sin(dir) * p.arcLengthPx;
+    const len = Math.hypot(ex, ey) || 1;
+    const ux = ex / len, uy = ey / len;
+    const nx = -uy, ny = ux;
+    const SEG = 6;
+    const mainFull: ArcPoint[] = [];
+    for (let i = 0; i <= SEG; i++) {
+      const s = i / SEG;
+      mainFull.push({ x: ux * len * s, y: uy * len * s, w: Math.max(0.2, p.arcWidthPx * (2.6 - 1.5 * s)) });
+    }
+    const drift = (displaceHash01(p.arcSeed, step, 950) - 0.5) * 2.4;
+    const branches: ArcPoint[][] = [];
+    for (const sideSign of [-1, 1]) {
+      const off = sideSign * p.arcWidthPx * 1.05 + drift * 0.4;
+      const line: ArcPoint[] = [];
+      for (let i = 0; i <= SEG; i++) {
+        const s = 0.06 + 0.9 * (i / SEG);
+        line.push({ x: ux * len * s + nx * off, y: uy * len * s + ny * off, w: Math.max(0.15, p.arcWidthPx * 0.5) });
+      }
+      branches.push(arcClipToFrac(line, grow));
+    }
+    const dots: ArcPoint[] = [{ x: 0, y: 0, w: p.arcWidthPx * 2.2 }];
+    if (grow >= 0.9) {
+      for (let j = 0; j < 4; j++) {
+        const a = displaceHash01(p.arcSeed, step, 960 + j) * Math.PI * 2;
+        const rr = p.arcWidthPx * (0.8 + 1.6 * displaceHash01(p.arcSeed, step, 970 + j));
+        dots.push({ x: ex + Math.cos(a) * rr, y: ey + Math.sin(a) * rr, w: 1.1 + displaceHash01(p.arcSeed, step, 980 + j) * 1.3 });
+      }
+    }
+    return { main: arcClipToFrac(mainFull, grow), branches, dots, alpha };
+  }
+
+  if (p.arcMode === 'glyph') {
+    // 法阵线绘（乙7）：外圈 + 内圈 + 五芒星 + 刻度，逐笔出现
+    // （生长系数按笔画总长顺序分摊）；整体以 arcGlyphSpinDeg 旋转
+    const R = Math.max(4, p.arcLengthPx);
+    const rot = dir + ((p.arcGlyphSpinDeg || 0) * t * Math.PI) / 180;
+    const rc = Math.cos(rot), rs = Math.sin(rot);
+    const rotPt = (x: number, y: number, w: number): ArcPoint => ({ x: x * rc - y * rs, y: x * rs + y * rc, w });
+    const circle = (rad: number, n: number, w: number): ArcPoint[] => {
+      const pts: ArcPoint[] = [];
+      for (let i = 0; i <= n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        pts.push(rotPt(Math.cos(a) * rad, Math.sin(a) * rad, w));
+      }
+      return pts;
+    };
+    const strokes: ArcPoint[][] = [];
+    strokes.push(circle(R, 40, p.arcWidthPx));
+    strokes.push(circle(R * 0.72, 32, Math.max(0.15, p.arcWidthPx * 0.7)));
+    const starOrder = [0, 2, 4, 1, 3, 0];
+    strokes.push(starOrder.map((vi) => {
+      const a = -Math.PI / 2 + vi * (Math.PI * 2 / 5);
+      return rotPt(Math.cos(a) * R * 0.72, Math.sin(a) * R * 0.72, Math.max(0.15, p.arcWidthPx * 0.8));
+    }));
+    const ticks = p.arcDetail > 0 ? p.arcDetail : 12;
+    for (let j = 0; j < ticks; j++) {
+      const a = (j / ticks) * Math.PI * 2;
+      const w = Math.max(0.12, p.arcWidthPx * 0.6);
+      strokes.push([rotPt(Math.cos(a) * R * 0.88, Math.sin(a) * R * 0.88, w), rotPt(Math.cos(a) * R, Math.sin(a) * R, w)]);
+    }
+    const lens = strokes.map((ln) => {
+      let L = 0;
+      for (let i = 0; i + 1 < ln.length; i++) L += Math.hypot(ln[i + 1].x - ln[i].x, ln[i + 1].y - ln[i].y);
+      return L;
+    });
+    const total = lens.reduce((a, b) => a + b, 0);
+    let budget = grow * total;
+    const shown: ArcPoint[][] = [];
+    for (let si = 0; si < strokes.length; si++) {
+      if (budget <= 0) break;
+      shown.push(arcClipToFrac(strokes[si], Math.min(1, budget / Math.max(0.0001, lens[si]))));
+      budget -= lens[si];
+    }
+    const dots: ArcPoint[] = [];
+    const runes = 6;
+    for (let j = 0; j < runes; j++) {
+      if (grow < 0.5 + 0.5 * ((j + 0.5) / runes)) continue;
+      const a = displaceHash01(p.arcSeed, 0, 990 + j) * Math.PI * 2;
+      const q = rotPt(Math.cos(a) * R * 0.86, Math.sin(a) * R * 0.86, 0);
+      dots.push({ x: q.x, y: q.y, w: 1.3 });
+    }
+    return {
+      main: shown.length ? shown[0] : [{ x: 0, y: 0, w: p.arcWidthPx }],
+      branches: shown.slice(1),
+      dots, alpha,
+    };
+  }
+
+  if (p.arcMode === 'stream') {
+    // 流光线（乙7）：微弯细线（种子定弯向）+ 沿线流动的光点
+    const ex = endOverride ? endOverride.x : Math.cos(dir) * p.arcLengthPx;
+    const ey = endOverride ? endOverride.y : Math.sin(dir) * p.arcLengthPx;
+    const len = Math.hypot(ex, ey) || 1;
+    const ux = ex / len, uy = ey / len;
+    const nx = -uy, ny = ux;
+    const bow = (displaceHash01(p.arcSeed, 0, 960) - 0.5) * len * 0.18;
+    const SEG = 12;
+    const ptAt = (s: number): { x: number; y: number } => {
+      const bend = Math.sin(s * Math.PI) * bow;
+      return { x: ux * len * s + nx * bend, y: uy * len * s + ny * bend };
+    };
+    const mainFull: ArcPoint[] = [];
+    for (let i = 0; i <= SEG; i++) {
+      const s = i / SEG;
+      const q = ptAt(s);
+      mainFull.push({ x: q.x, y: q.y, w: Math.max(0.15, p.arcWidthPx * (1 - 0.65 * s)) });
+    }
+    const beads = p.arcDetail > 0 ? p.arcDetail : 6;
+    const dots: ArcPoint[] = [];
+    for (let j = 0; j < beads; j++) {
+      const s = ((j / beads) + t * (p.arcFlowHz || 0)) % 1;
+      if (s > grow) continue;
+      const q = ptAt(s);
+      dots.push({ x: q.x, y: q.y, w: Math.max(0.5, p.arcWidthPx * (0.85 + 0.45 * Math.sin(s * Math.PI))) });
+    }
     return { main: arcClipToFrac(mainFull, grow), branches: [], dots, alpha };
   }
 
@@ -1275,7 +1403,9 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'arcFlicker', label: '跳动（步/秒，0=静止）', section: '弧线', min: 0, max: 30, step: 1 },
   { key: 'arcSeed', label: '形状种子', section: '弧线', min: 1, max: 9999, step: 1 },
   { key: 'arcGrowHz', label: '生长循环（次/秒，0=恒满长）', section: '弧线', min: 0, max: 2, step: 0.05 },
-  { key: 'arcDetail', label: '细节数（藤蔓叶/星座星，0=缺省）', section: '弧线', min: 0, max: 12, step: 1 },
+  { key: 'arcDetail', label: '细节数（叶/星/刻度/流光点，0=缺省）', section: '弧线', min: 0, max: 12, step: 1 },
+  { key: 'arcGlyphSpinDeg', label: '法阵转速（度/秒，可负）', section: '弧线', min: -180, max: 180, step: 2 },
+  { key: 'arcFlowHz', label: '流光速度（圈/秒）', section: '弧线', min: 0, max: 4, step: 0.1 },
   { key: 'followDelaySec', label: '追随延迟（秒）', section: '形变', min: 0, max: 1, step: 0.01 },
   { key: 'followAmount', label: '追随强度', section: '形变', min: 0, max: 1, step: 0.05 },
   { key: 'rate', label: '发射率（个/秒）', section: '发射', min: 0, max: 60, step: 1 },

@@ -176,6 +176,121 @@ function dynArcPoints(params, tSec, endX, endY, hasEnd) {
       .map((i) => [raw[i][0], raw[i][1], 1.3 + 1.1 * dynHash01(p.arcSeed, step, 380 + i)]);
     return { main: dynArcClip(mainFull, grow), branches: [], dots: dots, alpha: alpha };
   }
+  if (p.arcMode === 'beam') {
+    const ex = hasEnd ? endX : Math.cos(dir) * p.arcLengthPx;
+    const ey = hasEnd ? endY : Math.sin(dir) * p.arcLengthPx;
+    const len = Math.hypot(ex, ey) || 1;
+    const ux = ex / len, uy = ey / len;
+    const nx = -uy, ny = ux;
+    const SEG = 6;
+    const mainFull = [];
+    for (let i = 0; i <= SEG; i++) {
+      const sf = i / SEG;
+      mainFull.push([ux * len * sf, uy * len * sf, Math.max(0.2, p.arcWidthPx * (2.6 - 1.5 * sf))]);
+    }
+    const drift = (dynHash01(p.arcSeed, step, 950) - 0.5) * 2.4;
+    const branches = [];
+    for (const sideSign of [-1, 1]) {
+      const off = sideSign * p.arcWidthPx * 1.05 + drift * 0.4;
+      const line = [];
+      for (let i = 0; i <= SEG; i++) {
+        const sf = 0.06 + 0.9 * (i / SEG);
+        line.push([ux * len * sf + nx * off, uy * len * sf + ny * off, Math.max(0.15, p.arcWidthPx * 0.5)]);
+      }
+      branches.push(dynArcClip(line, grow));
+    }
+    const dots = [[0, 0, p.arcWidthPx * 2.2]];
+    if (grow >= 0.9) {
+      for (let j = 0; j < 4; j++) {
+        const a = dynHash01(p.arcSeed, step, 960 + j) * Math.PI * 2;
+        const rr = p.arcWidthPx * (0.8 + 1.6 * dynHash01(p.arcSeed, step, 970 + j));
+        dots.push([ex + Math.cos(a) * rr, ey + Math.sin(a) * rr, 1.1 + dynHash01(p.arcSeed, step, 980 + j) * 1.3]);
+      }
+    }
+    return { main: dynArcClip(mainFull, grow), branches: branches, dots: dots, alpha: alpha };
+  }
+  if (p.arcMode === 'glyph') {
+    const R = Math.max(4, p.arcLengthPx);
+    const rot = dir + (((p.arcGlyphSpinDeg ?? 12)) * tSec * Math.PI) / 180;
+    const rc = Math.cos(rot), rs = Math.sin(rot);
+    const rotPt = (x, y, w) => [x * rc - y * rs, x * rs + y * rc, w];
+    const circle = (rad, n, w) => {
+      const pts = [];
+      for (let i = 0; i <= n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        pts.push(rotPt(Math.cos(a) * rad, Math.sin(a) * rad, w));
+      }
+      return pts;
+    };
+    const strokes = [];
+    strokes.push(circle(R, 40, p.arcWidthPx));
+    strokes.push(circle(R * 0.72, 32, Math.max(0.15, p.arcWidthPx * 0.7)));
+    const starOrder = [0, 2, 4, 1, 3, 0];
+    strokes.push(starOrder.map((vi) => {
+      const a = -Math.PI / 2 + vi * (Math.PI * 2 / 5);
+      return rotPt(Math.cos(a) * R * 0.72, Math.sin(a) * R * 0.72, Math.max(0.15, p.arcWidthPx * 0.8));
+    }));
+    const ticks = p.arcDetail > 0 ? p.arcDetail : 12;
+    for (let j = 0; j < ticks; j++) {
+      const a = (j / ticks) * Math.PI * 2;
+      const w = Math.max(0.12, p.arcWidthPx * 0.6);
+      strokes.push([rotPt(Math.cos(a) * R * 0.88, Math.sin(a) * R * 0.88, w), rotPt(Math.cos(a) * R, Math.sin(a) * R, w)]);
+    }
+    const lens = strokes.map((ln) => {
+      let L = 0;
+      for (let i = 0; i + 1 < ln.length; i++) L += Math.hypot(ln[i + 1][0] - ln[i][0], ln[i + 1][1] - ln[i][1]);
+      return L;
+    });
+    const total = lens.reduce((a, b) => a + b, 0);
+    let budget = grow * total;
+    const shown = [];
+    for (let si = 0; si < strokes.length; si++) {
+      if (budget <= 0) break;
+      shown.push(dynArcClip(strokes[si], Math.min(1, budget / Math.max(0.0001, lens[si]))));
+      budget -= lens[si];
+    }
+    const dots = [];
+    const runes = 6;
+    for (let j = 0; j < runes; j++) {
+      if (grow < 0.5 + 0.5 * ((j + 0.5) / runes)) continue;
+      const a = dynHash01(p.arcSeed, 0, 990 + j) * Math.PI * 2;
+      const q = rotPt(Math.cos(a) * R * 0.86, Math.sin(a) * R * 0.86, 0);
+      dots.push([q[0], q[1], 1.3]);
+    }
+    return {
+      main: shown.length ? shown[0] : [[0, 0, p.arcWidthPx]],
+      branches: shown.slice(1),
+      dots: dots, alpha: alpha,
+    };
+  }
+  if (p.arcMode === 'stream') {
+    const ex = hasEnd ? endX : Math.cos(dir) * p.arcLengthPx;
+    const ey = hasEnd ? endY : Math.sin(dir) * p.arcLengthPx;
+    const len = Math.hypot(ex, ey) || 1;
+    const ux = ex / len, uy = ey / len;
+    const nx = -uy, ny = ux;
+    const bow = (dynHash01(p.arcSeed, 0, 960) - 0.5) * len * 0.18;
+    const SEG = 12;
+    const ptAt = (sf) => {
+      const bend = Math.sin(sf * Math.PI) * bow;
+      return [ux * len * sf + nx * bend, uy * len * sf + ny * bend];
+    };
+    const mainFull = [];
+    for (let i = 0; i <= SEG; i++) {
+      const sf = i / SEG;
+      const q = ptAt(sf);
+      mainFull.push([q[0], q[1], Math.max(0.15, p.arcWidthPx * (1 - 0.65 * sf))]);
+    }
+    const beads = p.arcDetail > 0 ? p.arcDetail : 6;
+    const dots = [];
+    for (let j = 0; j < beads; j++) {
+      const sf = ((j / beads) + tSec * (p.arcFlowHz ?? 0.6)) % 1;
+      if (sf > grow) continue;
+      const q = ptAt(sf);
+      dots.push([q[0], q[1], Math.max(0.5, p.arcWidthPx * (0.85 + 0.45 * Math.sin(sf * Math.PI)))]);
+    }
+    return { main: dynArcClip(mainFull, grow), branches: [], dots: dots, alpha: alpha };
+  }
   const ex = hasEnd ? endX : Math.cos(dir) * p.arcLengthPx;
   const ey = hasEnd ? endY : Math.sin(dir) * p.arcLengthPx;
   const mainLen = Math.hypot(ex, ey);

@@ -240,5 +240,53 @@ console.log('C 组：去孤点算子（注册表 + 蓝图求值 + 列表转图�
   check('C9 修改器列表转图含 cleanup 节点', !!g3 && g3.nodes.some((n) => n.type === 'cleanup'));
 }
 
+// ---- B 组：乙7 几何生成三件（光束/法阵线绘/流光线） ----
+console.log('B 组：几何生成三件——arcPointsAt vs dynArcPoints 逐点对拍');
+{
+  const { arcPointsAt } = await import('../src/lib/dynamic-patterns');
+  const rt3 = rt as unknown as {
+    dynArcPoints: (p: unknown, t: number, ex?: number, ey?: number, hasEnd?: boolean) =>
+      { main: [number, number, number][]; branches: [number, number, number][][]; dots: [number, number, number][]; alpha: number };
+  };
+  const sameShape = (name: string, over: Partial<DynamicPatternParams>, t: number, end?: { x: number; y: number }) => {
+    const p = { ...defaultDynamicParams(), arcEnabled: true, ...over };
+    const a = arcPointsAt(p, t, end);
+    const b = rt3.dynArcPoints(p, t, end?.x, end?.y, !!end);
+    const ptEq = (u: { x: number; y: number; w: number }[], v: [number, number, number][]) =>
+      u.length === v.length && u.every((q, i) => near(q.x, v[i]![0], 1e-9) && near(q.y, v[i]![1], 1e-9) && near(q.w, v[i]![2], 1e-9));
+    const okAll = ptEq(a.main, b.main)
+      && a.branches.length === b.branches.length && a.branches.every((br, i) => ptEq(br, b.branches[i]!))
+      && ptEq(a.dots, b.dots) && near(a.alpha, b.alpha, 1e-9);
+    check(name, okAll, `main ${a.main.length}/${b.main.length} branches ${a.branches.length}/${b.branches.length} dots ${a.dots.length}/${b.dots.length}`);
+    return a;
+  };
+  const beamOver = { arcMode: 'beam' as const, arcLengthPx: 40, arcDirDeg: 30, arcWidthPx: 2, arcFlicker: 10, arcSeed: 7 };
+  const beam = sameShape('B1 光束差分（t=0.35，带跳动步）', beamOver, 0.35);
+  check('B2 光束主线终点 = 方向×长', (() => {
+    const last = beam.main[beam.main.length - 1]!;
+    return near(last.x, Math.cos(Math.PI / 6) * 40, 1e-6) && near(last.y, Math.sin(Math.PI / 6) * 40, 1e-6);
+  })());
+  check('B3 光束根粗尖细 + 两条条纹 + 光斑点', beam.main[0]!.w > beam.main[beam.main.length - 1]!.w && beam.branches.length === 2 && beam.dots.length === 5);
+  sameShape('B4 光束双锚点差分', beamOver, 0.8, { x: 25, y: -12 });
+  const glyphOver = { arcMode: 'glyph' as const, arcLengthPx: 30, arcWidthPx: 1.4, arcSeed: 3, arcDetail: 12, arcGlyphSpinDeg: 30 };
+  const glyph = sameShape('B5 法阵差分（t=0.4）', glyphOver, 0.4);
+  check('B6 法阵外圈半径 = arcLengthPx', (() => {
+    const mx = Math.max(...glyph.main.map((q) => Math.hypot(q.x, q.y)));
+    return near(mx, 30, 0.6);
+  })());
+  check('B7 法阵笔画齐全（内圈+星+12 刻度）', glyph.branches.length === 2 + 12, `实得 ${glyph.branches.length}`);
+  const glyphSpin = sameShape('B8 法阵旋转后差分仍一致（t=1.3）', glyphOver, 1.3);
+  check('B9 法阵随时间旋转（点集变化）', JSON.stringify(glyphSpin.main[3]) !== JSON.stringify(glyph.main[3]));
+  const glyphGrow = sameShape('B10 法阵生长差分（growHz）', { ...glyphOver, arcGrowHz: 1 }, 0.18);
+  check('B11 生长中笔画未齐（逐笔出现）', glyphGrow.branches.length < glyph.branches.length, `${glyphGrow.branches.length} < ${glyph.branches.length}`);
+  const streamOver = { arcMode: 'stream' as const, arcLengthPx: 36, arcDirDeg: 0, arcWidthPx: 1.6, arcSeed: 5, arcDetail: 6, arcFlowHz: 0.5 };
+  const stream = sameShape('B12 流光线差分（t=0.3）', streamOver, 0.3);
+  check('B13 流光点 6 颗沿线分布', stream.dots.length === 6 && stream.dots.every((d) => d.x >= -0.01 && d.x <= 36.01));
+  const stream2 = sameShape('B14 流光线差分（t=0.9）', streamOver, 0.9);
+  check('B15 光点随时间流动（位置变）', stream2.dots.some((d, i) => Math.abs(d.x - stream.dots[i]!.x) > 0.5));
+  const badMode = normalizeDynamicParams({ ...defaultDynamicParams(), arcMode: 'zzz' } as DynamicPatternParams);
+  check('B16 坏模式回落 arc、新参数钳制', badMode.arcMode === 'arc' && badMode.arcGlyphSpinDeg === 12);
+}
+
 console.log(`\n合计：${pass} 过 / ${fail} 败`);
 if (fail > 0) process.exit(1);

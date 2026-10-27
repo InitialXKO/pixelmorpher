@@ -330,6 +330,9 @@ export default function DynamicPatternEditor({
                   <option value="arc">弧线</option>
                   <option value="vine">藤蔓</option>
                   <option value="stars">星座</option>
+                  <option value="beam">光束</option>
+                  <option value="glyph">法阵线绘</option>
+                  <option value="stream">流光线</option>
                 </select>
               </label>
             )}
@@ -570,6 +573,8 @@ export default function DynamicPatternEditor({
                 .filter((d) => !(section === '粒子' && d.key === 'rampMidPos' && !np(inst).rampEnabled))
                 .filter((d) => !(section === '环绕' && !np(inst).orbitEnabled))
                 .filter((d) => !(section === '后期' && !np(inst).postEnabled))
+                .filter((d) => !(section === '弧线' && d.key === 'arcGlyphSpinDeg' && np(inst).arcMode !== 'glyph'))
+                .filter((d) => !(section === '弧线' && d.key === 'arcFlowHz' && np(inst).arcMode !== 'stream'))
                 .map((d) => {
                 const v = np(inst)[d.key] as number;
                 return (
