@@ -47,8 +47,8 @@ function effectiveDiscDiameter(node: Node, ignoreStored = false): number {
   const stored = node.attachment?.jointWidth;
   if (!ignoreStored && typeof stored === 'number' && stored > 0) return stored;
   const piece = node.slot;
-  const plugCS = piece?.crossSections.find((cs) => cs.id === (node.generated?.crossSectionId ?? 'plug'));
-  const bottomCS = piece?.crossSections.find((cs) => cs.id === 'bottom');
+  const plugCS = (piece?.crossSections ?? []).find((cs) => cs.id === (node.generated?.crossSectionId ?? 'plug'));
+  const bottomCS = (piece?.crossSections ?? []).find((cs) => cs.id === 'bottom');
   return plugCS?.diameter ?? bottomCS?.diameter ?? 4;
 }
 

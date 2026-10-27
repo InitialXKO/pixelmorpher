@@ -1336,9 +1336,6 @@ function generateDiscInstructions(
   for (const [nodeId, node] of Object.entries(character.nodes)) {
     if (!nodeHasJointDisc(node)) continue;
     if (activeSnapshots.has(nodeId)) continue; // 蒙皮快照生效：改走合并精灵弯曲，不出盘
-    // 无精灵可遮盖（占位/结构节点）不出盘：node.sprite 现行管线不赋值，
-    // 以 slot 精灵条目为准（烘焙占位节点的 slot.sprites 为空）
-    if (!node.sprite && Object.keys(node.slot?.sprites ?? {}).length === 0) continue;
 
     // mesh 蒙皮模式：不生成关节盘（由像素变形代替）
     if (node.attachment?.type === 'socket' && node.attachment.parentSocketId && node.parentId) {
@@ -1359,6 +1356,11 @@ function generateDiscInstructions(
     const resolved = resolveSprite(node, currentDirection, activeCostumeSet, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? ''], character.latitude ?? 0);
     const currentSprite = resolved.sprite;
 
+    // 无精灵可遮盖（占位/结构节点）不出盘：按上面的同一解析判——精灵
+    // 住在生效服装件里（向导角色 node.slot 本身不带 sprites，只看
+    // slot.sprites 会把向导角色的每个关节都误判成占位、整批不出盘）。
+    if (!node.sprite && !currentSprite) continue;
+
     // 关节盘直径 = plug 侧开口宽度（与 carve 同源，不再与 parent bottom 求平均）。
     // 优先用 attachment.jointWidth（创建时写入），否则按 plug 位置回退估算。
     const storedJointWidth = node.attachment?.jointWidth;
@@ -1367,8 +1369,8 @@ function generateDiscInstructions(
       diameter = storedJointWidth;
     } else {
       const childPiece = node.slot;
-      const plugCS = childPiece?.crossSections.find(cs => cs.id === (node.generated?.crossSectionId ?? 'plug'));
-      const bottomCS = childPiece?.crossSections.find(cs => cs.id === 'bottom');
+      const plugCS = (childPiece?.crossSections ?? []).find(cs => cs.id === (node.generated?.crossSectionId ?? 'plug'));
+      const bottomCS = (childPiece?.crossSections ?? []).find(cs => cs.id === 'bottom');
       diameter = getPlugJointWidth(
         {
           plug: node.attachment?.plug

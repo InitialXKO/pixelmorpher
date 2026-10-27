@@ -20,7 +20,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store';
-import { createDefaultNode, pxToSub } from '@/lib/unified-types';
+import { createDefaultNode, pxToSub, type CrossSection } from '@/lib/unified-types';
 import type {
   PuppetDirection,
 } from '@/lib/types';
@@ -608,6 +608,17 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
         }
       }
 
+      // 关节盘回退数据（与烘焙导入 skeleton-mapper 同款）：创建时算出的
+      // jointWidth 同时落一份 'plug' 截面到两件服装件——attachment.jointWidth
+      // 被清空（恢复自动）时，渲染端与 RigPanel 按 node.slot 的截面找回
+      // 这个宽度；没有截面就只剩默认 4。用户指定精灵的节点没算过
+      // jointWidth（Pass 1 跳过），保持空截面、不编造宽度。
+      const jointWidth = jointWidths[def.name];
+      const jointCrossSections = (): CrossSection[] =>
+        typeof jointWidth === 'number' && jointWidth > 0
+          ? [{ id: 'plug', mode: 'inside', diameter: jointWidth }]
+          : [];
+
       // node.slot 只定义 slot（不带 sprites），sprites 只在 costumeSet.pieces 里
       const nodeCostumePiece = {
         slotKey: def.name,
@@ -615,7 +626,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
         sprites: {},
         scaleVariants: {},
         mirrorMap: {},
-        crossSections: [],
+        crossSections: jointCrossSections(),
       };
       // costumeSet.pieces 带 sprites（激活服装的覆盖）
       const costumePiece = {
@@ -624,7 +635,7 @@ export default function PuppetCreationWizard({ open, onClose }: PuppetCreationWi
         sprites: pieceSprites,
         scaleVariants: {},
         mirrorMap: {},
-        crossSections: [],
+        crossSections: jointCrossSections(),
       };
 
       // Build node in memory (do NOT call store.addUnifiedNode)
