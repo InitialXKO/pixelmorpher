@@ -122,6 +122,27 @@ export interface DynamicPatternParams {
   // 自身的后期——作用于本图案的全部绘制：粒子全程 + 发光/弧线/
   // 环绕的颜色主题化）
   postEnabled: boolean;
+  // 团块段（乙8：距离场种子团块 + 烧穿 + 热度色阶，闭式场）
+  blobEnabled: boolean;
+  blobRadius: number;    // 团块半径（px）
+  blobCount: number;     // 种子数
+  blobSeed: number;      // 形状种子
+  blobHz: number;        // 烧穿循环（次/秒）
+  blobBurn: number;      // 烧穿深度 0..1（周期中段侵蚀最深）
+  blobAlpha: number;     // 峰值不透明度
+  blobColorEdge: string; // 低热色
+  blobColorMid: string;  // 中热色
+  blobColorCore: string; // 高热色
+  // 火焰段（乙8：高度场火舌 + 上滚周期噪声撕边，循环无缝）
+  flameEnabled: boolean;
+  flameWidth: number;    // 焰宽（px）
+  flameHeight: number;   // 焰高（px，自插头向上）
+  flameHz: number;       // 上滚循环（次/秒）
+  flameTurbulence: number; // 撕边强度 0..1
+  flameAlpha: number;    // 峰值不透明度
+  flameColorEdge: string;
+  flameColorMid: string;
+  flameColorCore: string;
   postTheme: PostTheme;    // 色板主题（按亮度映射到主题色阶；none = 不映射）
   postAlphaLevels: number; // 透明度分级（0 = 关；2~8 = 把粒子透明度量化到该档数）
   postDither: boolean;     // 抖动消散（粒子按生命包络做确定性哈希掉落，代替平滑淡出）
@@ -264,6 +285,10 @@ export function defaultDynamicParams(): DynamicPatternParams {
     orbitEnabled: false, orbitCount: 3, orbitRadiusX: 14, orbitRadiusY: 10, orbitHz: 0.5, orbitPhase: 0,
     orbitSize: 3, orbitColor: '#aee6ff', orbitAngleSpace: 'sprite',
     postEnabled: false, postTheme: 'none', postAlphaLevels: 0, postDither: false,
+    blobEnabled: false, blobRadius: 16, blobCount: 5, blobSeed: 3, blobHz: 0.8, blobBurn: 0.55, blobAlpha: 0.85,
+    blobColorEdge: '#7a1e00', blobColorMid: '#ff5a00', blobColorCore: '#fff3c4',
+    flameEnabled: false, flameWidth: 18, flameHeight: 26, flameHz: 1.2, flameTurbulence: 0.55, flameAlpha: 0.85,
+    flameColorEdge: '#8a0e00', flameColorMid: '#ff7a1a', flameColorCore: '#fff3c4',
     glowEnabled: false, glowColor: '#7dd7ff', glowStrength: 1, glowHz: 0.8,
     glowPhase: 0, glowHalo: 2, glowMaskSource: 'color', glowPick: '#2ea8ff',
     glowTolerance: 0, glowMask: undefined, glowMarkName: '', glowFollowGroup: 2,
@@ -296,6 +321,9 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
   if (out.orbitAngleSpace !== 'world') out.orbitAngleSpace = 'sprite';
   if (!['none', 'ember', 'frost', 'gameboy', 'dusk', 'mono'].includes(out.postTheme)) out.postTheme = 'none';
   out.postAlphaLevels = Number.isFinite(out.postAlphaLevels) ? Math.max(0, Math.min(8, Math.round(out.postAlphaLevels))) : 0;
+  out.blobCount = Number.isFinite(out.blobCount) ? Math.max(2, Math.min(8, Math.round(out.blobCount))) : 5;
+  out.blobBurn = Number.isFinite(out.blobBurn) ? Math.max(0, Math.min(1, out.blobBurn)) : 0.55;
+  out.flameTurbulence = Number.isFinite(out.flameTurbulence) ? Math.max(0, Math.min(1, out.flameTurbulence)) : 0.55;
   out.orbitCount = Number.isFinite(out.orbitCount) ? Math.max(1, Math.min(12, Math.round(out.orbitCount))) : 3;
   if (typeof out.emitMark !== 'string') out.emitMark = '';
   if (typeof out.emitDirMark !== 'string') out.emitDirMark = '';
@@ -465,6 +493,106 @@ export function postColorAt(params: DynamicPatternParams, hex: string): string {
   const f = pos - i;
   const a = hexRgbOf(ramp[i]!), c = hexRgbOf(ramp[Math.min(4, i + 1)]!);
   return rgbHex(a[0] + (c[0] - a[0]) * f, a[1] + (c[1] - a[1]) * f, a[2] + (c[2] - a[2]) * f);
+}
+
+// ---- 团块/火焰场（乙8）：闭式热度场，heat 0..1 行优先；
+// (ox, oy) = 插头在场内的格坐标。时间只经周期相位进入，
+// 场以 1/Hz 为周期严格循环（噪声相位偏移恒为周期整数倍）。
+// 运行时孪生 = DYNAMIC_SRC 的 dynBlobField / dynFlameField。 ----
+
+export interface DynField {
+  w: number; h: number;
+  heat: Float32Array;
+  ox: number; oy: number;
+}
+
+function smoothstep01(a: number, b: number, x: number): number {
+  const f = Math.max(0, Math.min(1, (x - a) / Math.max(1e-6, b - a)));
+  return f * f * (3 - 2 * f);
+}
+
+/** 热度 → 颜色（低热 edge → 0.55 mid → 高热 core 两段线性） */
+export function fieldColorAt(edge: string, mid: string, core: string, heat: number): [number, number, number] {
+  const f = Math.max(0, Math.min(1, heat));
+  const a = hexRgbOf(edge), m = hexRgbOf(mid), c = hexRgbOf(core);
+  if (f <= 0.55) {
+    const t = f / 0.55;
+    return [a[0] + (m[0] - a[0]) * t, a[1] + (m[1] - a[1]) * t, a[2] + (m[2] - a[2]) * t];
+  }
+  const t = (f - 0.55) / 0.45;
+  return [m[0] + (c[0] - m[0]) * t, m[1] + (c[1] - m[1]) * t, m[2] + (c[2] - m[2]) * t];
+}
+
+export function blobFieldAt(p: DynamicPatternParams, tSec: number): DynField | null {
+  if (!p.blobEnabled) return null;
+  const R = Math.max(4, p.blobRadius);
+  const pad = 2;
+  const S = 2 * (R + pad) + 1;
+  const heat = new Float32Array(S * S);
+  const phase = ((tSec * p.blobHz) % 1 + 1) % 1;
+  const K = DISPLACE_PERIOD_CELLS;
+  const theta = p.blobBurn * Math.sin(Math.PI * phase);
+  const seeds: { x: number; y: number; r: number }[] = [];
+  for (let i = 0; i < p.blobCount; i++) {
+    // 第 0 个种子锚在原点当核（团块必须骑在锚点上），其余绕核散布
+    const ang = displaceHash01(p.blobSeed, 0, 100 + i) * Math.PI * 2;
+    const rad = i === 0 ? 0 : R * 0.5 * Math.sqrt(displaceHash01(p.blobSeed, 0, 110 + i));
+    const wx = (displaceNoiseU(phase * K + i * 3.7, i * 1.3, K, 7717) - 0.5) * R * 0.22;
+    const wy = (displaceNoiseU(phase * K + i * 2.9 + 40, i * 1.7, K, 31337) - 0.5) * R * 0.22;
+    seeds.push({
+      x: Math.cos(ang) * rad + wx,
+      y: Math.sin(ang) * rad + wy,
+      r: i === 0 ? R * 0.78 : R * (0.42 + 0.3 * displaceHash01(p.blobSeed, 0, 120 + i)),
+    });
+  }
+  for (let cy = 0; cy < S; cy++) {
+    for (let cx = 0; cx < S; cx++) {
+      const lx = cx - (R + pad), ly = cy - (R + pad);
+      let raw = 0;
+      for (const sd of seeds) {
+        const d = Math.hypot(lx - sd.x, ly - sd.y);
+        const v = 1 - d / sd.r;
+        if (v > raw) raw = v;
+      }
+      heat[cy * S + cx] = smoothstep01(theta, theta + 0.38, Math.pow(Math.max(0, raw), 1.3));
+    }
+  }
+  return { w: S, h: S, heat, ox: R + pad, oy: R + pad };
+}
+
+export function flameFieldAt(p: DynamicPatternParams, tSec: number): DynField | null {
+  if (!p.flameEnabled) return null;
+  const W = Math.max(4, Math.round(p.flameWidth));
+  const H = Math.max(6, Math.round(p.flameHeight));
+  const pad = 2;
+  const w = W + 2 * pad + 1;
+  const h = H + pad + 3;
+  const ox = Math.floor(W / 2) + pad;
+  const oy = H + pad;
+  const heat = new Float32Array(w * h);
+  const phase = ((tSec * p.flameHz) % 1 + 1) % 1;
+  const K = DISPLACE_PERIOD_CELLS;
+  const f = 0.16;
+  for (let cy = 0; cy < h; cy++) {
+    const ly = cy - oy;
+    if (ly > 1) continue;
+    const rise = Math.max(0, Math.min(1, -ly / H));
+    const widthMod = 0.82 + 0.36 * displaceNoiseU(phase * K, rise * 3, K, 7717);
+    const halfW = Math.max(1, (W / 2) * (1 - 0.5 * rise) * widthMod);
+    for (let cx = 0; cx < w; cx++) {
+      const lx = cx - ox;
+      const inside = 1 - Math.abs(lx) / halfW;
+      if (inside <= 0) continue;
+      const n1 = displaceNoiseU(-ly * f + phase * K, lx * f, K, 5511);
+      const n2 = displaceNoiseU(-ly * f * 2.1 + phase * K * 2, lx * f * 2.1 + 7.7, K, 9923);
+      let hv = inside * (1 - rise * 0.9)
+        + (n1 - 0.5) * p.flameTurbulence * (0.35 + 0.65 * rise)
+        + (n2 - 0.5) * p.flameTurbulence * 0.35
+        - rise * rise * 0.25;
+      heat[cy * w + cx] = smoothstep01(0.06, 0.62, hv);
+    }
+  }
+  return { w, h, heat, ox, oy };
 }
 
 /** 发光分组：解析序里前 3 个启用发光的实例各成一组（颜色/强度/频率/相位
@@ -1374,7 +1502,7 @@ export function deleteUserDynamicPattern(name: string): void {
 export interface DynamicParamDef {
   key: keyof DynamicPatternParams;
   label: string;
-  section: '形变' | '发射' | '粒子' | '发光' | '弧线' | '环绕' | '后期';
+  section: '形变' | '发射' | '粒子' | '发光' | '弧线' | '环绕' | '后期' | '团块' | '火焰';
   min: number;
   max: number;
   step: number;
@@ -1431,6 +1559,17 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'orbitPhase', label: '环绕相位', section: '环绕', min: 0, max: 1, step: 0.01 },
   { key: 'orbitSize', label: '光点直径（px）', section: '环绕', min: 1, max: 10, step: 0.5 },
   { key: 'postAlphaLevels', label: '透明度分级（0=关）', section: '后期', min: 0, max: 8, step: 1 },
+  { key: 'blobRadius', label: '团块半径（px）', section: '团块', min: 6, max: 40, step: 1 },
+  { key: 'blobCount', label: '种子数', section: '团块', min: 2, max: 8, step: 1 },
+  { key: 'blobSeed', label: '形状种子', section: '团块', min: 1, max: 9999, step: 1 },
+  { key: 'blobHz', label: '烧穿循环（次/秒）', section: '团块', min: 0.1, max: 3, step: 0.05 },
+  { key: 'blobBurn', label: '烧穿深度', section: '团块', min: 0, max: 1, step: 0.05 },
+  { key: 'blobAlpha', label: '不透明度', section: '团块', min: 0.05, max: 1, step: 0.05 },
+  { key: 'flameWidth', label: '焰宽（px）', section: '火焰', min: 6, max: 48, step: 1 },
+  { key: 'flameHeight', label: '焰高（px）', section: '火焰', min: 8, max: 64, step: 1 },
+  { key: 'flameHz', label: '上滚循环（次/秒）', section: '火焰', min: 0.2, max: 4, step: 0.05 },
+  { key: 'flameTurbulence', label: '撕边强度', section: '火焰', min: 0, max: 1, step: 0.05 },
+  { key: 'flameAlpha', label: '不透明度', section: '火焰', min: 0.05, max: 1, step: 0.05 },
   { key: 'glowStrength', label: '发光强度（峰值）', section: '发光', min: 0, max: 2, step: 0.05 },
   { key: 'glowHz', label: '呼吸频率（次/秒）', section: '发光', min: 0, max: 3, step: 0.05 },
   { key: 'glowPhase', label: '呼吸相位', section: '发光', min: 0, max: 1, step: 0.01 },

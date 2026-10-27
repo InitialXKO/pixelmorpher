@@ -78,7 +78,7 @@ import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/procedural';
 import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followAnchoredDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
 import { effectivePatternGraph, resolvePatternsFromGraph } from './blueprint/pattern-sync';
-import { orbitPointsAt, postColorAt } from './dynamic-patterns';
+import { orbitPointsAt, postColorAt, blobFieldAt, flameFieldAt, fieldColorAt } from './dynamic-patterns';
 import { evaluateNodeOutput } from './blueprint/eval';
 import { markPointPx, markDirAngleDeg } from './sprite-marks';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
@@ -2330,6 +2330,57 @@ const PIXEL_MOD_TYPES: ModifierType[] = [
   'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip', 'pixel_edit',
 ];
 
+/** 团块/火焰场画布（乙8）：热度场 → RGBA 画布，颜色过图案级
+ * 后期主题；按键（实例 + 段参数签名 + 时间量化步）缓存 */
+const dynFieldCanvasCache = new Map<string, { canvas: HTMLCanvasElement; ox: number; oy: number } | null>();
+function dynFieldCanvas(
+  kind: 'blob' | 'flame',
+  params: import('./dynamic-patterns').DynamicPatternParams,
+  tSec: number,
+  idKey: string,
+): { canvas: HTMLCanvasElement; ox: number; oy: number } | null {
+  const seg = kind === 'blob'
+    ? [params.blobRadius, params.blobCount, params.blobSeed, params.blobHz, params.blobBurn, params.blobAlpha, params.blobColorEdge, params.blobColorMid, params.blobColorCore]
+    : [params.flameWidth, params.flameHeight, params.flameHz, params.flameTurbulence, params.flameAlpha, params.flameColorEdge, params.flameColorMid, params.flameColorCore];
+  const key = `${idKey}|${kind}|${Math.round(tSec * 24)}|${seg.join(',')}|${params.postEnabled ? params.postTheme : ''}`;
+  const hit = dynFieldCanvasCache.get(key);
+  if (hit !== undefined) return hit;
+  const field = kind === 'blob' ? blobFieldAt(params, tSec) : flameFieldAt(params, tSec);
+  let result: { canvas: HTMLCanvasElement; ox: number; oy: number } | null = null;
+  if (field) {
+    const canvas = document.createElement('canvas');
+    canvas.width = field.w;
+    canvas.height = field.h;
+    const c2d = canvas.getContext('2d')!;
+    const img = c2d.createImageData(field.w, field.h);
+    const edge = kind === 'blob' ? params.blobColorEdge : params.flameColorEdge;
+    const mid = kind === 'blob' ? params.blobColorMid : params.flameColorMid;
+    const core = kind === 'blob' ? params.blobColorCore : params.flameColorCore;
+    const segAlpha = kind === 'blob' ? params.blobAlpha : params.flameAlpha;
+    for (let i = 0; i < field.heat.length; i++) {
+      const hv = field.heat[i];
+      if (hv <= 0.003) continue;
+      let [r, g, b] = fieldColorAt(edge, mid, core, hv);
+      if (params.postEnabled && params.postTheme !== 'none') {
+        const hex = `#${[r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('')}`;
+        const mapped = /^#([0-9a-fA-F]{6})$/.exec(postColorAt(params, hex));
+        if (mapped) {
+          r = parseInt(mapped[1].slice(0, 2), 16); g = parseInt(mapped[1].slice(2, 4), 16); b = parseInt(mapped[1].slice(4, 6), 16);
+        }
+      }
+      img.data[i * 4] = r;
+      img.data[i * 4 + 1] = g;
+      img.data[i * 4 + 2] = b;
+      img.data[i * 4 + 3] = Math.round(255 * Math.min(1, hv) * segAlpha);
+    }
+    c2d.putImageData(img, 0, 0);
+    result = { canvas, ox: field.ox, oy: field.oy };
+  }
+  if (dynFieldCanvasCache.size > 96) dynFieldCanvasCache.clear();
+  dynFieldCanvasCache.set(key, result);
+  return result;
+}
+
 /** 动态模式粒子绘制（本地坐标：原点 = 枢轴，与精灵同一变换空间） */
 function drawDynamicParticles(
   ctx: CanvasRenderingContext2D,
@@ -2381,6 +2432,20 @@ function drawDynamicParticles(
         ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       }
       ctx.fill();
+    }
+    // 团块/火焰场（乙8）：身前层、粒子之下先画场画布（带缓存）
+    if (layer === 'front') {
+      const tSecF = instruction.frame / instruction.frameRate;
+      for (const resolved of list) {
+        for (const kind of ['blob', 'flame'] as const) {
+          const fc = dynFieldCanvas(kind, resolved.instance.params, tSecF, `${instruction.nodeId}|${resolved.instance.id}`);
+          if (!fc) continue;
+          ctx.save();
+          if (instruction.mirror) ctx.scale(-1, 1);
+          ctx.drawImage(fc.canvas, -fc.ox, -fc.oy);
+          ctx.restore();
+        }
+      }
     }
     // 环绕光点（Jeff 落地）：只在身前层画一次（绕部件的轨道光点）
     if (layer === 'front') {

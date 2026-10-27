@@ -382,7 +382,7 @@ export default function DynamicPatternEditor({
               </label>
             )}
           </div>
-          {(['形变', '发射', '粒子', '环绕', '发光', '弧线', '后期'] as const).map((section) => (
+          {(['形变', '发射', '粒子', '环绕', '发光', '弧线', '团块', '火焰', '后期'] as const).map((section) => (
             <div key={section}>
               <div className="text-[9px] text-gray-600 mt-0.5">{section}</div>
               {section === '形变' && (
@@ -484,6 +484,36 @@ export default function DynamicPatternEditor({
                   )}
                 </div>
               )}
+              {section === '团块' && (
+                <div className="flex items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0">
+                    <input type="checkbox" checked={np(inst).blobEnabled} onChange={(e) => patchParam(inst.id, 'blobEnabled', e.target.checked)} />
+                    团块段
+                  </label>
+                  {np(inst).blobEnabled && (
+                    <span className="flex items-center gap-1">
+                      <input type="color" value={np(inst).blobColorEdge} onChange={(e) => patchParam(inst.id, 'blobColorEdge', e.target.value)} className="h-5 w-8 bg-transparent" title="低热色" />
+                      <input type="color" value={np(inst).blobColorMid} onChange={(e) => patchParam(inst.id, 'blobColorMid', e.target.value)} className="h-5 w-8 bg-transparent" title="中热色" />
+                      <input type="color" value={np(inst).blobColorCore} onChange={(e) => patchParam(inst.id, 'blobColorCore', e.target.value)} className="h-5 w-8 bg-transparent" title="高热色" />
+                    </span>
+                  )}
+                </div>
+              )}
+              {section === '火焰' && (
+                <div className="flex items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0">
+                    <input type="checkbox" checked={np(inst).flameEnabled} onChange={(e) => patchParam(inst.id, 'flameEnabled', e.target.checked)} />
+                    火焰段
+                  </label>
+                  {np(inst).flameEnabled && (
+                    <span className="flex items-center gap-1">
+                      <input type="color" value={np(inst).flameColorEdge} onChange={(e) => patchParam(inst.id, 'flameColorEdge', e.target.value)} className="h-5 w-8 bg-transparent" title="低热色（焰边/焰尖）" />
+                      <input type="color" value={np(inst).flameColorMid} onChange={(e) => patchParam(inst.id, 'flameColorMid', e.target.value)} className="h-5 w-8 bg-transparent" title="中热色" />
+                      <input type="color" value={np(inst).flameColorCore} onChange={(e) => patchParam(inst.id, 'flameColorCore', e.target.value)} className="h-5 w-8 bg-transparent" title="高热色（焰心）" />
+                    </span>
+                  )}
+                </div>
+              )}
               {section === '后期' && (
                 <div className="flex items-center gap-1.5">
                   <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0">
@@ -573,6 +603,8 @@ export default function DynamicPatternEditor({
                 .filter((d) => !(section === '粒子' && d.key === 'rampMidPos' && !np(inst).rampEnabled))
                 .filter((d) => !(section === '环绕' && !np(inst).orbitEnabled))
                 .filter((d) => !(section === '后期' && !np(inst).postEnabled))
+                .filter((d) => !(section === '团块' && !np(inst).blobEnabled))
+                .filter((d) => !(section === '火焰' && !np(inst).flameEnabled))
                 .filter((d) => !(section === '弧线' && d.key === 'arcGlyphSpinDeg' && np(inst).arcMode !== 'glyph'))
                 .filter((d) => !(section === '弧线' && d.key === 'arcFlowHz' && np(inst).arcMode !== 'stream'))
                 .map((d) => {

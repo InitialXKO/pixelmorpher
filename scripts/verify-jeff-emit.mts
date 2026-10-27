@@ -288,5 +288,47 @@ console.log('B 组：几何生成三件——arcPointsAt vs dynArcPoints 逐点�
   check('B16 坏模式回落 arc、新参数钳制', badMode.arcMode === 'arc' && badMode.arcGlyphSpinDeg === 12);
 }
 
+// ---- F 组：乙8 团块/火焰场 ----
+console.log('F 组：团块/火焰场——双侧逐格对拍 + 周期无缝 + 行为');
+{
+  const { blobFieldAt, flameFieldAt, fieldColorAt } = await import('../src/lib/dynamic-patterns');
+  const rt4 = rt as unknown as {
+    dynBlobField: (p: unknown, t: number) => { w: number; h: number; heat: Float32Array; ox: number; oy: number } | null;
+    dynFlameField: (p: unknown, t: number) => { w: number; h: number; heat: Float32Array; ox: number; oy: number } | null;
+    dynFieldColorAt: (e: string, m: string, c: string, h: number) => [number, number, number];
+  };
+  const fieldEq = (a: { w: number; h: number; heat: Float32Array } | null, b: { w: number; h: number; heat: Float32Array } | null) =>
+    !!a && !!b && a.w === b.w && a.h === b.h && a.heat.length === b.heat.length
+    && Array.from(a.heat).every((v, i) => near(v, b.heat[i]!, 1e-6));
+  const bp = { ...defaultDynamicParams(), blobEnabled: true, blobRadius: 14, blobCount: 5, blobSeed: 9, blobHz: 0.8, blobBurn: 0.6 };
+  const bf = blobFieldAt(bp, 0.31);
+  check('F1 团块场差分（t=0.31）', fieldEq(bf, rt4.dynBlobField(bp, 0.31)));
+  check('F2 团块场差分（t=0.77 烧穿更深时刻）', fieldEq(blobFieldAt(bp, 0.77), rt4.dynBlobField(bp, 0.77)));
+  check('F3 团块场周期无缝（t 与 t+1/Hz 逐格同）', fieldEq(blobFieldAt(bp, 0.31), blobFieldAt(bp, 0.31 + 1 / 0.8)));
+  const bHot = bf ? Array.from(bf.heat).filter((v) => v > 0.02).length : 0;
+  const bHot2 = (() => { const f2 = blobFieldAt(bp, 0.625); return f2 ? Array.from(f2.heat).filter((v) => v > 0.02).length : 0; })();
+  check('F4 烧穿中段覆盖变小（周期中点侵蚀最深）', bHot2 < bHot, `${bHot2} < ${bHot}`);
+  check("F5 团块锚点有核（中心热度 > 0.3）", !!bf && bf.heat[(bf.oy) * bf.w + bf.ox]! > 0.3, bf ? `中心 ${bf.heat[bf.oy * bf.w + bf.ox]?.toFixed(2)}` : "空");
+  check('F6 关时为 null（双侧）', blobFieldAt(defaultDynamicParams(), 0) === null && rt4.dynBlobField(defaultDynamicParams(), 0) === null);
+  const fp = { ...defaultDynamicParams(), flameEnabled: true, flameWidth: 16, flameHeight: 24, flameHz: 1.2, flameTurbulence: 0.6 };
+  const ff = flameFieldAt(fp, 0.43);
+  check('F7 火焰场差分（t=0.43）', fieldEq(ff, rt4.dynFlameField(fp, 0.43)));
+  check('F8 火焰场差分（t=0.71）', fieldEq(flameFieldAt(fp, 0.71), rt4.dynFlameField(fp, 0.71)));
+  check('F9 火焰场周期无缝（噪声相位整周期偏移）', fieldEq(flameFieldAt(fp, 0.43), flameFieldAt(fp, 0.43 + 1 / 1.2)));
+  check('F10 火焰只在基线之上（基线下两行全零）', !!ff && Array.from(ff.heat.slice((ff.oy + 2) * ff.w)).every((v) => v === 0));
+  check('F11 焰根热于焰尖（纵向衰减）', !!ff && (() => {
+    const root = ff.heat[(ff.oy - 2) * ff.w + ff.ox]!;
+    const tip = ff.heat[(ff.oy - Math.round(fp.flameHeight * 0.92)) * ff.w + ff.ox]!;
+    return root > tip;
+  })());
+  check('F12 焰尖收窄（高处宽度 < 低处）', !!ff && (() => {
+    const widthAt = (ly: number) => Array.from(ff.heat.slice((ff.oy + ly) * ff.w, (ff.oy + ly + 1) * ff.w)).filter((v) => v > 0.02).length;
+    return widthAt(-Math.round(fp.flameHeight * 0.85)) <= widthAt(-3);
+  })());
+  const c1 = fieldColorAt('#000000', '#ff0000', '#ffffff', 0.55);
+  const c2 = rt4.dynFieldColorAt('#000000', '#ff0000', '#ffffff', 0.55);
+  check('F13 热度色阶中点 = 中色（双侧）', near(c1[0], 255) && near(c1[1], 0) && JSON.stringify(c1) === JSON.stringify(c2));
+}
+
 console.log(`\n合计：${pass} 过 / ${fail} 败`);
 if (fail > 0) process.exit(1);
