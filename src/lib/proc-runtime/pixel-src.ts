@@ -1677,16 +1677,31 @@ export const PIXEL_CHAIN_PIXEL_TYPES = [
   'heat_flame', 'crystal_cage', 'void_vortex', 'ground_wave', 'sword_ring',
 ] as const;
 
-/** 像素链数值子图可用的节点类型（与 eval-src 实现集对齐） */
+/** 像素链数值子图可用的节点类型（与 eval-src 实现集对齐；
+ * nodeRef 不在此列：它读位姿图的节点输出，像素链上下文里没有
+ * 对应数据源，convert 提取时点名不进包） */
 export const PIXEL_CHAIN_NUMERIC_TYPES = [
   'time', 'timeGate', 'const', 'var',
   'add', 'sub', 'mul', 'div', 'blend', 'sin', 'cos', 'keyframes',
-  'waveform', 'ease', 'timeRemap', 'switch', 'step', 'hold', 'nodeRef',
+  'waveform', 'ease', 'timeRemap', 'switch', 'step', 'hold',
   'pendulum', 'breath', 'shake', 'float', 'wobble', 'bounce', 'elastic',
   'wheel', 'noise', 'wave', 'spring', 'jitter',
   'translate', 'rotate', 'uniform_scale', 'skew', 'non_uniform_stretch',
   'curve',
 ] as const;
+
+/** 包内像素链迷你图（convert 提取产出，模板 evalPixelChain 消费） */
+export interface RuntimePixelGraph {
+  nodes: Array<{
+    id: string;
+    type: string;
+    params?: Record<string, unknown>;
+    inputs?: Record<string, { n: string; o?: string } | { v: number } | { s: string }>;
+    points?: [number, number][];
+  }>;
+  /** 链终点节点 id（其 pixels 输出即 screen 的像素输入） */
+  out: string;
+}
 
 /** 探针/测试用：在 Node 里加载像素链求值器（与模板内嵌的是同一份源） */
 export function createPixelRuntime(): {

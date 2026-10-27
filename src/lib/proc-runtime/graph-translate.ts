@@ -211,3 +211,95 @@ export function translateBehaviorGraph(
   }
   return { ok: true, nodes, typeReport, maxAmp: Number.NaN, warnings };
 }
+
+// ================= 像素链：子图提取 =================
+
+import { PIXEL_CHAIN_NUMERIC_TYPES, PIXEL_CHAIN_PIXEL_TYPES } from './pixel-src';
+import type { RuntimePixelGraph } from './pixel-src';
+
+export interface PixelGraphExtraction {
+  graph?: RuntimePixelGraph;
+  warnings: string[];
+}
+
+/**
+ * 从节点原始蓝图提取像素链子图：沿输出 screen 的 pixels 输入边
+ * 反向收集祖先节点（含驱动参数的数值子树），逐节点校验支持集，
+ * 翻成 PIXEL_SRC 的迷你图格式。图中含 costume/character_source
+ * （跨槽位读图）或范围外像素节点（texture_scroll、bump_light、
+ * pixel_edit 等）时整链不进包并逐条点名——不静默丢弃、不部分
+ * 进包造成与编辑器分叉。
+ */
+export function extractPixelGraph(graph: BlueprintGraph): PixelGraphExtraction {
+  const warnings: string[] = [];
+  const outNode = graph.nodes.find((n) => n.id === graph.outputId)
+    ?? graph.nodes.find((n) => n.type === 'screen');
+  if (!outNode || outNode.type !== 'screen') return { warnings };
+  const pxIn = (outNode.inputs ?? {}).pixels as BlueprintInput | undefined;
+  if (!pxIn || !isRef(pxIn)) return { warnings };
+  if (pxIn.output !== undefined && pxIn.output !== 'pixels') {
+    warnings.push(`screen 的 pixels 输入接在 ${pxIn.output} 输出上（非 pixels），像素链未进包`);
+    return { warnings };
+  }
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const keep = new Set<string>();
+  const stack = [pxIn.nodeId];
+  let missing = false;
+  while (stack.length) {
+    const id = stack.pop()!;
+    if (keep.has(id)) continue;
+    const node = byId.get(id);
+    if (!node) { missing = true; continue; }
+    keep.add(id);
+    for (const inp of Object.values(node.inputs ?? {})) {
+      if (isRef(inp as BlueprintInput)) stack.push((inp as { nodeId: string }).nodeId);
+    }
+  }
+  if (missing) {
+    warnings.push('像素链引用了不存在的节点，整链未进包');
+    return { warnings };
+  }
+  const pixelSet = new Set<string>(PIXEL_CHAIN_PIXEL_TYPES as readonly string[]);
+  const numericSet = new Set<string>(PIXEL_CHAIN_NUMERIC_TYPES as readonly string[]);
+  let unsupported = false;
+  for (const id of keep) {
+    const node = byId.get(id)!;
+    if (node.type === 'sprite_source' || pixelSet.has(node.type) || numericSet.has(node.type)) continue;
+    unsupported = true;
+    if (node.type === 'costume' || node.type === 'character_source') {
+      warnings.push(`像素链含 ${node.type} 节点（跨图读像素），v1 不支持，整链未进包`);
+    } else {
+      warnings.push(`像素链节点 ${node.id}（${node.type}）不在运行时支持集，整链未进包`);
+    }
+  }
+  if (unsupported) return { warnings };
+  const nodes: RuntimePixelGraph['nodes'] = [];
+  for (const id of keep) {
+    const node = byId.get(id)!;
+    const inputs: NonNullable<RuntimePixelGraph['nodes'][number]['inputs']> = {};
+    for (const [port, inp] of Object.entries(node.inputs ?? {})) {
+      const input = inp as BlueprintInput;
+      if (isRef(input)) {
+        inputs[port] = { n: input.nodeId, ...(input.output ? { o: input.output } : {}) };
+        continue;
+      }
+      const lit = input as unknown as { type?: string; value?: unknown };
+      if (lit.type === 'number' && typeof lit.value === 'number') inputs[port] = { v: lit.value };
+      else if (lit.type === 'boolean') inputs[port] = { v: lit.value ? 1 : 0 };
+      else if (lit.type === 'string' && typeof lit.value === 'string') inputs[port] = { s: lit.value };
+      else {
+        warnings.push(`像素链节点 ${node.id} 的输入 ${port} 是 ${lit.type ?? '未知'} 字面值，整链未进包`);
+        return { warnings };
+      }
+    }
+    const mini: RuntimePixelGraph['nodes'][number] = {
+      id: node.id, type: node.type,
+      ...(node.params && Object.keys(node.params).length ? { params: node.params as Record<string, unknown> } : {}),
+      ...(Object.keys(inputs).length ? { inputs } : {}),
+    };
+    const pts = (node as unknown as { points?: [number, number][] }).points;
+    if (node.type === 'curve' && Array.isArray(pts)) mini.points = pts;
+    nodes.push(mini);
+  }
+  return { graph: { nodes, out: pxIn.nodeId }, warnings };
+}

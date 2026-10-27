@@ -10,6 +10,9 @@
 // ============================================================
 import { evaluateBlueprint } from '../src/lib/blueprint/eval';
 import { createPixelRuntime } from '../src/lib/proc-runtime/pixel-src';
+import { convertCharacterToRuntimePackage } from '../src/lib/proc-runtime/convert';
+import { createDefaultParametricAppearance } from '../src/lib/proc-runtime/surfaces';
+import { createDefaultCostumePiece } from '../src/lib/unified-types';
 
 let pass = 0, fail = 0;
 const fails: string[] = [];
@@ -220,6 +223,98 @@ parity('sword_ring 默认', [{ id: 'op', type: 'sword_ring', params: {} }]);
   const b = rt.evalPixelChain([{ id: 'src', type: 'sprite_source' }, { id: 'op', type: 'mirror', inputs: { pixels: { n: 'src', o: 'pixels' } } }] as never, 'op', { frame: 0, frameRate: 12 } as never);
   check('Q5 无源断链空网格上屏', Array.isArray(a) && a.length === 0 && Array.isArray(b) && b.length === 0,
     `editor=${JSON.stringify(a)?.length} twin=${JSON.stringify(b)?.length}`);
+}
+
+// ---------- C 组：convert 提取 ----------
+function chainBlueprint(extraNodes: any[] = [], opType = 'outline'): any {
+  return {
+    version: 1,
+    nodes: [
+      { id: 'src', type: 'sprite_source', inputs: {}, params: {} },
+      ...extraNodes,
+      { id: 'op', type: opType, inputs: { pixels: { nodeId: 'src', output: 'pixels' } }, params: { thickness: 1, color: '#0a0a0a' } },
+      { id: 'scr', type: 'screen', inputs: { pixels: { nodeId: 'op', output: 'pixels' } }, params: {} },
+    ],
+    edges: [], outputId: 'scr',
+  };
+}
+function spriteChar(blueprint: any): any {
+  const grid = [
+    ['#cc3333', '#3366cc', null, '#33aa55'],
+    ['#3366cc', null, '#33aa55', '#cc3333'],
+    [null, '#33aa55', '#cc3333', '#3366cc'],
+  ];
+  const spr = {
+    id: 'gspr', width: 4, height: 3,
+    plug: { x: 0, y: 0 },
+    data: grid,
+    directions: { 2: { spriteId: 'gspr', mirror: false } },
+  };
+  const node = {
+    id: 'gem', name: '宝石', role: 'bone',
+    slot: { slotKey: 'gem' },
+    transform: { x: 0, y: 0, angle: 0, variantIndex: 2, stretch: 1 },
+    attachment: { type: 'fixed' }, sockets: [], tracks: {}, modifiers: [], children: [],
+    blueprint,
+  };
+  return {
+    id: 'chPx', name: '像素链测试',
+    nodes: { gem: node },
+    rootNodeIds: ['gem'],
+    sprites: { gspr: spr },
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { gem: { ...createDefaultCostumePiece('gem'), sprites: { 2: { spriteId: 'gspr', mirror: false } } } } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  };
+}
+{
+  const pkg = convertCharacterToRuntimePackage(spriteChar(chainBlueprint()));
+  const gem = pkg.parts.find((p) => p.key === 'gem');
+  check('C1 精灵部件像素链进包', !!gem?.pixelGraph && gem.pixelGraph.out === 'op'
+    && gem.pixelGraph.nodes.some((n) => n.type === 'outline')
+    && gem.pixelGraph.nodes.some((n) => n.type === 'sprite_source'),
+    JSON.stringify(gem?.pixelGraph ?? null).slice(0, 120));
+  check('C2 已进包的像素蓝图不再报「未进包」', !pkg.warnings.some((w) => w.includes('无 transform 输出') && w.includes('宝石')),
+    pkg.warnings.filter((w) => w.includes('宝石')).join(' | '));
+  // C3 包内链直接跑 = 编辑器同图同网格
+  if (gem?.pixelGraph && gem.sprite) {
+    const rt = createPixelRuntime();
+    const viaPkg = rt.evalPixelChain(gem.pixelGraph.nodes as never, gem.pixelGraph.out,
+      { pixels: gem.sprite.data, frame: 3, frameRate: 12 } as never);
+    const viaEditor = editorChain([{ id: 'op', type: 'outline', params: { thickness: 1, color: '#0a0a0a' } }],
+      gem.sprite.data as (string | null)[][], 3, 12);
+    check('C3 包内链与编辑器逐格一致', gridsEqual(viaPkg, viaEditor));
+  } else {
+    check('C3 包内链与编辑器逐格一致', false, 'pixelGraph/sprite 缺失');
+  }
+}
+{
+  const bp = chainBlueprint([{ id: 'cst', type: 'costume', inputs: {}, params: {} }]);
+  // costume 接进 pixels 路径：op 的输入改走 costume 的输出再回接
+  bp.nodes.find((n: any) => n.id === 'op').inputs = { pixels: { nodeId: 'cst', output: 'pixels' } };
+  bp.nodes.find((n: any) => n.id === 'cst').inputs = { pixels: { nodeId: 'src', output: 'pixels' } };
+  const pkg = convertCharacterToRuntimePackage(spriteChar(bp));
+  const gem = pkg.parts.find((p) => p.key === 'gem');
+  check('C4 costume 链点名不进包', !gem?.pixelGraph
+    && pkg.warnings.some((w) => w.includes('costume') && w.includes('未进包')),
+    pkg.warnings.join(' | ').slice(0, 200));
+}
+{
+  const pkg = convertCharacterToRuntimePackage(spriteChar(chainBlueprint([], 'texture_scroll')));
+  const gem = pkg.parts.find((p) => p.key === 'gem');
+  check('C5 范围外算子点名不进包', !gem?.pixelGraph
+    && pkg.warnings.some((w) => w.includes('texture_scroll')),
+    pkg.warnings.join(' | ').slice(0, 200));
+}
+{
+  // 参数化部件带像素链蓝图：点名不进
+  const ch = spriteChar(chainBlueprint());
+  ch.costumeSets[0].pieces.gem = { nodeId: 'gem', zIndex: 0, parametric: createDefaultParametricAppearance() } as never;
+  const pkg = convertCharacterToRuntimePackage(ch);
+  const gem = pkg.parts.find((p) => p.key === 'gem');
+  check('C6 参数化部件像素链点名不进', !!gem && !gem.pixelGraph
+    && pkg.warnings.some((w) => w.includes('参数化部件 v1 不带像素链')),
+    pkg.warnings.join(' | ').slice(0, 240));
 }
 
 console.log(`verify-pixel-chain: ${pass} passed, ${fail} failed`);
