@@ -20,6 +20,7 @@ import {
   Magnet,
   Users,
   Scaling,
+  Shirt,
 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
@@ -189,6 +190,51 @@ export function SkeletonsToggle() {
       </TooltipTrigger>
       <TooltipContent side="bottom" className="text-xs">显示骨骼（节点标签/IK目标/插槽）</TooltipContent>
     </Tooltip>
+  );
+}
+
+// ---- 显示效果（人偶衣物色区 + 空气透视） ----
+// 袖口/裤腰比例：人偶兜底开启时，肢体根部一段按比例（占肢体全长）
+// 染成衣物色；距离强度：主画布渲染按深度向雾色插值（0 = 关）。
+export function DisplayFxControls() {
+  const sleeve = useEditorStore((s) => s.mannequinSleeveRatio);
+  const pants = useEditorStore((s) => s.mannequinPantsRatio);
+  const fog = useEditorStore((s) => s.depthFogStrength);
+  const setSleeve = useEditorStore((s) => s.setMannequinSleeveRatio);
+  const setPants = useEditorStore((s) => s.setMannequinPantsRatio);
+  const setFog = useEditorStore((s) => s.setDepthFogStrength);
+  const row = (label: string, v: number, set: (n: number) => void) => (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] text-gray-400 w-14">{label}</span>
+      <Slider className="flex-1" value={[v]} min={0} max={1} step={0.01} onValueChange={([n]) => set(n)} />
+      <span className="text-[10px] text-gray-400 w-8 text-right">{Math.round(v * 100)}%</span>
+    </div>
+  );
+  return (
+    <Popover>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label="显示效果"
+              className="h-7 w-7 p-0 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded">
+              <Shirt className="size-3.5" />
+            </Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="text-xs">显示效果（人偶衣物色区/空气透视）</TooltipContent>
+      </Tooltip>
+      <PopoverContent className="w-60 bg-[#1a1a2e] border-white/10 text-gray-200 p-3" side="bottom" align="end">
+        <div className="space-y-3">
+          <div className="text-xs font-medium text-gray-300">人偶衣物色区</div>
+          {row('袖口比例', sleeve, setSleeve)}
+          {row('裤腰比例', pants, setPants)}
+          <p className="text-[9px] text-gray-500 leading-relaxed">开「人偶兜底」后生效：手臂/腿根部一段按比例（占整条肢体长）染成衣物色，模拟袖长/裤长。按节点名识别手臂与腿。</p>
+          <div className="text-xs font-medium text-gray-300 pt-1">空气透视</div>
+          {row('距离强度', fog, setFog)}
+          <p className="text-[9px] text-gray-500 leading-relaxed">主画布渲染时，离镜头越远的部件越向雾色褪色。仅编辑器显示，不进导出与运行时包。</p>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 

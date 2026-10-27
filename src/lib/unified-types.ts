@@ -803,6 +803,10 @@ export interface Node {
   // yaw: -1（左）~ 1（右）；pitch: -1（上）~ 1（下）
   faceTurn?: { yaw: number; pitch: number };
 
+  // ---- 五官点位（角色级可调参数，相对头部框的比例） ----
+  // 垫图/转面参照按参数现算（见 lib/face-features）；缺省 = 标准三庭组。
+  faceFeatures?: import('./face-features').FaceFeatureParams;
+
   // ---- Dynamic Generated Items ----
   generated?: GeneratedItem;
 
@@ -1457,6 +1461,8 @@ export interface NodeRenderInstruction {
   /** 残影段（D5）：过去位姿相对当前位姿的增量（画布 px / 度），
    * 由渲染计划按过去帧轨道位姿算出；执行端在本精灵之前逐个绘制 */
   trailGhosts?: { dx: number; dy: number; daDeg: number; alpha: number }[];
+  /** 空气透视（编辑器专用）：本指令向雾色插值的量 0..1（计划期按深度算） */
+  fogAmount?: number;
   /** 动态形变段缩放积（dynSx, dynSy）：场段域缩放口径用（范围跟、形态不跟） */
   dynScale?: [number, number];
   /** 弧线双锚点（D4 二期）：实例序号 → 终点（本节点本地 px，
@@ -1519,10 +1525,34 @@ export interface DiscRenderInstruction {
   // 始终被遮挡，只透过开口补缝（规格）
 }
 
+/**
+ * 人偶兜底指令（编辑器专用，generateRenderPlan 的 mannequinFallback
+ * 开关开启时才生成）：无精灵节点的一段胶囊体——起点 = 父关节、终点
+ * = 本关节（关节 = 节点世界原点；均为画布 SubPixel 坐标，已含画布
+ * 中心，与关节盘同投影口径），执行端在精灵之前绘制（与关节盘同层）。
+ */
+export interface MannequinRenderInstruction {
+  nodeId: string;
+  x1: SubPixel;
+  y1: SubPixel;
+  x2: SubPixel;
+  y2: SubPixel;
+  /** 起点半径 px（父关节处）/ 终点半径 px（本关节处） */
+  r1: number;
+  r2: number;
+  fillColor: string;
+  outlineColor: string;
+  /** 衣物色区：本段自起点起的衣物色占比（0..1，袖口/裤腰比例按肢体
+   * 全长弧长切分到本段的结果）；缺省/0 = 全段皮肤色 */
+  clothRatio?: number;
+}
+
 /** Complete render plan for a frame */
 export interface RenderPlan {
   nodeInstructions: NodeRenderInstruction[];
   discInstructions: DiscRenderInstruction[];
+  /** 人偶兜底指令（仅编辑器开关开启时非空；缺省 undefined） */
+  mannequinInstructions?: MannequinRenderInstruction[];
   /** 节点指令按 zIndex（投影深度）排序后的绘制序；关节盘不在此列（单独先行绘制） */
   sortedInstructions: NodeRenderInstruction[];
   backgroundColor?: string;

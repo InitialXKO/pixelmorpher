@@ -5,7 +5,7 @@
  * UI 和拖拽逻辑共用，与求解器（solveChainIKOverrides）同构造。
  */
 
-import { computeWorldTransforms } from './unified-render';
+import { computeWorldTransforms, resolveSpriteTipLength } from './unified-render';
 import { frameYAxisWorld, subToPx } from './unified-types';
 import { useProjectStore } from './store';
 import type { Character, DirectionIndex } from './unified-types';
@@ -55,15 +55,17 @@ export function computeIKChainTip(
   if (joints.length >= 1) {
     const last = joints[joints.length - 1];
     tipX = last.x; tipY = last.y; tipZ = last.z;
-    // 默认尖端长：末关节精灵的 Y 轴长度（plug 到底端）
+    // 默认尖端长：末关节当前精灵的 Y 轴长度（plug 到底端，走服装解析；
+    // 与求解器同一口径 resolveSpriteTipLength）> 旧 node.sprite > 末段骨长
     if (tipLength <= 0) {
       const endNodeId = jointIds[jointIds.length - 1];
+      tipLength = resolveSpriteTipLength(ch, endNodeId, last.variant, store.sprites) ?? 0;
       const endNode = ch.nodes[endNodeId];
       const sprite = endNode?.sprite;
-      if (sprite && sprite.height > 0) {
+      if (tipLength <= 0 && sprite && sprite.height > 0) {
         const plugY = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
         tipLength = Math.max(1, sprite.height - plugY);
-      } else if (joints.length >= 2) {
+      } else if (tipLength <= 0 && joints.length >= 2) {
         // 无精灵时回退到最后一段 3D 骨长（与求解器的 lengths 回退一致）
         const prev = joints[joints.length - 2];
         tipLength = Math.hypot(last.x - prev.x, last.y - prev.y, last.z - prev.z);

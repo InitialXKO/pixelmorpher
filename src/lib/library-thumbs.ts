@@ -345,6 +345,46 @@ export function dynamicPosterRGBA(params: DynamicPatternParams): RGBAImage {
   return { w: OUT, h: OUT, data };
 }
 
+// ---------------- 脸型缩略图 ----------------
+
+import { faceFeaturePoints, faceHalfWidths, type FaceFeatureParams } from './face-features';
+
+/** 脸型条目缩略图：头部框（蛋形填充）+ 五官点位线段（纯 RGBA 栅格） */
+export function faceThumbRGBA(p: FaceFeatureParams, size = 48): RGBAImage {
+  const w = size, h = size;
+  const data = new Uint8ClampedArray(w * h * 4);
+  const set = (x: number, y: number, r: number, g: number, b: number, a: number) => {
+    const xi = Math.round(x), yi = Math.round(y);
+    if (xi < 0 || yi < 0 || xi >= w || yi >= h) return;
+    const i = (yi * w + xi) * 4;
+    data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = a;
+  };
+  // 头蛋形：中心 (0.5, 0.52)、半宽 0.36、半高 0.48（框内）
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const dx = (x / w - 0.5) / 0.36, dy = (y / h - 0.52) / 0.48;
+      if (dx * dx + dy * dy <= 1) set(x, y, 143, 155, 176, 255);
+    }
+  }
+  const line = (x0: number, y0: number, x1: number, y1: number) => {
+    const steps = Math.max(2, Math.ceil(Math.hypot(x1 - x0, y1 - y0) * size));
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      set((x0 + (x1 - x0) * t) * w, (y0 + (y1 - y0) * t) * h, 30, 34, 48, 255);
+      set((x0 + (x1 - x0) * t) * w + 1, (y0 + (y1 - y0) * t) * h, 30, 34, 48, 255);
+    }
+  };
+  const pts = faceFeaturePoints(p);
+  const hw = faceHalfWidths(p);
+  line(pts.browL.x - hw.eye, pts.browL.y, pts.browL.x + hw.eye, pts.browL.y);
+  line(pts.browR.x - hw.eye, pts.browR.y, pts.browR.x + hw.eye, pts.browR.y);
+  line(pts.eyeL.x - hw.eye, pts.eyeL.y, pts.eyeL.x + hw.eye, pts.eyeL.y);
+  line(pts.eyeR.x - hw.eye, pts.eyeR.y, pts.eyeR.x + hw.eye, pts.eyeR.y);
+  line(pts.noseBase.x - hw.nose, pts.noseBase.y, pts.noseBase.x + hw.nose, pts.noseBase.y);
+  line(pts.mouth.x - hw.mouth, pts.mouth.y, pts.mouth.x + hw.mouth, pts.mouth.y);
+  return { w, h, data: data as Uint8ClampedArray<ArrayBuffer> };
+}
+
 // ---------------- 编码与缓存（浏览器侧） ----------------
 
 const thumbCache = new Map<string, string>();

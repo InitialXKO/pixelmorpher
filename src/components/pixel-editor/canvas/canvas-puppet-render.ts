@@ -7,9 +7,10 @@
 import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
 import type { RenderContext } from './canvas-render-helpers';
 import type { Character, Node } from '@/lib/unified-types';
-import { pxToSub, subToPx, projectToView, rotateInViewPlane, resolveChainTarget3D } from '@/lib/unified-types';
-import { computeWorldTransforms, socketOffsetTo3D, geometryDirectionFromToggle } from '@/lib/unified-render';
+import { pxToSub, subToPx, projectToView, rotateInViewPlane, resolveChainTarget3D, applyFrameRotation } from '@/lib/unified-types';
+import { computeWorldTransforms, socketOffsetTo3D, geometryDirectionFromToggle, resolveNodeSpriteId } from '@/lib/unified-render';
 import { useProjectStore, useEditorStore } from '@/lib/store';
+import { DEFAULT_FACE_FEATURES, faceFeaturePoints, faceHalfWidths } from '@/lib/face-features';
 
 // ============================================================
 // Puppet skeleton overlay visualization
@@ -65,6 +66,83 @@ export function renderIKTargetHandles(
     ctx.font = '10px sans-serif';
     ctx.fillText(chain.name, sx + r + 6, sy - r - 2);
   }
+  ctx.restore();
+}
+
+/**
+ * 五官参照叠画：选中节点（带 faceFeatures 或 faceTurn）头部框 + 点位线段。
+ * 头部框 = 该节点当前精灵的绘制框（原点 + plug 反推中心，随世界角旋转）；
+ * 点位按 node.faceFeatures（缺省标准三庭）+ node.faceTurn 现算转面压缩。
+ */
+export function renderFaceGuideOverlay(
+  rc: { ctx: CanvasRenderingContext2D; canvasWidth: number; canvasHeight: number; zoom: number; panX: number; panY: number; currentFrame: number },
+  character: Character,
+  nodeId: string | null,
+): void {
+  if (!nodeId) return;
+  const node = character.nodes[nodeId];
+  if (!node || (!node.faceFeatures && !node.faceTurn)) return;
+  const { ctx, zoom, panX, panY } = rc;
+  const geoDir = geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D);
+  const worldTransforms = computeWorldTransforms(character, rc.currentFrame, rc.canvasWidth, rc.canvasHeight, undefined, undefined, undefined, undefined, geoDir);
+  const wt = worldTransforms.get(nodeId);
+  if (!wt) return;
+  const rootNode = character.nodes[character.rootNodeId];
+  const dir = (rootNode?.transform.variantIndex ?? 0) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+  const sprites = useProjectStore.getState().sprites ?? {};
+  const spriteId = resolveNodeSpriteId(character, nodeId, dir, sprites);
+  const sprite = spriteId ? sprites[spriteId] : undefined;
+  if (!sprite) return;
+
+  // 局部偏移（精灵像素空间）→ 世界 → 投影 → 屏幕（与主渲染同口径）
+  const projWorld = (lx: number, ly: number) => {
+    const r = applyFrameRotation(wt.worldFrame, lx, ly, 0, dir);
+    const p = projectToView(
+      (wt.worldX + pxToSub(r.x)) as import('@/lib/unified-types').SubPixel,
+      (wt.worldY + pxToSub(r.y)) as import('@/lib/unified-types').SubPixel,
+      (wt.worldZ + pxToSub(r.z)) as import('@/lib/unified-types').SubPixel,
+      dir,
+    );
+    return {
+      x: panX + (rc.canvasWidth / 2 + subToPx(p.canvasX)) * zoom,
+      y: panY + (rc.canvasHeight / 2 + subToPx(p.canvasY)) * zoom,
+    };
+  };
+  const plugX = sprite.plug ? subToPx(sprite.plug.x) : sprite.width / 2;
+  const plugY = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
+  const bw = sprite.width, bh = sprite.height;
+  // 精灵框四角在精灵像素空间以 plug 为原点：左上 = (−plugX, −plugY)
+  const toScreen = (fx: number, fy: number) => projWorld(fx * bw - plugX, fy * bh - plugY);
+
+  const fp = node.faceFeatures ?? DEFAULT_FACE_FEATURES;
+  const yaw = node.faceTurn?.yaw ?? 0;
+  const pitch = node.faceTurn?.pitch ?? 0;
+  const pts = faceFeaturePoints(fp, yaw, pitch);
+  const hw = faceHalfWidths(fp, yaw);
+
+  ctx.save();
+  // 头部框
+  ctx.strokeStyle = 'rgba(148,163,184,0.75)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  const c00 = toScreen(0, 0), c10 = toScreen(1, 0), c11 = toScreen(1, 1), c01 = toScreen(0, 1);
+  ctx.moveTo(c00.x, c00.y); ctx.lineTo(c10.x, c10.y); ctx.lineTo(c11.x, c11.y); ctx.lineTo(c01.x, c01.y); ctx.closePath();
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // 点位线段
+  ctx.strokeStyle = '#22d3ee';
+  ctx.lineWidth = 1.5;
+  const segDraw = (p: { x: number; y: number }, halfW: number) => {
+    const a = toScreen(p.x - halfW, p.y), b = toScreen(p.x + halfW, p.y);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    const c = toScreen(p.x, p.y);
+    ctx.beginPath(); ctx.arc(c.x, c.y, 2, 0, Math.PI * 2); ctx.fillStyle = '#22d3ee'; ctx.fill();
+  };
+  segDraw(pts.browL, hw.eye * 0.8); segDraw(pts.browR, hw.eye * 0.8);
+  segDraw(pts.eyeL, hw.eye); segDraw(pts.eyeR, hw.eye);
+  segDraw(pts.noseBase, hw.nose);
+  segDraw(pts.mouth, hw.mouth);
   ctx.restore();
 }
 
