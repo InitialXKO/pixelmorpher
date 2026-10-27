@@ -317,6 +317,19 @@ function spriteChar(blueprint: any): any {
     pkg.warnings.join(' | ').slice(0, 240));
 }
 
+// ---------- T 组：模板接线 ----------
+{
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  const pkg = convertCharacterToRuntimePackage(spriteChar(chainBlueprint()));
+  const html = buildRuntimeHtml(pkg);
+  check('T1 模板注入 PIXEL_SRC（evalPixelChain 在位）', html.includes('function evalPixelChain'));
+  check('T2 模板含像素作业收集与执行', html.includes('pixelJobs.push') && html.includes('像素链执行'));
+  check('T3 包 JSON 带 pixelGraph', html.includes('"pixelGraph"'));
+  const pkg2 = convertCharacterToRuntimePackage(spriteChar(null));
+  const html2 = buildRuntimeHtml(pkg2);
+  check('T4 无链角色模板仍可构建', html2.includes('function evalPixelChain') && !html2.includes('"pixelGraph"'));
+}
+
 console.log(`verify-pixel-chain: ${pass} passed, ${fail} failed`);
 for (const f of fails) console.log('  FAIL ' + f);
 process.exit(fail ? 1 : 0);

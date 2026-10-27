@@ -9,6 +9,7 @@ import type { ProcRuntimePackage } from './convert';
 import { RUNTIME_EVAL_SRC } from './eval-src';
 import { BAKE_SRC } from './bake-src';
 import { DYNAMIC_SRC } from './dynamic-src';
+import { PIXEL_SRC } from './pixel-src';
 
 export function buildRuntimeHtml(pkg: ProcRuntimePackage): string {
   const json = JSON.stringify(pkg).replace(/</g, '\\u003c');
@@ -16,7 +17,8 @@ export function buildRuntimeHtml(pkg: ProcRuntimePackage): string {
     .split('/*__PACKAGE__*/').join(json)
     .split('/*__EVAL__*/').join(RUNTIME_EVAL_SRC)
     .split('/*__BAKE__*/').join(BAKE_SRC)
-    .split('/*__DYNAMIC__*/').join(DYNAMIC_SRC);
+    .split('/*__DYNAMIC__*/').join(DYNAMIC_SRC)
+    .split('/*__PIXEL__*/').join(PIXEL_SRC);
 }
 
 const TEMPLATE = `<!DOCTYPE html>
@@ -769,6 +771,7 @@ function glowEntryOf(part, costume) {
 /*__EVAL__*/
 /*__BAKE__*/
 /*__DYNAMIC__*/
+/*__PIXEL__*/
 
 // ---------- 数据（来自运行时包） ----------
 const PAL = EMBEDDED.palettes;
@@ -1110,7 +1113,7 @@ function ensureAtlas(gl, variant, costumeName) {
       const rec = (animFrameMap[bk] = animFrameMap[bk] || {});
       rec[fi + ',' + di] = { tile: tile, place: [ax, ay] };
     } else {
-      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][11] || null, marksN: entries[i][10] || null, marksDir: entries[i][12] || null, fam: entries[i][4] ? 1 : 0 });
+      map.set(ekey, { tile: tile, place: [ax, ay], resolved: entries[i][2], glowStamps: ge && ge.stamps ? ge.stamps : null, anim: entries[i][7] || null, disp: entries[i][9] || null, plugN: entries[i][11] || null, marksN: entries[i][10] || null, marksDir: entries[i][12] || null, fam: entries[i][4] ? 1 : 0, spriteGrid: entries[i][4] || null, mirrored: entries[i][3], tileExtra: entries[i][6] || 0 });
     }
   });
   for (const bk in animFrameMap) {
@@ -2989,6 +2992,7 @@ function frame(now) {
   const skinJobs = [];
   const fieldJobs = [];
   const stackJobs = [];
+  const pixelJobs = [];
   const partAnchorsByKey = new Map();
   const dynAnchors = [];
   sorted.forEach((part, idx) => {
@@ -3006,6 +3010,11 @@ function frame(now) {
       }
       const v = entry.animFrames[fi + ',' + di];
       if (v) { tile = v.tile; place = v.place; }
+    }
+    // 像素链作业收集：带 pixelGraph 的精灵部件（置换变体瓦片由
+    // 干净瓦片在 CPU 烘出、链不跟，v1 边界——有 disp 时整件跳过）
+    if (part.pixelGraph && entry.spriteGrid && !entry.disp) {
+      pixelJobs.push({ part: part, grid: entry.spriteGrid, mirrored: entry.mirrored, place: place, tileExtra: entry.tileExtra || 0 });
     }
     const p = resolved.params;
     const an0 = pose[part.key] || { a: 0, dy: 0, rim: 0, glint: 0 };
@@ -3298,6 +3307,53 @@ function frame(now) {
       .filter((s) => elapsed - s.born < ai.interval * ai.count * 1.8)
       .map((s) => Object.assign({}, s.el, { ghost: true }));
     els.splice(idx, 0, ...ghosts);
+  }
+  // ---- 像素链执行（先于蒙皮）：部件当前精灵网格逐帧过链，结果
+  // 回写底图图集（RGB+A）+ 主图集 R 占据（2=实心、255=外部，与
+  // spriteTileOf 同编码）。源网格取图集条目里的当帧精灵（服装集
+  // 覆盖/变体替代已在条目里定格），镜像变体先翻成显示朝向——与
+  // 编辑器喂 evaluateBlueprint 的显示网格同口径。链是 (源网格,
+  // 帧) 的纯函数：每帧从干净源重算，两张图集的回写逐帧全量覆
+  // 盖精灵矩形，不需要还原登记。断链输出空网格 = 精灵矩形清空
+  // （编辑器 screen 空网格上屏同义）。
+  if (pixelJobs.length > 0) {
+    const pframe = elapsed * FRAME_RATE;
+    if (!state.pixelState) state.pixelState = new Map();
+    for (const job of pixelJobs) {
+      const pg = job.part.pixelGraph;
+      let srcGrid = job.grid.data;
+      if (job.mirrored) srcGrid = srcGrid.map((row) => row.slice().reverse());
+      let outGrid = null;
+      try {
+        outGrid = evalPixelChain(pg.nodes, pg.out, {
+          pixels: srcGrid, frame: pframe, frameRate: FRAME_RATE,
+          nodeState: state.pixelState, statePrefix: job.part.key,
+        });
+      } catch (e) { outGrid = null; }
+      if (!outGrid) continue;
+      const gw = job.grid.w, gh = job.grid.h;
+      const baseBuf = new Uint8Array(gw * gh * 4);
+      const occBuf = new Uint8Array(gw * gh * 4);
+      for (let q = 0; q < gw * gh; q++) { occBuf[q * 4] = 255; occBuf[q * 4 + 3] = 255; }
+      for (let yy = 0; yy < gh; yy++) {
+        const orow = outGrid[yy] || [];
+        for (let xx = 0; xx < gw; xx++) {
+          const c = xx < orow.length ? orow[xx] : null;
+          if (!c) continue;
+          const rgb = parseHexRt(c);
+          if (!rgb) continue;
+          const o = (yy * gw + xx) * 4;
+          baseBuf[o] = rgb[0]; baseBuf[o + 1] = rgb[1]; baseBuf[o + 2] = rgb[2]; baseBuf[o + 3] = 255;
+          occBuf[o] = 2;
+        }
+      }
+      const off = 2 + job.tileExtra;
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, state.baseTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, job.place[0] + off, job.place[1] + off, gw, gh, gl.RGBA, gl.UNSIGNED_BYTE, baseBuf);
+      gl.bindTexture(gl.TEXTURE_2D, state.tex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, job.place[0] + off, job.place[1] + off, gw, gh, gl.RGBA, gl.UNSIGNED_BYTE, occBuf);
+    }
   }
   // ---- 网格蒙皮执行（缺口 4）：按子/父世界角差变形当前瓦片并回传
   // 图集（每帧从干净瓦片数据重算，不累积）。角的换算：运行时世界角
