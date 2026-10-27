@@ -13,6 +13,7 @@ import { markPointPx, markDirAngleDeg } from './sprite-marks';
 import { hashPixelGrid } from './engine/render-cache';
 import {
   dynamicDeformAt,
+  particleColorAt,
   type DynamicPatternParams,
   type ResolvedDynamicPattern,
 } from './dynamic-patterns';
@@ -27,6 +28,8 @@ export interface SimParticle {
   size: number;           // 直径 px
   alpha: number;          // 0..1（已乘实例 alpha 与生命包络）
   color: string;
+  shape: import('./dynamic-patterns').ParticleShape;
+  dirX: number; dirY: number; // 运动方向（单位向量，绘制空间：已含镜像翻转）——'line' 形状取向用
 }
 
 function hash01(...nums: number[]): number {
@@ -191,20 +194,39 @@ export function simulateDynamicParticles(
       const cs = Math.cos(spread), sn = Math.sin(spread);
       const rvx = vx * cs - vy * sn, rvy = vx * sn + vy * cs;
       vx = rvx; vy = rvy;
+      // 汇聚模式（Jeff 落地）：出生点沿外向速度方向外移 gatherRadius
+      // （哈希 0.5~1 倍抖动），速度整体反向——粒子自外围飞向部件
+      // （蓄力/虹流）。位置公式与普通模式共用（浮力/上浮照旧）。
+      let spawnX = sx, spawnY = sy;
+      if (params.emitMode === 'gather') {
+        const vlen = Math.hypot(vx, vy);
+        if (vlen > 1e-6) {
+          const off = params.gatherRadius * (0.5 + 0.5 * hash01(seedBase, b, k, 51));
+          spawnX += (vx / vlen) * off;
+          spawnY += (vy / vlen) * off;
+        }
+        vx = -vx; vy = -vy;
+      }
       // 位置：初速 + 上浮漂移 + 浮力（y 向下：向上为负）
       const sway = params.turbulence * Math.sin(age * 3.1 + hash01(seedBase, b, k, 41) * Math.PI * 2) * Math.min(1, age);
-      const rawPx = sx + vx * age + sway * -vy * 0.14;
-      const py = sy + vy * age - params.rise * age - 0.5 * params.buoy * age * age + sway * vx * 0.14;
+      const rawPx = spawnX + vx * age + sway * -vy * 0.14;
+      const py = spawnY + vy * age - params.rise * age - 0.5 * params.buoy * age * age + sway * vx * 0.14;
       // 镜像：全程在未镜像空间算完，最终 x 反号（整条轨迹刚性翻转，
       // 与画布上预翻转的精灵图同口径；分开翻起点/法线会翻错符号）
       const px = mirror ? -rawPx : rawPx;
       const size = params.sizeStart + (params.sizeEnd - params.sizeStart) * lifeRatio;
       const env = lifeRatio < 0.15 ? lifeRatio / 0.15 : 1 - (lifeRatio - 0.15) / 0.85;
+      const vlen = Math.hypot(vx, vy);
+      const dirUx = vlen > 1e-6 ? vx / vlen : dirX;
+      const dirUy = vlen > 1e-6 ? vy / vlen : dirY;
       out.push({
         x: px, y: py,
         size,
         alpha: Math.max(0, params.alpha * env),
-        color: params.color,
+        color: particleColorAt(params, lifeRatio),
+        shape: params.particleShape,
+        dirX: mirror ? -dirUx : dirUx,
+        dirY: dirUy,
       });
       if (out.length >= cap) return out;
     }

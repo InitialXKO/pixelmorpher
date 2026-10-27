@@ -252,6 +252,43 @@ function dynSourcePoints(params, tile, contour) {
   }
   return contour;
 }
+function dynHexRgbOf(hex) {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex || '');
+  if (!m) return [255, 180, 107];
+  return [parseInt(m[1].slice(0, 2), 16), parseInt(m[1].slice(2, 4), 16), parseInt(m[1].slice(4, 6), 16)];
+}
+function dynRgbHex(r, g, b) {
+  const c = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+  return '#' + c(r) + c(g) + c(b);
+}
+// 与 dynamic-patterns.ts particleColorAt 逐值同式（探针 J 组对拍）
+function dynParticleColorAt(params, lifeRatio) {
+  if (!params.rampEnabled) return params.color;
+  const f = Math.max(0, Math.min(1, lifeRatio));
+  const pos = Math.max(0, Math.min(1, params.rampMidPos ?? 0.5));
+  const a = dynHexRgbOf(params.rampFrom), mid = dynHexRgbOf(params.rampMid), b = dynHexRgbOf(params.rampTo);
+  if (f <= pos) {
+    const t = pos <= 0 ? 1 : f / pos;
+    return dynRgbHex(a[0] + (mid[0] - a[0]) * t, a[1] + (mid[1] - a[1]) * t, a[2] + (mid[2] - a[2]) * t);
+  }
+  const t = pos >= 1 ? 1 : (f - pos) / (1 - pos);
+  return dynRgbHex(mid[0] + (b[0] - mid[0]) * t, mid[1] + (b[1] - mid[1]) * t, mid[2] + (b[2] - mid[2]) * t);
+}
+// 与 dynamic-patterns.ts orbitPointsAt 逐点同式（探针 J 组对拍）
+function dynOrbitPoints(params, tSec, worldAngleDeg) {
+  if (!params.orbitEnabled || !(params.orbitCount > 0)) return [];
+  const out = [];
+  const counter = params.orbitAngleSpace === 'world' ? (-(worldAngleDeg || 0) * Math.PI) / 180 : 0;
+  const cc = Math.cos(counter), cs = Math.sin(counter);
+  for (let i = 0; i < params.orbitCount; i++) {
+    const ph = (params.orbitPhase || 0) + tSec * (params.orbitHz || 0) + i / params.orbitCount;
+    const a = ph * Math.PI * 2;
+    const ex = Math.cos(a) * params.orbitRadiusX;
+    const ey = Math.sin(a) * params.orbitRadiusY;
+    out.push({ x: ex * cc - ey * cs, y: ex * cs + ey * cc });
+  }
+  return out;
+}
 function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
   const params = inst.params;
   if (!params.emitEnabled || params.rate <= 0 || params.life <= 0) return [];
@@ -300,12 +337,30 @@ function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
       const cs = Math.cos(spread), sn = Math.sin(spread);
       const rvx = vx * cs - vy * sn, rvy = vx * sn + vy * cs;
       vx = rvx; vy = rvy;
+      // 汇聚模式（与产品侧 dynamic-pattern-sim 同式）
+      let spawnX = sx, spawnY = sy;
+      if (params.emitMode === 'gather') {
+        const vlen0 = Math.hypot(vx, vy);
+        if (vlen0 > 1e-6) {
+          const off = (params.gatherRadius || 0) * (0.5 + 0.5 * dynHash01(seedBase, b, k, 51));
+          spawnX += (vx / vlen0) * off;
+          spawnY += (vy / vlen0) * off;
+        }
+        vx = -vx; vy = -vy;
+      }
       const sway = params.turbulence * Math.sin(age * 3.1 + dynHash01(seedBase, b, k, 41) * Math.PI * 2) * Math.min(1, age);
-      const px = sx + vx * age + sway * -vy * 0.14;
-      const py = sy + vy * age - params.rise * age - 0.5 * params.buoy * age * age + sway * vx * 0.14;
+      const px = spawnX + vx * age + sway * -vy * 0.14;
+      const py = spawnY + vy * age - params.rise * age - 0.5 * params.buoy * age * age + sway * vx * 0.14;
       const size = params.sizeStart + (params.sizeEnd - params.sizeStart) * lifeRatio;
       const env = lifeRatio < 0.15 ? lifeRatio / 0.15 : 1 - (lifeRatio - 0.15) / 0.85;
-      out.push({ x: px, y: py, size: size, alpha: Math.max(0, params.alpha * env), color: params.color });
+      const vlen = Math.hypot(vx, vy);
+      out.push({
+        x: px, y: py, size: size, alpha: Math.max(0, params.alpha * env),
+        color: dynParticleColorAt(params, lifeRatio),
+        shape: params.particleShape || 'dot',
+        dirX: vlen > 1e-6 ? vx / vlen : dirX,
+        dirY: vlen > 1e-6 ? vy / vlen : dirY,
+      });
       if (out.length >= cap) return out;
     }
   }
@@ -370,13 +425,15 @@ function dynProceduralValue(cfg, frame) {
 export function createDynamicRuntime(): {
   dynDeformAt: (params: never, t: number) => { sx: number; sy: number; amount: number };
   dynContour: (tile: never) => { x: number; y: number; nx: number; ny: number }[];
-  dynSimulate: (inst: never, tile: never, frame: number, frameRate: number, layer: string, seedKey: string) => { x: number; y: number; size: number; alpha: number; color: string }[];
+  dynSimulate: (inst: never, tile: never, frame: number, frameRate: number, layer: string, seedKey: string) => { x: number; y: number; size: number; alpha: number; color: string; shape: string; dirX: number; dirY: number }[];
+  dynParticleColorAt: (params: never, lifeRatio: number) => string;
+  dynOrbitPoints: (params: never, tSec: number, worldAngleDeg?: number) => { x: number; y: number }[];
   dynDisplaceSrcMap: (params: never, w: number, h: number, phase: number) => Int32Array;
   dynNoiseU: (u: number, v: number, period: number, seed: number) => number;
   dynSpinRadAt: (params: never, t: number) => number;
   dynArcPoints: (params: never, t: number, endX?: number, endY?: number, hasEnd?: boolean) => { main: [number, number, number][]; branches: [number, number, number][][]; dots: [number, number, number][]; alpha: number };
   dynProceduralValue: (cfg: never, frame: number) => number;
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynParticleColorAt, dynOrbitPoints };`);
   return factory() as never;
 }

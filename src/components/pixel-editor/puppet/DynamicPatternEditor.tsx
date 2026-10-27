@@ -379,7 +379,7 @@ export default function DynamicPatternEditor({
               </label>
             )}
           </div>
-          {(['形变', '发射', '粒子', '发光', '弧线'] as const).map((section) => (
+          {(['形变', '发射', '粒子', '环绕', '发光', '弧线'] as const).map((section) => (
             <div key={section}>
               <div className="text-[9px] text-gray-600 mt-0.5">{section}</div>
               {section === '形变' && (
@@ -412,6 +412,73 @@ export default function DynamicPatternEditor({
                     <input type="checkbox" checked={np(inst).followRotate} onChange={(e) => patchParam(inst.id, 'followRotate', e.target.checked)} />
                     连旋转
                   </label>
+                </div>
+              )}
+              {section === '发射' && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[9px] text-gray-500 w-24 shrink-0">发射模式</span>
+                  <select
+                    value={np(inst).emitMode}
+                    onChange={(e) => patchParam(inst.id, 'emitMode', e.target.value)}
+                    className={`${selCls} flex-1`}
+                    title="向外发射：粒子自部件向外飞（一直以来的行为）；汇聚：粒子在外围出生、反向飞向部件（蓄力/虹流）"
+                  >
+                    <option value="out">向外发射</option>
+                    <option value="gather">汇聚（向内飞）</option>
+                  </select>
+                </div>
+              )}
+              {section === '粒子' && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[9px] text-gray-500 w-24 shrink-0">粒子形状</span>
+                  <select
+                    value={np(inst).particleShape}
+                    onChange={(e) => patchParam(inst.id, 'particleShape', e.target.value)}
+                    className={`${selCls} flex-1`}
+                    title="只影响绘制不影响弹道：圆点（径向渐隐）/ 星形 / 菱形 / 流光线（沿运动方向拉长）"
+                  >
+                    <option value="dot">圆点</option>
+                    <option value="star">星形</option>
+                    <option value="diamond">菱形</option>
+                    <option value="line">流光线</option>
+                  </select>
+                </div>
+              )}
+              {section === '粒子' && (
+                <div className="flex items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0">
+                    <input type="checkbox" checked={np(inst).rampEnabled} onChange={(e) => patchParam(inst.id, 'rampEnabled', e.target.checked)} />
+                    生命颜色坡道
+                  </label>
+                  {np(inst).rampEnabled && (
+                    <span className="flex items-center gap-1">
+                      <input type="color" value={np(inst).rampFrom} onChange={(e) => patchParam(inst.id, 'rampFrom', e.target.value)} className="h-5 w-8 bg-transparent" title="出生色" />
+                      <input type="color" value={np(inst).rampMid} onChange={(e) => patchParam(inst.id, 'rampMid', e.target.value)} className="h-5 w-8 bg-transparent" title="中途色" />
+                      <input type="color" value={np(inst).rampTo} onChange={(e) => patchParam(inst.id, 'rampTo', e.target.value)} className="h-5 w-8 bg-transparent" title="死亡色" />
+                    </span>
+                  )}
+                </div>
+              )}
+              {section === '环绕' && (
+                <div className="flex items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0">
+                    <input type="checkbox" checked={np(inst).orbitEnabled} onChange={(e) => patchParam(inst.id, 'orbitEnabled', e.target.checked)} />
+                    环绕光点
+                  </label>
+                  {np(inst).orbitEnabled && (
+                    <span className="flex items-center gap-1">
+                      <input type="color" value={np(inst).orbitColor} onChange={(e) => patchParam(inst.id, 'orbitColor', e.target.value)} className="h-5 w-8 bg-transparent" title="光点颜色" />
+                      <select
+                        value={np(inst).orbitAngleSpace}
+                        onChange={(e) => patchParam(inst.id, 'orbitAngleSpace', e.target.value)}
+                        className={selCls}
+                        title="精灵方向：椭圆跟着精灵一起转；世界方向：精灵怎么转，椭圆都恒对世界"
+                      >
+                        <option value="sprite">精灵方向</option>
+                        <option value="world">世界方向</option>
+                      </select>
+                    </span>
+                  )}
                 </div>
               )}
               {section === '发光' && glowOverflowOf(inst) && (
@@ -470,6 +537,9 @@ export default function DynamicPatternEditor({
                 .filter((d) => !(section === '发光' && d.key === 'glowStarReach' && np(inst).glowShape !== 'star'))
                 .filter((d) => !(section === '发光' && d.key === 'glowFlameReach' && np(inst).glowShape !== 'flame'))
                 .filter((d) => !(section === '发光' && d.key === 'glowAngleDeg' && !['star', 'flame', 'custom'].includes(np(inst).glowShape)))
+                .filter((d) => !(section === '发射' && d.key === 'gatherRadius' && np(inst).emitMode !== 'gather'))
+                .filter((d) => !(section === '粒子' && d.key === 'rampMidPos' && !np(inst).rampEnabled))
+                .filter((d) => !(section === '环绕' && !np(inst).orbitEnabled))
                 .map((d) => {
                 const v = np(inst)[d.key] as number;
                 return (

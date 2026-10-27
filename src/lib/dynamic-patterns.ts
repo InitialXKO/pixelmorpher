@@ -78,6 +78,8 @@ export interface DynamicPatternParams {
   followRotate: boolean;  // 是否连源部件的旋转滞后一起跟
   // 发射段
   emitEnabled: boolean;
+  emitMode: DynamicEmitMode; // out = 向外发射（一直以来的行为）；gather = 汇聚（蓄力/虹流：粒子在外围出生、反向飞向部件）
+  gatherRadius: number;      // gather 时出生点沿外向的偏移距离（px，逐粒子 0.5~1 倍哈希抖动）
   source: DynamicEmitSource;
   emitMark: string;      // source='mark' 时引用的精灵点标记名（缺失回落 plug 点）
   rate: number;          // 每秒生成数（峰值，受 linkToDeform 调制）
@@ -98,6 +100,22 @@ export interface DynamicPatternParams {
   color: string;         // 粒子颜色（#rrggbb，径向渐隐绘制）
   alpha: number;         // 峰值不透明度 0..1
   maxParticles: number;  // 单实例同时存活上限
+  particleShape: ParticleShape; // 粒子形状（只影响绘制，不影响弹道）
+  rampEnabled: boolean;  // 生命期颜色坡道开关（开时按生命比例在三色间过渡，覆盖 color）
+  rampFrom: string;      // 坡道起色（出生）
+  rampMid: string;       // 坡道中色
+  rampTo: string;        // 坡道终色（死亡）
+  rampMidPos: number;    // 中色位置（生命比例 0..1）
+  // 环绕段（Jeff 落地：绕宿主椭圆轨道的光点，闭式求位）
+  orbitEnabled: boolean;
+  orbitCount: number;    // 光点数
+  orbitRadiusX: number;  // 椭圆半轴 X（px）
+  orbitRadiusY: number;  // 椭圆半轴 Y（px）
+  orbitHz: number;       // 转速（圈/秒，可负 = 反向）
+  orbitPhase: number;    // 相位（周期数 0..1）
+  orbitSize: number;     // 光点直径（px）
+  orbitColor: string;    // 光点颜色（#rrggbb）
+  orbitAngleSpace: 'sprite' | 'world'; // sprite = 椭圆随精灵转；world = 椭圆恒对世界（同发光方向基准口径）
   // 发光段（原地发光：选区内像素随呼吸曲线提亮，并向外扩一圈柔光）
   glowEnabled: boolean;
   glowColor: string;        // 辉光颜色（#rrggbb）：柔光圈颜色与提亮染色
@@ -181,6 +199,8 @@ export function followAnchoredDeltaAt(
 
 /** 发光选区来源：color = 按像素颜色取色；marked = 手动标记的像素掩码 */
 export type GlowMaskSource = 'color' | 'marked' | 'mark';
+export type DynamicEmitMode = 'out' | 'gather';
+export type ParticleShape = 'dot' | 'star' | 'diamond' | 'line';
 
 /** 柔光圈形状：square 方形圈（八邻域逐圈外扩）/ circle 圆形 / star 十字星形
  * （沿横竖轴伸长、对角收短）/ flame 焰形（向上伸长收尖、下方收短）/ custom 自绘印章 */
@@ -225,10 +245,13 @@ export function defaultDynamicParams(): DynamicPatternParams {
     arcColor: '#bfe3ff',
     arcMode: 'arc', arcGrowHz: 0, arcTarget: '', arcOriginMark: '', arcDetail: 0,
     followEnabled: false, followSource: '', followDelaySec: 0.12, followAmount: 0.7, followRotate: true,
-    emitEnabled: true, source: 'contour', emitMark: '', rate: 12, linkToDeform: 0, speed: 6,
+    emitEnabled: true, emitMode: 'out', gatherRadius: 14, source: 'contour', emitMark: '', rate: 12, linkToDeform: 0, speed: 6,
     directionDeg: 270, emitDirMark: '', spreadDeg: 60, layer: 'both', frontRatio: 0.35,
     life: 0.9, sizeStart: 3, sizeEnd: 8, rise: 12, buoy: 0, turbulence: 4,
     color: '#ffb46b', alpha: 0.5, maxParticles: 90,
+    particleShape: 'dot', rampEnabled: false, rampFrom: '#ffffff', rampMid: '#ffb46b', rampTo: '#ff5a2a', rampMidPos: 0.5,
+    orbitEnabled: false, orbitCount: 3, orbitRadiusX: 14, orbitRadiusY: 10, orbitHz: 0.5, orbitPhase: 0,
+    orbitSize: 3, orbitColor: '#aee6ff', orbitAngleSpace: 'sprite',
     glowEnabled: false, glowColor: '#7dd7ff', glowStrength: 1, glowHz: 0.8,
     glowPhase: 0, glowHalo: 2, glowMaskSource: 'color', glowPick: '#2ea8ff',
     glowTolerance: 0, glowMask: undefined, glowMarkName: '', glowFollowGroup: 2,
@@ -254,6 +277,12 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
     ? ((out.glowAngleDeg % 360) + 360) % 360 : 270;
   if (out.glowAngleSpace !== 'world') out.glowAngleSpace = 'sprite';
   if (typeof out.followSource !== 'string') out.followSource = '';
+  if (out.emitMode !== 'gather') out.emitMode = 'out';
+  out.gatherRadius = Number.isFinite(out.gatherRadius) ? Math.max(0, Math.min(64, out.gatherRadius)) : 14;
+  if (!['dot', 'star', 'diamond', 'line'].includes(out.particleShape)) out.particleShape = 'dot';
+  out.rampMidPos = Number.isFinite(out.rampMidPos) ? Math.max(0, Math.min(1, out.rampMidPos)) : 0.5;
+  if (out.orbitAngleSpace !== 'world') out.orbitAngleSpace = 'sprite';
+  out.orbitCount = Number.isFinite(out.orbitCount) ? Math.max(1, Math.min(12, Math.round(out.orbitCount))) : 3;
   if (typeof out.emitMark !== 'string') out.emitMark = '';
   if (typeof out.emitDirMark !== 'string') out.emitDirMark = '';
   if (typeof out.displaceDirMark !== 'string') out.displaceDirMark = '';
@@ -347,6 +376,55 @@ export function resolveDynamicPatterns(
     map.set(inst.slot, { instance: norm(inst), origin: 'costume' });
   }
   return [...map.values()];
+}
+
+function hexRgbOf(hex: string): [number, number, number] {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return [255, 180, 107];
+  return [parseInt(m[1].slice(0, 2), 16), parseInt(m[1].slice(2, 4), 16), parseInt(m[1].slice(4, 6), 16)];
+}
+function rgbHex(r: number, g: number, b: number): string {
+  const c = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
+  return `#${c(r)}${c(g)}${c(b)}`;
+}
+
+/** 粒子在某生命比例处的颜色：坡道关 = 恒 color；开 = 起→中→终三段线性过渡 */
+export function particleColorAt(params: DynamicPatternParams, lifeRatio: number): string {
+  if (!params.rampEnabled) return params.color;
+  const f = Math.max(0, Math.min(1, lifeRatio));
+  const pos = Math.max(0, Math.min(1, params.rampMidPos));
+  const a = hexRgbOf(params.rampFrom), mid = hexRgbOf(params.rampMid), b = hexRgbOf(params.rampTo);
+  if (f <= pos) {
+    const t = pos <= 0 ? 1 : f / pos;
+    return rgbHex(a[0] + (mid[0] - a[0]) * t, a[1] + (mid[1] - a[1]) * t, a[2] + (mid[2] - a[2]) * t);
+  }
+  const t = pos >= 1 ? 1 : (f - pos) / (1 - pos);
+  return rgbHex(mid[0] + (b[0] - mid[0]) * t, mid[1] + (b[1] - mid[1]) * t, mid[2] + (b[2] - mid[2]) * t);
+}
+
+/**
+ * 环绕光点位置（精灵本地 px，原点 = plug，x 右 y 下）：第 i 点
+ * 相位 = orbitPhase + t·orbitHz + i/count（周期数），椭圆参数位。
+ * angleSpace='world' 时按 -worldAngleDeg 反转，椭圆恒对世界
+ * （调用方传部件当前世界角；缺省 0 = sprite 口径）。
+ */
+export function orbitPointsAt(
+  params: DynamicPatternParams,
+  tSec: number,
+  worldAngleDeg = 0,
+): { x: number; y: number }[] {
+  if (!params.orbitEnabled || params.orbitCount <= 0) return [];
+  const out: { x: number; y: number }[] = [];
+  const counter = params.orbitAngleSpace === 'world' ? (-worldAngleDeg * Math.PI) / 180 : 0;
+  const cc = Math.cos(counter), cs = Math.sin(counter);
+  for (let i = 0; i < params.orbitCount; i++) {
+    const ph = params.orbitPhase + tSec * params.orbitHz + i / params.orbitCount;
+    const a = ph * Math.PI * 2;
+    const ex = Math.cos(a) * params.orbitRadiusX;
+    const ey = Math.sin(a) * params.orbitRadiusY;
+    out.push({ x: ex * cc - ey * cs, y: ex * cs + ey * cc });
+  }
+  return out;
 }
 
 /** 发光分组：解析序里前 3 个启用发光的实例各成一组（颜色/强度/频率/相位
@@ -1068,6 +1146,7 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'directionDeg', label: '发射方向角（度）', section: '发射', min: 0, max: 359, step: 5 },
   { key: 'spreadDeg', label: '方向散布（度）', section: '发射', min: 0, max: 180, step: 5 },
   { key: 'frontRatio', label: '身前比例（两层时）', section: '发射', min: 0, max: 1, step: 0.05 },
+  { key: 'gatherRadius', label: '汇聚出生距（px）', section: '发射', min: 0, max: 48, step: 1 },
   { key: 'life', label: '生命（秒）', section: '粒子', min: 0.2, max: 3, step: 0.05 },
   { key: 'sizeStart', label: '出生直径（px）', section: '粒子', min: 1, max: 12, step: 0.5 },
   { key: 'sizeEnd', label: '死亡直径（px）', section: '粒子', min: 1, max: 20, step: 0.5 },
@@ -1076,6 +1155,13 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'turbulence', label: '横向摆动（px）', section: '粒子', min: 0, max: 12, step: 0.5 },
   { key: 'alpha', label: '不透明度', section: '粒子', min: 0.05, max: 1, step: 0.05 },
   { key: 'maxParticles', label: '存活上限', section: '粒子', min: 8, max: 240, step: 4 },
+  { key: 'rampMidPos', label: '坡道中色位置', section: '粒子', min: 0, max: 1, step: 0.05 },
+  { key: 'orbitCount', label: '光点数', section: '环绕', min: 1, max: 12, step: 1 },
+  { key: 'orbitRadiusX', label: '椭圆半轴 X（px）', section: '环绕', min: 2, max: 48, step: 1 },
+  { key: 'orbitRadiusY', label: '椭圆半轴 Y（px）', section: '环绕', min: 2, max: 48, step: 1 },
+  { key: 'orbitHz', label: '转速（圈/秒，可负）', section: '环绕', min: -2, max: 2, step: 0.05 },
+  { key: 'orbitPhase', label: '环绕相位', section: '环绕', min: 0, max: 1, step: 0.01 },
+  { key: 'orbitSize', label: '光点直径（px）', section: '环绕', min: 1, max: 10, step: 0.5 },
   { key: 'glowStrength', label: '发光强度（峰值）', section: '发光', min: 0, max: 2, step: 0.05 },
   { key: 'glowHz', label: '呼吸频率（次/秒）', section: '发光', min: 0, max: 3, step: 0.05 },
   { key: 'glowPhase', label: '呼吸相位', section: '发光', min: 0, max: 1, step: 0.01 },

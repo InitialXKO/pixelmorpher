@@ -78,6 +78,7 @@ import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/procedural';
 import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followAnchoredDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
 import { effectivePatternGraph, resolvePatternsFromGraph } from './blueprint/pattern-sync';
+import { orbitPointsAt } from './dynamic-patterns';
 import { evaluateNodeOutput } from './blueprint/eval';
 import { markPointPx, markDirAngleDeg } from './sprite-marks';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
@@ -2354,8 +2355,56 @@ function drawDynamicParticles(
       grad.addColorStop(1, `rgba(${rgb},0)`);
       ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      // 粒子形状（Jeff 落地）：dot = 径向渐隐圆（原行为）；其余以
+      // 同一渐变填充形状轮廓（柔边由渐变承担，与运行时四边形同族）
+      if (p.shape === 'diamond') {
+        ctx.moveTo(p.x, p.y - r); ctx.lineTo(p.x + r, p.y);
+        ctx.lineTo(p.x, p.y + r); ctx.lineTo(p.x - r, p.y);
+        ctx.closePath();
+      } else if (p.shape === 'star') {
+        for (let i = 0; i < 8; i++) {
+          const a = (i * Math.PI) / 4 - Math.PI / 2;
+          const rad = i % 2 === 0 ? r : r * 0.38;
+          const vx = p.x + Math.cos(a) * rad, vy = p.y + Math.sin(a) * rad;
+          if (i === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
+        }
+        ctx.closePath();
+      } else if (p.shape === 'line') {
+        const dx = p.dirX, dy = p.dirY;
+        const pxv = -dy, pyv = dx;
+        ctx.moveTo(p.x + dx * r * 1.7, p.y + dy * r * 1.7);
+        ctx.lineTo(p.x - dx * r * 0.1 + pxv * r * 0.45, p.y - dy * r * 0.1 + pyv * r * 0.45);
+        ctx.lineTo(p.x - dx * r * 1.1, p.y - dy * r * 1.1);
+        ctx.lineTo(p.x - dx * r * 0.1 - pxv * r * 0.45, p.y - dy * r * 0.1 - pyv * r * 0.45);
+        ctx.closePath();
+      } else {
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      }
       ctx.fill();
+    }
+    // 环绕光点（Jeff 落地）：只在身前层画一次（绕部件的轨道光点）
+    if (layer === 'front') {
+      const tSec = instruction.frame / instruction.frameRate;
+      for (const resolved of list) {
+        const params = resolved.instance.params;
+        if (!params.orbitEnabled) continue;
+        const pts = orbitPointsAt(params, tSec, instruction.angle);
+        const m = /^#([0-9a-fA-F]{6})$/.exec(params.orbitColor);
+        const rgb = m
+          ? `${parseInt(m[1].slice(0, 2), 16)},${parseInt(m[1].slice(2, 4), 16)},${parseInt(m[1].slice(4, 6), 16)}`
+          : '174,230,255';
+        const r = Math.max(0.5, params.orbitSize / 2);
+        for (const q of pts) {
+          const gx = instruction.mirror ? -q.x : q.x;
+          const grad = ctx.createRadialGradient(gx, q.y, 0, gx, q.y, r);
+          grad.addColorStop(0, `rgba(${rgb},0.95)`);
+          grad.addColorStop(1, `rgba(${rgb},0)`);
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(gx, q.y, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     }
   }
 }

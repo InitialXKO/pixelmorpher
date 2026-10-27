@@ -1843,6 +1843,36 @@ function pushParticleQuad(verts, x, y, size, rgb, alpha) {
     verts.push(x + cn[0] * h, y + cn[1] * h, cn[0], cn[1], rgb[0], rgb[1], rgb[2], alpha, 1);
   }
 }
+// 粒子形状（Jeff 落地，与编辑器画布同族）：diamond = 四边形转 45°；
+// star = 两张错开 45° 的小四边形叠成八角星；line = 沿运动方向拉长。
+// (dirX, dirY) 已由调用方变换到世界空间。顶点第二组坐标（衰减口径）
+// 保持原四边形坐标，柔边与 dot 一致。
+function pushParticleQuadShaped(verts, x, y, size, rgb, alpha, shape, dirX, dirY) {
+  if (!shape || shape === 'dot') { pushParticleQuad(verts, x, y, size, rgb, alpha); return; }
+  const h = Math.max(0.5, size / 2);
+  const corners = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
+  if (shape === 'diamond' || shape === 'star') {
+    const c45 = Math.SQRT1_2;
+    const emit = (hh, al) => {
+      for (const cn of corners) {
+        verts.push(x + (cn[0] - cn[1]) * c45 * hh, y + (cn[0] + cn[1]) * c45 * hh, cn[0], cn[1], rgb[0], rgb[1], rgb[2], al, 1);
+      }
+    };
+    if (shape === 'diamond') { emit(h, alpha); return; }
+    pushParticleQuad(verts, x, y, size * 0.78, rgb, alpha * 0.85);
+    emit(h * 0.78, alpha * 0.85);
+    return;
+  }
+  if (shape === 'line') {
+    const L = h * 1.9, W = h * 0.5;
+    const pxv = -dirY, pyv = dirX;
+    for (const cn of corners) {
+      verts.push(x + dirX * cn[0] * L + pxv * cn[1] * W, y + dirY * cn[0] * L + pyv * cn[1] * W, cn[0], cn[1], rgb[0], rgb[1], rgb[2], alpha, 1);
+    }
+    return;
+  }
+  pushParticleQuad(verts, x, y, size, rgb, alpha);
+}
 let elapsed = 0;
 let autoWalk = false;
 let foreOn = false; // 透视缩短开关（缺口 7）：默认关，与编辑器缺省一致
@@ -3059,7 +3089,25 @@ function frame(now) {
           const target = layer === 'back' ? backVerts : frontVerts;
           for (const pt of ps) {
             const gx = pt.x * a.dsx, gy = pt.y * a.dsy;
-            pushParticleQuad(target, a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c, pt.size, particleRgb(pt.color), pt.alpha);
+            const wdx0 = (pt.dirX ?? 1) * c + (pt.dirY ?? 0) * s;
+            const wdy0 = (pt.dirX ?? 1) * s - (pt.dirY ?? 0) * c;
+            const wl = Math.hypot(wdx0, wdy0) || 1;
+            pushParticleQuadShaped(target, a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c, pt.size, particleRgb(pt.color), pt.alpha, pt.shape, wdx0 / wl, wdy0 / wl);
+          }
+        }
+        // 环绕光点（Jeff 落地）：身前层一次；world 基准时先用部件
+        // 旋转的自逆变换把椭圆点预转回本地（变换矩阵 [[c,s],[s,−c]]
+        // 自逆，预转与放置两次同变换相消，椭圆恒对世界）
+        if (inst.params.orbitEnabled) {
+          const opts = dynOrbitPoints(inst.params, frameIdx / FRAME_RATE, 0);
+          const orgb = particleRgb(inst.params.orbitColor || '#aee6ff');
+          for (const q of opts) {
+            let qx = q.x * a.dsx, qy = q.y * a.dsy;
+            if (inst.params.orbitAngleSpace === 'world') {
+              const rx = qx * c + qy * s, ry = qx * s - qy * c;
+              qx = rx; qy = ry;
+            }
+            pushParticleQuad(frontVerts, a.ctr[0] + qx * c + qy * s, a.ctr[1] + qx * s - qy * c, inst.params.orbitSize || 3, orgb, 0.95);
           }
         }
       }
