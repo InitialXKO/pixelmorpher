@@ -1,84 +1,142 @@
 'use client';
 
-// 草图捕姿：对当前角色草划目标姿态（每笔自一条 IK 链的关节起笔、
-// 笔尖落点 = 末端要去的位置），经既有 IK 口径解算后落成当前帧
-// angle/tilt 关键帧。换算/解算/落帧全在 lib/sketch-pose。
+// 草图捕姿（甲案：直接复用主渲染内容）：底图 = 与主画布同一条
+// renderUnified 渲染（精灵/关节盘/人偶兜底/距离雾全在）+ 主画布同款
+// 骨架覆盖层 + IK 手柄，笔触画在最上层。过滤开关：只显示当前角色
+// 或全部角色（同编辑器视图）。解算先出预览（不写数据）：确认才落
+// 帧写入，重画丢弃预览重划。换算/解算/落帧在 lib/sketch-pose。
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Eraser, PencilRuler } from 'lucide-react';
+import { Check, Eraser, PencilRuler, RotateCcw } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
-import { computeWorldTransforms } from '@/lib/unified-render';
+import {
+  computeWorldTransforms, geometryDirectionFromToggle, renderUnified,
+} from '@/lib/unified-render';
+import {
+  renderIKTargetHandles, renderPuppetSkeletonOverlay,
+} from '../canvas/canvas-puppet-render';
 import { projectToView, subToPx, type Character } from '@/lib/unified-types';
-import { assignSketchStrokes, bakeSketchPose, chainJointIds } from '@/lib/sketch-pose';
+import { assignSketchStrokes, bakeSketchPose, chainJointIds, type SketchBakeResult } from '@/lib/sketch-pose';
 import type { Pt } from '@/lib/arc-length';
 
-const W = 480;
-const H = 480;
+interface PreviewState {
+  bake: SketchBakeResult;
+  report: string;
+}
 
 export default function SketchPoseDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const characterId = useEditorStore((s) => s.activePuppetSkeletonId);
   const character = useProjectStore((s) => (characterId ? s.unifiedCharacters[characterId] : undefined));
   const frame = useProjectStore((s) => s.currentFrame);
   const frameRate = useProjectStore((s) => s.frameRate) || 12;
+  const canvasW = useProjectStore((s) => s.canvasWidth) || 512;
+  const canvasH = useProjectStore((s) => s.canvasHeight) || 512;
   const [strokes, setStrokes] = useState<Pt[][]>([]);
   const [drawing, setDrawing] = useState<Pt[] | null>(null);
   const [note, setNote] = useState('');
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [onlyCurrent, setOnlyCurrent] = useState(true);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const baseRef = useRef<HTMLCanvasElement>(null);
+  const strokeRef = useRef<HTMLCanvasElement>(null);
 
-  useEffect(() => { if (open) { setStrokes([]); setDrawing(null); setNote(''); } }, [open, characterId]);
+  useEffect(() => {
+    if (open) { setStrokes([]); setDrawing(null); setNote(''); setPreview(null); }
+  }, [open, characterId]);
 
+  /** 渲染用角色：预览态用落帧后的节点表替换当前角色 */
+  const renderCharacter = useMemo<Character | undefined>(() => {
+    if (!character) return undefined;
+    if (!preview) return character as Character;
+    return { ...(character as Character), nodes: preview.bake.nodes };
+  }, [character, preview]);
+
+  /** 吸附/归属用关节点位（工程画布坐标，与底图同口径） */
   const joints = useMemo(() => {
-    if (!character) return null;
-    const wt = computeWorldTransforms(character as Character, frame, W, H, frameRate);
+    if (!renderCharacter) return null;
+    const wt = computeWorldTransforms(renderCharacter, frame, canvasW, canvasH, frameRate);
     const canvas = new Map<string, Pt>();
     const worldZ = new Map<string, number>();
     for (const [id, t] of wt) {
-      const dir = t.variantIndex ?? 6;
-      const p = projectToView(t.worldX, t.worldY, t.worldZ, dir as never);
-      canvas.set(id, { x: subToPx(p.canvasX) + W / 2, y: subToPx(p.canvasY) + H / 2 });
+      const p = projectToView(t.worldX, t.worldY, t.worldZ, (t.variantIndex ?? 6) as never);
+      canvas.set(id, { x: subToPx(p.canvasX) + canvasW / 2, y: subToPx(p.canvasY) + canvasH / 2 });
     }
-    for (const chain of character.ikChains ?? []) {
+    for (const chain of renderCharacter.ikChains ?? []) {
       const end = wt.get(chain.endNodeId);
       if (end) worldZ.set(chain.id, subToPx(end.worldZ));
     }
     return { canvas, worldZ };
-  }, [character, frame, frameRate]);
+  }, [renderCharacter, frame, frameRate, canvasW, canvasH]);
 
-  const redraw = useCallback(() => {
-    const canvas = canvasRef.current;
+  /** 底图：主渲染内容 + 骨架覆盖层 + 链关节金圈（主画布同款调用） */
+  const renderBase = useCallback(() => {
+    const canvas = baseRef.current;
     const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) return;
-    ctx.clearRect(0, 0, W, H);
+    if (!canvas || !ctx || !renderCharacter || !characterId) return;
+    const pst = useProjectStore.getState();
+    const est = useEditorStore.getState();
+    ctx.clearRect(0, 0, canvasW, canvasH);
     ctx.fillStyle = '#0a0a18';
-    ctx.fillRect(0, 0, W, H);
-    if (character && joints) {
-      // 骨架连线（按父子）
-      ctx.lineCap = 'round';
-      for (const node of Object.values(character.nodes)) {
-        if (!node.parentId) continue;
-        const a = joints.canvas.get(node.parentId);
-        const b = joints.canvas.get(node.id);
-        if (!a || !b) continue;
-        ctx.beginPath();
-        ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
-        ctx.strokeStyle = 'rgba(148,184,255,0.5)';
-        ctx.lineWidth = 5;
-        ctx.stroke();
-      }
-      // IK 链关节高亮（可捕姿的链）
-      for (const chain of character.ikChains ?? []) {
-        for (const id of chainJointIds(character as Character, chain)) {
+    ctx.fillRect(0, 0, canvasW, canvasH);
+    const charsForRender: Record<string, Character> = onlyCurrent
+      ? { [characterId]: renderCharacter }
+      : { ...pst.unifiedCharacters, [characterId]: renderCharacter };
+    const off = document.createElement('canvas');
+    off.width = canvasW;
+    off.height = canvasH;
+    const offCtx = off.getContext('2d')!;
+    renderUnified(
+      offCtx, canvasW, canvasH, Object.values(pst.sprites), [], frame, 'transparent',
+      [], [], [], false, 0,
+      pst.proceduralAnimations ?? [], pst.canvasModifierTracks ?? [], frameRate, 'high',
+      pst.animationVariables ?? [], pst.globalModifiers ?? [],
+      charsForRender, pst.animationClips, true, pst.globalBlueprint,
+      pst.sprites, est.perspectiveForeshorten, pst.activeAnimationClipId,
+      geometryDirectionFromToggle(est.nodeTurn3D),
+      est.showMannequinFallback,
+      {
+        sleeveRatio: est.mannequinSleeveRatio,
+        pantsRatio: est.mannequinPantsRatio,
+        fogStrength: est.depthFogStrength,
+      },
+    );
+    ctx.drawImage(off, 0, 0);
+    const rc = { ctx, canvasWidth: canvasW, canvasHeight: canvasH, zoom: 1, panX: 0, panY: 0, currentFrame: frame };
+    renderPuppetSkeletonOverlay(rc, {
+      shouldRender: true,
+      characters: [renderCharacter],
+      activePuppetSkeletonId: characterId,
+      selectedNodeId: null,
+      animationClips: pst.animationClips,
+      sprites: Object.values(pst.sprites),
+    });
+    renderIKTargetHandles(rc, renderCharacter);
+    // 链根/链尾金圈：起笔吸附点提示
+    if (joints) {
+      for (const chain of renderCharacter.ikChains ?? []) {
+        for (const id of chainJointIds(renderCharacter, chain)) {
           const p = joints.canvas.get(id);
           if (!p) continue;
+          const isEnd = id === chain.rootNodeId || id === chain.endNodeId;
           ctx.beginPath();
-          ctx.arc(p.x, p.y, id === chain.rootNodeId || id === chain.endNodeId ? 6 : 4, 0, Math.PI * 2);
-          ctx.fillStyle = '#fbbf24';
-          ctx.fill();
+          ctx.arc(p.x, p.y, isEnd ? 7 : 4, 0, Math.PI * 2);
+          ctx.strokeStyle = '#fbbf24';
+          ctx.lineWidth = isEnd ? 2 : 1.25;
+          ctx.stroke();
         }
       }
     }
+  }, [renderCharacter, characterId, onlyCurrent, joints, frame, frameRate, canvasW, canvasH]);
+
+  useEffect(() => { if (open) renderBase(); }, [renderBase, open]);
+
+  /** 笔触层 */
+  const renderStrokes = useCallback(() => {
+    const canvas = strokeRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvasW, canvasH);
     const drawStroke = (pts: Pt[], color: string) => {
       if (pts.length < 2) return;
       ctx.beginPath();
@@ -96,39 +154,58 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
     };
     for (const s of strokes) drawStroke(s, '#7dd3fc');
     if (drawing) drawStroke(drawing, '#ffffff');
-  }, [character, joints, strokes, drawing]);
+  }, [strokes, drawing, canvasW, canvasH]);
 
-  useEffect(() => { redraw(); }, [redraw, open]);
+  useEffect(() => { if (open) renderStrokes(); }, [renderStrokes, open]);
 
   const pointFromEvent = (e: React.PointerEvent): Pt => {
-    const rect = canvasRef.current!.getBoundingClientRect();
-    return { x: ((e.clientX - rect.left) / rect.width) * W, y: ((e.clientY - rect.top) / rect.height) * H };
+    const rect = strokeRef.current!.getBoundingClientRect();
+    return {
+      x: ((e.clientX - rect.left) / rect.width) * canvasW,
+      y: ((e.clientY - rect.top) / rect.height) * canvasH,
+    };
   };
 
   const chainCount = character?.ikChains?.length ?? 0;
 
-  const handleApply = () => {
-    if (!character || !joints || strokes.length === 0) return;
+  const handleSolve = () => {
+    if (!character || !joints || strokes.length === 0 || preview) return;
     const { assignments, missed } = assignSketchStrokes(
-      character as Character, strokes, joints.canvas, W, H, joints.worldZ,
+      character as Character, strokes, joints.canvas, canvasW, canvasH, joints.worldZ,
     );
     if (assignments.length === 0) {
-      setNote(`没有笔触命中 IK 链（${missed} 笔未命中）：起笔要落在金色关节点附近`);
+      setNote(`没有笔触命中 IK 链（${missed} 笔未命中）：起笔要落在金圈关节附近`);
       return;
     }
-    const res = bakeSketchPose(character as Character, assignments, frame, frameRate, W, H);
-    useProjectStore.getState().updateUnifiedCharacter(character.id, { nodes: res.nodes });
-    const errs = res.appliedChainIds.map((id) => {
+    const bake = bakeSketchPose(character as Character, assignments, frame, frameRate, canvasW, canvasH);
+    const errs = bake.appliedChainIds.map((id) => {
       const chain = (character.ikChains ?? []).find((c) => c.id === id);
-      return `${chain?.name ?? id} 误差 ${(res.endError[id] ?? 0).toFixed(1)}px`;
+      return `${chain?.name ?? id} 误差 ${(bake.endError[id] ?? 0).toFixed(1)}px`;
+    });
+    setPreview({
+      bake,
+      report: `第 ${frame} 帧预览：${errs.join('；')}${missed > 0 ? `；另有 ${missed} 笔未命中` : ''}——确认写入或重画`,
     });
     setStrokes([]);
-    setNote(`已在第 ${frame} 帧落姿：${errs.join('；')}${missed > 0 ? `；另有 ${missed} 笔未命中` : ''}`);
+    setNote('');
+  };
+
+  const handleConfirm = () => {
+    if (!character || !preview) return;
+    useProjectStore.getState().updateUnifiedCharacter(character.id, { nodes: preview.bake.nodes });
+    setPreview(null);
+    onClose();
+  };
+
+  const handleRedraw = () => {
+    setPreview(null);
+    setStrokes([]);
+    setNote('');
   };
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-[540px] bg-[#12122a] border-white/10 text-gray-200">
+      <DialogContent className="max-w-[580px] bg-[#12122a] border-white/10 text-gray-200">
         <DialogHeader>
           <DialogTitle className="text-sm flex items-center gap-2">
             <PencilRuler className="size-4 text-amber-300" /> 草图捕姿{character ? ` · ${character.name}` : ''}
@@ -140,34 +217,67 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
           <p className="text-[12px] text-gray-400">当前角色没有 IK 链，先在骨骼面板为手臂/腿建链再用草图捕姿。</p>
         ) : (
           <div className="space-y-3">
-            <p className="text-[11px] text-gray-400">
-              在金色关节（链根或链尾）附近起笔，划向末端要去的位置，松手成一笔；一笔对应一条链。
-              应用后解算结果落成第 {frame} 帧的关键帧（只写角度/出平面角两轨）。
-            </p>
-            <canvas ref={canvasRef} width={W} height={H}
-              className="w-full rounded border border-white/10 touch-none cursor-crosshair"
-              style={{ aspectRatio: '1/1' }}
-              onPointerDown={(e) => { (e.target as HTMLElement).setPointerCapture(e.pointerId); setDrawing([pointFromEvent(e)]); }}
-              onPointerMove={(e) => {
-                if (!drawing) return;
-                const p = pointFromEvent(e);
-                const last = drawing[drawing.length - 1]!;
-                if (Math.hypot(p.x - last.x, p.y - last.y) >= 3) setDrawing([...drawing, p]);
-              }}
-              onPointerUp={() => {
-                if (drawing && drawing.length >= 2) setStrokes((prev) => [...prev, drawing]);
-                setDrawing(null);
-              }}
-            />
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" className="h-7 text-[11px] text-gray-400" onClick={() => setStrokes([])}>
-                <Eraser className="size-3 mr-1" /> 清除笔触（{strokes.length}）
-              </Button>
-              <div className="flex-1" />
-              <Button size="sm" className="h-7 text-[11px]" disabled={strokes.length === 0} onClick={handleApply}>
-                解算并落帧
-              </Button>
+            <div className="flex items-center gap-3">
+              <p className="text-[11px] text-gray-400 flex-1">
+                在金圈关节（链根或链尾）附近起笔，划向末端要去的位置，一笔一条链。
+                解算先出预览，确认后才落成第 {frame} 帧关键帧。
+              </p>
+              <label className="flex items-center gap-1.5 text-[11px] text-gray-300 shrink-0 cursor-pointer">
+                <input type="checkbox" checked={onlyCurrent} onChange={(e) => setOnlyCurrent(e.target.checked)}
+                  className="accent-cyan-400" />
+                只显示当前角色
+              </label>
             </div>
+            <div className="relative w-full rounded border border-white/10 overflow-hidden"
+              style={{ aspectRatio: `${canvasW}/${canvasH}` }}>
+              <canvas ref={baseRef} width={canvasW} height={canvasH} className="absolute inset-0 w-full h-full" />
+              <canvas ref={strokeRef} width={canvasW} height={canvasH}
+                className="absolute inset-0 w-full h-full touch-none cursor-crosshair"
+                onPointerDown={(e) => {
+                  if (preview) return;
+                  (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                  setDrawing([pointFromEvent(e)]);
+                }}
+                onPointerMove={(e) => {
+                  if (!drawing) return;
+                  const p = pointFromEvent(e);
+                  const last = drawing[drawing.length - 1]!;
+                  if (Math.hypot(p.x - last.x, p.y - last.y) >= 3) setDrawing([...drawing, p]);
+                }}
+                onPointerUp={() => {
+                  if (drawing && drawing.length >= 2) setStrokes((prev) => [...prev, drawing]);
+                  setDrawing(null);
+                }}
+              />
+              {preview && (
+                <div className="absolute top-1.5 left-1.5 px-2 py-0.5 rounded bg-amber-500/20 border border-amber-400/40 text-amber-200 text-[10px]">
+                  预览（未写入）
+                </div>
+              )}
+            </div>
+            {preview ? (
+              <div className="space-y-2">
+                <p className="text-[11px] text-amber-200">{preview.report}</p>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" className="h-7 text-[11px]" onClick={handleConfirm}>
+                    <Check className="size-3 mr-1" /> 确认写入
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-7 text-[11px] text-gray-300" onClick={handleRedraw}>
+                    <RotateCcw className="size-3 mr-1" /> 重画
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" className="h-7 text-[11px] text-gray-400" onClick={() => setStrokes([])}>
+                  <Eraser className="size-3 mr-1" /> 清除笔触（{strokes.length}）
+                </Button>
+                <div className="flex-1" />
+                <Button size="sm" className="h-7 text-[11px]" disabled={strokes.length === 0} onClick={handleSolve}>
+                  解算预览
+                </Button>
+              </div>
+            )}
             {note && <p className="text-[11px] text-emerald-300">{note}</p>}
           </div>
         )}
