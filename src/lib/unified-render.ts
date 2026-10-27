@@ -1515,8 +1515,8 @@ function generateDiscInstructions(
  * 已并入子节点合并图，不算无精灵、跳过。
  */
 /** 肢体类别（衣物色区用）：沿父链上溯节点名，先命中者胜（近者优先） */
-const MQ_ARM_KEYS = ['arm', 'shoulder', '袖', '臂', '肩'];
-const MQ_LEG_KEYS = ['leg', 'thigh', 'hip', '腿', '髋'];
+const MQ_ARM_KEYS = ['arm', 'shoulder', 'wrist', 'hand', '袖', '臂', '肩', '腕', '手'];
+const MQ_LEG_KEYS = ['leg', 'thigh', 'hip', 'shin', 'calf', 'ankle', 'foot', '腿', '髋', '踝', '脚'];
 function mannequinLimbKind(character: Character, node: Node): 'arm' | 'leg' | null {
   let cur: Node | undefined = node;
   while (cur) {
@@ -1649,6 +1649,62 @@ function generateMannequinInstructions(
       outlineColor: '#4a5160',
       ...(clothRatio > 0 ? { clothRatio } : {}),
     });
+  }
+
+  // 手脚延伸（借 PoseSketcher 口径）：肢体末端叶子关节（腕/踝）的胶囊
+  // 在末段方向上再伸一段——手掌自腕伸末段长 ×(0.16/0.44)、脚掌自踝伸
+  // 末段长 ×(0.15/0.45)（原项目腕 0.84/踝 0.85 切分换算到末段占比），
+  // 末端半径收至 0.64 倍；手另补拇指支段（自腕起：沿手向 0.3 倍手长
+  // + 法向 0.4 倍手长，侧别沿父链名字判左右、判不出取 +1，同原项目
+  // 侧面口径）。手脚用浅一号的色。手指/脚趾/拇指命名的叶子不延伸，
+  // 免得烘焙骨骼的指节末端冒出手掌。非叶子（其后还有节点）不延伸。
+  const EXTREMITY_FILL = '#a7b2c4';
+  const EXTREMITY_EXCLUDE = ['finger', 'thumb', 'toe', 'index', 'middle', 'ring', 'pinky', '指', '趾'];
+  const hasChildNode = new Set<string>();
+  for (const n of Object.values(character.nodes)) if (n.parentId) hasChildNode.add(n.parentId);
+  for (const [nodeId, j] of joints) {
+    if (hasChildNode.has(nodeId)) continue;
+    const node = character.nodes[nodeId]!;
+    if (EXTREMITY_EXCLUDE.some((k) => node.name.toLowerCase().includes(k))) continue;
+    const kind = mannequinLimbKind(character, node);
+    if (!kind) continue;
+    const sx = subToPx(j.sx), sy = subToPx(j.sy);
+    const ex = subToPx(j.ex), ey = subToPx(j.ey);
+    const segLen = Math.hypot(ex - sx, ey - sy);
+    if (segLen < 2) continue;
+    const ux = (ex - sx) / segLen, uy = (ey - sy) / segLen;
+    const r = radiusOf(nodeId);
+    const extLen = kind === 'arm' ? segLen * (0.16 / 0.44) : segLen * (0.15 / 0.45);
+    out.push({
+      nodeId,
+      x1: j.ex, y1: j.ey,
+      x2: pxToSub(ex + ux * extLen), y2: pxToSub(ey + uy * extLen),
+      r1: r, r2: r * 0.64,
+      fillColor: EXTREMITY_FILL,
+      outlineColor: '#4a5160',
+      extremity: kind === 'arm' ? 'hand' : 'foot',
+    });
+    if (kind === 'arm') {
+      let side = 1;
+      let cur: Node | undefined = node;
+      while (cur) {
+        const n = cur.name.toLowerCase();
+        if (n.includes('left') || n.includes('_l') || n.includes('左')) { side = -1; break; }
+        if (n.includes('right') || n.includes('_r') || n.includes('右')) { side = 1; break; }
+        cur = cur.parentId ? character.nodes[cur.parentId] : undefined;
+      }
+      const nx = -uy, ny = ux;
+      out.push({
+        nodeId,
+        x1: j.ex, y1: j.ey,
+        x2: pxToSub(ex + ux * extLen * 0.3 + nx * side * extLen * 0.4),
+        y2: pxToSub(ey + uy * extLen * 0.3 + ny * side * extLen * 0.4),
+        r1: r * 0.8, r2: r * 0.45,
+        fillColor: EXTREMITY_FILL,
+        outlineColor: '#4a5160',
+        extremity: 'thumb',
+      });
+    }
   }
   return out;
 }

@@ -1545,6 +1545,9 @@ export interface MannequinRenderInstruction {
   /** 衣物色区：本段自起点起的衣物色占比（0..1，袖口/裤腰比例按肢体
    * 全长弧长切分到本段的结果）；缺省/0 = 全段皮肤色 */
   clothRatio?: number;
+  /** 手脚延伸段（肢体末端叶子节点在腕/踝之外伸出的手掌/脚掌/拇指，
+   * nodeId 仍记末端关节节点）；缺省 = 普通骨段 */
+  extremity?: 'hand' | 'foot' | 'thumb';
 }
 
 /** Complete render plan for a frame */

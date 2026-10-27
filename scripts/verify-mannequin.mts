@@ -86,5 +86,74 @@ mq = plan(true).mannequinInstructions ?? [];
 ok(mq.length === 1 && mq[0]!.nodeId === root.id, `⑤ 子不可见：仅根（实际 ${mq.length}）`);
 (child as any).visible = true;
 
+// ⑥ 手脚延伸：无精灵四肢链末端叶子（腕/踝）伸手掌/脚掌 + 拇指
+const mkNode = (id: string, name: string, parentId?: string) => {
+  const n = createDefaultNode(name, name);
+  n.id = id;
+  (n.transform as any).variantIndex = 6;
+  if (parentId) n.parentId = parentId;
+  return n;
+};
+const link = (parent: ReturnType<typeof mkNode>, node: ReturnType<typeof mkNode>, dx: number, dy: number) => {
+  const sockId = `sock_${node.id}`;
+  parent.children = [...(parent.children ?? []), node.id];
+  parent.sockets = [...(parent.sockets ?? []), {
+    id: sockId, name: node.name, basePosition: { x: 0, y: 0 }, directionOffsets: {},
+    offset3D: { x: pxToSub(dx), y: pxToSub(dy), z: 0 },
+  } as never];
+  node.attachment = { type: 'socket', parentSocketId: sockId, plug: { x: 0, y: 0 } } as never;
+};
+const pelvis = mkNode('mq2_pelvis', 'pelvis');
+const uarm = mkNode('mq2_uarm', 'upper_arm_L', pelvis.id);
+const farm = mkNode('mq2_farm', 'forearm_L', uarm.id);
+const wrist = mkNode('mq2_wrist', 'wrist_L', farm.id);
+const thigh = mkNode('mq2_thigh', 'thigh_R', pelvis.id);
+const shin = mkNode('mq2_shin', 'shin_R', thigh.id);
+const ankle = mkNode('mq2_ankle', 'ankle_R', shin.id);
+link(pelvis, uarm, -20, 30);
+link(uarm, farm, 0, 30);
+link(farm, wrist, 0, 30);
+link(pelvis, thigh, 15, 40);
+link(thigh, shin, 0, 35);
+link(shin, ankle, 0, 35);
+const nodes2 = Object.fromEntries([pelvis, uarm, farm, wrist, thigh, shin, ankle].map((n) => [n.id, n]));
+const character2 = {
+  id: 'mqchar2', name: '手脚测试', nodes: nodes2, rootNodeId: pelvis.id, sprites: {},
+  costumeSets: [], activeCostumeSetId: undefined, direction: 6, latitude: 0,
+} as unknown as Character;
+const plan2 = () => generateRenderPlan(character2, 0, 256, 256, 'pixel-perfect', 12,
+  undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, {},
+  undefined, undefined, undefined, undefined, undefined, true);
+const mq2 = plan2().mannequinInstructions ?? [];
+const ext = mq2.filter((m) => m.extremity);
+const segLenOf = (m: (typeof mq2)[number]) =>
+  Math.hypot(subToPx(m.x2) - subToPx(m.x1), subToPx(m.y2) - subToPx(m.y1));
+const hand = ext.find((m) => m.extremity === 'hand');
+const thumb = ext.find((m) => m.extremity === 'thumb');
+const foot = ext.find((m) => m.extremity === 'foot');
+ok(!!hand && hand.nodeId === wrist.id, `⑥ 腕叶子出手掌段（实际 extremities: ${ext.map((m) => m.extremity).join(',')}）`);
+ok(!!foot && foot.nodeId === ankle.id, '⑥ 踝叶子出脚掌段');
+ok(ext.length === 3, `⑥ 延伸段共 3（手+拇指+脚），非叶子不出（实际 ${ext.length}）`);
+if (hand) {
+  ok(Math.abs(segLenOf(hand) - 30 * (0.16 / 0.44)) < 1.5, `⑥ 手长 = 前臂 30×(0.16/0.44) ≈ 10.9（实际 ${segLenOf(hand).toFixed(1)}）`);
+  const dx = subToPx(hand.x2) - subToPx(hand.x1), dy = subToPx(hand.y2) - subToPx(hand.y1);
+  ok(Math.abs(dx) < 1 && dy > 0, '⑥ 手沿末段方向（向下）伸出');
+  ok(hand.r2 < hand.r1, '⑥ 手末端半径收小');
+}
+if (thumb) {
+  const along = subToPx(thumb.y2) - subToPx(thumb.y1);
+  const perp = Math.abs(subToPx(thumb.x2) - subToPx(thumb.x1));
+  ok(Math.abs(along - 10.9 * 0.3) < 1.5 && Math.abs(perp - 10.9 * 0.4) < 1.5,
+    `⑥ 拇指：沿手向 0.3 + 法向 0.4（实际沿 ${along.toFixed(1)} / 法 ${perp.toFixed(1)}）`);
+}
+if (foot) {
+  ok(Math.abs(segLenOf(foot) - 35 * (0.15 / 0.45)) < 1.5, `⑥ 脚长 = 小腿 35×(0.15/0.45) ≈ 11.7（实际 ${segLenOf(foot).toFixed(1)}）`);
+}
+// ⑦ 手指命名的叶子不延伸（指节末端不冒手掌）
+(wrist as any).name = 'finger_L';
+const ext2 = (plan2().mannequinInstructions ?? []).filter((m) => m.extremity);
+ok(ext2.length === 1 && ext2[0]!.extremity === 'foot', `⑦ finger 叶子：只剩脚延伸（实际 ${ext2.map((m) => m.extremity).join(',')}）`);
+(wrist as any).name = 'wrist_L';
+
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
 process.exit(fails === 0 ? 0 : 1);
