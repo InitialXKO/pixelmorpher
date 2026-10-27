@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Eraser, PenLine, RotateCcw } from 'lucide-react';
-import { useProjectStore } from '@/lib/store';
+import { useProjectStore, useEditorStore } from '@/lib/store';
 import {
   buildSkeletonFromStrokes, strokeLimbJoints, strokeTorsoJoints, type Pt,
 } from '@/lib/stroke-build';
@@ -168,6 +168,9 @@ export default function StrokeBuildWizard({ open, onClose }: { open: boolean; on
     store.updateUnifiedCharacter(character.id, {
       nodes: built.nodes, rootNodeId: built.rootNodeId, ikChains: built.ikChains,
     });
+    // 火柴人生成的是一副无精灵骨架：自动打开一次人偶兜底，让新角色
+    // 落地即有体量形象（已开则保持不变，之后仍可从画布右键关掉）
+    useEditorStore.getState().setMannequinFallback(true);
     const snapped = Object.entries(built.snapped).filter(([, v]) => v).length;
     setNote(`已创建：15 个节点，${snapped} 条肢体起笔吸附成功`);
     onClose();
