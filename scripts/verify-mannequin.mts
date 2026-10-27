@@ -203,5 +203,39 @@ ok(capsuleTangents(5, 5, 8, 5, 5, 3) === null, '⑨ 同心返回 null（执行�
 const childMq9 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === child.id);
 ok(!!childMq9 && childMq9.r1 === 12, `⑨ 子段起点半径 = 父 jointWidth/2 = 12（实际 ${childMq9?.r1}）`);
 
+// ⑩ 手脚/头跟末端节点自身旋转：转腕/踝/头节点 90°（关节位置不变），
+// 延伸方向/蛋长轴必须跟着转约 90°（此前方向取自段几何、纹丝不动）
+const dirOf = (m: (typeof mq2)[number]) => {
+  const dx = subToPx(m.x2) - subToPx(m.x1), dy = subToPx(m.y2) - subToPx(m.y1);
+  const l = Math.hypot(dx, dy) || 1;
+  return { x: dx / l, y: dy / l };
+};
+const hand0 = (plan2().mannequinInstructions ?? []).find((m) => m.extremity === 'hand')!;
+const foot0 = (plan2().mannequinInstructions ?? []).find((m) => m.extremity === 'foot')!;
+const head0 = (plan2().mannequinInstructions ?? []).find((m) => m.nodeId === headN.id && !m.extremity)!;
+(wrist.transform as any).angle = 90;
+(ankle.transform as any).angle = 90;
+(headN.transform as any).angle = 90;
+const mq10 = plan2().mannequinInstructions ?? [];
+const hand1 = mq10.find((m) => m.extremity === 'hand')!;
+const foot1 = mq10.find((m) => m.extremity === 'foot')!;
+const head1 = mq10.find((m) => m.nodeId === headN.id && !m.extremity)!;
+const dotH = Math.abs(dirOf(hand0).x * dirOf(hand1).x + dirOf(hand0).y * dirOf(hand1).y);
+const dotF = Math.abs(dirOf(foot0).x * dirOf(foot1).x + dirOf(foot0).y * dirOf(foot1).y);
+ok(!!hand1 && dotH < 0.35, `⑩ 转腕 90°：手延伸方向跟着转（与原方向 |dot| ${dotH.toFixed(2)} < 0.35）`);
+ok(!!foot1 && dotF < 0.35, `⑩ 转踝 90°：脚延伸方向跟着转（|dot| ${dotF.toFixed(2)} < 0.35）`);
+ok(Math.abs(segLenOf(hand1) - segLenOf(hand0)) < 1.5, '⑩ 手长不随旋转变');
+if (head0?.head && head1?.head) {
+  let dAng = Math.abs(head1.head.angleRad - head0.head.angleRad) % Math.PI;
+  if (dAng > Math.PI / 2) dAng = Math.PI - dAng;
+  const deg = (dAng * 180) / Math.PI;
+  ok(deg > 80 && deg < 100, `⑩ 转头 90°：蛋长轴跟着转 ${deg.toFixed(0)}°`);
+} else {
+  ok(false, '⑩ 头蛋形缺失');
+}
+(wrist.transform as any).angle = 0;
+(ankle.transform as any).angle = 0;
+(headN.transform as any).angle = 0;
+
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
 process.exit(fails === 0 ? 0 : 1);

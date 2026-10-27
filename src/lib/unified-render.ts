@@ -1548,6 +1548,7 @@ function generateMannequinInstructions(
   claimedParents: ReadonlySet<string>,
   clothing: { sleeveRatio: number; pantsRatio: number },
   faceGuide?: boolean,
+  geometryDirection?: DirectionIndex,
 ): MannequinRenderInstruction[] {
   const out: MannequinRenderInstruction[] = [];
   const centerSubX = pxToSub(canvasWidth / 2);
@@ -1558,6 +1559,25 @@ function generateMannequinInstructions(
       x: (centerSubX + (p.canvasX as SubPixel)) as SubPixel,
       y: (centerSubY + (p.canvasY as SubPixel)) as SubPixel,
     };
+  };
+  // 节点 frame 的 +Y 轴在画布上的单位方向（投影后）：末端节点自身的
+  // 旋转只存在于 frame 里（不改变任何关节位置），手脚延伸与蛋形头
+  // 必须读它才跟着转——与 IK 尖端口径 frameYAxisWorld 同源同法。
+  // 投影后近零（骨正对镜头）返回 null，调用方回退段方向。
+  const frameDirCanvas = (nodeId: string): { x: number; y: number } | null => {
+    const wt = worldTransforms.get(nodeId);
+    if (!wt) return null;
+    const yAxis = frameYAxisWorld(wt.worldFrame, geometryDirection ?? wt.variantIndex);
+    const p0 = project(wt.worldX, wt.worldY, wt.worldZ);
+    const p1 = project(
+      (wt.worldX + pxToSub(yAxis.x)) as SubPixel,
+      (wt.worldY + pxToSub(yAxis.y)) as SubPixel,
+      (wt.worldZ + pxToSub(yAxis.z)) as SubPixel,
+    );
+    const dx = subToPx(p1.x) - subToPx(p0.x), dy = subToPx(p1.y) - subToPx(p0.y);
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-4) return null;
+    return { x: dx / len, y: dy / len };
   };
 
   // 第一遍：各节点的关节位置与连接点（起点）
@@ -1663,7 +1683,7 @@ function generateMannequinInstructions(
   }
 
   // 手脚延伸（借 PoseSketcher 口径）：肢体末端叶子关节（腕/踝）的胶囊
-  // 在末段方向上再伸一段——手掌自腕伸末段长 ×(0.16/0.44)、脚掌自踝伸
+  // 沿末端节点 frame 方向再伸一段——手掌自腕伸末段长 ×(0.16/0.44)、脚掌自踝伸
   // 末段长 ×(0.15/0.45)（原项目腕 0.84/踝 0.85 切分换算到末段占比），
   // 末端半径收至 0.64 倍；手另补拇指支段（自腕起：沿手向 0.3 倍手长
   // + 法向 0.4 倍手长，侧别沿父链名字判左右、判不出取 +1，同原项目
@@ -1683,7 +1703,11 @@ function generateMannequinInstructions(
     const ex = subToPx(j.ex), ey = subToPx(j.ey);
     const segLen = Math.hypot(ex - sx, ey - sy);
     if (segLen < 2) continue;
-    const ux = (ex - sx) / segLen, uy = (ey - sy) / segLen;
+    // 延伸方向 = 末端节点 frame 的 +Y（与 IK 尖端同一朝向）：腕/踝
+    // 节点自身旋转时手脚跟着转；段方向（父关节→本关节）只作回退
+    const segDir = { x: (ex - sx) / segLen, y: (ey - sy) / segLen };
+    const dirF = frameDirCanvas(nodeId) ?? segDir;
+    const ux = dirF.x, uy = dirF.y;
     const r = radiusOf(nodeId);
     const extLen = kind === 'arm' ? segLen * (0.16 / 0.44) : segLen * (0.15 / 0.45);
     out.push({
@@ -1735,6 +1759,16 @@ function generateMannequinInstructions(
     const segLen = Math.hypot(ex - sx, ey - sy);
     let ax = 0, ay = -1;
     if (segLen > 0.5) { ax = (ex - sx) / segLen; ay = (ey - sy) / segLen; }
+    // 长轴跟头节点 frame 转（点头/歪头都跟）：frame +Y 定轴向，
+    // 段方向只用来定号——保证轴指向冠侧、五官不上下颠倒
+    const fDir = frameDirCanvas(nodeId);
+    if (fDir) {
+      ax = fDir.x; ay = fDir.y;
+      if (segLen > 0.5) {
+        const segX = (ex - sx) / segLen, segY = (ey - sy) / segLen;
+        if (ax * segX + ay * segY < 0) { ax = -ax; ay = -ay; }
+      }
+    }
     const a = Math.max(segLen / 2, radiusOf(nodeId) * 1.8, 5);
     const b = a * 0.7;
     ins.head = { cx: j.ex, cy: j.ey, a, b, angleRad: Math.atan2(ay, ax) };
@@ -2517,6 +2551,7 @@ export function generateRenderPlan(
         new Set(nodeInstructions.map((i) => i.nodeId)), claimedParents,
         { sleeveRatio: editorFx?.sleeveRatio ?? 0, pantsRatio: editorFx?.pantsRatio ?? 0 },
         editorFx?.faceGuide ?? false,
+        geometryDirection,
       )
     : [];
 
