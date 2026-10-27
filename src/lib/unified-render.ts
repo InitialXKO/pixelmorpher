@@ -2326,7 +2326,7 @@ export function executeRenderPlan(
  * These are applied in the sprite → canvas conversion step.
  */
 const PIXEL_MOD_TYPES: ModifierType[] = [
-  'color_replace', 'outline', 'dither', 'pixel_displace',
+  'color_replace', 'outline', 'cleanup', 'dither', 'pixel_displace',
   'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip', 'pixel_edit',
 ];
 

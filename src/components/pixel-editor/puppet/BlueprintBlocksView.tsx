@@ -34,6 +34,7 @@ const BLOCK_COLORS: Record<string, string> = {
   teleport: 'bg-[#FF6680]', crt_off: 'bg-[#FF6680]', bend: 'bg-[#FF6680]',
   elliptical_compress: 'bg-[#FF6680]', dumbbell_stretch: 'bg-[#FF6680]',
   pillow_stretch: 'bg-[#FF6680]', hyperbolic_stretch: 'bg-[#FF6680]', ring_ripple: 'bg-[#FF6680]',
+  cleanup: 'bg-[#FF6680]',
 };
 
 const BLOCK_TEMPLATES: Record<string, string> = {
@@ -61,6 +62,7 @@ const BLOCK_TEMPLATES: Record<string, string> = {
   bend: '弯曲 量 {bendAmount}', elliptical_compress: '椭圆压缩',
   dumbbell_stretch: '哑铃拉伸', pillow_stretch: '枕形拉伸',
   hyperbolic_stretch: '双曲拉伸', ring_ripple: '波纹 幅度 {amplitude}',
+  cleanup: '去孤点 最小块 {minSize}',
 };
 
 export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocksViewProps) {

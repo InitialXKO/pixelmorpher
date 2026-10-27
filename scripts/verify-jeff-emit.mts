@@ -190,5 +190,55 @@ console.log('U 组：全局后期（色板主题/透明度分级/抖动消散）
   }));
 }
 
+// ---- C 组：甲6 cleanup 去孤点 ----
+console.log('C 组：去孤点算子（注册表 + 蓝图求值 + 列表转图三路）');
+{
+  const { modifierRegistry } = await import('../src/lib/engine/pixel-modifiers');
+  const G = (rows: string[]): (string | null)[][] => rows.map((r) => r.split('').map((c) => (c === '#' ? '#a0a0a0' : null)));
+  // 7×6（共 14 点）：3×3 块（9) + 孤点（5,1) + 空行 + 2 连块 + 两孤点
+  const grid = G([
+    '###....',
+    '###..#.',
+    '###....',
+    '.......',
+    '..##..#',
+    '.#.....',
+  ]);
+  const count = (g: (string | null)[][]) => g.flat().filter((c) => c).length;
+  const handler = modifierRegistry.get('cleanup');
+  check('C1 注册表有 cleanup', !!handler);
+  const r2 = handler!({ minSize: 2 }, grid, 0);
+  check('C2 minSize=2：三个孤点清除（14→11）', count(r2) === 11, `实得 ${count(r2)}`);
+  const r3 = handler!({ minSize: 3 }, grid, 0);
+  check('C3 minSize=3：2 连块也清除（14→9）', count(r3) === 9, `实得 ${count(r3)}`);
+  const r1 = handler!({ minSize: 1 }, grid, 0);
+  check('C4 minSize=1：原样', count(r1) === 14);
+  check('C5 原图未被改动（不可变）', count(grid) === 14);
+  check('C6 大块保留颜色与位置', r3[0]![0] === '#a0a0a0' && r3[2]![2] === '#a0a0a0');
+  // 蓝图求值原路：sprite_source → cleanup 节点
+  const { evaluateNodeOutput } = await import('../src/lib/blueprint/eval');
+  const { asPixels } = await import('../src/lib/blueprint/ir');
+  const graph = {
+    nodes: [
+      { id: 'src', type: 'sprite_source', params: {}, inputs: {}, ui: { x: 0, y: 0 } },
+      { id: 'c1', type: 'cleanup', params: { minSize: 3 }, inputs: { pixels: { nodeId: 'src', output: 'pixels' } }, ui: { x: 1, y: 0 } },
+      { id: 'k', type: 'const', params: { value: 2 }, inputs: {}, ui: { x: 0, y: 1 } },
+      { id: 'c2', type: 'cleanup', params: { minSize: 3 }, inputs: { pixels: { nodeId: 'src', output: 'pixels' }, minSize: { nodeId: 'k', output: 'out' } }, ui: { x: 2, y: 0 } },
+    ],
+    outputId: 'c1',
+  };
+  const ctx = { frame: 0, frameRate: 12, vars: {}, spritePixels: grid } as never;
+  const out1 = evaluateNodeOutput(graph as never, 'c1', ctx) as Record<string, unknown> | null;
+  const g1 = out1 ? asPixels(out1.pixels as never) : null;
+  check('C7 蓝图节点求值：minSize=3 生效（余 9）', !!g1 && count(g1) === 9, g1 ? `实得 ${count(g1)}` : '无输出');
+  const out2 = evaluateNodeOutput(graph as never, 'c2', ctx) as Record<string, unknown> | null;
+  const g2 = out2 ? asPixels(out2.pixels as never) : null;
+  check('C8 接线覆盖 minSize=2：2 连块保留（余 11）', !!g2 && count(g2) === 11, g2 ? `实得 ${count(g2)}` : '无输出');
+  // 列表 → 图：modifiersToBlueprint 链上出现 cleanup 节点
+  const { modifiersToBlueprint } = await import('../src/lib/blueprint/migrate');
+  const g3 = modifiersToBlueprint([{ id: 'm1', type: 'cleanup', enabled: true, params: { minSize: 2 } } as never]);
+  check('C9 修改器列表转图含 cleanup 节点', !!g3 && g3.nodes.some((n) => n.type === 'cleanup'));
+}
+
 console.log(`\n合计：${pass} 过 / ${fail} 败`);
 if (fail > 0) process.exit(1);

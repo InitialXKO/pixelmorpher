@@ -1083,6 +1083,20 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const result = applyLocalInflate(inputPixels, w, h, params, ctx.frame, ctx.frameRate, 1);
     return { pixels: pixelsVal(result) };
   },
+  cleanup: (n, i, ctx): Record<string, BlueprintValue> => {
+    const inputPixels = asPixels(i.pixels as BlueprintValue);
+    if (!inputPixels) return {};
+    const { modifierRegistry } = require('../engine/pixel-modifiers');
+    const handler = modifierRegistry.get('cleanup');
+    if (!handler) return {};
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(n.params)) params[k] = v;
+    for (const [k, v] of Object.entries(i)) {
+      if (k !== 'pixels' && k !== 't' && k !== 'gate') params[k] = asNumber(v as BlueprintValue);
+    }
+    const result = handler(params, inputPixels, ctx.frame);
+    return { pixels: pixelsVal(result) };
+  },
   // ---- 补齐的像素修改器：走 modifierRegistry ----
   color_replace: (n, i, ctx): Record<string, BlueprintValue> => {
     const inputPixels = asPixels(i.pixels as BlueprintValue);
@@ -2384,6 +2398,7 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   pillow_stretch: '枕形拉伸',
   hyperbolic_stretch: '双曲拉伸',
   ring_ripple: '环形波纹',
+  cleanup: '去孤点',
   // 新增补全
   color_replace: '颜色替换',
   cylinder_rotate: '圆柱旋转',

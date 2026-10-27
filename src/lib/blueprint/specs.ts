@@ -294,6 +294,11 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     outputs: ['pixels'],
     params: ['amplitude', 'frequency', 'progress'],
   },
+  cleanup: {
+    inputs: ['pixels', 't', 'minSize'],
+    outputs: ['pixels'],
+    params: ['minSize'],
+  },
   local_inflate: {
     inputs: ['pixels', 't', 'centerX', 'centerY', 'radius', 'strength'],
     outputs: ['pixels'],
