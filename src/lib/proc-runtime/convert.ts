@@ -14,7 +14,8 @@ import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, Pix
 import type { AnimationClip } from '../types';
 import { buildParametricSprite } from './main-canvas';
 import { subToPx, projectToView, frameYAxisWorld, directionTrig } from '../unified-types';
-import { computeWorldTransforms, computeRestWorldTransforms, stackBendForNode, rotateWorldTransformsForYaw, facingYawDeltaRad } from '../unified-render';
+import { computeWorldTransforms, computeRestWorldTransforms, stackBendForNode, rotateWorldTransformsForYaw, facingYawDeltaRad, stepClampState, type ClampStateMap } from '../unified-render';
+import { cloneClampState, steppedClampState } from '../clamp-session';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { computeStackOps, rasterizeStackOpsData, STACK_VIEW_ELEVATION_DEG, type StackDrawOp } from '../stack-render';
 import { packMaskBits, unpackMaskBits } from '../sprite-marks';
@@ -1269,12 +1270,30 @@ export function convertCharacterToRuntimePackage(
       // 采样一个窗：工程帧 [startF, startF + D] 共 D+1 个样本（末样本为循环接点）；
       // 与部件摆放同一投影（projectToView，朝向取当帧根节点 variantIndex），
       // 运行时系（角度弧度、y 取反、px）
+      const hasClamps = (character.clampAnchors ?? []).some((a) => a.enabled);
+      const clampSnapshots = new Map<number, ClampStateMap>();
+      if (hasClamps && (character.clampAnchors ?? []).some((a) => a.enabled && a.trigger.kind === 'scene')) {
+        warnings.push('钳制锚定：scene 触发不进采样，运行时按 anchor 点标记对全部固体自动锚定');
+      }
       const sampleWindow = (startF: number, D: number) => {
         const samples = new Map<string, Array<{ a: number; x: number; y: number; fore: number }>>();
         const stackSamples = new Map<string, Array<StackFrameSample | null>>();
         for (const snId of stackNodes.keys()) stackSamples.set(snId, []);
+        // 钳制状态：整窗从空状态顺序步进并在每帧界留快照；片段窗从
+        // 快照起算（裁决 6：convert 整窗跨片段延续、片段起点缓存）
+        let clampState: ClampStateMap | null = null;
+        if (hasClamps) {
+          if (startF === 0) clampState = new Map();
+          else if (clampSnapshots.has(startF)) clampState = cloneClampState(clampSnapshots.get(startF)!);
+          else clampState = steppedClampState(stripped, startF - 1, 0, { canvasWidth: 512, canvasHeight: 512, frameRate: projectFpsTop });
+        }
         for (let f = startF; f <= startF + D; f++) {
-          const wf = computeWorldTransforms(stripped, f, 512, 512, projectFpsTop);
+          let wf = computeWorldTransforms(stripped, f, 512, 512, projectFpsTop);
+          if (clampState) {
+            stepClampState(stripped, wf, clampState);
+            if (startF === 0) clampSnapshots.set(f + 1, cloneClampState(clampState));
+            wf = computeWorldTransforms(stripped, f, 512, 512, projectFpsTop, undefined, undefined, undefined, undefined, { frozen: clampState });
+          }
           const dirF = (character.rootNodeId ? wf.get(character.rootNodeId)?.variantIndex : undefined) ?? rootDir;
           for (const node of Object.values(character.nodes)) {
             const w = wf.get(node.id);

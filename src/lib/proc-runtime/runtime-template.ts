@@ -1873,6 +1873,61 @@ const rec = { active: false, frames: [], start: null };
 const replay = { active: false, idx: 0, frames: [], gif: false };
 function charFeetY() { return moveMode === 'top' ? char.py : char.y; }
 function charOriginY() { return charFeetY() - localGround; }
+// ---- 钳制锚定（运行时，PR #55 裁决 3/5）：部件精灵上名为 anchor 的
+// 点标记自动成为锚点（约定、UI 无感）；逐帧在表演求值后对全部场景
+// 固体求值：侧视贴顶面冻结、俯视进区域冻结，锚点全位置不滑动，
+// 整角色反向横移由 Δ 回写物理体承担（着地/抓边从回写后位置判定）。
+// 硬优先级：部件序最靠前的生效锚独占 Δ。状态键 = 部件 key。
+const anchorState = new Map();
+function anchorPointWorld(a) {
+  const c = Math.cos(a.rot), s = Math.sin(a.rot);
+  const gx = a.local[0] * a.dsx, gy = a.local[1] * a.dsy;
+  return [a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c];
+}
+function runAnchorPass(cands, els, anchorsByKey) {
+  if (!cands.length) { if (anchorState.size) anchorState.clear(); return; }
+  const alive = new Set();
+  let delta = null;
+  for (const cd of cands) {
+    alive.add(cd.key);
+    const p = anchorPointWorld(cd);
+    let st = anchorState.get(cd.key);
+    if (moveMode === 'top') {
+      if (st && (p[0] < st.qx - 6 || p[0] > st.qx + st.qw + 6 || p[1] < st.qy - 6 || p[1] > st.qy + st.qh + 6)) { anchorState.delete(cd.key); st = null; }
+      if (!st) {
+        for (const q of solids) {
+          if (p[0] >= q.x && p[0] <= q.x + q.w && p[1] >= q.y && p[1] <= q.y + q.h) {
+            st = { x: p[0], y: p[1], qx: q.x, qy: q.y, qw: q.w, qh: q.h };
+            anchorState.set(cd.key, st);
+            break;
+          }
+        }
+      }
+    } else {
+      if (st && (p[0] < st.qx - 2 || p[0] > st.qx + st.qw + 2 || p[1] > st.top + 10 || p[1] < st.top - 40)) { anchorState.delete(cd.key); st = null; }
+      if (!st) {
+        let best = null;
+        for (const q of solids) {
+          const top = q.y + q.h;
+          if (p[0] >= q.x && p[0] <= q.x + q.w && p[1] <= top + 2 && p[1] >= top - 28) {
+            if (!best || Math.abs(p[1] - top) < Math.abs(p[1] - best.top)) best = { top: top, qx: q.x, qw: q.w };
+          }
+        }
+        if (best) { st = { x: p[0], y: best.top, top: best.top, qx: best.qx, qw: best.qw }; anchorState.set(cd.key, st); }
+      }
+    }
+    if (st && !delta) {
+      const dx = st.x - p[0], dy = st.y - p[1];
+      if (dx !== 0 || dy !== 0) delta = [dx, dy];
+    }
+  }
+  for (const k of Array.from(anchorState.keys())) if (!alive.has(k)) anchorState.delete(k);
+  if (!delta) return;
+  char.x += delta[0];
+  if (moveMode === 'top') char.py += delta[1]; else char.y += delta[1];
+  for (const el of els) { el.pos[0] += delta[0]; el.pos[1] += delta[1]; }
+  for (const rec of anchorsByKey.values()) { rec.ctr[0] += delta[0]; rec.ctr[1] += delta[1]; }
+}
 function charBoxH() { return -localGround + 8; }
 let currentCostume = (EMBEDDED.defaultCostume && COSTUMES[EMBEDDED.defaultCostume])
   ? EMBEDDED.defaultCostume
@@ -2533,9 +2588,11 @@ function startRecording() {
   if (replay.active) endReplay();
   stopAllPerfs(); behaviorEpoch = elapsed;
   rec.frames = []; rec.start = snapshotChar(); rec.active = true;
+  anchorState.clear(); // 录制起点即锚定状态重置点（回放同口径重演）
   refreshRecPanel();
 }
 function startReplay(withGif) {
+  anchorState.clear();
   if (!rec.frames.length || !rec.start) return;
   rec.active = false;
   restoreChar(rec.start);
@@ -2995,6 +3052,7 @@ function frame(now) {
   const pixelJobs = [];
   const partAnchorsByKey = new Map();
   const dynAnchors = [];
+  const clampCands = [];
   sorted.forEach((part, idx) => {
     const entry = state.map.get(part.key);
     if (!entry) return;
@@ -3138,10 +3196,17 @@ function frame(now) {
       : [0, 0];
     // 双锚点查表：全部部件的锚点信息（目标部件未必挂动态模式）
     partAnchorsByKey.set(part.key, { ctr: ctr, rot: rotA, plugC: plugC, dsx: dsx, dsy: dsy });
+    // 钳制锚定候选：名为 anchor 的点标记（瓦片像素 → 部件中心系、y-up）
+    if (entry.marksN && entry.marksN.anchor && tile) {
+      clampCands.push({ key: part.key, ctr: ctr, rot: rotA, dsx: dsx, dsy: dsy,
+        local: [entry.marksN.anchor[0] - tile.w / 2, tile.h / 2 - entry.marksN.anchor[1]] });
+    }
     if (dynList.length > 0) {
       dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: rotA, dynList: dynList, dsx: dsx, dsy: dsy, plugC: plugC, marksN: entry.marksN || null, marksDir: entry.marksDir || null });
     }
   });
+  // 钳制锚定遍：表演求值后、绘制前（Δ 回写物理 + 同步移本帧绘制位）
+  runAnchorPass(clampCands, els, partAnchorsByKey);
   // 动态粒子：瓦片空间模拟（连续钟 elapsed × 包帧率量化帧，
   // 与编辑器同一帧基），发射点随形变缩放，位置经部件旋转落到
   // 世界（与片元采样同式）；绘制分身后/身前两遍夹住部件一遍。

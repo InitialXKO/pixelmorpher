@@ -31,6 +31,7 @@ import StateBlueprintEditor from './StateBlueprintEditor';
 import IKBakeButton from './IKBakeButton';
 import ChainBakePanel from './ChainBakePanel';
 import IKChainEditor from './IKChainEditor';
+import ClampAnchorPanel from './ClampAnchorPanel';
 import ThreeBakeDialog from './ThreeBakeDialog';
 
 interface RigPanelProps {
@@ -269,6 +270,12 @@ export default function RigPanel({
       <div className="pt-2 border-t border-[#1e1e3a]">
         <div className="text-[10px] text-gray-500 mb-1">IK 链</div>
         <IKChainEditor character={selectedCharacter} />
+      </div>
+
+      {/* ---- 钳制锚定 ---- */}
+      <div className="pt-2 border-t border-[#1e1e3a]">
+        <div className="text-[10px] text-gray-500 mb-1">钳制锚定</div>
+        <ClampAnchorPanel character={selectedCharacter} />
       </div>
 
       {/* ---- IK 烘焙 ---- */}
