@@ -14,6 +14,7 @@ import type {
   PaletteColor,
   AnimationClip,
 } from '../types';
+import { beatFrameTags, getBeatTemplate } from '../beat-templates';
 
 export type DccPipelineSlice = {
   addAnimationEvent: (clipId: string, frame: number, name: string, opts?: Partial<Pick<AnimationEvent, 'stringValue' | 'numberValue' | 'objectValue' | 'active' | 'color'>>) => AnimationEvent;
@@ -26,6 +27,8 @@ export type DccPipelineSlice = {
   updateFrameTag: (clipId: string, tagId: string, updates: Partial<FrameTag>) => void;
   getFrameTagsAtFrame: (clipId: string, frame: number) => FrameTag[];
   getFrameTags: (clipId: string) => FrameTag[];
+  /** 套用动作节拍模板：按节拍权重把片段窗切成帧标签（整体替换既有标签），并按模板设定片段循环。模板不存在或片段不存在时返回 false。 */
+  applyBeatTemplate: (clipId: string, templateId: string) => boolean;
   addHitboxShape: (clipId: string, keyframeId: string, name: string, shapeType: HitboxShapeType, data: HitboxShape['data'], opts?: Partial<Pick<HitboxShape, 'active' | 'color' | 'metadata'>>) => HitboxShape;
   removeHitboxShape: (clipId: string, keyframeId: string, hitboxId: string) => void;
   updateHitboxShape: (clipId: string, keyframeId: string, hitboxId: string, updates: Partial<HitboxShape>) => void;
@@ -115,6 +118,19 @@ export const createDccPipelineSlice: StateCreator<ProjectStore, [], [], DccPipel
   getFrameTags: (clipId) => {
     const clip = findClip(get(), clipId);
     return clip?.frameTags || [];
+  },
+  applyBeatTemplate: (clipId, templateId) => {
+    const template = getBeatTemplate(templateId);
+    const clip = findClip(get(), clipId);
+    if (!template || !clip) return false;
+    // 内存里拼好整套标签再一次写入（禁止中途回读快照）
+    const tags = beatFrameTags(clip.startFrame, clip.endFrame, template);
+    get().pushUndo('套用节拍模板');
+    set(s => ({
+      animationClips: s.animationClips.map(c =>
+        c.id === clipId ? { ...c, frameTags: tags, loop: template.loop, updatedAt: Date.now() } : c),
+    }));
+    return true;
   },
 
   // ---- Hitbox Shapes ----
