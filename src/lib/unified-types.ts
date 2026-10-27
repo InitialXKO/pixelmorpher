@@ -1245,7 +1245,7 @@ export interface IKChain {
    * If present, overrides the static target. Use for gait/sine/etc.
    */
   targetBlueprint?: import('./blueprint/ir').BlueprintGraph;
-  /** Solver: '2bone' for 2-joint chains, 'fabrik' for longer */
+  /** 求解器声明：'fabrik' = 强制迭代解；'2bone'（默认）= 按链实际段数自动解析（2 段→2 骨、3 段→3 骨、3 骨+尖端→剥尖端 3 骨），解析不可解与其余长链回落迭代 */
   solver: '2bone' | 'fabrik';
   /** Bend direction for 2-bone (+1/-1) */
   bendDir?: number;

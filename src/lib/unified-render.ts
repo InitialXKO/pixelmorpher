@@ -19,7 +19,7 @@ import type {
   NodeRenderInstruction, DiscRenderInstruction, MannequinRenderInstruction, RenderPlan,
   KeyframeTrack, KeyframePoint, InterpolationMode,
   ModifierInstance, GeneratedItem, AnimationVariable, ParamDriver,
-  IKChain, Mat3, ParentKeyValue,
+  IKChain, Mat3, ParentKeyValue, SpriteStack,
 } from './unified-types';
 import {
   subToPx, halfPixelAlignSub, DEFAULT_MIRROR_MAP, projectToView, rotateInViewPlane,
@@ -29,7 +29,7 @@ import {
   frameViewAngleForDirection, frameYAxisWorld,
   worldToViewBasis, MAT3_IDENTITY, nodeJointDiscDiameter,
 } from './unified-types';
-import { solveIK2Bone3D, solveIKFabrik3D } from './blueprint/ik';
+import { solveIK2Bone3D, solveIK3Bone3D, solveIK3BoneWithTip3D, solveIKFabrik3D } from './blueprint/ik';
 import { DEFAULT_FACE_FEATURES, faceFeaturePoints, faceHalfWidths } from './face-features';
 import { slashFrameCanvas } from './slash-fan';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
@@ -108,7 +108,7 @@ import {
   getEmptyVariableContext,
 } from './unified-animation-resolver';
 import { resolvePieceSprite } from './sprite-resolve';
-import { computeStackOps, rasterizeStackOps, rasterizeStackOpsData } from './stack-render';
+import { computeStackOps, rasterizeStackOps, rasterizeStackOpsData, STACK_VIEW_ELEVATION_DEG, type StackBend } from './stack-render';
 
 // ---- World Transform Computation ----
 
@@ -760,6 +760,7 @@ export function solveChainIKOverrides(
     }
   }
   const points: V3[] = [...pos];
+  const hasTip = tipLength > 1e-6;
   if (tipLength > 1e-6) {
     const yAxis = frameYAxisWorld(fkT[n - 1].worldFrame, geometryDirection ?? fkT[n - 1].variantIndex);
     points.push({
@@ -797,9 +798,11 @@ export function solveChainIKOverrides(
     }
   }
 
-  // 位置求解
+  // 位置求解：策略按实际段数自动匹配（定案）——显式 fabrik 声明优先；
+  // 否则 2 段解析 2 骨、3 段解析 3 骨、4 段且末段为尖端时剥尖端走 3 骨，
+  // 解析不可解的退化构型与其余长链回落 FABRIK。
   let solved: V3[];
-  if (chain.solver === '2bone' && lengths.length === 2) {
+  if (chain.solver !== 'fabrik' && lengths.length >= 2) {
     let pole: V3 = chain.poleTarget3D ? { ...chain.poleTarget3D } : { ...points[1] };
     if (!chain.poleTarget3D && (chain.bendDir ?? 1) < 0) {
       // bendDir=-1 且无显式 pole：把 FK 肘位关于 root→target 轴镜像到另一侧
@@ -814,8 +817,20 @@ export function solveChainIKOverrides(
         z: points[0].z + 2 * proj * d.z - rel.z,
       };
     }
-    const r = solveIK2Bone3D(points[0], target, lengths[0], lengths[1], pole);
-    solved = [points[0], r.mid, r.end];
+    if (lengths.length === 2) {
+      const r = solveIK2Bone3D(points[0], target, lengths[0], lengths[1], pole);
+      solved = [points[0], r.mid, r.end];
+    } else if (lengths.length === 3) {
+      const r3 = solveIK3Bone3D(points[0], target, lengths[0], lengths[1], lengths[2], pole, { p1: points[1], p2: points[2], p3: points[3] });
+      solved = r3
+        ? [points[0], r3.p1, r3.p2, r3.end]
+        : solveIKFabrik3D(points, lengths, target);
+    } else if (lengths.length === 4 && hasTip) {
+      solved = solveIK3BoneWithTip3D(points, lengths, target, pole)
+        ?? solveIKFabrik3D(points, lengths, target);
+    } else {
+      solved = solveIKFabrik3D(points, lengths, target);
+    }
   } else {
     solved = solveIKFabrik3D(points, lengths, target);
   }
@@ -2192,6 +2207,92 @@ export function rotateWorldTransformsForYaw(
   }
 }
 
+/** 静止位世界变换（剥每节点轨道、关 IK、全节点强制朝向 dir）：
+ * 按 nodes 对象身份 + 朝向缓存——动画播放期角色对象不变、逐帧复用。
+ * 拆分工具（node-split）与堆叠接缝弯曲带共用同一静止口径。 */
+const restWtCache = new WeakMap<Record<string, Node>, Map<string, Map<string, WorldTransform>>>();
+export function computeRestWorldTransforms(
+  character: Character,
+  dir: DirectionIndex,
+  geometryDirection?: DirectionIndex,
+): Map<string, WorldTransform> {
+  let byKey = restWtCache.get(character.nodes);
+  if (!byKey) { byKey = new Map(); restWtCache.set(character.nodes, byKey); }
+  const key = `${dir}|${geometryDirection ?? ''}`;
+  let hit = byKey.get(key);
+  if (hit) return hit;
+  const nodes: Record<string, Node> = {};
+  for (const n of Object.values(character.nodes)) {
+    nodes[n.id] = { ...n, tracks: {}, transform: { ...n.transform, variantIndex: dir } };
+  }
+  const clone: Character = {
+    ...character,
+    nodes,
+    ikChains: (character.ikChains ?? []).map((c) => ({ ...c, enabled: false })),
+  };
+  hit = computeWorldTransforms(clone, 0, 512, 512, 12, undefined, undefined, undefined, geometryDirection);
+  byKey.set(key, hit);
+  return hit;
+}
+
+/**
+ * 某节点摞的接缝弯曲带入参：根端取父节点、尖端取关节最贴摞尖端
+ * 的子节点（摞轴长与子关节局部位置比对）；当帧帧取 now、静止帧取
+ * rest（两图须同口径，如连续偏航须都已转）。无可用关节返回 undefined。
+ */
+export function stackBendForNode(
+  node: Node,
+  stack: SpriteStack,
+  now: Map<string, WorldTransform>,
+  rest: Map<string, WorldTransform>,
+  geometryDirection?: DirectionIndex,
+): StackBend | undefined {
+  const selfN = now.get(node.id);
+  const selfR = rest.get(node.id);
+  if (!selfN || !selfR) return undefined;
+  const bend: StackBend = { restFrame: selfR.worldFrame, restAngle: selfR.worldAngle };
+  if (node.parentId) {
+    const pN = now.get(node.parentId);
+    const pR = rest.get(node.parentId);
+    if (pN && pR) {
+      bend.parent = { frame: pN.worldFrame, angle: pN.worldAngle, restFrame: pR.worldFrame, restAngle: pR.worldAngle };
+    }
+  }
+  const totalLen = stack.layerSpriteIds.length * stack.layerThickness;
+  if (totalLen > 0 && node.children.length > 0) {
+    const tipX = stack.origin.x + stack.axis.x * totalLen;
+    const tipY = stack.origin.y + stack.axis.y * totalLen;
+    const tipZ = stack.origin.z + stack.axis.z * totalLen;
+    let bestId: string | null = null;
+    let bestD = Infinity;
+    // 子关节在本节点局部（与插座偏移/摞原点同一空间）：世界位差经
+    // 帧逆变换回局部——applyFrameRotation(转置帧) 是 computeChild-
+    // Transforms 正变换的逆（node-split 摞原点回填同口径，探针 0.00）
+    const basisDir = geometryDirection ?? selfN.variantIndex;
+    for (const cid of node.children) {
+      const cN = now.get(cid);
+      if (!cN) continue;
+      const loc = applyFrameRotation(
+        mat3Transpose(selfN.worldFrame),
+        subToPx(cN.worldX - selfN.worldX),
+        subToPx(cN.worldY - selfN.worldY),
+        subToPx(cN.worldZ - selfN.worldZ),
+        basisDir,
+      );
+      const d = Math.hypot(loc.x - tipX, loc.y - tipY, loc.z - tipZ);
+      if (d < Math.max(2, stack.layerThickness) && d < bestD) { bestD = d; bestId = cid; }
+    }
+    if (bestId) {
+      const cN = now.get(bestId)!;
+      const cR = rest.get(bestId);
+      if (cR) {
+        bend.child = { frame: cN.worldFrame, angle: cN.worldAngle, restFrame: cR.worldFrame, restAngle: cR.worldAngle };
+      }
+    }
+  }
+  return bend.parent || bend.child ? bend : undefined;
+}
+
 /** facingAngle（0=E, 45=NE, …, 270=S）相对离散朝向的偏航增量（弧度） */
 export function facingYawDeltaRad(facingAngle: number, currentDirection: DirectionIndex): number {
   return (((facingAngle - 45 * currentDirection) % 360) * Math.PI) / 180;
@@ -2273,6 +2374,21 @@ export function generateRenderPlan(
     ? facingYawDeltaRad(character.facingAngle, currentDirection as DirectionIndex)
     : 0;
   if (yawDeltaRad !== 0) rotateWorldTransformsForYaw(worldTransforms, yawDeltaRad, geometryDirection);
+
+  // 堆叠接缝弯曲带的静止位帧（懒算一次；连续偏航时同步转一份，
+  // 与当帧 worldTransforms 同口径）
+  let stackRestCache: Map<string, WorldTransform> | undefined;
+  const stackRestTransforms = (): Map<string, WorldTransform> => {
+    if (!stackRestCache) {
+      let rest = computeRestWorldTransforms(character, currentDirection as DirectionIndex, geometryDirection);
+      if (yawDeltaRad !== 0) {
+        rest = new Map(rest);
+        rotateWorldTransformsForYaw(rest, yawDeltaRad, geometryDirection);
+      }
+      stackRestCache = rest;
+    }
+    return stackRestCache;
+  };
 
   // 追随段取样（动态模式跨部件驱动）：源部件位姿取渲染同源的完整
   // 位姿（轨道+蓝图+行为/IK，2026-10-27 改口径），当前帧与滞后帧
@@ -2629,7 +2745,8 @@ export function generateRenderPlan(
     if (stackPiece?.stack) {
       const layerSprites = stackPiece.stack.layerSpriteIds.map((id) => spriteTable[id]);
       if (layerSprites.some(Boolean)) {
-        const res = computeStackOps(stackPiece.stack, layerSprites, worldTf.worldFrame, worldTf.worldAngle);
+        const bend = stackBendForNode(node, stackPiece.stack, worldTransforms, stackRestTransforms(), geometryDirection);
+        const res = computeStackOps(stackPiece.stack, layerSprites, worldTf.worldFrame, worldTf.worldAngle, STACK_VIEW_ELEVATION_DEG, bend);
         if (res.ops.length > 0) {
           stackRender = { ops: res.ops, width: res.width, height: res.height, pivotX: res.pivotX, pivotY: res.pivotY, key: res.key, layerSpriteIds: stackPiece.stack.layerSpriteIds, marks: stackPiece.stack.marks };
         }

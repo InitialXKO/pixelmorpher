@@ -14,6 +14,8 @@ import type {
 import { createDefaultNode, createDefaultCostumeSet, createDefaultCostumePiece } from '../unified-types';
 import type { DirectionIndex } from '../unified-types';
 import { cloneSubtreeTransposed, cloneClipDataForTranspose } from '../clone-transpose';
+import { splitNodeSegment } from '../node-split';
+import type { DirectionIndex as SplitDirectionIndex } from '../unified-types';
 import { syncCharacterPatternBlueprints } from '../blueprint/pattern-sync';
 
 export type CharacterSlice = {
@@ -31,6 +33,9 @@ export type CharacterSlice = {
   cloneNodeSubtreeTransposed: (characterId: string, rootNodeId: string, thetaDeg: number) => string | null;
   /** 纯复制子树（不转位）：与转位克隆同一套引用跟随，仅不挂 rotate 修改器。返回新根 id */
   cloneNodeSubtree: (characterId: string, rootNodeId: string) => string | null;
+  /** 节点拆分（工具走甲）：在段 nodeId→childId 中插入新关节（childId=null 为叶子），
+   * 精灵逐向切/摞按层断/参数化按档，一次写入（一个撤销步）。 */
+  splitUnifiedNode: (characterId: string, nodeId: string, childId: string | null, t: number) => { ok: boolean; error?: string; report: string[]; midNodeId?: string };
 
   // ---- Node Track Keys（轨道附件轨与帧级操作；姿态通道点由 writePuppetPoseKeyframe 等直写） ----
   /** 写修饰器组轨上某帧的点（空数组 = 删点） */
@@ -316,6 +321,29 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
       ),
     }));
     return result.newRootId;
+  },
+
+  splitUnifiedNode: (characterId, nodeId, childId, t) => {
+    const state = get();
+    const character = state.unifiedCharacters[characterId];
+    if (!character) return { ok: false, error: '角色不存在', report: [] as string[] };
+    const direction = ((character.nodes[character.rootNodeId]?.transform.variantIndex ?? 2) as SplitDirectionIndex);
+    const out = splitNodeSegment({ character, sprites: state.sprites, nodeId, childId, t, direction });
+    if (!out.ok || !out.character) {
+      return { ok: false, error: out.error, report: out.report };
+    }
+    state.pushUndo('拆分节点');
+    const mergedSprites = { ...state.sprites };
+    for (const sp of out.newSprites ?? []) if (sp.id) mergedSprites[sp.id] = sp;
+    set((s) => ({
+      unifiedCharacters: {
+        ...s.unifiedCharacters,
+        [characterId]: { ...out.character!, updatedAt: Date.now() },
+      },
+      sprites: mergedSprites,
+      selectedNodeId: out.midNodeId ?? s.selectedNodeId,
+    }));
+    return { ok: true, report: out.report, midNodeId: out.midNodeId };
   },
 
   updateUnifiedNode: (characterId, nodeId, updates) => {
