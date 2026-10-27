@@ -152,6 +152,14 @@ interface EditorStore extends EditorState {
   // 五官参照（选中节点头部框点位叠画，编辑器显示开关）
   showFaceGuide: boolean;
   toggleFaceGuide: () => void;
+  // 人偶衣物色区（袖口/裤腰比例，编辑器显示参数）
+  mannequinSleeveRatio: number;
+  mannequinPantsRatio: number;
+  setMannequinSleeveRatio: (v: number) => void;
+  setMannequinPantsRatio: (v: number) => void;
+  // 空气透视（距离强度 0..1，0 = 关；编辑器渲染专用）
+  depthFogStrength: number;
+  setDepthFogStrength: (v: number) => void;
   // 节点锁定（中键循环命中/节点树点选时置位）：锁定期间左键只作用于该
   // 节点、不再命中其他节点；画布空白处单击（不拖动）解除。
   nodeLockId: string | null;
@@ -234,6 +242,9 @@ const defaultEditor: EditorState = {
   showPuppetSkeleton: false,
   showMannequinFallback: false,
   showFaceGuide: false,
+  mannequinSleeveRatio: 0.1,
+  mannequinPantsRatio: 0.1,
+  depthFogStrength: 0,
   activePuppetSkeletonId: null,
   nodeLockId: null,
   selectedHitboxId: null,
@@ -324,6 +335,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   togglePuppetSkeleton: () => set((s) => ({ showPuppetSkeleton: !s.showPuppetSkeleton })),
   toggleMannequinFallback: () => set((s) => ({ showMannequinFallback: !s.showMannequinFallback })),
   toggleFaceGuide: () => set((s) => ({ showFaceGuide: !s.showFaceGuide })),
+  setMannequinSleeveRatio: (v) => set({ mannequinSleeveRatio: v }),
+  setMannequinPantsRatio: (v) => set({ mannequinPantsRatio: v }),
+  setDepthFogStrength: (v) => set({ depthFogStrength: v }),
   setActivePuppetSkeletonId: (id) => set({ activePuppetSkeletonId: id }),
   setNodeLockId: (id) => set({ nodeLockId: id }),
   setReferenceImageUrl: (url) => set({ referenceImageUrl: url }),

@@ -294,7 +294,12 @@ export default function PixelCanvas() {
         s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint,
         freshStore.sprites, s.perspectiveForeshorten, freshStore.activeAnimationClipId,
         geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D),
-        useEditorStore.getState().showMannequinFallback);
+        useEditorStore.getState().showMannequinFallback,
+        {
+          sleeveRatio: useEditorStore.getState().mannequinSleeveRatio,
+          pantsRatio: useEditorStore.getState().mannequinPantsRatio,
+          fogStrength: useEditorStore.getState().depthFogStrength,
+        });
     }
 
     // 3. Stroke preview
@@ -515,6 +520,10 @@ export default function PixelCanvas() {
   useEffect(() => { s.markDirty(); }, [showMannequinFallback]); // eslint-disable-line react-hooks/exhaustive-deps
   const showFaceGuide = useEditorStore((x) => x.showFaceGuide);
   useEffect(() => { s.markDirty(); }, [showFaceGuide]); // eslint-disable-line react-hooks/exhaustive-deps
+  const mannequinSleeveRatio = useEditorStore((x) => x.mannequinSleeveRatio);
+  const mannequinPantsRatio = useEditorStore((x) => x.mannequinPantsRatio);
+  const depthFogStrength = useEditorStore((x) => x.depthFogStrength);
+  useEffect(() => { s.markDirty(); }, [mannequinSleeveRatio, mannequinPantsRatio, depthFogStrength]); // eslint-disable-line react-hooks/exhaustive-deps
   // 比例垫图：内置比例人偶生成图 → 走既有参考图通道（与外部图源并列）
   const applyProportionGuide = useCallback((presetId: string, view: ProportionView) => {
     const url = proportionGuideDataUrl(presetId, view);

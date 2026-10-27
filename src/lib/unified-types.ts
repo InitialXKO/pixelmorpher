@@ -1461,6 +1461,8 @@ export interface NodeRenderInstruction {
   /** 残影段（D5）：过去位姿相对当前位姿的增量（画布 px / 度），
    * 由渲染计划按过去帧轨道位姿算出；执行端在本精灵之前逐个绘制 */
   trailGhosts?: { dx: number; dy: number; daDeg: number; alpha: number }[];
+  /** 空气透视（编辑器专用）：本指令向雾色插值的量 0..1（计划期按深度算） */
+  fogAmount?: number;
   /** 动态形变段缩放积（dynSx, dynSy）：场段域缩放口径用（范围跟、形态不跟） */
   dynScale?: [number, number];
   /** 弧线双锚点（D4 二期）：实例序号 → 终点（本节点本地 px，
@@ -1540,6 +1542,9 @@ export interface MannequinRenderInstruction {
   r2: number;
   fillColor: string;
   outlineColor: string;
+  /** 衣物色区：本段自起点起的衣物色占比（0..1，袖口/裤腰比例按肢体
+   * 全长弧长切分到本段的结果）；缺省/0 = 全段皮肤色 */
+  clothRatio?: number;
 }
 
 /** Complete render plan for a frame */

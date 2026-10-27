@@ -1755,6 +1755,12 @@ export interface EditorState {
   showMannequinFallback: boolean;
   /** 五官参照显示开关（选中节点头部框点位叠画，编辑器专用） */
   showFaceGuide: boolean;
+  /** 人偶衣物色区：袖口比例（0..1，编辑器显示参数） */
+  mannequinSleeveRatio: number;
+  /** 人偶衣物色区：裤腰比例（0..1，编辑器显示参数） */
+  mannequinPantsRatio: number;
+  /** 空气透视距离强度（0..1，0 = 关；编辑器渲染专用） */
+  depthFogStrength: number;
   activePuppetSkeletonId: string | null;
   /** 节点锁定（中键循环命中/节点树点选置位；空白单击解除） */
   nodeLockId: string | null;

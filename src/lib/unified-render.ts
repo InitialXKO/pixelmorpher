@@ -1469,6 +1469,20 @@ function generateDiscInstructions(
  * 标尺换成本段长）。被蒙皮快照认领的父节点（claimedParents）精灵
  * 已并入子节点合并图，不算无精灵、跳过。
  */
+/** 肢体类别（衣物色区用）：沿父链上溯节点名，先命中者胜（近者优先） */
+const MQ_ARM_KEYS = ['arm', 'shoulder', '袖', '臂', '肩'];
+const MQ_LEG_KEYS = ['leg', 'thigh', 'hip', '腿', '髋'];
+function mannequinLimbKind(character: Character, node: Node): 'arm' | 'leg' | null {
+  let cur: Node | undefined = node;
+  while (cur) {
+    const name = cur.name.toLowerCase();
+    if (MQ_LEG_KEYS.some((k) => name.includes(k))) return 'leg';
+    if (MQ_ARM_KEYS.some((k) => name.includes(k))) return 'arm';
+    cur = cur.parentId ? character.nodes[cur.parentId] : undefined;
+  }
+  return null;
+}
+
 function generateMannequinInstructions(
   character: Character,
   worldTransforms: Map<string, WorldTransform>,
@@ -1477,6 +1491,7 @@ function generateMannequinInstructions(
   currentDirection: DirectionIndex,
   instructedNodeIds: ReadonlySet<string>,
   claimedParents: ReadonlySet<string>,
+  clothing: { sleeveRatio: number; pantsRatio: number },
 ): MannequinRenderInstruction[] {
   const out: MannequinRenderInstruction[] = [];
   const centerSubX = pxToSub(canvasWidth / 2);
@@ -1517,9 +1532,69 @@ function generateMannequinInstructions(
     return Math.min(16, Math.max(1.5, lenPx * 0.16));
   };
 
+  // 衣物色区：袖口/裤腰比例按肢体全长（弧长）切分到各段。
+  // 全部关节点位（px）供链长计算（不限无精灵节点）。
+  const posPx = new Map<string, { x: number; y: number }>();
+  for (const [id, wt] of worldTransforms) {
+    const p = project(wt.worldX, wt.worldY, wt.worldZ);
+    posPx.set(id, { x: subToPx(p.x), y: subToPx(p.y) });
+  }
+  const clothRatioOf = (node: Node): number => {
+    const kind = mannequinLimbKind(character, node);
+    if (!kind) return 0;
+    const ratio = kind === 'arm' ? clothing.sleeveRatio : clothing.pantsRatio;
+    if (ratio <= 0) return 0;
+    // 链根：沿父链上溯到类别变化处（父不再是同类）的那个节点。
+    // 链根自身的段是「躯干→肩/髋」的挂接段、不算肢体本身，衣物色
+    // 自链根关节（肩/髋）起算，故链根段不染色。
+    let root: Node = node;
+    while (root.parentId) {
+      const parent = character.nodes[root.parentId];
+      if (!parent || mannequinLimbKind(character, parent) !== kind) break;
+      root = parent;
+    }
+    if (node.id === root.id) return 0;
+    // 肢体全长：自链根关节沿子链取最长路径（同类节点内）
+    const dist = (a?: { x: number; y: number }, b?: { x: number; y: number }) =>
+      a && b ? Math.hypot(b.x - a.x, b.y - a.y) : 0;
+    const longestFrom = (n: Node): number => {
+      let best = 0;
+      for (const cid of n.children ?? []) {
+        const c = character.nodes[cid];
+        if (!c || mannequinLimbKind(character, c) !== kind) continue;
+        best = Math.max(best, dist(posPx.get(n.id), posPx.get(c.id)) + longestFrom(c));
+      }
+      return best;
+    };
+    const total = longestFrom(root);
+    if (total <= 0) return 0;
+    // 本段起点距链根的弧长：沿链根→本节点父关节逐段累加
+    let fromRoot = 0;
+    const chainUp: Node[] = [];
+    let cur: Node | undefined = node;
+    while (cur && cur.id !== root.id) { chainUp.push(cur); cur = cur.parentId ? character.nodes[cur.parentId] : undefined; }
+    chainUp.reverse();
+    let prev: Node = root;
+    for (const n of chainUp) {
+      if (n.id !== node.id) fromRoot += dist(posPx.get(prev.id), posPx.get(n.id));
+      prev = n;
+    }
+    // 本节点段的起点 = 父关节：若父不是链根链上节点（父即链根或链外），
+    // fromRoot 应计到父关节为止——上面循环计的是到各祖先关节的累加，
+    // 本段起点（父关节）距根 = fromRoot（循环已把父关节计入）。
+    const segLen = dist(
+      node.parentId ? posPx.get(node.parentId) : posPx.get(node.id),
+      posPx.get(node.id),
+    );
+    if (segLen <= 0) return 0;
+    const covered = Math.min(1, Math.max(0, (ratio * total - fromRoot) / segLen));
+    return covered;
+  };
+
   for (const [nodeId, j] of joints) {
     const node = character.nodes[nodeId]!;
     const parentId = node.parentId ?? undefined;
+    const clothRatio = clothRatioOf(node);
     out.push({
       nodeId,
       x1: j.sx, y1: j.sy, x2: j.ex, y2: j.ey,
@@ -1527,6 +1602,7 @@ function generateMannequinInstructions(
       r2: radiusOf(nodeId),
       fillColor: '#8f9bb0',
       outlineColor: '#4a5160',
+      ...(clothRatio > 0 ? { clothRatio } : {}),
     });
   }
   return out;
@@ -1761,6 +1837,8 @@ export function generateRenderPlan(
   // 人偶兜底（编辑器专用开关）：为无精灵节点生成胶囊人偶指令；
   // 转换/导出路径不传 → 恒为空，运行时包不受影响
   mannequinFallback?: boolean,
+  // 编辑器显示效果（仅主画布传）：人偶衣物色区比例 + 空气透视强度
+  editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number },
 ): RenderPlan {
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
@@ -2281,8 +2359,23 @@ export function generateRenderPlan(
     ? generateMannequinInstructions(
         character, worldTransforms, canvasWidth, canvasHeight, currentDirection,
         new Set(nodeInstructions.map((i) => i.nodeId)), claimedParents,
+        { sleeveRatio: editorFx?.sleeveRatio ?? 0, pantsRatio: editorFx?.pantsRatio ?? 0 },
       )
     : [];
+
+  // Step 5.6: 空气透视（编辑器专用）：按投影深度给节点指令写雾量
+  // （zIndex 主键即深度分桶：值大 = 后画 = 近；远端雾量最大）
+  const fogStrength = editorFx?.fogStrength ?? 0;
+  if (fogStrength > 0 && nodeInstructions.length > 0) {
+    let zMin = Infinity, zMax = -Infinity;
+    for (const i of nodeInstructions) { zMin = Math.min(zMin, i.zIndex); zMax = Math.max(zMax, i.zIndex); }
+    const span = zMax - zMin;
+    if (span > 0) {
+      for (const i of nodeInstructions) {
+        i.fogAmount = fogStrength * (1 - (i.zIndex - zMin) / span) * 0.85;
+      }
+    }
+  }
 
   // Step 6: 节点指令复合排序——主键投影深度（3D 遮挡），次键作者
   // zIndex（node.zIndex），再同则稳定排序保持生成序（层级遍历序）。
@@ -3127,6 +3220,21 @@ function renderNodeSprite(
 
   const pivotXRaw = pivotX; // 未镜像口径的枢轴（发光叠加层按此对位）
 
+  // 空气透视（编辑器专用，计划期按深度写入 fogAmount）：在隔离副本上
+  // 向雾色插值（source-atop 只染有像素处），不污染精灵画布缓存。
+  if (instruction.fogAmount && instruction.fogAmount > 0.001) {
+    const fogCanvas = document.createElement('canvas');
+    fogCanvas.width = spriteCanvas.width;
+    fogCanvas.height = spriteCanvas.height;
+    const fctx = fogCanvas.getContext('2d')!;
+    fctx.drawImage(spriteCanvas, 0, 0);
+    fctx.globalCompositeOperation = 'source-atop';
+    fctx.globalAlpha = Math.min(1, instruction.fogAmount);
+    fctx.fillStyle = '#aebdd4';
+    fctx.fillRect(0, 0, fogCanvas.width, fogCanvas.height);
+    spriteCanvas = fogCanvas;
+  }
+
   // Step 3: Apply horizontal flip if mirrored (STATIC mirror: flip BEFORE rotation)
   let workingCanvas: HTMLCanvasElement = spriteCanvas;
   if (mirror) {
@@ -3387,21 +3495,36 @@ function renderMannequin(
   const rAvg = Math.max(1, (instruction.r1 + instruction.r2) / 2);
   ctx.save();
   ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.strokeStyle = instruction.outlineColor;
-  ctx.lineWidth = rAvg * 2 + 2;
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.strokeStyle = instruction.fillColor;
-  ctx.lineWidth = rAvg * 2;
-  ctx.stroke();
+  const capsule = (ax: number, ay: number, bx: number, by: number, fill: string) => {
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.strokeStyle = instruction.outlineColor;
+    ctx.lineWidth = rAvg * 2 + 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.strokeStyle = fill;
+    ctx.lineWidth = rAvg * 2;
+    ctx.stroke();
+  };
+  capsule(x1, y1, x2, y2, instruction.fillColor);
+  // 衣物色区：本段自起点起 clothRatio 一段覆衣物色（略加粗盖住皮肤色）
+  const cloth = instruction.clothRatio ?? 0;
+  if (cloth > 0) {
+    const cxp = x1 + (x2 - x1) * Math.min(1, cloth);
+    const cyp = y1 + (y2 - y1) * Math.min(1, cloth);
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(cxp, cyp);
+    ctx.strokeStyle = '#5b7ea6';
+    ctx.lineWidth = rAvg * 2;
+    ctx.stroke();
+  }
   ctx.beginPath();
   ctx.arc(x2, y2, Math.max(1, instruction.r2), 0, Math.PI * 2);
-  ctx.fillStyle = instruction.fillColor;
+  ctx.fillStyle = cloth >= 1 ? '#5b7ea6' : instruction.fillColor;
   ctx.fill();
   ctx.strokeStyle = instruction.outlineColor;
   ctx.lineWidth = 1;
@@ -3867,6 +3990,7 @@ function renderPuppetViaUnifiedPipeline(
   activeClipId?: string | null,
   geometryDirection?: DirectionIndex,
   mannequinFallback?: boolean,
+  editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number },
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
@@ -3884,6 +4008,7 @@ function renderPuppetViaUnifiedPipeline(
       geometryDirection,
       pickSlashClip(animationClips, activeClipId, unifiedCharacter.id, currentFrame) ?? null,
       mannequinFallback,
+      editorFx,
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }
@@ -3921,6 +4046,7 @@ export function renderUnified(
   activeClipId?: string | null,
   geometryDirection?: DirectionIndex,
   mannequinFallback?: boolean,
+  editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number },
 ): void {
   if (backgroundColor !== 'transparent') {
     ctx.fillStyle = backgroundColor;
@@ -3932,7 +4058,7 @@ export function renderUnified(
       currentFrame, frameRate, globalModifiers, animationVariables,
       canvasModifierTracks, proceduralAnimations, globalBlueprint, sprites,
       perspectiveForeshorten, animationClips, activeClipId, geometryDirection,
-      mannequinFallback,
+      mannequinFallback, editorFx,
     );
   }
   if (effectTracks) {

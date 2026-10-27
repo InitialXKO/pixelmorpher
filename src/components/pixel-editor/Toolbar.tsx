@@ -50,6 +50,7 @@ import {
   TrajectorySnapToggle,
   SkeletonsToggle,
   ForeshortenToggle,
+  DisplayFxControls,
   ShowAllCharactersToggle,
   OnionSkinToggle,
   PreviewQualitySelect,
@@ -609,6 +610,7 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
 
       <SkeletonsToggle />
       <ForeshortenToggle />
+      <DisplayFxControls />
       <ShowAllCharactersToggle />
       <OnionSkinToggle />
 
