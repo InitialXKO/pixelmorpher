@@ -24,6 +24,10 @@ import { FaceTurnPanel } from './FaceTurnPanel';
 import PathEditor from './PathEditor';
 import HeightmapEditor from './HeightmapEditor';
 import { modifiersToBlueprint } from '@/lib/blueprint/migrate';
+import {
+  BUILTIN_ENTRIES, chainDefOf, chainEntriesOf, loadUserEntries, mergedIndex,
+} from '@/lib/library-entries';
+import { chainDefToModifierParams } from '@/lib/blueprint/chain-presets';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 import { resolveNodeSpriteId } from '@/lib/unified-render';
 
@@ -259,6 +263,35 @@ export default function PuppetModifierPanel() {
     addUnifiedNodeModifier(activePuppetSkeletonId!, node.id, addingType);
   };
 
+  // ---- 链预设落成修改器（甲4 载体乙）：单像素节点预设可用，
+  // 包络取峰值做持续型；多节点链只能走蓝图插入，这里不列 ----
+  const [chainPresetId, setChainPresetId] = useState('');
+  const [chainEntriesVersion, setChainEntriesVersion] = useState(0);
+  const modifierChainEntries = useMemo(() => {
+    void chainEntriesVersion;
+    const idx = mergedIndex(loadUserEntries());
+    return chainEntriesOf([...BUILTIN_ENTRIES, ...loadUserEntries()])
+      .map((e) => {
+        const got = chainDefOf(idx, e.id);
+        return { entry: e, mod: got ? chainDefToModifierParams(got.def) : undefined };
+      })
+      .filter((x) => x.mod !== undefined);
+  }, [chainEntriesVersion]);
+
+  const handleAddChainPreset = () => {
+    const picked = modifierChainEntries.find((x) => x.entry.id === chainPresetId);
+    if (!picked?.mod || !activePuppetSkeletonId) return;
+    addUnifiedNodeModifier(activePuppetSkeletonId, node.id, picked.mod.type);
+    // 新修改器追加在列表末尾，取回后写预设参数（每次读最新状态，不用快照）
+    const st = useProjectStore.getState();
+    const ch = st.unifiedCharacters[activePuppetSkeletonId];
+    const mods = ch?.nodes[node.id]?.modifiers ?? [];
+    const last = mods[mods.length - 1];
+    if (last) {
+      updateUnifiedNodeModifier(activePuppetSkeletonId, node.id, last.id, { params: picked.mod.params });
+    }
+  };
+
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -368,6 +401,32 @@ export default function PuppetModifierPanel() {
         <Button size="sm" onClick={handleAdd} className="h-7 px-2 text-[10px]">
           <Plus className="size-3 mr-0.5" />
           添加
+        </Button>
+      </div>
+
+      {/* 链预设（模式库）：落成参数预设修改器，持续型（包络版走蓝图插入） */}
+      <div className="flex gap-1.5 items-center">
+        <select
+          value={chainPresetId}
+          onChange={(e) => setChainPresetId(e.target.value)}
+          onFocus={() => setChainEntriesVersion((v) => v + 1)}
+          className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1.5 py-1 text-[10px] text-gray-300"
+          title="模式库链预设：以峰值振幅落成持续型修改器；要包络效果请在蓝图里插入预设段"
+        >
+          <option value="">链预设（环带）…</option>
+          {modifierChainEntries.map(({ entry }) => (
+            <option key={entry.id} value={entry.id}>{entry.name}</option>
+          ))}
+        </select>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleAddChainPreset}
+          disabled={!chainPresetId}
+          className="h-7 px-2 text-[10px]"
+          title="把预设落成一个参数调好的修改器（持续型）"
+        >
+          加预设
         </Button>
       </div>
 

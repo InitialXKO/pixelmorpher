@@ -52,11 +52,33 @@ export interface DynamicParentDef {
 }
 
 export type DynamicEntryDef = DynamicLeafDef | DynamicParentDef;
-export type EntryDef = SurfaceEntryDef | DynamicEntryDef;
+
+/** 链条目暴露参数口：指向模板内某节点的某个参数（面板展示/说明用） */
+export interface ChainExpose {
+  node: string;
+  key: string;
+  label: string;
+}
+
+/**
+ * 链条目定义：一段像素链模板（节点蓝图形状，局部 id）。
+ * 哨兵引用：inputs 里的 nodeId '@in' = 段入口像素（插入时接原 screen 的
+ * 像素来源），'@time' = 目标图的时间节点。entry = 段的像素出口节点 id
+ * （插入时它的 pixels 输出接 screen）。节点类型限像素链支持集
+ * （PIXEL_CHAIN_PIXEL_TYPES / PIXEL_CHAIN_NUMERIC_TYPES），保证进包可真跑。
+ */
+export interface ChainEntryDef {
+  kind: 'chain';
+  nodes: import('./blueprint/ir').BlueprintNode[];
+  entry: string;
+  expose: ChainExpose[];
+}
+
+export type EntryDef = SurfaceEntryDef | DynamicEntryDef | ChainEntryDef;
 
 export interface LibraryEntry {
   id: string;
-  kind: 'surface' | 'dynamic';
+  kind: 'surface' | 'dynamic' | 'chain';
   name: string;
   cluster: string;
   versions: Record<number, EntryDef>;
@@ -530,9 +552,86 @@ function buildBuiltinEntries(): LibraryEntry[] {
       { entry: 'dyn-glow-frost', version: 1, overrides: { glowColor: '#dff4ff', glowStrength: 0.6 } },
     ], []),
   );
+  // 链条目：环带预设族（甲4）。结构 = 包络数值节点 → ring_ripple，
+  // 插入节点蓝图后经像素链进包真跑；也可落成修改器参数预设（无包络）。
+  out.push(...buildBuiltinChainEntries());
   return out;
 }
 
+/** 环带预设的统一构造：env（waveform 包络）驱动 ring 的 amplitude 输入 */
+function ringChainEntry(
+  id: string, name: string,
+  ringParams: Record<string, number | string>,
+  envParams: Record<string, number | string>,
+  expose: ChainExpose[],
+): LibraryEntry {
+  const def: ChainEntryDef = {
+    kind: 'chain',
+    entry: 'ring',
+    expose,
+    nodes: [
+      {
+        id: 'env', type: 'waveform',
+        inputs: { t: { nodeId: '@time', output: 'out' } },
+        params: { ...envParams },
+        ui: { x: 0, y: 120 },
+      },
+      {
+        id: 'ring', type: 'ring_ripple',
+        inputs: {
+          pixels: { nodeId: '@in', output: 'pixels' },
+          t: { nodeId: '@time', output: 'out' },
+          amplitude: { nodeId: 'env', output: 'out' },
+        },
+        params: { amplitude: 3, ...ringParams },
+        ui: { x: 200, y: 40 },
+      },
+    ],
+  };
+  return {
+    id, kind: 'chain', name, cluster: '环带', builtin: true, latest: 1,
+    versions: { 1: def },
+  };
+}
+
+function buildBuiltinChainEntries(): LibraryEntry[] {
+  return [
+    // 重击环：弹簧振荡包络，一次性冲击脉冲约半秒衰尽
+    ringChainEntry(
+      'chain-heavy-ring', '重击环',
+      { frequency: 0.15, speed: 9, damping: 0.03, rippleMode: 'radial' },
+      { waveform: 'spring_oscillate', baseValue: 0, amplitude: 6, period: 0.45, damping: 6 },
+      [
+        { node: 'env', key: 'amplitude', label: '冲击峰值' },
+        { node: 'env', key: 'period', label: '振荡周期（秒）' },
+        { node: 'ring', key: 'frequency', label: '环密度' },
+      ],
+    ),
+    // 冲击波环：指数衰减包络，多圈扩散约 1.5 秒
+    ringChainEntry(
+      'chain-shock-ring', '冲击波环',
+      { frequency: 0.3, speed: 12, damping: 0.015, rippleMode: 'radial' },
+      { waveform: 'exponential_decay', baseValue: 7, endValue: 0, damping: 2.2 },
+      [
+        { node: 'env', key: 'baseValue', label: '起始振幅' },
+        { node: 'env', key: 'damping', label: '衰减速度' },
+        { node: 'ring', key: 'frequency', label: '环密度' },
+        { node: 'ring', key: 'speed', label: '扩散速度' },
+      ],
+    ),
+    // 护盾环：螺旋模式低振幅常驻 + 正弦呼吸微脉动
+    ringChainEntry(
+      'chain-shield-ring', '护盾环',
+      { frequency: 0.12, speed: 2.5, damping: 0.01, rippleMode: 'spiral', spiralTwist: 3 },
+      { waveform: 'sine', baseValue: 1.6, amplitude: 0.7, period: 2.4 },
+      [
+        { node: 'env', key: 'baseValue', label: '基础振幅' },
+        { node: 'env', key: 'period', label: '呼吸周期（秒）' },
+        { node: 'ring', key: 'spiralTwist', label: '螺旋扭转' },
+      ],
+    ),
+  ];
+}
 export const BUILTIN_ENTRIES: LibraryEntry[] = buildBuiltinEntries();
 export const BUILTIN_INDEX: LibraryIndex = libraryIndexOf(BUILTIN_ENTRIES);
 
@@ -593,6 +692,7 @@ export function publishDraft(entry: LibraryEntry): LibraryEntry | undefined {
 export function refsOfDef(def: EntryDef): { id: string; version?: number }[] {
   if ('kind' in def) {
     if (def.kind === 'leaf') return [];
+    if (def.kind === 'chain') return [];
     return def.children.map((c) => ({ id: c.entry, version: c.version }));
   }
   const out: { id: string; version?: number }[] = [];
@@ -738,4 +838,18 @@ export function saveUserEntries(entries: readonly LibraryEntry[]): void {
   try {
     localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries.filter((e) => !e.builtin)));
   } catch { /* 存储不可用时静默（库管理降级为会话内） */ }
+}
+
+/** 全部链条目（内置 + 用户），供蓝图插入/修改器预设/库面板共用 */
+export function chainEntriesOf(entries: readonly LibraryEntry[]): LibraryEntry[] {
+  return entries.filter((e) => e.kind === 'chain');
+}
+
+/** 取链条目某版本的定义（非链条目/无此版本返回 undefined） */
+export function chainDefOf(
+  index: LibraryIndex, id: string, version?: number,
+): { def: ChainEntryDef; version: number } | undefined {
+  const got = defOf(index, id, version);
+  if (!got || !('kind' in got.def) || got.def.kind !== 'chain') return undefined;
+  return { def: got.def, version: got.version };
 }

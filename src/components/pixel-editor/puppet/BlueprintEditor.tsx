@@ -44,6 +44,12 @@ import type { Character } from '@/lib/unified-types';
 import { Button } from '@/components/ui/button';
 import BlueprintBlocksView from './BlueprintBlocksView';
 import PathEditor from './PathEditor';
+import {
+  BUILTIN_ENTRIES, chainDefOf, chainEntriesOf, loadUserEntries, mergedIndex, saveUserEntries,
+  type LibraryEntry,
+} from '@/lib/library-entries';
+import { insertChainSegment, packChainSegment } from '@/lib/blueprint/chain-presets';
+import { PIXEL_CHAIN_PIXEL_TYPES } from '@/lib/proc-runtime/pixel-src';
 
 interface BlueprintEditorProps {
   graph: BlueprintGraph;
@@ -667,6 +673,40 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     setSelectedId(id);
   }, [graph, onChange, addingType, idPrefix]);
 
+  // ---- 链预设（甲4）：从模式库插入预设段 / 把选中链打包存库 ----
+  const [chainPresetId, setChainPresetId] = useState('');
+  const [chainEntriesVersion, setChainEntriesVersion] = useState(0);
+  const chainEntries = useMemo(
+    () => chainEntriesOf([...BUILTIN_ENTRIES, ...loadUserEntries()]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [chainEntriesVersion],
+  );
+  const insertChainPreset = useCallback(() => {
+    if (!chainPresetId) return;
+    const idx = mergedIndex(loadUserEntries());
+    const got = chainDefOf(idx, chainPresetId);
+    if (!got) { window.alert('预设不存在或已删除'); return; }
+    const res = insertChainSegment(graph, got.def, `chain_${Date.now().toString(36)}`);
+    if (!res.ok) { window.alert(`插入失败：${res.error}`); return; }
+    onChange(res.graph);
+    if (res.insertedIds.length > 0) setSelectedId(res.insertedIds[res.insertedIds.length - 1]!);
+  }, [chainPresetId, graph, onChange]);
+
+  const packSelectedChain = useCallback(() => {
+    if (!selectedId) return;
+    const res = packChainSegment(graph, selectedId);
+    if (!res.ok) { window.alert(`打包失败：${res.error}`); return; }
+    const name = window.prompt('存入模式库（链预设），名称', '我的链预设')?.trim();
+    if (!name) return;
+    const entry: LibraryEntry = {
+      id: `user-chain-${Date.now().toString(36)}`, kind: 'chain', name,
+      cluster: '我的', latest: 1, versions: { 1: res.def },
+    };
+    saveUserEntries([...loadUserEntries(), entry]);
+    setChainEntriesVersion((v) => v + 1);
+    window.alert(`已存入模式库：${name}`);
+  }, [graph, selectedId]);
+
   // 自动布局：按拓扑深度分层，左→右排列
   const autoLayout = useCallback(() => {
     const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
@@ -902,6 +942,41 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           整理
         </Button>
       </div>
+      {!idPrefix && (
+        <div className="flex gap-1.5 items-center">
+          <select
+            value={chainPresetId}
+            onChange={(e) => setChainPresetId(e.target.value)}
+            onFocus={() => setChainEntriesVersion((v) => v + 1)}
+            className="flex-1 min-w-0 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1.5 py-1 text-[10px] text-gray-300"
+            title="模式库链预设（环带等）：整段插入到 screen 之前，进包可真跑"
+          >
+            <option value="">链预设…</option>
+            {chainEntries.map((e) => (
+              <option key={e.id} value={e.id}>{e.name}（{e.cluster}）</option>
+            ))}
+          </select>
+          <Button
+            size="sm"
+            onClick={insertChainPreset}
+            disabled={!chainPresetId}
+            className="h-7 px-2 text-[10px]"
+            title="把预设段串入当前图的像素链（screen 之前）"
+          >
+            插入
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={packSelectedChain}
+            disabled={!selected || !(PIXEL_CHAIN_PIXEL_TYPES as readonly string[]).includes(selected.type)}
+            className="h-7 px-2 text-[10px]"
+            title="把选中像素节点到精灵源之间的链（含数值包络）打包存入模式库"
+          >
+            打包选中链
+          </Button>
+        </div>
+      )}
       {idPrefix && (
         <div className="text-[9px] text-gray-500 px-1">
           新节点将归属到部件 <span className="text-cyan-300">{idPrefix}</span>
