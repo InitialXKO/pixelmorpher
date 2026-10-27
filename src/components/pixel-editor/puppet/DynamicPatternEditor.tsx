@@ -379,7 +379,7 @@ export default function DynamicPatternEditor({
               </label>
             )}
           </div>
-          {(['形变', '发射', '粒子', '环绕', '发光', '弧线'] as const).map((section) => (
+          {(['形变', '发射', '粒子', '环绕', '发光', '弧线', '后期'] as const).map((section) => (
             <div key={section}>
               <div className="text-[9px] text-gray-600 mt-0.5">{section}</div>
               {section === '形变' && (
@@ -481,6 +481,35 @@ export default function DynamicPatternEditor({
                   )}
                 </div>
               )}
+              {section === '后期' && (
+                <div className="flex items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0">
+                    <input type="checkbox" checked={np(inst).postEnabled} onChange={(e) => patchParam(inst.id, 'postEnabled', e.target.checked)} />
+                    全局后期
+                  </label>
+                  {np(inst).postEnabled && (
+                    <span className="flex items-center gap-1.5">
+                      <select
+                        value={np(inst).postTheme}
+                        onChange={(e) => patchParam(inst.id, 'postTheme', e.target.value)}
+                        className={selCls}
+                        title="色板主题：本图案全部绘制（粒子/发光/弧线/环绕）的颜色按亮度映射到所选色阶"
+                      >
+                        <option value="none">无主题</option>
+                        <option value="ember">余烬</option>
+                        <option value="frost">寒霜</option>
+                        <option value="gameboy">复古绿</option>
+                        <option value="dusk">暮紫</option>
+                        <option value="mono">单色</option>
+                      </select>
+                      <label className="flex items-center gap-1 text-[9px] text-gray-500" title="粒子不再平滑淡出，改按生命包络做确定性掉落消散">
+                        <input type="checkbox" checked={np(inst).postDither} onChange={(e) => patchParam(inst.id, 'postDither', e.target.checked)} />
+                        抖动消散
+                      </label>
+                    </span>
+                  )}
+                </div>
+              )}
               {section === '发光' && glowOverflowOf(inst) && (
                 <div className="flex items-center gap-1.5">
                   <span className="text-[9px] text-gray-500 w-24 shrink-0">并入发光组</span>
@@ -540,6 +569,7 @@ export default function DynamicPatternEditor({
                 .filter((d) => !(section === '发射' && d.key === 'gatherRadius' && np(inst).emitMode !== 'gather'))
                 .filter((d) => !(section === '粒子' && d.key === 'rampMidPos' && !np(inst).rampEnabled))
                 .filter((d) => !(section === '环绕' && !np(inst).orbitEnabled))
+                .filter((d) => !(section === '后期' && !np(inst).postEnabled))
                 .map((d) => {
                 const v = np(inst)[d.key] as number;
                 return (

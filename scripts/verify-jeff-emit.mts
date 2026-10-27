@@ -153,5 +153,42 @@ console.log('T 组：组合配方模板 ×13 入库（配方核心段断言）')
   seg('水花', (p) => p.buoy < -50 && p.particleShape === 'diamond', '强重力水滴（菱形）抛物线');
 }
 
+// ---- U 组：甲5 图案级全局后期 ----
+console.log('U 组：全局后期（色板主题/透明度分级/抖动消散）');
+{
+  const { postColorAt, POST_THEME_RAMPS } = await import('../src/lib/dynamic-patterns');
+  const rt2 = rt as unknown as { dynPostColorAt: (p: unknown, hex: string) => string };
+  const mono = { ...defaultDynamicParams(), postEnabled: true, postTheme: 'mono' as const };
+  check('U1 关 = 原样', postColorAt(defaultDynamicParams(), '#3a7bd5') === '#3a7bd5');
+  check('U2 单色主题两端锚定', postColorAt(mono, '#000000') === '#000000' && postColorAt(mono, '#ffffff') === '#ffffff');
+  check('U3 单色主题输出恒灰阶', (() => { const c = postColorAt(mono, '#ff2020'); return c.slice(1, 3) === c.slice(3, 5) && c.slice(3, 5) === c.slice(5, 7); })());
+  const ember = { ...defaultDynamicParams(), postEnabled: true, postTheme: 'ember' as const };
+  check('U4 余烬主题白色落顶站', postColorAt(ember, '#ffffff') === '#fff3c4');
+  let sweep = true;
+  for (const theme of ['ember', 'frost', 'gameboy', 'dusk', 'mono'] as const) {
+    const pp = { ...defaultDynamicParams(), postEnabled: true, postTheme: theme };
+    for (const hex of ['#000000', '#7a3b10', '#3a7bd5', '#c8c8c8', '#ffffff', '#12ab34']) {
+      if (rt2.dynPostColorAt(pp, hex) !== postColorAt(pp, hex)) sweep = false;
+    }
+  }
+  check('U5 孪生主题映射逐值一致（5 主题 × 6 色）', sweep);
+  check('U6 主题表五站齐全', Object.values(POST_THEME_RAMPS).every((r) => r.length === 5));
+  // 模拟层：分级量化 + 抖动掉落，仍走差分原路
+  const base = { source: 'contour' as const, layer: 'front' as const, frontRatio: 1 };
+  const q = diffSim('U7 透明度分级差分', { ...base, postEnabled: true, postAlphaLevels: 4, alpha: 1 }, 30);
+  check('U8 分级后 alpha 恒为 0.25 的倍数', q.every((p) => Math.abs(p.alpha * 4 - Math.round(p.alpha * 4)) < 1e-9));
+  const plain = simulateDynamicParticles(
+    { instance: { id: 'j1', slot: '身体', enabled: true, params: { ...defaultDynamicParams(), ...base } }, origin: 'node' },
+    spriteB, 30, 12, false, 'front', 'nodeX');
+  const dith = diffSim('U9 抖动消散差分', { ...base, postEnabled: true, postDither: true }, 30);
+  check('U10 抖动存活者全 alpha（无平滑淡出）', dith.every((p) => Math.abs(p.alpha - 0.5) < 1e-9), 'default alpha=0.5');
+  check('U11 抖动确实掉落（存活数变少）', dith.length < plain.length, `${dith.length} < ${plain.length}`);
+  const themed = diffSim('U12 主题色贯通粒子', { ...base, postEnabled: true, postTheme: 'frost' as const }, 30);
+  check('U13 主题后粒子色落在寒霜色阶邻域（蓝通道不低于红）', themed.every((p) => {
+    const r = parseInt(p.color.slice(1, 3), 16), b = parseInt(p.color.slice(5, 7), 16);
+    return b >= r;
+  }));
+}
+
 console.log(`\n合计：${pass} 过 / ${fail} 败`);
 if (fail > 0) process.exit(1);

@@ -274,6 +274,26 @@ function dynParticleColorAt(params, lifeRatio) {
   const t = pos >= 1 ? 1 : (f - pos) / (1 - pos);
   return dynRgbHex(mid[0] + (b[0] - mid[0]) * t, mid[1] + (b[1] - mid[1]) * t, mid[2] + (b[2] - mid[2]) * t);
 }
+const DYN_POST_RAMPS = {
+  ember: ['#1a0500', '#7a1e00', '#ff5a00', '#ffa02a', '#fff3c4'],
+  frost: ['#02101e', '#0e4a7a', '#2a9adf', '#9fdcff', '#ffffff'],
+  gameboy: ['#0f380f', '#306230', '#8bac0f', '#9bbc0f', '#e0f8d0'],
+  dusk: ['#12041f', '#3c1160', '#7a2a9e', '#d76bd7', '#ffd7f4'],
+  mono: ['#000000', '#404040', '#808080', '#c0c0c0', '#ffffff'],
+};
+// 与 dynamic-patterns.ts postColorAt 逐值同式（探针 J 组对拍）
+function dynPostColorAt(params, hex) {
+  if (!params.postEnabled || !params.postTheme || params.postTheme === 'none') return hex;
+  const ramp = DYN_POST_RAMPS[params.postTheme];
+  if (!ramp) return hex;
+  const rgb = dynHexRgbOf(hex);
+  const lum = (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255;
+  const pos = Math.max(0, Math.min(0.9999, lum)) * 4;
+  const i = Math.floor(pos);
+  const f = pos - i;
+  const a = dynHexRgbOf(ramp[i]), c = dynHexRgbOf(ramp[Math.min(4, i + 1)]);
+  return dynRgbHex(a[0] + (c[0] - a[0]) * f, a[1] + (c[1] - a[1]) * f, a[2] + (c[2] - a[2]) * f);
+}
 // 与 dynamic-patterns.ts orbitPointsAt 逐点同式（探针 J 组对拍）
 function dynOrbitPoints(params, tSec, worldAngleDeg) {
   if (!params.orbitEnabled || !(params.orbitCount > 0)) return [];
@@ -354,9 +374,21 @@ function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
       const size = params.sizeStart + (params.sizeEnd - params.sizeStart) * lifeRatio;
       const env = lifeRatio < 0.15 ? lifeRatio / 0.15 : 1 - (lifeRatio - 0.15) / 0.85;
       const vlen = Math.hypot(vx, vy);
+      // 图案级全局后期（与产品侧同式）：抖动消散按包络概率掉落
+      // （哈希 61），存活粒子全 alpha 出画；透明度分级量化 alpha
+      if (params.postEnabled && params.postDither) {
+        if (dynHash01(seedBase, b, k, 61) >= env) continue;
+        var postAlpha = params.alpha;
+      } else {
+        var postAlpha = Math.max(0, params.alpha * env);
+        if (params.postEnabled && params.postAlphaLevels >= 2) {
+          const lv = params.postAlphaLevels;
+          postAlpha = Math.round(postAlpha * lv) / lv;
+        }
+      }
       out.push({
-        x: px, y: py, size: size, alpha: Math.max(0, params.alpha * env),
-        color: dynParticleColorAt(params, lifeRatio),
+        x: px, y: py, size: size, alpha: postAlpha,
+        color: dynPostColorAt(params, dynParticleColorAt(params, lifeRatio)),
         shape: params.particleShape || 'dot',
         dirX: vlen > 1e-6 ? vx / vlen : dirX,
         dirY: vlen > 1e-6 ? vy / vlen : dirY,
@@ -427,6 +459,7 @@ export function createDynamicRuntime(): {
   dynContour: (tile: never) => { x: number; y: number; nx: number; ny: number }[];
   dynSimulate: (inst: never, tile: never, frame: number, frameRate: number, layer: string, seedKey: string) => { x: number; y: number; size: number; alpha: number; color: string; shape: string; dirX: number; dirY: number }[];
   dynParticleColorAt: (params: never, lifeRatio: number) => string;
+  dynPostColorAt: (params: never, hex: string) => string;
   dynOrbitPoints: (params: never, tSec: number, worldAngleDeg?: number) => { x: number; y: number }[];
   dynDisplaceSrcMap: (params: never, w: number, h: number, phase: number) => Int32Array;
   dynNoiseU: (u: number, v: number, period: number, seed: number) => number;
@@ -434,6 +467,6 @@ export function createDynamicRuntime(): {
   dynArcPoints: (params: never, t: number, endX?: number, endY?: number, hasEnd?: boolean) => { main: [number, number, number][]; branches: [number, number, number][][]; dots: [number, number, number][]; alpha: number };
   dynProceduralValue: (cfg: never, frame: number) => number;
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynParticleColorAt, dynOrbitPoints };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynParticleColorAt, dynOrbitPoints, dynPostColorAt };`);
   return factory() as never;
 }

@@ -14,6 +14,7 @@ import { hashPixelGrid } from './engine/render-cache';
 import {
   dynamicDeformAt,
   particleColorAt,
+  postColorAt,
   type DynamicPatternParams,
   type ResolvedDynamicPattern,
 } from './dynamic-patterns';
@@ -216,14 +217,24 @@ export function simulateDynamicParticles(
       const px = mirror ? -rawPx : rawPx;
       const size = params.sizeStart + (params.sizeEnd - params.sizeStart) * lifeRatio;
       const env = lifeRatio < 0.15 ? lifeRatio / 0.15 : 1 - (lifeRatio - 0.15) / 0.85;
+      // 图案级全局后期：抖动消散（包络概率哈希掉落，存活者全
+      // alpha）/ 透明度分级（量化）——与运行时孪生同式
+      let postAlpha = Math.max(0, params.alpha * env);
+      if (params.postEnabled && params.postDither) {
+        if (hash01(seedBase, b, k, 61) >= env) continue;
+        postAlpha = params.alpha;
+      } else if (params.postEnabled && params.postAlphaLevels >= 2) {
+        const lv = params.postAlphaLevels;
+        postAlpha = Math.round(postAlpha * lv) / lv;
+      }
       const vlen = Math.hypot(vx, vy);
       const dirUx = vlen > 1e-6 ? vx / vlen : dirX;
       const dirUy = vlen > 1e-6 ? vy / vlen : dirY;
       out.push({
         x: px, y: py,
         size,
-        alpha: Math.max(0, params.alpha * env),
-        color: particleColorAt(params, lifeRatio),
+        alpha: postAlpha,
+        color: postColorAt(params, particleColorAt(params, lifeRatio)),
         shape: params.particleShape,
         dirX: mirror ? -dirUx : dirUx,
         dirY: dirUy,

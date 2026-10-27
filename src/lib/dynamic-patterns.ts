@@ -116,6 +116,13 @@ export interface DynamicPatternParams {
   orbitSize: number;     // 光点直径（px）
   orbitColor: string;    // 光点颜色（#rrggbb）
   orbitAngleSpace: 'sprite' | 'world'; // sprite = 椭圆随精灵转；world = 椭圆恒对世界（同发光方向基准口径）
+  // 图案级全局后期（Jeff 落地：把蓝图链的色板/抖动能力提为图案
+  // 自身的后期——作用于本图案的全部绘制：粒子全程 + 发光/弧线/
+  // 环绕的颜色主题化）
+  postEnabled: boolean;
+  postTheme: PostTheme;    // 色板主题（按亮度映射到主题色阶；none = 不映射）
+  postAlphaLevels: number; // 透明度分级（0 = 关；2~8 = 把粒子透明度量化到该档数）
+  postDither: boolean;     // 抖动消散（粒子按生命包络做确定性哈希掉落，代替平滑淡出）
   // 发光段（原地发光：选区内像素随呼吸曲线提亮，并向外扩一圈柔光）
   glowEnabled: boolean;
   glowColor: string;        // 辉光颜色（#rrggbb）：柔光圈颜色与提亮染色
@@ -200,6 +207,7 @@ export function followAnchoredDeltaAt(
 /** 发光选区来源：color = 按像素颜色取色；marked = 手动标记的像素掩码 */
 export type GlowMaskSource = 'color' | 'marked' | 'mark';
 export type DynamicEmitMode = 'out' | 'gather';
+export type PostTheme = 'none' | 'ember' | 'frost' | 'gameboy' | 'dusk' | 'mono';
 export type ParticleShape = 'dot' | 'star' | 'diamond' | 'line';
 
 /** 柔光圈形状：square 方形圈（八邻域逐圈外扩）/ circle 圆形 / star 十字星形
@@ -252,6 +260,7 @@ export function defaultDynamicParams(): DynamicPatternParams {
     particleShape: 'dot', rampEnabled: false, rampFrom: '#ffffff', rampMid: '#ffb46b', rampTo: '#ff5a2a', rampMidPos: 0.5,
     orbitEnabled: false, orbitCount: 3, orbitRadiusX: 14, orbitRadiusY: 10, orbitHz: 0.5, orbitPhase: 0,
     orbitSize: 3, orbitColor: '#aee6ff', orbitAngleSpace: 'sprite',
+    postEnabled: false, postTheme: 'none', postAlphaLevels: 0, postDither: false,
     glowEnabled: false, glowColor: '#7dd7ff', glowStrength: 1, glowHz: 0.8,
     glowPhase: 0, glowHalo: 2, glowMaskSource: 'color', glowPick: '#2ea8ff',
     glowTolerance: 0, glowMask: undefined, glowMarkName: '', glowFollowGroup: 2,
@@ -282,6 +291,8 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
   if (!['dot', 'star', 'diamond', 'line'].includes(out.particleShape)) out.particleShape = 'dot';
   out.rampMidPos = Number.isFinite(out.rampMidPos) ? Math.max(0, Math.min(1, out.rampMidPos)) : 0.5;
   if (out.orbitAngleSpace !== 'world') out.orbitAngleSpace = 'sprite';
+  if (!['none', 'ember', 'frost', 'gameboy', 'dusk', 'mono'].includes(out.postTheme)) out.postTheme = 'none';
+  out.postAlphaLevels = Number.isFinite(out.postAlphaLevels) ? Math.max(0, Math.min(8, Math.round(out.postAlphaLevels))) : 0;
   out.orbitCount = Number.isFinite(out.orbitCount) ? Math.max(1, Math.min(12, Math.round(out.orbitCount))) : 3;
   if (typeof out.emitMark !== 'string') out.emitMark = '';
   if (typeof out.emitDirMark !== 'string') out.emitDirMark = '';
@@ -425,6 +436,30 @@ export function orbitPointsAt(
     out.push({ x: ex * cc - ey * cs, y: ex * cs + ey * cc });
   }
   return out;
+}
+
+/** 色板主题色阶（亮度 0 / .25 / .5 / .75 / 1 五站，站间线性） */
+export const POST_THEME_RAMPS: Record<Exclude<PostTheme, 'none'>, [string, string, string, string, string]> = {
+  ember: ['#1a0500', '#7a1e00', '#ff5a00', '#ffa02a', '#fff3c4'],
+  frost: ['#02101e', '#0e4a7a', '#2a9adf', '#9fdcff', '#ffffff'],
+  gameboy: ['#0f380f', '#306230', '#8bac0f', '#9bbc0f', '#e0f8d0'],
+  dusk: ['#12041f', '#3c1160', '#7a2a9e', '#d76bd7', '#ffd7f4'],
+  mono: ['#000000', '#404040', '#808080', '#c0c0c0', '#ffffff'],
+};
+
+/** 全局后期颜色映射：主题开时按输入色亮度落到主题色阶（保留明暗
+ * 关系、换掉色相家族）；关/none 时原样返回 */
+export function postColorAt(params: DynamicPatternParams, hex: string): string {
+  if (!params.postEnabled || params.postTheme === 'none') return hex;
+  const ramp = POST_THEME_RAMPS[params.postTheme as Exclude<PostTheme, 'none'>];
+  if (!ramp) return hex;
+  const [r, g, b] = hexRgbOf(hex);
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  const pos = Math.max(0, Math.min(0.9999, lum)) * 4;
+  const i = Math.floor(pos);
+  const f = pos - i;
+  const a = hexRgbOf(ramp[i]!), c = hexRgbOf(ramp[Math.min(4, i + 1)]!);
+  return rgbHex(a[0] + (c[0] - a[0]) * f, a[1] + (c[1] - a[1]) * f, a[2] + (c[2] - a[2]) * f);
 }
 
 /** 发光分组：解析序里前 3 个启用发光的实例各成一组（颜色/强度/频率/相位
@@ -1211,7 +1246,7 @@ export function deleteUserDynamicPattern(name: string): void {
 export interface DynamicParamDef {
   key: keyof DynamicPatternParams;
   label: string;
-  section: '形变' | '发射' | '粒子' | '发光' | '弧线' | '环绕';
+  section: '形变' | '发射' | '粒子' | '发光' | '弧线' | '环绕' | '后期';
   min: number;
   max: number;
   step: number;
@@ -1265,6 +1300,7 @@ export const DYNAMIC_PARAM_DEFS: DynamicParamDef[] = [
   { key: 'orbitHz', label: '转速（圈/秒，可负）', section: '环绕', min: -2, max: 2, step: 0.05 },
   { key: 'orbitPhase', label: '环绕相位', section: '环绕', min: 0, max: 1, step: 0.01 },
   { key: 'orbitSize', label: '光点直径（px）', section: '环绕', min: 1, max: 10, step: 0.5 },
+  { key: 'postAlphaLevels', label: '透明度分级（0=关）', section: '后期', min: 0, max: 8, step: 1 },
   { key: 'glowStrength', label: '发光强度（峰值）', section: '发光', min: 0, max: 2, step: 0.05 },
   { key: 'glowHz', label: '呼吸频率（次/秒）', section: '发光', min: 0, max: 3, step: 0.05 },
   { key: 'glowPhase', label: '呼吸相位', section: '发光', min: 0, max: 1, step: 0.01 },

@@ -78,7 +78,7 @@ import { computeGlobalModifierTransform } from './engine/animation-dispatch';
 import { applyProceduralAnimations } from './engine/procedural';
 import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followAnchoredDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
 import { effectivePatternGraph, resolvePatternsFromGraph } from './blueprint/pattern-sync';
-import { orbitPointsAt } from './dynamic-patterns';
+import { orbitPointsAt, postColorAt } from './dynamic-patterns';
 import { evaluateNodeOutput } from './blueprint/eval';
 import { markPointPx, markDirAngleDeg } from './sprite-marks';
 import { simulateDynamicParticles } from './dynamic-pattern-sim';
@@ -2389,7 +2389,7 @@ function drawDynamicParticles(
         const params = resolved.instance.params;
         if (!params.orbitEnabled) continue;
         const pts = orbitPointsAt(params, tSec, instruction.angle);
-        const m = /^#([0-9a-fA-F]{6})$/.exec(params.orbitColor);
+        const m = /^#([0-9a-fA-F]{6})$/.exec(postColorAt(params, params.orbitColor));
         const rgb = m
           ? `${parseInt(m[1].slice(0, 2), 16)},${parseInt(m[1].slice(2, 4), 16)},${parseInt(m[1].slice(4, 6), 16)}`
           : '174,230,255';
@@ -2431,7 +2431,7 @@ function drawDynamicArcs(
       shape.branches = shape.branches.map(sh);
       shape.dots = sh(shape.dots);
     }
-    const rgb = hexToRgb(p.arcColor || '#bfe3ff') ?? { r: 191, g: 227, b: 255 };
+    const rgb = hexToRgb(postColorAt(p, p.arcColor || '#bfe3ff')) ?? { r: 191, g: 227, b: 255 };
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -2485,7 +2485,7 @@ function buildGlowOverlay(
   const params = visualParams;
   const hasWorld = contributors.some((c) => c.glowAngleSpace === 'world');
   const sig = [
-    params.glowColor, params.glowStrength,
+    params.glowColor, params.glowStrength, params.postEnabled ? params.postTheme : '',
     ...contributors.flatMap((c) => [
       c.glowHalo, c.glowMaskSource, c.glowMarkName ?? '', c.glowPick, c.glowTolerance,
       c.glowMask?.w ?? 0, c.glowMask?.h ?? 0, c.glowMask?.bits ?? '',
@@ -2545,7 +2545,7 @@ function buildGlowOverlay(
     canvas.height = H;
     const c2d = canvas.getContext('2d')!;
     const img = c2d.createImageData(W, H);
-    const glowRgbObj = hexToRgb(params.glowColor);
+    const glowRgbObj = hexToRgb(postColorAt(params, params.glowColor));
     const glowRgb: [number, number, number] = glowRgbObj
       ? [glowRgbObj.r, glowRgbObj.g, glowRgbObj.b]
       : [125, 215, 255];

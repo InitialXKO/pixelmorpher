@@ -2969,7 +2969,7 @@ function frame(now) {
     // 按选区预计算；第 4 个起在导出端已按各自所选组并入对应通道）
     const glowInsts = dynList.filter((x) => x.params.glowEnabled).slice(0, 3);
     const glowEl = glowInsts.map((x) => {
-      const grgb = particleRgb(x.params.glowColor || '#7dd7ff');
+      const grgb = particleRgb(dynPostColorAt(x.params, x.params.glowColor || '#7dd7ff'));
       return [grgb[0], grgb[1], grgb[2], x.params.glowStrength || 0, x.params.glowHz || 0, x.params.glowPhase || 0];
     });
     const glowSpace = glowInsts.map((x) => (x.params.glowAngleSpace === 'world' ? 1 : 0));
@@ -3048,7 +3048,7 @@ function frame(now) {
           hasEnd = true;
         }
         const shape = dynArcPoints(p, elapsed, endX, endY, hasEnd);
-        const rgb = particleRgb(p.arcColor || '#bfe3ff');
+        const rgb = particleRgb(dynPostColorAt(p, p.arcColor || '#bfe3ff'));
         const toWorld = (qx, qy) => {
           const gx = (orgC[0] + qx) * a.dsx, gy = (orgC[1] + qy) * a.dsy;
           return [a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c];
@@ -3100,7 +3100,7 @@ function frame(now) {
         // 自逆，预转与放置两次同变换相消，椭圆恒对世界）
         if (inst.params.orbitEnabled) {
           const opts = dynOrbitPoints(inst.params, frameIdx / FRAME_RATE, 0);
-          const orgb = particleRgb(inst.params.orbitColor || '#aee6ff');
+          const orgb = particleRgb(dynPostColorAt(inst.params, inst.params.orbitColor || '#aee6ff'));
           for (const q of opts) {
             let qx = q.x * a.dsx, qy = q.y * a.dsy;
             if (inst.params.orbitAngleSpace === 'world') {
