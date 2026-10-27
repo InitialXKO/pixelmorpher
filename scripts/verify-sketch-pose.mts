@@ -96,5 +96,70 @@ ok((res.nodes[root.id]!.tracks?.angle?.keyframes.length ?? 0) === 0, '链外节�
 // 原角色不被修改（返回新节点表）
 ok((character.nodes[arm.id]!.tracks?.angle?.keyframes.length ?? 0) === 0, '入参角色未被原地修改');
 
+// ===== 夹具 B：真实缺省形态——无精灵、链无 tipLength（火柴人同款）=====
+// 回归点：求解器缺省把尖端（末关节再伸一个末段骨长）送到目标，
+// 捕姿若不覆写尖端长，末端关节会差整整一个前臂长（30px）到不了位。
+const bRoot = mkNode('node_sk2_root', 'torso');
+(bRoot.transform as any).variantIndex = 6;
+const bArm = mkNode('node_sk2_arm', 'upper_arm_R', bRoot.id);
+const bFore = mkNode('node_sk2_fore', 'lower_arm_R', bArm.id);
+const bHand = mkNode('node_sk2_hand', 'hand_R', bFore.id);
+bRoot.children = [bArm.id];
+bArm.children = [bFore.id];
+bFore.children = [bHand.id];
+bRoot.sockets = [sock('sb_arm', -30, 0)];
+bArm.sockets = [sock('sb_fore', -35, 0)];
+bFore.sockets = [sock('sb_hand', -30, 0)];
+attach(bArm, 'sb_arm'); attach(bFore, 'sb_fore'); attach(bHand, 'sb_hand');
+const chainB: IKChain = {
+  id: 'chain_sk2_arm', name: '右臂B', rootNodeId: bArm.id, endNodeId: bHand.id,
+  target: { x: 0, y: 0 }, enabled: false, solver: '2bone',
+} as IKChain;
+const charB = {
+  id: 'sk2', name: '捕姿测试B', nodes: { [bRoot.id]: bRoot, [bArm.id]: bArm, [bFore.id]: bFore, [bHand.id]: bHand },
+  rootNodeId: bRoot.id, sprites: {}, costumeSets: [], activeCostumeSetId: undefined,
+  direction: 6, latitude: 0, ikChains: [chainB],
+} as unknown as Character;
+const fkB = computeWorldTransforms(charB, 0, W, H, 12);
+const jointCanvasB = new Map<string, { x: number; y: number }>();
+const endZB = new Map<string, number>();
+for (const [id, t] of fkB) {
+  const p = projectToView(t.worldX, t.worldY, t.worldZ, 6);
+  jointCanvasB.set(id, { x: subToPx(p.canvasX) + W / 2, y: subToPx(p.canvasY) + H / 2 });
+}
+endZB.set(chainB.id, subToPx(fkB.get(bHand.id)!.worldZ));
+const shoulderB = jointCanvasB.get(bArm.id)!;
+const targetB = { x: shoulderB.x + 15, y: shoulderB.y + 40 };
+const strokeB = [shoulderB, { x: shoulderB.x + 8, y: shoulderB.y + 22 }, targetB];
+const asgB = assignSketchStrokes(charB, [strokeB], jointCanvasB, W, H, endZB);
+ok(asgB.assignments.length === 1, 'B 笔触归属到无尖端长链');
+const resB = bakeSketchPose(charB, asgB.assignments, 0, 12, W, H);
+const errB = resB.endError[chainB.id]!;
+ok(errB < 2, `B 无精灵/无尖端长：末端关节误差 ${errB.toFixed(2)}px < 2（旧语义会差约 30）`);
+const ctB = resB.chainTargets[chainB.id];
+ok(!!ctB, 'B 产出链目标同步值');
+if (ctB) {
+  const tipDist = Math.hypot(ctB.target3D.x - (targetB.x - W / 2), ctB.target3D.y - (targetB.y - H / 2));
+  ok(Math.abs(tipDist - 30) < 3, `B 链目标 = 关节落点再伸末段 30（实际距落点 ${tipDist.toFixed(1)}）`);
+  // 启用链 + 同步目标再渲染：末端关节仍应落在笔触点（不被旧目标弹回）
+  const charBOn = {
+    ...charB, nodes: resB.nodes,
+    ikChains: [{ ...chainB, enabled: true, target3D: ctB.target3D, target: ctB.target }],
+  } as unknown as Character;
+  const fkOn = computeWorldTransforms(charBOn, 0, W, H, 12);
+  const endOn = fkOn.get(bHand.id)!;
+  const errOn = Math.hypot(subToPx(endOn.worldX) - (targetB.x - W / 2), subToPx(endOn.worldY) - (targetB.y - H / 2));
+  ok(errOn < 3, `B 启用链渲染一致性：末端误差 ${errOn.toFixed(2)}px < 3`);
+}
+
+// ===== 夹具 C：不可达目标——误差如实报短缺，不假装到位 =====
+const targetC = { x: shoulderB.x, y: shoulderB.y + 120 }; // 距肩 120 > 链长 65
+const strokeC = [shoulderB, { x: shoulderB.x, y: shoulderB.y + 60 }, targetC];
+const asgC = assignSketchStrokes(charB, [strokeC], jointCanvasB, W, H, endZB);
+const resC = bakeSketchPose(charB, asgC.assignments, 0, 12, W, H);
+const errC = resC.endError[chainB.id]!;
+ok(resC.appliedChainIds.includes(chainB.id) && Math.abs(errC - 55) < 4,
+  `C 不可达：误差 ${errC.toFixed(1)}px ≈ 短缺 55（120 − 链长 65）`);
+
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
 process.exit(fails === 0 ? 0 : 1);

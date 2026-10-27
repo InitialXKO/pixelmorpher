@@ -653,6 +653,10 @@ export function solveChainIKOverrides(
   blueprintTransforms: Map<string, BlueprintTransformResult> | undefined,
   overrides: Map<string, { angle: number; tilt: number }>,
   geometryDirection?: DirectionIndex,
+  // 尖端长覆写：传入（含 0）则跳过缺省解析链、按此值定尖端；
+  // 0 = 无尖端、目标直接落在末端关节上（草图捕姿的落点语义）。
+  // 渲染路径不传，行为不变。
+  tipLengthOverride?: number,
 ): void {
   // 关节链 root → end（与旧实现同走法）
   const jointIds: string[] = [];
@@ -684,23 +688,28 @@ export function solveChainIKOverrides(
   }
 
   // 尖端：末关节 + 其 frame 的 +Y 轴 × tipLength（与 computeIKChainTip 同构造）
-  // 尖端长口径：链上显式值 > 末关节当前精灵（服装解析） > 旧 node.sprite > 末段骨长
-  let tipLength = chain.tipLength ?? 0;
-  if (tipLength <= 0) {
-    tipLength = resolveSpriteTipLength(
-      character, chain.endNodeId,
-      geometryDirection ?? fkT[n - 1].variantIndex,
-      storeGlobalSprites(),
-    ) ?? 0;
-  }
-  if (tipLength <= 0) {
-    const endNode = character.nodes[chain.endNodeId];
-    const sprite = endNode?.sprite;
-    if (sprite && sprite.height > 0) {
-      const plugY = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
-      tipLength = Math.max(1, sprite.height - plugY);
-    } else if (lengths.length > 0) {
-      tipLength = lengths[lengths.length - 1];
+  // 尖端长口径：覆写值 > 链上显式值 > 末关节当前精灵（服装解析） > 旧 node.sprite > 末段骨长
+  let tipLength: number;
+  if (tipLengthOverride !== undefined) {
+    tipLength = tipLengthOverride;
+  } else {
+    tipLength = chain.tipLength ?? 0;
+    if (tipLength <= 0) {
+      tipLength = resolveSpriteTipLength(
+        character, chain.endNodeId,
+        geometryDirection ?? fkT[n - 1].variantIndex,
+        storeGlobalSprites(),
+      ) ?? 0;
+    }
+    if (tipLength <= 0) {
+      const endNode = character.nodes[chain.endNodeId];
+      const sprite = endNode?.sprite;
+      if (sprite && sprite.height > 0) {
+        const plugY = sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2;
+        tipLength = Math.max(1, sprite.height - plugY);
+      } else if (lengths.length > 0) {
+        tipLength = lengths[lengths.length - 1];
+      }
     }
   }
   const points: V3[] = [...pos];

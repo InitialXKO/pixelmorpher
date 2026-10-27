@@ -3,11 +3,11 @@
 // （solveChainIKOverrides，与渲染同一求解）解算 → 落成当前帧
 // angle/tilt 关键帧（只写这两轨，其余通道不动，同链烘焙先例）。
 import {
-  computeWorldTransforms, solveChainIKOverrides,
+  computeWorldTransforms, resolveSpriteTipLength, solveChainIKOverrides,
 } from './unified-render';
 import {
-  projectToView, pxToSub, subToPx,
-  type Character, type IKChain, type Node,
+  frameYAxisWorld, projectToView, pxToSub, subToPx,
+  type Character, type IKChain, type Node, type Sprite,
 } from './unified-types';
 import type { Pt } from './arc-length';
 
@@ -94,6 +94,10 @@ export interface SketchBakeResult {
   /** 每条命中链末端关节与目标的落点误差 px */
   endError: Record<string, number>;
   appliedChainIds: string[];
+  /** 命中链的新目标（确认写入时须同步写回链上）：取解算后姿态的
+   * 尖端位（末关节 + frame×尖端长，与渲染 IK 同口径）——启用中的
+   * 链若不更新目标，渲染会按旧目标再解算、把落帧姿势弹回去 */
+  chainTargets: Record<string, { target3D: { x: number; y: number; z: number }; target: { x: number; y: number } }>;
 }
 
 function upsertTrackPoint(
@@ -112,6 +116,9 @@ function upsertTrackPoint(
 /**
  * 解算 + 落帧：FK 首遍（链全停用）→ 逐链 solveChainIKOverrides →
  * angle/tilt 写当前帧关键帧 → 重算 FK 验误差。
+ * 落点语义 = 末端关节落在笔触末端：求解器缺省把「尖端」（末关节
+ * 沿 frame 再伸一个尖端长）送到目标，捕姿须以尖端长覆写 0 调用，
+ * 否则末端关节会差一个尖端长（无精灵时 = 末段骨长）到不了位。
  */
 export function bakeSketchPose(
   character: Character,
@@ -120,6 +127,7 @@ export function bakeSketchPose(
   frameRate: number,
   canvasWidth: number,
   canvasHeight: number,
+  globalSprites?: Record<string, Sprite>,
 ): SketchBakeResult {
   const chainsById = new Map((character.ikChains ?? []).map((c) => [c.id, c]));
   // 首遍 FK：全部链停用，避免既有 IK 覆写污染基准位姿
@@ -144,11 +152,17 @@ export function bakeSketchPose(
         return { x: subToPx(p.canvasX) + canvasWidth / 2, y: subToPx(p.canvasY) + canvasHeight / 2 };
       })(),
     };
-    const before = overrides.size;
-    solveChainIKOverrides(fkChar, withTarget, fk, canvasWidth, canvasHeight, frame, frameRate, undefined, undefined, overrides);
-    if (overrides.size > before || [...overrides.keys()].some((id) => chainJointIds(character, chain).includes(id))) {
-      applied.push(chain.id);
-    }
+    const jointIds = chainJointIds(character, chain);
+    const beforeVals = new Map(jointIds.map((id) => [id, overrides.get(id)]));
+    solveChainIKOverrides(fkChar, withTarget, fk, canvasWidth, canvasHeight, frame, frameRate, undefined, undefined, overrides, undefined, 0);
+    // 本链算没算上：看本链关节的覆写是否新增或变值（不能看全局
+    // size/keys——先命中的链会把后面的链误报成已应用）
+    const changed = jointIds.some((id) => {
+      const now = overrides.get(id);
+      const before = beforeVals.get(id);
+      return now !== undefined && (before === undefined || before.angle !== now.angle || before.tilt !== now.tilt);
+    });
+    if (changed) applied.push(chain.id);
   }
   // 落帧（仅 angle/tilt 两轨）
   const nodes: Record<string, Node> = { ...character.nodes };
@@ -172,5 +186,42 @@ export function bakeSketchPose(
       subToPx(t.worldZ) - a.target3D.z,
     );
   }
-  return { nodes, endError, appliedChainIds: applied };
+  // 链目标同步值：解算后姿态的尖端位（尖端长按渲染求解器同口径
+  // 解析：链显式值 > 当前精灵 > 末段骨长），确认写入时同步回链上，
+  // 启用中的链渲染再解算时目标即此处、姿势不弹回
+  const chainTargets: SketchBakeResult['chainTargets'] = {};
+  for (const chainId of applied) {
+    const chain = chainsById.get(chainId);
+    if (!chain) continue;
+    const endT = solved.get(chain.endNodeId);
+    if (!endT) continue;
+    const endDir = endT.variantIndex ?? 6;
+    let tipLen = chain.tipLength ?? 0;
+    if (tipLen <= 0) tipLen = resolveSpriteTipLength(solvedChar, chain.endNodeId, endDir, globalSprites) ?? 0;
+    if (tipLen <= 0) {
+      const ids = chainJointIds(character, chain);
+      const prevT = ids.length >= 2 ? solved.get(ids[ids.length - 2]) : undefined;
+      if (prevT) {
+        tipLen = Math.hypot(
+          subToPx(endT.worldX) - subToPx(prevT.worldX),
+          subToPx(endT.worldY) - subToPx(prevT.worldY),
+          subToPx(endT.worldZ) - subToPx(prevT.worldZ),
+        );
+      }
+    }
+    const yAxis = frameYAxisWorld(endT.worldFrame, endDir);
+    const tip = {
+      x: subToPx(endT.worldX) + yAxis.x * tipLen,
+      y: subToPx(endT.worldY) + yAxis.y * tipLen,
+      z: subToPx(endT.worldZ) + yAxis.z * tipLen,
+    };
+    const rootT = solved.get(chain.rootNodeId);
+    const rootDir = rootT?.variantIndex ?? 6;
+    const p = projectToView(pxToSub(tip.x), pxToSub(tip.y), pxToSub(tip.z), rootDir);
+    chainTargets[chainId] = {
+      target3D: tip,
+      target: { x: subToPx(p.canvasX) + canvasWidth / 2, y: subToPx(p.canvasY) + canvasHeight / 2 },
+    };
+  }
+  return { nodes, endError, appliedChainIds: applied, chainTargets };
 }

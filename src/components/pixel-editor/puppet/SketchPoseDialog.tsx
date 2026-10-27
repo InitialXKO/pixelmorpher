@@ -188,7 +188,10 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
       setNote(`没有笔触命中 IK 链（${missed} 笔未命中）：起笔要落在金圈关节附近`);
       return;
     }
-    const bake = bakeSketchPose(character as Character, assignments, frame, frameRate, canvasW, canvasH);
+    const bake = bakeSketchPose(
+      character as Character, assignments, frame, frameRate, canvasW, canvasH,
+      useProjectStore.getState().sprites,
+    );
     const errs = bake.appliedChainIds.map((id) => {
       const chain = (character.ikChains ?? []).find((c) => c.id === id);
       return `${chain?.name ?? id} 误差 ${(bake.endError[id] ?? 0).toFixed(1)}px`;
@@ -203,7 +206,19 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
 
   const handleConfirm = () => {
     if (!character || !preview) return;
-    useProjectStore.getState().updateUnifiedCharacter(character.id, { nodes: preview.bake.nodes });
+    // 链目标同步到解算后姿态的尖端位：链若启用着，渲染会按链目标
+    // 再解算，不同步就会把刚落帧的姿势弹回旧目标
+    const targets = preview.bake.chainTargets;
+    const ikChains = Object.keys(targets).length > 0
+      ? (character.ikChains ?? []).map((c) => {
+          const t = targets[c.id];
+          return t ? { ...c, target3D: t.target3D, target: t.target } : c;
+        })
+      : undefined;
+    useProjectStore.getState().updateUnifiedCharacter(character.id, {
+      nodes: preview.bake.nodes,
+      ...(ikChains ? { ikChains } : {}),
+    });
     setPreview(null);
     onClose();
   };
