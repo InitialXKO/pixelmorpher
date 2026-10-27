@@ -41,6 +41,74 @@ interface RigPanelProps {
   /** 隐藏节点树（用左侧共享树），只显示细节 */
 }
 
+/** 关节盘当前有效直径（与渲染端 generateDiscInstructions 同口径：
+ * attachment.jointWidth 优先，否则 plug 截面直径，否则 4） */
+function effectiveDiscDiameter(node: Node, ignoreStored = false): number {
+  const stored = node.attachment?.jointWidth;
+  if (!ignoreStored && typeof stored === 'number' && stored > 0) return stored;
+  const piece = node.slot;
+  const plugCS = piece?.crossSections.find((cs) => cs.id === (node.generated?.crossSectionId ?? 'plug'));
+  const bottomCS = piece?.crossSections.find((cs) => cs.id === 'bottom');
+  return plugCS?.diameter ?? bottomCS?.diameter ?? 4;
+}
+
+/** 关节盘直径行：写 attachment.jointWidth（渲染端首选来源，改完立即
+ * 生效）；清空或点「恢复自动」删字段，回到截面估算。回车/失焦提交。 */
+function JointDiscSizeRow({ node, onUpdate }: { node: Node; onUpdate: (updates: Partial<Node>) => void }) {
+  const stored = node.attachment?.jointWidth;
+  const isManual = typeof stored === 'number' && stored > 0;
+  const effective = effectiveDiscDiameter(node);
+  const [text, setText] = useState(() => String(Math.round(effective * 10) / 10));
+  const clearManual = () => {
+    if (!node.attachment) return;
+    const next = { ...node.attachment };
+    delete next.jointWidth;
+    onUpdate({ attachment: next });
+    setText(String(Math.round(effectiveDiscDiameter(node, true) * 10) / 10));
+  };
+  const commit = () => {
+    if (!node.attachment) return;
+    const t = text.trim();
+    if (t === '') {
+      if (isManual) clearManual();
+      return;
+    }
+    const v = Number(t);
+    if (Number.isFinite(v) && v > 0) {
+      if (!isManual || Math.abs(v - (stored as number)) > 1e-9) {
+        onUpdate({ attachment: { ...node.attachment, jointWidth: v } });
+      }
+    } else {
+      setText(String(Math.round(effective * 10) / 10));
+    }
+  };
+  return (
+    <div className={`flex items-center gap-2 mt-1.5 ${node.attachment?.autoJointDisc === false ? 'opacity-40 pointer-events-none' : ''}`}>
+      <Label className="text-[9px] text-gray-600">关节盘直径</Label>
+      <Input
+        type="number"
+        min={0.5}
+        step={0.5}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        className="h-6 w-20 text-[10px] bg-[#111128] border-[#1e1e3a]"
+      />
+      <span className="text-[9px] text-gray-500">px{isManual ? '（手动）' : '（自动，可改）'}</span>
+      {isManual && (
+        <button
+          type="button"
+          className="text-[9px] text-gray-400 underline hover:text-gray-200"
+          onClick={clearManual}
+        >
+          恢复自动
+        </button>
+      )}
+    </div>
+  );
+}
+
 /**
  * RigPanel — 骨架搭建阶段。
  * 只做：选骨骼、节点树、增删节点、关节（socket/plug）、rest pose、z-order。
@@ -559,6 +627,7 @@ function RigNodeProperties({
               />
               <span className="text-[9px] text-gray-500">自动生成（遮盖接缝）</span>
             </div>
+            <JointDiscSizeRow key={node.id} node={node} onUpdate={onUpdate} />
             <div className="flex items-center gap-2 mt-1.5">
               <Label className="text-[9px] text-gray-600">蒙皮</Label>
               <input

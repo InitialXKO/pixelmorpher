@@ -25,8 +25,10 @@ export interface BakeResult {
 }
 
 // ---- 全角度（多纬度）烘焙 ----
-/** 全角度模式的额外纬度（度）：±45 各 8 方向，±90 只渲一个朝向（极点处 8 方位等价）。基纬度 0 恒有 */
-export const FULL_ANGLE_LATITUDES: readonly number[] = [45, -45, 90, -90];
+/** 全角度模式的额外纬度（度）：只有俯角侧——+45（8 方向）与 +90（1 个朝向，
+ * 极点处 8 方位等价）。仰角（负纬度，自下往上看）基本用不上，不烘（2026-10-26 定）。
+ * 基纬度 0 恒有 */
+export const FULL_ANGLE_LATITUDES: readonly number[] = [45, 90];
 /** 某纬度要渲染的烘焙循环方向（0..7）；|纬度|≥90 只渲循环 0 */
 export function dirsForLatitude(lat: number): number[] {
   return Math.abs(lat) >= 90 ? [0] : [0, 1, 2, 3, 4, 5, 6, 7];
@@ -37,7 +39,7 @@ export function latitudePitchRad(lat: number): number {
 }
 
 export interface BakeOptions {
-  /** 全角度模式：额外纬度（度），如 [45,-45,90,-90]；基纬度 0 恒渲，|纬度|≥90 只渲一个朝向 */
+  /** 全角度模式：额外纬度（度），如 [45,90]（只有俯角侧）；基纬度 0 恒渲，|纬度|≥90 只渲一个朝向 */
   extraLatitudes?: number[];
   /** PMX 导入的贴图文件表（zip 解包：路径→Blob）；仅 PMX 输入时用 */
   pmxTextures?: Map<string, Blob>;

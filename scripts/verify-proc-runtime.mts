@@ -3165,4 +3165,81 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     && htmlS.includes('EMBEDDED.scene'));
 }
 
+// ---------- AM) 精灵堆叠进包 ----------
+// 摞全量进包（层图 + 几何）；纯堆叠件（无方向平面图）也进包，其
+// 显示图是 convert 按编辑器同一公式（computeStackOps）在第 0 帧
+// 世界帧合成的静止帧图；带方向图的摞件显示图同样走堆叠合成
+//（编辑器口径：有摞时方向图只作回落）。
+{
+  const { computeStackOps } = await import('../src/lib/stack-render');
+  const { computeWorldTransforms } = await import('../src/lib/unified-render');
+  const { pxToSub } = await import('../src/lib/unified-types');
+  // 层图：6×4 纯红/纯绿两层（SpriteRef 进全局表，与产品同路）
+  const mkLayer = (color: string) => ({
+    width: 6, height: 4,
+    data: Array.from({ length: 4 }, () => Array(6).fill(color)),
+    plug: { x: pxToSub(3), y: pxToSub(2) },
+  });
+  const layerRed = { ...mkLayer('#cc2222'), id: 'lay_red' };
+  const layerGrn = { ...mkLayer('#22cc22'), id: 'lay_grn' };
+  const stackGeo = {
+    layerSpriteIds: ['lay_red', 'lay_grn'],
+    layerThickness: 4,
+    origin: { x: 0, y: 0, z: 0 },
+    axis: { x: 0, y: 1, z: 0 },
+    uAxis: { x: 1, y: 0, z: 0 },
+    vAxis: { x: 0, y: 0, z: 1 },
+  };
+  const armPiece = createDefaultCostumePiece('arm');
+  armPiece.stack = stackGeo as never;
+  const legPiece = createDefaultCostumePiece('leg');
+  legPiece.stack = stackGeo as never;
+  // leg 另带一张方向图：显示图仍须走堆叠合成（尺寸 ≠ 方向图的 9×9）
+  (legPiece.sprites as Record<number, unknown>)[2] = {
+    width: 9, height: 9,
+    data: Array.from({ length: 9 }, () => Array(9).fill('#3333cc')),
+    plug: { x: pxToSub(4), y: pxToSub(4) },
+  };
+  const ch = {
+    id: 'chAM', name: '堆叠进包',
+    nodes: { arm: makeNode('arm', '臂', 'arm'), leg: makeNode('leg', '腿', 'leg', 'arm') },
+    rootNodeId: 'arm',
+    rootNodeIds: ['arm'],
+    costumeSets: [{ id: 'set1', name: '默认', pieces: { arm: armPiece, leg: legPiece } }],
+    activeCostumeSetId: 'set1',
+    variants: {},
+  } as unknown as Character;
+  (ch.nodes.arm as { children: string[] }).children = ['leg'];
+  const table = { lay_red: layerRed, lay_grn: layerGrn } as never;
+  const pkg = convertCharacterToRuntimePackage(ch, table);
+  const arm = pkg.parts.find((p) => p.key === 'arm');
+  check('AM1 纯堆叠件进包（spriteKind + 有显示图）', arm?.spriteKind === true && !!arm?.sprite);
+  check('AM2 摞全量进包（2 层图 + 几何逐值）',
+    arm?.stack?.layers.length === 2
+    && arm?.stack?.layerThickness === 4
+    && arm?.stack?.axis[1] === 1 && arm?.stack?.layers[0]?.data[0]?.[0] === '#cc2222'
+    && arm?.stack?.layers[1]?.plug[0] === 3);
+  // 显示图与编辑器公式对拍：同 stack、同第 0 帧世界帧 → 同尺寸/枢轴
+  const worlds = computeWorldTransforms(ch, 0, 512, 512, 12);
+  const wArm = worlds.get('arm');
+  const expect = computeStackOps(stackGeo as never, [layerRed, layerGrn] as never, wArm!.worldFrame, wArm!.worldAngle);
+  check('AM3 显示图尺寸/枢轴与 computeStackOps 一致（同公式）',
+    arm?.sprite?.w === expect.width && arm?.sprite?.h === expect.height
+    && Math.abs((arm?.sprite?.plug[0] ?? -1) - expect.pivotX) < 0.51
+    && Math.abs((arm?.sprite?.plug[1] ?? -1) - expect.pivotY) < 0.51);
+  check('AM4 显示图含两层颜色（合成而非单层直取）',
+    JSON.stringify(arm?.sprite?.data).includes('#cc2222')
+    && JSON.stringify(arm?.sprite?.data).includes('#22cc22'));
+  const leg = pkg.parts.find((p) => p.key === 'leg');
+  check('AM5 带方向图的摞件：显示图走堆叠合成（≠方向图 9×9）且摞进包',
+    !!leg?.stack && leg?.sprite?.w !== 9 && (leg?.sprite?.w ?? 0) > 0);
+  check('AM6 堆叠降级有 warning 点名（静止帧合成口径）',
+    pkg.warnings.some((w) => w.includes('精灵堆叠') && w.includes('arm')));
+  const sp1 = (pkg.costumes['set1'] as { __sprite?: Record<string, { w: number }>; __stack?: unknown }).__sprite;
+  check('AM7 集内 __sprite 也是堆叠合成图（与 part.sprite 同尺寸）',
+    sp1?.['arm']?.w === arm?.sprite?.w);
+  check('AM8 同摞不重复进 __stack（默认集同口径）',
+    (pkg.costumes['set1'] as { __stack?: unknown }).__stack === undefined);
+}
+
 console.log(`\n程序化运行时接线校验全过（${passed} 项）`);

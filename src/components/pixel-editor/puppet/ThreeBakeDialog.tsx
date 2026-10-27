@@ -39,6 +39,7 @@ import {
   type ProcessedBoneDirection,
   type ProcessedBoneLayered,
 } from '@/lib/bake/skeleton-mapper';
+import { attachBoneStacks } from '../../../lib/bake/stack-attach';
 import {
   bakeManualParts,
   listManualMeshes,
@@ -80,6 +81,10 @@ import {
   parseModelTopology,
   type SixPartBakeData,
   type PartName,
+  SIX_PARTS,
+  SIX_PART_LABEL,
+  type SixPartName,
+  type PartStackSlice,
 } from '@/lib/bake/threejs-baker-sixpart';
 import type { TopologyResult } from '@/lib/bake/bone-topology';
 
@@ -804,12 +809,15 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
   const [paletteSize, setPaletteSize] = useState(16);
   const [weightThreshold, setWeightThreshold] = useState(0.2);
   const [absorbUnassigned, setAbsorbUnassigned] = useState(false);
+  const [withStacks, setWithStacks] = useState(false);
+  const [manualStacks, setManualStacks] = useState<Map<number, PartStackSlice> | null>(null);
+  const [stackParts, setStackParts] = useState<SixPartName[]>([...SIX_PARTS]);
   const [manualPrefixSplit, setManualPrefixSplit] = useState<'none' | 'parts' | 'layers'>('none');
   const [granularity, setGranularity] = useState<'coarse' | 'fine'>('coarse');
   /** 烘焙模式：twopass=整模 ID 双遍（16 遍），sixpart=六部件（96 遍） */
   const [bakeMode, setBakeMode] = useState<'twopass' | 'sixpart' | 'manual' | 'layer'>('sixpart');
   const [processedLayered, setProcessedLayered] = useState<Map<number, ProcessedBoneLayered> | null>(null);
-  // 全角度模式：额外 ±45°（各 8 方向）与 ±90°（各 1 个朝向）纬度的整套精灵
+  // 全角度模式：额外俯角 +45°（8 方向）与 +90°（1 个朝向）纬度的整套精灵（仰角不烘）
   const [fullAngle, setFullAngle] = useState(false);
   // PMX 导入：zip 解包的贴图文件表 + 原味着色开关（参考版 NPR，默认关）
   const pmxTexturesRef = useRef<Map<string, Blob> | null>(null);
@@ -982,6 +990,8 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       const data = await bakeSixParts(inp, {
         size,
         layerPass: layerMode,
+        withStacks,
+        stackParts: withStacks ? stackParts : undefined,
         weightThreshold,
         absorbUnassigned,
         granularity,
@@ -1020,7 +1030,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [fileData, url, size, paletteSize, weightThreshold, absorbUnassigned, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor]);
+  }, [fileData, url, size, paletteSize, weightThreshold, absorbUnassigned, granularity, manualMerges, manualUnmerges, fullAngle, pmxFlavor, withStacks, stackParts]);
 
   /** 导出 Live2D (.moc3)：当前 MMD 模型 → 拆分图元 + 骨骼姿态采样关键形 → 打包下载 */
   const handleExportLive2d = useCallback(async () => {
@@ -1216,6 +1226,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     setSixPart(null);
     setProcessed(null);
     setProcessedLayered(null);
+    setManualStacks(null);
     setImportMsg(null);
     setRebakeTarget(null);
     try {
@@ -1237,6 +1248,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
         paletteSize,
         absorbUnassigned,
         bonePrefixSplit: manualPrefixSplit,
+        withStacks,
         pmxTextures: pmxTexturesRef.current ?? undefined,
         usePmxNpr: pmxFlavor,
         extraLatitudes: fullAngle ? [...FULL_ANGLE_LATITUDES] : undefined,
@@ -1244,6 +1256,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       });
       setTotalMs(performance.now() - t0);
       setProcessed(proc.parts);
+      setManualStacks(proc.stacks ?? null);
       setProcessedLayered(proc.layered ? new Map(proc.layered.map((l) => [l.boneIndex, l])) : null);
       setProgress('');
     } catch (e) {
@@ -1252,7 +1265,7 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
     } finally {
       setBaking(false);
     }
-  }, [manualCatalog, manualParts, resolveInput, size, paletteSize, absorbUnassigned, manualPrefixSplit, fullAngle, pmxFlavor]);
+  }, [manualCatalog, manualParts, resolveInput, size, paletteSize, absorbUnassigned, manualPrefixSplit, fullAngle, pmxFlavor, withStacks]);
 
   /** 按当前模式分发烘焙 */
   const handleBakeDispatch = useCallback(() => {
@@ -1357,6 +1370,14 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       const mapped = processedLayered
         ? mapBonesToNodesLayered(processedLayered, char.id, name)
         : mapBonesToNodes(processed, char.id, name);
+      // 精灵堆叠：把烘焙时的部件切片挂到对应服装件（层图并入 mapped.sprites 一并写入）
+      let stackNote = '';
+      const stacksForImport = bakeMode === 'manual' ? manualStacks ?? undefined : sixPart?.boneStacks;
+      if (stacksForImport && stacksForImport.size > 0) {
+        const r = attachBoneStacks(mapped.character, mapped.sprites, stacksForImport, char.id, name);
+        if (r.attached > 0) stackNote = `；已挂堆叠 ${r.attached} 处（${r.layerSprites} 张层图）`;
+        if (r.skipped > 0) stackNote += `；${r.skipped} 处未挂上（宿主节点缺失）`;
+      }
       // 一次写入：节点树 + 服装集（不中途回读，见 AGENTS.md 快照坑）
       store.updateUnifiedCharacter(char.id, {
         nodes: mapped.character.nodes,
@@ -1370,12 +1391,12 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
       }));
       setLastImportedCharId(char.id);
       setImportMsg(
-        `已创建角色 ${name}，含 ${mapped.stats.nodes} 个节点，${mapped.stats.sprites} 张精灵${enlargeNote}`,
+        `已创建角色 ${name}，含 ${mapped.stats.nodes} 个节点，${mapped.stats.sprites} 张精灵${enlargeNote}${stackNote}`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [processed, processedLayered, fileName, size]);
+  }, [processed, processedLayered, fileName, size, sixPart, bakeMode, manualStacks]);
 
   // 手动替换服装：用预览的某方向精灵替换已导入角色的对应精灵
   const handleReplaceSprite = useCallback((
@@ -1548,15 +1569,35 @@ export default function ThreeBakeDialog({ open, onClose }: ThreeBakeDialogProps)
                 <option value="manual">手动拆分（按网格）</option>
               </select>
             </label>
-            <label className="flex cursor-pointer items-center gap-1" title="额外渲染 ±45°（各 8 方向）与 ±90°（各 1 个朝向，正上方/正下方）的整套精灵，导入后按角色纬度自动选用；渲染遍数约 ×3.3">
+            <label className="flex cursor-pointer items-center gap-1" title="额外渲染俯角 +45°（8 方向）与 +90°（1 个朝向，正上方）的整套精灵，导入后按角色纬度自动选用；仰角（负纬度，自下往上看）基本用不上、不烘；渲染遍数约 ×2.1">
               <input type="checkbox" checked={fullAngle} onChange={(e) => setFullAngle(e.target.checked)} />
-              全角度（±45°/±90°）
+              俯角全套（+45°/+90°）
             </label>
             {bakeMode !== 'twopass' && (
             <label className="flex cursor-pointer items-center gap-1" title="不属于任何部件的内容（六部件：主导骨骼无部件的三角形；手动：未分配的网格）按邻近关系归入相邻部件，而不是直接丢弃">
               <input type="checkbox" checked={absorbUnassigned} onChange={(e) => setAbsorbUnassigned(e.target.checked)} />
               无归属归入邻近部件
             </label>
+            )}
+            {(bakeMode === 'sixpart' || bakeMode === 'layer' || bakeMode === 'manual') && (
+            <label className="flex cursor-pointer items-center gap-1" title="同时把每节肢体（手动模式：每个部件）沿自身轴切成一摞截面层图，挂到对应节点上：呈现时按 3D 朝向逐层合成、可连续转动、关节照常弯（第二产线，PR #46 研究定案）；方向平面图照常生成作回落">
+              <input type="checkbox" checked={withStacks} onChange={(e) => setWithStacks(e.target.checked)} />
+              生成精灵堆叠
+            </label>
+            )}
+            {withStacks && (bakeMode === 'sixpart' || bakeMode === 'layer') && (
+            <span className="flex items-center gap-1" title="只为勾选部件下属的肢体生成堆叠">
+              {SIX_PARTS.map((p) => (
+                <label key={p} className="flex cursor-pointer items-center gap-0.5">
+                  <input
+                    type="checkbox"
+                    checked={stackParts.includes(p)}
+                    onChange={(e) => setStackParts((prev) => (e.target.checked ? [...prev, p] : prev.filter((x) => x !== p)))}
+                  />
+                  {SIX_PART_LABEL[p]}
+                </label>
+              ))}
+            </span>
             )}
             {bakeMode === 'manual' && (
             <label className="flex items-center gap-1" title="部件内的像素再按主导骨骼名的前缀（去掉尾部序号）分组。需要模型带蒙皮；无蒙皮的部件自动不拆">

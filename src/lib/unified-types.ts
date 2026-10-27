@@ -233,6 +233,15 @@ export function rotMatU(tiltDeg: number): Mat3 {
   return [1, 0, 0, 0, c, s, 0, -s, c];
 }
 
+/** 绕竖直轴（y）旋转矩阵 RY（朝向基 (h, y, d) 坐标下）：整角色偏航用
+ * （h' = c·h + s·d；d' = −s·h + c·d，与 projectToView 的 (x,z) 旋转同向） */
+export function rotMatY(yawDeg: number): Mat3 {
+  const rad = (yawDeg * Math.PI) / 180;
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  return [c, 0, s, 0, 1, 0, -s, 0, c];
+}
+
 /** 局部旋转复合：先视平面内 angle、后出平面 tilt（L = RU(tilt)·RD(angle)） */
 export function localRotMat(angleDeg: number, tiltDeg: number): Mat3 {
   if (tiltDeg === 0) return rotMatD(angleDeg);
@@ -350,6 +359,34 @@ export interface Sprite {
   partCameraHalf?: number;
   /** 整模相机半宽（归一化单位），全局统一尺度基准 */
   globalCameraHalf?: number;
+}
+
+/**
+ * 精灵堆叠（3D 导入第二产线，PR #46 研究定案）：把一个部件的网格
+ * 沿主轴切成一摞截面图（层图），呈现时按部件当前 3D 朝向逐层合成，
+ * 得到连续转动的部件外观，替代「8 方向平面图」那条产线（按部件二选一）。
+ *
+ * 坐标口径：全部在节点局部空间（与 offset3D 同系）——x 右、y 下、
+ * z 向外（南向时朝观众），单位为全局像素。层 k 的截面中心 =
+ * origin + axis · (k + 0.5) · layerThickness。
+ * 层图本身是普通 Sprite（进全局精灵表、一摞一夹），其 plug =
+ * 主轴穿过该层图的图内位置（截面内坐标原点）。
+ */
+export interface SpriteStack {
+  /** 层精灵 id（全局精灵表），自根（origin 侧）向尖端按层序 */
+  layerSpriteIds: string[];
+  /** 层厚（全局像素）= 切片时相邻截面间距 */
+  layerThickness: number;
+  /** 摞原点：第 0 层根侧端面的截面中心（节点局部，全局像素） */
+  origin: { x: number; y: number; z: number };
+  /** 层叠方向（单位向量，根→尖） */
+  axis: { x: number; y: number; z: number };
+  /** 截面内 u 轴（单位向量，层图 x 方向在节点局部中的指向） */
+  uAxis: { x: number; y: number; z: number };
+  /** 截面内 v 轴（单位向量，层图 y 方向） */
+  vAxis: { x: number; y: number; z: number };
+  /** 摞级标记（整摞一份，消费端按名解析；层图自身不带） */
+  marks?: SpriteMark[];
 }
 
 // ---- Direction System ----
@@ -1094,6 +1131,9 @@ export interface CostumePiece {
   scaleVariants: Partial<Record<number, Partial<Record<DirectionIndex, Sprite | SpriteRef>>>>;
   mirrorMap: MirrorMap;                         // Direction mirror mapping
   crossSections: CrossSection[];                // Cross section definitions for disc gen
+  /** 精灵堆叠（可选）：有此字段时呈现走堆叠合成（stack-render），
+   *  sprites 的方向图只作回落（无 WebGL/导出旧路径）与身份标识 */
+  stack?: SpriteStack;
   /** 参数化外观（可选）：该槽在此服装集下的程序化形式，见 ParametricAppearance */
   parametric?: ParametricAppearance;
   /** 动态模式（服装件挂载：随本服装集生效，与节点挂载双挂载合并） */
@@ -1443,6 +1483,11 @@ export interface NodeRenderInstruction {
     radius: number;     // 影响半径（像素）
     curve: 'linear' | 'smoothstep';
   };
+  /** 堆叠绘制算子（计划期由 stack-render 按当帧朝向算出，纯数据）：
+   *  有此字段时 renderNodeSprite 按算子逐层栅格化为绘制画布（跳过精灵
+   *  像素链），pivot 为算子自带锚点；key = 朝向量化键，作像素完美旋转
+   *  的内容哈希（朝向变则缓存失效）。计划层不碰 DOM，栅格化在执行层。 */
+  stackRender?: { ops: import('./stack-render').StackDrawOp[]; width: number; height: number; pivotX: number; pivotY: number; key: string; layerSpriteIds: string[]; marks?: SpriteMark[] };
   /** Face turn params（Spine 式伪 3D 转头，renderNodeSprite 在 meshSkin 之前应用） */
   faceTurn?: {
     yaw: number;    // -1（左）~ 1（右）

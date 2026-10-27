@@ -20,6 +20,7 @@ import {
 } from './threejs-baker-twopass';
 import type { BakeOptions } from './threejs-baker';
 import { dirsForLatitude, latitudePitchRad } from './threejs-baker';
+import { sliceStack, type SliceStackResult } from './stack-slicer';
 import {
   analyzeTopology,
   type PartName,
@@ -124,6 +125,17 @@ export interface SixPartGroup {
   cameraHalf: number;
 }
 
+/** 部件堆叠切片产物（withStacks 开启时）：切片在角色空间完成，
+ *  导入时由 stack-attach 以宿主关节为原点换算到节点局部并挂上服装件 */
+export interface PartStackSlice {
+  /** 宿主骨骼（合并后 effective 下标）= 这节肢体自己的骨骼 */
+  rootBoneIndex: number;
+  rootBoneName: string;
+  /** 宿主关节的角色空间位置（全局像素）= 切片 pivot */
+  jointChar: { x: number; y: number; z: number };
+  sliced: SliceStackResult;
+}
+
 export interface SixPartBakeData {
   bones: BakedBoneInfo[];
   /** 48 组：6 部件 × 8 方向 */
@@ -141,6 +153,8 @@ export interface SixPartBakeData {
   /** 图层模式元数据：部件 → 视图（图层）清单（顺序 = layerPixels 里的层号-1）；
    * rank = 正面帧相机深度中位数定的画序（0 = 最远、先画） */
   partLayers?: Partial<Record<PartName, { key: string; label: string; rank: number }[]>>;
+  /** 肢体堆叠切片（withStacks 开启时）：键 = 有效骨骼下标，一骨（节肢体）一摞 */
+  boneStacks?: Map<number, PartStackSlice>;
   /** 无归属三角形丢弃数（主导骨骼不属于任何部件；开启 absorbUnassigned 后为仍无法归入的孤立数） */
   droppedTriCount: number;
   /** 无归属三角形按邻近投票归入部件的数量（absorbUnassigned 关闭时为 0） */
@@ -159,6 +173,13 @@ export interface SixPartBakeOptions extends BakeOptions {
   manualUnmerges?: Set<number>;
   /** 每部件相机 padding 系数，默认 1.25 */
   partPadding?: number;
+  /** 同时产出精灵堆叠切片（第二产线）：每部件一摞截面层图数据，
+   *  导入时挂到部件根骨骼节点的服装件上（呈现走堆叠合成） */
+  withStacks?: boolean;
+  /** 堆叠层厚（全局像素），默认 size/128（512 时 4px） */
+  stackLayerThicknessPx?: number;
+  /** 只为这些部件下属的肢体产堆叠（缺省 = 全部）；对话框按部件勾选（粗筛）时传入 */
+  stackParts?: readonly SixPartName[];
 }
 
 // ---- 内部：蒙皮烘焙为静态几何 ----
@@ -752,6 +773,181 @@ export async function parseModelTopology(
  * 归一化用整模（各部件同 scale，保证拼装比例）。
  * 每部件相机独立取景（紧贴部件 bbox + padding）。
  */
+
+// ---- 部件堆叠切片（第二产线）：部件几何在角色空间切片 ----
+// 角色空间换算与 skeleton-mapper 的 joint3D→offset3D 同口径：
+// 归一化坐标 (p − center)·scale 再 (x, −y, z)·(size/2) 到全局像素。
+interface StackTexEntry { data: Uint8ClampedArray | null; w: number; h: number; r: number; g: number; b: number; a: number }
+
+function buildBoneStacks(
+  bakedMeshes: BakedMesh[],
+  boneToPart: (PartName | null)[],
+  parentIndex: readonly (number | null)[],
+  bindPos: THREE.Vector3[],
+  center: THREE.Vector3,
+  normScale: number,
+  size: number,
+  boneNames: string[],
+  effectiveIndex: readonly number[] | null,
+  layerThicknessPx: number,
+  onlyParts?: readonly SixPartName[],
+): Map<number, PartStackSlice> {
+  const K = size / 2; // 归一化单位 → 全局像素（globalCameraHalf = 1）
+  const charOf = (x: number, y: number, z: number) => ({
+    x: (x - center.x) * normScale * K,
+    y: -(y - center.y) * normScale * K,
+    z: (z - center.z) * normScale * K,
+  });
+  // 每源网格：换算后顶点位置（缓存） + 材质采样表（全局注册）
+  const registry: StackTexEntry[] = [];
+  const meshCtx = bakedMeshes.map((bm) => {
+    const posAttr = bm.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const conv = new Float32Array(posAttr.count * 3);
+    for (let i = 0; i < posAttr.count; i++) {
+      const c = charOf(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+      conv[i * 3] = c.x; conv[i * 3 + 1] = c.y; conv[i * 3 + 2] = c.z;
+    }
+    const matBase = registry.length;
+    for (const mat of bm.materials) {
+      const mm = mat as THREE.MeshBasicMaterial | null;
+      let entry: StackTexEntry = { data: null, w: 0, h: 0, r: 1, g: 1, b: 1, a: 1 };
+      if (mm) {
+        if (mm.color) { entry.r = mm.color.r; entry.g = mm.color.g; entry.b = mm.color.b; }
+        entry.a = mm.opacity ?? 1;
+        const img = (mm.map as THREE.Texture | undefined)?.image as CanvasImageSource | undefined;
+        if (img) {
+          try {
+            const w = (img as HTMLImageElement).naturalWidth || (img as HTMLCanvasElement).width || 0;
+            const h = (img as HTMLImageElement).naturalHeight || (img as HTMLCanvasElement).height || 0;
+            if (w > 0 && h > 0) {
+              const cv = document.createElement('canvas');
+              cv.width = w; cv.height = h;
+              const g2 = cv.getContext('2d')!;
+              g2.drawImage(img, 0, 0);
+              entry = { ...entry, data: g2.getImageData(0, 0, w, h).data, w, h };
+            }
+          } catch { /* 贴图不可读时以材质色采样 */ }
+        }
+      }
+      registry.push(entry);
+    }
+    return { bm, conv, matBase };
+  });
+  const sample = (mat: number, u: number, v: number): [number, number, number, number] => {
+    const e = registry[mat] ?? registry[0]!;
+    if (!e.data) return [e.r * 255, e.g * 255, e.b * 255, e.a * 255];
+    const tx = Math.max(0, Math.min(e.w - 1, Math.floor(u * e.w)));
+    const ty = Math.max(0, Math.min(e.h - 1, Math.floor(v * e.h)));
+    const o = (ty * e.w + tx) * 4;
+    return [e.data[o]! * e.r, e.data[o + 1]! * e.g, e.data[o + 2]! * e.b, e.data[o + 3]! * e.a];
+  };
+
+  const effOf = (b: number) => (effectiveIndex ? (effectiveIndex[b] ?? b) : b);
+  const selected = (b: number): boolean => {
+    const p = boneToPart[b];
+    if (!p) return false;
+    if (!onlyParts) return true;
+    return (onlyParts as readonly string[]).includes(p);
+  };
+  // 逐骨聚合：三角形按主导骨骼投票（与 groupTrianglesByPart 同法），
+  // 再按 effective 归并——摞的划分与 2D 拆分出的肢体 1:1 对齐
+  // （头/躯干合并骨骼即一摞，手指并入手即一摞）。
+  interface BoneAcc { posArr: number[]; uvArr: number[]; triMat: number[] }
+  const acc = new Map<number, BoneAcc>();
+  for (const mc of meshCtx) {
+    const bm = mc.bm;
+    const geo = bm.geometry;
+    const index = geo.getIndex();
+    const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+    const uvAttr = geo.getAttribute('uv') as THREE.BufferAttribute | undefined;
+    const triCount = index ? index.count / 3 : Math.floor(posAttr.count / 3);
+    for (let t = 0; t < triCount; t++) {
+      const va = index ? index.getX(t * 3) : t * 3;
+      const vb = index ? index.getX(t * 3 + 1) : t * 3 + 1;
+      const vc = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+      const votes = new Map<number, number>();
+      for (const vi of [va, vb, vc]) {
+        const bi = bm.vertBone[vi];
+        if (bi !== undefined && bi >= 0) votes.set(bi, (votes.get(bi) ?? 0) + 1);
+      }
+      let bestBone = -1;
+      let bestVotes = 0;
+      for (const [bi, n] of votes) {
+        if (n > bestVotes) { bestVotes = n; bestBone = bi; }
+      }
+      if (bestBone < 0 || !selected(bestBone)) continue;
+      const eff = effOf(bestBone);
+      let e = acc.get(eff);
+      if (!e) { e = { posArr: [], uvArr: [], triMat: [] }; acc.set(eff, e); }
+      for (const vi of [va, vb, vc]) {
+        e.posArr.push(mc.conv[vi * 3]!, mc.conv[vi * 3 + 1]!, mc.conv[vi * 3 + 2]!);
+        e.uvArr.push(uvAttr ? uvAttr.getX(vi) : 0, uvAttr ? uvAttr.getY(vi) : 0);
+      }
+      e.triMat.push(mc.matBase + Math.max(0, bm.triMaterial[t] ?? 0));
+    }
+  }
+  // 骨骼父子表（原始下标；effective 骨骼本身也是原始下标）
+  const childrenOf = new Map<number, number[]>();
+  for (let b = 0; b < parentIndex.length; b++) {
+    const p = parentIndex[b];
+    if (p === null || p === undefined) continue;
+    let arr = childrenOf.get(p);
+    if (!arr) { arr = []; childrenOf.set(p, arr); }
+    arr.push(b);
+  }
+  const out = new Map<number, PartStackSlice>();
+  for (const [eff, e] of acc) {
+    const triCount = e.triMat.length;
+    if (triCount === 0) continue;
+    const joint = charOf(bindPos[eff]!.x, bindPos[eff]!.y, bindPos[eff]!.z);
+    // 入向：父关节 → 本关节（无父用角色上向）；本节轴向取同部件子
+    // 骨骼中与入向最贴合者（链的直行延续）；无子骨骼用入向本身；
+    // 头部特殊：竖直轴（与旧部件口径一致）
+    const par = parentIndex[eff] ?? null;
+    let incoming = { x: 0, y: -1, z: 0 };
+    if (par !== null && bindPos[par]) {
+      const pp = charOf(bindPos[par]!.x, bindPos[par]!.y, bindPos[par]!.z);
+      const d = { x: joint.x - pp.x, y: joint.y - pp.y, z: joint.z - pp.z };
+      const l = Math.hypot(d.x, d.y, d.z);
+      if (l > 1e-6) incoming = { x: d.x / l, y: d.y / l, z: d.z / l };
+    }
+    let axis: { x: number; y: number; z: number } | null = null;
+    if (boneToPart[eff] === 'head') {
+      axis = { x: 0, y: -1, z: 0 };
+    } else {
+      let bestScore = -Infinity;
+      for (const ch of childrenOf.get(eff) ?? []) {
+        if (boneToPart[ch] !== boneToPart[eff]) continue;
+        const cp = charOf(bindPos[ch]!.x, bindPos[ch]!.y, bindPos[ch]!.z);
+        const d = { x: cp.x - joint.x, y: cp.y - joint.y, z: cp.z - joint.z };
+        const l = Math.hypot(d.x, d.y, d.z);
+        if (l < 1e-6) continue;
+        const score = (d.x * incoming.x + d.y * incoming.y + d.z * incoming.z) / l;
+        if (score > bestScore) { bestScore = score; axis = { x: d.x, y: d.y, z: d.z }; }
+      }
+      if (!axis) axis = incoming;
+    }
+    const tris = new Uint32Array(triCount * 3);
+    for (let i = 0; i < tris.length; i++) tris[i] = i;
+    const axisLen = Math.hypot(axis.x, axis.y, axis.z) || 1;
+    const uAxis = Math.abs(axis.x / axisLen) > 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    const sliced = sliceStack({
+      positions: Float32Array.from(e.posArr),
+      uvs: Float32Array.from(e.uvArr),
+      tris,
+      triMaterial: Int32Array.from(e.triMat),
+      sample,
+      pivot: joint,
+      axis,
+      uAxis,
+      layerThickness: layerThicknessPx,
+    });
+    if (sliced.layers.length === 0 || sliced.filledPixels === 0) continue;
+    out.set(eff, { rootBoneIndex: eff, rootBoneName: boneNames[eff] ?? `bone_${eff}`, jointChar: joint, sliced });
+  }
+  return out;
+}
+
 export async function bakeSixParts(
   input: string | ArrayBuffer,
   options: SixPartBakeOptions = {},
@@ -915,6 +1111,16 @@ export async function bakeSixParts(
       jointPixels: [], // 六部件下按（部件，方向）投影，见 groups
       joint3D: { x: normJoints[i].x, y: normJoints[i].y, z: normJoints[i].z },
     }));
+
+    // ---- 肢体堆叠切片（第二产线，可选） ----
+    const boneStacks = options.withStacks
+      ? buildBoneStacks(
+          bakedMeshes, boneToPart, parentIndex, bindPos, center, scale, size,
+          bones.map((b) => b.name || ''), merge ? merge.effectiveIndex : null,
+          options.stackLayerThicknessPx ?? size / 128,
+          options.stackParts,
+        )
+      : undefined;
 
     // ---- 渲染 ----
     const gradientMap = makeGradientMap(toonSteps);
@@ -1635,6 +1841,7 @@ export async function bakeSixParts(
       height: size,
       normalization: { center: { x: center.x, y: center.y, z: center.z }, scale },
       partLayers: options.layerPass ? partLayersAcc : undefined,
+      boneStacks,
       merge,
       // 整模归一化到 [-1,1]，globalCameraHalf = 1.0（归一化单位）
       globalCameraHalf: 1.0,

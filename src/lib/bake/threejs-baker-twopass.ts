@@ -459,23 +459,36 @@ export function computeTopologyMerge(
       for (const c of chain) keep(c);
       return;
     }
-    // 段代表：踝（足首）先认（名字含「足」会与大腿的足相撞），膝次之，
-    // 大腿 = 膝之前的第一个主链节点；认不到按弧长比例兜底
+    // 大腿定位：链首不一定是髋辅助——只有链首与次节关节重合时
+    // （腰キャンセル型：辅助骨就坐在它要抵消的关节上）链首才是辅助、
+    // 真大腿是次节；否则链首本身就是大腿（GLB 等一般 rig 的 Leg1 型）。
+    // 旧口径无条件拿次节当大腿，是按 MMD 骨序写死的：Leg1 会被当成
+    // 髋辅助并进膝节点，整条腿丢髋关节（Z23 实测）。
+    const jpos = (k: number) => topology.boneWorldPos[chain[k]];
+    const segLen = (a: number, b: number) => {
+      const pa = jpos(a), pb = jpos(b);
+      return pa && pb ? Math.hypot(pb.x - pa.x, pb.y - pa.y, pb.z - pa.z) : 0;
+    };
+    const thighIdx = segLen(0, 1) * 4 < Math.max(segLen(1, 2), 1e-9) ? 1 : 0;
+    const thigh = chain[thighIdx];
+    // 段代表：踝（足首）先认（名字含「足」会与大腿的足相撞），膝次之；
+    // 认不到按弧长比例兜底（弧长从大腿起算）
     let ankleIdx = -1, kneeIdx = -1;
-    for (let k = 1; k < chain.length; k++) {
+    for (let k = thighIdx + 1; k < chain.length; k++) {
       if (ankleIdx < 0 && ANKLE_RE.test(boneNames[chain[k]])) ankleIdx = k;
     }
-    for (let k = 1; k < (ankleIdx > 0 ? ankleIdx : chain.length); k++) {
+    for (let k = thighIdx + 1; k < (ankleIdx > 0 ? ankleIdx : chain.length); k++) {
       if (KNEE_RE.test(boneNames[chain[k]])) { kneeIdx = k; break; }
     }
-    if (ankleIdx < 0) ankleIdx = arcPick(chain, 0.78);
-    if (kneeIdx < 0 || kneeIdx >= ankleIdx) kneeIdx = Math.max(1, arcPick(chain.slice(0, ankleIdx + 1), 0.55));
-    const thigh = chain[1];
+    if (ankleIdx < 0) ankleIdx = thighIdx + arcPick(chain.slice(thighIdx), 0.78);
+    if (kneeIdx < 0 || kneeIdx >= ankleIdx) {
+      kneeIdx = thighIdx + Math.max(1, arcPick(chain.slice(thighIdx, ankleIdx + 1), 0.55));
+    }
     const knee = chain[kneeIdx];
     const ankle = chain[ankleIdx];
     keep(thigh); keep(knee); keep(ankle);
-    if (legRoot !== thigh) setMerge(legRoot, thigh, `髋辅助并入 ${boneNames[thigh]}`);
-    for (let k = 2; k < kneeIdx; k++) setMerge(chain[k], thigh, `大腿段并入 ${boneNames[thigh]}`);
+    if (thighIdx === 1) setMerge(chain[0], thigh, `髋辅助并入 ${boneNames[thigh]}`);
+    for (let k = thighIdx + 1; k < kneeIdx; k++) setMerge(chain[k], thigh, `大腿段并入 ${boneNames[thigh]}`);
     for (let k = kneeIdx + 1; k < ankleIdx; k++) setMerge(chain[k], knee, `小腿段并入 ${boneNames[knee]}`);
     for (let k = ankleIdx + 1; k < chain.length; k++) setMerge(chain[k], ankle, `脚趾并入 ${boneNames[ankle]}`);
     // 链外（D 系平行链/足先EX 分叉等）：按关节距离就近归段

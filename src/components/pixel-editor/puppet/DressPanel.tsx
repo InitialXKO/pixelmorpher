@@ -313,6 +313,45 @@ export default function DressPanel({
     if (editVariantId === variantId) setEditVariantId(null);
   };
 
+  /** 堆叠层厚（作用于全部服装集的此部位——同一摞层图被各集共享，
+   * 层厚是摞本身的属性，不是某一集的穿法） */
+  const handleStackThickness = (node: Node, value: number) => {
+    if (!selectedCharacter || !activePuppetSkeletonId || !Number.isFinite(value)) return;
+    const slotKey = node.slot?.slotKey ?? node.id;
+    const v = Math.min(64, Math.max(0.5, value));
+    const store = useProjectStore.getState();
+    store.pushUndo('改堆叠层厚');
+    const newCostumeSets = selectedCharacter.costumeSets.map((cs) => {
+      const piece = cs.pieces[slotKey];
+      if (!piece?.stack) return cs;
+      return { ...cs, pieces: { ...cs.pieces, [slotKey]: { ...piece, stack: { ...piece.stack, layerThickness: v } } } };
+    });
+    updateUnifiedCharacter(activePuppetSkeletonId, { costumeSets: newCostumeSets });
+  };
+
+  /** 删除整摞：清全部服装集此部位的 stack + 删除全部层图（一条撤销） */
+  const handleDeleteStack = (node: Node) => {
+    if (!selectedCharacter || !activePuppetSkeletonId) return;
+    const slotKey = node.slot?.slotKey ?? node.id;
+    const layerIds = new Set<string>();
+    for (const cs of selectedCharacter.costumeSets) {
+      const st = cs.pieces[slotKey]?.stack;
+      if (st) for (const id of st.layerSpriteIds) layerIds.add(id);
+    }
+    if (!confirm(`删除此部位的精灵堆叠？全部服装集的堆叠将清除，${layerIds.size} 张层图将一并删除（方向平面图不受影响）。`)) return;
+    const store = useProjectStore.getState();
+    // removeSprites 压唯一的撤销记录（快照在任何改动之前），角色侧随后写
+    store.removeSprites([...layerIds], '删除整摞');
+    const newCostumeSets = selectedCharacter.costumeSets.map((cs) => {
+      const piece = cs.pieces[slotKey];
+      if (!piece?.stack) return cs;
+      const next = { ...piece };
+      delete next.stack;
+      return { ...cs, pieces: { ...cs.pieces, [slotKey]: next } };
+    });
+    updateUnifiedCharacter(activePuppetSkeletonId, { costumeSets: newCostumeSets });
+  };
+
   /** 槽位变体指派：'' = 基础（删条目） */
   const handleSlotVariantChange = (node: Node, variantId: string) => {
     if (!selectedCharacter || !activePuppetSkeletonId) return;
@@ -622,6 +661,39 @@ export default function DressPanel({
             getBaseSpriteFor={getBaseSpriteFor}
             onAssign={(dir, spriteId) => handleSpriteAssign(selectedNode.id, dir, spriteId)}
           />
+          {selectedCostume.pieces[selectedNode.slot?.slotKey ?? selectedNode.id]?.stack && (() => {
+            const stack = selectedCostume.pieces[selectedNode.slot?.slotKey ?? selectedNode.id]!.stack!;
+            return (
+              <div className="rounded border border-[#1e1e3a] bg-[#0a0a1a] p-2 space-y-1.5">
+                <div className="flex items-center gap-1.5 text-[10px] text-gray-400">
+                  <span className="flex-1">精灵堆叠（{stack.layerSpriteIds.length} 层，呈现按 3D 朝向逐层合成）</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-[10px] text-gray-500">
+                  <span className="flex-shrink-0">层厚（px）</span>
+                  <input
+                    key={`${selectedNode.id}:${stack.layerThickness}`}
+                    type="number"
+                    min={0.5}
+                    max={64}
+                    step={0.5}
+                    defaultValue={stack.layerThickness}
+                    onBlur={(e) => handleStackThickness(selectedNode, Number(e.target.value))}
+                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                    className="w-16 bg-[#0a0a1a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[10px] text-gray-300"
+                    title="层与层沿部件主轴的间距；改动作用于全部服装集的此部位"
+                  />
+                  <span className="text-gray-600">回车/失焦生效</span>
+                </div>
+                <button
+                  onClick={() => handleDeleteStack(selectedNode)}
+                  className="text-[10px] px-1.5 py-1 rounded border border-red-900/60 text-red-400 hover:bg-red-950/40"
+                  title="清除全部服装集此部位的堆叠并删除全部层图"
+                >
+                  删除整摞
+                </button>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>

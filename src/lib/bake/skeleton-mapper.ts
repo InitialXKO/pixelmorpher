@@ -863,9 +863,101 @@ export function mapBonesToNodesLayered(
 import type { SixPartBakeData } from './threejs-baker-sixpart';
 import { ALL_PARTS } from './threejs-baker-sixpart';
 
+
+/** 关节分段只用于臂/腿部件：躯干等部件的破洞填充靠 ID 遍把遮挡
+ * 片元改写成本部件一侧的接通骨骼、再经重锚叠回主图，归属必须走
+ * ID 掩码；臂腿无此依赖，直接在部件精灵上按关节分段更简单。 */
+const LIMB_SEGMENT_PARTS: ReadonlySet<string> = new Set(['armL', 'armR', 'legL', 'legR']);
+
 /**
- * 按六部件的块内 ID 拆分。
- * 每部件每方向：读块内 ID（局部）→ 映射到全局 bone → 累积像素 → 裁剪。
+ * 关节分段归属（仅臂/腿）：直接在部件精灵上按关节位置分段——
+ * 段 = 父关节→子关节连线（归父骨骼），每像素归离它最近的段；
+ * 末节骨骼（无子骨骼）沿入向（父关节→本关节方向）延长一段作
+ * 自己的段，关节处分界即过关节的垂面。等距时先出现的段优先
+ * （真实段排在延长段之前，关节处归父段）。返回逐像素的有效
+ * 骨骼下标（-1 = 无归属）。单有效骨骼时全部不透明像素归该骨骼。
+ */
+function segmentPartOwners(
+  g: { colorPixels: Uint8ClampedArray; jointPixels?: Record<number, { x: number; y: number }> },
+  partBones: readonly number[],
+  bake: SixPartBakeData,
+  W: number,
+  H: number,
+): Int32Array {
+  const owners = new Int32Array(W * H).fill(-1);
+  const merge = bake.merge;
+  const effOf = (b: number) => (merge ? (merge.effectiveIndex[b] ?? b) : b);
+  const effSet: number[] = [];
+  const jpOf = new Map<number, { x: number; y: number }>();
+  for (const gi of partBones) {
+    const e = effOf(gi);
+    if (!jpOf.has(e)) { effSet.push(e); const jp = g.jointPixels?.[gi]; if (jp) jpOf.set(e, jp); }
+    if (gi === e) { const jp = g.jointPixels?.[gi]; if (jp) jpOf.set(e, jp); }
+  }
+  if (effSet.length === 0) return owners;
+  const paintAll = (e: number) => {
+    for (let p = 0; p < W * H; p++) if (g.colorPixels[p * 4 + 3] > 8) owners[p] = e;
+  };
+  if (effSet.length === 1) { paintAll(effSet[0]!); return owners; }
+  const boneByIndex = new Map(bake.bones.map((b) => [b.index, b]));
+  const effParentOf = (e: number): number | null => {
+    let p = boneByIndex.get(e)?.parentIndex ?? null;
+    while (p !== null && effOf(p) === e) p = boneByIndex.get(p)?.parentIndex ?? null;
+    if (p === null) return null;
+    const ep = effOf(p);
+    return ep !== e && effSet.includes(ep) ? ep : null;
+  };
+  const hasChild = new Set<number>();
+  for (const e of effSet) { const par = effParentOf(e); if (par !== null) hasChild.add(par); }
+  interface Seg { ax: number; ay: number; bx: number; by: number; owner: number }
+  const segs: Seg[] = [];
+  const stubs: Seg[] = [];
+  for (const e of effSet) {
+    const par = effParentOf(e);
+    const je = jpOf.get(e);
+    if (par !== null) {
+      const jp = jpOf.get(par);
+      if (jp && je) segs.push({ ax: jp.x, ay: jp.y, bx: je.x, by: je.y, owner: par });
+    }
+    if (!hasChild.has(e) && je) {
+      let dx = 0, dy = -1;
+      if (par !== null) {
+        const jp = jpOf.get(par);
+        if (jp) { dx = je.x - jp.x; dy = je.y - jp.y; }
+      }
+      const l = Math.hypot(dx, dy);
+      if (l > 1e-6) { dx /= l; dy /= l; }
+      const L = W + H;
+      stubs.push({ ax: je.x, ay: je.y, bx: je.x + dx * L, by: je.y + dy * L, owner: e });
+    }
+  }
+  const all = [...segs, ...stubs];
+  if (all.length === 0) { paintAll(effSet[0]!); return owners; }
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const p = y * W + x;
+      if (g.colorPixels[p * 4 + 3] <= 8) continue;
+      let best = Infinity;
+      let owner = -1;
+      for (const sg of all) {
+        const abx = sg.bx - sg.ax, aby = sg.by - sg.ay;
+        const len2 = abx * abx + aby * aby;
+        let t = len2 > 0 ? ((x - sg.ax) * abx + (y - sg.ay) * aby) / len2 : 0;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const dx = x - (sg.ax + abx * t), dy = y - (sg.ay + aby * t);
+        const d2 = dx * dx + dy * dy;
+        if (d2 < best) { best = d2; owner = sg.owner; }
+      }
+      owners[p] = owner;
+    }
+  }
+  return owners;
+}
+
+/**
+ * 按六部件拆分。归属两种口径：臂/腿在部件精灵上按关节分段
+ * （segmentPartOwners）；其余部件读块内 ID 掩码（破洞填充的遮挡
+ * 片元归属靠它）→ 映射到全局 bone → 累积像素 → 裁剪。
  * 输出与 splitByBoneId 同格式（ProcessedBone），下游 mapBonesToNodes 不用改。
  */
 export function splitSixParts(
@@ -962,9 +1054,17 @@ export function splitSixParts(
         e.rgba[o + 2] = g.colorPixels[o + 2];
         e.rgba[o + 3] = 255;
       };
+      const segOwners = LIMB_SEGMENT_PARTS.has(part)
+        ? segmentPartOwners(g, localToGlobal, bake, W, H)
+        : null;
       for (let p = 0; p < W * H; p++) {
         const o = p * 4;
         if (g.colorPixels[o + 3] <= 8) continue; // 透明跳过
+        if (segOwners) {
+          const bi = segOwners[p]!;
+          if (bi >= 0) addPixel(bi, o, p);
+          continue;
+        }
         if (!g.idPixels) {
           // 单节点部件：无 ID 图，所有非透明像素归唯一有效骨骼
           const localToGlobal = bake.partBoneMap[part];
@@ -978,47 +1078,6 @@ export function splitSixParts(
         }
       }
 
-      // [split-debug] 临时诊断（定位后删）：三段计数——ID 帧解码数 / 归属数 / 最终精灵数
-      if (g.idPixels && (part === 'armL' || part === 'armR')) {
-        const idCount = new Map<number, number>();
-        for (let p = 0; p < W * H; p++) {
-          const o = p * 4;
-          for (const bi of decodeBones(g.idPixels, g.idPixelsHi, o)) {
-            const eff = merge ? (merge.effectiveIndex[bi] ?? bi) : bi;
-            idCount.set(eff, (idCount.get(eff) ?? 0) + 1);
-          }
-        }
-        for (const [eff, n] of idCount) {
-          const e2 = perBone.get(eff);
-          console.log(`[split-debug] ${part} dir=${d} bone=${bake.bones[eff]?.name} idFrame=${n} attributed=${e2?.count ?? 0}`);
-        }
-      }
-      // [split-debug] 偏移扫描：ID 掩码与颜色不透明区的最佳重叠偏移（定位后删）
-      if (g.idPixels && part === 'armL' && (d === 0 || d === 6)) {
-        const arm2Gi = bake.bones.findIndex((bb) => bb.name === 'b_L_Arm2');
-        const arm2Eff = merge ? (merge.effectiveIndex[arm2Gi] ?? arm2Gi) : arm2Gi;
-        const maskA: number[] = [];
-        for (let p = 0; p < W * H; p++) {
-          const o = p * 4;
-          const bones = decodeBones(g.idPixels, g.idPixelsHi, o);
-          if (bones.some((bi) => (merge ? (merge.effectiveIndex[bi] ?? bi) : bi) === arm2Eff)) maskA.push(p);
-        }
-        let bestOff = '', bestN = -1;
-        for (let dy = -24; dy <= 24; dy += 2) {
-          for (let dx = -24; dx <= 24; dx += 2) {
-            let n = 0;
-            for (const p of maskA) {
-              const x = (p % W) + dx, y = ((p / W) | 0) + dy;
-              if (x < 0 || x >= W || y < 0 || y >= H) continue;
-              if (g.colorPixels[(y * W + x) * 4 + 3] > 8) n++;
-            }
-            if (n > bestN) { bestN = n; bestOff = `${dx},${dy}`; }
-          }
-        }
-        let opaque = 0;
-        for (let i = 3; i < g.colorPixels.length; i += 4) if (g.colorPixels[i] > 8) opaque++;
-        console.log(`[split-debug] armL dir=${d} Arm2掩码=${maskA.length} 颜色不透明总数=${opaque} 最佳偏移=${bestOff} 重叠=${bestN}`);
-      }
       // 每 bone 裁剪（与 splitByBoneId 同逻辑）
       for (const [bi, e] of perBone) {
         const bone = bake.bones[bi];
@@ -1159,16 +1218,10 @@ export function splitSixParts(
                 }
               }
             }
-            console.log(`[splitSixParts] overlay ${bone.name}: part=${part} dir=${d} anchor=${bake.bones[domBi].name} filled=${filled}`);
           }
           continue;
         }
         if (!pb.part) pb.part = part; // 部件归属（导入时臂链 T-pose 摆回用；首个添加方为归属部件）
-        if (part === 'armL' || part === 'armR') {
-          let cells = 0;
-          for (const row of grid) for (const c of row) if (c) cells++;
-          console.log(`[split-debug] ${part} dir=${d} bone=${bone.name} sprite=${cells} (crop ${cw}x${ch} cameraHalf=${g.cameraHalf.toFixed(3)})`);
-        }
         pb.directions.push({
           direction: d as DirectionIndex,
           latitude: lat,
@@ -1332,11 +1385,19 @@ export function splitSixPartsLayered(
         e.rgba[o + 2] = g.colorPixels[o + 2];
         e.rgba[o + 3] = 255;
       };
+      const segOwners = LIMB_SEGMENT_PARTS.has(part)
+        ? segmentPartOwners(g, localToGlobal, bake, W, H)
+        : null;
       for (let p = 0; p < W * H; p++) {
         const o = p * 4;
         if (g.colorPixels[o + 3] <= 8) continue;
         const rawLayer = g.layerPixels ? g.layerPixels[o] : 0;
         const vi = rawLayer > 0 ? rawLayer - 1 : 0;
+        if (segOwners) {
+          const bi = segOwners[p]!;
+          if (bi >= 0) addPixel(bi, vi, o, p);
+          continue;
+        }
         if (!g.idPixels) {
           const gi0 = localToGlobal?.[0];
           if (gi0 === undefined) continue;

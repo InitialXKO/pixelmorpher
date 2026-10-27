@@ -76,6 +76,11 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
     () => (unifiedSkeleton ? Object.values(unifiedSkeleton.nodes) : []),
     [unifiedSkeleton]
   );
+  // 角色带堆叠件时，朝向角滑杆独立于转面开关显示（连续偏航是堆叠的原生能力）
+  const hasStackPieces = useMemo(
+    () => (character?.costumeSets ?? []).some((cs) => Object.values(cs.pieces ?? {}).some((p) => !!p.stack)),
+    [character]
+  );
   const activeAnimationClipId = useProjectStore((s) => s.activeAnimationClipId);
   const clip = useMemo(
     () =>
@@ -208,9 +213,8 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
                 启用
               </label>
             </div>
-            {(character.faceTurnConfig?.enabled ?? false) && (
-              <>
-                <div className="flex items-center gap-2">
+            {((character.faceTurnConfig?.enabled ?? false) || hasStackPieces) && (
+                <div className="flex items-center gap-2" title={hasStackPieces && !(character.faceTurnConfig?.enabled ?? false) ? '整个角色绕竖直轴连续转动：堆叠按新朝向逐层重合成，平面精灵仍按最近的离散朝向选图' : undefined}>
                   <span className="text-[9px] text-gray-500 w-12 shrink-0">朝向角</span>
                   <input
                     type="range"
@@ -229,6 +233,8 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
                     {Math.round(character.facingAngle ?? 0)}°
                   </span>
                 </div>
+            )}
+            {(character.faceTurnConfig?.enabled ?? false) && (
                 <label className="flex items-center gap-1.5 text-[9px] text-gray-400 cursor-pointer">
                   <input
                     type="checkbox"
@@ -243,7 +249,6 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
                   />
                   单图模式（不切换精灵，全程转面）
                 </label>
-              </>
             )}
           </div>
 

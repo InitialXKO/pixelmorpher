@@ -1,7 +1,10 @@
 /**
  * 探针：图层拆分 + 图层装配（行为探针，走真实消费路径）
- * 夹具 bake 数据（16×16，armL 两骨骼）：骨骼 0 全红单层；骨骼 1 两层
- * （上半绿 = 视图 1、下半蓝 = 视图 0），partLayers 的 rank 故意与视图号反序。
+ * 夹具 bake 数据（16×16，armL 两骨骼，关节分段口径：关节 (2,8)→(12,8)
+ * 水平链，段界 = 过关节 (12,8) 的垂线，x≤12 归骨骼 0、x≥13 归骨骼 1；
+ * 夹具不带 ID 帧——拆分已改关节分段，不再消费 ID 掩码）：骨骼 0 全红
+ * 单层；骨骼 1 两层（上半绿 = 视图 1、下半蓝 = 视图 0），partLayers
+ * 的 rank 故意与视图号反序。
  * 断言：分层纯色性 / 与合并拆分的像素划分等价 / rank 排序 / 装配子节点
  * （socket 零偏移、children 登记、zIndex 落在骨骼的深度桶内、件精灵纯色）。
  */
@@ -16,38 +19,33 @@ function check(name: string, cond: boolean, extra?: string) {
 
 const W = 16, H = 16;
 const color = new Uint8ClampedArray(W * H * 4);
-const idLo = new Uint8ClampedArray(W * H * 4);
-const idHi = new Uint8ClampedArray(W * H * 4);
 const layer = new Uint8ClampedArray(W * H * 4);
 for (let y = 0; y < H; y++) {
   for (let x = 0; x < W; x++) {
     const o = (y * W + x) * 4;
-    if (x < 8) {
+    if (x <= 12) {
       color.set([255, 0, 0, 255], o);
-      idLo[o] = 0b01;
       layer[o] = 1;
     } else if (y < 8) {
       color.set([0, 255, 0, 255], o);
-      idLo[o] = 0b10;
       layer[o] = 2;
     } else {
       color.set([0, 0, 255, 255], o);
-      idLo[o] = 0b10;
       layer[o] = 1;
     }
     layer[o + 3] = 255;
   }
 }
 const bones = [
-  { index: 0, name: 'root', parentIndex: null, joint3D: { x: 0, y: 1, z: 0 }, jointPixels: { 6: { x: 2, y: 2 } } },
+  { index: 0, name: 'root', parentIndex: null, joint3D: { x: 0, y: 1, z: 0 }, jointPixels: { 6: { x: 2, y: 8 } } },
   { index: 1, name: 'seg', parentIndex: 0, joint3D: { x: 0.2, y: 0.6, z: 0 }, jointPixels: { 6: { x: 12, y: 8 } } },
 ] as any;
 const bake = {
   bones,
   groups: [{
     part: 'armL', direction: 6, latitude: 0,
-    jointPixels: { 0: { x: 2, y: 2 }, 1: { x: 12, y: 8 } },
-    colorPixels: color, idPixels: idLo, idPixelsHi: idHi, layerPixels: layer, cameraHalf: 1,
+    jointPixels: { 0: { x: 2, y: 8 }, 1: { x: 12, y: 8 } },
+    colorPixels: color, layerPixels: layer, cameraHalf: 1,
   }],
   partBoneMap: { armL: [0, 1] },
   boneToPart: ['armL', 'armL'],
