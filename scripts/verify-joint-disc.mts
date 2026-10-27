@@ -69,6 +69,24 @@ delete (child.attachment as any).jointWidth;
 (child.attachment as any).autoJointDisc = false;
 discs = plan().discInstructions;
 ok(discs.length === 0, `关自动生成：不出盘（实际 ${discs.length}）`);
+delete (child.attachment as any).autoJointDisc;
+
+// ⑥ 向导形状：node.slot 与服装集件是两个独立对象（烘焙路径是同一对象），
+// 向导修后两件都带 'plug' 截面（直径 = 创建时 jointWidth）。
+// 清掉 attachment.jointWidth（恢复自动）→ 盘直径仍为截面 6，不是默认 4。
+const wizSlotPiece = createDefaultCostumePiece('limb');
+wizSlotPiece.crossSections = [{ id: 'plug', mode: 'inside', diameter: 6 }] as never;
+const wizSetPiece = createDefaultCostumePiece('limb');
+wizSetPiece.sprites = { 6: { spriteId: spr.id } } as never;
+wizSetPiece.crossSections = [{ id: 'plug', mode: 'inside', diameter: 6 }] as never;
+child.slot = wizSlotPiece as never;
+(character as any).costumeSets = [{ id: 'cs1', name: '默认', pieces: { limb: wizSetPiece } }];
+(child.attachment as any).jointWidth = 6;
+discs = plan().discInstructions;
+ok(discs.length === 1 && discs[0]!.diameter === 6, `向导形状手动 6：盘直径 = 6（实际 ${discs[0]?.diameter}）`);
+delete (child.attachment as any).jointWidth;
+discs = plan().discInstructions;
+ok(discs.length === 1 && discs[0]!.diameter === 6, `向导形状清手动值：截面回退 = 6（实际 ${discs[0]?.diameter}）`);
 
 console.log(fails === 0 ? 'JOINT DISC PROBE PASS' : `JOINT DISC PROBE FAIL (${fails})`);
 process.exit(fails === 0 ? 0 : 1);
