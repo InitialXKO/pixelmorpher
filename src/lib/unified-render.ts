@@ -491,6 +491,22 @@ export function computeWorldTransforms(
     } catch { /* store 不可用（离线语境）时回退 12 */ }
     frameRate = resolved;
   }
+  // 蓝图/修改器求值兜底：调用方没传 blueprintTransforms 时在此求值，
+  // 让所有取位路径（覆盖层标签/命中/IK 手柄/五官叠画/捕姿）与主渲染
+  // 同源。转位克隆的 rotate 修改器只活在这份求值结果里——缺了它，
+  // 克隆体在覆盖层与命中里停在原位（精灵却已经转过去了）。主渲染
+  // （generateRenderPlan）总是显式传入（含编辑中未保存图的覆写），
+  // 不走此兜底、语义不变。
+  if (!blueprintTransforms) {
+    const hasBp = Object.values(character.nodes).some(
+      (n) => (n as any).blueprint || (n.modifiers?.length ?? 0) > 0,
+    );
+    if (hasBp) {
+      blueprintTransforms = evaluateBlueprintTransforms(
+        character, frame, frameRate, variableContext?.values,
+      );
+    }
+  }
   const transforms = new Map<string, WorldTransform>();
 
   const rootNode = character.nodes[character.rootNodeId];
