@@ -29,7 +29,7 @@ import {
   frameViewAngleForDirection, frameYAxisWorld,
   worldToViewBasis, MAT3_IDENTITY, nodeJointDiscDiameter,
 } from './unified-types';
-import { solveIK2Bone3D, solveIKFabrik3D } from './blueprint/ik';
+import { solveIK2Bone3D, solveIK3Bone3D, solveIK3BoneWithTip3D, solveIKFabrik3D } from './blueprint/ik';
 import { DEFAULT_FACE_FEATURES, faceFeaturePoints, faceHalfWidths } from './face-features';
 import { slashFrameCanvas } from './slash-fan';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
@@ -760,6 +760,7 @@ export function solveChainIKOverrides(
     }
   }
   const points: V3[] = [...pos];
+  const hasTip = tipLength > 1e-6;
   if (tipLength > 1e-6) {
     const yAxis = frameYAxisWorld(fkT[n - 1].worldFrame, geometryDirection ?? fkT[n - 1].variantIndex);
     points.push({
@@ -797,9 +798,11 @@ export function solveChainIKOverrides(
     }
   }
 
-  // 位置求解
+  // 位置求解：策略按实际段数自动匹配（定案）——显式 fabrik 声明优先；
+  // 否则 2 段解析 2 骨、3 段解析 3 骨、4 段且末段为尖端时剥尖端走 3 骨，
+  // 解析不可解的退化构型与其余长链回落 FABRIK。
   let solved: V3[];
-  if (chain.solver === '2bone' && lengths.length === 2) {
+  if (chain.solver !== 'fabrik' && lengths.length >= 2) {
     let pole: V3 = chain.poleTarget3D ? { ...chain.poleTarget3D } : { ...points[1] };
     if (!chain.poleTarget3D && (chain.bendDir ?? 1) < 0) {
       // bendDir=-1 且无显式 pole：把 FK 肘位关于 root→target 轴镜像到另一侧
@@ -814,8 +817,20 @@ export function solveChainIKOverrides(
         z: points[0].z + 2 * proj * d.z - rel.z,
       };
     }
-    const r = solveIK2Bone3D(points[0], target, lengths[0], lengths[1], pole);
-    solved = [points[0], r.mid, r.end];
+    if (lengths.length === 2) {
+      const r = solveIK2Bone3D(points[0], target, lengths[0], lengths[1], pole);
+      solved = [points[0], r.mid, r.end];
+    } else if (lengths.length === 3) {
+      const r3 = solveIK3Bone3D(points[0], target, lengths[0], lengths[1], lengths[2], pole);
+      solved = r3
+        ? [points[0], r3.p1, r3.p2, r3.end]
+        : solveIKFabrik3D(points, lengths, target);
+    } else if (lengths.length === 4 && hasTip) {
+      solved = solveIK3BoneWithTip3D(points, lengths, target, pole)
+        ?? solveIKFabrik3D(points, lengths, target);
+    } else {
+      solved = solveIKFabrik3D(points, lengths, target);
+    }
   } else {
     solved = solveIKFabrik3D(points, lengths, target);
   }

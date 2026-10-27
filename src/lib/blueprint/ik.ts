@@ -313,6 +313,206 @@ export function solveIK2Bone3D(
   return { mid, end };
 }
 
+/** 两向量夹角（偏离直线的弯角，0 = 共线同向） */
+function bendAngle3(a: IK3DPoint, b: IK3DPoint): number {
+  const la = len3(a), lb = len3(b);
+  if (la < 1e-12 || lb < 1e-12) return 0;
+  const c = Math.max(-1, Math.min(1, dot3(a, b) / (la * lb)));
+  return Math.acos(c);
+}
+
+/**
+ * 3D 三骨 IK（解析）：三段长 len1/len2/len3、两个中间关节，末端到 target。
+ *
+ * 三段对末端目标多一个自由度，用弯曲分配定解：中间两关节的弯角按
+ * β1 : β2 = len2 : len3 分担（远段越长分得越少；腕/尖端侧天然少弯）。
+ * 以有符号弯角 β1 为参数（符号由 pole 定侧）：A = |p2 − root| 随 β1
+ * 定，p2 取「到 root 距 A、到 target 距 len3」两球交圆在弯平面内靠
+ * pole 侧的点，p1 再由 2 骨解析定——两弯同号同平面（不会像按 A 扫
+ * 那样落进反向弯的 S 形构型）。分配比对 β1 单调，二分命中；β2 变号
+ * 处是同号族的边界，搜索范围钳到那里为止。退化构型返回 null，
+ * 调用方回落 FABRIK。
+ */
+export function solveIK3Bone3D(
+  root: IK3DPoint,
+  target: IK3DPoint,
+  len1: number,
+  len2: number,
+  len3_: number,
+  pole: IK3DPoint,
+): { p1: IK3DPoint; p2: IK3DPoint; end: IK3DPoint } | null {
+  const toT = v3(target, root);
+  const dist = len3(toT);
+  const total = len1 + len2 + len3_;
+  if (dist < 1e-9 || len1 <= 0 || len2 <= 0 || len3_ < 0) return null;
+  const dir = mul3(toT, 1 / dist);
+  if (dist >= total - 1e-9) {
+    // 不可达：全伸直指向目标
+    const p1 = add3(root, mul3(dir, len1));
+    const p2 = add3(p1, mul3(dir, len2));
+    const end = add3(p2, mul3(dir, len3_));
+    return { p1, p2, end };
+  }
+  // 最小可达距离（最长段与其余之差）；目标过近无解析构型 → 回落
+  const longest = Math.max(len1, len2, len3_);
+  if (dist < longest - (total - longest) - 1e-9) return null;
+
+  // 弯平面：dir 与 pole 的垂向分量定 perpU；共线时取视平面内回退
+  // （dir × ẑ，再退化才 dir × ŷ），法向 n = dir × perpU 定弯角符号。
+  const rel = v3(pole, root);
+  const axial = dot3(rel, dir);
+  let perp = add3(rel, mul3(dir, -axial));
+  if (len3(perp) < 1e-6 * Math.max(1, dist)) {
+    perp = { x: dir.y, y: -dir.x, z: 0 };
+    if (len3(perp) < 1e-6) perp = { x: dir.z, y: 0, z: -dir.x };
+  }
+  const perpU = norm3(perp);
+  const nrm = norm3({
+    x: dir.y * perpU.z - dir.z * perpU.y,
+    y: dir.z * perpU.x - dir.x * perpU.z,
+    z: dir.x * perpU.y - dir.y * perpU.x,
+  });
+  const polePt = add3(root, add3(mul3(dir, axial), mul3(perpU, Math.max(1, dist))));
+  const signedAngle = (u: IK3DPoint, v: IK3DPoint): number => {
+    const cx = u.y * v.z - u.z * v.y;
+    const cy = u.z * v.x - u.x * v.z;
+    const cz = u.x * v.y - u.y * v.x;
+    return Math.atan2(cx * nrm.x + cy * nrm.y + cz * nrm.z, dot3(u, v));
+  };
+
+  // A 窗 → β1 窗（A 随 β1 单调减：A² = L1² + L2² + 2·L1·L2·cosβ1）
+  const eps = 1e-6;
+  const aLo = Math.max(Math.abs(len1 - len2), dist - len3_) + eps;
+  const aHi = Math.min(len1 + len2, dist + len3_) - eps;
+  if (aLo > aHi) return null;
+  const betaAt = (A: number) => Math.acos(Math.max(-1, Math.min(1,
+    (A * A - len1 * len1 - len2 * len2) / (2 * len1 * len2))));
+  let bLo = betaAt(aHi); // A 大 → β1 小
+  let bHi = betaAt(aLo);
+  const configAt = (b1: number) => {
+    const A = Math.sqrt(Math.max(0, len1 * len1 + len2 * len2 + 2 * len1 * len2 * Math.cos(b1)));
+    const a2 = (A * A - len3_ * len3_ + dist * dist) / (2 * dist);
+    const h2 = Math.sqrt(Math.max(0, A * A - a2 * a2));
+    const p2 = add3(root, add3(mul3(dir, a2), mul3(perpU, h2)));
+    const p1 = solveIK2Bone3D(root, p2, len1, len2, polePt).mid;
+    const d1 = v3(p1, root);
+    const d2 = v3(p2, p1);
+    const d3 = v3(target, p2);
+    return { p1, p2, end: { ...target }, sB1: signedAngle(d1, d2), sB2: signedAngle(d2, d3) };
+  };
+  // 同号族边界：β2 变号处（β2 = 0 是该族的自然终点，分配比在那里 = 1）
+  {
+    const cHi = configAt(bHi);
+    const cLo = configAt(bLo);
+    if (cLo.sB2 !== 0 && cHi.sB2 !== 0 && Math.sign(cHi.sB2) !== Math.sign(cLo.sB2)) {
+      let lo = bLo, hi = bHi;
+      for (let i = 0; i < 40; i++) {
+        const mid = (lo + hi) / 2;
+        const cm = configAt(mid);
+        if (Math.sign(cm.sB2) === Math.sign(cLo.sB2)) lo = mid; else hi = mid;
+      }
+      bHi = lo;
+    }
+  }
+  const targetShare = len3_ <= 1e-9 ? 1 : len2 / (len2 + len3_);
+  const shareOf = (c: { sB1: number; sB2: number }) => {
+    const d = Math.abs(c.sB1) + Math.abs(c.sB2);
+    return d < 1e-9 ? targetShare : Math.abs(c.sB1) / d;
+  };
+  const cLo = configAt(bLo);
+  const cHi = configAt(bHi);
+  const fLo = shareOf(cLo) - targetShare;
+  const fHi = shareOf(cHi) - targetShare;
+  if (Math.abs(fLo) < 1e-7) return cLo;
+  if (Math.abs(fHi) < 1e-7) return cHi;
+  if (fLo * fHi > 0) return Math.abs(fLo) <= Math.abs(fHi) ? cLo : cHi;
+  let best = Math.abs(fLo) <= Math.abs(fHi) ? cLo : cHi;
+  let lo = bLo, hi = bHi;
+  for (let i = 0; i < 56; i++) {
+    const mid = (lo + hi) / 2;
+    const c = configAt(mid);
+    const f = shareOf(c) - targetShare;
+    if (Math.abs(f) < Math.abs(shareOf(best) - targetShare)) best = c;
+    if (Math.abs(f) < 1e-7) { best = c; break; }
+    if ((f > 0) === (fLo > 0)) lo = mid; else hi = mid;
+  }
+  return best;
+}
+
+/** 把向量 v 按「单位向量 a 转到 b」的摆转旋转（Rodrigues），退化时回退 */
+function swingRotate3(a: IK3DPoint, b: IK3DPoint, v: IK3DPoint): IK3DPoint {
+  const axis = {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  };
+  const al = len3(axis);
+  const d = Math.max(-1, Math.min(1, dot3(a, b)));
+  if (al < 1e-9) {
+    if (d > 0) return v;
+    // 反向：绕任一与 a 正交的轴转 π
+    const ax = Math.abs(a.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+    const k = norm3({
+      x: a.y * ax.z - a.z * ax.y,
+      y: a.z * ax.x - a.x * ax.z,
+      z: a.x * ax.y - a.y * ax.x,
+    });
+    // 绕 k 转 π：v' = 2(k·v)k − v
+    return add3(mul3(k, 2 * dot3(k, v)), mul3(v, -1));
+  }
+  const k = mul3(axis, 1 / al);
+  const ang = Math.acos(d);
+  const cos = Math.cos(ang), sin = Math.sin(ang);
+  const term1 = mul3(v, cos);
+  const cross = {
+    x: k.y * v.z - k.z * v.y,
+    y: k.z * v.x - k.x * v.z,
+    z: k.x * v.y - k.y * v.x,
+  };
+  const term2 = mul3(cross, sin);
+  const term3 = mul3(k, dot3(k, v) * (1 - cos));
+  return add3(add3(term1, term2), term3);
+}
+
+/**
+ * 四段（3 骨 + 尖端段）：尖端是末关节 frame +Y 的刚性延伸，不占弯曲
+ * 自由度。把尖端剥掉——关节目标 = target − 尖端向 × 尖端长，关节链走
+ * 三骨解析解；尖端向先取 FK 值、按解后末段向摆转修正再解一次（末关
+ * 节朝向相对末段的偏角与 FK 保持一致）。返回 5 点（4 关节 + 尖端）。
+ */
+export function solveIK3BoneWithTip3D(
+  points: IK3DPoint[],
+  lengths: number[],
+  target: IK3DPoint,
+  pole: IK3DPoint,
+): IK3DPoint[] | null {
+  if (points.length !== 5 || lengths.length !== 4) return null;
+  const tipLen = lengths[3];
+  const fkTipDir = norm3(v3(points[4], points[3]));
+  const fkSegDir = norm3(v3(points[3], points[2]));
+  // 迭代：以 u 定关节目标解关节，再按解后末段向摆转更新 u；收敛时
+  // (u, joints) 自洽。不收敛时以最后的 u 再解一次，保证返回的关节与
+  // 尖端出自同一个 u（尖端 = 末关节 + u × 尖端长，恒精确达标）。
+  let u = fkTipDir;
+  for (let pass = 0; pass < 4; pass++) {
+    const jt = add3(target, mul3(u, -tipLen));
+    const r = solveIK3Bone3D(points[0], jt, lengths[0], lengths[1], lengths[2], pole);
+    if (!r) return null;
+    const joints = [points[0], r.p1, r.p2, r.end];
+    const segDir = norm3(v3(r.end, r.p2));
+    const u2 = norm3(swingRotate3(fkSegDir, segDir, fkTipDir));
+    if (bendAngle3(u, u2) < 1e-4) {
+      return [...joints, add3(joints[3], mul3(u2, tipLen))];
+    }
+    u = u2;
+  }
+  const jtF = add3(target, mul3(u, -tipLen));
+  const rF = solveIK3Bone3D(points[0], jtF, lengths[0], lengths[1], lengths[2], pole);
+  if (!rF) return null;
+  const jointsF = [points[0], rF.p1, rF.p2, rF.end];
+  return [...jointsF, add3(jointsF[3], mul3(u, tipLen))];
+}
+
 /**
  * 3D FABRIK：根固定，迭代前后向使末端到达 target（不可达时全伸直指向）。
  * points 为初始关节位置（取 FK），lengths 为段长（points.length - 1 段）。
