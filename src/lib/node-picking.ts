@@ -190,7 +190,9 @@ export function pickNodesAt(
       }
     }
 
-    // tier 2 · 无精灵兜底胶囊（与绘制同一份形状）
+    // tier 2 · 无精灵兜底胶囊（与绘制同一份形状；段归属与精灵属主
+    // 对齐——段属起始关节的节点；joint 形状让关节点本身点中的是
+    // 自己，半像素偏置压过父段在同一点的末端盖）
     if (spritelessIds.size > 0) {
       const shapes = computeMannequinShapes(
         character, worldTransforms, opts.canvasWidth, opts.canvasHeight,
@@ -208,7 +210,7 @@ export function pickNodesAt(
           if (q <= 1) picks.push({ node, character, tier: 2, score: q });
         } else {
           const prox = capsuleProximity(s.x1, s.y1, s.x2, s.y2, s.r1, s.r2, x, y);
-          if (prox <= slop) picks.push({ node, character, tier: 2, score: prox });
+          if (prox <= slop) picks.push({ node, character, tier: 2, score: s.kind === 'joint' ? prox - 0.5 : prox });
         }
       }
     }

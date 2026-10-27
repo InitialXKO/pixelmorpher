@@ -86,7 +86,9 @@ const charB = mkChar('charB',
 const pickB = (x: number, y: number, ch: Character = charB) => pickNodesAt([ch], x, y, { sprites: {}, frame: 0, canvasWidth: W, canvasHeight: H });
 
 picks = pickB(198.5, 238.5); // 前臂段中点
-ok(picks[0]?.node.id === bFore.id && picks[0]?.tier === 2, `B1 点在前臂胶囊上 → 选前臂（实际 ${picks[0]?.node.id}/tier ${picks[0]?.tier}）`);
+ok(picks[0]?.node.id === bArm.id && picks[0]?.tier === 2, `B1 点在前臂段上 → 选上臂（段归起始关节，与精灵属主对齐；实际 ${picks[0]?.node.id}/tier ${picks[0]?.tier}）`);
+picks = pickB(181, 241);     // 前臂关节正点
+ok(picks[0]?.node.id === bFore.id && picks[0]?.tier === 2, `B1b 点在前臂关节上 → 选前臂自己（实际 ${picks[0]?.node.id}）`);
 picks = pickB(198, 200);     // 段上方 38px
 ok(picks.length === 0, `B2 胶囊外 → 无人选中（实际 ${picks.length}）`);
 picks = pickB(256, 256);     // 根关节
@@ -104,7 +106,7 @@ const jp = (id: string) => {
 };
 const cArm = jp(cloned.newRootId), cFore = jp(cloneForeId);
 picks = pickB((cArm.x + cFore.x) / 2, (cArm.y + cFore.y) / 2, cloned.character);
-ok(picks[0]?.node.id === cloneForeId && picks[0]?.tier === 2, `B4 点在转位后前臂段 → 选克隆前臂（实际 ${picks[0]?.node.id}）`);
+ok(picks[0]?.node.id === cloned.newRootId && picks[0]?.tier === 2, `B4 点在转位后前臂段 → 选克隆上臂（段归起始关节；实际 ${picks[0]?.node.id}）`);
 
 // ---------- C：细精灵胶囊 ----------
 const cRoot = mkNode('c_root', 'torso');

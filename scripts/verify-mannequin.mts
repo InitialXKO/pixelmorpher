@@ -56,27 +56,28 @@ ok(mq.length === 0, `① 开关缺省：无人偶（实际 ${mq.length}）`);
 // ② 子有精灵：只根出人偶（根无精灵、无父 → 起止同点）
 mq = plan(true).mannequinInstructions ?? [];
 ok(mq.length === 1 && mq[0]!.nodeId === root.id, `② 子有精灵：仅根出人偶（实际 ${mq.map((m) => m.nodeId).join(',')}）`);
-ok(mq[0]!.x1 === mq[0]!.x2 && mq[0]!.y1 === mq[0]!.y2, '② 根人偶起止同点（无父连接段）');
+ok(Math.abs(Math.hypot(subToPx(mq[0]!.x2) - subToPx(mq[0]!.x1), subToPx(mq[0]!.y2) - subToPx(mq[0]!.y1)) - Math.hypot(30, 10)) < 1.5, '② 根段 = 根关节→子关节（段归起始关节）');
 
 // ③ 子无精灵：两段；子段起点 == 根关节、长 ≈ |(30,10)| ≈ 31.6
 piece.sprites = {} as never;
 mq = plan(true).mannequinInstructions ?? [];
-ok(mq.length === 2, `③ 子无精灵：两段人偶（实际 ${mq.length}）`);
+ok(mq.length === 2, `③ 子无精灵：根段 + 子孤点（实际 ${mq.length}）`);
 const rootMq = mq.find((m) => m.nodeId === root.id)!;
 const childMq = mq.find((m) => m.nodeId === child.id)!;
 ok(!!rootMq && !!childMq, '③ 根/子人偶齐全');
 if (rootMq && childMq) {
-  ok(childMq.x1 === rootMq.x2 && childMq.y1 === rootMq.y2, '③ 子段起点 == 根关节');
-  const len = Math.hypot(subToPx(childMq.x2) - subToPx(childMq.x1), subToPx(childMq.y2) - subToPx(childMq.y1));
-  ok(Math.abs(len - Math.hypot(30, 10)) < 1.5, `③ 子段长 ≈ 31.6（实际 ${len.toFixed(1)}）`);
+  ok(rootMq.x2 === childMq.x1 && rootMq.y2 === childMq.y1, '③ 根段终点 == 子关节（子孤点在其关节处）');
+  ok(childMq.x1 === childMq.x2 && childMq.y1 === childMq.y2, '③ 子为孤点退化（无出段）');
+  const len = Math.hypot(subToPx(rootMq.x2) - subToPx(rootMq.x1), subToPx(rootMq.y2) - subToPx(rootMq.y1));
+  ok(Math.abs(len - Math.hypot(30, 10)) < 1.5, `③ 根段长 ≈ 31.6（实际 ${len.toFixed(1)}）`);
   const expectR = Math.min(16, Math.max(1.5, Math.hypot(30, 10) * 0.16));
-  ok(Math.abs(childMq.r2 - expectR) < 0.01, `③ 无 jointWidth：半径 = 段长×0.16 = ${expectR.toFixed(2)}（实际 ${childMq.r2.toFixed(2)}）`);
+  ok(Math.abs(rootMq.r2 - expectR) < 0.01, `③ 无 jointWidth：段终半径 = 段长×0.16 = ${expectR.toFixed(2)}（实际 ${rootMq.r2.toFixed(2)}）`);
 }
 
 // ④ jointWidth=20 → r2 = 10
 (child.attachment as any).jointWidth = 20;
 mq = plan(true).mannequinInstructions ?? [];
-const childMq4 = mq.find((m) => m.nodeId === child.id)!;
+const childMq4 = mq.find((m) => m.nodeId === root.id)!; // 段归根：终点半径在根的出段上
 ok(!!childMq4 && childMq4.r2 === 10, `④ jointWidth 20 → 终点半径 10（实际 ${childMq4?.r2}）`);
 delete (child.attachment as any).jointWidth;
 
@@ -163,7 +164,7 @@ ok(ext2.length === 1 && ext2[0]!.extremity === 'foot', `⑦ finger 叶子：只�
 const plan2Fx = (faceGuide: boolean) => generateRenderPlan(character2, 0, 256, 256, 'pixel-perfect', 12,
   undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, {},
   undefined, undefined, undefined, undefined, undefined, true, { faceGuide });
-const headIns = mq2.find((m) => m.nodeId === headN.id && !m.extremity);
+const headIns = mq2.find((m) => !!m.head);
 ok(!!headIns?.head, '⑧ 头段挂蛋形头');
 if (headIns?.head) {
   ok(Math.abs(headIns.head.a - 27.5) < 0.6, `⑧ 长半轴 = 颈段 55/2 = 27.5（实际 ${headIns.head.a.toFixed(1)}）`);
@@ -171,7 +172,7 @@ if (headIns?.head) {
   ok(headIns.head.cx === headIns.x2 && headIns.head.cy === headIns.y2, '⑧ 蛋心 = 头关节');
   ok(headIns.faceSegs === undefined, '⑧ 五官参照关（缺省）：无五官段');
 }
-const headFx = (plan2Fx(true).mannequinInstructions ?? []).find((m) => m.nodeId === headN.id && !m.extremity);
+const headFx = (plan2Fx(true).mannequinInstructions ?? []).find((m) => !!m.head);
 ok(!!headFx?.faceSegs && headFx.faceSegs.length === 6, `⑧ 五官参照开：6 段五官（实际 ${headFx?.faceSegs?.length}）`);
 if (headFx?.head && headFx.faceSegs) {
   const cy = subToPx(headFx.head.cy), cx = subToPx(headFx.head.cx);
@@ -200,7 +201,7 @@ if (tg) {
 }
 ok(capsuleTangents(5, 5, 8, 5, 5, 3) === null, '⑨ 同心返回 null（执行端走退化圆）');
 (root.attachment as any) = { type: 'socket', jointWidth: 24 };
-const childMq9 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === child.id);
+const childMq9 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === root.id);
 ok(!!childMq9 && childMq9.r1 === 12, `⑨ 子段起点半径 = 父 jointWidth/2 = 12（实际 ${childMq9?.r1}）`);
 
 // ⑩ 手脚/头跟末端节点自身旋转：转腕/踝/头节点 90°（关节位置不变），
@@ -212,14 +213,14 @@ const dirOf = (m: (typeof mq2)[number]) => {
 };
 const hand0 = (plan2().mannequinInstructions ?? []).find((m) => m.extremity === 'hand')!;
 const foot0 = (plan2().mannequinInstructions ?? []).find((m) => m.extremity === 'foot')!;
-const head0 = (plan2().mannequinInstructions ?? []).find((m) => m.nodeId === headN.id && !m.extremity)!;
+const head0 = (plan2().mannequinInstructions ?? []).find((m) => !!m.head)!;
 (wrist.transform as any).angle = 90;
 (ankle.transform as any).angle = 90;
 (headN.transform as any).angle = 90;
 const mq10 = plan2().mannequinInstructions ?? [];
 const hand1 = mq10.find((m) => m.extremity === 'hand')!;
 const foot1 = mq10.find((m) => m.extremity === 'foot')!;
-const head1 = mq10.find((m) => m.nodeId === headN.id && !m.extremity)!;
+const head1 = mq10.find((m) => !!m.head)!;
 const dotH = Math.abs(dirOf(hand0).x * dirOf(hand1).x + dirOf(hand0).y * dirOf(hand1).y);
 const dotF = Math.abs(dirOf(foot0).x * dirOf(foot1).x + dirOf(foot0).y * dirOf(foot1).y);
 ok(!!hand1 && dotH < 0.35, `⑩ 转腕 90°：手延伸方向跟着转（与原方向 |dot| ${dotH.toFixed(2)} < 0.35）`);
@@ -242,17 +243,17 @@ if (head0?.head && head1?.head) {
 // 清掉截面 → 回段长估算。jointWidth 手动值仍压过截面（④ 的延伸）。
 delete (child.attachment as any).jointWidth;
 piece.crossSections = [{ id: 'plug', mode: 'inside', diameter: 20 }] as never;
-let mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === child.id)!;
+let mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === root.id)!;
 ok(!!mq11 && mq11.r2 === 10, `⑪ plug 截面 20 → 终点半径 10（实际 ${mq11?.r2}）`);
 piece.crossSections = [{ id: 'plug', mode: 'inside', diameter: 8 }] as never;
-mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === child.id)!;
+mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === root.id)!;
 ok(!!mq11 && mq11.r2 === 4, `⑪ 截面改 8 → 半径跟到 4（实际 ${mq11?.r2}）`);
 (child.attachment as any).jointWidth = 14;
-mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === child.id)!;
+mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === root.id)!;
 ok(!!mq11 && mq11.r2 === 7, `⑪ jointWidth 14 压过截面 8 → 半径 7（实际 ${mq11?.r2}）`);
 delete (child.attachment as any).jointWidth;
 piece.crossSections = [] as never;
-mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === child.id)!;
+mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === root.id)!;
 const expectEst = Math.min(16, Math.max(1.5, Math.hypot(30, 10) * 0.16));
 ok(!!mq11 && Math.abs(mq11.r2 - expectEst) < 0.01, `⑪ 无盘数据 → 回段长估算 ${expectEst.toFixed(2)}（实际 ${mq11?.r2.toFixed(2)}）`);
 

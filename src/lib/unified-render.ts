@@ -1590,10 +1590,13 @@ function mannequinLimbKind(character: Character, node: Node): 'arm' | 'leg' | nu
  * 画出来的胶囊就是点得中的胶囊，不另算第二套。 */
 export interface MannequinShape {
   nodeId: string;
-  kind: 'segment' | 'hand' | 'foot' | 'thumb' | 'head';
-  /** 段端点（画布 px）；head 时为颈段，判定走 head 椭圆 */
+  kind: 'segment' | 'hand' | 'foot' | 'thumb' | 'head' | 'joint';
+  /** 段端点（画布 px）；head 时为颈段，判定走 head 椭圆；
+   * joint 时 x1=x2=本关节、r1=r2=本关节半径（退化段） */
   x1: number; y1: number; x2: number; y2: number;
   r1: number; r2: number;
+  /** segment 的远端节点（段 = nodeId 关节 → toNodeId 关节） */
+  toNodeId?: string;
   head?: { cx: number; cy: number; a: number; b: number; angleRad: number };
 }
 
@@ -1655,27 +1658,58 @@ function mannequinShapesInternal(
   // 半径：关节盘有效直径/2（与 RigPanel 显示同口径 nodeJointDiscDiameter：
   // jointWidth 手动值 > plug 截面 > bottom 截面），无数据才按本段长
   // 估算（根节点无段长 → 5px）。此前只认 jointWidth——截面定的盘径
-  // 改了胶囊不跟。
-  const radiusOf = (nodeId: string): number => {
+  // 改了胶囊不跟。lenHintPx 供非 eligible 的子节点用（其入段长度
+  // 就是当前这条出段的长度、同口径）。
+  const radiusOf = (nodeId: string, lenHintPx?: number): number => {
     const node = character.nodes[nodeId];
     const discD = node ? nodeJointDiscDiameter(node) : null;
     if (discD !== null) return discD / 2;
     const j = joints.get(nodeId);
-    if (!j) return 5;
-    const lenPx = Math.hypot(subToPx(j.ex) - subToPx(j.sx), subToPx(j.ey) - subToPx(j.sy));
+    const lenPx = j
+      ? Math.hypot(subToPx(j.ex) - subToPx(j.sx), subToPx(j.ey) - subToPx(j.sy))
+      : (lenHintPx ?? 0);
     if (lenPx <= 0.01) return 5;
     return Math.min(16, Math.max(1.5, lenPx * 0.16));
   };
 
-  for (const [nodeId, j] of joints) {
-    const node = character.nodes[nodeId]!;
-    const parentId = node.parentId ?? undefined;
+  // 归属口径（与精灵属主对齐）：一段身体属于它起始的那个关节的节点——
+  // 精灵挂在本关节、覆盖本关节→子关节这一段，胶囊同理。故段形状记在
+  // 父侧节点名下（段 = 本关节 → 子关节），另给每个节点一个自关节的
+  // joint 形状，让关节点本身点中的是它自己而非父段的末端。
+  const posPxOf = (nodeId: string): { x: number; y: number } | null => {
+    const wt = worldTransforms.get(nodeId);
+    if (!wt) return null;
+    const p = project(wt.worldX, wt.worldY, wt.worldZ);
+    return { x: subToPx(p.x), y: subToPx(p.y) };
+  };
+  const childrenOf = new Map<string, string[]>();
+  for (const n of Object.values(character.nodes)) {
+    if (!n.parentId) continue;
+    const arr = childrenOf.get(n.parentId) ?? [];
+    arr.push(n.id);
+    childrenOf.set(n.parentId, arr);
+  }
+  for (const nodeId of joints.keys()) {
+    const own = posPxOf(nodeId);
+    if (!own) continue;
+    const rOwn = radiusOf(nodeId);
     shapes.push({
-      nodeId, kind: 'segment',
-      x1: subToPx(j.sx), y1: subToPx(j.sy), x2: subToPx(j.ex), y2: subToPx(j.ey),
-      r1: parentId ? radiusOf(parentId) : radiusOf(nodeId),
-      r2: radiusOf(nodeId),
+      nodeId, kind: 'joint',
+      x1: own.x, y1: own.y, x2: own.x, y2: own.y,
+      r1: rOwn, r2: rOwn,
     });
+    for (const childId of childrenOf.get(nodeId) ?? []) {
+      const childNode = character.nodes[childId];
+      if (!childNode || childNode.visible === false) continue;
+      const cp = posPxOf(childId);
+      if (!cp) continue;
+      const segLen = Math.hypot(cp.x - own.x, cp.y - own.y);
+      shapes.push({
+        nodeId, kind: 'segment', toNodeId: childId,
+        x1: own.x, y1: own.y, x2: cp.x, y2: cp.y,
+        r1: rOwn, r2: radiusOf(childId, segLen),
+      });
+    }
   }
 
   // 手脚延伸（借 PoseSketcher 口径）：肢体末端叶子关节（腕/踝）的胶囊
@@ -1870,11 +1904,17 @@ function generateMannequinInstructions(
   };
 
   const EXTREMITY_FILL = '#a7b2c4';
+  // segInsByNode 以段的远端节点为键（头蛋要挂到「以头关节结尾的那
+  // 条段」上）；段的衣物色区是段自身的属性（自链根累计到本段），
+  // 按远端节点算 clothRatioOf、与段记在谁名下无关。
   const segInsByNode = new Map<string, MannequinRenderInstruction>();
+  const coveredOwners = new Set<string>();
+  const jointShapes: MannequinShape[] = [];
   for (const s of shapes) {
+    if (s.kind === 'joint') { jointShapes.push(s); continue; }
     if (s.kind === 'segment') {
-      const node = character.nodes[s.nodeId]!;
-      const clothRatio = clothRatioOf(node);
+      const distal = s.toNodeId ? character.nodes[s.toNodeId] : undefined;
+      const clothRatio = distal ? clothRatioOf(distal) : 0;
       const ins: MannequinRenderInstruction = {
         nodeId: s.nodeId,
         x1: pxToSub(s.x1), y1: pxToSub(s.y1), x2: pxToSub(s.x2), y2: pxToSub(s.y2),
@@ -1884,10 +1924,24 @@ function generateMannequinInstructions(
         ...(clothRatio > 0 ? { clothRatio } : {}),
       };
       out.push(ins);
-      segInsByNode.set(s.nodeId, ins);
+      coveredOwners.add(s.nodeId);
+      if (s.toNodeId) segInsByNode.set(s.toNodeId, ins);
     } else if (s.kind === 'head') {
-      const ins = segInsByNode.get(s.nodeId);
-      if (!ins || !s.head) continue;
+      let ins = segInsByNode.get(s.nodeId);
+      if (!ins) {
+        // 父节点有精灵时颈段不生成（父精灵已覆盖该区域）：给头节点
+        // 补一条退化指令专挂蛋形
+        ins = {
+          nodeId: s.nodeId,
+          x1: pxToSub(s.x2), y1: pxToSub(s.y2), x2: pxToSub(s.x2), y2: pxToSub(s.y2),
+          r1: s.r2, r2: s.r2,
+          fillColor: '#8f9bb0',
+          outlineColor: '#4a5160',
+        };
+        out.push(ins);
+      }
+      coveredOwners.add(s.nodeId);
+      if (!s.head) continue;
       const node = character.nodes[s.nodeId]!;
       const { cx, cy, a, b, angleRad } = s.head;
       ins.head = { cx: pxToSub(cx), cy: pxToSub(cy), a, b, angleRad };
@@ -1926,7 +1980,20 @@ function generateMannequinInstructions(
         outlineColor: '#4a5160',
         extremity: s.kind,
       });
+      coveredOwners.add(s.nodeId);
     }
+  }
+  // 孤点补画：无子、无延伸、无头蛋的节点（如单节点角色、游离道具
+  // 尖）在新归属下没有任何段可画，给它一条退化指令保住可见性
+  for (const s of jointShapes) {
+    if (coveredOwners.has(s.nodeId)) continue;
+    out.push({
+      nodeId: s.nodeId,
+      x1: pxToSub(s.x1), y1: pxToSub(s.y1), x2: pxToSub(s.x2), y2: pxToSub(s.y2),
+      r1: s.r1, r2: s.r2,
+      fillColor: '#8f9bb0',
+      outlineColor: '#4a5160',
+    });
   }
   return out;
 }

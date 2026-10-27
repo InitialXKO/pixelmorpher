@@ -71,10 +71,9 @@ const planFx = (fx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: 
 
 let mq = planFx({ sleeveRatio: 0.5, pantsRatio: 0.25 }).mannequinInstructions ?? [];
 const byId = (id: string) => mq.find((m) => m.nodeId === id);
-ok(byId(arm.id)?.clothRatio === undefined, '袖口：链根（肩）挂接段不染色');
-ok(near(byId(fore.id)?.clothRatio ?? -1, 0.5), `袖口 50%：前臂段（肩→肘 40px）染一半（实际 ${byId(fore.id)?.clothRatio}）`);
-ok(byId(leg.id)?.clothRatio === undefined, '裤腰：链根（髋）挂接段不染色');
-ok(near(byId(shin.id)?.clothRatio ?? -1, 0.25), `裤腰 25%：小腿段染 1/4（实际 ${byId(shin.id)?.clothRatio}）`);
+ok(mq.filter((m) => m.nodeId === root.id).every((m) => m.clothRatio === undefined), '袖口/裤腰：链根挂接段（归躯干）不染色');
+ok(near(byId(arm.id)?.clothRatio ?? -1, 0.5), `袖口 50%：肩→肘段（归肩）染一半（实际 ${byId(arm.id)?.clothRatio}）`);
+ok(near(byId(leg.id)?.clothRatio ?? -1, 0.25), `裤腰 25%：髋→膝段（归髋）染 1/4（实际 ${byId(leg.id)?.clothRatio}）`);
 mq = planFx({ sleeveRatio: 0, pantsRatio: 0 }).mannequinInstructions ?? [];
 ok(mq.every((m) => m.clothRatio === undefined), '比例 0：全段不染色');
 mq = planFx(undefined).mannequinInstructions ?? [];
