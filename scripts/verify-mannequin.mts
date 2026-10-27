@@ -3,7 +3,7 @@
 // ③ 子无精灵 → 根+子各一段，子段起止 = 根关节→子关节（长 ≈ socket 偏移长）；
 // ④ attachment.jointWidth=20 → 子段终点半径 10（首选口径）；
 // ⑤ 不可见节点 → 不出人偶。
-import { generateRenderPlan } from '../src/lib/unified-render';
+import { generateRenderPlan, capsuleTangents } from '../src/lib/unified-render';
 import {
   createDefaultNode, createDefaultCostumePiece, pxToSub, subToPx,
   type Character, type Sprite,
@@ -181,6 +181,27 @@ if (headFx?.head && headFx.faceSegs) {
   ok(midY(headFx.faceSegs[5]!) > midY(headFx.faceSegs[2]!), '⑧ 嘴线在眼线下方');
   ok(Math.abs(midX(headFx.faceSegs[4]!) - cx) < 1.5, '⑧ 鼻居中');
 }
+
+// ⑨ 两端粗细：切线几何（切点在两圆上、切线到两圆心距离 = 各半径、
+// 对轴对称）+ 指令起点半径取父关节 jointWidth/2
+const tg = capsuleTangents(0, 0, 10, 40, 0, 4);
+ok(!!tg, '⑨ 切线几何存在');
+if (tg) {
+  const dist = (p: { x: number; y: number }, q: { x: number; y: number }) => Math.hypot(p.x - q.x, p.y - q.y);
+  ok(Math.abs(dist(tg.t1a, { x: 0, y: 0 }) - 10) < 1e-6, '⑨ 切点在圆 1 上');
+  ok(Math.abs(dist(tg.t2a, { x: 40, y: 0 }) - 4) < 1e-6, '⑨ 切点在圆 2 上');
+  const lineDist = (p: { x: number; y: number }) =>
+    Math.abs((tg.t2a.y - tg.t1a.y) * p.x - (tg.t2a.x - tg.t1a.x) * p.y + tg.t2a.x * tg.t1a.y - tg.t2a.y * tg.t1a.x)
+    / dist(tg.t1a, tg.t2a);
+  ok(Math.abs(lineDist({ x: 0, y: 0 }) - 10) < 1e-6, '⑨ 切线距圆心 1 = r1（相切）');
+  ok(Math.abs(lineDist({ x: 40, y: 0 }) - 4) < 1e-6, '⑨ 切线距圆心 2 = r2（相切）');
+  ok(Math.abs(tg.t1a.y + tg.t1b.y) < 1e-6, '⑨ 两侧切点对轴对称');
+  ok(Math.abs(tg.beta - Math.acos(6 / 40)) < 1e-9, '⑨ beta = acos((r1−r2)/d)');
+}
+ok(capsuleTangents(5, 5, 8, 5, 5, 3) === null, '⑨ 同心返回 null（执行端走退化圆）');
+(root.attachment as any) = { type: 'socket', jointWidth: 24 };
+const childMq9 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === child.id);
+ok(!!childMq9 && childMq9.r1 === 12, `⑨ 子段起点半径 = 父 jointWidth/2 = 12（实际 ${childMq9?.r1}）`);
 
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
 process.exit(fails === 0 ? 0 : 1);

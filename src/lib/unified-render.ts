@@ -3634,41 +3634,76 @@ function renderNodeSprite(
  */
 /** 人偶兜底绘制：胶囊段（圆头粗线，半径取两端均值）+ 终点关节圆，
  * 先描边色垫底再填主体色。与关节盘同层（精灵之前）。 */
+/**
+ * 两圆外公切线几何（胶囊渐变体拼路径用）：切点在两圆上同角
+ * （(r1−r2)/d 的相似变换口径），PoseSketcher TangentConnect 同形态。
+ * d 太小（同心）返回 null。
+ */
+export function capsuleTangents(
+  x1: number, y1: number, r1: number,
+  x2: number, y2: number, r2: number,
+): {
+  phi: number; beta: number; d: number;
+  t1a: { x: number; y: number }; t2a: { x: number; y: number };
+  t1b: { x: number; y: number }; t2b: { x: number; y: number };
+} | null {
+  const dx = x2 - x1, dy = y2 - y1;
+  const d = Math.hypot(dx, dy);
+  if (d < 1e-6) return null;
+  const phi = Math.atan2(dy, dx);
+  const beta = Math.acos(Math.min(1, Math.max(-1, (r1 - r2) / d)));
+  const a1 = phi + beta, a2 = phi - beta;
+  const pt = (cx: number, cy: number, r: number, a: number) => ({
+    x: cx + r * Math.cos(a), y: cy + r * Math.sin(a),
+  });
+  return {
+    phi, beta, d,
+    t1a: pt(x1, y1, r1, a1), t2a: pt(x2, y2, r2, a1),
+    t1b: pt(x1, y1, r1, a2), t2b: pt(x2, y2, r2, a2),
+  };
+}
+
 function renderMannequin(
   ctx: CanvasRenderingContext2D,
   instruction: MannequinRenderInstruction,
 ): void {
   const x1 = subToPx(instruction.x1), y1 = subToPx(instruction.y1);
   const x2 = subToPx(instruction.x2), y2 = subToPx(instruction.y2);
-  const rAvg = Math.max(1, (instruction.r1 + instruction.r2) / 2);
+  // 两端粗细各自取本端关节的半径（与关节盘同源：jointWidth/2 首选），
+  // 体形 = 两圆切线连接体（渐变），不再把两端平均成直筒
+  const r1 = Math.max(0.5, instruction.r1), r2 = Math.max(0.5, instruction.r2);
   ctx.save();
-  ctx.lineCap = 'round';
-  const capsule = (ax: number, ay: number, bx: number, by: number, fill: string) => {
+  const traceCapsule = (ax: number, ay: number, ar: number, bx: number, by: number, br: number) => {
     ctx.beginPath();
-    ctx.moveTo(ax, ay);
-    ctx.lineTo(bx, by);
-    ctx.strokeStyle = instruction.outlineColor;
-    ctx.lineWidth = rAvg * 2 + 2;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(ax, ay);
-    ctx.lineTo(bx, by);
-    ctx.strokeStyle = fill;
-    ctx.lineWidth = rAvg * 2;
-    ctx.stroke();
+    const t = capsuleTangents(ax, ay, ar, bx, by, br);
+    if (!t || t.d + Math.min(ar, br) <= Math.max(ar, br)) {
+      // 退化（同点/一圆吞另一圆）：两端圆并集
+      ctx.moveTo(ax + ar, ay); ctx.arc(ax, ay, ar, 0, Math.PI * 2);
+      ctx.moveTo(bx + br, by); ctx.arc(bx, by, br, 0, Math.PI * 2);
+      return;
+    }
+    const a1 = t.phi + t.beta, a2 = t.phi - t.beta;
+    ctx.moveTo(t.t1a.x, t.t1a.y);
+    ctx.lineTo(t.t2a.x, t.t2a.y);
+    ctx.arc(bx, by, br, a1, a2, true);
+    ctx.lineTo(t.t1b.x, t.t1b.y);
+    ctx.arc(ax, ay, ar, a2, a1, true);
+    ctx.closePath();
   };
-  capsule(x1, y1, x2, y2, instruction.fillColor);
-  // 衣物色区：本段自起点起 clothRatio 一段覆衣物色（略加粗盖住皮肤色）
+  traceCapsule(x1, y1, r1 + 1, x2, y2, r2 + 1);
+  ctx.fillStyle = instruction.outlineColor;
+  ctx.fill();
+  traceCapsule(x1, y1, r1, x2, y2, r2);
+  ctx.fillStyle = instruction.fillColor;
+  ctx.fill();
+  // 衣物色区：自起点起 clothRatio 一段的子体（半径沿段插值）
   const cloth = instruction.clothRatio ?? 0;
   if (cloth > 0) {
-    const cxp = x1 + (x2 - x1) * Math.min(1, cloth);
-    const cyp = y1 + (y2 - y1) * Math.min(1, cloth);
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(cxp, cyp);
-    ctx.strokeStyle = '#5b7ea6';
-    ctx.lineWidth = rAvg * 2;
-    ctx.stroke();
+    const ct = Math.min(1, cloth);
+    const cxp = x1 + (x2 - x1) * ct, cyp = y1 + (y2 - y1) * ct;
+    traceCapsule(x1, y1, r1, cxp, cyp, r1 + (r2 - r1) * ct);
+    ctx.fillStyle = '#5b7ea6';
+    ctx.fill();
   }
   if (instruction.head) {
     // 蛋形头替代末端关节圆：长轴沿颈向的椭圆（头不是胶囊段）
@@ -3693,14 +3728,6 @@ function renderMannequin(
         ctx.beginPath(); ctx.arc((fx1 + fx2) / 2, (fy1 + fy2) / 2, 1.6, 0, Math.PI * 2); ctx.fill();
       }
     }
-  } else {
-    ctx.beginPath();
-    ctx.arc(x2, y2, Math.max(1, instruction.r2), 0, Math.PI * 2);
-    ctx.fillStyle = cloth >= 1 ? '#5b7ea6' : instruction.fillColor;
-    ctx.fill();
-    ctx.strokeStyle = instruction.outlineColor;
-    ctx.lineWidth = 1;
-    ctx.stroke();
   }
   ctx.restore();
 }
