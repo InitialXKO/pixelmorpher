@@ -5,7 +5,7 @@
 //    蒙皮快照（合并图 = S 精灵、plug 移到 M 关节）时，渲染计划是否
 //    认领 S、给 M 出带 snapshotSkin 的合并指令、E 照常；并直接对
 //    applySnapshotBend 验弯曲带内外的像素行为；
-//  IK：2bone 链在插入中间关节（2 骨变 3 骨）后是否仍解到目标。
+//  IK：声明 2bone 的链在插入中间关节（2 骨变 3 骨）后如何解（实走 FABRIK 兜底，见断言）。
 import { createDefaultNode, createDefaultCostumePiece, pxToSub, subToPx, projectToView } from '../../src/lib/unified-types';
 import type { Character, Node, Sprite, IKChain, PixelGrid } from '../../src/lib/unified-types';
 import { generateRenderPlan, computeWorldTransforms } from '../../src/lib/unified-render';
@@ -168,7 +168,7 @@ ok(!planB0.nodeInstructions.some((i) => i.nodeId === M.id), '对照 无快照：
   let relM = (fk1.get(m.id)?.worldAngle ?? 0) - (fk1.get(a.id)?.worldAngle ?? 0);
   while (relM > 180) relM -= 360; while (relM < -180) relM += 360;
   console.log(`  IK 参考：2 骨链末端误差 ${err0.toFixed(1)}px；插中间关节（3 骨）后 ${err1.toFixed(1)}px；M 相对角 ${relM.toFixed(1)}°`);
-  ok(Math.abs(relM) > 90, `IK 关键发现：2bone 求解器把插入的中间关节折叠 ${relM.toFixed(0)}°（末端仍达目标附近）——拆分工具须对 IK 链内段设防`);
+  ok(Math.abs(relM) > 90, `IK 关键发现：链声明 2bone 但段数（含尖端）≠2、实际走无极向约束的 FABRIK，把插入的中间关节折叠 ${relM.toFixed(0)}°（末端仍达目标附近）——正解是求解按段数匹配，未立项前拆分工具对链内段设防`);
 }
 
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
