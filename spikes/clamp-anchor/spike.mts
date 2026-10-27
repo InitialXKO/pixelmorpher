@@ -79,21 +79,20 @@ function makeFootAnchor() {
     'frozen=null，绘制位 = 结算位');
 }
 
-// ============ 案例 B：多锚单遍补偿的最小二乘最优性（点对/双脚） ============
+// ============ 案例 B：多锚硬优先级（2026-10-28 裁决 7） ============
 {
+  // 全局 Δ 只有一个：由最高优先锚独占决定，它精确归位；低优先锚的残差
+  // 如实保留（不均分——均分意味着每个锚都滑一点，违背「锚定不滑动」）。
   const feet: V[] = [{ x: -18, y: 104 }, { x: 30, y: 97 }];        // 平结算双脚位
-  const anchors: V[] = [{ x: -18, y: GROUND_Y }, { x: 28, y: GROUND_Y }];  // 两脚各自的冻结位
-  const res = feet.map((f, i) => sub(anchors[i], f));
-  const delta = mul(add(res[0], res[1]), 0.5);
-  const sse = (d: V) => feet.reduce((s, f, i) => s + dist(add(f, d), anchors[i]) ** 2, 0);
-  const sseStar = sse(delta);
-  const worse = [add(delta, { x: 3, y: 0 }), add(delta, { x: 0, y: 2 }), res[0], res[1]]
-    .every((d) => sse(d) >= sseStar - 1e-9);
-  check('B1 双锚刚性反移：残差均值使平方和最小', worse && sseStar > 0,
-    `Δ*=(${delta.x.toFixed(2)},${delta.y.toFixed(2)})，sse=${sseStar.toFixed(2)}（偏向任一单脚锚都更差）`);
-  const dw = mul(add(mul(res[0], 3), res[1]), 0.25);
-  check('B2 权重即优先级：高权重锚补偿后残差更小', dist(add(feet[0], dw), anchors[0]) < dist(add(feet[1], dw), anchors[1]),
-    `左残差=${dist(add(feet[0], dw), anchors[0]).toFixed(2)} < 右残差=${dist(add(feet[1], dw), anchors[1]).toFixed(2)}`);
+  const anchors: V[] = [{ x: -18, y: GROUND_Y }, { x: 28, y: GROUND_Y }];  // 左（高优先）/右冻结位
+  const res = feet.map((f, k) => sub(anchors[k], f));
+  const delta = res[0];                                            // 硬优先：Δ = 高优先残差
+  const after = feet.map((f) => add(f, delta));
+  check('B1 硬优先：高优先锚精确归位', dist(after[0], anchors[0]) < 1e-9, `高优先残差=${dist(after[0], anchors[0]).toFixed(4)}`);
+  check('B2 硬优先：低优先残差如实保留、不被均分', Math.abs(dist(after[1], anchors[1]) - dist(res[1], res[0])) < 1e-9 && dist(after[1], anchors[1]) > 0.1,
+    `低优先残差=${dist(after[1], anchors[1]).toFixed(2)}（= 两残差之差的模，均分时本应减半）`);
+  const deltaSwap = res[1];                                        // 优先级互换 → 另一只脚精确
+  check('B3 优先级互换则归位方互换', dist(add(feet[1], deltaSwap), anchors[1]) < 1e-9, 'Δ 改由右脚残差决定');
 }
 
 // ============ 案例 C：精灵边缘锚（脚掌底边）——平移的边界与带旋转的解 ============
@@ -132,6 +131,27 @@ function makeFootAnchor() {
   const b = makeFootAnchor();
   b.frame({ x: 0, y: 10 }, { x: 10, y: 105 });
   check('D2 同序列重演得同一冻结位', !!b.frozen && dist(b.frozen, { x: 10, y: GROUND_Y }) === 0, '顺序求值确定');
+}
+
+// ============ 案例 E：边缘旋转只掰锚点所在节点（2026-10-28 裁决 1） ============
+{
+  // 脚节点 N=(0,80)，底边两端在节点局部：a=(-10,20)（已踩地、冻结），b=(14,26)（穿地 6、边倾斜）
+  const N: V = { x: 0, y: 80 };
+  const aL: V = { x: -10, y: 20 }, bL: V = { x: 14, y: 26 };
+  const A = add(N, aL);                                   // 锚点世界位 (-10,100) = 冻结位
+  const B = add(N, bL);                                   // (14,106)
+  // 以冻结锚点为心、只转本节点：θ 把边向 (B−A) 对齐到水平
+  const dir = sub(B, A);
+  const theta = -Math.atan2(dir.y, dir.x);
+  const rotAbout = (p: V, c: V, t: number): V => {
+    const dx = p.x - c.x, dy = p.y - c.y;
+    return { x: c.x + dx * Math.cos(t) - dy * Math.sin(t), y: c.y + dx * Math.sin(t) + dy * Math.cos(t) };
+  };
+  const A2 = rotAbout(A, A, theta), B2 = rotAbout(B, A, theta);
+  check('E1 节点绕冻结锚点转：锚点分毫不动、边另一端贴地', dist(A2, A) < 1e-9 && Math.abs(B2.y - GROUND_Y) < 1e-9,
+    `A'=(${A2.x.toFixed(2)},${A2.y.toFixed(2)})，B'.y=${B2.y.toFixed(2)}，θ=${(theta * 180 / Math.PI).toFixed(2)}°`);
+  check('E2 旋转是局部的：锚点已冻结 → 全局 Δ 为零、其他节点不受影响', dist(A, { x: -10, y: GROUND_Y }) === 0,
+    '平移补偿只认冻结位残差（此处 0），旋转不外溢到整角色');
 }
 
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
