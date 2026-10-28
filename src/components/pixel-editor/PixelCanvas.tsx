@@ -6,6 +6,7 @@ import { registerRenderCallback } from '@/lib/playback-scheduler';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
 import { renderCharacterOnionFrameFromCharacter, geometryDirectionFromToggle } from '@/lib/unified-render';
 import { editorClampContextFor } from '@/lib/clamp-session';
+import { editorSimContextFor } from '@/lib/sim-session';
 import { clearJointDiscs, regenerateJointDiscs } from '@/lib/joint-discs';
 import { renderSpriteEditUnified } from '@/lib/unified-render';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
@@ -314,7 +315,13 @@ export default function PixelCanvas() {
           (ch) => editorClampContextFor(ch, currentFrame, animationClips, {
             canvasWidth: s.canvasWidth, canvasHeight: s.canvasHeight,
             frameRate: s.frameRate, sprites: freshStore.sprites,
-          }));
+          }),
+          (ch) => useEditorStore.getState().simRealtimePreview
+            ? editorSimContextFor(ch, currentFrame, animationClips, {
+                canvasWidth: s.canvasWidth, canvasHeight: s.canvasHeight,
+                frameRate: s.frameRate,
+              })
+            : undefined);
       } finally {
         endPickFrame();
       }

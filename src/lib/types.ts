@@ -1753,6 +1753,8 @@ export interface EditorState {
   showPuppetSkeleton: boolean;
   /** 人偶兜底显示开关（无精灵节点画胶囊人偶，编辑器专用） */
   showMannequinFallback: boolean;
+  /** 链摆实时模拟总闸（默认开，编辑器预览专用） */
+  simRealtimePreview: boolean;
   /** 五官参照显示开关（选中节点头部框点位叠画，编辑器专用） */
   showFaceGuide: boolean;
   /** 人偶衣物色区：袖口比例（0..1，编辑器显示参数） */
