@@ -60,6 +60,11 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
       projectData: { proceduralAnimations, globalModifiers, globalBlueprint, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes, canvasWidth, canvasHeight },
       projectExtras: { perspectiveForeshorten },
     });
+    // 预览是观看宿主：改用墙钟模式按真实时间播。包缺省的 frame 模式
+    // 每 rAF tick 恰走一包帧（为录制/回放的确定性而设）——12fps 工程
+    // 在 60Hz 屏上就是 5 倍速、120Hz 屏 10 倍速。只改预览自己的包
+    // 副本，导出包的缺省不受影响。
+    pkg.simMode = 'wall';
     const html = buildRuntimeHtml(pkg);
     return { pkg, html, key: hashString(html) };
   }, [character, projectSprites, animationClips, frameRate, totalFrames, proceduralAnimations, globalModifiers, globalBlueprint, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes, canvasWidth, canvasHeight, perspectiveForeshorten]);

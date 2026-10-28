@@ -1631,7 +1631,7 @@ function generateDiscInstructions(
 /** 肢体类别（衣物色区用）：沿父链上溯节点名，先命中者胜（近者优先） */
 const MQ_ARM_KEYS = ['arm', 'shoulder', 'wrist', 'hand', '袖', '臂', '肩', '腕', '手'];
 const MQ_LEG_KEYS = ['leg', 'thigh', 'hip', 'shin', 'calf', 'ankle', 'foot', '腿', '髋', '踝', '脚'];
-function mannequinLimbKind(character: Character, node: Node): 'arm' | 'leg' | null {
+export function mannequinLimbKind(character: Character, node: Node): 'arm' | 'leg' | null {
   let cur: Node | undefined = node;
   while (cur) {
     const name = cur.name.toLowerCase();
@@ -1775,14 +1775,42 @@ function mannequinShapesInternal(
   // + 法向 0.4 倍手长，侧别沿父链名字判左右、判不出取 +1，同原项目
   // 侧面口径）。手指/脚趾/拇指命名的叶子不延伸，
   // 免得烘焙骨骼的指节末端冒出手掌。非叶子（其后还有节点）不延伸。
+  // 肢类按节点自身名字判（不沿父链继承）：手掌/拇指是手本节点的
+  // 形状——挂在手上的子节点（手指/武器之类）末端不该冒出手掌和
+  // 拇指；拇指归手本位，手挂了子节点后延伸撤下、拇指仍画在手
+  // 关节处（下方第二遍单独补，2026-10-28 用户裁决）。
   const EXTREMITY_EXCLUDE = ['finger', 'thumb', 'toe', 'index', 'middle', 'ring', 'pinky', '指', '趾'];
+  const ownLimbKind = (node: Node): 'arm' | 'leg' | null => {
+    const name = node.name.toLowerCase();
+    if (MQ_LEG_KEYS.some((k) => name.includes(k))) return 'leg';
+    if (MQ_ARM_KEYS.some((k) => name.includes(k))) return 'arm';
+    return null;
+  };
+  const pushThumb = (nodeId: string, node: Node, ex: number, ey: number, ux: number, uy: number, extLen: number, r: number) => {
+    let side = 1;
+    let cur: Node | undefined = node;
+    while (cur) {
+      const n = cur.name.toLowerCase();
+      if (n.includes('left') || n.includes('_l') || n.includes('左')) { side = -1; break; }
+      if (n.includes('right') || n.includes('_r') || n.includes('右')) { side = 1; break; }
+      cur = cur.parentId ? character.nodes[cur.parentId] : undefined;
+    }
+    const nx = -uy, ny = ux;
+    shapes.push({
+      nodeId, kind: 'thumb',
+      x1: ex, y1: ey,
+      x2: ex + ux * extLen * 0.3 + nx * side * extLen * 0.4,
+      y2: ey + uy * extLen * 0.3 + ny * side * extLen * 0.4,
+      r1: r * 0.8, r2: r * 0.45,
+    });
+  };
   const hasChildNode = new Set<string>();
   for (const n of Object.values(character.nodes)) if (n.parentId) hasChildNode.add(n.parentId);
   for (const [nodeId, j] of joints) {
     if (hasChildNode.has(nodeId)) continue;
     const node = character.nodes[nodeId]!;
     if (EXTREMITY_EXCLUDE.some((k) => node.name.toLowerCase().includes(k))) continue;
-    const kind = mannequinLimbKind(character, node);
+    const kind = ownLimbKind(node);
     if (!kind) continue;
     const sx = subToPx(j.sx), sy = subToPx(j.sy);
     const ex = subToPx(j.ex), ey = subToPx(j.ey);
@@ -1801,24 +1829,24 @@ function mannequinShapesInternal(
       x2: ex + ux * extLen, y2: ey + uy * extLen,
       r1: r, r2: r * 0.64,
     });
-    if (kind === 'arm') {
-      let side = 1;
-      let cur: Node | undefined = node;
-      while (cur) {
-        const n = cur.name.toLowerCase();
-        if (n.includes('left') || n.includes('_l') || n.includes('左')) { side = -1; break; }
-        if (n.includes('right') || n.includes('_r') || n.includes('右')) { side = 1; break; }
-        cur = cur.parentId ? character.nodes[cur.parentId] : undefined;
-      }
-      const nx = -uy, ny = ux;
-      shapes.push({
-        nodeId, kind: 'thumb',
-        x1: ex, y1: ey,
-        x2: ex + ux * extLen * 0.3 + nx * side * extLen * 0.4,
-        y2: ey + uy * extLen * 0.3 + ny * side * extLen * 0.4,
-        r1: r * 0.8, r2: r * 0.45,
-      });
-    }
+  }
+  // 拇指归手本位：画在腕/手本节点的关节处——该节点挂了子节点
+  // （手指/武器）后不再是叶子、手掌延伸撤下，拇指仍留原位；子节
+  // 点末端不画。判据只认手部关键词（腕/手/wrist/hand，上臂/前臂
+  // 不是手本位、不画）；手指命名的先被 EXTREMITY_EXCLUDE 排除
+  // （「手指」含「手」也照此办理）。
+  const HAND_KEYS = ['wrist', 'hand', '腕', '手'];
+  for (const [nodeId, j] of joints) {
+    const node = character.nodes[nodeId]!;
+    if (EXTREMITY_EXCLUDE.some((k) => node.name.toLowerCase().includes(k))) continue;
+    if (!HAND_KEYS.some((k) => node.name.toLowerCase().includes(k))) continue;
+    const sx = subToPx(j.sx), sy = subToPx(j.sy);
+    const ex = subToPx(j.ex), ey = subToPx(j.ey);
+    const segLen = Math.hypot(ex - sx, ey - sy);
+    if (segLen < 2) continue;
+    const segDir = { x: (ex - sx) / segLen, y: (ey - sy) / segLen };
+    const dirF = frameDirCanvas(nodeId) ?? segDir;
+    pushThumb(nodeId, node, ex, ey, dirF.x, dirF.y, segLen * (0.16 / 0.44), radiusOf(nodeId));
   }
 
   // 蛋形头（借 PoseSketcher 头蛋形）：头部节点的颈→头段上再挂一个蛋

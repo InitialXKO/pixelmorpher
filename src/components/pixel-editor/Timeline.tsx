@@ -137,7 +137,8 @@ export default function Timeline() {
         scaleX: iv?.scaleX ?? node?.transform?.scaleX ?? 1,
         x: iv?.x ?? node?.transform?.x ?? 0,
         y: iv?.y ?? node?.transform?.y ?? 0,
-      }, 0);
+        // 显式「添加关键帧」：不受自动关键帧开关约束，永远新建
+      }, 0, { forceCreate: true });
     },
     [puppetCharacter]
   );

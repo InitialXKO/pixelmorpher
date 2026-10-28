@@ -473,8 +473,14 @@ export default function Home() {
               >
                 <div className={isLocked ? 'pointer-events-none opacity-40 h-full' : 'h-full'}>
                   <div className="flex flex-col h-full">
-                    <PuppetAssetPanel />
-                    <div className="border-t border-zinc-800/50">
+                    {/* 三块面板各自的根都是 h-full：必须按份分高 + min-h-0
+                        收口，否则第一块按内容撑满整列、下面两块被挤出
+                        屏幕且整列无滚动、够不着（用户实测片段/笔触面板
+                        消失）。各面板内部列表自带滚动，分到多高滚多高 */}
+                    <div className="flex-[2] min-h-0">
+                      <PuppetAssetPanel />
+                    </div>
+                    <div className="border-t border-zinc-800/50 flex-[1.5] min-h-0">
                       <AnimationClipPanel />
                     </div>
                     <div className="border-t border-zinc-800/50 flex-1 min-h-0">

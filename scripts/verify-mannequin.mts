@@ -257,5 +257,16 @@ mq11 = (plan(true).mannequinInstructions ?? []).find((m) => m.nodeId === root.id
 const expectEst = Math.min(16, Math.max(1.5, Math.hypot(30, 10) * 0.16));
 ok(!!mq11 && Math.abs(mq11.r2 - expectEst) < 0.01, `⑪ 无盘数据 → 回段长估算 ${expectEst.toFixed(2)}（实际 ${mq11?.r2.toFixed(2)}）`);
 
+// ⑫ 拇指归手本位：腕下挂一个普通子节点（武器）→ 腕的手掌延伸撤下
+// （真实段接管）、拇指仍画在腕关节处；子节点末端不出手掌、不出拇指
+const prop = mkNode('mq2_prop', 'sword', wrist.id);
+link(wrist, prop, 0, 14);
+nodes2[prop.id] = prop;
+const ext5 = (plan2().mannequinInstructions ?? []).filter((m) => m.extremity);
+ok(!ext5.some((m) => m.nodeId === prop.id), `⑫ 子节点末端无延伸（实际 ${ext5.map((m) => `${m.extremity}@${m.nodeId}`).join(',')}）`);
+ok(!ext5.some((m) => m.extremity === 'hand' && m.nodeId === wrist.id), '⑫ 腕手掌延伸撤下（真实段接管）');
+ok(ext5.some((m) => m.extremity === 'thumb' && m.nodeId === wrist.id), '⑫ 拇指仍在腕（原手位置）');
+ok(ext5.some((m) => m.extremity === 'foot' && m.nodeId === ankle.id), '⑫ 脚延伸不受影响');
+
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
 process.exit(fails === 0 ? 0 : 1);

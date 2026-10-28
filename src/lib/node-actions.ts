@@ -2,7 +2,8 @@
 // 构造与确认文案对齐 RigPanel 既有 handler 与资产面板的添加节点对话框。
 
 import { useProjectStore } from './store';
-import { pxToSub, type Node } from './unified-types';
+import { createDefaultSocket, pxToSub, type Attachment, type DirectionIndex, type Node } from './unified-types';
+import { mannequinLimbKind, socketOffsetTo3D } from './unified-render';
 
 /** 收集子树全部节点 id（含根）：后代关系同时认 parentId 与插槽归属
  *  （对话框新建的子节点只有 attachment.parentSocketId、没有 parentId） */
@@ -74,18 +75,52 @@ export function deleteNodeSubtree(characterId: string, rootId: string): boolean 
   return true;
 }
 
+/** 子节点的挂接：父节点有插槽 → 挂第一个；没有 → 先在父节点上新建
+ * 一个插槽再挂——沿父节点局部 +Y（肢体伸出方向，与肢链插槽同款
+ * 约定），长度按父节点入段长定：手/脚末端取人偶延伸同口径的比例
+ * （臂 ×0.16/0.44、腿 ×0.15/0.45），其余取入段全长，无入段回退 20px。
+ * 此前无插槽直接退成同位 fixed：子节点贴在父关节上、段长为零，
+ * 手/脚的人偶延伸又因「非叶子」被撤，胶囊整个消失（用户实测）。 */
+export function ensureChildAttachment(characterId: string, parent: Node, childName: string): Attachment {
+  const store = useProjectStore.getState();
+  const character = store.unifiedCharacters[characterId];
+  const fresh = character?.nodes[parent.id] ?? parent;
+  const firstSocket = fresh.sockets?.[0];
+  if (firstSocket) {
+    return { type: 'socket', parentSocketId: firstSocket.id, plug: { x: 0, y: 0 } };
+  }
+  // 父节点入段长 = 它挂在祖父插槽上的那段偏移的长
+  let inLenPx = 0;
+  if (character && fresh.parentId && fresh.attachment?.type === 'socket' && fresh.attachment.parentSocketId) {
+    const grand = character.nodes[fresh.parentId];
+    const inSocket = grand?.sockets?.find((s) => s.id === fresh.attachment.parentSocketId);
+    if (inSocket) {
+      const v = socketOffsetTo3D(inSocket, (fresh.transform.variantIndex ?? 6) as DirectionIndex);
+      inLenPx = Math.hypot(v.x, v.y, v.z);
+    }
+  }
+  const kind = character ? mannequinLimbKind(character, fresh) : null;
+  const lenPx = inLenPx > 0
+    ? kind === 'arm' ? inLenPx * (0.16 / 0.44) : kind === 'leg' ? inLenPx * (0.15 / 0.45) : inLenPx
+    : 20;
+  const socket = createDefaultSocket(crypto.randomUUID(), childName, 0, pxToSub(lenPx));
+  store.updateUnifiedNode(characterId, fresh.id, { sockets: [...(fresh.sockets ?? []), socket] });
+  return { type: 'socket', parentSocketId: socket.id, plug: { x: 0, y: 0 } };
+}
+
 /** 在父节点下新建子节点（与资产面板添加节点对话框同构造：
- *  有插槽挂第一个插槽，无插槽用 fixed 附着）。返回新节点并选中 */
+ *  挂接走 ensureChildAttachment——无插槽自动新建插槽）。
+ *  返回新节点并选中 */
 export function addChildNode(characterId: string, parent: Node): Node | null {
   const store = useProjectStore.getState();
   const character = store.unifiedCharacters[characterId];
   if (!character) return null;
   const name = `节点_${Object.keys(character.nodes).length + 1}`;
-  const firstSocket = parent.sockets?.[0];
-  const attachment = firstSocket
-    ? { type: 'socket' as const, parentSocketId: firstSocket.id, plug: { x: 0, y: 0 } }
-    : { type: 'fixed' as const, fixedOffset: { x: 0, y: 0 }, inheritRotation: true };
-  const node = store.addUnifiedNode(characterId, name, { zIndex: 0, attachment });
+  const attachment = ensureChildAttachment(characterId, parent, name);
+  // 父级必须显式给：不给时 addUnifiedNode 只能按 attachment 推导，无插槽
+  // 的父节点推导不出、会落到根节点——新节点就成了根的子节点（在树上
+  // 表现为与所点节点同级），而不是所点节点的子节点。
+  const node = store.addUnifiedNode(characterId, name, { zIndex: 0, attachment, parentId: parent.id });
   store.setSelectedNodeId(node.id);
   return node;
 }
