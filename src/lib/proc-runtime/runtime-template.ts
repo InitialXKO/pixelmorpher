@@ -1205,6 +1205,31 @@ function resize() {
   canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
 }
 window.addEventListener('resize', resize); resize();
+// ---------- 视图缩放（鼠标滚轮，纯视图层） ----------
+// viewZoom 缺省 1：可见世界尺寸 = (lowW, VIEW_H)，与无缩放时逐像素
+// 一致。缩放只改「可见世界宽高」这一取景量：凡把 (lowW, VIEW_H) 当
+// 取景半幅喂着色器/换算指针的地方改喂 (visW(), visH())；凡当缓冲
+// 尺寸用的（viewport、uRes、渲染目标、抓帧、canvas 位图）一律不乘。
+// 相机位置与跟随逻辑（camState/camTX/camTY/snap/平滑）不碰，缩放
+// 围绕画面中心（相机中心）进行。
+// 注意：部件片元着色器按屏幕像素 1:1 采样瓦片（像素锁定约定），
+// 只改取景半幅时部件纹理不会放大、只会随锚点滑动并被四边形裁切
+// ——部件采样间距必须同步除以倍率（partProg 的 uZoom），角色才
+// 真正随视图缩放。此坑即上一版「改取景高、角色大小没变」的机理。
+let viewZoom = 1;
+const VIEW_ZOOM_MIN = 0.2, VIEW_ZOOM_MAX = 8;
+function visW() { return lowW / viewZoom; }
+function visH() { return VIEW_H / viewZoom; }
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  // deltaMode: 0=像素 1=行；统一近似成像素量后指数步进（与主画布
+  // 遮罩层的滚轮手感同一路数），触控板细粒度滚动也平滑。
+  const d = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+  const next = viewZoom * Math.exp(-d * 0.002);
+  viewZoom = Math.min(VIEW_ZOOM_MAX, Math.max(VIEW_ZOOM_MIN, next));
+}, { passive: false });
+// 双击复位 1 倍，防缩丢
+canvas.addEventListener('dblclick', () => { viewZoom = 1; });
 function compileShader(type, src) {
   const sh = gl.createShader(type);
   gl.shaderSource(sh, src); gl.compileShader(sh);
@@ -1249,6 +1274,7 @@ void main(){
 \`#version 300 es
 precision highp float;
 uniform sampler2D uAtlas; uniform sampler2D uPal; uniform sampler2D uBase; uniform sampler2D uGlow; uniform float uTime;
+uniform float uZoom;
 in vec2 vCenterScreen; in float vRot; in vec4 vTile; in vec2 vTileC; in vec4 vMisc; in vec4 vParam; in vec2 vDeform;
 in vec3 vClip; flat in int vInstId;
 uniform sampler2D uGlowSide;
@@ -1352,7 +1378,9 @@ void main(){
   int rm = int(mod(mp / 64.0, 8.0));
   int gm = int(mp / 512.0);
   int family = int(vMisc.x + 0.5);
-  vec2 d = gl_FragCoord.xy - vCenterScreen;
+  // 部件纹理按屏幕像素 1:1 采样（本渲染器的像素锁定约定）：视图
+  // 缩放时采样间距同步除以倍率，纹理随视图放大/缩小；uZoom=1 时恒等
+  vec2 d = (gl_FragCoord.xy - vCenterScreen) / uZoom;
   float c = cos(vRot), s = sin(vRot);
   vec2 lup = vec2(d.x * c + d.y * s, -d.x * s + d.y * c);
   vec2 gfv = vec2(lup.x, -lup.y);
@@ -1558,7 +1586,7 @@ const bgU = { cam: gl.getUniformLocation(bgProg, 'uCam'), vh: gl.getUniformLocat
 function drawBackground(camX, camY) {
   // 背景图四边形：0.85 倍视差跟随、1.4 倍视口大小（留出视差边距）
   const cx = camX * 0.85, cy = camY * 0.85;
-  const w = lowW * 1.4, h = VIEW_H * 1.4;
+  const w = visW() * 1.4, h = visH() * 1.4;
   const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2;
   const v = new Float32Array([
     x0, y0, 0, 0, x1, y0, 1, 0, x1, y1, 1, 1,
@@ -1566,7 +1594,7 @@ function drawBackground(camX, camY) {
   ]);
   gl.useProgram(bgProg);
   gl.uniform2f(bgU.cam, camX, camY);
-  gl.uniform2f(bgU.vh, lowW / 2, VIEW_H / 2);
+  gl.uniform2f(bgU.vh, visW() / 2, visH() / 2);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, bgTex); gl.uniform1i(bgU.tex, 0);
   gl.bindVertexArray(bgVAO);
   gl.bindBuffer(gl.ARRAY_BUFFER, bgBuf);
@@ -1575,7 +1603,7 @@ function drawBackground(camX, camY) {
   // 复位到场景（solid）绘制状态，调用方随后照常画 scenery
   gl.useProgram(solidProg);
   gl.uniform2f(solidU.cam, camX, camY);
-  gl.uniform2f(solidU.vh, lowW / 2, VIEW_H / 2);
+  gl.uniform2f(solidU.vh, visW() / 2, visH() / 2);
   gl.bindVertexArray(solidVAO);
   gl.bindBuffer(gl.ARRAY_BUFFER, solidBuf);
 }
@@ -1763,9 +1791,10 @@ function ensurePostSys() {
  *  瓦片为准，笔触/粒子不进掩码）。 */
 function fxBuildMask(state, elByKey, camX, camY) {
   const sys = postSys;
+  // mh 只取决于宽高比，缩放下不变，仍按基础量算（保 1 倍时逐值一致）
   const mw = 256, mh = Math.max(2, Math.round(256 * VIEW_H / lowW));
   const data = new Uint8Array(mw * mh * 4);
-  const sx = mw / lowW, sy = mh / VIEW_H;
+  const sx = mw / visW(), sy = mh / visH();
   for (const [key, el] of elByKey) {
     const entry = state.map.get(key);
     if (!entry || !entry.tile || !entry.tile.data) continue;
@@ -1778,8 +1807,8 @@ function fxBuildMask(state, elByKey, camX, camY) {
         const gx = (px - tile.cx) * dsx, gy = (tile.cy - py) * dsy;
         const wx = el.pos[0] + co * gx + si * gy;
         const wy = el.pos[1] + si * gx - co * gy;
-        const mx = Math.floor((wx - (camX - lowW / 2)) * sx);
-        const my = Math.floor((wy - (camY - VIEW_H / 2)) * sy);
+        const mx = Math.floor((wx - (camX - visW() / 2)) * sx);
+        const my = Math.floor((wy - (camY - visH() / 2)) * sy);
         if (mx < 0 || my < 0 || mx >= mw || my >= mh) continue;
         data[(my * mw + mx) * 4] = 255;
         data[(my * mw + mx) * 4 + 3] = 255;
@@ -2713,8 +2742,8 @@ function refreshScenePanel() {
 function screenToWorld(e) {
   const r = canvas.getBoundingClientRect();
   return [
-    camState.x + ((e.clientX - r.left) / r.width - 0.5) * lowW,
-    camState.y + (0.5 - (e.clientY - r.top) / r.height) * VIEW_H,
+    camState.x + ((e.clientX - r.left) / r.width - 0.5) * visW(),
+    camState.y + (0.5 - (e.clientY - r.top) / r.height) * visH(),
   ];
 }
 let sceneDrag = null;
@@ -2916,7 +2945,7 @@ function downloadGif() {
 
 // ---------- 主循环：输入 → 程序化姿态 → 表演合成 → 渲染 ----------
 const uLoc = (pr, n) => gl.getUniformLocation(pr, n);
-const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal'), base: uLoc(partProg, 'uBase'), glow: uLoc(partProg, 'uGlow'), glowSide: uLoc(partProg, 'uGlowSide') };
+const partU = { cam: uLoc(partProg, 'uCam'), vh: uLoc(partProg, 'uViewHalf'), res: uLoc(partProg, 'uRes'), time: uLoc(partProg, 'uTime'), zoom: uLoc(partProg, 'uZoom'), atlas: uLoc(partProg, 'uAtlas'), pal: uLoc(partProg, 'uPal'), base: uLoc(partProg, 'uBase'), glow: uLoc(partProg, 'uGlow'), glowSide: uLoc(partProg, 'uGlowSide') };
 const solidU = { cam: uLoc(solidProg, 'uCam'), vh: uLoc(solidProg, 'uViewHalf') };
 let last = performance.now();
 // ---------- 画布级特效（缺口 5）：特效轨 + 笔触 ----------
@@ -3879,7 +3908,7 @@ function frame(now) {
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   gl.useProgram(solidProg);
   gl.uniform2f(solidU.cam, camX, camY);
-  gl.uniform2f(solidU.vh, lowW / 2, VIEW_H / 2);
+  gl.uniform2f(solidU.vh, visW() / 2, visH() / 2);
   gl.bindVertexArray(solidVAO);
   gl.bindBuffer(gl.ARRAY_BUFFER, solidBuf);
   if (bgTex) drawBackground(camX, camY);
@@ -3895,8 +3924,9 @@ function frame(now) {
   gl.depthFunc(gl.LESS);
   gl.useProgram(partProg);
   gl.uniform2f(partU.cam, camX, camY);
-  gl.uniform2f(partU.vh, lowW / 2, VIEW_H / 2);
+  gl.uniform2f(partU.vh, visW() / 2, visH() / 2);
   gl.uniform2f(partU.res, lowW, VIEW_H);
+  gl.uniform1f(partU.zoom, viewZoom);
   gl.uniform1f(partU.time, elapsed);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, state.tex); gl.uniform1i(partU.atlas, 0);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palTex); gl.uniform1i(partU.pal, 1);
@@ -3915,7 +3945,7 @@ function frame(now) {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(solidProg);
     gl.uniform2f(solidU.cam, camX, camY);
-    gl.uniform2f(solidU.vh, lowW / 2, VIEW_H / 2);
+    gl.uniform2f(solidU.vh, visW() / 2, visH() / 2);
     gl.bindVertexArray(solidVAO);
     gl.bindBuffer(gl.ARRAY_BUFFER, solidBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(frontVerts), gl.DYNAMIC_DRAW);
