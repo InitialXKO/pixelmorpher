@@ -1745,6 +1745,10 @@ export function createDefaultNode(id: string, name: string): Node {
   return {
     id,
     name,
+    // 出生自带服装件定义（用户裁决：所有写侧必须写 slot，不许再有
+    // 无 slot 节点产生）；slotKey = 节点 id，与全部按节点 id 写件的
+    // 写侧（抠图/换装/Spine 导入）同键，零改键、零迁移件数据。
+    slot: createDefaultCostumePiece(id),
     transform: createDefaultTransform(),
     attachment: createDefaultAttachment(),
     sockets: [],
@@ -1792,6 +1796,24 @@ export function createDefaultCostumeSet(id: string, name: string): CostumeSet {
     name,
     pieces: {},
   };
+}
+
+/** 存量补挂（工程读入规范化处调用，一次性、幂等）：给无 slot 的
+ * 节点补默认件（slotKey = 节点 id，与写侧按节点 id 写件的口径同键）。
+ * 已有 slot（含烘焙线的自造键）原样保留，任何 pieces 数据零改动。
+ * 返回是否有节点被补挂。 */
+export function backfillNodeSlots(characters: Record<string, Character>): boolean {
+  let changed = false;
+  for (const ch of Object.values(characters)) {
+    if (!ch?.nodes) continue;
+    for (const node of Object.values(ch.nodes)) {
+      if (node && !node.slot) {
+        node.slot = createDefaultCostumePiece(node.id);
+        changed = true;
+      }
+    }
+  }
+  return changed;
 }
 
 /**

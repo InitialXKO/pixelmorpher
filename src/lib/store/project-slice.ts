@@ -11,7 +11,7 @@ import type { Project, HistoryEntry, ProjectFile, BrushPreset, AnimationClip, Cl
 import { MODIFIER_DEFINITIONS } from '../types';
 import { _isDragActive, _dragPostStackLen, _pendingTrajectorySpriteIds, setDragActive, setDragPostStackLen, resetDragState } from './shared';
 import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '../engine';
-import { resolveChainTarget3D } from '../unified-types';
+import { resolveChainTarget3D, backfillNodeSlots } from '../unified-types';
 import { migrateProjectTimeUnits } from '../blueprint/time-migration';
 import { syncCharacterPatternBlueprints } from '../blueprint/pattern-sync';
 import { migrateClipStructure } from '../clip-migration';
@@ -515,6 +515,23 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       }
     }
 
+    // 服装件定义补挂（一次性、幂等）：存量工程的无 slot 节点补默认件
+    // （slotKey = 节点 id，与全部按节点 id 写件的写侧同键）；已有 slot
+    // 原样不动、pieces 数据零改动。新工程的节点由 createDefaultNode
+    // 出生自带，此处只兜存量。历史快照同理（快照内角色一并补挂，
+    // 解析失败的条目原样保留）——否则撤销回旧快照会带回无 slot 节点。
+    backfillNodeSlots(unifiedCharacters as any);
+    const importedHistory = (file.history || []).map((entry: any) => {
+      if (!entry?.snapshot || typeof entry.snapshot !== 'string') return entry;
+      try {
+        const parsed = JSON.parse(entry.snapshot);
+        if (parsed?.unifiedCharacters && backfillNodeSlots(parsed.unifiedCharacters)) {
+          return { ...entry, snapshot: JSON.stringify(parsed) };
+        }
+      } catch { /* 快照损坏则原样保留 */ }
+      return entry;
+    });
+
     for (const ch of Object.values(unifiedCharacters) as any[]) {
       if (!ch?.sprites) continue;
       for (const [sid, sp] of Object.entries(ch.sprites) as [string, any][]) {
@@ -552,7 +569,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       // DCC Pipeline
       palettes: file.project.palettes || [],
       activePaletteId: file.project.activePaletteId ?? null,
-      undoStack: file.history || [],
+      undoStack: importedHistory,
       redoStack: [],
     });
 

@@ -519,6 +519,9 @@ export function splitNodeSegment(args: {
     return { ux: end.x / ll, uy: end.y / ll, segLocal: ll };
   };
 
+  // M 的 slot 是否已由生效集的拆分件接管（工厂默认件不算——循环外
+  // 兜底要按 midSlotKey 补挂，不能被 createDefaultNode 的默认件顶替）
+  let midSlotFromSet = false;
   for (const set of character.costumeSets ?? []) {
     const pS = pieceOf(set);
     if (!pS) { newSets.push(set); continue; }
@@ -702,9 +705,10 @@ export function splitNodeSegment(args: {
     if (isActive) {
       if (S.slot) S2.slot = pS2;
       M.slot = mHasContent ? pM : createDefaultCostumePiece(midSlotKey, pS.fillColor);
+      midSlotFromSet = true;
     }
   }
-  if (!M.slot) M.slot = createDefaultCostumePiece(midSlotKey);
+  if (!midSlotFromSet) M.slot = createDefaultCostumePiece(midSlotKey);
   if (jointWidthFromCut != null) {
     M.attachment = { ...M.attachment, jointWidth: jointWidthFromCut };
   }
