@@ -1389,8 +1389,12 @@ function resolveSprite(
   }
   // 只走服装集：node.slot 只定义槽位，不存精灵。
   // 分层解析（纬度→变体→基础）走 sprite-resolve 的共同实现，与蓝图预览逐级一致。
-  if (costumeSet && node.slot) {
-    const piece = costumeSet.pieces[node.slot.slotKey];
+  // 件键与产品通行口径一致（参数化分支/堆叠回退/convert/写侧同）：有槽位
+  // 定义用 slotKey，无槽位定义的节点（向导/手动加节点、Spine 导入——写侧
+  // 一律以节点 id 为键）回退 node.id。此前本支独缺回退且以 node.slot 存在
+  // 为门，无 slot 节点写入的件永远读不到、画布只剩兜底胶囊。
+  if (costumeSet) {
+    const piece = costumeSet.pieces[node.slot?.slotKey ?? node.id];
     return resolvePieceSprite(piece, direction, variantId, sprites, latitude);
   }
   return { sprite: null, mirror: false, spriteId: null };
@@ -1447,7 +1451,7 @@ export function resolveNodeSpriteId(
   if (!node) return null;
   const activeCs = (character.costumeSets ?? []).find((cs) => cs.id === character.activeCostumeSetId);
   const spriteTable = globalSprites ?? character.sprites ?? {};
-  const { spriteId } = resolveSprite(node, direction, activeCs, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? ''], character.latitude ?? 0);
+  const { spriteId } = resolveSprite(node, direction, activeCs, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? node.id], character.latitude ?? 0);
   return spriteId;
 }
 
@@ -1498,7 +1502,7 @@ function generateDiscInstructions(
     // 当前精灵（与下方配色采样同一解析）：直径回退与配色共用。
     // （旧代码读 node.sprite——现行管线从不赋值，截面回退因此恒走不到、
     // 无 jointWidth 的节点盘恒为 4px；这里改走 resolveSprite 修活。）
-    const resolved = resolveSprite(node, currentDirection, activeCostumeSet, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? ''], character.latitude ?? 0);
+    const resolved = resolveSprite(node, currentDirection, activeCostumeSet, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? node.id], character.latitude ?? 0);
     const currentSprite = resolved.sprite;
 
     // 无精灵可遮盖（占位/结构节点）不出盘：按上面的同一解析判——精灵
@@ -2949,7 +2953,7 @@ export function generateRenderPlan(
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
     // 方向混合时：先按 dirA 解析主精灵
     const resolveDir = dirBlend ? dirBlend.dirA : currentDirection;
-    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0, frame, frameRate);
+    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? node.id], character.latitude ?? 0, frame, frameRate);
     if (!sprite) {
       // 堆叠部件可以没有方向平面图（纯堆叠件）：以中间层图作替身
       // 精灵让指令成立（身份/点选/缩略口径），实际绘制由 stackRender
@@ -2972,7 +2976,7 @@ export function generateRenderPlan(
     // 只在需要时双采样，避免性能开销
     let blendedSprite: typeof sprite | null = null;
     if (dirBlend && sprite.data) {
-      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? ''], character.latitude ?? 0, frame, frameRate);
+      const { sprite: spriteB } = resolveSprite(node, dirBlend.dirB, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? node.id], character.latitude ?? 0, frame, frameRate);
       if (spriteB && spriteB.data) {
         try {
           const { applyFaceTurn, alphaBlendGrids } = require('./skin/face-turn') as typeof import('./skin/face-turn');
