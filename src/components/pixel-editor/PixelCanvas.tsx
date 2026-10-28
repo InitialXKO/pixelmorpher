@@ -35,6 +35,7 @@ import {
   renderFpsCounter,
 } from './canvas/canvas-puppet-render';
 import { proportionGuideDataUrl, type ProportionView } from '@/lib/proportion-guide';
+import { drawRefImage, refImageRect } from '@/lib/ref-image';
 import { acquireCanvas, releaseCanvas } from '@/lib/engine/canvas-pool';
 import { getCursorStyle, isStrokeToolCheck } from './canvas/canvas-utils';
 import { spriteEditCanvasOrigin } from './canvas/tool-handlers';
@@ -126,17 +127,9 @@ export default function PixelCanvas() {
       }
       const img = s.refImageRef.current;
       if (img && img.complete && img.naturalWidth > 0) {
-        offCtx.save();
-        offCtx.globalAlpha = s.referenceImageOpacity;
-        // contain 模式居中绘制
-        const scale = Math.min(s.canvasWidth / img.naturalWidth, s.canvasHeight / img.naturalHeight);
-        const dw = img.naturalWidth * scale;
-        const dh = img.naturalHeight * scale;
-        const dx = (s.canvasWidth - dw) / 2;
-        const dy = (s.canvasHeight - dh) / 2;
-        offCtx.imageSmoothingEnabled = false;
-        offCtx.drawImage(img, dx, dy, dw, dh);
-        offCtx.restore();
+        // contain 居中矩形走 lib/ref-image 共用定义（捕姿/火柴人窗口同口径）
+        const rect = refImageRect(s.canvasWidth, s.canvasHeight, img.naturalWidth, img.naturalHeight);
+        drawRefImage(offCtx, img, rect, s.referenceImageOpacity);
       }
     }
 

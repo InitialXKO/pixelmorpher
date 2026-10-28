@@ -15,6 +15,7 @@ import {
   buildSkeletonFromStrokes, strokeLimbJoints, strokeTorsoJoints, type Pt,
 } from '@/lib/stroke-build';
 import { polylineLength } from '@/lib/arc-length';
+import { drawRefImage, loadRefImage, refImageReady, refImageRectForWindow } from '@/lib/ref-image';
 
 const W = 440;
 const H = 500;
@@ -37,6 +38,12 @@ export default function StrokeBuildWizard({ open, onClose }: { open: boolean; on
   const [strokes, setStrokes] = useState<Partial<Record<StepKey, Pt[]>>>({});
   const [drawing, setDrawing] = useState<Pt[] | null>(null);
   const [note, setNote] = useState('');
+  const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
+  const referenceImageVisible = useEditorStore((s) => s.referenceImageVisible);
+  const referenceImageOpacity = useEditorStore((s) => s.referenceImageOpacity);
+  const projCanvasW = useProjectStore((s) => s.canvasWidth) || 512;
+  const projCanvasH = useProjectStore((s) => s.canvasHeight) || 512;
+  const [refTick, setRefTick] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const step = STEPS[stepIdx]!;
 
@@ -76,6 +83,17 @@ export default function StrokeBuildWizard({ open, onClose }: { open: boolean; on
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = '#0a0a18';
     ctx.fillRect(0, 0, W, H);
+    // 参考图垫图：与主画布同一份数据/可见性/透明度。本窗口与工程画布
+    // 同原点（中心）、同比例（笔触换算即按此），矩形按中心差平移即与
+    // 主画布同坐标；画在笔触之下，纯显示、不参与换算
+    if (referenceImageUrl && referenceImageVisible) {
+      const img = loadRefImage(referenceImageUrl, () => setRefTick((t) => t + 1));
+      if (refImageReady(img)) {
+        drawRefImage(ctx, img,
+          refImageRectForWindow(projCanvasW, projCanvasH, img.naturalWidth, img.naturalHeight, W, H),
+          referenceImageOpacity);
+      }
+    }
     ctx.strokeStyle = 'rgba(255,255,255,0.05)';
     ctx.beginPath();
     ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H);
@@ -133,7 +151,8 @@ export default function StrokeBuildWizard({ open, onClose }: { open: boolean; on
       ctx.lineWidth = 3;
       ctx.stroke();
     }
-  }, [strokes, drawing, torsoJoints, previewJoints, step.key]);
+  }, [strokes, drawing, torsoJoints, previewJoints, step.key,
+    referenceImageUrl, referenceImageVisible, referenceImageOpacity, projCanvasW, projCanvasH, refTick]);
 
   useEffect(() => { redraw(); }, [redraw, open]);
 
