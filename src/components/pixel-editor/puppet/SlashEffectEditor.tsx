@@ -6,7 +6,7 @@
  */
 import { useEffect, useRef } from 'react';
 import {
-  SLASH_PRESETS, defaultSlashSpec, generateSlashFrame,
+  SLASH_PALETTE, SLASH_PRESETS, defaultSlashSpec, generateSlashFrame, slashFrameLayout,
   type SlashFanSpec,
 } from '@/lib/slash-fan';
 
@@ -46,6 +46,12 @@ export default function SlashEffectEditor({ value, onChange, nodes }: Props) {
   }
 
   const set = (patch: Partial<SlashFanSpec>) => onChange({ ...value, ...patch });
+  // 有效帧布局（用户盒 ∪ 几何紧包围盒）：预览画布按此尺寸显示
+  const lay = slashFrameLayout(value);
+  const pvScale = Math.min(1, 112 / Math.max(lay.w, lay.h));
+  // 颜色档：未设时显示内置档供编辑，任一改动即落成显式 colors
+  const effColors = value.colors && value.colors.length >= 2 ? value.colors : SLASH_PALETTE;
+  const setColors = (next: string[] | undefined) => set({ colors: next });
   const num = (
     label: string,
     key: keyof SlashFanSpec,
@@ -70,12 +76,14 @@ export default function SlashEffectEditor({ value, onChange, nodes }: Props) {
       <div className="flex items-start gap-2">
         <canvas
           ref={canvasRef}
-          className="size-16 shrink-0 rounded border border-[#1e1e3a]"
+          className="shrink-0 rounded border border-[#1e1e3a]"
           style={{
+            width: Math.max(8, Math.round(lay.w * pvScale)),
+            height: Math.max(8, Math.round(lay.h * pvScale)),
             imageRendering: 'pixelated',
             background: 'repeating-conic-gradient(#191922 0% 25%, #101018 0% 50%) 0 0 / 10px 10px',
           }}
-          title="中间进度预览"
+          title={`中间进度预览（有效帧 ${lay.w}×${lay.h}）`}
         />
         <div className="flex-1 space-y-1.5">
           <div className="flex items-center gap-2">
@@ -127,6 +135,58 @@ export default function SlashEffectEditor({ value, onChange, nodes }: Props) {
         {num('时长 秒', 'durationSec', 0.05, '0 = 跟随表演/片段窗时长')}
         {num('画布宽', 'w')}
         {num('画布高', 'h')}
+      </div>
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="text-[9px] text-gray-500">颜色档（外弧 → 内界）</span>
+          {value.colors && value.colors.length >= 2 && (
+            <button
+              type="button"
+              onClick={() => setColors(undefined)}
+              className="text-[9px] text-gray-500 hover:text-amber-300"
+            >
+              恢复内置
+            </button>
+          )}
+        </div>
+        <div
+          className="h-2.5 rounded border border-[#1e1e3a]"
+          style={{ background: `linear-gradient(to right, ${effColors.join(', ')})` }}
+          title="渐变预览：左 = 外弧，右 = 内界"
+        />
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          {effColors.map((c, i) => (
+            <div key={i} className="flex items-center gap-1">
+              <input
+                type="color"
+                value={/^#[0-9a-fA-F]{6}$/.test(c) ? c : '#000000'}
+                onChange={(e) => {
+                  const next = [...effColors];
+                  next[i] = e.target.value;
+                  setColors(next);
+                }}
+                className="h-5 w-7 cursor-pointer rounded border border-[#2b2b3f] bg-transparent p-0"
+              />
+              <span className="text-[9px] text-gray-400">{c}</span>
+              <button
+                type="button"
+                disabled={effColors.length <= 2}
+                onClick={() => setColors(effColors.filter((_, j) => j !== i))}
+                className="text-[9px] text-gray-500 hover:text-red-300 disabled:opacity-30"
+                title="删此色档（最少 2 个）"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => setColors([...effColors, effColors[effColors.length - 1] ?? '#ffffff'])}
+            className="text-[9px] px-1.5 py-0.5 rounded border border-[#2b2b3f] text-gray-300 hover:border-amber-500/60"
+          >
+            ＋ 色档
+          </button>
+        </div>
       </div>
       <p className="text-[9px] text-gray-600">
         形状：外边界是椭圆弧，内边界随角向位置向尾部收尖；播放时头部先展开、尾部后收走。位姿在开始帧定格锚点，挥砍的弧线靠起始角/扫过角与锚点当时的角度对齐。
