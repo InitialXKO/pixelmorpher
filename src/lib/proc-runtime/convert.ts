@@ -202,8 +202,9 @@ export interface RuntimeSimChain {
 export interface ProcRuntimePackage {
   format: 'procedural-pixel-runtime-1';
   characterName: string;
-  /** 玩家时钟模式（帧主缺省）：'frame' | 'wall' | 'audio'；
-   * 宿主可经 procRuntime.setSimMode 覆盖 */
+  /** 玩家时钟模式（缺省 'frame'）：'frame' | 'wall' | 'audio'；
+   * 模板侧无运行时切换接口，宿主在构建 HTML 前改本字段覆盖
+   * （如预览面板改 'wall' 按真实时间播） */
   simMode?: string;
   /** 实时模拟链定义（无实时链时缺省，包与旧行为一致） */
   chains?: RuntimeSimChain[];
