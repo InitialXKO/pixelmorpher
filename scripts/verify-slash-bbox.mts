@@ -4,15 +4,13 @@
 //    plug 对齐后小盒帧逐像素等于大盒帧对应像素（多组参数）。
 // ② 盒随几何长大：放大半轴后帧尺寸超过用户盒、扇体像素出现在
 //    旧盒范围之外。
-// ③ 旧规格不回归：基线哈希生成于本线基点（af5a0c8）未改的生成
-//    器（默认+四预设 × 6 进度 × 镜像，sha256 前 16 位）。基点实
-//    测（大画布量绘制范围）：默认/上挑斩/下劈原本未被裁 → 修后
-//    逐字节一致；横斩（绘制 x 越界 ±34>±32）/大回旋（绘制 y 到
-//    27>22）原本已被裁 → 断言旧帧内容按 plug 相对位置原样保全
-//    （裁剪哈希）+ 被裁像素回归 + 有效帧尺寸符合扇形紧包围盒。
+// ③ 新语义布局锚点（2026-10-28 中心改相对锚点偏移后）：覆盖盒
+//    以锚点为中心，默认+四预设（cx/cy 已归零）的有效帧尺寸与
+//    plug 位置按下表锚定；像素内容相对 plug 的保真比对（旧语义
+//    出帧 vs 迁移后出帧逐点一致）由 verify-slash-center ① 承载
+//    （含原本被裁的横斩/大回旋的像素回归）。
 // ④ 颜色档：自定义 colors 逐像素取指定色、与内置档不同；编辑
 //    器颜色接线在位（源级断言）。
-import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
   generateSlashFrame, slashFrameLayout, SLASH_PRESETS, defaultSlashSpec,
@@ -21,21 +19,20 @@ import {
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
-const hash = (w: number, h: number, rgba: Uint8Array) =>
-  createHash('sha256').update(`${w}x${h}:`).update(rgba).digest('hex').slice(0, 16);
 const PS = [0, 0.2, 0.45, 0.58, 0.8, 1];
 
 // ---------- ① 不裁切：小盒帧是大盒帧的 plug 对齐子图 ----------
 {
   const geos: { name: string; geo: Partial<SlashFanSpec>; user: Partial<SlashFanSpec> }[] = [
-    { name: '中心移到左上角', geo: {}, user: { cx: 2, cy: 2 } },
-    { name: '半轴放大到盒外', geo: { rx: 48, ry: 44 }, user: { cx: 32, cy: 32 } },
-    { name: '旋转45°大扫角', geo: { rotDeg: 45, a0Deg: -30, sweepDeg: 200, rx: 36, ry: 18 }, user: { cx: 32, cy: 32 } },
-    { name: '中心移到右上角', geo: {}, user: { cx: 60, cy: 4 } },
+    { name: '中心偏移到左上', geo: {}, user: { cx: -30, cy: -30 } },
+    { name: '半轴放大到盒外', geo: { rx: 48, ry: 44 }, user: { cx: 0, cy: 0 } },
+    { name: '旋转45°大扫角', geo: { rotDeg: 45, a0Deg: -30, sweepDeg: 200, rx: 36, ry: 18 }, user: { cx: 0, cy: 0 } },
+    { name: '中心偏移到右上', geo: {}, user: { cx: 28, cy: -28 } },
   ];
   for (const { name, geo, user } of geos) {
     const small: SlashFanSpec = { ...defaultSlashSpec('a'), ...geo, w: 64, h: 64, ...user };
-    const big: SlashFanSpec = { ...small, w: small.w + 160, h: small.h + 160, cx: small.cx + 80, cy: small.cy + 80 };
+    // 新语义：覆盖盒以锚点为中心，放大 w/h 只扩覆盖、偏移不动
+    const big: SlashFanSpec = { ...small, w: small.w + 160, h: small.h + 160 };
     let aligned = true;
     let compared = 0;
     for (const p of [0.45, 0.6, 0.8]) {
@@ -73,16 +70,17 @@ const PS = [0, 0.2, 0.45, 0.58, 0.8, 1];
 
 // ---------- ② 盒随几何长大 ----------
 {
-  const spec: SlashFanSpec = { ...defaultSlashSpec('a'), rx: 48, ry: 44, cx: 32, cy: 32, w: 64, h: 64 };
+  const spec: SlashFanSpec = { ...defaultSlashSpec('a'), rx: 48, ry: 44, cx: 0, cy: 0, w: 64, h: 64 };
   const lay = slashFrameLayout(spec);
   ok(lay.w > 64 && lay.h > 64, `② 半轴 48×44 时有效帧 ${lay.w}×${lay.h} 超过用户盒 64×64`);
-  // 扇形随进度先展尾侧（左）后展头侧（右）：两进度并集断言
+  // 覆盖盒以锚点（plug）为中心：相对范围 [−32, +32)；扇体像素
+  // 出现在此范围之外即盒随几何长大生效（两进度并集断言）
   let outRight = 0, outLeft = 0;
   for (const p of [0.45, 0.6]) {
     const f = generateSlashFrame(spec, p, false);
     for (let y = 0; y < f.h; y++) for (let x = 0; x < f.w; x++) {
       if (f.rgba[(y * f.w + x) * 4 + 3]! > 0) {
-        if (x - f.plugX >= 64 - 32) outRight++;
+        if (x - f.plugX >= 32) outRight++;
         if (x - f.plugX < -32) outLeft++;
       }
     }
@@ -90,72 +88,58 @@ const PS = [0, 0.2, 0.45, 0.58, 0.8, 1];
   ok(outRight > 0 && outLeft > 0, `② 扇体像素出现在旧盒范围之外（右 ${outRight} / 左 ${outLeft} 像素）`);
 }
 
-// ---------- ③ 旧规格不回归（基线哈希：基点 af5a0c8 未改生成器） ----------
-const BASELINE: Record<string, Record<string, string>> = {
-  '默认': { '0|0': 'fcd7c9a0eaf1cb29', '0|1': 'ebac94184923e3b1', '0.2|0': '78f9f1460bd32ecd', '0.2|1': '56a41f9a53572068', '0.45|0': 'ec7769413cf99dca', '0.45|1': '6083ac491f867c5a', '0.58|0': '59c2d3b259fff6ef', '0.58|1': '2b7b7ea57c28f07e', '0.8|0': '3c40031bbf44b766', '0.8|1': 'cf5eb97f128cadcb', '1|0': 'f340b29d944dad0f', '1|1': 'f340b29d944dad0f' },
-  '上挑斩': { '0|0': 'fcd7c9a0eaf1cb29', '0|1': 'ebac94184923e3b1', '0.2|0': '78f9f1460bd32ecd', '0.2|1': '56a41f9a53572068', '0.45|0': 'ec7769413cf99dca', '0.45|1': '6083ac491f867c5a', '0.58|0': '59c2d3b259fff6ef', '0.58|1': '2b7b7ea57c28f07e', '0.8|0': '3c40031bbf44b766', '0.8|1': 'cf5eb97f128cadcb', '1|0': 'f340b29d944dad0f', '1|1': 'f340b29d944dad0f' },
-  '横斩': { '0|0': '6ad27c4f3f173028', '0|1': '5507b290ac8cb7a2', '0.2|0': '4e677a0faa67afe7', '0.2|1': 'e9f166358cf22a20', '0.45|0': '4a75a135cfe289f8', '0.45|1': 'cbe8ea4f25877019', '0.58|0': 'bc5bd94247f5770a', '0.58|1': '831aedd4595214b8', '0.8|0': '52fa8e0a9249bab7', '0.8|1': 'a6dc0badbb6f944c', '1|0': 'f340b29d944dad0f', '1|1': 'f340b29d944dad0f' },
-  '下劈': { '0|0': 'fb5df6664811f989', '0|1': '3f1c3db689b812d9', '0.2|0': '4dadc2165dc122c8', '0.2|1': '69d6b4399d85a06d', '0.45|0': '497141281608e753', '0.45|1': 'ccabf2478d185578', '0.58|0': '97485b6e7f4da136', '0.58|1': 'd0066dc76e101136', '0.8|0': 'eb4ffd3b8cdc2aca', '0.8|1': '651dbf8f3f3e1651', '1|0': 'f340b29d944dad0f', '1|1': 'f340b29d944dad0f' },
-  '大回旋': { '0|0': 'c6b1410f2c4d5dd9', '0|1': '90299b0c63585383', '0.2|0': 'ec60f2f1e429d278', '0.2|1': 'd0156da73f6ec4a2', '0.45|0': '937624a68eb242a6', '0.45|1': '0048cf509042068e', '0.58|0': 'e8d483da9b6e9811', '0.58|1': 'c2dac3e79f34d230', '0.8|0': '02f8b92c03c73c60', '0.8|1': '92b36283b7dc8171', '1|0': 'f340b29d944dad0f', '1|1': 'f340b29d944dad0f' },
-};
+// ---------- ③ 新语义布局锚点 ----------
+// 默认 + 四预设（cx/cy 已按新语义归零）：有效帧 = 以锚点为中心
+// 的覆盖盒 ∪ 扇形紧包围盒。锚点值取自主会话实测（2026-10-28）：
+// 横斩几何盒宽于覆盖盒 → 帧宽 74；下劈几何向下延出 → 帧高 69；
+// 大回旋旧语义下靠 cy=42 把盒撑到 70 高，新语义覆盖盒以锚点为
+// 中心、几何全程在 64 内 → 回到 64×64。像素内容相对 plug 的保
+// 真由 verify-slash-center ① 对旧语义参照实现逐点比对承载。
 const legacySpecs: { name: string; spec: SlashFanSpec }[] = [
   { name: '默认', spec: defaultSlashSpec('a') },
   ...SLASH_PRESETS.map((pr) => ({ name: pr.name, spec: { ...defaultSlashSpec('a'), ...pr.params } })),
 ];
-{ // 原本未被裁的 3 个：逐字节一致 + 布局不变
-  for (const { name, spec } of legacySpecs.filter((s) => ['默认', '上挑斩', '下劈'].includes(s.name))) {
-    let same = true;
-    for (const p of PS) for (const mir of [false, true]) {
-      const f = generateSlashFrame(spec, p, mir);
-      if (hash(f.w, f.h, f.rgba) !== BASELINE[name]![`${p}|${mir ? 1 : 0}`]) same = false;
-    }
-    const lay = slashFrameLayout(spec);
-    ok(same && lay.w === 64 && lay.h === 64 && lay.plugX === spec.cx && lay.plugY === spec.cy,
-      `③ ${name}（原本未裁）：6 进度 × 镜像逐字节一致、布局仍 64×64/plug=(${spec.cx},${spec.cy})`);
-  }
-}
-{ // 原本已被裁的 2 个：旧帧内容保全（裁剪哈希）+ 被裁像素回归 + 布局符合紧包围盒
-  const grown: Record<string, { w: number; h: number; plugX: number; plugY: number }> = {
-    '横斩': { w: 74, h: 64, plugX: 38, plugY: 54 },
-    '大回旋': { w: 64, h: 70, plugX: 32, plugY: 42 },
+{
+  const anchors: Record<string, { w: number; h: number; plugX: number; plugY: number }> = {
+    '默认': { w: 64, h: 64, plugX: 32, plugY: 32 },
+    '上挑斩': { w: 64, h: 64, plugX: 32, plugY: 32 },
+    '横斩': { w: 74, h: 64, plugX: 38, plugY: 32 },
+    '下劈': { w: 64, h: 69, plugX: 32, plugY: 32 },
+    '大回旋': { w: 64, h: 64, plugX: 32, plugY: 32 },
   };
-  const cropHash = (spec: SlashFanSpec, p: number) => {
-    const f = generateSlashFrame(spec, p, false);
-    const ox = f.plugX - spec.cx, oy = f.plugY - spec.cy;
-    const crop = new Uint8Array(64 * 64 * 4);
-    for (let y = 0; y < 64; y++) {
-      crop.set(f.rgba.subarray(((y + oy) * f.w + ox) * 4, ((y + oy) * f.w + ox + 64) * 4), y * 64 * 4);
-    }
-    return hash(64, 64, crop);
-  };
-  for (const { name, spec } of legacySpecs.filter((s) => s.name in grown)) {
-    const g = grown[name]!;
+  for (const { name, spec } of legacySpecs) {
+    const a = anchors[name]!;
     const lay = slashFrameLayout(spec);
-    ok(lay.w === g.w && lay.h === g.h && lay.plugX === g.plugX && lay.plugY === g.plugY,
-      `③ ${name}（原本已裁）：有效帧 ${lay.w}×${lay.h}、plug=(${lay.plugX},${lay.plugY}) 符合扇形紧包围盒并集`);
-    let kept = true;
-    for (const p of PS) if (cropHash(spec, p) !== BASELINE[name]![`${p}|0`]) kept = false;
-    ok(kept, `③ ${name}：旧帧 64×64 内容在新帧 plug 对齐裁剪下逐字节保全（6 进度）`);
+    ok(lay.w === a.w && lay.h === a.h && lay.plugX === a.plugX && lay.plugY === a.plugY,
+      `③ ${name}：有效帧 ${lay.w}×${lay.h}、plug=(${lay.plugX},${lay.plugY}) 符合锚点中心覆盖盒 ∪ 紧包围盒`);
+    ok(spec.cx === 0 && spec.cy === 0, `③ ${name}：预设/默认 cx/cy 已是新语义零偏移`);
   }
-  // 被裁像素回归：横斩旧足迹外（列 <6 或 ≥70）、大回旋旧足迹下（行 ≥64）出现绘制像素
+  // 被裁像素回归（新语义口径）：横斩扇体相对 plug 向左越过覆盖
+  // 盒左界（相对 plug < −32）仍有绘制像素；大回旋旧语义下用户盒
+  // 下界只到相对 +22（cy=42、盒高 64），扇体最深 +27 被裁——新
+  // 覆盖盒下界 +32，旧被裁带 [23, 32) 内的像素回归即不裁证据
   const hz = legacySpecs.find((s) => s.name === '横斩')!.spec;
   let hzOut = 0;
-  for (const p of [0, 0.1, 0.2, 0.3, 0.4, 0.45, 0.5, 0.58, 0.6, 0.7, 0.8, 0.9, 1]) {
+  for (const p of PS) {
     const f = generateSlashFrame(hz, p, false);
     for (let y = 0; y < f.h; y++) for (let x = 0; x < f.w; x++) {
-      if (f.rgba[(y * f.w + x) * 4 + 3]! > 0 && (x < 6 || x >= 70)) hzOut++;
+      if (f.rgba[(y * f.w + x) * 4 + 3]! > 0 && x - f.plugX < -32) hzOut++;
     }
   }
-  ok(hzOut > 0, `③ 横斩：被裁像素回归（旧足迹外绘制像素 ${hzOut} 个）`);
+  ok(hzOut > 0, `③ 横斩：覆盖盒外（相对 plug < −32）绘制像素 ${hzOut} 个，扇体不被裁`);
   const dh = legacySpecs.find((s) => s.name === '大回旋')!.spec;
-  let dhOut = 0, dhMaxRow = -1;
-  for (const p of [0, 0.1, 0.2, 0.3, 0.4, 0.45, 0.5, 0.58, 0.6, 0.7, 0.8, 0.9, 1]) {
+  let dhBand = 0, dhMaxRel = -Infinity;
+  for (const p of PS) {
     const f = generateSlashFrame(dh, p, false);
     for (let y = 0; y < f.h; y++) for (let x = 0; x < f.w; x++) {
-      if (f.rgba[(y * f.w + x) * 4 + 3]! > 0) { if (y >= 64) dhOut++; if (y > dhMaxRow) dhMaxRow = y; }
+      if (f.rgba[(y * f.w + x) * 4 + 3]! > 0) {
+        const rel = y - f.plugY;
+        if (rel >= 23 && rel < 32) dhBand++;
+        if (rel > dhMaxRel) dhMaxRel = rel;
+      }
     }
   }
-  ok(dhOut > 0 && dhMaxRow === 69, `③ 大回旋：被裁像素回归（旧足迹下 ${dhOut} 个、最深行 ${dhMaxRow}=基点实测 27+plugY 42）`);
+  ok(dhBand > 0 && dhMaxRel === 27, `③ 大回旋：旧被裁带 [23,32) 回归 ${dhBand} 个像素、最深相对行 ${dhMaxRel}（与旧实测 27 一致）`);
 }
 
 // ---------- ④ 颜色档 ----------

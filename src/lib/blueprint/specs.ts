@@ -33,7 +33,7 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     outputs: [],
     params: [
       'anchorNodeId', 'durationSec', 'frameCount', 'w', 'h', 'cx', 'cy',
-      'rx', 'ry', 'rotDeg', 'a0Deg', 'sweepDeg', 'thick', 'gammaAng',
+      'dir', 'rx', 'ry', 'rotDeg', 'a0Deg', 'sweepDeg', 'thick', 'gammaAng',
       'softRad', 'colors', 'enabled',
     ],
   },

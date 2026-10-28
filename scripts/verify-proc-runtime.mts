@@ -2112,6 +2112,10 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     { ...defaultSlashSpec('a'), w: 48, h: 80, cx: 20, cy: 60, colors: ['#ffffff', '#ffee00', '#ff0000'] },
     { ...defaultSlashSpec('a'), cx: 4, cy: 60, rx: 40, ry: 34, rotDeg: 45 },
     { ...defaultSlashSpec('a'), cx: 2, cy: 2 },
+    // 中心偏移（新语义）+ 逆时针扫向：双实现同样逐字节对拍
+    { ...defaultSlashSpec('a'), cx: -14, cy: 22, dir: -1 },
+    { ...defaultSlashSpec('a'), cx: 18, cy: -9, dir: -1, sweepDeg: 250, rotDeg: 30, a0Deg: 40 },
+    { ...defaultSlashSpec('a'), cx: -30, cy: -18, dir: -1, rx: 44, ry: 30, sweepDeg: 320 },
   ];
   let parity = true;
   let midNonEmpty = 0;
@@ -2129,7 +2133,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     }
     if (!parity) break;
   }
-  check('W1 刀光生成器双实现逐字节一致（默认+四预设+自定义色/尺寸+越界几何 × 6 进度 × 镜像，含有效帧布局 plug）', parity);
+  check('W1 刀光生成器双实现逐字节一致（默认+四预设+自定义色/尺寸+越界几何+中心偏移/逆时针 × 6 进度 × 镜像，含有效帧布局 plug）', parity);
   check('W2 中间进度帧非空（扇形真生成）', midNonEmpty > 200, String(midNonEmpty));
   const endFrame = generateSlashFrame(defaultSlashSpec('a'), 1, false);
   check('W3 进度 1 时扇形已收完（全透明）', endFrame.rgba.every((v) => v === 0));
@@ -2176,6 +2180,21 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     pkgW2.warnings.some((w) => w.includes('刀光'))
       && !(pkgW2.performances.find((p) => (p as { id?: string }).id === 'clip_clipBad') as unknown as { slash?: unknown })?.slash,
     pkgW2.warnings.filter((w) => w.includes('刀光')).join('；'));
+  // 扫向进包：dir=-1 透传；缺省（顺时针）不落 dir 字段（旧包形态不变）
+  const chWDir = {
+    ...chW,
+    performances: [{
+      id: 'perfDir', name: '逆斩', trigger: 'attack2', duration: 0.8, enabled: true,
+      mode: 'add', envelopeIn: 0, envelopeOut: 0, maskNodeIds: [], graphs: {},
+      slashEffect: { ...slashSpec, dir: -1 },
+    }],
+  } as unknown as Character;
+  const pkgDir = convertCharacterToRuntimePackage(chWDir, undefined, { frameRate: 12 });
+  const perfDir = pkgDir.performances.find((p) => (p as { id?: string }).id === 'perfDir') as unknown as { slash?: { dir?: number } };
+  const perfCw = pkgW.performances.find((p) => (p as { id?: string }).id === 'perfSlash') as unknown as { slash?: Record<string, unknown> };
+  check('W8 扫向进包：dir=-1 透传、缺省不带 dir 字段',
+    perfDir?.slash?.dir === -1 && !!perfCw?.slash && !('dir' in perfCw.slash),
+    JSON.stringify({ dirSlash: perfDir?.slash ?? null }));
 }
 
 // ============ Y 组：面板动态预览全库不崩（示例角色走工厂构造） ============

@@ -51,6 +51,19 @@ export default function SlashEffectEditor({ value, onChange, nodes, defBinding }
     const img = ctx.createImageData(frame.w, frame.h);
     img.data.set(frame.rgba);
     ctx.putImageData(img, 0, 0);
+    // 锚点（plug）十字标记：中心偏移的视觉参照——扇面随偏移
+    // 相对此点平移，白描边 + 红线保证在亮扇面与棋盘格上都可见
+    const px = frame.plugX, py = frame.plugY;
+    const cross = (style: string, width: number) => {
+      ctx.strokeStyle = style;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(px - 5, py); ctx.lineTo(px + 5, py);
+      ctx.moveTo(px, py - 5); ctx.lineTo(px, py + 5);
+      ctx.stroke();
+    };
+    cross('rgba(255,255,255,0.85)', 3);
+    cross('rgba(255,45,85,0.95)', 1);
   }, [value]);
 
   const boundDef = defBinding?.boundDefId
@@ -249,9 +262,28 @@ export default function SlashEffectEditor({ value, onChange, nodes, defBinding }
           )}
         </div>
       )}
+      <div className="flex items-center gap-1.5">
+        <span className="text-[9px] text-gray-500">扫向</span>
+        {([1, -1] as const).map((d) => (
+          <button
+            key={d}
+            type="button"
+            onClick={() => set({ dir: d })}
+            className={`text-[9px] px-1.5 py-0.5 rounded border ${
+              (value.dir === -1 ? -1 : 1) === d
+                ? 'border-amber-500/60 text-amber-200'
+                : 'border-[#2b2b3f] text-gray-300 hover:border-amber-500/60'}`}
+            title={d === 1
+              ? '顺时针：自起始角向扫过角正向行进'
+              : '逆时针：自起始角反向行进，头部仍在行进方向领先'}
+          >
+            {d === 1 ? '顺时针' : '逆时针'}
+          </button>
+        ))}
+      </div>
       <div className="grid grid-cols-4 gap-1.5">
-        {num('中心 X', 'cx', 0.5, '椭圆中心（帧画布坐标），同时是对位点')}
-        {num('中心 Y', 'cy', 0.5)}
+        {num('中心 X', 'cx', 0.5, '椭圆中心相对锚点的偏移 X（px）：改它扇面整体相对锚点平移')}
+        {num('中心 Y', 'cy', 0.5, '椭圆中心相对锚点的偏移 Y（px）：改它扇面整体相对锚点平移')}
         {num('半轴 X', 'rx', 0.5)}
         {num('半轴 Y', 'ry', 0.5)}
         {num('旋转 °', 'rotDeg')}
@@ -262,8 +294,8 @@ export default function SlashEffectEditor({ value, onChange, nodes, defBinding }
         {num('径向软边', 'softRad', 0.01)}
         {num('帧数', 'frameCount', 1)}
         {num('时长 秒', 'durationSec', 0.05, '0 = 跟随表演/片段窗时长')}
-        {num('画布宽', 'w')}
-        {num('画布高', 'h')}
+        {num('覆盖宽', 'w', 1, '覆盖盒宽（以锚点为中心）；扇形几何超出时有效帧随几何长大、不裁')}
+        {num('覆盖高', 'h', 1, '覆盖盒高（以锚点为中心）；扇形几何超出时有效帧随几何长大、不裁')}
       </div>
       <div className="space-y-1">
         <div className="flex items-center gap-2">
@@ -318,7 +350,7 @@ export default function SlashEffectEditor({ value, onChange, nodes, defBinding }
         </div>
       </div>
       <p className="text-[9px] text-gray-600">
-        形状：外边界是椭圆弧，内边界随角向位置向尾部收尖；播放时头部先展开、尾部后收走。位姿在开始帧定格锚点，挥砍的弧线靠起始角/扫过角与锚点当时的角度对齐。
+        形状：外边界是椭圆弧，内边界随角向位置向尾部收尖；播放时头部先展开、尾部后收走（逆时针时行进方向反过来、头部仍领先）。位姿在开始帧定格锚点（预览红十字），椭圆中心可相对锚点偏移，挥砍的弧线靠起始角/扫过角与锚点当时的角度对齐。
       </p>
     </div>
   );
