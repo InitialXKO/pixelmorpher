@@ -11,13 +11,20 @@
  * 本文件是编辑器侧实现；运行时模板内有一份孪生实现，探针逐字节
  * 对拍（verify-proc-runtime W 组）。改一处必须同步另一处。
  *
- * 有效帧（包围盒口径）：帧画布不是写死的 w×h。用户盒 = 以 plug
- * （椭圆中心 cx/cy）为原点、左上 (−cx, −cy)、尺寸 (w, h) 的覆盖
- * 范围；几何紧包围盒 = 扇形（含 1.22 辉光外延、扫过角全程）在
- * plug 坐标系下的轴对齐包围盒。实际生成帧 = 两盒并集（尺寸与
- * 帧内 plug 位置由 slashFrameLayout 导出）：移动 cx/cy = 移动整
- * 个盒相对锚点的位置、放大 rx/ry = 盒随几何长大，扇体永不被裁。
- * 并集等于用户盒时布局与旧口径逐值一致（旧帧逐字节不变）。
+ * 有效帧（包围盒口径）：帧画布不是写死的 w×h。坐标系以锚点
+ * （对位点 plug）为原点：椭圆中心 = 锚点 + 偏移 (cx, cy)；用户
+ * 盒 = 以锚点为中心、尺寸 (w, h) 的覆盖范围；几何紧包围盒 =
+ * 扇形（含 1.22 辉光外延、扫过角全程）在锚点本地系下的轴对齐
+ * 包围盒。实际生成帧 = 两盒并集（尺寸与帧内 plug 位置由
+ * slashFrameLayout 导出）：改 cx/cy = 扇面整体相对锚点平移、
+ * 放大 rx/ry = 盒随几何长大，扇体永不被裁。
+ *
+ * 中心语义沿革（2026-10-28 改版）：旧语义 cx/cy 是帧画布坐标、
+ * 兼任对位点——中心与锚点永远重合，改 cx/cy 对画面零作用（仅
+ * 帧尺寸变）。现改为相对锚点的偏移；旧语义下任何规格的扇面相
+ * 对锚点偏移恒为 0，故存量工程一次性迁移 cx/cy 归零即逐像素
+ * 保真（帧尺寸随覆盖盒新定义变化、画面相对锚点不变），标记
+ * slashCenterVersion，见 store 导入规范化链。
  */
 
 export interface SlashFanSpec {
@@ -27,12 +34,19 @@ export interface SlashFanSpec {
   durationSec?: number;
   /** 生成帧数（2–12，默认 6） */
   frameCount: number;
-  /** 帧画布宽/高 px（默认 64×64） */
+  /** 覆盖盒宽/高 px（默认 64×64）：以锚点为中心的覆盖范围，
+   *  几何超出时有效帧随几何长大（并集不裁） */
   w: number;
   h: number;
-  /** 椭圆中心（帧画布坐标，px）——同时是定格的对位点（plug） */
+  /** 椭圆中心相对锚点的偏移（锚点本地坐标系，px，可正负）：
+   *  对位点（plug）恒为锚点定格位置、不是参数；改 cx/cy =
+   *  扇面整体相对锚点平移 */
   cx: number;
   cy: number;
+  /** 扫向：1 / 缺省 = 顺时针（自起始角向扫过角正向行进）；
+   *  -1 = 逆时针（反向行进）。进度语义跟随扫向：头部始终在
+   *  行进方向领先、尾部收尖跟随（非静态镜像） */
+  dir?: 1 | -1;
   /** 椭圆半轴 px */
   rx: number;
   ry: number;
@@ -62,17 +76,17 @@ export function defaultSlashSpec(anchorNodeId: string): SlashFanSpec {
     anchorNodeId,
     frameCount: 6,
     w: 64, h: 64,
-    cx: 32, cy: 52, rx: 27, ry: 25,
+    cx: 0, cy: 0, rx: 27, ry: 25,
     rotDeg: -12, a0Deg: -150, sweepDeg: 130,
     thick: 0.62, gammaAng: 1.4, softRad: 0.28,
   };
 }
 
 export const SLASH_PRESETS: { name: string; params: Partial<SlashFanSpec> }[] = [
-  { name: '上挑斩', params: { cx: 32, cy: 52, rx: 27, ry: 25, rotDeg: -12, a0Deg: -150, sweepDeg: 130, thick: 0.62, gammaAng: 1.4, softRad: 0.28 } },
-  { name: '横斩', params: { cx: 32, cy: 54, rx: 31, ry: 20, rotDeg: 0, a0Deg: -170, sweepDeg: 150, thick: 0.55, gammaAng: 1.2, softRad: 0.24 } },
-  { name: '下劈', params: { cx: 32, cy: 10, rx: 24, ry: 30, rotDeg: 6, a0Deg: 20, sweepDeg: 130, thick: 0.7, gammaAng: 1.6, softRad: 0.3 } },
-  { name: '大回旋', params: { cx: 32, cy: 42, rx: 26, ry: 24, rotDeg: 18, a0Deg: -200, sweepDeg: 250, thick: 0.72, gammaAng: 1.1, softRad: 0.32 } },
+  { name: '上挑斩', params: { cx: 0, cy: 0, rx: 27, ry: 25, rotDeg: -12, a0Deg: -150, sweepDeg: 130, thick: 0.62, gammaAng: 1.4, softRad: 0.28 } },
+  { name: '横斩', params: { cx: 0, cy: 0, rx: 31, ry: 20, rotDeg: 0, a0Deg: -170, sweepDeg: 150, thick: 0.55, gammaAng: 1.2, softRad: 0.24 } },
+  { name: '下劈', params: { cx: 0, cy: 0, rx: 24, ry: 30, rotDeg: 6, a0Deg: 20, sweepDeg: 130, thick: 0.7, gammaAng: 1.6, softRad: 0.3 } },
+  { name: '大回旋', params: { cx: 0, cy: 0, rx: 26, ry: 24, rotDeg: 18, a0Deg: -200, sweepDeg: 250, thick: 0.72, gammaAng: 1.1, softRad: 0.32 } },
 ];
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -95,9 +109,12 @@ export interface SlashFrameLayout {
 }
 
 /**
- * 有效帧布局 = 用户盒 ∪ 几何紧包围盒（见文件头）。
- * 紧包围盒取扇形外弧（半径 1.22 含辉光）在扫过角全程内的极值：
- * 候选点 = 两端点 + 外弧上 x/y 驻点（扇区内才算）+ 椭圆中心。
+ * 有效帧布局 = 用户盒 ∪ 几何紧包围盒（见文件头），锚点本地系：
+ * 几何盒 = 扇形外弧（半径 1.22 含辉光）在扫过角全程内的极值
+ * （候选点 = 两端点 + 外弧上 x/y 驻点（扇区内才算）+ 椭圆中心）
+ * 再平移到椭圆中心 (cx, cy)；用户盒以锚点为中心。plug = 锚点
+ * 在帧内位置。扫向 dir 只改扇区行进方向：端点取 a0 与
+ * a0 + dir·sweep、扇区判定按带符号角距。
  */
 export function slashFrameLayout(spec: SlashFanSpec): SlashFrameLayout {
   const outW = Math.max(4, Math.round(spec.w));
@@ -105,6 +122,7 @@ export function slashFrameLayout(spec: SlashFanSpec): SlashFrameLayout {
   const rx = Math.max(2, spec.rx), ry = Math.max(2, spec.ry);
   const rot = (spec.rotDeg * Math.PI) / 180;
   const a0 = (spec.a0Deg * Math.PI) / 180;
+  const dirSign = spec.dir === -1 ? -1 : 1;
   const sweep = Math.max(0.06, Math.min(5.8, (spec.sweepDeg * Math.PI) / 180));
   const S = 1.22;
   const cr = Math.cos(rot), sr = Math.sin(rot);
@@ -118,10 +136,10 @@ export function slashFrameLayout(spec: SlashFanSpec): SlashFrameLayout {
     if (y > gy1) gy1 = y;
   };
   eat(a0);
-  eat(a0 + sweep);
+  eat(a0 + dirSign * sweep);
   const TWO_PI = Math.PI * 2;
   const inRange = (t: number) => {
-    let r = (t - a0) % TWO_PI;
+    let r = (dirSign * (t - a0)) % TWO_PI;
     if (r < 0) r += TWO_PI;
     return r <= sweep + 1e-12;
   };
@@ -131,14 +149,14 @@ export function slashFrameLayout(spec: SlashFanSpec): SlashFrameLayout {
   const ty = Math.atan2(ry * cr, rx * sr);
   if (inRange(ty)) eat(ty);
   if (inRange(ty + Math.PI)) eat(ty + Math.PI);
-  const ux0 = Math.min(0, spec.cx + gx0), ux1 = Math.max(outW, spec.cx + gx1);
-  const uy0 = Math.min(0, spec.cy + gy0), uy1 = Math.max(outH, spec.cy + gy1);
+  const ux0 = Math.min(-outW / 2, spec.cx + gx0), ux1 = Math.max(outW / 2, spec.cx + gx1);
+  const uy0 = Math.min(-outH / 2, spec.cy + gy0), uy1 = Math.max(outH / 2, spec.cy + gy1);
   const ox = Math.floor(ux0), oy = Math.floor(uy0);
   return {
     w: Math.ceil(ux1) - ox,
     h: Math.ceil(uy1) - oy,
-    plugX: spec.cx - ox,
-    plugY: spec.cy - oy,
+    plugX: -ox,
+    plugY: -oy,
   };
 }
 
@@ -160,10 +178,12 @@ export function generateSlashFrame(spec: SlashFanSpec, p: number, mirrored = fal
   const buf = new Uint8Array(outW * outH * 4);
   const palette = (spec.colors && spec.colors.length >= 2 ? spec.colors : SLASH_PALETTE).map(hexToRgb);
 
-  const cx = lay.plugX, cy = lay.plugY;
+  // 椭圆中心在帧内 = plug（锚点） + 偏移 (cx, cy)
+  const cx = lay.plugX + spec.cx, cy = lay.plugY + spec.cy;
   const rx = Math.max(2, spec.rx), ry = Math.max(2, spec.ry);
   const rotRad = (spec.rotDeg * Math.PI) / 180;
   const a0 = (spec.a0Deg * Math.PI) / 180;
+  const dirSign = spec.dir === -1 ? -1 : 1;
   const sweep = Math.max(0.06, Math.min(5.8, (spec.sweepDeg * Math.PI) / 180));
   const thick = Math.max(0.04, Math.min(0.97, spec.thick));
   const gammaAng = Math.max(0.25, spec.gammaAng);
@@ -187,9 +207,10 @@ export function generateSlashFrame(spec: SlashFanSpec, p: number, mirrored = fal
         const ex = lx / rx, ey = ly / ry;
         const rho = Math.sqrt(ex * ex + ey * ey);
         if (rho > 1.22) continue;
-        // 参数角
+        // 参数角（按扫向取带符号角距：逆时针时自 a0 反向行进，
+        // u 仍为 0=尾端(a0) → 1=头端，头部领先语义跟随扫向）
         const t = Math.atan2(ey, ex);
-        let rel = t - a0;
+        let rel = dirSign * (t - a0);
         rel = ((rel % TWO_PI) + TWO_PI) % TWO_PI;
         if (rel > sweep) continue;
         const u = rel / sweep;

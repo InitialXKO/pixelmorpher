@@ -1127,6 +1127,8 @@ export interface Project {
   patternBlueprintVersion?: number;
   /** 刀光↔蓝图统一迁移标记（1 = 表演刀光规格已镜像进表演图） */
   slashBlueprintVersion?: number;
+  /** 刀光中心语义迁移标记（1 = cx/cy 已从「帧内坐标兼对位点」迁为「椭圆中心相对锚点的偏移」） */
+  slashCenterVersion?: number;
   totalFrames: number; // Default total frames for new clips
   currentFrame: number;
   backgroundColor: string;

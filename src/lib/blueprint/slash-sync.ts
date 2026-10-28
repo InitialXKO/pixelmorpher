@@ -61,7 +61,7 @@ export const PANEL_SLASH_NODE_ID = 'slashfx';
 
 /** 可被接线覆盖的数值参数（anchorNodeId 是字符串，不走接线） */
 const NUMERIC_KEYS = [
-  'durationSec', 'frameCount', 'w', 'h', 'cx', 'cy',
+  'durationSec', 'frameCount', 'w', 'h', 'cx', 'cy', 'dir',
   'rx', 'ry', 'rotDeg', 'a0Deg', 'sweepDeg', 'thick', 'gammaAng', 'softRad',
 ] as const;
 
@@ -350,6 +350,48 @@ export function syncCharacterSlashBlueprints<T extends { performances?: ProcPerf
     return s;
   });
   return changed ? { ...character, performances: next } : character;
+}
+
+/**
+ * 刀光中心语义迁移（2026-10-28，一次性、幂等；store 导入链以
+ * slashCenterVersion 标记门控）：旧语义 cx/cy 是帧画布坐标兼任
+ * 对位点，任何规格渲染出的扇面相对锚点偏移恒为 0；新语义 cx/cy
+ * 是椭圆中心相对锚点的偏移——存量规格一律 cx/cy 归零即逐像素
+ * 保真（帧尺寸随覆盖盒新定义变化、画面相对锚点不变）。
+ * 覆盖全部存量住所：角色共享定义、表演字段（编辑模型）、表演图
+ * 规格形态节点 params（引用形态节点不存规格、跳过；手加节点同
+ * 为旧数据、一并归零）、片段字段。就地改写，返回归零份数。
+ */
+export function migrateSlashCenterOffsets(
+  characters: Record<string, {
+    slashDefs?: SlashDefinition[];
+    performances?: ProcPerformance[];
+  }>,
+  clips: readonly { slashEffect?: SlashFanSpec }[],
+): number {
+  let n = 0;
+  const fixSpec = (spec: SlashFanSpec | undefined): void => {
+    if (!spec) return;
+    if (spec.cx !== 0 || spec.cy !== 0) { spec.cx = 0; spec.cy = 0; n++; }
+  };
+  for (const ch of Object.values(characters)) {
+    for (const d of ch.slashDefs ?? []) fixSpec(d.spec);
+    for (const perf of ch.performances ?? []) {
+      fixSpec(perf.slashEffect);
+      for (const g of Object.values(perf.graphs ?? {})) {
+        for (const node of g.nodes) {
+          if (node.type !== SLASH_NODE_TYPE) continue;
+          if (defIdFromSlashNode(node) !== undefined) continue;
+          let touched = false;
+          if (typeof node.params.cx === 'number' && node.params.cx !== 0) { node.params.cx = 0; touched = true; }
+          if (typeof node.params.cy === 'number' && node.params.cy !== 0) { node.params.cy = 0; touched = true; }
+          if (touched) n++;
+        }
+      }
+    }
+  }
+  for (const c of clips) fixSpec(c.slashEffect);
+  return n;
 }
 
 /**

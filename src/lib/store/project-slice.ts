@@ -14,7 +14,7 @@ import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '..
 import { resolveChainTarget3D, backfillNodeSlots } from '../unified-types';
 import { migrateProjectTimeUnits } from '../blueprint/time-migration';
 import { syncCharacterPatternBlueprints } from '../blueprint/pattern-sync';
-import { syncCharacterSlashBlueprints } from '../blueprint/slash-sync';
+import { syncCharacterSlashBlueprints, migrateSlashCenterOffsets } from '../blueprint/slash-sync';
 import { migrateClipStructure } from '../clip-migration';
 import { backfillSpriteBirth } from '../sprite-folder';
 import { guardProjectBoneAxes } from '../bone-axis-guard';
@@ -35,6 +35,7 @@ const defaultProject: Project = {
   timeUnitsVersion: 2,
   patternBlueprintVersion: 1,
   slashBlueprintVersion: 1,
+  slashCenterVersion: 1,
   totalFrames: 24,
   currentFrame: 0,
   backgroundColor: '#1a1a2e',
@@ -182,6 +183,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       timeUnitsVersion: s.timeUnitsVersion ?? 2,
       patternBlueprintVersion: (s as any).patternBlueprintVersion ?? 1,
       slashBlueprintVersion: (s as any).slashBlueprintVersion ?? 1,
+      slashCenterVersion: (s as any).slashCenterVersion ?? 1,
       totalFrames: s.totalFrames,
       currentFrame: s.currentFrame,
       backgroundColor: s.backgroundColor,
@@ -358,6 +360,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         timeUnitsVersion: state.timeUnitsVersion ?? 2,
         patternBlueprintVersion: (state as any).patternBlueprintVersion ?? 1,
         slashBlueprintVersion: (state as any).slashBlueprintVersion ?? 1,
+        slashCenterVersion: (state as any).slashCenterVersion ?? 1,
         totalFrames: state.totalFrames,
         currentFrame: state.currentFrame,
         backgroundColor: state.backgroundColor,
@@ -511,6 +514,24 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       );
     }
 
+    // 刀光中心语义迁移（2026-10-28，一次性、幂等）：cx/cy 由
+    // 「帧画布坐标兼对位点」改义为「椭圆中心相对锚点的偏移」；
+    // 旧语义下扇面相对锚点偏移恒为 0，存量规格一律归零即逐像素
+    // 保真（覆盖共享定义/表演字段/表演图规格节点/片段字段）。
+    // 必须赶在下面的刀光蓝图同步之前跑，同步传播的是迁移后值；
+    // 历史快照同标记门控一并迁（撤销恢复是整包替换，快照内不迁
+    // 会把旧语义带回；新工程快照含合法偏移，靠标记区分不动）。
+    const slashCenterMigrating = (file.project as any).slashCenterVersion !== 1;
+    if (slashCenterMigrating) {
+      const nSlashCenter = migrateSlashCenterOffsets(
+        unifiedCharacters as any,
+        animationClips as any,
+      );
+      if (nSlashCenter > 0) {
+        console.warn('[slash-center] 刀光中心语义迁移：cx/cy 归零', nSlashCenter, '份');
+      }
+    }
+
     // 图案↔蓝图统一迁移（2026-10-27 甲案）：存量工程把图案实例
     // 镜像进已有节点蓝图（dynamic_pattern 节点，手术式）；无蓝图
     // 的节点不新建（读侧生成覆盖）。一次性，标记后跳过。
@@ -544,6 +565,15 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         const parsed = JSON.parse(entry.snapshot);
         if (!parsed?.unifiedCharacters) return entry;
         let dirty = backfillNodeSlots(parsed.unifiedCharacters);
+        // 刀光中心语义迁移（与主数据同标记门控）：快照内角色与
+        // 片段一并归零，否则撤销回旧快照会带回旧语义规格。
+        if (slashCenterMigrating) {
+          const nSnap = migrateSlashCenterOffsets(
+            parsed.unifiedCharacters,
+            (parsed.animationClips ?? []) as any,
+          );
+          if (nSnap > 0) dirty = true;
+        }
         // 骨轴守卫（与主数据同构）：快照内角色一并改轴，快照自带
         // 精灵表时反旋副本写回该表；无表时引用精灵不可达的角色
         // 由守卫中止保持原样（安全方向）。
@@ -607,6 +637,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       // Unified Characters (new model; migrated on load if missing)
       unifiedCharacters,
       timeUnitsVersion: 2,
+      slashCenterVersion: 1,
       selectedCharacterId: file.project.selectedCharacterId ?? null,
       selectedNodeId: file.project.selectedNodeId ?? null,
       // DCC Pipeline

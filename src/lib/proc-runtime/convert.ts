@@ -1175,6 +1175,7 @@ export function convertCharacterToRuntimePackage(
       durationSec: spec.durationSec ?? 0,
       frameCount: Math.max(2, Math.min(12, Math.round(spec.frameCount || 6))),
       w: spec.w, h: spec.h, cx: spec.cx, cy: spec.cy,
+      ...(spec.dir === -1 ? { dir: -1 } : {}),
       rx: spec.rx, ry: spec.ry, rotDeg: spec.rotDeg,
       a0Deg: spec.a0Deg, sweepDeg: spec.sweepDeg,
       thick: spec.thick, gammaAng: spec.gammaAng, softRad: spec.softRad,

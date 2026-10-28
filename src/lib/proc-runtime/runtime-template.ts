@@ -629,8 +629,9 @@ function clipPlaneForPart(clip, selfEl, anchorEl, anchorMirrored) {
 /** 刀光生成器（椭圆扇形状衰减；与主画布 slash-fan.ts 孪生，探针逐
  * 字节对拍）：外弧为界、内界随角向形状因子向尾部收尖，头部先展
  * 开、尾部后收走；返回 {w, h, plugX, plugY, data: RGBA}，其中
- * w/h/plug 为有效帧布局（用户盒 ∪ 扇形紧包围盒，见 slash-fan.ts
- * 文件头）——帧尺寸随几何长大、扇体不被裁 */
+ * w/h/plug 为有效帧布局（锚点本地系：用户盒以锚点为中心 ∪ 扇形
+ * 紧包围盒，cx/cy = 椭圆中心相对锚点的偏移，dir = 扫向，见
+ * slash-fan.ts 文件头）——帧尺寸随几何长大、扇体不被裁 */
 const SLASH_PALETTE_RT = ['#ffffff', '#fff8d6', '#ffeba1', '#ffd166', '#ffab2e', '#ff7a00', '#e8481f', '#b01a33'];
 function slashHexRgb(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
 function slashSmooth01(t) { t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); }
@@ -640,6 +641,7 @@ function slashFrameLayout(spec) {
   const rx = Math.max(2, spec.rx), ry = Math.max(2, spec.ry);
   const rot = spec.rotDeg * Math.PI / 180;
   const a0 = spec.a0Deg * Math.PI / 180;
+  const dirSign = spec.dir === -1 ? -1 : 1;
   const sweep = Math.max(0.06, Math.min(5.8, spec.sweepDeg * Math.PI / 180));
   const S = 1.22;
   const cr = Math.cos(rot), sr = Math.sin(rot);
@@ -653,10 +655,10 @@ function slashFrameLayout(spec) {
     if (y > gy1) gy1 = y;
   };
   eat(a0);
-  eat(a0 + sweep);
+  eat(a0 + dirSign * sweep);
   const TWO_PI = Math.PI * 2;
   const inRange = (t) => {
-    let r = (t - a0) % TWO_PI;
+    let r = (dirSign * (t - a0)) % TWO_PI;
     if (r < 0) r += TWO_PI;
     return r <= sweep + 1e-12;
   };
@@ -666,14 +668,14 @@ function slashFrameLayout(spec) {
   const ty = Math.atan2(ry * cr, rx * sr);
   if (inRange(ty)) eat(ty);
   if (inRange(ty + Math.PI)) eat(ty + Math.PI);
-  const ux0 = Math.min(0, spec.cx + gx0), ux1 = Math.max(outW, spec.cx + gx1);
-  const uy0 = Math.min(0, spec.cy + gy0), uy1 = Math.max(outH, spec.cy + gy1);
+  const ux0 = Math.min(-outW / 2, spec.cx + gx0), ux1 = Math.max(outW / 2, spec.cx + gx1);
+  const uy0 = Math.min(-outH / 2, spec.cy + gy0), uy1 = Math.max(outH / 2, spec.cy + gy1);
   const ox = Math.floor(ux0), oy = Math.floor(uy0);
   return {
     w: Math.ceil(ux1) - ox,
     h: Math.ceil(uy1) - oy,
-    plugX: spec.cx - ox,
-    plugY: spec.cy - oy,
+    plugX: -ox,
+    plugY: -oy,
   };
 }
 function slashFanFrame(spec, p, mirrored) {
@@ -681,10 +683,11 @@ function slashFanFrame(spec, p, mirrored) {
   const outW = lay.w, outH = lay.h;
   const buf = new Uint8Array(outW * outH * 4);
   const palette = (spec.colors && spec.colors.length >= 2 ? spec.colors : SLASH_PALETTE_RT).map(slashHexRgb);
-  const cx = lay.plugX, cy = lay.plugY;
+  const cx = lay.plugX + spec.cx, cy = lay.plugY + spec.cy;
   const rx = Math.max(2, spec.rx), ry = Math.max(2, spec.ry);
   const rotRad = spec.rotDeg * Math.PI / 180;
   const a0 = spec.a0Deg * Math.PI / 180;
+  const dirSign = spec.dir === -1 ? -1 : 1;
   const sweep = Math.max(0.06, Math.min(5.8, spec.sweepDeg * Math.PI / 180));
   const thick = Math.max(0.04, Math.min(0.97, spec.thick));
   const gammaAng = Math.max(0.25, spec.gammaAng);
@@ -702,7 +705,7 @@ function slashFanFrame(spec, p, mirrored) {
         const rho = Math.sqrt(ex * ex + ey * ey);
         if (rho > 1.22) continue;
         const t = Math.atan2(ey, ex);
-        let rel = t - a0;
+        let rel = dirSign * (t - a0);
         rel = ((rel % TWO_PI) + TWO_PI) % TWO_PI;
         if (rel > sweep) continue;
         const u = rel / sweep;
