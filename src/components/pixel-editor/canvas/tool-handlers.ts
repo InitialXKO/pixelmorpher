@@ -152,20 +152,25 @@ export function writePuppetPoseKeyframe(
   const node = character.nodes[nodeId];
   if (!node) return;
 
-  // 直接写 node.tracks（渲染器从这里读）。自动关键帧口径（动画软件
-  // 通例，2026-10-28 用户裁决）：开关只管「当前帧没有关键帧时要不要
-  // 自动新建」——已有关键帧的通道永远可改；关着且该帧无键 → 该通道
-  // 不写（拖拽对它不生效）。显式打帧入口（时间轴「添加关键帧」）传
-  // forceCreate 绕过；改骨架的操作（Alt 拖插槽）不经此函数、不受管。
+  // 直接写 node.tracks（渲染器从这里读）。自动关键帧口径（2026-10-28
+  // 用户裁决）：已有关键帧的通道永远可改；开关关着且当前帧该通道无
+  // 键 → 不在当前帧新建，改写到第 0 帧（0 帧有键更新、无键新建）——
+  // 拖拽永远有落点。显式打帧入口（时间轴「添加关键帧」）传
+  // forceCreate 绕过（永远在指定帧新建）；改骨架的操作（Alt 拖
+  // 插槽）不经此函数、不受管。
   const mayCreate = opts?.forceCreate === true || usePuppetSessionStore.getState().autoKeyframe;
   const setTrack = (trackName: 'angle' | 'x' | 'y' | 'stretch' | 'scaleX' | 'tilt', value: number) => {
     const existing = node.tracks[trackName];
     const track = existing ?? { keyframes: [], interpolation: 'linear' as const };
-    const idx = track.keyframes.findIndex(k => k.frame === frame);
-    if (idx < 0 && !mayCreate) return existing;
+    let idx = track.keyframes.findIndex(k => k.frame === frame);
+    let targetFrame = frame;
+    if (idx < 0 && !mayCreate) {
+      targetFrame = 0;
+      idx = track.keyframes.findIndex(k => k.frame === 0);
+    }
     const newKeyframes = idx >= 0
       ? track.keyframes.map((k, i) => i === idx ? { ...k, value } : k)
-      : [...track.keyframes, { frame, value }].sort((a, b) => a.frame - b.frame);
+      : [...track.keyframes, { frame: targetFrame, value }].sort((a, b) => a.frame - b.frame);
     return { ...track, keyframes: newKeyframes };
   };
 

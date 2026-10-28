@@ -265,7 +265,7 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
             </div>
             {!autoKeyframe && (
               <div className="text-[9px] text-amber-400/90">
-                自动关键帧已关闭 — 拖动只修改当前帧已有的关键帧、不会新建；用「记录姿态」手动打帧。
+                自动关键帧已关闭 — 拖动修改当前帧已有的关键帧；当前帧没有的写到第 0 帧。
               </div>
             )}
           </div>
