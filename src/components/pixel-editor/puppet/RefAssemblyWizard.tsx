@@ -28,6 +28,9 @@ let persistedStep: Step = 'upload';
 let persistedSelectedCharacterId: string | null = null;
 let persistedWorkingCostumeId: string | null = null;
 let persistedProcessedNodes: Map<string, string> = new Map();
+// SAM 分割步点选图的缩放/平移视角（原图与预览图共用一份，两图交替不跳）：
+// 与 step 同理模块级持久化，切步/重挂不丢；换新参考图时由组件内 effect 复位。
+let persistedSamView = { scale: 1, x: 0, y: 0 };
 let persistedPoseSnapshot: {
   charKey: string;
   nodes: Map<string, { transform: NodeTransform; tracks: NodeTracks }>;
@@ -37,6 +40,7 @@ export function resetRefWizardStep() {
   persistedSelectedCharacterId = null;
   persistedWorkingCostumeId = null;
   persistedProcessedNodes = new Map();
+  persistedSamView = { scale: 1, x: 0, y: 0 };
   persistedPoseSnapshot = null;
 }
 
@@ -59,6 +63,182 @@ const BUILT_IN_REFS = [
   { id: 'swordsman-side', label: '剑士·侧面', url: '/reference-demos/swordsman-side.webp' },
   { id: 'angel-front', label: '天使·正面', url: '/reference-demos/angel-front.webp' },
 ];
+
+// ============================================================
+// SAM 点选图：滚轮缩放 + 拖动平移 + 单击点选，三者共存
+//
+// 缩放走 CSS transform（translate + scale、origin 左上），外层
+// overflow-hidden 裁到原图框内。点选坐标仍按 img 的
+// getBoundingClientRect 做 0–1 归一化——rect 返回的是变换后的
+// 可视框，归一化比例在任何仿射变换下不变，所以缩放/平移后这套
+// 换算天然成立，不需要手动逆变换。
+// 点选与平移的区分不放在 click/contextmenu 里做（右键菜单事件的
+// 触发时机跨平台不一致），统一收在 pointerup：按下到抬起的位移
+// ≤ 阈值判点选（左键=保留 1、右键=抠除 0），超过判平移、不加点；
+// contextmenu 只 preventDefault 压掉系统菜单，本身不加点。
+// 滚轮用原生监听 + { passive: false } 拦截：React 的 onWheel 在
+// 根节点是被动监听，preventDefault 无效，会连带滚外层面板。
+// ============================================================
+
+const SAM_VIEW_MIN_SCALE = 1;
+const SAM_VIEW_MAX_SCALE = 8;
+const SAM_PICK_DRAG_THRESHOLD = 4; // px：按下到抬起位移 ≤ 此值判点选，超过判平移
+
+type SamView = { scale: number; x: number; y: number };
+
+// 视角钳制：倍率夹在 [1, 8]，平移保证放大图始终盖满原图框（不露边）
+function clampSamView(v: SamView, w: number, h: number): SamView {
+  const scale = Math.min(SAM_VIEW_MAX_SCALE, Math.max(SAM_VIEW_MIN_SCALE, v.scale));
+  return {
+    scale,
+    x: Math.min(0, Math.max(w * (1 - scale), v.x)),
+    y: Math.min(0, Math.max(h * (1 - scale), v.y)),
+  };
+}
+
+function SamPickImage({
+  src,
+  alt,
+  frameClassName,
+  view,
+  onViewChange,
+  onPick,
+}: {
+  src: string;
+  alt: string;
+  frameClassName: string;
+  view: SamView;
+  onViewChange: (v: SamView) => void;
+  onPick: (x: number, y: number, label: 1 | 0) => void;
+}) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const [dragging, setDragging] = useState(false);
+  // 原生监听与手势回调要读最新视角/回调，走 ref 防闭包过期
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const onViewChangeRef = useRef(onViewChange);
+  onViewChangeRef.current = onViewChange;
+  const dragRef = useRef<{
+    pointerId: number;
+    button: number;
+    startClientX: number;
+    startClientY: number;
+    startView: SamView;
+    moved: boolean;
+  } | null>(null);
+
+  // 滚轮缩放：以光标为中心——光标压着的图上比例点在缩放前后不动
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const img = imgRef.current;
+      if (!img) return;
+      const w = img.offsetWidth;
+      const h = img.offsetHeight;
+      if (!w || !h) return;
+      const rect = img.getBoundingClientRect();
+      const fx = (e.clientX - rect.left) / rect.width;
+      const fy = (e.clientY - rect.top) / rect.height;
+      const delta = e.deltaY * (e.deltaMode === 1 ? 16 : 1);
+      const v = viewRef.current;
+      const scale = v.scale * Math.exp(-delta * 0.002);
+      onViewChangeRef.current(
+        clampSamView(
+          {
+            scale,
+            x: v.x - fx * w * (scale - v.scale),
+            y: v.y - fy * h * (scale - v.scale),
+          },
+          w,
+          h,
+        ),
+      );
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 && e.button !== 2) return;
+    dragRef.current = {
+      pointerId: e.pointerId,
+      button: e.button,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      startView: viewRef.current,
+      moved: false,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    const dx = e.clientX - drag.startClientX;
+    const dy = e.clientY - drag.startClientY;
+    if (!drag.moved && Math.hypot(dx, dy) > SAM_PICK_DRAG_THRESHOLD) {
+      drag.moved = true;
+      if (drag.startView.scale > 1) setDragging(true);
+    }
+    if (drag.moved && drag.startView.scale > 1) {
+      const img = imgRef.current;
+      if (!img) return;
+      const w = img.offsetWidth;
+      const h = img.offsetHeight;
+      if (!w || !h) return;
+      onViewChange(
+        clampSamView(
+          { scale: drag.startView.scale, x: drag.startView.x + dx, y: drag.startView.y + dy },
+          w,
+          h,
+        ),
+      );
+    }
+  };
+
+  const endPointer = (e: React.PointerEvent<HTMLDivElement>, cancelled: boolean) => {
+    const drag = dragRef.current;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    dragRef.current = null;
+    setDragging(false);
+    if (cancelled || drag.moved) return;
+    // 未判平移 → 点选：坐标按变换后的可视 rect 归一化（变换下成立，见段头注）
+    const img = imgRef.current;
+    if (!img) return;
+    const rect = img.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    onPick(x, y, drag.button === 2 ? 0 : 1);
+  };
+
+  return (
+    <div
+      ref={viewportRef}
+      className={`relative touch-none select-none overflow-hidden rounded border ${frameClassName} ${dragging ? 'cursor-grabbing' : 'cursor-crosshair'}`}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={(e) => endPointer(e, false)}
+      onPointerCancel={(e) => endPointer(e, true)}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <img
+        ref={imgRef}
+        src={src}
+        alt={alt}
+        draggable={false}
+        className="block w-full"
+        style={{
+          transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+          transformOrigin: '0 0',
+        }}
+      />
+    </div>
+  );
+}
 
 export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) {
   // 恢复模板姿态快照（transform + tracks 整表写回）。
@@ -207,6 +387,21 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
 
   const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
   const setReferenceImageUrl = useEditorStore((s) => s.setReferenceImageUrl);
+  // 分割步缩放/平移视角（原图与预览图共用一份）；同步模块级持久化，理由同 step
+  const [samView, setSamViewState] = useState<SamView>(persistedSamView);
+  const setSamView = (v: SamView) => {
+    persistedSamView = v;
+    setSamViewState(v);
+  };
+  // 参考图换人（新上传、或用抠图结果回写）时视角复位：旧图的平移量对新图
+  // 几何无意义。同一张图内切步离开再回来、原图↔预览交替、重选都不触发。
+  const prevReferenceUrlRef = useRef(referenceImageUrl);
+  useEffect(() => {
+    if (prevReferenceUrlRef.current !== referenceImageUrl) {
+      prevReferenceUrlRef.current = referenceImageUrl;
+      setSamView({ scale: 1, x: 0, y: 0 });
+    }
+  }, [referenceImageUrl]);
   const referenceImageOpacity = useEditorStore((s) => s.referenceImageOpacity);
   const setReferenceImageOpacity = useEditorStore((s) => s.setReferenceImageOpacity);
   // 抠图目标：直接用画布全局当前选中的肢体
@@ -552,46 +747,39 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
             {samStatus === 'ready' && (
               <div className="space-y-2">
                 <div className="text-xs text-green-400">SAM 就绪。左键点选要保留的，右键点选要抠掉的，预览确认后应用。</div>
+                {(referenceImageUrl || samPreviewUrl) && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-gray-500">滚轮缩放 · 按住拖动平移 · 单击加点（拖动不误加）</span>
+                    <span className="ml-auto text-[11px] text-gray-400">{samView.scale.toFixed(1)}×</span>
+                    <Button
+                      size="sm" variant="ghost" className="h-6 px-2 text-[11px]"
+                      disabled={samView.scale === 1 && samView.x === 0 && samView.y === 0}
+                      onClick={() => setSamView({ scale: 1, x: 0, y: 0 })}
+                    >
+                      复位
+                    </Button>
+                  </div>
+                )}
                 {referenceImageUrl && !samPreviewUrl && (
-                  <img
+                  <SamPickImage
                     src={referenceImageUrl}
                     alt="参考图"
-                    className="w-full rounded border border-white/10 cursor-crosshair"
-                    onClick={async (e) => {
-                      const rect = (e.target as HTMLImageElement).getBoundingClientRect();
-                      const x = (e.clientX - rect.left) / rect.width;
-                      const y = (e.clientY - rect.top) / rect.height;
-                      await handleSamClick(x, y, 1);
-                    }}
-                    onContextMenu={async (e) => {
-                      e.preventDefault();
-                      const rect = (e.target as HTMLImageElement).getBoundingClientRect();
-                      const x = (e.clientX - rect.left) / rect.width;
-                      const y = (e.clientY - rect.top) / rect.height;
-                      await handleSamClick(x, y, 0);
-                    }}
+                    frameClassName="border-white/10"
+                    view={samView}
+                    onViewChange={setSamView}
+                    onPick={(x, y, label) => { void handleSamClick(x, y, label); }}
                   />
                 )}
                 {samPreviewUrl && (
                   <div className="space-y-2">
                     <div className="text-xs text-gray-400">预览效果（红色为将抠除，可继续左右键加点修正）：</div>
-                    <img
+                    <SamPickImage
                       src={samPreviewUrl}
                       alt="抠图预览"
-                      className="w-full rounded border border-green-500/30 cursor-crosshair"
-                      onClick={async (e) => {
-                        const rect = (e.target as HTMLImageElement).getBoundingClientRect();
-                        const x = (e.clientX - rect.left) / rect.width;
-                        const y = (e.clientY - rect.top) / rect.height;
-                        await handleSamClick(x, y, 1);
-                      }}
-                      onContextMenu={async (e) => {
-                        e.preventDefault();
-                        const rect = (e.target as HTMLImageElement).getBoundingClientRect();
-                        const x = (e.clientX - rect.left) / rect.width;
-                        const y = (e.clientY - rect.top) / rect.height;
-                        await handleSamClick(x, y, 0);
-                      }}
+                      frameClassName="border-green-500/30"
+                      view={samView}
+                      onViewChange={setSamView}
+                      onPick={(x, y, label) => { void handleSamClick(x, y, label); }}
                     />
                     <div className="text-xs text-gray-500">左键{ samPoints.filter(p => p.label === 1).length }点保留 · 右键{ samPoints.filter(p => p.label === 0).length }点抠除</div>
                     <div className="flex gap-2">
