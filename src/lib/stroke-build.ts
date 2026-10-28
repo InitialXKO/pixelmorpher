@@ -39,6 +39,22 @@ export interface StrokeBuildResult {
 
 const SUB = (v: number) => pxToSub(v);
 
+/**
+ * 指针事件 → 画布坐标：按画布元素的显示矩形比例换算（显示尺寸可与
+ * 位图尺寸不同——窗口按视口缩放显示时靠这条保住落点不偏）。笔触
+ * 采样、吸附、命中全部只许走这一条换算。
+ */
+export function pointerToCanvasPt(
+  clientX: number, clientY: number,
+  rect: { left: number; top: number; width: number; height: number },
+  canvasW: number, canvasH: number,
+): Pt {
+  return {
+    x: ((clientX - rect.left) / rect.width) * canvasW,
+    y: ((clientY - rect.top) / rect.height) * canvasH,
+  };
+}
+
 /** 躯干落点 + 肩/髋派生点（角色空间） */
 export function strokeTorsoJoints(torso: Pt[]): Record<string, Pt> {
   const len = polylineLength(torso);

@@ -19,6 +19,7 @@ import {
 } from '../canvas/canvas-puppet-render';
 import { projectToView, subToPx, type Character } from '@/lib/unified-types';
 import { assignSketchStrokes, bakeSketchPose, chainJointIds, type SketchBakeResult } from '@/lib/sketch-pose';
+import { drawRefImage, loadRefImage, refImageReady, refImageRect } from '@/lib/ref-image';
 import type { Pt } from '@/lib/arc-length';
 
 interface PreviewState {
@@ -30,6 +31,10 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
   const characterId = useEditorStore((s) => s.activePuppetSkeletonId);
   const character = useProjectStore((s) => (characterId ? s.unifiedCharacters[characterId] : undefined));
   const frame = useProjectStore((s) => s.currentFrame);
+  const referenceImageUrl = useEditorStore((s) => s.referenceImageUrl);
+  const referenceImageVisible = useEditorStore((s) => s.referenceImageVisible);
+  const referenceImageOpacity = useEditorStore((s) => s.referenceImageOpacity);
+  const [refTick, setRefTick] = useState(0);
   const frameRate = useProjectStore((s) => s.frameRate) || 12;
   const canvasW = useProjectStore((s) => s.canvasWidth) || 512;
   const canvasH = useProjectStore((s) => s.canvasHeight) || 512;
@@ -79,6 +84,15 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
     ctx.clearRect(0, 0, canvasW, canvasH);
     ctx.fillStyle = '#0a0a18';
     ctx.fillRect(0, 0, canvasW, canvasH);
+    // 参考图垫图：与主画布同一份数据/可见性/透明度、同一帧几何（本窗口
+    // 尺寸 == 工程画布尺寸，逐像素一致），画在主渲染内容之下，纯显示、
+    // 不参与笔触命中与解算
+    if (referenceImageUrl && referenceImageVisible) {
+      const img = loadRefImage(referenceImageUrl, () => setRefTick((t) => t + 1));
+      if (refImageReady(img)) {
+        drawRefImage(ctx, img, refImageRect(canvasW, canvasH, img.naturalWidth, img.naturalHeight), referenceImageOpacity);
+      }
+    }
     const charsForRender: Record<string, Character> = onlyCurrent
       ? { [characterId]: renderCharacter }
       : { ...pst.unifiedCharacters, [characterId]: renderCharacter };
@@ -128,7 +142,8 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
         }
       }
     }
-  }, [renderCharacter, characterId, onlyCurrent, joints, frame, frameRate, canvasW, canvasH]);
+  }, [renderCharacter, characterId, onlyCurrent, joints, frame, frameRate, canvasW, canvasH,
+    referenceImageUrl, referenceImageVisible, referenceImageOpacity, refTick]);
 
   // 底图绘制：打开后先等一帧（对话框挂载时序）再画，并短间隔补画
   // 两次兜底——主渲染里精灵位图等有首次备图时机，只画一次会赶上
