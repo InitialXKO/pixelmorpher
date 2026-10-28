@@ -1,6 +1,8 @@
 // 向导抠图精灵→兜底胶囊 bug 复现探针（行为，走真实消费路径 generateRenderPlan）：
 // 角色与服装数据按装配向导写侧的真实产物形状构造——
-//   · 节点由 createDefaultNode 生成（向导加肢体/stroke-build 同路）：无 slot 字段；
+//   · 节点按存量形状构造：createDefaultNode 现已出生自带 slot（写侧挂牌
+//     裁决），夹具显式删掉以模拟补挂前的存量工程——读侧回退是兜底，
+//     对存量形状必须仍成立；
 //   · 向导建工作服装并设为生效（RefAssemblyWizard 建集 + activeCostumeSetId）；
 //   · 抠图关联写侧（MaskBrushOverlay）：键 = node.slot?.slotKey ?? nodeId → 无 slot 即节点 id，
 //     值 = pieces[键].sprites[根节点 variantIndex] = { spriteId }。
@@ -29,6 +31,10 @@ bare.parentId = root.id;
 const ghost = createDefaultNode('ghost', '空槽节点');
 ghost.id = `node_${charId}_3`;
 ghost.parentId = root.id;
+// 存量形状：删掉工厂默认 slot（root/limb/bare 回到补挂前的无 slot 态）
+delete (root as any).slot;
+delete (limb as any).slot;
+delete (bare as any).slot;
 // 有 slot 定义、但生效集内没有对应件 → 仍应兜底（回退查无件不许凭空出图）
 ghost.slot = createDefaultCostumePiece('ghost_slot') as never;
 root.children = [limb.id, bare.id, ghost.id];

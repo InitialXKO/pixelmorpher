@@ -7,6 +7,7 @@
 // ============================================================
 
 import type { Character, KeyframeTrack, Node as UnifiedNode } from '../unified-types';
+import { createDefaultCostumePiece } from '../unified-types';
 import {
   collectChain, bakeChainSwing, isChainBakeFresh,
   type ChainBakeParams, type ChainBakeRecord,
@@ -25,6 +26,8 @@ export function generateHairStrands(
     id, name: id, parentId, role: 'bone',
     transform: { x, y, angle: 0, variantIndex: 2, stretch: 1 },
     attachment: { type: 'fixed' }, sockets: [], tracks: {}, modifiers: [], children,
+    // 写侧必须写 slot（slotKey = 节点 id，与工厂口径同键）
+    slot: createDefaultCostumePiece(id),
   } as unknown as UnifiedNode);
   for (let c = 0; c < strands; c++) {
     const frac = strands === 1 ? 0 : c / (strands - 1) - 0.5;
