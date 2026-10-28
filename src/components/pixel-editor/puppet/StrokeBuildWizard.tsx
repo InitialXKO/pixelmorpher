@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Eraser, PenLine, RotateCcw } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import {
-  buildSkeletonFromStrokes, strokeLimbJoints, strokeTorsoJoints, type Pt,
+  buildSkeletonFromStrokes, pointerToCanvasPt, strokeLimbJoints, strokeTorsoJoints, type Pt,
 } from '@/lib/stroke-build';
 import { polylineLength } from '@/lib/arc-length';
 import { drawRefImage, loadRefImage, refImageReady, refImageRectForWindow } from '@/lib/ref-image';
@@ -156,12 +156,30 @@ export default function StrokeBuildWizard({ open, onClose }: { open: boolean; on
 
   useEffect(() => { redraw(); }, [redraw, open]);
 
+  // 首画等一帧：对话框内容经 portal 挂载，打开瞬间本组件 effect 触发
+  // 的 redraw 会赶在 canvas ref 就位之前（实测首开数次 redraw 均为
+  // canvas 未就位而早退、且 loadRefImage 只在 redraw 内调用——首画
+  // 落空意味着参考图连请求都没发出，只能等下一次状态变更才补上）。
+  // rAF 时内容已挂载稳定，用最新 redraw 补画首帧。
+  const redrawRef = useRef(redraw);
+  useEffect(() => { redrawRef.current = redraw; });
+  useEffect(() => {
+    if (!open) return;
+    const raf = requestAnimationFrame(() => redrawRef.current());
+    return () => cancelAnimationFrame(raf);
+  }, [open ]);
+
+  // 参考图加载订阅独立于绘制：打开期间先把加载完成通知挂上，图片
+  // 就绪后 setRefTick 触发重绘——不再依赖某次 redraw 恰好在图片就绪
+  // 前跑过并注册监听。切换参考图/重新打开同样由依赖变化重新订阅。
+  useEffect(() => {
+    if (!open || !referenceImageUrl || !referenceImageVisible) return;
+    loadRefImage(referenceImageUrl, () => setRefTick((t) => t + 1));
+  }, [open, referenceImageUrl, referenceImageVisible]);
+
   const pointFromEvent = (e: React.PointerEvent): Pt => {
     const rect = canvasRef.current!.getBoundingClientRect();
-    return {
-      x: ((e.clientX - rect.left) / rect.width) * W,
-      y: ((e.clientY - rect.top) / rect.height) * H,
-    };
+    return pointerToCanvasPt(e.clientX, e.clientY, rect, W, H);
   };
 
   const finishStroke = (pts: Pt[]) => {
@@ -197,7 +215,7 @@ export default function StrokeBuildWizard({ open, onClose }: { open: boolean; on
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-[520px] bg-[#12122a] border-white/10 text-gray-200">
+      <DialogContent className="max-w-[520px] max-h-[calc(100dvh-1.5rem)] overflow-y-auto bg-[#12122a] border-white/10 text-gray-200">
         <DialogHeader>
           <DialogTitle className="text-sm flex items-center gap-2">
             <PenLine className="size-4 text-cyan-300" /> 画火柴人建角
@@ -222,8 +240,17 @@ export default function StrokeBuildWizard({ open, onClose }: { open: boolean; on
           </div>
           <p className="text-[11px] text-gray-400">{step.hint}。跳过的肢体按标准比例自动生成。</p>
           <canvas ref={canvasRef} width={W} height={H}
-            className="w-full rounded border border-white/10 touch-none cursor-crosshair"
-            style={{ aspectRatio: `${W}/${H}` }}
+            className="block mx-auto rounded border border-white/10 touch-none cursor-crosshair"
+            style={{
+              // 只缩显示尺寸：位图仍是 W×H、内部坐标与参考图同帧布局
+              // 一律不变，落点靠 pointFromEvent 的矩形比例换算保住。
+              // 高度按视口留出其余行（标题/名称/步骤/按钮 ≈ 270px）的
+              // 空间，矮屏不再被固定画布撑出视口；空间够时就是原尺寸。
+              height: 'min(500px, calc(100dvh - 270px))',
+              width: 'auto',
+              maxWidth: '100%',
+              aspectRatio: `${W}/${H}`,
+            }}
             onPointerDown={(e) => { (e.target as HTMLElement).setPointerCapture(e.pointerId); setDrawing([pointFromEvent(e)]); }}
             onPointerMove={(e) => {
               if (!drawing) return;

@@ -2,9 +2,9 @@
 // lib/ref-image 的几何定义，断言同一参考图点在三处对应的角色空间
 // 坐标逐点一致（参考图与骨架的相对关系不随窗口改变）。
 import {
-  drawRefImage, refImagePoint, refImageRect, refImageRectForWindow,
+  drawRefImage, loadRefImage, refImagePoint, refImageReady, refImageRect, refImageRectForWindow,
 } from '../src/lib/ref-image';
-import { buildSkeletonFromStrokes } from '../src/lib/stroke-build';
+import { buildSkeletonFromStrokes, pointerToCanvasPt } from '../src/lib/stroke-build';
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log((c ? '  ✓ ' : '  ✗ ') + m); if (!c) fails++; };
@@ -106,6 +106,65 @@ for (const [fw, fh, iw, ih] of [
   ok(alpha === 0.35, 'drawRefImage 透明度透传');
   ok(smoothing === false, 'drawRefImage 关闭图像平滑（像素口径）');
   ok(saves === 1 && restores === 1, 'drawRefImage save/restore 配对');
+}
+
+// ---- 7. 指针换算跨显示缩放一致（火柴人窗口缩放显示后落点不偏） ----
+// 窗口画布位图恒 440×500，显示尺寸随视口缩放。断言：同一画布点在
+// 1:1 / 0.5 / 1.5 倍显示 + 任意偏移的矩形下，client 坐标换算回同一
+// 画布坐标；笔触采样/吸附/命中共用这一条换算。
+{
+  const W = 440, H = 500;
+  const cases: { rect: { left: number; top: number; width: number; height: number }; pt: { x: number; y: number } }[] = [
+    { rect: { left: 100, top: 50, width: 440, height: 500 }, pt: { x: 220, y: 250 } },
+    { rect: { left: 30, top: 20, width: 220, height: 250 }, pt: { x: 220, y: 250 } },
+    { rect: { left: 0, top: 0, width: 660, height: 750 }, pt: { x: 220, y: 250 } },
+    { rect: { left: 17, top: 311, width: 308, height: 350 }, pt: { x: 123.4, y: 234.5 } },
+    { rect: { left: 17, top: 311, width: 308, height: 350 }, pt: { x: 0, y: 0 } },
+    { rect: { left: 17, top: 311, width: 308, height: 350 }, pt: { x: 440, y: 500 } },
+  ];
+  let allOk = true;
+  for (const { rect, pt } of cases) {
+    const cx = rect.left + (pt.x / W) * rect.width;
+    const cy = rect.top + (pt.y / H) * rect.height;
+    const back = pointerToCanvasPt(cx, cy, rect, W, H);
+    if (!near(back.x, pt.x, 1e-9) || !near(back.y, pt.y, 1e-9)) {
+      allOk = false;
+      console.log(`    换算不一致: 矩形 ${rect.width}×${rect.height}@(${rect.left},${rect.top}) 点 (${pt.x},${pt.y}) → (${back.x},${back.y})`);
+    }
+  }
+  ok(allOk, '指针换算：任意显示缩放/偏移下同一画布点换算一致');
+}
+
+// ---- 8. loadRefImage 加载订阅合同（首开补画所依赖的通知链） ----
+// 向导首画可能赶在图未就绪时：绘制跳过、靠加载完成通知触发重绘。
+// 用可控假 Image 断言合同：未就绪时订阅登记、就绪时全部订阅者恰
+// 触发一次、就绪后再订阅不登记（调用方直接画）、不同 URL 独立。
+{
+  class FakeImage {
+    static last: FakeImage | null = null;
+    src = '';
+    complete = false;
+    naturalWidth = 0;
+    naturalHeight = 0;
+    onload: (() => void) | null = null;
+    constructor() { FakeImage.last = this; }
+    finishLoad() { this.complete = true; this.naturalWidth = 240; this.naturalHeight = 320; this.onload?.(); }
+  }
+  (globalThis as unknown as { Image: unknown }).Image = FakeImage;
+
+  let n1 = 0, n2 = 0, n3 = 0;
+  const imgA = loadRefImage('probe://a.png', () => n1++);
+  ok(!refImageReady(imgA as never), '订阅合同：加载中图未就绪（绘制应跳过、等通知）');
+  const imgA2 = loadRefImage('probe://a.png', () => n2++);
+  ok(imgA2 === imgA, '订阅合同：同 URL 共用同一图实例（缓存一份）');
+  FakeImage.last!.finishLoad();
+  ok(n1 === 1 && n2 === 1, '订阅合同：加载完成时全部订阅者各触发一次');
+  const imgA3 = loadRefImage('probe://a.png', () => n3++);
+  ok(imgA3 === imgA && refImageReady(imgA3 as never), '订阅合同：已就绪图再取仍是同一实例且就绪');
+  FakeImage.last!.finishLoad();
+  ok(n3 === 0, '订阅合同：已就绪后的订阅不登记（不会被迟到通知误触发）');
+  const imgB = loadRefImage('probe://b.png');
+  ok(imgB !== imgA && !refImageReady(imgB as never), '订阅合同：不同 URL 独立条目、各自就绪状态');
 }
 
 console.log(fails === 0 ? '\n全部通过' : `\n${fails} 项失败`);
