@@ -214,6 +214,11 @@ export interface ProcRuntimePackage {
   frameRate: number;
   palettes: Record<string, number[]>;
   parts: RuntimePart[];
+  /** 骨骼名/父子表（按部件键对齐）：parts 的 slotKey 对烘焙角色是
+   * 不透明键（slot_<角色>_<骨序>），消费方无从按名识别骨骼——本表把
+   * 编辑器侧节点的原始名与父子拓扑按部件键发一份；几何仍以
+   * parts.base 为准，本表只发名称与关系。旧包无此字段。 */
+  skeleton?: Array<{ key: string; name: string; parent: string | null }>;
   costumes: Record<string, { label: string; [slotKey: string]: unknown }>;
   /** 模板初始服装集（产品当前生效集） */
   defaultCostume?: string;
@@ -1974,6 +1979,24 @@ export function convertCharacterToRuntimePackage(
     return solids.length > 0 ? { solids } : undefined;
   })();
 
+  // 骨骼名/父子表：slotNode 是 slotKey → nodeId，反查得 nodeId → 部件
+  // 键；逐部件取节点名与父节点部件键（父不在包内部件集时记 null）。
+  const nodeSlot = new Map<string, string>();
+  for (const [k, nid] of slotNode) nodeSlot.set(nid, k);
+  const partKeySet = new Set(parts.map((p) => p.key));
+  const skeleton: NonNullable<ProcRuntimePackage['skeleton']> = [];
+  for (const p of parts) {
+    const nodeId = slotNode.get(p.key);
+    const node = nodeId ? character.nodes[nodeId] : undefined;
+    if (!node) continue;
+    const parentKey = node.parentId ? nodeSlot.get(node.parentId) : undefined;
+    skeleton.push({
+      key: p.key,
+      name: node.name ?? p.key,
+      parent: parentKey && partKeySet.has(parentKey) ? parentKey : null,
+    });
+  }
+
   return {
     format: 'procedural-pixel-runtime-1',
     characterName: character.name,
@@ -1982,6 +2005,7 @@ export function convertCharacterToRuntimePackage(
     frameRate: projectFpsTop,
     palettes: PALETTES,
     parts,
+    skeleton: skeleton.length > 0 ? skeleton : undefined,
     costumes,
     defaultCostume: activeSet?.id,
     behavior,

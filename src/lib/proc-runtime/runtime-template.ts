@@ -1926,7 +1926,7 @@ function fxRunPostChain(rawList, state, elByKey, camX, camY) {
 // ---------- 宿主输入与运行时状态 ----------
 const char = { x: 0, y: 0, py: 0, vy: 0, onGround: true, variant: 0, lockedVariant: false, wallDir: 0, ledge: null };
 // 现场可调参数（控制条「手感」面板直改；宿主包 pkg.scene 可给初值）
-const PHYS = { speed: 72, jumpV: 200, gravity: 720, camFollow: 10, camLockX: false, camLockY: false };
+const PHYS = { speed: 140, jumpV: 350, gravity: 720, camFollow: 10, camLockX: false, camLockY: false };
 // 按键绑定（控制条「按键」面板可重绑；方向键恒为备用）
 const KEYMAP = { left: 'KeyA', right: 'KeyD', jump: 'KeyW', down: 'KeyS' };
 let rebindTarget = null; // {kind:'move', act} | {kind:'perf', perf}
@@ -2069,6 +2069,224 @@ function runSimPass(pose, steps) {
       const c1 = partCenter(items[i].p, an1);
       entry.dx = (entry.dx || 0) + (solved[i][0] - c1[0]);
       entry.dy = (entry.dy || 0) + (solved[i][1] - c1[1]);
+    }
+  }
+}
+// ---------- 默认动作表演兜底（播放器内置） ----------
+// 定位：包内没有作者自带的对应动作时，用现行姿态管线（pose 的
+// a/dx/dy，与模拟遍同一回写口径：改角 → partCenter 复算 → dx/dy
+// 补差到目标中心）合成最低限度的身体动作——跳跃先屈膝下蹲再蹬
+// 地、横版行走双脚交替、俯视纵走双脚交替上下。作者内容优先
+// （红线）：包内有走/跳语义的表演（name/trigger/id 命中），或已
+// 识别的腿部部件挂了行为图（作者直接驱动腿），对应兜底整体不
+// 介入。缺位判定只读包内静态数据，加载期定一次。
+// 腿脚识别：convert 随包发 skeleton（部件键 → 节点名/父部件键），
+// 按骨骼名（含中英日常见腿脚词）+ 父子链识别腿链，再按同父分组
+// 成对反相（两足对位、四足对角）；旧包无 skeleton 时以部件键为
+// 名、无父子（各自成单段链）。识别不到成对的腿 → 兜底整体不
+// 生效并点名（console + 警告条）；不许靠几何硬猜骨骼。
+const FB_CROUCH_DUR = 0.16;   // 下蹲预备时长（s）
+const FB_SWING = 0.38;        // 行走髋摆幅（rad）
+const FB_KNEE = 0.55;         // 行走膝弯幅（rad）
+const FB_LEG_NAME = /leg|thigh|shin|calf|femur|foot|feet|toe|ankle|knee|paw|腿|脚|足|膝|踝|胫|股|ひざ|つま先/i;
+const FB_NOT_LEG = /arm|wing|tail|ear|horn|手|腕|肘|肩|翼|耳|眼/i;
+let FB = null;           // 懒构建（首帧 costume/variant 已定）
+let fbCrouchT = 0;       // >0 = 下蹲进行中（剩余秒）
+let fbDipAir = 0;        // 起跳后残余下沉（px，空中快速释放）
+let fbPhase = 0;         // 步态相位（按实测位移推进，撞墙即停）
+let fbWalkW = 0;         // 横版行走混合权重
+let fbTopW = 0;          // 俯视纵走混合权重
+let fbPrevX = null, fbPrevPY = null;
+function fbDipMax() { return Math.max(3, Math.min(9, charBoxH() * 0.13)); }
+function fbJointOf(prm) {
+  const c = Math.cos(prm.restRot || 0), s = Math.sin(prm.restRot || 0);
+  return [prm.pivot[0] + prm.off[0] * c - prm.off[1] * s, prm.pivot[1] + prm.off[0] * s + prm.off[1] * c];
+}
+function fbParamsOf(part) {
+  // 与模拟遍/落位同一组装（simPartParams：精灵部件 {...base, off:0}、
+  // 参数化部件走 resolvePart），保证 partCenter 复算与落位逐值一致
+  return simPartParams(part);
+}
+function buildFallback() {
+  const skel = new Map();
+  for (const s of EMBEDDED.skeleton || []) skel.set(s.key, s);
+  const nameOf = (key) => (skel.get(key) || {}).name || key;
+  const parentOf = (key) => { const s = skel.get(key); return s ? s.parent : null; };
+  const isLeg = (key) => { const nm = nameOf(key); return FB_LEG_NAME.test(nm) && !FB_NOT_LEG.test(nm); };
+  // 静止关节（角色空间，根朝向口径）：识别校验与相位分组只读这一份；
+  // 逐帧回写时按当前 variant 重取（镜像朝向参数不同），不复用此表。
+  const restJ = new Map();
+  for (const part of PARTS) {
+    const prm = fbParamsOf(part);
+    if (prm) restJ.set(part.key, fbJointOf(prm));
+  }
+  const legKeys = PARTS.map((p) => p.key).filter((k) => restJ.has(k) && isLeg(k));
+  const legSet = new Set(legKeys);
+  const legChildren = new Map();
+  for (const k of legKeys) {
+    const par = parentOf(k);
+    if (par && legSet.has(par)) {
+      if (!legChildren.has(par)) legChildren.set(par, []);
+      legChildren.get(par).push(k);
+    }
+  }
+  const tipExtent = (part) => {
+    if (part.spriteKind && part.sprite) return Math.max(4, part.sprite.h - part.sprite.plug[1]);
+    const sz = part.base && part.base.size;
+    return Math.max(4, ((sz && sz[1]) || 12) * 0.55);
+  };
+  const allChains = [];
+  for (const k of legKeys) {
+    const par = parentOf(k);
+    if (par && legSet.has(par)) continue; // 非链根
+    const keys = [k];
+    let cur = k;
+    for (;;) {
+      const kids = (legChildren.get(cur) || []).filter((c) => !keys.includes(c));
+      if (!kids.length) break;
+      kids.sort((a, b) => {
+        const ja = restJ.get(a), jb = restJ.get(b), jc = restJ.get(cur);
+        return Math.hypot(jb[0] - jc[0], jb[1] - jc[1]) - Math.hypot(ja[0] - jc[0], ja[1] - jc[1]);
+      });
+      cur = kids[0]; keys.push(cur);
+    }
+    let len = tipExtent(PART_BY_KEY.get(keys[keys.length - 1]));
+    for (let i = 0; i + 1 < keys.length; i++) len += Math.hypot(restJ.get(keys[i + 1])[0] - restJ.get(keys[i])[0], restJ.get(keys[i + 1])[1] - restJ.get(keys[i])[1]);
+    if (len < 8 || len > 500) continue;
+    // 腿应朝下挂：根关节不得明显高于父关节（运行时 y 向上）
+    if (par && restJ.has(par) && restJ.get(k)[1] > restJ.get(par)[1] + 6) continue;
+    allChains.push({ keys, len, group: par || '__root__', phase: 0 });
+  }
+  // 同父成组配相位：两条按左右对位、四条及以上按对角（前 XOR 左）
+  const groups = new Map();
+  for (const c of allChains) { if (!groups.has(c.group)) groups.set(c.group, []); groups.get(c.group).push(c); }
+  const walkChains = [];
+  for (const g of groups.values()) {
+    if (g.length < 2) continue;
+    g.sort((a, b) => restJ.get(a.keys[0])[0] - restJ.get(b.keys[0])[0]);
+    const cx = g.reduce((s, c) => s + restJ.get(c.keys[0])[0], 0) / g.length;
+    g.forEach((c, i) => {
+      const nm = nameOf(c.keys[0]).toLowerCase();
+      const leftBit = /_l$|_left|left|左/.test(nm) ? 0 : /_r$|_right|right|右/.test(nm) ? 1 : (i % 2);
+      if (g.length === 2) c.phase = Math.PI * i; // 两足：按序直接对位反相
+      else c.phase = Math.PI * (((restJ.get(c.keys[0])[0] < cx ? 1 : 0) + leftBit) % 2);
+      walkChains.push(c);
+    });
+  }
+  const legRole = new Map();
+  for (const c of allChains) c.keys.forEach((k, d) => legRole.set(k, { depth: d, n: c.keys.length }));
+  const perfHay = (p) => ((p.trigger || '') + ' ' + (p.name || '') + ' ' + (p.id || '')).toLowerCase();
+  const walkPerf = PERFORMANCES.some((p) => /walk|run|move|行走|走路|奔跑|跑步|步行|移动/.test(perfHay(p)));
+  const jumpPerf = PERFORMANCES.some((p) => /jump|跳|蹦/.test(perfHay(p)));
+  const legGraphDriven = legKeys.some((k) => !!BEHAVIOR_GRAPHS[k]);
+  const lens = (walkChains.length ? walkChains : allChains).map((c) => c.len);
+  const fb = {
+    chains: walkChains,
+    legRole,
+    legLen: lens.length ? lens.reduce((a, b) => a + b, 0) / lens.length : 24,
+    walkOk: walkChains.length >= 2 && !walkPerf && !legGraphDriven,
+    jumpOk: walkChains.length >= 2 && !jumpPerf && !legGraphDriven,
+  };
+  if (walkChains.length < 2) {
+    const msg = '播放器兜底动作：未识别到成对的腿部骨骼（按骨骼名/父子链匹配失败），行走/跳跃兜底均不生效';
+    console.warn(msg);
+    const wEl = document.getElementById('warn');
+    if (wEl) wEl.textContent = (wEl.textContent ? wEl.textContent + '\\n' : '') + msg;
+  }
+  return fb;
+}
+function ensureFB() { if (!FB) FB = buildFallback(); return FB; }
+/** 跳跃统一请求：兜底开启时先进入下蹲倒计时（updateCharacterSide
+ * 里倒完才给初速），否则与旧行为一致立即起跳 */
+function requestJump() {
+  if (moveMode !== 'side' || !char.onGround || char.ledge) return;
+  if (ensureFB().jumpOk) { if (fbCrouchT <= 0) fbCrouchT = FB_CROUCH_DUR; }
+  else { char.vy = PHYS.jumpV; char.onGround = false; }
+}
+/** 兜底遍（表演合成后、模拟遍前）：下蹲下沉 + 行走步态回写 pose */
+function runFallbackPass(pose, dt) {
+  const fb = ensureFB();
+  if (fbPrevX === null) { fbPrevX = char.x; fbPrevPY = char.py; }
+  const dxF = char.x - fbPrevX, dyF = char.py - fbPrevPY;
+  fbPrevX = char.x; fbPrevPY = char.py;
+  // —— 下沉：下蹲中按进度压满（平方缓入），起跳后残余 0.05s 释放 ——
+  let dip = 0;
+  if (fb.jumpOk) {
+    if (fbCrouchT > 0) { const u = 1 - fbCrouchT / FB_CROUCH_DUR; dip = fbDipMax() * u * u; }
+    else if (!char.onGround && fbDipAir > 0) { dip = fbDipAir; fbDipAir = Math.max(0, fbDipAir - dt * fbDipMax() / 0.05); }
+    if (char.onGround && fbCrouchT <= 0) fbDipAir = 0;
+  }
+  if (dip > 0.01) {
+    const ratio = dip / fbDipMax();
+    for (const part of PARTS) {
+      const e = pose[part.key] || (pose[part.key] = { a: 0, dy: 0, rim: 0, glint: 0 });
+      const role = fb.legRole.get(part.key);
+      if (!role) e.dy = (e.dy || 0) - dip;
+      else if (role.depth === 0) { e.dy = (e.dy || 0) - dip * 0.45; e.a = (e.a || 0) + 0.16 * ratio; }
+      else if (role.depth === role.n - 1) { e.dy = (e.dy || 0) - dip * 0.05; }
+      else { e.dy = (e.dy || 0) - dip * 0.2; e.a = (e.a || 0) - 0.22 * ratio; }
+    }
+  }
+  // —— 横版行走：髋钟摆 + 膝弯，FK 目标 + 同口径回写 ——
+  const movingSide = moveMode === 'side' && char.onGround && Math.abs(dxF) > 1e-6;
+  fbWalkW += ((fb.walkOk && movingSide ? 1 : 0) - fbWalkW) * Math.min(1, dt / 0.12);
+  if (fb.walkOk && fbWalkW > 0.003) {
+    const stride = Math.max(10, 2 * fb.legLen * Math.sin(FB_SWING));
+    fbPhase += Math.PI * dxF / stride;
+    for (const chain of fb.chains) {
+      const keys = chain.keys, n = keys.length;
+      const phi = fbPhase + chain.phase;
+      const th = [FB_SWING * Math.sin(phi)];
+      if (n >= 2) th[1] = -FB_KNEE * Math.max(0, Math.sin(phi + 2.4));
+      if (n >= 3) th[2] = -(th[0] + th[1]) * 0.55;
+      for (let i = 3; i < n; i++) th[i] = 0;
+      // 当前 variant 的静止关节位（角色空间）逐帧现取，与落位同口径
+      const J = [];
+      let ok = true;
+      for (const k of keys) {
+        const part = PART_BY_KEY.get(k);
+        const prm = part ? fbParamsOf(part) : null;
+        if (!prm) { ok = false; break; }
+        J.push(fbJointOf(prm));
+      }
+      if (!ok) continue;
+      const cumA = []; { let acc = 0; for (let i = 0; i < n; i++) { acc += th[i] || 0; cumA.push(acc); } }
+      const T = [[J[0][0], J[0][1]]];
+      for (let i = 0; i + 1 < n; i++) {
+        const ddx = J[i + 1][0] - J[i][0], ddy = J[i + 1][1] - J[i][1];
+        const c = Math.cos(cumA[i]), s = Math.sin(cumA[i]);
+        T.push([T[i][0] + ddx * c - ddy * s, T[i][1] + ddx * s + ddy * c]);
+      }
+      for (let i = 0; i < n; i++) {
+        const part = PART_BY_KEY.get(keys[i]);
+        const prm = fbParamsOf(part);
+        if (!prm) continue;
+        const e = pose[keys[i]] || (pose[keys[i]] = { a: 0, dy: 0, rim: 0, glint: 0 });
+        const refC = partCenter(prm, { a: (e.a || 0) + (prm.restRot || 0), dx: e.dx || 0, dy: e.dy || 0 });
+        e.a = (e.a || 0) + cumA[i] * fbWalkW;
+        const c1 = partCenter(prm, { a: (e.a || 0) + (prm.restRot || 0), dx: e.dx || 0, dy: e.dy || 0 });
+        const bx = refC[0] + (char.x + T[i][0] - refC[0]) * fbWalkW;
+        const by = refC[1] + (charOriginY() + T[i][1] - refC[1]) * fbWalkW;
+        e.dx = (e.dx || 0) + (bx - c1[0]);
+        e.dy = (e.dy || 0) + (by - c1[1]);
+      }
+    }
+  }
+  // —— 俯视纵走：双脚沿纵向反相位交替（dy 直接偏移） ——
+  const movingTop = moveMode === 'top' && (Math.abs(dxF) + Math.abs(dyF)) > 1e-6;
+  const vertDom = Math.abs(dyF) >= Math.abs(dxF);
+  fbTopW += ((fb.walkOk && movingTop && vertDom ? 1 : 0) - fbTopW) * Math.min(1, dt / 0.12);
+  if (fb.walkOk && fbTopW > 0.003) {
+    const amp = Math.max(2, Math.min(7, fb.legLen * 0.14));
+    const stride = Math.max(8, 3.6 * amp);
+    fbPhase += Math.PI * (Math.abs(dxF) + Math.abs(dyF)) / stride * (dyF < 0 ? -1 : 1);
+    for (const chain of fb.chains) {
+      const n = chain.keys.length;
+      chain.keys.forEach((k, d) => {
+        const e = pose[k] || (pose[k] = { a: 0, dy: 0, rim: 0, glint: 0 });
+        const f = n === 1 ? 1 : 0.45 + 0.55 * (d / (n - 1));
+        e.dy = (e.dy || 0) + Math.sin(fbPhase + chain.phase) * amp * f * fbTopW;
+      });
     }
   }
 }
@@ -2369,7 +2587,7 @@ function enterPerformance(perf) {
 window.procRuntime = {
   intent: function (name) {
     if (name === 'jump') {
-      if (moveMode === 'side' && char.onGround) { char.vy = PHYS.jumpV; char.onGround = false; }
+      requestJump();
       return true;
     }
     const perf = PERFORMANCES.find((p) => p.id === name || p.name === name || p.trigger === name);
@@ -2463,6 +2681,7 @@ function updateCharacterTop(dt, ix, iy) {
   char.onGround = true; char.wallDir = 0; char.ledge = null;
 }
 function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
+  if (fbCrouchT > 0 && !char.onGround) fbCrouchT = 0; // 下蹲中离地（走下台阶等）→ 取消
   const H = charBoxH();
   // —— 抓边中：物理暂停，等爬上/落下 ——
   if (char.ledge) {
@@ -2490,8 +2709,14 @@ function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
   }
   char.x = nx;
   if (autoWalk && Math.abs(char.x) > 110) autoDir = char.x > 0 ? -1 : 1;
-  // —— 跳跃 ——
-  if (jumpHeld && char.onGround) { char.vy = PHYS.jumpV; char.onGround = false; }
+  // —— 跳跃（兜底开启时先屈膝下蹲：倒计时到位才给初速，起跳时机顺延） ——
+  if (fbCrouchT > 0) {
+    fbCrouchT -= dt;
+    if (fbCrouchT <= 0) { fbCrouchT = 0; char.vy = PHYS.jumpV; char.onGround = false; fbDipAir = fbDipMax(); }
+  } else if (jumpHeld && char.onGround) {
+    if (ensureFB().jumpOk) fbCrouchT = FB_CROUCH_DUR;
+    else { char.vy = PHYS.jumpV; char.onGround = false; }
+  }
   // —— 垂直：重力积分后按跨越判定落地/顶头 ——
   const prevFeet = char.y, prevHead = char.y + H;
   if (!char.onGround) char.vy -= PHYS.gravity * dt;
@@ -2626,6 +2851,7 @@ const feelPanel = mkPanelDiv(), keyPanel = mkPanelDiv(), scenePanel = mkPanelDiv
   bMode.onclick = () => {
     if (moveMode === 'side') { moveMode = 'top'; char.py = char.y; char.ledge = null; char.wallDir = 0; }
     else { moveMode = 'side'; char.y = 0; char.vy = 0; char.onGround = true; }
+    fbCrouchT = 0; // 模式切换取消进行中的兜底下蹲，避免往返后迟到起跳
     camState.snap = true;
     bMode.classList.toggle('on', moveMode === 'top');
     bMode.textContent = moveMode === 'top' ? '横版模式' : '俯视模式';
@@ -3267,6 +3493,8 @@ function frame(now) {
       emitRuntimeEvent('perfend', { id: act.perf.id, name: act.perf.name });
     }
   }
+  // 兜底动作遍：表演合成后、模拟遍前（模拟链以兜底后位姿为参考）
+  runFallbackPass(pose, dt);
   // 链摆实时模拟遍：pose 定稿后、落位之前（回写 pose，见
   // runSimPass）。步数：audio 已在帧头定；frame/wall 按累加器——
   // 应步数 = round((elapsed − 上次已步进 elapsed) * FRAME_RATE)
