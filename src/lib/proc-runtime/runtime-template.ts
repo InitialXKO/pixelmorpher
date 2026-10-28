@@ -781,6 +781,8 @@ const PARTS = EMBEDDED.parts;
 const COSTUMES = EMBEDDED.costumes;
 const BEHAVIOR_GRAPHS = (EMBEDDED.behavior && EMBEDDED.behavior.graphs) || {};
 const PERFORMANCES = EMBEDDED.performances || [];
+const SIM_CHAINS = EMBEDDED.chains || [];
+const PKG_SIM_MODE = EMBEDDED.simMode || 'frame';
 const PROCEDURAL = EMBEDDED.procedural || [];
 const GLOBAL_GRAPH = EMBEDDED.globalGraph || null;
 const globalGraphState = new Map();
@@ -1873,6 +1875,126 @@ const rec = { active: false, frames: [], start: null };
 const replay = { active: false, idx: 0, frames: [], gif: false };
 function charFeetY() { return moveMode === 'top' ? char.py : char.y; }
 function charOriginY() { return charFeetY() - localGround; }
+// ---- 链摆实时模拟（运行时，D6 乙路）：包内 chains 给定义（链节点
+// 部件键 + 参数）。本遍位于表演合成之后、部件落位之前（pose 已
+// 定稿）：以落位同一组装算各链关节世界位为参考，链根钉在参考
+// 首点、各段段长逐帧现取（与编辑器/烘焙同口径），步进器与编辑
+// 器 stepChainSim 同一份数学（孪生）：钉根 → 积分 → 距离约束迭
+// 代。坐标为运行时系（y 向上），故重力项取负（编辑器系 y 向下、
+// gravity 向下为正），风 x 同向；退化段向的兜底方向同理翻转。
+// 解出关节经角增量 + 中心补差回写 pose（详见 runSimPass），落位
+// 循环随后按新 pose 落位；钳制锚定遍在落位后跑，看到的是模拟
+// 后位姿（编辑器同序：模拟先于钳制）。状态键 = 链根 nodeId（跨
+// 表演同链延续，与锚定遍同口径）；录制/回放起点与 hardRelockTo
+// 全清（与锚定遍同一生命周期）。步进定步长 = 包帧率，步数由
+// 玩家时钟在 frame() 头决定（frame/wall/audio 三模式）。
+const simStates = new Map();
+let simSteppedElapsed = 0;
+const PART_BY_KEY = new Map(PARTS.map((p) => [p.key, p]));
+/** 落位循环同式的部件参数：与 ensureAtlas 的条目组装对齐——精灵
+ * 回落分支用合成参数（base + off 清零），其余走 resolvePart；
+ * hidden（该集无此件）返回 null（落位循环里该部件无条目）。 */
+function simPartParams(part) {
+  const costume = COSTUMES[currentCostume];
+  const centry = costume ? costume[part.key] : undefined;
+  const sgrid = costume && costume.__sprite ? costume.__sprite[part.key] : undefined;
+  const spriteGrid = (centry === null && sgrid) ? sgrid
+    : (part.spriteKind && !centry) ? (sgrid || part.sprite || null) : null;
+  if (spriteGrid) return { ...part.base, off: [0, 0] };
+  const resolved = resolvePart(part, char.variant, costume);
+  return resolved.params.hidden ? null : resolved.params;
+}
+function simStepChain(st, pin, lengths, params) {
+  const pts = st.pts;
+  const n = pts.length;
+  const dt = 1 / Math.max(1, FRAME_RATE);
+  const keep = 1 - Math.max(0, Math.min(0.2, params.damping));
+  const iters = Math.max(1, Math.min(24, Math.round(params.iterations)));
+  pts[0].x = pin[0]; pts[0].y = pin[1]; pts[0].px = pin[0]; pts[0].py = pin[1];
+  for (let i = 1; i < n; i++) {
+    const p = pts[i];
+    const vx = (p.x - p.px) * keep;
+    const vy = (p.y - p.py) * keep;
+    p.px = p.x; p.py = p.y;
+    p.x += vx + params.windX * dt * dt;
+    p.y += vy - params.gravity * dt * dt;
+  }
+  for (let it = 0; it < iters; it++) {
+    pts[0].x = pin[0]; pts[0].y = pin[1];
+    for (let i = 0; i + 1 < n; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const want = lengths[i];
+      let dx = b.x - a.x, dy = b.y - a.y;
+      let d = Math.hypot(dx, dy);
+      if (d < 1e-6) { dx = 0; dy = -1; d = 1; }
+      const diff = (d - want) / d;
+      if (i === 0) { b.x -= dx * diff; b.y -= dy * diff; }
+      else { a.x += dx * diff * 0.5; a.y += dy * diff * 0.5; b.x -= dx * diff * 0.5; b.y -= dy * diff * 0.5; }
+    }
+  }
+}
+function simLocalAngleDeltas(solved, reference) {
+  const n = solved.length;
+  const w = [];
+  for (let i = 0; i < n; i++) {
+    if (i + 1 < n) {
+      let d = Math.atan2(solved[i + 1][1] - solved[i][1], solved[i + 1][0] - solved[i][0])
+        - Math.atan2(reference[i + 1][1] - reference[i][1], reference[i + 1][0] - reference[i][0]);
+      if (d > Math.PI) d -= 2 * Math.PI; else if (d < -Math.PI) d += 2 * Math.PI;
+      w.push(d);
+    } else {
+      w.push(n >= 2 ? w[i - 1] : 0);
+    }
+  }
+  return w.map((d, i) => d - (i > 0 ? w[i - 1] : 0));
+}
+/** 模拟遍（落位前，pose 已定稿）：对每条 chain 按 chainNodeIds
+ * 顺序取各部件 pose、以落位循环同一组装（an = pose + restRot、
+ * partCenter）算世界关节位（遍内第一遍 partCenter 评估）；pin =
+ * 首关节、逐帧段长 = 相邻关节距；孪生步进 steps 步（多步复用当
+ * 帧 pin/段长，近似见时钟注释）；解出关节后逐部件回写 pose——
+ * 先按 simLocalAngleDeltas 的本地角增量改 pose.a，再以改角后的
+ * partCenter 复算中心（第二遍评估）、用 pose.dx/dy 补差使中心
+ * 恰落到解出关节位。落位循环随后按新 pose 落位，钳制锚定遍看
+ * 到的即模拟后位姿（编辑器同序：模拟先于钳制）。 */
+function runSimPass(pose, steps) {
+  if (!SIM_CHAINS.length || steps <= 0) return;
+  for (const ch of SIM_CHAINS) {
+    const items = [];
+    let okAll = true;
+    for (const k of ch.nodes) {
+      const part = PART_BY_KEY.get(k);
+      const p = part ? simPartParams(part) : null;
+      if (!part || !p) { okAll = false; break; }
+      const an0 = pose[k] || { a: 0, dy: 0 };
+      const an = { a: (an0.a || 0) + (p.restRot || 0), dx: an0.dx || 0, dy: an0.dy || 0 };
+      items.push({ key: k, p: p, ctr: partCenter(p, an) });
+    }
+    if (!okAll) { simStates.delete(ch.nodeId); continue; }
+    const ref = items.map((it) => it.ctr);
+    let st = simStates.get(ch.nodeId);
+    const fresh = !st;
+    if (fresh) {
+      st = { pts: ref.map((q) => ({ x: q[0], y: q[1], px: q[0], py: q[1] })) };
+      simStates.set(ch.nodeId, st);
+    }
+    // 播种帧不迈步（与批量求解第 0 帧只对齐钉点、编辑器会话片段
+    // 起点初始化同口径）：本帧解出位即参考位、增量为 0，下帧起步进。
+    const lengths = [];
+    for (let i = 0; i + 1 < ref.length; i++) lengths.push(Math.hypot(ref[i + 1][0] - ref[i][0], ref[i + 1][1] - ref[i][1]));
+    if (!fresh) for (let s = 0; s < steps; s++) simStepChain(st, ref[0], lengths, ch.params);
+    const solved = st.pts.map((q) => [q.x, q.y]);
+    const locals = simLocalAngleDeltas(solved, ref);
+    for (let i = 0; i < items.length; i++) {
+      const entry = pose[items[i].key] || (pose[items[i].key] = { a: 0, dy: 0, rim: 0, glint: 0 });
+      if (locals[i]) entry.a = (entry.a || 0) + locals[i];
+      const an1 = { a: (entry.a || 0) + (items[i].p.restRot || 0), dx: entry.dx || 0, dy: entry.dy || 0 };
+      const c1 = partCenter(items[i].p, an1);
+      entry.dx = (entry.dx || 0) + (solved[i][0] - c1[0]);
+      entry.dy = (entry.dy || 0) + (solved[i][1] - c1[1]);
+    }
+  }
+}
 // ---- 钳制锚定（运行时，PR #55 裁决 3/5）：部件精灵上名为 anchor 的
 // 点标记自动成为锚点（约定、UI 无感）；逐帧在表演求值后对全部场景
 // 固体求值：侧视贴顶面冻结、俯视进区域冻结，锚点全位置不滑动，
@@ -2589,10 +2711,12 @@ function startRecording() {
   stopAllPerfs(); behaviorEpoch = elapsed;
   rec.frames = []; rec.start = snapshotChar(); rec.active = true;
   anchorState.clear(); // 录制起点即锚定状态重置点（回放同口径重演）
+  simStates.clear(); // 模拟状态同生命周期：录制起点全清
   refreshRecPanel();
 }
 function startReplay(withGif) {
   anchorState.clear();
+  simStates.clear();
   if (!rec.frames.length || !rec.start) return;
   rec.active = false;
   restoreChar(rec.start);
@@ -2904,7 +3028,22 @@ function fxRenderSet(set, frame, verts, occAt) {
 
 let recPendingFrame = null;
 function frame(now) {
-  let dt = Math.min(0.05, (now - last) / 1000); last = now;
+  // ---------- 玩家时钟（D6 乙路裁决 6）：时钟只有一个入口——本
+  // 函数头的 dt 与随后的 elapsed += dt，下游全部时间从 elapsed
+  // 派生。三模式（包字段 simMode，缺省 frame）：
+  // frame：dt 恒 = 1/FRAME_RATE，每 rAF tick 恰走一包帧（帧为定
+  // 义、秒为帧率换算）。
+  // wall：保持现行墙钟 dt（含 0.05 钳制）；模拟步数按累加器补
+  // 步（见模拟遍调用处）。
+  // audio：宿主经 window.__simHost = { audioPositionMs } 注入音
+  // 轨实际位置回调（缺失时回退 wall 并以 wallClock 路径运行）；
+  // dt 以 frame 步进为基底恒 1/FRAME_RATE，漂移纠正与重锁在
+  // elapsed += dt 后按帧位对齐（见下）。
+  const audioHost = (PKG_SIM_MODE === 'audio' && window.__simHost && typeof window.__simHost.audioPositionMs === 'function')
+    ? window.__simHost : null;
+  const wallClock = PKG_SIM_MODE === 'wall' || (PKG_SIM_MODE === 'audio' && !audioHost);
+  let dt = wallClock ? Math.min(0.05, (now - last) / 1000) : 1 / FRAME_RATE;
+  last = now;
   // 本帧输入：回放时取记录帧（dt/方向/跳/触发/位姿快照），否则实时读键
   let inp, trigNow;
   if (replay.active) {
@@ -2927,6 +3066,19 @@ function frame(now) {
     trigNow = pendingTriggers.splice(0);
   }
   elapsed += dt;
+  // audio 对齐：目标帧位 = 音轨位置换算帧，drift = 目标 − 当前帧
+  // 位（elapsed*FRAME_RATE）。|drift| > 4 → hardRelockTo(round(目
+  // 标))；|drift| ≤ 4 → 本 tick 模拟步数在 frame 基底 1 步上 ±1
+  // 纠正（无死区，亚帧漂移由帧位取整自然吸收）。步数在此定，
+  // 模拟遍调用处消费；重锁在此处做，下游本帧即按新帧位求值。
+  let audioSimSteps = -1;
+  if (audioHost) {
+    const target = audioHost.audioPositionMs() / 1000 * FRAME_RATE;
+    const drift = target - elapsed * FRAME_RATE;
+    if (Math.abs(drift) > 4) { hardRelockTo(Math.round(target)); audioSimSteps = 1; }
+    else audioSimSteps = 1 + (drift >= 1 ? 1 : drift <= -1 ? -1 : 0);
+    simSteppedElapsed = elapsed;
+  }
   const ix = inp.ix;
   for (const id of trigNow) { const pf = PERFORMANCES.find((q) => q.id === id); if (pf) enterPerformance(pf); }
   updateCharacter(dt, inp);
@@ -3037,6 +3189,21 @@ function frame(now) {
       activePerfs.splice(i, 1);
       emitRuntimeEvent('perfend', { id: act.perf.id, name: act.perf.name });
     }
+  }
+  // 链摆实时模拟遍：pose 定稿后、落位之前（回写 pose，见
+  // runSimPass）。步数：audio 已在帧头定；frame/wall 按累加器——
+  // 应步数 = round((elapsed − 上次已步进 elapsed) * FRAME_RATE)
+  // 钳 0..4，余量留在累加器（simSteppedElapsed 只按已步进量推
+  // 进）；一 tick 内多步时除第一步外复用当帧 pin/段长步进（pose
+  // 每 tick 只求值一次的近似，点名）。
+  if (SIM_CHAINS.length) {
+    let simSteps;
+    if (audioSimSteps >= 0) simSteps = audioSimSteps;
+    else {
+      simSteps = Math.max(0, Math.min(4, Math.round((elapsed - simSteppedElapsed) * FRAME_RATE)));
+      simSteppedElapsed += simSteps / FRAME_RATE;
+    }
+    runSimPass(pose, simSteps);
   }
   const state = ensureAtlas(gl, char.variant, currentCostume);
   // 追随段进度：与「轨道」表演同一时间轴（全程窗 u ∈ 0..1，两端钳制）
@@ -3721,6 +3888,22 @@ function frame(now) {
   if (replay.active && replay.gif) gifCaptureFrame(dt);
   requestAnimationFrame(frame);
 }
+// ---------- 硬重锁（D6 乙路，运行时语义已定）：清 sim 状态 +
+// anchorState，把内部帧位设到 frameIndex（elapsed = 帧/帧率；
+// 表演 act.t 等按现行表演时间口径保持不变），sim 状态在下一帧
+// 模拟遍以 frameIndex 当帧 pose 零初速重建。理由：运行时 pose
+// 不是帧的纯函数（物理 char 位置、状态机、输入都在环内），历史
+// pose 无从重演，运行时能做的重锁只有现帧重建；编辑器侧 scrub
+// 的快照顺演不受影响。audio 大漂移、宿主 seek 与重锁共用此
+// 路径，window 上暴露供宿主调用。
+function hardRelockTo(frameIndex) {
+  if (frameIndex < 0) frameIndex = 0;
+  simStates.clear();
+  anchorState.clear();
+  elapsed = frameIndex / FRAME_RATE;
+  simSteppedElapsed = elapsed;
+}
+window.hardRelockTo = hardRelockTo;
 requestAnimationFrame(frame);
 </script>
 </body>

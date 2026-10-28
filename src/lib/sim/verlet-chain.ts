@@ -54,10 +54,74 @@ export function collectChain(
 
 interface Pt { x: number; y: number; px: number; py: number }
 
+// ============================================================
+// 实时步进器（D6 乙路）：与批量求解同一份数学的增量形态。
+// 状态 = 每质点 (x, y, px, py)，别无隐藏状态；快照 = 深拷贝。
+// 单步输入 = 当帧钉点（链根世界位 px）+ 当帧各段段长（px，
+// 由当帧平结算给出——链节点自身平移/拉伸轨道逐帧影响段长，
+// 与烘焙口径一致）。solveVerletChain 就建在本步进器之上，
+// 全项目只有这一份求解数学。
+// ============================================================
+
+export interface ChainSimState {
+  pts: { x: number; y: number; px: number; py: number }[];
+}
+
+export function createChainSimState(init: { x: number; y: number }[]): ChainSimState {
+  return { pts: init.map((q) => ({ x: q.x, y: q.y, px: q.x, py: q.y })) };
+}
+
+export function cloneChainSimState(state: ChainSimState): ChainSimState {
+  return { pts: state.pts.map((p) => ({ ...p })) };
+}
+
+/** 步进一帧（就地改 state）：钉根 → 积分 → 距离约束迭代。 */
+export function stepChainSim(
+  state: ChainSimState,
+  pin: { x: number; y: number },
+  lengths: number[],
+  params: ChainBakeParams,
+  frameRate: number,
+): void {
+  const pts = state.pts;
+  const n = pts.length;
+  const dt = 1 / Math.max(1, frameRate);
+  const keep = 1 - Math.max(0, Math.min(0.2, params.damping));
+  const iters = Math.max(1, Math.min(24, Math.round(params.iterations)));
+  pts[0].x = pin.x; pts[0].y = pin.y; pts[0].px = pin.x; pts[0].py = pin.y;
+  for (let i = 1; i < n; i++) {
+    const p = pts[i];
+    const vx = (p.x - p.px) * keep;
+    const vy = (p.y - p.py) * keep;
+    p.px = p.x; p.py = p.y;
+    p.x += vx + params.windX * dt * dt;
+    p.y += vy + params.gravity * dt * dt;
+  }
+  for (let it = 0; it < iters; it++) {
+    pts[0].x = pin.x; pts[0].y = pin.y;
+    for (let i = 0; i + 1 < n; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const want = lengths[i];
+      let dx = b.x - a.x, dy = b.y - a.y;
+      let d = Math.hypot(dx, dy);
+      if (d < 1e-6) { dx = 0; dy = 1; d = 1; }
+      const diff = (d - want) / d;
+      if (i === 0) {
+        b.x -= dx * diff; b.y -= dy * diff;
+      } else {
+        a.x += dx * diff * 0.5; a.y += dy * diff * 0.5;
+        b.x -= dx * diff * 0.5; b.y -= dy * diff * 0.5;
+      }
+    }
+  }
+}
+
 /** Verlet 链求解（纯函数）：pins[f] = 第 f 帧的钉点（链根世界
  * 位置 px），lengths[f][i] = 第 f 帧第 i 段的约束长度（px，
  * 由参考姿态逐帧给出，容忍驱动源自身的伸缩）。init = 第 0 帧
- * 的参考关节位置。返回逐帧关节位置（含钉点）。 */
+ * 的参考关节位置。返回逐帧关节位置（含钉点）。
+ * 实现 = 步进器的批量组装（同一份数学，见 stepChainSim）：
+ * 第 0 帧只对齐钉点不迈步（烘焙起点与作者姿态连续）。 */
 export function solveVerletChain(
   pins: { x: number; y: number }[],
   lengths: number[][],
@@ -65,43 +129,85 @@ export function solveVerletChain(
   params: ChainBakeParams,
   frameRate: number,
 ): { x: number; y: number }[][] {
-  const n = init.length;
-  const pts: Pt[] = init.map((q) => ({ x: q.x, y: q.y, px: q.x, py: q.y }));
-  const dt = 1 / Math.max(1, frameRate);
-  const keep = 1 - Math.max(0, Math.min(0.2, params.damping));
-  const iters = Math.max(1, Math.min(24, Math.round(params.iterations)));
+  const state = createChainSimState(init);
   const out: { x: number; y: number }[][] = [];
   for (let f = 0; f < pins.length; f++) {
-    const pin = pins[f];
-    pts[0].x = pin.x; pts[0].y = pin.y; pts[0].px = pin.x; pts[0].py = pin.y;
-    // 第 0 帧 = 初始姿态原样（烘焙起点与作者姿态连续，不先迈一步）
-    if (f === 0) { out.push(pts.map((p) => ({ x: p.x, y: p.y }))); continue; }
-    for (let i = 1; i < n; i++) {
-      const p = pts[i];
-      const vx = (p.x - p.px) * keep;
-      const vy = (p.y - p.py) * keep;
-      p.px = p.x; p.py = p.y;
-      p.x += vx + params.windX * dt * dt;
-      p.y += vy + params.gravity * dt * dt;
+    if (f === 0) {
+      const p0 = state.pts[0];
+      if (p0) { p0.x = pins[0].x; p0.y = pins[0].y; p0.px = pins[0].x; p0.py = pins[0].y; }
+    } else {
+      stepChainSim(state, pins[f], lengths[f], params, frameRate);
     }
-    for (let it = 0; it < iters; it++) {
-      pts[0].x = pin.x; pts[0].y = pin.y;
-      for (let i = 0; i + 1 < n; i++) {
-        const a = pts[i], b = pts[i + 1];
-        const want = lengths[f][i];
-        let dx = b.x - a.x, dy = b.y - a.y;
-        let d = Math.hypot(dx, dy);
-        if (d < 1e-6) { dx = 0; dy = 1; d = 1; }
-        const diff = (d - want) / d;
-        if (i === 0) {
-          b.x -= dx * diff; b.y -= dy * diff;
-        } else {
-          a.x += dx * diff * 0.5; a.y += dy * diff * 0.5;
-          b.x -= dx * diff * 0.5; b.y -= dy * diff * 0.5;
-        }
-      }
+    out.push(state.pts.map((p) => ({ x: p.x, y: p.y })));
+  }
+  return out;
+}
+
+/** 段向世界增量（度）：解出段向 − 参考段向，逐节点一行。
+ * 末节点无自有段，取上一段增量（刚性延续）。烘焙折算与实时
+ * 逐帧施加共用这一份折算。 */
+export function chainWorldDeltas(
+  solved: { x: number; y: number }[],
+  reference: { x: number; y: number }[],
+): number[] {
+  const n = solved.length;
+  const row: number[] = [];
+  for (let ci = 0; ci < n; ci++) {
+    if (ci + 1 < n) {
+      const segA = Math.atan2(
+        solved[ci + 1].y - solved[ci].y, solved[ci + 1].x - solved[ci].x);
+      const segR = Math.atan2(
+        reference[ci + 1].y - reference[ci].y,
+        reference[ci + 1].x - reference[ci].x);
+      let d = ((segA - segR) * 180) / Math.PI;
+      if (d > 180) d -= 360; else if (d < -180) d += 360;
+      row.push(d);
+    } else {
+      row.push(n >= 2 ? row[ci - 1] : 0);
     }
-    out.push(pts.map((p) => ({ x: p.x, y: p.y })));
+  }
+  return row;
+}
+
+/** 本地角增量（度）：节点 i 的本地角增量 = 本节点世界增量 −
+ * 父节点世界增量。实时施加时叠加在节点当帧结算角之上，世界
+ * 段向即与解出段向重合（望远镜式抵消，与烘焙折算同构）。 */
+export function chainLocalAngleDeltas(
+  solved: { x: number; y: number }[],
+  reference: { x: number; y: number }[],
+): number[] {
+  const w = chainWorldDeltas(solved, reference);
+  return w.map((d, i) => d - (i > 0 ? w[i - 1] : 0));
+}
+
+/** 链驱动模式（按链根二选一）：烘焙档案 / 实时定义 */
+export type ChainDriveMode = 'bake' | 'realtime';
+
+/** 实时模拟定义（链根 → 定义）：链结构 + 参数。静止段长与
+ * 基准角不入定义——运行时/会话初始化时由当帧结算现取。 */
+export interface ChainSimDef {
+  chainNodeIds: string[];
+  params: ChainBakeParams;
+}
+
+/** 某链根当前的驱动模式：显式标记优先；未标记时只有实时
+ * 定义、没有烘焙档案才默认实时，其余一律烘焙（现状口径）。 */
+export function chainDriveModeOf(character: Character, rootId: string): ChainDriveMode {
+  const marked = character.chainModes?.[rootId];
+  if (marked) return marked;
+  return character.chainSims?.[rootId] && !character.chainBakes?.[rootId] ? 'realtime' : 'bake';
+}
+
+/** 全部处于实时模式且定义完整的链（会话/发包共用一份枚举） */
+export function realtimeChainDefs(
+  character: Character,
+): { rootId: string; def: ChainSimDef }[] {
+  const out: { rootId: string; def: ChainSimDef }[] = [];
+  for (const [rootId, def] of Object.entries(character.chainSims ?? {})) {
+    if (chainDriveModeOf(character, rootId) !== 'realtime') continue;
+    if (!def || def.chainNodeIds.length < 2) continue;
+    if (def.chainNodeIds.some((id) => !character.nodes[id])) continue;
+    out.push({ rootId, def });
   }
   return out;
 }
@@ -210,22 +316,7 @@ export function bakeChainSwing(
   // 上一段的增量（刚性延续，本地角因此保持基准）。
   const worldDelta: number[][] = [];
   for (let fi = 0; fi < frames; fi++) {
-    const row: number[] = [];
-    for (let ci = 0; ci < n; ci++) {
-      if (ci + 1 < n) {
-        const segA = Math.atan2(
-          solved[fi][ci + 1].y - solved[fi][ci].y, solved[fi][ci + 1].x - solved[fi][ci].x);
-        const segR = Math.atan2(
-          ref.joints[fi][ci + 1].y - ref.joints[fi][ci].y,
-          ref.joints[fi][ci + 1].x - ref.joints[fi][ci].x);
-        let d = ((segA - segR) * 180) / Math.PI;
-        if (d > 180) d -= 360; else if (d < -180) d += 360;
-        row.push(d);
-      } else {
-        row.push(n >= 2 ? row[ci - 1] : 0);
-      }
-    }
-    worldDelta.push(row);
+    worldDelta.push(chainWorldDeltas(solved[fi], ref.joints[fi]));
   }
   // 本地角 = 基准本地角 + 本节点世界增量 − 父节点世界增量
   const angleTracks: Record<string, KeyframeTrack> = {};

@@ -16,6 +16,7 @@ import { buildParametricSprite } from './main-canvas';
 import { subToPx, projectToView, frameYAxisWorld, directionTrig } from '../unified-types';
 import { computeWorldTransforms, computeRestWorldTransforms, stackBendForNode, rotateWorldTransformsForYaw, facingYawDeltaRad, stepClampState, type ClampStateMap } from '../unified-render';
 import { cloneClampState, steppedClampState } from '../clamp-session';
+import { realtimeChainDefs, sampleReference, type ChainBakeParams } from '../sim/verlet-chain';
 import { resolvePieceSprite } from '../sprite-resolve';
 import { computeStackOps, rasterizeStackOpsData, STACK_VIEW_ELEVATION_DEG, type StackDrawOp } from '../stack-render';
 import { packMaskBits, unpackMaskBits } from '../sprite-marks';
@@ -175,9 +176,37 @@ export interface RuntimeStackPayload {
   }>;
 }
 
+/** 运行时实时模拟链（D6 乙路）：包内只发定义不发曲线——链结构、
+ * 参数与表演起点初始状态；运行时模板逐帧以当帧部件位姿为参考
+ * 步进同一份 Verlet 数学。坐标均为运行时系（px、y 向上、角度
+ * 弧度），关节位与部件 pivot 同投影（projectToView）。 */
+export interface RuntimeSimChain {
+  /** 链根节点 id（编辑器口径，消费方对账用） */
+  nodeId: string;
+  /** 链根部件键（模板按部件定位的状态键） */
+  root: string;
+  /** 链节点部件键（根→尖，与 chainNodeIds 一一对应） */
+  nodes: string[];
+  /** 链节点 id（根→尖） */
+  chainNodeIds: string[];
+  params: ChainBakeParams;
+  /** 初始状态种子：initState.frame 帧的平结算关节位（零初速，
+   * px=x、py=y 由消费方自建）；运行时硬重锁/首帧播种用 */
+  initState: { frame: number; joints: [number, number][]; angles: number[] };
+  /** initState 帧的逐段段长（px） */
+  restLengths: number[];
+  /** initState 帧各链节点的基准本地角（弧度，运行时系） */
+  baseAngles: number[];
+}
+
 export interface ProcRuntimePackage {
   format: 'procedural-pixel-runtime-1';
   characterName: string;
+  /** 玩家时钟模式（帧主缺省）：'frame' | 'wall' | 'audio'；
+   * 宿主可经 procRuntime.setSimMode 覆盖 */
+  simMode?: string;
+  /** 实时模拟链定义（无实时链时缺省，包与旧行为一致） */
+  chains?: RuntimeSimChain[];
   /** 工程帧率：粒子模拟的帧量化基数（出生帧/生命帧与编辑器同口径） */
   frameRate: number;
   palettes: Record<string, number[]>;
@@ -239,6 +268,68 @@ export function defaultStateMachine(performances: Array<Record<string, unknown>>
       { from: 'move', to: 'idle', when: [{ var: 'speed01', op: 'lt', value: 0.05 }] },
     ],
   };
+}
+
+/** 实时模拟链发包（D6 乙路步骤 4）：枚举 realtimeChainDefs（mode=
+ * realtime 且定义完整；发束在编辑器侧就是逐根独立的 chainSims 条目，
+ * 此处逐条成链）。initState 锚点 = 全程窗首帧（帧 0）——包级只有
+ * 一份 chains，全程窗是 convert 最先采样的窗、片段窗的快照亦由它
+ * 延续（与钳制 convert 的整窗快照口径同构），故初始状态取帧 0 的
+ * 平结算。链上任一节点不是运行时部件时整链不进包（模板的参考
+ * 关节位只能取自部件位姿，无位姿来源不臆造通道）并点名。 */
+export function buildSimChains(
+  character: Character,
+  frameRate: number,
+  toSlot: (nodeId: string) => string | null,
+  partKeys: Set<string>,
+  warnings: string[],
+): RuntimeSimChain[] {
+  const defs = realtimeChainDefs(character);
+  if (defs.length === 0) return [];
+  const fromFrame = 0;
+  const map = computeWorldTransforms(character, fromFrame, 800, 800, frameRate);
+  const dirF = (character.rootNodeId ? map.get(character.rootNodeId)?.variantIndex : undefined) ?? 0;
+  const r3 = (v: number) => Math.round(v * 1000) / 1000;
+  const out: RuntimeSimChain[] = [];
+  for (const { rootId, def } of defs) {
+    const nodes: string[] = [];
+    let missing: string | null = null;
+    for (const id of def.chainNodeIds) {
+      const slot = toSlot(id);
+      if (!slot || !partKeys.has(slot)) { missing = id; break; }
+      nodes.push(slot);
+    }
+    if (missing) {
+      warnings.push(`实时模拟：链根「${character.nodes[rootId]?.name ?? rootId}」的节点 ${character.nodes[missing]?.name ?? missing} 不是运行时部件，整链未进包（运行时无该关节的位姿来源）`);
+      continue;
+    }
+    const joints: [number, number][] = def.chainNodeIds.map((id) => {
+      const w = map.get(id);
+      if (!w) return [0, 0] as [number, number];
+      const proj = projectToView(w.worldX, w.worldY, w.worldZ, dirF as DirectionIndex);
+      return [r3(subToPx(proj.canvasX)), r3(-subToPx(proj.canvasY))] as [number, number];
+    });
+    const angles = def.chainNodeIds.map((id) => {
+      const w = map.get(id);
+      return w ? r3(-w.worldAngle * Math.PI / 180) : 0;
+    });
+    const restLengths: number[] = [];
+    for (let i = 0; i + 1 < joints.length; i++) {
+      restLengths.push(r3(Math.hypot(joints[i + 1][0] - joints[i][0], joints[i + 1][1] - joints[i][1])));
+    }
+    const baseLocals = sampleReference(character, def.chainNodeIds, fromFrame, fromFrame, frameRate).baseLocals;
+    out.push({
+      nodeId: rootId,
+      root: nodes[0],
+      nodes,
+      chainNodeIds: [...def.chainNodeIds],
+      params: { ...def.params },
+      initState: { frame: fromFrame, joints, angles },
+      restLengths,
+      baseAngles: baseLocals.map((d) => r3(-d * Math.PI / 180)),
+    });
+  }
+  return out;
 }
 
 /** 精灵表口径：服装件里的精灵引用（SpriteRef）可能指向角色自带表，
@@ -1162,6 +1253,10 @@ export function convertCharacterToRuntimePackage(
     });
   }
 
+  // ---- 实时模拟链（D6 乙路）：包级一份定义，锚帧 0 平结算 ----
+  const simChainsPkg = buildSimChains(
+    character, projectFpsTop, toSlot, new Set(parts.map((p) => p.key)), warnings);
+
   // ---- 轨道：采样烘焙成曲线 ----
   // 运行时部件是扁平摆放（各自钉在第 0 帧世界位姿、无父子跟随），而轨道在
   // 主画布是局部量（父轨道会带动子孙）。故不能逐节点烘局部增量：须把行为/
@@ -1244,6 +1339,30 @@ export function convertCharacterToRuntimePackage(
           n.id, { ...n, blueprint: null, modifiers: [] },
         ])),
       };
+      // 实时链的烘焙注入剥离：链根已改实时驱动时，其 angle 轨里可
+      // 能还留着烘焙写回的关键帧——采样前按烘焙档案的基准本地角
+      // 还原为常值轨，包内位姿不再含该链的烘焙摆幅（运行时由模拟
+      // 遍接管，免双重施加）；烘焙模式链与布料一律不动。无档案的
+      // 实时链从未烘焙过，轨道即作者原稿，保持原样。
+      for (const rc of simChainsPkg) {
+        const rec = character.chainBakes?.[rc.nodeId];
+        if (!rec) {
+          warnings.push(`实时模拟：链根「${character.nodes[rc.nodeId]?.name ?? rc.nodeId}」无烘焙档案，包内位姿按现轨道采样（无基准角可还原）`);
+          continue;
+        }
+        let touched = false;
+        rec.chainNodeIds.forEach((id, i) => {
+          const n = stripped.nodes[id];
+          if (!n) return;
+          const base = rec.baseLocals[i] ?? n.transform.angle;
+          stripped.nodes[id] = {
+            ...n,
+            tracks: { ...n.tracks, angle: { keyframes: [{ frame: 0, value: base }], interpolation: 'linear' as const } },
+          };
+          touched = true;
+        });
+        if (touched) warnings.push(`实时模拟：链根「${character.nodes[rc.nodeId]?.name ?? rc.nodeId}」的烘焙角轨已从包内位姿剥离，改由运行时模拟驱动`);
+      }
       // ---- 堆叠层变换烘焙的采样对象：仅 spriteKind 堆叠件、且显示图
       // 确由同一摞合成（与 stackDisplayOf 几何比对一致）、默认集口径。
       // 挂在显示图上的发光场/标记/裁剪面在垫图时逐项补偿（坐标随内容
@@ -1829,6 +1948,8 @@ export function convertCharacterToRuntimePackage(
   return {
     format: 'procedural-pixel-runtime-1',
     characterName: character.name,
+    simMode: 'frame',
+    chains: simChainsPkg.length > 0 ? simChainsPkg : undefined,
     frameRate: projectFpsTop,
     palettes: PALETTES,
     parts,

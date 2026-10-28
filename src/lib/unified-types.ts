@@ -1365,6 +1365,13 @@ export interface Character {
   // 状态重算不一致 = 烘焙过期，面板点名提示，不静默沿用。
   chainBakes?: Record<string, import('./sim/verlet-chain').ChainBakeRecord>;
 
+  // ---- 链摆实时模拟（D6 乙路）----
+  // 链根节点 id → 实时定义（链结构 + 参数）。与链摆烘焙按链根
+  // 二选一（chainModes 标记哪一路生效，未标记时的默认见
+  // chainDriveModeOf），另一路数据保留但不生效，不做叠加。
+  chainSims?: Record<string, import('./sim/verlet-chain').ChainSimDef>;
+  chainModes?: Record<string, import('./sim/verlet-chain').ChainDriveMode>;
+
   // ---- 布料烘焙档案（D6 二期）----
   // 挂载根节点 id → 布料记录（网格节点阵列 + 指纹 + 基准角）。
   clothBakes?: Record<string, import('./sim/cloth-bake').ClothBakeRecord>;

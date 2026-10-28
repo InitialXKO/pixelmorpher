@@ -9,10 +9,11 @@
 
 import React, { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { useProjectStore } from '@/lib/store';
+import { useProjectStore, useEditorStore } from '@/lib/store';
 import type { Character } from '@/lib/unified-types';
 import {
   collectChain, bakeChainSwing, isChainBakeFresh,
+  chainDriveModeOf, realtimeChainDefs,
   defaultChainBakeParams, type ChainBakeParams,
 } from '@/lib/sim/verlet-chain';
 import {
@@ -45,6 +46,37 @@ export default function ChainBakePanel({ character }: { character: Character | n
     () => (character && record ? isChainBakeFresh(character, record, frameRate) : null),
     [character, record, frameRate],
   );
+  const simMaster = useEditorStore((s) => s.simRealtimePreview);
+  const setSimMaster = useEditorStore((s) => s.setSimRealtimePreview);
+  const driveMode = character && selectedNodeId ? chainDriveModeOf(character, selectedNodeId) : 'bake';
+  const simDef = character && selectedNodeId ? character.chainSims?.[selectedNodeId] : undefined;
+  const realtimeDefs = useMemo(() => (character ? realtimeChainDefs(character) : []), [character]);
+
+  const setDriveMode = (mode: 'bake' | 'realtime') => {
+    if (!character || !selectedNodeId || !chain) return;
+    const patch: Partial<Character> = {
+      chainModes: { ...(character.chainModes ?? {}), [selectedNodeId]: mode },
+    };
+    if (mode === 'realtime' && !character.chainSims?.[selectedNodeId]) {
+      patch.chainSims = {
+        ...(character.chainSims ?? {}),
+        [selectedNodeId]: {
+          chainNodeIds: record?.chainNodeIds ?? chain.nodeIds,
+          params: record?.params ? { ...record.params } : { ...params },
+        },
+      };
+    }
+    updateUnifiedCharacter(character.id, patch);
+    setNote(mode === 'realtime' ? '已改用实时模拟（烘焙档案保留，当前不生效）' : '已改回烘焙驱动（实时定义保留，当前不生效）');
+  };
+
+  const updateSimParams = () => {
+    if (!character || !selectedNodeId || !simDef) return;
+    updateUnifiedCharacter(character.id, {
+      chainSims: { ...(character.chainSims ?? {}), [selectedNodeId]: { ...simDef, params: { ...params } } },
+    });
+    setNote('实时参数已更新');
+  };
 
   if (!character) return null;
   const num = (
@@ -132,6 +164,48 @@ export default function ChainBakePanel({ character }: { character: Character | n
         </div>
       )}
       {note && <div className="text-[10px] text-gray-500">{note}</div>}
+      <div className="mt-2 pt-2 border-t border-[#1e1e3a] flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-gray-500">实时模拟（同一链与烘焙二选一）</span>
+          <label className="flex items-center gap-1 text-[10px] text-gray-400">
+            <input type="checkbox" checked={simMaster}
+              onChange={(e) => setSimMaster(e.target.checked)} />
+            预览总开关
+          </label>
+        </div>
+        {!simMaster && realtimeDefs.length > 0 && (
+          <div className="text-[10px] text-amber-400">
+            总开关已关，以下链的实时模拟被跳过（画面按各自轨道显示）：{realtimeDefs.map((d) => character.nodes[d.rootId]?.name ?? d.rootId).join('、')}
+          </div>
+        )}
+        {selectedNodeId && chain && chain.nodeIds.length >= 2 && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-gray-400">本链驱动：{driveMode === 'realtime' ? '实时模拟' : '烘焙'}</span>
+            {driveMode !== 'realtime' ? (
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setDriveMode('realtime')}>
+                改用实时模拟
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setDriveMode('bake')}>
+                改回烘焙
+              </Button>
+            )}
+          </div>
+        )}
+        {selectedNodeId && driveMode === 'realtime' && simDef && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-gray-500">
+              实时参数：重力 {simDef.params.gravity}、风力 {simDef.params.windX}、阻尼 {simDef.params.damping}、迭代 {simDef.params.iterations}
+            </span>
+            <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={updateSimParams}>
+              用上方参数更新
+            </Button>
+          </div>
+        )}
+        {selectedNodeId && driveMode === 'realtime' && record && (
+          <div className="text-[10px] text-gray-500">本链留有烘焙档案，实时模式下不生效；上方新鲜度提示说的是烘焙档案。</div>
+        )}
+      </div>
       <ClothSection character={character} rootId={selectedNodeId} params={params}
         totalFrames={totalFrames} frameRate={frameRate}
         updateUnifiedCharacter={updateUnifiedCharacter}
@@ -164,6 +238,26 @@ function HairSection(props: {
   );
   if (!rootId) return null;
   const bakedCount = strands ? strands.length - stale.length : 0;
+  const allRealtime = strands
+    ? strands.every((s) => chainDriveModeOf(character, s[0]) === 'realtime')
+    : false;
+  const setBundleMode = (mode: 'bake' | 'realtime') => {
+    if (!strands) return;
+    const chainSims = { ...(character.chainSims ?? {}) };
+    const chainModes = { ...(character.chainModes ?? {}) };
+    for (const s of strands) {
+      chainModes[s[0]] = mode;
+      if (mode === 'realtime' && !chainSims[s[0]]) {
+        const rec = character.chainBakes?.[s[0]];
+        chainSims[s[0]] = {
+          chainNodeIds: rec?.chainNodeIds ?? s,
+          params: rec?.params ? { ...rec.params } : { ...params },
+        };
+      }
+    }
+    updateUnifiedCharacter(character.id, { chainSims, chainModes });
+    props.setNote(mode === 'realtime' ? '整束已改用实时模拟（烘焙档案保留，不生效）' : '整束已改回烘焙驱动（实时定义保留，不生效）');
+  };
 
   const handleGenerate = () => {
     const gen = generateHairStrands(rootId, props.strands, props.segs);
@@ -245,6 +339,20 @@ function HairSection(props: {
           {stale.length === 0
             ? `整束已烘焙（${bakedCount}/${strands.length}），与当前驱动一致`
             : `未烘焙/已过期发丝 ${stale.length}/${strands.length} 根，重烘整束即可`}
+        </div>
+      )}
+      {strands && (
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-gray-400">整束驱动：{allRealtime ? '实时模拟' : '烘焙'}</span>
+          {allRealtime ? (
+            <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setBundleMode('bake')}>
+              整束改回烘焙
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setBundleMode('realtime')}>
+              整束改用实时模拟
+            </Button>
+          )}
         </div>
       )}
       {props.note && <div className="text-[10px] text-gray-500">{props.note}</div>}

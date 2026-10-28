@@ -494,6 +494,7 @@ export function computeWorldTransforms(
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
   geometryDirection?: DirectionIndex,
   clampCtx?: ClampContext,
+  simCtx?: SimContext,
 ): Map<string, WorldTransform> {
   // 父级切换轨：FK 全程在按本帧有效父级重写的层级上跑
   character = effectiveCharacterAt(character, frame);
@@ -550,7 +551,7 @@ export function computeWorldTransforms(
     : undefined;
 
   // Root node: center of canvas + node's own offset
-  const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides, behaviorTransforms?.get(rootNode.id));
+  const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides, behaviorTransforms?.get(rootNode.id), simCtx?.angleDeltas);
   const rootFrame = localRotMat(rootInterpolated.angle, rootInterpolated.tilt ?? 0);
   const rootWorld: WorldTransform = {
     nodeId: rootNode.id,
@@ -572,7 +573,7 @@ export function computeWorldTransforms(
   transforms.set(rootNode.id, rootWorld);
 
   // Recursively compute children
-  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms);
+  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms, simCtx?.angleDeltas);
 
   // 钳制锚定收尾（仅最外层调用执行；IK 重算遍与 resettle 的内层调用跳过）：
   // 刚性反移 + 节点局部旋转就地施加在结算结果上；resettle 开时以累进
@@ -594,7 +595,7 @@ export function computeWorldTransforms(
           z: (clampCtx.rootOffset?.z ?? 0) + res.delta.z,
         },
       };
-      return computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, undefined, geometryDirection, ctx2);
+      return computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, undefined, geometryDirection, ctx2, simCtx);
     }
     return t;
   };
@@ -614,7 +615,7 @@ export function computeWorldTransforms(
         solveChainIKOverrides(character, effChain, transforms, canvasWidth, canvasHeight, frame, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection);
       }
       if (overrides.size > 0) {
-        const t2 = computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection, clampCtx);
+        const t2 = computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection, clampCtx, simCtx);
         return finishWithClamps(t2);
       }
     }
@@ -904,12 +905,13 @@ function computeChildTransforms(
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
   geometryDirection?: DirectionIndex,
   behaviorTransforms?: Map<string, { rotation: number; translateX: number; translateY: number }>,
+  simDeltas?: ReadonlyMap<string, number>,
 ): void {
   for (const childId of parentNode.children) {
     const childNode = character.nodes[childId];
     if (!childNode) continue;
 
-    const childInterpolated = interpolateTransform(childNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides, behaviorTransforms?.get(childId));
+    const childInterpolated = interpolateTransform(childNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides, behaviorTransforms?.get(childId), simDeltas);
     let childWorldX: SubPixel;
     let childWorldY: SubPixel;
     let childWorldZ: SubPixel;
@@ -990,7 +992,7 @@ function computeChildTransforms(
     transforms.set(childId, childWorld);
 
     // Recurse into children
-    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms);
+    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms, simDeltas);
   }
 }
 
@@ -1047,6 +1049,7 @@ function interpolateTransform(
   blueprintTransforms?: Map<string, BlueprintTransformResult>,
   ikOverrides?: Map<string, { angle: number; tilt: number }>,
   behavior?: { rotation: number; translateX: number; translateY: number },
+  simDeltas?: ReadonlyMap<string, number>,
 ): NodeTransform {
   const r0 = interpolateTransformImpl(node, frame, frameRate, variableContext, blueprintTransforms);
   // 行为层：行为图输出叠加在关键帧/蓝图/旧修改器之上（单位与蓝图路径
@@ -1062,7 +1065,10 @@ function interpolateTransform(
     : r0;
   // IK 覆写：求解出的局部 (angle, tilt) 绝对替换（乙的注入层，与蓝图同一层级之上）
   const ov = ikOverrides?.get(node.id);
-  return ov ? { ...r, angle: ov.angle, tilt: ov.tilt } : r;
+  const r2 = ov ? { ...r, angle: ov.angle, tilt: ov.tilt } : r;
+  // 实时模拟角增量：叠加在当帧结算角之上（会话层已步进并折算）
+  const sd = simDeltas?.get(node.id);
+  return sd ? { ...r2, angle: r2.angle + sd } : r2;
 }
 
 function interpolateTransformImpl(
@@ -2277,6 +2283,14 @@ export function computeRestWorldTransforms(
 
 export interface ClampFrozen { points: Array<{ x: number; y: number; z: number }> }
 export type ClampStateMap = Map<string, ClampFrozen | null>;
+export interface SimContext {
+  /** 链节点本地角增量（度）：实时模拟会话层步进后折算，结算时
+   * 叠加在节点当帧角之上（世界段向与解出段向重合）。施加顺序：
+   * 模拟先于钳制——本增量在 FK 阶段生效，钳制收尾读到的是模拟
+   * 后的位姿。 */
+  angleDeltas: ReadonlyMap<string, number>;
+}
+
 export interface ClampContext {
   /** 本帧已步进的冻结记录（会话层/convert 持有并步进） */
   frozen: ClampStateMap;
@@ -2759,6 +2773,8 @@ export function generateRenderPlan(
   editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number; faceGuide?: boolean },
   // 钳制锚定上下文（主画布/导出会话传；不传则不锚定）
   clampCtx?: ClampContext,
+  // 实时模拟上下文（主画布会话传；不传则链按结算原样）
+  simCtx?: SimContext,
 ): RenderPlan {
   const spriteTable = globalSprites ?? character.sprites ?? {};
   // Build variable context for ParamDriver resolution
@@ -2783,7 +2799,7 @@ export function generateRenderPlan(
   // 行为层在 computeWorldTransforms 内统一叠加（出图/点选/覆盖层同源）
   const worldTransforms = computeWorldTransforms(
     character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
-    undefined, geometryDirection, clampCtx,
+    undefined, geometryDirection, clampCtx, simCtx,
   );
 
   // Step 3: Get active costume set（用生效状态的集 id，含轨道/蓝图覆盖）
@@ -5078,6 +5094,7 @@ function renderPuppetViaUnifiedPipeline(
   mannequinFallback?: boolean,
   editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number; faceGuide?: boolean },
   clampCtxFor?: (character: Character) => ClampContext | undefined,
+  simCtxFor?: (character: Character) => SimContext | undefined,
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
@@ -5097,6 +5114,7 @@ function renderPuppetViaUnifiedPipeline(
       mannequinFallback,
       editorFx,
       clampCtxFor?.(unifiedCharacter),
+      simCtxFor?.(unifiedCharacter),
     );
     executeRenderPlan(ctx, plan, canvasWidth, canvasHeight);
   }
@@ -5136,6 +5154,7 @@ export function renderUnified(
   mannequinFallback?: boolean,
   editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number; faceGuide?: boolean },
   clampCtxFor?: (character: Character) => ClampContext | undefined,
+  simCtxFor?: (character: Character) => SimContext | undefined,
 ): void {
   if (backgroundColor !== 'transparent') {
     ctx.fillStyle = backgroundColor;
@@ -5147,7 +5166,7 @@ export function renderUnified(
       currentFrame, frameRate, globalModifiers, animationVariables,
       canvasModifierTracks, proceduralAnimations, globalBlueprint, sprites,
       perspectiveForeshorten, animationClips, activeClipId, geometryDirection,
-      mannequinFallback, editorFx, clampCtxFor,
+      mannequinFallback, editorFx, clampCtxFor, simCtxFor,
     );
   }
   if (effectTracks) {

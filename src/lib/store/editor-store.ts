@@ -150,6 +150,9 @@ interface EditorStore extends EditorState {
   showMannequinFallback: boolean;
   toggleMannequinFallback: () => void;
   setMannequinFallback: (v: boolean) => void;
+  // 链摆实时模拟总闸（默认开：理会链级实时标记；关时面板点名被跳过的链）
+  simRealtimePreview: boolean;
+  setSimRealtimePreview: (v: boolean) => void;
   // 五官参照（选中节点头部框点位叠画，编辑器显示开关）
   showFaceGuide: boolean;
   toggleFaceGuide: () => void;
@@ -242,6 +245,7 @@ const defaultEditor: EditorState = {
   moveTargetLevel: 'keyframe',
   showPuppetSkeleton: false,
   showMannequinFallback: false,
+  simRealtimePreview: true,
   showFaceGuide: false,
   mannequinSleeveRatio: 0.1,
   mannequinPantsRatio: 0.1,
@@ -336,6 +340,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   togglePuppetSkeleton: () => set((s) => ({ showPuppetSkeleton: !s.showPuppetSkeleton })),
   toggleMannequinFallback: () => set((s) => ({ showMannequinFallback: !s.showMannequinFallback })),
   setMannequinFallback: (v) => set({ showMannequinFallback: v }),
+  setSimRealtimePreview: (v) => set({ simRealtimePreview: v }),
   toggleFaceGuide: () => set((s) => ({ showFaceGuide: !s.showFaceGuide })),
   setMannequinSleeveRatio: (v) => set({ mannequinSleeveRatio: v }),
   setMannequinPantsRatio: (v) => set({ mannequinPantsRatio: v }),
