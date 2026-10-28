@@ -2076,13 +2076,15 @@ function runSimPass(pose, steps) {
 // 定位：包内没有作者自带的对应动作时，用现行姿态管线（pose 的
 // a/dx/dy，与模拟遍同一回写口径：改角 → partCenter 复算 → dx/dy
 // 补差到目标中心）合成最低限度的身体动作——跳跃先屈膝下蹲再蹬
-// 地、横版行走双脚交替、俯视纵走双脚交替上下。作者内容优先
+// 地、横版行走双脚交替、俯视行走双脚交替（纵向上下/横向左右，
+// 按占优轴分支、相位共用）。作者内容优先
 // （红线）：包内有走/跳语义的表演（name/trigger/id 命中），或已
 // 识别的腿部部件挂了行为图（作者直接驱动腿），对应兜底整体不
 // 介入。缺位判定只读包内静态数据，加载期定一次。
 // 腿脚识别：convert 随包发 skeleton（部件键 → 节点名/父部件键），
-// 按骨骼名（含中英日常见腿脚词）+ 父子链识别腿链，再按同父分组
-// 成对反相（两足对位、四足对角）；旧包无 skeleton 时以部件键为
+// 按骨骼名（含中英日常见腿脚词）+ 父子链识别腿链，全部腿链
+// 成一个步态组配相位（两足对位、四足对角；配对不要求同父——
+// 分髋双腿也要能配对）；旧包无 skeleton 时以部件键为
 // 名、无父子（各自成单段链）。识别不到成对的腿 → 兜底整体不
 // 生效并点名（console + 警告条）；不许靠几何硬猜骨骼。
 const FB_CROUCH_DUR = 0.16;   // 下蹲预备时长（s）
@@ -2096,6 +2098,7 @@ let fbDipAir = 0;        // 起跳后残余下沉（px，空中快速释放）
 let fbPhase = 0;         // 步态相位（按实测位移推进，撞墙即停）
 let fbWalkW = 0;         // 横版行走混合权重
 let fbTopW = 0;          // 俯视纵走混合权重
+let fbTopXW = 0;         // 俯视横走混合权重
 let fbPrevX = null, fbPrevPY = null;
 function fbDipMax() { return Math.max(3, Math.min(9, charBoxH() * 0.13)); }
 function fbJointOf(prm) {
@@ -2155,15 +2158,15 @@ function buildFallback() {
     if (len < 8 || len > 500) continue;
     // 腿应朝下挂：根关节不得明显高于父关节（运行时 y 向上）
     if (par && restJ.has(par) && restJ.get(k)[1] > restJ.get(par)[1] + 6) continue;
-    allChains.push({ keys, len, group: par || '__root__', phase: 0 });
+    allChains.push({ keys, len, phase: 0 });
   }
-  // 同父成组配相位：两条按左右对位、四条及以上按对角（前 XOR 左）
-  const groups = new Map();
-  for (const c of allChains) { if (!groups.has(c.group)) groups.set(c.group, []); groups.get(c.group).push(c); }
+  // 配相位：全部腿链同属一步态组——配对不要求同父（真实人形
+  // 骨骼双腿常分挂左右髋骨 hip_L/hip_R，同父成组会把分髋双腿
+  // 各自落单丢弃、误报未识别）。两条按左右对位反相、四条及
+  // 以上按对角（前 XOR 左），规则与原同父组内一致。
   const walkChains = [];
-  for (const g of groups.values()) {
-    if (g.length < 2) continue;
-    g.sort((a, b) => restJ.get(a.keys[0])[0] - restJ.get(b.keys[0])[0]);
+  if (allChains.length >= 2) {
+    const g = [...allChains].sort((a, b) => restJ.get(a.keys[0])[0] - restJ.get(b.keys[0])[0]);
     const cx = g.reduce((s, c) => s + restJ.get(c.keys[0])[0], 0) / g.length;
     g.forEach((c, i) => {
       const nm = nameOf(c.keys[0]).toLowerCase();
@@ -2272,21 +2275,37 @@ function runFallbackPass(pose, dt) {
       }
     }
   }
-  // —— 俯视纵走：双脚沿纵向反相位交替（dy 直接偏移） ——
+  // —— 俯视行走：双脚反相位交替（纵向 dy / 横向 dx 直接偏移，
+  // 按占优轴分支；相位、步长、链相位分配共用一套，切换分支只
+  // 换混合权重目标、相位不重置；相位推进每帧至多一次（任一俯视
+  // 权重在场时执行，表达式与原纵向分支逐字一致） ——
   const movingTop = moveMode === 'top' && (Math.abs(dxF) + Math.abs(dyF)) > 1e-6;
   const vertDom = Math.abs(dyF) >= Math.abs(dxF);
   fbTopW += ((fb.walkOk && movingTop && vertDom ? 1 : 0) - fbTopW) * Math.min(1, dt / 0.12);
-  if (fb.walkOk && fbTopW > 0.003) {
+  fbTopXW += ((fb.walkOk && movingTop && !vertDom ? 1 : 0) - fbTopXW) * Math.min(1, dt / 0.12);
+  if (fb.walkOk && (fbTopW > 0.003 || fbTopXW > 0.003)) {
     const amp = Math.max(2, Math.min(7, fb.legLen * 0.14));
     const stride = Math.max(8, 3.6 * amp);
     fbPhase += Math.PI * (Math.abs(dxF) + Math.abs(dyF)) / stride * (dyF < 0 ? -1 : 1);
-    for (const chain of fb.chains) {
-      const n = chain.keys.length;
-      chain.keys.forEach((k, d) => {
-        const e = pose[k] || (pose[k] = { a: 0, dy: 0, rim: 0, glint: 0 });
-        const f = n === 1 ? 1 : 0.45 + 0.55 * (d / (n - 1));
-        e.dy = (e.dy || 0) + Math.sin(fbPhase + chain.phase) * amp * f * fbTopW;
-      });
+    if (fbTopW > 0.003) {
+      for (const chain of fb.chains) {
+        const n = chain.keys.length;
+        chain.keys.forEach((k, d) => {
+          const e = pose[k] || (pose[k] = { a: 0, dy: 0, rim: 0, glint: 0 });
+          const f = n === 1 ? 1 : 0.45 + 0.55 * (d / (n - 1));
+          e.dy = (e.dy || 0) + Math.sin(fbPhase + chain.phase) * amp * f * fbTopW;
+        });
+      }
+    }
+    if (fbTopXW > 0.003) {
+      for (const chain of fb.chains) {
+        const n = chain.keys.length;
+        chain.keys.forEach((k, d) => {
+          const e = pose[k] || (pose[k] = { a: 0, dy: 0, rim: 0, glint: 0 });
+          const f = n === 1 ? 1 : 0.45 + 0.55 * (d / (n - 1));
+          e.dx = (e.dx || 0) + Math.sin(fbPhase + chain.phase) * amp * f * fbTopXW;
+        });
+      }
     }
   }
 }
