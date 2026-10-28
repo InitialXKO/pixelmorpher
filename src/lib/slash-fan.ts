@@ -10,6 +10,14 @@
  *
  * 本文件是编辑器侧实现；运行时模板内有一份孪生实现，探针逐字节
  * 对拍（verify-proc-runtime W 组）。改一处必须同步另一处。
+ *
+ * 有效帧（包围盒口径）：帧画布不是写死的 w×h。用户盒 = 以 plug
+ * （椭圆中心 cx/cy）为原点、左上 (−cx, −cy)、尺寸 (w, h) 的覆盖
+ * 范围；几何紧包围盒 = 扇形（含 1.22 辉光外延、扫过角全程）在
+ * plug 坐标系下的轴对齐包围盒。实际生成帧 = 两盒并集（尺寸与
+ * 帧内 plug 位置由 slashFrameLayout 导出）：移动 cx/cy = 移动整
+ * 个盒相对锚点的位置、放大 rx/ry = 盒随几何长大，扇体永不被裁。
+ * 并集等于用户盒时布局与旧口径逐值一致（旧帧逐字节不变）。
  */
 
 export interface SlashFanSpec {
@@ -77,21 +85,82 @@ function smooth01(t: number): number {
   return t * t * (3 - 2 * t);
 }
 
+/** 有效帧布局：生成帧的实际尺寸与帧内 plug 坐标（未镜像参照系；
+ * 镜像帧是未镜像帧的水平翻转，其 plug 横坐标 = w − plugX） */
+export interface SlashFrameLayout {
+  w: number;
+  h: number;
+  plugX: number;
+  plugY: number;
+}
+
+/**
+ * 有效帧布局 = 用户盒 ∪ 几何紧包围盒（见文件头）。
+ * 紧包围盒取扇形外弧（半径 1.22 含辉光）在扫过角全程内的极值：
+ * 候选点 = 两端点 + 外弧上 x/y 驻点（扇区内才算）+ 椭圆中心。
+ */
+export function slashFrameLayout(spec: SlashFanSpec): SlashFrameLayout {
+  const outW = Math.max(4, Math.round(spec.w));
+  const outH = Math.max(4, Math.round(spec.h));
+  const rx = Math.max(2, spec.rx), ry = Math.max(2, spec.ry);
+  const rot = (spec.rotDeg * Math.PI) / 180;
+  const a0 = (spec.a0Deg * Math.PI) / 180;
+  const sweep = Math.max(0.06, Math.min(5.8, (spec.sweepDeg * Math.PI) / 180));
+  const S = 1.22;
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  let gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
+  const eat = (t: number) => {
+    const lx = S * rx * Math.cos(t), ly = S * ry * Math.sin(t);
+    const x = lx * cr - ly * sr, y = lx * sr + ly * cr;
+    if (x < gx0) gx0 = x;
+    if (x > gx1) gx1 = x;
+    if (y < gy0) gy0 = y;
+    if (y > gy1) gy1 = y;
+  };
+  eat(a0);
+  eat(a0 + sweep);
+  const TWO_PI = Math.PI * 2;
+  const inRange = (t: number) => {
+    let r = (t - a0) % TWO_PI;
+    if (r < 0) r += TWO_PI;
+    return r <= sweep + 1e-12;
+  };
+  const tx = Math.atan2(-(ry * sr), rx * cr);
+  if (inRange(tx)) eat(tx);
+  if (inRange(tx + Math.PI)) eat(tx + Math.PI);
+  const ty = Math.atan2(ry * cr, rx * sr);
+  if (inRange(ty)) eat(ty);
+  if (inRange(ty + Math.PI)) eat(ty + Math.PI);
+  const ux0 = Math.min(0, spec.cx + gx0), ux1 = Math.max(outW, spec.cx + gx1);
+  const uy0 = Math.min(0, spec.cy + gy0), uy1 = Math.max(outH, spec.cy + gy1);
+  const ox = Math.floor(ux0), oy = Math.floor(uy0);
+  return {
+    w: Math.ceil(ux1) - ox,
+    h: Math.ceil(uy1) - oy,
+    plugX: spec.cx - ox,
+    plugY: spec.cy - oy,
+  };
+}
+
 export interface SlashFrame {
   w: number;
   h: number;
+  /** 帧内 plug 坐标（布局参照系，未镜像；镜像帧 plug 横坐标 = w − plugX） */
+  plugX: number;
+  plugY: number;
   /** RGBA，行主序，y 向下（与画布/精灵图同向） */
   rgba: Uint8Array;
 }
 
 /** 生成进度 p（0–1）处的一帧；mirrored 时整帧水平翻转（朝向镜像用） */
 export function generateSlashFrame(spec: SlashFanSpec, p: number, mirrored = false): SlashFrame {
-  const outW = Math.max(4, Math.round(spec.w));
-  const outH = Math.max(4, Math.round(spec.h));
+  const lay = slashFrameLayout(spec);
+  const outW = lay.w;
+  const outH = lay.h;
   const buf = new Uint8Array(outW * outH * 4);
   const palette = (spec.colors && spec.colors.length >= 2 ? spec.colors : SLASH_PALETTE).map(hexToRgb);
 
-  const cx = spec.cx, cy = spec.cy;
+  const cx = lay.plugX, cy = lay.plugY;
   const rx = Math.max(2, spec.rx), ry = Math.max(2, spec.ry);
   const rotRad = (spec.rotDeg * Math.PI) / 180;
   const a0 = (spec.a0Deg * Math.PI) / 180;
@@ -182,7 +251,7 @@ export function generateSlashFrame(spec: SlashFanSpec, p: number, mirrored = fal
       }
     }
   }
-  return { w: outW, h: outH, rgba: buf };
+  return { w: outW, h: outH, plugX: lay.plugX, plugY: lay.plugY, rgba: buf };
 }
 
 /** 帧画布缓存（编辑器预览用）：同一帧内容只生成一次 */

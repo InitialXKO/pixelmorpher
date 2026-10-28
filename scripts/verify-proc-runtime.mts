@@ -2104,12 +2104,14 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   };
   const palLine = tplSrc.slice(tplSrc.indexOf('const SLASH_PALETTE_RT'), tplSrc.indexOf(';', tplSrc.indexOf('const SLASH_PALETTE_RT')) + 1);
   const rtGen = new Function(
-    `${palLine}\n${grabFn(tplSrc, 'function slashHexRgb')}\n${grabFn(tplSrc, 'function slashSmooth01')}\n${grabFn(tplSrc, 'function slashFanFrame')}\nreturn slashFanFrame;`,
-  )() as (spec: never, p: number, mir: boolean) => { w: number; h: number; data: Uint8Array };
+    `${palLine}\n${grabFn(tplSrc, 'function slashHexRgb')}\n${grabFn(tplSrc, 'function slashSmooth01')}\n${grabFn(tplSrc, 'function slashFrameLayout')}\n${grabFn(tplSrc, 'function slashFanFrame')}\nreturn slashFanFrame;`,
+  )() as (spec: never, p: number, mir: boolean) => { w: number; h: number; plugX: number; plugY: number; data: Uint8Array };
   const specs: Record<string, unknown>[] = [
     { ...defaultSlashSpec('a') },
     ...SLASH_PRESETS.map((pr) => ({ ...defaultSlashSpec('a'), ...pr.params })),
     { ...defaultSlashSpec('a'), w: 48, h: 80, cx: 20, cy: 60, colors: ['#ffffff', '#ffee00', '#ff0000'] },
+    { ...defaultSlashSpec('a'), cx: 4, cy: 60, rx: 40, ry: 34, rotDeg: 45 },
+    { ...defaultSlashSpec('a'), cx: 2, cy: 2 },
   ];
   let parity = true;
   let midNonEmpty = 0;
@@ -2118,7 +2120,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
       for (const mir of [false, true]) {
         const a = generateSlashFrame(spec as never, p, mir);
         const b = rtGen(spec as never, p, mir);
-        if (a.w !== b.w || a.h !== b.h || a.rgba.length !== b.data.length) { parity = false; break; }
+        if (a.w !== b.w || a.h !== b.h || a.plugX !== b.plugX || a.plugY !== b.plugY || a.rgba.length !== b.data.length) { parity = false; break; }
         for (let i = 0; i < a.rgba.length; i++) if (a.rgba[i] !== b.data[i]) { parity = false; break; }
         if (!parity) break;
         if (p === 0.45 && !mir) for (let i = 3; i < a.rgba.length; i += 4) if (a.rgba[i]! > 0) midNonEmpty++;
@@ -2127,7 +2129,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     }
     if (!parity) break;
   }
-  check('W1 刀光生成器双实现逐字节一致（默认+四预设+自定义色/尺寸 × 6 进度 × 镜像）', parity);
+  check('W1 刀光生成器双实现逐字节一致（默认+四预设+自定义色/尺寸+越界几何 × 6 进度 × 镜像，含有效帧布局 plug）', parity);
   check('W2 中间进度帧非空（扇形真生成）', midNonEmpty > 200, String(midNonEmpty));
   const endFrame = generateSlashFrame(defaultSlashSpec('a'), 1, false);
   check('W3 进度 1 时扇形已收完（全透明）', endFrame.rgba.every((v) => v === 0));

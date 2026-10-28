@@ -21,6 +21,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import BlueprintEditor from './BlueprintEditor';
 import SlashEffectEditor from './SlashEffectEditor';
+import { cloneSlashSpec, countSlashDefRefs, findSlashDef } from '@/lib/slash-defs';
 
 const selCls = 'h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded text-gray-300 px-1';
 const numCls = 'h-6 text-[10px] bg-[#111128] border-[#1e1e3a]';
@@ -42,6 +43,7 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
   const [selPerfId, setSelPerfId] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ perfId: string; nodeId: string; graph: BlueprintGraph } | null>(null);
   const [editingBehavior, setEditingBehavior] = useState<{ nodeId: string; graph: BlueprintGraph } | null>(null);
+  const animationClips = useProjectStore((s) => s.animationClips);
 
   if (!character) {
     return <p className="text-[10px] text-gray-500">先在左侧选择一个角色。</p>;
@@ -50,6 +52,10 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
   const behaviorGraphs = character.behaviorGraphs ?? {};
   const performances = character.performances ?? [];
   const nodes = Object.values(character.nodes);
+  // 刀光共享定义（角色级）：引用计数含本角色片段（删除预防口径）
+  const slashDefs = character.slashDefs ?? [];
+  const slashRefCounts: Record<string, number> = {};
+  for (const d of slashDefs) slashRefCounts[d.id] = countSlashDefRefs(character, animationClips, d.id);
 
   const patchCharacter = (updates: Partial<Character>, undoLabel: string) => {
     const store = useProjectStore.getState();
@@ -222,11 +228,60 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
                       </select>
                     </div>
                     <div className="col-span-2">
-                      <SlashEffectEditor
-                        value={perf.slashEffect}
-                        onChange={(next) => patchPerf(perf.id, { slashEffect: next })}
-                        nodes={nodes}
-                      />
+                      {(() => {
+                        const boundDef = findSlashDef(slashDefs, perf.slashDefId);
+                        return (
+                          <SlashEffectEditor
+                            value={perf.slashDefId ? boundDef?.spec : perf.slashEffect}
+                            onChange={(next) => {
+                              // 绑定时参数编辑直达定义（一处改、处处生效）；未绑定走私有字段
+                              if (perf.slashDefId && boundDef) {
+                                if (next) {
+                                  patchCharacter(
+                                    { slashDefs: slashDefs.map((d) => (d.id === boundDef.id ? { ...d, spec: next } : d)) },
+                                    '刀光定义',
+                                  );
+                                }
+                              } else {
+                                patchPerf(perf.id, { slashEffect: next });
+                              }
+                            }}
+                            nodes={nodes}
+                            defBinding={{
+                              defs: slashDefs,
+                              boundDefId: perf.slashDefId,
+                              refCounts: slashRefCounts,
+                              onBind: (defId) => patchPerf(perf.id, { slashDefId: defId, slashEffect: undefined }),
+                              onUnbind: () => patchPerf(perf.id, {
+                                slashEffect: boundDef ? cloneSlashSpec(boundDef.spec) : perf.slashEffect,
+                                slashDefId: undefined,
+                              }),
+                              onSaveAsDef: () => {
+                                if (!perf.slashEffect) return;
+                                const nd = {
+                                  id: crypto.randomUUID(),
+                                  name: `${perf.name || '表演'}刀光`,
+                                  spec: cloneSlashSpec(perf.slashEffect),
+                                };
+                                patchCharacter({
+                                  slashDefs: [...slashDefs, nd],
+                                  performances: performances.map((x) => (x.id === perf.id
+                                    ? { ...x, slashDefId: nd.id, slashEffect: undefined }
+                                    : x)),
+                                }, '刀光定义');
+                              },
+                              onRenameDef: (defId, name) => patchCharacter(
+                                { slashDefs: slashDefs.map((d) => (d.id === defId ? { ...d, name } : d)) },
+                                '刀光定义',
+                              ),
+                              onDeleteDef: (defId) => patchCharacter(
+                                { slashDefs: slashDefs.filter((d) => d.id !== defId) },
+                                '刀光定义',
+                              ),
+                            }}
+                          />
+                        );
+                      })()}
                     </div>
                     <div>
                       <Label className="text-[9px] text-gray-600">淡入（秒）</Label>

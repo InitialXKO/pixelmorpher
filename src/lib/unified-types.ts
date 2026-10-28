@@ -1122,6 +1122,15 @@ export interface BehaviorTreeSpec {
   root: BehaviorTreeNode | null;
 }
 
+/** 刀光共享定义（角色级）：一份规格、多处活引用——片段与表演以
+ *  slashDefId 引用它，解析时实时解引用（不复制固化进各 owner），
+ *  故改定义一处、全部引用处同时生效。见 lib/slash-defs。 */
+export interface SlashDefinition {
+  id: string;
+  name: string;
+  spec: import('./slash-fan').SlashFanSpec;
+}
+
 export interface ProcPerformance {
   id: string;
   name: string;
@@ -1139,8 +1148,15 @@ export interface ProcPerformance {
   graphs: Record<string, BlueprintGraph>;
   /** 残影部件（nodeId，可选）：表演期间该部件发历史残影（实例流效果） */
   afterimageNodeId?: string;
-  /** 刀光（可选）：椭圆扇形状衰减特效，表演开始时定格锚点位姿播放 */
+  /** 刀光（可选）：椭圆扇形状衰减特效，表演开始时定格锚点位姿播放。
+   *  本字段是面板编辑模型；渲染/进包以表演图里的 slash_fan 节点为
+   *  准（slash-sync 手术式同步，读侧未同步时以本字段镜像兜底） */
   slashEffect?: import('./slash-fan').SlashFanSpec;
+  /** 共享定义引用（角色 slashDefs 的 id）：设置后本表演刀光活引用该
+   *  定义——slashEffect 被忽略，表演图面板节点为引用形态（只带
+   *  __defId，不镜像规格），解析先解引用再叠接线覆盖。解绑 = 物化
+   *  （把定义当前规格复制回 slashEffect 并清除本字段） */
+  slashDefId?: string;
   enabled: boolean;
 }
 
@@ -1415,6 +1431,9 @@ export interface Character {
   behaviorGraphs?: Record<string, BlueprintGraph>;
   /** 作者型表演清单（挂蓝图，见 ProcPerformance） */
   performances?: ProcPerformance[];
+  /** 刀光共享定义（角色级，一处存、多处活引用：本角色的片段与表演
+   *  以 slashDefId 引用；跨角色不共享） */
+  slashDefs?: SlashDefinition[];
   /** 运行时状态机规格（作者编排，可选）：convert 直通进运行时包；
    *  缺省由 convert 按包内表演自动生成默认机（idle/move/air + 表演状态）。
    *  状态机只判身体状态（材料在包内：宿主变量 + 表演清单）；世界判定

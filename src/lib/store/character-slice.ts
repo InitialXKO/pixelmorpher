@@ -17,6 +17,7 @@ import { cloneSubtreeTransposed, cloneClipDataForTranspose } from '../clone-tran
 import { splitNodeSegment } from '../node-split';
 import type { DirectionIndex as SplitDirectionIndex } from '../unified-types';
 import { syncCharacterPatternBlueprints } from '../blueprint/pattern-sync';
+import { syncCharacterSlashBlueprints } from '../blueprint/slash-sync';
 
 export type CharacterSlice = {
   // ---- Character CRUD ----
@@ -182,13 +183,18 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
   updateUnifiedCharacter: (id, updates) => {
     set((s) => {
       const merged = { ...s.unifiedCharacters[id]!, ...updates, updatedAt: Date.now() };
+      // 图案↔蓝图统一：服装集变更（含件挂载图案编辑）→ 图案节点手术式同步落盘
+      const patternSynced = (updates as { costumeSets?: unknown }).costumeSets !== undefined
+        ? syncCharacterPatternBlueprints(merged as never, true) as typeof merged
+        : merged;
+      // 刀光↔蓝图统一：表演清单变更（含刀光面板编辑）→ 刀光节点手术式同步落盘
+      const slashSynced = (updates as { performances?: unknown }).performances !== undefined
+        ? syncCharacterSlashBlueprints(patternSynced as never) as typeof patternSynced
+        : patternSynced;
       return {
         unifiedCharacters: {
           ...s.unifiedCharacters,
-          // 图案↔蓝图统一：服装集变更（含件挂载图案编辑）→ 图案节点手术式同步落盘
-          [id]: (updates as { costumeSets?: unknown }).costumeSets !== undefined
-            ? syncCharacterPatternBlueprints(merged as never, true) as typeof merged
-            : merged,
+          [id]: slashSynced,
         },
       };
     });

@@ -14,6 +14,7 @@ import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '..
 import { resolveChainTarget3D, backfillNodeSlots } from '../unified-types';
 import { migrateProjectTimeUnits } from '../blueprint/time-migration';
 import { syncCharacterPatternBlueprints } from '../blueprint/pattern-sync';
+import { syncCharacterSlashBlueprints } from '../blueprint/slash-sync';
 import { migrateClipStructure } from '../clip-migration';
 import { backfillSpriteBirth } from '../sprite-folder';
 import { guardProjectBoneAxes } from '../bone-axis-guard';
@@ -33,6 +34,7 @@ const defaultProject: Project = {
   frameRate: 12,
   timeUnitsVersion: 2,
   patternBlueprintVersion: 1,
+  slashBlueprintVersion: 1,
   totalFrames: 24,
   currentFrame: 0,
   backgroundColor: '#1a1a2e',
@@ -179,6 +181,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       frameRate: s.frameRate,
       timeUnitsVersion: s.timeUnitsVersion ?? 2,
       patternBlueprintVersion: (s as any).patternBlueprintVersion ?? 1,
+      slashBlueprintVersion: (s as any).slashBlueprintVersion ?? 1,
       totalFrames: s.totalFrames,
       currentFrame: s.currentFrame,
       backgroundColor: s.backgroundColor,
@@ -354,6 +357,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         frameRate: state.frameRate,
         timeUnitsVersion: state.timeUnitsVersion ?? 2,
         patternBlueprintVersion: (state as any).patternBlueprintVersion ?? 1,
+        slashBlueprintVersion: (state as any).slashBlueprintVersion ?? 1,
         totalFrames: state.totalFrames,
         currentFrame: state.currentFrame,
         backgroundColor: state.backgroundColor,
@@ -513,6 +517,18 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     if ((file.project as any).patternBlueprintVersion !== 1) {
       for (const [cid, ch] of Object.entries(unifiedCharacters)) {
         (unifiedCharacters as any)[cid] = syncCharacterPatternBlueprints(ch as any, false);
+      }
+    }
+
+    // 刀光↔蓝图统一迁移（2026-10-28）：存量工程把表演刀光规格
+    // （perf.slashEffect 编辑模型）镜像进表演图（slash_fan 节点，
+    // 手术式；绑定共享定义的表演落引用形态节点）；字段保留为编辑
+    // 模型，渲染/进包改读图。片段没有图结构，其刀光维持字段口径，
+    // 跨片段/表演共享走角色级共享定义活引用（lib/slash-defs，纯
+    // 增量可选字段、无迁移）。一次性，标记后跳过。
+    if ((file.project as any).slashBlueprintVersion !== 1) {
+      for (const [cid, ch] of Object.entries(unifiedCharacters)) {
+        (unifiedCharacters as any)[cid] = syncCharacterSlashBlueprints(ch as any);
       }
     }
 

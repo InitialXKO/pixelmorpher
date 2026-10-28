@@ -628,15 +628,60 @@ function clipPlaneForPart(clip, selfEl, anchorEl, anchorMirrored) {
 }
 /** 刀光生成器（椭圆扇形状衰减；与主画布 slash-fan.ts 孪生，探针逐
  * 字节对拍）：外弧为界、内界随角向形状因子向尾部收尖，头部先展
- * 开、尾部后收走；返回 {w, h, data: RGBA} */
+ * 开、尾部后收走；返回 {w, h, plugX, plugY, data: RGBA}，其中
+ * w/h/plug 为有效帧布局（用户盒 ∪ 扇形紧包围盒，见 slash-fan.ts
+ * 文件头）——帧尺寸随几何长大、扇体不被裁 */
 const SLASH_PALETTE_RT = ['#ffffff', '#fff8d6', '#ffeba1', '#ffd166', '#ffab2e', '#ff7a00', '#e8481f', '#b01a33'];
 function slashHexRgb(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
 function slashSmooth01(t) { t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); }
+function slashFrameLayout(spec) {
+  const outW = Math.max(4, Math.round(spec.w));
+  const outH = Math.max(4, Math.round(spec.h));
+  const rx = Math.max(2, spec.rx), ry = Math.max(2, spec.ry);
+  const rot = spec.rotDeg * Math.PI / 180;
+  const a0 = spec.a0Deg * Math.PI / 180;
+  const sweep = Math.max(0.06, Math.min(5.8, spec.sweepDeg * Math.PI / 180));
+  const S = 1.22;
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  let gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
+  const eat = (t) => {
+    const lx = S * rx * Math.cos(t), ly = S * ry * Math.sin(t);
+    const x = lx * cr - ly * sr, y = lx * sr + ly * cr;
+    if (x < gx0) gx0 = x;
+    if (x > gx1) gx1 = x;
+    if (y < gy0) gy0 = y;
+    if (y > gy1) gy1 = y;
+  };
+  eat(a0);
+  eat(a0 + sweep);
+  const TWO_PI = Math.PI * 2;
+  const inRange = (t) => {
+    let r = (t - a0) % TWO_PI;
+    if (r < 0) r += TWO_PI;
+    return r <= sweep + 1e-12;
+  };
+  const tx = Math.atan2(-(ry * sr), rx * cr);
+  if (inRange(tx)) eat(tx);
+  if (inRange(tx + Math.PI)) eat(tx + Math.PI);
+  const ty = Math.atan2(ry * cr, rx * sr);
+  if (inRange(ty)) eat(ty);
+  if (inRange(ty + Math.PI)) eat(ty + Math.PI);
+  const ux0 = Math.min(0, spec.cx + gx0), ux1 = Math.max(outW, spec.cx + gx1);
+  const uy0 = Math.min(0, spec.cy + gy0), uy1 = Math.max(outH, spec.cy + gy1);
+  const ox = Math.floor(ux0), oy = Math.floor(uy0);
+  return {
+    w: Math.ceil(ux1) - ox,
+    h: Math.ceil(uy1) - oy,
+    plugX: spec.cx - ox,
+    plugY: spec.cy - oy,
+  };
+}
 function slashFanFrame(spec, p, mirrored) {
-  const outW = Math.max(4, Math.round(spec.w)), outH = Math.max(4, Math.round(spec.h));
+  const lay = slashFrameLayout(spec);
+  const outW = lay.w, outH = lay.h;
   const buf = new Uint8Array(outW * outH * 4);
   const palette = (spec.colors && spec.colors.length >= 2 ? spec.colors : SLASH_PALETTE_RT).map(slashHexRgb);
-  const cx = spec.cx, cy = spec.cy;
+  const cx = lay.plugX, cy = lay.plugY;
   const rx = Math.max(2, spec.rx), ry = Math.max(2, spec.ry);
   const rotRad = spec.rotDeg * Math.PI / 180;
   const a0 = spec.a0Deg * Math.PI / 180;
@@ -705,7 +750,7 @@ function slashFanFrame(spec, p, mirrored) {
       }
     }
   }
-  return { w: outW, h: outH, data: buf };
+  return { w: outW, h: outH, plugX: lay.plugX, plugY: lay.plugY, data: buf };
 }
 
 /** 实例打包：24 float —— pos2 size2 rot1 pivotTile2 clipC1 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 clipAB2。裁剪面占 iRotTileC.w（c）与 iDeform.zw（a,b）。发光全套（34 float）已搬侧车数据纹理（packGlowSidecar），顶点属性只剩 7 个：Mesa 等上报上限低于规范保证的环境也能链上，varying 同步腾空。 */
@@ -969,7 +1014,7 @@ function ensureAtlas(gl, variant, costumeName) {
       const M = 2;
       const tile = {
         w: fr.w + M * 2, h: fr.h + M * 2,
-        cx: M + (mir ? fr.w - 1 - sl.cx : sl.cx), cy: M + sl.cy,
+        cx: M + (mir ? fr.w - 1 - fr.plugX : fr.plugX), cy: M + fr.plugY,
         data: new Uint8Array((fr.w + M * 2) * (fr.h + M * 2) * 4),
       };
       for (let q = 0; q < tile.w * tile.h; q++) { tile.data[q * 4] = 255; tile.data[q * 4 + 3] = 255; }

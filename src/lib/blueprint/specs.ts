@@ -24,6 +24,19 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     outputs: [],
     params: [...Object.keys(defaultDynamicParams()), 'enabled'],
   },
+  // 刀光（刀光↔蓝图统一）：表演刀光规格在表演图里的化身，params =
+  // SlashFanSpec 全集（colors 以 __json_colors 存，+/- 暴露即可接线
+  // 覆盖数值参数）；求值由渲染/进包经 slash-sync 从图提取规格后走
+  // 刀光生成器，本节点不产出像素/变换端口
+  slash_fan: {
+    inputs: ['t', 'gate'],
+    outputs: [],
+    params: [
+      'anchorNodeId', 'durationSec', 'frameCount', 'w', 'h', 'cx', 'cy',
+      'rx', 'ry', 'rotDeg', 'a0Deg', 'sweepDeg', 'thick', 'gammaAng',
+      'softRad', 'colors', 'enabled',
+    ],
+  },
   // ---- 源 ----
   time: { inputs: [], outputs: ['out'], params: [] },
   // timeGate: 时间范围门控，输出 0~1 权重
