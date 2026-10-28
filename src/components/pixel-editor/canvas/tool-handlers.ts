@@ -144,6 +144,7 @@ export function writePuppetPoseKeyframe(
   frame: number,
   values: { angle: number; stretch: number; scaleX: number; x: number; y: number; tilt?: number },
   variantIndex: number,
+  opts?: { forceCreate?: boolean },
 ) {
   const store = useProjectStore.getState();
   const character = store.unifiedCharacters[skeletonId];
@@ -151,28 +152,36 @@ export function writePuppetPoseKeyframe(
   const node = character.nodes[nodeId];
   if (!node) return;
 
-  // 直接写 node.tracks（渲染器从这里读）
+  // 直接写 node.tracks（渲染器从这里读）。自动关键帧口径（动画软件
+  // 通例，2026-10-28 用户裁决）：开关只管「当前帧没有关键帧时要不要
+  // 自动新建」——已有关键帧的通道永远可改；关着且该帧无键 → 该通道
+  // 不写（拖拽对它不生效）。显式打帧入口（时间轴「添加关键帧」）传
+  // forceCreate 绕过；改骨架的操作（Alt 拖插槽）不经此函数、不受管。
+  const mayCreate = opts?.forceCreate === true || usePuppetSessionStore.getState().autoKeyframe;
   const setTrack = (trackName: 'angle' | 'x' | 'y' | 'stretch' | 'scaleX' | 'tilt', value: number) => {
-    const track = node.tracks[trackName] ?? { keyframes: [], interpolation: 'linear' as const };
+    const existing = node.tracks[trackName];
+    const track = existing ?? { keyframes: [], interpolation: 'linear' as const };
     const idx = track.keyframes.findIndex(k => k.frame === frame);
+    if (idx < 0 && !mayCreate) return existing;
     const newKeyframes = idx >= 0
       ? track.keyframes.map((k, i) => i === idx ? { ...k, value } : k)
       : [...track.keyframes, { frame, value }].sort((a, b) => a.frame - b.frame);
     return { ...track, keyframes: newKeyframes };
   };
 
-  store.updateUnifiedNode(skeletonId, nodeId, {
-    tracks: {
-      ...node.tracks,
-      angle: setTrack('angle', values.angle),
-      x: setTrack('x', values.x),
-      y: setTrack('y', values.y),
-      stretch: setTrack('stretch', values.stretch),
-      scaleX: setTrack('scaleX', values.scaleX),
-      // tilt 仅在调用方给出时写（伪 3D 工具 / tilt 编辑），其余拖拽不碰出平面角轨道
-      ...(values.tilt !== undefined ? { tilt: setTrack('tilt', values.tilt) } : {}),
-    },
-  });
+  const nextTracks: typeof node.tracks = { ...node.tracks };
+  const put = (trackName: 'angle' | 'x' | 'y' | 'stretch' | 'scaleX' | 'tilt', value: number) => {
+    const t = setTrack(trackName, value);
+    if (t) nextTracks[trackName] = t;
+  };
+  put('angle', values.angle);
+  put('x', values.x);
+  put('y', values.y);
+  put('stretch', values.stretch);
+  put('scaleX', values.scaleX);
+  // tilt 仅在调用方给出时写（伪 3D 工具 / tilt 编辑），其余拖拽不碰出平面角轨道
+  if (values.tilt !== undefined) put('tilt', values.tilt);
+  store.updateUnifiedNode(skeletonId, nodeId, { tracks: nextTracks });
 }
 
 /** 锁定节点解析：editor.nodeLockId 有效（节点仍存在）时返回其命中三元组，
@@ -286,10 +295,8 @@ export const puppetHandler: ToolHandler = {
     if (!session.performArmed) {
       usePuppetSessionStore.setState({ performArmed: true });
     }
-    // 关闭自动关键帧时：只选中，不开始拖动
-    if (!usePuppetSessionStore.getState().autoKeyframe) {
-      return;
-    }
+    // 自动关键帧不再拦拖拽：开关只管写关键帧时要不要自动新建
+    // （writePuppetPoseKeyframe 内部口径），拖拽本身永远可用
 
     // Alt+拖动：移动该节点所插入的父节点插槽在父节点中的位置（rig 操作，直接改骨架）
     if (e.altKey) {
@@ -1476,7 +1483,7 @@ export const nodeMoveHandler: ToolHandler = {
     if (!session.performArmed) {
       usePuppetSessionStore.setState({ performArmed: true });
     }
-    if (!session.autoKeyframe) return; // 关闭自动关键帧时只选中
+    // 自动关键帧不拦拖拽（口径见 writePuppetPoseKeyframe）
 
     const frame = project.currentFrame;
     const ivMap = interpolateNodeKeyframes(character, frame);
