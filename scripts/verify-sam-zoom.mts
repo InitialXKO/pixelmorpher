@@ -1,10 +1,13 @@
 /**
- * 结构断言：参考图装配·分割步小图缩放/平移（源级）
+ * 结构断言：分割步小图缩放/平移 + 遮罩层视图手势（源级）
  *
- * 两张点选图（参考图原图 / 抠图预览）统一走 SamPickImage：CSS
- * transform 缩放（origin 左上）、滚轮原生非被动监听拦截、按下到
- * 抬起位移阈值区分平移与点选、点选仍走 rect 归一化换算、视角
- * 模块级持久化且换图复位、带倍率显示与复位按钮。
+ * 一、参考图装配·分割步：两张点选图（参考图原图 / 抠图预览）统一
+ * 走 SamPickImage：CSS transform 缩放（origin 左上）、滚轮原生非
+ * 被动监听拦截、按下到抬起位移阈值区分平移与点选、点选仍走 rect
+ * 归一化换算、视角模块级持久化且换图复位、带倍率显示与复位按钮。
+ * 二、遮罩模式（MaskBrushOverlay）：主画布视图手势在本层复原——
+ * 滚轮走主画布同一套缩放公式、空格/中键平移判定排在笔刷之前且
+ * 笔划中不介入、普通按下路径与取点换算不动。
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -54,8 +57,32 @@ ok(wiz.includes('persistedSamView = { scale: 1, x: 0, y: 0 };'), 'resetRefWizard
 ok(wiz.includes('prevReferenceUrlRef'), '参考图换人时视角复位 effect 在位');
 ok(wiz.includes('samView.scale.toFixed(1)') && wiz.includes('复位'), '倍率显示 + 复位按钮在位');
 
+// ---------- 遮罩层视图手势（MaskBrushOverlay） ----------
+const mask = read('src/components/pixel-editor/MaskBrushOverlay.tsx');
+
+// 滚轮：原生非被动监听 + 主画布同一套缩放公式（步进/取整/钳制/光标锚点）
+ok(mask.includes("addEventListener('wheel'") && mask.includes('{ passive: false }'), '遮罩层滚轮走原生监听 + passive:false');
+ok(mask.includes('e.deltaY < 0 ? 1.15 : 1 / 1.15'), '遮罩层缩放步进 ×1.15 与主画布一致');
+ok(mask.includes('Math.max(1, Math.min(32, Math.round(zoom * zoomFactor * 10) / 10))'), '遮罩层缩放 0.1 取整 + 钳制 1–32 与主画布一致');
+ok(mask.includes('e.clientX - rect.left + panX'), '遮罩层光标容器坐标 = 图内偏移 + panX（rect 左缘含 pan）');
+ok(mask.includes('const worldX = (mouseX - panX) / zoom') && mask.includes('setPan(mouseX - worldX * newZoom, mouseY - worldY * newZoom)'), '遮罩层缩放按光标点世界坐标不变换算 setZoom/setPan');
+// 笔划中滚轮只吞不缩放
+ok(mask.includes('if (isDrawing.current) return;'), '笔划进行中滚轮被吞、不缩放（不毁笔划）');
+
+// 平移：判定（中键 / 空格+左键）排在取色之前，且笔划中不介入
+const panCondIdx = mask.indexOf('!isDrawing.current && (e.button === 1 || (spaceHeldRef.current && e.button === 0))');
+ok(panCondIdx > -1, '遮罩层平移判定在位（中键/空格+左键 + 笔划中不介入）');
+ok(panCondIdx > -1 && panCondIdx < mask.indexOf('if (isPicking)'), '平移判定排在取色/取点/笔刷之前（优先）');
+ok(mask.includes("e.code === 'Space'") && mask.includes('spaceHeldRef'), '遮罩层自追空格键状态（主画布的 ref 够不着）');
+ok(mask.includes('setPan(p.panX + (e.clientX - p.startClientX), p.panY + (e.clientY - p.startClientY))'), '平移按按下点快照推 pan');
+
+// 普通路径与坐标换算未改
+ok(mask.includes('isDrawing.current = true;'), '普通按下仍走原笔刷落笔路径');
+ok(mask.includes('(rect.width / canvasWidth)') && mask.includes('(rect.height / canvasHeight)'), 'getPos 仍按 live rect 换算内部像素坐标（视图变化后成立）');
+ok(mask.includes('width: canvasWidth * zoom') && mask.includes('left: panX'), '遮罩层仍按订阅的 zoom/pan 定位（缩放后自动跟随）');
+
 if (failures > 0) {
   console.error(`\n${failures} 项断言失败`);
   process.exit(1);
 }
-console.log('SAM ZOOM/PAN PROBE PASS');
+console.log('SAM ZOOM/PAN + MASK VIEW GESTURES PROBE PASS');
