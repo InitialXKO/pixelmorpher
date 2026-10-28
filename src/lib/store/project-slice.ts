@@ -522,9 +522,10 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
 
     // 刀光↔蓝图统一迁移（2026-10-28）：存量工程把表演刀光规格
     // （perf.slashEffect 编辑模型）镜像进表演图（slash_fan 节点，
-    // 手术式）；字段保留为编辑模型，渲染/进包改读图。片段没有图
-    // 结构，其刀光维持字段口径（归宿待裁决，见 slash-sync 文件头）。
-    // 一次性，标记后跳过。
+    // 手术式；绑定共享定义的表演落引用形态节点）；字段保留为编辑
+    // 模型，渲染/进包改读图。片段没有图结构，其刀光维持字段口径，
+    // 跨片段/表演共享走角色级共享定义活引用（lib/slash-defs，纯
+    // 增量可选字段、无迁移）。一次性，标记后跳过。
     if ((file.project as any).slashBlueprintVersion !== 1) {
       for (const [cid, ch] of Object.entries(unifiedCharacters)) {
         (unifiedCharacters as any)[cid] = syncCharacterSlashBlueprints(ch as any);

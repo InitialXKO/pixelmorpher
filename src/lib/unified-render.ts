@@ -32,6 +32,8 @@ import {
 import { solveIK2Bone3D, solveIK3Bone3D, solveIK3BoneWithTip3D, solveIKFabrik3D } from './blueprint/ik';
 import { DEFAULT_FACE_FEATURES, faceFeaturePoints, faceHalfWidths } from './face-features';
 import { slashFrameCanvas, slashFrameLayout } from './slash-fan';
+import { resolveClipSlash } from './slash-defs';
+import type { SlashDefinition } from './unified-types';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
 import { sampleJointDiscColor, getPlugJointWidth } from './engine/render-helpers/puppet-joint-color';
@@ -2149,16 +2151,18 @@ export function pickClipStateKeyframes(
   return clip.stateKeyframes;
 }
 
-/** 激活片段的刀光（与状态轨道同一门控口径：激活片段 + 归属角色 + 帧在窗内） */
+/** 激活片段的刀光（与状态轨道同一门控口径：激活片段 + 归属角色 + 帧在窗内）。
+ *  规格经 resolveClipSlash 解引用（私有字段或共享定义活引用），与进包同源 */
 export function pickSlashClip(
   clips: AnimationClip[] | undefined,
   activeClipId: string | null | undefined,
   characterId: string,
   frame: number,
+  defs?: readonly SlashDefinition[],
 ): AnimationClip | undefined {
   if (!clips || !activeClipId) return undefined;
   const clip = clips.find((c) => c.id === activeClipId);
-  if (!clip || clip.puppetCharacterId !== characterId || !clip.slashEffect) return undefined;
+  if (!clip || clip.puppetCharacterId !== characterId || !resolveClipSlash(clip, defs)) return undefined;
   if (frame < clip.startFrame || frame > clip.endFrame) return undefined;
   return clip;
 }
@@ -3267,8 +3271,9 @@ export function generateRenderPlan(
   // 刀光：位姿在片段起始帧定格（锚点其后怎么动都不跟随），进度
   // 按窗内帧走；时长单独设了秒数时先于窗结束
   let slashFx: RenderPlan['slashFx'];
-  if (slashClip?.slashEffect && frame >= slashClip.startFrame && frame <= slashClip.endFrame) {
-    const spec = slashClip.slashEffect;
+  const slashClipSpec = slashClip ? resolveClipSlash(slashClip, character.slashDefs) : undefined;
+  if (slashClip && slashClipSpec && frame >= slashClip.startFrame && frame <= slashClip.endFrame) {
+    const spec = slashClipSpec;
     const spawnTransforms = computeWorldTransforms(
       character, slashClip.startFrame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
       undefined, geometryDirection,
@@ -5113,7 +5118,7 @@ function renderPuppetViaUnifiedPipeline(
       undefined, perspectiveForeshorten,
       pickClipStateKeyframes(animationClips, activeClipId, unifiedCharacter.id, currentFrame),
       geometryDirection,
-      pickSlashClip(animationClips, activeClipId, unifiedCharacter.id, currentFrame) ?? null,
+      pickSlashClip(animationClips, activeClipId, unifiedCharacter.id, currentFrame, unifiedCharacter.slashDefs) ?? null,
       mannequinFallback,
       editorFx,
       clampCtxFor?.(unifiedCharacter),

@@ -844,6 +844,10 @@ export interface AnimationClip {
   /** 刀光（可选）：椭圆扇形状衰减特效，片段窗内播放、起始帧定格锚点位姿；
    *  导出时随段表演进包 */
   slashEffect?: import('./slash-fan').SlashFanSpec;
+  /** 共享定义引用（归属角色 slashDefs 的 id）：设置后片段刀光活引用
+   *  该定义、slashEffect 被忽略（预览与进包同源解引用）；解绑 = 物化
+   *  （把定义当前规格复制回 slashEffect 并清除本字段） */
+  slashDefId?: string;
 
   // ---- Per-clip effects ----
   effectTracks: EffectTrack[];

@@ -22,6 +22,7 @@ import { computeStackOps, rasterizeStackOpsData, STACK_VIEW_ELEVATION_DEG, type 
 import { packMaskBits, unpackMaskBits } from '../sprite-marks';
 import { collectDesiredPatterns, effectivePatternGraph, extractPatternInstances } from '../blueprint/pattern-sync';
 import { resolvePerfSlash, graphWithoutSlashNodes } from '../blueprint/slash-sync';
+import { findSlashDef, resolveClipSlash } from '../slash-defs';
 import { rgbaToHexOrNull } from '../engine/utils';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
@@ -1244,6 +1245,9 @@ export function convertCharacterToRuntimePackage(
       if (unsupported.length) warnings.push(`表演「${perf.name}」节点 ${character.nodes[nodeId]?.name ?? nodeId} 含运行时不支持的节点：${unsupported.join('、')}（其数值若未进 transform 输出则无影响）`);
     }
     const afterSlot = perf.afterimageNodeId ? toSlot(perf.afterimageNodeId) : null;
+    if (perf.slashDefId && !findSlashDef(character.slashDefs, perf.slashDefId)) {
+      warnings.push(`刀光：表演「${perf.name}」引用的共享定义（${perf.slashDefId}）不存在，未进包`);
+    }
     performances.push({
       id: perf.id,
       name: perf.name,
@@ -1255,8 +1259,9 @@ export function convertCharacterToRuntimePackage(
       mask,
       afterimage: afterSlot ? { part: afterSlot, count: 3, interval: 0.035 } : undefined,
       // 刀光↔蓝图统一：只从表演图解析（slash_fan 节点，静态 params
-      // 固化；未落盘同步的数据由 slash-sync 读侧镜像兜底）
-      slash: slashForPkg(resolvePerfSlash(perf), `表演「${perf.name}」`),
+      // 固化；未落盘同步的数据由 slash-sync 读侧镜像兜底）。
+      // 绑定共享定义时解引用活读角色定义（悬空点名、不进包）
+      slash: slashForPkg(resolvePerfSlash(perf, undefined, character.slashDefs), `表演「${perf.name}」`),
       graph: { context: 'performance', nodes: graphNodes },
     });
   }
@@ -1316,6 +1321,15 @@ export function convertCharacterToRuntimePackage(
       && typeof c.startFrame === 'number' && typeof c.endFrame === 'number'
       && c.endFrame >= c.startFrame);
     const emittedClipPerfIds = new Set<string>();
+    // 片段刀光共享定义悬空点名（每片段只报一次；悬空解析为无刀光，
+    // 绝不静默回落私有字段冒充）
+    const slashDanglingWarned = new Set<string>();
+    const warnClipSlashDangling = (clip: AnimationClip) => {
+      if (!clip.slashDefId || findSlashDef(character.slashDefs, clip.slashDefId)) return;
+      if (slashDanglingWarned.has(clip.id)) return;
+      slashDanglingWarned.add(clip.id);
+      warnings.push(`刀光：片段「${clip.name}」引用的共享定义（${clip.slashDefId}）不存在，未进包`);
+    };
     if (trackNodes.length > 0) {
       const frameRate = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
       const partKeys = new Set(parts.map((p) => p.key));
@@ -1797,7 +1811,10 @@ export function convertCharacterToRuntimePackage(
         const clipSampled = clipSamples.get(clip)!;
         const seg = curvesForWindow(clipSampled.samples, len, `c${ci++}_`, false);
         const segStackFrames = stackFramesForWindow(clipSampled.stackSamples);
-        if (seg.graphNodes.length === 0 && !clip.slashEffect) {
+        // 片段刀光：私有字段或共享定义活引用，同一解析入口
+        const clipSlash = resolveClipSlash(clip, character.slashDefs);
+        warnClipSlashDangling(clip);
+        if (seg.graphNodes.length === 0 && !clipSlash) {
           warnings.push(`片段「${clip.name}」：时间窗内轨道无姿态贡献，未生成段表演`);
           continue;
         }
@@ -1810,7 +1827,7 @@ export function convertCharacterToRuntimePackage(
           mode: 'add',
           loop: clip.loop === true,
           mask: seg.mask,
-          slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
+          slash: slashForPkg(clipSlash, `片段「${clip.name}」`),
           graph: { context: 'performance', nodes: seg.graphNodes },
           ...(segStackFrames ? { stackFrames: segStackFrames } : {}),
           stateFx: stateFxOf(clip),
@@ -1824,7 +1841,9 @@ export function convertCharacterToRuntimePackage(
     // 刀光专用片段：角色全无姿态轨道时采样块整体跳过，段表演仍须
     // 生成（刀光本身就是该片段的内容），否则引用悬空且无声丢失
     for (const clip of clipList) {
-      if (!clip.slashEffect || emittedClipPerfIds.has(`clip_${clip.id}`)) continue;
+      const clipSlash = resolveClipSlash(clip, character.slashDefs);
+      warnClipSlashDangling(clip);
+      if (!clipSlash || emittedClipPerfIds.has(`clip_${clip.id}`)) continue;
       const rate = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
       performances.push({
         id: `clip_${clip.id}`,
@@ -1835,7 +1854,7 @@ export function convertCharacterToRuntimePackage(
         mode: 'add',
         loop: clip.loop === true,
         mask: [],
-        slash: slashForPkg(clip.slashEffect, `片段「${clip.name}」`),
+        slash: slashForPkg(clipSlash, `片段「${clip.name}」`),
         graph: { context: 'performance', nodes: [] },
         stateFx: stateFxOf(clip),
         fx: clipFxOf(clip),
