@@ -16,6 +16,7 @@ import { migrateProjectTimeUnits } from '../blueprint/time-migration';
 import { syncCharacterPatternBlueprints } from '../blueprint/pattern-sync';
 import { migrateClipStructure } from '../clip-migration';
 import { backfillSpriteBirth } from '../sprite-folder';
+import { guardProjectBoneAxes } from '../bone-axis-guard';
 
 const defaultProject: Project = {
   id: crypto.randomUUID(),
@@ -525,9 +526,18 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       if (!entry?.snapshot || typeof entry.snapshot !== 'string') return entry;
       try {
         const parsed = JSON.parse(entry.snapshot);
-        if (parsed?.unifiedCharacters && backfillNodeSlots(parsed.unifiedCharacters)) {
-          return { ...entry, snapshot: JSON.stringify(parsed) };
+        if (!parsed?.unifiedCharacters) return entry;
+        let dirty = backfillNodeSlots(parsed.unifiedCharacters);
+        // 骨轴守卫（与主数据同构）：快照内角色一并改轴，快照自带
+        // 精灵表时反旋副本写回该表；无表时引用精灵不可达的角色
+        // 由守卫中止保持原样（安全方向）。
+        const snapSprites = (parsed.sprites ?? {}) as Record<string, import('../unified-types').Sprite>;
+        const ag = guardProjectBoneAxes(parsed.unifiedCharacters, snapSprites);
+        if (ag.changed) {
+          dirty = true;
+          if (parsed.sprites || Object.keys(snapSprites).length > 0) parsed.sprites = snapSprites;
         }
+        if (dirty) return { ...entry, snapshot: JSON.stringify(parsed) };
       } catch { /* 快照损坏则原样保留 */ }
       return entry;
     });
@@ -549,6 +559,23 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     // 的不覆盖（sprite-folder.ts）。
     const backfilled = backfillSpriteBirth(migratedSprites);
     const finalSprites = backfilled.changed > 0 ? backfilled.sprites : migratedSprites;
+
+    // 骨轴守卫（读入规范化，一次性、幂等）：静止方向落进水平带
+    // 的骨段在数据层改轴（父帧 ±90° 增益 + 偏移反旋 + 精灵 D4
+    // 反旋副本），静止几何与绘制逐点不变、IK 两角反解全朝向
+    // 可达；合规角色零改动，冲突/不可修的段只点名不改（见
+    // bone-axis-guard 报告）。必须在精灵合并完成后跑（反旋副本
+    // 注册进 finalSprites）。
+    {
+      const ag = guardProjectBoneAxes(unifiedCharacters as any, finalSprites as any);
+      const notes: string[] = [];
+      for (const [cid, r] of Object.entries(ag.reports)) {
+        if (r.changed) notes.push(`${cid}: 改轴节点 ${r.gainedNodes.length}、修复段 ${r.fixedSegments.length}`);
+        if (r.aborted) notes.push(`${cid}: 中止（${r.aborted}）`);
+        for (const u of r.unfixableSegments) notes.push(`${cid}: 不可修段 ${u.parentId}->${u.childId}（${u.reason}）`);
+      }
+      if (notes.length > 0) console.warn('[bone-axis-guard] 读入改轴', JSON.stringify(notes));
+    }
 
     set({
       ...file.project,
