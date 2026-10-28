@@ -5,6 +5,7 @@
 
 import type { Character, Node, CostumeSet, Sprite, PixelGrid } from './unified-types';
 import { createDefaultCharacter, createDefaultNode, createDefaultCostumeSet, createDefaultCostumePiece, pxToSub } from './unified-types';
+import { guardCharacterBoneAxes } from './bone-axis-guard';
 
 // ---- Spine JSON Types (4.x) ----
 
@@ -328,6 +329,11 @@ export function importSpineToCharacter(
     (character as any).spineAnimation = animName;
     (character as any).spineAnimations = animationNames;
   }
+
+  // 骨轴守卫（数据入口）：Spine 骨沿 +X 走，横骨链在东/西向会落
+  // 进 IK 两角反解的纵深奇异带——导入成型即改轴（静止几何不变），
+  // 与工程读入规范化同一守卫。合规则零改动。
+  guardCharacterBoneAxes(character, outSprites);
 
   return { character, sprites: outSprites };
 }

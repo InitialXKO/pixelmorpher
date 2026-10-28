@@ -9,6 +9,7 @@ import type { PartName } from './threejs-baker-sixpart';
 import { medianCut, nearestPaletteIndex } from './threejs-baker';
 import { rgbaToHexOrNull } from '../engine/utils';
 import { directionFolder } from '../sprite-folder';
+import { guardCharacterBoneAxes } from '../bone-axis-guard';
 import {
   pxToSub,
   createDefaultNode,
@@ -738,6 +739,11 @@ export function mapBonesToNodes(
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
+
+  // 骨轴守卫（数据入口）：臂链已由上方 T-pose 摆回（甲案）拉直、
+  // 其余主干多为竖直段，预期零改动；尾/裙摆等横向骨段若落进
+  // IK 反解奇异带在此改轴（静止几何不变），与读入规范化同守卫。
+  guardCharacterBoneAxes(character, sprites);
 
   return {
     character,
