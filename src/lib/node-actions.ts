@@ -85,7 +85,10 @@ export function addChildNode(characterId: string, parent: Node): Node | null {
   const attachment = firstSocket
     ? { type: 'socket' as const, parentSocketId: firstSocket.id, plug: { x: 0, y: 0 } }
     : { type: 'fixed' as const, fixedOffset: { x: 0, y: 0 }, inheritRotation: true };
-  const node = store.addUnifiedNode(characterId, name, { zIndex: 0, attachment });
+  // 父级必须显式给：不给时 addUnifiedNode 只能按 attachment 推导，无插槽
+  // 的父节点推导不出、会落到根节点——新节点就成了根的子节点（在树上
+  // 表现为与所点节点同级），而不是所点节点的子节点。
+  const node = store.addUnifiedNode(characterId, name, { zIndex: 0, attachment, parentId: parent.id });
   store.setSelectedNodeId(node.id);
   return node;
 }

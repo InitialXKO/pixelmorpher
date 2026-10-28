@@ -48,5 +48,18 @@ const explicit = ps.addUnifiedNode(charId, '显式子', { parentId: sockChild.id
 ch = useProjectStore.getState().unifiedCharacters[charId]!;
 ok('D1 显式 parentId 被尊重并挂 children', ch.nodes[explicit.id]?.parentId === sockChild.id && ch.nodes[sockChild.id]!.children.includes(explicit.id));
 
+// 右键「新建子节点」真实路径（addChildNode）：
+// E1 父节点有插槽 → 子节点挂该父；
+// E2 父节点无插槽（新建节点默认无插槽）→ 仍挂该父，不许落到根下变同级
+const { addChildNode } = await import('../src/lib/node-actions');
+ch = useProjectStore.getState().unifiedCharacters[charId]!;
+const e1 = addChildNode(charId, ch.nodes[root.id]!);
+ch = useProjectStore.getState().unifiedCharacters[charId]!;
+ok('E1 有插槽父节点：子节点 parentId=所点节点', !!e1 && ch.nodes[e1.id]?.parentId === root.id && ch.nodes[root.id]!.children.includes(e1.id));
+const e2 = addChildNode(charId, ch.nodes[e1!.id]!);
+ch = useProjectStore.getState().unifiedCharacters[charId]!;
+ok('E2 无插槽父节点：子节点 parentId=所点节点（非根）', !!e2 && ch.nodes[e2.id]?.parentId === e1!.id && ch.nodes[e1!.id]!.children.includes(e2.id));
+ok('E3 无插槽路径子节点世界变换可达', !!e2 && computeWorldTransforms(ch, 0, 400, 400).has(e2.id));
+
 console.log(`合计：${pass} 过 / ${fail} 败`);
 if (fail > 0) process.exit(1);

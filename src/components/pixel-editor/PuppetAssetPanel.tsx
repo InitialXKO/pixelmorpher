@@ -1002,6 +1002,9 @@ export default function PuppetAssetPanel() {
                         const newNode = addUnifiedNode(activePuppetSkeletonId!, nodeName, {
                           zIndex: 0,
                           attachment,
+                          // 父级显式给：只靠 attachment 推导时，无插槽的
+                          // 父节点会让新节点落到根下（与所选父节点同级）
+                          parentId: addNodeDialog.parentNodeId,
                         });
                         setSelectedNodeId(newNode.id);
                         setAddNodeDialog(null);

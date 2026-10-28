@@ -323,6 +323,9 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     // 的旧角色快照（根本没有新节点），选中的恒是添加前的末位节点
     const newNode = addUnifiedNode(activeSkeletonKey!, newLimbName.trim(), {
       attachment,
+      // 父级显式给：父节点无插槽时 attachment 是 fixed、推导不出父级，
+      // 不给就会挂到根下，与所选父节点无关（同上方强制选插槽的注释）
+      parentId: newLimbParentId || undefined,
       zIndex: (targetNode?.zIndex ?? 0) + 1,
     });
     setNewLimbName('');
