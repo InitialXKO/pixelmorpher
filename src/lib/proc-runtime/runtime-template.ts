@@ -1196,21 +1196,12 @@ function ensureAtlas(gl, variant, costumeName) {
 const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl2', { antialias: false });
 if (!gl) throw new Error('WebGL2 不可用');
-// 视图两量分离（2026-10-28 用户裁定：按工程画布取景、分辨率保持低清）：
-// BUF_H/bufW = 分辨率（渲染缓冲像素，低清像素风固定 180 高）；
-// VIEW_H/viewW = 取景（可见世界高度/宽度，世界单位 = 工程像素）。
-// 取景高度取包内工程画布高（fx.canvas.h，与下方 FXH 同源）；缺失、
-// 非有限数或越出 [16, 16384] 回退 512（与 convert 的画布缺省一致）。
-const BUF_H = 180;
-let bufW = 320;
-const PKG_VIEW_H = EMBEDDED.fx && EMBEDDED.fx.canvas ? Number(EMBEDDED.fx.canvas.h) : NaN;
-const VIEW_H = Number.isFinite(PKG_VIEW_H) && PKG_VIEW_H >= 16 && PKG_VIEW_H <= 16384 ? PKG_VIEW_H : 512;
-let viewW = VIEW_H * (320 / 180);
+const VIEW_H = 180;
+let lowW = 320;
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
-  bufW = Math.max(1, Math.round(BUF_H * (w / h)));
-  viewW = VIEW_H * (w / h);
-  canvas.width = bufW; canvas.height = BUF_H;
+  lowW = Math.max(1, Math.round(VIEW_H * (w / h)));
+  canvas.width = lowW; canvas.height = VIEW_H;
   canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
 }
 window.addEventListener('resize', resize); resize();
@@ -1567,7 +1558,7 @@ const bgU = { cam: gl.getUniformLocation(bgProg, 'uCam'), vh: gl.getUniformLocat
 function drawBackground(camX, camY) {
   // 背景图四边形：0.85 倍视差跟随、1.4 倍视口大小（留出视差边距）
   const cx = camX * 0.85, cy = camY * 0.85;
-  const w = viewW * 1.4, h = VIEW_H * 1.4;
+  const w = lowW * 1.4, h = VIEW_H * 1.4;
   const x0 = cx - w / 2, x1 = cx + w / 2, y0 = cy - h / 2, y1 = cy + h / 2;
   const v = new Float32Array([
     x0, y0, 0, 0, x1, y0, 1, 0, x1, y1, 1, 1,
@@ -1575,7 +1566,7 @@ function drawBackground(camX, camY) {
   ]);
   gl.useProgram(bgProg);
   gl.uniform2f(bgU.cam, camX, camY);
-  gl.uniform2f(bgU.vh, viewW / 2, VIEW_H / 2);
+  gl.uniform2f(bgU.vh, lowW / 2, VIEW_H / 2);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, bgTex); gl.uniform1i(bgU.tex, 0);
   gl.bindVertexArray(bgVAO);
   gl.bindBuffer(gl.ARRAY_BUFFER, bgBuf);
@@ -1584,7 +1575,7 @@ function drawBackground(camX, camY) {
   // 复位到场景（solid）绘制状态，调用方随后照常画 scenery
   gl.useProgram(solidProg);
   gl.uniform2f(solidU.cam, camX, camY);
-  gl.uniform2f(solidU.vh, viewW / 2, VIEW_H / 2);
+  gl.uniform2f(solidU.vh, lowW / 2, VIEW_H / 2);
   gl.bindVertexArray(solidVAO);
   gl.bindBuffer(gl.ARRAY_BUFFER, solidBuf);
 }
@@ -1661,11 +1652,11 @@ function fxCollectCanvasMods(set, frame, out) {
 }
 let postSys = null;
 function ensurePostSys() {
-  if (postSys && postSys.w === bufW && postSys.h === BUF_H) return postSys;
+  if (postSys && postSys.w === lowW && postSys.h === VIEW_H) return postSys;
   const mkRT = () => {
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, bufW, BUF_H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, lowW, VIEW_H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -1678,7 +1669,7 @@ function ensurePostSys() {
   const A = mkRT(), B = mkRT(), C = mkRT(), D = mkRT();
   const depthRb = gl.createRenderbuffer();
   gl.bindRenderbuffer(gl.RENDERBUFFER, depthRb);
-  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, bufW, BUF_H);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, lowW, VIEW_H);
   gl.bindFramebuffer(gl.FRAMEBUFFER, A.fbo);
   gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthRb);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -1764,7 +1755,7 @@ function ensurePostSys() {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  postSys = { w: bufW, h: BUF_H, A: A, B: B, C: C, D: D, prog: prog, U: U, maskTex: maskTex, vao: gl.createVertexArray() };
+  postSys = { w: lowW, h: VIEW_H, A: A, B: B, C: C, D: D, prog: prog, U: U, maskTex: maskTex, vao: gl.createVertexArray() };
   return postSys;
 }
 /** 掩码栅格化（CPU，低清）：把各部件瓦片 alpha 按位姿印到覆盖视野的
@@ -1772,11 +1763,9 @@ function ensurePostSys() {
  *  瓦片为准，笔触/粒子不进掩码）。 */
 function fxBuildMask(state, elByKey, camX, camY) {
   const sys = postSys;
-  // 掩码网格覆盖可见世界矩形（宽 viewW、高 VIEW_H，皆为取景量）；
-  // 网格分辨率固定 256 宽，mh 按取景宽高比导出（与缓冲宽高比同值）
-  const mw = 256, mh = Math.max(2, Math.round(256 * VIEW_H / viewW));
+  const mw = 256, mh = Math.max(2, Math.round(256 * VIEW_H / lowW));
   const data = new Uint8Array(mw * mh * 4);
-  const sx = mw / viewW, sy = mh / VIEW_H;
+  const sx = mw / lowW, sy = mh / VIEW_H;
   for (const [key, el] of elByKey) {
     const entry = state.map.get(key);
     if (!entry || !entry.tile || !entry.tile.data) continue;
@@ -1789,7 +1778,7 @@ function fxBuildMask(state, elByKey, camX, camY) {
         const gx = (px - tile.cx) * dsx, gy = (tile.cy - py) * dsy;
         const wx = el.pos[0] + co * gx + si * gy;
         const wy = el.pos[1] + si * gx - co * gy;
-        const mx = Math.floor((wx - (camX - viewW / 2)) * sx);
+        const mx = Math.floor((wx - (camX - lowW / 2)) * sx);
         const my = Math.floor((wy - (camY - VIEW_H / 2)) * sy);
         if (mx < 0 || my < 0 || mx >= mw || my >= mh) continue;
         data[(my * mw + mx) * 4] = 255;
@@ -1820,7 +1809,7 @@ function fxRunPostChain(rawList, state, elByKey, camX, camY) {
   gl.bindVertexArray(sys.vao);
   const pass = (dst, effect, setup, auxTex) => {
     gl.bindFramebuffer(gl.FRAMEBUFFER, dst ? dst.fbo : null);
-    gl.viewport(0, 0, bufW, BUF_H);
+    gl.viewport(0, 0, lowW, VIEW_H);
     gl.useProgram(sys.prog);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, src.tex);
@@ -1828,7 +1817,7 @@ function fxRunPostChain(rawList, state, elByKey, camX, camY) {
     gl.activeTexture(gl.TEXTURE4);
     gl.bindTexture(gl.TEXTURE_2D, auxTex || sys.C.tex);
     gl.uniform1i(sys.U.uAux, 4);
-    gl.uniform2f(sys.U.uRes, bufW, BUF_H);
+    gl.uniform2f(sys.U.uRes, lowW, VIEW_H);
     gl.uniform1i(sys.U.uEffect, effect);
     gl.uniform4f(sys.U.uP0, 0, 0, 0, 0);
     gl.uniform4f(sys.U.uP1, 0, 0, 0, 0);
@@ -2724,7 +2713,7 @@ function refreshScenePanel() {
 function screenToWorld(e) {
   const r = canvas.getBoundingClientRect();
   return [
-    camState.x + ((e.clientX - r.left) / r.width - 0.5) * viewW,
+    camState.x + ((e.clientX - r.left) / r.width - 0.5) * lowW,
     camState.y + (0.5 - (e.clientY - r.top) / r.height) * VIEW_H,
   ];
 }
@@ -2828,14 +2817,14 @@ function gifCaptureFrame(dt) {
   if (gifAcc < 1 / 30) return;
   const delay = Math.max(2, Math.round(gifAcc * 100));
   gifAcc = 0;
-  const px = new Uint8Array(bufW * BUF_H * 4);
-  gl.readPixels(0, 0, bufW, BUF_H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  const px = new Uint8Array(lowW * VIEW_H * 4);
+  gl.readPixels(0, 0, lowW, VIEW_H, gl.RGBA, gl.UNSIGNED_BYTE, px);
   const flipped = new Uint8ClampedArray(px.length);
-  const stride = bufW * 4;
-  for (let y = 0; y < BUF_H; y++) flipped.set(px.subarray((BUF_H - 1 - y) * stride, (BUF_H - y) * stride), y * stride);
-  gifSrc.width = bufW; gifSrc.height = BUF_H;
-  gifSrc.getContext('2d').putImageData(new ImageData(flipped, bufW, BUF_H), 0, 0);
-  const W = Math.min(320, bufW), H = Math.max(1, Math.round(BUF_H * W / bufW));
+  const stride = lowW * 4;
+  for (let y = 0; y < VIEW_H; y++) flipped.set(px.subarray((VIEW_H - 1 - y) * stride, (VIEW_H - y) * stride), y * stride);
+  gifSrc.width = lowW; gifSrc.height = VIEW_H;
+  gifSrc.getContext('2d').putImageData(new ImageData(flipped, lowW, VIEW_H), 0, 0);
+  const W = Math.min(320, lowW), H = Math.max(1, Math.round(VIEW_H * W / lowW));
   gifDst.width = W; gifDst.height = H;
   const cx2 = gifDst.getContext('2d');
   cx2.imageSmoothingEnabled = false;
@@ -3881,7 +3870,7 @@ function frame(now) {
     const sys = ensurePostSys();
     gl.bindFramebuffer(gl.FRAMEBUFFER, sys.A.fbo);
   }
-  gl.viewport(0, 0, bufW, BUF_H);
+  gl.viewport(0, 0, lowW, VIEW_H);
   gl.clearColor(0.070, 0.070, 0.157, 1);
   gl.clearDepth(1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -3890,7 +3879,7 @@ function frame(now) {
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   gl.useProgram(solidProg);
   gl.uniform2f(solidU.cam, camX, camY);
-  gl.uniform2f(solidU.vh, viewW / 2, VIEW_H / 2);
+  gl.uniform2f(solidU.vh, lowW / 2, VIEW_H / 2);
   gl.bindVertexArray(solidVAO);
   gl.bindBuffer(gl.ARRAY_BUFFER, solidBuf);
   if (bgTex) drawBackground(camX, camY);
@@ -3906,8 +3895,8 @@ function frame(now) {
   gl.depthFunc(gl.LESS);
   gl.useProgram(partProg);
   gl.uniform2f(partU.cam, camX, camY);
-  gl.uniform2f(partU.vh, viewW / 2, VIEW_H / 2);
-  gl.uniform2f(partU.res, bufW, BUF_H);
+  gl.uniform2f(partU.vh, lowW / 2, VIEW_H / 2);
+  gl.uniform2f(partU.res, lowW, VIEW_H);
   gl.uniform1f(partU.time, elapsed);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, state.tex); gl.uniform1i(partU.atlas, 0);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, palTex); gl.uniform1i(partU.pal, 1);
@@ -3926,7 +3915,7 @@ function frame(now) {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(solidProg);
     gl.uniform2f(solidU.cam, camX, camY);
-    gl.uniform2f(solidU.vh, viewW / 2, VIEW_H / 2);
+    gl.uniform2f(solidU.vh, lowW / 2, VIEW_H / 2);
     gl.bindVertexArray(solidVAO);
     gl.bindBuffer(gl.ARRAY_BUFFER, solidBuf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(frontVerts), gl.DYNAMIC_DRAW);
