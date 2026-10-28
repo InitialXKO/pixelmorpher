@@ -2,20 +2,18 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Plus,
-  ArrowRight,
   Users,
-  CheckCircle2,
-  Box,
-  Dog,
-  FileUp,
-  PenLine,
   PencilRuler,
+  Bone,
+  Shirt,
+  Clapperboard,
+  Drama,
+  Workflow,
+  ListTree,
+  MonitorPlay,
 } from 'lucide-react';
-import PuppetCreationWizard from './PuppetCreationWizard';
-import SpineImportDialog from './SpineImportDialog';
-import StrokeBuildWizard from './puppet/StrokeBuildWizard';
 import SketchPoseDialog from './puppet/SketchPoseDialog';
+import SidePanelTabs from './shared/SidePanelTabs';
 import { Button } from '@/components/ui/button';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { useProjectStore, useEditorStore } from '@/lib/store';
@@ -47,10 +45,9 @@ export default function PuppetPanel() {
   // ---- dress 阶段本地状态 ----
   const [selectedCostumeId, setSelectedCostumeId] = useState<string | null>(null);
 
-  const [wizardOpen, setWizardOpen] = useState(false);
-  const [spineImportOpen, setSpineImportOpen] = useState(false);
-  const [strokeWizardOpen, setStrokeWizardOpen] = useState(false);
   const [sketchPoseOpen, setSketchPoseOpen] = useState(false);
+  // 右栏页签（本面板内部状态即可：无外部组件需要切换右栏页签）
+  const [rightTab, setRightTab] = useState('rig');
 
   const selectedCharacter = activePuppetSkeletonId
     ? (unifiedCharacters[activePuppetSkeletonId] ?? null)
@@ -123,24 +120,8 @@ export default function PuppetPanel() {
           <span className="text-[10px] font-semibold text-cyan-300 uppercase tracking-wider flex-1">
             木偶工作流
           </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-cyan-400 hover:text-cyan-300"
-            onClick={() => setWizardOpen(true)}
-            title="创建木偶角色"
-          >
-            <Plus className="size-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-cyan-400 hover:text-cyan-300"
-            onClick={() => setStrokeWizardOpen(true)}
-            title="画火柴人建角"
-          >
-            <PenLine className="size-3.5" />
-          </Button>
+          {/* 新建角色入口已收拢到顶部工具栏「＋ 新建角色」统一菜单，
+              此处只留草图捕姿（给已有角色摆姿势、不是新建） */}
           <Button
             variant="ghost"
             size="icon"
@@ -150,35 +131,10 @@ export default function PuppetPanel() {
           >
             <PencilRuler className="size-3.5" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-purple-400 hover:text-purple-300"
-            onClick={() => setSpineImportOpen(true)}
-            title="导入 Spine 项目"
-          >
-            <FileUp className="size-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-amber-400 hover:text-amber-300"
-            onClick={() => {
-              const store = useProjectStore.getState();
-              const count = Object.keys(store.unifiedCharacters ?? {}).length;
-              store.addUnifiedCharacter(`道具${count + 1}`);
-            }}
-            title="新建道具（单节点木偶，用于背景/道具/UI 动画）"
-          >
-            <Box className="size-3.5" />
-          </Button>
         </div>
 
       </div>
 
-      <PuppetCreationWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
-      <SpineImportDialog open={spineImportOpen} onClose={() => setSpineImportOpen(false)} />
-      <StrokeBuildWizard open={strokeWizardOpen} onClose={() => setStrokeWizardOpen(false)} />
       <SketchPoseDialog open={sketchPoseOpen} onClose={() => setSketchPoseOpen(false)} />
 
       {/* Empty state when nothing exists yet */}
@@ -189,128 +145,116 @@ export default function PuppetPanel() {
             <div>
               <p className="text-[11px] text-gray-400 mb-1">开始创建木偶角色</p>
               <p className="text-[9px] text-gray-600 leading-relaxed">
-                点击右上角 + 创建新角色，或使用创建向导
+                点顶部工具栏的「＋ 新建角色」，可选创建向导、参考图装配、
+                火柴人建角、3D 烘焙、Spine 导入或示例角色
               </p>
-            </div>
-            <div className="flex gap-2 justify-center">
-              <Button
-                size="sm"
-                className="text-[10px] bg-cyan-600 hover:bg-cyan-500"
-                onClick={() => setWizardOpen(true)}
-              >
-                <Plus className="size-3 mr-1" /> 创建角色
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-[10px] border-[#2a2a4a] text-gray-300"
-                onClick={() => {
-                  import('@/lib/blueprint/examples/quadruped-run').then((m) => {
-                    const sessionStore = usePuppetSessionStore.getState();
-                    const id = m.createPuppyRunExampleCharacter(useProjectStore, sessionStore);
-                    if (!id) {
-                      alert('小狗创建失败，请看控制台');
-                    }
-                  });
-                }}
-              >
-                <Dog className="size-3 mr-1" /> 小狗奔跑示例
-              </Button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Phase content - 三段合一，不再按 phase 切换 */}
-      {(hasSkeletons) && (
-        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-          <div className="p-2 space-y-2">
-            {/* ============ 搭建 RIG ============ */}
-            {hasSkeletons && (
-              <details open className="bg-white/[0.02] border border-white/10 rounded">
-                <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
-                  🦴 搭建骨架
-                </summary>
-                <div className="p-2 pt-0">
-                  <RigPanel
-                    unifiedCharacters={unifiedCharacters}
-                    selectedNodeId={selectedNodeId}
-                    selectedNode={selectedNode}
-                    handleSelectNodeWithSync={handleSelectNodeWithSync}
-                    
-                  />
-                </div>
-              </details>
-            )}
-
-            {/* ============ 换装 DRESS ============ */}
-            <details open className="bg-white/[0.02] border border-white/10 rounded">
-              <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
-                👗 换装
-              </summary>
-              <div className="p-2 pt-0">
-                <DressPanel
-                  unifiedCharacters={unifiedCharacters}
-                  sprites={Object.values(sprites)}
-                  selectedCostumeId={selectedCostumeId}
-                  setSelectedCostumeId={setSelectedCostumeId}
-                  selectedNodeId={selectedNodeId}
-                  handleSelectNodeWithSync={handleSelectNodeWithSync}
-                  hideNodeList={true}
-                />
-              </div>
-            </details>
-
-            {/* ============ 操控 PERFORM ============ */}
-            <details open className="bg-white/[0.02] border border-white/10 rounded">
-              <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
-                🎬 操控动画
-              </summary>
-              <div className="p-2 pt-0">
-                <PerformPanel hideNodeList={true} />
-              </div>
-            </details>
-
-            {/* ============ 程序化行为 PROC ============ */}
-            <details className="bg-white/[0.02] border border-white/10 rounded">
-              <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
-                🎭 程序化行为
-              </summary>
-              <div className="p-2 pt-0">
-                <BehaviorPanel unifiedCharacters={unifiedCharacters} />
-              </div>
-            </details>
-
-            {/* ============ 状态机编排 STATE MACHINE ============ */}
-            <details className="bg-white/[0.02] border border-white/10 rounded">
-              <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
-                🧠 状态机编排
-              </summary>
-              <div className="p-2 pt-0">
-                <StateMachinePanel unifiedCharacters={unifiedCharacters} />
-              </div>
-            </details>
-
-            {/* ============ 行为树 BEHAVIOR TREE ============ */}
-            <details className="bg-white/[0.02] border border-white/10 rounded">
-              <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
-                🌳 行为树
-              </summary>
-              <div className="p-2 pt-0">
-                <BehaviorTreePanel unifiedCharacters={unifiedCharacters} />
-              </div>
-            </details>
-
-            {/* ============ 程序化预览 PREVIEW ============ */}
-            <details className="bg-white/[0.02] border border-white/10 rounded">
-              <summary className="px-2 py-1.5 text-[11px] font-medium text-gray-300 cursor-pointer select-none">
-                🕹 程序化预览
-              </summary>
-              <div className="p-2 pt-0">
-                <ProcPreview unifiedCharacters={unifiedCharacters} />
-              </div>
-            </details>
-          </div>
+      {/* 侧面页签切换：七段各占一页签、独占整高（取代原来同列
+          折叠段堆叠滚动——段再多也只滚激活段自己） */}
+      {hasSkeletons && (
+        <div className="flex-1 min-h-0">
+          <SidePanelTabs
+            side="right"
+            ariaLabel="右栏面板"
+            activeId={rightTab}
+            onChange={setRightTab}
+            tabs={[
+              {
+                id: 'rig',
+                label: '骨架',
+                icon: <Bone className="size-4" />,
+                scrollMode: 'scroll',
+                content: (
+                  <div className="p-2">
+                    <RigPanel
+                      unifiedCharacters={unifiedCharacters}
+                      selectedNodeId={selectedNodeId}
+                      selectedNode={selectedNode}
+                      handleSelectNodeWithSync={handleSelectNodeWithSync}
+                    />
+                  </div>
+                ),
+              },
+              {
+                id: 'dress',
+                label: '换装',
+                icon: <Shirt className="size-4" />,
+                scrollMode: 'scroll',
+                content: (
+                  <div className="p-2">
+                    <DressPanel
+                      unifiedCharacters={unifiedCharacters}
+                      sprites={Object.values(sprites)}
+                      selectedCostumeId={selectedCostumeId}
+                      setSelectedCostumeId={setSelectedCostumeId}
+                      selectedNodeId={selectedNodeId}
+                      handleSelectNodeWithSync={handleSelectNodeWithSync}
+                      hideNodeList={true}
+                    />
+                  </div>
+                ),
+              },
+              {
+                id: 'perform',
+                label: '操控',
+                icon: <Clapperboard className="size-4" />,
+                scrollMode: 'scroll',
+                content: (
+                  <div className="p-2">
+                    <PerformPanel hideNodeList={true} />
+                  </div>
+                ),
+              },
+              {
+                id: 'behavior',
+                label: '行为',
+                icon: <Drama className="size-4" />,
+                scrollMode: 'scroll',
+                content: (
+                  <div className="p-2">
+                    <BehaviorPanel unifiedCharacters={unifiedCharacters} />
+                  </div>
+                ),
+              },
+              {
+                id: 'statemachine',
+                label: '状态机',
+                icon: <Workflow className="size-4" />,
+                scrollMode: 'scroll',
+                content: (
+                  <div className="p-2">
+                    <StateMachinePanel unifiedCharacters={unifiedCharacters} />
+                  </div>
+                ),
+              },
+              {
+                id: 'behaviortree',
+                label: '行为树',
+                icon: <ListTree className="size-4" />,
+                scrollMode: 'scroll',
+                content: (
+                  <div className="p-2">
+                    <BehaviorTreePanel unifiedCharacters={unifiedCharacters} />
+                  </div>
+                ),
+              },
+              {
+                id: 'preview',
+                label: '预览',
+                icon: <MonitorPlay className="size-4" />,
+                scrollMode: 'scroll',
+                content: (
+                  <div className="p-2">
+                    <ProcPreview unifiedCharacters={unifiedCharacters} />
+                  </div>
+                ),
+              },
+            ]}
+          />
         </div>
       )}
     </div>

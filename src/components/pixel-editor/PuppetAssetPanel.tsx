@@ -33,15 +33,15 @@ import { SocketEditor, type SocketInfo } from './SocketEditor';
 import SpriteThumb from './SpriteThumb';
 import { filterSpritesByQuery } from '@/lib/sprite-thumb';
 import { groupSpritesByFolder, directionFolder, DIRECTION_FOLDER_NAMES, NO_FOLDER_LABEL } from '@/lib/sprite-folder';
-import ThreeBakeDialog from './puppet/ThreeBakeDialog';
-import { Box } from 'lucide-react';
+
+
 import { pxToSub, subToPx, type Socket } from '@/lib/unified-types';
 import type {
   PuppetDirection,
 } from '@/lib/types';
 import type { Character, Node, Sprite } from '@/lib/unified-types';
 import ResizePreviewDialog from './ResizePreviewDialog';
-import PuppetCreationWizard from './PuppetCreationWizard';
+
 import RefAssemblyWizard from './puppet/RefAssemblyWizard';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Button } from '@/components/ui/button';
@@ -291,8 +291,7 @@ export default function PuppetAssetPanel() {
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const setActivePuppetSkeletonId = useEditorStore((s) => s.setActivePuppetSkeletonId);
 
-  const [wizardOpen, setWizardOpen] = useState(false);
-  const [threeBakeOpen, setThreeBakeOpen] = useState(false);
+  // （创建向导 / 3D 烘焙的开关状态已随统一入口迁往工具栏 NewCharacterMenu）
   const [spriteQuery, setSpriteQuery] = useState('');
   // 新建空白精灵（从零绘制的入口；此前只有死面板 AssetLibraryPanel 里有，已退役）
   const [newSpriteOpen, setNewSpriteOpen] = useState(false);
@@ -512,42 +511,14 @@ export default function PuppetAssetPanel() {
 
   return (
     <div className="flex flex-col h-full bg-[#0d0d1a]">
-      {/* Header */}
+      {/* Header（新建角色入口已收拢到工具栏「＋ 新建角色」统一菜单，
+          此处不再放新建按钮） */}
       <div className="flex items-center gap-1.5 px-2 py-2 border-b border-[#1e1e3a]">
         <Users className="size-3.5 text-cyan-400" />
         <span className="text-[10px] font-semibold text-cyan-300 uppercase tracking-wider flex-1">
           木偶资产
         </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-5 text-cyan-400 hover:text-cyan-300"
-          onClick={() => setWizardOpen(true)}
-          title="创建木偶角色"
-        >
-          <Plus className="size-3" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-5 text-amber-400 hover:text-amber-300"
-          onClick={() => setRefWizardOpen(true)}
-          title="从参考图装配"
-        >
-          <Image className="size-3" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-5 text-purple-400 hover:text-purple-300"
-          onClick={() => setThreeBakeOpen(true)}
-          title="3D 烘焙导入（GLB → 2D 木偶）"
-        >
-          <Box className="size-3" />
-        </Button>
       </div>
-
-      <ThreeBakeDialog open={threeBakeOpen} onClose={() => setThreeBakeOpen(false)} />
 
       {/* 新建空白精灵：建完直接进像素编辑从零画 */}
       <Dialog open={newSpriteOpen} onOpenChange={setNewSpriteOpen}>
@@ -602,7 +573,6 @@ export default function PuppetAssetPanel() {
         </DialogContent>
       </Dialog>
 
-      <PuppetCreationWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
       {refWizardOpen ? (
         <div className="flex-1 min-h-0">
           <RefAssemblyWizard
@@ -644,13 +614,9 @@ export default function PuppetAssetPanel() {
                   <div className="text-center py-4 px-2">
                     <Users className="size-5 text-gray-700 mx-auto mb-1" />
                     <p className="text-[9px] text-gray-600 mb-2">尚无木偶角色</p>
-                    <Button
-                      size="sm"
-                      className="text-[9px] h-6 bg-cyan-600 hover:bg-cyan-500"
-                      onClick={() => setWizardOpen(true)}
-                    >
-                      <Plus className="size-2.5 mr-0.5" /> 创建角色
-                    </Button>
+                    <p className="text-[9px] text-gray-600 leading-relaxed">
+                      点顶部工具栏的「＋ 新建角色」创建
+                    </p>
                   </div>
                 ) : (
                   Object.entries(unifiedCharacters).map(([skeletonKey, char]) => {

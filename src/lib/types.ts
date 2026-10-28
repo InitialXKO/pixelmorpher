@@ -1787,6 +1787,9 @@ export interface EditorState {
   chromaKeyColor: { r: number; g: number; b: number } | null;
   // ---- 参考图装配向导 ----
   refWizardOpen: boolean;
+  // ---- 左栏页签（侧面页签切换：记住激活页签；统一新建入口触发
+  // 参考图装配时切到 assets 以露出其整版宿主） ----
+  leftPanelTab: 'assets' | 'clips' | 'strokes';
 }
 
 // ---- SAM / Smart Selection ----

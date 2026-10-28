@@ -32,7 +32,7 @@ import IKBakeButton from './IKBakeButton';
 import ChainBakePanel from './ChainBakePanel';
 import IKChainEditor from './IKChainEditor';
 import ClampAnchorPanel from './ClampAnchorPanel';
-import ThreeBakeDialog from './ThreeBakeDialog';
+
 
 interface RigPanelProps {
   unifiedCharacters: Record<string, Character>;
@@ -121,7 +121,7 @@ export default function RigPanel({
   const selectedSkeletonId = activePuppetSkeletonId;
   const selectedCharacter = selectedSkeletonId ? (unifiedCharacters[selectedSkeletonId] ?? null) : null;
 
-  const [threeBakeOpen, setThreeBakeOpen] = useState(false);
+
 
   // ---- Handlers ----
   // (增删节点已移到左侧面板树，此处只保留细节编辑)
@@ -200,19 +200,7 @@ export default function RigPanel({
   return (
     <div className="space-y-3">
       {/* 骨骼：用左侧选中的，不再重复选择 */}
-
-      {/* 3D 烘焙 MVP 测试入口 */}
-      <div className="flex items-center gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="flex-1 text-[10px] h-6 border-purple-600/50 text-purple-400 hover:bg-purple-500/10"
-          onClick={() => setThreeBakeOpen(true)}
-        >
-          <Bone className="size-3 mr-1" /> 3D 烘焙测试 (MVP)
-        </Button>
-      </div>
-      <ThreeBakeDialog open={threeBakeOpen} onClose={() => setThreeBakeOpen(false)} />
+      {/* 3D 烘焙入口已收拢到工具栏「＋ 新建角色」统一菜单，此处不再另设 */}
 
       {/* Canvas interaction: Switch to puppet tool */}
       {selectedSkeletonId && (

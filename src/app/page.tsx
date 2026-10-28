@@ -30,9 +30,9 @@ import {
   clearAutosaveInOPFS,
   migrateLegacyAutosave,
 } from '@/lib/autosave-opfs';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
-import { Settings, Route, Activity, Terminal, Puzzle, Layers, Pencil, ChevronDown, ChevronUp, Grid3x3, Eye, Paintbrush, Globe, Film, Shirt, Zap } from 'lucide-react';
+import SidePanelTabs from '@/components/pixel-editor/shared/SidePanelTabs';
+import { Pencil, ChevronDown, ChevronUp, Film, Users, PenLine } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -45,7 +45,7 @@ import {
 
 export default function Home() {
   const { sprites, animationClips, activeAnimationClipId, setActiveAnimationClip } = useProjectStore();
-  const { selectPart, editMode, exitSpriteEditMode, spriteEditSpriteId } = useEditorStore();
+  const { selectPart, editMode, exitSpriteEditMode, spriteEditSpriteId, leftPanelTab, setLeftPanelTab } = useEditorStore();
   const isMasking = editMode === 'mask';
   // 遮罩中：锁定不相干操作
   const isLocked = isMasking;
@@ -352,98 +352,6 @@ export default function Home() {
     // After all parts, keyframes, and modifiers are created at the Project level,
   }, [Object.keys(sprites).length]);
 
-  // ---- Right panel content based on workspace mode ----
-  const renderRightPanel = () => {
-    // Puppet 是唯一工作流：单 focused 面板（rig → dress → perform）
-    return <PuppetPanel />;
-    return (
-      <Tabs defaultValue={currentLayout.rightPanelDefaultTab} className="flex flex-col h-full">
-        <TabsList className="w-full justify-start rounded-none border-b border-zinc-800 bg-zinc-950 h-auto min-h-8 px-0.5 py-0.5 flex-wrap">
-          <TabsTrigger
-            value="canvas"
-            className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-          >
-            <Layers className="size-3 mr-0.5" />
-            画布效果
-          </TabsTrigger>
-          <TabsTrigger
-            value="trajectory"
-            className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-          >
-            <Route className="size-3 mr-0.5" />
-            轨迹
-          </TabsTrigger>
-          <TabsTrigger
-            value="procedural"
-            className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-          >
-            <Activity className="size-3 mr-0.5" />
-            程序化
-          </TabsTrigger>
-          <TabsTrigger
-            value="script"
-            className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-          >
-            <Terminal className="size-3 mr-0.5" />
-            脚本
-          </TabsTrigger>
-          <TabsTrigger
-            value="plugins"
-            className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-          >
-            <Puzzle className="size-3 mr-0.5" />
-            插件
-          </TabsTrigger>
-          <TabsTrigger
-            value="global"
-            className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-          >
-            <Globe className="size-3 mr-0.5" />
-            全局
-          </TabsTrigger>
-          <TabsTrigger
-            value="puppet"
-            className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-          >
-            <Shirt className="size-3 mr-0.5" />
-            木偶
-          </TabsTrigger>
-          <TabsTrigger
-            value="dcc"
-            className="text-[10px] data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500 px-1.5 py-1 h-6"
-          >
-            <Zap className="size-3 mr-0.5" />
-            DCC管线
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent value="canvas" className="flex-1 min-h-0 m-0">
-          <CanvasModifierPanel />
-        </TabsContent>
-        <TabsContent value="trajectory" className="flex-1 min-h-0 m-0">
-          <TrajectoryPanel />
-        </TabsContent>
-        <TabsContent value="procedural" className="flex-1 min-h-0 m-0">
-          <ProceduralPanel />
-        </TabsContent>
-        <TabsContent value="script" className="flex-1 min-h-0 m-0">
-          <ScriptPanel />
-        </TabsContent>
-        <TabsContent value="plugins" className="flex-1 min-h-0 m-0">
-          <PluginPanel />
-        </TabsContent>
-        <TabsContent value="global" className="flex-1 min-h-0 m-0">
-          <GlobalModifierPanel />
-        </TabsContent>
-        <TabsContent value="puppet" className="flex-1 min-h-0 m-0">
-          <PuppetPanel />
-        </TabsContent>
-        <TabsContent value="dcc" className="flex-1 min-h-0 m-0">
-          <DccPipelinePanel />
-        </TabsContent>
-      </Tabs>
-    );
-  };
-
   return (
     <TooltipProvider delayDuration={300}>
       <div className="flex flex-col h-screen w-screen bg-[#0a0a16] text-gray-200 overflow-hidden">
@@ -472,21 +380,36 @@ export default function Home() {
                 className="transition-all duration-300"
               >
                 <div className={isLocked ? 'pointer-events-none opacity-40 h-full' : 'h-full'}>
-                  <div className="flex flex-col h-full">
-                    {/* 三块面板各自的根都是 h-full：必须按份分高 + min-h-0
-                        收口，否则第一块按内容撑满整列、下面两块被挤出
-                        屏幕且整列无滚动、够不着（用户实测片段/笔触面板
-                        消失）。各面板内部列表自带滚动，分到多高滚多高 */}
-                    <div className="flex-[2] min-h-0">
-                      <PuppetAssetPanel />
-                    </div>
-                    <div className="border-t border-zinc-800/50 flex-[1.5] min-h-0">
-                      <AnimationClipPanel />
-                    </div>
-                    <div className="border-t border-zinc-800/50 flex-1 min-h-0">
-                      <StrokePanel />
-                    </div>
-                  </div>
+                  {/* 侧面页签切换：一栏一次只显示一块、独占整高（取代
+                      原来的自上而下堆叠 + 分高——堆叠必然溢出，分高
+                      只是把每块压小）。各面板自带 h-full 根与内部
+                      滚动，整高下滚自己内部 */}
+                  <SidePanelTabs
+                    side="left"
+                    ariaLabel="左栏面板"
+                    activeId={leftPanelTab}
+                    onChange={setLeftPanelTab}
+                    tabs={[
+                      {
+                        id: 'assets',
+                        label: '资产',
+                        icon: <Users className="size-4" />,
+                        content: <PuppetAssetPanel />,
+                      },
+                      {
+                        id: 'clips',
+                        label: '片段',
+                        icon: <Film className="size-4" />,
+                        content: <AnimationClipPanel />,
+                      },
+                      {
+                        id: 'strokes',
+                        label: '笔触',
+                        icon: <PenLine className="size-4" />,
+                        content: <StrokePanel />,
+                      },
+                    ]}
+                  />
                 </div>
               </ResizablePanel>
               <ResizableHandle className="bg-zinc-800/80 hover:bg-purple-600/30 transition-colors w-px" />
@@ -618,7 +541,7 @@ export default function Home() {
                 className="border-l border-zinc-800 transition-all duration-300"
               >
                 <div className={isLocked ? 'pointer-events-none opacity-40 h-full' : 'h-full'}>
-                  {renderRightPanel()}
+                  <PuppetPanel />
                 </div>
               </ResizablePanel>
             </>
