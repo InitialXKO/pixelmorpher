@@ -2153,11 +2153,16 @@ function buildFallback() {
       });
       cur = kids[0]; keys.push(cur);
     }
-    let len = tipExtent(PART_BY_KEY.get(keys[keys.length - 1]));
-    for (let i = 0; i + 1 < keys.length; i++) len += Math.hypot(restJ.get(keys[i + 1])[0] - restJ.get(keys[i])[0], restJ.get(keys[i + 1])[1] - restJ.get(keys[i])[1]);
+    let segLen = 0;
+    for (let i = 0; i + 1 < keys.length; i++) segLen += Math.hypot(restJ.get(keys[i + 1])[0] - restJ.get(keys[i])[0], restJ.get(keys[i + 1])[1] - restJ.get(keys[i])[1]);
+    const len = segLen + tipExtent(PART_BY_KEY.get(keys[keys.length - 1]));
     if (len < 8 || len > 500) continue;
-    // 腿应朝下挂：根关节不得明显高于父关节（运行时 y 向上）
-    if (par && restJ.has(par) && restJ.get(k)[1] > restJ.get(par)[1] + 6) continue;
+    // 腿链须朝下长：链尖关节明显低于链根（运行时 y 向上，根−尖为
+    // 正；单节链 segLen=0 恒过）。锚在链自身几何、不用父关节高
+    // 低——父部件的静止关节位是其自身插头位（如骨盆部件 pivot
+    // 在骨盆图中间一带），不是髋关节窝，腿根略高于它属正常骨
+    // 骼，拿它当基准会把同挂骨盆的正经双腿双双误杀。
+    if (restJ.get(k)[1] - restJ.get(keys[keys.length - 1])[1] < 0.25 * segLen) continue;
     allChains.push({ keys, len, phase: 0 });
   }
   // 配相位：全部腿链同属一步态组——配对不要求同父（真实人形
