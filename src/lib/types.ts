@@ -1121,6 +1121,8 @@ export interface Project {
   timeUnitsVersion?: number;
   /** 图案↔蓝图统一迁移标记（1 = 图案实例已镜像进节点蓝图） */
   patternBlueprintVersion?: number;
+  /** 刀光↔蓝图统一迁移标记（1 = 表演刀光规格已镜像进表演图） */
+  slashBlueprintVersion?: number;
   totalFrames: number; // Default total frames for new clips
   currentFrame: number;
   backgroundColor: string;

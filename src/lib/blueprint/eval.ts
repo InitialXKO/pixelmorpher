@@ -114,6 +114,10 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // 计划/进包经 pattern-sync 从图提取实例后走图案引擎；注册空求值
   // 器让拓扑求值把它当普通节点（接线源照常求值）
   dynamic_pattern: () => ({}),
+  // 刀光（刀光↔蓝图统一）：规格化身节点，本身不产出值——渲染/进包
+  // 经 slash-sync 从表演图提取规格后走刀光生成器；注册空求值器让
+  // 拓扑求值把它当普通节点（接线源照常求值）
+  slash_fan: () => ({}),
   // timeGate: 时间范围门控
   // start/end: 生效帧范围（-1 表示无限制）
   // fadeIn/fadeOut: 淡入淡出帧数（smoothstep）
@@ -2400,6 +2404,7 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   // 源
   time: '时间',
   dynamic_pattern: '动态图案',
+  slash_fan: '刀光',
   timeGate: '时间门',
   const: '常量',
   var: '变量',

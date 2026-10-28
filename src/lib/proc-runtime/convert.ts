@@ -21,6 +21,7 @@ import { resolvePieceSprite } from '../sprite-resolve';
 import { computeStackOps, rasterizeStackOpsData, STACK_VIEW_ELEVATION_DEG, type StackDrawOp } from '../stack-render';
 import { packMaskBits, unpackMaskBits } from '../sprite-marks';
 import { collectDesiredPatterns, effectivePatternGraph, extractPatternInstances } from '../blueprint/pattern-sync';
+import { resolvePerfSlash, graphWithoutSlashNodes } from '../blueprint/slash-sync';
 import { rgbaToHexOrNull } from '../engine/utils';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
@@ -1228,7 +1229,12 @@ export function convertCharacterToRuntimePackage(
       const slot = toSlot(nodeId);
       if (!slot) { warnings.push(`表演「${perf.name}」：掩码节点 ${character.nodes[nodeId]?.name ?? nodeId} 不存在`); continue; }
       mask.push(slot);
-      const graph = perf.graphs[nodeId];
+      const rawGraph = perf.graphs[nodeId];
+      // 刀光节点不是姿态内容（已由下方 resolvePerfSlash 从图单独
+      // 提取）：翻译前摘除，免得采样路把它当不支持节点点名；摘空
+      // 视同无姿态图、走既有口径
+      const cleanedGraph = rawGraph ? graphWithoutSlashNodes(rawGraph) : undefined;
+      const graph = cleanedGraph && cleanedGraph.nodes.length > 0 ? cleanedGraph : undefined;
       if (!graph) { warnings.push(`表演「${perf.name}」：节点 ${character.nodes[nodeId]?.name ?? nodeId} 在掩码内但没有表演图`); continue; }
       const res = translatePerformanceGraph(graph, slot, perf.duration, `g${gi++}_`);
       graphNodes.push(...res.nodes);
@@ -1248,7 +1254,9 @@ export function convertCharacterToRuntimePackage(
       mode: perf.mode,
       mask,
       afterimage: afterSlot ? { part: afterSlot, count: 3, interval: 0.035 } : undefined,
-      slash: slashForPkg(perf.slashEffect, `表演「${perf.name}」`),
+      // 刀光↔蓝图统一：只从表演图解析（slash_fan 节点，静态 params
+      // 固化；未落盘同步的数据由 slash-sync 读侧镜像兜底）
+      slash: slashForPkg(resolvePerfSlash(perf), `表演「${perf.name}」`),
       graph: { context: 'performance', nodes: graphNodes },
     });
   }

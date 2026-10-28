@@ -1139,7 +1139,9 @@ export interface ProcPerformance {
   graphs: Record<string, BlueprintGraph>;
   /** 残影部件（nodeId，可选）：表演期间该部件发历史残影（实例流效果） */
   afterimageNodeId?: string;
-  /** 刀光（可选）：椭圆扇形状衰减特效，表演开始时定格锚点位姿播放 */
+  /** 刀光（可选）：椭圆扇形状衰减特效，表演开始时定格锚点位姿播放。
+   *  本字段是面板编辑模型；渲染/进包以表演图里的 slash_fan 节点为
+   *  准（slash-sync 手术式同步，读侧未同步时以本字段镜像兜底） */
   slashEffect?: import('./slash-fan').SlashFanSpec;
   enabled: boolean;
 }
