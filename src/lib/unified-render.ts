@@ -1629,7 +1629,7 @@ function generateDiscInstructions(
 /** 肢体类别（衣物色区用）：沿父链上溯节点名，先命中者胜（近者优先） */
 const MQ_ARM_KEYS = ['arm', 'shoulder', 'wrist', 'hand', '袖', '臂', '肩', '腕', '手'];
 const MQ_LEG_KEYS = ['leg', 'thigh', 'hip', 'shin', 'calf', 'ankle', 'foot', '腿', '髋', '踝', '脚'];
-function mannequinLimbKind(character: Character, node: Node): 'arm' | 'leg' | null {
+export function mannequinLimbKind(character: Character, node: Node): 'arm' | 'leg' | null {
   let cur: Node | undefined = node;
   while (cur) {
     const name = cur.name.toLowerCase();

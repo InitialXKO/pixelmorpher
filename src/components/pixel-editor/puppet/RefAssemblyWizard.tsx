@@ -10,7 +10,7 @@ import type { PixelGrid } from '@/lib/types';
 import { initSAM, isSAMReady, setSAMImage } from '@/lib/sam';
 import { inpaintPixels } from '@/lib/inpainting';
 import type { DirectionIndex, NodeTransform, NodeTracks, Sprite } from '@/lib/unified-types';
-import { collectSubtreeIds, deleteNodeSubtree } from '@/lib/node-actions';
+import { collectSubtreeIds, deleteNodeSubtree, ensureChildAttachment } from '@/lib/node-actions';
 import PivotEditor from './PivotEditor';
 
 // ============================================================
@@ -314,11 +314,14 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const handleAddLimb = () => {
     if (!activeSkeleton || !newLimbName.trim()) return;
     // 父节点有插槽时必须选插槽：不选则 attachment 落成 fixed、节点挂到根下，
-    // 与用户选的父节点毫无关系（addUnifiedNode 按 attachment 推导父级写全挂接）
+    // 与用户选的父节点毫无关系（addUnifiedNode 按 attachment 推导父级写全挂接）。
+    // 父节点无插槽时走 ensureChildAttachment 自动新建插槽，不再退成同位 fixed。
     if (parentNodeForSocket && parentNodeForSocket.sockets.length > 0 && !newLimbSocketId) return;
     const attachment = newLimbSocketId
       ? { type: 'socket' as const, parentSocketId: newLimbSocketId, plug: { x: newLimbPlugX, y: newLimbPlugY } }
-      : { type: 'fixed' as const, fixedOffset: { x: 0, y: 0 }, inheritRotation: true };
+      : parentNodeForSocket
+        ? ensureChildAttachment(activeSkeletonKey!, parentNodeForSocket, newLimbName.trim())
+        : { type: 'fixed' as const, fixedOffset: { x: 0, y: 0 }, inheritRotation: true };
     // addUnifiedNode 返回新节点，直接选中——旧实现 setTimeout 后读渲染闭包里
     // 的旧角色快照（根本没有新节点），选中的恒是添加前的末位节点
     const newNode = addUnifiedNode(activeSkeletonKey!, newLimbName.trim(), {

@@ -28,7 +28,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
-import { collectSubtreeIds, deleteNodeSubtree, addSocketToNode } from '@/lib/node-actions';
+import { collectSubtreeIds, deleteNodeSubtree, addSocketToNode, ensureChildAttachment } from '@/lib/node-actions';
 import { SocketEditor, type SocketInfo } from './SocketEditor';
 import SpriteThumb from './SpriteThumb';
 import { filterSpritesByQuery } from '@/lib/sprite-thumb';
@@ -980,7 +980,7 @@ export default function PuppetAssetPanel() {
                         <option key={s.id} value={s.id}>{s.name || s.id.slice(0, 8)}</option>
                       ))}
                       {(parentNode?.sockets ?? []).length === 0 && (
-                        <option value="">（无插槽，将创建为根节点）</option>
+                        <option value="">（无插槽，将自动新建插槽）</option>
                       )}
                     </select>
                   </div>
@@ -995,10 +995,14 @@ export default function PuppetAssetPanel() {
                       className="px-3 h-7 text-[11px] bg-cyan-600 hover:bg-cyan-500 text-white rounded"
                       onClick={() => {
                         const nodeName = `节点_${nodes.length + 1}`;
-                        // New model: plug → attachment
+                        // New model: plug → attachment。未选插槽（父节点
+                        // 无插槽）时自动在父节点上新建一个，不再退成同位
+                        // fixed（子节点贴在父关节上、段长为零）
                         const attachment = addNodeDialog.socketId
                           ? { type: 'socket' as const, parentSocketId: addNodeDialog.socketId, plug: { x: 0, y: 0 } }
-                          : { type: 'fixed' as const, fixedOffset: { x: 0, y: 0 }, inheritRotation: true };
+                          : parentNode
+                            ? ensureChildAttachment(activePuppetSkeletonId!, parentNode, nodeName)
+                            : { type: 'fixed' as const, fixedOffset: { x: 0, y: 0 }, inheritRotation: true };
                         const newNode = addUnifiedNode(activePuppetSkeletonId!, nodeName, {
                           zIndex: 0,
                           attachment,
