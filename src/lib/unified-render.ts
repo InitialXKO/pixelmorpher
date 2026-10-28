@@ -31,7 +31,7 @@ import {
 } from './unified-types';
 import { solveIK2Bone3D, solveIK3Bone3D, solveIK3BoneWithTip3D, solveIKFabrik3D } from './blueprint/ik';
 import { DEFAULT_FACE_FEATURES, faceFeaturePoints, faceHalfWidths } from './face-features';
-import { slashFrameCanvas } from './slash-fan';
+import { slashFrameCanvas, slashFrameLayout } from './slash-fan';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
 import { releaseCanvas } from './engine/canvas-pool';
 import { sampleJointDiscColor, getPlugJointWidth } from './engine/render-helpers/puppet-joint-color';
@@ -3406,16 +3406,19 @@ export function executeRenderPlan(
     }
   }
 
-  // 刀光最后绘制（盖在角色之上）：帧图以对位点 (cx, cy) 钉在定格
-  // 位姿处、按定格角度旋转（镜像帧已预翻，与精灵同口径）
+  // 刀光最后绘制（盖在角色之上）：帧图以有效帧布局的 plug 钉在
+  // 定格位姿处、按定格角度旋转（镜像帧已预翻，其 plug 横坐标
+  // = 帧宽 − plugX，与精灵同口径）
   if (plan.slashFx) {
     const fx = plan.slashFx;
     const fc = slashFrameCanvas(fx.spec, fx.frameIdx, fx.mirror);
+    const lay = slashFrameLayout(fx.spec);
+    const plugX = fx.mirror ? lay.w - lay.plugX : lay.plugX;
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.translate(fx.worldX, fx.worldY);
     ctx.rotate((fx.angleDeg * Math.PI) / 180);
-    ctx.drawImage(fc, -fx.spec.cx, -fx.spec.cy);
+    ctx.drawImage(fc, -plugX, -lay.plugY);
     ctx.restore();
   }
 
