@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useState, useCallback } from 'react';
 import SlashEffectEditor from './puppet/SlashEffectEditor';
+import { BEAT_TEMPLATES } from '@/lib/beat-templates';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -23,6 +24,7 @@ export default function AnimationClipPanel() {
     removeAnimationClip,
     updateAnimationClip,
     setActiveAnimationClip,
+    applyBeatTemplate,
   } = useProjectStore();
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
   const selectedCharacterId = useProjectStore((s) => s.selectedCharacterId);
@@ -35,6 +37,7 @@ export default function AnimationClipPanel() {
 
   const [editingClipId, setEditingClipId] = useState<string | null>(null);
   const [newClipName, setNewClipName] = useState('');
+  const [beatTemplateId, setBeatTemplateId] = useState('attack');
 
   const activeClip = animationClips.find(c => c.id === activeAnimationClipId) ?? null;
 
@@ -302,6 +305,32 @@ export default function AnimationClipPanel() {
               />
               窗内循环
             </label>
+            <div>
+              <label className="text-[9px] text-zinc-500 block mb-0.5">节拍模板</label>
+              <div className="flex items-center gap-1">
+                <select
+                  className="h-5 text-[10px] bg-zinc-900 border border-zinc-700 rounded px-1 flex-1 text-zinc-300"
+                  value={beatTemplateId}
+                  onChange={(e) => setBeatTemplateId(e.target.value)}
+                >
+                  {BEAT_TEMPLATES.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-5 px-1.5 text-[10px] text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
+                  onClick={() => applyBeatTemplate(activeClip.id, beatTemplateId)}
+                  title="按节拍把片段窗切成帧标签（替换既有标签），并按模板设定循环"
+                >
+                  套用
+                </Button>
+              </div>
+              <p className="text-[9px] text-zinc-600 mt-0.5">
+                按节拍阶段切分片段窗为帧标签，套用后可在 DCC 面板继续调整。
+              </p>
+            </div>
             <div className="mt-2">
               <SlashEffectEditor
                 value={activeClip.slashEffect}
