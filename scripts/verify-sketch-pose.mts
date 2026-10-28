@@ -3,6 +3,7 @@ import { assignSketchStrokes, bakeSketchPose, chainJointIds } from '../src/lib/s
 import { computeWorldTransforms } from '../src/lib/unified-render';
 import {
   createDefaultNode, createDefaultCostumePiece, projectToView, pxToSub, subToPx,
+  worldToViewBasis,
   type Character, type IKChain, type Sprite,
 } from '../src/lib/unified-types';
 
@@ -55,12 +56,15 @@ const character = {
 const W = 512, H = 512;
 const fk = computeWorldTransforms(character, 0, W, H, 12);
 const jointCanvas = new Map<string, { x: number; y: number }>();
-const endZ = new Map<string, number>();
+const endZ = new Map<string, number>(); // 南向 6 下视图深度 == worldZ
 for (const [id, t] of fk) {
   const p = projectToView(t.worldX, t.worldY, t.worldZ, 6);
   jointCanvas.set(id, { x: subToPx(p.canvasX) + W / 2, y: subToPx(p.canvasY) + H / 2 });
 }
-endZ.set(chain.id, subToPx(fk.get(hand.id)!.worldZ));
+{
+  const et = fk.get(hand.id)!;
+  endZ.set(chain.id, worldToViewBasis(subToPx(et.worldX), subToPx(et.worldY), subToPx(et.worldZ), 6).d);
+}
 ok(chainJointIds(character, chain).length === 3, '链关节序列 root→end 共 3 节点');
 
 const shoulderC = jointCanvas.get(arm.id)!;
@@ -68,20 +72,20 @@ const handC = jointCanvas.get(hand.id)!;
 // 笔触：自肩起笔，划向右下（目标点）
 const target = { x: shoulderC.x + 15, y: shoulderC.y + 40 }; // 肩→目标 ≈60px < 链长 65，可达
 const stroke = [shoulderC, { x: shoulderC.x + 8, y: shoulderC.y + 22 }, target];
-const { assignments, missed } = assignSketchStrokes(character, [stroke], jointCanvas, W, H, endZ);
+const { assignments, missed } = assignSketchStrokes(character, [stroke], jointCanvas, W, H, endZ, { direction: 6 });
 ok(assignments.length === 1 && missed === 0, '笔触归属到右臂链');
 ok(assignments[0]!.fromEnd === false, '自链根起笔（正向）');
 ok(Math.abs(assignments[0]!.target3D.x - (target.x - W / 2)) < 0.01, '目标 = 笔触末端（原点中心口径）');
 
 // 反向笔：自手腕起笔向外划 → 同样归属，目标 = 笔触末端
 const strokeRev = [handC, { x: handC.x + 10, y: handC.y + 30 }, { x: handC.x + 20, y: handC.y + 70 }];
-const rev = assignSketchStrokes(character, [strokeRev], jointCanvas, W, H, endZ);
+const rev = assignSketchStrokes(character, [strokeRev], jointCanvas, W, H, endZ, { direction: 6 });
 ok(rev.assignments.length === 1 && rev.assignments[0]!.fromEnd === true, '自链尾起笔也能归属（反向）');
 ok(Math.abs(rev.assignments[0]!.target3D.y - (strokeRev[2]!.y - H / 2)) < 0.01, '反向笔目标 = 笔触末端');
 
 // 远离所有关节的笔触 → 未命中
 const farStroke = [{ x: 10, y: 480 }, { x: 60, y: 500 }];
-const far = assignSketchStrokes(character, [farStroke], jointCanvas, W, H, endZ);
+const far = assignSketchStrokes(character, [farStroke], jointCanvas, W, H, endZ, { direction: 6 });
 ok(far.assignments.length === 0 && far.missed === 1, '无吸附的笔触计未命中');
 
 const res = bakeSketchPose(character, assignments, 0, 12, W, H);
@@ -127,11 +131,14 @@ for (const [id, t] of fkB) {
   const p = projectToView(t.worldX, t.worldY, t.worldZ, 6);
   jointCanvasB.set(id, { x: subToPx(p.canvasX) + W / 2, y: subToPx(p.canvasY) + H / 2 });
 }
-endZB.set(chainB.id, subToPx(fkB.get(bHand.id)!.worldZ));
+{
+  const et = fkB.get(bHand.id)!;
+  endZB.set(chainB.id, worldToViewBasis(subToPx(et.worldX), subToPx(et.worldY), subToPx(et.worldZ), 6).d);
+}
 const shoulderB = jointCanvasB.get(bArm.id)!;
 const targetB = { x: shoulderB.x + 15, y: shoulderB.y + 40 };
 const strokeB = [shoulderB, { x: shoulderB.x + 8, y: shoulderB.y + 22 }, targetB];
-const asgB = assignSketchStrokes(charB, [strokeB], jointCanvasB, W, H, endZB);
+const asgB = assignSketchStrokes(charB, [strokeB], jointCanvasB, W, H, endZB, { direction: 6 });
 ok(asgB.assignments.length === 1, 'B 笔触归属到无尖端长链');
 const resB = bakeSketchPose(charB, asgB.assignments, 0, 12, W, H);
 const errB = resB.endError[chainB.id]!;
@@ -155,7 +162,7 @@ if (ctB) {
 // ===== 夹具 C：不可达目标——误差如实报短缺，不假装到位 =====
 const targetC = { x: shoulderB.x, y: shoulderB.y + 120 }; // 距肩 120 > 链长 65
 const strokeC = [shoulderB, { x: shoulderB.x, y: shoulderB.y + 60 }, targetC];
-const asgC = assignSketchStrokes(charB, [strokeC], jointCanvasB, W, H, endZB);
+const asgC = assignSketchStrokes(charB, [strokeC], jointCanvasB, W, H, endZB, { direction: 6 });
 const resC = bakeSketchPose(charB, asgC.assignments, 0, 12, W, H);
 const errC = resC.endError[chainB.id]!;
 ok(resC.appliedChainIds.includes(chainB.id) && Math.abs(errC - 55) < 4,

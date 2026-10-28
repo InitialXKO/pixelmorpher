@@ -12,13 +12,13 @@ import { Button } from '@/components/ui/button';
 import { Check, Eraser, PencilRuler, RotateCcw } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import {
-  computeWorldTransforms, geometryDirectionFromToggle, renderUnified,
+  geometryDirectionFromToggle, renderUnified,
 } from '@/lib/unified-render';
 import {
   renderIKTargetHandles, renderPuppetSkeletonOverlay,
 } from '../canvas/canvas-puppet-render';
 import { projectToView, subToPx, type Character } from '@/lib/unified-types';
-import { assignSketchStrokes, bakeSketchPose, chainJointIds, type SketchBakeResult } from '@/lib/sketch-pose';
+import { assignSketchStrokes, bakeSketchPose, chainJointIds, sketchDisplayFrame, type SketchBakeResult } from '@/lib/sketch-pose';
 import { drawRefImage, loadRefImage, refImageReady, refImageRect } from '@/lib/ref-image';
 import type { Pt } from '@/lib/arc-length';
 
@@ -38,6 +38,7 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
   const frameRate = useProjectStore((s) => s.frameRate) || 12;
   const canvasW = useProjectStore((s) => s.canvasWidth) || 512;
   const canvasH = useProjectStore((s) => s.canvasHeight) || 512;
+  const nodeTurn3D = useEditorStore((s) => s.nodeTurn3D);
   const [strokes, setStrokes] = useState<Pt[][]>([]);
   const [drawing, setDrawing] = useState<Pt[] | null>(null);
   const [note, setNote] = useState('');
@@ -57,22 +58,14 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
     return { ...(character as Character), nodes: preview.bake.nodes };
   }, [character, preview]);
 
-  /** 吸附/归属用关节点位（工程画布坐标，与底图同口径） */
+  /** 吸附/归属用显示帧（工程画布坐标，与底图同口径：几何基准、
+   * 根向单一投影、连续偏航全与主渲染同源，见 sketchDisplayFrame） */
   const joints = useMemo(() => {
     if (!renderCharacter) return null;
-    const wt = computeWorldTransforms(renderCharacter, frame, canvasW, canvasH, frameRate);
-    const canvas = new Map<string, Pt>();
-    const worldZ = new Map<string, number>();
-    for (const [id, t] of wt) {
-      const p = projectToView(t.worldX, t.worldY, t.worldZ, (t.variantIndex ?? 6) as never);
-      canvas.set(id, { x: subToPx(p.canvasX) + canvasW / 2, y: subToPx(p.canvasY) + canvasH / 2 });
-    }
-    for (const chain of renderCharacter.ikChains ?? []) {
-      const end = wt.get(chain.endNodeId);
-      if (end) worldZ.set(chain.id, subToPx(end.worldZ));
-    }
-    return { canvas, worldZ };
-  }, [renderCharacter, frame, frameRate, canvasW, canvasH]);
+    const geometryDirection = geometryDirectionFromToggle(nodeTurn3D);
+    const disp = sketchDisplayFrame(renderCharacter, frame, canvasW, canvasH, frameRate, geometryDirection);
+    return { ...disp, geometryDirection };
+  }, [renderCharacter, frame, frameRate, canvasW, canvasH, nodeTurn3D]);
 
   /** 底图：主渲染内容 + 骨架覆盖层 + 链关节金圈（主画布同款调用） */
   const renderBase = useCallback(() => {
@@ -197,7 +190,8 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
   const handleSolve = () => {
     if (!character || !joints || strokes.length === 0 || preview) return;
     const { assignments, missed } = assignSketchStrokes(
-      character as Character, strokes, joints.canvas, canvasW, canvasH, joints.worldZ,
+      character as Character, strokes, joints.canvas, canvasW, canvasH, joints.endDepth,
+      { direction: joints.direction, yawDeltaRad: joints.yawDeltaRad },
     );
     if (assignments.length === 0) {
       setNote(`没有笔触命中 IK 链（${missed} 笔未命中）：起笔要落在金圈关节附近`);
@@ -205,7 +199,7 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
     }
     const bake = bakeSketchPose(
       character as Character, assignments, frame, frameRate, canvasW, canvasH,
-      useProjectStore.getState().sprites,
+      useProjectStore.getState().sprites, joints.geometryDirection,
     );
     const errs = bake.appliedChainIds.map((id) => {
       const chain = (character.ikChains ?? []).find((c) => c.id === id);

@@ -3,11 +3,13 @@
 // （solveChainIKOverrides，与渲染同一求解）解算 → 落成当前帧
 // angle/tilt 关键帧（只写这两轨，其余通道不动，同链烘焙先例）。
 import {
-  computeWorldTransforms, resolveSpriteTipLength, solveChainIKOverrides,
+  computeWorldTransforms, facingYawDeltaRad, resolveSpriteTipLength,
+  rotateWorldTransformsForYaw, solveChainIKOverrides, type WorldTransform,
 } from './unified-render';
 import {
-  frameYAxisWorld, projectToView, pxToSub, subToPx,
-  type Character, type IKChain, type Node, type Sprite,
+  frameYAxisWorld, projectToView, pxToSub, subToPx, viewBasisToWorld,
+  worldToViewBasis, type Character, type DirectionIndex, type IKChain,
+  type Node, type Sprite,
 } from './unified-types';
 import type { Pt } from './arc-length';
 
@@ -33,9 +35,72 @@ export function chainJointIds(character: Character, chain: IKChain): string[] {
   return ids[0] === chain.rootNodeId ? ids : [];
 }
 
+export interface SketchDisplayFrame {
+  /** 关节点位（工程画布 px，含中心）——与主画布底图逐点同源 */
+  canvas: Map<string, Pt>;
+  /** 每条链末端关节在显示口径下的视图深度 d（px）：笔触目标换算
+   * 时保持此深度（笔尖在平行于视面的平面内拖动） */
+  endDepth: Map<string, number>;
+  /** 全角色单一投影方向 = 根节点世界变换的 variantIndex（主渲染口径） */
+  direction: DirectionIndex;
+  /** 连续偏航增量（弧度）：主渲染在几何基准关闭且 facingAngle
+   * 存在时对世界变换施加的同一旋转；解算空间不含此旋转，目标
+   * 换算时须逆转回来 */
+  yawDeltaRad: number;
+  /** 本次计算实际用的世界变换（已含偏航旋转，与底图同源） */
+  worldTransforms: Map<string, WorldTransform>;
+}
+
+/**
+ * 对话框显示帧：与主渲染 generateRenderPlan 完全同源的取位口径——
+ * computeWorldTransforms 带同一 geometryDirection、全角色按根节点
+ * variantIndex 单一方向投影、facingAngle 偏航同条件施加。此前对话
+ * 框裸调 FK 且逐节点各按各的 variantIndex 投影：改根朝向时肢体
+ * 节点还停在旧方向（金圈与精灵错位可达百余 px）、开节点转向或
+ * 连续偏航时底图动而关节点位不动。
+ */
+export function sketchDisplayFrame(
+  character: Character,
+  frame: number,
+  canvasWidth: number,
+  canvasHeight: number,
+  frameRate: number,
+  geometryDirection?: DirectionIndex,
+): SketchDisplayFrame {
+  const wt = computeWorldTransforms(
+    character, frame, canvasWidth, canvasHeight, frameRate,
+    undefined, undefined, undefined, geometryDirection,
+  );
+  const direction = (wt.get(character.rootNodeId)?.variantIndex ?? 6) as DirectionIndex;
+  const yawDeltaRad = geometryDirection === undefined && character.facingAngle !== undefined
+    ? facingYawDeltaRad(character.facingAngle, direction)
+    : 0;
+  if (yawDeltaRad !== 0) rotateWorldTransformsForYaw(wt, yawDeltaRad, geometryDirection);
+  const canvas = new Map<string, Pt>();
+  for (const [id, t] of wt) {
+    const p = projectToView(t.worldX, t.worldY, t.worldZ, direction);
+    canvas.set(id, { x: subToPx(p.canvasX) + canvasWidth / 2, y: subToPx(p.canvasY) + canvasHeight / 2 });
+  }
+  const endDepth = new Map<string, number>();
+  for (const chain of character.ikChains ?? []) {
+    const end = wt.get(chain.endNodeId);
+    if (!end) continue;
+    endDepth.set(chain.id, worldToViewBasis(
+      subToPx(end.worldX), subToPx(end.worldY), subToPx(end.worldZ), direction,
+    ).d);
+  }
+  return { canvas, endDepth, direction, yawDeltaRad, worldTransforms: wt };
+}
+
 /**
  * 笔触归属：每笔起笔点吸附最近的链根/链尾关节（阈值内）；目标 =
  * 笔触另一端。坐标口径：入参 strokes 与 joints 均为画布 px（含中心）。
+ * 目标换算（画布 → 解算世界）：按显示方向逆投影（viewBasisToWorld，
+ * 与 resolveChainTarget3D 同一换算），深度保持末端关节当前视图深
+ * 度；显示帧带偏航时再逆转偏航回到解算空间。此前直接把画布 x/y
+ * 当世界 x/y、z 塞世界 Z——只在南向（6）时与逆投影逐值重合，换
+ * 朝向后解算落点在画布上偏出十余 px（3D 自报误差却很小，因为求
+ * 解器在错误目标上自洽）。
  */
 export function assignSketchStrokes(
   character: Character,
@@ -43,7 +108,8 @@ export function assignSketchStrokes(
   jointCanvas: ReadonlyMap<string, Pt>,
   canvasWidth: number,
   canvasHeight: number,
-  endWorldZ: ReadonlyMap<string, number>,
+  endViewDepth: ReadonlyMap<string, number>,
+  view: { direction: DirectionIndex; yawDeltaRad?: number },
   snapRadius = 56,
 ): { assignments: SketchAssignment[]; missed: number } {
   const chains = character.ikChains ?? [];
@@ -75,14 +141,24 @@ export function assignSketchStrokes(
     // 目标恒为笔触末端：起笔端只是抓取锚点（链根或链尾的当前位），
     // 笔尖落点才是末端关节要去的地方（与对方起笔吸附同一语义）。
     const targetCanvas = end;
+    const disp = viewBasisToWorld(
+      targetCanvas.x - canvasWidth / 2,
+      targetCanvas.y - canvasHeight / 2,
+      endViewDepth.get(best.chain.id) ?? 0,
+      view.direction,
+    );
+    let target3D = disp;
+    const yaw = view.yawDeltaRad ?? 0;
+    if (yaw !== 0) {
+      // 显示世界 = 解算世界绕竖直轴 +yaw（rotateWorldTransformsForYaw
+      // 的 x/z 公式），目标回到解算空间须逆转 −yaw
+      const c = Math.cos(yaw), s = Math.sin(yaw);
+      target3D = { x: disp.x * c - disp.z * s, y: disp.y, z: disp.x * s + disp.z * c };
+    }
     assignments.push({
       chainId: best.chain.id,
       fromEnd: best.fromEnd,
-      target3D: {
-        x: targetCanvas.x - canvasWidth / 2,
-        y: targetCanvas.y - canvasHeight / 2,
-        z: endWorldZ.get(best.chain.id) ?? 0,
-      },
+      target3D,
     });
   }
   return { assignments, missed };
@@ -128,6 +204,9 @@ export function bakeSketchPose(
   canvasWidth: number,
   canvasHeight: number,
   globalSprites?: Record<string, Sprite>,
+  // 几何基准朝向（编辑器节点转向开关）：与渲染同一参数——FK、求解
+  // 器内部的段向还原/目标解析、验误差 FK 全部同源；不传 = 现行口径。
+  geometryDirection?: DirectionIndex,
 ): SketchBakeResult {
   const chainsById = new Map((character.ikChains ?? []).map((c) => [c.id, c]));
   // 首遍 FK：全部链停用，避免既有 IK 覆写污染基准位姿
@@ -135,7 +214,7 @@ export function bakeSketchPose(
     ...character,
     ikChains: (character.ikChains ?? []).map((c) => ({ ...c, enabled: false })),
   };
-  const fk = computeWorldTransforms(fkChar, frame, canvasWidth, canvasHeight, frameRate);
+  const fk = computeWorldTransforms(fkChar, frame, canvasWidth, canvasHeight, frameRate, undefined, undefined, undefined, geometryDirection);
   const overrides = new Map<string, { angle: number; tilt: number }>();
   const applied: string[] = [];
   for (const a of assignments) {
@@ -144,17 +223,18 @@ export function bakeSketchPose(
     const withTarget: IKChain = {
       ...chain,
       target3D: a.target3D,
-      // 保持投影镜像不变式（旧义 target 字段同步）
+      // 保持投影镜像不变式（旧义 target 字段同步）：投影方向与求解
+      // 器内部的目标解析方向（dir0）同源
       target: (() => {
         const rootT = fk.get(chain.rootNodeId);
-        const dir = rootT?.variantIndex ?? 6;
+        const dir = geometryDirection ?? rootT?.variantIndex ?? 6;
         const p = projectToView(pxToSub(a.target3D.x), pxToSub(a.target3D.y), pxToSub(a.target3D.z), dir);
         return { x: subToPx(p.canvasX) + canvasWidth / 2, y: subToPx(p.canvasY) + canvasHeight / 2 };
       })(),
     };
     const jointIds = chainJointIds(character, chain);
     const beforeVals = new Map(jointIds.map((id) => [id, overrides.get(id)]));
-    solveChainIKOverrides(fkChar, withTarget, fk, canvasWidth, canvasHeight, frame, frameRate, undefined, undefined, overrides, undefined, 0);
+    solveChainIKOverrides(fkChar, withTarget, fk, canvasWidth, canvasHeight, frame, frameRate, undefined, undefined, overrides, geometryDirection, 0);
     // 本链算没算上：看本链关节的覆写是否新增或变值（不能看全局
     // size/keys——先命中的链会把后面的链误报成已应用）
     const changed = jointIds.some((id) => {
@@ -173,7 +253,7 @@ export function bakeSketchPose(
   }
   // 验误差：以落帧后的角色在该帧重算 FK，量末端关节与目标距离
   const solvedChar: Character = { ...fkChar, nodes };
-  const solved = computeWorldTransforms(solvedChar, frame, canvasWidth, canvasHeight, frameRate);
+  const solved = computeWorldTransforms(solvedChar, frame, canvasWidth, canvasHeight, frameRate, undefined, undefined, undefined, geometryDirection);
   const endError: Record<string, number> = {};
   for (const a of assignments) {
     const chain = chainsById.get(a.chainId);
@@ -195,7 +275,8 @@ export function bakeSketchPose(
     if (!chain) continue;
     const endT = solved.get(chain.endNodeId);
     if (!endT) continue;
-    const endDir = endT.variantIndex ?? 6;
+    // 尖端长解析与 frame 朝向基与求解器内部同口径（geometryDirection 优先）
+    const endDir = geometryDirection ?? endT.variantIndex ?? 6;
     let tipLen = chain.tipLength ?? 0;
     if (tipLen <= 0) tipLen = resolveSpriteTipLength(solvedChar, chain.endNodeId, endDir, globalSprites) ?? 0;
     if (tipLen <= 0) {
@@ -216,7 +297,7 @@ export function bakeSketchPose(
       z: subToPx(endT.worldZ) + yAxis.z * tipLen,
     };
     const rootT = solved.get(chain.rootNodeId);
-    const rootDir = rootT?.variantIndex ?? 6;
+    const rootDir = geometryDirection ?? rootT?.variantIndex ?? 6;
     const p = projectToView(pxToSub(tip.x), pxToSub(tip.y), pxToSub(tip.z), rootDir);
     chainTargets[chainId] = {
       target3D: tip,
