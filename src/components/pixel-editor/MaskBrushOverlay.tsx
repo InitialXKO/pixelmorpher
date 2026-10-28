@@ -2,6 +2,20 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import {
+  Brush,
+  Check,
+  CircleX,
+  Delete,
+  Eraser,
+  Fence,
+  Paintbrush,
+  Pipette,
+  Stamp,
+  Trash2,
+  WandSparkles,
+  X,
+} from 'lucide-react';
 import { useEditorStore, useProjectStore } from '@/lib/store';
 import PivotEditor from './puppet/PivotEditor';
 import type { Sprite } from '@/lib/unified-types';
@@ -84,6 +98,14 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   const zoom = useEditorStore((s) => s.zoom);
   const panX = useEditorStore((s) => s.panX);
   const panY = useEditorStore((s) => s.panY);
+  const setZoom = useEditorStore((s) => s.setZoom);
+  const setPan = useEditorStore((s) => s.setPan);
+  // 视图手势（与主画布同口径，本层自备）：空格按下状态——主画布的
+  // spaceHeldRef 是 PixelCanvas 私有 ref，本层够不着，只能自追同一按键；
+  // 平移进行中记按下点与起始 pan（抬起/松空格/离场即清）
+  const spaceHeldRef = useRef(false);
+  const viewPanRef = useRef<{ startClientX: number; startClientY: number; panX: number; panY: number } | null>(null);
+  const [isViewPanning, setIsViewPanning] = useState(false);
 
   // 初始化：透明底（遮罩和防溢出线都清空）
   useEffect(() => {
@@ -157,6 +179,64 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       })();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 滚轮缩放：与主画布同一套算法（use-canvas-interaction 的原生 wheel
+  // 口径：×1.15 步进、0.1 取整、钳制 1–32、光标点世界坐标不变），只是
+  // 事件源换成本层——主画布的监听挂在它自己的 canvas 上，本层罩住图像
+  // 区域后滚轮事件到不了它。坐标换算：本层 canvas 以 left:panX 定位在
+  // 同一容器里，rect 左缘 = 容器左缘 + panX，故光标的容器坐标 =
+  // (clientX - rect.left) + panX，与主画布的 mouseX 等值，后面整套公式
+  // 逐字照搬。缩放后本层靠顶部的 zoom/pan 订阅自动重定位跟随。
+  // 笔划进行中（一笔未抬起）：滚轮只吞（preventDefault 防页面滚动）、
+  // 不缩放——不许视图在一笔中途乱动毁笔划。
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (isDrawing.current) return;
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left + panX;
+      const mouseY = e.clientY - rect.top + panY;
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const newZoom = Math.max(1, Math.min(32, Math.round(zoom * zoomFactor * 10) / 10));
+      const worldX = (mouseX - panX) / zoom;
+      const worldY = (mouseY - panY) / zoom;
+      setZoom(newZoom);
+      setPan(mouseX - worldX * newZoom, mouseY - worldY * newZoom);
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [zoom, panX, panY, setZoom, setPan]);
+
+  // 空格键追踪（平移判定用）：与主画布并行监听同一按键、互不影响；
+  // 松开空格时若正在平移则结束平移（与主画布 keyup 口径一致）；窗口
+  // 失焦清状态防卡死。
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat) spaceHeldRef.current = true;
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        spaceHeldRef.current = false;
+        if (viewPanRef.current) {
+          viewPanRef.current = null;
+          setIsViewPanning(false);
+        }
+      }
+    };
+    const onBlur = () => {
+      spaceHeldRef.current = false;
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
   }, []);
 
   const getPos = (e: React.MouseEvent) => {
@@ -596,6 +676,15 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   };
 
   const handleDown = (e: React.MouseEvent) => {
+    // 视图平移优先（与主画布同一判定：中键、或空格+左键），排在取色/
+    // 取点/笔刷之前。但笔划进行中不介入：一笔未抬起时第二键按下仍走
+    // 下面原笔刷路径，视图手势不毁笔划（滚轮同理，见 wheel 监听）。
+    if (!isDrawing.current && (e.button === 1 || (spaceHeldRef.current && e.button === 0))) {
+      e.preventDefault();
+      viewPanRef.current = { startClientX: e.clientX, startClientY: e.clientY, panX, panY };
+      setIsViewPanning(true);
+      return;
+    }
     const { x, y } = getPos(e);
     if (isPicking) {
       handlePick(x, y);
@@ -649,6 +738,12 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
         y: e.clientY - rect.top,
       });
     }
+    // 视图平移进行中：只推 pan，不落笔（平移优先于笔刷，与主画布同序）
+    if (viewPanRef.current) {
+      const p = viewPanRef.current;
+      setPan(p.panX + (e.clientX - p.startClientX), p.panY + (e.clientY - p.startClientY));
+      return;
+    }
     if (!isDrawing.current) return;
     if (paintMode === 'barrier') {
       drawAt(x, y); // 线条靠 lineTo 自带连续性
@@ -672,6 +767,10 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   };
 
   const handleUp = () => {
+    if (viewPanRef.current) {
+      viewPanRef.current = null;
+      setIsViewPanning(false);
+    }
     isDrawing.current = false;
     lastBarrierPos.current = null;
     lastStampPos.current = null;
@@ -679,6 +778,10 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
   };
 
   const handleLeave = () => {
+    if (viewPanRef.current) {
+      viewPanRef.current = null;
+      setIsViewPanning(false);
+    }
     isDrawing.current = false;
     lastBarrierPos.current = null;
     lastStampPos.current = null;
@@ -904,7 +1007,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
         ref={canvasRef}
         className="absolute z-40"
         style={{
-          cursor: isPicking ? 'copy' : paintMode === 'sam' ? 'crosshair' : 'none',
+          cursor: isViewPanning ? 'grabbing' : isPicking ? 'copy' : paintMode === 'sam' ? 'crosshair' : 'none',
           imageRendering: 'pixelated',
           left: panX,
           top: panY,
@@ -959,19 +1062,19 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs pointer-events-auto z-50"
         style={{ background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.4)', backdropFilter: 'blur(4px)' }}>
         <span className="text-purple-300 font-medium">遮罩绘制</span>
-        <span className="text-gray-400">|</span>
-        {/* 模式切换：绘制 / 擦除 / 防溢出线 */}
+        <div className="w-px h-4 bg-white/15" />
+        {/* 模式切换（图标钮，激活态配色沿用原语义：绘制/擦除红、防溢出线蓝、SAM 绿） */}
         <div className="flex rounded overflow-hidden border border-white/20">
           {([
-            { mode: 'draw' as const, label: '绘制' },
-            { mode: 'erase' as const, label: '擦除' },
-            { mode: 'barrier' as const, label: '防溢出线' },
-            { mode: 'sam' as const, label: 'SAM提取' },
-          ]).map(({ mode, label }) => (
+            { mode: 'draw' as const, Icon: Paintbrush, title: '绘制' },
+            { mode: 'erase' as const, Icon: Eraser, title: '擦除' },
+            { mode: 'barrier' as const, Icon: Fence, title: '防溢出线：画1px蓝色线条，绘制时笔刷不会跨过线条' },
+            { mode: 'sam' as const, Icon: WandSparkles, title: 'SAM提取：点选提取肢体；已画的防溢出线之外不输入 SAM' },
+          ]).map(({ mode, Icon, title }) => (
             <button
               key={mode}
               onClick={() => setPaintMode(mode)}
-              className={`px-2 h-6 text-[11px] transition-colors ${
+              className={`size-7 grid place-items-center transition-colors ${
                 paintMode === mode
                   ? mode === 'barrier'
                     ? 'bg-blue-600 text-white'
@@ -980,21 +1083,15 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
                       : 'bg-red-600 text-white'
                   : 'bg-transparent text-gray-300 hover:bg-white/10'
               }`}
-              title={
-                mode === 'barrier'
-                  ? '画1px蓝色线条，绘制时笔刷不会跨过线条'
-                  : mode === 'sam'
-                    ? '点选提取肢体；已画的防溢出线之外不输入 SAM'
-                    : undefined
-              }
+              title={title}
             >
-              {label}
+              <Icon className="size-4" />
             </button>
           ))}
         </div>
         {(paintMode === 'draw' || paintMode === 'erase') && (
-          <label className="text-gray-300 flex items-center gap-1">
-            笔刷
+          <label className="text-gray-300 flex items-center gap-1" title="笔刷大小">
+            <Brush className="size-3.5" />
             <input
               type="range"
               min={2}
@@ -1008,9 +1105,10 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
         )}
         {paintMode === 'barrier' && (
           <Button
-            size="sm"
+            size="icon"
             variant="ghost"
-            className="h-6 text-[11px] text-gray-400"
+            className="size-7 text-gray-400"
+            title="清除线条"
             onClick={() => {
               const bCanvas = barrierCanvasRef.current;
               if (bCanvas) bCanvas.getContext('2d')!.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -1022,40 +1120,42 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
               resetSamSession();
             }}
           >
-            清除线条
+            <Trash2 className="size-4" />
           </Button>
         )}
         {paintMode === 'sam' && (
           <>
             <Button
-              size="sm"
-              className="h-6 text-[11px]"
+              size="icon"
+              className="size-7"
+              title="应用到遮罩"
               onClick={applySamToMask}
               disabled={!samUi.hasResult}
             >
-              应用到遮罩
+              <Stamp className="size-4" />
             </Button>
             <Button
-              size="sm"
+              size="icon"
               variant="ghost"
-              className="h-6 text-[11px] text-gray-400"
+              className="size-7 text-gray-400"
+              title="清除点"
               onClick={resetSamSession}
               disabled={samUi.points === 0 && !samUi.hasResult}
             >
-              清除点
+              <CircleX className="size-4" />
             </Button>
           </>
         )}
-        <span className="text-gray-400">|</span>
+        <div className="w-px h-4 bg-white/15" />
         {/* 色键取色 */}
         <Button
-          size="sm"
+          size="icon"
           variant={isPicking ? "default" : "outline"}
-          className="h-6 text-[11px]"
+          className="size-7"
           onClick={() => setIsPicking(!isPicking)}
-          title="点击参考图取色键颜色"
+          title={isPicking ? "取色中…点击参考图选色键颜色" : "取色：点击参考图取色键颜色"}
         >
-          {isPicking ? "取色中…" : "取色"}
+          <Pipette className="size-4" />
         </Button>
         {keyColor && (
           <>
@@ -1064,13 +1164,17 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
               style={{ backgroundColor: `rgb(${keyColor.r},${keyColor.g},${keyColor.b})` }}
               title={`rgb(${keyColor.r},${keyColor.g},${keyColor.b})`}
             />
-            <Button size="sm" variant="ghost" className="h-6 text-[11px] text-gray-500" onClick={() => setKeyColor(null)}>
-              清除
+            <Button size="icon" variant="ghost" className="size-6 text-gray-500" title="清除色键" onClick={() => setKeyColor(null)}>
+              <Delete className="size-3.5" />
             </Button>
           </>
         )}
-        <Button size="sm" className="h-6 text-[11px]" onClick={handleConfirm}>确认</Button>
-        <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={handleCancel}>取消</Button>
+        <Button size="icon" className="size-7" title="确认" onClick={handleConfirm}>
+          <Check className="size-4" />
+        </Button>
+        <Button size="icon" variant="ghost" className="size-7" title="取消" onClick={handleCancel}>
+          <X className="size-4" />
+        </Button>
       </div>
       {/* 更新状态显示 */}
       {lastUpdateInfo && (

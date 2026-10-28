@@ -27,6 +27,7 @@ import { BRUSH_STYLE_LABELS } from '@/lib/brush-engine';
 import { applyTheme, loadTheme, type ThemeMode } from '@/lib/theme';
 import { useToast } from '@/hooks/use-toast';
 import WorkspaceSwitcher from '@/components/pixel-editor/WorkspaceSwitcher';
+import NewCharacterMenu from '@/components/pixel-editor/NewCharacterMenu';
 
 // Sub-components
 import { TOOL_CONFIG, MAX_RECENT_COLORS } from './toolbar/constants';
@@ -321,6 +322,11 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
 
       {/* ---- Workspace Switcher ---- */}
       <WorkspaceSwitcher />
+
+      <Separator orientation="vertical" className="h-5 bg-white/10" />
+
+      {/* ---- 新建角色（统一入口：全部新建方式 + 对话框唯一宿主） ---- */}
+      <NewCharacterMenu />
 
       <Separator orientation="vertical" className="h-5 bg-white/10" />
 

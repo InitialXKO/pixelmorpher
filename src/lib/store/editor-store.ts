@@ -184,6 +184,8 @@ interface EditorStore extends EditorState {
   // 参考图装配向导
   refWizardOpen: boolean;
   setRefWizardOpen: (v: boolean) => void;
+  // 左栏页签
+  setLeftPanelTab: (t: 'assets' | 'clips' | 'strokes') => void;
 }
 
 const defaultEditor: EditorState = {
@@ -265,6 +267,8 @@ const defaultEditor: EditorState = {
   chromaKeyColor: null as { r: number; g: number; b: number } | null,
   // 参考图装配向导
   refWizardOpen: false,
+  // 左栏页签（缺省资产：角色/精灵管理是入口面板）
+  leftPanelTab: 'assets' as const,
 };
 
 // Lazy import to avoid circular dependency
@@ -353,6 +357,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setMaskNodeId: (id) => set({ maskNodeId: id }),
   setChromaKeyColor: (c) => set({ chromaKeyColor: c }),
   setRefWizardOpen: (v) => set({ refWizardOpen: v }),
+  setLeftPanelTab: (t) => set({ leftPanelTab: t }),
 
   initSAMModel: async (model?: SAMModelType) => {
     const { disposeSAMModel } = get();
