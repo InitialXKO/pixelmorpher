@@ -8,6 +8,8 @@
  * 二、遮罩模式（MaskBrushOverlay）：主画布视图手势在本层复原——
  * 滚轮走主画布同一套缩放公式、空格/中键平移判定排在笔刷之前且
  * 笔划中不介入、普通按下路径与取点换算不动。
+ * 三、遮罩工具条图标化：按钮全改 lucide 图标钮 + title、激活配色
+ * 语义保留、滑杆/色块形态保留、disabled 条件与处理函数照旧。
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -81,8 +83,51 @@ ok(mask.includes('isDrawing.current = true;'), '普通按下仍走原笔刷落�
 ok(mask.includes('(rect.width / canvasWidth)') && mask.includes('(rect.height / canvasHeight)'), 'getPos 仍按 live rect 换算内部像素坐标（视图变化后成立）');
 ok(mask.includes('width: canvasWidth * zoom') && mask.includes('left: panX'), '遮罩层仍按订阅的 zoom/pan 定位（缩放后自动跟随）');
 
+// ---------- 遮罩工具条图标化（MaskBrushOverlay 工具条） ----------
+// 图标钮 + title：每个原文字按钮都有对应图标与 title 文案
+for (const [icon, title] of [
+  ['Trash2', '清除线条'],
+  ['Stamp', '应用到遮罩'],
+  ['CircleX', '清除点'],
+  ['Pipette', '取色'],
+  ['Delete', '清除色键'],
+  ['Check', '确认'],
+  ['X', '取消'],
+] as const) {
+  ok(mask.includes(`<${icon} className=`), `工具条图标 ${icon} 在位`);
+  ok(mask.includes(title), `工具条 title/文案「${title}」在位`);
+}
+// 模式组四图标经数据数组以 Icon 组件渲染（JSX 里是 <Icon />）
+for (const [icon, title] of [
+  ['Paintbrush', '绘制'],
+  ['Eraser', '擦除'],
+  ['Fence', '防溢出线'],
+  ['WandSparkles', 'SAM提取'],
+] as const) {
+  ok(mask.includes(`Icon: ${icon}`), `模式组图标 ${icon} 在位`);
+  ok(mask.includes(title), `模式组 title/文案「${title}」在位`);
+}
+ok(mask.includes('<Icon className="size-4" />'), '模式组以 Icon 组件渲染图标');
+ok(mask.includes("from 'lucide-react'"), '图标走 lucide-react 引用');
+// 工具条内不再有文字按钮：原文字不再作为按钮子节点出现
+for (const textBtn of ['>绘制<', '>擦除<', '>\n              应用到遮罩', '清除线条\n', '{label}']) {
+  ok(!mask.includes(textBtn), `文字按钮残留已除（${textBtn.trim()}）`);
+}
+ok(!mask.includes('{isPicking ? "取色中…" : "取色"}'), '取色钮不再用文字切换（改图标 + title）');
+// 模式激活配色语义保留（红/蓝/绿落在图标钮激活背景上）
+ok(mask.includes("'bg-blue-600 text-white'") && mask.includes("'bg-green-600 text-white'") && mask.includes("'bg-red-600 text-white'"), '模式激活配色（蓝/绿/红）保留');
+// 非按钮控件形态保留：滑杆 + 像素读数 + 色块
+ok(mask.includes('type="range"') && mask.includes('{brushSize}px'), '笔刷滑杆与像素读数保留');
+ok(mask.includes('<Brush className="size-3.5" />'), '滑杆配笔刷图标');
+ok(mask.includes('backgroundColor: `rgb(${keyColor.r},${keyColor.g},${keyColor.b})`'), '色键色块保留');
+// disabled 条件逐个照旧
+ok(mask.includes('disabled={!samUi.hasResult}'), '应用到遮罩 disabled 条件照旧');
+ok(mask.includes('disabled={samUi.points === 0 && !samUi.hasResult}'), '清除点 disabled 条件照旧');
+// 行为未动：处理函数挂载照旧
+ok(mask.includes('onClick={applySamToMask}') && mask.includes('onClick={handleConfirm}') && mask.includes('onClick={handleCancel}'), '应用/确认/取消处理函数照旧');
+
 if (failures > 0) {
   console.error(`\n${failures} 项断言失败`);
   process.exit(1);
 }
-console.log('SAM ZOOM/PAN + MASK VIEW GESTURES PROBE PASS');
+console.log('SAM ZOOM/PAN + MASK VIEW GESTURES + ICON TOOLBAR PROBE PASS');

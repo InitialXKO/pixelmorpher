@@ -2,6 +2,20 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import {
+  Brush,
+  Check,
+  CircleX,
+  Delete,
+  Eraser,
+  Fence,
+  Paintbrush,
+  Pipette,
+  Stamp,
+  Trash2,
+  WandSparkles,
+  X,
+} from 'lucide-react';
 import { useEditorStore, useProjectStore } from '@/lib/store';
 import PivotEditor from './puppet/PivotEditor';
 import type { Sprite } from '@/lib/unified-types';
@@ -1048,19 +1062,19 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs pointer-events-auto z-50"
         style={{ background: 'rgba(139,92,246,0.2)', border: '1px solid rgba(139,92,246,0.4)', backdropFilter: 'blur(4px)' }}>
         <span className="text-purple-300 font-medium">遮罩绘制</span>
-        <span className="text-gray-400">|</span>
-        {/* 模式切换：绘制 / 擦除 / 防溢出线 */}
+        <div className="w-px h-4 bg-white/15" />
+        {/* 模式切换（图标钮，激活态配色沿用原语义：绘制/擦除红、防溢出线蓝、SAM 绿） */}
         <div className="flex rounded overflow-hidden border border-white/20">
           {([
-            { mode: 'draw' as const, label: '绘制' },
-            { mode: 'erase' as const, label: '擦除' },
-            { mode: 'barrier' as const, label: '防溢出线' },
-            { mode: 'sam' as const, label: 'SAM提取' },
-          ]).map(({ mode, label }) => (
+            { mode: 'draw' as const, Icon: Paintbrush, title: '绘制' },
+            { mode: 'erase' as const, Icon: Eraser, title: '擦除' },
+            { mode: 'barrier' as const, Icon: Fence, title: '防溢出线：画1px蓝色线条，绘制时笔刷不会跨过线条' },
+            { mode: 'sam' as const, Icon: WandSparkles, title: 'SAM提取：点选提取肢体；已画的防溢出线之外不输入 SAM' },
+          ]).map(({ mode, Icon, title }) => (
             <button
               key={mode}
               onClick={() => setPaintMode(mode)}
-              className={`px-2 h-6 text-[11px] transition-colors ${
+              className={`size-7 grid place-items-center transition-colors ${
                 paintMode === mode
                   ? mode === 'barrier'
                     ? 'bg-blue-600 text-white'
@@ -1069,21 +1083,15 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
                       : 'bg-red-600 text-white'
                   : 'bg-transparent text-gray-300 hover:bg-white/10'
               }`}
-              title={
-                mode === 'barrier'
-                  ? '画1px蓝色线条，绘制时笔刷不会跨过线条'
-                  : mode === 'sam'
-                    ? '点选提取肢体；已画的防溢出线之外不输入 SAM'
-                    : undefined
-              }
+              title={title}
             >
-              {label}
+              <Icon className="size-4" />
             </button>
           ))}
         </div>
         {(paintMode === 'draw' || paintMode === 'erase') && (
-          <label className="text-gray-300 flex items-center gap-1">
-            笔刷
+          <label className="text-gray-300 flex items-center gap-1" title="笔刷大小">
+            <Brush className="size-3.5" />
             <input
               type="range"
               min={2}
@@ -1097,9 +1105,10 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
         )}
         {paintMode === 'barrier' && (
           <Button
-            size="sm"
+            size="icon"
             variant="ghost"
-            className="h-6 text-[11px] text-gray-400"
+            className="size-7 text-gray-400"
+            title="清除线条"
             onClick={() => {
               const bCanvas = barrierCanvasRef.current;
               if (bCanvas) bCanvas.getContext('2d')!.clearRect(0, 0, canvasWidth, canvasHeight);
@@ -1111,40 +1120,42 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
               resetSamSession();
             }}
           >
-            清除线条
+            <Trash2 className="size-4" />
           </Button>
         )}
         {paintMode === 'sam' && (
           <>
             <Button
-              size="sm"
-              className="h-6 text-[11px]"
+              size="icon"
+              className="size-7"
+              title="应用到遮罩"
               onClick={applySamToMask}
               disabled={!samUi.hasResult}
             >
-              应用到遮罩
+              <Stamp className="size-4" />
             </Button>
             <Button
-              size="sm"
+              size="icon"
               variant="ghost"
-              className="h-6 text-[11px] text-gray-400"
+              className="size-7 text-gray-400"
+              title="清除点"
               onClick={resetSamSession}
               disabled={samUi.points === 0 && !samUi.hasResult}
             >
-              清除点
+              <CircleX className="size-4" />
             </Button>
           </>
         )}
-        <span className="text-gray-400">|</span>
+        <div className="w-px h-4 bg-white/15" />
         {/* 色键取色 */}
         <Button
-          size="sm"
+          size="icon"
           variant={isPicking ? "default" : "outline"}
-          className="h-6 text-[11px]"
+          className="size-7"
           onClick={() => setIsPicking(!isPicking)}
-          title="点击参考图取色键颜色"
+          title={isPicking ? "取色中…点击参考图选色键颜色" : "取色：点击参考图取色键颜色"}
         >
-          {isPicking ? "取色中…" : "取色"}
+          <Pipette className="size-4" />
         </Button>
         {keyColor && (
           <>
@@ -1153,13 +1164,17 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
               style={{ backgroundColor: `rgb(${keyColor.r},${keyColor.g},${keyColor.b})` }}
               title={`rgb(${keyColor.r},${keyColor.g},${keyColor.b})`}
             />
-            <Button size="sm" variant="ghost" className="h-6 text-[11px] text-gray-500" onClick={() => setKeyColor(null)}>
-              清除
+            <Button size="icon" variant="ghost" className="size-6 text-gray-500" title="清除色键" onClick={() => setKeyColor(null)}>
+              <Delete className="size-3.5" />
             </Button>
           </>
         )}
-        <Button size="sm" className="h-6 text-[11px]" onClick={handleConfirm}>确认</Button>
-        <Button size="sm" variant="ghost" className="h-6 text-[11px]" onClick={handleCancel}>取消</Button>
+        <Button size="icon" className="size-7" title="确认" onClick={handleConfirm}>
+          <Check className="size-4" />
+        </Button>
+        <Button size="icon" variant="ghost" className="size-7" title="取消" onClick={handleCancel}>
+          <X className="size-4" />
+        </Button>
       </div>
       {/* 更新状态显示 */}
       {lastUpdateInfo && (
