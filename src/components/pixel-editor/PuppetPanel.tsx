@@ -11,9 +11,16 @@ import {
   Workflow,
   ListTree,
   MonitorPlay,
+  Layers,
+  Route,
+  Activity,
+  Terminal,
+  Puzzle,
+  Globe,
+  Zap,
 } from 'lucide-react';
 import SketchPoseDialog from './puppet/SketchPoseDialog';
-import SidePanelTabs from './shared/SidePanelTabs';
+import SidePanelTabs, { type SidePanelTabDef } from './shared/SidePanelTabs';
 import { Button } from '@/components/ui/button';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { useProjectStore, useEditorStore } from '@/lib/store';
@@ -24,6 +31,13 @@ import StateMachinePanel from './puppet/StateMachinePanel';
 import BehaviorTreePanel from './puppet/BehaviorTreePanel';
 import BehaviorPanel from './puppet/BehaviorPanel';
 import ProcPreview from './puppet/ProcPreview';
+import CanvasModifierPanel from './CanvasModifierPanel';
+import TrajectoryPanel from './TrajectoryPanel';
+import ProceduralPanel from './ProceduralPanel';
+import ScriptPanel from './ScriptPanel';
+import PluginPanel from './PluginPanel';
+import GlobalModifierPanel from './GlobalModifierPanel';
+import DccPipelinePanel from './DccPipelinePanel';
 import type { DirectionIndex } from '@/lib/unified-types';
 
 // ---- Main Component ----
@@ -46,7 +60,9 @@ export default function PuppetPanel() {
   const [selectedCostumeId, setSelectedCostumeId] = useState<string | null>(null);
 
   const [sketchPoseOpen, setSketchPoseOpen] = useState(false);
-  // 右栏页签（本面板内部状态即可：无外部组件需要切换右栏页签）
+  // 右栏页签（本面板即右栏页签容器，内部状态即可：无外部组件需要
+  // 切换右栏页签）。木偶七页签 + 动画工具七页签同排（工具面板为
+  // 2026-10-16 退役 workspace mode 时被连带封存、2026-10-29 恢复）
   const [rightTab, setRightTab] = useState('rig');
 
   const selectedCharacter = activePuppetSkeletonId
@@ -110,6 +126,59 @@ export default function PuppetPanel() {
   const hasSkeletons = Object.keys(unifiedCharacters).length > 0;
   const hasClips = animationClips.some((c) => true);
 
+  // 动画工具页签（工程级，不依赖角色在场，常驻）：2026-10-16 退役
+  // workspace mode 时 renderRightPanel 被短路、这批面板连带封存，
+  // 2026-10-29 审计后恢复进本页签排（消费端缺失的同批补齐）。
+  const toolTabs = [
+    {
+      id: 'canvas',
+      label: '画布效果',
+      icon: <Layers className="size-4" />,
+      content: <CanvasModifierPanel />,
+    },
+    {
+      id: 'trajectory',
+      label: '轨迹',
+      icon: <Route className="size-4" />,
+      content: <TrajectoryPanel />,
+    },
+    {
+      id: 'procedural',
+      label: '程序化',
+      icon: <Activity className="size-4" />,
+      content: <ProceduralPanel />,
+    },
+    {
+      id: 'script',
+      label: '脚本',
+      icon: <Terminal className="size-4" />,
+      content: <ScriptPanel />,
+    },
+    {
+      id: 'plugins',
+      label: '插件',
+      icon: <Puzzle className="size-4" />,
+      content: <PluginPanel />,
+    },
+    {
+      id: 'global',
+      label: '全局',
+      icon: <Globe className="size-4" />,
+      content: <GlobalModifierPanel />,
+    },
+    {
+      id: 'dcc',
+      label: 'DCC管线',
+      icon: <Zap className="size-4" />,
+      content: <DccPipelinePanel />,
+    },
+  ];
+  const rightTabIds = [
+    ...(hasSkeletons ? ['rig', 'dress', 'perform', 'behavior', 'statemachine', 'behaviortree', 'preview'] : []),
+    ...toolTabs.map((t) => t.id),
+  ];
+  const activeRightTab = rightTabIds.includes(rightTab) ? rightTab : rightTabIds[0];
+
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#0d0d1a]">
       {/* Workflow Header */}
@@ -139,7 +208,7 @@ export default function PuppetPanel() {
 
       {/* Empty state when nothing exists yet */}
       {!hasSkeletons && (
-        <div className="flex-1 flex items-center justify-center p-4">
+        <div className="flex items-center justify-center px-4 py-8 shrink-0">
           <div className="text-center space-y-3">
             <Users className="size-8 text-cyan-500/30 mx-auto" />
             <div>
@@ -153,16 +222,17 @@ export default function PuppetPanel() {
         </div>
       )}
 
-      {/* 侧面页签切换：七段各占一页签、独占整高（取代原来同列
-          折叠段堆叠滚动——段再多也只滚激活段自己） */}
-      {hasSkeletons && (
-        <div className="flex-1 min-h-0">
-          <SidePanelTabs
-            side="right"
-            ariaLabel="右栏面板"
-            activeId={rightTab}
-            onChange={setRightTab}
-            tabs={[
+      {/* 侧面页签切换：各段各占一页签、独占整高（取代同列折叠段
+          堆叠滚动——段再多也只滚激活段自己）。木偶七页签需角色
+          在场，动画工具七页签（toolTabs）常驻同排。 */}
+      <div className="flex-1 min-h-0">
+        <SidePanelTabs
+          side="right"
+          ariaLabel="右栏面板"
+          activeId={activeRightTab}
+          onChange={setRightTab}
+          tabs={[
+            ...((hasSkeletons ? [
               {
                 id: 'rig',
                 label: '骨架',
@@ -253,10 +323,11 @@ export default function PuppetPanel() {
                   </div>
                 ),
               },
-            ]}
-          />
-        </div>
-      )}
+            ] : []) as SidePanelTabDef[]),
+            ...toolTabs,
+          ]}
+        />
+      </div>
     </div>
   );
 }
