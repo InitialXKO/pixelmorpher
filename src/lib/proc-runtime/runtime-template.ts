@@ -2094,7 +2094,6 @@ const FB_CROUCH_DUR = 0.20;   // 跳跃预备总时长（s）：下蹲 0.13 + �
 const FB_EXT_U = 0.65;        // 蹬伸段在预备进度中的起点（0.13/0.20）
 const FB_STANCE = 0.6;        // 步态周期中支撑段占比（摆动段 0.4）
 const FB_SWING = 0.38;        // 步长推导用等效摆幅（rad）：stride = 2·腿长·sin(摆幅)
-const FB_TOP_KAPPA = 0.16;    // 俯视纵向走廊：支撑段脚沿轴速度 = 行进速度 × 此投影系数（正面/背面图的纵深压短）
 const FB_LEG_NAME = /leg|thigh|shin|calf|femur|foot|feet|toe|ankle|knee|paw|腿|脚|足|膝|踝|胫|股|ひざ|つま先/i;
 const FB_NOT_LEG = /arm|wing|tail|ear|horn|手|腕|肘|肩|翼|耳|眼/i;
 let FB = null;           // 懒构建（首帧 costume/variant 已定）
@@ -2603,11 +2602,13 @@ function runFallbackPass(pose, dt) {
   // fbCorridorChain，垂距恒定、沿轴望远镜式缩放）。
   // 走廊行程刻意压短：半扫幅 A = 0.03·D、摆动收脚 0.04·D，脚沿
   // 轴总行程 2A + 收脚 ≈ 0.1·D（D≈91 的角色 ≈9px，十像素量级
-  // 以内）；步频按投影关系对齐：支撑段脚沿轴速度 = 行进速度 ×
-  // FB_TOP_KAPPA(0.16)，周期距离 = 2Ā/(FB_STANCE·κ)，并以
-  // PHYS.speed/3.2 为周期距离下限钳住频率上限——小步快迈。
+  // 以内）。
+  // 步频全俯视共用一个口径：fbPhase 只按横向平面步态的周期距离
+  // cycTop 推进（纵向走廊同速率，纵横混合期间亦然），不另设纵向
+  // 周期距离——纵向曾自带 cycVert（按投影系数 κ=0.16 单独对齐、
+  // 约 3.9 步/秒），与横向步频不一致，已撤销。
   // 主导轴切换：fbTopVertW 平滑过渡、两套解算结果按权重混合，
-  // fbPhase 共用、只按混合速率推进、从不重置。
+  // fbPhase 共用同一速率推进、从不重置。
   const movingTop = !side && (Math.abs(dxF) + Math.abs(dyF)) > 1e-6;
   fbTopW += ((fb.walkOk && movingTop ? 1 : 0) - fbTopW) * Math.min(1, dt / 0.12);
   if (!side && fb.walkOk && fbTopW > 0.003) {
@@ -2639,20 +2640,16 @@ function runFallbackPass(pose, dt) {
     }
     const cycTop = 2 * stride;                  // 周期距离（相位 2π 的行进距离）
     const stanceTravel = FB_STANCE * cycTop;    // 支撑行程：脚相对身体的后扫全程
-    // —— 纵向走廊口径：各链走廊几何、行程与周期距离 ——
+    // —— 纵向走廊口径：各链走廊几何与行程 ——
     const corGeoms = chainRT.map((rt) => (rt ? fbCorridorGeom(rt) : null));
-    let dMean = 0, dCnt = 0;
-    for (const g of corGeoms) if (g) { dMean += g.D; dCnt++; }
-    dMean = dCnt ? dMean / dCnt : 0;
+    let dCnt = 0;
+    for (const g of corGeoms) if (g) dCnt++;
     const corA = (D) => Math.max(0.8, Math.min(4, 0.03 * D));    // 沿轴扫掠半幅（px）
     const corTuck = (D) => Math.max(1, Math.min(5, 0.04 * D));   // 摆动收脚量（px）
-    const cycVert = dCnt
-      ? Math.max(PHYS.speed / 3.2, Math.min(140, (2 * corA(dMean)) / (FB_STANCE * FB_TOP_KAPPA)))
-      : cycTop;
     const vertNow = dCnt > 0 && Math.abs(fbTopDir[1]) >= Math.abs(fbTopDir[0]) ? 1 : 0;
     fbTopVertW += (vertNow - fbTopVertW) * Math.min(1, dt / 0.09);
     if (fbTopVertW > 0.98) { fbTopPlants.clear(); fbSwingFrom.clear(); } // 全纵向期间平面落点状态作废，回横向时就地重落脚
-    fbPhase += 2 * Math.PI * dist * ((1 - fbTopVertW) / cycTop + fbTopVertW / cycVert);
+    fbPhase += 2 * Math.PI * dist / cycTop;
     // 各链当帧相位/段（两套驱动共用）
     const us = [], segs = [];
     fb.chains.forEach((chain, ci) => {
