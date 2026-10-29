@@ -2110,6 +2110,8 @@ let fbAirTime = 0;       // 本次连续滞空秒数（坠落落地吸收的触�
 let fbAirRootFrom = 0;   // 离地瞬间的身体过冲量（滞空初期衰减回 0）
 const fbPlants = new Map();     // 链序 → 支撑脚的世界 x（横版：下蹲/支撑/吸收共用）
 const fbTopPlants = new Map();  // 链序 → 支撑脚的世界平面位 [x, y]（俯视）
+const fbCorPlants = new Map();  // 链序 → 走廊支撑脚锚定的世界平面位 [x, y]（俯视纵向专用，与平面步态分表）
+const fbCorSegPrev = new Map(); // 链序 → 走廊驱动上帧所处段（0 支撑 / 1 摆动，走廊专用）
 const fbTipPrev = new Map();    // 链序 → 上帧解算出的脚尖关节本地位（目标连续性）
 const fbSegPrev = new Map();    // 链序 → 上帧所处段（0 支撑 / 1 摆动）
 const fbSwingFrom = new Map();  // 链序 → 本次摆动段起点脚位（本地）
@@ -2600,9 +2602,15 @@ function runFallbackPass(pose, dt) {
   // 算只能让膝盖在画面内左右弹（青蛙式撇膝）——改走廊驱动：解
   // 算退场，各关节骑在「链根→静止脚尖」轴线上做一维伸缩（见
   // fbCorridorChain，垂距恒定、沿轴望远镜式缩放）。
-  // 走廊行程刻意压短：半扫幅 A = 0.03·D、摆动收脚 0.04·D，脚沿
-  // 轴总行程 2A + 收脚 ≈ 0.1·D（D≈91 的角色 ≈9px，十像素量级
-  // 以内）。
+  // 俯视步幅（用户裁定）：每步行进距离 = 腿长·sin(FB_SWING)
+  // （侧视步长之半，用户角色 ≈44、周期 ≈88），各链可达钳制仍作
+  // 上限取小。纵向移动速度亦为横向之半（updateCharacterTop 内
+  // vy ×0.5），步幅半、速度半 → 纵向一个周期的时间与侧视一致。
+  // 走廊行程改每步锚定（撤销 A = 0.03·D、收脚 0.04·D 的独立行
+  // 程参数）：支撑段开步把脚锚在世界平面点、每帧取锚点的沿轴
+  // 坐标，行程由锚定与步频自然决定；摆动预落点 = D + σ·半扫
+  // 程，半扫程 = 0.3·cycTop·|cos(轴向, 行进方向)|（当帧真实几
+  // 何的投影、非常数），中途收脚取扫程的 0.35 倍（派生份额）。
   // 步频全俯视共用一个口径：fbPhase 只按横向平面步态的周期距离
   // cycTop 推进（纵向走廊同速率，纵横混合期间亦然），不另设纵向
   // 周期距离——纵向曾自带 cycVert（按投影系数 κ=0.16 单独对齐、
@@ -2619,8 +2627,9 @@ function runFallbackPass(pose, dt) {
       const nl = Math.hypot(nx, ny) || 1;
       fbTopDir = [nx / nl, ny / nl];
     }
-    // 步长与侧视同式：公式步长 2·腿长·sin(FB_SWING)，再按各链平面
-    // 可达扫掠取小（全链共用最严的一条、步频一致）：脚的扫掠线是过
+    // 步长（用户裁定 步幅 44）：公式步长 腿长·sin(FB_SWING)（侧视
+    // 2·腿长·sin(FB_SWING) 之半），再按各链平面可达扫掠取小（全
+    // 链共用最严的一条、步频一致，钳制只作上限不放大）：脚的扫掠线是过
     // 脚家位、沿行进方向的直线，链根到该线的垂直距离为 perp，支撑
     // 行程半程不得超过弦长 sqrt((0.98·段长和)² − perp²)（与侧视
     // hCap 同构：支撑脚钉住时根→脚距在行程两端最大）。旧口径
@@ -2629,7 +2638,7 @@ function runFallbackPass(pose, dt) {
     // 方向·amp」——离链根仅数像素而腿长数十像素，解算只能把腿折
     // 成死结（实测 cumA 达 4~5 rad），落脚记录再把死结脚尖喂给支
     // 撑段，整腿塌在髋旁出不来（画面实测北向数帧内腿团消失）。
-    let stride = Math.max(10, 2 * fb.legLen * Math.sin(FB_SWING));
+    let stride = Math.max(10, fb.legLen * Math.sin(FB_SWING));
     for (const rt of chainRT) {
       if (!rt || rt.segSum < 1e-6) continue;
       const relX = rt.restT[0] - rt.J[0][0], relY = rt.restT[1] - rt.J[0][1];
@@ -2640,15 +2649,14 @@ function runFallbackPass(pose, dt) {
     }
     const cycTop = 2 * stride;                  // 周期距离（相位 2π 的行进距离）
     const stanceTravel = FB_STANCE * cycTop;    // 支撑行程：脚相对身体的后扫全程
-    // —— 纵向走廊口径：各链走廊几何与行程 ——
+    // —— 纵向走廊口径：各链走廊几何 ——
     const corGeoms = chainRT.map((rt) => (rt ? fbCorridorGeom(rt) : null));
     let dCnt = 0;
     for (const g of corGeoms) if (g) dCnt++;
-    const corA = (D) => Math.max(0.8, Math.min(4, 0.03 * D));    // 沿轴扫掠半幅（px）
-    const corTuck = (D) => Math.max(1, Math.min(5, 0.04 * D));   // 摆动收脚量（px）
     const vertNow = dCnt > 0 && Math.abs(fbTopDir[1]) >= Math.abs(fbTopDir[0]) ? 1 : 0;
     fbTopVertW += (vertNow - fbTopVertW) * Math.min(1, dt / 0.09);
     if (fbTopVertW > 0.98) { fbTopPlants.clear(); fbSwingFrom.clear(); } // 全纵向期间平面落点状态作废，回横向时就地重落脚
+    if (fbTopVertW < 0.02) { fbCorPlants.clear(); fbCorSegPrev.clear(); } // 全横向期间走廊锚定状态作废，回纵向时就地重锚
     fbPhase += 2 * Math.PI * dist / cycTop;
     // 各链当帧相位/段（两套驱动共用）
     const us = [], segs = [];
@@ -2727,21 +2735,45 @@ function runFallbackPass(pose, dt) {
         solved = fbSolveChain(J, rt.tipExt, 0, F, null);
       }
       if (fbTopVertW > 0.001 && corGeoms[ci]) {
-        // 走廊行程：支撑段脚沿轴单调扫过（扫掠符号 σ = 行进方向在
-        // 轴向上的投影符号——身体越过脚时脚相对根的沿轴坐标单调
-        // 变化，方向由 σ 定，与侧视钉点后扫同构造）；摆动段平滑
-        // 返回并在中途额外收脚（沿轴距离缩短 = 纵深屈膝的投影）。
+        // 走廊每步锚定：支撑段开步时把脚锚在世界平面点（走廊专
+        // 用表 fbCorPlants），每帧的沿轴坐标 q 取锚点在身体系位
+        // 的沿轴分量——身体越过锚点时 q 单调扫过，行程由锚定与
+        // 步频（共用 cycTop）自然决定，不设独立行程参数（旧
+        // A = 0.03·D / 收脚 0.04·D 参数已撤销）。摆动段从旧锚坐
+        // 标平滑过渡到预落点：预落沿轴坐标 = D + σ·半扫程（σ =
+        // 行进方向在轴向上的投影符号，脚落在来向一侧、支撑段向
+        // 另一侧扫过 D），半扫程 = 0.3·cycTop·|cos(轴向, 行进
+        // 方向)|——0.3·cycTop 即半个支撑行程，投影取自当帧真实
+        // 几何（轴向与平滑行进方向的夹角）；中途收脚（沿轴距离
+        // 缩短 = 纵深屈膝的投影）取扫程的 0.35 倍（派生份额）。
         const g = corGeoms[ci];
         const dot = fbTopDir[0] * g.ux + fbTopDir[1] * g.uy;
         const sigma = dot < -0.05 ? -1 : 1;
-        const A = corA(g.D), tuck = corTuck(g.D);
+        const halfSweep = 0.3 * cycTop * Math.abs(dot);
+        const corPrev = fbCorSegPrev.get(ci);
+        const anchorQ = () => {
+          const p = fbCorPlants.get(ci);
+          return (p[0] - char.x - J[0][0]) * g.ux + (p[1] - charOriginY() - J[0][1]) * g.uy;
+        };
         let q;
-        if (seg === 0) q = g.D + sigma * A * (1 - 2 * (u / FB_STANCE));
-        else {
+        if (seg === 0) {
+          if (corPrev !== 0 || !fbCorPlants.has(ci)) {
+            const tp = tipPrevOf(ci);
+            fbCorPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 就地锚定（世界平面位）
+          }
+          q = anchorQ();
+        } else {
+          if (corPrev !== 1 || !fbCorPlants.has(ci)) {
+            const tp = tipPrevOf(ci);
+            fbCorPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 无锚可依（走廊中途接合等）→ 就地锚定取当前坐标
+          }
           const s = (u - FB_STANCE) / (1 - FB_STANCE);
           const sm = s * s * (3 - 2 * s);
-          q = g.D + sigma * A * (2 * sm - 1) - tuck * Math.sin(Math.PI * s);
+          const qFrom = anchorQ();
+          const qLand = g.D + sigma * halfSweep;
+          q = qFrom + (qLand - qFrom) * sm - 0.35 * (2 * halfSweep) * Math.sin(Math.PI * s);
         }
+        fbCorSegPrev.set(ci, seg);
         const cs = fbCorridorChain(J, rt.tipExt, g, q, B);
         if (solved) {
           const wV = fbTopVertW;
@@ -3127,7 +3159,11 @@ const CHAR_HW = 7;
 function updateCharacterTop(dt, ix, iy) {
   const len = Math.hypot(ix, iy);
   if (len > 0) {
-    const vx = ix / (len || 1) * PHYS.speed, vy = iy / (len || 1) * PHYS.speed;
+    // 纵向速度减半（用户裁定）：PHYS.speed 是横向速度（140，侧视与
+    // 俯视横向同值）；俯视纵向分量 ×0.5（=70），斜向时仅纵向分量
+    // 减半、横向分量不变。步幅同为侧视之半（见俯视步态 stride），
+    // 步幅半、速度半 → 纵向一个步态周期的时间与侧视一致。
+    const vx = ix / (len || 1) * PHYS.speed, vy = iy / (len || 1) * PHYS.speed * 0.5;
     // 逐轴解算：先 x 后 y，实体当平面障碍
     let nx = char.x + vx * dt;
     for (const q of solids) {
