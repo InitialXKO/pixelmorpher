@@ -328,7 +328,7 @@ export default function AnimationClipPanel() {
                 </Button>
               </div>
               <p className="text-[9px] text-zinc-600 mt-0.5">
-                按节拍阶段切分片段窗为帧标签：时间轴上方会画出标签条，边界可在右侧「DCC管线」页签里调整。
+                按节拍阶段切分片段窗为帧标签：时间轴上方会画出标签条，边界可在左侧「DCC管线」页签里调整。
               </p>
             </div>
             <div className="mt-2">
