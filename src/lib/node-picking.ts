@@ -68,18 +68,17 @@ function capsuleProximity(
   return Math.hypot(px - cx, py - cy) - (r1 + (r2 - r1) * t);
 }
 
-/** 精灵像素采样：点击点按绘制变换（枢轴 + 旋转 + 缩放 + 倾斜 + 镜像，
- * 与 renderNodeSprite 的 translate→rotate→scale→skew 同链）逆映射回
- * 精灵局部，落在不透明像素上算中。像素修改器/像素链改过的占据不在
- * 此列（按基础精灵图判）。 */
-function spritePixelHit(
+/** 画布点 → 精灵局部坐标（浮点，格 = floor）：按绘制变换（枢轴 + 旋转 +
+ * 缩放 + 倾斜 + 镜像，与 renderNodeSprite 的 translate→rotate→scale→skew
+ * 同链）逆映射。命中判定与矫正模式作画共用同一映射。 */
+export function spriteLocalPoint(
   sprite: Sprite,
   wt: { worldAngle: number; scaleX?: number; worldStretch: number; skewX?: number; skewY?: number; mirror: boolean },
   jointX: number, jointY: number,
   x: number, y: number,
-): boolean {
+): { x: number; y: number } | null {
   const w = sprite.width, h = sprite.height;
-  if (!w || !h || !sprite.data) return false;
+  if (!w || !h || !sprite.data) return null;
   const pivotX = sprite.plug ? subToPx(sprite.plug.x) : w / 2;
   const pivotY = sprite.plug ? subToPx(sprite.plug.y) : h / 2;
   let lx = x - jointX, ly = y - jointY;
@@ -91,15 +90,28 @@ function spritePixelHit(
   const tx = Math.tan(((wt.skewX ?? 0) * Math.PI) / 180), ty = Math.tan(((wt.skewY ?? 0) * Math.PI) / 180);
   if (tx !== 0 || ty !== 0) {
     const det = 1 - tx * ty;
-    if (Math.abs(det) < 1e-6) return false;
+    if (Math.abs(det) < 1e-6) return null;
     const ux = (lx - tx * ly) / det, uy = (ly - ty * lx) / det;
     lx = ux; ly = uy;
   }
   lx += wt.mirror ? w - pivotX : pivotX;
   ly += pivotY;
   const srcX = wt.mirror ? w - lx : lx;
-  const cx = Math.floor(srcX), cy = Math.floor(ly);
-  if (cx < 0 || cy < 0 || cx >= w || cy >= h) return false;
+  return { x: srcX, y: ly };
+}
+
+/** 精灵像素采样：逆映射回精灵局部，落在不透明像素上算中。像素修改器/
+ * 像素链改过的占据不在此列（按基础精灵图判）。 */
+function spritePixelHit(
+  sprite: Sprite,
+  wt: { worldAngle: number; scaleX?: number; worldStretch: number; skewX?: number; skewY?: number; mirror: boolean },
+  jointX: number, jointY: number,
+  x: number, y: number,
+): boolean {
+  const local = spriteLocalPoint(sprite, wt, jointX, jointY, x, y);
+  if (!local) return false;
+  const cx = Math.floor(local.x), cy = Math.floor(local.y);
+  if (cx < 0 || cy < 0 || cx >= sprite.width || cy >= sprite.height) return false;
   return isOpaqueCell(sprite.data[cy]?.[cx]);
 }
 

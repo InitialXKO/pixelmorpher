@@ -75,7 +75,19 @@ export function useCanvasState() {
     // pivot 模式专用
     pivotSpriteId?: string; origPivotX?: number; origPivotY?: number;
   } | null>(null);
-  const pixelEditCommandRef = useRef<{ commandId: string; modifierId: string; keyframeId: string; points: { x: number; y: number }[] } | null>(null);
+  // 矫正模式进行中的笔画：目标节点 + 笔画起始帧的映射上下文（世界变换快照，
+  // 与 node-picking 逆映射同口径）+ 已积累的精灵局部点列
+  const pixelEditCommandRef = useRef<{
+    commandId: string;
+    characterId: string;
+    nodeId: string;
+    spriteId: string;
+    sprite: import('@/lib/unified-types').Sprite;
+    wt: { worldAngle: number; scaleX?: number; worldStretch: number; skewX?: number; skewY?: number; mirror: boolean };
+    jointX: number;
+    jointY: number;
+    points: { x: number; y: number }[];
+  } | null>(null);
   const spriteEditBrushCmdRef = useRef<{ commandId: string; modifierId: string; points: { x: number; y: number }[] } | null>(null);
 
   // ---- Dev FPS counter ----
@@ -94,7 +106,6 @@ export function useCanvasState() {
     () => Object.values(spritesRecord).filter((s): s is Sprite & { id: string } => !!s.id),
     [spritesRecord],
   );
-  const keyframes = useProjectStore((s) => s.keyframes);
   const canvasWidth = useProjectStore((s) => s.canvasWidth);
   const canvasHeight = useProjectStore((s) => s.canvasHeight);
   const backgroundColor = useProjectStore((s) => s.backgroundColor);
@@ -106,7 +117,6 @@ export function useCanvasState() {
   const proceduralAnimations = useProjectStore((s) => s.proceduralAnimations);
   const canvasModifierTracks = useProjectStore((s) => s.canvasModifierTracks);
   const setPartPixels = useProjectStore((s) => s.setSpritePixels);
-  const setCorrection = useProjectStore((s) => s.setCorrection);
   const frameRate = useProjectStore((s) => s.frameRate);
   const setCanvasSize = useProjectStore((s) => s.setCanvasSize);
   const animationVariables = useProjectStore((s) => s.animationVariables);
@@ -182,38 +192,19 @@ export function useCanvasState() {
   const selectedPart: Sprite | null = (selectedSpriteId ? spritesRecord[selectedSpriteId] : undefined) ?? null;
 
   // ---- Helper: get full translate offset ----
+  // 旧工程关键帧退役后，独立精灵在画布上再无帧位移来源（part_global 层
+  // 更早已删），偏移恒为 0；保留签名供旧部件几何助手（命中/取色）使用。
   const getFullTranslateOffset = useCallback(
-    (spriteId: string, frame: number): { offsetX: number; offsetY: number } => {
-      const store = useProjectStore.getState();
-      const { getSurroundingKeyframes: getSurrounding } = store;
-      const { prev } = getSurrounding(spriteId, frame);
-      const part = store.sprites[spriteId];
-      if (!part) return { offsetX: 0, offsetY: 0 };
-
-      const keyframe = prev;
-      const allModifiers = keyframe && !keyframe.isBaked ? keyframe.modifiers : [];
-      const modifiers = allModifiers.filter(m => !m.collapsed);
-      const kfBase = computeKeyframeBaseTransform(modifiers);
-      const animTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1, weight: 0, blendMode: 'add' as const, convergeFactor: 1 }; // Part 无 animationModifiers
-      const combined = combineTransformsComponentLevel(kfBase, animTransform, animTransform.blendMode, animTransform.convergeFactor);
-
-      const partGlobalOffsetX = 0;
-      const partGlobalOffsetY = 0;
-      return { offsetX: combined.translateX + partGlobalOffsetX, offsetY: combined.translateY + partGlobalOffsetY };
-    }, [],
+    (_spriteId: string, _frame: number): { offsetX: number; offsetY: number } => ({ offsetX: 0, offsetY: 0 }),
+    [],
   );
   const getInterpolatedTranslateOffset = getFullTranslateOffset;
 
   // ---- Helper: get interpolated modifiers ----
+  // 同上：无关键帧即无逐帧修改器，恒空。
   const getInterpolatedModifiers = useCallback(
-    (spriteId: string, frame: number) => {
-      const { getSurroundingKeyframes: getSurrounding } = useProjectStore.getState();
-      const { prev, next, t } = getSurrounding(spriteId, frame);
-      if (prev && next && prev.frame !== next.frame && t > 0) {
-        return interpolateModifiers(prev.modifiers, next.modifiers, t, prev.interpolationMode ?? 'linear', prev.bezierCP1, prev.bezierCP2);
-      } else if (prev) return prev.modifiers;
-      return [];
-    }, [],
+    (_spriteId: string, _frame: number): never[] => [],
+    [],
   );
 
   // ---- Canvas size editor ----
@@ -305,9 +296,7 @@ export function useCanvasState() {
       const local = canvasToPartLocal(px, py, selectedPart, txOff, tyOff);
       if (!local) return;
 
-      const store = useProjectStore.getState();
-      const currentKf = store.keyframes.find(k => k.spriteId === selectedPart.id! && k.frame === currentFrame);
-      const basePixels = currentKf?.correctionMask ?? selectedPart.data;
+      const basePixels = selectedPart.data;
       const newPixels: PixelGrid = basePixels.map((row) => [...row]);
 
       if (brushStyle === 'solid' || color === null) {
@@ -327,9 +316,8 @@ export function useCanvasState() {
         applyBrushStamp(newPixels, stamp, local.lx, local.ly, selectedPart.width, selectedPart.height);
       }
 
-      if (currentKf?.correctionMask) store.setCorrection(currentKf.id, newPixels);
-      else setPartPixels(selectedPart.id!, newPixels);
-    }, [selectedPart, brushSize, brushStyle, brushStyleParams, canvasToPartLocal, setPartPixels, setCorrection, getInterpolatedTranslateOffset, canvasWidth, canvasHeight],
+      setPartPixels(selectedPart.id!, newPixels);
+    }, [selectedPart, brushSize, brushStyle, brushStyleParams, canvasToPartLocal, setPartPixels, getInterpolatedTranslateOffset, canvasWidth, canvasHeight],
   );
 
   const applyFill = useCallback(
@@ -340,13 +328,9 @@ export function useCanvasState() {
       const local = canvasToPartLocal(px, py, selectedPart, txOff, tyOff);
       if (!local) return;
 
-      const store = useProjectStore.getState();
-      const currentKf = store.keyframes.find(k => k.spriteId === selectedPart.id! && k.frame === currentFrame);
-      const basePixels = currentKf?.correctionMask ?? selectedPart.data;
-      const filled = floodFill(basePixels, local.lx, local.ly, brushColor);
-      if (currentKf?.correctionMask) store.setCorrection(currentKf.id, filled);
-      else setPartPixels(selectedPart.id!, filled);
-    }, [selectedPart, brushColor, canvasToPartLocal, setPartPixels, setCorrection, getInterpolatedTranslateOffset, canvasWidth, canvasHeight],
+      const filled = floodFill(selectedPart.data, local.lx, local.ly, brushColor);
+      setPartPixels(selectedPart.id!, filled);
+    }, [selectedPart, brushColor, canvasToPartLocal, setPartPixels, getInterpolatedTranslateOffset, canvasWidth, canvasHeight],
   );
 
   const applyEyedropper = useCallback(
@@ -518,7 +502,7 @@ export function useCanvasState() {
     onionDataVersionRef.current++;
     invalidateUnifiedPipelineCache();
     dirtyRef.current = true;
-  }, [parts, keyframes, backgroundColor, onionSkinEnabled, onionSkinFrames, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, spriteEditModifiers, unifiedCharacters, globalModifiers, globalBlueprint]);
+  }, [parts, backgroundColor, onionSkinEnabled, onionSkinFrames, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, spriteEditModifiers, unifiedCharacters, globalModifiers, globalBlueprint]);
 
   // ---- Container size / canvas dimension effects ----
   useEffect(() => {
@@ -554,10 +538,10 @@ export function useCanvasState() {
     fpsFramesRef, fpsLastTimeRef, fpsDisplay, setFpsDisplay,
     currentFrameRef, playStateRef, zoomRef, panRef,
     // Store values
-    parts, keyframes, canvasWidth, canvasHeight, backgroundColor,
+    parts, canvasWidth, canvasHeight, backgroundColor,
     onionSkinEnabled, onionSkinFrames, motionBlurStrokes, effectStrokes,
     effectTracks, proceduralAnimations, canvasModifierTracks,
-    setPartPixels, setCorrection, frameRate, setCanvasSize, animationVariables,
+    setPartPixels, frameRate, setCanvasSize, animationVariables,
     globalModifiers,
     nonPuppetParts, unifiedCharacters,
     // Editor

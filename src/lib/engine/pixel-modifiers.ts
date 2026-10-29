@@ -1169,6 +1169,20 @@ function floodFillPixels(pixels: PixelColor[][], startX: number, startY: number,
 /**
  * Render correction mask on top of the part
  */
+/** 逐帧像素修正的命令回放（节点 frameCorrections）：与 pixel_edit 修改器
+ * 同一求值器，输入先克隆（求值器原地作画），返回新网格。 */
+export function applyBrushCommandsToGrid(
+  pixels: PixelGrid,
+  commands: import('../types').BrushCommand[],
+  frame: number,
+): PixelGrid {
+  if (!commands || commands.length === 0) return pixels;
+  const renderer = modifierRegistry.get('pixel_edit');
+  if (!renderer) return pixels;
+  const grid = pixels.map((row) => [...row]);
+  return renderer({ brushCommands: commands, opacity: 1 }, grid, frame) ?? grid;
+}
+
 export function renderCorrectionMask(
   ctx: CanvasRenderingContext2D,
   mask: PixelGrid,

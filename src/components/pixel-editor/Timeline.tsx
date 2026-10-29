@@ -384,7 +384,7 @@ export default function Timeline() {
   // ---- Virtual Scroll ----
   // Part 轨道已删除：tracks 传空数组（原 tracks 恒为空）
   const { visibleRange, rowOffsets, rowHeights, totalHeight, onScroll: handleVirtualScroll } = useVirtualScroll(
-    scrollContainerRef, [], [], effectTracks, canvasModifierTracks, () => [],
+    scrollContainerRef, [], [], effectTracks, canvasModifierTracks,
     puppetNodes as any, isPuppetClip,
     !!(activeClip && puppetCharacter && puppetNodes.length > 0)
   );

@@ -757,6 +757,16 @@ export function convertCharacterToRuntimePackage(
   opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number; palettes?: import('../types').Palette[]; activePaletteId?: string | null; scene?: { solids?: Array<{ x: number; y: number; w: number; h: number }> } }; projectExtras?: { perspectiveForeshorten?: boolean } },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
+  // 逐帧像素修正（矫正模式）：编辑器主画布已消费（渲染计划下发回放），
+  // 运行时包的瓦片是静态烘焙、无逐帧栅格变体机制，此处点名不静默丢弃。
+  for (const node of Object.values(character.nodes ?? {})) {
+    const fc = node.frameCorrections;
+    if (!fc) continue;
+    const frameCount = Object.values(fc).filter((e) => (e.commands?.length ?? 0) > 0).length;
+    if (frameCount > 0) {
+      warnings.push(`节点「${node.name ?? node.id}」有 ${frameCount} 帧逐帧像素修正未进运行时包（仅编辑器预览生效）`);
+    }
+  }
   // ---- 工程级数据点名（运行时完备性审计缺口 5/7，未修项）：convert
   // 结构上拿不到工程级 store，调用方把计数经 projectExtras 传入，有
   // 则点名，不再静默丢弃。（缺口 3 全局修改器/蓝图已改走 projectData

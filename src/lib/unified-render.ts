@@ -44,6 +44,7 @@ import {
 import { rgbaToHexOrNull } from './engine/utils';
 import {
   applyPixelModifiers,
+  applyBrushCommandsToGrid,
   isPixelDeformModifier,
   computeTotalAnimPadding,
   padPixelGrid,
@@ -3229,10 +3230,17 @@ export function generateRenderPlan(
       }
     }
 
+    // 逐帧像素修正：节点当帧条目且精灵 id 与本帧实际精灵对上才下发
+    const fcEntry = node.frameCorrections?.[frame];
+    const frameCorrection = fcEntry && fcEntry.spriteId === effectiveSprite.id
+      ? { commands: fcEntry.commands }
+      : undefined;
+
     nodeInstructions.push({
       nodeId,
       sprite: effectiveSprite,
       stackRender,
+      frameCorrection,
       worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel) + pxToSub(folDx)) as SubPixel,
       worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel) + pxToSub(folDy)) as SubPixel,
       angle: worldTf.worldAngle + (folDa * 180) / Math.PI + spinDeg,
@@ -4017,6 +4025,11 @@ function renderNodeSprite(
     effectivePixels = modResult.pixels;
     modOffsetX = modResult.offsetX;
     modOffsetY = modResult.offsetY;
+  }
+
+  // 逐帧像素修正的笔刷命令：像素修改器之后回放（最上层的逐帧补画）
+  if (instruction.frameCorrection?.commands && instruction.frameCorrection.commands.length > 0) {
+    effectivePixels = applyBrushCommandsToGrid(effectivePixels, instruction.frameCorrection.commands, frame);
   }
 
   // 像素形变走蓝图，不再此处直接调用 applyPixelDeformAnimations
@@ -5165,7 +5178,6 @@ export function renderUnified(
   canvasWidth: number,
   canvasHeight: number,
   _parts: Sprite[],
-  keyframes: Keyframe[],
   currentFrame: number,
   backgroundColor: string,
   effectTracks: EffectTrack[] | undefined,
@@ -5256,7 +5268,6 @@ export function renderUnifiedToCanvas(
   canvasWidth: number,
   canvasHeight: number,
   _parts: Sprite[],
-  keyframes: Keyframe[],
   frame: number,
   backgroundColor: string,
   effectTracks?: EffectTrack[],

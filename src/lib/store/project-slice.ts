@@ -50,7 +50,6 @@ const defaultProject: Project = {
 
   // Legacy fields (backward compatibility)
   tracks: [],
-  keyframes: [],
   effectTracks: [],
   canvasModifierTracks: [],
   motionBlurStrokes: [],
@@ -169,7 +168,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       animationClips: s.animationClips,
       activeAnimationClipId: s.activeAnimationClipId,
       tracks: s.tracks,
-      keyframes: s.keyframes,
       effectTracks: s.effectTracks,
       canvasModifierTracks: s.canvasModifierTracks,
       motionBlurStrokes: s.motionBlurStrokes,
@@ -358,7 +356,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         animationVariables: state.animationVariables,
         // Legacy fields for backward compatibility
         tracks: state.tracks,
-        keyframes: state.keyframes,
         effectTracks: state.effectTracks,
         canvasModifierTracks: state.canvasModifierTracks,
         motionBlurStrokes: state.motionBlurStrokes,
@@ -385,23 +382,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     }
 
     const knownModifierTypes = MODIFIER_DEFINITIONS.map(d => d.type);
-    const processedKeyframes = (file.project.keyframes || []).map((kf: any) => ({
-      ...kf,
-      modifiers: (kf.modifiers || []).map((mod: any) => {
-        if (!knownModifierTypes.includes(mod.type)) {
-          return { ...mod, type: 'unknown', enabled: false, startFrame: mod.startFrame ?? -1, endFrame: mod.endFrame ?? -1, fadeInFrames: mod.fadeInFrames ?? 0, fadeOutFrames: mod.fadeOutFrames ?? 0 };
-        }
-        return {
-          ...mod,
-          startFrame: mod.startFrame ?? -1,
-          endFrame: mod.endFrame ?? -1,
-          fadeInFrames: mod.fadeInFrames ?? 0,
-          fadeOutFrames: mod.fadeOutFrames ?? 0,
-          blendMode: mod.blendMode ?? 'add',
-          coordinateMode: mod.coordinateMode ?? 'world',
-        };
-      }),
-    }));
 
     const processedParts = ((file.project as any).parts || []).map((p: any) => ({
       ...p,
@@ -611,7 +591,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
 
     set({
       ...file.project,
-      keyframes: processedKeyframes,
       sprites: finalSprites,
       animationClips,
       activeAnimationClipId,

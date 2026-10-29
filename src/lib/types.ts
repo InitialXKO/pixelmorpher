@@ -1121,8 +1121,8 @@ export interface Project {
   // the active clip's data takes precedence.
   /** @deprecated Use activeAnimationClip.tracks instead */
   tracks: Track[];
-  /** @deprecated Use activeAnimationClip.keyframes instead */
-  keyframes: Keyframe[];
+  // 旧工程关键帧（按 spriteId）已退役（2026-10-30）：统一渲染/convert
+  // 零消费，矫正已搬到节点 frameCorrections；旧工程该字段载入即丢。
   /** @deprecated Use activeAnimationClip.effectTracks instead */
   effectTracks: EffectTrack[];
   /** @deprecated Use activeAnimationClip.canvasModifierTracks instead */

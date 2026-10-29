@@ -835,6 +835,16 @@ export interface Node {
   // When present, renderer interpolates x/y from trajectory instead of tracks.
   trajectory?: { frame: number; x: number; y: number }[];
 
+  // ---- 逐帧像素修正（矫正模式，2026-10-30 自旧工程关键帧搬家）----
+  // 键 = 工程帧。记录时钉住当帧生效精灵 id：渲染仅当本帧实际精灵与之
+  // 相同才应用（换装/换向换了图不误伤）。commands = 笔刷/填充/擦除命令，
+  // 在像素修改器之后以精灵局部坐标回放（pixel_edit 同一求值器）。旧
+  // correctionMask 整图形式不可达已久（只改不建），不搬。
+  frameCorrections?: Record<number, {
+    spriteId: string;
+    commands?: import('./types').BrushCommand[];
+  }>;
+
   // ---- 动态模式（节点挂载：角色固有效果，不随换装变）----
   // 与服装件的同名字段双挂载：按效果位合并，服装件同位替换、
   // 同位关闭压制（见 dynamic-patterns 的 resolveDynamicPatterns）。
@@ -1544,6 +1554,10 @@ export interface NodeRenderInstruction {
   drawLayer: string;
   generated?: DiscRenderInstruction;
   modifiers: ModifierInstance[];  // Pixel-level modifiers to apply before drawing
+  /** 逐帧像素修正（计划期按 node.frameCorrections[frame] 且精灵 id 对上才下发） */
+  frameCorrection?: {
+    commands?: import('./types').BrushCommand[];
+  };
   frame: number;                 // Current frame (for modifier param resolution)
   frameRate: number;             // Frame rate (for modifier param resolution)
   /** 裁剪多边形（画布 px 坐标）：执行端在本指令绘制前 clip、绘后

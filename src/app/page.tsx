@@ -272,79 +272,11 @@ export default function Home() {
     // ============================================================
     // Z-order: far arm < far foot < body < near foot < near arm
     // ============================================================
-
-    // ============================================================
-    // Walking Animation — Using Animation Modifiers
-    // ============================================================
-
-    // Helper: create a keyframe with translate + optional rotate
-    const addKf = (
-      spriteId: string, frame: number,
-      offsetX: number, offsetY: number, angle?: number,
-    ) => {
-      const kf = store.addKeyframe(spriteId, frame);
-      store.addModifier(kf.id, 'translate');
-      if (angle !== undefined && angle !== 0) {
-        store.addModifier(kf.id, 'rotate');
-      }
-      const updated = store.keyframes.find(k => k.id === kf.id);
-      if (updated) {
-        const tMod = updated.modifiers.find(m => m.type === 'translate');
-        if (tMod) store.updateModifier(kf.id, tMod.id, { offsetX, offsetY });
-        if (angle !== undefined && angle !== 0) {
-          const rMod = updated.modifiers.find(m => m.type === 'rotate');
-          if (rMod) store.updateModifier(kf.id, rMod.id, { angle });
-        }
-      }
-    };
-
-    // Neutral standing offsets:
-    //   Body:  (0, -10)      Left arm:  (-12, -16)     Right arm: (6, -16)
-    //   Left foot: (-4, 2)   Right foot: (2, 2)
-
-    // ---- Frame 0: Contact 1 (right foot forward, left foot back) ----
-    addKf(body.id!,     0,   0, -10);
-    addKf(leftArm.id!,  0, -12, -16);
-    addKf(rightArm.id!, 0,   6, -16);
-    addKf(leftFoot.id!, 0,  -4,   2);
-    addKf(rightFoot.id!,0,   2,   2);
-
-    // Add pendulum to arms
-
-
-    // Add gait to feet
-
-
-    // ---- Frame 4: Passing ----
-    addKf(body.id!,     4,   0, -12);
-    addKf(leftArm.id!,  4, -12, -18);
-    addKf(rightArm.id!, 4,   6, -18);
-    addKf(leftFoot.id!, 4,  -4,  -1);
-    addKf(rightFoot.id!,4,   2,  -1);
-
-    // ---- Frame 8: Contact 2 ----
-    addKf(body.id!,     8,   0, -10);
-    addKf(leftArm.id!,  8, -12, -16);
-    addKf(rightArm.id!, 8,   6, -16);
-    addKf(leftFoot.id!, 8,  -4,   2);
-    addKf(rightFoot.id!,8,   2,   2);
-
-    // ---- Frame 12: Passing back ----
-    addKf(body.id!,     12,  0, -12);
-    addKf(leftArm.id!,  12,-12, -18);
-    addKf(rightArm.id!, 12,  6, -18);
-    addKf(leftFoot.id!, 12, -4,  -1);
-    addKf(rightFoot.id!,12,  2,  -1);
+    // 演示行走动画原本靠旧工程关键帧（已退役）：精灵资产保留播种，
+    // 动画部分不再写死数据（旧关键帧无任何消费端）。
 
     // Select body part by default
     selectPart(body.id!);
-
-      for (const sprite of Object.values(useProjectStore.getState().sprites)) {
-    }
-
-  
-    // V3.0: Migrate legacy data into the active animation clip
-    // After all parts, keyframes, and modifiers are created at the Project level,
   }, [Object.keys(sprites).length]);
 
   return (

@@ -94,7 +94,7 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
     off.height = canvasH;
     const offCtx = off.getContext('2d')!;
     renderUnified(
-      offCtx, canvasW, canvasH, Object.values(pst.sprites), [], frame, 'transparent',
+      offCtx, canvasW, canvasH, Object.values(pst.sprites), frame, 'transparent',
       [], [], [], false, 0,
       pst.proceduralAnimations ?? [], pst.canvasModifierTracks ?? [], frameRate, 'high',
       pst.animationVariables ?? [], pst.globalModifiers ?? [],
