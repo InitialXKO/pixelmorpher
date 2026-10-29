@@ -32,7 +32,7 @@ import {
 } from '@/lib/autosave-opfs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import SidePanelTabs from '@/components/pixel-editor/shared/SidePanelTabs';
-import { Pencil, ChevronDown, ChevronUp, Film, Users, PenLine } from 'lucide-react';
+import { Pencil, ChevronDown, ChevronUp, Film, Users, PenLine, Layers, Route, Globe, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -407,6 +407,33 @@ export default function Home() {
                         label: '笔触',
                         icon: <PenLine className="size-4" />,
                         content: <StrokePanel />,
+                      },
+                      // 工程数据类面板归左栏（与资产/片段/笔触同类，不随
+                      // 画布选择走）：画布轨道、精灵轨迹、工程级全局变换、
+                      // 片段的事件/标签/碰撞（2026-10-29 用户裁定归左）
+                      {
+                        id: 'canvas',
+                        label: '画布效果',
+                        icon: <Layers className="size-4" />,
+                        content: <CanvasModifierPanel />,
+                      },
+                      {
+                        id: 'trajectory',
+                        label: '轨迹',
+                        icon: <Route className="size-4" />,
+                        content: <TrajectoryPanel />,
+                      },
+                      {
+                        id: 'global',
+                        label: '全局',
+                        icon: <Globe className="size-4" />,
+                        content: <GlobalModifierPanel />,
+                      },
+                      {
+                        id: 'dcc',
+                        label: 'DCC管线',
+                        icon: <Zap className="size-4" />,
+                        content: <DccPipelinePanel />,
                       },
                     ]}
                   />

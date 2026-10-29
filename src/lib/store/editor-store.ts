@@ -185,7 +185,7 @@ interface EditorStore extends EditorState {
   refWizardOpen: boolean;
   setRefWizardOpen: (v: boolean) => void;
   // 左栏页签
-  setLeftPanelTab: (t: 'assets' | 'clips' | 'strokes') => void;
+  setLeftPanelTab: (t: 'assets' | 'clips' | 'strokes' | 'canvas' | 'trajectory' | 'global' | 'dcc') => void;
 }
 
 const defaultEditor: EditorState = {
