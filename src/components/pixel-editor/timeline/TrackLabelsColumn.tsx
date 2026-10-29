@@ -17,7 +17,7 @@ import {
 import { useProjectStore } from '@/lib/store';
 import type { EffectTrack, CanvasModifierTrack, EffectType } from '@/lib/types';
 import type { TrackTimelineDisplay } from '@/lib/v15-types';
-import { RULER_HEIGHT, TRACK_HEIGHT, LABEL_WIDTH, EFFECT_CONFIG, PUPPET_COLOR } from './constants';
+import { RULER_HEIGHT, TAG_STRIP_HEIGHT, TRACK_HEIGHT, LABEL_WIDTH, EFFECT_CONFIG, PUPPET_COLOR } from './constants';
 
 // ---- Left: Track Labels Column ----
 interface TrackLabelsColumnProps {
@@ -37,6 +37,8 @@ interface TrackLabelsColumnProps {
   trackFrameSteps?: Record<string, number>;
   onUpdateTrackTimelineDisplay?: (trackId: string, updates: Partial<TrackTimelineDisplay>) => void;
   onSetTrackFrameStep?: (trackId: string, step: number) => void;
+  /** 泳道列是否显示了帧标签条（标签列头同步加高，保持行对齐） */
+  tagStripVisible?: boolean;
   /** 服装/变体状态轨道标签（记录/删除/当前帧摘要） */
   costumeState?: {
     summary: string;
@@ -50,7 +52,7 @@ export default function TrackLabelsColumn({
   effectTracks, canvasModifierTracks,
   visibleRange, rowOffsets, rowHeights, totalHeight,
   selectedEffectTrackId, onSelectEffectTrack,
-  isPuppetClip, nodeList, labelScrollRef,
+  isPuppetClip, nodeList, labelScrollRef, tagStripVisible,
   trackTimelineDisplays, trackFrameSteps,
   onUpdateTrackTimelineDisplay, onSetTrackFrameStep,
   costumeState,
@@ -59,7 +61,7 @@ export default function TrackLabelsColumn({
   return (
     <div className="shrink-0 flex flex-col border-r border-[#1e1e3a]" style={{ width: LABEL_WIDTH }}>
       {/* Ruler label area */}
-      <div className="shrink-0 flex items-center px-2 border-b border-[#1e1e2e]" style={{ height: RULER_HEIGHT, background: '#16162a' }}>
+      <div className="shrink-0 flex items-center px-2 border-b border-[#1e1e2e]" style={{ height: RULER_HEIGHT + (tagStripVisible ? TAG_STRIP_HEIGHT : 0), background: '#16162a' }}>
         <span className="text-[10px] text-gray-500 uppercase tracking-wider select-none">Tracks</span>
       </div>
 
