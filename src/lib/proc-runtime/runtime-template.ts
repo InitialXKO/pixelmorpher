@@ -2546,13 +2546,32 @@ function runFallbackPass(pose, dt) {
       const nl = Math.hypot(nx, ny) || 1;
       fbTopDir = [nx / nl, ny / nl];
     }
-    const amp = Math.max(2, Math.min(7, fb.legLen * 0.14));  // 平面落脚前伸距（俯视腿短、步幅小）
-    const cycTop = Math.max(8, (2 * amp) / FB_STANCE);       // 周期距离：支撑行程 0.6·周期 = 2·amp（脚全程可达、支撑不滑）
+    // 步长与侧视同式：公式步长 2·腿长·sin(FB_SWING)，再按各链平面
+    // 可达扫掠取小（全链共用最严的一条、步频一致）：脚的扫掠线是过
+    // 脚家位、沿行进方向的直线，链根到该线的垂直距离为 perp，支撑
+    // 行程半程不得超过弦长 sqrt((0.98·段长和)² − perp²)（与侧视
+    // hCap 同构：支撑脚钉住时根→脚距在行程两端最大）。旧口径
+    // amp = 腿长×0.14（≤7px）是正弦时代的摆幅残留：周期距离只剩
+    // 23px 上下、脚以 6 次/秒在链根旁碎步，且摆动落点取「链根 +
+    // 方向·amp」——离链根仅数像素而腿长数十像素，解算只能把腿折
+    // 成死结（实测 cumA 达 4~5 rad），落脚记录再把死结脚尖喂给支
+    // 撑段，整腿塌在髋旁出不来（画面实测北向数帧内腿团消失）。
+    let stride = Math.max(10, 2 * fb.legLen * Math.sin(FB_SWING));
+    for (const rt of chainRT) {
+      if (!rt || rt.segSum < 1e-6) continue;
+      const relX = rt.restT[0] - rt.J[0][0], relY = rt.restT[1] - rt.J[0][1];
+      const perp = Math.abs(relX * fbTopDir[1] - relY * fbTopDir[0]);
+      const reach = 0.98 * rt.segSum;
+      const half = Math.sqrt(Math.max(0, reach * reach - perp * perp));
+      stride = Math.min(stride, Math.max(10, (2 * half) / FB_STANCE));
+    }
+    const cycTop = 2 * stride;                  // 周期距离（相位 2π 的行进距离）
+    const stanceTravel = FB_STANCE * cycTop;    // 支撑行程：脚相对身体的后扫全程
     fbPhase += 2 * Math.PI * dist / cycTop;
     fb.chains.forEach((chain, ci) => {
       const rt = chainRT[ci];
       if (!rt) return;
-      const { J } = rt;
+      const { J, restT } = rt;
       let u = ((fbPhase + chain.phase) / (2 * Math.PI)) % 1;
       if (u < 0) u += 1;
       const seg = u < FB_STANCE ? 0 : 1;
@@ -2569,10 +2588,21 @@ function runFallbackPass(pose, dt) {
         const from = fbSwingFrom.get(ci);
         const s = (u - FB_STANCE) / (1 - FB_STANCE);
         const sm = s * s * (3 - 2 * s);
-        const endX = J[0][0] + fbTopDir[0] * amp, endY = J[0][1] + fbTopDir[1] * amp;
-        const bow = amp * 0.35 * Math.sin(Math.PI * s);
-        F = [from[0] + (endX - from[0]) * sm + (-fbTopDir[1]) * bow,
-             from[1] + (endY - from[1]) * sm + fbTopDir[0] * bow];
+        // 摆动终点在脚家位沿行进方向前移半个支撑行程处：扫掠窗以
+        // 「过家位、沿行进方向的直线」为轴（链根在该轴上的投影为
+        // 窗心，与侧视窗以链根横坐标为心、落在 家位高度线上同构），
+        // 脚全程围绕自己的家位前后扫，不再被拽向链根。
+        const endX = restT[0] + fbTopDir[0] * (stanceTravel / 2), endY = restT[1] + fbTopDir[1] * (stanceTravel / 2);
+        // 外弧方向：家位相对链根的横向分量（脚绕身体外侧回摆，不
+        // 穿身体中心）；横向分量近零（脚在行进轴上）时退化为行进
+        // 方向的垂直方向。
+        let px = (restT[0] - J[0][0]) - ((restT[0] - J[0][0]) * fbTopDir[0] + (restT[1] - J[0][1]) * fbTopDir[1]) * fbTopDir[0];
+        let py = (restT[1] - J[0][1]) - ((restT[0] - J[0][0]) * fbTopDir[0] + (restT[1] - J[0][1]) * fbTopDir[1]) * fbTopDir[1];
+        const pl = Math.hypot(px, py);
+        if (pl > 1e-6) { px /= pl; py /= pl; } else { px = -fbTopDir[1]; py = fbTopDir[0]; }
+        const bow = stanceTravel * 0.18 * Math.sin(Math.PI * s);
+        F = [from[0] + (endX - from[0]) * sm + px * bow,
+             from[1] + (endY - from[1]) * sm + py * bow];
       }
       fbSegPrev.set(ci, seg);
       const solved = fbSolveChain(J, rt.tipExt, 0, F, null);
