@@ -1926,7 +1926,11 @@ function fxRunPostChain(rawList, state, elByKey, camX, camY) {
 // ---------- 宿主输入与运行时状态 ----------
 const char = { x: 0, y: 0, py: 0, vy: 0, onGround: true, variant: 0, lockedVariant: false, wallDir: 0, ledge: null };
 // 现场可调参数（控制条「手感」面板直改；宿主包 pkg.scene 可给初值）
-const PHYS = { speed: 140, jumpV: 350, gravity: 720, camFollow: 10, camLockX: false, camLockY: false };
+const PHYS = { speed: 140, jumpV: 350, gravity: 720, camFollow: 10, camLockX: false, camLockY: false,
+// 土狼时间（s）：非跳跃离地后 coyote 内按跳仍可起跳；coyoteHang 内不下落（水平滑出）
+coyote: 0.1, coyoteHang: 0.07,
+// 可变跳高：上升段按住跳跃时重力倍率；上升中松开跳跃键的初速打折（跳跃截断）
+jumpHoldGrav: 0.5, jumpCut: 0.45 };
 // 按键绑定（控制条「按键」面板可重绑；方向键恒为备用）
 const KEYMAP = { left: 'KeyA', right: 'KeyD', jump: 'KeyW', down: 'KeyS' };
 let rebindTarget = null; // {kind:'move', act} | {kind:'perf', perf}
@@ -2098,6 +2102,12 @@ const FB_LEG_NAME = /leg|thigh|shin|calf|femur|foot|feet|toe|ankle|knee|paw|腿|
 const FB_NOT_LEG = /arm|wing|tail|ear|horn|手|腕|肘|肩|翼|耳|眼/i;
 let FB = null;           // 懒构建（首帧 costume/variant 已定）
 let fbCrouchT = 0;       // >0 = 跳跃预备倒计时（剩余秒，物理侧递减、到点给初速）
+let fbCrouchCoyote = false; // 当前下蹲倒计时由土狼跳触发（人在空中，倒计时不按「离地取消」处理）
+let coyoteT = 1e9;       // 距上次非跳跃离地的秒数（在地/跳跃离地时保持大值 → 土狼窗关闭）
+let coyoteHangT = 1e9;   // 非跳跃离地后已滞空秒数（土狼滞空判据，同上保持大值即关闭）
+let coyoteArm = false;   // 上帧收尾时在地 → 本帧若非跳跃离地，土狼计时从 0 起计（哨兵值不直接累加）
+let airByJump = false;   // 本次滞空由跳跃造成（不进土狼窗、不享土狼滞空）
+let prevJumpHeld = false; // 上帧跳跃键状态（可变跳高的松开打折取边沿）
 let fbPhase = 0;         // 步态相位（按实测位移推进，撞墙即停）
 let fbWalkW = 0;         // 横版行走混合权重
 let fbTopW = 0;          // 俯视行走混合权重
@@ -2231,7 +2241,7 @@ function fbCorridorGeom(rt) {
 function fbCorridorChain(J, tipExt, g, q, B) {
   const n = J.length;
   const R0 = J[0];
-  if (n < 2 || !g) return { P: J.map((p) => [p[0] + B[0], p[1] + B[1]]), cumA: new Array(n).fill(0), tip: [R0[0] + B[0], R0[1] + B[1]] };
+  if (n < 2 || !g) return { P: J.map((p) => [p[0] + B[0], p[1] + B[1]]), cumA: new Array(n).fill(0), tip: [R0[0] + B[0], R0[1] + B[1]], segS: new Array(n).fill(1) };
   const k = q / g.D;
   const P = [];
   for (let i = 0; i < n; i++) {
@@ -2251,14 +2261,24 @@ function fbCorridorChain(J, tipExt, g, q, B) {
   }
   const PP = [...P, tip];
   const cumA = new Array(n).fill(0);
+  // 段长比 segS：走廊段长（PP）/ 静止段长（RR）——回写时经 sy 通道
+  // 把精灵沿骨骼方向按此比缩放，精灵远端才真落到下一关节（真伸
+  // 缩）；只写角度+中心时精灵保持静止长度，k≠1 必在关节处溢出/
+  // 缺口、随段向差呈横向错位（用户真机所见「不是伸缩而是错位」）。
+  const segS = new Array(n).fill(1);
   for (let i = 0; i < n; i++) {
     cumA[i] = Math.atan2(PP[i + 1][1] - PP[i][1], PP[i + 1][0] - PP[i][0])
             - Math.atan2(RR[i + 1][1] - RR[i][1], RR[i + 1][0] - RR[i][0]);
+    const rl = Math.hypot(RR[i + 1][0] - RR[i][0], RR[i + 1][1] - RR[i][1]);
+    if (rl > 1e-6) segS[i] = Math.hypot(PP[i + 1][0] - PP[i][0], PP[i + 1][1] - PP[i][1]) / rl;
   }
-  return { P, cumA, tip };
+  return { P, cumA, tip, segS };
 }
 /** 解算结果回写 pose：与模拟遍/旧兜底同口径——先按当前条目测
- * 中心 refC，再叠角、复算中心、把中心按权重 w 补差到目标位。 */
+ * 中心 refC，再叠角、复算中心、把中心按权重 w 补差到目标位。
+ * solved.segS 存在时（走廊驱动）另把段长比按 w 混入 sy 通道：
+ * 精灵沿骨骼方向（局部 Y）绕 plug 缩放，远端随关节距伸缩——两
+ * 骨解算段长恒为静止值、不带 segS，此路对横版/平面步态零影响。 */
 function fbWriteChain(pose, keys, solved, w) {
   const { P, cumA } = solved;
   for (let i = 0; i < keys.length; i++) {
@@ -2273,6 +2293,10 @@ function fbWriteChain(pose, keys, solved, w) {
     const by = refC[1] + (charOriginY() + P[i][1] - refC[1]) * w;
     e.dx = (e.dx || 0) + (bx - c1[0]);
     e.dy = (e.dy || 0) + (by - c1[1]);
+    if (solved.segS) {
+      const sf = 1 + (solved.segS[i] - 1) * w;
+      if (Math.abs(sf - 1) > 1e-4) e.sy = (e.sy === undefined || e.sy === null ? 1 : e.sy) * sf;
+    }
   }
 }
 /** 横版脚段角度进程（脚跟落 → 全掌 → 脚尖蹬离 / 摆动收脚尖）：
@@ -2375,12 +2399,18 @@ function buildFallback() {
   return fb;
 }
 function ensureFB() { if (!FB) FB = buildFallback(); return FB; }
+/** 土狼窗判据：非跳跃离地后 PHYS.coyote 秒内仍可起跳（物理侧
+ * updateCharacterSide 与跳跃请求共用同一口径） */
+function coyoteOkNow() { return !char.onGround && !airByJump && coyoteT <= PHYS.coyote; }
 /** 跳跃统一请求：兜底开启时先进入下蹲倒计时（updateCharacterSide
- * 里倒完才给初速），否则与旧行为一致立即起跳 */
+ * 里倒完才给初速），否则与旧行为一致立即起跳。土狼窗内（跑出平
+ * 台边缘后短暂滞空）同样受理，倒计时标 fbCrouchCoyote 不被离地取消 */
 function requestJump() {
-  if (moveMode !== 'side' || !char.onGround || char.ledge) return;
-  if (ensureFB().jumpOk) { if (fbCrouchT <= 0) fbCrouchT = FB_CROUCH_DUR; }
-  else { char.vy = PHYS.jumpV; char.onGround = false; }
+  if (moveMode !== 'side' || char.ledge) return;
+  const coyoteOk = coyoteOkNow();
+  if (!char.onGround && !coyoteOk) return;
+  if (ensureFB().jumpOk) { if (fbCrouchT <= 0) { fbCrouchT = FB_CROUCH_DUR; fbCrouchCoyote = coyoteOk; } }
+  else { airByJump = true; char.vy = PHYS.jumpV; char.onGround = false; }
 }
 /** 兜底遍（表演合成后、模拟遍前）：脚目标驱动——跳跃四段、横版
  * 行走支撑/摆动分段、俯视平面步态，统一走两骨解算回写 pose */
@@ -2578,14 +2608,52 @@ function runFallbackPass(pose, dt) {
       if (F) solvedList.push({ chain, rt, F, footDelta, w, walk: false });
       else solvedList.push(null);
     });
+    // —— 挤压拉伸（动画理论「小球跳跃」，仅兜底跳跃段）：s = 身体
+    // 竖直缩放（1 为中性）。下蹲压扁、蹬伸与快速上升沿运动方向拉
+    // 长、顶点附近（|vy|→0）回中性、落地压扁后回弹；幅值口径与现
+    // 行下沉对齐（dipR = 下沉深/包围高 ≈ 0.13、拉伸同量级）。作用
+    // 于非腿部件：sy 沿高度缩放 + 以髋线为轴的梯度 dy（髋以上部
+    // 件按距髋高度比例升降，部件间距随之压/拉、不断节）；腿部由
+    // 解算自理。阶段切换与 bodyOff 的缓动曲线逐段同式，保证压拉
+    // 与身体位移同步。
+    let squashS = 1;
+    if (jumpW) {
+      const dipR = Math.max(0.04, Math.min(0.2, fbDipMax() / Math.max(1, charBoxH())));
+      if (fbStage === 'crouch') {
+        const u = Math.max(0, Math.min(1, 1 - fbCrouchT / FB_CROUCH_DUR));
+        if (u < FB_EXT_U) { const q = u / FB_EXT_U; squashS = 1 - dipR * (1 - (1 - q) * (1 - q)); }
+        else { const q = (u - FB_EXT_U) / (1 - FB_EXT_U); squashS = 1 + dipR * q * q; }
+      } else if (fbStage === 'air') {
+        squashS = 1 + dipR * 0.9 * Math.min(1, Math.abs(char.vy) / PHYS.jumpV);
+      } else if (fbStage === 'absorb') {
+        const dipA = dipR * 0.6;
+        if (fbStageT < 0.06) { const q = fbStageT / 0.06; squashS = 1 - dipA * (1 - (1 - q) * (1 - q)); }
+        else { const q = Math.max(0, Math.min(1, (fbStageT - 0.06) / 0.12)); squashS = 1 - dipA * (1 - q * q * (3 - 2 * q)); }
+      }
+    }
+    const squashOn = jumpW && Math.abs(squashS - 1) > 0.002;
     // 身体偏移落笔：跳跃段用 bodyOff；行走用几何 sink（×权重）——
     // 非腿部件 dy 叠加；腿链根偏移在解算时注入（同一数值）
     const bodyNow = jumpW ? bodyOff : -Math.min(12, Math.max(0, sink)) * fbWalkW;
-    if (Math.abs(bodyNow) > 0.01 && (jumpW || fbWalkW > 0.003)) {
+    if ((Math.abs(bodyNow) > 0.01 && (jumpW || fbWalkW > 0.003)) || squashOn) {
+      let hipRef = 0;
+      if (squashOn) {
+        let hn = 0;
+        for (const rt of chainRT) { if (rt) { hipRef += rt.J[0][1]; hn++; } }
+        if (hn) hipRef /= hn;
+      }
       for (const part of PARTS) {
         if (fb.legRole.has(part.key)) continue;
         const e = pose[part.key] || (pose[part.key] = { a: 0, dy: 0, rim: 0, glint: 0 });
-        e.dy = (e.dy || 0) + bodyNow;
+        if (Math.abs(bodyNow) > 0.01 && (jumpW || fbWalkW > 0.003)) e.dy = (e.dy || 0) + bodyNow;
+        if (squashOn) {
+          const prm = fbParamsOf(part);
+          if (prm) {
+            const C = fbJointOf(prm);
+            e.dy = (e.dy || 0) + (C[1] - hipRef) * (squashS - 1);
+            e.sy = (e.sy === undefined || e.sy === null ? 1 : e.sy) * squashS;
+          }
+        }
       }
     }
     for (const s of solvedList) {
@@ -2715,11 +2783,16 @@ function runFallbackPass(pose, dt) {
           const from = fbSwingFrom.get(ci);
           const s = (u - FB_STANCE) / (1 - FB_STANCE);
           const sm = s * s * (3 - 2 * s);
-          // 摆动终点在脚家位沿行进方向前移半个支撑行程处：扫掠窗以
-          // 「过家位、沿行进方向的直线」为轴（链根在该轴上的投影为
-          // 窗心，与侧视窗以链根横坐标为心、落在 家位高度线上同构），
-          // 脚全程围绕自己的家位前后扫，不再被拽向链根。
-          const endX = restT[0] + fbTopDir[0] * (stanceTravel / 2), endY = restT[1] + fbTopDir[1] * (stanceTravel / 2);
+          // 摆动终点：沿行进方向的扫掠窗改两脚共用——窗心取链根的
+          // 沿行进方向坐标（与侧视落脚窗以链根为心同构），终点的沿
+          // 行进坐标 = 链根沿行进坐标 + 半个支撑行程；横向（垂直行
+          // 进方向）坐标仍取脚家位，不串道。旧口径以各自家位为窗
+          // 心：东向布局里两脚家位沿行进方向错开 ≈60（南向站宽转
+          // 成前后错位）、摆幅 ±26 够不着对方区域，两脚永远不互
+          // 越（实测 248 帧前后顺序零交换）；共用窗心后两脚扫过同
+          // 一窗、反相交替互越。
+          const relAlong = (restT[0] - J[0][0]) * fbTopDir[0] + (restT[1] - J[0][1]) * fbTopDir[1];
+          const endX = restT[0] + fbTopDir[0] * (stanceTravel / 2 - relAlong), endY = restT[1] + fbTopDir[1] * (stanceTravel / 2 - relAlong);
           // 外弧方向：家位相对链根的横向分量（脚绕身体外侧回摆，不
           // 穿身体中心）；横向分量近零（脚在行进轴上）时退化为行进
           // 方向的垂直方向。
@@ -2781,6 +2854,7 @@ function runFallbackPass(pose, dt) {
             P: cs.P.map((cp, i) => [solved.P[i][0] + (cp[0] - solved.P[i][0]) * wV, solved.P[i][1] + (cp[1] - solved.P[i][1]) * wV]),
             cumA: cs.cumA.map((ca, i) => solved.cumA[i] + (ca - solved.cumA[i]) * wV),
             tip: [solved.tip[0] + (cs.tip[0] - solved.tip[0]) * wV, solved.tip[1] + (cs.tip[1] - solved.tip[1]) * wV],
+            segS: cs.segS.map((ss) => 1 + (ss - 1) * wV), // 平面解算段长比恒 1，按纵向权重混入走廊段长比
           };
         } else solved = cs;
       }
@@ -3186,7 +3260,7 @@ function updateCharacterTop(dt, ix, iy) {
   char.onGround = true; char.wallDir = 0; char.ledge = null;
 }
 function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
-  if (fbCrouchT > 0 && !char.onGround) fbCrouchT = 0; // 下蹲中离地（走下台阶等）→ 取消
+  if (fbCrouchT > 0 && !char.onGround && !fbCrouchCoyote) { fbCrouchT = 0; } // 下蹲中离地（走下台阶等）→ 取消；土狼跳的倒计时除外（本就在空中）
   const H = charBoxH();
   // —— 抓边中：物理暂停，等爬上/落下 ——
   if (char.ledge) {
@@ -3199,6 +3273,14 @@ function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
     }
     return;
   }
+  // —— 土狼时间维护：在地清零关闭并预备（coyoteArm）；跳跃离地不
+  // 计时（airByJump）；「非跳跃离地」（走出边缘/支撑消失）的第一
+  // 帧由 coyoteArm 把计时从 0 起计、其后逐帧累加 ——
+  if (char.onGround) { coyoteT = 1e9; coyoteHangT = 1e9; airByJump = false; coyoteArm = true; }
+  else if (!airByJump) {
+    if (coyoteArm) { coyoteT = 0; coyoteHangT = 0; coyoteArm = false; }
+    coyoteT += dt; coyoteHangT += dt;
+  } else coyoteArm = false;
   if (ix !== 0 && !char.lockedVariant) char.variant = ix > 0 ? 2 : 6;
   // —— 水平：先走后堵（实体侧面） ——
   char.wallDir = 0;
@@ -3214,17 +3296,31 @@ function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
   }
   char.x = nx;
   if (autoWalk && Math.abs(char.x) > 110) autoDir = char.x > 0 ? -1 : 1;
-  // —— 跳跃（兜底开启时先屈膝下蹲：倒计时到位才给初速，起跳时机顺延） ——
+  // —— 跳跃（兜底开启时先屈膝下蹲：倒计时到位才给初速，起跳时机顺延；
+  // 土狼窗内按跳同口径受理，倒计时期间不被离地取消） ——
+  const coyoteOk = coyoteOkNow();
   if (fbCrouchT > 0) {
     fbCrouchT -= dt;
-    if (fbCrouchT <= 0) { fbCrouchT = 0; char.vy = PHYS.jumpV; char.onGround = false; }
-  } else if (jumpHeld && char.onGround) {
-    if (ensureFB().jumpOk) fbCrouchT = FB_CROUCH_DUR;
-    else { char.vy = PHYS.jumpV; char.onGround = false; }
+    if (fbCrouchT <= 0) { fbCrouchT = 0; fbCrouchCoyote = false; airByJump = true; char.vy = PHYS.jumpV; char.onGround = false; }
+  } else if (jumpHeld && (char.onGround || coyoteOk)) {
+    if (ensureFB().jumpOk) { fbCrouchT = FB_CROUCH_DUR; fbCrouchCoyote = coyoteOk; }
+    else { airByJump = true; char.vy = PHYS.jumpV; char.onGround = false; }
   }
   // —— 垂直：重力积分后按跨越判定落地/顶头 ——
   const prevFeet = char.y, prevHead = char.y + H;
-  if (!char.onGround) char.vy -= PHYS.gravity * dt;
+  // 可变跳高·跳跃截断：上升中松开跳跃键（边沿）→ 初速立即打折
+  if (prevJumpHeld && !jumpHeld && !char.onGround && char.vy > 0) char.vy *= PHYS.jumpCut;
+  prevJumpHeld = jumpHeld;
+  if (!char.onGround) {
+    // 土狼滞空：非跳跃离地后的最初 coyoteHang 秒不下落（水平滑出平台）
+    if (!airByJump && coyoteHangT < PHYS.coyoteHang) char.vy = 0;
+    else {
+      // 可变跳高·长按：上升段按住跳跃 → 重力减小，跳得更高
+      let g = PHYS.gravity;
+      if (jumpHeld && char.vy > 0) g *= PHYS.jumpHoldGrav;
+      char.vy -= g * dt;
+    }
+  }
   else if (!jumpHeld || char.vy <= 0) char.vy = 0;
   let ny = char.y + char.vy * dt;
   let landed = false;
@@ -3263,10 +3359,10 @@ function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
       const top = q.y + q.h;
       if (handPrev > top && handNow <= top) {
         if (char.x + CHAR_HW >= q.x - 2 && char.x + CHAR_HW <= q.x + 5 && ix >= 0) {
-          char.ledge = { s: q, side: 1 }; char.y = top - (H - 6); char.x = q.x - CHAR_HW; char.vy = 0; break;
+          char.ledge = { s: q, side: 1 }; char.y = top - (H - 6); char.x = q.x - CHAR_HW; char.vy = 0; coyoteT = 1e9; coyoteHangT = 1e9; break;
         }
         if (char.x - CHAR_HW <= q.x + q.w + 2 && char.x - CHAR_HW >= q.x + q.w - 5 && ix <= 0) {
-          char.ledge = { s: q, side: -1 }; char.y = top - (H - 6); char.x = q.x + q.w + CHAR_HW; char.vy = 0; break;
+          char.ledge = { s: q, side: -1 }; char.y = top - (H - 6); char.x = q.x + q.w + CHAR_HW; char.vy = 0; coyoteT = 1e9; coyoteHangT = 1e9; break;
         }
       }
     }
@@ -3356,7 +3452,7 @@ const feelPanel = mkPanelDiv(), keyPanel = mkPanelDiv(), scenePanel = mkPanelDiv
   bMode.onclick = () => {
     if (moveMode === 'side') { moveMode = 'top'; char.py = char.y; char.ledge = null; char.wallDir = 0; }
     else { moveMode = 'side'; char.y = 0; char.vy = 0; char.onGround = true; }
-    fbCrouchT = 0; // 模式切换取消进行中的兜底下蹲，避免往返后迟到起跳
+    fbCrouchT = 0; fbCrouchCoyote = false; coyoteT = 1e9; coyoteHangT = 1e9; airByJump = false; prevJumpHeld = false; // 模式切换取消进行中的兜底下蹲，避免往返后迟到起跳；土狼/可变跳高状态一并复位
     fbStage = 'none'; fbStageT = 0; fbAirTime = 0; // 脚目标状态一并清（植物点/段记录跨模式无意义）
     fbPlants.clear(); fbTopPlants.clear(); fbTipPrev.clear(); fbSegPrev.clear(); fbSwingFrom.clear(); fbAirCur.clear();
     camState.snap = true;
