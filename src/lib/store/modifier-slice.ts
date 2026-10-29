@@ -16,6 +16,7 @@ import {
   ModifierParamValue,
   BrushCommand,
 } from '../types';
+import { _isDragActive } from './shared';
 import {
   invalidateAnimModifierCache,
   invalidateInterpolationCache,
@@ -27,7 +28,6 @@ import {
   imageDataToPixelGrid,
   bakeParamDriverToKeyframes,
 } from '../engine';
-import { _isDragActive, _pendingTrajectorySpriteIds } from './shared';
 
 export type ModifierSlice = {
   addModifier: ProjectStore['addModifier'];
@@ -71,9 +71,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
       const kf = get().keyframes.find((k) => k.id === keyframeId);
       if (kf) {
         if (_isDragActive) {
-          _pendingTrajectorySpriteIds.add(kf.spriteId);
         } else {
-          setTimeout(() => get().autoRecordTrajectory(kf.spriteId), 0);
         }
       }
     }
@@ -134,9 +132,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
         }
         if (mod.type === 'translate' || mod.type === 'rotate') {
           if (_isDragActive) {
-            _pendingTrajectorySpriteIds.add(kf.spriteId);
           } else {
-            setTimeout(() => get().autoRecordTrajectory(kf.spriteId), 0);
           }
         }
       }
@@ -370,9 +366,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
     }));
     if (type === 'translate' || type === 'rotate') {
       if (_isDragActive) {
-        _pendingTrajectorySpriteIds.add(spriteId);
       } else {
-        setTimeout(() => get().autoRecordTrajectory(spriteId), 0);
       }
     }
   },
@@ -390,9 +384,7 @@ export const createModifierSlice: StateCreator<ProjectStore, [], [], ModifierSli
     }));
     if (modifierType === 'translate' || modifierType === 'rotate') {
       if (_isDragActive) {
-        _pendingTrajectorySpriteIds.add(spriteId);
       } else {
-        setTimeout(() => get().autoRecordTrajectory(spriteId), 0);
       }
     }
   },

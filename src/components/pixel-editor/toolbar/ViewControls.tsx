@@ -13,7 +13,6 @@ import {
   ZoomOut,
   Maximize,
   Grid3x3,
-  Spline,
   Bone,
   Paintbrush,
   Eye,
@@ -126,49 +125,7 @@ export function GridToggle() {
   );
 }
 
-// ---- Trajectory Toggle ----
-export function TrajectoryToggle() {
-  const showTrajectories = useEditorStore((s) => s.showTrajectories);
-  const toggleTrajectories = useEditorStore((s) => s.toggleTrajectories);
 
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Toggle
-          pressed={showTrajectories}
-          onPressedChange={toggleTrajectories}
-          aria-label="Toggle Trajectories"
-          className="h-7 w-7 p-0 data-[state=on]:bg-emerald-600/30 data-[state=on]:text-emerald-300 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded"
-        >
-          <Spline className="size-3.5" />
-        </Toggle>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" className="text-xs">Toggle Trajectories</TooltipContent>
-    </Tooltip>
-  );
-}
-
-// ---- Trajectory Snap Toggle ----
-export function TrajectorySnapToggle() {
-  const trajectorySnap = useEditorStore((s) => s.trajectorySnap);
-  const setTrajectorySnap = useEditorStore((s) => s.setTrajectorySnap);
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Toggle
-          pressed={trajectorySnap}
-          onPressedChange={setTrajectorySnap}
-          aria-label="Trajectory Snap"
-          className="h-7 w-7 p-0 data-[state=on]:bg-cyan-600/30 data-[state=on]:text-cyan-300 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded"
-        >
-          <Magnet className="size-3.5" />
-        </Toggle>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" className="text-xs">Trajectory Snap to Pixels</TooltipContent>
-    </Tooltip>
-  );
-}
 
 // ---- Skeletons Toggle ----
 // 切换木偶骨架覆盖层（节点标签、IK目标点、插槽连线等）

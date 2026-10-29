@@ -11,7 +11,6 @@ import { createKeyframeSlice } from './keyframe-slice';
 import { createModifierSlice } from './modifier-slice';
 import { createAnimationSlice } from './animation-slice';
 import { createEffectSlice } from './effect-slice';
-import { createTrajectorySlice } from './trajectory-slice';
 import { createProceduralSlice } from './procedural-slice';
 import { createProjectSlice } from './project-slice';
 import { createCorrectionSlice } from './correction-slice';
@@ -34,7 +33,6 @@ export const useProjectStore = create<ProjectStore>()(
     ...createModifierSlice(...a),
     ...createAnimationSlice(...a),
     ...createEffectSlice(...a),
-    ...createTrajectorySlice(...a),
     ...createProceduralSlice(...a),
     ...createCorrectionSlice(...a),
     ...createGlobalModifierSlice(...a),

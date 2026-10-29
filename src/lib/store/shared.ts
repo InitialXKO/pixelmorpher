@@ -8,9 +8,6 @@
 
 export let _isDragActive = false;
 export let _dragPostStackLen = 0; // undoStack.length right after beginDrag pushed its entry
-// During a drag, trajectory auto-record is deferred to avoid multiple pushUndo entries.
-// We collect the partIds that need trajectory updates, then flush them once in endDrag.
-export const _pendingTrajectorySpriteIds = new Set<string>();
 
 export function setDragActive(v: boolean) { _isDragActive = v; }
 export function setDragPostStackLen(n: number) { _dragPostStackLen = n; }
@@ -18,5 +15,4 @@ export function setDragPostStackLen(n: number) { _dragPostStackLen = n; }
 export function resetDragState() {
   _isDragActive = false;
   _dragPostStackLen = 0;
-  _pendingTrajectorySpriteIds.clear();
 }

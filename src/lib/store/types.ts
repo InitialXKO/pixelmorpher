@@ -16,10 +16,6 @@ import type {
   EditMode,
   PixelGrid,
   EffectTrack,
-  Trajectory,
-  TrajectoryPoint,
-  TrajectoryCurvePoint,
-  AfterimageConfig,
   MotionBlurStroke,
   MotionBlurBrushType,
   EffectStroke,
@@ -173,14 +169,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   removeEffectKeyframe: (effectTrackId: string, keyframeId: string) => void;
   updateEffectKeyframe: (effectTrackId: string, keyframeId: string, params: Record<string, ModifierParamValue>) => void;
 
-  // Trajectory actions
-  addTrajectoryPoint: (spriteId: string, frame: number, x: number, y: number, rotation: number) => void;
-  updateTrajectoryPoint: (spriteId: string, frame: number, updates: Partial<Omit<TrajectoryCurvePoint, 'frame'>>) => void;
-  clearTrajectory: (spriteId: string) => void;
-  toggleTrajectoryVisibility: (spriteId: string) => void;
-  autoRecordTrajectory: (spriteId: string) => void;
-  generateTweenFromTrajectory: (spriteId: string, startFrame: number, endFrame: number, step: number) => void;
-  generateAfterimageSequence: (spriteId: string, config: AfterimageConfig) => void;
 
   // Motion blur stroke actions
   addMotionBlurStroke: (stroke: Omit<MotionBlurStroke, 'id'>) => void;

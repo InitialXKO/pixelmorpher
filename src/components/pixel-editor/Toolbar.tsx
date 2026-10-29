@@ -47,8 +47,6 @@ import {
 import {
   ZoomControls,
   GridToggle,
-  TrajectoryToggle,
-  TrajectorySnapToggle,
   SkeletonsToggle,
   ForeshortenToggle,
   DisplayFxControls,
@@ -74,12 +72,10 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
   const tool = useEditorStore((s) => s.tool);
   const brushSize = useEditorStore((s) => s.brushSize);
   const brushColor = useEditorStore((s) => s.brushColor);
-  const showTrajectories = useEditorStore((s) => s.showTrajectories);
   const setTool = useEditorStore((s) => s.setTool);
   const setBrushSize = useEditorStore((s) => s.setBrushSize);
   const setBrushColor = useEditorStore((s) => s.setBrushColor);
   const setEditMode = useEditorStore((s) => s.setEditMode);
-  const toggleTrajectories = useEditorStore((s) => s.toggleTrajectories);
   const editMode = useEditorStore((s) => s.editMode);
   // Brush style
   const brushStyle = useEditorStore((s) => s.brushStyle);
@@ -338,14 +334,6 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
           if (val) {
             setTool(val as ToolType);
             const state = useEditorStore.getState();
-
-            // Switch edit mode when trajectory tool is selected
-            if (val === 'trajectory') {
-              setEditMode('trajectory_edit');
-              if (!showTrajectories) toggleTrajectories();
-            } else if (state.editMode === 'trajectory_edit') {
-              setEditMode('normal');
-            }
 
             // Auto-enter sprite_edit when switching to brush/eraser/fill in non-correction mode.
             // Only auto-enter when a sprite is already selected; never silently pick the first one.
@@ -606,8 +594,6 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
       <Separator orientation="vertical" className="h-5 bg-white/10" />
 
       <GridToggle />
-      <TrajectoryToggle />
-      <TrajectorySnapToggle />
 
       {/* Hand-drawn Trajectory Hint */}
       {tool === 'trajectory' && (

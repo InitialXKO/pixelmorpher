@@ -565,33 +565,6 @@ export interface EffectTrack {
   keyframes: EffectKeyframe[];
 }
 
-// ---- Trajectory ----
-
-export interface TrajectoryPoint {
-  frame: number;
-  x: number;
-  y: number;
-  rotation: number;
-}
-
-export interface TrajectoryCurvePoint extends TrajectoryPoint {
-  cp1x: number; // control point 1 x
-  cp1y: number; // control point 1 y
-  cp2x: number; // control point 2 x
-  cp2y: number; // control point 2 y
-}
-
-export interface Trajectory {
-  spriteId: string;
-  points: TrajectoryCurvePoint[];
-  visible: boolean;
-}
-
-export interface AfterimageConfig {
-  count: number;        // number of afterimage copies
-  opacityDecay: number; // opacity decay factor (0-1)
-  spacing: number;      // spacing between afterimages in pixels
-}
 
 // ---- V12: Global Modifiers ----
 // Global modifiers apply to ALL parts simultaneously at the transform level.
@@ -852,7 +825,6 @@ export interface AnimationClip {
   // ---- Per-clip effects ----
   effectTracks: EffectTrack[];
   canvasModifierTracks: CanvasModifierTrack[];
-  trajectories: Trajectory[];
   motionBlurStrokes: MotionBlurStroke[];
   effectStrokes: EffectStroke[];
 
@@ -1155,8 +1127,6 @@ export interface Project {
   effectTracks: EffectTrack[];
   /** @deprecated Use activeAnimationClip.canvasModifierTracks instead */
   canvasModifierTracks: CanvasModifierTrack[];
-  /** @deprecated Use activeAnimationClip.trajectories instead */
-  trajectories: Trajectory[];
   /** @deprecated Use activeAnimationClip.motionBlurStrokes instead */
   motionBlurStrokes: MotionBlurStroke[];
   /** @deprecated Use activeAnimationClip.effectStrokes instead */
@@ -1208,7 +1178,7 @@ export interface EffectStroke {
 
 export type ToolType = 'select' | 'brush' | 'eraser' | 'fill' | 'eyedropper' | 'move' | 'trajectory' | 'crop' | 'motion_blur_brush' | 'glow_brush' | 'particle_brush' | 'afterimage_brush' | 'lasso' | 'magic_wand' | 'smart_select' | 'inpaint' | 'puppet' | 'landmark' | 'mark' | 'pseudo3d_rotate' | 'split_node';
 export type PlayState = 'stopped' | 'playing' | 'paused';
-export type EditMode = 'normal' | 'correction' | 'trajectory_edit' | 'bone_edit' | 'weight_paint' | 'sprite_edit' | 'mask';
+export type EditMode = 'normal' | 'correction' | 'bone_edit' | 'weight_paint' | 'sprite_edit' | 'mask';
 
 // ---- Brush Style System ----
 
@@ -1694,7 +1664,6 @@ export interface EditorState {
   selectedEffectTrackId: string | null;
   showGrid: boolean;
   nodeTurn3D: boolean;
-  showTrajectories: boolean;
   isDirty: boolean;
   // Motion blur
   autoMotionBlur: boolean;
@@ -1724,8 +1693,6 @@ export interface EditorState {
     paintCells?: Uint8Array;
     paintValue?: boolean;
   } | null;
-  // Trajectory snap
-  trajectorySnap: boolean;
   // Preview quality (Feature 2)
   previewQuality: 'low' | 'medium' | 'high';
   // SAM / Smart Selection
@@ -1791,7 +1758,7 @@ export interface EditorState {
   refWizardOpen: boolean;
   // ---- 左栏页签（侧面页签切换：记住激活页签；统一新建入口触发
   // 参考图装配时切到 assets 以露出其整版宿主） ----
-  leftPanelTab: 'assets' | 'clips' | 'strokes' | 'canvas' | 'trajectory' | 'global' | 'dcc';
+  leftPanelTab: 'assets' | 'clips' | 'strokes' | 'canvas' | 'global' | 'dcc';
 }
 
 // ---- SAM / Smart Selection ----

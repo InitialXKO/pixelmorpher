@@ -9,7 +9,7 @@ import type { StateCreator } from 'zustand';
 import type { ProjectStore } from './types';
 import type { Project, HistoryEntry, ProjectFile, BrushPreset, AnimationClip, ClipPartData, Costume, Track } from '../types';
 import { MODIFIER_DEFINITIONS } from '../types';
-import { _isDragActive, _dragPostStackLen, _pendingTrajectorySpriteIds, setDragActive, setDragPostStackLen, resetDragState } from './shared';
+import { _isDragActive, _dragPostStackLen, setDragActive, setDragPostStackLen, resetDragState } from './shared';
 import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '../engine';
 import { resolveChainTarget3D, backfillNodeSlots } from '../unified-types';
 import { migrateProjectTimeUnits } from '../blueprint/time-migration';
@@ -53,7 +53,6 @@ const defaultProject: Project = {
   keyframes: [],
   effectTracks: [],
   canvasModifierTracks: [],
-  trajectories: [],
   motionBlurStrokes: [],
   effectStrokes: [],
 
@@ -173,7 +172,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       keyframes: s.keyframes,
       effectTracks: s.effectTracks,
       canvasModifierTracks: s.canvasModifierTracks,
-      trajectories: s.trajectories,
       motionBlurStrokes: s.motionBlurStrokes,
       effectStrokes: s.effectStrokes,
       proceduralAnimations: s.proceduralAnimations,
@@ -269,16 +267,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       set({ _dragActive: false });
     }
     setDragPostStackLen(0);
-
-    if (_pendingTrajectorySpriteIds.size > 0) {
-      const spriteIds = [..._pendingTrajectorySpriteIds];
-      _pendingTrajectorySpriteIds.clear();
-      setTimeout(() => {
-        for (const sid of spriteIds) {
-          get().autoRecordTrajectory(sid);
-        }
-      }, 0);
-    }
   },
 
   performBatch: (description, fn) => {
@@ -373,7 +361,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         keyframes: state.keyframes,
         effectTracks: state.effectTracks,
         canvasModifierTracks: state.canvasModifierTracks,
-        trajectories: state.trajectories,
         motionBlurStrokes: state.motionBlurStrokes,
         effectStrokes: state.effectStrokes,
         // Unified Characters (new model)
@@ -444,7 +431,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         loop: false,
         effectTracks: file.project.effectTracks || [],
         canvasModifierTracks: file.project.canvasModifierTracks || [],
-        trajectories: file.project.trajectories || [],
         motionBlurStrokes: file.project.motionBlurStrokes || [],
         effectStrokes: file.project.effectStrokes || [],
         tags: [],
@@ -762,7 +748,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       loop: false,
       effectTracks: [],
       canvasModifierTracks: [],
-      trajectories: [],
       motionBlurStrokes: [],
       effectStrokes: [],
       tags: [],

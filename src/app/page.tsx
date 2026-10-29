@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import PixelCanvas from '@/components/pixel-editor/PixelCanvas';
-import TrajectoryPanel from '@/components/pixel-editor/TrajectoryPanel';
 import PuppetPanel from '@/components/pixel-editor/PuppetPanel';
 import PuppetAssetPanel from '@/components/pixel-editor/PuppetAssetPanel';
 import StrokePanel from '@/components/pixel-editor/StrokePanel';
@@ -340,14 +339,10 @@ export default function Home() {
     // Select body part by default
     selectPart(body.id!);
 
-    // Auto-record trajectories for all parts
-    for (const sprite of Object.values(useProjectStore.getState().sprites)) {
-      useProjectStore.getState().autoRecordTrajectory(sprite.id!);
+      for (const sprite of Object.values(useProjectStore.getState().sprites)) {
     }
 
-    // Enable trajectory display by default
-    useEditorStore.getState().toggleTrajectories();
-
+  
     // V3.0: Migrate legacy data into the active animation clip
     // After all parts, keyframes, and modifiers are created at the Project level,
   }, [Object.keys(sprites).length]);
@@ -416,12 +411,6 @@ export default function Home() {
                         label: '画布效果',
                         icon: <Layers className="size-4" />,
                         content: <CanvasModifierPanel />,
-                      },
-                      {
-                        id: 'trajectory',
-                        label: '轨迹',
-                        icon: <Route className="size-4" />,
-                        content: <TrajectoryPanel />,
                       },
                       {
                         id: 'global',

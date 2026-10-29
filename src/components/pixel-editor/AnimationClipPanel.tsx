@@ -75,7 +75,6 @@ export default function AnimationClipPanel() {
       stateKeyframes: structuredClone(clip.stateKeyframes ?? []),
       effectTracks: structuredClone(clip.effectTracks ?? []),
       canvasModifierTracks: structuredClone(clip.canvasModifierTracks ?? []),
-      trajectories: structuredClone(clip.trajectories ?? []),
       motionBlurStrokes: structuredClone(clip.motionBlurStrokes ?? []),
       effectStrokes: structuredClone(clip.effectStrokes ?? []),
       tags: [...(clip.tags ?? [])],

@@ -1297,7 +1297,6 @@ export function convertCharacterToRuntimePackage(
       n.tracks && POSE_CHANNELS.some((ch) => (n.tracks[ch]?.keyframes?.length ?? 0) > 0));
     // ---- 片段级点名（缺口 5/6）：片段内的状态切换与特效数据不进包 ----
     for (const c of opts?.clips ?? []) {
-      if ((c.trajectories?.length ?? 0) > 0) warnings.push(`片段「${c.name}」内的轨迹未进运行时包（v1）`);
     }
   // ---- 片段状态轨（缺口 6）：状态键 → 段表演内的定时状态切换 ----
   // 帧为工程绝对帧，换算为片段本地秒；窗外（起点之前）的键折叠到 0。
