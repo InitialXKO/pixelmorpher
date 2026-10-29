@@ -30,6 +30,7 @@ import {
   renderPuppetSkeletonOverlay,
   renderIKTargetHandles,
   renderClampAnchorGizmos,
+  renderClipHitboxes,
   renderFaceGuideOverlay,
   renderPivotCrosshair,
   renderStrokeCursorIndicator,
@@ -407,6 +408,11 @@ export default function PixelCanvas() {
       if (activeChar && s.showPuppetSkeleton) {
         renderIKTargetHandles(rc, activeChar);
         renderClampAnchorGizmos(rc, activeChar);
+      }
+      // 片段碰撞盒（当前帧有桶才画，函数内自查）
+      if (activeChar) {
+        const activeClip = pst.animationClips.find((c) => c.id === pst.activeAnimationClipId) ?? null;
+        renderClipHitboxes(rc, activeChar, activeClip);
       }
       // 五官参照（选中节点头部框点位）
       if (activeChar && useEditorStore.getState().showFaceGuide) {

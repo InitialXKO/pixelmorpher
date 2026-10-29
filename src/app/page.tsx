@@ -32,7 +32,7 @@ import {
 } from '@/lib/autosave-opfs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import SidePanelTabs from '@/components/pixel-editor/shared/SidePanelTabs';
-import { Pencil, ChevronDown, ChevronUp, Film, Users, PenLine } from 'lucide-react';
+import { Pencil, ChevronDown, ChevronUp, Film, Users, PenLine, Shirt, Layers, Route, Activity, Terminal, Puzzle, Globe, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -51,6 +51,9 @@ export default function Home() {
   const isLocked = isMasking;
   const { layouts } = useWorkspaceStore();
   const [exportOpen, setExportOpen] = useState(false);
+  // 右栏页签（缺省木偶：主工作流面板；其余为 2026-10-16 退役模式时
+  // 被连带封存的动画工具面板，2026-10-29 审计后恢复为同栏页签）
+  const [rightPanelTab, setRightPanelTab] = useState<'puppet' | 'canvas' | 'trajectory' | 'procedural' | 'script' | 'plugins' | 'global' | 'dcc'>('puppet');
   const initializedRef = useRef(false);
   const { showProjectHome, setShowProjectHome, loadProjectList } = useAssetStore();
 
@@ -541,7 +544,66 @@ export default function Home() {
                 className="border-l border-zinc-800 transition-all duration-300"
               >
                 <div className={isLocked ? 'pointer-events-none opacity-40 h-full' : 'h-full'}>
-                  <PuppetPanel />
+                  {/* 侧面页签切换（与左栏同容器）：木偶是主工作流缺省页签；
+                      画布效果/轨迹/程序化/脚本/插件/全局/DCC管线是动画工具，
+                      退役 workspace mode 只该退役模式本身、不该封存工具
+                      （2026-10-29 用户裁定恢复，逐个审计结论见各面板） */}
+                  <SidePanelTabs
+                    side="right"
+                    ariaLabel="右栏面板"
+                    activeId={rightPanelTab}
+                    onChange={setRightPanelTab}
+                    tabs={[
+                      {
+                        id: 'puppet',
+                        label: '木偶',
+                        icon: <Shirt className="size-4" />,
+                        content: <PuppetPanel />,
+                      },
+                      {
+                        id: 'canvas',
+                        label: '画布效果',
+                        icon: <Layers className="size-4" />,
+                        content: <CanvasModifierPanel />,
+                      },
+                      {
+                        id: 'trajectory',
+                        label: '轨迹',
+                        icon: <Route className="size-4" />,
+                        content: <TrajectoryPanel />,
+                      },
+                      {
+                        id: 'procedural',
+                        label: '程序化',
+                        icon: <Activity className="size-4" />,
+                        content: <ProceduralPanel />,
+                      },
+                      {
+                        id: 'script',
+                        label: '脚本',
+                        icon: <Terminal className="size-4" />,
+                        content: <ScriptPanel />,
+                      },
+                      {
+                        id: 'plugins',
+                        label: '插件',
+                        icon: <Puzzle className="size-4" />,
+                        content: <PluginPanel />,
+                      },
+                      {
+                        id: 'global',
+                        label: '全局',
+                        icon: <Globe className="size-4" />,
+                        content: <GlobalModifierPanel />,
+                      },
+                      {
+                        id: 'dcc',
+                        label: 'DCC管线',
+                        icon: <Zap className="size-4" />,
+                        content: <DccPipelinePanel />,
+                      },
+                    ]}
+                  />
                 </div>
               </ResizablePanel>
             </>

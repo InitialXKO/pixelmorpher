@@ -1010,7 +1010,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       clips: animationClips.filter((c) => c.puppetCharacterId === procCharacter.id),
       patternLibrary: allPatternTemplates(),
       libraryEntries: allLibraryEntries(),
-      projectData: { proceduralAnimations, globalModifiers: useProjectStore.getState().globalModifiers, globalBlueprint: useProjectStore.getState().globalBlueprint, canvasModifierTracks: useProjectStore.getState().canvasModifierTracks, effectTracks: useProjectStore.getState().effectTracks, motionBlurStrokes: useProjectStore.getState().motionBlurStrokes, effectStrokes: useProjectStore.getState().effectStrokes, canvasWidth: useProjectStore.getState().canvasWidth, canvasHeight: useProjectStore.getState().canvasHeight },
+      projectData: { proceduralAnimations, globalModifiers: useProjectStore.getState().globalModifiers, globalBlueprint: useProjectStore.getState().globalBlueprint, canvasModifierTracks: useProjectStore.getState().canvasModifierTracks, effectTracks: useProjectStore.getState().effectTracks, motionBlurStrokes: useProjectStore.getState().motionBlurStrokes, effectStrokes: useProjectStore.getState().effectStrokes, canvasWidth: useProjectStore.getState().canvasWidth, canvasHeight: useProjectStore.getState().canvasHeight, palettes: useProjectStore.getState().palettes, activePaletteId: useProjectStore.getState().activePaletteId },
       projectExtras: {
         perspectiveForeshorten: useEditorStore.getState().perspectiveForeshorten,
       },

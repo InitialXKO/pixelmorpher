@@ -46,6 +46,8 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
   const effectStrokes = useProjectStore((s) => s.effectStrokes);
   const canvasWidth = useProjectStore((s) => s.canvasWidth);
   const canvasHeight = useProjectStore((s) => s.canvasHeight);
+  const palettes = useProjectStore((s) => s.palettes);
+  const activePaletteId = useProjectStore((s) => s.activePaletteId);
   const perspectiveForeshorten = useEditorStore((s) => s.perspectiveForeshorten);
 
   const built = useMemo(() => {
@@ -57,7 +59,7 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
       clips: animationClips.filter((c) => c.puppetCharacterId === character.id),
       patternLibrary: allPatternTemplates(),
       libraryEntries: allLibraryEntries(),
-      projectData: { proceduralAnimations, globalModifiers, globalBlueprint, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes, canvasWidth, canvasHeight },
+      projectData: { proceduralAnimations, globalModifiers, globalBlueprint, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes, canvasWidth, canvasHeight, palettes, activePaletteId },
       projectExtras: { perspectiveForeshorten },
     });
     // 预览是观看宿主：改用墙钟模式按真实时间播。包缺省的 frame 模式

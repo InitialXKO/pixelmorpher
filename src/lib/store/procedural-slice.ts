@@ -19,12 +19,15 @@ export type ProceduralSlice = {
 export const createProceduralSlice: StateCreator<ProjectStore, [], [], ProceduralSlice> = (set, get) => ({
   proceduralAnimations: [],
 
-  addProceduralAnimation: (spriteId, name, config, startFrame, endFrame) => {
+  addProceduralAnimation: (spriteId, name, config, startFrame, endFrame, nodeId) => {
     get().pushUndo('添加程序动画');
     const pa: ProceduralAnimation = {
       id: crypto.randomUUID(),
       name,
       spriteId,
+      // 节点级条目（新管线唯一生效口径：主渲染与 convert 都按 nodeId
+      // 匹配）；spriteId 传 '' 表示不挂精灵，引擎侧空串不算匹配。
+      ...(nodeId ? { nodeId } : {}),
       config,
       enabled: true,
       startFrame,

@@ -213,6 +213,12 @@ export interface ProcRuntimePackage {
   /** 工程帧率：粒子模拟的帧量化基数（出生帧/生命帧与编辑器同口径） */
   frameRate: number;
   palettes: Record<string, number[]>;
+  /** 工程调色板（DCC管线·调色板页签的用户数据，与上方运行时程序化
+   * 着色用的内置 PALETTES 是两回事）：colors 为逐槽位 hex 或 null，
+   * swappableIndices 是允许运行时换色的槽位。宿主经
+   * procRuntime.setPaletteSwap 按槽位换色（队伍色系统）。旧包无此字段。 */
+  userPalettes?: Array<{ id: string; name: string; colors: Array<string | null>; swappableIndices: number[]; isDefault?: boolean }>;
+  activeUserPaletteId?: string | null;
   parts: RuntimePart[];
   /** 骨骼名/父子表（按部件键对齐）：parts 的 slotKey 对烘焙角色是
    * 不透明键（slot_<角色>_<骨序>），消费方无从按名识别骨骼——本表把
@@ -748,7 +754,7 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number; scene?: { solids?: Array<{ x: number; y: number; w: number; h: number }> } }; projectExtras?: { perspectiveForeshorten?: boolean } },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number; palettes?: import('../types').Palette[]; activePaletteId?: string | null; scene?: { solids?: Array<{ x: number; y: number; w: number; h: number }> } }; projectExtras?: { perspectiveForeshorten?: boolean } },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
   // ---- 工程级数据点名（运行时完备性审计缺口 5/7，未修项）：convert
@@ -1322,6 +1328,41 @@ export function convertCharacterToRuntimePackage(
     }
     return fx.length > 0 ? fx : undefined;
   };
+  // 片段事件（DCC管线·事件页签）：事件帧是工程绝对帧 → 段表演本地帧；
+  // 只收启用且落在片段窗内的。运行时在表演播放跨过该本地帧时经
+  // onEvent 向宿主发 clipevent（游戏逻辑集成口，此前全仓无消费端）。
+  const clipEventsOf = (clip: AnimationClip) => {
+    const evs = (clip.events ?? [])
+      .filter((e) => e.active && e.frame >= clip.startFrame && e.frame <= clip.endFrame)
+      .sort((a, b) => a.frame - b.frame)
+      .map((e) => ({
+        frame: e.frame - clip.startFrame,
+        name: e.name,
+        ...(e.stringValue !== undefined ? { stringValue: e.stringValue } : {}),
+        ...(e.numberValue !== undefined ? { numberValue: e.numberValue } : {}),
+        ...(e.objectValue !== undefined ? { objectValue: e.objectValue } : {}),
+      }));
+    return evs.length > 0 ? evs : undefined;
+  };
+  // 片段碰撞（DCC管线·碰撞页签）：hitboxMap 键为 frame_<工程绝对帧>，
+  // 转段表演本地帧分桶，只收启用形状。运行时经 procRuntime.hitboxes()
+  // 按当前本地帧取最近一桶（游戏碰撞判定口，此前全仓无消费端）。
+  const clipHitboxesOf = (clip: AnimationClip) => {
+    const map = clip.hitboxMap ?? {};
+    const buckets: Array<{ frame: number; shapes: Array<Record<string, unknown>> }> = [];
+    for (const key of Object.keys(map)) {
+      const m = /^frame_(\d+)$/.exec(key);
+      if (!m) continue;
+      const abs = Number(m[1]);
+      if (abs < clip.startFrame || abs > clip.endFrame) continue;
+      const shapes = (map[key] ?? [])
+        .filter((s) => s.active)
+        .map((s) => ({ name: s.name, shapeType: s.shapeType, data: s.data }));
+      if (shapes.length > 0) buckets.push({ frame: abs - clip.startFrame, shapes });
+    }
+    buckets.sort((a, b) => a.frame - b.frame);
+    return buckets.length > 0 ? buckets : undefined;
+  };
 
     const clipList = (opts?.clips ?? []).filter((c) =>
       c.puppetCharacterId === character.id
@@ -1838,6 +1879,8 @@ export function convertCharacterToRuntimePackage(
           graph: { context: 'performance', nodes: seg.graphNodes },
           ...(segStackFrames ? { stackFrames: segStackFrames } : {}),
           stateFx: stateFxOf(clip),
+          events: clipEventsOf(clip),
+          hitboxes: clipHitboxesOf(clip),
           fx: clipFxOf(clip),
           fxStart: clip.startFrame,
         });
@@ -1864,6 +1907,8 @@ export function convertCharacterToRuntimePackage(
         slash: slashForPkg(clipSlash, `片段「${clip.name}」`),
         graph: { context: 'performance', nodes: [] },
         stateFx: stateFxOf(clip),
+        events: clipEventsOf(clip),
+        hitboxes: clipHitboxesOf(clip),
         fx: clipFxOf(clip),
         fxStart: clip.startFrame,
       });
@@ -2004,6 +2049,16 @@ export function convertCharacterToRuntimePackage(
     chains: simChainsPkg.length > 0 ? simChainsPkg : undefined,
     frameRate: projectFpsTop,
     palettes: PALETTES,
+    userPalettes: (opts?.projectData?.palettes ?? []).length > 0
+      ? (opts?.projectData?.palettes ?? []).map((p) => ({
+          id: p.id,
+          name: p.name,
+          colors: (p.colors ?? []).map((c) => c.color ?? null),
+          swappableIndices: p.swappableIndices ?? [],
+          ...(p.isDefault ? { isDefault: true } : {}),
+        }))
+      : undefined,
+    activeUserPaletteId: opts?.projectData?.activePaletteId ?? null,
     parts,
     skeleton: skeleton.length > 0 ? skeleton : undefined,
     costumes,

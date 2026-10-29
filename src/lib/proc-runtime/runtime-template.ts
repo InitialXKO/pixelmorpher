@@ -823,6 +823,37 @@ function glowEntryOf(part, costume) {
 
 // ---------- 数据（来自运行时包） ----------
 const PAL = EMBEDDED.palettes;
+// 工程调色板换色（包内 userPalettes，来自编辑器 DCC管线·调色板页签；
+// 与上方运行时程序化着色的内置 PALETTES 是两回事）：宿主经
+// procRuntime.setPaletteSwap(调色板id, {槽位: 新色}) 指定换色，只对
+// 该板 swappableIndices 内的槽位生效。换色在图集构建时按精确 RGB
+// 匹配改底图（精灵直贴图），签名并入图集缓存键——改换色即重建图集。
+// 参数化图案瓦片走 PAL 体系，不在此列。
+const USER_PALETTES = EMBEDDED.userPalettes || [];
+let paletteSwapState = null; // { map: Map<rgbInt, rgbInt>, sig: string }
+function hexToIntRt(h) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(h || '').trim());
+  return m ? parseInt(m[1], 16) : null;
+}
+function paletteSwapMap() { return paletteSwapState ? paletteSwapState.map : null; }
+function applyPaletteSwap(paletteId, swaps) {
+  const pal = USER_PALETTES.find((p) => p.id === paletteId || p.name === paletteId);
+  if (!pal || !swaps) return 0;
+  const allow = new Set(pal.swappableIndices || []);
+  const map = new Map();
+  for (const k of Object.keys(swaps)) {
+    const idx = Number(k);
+    if (!allow.has(idx)) continue;
+    const from = hexToIntRt(pal.colors ? pal.colors[idx] : null);
+    const to = hexToIntRt(swaps[k]);
+    if (from === null || to === null || from === to) continue;
+    map.set(from, to);
+  }
+  paletteSwapState = map.size > 0
+    ? { map, sig: [...map.entries()].map(([a, b]) => a + '>' + b).join(',') }
+    : null;
+  return map.size;
+}
 const PAL_NAMES = Object.keys(PAL);
 const palIndex = (name) => Math.max(0, PAL_NAMES.indexOf(name));
 const PARTS = EMBEDDED.parts;
@@ -873,7 +904,8 @@ function tileKeyOf(part, variant, costumeName, resolved) {
 }
 function ensureAtlas(gl, variant, costumeName) {
   const osig = overrideSig();
-  if (atlasState && atlasState.variant === variant && atlasState.costumeName === costumeName && atlasState.osig === osig) return atlasState;
+  const palSig = paletteSwapState ? paletteSwapState.sig : '';
+  if (atlasState && atlasState.variant === variant && atlasState.costumeName === costumeName && atlasState.osig === osig && atlasState.palSig === palSig) return atlasState;
   const costume = COSTUMES[costumeName];
   const tiles = [], entries = [];
   const map = new Map();
@@ -1057,6 +1089,7 @@ function ensureAtlas(gl, variant, costumeName) {
       }
     });
   }
+  const palMapAtlas = paletteSwapMap();
   const pack = packAtlas(tiles, 256);
   const height = pack.height;
   const slashTiles = {};
@@ -1092,8 +1125,13 @@ function ensureAtlas(gl, variant, costumeName) {
           const sy = flipY ? bs.h - 1 - (ej - M) : ej - M;
           if (sx < 0 || sy < 0 || sx >= bs.w || sy >= bs.h) continue;
           const c = bs.data[sy] && bs.data[sy][sx];
-          const rgb = c ? parseHexRt(c) : null;
+          let rgb = c ? parseHexRt(c) : null;
           if (!rgb) continue;
+          // 工程调色板换色：底图色精确命中换色表即替换（alpha 恒 255）
+          if (palMapAtlas) {
+            const to = palMapAtlas.get((rgb[0] << 16) | (rgb[1] << 8) | rgb[2]);
+            if (to !== undefined) rgb = [(to >> 16) & 255, (to >> 8) & 255, to & 255];
+          }
           const o = ((ay + j) * 256 + ax + ii) * 4;
           baseData[o] = rgb[0]; baseData[o + 1] = rgb[1]; baseData[o + 2] = rgb[2]; baseData[o + 3] = 255;
         }
@@ -1188,7 +1226,7 @@ function ensureAtlas(gl, variant, costumeName) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  atlasState = { variant: variant, costumeName: costumeName, osig: osig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles, fieldSlots: fieldSlots };
+  atlasState = { variant: variant, costumeName: costumeName, osig: osig, palSig: palSig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles, fieldSlots: fieldSlots };
   return atlasState;
 }
 
@@ -3158,6 +3196,23 @@ function enterPerformance(perf) {
   }
   startPerf(perf);
 }
+/** 当前生效的片段碰撞盒：逐个在演段表演取本地帧 ≤ 当前帧的最近一桶
+ * （桶来自编辑器片段的碰撞表，convert 已转本地帧并按帧排序）。
+ * 形状坐标口径 = 相对角色根节点的本地像素偏移（编辑器画布同口径叠画
+ * 在根节点当帧世界位上），宿主按自身角色世界位平移即得世界盒。 */
+function currentHitboxes() {
+  const out = [];
+  for (const act of activePerfs) {
+    const buckets = act.perf.hitboxes;
+    if (!buckets || buckets.length === 0) continue;
+    const curF = Math.floor(act.t * FRAME_RATE);
+    let pick = null;
+    for (const b of buckets) { if (b.frame <= curF) pick = b; else break; }
+    if (pick) out.push({ id: act.perf.id, name: act.perf.name, frame: pick.frame, shapes: pick.shapes });
+  }
+  return out;
+}
+
 // 宿主接口：意图进、事件出、变量可绕过直写
 window.procRuntime = {
   intent: function (name) {
@@ -3189,6 +3244,11 @@ window.procRuntime = {
   },
   state: function () { return smCurrent; },
   onEvent: function (cb) { runtimeEventCbs.push(cb); },
+  /** 当前生效的片段碰撞盒（见 currentHitboxes） */
+  hitboxes: function () { return currentHitboxes(); },
+  /** 工程调色板换色：返回实际生效的换色条数（0 = 板不存在或无可换槽位） */
+  setPaletteSwap: function (paletteId, swaps) { return applyPaletteSwap(paletteId, swaps); },
+  clearPaletteSwap: function () { paletteSwapState = null; },
   stop: function (nameOrId) { stopPerf(nameOrId); },
   stopAll: function () { stopAllPerfs(); },
 };
@@ -4047,6 +4107,27 @@ function frame(now) {
     act.t += dt;
     // 循环表演（片段 loop）到尾回绕，不结束、不发 perfend
     if (act.perf.loop && act.t > act.perf.duration) act.t = act.t % act.perf.duration;
+    // 片段事件（段表演 events，本地帧口径，来自编辑器片段的事件表）：
+    // 本 tick 跨过的事件帧逐个经 onEvent 发 clipevent。act.evFrame 记
+    // 上一 tick 的本地帧；回绕时先补尾段 (prev, 尾] 再补头段 [0, cur]。
+    if (act.perf.events && act.perf.events.length > 0) {
+      const durF = Math.max(0, Math.round(act.perf.duration * FRAME_RATE));
+      const curF = Math.min(durF, Math.floor(act.t * FRAME_RATE));
+      const prevF = act.evFrame === undefined ? -1 : act.evFrame;
+      const fireEvRange = (f0, f1) => {
+        for (const e of act.perf.events) {
+          if (e.frame > f0 && e.frame <= f1) {
+            emitRuntimeEvent('clipevent', {
+              id: act.perf.id, name: e.name, frame: e.frame,
+              stringValue: e.stringValue, numberValue: e.numberValue, objectValue: e.objectValue,
+            });
+          }
+        }
+      };
+      if (curF >= prevF) fireEvRange(prevF, curF);
+      else { fireEvRange(prevF, durF); fireEvRange(-1, curF); }
+      act.evFrame = curF;
+    }
     const w = envelopeWeight(act.t, act.perf.duration, act.perf.envelope.in, act.perf.envelope.out);
     if (w > 0) {
       const bpOut = evalRuntimeGraph(act.perf.graph, { u: Math.min(1, act.t / act.perf.duration), tSec: act.t });

@@ -199,7 +199,7 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   setOnionSkinFrames: (n: number) => void;
 
   // Procedural Animation actions（旧骨骼系统已删除，2026-10-26；程序化动画为活功能保留）
-  addProceduralAnimation: (spriteId: string, name: string, config: ProceduralConfig, startFrame: number, endFrame: number) => ProceduralAnimation;
+  addProceduralAnimation: (spriteId: string, name: string, config: ProceduralConfig, startFrame: number, endFrame: number, nodeId?: string) => ProceduralAnimation;
   removeProceduralAnimation: (id: string) => void;
   updateProceduralAnimation: (id: string, updates: Partial<ProceduralAnimation>) => void;
   toggleProceduralAnimation: (id: string) => void;
