@@ -9,7 +9,7 @@ import type { StateCreator } from 'zustand';
 import type { ProjectStore } from './types';
 import type { Project, HistoryEntry, ProjectFile, BrushPreset, AnimationClip, ClipPartData, Costume, Track } from '../types';
 import { MODIFIER_DEFINITIONS } from '../types';
-import { _isDragActive, _dragPostStackLen, _pendingTrajectorySpriteIds, setDragActive, setDragPostStackLen, resetDragState } from './shared';
+import { _isDragActive, _dragPostStackLen, setDragActive, setDragPostStackLen, resetDragState } from './shared';
 import { invalidateInterpolationCache, invalidateParamDriverEvalCache } from '../engine';
 import { resolveChainTarget3D, backfillNodeSlots } from '../unified-types';
 import { migrateProjectTimeUnits } from '../blueprint/time-migration';
@@ -50,10 +50,8 @@ const defaultProject: Project = {
 
   // Legacy fields (backward compatibility)
   tracks: [],
-  keyframes: [],
   effectTracks: [],
   canvasModifierTracks: [],
-  trajectories: [],
   motionBlurStrokes: [],
   effectStrokes: [],
 
@@ -170,10 +168,8 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       animationClips: s.animationClips,
       activeAnimationClipId: s.activeAnimationClipId,
       tracks: s.tracks,
-      keyframes: s.keyframes,
       effectTracks: s.effectTracks,
       canvasModifierTracks: s.canvasModifierTracks,
-      trajectories: s.trajectories,
       motionBlurStrokes: s.motionBlurStrokes,
       effectStrokes: s.effectStrokes,
       proceduralAnimations: s.proceduralAnimations,
@@ -269,16 +265,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       set({ _dragActive: false });
     }
     setDragPostStackLen(0);
-
-    if (_pendingTrajectorySpriteIds.size > 0) {
-      const spriteIds = [..._pendingTrajectorySpriteIds];
-      _pendingTrajectorySpriteIds.clear();
-      setTimeout(() => {
-        for (const sid of spriteIds) {
-          get().autoRecordTrajectory(sid);
-        }
-      }, 0);
-    }
   },
 
   performBatch: (description, fn) => {
@@ -370,10 +356,8 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         animationVariables: state.animationVariables,
         // Legacy fields for backward compatibility
         tracks: state.tracks,
-        keyframes: state.keyframes,
         effectTracks: state.effectTracks,
         canvasModifierTracks: state.canvasModifierTracks,
-        trajectories: state.trajectories,
         motionBlurStrokes: state.motionBlurStrokes,
         effectStrokes: state.effectStrokes,
         // Unified Characters (new model)
@@ -398,23 +382,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     }
 
     const knownModifierTypes = MODIFIER_DEFINITIONS.map(d => d.type);
-    const processedKeyframes = (file.project.keyframes || []).map((kf: any) => ({
-      ...kf,
-      modifiers: (kf.modifiers || []).map((mod: any) => {
-        if (!knownModifierTypes.includes(mod.type)) {
-          return { ...mod, type: 'unknown', enabled: false, startFrame: mod.startFrame ?? -1, endFrame: mod.endFrame ?? -1, fadeInFrames: mod.fadeInFrames ?? 0, fadeOutFrames: mod.fadeOutFrames ?? 0 };
-        }
-        return {
-          ...mod,
-          startFrame: mod.startFrame ?? -1,
-          endFrame: mod.endFrame ?? -1,
-          fadeInFrames: mod.fadeInFrames ?? 0,
-          fadeOutFrames: mod.fadeOutFrames ?? 0,
-          blendMode: mod.blendMode ?? 'add',
-          coordinateMode: mod.coordinateMode ?? 'world',
-        };
-      }),
-    }));
 
     const processedParts = ((file.project as any).parts || []).map((p: any) => ({
       ...p,
@@ -444,7 +411,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         loop: false,
         effectTracks: file.project.effectTracks || [],
         canvasModifierTracks: file.project.canvasModifierTracks || [],
-        trajectories: file.project.trajectories || [],
         motionBlurStrokes: file.project.motionBlurStrokes || [],
         effectStrokes: file.project.effectStrokes || [],
         tags: [],
@@ -625,7 +591,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
 
     set({
       ...file.project,
-      keyframes: processedKeyframes,
       sprites: finalSprites,
       animationClips,
       activeAnimationClipId,
@@ -762,7 +727,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       loop: false,
       effectTracks: [],
       canvasModifierTracks: [],
-      trajectories: [],
       motionBlurStrokes: [],
       effectStrokes: [],
       tags: [],

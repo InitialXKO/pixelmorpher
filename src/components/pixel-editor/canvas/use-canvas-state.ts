@@ -20,7 +20,7 @@ import {
 } from '@/lib/engine';
 import { generateBrushStamp, applyBrushStamp } from '@/lib/brush-engine';
 import { inpaintPixels } from '@/lib/inpainting';
-import { catmullRomToBezier, isPixelInPart, getPixelAt, computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
+import { isPixelInPart, getPixelAt, computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
 import type { PixelColor, PixelGrid, PuppetNode, PuppetSkeleton, PuppetCharacter, PuppetNodeKeyframe, BrushCommand, ModifierInstance } from '@/lib/types';
 import type { Node, Character, Sprite } from '@/lib/unified-types';
 import { pxToSub, subToPx, projectToView } from '@/lib/unified-types';
@@ -59,11 +59,6 @@ export function useCanvasState() {
   const cropStartRef = useRef<{ x: number; y: number } | null>(null);
   const cropRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const trajectoryPathRef = useRef<{ x: number; y: number }[]>([]);
-  const handDrawTrajectoryRef = useRef<{ x: number; y: number }[]>([]);
-  const trajectoryCpDragRef = useRef<{
-    spriteId: string; segmentIdx: number; cp: 'cp1' | 'cp2';
-    startX: number; startY: number; origCp1x: number; origCp1y: number; origCp2x: number; origCp2y: number;
-  } | null>(null);
   const selectionMaskRef = useRef<Set<string>>(new Set());
   const lassoPathRef = useRef<{ x: number; y: number }[]>([]);
   const selectionMarchOffsetRef = useRef<number>(0);
@@ -80,7 +75,19 @@ export function useCanvasState() {
     // pivot 模式专用
     pivotSpriteId?: string; origPivotX?: number; origPivotY?: number;
   } | null>(null);
-  const pixelEditCommandRef = useRef<{ commandId: string; modifierId: string; keyframeId: string; points: { x: number; y: number }[] } | null>(null);
+  // 矫正模式进行中的笔画：目标节点 + 笔画起始帧的映射上下文（世界变换快照，
+  // 与 node-picking 逆映射同口径）+ 已积累的精灵局部点列
+  const pixelEditCommandRef = useRef<{
+    commandId: string;
+    characterId: string;
+    nodeId: string;
+    spriteId: string;
+    sprite: import('@/lib/unified-types').Sprite;
+    wt: { worldAngle: number; scaleX?: number; worldStretch: number; skewX?: number; skewY?: number; mirror: boolean };
+    jointX: number;
+    jointY: number;
+    points: { x: number; y: number }[];
+  } | null>(null);
   const spriteEditBrushCmdRef = useRef<{ commandId: string; modifierId: string; points: { x: number; y: number }[] } | null>(null);
 
   // ---- Dev FPS counter ----
@@ -99,20 +106,17 @@ export function useCanvasState() {
     () => Object.values(spritesRecord).filter((s): s is Sprite & { id: string } => !!s.id),
     [spritesRecord],
   );
-  const keyframes = useProjectStore((s) => s.keyframes);
   const canvasWidth = useProjectStore((s) => s.canvasWidth);
   const canvasHeight = useProjectStore((s) => s.canvasHeight);
   const backgroundColor = useProjectStore((s) => s.backgroundColor);
   const onionSkinEnabled = useProjectStore((s) => s.onionSkinEnabled);
   const onionSkinFrames = useProjectStore((s) => s.onionSkinFrames);
-  const trajectories = useProjectStore((s) => s.trajectories);
   const motionBlurStrokes = useProjectStore((s) => s.motionBlurStrokes);
   const effectStrokes = useProjectStore((s) => s.effectStrokes);
   const effectTracks = useProjectStore((s) => s.effectTracks);
   const proceduralAnimations = useProjectStore((s) => s.proceduralAnimations);
   const canvasModifierTracks = useProjectStore((s) => s.canvasModifierTracks);
   const setPartPixels = useProjectStore((s) => s.setSpritePixels);
-  const setCorrection = useProjectStore((s) => s.setCorrection);
   const frameRate = useProjectStore((s) => s.frameRate);
   const setCanvasSize = useProjectStore((s) => s.setCanvasSize);
   const animationVariables = useProjectStore((s) => s.animationVariables);
@@ -150,7 +154,6 @@ export function useCanvasState() {
   const panX = useEditorStore((s) => s.panX);
   const panY = useEditorStore((s) => s.panY);
   const showGrid = useEditorStore((s) => s.showGrid);
-  const showTrajectories = useEditorStore((s) => s.showTrajectories);
   const editMode = useEditorStore((s) => s.editMode);
   const selectedSpriteId = useEditorStore((s) => s.selectedSpriteId);
   const setZoom = useEditorStore((s) => s.setZoom);
@@ -176,7 +179,6 @@ export function useCanvasState() {
   const maskNodeId = useEditorStore((s) => s.maskNodeId);
   const refWizardOpen = useEditorStore((s) => s.refWizardOpen);
   const magicWandTolerance = useEditorStore((s) => s.magicWandTolerance);
-  const trajectorySnap = useEditorStore((s) => s.trajectorySnap);
   const spriteEditSpriteId = useEditorStore((s) => s.spriteEditSpriteId);
   const spriteEditModifiers = useEditorStore((s) => s.spriteEditModifiers);
   const brushStyle = useEditorStore((s) => s.brushStyle);
@@ -190,38 +192,19 @@ export function useCanvasState() {
   const selectedPart: Sprite | null = (selectedSpriteId ? spritesRecord[selectedSpriteId] : undefined) ?? null;
 
   // ---- Helper: get full translate offset ----
+  // 旧工程关键帧退役后，独立精灵在画布上再无帧位移来源（part_global 层
+  // 更早已删），偏移恒为 0；保留签名供旧部件几何助手（命中/取色）使用。
   const getFullTranslateOffset = useCallback(
-    (spriteId: string, frame: number): { offsetX: number; offsetY: number } => {
-      const store = useProjectStore.getState();
-      const { getSurroundingKeyframes: getSurrounding } = store;
-      const { prev } = getSurrounding(spriteId, frame);
-      const part = store.sprites[spriteId];
-      if (!part) return { offsetX: 0, offsetY: 0 };
-
-      const keyframe = prev;
-      const allModifiers = keyframe && !keyframe.isBaked ? keyframe.modifiers : [];
-      const modifiers = allModifiers.filter(m => !m.collapsed);
-      const kfBase = computeKeyframeBaseTransform(modifiers);
-      const animTransform = { translateX: 0, translateY: 0, rotation: 0, scaleX: 1, scaleY: 1, weight: 0, blendMode: 'add' as const, convergeFactor: 1 }; // Part 无 animationModifiers
-      const combined = combineTransformsComponentLevel(kfBase, animTransform, animTransform.blendMode, animTransform.convergeFactor);
-
-      const partGlobalOffsetX = 0;
-      const partGlobalOffsetY = 0;
-      return { offsetX: combined.translateX + partGlobalOffsetX, offsetY: combined.translateY + partGlobalOffsetY };
-    }, [],
+    (_spriteId: string, _frame: number): { offsetX: number; offsetY: number } => ({ offsetX: 0, offsetY: 0 }),
+    [],
   );
   const getInterpolatedTranslateOffset = getFullTranslateOffset;
 
   // ---- Helper: get interpolated modifiers ----
+  // 同上：无关键帧即无逐帧修改器，恒空。
   const getInterpolatedModifiers = useCallback(
-    (spriteId: string, frame: number) => {
-      const { getSurroundingKeyframes: getSurrounding } = useProjectStore.getState();
-      const { prev, next, t } = getSurrounding(spriteId, frame);
-      if (prev && next && prev.frame !== next.frame && t > 0) {
-        return interpolateModifiers(prev.modifiers, next.modifiers, t, prev.interpolationMode ?? 'linear', prev.bezierCP1, prev.bezierCP2);
-      } else if (prev) return prev.modifiers;
-      return [];
-    }, [],
+    (_spriteId: string, _frame: number): never[] => [],
+    [],
   );
 
   // ---- Canvas size editor ----
@@ -313,9 +296,7 @@ export function useCanvasState() {
       const local = canvasToPartLocal(px, py, selectedPart, txOff, tyOff);
       if (!local) return;
 
-      const store = useProjectStore.getState();
-      const currentKf = store.keyframes.find(k => k.spriteId === selectedPart.id! && k.frame === currentFrame);
-      const basePixels = currentKf?.correctionMask ?? selectedPart.data;
+      const basePixels = selectedPart.data;
       const newPixels: PixelGrid = basePixels.map((row) => [...row]);
 
       if (brushStyle === 'solid' || color === null) {
@@ -335,9 +316,8 @@ export function useCanvasState() {
         applyBrushStamp(newPixels, stamp, local.lx, local.ly, selectedPart.width, selectedPart.height);
       }
 
-      if (currentKf?.correctionMask) store.setCorrection(currentKf.id, newPixels);
-      else setPartPixels(selectedPart.id!, newPixels);
-    }, [selectedPart, brushSize, brushStyle, brushStyleParams, canvasToPartLocal, setPartPixels, setCorrection, getInterpolatedTranslateOffset, canvasWidth, canvasHeight],
+      setPartPixels(selectedPart.id!, newPixels);
+    }, [selectedPart, brushSize, brushStyle, brushStyleParams, canvasToPartLocal, setPartPixels, getInterpolatedTranslateOffset, canvasWidth, canvasHeight],
   );
 
   const applyFill = useCallback(
@@ -348,13 +328,9 @@ export function useCanvasState() {
       const local = canvasToPartLocal(px, py, selectedPart, txOff, tyOff);
       if (!local) return;
 
-      const store = useProjectStore.getState();
-      const currentKf = store.keyframes.find(k => k.spriteId === selectedPart.id! && k.frame === currentFrame);
-      const basePixels = currentKf?.correctionMask ?? selectedPart.data;
-      const filled = floodFill(basePixels, local.lx, local.ly, brushColor);
-      if (currentKf?.correctionMask) store.setCorrection(currentKf.id, filled);
-      else setPartPixels(selectedPart.id!, filled);
-    }, [selectedPart, brushColor, canvasToPartLocal, setPartPixels, setCorrection, getInterpolatedTranslateOffset, canvasWidth, canvasHeight],
+      const filled = floodFill(selectedPart.data, local.lx, local.ly, brushColor);
+      setPartPixels(selectedPart.id!, filled);
+    }, [selectedPart, brushColor, canvasToPartLocal, setPartPixels, getInterpolatedTranslateOffset, canvasWidth, canvasHeight],
   );
 
   const applyEyedropper = useCallback(
@@ -448,39 +424,6 @@ export function useCanvasState() {
     [collectPuppetNodeHits],
   );
 
-  // ---- Find trajectory control point handle ----
-  const findTrajectoryCpAtPixel = useCallback(
-    (px: number, py: number) => {
-      const hitRadius = Math.max(8 / zoom, 3);
-      const centerX = canvasWidth / 2;
-      const centerY = canvasHeight / 2;
-      const { catmullRomToBezier: crb } = { catmullRomToBezier };
-
-      for (const traj of trajectories) {
-        if (!traj.visible || traj.points.length < 2) continue;
-        if (traj.spriteId !== selectedSpriteId) continue;
-        const screenPoints = traj.points.map((pt) => ({ x: panX + (centerX + pt.x) * zoom, y: panY + (centerY + pt.y) * zoom }));
-        for (let i = 0; i < screenPoints.length - 1; i++) {
-          const p0 = i > 0 ? screenPoints[i - 1] : screenPoints[i];
-          const p1 = screenPoints[i]; const p2 = screenPoints[i + 1];
-          const p3 = i < screenPoints.length - 2 ? screenPoints[i + 2] : screenPoints[i + 1];
-          const bez = crb({ x: p0.x, y: p0.y }, { x: p1.x, y: p1.y }, { x: p2.x, y: p2.y }, { x: p3.x, y: p3.y });
-          const curvePt = traj.points[i]; const nextCurvePt = traj.points[i + 1];
-          let cp1x = bez.cp1x, cp1y = bez.cp1y, cp2x = bez.cp2x, cp2y = bez.cp2y;
-          if (curvePt && (curvePt.cp1x !== 0 || curvePt.cp1y !== 0)) { cp1x = p1.x + curvePt.cp1x * zoom; cp1y = p1.y + curvePt.cp1y * zoom; }
-          if (nextCurvePt && (nextCurvePt.cp2x !== 0 || nextCurvePt.cp2y !== 0)) { cp2x = p2.x + nextCurvePt.cp2x * zoom; cp2y = p2.y + nextCurvePt.cp2y * zoom; }
-          if (Math.sqrt((px * zoom + panX - cp1x) ** 2 + (py * zoom + panY - cp1y) ** 2) <= hitRadius) {
-            return { spriteId: traj.spriteId, segmentIdx: i, cp: 'cp1' as const, cp1x: curvePt?.cp1x ?? 0, cp1y: curvePt?.cp1y ?? 0, cp2x: nextCurvePt?.cp2x ?? 0, cp2y: nextCurvePt?.cp2y ?? 0 };
-          }
-          if (Math.sqrt((px * zoom + panX - cp2x) ** 2 + (py * zoom + panY - cp2y) ** 2) <= hitRadius) {
-            return { spriteId: traj.spriteId, segmentIdx: i, cp: 'cp2' as const, cp1x: curvePt?.cp1x ?? 0, cp1y: curvePt?.cp1y ?? 0, cp2x: nextCurvePt?.cp2x ?? 0, cp2y: nextCurvePt?.cp2y ?? 0 };
-          }
-        }
-      }
-      return null;
-    }, [trajectories, selectedSpriteId, canvasWidth, canvasHeight, zoom, panX, panY],
-  );
-
   // ---- Extract selection pixels as a new part ----
   const extractSelectionAsPart = useCallback((mode: 'keep' | 'transparent' | 'fill' | 'inpaint' = 'keep', fillColor: string = '#000000', partName: string = '选区') => {
     const mask = selectionMaskRef.current;
@@ -559,7 +502,7 @@ export function useCanvasState() {
     onionDataVersionRef.current++;
     invalidateUnifiedPipelineCache();
     dirtyRef.current = true;
-  }, [parts, keyframes, backgroundColor, onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, spriteEditModifiers, unifiedCharacters, globalModifiers, globalBlueprint]);
+  }, [parts, backgroundColor, onionSkinEnabled, onionSkinFrames, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations, canvasModifierTracks, frameRate, animationVariables, spriteEditModifiers, unifiedCharacters, globalModifiers, globalBlueprint]);
 
   // ---- Container size / canvas dimension effects ----
   useEffect(() => {
@@ -588,21 +531,21 @@ export function useCanvasState() {
     isPanningRef, isDrawingRef, lastPixelRef, panStartRef, moveStartRef,
     spaceHeldRef, altToggleBackupRef, lastDrawnPixelsRef,
     currentStrokePointsRef, cropStartRef, cropRectRef,
-    trajectoryPathRef, handDrawTrajectoryRef, trajectoryCpDragRef,
+    trajectoryPathRef,
     selectionMaskRef, lassoPathRef, selectionMarchOffsetRef,
     boneDragRef, puppetNodeDragRef, pixelEditCommandRef, spriteEditBrushCmdRef,
     // State
     fpsFramesRef, fpsLastTimeRef, fpsDisplay, setFpsDisplay,
     currentFrameRef, playStateRef, zoomRef, panRef,
     // Store values
-    parts, keyframes, canvasWidth, canvasHeight, backgroundColor,
-    onionSkinEnabled, onionSkinFrames, trajectories, motionBlurStrokes, effectStrokes,
+    parts, canvasWidth, canvasHeight, backgroundColor,
+    onionSkinEnabled, onionSkinFrames, motionBlurStrokes, effectStrokes,
     effectTracks, proceduralAnimations, canvasModifierTracks,
-    setPartPixels, setCorrection, frameRate, setCanvasSize, animationVariables,
+    setPartPixels, frameRate, setCanvasSize, animationVariables,
     globalModifiers,
     nonPuppetParts, unifiedCharacters,
     // Editor
-    tool, brushSize, brushColor, zoom, panX, panY, showGrid, showTrajectories,
+    tool, brushSize, brushColor, zoom, panX, panY, showGrid,
     editMode, selectedSpriteId, setZoom, setPan,
     autoMotionBlur, autoMotionBlurIntensity, motionBlurBrushType, motionBlurIntensity, motionBlurDirection,
     effectBrushColor, effectBrushRadius, effectBrushIntensity, effectBrushDensity, effectBrushSpread, strokeBlendMode,
@@ -610,7 +553,7 @@ export function useCanvasState() {
     showPuppetSkeleton, activePuppetSkeletonId, selectedNodeId,
     referenceImageUrl, referenceImageOpacity, referenceImageVisible, maskNodeId,
     refWizardOpen,
-    magicWandTolerance, trajectorySnap, spriteEditSpriteId, spriteEditModifiers,
+    magicWandTolerance, spriteEditSpriteId, spriteEditModifiers,
     brushStyle, brushStyleParams, compositingMode, styleAspects, strokeDrivers, editorStore,
     // Derived
     selectedPart,
@@ -618,9 +561,8 @@ export function useCanvasState() {
     getFullTranslateOffset, getInterpolatedTranslateOffset, getInterpolatedModifiers,
     screenToPixel, canvasToPartLocal, findPartAtPixel,
     applyBrush, applyFill, applyEyedropper,
-    computePivotWorldPosition, findPuppetNodeAtPixel, findAllPuppetNodesAtPixel,
+    computePivotWorldPosition, findPuppetNodeAtPixel, findAllPuppetNodesAtPixel, extractSelectionAsPart,
     middleClickRef, leftPressRef,
-    findTrajectoryCpAtPixel, extractSelectionAsPart,
     // Canvas size
     canvasSizeEditing, setCanvasSizeEditing, canvasSizeW, setCanvasSizeW, canvasSizeH, setCanvasSizeH, applyCanvasSize,
     // Container

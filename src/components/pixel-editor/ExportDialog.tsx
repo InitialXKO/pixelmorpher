@@ -178,7 +178,6 @@ function generateLottieJSON(
   frameRate: number,
   totalFrames: number,
   sprites: import('@/lib/unified-types').Sprite[],
-  keyframes: ReturnType<typeof useProjectStore.getState>['keyframes'],
   scale: number,
 ): Record<string, unknown> {
   const w = canvasWidth * scale;
@@ -190,7 +189,8 @@ function generateLottieJSON(
 
   for (let i = 0; i < sortedSprites.length; i++) {
     const part = sortedSprites[i];
-    const partKeyframes = keyframes.filter((k) => k.spriteId === part.id).sort((a, b) => a.frame - b.frame);
+    // 旧工程关键帧已退役：独立精灵在 Lottie 里恒静态位（下方已有静态分支）
+    const partKeyframes: Array<{ spriteId: string; frame: number; modifiers: Array<{ type: string; enabled: boolean; params: Record<string, unknown> }> }> = [];
 
     // Build keyframe arrays for each transform property
     const positionKeys: LottieKeyframe[] = [];
@@ -449,7 +449,6 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
   // ---- Store ----
   const {
     sprites,
-    keyframes,
     canvasWidth,
     canvasHeight,
     totalFrames,
@@ -543,7 +542,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
     } catch {
       setPreviewUrl(null);
     }
-  }, [open, settings.scale, settings.backgroundMode, settings.customBgColor, canvasWidth, canvasHeight, sprites, keyframes, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations]);
+  }, [open, settings.scale, settings.backgroundMode, settings.customBgColor, canvasWidth, canvasHeight, sprites, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations]);
 
   // ---- Background color for rendering ----
   const getBgColor = useCallback(() => {
@@ -615,7 +614,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations]);
+  }, [canvasWidth, canvasHeight, sprites, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations]);
 
   // ---- Export: Spritesheet ----
   const exportSpritesheet = useCallback(async () => {
@@ -705,7 +704,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations]);
+  }, [canvasWidth, canvasHeight, sprites, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations]);
 
   // ---- Export: GIF (using gif.js encoder) ----
   const exportGif = useCallback(async () => {
@@ -786,7 +785,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations, frameRate, projectName]);
+  }, [canvasWidth, canvasHeight, sprites, totalFrames, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations, frameRate, projectName]);
 
   // ---- Export: Video (V2.0) ----
   const exportVideo = useCallback(async () => {
@@ -904,7 +903,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, sprites, keyframes, totalFrames, frameRate, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations, projectName]);
+  }, [canvasWidth, canvasHeight, sprites, totalFrames, frameRate, settings, getBgColor, onOpenChange, motionBlurStrokes, effectStrokes, effectTracks, proceduralAnimations, projectName]);
 
   // ---- Export: Lottie (V2.0) ----
   const exportLottie = useCallback(async () => {
@@ -918,7 +917,6 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
         frameRate,
         totalFrames,
         nonPuppetParts,
-        keyframes,
         scale,
       );
 
@@ -943,7 +941,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       setExportProgress(0);
       onOpenChange(false);
     }
-  }, [canvasWidth, canvasHeight, frameRate, totalFrames, sprites, keyframes, settings.lottieScale, onOpenChange, projectName]);
+  }, [canvasWidth, canvasHeight, frameRate, totalFrames, sprites, settings.lottieScale, onOpenChange, projectName]);
 
   // ---- Export: Project File (V2.0) ----
   const exportProjectFile = useCallback(() => {
@@ -1010,7 +1008,7 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       clips: animationClips.filter((c) => c.puppetCharacterId === procCharacter.id),
       patternLibrary: allPatternTemplates(),
       libraryEntries: allLibraryEntries(),
-      projectData: { proceduralAnimations, globalModifiers: useProjectStore.getState().globalModifiers, globalBlueprint: useProjectStore.getState().globalBlueprint, canvasModifierTracks: useProjectStore.getState().canvasModifierTracks, effectTracks: useProjectStore.getState().effectTracks, motionBlurStrokes: useProjectStore.getState().motionBlurStrokes, effectStrokes: useProjectStore.getState().effectStrokes, canvasWidth: useProjectStore.getState().canvasWidth, canvasHeight: useProjectStore.getState().canvasHeight },
+      projectData: { proceduralAnimations, globalModifiers: useProjectStore.getState().globalModifiers, globalBlueprint: useProjectStore.getState().globalBlueprint, canvasModifierTracks: useProjectStore.getState().canvasModifierTracks, effectTracks: useProjectStore.getState().effectTracks, motionBlurStrokes: useProjectStore.getState().motionBlurStrokes, effectStrokes: useProjectStore.getState().effectStrokes, canvasWidth: useProjectStore.getState().canvasWidth, canvasHeight: useProjectStore.getState().canvasHeight, palettes: useProjectStore.getState().palettes, activePaletteId: useProjectStore.getState().activePaletteId },
       projectExtras: {
         perspectiveForeshorten: useEditorStore.getState().perspectiveForeshorten,
       },
@@ -1449,9 +1447,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
             <div className="space-y-3">
               <div className="text-xs text-gray-500 bg-white/[0.03] rounded-md p-3 space-y-1">
                 <div className="font-medium text-gray-400">Export Project File (.pxm)</div>
-                <div>Save the complete project including all sprites, keyframes, and procedural animations.</div>
+                <div>Save the complete project including all sprites and procedural animations.</div>
                 <div className="text-[10px] text-gray-600 mt-1">
-                  {Object.keys(sprites).length} sprites · {keyframes.length} keyframes · {proceduralAnimations.length} procedural anims
+                  {Object.keys(sprites).length} sprites · {proceduralAnimations.length} procedural anims
                 </div>
               </div>
               <Button

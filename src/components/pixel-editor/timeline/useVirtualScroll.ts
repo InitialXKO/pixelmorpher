@@ -13,7 +13,6 @@ export default function useVirtualScroll(
   sprites: Sprite[],
   effectTracks: EffectTrack[],
   canvasModifierTracks: CanvasModifierTrack[],
-  getKeyframesForPart: (spriteId: string) => Keyframe[],
   puppetNodes: Array<{ id: string; tracks?: import('@/lib/unified-types').NodeTracks }> = [],
   isPuppetClip: boolean = false,
   showCostumeStateRow: boolean = false,
@@ -86,7 +85,7 @@ export default function useVirtualScroll(
     }
 
     return groups;
-  }, [tracks, sprites, effectTracks, canvasModifierTracks, getKeyframesForPart, puppetNodes, isPuppetClip, showCostumeStateRow]);
+  }, [tracks, sprites, effectTracks, canvasModifierTracks, puppetNodes, isPuppetClip, showCostumeStateRow]);
 
   const { rowOffsets, rowHeights, totalHeight } = useMemo(() => {
     const offsets: number[] = [];

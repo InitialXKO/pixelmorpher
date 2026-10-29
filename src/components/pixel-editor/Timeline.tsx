@@ -378,12 +378,13 @@ export default function Timeline() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const labelScrollRef = useRef<HTMLDivElement>(null);
   const rulerScrollRef = useRef<HTMLDivElement>(null);
+  const tagStripScrollRef = useRef<HTMLDivElement>(null);
   const inputStripScrollRef = useRef<HTMLDivElement>(null);
 
   // ---- Virtual Scroll ----
   // Part 轨道已删除：tracks 传空数组（原 tracks 恒为空）
   const { visibleRange, rowOffsets, rowHeights, totalHeight, onScroll: handleVirtualScroll } = useVirtualScroll(
-    scrollContainerRef, [], [], effectTracks, canvasModifierTracks, () => [],
+    scrollContainerRef, [], [], effectTracks, canvasModifierTracks,
     puppetNodes as any, isPuppetClip,
     !!(activeClip && puppetCharacter && puppetNodes.length > 0)
   );
@@ -453,6 +454,9 @@ export default function Timeline() {
     }
     if (rulerScrollRef.current && scrollContainerRef.current) {
       rulerScrollRef.current.scrollLeft = scrollContainerRef.current.scrollLeft;
+    }
+    if (tagStripScrollRef.current && scrollContainerRef.current) {
+      tagStripScrollRef.current.scrollLeft = scrollContainerRef.current.scrollLeft;
     }
     if (inputStripScrollRef.current && scrollContainerRef.current) {
       inputStripScrollRef.current.scrollLeft = scrollContainerRef.current.scrollLeft;
@@ -673,6 +677,7 @@ export default function Timeline() {
           isPuppetClip={isPuppetClip}
           nodeList={puppetNodes as any}
           labelScrollRef={labelScrollRef}
+          tagStripVisible={(activeClip?.frameTags?.length ?? 0) > 0}
           // V15: Pass track colors and frame step info
           trackTimelineDisplays={trackTimelineDisplays}
           trackFrameSteps={trackFrameSteps}
@@ -703,6 +708,8 @@ export default function Timeline() {
           playheadX={playheadX}
           scrollContainerRef={scrollContainerRef}
           rulerScrollRef={rulerScrollRef}
+          tagStripScrollRef={tagStripScrollRef}
+          frameTags={activeClip?.frameTags ?? []}
           rulerHighlightRef={rulerHighlightRef}
           playheadLineRef={playheadLineRef}
           onScroll={handleTrackScroll}

@@ -24,12 +24,12 @@ import {
   renderLassoPreview,
   renderHandDrawnTrajectoryPreview,
   renderCropPreview,
-  renderTrajectoryOverlay,
 } from './canvas/canvas-render-helpers';
 import {
   renderPuppetSkeletonOverlay,
   renderIKTargetHandles,
   renderClampAnchorGizmos,
+  renderClipHitboxes,
   renderFaceGuideOverlay,
   renderPivotCrosshair,
   renderStrokeCursorIndicator,
@@ -158,8 +158,8 @@ export default function PixelCanvas() {
       offCtx.save();
       offCtx.clearRect(0, 0, s.canvasWidth, s.canvasHeight);
       const curVersion = s.onionDataVersionRef.current;
-      const kfHash = s.keyframes.map(kf => `${kf.id}:${kf.frame}:${kf.modifiers.length}`).join('|')
-        + `|tracks:${JSON.stringify(Object.values(useProjectStore.getState().unifiedCharacters).map((c) => Object.values(c.nodes).map((n) => n.tracks ?? null)))}`;
+      const kfHash = `|tracks:${JSON.stringify(Object.values(useProjectStore.getState().unifiedCharacters).map((c) => Object.values(c.nodes).map((n) => n.tracks ?? null)))}`
+        + `|corr:${JSON.stringify(Object.values(useProjectStore.getState().unifiedCharacters).map((c) => Object.values(c.nodes).map((n) => n.frameCorrections ?? null)))}`;
 
       // 木偶洋葱皮：把指定帧的木偶角色渲染进洋葱缓存画布（新模型）
       // 与顶端开关同构：外层 s.onionSkinEnabled 已控制，此处不再单独检查
@@ -292,7 +292,7 @@ export default function PixelCanvas() {
         nodeTurn3D: useEditorStore.getState().nodeTurn3D,
       });
       try {
-        renderUnified(offCtx, s.canvasWidth, s.canvasHeight, Object.values(freshStore.sprites), s.keyframes, currentFrame, bgColor,
+        renderUnified(offCtx, s.canvasWidth, s.canvasHeight, Object.values(freshStore.sprites), currentFrame, bgColor,
           s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
           s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
           s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint,
@@ -385,10 +385,9 @@ export default function PixelCanvas() {
     }
 
     if (s.isDrawingRef.current && s.tool === 'lasso') renderLassoPreview(rc, s.lassoPathRef.current);
-    if (s.isDrawingRef.current && s.tool === 'trajectory') renderHandDrawnTrajectoryPreview(rc, s.handDrawTrajectoryRef.current);
+    if (s.isDrawingRef.current && s.tool === 'trajectory') renderHandDrawnTrajectoryPreview(rc, s.trajectoryPathRef.current);
     if (s.isDrawingRef.current && s.tool === 'crop') renderCropPreview(rc, s.cropRectRef.current);
 
-    renderTrajectoryOverlay(rc, { showTrajectories: s.showTrajectories, trajectories: s.trajectories, selectedSpriteId: s.selectedSpriteId, editMode: s.editMode, trajectorySnap: s.trajectorySnap, totalFrames: useProjectStore.getState().totalFrames });
 
     // Skip puppet skeleton overlay during playback — reduces non-essential drawing overhead
     if (!isPlaying) {
@@ -407,6 +406,11 @@ export default function PixelCanvas() {
       if (activeChar && s.showPuppetSkeleton) {
         renderIKTargetHandles(rc, activeChar);
         renderClampAnchorGizmos(rc, activeChar);
+      }
+      // 片段碰撞盒（当前帧有桶才画，函数内自查）
+      if (activeChar) {
+        const activeClip = pst.animationClips.find((c) => c.id === pst.activeAnimationClipId) ?? null;
+        renderClipHitboxes(rc, activeChar, activeClip);
       }
       // 五官参照（选中节点头部框点位）
       if (activeChar && useEditorStore.getState().showFaceGuide) {
@@ -433,9 +437,9 @@ export default function PixelCanvas() {
   // re-creation of the render callback. Only truly render-affecting state is listed.
   // During playback, most of these don't change, so the callback stays stable.
   }, [
-    s.canvasWidth, s.canvasHeight, useProjectStore.getState().sprites, s.keyframes, s.backgroundColor,
-    s.onionSkinEnabled, s.onionSkinFrames, s.showGrid, s.showTrajectories, s.editMode,
-    s.trajectories, s.selectedPart, s.selectedSpriteId, s.motionBlurStrokes, s.effectStrokes,
+    s.canvasWidth, s.canvasHeight, useProjectStore.getState().sprites, s.backgroundColor,
+    s.onionSkinEnabled, s.onionSkinFrames, s.showGrid, s.editMode,
+    s.selectedPart, s.selectedSpriteId, s.motionBlurStrokes, s.effectStrokes,
     s.effectTracks, s.autoMotionBlur, s.autoMotionBlurIntensity, s.tool,
     s.showPuppetSkeleton, s.unifiedCharacters,
     s.canvasModifierTracks, spriteEditSpriteId, s.spriteEditModifiers,
@@ -457,7 +461,7 @@ export default function PixelCanvas() {
   // 覆盖层开关变化时标记重绘（网格/骨骼/轨迹等）
   useEffect(() => {
     s.markDirty();
-  }, [s.showGrid, s.showPuppetSkeleton, s.showTrajectories, s.perspectiveForeshorten]);
+  }, [s.showGrid, s.showPuppetSkeleton, s.perspectiveForeshorten]);
 
   // 节点关键帧变化时标记重绘
   const animationClips = useProjectStore((s) => s.animationClips);

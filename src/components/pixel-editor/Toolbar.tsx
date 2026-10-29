@@ -47,8 +47,6 @@ import {
 import {
   ZoomControls,
   GridToggle,
-  TrajectoryToggle,
-  TrajectorySnapToggle,
   SkeletonsToggle,
   ForeshortenToggle,
   DisplayFxControls,
@@ -74,12 +72,10 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
   const tool = useEditorStore((s) => s.tool);
   const brushSize = useEditorStore((s) => s.brushSize);
   const brushColor = useEditorStore((s) => s.brushColor);
-  const showTrajectories = useEditorStore((s) => s.showTrajectories);
   const setTool = useEditorStore((s) => s.setTool);
   const setBrushSize = useEditorStore((s) => s.setBrushSize);
   const setBrushColor = useEditorStore((s) => s.setBrushColor);
   const setEditMode = useEditorStore((s) => s.setEditMode);
-  const toggleTrajectories = useEditorStore((s) => s.toggleTrajectories);
   const editMode = useEditorStore((s) => s.editMode);
   // Brush style
   const brushStyle = useEditorStore((s) => s.brushStyle);
@@ -339,14 +335,6 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
             setTool(val as ToolType);
             const state = useEditorStore.getState();
 
-            // Switch edit mode when trajectory tool is selected
-            if (val === 'trajectory') {
-              setEditMode('trajectory_edit');
-              if (!showTrajectories) toggleTrajectories();
-            } else if (state.editMode === 'trajectory_edit') {
-              setEditMode('normal');
-            }
-
             // Auto-enter sprite_edit when switching to brush/eraser/fill in non-correction mode.
             // Only auto-enter when a sprite is already selected; never silently pick the first one.
             const autoEnterSpriteEdit = (hint: string) => {
@@ -421,16 +409,44 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
               onPressedChange={(pressed) => {
                 setEditMode(pressed ? 'correction' : 'normal');
               }}
-              disabled={!selectedSpriteId}
               aria-label="修正模式"
-              className="h-7 px-2 py-0 data-[state=on]:bg-cyan-600/30 data-[state=on]:text-cyan-300 data-[state=on]:ring-cyan-500/50 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded text-[10px] gap-1 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-500"
+              className="h-7 px-2 py-0 data-[state=on]:bg-cyan-600/30 data-[state=on]:text-cyan-300 data-[state=on]:ring-cyan-500/50 text-gray-500 hover:bg-white/5 hover:text-gray-200 rounded text-[10px] gap-1"
             >
               <Paintbrush className="size-3" />
               修正
             </Toggle>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-xs">
-            {selectedSpriteId ? '修正模式: 笔画记录为 PixelEdit 修改器 (非破坏性)' : '修正模式: 请先选择一个部件'}
+            修正模式: 在木偶节点上逐帧补画（笔画记为该节点当前帧的像素修正，非破坏性）
+          </TooltipContent>
+        </Tooltip>
+      )}
+      {showCorrectionToggle && editMode === 'correction' && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              aria-label="清除本帧修正"
+              className="h-7 px-2 py-0 text-gray-500 hover:bg-white/5 hover:text-red-300 rounded text-[10px]"
+              onClick={() => {
+                const ps = useProjectStore.getState();
+                const nodeId = ps.selectedNodeId;
+                if (!nodeId) return;
+                for (const ch of Object.values(ps.unifiedCharacters)) {
+                  const node = ch.nodes?.[nodeId];
+                  if (!node?.frameCorrections?.[ps.currentFrame]) continue;
+                  const next = { ...(node.frameCorrections ?? {}) };
+                  delete next[ps.currentFrame];
+                  ps.pushUndo('清除本帧修正');
+                  ps.updateUnifiedNode(ch.id, nodeId, { frameCorrections: next } as any);
+                  break;
+                }
+              }}
+            >
+              清除本帧修正
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="text-xs">
+            清除选中节点在当前帧的全部像素修正
           </TooltipContent>
         </Tooltip>
       )}
@@ -606,8 +622,6 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
       <Separator orientation="vertical" className="h-5 bg-white/10" />
 
       <GridToggle />
-      <TrajectoryToggle />
-      <TrajectorySnapToggle />
 
       {/* Hand-drawn Trajectory Hint */}
       {tool === 'trajectory' && (

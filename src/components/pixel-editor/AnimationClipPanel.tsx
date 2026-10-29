@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useState, useCallback } from 'react';
 import SlashEffectEditor from './puppet/SlashEffectEditor';
-import { cloneSlashSpec, countSlashDefRefs, findSlashDef } from '@/lib/slash-defs';
 import { BEAT_TEMPLATES } from '@/lib/beat-templates';
 import {
   ContextMenu,
@@ -28,7 +27,6 @@ export default function AnimationClipPanel() {
     applyBeatTemplate,
   } = useProjectStore();
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
-  const updateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
   const selectedCharacterId = useProjectStore((s) => s.selectedCharacterId);
   const characterList = Object.values(unifiedCharacters ?? {});
   // 新片段的缺省归属：当前选中角色，否则第一个角色；无角色时不可建
@@ -77,7 +75,6 @@ export default function AnimationClipPanel() {
       stateKeyframes: structuredClone(clip.stateKeyframes ?? []),
       effectTracks: structuredClone(clip.effectTracks ?? []),
       canvasModifierTracks: structuredClone(clip.canvasModifierTracks ?? []),
-      trajectories: structuredClone(clip.trajectories ?? []),
       motionBlurStrokes: structuredClone(clip.motionBlurStrokes ?? []),
       effectStrokes: structuredClone(clip.effectStrokes ?? []),
       tags: [...(clip.tags ?? [])],
@@ -330,58 +327,15 @@ export default function AnimationClipPanel() {
                 </Button>
               </div>
               <p className="text-[9px] text-zinc-600 mt-0.5">
-                按节拍阶段切分片段窗为帧标签，套用后可在 DCC 面板继续调整。
+                按节拍阶段切分片段窗为帧标签：时间轴上方会画出标签条，边界可在左侧「DCC管线」页签里调整。
               </p>
             </div>
             <div className="mt-2">
-              {(() => {
-                const ownerChar = unifiedCharacters?.[activeClip.puppetCharacterId];
-                const clipDefs = ownerChar?.slashDefs ?? [];
-                const boundDef = findSlashDef(clipDefs, activeClip.slashDefId);
-                const refCounts: Record<string, number> = {};
-                if (ownerChar) {
-                  for (const d of clipDefs) refCounts[d.id] = countSlashDefRefs(ownerChar, animationClips, d.id);
-                }
-                const patchDefs = (nextDefs: typeof clipDefs) => {
-                  if (ownerChar) updateUnifiedCharacter(ownerChar.id, { slashDefs: nextDefs });
-                };
-                return (
-                  <SlashEffectEditor
-                    value={activeClip.slashDefId ? boundDef?.spec : activeClip.slashEffect}
-                    onChange={(next) => {
-                      // 绑定时参数编辑直达定义（一处改、处处生效）；未绑定走私有字段
-                      if (activeClip.slashDefId && boundDef) {
-                        if (next) patchDefs(clipDefs.map((d) => (d.id === boundDef.id ? { ...d, spec: next } : d)));
-                      } else {
-                        updateAnimationClip(activeClip.id, { slashEffect: next });
-                      }
-                    }}
-                    nodes={Object.values(ownerChar?.nodes ?? {}).map((n) => ({ id: n.id, name: n.name }))}
-                    defBinding={ownerChar ? {
-                      defs: clipDefs,
-                      boundDefId: activeClip.slashDefId,
-                      refCounts,
-                      onBind: (defId) => updateAnimationClip(activeClip.id, { slashDefId: defId, slashEffect: undefined }),
-                      onUnbind: () => updateAnimationClip(activeClip.id, {
-                        slashEffect: boundDef ? cloneSlashSpec(boundDef.spec) : activeClip.slashEffect,
-                        slashDefId: undefined,
-                      }),
-                      onSaveAsDef: () => {
-                        if (!activeClip.slashEffect || !ownerChar) return;
-                        const nd = {
-                          id: crypto.randomUUID(),
-                          name: `${activeClip.name || '片段'}刀光`,
-                          spec: cloneSlashSpec(activeClip.slashEffect),
-                        };
-                        patchDefs([...clipDefs, nd]);
-                        updateAnimationClip(activeClip.id, { slashDefId: nd.id, slashEffect: undefined });
-                      },
-                      onRenameDef: (defId, name) => patchDefs(clipDefs.map((d) => (d.id === defId ? { ...d, name } : d))),
-                      onDeleteDef: (defId) => patchDefs(clipDefs.filter((d) => d.id !== defId)),
-                    } : undefined}
-                  />
-                );
-              })()}
+              <SlashEffectEditor
+                value={activeClip.slashEffect}
+                onChange={(next) => updateAnimationClip(activeClip.id, { slashEffect: next })}
+                nodes={Object.values(unifiedCharacters?.[activeClip.puppetCharacterId]?.nodes ?? {}).map((n) => ({ id: n.id, name: n.name }))}
+              />
             </div>
           </div>
         </div>

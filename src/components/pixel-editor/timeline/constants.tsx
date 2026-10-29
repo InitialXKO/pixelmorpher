@@ -8,6 +8,8 @@ export const FRAME_WIDTH = DEFAULT_FRAME_WIDTH; // Backward compat, use getFrame
 export const TRACK_HEIGHT = 32;
 export const SUB_TRACK_HEIGHT = 22;
 export const RULER_HEIGHT = 24;
+/** 帧标签条高（当前片段有 frameTags 时出现在标尺上方，标签列头同步加高对齐） */
+export const TAG_STRIP_HEIGHT = 16;
 export const LABEL_WIDTH = 180;
 export const KEYFRAME_SIZE = 10;
 export const EFFECT_KEYFRAME_SIZE = 8;

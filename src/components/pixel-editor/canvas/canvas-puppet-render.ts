@@ -153,6 +153,81 @@ export function renderClampAnchorGizmos(
 }
 
 /**
+ * 片段碰撞盒叠画（DCC管线·碰撞页签的编辑反馈）：当前帧在激活片段的
+ * hitboxMap 里有桶（frame_<帧>）时，把桶内启用形状画在角色根节点当帧
+ * 世界位上——形状坐标口径 = 相对根节点的本地像素偏移（与 convert 进包、
+ * 运行时 procRuntime.hitboxes() 返回的口径一致）。无桶不画。
+ */
+export function renderClipHitboxes(
+  rc: { ctx: CanvasRenderingContext2D; canvasWidth: number; canvasHeight: number; zoom: number; panX: number; panY: number; currentFrame: number },
+  character: Character,
+  clip: import('@/lib/types').AnimationClip | null,
+): void {
+  const shapes = clip?.hitboxMap?.[`frame_${rc.currentFrame}`]?.filter((s) => s.active);
+  if (!shapes || shapes.length === 0) return;
+  const { ctx, zoom, panX, panY } = rc;
+  const geoDir = geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D);
+  const worldTransforms = computeWorldTransforms(character, rc.currentFrame, rc.canvasWidth, rc.canvasHeight, undefined, undefined, undefined, undefined, geoDir);
+  const rootWt = worldTransforms.get(character.rootNodeId);
+  if (!rootWt) return;
+  const rootDir = geoDir ?? rootWt.variantIndex ?? 6;
+  const rx = subToPx(rootWt.worldX), ry = subToPx(rootWt.worldY), rz = subToPx(rootWt.worldZ);
+  const toScreen = (x: number, y: number) => {
+    const proj = projectToView(pxToSub(rx + x), pxToSub(ry + y), pxToSub(rz), rootDir);
+    return {
+      x: panX + (rc.canvasWidth / 2 + subToPx(proj.canvasX)) * zoom,
+      y: panY + (rc.canvasHeight / 2 + subToPx(proj.canvasY)) * zoom,
+    };
+  };
+  ctx.save();
+  ctx.font = '10px sans-serif';
+  ctx.lineWidth = 1.5;
+  for (const shape of shapes) {
+    const d = shape.data as Record<string, number> & { vertices?: Array<{ x: number; y: number }> };
+    ctx.strokeStyle = shape.color;
+    ctx.fillStyle = shape.color + '2e';
+    ctx.beginPath();
+    if (shape.shapeType === 'rect') {
+      const c1 = toScreen(d.x || 0, d.y || 0);
+      const c2 = toScreen((d.x || 0) + (d.width || 0), (d.y || 0) + (d.height || 0));
+      const x = Math.min(c1.x, c2.x), y = Math.min(c1.y, c2.y), w = Math.abs(c2.x - c1.x), h = Math.abs(c2.y - c1.y);
+      ctx.rect(x, y, w, h);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = shape.color;
+      ctx.fillText(shape.name, x, y - 4);
+    } else if (shape.shapeType === 'circle') {
+      const c = toScreen(d.x || 0, d.y || 0);
+      ctx.arc(c.x, c.y, Math.max(1, (d.radius || 0) * zoom), 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = shape.color;
+      ctx.fillText(shape.name, c.x + (d.radius || 0) * zoom + 4, c.y);
+    } else if (shape.shapeType === 'capsule') {
+      const r = Math.max(1, (d.radius || 0) * zoom);
+      const a = toScreen(d.x || 0, d.y || 0);
+      const b = toScreen(d.x || 0, (d.y || 0) + (d.height || 0));
+      ctx.moveTo(a.x + r, a.y);
+      ctx.arc(a.x, a.y, r, -Math.PI / 2, Math.PI / 2, false);
+      ctx.arc(b.x, b.y, r, Math.PI / 2, Math.PI * 1.5, false);
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = shape.color;
+      ctx.fillText(shape.name, a.x + r + 4, a.y);
+    } else if (shape.shapeType === 'polygon' && Array.isArray(d.vertices) && d.vertices.length > 0) {
+      d.vertices.forEach((v, i) => {
+        const p = toScreen(v.x || 0, v.y || 0);
+        if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      });
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      const p0 = toScreen(d.vertices[0].x || 0, d.vertices[0].y || 0);
+      ctx.fillStyle = shape.color;
+      ctx.fillText(shape.name, p0.x, p0.y - 4);
+    }
+  }
+  ctx.restore();
+}
+
+/**
  * 五官参照叠画：选中节点（带 faceFeatures 或 faceTurn）头部框 + 点位线段。
  * 头部框 = 该节点当前精灵的绘制框（原点 + plug 反推中心，随世界角旋转）；
  * 点位按 node.faceFeatures（缺省标准三庭）+ node.faceTurn 现算转面压缩。

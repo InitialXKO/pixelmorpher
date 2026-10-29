@@ -4,7 +4,8 @@ import React, { useRef } from 'react';
 import type { EffectTrack, CanvasModifierTrack } from '@/lib/types';
 import type { Node } from '@/lib/unified-types';
 import type { SnapConfig, TrackTimelineDisplay } from '@/lib/v15-types';
-import { getFrameWidth, TRACK_HEIGHT, RULER_HEIGHT } from './constants';
+import { getFrameWidth, TRACK_HEIGHT, RULER_HEIGHT, TAG_STRIP_HEIGHT } from './constants';
+import type { FrameTag } from '@/lib/types';
 import FrameRuler from './FrameRuler';
 import EffectTrackLane from './EffectTrackLane';
 import CanvasModifierTrackLane from './CanvasModifierTrackLane';
@@ -41,6 +42,9 @@ interface TrackLanesColumnProps {
   characterId: string | null;
   /** 激活片段的时间窗（节点行上的可视标记） */
   clipWindow?: { startFrame: number; endFrame: number } | null;
+  /** 当前片段的帧标签（节拍模板/DCC 面板所写）：非空时在标尺上方画标签条 */
+  frameTags?: FrameTag[];
+  tagStripScrollRef?: React.RefObject<HTMLDivElement | null>;
   selectedNodeKeyframeId: string | null;
   onSelectNodeKeyframe: (id: string) => void;
   onAddNodeKeyframe: (nodeId: string, frame: number) => void;
@@ -73,7 +77,7 @@ export default function TrackLanesColumn({
   onScroll, onRulerClick, onSelectEffectTrack,
   onAddEffectKeyframe, onDeleteEffectKeyframe, onEditEffectKeyframe,
   onPlayheadMouseDown,
-  isPuppetClip, nodeList, characterId, clipWindow, selectedNodeKeyframeId,
+  isPuppetClip, nodeList, characterId, clipWindow, frameTags, tagStripScrollRef, selectedNodeKeyframeId,
   onSelectNodeKeyframe, onAddNodeKeyframe, onDeleteNodeKeyframe, onDuplicateNodeKeyframe,
   onMoveNodeKeyframeToFrame, onUpdateNodeKeyframe, onEditModifierParams, onEditParamDriver,
   // V15
@@ -88,6 +92,31 @@ export default function TrackLanesColumn({
 
   return (
     <div className="flex-1 overflow-hidden flex flex-col relative">
+      {/* 帧标签条（当前片段有标签时）：按标签色分段，点段跳到该段起始帧；
+          横向滚动与标尺同机制同步（tagStripScrollRef） */}
+      {frameTags && frameTags.length > 0 && (
+        <div ref={tagStripScrollRef} className="shrink-0 overflow-hidden border-b border-[#1e1e3a]" style={{ height: TAG_STRIP_HEIGHT, background: '#101024' }}>
+          <div className="relative" style={{ width: rulerWidth, height: TAG_STRIP_HEIGHT }}>
+            {frameTags.map((tag) => {
+              const left = tag.startFrame * fw;
+              const width = Math.max(2, (tag.endFrame - tag.startFrame + 1) * fw);
+              return (
+                <button
+                  key={tag.id}
+                  type="button"
+                  onClick={() => onRulerClick(tag.startFrame)}
+                  title={`${tag.name} · 第 ${tag.startFrame}–${tag.endFrame} 帧（点击跳到起始帧）`}
+                  className="absolute top-0 h-full flex items-center overflow-hidden cursor-pointer hover:brightness-150"
+                  style={{ left, width, background: `${tag.color}2e`, borderLeft: `2px solid ${tag.color}`, borderRight: '1px solid rgba(0,0,0,0.35)' }}
+                >
+                  {width >= 34 && <span className="text-[9px] leading-none px-1 truncate" style={{ color: '#e4e4e7' }}>{tag.name}</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Ruler row (fixed) */}
       <div ref={rulerScrollRef} className="shrink-0 overflow-hidden border-b border-[#1e1e3a]" style={{ height: RULER_HEIGHT }}>
         <FrameRuler totalFrames={totalFrames} currentFrame={currentFrame} onRulerClick={onRulerClick} timelineZoom={timelineZoom} highlightRef={rulerHighlightRef} />

@@ -823,6 +823,37 @@ function glowEntryOf(part, costume) {
 
 // ---------- 数据（来自运行时包） ----------
 const PAL = EMBEDDED.palettes;
+// 工程调色板换色（包内 userPalettes，来自编辑器 DCC管线·调色板页签；
+// 与上方运行时程序化着色的内置 PALETTES 是两回事）：宿主经
+// procRuntime.setPaletteSwap(调色板id, {槽位: 新色}) 指定换色，只对
+// 该板 swappableIndices 内的槽位生效。换色在图集构建时按精确 RGB
+// 匹配改底图（精灵直贴图），签名并入图集缓存键——改换色即重建图集。
+// 参数化图案瓦片走 PAL 体系，不在此列。
+const USER_PALETTES = EMBEDDED.userPalettes || [];
+let paletteSwapState = null; // { map: Map<rgbInt, rgbInt>, sig: string }
+function hexToIntRt(h) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(h || '').trim());
+  return m ? parseInt(m[1], 16) : null;
+}
+function paletteSwapMap() { return paletteSwapState ? paletteSwapState.map : null; }
+function applyPaletteSwap(paletteId, swaps) {
+  const pal = USER_PALETTES.find((p) => p.id === paletteId || p.name === paletteId);
+  if (!pal || !swaps) return 0;
+  const allow = new Set(pal.swappableIndices || []);
+  const map = new Map();
+  for (const k of Object.keys(swaps)) {
+    const idx = Number(k);
+    if (!allow.has(idx)) continue;
+    const from = hexToIntRt(pal.colors ? pal.colors[idx] : null);
+    const to = hexToIntRt(swaps[k]);
+    if (from === null || to === null || from === to) continue;
+    map.set(from, to);
+  }
+  paletteSwapState = map.size > 0
+    ? { map, sig: [...map.entries()].map(([a, b]) => a + '>' + b).join(',') }
+    : null;
+  return map.size;
+}
 const PAL_NAMES = Object.keys(PAL);
 const palIndex = (name) => Math.max(0, PAL_NAMES.indexOf(name));
 const PARTS = EMBEDDED.parts;
@@ -873,7 +904,8 @@ function tileKeyOf(part, variant, costumeName, resolved) {
 }
 function ensureAtlas(gl, variant, costumeName) {
   const osig = overrideSig();
-  if (atlasState && atlasState.variant === variant && atlasState.costumeName === costumeName && atlasState.osig === osig) return atlasState;
+  const palSig = paletteSwapState ? paletteSwapState.sig : '';
+  if (atlasState && atlasState.variant === variant && atlasState.costumeName === costumeName && atlasState.osig === osig && atlasState.palSig === palSig) return atlasState;
   const costume = COSTUMES[costumeName];
   const tiles = [], entries = [];
   const map = new Map();
@@ -1025,6 +1057,30 @@ function ensureAtlas(gl, variant, costumeName) {
       entries.push(['slash:' + perf.id + ':' + fi, tile, { composite: 'slashfx', params: { hidden: false } }, false, fr, null, 0]);
     }
   }
+  // 逐帧修正替代图（矫正烘焙）：表演 spriteFrames 里与当前服装集对上的
+  // 替代图按当前变体镜像烘成瓦片入图集，条目键带 #corr<perfId>:<本地帧>，
+  // 打包时折进部件条目的 corrFrames（与 #anim 同路）；绘制时主导表演在
+  // 该本地帧有条目才换瓦片（见 corrPick）。
+  for (const perf of PERFORMANCES) {
+    const sfx = perf.spriteFrames;
+    if (!sfx) continue;
+    for (const sk of Object.keys(sfx)) {
+      const byCostume = sfx[sk];
+      const frames = byCostume ? byCostume[costumeName] : undefined;
+      if (!frames) continue;
+      const part = PARTS.find((p) => p.key === sk);
+      if (!part) continue;
+      const mirrored = variantMirrored(part, variant);
+      for (const lf of Object.keys(frames)) {
+        const grid = frames[lf];
+        const key = [sk, variant, costumeName, 'C', perf.id, lf, grid.w, grid.h, grid.plug.join(','), gridHashOf(grid), mirrored ? 'M' : ''].join('|');
+        let tile = tileCache.get(key);
+        if (!tile) { tile = spriteTileOf(grid, mirrored); tileCache.set(key, tile); }
+        tiles.push(tile);
+        entries.push([sk + '#corr' + perf.id + ':' + lf, tile, { params: { ...part.base, off: [0, 0] }, composite: 'sprite', halo: 0, baseSprite: null }, mirrored, grid, null, 0]);
+      }
+    }
+  }
   // 团块/火焰场槽（乙8 改造）：跟随口径 = 范围/位置跟、形态不跟
   // （用户定案）——烘焙帧一缩放就是拉伸形态，故图集只预留定尺寸
   // 槽位（域上限 = 形变 2 倍时的场尺寸），每帧由场作业按当帧
@@ -1057,10 +1113,12 @@ function ensureAtlas(gl, variant, costumeName) {
       }
     });
   }
+  const palMapAtlas = paletteSwapMap();
   const pack = packAtlas(tiles, 256);
   const height = pack.height;
   const slashTiles = {};
   const animFrameMap = {};
+  const corrFrameMap = {};
   const data = new Uint8Array(256 * height * 4);
   const baseData = new Uint8Array(256 * height * 4);
   const glowData = new Uint8Array(256 * height * 4);
@@ -1092,8 +1150,13 @@ function ensureAtlas(gl, variant, costumeName) {
           const sy = flipY ? bs.h - 1 - (ej - M) : ej - M;
           if (sx < 0 || sy < 0 || sx >= bs.w || sy >= bs.h) continue;
           const c = bs.data[sy] && bs.data[sy][sx];
-          const rgb = c ? parseHexRt(c) : null;
+          let rgb = c ? parseHexRt(c) : null;
           if (!rgb) continue;
+          // 工程调色板换色：底图色精确命中换色表即替换（alpha 恒 255）
+          if (palMapAtlas) {
+            const to = palMapAtlas.get((rgb[0] << 16) | (rgb[1] << 8) | rgb[2]);
+            if (to !== undefined) rgb = [(to >> 16) & 255, (to >> 8) & 255, to & 255];
+          }
           const o = ((ay + j) * 256 + ax + ii) * 4;
           baseData[o] = rgb[0]; baseData[o + 1] = rgb[1]; baseData[o + 2] = rgb[2]; baseData[o + 3] = 255;
         }
@@ -1151,8 +1214,16 @@ function ensureAtlas(gl, variant, costumeName) {
     }
       }
     const ekey = entries[i][0];
+    const corrPos = ekey.indexOf('#corr');
     const animPos = ekey.indexOf('#anim');
-    if (animPos >= 0) {
+    if (corrPos >= 0) {
+      // 逐帧修正替代瓦片：不单独成条目，挂到部件条目的 corrFrames
+      // （键 "<perfId>:<本地帧>"；绘制时按 corrPick 选帧）
+      const bk = ekey.slice(0, corrPos);
+      const ck = ekey.slice(corrPos + 5);
+      const rec = (corrFrameMap[bk] = corrFrameMap[bk] || {});
+      rec[ck] = { tile: tile, place: [ax, ay] };
+    } else if (animPos >= 0) {
       // 变体瓦片（动态表面步 fi × 置换步 di）：不单独成条目，挂到
       // 部件条目的 animFrames（键 "fi,di"；步 0,0 即条目自身）
       const bk = ekey.slice(0, animPos);
@@ -1169,6 +1240,10 @@ function ensureAtlas(gl, variant, costumeName) {
   for (const bk in animFrameMap) {
     const baseEntry = map.get(bk);
     if (baseEntry) baseEntry.animFrames = animFrameMap[bk];
+  }
+  for (const bk in corrFrameMap) {
+    const baseEntry = map.get(bk);
+    if (baseEntry) baseEntry.corrFrames = corrFrameMap[bk];
   }
   if (atlasState && atlasState.tex) gl.deleteTexture(atlasState.tex);
   if (atlasState && atlasState.baseTex) gl.deleteTexture(atlasState.baseTex);
@@ -1188,7 +1263,7 @@ function ensureAtlas(gl, variant, costumeName) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  atlasState = { variant: variant, costumeName: costumeName, osig: osig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles, fieldSlots: fieldSlots };
+  atlasState = { variant: variant, costumeName: costumeName, osig: osig, palSig: palSig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles, fieldSlots: fieldSlots };
   return atlasState;
 }
 
@@ -1926,7 +2001,11 @@ function fxRunPostChain(rawList, state, elByKey, camX, camY) {
 // ---------- 宿主输入与运行时状态 ----------
 const char = { x: 0, y: 0, py: 0, vy: 0, onGround: true, variant: 0, lockedVariant: false, wallDir: 0, ledge: null };
 // 现场可调参数（控制条「手感」面板直改；宿主包 pkg.scene 可给初值）
-const PHYS = { speed: 72, jumpV: 200, gravity: 720, camFollow: 10, camLockX: false, camLockY: false };
+const PHYS = { speed: 140, jumpV: 350, gravity: 720, camFollow: 10, camLockX: false, camLockY: false,
+// 土狼时间（s）：非跳跃离地后 coyote 内按跳仍可起跳；coyoteHang 内不下落（水平滑出）
+coyote: 0.1, coyoteHang: 0.07,
+// 可变跳高：上升段按住跳跃时重力倍率；上升中松开跳跃键的初速打折（跳跃截断）
+jumpHoldGrav: 0.5, jumpCut: 0.45 };
 // 按键绑定（控制条「按键」面板可重绑；方向键恒为备用）
 const KEYMAP = { left: 'KeyA', right: 'KeyD', jump: 'KeyW', down: 'KeyS' };
 let rebindTarget = null; // {kind:'move', act} | {kind:'perf', perf}
@@ -2070,6 +2149,795 @@ function runSimPass(pose, steps) {
       entry.dx = (entry.dx || 0) + (solved[i][0] - c1[0]);
       entry.dy = (entry.dy || 0) + (solved[i][1] - c1[1]);
     }
+  }
+}
+// ---------- 默认动作表演兜底（播放器内置） ----------
+// 定位：包内没有作者自带的对应动作时，用现行姿态管线（pose 的
+// a/dx/dy，与模拟遍同一回写口径：改角 → partCenter 复算 → dx/dy
+// 补差到目标中心）合成最低限度的身体动作。作者内容优先
+// （红线）：包内有走/跳语义的表演（name/trigger/id 命中），或已
+// 识别的腿部部件挂了行为图（作者直接驱动腿），对应兜底整体不
+// 介入。缺位判定只读包内静态数据，加载期定一次。
+// 腿脚识别：convert 随包发 skeleton（部件键 → 节点名/父部件键），
+// 按骨骼名（含中英日常见腿脚词）+ 父子链识别腿链，再按同父分组
+// 成对反相（两足对位、四足对角）；旧包无 skeleton 时以部件键为
+// 名、无父子（各自成单段链）。识别不到成对的腿 → 兜底整体不
+// 生效并点名（console + 警告条）；不许靠几何硬猜骨骼。
+// 动作机制（脚目标驱动，取代旧正弦开环摆腿）：每条腿链由「脚
+// 目标点 + 两骨解析解算」驱动——行走分支撑段（脚钉在地面点、
+// 世界系静止，滑步由构造消除）与摆动段（脚沿弧线快速前送）；
+// 身体高度由支撑腿几何反推（分腿站位越开、身体越低，起伏自
+// 然产生）；跳跃四段（下蹲脚钉地折膝 → 蹬伸过冲 → 滞空收/伸
+// 腿 → 落地浅沉吸收）共用同一套脚目标与解算。
+const FB_CROUCH_DUR = 0.20;   // 跳跃预备总时长（s）：下蹲 0.13 + 蹬伸 0.07（物理倒计时与起跳顺延共用）
+const FB_EXT_U = 0.65;        // 蹬伸段在预备进度中的起点（0.13/0.20）
+const FB_STANCE = 0.6;        // 步态周期中支撑段占比（摆动段 0.4）
+const FB_SWING = 0.38;        // 步长推导用等效摆幅（rad）：stride = 2·腿长·sin(摆幅)
+const FB_LEG_NAME = /leg|thigh|shin|calf|femur|foot|feet|toe|ankle|knee|paw|腿|脚|足|膝|踝|胫|股|ひざ|つま先/i;
+const FB_NOT_LEG = /arm|wing|tail|ear|horn|手|腕|肘|肩|翼|耳|眼/i;
+let FB = null;           // 懒构建（首帧 costume/variant 已定）
+let fbCrouchT = 0;       // >0 = 跳跃预备倒计时（剩余秒，物理侧递减、到点给初速）
+let fbCrouchCoyote = false; // 当前下蹲倒计时由土狼跳触发（人在空中，倒计时不按「离地取消」处理）
+let coyoteT = 1e9;       // 距上次非跳跃离地的秒数（在地/跳跃离地时保持大值 → 土狼窗关闭）
+let coyoteHangT = 1e9;   // 非跳跃离地后已滞空秒数（土狼滞空判据，同上保持大值即关闭）
+let coyoteArm = false;   // 上帧收尾时在地 → 本帧若非跳跃离地，土狼计时从 0 起计（哨兵值不直接累加）
+let airByJump = false;   // 本次滞空由跳跃造成（不进土狼窗、不享土狼滞空）
+let prevJumpHeld = false; // 上帧跳跃键状态（可变跳高的松开打折取边沿）
+let fbPhase = 0;         // 步态相位（按实测位移推进，撞墙即停）
+let fbWalkW = 0;         // 横版行走混合权重
+let fbTopW = 0;          // 俯视行走混合权重
+let fbTopVertW = 0;      // 俯视纵向（走廊驱动）混合权重：主导轴在横/纵间切换时平滑过渡，fbPhase 共用不重置
+let fbPrevX = null, fbPrevPY = null;
+// —— 脚目标驱动的状态 ——
+let fbStage = 'none';    // 跳跃阶段：'none' | 'crouch' | 'air' | 'absorb'
+let fbStageT = 0;        // 当前阶段已持续秒数
+let fbAirTime = 0;       // 本次连续滞空秒数（坠落落地吸收的触发判据）
+let fbAirRootFrom = 0;   // 离地瞬间的身体过冲量（滞空初期衰减回 0）
+const fbPlants = new Map();     // 链序 → 支撑脚的世界 x（横版：下蹲/支撑/吸收共用）
+const fbTopPlants = new Map();  // 链序 → 支撑脚的世界平面位 [x, y]（俯视）
+const fbCorPlants = new Map();  // 链序 → 走廊支撑脚锚定的世界平面位 [x, y]（俯视纵向专用，与平面步态分表）
+const fbCorSegPrev = new Map(); // 链序 → 走廊驱动上帧所处段（0 支撑 / 1 摆动，走廊专用）
+const fbTipPrev = new Map();    // 链序 → 上帧解算出的脚尖关节本地位（目标连续性）
+const fbSegPrev = new Map();    // 链序 → 上帧所处段（0 支撑 / 1 摆动）
+const fbSwingFrom = new Map();  // 链序 → 本次摆动段起点脚位（本地）
+const fbAirCur = new Map();     // 链序 → 滞空脚目标当前值（本地，向当帧目标趋近）
+let fbTopDir = [1, 0];          // 俯视最近移动方向（单位矢量）
+function fbDipMax() { return Math.max(3, Math.min(9, charBoxH() * 0.13)); }
+function fbJointOf(prm) {
+  const c = Math.cos(prm.restRot || 0), s = Math.sin(prm.restRot || 0);
+  return [prm.pivot[0] + prm.off[0] * c - prm.off[1] * s, prm.pivot[1] + prm.off[0] * s + prm.off[1] * c];
+}
+function fbParamsOf(part) {
+  // 与模拟遍/落位同一组装（simPartParams：精灵部件 {...base, off:0}、
+  // 参数化部件走 resolvePart），保证 partCenter 复算与落位逐值一致
+  return simPartParams(part);
+}
+/** 末节部件的脚底延伸（关节到精灵底边的距离）：2 节链的接触点
+ * 按此沿末段方向续出（末节精灵沿腿线垂挂，接触点即其下端）。 */
+function fbTipExtent(part) {
+  if (!part) return 8;
+  if (part.spriteKind && part.sprite) return Math.max(4, part.sprite.h - part.sprite.plug[1]);
+  const sz = part.base && part.base.size;
+  return Math.max(4, ((sz && sz[1]) || 12) * 0.55);
+}
+/** 链的静止目标点（本地）：3+ 节链 = 末关节（踝）；2 节链 = 脚底
+ * 接触点（末关节沿末段方向续 tipExt）；1 节链 = 链根。 */
+function fbRestTarget(J, tipExt) {
+  const n = J.length;
+  if (n === 2) {
+    const dx = J[1][0] - J[0][0], dy = J[1][1] - J[0][1], d = Math.hypot(dx, dy) || 1;
+    return [J[1][0] + (dx / d) * tipExt, J[1][1] + (dy / d) * tipExt];
+  }
+  return J[n - 1];
+}
+/** 链的有效段长和（根 → 目标点）：2 节链含脚底延伸段。 */
+function fbSegSumEff(J, tipExt) {
+  let s = 0;
+  for (let i = 0; i + 1 < J.length; i++) s += Math.hypot(J[i + 1][0] - J[i][0], J[i + 1][1] - J[i][1]);
+  return J.length === 2 ? s + tipExt : s;
+}
+/** 两骨解析解算：给定当帧静止关节 J（本地）、末节脚底延伸
+ * tipExt、链根附加纵向偏移 rootOffY 与目标点 F（3+ 节链 = 踝关
+ * 节目标，2 节链 = 脚底接触点目标），求各关节目标位 P、各部件
+ * 绘制角增量 cumA 与解算目标点 tip。解算在点列 JJ 上进行（2 节
+ * 链把接触点作虚拟链尖补入）：根→次节→链尖两骨解算（余弦定
+ * 理，弯曲侧取静止姿态膝盖偏向侧、由静止叉积符号定死），中间
+ * 关节按「尾段刚性旋转」跟随（次节→链尖在静止姿态下的相对构
+ * 型整体旋转到解算方向，段长逐值不变、链尖精确落 F）。
+ * footDelta = 末节（脚）部件的绘制角增量，null = 跟随末段方向。 */
+function fbSolveChain(J, tipExt, rootOffY, F, footDelta) {
+  const n = J.length;
+  const R = [J[0][0], J[0][1] + rootOffY];
+  if (n === 1) return { P: [R], cumA: [0], tip: R };
+  let JJ = J;
+  if (n === 2) JJ = [J[0], J[1], fbRestTarget(J, tipExt)];
+  const m = JJ.length;
+  const P = [R];
+  const segD = [], segL = [];
+  for (let i = 0; i + 1 < m; i++) {
+    const dx = JJ[i + 1][0] - JJ[i][0], dy = JJ[i + 1][1] - JJ[i][1];
+    segL.push(Math.hypot(dx, dy)); segD.push(Math.atan2(dy, dx));
+  }
+  const L1 = segL[0];
+  const L2 = Math.hypot(JJ[m - 1][0] - JJ[1][0], JJ[m - 1][1] - JJ[1][1]);
+  let tx = F[0] - R[0], ty = F[1] - R[1], d = Math.hypot(tx, ty);
+  const maxD = (L1 + L2) * 0.999, minD = Math.abs(L1 - L2) * 1.001 + 1e-4;
+  if (d > maxD) { tx *= maxD / d; ty *= maxD / d; d = maxD; }
+  else if (d < minD && d > 1e-6) { tx *= minD / d; ty *= minD / d; d = minD; }
+  const T = [R[0] + tx, R[1] + ty];
+  const a1 = Math.atan2(ty, tx);
+  const cosK = Math.max(-1, Math.min(1, (L1 * L1 + d * d - L2 * L2) / (2 * L1 * Math.max(d, 1e-6))));
+  const restCross = (JJ[m - 1][0] - JJ[0][0]) * (JJ[1][1] - JJ[0][1]) - (JJ[m - 1][1] - JJ[0][1]) * (JJ[1][0] - JJ[0][0]);
+  const ka = a1 + (restCross >= 0 ? 1 : -1) * Math.acos(cosK);
+  const K = [R[0] + Math.cos(ka) * L1, R[1] + Math.sin(ka) * L1];
+  P.push(K);
+  const rot = Math.atan2(T[1] - K[1], T[0] - K[0]) - Math.atan2(JJ[m - 1][1] - JJ[1][1], JJ[m - 1][0] - JJ[1][0]);
+  const cr = Math.cos(rot), sr = Math.sin(rot);
+  for (let i = 2; i < m - 1; i++) {
+    const vx = JJ[i][0] - JJ[1][0], vy = JJ[i][1] - JJ[1][1];
+    P.push([K[0] + vx * cr - vy * sr, K[1] + vx * sr + vy * cr]);
+  }
+  P.push(T);
+  const cumA = new Array(n).fill(0);
+  const segDelta = [];
+  for (let i = 0; i + 1 < m; i++) segDelta.push(Math.atan2(P[i + 1][1] - P[i][1], P[i + 1][0] - P[i][0]) - segD[i]);
+  for (let i = 0; i < n - 1; i++) cumA[i] = segDelta[i];
+  cumA[n - 1] = footDelta !== null && footDelta !== undefined ? footDelta : segDelta[m - 2];
+  return { P, cumA, tip: T };
+}
+/** 俯视纵向走廊几何：链根 → 静止脚尖的轴线（单位矢量 + 全长
+ * D）。脚尖口径与 fbRestTarget 一致：2 节链用已含延伸的 restT，
+ * 3+ 节链沿末段方向续 tipExt。链太短（<2 关节或 D<2）返回 null，
+ * 该链退回平面步态。 */
+function fbCorridorGeom(rt) {
+  const J = rt.J, n = J.length;
+  if (n < 2) return null;
+  let T;
+  if (n === 2) T = rt.restT;
+  else {
+    const lx = J[n - 1][0] - J[n - 2][0], ly = J[n - 1][1] - J[n - 2][1];
+    const ll = Math.hypot(lx, ly) || 1;
+    T = [J[n - 1][0] + (lx / ll) * rt.tipExt, J[n - 1][1] + (ly / ll) * rt.tipExt];
+  }
+  const dx = T[0] - J[0][0], dy = T[1] - J[0][1];
+  const D = Math.hypot(dx, dy);
+  if (D < 2) return null;
+  return { ux: dx / D, uy: dy / D, D };
+}
+/** 俯视纵向走廊驱动（正面/背面图专用，取代两骨解算）：膝盖朝
+ * 画面外（纵深）弯，投影只表现为腿沿自身轴线伸缩——各关节到轴
+ * 线的垂距恒等于静止值、沿轴距离按 k = q/D 同比例缩放（望远镜
+ * 式伸缩），关节骑在走廊里做一维运动，膝盖从构造上不会左右
+ * 弯。g = fbCorridorGeom 的走廊几何，q = 脚尖沿轴距离（由相位
+ * 行程给出），B = 身体偏移（侧摆/微伏，全链与根共用）。返回
+ * {P, cumA, tip} 与 fbSolveChain 同
+ * 形状：各节角度由相邻关节实际位置导出，末节（脚）跟随末段方
+ * 向（与小腿的静止相对角不变）。 */
+function fbCorridorChain(J, tipExt, g, q, B) {
+  const n = J.length;
+  const R0 = J[0];
+  if (n < 2 || !g) return { P: J.map((p) => [p[0] + B[0], p[1] + B[1]]), cumA: new Array(n).fill(0), tip: [R0[0] + B[0], R0[1] + B[1]], segS: new Array(n).fill(1) };
+  const k = q / g.D;
+  const P = [];
+  for (let i = 0; i < n; i++) {
+    const vx = J[i][0] - R0[0], vy = J[i][1] - R0[1];
+    const t = vx * g.ux + vy * g.uy;               // 沿轴静止距离
+    const px = vx - t * g.ux, py = vy - t * g.uy;  // 静止垂距向量（恒定）
+    P.push([R0[0] + B[0] + t * k * g.ux + px, R0[1] + B[1] + t * k * g.uy + py]);
+  }
+  const tip = [R0[0] + B[0] + q * g.ux, R0[1] + B[1] + q * g.uy];
+  // 角度导出：点列 [...关节, 脚尖] 与静止点列逐段比方向
+  const RR = [...J];
+  if (n === 2) RR.push(fbRestTarget(J, tipExt));
+  else {
+    const lx = J[n - 1][0] - J[n - 2][0], ly = J[n - 1][1] - J[n - 2][1];
+    const ll = Math.hypot(lx, ly) || 1;
+    RR.push([J[n - 1][0] + (lx / ll) * tipExt, J[n - 1][1] + (ly / ll) * tipExt]);
+  }
+  const PP = [...P, tip];
+  const cumA = new Array(n).fill(0);
+  // 段长比 segS：走廊段长（PP）/ 静止段长（RR）——回写时经 sy 通道
+  // 把精灵沿骨骼方向按此比缩放，精灵远端才真落到下一关节（真伸
+  // 缩）；只写角度+中心时精灵保持静止长度，k≠1 必在关节处溢出/
+  // 缺口、随段向差呈横向错位（用户真机所见「不是伸缩而是错位」）。
+  const segS = new Array(n).fill(1);
+  for (let i = 0; i < n; i++) {
+    cumA[i] = Math.atan2(PP[i + 1][1] - PP[i][1], PP[i + 1][0] - PP[i][0])
+            - Math.atan2(RR[i + 1][1] - RR[i][1], RR[i + 1][0] - RR[i][0]);
+    const rl = Math.hypot(RR[i + 1][0] - RR[i][0], RR[i + 1][1] - RR[i][1]);
+    if (rl > 1e-6) segS[i] = Math.hypot(PP[i + 1][0] - PP[i][0], PP[i + 1][1] - PP[i][1]) / rl;
+  }
+  return { P, cumA, tip, segS };
+}
+/** 解算结果回写 pose：与模拟遍/旧兜底同口径——先按当前条目测
+ * 中心 refC，再叠角、复算中心、把中心按权重 w 补差到目标位。
+ * solved.segS 存在时（走廊驱动）另把段长比按 w 混入 sy 通道：
+ * 精灵沿骨骼方向（局部 Y）绕 plug 缩放，远端随关节距伸缩——两
+ * 骨解算段长恒为静止值、不带 segS，此路对横版/平面步态零影响。 */
+function fbWriteChain(pose, keys, solved, w) {
+  const { P, cumA } = solved;
+  for (let i = 0; i < keys.length; i++) {
+    const part = PART_BY_KEY.get(keys[i]);
+    const prm = part ? fbParamsOf(part) : null;
+    if (!prm) continue;
+    const e = pose[keys[i]] || (pose[keys[i]] = { a: 0, dy: 0, rim: 0, glint: 0 });
+    const refC = partCenter(prm, { a: (e.a || 0) + (prm.restRot || 0), dx: e.dx || 0, dy: e.dy || 0 });
+    e.a = (e.a || 0) + cumA[i] * w;
+    const c1 = partCenter(prm, { a: (e.a || 0) + (prm.restRot || 0), dx: e.dx || 0, dy: e.dy || 0 });
+    const bx = refC[0] + (char.x + P[i][0] - refC[0]) * w;
+    const by = refC[1] + (charOriginY() + P[i][1] - refC[1]) * w;
+    e.dx = (e.dx || 0) + (bx - c1[0]);
+    e.dy = (e.dy || 0) + (by - c1[1]);
+    if (solved.segS) {
+      const sf = 1 + (solved.segS[i] - 1) * w;
+      if (Math.abs(sf - 1) > 1e-4) e.sy = (e.sy === undefined || e.sy === null ? 1 : e.sy) * sf;
+    }
+  }
+}
+/** 横版脚段角度进程（脚跟落 → 全掌 → 脚尖蹬离 / 摆动收脚尖）：
+ * f = 朝向符号（本地 +x 为正向时 +1），u = 链内周期相位。 */
+function fbFootPitch(u, f) {
+  if (u < FB_STANCE) {
+    if (u < 0.15) return f * 0.14 * (1 - u / 0.15);            // 落地：脚尖略抬、渐落平
+    if (u > 0.45) return -f * 0.30 * ((u - 0.45) / 0.15);      // 蹬离：脚跟抬起、脚尖压地
+    return 0;                                                   // 全掌支撑
+  }
+  const s = (u - FB_STANCE) / (1 - FB_STANCE);
+  return f * 0.12 * Math.sin(Math.PI * Math.min(1, s * 1.15)); // 摆动：收脚尖防绊、落前回平
+}
+function buildFallback() {
+  const skel = new Map();
+  for (const s of EMBEDDED.skeleton || []) skel.set(s.key, s);
+  const nameOf = (key) => (skel.get(key) || {}).name || key;
+  const parentOf = (key) => { const s = skel.get(key); return s ? s.parent : null; };
+  const isLeg = (key) => { const nm = nameOf(key); return FB_LEG_NAME.test(nm) && !FB_NOT_LEG.test(nm); };
+  // 静止关节（角色空间，根朝向口径）：识别校验与相位分组只读这一份；
+  // 逐帧回写时按当前 variant 重取（镜像朝向参数不同），不复用此表。
+  const restJ = new Map();
+  for (const part of PARTS) {
+    const prm = fbParamsOf(part);
+    if (prm) restJ.set(part.key, fbJointOf(prm));
+  }
+  const legKeys = PARTS.map((p) => p.key).filter((k) => restJ.has(k) && isLeg(k));
+  const legSet = new Set(legKeys);
+  const legChildren = new Map();
+  for (const k of legKeys) {
+    const par = parentOf(k);
+    if (par && legSet.has(par)) {
+      if (!legChildren.has(par)) legChildren.set(par, []);
+      legChildren.get(par).push(k);
+    }
+  }
+  const allChains = [];
+  for (const k of legKeys) {
+    const par = parentOf(k);
+    if (par && legSet.has(par)) continue; // 非链根
+    const keys = [k];
+    let cur = k;
+    for (;;) {
+      const kids = (legChildren.get(cur) || []).filter((c) => !keys.includes(c));
+      if (!kids.length) break;
+      kids.sort((a, b) => {
+        const ja = restJ.get(a), jb = restJ.get(b), jc = restJ.get(cur);
+        return Math.hypot(jb[0] - jc[0], jb[1] - jc[1]) - Math.hypot(ja[0] - jc[0], ja[1] - jc[1]);
+      });
+      cur = kids[0]; keys.push(cur);
+    }
+    let segLen = 0;
+    for (let i = 0; i + 1 < keys.length; i++) segLen += Math.hypot(restJ.get(keys[i + 1])[0] - restJ.get(keys[i])[0], restJ.get(keys[i + 1])[1] - restJ.get(keys[i])[1]);
+    const len = segLen + fbTipExtent(PART_BY_KEY.get(keys[keys.length - 1]));
+    if (len < 8 || len > 500) continue;
+    // 腿链须朝下长：链尖关节明显低于链根（运行时 y 向上，根−尖为
+    // 正；单节链 segLen=0 恒过）。锚在链自身几何、不用父关节高
+    // 低——父部件的静止关节位是其自身插头位（如骨盆部件 pivot
+    // 在骨盆图中间一带），不是髋关节窝，腿根略高于它属正常骨
+    // 骼，拿它当基准会把同挂骨盆的正经双腿双双误杀。
+    if (restJ.get(k)[1] - restJ.get(keys[keys.length - 1])[1] < 0.25 * segLen) continue;
+    allChains.push({ keys, len, phase: 0 });
+  }
+  // 配相位：全部腿链同属一步态组——配对不要求同父（真实人形
+  // 骨骼双腿常分挂左右髋骨 hip_L/hip_R，同父成组会把分髋双腿
+  // 各自落单丢弃、误报未识别）。两条按左右对位反相、四条及
+  // 以上按对角（前 XOR 左），规则与原同父组内一致。
+  const walkChains = [];
+  if (allChains.length >= 2) {
+    const g = [...allChains].sort((a, b) => restJ.get(a.keys[0])[0] - restJ.get(b.keys[0])[0]);
+    const cx = g.reduce((s, c) => s + restJ.get(c.keys[0])[0], 0) / g.length;
+    g.forEach((c, i) => {
+      const nm = nameOf(c.keys[0]).toLowerCase();
+      const leftBit = /_l$|_left|left|左/.test(nm) ? 0 : /_r$|_right|right|右/.test(nm) ? 1 : (i % 2);
+      if (g.length === 2) c.phase = Math.PI * i; // 两足：按序直接对位反相
+      else c.phase = Math.PI * (((restJ.get(c.keys[0])[0] < cx ? 1 : 0) + leftBit) % 2);
+      walkChains.push(c);
+    });
+  }
+  const legRole = new Map();
+  for (const c of allChains) c.keys.forEach((k, d) => legRole.set(k, { depth: d, n: c.keys.length }));
+  const perfHay = (p) => ((p.trigger || '') + ' ' + (p.name || '') + ' ' + (p.id || '')).toLowerCase();
+  const walkPerf = PERFORMANCES.some((p) => /walk|run|move|行走|走路|奔跑|跑步|步行|移动/.test(perfHay(p)));
+  const jumpPerf = PERFORMANCES.some((p) => /jump|跳|蹦/.test(perfHay(p)));
+  const legGraphDriven = legKeys.some((k) => !!BEHAVIOR_GRAPHS[k]);
+  const lens = (walkChains.length ? walkChains : allChains).map((c) => c.len);
+  const fb = {
+    chains: walkChains,
+    legRole,
+    legLen: lens.length ? lens.reduce((a, b) => a + b, 0) / lens.length : 24,
+    walkOk: walkChains.length >= 2 && !walkPerf && !legGraphDriven,
+    jumpOk: walkChains.length >= 2 && !jumpPerf && !legGraphDriven,
+  };
+  if (walkChains.length < 2) {
+    const msg = '播放器兜底动作：未识别到成对的腿部骨骼（按骨骼名/父子链匹配失败），行走/跳跃兜底均不生效';
+    console.warn(msg);
+    const wEl = document.getElementById('warn');
+    if (wEl) wEl.textContent = (wEl.textContent ? wEl.textContent + '\\n' : '') + msg;
+  }
+  return fb;
+}
+function ensureFB() { if (!FB) FB = buildFallback(); return FB; }
+/** 土狼窗判据：非跳跃离地后 PHYS.coyote 秒内仍可起跳（物理侧
+ * updateCharacterSide 与跳跃请求共用同一口径） */
+function coyoteOkNow() { return !char.onGround && !airByJump && coyoteT <= PHYS.coyote; }
+/** 跳跃统一请求：兜底开启时先进入下蹲倒计时（updateCharacterSide
+ * 里倒完才给初速），否则与旧行为一致立即起跳。土狼窗内（跑出平
+ * 台边缘后短暂滞空）同样受理，倒计时标 fbCrouchCoyote 不被离地取消 */
+function requestJump() {
+  if (moveMode !== 'side' || char.ledge) return;
+  const coyoteOk = coyoteOkNow();
+  if (!char.onGround && !coyoteOk) return;
+  if (ensureFB().jumpOk) { if (fbCrouchT <= 0) { fbCrouchT = FB_CROUCH_DUR; fbCrouchCoyote = coyoteOk; } }
+  else { airByJump = true; char.vy = PHYS.jumpV; char.onGround = false; }
+}
+/** 兜底遍（表演合成后、模拟遍前）：脚目标驱动——跳跃四段、横版
+ * 行走支撑/摆动分段、俯视平面步态，统一走两骨解算回写 pose */
+function runFallbackPass(pose, dt) {
+  const fb = ensureFB();
+  if (fbPrevX === null) { fbPrevX = char.x; fbPrevPY = char.py; }
+  const dxF = char.x - fbPrevX, dyF = char.py - fbPrevPY;
+  fbPrevX = char.x; fbPrevPY = char.py;
+  const side = moveMode === 'side';
+  // —— 各链当帧静止几何（当前 variant 口径，本地）：关节列 J、末节
+  // 脚底延伸 tipExt、静止目标点 restT（踝/接触点）、有效段长和 ——
+  const chainRT = [];
+  if (fb.walkOk || fb.jumpOk) {
+    for (const chain of fb.chains) {
+      const J = [];
+      let ok = true;
+      for (const k of chain.keys) {
+        const part = PART_BY_KEY.get(k);
+        const prm = part ? fbParamsOf(part) : null;
+        if (!prm) { ok = false; break; }
+        J.push(fbJointOf(prm));
+      }
+      if (!ok) { chainRT.push(null); continue; }
+      const tipExt = fbTipExtent(PART_BY_KEY.get(chain.keys[chain.keys.length - 1]));
+      chainRT.push({ J, tipExt, restT: fbRestTarget(J, tipExt), segSum: fbSegSumEff(J, tipExt) });
+    }
+  }
+  const tipPrevOf = (ci) => fbTipPrev.get(ci) || chainRT[ci].restT;
+  // ================= 横版：跳跃阶段机 =================
+  let bodyOff = 0;      // 本帧身体纵向偏移（负 = 下沉，正 = 蹬伸过冲；根与非腿部件共用）
+  let jumpW = false;    // 本帧腿链由跳跃段拥有（权重 1）
+  if (side && fb.jumpOk) {
+    if (!char.onGround && !char.ledge) fbAirTime += dt; else if (fbStage !== 'air') fbAirTime = 0;
+    // 进下蹲：物理侧刚置倒计时（requestJump / 按住跳）且当前不在下蹲段
+    if (fbCrouchT > 0 && fbStage !== 'crouch') {
+      fbStage = 'crouch'; fbStageT = 0;
+      fb.chains.forEach((chain, ci) => {
+        if (!chainRT[ci]) return;
+        fbPlants.set(ci, char.x + tipPrevOf(ci)[0]); // 脚钉在当前世界位
+        fbSegPrev.set(ci, 0);
+      });
+    }
+    if (fbStage === 'crouch') {
+      if (fbCrouchT <= 0) {
+        if (!char.onGround && char.vy > 0) {
+          // 离地：进滞空，脚目标从离地位连续接管、过冲量带入衰减
+          fbStage = 'air'; fbStageT = 0; fbAirRootFrom = Math.max(0, bodyOff);
+          fb.chains.forEach((chain, ci) => {
+            if (!chainRT[ci]) return;
+            fbAirCur.set(ci, [...tipPrevOf(ci)]);
+          });
+        } else fbStage = 'none'; // 下蹲中走下台阶被物理取消等
+      }
+    } else if (fbStage === 'air') {
+      fbStageT += dt;
+      if (char.onGround) {
+        fbStage = 'absorb'; fbStageT = 0;
+        fb.chains.forEach((chain, ci) => {
+          if (!chainRT[ci]) return;
+          fbPlants.set(ci, char.x + tipPrevOf(ci)[0]); // 脚钉在落点
+          fbSegPrev.set(ci, 0);
+        });
+      }
+    } else if (fbStage === 'absorb') {
+      fbStageT += dt;
+      if (fbStageT >= 0.18) { fbStage = 'none'; fbStageT = 0; }
+    }
+    // 坠落落地（未走跳跃序，如走下台阶跌落）：同样给一次吸收
+    if (fbStage === 'none' && char.onGround && fbAirTime > 0.05) {
+      fbStage = 'absorb'; fbStageT = 0; fbAirTime = 0;
+      fb.chains.forEach((chain, ci) => {
+        if (!chainRT[ci]) return;
+        fbPlants.set(ci, char.x + chainRT[ci].restT[0]); // 脚在身体正下方的静止位落点
+        fbSegPrev.set(ci, 0);
+      });
+    }
+    if (fbStage === 'crouch') {
+      // u：预备总进度；<FB_EXT_U 下蹲（缓出压满旧深度公式），其后蹬伸（缓入冲过静止高）
+      const u = Math.max(0, Math.min(1, 1 - fbCrouchT / FB_CROUCH_DUR));
+      const dipM = fbDipMax();
+      if (u < FB_EXT_U) { const q = u / FB_EXT_U; bodyOff = -dipM * (1 - (1 - q) * (1 - q)); }
+      else {
+        const q = (u - FB_EXT_U) / (1 - FB_EXT_U);
+        let over = Math.max(1.5, Math.min(4, dipM * 0.45));
+        // 过冲不得把腿拉出可达域（静止近直腿的角色余量小）：按各链
+        // 几何钳——根升 over 后根→目标距须 ≤ 两骨全伸长的 0.999
+        fb.chains.forEach((chain, ci) => {
+          const rt = chainRT[ci]; if (!rt) return;
+          const J = rt.J, n = J.length;
+          const Fx = (fbPlants.has(ci) ? fbPlants.get(ci) : char.x + rt.restT[0]) - char.x;
+          const hx = Fx - J[0][0], drop = J[0][1] - rt.restT[1];
+          let maxD;
+          if (n === 2) maxD = rt.segSum * 0.999;
+          else {
+            const L1 = Math.hypot(J[1][0] - J[0][0], J[1][1] - J[0][1]);
+            const L2 = Math.hypot(J[n - 1][0] - J[1][0], J[n - 1][1] - J[1][1]);
+            maxD = (L1 + L2) * 0.999;
+          }
+          const room = Math.sqrt(Math.max(0, maxD * maxD - hx * hx)) - drop;
+          if (room < over) over = Math.max(0, room);
+        });
+        bodyOff = -dipM + (dipM + over) * q * q;
+      }
+      jumpW = true;
+    } else if (fbStage === 'air') {
+      bodyOff = fbAirRootFrom * Math.max(0, 1 - fbStageT / 0.08); // 过冲在滞空初期衰减
+      jumpW = true;
+    } else if (fbStage === 'absorb') {
+      const dipA = fbDipMax() * 0.6;
+      if (fbStageT < 0.06) { const q = fbStageT / 0.06; bodyOff = -dipA * (1 - (1 - q) * (1 - q)); }
+      else { const q = Math.max(0, Math.min(1, (fbStageT - 0.06) / 0.12)); bodyOff = -dipA * (1 - q * q * (3 - 2 * q)); }
+      jumpW = true;
+    }
+  } else if (!side) { fbStage = 'none'; fbAirTime = 0; }
+  // ================= 横版：腿链目标与解算 =================
+  if (side && (fb.walkOk || fb.jumpOk)) {
+    const movingSide = char.onGround && Math.abs(dxF) > 1e-6 && fbStage === 'none';
+    fbWalkW += ((fb.walkOk && movingSide ? 1 : 0) - fbWalkW) * Math.min(1, dt / 0.12);
+    // 步长：公式值与「几何可达」取小——直腿角色步子迈不开时缩步
+    // 提频（支撑行程 = 0.6·周期距离，须 ≤ 链在下沉预算内的可达横距；
+    // 距与下沉都以目标点（踝/接触点）与有效段长量）
+    let stride = Math.max(10, 2 * fb.legLen * Math.sin(FB_SWING));
+    for (const rt of chainRT) {
+      if (!rt || rt.segSum < 1e-6) continue;
+      const drop = rt.J[0][1] - rt.restT[1];
+      const budget = Math.max(2, Math.min(8, rt.segSum * 0.08));
+      const hCap = Math.sqrt(Math.max(9, rt.segSum * rt.segSum - Math.pow(Math.max(0, drop - budget), 2)));
+      stride = Math.min(stride, Math.max(10, hCap / 0.6));
+    }
+    const cycDist = 2 * stride;              // 一个步态周期（相位 2π）的行进距离
+    const frontReach = 0.3 * cycDist;        // 落脚点在链根前方的横距（沿朝向，见下）
+    const lift = Math.max(2, Math.min(8, cycDist * 0.12)); // 摆动段脚尖抬高峰值
+    // 步态在朝向空间定义：faceF = 当前 variant 本地帧里「前方」的 x
+    // 符号（镜像朝向 5..7 本地前方为 −x）。相位按沿朝向的行进量
+    // dxF·faceF 推进、摆动落点取链根 + faceF·frontReach——左右行走
+    // 互为镜像、周期顺序一致（支撑后扫、摆动前送）；若按带符号世界
+    // 位移推进，左行时 u 逆行且落点落到行进后方（曾实测只有右行对）。
+    const faceF = (char.variant >= 5 && char.variant <= 7) ? -1 : 1;
+    if (fbStage === 'none' && fb.walkOk && char.onGround && !char.ledge) fbPhase += Math.PI * dxF * faceF / stride;
+    let sink = 0; // 支撑几何反推的身体下沉（行走时）
+    const solvedList = [];
+    fb.chains.forEach((chain, ci) => {
+      const rt = chainRT[ci];
+      if (!rt) { solvedList.push(null); return; }
+      const { J, restT } = rt;
+      const n = J.length;
+      let F = null, footDelta = null, w = 0;
+      if (jumpW) {
+        w = 1;
+        if (fbStage === 'air') {
+          // 滞空：上升收脚（目标点向身体收拢上提）、下落伸腿（近全伸
+          // 下探），目标逐帧趋近防跳变
+          const rel = [restT[0] - J[0][0], restT[1] - J[0][1]];
+          const want = char.vy > -20
+            ? [J[0][0] + rel[0] * 0.55, J[0][1] + rel[1] * 0.55 + rt.segSum * 0.20]
+            : [J[0][0] + rel[0] * 0.90, J[0][1] + rel[1] * 1.02];
+          const cur = fbAirCur.get(ci) || [...restT];
+          const kk = Math.min(1, dt / 0.09);
+          cur[0] += (want[0] - cur[0]) * kk; cur[1] += (want[1] - cur[1]) * kk;
+          fbAirCur.set(ci, cur);
+          F = [...cur];
+          footDelta = null; // 脚跟随末段
+        } else {
+          // 下蹲 / 蹬伸 / 吸收：脚钉在记录的世界位，本地目标随身体移动反算
+          if (!fbPlants.has(ci)) fbPlants.set(ci, char.x + restT[0]);
+          F = [fbPlants.get(ci) - char.x, restT[1]];
+          footDelta = n >= 3 ? 0 : null; // 3+ 节脚掌平贴；2 节脚跟随接触段
+        }
+      } else if (fbWalkW > 0.003) {
+        w = fbWalkW;
+        let u = ((fbPhase + chain.phase) / (2 * Math.PI)) % 1;
+        if (u < 0) u += 1;
+        const seg = u < FB_STANCE ? 0 : 1;
+        if (seg === 0) {
+          if (fbSegPrev.get(ci) !== 0 || !fbPlants.has(ci)) fbPlants.set(ci, char.x + tipPrevOf(ci)[0]); // 就地落脚
+          F = [fbPlants.get(ci) - char.x, restT[1]];
+          // 几何下沉：脚钉地且腿长固定 → 脚横移越远、根须越低
+          if (rt.segSum > 1e-6) {
+            const horiz = Math.min(Math.abs(F[0] - J[0][0]), rt.segSum * 0.95);
+            const dropNeed = (J[0][1] - restT[1]) - Math.sqrt(Math.max(rt.segSum * rt.segSum - horiz * horiz, Math.pow(rt.segSum * 0.3, 2)));
+            if (dropNeed > sink) sink = dropNeed;
+          }
+        } else {
+          if (fbSegPrev.get(ci) !== 1 || !fbSwingFrom.has(ci)) fbSwingFrom.set(ci, [...tipPrevOf(ci)]);
+          const from = fbSwingFrom.get(ci);
+          const s = (u - FB_STANCE) / (1 - FB_STANCE);
+          const sm = s * s * (3 - 2 * s);
+          F = [from[0] + (J[0][0] + faceF * frontReach - from[0]) * sm, restT[1] + lift * 4 * s * (1 - s)];
+        }
+        fbSegPrev.set(ci, seg);
+        footDelta = n >= 3 ? fbFootPitch(u, faceF) : null;
+        solvedList.push({ chain, rt, F, footDelta, w, walk: true });
+        return;
+      }
+      if (F) solvedList.push({ chain, rt, F, footDelta, w, walk: false });
+      else solvedList.push(null);
+    });
+    // —— 挤压拉伸（动画理论「小球跳跃」，仅兜底跳跃段）：s = 身体
+    // 竖直缩放（1 为中性）。下蹲压扁、蹬伸与快速上升沿运动方向拉
+    // 长、顶点附近（|vy|→0）回中性、落地压扁后回弹；幅值口径与现
+    // 行下沉对齐（dipR = 下沉深/包围高 ≈ 0.13、拉伸同量级）。作用
+    // 于非腿部件：sy 沿高度缩放 + 以髋线为轴的梯度 dy（髋以上部
+    // 件按距髋高度比例升降，部件间距随之压/拉、不断节）；腿部由
+    // 解算自理。阶段切换与 bodyOff 的缓动曲线逐段同式，保证压拉
+    // 与身体位移同步。
+    let squashS = 1;
+    if (jumpW) {
+      const dipR = Math.max(0.04, Math.min(0.2, fbDipMax() / Math.max(1, charBoxH())));
+      if (fbStage === 'crouch') {
+        const u = Math.max(0, Math.min(1, 1 - fbCrouchT / FB_CROUCH_DUR));
+        if (u < FB_EXT_U) { const q = u / FB_EXT_U; squashS = 1 - dipR * (1 - (1 - q) * (1 - q)); }
+        else { const q = (u - FB_EXT_U) / (1 - FB_EXT_U); squashS = 1 + dipR * q * q; }
+      } else if (fbStage === 'air') {
+        squashS = 1 + dipR * 0.9 * Math.min(1, Math.abs(char.vy) / PHYS.jumpV);
+      } else if (fbStage === 'absorb') {
+        const dipA = dipR * 0.6;
+        if (fbStageT < 0.06) { const q = fbStageT / 0.06; squashS = 1 - dipA * (1 - (1 - q) * (1 - q)); }
+        else { const q = Math.max(0, Math.min(1, (fbStageT - 0.06) / 0.12)); squashS = 1 - dipA * (1 - q * q * (3 - 2 * q)); }
+      }
+    }
+    const squashOn = jumpW && Math.abs(squashS - 1) > 0.002;
+    // 身体偏移落笔：跳跃段用 bodyOff；行走用几何 sink（×权重）——
+    // 非腿部件 dy 叠加；腿链根偏移在解算时注入（同一数值）
+    const bodyNow = jumpW ? bodyOff : -Math.min(12, Math.max(0, sink)) * fbWalkW;
+    if ((Math.abs(bodyNow) > 0.01 && (jumpW || fbWalkW > 0.003)) || squashOn) {
+      let hipRef = 0;
+      if (squashOn) {
+        let hn = 0;
+        for (const rt of chainRT) { if (rt) { hipRef += rt.J[0][1]; hn++; } }
+        if (hn) hipRef /= hn;
+      }
+      for (const part of PARTS) {
+        if (fb.legRole.has(part.key)) continue;
+        const e = pose[part.key] || (pose[part.key] = { a: 0, dy: 0, rim: 0, glint: 0 });
+        if (Math.abs(bodyNow) > 0.01 && (jumpW || fbWalkW > 0.003)) e.dy = (e.dy || 0) + bodyNow;
+        if (squashOn) {
+          const prm = fbParamsOf(part);
+          if (prm) {
+            const C = fbJointOf(prm);
+            e.dy = (e.dy || 0) + (C[1] - hipRef) * (squashS - 1);
+            e.sy = (e.sy === undefined || e.sy === null ? 1 : e.sy) * squashS;
+          }
+        }
+      }
+    }
+    for (const s of solvedList) {
+      if (!s) continue;
+      const solved = fbSolveChain(s.rt.J, s.rt.tipExt, s.walk ? bodyNow : bodyOff, s.F, s.footDelta);
+      fbWriteChain(pose, s.chain.keys, solved, s.w);
+      fbTipPrev.set(fb.chains.indexOf(s.chain), solved.tip);
+    }
+  }
+  // ================= 俯视步态：横向平面步态 / 纵向走廊驱动 =================
+  // 横向占优（出侧面图）：平面脚目标步态（脚目标 + 两骨解算），
+  // 追加六定版逐字沿用（stride 段与平面落点/钉点均未改）。
+  // 纵向占优（出正面/背面图）：膝盖朝画面外（纵深）弯，平面内解
+  // 算只能让膝盖在画面内左右弹（青蛙式撇膝）——改走廊驱动：解
+  // 算退场，各关节骑在「链根→静止脚尖」轴线上做一维伸缩（见
+  // fbCorridorChain，垂距恒定、沿轴望远镜式缩放）。
+  // 俯视步幅（用户裁定）：每步行进距离 = 腿长·sin(FB_SWING)
+  // （侧视步长之半，用户角色 ≈44、周期 ≈88），各链可达钳制仍作
+  // 上限取小。纵向移动速度亦为横向之半（updateCharacterTop 内
+  // vy ×0.5），步幅半、速度半 → 纵向一个周期的时间与侧视一致。
+  // 走廊行程改每步锚定（撤销 A = 0.03·D、收脚 0.04·D 的独立行
+  // 程参数）：支撑段开步把脚锚在世界平面点、每帧取锚点的沿轴
+  // 坐标，行程由锚定与步频自然决定；摆动预落点 = D + σ·半扫
+  // 程，半扫程 = 0.3·cycTop·|cos(轴向, 行进方向)|（当帧真实几
+  // 何的投影、非常数），中途收脚取扫程的 0.35 倍（派生份额）。
+  // 步频全俯视共用一个口径：fbPhase 只按横向平面步态的周期距离
+  // cycTop 推进（纵向走廊同速率，纵横混合期间亦然），不另设纵向
+  // 周期距离——纵向曾自带 cycVert（按投影系数 κ=0.16 单独对齐、
+  // 约 3.9 步/秒），与横向步频不一致，已撤销。
+  // 主导轴切换：fbTopVertW 平滑过渡、两套解算结果按权重混合，
+  // fbPhase 共用同一速率推进、从不重置。
+  const movingTop = !side && (Math.abs(dxF) + Math.abs(dyF)) > 1e-6;
+  fbTopW += ((fb.walkOk && movingTop ? 1 : 0) - fbTopW) * Math.min(1, dt / 0.12);
+  if (!side && fb.walkOk && fbTopW > 0.003) {
+    const dist = Math.hypot(dxF, dyF);
+    if (dist > 1e-4) {
+      const ix = dxF / dist, iy = dyF / dist;
+      let nx = fbTopDir[0] * 0.6 + ix * 0.4, ny = fbTopDir[1] * 0.6 + iy * 0.4;
+      const nl = Math.hypot(nx, ny) || 1;
+      fbTopDir = [nx / nl, ny / nl];
+    }
+    // 步长（用户裁定 步幅 44）：公式步长 腿长·sin(FB_SWING)（侧视
+    // 2·腿长·sin(FB_SWING) 之半），再按各链平面可达扫掠取小（全
+    // 链共用最严的一条、步频一致，钳制只作上限不放大）：脚的扫掠线是过
+    // 脚家位、沿行进方向的直线，链根到该线的垂直距离为 perp，支撑
+    // 行程半程不得超过弦长 sqrt((0.98·段长和)² − perp²)（与侧视
+    // hCap 同构：支撑脚钉住时根→脚距在行程两端最大）。旧口径
+    // amp = 腿长×0.14（≤7px）是正弦时代的摆幅残留：周期距离只剩
+    // 23px 上下、脚以 6 次/秒在链根旁碎步，且摆动落点取「链根 +
+    // 方向·amp」——离链根仅数像素而腿长数十像素，解算只能把腿折
+    // 成死结（实测 cumA 达 4~5 rad），落脚记录再把死结脚尖喂给支
+    // 撑段，整腿塌在髋旁出不来（画面实测北向数帧内腿团消失）。
+    let stride = Math.max(10, fb.legLen * Math.sin(FB_SWING));
+    for (const rt of chainRT) {
+      if (!rt || rt.segSum < 1e-6) continue;
+      const relX = rt.restT[0] - rt.J[0][0], relY = rt.restT[1] - rt.J[0][1];
+      const perp = Math.abs(relX * fbTopDir[1] - relY * fbTopDir[0]);
+      const reach = 0.98 * rt.segSum;
+      const half = Math.sqrt(Math.max(0, reach * reach - perp * perp));
+      stride = Math.min(stride, Math.max(10, (2 * half) / FB_STANCE));
+    }
+    const cycTop = 2 * stride;                  // 周期距离（相位 2π 的行进距离）
+    const stanceTravel = FB_STANCE * cycTop;    // 支撑行程：脚相对身体的后扫全程
+    // —— 纵向走廊口径：各链走廊几何 ——
+    const corGeoms = chainRT.map((rt) => (rt ? fbCorridorGeom(rt) : null));
+    let dCnt = 0;
+    for (const g of corGeoms) if (g) dCnt++;
+    const vertNow = dCnt > 0 && Math.abs(fbTopDir[1]) >= Math.abs(fbTopDir[0]) ? 1 : 0;
+    fbTopVertW += (vertNow - fbTopVertW) * Math.min(1, dt / 0.09);
+    if (fbTopVertW > 0.98) { fbTopPlants.clear(); fbSwingFrom.clear(); } // 全纵向期间平面落点状态作废，回横向时就地重落脚
+    if (fbTopVertW < 0.02) { fbCorPlants.clear(); fbCorSegPrev.clear(); } // 全横向期间走廊锚定状态作废，回纵向时就地重锚
+    fbPhase += 2 * Math.PI * dist / cycTop;
+    // 各链当帧相位/段（两套驱动共用）
+    const us = [], segs = [];
+    fb.chains.forEach((chain, ci) => {
+      let u = ((fbPhase + chain.phase) / (2 * Math.PI)) % 1;
+      if (u < 0) u += 1;
+      us.push(u); segs.push(u < FB_STANCE ? 0 : 1);
+    });
+    // 身体侧摆/微伏（仅走廊模式）：侧摆朝支撑侧——各链根相对链根
+    // 质心的横向（垂直行进方向）坐标按支撑 +1 / 摆动 −1 加权平均
+    // 得侧倾 m∈[−1,1]，幅 1.5px；微伏一周期两下、幅 0.8px。偏移
+    // B 全链共用并同值注入非腿部件（与侧视 bodyNow 同法）。
+    let B = [0, 0];
+    if (fbTopVertW > 0.003) {
+      const latX = -fbTopDir[1], latY = fbTopDir[0];
+      let cx = 0, cy = 0, cn = 0;
+      fb.chains.forEach((chain, ci) => { const rt = chainRT[ci]; if (rt) { cx += rt.J[0][0]; cy += rt.J[0][1]; cn++; } });
+      if (cn) { cx /= cn; cy /= cn; }
+      let num = 0, den = 0;
+      fb.chains.forEach((chain, ci) => {
+        const rt = chainRT[ci]; if (!rt) return;
+        const li = (rt.J[0][0] - cx) * latX + (rt.J[0][1] - cy) * latY;
+        den += Math.abs(li);
+        num += (segs[ci] === 0 ? 1 : -1) * li;
+      });
+      const m = den > 1e-6 ? num / den : 0;
+      const wV = fbTopVertW;
+      B = [latX * 1.5 * m * wV, latY * 1.5 * m * wV - 0.8 * (0.5 - 0.5 * Math.cos(2 * fbPhase)) * wV];
+      if (Math.abs(B[0]) > 0.01 || Math.abs(B[1]) > 0.01) {
+        for (const part of PARTS) {
+          if (fb.legRole.has(part.key)) continue;
+          const e = pose[part.key] || (pose[part.key] = { a: 0, dy: 0, rim: 0, glint: 0 });
+          e.dx = (e.dx || 0) + B[0] * fbTopW;
+          e.dy = (e.dy || 0) + B[1] * fbTopW;
+        }
+      }
+    }
+    fb.chains.forEach((chain, ci) => {
+      const rt = chainRT[ci];
+      if (!rt) return;
+      const { J, restT } = rt;
+      const u = us[ci];
+      const seg = segs[ci];
+      let solved = null;
+      if (fbTopVertW < 0.999) {
+        let F;
+        if (seg === 0) {
+          if (fbSegPrev.get(ci) !== 0 || !fbTopPlants.has(ci)) {
+            const tp = tipPrevOf(ci);
+            fbTopPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 就地落脚（世界平面位）
+          }
+          const p = fbTopPlants.get(ci);
+          F = [p[0] - char.x, p[1] - charOriginY()];
+        } else {
+          if (fbSegPrev.get(ci) !== 1 || !fbSwingFrom.has(ci)) fbSwingFrom.set(ci, [...tipPrevOf(ci)]);
+          const from = fbSwingFrom.get(ci);
+          const s = (u - FB_STANCE) / (1 - FB_STANCE);
+          const sm = s * s * (3 - 2 * s);
+          // 摆动终点：沿行进方向的扫掠窗改两脚共用——窗心取链根的
+          // 沿行进方向坐标（与侧视落脚窗以链根为心同构），终点的沿
+          // 行进坐标 = 链根沿行进坐标 + 半个支撑行程；横向（垂直行
+          // 进方向）坐标仍取脚家位，不串道。旧口径以各自家位为窗
+          // 心：东向布局里两脚家位沿行进方向错开 ≈60（南向站宽转
+          // 成前后错位）、摆幅 ±26 够不着对方区域，两脚永远不互
+          // 越（实测 248 帧前后顺序零交换）；共用窗心后两脚扫过同
+          // 一窗、反相交替互越。
+          const relAlong = (restT[0] - J[0][0]) * fbTopDir[0] + (restT[1] - J[0][1]) * fbTopDir[1];
+          const endX = restT[0] + fbTopDir[0] * (stanceTravel / 2 - relAlong), endY = restT[1] + fbTopDir[1] * (stanceTravel / 2 - relAlong);
+          // 外弧方向：家位相对链根的横向分量（脚绕身体外侧回摆，不
+          // 穿身体中心）；横向分量近零（脚在行进轴上）时退化为行进
+          // 方向的垂直方向。
+          let px = (restT[0] - J[0][0]) - ((restT[0] - J[0][0]) * fbTopDir[0] + (restT[1] - J[0][1]) * fbTopDir[1]) * fbTopDir[0];
+          let py = (restT[1] - J[0][1]) - ((restT[0] - J[0][0]) * fbTopDir[0] + (restT[1] - J[0][1]) * fbTopDir[1]) * fbTopDir[1];
+          const pl = Math.hypot(px, py);
+          if (pl > 1e-6) { px /= pl; py /= pl; } else { px = -fbTopDir[1]; py = fbTopDir[0]; }
+          const bow = stanceTravel * 0.18 * Math.sin(Math.PI * s);
+          F = [from[0] + (endX - from[0]) * sm + px * bow,
+               from[1] + (endY - from[1]) * sm + py * bow];
+        }
+        fbSegPrev.set(ci, seg);
+        solved = fbSolveChain(J, rt.tipExt, 0, F, null);
+      }
+      if (fbTopVertW > 0.001 && corGeoms[ci]) {
+        // 走廊每步锚定：支撑段开步时把脚锚在世界平面点（走廊专
+        // 用表 fbCorPlants），每帧的沿轴坐标 q 取锚点在身体系位
+        // 的沿轴分量——身体越过锚点时 q 单调扫过，行程由锚定与
+        // 步频（共用 cycTop）自然决定，不设独立行程参数（旧
+        // A = 0.03·D / 收脚 0.04·D 参数已撤销）。摆动段从旧锚坐
+        // 标平滑过渡到预落点：预落沿轴坐标 = D + σ·半扫程（σ =
+        // 行进方向在轴向上的投影符号，脚落在来向一侧、支撑段向
+        // 另一侧扫过 D），半扫程 = 0.3·cycTop·|cos(轴向, 行进
+        // 方向)|——0.3·cycTop 即半个支撑行程，投影取自当帧真实
+        // 几何（轴向与平滑行进方向的夹角）；中途收脚（沿轴距离
+        // 缩短 = 纵深屈膝的投影）取扫程的 0.35 倍（派生份额）。
+        const g = corGeoms[ci];
+        const dot = fbTopDir[0] * g.ux + fbTopDir[1] * g.uy;
+        const sigma = dot < -0.05 ? -1 : 1;
+        const halfSweep = 0.3 * cycTop * Math.abs(dot);
+        const corPrev = fbCorSegPrev.get(ci);
+        const anchorQ = () => {
+          const p = fbCorPlants.get(ci);
+          return (p[0] - char.x - J[0][0]) * g.ux + (p[1] - charOriginY() - J[0][1]) * g.uy;
+        };
+        let q;
+        if (seg === 0) {
+          if (corPrev !== 0 || !fbCorPlants.has(ci)) {
+            const tp = tipPrevOf(ci);
+            fbCorPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 就地锚定（世界平面位）
+          }
+          q = anchorQ();
+        } else {
+          if (corPrev !== 1 || !fbCorPlants.has(ci)) {
+            const tp = tipPrevOf(ci);
+            fbCorPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 无锚可依（走廊中途接合等）→ 就地锚定取当前坐标
+          }
+          const s = (u - FB_STANCE) / (1 - FB_STANCE);
+          const sm = s * s * (3 - 2 * s);
+          const qFrom = anchorQ();
+          const qLand = g.D + sigma * halfSweep;
+          q = qFrom + (qLand - qFrom) * sm - 0.35 * (2 * halfSweep) * Math.sin(Math.PI * s);
+        }
+        fbCorSegPrev.set(ci, seg);
+        const cs = fbCorridorChain(J, rt.tipExt, g, q, B);
+        if (solved) {
+          const wV = fbTopVertW;
+          solved = {
+            P: cs.P.map((cp, i) => [solved.P[i][0] + (cp[0] - solved.P[i][0]) * wV, solved.P[i][1] + (cp[1] - solved.P[i][1]) * wV]),
+            cumA: cs.cumA.map((ca, i) => solved.cumA[i] + (ca - solved.cumA[i]) * wV),
+            tip: [solved.tip[0] + (cs.tip[0] - solved.tip[0]) * wV, solved.tip[1] + (cs.tip[1] - solved.tip[1]) * wV],
+            segS: cs.segS.map((ss) => 1 + (ss - 1) * wV), // 平面解算段长比恒 1，按纵向权重混入走廊段长比
+          };
+        } else solved = cs;
+      }
+      if (solved) {
+        fbWriteChain(pose, chain.keys, solved, fbTopW);
+        fbTipPrev.set(ci, solved.tip);
+      }
+    });
   }
 }
 // ---- 钳制锚定（运行时，PR #55 裁决 3/5）：部件精灵上名为 anchor 的
@@ -2365,11 +3233,28 @@ function enterPerformance(perf) {
   }
   startPerf(perf);
 }
+/** 当前生效的片段碰撞盒：逐个在演段表演取本地帧 ≤ 当前帧的最近一桶
+ * （桶来自编辑器片段的碰撞表，convert 已转本地帧并按帧排序）。
+ * 形状坐标口径 = 相对角色根节点的本地像素偏移（编辑器画布同口径叠画
+ * 在根节点当帧世界位上），宿主按自身角色世界位平移即得世界盒。 */
+function currentHitboxes() {
+  const out = [];
+  for (const act of activePerfs) {
+    const buckets = act.perf.hitboxes;
+    if (!buckets || buckets.length === 0) continue;
+    const curF = Math.floor(act.t * FRAME_RATE);
+    let pick = null;
+    for (const b of buckets) { if (b.frame <= curF) pick = b; else break; }
+    if (pick) out.push({ id: act.perf.id, name: act.perf.name, frame: pick.frame, shapes: pick.shapes });
+  }
+  return out;
+}
+
 // 宿主接口：意图进、事件出、变量可绕过直写
 window.procRuntime = {
   intent: function (name) {
     if (name === 'jump') {
-      if (moveMode === 'side' && char.onGround) { char.vy = PHYS.jumpV; char.onGround = false; }
+      requestJump();
       return true;
     }
     const perf = PERFORMANCES.find((p) => p.id === name || p.name === name || p.trigger === name);
@@ -2396,6 +3281,11 @@ window.procRuntime = {
   },
   state: function () { return smCurrent; },
   onEvent: function (cb) { runtimeEventCbs.push(cb); },
+  /** 当前生效的片段碰撞盒（见 currentHitboxes） */
+  hitboxes: function () { return currentHitboxes(); },
+  /** 工程调色板换色：返回实际生效的换色条数（0 = 板不存在或无可换槽位） */
+  setPaletteSwap: function (paletteId, swaps) { return applyPaletteSwap(paletteId, swaps); },
+  clearPaletteSwap: function () { paletteSwapState = null; },
   stop: function (nameOrId) { stopPerf(nameOrId); },
   stopAll: function () { stopAllPerfs(); },
 };
@@ -2440,7 +3330,11 @@ const CHAR_HW = 7;
 function updateCharacterTop(dt, ix, iy) {
   const len = Math.hypot(ix, iy);
   if (len > 0) {
-    const vx = ix / (len || 1) * PHYS.speed, vy = iy / (len || 1) * PHYS.speed;
+    // 纵向速度减半（用户裁定）：PHYS.speed 是横向速度（140，侧视与
+    // 俯视横向同值）；俯视纵向分量 ×0.5（=70），斜向时仅纵向分量
+    // 减半、横向分量不变。步幅同为侧视之半（见俯视步态 stride），
+    // 步幅半、速度半 → 纵向一个步态周期的时间与侧视一致。
+    const vx = ix / (len || 1) * PHYS.speed, vy = iy / (len || 1) * PHYS.speed * 0.5;
     // 逐轴解算：先 x 后 y，实体当平面障碍
     let nx = char.x + vx * dt;
     for (const q of solids) {
@@ -2463,6 +3357,7 @@ function updateCharacterTop(dt, ix, iy) {
   char.onGround = true; char.wallDir = 0; char.ledge = null;
 }
 function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
+  if (fbCrouchT > 0 && !char.onGround && !fbCrouchCoyote) { fbCrouchT = 0; } // 下蹲中离地（走下台阶等）→ 取消；土狼跳的倒计时除外（本就在空中）
   const H = charBoxH();
   // —— 抓边中：物理暂停，等爬上/落下 ——
   if (char.ledge) {
@@ -2475,6 +3370,14 @@ function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
     }
     return;
   }
+  // —— 土狼时间维护：在地清零关闭并预备（coyoteArm）；跳跃离地不
+  // 计时（airByJump）；「非跳跃离地」（走出边缘/支撑消失）的第一
+  // 帧由 coyoteArm 把计时从 0 起计、其后逐帧累加 ——
+  if (char.onGround) { coyoteT = 1e9; coyoteHangT = 1e9; airByJump = false; coyoteArm = true; }
+  else if (!airByJump) {
+    if (coyoteArm) { coyoteT = 0; coyoteHangT = 0; coyoteArm = false; }
+    coyoteT += dt; coyoteHangT += dt;
+  } else coyoteArm = false;
   if (ix !== 0 && !char.lockedVariant) char.variant = ix > 0 ? 2 : 6;
   // —— 水平：先走后堵（实体侧面） ——
   char.wallDir = 0;
@@ -2490,11 +3393,31 @@ function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
   }
   char.x = nx;
   if (autoWalk && Math.abs(char.x) > 110) autoDir = char.x > 0 ? -1 : 1;
-  // —— 跳跃 ——
-  if (jumpHeld && char.onGround) { char.vy = PHYS.jumpV; char.onGround = false; }
+  // —— 跳跃（兜底开启时先屈膝下蹲：倒计时到位才给初速，起跳时机顺延；
+  // 土狼窗内按跳同口径受理，倒计时期间不被离地取消） ——
+  const coyoteOk = coyoteOkNow();
+  if (fbCrouchT > 0) {
+    fbCrouchT -= dt;
+    if (fbCrouchT <= 0) { fbCrouchT = 0; fbCrouchCoyote = false; airByJump = true; char.vy = PHYS.jumpV; char.onGround = false; }
+  } else if (jumpHeld && (char.onGround || coyoteOk)) {
+    if (ensureFB().jumpOk) { fbCrouchT = FB_CROUCH_DUR; fbCrouchCoyote = coyoteOk; }
+    else { airByJump = true; char.vy = PHYS.jumpV; char.onGround = false; }
+  }
   // —— 垂直：重力积分后按跨越判定落地/顶头 ——
   const prevFeet = char.y, prevHead = char.y + H;
-  if (!char.onGround) char.vy -= PHYS.gravity * dt;
+  // 可变跳高·跳跃截断：上升中松开跳跃键（边沿）→ 初速立即打折
+  if (prevJumpHeld && !jumpHeld && !char.onGround && char.vy > 0) char.vy *= PHYS.jumpCut;
+  prevJumpHeld = jumpHeld;
+  if (!char.onGround) {
+    // 土狼滞空：非跳跃离地后的最初 coyoteHang 秒不下落（水平滑出平台）
+    if (!airByJump && coyoteHangT < PHYS.coyoteHang) char.vy = 0;
+    else {
+      // 可变跳高·长按：上升段按住跳跃 → 重力减小，跳得更高
+      let g = PHYS.gravity;
+      if (jumpHeld && char.vy > 0) g *= PHYS.jumpHoldGrav;
+      char.vy -= g * dt;
+    }
+  }
   else if (!jumpHeld || char.vy <= 0) char.vy = 0;
   let ny = char.y + char.vy * dt;
   let landed = false;
@@ -2533,10 +3456,10 @@ function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
       const top = q.y + q.h;
       if (handPrev > top && handNow <= top) {
         if (char.x + CHAR_HW >= q.x - 2 && char.x + CHAR_HW <= q.x + 5 && ix >= 0) {
-          char.ledge = { s: q, side: 1 }; char.y = top - (H - 6); char.x = q.x - CHAR_HW; char.vy = 0; break;
+          char.ledge = { s: q, side: 1 }; char.y = top - (H - 6); char.x = q.x - CHAR_HW; char.vy = 0; coyoteT = 1e9; coyoteHangT = 1e9; break;
         }
         if (char.x - CHAR_HW <= q.x + q.w + 2 && char.x - CHAR_HW >= q.x + q.w - 5 && ix <= 0) {
-          char.ledge = { s: q, side: -1 }; char.y = top - (H - 6); char.x = q.x + q.w + CHAR_HW; char.vy = 0; break;
+          char.ledge = { s: q, side: -1 }; char.y = top - (H - 6); char.x = q.x + q.w + CHAR_HW; char.vy = 0; coyoteT = 1e9; coyoteHangT = 1e9; break;
         }
       }
     }
@@ -2626,6 +3549,9 @@ const feelPanel = mkPanelDiv(), keyPanel = mkPanelDiv(), scenePanel = mkPanelDiv
   bMode.onclick = () => {
     if (moveMode === 'side') { moveMode = 'top'; char.py = char.y; char.ledge = null; char.wallDir = 0; }
     else { moveMode = 'side'; char.y = 0; char.vy = 0; char.onGround = true; }
+    fbCrouchT = 0; fbCrouchCoyote = false; coyoteT = 1e9; coyoteHangT = 1e9; airByJump = false; prevJumpHeld = false; // 模式切换取消进行中的兜底下蹲，避免往返后迟到起跳；土狼/可变跳高状态一并复位
+    fbStage = 'none'; fbStageT = 0; fbAirTime = 0; // 脚目标状态一并清（植物点/段记录跨模式无意义）
+    fbPlants.clear(); fbTopPlants.clear(); fbTipPrev.clear(); fbSegPrev.clear(); fbSwingFrom.clear(); fbAirCur.clear();
     camState.snap = true;
     bMode.classList.toggle('on', moveMode === 'top');
     bMode.textContent = moveMode === 'top' ? '横版模式' : '俯视模式';
@@ -3213,11 +4139,33 @@ function frame(now) {
   prevBehaviorOutputs = behaviorOutputs;
   // 表演层：包络权重内合成到行为姿态之上
   const stackPick = new Map();
+  const corrPick = new Map();
   for (let i = activePerfs.length - 1; i >= 0; i--) {
     const act = activePerfs[i];
     act.t += dt;
     // 循环表演（片段 loop）到尾回绕，不结束、不发 perfend
     if (act.perf.loop && act.t > act.perf.duration) act.t = act.t % act.perf.duration;
+    // 片段事件（段表演 events，本地帧口径，来自编辑器片段的事件表）：
+    // 本 tick 跨过的事件帧逐个经 onEvent 发 clipevent。act.evFrame 记
+    // 上一 tick 的本地帧；回绕时先补尾段 (prev, 尾] 再补头段 [0, cur]。
+    if (act.perf.events && act.perf.events.length > 0) {
+      const durF = Math.max(0, Math.round(act.perf.duration * FRAME_RATE));
+      const curF = Math.min(durF, Math.floor(act.t * FRAME_RATE));
+      const prevF = act.evFrame === undefined ? -1 : act.evFrame;
+      const fireEvRange = (f0, f1) => {
+        for (const e of act.perf.events) {
+          if (e.frame > f0 && e.frame <= f1) {
+            emitRuntimeEvent('clipevent', {
+              id: act.perf.id, name: e.name, frame: e.frame,
+              stringValue: e.stringValue, numberValue: e.numberValue, objectValue: e.objectValue,
+            });
+          }
+        }
+      };
+      if (curF >= prevF) fireEvRange(prevF, curF);
+      else { fireEvRange(prevF, durF); fireEvRange(-1, curF); }
+      act.evFrame = curF;
+    }
     const w = envelopeWeight(act.t, act.perf.duration, act.perf.envelope.in, act.perf.envelope.out);
     if (w > 0) {
       const bpOut = evalRuntimeGraph(act.perf.graph, { u: Math.min(1, act.t / act.perf.duration), tSec: act.t });
@@ -3233,6 +4181,25 @@ function frame(now) {
           const frames = sf[sk].frames;
           const idx = Math.max(0, Math.min(frames.length - 1, Math.round(u * (frames.length - 1))));
           stackPick.set(sk, { w: w, ops: frames[idx], costume: sf[sk].costume });
+        }
+      }
+      // 逐帧修正选帧：带 spriteFrames 的表演里，本地帧（floor(t×帧率)，
+      // 与片段事件同口径）真有替代图的才参选，权重最大者胜（同
+      // stackPick 口径）；服装集维度由图集打包侧把关（corrFrames 里
+      // 只有当前集的瓦片），此处不查
+      const sfx2 = act.perf.spriteFrames;
+      if (sfx2) {
+        const lf = Math.floor(act.t * FRAME_RATE);
+        for (const sk of Object.keys(sfx2)) {
+          const byCostume = sfx2[sk];
+          let has = false;
+          for (const ck of Object.keys(byCostume)) {
+            if (byCostume[ck] && (lf in byCostume[ck])) { has = true; break; }
+          }
+          if (!has) continue;
+          const prev = corrPick.get(sk);
+          if (prev && prev.w >= w) continue;
+          corrPick.set(sk, { w: w, key: act.perf.id + ':' + lf });
         }
       }
     }
@@ -3267,6 +4234,8 @@ function frame(now) {
       emitRuntimeEvent('perfend', { id: act.perf.id, name: act.perf.name });
     }
   }
+  // 兜底动作遍：表演合成后、模拟遍前（模拟链以兜底后位姿为参考）
+  runFallbackPass(pose, dt);
   // 链摆实时模拟遍：pose 定稿后、落位之前（回写 pose，见
   // runSimPass）。步数：audio 已在帧头定；frame/wall 按累加器——
   // 应步数 = round((elapsed − 上次已步进 elapsed) * FRAME_RATE)
@@ -3312,6 +4281,12 @@ function frame(now) {
       }
       const v = entry.animFrames[fi + ',' + di];
       if (v) { tile = v.tile; place = v.place; }
+    }
+    // 逐帧像素修正（矫正烘焙）：主导表演在本帧有替代图 → 换瓦片
+    // （盖过表面动画帧：修正是逐帧定点补画，语义在最上层）
+    if (entry.corrFrames) {
+      const cp = corrPick.get(part.key);
+      if (cp) { const v = entry.corrFrames[cp.key]; if (v) { tile = v.tile; place = v.place; } }
     }
     // 像素链作业收集：带 pixelGraph 的精灵部件（置换变体瓦片由
     // 干净瓦片在 CPU 烘出、链不跟，v1 边界——有 disp 时整件跳过）

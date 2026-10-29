@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Route,
   Play,
+  ArrowRightToLine,
 } from 'lucide-react';
 import { useProjectStore } from '@/lib/store';
 import type { MotionBlurStroke, EffectStroke } from '@/lib/types';
@@ -234,9 +235,29 @@ function TrajectoryRow({ characterId, characterName, nodeId, nodeName, trajector
 }) {
   const updateUnifiedNode = useProjectStore((s) => s.updateUnifiedNode);
   const setCurrentFrame = useProjectStore((s) => s.setCurrentFrame);
+  const pushUndo = useProjectStore((s) => s.pushUndo);
+  const node = useProjectStore((s) => s.unifiedCharacters[characterId]?.nodes?.[nodeId]);
   const frames = trajectory.map((p) => p.frame);
   const minF = Math.min(...frames);
   const maxF = Math.max(...frames);
+  // 烘焙为轨道：轨迹点与 tracks.x/y 同空间（父级局部子像素偏移），逐点采样
+  // 成 x/y 两条线性轨道（同帧取最后一点），替换既有 x/y 轨道、保留其余轨道，
+  // 同一步里清掉轨迹（轨迹原本就盖过轨道，烘焙 = 把胜出层落成轨道）。
+  const bakeToTracks = () => {
+    const byFrame = new Map<number, { frame: number; x: number; y: number }>();
+    for (const p of trajectory) byFrame.set(p.frame, p);
+    const uniq = [...byFrame.values()].sort((a, b) => a.frame - b.frame);
+    if (uniq.length < 2) return;
+    pushUndo('轨迹烘焙为轨道');
+    updateUnifiedNode(characterId, nodeId, {
+      tracks: {
+        ...(node?.tracks ?? {}),
+        x: { interpolation: 'linear', keyframes: uniq.map((p) => ({ frame: p.frame, value: p.x })) },
+        y: { interpolation: 'linear', keyframes: uniq.map((p) => ({ frame: p.frame, value: p.y })) },
+      },
+      trajectory: [],
+    } as any);
+  };
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -255,6 +276,17 @@ function TrajectoryRow({ characterId, characterName, nodeId, nodeName, trajector
       <Tooltip>
         <TooltipTrigger asChild>
           <button
+            className="shrink-0 text-zinc-600 hover:text-cyan-300 p-0.5"
+            onClick={bakeToTracks}
+          >
+            <ArrowRightToLine className="size-3.5" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="left" className="text-[10px]">烘焙为轨道（写入 x/y 轨道并清除轨迹）</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
             className="shrink-0 text-zinc-600 hover:text-red-400 p-0.5"
             onClick={() => updateUnifiedNode(characterId, nodeId, { trajectory: [] } as any)}
           >
@@ -268,6 +300,9 @@ function TrajectoryRow({ characterId, characterName, nodeId, nodeName, trajector
       <ContextMenuContent className="min-w-36">
         <ContextMenuItem onSelect={() => setCurrentFrame(minF)}>
           跳转到起始帧
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={bakeToTracks}>
+          烘焙为轨道
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem

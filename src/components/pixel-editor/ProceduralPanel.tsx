@@ -357,12 +357,15 @@ function ProceduralAnimationCard({
   onUpdate,
   onRemove,
   onToggle,
+  ineffectiveNote,
 }: {
   animation: ProceduralAnimation;
   currentFrame: number;
   onUpdate: (id: string, updates: Partial<ProceduralAnimation>) => void;
   onRemove: (id: string) => void;
   onToggle: (id: string) => void;
+  /** 节点模式下目标节点缺对应启用的修改器时的点名（与 convert 同口径） */
+  ineffectiveNote?: string;
 }) {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editName, setEditName] = useState(animation.name);
@@ -405,6 +408,11 @@ function ProceduralAnimationCard({
           : 'border-zinc-800 bg-zinc-900/20 opacity-60'
       }`}
     >
+      {ineffectiveNote && (
+        <div className="px-2 py-1 text-[9px] leading-snug text-amber-300 bg-amber-500/10 border-b border-amber-500/20">
+          {ineffectiveNote}
+        </div>
+      )}
       {/* Card Header */}
       <div className="flex items-center gap-1.5 px-2 py-1.5">
         {/* Collapse toggle */}
@@ -824,19 +832,66 @@ export default function ProceduralPanel() {
 
   const { selectedSpriteId } = useEditorStore();
 
+  // 节点目标（新管线）：主渲染与 convert 只按 nodeId 匹配程序化动画，
+  // 只写 spriteId 的条目永远不生效（2026-10-29 审计坐实）。选中了木偶
+  // 节点时面板转入节点模式：列表、新建都按 nodeId；无节点选中才回落
+  // 旧精灵模式（spriteId）。
+  const selectedCharacterId = useProjectStore((s) => s.selectedCharacterId);
+  const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
+  const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
+  const targetNode =
+    selectedCharacterId && selectedNodeId
+      ? unifiedCharacters?.[selectedCharacterId]?.nodes?.[selectedNodeId]
+      : undefined;
+  const nodeMode = !!targetNode;
+
   // Feature 5: CSV waveform import ref
 
   // ---- Derived ----
   const partAnimations = useMemo(
-    () => proceduralAnimations.filter((pa) => pa.spriteId === selectedSpriteId),
-    [proceduralAnimations, selectedSpriteId],
+    () =>
+      nodeMode
+        ? proceduralAnimations.filter((pa) => pa.nodeId === selectedNodeId)
+        : proceduralAnimations.filter((pa) => pa.spriteId === selectedSpriteId),
+    [nodeMode, proceduralAnimations, selectedNodeId, selectedSpriteId],
+  );
+
+  // 节点模式下与 convert 同口径判生效：目标属性对应的修改器必须在
+  // 节点上存在且启用，否则条目在编辑器与包里都不生效——卡片上点名，
+  // 修改器请去木偶面板加（节点修改器与蓝图双向同步，不在此处代加）。
+  const ineffectiveNoteFor = useCallback(
+    (pa: ProceduralAnimation): string | undefined => {
+      if (!nodeMode || !targetNode) return undefined;
+      const need =
+        pa.config.targetProperty === 'rotation'
+          ? { type: 'rotate', label: '旋转' }
+          : pa.config.targetProperty === 'scale'
+            ? { type: 'uniform_scale', label: '等比缩放' }
+            : { type: 'translate', label: '平移' };
+      const ok = (targetNode.modifiers ?? []).some((m) => m.type === need.type && m.enabled);
+      return ok
+        ? undefined
+        : `目标节点缺启用的「${need.label}」修改器，暂不生效——在木偶面板给节点加上后即生效，导出时也不会被丢弃。`;
+    },
+    [nodeMode, targetNode],
   );
 
   // ---- Handlers ----
   const handleAdd = useCallback(
     (type: ProceduralConfig['type']) => {
-      if (!selectedSpriteId) return;
       const info = PROCEDURAL_TYPE_INFO[type];
+      if (nodeMode && selectedNodeId) {
+        addProceduralAnimation(
+          '',
+          `${info.label} ${partAnimations.length + 1}`,
+          { ...info.defaultConfig },
+          0,
+          totalFrames - 1,
+          selectedNodeId,
+        );
+        return;
+      }
+      if (!selectedSpriteId) return;
       addProceduralAnimation(
         selectedSpriteId,
         `${info.label} ${partAnimations.length + 1}`,
@@ -845,7 +900,7 @@ export default function ProceduralPanel() {
         totalFrames - 1,
       );
     },
-    [selectedSpriteId, partAnimations.length, totalFrames, addProceduralAnimation],
+    [nodeMode, selectedNodeId, selectedSpriteId, partAnimations.length, totalFrames, addProceduralAnimation],
   );
 
   const handleRemove = useCallback(
@@ -870,7 +925,7 @@ export default function ProceduralPanel() {
   );
 
   // ---- Render ----
-  if (!selectedSpriteId) {
+  if (!selectedSpriteId && !targetNode) {
     return (
       <div className="flex flex-col h-full bg-zinc-950" style={{ width: 280 }}>
         <div className="px-3 py-2.5 border-b border-zinc-800 shrink-0">
@@ -949,6 +1004,15 @@ export default function ProceduralPanel() {
         </div>
       </div>
 
+      {nodeMode && targetNode && (
+        <div className="px-3 py-1.5 border-b border-zinc-800 bg-emerald-500/5 shrink-0">
+          <span className="text-[10px] text-zinc-400">
+            目标节点：<span className="text-emerald-300">{targetNode.name ?? selectedNodeId}</span>
+            <span className="text-zinc-500">（按节点生效；未选节点时回落精灵模式）</span>
+          </span>
+        </div>
+      )}
+
       {/* Animation list */}
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-2 space-y-1.5">
@@ -963,6 +1027,7 @@ export default function ProceduralPanel() {
                 onUpdate={handleUpdate}
                 onRemove={handleRemove}
                 onToggle={handleToggle}
+                ineffectiveNote={ineffectiveNoteFor(pa)}
               />
             ))
           )}

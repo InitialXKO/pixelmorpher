@@ -14,6 +14,7 @@ import { renderUnifiedToCanvas, renderSpriteEditUnified } from '@/lib/unified-re
 import { resolveNodeSpriteId } from '@/lib/unified-render';
 import { computeWorldTransforms, geometryDirectionFromToggle } from '@/lib/unified-render';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
+import { spriteLocalPoint } from '@/lib/node-picking';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import {
@@ -26,7 +27,6 @@ import { computeIKChainTip, getIKChainJointIds } from '@/lib/ik-tip';
 import {
   isPixelInPart,
   getLinePixels,
-  simplifyPath,
   pointInPolygon,
   computeSpriteEndPoint,
   isStrokeToolCheck,
@@ -60,49 +60,6 @@ export const panningHandler: ToolHandler = {};
 // ---------------------------------------------------------------------------
 
 
-
-// ---------------------------------------------------------------------------
-// Move Tool Handler
-// ---------------------------------------------------------------------------
-
-export const moveToolHandler: ToolHandler = {
-  onMouseDown(s, e, px, py) {
-    const currentFrame = s.currentFrameRef.current;
-    const editorState = s.editorStore.getState();
-    // part_edit 模式下只能拖正在编辑的部位
-    if (editorState.editMode === 'sprite_edit') {
-      const editPartId = editorState.spriteEditSpriteId;
-      if (!editPartId || s.selectedPart?.id !== editPartId) return;
-    }
-    if (!s.selectedPart) return;
-    const selPart = s.selectedPart;
-    const offsetX = s.canvasWidth / 2; const offsetY = s.canvasHeight / 2;
-    const { offsetX: txOff, offsetY: tyOff } = s.getInterpolatedTranslateOffset(selPart.id!, currentFrame);
-    if (isPixelInPart(px, py, selPart, offsetX, offsetY, txOff, tyOff)) {
-      const targetLevel = s.editorStore.getState().moveTargetLevel;
-      const kfOnlyOffsetX = txOff; const kfOnlyOffsetY = tyOff;
-      const startOffsetX = kfOnlyOffsetX;
-      const startOffsetY = kfOnlyOffsetY;
-      useProjectStore.getState().beginDrag('移动部件');
-      s.isDrawingRef.current = true; s.markDirty();
-      s.moveStartRef.current = { x: px, y: py, offsetX: startOffsetX, offsetY: startOffsetY, targetLevel, partGlobalOffsetX: 0, partGlobalOffsetY: 0 };
-    }
-  },
-
-  onMouseMove(s, e, px, py) {
-    const currentFrame = s.currentFrameRef.current;
-    if (!s.isDrawingRef.current || !s.selectedPart || !s.moveStartRef.current) return;
-    const selPart = s.selectedPart;
-    const dx = px - s.moveStartRef.current.x; const dy = py - s.moveStartRef.current.y;
-    const newOffsetX = s.moveStartRef.current.offsetX + dx; const newOffsetY = s.moveStartRef.current.offsetY + dy;
-    // Part 是纯精灵数据，不再有 part_global 位移层级；统一走关键帧
-    let kf = s.keyframes.find(k => k.spriteId === selPart.id && k.frame === currentFrame);
-    if (!kf) kf = useProjectStore.getState().addKeyframe(selPart.id!, currentFrame);
-    const translateMod = kf.modifiers.find(m => m.type === 'translate');
-    if (translateMod) useProjectStore.getState().updateModifier(kf.id, translateMod.id, { offsetX: newOffsetX, offsetY: newOffsetY });
-    else { useProjectStore.getState().addModifier(kf.id, 'translate'); const updatedKf = useProjectStore.getState().keyframes.find(k => k.id === kf!.id); if (updatedKf) { const newMod = updatedKf.modifiers.find(m => m.type === 'translate'); if (newMod) useProjectStore.getState().updateModifier(updatedKf.id, newMod.id, { offsetX: newOffsetX, offsetY: newOffsetY }); } }
-  },
-};
 
 // ---------------------------------------------------------------------------
 // Select Tool Handler
@@ -898,29 +855,87 @@ export const markHandler: ToolHandler = {
 };
 
 // ---------------------------------------------------------------------------
+// 矫正模式目标解析（逐帧像素修正，2026-10-30 自旧工程关键帧搬家到节点）
+// ---------------------------------------------------------------------------
+
+/** 画布点命中的可修正目标：木偶节点 + 当帧生效精灵 + 逆映射上下文。
+ * 堆叠件（无单一底图）与参数化生成图（无静态底图）不可修正，返回 null。 */
+function correctionTargetAt(s: CanvasState, px: number, py: number): {
+  characterId: string;
+  nodeId: string;
+  spriteId: string;
+  sprite: import('@/lib/unified-types').Sprite;
+  wt: { worldAngle: number; scaleX?: number; worldStretch: number; skewX?: number; skewY?: number; mirror: boolean };
+  jointX: number;
+  jointY: number;
+} | null {
+  const hit = s.findPuppetNodeAtPixel(px, py);
+  if (!hit) return null;
+  const { node, character } = hit;
+  const store = useProjectStore.getState();
+  const activeCs = (character.costumeSets ?? []).find((cs) => cs.id === character.activeCostumeSetId);
+  const piece = activeCs?.pieces[node.slot?.slotKey ?? node.id];
+  if (piece?.stack) return null;
+  const rootNode = character.nodes[character.rootNodeId];
+  const direction = (rootNode?.transform.variantIndex ?? 0) as import('@/lib/unified-types').DirectionIndex;
+  const spriteId = resolveNodeSpriteId(character, node.id, direction, store.sprites);
+  if (!spriteId) return null;
+  const sprite = store.sprites[spriteId];
+  if (!sprite) return null;
+  const frame = s.currentFrameRef.current;
+  const wts = computeWorldTransforms(character, frame, s.canvasWidth, s.canvasHeight, undefined, undefined, undefined, undefined, geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
+  const w = wts.get(node.id);
+  if (!w) return null;
+  const proj = projectToView(w.worldX, w.worldY, w.worldZ, direction);
+  return {
+    characterId: character.id,
+    nodeId: node.id,
+    spriteId,
+    sprite,
+    wt: w,
+    jointX: subToPx(proj.canvasX) + s.canvasWidth / 2,
+    jointY: subToPx(proj.canvasY) + s.canvasHeight / 2,
+  };
+}
+
+/** 把一条笔刷命令追加到节点当帧的逐帧修正（同帧换过图则旧条目作废重开）。 */
+function appendFrameCorrectionCommand(
+  target: { characterId: string; nodeId: string; spriteId: string },
+  frame: number,
+  cmd: BrushCommand,
+): void {
+  const store = useProjectStore.getState();
+  const node = store.unifiedCharacters[target.characterId]?.nodes?.[target.nodeId];
+  if (!node) return;
+  const prev = node.frameCorrections?.[frame];
+  const base = prev && prev.spriteId === target.spriteId ? prev.commands ?? [] : [];
+  store.updateUnifiedNode(target.characterId, target.nodeId, {
+    frameCorrections: {
+      ...(node.frameCorrections ?? {}),
+      [frame]: { spriteId: target.spriteId, commands: [...base, cmd] },
+    },
+  } as any);
+}
+
+// ---------------------------------------------------------------------------
 // Fill Tool Handler
 // ---------------------------------------------------------------------------
 
 export const fillToolHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
     const currentFrame = s.currentFrameRef.current;
-    if (s.editMode === 'correction' && s.selectedSpriteId && s.selectedPart) {
-      const selPart = s.selectedPart;
-      const store = useProjectStore.getState();
-      store.performBatch('填充', () => {
-        let currentKf = store.keyframes.find(k => k.spriteId === s.selectedSpriteId && k.frame === currentFrame);
-        if (!currentKf) currentKf = store.addKeyframe(s.selectedSpriteId!, currentFrame);
-        if (currentKf) {
-          let pixelEditMod = currentKf.modifiers.find(m => m.type === 'pixel_edit' && m.enabled);
-          let modId = pixelEditMod?.id;
-          if (!modId) modId = store.createPixelEditModifier(currentKf.id);
-          const { offsetX: txOffF, offsetY: tyOffF } = s.getInterpolatedTranslateOffset(selPart.id!, currentFrame);
-          const localF = s.canvasToPartLocal(px, py, selPart, txOffF, tyOffF);
-          const fillPt = localF ? { x: localF.lx, y: localF.ly } : { x: px, y: py };
-          const fillCmd: BrushCommand = { id: crypto.randomUUID(), type: 'fill', color: s.brushColor, size: 1, points: [fillPt], blendMode: 'normal', brushStyle: s.brushStyle !== 'solid' ? s.brushStyle : undefined, brushStyleParams: s.brushStyle !== 'solid' ? s.brushStyleParams : undefined };
-          store.addPixelEditCommand(currentKf.id, modId, fillCmd);
+    if (s.editMode === 'correction') {
+      // 矫正模式：填充记到命中节点的当帧逐帧修正（精灵局部坐标）
+      const target = correctionTargetAt(s, px, py);
+      if (target) {
+        const localF = spriteLocalPoint(target.sprite, target.wt, target.jointX, target.jointY, px, py);
+        if (localF) {
+          const fillCmd: BrushCommand = { id: crypto.randomUUID(), type: 'fill', color: s.brushColor, size: 1, points: [{ x: localF.x, y: localF.y }], blendMode: 'normal', brushStyle: s.brushStyle !== 'solid' ? s.brushStyle : undefined, brushStyleParams: s.brushStyle !== 'solid' ? s.brushStyleParams : undefined };
+          useProjectStore.getState().performBatch('填充', () => {
+            appendFrameCorrectionCommand(target, currentFrame, fillCmd);
+          });
         }
-      });
+      }
       return;
     }
     if (s.editMode === 'sprite_edit' && s.selectedSpriteId && s.selectedPart) {
@@ -946,83 +961,6 @@ export const fillToolHandler: ToolHandler = {
     }
     if (s.editMode === 'normal' && s.selectedSpriteId) s.editorStore.getState().enterSpriteEditMode(s.selectedSpriteId);
     s.applyFill(px, py);
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Trajectory Tool Handler
-// ---------------------------------------------------------------------------
-
-export const trajectoryHandler: ToolHandler = {
-  onMouseDown(s, e, px, py) {
-    if (s.editMode === 'trajectory_edit' && s.selectedSpriteId) {
-      const cpHit = s.findTrajectoryCpAtPixel(px, py);
-      if (cpHit) {
-        useProjectStore.getState().beginDrag('拖动轨迹控制点');
-        s.isDrawingRef.current = true; s.markDirty();
-        s.trajectoryCpDragRef.current = { spriteId: cpHit.spriteId, segmentIdx: cpHit.segmentIdx, cp: cpHit.cp, startX: px, startY: py, origCp1x: cpHit.cp1x, origCp1y: cpHit.cp1y, origCp2x: cpHit.cp2x, origCp2y: cpHit.cp2y };
-        return;
-      }
-    }
-    if (e.shiftKey && s.selectedSpriteId) { s.isDrawingRef.current = true; s.markDirty(); s.handDrawTrajectoryRef.current = [{ x: px, y: py }]; s.lastPixelRef.current = { x: px, y: py }; return; }
-    s.isDrawingRef.current = true; s.markDirty();
-    s.trajectoryPathRef.current = [{ x: px, y: py }]; s.lastPixelRef.current = { x: px, y: py };
-  },
-
-  onMouseMove(s, e, px, py) {
-    if (!s.isDrawingRef.current) return;
-    if (s.trajectoryCpDragRef.current) {
-      const drag = s.trajectoryCpDragRef.current; const ddx = px - drag.startX; const ddy = py - drag.startY;
-      const traj = useProjectStore.getState().trajectories.find(t => t.spriteId === drag.spriteId);
-      if (traj) { const pt = traj.points[drag.segmentIdx]; const nextPt = traj.points[drag.segmentIdx + 1]; if (pt && nextPt) { if (drag.cp === 'cp1') useProjectStore.getState().updateTrajectoryPoint(drag.spriteId, pt.frame, { cp1x: drag.origCp1x + ddx, cp1y: drag.origCp1y + ddy }); else useProjectStore.getState().updateTrajectoryPoint(drag.spriteId, nextPt.frame, { cp2x: drag.origCp2x + ddx, cp2y: drag.origCp2y + ddy }); } }
-      return;
-    }
-    if (s.handDrawTrajectoryRef.current.length > 0) {
-      if (s.lastPixelRef.current) { for (const point of getLinePixels(s.lastPixelRef.current.x, s.lastPixelRef.current.y, px, py)) s.handDrawTrajectoryRef.current.push({ x: point.x, y: point.y }); }
-      else s.handDrawTrajectoryRef.current.push({ x: px, y: py });
-      s.lastPixelRef.current = { x: px, y: py }; return;
-    }
-    if (s.lastPixelRef.current) { for (const point of getLinePixels(s.lastPixelRef.current.x, s.lastPixelRef.current.y, px, py)) s.trajectoryPathRef.current.push({ x: point.x, y: point.y }); }
-    else s.trajectoryPathRef.current.push({ x: px, y: py });
-    s.lastPixelRef.current = { x: px, y: py };
-  },
-
-  onMouseUp(s) {
-    // Hand-drawn trajectory
-    if (s.isDrawingRef.current && s.handDrawTrajectoryRef.current.length > 2 && s.selectedSpriteId) {
-      const rawPath = s.handDrawTrajectoryRef.current;
-      const simplified = simplifyPath(rawPath, 3);
-      const totalFrames = useProjectStore.getState().totalFrames;
-      const numPoints = Math.min(totalFrames, simplified.length);
-      const step = Math.max(1, Math.floor(totalFrames / numPoints));
-      for (let i = 0; i < simplified.length; i++) {
-        const frame = Math.min(i * step, totalFrames - 1);
-        const pt = simplified[i];
-        const snapX = s.trajectorySnap ? Math.round(pt.x) : pt.x; const snapY = s.trajectorySnap ? Math.round(pt.y) : pt.y;
-        const prevPt = i > 0 ? simplified[i - 1] : simplified[i]; const nextPt = i < simplified.length - 1 ? simplified[i + 1] : simplified[i];
-        const cp1x = i > 0 ? (prevPt.x + pt.x) / 2 - pt.x : 0; const cp1y = i > 0 ? (prevPt.y + pt.y) / 2 - pt.y : 0;
-        const cp2x = i < simplified.length - 1 ? (nextPt.x + pt.x) / 2 - pt.x : 0; const cp2y = i < simplified.length - 1 ? (nextPt.y + pt.y) / 2 - pt.y : 0;
-        useProjectStore.getState().addTrajectoryPoint(s.selectedSpriteId, frame, snapX, snapY, 0);
-        useProjectStore.getState().updateTrajectoryPoint(s.selectedSpriteId, frame, { cp1x, cp1y, cp2x, cp2y });
-      }
-      s.handDrawTrajectoryRef.current = [];
-    } else if (s.handDrawTrajectoryRef.current.length > 0) s.handDrawTrajectoryRef.current = [];
-
-    // Trajectory freehand path
-    if (s.isDrawingRef.current && s.trajectoryPathRef.current.length >= 2 && s.selectedSpriteId) {
-      const path = s.trajectoryPathRef.current; const totalFrames = useProjectStore.getState().totalFrames; const pathLength = path.length;
-      const numSamples = Math.min(totalFrames, Math.max(2, Math.round(pathLength / 3)));
-      const step = pathLength / numSamples;
-      for (let i = 0; i < numSamples; i++) {
-        const pathIndex = Math.min(Math.round(i * step), pathLength - 1); const point = path[pathIndex];
-        const frame = Math.round((i / (numSamples - 1)) * (totalFrames - 1));
-        const snapX = s.trajectorySnap ? Math.round(point.x) : point.x; const snapY = s.trajectorySnap ? Math.round(point.y) : point.y;
-        useProjectStore.getState().addTrajectoryPoint(s.selectedSpriteId, frame, snapX, snapY, 0);
-      }
-      s.trajectoryPathRef.current = [];
-    }
-
-    if (s.trajectoryCpDragRef.current) s.trajectoryCpDragRef.current = null;
   },
 };
 
@@ -1067,7 +1005,6 @@ export const cropHandler: ToolHandler = {
       const newCenterOffsetX = cropX + cropW / 2 - oldCenterX; const newCenterOffsetY = cropY + cropH / 2 - oldCenterY;
       store.performBatch('裁剪画布', () => {
         // Part 是纯精灵数据，无位置偏移；裁剪画布不再移动 Part
-        for (const traj of store.trajectories) for (const pt of traj.points) store.updateTrajectoryPoint(traj.spriteId, pt.frame, { x: pt.x - newCenterOffsetX, y: pt.y - newCenterOffsetY });
         store.setCanvasSize(cropW, cropH);
       });
     }
@@ -1228,7 +1165,7 @@ export const smartSelectHandler: ToolHandler = {
             ? renderSpriteEditViewToCanvas(s)
             : renderUnifiedToCanvas(
               s.canvasWidth, s.canvasHeight,
-              Object.values(pst.sprites), s.keyframes, currentFrame, s.backgroundColor,
+              Object.values(pst.sprites), currentFrame, s.backgroundColor,
               s.effectTracks, undefined, undefined, false, 0.5,
               undefined, undefined, 'low',
               s.globalModifiers, undefined,
@@ -1292,12 +1229,8 @@ export const inpaintHandler: ToolHandler = {
         }
       }
       if (spriteMask.size > 0) {
-        const store = useProjectStore.getState();
-        const currentKf = store.keyframes.find(k => k.spriteId === selPart.id && k.frame === currentFrame);
-        const basePixels = currentKf?.correctionMask ?? selPart.data;
-        const inpainted = inpaintPixels(basePixels, spriteMask, editor.inpaintRadius);
-        if (currentKf?.correctionMask) store.setCorrection(currentKf.id, inpainted);
-        else s.setPartPixels(selPart.id!, inpainted);
+        const inpainted = inpaintPixels(selPart.data, spriteMask, editor.inpaintRadius);
+        s.setPartPixels(selPart.id!, inpainted);
       }
       return;
     }
@@ -1312,12 +1245,8 @@ export const inpaintHandler: ToolHandler = {
         if (dx * dx + dy * dy <= radius * radius) { const mx = lx + dx; const my = ly + dy; if (mx >= 0 && mx < selPart.width && my >= 0 && my < selPart.height) mask.add(`${mx},${my}`); }
       }
       if (mask.size > 0) {
-        const store = useProjectStore.getState();
-        const currentKf = store.keyframes.find(k => k.spriteId === selPart.id && k.frame === currentFrame);
-        const basePixels = currentKf?.correctionMask ?? selPart.data;
-        const inpainted = inpaintPixels(basePixels, mask, radius);
-        if (currentKf?.correctionMask) store.setCorrection(currentKf.id, inpainted);
-        else s.setPartPixels(selPart.id!, inpainted);
+        const inpainted = inpaintPixels(selPart.data, mask, radius);
+        s.setPartPixels(selPart.id!, inpainted);
       }
     }
   },
@@ -1857,23 +1786,27 @@ export const brushEraserHandler: ToolHandler = {
     s.lastDrawnPixelsRef.current.clear();
     const color = s.tool === 'eraser' ? null : s.brushColor;
 
-    // Correction mode
-    if (s.editMode === 'correction' && s.selectedSpriteId && s.selectedPart) {
-      const selPart = s.selectedPart;
-      const store = useProjectStore.getState();
-      let currentKf = store.keyframes.find(k => k.spriteId === s.selectedSpriteId && k.frame === currentFrame);
-      if (!currentKf) currentKf = store.addKeyframe(s.selectedSpriteId!, currentFrame);
-      if (currentKf) {
-        let pixelEditMod = currentKf.modifiers.find(m => m.type === 'pixel_edit' && m.enabled);
-        let modId = pixelEditMod?.id;
-        if (!modId) modId = store.createPixelEditModifier(currentKf.id);
-        const cmdId = crypto.randomUUID();
-        const { offsetX: txOff2, offsetY: tyOff2 } = s.getInterpolatedTranslateOffset(selPart.id!, currentFrame);
-        const local2 = s.canvasToPartLocal(px, py, selPart, txOff2, tyOff2);
-        const startPt = local2 ? { x: local2.lx, y: local2.ly } : { x: px, y: py };
-        s.pixelEditCommandRef.current = { commandId: cmdId, modifierId: modId, keyframeId: currentKf.id, points: [startPt] };
-        s.lastPixelRef.current = { x: px, y: py }; return;
+    // Correction mode：笔画目标 = 落笔命中的木偶节点，点列记精灵局部坐标
+    if (s.editMode === 'correction') {
+      const target = correctionTargetAt(s, px, py);
+      if (target) {
+        const startPt = spriteLocalPoint(target.sprite, target.wt, target.jointX, target.jointY, px, py);
+        if (startPt) {
+          s.pixelEditCommandRef.current = {
+            commandId: crypto.randomUUID(),
+            characterId: target.characterId,
+            nodeId: target.nodeId,
+            spriteId: target.spriteId,
+            sprite: target.sprite,
+            wt: target.wt,
+            jointX: target.jointX,
+            jointY: target.jointY,
+            points: [{ x: startPt.x, y: startPt.y }],
+          };
+        }
       }
+      s.lastPixelRef.current = { x: px, y: py };
+      return;
     }
 
     // Normal mode fallback
@@ -1905,7 +1838,6 @@ export const brushEraserHandler: ToolHandler = {
       if (editorState.spriteEditStartFrame !== undefined && editorState.spriteEditStartFrame !== projectStore.currentFrame) {
         const spriteId = editorState.spriteEditSpriteId!;
         const prevFrame = editorState.spriteEditStartFrame;
-        const existingPkf = projectStore.getKeyframeAtFrame(spriteId, prevFrame);
         const mods = editorState.spriteEditModifiers.map(m => ({
           ...m,
           params: {
@@ -1942,15 +1874,20 @@ export const brushEraserHandler: ToolHandler = {
 
   onMouseMove(s, e, px, py) {
     const currentFrame = s.currentFrameRef.current;
+    // 矫正模式先行：目标是木偶节点，不依赖 selectedPart
+    if (s.editMode === 'correction') {
+      if (!s.isDrawingRef.current) return;
+      const rec = s.pixelEditCommandRef.current;
+      if (rec) {
+        const local3 = spriteLocalPoint(rec.sprite, rec.wt, rec.jointX, rec.jointY, px, py);
+        if (local3) rec.points.push({ x: local3.x, y: local3.y });
+      }
+      s.lastPixelRef.current = { x: px, y: py };
+      return;
+    }
     if (!s.isDrawingRef.current || !s.selectedPart) return;
     const selPart = s.selectedPart;
     const color = s.tool === 'eraser' ? null : s.brushColor;
-    if (s.editMode === 'correction' && s.pixelEditCommandRef.current && selPart) {
-      const { offsetX: txOff3, offsetY: tyOff3 } = s.getInterpolatedTranslateOffset(selPart.id!, currentFrame);
-      const local3 = s.canvasToPartLocal(px, py, selPart, txOff3, tyOff3);
-      if (local3) s.pixelEditCommandRef.current.points.push({ x: local3.lx, y: local3.ly });
-      s.lastPixelRef.current = { x: px, y: py }; return;
-    }
     if (s.editMode === 'sprite_edit' && s.spriteEditBrushCmdRef.current && selPart) {
       const offsetX = Math.floor((s.canvasWidth - selPart.width) / 2); const offsetY = Math.floor((s.canvasHeight - selPart.height) / 2);
       const localX = px - offsetX; const localY = py - offsetY;
@@ -1969,12 +1906,12 @@ export const brushEraserHandler: ToolHandler = {
   },
 
   onMouseUp(s) {
-    // PixelEdit commit
+    // PixelEdit commit（矫正模式：落到目标节点的当帧逐帧修正）
     if (s.pixelEditCommandRef.current) {
-      const { commandId, modifierId, keyframeId, points } = s.pixelEditCommandRef.current;
-      if (points.length > 0) {
-        const cmd: BrushCommand = { id: commandId, type: s.tool === 'eraser' ? 'erase' : 'draw', color: s.brushColor, size: s.brushSize, points, blendMode: 'normal', brushStyle: s.brushStyle !== 'solid' ? s.brushStyle : undefined, brushStyleParams: s.brushStyle !== 'solid' ? s.brushStyleParams : undefined, ...(s.compositingMode && (s.styleAspects.length > 0 || s.strokeDrivers.length > 0) ? { styleAspects: s.styleAspects.filter(a => a.enabled), strokeDrivers: s.strokeDrivers.filter(d => d.enabled) } : {}) };
-        useProjectStore.getState().addPixelEditCommand(keyframeId, modifierId, cmd);
+      const rec = s.pixelEditCommandRef.current;
+      if (rec.points.length > 0) {
+        const cmd: BrushCommand = { id: rec.commandId, type: s.tool === 'eraser' ? 'erase' : 'draw', color: s.brushColor, size: s.brushSize, points: rec.points, blendMode: 'normal', brushStyle: s.brushStyle !== 'solid' ? s.brushStyle : undefined, brushStyleParams: s.brushStyle !== 'solid' ? s.brushStyleParams : undefined, ...(s.compositingMode && (s.styleAspects.length > 0 || s.strokeDrivers.length > 0) ? { styleAspects: s.styleAspects.filter(a => a.enabled), strokeDrivers: s.strokeDrivers.filter(d => d.enabled) } : {}) };
+        appendFrameCorrectionCommand(rec, s.currentFrameRef.current, cmd);
       }
       s.pixelEditCommandRef.current = null;
     }

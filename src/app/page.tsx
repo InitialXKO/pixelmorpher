@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import PixelCanvas from '@/components/pixel-editor/PixelCanvas';
-import TrajectoryPanel from '@/components/pixel-editor/TrajectoryPanel';
 import PuppetPanel from '@/components/pixel-editor/PuppetPanel';
 import PuppetAssetPanel from '@/components/pixel-editor/PuppetAssetPanel';
 import StrokePanel from '@/components/pixel-editor/StrokePanel';
@@ -32,7 +31,7 @@ import {
 } from '@/lib/autosave-opfs';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import SidePanelTabs from '@/components/pixel-editor/shared/SidePanelTabs';
-import { Pencil, ChevronDown, ChevronUp, Film, Users, PenLine } from 'lucide-react';
+import { Pencil, ChevronDown, ChevronUp, Film, Users, PenLine, Layers, Route, Globe, Zap } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -273,83 +272,11 @@ export default function Home() {
     // ============================================================
     // Z-order: far arm < far foot < body < near foot < near arm
     // ============================================================
-
-    // ============================================================
-    // Walking Animation — Using Animation Modifiers
-    // ============================================================
-
-    // Helper: create a keyframe with translate + optional rotate
-    const addKf = (
-      spriteId: string, frame: number,
-      offsetX: number, offsetY: number, angle?: number,
-    ) => {
-      const kf = store.addKeyframe(spriteId, frame);
-      store.addModifier(kf.id, 'translate');
-      if (angle !== undefined && angle !== 0) {
-        store.addModifier(kf.id, 'rotate');
-      }
-      const updated = store.keyframes.find(k => k.id === kf.id);
-      if (updated) {
-        const tMod = updated.modifiers.find(m => m.type === 'translate');
-        if (tMod) store.updateModifier(kf.id, tMod.id, { offsetX, offsetY });
-        if (angle !== undefined && angle !== 0) {
-          const rMod = updated.modifiers.find(m => m.type === 'rotate');
-          if (rMod) store.updateModifier(kf.id, rMod.id, { angle });
-        }
-      }
-    };
-
-    // Neutral standing offsets:
-    //   Body:  (0, -10)      Left arm:  (-12, -16)     Right arm: (6, -16)
-    //   Left foot: (-4, 2)   Right foot: (2, 2)
-
-    // ---- Frame 0: Contact 1 (right foot forward, left foot back) ----
-    addKf(body.id!,     0,   0, -10);
-    addKf(leftArm.id!,  0, -12, -16);
-    addKf(rightArm.id!, 0,   6, -16);
-    addKf(leftFoot.id!, 0,  -4,   2);
-    addKf(rightFoot.id!,0,   2,   2);
-
-    // Add pendulum to arms
-
-
-    // Add gait to feet
-
-
-    // ---- Frame 4: Passing ----
-    addKf(body.id!,     4,   0, -12);
-    addKf(leftArm.id!,  4, -12, -18);
-    addKf(rightArm.id!, 4,   6, -18);
-    addKf(leftFoot.id!, 4,  -4,  -1);
-    addKf(rightFoot.id!,4,   2,  -1);
-
-    // ---- Frame 8: Contact 2 ----
-    addKf(body.id!,     8,   0, -10);
-    addKf(leftArm.id!,  8, -12, -16);
-    addKf(rightArm.id!, 8,   6, -16);
-    addKf(leftFoot.id!, 8,  -4,   2);
-    addKf(rightFoot.id!,8,   2,   2);
-
-    // ---- Frame 12: Passing back ----
-    addKf(body.id!,     12,  0, -12);
-    addKf(leftArm.id!,  12,-12, -18);
-    addKf(rightArm.id!, 12,  6, -18);
-    addKf(leftFoot.id!, 12, -4,  -1);
-    addKf(rightFoot.id!,12,  2,  -1);
+    // 演示行走动画原本靠旧工程关键帧（已退役）：精灵资产保留播种，
+    // 动画部分不再写死数据（旧关键帧无任何消费端）。
 
     // Select body part by default
     selectPart(body.id!);
-
-    // Auto-record trajectories for all parts
-    for (const sprite of Object.values(useProjectStore.getState().sprites)) {
-      useProjectStore.getState().autoRecordTrajectory(sprite.id!);
-    }
-
-    // Enable trajectory display by default
-    useEditorStore.getState().toggleTrajectories();
-
-    // V3.0: Migrate legacy data into the active animation clip
-    // After all parts, keyframes, and modifiers are created at the Project level,
   }, [Object.keys(sprites).length]);
 
   return (
@@ -407,6 +334,27 @@ export default function Home() {
                         label: '笔触',
                         icon: <PenLine className="size-4" />,
                         content: <StrokePanel />,
+                      },
+                      // 工程数据类面板归左栏（与资产/片段/笔触同类，不随
+                      // 画布选择走）：画布轨道、精灵轨迹、工程级全局变换、
+                      // 片段的事件/标签/碰撞（2026-10-29 用户裁定归左）
+                      {
+                        id: 'canvas',
+                        label: '画布效果',
+                        icon: <Layers className="size-4" />,
+                        content: <CanvasModifierPanel />,
+                      },
+                      {
+                        id: 'global',
+                        label: '全局',
+                        icon: <Globe className="size-4" />,
+                        content: <GlobalModifierPanel />,
+                      },
+                      {
+                        id: 'dcc',
+                        label: 'DCC管线',
+                        icon: <Zap className="size-4" />,
+                        content: <DccPipelinePanel />,
                       },
                     ]}
                   />
@@ -541,6 +489,9 @@ export default function Home() {
                 className="border-l border-zinc-800 transition-all duration-300"
               >
                 <div className={isLocked ? 'pointer-events-none opacity-40 h-full' : 'h-full'}>
+                  {/* 右栏页签在 PuppetPanel 内部（它本身就是页签容器：
+                      骨架/换装/操控/行为/状态机/行为树/预览 + 恢复的动画
+                      工具面板同排），此处不套第二层页签 */}
                   <PuppetPanel />
                 </div>
               </ResizablePanel>

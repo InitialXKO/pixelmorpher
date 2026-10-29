@@ -16,10 +16,6 @@ import type {
   EditMode,
   PixelGrid,
   EffectTrack,
-  Trajectory,
-  TrajectoryPoint,
-  TrajectoryCurvePoint,
-  AfterimageConfig,
   MotionBlurStroke,
   MotionBlurBrushType,
   EffectStroke,
@@ -119,52 +115,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   toggleTrackLock: (trackId: string) => void;
   toggleTrackExpanded: (trackId: string) => void;
 
-  // Keyframe actions
-  addKeyframe: (spriteId: string, frame: number) => Keyframe;
-  removeKeyframe: (keyframeId: string) => void;
-  updateKeyframe: (keyframeId: string, updates: Partial<Keyframe>) => void;
-  duplicateKeyframe: (keyframeId: string, toFrame: number) => Keyframe;
-  getKeyframesForPart: (spriteId: string) => Keyframe[];
-  getKeyframeAtFrame: (spriteId: string, frame: number) => Keyframe | undefined;
-  getSurroundingKeyframes: (spriteId: string, frame: number) => { prev: Keyframe | null; next: Keyframe | null; t: number };
-
-  // Modifier actions
-  addModifier: (keyframeId: string, type: ModifierType) => void;
-  removeModifier: (keyframeId: string, modifierId: string) => void;
-  updateModifier: (keyframeId: string, modifierId: string, params: Record<string, ModifierParamValue>) => void;
-  toggleModifier: (keyframeId: string, modifierId: string) => void;
-  toggleModifierCollapsed: (keyframeId: string, modifierId: string) => void;
-  reorderModifier: (keyframeId: string, modifierId: string, newIndex: number) => void;
-  collapseModifiers: (keyframeId: string) => void;
-  uncollapseModifiers: (keyframeId: string) => void;
-  bakeModifiers: (keyframeId: string) => void;
-  // V3.0: Bake animation modifiers to timeline keyframes
-  bakeToTimeline: (spriteId: string, startFrame: number, endFrame: number, step: number) => void;
-  // V3.0: Update modifier effective range
-  updateModifierRange: (keyframeId: string, modifierId: string, range: { startFrame?: number; endFrame?: number; fadeInFrames?: number; fadeOutFrames?: number }) => void;
-  // V2.3: Scope-aware modifier actions
-  addModifierToSubsequent: (spriteId: string, fromFrame: number, type: ModifierType) => void;
-  removeModifierFromSubsequent: (spriteId: string, fromFrame: number, modifierType: ModifierType) => void;
-
-  // M6: Modifier parameter keyframe actions
-  addModifierParamKeyframe: (keyframeId: string, modifierId: string, frame: number, params: Record<string, ModifierParamValue>) => void;
-  removeModifierParamKeyframe: (keyframeId: string, modifierId: string, paramKfId: string) => void;
-  updateModifierParamKeyframe: (keyframeId: string, modifierId: string, paramKfId: string, params: Record<string, ModifierParamValue>) => void;
-
-  // M7: ParamDriver actions
-  addParamDriver: (keyframeId: string, modifierId: string, paramName: string, startFrame?: number, endFrame?: number) => void;
-  removeParamDriver: (keyframeId: string, modifierId: string, driverId: string) => void;
-  updateParamDriver: (keyframeId: string, modifierId: string, driverId: string, updates: Partial<ParamDriver>) => void;
-  toggleParamDriver: (keyframeId: string, modifierId: string, driverId: string) => void;
-  /** Bake a ParamDriver into consecutive paramKeyframes for manual editing */
-  bakeParamDriver: (keyframeId: string, modifierId: string, driverId: string) => void;
-  /** Unbake: remove baked paramKeyframes that came from a driver, re-enable the driver */
-  unbakeParamDriver: (keyframeId: string, modifierId: string, driverId: string) => void;
-
-  // Correction actions
-  setCorrection: (keyframeId: string, mask: PixelGrid | null) => void;
-  clearCorrection: (keyframeId: string) => void;
-
   // Effect track actions
   addEffectTrack: (type: EffectTrack['type'], name: string) => void;
   removeEffectTrack: (id: string) => void;
@@ -173,14 +123,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   removeEffectKeyframe: (effectTrackId: string, keyframeId: string) => void;
   updateEffectKeyframe: (effectTrackId: string, keyframeId: string, params: Record<string, ModifierParamValue>) => void;
 
-  // Trajectory actions
-  addTrajectoryPoint: (spriteId: string, frame: number, x: number, y: number, rotation: number) => void;
-  updateTrajectoryPoint: (spriteId: string, frame: number, updates: Partial<Omit<TrajectoryCurvePoint, 'frame'>>) => void;
-  clearTrajectory: (spriteId: string) => void;
-  toggleTrajectoryVisibility: (spriteId: string) => void;
-  autoRecordTrajectory: (spriteId: string) => void;
-  generateTweenFromTrajectory: (spriteId: string, startFrame: number, endFrame: number, step: number) => void;
-  generateAfterimageSequence: (spriteId: string, config: AfterimageConfig) => void;
 
   // Motion blur stroke actions
   addMotionBlurStroke: (stroke: Omit<MotionBlurStroke, 'id'>) => void;
@@ -199,7 +141,7 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   setOnionSkinFrames: (n: number) => void;
 
   // Procedural Animation actions（旧骨骼系统已删除，2026-10-26；程序化动画为活功能保留）
-  addProceduralAnimation: (spriteId: string, name: string, config: ProceduralConfig, startFrame: number, endFrame: number) => ProceduralAnimation;
+  addProceduralAnimation: (spriteId: string, name: string, config: ProceduralConfig, startFrame: number, endFrame: number, nodeId?: string) => ProceduralAnimation;
   removeProceduralAnimation: (id: string) => void;
   updateProceduralAnimation: (id: string, updates: Partial<ProceduralAnimation>) => void;
   toggleProceduralAnimation: (id: string) => void;
@@ -265,24 +207,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   removeCanvasModifierKeyframe: (trackId: string, keyframeId: string) => void;
   updateCanvasModifierKeyframe: (trackId: string, keyframeId: string, params: Record<string, ModifierParamValue>) => void;
 
-  // PixelEdit modifier actions
-  createPixelEditModifier: (keyframeId: string) => string;
-  addPixelEditCommand: (keyframeId: string, modifierId: string, command: BrushCommand) => void;
-  removePixelEditCommand: (keyframeId: string, modifierId: string, commandId: string) => void;
-  updatePixelEditCommand: (keyframeId: string, modifierId: string, commandId: string, updates: Partial<BrushCommand>) => void;
-
-  // M7+: StrokeParamDriver time-domain ParamDriver actions (on persisted BrushCommands)
-  addStrokeDriverParamDriver: (keyframeId: string, modifierId: string, commandId: string, strokeDriverId: string, paramName: string, startFrame?: number, endFrame?: number) => void;
-  removeStrokeDriverParamDriver: (keyframeId: string, modifierId: string, commandId: string, strokeDriverId: string, driverId: string) => void;
-  updateStrokeDriverParamDriver: (keyframeId: string, modifierId: string, commandId: string, strokeDriverId: string, driverId: string, updates: Partial<ParamDriver>) => void;
-  toggleStrokeDriverParamDriver: (keyframeId: string, modifierId: string, commandId: string, strokeDriverId: string, driverId: string) => void;
-  addStrokeDriverParamKeyframe: (keyframeId: string, modifierId: string, commandId: string, strokeDriverId: string, frame: number, params: Record<string, ModifierParamValue>) => void;
-  removeStrokeDriverParamKeyframe: (keyframeId: string, modifierId: string, commandId: string, strokeDriverId: string, paramKfId: string) => void;
-  /** Bake a ParamDriver on a StrokeParamDriver into consecutive paramKeyframes */
-  bakeStrokeDriverParamDriver: (keyframeId: string, modifierId: string, commandId: string, strokeDriverId: string, driverId: string) => void;
-  /** Unbake: re-enable the driver and clear the baked paramKeyframes on a StrokeParamDriver */
-  unbakeStrokeDriverParamDriver: (keyframeId: string, modifierId: string, commandId: string, strokeDriverId: string, driverId: string) => void;
-
   // Motion analysis split (PRD 3.1.1)
   motionAnalysisSplit: (frames: PixelGrid[], options?: { blockSize?: number; searchRadius?: number; motionThreshold?: number; minRegionSize?: number }) => string[];
 
@@ -291,13 +215,6 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   removeAnimationVariable: (variableId: string) => void;
   updateAnimationVariable: (variableId: string, updates: Partial<AnimationVariable>) => void;
   renameAnimationVariable: (variableId: string, name: string) => void;
-  setVariableWriter: (variableId: string, writerDriverId: string) => boolean;
-
-  // M8: ParamSource actions
-  setParamDriverSource: (keyframeId: string, modifierId: string, driverId: string, param: ParamDriverNumericParam, source: ParamSource) => void;
-  clearParamDriverSource: (keyframeId: string, modifierId: string, driverId: string, param: ParamDriverNumericParam) => void;
-  updateParamDriverKeyframes: (keyframeId: string, modifierId: string, driverId: string, param: ParamDriverNumericParam, keyframes: ParamDriverKeyframe[]) => void;
-  updateSecondaryDriver: (keyframeId: string, modifierId: string, driverId: string, param: ParamDriverNumericParam, updates: Partial<SecondaryParamDriver>) => void;
 
   // Reset
   resetProject: () => void;

@@ -71,8 +71,10 @@ export function applyProceduralAnimations(
   }));
 
   for (const pa of proceduralAnimations) {
-    // 匹配 spriteId 或 nodeId（新管线节点级程序化动画用 nodeId）
-    const matchesPart = pa.spriteId === spriteId;
+    // 匹配 spriteId 或 nodeId（新管线节点级程序化动画用 nodeId）。
+    // spriteId 空串不算匹配：主渲染以 '' 调用本函数，节点级条目的
+    // spriteId 同为 ''，不设此门会让节点条目串到所有节点上。
+    const matchesPart = !!spriteId && pa.spriteId === spriteId;
     const matchesNode = nodeId && pa.nodeId === nodeId;
     if (!pa.enabled || (!matchesPart && !matchesNode)) continue;
     if (frame < pa.startFrame || frame > pa.endFrame) continue;

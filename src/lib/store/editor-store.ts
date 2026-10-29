@@ -45,7 +45,6 @@ interface EditorStore extends EditorState {
   selectEffectTrack: (id: string | null) => void;
   toggleGrid: () => void;
   toggleNodeTurn3D: () => void;
-  toggleTrajectories: () => void;
   // Motion blur
   setAutoMotionBlur: (enabled: boolean) => void;
   setAutoMotionBlurIntensity: (intensity: number) => void;
@@ -60,7 +59,6 @@ interface EditorStore extends EditorState {
   setEffectBrushSpread: (spread: number) => void;
   setStrokeBlendMode: (m: 'normal' | 'lighter' | 'overlay' | 'screen') => void;
   setEffectCoordinateMode: (mode: CoordinateMode) => void;
-  setTrajectorySnap: (enabled: boolean) => void;
   setPreviewQuality: (quality: 'low' | 'medium' | 'high') => void;
   magicWandTolerance: number;
   setMagicWandTolerance: (tolerance: number) => void;
@@ -185,7 +183,7 @@ interface EditorStore extends EditorState {
   refWizardOpen: boolean;
   setRefWizardOpen: (v: boolean) => void;
   // 左栏页签
-  setLeftPanelTab: (t: 'assets' | 'clips' | 'strokes') => void;
+  setLeftPanelTab: (t: 'assets' | 'clips' | 'strokes' | 'canvas' | 'global' | 'dcc') => void;
 }
 
 const defaultEditor: EditorState = {
@@ -203,7 +201,6 @@ const defaultEditor: EditorState = {
   selectedEffectTrackId: null,
   showGrid: true,
   nodeTurn3D: false,
-  showTrajectories: false,
   isDirty: false,
   autoMotionBlur: false,
   autoMotionBlurIntensity: 0.5,
@@ -223,7 +220,6 @@ const defaultEditor: EditorState = {
   markToolMode: 'point' as const,
   selectedMarkId: null,
   markDrag: null,
-  trajectorySnap: false,
   samState: {
     status: 'idle' as SAMStatus,
     model: 'mobilesam' as SAMModelType,
@@ -314,7 +310,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   selectEffectTrack: (id) => set({ selectedEffectTrackId: id }),
   toggleGrid: () => set((s) => ({ showGrid: !s.showGrid })),
   toggleNodeTurn3D: () => set((s) => ({ nodeTurn3D: !s.nodeTurn3D })),
-  toggleTrajectories: () => set((s) => ({ showTrajectories: !s.showTrajectories })),
   setAutoMotionBlur: (enabled) => set({ autoMotionBlur: enabled }),
   setAutoMotionBlurIntensity: (intensity) => set({ autoMotionBlurIntensity: intensity }),
   setMotionBlurBrushType: (type) => set({ motionBlurBrushType: type }),
@@ -327,7 +322,6 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setEffectBrushSpread: (spread) => set({ effectBrushSpread: spread }),
   setStrokeBlendMode: (m) => set({ strokeBlendMode: m }),
   setEffectCoordinateMode: (mode) => set({ effectCoordinateMode: mode }),
-  setTrajectorySnap: (enabled) => set({ trajectorySnap: enabled }),
   setPreviewQuality: (quality) => set({ previewQuality: quality }),
   togglePerspectiveForeshorten: () => set((s) => ({ perspectiveForeshorten: !s.perspectiveForeshorten })),
   setProcPreviewDock: (dock) => set({ procPreviewDock: dock }),

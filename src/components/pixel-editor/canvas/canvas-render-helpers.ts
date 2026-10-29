@@ -1,3 +1,18 @@
+const LANDMARK_COLORS: Record<string, string> = {
+  leftEye: '#60a5fa',  // 蓝
+  rightEye: '#4ade80', // 绿
+  nose: '#facc15',     // 黄
+  mouth: '#f87171',    // 红
+};
+
+const LANDMARK_LABELS: Record<string, string> = {
+  leftEye: '左眼',
+  rightEye: '右眼',
+  nose: '鼻',
+  mouth: '嘴',
+};
+
+
 /**
  * canvas-render-helpers.ts — Standalone render sub-functions for PixelCanvas.
  * Each function draws a specific overlay or section onto the canvas context.
@@ -5,7 +20,7 @@
  */
 
 import { drawDiamond, catmullRomToBezier, evaluateBezier, computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-utils';
-import type { TrajectoryCurvePoint, PuppetNode } from '@/lib/types';
+import type { PuppetNode } from '@/lib/types';
 import type { Sprite } from '@/lib/unified-types';
 import { resolveRegionCells } from '@/lib/sprite-marks';
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
@@ -238,239 +253,6 @@ export function renderCropPreview(
 
 // ============================================================
 
-export interface TrajectoryOverlayParams {
-  showTrajectories: boolean;
-  trajectories: import('@/lib/types').Trajectory[];
-  selectedSpriteId: string | null;
-  editMode: string;
-  trajectorySnap: boolean;
-  totalFrames: number;
-}
-
-export function renderTrajectoryOverlay(rc: RenderContext, params: TrajectoryOverlayParams) {
-  const { showTrajectories, trajectories, selectedSpriteId, editMode, trajectorySnap, totalFrames } = params;
-  if (!showTrajectories) return;
-
-  const { ctx, canvasWidth, canvasHeight, zoom, panX, panY, currentFrame } = rc;
-  const centerX = canvasWidth / 2;
-  const centerY = canvasHeight / 2;
-
-  for (const traj of trajectories) {
-    if (!traj.visible || traj.points.length === 0) continue;
-
-    const isSelected = traj.spriteId === selectedSpriteId;
-    const curveColor = isSelected ? '#00ffaa' : '#ff8800';
-    const pointColor = isSelected ? '#00ffdd' : '#ffaa44';
-    const highlightColor = '#ff3366';
-
-    // Trajectory snap visualization
-    if (trajectorySnap && isSelected && traj.points.length > 0) {
-      const currentPt = traj.points.find(p => p.frame === currentFrame);
-      if (currentPt) {
-        const snappedX = Math.round(currentPt.x);
-        const snappedY = Math.round(currentPt.y);
-        if (snappedX !== currentPt.x || snappedY !== currentPt.y) {
-          // Note: actual snap mutation is done in interaction handler, here we just render
-        }
-      } else {
-        let prevPt: TrajectoryCurvePoint | null = null;
-        let nextPt: TrajectoryCurvePoint | null = null;
-        for (let i = 0; i < traj.points.length - 1; i++) {
-          if (currentFrame >= traj.points[i].frame && currentFrame <= traj.points[i + 1].frame) {
-            prevPt = traj.points[i];
-            nextPt = traj.points[i + 1];
-            break;
-          }
-        }
-        if (prevPt && nextPt) {
-          const frameRange = nextPt.frame - prevPt.frame;
-          const t = frameRange > 0 ? (currentFrame - prevPt.frame) / frameRange : 0;
-          const interpX = prevPt.x + (nextPt.x - prevPt.x) * t;
-          const interpY = prevPt.y + (nextPt.y - prevPt.y) * t;
-
-          let nearestDist = Infinity;
-          let nearestPt: TrajectoryCurvePoint | null = null;
-          for (const pt of traj.points) {
-            const dist = Math.sqrt(Math.pow(interpX - pt.x, 2) + Math.pow(interpY - pt.y, 2));
-            if (dist < nearestDist) { nearestDist = dist; nearestPt = pt; }
-          }
-          if (nearestPt && nearestDist <= 2) {
-            const snapScreenX = panX + (centerX + nearestPt.x) * zoom;
-            const snapScreenY = panY + (centerY + nearestPt.y) * zoom;
-            ctx.save();
-            ctx.strokeStyle = '#00ffff';
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([3, 3]);
-            ctx.beginPath();
-            ctx.arc(snapScreenX, snapScreenY, 8, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.fillStyle = '#00ffff';
-            ctx.font = '9px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText('SNAP', snapScreenX, snapScreenY - 12);
-            ctx.restore();
-          }
-        }
-      }
-    }
-
-    // Convert trajectory points to screen coordinates
-    const screenPoints = traj.points.map((pt) => ({
-      x: panX + (centerX + pt.x) * zoom,
-      y: panY + (centerY + pt.y) * zoom,
-      frame: pt.frame,
-      rotation: pt.rotation,
-    }));
-
-    if (screenPoints.length < 2) {
-      const pt = screenPoints[0];
-      const isCurrentFrame = pt.frame === currentFrame;
-      drawDiamond(ctx, pt.x, pt.y, isCurrentFrame ? 7 : 5, isCurrentFrame ? highlightColor : pointColor, '#ffffff');
-      ctx.save();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '10px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(`F${pt.frame}`, pt.x, pt.y - 10);
-      ctx.restore();
-      continue;
-    }
-
-    // Draw bezier curve
-    ctx.save();
-    ctx.strokeStyle = curveColor;
-    ctx.lineWidth = isSelected ? 2.5 : 1.5;
-    ctx.globalAlpha = isSelected ? 0.9 : 0.5;
-
-    const polylinePoints: { x: number; y: number }[] = [];
-    const bezierSegments: { cp1x: number; cp1y: number; cp2x: number; cp2y: number }[] = [];
-
-    for (let i = 0; i < screenPoints.length - 1; i++) {
-      const p0 = i > 0 ? screenPoints[i - 1] : screenPoints[i];
-      const p1 = screenPoints[i];
-      const p2 = screenPoints[i + 1];
-      const p3 = i < screenPoints.length - 2 ? screenPoints[i + 2] : screenPoints[i + 1];
-
-      let bez = catmullRomToBezier({ x: p0.x, y: p0.y }, { x: p1.x, y: p1.y }, { x: p2.x, y: p2.y }, { x: p3.x, y: p3.y });
-
-      const curvePt = traj.points[i];
-      const nextCurvePt = traj.points[i + 1];
-      const hasCustomCp1 = curvePt && (curvePt.cp1x !== 0 || curvePt.cp1y !== 0);
-      const hasCustomCp2 = nextCurvePt && (nextCurvePt.cp2x !== 0 || nextCurvePt.cp2y !== 0);
-
-      if (hasCustomCp1) bez = { ...bez, cp1x: p1.x + curvePt.cp1x * zoom, cp1y: p1.y + curvePt.cp1y * zoom };
-      if (hasCustomCp2) bez = { ...bez, cp2x: p2.x + nextCurvePt.cp2x * zoom, cp2y: p2.y + nextCurvePt.cp2y * zoom };
-
-      bezierSegments.push(bez);
-      const steps = 20;
-      for (let s = 0; s <= steps; s++) {
-        const st = s / steps;
-        polylinePoints.push({ x: evaluateBezier(p1.x, bez.cp1x, bez.cp2x, p2.x, st), y: evaluateBezier(p1.y, bez.cp1y, bez.cp2y, p2.y, st) });
-      }
-    }
-
-    if (polylinePoints.length > 1) {
-      ctx.beginPath();
-      ctx.moveTo(polylinePoints[0].x, polylinePoints[0].y);
-      for (let i = 1; i < polylinePoints.length; i++) ctx.lineTo(polylinePoints[i].x, polylinePoints[i].y);
-      ctx.stroke();
-    }
-
-    // Control point handles in trajectory_edit mode
-    if (editMode === 'trajectory_edit' && isSelected) {
-      for (let i = 0; i < bezierSegments.length; i++) {
-        const seg = bezierSegments[i];
-        const p1 = screenPoints[i];
-        const p2 = screenPoints[i + 1];
-        const curvePt = traj.points[i];
-        const nextCurvePt = traj.points[i + 1];
-        const hasCustomCp1 = curvePt && (curvePt.cp1x !== 0 || curvePt.cp1y !== 0);
-        const hasCustomCp2 = nextCurvePt && (nextCurvePt.cp2x !== 0 || nextCurvePt.cp2y !== 0);
-
-        ctx.strokeStyle = hasCustomCp1 ? 'rgba(255, 200, 50, 0.6)' : 'rgba(0, 255, 170, 0.4)';
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(seg.cp1x, seg.cp1y); ctx.stroke();
-        ctx.fillStyle = hasCustomCp1 ? 'rgba(255, 200, 50, 0.8)' : 'rgba(0, 255, 170, 0.6)';
-        ctx.beginPath(); ctx.arc(seg.cp1x, seg.cp1y, hasCustomCp1 ? 5 : 3, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = hasCustomCp1 ? 'rgba(255, 200, 50, 1)' : 'rgba(0, 255, 170, 0.8)';
-        ctx.lineWidth = 1; ctx.stroke();
-
-        ctx.strokeStyle = hasCustomCp2 ? 'rgba(255, 200, 50, 0.6)' : 'rgba(0, 255, 170, 0.4)';
-        ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.moveTo(p2.x, p2.y); ctx.lineTo(seg.cp2x, seg.cp2y); ctx.stroke();
-        ctx.fillStyle = hasCustomCp2 ? 'rgba(255, 200, 50, 0.8)' : 'rgba(0, 255, 170, 0.6)';
-        ctx.beginPath(); ctx.arc(seg.cp2x, seg.cp2y, hasCustomCp2 ? 5 : 3, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = hasCustomCp2 ? 'rgba(255, 200, 50, 1)' : 'rgba(0, 255, 170, 0.8)';
-        ctx.lineWidth = 1; ctx.stroke();
-      }
-    }
-
-    ctx.restore();
-
-    // Diamond markers at trajectory points
-    for (const pt of screenPoints) {
-      const isCurrentFrame = pt.frame === currentFrame;
-      drawDiamond(ctx, pt.x, pt.y, isCurrentFrame ? 7 : 5, isCurrentFrame ? highlightColor : pointColor, '#ffffff');
-      ctx.save();
-      ctx.fillStyle = isCurrentFrame ? '#ffffff' : 'rgba(255,255,255,0.6)';
-      ctx.font = `${isCurrentFrame ? 'bold ' : ''}10px monospace`;
-      ctx.textAlign = 'center';
-      ctx.fillText(`F${pt.frame}`, pt.x, pt.y - (isCurrentFrame ? 7 : 5) - 4);
-      if (isSelected && Math.abs(pt.rotation) > 0.1) {
-        ctx.fillStyle = 'rgba(255,150,100,0.7)';
-        ctx.fillText(`${Math.round(pt.rotation)}°`, pt.x, pt.y + (isCurrentFrame ? 7 : 5) + 12);
-      }
-      ctx.restore();
-    }
-
-    // Direction arrows
-    if (isSelected && polylinePoints.length > 10) {
-      ctx.save();
-      ctx.fillStyle = curveColor;
-      ctx.globalAlpha = 0.6;
-      const arrowInterval = Math.floor(polylinePoints.length / 4);
-      for (let a = arrowInterval; a < polylinePoints.length - 2; a += arrowInterval) {
-        const pt = polylinePoints[a];
-        const nextPt = polylinePoints[a + 2];
-        if (!nextPt) continue;
-        const angle = Math.atan2(nextPt.y - pt.y, nextPt.x - pt.x);
-        ctx.save();
-        ctx.translate(pt.x, pt.y);
-        ctx.rotate(angle);
-        ctx.beginPath();
-        ctx.moveTo(4, 0); ctx.lineTo(-3, -3); ctx.lineTo(-3, 3); ctx.closePath();
-        ctx.fill();
-        ctx.restore();
-      }
-      ctx.restore();
-    }
-  }
-}
-
-// ============================================================
-// Landmark overlay（蒙皮转面手动特征点标注）
-// ============================================================
-
-const LANDMARK_COLORS: Record<string, string> = {
-  leftEye: '#60a5fa',  // 蓝
-  rightEye: '#4ade80', // 绿
-  nose: '#facc15',     // 黄
-  mouth: '#f87171',    // 红
-};
-
-const LANDMARK_LABELS: Record<string, string> = {
-  leftEye: '左眼',
-  rightEye: '右眼',
-  nose: '鼻',
-  mouth: '嘴',
-};
-
-/**
- * 在 sprite_edit 模式下绘制精灵标记（sprite-marks）。
- * marks 为精灵上的命名标记；drag 为拖拽中的工作副本（按 id
- * 替换显示，paintCells 为涂画中的逐格预览）。值标记无空间
- * 形态，不在画布绘制（只在标记面板列出）。
- */
 export function renderMarkOverlay(
   rc: RenderContext,
   sprite: import('@/lib/unified-types').Sprite,
