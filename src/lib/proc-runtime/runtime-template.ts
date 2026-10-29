@@ -2094,13 +2094,15 @@ const FB_CROUCH_DUR = 0.20;   // 跳跃预备总时长（s）：下蹲 0.13 + �
 const FB_EXT_U = 0.65;        // 蹬伸段在预备进度中的起点（0.13/0.20）
 const FB_STANCE = 0.6;        // 步态周期中支撑段占比（摆动段 0.4）
 const FB_SWING = 0.38;        // 步长推导用等效摆幅（rad）：stride = 2·腿长·sin(摆幅)
+const FB_TOP_KAPPA = 0.16;    // 俯视纵向走廊：支撑段脚沿轴速度 = 行进速度 × 此投影系数（正面/背面图的纵深压短）
 const FB_LEG_NAME = /leg|thigh|shin|calf|femur|foot|feet|toe|ankle|knee|paw|腿|脚|足|膝|踝|胫|股|ひざ|つま先/i;
 const FB_NOT_LEG = /arm|wing|tail|ear|horn|手|腕|肘|肩|翼|耳|眼/i;
 let FB = null;           // 懒构建（首帧 costume/variant 已定）
 let fbCrouchT = 0;       // >0 = 跳跃预备倒计时（剩余秒，物理侧递减、到点给初速）
 let fbPhase = 0;         // 步态相位（按实测位移推进，撞墙即停）
 let fbWalkW = 0;         // 横版行走混合权重
-let fbTopW = 0;          // 俯视行走混合权重（矢量目标，不再分横纵占优轴）
+let fbTopW = 0;          // 俯视行走混合权重
+let fbTopVertW = 0;      // 俯视纵向（走廊驱动）混合权重：主导轴在横/纵间切换时平滑过渡，fbPhase 共用不重置
 let fbPrevX = null, fbPrevPY = null;
 // —— 脚目标驱动的状态 ——
 let fbStage = 'none';    // 跳跃阶段：'none' | 'crouch' | 'air' | 'absorb'
@@ -2196,6 +2198,63 @@ function fbSolveChain(J, tipExt, rootOffY, F, footDelta) {
   for (let i = 0; i < n - 1; i++) cumA[i] = segDelta[i];
   cumA[n - 1] = footDelta !== null && footDelta !== undefined ? footDelta : segDelta[m - 2];
   return { P, cumA, tip: T };
+}
+/** 俯视纵向走廊几何：链根 → 静止脚尖的轴线（单位矢量 + 全长
+ * D）。脚尖口径与 fbRestTarget 一致：2 节链用已含延伸的 restT，
+ * 3+ 节链沿末段方向续 tipExt。链太短（<2 关节或 D<2）返回 null，
+ * 该链退回平面步态。 */
+function fbCorridorGeom(rt) {
+  const J = rt.J, n = J.length;
+  if (n < 2) return null;
+  let T;
+  if (n === 2) T = rt.restT;
+  else {
+    const lx = J[n - 1][0] - J[n - 2][0], ly = J[n - 1][1] - J[n - 2][1];
+    const ll = Math.hypot(lx, ly) || 1;
+    T = [J[n - 1][0] + (lx / ll) * rt.tipExt, J[n - 1][1] + (ly / ll) * rt.tipExt];
+  }
+  const dx = T[0] - J[0][0], dy = T[1] - J[0][1];
+  const D = Math.hypot(dx, dy);
+  if (D < 2) return null;
+  return { ux: dx / D, uy: dy / D, D };
+}
+/** 俯视纵向走廊驱动（正面/背面图专用，取代两骨解算）：膝盖朝
+ * 画面外（纵深）弯，投影只表现为腿沿自身轴线伸缩——各关节到轴
+ * 线的垂距恒等于静止值、沿轴距离按 k = q/D 同比例缩放（望远镜
+ * 式伸缩），关节骑在走廊里做一维运动，膝盖从构造上不会左右
+ * 弯。g = fbCorridorGeom 的走廊几何，q = 脚尖沿轴距离（由相位
+ * 行程给出），B = 身体偏移（侧摆/微伏，全链与根共用）。返回
+ * {P, cumA, tip} 与 fbSolveChain 同
+ * 形状：各节角度由相邻关节实际位置导出，末节（脚）跟随末段方
+ * 向（与小腿的静止相对角不变）。 */
+function fbCorridorChain(J, tipExt, g, q, B) {
+  const n = J.length;
+  const R0 = J[0];
+  if (n < 2 || !g) return { P: J.map((p) => [p[0] + B[0], p[1] + B[1]]), cumA: new Array(n).fill(0), tip: [R0[0] + B[0], R0[1] + B[1]] };
+  const k = q / g.D;
+  const P = [];
+  for (let i = 0; i < n; i++) {
+    const vx = J[i][0] - R0[0], vy = J[i][1] - R0[1];
+    const t = vx * g.ux + vy * g.uy;               // 沿轴静止距离
+    const px = vx - t * g.ux, py = vy - t * g.uy;  // 静止垂距向量（恒定）
+    P.push([R0[0] + B[0] + t * k * g.ux + px, R0[1] + B[1] + t * k * g.uy + py]);
+  }
+  const tip = [R0[0] + B[0] + q * g.ux, R0[1] + B[1] + q * g.uy];
+  // 角度导出：点列 [...关节, 脚尖] 与静止点列逐段比方向
+  const RR = [...J];
+  if (n === 2) RR.push(fbRestTarget(J, tipExt));
+  else {
+    const lx = J[n - 1][0] - J[n - 2][0], ly = J[n - 1][1] - J[n - 2][1];
+    const ll = Math.hypot(lx, ly) || 1;
+    RR.push([J[n - 1][0] + (lx / ll) * tipExt, J[n - 1][1] + (ly / ll) * tipExt]);
+  }
+  const PP = [...P, tip];
+  const cumA = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    cumA[i] = Math.atan2(PP[i + 1][1] - PP[i][1], PP[i + 1][0] - PP[i][0])
+            - Math.atan2(RR[i + 1][1] - RR[i][1], RR[i + 1][0] - RR[i][0]);
+  }
+  return { P, cumA, tip };
 }
 /** 解算结果回写 pose：与模拟遍/旧兜底同口径——先按当前条目测
  * 中心 refC，再叠角、复算中心、把中心按权重 w 补差到目标位。 */
@@ -2535,7 +2594,20 @@ function runFallbackPass(pose, dt) {
       fbTipPrev.set(fb.chains.indexOf(s.chain), solved.tip);
     }
   }
-  // ================= 俯视：平面脚目标步态 =================
+  // ================= 俯视步态：横向平面步态 / 纵向走廊驱动 =================
+  // 横向占优（出侧面图）：平面脚目标步态（脚目标 + 两骨解算），
+  // 追加六定版逐字沿用（stride 段与平面落点/钉点均未改）。
+  // 纵向占优（出正面/背面图）：膝盖朝画面外（纵深）弯，平面内解
+  // 算只能让膝盖在画面内左右弹（青蛙式撇膝）——改走廊驱动：解
+  // 算退场，各关节骑在「链根→静止脚尖」轴线上做一维伸缩（见
+  // fbCorridorChain，垂距恒定、沿轴望远镜式缩放）。
+  // 走廊行程刻意压短：半扫幅 A = 0.03·D、摆动收脚 0.04·D，脚沿
+  // 轴总行程 2A + 收脚 ≈ 0.1·D（D≈91 的角色 ≈9px，十像素量级
+  // 以内）；步频按投影关系对齐：支撑段脚沿轴速度 = 行进速度 ×
+  // FB_TOP_KAPPA(0.16)，周期距离 = 2Ā/(FB_STANCE·κ)，并以
+  // PHYS.speed/3.2 为周期距离下限钳住频率上限——小步快迈。
+  // 主导轴切换：fbTopVertW 平滑过渡、两套解算结果按权重混合，
+  // fbPhase 共用、只按混合速率推进、从不重置。
   const movingTop = !side && (Math.abs(dxF) + Math.abs(dyF)) > 1e-6;
   fbTopW += ((fb.walkOk && movingTop ? 1 : 0) - fbTopW) * Math.min(1, dt / 0.12);
   if (!side && fb.walkOk && fbTopW > 0.003) {
@@ -2567,47 +2639,126 @@ function runFallbackPass(pose, dt) {
     }
     const cycTop = 2 * stride;                  // 周期距离（相位 2π 的行进距离）
     const stanceTravel = FB_STANCE * cycTop;    // 支撑行程：脚相对身体的后扫全程
-    fbPhase += 2 * Math.PI * dist / cycTop;
+    // —— 纵向走廊口径：各链走廊几何、行程与周期距离 ——
+    const corGeoms = chainRT.map((rt) => (rt ? fbCorridorGeom(rt) : null));
+    let dMean = 0, dCnt = 0;
+    for (const g of corGeoms) if (g) { dMean += g.D; dCnt++; }
+    dMean = dCnt ? dMean / dCnt : 0;
+    const corA = (D) => Math.max(0.8, Math.min(4, 0.03 * D));    // 沿轴扫掠半幅（px）
+    const corTuck = (D) => Math.max(1, Math.min(5, 0.04 * D));   // 摆动收脚量（px）
+    const cycVert = dCnt
+      ? Math.max(PHYS.speed / 3.2, Math.min(140, (2 * corA(dMean)) / (FB_STANCE * FB_TOP_KAPPA)))
+      : cycTop;
+    const vertNow = dCnt > 0 && Math.abs(fbTopDir[1]) >= Math.abs(fbTopDir[0]) ? 1 : 0;
+    fbTopVertW += (vertNow - fbTopVertW) * Math.min(1, dt / 0.09);
+    if (fbTopVertW > 0.98) { fbTopPlants.clear(); fbSwingFrom.clear(); } // 全纵向期间平面落点状态作废，回横向时就地重落脚
+    fbPhase += 2 * Math.PI * dist * ((1 - fbTopVertW) / cycTop + fbTopVertW / cycVert);
+    // 各链当帧相位/段（两套驱动共用）
+    const us = [], segs = [];
+    fb.chains.forEach((chain, ci) => {
+      let u = ((fbPhase + chain.phase) / (2 * Math.PI)) % 1;
+      if (u < 0) u += 1;
+      us.push(u); segs.push(u < FB_STANCE ? 0 : 1);
+    });
+    // 身体侧摆/微伏（仅走廊模式）：侧摆朝支撑侧——各链根相对链根
+    // 质心的横向（垂直行进方向）坐标按支撑 +1 / 摆动 −1 加权平均
+    // 得侧倾 m∈[−1,1]，幅 1.5px；微伏一周期两下、幅 0.8px。偏移
+    // B 全链共用并同值注入非腿部件（与侧视 bodyNow 同法）。
+    let B = [0, 0];
+    if (fbTopVertW > 0.003) {
+      const latX = -fbTopDir[1], latY = fbTopDir[0];
+      let cx = 0, cy = 0, cn = 0;
+      fb.chains.forEach((chain, ci) => { const rt = chainRT[ci]; if (rt) { cx += rt.J[0][0]; cy += rt.J[0][1]; cn++; } });
+      if (cn) { cx /= cn; cy /= cn; }
+      let num = 0, den = 0;
+      fb.chains.forEach((chain, ci) => {
+        const rt = chainRT[ci]; if (!rt) return;
+        const li = (rt.J[0][0] - cx) * latX + (rt.J[0][1] - cy) * latY;
+        den += Math.abs(li);
+        num += (segs[ci] === 0 ? 1 : -1) * li;
+      });
+      const m = den > 1e-6 ? num / den : 0;
+      const wV = fbTopVertW;
+      B = [latX * 1.5 * m * wV, latY * 1.5 * m * wV - 0.8 * (0.5 - 0.5 * Math.cos(2 * fbPhase)) * wV];
+      if (Math.abs(B[0]) > 0.01 || Math.abs(B[1]) > 0.01) {
+        for (const part of PARTS) {
+          if (fb.legRole.has(part.key)) continue;
+          const e = pose[part.key] || (pose[part.key] = { a: 0, dy: 0, rim: 0, glint: 0 });
+          e.dx = (e.dx || 0) + B[0] * fbTopW;
+          e.dy = (e.dy || 0) + B[1] * fbTopW;
+        }
+      }
+    }
     fb.chains.forEach((chain, ci) => {
       const rt = chainRT[ci];
       if (!rt) return;
       const { J, restT } = rt;
-      let u = ((fbPhase + chain.phase) / (2 * Math.PI)) % 1;
-      if (u < 0) u += 1;
-      const seg = u < FB_STANCE ? 0 : 1;
-      let F;
-      if (seg === 0) {
-        if (fbSegPrev.get(ci) !== 0 || !fbTopPlants.has(ci)) {
-          const tp = tipPrevOf(ci);
-          fbTopPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 就地落脚（世界平面位）
+      const u = us[ci];
+      const seg = segs[ci];
+      let solved = null;
+      if (fbTopVertW < 0.999) {
+        let F;
+        if (seg === 0) {
+          if (fbSegPrev.get(ci) !== 0 || !fbTopPlants.has(ci)) {
+            const tp = tipPrevOf(ci);
+            fbTopPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 就地落脚（世界平面位）
+          }
+          const p = fbTopPlants.get(ci);
+          F = [p[0] - char.x, p[1] - charOriginY()];
+        } else {
+          if (fbSegPrev.get(ci) !== 1 || !fbSwingFrom.has(ci)) fbSwingFrom.set(ci, [...tipPrevOf(ci)]);
+          const from = fbSwingFrom.get(ci);
+          const s = (u - FB_STANCE) / (1 - FB_STANCE);
+          const sm = s * s * (3 - 2 * s);
+          // 摆动终点在脚家位沿行进方向前移半个支撑行程处：扫掠窗以
+          // 「过家位、沿行进方向的直线」为轴（链根在该轴上的投影为
+          // 窗心，与侧视窗以链根横坐标为心、落在 家位高度线上同构），
+          // 脚全程围绕自己的家位前后扫，不再被拽向链根。
+          const endX = restT[0] + fbTopDir[0] * (stanceTravel / 2), endY = restT[1] + fbTopDir[1] * (stanceTravel / 2);
+          // 外弧方向：家位相对链根的横向分量（脚绕身体外侧回摆，不
+          // 穿身体中心）；横向分量近零（脚在行进轴上）时退化为行进
+          // 方向的垂直方向。
+          let px = (restT[0] - J[0][0]) - ((restT[0] - J[0][0]) * fbTopDir[0] + (restT[1] - J[0][1]) * fbTopDir[1]) * fbTopDir[0];
+          let py = (restT[1] - J[0][1]) - ((restT[0] - J[0][0]) * fbTopDir[0] + (restT[1] - J[0][1]) * fbTopDir[1]) * fbTopDir[1];
+          const pl = Math.hypot(px, py);
+          if (pl > 1e-6) { px /= pl; py /= pl; } else { px = -fbTopDir[1]; py = fbTopDir[0]; }
+          const bow = stanceTravel * 0.18 * Math.sin(Math.PI * s);
+          F = [from[0] + (endX - from[0]) * sm + px * bow,
+               from[1] + (endY - from[1]) * sm + py * bow];
         }
-        const p = fbTopPlants.get(ci);
-        F = [p[0] - char.x, p[1] - charOriginY()];
-      } else {
-        if (fbSegPrev.get(ci) !== 1 || !fbSwingFrom.has(ci)) fbSwingFrom.set(ci, [...tipPrevOf(ci)]);
-        const from = fbSwingFrom.get(ci);
-        const s = (u - FB_STANCE) / (1 - FB_STANCE);
-        const sm = s * s * (3 - 2 * s);
-        // 摆动终点在脚家位沿行进方向前移半个支撑行程处：扫掠窗以
-        // 「过家位、沿行进方向的直线」为轴（链根在该轴上的投影为
-        // 窗心，与侧视窗以链根横坐标为心、落在 家位高度线上同构），
-        // 脚全程围绕自己的家位前后扫，不再被拽向链根。
-        const endX = restT[0] + fbTopDir[0] * (stanceTravel / 2), endY = restT[1] + fbTopDir[1] * (stanceTravel / 2);
-        // 外弧方向：家位相对链根的横向分量（脚绕身体外侧回摆，不
-        // 穿身体中心）；横向分量近零（脚在行进轴上）时退化为行进
-        // 方向的垂直方向。
-        let px = (restT[0] - J[0][0]) - ((restT[0] - J[0][0]) * fbTopDir[0] + (restT[1] - J[0][1]) * fbTopDir[1]) * fbTopDir[0];
-        let py = (restT[1] - J[0][1]) - ((restT[0] - J[0][0]) * fbTopDir[0] + (restT[1] - J[0][1]) * fbTopDir[1]) * fbTopDir[1];
-        const pl = Math.hypot(px, py);
-        if (pl > 1e-6) { px /= pl; py /= pl; } else { px = -fbTopDir[1]; py = fbTopDir[0]; }
-        const bow = stanceTravel * 0.18 * Math.sin(Math.PI * s);
-        F = [from[0] + (endX - from[0]) * sm + px * bow,
-             from[1] + (endY - from[1]) * sm + py * bow];
+        fbSegPrev.set(ci, seg);
+        solved = fbSolveChain(J, rt.tipExt, 0, F, null);
       }
-      fbSegPrev.set(ci, seg);
-      const solved = fbSolveChain(J, rt.tipExt, 0, F, null);
-      fbWriteChain(pose, chain.keys, solved, fbTopW);
-      fbTipPrev.set(ci, solved.tip);
+      if (fbTopVertW > 0.001 && corGeoms[ci]) {
+        // 走廊行程：支撑段脚沿轴单调扫过（扫掠符号 σ = 行进方向在
+        // 轴向上的投影符号——身体越过脚时脚相对根的沿轴坐标单调
+        // 变化，方向由 σ 定，与侧视钉点后扫同构造）；摆动段平滑
+        // 返回并在中途额外收脚（沿轴距离缩短 = 纵深屈膝的投影）。
+        const g = corGeoms[ci];
+        const dot = fbTopDir[0] * g.ux + fbTopDir[1] * g.uy;
+        const sigma = dot < -0.05 ? -1 : 1;
+        const A = corA(g.D), tuck = corTuck(g.D);
+        let q;
+        if (seg === 0) q = g.D + sigma * A * (1 - 2 * (u / FB_STANCE));
+        else {
+          const s = (u - FB_STANCE) / (1 - FB_STANCE);
+          const sm = s * s * (3 - 2 * s);
+          q = g.D + sigma * A * (2 * sm - 1) - tuck * Math.sin(Math.PI * s);
+        }
+        const cs = fbCorridorChain(J, rt.tipExt, g, q, B);
+        if (solved) {
+          const wV = fbTopVertW;
+          solved = {
+            P: cs.P.map((cp, i) => [solved.P[i][0] + (cp[0] - solved.P[i][0]) * wV, solved.P[i][1] + (cp[1] - solved.P[i][1]) * wV]),
+            cumA: cs.cumA.map((ca, i) => solved.cumA[i] + (ca - solved.cumA[i]) * wV),
+            tip: [solved.tip[0] + (cs.tip[0] - solved.tip[0]) * wV, solved.tip[1] + (cs.tip[1] - solved.tip[1]) * wV],
+          };
+        } else solved = cs;
+      }
+      if (solved) {
+        fbWriteChain(pose, chain.keys, solved, fbTopW);
+        fbTipPrev.set(ci, solved.tip);
+      }
     });
   }
 }
