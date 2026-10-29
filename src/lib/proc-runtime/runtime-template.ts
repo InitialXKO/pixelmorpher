@@ -2451,10 +2451,15 @@ function runFallbackPass(pose, dt) {
       stride = Math.min(stride, Math.max(10, hCap / 0.6));
     }
     const cycDist = 2 * stride;              // 一个步态周期（相位 2π）的行进距离
-    const frontReach = 0.3 * cycDist;        // 落脚点在链根前方的横距
+    const frontReach = 0.3 * cycDist;        // 落脚点在链根前方的横距（沿朝向，见下）
     const lift = Math.max(2, Math.min(8, cycDist * 0.12)); // 摆动段脚尖抬高峰值
-    if (fbStage === 'none' && fb.walkOk && char.onGround && !char.ledge) fbPhase += Math.PI * dxF / stride;
+    // 步态在朝向空间定义：faceF = 当前 variant 本地帧里「前方」的 x
+    // 符号（镜像朝向 5..7 本地前方为 −x）。相位按沿朝向的行进量
+    // dxF·faceF 推进、摆动落点取链根 + faceF·frontReach——左右行走
+    // 互为镜像、周期顺序一致（支撑后扫、摆动前送）；若按带符号世界
+    // 位移推进，左行时 u 逆行且落点落到行进后方（曾实测只有右行对）。
     const faceF = (char.variant >= 5 && char.variant <= 7) ? -1 : 1;
+    if (fbStage === 'none' && fb.walkOk && char.onGround && !char.ledge) fbPhase += Math.PI * dxF * faceF / stride;
     let sink = 0; // 支撑几何反推的身体下沉（行走时）
     const solvedList = [];
     fb.chains.forEach((chain, ci) => {
@@ -2503,7 +2508,7 @@ function runFallbackPass(pose, dt) {
           const from = fbSwingFrom.get(ci);
           const s = (u - FB_STANCE) / (1 - FB_STANCE);
           const sm = s * s * (3 - 2 * s);
-          F = [from[0] + (J[0][0] + frontReach - from[0]) * sm, restT[1] + lift * 4 * s * (1 - s)];
+          F = [from[0] + (J[0][0] + faceF * frontReach - from[0]) * sm, restT[1] + lift * 4 * s * (1 - s)];
         }
         fbSegPrev.set(ci, seg);
         footDelta = n >= 3 ? fbFootPitch(u, faceF) : null;
