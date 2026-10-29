@@ -1057,6 +1057,30 @@ function ensureAtlas(gl, variant, costumeName) {
       entries.push(['slash:' + perf.id + ':' + fi, tile, { composite: 'slashfx', params: { hidden: false } }, false, fr, null, 0]);
     }
   }
+  // 逐帧修正替代图（矫正烘焙）：表演 spriteFrames 里与当前服装集对上的
+  // 替代图按当前变体镜像烘成瓦片入图集，条目键带 #corr<perfId>:<本地帧>，
+  // 打包时折进部件条目的 corrFrames（与 #anim 同路）；绘制时主导表演在
+  // 该本地帧有条目才换瓦片（见 corrPick）。
+  for (const perf of PERFORMANCES) {
+    const sfx = perf.spriteFrames;
+    if (!sfx) continue;
+    for (const sk of Object.keys(sfx)) {
+      const byCostume = sfx[sk];
+      const frames = byCostume ? byCostume[costumeName] : undefined;
+      if (!frames) continue;
+      const part = PARTS.find((p) => p.key === sk);
+      if (!part) continue;
+      const mirrored = variantMirrored(part, variant);
+      for (const lf of Object.keys(frames)) {
+        const grid = frames[lf];
+        const key = [sk, variant, costumeName, 'C', perf.id, lf, grid.w, grid.h, grid.plug.join(','), gridHashOf(grid), mirrored ? 'M' : ''].join('|');
+        let tile = tileCache.get(key);
+        if (!tile) { tile = spriteTileOf(grid, mirrored); tileCache.set(key, tile); }
+        tiles.push(tile);
+        entries.push([sk + '#corr' + perf.id + ':' + lf, tile, { params: { ...part.base, off: [0, 0] }, composite: 'sprite', halo: 0, baseSprite: null }, mirrored, grid, null, 0]);
+      }
+    }
+  }
   // 团块/火焰场槽（乙8 改造）：跟随口径 = 范围/位置跟、形态不跟
   // （用户定案）——烘焙帧一缩放就是拉伸形态，故图集只预留定尺寸
   // 槽位（域上限 = 形变 2 倍时的场尺寸），每帧由场作业按当帧
@@ -1094,6 +1118,7 @@ function ensureAtlas(gl, variant, costumeName) {
   const height = pack.height;
   const slashTiles = {};
   const animFrameMap = {};
+  const corrFrameMap = {};
   const data = new Uint8Array(256 * height * 4);
   const baseData = new Uint8Array(256 * height * 4);
   const glowData = new Uint8Array(256 * height * 4);
@@ -1189,8 +1214,16 @@ function ensureAtlas(gl, variant, costumeName) {
     }
       }
     const ekey = entries[i][0];
+    const corrPos = ekey.indexOf('#corr');
     const animPos = ekey.indexOf('#anim');
-    if (animPos >= 0) {
+    if (corrPos >= 0) {
+      // 逐帧修正替代瓦片：不单独成条目，挂到部件条目的 corrFrames
+      // （键 "<perfId>:<本地帧>"；绘制时按 corrPick 选帧）
+      const bk = ekey.slice(0, corrPos);
+      const ck = ekey.slice(corrPos + 5);
+      const rec = (corrFrameMap[bk] = corrFrameMap[bk] || {});
+      rec[ck] = { tile: tile, place: [ax, ay] };
+    } else if (animPos >= 0) {
       // 变体瓦片（动态表面步 fi × 置换步 di）：不单独成条目，挂到
       // 部件条目的 animFrames（键 "fi,di"；步 0,0 即条目自身）
       const bk = ekey.slice(0, animPos);
@@ -1207,6 +1240,10 @@ function ensureAtlas(gl, variant, costumeName) {
   for (const bk in animFrameMap) {
     const baseEntry = map.get(bk);
     if (baseEntry) baseEntry.animFrames = animFrameMap[bk];
+  }
+  for (const bk in corrFrameMap) {
+    const baseEntry = map.get(bk);
+    if (baseEntry) baseEntry.corrFrames = corrFrameMap[bk];
   }
   if (atlasState && atlasState.tex) gl.deleteTexture(atlasState.tex);
   if (atlasState && atlasState.baseTex) gl.deleteTexture(atlasState.baseTex);
@@ -4102,6 +4139,7 @@ function frame(now) {
   prevBehaviorOutputs = behaviorOutputs;
   // 表演层：包络权重内合成到行为姿态之上
   const stackPick = new Map();
+  const corrPick = new Map();
   for (let i = activePerfs.length - 1; i >= 0; i--) {
     const act = activePerfs[i];
     act.t += dt;
@@ -4143,6 +4181,25 @@ function frame(now) {
           const frames = sf[sk].frames;
           const idx = Math.max(0, Math.min(frames.length - 1, Math.round(u * (frames.length - 1))));
           stackPick.set(sk, { w: w, ops: frames[idx], costume: sf[sk].costume });
+        }
+      }
+      // 逐帧修正选帧：带 spriteFrames 的表演里，本地帧（floor(t×帧率)，
+      // 与片段事件同口径）真有替代图的才参选，权重最大者胜（同
+      // stackPick 口径）；服装集维度由图集打包侧把关（corrFrames 里
+      // 只有当前集的瓦片），此处不查
+      const sfx2 = act.perf.spriteFrames;
+      if (sfx2) {
+        const lf = Math.floor(act.t * FRAME_RATE);
+        for (const sk of Object.keys(sfx2)) {
+          const byCostume = sfx2[sk];
+          let has = false;
+          for (const ck of Object.keys(byCostume)) {
+            if (byCostume[ck] && (lf in byCostume[ck])) { has = true; break; }
+          }
+          if (!has) continue;
+          const prev = corrPick.get(sk);
+          if (prev && prev.w >= w) continue;
+          corrPick.set(sk, { w: w, key: act.perf.id + ':' + lf });
         }
       }
     }
@@ -4224,6 +4281,12 @@ function frame(now) {
       }
       const v = entry.animFrames[fi + ',' + di];
       if (v) { tile = v.tile; place = v.place; }
+    }
+    // 逐帧像素修正（矫正烘焙）：主导表演在本帧有替代图 → 换瓦片
+    // （盖过表面动画帧：修正是逐帧定点补画，语义在最上层）
+    if (entry.corrFrames) {
+      const cp = corrPick.get(part.key);
+      if (cp) { const v = entry.corrFrames[cp.key]; if (v) { tile = v.tile; place = v.place; } }
     }
     // 像素链作业收集：带 pixelGraph 的精灵部件（置换变体瓦片由
     // 干净瓦片在 CPU 烘出、链不跟，v1 边界——有 disp 时整件跳过）

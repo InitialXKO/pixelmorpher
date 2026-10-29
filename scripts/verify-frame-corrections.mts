@@ -94,13 +94,43 @@ for (const [name, wt] of [
   ok(!!back && Math.abs(back.x - 3) < 1e-6 && Math.abs(back.y - 1) < 1e-6, `逆映射往返：${name}`);
 }
 
-// ---------- 4) convert 点名 ----------
-const pkg = convertCharacterToRuntimePackage(character, { spr1: sprite } as any, { frameRate: 12 });
-ok(pkg.warnings.some((w) => w.includes('逐帧像素修正') && w.includes('体')), 'convert 对带修正节点点名');
+// ---------- 4) convert 烘焙 + 点名 ----------
+// 无片段/轨道上下文：全部修正无窗可挂 → 全数点名
+const pkg0 = convertCharacterToRuntimePackage(character, { spr1: sprite } as any, { frameRate: 12 });
+ok(pkg0.warnings.some((w) => w.includes('逐帧像素修正') && w.includes('体')), 'convert 对带修正节点点名');
+ok(!pkg0.performances.some((p: any) => p.spriteFrames), '无窗时不生成替代图');
+
+// 带轨道 + 片段窗（0..15）：帧 5 修正（图对）烘进轨道表演与段表演；
+// 帧 7 图不对、帧 20 窗外 → 点名 2/3
+const charB = JSON.parse(JSON.stringify(character));
+charB.nodes.n1.tracks = { x: { interpolation: 'linear', keyframes: [{ frame: 0, value: 0 }, { frame: 10, value: 32 }] } };
+charB.nodes.n1.frameCorrections[20] = { spriteId: 'spr1', commands: [drawCmd] };
+const clips = [{ id: 'clipA', name: '走', puppetCharacterId: 'ch1', startFrame: 0, endFrame: 15, loop: false }] as any;
+const pkg = convertCharacterToRuntimePackage(charB, { spr1: sprite } as any, { frameRate: 12, totalFrames: 16, clips });
+const clipPerf = pkg.performances.find((p: any) => p.id === 'clip_clipA') as any;
+ok(!!clipPerf, '段表演已生成');
+const sfGrid = clipPerf?.spriteFrames?.body?.cs1?.[5];
+ok(!!sfGrid, '段表演带帧 5 替代图（本地帧 = 工程帧 − 窗起点）');
+const expected = applyBrushCommandsToGrid(sprite.data, [drawCmd as any], 5);
+ok(!!sfGrid && JSON.stringify(sfGrid.data) === JSON.stringify(expected), '替代图 = 编辑器同一求值器回放结果（逐格一致）');
+ok(!!sfGrid && sfGrid.w === 4 && sfGrid.h === 4 && sfGrid.plug[0] === 2 && sfGrid.plug[1] === 2, '替代图尺寸/plug 与显示图一致');
+ok(!clipPerf?.spriteFrames?.body?.cs1?.[7], '帧 7 图不对 → 不烘');
+const tracksPerf = pkg.performances.find((p: any) => p.id === 'tracks') as any;
+ok(!!tracksPerf?.spriteFrames?.body?.cs1?.[5], '轨道表演（全程窗）也带帧 5 替代图');
+ok(!tracksPerf?.spriteFrames?.body?.cs1?.[20], '帧 20 在总帧窗外 → 不烘');
+ok(pkg.warnings.some((w) => w.includes('逐帧像素修正') && w.includes('2/3')), '未烘 2/3 帧点名（图不对 + 窗外）');
+
 const cleanChar = JSON.parse(JSON.stringify(character));
 delete cleanChar.nodes.n1.frameCorrections;
 const pkg2 = convertCharacterToRuntimePackage(cleanChar, { spr1: sprite } as any, { frameRate: 12 });
 ok(!pkg2.warnings.some((w) => w.includes('逐帧像素修正')), '无修正时不点名');
+
+// ---------- 5) 模板切图接线（结构校验，与 verify-proc-runtime 同口径） ----------
+{
+  const { buildRuntimeHtml } = await import('../src/lib/proc-runtime/runtime-template');
+  const html = buildRuntimeHtml(pkg);
+  ok(html.includes('spriteFrames') && html.includes('corrPick') && html.includes('corrFrames') && html.includes('#corr'), '运行时 HTML 含替代图打包/折叠/选帧/切图全链');
+}
 
 console.log(`frame-corrections probe: ${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
