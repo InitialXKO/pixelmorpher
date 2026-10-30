@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 
 import { useProjectStore, useEditorStore } from '@/lib/store';
+import { computeProceduralValue } from '@/lib/engine/procedural';
 import type {
   ProceduralAnimation,
   ProceduralConfig,
@@ -248,65 +249,8 @@ function ProceduralMiniPreview({
   );
 }
 
-// ---- Procedural value computation (simplified for preview) ----
-
-function computeProceduralValue(config: ProceduralConfig, frame: number): number {
-  switch (config.type) {
-    case 'noise': {
-      // Simple multi-octave pseudo-noise
-      let value = 0;
-      let amp = config.amplitude;
-      let freq = config.frequency;
-      for (let o = 0; o < config.octaves; o++) {
-        value += amp * pseudoNoise(frame * freq + config.seed + o * 100);
-        amp *= 0.5;
-        freq *= 2;
-      }
-      return value;
-    }
-    case 'wave': {
-      const phaseRad = (config.phase * Math.PI) / 180;
-      const t = frame * config.frequency * Math.PI * 2 + phaseRad;
-      switch (config.waveType) {
-        case 'sine':
-          return config.amplitude * Math.sin(t);
-        case 'triangle':
-          return config.amplitude * (2 * Math.abs(2 * (t / (2 * Math.PI) - Math.floor(t / (2 * Math.PI) + 0.5))) - 1);
-        case 'square':
-          return config.amplitude * (Math.sin(t) >= 0 ? 1 : -1);
-        case 'sawtooth':
-          return config.amplitude * 2 * (t / (2 * Math.PI) - Math.floor(t / (2 * Math.PI) + 0.5));
-        default:
-          return 0;
-      }
-    }
-    case 'spring': {
-      // Damped spring oscillation simulation
-      const { stiffness, damping, mass, restLength } = config;
-      const omega = Math.sqrt(stiffness / mass);
-      const gamma = damping / (2 * mass);
-      const dampedOmega = Math.sqrt(Math.max(0, omega * omega - gamma * gamma));
-      const t = frame * 0.1;
-      const envelope = Math.exp(-gamma * t);
-      return restLength + envelope * (restLength + 10) * Math.cos(dampedOmega * t);
-    }
-    case 'jitter': {
-      // Pseudo-random jitter with optional smoothing
-      if (config.smooth) {
-        return config.amount * pseudoNoise(frame * config.frequency);
-      }
-      return config.amount * (pseudoNoise(frame * config.frequency * 10) > 0 ? 1 : -1);
-    }
-    default:
-      return 0;
-  }
-}
-
-/** Simple pseudo-noise function for preview purposes */
-function pseudoNoise(x: number): number {
-  const s = Math.sin(x * 12.9898 + 78.233) * 43758.5453;
-  return (s - Math.floor(s)) * 2 - 1;
-}
+// ---- 取值：小预览直接用引擎 computeProceduralValue（文件头 import），
+// 与主画布/播放器实际生效的曲线同一函数，不再维护本地近似副本 ----
 
 // ---- Empty State ----
 
@@ -364,7 +308,7 @@ function ProceduralAnimationCard({
   onUpdate: (id: string, updates: Partial<ProceduralAnimation>) => void;
   onRemove: (id: string) => void;
   onToggle: (id: string) => void;
-  /** 节点模式下目标节点缺对应启用的修改器时的点名（与 convert 同口径） */
+  /** 不生效点名：节点模式=缺对应启用的修改器（与 convert 同口径）；精灵模式=spriteId-only 条目 */
   ineffectiveNote?: string;
 }) {
   const [isEditingName, setIsEditingName] = useState(false);
@@ -817,6 +761,9 @@ function ParamSlider({
   );
 }
 
+/** 精灵模式下 spriteId-only 条目的点名（卡片警示条与面板提示同句） */
+const SPRITE_ONLY_NOTE = '只有精灵目标的条目在编辑器与导出中均不生效——选中木偶节点后按节点新建。';
+
 // ---- Main ProceduralPanel Component ----
 
 export default function ProceduralPanel() {
@@ -891,16 +838,13 @@ export default function ProceduralPanel() {
         );
         return;
       }
-      if (!selectedSpriteId) return;
-      addProceduralAnimation(
-        selectedSpriteId,
-        `${info.label} ${partAnimations.length + 1}`,
-        { ...info.defaultConfig },
-        0,
-        totalFrames - 1,
-      );
+      // 精灵模式不再新建：只有 spriteId 的条目在编辑器与导出中均不
+      // 生效（主渲染只按 nodeId 匹配、convert 点名丢弃），新建即死
+      // 条目。添加下拉已禁用，此处兜底（空状态按钮同走本函数）；
+      // 存量条目的编辑/删除/开关不受影响。
+      return;
     },
-    [nodeMode, selectedNodeId, selectedSpriteId, partAnimations.length, totalFrames, addProceduralAnimation],
+    [nodeMode, selectedNodeId, partAnimations.length, totalFrames, addProceduralAnimation],
   );
 
   const handleRemove = useCallback(
@@ -949,14 +893,15 @@ export default function ProceduralPanel() {
             {partAnimations.length}
           </Badge>
 
-          {/* Add dropdown */}
+          {/* Add dropdown（精灵模式禁用：spriteId-only 条目两边都不生效） */}
           <DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
+                <DropdownMenuTrigger asChild disabled={!nodeMode}>
                   <Button
                     variant="ghost"
                     size="icon"
+                    disabled={!nodeMode}
                     className="size-6 p-0 text-zinc-500 hover:text-emerald-400"
                   >
                     <Plus className="size-3.5" />
@@ -964,7 +909,7 @@ export default function ProceduralPanel() {
                 </DropdownMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-[11px]">
-                添加程序动画
+                {nodeMode ? '添加程序动画' : SPRITE_ONLY_NOTE}
               </TooltipContent>
             </Tooltip>
             <DropdownMenuContent
@@ -1013,6 +958,12 @@ export default function ProceduralPanel() {
         </div>
       )}
 
+      {!nodeMode && (
+        <div className="px-3 py-1.5 border-b border-zinc-800 bg-amber-500/5 shrink-0">
+          <span className="text-[10px] leading-snug text-amber-200/80">{SPRITE_ONLY_NOTE}</span>
+        </div>
+      )}
+
       {/* Animation list */}
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-2 space-y-1.5">
@@ -1027,7 +978,13 @@ export default function ProceduralPanel() {
                 onUpdate={handleUpdate}
                 onRemove={handleRemove}
                 onToggle={handleToggle}
-                ineffectiveNote={ineffectiveNoteFor(pa)}
+                ineffectiveNote={
+                  nodeMode
+                    ? ineffectiveNoteFor(pa)
+                    : !pa.nodeId
+                      ? SPRITE_ONLY_NOTE
+                      : undefined
+                }
               />
             ))
           )}

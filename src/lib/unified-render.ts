@@ -79,7 +79,7 @@ import {
 import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from './engine/brush-render';
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
-import { applyProceduralAnimations } from './engine/procedural';
+import { computeProceduralPoseDelta } from './engine/procedural';
 import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followAnchoredDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
 import { effectivePatternGraph, resolvePatternsFromGraph } from './blueprint/pattern-sync';
 import { orbitPointsAt, postColorAt, blobFieldAt, flameFieldAt, fieldColorAt, envSamplesAt } from './dynamic-patterns';
@@ -3049,15 +3049,18 @@ export function generateRenderPlan(
     // Determine rotation strategy
     const strategy: RotationStrategy = rotationStrategy;
 
-    // Apply procedural animations to node modifiers (migrated from old renderFrame)
-    let nodeModifiers = node.modifiers;
-    if (proceduralAnimations && proceduralAnimations.length > 0) {
-      nodeModifiers = applyProceduralAnimations(
-        node.modifiers as any ?? [],
-        proceduralAnimations as any,
-        '', frame, nodeId,
-      ) as any;
-    }
+    // 程序化动画：位姿增量口径（与运行时播放器同式）——不再把值加进
+    // instruction.modifiers：主画布的旋转/缩放由节点蓝图求值决定、
+    // 读不到指令携带的 rotate/uniform_scale 参数（旧路只有平移偶然
+    // 经 renderNodeSprite 的图内平移生效，且图内平移会裁掉移出精灵
+    // 图边缘的像素）。改为汇总成位姿增量、叠加到下方指令的
+    // worldX/worldY/angle 与缩放通道，整部件绕插头位移/旋转/等比
+    // 缩放，与播放器把增量叠到部件位姿同口径。生效门控不变：
+    // computeProceduralPoseDelta 按与旧查找规则相同的门控汇总
+    // （enabled + 帧范围 + nodeId 命中 + 对应类型的启用修改器存在）。
+    const procDelta = proceduralAnimations && proceduralAnimations.length > 0
+      ? computeProceduralPoseDelta(proceduralAnimations, node.modifiers ?? [], nodeId, frame)
+      : { dx: 0, dy: 0, rotDeg: 0, scaleMul: 1 };
 
     // ---- Mesh skinning: 若父 socket.skinning === 'mesh'，计算蒙皮参数 ----
     // （替代关节盘：子精灵在 plug 附近做插值变形）
@@ -3241,10 +3244,14 @@ export function generateRenderPlan(
       sprite: effectiveSprite,
       stackRender,
       frameCorrection,
-      worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel) + pxToSub(folDx)) as SubPixel,
-      worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel) + pxToSub(folDy)) as SubPixel,
-      angle: worldTf.worldAngle + (folDa * 180) / Math.PI + spinDeg,
-      stretch: dynResolved.length > 0 ? worldTf.worldStretch * dynSy * folDs : worldTf.worldStretch,
+      worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel) + pxToSub(folDx) + pxToSub(procDelta.dx)) as SubPixel,
+      worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel) + pxToSub(folDy) + pxToSub(procDelta.dy)) as SubPixel,
+      angle: worldTf.worldAngle + (folDa * 180) / Math.PI + spinDeg + procDelta.rotDeg,
+      // 程序化等比缩放：同时乘 X 向 scaleX 与 Y 向 stretch 两轴
+      // （renderNodeSprite 以 ctx.scale(scaleX, effStretch) 绕插头
+      // 绘制，两轴同乘即绕插头等比缩放，与播放器 dsx/dsy 同乘
+      // paScale 同口径）；scaleMul 恒为 1 时与旧值逐位相同。
+      stretch: (dynResolved.length > 0 ? worldTf.worldStretch * dynSy * folDs : worldTf.worldStretch) * procDelta.scaleMul,
       foreshorten: stackRender ? undefined : foreshorten,
       variantIndex: worldTf.variantIndex,
       rotationStrategy: strategy,
@@ -3255,7 +3262,7 @@ export function generateRenderPlan(
       authoredZ: node.zIndex ?? 0,
       drawLayer: node.drawLayer,
       generated: undefined, // Discs are handled separately
-      modifiers: nodeModifiers,
+      modifiers: node.modifiers,
       frame,
       frameRate,
       meshSkin,
@@ -3274,8 +3281,14 @@ export function generateRenderPlan(
         return node.faceTurn;
       })(),
       // t.scaleX 修复：蓝图 scaleX 独立 plumbing，不再平均吃掉
-      scaleX: dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX,
-      dynScale: dynResolved.length > 0 ? [dynSx, dynSy] as [number, number] : undefined,
+      // 程序化等比缩放同乘本通道（与 stretch 两轴同乘，见上）；
+      // scaleMul 为 1 时保持原表达式（含 scaleX 可为 undefined 的原样）
+      scaleX: procDelta.scaleMul !== 1
+        ? ((dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX) ?? 1) * procDelta.scaleMul
+        : (dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX),
+      // 动态形变缩放积同乘程序化缩放：与播放器 dsx/dsy 乘 paScale
+      // 后同喂场作业一致（场域范围跟随部件的实际绘制缩放）
+      dynScale: dynResolved.length > 0 ? [dynSx * procDelta.scaleMul, dynSy * procDelta.scaleMul] as [number, number] : undefined,
       dynamicPatterns: dynResolved.length > 0 ? dynResolved : undefined,
       trailGhosts,
       arcEnds,

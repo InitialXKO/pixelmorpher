@@ -1,6 +1,7 @@
 // ============================================================
 // PixelMorpher - Procedural Animation Engine
-// computeProceduralValue, applyProceduralAnimations（旧骨骼 IK/变换已随旧系统删除，2026-10-26）
+// computeProceduralValue, applyProceduralAnimations,
+// computeProceduralPoseDelta（旧骨骼 IK/变换已随旧系统删除，2026-10-26）
 // ============================================================
 
 import type { ModifierInstance, ProceduralAnimation, ProceduralConfig } from '../types';
@@ -116,4 +117,68 @@ export function applyProceduralAnimations(
   }
 
   return result;
+}
+
+// ============================================================
+// V2.0: Procedural Pose Delta（编辑器位姿增量口径）
+// ============================================================
+
+/** 程序化动画汇总出的节点位姿增量（编辑器主画布叠加到渲染指令的位姿字段） */
+export interface ProceduralPoseDelta {
+  /** 平移增量 X（画布 px） */
+  dx: number;
+  /** 平移增量 Y（画布 px） */
+  dy: number;
+  /** 旋转增量（度） */
+  rotDeg: number;
+  /** 等比缩放倍乘（逐条 max(0.1, 1 + v/10) 累乘，与播放器 paScale 同式） */
+  scaleMul: number;
+}
+
+/**
+ * 把命中本节点的程序化动画汇总为位姿增量，与运行时播放器
+ * （runtime-template 的 PROCEDURAL 叠加段）同一口径：平移按 px
+ * 累加、旋转按度累加、缩放逐条以 (1 + v/10) 钳 ≥0.1 后累乘。
+ *
+ * 匹配与门控与 applyProceduralAnimations 的查找规则一致：条目须
+ * enabled、帧在 [startFrame, endFrame] 内、nodeId 命中本节点，且
+ * 节点挂有目标属性对应类型的启用修改器（translateX/Y→translate、
+ * rotation→rotate、scale→uniform_scale）才计入；只有 spriteId 的
+ * 条目永不命中（主渲染只按 nodeId 消费，与 convert 进包门控同口径）。
+ *
+ * modifiers 只读 type/enabled 两字段，入参取结构形状：types 与
+ * unified-types 两套 ModifierInstance 定义字段兼容但类型不互认，
+ * 结构入参让两边都可直传（替代旧调用点的 as any 糊法）。
+ */
+export function computeProceduralPoseDelta(
+  proceduralAnimations: ProceduralAnimation[],
+  modifiers: ReadonlyArray<{ type: string; enabled: boolean }>,
+  nodeId: string | undefined,
+  frame: number,
+): ProceduralPoseDelta {
+  const delta: ProceduralPoseDelta = { dx: 0, dy: 0, rotDeg: 0, scaleMul: 1 };
+  if (!nodeId) return delta;
+  const hasEnabledModifier = (type: string) =>
+    modifiers.some((m) => m.type === type && m.enabled);
+  for (const pa of proceduralAnimations) {
+    if (!pa.enabled || pa.nodeId !== nodeId) continue;
+    if (frame < pa.startFrame || frame > pa.endFrame) continue;
+    switch (pa.config.targetProperty) {
+      case 'translateX':
+        if (hasEnabledModifier('translate')) delta.dx += computeProceduralValue(pa.config, frame);
+        break;
+      case 'translateY':
+        if (hasEnabledModifier('translate')) delta.dy += computeProceduralValue(pa.config, frame);
+        break;
+      case 'rotation':
+        if (hasEnabledModifier('rotate')) delta.rotDeg += computeProceduralValue(pa.config, frame);
+        break;
+      case 'scale':
+        if (hasEnabledModifier('uniform_scale')) {
+          delta.scaleMul *= Math.max(0.1, 1 + computeProceduralValue(pa.config, frame) / 10);
+        }
+        break;
+    }
+  }
+  return delta;
 }

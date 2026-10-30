@@ -38,7 +38,8 @@ export {
 export { interpolateModifiers, invalidateInterpolationCache } from './interpolation';
 
 // Skeleton
-export { applyProceduralAnimations } from './procedural';
+export { applyProceduralAnimations, computeProceduralPoseDelta, computeProceduralValue } from './procedural';
+export type { ProceduralPoseDelta } from './procedural';
 
 // Frame cache
 export {
