@@ -4362,9 +4362,9 @@ function frame(now) {
         if (fc.ds) an.sy *= followSampleAt(fc.ds, followU);
       }
     }
-    // 程序化动画（缺口 2）：与编辑器同口径叠加到位姿——平移 px、旋转
-    // 度→弧度、缩放以 (1 + v/10) 相乘（编辑器是加到 uniform_scale 的
-    // scale 参数上，无其他缩放修改器时等价；钳制与编辑器同为 ≥0.1）。
+    // 程序化动画（缺口 2）：与编辑器位姿增量汇总同一口径叠加到位
+    // 姿——平移 px 累加、旋转度→弧度、缩放逐条以 (1 + v/10) 钳
+    // ≥0.1 后累乘；两端都不经修改器参数、不要求节点预挂修改器。
     let paScale = 1;
     if (PROCEDURAL.length > 0) {
       const fIdx = elapsed * FRAME_RATE;

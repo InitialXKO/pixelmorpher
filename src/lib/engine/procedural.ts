@@ -143,47 +143,41 @@ export interface ProceduralPoseDelta {
  * 匹配规则（与 convert 进包同一口径）：条目作用于某节点，当且仅当
  * pa.nodeId 等于该节点，或 pa.spriteId 非空且等于该节点当前解析出
  * 的精灵 id（resolvedSpriteId，由调用方按本次渲染的解析结果传入）
- * ——只挂精灵的条目自动落到挂着这个精灵的节点上。除此之外仍须
- * enabled、帧在 [startFrame, endFrame] 内，且节点挂有目标属性对应
- * 类型的启用修改器（translateX/Y→translate、rotation→rotate、
- * scale→uniform_scale）才计入，与 applyProceduralAnimations 的查找
- * 门控一致。一条条目同帧只走一条汇总路径：nodeId 与 spriteId 双
- * 通道同时命中也只计一次。
- *
- * modifiers 只读 type/enabled 两字段，入参取结构形状：types 与
- * unified-types 两套 ModifierInstance 定义字段兼容但类型不互认，
- * 结构入参让两边都可直传（替代旧调用点的 as any 糊法）。
+ * ——只挂精灵的条目自动落到挂着这个精灵的节点上。除此之外只须
+ * enabled、帧在 [startFrame, endFrame] 内即计入：增量直接叠到节点
+ * 位姿、不经修改器参数，不要求节点预先挂任何修改器（旧口径曾要
+ * 求目标节点挂有对应类型的启用修改器才计入——那是旧消费路
+ * applyProceduralAnimations 只能把值写进修改器参数、没有修改器就
+ * 没地方落的机械残留，2026-10-30 经用户点名整体摘除）。一条条目
+ * 同帧只走一条汇总路径：nodeId 与 spriteId 双通道同时命中也只计
+ * 一次。
  */
 export function computeProceduralPoseDelta(
   proceduralAnimations: ProceduralAnimation[],
-  modifiers: ReadonlyArray<{ type: string; enabled: boolean }>,
   nodeId: string | undefined,
   frame: number,
   resolvedSpriteId?: string,
 ): ProceduralPoseDelta {
   const delta: ProceduralPoseDelta = { dx: 0, dy: 0, rotDeg: 0, scaleMul: 1 };
   if (!nodeId && !resolvedSpriteId) return delta;
-  const hasEnabledModifier = (type: string) =>
-    modifiers.some((m) => m.type === type && m.enabled);
   for (const pa of proceduralAnimations) {
     const matchesNode = !!nodeId && pa.nodeId === nodeId;
     const matchesSprite = !!resolvedSpriteId && !!pa.spriteId && pa.spriteId === resolvedSpriteId;
     if (!pa.enabled || (!matchesNode && !matchesSprite)) continue;
     if (frame < pa.startFrame || frame > pa.endFrame) continue;
+    const value = computeProceduralValue(pa.config, frame);
     switch (pa.config.targetProperty) {
       case 'translateX':
-        if (hasEnabledModifier('translate')) delta.dx += computeProceduralValue(pa.config, frame);
+        delta.dx += value;
         break;
       case 'translateY':
-        if (hasEnabledModifier('translate')) delta.dy += computeProceduralValue(pa.config, frame);
+        delta.dy += value;
         break;
       case 'rotation':
-        if (hasEnabledModifier('rotate')) delta.rotDeg += computeProceduralValue(pa.config, frame);
+        delta.rotDeg += value;
         break;
       case 'scale':
-        if (hasEnabledModifier('uniform_scale')) {
-          delta.scaleMul *= Math.max(0.1, 1 + computeProceduralValue(pa.config, frame) / 10);
-        }
+        delta.scaleMul *= Math.max(0.1, 1 + value / 10);
         break;
     }
   }

@@ -303,15 +303,12 @@ function ProceduralAnimationCard({
   onUpdate,
   onRemove,
   onToggle,
-  ineffectiveNote,
 }: {
   animation: ProceduralAnimation;
   currentFrame: number;
   onUpdate: (id: string, updates: Partial<ProceduralAnimation>) => void;
   onRemove: (id: string) => void;
   onToggle: (id: string) => void;
-  /** 不生效点名：目标节点缺对应启用的修改器时给出（与 convert 同口径），两种目标都适用 */
-  ineffectiveNote?: string;
 }) {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editName, setEditName] = useState(animation.name);
@@ -354,11 +351,6 @@ function ProceduralAnimationCard({
           : 'border-zinc-800 bg-zinc-900/20 opacity-60'
       }`}
     >
-      {ineffectiveNote && (
-        <div className="px-2 py-1 text-[9px] leading-snug text-amber-300 bg-amber-500/10 border-b border-amber-500/20">
-          {ineffectiveNote}
-        </div>
-      )}
       {/* Card Header */}
       <div className="flex items-center gap-1.5 px-2 py-1.5">
         {/* Collapse toggle */}
@@ -851,26 +843,6 @@ export default function ProceduralPanel() {
     [nodeMode, proceduralAnimations, selectedNodeId, selectedSpriteId, nodeSpriteIds],
   );
 
-  // 选中节点时与 convert 同口径判生效：目标属性对应的修改器必须在
-  // 节点上存在且启用，否则条目在编辑器与包里都不生效——卡片上点名，
-  // 修改器请去木偶面板加（节点修改器与蓝图双向同步，不在此处代加）。
-  const ineffectiveNoteFor = useCallback(
-    (pa: ProceduralAnimation): string | undefined => {
-      if (!targetNode) return undefined;
-      const need =
-        pa.config.targetProperty === 'rotation'
-          ? { type: 'rotate', label: '旋转' }
-          : pa.config.targetProperty === 'scale'
-            ? { type: 'uniform_scale', label: '等比缩放' }
-            : { type: 'translate', label: '平移' };
-      const ok = (targetNode.modifiers ?? []).some((m) => m.type === need.type && m.enabled);
-      return ok
-        ? undefined
-        : `目标节点缺启用的「${need.label}」修改器，暂不生效——在木偶面板给节点加上后即生效，导出时也不会被丢弃。`;
-    },
-    [targetNode],
-  );
-
   // ---- Handlers ----
   const handleAdd = useCallback(
     (type: ProceduralConfig['type']) => {
@@ -1024,7 +996,6 @@ export default function ProceduralPanel() {
                 onUpdate={handleUpdate}
                 onRemove={handleRemove}
                 onToggle={handleToggle}
-                ineffectiveNote={ineffectiveNoteFor(pa)}
               />
             ))
           )}

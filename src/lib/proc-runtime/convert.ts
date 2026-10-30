@@ -2031,9 +2031,11 @@ export function convertCharacterToRuntimePackage(
   }
 
 
-  // ---- 程序化动画（缺口 2）：与编辑器同口径——PA 只在目标节点挂有
-  // 对应类型的启用修改器时才生效（applyProceduralAnimations 的查找
-  // 规则），不满足的在编辑器内同样无效，逐条点名不进包。命中两条
+  // ---- 程序化动画（缺口 2）：与编辑器同口径——条目凭自身生效：
+  // 增量在编辑器与播放器两端都直接叠到节点位姿、不经修改器参数，
+  // 不要求目标节点预挂任何修改器（旧口径曾要求挂有对应类型的启
+  // 用修改器才进包，是旧消费路只能把值写进修改器参数的残留，
+  // 2026-10-30 整体摘除）。命中两条
   // 通道：nodeId 条目直达其节点；只有 spriteId 的条目按挂载关系落
   // 到挂着这个精灵的节点上（精灵目标自动对挂载节点生效，与编辑器
   // 按当前解析精灵逐帧匹配同一裁定）。挂载集合用与瓦片解析同一套
@@ -2074,7 +2076,6 @@ export function convertCharacterToRuntimePackage(
   };
   for (const pa of opts?.projectData?.proceduralAnimations ?? []) {
     if (!pa.enabled) continue;
-    const need = pa.config.targetProperty === 'rotation' ? 'rotate' : pa.config.targetProperty === 'scale' ? 'uniform_scale' : 'translate';
     const pushFor = (node: ConvNode) => {
       procedural.push({
         slot: node.slot?.slotKey ?? node.id,
@@ -2087,10 +2088,6 @@ export function convertCharacterToRuntimePackage(
     if (pa.nodeId) {
       const node = character.nodes[pa.nodeId];
       if (!node) { warnings.push(`程序化动画「${pa.name}」目标节点不存在，未进包`); continue; }
-      if (!(node.modifiers ?? []).some((m) => m.type === need && m.enabled)) {
-        warnings.push(`程序化动画「${pa.name}」目标节点无启用的 ${need} 修改器：编辑器内同样不生效，未进包`);
-        continue;
-      }
       pushFor(node);
       continue;
     }
@@ -2100,15 +2097,7 @@ export function convertCharacterToRuntimePackage(
       warnings.push(`程序化动画「${pa.name}」目标精灵未被任何节点挂载，未进包`);
       continue;
     }
-    let emitted = 0;
-    for (const node of targets) {
-      if (!(node.modifiers ?? []).some((m) => m.type === need && m.enabled)) continue;
-      pushFor(node);
-      emitted++;
-    }
-    if (emitted === 0) {
-      warnings.push(`程序化动画「${pa.name}」挂载其目标精灵的节点均无启用的 ${need} 修改器：编辑器内同样不生效，未进包`);
-    }
+    for (const node of targets) pushFor(node);
   }
 
   // ---- 全局变换（缺口 3）：与编辑器 applyGlobalTransformWrapper 同

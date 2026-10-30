@@ -3057,15 +3057,15 @@ export function generateRenderPlan(
     // 经 renderNodeSprite 的图内平移生效，且图内平移会裁掉移出精灵
     // 图边缘的像素）。改为汇总成位姿增量、叠加到下方指令的
     // worldX/worldY/angle 与缩放通道，整部件绕插头位移/旋转/等比
-    // 缩放，与播放器把增量叠到部件位姿同口径。生效门控不变：
-    // computeProceduralPoseDelta 按与旧查找规则相同的门控汇总
-    // （enabled + 帧范围 + 命中 + 对应类型的启用修改器存在）。命中
+    // 缩放，与播放器把增量叠到部件位姿同口径。计入条件只有
+    // enabled + 帧范围 + 命中（增量凭条目自身生效，不要求节点预
+    // 挂修改器）。命中
     // 有两条通道：条目 nodeId 等于本节点，或条目 spriteId 等于本节
     // 点本次解析出的精灵（nodeSpriteId，上方 resolveSprite 的结果，
     // 参数化合成等无表 id 的情形为 null、不走精灵通道）——只挂精灵
     // 的条目自动落到挂着这个精灵的节点上。
     const procDelta = proceduralAnimations && proceduralAnimations.length > 0
-      ? computeProceduralPoseDelta(proceduralAnimations, node.modifiers ?? [], nodeId, frame, nodeSpriteId ?? undefined)
+      ? computeProceduralPoseDelta(proceduralAnimations, nodeId, frame, nodeSpriteId ?? undefined)
       : { dx: 0, dy: 0, rotDeg: 0, scaleMul: 1 };
 
     // ---- Mesh skinning: 若父 socket.skinning === 'mesh'，计算蒙皮参数 ----
