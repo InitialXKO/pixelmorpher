@@ -6,6 +6,7 @@
 //  D) store 关键帧全环（加轨/加修改器/重排/加帧/改帧参/移帧/删帧）
 //  E) 迁移不双写 + 导入缺字段清空
 //  F) convert 存量去重（片段轨与工程级逐项全同 → 不入包 + 点名；不同 → 入包）
+//  G) 描边轮廓来源（运行时掩码按瓦片 enc 编码读占据 + 编辑器背景填充挪到修改器后垫底——源码级断言）
 import { resolveCanvasModifierParams, applyCanvasModifiers } from '../src/lib/engine/canvas-modifiers';
 import { buildRuntimeHtml } from '../src/lib/proc-runtime/runtime-template';
 import { convertCharacterToRuntimePackage } from '../src/lib/proc-runtime/convert';
@@ -396,6 +397,36 @@ console.log('F) convert 去重');
   });
   const perfB = pkgB.performances.find((p: any) => p.id === 'clip_clipB') as any;
   ok(!!(perfB?.fx as any)?.canvasTracks, '异轨：真不同的片段轨照常入包');
+}
+
+// ================= G) 描边轮廓来源 =================
+console.log('G) 描边轮廓来源');
+{
+  const tplG = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+  // 运行时掩码：占据测试按瓦片 enc 标记分流（瓦片家族 alpha 恒 255、占据在
+  // R 通道；误测 alpha 会把每个瓦片整块矩形印进掩码、描边沿包围盒走）
+  const maskSeg = tplG.slice(tplG.indexOf('function fxBuildMask'), tplG.indexOf('function fxRunPostChain'));
+  ok(maskSeg.includes("tile.enc === 'r'"), 'fxBuildMask 按 tile.enc 分流占据测试');
+  ok(maskSeg.includes('>= 128'), 'fxBuildMask 对 R 编码瓦片以 R>=128 为空（不再误测 alpha）');
+  ok(tplG.includes("enc: 'r'"), '瓦片生产者带 enc 标记（spriteTileOf/刀光/场槽字面量）');
+  ok((tplG.match(/\.enc = 'r'/g) || []).length >= 2, 'bakeResolvedTile 两条返回路径都打 enc 标记');
+  ok(tplG.includes('enc: tile.enc'), 'displaceTileRt 透传 enc 标记');
+  // 生成包里同样带 R 读法（钉到出货产物，不只源码文件）
+  const htmlG = buildRuntimeHtml({ parts: [], costumes: {}, performances: [], behavior: { graphs: {} }, fx: { canvas: { w: 8, h: 8 }, totalFrames: 24, canvasTracks: [] } } as any);
+  ok(htmlG.includes("tile.enc === 'r'"), '生成包 fxBuildMask 读 R 编码占据');
+
+  // 编辑器：有修改器时背景填充必须位于 applyCanvasModifiers 之后
+  // （destination-over 垫底），否则背景 alpha 先把整幅画布填成不透明、
+  // 修改器的轮廓集变成整幅画布、描边带为空
+  const ur = readFileSync(new URL('../src/lib/unified-render.ts', import.meta.url), 'utf8');
+  const ruSeg = ur.slice(ur.indexOf('export function renderUnified('), ur.indexOf('export function renderUnifiedToCanvas'));
+  ok(ruSeg.includes('deferBgFill'), 'renderUnified 有背景推迟填充开关（仅修改器在场时）');
+  ok(ruSeg.indexOf('destination-over') > ruSeg.indexOf('applyCanvasModifiers'), 'renderUnified 背景垫底在修改器之后');
+  const rucSeg = ur.slice(ur.indexOf('export function renderUnifiedCharactersToCanvas'));
+  ok(rucSeg.indexOf('destination-over') > rucSeg.indexOf('applyCanvasModifiers'), 'renderUnifiedCharactersToCanvas 背景垫底在修改器之后');
+  // 导出/SAM 路径自身不填背景（其管线内亦无填充），修改器读到的 alpha 不被污染
+  const rutSeg = ur.slice(ur.indexOf('export function renderUnifiedToCanvas'), ur.indexOf('export function renderCharacterOnionFrameFromCharacter'));
+  ok(!rutSeg.includes('fillStyle = backgroundColor'), 'renderUnifiedToCanvas 不自填背景');
 }
 
 console.log(`\nverify-canvas-effects-audit: ${pass} passed, ${fail} failed`);

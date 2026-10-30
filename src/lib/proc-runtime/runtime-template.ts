@@ -357,12 +357,15 @@ function bakeResolvedTile(resolved, mirrored, phase) {
           if (tile.data[q * 4] >= 128) tile.data[q * 4 + 2] = full.data[q * 4 + 2];
         }
       }
+      tile.enc = 'r';
       return tile;
     }
   }
-  return resolved.graph
+  const baked = resolved.graph
     ? compileTileDAG(resolved.shape, resolved.graph, halo, phase || 0)
     : compileTileLayers(resolved.shape, resolved.program, halo);
+  baked.enc = 'r';
+  return baked;
 }
 /** 动态表面（D1）规格读取：与编辑器 surface-animation 同口径规范化 */
 function surfaceAnimOfRt(resolved) {
@@ -428,7 +431,7 @@ function displaceTileRt(tile, srcMap) {
       data[dst + 2] = tile.data[src + 2]; data[dst + 3] = tile.data[src + 3];
     }
   }
-  return { w: w, h: h, cx: tile.cx, cy: tile.cy, data: data };
+  return { w: w, h: h, cx: tile.cx, cy: tile.cy, data: data, enc: tile.enc };
 }
 function parseHexRt(hex) {
   const m = /^#([0-9a-fA-F]{6})$/.exec(hex || '');
@@ -475,6 +478,7 @@ function spriteTileOf(sg, mirrored) {
     cx: M + (mirrored ? sg.w - 1 - sg.plug[0] : sg.plug[0]),
     cy: M + sg.plug[1],
     data: data,
+    enc: 'r',
   };
 }
 /** 堆叠层图 RGBA 缓存（part.stack.layers 网格 → RGBA；解析与 convert
@@ -1051,6 +1055,7 @@ function ensureAtlas(gl, variant, costumeName) {
         w: fr.w + M * 2, h: fr.h + M * 2,
         cx: M + (mir ? fr.w - 1 - fr.plugX : fr.plugX), cy: M + fr.plugY,
         data: new Uint8Array((fr.w + M * 2) * (fr.h + M * 2) * 4),
+        enc: 'r',
       };
       for (let q = 0; q < tile.w * tile.h; q++) { tile.data[q * 4] = 255; tile.data[q * 4 + 3] = 255; }
       tiles.push(tile);
@@ -1105,6 +1110,7 @@ function ensureAtlas(gl, variant, costumeName) {
           w: probe.w + M * 2, h: probe.h + M * 2,
           cx: M + probe.ox, cy: M + probe.oy,
           data: new Uint8Array((probe.w + M * 2) * (probe.h + M * 2) * 4),
+          enc: 'r',
           slotOx: probe.ox, slotOy: probe.oy, innerW: probe.w, innerH: probe.h,
         };
         for (let q = 0; q < tile.w * tile.h; q++) { tile.data[q * 4] = 255; tile.data[q * 4 + 3] = 255; }
@@ -1886,9 +1892,15 @@ function ensurePostSys() {
   postSys = { w: lowW, h: VIEW_H, A: A, B: B, C: C, D: D, prog: prog, U: U, maskTex: maskTex, vao: gl.createVertexArray() };
   return postSys;
 }
-/** 掩码栅格化（CPU，渲染分辨率）：把各部件瓦片 alpha 按位姿印到覆盖
+/** 掩码栅格化（CPU，渲染分辨率）：把各部件瓦片的占据按位姿印到覆盖
  *  视野的网格上，供描边通道采样（分辨率与后处理面一致，旧实现固定
- *  256 宽、与编辑器全分辨率掩码不一致）。来源差仍在：编辑器以全画布
+ *  256 宽、与编辑器全分辨率掩码不一致）。占据按瓦片自己的编码读：
+ *  瓦片家族（spriteTileOf / compileTile* 烘焙 / pad / displace，带
+ *  enc='r' 标记）的 alpha 恒 255、占据在 R 通道（<128 为占据，与着色器
+ *  occ=r0<128 及烘焙端 >=128 为空的口径一致）——旧实现误测 alpha，
+ *  每个瓦片整块矩形都被印进掩码，描边只能沿部件包围盒走；无 enc
+ *  标记的真 RGBA 瓦片才按 alpha 测。刀光/场槽位瓦片同为 R 编码全空，
+ *  不入掩码（与下述来源差口径一致）。来源差仍在：编辑器以全画布
  *  alpha 为准（含背景与效果笔触），此处以部件瓦片为准——笔触/粒子是
  *  GPU 绘制、无 CPU 栅格数据可印，无法对齐，见 PR 说明。 */
 function fxBuildMask(state, elByKey, camX, camY) {
@@ -1900,11 +1912,13 @@ function fxBuildMask(state, elByKey, camX, camY) {
     const entry = state.map.get(key);
     if (!entry || !entry.tile || !entry.tile.data) continue;
     const tile = entry.tile;
+    const useR = tile.enc === 'r';
     const co = Math.cos(el.rot), si = Math.sin(el.rot);
     const dsx = el.deform ? el.deform[0] : 1, dsy = el.deform ? el.deform[1] : 1;
     for (let py = 0; py < tile.h; py++) {
       for (let px = 0; px < tile.w; px++) {
-        if (tile.data[(py * tile.w + px) * 4 + 3] <= 8) continue;
+        const q4 = (py * tile.w + px) * 4;
+        if (useR ? tile.data[q4] >= 128 : tile.data[q4 + 3] <= 8) continue;
         const gx = (px - tile.cx) * dsx, gy = (tile.cy - py) * dsy;
         const wx = el.pos[0] + co * gx + si * gy;
         const wy = el.pos[1] + si * gx - co * gy;

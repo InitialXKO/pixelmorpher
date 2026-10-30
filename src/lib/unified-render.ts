@@ -5204,7 +5204,14 @@ export function renderUnified(
   clampCtxFor?: (character: Character) => ClampContext | undefined,
   simCtxFor?: (character: Character) => SimContext | undefined,
 ): void {
-  if (backgroundColor !== 'transparent') {
+  // 有画布修改器在场时，背景填充推迟到 applyCanvasModifiers 之后以
+  // destination-over 垫底：修改器按 alpha 定轮廓（描边带、掩码等），
+  // 先填背景会让整幅画布 alpha=255、轮廓集变成整幅画布而带为空。
+  // 背景是纯色填充、其余绘制以 source-over 叠加，最终合成逐像素
+  // 等价（结合律）；无修改器时保持原顺序，零行为变化。
+  const deferBgFill = backgroundColor !== 'transparent'
+    && !!canvasModifierTracks && canvasModifierTracks.length > 0;
+  if (backgroundColor !== 'transparent' && !deferBgFill) {
     ctx.fillStyle = backgroundColor;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
   }
@@ -5258,6 +5265,13 @@ export function renderUnified(
   }
   if (canvasModifierTracks && canvasModifierTracks.length > 0) {
     applyCanvasModifiers(ctx, canvasModifierTracks, currentFrame, canvasWidth, canvasHeight);
+  }
+  if (deferBgFill) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    ctx.restore();
   }
 }
 
@@ -5359,7 +5373,12 @@ export function renderUnifiedCharactersToCanvas(
   canvas.width = canvasWidth;
   canvas.height = canvasHeight;
   const ctx = canvas.getContext('2d')!;
-  if (backgroundColor && backgroundColor !== 'rgba(0,0,0,0)') {
+  // 背景填充时机与 renderUnified 同口径：有画布修改器时推迟到
+  // applyCanvasModifiers 之后 destination-over 垫底，避免背景 alpha
+  // 污染修改器的轮廓集；无修改器时原顺序不变。
+  const deferBgFill = !!backgroundColor && backgroundColor !== 'rgba(0,0,0,0)'
+    && !!canvasModifierTracks && canvasModifierTracks.length > 0;
+  if (backgroundColor && backgroundColor !== 'rgba(0,0,0,0)' && !deferBgFill) {
     ctx.fillStyle = backgroundColor;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
   }
@@ -5382,6 +5401,13 @@ export function renderUnifiedCharactersToCanvas(
   if (hasGlobalTransform) ctx.restore();
   if (canvasModifierTracks && canvasModifierTracks.length > 0) {
     applyCanvasModifiers(ctx, canvasModifierTracks, frame, canvasWidth, canvasHeight);
+  }
+  if (deferBgFill) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    ctx.restore();
   }
   return canvas;
 }
