@@ -14,7 +14,8 @@ import {
 } from '@/components/ui/dialog';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { startPlayback, stopPlayback } from '@/lib/playback-scheduler';
-import type { InterpolationMode } from '@/lib/types';
+import type { InterpolationMode, ModifierParamValue } from '@/lib/types';
+import { resolveCanvasModifierParams } from '@/lib/engine/canvas-modifiers';
 import { writePuppetPoseKeyframe } from './canvas/tool-handlers';
 import { trackKeyFrames, trackKeyId } from './timeline/NodeTrackLane';
 import type { SnapTarget } from '@/lib/v15-types';
@@ -53,6 +54,9 @@ export default function Timeline() {
   const addEffectKeyframe = useProjectStore((s) => s.addEffectKeyframe);
   const removeEffectKeyframe = useProjectStore((s) => s.removeEffectKeyframe);
   const canvasModifierTracks = useProjectStore((s) => s.canvasModifierTracks);
+  const addCanvasModifierKeyframe = useProjectStore((s) => s.addCanvasModifierKeyframe);
+  const removeCanvasModifierKeyframe = useProjectStore((s) => s.removeCanvasModifierKeyframe);
+  const moveCanvasModifierKeyframe = useProjectStore((s) => s.moveCanvasModifierKeyframe);
 
   // ---- V15: Timeline zoom & snap ----
   const timelineZoom = useProjectStore((s) => s.timelineZoom);
@@ -496,6 +500,24 @@ export default function Timeline() {
   const handleEditEffectKeyframe = useCallback((trackId: string, keyframeId: string) => { setEditKfTrackId(trackId); setEditKfId(keyframeId); setEditKfDialogOpen(true); }, []);
   const handleSelectEffectTrack = useCallback((id: string | null) => { selectEffectTrack(id); }, [selectEffectTrack]);
 
+  // ---- Canvas modifier track handlers ----
+  // 加帧时快照该帧各修改器的解析参数（加帧不改变当前画面，之后在面板
+  // 里改参即写这一帧的关键帧）；编辑 = 把播放头跳到该帧（面板改参写关键帧）。
+  const handleAddCanvasModifierKeyframe = useCallback((trackId: string, frame: number) => {
+    const track = useProjectStore.getState().canvasModifierTracks.find((t) => t.id === trackId);
+    if (!track) return;
+    const bag: Record<string, ModifierParamValue> = {};
+    for (const m of track.modifiers) Object.assign(bag, resolveCanvasModifierParams(track, m, frame));
+    addCanvasModifierKeyframe(trackId, frame, bag);
+  }, [addCanvasModifierKeyframe]);
+  const handleDeleteCanvasModifierKeyframe = useCallback((trackId: string, keyframeId: string) => { removeCanvasModifierKeyframe(trackId, keyframeId); }, [removeCanvasModifierKeyframe]);
+  const handleEditCanvasModifierKeyframe = useCallback((trackId: string, keyframeId: string) => {
+    const track = useProjectStore.getState().canvasModifierTracks.find((t) => t.id === trackId);
+    const kf = track?.keyframes.find((k) => k.id === keyframeId);
+    if (kf) setCurrentFrame(kf.frame);
+  }, [setCurrentFrame]);
+  const handleMoveCanvasModifierKeyframe = useCallback((trackId: string, keyframeId: string, frame: number) => { moveCanvasModifierKeyframe(trackId, keyframeId, frame); }, [moveCanvasModifierKeyframe]);
+
   // ---- Playhead Drag ----
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false);
 
@@ -718,6 +740,10 @@ export default function Timeline() {
           onAddEffectKeyframe={handleAddEffectKeyframe}
           onDeleteEffectKeyframe={handleDeleteEffectKeyframe}
           onEditEffectKeyframe={handleEditEffectKeyframe}
+          onAddCanvasModifierKeyframe={handleAddCanvasModifierKeyframe}
+          onDeleteCanvasModifierKeyframe={handleDeleteCanvasModifierKeyframe}
+          onEditCanvasModifierKeyframe={handleEditCanvasModifierKeyframe}
+          onMoveCanvasModifierKeyframe={handleMoveCanvasModifierKeyframe}
           onPlayheadMouseDown={handlePlayheadMouseDown}
           isPuppetClip={isPuppetClip}
           nodeList={puppetNodes as any}

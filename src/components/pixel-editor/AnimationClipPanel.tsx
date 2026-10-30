@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useState, useCallback } from 'react';
 import SlashEffectEditor from './puppet/SlashEffectEditor';
+import { cloneSlashSpec, countSlashDefRefs, findSlashDef } from '@/lib/slash-defs';
 import { BEAT_TEMPLATES } from '@/lib/beat-templates';
 import {
   ContextMenu,
@@ -23,6 +24,7 @@ export default function AnimationClipPanel() {
     addAnimationClip,
     removeAnimationClip,
     updateAnimationClip,
+    updateUnifiedCharacter,
     setActiveAnimationClip,
     applyBeatTemplate,
   } = useProjectStore();
@@ -331,11 +333,61 @@ export default function AnimationClipPanel() {
               </p>
             </div>
             <div className="mt-2">
-              <SlashEffectEditor
-                value={activeClip.slashEffect}
-                onChange={(next) => updateAnimationClip(activeClip.id, { slashEffect: next })}
-                nodes={Object.values(unifiedCharacters?.[activeClip.puppetCharacterId]?.nodes ?? {}).map((n) => ({ id: n.id, name: n.name }))}
-              />
+              {(() => {
+                // 刀光共享定义（角色级）：与行为面板同一挂载口径——绑定时
+                // value 解引用为定义规格、onChange 直达定义（一处改、处处
+                // 生效）；defs/引用计数取片段所属角色，绑定写片段 slashDefId
+                const ownerChar = unifiedCharacters?.[activeClip.puppetCharacterId];
+                const clipDefs = ownerChar?.slashDefs ?? [];
+                const boundDef = findSlashDef(clipDefs, activeClip.slashDefId);
+                const clipRefCounts: Record<string, number> = {};
+                if (ownerChar) {
+                  for (const d of clipDefs) clipRefCounts[d.id] = countSlashDefRefs(ownerChar, animationClips, d.id);
+                }
+                const patchOwnerDefs = (defs: typeof clipDefs) => {
+                  if (ownerChar) updateUnifiedCharacter(ownerChar.id, { slashDefs: defs });
+                };
+                return (
+                  <SlashEffectEditor
+                    value={activeClip.slashDefId ? boundDef?.spec : activeClip.slashEffect}
+                    onChange={(next) => {
+                      // 绑定时参数编辑直达定义；未绑定走片段私有字段
+                      if (activeClip.slashDefId && boundDef) {
+                        if (next) {
+                          patchOwnerDefs(clipDefs.map((d) => (d.id === boundDef.id ? { ...d, spec: next } : d)));
+                        }
+                      } else {
+                        updateAnimationClip(activeClip.id, { slashEffect: next });
+                      }
+                    }}
+                    nodes={Object.values(ownerChar?.nodes ?? {}).map((n) => ({ id: n.id, name: n.name }))}
+                    defBinding={ownerChar ? {
+                      defs: clipDefs,
+                      boundDefId: activeClip.slashDefId,
+                      refCounts: clipRefCounts,
+                      onBind: (defId) => updateAnimationClip(activeClip.id, { slashDefId: defId, slashEffect: undefined }),
+                      onUnbind: () => updateAnimationClip(activeClip.id, {
+                        // 解绑 = 物化：定义当前规格深拷贝回片段私有字段；
+                        // 悬空（定义已不存在）时私有字段保持原样、仅清引用
+                        slashEffect: boundDef ? cloneSlashSpec(boundDef.spec) : activeClip.slashEffect,
+                        slashDefId: undefined,
+                      }),
+                      onSaveAsDef: () => {
+                        if (!activeClip.slashEffect || !ownerChar) return;
+                        const nd = {
+                          id: crypto.randomUUID(),
+                          name: `${activeClip.name || '片段'}刀光`,
+                          spec: cloneSlashSpec(activeClip.slashEffect),
+                        };
+                        patchOwnerDefs([...clipDefs, nd]);
+                        updateAnimationClip(activeClip.id, { slashDefId: nd.id, slashEffect: undefined });
+                      },
+                      onRenameDef: (defId, name) => patchOwnerDefs(clipDefs.map((d) => (d.id === defId ? { ...d, name } : d))),
+                      onDeleteDef: (defId) => patchOwnerDefs(clipDefs.filter((d) => d.id !== defId)),
+                    } : undefined}
+                  />
+                );
+              })()}
             </div>
           </div>
         </div>

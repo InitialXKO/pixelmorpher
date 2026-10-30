@@ -1167,7 +1167,9 @@ export const smartSelectHandler: ToolHandler = {
               s.canvasWidth, s.canvasHeight,
               Object.values(pst.sprites), currentFrame, s.backgroundColor,
               s.effectTracks, undefined, undefined, false, 0.5,
-              undefined, undefined, 'low',
+              // 画布轨必须带上：SAM 编码帧要与用户所见几何一致（像素缩放/
+              // 画布遮罩开启时传 undefined 会让分割画面与点选坐标错位）
+              undefined, pst.canvasModifierTracks, 'low',
               s.globalModifiers, undefined,
               s.frameRate,
               pst.unifiedCharacters,

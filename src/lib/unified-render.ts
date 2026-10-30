@@ -5204,9 +5204,23 @@ export function renderUnified(
   clampCtxFor?: (character: Character) => ClampContext | undefined,
   simCtxFor?: (character: Character) => SimContext | undefined,
 ): void {
-  if (backgroundColor !== 'transparent') {
+  // 有画布修改器在场时，背景填充推迟到 applyCanvasModifiers 之后以
+  // destination-over 垫底：修改器按 alpha 定轮廓（描边带、掩码等），
+  // 先填背景会让整幅画布 alpha=255、轮廓集变成整幅画布而带为空。
+  // 背景是纯色填充、其余绘制以 source-over 叠加，最终合成逐像素
+  // 等价（结合律）；无修改器时保持原顺序，零行为变化。
+  // 推迟时入口先清画布：调用方（主画布）可能已在同一 ctx 上画过
+  // 洋葱影等先行内容，旧流程靠背景填充盖住、从不进入修改器的
+  // alpha 读取；不清则推迟后它们会混进轮廓集。清后恢复「每帧从
+  // 已知（透明）状态起笔」的前提，修改器读到的 alpha 只有当前帧。
+  const deferBgFill = backgroundColor !== 'transparent'
+    && !!canvasModifierTracks && canvasModifierTracks.length > 0;
+  if (backgroundColor !== 'transparent' && !deferBgFill) {
     ctx.fillStyle = backgroundColor;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
+  if (deferBgFill) {
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   }
   if (unifiedCharacters && Object.keys(unifiedCharacters).length > 0) {
     renderPuppetViaUnifiedPipeline(
@@ -5258,6 +5272,13 @@ export function renderUnified(
   }
   if (canvasModifierTracks && canvasModifierTracks.length > 0) {
     applyCanvasModifiers(ctx, canvasModifierTracks, currentFrame, canvasWidth, canvasHeight);
+  }
+  if (deferBgFill) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    ctx.restore();
   }
 }
 
@@ -5359,7 +5380,12 @@ export function renderUnifiedCharactersToCanvas(
   canvas.width = canvasWidth;
   canvas.height = canvasHeight;
   const ctx = canvas.getContext('2d')!;
-  if (backgroundColor && backgroundColor !== 'rgba(0,0,0,0)') {
+  // 背景填充时机与 renderUnified 同口径：有画布修改器时推迟到
+  // applyCanvasModifiers 之后 destination-over 垫底，避免背景 alpha
+  // 污染修改器的轮廓集；无修改器时原顺序不变。
+  const deferBgFill = !!backgroundColor && backgroundColor !== 'rgba(0,0,0,0)'
+    && !!canvasModifierTracks && canvasModifierTracks.length > 0;
+  if (backgroundColor && backgroundColor !== 'rgba(0,0,0,0)' && !deferBgFill) {
     ctx.fillStyle = backgroundColor;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
   }
@@ -5382,6 +5408,13 @@ export function renderUnifiedCharactersToCanvas(
   if (hasGlobalTransform) ctx.restore();
   if (canvasModifierTracks && canvasModifierTracks.length > 0) {
     applyCanvasModifiers(ctx, canvasModifierTracks, frame, canvasWidth, canvasHeight);
+  }
+  if (deferBgFill) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    ctx.restore();
   }
   return canvas;
 }
