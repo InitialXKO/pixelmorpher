@@ -6,6 +6,7 @@ import {
   Radio,
   Zap,
   Shuffle,
+  Sigma,
   Plus,
   Trash2,
   Play,
@@ -17,6 +18,10 @@ import {
 } from 'lucide-react';
 
 import { useProjectStore, useEditorStore } from '@/lib/store';
+import { computeProceduralValue } from '@/lib/engine/procedural';
+import { validateFormula } from '@/lib/engine/formula';
+import { getActiveCostumeSet, resolvePieceSprite } from '@/lib/sprite-resolve';
+import type { DirectionIndex } from '@/lib/unified-types';
 import type {
   ProceduralAnimation,
   ProceduralConfig,
@@ -24,6 +29,7 @@ import type {
   ProceduralWave,
   ProceduralSpring,
   ProceduralJitter,
+  ProceduralFormula,
 } from '@/lib/types';
 
 import { Button } from '@/components/ui/button';
@@ -95,6 +101,7 @@ const PROCEDURAL_TYPE_INFO: Record<
       stiffness: 0.5,
       damping: 0.3,
       mass: 1,
+      amplitude: 5,
       restLength: 0,
       targetProperty: 'translateY',
     } satisfies ProceduralSpring,
@@ -110,6 +117,16 @@ const PROCEDURAL_TYPE_INFO: Record<
       smooth: true,
       targetProperty: 'translateX',
     } satisfies ProceduralJitter,
+  },
+  formula: {
+    label: '公式',
+    icon: Sigma,
+    color: 'text-emerald-400',
+    defaultConfig: {
+      type: 'formula',
+      expression: '5 * sin(f * 0.5)',
+      targetProperty: 'translateX',
+    } satisfies ProceduralFormula,
   },
 };
 
@@ -174,7 +191,7 @@ function ProceduralMiniPreview({
     for (let i = 0; i <= numSamples; i++) {
       const t = i / numSamples;
       const frame = startFrame + t * frameRange;
-      values.push(computeProceduralValue(config, frame));
+      values.push(computeProceduralValue(config, frame, startFrame, endFrame));
     }
 
     // Find min/max for Y axis
@@ -200,6 +217,7 @@ function ProceduralMiniPreview({
     const lineColor = typeColor === 'text-violet-400' ? '#a78bfa'
       : typeColor === 'text-cyan-400' ? '#22d3ee'
       : typeColor === 'text-amber-400' ? '#fbbf24'
+      : typeColor === 'text-emerald-400' ? '#34d399'
       : '#fb7185';
 
     ctx.strokeStyle = lineColor;
@@ -228,7 +246,7 @@ function ProceduralMiniPreview({
 
       // Draw dot at current value
       const currentT = (currentFrame - startFrame) / frameRange;
-      const currentVal = computeProceduralValue(config, currentFrame);
+      const currentVal = computeProceduralValue(config, currentFrame, startFrame, endFrame);
       const dotY = padding + drawH - ((currentVal - minVal) / rangeY) * drawH;
       ctx.fillStyle = '#fff';
       ctx.beginPath();
@@ -248,65 +266,8 @@ function ProceduralMiniPreview({
   );
 }
 
-// ---- Procedural value computation (simplified for preview) ----
-
-function computeProceduralValue(config: ProceduralConfig, frame: number): number {
-  switch (config.type) {
-    case 'noise': {
-      // Simple multi-octave pseudo-noise
-      let value = 0;
-      let amp = config.amplitude;
-      let freq = config.frequency;
-      for (let o = 0; o < config.octaves; o++) {
-        value += amp * pseudoNoise(frame * freq + config.seed + o * 100);
-        amp *= 0.5;
-        freq *= 2;
-      }
-      return value;
-    }
-    case 'wave': {
-      const phaseRad = (config.phase * Math.PI) / 180;
-      const t = frame * config.frequency * Math.PI * 2 + phaseRad;
-      switch (config.waveType) {
-        case 'sine':
-          return config.amplitude * Math.sin(t);
-        case 'triangle':
-          return config.amplitude * (2 * Math.abs(2 * (t / (2 * Math.PI) - Math.floor(t / (2 * Math.PI) + 0.5))) - 1);
-        case 'square':
-          return config.amplitude * (Math.sin(t) >= 0 ? 1 : -1);
-        case 'sawtooth':
-          return config.amplitude * 2 * (t / (2 * Math.PI) - Math.floor(t / (2 * Math.PI) + 0.5));
-        default:
-          return 0;
-      }
-    }
-    case 'spring': {
-      // Damped spring oscillation simulation
-      const { stiffness, damping, mass, restLength } = config;
-      const omega = Math.sqrt(stiffness / mass);
-      const gamma = damping / (2 * mass);
-      const dampedOmega = Math.sqrt(Math.max(0, omega * omega - gamma * gamma));
-      const t = frame * 0.1;
-      const envelope = Math.exp(-gamma * t);
-      return restLength + envelope * (restLength + 10) * Math.cos(dampedOmega * t);
-    }
-    case 'jitter': {
-      // Pseudo-random jitter with optional smoothing
-      if (config.smooth) {
-        return config.amount * pseudoNoise(frame * config.frequency);
-      }
-      return config.amount * (pseudoNoise(frame * config.frequency * 10) > 0 ? 1 : -1);
-    }
-    default:
-      return 0;
-  }
-}
-
-/** Simple pseudo-noise function for preview purposes */
-function pseudoNoise(x: number): number {
-  const s = Math.sin(x * 12.9898 + 78.233) * 43758.5453;
-  return (s - Math.floor(s)) * 2 - 1;
-}
+// ---- 取值：小预览直接用引擎 computeProceduralValue（文件头 import），
+// 与主画布/播放器实际生效的曲线同一函数，不再维护本地近似副本 ----
 
 // ---- Empty State ----
 
@@ -318,7 +279,7 @@ function EmptyProceduralState({ onAdd }: { onAdd: () => void }) {
       </div>
       <p className="text-xs text-zinc-400 mb-1">No procedural animations</p>
       <p className="text-[11px] text-zinc-500 mb-4">
-        Add noise, wave, spring, or jitter animations
+        Add noise, wave, spring, jitter, or formula animations
       </p>
       <Button
         size="sm"
@@ -357,15 +318,12 @@ function ProceduralAnimationCard({
   onUpdate,
   onRemove,
   onToggle,
-  ineffectiveNote,
 }: {
   animation: ProceduralAnimation;
   currentFrame: number;
   onUpdate: (id: string, updates: Partial<ProceduralAnimation>) => void;
   onRemove: (id: string) => void;
   onToggle: (id: string) => void;
-  /** 节点模式下目标节点缺对应启用的修改器时的点名（与 convert 同口径） */
-  ineffectiveNote?: string;
 }) {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editName, setEditName] = useState(animation.name);
@@ -408,11 +366,6 @@ function ProceduralAnimationCard({
           : 'border-zinc-800 bg-zinc-900/20 opacity-60'
       }`}
     >
-      {ineffectiveNote && (
-        <div className="px-2 py-1 text-[9px] leading-snug text-amber-300 bg-amber-500/10 border-b border-amber-500/20">
-          {ineffectiveNote}
-        </div>
-      )}
       {/* Card Header */}
       <div className="flex items-center gap-1.5 px-2 py-1.5">
         {/* Collapse toggle */}
@@ -463,7 +416,9 @@ function ProceduralAnimationCard({
                 ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
                 : animation.config.type === 'spring'
                   ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-                  : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                  : animation.config.type === 'formula'
+                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                    : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
           }`}
         >
           {typeInfo.label}
@@ -563,6 +518,9 @@ function ProceduralAnimationCard({
           )}
           {animation.config.type === 'jitter' && (
             <JitterConfig config={animation.config} onUpdate={handleConfigUpdate} />
+          )}
+          {animation.config.type === 'formula' && (
+            <FormulaConfig config={animation.config} onUpdate={handleConfigUpdate} />
           )}
         </div>
       )}
@@ -691,6 +649,14 @@ function SpringConfig({
   return (
     <div className="space-y-2">
       <ParamSlider
+        label="振幅"
+        value={config.amplitude ?? 5}
+        min={0.1}
+        max={50}
+        step={0.5}
+        onChange={(v) => onUpdate({ amplitude: v })}
+      />
+      <ParamSlider
         label="刚度"
         value={config.stiffness}
         min={0.01}
@@ -718,7 +684,7 @@ function SpringConfig({
         displayPrecision={1}
       />
       <ParamSlider
-        label="静止长度"
+        label="静止偏移"
         value={config.restLength}
         min={-50}
         max={50}
@@ -773,6 +739,40 @@ function JitterConfig({
           平滑
         </Label>
       </div>
+    </div>
+  );
+}
+
+// ---- Formula Config ----
+
+function FormulaConfig({
+  config,
+  onUpdate,
+}: {
+  config: ProceduralFormula;
+  onUpdate: (updates: Partial<ProceduralFormula>) => void;
+}) {
+  const check = validateFormula(config.expression);
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-[10px] text-zinc-500">表达式</Label>
+      <Input
+        type="text"
+        value={config.expression}
+        onChange={(e) => onUpdate({ expression: e.target.value })}
+        spellCheck={false}
+        className="h-6 w-full font-mono text-[11px] bg-zinc-800 border-zinc-700 text-zinc-200 px-1.5 py-0"
+      />
+      <p className="text-[9px] leading-snug text-zinc-500">
+        变量：f 局部帧（从起始帧数）、F 全局帧、p 进度（0..1）；常量 pi；
+        运算 + - * / % ^（幂）；函数 sin cos tan abs sqrt pow exp log
+        min max floor ceil round。
+      </p>
+      {!check.ok && (
+        <p className="text-[9px] leading-snug text-red-400">
+          公式有误：{check.error}（有误时取值为 0、不生效）
+        </p>
+      )}
     </div>
   );
 }
@@ -832,18 +832,63 @@ export default function ProceduralPanel() {
 
   const { selectedSpriteId } = useEditorStore();
 
-  // 节点目标（新管线）：主渲染与 convert 只按 nodeId 匹配程序化动画，
-  // 只写 spriteId 的条目永远不生效（2026-10-29 审计坐实）。选中了木偶
-  // 节点时面板转入节点模式：列表、新建都按 nodeId；无节点选中才回落
-  // 旧精灵模式（spriteId）。
-  const selectedCharacterId = useProjectStore((s) => s.selectedCharacterId);
+  // 程序化动画有两种目标：写 nodeId 的直达节点；只写 spriteId 的落
+  // 到挂着这个精灵的节点（主渲染按节点当前解析出的精灵匹配、
+  // convert 按挂载关系进包，同一口径）。选中了木偶节点时，列表含
+  // 直达本节点的条目与挂在本节点精灵上的条目、新建写 nodeId；无节
+  // 点选中（只有精灵被选中）时按 spriteId 列、新建写 spriteId。
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
-  const targetNode =
-    selectedCharacterId && selectedNodeId
-      ? unifiedCharacters?.[selectedCharacterId]?.nodes?.[selectedNodeId]
+  const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
+  const globalSprites = useProjectStore((s) => s.sprites);
+  // 目标节点不按 selectedCharacterId 找角色：那个字段几乎无人维护
+  // （只随存档装载、常为 null 或旧值），拿它查 nodes 会让明明选中
+  // 的节点恒落空。节点 id 全局唯一，目标节点 = 实际包含
+  // selectedNodeId 的那个角色的节点；编辑器侧的选择事实
+  // activePuppetSkeletonId 命中的角色优先查，未命中再扫其余角色，
+  // 画布点选、节点树点选、资产面板点选都认得出。
+  let targetCharacter: (typeof unifiedCharacters)[string] | undefined;
+  let targetNode: NonNullable<(typeof unifiedCharacters)[string]>['nodes'][string] | undefined;
+  if (selectedNodeId && unifiedCharacters) {
+    const preferred = activePuppetSkeletonId
+      ? unifiedCharacters[activePuppetSkeletonId]
       : undefined;
+    const candidates = preferred
+      ? [preferred, ...Object.values(unifiedCharacters).filter((c) => c !== preferred)]
+      : Object.values(unifiedCharacters);
+    for (const ch of candidates) {
+      const node = ch?.nodes?.[selectedNodeId];
+      if (node) {
+        targetCharacter = ch;
+        targetNode = node;
+        break;
+      }
+    }
+  }
   const nodeMode = !!targetNode;
+
+  // 选中节点在当前服装集下能显示的精灵 id 集合——只挂精灵的条目按
+  // 此落到本节点，列表与渲染同一口径。用与主渲染/convert 同一套
+  // resolvePieceSprite 解析；面板取不到画布的当前编辑方向，按该件
+  // 全部方向解析取集合（列出为超集，渲染端仍逐帧精确）；含堆叠件
+  // 的层图 id（堆叠节点在渲染时以中间层图为解析精灵）。
+  const nodeSpriteIds = useMemo(() => {
+    if (!targetNode || !targetCharacter || !selectedNodeId) return null;
+    const ids = new Set<string>();
+    const slotKey = targetNode.slot?.slotKey ?? selectedNodeId;
+    const piece = getActiveCostumeSet(
+      targetCharacter.costumeSets,
+      targetCharacter.activeCostumeSetId,
+    )?.pieces[slotKey];
+    if (!piece) return ids;
+    const table = { ...(targetCharacter.sprites ?? {}), ...(globalSprites ?? {}) };
+    for (const d of [0, 1, 2, 3, 4, 5, 6, 7] as DirectionIndex[]) {
+      const r = resolvePieceSprite(piece, d, targetCharacter.slotVariants?.[slotKey], table, targetCharacter.latitude ?? 0);
+      if (r.spriteId) ids.add(r.spriteId);
+    }
+    for (const layerId of piece.stack?.layerSpriteIds ?? []) ids.add(layerId);
+    return ids;
+  }, [targetNode, targetCharacter, selectedNodeId, globalSprites]);
 
   // Feature 5: CSV waveform import ref
 
@@ -851,29 +896,13 @@ export default function ProceduralPanel() {
   const partAnimations = useMemo(
     () =>
       nodeMode
-        ? proceduralAnimations.filter((pa) => pa.nodeId === selectedNodeId)
+        ? proceduralAnimations.filter(
+            (pa) =>
+              pa.nodeId === selectedNodeId ||
+              (!!pa.spriteId && !!nodeSpriteIds?.has(pa.spriteId)),
+          )
         : proceduralAnimations.filter((pa) => pa.spriteId === selectedSpriteId),
-    [nodeMode, proceduralAnimations, selectedNodeId, selectedSpriteId],
-  );
-
-  // 节点模式下与 convert 同口径判生效：目标属性对应的修改器必须在
-  // 节点上存在且启用，否则条目在编辑器与包里都不生效——卡片上点名，
-  // 修改器请去木偶面板加（节点修改器与蓝图双向同步，不在此处代加）。
-  const ineffectiveNoteFor = useCallback(
-    (pa: ProceduralAnimation): string | undefined => {
-      if (!nodeMode || !targetNode) return undefined;
-      const need =
-        pa.config.targetProperty === 'rotation'
-          ? { type: 'rotate', label: '旋转' }
-          : pa.config.targetProperty === 'scale'
-            ? { type: 'uniform_scale', label: '等比缩放' }
-            : { type: 'translate', label: '平移' };
-      const ok = (targetNode.modifiers ?? []).some((m) => m.type === need.type && m.enabled);
-      return ok
-        ? undefined
-        : `目标节点缺启用的「${need.label}」修改器，暂不生效——在木偶面板给节点加上后即生效，导出时也不会被丢弃。`;
-    },
-    [nodeMode, targetNode],
+    [nodeMode, proceduralAnimations, selectedNodeId, selectedSpriteId, nodeSpriteIds],
   );
 
   // ---- Handlers ----
@@ -891,6 +920,8 @@ export default function ProceduralPanel() {
         );
         return;
       }
+      // 未选中节点（只有精灵被选中）时按 spriteId 新建：条目自动落
+      // 到挂着这个精灵的节点上生效（主渲染与 convert 同口径）。
       if (!selectedSpriteId) return;
       addProceduralAnimation(
         selectedSpriteId,
@@ -999,6 +1030,13 @@ export default function ProceduralPanel() {
                 <Shuffle className="size-3.5 text-rose-400 mr-2" />
                 抖动 (Jitter)
               </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 cursor-pointer"
+                onClick={() => handleAdd('formula')}
+              >
+                <Sigma className="size-3.5 text-emerald-400 mr-2" />
+                公式 (Formula)
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -1008,7 +1046,7 @@ export default function ProceduralPanel() {
         <div className="px-3 py-1.5 border-b border-zinc-800 bg-emerald-500/5 shrink-0">
           <span className="text-[10px] text-zinc-400">
             目标节点：<span className="text-emerald-300">{targetNode.name ?? selectedNodeId}</span>
-            <span className="text-zinc-500">（按节点生效；未选节点时回落精灵模式）</span>
+            <span className="text-zinc-500">（程序化动画按节点生效）</span>
           </span>
         </div>
       )}
@@ -1027,7 +1065,6 @@ export default function ProceduralPanel() {
                 onUpdate={handleUpdate}
                 onRemove={handleRemove}
                 onToggle={handleToggle}
-                ineffectiveNote={ineffectiveNoteFor(pa)}
               />
             ))
           )}

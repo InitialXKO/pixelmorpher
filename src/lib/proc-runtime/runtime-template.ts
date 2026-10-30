@@ -867,6 +867,16 @@ const PERFORMANCES = EMBEDDED.performances || [];
 const SIM_CHAINS = EMBEDDED.chains || [];
 const PKG_SIM_MODE = EMBEDDED.simMode || 'frame';
 const PROCEDURAL = EMBEDDED.procedural || [];
+/** 部件父子表（EMBEDDED.skeleton 的 key→parent 映射，惰性建一次）：
+ * 程序化增量沿树传播（dynPropagateProc）用。 */
+let PROC_PARENTS = null;
+function procParents() {
+  if (!PROC_PARENTS) {
+    PROC_PARENTS = {};
+    for (const s of EMBEDDED.skeleton || []) PROC_PARENTS[s.key] = s.parent;
+  }
+  return PROC_PARENTS;
+}
 const GLOBAL_GRAPH = EMBEDDED.globalGraph || null;
 const globalGraphState = new Map();
 /** 工程帧率（包内字段）：粒子模拟的帧量化基数，与编辑器同口径；
@@ -4306,6 +4316,10 @@ function frame(now) {
   const sorted = sortParts(PARTS, char.variant);
   const els = [];
   const elByKey = new Map();
+  // 程序化传播账本：每部件一份（见 dynPropagateProc 的 info 形状）与
+  // 场 els 按 key 登记（场 el 的 pos/rot 是构建时的副本、后遍要回写）。
+  const procInfo = {};
+  const fieldElsByKey = {};
   const skinJobs = [];
   const fieldJobs = [];
   const stackJobs = [];
@@ -4362,18 +4376,23 @@ function frame(now) {
         if (fc.ds) an.sy *= followSampleAt(fc.ds, followU);
       }
     }
-    // 程序化动画（缺口 2）：与编辑器同口径叠加到位姿——平移 px、旋转
-    // 度→弧度、缩放以 (1 + v/10) 相乘（编辑器是加到 uniform_scale 的
-    // scale 参数上，无其他缩放修改器时等价；钳制与编辑器同为 ≥0.1）。
+    // 程序化动画（缺口 2）：与编辑器位姿增量汇总同一口径叠加到位
+    // 姿——平移 px 累加、旋转度→弧度、缩放逐条以 (1 + v/10) 钳
+    // ≥0.1 后累乘；两端都不经修改器参数、不要求节点预挂修改器。
+    // ownDx/ownDy/ownRot 另记一份自身增量：循环后按部件树刚体传播
+    // 给子部件（dynPropagateProc，与编辑器增量进世界变换同义）；
+    // 缩放只作用自身两轴、不传播（编辑器世界变换的缩放通道同样
+    // 不沿层级累乘）。
     let paScale = 1;
+    let ownDx = 0, ownDy = 0, ownRot = 0;
     if (PROCEDURAL.length > 0) {
       const fIdx = elapsed * FRAME_RATE;
       for (const pa of PROCEDURAL) {
         if (pa.slot !== part.key || fIdx < pa.startFrame || fIdx > pa.endFrame) continue;
-        const v = dynProceduralValue(pa.cfg, fIdx);
-        if (pa.target === 'translateX') an.dx += v;
-        else if (pa.target === 'translateY') an.dy += v;
-        else if (pa.target === 'rotation') an.a += v * Math.PI / 180;
+        const v = dynProceduralValue(pa.cfg, fIdx, pa.startFrame, pa.endFrame);
+        if (pa.target === 'translateX') { an.dx += v; ownDx += v; }
+        else if (pa.target === 'translateY') { an.dy += v; ownDy += v; }
+        else if (pa.target === 'rotation') { const rv = v * Math.PI / 180; an.a += rv; ownRot += rv; }
         else if (pa.target === 'scale') paScale *= Math.max(0.1, 1 + v / 10);
       }
     }
@@ -4395,6 +4414,19 @@ function frame(now) {
     // effStretch 同落点；开关关时因子不生效
     if (!stackDrive && foreOn && an.fore !== undefined && an.fore !== 1) { dsy *= an.fore; hasDeform = true; }
     const rotA = an.a + spinRad;
+    // 传播账本（PROCEDURAL 非空才记）：插头点基线 = char 原点 + pivot
+    // + 未含自身程序化平移的 an.dx/dy（an.dx 另含追随等既有增量，
+    // 它们本就平移整部件、基线含之才对）；baseRot = 去掉自身程序化
+    // 旋转的绘制角（追随/自旋不在自身增量内、不参与传播的增量部
+    // 分，与编辑器 folDx/spin 只落自身指令同口径）。
+    if (PROCEDURAL.length > 0) {
+      procInfo[part.key] = {
+        px: char.x + p.pivot[0] + ((an.dx || 0) - ownDx),
+        py: charOriginY() + p.pivot[1] + ((an.dy || 0) - ownDy),
+        dx: ownDx, dy: ownDy, rot: ownRot,
+        baseRot: rotA - ownRot, cx: ctr[0], cy: ctr[1],
+      };
+    }
     // 发光段：前 3 个启用实例各供一组参数（场在图集 RGB 三通道，导出时
     // 按选区预计算；第 4 个起在导出端已按各自所选组并入对应通道）
     const glowInsts = dynList.filter((x) => x.params.glowEnabled).slice(0, 3);
@@ -4435,12 +4467,15 @@ function frame(now) {
         for (const kind of kindsR) {
           const ft = state.fieldSlots[part.key + ':' + ii + ':' + kind];
           if (!ft) continue;
-          els.push({
+          const fEl = {
             pos: [el.pos[0], el.pos[1]], size: [ft.size[0] * 3, ft.size[1] * 3], rot: el.rot,
             tileCx: ft.tileCx, tileCy: ft.tileCy, tile: ft.tile,
             family: 0, seed: 0, modes: [0, 0, 0, 0], param: [0, 0, 0],
             ghost: false, composite: 4, deform: undefined, glow: [], glowSpace: [], glowStamps: undefined,
-          });
+          };
+          els.push(fEl);
+          // 程序化传播后遍要回写场 el 的 pos/rot（此处是副本），按 key 登记
+          (fieldElsByKey[part.key] || (fieldElsByKey[part.key] = [])).push(fEl);
           fieldJobs.push({ slot: ft, params: pp, kind: kind, dsx: dsx, dsy: dsy, mir: mirNow });
         }
       });
@@ -4471,6 +4506,25 @@ function frame(now) {
       dynAnchors.push({ part: part, tile: tile, ctr: ctr, rot: rotA, dynList: dynList, dsx: dsx, dsy: dsy, plugC: plugC, marksN: entry.marksN || null, marksDir: entry.marksDir || null });
     }
   });
+  // 程序化增量传播遍：父部件的增量刚体带动子部件（dynPropagateProc
+  // 按插头点递推、祖先无增量时逐值不变）——回写 el（绘制/蒙皮/刀光
+  // 读 elByKey 即跟随）、锚点表与钳制候选（钳制遍在其后、读新值）、
+  // 动态锚点（粒子发射随之）与场 els（pos/rot 是构建时的副本）。
+  // 须在钳制遍之前（钳制仍是最外层收尾、与编辑器同序）。
+  if (PROCEDURAL.length > 0) {
+    const finals = dynPropagateProc(procParents(), procInfo);
+    for (const key of Object.keys(finals)) {
+      const f = finals[key];
+      const el = elByKey.get(key);
+      if (el) { el.pos[0] = f.x; el.pos[1] = f.y; el.rot = f.rot; }
+      const anc = partAnchorsByKey.get(key);
+      if (anc) { anc.ctr = [f.x, f.y]; anc.rot = f.rot; }
+      const fes = fieldElsByKey[key];
+      if (fes) for (const fe of fes) { fe.pos[0] = f.x; fe.pos[1] = f.y; fe.rot = f.rot; }
+    }
+    for (const cd of clampCands) { const f = finals[cd.key]; if (f) { cd.ctr = [f.x, f.y]; cd.rot = f.rot; } }
+    for (const a of dynAnchors) { const f = finals[a.part.key]; if (f) { a.ctr = [f.x, f.y]; a.rot = f.rot; } }
+  }
   // 钳制锚定遍：表演求值后、绘制前（Δ 回写物理 + 同步移本帧绘制位）
   runAnchorPass(clampCands, els, partAnchorsByKey);
   // 动态粒子：瓦片空间模拟（连续钟 elapsed × 包帧率量化帧，

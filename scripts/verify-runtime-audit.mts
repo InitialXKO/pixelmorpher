@@ -87,11 +87,13 @@ check('缺口1·已修：resolvePart 全量覆盖服装件派生字段（含 sur
     { id: 'p3', name: '只有精灵id', spriteId: 'spr_x', enabled: true, startFrame: 0, endFrame: 60, config: { type: 'wave', amplitude: 2, frequency: 0.1, phase: 0, waveType: 'sine', targetProperty: 'translateX' } },
   ] as never[];
   const pkg = convertCharacterToRuntimePackage(ch, undefined, { projectData: { proceduralAnimations: pas } });
-  check('缺口2·有对应修改器的 PA 进包且槽位/目标正确',
-    pkg.procedural?.length === 1 && pkg.procedural[0].slot === 'withMod' && pkg.procedural[0].target === 'translateX');
-  check('缺口2·无修改器与 spriteId-only 的 PA 被点名不进包',
-    pkg.warnings.some((w) => w.includes('无修改器') && w.includes('同样不生效'))
-    && pkg.warnings.some((w) => w.includes('只有精灵id') && w.includes('亦不生效')));
+  check('缺口2·有修改器与无修改器的 PA 都进包且槽位/目标正确（修改器门控已摘除）',
+    pkg.procedural?.length === 2
+    && pkg.procedural.some((e) => e.slot === 'withMod' && e.target === 'translateX')
+    && pkg.procedural.some((e) => e.slot === 'noMod' && e.target === 'translateX'));
+  check('缺口2·精灵目标未被任何节点挂载时点名不进包、无修改器不再被点名',
+    pkg.warnings.some((w) => w.includes('只有精灵id') && w.includes('未被任何节点挂载'))
+    && !pkg.warnings.some((w) => w.includes('同样不生效')));
   check('缺口2·运行时模板消费 PROCEDURAL', template.includes('const PROCEDURAL = EMBEDDED.procedural') && template.includes('dynProceduralValue(pa.cfg'));
 }
 
