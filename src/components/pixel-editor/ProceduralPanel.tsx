@@ -783,16 +783,34 @@ export default function ProceduralPanel() {
   // convert 按挂载关系进包，同一口径）。选中了木偶节点时，列表含
   // 直达本节点的条目与挂在本节点精灵上的条目、新建写 nodeId；无节
   // 点选中（只有精灵被选中）时按 spriteId 列、新建写 spriteId。
-  const selectedCharacterId = useProjectStore((s) => s.selectedCharacterId);
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
+  const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
   const globalSprites = useProjectStore((s) => s.sprites);
-  const targetCharacter =
-    selectedCharacterId ? unifiedCharacters?.[selectedCharacterId] : undefined;
-  const targetNode =
-    selectedCharacterId && selectedNodeId
-      ? unifiedCharacters?.[selectedCharacterId]?.nodes?.[selectedNodeId]
+  // 目标节点不按 selectedCharacterId 找角色：那个字段几乎无人维护
+  // （只随存档装载、常为 null 或旧值），拿它查 nodes 会让明明选中
+  // 的节点恒落空。节点 id 全局唯一，目标节点 = 实际包含
+  // selectedNodeId 的那个角色的节点；编辑器侧的选择事实
+  // activePuppetSkeletonId 命中的角色优先查，未命中再扫其余角色，
+  // 画布点选、节点树点选、资产面板点选都认得出。
+  let targetCharacter: (typeof unifiedCharacters)[string] | undefined;
+  let targetNode: NonNullable<(typeof unifiedCharacters)[string]>['nodes'][string] | undefined;
+  if (selectedNodeId && unifiedCharacters) {
+    const preferred = activePuppetSkeletonId
+      ? unifiedCharacters[activePuppetSkeletonId]
       : undefined;
+    const candidates = preferred
+      ? [preferred, ...Object.values(unifiedCharacters).filter((c) => c !== preferred)]
+      : Object.values(unifiedCharacters);
+    for (const ch of candidates) {
+      const node = ch?.nodes?.[selectedNodeId];
+      if (node) {
+        targetCharacter = ch;
+        targetNode = node;
+        break;
+      }
+    }
+  }
   const nodeMode = !!targetNode;
 
   // 选中节点在当前服装集下能显示的精灵 id 集合——只挂精灵的条目按

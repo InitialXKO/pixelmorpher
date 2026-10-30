@@ -189,6 +189,10 @@ console.log('D) 源码级断言');
   ok(!panel.includes('SPRITE_ONLY_NOTE'), '上一轮的精灵目标警示（SPRITE_ONLY_NOTE）已撤销');
   ok(!panel.includes('disabled={!nodeMode}'), '添加下拉不再按有无节点禁用（只挂精灵也可新建）');
   ok(panel.includes('nodeSpriteIds'), '选中节点时列表按挂载精灵集合并入精灵目标条目');
+  ok(!panel.includes('(s) => s.selectedCharacterId'), 'ProceduralPanel 不再订阅 selectedCharacterId（几乎无人维护、常为旧值）');
+  ok(!panel.includes('[selectedCharacterId]'), 'ProceduralPanel 不再以 selectedCharacterId 查角色/nodes 推导目标节点');
+  ok(panel.includes('activePuppetSkeletonId'), '目标角色优先按编辑器侧选择事实 activePuppetSkeletonId 找');
+  ok(panel.includes('nodes?.[selectedNodeId]'), '目标节点按「角色实际包含 selectedNodeId」推导（节点 id 全局唯一）');
 
   const eng = readFileSync(new URL('../src/lib/engine/procedural.ts', import.meta.url), 'utf8');
   ok(eng.includes('export function applyProceduralAnimations'), 'applyProceduralAnimations 本体保留（convert 注释引用其查找规则）');
