@@ -308,7 +308,7 @@ function ProceduralAnimationCard({
   onUpdate: (id: string, updates: Partial<ProceduralAnimation>) => void;
   onRemove: (id: string) => void;
   onToggle: (id: string) => void;
-  /** 不生效点名：节点模式=缺对应启用的修改器（与 convert 同口径）；精灵模式=spriteId-only 条目 */
+  /** 不生效点名：选中节点时=缺对应启用的修改器（与 convert 同口径）；未选中节点时=spriteId-only 条目 */
   ineffectiveNote?: string;
 }) {
   const [isEditingName, setIsEditingName] = useState(false);
@@ -761,7 +761,7 @@ function ParamSlider({
   );
 }
 
-/** 精灵模式下 spriteId-only 条目的点名（卡片警示条与面板提示同句） */
+/** 未选中节点时 spriteId-only 条目的点名（卡片警示条与面板提示同句） */
 const SPRITE_ONLY_NOTE = '只有精灵目标的条目在编辑器与导出中均不生效——选中木偶节点后按节点新建。';
 
 // ---- Main ProceduralPanel Component ----
@@ -781,8 +781,8 @@ export default function ProceduralPanel() {
 
   // 节点目标（新管线）：主渲染与 convert 只按 nodeId 匹配程序化动画，
   // 只写 spriteId 的条目永远不生效（2026-10-29 审计坐实）。选中了木偶
-  // 节点时面板转入节点模式：列表、新建都按 nodeId；无节点选中才回落
-  // 旧精灵模式（spriteId）。
+  // 节点时，列表、新建都按 nodeId；无节点选中（只有精灵被选中）时
+  // 才按 spriteId 列既有条目。
   const selectedCharacterId = useProjectStore((s) => s.selectedCharacterId);
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
@@ -803,7 +803,7 @@ export default function ProceduralPanel() {
     [nodeMode, proceduralAnimations, selectedNodeId, selectedSpriteId],
   );
 
-  // 节点模式下与 convert 同口径判生效：目标属性对应的修改器必须在
+  // 选中节点时与 convert 同口径判生效：目标属性对应的修改器必须在
   // 节点上存在且启用，否则条目在编辑器与包里都不生效——卡片上点名，
   // 修改器请去木偶面板加（节点修改器与蓝图双向同步，不在此处代加）。
   const ineffectiveNoteFor = useCallback(
@@ -838,7 +838,7 @@ export default function ProceduralPanel() {
         );
         return;
       }
-      // 精灵模式不再新建：只有 spriteId 的条目在编辑器与导出中均不
+      // 未选中节点时不再新建：只有 spriteId 的条目在编辑器与导出中均不
       // 生效（主渲染只按 nodeId 匹配、convert 点名丢弃），新建即死
       // 条目。添加下拉已禁用，此处兜底（空状态按钮同走本函数）；
       // 存量条目的编辑/删除/开关不受影响。
@@ -893,7 +893,7 @@ export default function ProceduralPanel() {
             {partAnimations.length}
           </Badge>
 
-          {/* Add dropdown（精灵模式禁用：spriteId-only 条目两边都不生效） */}
+          {/* Add dropdown（未选中节点时禁用：spriteId-only 条目两边都不生效） */}
           <DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -953,7 +953,7 @@ export default function ProceduralPanel() {
         <div className="px-3 py-1.5 border-b border-zinc-800 bg-emerald-500/5 shrink-0">
           <span className="text-[10px] text-zinc-400">
             目标节点：<span className="text-emerald-300">{targetNode.name ?? selectedNodeId}</span>
-            <span className="text-zinc-500">（按节点生效；未选节点时回落精灵模式）</span>
+            <span className="text-zinc-500">（程序化动画按节点生效）</span>
           </span>
         </div>
       )}

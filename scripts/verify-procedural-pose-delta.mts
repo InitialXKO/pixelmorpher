@@ -9,7 +9,7 @@
 //     播放器公式由 dyn 值组装的结果与 A 一致
 //  D) 源码级断言——unified-render 不再以 applyProceduralAnimations 改
 //     指令 modifiers；ProceduralPanel 不再含本地 computeProceduralValue
-//     /pseudoNoise 且 import 引擎函数；精灵模式警示与禁用添加在位
+//     /pseudoNoise 且 import 引擎函数；只有精灵目标时的警示与禁用添加在位
 import { computeProceduralPoseDelta, computeProceduralValue } from '../src/lib/engine/procedural';
 import { createDynamicRuntime } from '../src/lib/proc-runtime/dynamic-src';
 import type { ModifierInstance, ProceduralAnimation, ProceduralConfig } from '../src/lib/types';
@@ -156,8 +156,8 @@ console.log('D) 源码级断言');
   ok(!panel.includes('function computeProceduralValue'), 'ProceduralPanel 不再含本地 computeProceduralValue 定义');
   ok(!panel.includes('pseudoNoise'), 'ProceduralPanel 不再含 pseudoNoise');
   ok(panel.includes("import { computeProceduralValue } from '@/lib/engine/procedural'"), 'ProceduralPanel 改 import 引擎 computeProceduralValue');
-  ok(panel.includes('SPRITE_ONLY_NOTE') && panel.includes('只有精灵目标的条目在编辑器与导出中均不生效'), '精灵模式警示文案在位');
-  ok(panel.includes('disabled={!nodeMode}'), '精灵模式下添加下拉禁用');
+  ok(panel.includes('SPRITE_ONLY_NOTE') && panel.includes('只有精灵目标的条目在编辑器与导出中均不生效'), '只有精灵目标的警示文案在位');
+  ok(panel.includes('disabled={!nodeMode}'), '未选节点时添加下拉禁用');
 
   const eng = readFileSync(new URL('../src/lib/engine/procedural.ts', import.meta.url), 'utf8');
   ok(eng.includes('export function applyProceduralAnimations'), 'applyProceduralAnimations 本体保留（convert 注释引用其查找规则）');
