@@ -422,6 +422,10 @@ console.log('G) 描边轮廓来源');
   const ruSeg = ur.slice(ur.indexOf('export function renderUnified('), ur.indexOf('export function renderUnifiedToCanvas'));
   ok(ruSeg.includes('deferBgFill'), 'renderUnified 有背景推迟填充开关（仅修改器在场时）');
   ok(ruSeg.indexOf('destination-over') > ruSeg.indexOf('applyCanvasModifiers'), 'renderUnified 背景垫底在修改器之后');
+  // 推迟时入口须先清画布：调用方在同一 ctx 上的先行绘制（主画布第 1 步的
+  // 洋葱影）旧流程靠背景填充盖住、不进修改器 alpha；推迟后不清会混进轮廓集
+  ok(ruSeg.includes('if (deferBgFill) {\n    ctx.clearRect(0, 0, canvasWidth, canvasHeight);'), 'renderUnified 推迟时入口有 clearRect 守卫');
+  ok(ruSeg.indexOf('ctx.clearRect(0, 0, canvasWidth, canvasHeight)') < ruSeg.indexOf('renderPuppetViaUnifiedPipeline('), 'renderUnified clearRect 守卫位于管线绘制之前（入口）');
   const rucSeg = ur.slice(ur.indexOf('export function renderUnifiedCharactersToCanvas'));
   ok(rucSeg.indexOf('destination-over') > rucSeg.indexOf('applyCanvasModifiers'), 'renderUnifiedCharactersToCanvas 背景垫底在修改器之后');
   // 导出/SAM 路径自身不填背景（其管线内亦无填充），修改器读到的 alpha 不被污染

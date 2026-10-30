@@ -5209,11 +5209,18 @@ export function renderUnified(
   // 先填背景会让整幅画布 alpha=255、轮廓集变成整幅画布而带为空。
   // 背景是纯色填充、其余绘制以 source-over 叠加，最终合成逐像素
   // 等价（结合律）；无修改器时保持原顺序，零行为变化。
+  // 推迟时入口先清画布：调用方（主画布）可能已在同一 ctx 上画过
+  // 洋葱影等先行内容，旧流程靠背景填充盖住、从不进入修改器的
+  // alpha 读取；不清则推迟后它们会混进轮廓集。清后恢复「每帧从
+  // 已知（透明）状态起笔」的前提，修改器读到的 alpha 只有当前帧。
   const deferBgFill = backgroundColor !== 'transparent'
     && !!canvasModifierTracks && canvasModifierTracks.length > 0;
   if (backgroundColor !== 'transparent' && !deferBgFill) {
     ctx.fillStyle = backgroundColor;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
+  if (deferBgFill) {
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
   }
   if (unifiedCharacters && Object.keys(unifiedCharacters).length > 0) {
     renderPuppetViaUnifiedPipeline(
