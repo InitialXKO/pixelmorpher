@@ -6,6 +6,7 @@
 
 import type { ModifierInstance, ProceduralAnimation, ProceduralConfig } from '../types';
 import { fbmNoise, seededRandom, simplex2D } from './noise';
+import { evaluateFormula } from './formula';
 // ============================================================
 // V2.0: Procedural Animation System
 // ============================================================
@@ -14,6 +15,7 @@ export function computeProceduralValue(
   config: ProceduralConfig,
   frame: number,
   startFrame = 0,
+  endFrame?: number,
 ): number {
   switch (config.type) {
     case 'noise': {
@@ -56,6 +58,17 @@ export function computeProceduralValue(
         return (rng() * 2 - 1) * config.amount;
       }
     }
+    case 'formula': {
+      // 变量口径与 dynamic-src 的 dynProceduralValue 同式：f 局部帧
+      // （钳 ≥0）、F 全局帧、p 条目进度钳 [0,1]（endFrame ≤
+      // startFrame 或未传 endFrame 时 p = 0）。公式本身的解析与
+      // 求值在 engine/formula.ts（坏公式/非有限结果回 0）。
+      const sf = startFrame;
+      const ef = endFrame ?? sf;
+      const lf = Math.max(0, frame - sf);
+      const p = ef > sf ? Math.min(1, Math.max(0, (frame - sf) / (ef - sf))) : 0;
+      return evaluateFormula(config.expression, lf, frame, p);
+    }
     default: return 0;
   }
 }
@@ -89,7 +102,7 @@ export function applyProceduralAnimations(
     if (!pa.enabled || (!matchesPart && !matchesNode)) continue;
     if (frame < pa.startFrame || frame > pa.endFrame) continue;
 
-    const value = computeProceduralValue(pa.config, frame, pa.startFrame);
+    const value = computeProceduralValue(pa.config, frame, pa.startFrame, pa.endFrame);
 
     switch (pa.config.targetProperty) {
       case 'translateX': {
@@ -174,7 +187,7 @@ export function computeProceduralPoseDelta(
     const matchesSprite = !!resolvedSpriteId && !!pa.spriteId && pa.spriteId === resolvedSpriteId;
     if (!pa.enabled || (!matchesNode && !matchesSprite)) continue;
     if (frame < pa.startFrame || frame > pa.endFrame) continue;
-    const value = computeProceduralValue(pa.config, frame, pa.startFrame);
+    const value = computeProceduralValue(pa.config, frame, pa.startFrame, pa.endFrame);
     switch (pa.config.targetProperty) {
       case 'translateX':
         delta.dx += value;

@@ -666,9 +666,121 @@ function dynProcFbm(x, y, octaves, seed) {
   }
   return value / maxValue;
 }
+// 公式求值：与编辑器 engine/formula.ts 逐行同构的递归下降小解析器
+// （不用 eval / Function）。变量 f/F/p 由 dynProceduralValue 按条目
+// 帧范围算好传入；长度上限 200、括号/调用嵌套上限 32；解析错误
+// （未知标识符/函数、括号不配对等）或非有限结果一律回 0。
+var DYN_FML_UNARY = { sin: Math.sin, cos: Math.cos, tan: Math.tan, abs: Math.abs, sqrt: Math.sqrt, exp: Math.exp, log: Math.log, floor: Math.floor, ceil: Math.ceil, round: Math.round };
+var DYN_FML_BINARY = { pow: Math.pow, min: Math.min, max: Math.max };
+function dynFmlHas(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+function dynFmlErr(st, msg) { return new Error('第 ' + (st.pos + 1) + ' 个字符处：' + msg); }
+function dynFmlSkipWs(st) { while (st.pos < st.src.length) { const c = st.src.charCodeAt(st.pos); if (c === 32 || c === 9 || c === 10 || c === 13) st.pos++; else break; } }
+function dynFmlPeek(st) { dynFmlSkipWs(st); return st.pos < st.src.length ? st.src[st.pos] : ''; }
+function dynFmlExpr(st) {
+  let v = dynFmlTerm(st);
+  for (;;) {
+    const c = dynFmlPeek(st);
+    if (c === '+') { st.pos++; v = v + dynFmlTerm(st); }
+    else if (c === '-') { st.pos++; v = v - dynFmlTerm(st); }
+    else return v;
+  }
+}
+function dynFmlTerm(st) {
+  let v = dynFmlUnary(st);
+  for (;;) {
+    const c = dynFmlPeek(st);
+    if (c === '*') { st.pos++; v = v * dynFmlUnary(st); }
+    else if (c === '/') { st.pos++; v = v / dynFmlUnary(st); }
+    else if (c === '%') { st.pos++; v = v % dynFmlUnary(st); }
+    else return v;
+  }
+}
+function dynFmlUnary(st) {
+  if (dynFmlPeek(st) === '-') { st.pos++; return -dynFmlUnary(st); }
+  return dynFmlPower(st);
+}
+function dynFmlPower(st) {
+  const base = dynFmlPrimary(st);
+  if (dynFmlPeek(st) === '^') { st.pos++; return Math.pow(base, dynFmlUnary(st)); }
+  return base;
+}
+function dynFmlPrimary(st) {
+  const c = dynFmlPeek(st);
+  if (c === '') throw dynFmlErr(st, '表达式不完整');
+  if (c === ')' || c === ',') throw dynFmlErr(st, '这里缺一个数或子表达式');
+  if (c === '(') {
+    st.pos++;
+    st.depth++;
+    if (st.depth > 32) throw dynFmlErr(st, '嵌套超过 32 层上限');
+    const v = dynFmlExpr(st);
+    if (dynFmlPeek(st) !== ')') throw dynFmlErr(st, '括号不配对，缺「)」');
+    st.pos++;
+    st.depth--;
+    return v;
+  }
+  const code = st.src.charCodeAt(st.pos);
+  if ((code >= 48 && code <= 57) || c === '.') {
+    const start = st.pos;
+    let dot = false;
+    let digit = false;
+    while (st.pos < st.src.length) {
+      const d = st.src[st.pos];
+      if (d >= '0' && d <= '9') { digit = true; st.pos++; }
+      else if (d === '.') { if (dot) break; dot = true; st.pos++; }
+      else break;
+    }
+    if (!digit) throw dynFmlErr(st, '数字格式不对');
+    return parseFloat(st.src.slice(start, st.pos));
+  }
+  if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122) || c === '_') {
+    const start = st.pos;
+    while (st.pos < st.src.length) {
+      const d = st.src.charCodeAt(st.pos);
+      if ((d >= 65 && d <= 90) || (d >= 97 && d <= 122) || (d >= 48 && d <= 57) || d === 95) st.pos++;
+      else break;
+    }
+    const name = st.src.slice(start, st.pos);
+    if (dynFmlPeek(st) === '(') {
+      const unary = dynFmlHas(DYN_FML_UNARY, name) ? DYN_FML_UNARY[name] : undefined;
+      const binary = dynFmlHas(DYN_FML_BINARY, name) ? DYN_FML_BINARY[name] : undefined;
+      if (!unary && !binary) throw dynFmlErr(st, '未知函数「' + name + '」');
+      st.pos++;
+      st.depth++;
+      if (st.depth > 32) throw dynFmlErr(st, '嵌套超过 32 层上限');
+      const args = [dynFmlExpr(st)];
+      while (dynFmlPeek(st) === ',') { st.pos++; args.push(dynFmlExpr(st)); }
+      if (dynFmlPeek(st) !== ')') throw dynFmlErr(st, '括号不配对，缺「)」');
+      st.pos++;
+      st.depth--;
+      const need = unary ? 1 : 2;
+      if (args.length !== need) throw dynFmlErr(st, '函数「' + name + '」需要 ' + need + ' 个参数，实际 ' + args.length + ' 个');
+      return unary ? unary(args[0]) : binary(args[0], args[1]);
+    }
+    if (name === 'f') return st.f;
+    if (name === 'F') return st.F;
+    if (name === 'p') return st.p;
+    if (name === 'pi') return Math.PI;
+    if (dynFmlHas(DYN_FML_UNARY, name) || dynFmlHas(DYN_FML_BINARY, name)) throw dynFmlErr(st, '函数「' + name + '」后面要带括号和参数');
+    throw dynFmlErr(st, '未知变量「' + name + '」');
+  }
+  throw dynFmlErr(st, '无法识别的字符「' + c + '」');
+}
+function dynFormulaParse(src, f, F, p) {
+  const st = { src: src, pos: 0, depth: 0, f: f, F: F, p: p };
+  const v = dynFmlExpr(st);
+  if (dynFmlPeek(st) !== '') throw dynFmlErr(st, '后面多出了无法识别的内容');
+  return v;
+}
+function dynFormulaValue(expr, f, F, p) {
+  if (typeof expr !== 'string' || expr.length > 200) return 0;
+  try {
+    const v = dynFormulaParse(expr, f, F, p);
+    return Number.isFinite(v) ? v : 0;
+  } catch (e) { return 0; }
+}
 // 程序化动画取值：与编辑器 engine/procedural.computeProceduralValue 逐值同源
-// （噪声/弹簧/抖动公式逐行移植，探针逐值对拍）。
-function dynProceduralValue(cfg, frame, startFrame) {
+// （噪声/弹簧/抖动公式逐行移植、公式类型经 dynFormulaValue 同规格求值，探针逐值对拍）。
+function dynProceduralValue(cfg, frame, startFrame, endFrame) {
   switch (cfg.type) {
     case 'noise': return (dynProcFbm(frame * cfg.frequency, 0, cfg.octaves, cfg.seed) * 2 - 1) * cfg.amplitude;
     case 'wave': {
@@ -695,6 +807,13 @@ function dynProceduralValue(cfg, frame, startFrame) {
       if (cfg.smooth) return (dynProcNoise2D(frame * cfg.frequency, 0) * 2 - 1) * cfg.amount;
       return (rng() * 2 - 1) * cfg.amount;
     }
+    case 'formula': {
+      const sf = startFrame || 0;
+      const ef = (endFrame === undefined || endFrame === null) ? sf : endFrame;
+      const lf = Math.max(0, frame - sf);
+      const p = ef > sf ? Math.min(1, Math.max(0, (frame - sf) / (ef - sf))) : 0;
+      return dynFormulaValue(cfg.expression, lf, frame, p);
+    }
     default: return 0;
   }
 }
@@ -716,8 +835,9 @@ export function createDynamicRuntime(): {
   dynNoiseU: (u: number, v: number, period: number, seed: number) => number;
   dynSpinRadAt: (params: never, t: number) => number;
   dynArcPoints: (params: never, t: number, endX?: number, endY?: number, hasEnd?: boolean) => { main: [number, number, number][]; branches: [number, number, number][][]; dots: [number, number, number][]; alpha: number };
-  dynProceduralValue: (cfg: never, frame: number, startFrame?: number) => number;
+  dynProceduralValue: (cfg: never, frame: number, startFrame?: number, endFrame?: number) => number;
+  dynFormulaValue: (expression: string, f: number, F: number, p: number) => number;
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynParticleColorAt, dynOrbitPoints, dynPostColorAt, dynFieldColorAt, dynBlobField, dynFlameField, dynEnvSamples };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynFormulaValue, dynParticleColorAt, dynOrbitPoints, dynPostColorAt, dynFieldColorAt, dynBlobField, dynFlameField, dynEnvSamples };`);
   return factory() as never;
 }

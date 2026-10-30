@@ -25,7 +25,12 @@
 //     amplitude 按 5 读、引擎与 dyn 两份弹簧带 startFrame 逐值对
 //     拍；噪声输出居中（fbm 原语恒 [0,1)，分支 ×2−1 后跨零）；
 //     wave/jitter 按改前公式在探针内复算、多帧多参数逐值不变
+//  G) 第五类「公式」——表达式按规格手算对拍（优先级/^ 右结合/
+//     一元负号/嵌套括号/全部函数/f·F·p 三变量与 p 钳制）、坏公式
+//     与非有限结果回 0、引擎 evaluateFormula 与 dyn 版逐值全等、
+//     经 computeProceduralValue 与位姿增量汇总的接线
 import { computeProceduralPoseDelta, computeProceduralValue } from '../src/lib/engine/procedural';
+import { evaluateFormula, validateFormula } from '../src/lib/engine/formula';
 import { fbmNoise, seededRandom, simplex2D } from '../src/lib/engine/noise';
 import { createDynamicRuntime } from '../src/lib/proc-runtime/dynamic-src';
 import { convertCharacterToRuntimePackage } from '../src/lib/proc-runtime/convert';
@@ -205,11 +210,11 @@ console.log('D) 源码级断言');
   ok(eng.includes('frame - startFrame') && eng.includes('amplitude ?? 5'), '引擎弹簧按局部帧起振、amplitude 缺省 5');
   ok(!eng.includes('frame / 60'), '引擎弹簧不再把帧数除以 60 折秒');
   const dynSrc = readFileSync(new URL('../src/lib/proc-runtime/dynamic-src.ts', import.meta.url), 'utf8');
-  ok(dynSrc.includes('function dynProceduralValue(cfg, frame, startFrame)') && dynSrc.includes('amplitude ?? 5'), '运行时弹簧同式：带 startFrame、amplitude 缺省 5');
+  ok(dynSrc.includes('function dynProceduralValue(cfg, frame, startFrame, endFrame)') && dynSrc.includes('amplitude ?? 5'), '运行时弹簧同式：带 startFrame、amplitude 缺省 5');
   ok(!dynSrc.includes('frame / 60'), '运行时弹簧不再把帧数除以 60 折秒');
   const rtSrc = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
-  ok(rtSrc.includes('dynProceduralValue(pa.cfg, fIdx, pa.startFrame)'), '播放器调用 dynProceduralValue 传 pa.startFrame');
-  ok(panel.includes('computeProceduralValue(config, frame, startFrame)') && panel.includes('computeProceduralValue(config, currentFrame, startFrame)'), '面板小预览两处取值都传条目 startFrame');
+  ok(rtSrc.includes('dynProceduralValue(pa.cfg, fIdx, pa.startFrame, pa.endFrame)'), '播放器调用 dynProceduralValue 传 pa.startFrame 与 pa.endFrame');
+  ok(panel.includes('computeProceduralValue(config, frame, startFrame, endFrame)') && panel.includes('computeProceduralValue(config, currentFrame, startFrame, endFrame)'), '面板小预览两处取值都传条目 startFrame 与 endFrame');
   ok(panel.includes('amplitude: 5') && panel.includes('config.amplitude ?? 5'), '面板弹簧默认带 amplitude 5、存量缺字段按 5 显示');
   ok(panel.includes('静止偏移') && !panel.includes('静止长度'), '面板弹簧参数名改为「静止偏移」、不再叫「静止长度」');
 
@@ -440,6 +445,152 @@ console.log('F) 弹簧拉齐 + 噪声居中');
     }
     ok(same, 'wave/jitter 与改前公式逐值不变');
   }
+}
+
+console.log('G) 公式类型');
+{
+  const rt = createDynamicRuntime();
+  // 手算对拍：期望值在探针内以原生 Math 直接写出，与解析器实现独立
+  const hand: Array<[string, number, number, number, number]> = [
+    // [表达式, f, F, p, 期望]
+    ['1 + 2 * 3 - 4 / 2', 0, 0, 0, 5],
+    ['(1 + 2) * (3 - 4)', 0, 0, 0, -3],
+    ['2 ^ 3 ^ 2', 0, 0, 0, 512],
+    ['(2 ^ 3) ^ 2', 0, 0, 0, 64],
+    ['-2 ^ 2', 0, 0, 0, -4],
+    ['(-2) ^ 2', 0, 0, 0, 4],
+    ['2 ^ -2', 0, 0, 0, 0.25],
+    ['10 % 3 + 10.5 % 3', 0, 0, 0, 2.5],
+    ['sin(pi / 2) + cos(0)', 0, 0, 0, 2],
+    ['sqrt(16) + pow(2, 5)', 0, 0, 0, 36],
+    ['min(max(1, 5), 3)', 0, 0, 0, 3],
+    ['abs(0 - 7) + floor(2.9) + ceil(2.1) + round(2.4)', 0, 0, 0, 14],
+    ['exp(0) + log(exp(3))', 0, 0, 0, 4],
+    ['tan(0) * 5 + cos(0)', 0, 0, 0, 1],
+    ['f * 2 + F', 3, 10, 0, 16],
+    ['p * 200 - f', 5, 99, 0.3, 55],
+    ['  1+2 ', 0, 0, 0, 3],
+    ['- -5 + -3', 0, 0, 0, 2],
+  ];
+  let handOk = true;
+  for (const [expr, f, F, p, want] of hand) {
+    const got = evaluateFormula(expr, f, F, p);
+    if (!near(got, want)) { handOk = false; console.log(`    手算不一致: ${expr} → ${got}，期望 ${want}`); }
+  }
+  ok(handOk, '公式多式与手算逐值一致（优先级/结合性/一元负号/括号/函数/三变量）');
+
+  // 引擎与 dyn 逐值全等（一组表达式 × 多组变量，严格相等）
+  const battery = [
+    '5 * sin(f * 0.5)', 'f ^ 2 / 10 - F % 7', 'p * (1 - p) * 40', 'pow(sin(f / 3), 2) * 8',
+    'min(10, max(-10, f - 20))', 'sqrt(abs(F - 50)) + floor(p * 10)', '1 + 2 * 3 ^ 2 % 5',
+    'exp(-f / 10) * 20 * cos(f)', 'log(1 + f) * 3', 'round(pi * 100) / 100',
+  ];
+  const varSets: Array<[number, number, number]> = [[0, 0, 0], [1, 7, 0.2], [13, 40, 0.9], [99, 99, 1], [7, 3, 0.5]];
+  let parOk = true;
+  for (const expr of battery) {
+    for (const [f, F, p] of varSets) {
+      const a = evaluateFormula(expr, f, F, p);
+      const b = rt.dynFormulaValue(expr, f, F, p);
+      if (a !== b) { parOk = false; console.log(`    引擎/dyn 不等: ${expr} @(${f},${F},${p}) → ${a} vs ${b}`); }
+    }
+  }
+  ok(parOk, '引擎 evaluateFormula 与 dynFormulaValue 全组逐值严格相等');
+
+  // 坏公式 / 非有限 → 0（两端一致）
+  const bad = ['', '   ', '1 / 0', '0 / 0', 'sqrt(-1)', 'log(-1)', 'foo(1)', 'bar + 1', 'sin',
+    'sin()', 'max(1)', 'pow(1, 2, 3)', '1 +', '(1 + 2', '1 + 2)', '1 ++ 2', '1 ** 2', '2f',
+    '1.2.3', 'f(2)', 'x'.repeat(201), '('.repeat(33) + '1' + ')'.repeat(33),
+    'sin('.repeat(33) + '0' + ')'.repeat(33)];
+  let badOk = true;
+  for (const expr of bad) {
+    if (evaluateFormula(expr, 3, 9, 0.5) !== 0) { badOk = false; console.log(`    坏公式未回 0: ${JSON.stringify(expr.slice(0, 30))} → ${evaluateFormula(expr, 3, 9, 0.5)}`); }
+    if (rt.dynFormulaValue(expr, 3, 9, 0.5) !== 0) { badOk = false; console.log(`    dyn 坏公式未回 0: ${JSON.stringify(expr.slice(0, 30))}`); }
+  }
+  ok(badOk, '空串/除零/NaN/未知标识符/坏语法/超长/嵌套超限 → 两端回 0');
+  ok(evaluateFormula('('.repeat(32) + '1' + ')'.repeat(32), 0, 0, 0) === 1, '嵌套恰 32 层可用（上限含端点）');
+
+  // 校验入口：合法 ok、非法带原因
+  ok(validateFormula('5 * sin(f * 0.5)').ok === true, 'validateFormula 合法公式 ok');
+  const vBad = validateFormula('foo(1)');
+  ok(vBad.ok === false && typeof vBad.error === 'string' && vBad.error.includes('foo'), 'validateFormula 未知函数报错且点名');
+  ok(validateFormula('').ok === false && validateFormula('max(1)').ok === false && validateFormula('(1').ok === false, 'validateFormula 空串/参数个数/括号不配对均报错');
+
+  // 经 computeProceduralValue 接线：f 局部帧、F 全局帧、p 进度钳制
+  const fml = (expression: string, tp: 'translateX' | 'rotation' | 'scale' = 'translateX'): ProceduralConfig =>
+    ({ type: 'formula', expression, targetProperty: tp });
+  ok(near(computeProceduralValue(fml('f'), 25, 10, 30), 15), 'computeProceduralValue 公式 f = frame − startFrame');
+  ok(near(computeProceduralValue(fml('F'), 25, 10, 30), 25), 'computeProceduralValue 公式 F = frame');
+  ok(near(computeProceduralValue(fml('p * 100'), 10, 10, 30), 0), 'p 在起始帧 = 0');
+  ok(near(computeProceduralValue(fml('p * 100'), 20, 10, 30), 50), 'p 在区间中点 = 0.5');
+  ok(near(computeProceduralValue(fml('p * 100'), 30, 10, 30), 100), 'p 在结束帧 = 1');
+  ok(near(computeProceduralValue(fml('p * 100'), 10, 10, 10), 0), 'endFrame ≤ startFrame 时 p = 0');
+  ok(near(computeProceduralValue(fml('p * 100'), 20, 10), 0), '未传 endFrame 时 p = 0');
+  // 与 dyn 分支（带 start/end）逐值同
+  let branchPar = true;
+  for (const f of [10, 15, 20, 25, 30]) {
+    const a = computeProceduralValue(fml('5 * sin(f * 0.5) + p * 10'), f, 10, 30);
+    const b = rt.dynProceduralValue(fml('5 * sin(f * 0.5) + p * 10') as never, f, 10, 30);
+    if (a !== b) branchPar = false;
+  }
+  ok(branchPar, '公式分支引擎与 dynProceduralValue（带 start/end）逐帧严格相等');
+
+  // 位姿增量汇总：公式条目按目标属性出增量
+  const dF = computeProceduralPoseDelta([pa(fml('f'))], 'n1', 8);
+  ok(near(dF.dx, 8), '公式条目 translateX 出增量（dx = f = 8）');
+  const dR = computeProceduralPoseDelta([pa(fml('p * 90', 'rotation'), { startFrame: 0, endFrame: 20 })], 'n1', 10);
+  ok(near(dR.rotDeg, 45), '公式条目 rotation 出增量（p=0.5 → 45）');
+  const dS = computeProceduralPoseDelta([pa(fml('10', 'scale'))], 'n1', 3);
+  ok(near(dS.scaleMul, 2), '公式条目 scale 出增量（常数 10 → ×2）');
+  const dBad = computeProceduralPoseDelta([pa(fml('1 / 0'))], 'n1', 3);
+  ok(isZeroDelta(dBad), '公式条目坏公式 → 零增量（不炸汇总）');
+  // 面板默认式端到端：默认 config 在起始帧后按 5·sin(f·0.5) 动
+  const dDef = computeProceduralPoseDelta([pa(fml('5 * sin(f * 0.5)'))], 'n1', 4);
+  ok(near(dDef.dx, 5 * Math.sin(2)), '面板默认公式 5 * sin(f * 0.5) 在帧 4 的增量与手算一致');
+
+  // convert 进包：公式 cfg 原样透传（无按 type 白名单拦截）
+  {
+    const grid = [['#ffffff', '#ffffff'], ['#ffffff', '#ffffff']];
+    const node = {
+      id: 'fn1', name: 'fn1', parentId: undefined, role: 'bone',
+      slot: { slotKey: 'fn1' },
+      transform: { x: 0, y: 0, angle: 0, variantIndex: 2, stretch: 1 },
+      attachment: { type: 'fixed' }, sockets: [], tracks: {}, modifiers: [], children: [], sprite: undefined as never,
+    } as unknown as UnifiedNode;
+    const char = {
+      id: 'cf1', name: '公式进包测试',
+      nodes: { fn1: node }, rootNodeId: 'fn1', rootNodeIds: ['fn1'],
+      sprites: { sprF: { id: 'sprF', width: 2, height: 2, data: grid } },
+      costumeSets: [{ id: 'set1', name: '默认', pieces: { fn1: { sprites: { 2: { spriteId: 'sprF' } } } } }],
+      activeCostumeSetId: 'set1', variants: { '2': '西' },
+    } as unknown as UnifiedCharacter;
+    const pas: ProceduralAnimation[] = [
+      { id: 'g1', name: '公式节点目标', spriteId: '', nodeId: 'fn1', config: fml('5 * sin(f * 0.5)'), enabled: true, startFrame: 0, endFrame: 40 },
+      { id: 'g2', name: '公式精灵目标', spriteId: 'sprF', config: fml('p * 30', 'rotation'), enabled: true, startFrame: 0, endFrame: 40 },
+    ];
+    const pkg = convertCharacterToRuntimePackage(char, undefined, { projectData: { proceduralAnimations: pas } });
+    const entries = pkg.procedural ?? [];
+    ok(entries.length === 2, `公式条目进包 2 条（节点目标 + 精灵目标，实 ${entries.length}）`);
+    ok(entries.every((e) => (e.cfg as { type?: string }).type === 'formula'), '进包 cfg.type 均为 formula（原样透传未被拦）');
+    ok(entries.some((e) => (e.cfg as { expression?: string }).expression === 'p * 30' && e.target === 'rotation'), '精灵目标公式的 expression 与 target 原样进包');
+    ok(!pkg.warnings.some((w) => w.includes('公式')), 'convert 对公式条目无点名丢弃');
+  }
+
+  // 源码级断言：接线在位
+  const engP = readFileSync(new URL('../src/lib/engine/procedural.ts', import.meta.url), 'utf8');
+  ok(engP.includes("case 'formula':") && engP.includes('evaluateFormula'), '引擎 computeProceduralValue 含 formula 分支走 evaluateFormula');
+  ok(engP.includes('pa.startFrame, pa.endFrame'), '引擎两处调用 computeProceduralValue 传齐 start/end');
+  const dynSrc2 = readFileSync(new URL('../src/lib/proc-runtime/dynamic-src.ts', import.meta.url), 'utf8');
+  ok(dynSrc2.includes('function dynFormulaValue(') && dynSrc2.includes("case 'formula':"), '运行时含 dynFormulaValue 与 formula 分支');
+  ok(dynSrc2.includes('function dynProceduralValue(cfg, frame, startFrame, endFrame)'), 'dynProceduralValue 签名带 endFrame');
+  const rtSrc2 = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+  ok(rtSrc2.includes('dynProceduralValue(pa.cfg, fIdx, pa.startFrame, pa.endFrame)'), '播放器调用 dynProceduralValue 传 pa.endFrame');
+  const panel2 = readFileSync(new URL('../src/components/pixel-editor/ProceduralPanel.tsx', import.meta.url), 'utf8');
+  ok(panel2.includes("label: '公式'") && panel2.includes("expression: '5 * sin(f * 0.5)'"), '面板信息表含公式类型与默认表达式');
+  ok(panel2.includes("handleAdd('formula')"), '添加菜单含公式一项');
+  ok(panel2.includes('validateFormula') && panel2.includes('FormulaConfig'), '面板含 FormulaConfig 且接即时校验');
+  ok(panel2.includes('computeProceduralValue(config, frame, startFrame, endFrame)'), '面板小预览取值传 endFrame');
+  const types2 = readFileSync(new URL('../src/lib/types.ts', import.meta.url), 'utf8');
+  ok(types2.includes('ProceduralFormula') && types2.includes("| ProceduralFormula"), 'types 联合含 ProceduralFormula');
 }
 
 console.log(`\nverify-procedural-pose-delta: ${pass} passed, ${fail} failed`);

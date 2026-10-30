@@ -6,6 +6,7 @@ import {
   Radio,
   Zap,
   Shuffle,
+  Sigma,
   Plus,
   Trash2,
   Play,
@@ -18,6 +19,7 @@ import {
 
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { computeProceduralValue } from '@/lib/engine/procedural';
+import { validateFormula } from '@/lib/engine/formula';
 import { getActiveCostumeSet, resolvePieceSprite } from '@/lib/sprite-resolve';
 import type { DirectionIndex } from '@/lib/unified-types';
 import type {
@@ -27,6 +29,7 @@ import type {
   ProceduralWave,
   ProceduralSpring,
   ProceduralJitter,
+  ProceduralFormula,
 } from '@/lib/types';
 
 import { Button } from '@/components/ui/button';
@@ -115,6 +118,16 @@ const PROCEDURAL_TYPE_INFO: Record<
       targetProperty: 'translateX',
     } satisfies ProceduralJitter,
   },
+  formula: {
+    label: '公式',
+    icon: Sigma,
+    color: 'text-emerald-400',
+    defaultConfig: {
+      type: 'formula',
+      expression: '5 * sin(f * 0.5)',
+      targetProperty: 'translateX',
+    } satisfies ProceduralFormula,
+  },
 };
 
 const TARGET_PROPERTY_OPTIONS = [
@@ -178,7 +191,7 @@ function ProceduralMiniPreview({
     for (let i = 0; i <= numSamples; i++) {
       const t = i / numSamples;
       const frame = startFrame + t * frameRange;
-      values.push(computeProceduralValue(config, frame, startFrame));
+      values.push(computeProceduralValue(config, frame, startFrame, endFrame));
     }
 
     // Find min/max for Y axis
@@ -204,6 +217,7 @@ function ProceduralMiniPreview({
     const lineColor = typeColor === 'text-violet-400' ? '#a78bfa'
       : typeColor === 'text-cyan-400' ? '#22d3ee'
       : typeColor === 'text-amber-400' ? '#fbbf24'
+      : typeColor === 'text-emerald-400' ? '#34d399'
       : '#fb7185';
 
     ctx.strokeStyle = lineColor;
@@ -232,7 +246,7 @@ function ProceduralMiniPreview({
 
       // Draw dot at current value
       const currentT = (currentFrame - startFrame) / frameRange;
-      const currentVal = computeProceduralValue(config, currentFrame, startFrame);
+      const currentVal = computeProceduralValue(config, currentFrame, startFrame, endFrame);
       const dotY = padding + drawH - ((currentVal - minVal) / rangeY) * drawH;
       ctx.fillStyle = '#fff';
       ctx.beginPath();
@@ -265,7 +279,7 @@ function EmptyProceduralState({ onAdd }: { onAdd: () => void }) {
       </div>
       <p className="text-xs text-zinc-400 mb-1">No procedural animations</p>
       <p className="text-[11px] text-zinc-500 mb-4">
-        Add noise, wave, spring, or jitter animations
+        Add noise, wave, spring, jitter, or formula animations
       </p>
       <Button
         size="sm"
@@ -402,7 +416,9 @@ function ProceduralAnimationCard({
                 ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
                 : animation.config.type === 'spring'
                   ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-                  : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                  : animation.config.type === 'formula'
+                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                    : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
           }`}
         >
           {typeInfo.label}
@@ -502,6 +518,9 @@ function ProceduralAnimationCard({
           )}
           {animation.config.type === 'jitter' && (
             <JitterConfig config={animation.config} onUpdate={handleConfigUpdate} />
+          )}
+          {animation.config.type === 'formula' && (
+            <FormulaConfig config={animation.config} onUpdate={handleConfigUpdate} />
           )}
         </div>
       )}
@@ -720,6 +739,40 @@ function JitterConfig({
           平滑
         </Label>
       </div>
+    </div>
+  );
+}
+
+// ---- Formula Config ----
+
+function FormulaConfig({
+  config,
+  onUpdate,
+}: {
+  config: ProceduralFormula;
+  onUpdate: (updates: Partial<ProceduralFormula>) => void;
+}) {
+  const check = validateFormula(config.expression);
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-[10px] text-zinc-500">表达式</Label>
+      <Input
+        type="text"
+        value={config.expression}
+        onChange={(e) => onUpdate({ expression: e.target.value })}
+        spellCheck={false}
+        className="h-6 w-full font-mono text-[11px] bg-zinc-800 border-zinc-700 text-zinc-200 px-1.5 py-0"
+      />
+      <p className="text-[9px] leading-snug text-zinc-500">
+        变量：f 局部帧（从起始帧数）、F 全局帧、p 进度（0..1）；常量 pi；
+        运算 + - * / % ^（幂）；函数 sin cos tan abs sqrt pow exp log
+        min max floor ceil round。
+      </p>
+      {!check.ok && (
+        <p className="text-[9px] leading-snug text-red-400">
+          公式有误：{check.error}（有误时取值为 0、不生效）
+        </p>
+      )}
     </div>
   );
 }
@@ -976,6 +1029,13 @@ export default function ProceduralPanel() {
               >
                 <Shuffle className="size-3.5 text-rose-400 mr-2" />
                 抖动 (Jitter)
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-[11px] text-zinc-300 focus:bg-zinc-700 focus:text-zinc-100 cursor-pointer"
+                onClick={() => handleAdd('formula')}
+              >
+                <Sigma className="size-3.5 text-emerald-400 mr-2" />
+                公式 (Formula)
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

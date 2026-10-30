@@ -1787,7 +1787,7 @@ export interface HistoryEntry {
 
 // ---- V2.0: Procedural Animation System ----（旧 Skeleton/Bone 系统已删除，2026-10-26）
 
-export type ProceduralType = 'noise' | 'wave' | 'spring' | 'jitter';
+export type ProceduralType = 'noise' | 'wave' | 'spring' | 'jitter' | 'formula';
 
 export interface ProceduralNoise {
   type: 'noise';
@@ -1828,7 +1828,14 @@ export interface ProceduralJitter {
   targetProperty: 'translateX' | 'translateY' | 'rotation' | 'scale';
 }
 
-export type ProceduralConfig = ProceduralNoise | ProceduralWave | ProceduralSpring | ProceduralJitter;
+export interface ProceduralFormula {
+  type: 'formula';
+  /** 以帧为变量的数学表达式（变量 f/F/p、函数与语法见 engine/formula.ts） */
+  expression: string;
+  targetProperty: 'translateX' | 'translateY' | 'rotation' | 'scale';
+}
+
+export type ProceduralConfig = ProceduralNoise | ProceduralWave | ProceduralSpring | ProceduralJitter | ProceduralFormula;
 
 export interface ProceduralAnimation {
   id: string;
