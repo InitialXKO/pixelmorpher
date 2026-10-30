@@ -1835,28 +1835,32 @@ function ensurePostSys() {
     + '    oColor = vec4(c.rgb, a); return;\\n'
     + '  }\\n'
     + '  if (uEffect == 5) { oColor = vec4(c.rgb + texture(uAux, uv).rgb * texture(uAux, uv).a, c.a); return; }\\n' // bloom 合成
-    + '  if (uEffect == 6) {\\n' // outline：uAux=掩码；uP0.x=厚度px uP0.y=方向集(4/8) uP0.z=模式(0实色 1变暗 2渐变) uP0.w=混合(0正常 1叠加 2正片叠底 3滤色)；uP1.xy=光向 uP1.z=仅边缘；uColor=描边色
-    + '    vec2 tp = 1.0 / uRes; float th = max(1.0, uP0.x); float selfMask = texture(uAux, uv).r;\\n'
-    + '    bool hit = false; vec2 hd = vec2(0.0); vec2 srcUv = uv;\\n'
-    + '    for (int k = 1; k <= 5 && !hit; k++) { if (float(k) > th) break;\\n'
-    + '      for (int di = 0; di < 8; di++) { if (uP0.y < 7.5 && di >= 4) break;\\n'
-    + '        vec2 dir = di == 0 ? vec2(-1.0, 0.0) : di == 1 ? vec2(1.0, 0.0) : di == 2 ? vec2(0.0, -1.0) : di == 3 ? vec2(0.0, 1.0) : di == 4 ? vec2(-1.0, -1.0) : di == 5 ? vec2(-1.0, 1.0) : di == 6 ? vec2(1.0, -1.0) : vec2(1.0, 1.0);\\n'
-    + '        vec2 suv = uv + dir * float(k) * tp;\\n'
-    + '        if (texture(uAux, suv).r <= 0.5) continue;\\n'
-    + '        if (uP1.z > 0.5) { bool isEdge = texture(uAux, suv + vec2(tp.x, 0.0)).r <= 0.5 || texture(uAux, suv - vec2(tp.x, 0.0)).r <= 0.5 || texture(uAux, suv + vec2(0.0, tp.y)).r <= 0.5 || texture(uAux, suv - vec2(0.0, tp.y)).r <= 0.5; if (!isEdge) continue; }\\n'
-    + '        hit = true; hd = dir; srcUv = suv; break; } }\\n'
-    + '    if (!hit) { oColor = c; return; }\\n'
-    + '    vec4 srcCol = texture(uTex, srcUv); float sa = srcCol.a;\\n'
+    + '  if (uEffect == 6) {\\n' // outline 膨胀构造（与编辑器 applyOutlineEmphasis 同构）：uAux=掩码；uP0.x=厚度px uP0.y=度量(4=曼哈顿菱形 8=欧氏圆盘) uP0.z=模式(0实色 1变暗 2渐变) uP0.w=混合(0正常 1叠加 2正片叠底 3滤色)；uP1.xy=光向 uP1.z=仅边缘；uColor=描边色
+    + '    vec2 tp = 1.0 / uRes; float selfMask = texture(uAux, uv).r;\\n'
+    + '    if (selfMask > 0.5) { oColor = c; return; }\\n' // 轮廓内直通：带只在轮廓外，混合不入内部
+    + '    float R = clamp(floor(max(1.0, uP0.x)), 1.0, 5.0); bool euclid = uP0.y > 7.5; float lim = euclid ? R * R : R;\\n'
+    + '    float bestD = 1e9; vec2 bestOff = vec2(0.0); bool found = false;\\n'
+    + '    for (int dy = -5; dy <= 5; dy++) { for (int dx = -5; dx <= 5; dx++) {\\n' // 偏移按 (dy,dx) 升序 = 源扫描序，同距先到先得
+    + '      if (dx == 0 && dy == 0) continue;\\n'
+    + '      float d = euclid ? float(dx * dx + dy * dy) : abs(float(dx)) + abs(float(dy));\\n'
+    + '      if (d > lim || d >= bestD) continue;\\n'
+    + '      vec2 suv = uv + vec2(float(dx), float(dy)) * tp;\\n'
+    + '      if (texture(uAux, suv).r <= 0.5) continue;\\n'
+    + '      if (uP1.z > 0.5) { bool isEdge = texture(uAux, suv + vec2(tp.x, 0.0)).r <= 0.5 || texture(uAux, suv - vec2(tp.x, 0.0)).r <= 0.5 || texture(uAux, suv + vec2(0.0, tp.y)).r <= 0.5 || texture(uAux, suv - vec2(0.0, tp.y)).r <= 0.5; if (!isEdge) continue; }\\n'
+    + '      bestD = d; bestOff = vec2(float(dx), float(dy)); found = true; } }\\n'
+    + '    if (!found) { oColor = c; return; }\\n'
+    + '    vec4 srcCol = texture(uTex, uv + bestOff * tp); float sa = srcCol.a;\\n' // 取色/alpha 来自最近轮廓纹素 n(p)
     + '    vec3 oc = uColor;\\n'
-    + '    if (uP0.z > 1.5) { float f = 0.5 - dot(normalize(hd), uP1.xy) * 0.5; oc = mix(uColor * 0.3, mix(uColor, vec3(1.0), 0.5), f); }\\n'
+    + '    if (uP0.z > 1.5) { vec2 v = -bestOff / max(length(bestOff), 1e-5); float t = (dot(v, uP1.xy) + 1.0) * 0.5; oc = mix(uColor * 0.3, mix(uColor, vec3(1.0), 0.5), t); }\\n' // 渐变：外向向量 v=(p−n)/|p−n|
     + '    else if (uP0.z > 0.5) { oc = max(srcCol.rgb - vec3(80.0 / 255.0), vec3(0.0)); }\\n'
     + '    int bm = int(uP0.w + 0.5);\\n'
-    + '    if (bm == 0) { if (selfMask > 0.5) { oColor = c; return; } oColor = vec4(mix(c.rgb, oc, sa), c.a + sa * (1.0 - c.a)); return; }\\n'
     + '    vec3 bl = oc;\\n'
     + '    if (bm == 2) bl = c.rgb * oc;\\n'
     + '    else if (bm == 3) bl = 1.0 - (1.0 - c.rgb) * (1.0 - oc);\\n'
     + '    else if (bm == 1) bl = mix(2.0 * c.rgb * oc, 1.0 - 2.0 * (1.0 - c.rgb) * (1.0 - oc), step(0.5, c.rgb));\\n'
-    + '    oColor = vec4(mix(c.rgb, bl, sa), c.a); return;\\n'
+    + '    float outA = sa + c.a * (1.0 - sa);\\n' // 混合只对带内算完，再以描边 alpha 做 source-over
+    + '    if (outA < 1e-4) { oColor = c; return; }\\n'
+    + '    oColor = vec4((bl * sa + c.rgb * c.a * (1.0 - sa)) / outA, outA); return;\\n'
     + '  }\\n'
     + '  if (uEffect == 7) {\\n' // bloom 亮部提取：uP0.x=阈值，uColor=辉光色
     + '    float lum = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;\\n'

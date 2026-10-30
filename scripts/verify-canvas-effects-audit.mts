@@ -2,7 +2,7 @@
 // 覆盖：
 //  A) resolveCanvasModifierParams 区间外端点保持 + 两端（编辑器/运行时）同结果
 //  B) 参数 0 被尊重（bloom 强度/阈值、scanlines 不透明度——假 DOM 跑真引擎逐字节比）
-//  C) 描边整带覆盖 + blendMode/edgesOnly 经 convert 入包 + 运行时打包/着色器源码断言
+//  C) 描边膨胀构造回归网（带=距最近轮廓≤thickness 全集、变暗取最近点、混合只入带内、仅边缘门控） + 入包/打包/着色器结构断言
 //  D) store 关键帧全环（加轨/加修改器/重排/加帧/改帧参/移帧/删帧）
 //  E) 迁移不双写 + 导入缺字段清空
 //  F) convert 存量去重（片段轨与工程级逐项全同 → 不入包 + 点名；不同 → 入包）
@@ -156,41 +156,110 @@ console.log('B) 0 值尊重（真引擎逐字节）');
   ok(!bytesEq(plain, scanCtl), '对照：lineOpacity=0.5 确实压暗扫描线行');
 }
 
-// ================= C) 描边整带 + 入包 + 运行时源码断言 =================
+// ================= C) 描边膨胀构造（回归网） + 入包 + 运行时源码断言 =================
+// 本组断言的是构造性质（期望由定义独立算出，不来自被测代码）：描边带 =
+// 轮廓外、距最近轮廓像素 ≤ thickness 的像素全集；取色/明暗来自最近轮廓
+// 像素与外向向量；混合只作用带内。旧盖印构造在这些断言上应失败（已实测）。
 console.log('C) 描边');
 {
-  const dot = (px: Uint8ClampedArray) => { const i = (4 * 9 + 4) * 4; px[i] = 255; px[i + 3] = 255; };
-  const out = runChain(9, 9, dot, mkTrack('outline_emphasis', {
+  const pxAt = (out: Uint8ClampedArray, W: number, x: number, y: number) => {
+    const i = (y * W + x) * 4; return [out[i], out[i + 1], out[i + 2], out[i + 3]];
+  };
+
+  // ① 1px 宽反对角线（x+y=12）：欧氏（'8'）/曼哈顿（'4'）两度量整图与定义比对
+  const W1 = 13;
+  const lineFill = (px: Uint8ClampedArray) => {
+    for (let i = 1; i <= 11; i++) {
+      const j = ((12 - i) * W1 + i) * 4;
+      px[j] = 255; px[j + 1] = 255; px[j + 2] = 255; px[j + 3] = 255;
+    }
+  };
+  const srcSet = new Set<string>();
+  for (let i = 1; i <= 11; i++) srcSet.add(`${i},${12 - i}`);
+  const checkBand = (directions: string, thickness: number) => {
+    const out = runChain(W1, W1, lineFill, mkTrack('outline_emphasis', {
+      thickness, color: '#00ff00', directions, outlineMode: 'solid', blendMode: 'normal', edgesOnly: false, lightAngle: 315,
+    }));
+    let bad = '';
+    for (let y = 0; y < W1 && !bad; y++) for (let x = 0; x < W1 && !bad; x++) {
+      const [r, g, , a] = pxAt(out, W1, x, y);
+      if (srcSet.has(`${x},${y}`)) {
+        if (!(r === 255 && g === 255 && a === 255)) bad = `源像素被改 (${x},${y})`;
+        continue;
+      }
+      let dmin = Infinity;
+      for (const s of srcSet) {
+        const [sx, sy] = s.split(',').map(Number);
+        const d = directions === '4'
+          ? Math.abs(x - sx) + Math.abs(y - sy)
+          : Math.hypot(x - sx, y - sy);
+        if (d < dmin) dmin = d;
+      }
+      const inBand = dmin <= thickness + 1e-9;
+      if (inBand && !(r === 0 && g === 255 && a === 255)) bad = `带内漏描 (${x},${y}) d=${dmin.toFixed(2)} 实得(${r},${g},${a})`;
+      if (!inBand && a !== 0) bad = `带外误描 (${x},${y}) d=${dmin.toFixed(2)}`;
+    }
+    return bad;
+  };
+  const b82 = checkBand('8', 2);
+  ok(b82 === '', `①欧氏 t=2：细对角线整图与膨胀定义一致${b82 ? '（' + b82 + '）' : ''}`);
+  const b83 = checkBand('8', 3);
+  ok(b83 === '', `①欧氏 t=3：整图与圆盘膨胀定义一致（(2,2) 向入带）${b83 ? '（' + b83 + '）' : ''}`);
+  const b43 = checkBand('4', 3);
+  ok(b43 === '', `①曼哈顿 t=3：整图与菱形膨胀定义一致（(2,2) 向不入带）${b43 ? '（' + b43 + '）' : ''}`);
+
+  // ② 变暗取色 = 最近轮廓点逐通道 −80，与扫描顺序无关。
+  // 摆法：目标 (5,5) 最近源 A(5,3) 距 2、远源 B(5,8) 距 3 仍能盖到它——
+  // 旧实现按扫描顺序后写者赢，必然取 B 的色。
+  const twoDots = (px: Uint8ClampedArray) => {
+    const A = (3 * 11 + 5) * 4; px[A] = 200; px[A + 1] = 30; px[A + 2] = 30; px[A + 3] = 255;
+    const B = (8 * 11 + 5) * 4; px[B] = 30; px[B + 1] = 30; px[B + 2] = 200; px[B + 3] = 255;
+  };
+  const out2 = runChain(11, 11, twoDots, mkTrack('outline_emphasis', {
+    thickness: 3, color: '#000000', directions: '8', outlineMode: 'darken', blendMode: 'normal', edgesOnly: false, lightAngle: 315,
+  }));
+  const p55 = pxAt(out2, 11, 5, 5);
+  ok(p55[0] === 120 && p55[1] === 0 && p55[2] === 0 && p55[3] === 255,
+    `②(5,5) 变暗取最近点 A−80=(120,0,0)（实得 ${p55.join(',')}）`);
+  const p56 = pxAt(out2, 11, 5, 6);
+  ok(p56[0] === 0 && p56[1] === 0 && p56[2] === 120 && p56[3] === 255,
+    `②(5,6) 变暗取最近点 B−80=(0,0,120)（实得 ${p56.join(',')}）`);
+
+  // ③ 混合模式只作用描边带：精灵内部逐值不变；带内按混合公式 + 描边 alpha 合成
+  const block5 = (px: Uint8ClampedArray) => {
+    for (let y = 3; y <= 7; y++) for (let x = 3; x <= 7; x++) {
+      const i = (y * 11 + x) * 4; px[i] = 200; px[i + 1] = 30; px[i + 2] = 30; px[i + 3] = 255;
+    }
+  };
+  const outM = runChain(11, 11, block5, mkTrack('outline_emphasis', {
+    thickness: 2, color: '#808080', directions: '8', outlineMode: 'solid', blendMode: 'multiply', edgesOnly: false, lightAngle: 315,
+  }));
+  let innerOk = true;
+  for (let y = 3; y <= 7; y++) for (let x = 3; x <= 7; x++) {
+    const v = pxAt(outM, 11, x, y);
+    if (!(v[0] === 200 && v[1] === 30 && v[2] === 30 && v[3] === 255)) innerOk = false;
+  }
+  ok(innerOk, '③正片叠底：精灵内部逐值不变（旧实现整层盖图染内部）');
+  const bandM = pxAt(outM, 11, 5, 2);
+  ok(bandM[0] === 0 && bandM[1] === 0 && bandM[2] === 0 && bandM[3] === 255,
+    `③正片叠底带内按公式合成（透明底→黑，实得 ${bandM.join(',')}）`);
+  const outS = runChain(11, 11, block5, mkTrack('outline_emphasis', {
+    thickness: 2, color: '#808080', directions: '8', outlineMode: 'solid', blendMode: 'screen', edgesOnly: false, lightAngle: 315,
+  }));
+  const bandS = pxAt(outS, 11, 5, 2);
+  ok(bandS[0] === 128 && bandS[1] === 128 && bandS[2] === 128 && bandS[3] === 255,
+    `③滤色带内按公式合成（透明底→描边色，实得 ${bandS.join(',')}）`);
+
+  // ④ 仅边缘：源门控意图不变（只取边界像素为源），厚块外带仍与全源一致
+  const outE = runChain(11, 11, block5, mkTrack('outline_emphasis', {
+    thickness: 2, color: '#00ff00', directions: '8', outlineMode: 'solid', blendMode: 'normal', edgesOnly: true, lightAngle: 315,
+  }));
+  const outF = runChain(11, 11, block5, mkTrack('outline_emphasis', {
     thickness: 2, color: '#00ff00', directions: '8', outlineMode: 'solid', blendMode: 'normal', edgesOnly: false, lightAngle: 315,
   }));
-  const at = (x: number, y: number) => { const i = (y * 9 + x) * 4; return [out[i], out[i + 1], out[i + 2], out[i + 3]]; };
-  // 与运行时同一几何：8 方向 × 1..thickness 逐级（辐条带）——旧实现只有
-  // 恰好 =thickness 的一圈点；骑士步位置两端都不覆盖。
-  const onSpoke = (dx: number, dy: number) => dx === 0 || dy === 0 || dx === dy;
-  let bandOk = true, outsideOk = true;
-  for (let y = 0; y < 9; y++) for (let x = 0; x < 9; x++) {
-    const dx = Math.abs(x - 4), dy = Math.abs(y - 4), cheb = Math.max(dx, dy);
-    const [r, g, , a] = at(x, y);
-    if (cheb >= 1 && cheb <= 2 && onSpoke(dx, dy)) { if (!(g === 255 && r === 0 && a === 255)) bandOk = false; }
-    if (cheb > 2 || (cheb >= 1 && !onSpoke(dx, dy))) { if (a !== 0) outsideOk = false; }
-  }
-  ok(bandOk, 'thickness=2：8 方向 1..2 级全覆盖（旧实现只有距 2 一圈点）');
-  ok(outsideOk, '带外与骑士步位置无描边（与运行时搜索同几何）');
-  // 宽形状：3×3 块 th=1 → 外圈整圈（真实形状的描边带）
-  const block = (px: Uint8ClampedArray) => { for (let y = 3; y <= 5; y++) for (let x = 3; x <= 5; x++) { const i = (y * 9 + x) * 4; px[i] = 255; px[i + 3] = 255; } };
-  const outB = runChain(9, 9, block, mkTrack('outline_emphasis', {
-    thickness: 1, color: '#00ff00', directions: '8', outlineMode: 'solid', blendMode: 'normal', edgesOnly: false, lightAngle: 315,
-  }));
-  let ringOk = true;
-  for (let y = 2; y <= 6; y++) for (let x = 2; x <= 6; x++) {
-    if (x >= 3 && x <= 5 && y >= 3 && y <= 5) continue;
-    const i = (y * 9 + x) * 4;
-    if (!(outB[i + 1] === 255 && outB[i + 3] === 255)) ringOk = false;
-  }
-  ok(ringOk, '3×3 块 thickness=1 外圈整圈描边');
-  const [cr, , , ca] = at(4, 4);
-  ok(cr === 255 && ca === 255, '中心源像素保留（normal 模式描边垫底）');
+  ok(bytesEq(outE, outF), '④仅边缘：厚块描边与全源逐字节一致（不成点阵）');
 
+  // 入包与打包不回退
   const outlineTrack = mkTrack('outline_emphasis', {
     thickness: 2, color: '#112233', directions: '8', outlineMode: 'gradient', blendMode: 'multiply', edgesOnly: true, lightAngle: 90,
   });
@@ -203,11 +272,14 @@ console.log('C) 描边');
 
   const tpl = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
   ok(tpl.includes('edgesOnly ? 1 : 0') && tpl.includes("multiply: 2"), '运行时打包 uP0.w=混合模式、uP1.z=仅边缘');
-  ok(tpl.includes('uP1.z > 0.5') && tpl.includes('80.0 / 255.0') && tpl.includes('uColor * 0.3'), '着色器实现仅边缘判定、darken −80、gradient 暗端 ×0.3');
+  ok(tpl.includes('80.0 / 255.0') && tpl.includes('uColor * 0.3'), '着色器 darken −80、gradient 暗端 ×0.3');
+  const seg6 = tpl.slice(tpl.indexOf('uEffect == 6'), tpl.indexOf('uEffect == 7'));
+  ok(seg6.includes('for (int dy') && seg6.includes('for (int dx'), '④运行时描边：双轴半径搜索（非 8 射线首命中）');
+  ok(seg6.includes('floor') && seg6.includes('bestD'), '④运行时描边：半径取整 + 最近轮廓选择（bestD）');
+  ok(seg6.includes('if (selfMask > 0.5)'), '④运行时描边：轮廓内直通（混合不入内部）');
   const th = readFileSync(new URL('../src/components/pixel-editor/canvas/tool-handlers.ts', import.meta.url), 'utf8');
   ok(th.includes('undefined, pst.canvasModifierTracks'), 'SAM 编码帧传当前工程画布轨（D4）');
 }
-
 // ================= D) store 关键帧全环 =================
 console.log('D) store 关键帧全环');
 {

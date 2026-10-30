@@ -81,20 +81,32 @@ export function resolveCanvasModifierParams(
 }
 
 /**
- * Apply outline emphasis canvas modifier using offset-and-composite algorithm.
+ * Apply outline emphasis canvas modifier using silhouette-dilation.
  *
- * For each opaque pixel in the source canvas, copies of the pixel are placed
- * at offset positions in 4 or 8 directions (scaled by thickness). The outline
- * layer is then composited onto the canvas behind the original content.
+ * Construction（与运行时 uEffect==6 同构）：轮廓 S = alpha>0 的像素集。
+ * 对每个不在 S 中的像素 p，求其最近轮廓像素 n(p)；描边带 =
+ * { p ∉ S 且 dist(p, n(p)) ≤ thickness }。距离按 directions 选度量：
+ * '8' = 欧氏（圆盘）、'4' = 曼哈顿（菱形）——旧实现里该参数是盖印的
+ * 射线方向集（4/8 条射线），现重新解释为膨胀度量，带的形状随之而变。
+ *
+ * 源像素以实心度量球盖印、每像素保留距离最小的候选（同距按源扫描序
+ * 先到先得，确定性），由此得 n(p)。取色一律来自 n(p)：实色 = 描边色；
+ * 变暗 = n(p) 逐通道 −80；渐变 = 外向向量 (p−n(p))/|p−n(p)| 与光向
+ * 点积映射到 dark（描边色 ×0.3）/light（向白 0.5）两变体间插值。
+ * 描边 alpha = n(p) 的 alpha。
+ *
+ * 合成只作用于带内（带外与轮廓内部逐值不变）：以当前像素为底、混合
+ * 结果为源色，按描边 alpha 做 source-over；普通模式即源色 = 描边色。
+ * 不再用整层 globalCompositeOperation 盖全图（旧构造描边层被内部盖印
+ * 填满，混合会染整个精灵内部）。
  *
  * Parameters:
- * - thickness (1-5): Pixel offset distance for outline copies
+ * - thickness (1-5): 带宽（按所选度量取整级数）
  * - color (hex): Outline color
- * - directions ('4' or '8'): 4-direction (faster) or 8-direction (rounder)
+ * - directions ('4' | '8'): 膨胀度量（'4' 曼哈顿菱形 / '8' 欧氏圆盘）
  * - outlineMode ('solid' | 'darken' | 'gradient'): How to color the outline
- *   - 'gradient' uses light-direction simulation based on lightAngle parameter
  * - blendMode ('normal' | 'overlay' | 'multiply' | 'screen'): How to blend
- * - edgesOnly (boolean): Only apply to pixels adjacent to transparent areas
+ * - edgesOnly (boolean): 源只取与透明相邻（或出界）的轮廓像素
  */
 function applyOutlineEmphasis(
   ctx: CanvasRenderingContext2D,
@@ -105,7 +117,7 @@ function applyOutlineEmphasis(
 ): void {
   const thickness = numParam(params.thickness, 1);
   const color = String(params.color) || '#000000';
-  const directions = String(params.directions) === '4' ? 4 : 8;
+  const euclid = String(params.directions) !== '4';
   const outlineMode = String(params.outlineMode) || 'solid';
   const blendMode = String(params.blendMode) || 'normal';
   const edgesOnly = Boolean(params.edgesOnly);
@@ -115,196 +127,132 @@ function applyOutlineEmphasis(
   const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
   const src = imageData.data;
 
-  // Parse outline color
+  // Parse outline color + gradient variants（生成口径沿用 color-utils）
   const [outlineR, outlineG, outlineB] = hexToRgb(color);
+  const [darkR, darkG, darkB] = hexToRgb(darkenColor(color, 0.3));
+  const [lightR, lightG, lightB] = hexToRgb(lightenColor(color, 0.5));
 
-  // Create outline layer (zeroed RGBA buffer)
-  const outlineData = new Uint8ClampedArray(src.length);
-
-  // Pre-compute direction offsets
-  // 4-direction: [(-1,0), (1,0), (0,-1), (0,1)]
-  // 8-direction: add [(-1,-1), (-1,1), (1,-1), (1,1)]
-  const dirOffsets: [number, number][] =
-    directions === 4
-      ? [[-1, 0], [1, 0], [0, -1], [0, 1]]
-      : [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];
-
-  // For 'gradient' mode: compute light-direction-based shading per direction
-  // Light angle convention: 0° = right, 90° = down, 180° = left, 270° = up
-  // For each direction, compute how much it faces the light source
+  // Light direction（0° = right, 90° = down, 180° = left, 270° = up）
   const lightRad = (lightAngle * Math.PI) / 180;
   const ldx = Math.cos(lightRad);
   const ldy = Math.sin(lightRad);
 
-  // Compute dark and light variants of outline color
-  const [darkR, darkG, darkB] = hexToRgb(darkenColor(color, 0.3));
-  const [lightR, lightG, lightB] = hexToRgb(lightenColor(color, 0.5));
-
-  // For each direction offset, pre-compute the shading color
-  const dirColors: [number, number, number][] = dirOffsets.map(([dx, dy]) => {
-    if (outlineMode !== 'gradient') return [outlineR, outlineG, outlineB];
-    // Normalize direction
-    const len = Math.sqrt(dx * dx + dy * dy);
-    const ndx = dx / len;
-    const ndy = dy / len;
-    // Dot product with light direction
-    const dot = ndx * ldx + ndy * ldy;
-    // Map [-1, 1] to [0, 1]
-    const t = (dot + 1) / 2;
-    // Interpolate between dark and light
-    return [
-      Math.round(darkR + (lightR - darkR) * t),
-      Math.round(darkG + (lightG - darkG) * t),
-      Math.round(darkB + (lightB - darkB) * t),
-    ];
-  });
-
   const pixelCount = canvasWidth * canvasHeight;
-  // 整带盖印的级数：厚度取整、至少 1（与运行时 k ≤ th 的整数步进口径一致）
-  const stampSteps = Math.max(1, Math.floor(thickness));
+  // 带宽取整级数（与运行时 floor(uP0.x) 同口径）
+  const R = Math.max(1, Math.floor(thickness));
 
-  // For edgesOnly: build a boolean mask of edge pixels
-  // An edge pixel is an opaque pixel with at least one transparent 4-connected neighbor
-  let edgeMask: Uint8Array | null = null;
-  if (edgesOnly) {
-    edgeMask = new Uint8Array(pixelCount);
-    for (let y = 0; y < canvasHeight; y++) {
-      for (let x = 0; x < canvasWidth; x++) {
-        const i = (y * canvasWidth + x) * 4;
-        if (src[i + 3] === 0) continue; // skip transparent pixels
-
-        // Check 4-connected neighbors for transparency
-        let isEdge = false;
-        // Up
-        if (y === 0 || src[((y - 1) * canvasWidth + x) * 4 + 3] === 0) isEdge = true;
-        // Down
-        if (!isEdge && (y === canvasHeight - 1 || src[((y + 1) * canvasWidth + x) * 4 + 3] === 0)) isEdge = true;
-        // Left
-        if (!isEdge && (x === 0 || src[(y * canvasWidth + (x - 1)) * 4 + 3] === 0)) isEdge = true;
-        // Right
-        if (!isEdge && (x === canvasWidth - 1 || src[(y * canvasWidth + (x + 1)) * 4 + 3] === 0)) isEdge = true;
-
-        if (isEdge) {
-          edgeMask![y * canvasWidth + x] = 1;
-        }
+  // 度量球内的全部整数偏移（不含原点）：'8' 取欧氏平方距离、'4' 取曼哈顿
+  const offsets: { dx: number; dy: number; d: number }[] = [];
+  for (let dy = -R; dy <= R; dy++) {
+    for (let dx = -R; dx <= R; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      if (euclid) {
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= R * R) offsets.push({ dx, dy, d: d2 });
+      } else {
+        const d = Math.abs(dx) + Math.abs(dy);
+        if (d <= R) offsets.push({ dx, dy, d });
       }
     }
   }
 
-  // Build outline layer by iterating over opaque pixels and stamping offset copies
+  // n(p)：bestSrc = 最近轮廓像素下标，bestDist = 其度量距离（无候选为 -1）
+  const bestDist = new Int32Array(pixelCount).fill(-1);
+  const bestSrc = new Int32Array(pixelCount).fill(-1);
+
+  // 源按扫描序遍历：同距先到先得（仅严格更小才替换），与运行时着色器
+  // 按 (dy, dx) 升序遍历偏移的确定性口径一致。
   for (let y = 0; y < canvasHeight; y++) {
     for (let x = 0; x < canvasWidth; x++) {
-      const srcIdx = (y * canvasWidth + x) * 4;
-      const srcAlpha = src[srcIdx + 3];
+      const sIdx = y * canvasWidth + x;
+      if (src[sIdx * 4 + 3] === 0) continue; // 不在轮廓 S 中
 
-      // Skip transparent pixels
-      if (srcAlpha === 0) continue;
+      if (edgesOnly) {
+        // 源门控（意图沿用旧实现）：4 邻域有透明或出界才算边缘源
+        const isEdge =
+          y === 0 || src[((y - 1) * canvasWidth + x) * 4 + 3] === 0 ||
+          y === canvasHeight - 1 || src[((y + 1) * canvasWidth + x) * 4 + 3] === 0 ||
+          x === 0 || src[(y * canvasWidth + (x - 1)) * 4 + 3] === 0 ||
+          x === canvasWidth - 1 || src[(y * canvasWidth + (x + 1)) * 4 + 3] === 0;
+        if (!isEdge) continue;
+      }
 
-      // If edgesOnly, skip non-edge pixels
-      if (edgeMask && !edgeMask[y * canvasWidth + x]) continue;
-
-      // Source pixel RGB
-      const sr = src[srcIdx];
-      const sg = src[srcIdx + 1];
-      const sb = src[srcIdx + 2];
-
-      // Stamp outline at each direction offset, filled band 1..stampSteps
-      // （旧实现只在恰好 =thickness 处盖印，thickness≥2 时是带空洞的稀疏
-      // 点环；运行时是逐级整带，两边统一为整带。关键帧插值出的小数厚度
-      // 按运行时同口径取整级数。）
-      for (let d = 0; d < dirOffsets.length; d++) {
-        const [dx, dy] = dirOffsets[d];
-
-        // Determine outline color based on outlineMode
-        let or: number, og: number, ob: number;
-        switch (outlineMode) {
-          case 'darken': {
-            // Darken the source pixel color by subtracting 80 from each channel (clamped to 0)
-            or = Math.max(0, sr - 80);
-            og = Math.max(0, sg - 80);
-            ob = Math.max(0, sb - 80);
-            break;
-          }
-          case 'gradient': {
-            // Use pre-computed direction-based light shading
-            [or, og, ob] = dirColors[d];
-            break;
-          }
-          case 'solid':
-          default: {
-            // Use the outline color directly
-            or = outlineR;
-            og = outlineG;
-            ob = outlineB;
-            break;
-          }
-        }
-
-        for (let step = 1; step <= stampSteps; step++) {
-          const ox = x + dx * step;
-          const oy = y + dy * step;
-
-          // Bounds check
-          if (ox < 0 || ox >= canvasWidth || oy < 0 || oy >= canvasHeight) continue;
-
-          const outIdx = (oy * canvasWidth + ox) * 4;
-
-          // "Max alpha" blending: write the outline color with full alpha,
-          // but if there's already an outline pixel here, keep the one with higher alpha
-          // (to avoid over-brightening). For same alpha, just overwrite.
-          const existingAlpha = outlineData[outIdx + 3];
-          if (srcAlpha >= existingAlpha) {
-            outlineData[outIdx] = or;
-            outlineData[outIdx + 1] = og;
-            outlineData[outIdx + 2] = ob;
-            outlineData[outIdx + 3] = srcAlpha; // carry source alpha for natural blending
-          }
+      for (const { dx, dy, d } of offsets) {
+        const px = x + dx;
+        const py = y + dy;
+        if (px < 0 || px >= canvasWidth || py < 0 || py >= canvasHeight) continue;
+        const tIdx = py * canvasWidth + px;
+        if (src[tIdx * 4 + 3] !== 0) continue; // 带只在轮廓外
+        if (bestSrc[tIdx] === -1 || d < bestDist[tIdx]) {
+          bestDist[tIdx] = d;
+          bestSrc[tIdx] = sIdx;
         }
       }
     }
   }
 
-  // Composite the outline layer onto the canvas
-  const outlineCanvas = document.createElement('canvas');
-  outlineCanvas.width = canvasWidth;
-  outlineCanvas.height = canvasHeight;
-  const outlineCtx = outlineCanvas.getContext('2d')!;
-  outlineCtx.putImageData(new ImageData(outlineData, canvasWidth, canvasHeight), 0, 0);
+  // 合成：只写带内像素
+  for (let y = 0; y < canvasHeight; y++) {
+    for (let x = 0; x < canvasWidth; x++) {
+      const tIdx = y * canvasWidth + x;
+      const nIdx = bestSrc[tIdx];
+      if (nIdx === -1) continue;
 
-  if (blendMode === 'normal') {
-    // For 'normal': draw outline layer first, then redraw original content on top
-    // Save current canvas content
-    const originalCanvas = document.createElement('canvas');
-    originalCanvas.width = canvasWidth;
-    originalCanvas.height = canvasHeight;
-    const originalCtx = originalCanvas.getContext('2d')!;
-    originalCtx.putImageData(imageData, 0, 0);
+      const ni = nIdx * 4;
+      const sa = src[ni + 3] / 255; // 描边 alpha = n(p) 的 alpha
 
-    // Clear and draw outline first
-    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(outlineCanvas, 0, 0);
+      // 取色（来自 n(p)）
+      let ocr: number, ocg: number, ocb: number;
+      switch (outlineMode) {
+        case 'darken': {
+          ocr = Math.max(0, src[ni] - 80);
+          ocg = Math.max(0, src[ni + 1] - 80);
+          ocb = Math.max(0, src[ni + 2] - 80);
+          break;
+        }
+        case 'gradient': {
+          // 外向向量 (p − n(p)) 按欧氏长度归一（与度量选择无关）
+          const vx = x - (nIdx % canvasWidth);
+          const vy = y - Math.floor(nIdx / canvasWidth);
+          const len = Math.sqrt(vx * vx + vy * vy) || 1;
+          const t = ((vx / len) * ldx + (vy / len) * ldy + 1) / 2;
+          ocr = Math.round(darkR + (lightR - darkR) * t);
+          ocg = Math.round(darkG + (lightG - darkG) * t);
+          ocb = Math.round(darkB + (lightB - darkB) * t);
+          break;
+        }
+        case 'solid':
+        default: {
+          ocr = outlineR; ocg = outlineG; ocb = outlineB;
+          break;
+        }
+      }
 
-    // Then draw original on top
-    ctx.drawImage(originalCanvas, 0, 0);
-  } else {
-    // For overlay/multiply/screen: use canvas globalCompositeOperation
-    ctx.save();
-    switch (blendMode) {
-      case 'overlay':
-        ctx.globalCompositeOperation = 'overlay';
-        break;
-      case 'multiply':
-        ctx.globalCompositeOperation = 'multiply';
-        break;
-      case 'screen':
-        ctx.globalCompositeOperation = 'screen';
-        break;
+      // 混合（标准公式，0..255 浮点）后以描边 alpha 做 source-over
+      const ti = tIdx * 4;
+      const br = src[ti], bg = src[ti + 1], bb = src[ti + 2];
+      const ba = src[ti + 3] / 255;
+      let blr = ocr, blg = ocg, blb = ocb;
+      if (blendMode === 'multiply') {
+        blr = (br * ocr) / 255; blg = (bg * ocg) / 255; blb = (bb * ocb) / 255;
+      } else if (blendMode === 'screen') {
+        blr = 255 - ((255 - br) * (255 - ocr)) / 255;
+        blg = 255 - ((255 - bg) * (255 - ocg)) / 255;
+        blb = 255 - ((255 - bb) * (255 - ocb)) / 255;
+      } else if (blendMode === 'overlay') {
+        const ov = (b: number, o: number) => (b < 128 ? (2 * b * o) / 255 : 255 - (2 * (255 - b) * (255 - o)) / 255);
+        blr = ov(br, ocr); blg = ov(bg, ocg); blb = ov(bb, ocb);
+      }
+      const outA = sa + ba * (1 - sa);
+      if (outA <= 0) continue;
+      src[ti] = Math.round((blr * sa + br * ba * (1 - sa)) / outA);
+      src[ti + 1] = Math.round((blg * sa + bg * ba * (1 - sa)) / outA);
+      src[ti + 2] = Math.round((blb * sa + bb * ba * (1 - sa)) / outA);
+      src[ti + 3] = Math.round(outA * 255);
     }
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(outlineCanvas, 0, 0);
-    ctx.restore();
   }
+
+  ctx.putImageData(imageData, 0, 0);
 }
 
 /**
