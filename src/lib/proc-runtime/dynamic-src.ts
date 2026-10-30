@@ -668,9 +668,9 @@ function dynProcFbm(x, y, octaves, seed) {
 }
 // 程序化动画取值：与编辑器 engine/procedural.computeProceduralValue 逐值同源
 // （噪声/弹簧/抖动公式逐行移植，探针逐值对拍）。
-function dynProceduralValue(cfg, frame) {
+function dynProceduralValue(cfg, frame, startFrame) {
   switch (cfg.type) {
-    case 'noise': return dynProcFbm(frame * cfg.frequency, 0, cfg.octaves, cfg.seed) * cfg.amplitude;
+    case 'noise': return (dynProcFbm(frame * cfg.frequency, 0, cfg.octaves, cfg.seed) * 2 - 1) * cfg.amplitude;
     case 'wave': {
       const t = frame * cfg.frequency + (cfg.phase / 360);
       const phase = t * Math.PI * 2;
@@ -686,8 +686,8 @@ function dynProceduralValue(cfg, frame) {
       const omega = Math.sqrt(cfg.stiffness / cfg.mass);
       const gamma = cfg.damping / (2 * cfg.mass);
       const dampedOmega = Math.sqrt(Math.max(0, omega * omega - gamma * gamma));
-      const t = frame / 60;
-      return (cfg.restLength > 0 ? cfg.restLength : 1) * Math.exp(-gamma * t) * Math.cos(dampedOmega * t) + cfg.restLength;
+      const lf = Math.max(0, frame - (startFrame || 0));
+      return (cfg.restLength ?? 0) + (cfg.amplitude ?? 5) * Math.exp(-gamma * lf) * Math.cos(dampedOmega * lf);
     }
     case 'jitter': {
       const seed = Math.floor(frame * cfg.frequency * 100);
@@ -716,7 +716,7 @@ export function createDynamicRuntime(): {
   dynNoiseU: (u: number, v: number, period: number, seed: number) => number;
   dynSpinRadAt: (params: never, t: number) => number;
   dynArcPoints: (params: never, t: number, endX?: number, endY?: number, hasEnd?: boolean) => { main: [number, number, number][]; branches: [number, number, number][][]; dots: [number, number, number][]; alpha: number };
-  dynProceduralValue: (cfg: never, frame: number) => number;
+  dynProceduralValue: (cfg: never, frame: number, startFrame?: number) => number;
 } {
   const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynParticleColorAt, dynOrbitPoints, dynPostColorAt, dynFieldColorAt, dynBlobField, dynFlameField, dynEnvSamples };`);
   return factory() as never;

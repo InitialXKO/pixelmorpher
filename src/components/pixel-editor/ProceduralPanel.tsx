@@ -98,6 +98,7 @@ const PROCEDURAL_TYPE_INFO: Record<
       stiffness: 0.5,
       damping: 0.3,
       mass: 1,
+      amplitude: 5,
       restLength: 0,
       targetProperty: 'translateY',
     } satisfies ProceduralSpring,
@@ -177,7 +178,7 @@ function ProceduralMiniPreview({
     for (let i = 0; i <= numSamples; i++) {
       const t = i / numSamples;
       const frame = startFrame + t * frameRange;
-      values.push(computeProceduralValue(config, frame));
+      values.push(computeProceduralValue(config, frame, startFrame));
     }
 
     // Find min/max for Y axis
@@ -231,7 +232,7 @@ function ProceduralMiniPreview({
 
       // Draw dot at current value
       const currentT = (currentFrame - startFrame) / frameRange;
-      const currentVal = computeProceduralValue(config, currentFrame);
+      const currentVal = computeProceduralValue(config, currentFrame, startFrame);
       const dotY = padding + drawH - ((currentVal - minVal) / rangeY) * drawH;
       ctx.fillStyle = '#fff';
       ctx.beginPath();
@@ -629,6 +630,14 @@ function SpringConfig({
   return (
     <div className="space-y-2">
       <ParamSlider
+        label="振幅"
+        value={config.amplitude ?? 5}
+        min={0.1}
+        max={50}
+        step={0.5}
+        onChange={(v) => onUpdate({ amplitude: v })}
+      />
+      <ParamSlider
         label="刚度"
         value={config.stiffness}
         min={0.01}
@@ -656,7 +665,7 @@ function SpringConfig({
         displayPrecision={1}
       />
       <ParamSlider
-        label="静止长度"
+        label="静止偏移"
         value={config.restLength}
         min={-50}
         max={50}

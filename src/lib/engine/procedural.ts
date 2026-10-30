@@ -13,10 +13,15 @@ import { fbmNoise, seededRandom, simplex2D } from './noise';
 export function computeProceduralValue(
   config: ProceduralConfig,
   frame: number,
+  startFrame = 0,
 ): number {
   switch (config.type) {
     case 'noise': {
-      return fbmNoise(frame * config.frequency, 0, config.octaves, config.seed) * config.amplitude;
+      // fbmNoise 的输出恒在 [0, 1)（底层 hash 的符号位恒为 0），必须
+      // ×2−1 居中后才有正有负——与 jitter 平滑模式同一约定。原语是
+      // 共享的（jitter 等消费方按 [0,1) 口径各自补偿），只改本分支
+      // 的后处理、不动原语本体。旧式直接 ×amplitude 只往正方向推。
+      return (fbmNoise(frame * config.frequency, 0, config.octaves, config.seed) * 2 - 1) * config.amplitude;
     }
     case 'wave': {
       const t = frame * config.frequency + (config.phase / 360);
@@ -30,12 +35,16 @@ export function computeProceduralValue(
       }
     }
     case 'spring': {
-      // Damped spring oscillation
+      // 阻尼弹簧：与另外三类同为按帧推进的纯函数——以条目起始帧为
+      // 起振点（局部帧 lf），振幅用独立的 amplitude 字段（存量条目
+      // 缺该字段按 5 读），restLength 只作衰减后收敛到的静止偏移。
+      // 旧公式以全工程第 0 帧、把帧数除以 60 折成秒起振，摆幅还由
+      // restLength 兼职，条目往后放就只剩平线，2026-10-30 改齐。
       const omega = Math.sqrt(config.stiffness / config.mass);
       const gamma = config.damping / (2 * config.mass);
       const dampedOmega = Math.sqrt(Math.max(0, omega * omega - gamma * gamma));
-      const t = frame / 60; // time in seconds
-      return (config.restLength > 0 ? config.restLength : 1) * Math.exp(-gamma * t) * Math.cos(dampedOmega * t) + config.restLength;
+      const lf = Math.max(0, frame - startFrame);
+      return (config.restLength ?? 0) + (config.amplitude ?? 5) * Math.exp(-gamma * lf) * Math.cos(dampedOmega * lf);
     }
     case 'jitter': {
       const seed = Math.floor(frame * config.frequency * 100);
@@ -80,7 +89,7 @@ export function applyProceduralAnimations(
     if (!pa.enabled || (!matchesPart && !matchesNode)) continue;
     if (frame < pa.startFrame || frame > pa.endFrame) continue;
 
-    const value = computeProceduralValue(pa.config, frame);
+    const value = computeProceduralValue(pa.config, frame, pa.startFrame);
 
     switch (pa.config.targetProperty) {
       case 'translateX': {
@@ -165,7 +174,7 @@ export function computeProceduralPoseDelta(
     const matchesSprite = !!resolvedSpriteId && !!pa.spriteId && pa.spriteId === resolvedSpriteId;
     if (!pa.enabled || (!matchesNode && !matchesSprite)) continue;
     if (frame < pa.startFrame || frame > pa.endFrame) continue;
-    const value = computeProceduralValue(pa.config, frame);
+    const value = computeProceduralValue(pa.config, frame, pa.startFrame);
     switch (pa.config.targetProperty) {
       case 'translateX':
         delta.dx += value;

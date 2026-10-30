@@ -20,7 +20,13 @@
 //  E) convert 构造对拍——只有 spriteId 的条目按挂载关系进包（一精
 //     灵多节点多条）、未被任何节点挂载的点名丢弃、挂载节点无修改
 //     器也照样进包（门控已摘除）、nodeId 条目原路径不变
+//  F) 弹簧与其余三类拉齐（加独立 amplitude、按帧推进、从条目起始
+//     帧起振）——lf=0 取值、衰减包络、起始帧平移不变性、缺
+//     amplitude 按 5 读、引擎与 dyn 两份弹簧带 startFrame 逐值对
+//     拍；噪声输出居中（fbm 原语恒 [0,1)，分支 ×2−1 后跨零）；
+//     wave/jitter 按改前公式在探针内复算、多帧多参数逐值不变
 import { computeProceduralPoseDelta, computeProceduralValue } from '../src/lib/engine/procedural';
+import { fbmNoise, seededRandom, simplex2D } from '../src/lib/engine/noise';
 import { createDynamicRuntime } from '../src/lib/proc-runtime/dynamic-src';
 import { convertCharacterToRuntimePackage } from '../src/lib/proc-runtime/convert';
 import { pxToSub, type Character as UnifiedCharacter, type Node as UnifiedNode } from '../src/lib/unified-types';
@@ -123,7 +129,7 @@ console.log('B) 计入条件（修改器门控已摘除）');
 console.log('C) 与播放器同式对拍');
 {
   const rt = createDynamicRuntime();
-  const dyn = (cfg: ProceduralConfig, f: number) => rt.dynProceduralValue(cfg as never, f);
+  const dyn = (cfg: ProceduralConfig, f: number, sf = 0) => rt.dynProceduralValue(cfg as never, f, sf);
   const cfgs: ProceduralConfig[] = [
     { type: 'noise', amplitude: 7, frequency: 0.05, octaves: 3, seed: 42, targetProperty: 'translateX' },
     { type: 'wave', amplitude: 9, frequency: 0.3, phase: 40, waveType: 'sine', targetProperty: 'translateX' },
@@ -194,6 +200,25 @@ console.log('D) 源码级断言');
   ok(!conv.includes('只有 spriteId 无 nodeId'), 'convert 不再以「只有 spriteId 无 nodeId」点名丢弃');
   ok(conv.includes('mountNodesOf') && conv.includes('目标精灵未被任何节点挂载'), 'convert 改按挂载关系解析精灵目标、无挂载时点名');
   ok(!conv.includes('无启用的') && !conv.includes('同样不生效'), 'convert 不再以缺启用修改器点名丢弃程序化条目（门控已摘除）');
+
+  // 弹簧拉齐的接线
+  ok(eng.includes('frame - startFrame') && eng.includes('amplitude ?? 5'), '引擎弹簧按局部帧起振、amplitude 缺省 5');
+  ok(!eng.includes('frame / 60'), '引擎弹簧不再把帧数除以 60 折秒');
+  const dynSrc = readFileSync(new URL('../src/lib/proc-runtime/dynamic-src.ts', import.meta.url), 'utf8');
+  ok(dynSrc.includes('function dynProceduralValue(cfg, frame, startFrame)') && dynSrc.includes('amplitude ?? 5'), '运行时弹簧同式：带 startFrame、amplitude 缺省 5');
+  ok(!dynSrc.includes('frame / 60'), '运行时弹簧不再把帧数除以 60 折秒');
+  const rtSrc = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', import.meta.url), 'utf8');
+  ok(rtSrc.includes('dynProceduralValue(pa.cfg, fIdx, pa.startFrame)'), '播放器调用 dynProceduralValue 传 pa.startFrame');
+  ok(panel.includes('computeProceduralValue(config, frame, startFrame)') && panel.includes('computeProceduralValue(config, currentFrame, startFrame)'), '面板小预览两处取值都传条目 startFrame');
+  ok(panel.includes('amplitude: 5') && panel.includes('config.amplitude ?? 5'), '面板弹簧默认带 amplitude 5、存量缺字段按 5 显示');
+  ok(panel.includes('静止偏移') && !panel.includes('静止长度'), '面板弹簧参数名改为「静止偏移」、不再叫「静止长度」');
+
+  // 噪声居中只改分支后处理、原语本体不动
+  ok(eng.includes('* 2 - 1) * config.amplitude'), '引擎 noise 分支 ×2−1 居中后乘振幅');
+  ok(dynSrc.includes('* 2 - 1) * cfg.amplitude'), '运行时 noise 分支同步 ×2−1 居中');
+  const noiseSrc = readFileSync(new URL('../src/lib/engine/noise.ts', import.meta.url), 'utf8');
+  ok(noiseSrc.includes('/ 2147483648'), 'noise.ts 的 hash/simplex2D/fbmNoise 原语本体未动（仍 [0,1) 口径）');
+  ok(dynSrc.includes('2147483648'), 'dynProcNoise2D 原语本体未动（仍 [0,1) 口径）');
 }
 
 console.log('E) convert 挂载解析对拍');
@@ -255,6 +280,166 @@ console.log('E) convert 挂载解析对拍');
   ok(entries.length === 4, `进包共 4 条（实 ${entries.length}）`);
   ok(pkg.warnings.some((w) => w.includes('无挂载') && w.includes('未被任何节点挂载')), '未被任何节点挂载的精灵条目被点名丢弃');
   ok(!pkg.warnings.some((w) => w.includes('无修改器')), '无修改器的精灵条目不再被点名（凭自身进包）');
+}
+
+console.log('F) 弹簧拉齐 + 噪声居中');
+{
+  const rt = createDynamicRuntime();
+  const dynS = (cfg: ProceduralConfig, f: number, sf = 0) => rt.dynProceduralValue(cfg as never, f, sf);
+  // 探针内按新口径手算（与实现独立复算）
+  const springExpected = (cfg: { stiffness: number; damping: number; mass: number; amplitude?: number; restLength: number }, frame: number, startFrame = 0) => {
+    const omega = Math.sqrt(cfg.stiffness / cfg.mass);
+    const gamma = cfg.damping / (2 * cfg.mass);
+    const dampedOmega = Math.sqrt(Math.max(0, omega * omega - gamma * gamma));
+    const lf = Math.max(0, frame - startFrame);
+    return cfg.restLength + (cfg.amplitude ?? 5) * Math.exp(-gamma * lf) * Math.cos(dampedOmega * lf);
+  };
+  const springCfg = (over: Record<string, unknown> = {}): ProceduralConfig => ({
+    type: 'spring', stiffness: 0.5, damping: 0.3, mass: 1, amplitude: 5, restLength: 2,
+    targetProperty: 'translateX', ...over,
+  } as ProceduralConfig);
+
+  // lf=0：值 = restLength + amplitude（e^0=cos0=1）
+  ok(near(computeProceduralValue(springCfg(), 0), 7), '弹簧 lf=0 → restLength + amplitude = 7');
+  ok(near(computeProceduralValue(springCfg(), 40, 40), 7), '弹簧在 startFrame 当帧起振 → 同为 7');
+
+  // 多帧与手算逐值对（两组参数，含负 restLength 与高阻尼）
+  {
+    const sets = [
+      springCfg(),
+      springCfg({ stiffness: 1.6, damping: 0.9, mass: 2.5, amplitude: 12, restLength: -3 }),
+      springCfg({ stiffness: 0.2, damping: 0.05, mass: 0.5, amplitude: 3, restLength: 0 }),
+    ];
+    let all = true;
+    for (const cfg of sets) {
+      for (const f of [0, 1, 2, 3, 5, 8, 13, 21, 34, 60, 120]) {
+        if (!near(computeProceduralValue(cfg, f), springExpected(cfg as never, f))) all = false;
+        if (!near(computeProceduralValue(cfg, f + 40, 40), springExpected(cfg as never, f + 40, 40))) all = false;
+      }
+    }
+    ok(all, '弹簧多帧多参数与手算新公式逐值一致（含 startFrame=40）');
+  }
+
+  // 衰减包络：|v − restLength| ≤ amplitude·e^(−γ·lf)，且采样点包络递减
+  {
+    const cfg = springCfg();
+    const gamma = 0.3 / (2 * 1);
+    let envOk = true;
+    for (let f = 0; f <= 200; f++) {
+      const v = computeProceduralValue(cfg, f);
+      if (Math.abs(v - 2) > 5 * Math.exp(-gamma * f) + 1e-9) envOk = false;
+    }
+    ok(envOk, '弹簧全程落在衰减包络 amplitude·e^(−γ·lf) 内');
+    const env = (lf: number) => 5 * Math.exp(-gamma * lf);
+    ok(env(0) > env(10) && env(10) > env(20) && env(20) > env(40), '包络随 lf 单调递减');
+    // 默认参数可见性自查：lf=20 已衰减到 5% 量级（e^−3≈0.0498），且前段确有大摆幅
+    ok(Math.abs(computeProceduralValue(springCfg({ restLength: 0 }), 20)) <= 5 * Math.exp(-3) + 1e-9, '默认参数 lf=20 时 |v| 已 ≤ 振幅的 e^−3');
+    ok(computeProceduralValue(springCfg({ restLength: 0 }), 5) < -2, '默认参数 lf=5 出现明显反向摆幅（< −2，看得见振荡）');
+  }
+
+  // 起始帧平移不变性：startFrame=40 在 frame=40+k 的值 == startFrame=0 在 frame=k 的值
+  {
+    let inv = true;
+    for (let k = 0; k <= 60; k++) {
+      if (!near(computeProceduralValue(springCfg(), 40 + k, 40), computeProceduralValue(springCfg(), k, 0))) inv = false;
+    }
+    ok(inv, '弹簧起始帧平移不变性（引擎取值）');
+    // 经位姿增量同理：条目 startFrame=40、帧 40+k 的 dx == startFrame=0、帧 k 的 dx
+    let invD = true;
+    for (const k of [0, 1, 4, 9, 20]) {
+      const a = computeProceduralPoseDelta([pa(springCfg(), { startFrame: 40, endFrame: 200 })], 'n1', 40 + k);
+      const b = computeProceduralPoseDelta([pa(springCfg(), { startFrame: 0, endFrame: 200 })], 'n1', k);
+      if (!near(a.dx, b.dx)) invD = false;
+    }
+    ok(invD, '弹簧起始帧平移不变性（位姿增量通路传 pa.startFrame）');
+    // frame < startFrame：局部帧钳到 0（直接取值口径），值 = restLength + amplitude
+    ok(near(computeProceduralValue(springCfg(), 10, 40), 7), 'frame < startFrame 时局部帧钳 0 → restLength + amplitude');
+  }
+
+  // 缺 amplitude 字段按 5 读（存量条目）：与显式 amplitude=5 逐帧同值
+  {
+    const legacy = springCfg(); delete (legacy as { amplitude?: number }).amplitude;
+    let same = true;
+    for (const f of [0, 3, 7, 15, 30]) {
+      if (!near(computeProceduralValue(legacy, f), computeProceduralValue(springCfg(), f))) same = false;
+      if (!near(dynS(legacy, f), computeProceduralValue(legacy, f))) same = false;
+    }
+    ok(same, '缺 amplitude 的存量弹簧按 5 读（引擎与运行时一致）');
+  }
+
+  // 引擎与 dyn 两份弹簧带 startFrame 逐值对拍
+  {
+    let par = true;
+    for (const cfg of [springCfg(), springCfg({ stiffness: 1.2, damping: 0.5, mass: 0.8, amplitude: 8, restLength: -1 })]) {
+      for (const sf of [0, 40]) {
+        for (const f of [0, 1, 5, 12, 40, 41, 55, 90]) {
+          if (!near(computeProceduralValue(cfg, f, sf), dynS(cfg, f, sf))) par = false;
+        }
+      }
+    }
+    ok(par, '弹簧引擎与 dyn 带 startFrame 逐值同值');
+  }
+
+  // 噪声居中：fbm 原语 [0,1) 不变，分支 ×2−1 后跨零、全值在 [−amplitude, amplitude]
+  {
+    const nCfg: ProceduralConfig = { type: 'noise', amplitude: 7, frequency: 0.05, octaves: 3, seed: 42, targetProperty: 'translateX' };
+    let mn = Infinity, mx = -Infinity, inRange = true;
+    for (let f = 0; f <= 400; f++) {
+      const v = computeProceduralValue(nCfg, f);
+      mn = Math.min(mn, v); mx = Math.max(mx, v);
+      if (v < -7 || v >= 7) inRange = false;
+    }
+    ok(mn < 0 && mx > 0, `噪声取值有正有负（min=${mn.toFixed(2)} max=${mx.toFixed(2)}）`);
+    ok(inRange, '噪声全值落在 [−amplitude, amplitude] 内');
+    // 与原语复算逐值对：(fbmNoise(...)·2−1)·amplitude
+    let rep = true;
+    for (const f of [0, 1, 7, 33, 100, 255]) {
+      const expect = (fbmNoise(f * 0.05, 0, 3, 42) * 2 - 1) * 7;
+      if (!near(computeProceduralValue(nCfg, f), expect)) rep = false;
+      if (!near(dynS(nCfg, f), expect)) rep = false;
+    }
+    ok(rep, '噪声 = (fbm 输出·2−1)·振幅，引擎与 dyn 逐值同式（原语未动）');
+  }
+
+  // 其余两类按改前公式复算逐值不变（wave/jitter 分支一字未动）
+  {
+    const oldWave = (cfg: Extract<ProceduralConfig, { type: 'wave' }>, frame: number) => {
+      const t = frame * cfg.frequency + (cfg.phase / 360);
+      const phase = t * Math.PI * 2;
+      switch (cfg.waveType) {
+        case 'sine': return Math.sin(phase) * cfg.amplitude;
+        case 'triangle': return (2 * Math.abs(2 * (t % 1 - 0.5)) - 1) * cfg.amplitude;
+        case 'square': return (Math.sin(phase) >= 0 ? 1 : -1) * cfg.amplitude;
+        case 'sawtooth': return (2 * (t % 1) - 1) * cfg.amplitude;
+        default: return Math.sin(phase) * cfg.amplitude;
+      }
+    };
+    const oldJitter = (cfg: Extract<ProceduralConfig, { type: 'jitter' }>, frame: number) => {
+      const seed = Math.floor(frame * cfg.frequency * 100);
+      const rng = seededRandom(seed);
+      if (cfg.smooth) return (simplex2D(frame * cfg.frequency, 0) * 2 - 1) * cfg.amount;
+      return (rng() * 2 - 1) * cfg.amount;
+    };
+    let same = true;
+    const waveCfgs: ProceduralConfig[] = (['sine', 'triangle', 'square', 'sawtooth'] as const).map((waveType) => ({
+      type: 'wave', amplitude: 9, frequency: 0.3, phase: 40, waveType, targetProperty: 'translateX',
+    }));
+    for (const cfg of waveCfgs) {
+      for (const f of [0, 1, 2, 7, 19, 58, 123]) {
+        if (!near(computeProceduralValue(cfg, f), oldWave(cfg as never, f))) same = false;
+      }
+    }
+    const jitCfgs: ProceduralConfig[] = [
+      { type: 'jitter', amount: 3, frequency: 0.7, smooth: true, targetProperty: 'translateX' },
+      { type: 'jitter', amount: 4, frequency: 1.3, smooth: false, targetProperty: 'translateX' },
+    ];
+    for (const cfg of jitCfgs) {
+      for (const f of [0, 1, 5, 23, 77, 200]) {
+        if (!near(computeProceduralValue(cfg, f), oldJitter(cfg as never, f))) same = false;
+      }
+    }
+    ok(same, 'wave/jitter 与改前公式逐值不变');
+  }
 }
 
 console.log(`\nverify-procedural-pose-delta: ${pass} passed, ${fail} failed`);

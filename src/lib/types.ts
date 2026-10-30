@@ -1813,6 +1813,9 @@ export interface ProceduralSpring {
   stiffness: number;
   damping: number;
   mass: number;
+  /** 起振摆幅（独立字段）；存量条目没有该字段时读取端按 5 读，不做数据迁移 */
+  amplitude?: number;
+  /** 静止偏移：衰减后收敛到的恒定偏移 */
   restLength: number;
   targetProperty: 'translateX' | 'translateY' | 'rotation' | 'scale';
 }

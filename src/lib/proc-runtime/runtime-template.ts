@@ -4370,7 +4370,7 @@ function frame(now) {
       const fIdx = elapsed * FRAME_RATE;
       for (const pa of PROCEDURAL) {
         if (pa.slot !== part.key || fIdx < pa.startFrame || fIdx > pa.endFrame) continue;
-        const v = dynProceduralValue(pa.cfg, fIdx);
+        const v = dynProceduralValue(pa.cfg, fIdx, pa.startFrame);
         if (pa.target === 'translateX') an.dx += v;
         else if (pa.target === 'translateY') an.dy += v;
         else if (pa.target === 'rotation') an.a += v * Math.PI / 180;
