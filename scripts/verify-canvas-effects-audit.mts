@@ -411,6 +411,15 @@ console.log('G) 描边轮廓来源');
   ok(tplG.includes("enc: 'r'"), '瓦片生产者带 enc 标记（spriteTileOf/刀光/场槽字面量）');
   ok((tplG.match(/\.enc = 'r'/g) || []).length >= 2, 'bakeResolvedTile 两条返回路径都打 enc 标记');
   ok(tplG.includes('enc: tile.enc'), 'displaceTileRt 透传 enc 标记');
+  // 掩码纵向口径钉死：g.y = (py − tile.cy)·dsy 与部件渲染器同一映射
+  // （py 为数据行、0 在图顶）；旧式 (tile.cy − py) 等于把瓦片先上下
+  // 翻转再摆进掩码，描边贴的是镜像剪影（旋转部件描边角度镜像）
+  ok(maskSeg.includes('gy = (py - tile.cy) * dsy'), 'fxBuildMask gy 按 (py - tile.cy) 口径（与渲染器同映射）');
+  ok(!maskSeg.includes('gy = (tile.cy - py) * dsy'), 'fxBuildMask 无纵向翻转旧式 gy');
+  // occAt（afterimage 采样反查）同口径：g = M·W 的图内偏移，反查行
+  // py = tile.cy + gy；旧式 tile.cy − gy 同为翻转
+  ok(tplG.includes('py = Math.round(tile.cy + gy)'), 'occAt 反查行按 tile.cy + gy 口径');
+  ok(!tplG.includes('tile.cy - gy'), 'occAt 无纵向翻转旧式');
   // 生成包里同样带 R 读法（钉到出货产物，不只源码文件）
   const htmlG = buildRuntimeHtml({ parts: [], costumes: {}, performances: [], behavior: { graphs: {} }, fx: { canvas: { w: 8, h: 8 }, totalFrames: 24, canvasTracks: [] } } as any);
   ok(htmlG.includes("tile.enc === 'r'"), '生成包 fxBuildMask 读 R 编码占据');

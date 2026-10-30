@@ -1899,7 +1899,11 @@ function ensurePostSys() {
  *  enc='r' 标记）的 alpha 恒 255、占据在 R 通道（<128 为占据，与着色器
  *  occ=r0<128 及烘焙端 >=128 为空的口径一致）——旧实现误测 alpha，
  *  每个瓦片整块矩形都被印进掩码，描边只能沿部件包围盒走；无 enc
- *  标记的真 RGBA 瓦片才按 alpha 测。刀光/场槽位瓦片同为 R 编码全空，
+ *  标记的真 RGBA 瓦片才按 alpha 测。纵向口径与部件渲染器一致：图内
+ *  偏移 g.y = (py − tile.cy)·dsy（py 为数据行、0 在图顶），再经同一
+ *  M=[[c,s],[s,−c]] 到世界——旧实现 gy 写成 (tile.cy − py)，等于把
+ *  每块瓦片上下翻转后再摆，描边贴的是镜像剪影（角度镜像）。
+ *  刀光/场槽位瓦片同为 R 编码全空，
  *  不入掩码（与下述来源差口径一致）。来源差仍在：编辑器以全画布
  *  alpha 为准（含背景与效果笔触），此处以部件瓦片为准——笔触/粒子是
  *  GPU 绘制、无 CPU 栅格数据可印，无法对齐，见 PR 说明。 */
@@ -1919,7 +1923,7 @@ function fxBuildMask(state, elByKey, camX, camY) {
       for (let px = 0; px < tile.w; px++) {
         const q4 = (py * tile.w + px) * 4;
         if (useR ? tile.data[q4] >= 128 : tile.data[q4 + 3] <= 8) continue;
-        const gx = (px - tile.cx) * dsx, gy = (tile.cy - py) * dsy;
+        const gx = (px - tile.cx) * dsx, gy = (py - tile.cy) * dsy;
         const wx = el.pos[0] + co * gx + si * gy;
         const wy = el.pos[1] + si * gx - co * gy;
         const mx = Math.floor((wx - (camX - visW() / 2)) * sx);
@@ -4845,8 +4849,8 @@ function frame(now) {
         const tile = entry.tile;
         const dx = wx - el.pos[0], dy = wy - el.pos[1];
         const c = Math.cos(el.rot), s = Math.sin(el.rot);
-        const gx = c * dx + s * dy, gy = s * dx - c * dy;
-        const px = Math.round(gx + tile.cx), py = Math.round(tile.cy - gy);
+        const gx = c * dx + s * dy, gy = s * dx - c * dy; // g = M·W，与渲染器同一映射，反查行 py = tile.cy + gy
+        const px = Math.round(gx + tile.cx), py = Math.round(tile.cy + gy);
         if (px < 0 || py < 0 || px >= tile.w || py >= tile.h) continue;
         if (tile.data[(py * tile.w + px) * 4 + 3] > 8) return true;
       }
