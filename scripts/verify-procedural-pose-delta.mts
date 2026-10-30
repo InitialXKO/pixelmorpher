@@ -29,7 +29,13 @@
 //     一元负号/嵌套括号/全部函数/f·F·p 三变量与 p 钳制）、坏公式
 //     与非有限结果回 0、引擎 evaluateFormula 与 dyn 版逐值全等、
 //     经 computeProceduralValue 与位姿增量汇总的接线
+//  H) 增量进世界变换——computeWorldTransforms 构造三节点链：根/
+//     父增量的平移与旋转被子孙逐值继承、缩放两通道只落自身、
+//     挂根节点的 wave 条目端到端带动孙节点
+//  I) 播放器传播纯函数 dynPropagateProc——全零增量逐值不变、根平
+//     移/旋转按插头点刚体递推到子孙、父部件未绘制时链断按根结算
 import { computeProceduralPoseDelta, computeProceduralValue } from '../src/lib/engine/procedural';
+import { computeWorldTransforms } from '../src/lib/unified-render';
 import { evaluateFormula, validateFormula } from '../src/lib/engine/formula';
 import { fbmNoise, seededRandom, simplex2D } from '../src/lib/engine/noise';
 import { createDynamicRuntime } from '../src/lib/proc-runtime/dynamic-src';
@@ -174,12 +180,18 @@ console.log('D) 源码级断言');
 {
   const ur = readFileSync(new URL('../src/lib/unified-render.ts', import.meta.url), 'utf8');
   ok(!ur.includes('applyProceduralAnimations'), 'unified-render 不再引用 applyProceduralAnimations（旧调用串消失）');
-  ok(ur.includes('computeProceduralPoseDelta(proceduralAnimations'), 'unified-render 改走 computeProceduralPoseDelta 汇总位姿增量');
-  ok(ur.includes('pxToSub(procDelta.dx)') && ur.includes('pxToSub(procDelta.dy)'), '平移增量叠进 worldX/worldY（pxToSub 同 folDx 口径）');
-  ok(ur.includes('+ procDelta.rotDeg'), '旋转增量叠进 angle');
+  // 落点迁移（2026-10-30）：增量不再叠在渲染指令上（子节点与关节盘
+  // 读世界变换表、指令层叠加带不动它们），改由预备段汇成增量图、
+  // computeWorldTransforms 叠进每个节点的最终世界变换。
+  ok(ur.includes('procDeltas?: ReadonlyMap<string, ProceduralPoseDelta>'), 'computeWorldTransforms 带增量图可选入参');
+  ok(ur.includes('computeProceduralPoseDelta(proceduralAnimations, n.id, frame, sid ?? undefined)'), '预备段逐节点按本次解析精灵 id 汇总增量图');
+  ok(ur.includes('mapDragTo3D(pxToSub(rootDelta.dx)') && ur.includes('mapDragTo3D(pxToSub(childDelta.dx)'), '根/子合成点平移增量经 mapDragTo3D 换算到世界轴');
+  ok(ur.includes('mat3Mul(rotMatD(childDelta.rotDeg), childFrame)'), '子合成点 frame 左乘视平面旋转（worldAngle 恰好 +rotDeg）');
+  ok(!ur.includes('pxToSub(procDelta.dx)') && !ur.includes('+ procDelta.rotDeg') && !ur.includes('procDelta.scaleMul'), '指令层无 procDelta 叠加残留（不双重应用）');
+  ok(ur.includes('angle: worldTf.worldAngle + (folDa * 180) / Math.PI + spinDeg,'), '指令 angle 只读 worldTf.worldAngle（程序化已在表内）');
   ok(ur.includes('modifiers: node.modifiers'), '指令 modifiers 回归节点原始修改器（不再被程序化改写）');
-
-  ok(ur.includes('nodeSpriteId ?? undefined'), 'unified-render 把本次解析出的精灵 id 传给增量汇总');
+  // 关节盘连带：盘生成读同一张世界变换表（增量已进表即跟随）
+  ok(ur.includes('generateDiscInstructions(character, worldTransforms'), '关节盘生成读 generateRenderPlan 的世界变换表（与精灵指令同表）');
 
   const panel = readFileSync(new URL('../src/components/pixel-editor/ProceduralPanel.tsx', import.meta.url), 'utf8');
   ok(!panel.includes('function computeProceduralValue'), 'ProceduralPanel 不再含本地 computeProceduralValue 定义');
@@ -591,6 +603,86 @@ console.log('G) 公式类型');
   ok(panel2.includes('computeProceduralValue(config, frame, startFrame, endFrame)'), '面板小预览取值传 endFrame');
   const types2 = readFileSync(new URL('../src/lib/types.ts', import.meta.url), 'utf8');
   ok(types2.includes('ProceduralFormula') && types2.includes("| ProceduralFormula"), 'types 联合含 ProceduralFormula');
+}
+
+console.log('H) 增量进世界变换：子节点随父增量（computeWorldTransforms 行为）');
+{
+  // 三节点链 root→arm→hand，全部南向（variantIndex 6，投影换算恒等）、
+  // 角度 0、fixed 挂接：arm 局部 x=30px、hand 局部 x=10px。
+  const mkNode = (id: string, parentId: string | null, xPx: number, children: string[]) => ({
+    id, parentId, name: id, children,
+    transform: { x: pxToSub(xPx), y: 0 as never, z: 0, angle: 0, tilt: 0, stretch: 1, scaleX: 1, skewX: 0, skewY: 0, variantIndex: 6 },
+    tracks: {}, modifiers: [], sockets: [],
+    attachment: parentId ? { type: 'fixed' } : undefined,
+  }) as never;
+  const charFx = {
+    id: 'fx', name: 'fx', rootNodeId: 'root',
+    nodes: {
+      root: mkNode('root', null, 0, ['arm']),
+      arm: mkNode('arm', 'root', 30, ['hand']),
+      hand: mkNode('hand', 'arm', 10, []),
+    },
+  } as never;
+  const run = (deltas?: Map<string, { dx: number; dy: number; rotDeg: number; scaleMul: number }>) =>
+    computeWorldTransforms(charFx, 0, 64, 64, 60, undefined, undefined, undefined, undefined, undefined, undefined, deltas);
+  const nearSub = (a: number, b: number) => Math.abs(a - b) < 1;
+
+  const base = run();
+  ok(nearSub(base.get('arm')!.worldX, pxToSub(30)) && nearSub(base.get('hand')!.worldX, pxToSub(40)), '无增量基线：arm x=30px、hand x=40px');
+  ok(base.get('hand')!.worldAngle === 0, '无增量基线：hand worldAngle=0');
+
+  const rootShift = run(new Map([['root', { dx: 5, dy: 0, rotDeg: 0, scaleMul: 1 }]]));
+  ok(nearSub(rootShift.get('arm')!.worldX, pxToSub(35)) && nearSub(rootShift.get('hand')!.worldX, pxToSub(45)), '根 dx=5：arm/hand 世界 x 同步 +5（子节点继承）');
+
+  const armRot = run(new Map([['arm', { dx: 0, dy: 0, rotDeg: 90, scaleMul: 1 }]]));
+  ok(nearSub(armRot.get('arm')!.worldAngle, 90) && nearSub(armRot.get('hand')!.worldAngle, 90), 'arm rotDeg=90：arm 与 hand 的 worldAngle 都是 90');
+  ok(nearSub(armRot.get('hand')!.worldX, pxToSub(30)) && nearSub(armRot.get('hand')!.worldY, pxToSub(10)), 'arm rotDeg=90：hand 绕 arm 插头转到 (30px, 10px)');
+
+  const armDy = run(new Map([['arm', { dx: 0, dy: 7, rotDeg: 0, scaleMul: 1 }]]));
+  ok(nearSub(armDy.get('hand')!.worldY, pxToSub(7)), 'arm dy=7：hand 世界 y 同步 +7');
+
+  const rootScale = run(new Map([['root', { dx: 0, dy: 0, rotDeg: 0, scaleMul: 2 }]]));
+  ok(rootScale.get('root')!.worldStretch === 2 && rootScale.get('root')!.scaleX === 2, '根 scaleMul=2：worldStretch 与 scaleX 两通道同乘');
+  ok(rootScale.get('arm')!.worldStretch === 1 && nearSub(rootScale.get('arm')!.worldX, pxToSub(30)), '根 scaleMul=2：缩放通道不沿层级传、子节点位置不变（与世界变换既有口径一致）');
+
+  // 端到端：挂根节点的 wave 条目（frame=1、frequency=0.25、phase=0 →
+  // sine 恰为 1、dx=振幅 6）经汇总函数成图后喂世界变换，整链同移。
+  const e2eDelta = computeProceduralPoseDelta(
+    [pa({ type: 'wave', amplitude: 6, frequency: 0.25, phase: 0, waveType: 'sine', targetProperty: 'translateX' }, { nodeId: 'root' })],
+    'root', 1,
+  );
+  ok(near(e2eDelta.dx, 6), '端到端增量：wave 在 frame=1 取 dx=6');
+  const e2e = run(new Map([['root', e2eDelta]]));
+  ok(nearSub(e2e.get('hand')!.worldX, pxToSub(46)), '端到端：hand 世界 x = 40+6（条目挂根、孙节点跟随）');
+}
+
+console.log('I) 播放器传播纯函数 dynPropagateProc（刚体递推）');
+{
+  const dyn = createDynamicRuntime();
+  const prop = dyn.dynPropagateProc as unknown as (
+    tree: Record<string, string | null>,
+    info: Record<string, { px: number; py: number; dx: number; dy: number; rot: number; baseRot: number; cx: number; cy: number }>,
+  ) => Record<string, { x: number; y: number; rot: number }>;
+  const info0 = {
+    root: { px: 0, py: 0, dx: 0, dy: 0, rot: 0, baseRot: 0.3, cx: 2, cy: 3 },
+    arm: { px: 30, py: 0, dx: 0, dy: 0, rot: 0, baseRot: 0.3, cx: 32, cy: 3 },
+    hand: { px: 40, py: 0, dx: 0, dy: 0, rot: 0, baseRot: 0.3, cx: 42, cy: 3 },
+  };
+  const tree = { root: null, arm: 'root', hand: 'arm' };
+
+  const idem = prop(tree, structuredClone(info0));
+  ok(idem.root.x === 2 && idem.root.y === 3 && idem.root.rot === 0.3
+    && idem.arm.x === 32 && idem.hand.x === 42 && idem.hand.rot === 0.3, '全零增量：逐值返回原中心/原角度');
+
+  const shifted = prop(tree, { ...structuredClone(info0), root: { ...info0.root, dx: 5 } });
+  ok(near(shifted.arm.x, 37) && near(shifted.hand.x, 47) && near(shifted.root.x, 2), '根平移 dx=5：子/孙中心 +5、根本身中心不变（自身增量已在 cx 内）');
+
+  const rotated = prop(tree, { ...structuredClone(info0), root: { ...info0.root, rot: Math.PI / 2 } });
+  ok(near(rotated.arm.x, -3) && near(rotated.arm.y, 32) && near(rotated.arm.rot, 0.3 + Math.PI / 2), '根旋转 90°：arm 中心绕根插头转到 (-3, 32)、角度 +90°');
+  ok(near(rotated.hand.x, -3) && near(rotated.hand.y, 42) && near(rotated.hand.rot, 0.3 + Math.PI / 2), '根旋转 90°：hand 中心到 (-3, 42)（三节链刚体一致）');
+
+  const broken = prop({ hand: 'ghost' }, { hand: { ...info0.hand } });
+  ok(broken.hand.x === 42 && broken.hand.rot === 0.3, '父部件不在 info（未绘制）：链断、按根结算逐值不变');
 }
 
 console.log(`\nverify-procedural-pose-delta: ${pass} passed, ${fail} failed`);

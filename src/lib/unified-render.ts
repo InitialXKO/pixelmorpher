@@ -27,7 +27,7 @@ import {
   resolveChainTarget3D,
   mat3Mul, mat3Transpose, mat3Apply, localRotMat, rotMatD, rotMatY, applyFrameRotation, frameViewAngle,
   frameViewAngleForDirection, frameYAxisWorld,
-  worldToViewBasis, MAT3_IDENTITY, nodeJointDiscDiameter,
+  worldToViewBasis, MAT3_IDENTITY, nodeJointDiscDiameter, mapDragTo3D,
 } from './unified-types';
 import { solveIK2Bone3D, solveIK3Bone3D, solveIK3BoneWithTip3D, solveIKFabrik3D } from './blueprint/ik';
 import { DEFAULT_FACE_FEATURES, faceFeaturePoints, faceHalfWidths } from './face-features';
@@ -79,7 +79,7 @@ import {
 import { applyAutoMotionBlur, renderMotionBlurStroke, renderEffectStroke } from './engine/brush-render';
 import { getAnimationFrameAndWeight } from './engine/animation-state';
 import { computeGlobalModifierTransform } from './engine/animation-dispatch';
-import { computeProceduralPoseDelta } from './engine/procedural';
+import { computeProceduralPoseDelta, type ProceduralPoseDelta } from './engine/procedural';
 import { resolveDynamicPatterns, resolveGlowGroups, dynamicDeformAt, followAnchoredDeltaAt, glowField, glowPulseAt, spinAngleDegAt, arcPointsAt, type DynamicPatternParams } from './dynamic-patterns';
 import { effectivePatternGraph, resolvePatternsFromGraph } from './blueprint/pattern-sync';
 import { orbitPointsAt, postColorAt, blobFieldAt, flameFieldAt, fieldColorAt, envSamplesAt } from './dynamic-patterns';
@@ -498,6 +498,10 @@ export function computeWorldTransforms(
   geometryDirection?: DirectionIndex,
   clampCtx?: ClampContext,
   simCtx?: SimContext,
+  // 程序化位姿增量图（generateRenderPlan 预备段按命中口径汇总；不传
+  // 则全程零变化）。增量叠在每个节点的最终世界变换上（见根/子合成
+  // 点），子节点与关节盘读同一张表、天然跟随。
+  procDeltas?: ReadonlyMap<string, ProceduralPoseDelta>,
 ): Map<string, WorldTransform> {
   // 父级切换轨：FK 全程在按本帧有效父级重写的层级上跑
   character = effectiveCharacterAt(character, frame);
@@ -555,28 +559,39 @@ export function computeWorldTransforms(
 
   // Root node: center of canvas + node's own offset
   const rootInterpolated = interpolateTransform(rootNode, frame, frameRate, variableContext, blueprintTransforms, ikOverrides, behaviorTransforms?.get(rootNode.id), simCtx?.angleDeltas);
-  const rootFrame = localRotMat(rootInterpolated.angle, rootInterpolated.tilt ?? 0);
+  // 程序化增量（根）：叠在最终世界变换上——平移是画布系增量，按根
+  // 朝向经 mapDragTo3D 换算到世界轴；frame 左乘视平面旋转 rotMatD
+  // （frameViewAngle 恰好 +rotDeg，与旧指令层 angle 加法同值）；缩放
+  // 乘 worldStretch/scaleX 两通道（这两通道是节点自身量、不沿层级
+  // 累乘，与旧指令层落点一致）。无增量时各字段逐位不变。
+  const rootDelta = procDeltas?.get(rootNode.id);
+  const rootDelta3 = rootDelta && (rootDelta.dx !== 0 || rootDelta.dy !== 0)
+    ? mapDragTo3D(pxToSub(rootDelta.dx) as SubPixel, pxToSub(rootDelta.dy) as SubPixel, rootInterpolated.variantIndex)
+    : undefined;
+  const rootFrame = rootDelta && rootDelta.rotDeg !== 0
+    ? mat3Mul(rotMatD(rootDelta.rotDeg), localRotMat(rootInterpolated.angle, rootInterpolated.tilt ?? 0))
+    : localRotMat(rootInterpolated.angle, rootInterpolated.tilt ?? 0);
   const rootWorld: WorldTransform = {
     nodeId: rootNode.id,
     // 3D 世界坐标以原点为中心，不含画布中心（画布中心在投影后 2D 阶段加）
-    worldX: (rootInterpolated.x + (clampCtx?.rootOffset ? pxToSub(clampCtx.rootOffset.x) : 0)) as SubPixel,
-    worldY: (rootInterpolated.y + (clampCtx?.rootOffset ? pxToSub(clampCtx.rootOffset.y) : 0)) as SubPixel,
-    worldZ: ((rootInterpolated.z ?? 0) + (clampCtx?.rootOffset ? pxToSub(clampCtx.rootOffset.z) : 0)) as SubPixel,
+    worldX: (rootInterpolated.x + (clampCtx?.rootOffset ? pxToSub(clampCtx.rootOffset.x) : 0) + (rootDelta3?.dx3 ?? 0)) as SubPixel,
+    worldY: (rootInterpolated.y + (clampCtx?.rootOffset ? pxToSub(clampCtx.rootOffset.y) : 0) + (rootDelta3?.dy3 ?? 0)) as SubPixel,
+    worldZ: ((rootInterpolated.z ?? 0) + (clampCtx?.rootOffset ? pxToSub(clampCtx.rootOffset.z) : 0) + (rootDelta3?.dz3 ?? 0)) as SubPixel,
     worldAngle: geometryDirection !== undefined
       ? frameViewAngleForDirection(rootFrame, geometryDirection, rootInterpolated.variantIndex)
       : frameViewAngle(rootFrame),
     worldFrame: rootFrame,
-    worldStretch: rootInterpolated.stretch,
+    worldStretch: rootDelta ? rootInterpolated.stretch * rootDelta.scaleMul : rootInterpolated.stretch,
     variantIndex: rootInterpolated.variantIndex,
     mirror: false,
-    scaleX: rootInterpolated.scaleX,
+    scaleX: rootDelta && rootDelta.scaleMul !== 1 ? (rootInterpolated.scaleX ?? 1) * rootDelta.scaleMul : rootInterpolated.scaleX,
     skewX: rootInterpolated.skewX,
     skewY: rootInterpolated.skewY,
   };
   transforms.set(rootNode.id, rootWorld);
 
   // Recursively compute children
-  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms, simCtx?.angleDeltas);
+  computeChildTransforms(rootNode, rootWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms, simCtx?.angleDeltas, procDeltas, rootInterpolated.variantIndex);
 
   // 钳制锚定收尾（仅最外层调用执行；IK 重算遍与 resettle 的内层调用跳过）：
   // 刚性反移 + 节点局部旋转就地施加在结算结果上；resettle 开时以累进
@@ -598,7 +613,7 @@ export function computeWorldTransforms(
           z: (clampCtx.rootOffset?.z ?? 0) + res.delta.z,
         },
       };
-      return computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, undefined, geometryDirection, ctx2, simCtx);
+      return computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, undefined, geometryDirection, ctx2, simCtx, procDeltas);
     }
     return t;
   };
@@ -618,7 +633,7 @@ export function computeWorldTransforms(
         solveChainIKOverrides(character, effChain, transforms, canvasWidth, canvasHeight, frame, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection);
       }
       if (overrides.size > 0) {
-        const t2 = computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection, clampCtx, simCtx);
+        const t2 = computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection, clampCtx, simCtx, procDeltas);
         return finishWithClamps(t2);
       }
     }
@@ -909,6 +924,11 @@ function computeChildTransforms(
   geometryDirection?: DirectionIndex,
   behaviorTransforms?: Map<string, { rotation: number; translateX: number; translateY: number }>,
   simDeltas?: ReadonlyMap<string, number>,
+  // 程序化位姿增量图 + 本遍投影朝向（根 variant，与 generateRenderPlan
+  // 指令投影的 currentDirection 同值）：增量叠在子节点最终世界变换上，
+  // 递归时父级读到的已是叠加后的变换、整棵子树天然继承。
+  procDeltas?: ReadonlyMap<string, ProceduralPoseDelta>,
+  procViewDirection?: DirectionIndex,
 ): void {
   for (const childId of parentNode.children) {
     const childNode = character.nodes[childId];
@@ -976,26 +996,52 @@ function computeChildTransforms(
       ? mat3Mul(parentWorld.worldFrame, childLocalFrame)
       : childLocalFrame;
 
+    // 程序化增量（子）：与根同一落法叠在最终世界变换上——位置按投影
+    // 朝向经 mapDragTo3D 换算到世界轴（加在已合成的位置上、画布系
+    // 不随父 frame 旋转，与旧指令层加法同义）；frame 左乘视平面旋转
+    // （worldAngle 恰好 +rotDeg）；缩放乘自身两通道。父级增量已在本
+    // 节点的位置/frame 合成里（parentWorld 是叠加后的变换），此处只
+    // 叠本节点自己的增量。无增量时各字段逐位不变。
+    const childDelta = procDeltas?.get(childId);
+    let childFrameFinal = childFrame;
+    let childStretch = childInterpolated.stretch;
+    let childScaleX = childInterpolated.scaleX;
+    if (childDelta && (childDelta.dx !== 0 || childDelta.dy !== 0 || childDelta.rotDeg !== 0 || childDelta.scaleMul !== 1)) {
+      if (childDelta.dx !== 0 || childDelta.dy !== 0) {
+        const d3 = mapDragTo3D(pxToSub(childDelta.dx) as SubPixel, pxToSub(childDelta.dy) as SubPixel, procViewDirection ?? childInterpolated.variantIndex);
+        childWorldX = (childWorldX + d3.dx3) as SubPixel;
+        childWorldY = (childWorldY + d3.dy3) as SubPixel;
+        childWorldZ = (childWorldZ + d3.dz3) as SubPixel;
+      }
+      if (childDelta.rotDeg !== 0) {
+        childFrameFinal = mat3Mul(rotMatD(childDelta.rotDeg), childFrame);
+      }
+      childStretch = childInterpolated.stretch * childDelta.scaleMul;
+      if (childDelta.scaleMul !== 1) {
+        childScaleX = (childInterpolated.scaleX ?? 1) * childDelta.scaleMul;
+      }
+    }
+
     const childWorld: WorldTransform = {
       nodeId: childId,
       worldX: childWorldX,
       worldY: childWorldY,
       worldZ: childWorldZ,
       worldAngle: geometryDirection !== undefined
-        ? frameViewAngleForDirection(childFrame, geometryDirection, childInterpolated.variantIndex)
-        : frameViewAngle(childFrame),
-      worldFrame: childFrame,
-      worldStretch: childInterpolated.stretch,
+        ? frameViewAngleForDirection(childFrameFinal, geometryDirection, childInterpolated.variantIndex)
+        : frameViewAngle(childFrameFinal),
+      worldFrame: childFrameFinal,
+      worldStretch: childStretch,
       variantIndex: childInterpolated.variantIndex,
       mirror: childMirror,
-      scaleX: childInterpolated.scaleX,
+      scaleX: childScaleX,
       skewX: childInterpolated.skewX,
       skewY: childInterpolated.skewY,
     };
     transforms.set(childId, childWorld);
 
     // Recurse into children
-    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms, simDeltas);
+    computeChildTransforms(childNode, childWorld, character, frame, transforms, frameRate, variableContext, blueprintTransforms, ikOverrides, geometryDirection, behaviorTransforms, simDeltas, procDeltas, procViewDirection);
   }
 }
 
@@ -2828,17 +2874,73 @@ export function generateRenderPlan(
   // 生效服装状态：静态字段 → clip 状态轨道 → 状态蓝图（三层增量叠加）
   const effCostume = resolveEffectiveCostumeState(character, frame, frameRate, stateKeyframes, blueprintVars);
 
+  // 生效服装集（用生效状态的集 id，含轨道/蓝图覆盖；原在 Step 1 之后，
+  // 因程序化增量图的预备段要按它解析精灵，提前到此，口径不变）
+  const activeCostumeSet = effCostume.costumeSetId
+    ? character.costumeSets.find(cs => cs.id === effCostume.costumeSetId)
+    : undefined;
+
+  // 方向间过渡（蒙皮转面 A）：facingAngle 为连续角度时，计算相邻两方向及混合系数
+  // 单图模式（蒙皮转面 C）：不切换精灵，用 faceTurn 的 yaw 模拟转头
+  // （原在指令构建前段，因程序化增量图的预备段解析精灵要同用 dirA，整块提前，逻辑不变）
+  const singleImageMode = character.faceTurnConfig?.singleImageMode === true;
+  let dirBlend: { dirA: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7; dirB: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7; blend: number } | undefined;
+  let singleImageYaw = 0;
+  if (character.facingAngle !== undefined && character.faceTurnConfig?.enabled) {
+    if (singleImageMode) {
+      // 单图模式：facingAngle → yaw（-1~1），不切换精灵
+      // 归一化到 [-180, 180)，yaw = angle / 180
+      let a = ((character.facingAngle % 360) + 360) % 360;
+      if (a > 180) a -= 360;
+      singleImageYaw = Math.max(-1, Math.min(1, a / 180));
+      // dirBlend 保持 undefined（单精灵）
+    } else {
+      // 懒加载避免循环依赖
+      const { facingAngleToBlend } = require('./skin/face-turn') as typeof import('./skin/face-turn');
+      dirBlend = facingAngleToBlend(character.facingAngle);
+      // blend 为 0 或 1 时退化为单方向（避免双采样开销）
+      if (dirBlend.blend < 1e-6 || dirBlend.blend > 1 - 1e-6) {
+        dirBlend = undefined;
+      }
+    }
+  }
+
+  // 程序化增量图（预备段）：逐节点按与指令构建同一推导解析本次精灵
+  // （resolveSprite + 无平面图时堆叠替身回落，见指令构建处），汇总命
+  // 中条目为位姿增量，喂给 computeWorldTransforms 叠进世界变换——子
+  // 节点在本遍 FK 里读父级最终变换、天然继承，关节盘读同一张表连带
+  // 跟随（旧实现把增量加在渲染指令上，世界变换表里没有，子节点与
+  // 盘都不跟）。解析朝向与指令构建同值：dirBlend 时 dirA、否则根
+  // variantIndex（根的 variantIndex 只由其轨道决定、先于世界变换
+  // 可知，单独求值一份只读 variantIndex）。无条目时不建图、下游零变化。
+  let procDeltas: Map<string, ProceduralPoseDelta> | undefined;
+  if (proceduralAnimations && proceduralAnimations.length > 0) {
+    const rootNodeForDir = character.nodes[character.rootNodeId];
+    const rootVariant = rootNodeForDir
+      ? interpolateTransform(rootNodeForDir, frame, frameRate, variableContext, blueprintTransforms).variantIndex
+      : (0 as DirectionIndex);
+    const resolveDir = dirBlend ? dirBlend.dirA : rootVariant;
+    const map = new Map<string, ProceduralPoseDelta>();
+    for (const n of Object.values(character.nodes)) {
+      const r = resolveSprite(n, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[n.slot?.slotKey ?? n.id], character.latitude ?? 0, frame, frameRate);
+      let sid: string | null = r.spriteId;
+      if (!r.sprite) {
+        const piece = activeCostumeSet?.pieces[n.slot?.slotKey ?? n.id];
+        const midId = piece?.stack?.layerSpriteIds[Math.floor(piece.stack.layerSpriteIds.length / 2)];
+        sid = midId ?? null;
+      }
+      const d = computeProceduralPoseDelta(proceduralAnimations, n.id, frame, sid ?? undefined);
+      if (d.dx !== 0 || d.dy !== 0 || d.rotDeg !== 0 || d.scaleMul !== 1) map.set(n.id, d);
+    }
+    if (map.size > 0) procDeltas = map;
+  }
+
   // Step 1: World transforms (includes blueprint-evaluated modifier contributions)
   // 行为层在 computeWorldTransforms 内统一叠加（出图/点选/覆盖层同源）
   const worldTransforms = computeWorldTransforms(
     character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
-    undefined, geometryDirection, clampCtx, simCtx,
+    undefined, geometryDirection, clampCtx, simCtx, procDeltas,
   );
-
-  // Step 3: Get active costume set（用生效状态的集 id，含轨道/蓝图覆盖）
-  const activeCostumeSet = effCostume.costumeSetId
-    ? character.costumeSets.find(cs => cs.id === effCostume.costumeSetId)
-    : undefined;
 
   // Step 4: Generate node render instructions
   const nodeInstructions: NodeRenderInstruction[] = [];
@@ -2917,30 +3019,6 @@ export function generateRenderPlan(
     return { a: (wa * Math.PI) / 180, x: subToPx(p.canvasX), y: subToPx(p.canvasY) };
   };
 
-  // 方向间过渡（蒙皮转面 A）：facingAngle 为连续角度时，计算相邻两方向及混合系数
-  // 单图模式（蒙皮转面 C）：不切换精灵，用 faceTurn 的 yaw 模拟转头
-  const singleImageMode = character.faceTurnConfig?.singleImageMode === true;
-  let dirBlend: { dirA: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7; dirB: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7; blend: number } | undefined;
-  let singleImageYaw = 0;
-  if (character.facingAngle !== undefined && character.faceTurnConfig?.enabled) {
-    if (singleImageMode) {
-      // 单图模式：facingAngle → yaw（-1~1），不切换精灵
-      // 归一化到 [-180, 180)，yaw = angle / 180
-      let a = ((character.facingAngle % 360) + 360) % 360;
-      if (a > 180) a -= 360;
-      singleImageYaw = Math.max(-1, Math.min(1, a / 180));
-      // dirBlend 保持 undefined（单精灵）
-    } else {
-      // 懒加载避免循环依赖
-      const { facingAngleToBlend } = require('./skin/face-turn') as typeof import('./skin/face-turn');
-      dirBlend = facingAngleToBlend(character.facingAngle);
-      // blend 为 0 或 1 时退化为单方向（避免双采样开销）
-      if (dirBlend.blend < 1e-6 || dirBlend.blend > 1 - 1e-6) {
-        dirBlend = undefined;
-      }
-    }
-  }
-
   // 蒙皮快照认领（与关节盘抑制同一口径）：生效子节点的父精灵被合并图替代。
   // 合并精灵缺失/子节点不可见的认领不成立（否则父被跳过又无人接）。
   const activeSnapshots = computeActiveSnapshots(character, currentDirection as DirectionIndex);
@@ -3002,7 +3080,7 @@ export function generateRenderPlan(
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
     // 方向混合时：先按 dirA 解析主精灵
     const resolveDir = dirBlend ? dirBlend.dirA : currentDirection;
-    let { sprite, mirror, spriteId: nodeSpriteId } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? node.id], character.latitude ?? 0, frame, frameRate);
+    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? node.id], character.latitude ?? 0, frame, frameRate);
     if (!sprite) {
       // 堆叠部件可以没有方向平面图（纯堆叠件）：以中间层图作替身
       // 精灵让指令成立（身份/点选/缩略口径），实际绘制由 stackRender
@@ -3014,8 +3092,8 @@ export function generateRenderPlan(
       const midSprite = midId ? spriteTable[midId] : undefined;
       if (!midSprite) continue;
       sprite = midSprite;
-      // 替身精灵即本节点本次显示的精灵：精灵目标的程序化条目按它匹配
-      nodeSpriteId = midId ?? null;
+      // 替身精灵即本节点本次显示的精灵：程序化增量图的预备段按同一
+      // 推导（resolveSprite 无结果时取中间层图 id）做精灵通道匹配。
       // 镜像不因回落丢弃：本方向在 mirrorMap 里有条目即镜像朝向——
       // 平面图缺失不改变朝向，堆叠合成图在执行端按同一 mirror 标志
       // 整图翻转（水平翻转下摞内深度由 y/d 决定、与 h 无关，画序
@@ -3051,22 +3129,9 @@ export function generateRenderPlan(
     // Determine rotation strategy
     const strategy: RotationStrategy = rotationStrategy;
 
-    // 程序化动画：位姿增量口径（与运行时播放器同式）——不再把值加进
-    // instruction.modifiers：主画布的旋转/缩放由节点蓝图求值决定、
-    // 读不到指令携带的 rotate/uniform_scale 参数（旧路只有平移偶然
-    // 经 renderNodeSprite 的图内平移生效，且图内平移会裁掉移出精灵
-    // 图边缘的像素）。改为汇总成位姿增量、叠加到下方指令的
-    // worldX/worldY/angle 与缩放通道，整部件绕插头位移/旋转/等比
-    // 缩放，与播放器把增量叠到部件位姿同口径。计入条件只有
-    // enabled + 帧范围 + 命中（增量凭条目自身生效，不要求节点预
-    // 挂修改器）。命中
-    // 有两条通道：条目 nodeId 等于本节点，或条目 spriteId 等于本节
-    // 点本次解析出的精灵（nodeSpriteId，上方 resolveSprite 的结果，
-    // 参数化合成等无表 id 的情形为 null、不走精灵通道）——只挂精灵
-    // 的条目自动落到挂着这个精灵的节点上。
-    const procDelta = proceduralAnimations && proceduralAnimations.length > 0
-      ? computeProceduralPoseDelta(proceduralAnimations, nodeId, frame, nodeSpriteId ?? undefined)
-      : { dx: 0, dy: 0, rotDeg: 0, scaleMul: 1 };
+    // 程序化动画增量不在本层叠加：已在预备段汇总成增量图、经
+    // computeWorldTransforms 叠进 worldTf（本节点的位姿与子孙的继承
+    // 都在那张表里），本处只读 worldTf 的最终值。
 
     // ---- Mesh skinning: 若父 socket.skinning === 'mesh'，计算蒙皮参数 ----
     // （替代关节盘：子精灵在 plug 附近做插值变形）
@@ -3250,14 +3315,12 @@ export function generateRenderPlan(
       sprite: effectiveSprite,
       stackRender,
       frameCorrection,
-      worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel) + pxToSub(folDx) + pxToSub(procDelta.dx)) as SubPixel,
-      worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel) + pxToSub(folDy) + pxToSub(procDelta.dy)) as SubPixel,
-      angle: worldTf.worldAngle + (folDa * 180) / Math.PI + spinDeg + procDelta.rotDeg,
-      // 程序化等比缩放：同时乘 X 向 scaleX 与 Y 向 stretch 两轴
-      // （renderNodeSprite 以 ctx.scale(scaleX, effStretch) 绕插头
-      // 绘制，两轴同乘即绕插头等比缩放，与播放器 dsx/dsy 同乘
-      // paScale 同口径）；scaleMul 恒为 1 时与旧值逐位相同。
-      stretch: (dynResolved.length > 0 ? worldTf.worldStretch * dynSy * folDs : worldTf.worldStretch) * procDelta.scaleMul,
+      worldX: halfPixelAlignSub(pxToSub(canvasWidth / 2) + (proj.canvasX as SubPixel) + pxToSub(folDx)) as SubPixel,
+      worldY: halfPixelAlignSub(pxToSub(canvasHeight / 2) + (proj.canvasY as SubPixel) + pxToSub(folDy)) as SubPixel,
+      angle: worldTf.worldAngle + (folDa * 180) / Math.PI + spinDeg,
+      // worldStretch/scaleX 已在世界变换里乘过程序化 scaleMul（增量图
+      // 落点），此处只叠动态形变自身的 dynSy/dynSx/folDs。
+      stretch: dynResolved.length > 0 ? worldTf.worldStretch * dynSy * folDs : worldTf.worldStretch,
       foreshorten: stackRender ? undefined : foreshorten,
       variantIndex: worldTf.variantIndex,
       rotationStrategy: strategy,
@@ -3287,14 +3350,11 @@ export function generateRenderPlan(
         return node.faceTurn;
       })(),
       // t.scaleX 修复：蓝图 scaleX 独立 plumbing，不再平均吃掉
-      // 程序化等比缩放同乘本通道（与 stretch 两轴同乘，见上）；
-      // scaleMul 为 1 时保持原表达式（含 scaleX 可为 undefined 的原样）
-      scaleX: procDelta.scaleMul !== 1
-        ? ((dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX) ?? 1) * procDelta.scaleMul
-        : (dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX),
-      // 动态形变缩放积同乘程序化缩放：与播放器 dsx/dsy 乘 paScale
-      // 后同喂场作业一致（场域范围跟随部件的实际绘制缩放）
-      dynScale: dynResolved.length > 0 ? [dynSx * procDelta.scaleMul, dynSy * procDelta.scaleMul] as [number, number] : undefined,
+      scaleX: dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX,
+      // 动态形变缩放积（场域范围跟随部件的实际绘制缩放；程序化缩放
+      // 走世界变换的 scaleX/stretch 通道、不经此字段——与蓝图缩放的
+      // 既有口径一致：dynScale 本就不含世界变换的缩放）
+      dynScale: dynResolved.length > 0 ? [dynSx, dynSy] as [number, number] : undefined,
       dynamicPatterns: dynResolved.length > 0 ? dynResolved : undefined,
       trailGhosts,
       arcEnds,

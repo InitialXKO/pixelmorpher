@@ -817,6 +817,61 @@ function dynProceduralValue(cfg, frame, startFrame, endFrame) {
     default: return 0;
   }
 }
+// 程序化增量沿部件树传播（与编辑器世界变换同构）：包内位姿是扁平的
+// 角色空间绝对量，父部件的增量原本带不动子部件。这里按插头点做刚
+// 体递推——info[key] = { px, py, dx, dy, rot, baseRot, cx, cy }：
+// (px, py) 无程序化时的插头点（角色空间）、(dx, dy) 自身平移增量、
+// rot 自身旋转增量（弧度）、baseRot 无程序化时的绘制角、(cx, cy)
+// 自身增量已生效的部件中心。累计角 A 沿树相加；子部件插头由父级
+// 最终插头 + 累计角刚体携带（绕父插头转），中心相对插头的偏移（自
+// 身增量已含在 cx/cy 里）只再随累计角转；自身平移在自身一层以角色
+// 轴叠加、不被祖先旋转——与编辑器把增量加在世界变换里、dx/dy 走
+// 世界轴同义。父部件不在 info 里（未绘制）时链断、按根结算。祖先
+// 无任何增量时逐值返回原中心/原角度（chainMoved 短路保持逐位）。
+function dynPropagateProc(tree, info) {
+  const out = {};
+  const cache = {};
+  const solve = (key, guard) => {
+    if (cache[key]) return cache[key];
+    const inf = info[key];
+    if (!inf) return null;
+    let res = null;
+    const pk = tree ? tree[key] : null;
+    const P = pk && pk !== key && info[pk] && guard < 64 ? solve(pk, guard + 1) : null;
+    if (!P) {
+      res = {
+        pivX: inf.px + inf.dx, pivY: inf.py + inf.dy, a: inf.rot,
+        chainMoved: inf.dx !== 0 || inf.dy !== 0 || inf.rot !== 0,
+        cx: inf.cx, cy: inf.cy, rot: inf.baseRot + inf.rot,
+      };
+    } else {
+      const pp = info[pk];
+      const cA = Math.cos(P.a), sA = Math.sin(P.a);
+      const rx = inf.px - pp.px, ry = inf.py - pp.py;
+      const pivX = P.pivX + (rx * cA - ry * sA) + inf.dx;
+      const pivY = P.pivY + (rx * sA + ry * cA) + inf.dy;
+      const a = P.a + inf.rot;
+      let cx = inf.cx, cy = inf.cy;
+      if (P.chainMoved) {
+        const ox = inf.cx - (inf.px + inf.dx), oy = inf.cy - (inf.py + inf.dy);
+        cx = pivX + (ox * cA - oy * sA);
+        cy = pivY + (ox * sA + oy * cA);
+      }
+      res = {
+        pivX, pivY, a,
+        chainMoved: P.chainMoved || inf.dx !== 0 || inf.dy !== 0 || inf.rot !== 0,
+        cx, cy, rot: inf.baseRot + a,
+      };
+    }
+    cache[key] = res;
+    return res;
+  };
+  for (const key of Object.keys(info)) {
+    const r = solve(key, 0);
+    if (r) out[key] = { x: r.cx, y: r.cy, rot: r.rot };
+  }
+  return out;
+}
 `;
 
 /** 探针用：把 DYNAMIC_SRC 装成可调用对象 */
@@ -836,8 +891,9 @@ export function createDynamicRuntime(): {
   dynSpinRadAt: (params: never, t: number) => number;
   dynArcPoints: (params: never, t: number, endX?: number, endY?: number, hasEnd?: boolean) => { main: [number, number, number][]; branches: [number, number, number][][]; dots: [number, number, number][]; alpha: number };
   dynProceduralValue: (cfg: never, frame: number, startFrame?: number, endFrame?: number) => number;
+  dynPropagateProc: (tree: never, info: never) => Record<string, { x: number; y: number; rot: number }>;
   dynFormulaValue: (expression: string, f: number, F: number, p: number) => number;
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynFormulaValue, dynParticleColorAt, dynOrbitPoints, dynPostColorAt, dynFieldColorAt, dynBlobField, dynFlameField, dynEnvSamples };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynPropagateProc, dynFormulaValue, dynParticleColorAt, dynOrbitPoints, dynPostColorAt, dynFieldColorAt, dynBlobField, dynFlameField, dynEnvSamples };`);
   return factory() as never;
 }
