@@ -1305,10 +1305,28 @@ export function convertCharacterToRuntimePackage(
   // 变体在运行时经 altSprites 解析，见 parts 组装后的回填）。
   // 片段级特效数据（缺口 5）：挂段表演 fx，键帧/笔触帧均为工程绝对帧，
   // 运行时以 clip.startFrame + 本地帧求值（与状态轨同一帧口径）。
+  // 稳定序列化（对象键排序后 stringify）：仅供「逐项全同」比较，
+  // 键序差异不算不同。
+  const stableFxKey = (v: unknown): string => {
+    if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+    if (Array.isArray(v)) return `[${v.map(stableFxKey).join(',')}]`;
+    const rec = v as Record<string, unknown>;
+    return `{${Object.keys(rec).sort().map((k) => `${JSON.stringify(k)}:${stableFxKey(rec[k])}`).join(',')}}`;
+  };
   const clipFxOf = (clip: AnimationClip) => {
     const fx: Record<string, unknown> = {};
     if (clip.effectTracks?.length) fx.effectTracks = clip.effectTracks;
-    if (clip.canvasModifierTracks?.length) fx.canvasTracks = clip.canvasModifierTracks;
+    if (clip.canvasModifierTracks?.length) {
+      // 存量已迁移文件兜底：片段画布轨与工程级逐项全同时必是旧迁移
+      // 双写（编辑器从来只显示工程级一份），入包会让段表演激活时叠
+      // 第二遍——不入包并点名；真不同的片段轨是用户数据，照常入包。
+      const projTracks = opts?.projectData?.canvasModifierTracks;
+      if (projTracks?.length && stableFxKey(clip.canvasModifierTracks) === stableFxKey(projTracks)) {
+        warnings.push(`片段「${clip.name}」画布效果轨与工程级逐项相同（旧迁移双写），未重复入包`);
+      } else {
+        fx.canvasTracks = clip.canvasModifierTracks;
+      }
+    }
     if (clip.motionBlurStrokes?.length) fx.motionBlurStrokes = clip.motionBlurStrokes;
     if (clip.effectStrokes?.length) fx.effectStrokes = clip.effectStrokes;
     return Object.keys(fx).length > 0 ? fx : undefined;

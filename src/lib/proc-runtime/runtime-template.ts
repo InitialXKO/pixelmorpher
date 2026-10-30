@@ -1729,17 +1729,28 @@ function buildScenery(charX) {
 function fxResolveCanvasParams(track, modifier, frame) {
   const kfs = [...(track.keyframes || [])].sort((a, b) => a.frame - b.frame);
   if (kfs.length === 0) return modifier.params || {};
-  let prevKf = kfs[0], nextKf = null;
+  // 区间外保持端点帧（与编辑器 resolveCanvasModifierParams 同口径）；
+  // 旧实现首帧之前 prevKf 与 nextKf 同键、t=-Infinity 数值参数出 NaN，
+  // 只是被 uniform 写入器 n() 兜住缺省、与编辑器表现不一致。
+  const first = kfs[0], last = kfs[kfs.length - 1];
+  if (frame <= first.frame) return { ...(modifier.params || {}), ...(first.params || {}) };
+  if (frame >= last.frame) return { ...(modifier.params || {}), ...(last.params || {}) };
+  let prevKf = first, nextKf = null;
   for (const kf of kfs) {
     if (kf.frame <= frame) prevKf = kf;
     if (kf.frame > frame && !nextKf) nextKf = kf;
   }
   if (!nextKf) return { ...(modifier.params || {}), ...(prevKf.params || {}) };
-  const t = (frame - prevKf.frame) / (nextKf.frame - prevKf.frame);
+  let t = (frame - prevKf.frame) / (nextKf.frame - prevKf.frame);
+  if (!Number.isFinite(t)) t = 0;
+  t = Math.min(1, Math.max(0, t));
   const result = { ...(modifier.params || {}) };
   for (const key of Object.keys(prevKf.params || {})) {
     const pv = prevKf.params[key], nv = (nextKf.params || {})[key];
-    if (typeof pv === 'number' && typeof nv === 'number') result[key] = pv + (nv - pv) * t;
+    if (typeof pv === 'number' && typeof nv === 'number') {
+      const v = pv + (nv - pv) * t;
+      result[key] = Number.isFinite(v) ? v : (Number.isFinite(pv) ? pv : nv);
+    }
     else result[key] = t < 0.5 ? pv : nv;
   }
   return result;
@@ -1824,18 +1835,28 @@ function ensurePostSys() {
     + '    oColor = vec4(c.rgb, a); return;\\n'
     + '  }\\n'
     + '  if (uEffect == 5) { oColor = vec4(c.rgb + texture(uAux, uv).rgb * texture(uAux, uv).a, c.a); return; }\\n' // bloom 合成
-    + '  if (uEffect == 6) {\\n' // outline：uAux=掩码；uP0.x=厚度px uP0.y=方向集(4/8) uP0.z=模式(0实色 1暗版 2渐变) uP1.xy=光向 uColor=描边色
-    + '    if (texture(uAux, uv).r > 0.5) { oColor = c; return; }\\n'
-    + '    vec2 tp = 1.0 / uRes; float th = max(1.0, uP0.x); bool hit = false; vec2 hd = vec2(0.0);\\n'
+    + '  if (uEffect == 6) {\\n' // outline：uAux=掩码；uP0.x=厚度px uP0.y=方向集(4/8) uP0.z=模式(0实色 1变暗 2渐变) uP0.w=混合(0正常 1叠加 2正片叠底 3滤色)；uP1.xy=光向 uP1.z=仅边缘；uColor=描边色
+    + '    vec2 tp = 1.0 / uRes; float th = max(1.0, uP0.x); float selfMask = texture(uAux, uv).r;\\n'
+    + '    bool hit = false; vec2 hd = vec2(0.0); vec2 srcUv = uv;\\n'
     + '    for (int k = 1; k <= 5 && !hit; k++) { if (float(k) > th) break;\\n'
     + '      for (int di = 0; di < 8; di++) { if (uP0.y < 7.5 && di >= 4) break;\\n'
     + '        vec2 dir = di == 0 ? vec2(-1.0, 0.0) : di == 1 ? vec2(1.0, 0.0) : di == 2 ? vec2(0.0, -1.0) : di == 3 ? vec2(0.0, 1.0) : di == 4 ? vec2(-1.0, -1.0) : di == 5 ? vec2(-1.0, 1.0) : di == 6 ? vec2(1.0, -1.0) : vec2(1.0, 1.0);\\n'
-    + '        if (texture(uAux, uv + dir * float(k) * tp).r > 0.5) { hit = true; hd = dir; break; } } }\\n'
+    + '        vec2 suv = uv + dir * float(k) * tp;\\n'
+    + '        if (texture(uAux, suv).r <= 0.5) continue;\\n'
+    + '        if (uP1.z > 0.5) { bool isEdge = texture(uAux, suv + vec2(tp.x, 0.0)).r <= 0.5 || texture(uAux, suv - vec2(tp.x, 0.0)).r <= 0.5 || texture(uAux, suv + vec2(0.0, tp.y)).r <= 0.5 || texture(uAux, suv - vec2(0.0, tp.y)).r <= 0.5; if (!isEdge) continue; }\\n'
+    + '        hit = true; hd = dir; srcUv = suv; break; } }\\n'
     + '    if (!hit) { oColor = c; return; }\\n'
+    + '    vec4 srcCol = texture(uTex, srcUv); float sa = srcCol.a;\\n'
     + '    vec3 oc = uColor;\\n'
-    + '    if (uP0.z > 1.5) { float f = dot(normalize(hd), uP1.xy) * 0.5 + 0.5; oc = mix(uColor * 0.7, mix(uColor, vec3(1.0), 0.5), f); }\\n'
-    + '    else if (uP0.z > 0.5) oc = uColor * 0.7;\\n'
-    + '    oColor = vec4(oc, 1.0); return;\\n'
+    + '    if (uP0.z > 1.5) { float f = 0.5 - dot(normalize(hd), uP1.xy) * 0.5; oc = mix(uColor * 0.3, mix(uColor, vec3(1.0), 0.5), f); }\\n'
+    + '    else if (uP0.z > 0.5) { oc = max(srcCol.rgb - vec3(80.0 / 255.0), vec3(0.0)); }\\n'
+    + '    int bm = int(uP0.w + 0.5);\\n'
+    + '    if (bm == 0) { if (selfMask > 0.5) { oColor = c; return; } oColor = vec4(mix(c.rgb, oc, sa), c.a + sa * (1.0 - c.a)); return; }\\n'
+    + '    vec3 bl = oc;\\n'
+    + '    if (bm == 2) bl = c.rgb * oc;\\n'
+    + '    else if (bm == 3) bl = 1.0 - (1.0 - c.rgb) * (1.0 - oc);\\n'
+    + '    else if (bm == 1) bl = mix(2.0 * c.rgb * oc, 1.0 - 2.0 * (1.0 - c.rgb) * (1.0 - oc), step(0.5, c.rgb));\\n'
+    + '    oColor = vec4(mix(c.rgb, bl, sa), c.a); return;\\n'
     + '  }\\n'
     + '  if (uEffect == 7) {\\n' // bloom 亮部提取：uP0.x=阈值，uColor=辉光色
     + '    float lum = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;\\n'
@@ -1861,13 +1882,14 @@ function ensurePostSys() {
   postSys = { w: lowW, h: VIEW_H, A: A, B: B, C: C, D: D, prog: prog, U: U, maskTex: maskTex, vao: gl.createVertexArray() };
   return postSys;
 }
-/** 掩码栅格化（CPU，低清）：把各部件瓦片 alpha 按位姿印到覆盖视野的
- *  网格上，供描边通道采样（编辑器以全画布 alpha 为准；此处以部件
- *  瓦片为准，笔触/粒子不进掩码）。 */
+/** 掩码栅格化（CPU，渲染分辨率）：把各部件瓦片 alpha 按位姿印到覆盖
+ *  视野的网格上，供描边通道采样（分辨率与后处理面一致，旧实现固定
+ *  256 宽、与编辑器全分辨率掩码不一致）。来源差仍在：编辑器以全画布
+ *  alpha 为准（含背景与效果笔触），此处以部件瓦片为准——笔触/粒子是
+ *  GPU 绘制、无 CPU 栅格数据可印，无法对齐，见 PR 说明。 */
 function fxBuildMask(state, elByKey, camX, camY) {
   const sys = postSys;
-  // mh 只取决于宽高比，缩放下不变，仍按基础量算（保 1 倍时逐值一致）
-  const mw = 256, mh = Math.max(2, Math.round(256 * VIEW_H / lowW));
+  const mw = lowW, mh = VIEW_H;
   const data = new Uint8Array(mw * mh * 4);
   const sx = mw / visW(), sy = mh / visH();
   for (const [key, el] of elByKey) {
@@ -1984,10 +2006,13 @@ function fxRunPostChain(rawList, state, elByKey, camX, camY) {
     } else if (m.type === 'outline_emphasis') {
       const oc = fxHexRgb(P.color || '#000000');
       const modes = { solid: 0, darken: 1, gradient: 2 };
+      const blends = { normal: 0, overlay: 1, multiply: 2, screen: 3 };
       const la = n(P.lightAngle, 315) * Math.PI / 180;
       pass(dst, 6, () => {
-        gl.uniform4f(sys.U.uP0, n(P.thickness, 1), String(P.directions) === '4' ? 4 : 8, modes[String(P.outlineMode || 'solid')] ?? 0, 0);
-        gl.uniform4f(sys.U.uP1, Math.cos(la), -Math.sin(la), 0, 0);
+        // uP0.w=混合模式、uP1.z=仅边缘：与编辑器描边同口径（旧实现两参
+        // 未入 uniform，运行时恒实色全带、与编辑器所见不一致）
+        gl.uniform4f(sys.U.uP0, n(P.thickness, 1), String(P.directions) === '4' ? 4 : 8, modes[String(P.outlineMode || 'solid')] ?? 0, blends[String(P.blendMode || 'normal')] ?? 0);
+        gl.uniform4f(sys.U.uP1, Math.cos(la), -Math.sin(la), P.edgesOnly ? 1 : 0, 0);
         gl.uniform3f(sys.U.uColor, oc[0], oc[1], oc[2]);
       }, sys.maskTex);
     } else {

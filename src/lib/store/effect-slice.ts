@@ -47,6 +47,7 @@ export type EffectSlice = {
   addCanvasModifierKeyframe: ProjectStore['addCanvasModifierKeyframe'];
   removeCanvasModifierKeyframe: ProjectStore['removeCanvasModifierKeyframe'];
   updateCanvasModifierKeyframe: ProjectStore['updateCanvasModifierKeyframe'];
+  moveCanvasModifierKeyframe: ProjectStore['moveCanvasModifierKeyframe'];
 };
 
 export const createEffectSlice: StateCreator<ProjectStore, [], [], EffectSlice> = (set, get) => ({
@@ -338,6 +339,23 @@ export const createEffectSlice: StateCreator<ProjectStore, [], [], EffectSlice> 
           if (k.id !== keyframeId) return k;
           return { ...k, params: { ...k.params, ...params } };
         }),
+      };
+    }),
+    }));
+  },
+
+  moveCanvasModifierKeyframe: (trackId, keyframeId, frame) => {
+    get().pushUndo('移动画布修改器关键帧');
+    set((s) => ({
+    canvasModifierTracks: s.canvasModifierTracks.map((t) => {
+      if (t.id !== trackId) return t;
+      // 目标帧已有其他关键帧时拒绝（与轨道拖拽的碰撞检查同口径）
+      if (t.keyframes.some((k) => k.id !== keyframeId && k.frame === frame)) return t;
+      return {
+        ...t,
+        keyframes: t.keyframes
+          .map((k) => (k.id === keyframeId ? { ...k, frame } : k))
+          .sort((a, b) => a.frame - b.frame),
       };
     }),
     }));

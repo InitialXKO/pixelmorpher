@@ -20,38 +20,58 @@ import { boxBlurAlpha } from './effect-render';
 // ============================================================
 
 /**
+ * 数值参数读法（与运行时 fx 的 n() 同口径）：仅当参数缺失或非有限时
+ * 才回缺省——0 是有效值，不许被缺省顶替（旧 `Number(p) || 缺省` 在
+ * bloom 阈值/强度、扫描线透明度等处把 0 顶替掉，与运行时表现不一致）。
+ */
+function numParam(value: ModifierParamValue | undefined, fallback: number): number {
+  if (value === undefined || value === null) return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
  * Get resolved params for a canvas modifier at the current frame,
  * interpolating between keyframes if necessary.
+ *
+ * 区间外保持端点帧（首帧之前取首关键帧、末帧之后取末关键帧）；
+ * 旧实现首帧之前 prevKf 与 nextKf 是同一键、t = 负数/0 = -Infinity，
+ * 数值参数算出 NaN 后污染整帧（LUT 出黑影、描边光角 NaN）。
+ * 与运行时 fxResolveCanvasParams 同口径。
  */
-function resolveCanvasModifierParams(
+export function resolveCanvasModifierParams(
   track: CanvasModifierTrack,
   modifier: CanvasModifierInstance,
   currentFrame: number,
 ): Record<string, ModifierParamValue> {
-  const kfs = track.keyframes.sort((a, b) => a.frame - b.frame);
+  const kfs = [...track.keyframes].sort((a, b) => a.frame - b.frame);
   if (kfs.length === 0) return modifier.params;
 
-  // Find surrounding keyframes
-  let prevKf = kfs[0];
+  const first = kfs[0];
+  const last = kfs[kfs.length - 1];
+  if (currentFrame <= first.frame) return { ...modifier.params, ...first.params };
+  if (currentFrame >= last.frame) return { ...modifier.params, ...last.params };
+
+  // Find surrounding keyframes（此处必有 nextKf：currentFrame < last.frame）
+  let prevKf = first;
   let nextKf: typeof kfs[0] | null = null;
   for (const kf of kfs) {
     if (kf.frame <= currentFrame) prevKf = kf;
     if (kf.frame > currentFrame && !nextKf) nextKf = kf;
   }
+  if (!nextKf) return { ...modifier.params, ...prevKf.params };
 
-  // If no next keyframe, just use prev keyframe params merged with defaults
-  if (!nextKf) {
-    return { ...modifier.params, ...prevKf.params };
-  }
-
-  // Interpolate numeric params
-  const t = (currentFrame - prevKf.frame) / (nextKf.frame - prevKf.frame);
+  // Interpolate numeric params（t 钳 [0,1] 并防非有限）
+  let t = (currentFrame - prevKf.frame) / (nextKf.frame - prevKf.frame);
+  if (!Number.isFinite(t)) t = 0;
+  t = Math.min(1, Math.max(0, t));
   const result: Record<string, ModifierParamValue> = { ...modifier.params };
   for (const key of Object.keys(prevKf.params)) {
     const prevVal = prevKf.params[key];
     const nextVal = nextKf.params[key];
     if (typeof prevVal === 'number' && typeof nextVal === 'number') {
-      result[key] = prevVal + (nextVal - prevVal) * t;
+      const v = prevVal + (nextVal - prevVal) * t;
+      result[key] = Number.isFinite(v) ? v : (Number.isFinite(prevVal) ? prevVal : nextVal);
     } else {
       // For non-numeric, use prev if t < 0.5, next otherwise
       result[key] = t < 0.5 ? prevVal : nextVal;
@@ -83,13 +103,13 @@ function applyOutlineEmphasis(
   canvasWidth: number,
   canvasHeight: number,
 ): void {
-  const thickness = Number(params.thickness) || 1;
+  const thickness = numParam(params.thickness, 1);
   const color = String(params.color) || '#000000';
   const directions = String(params.directions) === '4' ? 4 : 8;
   const outlineMode = String(params.outlineMode) || 'solid';
   const blendMode = String(params.blendMode) || 'normal';
   const edgesOnly = Boolean(params.edgesOnly);
-  const lightAngle = Number(params.lightAngle ?? 315);
+  const lightAngle = numParam(params.lightAngle, 315);
 
   // Read current canvas content
   const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
@@ -140,6 +160,8 @@ function applyOutlineEmphasis(
   });
 
   const pixelCount = canvasWidth * canvasHeight;
+  // 整带盖印的级数：厚度取整、至少 1（与运行时 k ≤ th 的整数步进口径一致）
+  const stampSteps = Math.max(1, Math.floor(thickness));
 
   // For edgesOnly: build a boolean mask of edge pixels
   // An edge pixel is an opaque pixel with at least one transparent 4-connected neighbor
@@ -186,20 +208,15 @@ function applyOutlineEmphasis(
       const sg = src[srcIdx + 1];
       const sb = src[srcIdx + 2];
 
-      // Stamp outline at each direction offset
+      // Stamp outline at each direction offset, filled band 1..stampSteps
+      // （旧实现只在恰好 =thickness 处盖印，thickness≥2 时是带空洞的稀疏
+      // 点环；运行时是逐级整带，两边统一为整带。关键帧插值出的小数厚度
+      // 按运行时同口径取整级数。）
       for (let d = 0; d < dirOffsets.length; d++) {
         const [dx, dy] = dirOffsets[d];
-        const ox = x + dx * thickness;
-        const oy = y + dy * thickness;
-
-        // Bounds check
-        if (ox < 0 || ox >= canvasWidth || oy < 0 || oy >= canvasHeight) continue;
-
-        const outIdx = (oy * canvasWidth + ox) * 4;
 
         // Determine outline color based on outlineMode
         let or: number, og: number, ob: number;
-
         switch (outlineMode) {
           case 'darken': {
             // Darken the source pixel color by subtracting 80 from each channel (clamped to 0)
@@ -223,15 +240,25 @@ function applyOutlineEmphasis(
           }
         }
 
-        // "Max alpha" blending: write the outline color with full alpha,
-        // but if there's already an outline pixel here, keep the one with higher alpha
-        // (to avoid over-brightening). For same alpha, just overwrite.
-        const existingAlpha = outlineData[outIdx + 3];
-        if (srcAlpha >= existingAlpha) {
-          outlineData[outIdx] = or;
-          outlineData[outIdx + 1] = og;
-          outlineData[outIdx + 2] = ob;
-          outlineData[outIdx + 3] = srcAlpha; // carry source alpha for natural blending
+        for (let step = 1; step <= stampSteps; step++) {
+          const ox = x + dx * step;
+          const oy = y + dy * step;
+
+          // Bounds check
+          if (ox < 0 || ox >= canvasWidth || oy < 0 || oy >= canvasHeight) continue;
+
+          const outIdx = (oy * canvasWidth + ox) * 4;
+
+          // "Max alpha" blending: write the outline color with full alpha,
+          // but if there's already an outline pixel here, keep the one with higher alpha
+          // (to avoid over-brightening). For same alpha, just overwrite.
+          const existingAlpha = outlineData[outIdx + 3];
+          if (srcAlpha >= existingAlpha) {
+            outlineData[outIdx] = or;
+            outlineData[outIdx + 1] = og;
+            outlineData[outIdx + 2] = ob;
+            outlineData[outIdx + 3] = srcAlpha; // carry source alpha for natural blending
+          }
         }
       }
     }
@@ -291,7 +318,7 @@ function applyColorLut(
   canvasHeight: number,
 ): void {
   const preset = String(params.preset) || 'none';
-  const intensity = Number(params.intensity) ?? 1;
+  const intensity = numParam(params.intensity, 1);
 
   if (preset === 'none' || intensity === 0) return;
 
@@ -368,7 +395,7 @@ function applyPixelZoom(
   canvasWidth: number,
   canvasHeight: number,
 ): void {
-  const scale = Number(params.scale) || 1;
+  const scale = numParam(params.scale, 1);
   const antiAlias = Boolean(params.antiAlias);
 
   if (scale === 1) return;
@@ -438,9 +465,9 @@ function applyBloom(
   canvasWidth: number,
   canvasHeight: number,
 ): void {
-  const threshold = Number(params.threshold) || 0.7;
-  const radius = Number(params.radius) || 3;
-  const intensity = Number(params.intensity) || 0.5;
+  const threshold = numParam(params.threshold, 0.7);
+  const radius = numParam(params.radius, 3);
+  const intensity = numParam(params.intensity, 0.5);
   const color = String(params.color) || '#ffffff';
 
   // Extract bright pixels
@@ -508,11 +535,11 @@ function applyScanlines(
   canvasWidth: number,
   canvasHeight: number,
 ): void {
-  const lineSpacing = Number(params.lineSpacing) || 2;
-  const lineOpacity = Number(params.lineOpacity) || 0.3;
+  const lineSpacing = numParam(params.lineSpacing, 2);
+  const lineOpacity = numParam(params.lineOpacity, 0.3);
   const lineColor = String(params.lineColor) || '#000000';
   const vignette = Boolean(params.vignette);
-  const vignetteIntensity = Number(params.vignetteIntensity) || 0.3;
+  const vignetteIntensity = numParam(params.vignetteIntensity, 0.3);
 
   const [lr, lg, lb] = hexToRgb(lineColor);
 
@@ -571,8 +598,8 @@ function applyCanvasMask(
   canvasHeight: number,
 ): void {
   const shape = String(params.shape) || 'circle';
-  const margin = Number(params.margin) || 0;
-  const feather = Number(params.feather) || 0;
+  const margin = numParam(params.margin, 0);
+  const feather = numParam(params.feather, 0);
 
   const w = canvasWidth - margin * 2;
   const h = canvasHeight - margin * 2;

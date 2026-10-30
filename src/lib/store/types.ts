@@ -206,6 +206,7 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   addCanvasModifierKeyframe: (trackId: string, frame: number, params?: Record<string, ModifierParamValue>) => void;
   removeCanvasModifierKeyframe: (trackId: string, keyframeId: string) => void;
   updateCanvasModifierKeyframe: (trackId: string, keyframeId: string, params: Record<string, ModifierParamValue>) => void;
+  moveCanvasModifierKeyframe: (trackId: string, keyframeId: string, frame: number) => void;
 
   // Motion analysis split (PRD 3.1.1)
   motionAnalysisSplit: (frames: PixelGrid[], options?: { blockSize?: number; searchRadius?: number; motionThreshold?: number; minRegionSize?: number }) => string[];

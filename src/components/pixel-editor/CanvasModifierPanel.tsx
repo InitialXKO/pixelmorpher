@@ -6,6 +6,7 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Eye,
   EyeOff,
   Settings,
@@ -86,9 +87,15 @@ const CANVAS_MODIFIER_BG: Record<CanvasModifierType, string> = {
 function CanvasModifierBlock({
   modifier,
   trackId,
+  track,
+  index,
+  count,
 }: {
   modifier: CanvasModifierInstance;
   trackId: string;
+  track: CanvasModifierTrack;
+  index: number;
+  count: number;
 }) {
   const def = getCanvasModifierDef(modifier.type);
   // P1: Use individual selectors to avoid re-renders on unrelated store changes
@@ -96,14 +103,21 @@ function CanvasModifierBlock({
   const toggleCanvasModifier = useProjectStore(s => s.toggleCanvasModifier);
   const toggleCanvasModifierCollapsed = useProjectStore(s => s.toggleCanvasModifierCollapsed);
   const removeCanvasModifier = useProjectStore(s => s.removeCanvasModifier);
+  const updateCanvasModifierKeyframe = useProjectStore(s => s.updateCanvasModifierKeyframe);
+  const reorderCanvasModifier = useProjectStore(s => s.reorderCanvasModifier);
+  const currentFrame = useProjectStore(s => s.currentFrame);
   const beginDrag = useProjectStore(s => s.beginDrag);
   const endDrag = useProjectStore(s => s.endDrag);
 
+  // 当前帧有关键帧时改参写关键帧（关键帧袋是该帧全部修改器的解析参数
+  // 快照、逐修改器合并覆盖），无关键帧时改基础值。
+  const activeKf = track.keyframes?.find((k) => k.frame === currentFrame);
   const handleParamChange = useCallback(
     (paramName: string, value: ModifierParamValue) => {
-      updateCanvasModifier(trackId, modifier.id, { [paramName]: value });
+      if (activeKf) updateCanvasModifierKeyframe(trackId, activeKf.id, { [paramName]: value });
+      else updateCanvasModifier(trackId, modifier.id, { [paramName]: value });
     },
-    [trackId, modifier.id, updateCanvasModifier],
+    [trackId, modifier.id, updateCanvasModifier, updateCanvasModifierKeyframe, activeKf],
   );
 
   const handleSliderDragStart = useCallback(() => {
@@ -148,6 +162,36 @@ function CanvasModifierBlock({
           </Badge>
         )}
 
+        {/* Keyframe badge：当前帧有关键帧时改参写关键帧 */}
+        {activeKf && (
+          <Badge
+            variant="secondary"
+            className="text-[9px] px-1 py-0 h-4 bg-cyan-500/20 text-cyan-300 border-cyan-500/30 shrink-0"
+          >
+            关键帧 @{activeKf.frame}
+          </Badge>
+        )}
+
+        {/* Reorder buttons */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-5 p-0 text-zinc-500 hover:text-zinc-300 shrink-0 disabled:opacity-30"
+          disabled={index === 0}
+          onClick={() => reorderCanvasModifier(trackId, modifier.id, index - 1)}
+        >
+          <ChevronUp className="size-3" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-5 p-0 text-zinc-500 hover:text-zinc-300 shrink-0 disabled:opacity-30"
+          disabled={index === count - 1}
+          onClick={() => reorderCanvasModifier(trackId, modifier.id, index + 1)}
+        >
+          <ChevronDown className="size-3" />
+        </Button>
+
         {/* Enabled toggle */}
         <Checkbox
           checked={modifier.enabled}
@@ -188,7 +232,7 @@ function CanvasModifierBlock({
             <ParamControl
               key={p.name}
               param={p}
-              value={modifier.params[p.name]}
+              value={activeKf ? (activeKf.params[p.name] ?? modifier.params[p.name]) : modifier.params[p.name]}
               onChange={(v) => handleParamChange(p.name, v)}
               disabled={!modifier.enabled}
               onDragStart={handleSliderDragStart}
@@ -283,11 +327,14 @@ function CanvasModifierTrackBlock({ track }: { track: CanvasModifierTrack }) {
       {/* Track content */}
       {!collapsed && (
         <div className="p-2 space-y-1.5">
-          {track.modifiers.map((mod) => (
+          {track.modifiers.map((mod, modIndex) => (
             <CanvasModifierBlock
               key={mod.id}
               modifier={mod}
               trackId={track.id}
+              track={track}
+              index={modIndex}
+              count={track.modifiers.length}
             />
           ))}
 

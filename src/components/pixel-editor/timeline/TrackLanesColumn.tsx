@@ -35,6 +35,10 @@ interface TrackLanesColumnProps {
   onAddEffectKeyframe: (trackId: string, frame: number) => void;
   onDeleteEffectKeyframe: (trackId: string, keyframeId: string) => void;
   onEditEffectKeyframe: (trackId: string, keyframeId: string) => void;
+  onAddCanvasModifierKeyframe: (trackId: string, frame: number) => void;
+  onDeleteCanvasModifierKeyframe: (trackId: string, keyframeId: string) => void;
+  onEditCanvasModifierKeyframe: (trackId: string, keyframeId: string) => void;
+  onMoveCanvasModifierKeyframe: (trackId: string, keyframeId: string, frame: number) => void;
   onPlayheadMouseDown: (e: React.MouseEvent) => void;
   isPuppetClip: boolean;
   nodeList: Node[];
@@ -76,6 +80,7 @@ export default function TrackLanesColumn({
   scrollContainerRef, rulerScrollRef, rulerHighlightRef, playheadLineRef,
   onScroll, onRulerClick, onSelectEffectTrack,
   onAddEffectKeyframe, onDeleteEffectKeyframe, onEditEffectKeyframe,
+  onAddCanvasModifierKeyframe, onDeleteCanvasModifierKeyframe, onEditCanvasModifierKeyframe, onMoveCanvasModifierKeyframe,
   onPlayheadMouseDown,
   isPuppetClip, nodeList, characterId, clipWindow, frameTags, tagStripScrollRef, selectedNodeKeyframeId,
   onSelectNodeKeyframe, onAddNodeKeyframe, onDeleteNodeKeyframe, onDuplicateNodeKeyframe,
@@ -182,7 +187,13 @@ export default function TrackLanesColumn({
             let cmRowIdx = (effectTracks.length > 0 ? 1 + effectTracks.length + 1 : 0);
             if (canvasModifierTracks.length > 0) cmRowIdx += 1 + cmIdx;
             if (cmRowIdx < visibleRange.startIndex || cmRowIdx > visibleRange.endIndex) return null;
-            return <CanvasModifierTrackLane key={cmTrack.id} track={cmTrack} totalFrames={totalFrames} currentFrame={currentFrame} frameWidth={fw} />;
+            return (
+              <CanvasModifierTrackLane
+                key={cmTrack.id} track={cmTrack} totalFrames={totalFrames} currentFrame={currentFrame} frameWidth={fw}
+                onAddKeyframe={onAddCanvasModifierKeyframe} onDeleteKeyframe={onDeleteCanvasModifierKeyframe}
+                onEditKeyframe={onEditCanvasModifierKeyframe} onMoveKeyframe={onMoveCanvasModifierKeyframe}
+              />
+            );
           })}
 
           {/* Canvas modifier add spacer */}

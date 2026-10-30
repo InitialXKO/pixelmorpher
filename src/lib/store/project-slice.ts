@@ -410,7 +410,10 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         endFrame: (file.project.totalFrames ?? 24) - 1,
         loop: false,
         effectTracks: file.project.effectTracks || [],
-        canvasModifierTracks: file.project.canvasModifierTracks || [],
+        // 画布轨不复制进迁移片段：工程级是唯一源。旧写法同写两处，
+        // 运行时工程级每帧收 + 段表演激活再叠片段级 = 双重应用，
+        // 而编辑器只渲染工程级一份、看不出来。
+        canvasModifierTracks: [],
         motionBlurStrokes: file.project.motionBlurStrokes || [],
         effectStrokes: file.project.effectStrokes || [],
         tags: [],
@@ -598,6 +601,8 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       description: file.project.description ?? '',
       proceduralAnimations: file.proceduralAnimations || [],
       globalModifiers: file.project.globalModifiers || [],
+      // 与其他字段同口径：文件缺此字段时必须清空，不许残留当前会话的轨
+      canvasModifierTracks: file.project.canvasModifierTracks || [],
       animationVariables: file.project.animationVariables || [],
       // Unified Characters (new model; migrated on load if missing)
       unifiedCharacters,
