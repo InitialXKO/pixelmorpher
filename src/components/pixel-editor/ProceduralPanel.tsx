@@ -18,6 +18,8 @@ import {
 
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { computeProceduralValue } from '@/lib/engine/procedural';
+import { getActiveCostumeSet, resolvePieceSprite } from '@/lib/sprite-resolve';
+import type { DirectionIndex } from '@/lib/unified-types';
 import type {
   ProceduralAnimation,
   ProceduralConfig,
@@ -308,7 +310,7 @@ function ProceduralAnimationCard({
   onUpdate: (id: string, updates: Partial<ProceduralAnimation>) => void;
   onRemove: (id: string) => void;
   onToggle: (id: string) => void;
-  /** 不生效点名：选中节点时=缺对应启用的修改器（与 convert 同口径）；未选中节点时=spriteId-only 条目 */
+  /** 不生效点名：目标节点缺对应启用的修改器时给出（与 convert 同口径），两种目标都适用 */
   ineffectiveNote?: string;
 }) {
   const [isEditingName, setIsEditingName] = useState(false);
@@ -761,9 +763,6 @@ function ParamSlider({
   );
 }
 
-/** 未选中节点时 spriteId-only 条目的点名（卡片警示条与面板提示同句） */
-const SPRITE_ONLY_NOTE = '只有精灵目标的条目在编辑器与导出中均不生效——选中木偶节点后按节点新建。';
-
 // ---- Main ProceduralPanel Component ----
 
 export default function ProceduralPanel() {
@@ -779,18 +778,45 @@ export default function ProceduralPanel() {
 
   const { selectedSpriteId } = useEditorStore();
 
-  // 节点目标（新管线）：主渲染与 convert 只按 nodeId 匹配程序化动画，
-  // 只写 spriteId 的条目永远不生效（2026-10-29 审计坐实）。选中了木偶
-  // 节点时，列表、新建都按 nodeId；无节点选中（只有精灵被选中）时
-  // 才按 spriteId 列既有条目。
+  // 程序化动画有两种目标：写 nodeId 的直达节点；只写 spriteId 的落
+  // 到挂着这个精灵的节点（主渲染按节点当前解析出的精灵匹配、
+  // convert 按挂载关系进包，同一口径）。选中了木偶节点时，列表含
+  // 直达本节点的条目与挂在本节点精灵上的条目、新建写 nodeId；无节
+  // 点选中（只有精灵被选中）时按 spriteId 列、新建写 spriteId。
   const selectedCharacterId = useProjectStore((s) => s.selectedCharacterId);
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
+  const globalSprites = useProjectStore((s) => s.sprites);
+  const targetCharacter =
+    selectedCharacterId ? unifiedCharacters?.[selectedCharacterId] : undefined;
   const targetNode =
     selectedCharacterId && selectedNodeId
       ? unifiedCharacters?.[selectedCharacterId]?.nodes?.[selectedNodeId]
       : undefined;
   const nodeMode = !!targetNode;
+
+  // 选中节点在当前服装集下能显示的精灵 id 集合——只挂精灵的条目按
+  // 此落到本节点，列表与渲染同一口径。用与主渲染/convert 同一套
+  // resolvePieceSprite 解析；面板取不到画布的当前编辑方向，按该件
+  // 全部方向解析取集合（列出为超集，渲染端仍逐帧精确）；含堆叠件
+  // 的层图 id（堆叠节点在渲染时以中间层图为解析精灵）。
+  const nodeSpriteIds = useMemo(() => {
+    if (!targetNode || !targetCharacter || !selectedNodeId) return null;
+    const ids = new Set<string>();
+    const slotKey = targetNode.slot?.slotKey ?? selectedNodeId;
+    const piece = getActiveCostumeSet(
+      targetCharacter.costumeSets,
+      targetCharacter.activeCostumeSetId,
+    )?.pieces[slotKey];
+    if (!piece) return ids;
+    const table = { ...(targetCharacter.sprites ?? {}), ...(globalSprites ?? {}) };
+    for (const d of [0, 1, 2, 3, 4, 5, 6, 7] as DirectionIndex[]) {
+      const r = resolvePieceSprite(piece, d, targetCharacter.slotVariants?.[slotKey], table, targetCharacter.latitude ?? 0);
+      if (r.spriteId) ids.add(r.spriteId);
+    }
+    for (const layerId of piece.stack?.layerSpriteIds ?? []) ids.add(layerId);
+    return ids;
+  }, [targetNode, targetCharacter, selectedNodeId, globalSprites]);
 
   // Feature 5: CSV waveform import ref
 
@@ -798,9 +824,13 @@ export default function ProceduralPanel() {
   const partAnimations = useMemo(
     () =>
       nodeMode
-        ? proceduralAnimations.filter((pa) => pa.nodeId === selectedNodeId)
+        ? proceduralAnimations.filter(
+            (pa) =>
+              pa.nodeId === selectedNodeId ||
+              (!!pa.spriteId && !!nodeSpriteIds?.has(pa.spriteId)),
+          )
         : proceduralAnimations.filter((pa) => pa.spriteId === selectedSpriteId),
-    [nodeMode, proceduralAnimations, selectedNodeId, selectedSpriteId],
+    [nodeMode, proceduralAnimations, selectedNodeId, selectedSpriteId, nodeSpriteIds],
   );
 
   // 选中节点时与 convert 同口径判生效：目标属性对应的修改器必须在
@@ -808,7 +838,7 @@ export default function ProceduralPanel() {
   // 修改器请去木偶面板加（节点修改器与蓝图双向同步，不在此处代加）。
   const ineffectiveNoteFor = useCallback(
     (pa: ProceduralAnimation): string | undefined => {
-      if (!nodeMode || !targetNode) return undefined;
+      if (!targetNode) return undefined;
       const need =
         pa.config.targetProperty === 'rotation'
           ? { type: 'rotate', label: '旋转' }
@@ -820,7 +850,7 @@ export default function ProceduralPanel() {
         ? undefined
         : `目标节点缺启用的「${need.label}」修改器，暂不生效——在木偶面板给节点加上后即生效，导出时也不会被丢弃。`;
     },
-    [nodeMode, targetNode],
+    [targetNode],
   );
 
   // ---- Handlers ----
@@ -838,13 +868,18 @@ export default function ProceduralPanel() {
         );
         return;
       }
-      // 未选中节点时不再新建：只有 spriteId 的条目在编辑器与导出中均不
-      // 生效（主渲染只按 nodeId 匹配、convert 点名丢弃），新建即死
-      // 条目。添加下拉已禁用，此处兜底（空状态按钮同走本函数）；
-      // 存量条目的编辑/删除/开关不受影响。
-      return;
+      // 未选中节点（只有精灵被选中）时按 spriteId 新建：条目自动落
+      // 到挂着这个精灵的节点上生效（主渲染与 convert 同口径）。
+      if (!selectedSpriteId) return;
+      addProceduralAnimation(
+        selectedSpriteId,
+        `${info.label} ${partAnimations.length + 1}`,
+        { ...info.defaultConfig },
+        0,
+        totalFrames - 1,
+      );
     },
-    [nodeMode, selectedNodeId, partAnimations.length, totalFrames, addProceduralAnimation],
+    [nodeMode, selectedNodeId, selectedSpriteId, partAnimations.length, totalFrames, addProceduralAnimation],
   );
 
   const handleRemove = useCallback(
@@ -893,15 +928,14 @@ export default function ProceduralPanel() {
             {partAnimations.length}
           </Badge>
 
-          {/* Add dropdown（未选中节点时禁用：spriteId-only 条目两边都不生效） */}
+          {/* Add dropdown */}
           <DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild disabled={!nodeMode}>
+                <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
-                    disabled={!nodeMode}
                     className="size-6 p-0 text-zinc-500 hover:text-emerald-400"
                   >
                     <Plus className="size-3.5" />
@@ -909,7 +943,7 @@ export default function ProceduralPanel() {
                 </DropdownMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-[11px]">
-                {nodeMode ? '添加程序动画' : SPRITE_ONLY_NOTE}
+                添加程序动画
               </TooltipContent>
             </Tooltip>
             <DropdownMenuContent
@@ -958,12 +992,6 @@ export default function ProceduralPanel() {
         </div>
       )}
 
-      {!nodeMode && (
-        <div className="px-3 py-1.5 border-b border-zinc-800 bg-amber-500/5 shrink-0">
-          <span className="text-[10px] leading-snug text-amber-200/80">{SPRITE_ONLY_NOTE}</span>
-        </div>
-      )}
-
       {/* Animation list */}
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-2 space-y-1.5">
@@ -978,13 +1006,7 @@ export default function ProceduralPanel() {
                 onUpdate={handleUpdate}
                 onRemove={handleRemove}
                 onToggle={handleToggle}
-                ineffectiveNote={
-                  nodeMode
-                    ? ineffectiveNoteFor(pa)
-                    : !pa.nodeId
-                      ? SPRITE_ONLY_NOTE
-                      : undefined
-                }
+                ineffectiveNote={ineffectiveNoteFor(pa)}
               />
             ))
           )}

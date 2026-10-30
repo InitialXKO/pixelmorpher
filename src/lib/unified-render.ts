@@ -3002,7 +3002,7 @@ export function generateRenderPlan(
     // Resolve sprite (with Character.sprites table for SpriteRef resolution)
     // 方向混合时：先按 dirA 解析主精灵
     const resolveDir = dirBlend ? dirBlend.dirA : currentDirection;
-    let { sprite, mirror } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? node.id], character.latitude ?? 0, frame, frameRate);
+    let { sprite, mirror, spriteId: nodeSpriteId } = resolveSprite(node, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[node.slot?.slotKey ?? node.id], character.latitude ?? 0, frame, frameRate);
     if (!sprite) {
       // 堆叠部件可以没有方向平面图（纯堆叠件）：以中间层图作替身
       // 精灵让指令成立（身份/点选/缩略口径），实际绘制由 stackRender
@@ -3014,6 +3014,8 @@ export function generateRenderPlan(
       const midSprite = midId ? spriteTable[midId] : undefined;
       if (!midSprite) continue;
       sprite = midSprite;
+      // 替身精灵即本节点本次显示的精灵：精灵目标的程序化条目按它匹配
+      nodeSpriteId = midId ?? null;
       // 镜像不因回落丢弃：本方向在 mirrorMap 里有条目即镜像朝向——
       // 平面图缺失不改变朝向，堆叠合成图在执行端按同一 mirror 标志
       // 整图翻转（水平翻转下摞内深度由 y/d 决定、与 h 无关，画序
@@ -3057,9 +3059,13 @@ export function generateRenderPlan(
     // worldX/worldY/angle 与缩放通道，整部件绕插头位移/旋转/等比
     // 缩放，与播放器把增量叠到部件位姿同口径。生效门控不变：
     // computeProceduralPoseDelta 按与旧查找规则相同的门控汇总
-    // （enabled + 帧范围 + nodeId 命中 + 对应类型的启用修改器存在）。
+    // （enabled + 帧范围 + 命中 + 对应类型的启用修改器存在）。命中
+    // 有两条通道：条目 nodeId 等于本节点，或条目 spriteId 等于本节
+    // 点本次解析出的精灵（nodeSpriteId，上方 resolveSprite 的结果，
+    // 参数化合成等无表 id 的情形为 null、不走精灵通道）——只挂精灵
+    // 的条目自动落到挂着这个精灵的节点上。
     const procDelta = proceduralAnimations && proceduralAnimations.length > 0
-      ? computeProceduralPoseDelta(proceduralAnimations, node.modifiers ?? [], nodeId, frame)
+      ? computeProceduralPoseDelta(proceduralAnimations, node.modifiers ?? [], nodeId, frame, nodeSpriteId ?? undefined)
       : { dx: 0, dy: 0, rotDeg: 0, scaleMul: 1 };
 
     // ---- Mesh skinning: 若父 socket.skinning === 'mesh'，计算蒙皮参数 ----

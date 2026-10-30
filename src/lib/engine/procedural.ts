@@ -140,11 +140,15 @@ export interface ProceduralPoseDelta {
  * （runtime-template 的 PROCEDURAL 叠加段）同一口径：平移按 px
  * 累加、旋转按度累加、缩放逐条以 (1 + v/10) 钳 ≥0.1 后累乘。
  *
- * 匹配与门控与 applyProceduralAnimations 的查找规则一致：条目须
- * enabled、帧在 [startFrame, endFrame] 内、nodeId 命中本节点，且
- * 节点挂有目标属性对应类型的启用修改器（translateX/Y→translate、
- * rotation→rotate、scale→uniform_scale）才计入；只有 spriteId 的
- * 条目永不命中（主渲染只按 nodeId 消费，与 convert 进包门控同口径）。
+ * 匹配规则（与 convert 进包同一口径）：条目作用于某节点，当且仅当
+ * pa.nodeId 等于该节点，或 pa.spriteId 非空且等于该节点当前解析出
+ * 的精灵 id（resolvedSpriteId，由调用方按本次渲染的解析结果传入）
+ * ——只挂精灵的条目自动落到挂着这个精灵的节点上。除此之外仍须
+ * enabled、帧在 [startFrame, endFrame] 内，且节点挂有目标属性对应
+ * 类型的启用修改器（translateX/Y→translate、rotation→rotate、
+ * scale→uniform_scale）才计入，与 applyProceduralAnimations 的查找
+ * 门控一致。一条条目同帧只走一条汇总路径：nodeId 与 spriteId 双
+ * 通道同时命中也只计一次。
  *
  * modifiers 只读 type/enabled 两字段，入参取结构形状：types 与
  * unified-types 两套 ModifierInstance 定义字段兼容但类型不互认，
@@ -155,13 +159,16 @@ export function computeProceduralPoseDelta(
   modifiers: ReadonlyArray<{ type: string; enabled: boolean }>,
   nodeId: string | undefined,
   frame: number,
+  resolvedSpriteId?: string,
 ): ProceduralPoseDelta {
   const delta: ProceduralPoseDelta = { dx: 0, dy: 0, rotDeg: 0, scaleMul: 1 };
-  if (!nodeId) return delta;
+  if (!nodeId && !resolvedSpriteId) return delta;
   const hasEnabledModifier = (type: string) =>
     modifiers.some((m) => m.type === type && m.enabled);
   for (const pa of proceduralAnimations) {
-    if (!pa.enabled || pa.nodeId !== nodeId) continue;
+    const matchesNode = !!nodeId && pa.nodeId === nodeId;
+    const matchesSprite = !!resolvedSpriteId && !!pa.spriteId && pa.spriteId === resolvedSpriteId;
+    if (!pa.enabled || (!matchesNode && !matchesSprite)) continue;
     if (frame < pa.startFrame || frame > pa.endFrame) continue;
     switch (pa.config.targetProperty) {
       case 'translateX':

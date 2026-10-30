@@ -2033,27 +2033,82 @@ export function convertCharacterToRuntimePackage(
 
   // ---- 程序化动画（缺口 2）：与编辑器同口径——PA 只在目标节点挂有
   // 对应类型的启用修改器时才生效（applyProceduralAnimations 的查找
-  // 规则），不满足的在编辑器内同样无效，逐条点名不进包；只认
-  // nodeId 的条目（编辑器主渲染只按 nodeId 匹配，spriteId-only 的
-  // 历史条目在编辑器内亦不生效，同口径点名）。 ----
+  // 规则），不满足的在编辑器内同样无效，逐条点名不进包。命中两条
+  // 通道：nodeId 条目直达其节点；只有 spriteId 的条目按挂载关系落
+  // 到挂着这个精灵的节点上（精灵目标自动对挂载节点生效，与编辑器
+  // 按当前解析精灵逐帧匹配同一裁定）。挂载集合用与瓦片解析同一套
+  // resolvePieceSprite 收集：每个节点在其槽位件上、跨全部服装集与
+  // 8 个方向能解析出的精灵 id，并含堆叠件的层图 id（堆叠节点在编
+  // 辑器里以中间层图为解析精灵）。已知口径差：编辑器按当前方向的
+  // 解析精灵逐帧精确匹配，包内在导出时解析到槽位、该槽位所有方向
+  // 都生效——单方向工程两者一致，多方向且同节点不同方向挂不同精
+  // 灵时包内宽于编辑器，本次不改包格式处理这一层。 ----
   const procedural: NonNullable<ProcRuntimePackage['procedural']> = [];
+  type ConvNode = Character['nodes'][string];
+  // 精灵 id → 挂载节点列表（懒构建：出现只有 spriteId 的条目时才收集）
+  let nodesBySprite: Map<string, ConvNode[]> | null = null;
+  const mountNodesOf = (spriteId: string): ConvNode[] => {
+    if (!nodesBySprite) {
+      nodesBySprite = new Map();
+      const built = nodesBySprite;
+      const addMount = (id: string | null | undefined, node: ConvNode) => {
+        if (!id) return;
+        const arr = built.get(id);
+        if (arr) { if (!arr.includes(node)) arr.push(node); }
+        else built.set(id, [node]);
+      };
+      for (const node of Object.values(character.nodes)) {
+        const slotKey = node.slot?.slotKey ?? node.id;
+        for (const set of character.costumeSets) {
+          const piece = set.pieces[slotKey];
+          if (!piece) continue;
+          for (let d = 0; d < 8; d++) {
+            const r = resolvePieceSprite(piece, d as DirectionIndex, character.slotVariants?.[slotKey], spriteTable, character.latitude ?? 0);
+            addMount(r.spriteId, node);
+          }
+          for (const layerId of piece.stack?.layerSpriteIds ?? []) addMount(layerId, node);
+        }
+      }
+    }
+    return nodesBySprite.get(spriteId) ?? [];
+  };
   for (const pa of opts?.projectData?.proceduralAnimations ?? []) {
     if (!pa.enabled) continue;
-    if (!pa.nodeId) { warnings.push(`程序化动画「${pa.name}」只有 spriteId 无 nodeId：编辑器主渲染亦不生效，未进包`); continue; }
-    const node = character.nodes[pa.nodeId];
-    if (!node) { warnings.push(`程序化动画「${pa.name}」目标节点不存在，未进包`); continue; }
     const need = pa.config.targetProperty === 'rotation' ? 'rotate' : pa.config.targetProperty === 'scale' ? 'uniform_scale' : 'translate';
-    if (!(node.modifiers ?? []).some((m) => m.type === need && m.enabled)) {
-      warnings.push(`程序化动画「${pa.name}」目标节点无启用的 ${need} 修改器：编辑器内同样不生效，未进包`);
+    const pushFor = (node: ConvNode) => {
+      procedural.push({
+        slot: node.slot?.slotKey ?? node.id,
+        target: pa.config.targetProperty,
+        cfg: pa.config as unknown as Record<string, unknown>,
+        startFrame: pa.startFrame,
+        endFrame: pa.endFrame,
+      });
+    };
+    if (pa.nodeId) {
+      const node = character.nodes[pa.nodeId];
+      if (!node) { warnings.push(`程序化动画「${pa.name}」目标节点不存在，未进包`); continue; }
+      if (!(node.modifiers ?? []).some((m) => m.type === need && m.enabled)) {
+        warnings.push(`程序化动画「${pa.name}」目标节点无启用的 ${need} 修改器：编辑器内同样不生效，未进包`);
+        continue;
+      }
+      pushFor(node);
       continue;
     }
-    procedural.push({
-      slot: node.slot?.slotKey ?? node.id,
-      target: pa.config.targetProperty,
-      cfg: pa.config as unknown as Record<string, unknown>,
-      startFrame: pa.startFrame,
-      endFrame: pa.endFrame,
-    });
+    // 只有 spriteId：按挂载关系落到挂着这个精灵的节点（可多个）
+    const targets = pa.spriteId ? mountNodesOf(pa.spriteId) : [];
+    if (targets.length === 0) {
+      warnings.push(`程序化动画「${pa.name}」目标精灵未被任何节点挂载，未进包`);
+      continue;
+    }
+    let emitted = 0;
+    for (const node of targets) {
+      if (!(node.modifiers ?? []).some((m) => m.type === need && m.enabled)) continue;
+      pushFor(node);
+      emitted++;
+    }
+    if (emitted === 0) {
+      warnings.push(`程序化动画「${pa.name}」挂载其目标精灵的节点均无启用的 ${need} 修改器：编辑器内同样不生效，未进包`);
+    }
   }
 
   // ---- 全局变换（缺口 3）：与编辑器 applyGlobalTransformWrapper 同

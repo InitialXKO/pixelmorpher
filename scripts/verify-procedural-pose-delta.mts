@@ -1,17 +1,28 @@
-// 程序化位姿增量验收探针（程序化页签审计缺陷 1+2 修复）
+// 程序化位姿增量验收探针（程序化页签审计缺陷 1+2 修复 + 精灵目标
+// 自动落到挂载节点）
 // 覆盖：
 //  A) computeProceduralPoseDelta 汇总口径——平移按 px 累加、旋转按度
 //     累加、缩放逐条 max(0.1, 1+v/10) 累乘（与播放器 paScale 同式）
 //  B) 门控三态——未启用/帧外/缺对应启用修改器 → 零增量；齐备 → 非零；
-//     帧界含端点；nodeId 不匹配/缺失不串扰；spriteId-only 条目永不命中
+//     帧界含端点；nodeId 不匹配不串扰；精灵通道——spriteId 命中节点
+//     当前解析精灵（resolvedSpriteId）才出增量、不符/缺省不出、双通
+//     道同命中只计一次、精灵通道同受门控
 //  C) 取值同源对拍——引擎 computeProceduralValue 与播放器
 //     dynProceduralValue（createDynamicRuntime）逐帧同值，且增量按
 //     播放器公式由 dyn 值组装的结果与 A 一致
 //  D) 源码级断言——unified-render 不再以 applyProceduralAnimations 改
 //     指令 modifiers；ProceduralPanel 不再含本地 computeProceduralValue
-//     /pseudoNoise 且 import 引擎函数；只有精灵目标时的警示与禁用添加在位
+//     /pseudoNoise 且 import 引擎函数；上一轮「堵死精灵目标新建」的
+//     警示与禁用已撤销（SPRITE_ONLY_NOTE 与添加禁用不存在）、精灵目
+//     标可新建且选中节点时列表含挂载精灵条目；convert 不再以「只有
+//     spriteId」点名丢弃、改走挂载解析
+//  E) convert 构造对拍——只有 spriteId 的条目按挂载关系进包（一精
+//     灵多节点多条）、未被任何节点挂载的点名丢弃、挂载节点缺对应
+//     修改器的点名不进包、nodeId 条目原路径不变
 import { computeProceduralPoseDelta, computeProceduralValue } from '../src/lib/engine/procedural';
 import { createDynamicRuntime } from '../src/lib/proc-runtime/dynamic-src';
+import { convertCharacterToRuntimePackage } from '../src/lib/proc-runtime/convert';
+import { pxToSub, type Character as UnifiedCharacter, type Node as UnifiedNode } from '../src/lib/unified-types';
 import type { ModifierInstance, ProceduralAnimation, ProceduralConfig } from '../src/lib/types';
 import { readFileSync } from 'node:fs';
 
@@ -98,9 +109,26 @@ console.log('B) 门控三态');
   const mixed = computeProceduralPoseDelta([waveX(5), pa(rotCfg)], [mod('translate')], 'n1', 1);
   ok(near(mixed.dx, 5) && mixed.rotDeg === 0, '门控逐属性独立：translate 命中、rotation 被门');
   ok(isZeroDelta(computeProceduralPoseDelta([waveX(5, { nodeId: 'n2' })], mods, 'n1', 1)), 'nodeId 不匹配 → 不串扰');
-  ok(isZeroDelta(computeProceduralPoseDelta([waveX(5)], mods, undefined, 1)), 'nodeId 入参缺失 → 零增量');
-  ok(isZeroDelta(computeProceduralPoseDelta([waveX(5, { nodeId: undefined, spriteId: 's9' })], mods, 'n1', 1)), 'spriteId-only 条目 → 永不命中节点');
+  ok(isZeroDelta(computeProceduralPoseDelta([waveX(5)], mods, undefined, 1)), 'nodeId 入参缺失且无解析精灵 → 零增量');
   ok(isZeroDelta(computeProceduralPoseDelta([], mods, 'n1', 1)), '空列表 → 零增量');
+
+  // 精灵通道：只挂精灵的条目落到「当前解析精灵正是它」的节点上
+  const spritePa = waveX(5, { nodeId: undefined, spriteId: 's9' });
+  const hitSprite = computeProceduralPoseDelta([spritePa], mods, 'n1', 1, 's9');
+  ok(near(hitSprite.dx, 5), `spriteId 命中解析精灵 → 出增量 dx=5（实 ${hitSprite.dx}）`);
+  ok(isZeroDelta(computeProceduralPoseDelta([spritePa], mods, 'n1', 1, 'sX')), 'spriteId 与解析精灵不符 → 零增量');
+  ok(isZeroDelta(computeProceduralPoseDelta([spritePa], mods, 'n1', 1)), '未传解析精灵 → 精灵通道不命中');
+  ok(isZeroDelta(computeProceduralPoseDelta([spritePa], mods, 'n1', 1, '')), '解析精灵为空串 → 精灵通道不命中');
+  const hitNoNodeArg = computeProceduralPoseDelta([spritePa], mods, undefined, 1, 's9');
+  ok(near(hitNoNodeArg.dx, 5), 'nodeId 入参缺失时精灵通道仍可命中');
+  // 双通道同命中只计一次（nodeId 与 spriteId 指向同一节点同一条）
+  const bothPa = waveX(5, { nodeId: 'n1', spriteId: 's9' });
+  const bothHit = computeProceduralPoseDelta([bothPa], mods, 'n1', 1, 's9');
+  ok(near(bothHit.dx, 5), `双通道同命中只计一次 dx=5（实 ${bothHit.dx}）`);
+  // 精灵通道同受门控：缺修改器/未启用/帧外都不出
+  ok(isZeroDelta(computeProceduralPoseDelta([spritePa], [mod('rotate')], 'n1', 1, 's9')), '精灵通道：缺 translate 修改器 → 零增量');
+  ok(isZeroDelta(computeProceduralPoseDelta([waveX(5, { nodeId: undefined, spriteId: 's9', enabled: false })], mods, 'n1', 1, 's9')), '精灵通道：未启用 → 零增量');
+  ok(isZeroDelta(computeProceduralPoseDelta([spritePa], mods, 'n1', 101, 's9')), '精灵通道：帧外 → 零增量');
 }
 
 console.log('C) 与播放器同式对拍');
@@ -152,16 +180,85 @@ console.log('D) 源码级断言');
   ok(ur.includes('+ procDelta.rotDeg'), '旋转增量叠进 angle');
   ok(ur.includes('modifiers: node.modifiers'), '指令 modifiers 回归节点原始修改器（不再被程序化改写）');
 
+  ok(ur.includes('nodeSpriteId ?? undefined'), 'unified-render 把本次解析出的精灵 id 传给增量汇总');
+
   const panel = readFileSync(new URL('../src/components/pixel-editor/ProceduralPanel.tsx', import.meta.url), 'utf8');
   ok(!panel.includes('function computeProceduralValue'), 'ProceduralPanel 不再含本地 computeProceduralValue 定义');
   ok(!panel.includes('pseudoNoise'), 'ProceduralPanel 不再含 pseudoNoise');
   ok(panel.includes("import { computeProceduralValue } from '@/lib/engine/procedural'"), 'ProceduralPanel 改 import 引擎 computeProceduralValue');
-  ok(panel.includes('SPRITE_ONLY_NOTE') && panel.includes('只有精灵目标的条目在编辑器与导出中均不生效'), '只有精灵目标的警示文案在位');
-  ok(panel.includes('disabled={!nodeMode}'), '未选节点时添加下拉禁用');
+  ok(!panel.includes('SPRITE_ONLY_NOTE'), '上一轮的精灵目标警示（SPRITE_ONLY_NOTE）已撤销');
+  ok(!panel.includes('disabled={!nodeMode}'), '添加下拉不再按有无节点禁用（只挂精灵也可新建）');
+  ok(panel.includes('nodeSpriteIds'), '选中节点时列表按挂载精灵集合并入精灵目标条目');
 
   const eng = readFileSync(new URL('../src/lib/engine/procedural.ts', import.meta.url), 'utf8');
   ok(eng.includes('export function applyProceduralAnimations'), 'applyProceduralAnimations 本体保留（convert 注释引用其查找规则）');
   ok(eng.includes('export function computeProceduralPoseDelta'), 'computeProceduralPoseDelta 已导出');
+  ok(eng.includes('matchesSprite'), '引擎含精灵通道匹配（resolvedSpriteId）');
+
+  const conv = readFileSync(new URL('../src/lib/proc-runtime/convert.ts', import.meta.url), 'utf8');
+  ok(!conv.includes('只有 spriteId 无 nodeId'), 'convert 不再以「只有 spriteId 无 nodeId」点名丢弃');
+  ok(conv.includes('mountNodesOf') && conv.includes('目标精灵未被任何节点挂载'), 'convert 改按挂载关系解析精灵目标、无挂载时点名');
+}
+
+console.log('E) convert 挂载解析对拍');
+{
+  const grid = [['#ffffff', '#ffffff'], ['#ffffff', '#ffffff']];
+  const mkNode = (id: string, slotKey: string | null, mods: unknown[], parentId?: string): UnifiedNode => ({
+    id, name: id, parentId,
+    role: 'bone',
+    slot: slotKey ? { slotKey } : undefined,
+    transform: { x: 0, y: 0, angle: 0, variantIndex: 2, stretch: 1 },
+    attachment: { type: 'fixed' },
+    sockets: [],
+    tracks: {},
+    modifiers: mods,
+    children: [],
+    sprite: undefined as never,
+  } as unknown as UnifiedNode);
+  const tMod = [{ id: 'tm', type: 'translate', enabled: true, collapsed: false, params: {}, startFrame: -1, endFrame: -1, fadeInFrames: 0, fadeOutFrames: 0 }];
+  const root = mkNode('root', null, []);
+  const armL = mkNode('armL', 'armL', tMod, 'root');
+  const armR = mkNode('armR', 'armR', tMod, 'root');
+  const armX = mkNode('armX', 'armX', [], 'root');
+  root.children = ['armL', 'armR', 'armX'];
+  (armL.transform as { x: number }).x = pxToSub(-20);
+  (armR.transform as { x: number }).x = pxToSub(20);
+  const char = {
+    id: 'cp1', name: '程序化挂载测试',
+    nodes: { root, armL, armR, armX },
+    rootNodeId: 'root',
+    rootNodeIds: ['root'],
+    sprites: {
+      sprA: { id: 'sprA', width: 2, height: 2, data: grid },
+      sprB: { id: 'sprB', width: 2, height: 2, data: grid },
+    },
+    costumeSets: [{
+      id: 'set1', name: '默认',
+      pieces: {
+        armL: { sprites: { 2: { spriteId: 'sprA' } } },
+        armR: { sprites: { 6: { spriteId: 'sprA' } } },
+        armX: { sprites: { 2: { spriteId: 'sprB' } } },
+      },
+    }],
+    activeCostumeSetId: 'set1',
+    variants: { '0': '东', '2': '西' },
+  } as unknown as UnifiedCharacter;
+
+  const cfgX: ProceduralConfig = { type: 'wave', amplitude: 5, frequency: 0.25, phase: 0, waveType: 'sine', targetProperty: 'translateX' };
+  const pas: ProceduralAnimation[] = [
+    { id: 'e1', name: '精灵目标', spriteId: 'sprA', config: cfgX, enabled: true, startFrame: 0, endFrame: 100 },
+    { id: 'e2', name: '无挂载', spriteId: 'sprGhost', config: cfgX, enabled: true, startFrame: 0, endFrame: 100 },
+    { id: 'e3', name: '缺修改器', spriteId: 'sprB', config: cfgX, enabled: true, startFrame: 0, endFrame: 100 },
+    { id: 'e4', name: '节点目标', spriteId: '', nodeId: 'armL', config: cfgX, enabled: true, startFrame: 0, endFrame: 100 },
+  ];
+  const pkg = convertCharacterToRuntimePackage(char, undefined, { projectData: { proceduralAnimations: pas } });
+  const entries = pkg.procedural ?? [];
+  ok(entries.filter((e) => e.slot === 'armR').length === 1, '精灵目标落到第二个挂载节点 armR（一条）');
+  ok(entries.filter((e) => e.slot === 'armL').length === 2, 'armL 吃到精灵目标 + 节点目标（两条）');
+  ok(entries.every((e) => e.slot !== 'armX'), '缺修改器的挂载节点 armX 不进包');
+  ok(entries.length === 3, `进包共 3 条（实 ${entries.length}）`);
+  ok(pkg.warnings.some((w) => w.includes('无挂载') && w.includes('未被任何节点挂载')), '未被任何节点挂载的精灵条目被点名丢弃');
+  ok(pkg.warnings.some((w) => w.includes('缺修改器') && w.includes('均无启用的')), '挂载节点均无对应修改器的精灵条目被点名不进包');
 }
 
 console.log(`\nverify-procedural-pose-delta: ${pass} passed, ${fail} failed`);
