@@ -420,6 +420,10 @@ console.log('G) 描边轮廓来源');
   // py = tile.cy + gy；旧式 tile.cy − gy 同为翻转
   ok(tplG.includes('py = Math.round(tile.cy + gy)'), 'occAt 反查行按 tile.cy + gy 口径');
   ok(!tplG.includes('tile.cy - gy'), 'occAt 无纵向翻转旧式');
+  // occAt 占据判定与 fxBuildMask 同一分流：流经瓦片同源（enc:'r' 编码、
+  // alpha 恒 255），误测 alpha 等于「落在瓦片矩形内即算占据」
+  const occSeg = tplG.slice(tplG.indexOf('const occAt = (wx, wy)'), tplG.indexOf('fxRenderSet(FX,'));
+  ok(occSeg.includes("const useR = tile.enc === 'r';") && occSeg.includes('useR ? tile.data[q4] < 128 : tile.data[q4 + 3] > 8'), 'occAt 按 tile.enc 分流判占据（R 编码以 R<128 为占据，不再误测 alpha）');
   // 生成包里同样带 R 读法（钉到出货产物，不只源码文件）
   const htmlG = buildRuntimeHtml({ parts: [], costumes: {}, performances: [], behavior: { graphs: {} }, fx: { canvas: { w: 8, h: 8 }, totalFrames: 24, canvasTracks: [] } } as any);
   ok(htmlG.includes("tile.enc === 'r'"), '生成包 fxBuildMask 读 R 编码占据');

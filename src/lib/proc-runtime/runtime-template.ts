@@ -4847,12 +4847,14 @@ function frame(now) {
         const entry = state.map.get(key);
         if (!entry || !entry.tile || !entry.tile.data) continue;
         const tile = entry.tile;
+        const useR = tile.enc === 'r';
         const dx = wx - el.pos[0], dy = wy - el.pos[1];
         const c = Math.cos(el.rot), s = Math.sin(el.rot);
         const gx = c * dx + s * dy, gy = s * dx - c * dy; // g = M·W，与渲染器同一映射，反查行 py = tile.cy + gy
         const px = Math.round(gx + tile.cx), py = Math.round(tile.cy + gy);
         if (px < 0 || py < 0 || px >= tile.w || py >= tile.h) continue;
-        if (tile.data[(py * tile.w + px) * 4 + 3] > 8) return true;
+        const q4 = (py * tile.w + px) * 4;
+        if (useR ? tile.data[q4] < 128 : tile.data[q4 + 3] > 8) return true;
       }
       return false;
     };
