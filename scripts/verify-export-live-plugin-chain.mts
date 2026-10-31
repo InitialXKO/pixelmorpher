@@ -197,7 +197,7 @@ pluginManager.togglePlugin(PLUGIN_ID);
   const pkg = convertCharacterToRuntimePackage(makeChar(gemBp(), orbBp()), undefined, { bake: { pluginChain: 'live' } });
   const gem = pkg.parts.find((p) => p.key === 'gem');
   check('禁用：不挂 pixelGraph', !gem?.pixelGraph);
-  check('禁用：drop 形态整链拒绝点名', pkg.warnings.some((w) => w.includes(PLUGIN_TYPE) && w.includes('整链未进包')),
+  check('禁用：drop 形态整链拒绝点名（用注册标签）', pkg.warnings.some((w) => w.includes('（插件:redshift）不在运行时支持集') && w.includes('整链未进包')),
     pkg.warnings.join(' | ').slice(0, 240));
   check('禁用：按原因点名已禁用', pkg.warnings.some((w) => w.includes('插件〈实时测试〉已禁用，未按实时执行进包')),
     pkg.warnings.join(' | ').slice(0, 240));
@@ -225,7 +225,7 @@ check('编程式注册无源码', pluginManager.getPluginSource('progtest') === 
   const pkg = convertCharacterToRuntimePackage(makeChar(gemBp(), orbBp()), undefined, { bake: { pluginChain: 'drop' } });
   const gem = pkg.parts.find((p) => p.key === 'gem');
   check('drop：插件链不挂 pixelGraph', !gem?.pixelGraph);
-  check('drop：整链拒绝点名', pkg.warnings.some((w) => w.includes(PLUGIN_TYPE) && w.includes('整链未进包')));
+  check('drop：整链拒绝点名（用注册标签）', pkg.warnings.some((w) => w.includes('（插件:redshift）不在运行时支持集') && w.includes('整链未进包')));
   check('drop：pkg.plugins 不出现', !pkg.plugins);
 }
 {
