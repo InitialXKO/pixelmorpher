@@ -11,6 +11,8 @@ import { useWorkspaceStore } from '@/lib/workspace-store';
 import { invalidateUnifiedPipelineCache, computeWorldTransforms, geometryDirectionFromToggle } from '@/lib/unified-render';
 import { pickNodesAt } from '@/lib/node-picking';
 import { readPick } from '@/lib/pick-buffer';
+import { usePuppetSessionStore } from '@/lib/puppet-session-store';
+import { visibleCharactersRecord } from '@/lib/visible-characters';
 import {
   interpolateModifiers,
   computeKeyframeBaseTransform,
@@ -376,16 +378,21 @@ export function useCanvasState() {
     (px: number, py: number): { node: Node; character: Character; clipId: string | null; score: number }[] => {
       const state = useProjectStore.getState();
       const clips = state.animationClips;
+      // 可见集与主画布同一份（visibleCharactersRecord 按输入记忆：
+      // 绘制侧 beginPickFrame 与此处读到的必须是同一个对象，拾取戳记
+      // 的同一性校验才对得上；未过滤时即原表）。隐藏的角色编号图里
+      // 没画、几何兜底也不迭代它——看不见即点不中。
+      const visibleRecord = visibleCharactersRecord(state.unifiedCharacters, usePuppetSessionStore.getState());
       // 拾取编号图（与主画布同帧绘制的剪影编号）：戳记对上（fresh）
       // 时它是 tier 0 的权威口径——读到节点即视觉最上层，读到背景
       // 即此处没画精灵/关节盘（像素链擦掉的区域点不中）
       const pickRead = readPick(px, py, {
-        characters: state.unifiedCharacters, sprites: state.sprites,
+        characters: visibleRecord, sprites: state.sprites,
         frame: state.currentFrame, canvasWidth, canvasHeight,
         nodeTurn3D: useEditorStore.getState().nodeTurn3D,
       });
       const bufferNodeId = pickRead.nodeId;
-      const picks = pickNodesAt(Object.values(state.unifiedCharacters), px, py, {
+      const picks = pickNodesAt(Object.values(visibleRecord ?? {}), px, py, {
         sprites: state.sprites,
         frame: state.currentFrame,
         canvasWidth,
