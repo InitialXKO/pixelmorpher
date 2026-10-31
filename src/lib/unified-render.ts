@@ -93,7 +93,7 @@ import { behaviorHostVars } from './behavior-host';
 import { modifiersToBlueprint } from './blueprint/migrate';
 import type { BlueprintEvalContext } from './blueprint/ir';
 import { isIKChainSuspended } from './ik-drag-state';
-import type { BlueprintGraph } from './blueprint/ir';
+import type { BlueprintGraph, BlueprintValue } from './blueprint/ir';
 import type { VariableContext as EngineVariableContext } from './engine/param-driver';
 import type {
   PixelGrid, ModifierType, Keyframe, ProceduralAnimation,
@@ -622,7 +622,17 @@ export function computeWorldTransforms(
   // 链外后代随 frame 复合自动跟随。ikOverrides 已传入时（重算遍）不再求解。
   if (!ikOverrides) {
     if (character.ikBlueprint) {
-      applyBakedIKBlueprint(character, transforms, variableContext?.values, frame, frameRate);
+      // 烘焙蓝图接管（实时 ikChains 不再直解）：与直解同路——先把蓝图
+      // 求值结果反解为各关节的局部 (angle, tilt) 覆写，再整树重算 FK，
+      // 子节点随 frame 复合跟随（旧实现是求值后就地改关节 worldAngle/
+      // worldFrame，位置已按旧 frame 合成完，子节点不跟、且 2bone 的
+      // angle2 是相对角被当绝对角写）。
+      const bakedOverrides = new Map<string, { angle: number; tilt: number }>();
+      solveBakedIKOverrides(character, transforms, frame, frameRate, variableContext, blueprintTransforms, bakedOverrides, geometryDirection);
+      if (bakedOverrides.size > 0) {
+        const t2 = computeWorldTransforms(character, frame, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms, bakedOverrides, geometryDirection, clampCtx, simCtx, procDeltas);
+        return finishWithClamps(t2);
+      }
       return finishWithClamps(transforms);
     }
     const chains = character.ikChains?.filter((c) => c.enabled && !isIKChainSuspended(c.id));
@@ -642,44 +652,145 @@ export function computeWorldTransforms(
   return finishWithClamps(transforms);
 }
 
+const bpNumber = (v: BlueprintValue | undefined): number | undefined =>
+  v && v.type === 'number' && Number.isFinite(v.value) ? v.value : undefined;
+
+/** 平面绝对角（度、画布系）→ 世界轴单位方向：画布 X 分量按朝向转进 XZ。 */
+function planeAngleToWorldDir(angleDeg: number, direction: DirectionIndex): V3 {
+  const rad = (angleDeg * Math.PI) / 180;
+  const d = mapDragTo3D(pxToSub(Math.cos(rad)) as SubPixel, pxToSub(Math.sin(rad)) as SubPixel, direction);
+  return { x: subToPx(d.dx3), y: subToPx(d.dy3), z: subToPx(d.dz3) };
+}
+
 /**
- * Apply baked IK blueprint.
+ * 烘焙 IK 蓝图 → 关节 (angle, tilt) 覆写（computeWorldTransforms 在
+ * character.ikBlueprint 存在时调用，与直解同路：覆写后再整树重算，
+ * 子节点随 frame 复合跟随；旧实现是求值后就地改关节 worldAngle/
+ * worldFrame，位置已按旧 frame 合成完，子节点不跟、且 2bone 的
+ * angle2 是相对角被当绝对角写）。
  *
- * Evaluates character.ikBlueprint and applies the resulting joint angles.
- * Nodes with _jointId param in their transform outputs indicate which
- * joint each angle applies to.
+ * 烘焙图里每条链是一个 ik_2bone / ik_fabrik 节点（id = `ik_<chainId>`）：
+ * - 2bone：段绝对角 = [angle1, angle1 + angle2]（angle1 是肩的平面绝对
+ *   角、angle2 是肘的相对角）。优先读烘焙时生成的辅助 transform 节点
+ *   （id 后缀 _angle1/_angle2、params._jointId 指向关节）的 rotation——
+ *   用户在 ik 节点与辅助节点之间插了数学节点时，编辑语义以辅助节点
+ *   的实际输出为准；辅助节点缺失才直读 ik 节点的 angle1/angle2 输出。
+ * - fabrik：angles 输出是逗号拼接的每段平面绝对角，直读。
+ *
+ * 段绝对角经当前朝向换算为世界方向、乘 FK 段长得 solved 位置阵，再走
+ * deriveIKOverridesFromSolved 的同一闭式反解（与直解逐段同口径）。
+ * 链缺失、关节变换不全或段数对不上的链跳过（该链保持 FK）。
  */
-function applyBakedIKBlueprint(
+function solveBakedIKOverrides(
   character: Character,
   transforms: Map<string, WorldTransform>,
-  vars?: Record<string, number>,
-  frame: number = 0,
-  frameRate: number = 12,
+  frame: number,
+  frameRate: number,
+  variableContext: VariableContext | undefined,
+  blueprintTransforms: Map<string, BlueprintTransformResult> | undefined,
+  overrides: Map<string, { angle: number; tilt: number }>,
+  geometryDirection?: DirectionIndex,
 ): void {
   const blueprint = character.ikBlueprint;
   if (!blueprint) return;
+  const ctx: BlueprintEvalContext = { frame, frameRate, vars: variableContext?.values ?? {} };
+  const chains = character.ikChains ?? [];
 
-  const ctx: BlueprintEvalContext = { frame, frameRate, vars: vars ?? {} };
+  for (const bpNode of blueprint.nodes) {
+    if (bpNode.type !== 'ik_2bone' && bpNode.type !== 'ik_fabrik') continue;
+    if (!bpNode.id.startsWith('ik_')) continue;
+    const chain = chains.find((c) => c.id === bpNode.id.slice(3));
+    if (!chain) continue;
 
-  // Evaluate each transform node that has a _jointId param
-  for (const node of blueprint.nodes) {
-    if (node.type !== 'transform') continue;
-    const jointId = node.params._jointId as string | undefined;
-    if (!jointId) continue;
-
-    // Build a single-node graph to evaluate this transform
-    const singleGraph: BlueprintGraph = {
-      version: 1,
-      nodes: blueprint.nodes,
-      outputId: node.id,
-    };
-    const result = evaluateBlueprint(singleGraph, ctx);
-
-    const t = transforms.get(jointId);
-    if (t) {
-      t.worldAngle = result.rotation;
-      t.worldFrame = rotMatD(result.rotation);
+    // 关节链回溯（与直解 / 烘焙生成同一走法）
+    const jointIds: string[] = [];
+    let cursor: string | null = chain.endNodeId;
+    while (cursor) {
+      jointIds.unshift(cursor);
+      if (cursor === chain.rootNodeId) break;
+      cursor = character.nodes[cursor]?.parentId ?? null;
     }
+    if (jointIds.length < 2 || jointIds[0] !== chain.rootNodeId) continue;
+    const fkT: WorldTransform[] = [];
+    let complete = true;
+    for (const jid of jointIds) {
+      const t = transforms.get(jid);
+      if (!t) { complete = false; break; }
+      fkT.push(t);
+    }
+    if (!complete) continue;
+
+    // FK 段偏移（父帧系，world 轴存储）与段长——与直解同一构造
+    const pos: V3[] = fkT.map((t) => ({ x: subToPx(t.worldX), y: subToPx(t.worldY), z: subToPx(t.worldZ) }));
+    const totals: V3[] = [];
+    const lengths: number[] = [];
+    for (let i = 0; i < jointIds.length - 1; i++) {
+      const seg = { x: pos[i + 1].x - pos[i].x, y: pos[i + 1].y - pos[i].y, z: pos[i + 1].z - pos[i].z };
+      lengths.push(Math.hypot(seg.x, seg.y, seg.z));
+      totals.push(applyFrameRotation(mat3Transpose(fkT[i].worldFrame), seg.x, seg.y, seg.z, geometryDirection ?? fkT[i].variantIndex));
+    }
+    const variant = geometryDirection ?? fkT[0].variantIndex;
+
+    // 段绝对角（度、画布平面）
+    let absAngles: number[] | null = null;
+    if (bpNode.type === 'ik_2bone') {
+      let a1: number | undefined;
+      let a2rel: number | undefined;
+      for (const helper of blueprint.nodes) {
+        if (helper.type !== 'transform') continue;
+        const jid = helper.params?._jointId;
+        if (typeof jid !== 'string') continue;
+        const isA1 = helper.id.endsWith('_angle1') && jid === jointIds[0];
+        const isA2 = helper.id.endsWith('_angle2') && jid === jointIds[1];
+        if (!isA1 && !isA2) continue;
+        try {
+          const r = evaluateBlueprint({ version: 1, nodes: blueprint.nodes, outputId: helper.id }, ctx);
+          if (!r) continue;
+          if (isA1) a1 = r.rotation;
+          else a2rel = r.rotation;
+        } catch {
+          // 求值失败按缺失处理，走下方直读回落。
+        }
+      }
+      if (a1 === undefined || a2rel === undefined) {
+        try {
+          const outs = evaluateNodeOutput(blueprint, bpNode.id, ctx);
+          if (a1 === undefined) a1 = bpNumber(outs?.angle1);
+          if (a2rel === undefined) a2rel = bpNumber(outs?.angle2);
+        } catch {
+          // 直读失败则整链跳过。
+        }
+      }
+      if (a1 !== undefined && a2rel !== undefined) absAngles = [a1, a1 + a2rel];
+    } else {
+      try {
+        const outs = evaluateNodeOutput(blueprint, bpNode.id, ctx);
+        const s = outs?.angles;
+        if (s && s.type === 'string') {
+          const parsed = s.value.split(',').map((p) => Number(p.trim()));
+          if (parsed.length === jointIds.length - 1 && parsed.every((v) => Number.isFinite(v))) {
+            absAngles = parsed;
+          }
+        }
+      } catch {
+        // 求值失败则整链跳过。
+      }
+    }
+    if (!absAngles) continue;
+
+    const solved: V3[] = [pos[0]];
+    for (let s = 0; s < absAngles.length; s++) {
+      const dir = planeAngleToWorldDir(absAngles[s], variant);
+      solved.push({
+        x: solved[s].x + dir.x * lengths[s],
+        y: solved[s].y + dir.y * lengths[s],
+        z: solved[s].z + dir.z * lengths[s],
+      });
+    }
+    deriveIKOverridesFromSolved(
+      character, jointIds, transforms, fkT, totals, lengths, solved, 0,
+      frame, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection,
+    );
   }
 }
 
@@ -882,7 +993,34 @@ export function solveChainIKOverrides(
     solved = solveIKFabrik3D(points, lengths, target);
   }
 
-  // 位置 → 局部 (angle, tilt) 覆写：逐段沿链推进父帧（Mprev 与 FK 的 plain-product 复合口径一致）
+  deriveIKOverridesFromSolved(
+    character, jointIds, transforms, fkT, totals, lengths, solved, tipLength,
+    frame, frameRate, variableContext, blueprintTransforms, overrides, geometryDirection,
+  );
+}
+
+/**
+ * 位置 → 局部 (angle, tilt) 覆写：逐段沿链推进父帧（Mprev 与 FK 的
+ * plain-product 复合口径一致）。直解（solveChainIKOverrides）与烘焙
+ * 蓝图桥（solveBakedIKOverrides）共用：调用方给出 solved 关节位置
+ * （world 轴、px），本函数把每段方向闭式反解为关节的局部覆写。
+ */
+function deriveIKOverridesFromSolved(
+  character: Character,
+  jointIds: string[],
+  transforms: Map<string, WorldTransform>,
+  fkT: WorldTransform[],
+  totals: V3[],
+  lengths: number[],
+  solved: V3[],
+  tipLength: number,
+  frame: number,
+  frameRate: number,
+  variableContext: VariableContext | undefined,
+  blueprintTransforms: Map<string, BlueprintTransformResult> | undefined,
+  overrides: Map<string, { angle: number; tilt: number }>,
+  geometryDirection?: DirectionIndex,
+): void {
   const rootNode = character.nodes[jointIds[0]];
   const parentId = rootNode?.parentId ?? undefined;
   const parentT = parentId ? transforms.get(parentId) : undefined;

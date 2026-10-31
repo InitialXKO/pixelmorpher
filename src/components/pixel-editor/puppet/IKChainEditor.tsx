@@ -14,6 +14,7 @@ import { resolveChainTarget3D, ikTargetMirror, subToPx } from '@/lib/unified-typ
 import { computeWorldTransforms } from '@/lib/unified-render';
 import type { Character, IKChain } from '@/lib/unified-types';
 import { Vec3Field } from '../shared/Vec3Field';
+import CommitNumberInput from '../shared/CommitNumberInput';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 import BlueprintEditor from './BlueprintEditor';
 
@@ -22,7 +23,13 @@ interface IKChainEditorProps {
 }
 
 export default function IKChainEditor({ character }: IKChainEditorProps) {
-  const updateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
+  const rawUpdateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
+  // 本面板全部写操作统一经此：补撤销（同键 1 秒窗合并，逐字/连续
+  // 调整不刷栈）。原实现全程无 pushUndo，改目标/删链都无法撤销。
+  const updateUnifiedCharacter = (id: string, patch: Partial<Character>) => {
+    useProjectStore.getState().pushUndo('编辑 IK 链', 'ikChains');
+    rawUpdateUnifiedCharacter(id, patch);
+  };
   const [rootId, setRootId] = useState<string>('');
   const [endId, setEndId] = useState<string>('');
   const [editingTargetChainId, setEditingTargetChainId] = useState<string | null>(null);
@@ -286,28 +293,28 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
                 <span>目标</span>
                 <label className="flex items-center gap-0.5">
                   X
-                  <input
-                    type="number"
+                  <CommitNumberInput
+                    bare
                     value={Math.round(c.target.x - useProjectStore.getState().canvasWidth / 2)}
-                    onChange={(e) => handleTargetChange(c.id, 'x', Number(e.target.value))}
+                    onCommit={(v) => handleTargetChange(c.id, 'x', v)}
                     className="w-14 px-1 py-0.5 bg-black/50 rounded text-gray-300 text-[10px]"
                   />
                 </label>
                 <label className="flex items-center gap-0.5">
                   Y
-                  <input
-                    type="number"
+                  <CommitNumberInput
+                    bare
                     value={Math.round(c.target.y - useProjectStore.getState().canvasHeight / 2)}
-                    onChange={(e) => handleTargetChange(c.id, 'y', Number(e.target.value))}
+                    onCommit={(v) => handleTargetChange(c.id, 'y', v)}
                     className="w-14 px-1 py-0.5 bg-black/50 rounded text-gray-300 text-[10px]"
                   />
                 </label>
                 <label className="flex items-center gap-0.5" title="末节尖端到轴心的距离">
                   尖端
-                  <input
-                    type="number"
+                  <CommitNumberInput
+                    bare
                     value={Math.round(c.tipLength ?? 0)}
-                    onChange={(e) => handleTipLengthChange(c.id, Number(e.target.value))}
+                    onCommit={(v) => handleTipLengthChange(c.id, v)}
                     className="w-12 px-1 py-0.5 bg-black/50 rounded text-gray-300 text-[10px]"
                   />
                 </label>

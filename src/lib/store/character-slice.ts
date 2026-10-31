@@ -379,6 +379,7 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
     const character = get().unifiedCharacters[characterId];
     const node = character?.nodes[nodeId];
     if (!node) return;
+    get().pushUndo('添加修改器');
     const modifier: any = {
       id: crypto.randomUUID(),
       type,
@@ -401,6 +402,7 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
   removeUnifiedNodeModifier: (characterId, nodeId, modifierId) => {
     const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
     if (!node) return;
+    get().pushUndo('删除修改器');
     get().updateUnifiedNode(characterId, nodeId, {
       modifiers: (node.modifiers ?? []).filter((m: any) => m.id !== modifierId),
     });
@@ -409,6 +411,8 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
   updateUnifiedNodeModifier: (characterId, nodeId, modifierId, updates) => {
     const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
     if (!node) return;
+    // 参数编辑逐字/逐帧触发，同键 1 秒窗合并避免刷栈
+    get().pushUndo('更新修改器', 'updateNodeModifier');
     get().updateUnifiedNode(characterId, nodeId, {
       modifiers: (node.modifiers ?? []).map((m: any) =>
         m.id === modifierId ? { ...m, ...updates } : m
@@ -419,6 +423,7 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
   toggleUnifiedNodeModifier: (characterId, nodeId, modifierId) => {
     const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
     if (!node) return;
+    get().pushUndo('开关修改器');
     get().updateUnifiedNode(characterId, nodeId, {
       modifiers: (node.modifiers ?? []).map((m: any) =>
         m.id === modifierId ? { ...m, enabled: !m.enabled } : m

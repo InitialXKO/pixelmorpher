@@ -4,27 +4,43 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Play, Square, Trash2, Copy, ChevronDown, Terminal } from 'lucide-react';
+import { Play, Trash2, Copy, ChevronDown, Terminal } from 'lucide-react';
 import { pluginManager } from '@/lib/plugin-manager';
+import { useProjectStore } from '@/lib/store';
 
 const SCRIPT_TEMPLATES: { id: string; label: string; code: string }[] = [
   {
     id: 'batch-keyframes',
     label: '批量添加关键帧',
-    code: `// 批量添加关键帧 - 为所有角色的所有节点每4帧添加关键帧
+    code: `// 批量添加关键帧 - 为每个角色的每个片段、每个节点每 4 帧按静止姿态添加关键帧
+// 片段清单经 api.exportProjectFile() 读取（api 没有单独的片段查询方法）。
+// 落键值取节点静止姿态 transform 的 x/y/angle（与轨道通道同单位）；
+// 已有同帧关键帧会被覆盖；无片段的角色跳过。
+const data = api.exportProjectFile();
+const clips = data.project.animationClips || [];
 const characters = api.getCharacters();
 const totalFrames = api.getTotalFrames();
-// 需要先获取 clipId（这里用第一个 clip，实际项目可能有多个）
+const charsData = data.project.unifiedCharacters || {};
+let added = 0;
 for (const char of characters) {
+  const charClips = clips.filter((c) => c.puppetCharacterId === char.id);
+  if (charClips.length === 0) {
+    console.log('跳过（无片段）: ' + char.name);
+    continue;
+  }
   const nodes = api.getNodes(char.id);
-  for (const node of nodes) {
-    for (let frame = 0; frame < totalFrames; frame += 4) {
-      // 注意：需要 clipId，这里简化为演示
-      console.log('Node ' + node.name + ' frame ' + frame);
+  const charData = charsData[char.id];
+  for (const clip of charClips) {
+    for (const node of nodes) {
+      const t = (charData && charData.nodes[node.id] && charData.nodes[node.id].transform) || {};
+      for (let frame = 0; frame < totalFrames; frame += 4) {
+        api.addNodeKeyframe(clip.id, node.id, frame, { angle: t.angle ?? 0, x: t.x ?? 0, y: t.y ?? 0 });
+        added++;
+      }
     }
   }
 }
-console.log('Done! Processed ' + characters.length + ' characters');`,
+console.log('Done! Added ' + added + ' keyframes for ' + characters.length + ' characters');`,
   },
   {
     id: 'node-report',
@@ -44,15 +60,33 @@ console.log('========================');`,
   {
     id: 'random-rotation',
     label: '随机旋转动画',
-    code: `// 随机旋转动画 - 为选中节点的蓝图添加随机旋转
-// 注意：新架构用蓝图驱动动画，这里演示获取节点信息
+    code: `// 随机旋转动画 - 为选中节点在其角色的第一个片段上生成随机角度关键帧
+// 每 8 帧落一个 -15°..15° 的随机角度键（帧间自动插值），末帧回到 0° 收尾。
+// 片段清单经 api.exportProjectFile() 读取（api 没有单独的片段查询方法）。
 const nodeId = api.getSelectedNodeId();
 if (!nodeId) {
   console.log('请先在画布上选择一个节点');
 } else {
-  console.log('选中节点: ' + nodeId);
-  console.log('随机角度: ' + Math.round(Math.random() * 30 - 15) + '°');
-  console.log('提示：在蓝图编辑器中为该节点添加 rotate 修改器');
+  const data = api.exportProjectFile();
+  const charsData = data.project.unifiedCharacters || {};
+  const charId = Object.keys(charsData).find((id) => charsData[id].nodes && charsData[id].nodes[nodeId]);
+  const clip = (data.project.animationClips || []).find((c) => c.puppetCharacterId === charId);
+  if (!charId || !clip) {
+    console.log('选中节点所在角色没有片段，无法添加关键帧');
+  } else {
+    const totalFrames = api.getTotalFrames();
+    let count = 0;
+    for (let frame = 0; frame < totalFrames; frame += 8) {
+      const angle = Math.round(Math.random() * 30 - 15);
+      api.addNodeKeyframe(clip.id, nodeId, frame, { angle: angle });
+      count++;
+    }
+    if (totalFrames > 1) {
+      api.addNodeKeyframe(clip.id, nodeId, totalFrames - 1, { angle: 0 });
+      count++;
+    }
+    console.log('已为节点 ' + nodeId + ' 生成 ' + count + ' 个随机旋转关键帧');
+  }
 }`,
   },
   {
@@ -126,6 +160,10 @@ export default function ScriptPanel() {
     if (isRunning || !code.trim()) return;
     setIsRunning(true);
     addOutput('system', '> 执行脚本...');
+    // 整段脚本的写入压成一笔撤销：pushUndo 的快照是全工程级（含
+    // unifiedCharacters），api 的主要写路径都落在这份快照里；脚本
+    // 中途抛错时已写的部分也能一步退回。
+    useProjectStore.getState().pushUndo('执行脚本');
 
     // Capture console output
     const origLog = console.log;
@@ -179,10 +217,12 @@ export default function ScriptPanel() {
     }
   }, [code, isRunning, history, addOutput]);
 
-  const stopScript = useCallback(() => {
-    setIsRunning(false);
-    addOutput('system', '> 脚本已停止');
-  }, [addOutput]);
+  const clearHistory = useCallback(() => {
+    setHistory([]);
+    try {
+      localStorage.removeItem(HISTORY_KEY);
+    } catch { /* ignore */ }
+  }, []);
 
   const clearOutput = useCallback(() => {
     setOutput([]);
@@ -238,6 +278,40 @@ export default function ScriptPanel() {
         </Select>
       </div>
 
+      {/* 历史脚本（localStorage，上限 20 条）：点选把脚本回填到编辑器 */}
+      <div className="flex items-center gap-1 px-3 py-1.5 border-b border-zinc-800">
+        <Select
+          value=""
+          onValueChange={(v) => {
+            const item = history[Number(v)];
+            if (item) setCode(item);
+          }}
+        >
+          <SelectTrigger
+            className="h-6 flex-1 text-[10px] bg-zinc-900 border-zinc-800 text-zinc-400"
+            disabled={history.length === 0}
+          >
+            <SelectValue placeholder={history.length === 0 ? '暂无历史脚本' : '历史脚本（点选回填）'} />
+          </SelectTrigger>
+          <SelectContent className="bg-zinc-900 border-zinc-800">
+            {history.map((h, i) => (
+              <SelectItem key={i} value={String(i)} className="text-[10px] text-zinc-300 focus:bg-zinc-800 focus:text-zinc-100">
+                {(h.split('\n').find((l) => l.trim()) ?? '').slice(0, 48) || '（空脚本）'}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={clearHistory}
+          disabled={history.length === 0}
+          className="h-6 px-2 text-[10px] text-zinc-400 hover:text-zinc-200"
+        >
+          清空历史
+        </Button>
+      </div>
+
       {/* Code editor */}
       <div className="flex-1 min-h-0 px-1 py-1">
         <textarea
@@ -269,16 +343,6 @@ export default function ScriptPanel() {
         <Button
           size="sm"
           variant="ghost"
-          onClick={stopScript}
-          disabled={!isRunning}
-          className="h-6 px-2 text-[10px] text-zinc-400 hover:text-zinc-200"
-        >
-          <Square className="size-3 mr-1" />
-          停止
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
           onClick={clearOutput}
           className="h-6 px-2 text-[10px] text-zinc-400 hover:text-zinc-200"
         >
@@ -287,6 +351,12 @@ export default function ScriptPanel() {
         </Button>
         <div className="flex-1" />
         <span className="text-[9px] text-zinc-600">Ctrl+Enter 运行</span>
+      </div>
+      <div className="px-3 pb-1.5">
+        <p className="text-[9px] text-zinc-600 leading-snug">
+          脚本在界面线程同步执行，运行期间界面无响应、无法中途停止；死循环只能刷新页面恢复。
+          执行前已自动压一笔撤销，跑完或跑错都能 Ctrl+Z 整段退回。
+        </p>
       </div>
 
       {/* Output console */}

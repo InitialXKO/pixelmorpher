@@ -123,6 +123,17 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
     }
   }, [character?.id]);
 
+  // 武装中切换角色时同步会话：片段解析、姿态来源、记录/清帧、关键帧
+  // 导航都按会话的 performCharacterId 落笔，它只在 enterPerform 时写；
+  // 只切 activePuppetSkeletonId 不切它，面板显示与实际写入会分属两个
+  // 角色。enterPerform 无前置条件（重入即整套重设：片段、工具、根节点
+  // 选择一并对齐新角色），这里直接按新角色重入，不另造进入逻辑。
+  useEffect(() => {
+    if (performArmed && character && performCharacterId !== character.id) {
+      enterPerform(character.id);
+    }
+  }, [performArmed, character, performCharacterId]);
+
   const gotoPrevKeyframe = () => {
     const prev = [...keyframedFrames].reverse().find((f) => f < currentFrame);
     if (prev !== undefined) { setPlayState('paused'); setCurrentFrame(prev); }
@@ -154,6 +165,16 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
           帧 {currentFrame}/{totalFrames - 1}
         </span>
       </div>
+
+      {/* ---- 实际使用的片段（时间线选中项不属于操控角色时已回落到该角色的片段） ---- */}
+      {performArmed && character && (
+        <p className="text-[9px] text-gray-500 px-0.5 -mt-1.5">
+          实际片段：{clip ? clip.name : '（无片段）'}
+          {clip && activeAnimationClipId && clip.id !== activeAnimationClipId && (
+            <span className="text-amber-500/90">（时间线选中的片段不属于当前角色，已回落）</span>
+          )}
+        </p>
+      )}
 
       {/* ---- 进入/退出操控（角色用左侧选中的） ---- */}
       <div className="space-y-1.5">

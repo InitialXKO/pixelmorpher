@@ -38,6 +38,7 @@ function previewBlueprintVars(frame: number, character?: Character | null): Reco
     return {};
   }
 }
+import { behaviorHostVars } from '@/lib/behavior-host';
 import { resolvePreviewSprite, getActiveCostumeSet } from '@/lib/sprite-resolve';
 import { generateRenderPlan, executeRenderPlan, evaluateBlueprintTransforms, canvasToPixels, pickClipStateKeyframes } from '@/lib/unified-render';
 import type { Character } from '@/lib/unified-types';
@@ -212,6 +213,18 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
   };
   const flipYFor = (nodeType: string, key: string): boolean =>
     inIkTarget && nodeType === 'transform' && key === 'translateY';
+  // 预览变量：基础拼装（动画变量 + 参数驱动器）之上，行为语境再补喂
+  // 宿主变量——与主画布 evaluateBehaviorTransforms 同一套 behaviorHostVars
+  // 且同为「宿主后盖」的合成顺序（t/phase/moveX/speed01/grounded；
+  // 缺输入轨时 grounded=1、phase 按既有速率推进）。靠宿主变量把关的
+  // 行为图在编辑预览里因此与主画布/包内走同一支。其它语境构成不变。
+  const previewVars = (frame: number): Record<string, number> => {
+    const base = previewBlueprintVars(frame, character);
+    if (inBehavior && character) {
+      return { ...base, ...behaviorHostVars(character, frame, frameRate) };
+    }
+    return base;
+  };
   const neg = (v: number): number => (v === 0 ? 0 : -v);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
@@ -262,10 +275,10 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           if (octx) {
             const editedId = (graph as any)._nodeId as string | undefined;
             // 其余节点：走渲染器自己的两-pass 求值（animateOthers 关时取第 0 帧，保持"他静态"语义）
-            const bpOverrides = evaluateBlueprintTransforms(character, animateOthers ? previewFrame : 0, frameRate, previewBlueprintVars(animateOthers ? previewFrame : 0, character));
+            const bpOverrides = evaluateBlueprintTransforms(character, animateOthers ? previewFrame : 0, frameRate, previewVars(animateOthers ? previewFrame : 0));
             if (editedId && graph) {
               try {
-                const r = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: previewBlueprintVars(previewFrame, character) } as any);
+                const r = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: previewVars(previewFrame) } as any);
                 bpOverrides.set(editedId, {
                   translateX: r.translateX ?? 0, translateY: r.translateY ?? 0, translateZ: r.translateZ ?? 0, rotation: r.rotation ?? 0, tilt: r.tilt ?? 0,
                   scaleX: r.scaleX ?? 1, scaleY: r.scaleY ?? 1, skewX: r.skewX ?? 0, skewY: r.skewY ?? 0,
@@ -319,7 +332,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           const bp = (cn.id === (graph as any)._nodeId) ? graph : cn.blueprint;
           if (bp && (animateOthers || cn.id === (graph as any)._nodeId)) {
             try {
-              const r = evaluateBlueprint(bp, { frame: animateOthers ? frame : 0, frameRate, vars: previewBlueprintVars(animateOthers ? frame : 0, character) } as any);
+              const r = evaluateBlueprint(bp, { frame: animateOthers ? frame : 0, frameRate, vars: previewVars(animateOthers ? frame : 0) } as any);
               t = r;
             } catch {}
           }
@@ -418,7 +431,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           off.width = offW; off.height = offH;
           const octx = off.getContext('2d');
           if (!octx) return undefined;
-          const bpOverrides = evaluateBlueprintTransforms(character, previewFrame, frameRate, previewBlueprintVars(previewFrame, character));
+          const bpOverrides = evaluateBlueprintTransforms(character, previewFrame, frameRate, previewVars(previewFrame));
           const plan = generateRenderPlan({ ...character, blueprint: null }, previewFrame, offW, offH, 'pixel-perfect', frameRate,
             undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
             spritesTable as any, bpOverrides, undefined,
@@ -432,7 +445,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
       const t = evaluateBlueprint(graph, {
         frame: previewFrame,
         frameRate,
-        vars: previewBlueprintVars(previewFrame, character),
+        vars: previewVars(previewFrame),
         ...(isCharGraph ? {
           characterPixels,
           drawToScreen: (cmd: { pixels: import('@/lib/types').PixelGrid }) => { capturedScreenPixels = cmd.pixels; },
@@ -491,7 +504,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
             const out = evaluateNodeOutput(graph, ref.nodeId, {
               frame: previewFrame,
               frameRate,
-              vars: previewBlueprintVars(previewFrame, character),
+              vars: previewVars(previewFrame),
             } as any);
             // out 是该节点的输出 Record，取 pixels 或 output 指定的
             const outVals = out as Record<string, any>;
@@ -1252,7 +1265,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
               </div>
               {/* 节点输出预览（仅全屏模式） */}
               {isFullscreen && (
-                <NodePreview graph={graph} nodeId={node.id} frame={previewFrame} frameRate={frameRate} characterNodes={characterNodes} />
+                <NodePreview graph={graph} nodeId={node.id} frame={previewFrame} frameRate={frameRate} characterNodes={characterNodes} extraVars={inBehavior && character ? previewVars(previewFrame) : undefined} />
               )}
             </div>
           );
@@ -1506,12 +1519,14 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
 }
 
 /** 单节点输出预览（无播放按钮，同步预览帧） */
-function NodePreview({ graph, nodeId, frame, frameRate, characterNodes }: {
+function NodePreview({ graph, nodeId, frame, frameRate, characterNodes, extraVars }: {
   graph: BlueprintGraph;
   nodeId: string;
   frame: number;
   frameRate: number;
   characterNodes?: Array<{ id: string; spritePixels?: import('@/lib/types').PixelGrid | null }>;
+  /** 调用方拼好的预览变量（行为语境含宿主变量）：后盖基础拼装 */
+  extraVars?: Record<string, number>;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -1522,7 +1537,7 @@ function NodePreview({ graph, nodeId, frame, frameRate, characterNodes }: {
     if (!ctx) return;
     try {
       const out = evaluateNodeOutput(graph, nodeId, {
-        frame, frameRate, vars: previewBlueprintVars(frame),
+        frame, frameRate, vars: { ...previewBlueprintVars(frame), ...(extraVars ?? {}) },
         // sprite_source 从这里取像素
         spritePixels: (() => {
           if (characterNodes) {
@@ -1594,7 +1609,7 @@ function NodePreview({ graph, nodeId, frame, frameRate, characterNodes }: {
         ctx.fillText('∅', 4, 12);
       }
     } catch {}
-  }, [graph, nodeId, frame, frameRate]);
+  }, [graph, nodeId, frame, frameRate, extraVars]);
 
   return (
     <div className="px-1.5 pb-1">

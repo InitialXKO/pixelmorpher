@@ -9,6 +9,7 @@ import { buildLive2dModelFromCharacter } from '@/lib/live2d/build-from-character
 import { buildLive2dArchive } from '@/lib/live2d/build-from-model';
 import { allPatternTemplates } from '@/lib/proc-runtime/pattern-library';
 import { allLibraryEntries } from '@/lib/library-entries';
+import { pluginManager } from '@/lib/plugin-manager';
 import type { AnimationClip } from '@/lib/types';
 import { subToPx } from '@/lib/unified-types';
 import GIF from 'gif.js';
@@ -963,6 +964,43 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
     onOpenChange(false);
   }, [onOpenChange, projectName]);
 
+  // ---- Export: Plugin Exporters（插件注册的导出器） ----
+  // 契约（plugin-manager 的 CustomExporterDef）：export(projectData) => Blob，
+  // 这里把当前工程文件对象作为 projectData 传入，返回的 Blob 直接触发下载。
+  const [pluginExportError, setPluginExportError] = useState<string | null>(null);
+  const [pluginExportDone, setPluginExportDone] = useState<string | null>(null);
+  const handlePluginExport = useCallback(
+    (exp: { id: string; name: string; extension: string; export: (projectData: any) => Blob }) => {
+      setPluginExportError(null);
+      setPluginExportDone(null);
+      try {
+        const projectData = useProjectStore.getState().exportProjectFile();
+        const result = exp.export(projectData);
+        if (!(result instanceof Blob)) {
+          setPluginExportError(
+            `插件导出器「${exp.name}」未返回 Blob，无法下载（契约要求 export(projectData) 返回 Blob）`,
+          );
+          return;
+        }
+        const ext = exp.extension.replace(/^\./, '');
+        const url = URL.createObjectURL(result);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${projectName || 'project'}.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        setPluginExportDone(`已用插件导出器「${exp.name}」导出 .${ext} 文件`);
+      } catch (err) {
+        setPluginExportError(
+          `插件导出器「${exp.name}」执行失败: ${(err as Error).message}`,
+        );
+      }
+    },
+    [projectName],
+  );
+
   // ---- Import: Project File (V2.0) ----
   const handleImportProjectFile = useCallback(() => {
     importInputRef.current?.click();
@@ -1149,6 +1187,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       </Select>
     </div>
   );
+
+  // 插件导出器（只列所属插件启用中的；启停口径见 plugin-manager 的 getters）
+  const pluginExporters = pluginManager.getCustomExporters();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1645,6 +1686,48 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
             </div>
           </TabsContent>
         </Tabs>
+
+        {/* ---- Plugin Exporters ---- */}
+        {pluginExporters.length > 0 && (
+          <div className="space-y-2 mt-4">
+            <Label className="text-xs text-gray-400">插件导出</Label>
+            <div className="space-y-1.5">
+              {pluginExporters.map((exp) => {
+                const ownerId = exp.id.slice(0, exp.id.indexOf(':'));
+                const ownerName =
+                  pluginManager.getPlugin(ownerId)?.manifest.name ?? ownerId;
+                return (
+                  <div
+                    key={exp.id}
+                    className="flex items-center justify-between gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5"
+                  >
+                    <span className="text-xs text-gray-300 truncate">
+                      {exp.name}
+                      <span className="text-gray-500">
+                        {' '}
+                        · {ownerName} · .{exp.extension.replace(/^\./, '')}
+                      </span>
+                    </span>
+                    <Button
+                      size="sm"
+                      onClick={() => handlePluginExport(exp)}
+                      className="h-6 px-2 text-[11px] bg-emerald-600 hover:bg-emerald-500 text-white gap-1 shrink-0"
+                    >
+                      <Download className="size-3" />
+                      导出
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+            {pluginExportError && (
+              <p className="text-xs text-red-400">{pluginExportError}</p>
+            )}
+            {pluginExportDone && (
+              <p className="text-xs text-emerald-400">{pluginExportDone}</p>
+            )}
+          </div>
+        )}
 
         <Separator className="bg-white/10" />
 

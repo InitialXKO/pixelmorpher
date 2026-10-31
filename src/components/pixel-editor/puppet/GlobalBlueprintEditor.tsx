@@ -56,6 +56,7 @@ export default function GlobalBlueprintEditor({ character }: GlobalBlueprintEdit
     if (!character || !mergedGraph) return;
     const split = splitBlueprints(mergedGraph, character, outputMap);
     const store = useProjectStore.getState();
+    store.pushUndo('保存全局蓝图');
     for (const [puppetNodeId, graph] of split) {
       store.updateUnifiedNode(character.id, puppetNodeId, { blueprint: graph });
     }

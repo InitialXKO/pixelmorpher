@@ -31,8 +31,8 @@ import { representativeGridForSlot, representativeGridForSlotEx } from '@/lib/pr
 import DynamicPatternEditor from './DynamicPatternEditor';
 import { glowRankByInstanceId, type DynamicPatternInstance } from '@/lib/dynamic-patterns';
 import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import CommitNumberInput from '../shared/CommitNumberInput';
 
 const selCls = 'h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded mt-1 w-full text-gray-300';
 const numCls = 'h-6 text-[10px] bg-[#111128] border-[#1e1e3a]';
@@ -145,10 +145,10 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
           </div>
           <div>
             <Label className="text-[9px] text-gray-600">轮廓外延宽度（px，0=关）</Label>
-            <Input
-              type="number" min={0} max={8} step={1}
+            <CommitNumberInput
+              min={0} max={8} step={1}
               value={app.haloWidth ?? 0}
-              onChange={(e) => patch({ haloWidth: Math.max(0, Math.min(8, Math.floor(Number(e.target.value) || 0))) })}
+              onCommit={(v) => patch({ haloWidth: Math.max(0, Math.min(8, Math.floor(v))) })}
               className={numCls}
             />
             <p className="mt-0.5 text-[9px] text-gray-600">模式可在轮廓外这圈内继续写出（按离轮廓距离选环，如悬环、火焰边）；产物精灵随之变大，枢轴自动补偿。</p>
@@ -174,25 +174,25 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
           <div className="grid grid-cols-3 gap-1.5">
             <div>
               <Label className="text-[9px] text-gray-600">宽</Label>
-              <Input type="number" value={app.shape.size[0]} onChange={(e) => patchShape({ size: [Number(e.target.value) || 1, app.shape.size[1]] })} className={numCls} />
+              <CommitNumberInput value={app.shape.size[0]} onCommit={(v) => patchShape({ size: [v, app.shape.size[1]] })} className={numCls} />
             </div>
             <div>
               <Label className="text-[9px] text-gray-600">高</Label>
-              <Input type="number" value={app.shape.size[1]} onChange={(e) => patchShape({ size: [app.shape.size[0], Number(e.target.value) || 1] })} className={numCls} />
+              <CommitNumberInput value={app.shape.size[1]} onCommit={(v) => patchShape({ size: [app.shape.size[0], v] })} className={numCls} />
             </div>
             <div>
               <Label className="text-[9px] text-gray-600">圆角</Label>
-              <Input type="number" step="0.05" min="0" max="1" value={app.shape.roundness ?? 0} onChange={(e) => patchShape({ roundness: Number(e.target.value) || 0 })} className={numCls} />
+              <CommitNumberInput step="0.05" min="0" max="1" value={app.shape.roundness ?? 0} onCommit={(v) => patchShape({ roundness: v })} className={numCls} />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-1.5">
             <div>
               <Label className="text-[9px] text-gray-600">中心偏移 X</Label>
-              <Input type="number" value={app.centerOffset[0]} onChange={(e) => patch({ centerOffset: [Number(e.target.value) || 0, app.centerOffset[1]] })} className={numCls} />
+              <CommitNumberInput value={app.centerOffset[0]} onCommit={(v) => patch({ centerOffset: [v, app.centerOffset[1]] })} className={numCls} />
             </div>
             <div>
               <Label className="text-[9px] text-gray-600">中心偏移 Y</Label>
-              <Input type="number" value={app.centerOffset[1]} onChange={(e) => patch({ centerOffset: [app.centerOffset[0], Number(e.target.value) || 0] })} className={numCls} />
+              <CommitNumberInput value={app.centerOffset[1]} onCommit={(v) => patch({ centerOffset: [app.centerOffset[0], v] })} className={numCls} />
             </div>
           </div>
           {app.shape.kind === 'poly' && (

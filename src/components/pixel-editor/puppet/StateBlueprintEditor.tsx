@@ -56,6 +56,7 @@ export default function StateBlueprintEditor({ character }: StateBlueprintEditor
 
   const handleSave = useCallback(() => {
     if (!character || !localGraph) return;
+    useProjectStore.getState().pushUndo('保存状态蓝图');
     updateUnifiedCharacter(character.id, { stateBlueprint: localGraph });
     setEditing(false);
     setLocalGraph(null);
@@ -63,6 +64,7 @@ export default function StateBlueprintEditor({ character }: StateBlueprintEditor
 
   const handleDelete = useCallback(() => {
     if (!character) return;
+    useProjectStore.getState().pushUndo('删除状态蓝图');
     updateUnifiedCharacter(character.id, { stateBlueprint: null });
     setEditing(false);
     setLocalGraph(null);

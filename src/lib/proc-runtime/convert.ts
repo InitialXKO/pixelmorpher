@@ -1259,14 +1259,24 @@ export function convertCharacterToRuntimePackage(
       if (unsupported.length) warnings.push(`表演「${perf.name}」节点 ${character.nodes[nodeId]?.name ?? nodeId} 含运行时不支持的节点：${unsupported.join('、')}（其数值若未进 transform 输出则无影响）`);
     }
     const afterSlot = perf.afterimageNodeId ? toSlot(perf.afterimageNodeId) : null;
+    if (perf.afterimageNodeId && !afterSlot) {
+      warnings.push(`表演「${perf.name}」：残影部件 ${character.nodes[perf.afterimageNodeId]?.name ?? perf.afterimageNodeId} 解析不到槽位，残影未进包`);
+    }
     if (perf.slashDefId && !findSlashDef(character.slashDefs, perf.slashDefId)) {
       warnings.push(`刀光：表演「${perf.name}」引用的共享定义（${perf.slashDefId}）不存在，未进包`);
+    }
+    // 触发键映射：已知触发名走映射表、单字母 Key[A-Z] 直通，其余回落
+    // KeyJ——回落是静默改键，必须点名（宿主 intent 仍按触发名可用，
+    // 受影响的只是包内建的键盘触发键）。
+    const triggerKey = TRIGGER_KEY_MAP[perf.trigger] ?? (/^Key[A-Z]$/.test(perf.trigger) ? perf.trigger : 'KeyJ');
+    if (!TRIGGER_KEY_MAP[perf.trigger] && !/^Key[A-Z]$/.test(perf.trigger)) {
+      warnings.push(`表演「${perf.name}」：触发名「${perf.trigger}」未映射到已知按键，包内触发键按 KeyJ 进包`);
     }
     performances.push({
       id: perf.id,
       name: perf.name,
       trigger: perf.trigger,
-      triggerKey: TRIGGER_KEY_MAP[perf.trigger] ?? (/^Key[A-Z]$/.test(perf.trigger) ? perf.trigger : 'KeyJ'),
+      triggerKey,
       duration: perf.duration,
       envelope: { in: perf.envelopeIn, out: perf.envelopeOut },
       mode: perf.mode,

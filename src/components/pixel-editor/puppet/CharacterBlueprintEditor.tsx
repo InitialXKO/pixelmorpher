@@ -43,6 +43,7 @@ export default function CharacterBlueprintEditor({ character }: CharacterBluepri
 
   const handleSave = useCallback(() => {
     if (!character || !localGraph) return;
+    useProjectStore.getState().pushUndo('保存角色蓝图');
     const missing = validateCharacterBlueprint(localGraph);
     if (missing.length > 0) {
       // 缺少系统节点时自动补回（不丢弃用户链）
@@ -66,6 +67,7 @@ export default function CharacterBlueprintEditor({ character }: CharacterBluepri
 
   const handleDelete = useCallback(() => {
     if (!character) return;
+    useProjectStore.getState().pushUndo('删除角色蓝图');
     updateUnifiedCharacter(character.id, { blueprint: null });
     setEditing(false);
     setLocalGraph(null);
