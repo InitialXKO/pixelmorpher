@@ -11,6 +11,7 @@ import {
   removeNodeLabel,
 } from './blueprint/eval';
 import { registerNodeSpec, removeNodeSpec } from './blueprint/specs';
+import { pixels as pixelsVal } from './blueprint/ir';
 
 export interface PluginManifest {
   id: string;
@@ -97,21 +98,27 @@ export class PluginManagerClass {
         // 注册为蓝图节点
         const nodeType = `plugin_${manifest.id}_${mod.name}`;
         registerEvaluator(nodeType, (_node, inputs, _ctx) => {
-          const pixelsInput = (inputs as any).pixels;
+          // 图求值的 pixels 值是 ir 形态 { type:'pixels', grid }；旧桥
+          // 只认 { value } 形态，真实图里 execute 收到值对象、抛
+          // 「.map 非函数」被求值器吞成空输出——插件节点在真链里恒
+          // 失效（旧探针喂的是手拼 { value } 输入，未能证伪）。入口按
+          // grid → value → 裸数组归一，出口一律回 ir 形态，下游内置
+          // 节点的 asPixels 才读得到。
+          const rawPixels = (inputs as any).pixels;
           const inputPixels: (string | null)[][] =
-            pixelsInput?.value ?? pixelsInput ?? [];
+            rawPixels?.grid ?? rawPixels?.value ?? (Array.isArray(rawPixels) ? rawPixels : []);
           // 启停在求值层生效：所属插件被禁用（或已卸载但求值器尚在）
           // 时直通输入像素。这里查的是 manager 自身的状态（闭包捕获
           // 本实例），不让 blueprint/eval 反向依赖 manager。
           if (!this.plugins.get(manifest.id)?.enabled) {
-            return { pixels: { value: inputPixels } as any };
+            return { pixels: pixelsVal(inputPixels) };
           }
           const params: Record<string, any> = {};
           for (const p of mod.params) {
             params[p.name] = (_node as any).params?.[p.name] ?? p.default;
           }
           const output = mod.execute(inputPixels, params);
-          return { pixels: { value: output } as any };
+          return { pixels: pixelsVal(output as (string | null)[][]) };
         });
         registerNodeSpec(nodeType, {
           inputs: ['pixels'],

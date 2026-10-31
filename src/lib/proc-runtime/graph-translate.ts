@@ -4,9 +4,10 @@
 // - 行为（无限过程）：结构翻译——节点 1:1 映射到运行时求值器（eval-src）
 //   的实现集，图原样进包实时求值（units='main'，通道在 transform 处换算）。
 // 两条路共用方言表（按语境分类）与报告口径：不支持的节点逐条点名，不静默。
-import type { BlueprintGraph, BlueprintInput } from '../blueprint/ir';
-import { isRef } from '../blueprint/ir';
-import { evaluateBlueprint } from '../blueprint/eval';
+import type { BlueprintGraph, BlueprintInput, BlueprintEvalContext } from '../blueprint/ir';
+import { asPixels, isRef } from '../blueprint/ir';
+import { evaluateBlueprint, evaluateNodeOutput, listBlueprintNodeTypes } from '../blueprint/eval';
+import type { PixelGrid } from '../types';
 import { dialectOf } from './dialect';
 
 /** 运行时引用：节点 id + 输出口（缺省 'out'） */
@@ -220,6 +221,9 @@ import type { RuntimePixelGraph } from './pixel-src';
 export interface PixelGraphExtraction {
   graph?: RuntimePixelGraph;
   warnings: string[];
+  /** 整链因含运行时不支持节点被拒时给出：链终点节点 id 与链内节点
+   * id 集（供导出「烘焙」档接管静态求值；drop 档不读此字段） */
+  rejectedChain?: { endpoint: string; nodeIds: string[] };
 }
 
 /**
@@ -272,7 +276,7 @@ export function extractPixelGraph(graph: BlueprintGraph): PixelGraphExtraction {
       warnings.push(`像素链节点 ${node.id}（${node.type}）不在运行时支持集，整链未进包`);
     }
   }
-  if (unsupported) return { warnings };
+  if (unsupported) return { warnings, rejectedChain: { endpoint: pxIn.nodeId, nodeIds: [...keep] } };
   const nodes: RuntimePixelGraph['nodes'] = [];
   for (const id of keep) {
     const node = byId.get(id)!;
@@ -302,4 +306,78 @@ export function extractPixelGraph(graph: BlueprintGraph): PixelGraphExtraction {
     nodes.push(mini);
   }
   return { graph: { nodes, out: pxIn.nodeId }, warnings };
+}
+
+/** 帧相关/有状态节点：静态烘焙会把某一帧的状态冻进瓦片，逐类点名拒 */
+const BAKE_TYPE_BLACKLIST: Record<string, string> = {
+  spring: '有状态（弹簧历史）',
+  hold: '与历史相关（保持采样）',
+  var: '变量在烘焙时会被冻结',
+};
+
+/**
+ * 导出「烘焙」档：把一条因含运行时不支持节点而会被整链拒绝的像素链，
+ * 在编辑器侧以部件代表图为源静态求值，产出可直接替换代表图的网格。
+ * 烘前逐项校验（任一不过回落整链拒绝，reason 区分原因）：
+ * - 链起源为 costume / character_source（跨图读源、代表图口径下源不
+ *   唯一）拒；
+ * - 链中任一节点无求值器（插件未装/已卸——evaluateNodeOutput 对无
+ *   求值器节点是静默跳过，不验会烘出残图）拒；
+ * - spring / hold / var 三类帧相关/有状态节点拒，其余链在 frame
+ *   0/7/23 各以全新 ctx 求值一次、任一输出不一致按「链随帧变化」拒；
+ * - 求值抛错、无像素输出、输出尺寸与源图不一致拒。
+ * 校验全过才返回 frame 0 的输出（三帧已证一致，取哪帧等价）。
+ */
+export function bakePixelChainStatic(
+  graph: BlueprintGraph,
+  chain: { endpoint: string; nodeIds: string[] },
+  source: PixelGrid,
+  frameRate: number,
+): { ok: true; data: PixelGrid } | { ok: false; reason: string } {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const known = new Set(listBlueprintNodeTypes());
+  for (const id of chain.nodeIds) {
+    const node = byId.get(id);
+    if (!node) return { ok: false, reason: `链引用了不存在的节点 ${id}` };
+    if (node.type === 'costume' || node.type === 'character_source') {
+      return { ok: false, reason: `链含 ${node.type} 节点（跨图读源），代表图口径下源不唯一` };
+    }
+    const bl = BAKE_TYPE_BLACKLIST[node.type];
+    if (bl) return { ok: false, reason: `链含 ${node.type} 节点（${bl}）` };
+    if (!known.has(node.type)) {
+      return { ok: false, reason: `链节点 ${node.id}（${node.type}）无求值器（插件未安装或已卸载）` };
+    }
+  }
+  const srcW = source[0]?.length ?? 0;
+  const srcH = source.length;
+  const evalAt = (frame: number): PixelGrid | null => {
+    const ctx = { frame, frameRate, vars: {}, spritePixels: source } as unknown as BlueprintEvalContext;
+    const out = evaluateNodeOutput(graph, chain.endpoint, ctx);
+    const px = out?.pixels;
+    return px ? asPixels(px) : null;
+  };
+  let base: PixelGrid | null;
+  try {
+    base = evalAt(0);
+  } catch (e) {
+    return { ok: false, reason: `链求值抛错（${e instanceof Error ? e.message : String(e)}）` };
+  }
+  if (!base) return { ok: false, reason: '链求值无像素输出' };
+  const outW = base[0]?.length ?? 0;
+  if (base.length !== srcH || outW !== srcW) {
+    return { ok: false, reason: `链输出尺寸 ${outW}×${base.length} 与源图 ${srcW}×${srcH} 不一致` };
+  }
+  const baseJson = JSON.stringify(base);
+  for (const f of [7, 23]) {
+    let g: PixelGrid | null;
+    try {
+      g = evalAt(f);
+    } catch (e) {
+      return { ok: false, reason: `链求值抛错（${e instanceof Error ? e.message : String(e)}）` };
+    }
+    if (!g || JSON.stringify(g) !== baseJson) {
+      return { ok: false, reason: '链随帧变化（多帧求值结果不一致）' };
+    }
+  }
+  return { ok: true, data: base };
 }

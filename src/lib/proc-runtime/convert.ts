@@ -35,7 +35,7 @@ import { expandSurfaceGraph, graphHasRefs, subgraphLibraryOf } from './graph-exp
 import { PATTERN_TEMPLATES, type PatternTemplate } from './pattern-templates';
 import { PALETTES } from './palettes';
 import {
-  translatePerformanceGraph, translateBehaviorGraph, simplify, extractPixelGraph,
+  translatePerformanceGraph, translateBehaviorGraph, simplify, extractPixelGraph, bakePixelChainStatic,
   type RuntimeGraph, type RuntimeGraphNode,
 } from './graph-translate';
 import type { RuntimePixelGraph } from './pixel-src';
@@ -755,9 +755,17 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number; palettes?: import('../types').Palette[]; activePaletteId?: string | null; scene?: { solids?: Array<{ x: number; y: number; w: number; h: number }> } }; projectExtras?: { perspectiveForeshorten?: boolean } },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number; palettes?: import('../types').Palette[]; activePaletteId?: string | null; scene?: { solids?: Array<{ x: number; y: number; w: number; h: number }> } }; projectExtras?: { perspectiveForeshorten?: boolean }; bake?: { pluginChain?: 'drop' | 'bake'; corrections?: 'off' | 'standard' | 'extended'; ik?: 'drop' | 'bake' } },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
+  // 导出选项（三项「不进包」处理的用户选择）：缺省 = 现行行为——
+  // 插件像素链不进包、逐帧像素修正现行烘焙、实时 IK 不进包。
+  // 调用方不传 bake 时行为与此前逐位一致。
+  const bakeOpts = {
+    pluginChain: opts?.bake?.pluginChain ?? 'drop',
+    corrections: opts?.bake?.corrections ?? 'standard',
+    ik: opts?.bake?.ik ?? 'drop',
+  } as const;
   // ---- 工程级数据点名（运行时完备性审计缺口 5/7，未修项）：convert
   // 结构上拿不到工程级 store，调用方把计数经 projectExtras 传入，有
   // 则点名，不再静默丢弃。（缺口 3 全局修改器/蓝图已改走 projectData
@@ -981,6 +989,8 @@ export function convertCharacterToRuntimePackage(
   // 网格为口径；参数化部件 v1 点名不进）。行为图一节的「无
   // transform 输出」警告据 pixelCarriedNodes 免发（链已进包）。
   const pixelCarriedNodes = new Set<string>();
+  /** 烘焙档已烘成的各集代表图（服装表建完后回填 __sprite，见下方） */
+  const pendingBakedSprites: Array<{ csId: string; slot: string; data: PixelGrid }> = [];
   for (const part of parts) {
     const nodeId = slotNode.get(part.key);
     const node = nodeId ? character.nodes[nodeId] : undefined;
@@ -989,6 +999,52 @@ export function convertCharacterToRuntimePackage(
       ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers as never) : null);
     if (!rawBp) continue;
     const ext = extractPixelGraph(rawBp as BlueprintGraph);
+    // 烘焙档接管：含运行时不支持节点、原本整链拒绝的像素链，改在编辑
+    // 器侧逐（部件 × 服装集）以代表图为源静态求值、原位替换代表图，
+    // 且不再挂 pixelGraph（防包内二次施加）。校验任一不过 → 回落现行
+    // 整链拒绝并注明未烘成的原因。drop 档不进此分支、行为文案不变。
+    if (!ext.graph && bakeOpts.pluginChain === 'bake' && ext.rejectedChain) {
+      const failBake = (reason: string) => {
+        for (const w of ext.warnings) warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链：${w}`);
+        warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链：已选烘焙处理仍未烘成：${reason}，整链未进包`);
+      };
+      if (!part.spriteKind) { failBake('参数化部件无静态代表图'); continue; }
+      type RepGrid = { w: number; h: number; plug: [number, number]; data: PixelGrid; marks?: SpriteMark[] };
+      const reps: Array<{ source: PixelGrid; set: (data: PixelGrid) => void }> = [];
+      if (part.sprite) {
+        const target = part.sprite as RepGrid;
+        reps.push({ source: target.data, set: (data) => { part.sprite = { ...target, data }; } });
+      }
+      for (const cs of character.costumeSets) {
+        // 全部集都收：生效集在服装表里另有一份 __sprite 副本（切集时
+        // 读它），与 part.sprite 同源同图、须一并烘，否则切回生效集
+        // 会露出未烘的原图
+        const piece = cs.pieces[part.key];
+        if (!piece || piece.parametric) continue;
+        // 该集代表图与服装表 __sprite 的取图口径逐字一致；服装表此刻
+        // 尚未建完，先按同一表达式取源，烘成后等表建完再回填（见
+        // costumes 循环后的「像素链烘焙回填」）
+        const rec = (stackDisplayOf(piece, nodeId) ?? displaySpriteOf(piece, character, part.key, spriteTable, false, rootDir as DirectionIndex)) as RepGrid | undefined;
+        if (!rec) continue;
+        reps.push({ source: rec.data, set: (data) => { pendingBakedSprites.push({ csId: cs.id, slot: part.key, data }); } });
+      }
+      // 先全集求完再统一替换：任一集烘不成整链回落，绝不半烘
+      let failReason: string | null = reps.length > 0 ? null : '无代表图可烘';
+      const bakedData: PixelGrid[] = [];
+      if (!failReason) {
+        const bakeFrameRate = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
+        for (const rep of reps) {
+          const r = bakePixelChainStatic(rawBp as BlueprintGraph, ext.rejectedChain, rep.source, bakeFrameRate);
+          if (!r.ok) { failReason = r.reason; break; }
+          bakedData.push(r.data);
+        }
+      }
+      if (failReason) { failBake(failReason); continue; }
+      reps.forEach((rep, i) => rep.set(bakedData[i]));
+      warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链已静态烘焙进包（含运行时不支持的节点，运行时不再重算）`);
+      pixelCarriedNodes.add(node.id);
+      continue;
+    }
     for (const w of ext.warnings) warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链：${w}`);
     if (!ext.graph) continue;
     if (part.spriteKind) {
@@ -1075,6 +1131,13 @@ export function convertCharacterToRuntimePackage(
     }
     if (Object.keys(stackMap).length > 0) entry.__stack = stackMap;
     costumes[cs.id] = entry;
+  }
+
+  // 像素链烘焙回填：烘焙档在链提取段已逐集烘成（当时服装表未建完、
+  // 按同口径另行取源），这里把各集 __sprite 代表图换成烘焙结果
+  for (const p of pendingBakedSprites) {
+    const map = (costumes[p.csId]?.__sprite ?? undefined) as Record<string, { data: PixelGrid }> | undefined;
+    if (map?.[p.slot]) map[p.slot] = { ...map[p.slot], data: p.data };
   }
 
   // ---- 裁剪面：node.clipPlane → part.clip ----
@@ -1434,6 +1497,55 @@ export function convertCharacterToRuntimePackage(
     }
     return Object.keys(out).length > 0 ? out : undefined;
   };
+  // 修正烘焙三档（bakeOpts.corrections）：off = 三路窗调用点全短路、
+  // 不产替代图（未烘点名按全部修正帧计）；standard = 现行口径逐字；
+  // extended = 现行之上只补「载体缺口」一类——全程窗长扩到最晚修正
+  // 帧（超工程总帧数的修正也能落窗）、全程窗替代图无表演可挂时补发
+  // 载体表演、无轨道角色为全程窗单独开路。stack/像素链部件、参数化
+  // 部件、修正图非显示图三类缺口三档都不扩，未烘点名照旧按已烘集合
+  // 统计（extended 补烘后数字自然消减，不另造统计）。
+  const latestCorrectionFrame = () => {
+    let latest = -1;
+    for (const node of Object.values(character.nodes)) {
+      const fc = node.frameCorrections;
+      if (!fc) continue;
+      for (const [frameStr, entry] of Object.entries(fc)) {
+        if (!entry.commands || entry.commands.length === 0) continue;
+        const abs = Number(frameStr);
+        if (Number.isFinite(abs) && abs > latest) latest = abs;
+      }
+    }
+    return latest;
+  };
+  const fullCorrWinLen = (totalFrames: number) =>
+    bakeOpts.corrections === 'extended'
+      ? Math.max(totalFrames + 1, latestCorrectionFrame() + 1)
+      : totalFrames + 1;
+  // 载体表演：只带 spriteFrames 的空图「轨道」表演（id/trigger 与真
+  // 轨道表演同口径，运行时按同一入口激活、corrPick 同路选帧）。
+  // 已有同 id 表演时不补发（不造双份 'tracks'）、sink 也不并入——
+  // 没挂上包的帧在未烘点名里如实留下。
+  const pushCorrCarrier = (
+    spriteFrames: NonNullable<ReturnType<typeof spriteFramesOf>>,
+    sink: Set<string>,
+    duration: number,
+    mask: unknown,
+  ) => {
+    if (performances.some((p) => p.id === 'tracks')) return;
+    performances.push({
+      id: 'tracks',
+      name: '轨道',
+      trigger: 'tracks',
+      triggerKey: 'KeyT',
+      duration,
+      envelope: { in: 0, out: 0 },
+      mode: 'add',
+      mask,
+      graph: { context: 'performance', nodes: [] },
+      spriteFrames,
+    });
+    for (const k of sink) bakedCorrectionFrames.add(k);
+  };
 
     const clipList = (opts?.clips ?? []).filter((c) =>
       c.puppetCharacterId === character.id
@@ -1472,14 +1584,27 @@ export function convertCharacterToRuntimePackage(
         }
       }
       // 剥离克隆（浅拷贝：只换掉驱动姿态的输入，几何/轨道/层级原样共享）
+      // 实时 IK 烘焙档：保留 ikChains 让采样在 computeWorldTransforms 内
+      // 同源求解（其余剥离项照旧，避免与包内 dyn 通道双重施加）；
+      // 不进包档（缺省）：剥成 []，与此前行为逐位一致。
       const stripped: Character = {
         ...character,
         behaviorGraphs: {},
-        ikChains: [],
+        ikChains: bakeOpts.ik === 'bake' ? character.ikChains : [],
         nodes: Object.fromEntries(Object.values(character.nodes).map((n) => [
           n.id, { ...n, blueprint: null, modifiers: [] },
         ])),
       };
+      if (bakeOpts.ik === 'bake') {
+        // 烘焙采样不传 variableContext：目标蓝图含变量节点时其输出按
+        // 缺省值求值、逐帧冻结，可能与编辑器实时画面不同，逐链点名。
+        for (const ch of character.ikChains ?? []) {
+          if (!ch.enabled) continue;
+          if (ch.targetBlueprint?.nodes?.some((n) => n.type === 'var')) {
+            warnings.push(`链「${ch.name}」的目标蓝图含变量节点，烘焙按缺省值求值，可能与编辑器实时画面不同`);
+          }
+        }
+      }
       // 实时链的烘焙注入剥离：链根已改实时驱动时，其 angle 轨里可
       // 能还留着烘焙写回的关键帧——采样前按烘焙档案的基准本地角
       // 还原为常值轨，包内位姿不再含该链的烘焙摆幅（运行时由模拟
@@ -1536,6 +1661,11 @@ export function convertCharacterToRuntimePackage(
         warnings.push('钳制锚定：scene 触发不进采样，运行时按 anchor 点标记对全部固体自动锚定');
       }
       const sampleWindow = (startF: number, D: number) => {
+        // 采样画布：实时 IK 烘焙档按工程画布求解（旧式只存 chain.target
+        // 的链按画布中心换算目标，尺寸不对目标就偏），缺省回落 512；
+        // 不进包档恒为 512，与此前采样逐位一致。
+        const sampleCanvasW = bakeOpts.ik === 'bake' ? (opts?.projectData?.canvasWidth ?? 512) : 512;
+        const sampleCanvasH = bakeOpts.ik === 'bake' ? (opts?.projectData?.canvasHeight ?? 512) : 512;
         const samples = new Map<string, Array<{ a: number; x: number; y: number; fore: number }>>();
         const stackSamples = new Map<string, Array<StackFrameSample | null>>();
         for (const snId of stackNodes.keys()) stackSamples.set(snId, []);
@@ -1545,14 +1675,14 @@ export function convertCharacterToRuntimePackage(
         if (hasClamps) {
           if (startF === 0) clampState = new Map();
           else if (clampSnapshots.has(startF)) clampState = cloneClampState(clampSnapshots.get(startF)!);
-          else clampState = steppedClampState(stripped, startF - 1, 0, { canvasWidth: 512, canvasHeight: 512, frameRate: projectFpsTop });
+          else clampState = steppedClampState(stripped, startF - 1, 0, { canvasWidth: sampleCanvasW, canvasHeight: sampleCanvasH, frameRate: projectFpsTop });
         }
         for (let f = startF; f <= startF + D; f++) {
-          let wf = computeWorldTransforms(stripped, f, 512, 512, projectFpsTop);
+          let wf = computeWorldTransforms(stripped, f, sampleCanvasW, sampleCanvasH, projectFpsTop);
           if (clampState) {
             stepClampState(stripped, wf, clampState);
             if (startF === 0) clampSnapshots.set(f + 1, cloneClampState(clampState));
-            wf = computeWorldTransforms(stripped, f, 512, 512, projectFpsTop, undefined, undefined, undefined, undefined, { frozen: clampState });
+            wf = computeWorldTransforms(stripped, f, sampleCanvasW, sampleCanvasH, projectFpsTop, undefined, undefined, undefined, undefined, { frozen: clampState });
           }
           const dirF = (character.rootNodeId ? wf.get(character.rootNodeId)?.variantIndex : undefined) ?? rootDir;
           for (const node of Object.values(character.nodes)) {
@@ -1840,7 +1970,9 @@ export function convertCharacterToRuntimePackage(
       }
       const fullStackFrames = stackFramesForWindow(fullSamples.stackSamples);
       const fullCorrSink = new Set<string>();
-      const fullSpriteFrames = spriteFramesOf(0, totalFrames + 1, fullCorrSink);
+      const fullSpriteFrames = bakeOpts.corrections === 'off'
+        ? undefined
+        : spriteFramesOf(0, fullCorrWinLen(totalFrames), fullCorrSink);
       if (full.graphNodes.length > 0) {
         performances.push({
           id: 'tracks',
@@ -1857,6 +1989,12 @@ export function convertCharacterToRuntimePackage(
         });
         if (fullStackFrames) for (const slot of Object.keys(fullStackFrames)) stackBakedSlots.add(slot);
         for (const k of fullCorrSink) bakedCorrectionFrames.add(k);
+      } else if (bakeOpts.corrections === 'extended' && fullSpriteFrames && fullCorrSink.size > 0) {
+        // extended 载体：全程窗替代图已烘成、但本窗无姿态曲线可挂
+        // （graphNodes 为空、「轨道」表演不发射）——补发载体表演承
+        // 载，否则替代图无表演可挂、corrPick 永远选不到，sink 不并
+        // 入还会让未烘点名把已烘帧误报未烘。
+        pushCorrCarrier(fullSpriteFrames, fullCorrSink, totalFrames / frameRate, full.mask);
       }
       // ---- 追随段：锚定增量曲线烘焙（甲：摆角 + 沿轴缩放） ----
       // 连接点锚死：源部件轨道样本的平移增量不再整件平移跟随者，
@@ -1935,7 +2073,9 @@ export function convertCharacterToRuntimePackage(
         const seg = curvesForWindow(clipSampled.samples, len, `c${ci++}_`, false);
         const segStackFrames = stackFramesForWindow(clipSampled.stackSamples);
         const segCorrSink = new Set<string>();
-        const segSpriteFrames = spriteFramesOf(clip.startFrame, len, segCorrSink);
+        const segSpriteFrames = bakeOpts.corrections === 'off'
+          ? undefined
+          : spriteFramesOf(clip.startFrame, len, segCorrSink);
         // 片段刀光：私有字段或共享定义活引用，同一解析入口
         const clipSlash = resolveClipSlash(clip, character.slashDefs);
         warnClipSlashDangling(clip);
@@ -1967,6 +2107,17 @@ export function convertCharacterToRuntimePackage(
         for (const k of segCorrSink) bakedCorrectionFrames.add(k);
       }
     }
+    // extended 档：无节点轨道的角色为全程窗修正单独开路——采样块被
+    // trackNodes 总门控整体跳过时，姿态采样本体不放行，只把全程窗
+    // 修正烘焙 + 载体表演这一路摘出来跑（standard 维持总门控、off
+    // 本就不烘），免得修正因「无轨道」整批落空。
+    if (bakeOpts.corrections === 'extended' && trackNodes.length === 0) {
+      const rate = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
+      const totalFrames = Math.max(1, Math.round(opts?.totalFrames ?? 0));
+      const corrSink = new Set<string>();
+      const frames = spriteFramesOf(0, fullCorrWinLen(totalFrames), corrSink);
+      if (frames && corrSink.size > 0) pushCorrCarrier(frames, corrSink, totalFrames / rate, []);
+    }
     // 刀光专用片段：角色全无姿态轨道时采样块整体跳过，段表演仍须
     // 生成（刀光本身就是该片段的内容），否则引用悬空且无声丢失
     for (const clip of clipList) {
@@ -1974,7 +2125,9 @@ export function convertCharacterToRuntimePackage(
       warnClipSlashDangling(clip);
       if (!clipSlash || emittedClipPerfIds.has(`clip_${clip.id}`)) continue;
       const rate = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
-      const slashSpriteFrames = spriteFramesOf(clip.startFrame, clip.endFrame - clip.startFrame + 1, bakedCorrectionFrames);
+      const slashSpriteFrames = bakeOpts.corrections === 'off'
+        ? undefined
+        : spriteFramesOf(clip.startFrame, clip.endFrame - clip.startFrame + 1, bakedCorrectionFrames);
       performances.push({
         id: `clip_${clip.id}`,
         name: clip.name,

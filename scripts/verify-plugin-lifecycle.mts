@@ -60,10 +60,12 @@ return {
   cleanup: () => {},
 };`;
 const grid: (string | null)[][] = [['#aabbcc', null], [null, '#000000']];
+// 输入用图求值的真实形态 { type:'pixels', grid }（ir.pixels）——旧版
+// 探针喂手拼的 { value } 形态，恰好掩盖了桥只认 value 的形态 bug
 const evalNode = () =>
   (EVALUATORS[NODE_TYPE] as any)(
     { id: 'n1', type: NODE_TYPE, params: {} },
-    { pixels: { value: grid } },
+    { pixels: { type: 'pixels', grid } },
     {},
   );
 
@@ -81,7 +83,7 @@ ok(BLUEPRINT_NODE_LABELS[NODE_TYPE] === '插件:invert', 'A6 节点标签进注�
 {
   const out = evalNode();
   ok(
-    out?.pixels?.value?.[0]?.[0] === 'INVERTED' && out?.pixels?.value?.[0]?.[1] === null,
+    out?.pixels?.grid?.[0]?.[0] === 'INVERTED' && out?.pixels?.grid?.[0]?.[1] === null,
     'A7 求值器经注册表分发真生效（非空像素被改写、null 保留）',
   );
 }
@@ -117,7 +119,7 @@ ok(!pluginManager.getCustomExporters().some((e) => e.id === 'testplug:textexport
 }
 {
   const out = evalNode();
-  ok(out?.pixels?.value?.[0]?.[0] === '#aabbcc', 'B5 禁用后求值器直通输入像素');
+  ok(out?.pixels?.grid?.[0]?.[0] === '#aabbcc', 'B5 禁用后求值器直通输入像素');
 }
 {
   const stored = JSON.parse(lsData.get(PLUGIN_STORAGE_KEY) || '[]');
@@ -126,7 +128,7 @@ ok(!pluginManager.getCustomExporters().some((e) => e.id === 'testplug:textexport
 pluginManager.togglePlugin('testplug');
 {
   const out = evalNode();
-  ok(out?.pixels?.value?.[0]?.[0] === 'INVERTED', 'B7 恢复启用后求值恢复');
+  ok(out?.pixels?.grid?.[0]?.[0] === 'INVERTED', 'B7 恢复启用后求值恢复');
 }
 // 留 disabled 状态落盘，供 C 段验证恢复时还原启停
 pluginManager.togglePlugin('testplug');

@@ -75,6 +75,14 @@ interface EditorStore extends EditorState {
   } | null) => void;
   // 真 3D FK：透视缩短开关（精灵沿骨骼方向按投影长度比缩放；默认关）
   perspectiveForeshorten: boolean;
+  // 导出选项（导出对话框与程序化预览共用，convert 的 opts.bake）：
+  // 缺省三值 = 现行行为（插件链不进包 / 像素修正现行烘焙 / 实时 IK 不进包）
+  exportBakePluginChain: 'drop' | 'bake';
+  exportBakeCorrections: 'off' | 'standard' | 'extended';
+  exportBakeIk: 'drop' | 'bake';
+  setExportBakePluginChain: (v: 'drop' | 'bake') => void;
+  setExportBakeCorrections: (v: 'off' | 'standard' | 'extended') => void;
+  setExportBakeIk: (v: 'drop' | 'bake') => void;
   procPreviewDock: 'panel' | 'main';
   togglePerspectiveForeshorten: () => void;
   setProcPreviewDock: (dock: 'panel' | 'main') => void;
@@ -280,6 +288,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   ...defaultEditor,
   moveTargetLevel: 'keyframe' as const,
   perspectiveForeshorten: false,
+  exportBakePluginChain: 'drop',
+  exportBakeCorrections: 'standard',
+  exportBakeIk: 'drop',
   procPreviewDock: 'panel',
   showProcedural: false,
 
@@ -324,6 +335,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setEffectCoordinateMode: (mode) => set({ effectCoordinateMode: mode }),
   setPreviewQuality: (quality) => set({ previewQuality: quality }),
   togglePerspectiveForeshorten: () => set((s) => ({ perspectiveForeshorten: !s.perspectiveForeshorten })),
+  setExportBakePluginChain: (v) => set({ exportBakePluginChain: v }),
+  setExportBakeCorrections: (v) => set({ exportBakeCorrections: v }),
+  setExportBakeIk: (v) => set({ exportBakeIk: v }),
   setProcPreviewDock: (dock) => set({ procPreviewDock: dock }),
   toggleProcedural: () => set((s) => ({ showProcedural: !s.showProcedural })),
   setMagicWandTolerance: (tolerance) => set({ magicWandTolerance: tolerance }),

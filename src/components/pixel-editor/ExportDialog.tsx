@@ -1031,6 +1031,13 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
   const [procCharId, setProcCharId] = useState<string | null>(null);
   const [procExportError, setProcExportError] = useState<string | null>(null);
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
+  // 导出选项（与程序化预览共用同一组 store 选择，改值即重算 procPkg）
+  const exportBakePluginChain = useEditorStore((s) => s.exportBakePluginChain);
+  const exportBakeCorrections = useEditorStore((s) => s.exportBakeCorrections);
+  const exportBakeIk = useEditorStore((s) => s.exportBakeIk);
+  const setExportBakePluginChain = useEditorStore((s) => s.setExportBakePluginChain);
+  const setExportBakeCorrections = useEditorStore((s) => s.setExportBakeCorrections);
+  const setExportBakeIk = useEditorStore((s) => s.setExportBakeIk);
   const procCharacter = useMemo(() => {
     // 依赖订阅值而非 getState：对话框开着时改角色/切选中，包必须跟着刷新
     const chars = Object.values(unifiedCharacters ?? {});
@@ -1050,8 +1057,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       projectExtras: {
         perspectiveForeshorten: useEditorStore.getState().perspectiveForeshorten,
       },
+      bake: { pluginChain: exportBakePluginChain, corrections: exportBakeCorrections, ik: exportBakeIk },
     }) : null),
-    [procCharacter, animationClips, sprites, frameRate, totalFrames, proceduralAnimations, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes],
+    [procCharacter, animationClips, sprites, frameRate, totalFrames, proceduralAnimations, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes, exportBakePluginChain, exportBakeCorrections, exportBakeIk],
   );
   const exportProcRuntime = useCallback(() => {
     if (!procCharacter || !procPkg) return;
@@ -1614,6 +1622,51 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs text-gray-400">导出选项</Label>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-gray-500 w-24 shrink-0">插件像素链</span>
+                    <Select value={exportBakePluginChain} onValueChange={(v) => setExportBakePluginChain(v as 'drop' | 'bake')}>
+                      <SelectTrigger className="h-8 text-xs bg-white/5 border-white/10 text-gray-300 flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#1a1a2e] border-white/10">
+                        <SelectItem value="drop">不进包</SelectItem>
+                        <SelectItem value="bake">烘焙进包</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-gray-500 w-24 shrink-0">逐帧像素修正</span>
+                    <Select value={exportBakeCorrections} onValueChange={(v) => setExportBakeCorrections(v as 'off' | 'standard' | 'extended')}>
+                      <SelectTrigger className="h-8 text-xs bg-white/5 border-white/10 text-gray-300 flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#1a1a2e] border-white/10">
+                        <SelectItem value="off">不烘焙</SelectItem>
+                        <SelectItem value="standard">现行烘焙</SelectItem>
+                        <SelectItem value="extended">尽力全烘</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-gray-500 w-24 shrink-0">实时 IK</span>
+                    <Select value={exportBakeIk} onValueChange={(v) => setExportBakeIk(v as 'drop' | 'bake')}>
+                      <SelectTrigger className="h-8 text-xs bg-white/5 border-white/10 text-gray-300 flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#1a1a2e] border-white/10">
+                        <SelectItem value="drop">不进包</SelectItem>
+                        <SelectItem value="bake">烘焙进包</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="text-[10px] text-gray-600">
+                  程序化预览与导出共用这组选择；改档后下方报告即时重算。
+                </div>
               </div>
               {procPkg && procPkg.warnings.length > 0 && (
                 <div className="rounded-md border border-amber-900/50 bg-amber-950/20 p-3 space-y-1">

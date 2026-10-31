@@ -57,6 +57,10 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
   const palettes = useProjectStore((s) => s.palettes);
   const activePaletteId = useProjectStore((s) => s.activePaletteId);
   const perspectiveForeshorten = useEditorStore((s) => s.perspectiveForeshorten);
+  // 导出选项与导出对话框共用同一组 store 选择，任一变化同样触发重建
+  const exportBakePluginChain = useEditorStore((s) => s.exportBakePluginChain);
+  const exportBakeCorrections = useEditorStore((s) => s.exportBakeCorrections);
+  const exportBakeIk = useEditorStore((s) => s.exportBakeIk);
 
   const built = useMemo(() => {
     if (!character) return null;
@@ -69,6 +73,7 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
       libraryEntries: allLibraryEntries(),
       projectData: { proceduralAnimations, globalModifiers, globalBlueprint, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes, canvasWidth, canvasHeight, palettes, activePaletteId },
       projectExtras: { perspectiveForeshorten },
+      bake: { pluginChain: exportBakePluginChain, corrections: exportBakeCorrections, ik: exportBakeIk },
     });
     // 预览是观看宿主：改用墙钟模式按真实时间播。包缺省的 frame 模式
     // 每 rAF tick 恰走一包帧（为录制/回放的确定性而设）——12fps 工程
@@ -77,7 +82,7 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
     pkg.simMode = 'wall';
     const html = buildRuntimeHtml(pkg);
     return { pkg, html, key: hashString(html) };
-  }, [character, projectSprites, animationClips, frameRate, totalFrames, proceduralAnimations, globalModifiers, globalBlueprint, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes, canvasWidth, canvasHeight, perspectiveForeshorten]);
+  }, [character, projectSprites, animationClips, frameRate, totalFrames, proceduralAnimations, globalModifiers, globalBlueprint, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes, canvasWidth, canvasHeight, perspectiveForeshorten, exportBakePluginChain, exportBakeCorrections, exportBakeIk]);
 
   // —— 显示方式 ——
   const dock = useEditorStore((s) => s.procPreviewDock);
@@ -140,6 +145,8 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
         导出缺省按帧走，速度观感会有差别。服装集打开即是当前生效的那套；
         方向从东起播、用数字键锁定切换。点进画面后：A/D 移动、W 跳；
         右上可切服装/触发表演/自动行走。
+        插件像素链、逐帧像素修正、实时 IK 三项的进包方式跟随导出选项，
+        与导出共用同一组选择（在导出对话框的程序化运行时页签里改）。
       </p>
       <div className="flex flex-wrap gap-1">
         <button type="button" className={modeBtn(dock === 'panel')} onClick={() => setDock('panel')}>面板</button>
