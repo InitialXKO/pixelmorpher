@@ -9,7 +9,10 @@ import type {
   Character,
   Node,
   NodeTracks,
+  CostumePiece,
   CostumeSet,
+  Sprite,
+  SpriteRef,
 } from '../unified-types';
 import { createDefaultNode, createDefaultCostumeSet, createDefaultCostumePiece } from '../unified-types';
 import type { DirectionIndex } from '../unified-types';
@@ -86,7 +89,124 @@ export type CharacterSlice = {
   updateUnifiedCostumeSet: (characterId: string, costumeSetId: string, updates: Partial<CostumeSet>) => void;
   /** 给指定节点/方向设置精灵引用。spriteId 为 null 时清除。 */
   setUnifiedCostumeSprite: (characterId: string, costumeSetId: string, nodeId: string, direction: DirectionIndex, spriteId: string | null) => void;
+  /**
+   * 分层版写精灵（参考图装配的目标层写入）：按 layer 落基础层 / 变体层 / 纬度层，
+   * 层序与 resolvePieceSprite 一致——纬度非 0 时只落纬度层（整套优先、层内无变体
+   * 分层）；纬度 0 且给了 variantId 时落 variantSprites[variantId]。
+   * 写变体层且该槽位（character.slotVariants）原先没有任何指派时，顺带把指派设为
+   * 该变体使装配即生效；已有指派不覆盖。返回是否顺带设了指派。
+   */
+  setUnifiedCostumeSpriteLayered: (
+    characterId: string,
+    costumeSetId: string,
+    nodeId: string,
+    direction: DirectionIndex,
+    spriteId: string | null,
+    layer?: { variantId?: string | null; latitude?: number },
+  ) => { autoAssignedVariant: boolean };
 };
+
+/** 写入层（与 sprite-resolve 的解析层序同口径） */
+export interface CostumeSpriteLayer {
+  variantId?: string | null;
+  latitude?: number;
+}
+
+/**
+ * 把一条精灵引用按层写进服装件（纯函数）：纬度非 0 → latitudeSprites[latitude]；
+ * 否则 variantId → variantSprites[variantId]；否则 sprites。spriteId 为 null 时
+ * 删除该格。返回新 piece（不改原对象）。
+ */
+export function applySpriteToPieceLayer(
+  piece: CostumePiece,
+  direction: DirectionIndex,
+  spriteId: string | null,
+  layer?: CostumeSpriteLayer,
+): CostumePiece {
+  const latitude = layer?.latitude ?? 0;
+  const variantId = layer?.variantId ?? null;
+  const writeInto = (
+    table: Partial<Record<DirectionIndex, Sprite | SpriteRef>> | undefined,
+  ): Partial<Record<DirectionIndex, Sprite | SpriteRef>> => {
+    const next = { ...(table ?? {}) };
+    if (spriteId) next[direction] = { spriteId };
+    else delete next[direction];
+    return next;
+  };
+  if (latitude !== 0) {
+    return {
+      ...piece,
+      latitudeSprites: {
+        ...(piece.latitudeSprites ?? {}),
+        [latitude]: writeInto(piece.latitudeSprites?.[latitude]),
+      },
+    };
+  }
+  if (variantId) {
+    return {
+      ...piece,
+      variantSprites: {
+        ...(piece.variantSprites ?? {}),
+        [variantId]: writeInto(piece.variantSprites?.[variantId]),
+      },
+    };
+  }
+  return { ...piece, sprites: writeInto(piece.sprites) };
+}
+
+/**
+ * applySpriteToPieceLayer 的读侧孪生：按同一层序读某格当前的精灵 id。
+ * 嵌入式 Sprite（旧数据）返回其 id；空格返回 null。参考图装配的覆盖门用它
+ * 在发起写入前查目标格是否已有精灵。
+ */
+export function readPieceLayerSpriteId(
+  piece: CostumePiece,
+  direction: DirectionIndex,
+  layer?: CostumeSpriteLayer,
+): string | null {
+  const latitude = layer?.latitude ?? 0;
+  const variantId = layer?.variantId ?? null;
+  const table =
+    latitude !== 0
+      ? piece.latitudeSprites?.[latitude]
+      : variantId
+        ? piece.variantSprites?.[variantId]
+        : piece.sprites;
+  const ref = table?.[direction];
+  if (!ref) return null;
+  return 'spriteId' in ref ? ref.spriteId : ((ref as Sprite).id ?? null);
+}
+
+/** 装配写入记录中与指派回滚相关的最小形态（结构兼容 editor store 的 RefAssemblyWriteRecord） */
+export interface AutoAssignWriteFact {
+  slotKey: string;
+  variantId: string | null;
+  autoAssignedVariant: boolean;
+}
+
+/**
+ * 装配会话放弃时顺带指派的回滚（纯函数）：对本会话顺带设过指派的写入记录，
+ * 若该槽位当前指派仍等于当时顺带设的变体（没被别处改过），删掉该指派；
+ * 已被改过、或非顺带设的，一律不动。无任何变更时原样返回入参（同一引用）；
+ * 删空后返回 undefined（与「从未指派过」的缺省形态一致）。
+ */
+export function computeSlotVariantsAfterAssemblyDiscard(
+  slotVariants: Record<string, string> | undefined,
+  writes: ReadonlyArray<AutoAssignWriteFact>,
+): Record<string, string> | undefined {
+  if (!slotVariants) return slotVariants;
+  let next: Record<string, string> | null = null;
+  for (const w of writes) {
+    if (!w.autoAssignedVariant || !w.variantId) continue;
+    const current = (next ?? slotVariants)[w.slotKey];
+    if (current === w.variantId) {
+      next = { ...(next ?? slotVariants) };
+      delete next[w.slotKey];
+    }
+  }
+  if (!next) return slotVariants;
+  return Object.keys(next).length > 0 ? next : undefined;
+}
 
 function generateId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -700,5 +820,48 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
         },
       };
     });
+  },
+
+  setUnifiedCostumeSpriteLayered: (characterId, costumeSetId, nodeId, direction, spriteId, layer) => {
+    let autoAssignedVariant = false;
+    set((s) => {
+      const character = s.unifiedCharacters[characterId];
+      if (!character) return s;
+      if (!character.costumeSets.some((cs) => cs.id === costumeSetId)) return s;
+      // 件键与渲染/遮罩写侧同口径：node.slot.slotKey，缺省节点 id
+      const node = character.nodes[nodeId];
+      const slotKey = node?.slot?.slotKey ?? nodeId;
+      const latitude = layer?.latitude ?? 0;
+      const variantId = layer?.variantId ?? null;
+      // 变体层写入且槽位无任何指派时顺带指派（使装配即生效）；已有指派不覆盖。
+      // 纬度层与解析层序一致地优先于变体层，故顺带指派只发生在纬度 0 的变体写入。
+      let slotVariants = character.slotVariants;
+      if (spriteId && latitude === 0 && variantId && slotVariants?.[slotKey] === undefined) {
+        slotVariants = { ...(slotVariants ?? {}), [slotKey]: variantId };
+        autoAssignedVariant = true;
+      }
+      return {
+        unifiedCharacters: {
+          ...s.unifiedCharacters,
+          [characterId]: {
+            ...character,
+            ...(slotVariants !== character.slotVariants ? { slotVariants } : {}),
+            costumeSets: character.costumeSets.map((cs) => {
+              if (cs.id !== costumeSetId) return cs;
+              const piece = cs.pieces[slotKey] ?? createDefaultCostumePiece(slotKey);
+              return {
+                ...cs,
+                pieces: {
+                  ...cs.pieces,
+                  [slotKey]: applySpriteToPieceLayer(piece, direction, spriteId, layer),
+                },
+              };
+            }),
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    });
+    return { autoAssignedVariant };
   },
 });

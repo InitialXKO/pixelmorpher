@@ -919,6 +919,7 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
       // 关联到节点：只写当前激活服装的 pieces（新模型），不改模板节点的 sprite
       // （模板是共享的，服装才是向导产物）
       if (maskNodeId) {
+        let autoAssignedVariant = false;
         if (ownerChar && ownerId) {
           // 只写当前激活服装，只写当前方向（对位时选择的方向），不写四个方向
           // 方向：从角色根节点的 transform.variantIndex 读取（新模型）
@@ -926,7 +927,26 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
           const dirIndex = (rootNode?.transform.variantIndex ?? 6) as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
           const activeCsId = ownerChar.activeCostumeSetId;
           const activeCs = (ownerChar.costumeSets ?? []).find((cs) => cs.id === activeCsId);
-          if (activeCs) {
+          // 参考图装配会话目标（向导写入 editor store）：命中本角色时写会话
+          // 目标的服装集与层（基础/变体/纬度）；无上下文（向导外单独用遮罩
+          // 工具）时走下面的现行口径——当前激活服装的基础层。
+          const assemblyTarget = useEditorStore.getState().refAssemblyTarget;
+          const sessionTarget =
+            assemblyTarget && assemblyTarget.characterId === ownerId ? assemblyTarget : null;
+          if (sessionTarget) {
+            const res = projectStore.setUnifiedCostumeSpriteLayered(
+              ownerId,
+              sessionTarget.costumeSetId,
+              maskNodeId,
+              dirIndex,
+              sprite.id!,
+              { variantId: sessionTarget.variantId, latitude: sessionTarget.latitude },
+            );
+            autoAssignedVariant = res.autoAssignedVariant;
+            setLastUpdateInfo(
+              `节点 ${maskNodeId.slice(0, 8)} → 角色 ${ownerId.slice(0, 8)} → Sprite ${sprite.id!.slice(0, 12)} ✓成功`
+            );
+          } else if (activeCs) {
             // Sprite 已在全局表，直接引用 ID（无需转换）
             const spriteId = sprite.id!;
             // 用 slotKey（不是 nodeId）——渲染器按 costumeSet.pieces[node.slot.slotKey] 查找
@@ -954,9 +974,11 @@ export default function MaskBrushOverlay({ canvasWidth, canvasHeight }: Props) {
           setLastUpdateInfo(`✗找不到节点所在角色: ${maskNodeId.slice(0, 8)}`);
         }
         console.log('[MaskBrush] 已关联到节点:', maskNodeId);
-        // 通知向导更新进度
+        // 通知向导更新进度（autoAssignedVariant 供向导记入会话写入记录）
         window.dispatchEvent(
-          new CustomEvent('ref-assembly:mask-done', { detail: { nodeId: maskNodeId } })
+          new CustomEvent('ref-assembly:mask-done', {
+            detail: { nodeId: maskNodeId, autoAssignedVariant },
+          })
         );
       }
 
