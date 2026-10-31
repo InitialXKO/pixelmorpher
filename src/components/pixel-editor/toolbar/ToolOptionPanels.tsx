@@ -9,6 +9,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import type { MotionBlurBrushType } from '@/lib/types';
+import type { SpriteLandmarks } from '@/lib/unified-types';
 import { newMarkId, uniqueMarkName, normalizeSpriteMarks } from '@/lib/sprite-marks';
 
 // ============================================================
@@ -367,12 +368,16 @@ const LANDMARK_META = [
   { key: 'mouth', label: '嘴', color: '#f87171' },       // 红
 ] as const;
 
+// 空特征点回落常量：zustand selector 必须返回身份稳定的引用；无标注/未选中时
+// 统一回落此常量（selector 内现拼 {} 会让 getSnapshot 每次都变 → Maximum update depth）。
+const EMPTY_LANDMARKS: SpriteLandmarks = {};
+
 export function LandmarkControls() {
   const landmarkTarget = useEditorStore((s) => s.landmarkTarget);
   const setLandmarkTarget = useEditorStore((s) => s.setLandmarkTarget);
   const selectedSpriteId = useEditorStore((s) => s.selectedSpriteId);
   const landmarks = useProjectStore((s) =>
-    selectedSpriteId ? s.sprites[selectedSpriteId]?.landmarks ?? {} : {}
+    selectedSpriteId ? s.sprites[selectedSpriteId]?.landmarks ?? EMPTY_LANDMARKS : EMPTY_LANDMARKS
   );
   const updateSpriteLandmarks = useProjectStore((s) => s.updateSpriteLandmarks);
 
