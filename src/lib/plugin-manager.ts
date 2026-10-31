@@ -181,6 +181,15 @@ export class PluginManagerClass {
     return this.plugins.get(id);
   }
 
+  /**
+   * 经代码字符串安装的插件返回其代码原文（导出「实时执行」档随包
+   * 携带用）；编程式以函数对象直接 registerPlugin 的插件没有源码
+   * 可携带，返回 undefined。
+   */
+  getPluginSource(id: string): string | undefined {
+    return this.installedSources.get(id)?.code;
+  }
+
   /** 能力条目所属插件当前是否启用（条目 id 形如 `${插件id}:${名}`） */
   private ownerEnabled(key: string): boolean {
     const pid = key.slice(0, key.indexOf(':'));

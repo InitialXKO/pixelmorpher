@@ -77,10 +77,10 @@ interface EditorStore extends EditorState {
   perspectiveForeshorten: boolean;
   // 导出选项（导出对话框与程序化预览共用，convert 的 opts.bake）：
   // 缺省三值 = 现行行为（插件链不进包 / 像素修正现行烘焙 / 实时 IK 不进包）
-  exportBakePluginChain: 'drop' | 'bake';
+  exportBakePluginChain: 'drop' | 'bake' | 'live';
   exportBakeCorrections: 'off' | 'standard' | 'extended';
   exportBakeIk: 'drop' | 'bake';
-  setExportBakePluginChain: (v: 'drop' | 'bake') => void;
+  setExportBakePluginChain: (v: 'drop' | 'bake' | 'live') => void;
   setExportBakeCorrections: (v: 'off' | 'standard' | 'extended') => void;
   setExportBakeIk: (v: 'drop' | 'bake') => void;
   procPreviewDock: 'panel' | 'main';

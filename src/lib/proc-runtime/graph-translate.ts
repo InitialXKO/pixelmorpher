@@ -233,8 +233,15 @@ export interface PixelGraphExtraction {
  * （跨槽位读图）或范围外像素节点（texture_scroll、bump_light、
  * pixel_edit 等）时整链不进包并逐条点名——不静默丢弃、不部分
  * 进包造成与编辑器分叉。
+ * opts.allowPluginNodes（导出「实时执行」档）：plugin_ 前缀类型
+ * 与内置三类同等放行（包内经 ctx.plugins 注入插件 execute 求值）；
+ * 缺省关，判读与此前逐字一致。
  */
-export function extractPixelGraph(graph: BlueprintGraph): PixelGraphExtraction {
+export function extractPixelGraph(
+  graph: BlueprintGraph,
+  opts?: { allowPluginNodes?: boolean },
+): PixelGraphExtraction {
+  const allowPlugins = !!opts?.allowPluginNodes;
   const warnings: string[] = [];
   const outNode = graph.nodes.find((n) => n.id === graph.outputId)
     ?? graph.nodes.find((n) => n.type === 'screen');
@@ -268,7 +275,8 @@ export function extractPixelGraph(graph: BlueprintGraph): PixelGraphExtraction {
   let unsupported = false;
   for (const id of keep) {
     const node = byId.get(id)!;
-    if (node.type === 'sprite_source' || pixelSet.has(node.type) || numericSet.has(node.type)) continue;
+    if (node.type === 'sprite_source' || pixelSet.has(node.type) || numericSet.has(node.type)
+      || (allowPlugins && node.type.startsWith('plugin_'))) continue;
     unsupported = true;
     if (node.type === 'costume' || node.type === 'character_source') {
       warnings.push(`像素链含 ${node.type} 节点（跨图读像素），v1 不支持，整链未进包`);

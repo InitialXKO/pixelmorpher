@@ -26,6 +26,7 @@ import { resolvePerfSlash, graphWithoutSlashNodes } from '../blueprint/slash-syn
 import { findSlashDef, resolveClipSlash } from '../slash-defs';
 import { rgbaToHexOrNull } from '../engine/utils';
 import { modifiersToBlueprint } from '../blueprint/migrate';
+import { pluginManager } from '../plugin-manager';
 import type { BlueprintGraph, BlueprintInput, BlueprintNode } from '../blueprint/ir';
 import { followAnchoredDeltaAt, glowField, glowMaskCells, glowFollowTargetOf, packBytesBase64, resolveDynamicPatterns, type DynamicPatternParams, type DynamicPatternInstance } from '../dynamic-patterns';
 import { BUILTIN_ENTRIES, libraryIndexOf, surfaceLibEntriesOf } from '../library-entries';
@@ -211,6 +212,10 @@ export interface ProcRuntimePackage {
   simMode?: string;
   /** 实时模拟链定义（无实时链时缺省，包与旧行为一致） */
   chains?: RuntimeSimChain[];
+  /** 随包携带的插件源码（导出「实时执行」档且像素链实际用到插件
+   * 节点时才有）：模板打开时编译执行，把各插件 customModifiers
+   * 的 execute 注入像素链求值。旧包无此字段。 */
+  plugins?: Array<{ id: string; code: string }>;
   /** 工程帧率：粒子模拟的帧量化基数（出生帧/生命帧与编辑器同口径） */
   frameRate: number;
   palettes: Record<string, number[]>;
@@ -755,7 +760,7 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number; palettes?: import('../types').Palette[]; activePaletteId?: string | null; scene?: { solids?: Array<{ x: number; y: number; w: number; h: number }> } }; projectExtras?: { perspectiveForeshorten?: boolean }; bake?: { pluginChain?: 'drop' | 'bake'; corrections?: 'off' | 'standard' | 'extended'; ik?: 'drop' | 'bake' } },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number; palettes?: import('../types').Palette[]; activePaletteId?: string | null; scene?: { solids?: Array<{ x: number; y: number; w: number; h: number }> } }; projectExtras?: { perspectiveForeshorten?: boolean }; bake?: { pluginChain?: 'drop' | 'bake' | 'live'; corrections?: 'off' | 'standard' | 'extended'; ik?: 'drop' | 'bake' } },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
   // 导出选项（三项「不进包」处理的用户选择）：缺省 = 现行行为——
@@ -991,6 +996,9 @@ export function convertCharacterToRuntimePackage(
   const pixelCarriedNodes = new Set<string>();
   /** 烘焙档已烘成的各集代表图（服装表建完后回填 __sprite，见下方） */
   const pendingBakedSprites: Array<{ csId: string; slot: string; data: PixelGrid }> = [];
+  /** 实时执行档实际用到的插件源码（插件 id → 代码原文，去重收集，
+   * 循环结束后挂 pkg.plugins；无链用到时不挂字段） */
+  const livePluginSources = new Map<string, string>();
   for (const part of parts) {
     const nodeId = slotNode.get(part.key);
     const node = nodeId ? character.nodes[nodeId] : undefined;
@@ -998,7 +1006,8 @@ export function convertCharacterToRuntimePackage(
     const rawBp = node.blueprint
       ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers as never) : null);
     if (!rawBp) continue;
-    const ext = extractPixelGraph(rawBp as BlueprintGraph);
+    const ext = extractPixelGraph(rawBp as BlueprintGraph,
+      bakeOpts.pluginChain === 'live' ? { allowPluginNodes: true } : undefined);
     // 烘焙档接管：含运行时不支持节点、原本整链拒绝的像素链，改在编辑
     // 器侧逐（部件 × 服装集）以代表图为源静态求值、原位替换代表图，
     // 且不再挂 pixelGraph（防包内二次施加）。校验任一不过 → 回落现行
@@ -1044,6 +1053,91 @@ export function convertCharacterToRuntimePackage(
       warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链已静态烘焙进包（含运行时不支持的节点，运行时不再重算）`);
       pixelCarriedNodes.add(node.id);
       continue;
+    }
+    // 实时执行档：插件节点随图进包、插件源码随包携带，包内打开时
+    // 编译注入像素链求值（不烘焙、不替换代表图）。逐插件校验——
+    // 未安装 / 已禁用 / 无源码（编程式函数注册）任一命中，该链整链
+    // 回落 drop 形态点名并按原因分开点名；校验全过才收源码。
+    if (bakeOpts.pluginChain === 'live') {
+      const failLive = (extra?: string) => {
+        const dropExt = extractPixelGraph(rawBp as BlueprintGraph);
+        for (const w of dropExt.warnings) warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链：${w}`);
+        if (extra) warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链：${extra}`);
+      };
+      if (!ext.graph) {
+        for (const w of ext.warnings) warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链：${w}`);
+        if (ext.rejectedChain) {
+          warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链：已选实时执行，但链含插件以外的运行时不支持节点，未进包`);
+        }
+        continue;
+      }
+      const pluginNodes = ext.graph.nodes.filter((n) => n.type.startsWith('plugin_'));
+      if (pluginNodes.length > 0) {
+        if (!part.spriteKind) {
+          warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链：参数化部件 v1 不带像素链，未进包（编辑器内照常生效）`);
+          continue;
+        }
+        // 节点类型 plugin_<插件id>_<修改器名> → 所属插件：按已注册
+        // 插件 id 做最长前缀匹配（插件 id 本身可含下划线，朴素切分
+        // 会切错）；无任何已注册插件匹配即未安装。
+        const chainSources = new Map<string, string>();
+        const failReasons: string[] = [];
+        const seenFail = new Set<string>();
+        const failOnce = (key: string, msg: string) => {
+          if (seenFail.has(key)) return;
+          seenFail.add(key);
+          failReasons.push(msg);
+        };
+        for (const n of pluginNodes) {
+          let pid: string | undefined;
+          for (const p of pluginManager.getPlugins()) {
+            const cand = p.manifest.id;
+            if (n.type.startsWith(`plugin_${cand}_`) && (pid === undefined || cand.length > pid.length)) pid = cand;
+          }
+          if (pid === undefined) {
+            failOnce(`uninstalled:${n.type}`, `插件〈${n.type.slice('plugin_'.length)}〉未安装，未按实时执行进包`);
+            continue;
+          }
+          const inst = pluginManager.getPlugin(pid)!;
+          const dispName = inst.manifest.name || pid;
+          if (!inst.enabled) {
+            failOnce(`disabled:${pid}`, `插件〈${dispName}〉已禁用，未按实时执行进包`);
+            continue;
+          }
+          const code = pluginManager.getPluginSource(pid);
+          if (code === undefined) {
+            failOnce(`nosrc:${pid}`, `插件〈${dispName}〉以编程式注册、无源码可携带，未按实时执行进包`);
+            continue;
+          }
+          chainSources.set(pid, code);
+        }
+        if (failReasons.length > 0) {
+          failLive();
+          for (const r of failReasons) warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链：${r}`);
+          continue;
+        }
+        // params 物化：包内 execute 直读节点 params 原表、无人再补
+        // 缺省——按 def 把缺失键用缺省值补齐写回迷你图节点（新对象，
+        // 不改原始蓝图）。def 条目 id 为「插件id:名」，据此重建类型名匹配。
+        const defByType = new Map<string, { params?: Array<{ name: string; default: unknown }> }>();
+        for (const m of pluginManager.getCustomModifiers()) {
+          const ci = m.id.indexOf(':');
+          if (ci < 0) continue;
+          defByType.set(`plugin_${m.id.slice(0, ci)}_${m.id.slice(ci + 1)}`, m as never);
+        }
+        for (const n of pluginNodes) {
+          const def = defByType.get(n.type);
+          if (!def?.params?.length) continue;
+          const merged: Record<string, unknown> = {};
+          for (const p of def.params) merged[p.name] = p.default;
+          Object.assign(merged, n.params ?? {});
+          n.params = merged;
+        }
+        for (const [pid, code] of chainSources) livePluginSources.set(pid, code);
+        part.pixelGraph = ext.graph;
+        pixelCarriedNodes.add(node.id);
+        continue;
+      }
     }
     for (const w of ext.warnings) warnings.push(`节点蓝图「${node.name ?? nodeId}」像素链：${w}`);
     if (!ext.graph) continue;
@@ -2341,6 +2435,9 @@ export function convertCharacterToRuntimePackage(
     characterName: character.name,
     simMode: 'frame',
     chains: simChainsPkg.length > 0 ? simChainsPkg : undefined,
+    plugins: livePluginSources.size > 0
+      ? Array.from(livePluginSources, ([id, code]) => ({ id, code }))
+      : undefined,
     frameRate: projectFpsTop,
     palettes: PALETTES,
     userPalettes: (opts?.projectData?.palettes ?? []).length > 0

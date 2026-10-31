@@ -1628,13 +1628,14 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] text-gray-500 w-24 shrink-0">插件像素链</span>
-                    <Select value={exportBakePluginChain} onValueChange={(v) => setExportBakePluginChain(v as 'drop' | 'bake')}>
+                    <Select value={exportBakePluginChain} onValueChange={(v) => setExportBakePluginChain(v as 'drop' | 'bake' | 'live')}>
                       <SelectTrigger className="h-8 text-xs bg-white/5 border-white/10 text-gray-300 flex-1">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="bg-[#1a1a2e] border-white/10">
                         <SelectItem value="drop">不进包</SelectItem>
                         <SelectItem value="bake">烘焙进包</SelectItem>
+                        <SelectItem value="live">实时执行进包</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1667,6 +1668,11 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
                 <div className="text-[10px] text-gray-600">
                   程序化预览与导出共用这组选择；改档后下方报告即时重算。
                 </div>
+                {exportBakePluginChain === 'live' && (
+                  <div className="text-[10px] text-amber-400/80">
+                    实时执行：导出包将携带插件代码，并在打开时执行该代码。
+                  </div>
+                )}
               </div>
               {procPkg && procPkg.warnings.length > 0 && (
                 <div className="rounded-md border border-amber-900/50 bg-amber-950/20 p-3 space-y-1">

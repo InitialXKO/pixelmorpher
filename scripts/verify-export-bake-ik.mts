@@ -207,7 +207,7 @@ const pkgBake = convertCharacterToRuntimePackage(charChained, undefined, { ...ba
   ok(store.includes('setExportBakePluginChain') && store.includes('setExportBakeCorrections') && store.includes('setExportBakeIk'),
     '3b editor store 三 setter 在位');
   const conv = readFileSync('src/lib/proc-runtime/convert.ts', 'utf8');
-  ok(conv.includes("bake?: { pluginChain?: 'drop' | 'bake'; corrections?: 'off' | 'standard' | 'extended'; ik?: 'drop' | 'bake' }"),
+  ok(conv.includes("bake?: { pluginChain?: 'drop' | 'bake' | 'live'; corrections?: 'off' | 'standard' | 'extended'; ik?: 'drop' | 'bake' }"),
     '3c convert opts.bake 类型在位');
   ok(conv.includes("ik: opts?.bake?.ik ?? 'drop'") && conv.includes("pluginChain: opts?.bake?.pluginChain ?? 'drop'") && conv.includes("corrections: opts?.bake?.corrections ?? 'standard'"),
     '3d convert 缺省解析 = 现行行为（drop/standard/drop）');
