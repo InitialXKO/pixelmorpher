@@ -6,12 +6,21 @@
 // 两条路共用方言表（按语境分类）与报告口径：不支持的节点逐条点名，不静默。
 import type { BlueprintGraph, BlueprintInput, BlueprintEvalContext } from '../blueprint/ir';
 import { asPixels, isRef } from '../blueprint/ir';
-import { evaluateBlueprint, evaluateNodeOutput, listBlueprintNodeTypes } from '../blueprint/eval';
+import { evaluateBlueprint, evaluateNodeOutput, getBlueprintNodeLabel, listBlueprintNodeTypes } from '../blueprint/eval';
 import type { PixelGrid } from '../types';
 import { dialectOf } from './dialect';
 
 /** 运行时引用：节点 id + 输出口（缺省 'out'） */
 export interface RuntimeRef { n: string; o?: string }
+
+/**
+ * 警告点名用的节点类型显示名：插件类型（plugin_ 前缀）优先用注册时的
+ * 标签（如「插件:反相」），插件未安装时注册表里没有标签、回落原始类型
+ * 串；其余类型一律原样返回（内置类型的既有警告文案不借标签改写）。
+ */
+export function nodeTypeDisplayName(type: string): string {
+  return type.startsWith('plugin_') ? getBlueprintNodeLabel(type) : type;
+}
 
 /** 运行时迷你图节点（与 eval-src 的求值器同构） */
 export type RuntimeGraphNode =
@@ -149,7 +158,7 @@ export function translateBehaviorGraph(
     typeReport[n.type] = cls;
     // enabled 短路（主系统口径：params.enabled === false → 节点无输出）
     if ((n.params as Record<string, unknown>)?.enabled === false) {
-      warnings.push(`节点 ${n.id}（${n.type}）已禁用（enabled=false），未进包`);
+      warnings.push(`节点 ${n.id}（${nodeTypeDisplayName(n.type)}）已禁用（enabled=false），未进包`);
       continue;
     }
     if (n.type === 'transform') {
@@ -182,7 +191,7 @@ export function translateBehaviorGraph(
       continue;
     }
     if (cls !== 'direct') {
-      warnings.push(`节点 ${n.id}（${n.type}）运行时不支持，已跳过（其输出按 0 计）`);
+      warnings.push(`节点 ${n.id}（${nodeTypeDisplayName(n.type)}）运行时不支持，已跳过（其输出按 0 计）`);
       continue;
     }
     const params: Record<string, unknown> = { ...(n.params ?? {}) };
@@ -281,7 +290,7 @@ export function extractPixelGraph(
     if (node.type === 'costume' || node.type === 'character_source') {
       warnings.push(`像素链含 ${node.type} 节点（跨图读像素），v1 不支持，整链未进包`);
     } else {
-      warnings.push(`像素链节点 ${node.id}（${node.type}）不在运行时支持集，整链未进包`);
+      warnings.push(`像素链节点 ${node.id}（${nodeTypeDisplayName(node.type)}）不在运行时支持集，整链未进包`);
     }
   }
   if (unsupported) return { warnings, rejectedChain: { endpoint: pxIn.nodeId, nodeIds: [...keep] } };
@@ -353,7 +362,7 @@ export function bakePixelChainStatic(
     const bl = BAKE_TYPE_BLACKLIST[node.type];
     if (bl) return { ok: false, reason: `链含 ${node.type} 节点（${bl}）` };
     if (!known.has(node.type)) {
-      return { ok: false, reason: `链节点 ${node.id}（${node.type}）无求值器（插件未安装或已卸载）` };
+      return { ok: false, reason: `链节点 ${node.id}（${nodeTypeDisplayName(node.type)}）无求值器（插件未安装或已卸载）` };
     }
   }
   const srcW = source[0]?.length ?? 0;

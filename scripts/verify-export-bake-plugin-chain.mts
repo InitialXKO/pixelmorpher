@@ -114,7 +114,7 @@ for (const [label, opts] of [['缺省', undefined], ['drop', { bake: { pluginCha
   const gem = pkg.parts.find((p) => p.key === 'gem');
   check(`${label}：插件链不挂 pixelGraph`, !gem?.pixelGraph);
   check(`${label}：代表图逐格不变`, gridsEqual(gem?.sprite?.data as never, GRID1), norm(gem?.sprite?.data as never));
-  check(`${label}：整链拒绝点名`, pkg.warnings.some((w) => w.includes(PLUGIN_TYPE) && w.includes('整链未进包')),
+  check(`${label}：整链拒绝点名（用注册标签）`, pkg.warnings.some((w) => w.includes('（插件:redinv）不在运行时支持集') && w.includes('整链未进包')),
     pkg.warnings.join(' | ').slice(0, 200));
   check(`${label}：无已烘交代`, !pkg.warnings.some((w) => w.includes('已静态烘焙进包')));
 }

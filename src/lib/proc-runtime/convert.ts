@@ -36,7 +36,7 @@ import { expandSurfaceGraph, graphHasRefs, subgraphLibraryOf } from './graph-exp
 import { PATTERN_TEMPLATES, type PatternTemplate } from './pattern-templates';
 import { PALETTES } from './palettes';
 import {
-  translatePerformanceGraph, translateBehaviorGraph, simplify, extractPixelGraph, bakePixelChainStatic,
+  translatePerformanceGraph, translateBehaviorGraph, simplify, extractPixelGraph, bakePixelChainStatic, nodeTypeDisplayName,
   type RuntimeGraph, type RuntimeGraphNode,
 } from './graph-translate';
 import type { RuntimePixelGraph } from './pixel-src';
@@ -1412,7 +1412,7 @@ export function convertCharacterToRuntimePackage(
       graphNodes.push(...res.nodes);
       if (!res.ok) warnings.push(`表演「${perf.name}」节点 ${character.nodes[nodeId]?.name ?? nodeId} 的图翻译失败：${res.reason}`);
       else if (res.maxAmp < 1e-4) warnings.push(`表演「${perf.name}」节点 ${character.nodes[nodeId]?.name ?? nodeId} 的图采样后无姿态贡献`);
-      const unsupported = Object.entries(res.typeReport).filter(([, c]) => c === 'unsupported').map(([t]) => t);
+      const unsupported = Object.entries(res.typeReport).filter(([, c]) => c === 'unsupported').map(([t]) => nodeTypeDisplayName(t));
       if (unsupported.length) warnings.push(`表演「${perf.name}」节点 ${character.nodes[nodeId]?.name ?? nodeId} 含运行时不支持的节点：${unsupported.join('、')}（其数值若未进 transform 输出则无影响）`);
     }
     const afterSlot = perf.afterimageNodeId ? toSlot(perf.afterimageNodeId) : null;
