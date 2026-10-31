@@ -10,6 +10,7 @@ import { editorSimContextFor } from '@/lib/sim-session';
 import { clearJointDiscs, regenerateJointDiscs } from '@/lib/joint-discs';
 import { renderSpriteEditUnified } from '@/lib/unified-render';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
+import { filterVisibleCharacters, visibleCharactersRecord } from '@/lib/visible-characters';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-render';
 import { beginPickFrame, endPickFrame } from '@/lib/pick-buffer';
 import { useCanvasState } from './canvas/use-canvas-state';
@@ -58,27 +59,8 @@ import { addChildNode, addSocketToNode, deleteNodeSubtree } from '@/lib/node-act
 // PixelCanvas - Central canvas for PixelMorpher pixel animation
 // ============================================================
 
-/**
- * 角色显示过滤：互斥模式下只返回选中角色。
- * - perform 阶段且 showAllCharacters=true → 全部
- * - 否则若 performCharacterId 有值 → 仅该角色
- * - 否则 → 全部（无选中时的回退）
- */
-function filterVisibleCharacters<T extends { id: string }>(
-  characters: T[],
-  session: { showAllCharacters: boolean; performCharacterId: string | null },
-): T[] {
-  if (session.showAllCharacters) {
-    return characters;
-  }
-  if (session.performCharacterId) {
-    const selected = characters.filter((c) => c.id === session.performCharacterId);
-    // 选中角色不在列表里时回退到全部（避免画布空白）
-    return selected.length > 0 ? selected : characters;
-  }
-  return characters;
-}
-
+// 角色显示过滤（filterVisibleCharacters / visibleCharactersRecord）已迁至
+// @/lib/visible-characters：主渲染、拾取、骨骼覆盖层、洋葱皮与拾取读侧共用同一口径。
 export default function PixelCanvas() {
   const s = useCanvasState();
   const interaction = useCanvasInteraction(s);
@@ -168,14 +150,10 @@ export default function PixelCanvas() {
         const unifiedChars = pst.unifiedCharacters ?? {};
         const allCharacters = Object.values(unifiedChars);
         if (allCharacters.length === 0) return;
-        // 角色显示互斥：非 perform 或未开启"显示全部"时，只渲染选中角色
+        // 角色显示互斥：与主渲染同一过滤口径（lib/visible-characters）
         // 新模型：performCharacterId 直接是 unified Character ID
         const session = usePuppetSessionStore.getState();
-        let characters = allCharacters;
-        if (!session.showAllCharacters && session.performCharacterId) {
-          const matched = allCharacters.filter((c) => c.id === session.performCharacterId);
-          if (matched.length > 0) characters = matched;
-        }
+        const characters = filterVisibleCharacters(allCharacters, session);
         for (const character of characters) {
           try {
             // 新模型：Character 已包含 tracks（sync 时合并），无需单独传 keyframes
@@ -281,7 +259,9 @@ export default function PixelCanvas() {
       // 在蓝图挂载后可能还是旧引用，导致播放时读不到 blueprint
       const freshStore = useProjectStore.getState();
       // 新模型：数据直写 unifiedCharacters，无需每帧同步
-      const unifiedCharacters = useProjectStore.getState().unifiedCharacters;
+      // 角色显示互斥：主渲染与拾取编号图共用同一份可见集（隐藏的角色
+      // 既不画、也不能被点中）；未过滤时原表直传，保拾取戳记同一性。
+      const unifiedCharacters = visibleCharactersRecord(useProjectStore.getState().unifiedCharacters, puppetSession);
       const globalBlueprint = useProjectStore.getState().globalBlueprint;
       // 参考图可见时用透明背景，让参考图透出来做底
       const bgColor = (s.referenceImageUrl && s.referenceImageVisible) ? 'transparent' : s.backgroundColor;
@@ -397,7 +377,9 @@ export default function PixelCanvas() {
       const charList = Object.values(unifiedChars);
       renderPuppetSkeletonOverlay(rc, {
         shouldRender: s.showPuppetSkeleton && charList.length > 0,
-        characters: charList, activePuppetSkeletonId: s.activePuppetSkeletonId,
+        // 骨骼是逐角色画的本体可视化，跟主渲染同一可见集（隐藏角色不漏骨骼）；
+        // 下方 activeChar 的附属物（IK 手柄等）仍按 activePuppetSkeletonId 既有口径，不在此列。
+        characters: filterVisibleCharacters(charList, usePuppetSessionStore.getState()), activePuppetSkeletonId: s.activePuppetSkeletonId,
         selectedNodeId: s.selectedNodeId,
         animationClips: useProjectStore.getState().animationClips, sprites: Object.values(useProjectStore.getState().sprites),
       });
