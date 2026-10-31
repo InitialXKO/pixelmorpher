@@ -5,11 +5,13 @@ import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { ArrowLeft, ArrowRight, X, Upload } from 'lucide-react';
 import { useEditorStore, useProjectStore } from '@/lib/store';
+import { refAssemblyComboKey, refImageSlotKey, type RefAssemblyCombo } from '@/lib/store/editor-store';
+import { computeSlotVariantsAfterAssemblyDiscard, readPieceLayerSpriteId } from '@/lib/store/character-slice';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import type { PixelGrid } from '@/lib/types';
 import { initSAM, isSAMReady, setSAMImage } from '@/lib/sam';
 import { inpaintPixels } from '@/lib/inpainting';
-import type { DirectionIndex, NodeTransform, NodeTracks, Sprite } from '@/lib/unified-types';
+import type { CostumePiece, CostumeSet, DirectionIndex, NodeTransform, NodeTracks, Sprite } from '@/lib/unified-types';
 import { collectSubtreeIds, deleteNodeSubtree, ensureChildAttachment } from '@/lib/node-actions';
 import PivotEditor from './PivotEditor';
 
@@ -27,13 +29,59 @@ type Step = 'upload' | 'sam' | 'align' | 'mask' | 'cleanup' | 'confirm';
 let persistedStep: Step = 'upload';
 let persistedSelectedCharacterId: string | null = null;
 let persistedWorkingCostumeId: string | null = null;
-let persistedProcessedNodes: Map<string, string> = new Map();
+// 已处理进度按组合记：键 = refAssemblyComboKey（节点 × 方向 × 纬度 × 写入层），
+// 值带节点与组合本身，确认步按节点归组列组合清单时不必反解键。
+export interface ProcessedComboEntry extends RefAssemblyCombo {
+  nodeId: string;
+  method: string; // 'mask' | 'mirror' | 'copy'
+}
+let persistedProcessedNodes: Map<string, ProcessedComboEntry> = new Map();
+// ---- 参考图分槽：键 `${direction}|${latitude}` → 图片地址 ----
+// 当前槽 = 当前目标方向 × 当前目标纬度；切方向/纬度时当前参考图换成新槽
+// 的图（槽空则清空），由组件内同步 effect 执行。步 1 选图与 SAM 产出都写
+// 进当前槽。槽内 blob 地址在清表时回收（正显示的那张除外，它的回收归
+// handleClose 的既有口径，见 clearRefImageSlots）。
+let persistedRefImageSlots: Map<string, string> = new Map();
+// 当前 referenceImageUrl 归属的槽键；null = 尚未归属（首次由同步 effect
+// 把已在显示的图收编进当前槽，而不是清空——向导外设入的参考图不许丢）。
+let persistedRefImageSlotKey: string | null = null;
+function clearRefImageSlots(revokeDisplayed = false) {
+  const displayed = useEditorStore.getState().referenceImageUrl;
+  for (const url of persistedRefImageSlots.values()) {
+    if (url.startsWith('blob:') && (revokeDisplayed || url !== displayed)) {
+      URL.revokeObjectURL(url);
+    }
+  }
+  persistedRefImageSlots.clear();
+  persistedRefImageSlotKey = null;
+}
 // SAM 分割步点选图的缩放/平移视角（原图与预览图共用一份，两图交替不跳）：
 // 与 step 同理模块级持久化，切步/重挂不丢；换新参考图时由组件内 effect 复位。
 let persistedSamView = { scale: 1, x: 0, y: 0 };
 let persistedPoseSnapshot: {
   charKey: string;
+  /** 会话开始前的角色纬度（与姿态同快照：会话期间角色纬度切到目标纬度，结束时恢复） */
+  latitude: number;
   nodes: Map<string, { transform: NodeTransform; tracks: NodeTracks }>;
+} | null = null;
+// ---- 装配目标（会话语义与快照，同理由模块级持久化） ----
+// 目标服装集选择：'new' = 每会话新建一套「X（装配）」；否则为已有服装集 id。
+let persistedTargetCostumeChoice: string = 'new';
+// 写入层与目标纬度是活选择（会话中可改，立即作用于后续写入，不重启会话）。
+let persistedTargetVariantId: string | null = null;
+let persistedTargetLatitude = 0;
+// 当前装配会话的元信息：结束会话时按它决定丢弃方式（新建集删除 / 已有集还原）。
+let persistedSessionMeta: {
+  charKey: string;
+  costumeSetId: string;
+  isNewCostumeSet: boolean;
+} | null = null;
+// 目标为已有集时的会话快照：pieces 深拷贝 + 会话前的生效集（放弃时整表还原）。
+let persistedTargetSnapshot: {
+  charKey: string;
+  costumeSetId: string;
+  pieces: CostumeSet['pieces'];
+  prevActiveCostumeSetId?: string;
 } | null = null;
 export function resetRefWizardStep() {
   persistedStep = 'upload';
@@ -42,6 +90,14 @@ export function resetRefWizardStep() {
   persistedProcessedNodes = new Map();
   persistedSamView = { scale: 1, x: 0, y: 0 };
   persistedPoseSnapshot = null;
+  persistedTargetCostumeChoice = 'new';
+  persistedTargetVariantId = null;
+  persistedTargetLatitude = 0;
+  persistedSessionMeta = null;
+  persistedTargetSnapshot = null;
+  // 参考图槽表随会话状态一并清（正显示的 blob 不在此回收：X 关闭路径已由
+  // handleClose 先行回收；完成路径保留显示，地址留待下次收编/关闭处理）
+  clearRefImageSlots(false);
 }
 
 const STEPS: { id: Step; label: string; optional?: boolean }[] = [
@@ -52,6 +108,24 @@ const STEPS: { id: Step; label: string; optional?: boolean }[] = [
   { id: 'cleanup', label: 'AI清理', optional: true },
   { id: 'confirm', label: '确认' },
 ];
+
+// 方向名（下标与对位步下拉同一约定：6 南 / 2 北 / 0 东 / 4 西 / 斜向 1/7/5/3）
+const DIRECTION_NAMES: Record<number, string> = {
+  0: '东', 1: '东北', 2: '北', 3: '西北', 4: '西', 5: '西南', 6: '南', 7: '东南',
+};
+// 槽位总览的行内方向顺序：南起顺时针
+const DIRECTION_DISPLAY_ORDER = [6, 7, 0, 1, 2, 3, 4, 5];
+
+/** 组合的人话写法：方向 · 层（纬度层 / 变体名 / 基础层），确认步与覆盖确认共用 */
+function refAssemblyComboLabel(
+  combo: RefAssemblyCombo,
+  variantName?: (id: string) => string | undefined,
+): string {
+  const dir = DIRECTION_NAMES[combo.direction] ?? `方向${combo.direction}`;
+  if (combo.latitude !== 0) return `${dir} · 纬度 ${combo.latitude}°`;
+  if (combo.variantId) return `${dir} · 变体「${variantName?.(combo.variantId) ?? combo.variantId}」`;
+  return `${dir} · 基础层`;
+}
 
 const BUILT_IN_REFS = [
   { id: 'knight-front', label: '骑士·正面', url: '/reference-demos/knight-front.webp' },
@@ -258,16 +332,56 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
         tracks: structuredClone(entry.tracks),
       });
     });
+    // 角色纬度与姿态同快照恢复（会话期间被切到目标纬度）
+    ps.updateUnifiedCharacter(snap.charKey, { latitude: snap.latitude });
   };
 
-  // 内部关闭：恢复模板，删工作服装（取消时），清参考图
-  const handleClose = (keepCostume: boolean = false) => {
+  // 结束装配会话：discard 时按目标类型回滚——本会话新建的服装集整套删除；
+  // 已有服装集不许删，pieces 还原为会话快照、生效集还原为会话前。
+  // 两种情况都恢复模板姿态（含纬度）并清目标上下文；keep 时写入原样保留。
+  const endAssemblySession = (discard: boolean) => {
     const ps = useProjectStore.getState();
-    if (!keepCostume && workingCostumeId && selectedCharacterId) {
-      ps.removeUnifiedCostumeSet(selectedCharacterId, workingCostumeId);
+    if (discard) {
+      // 顺带指派回滚（指派是角色级的，新建/已有集都算）：必须在清目标上下文
+      // 前读本会话写入记录——只回滚仍等于当时顺带值的指派，被别处改过的不动。
+      // 不回滚会留窄口子：已有集 pieces 还原后，顺带指派还在、若该槽位本有
+      // 该变体的旧图就会真显示出来，放弃不等于没发生过。
+      const ctx = useEditorStore.getState().refAssemblyTarget;
+      if (ctx && ctx.writes.some((w) => w.autoAssignedVariant)) {
+        const ch = ps.unifiedCharacters[ctx.characterId];
+        if (ch) {
+          const next = computeSlotVariantsAfterAssemblyDiscard(ch.slotVariants, ctx.writes);
+          if (next !== ch.slotVariants) {
+            ps.updateUnifiedCharacter(ctx.characterId, { slotVariants: next });
+          }
+        }
+      }
     }
-    setWorkingCostumeIdState(null);
+    const meta = persistedSessionMeta;
+    if (meta) {
+      if (discard) {
+        if (meta.isNewCostumeSet) {
+          ps.removeUnifiedCostumeSet(meta.charKey, meta.costumeSetId);
+        } else if (persistedTargetSnapshot) {
+          ps.updateUnifiedCostumeSet(meta.charKey, meta.costumeSetId, {
+            pieces: structuredClone(persistedTargetSnapshot.pieces),
+          });
+          ps.updateUnifiedCharacter(meta.charKey, {
+            activeCostumeSetId: persistedTargetSnapshot.prevActiveCostumeSetId,
+          });
+        }
+      }
+      persistedSessionMeta = null;
+      persistedTargetSnapshot = null;
+    }
     restoreTemplatePose();
+    setWorkingCostumeIdState(null);
+    useEditorStore.getState().setRefAssemblyTarget(null);
+  };
+
+  // 内部关闭：结束会话（取消时回滚目标），清参考图
+  const handleClose = (keepCostume: boolean = false) => {
+    endAssemblySession(!keepCostume);
     // 清参考图（否则第二次进入时残留旧 URL）
     const oldUrl = useEditorStore.getState().referenceImageUrl;
     if (oldUrl && oldUrl.startsWith('blob:')) {
@@ -361,11 +475,16 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const [newLimbSocketId, setNewLimbSocketId] = useState('');
   const [newLimbPlugX, setNewLimbPlugX] = useState(0);
   const [newLimbPlugY, setNewLimbPlugY] = useState(0);
-  // 已处理的节点 ID → 方式 ('mask' | 'mirror' | 'copy')；模块级镜像防重挂丢标记
-  const [processedNodes, setProcessedNodes] = useState<Map<string, string>>(() => new Map(persistedProcessedNodes));
+  // 已处理进度（按组合键，见文件头 persistedProcessedNodes）；模块级镜像防重挂丢标记
+  const [processedNodes, setProcessedNodes] = useState<Map<string, ProcessedComboEntry>>(() => new Map(persistedProcessedNodes));
   useEffect(() => {
     persistedProcessedNodes = processedNodes;
   }, [processedNodes]);
+  // ref 镜像：遮罩完成事件回调（依赖只有 sortedNodes）要读最新进度判「下一未处理」
+  const processedNodesRef = useRef(processedNodes);
+  processedNodesRef.current = processedNodes;
+  // 会话目标上下文（确认步读本会话写入记录；写入发生时随之更新触发重渲染）
+  const refAssemblyTarget = useEditorStore((s) => s.refAssemblyTarget);
   // 复制/镜像派生面板状态
   const [deriveSourceId, setDeriveSourceId] = useState<string | null>(null);
   const [deriveAxis, setDeriveAxis] = useState(90);
@@ -417,11 +536,28 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     persistedSelectedCharacterId = id;
     setSelectedCharacterIdState(id);
   };
-  // 工作服装 ID（选模板时创建；初值与变更都同步模块级持久化，防重挂重建）
+  // 工作服装 ID（会话目标服装集；初值与变更都同步模块级持久化，防重挂重建）
   const [workingCostumeId, setWorkingCostumeIdState] = useState<string | null>(persistedWorkingCostumeId);
   useEffect(() => {
     persistedWorkingCostumeId = workingCostumeId;
   }, [workingCostumeId]);
+  // 装配目标三选择（同款模块级持久化）：目标服装集（'new' 或已有集 id）、
+  // 写入层变体、目标纬度。后两者是活选择，会话中改动不重启会话。
+  const [targetCostumeChoice, setTargetCostumeChoiceState] = useState<string>(persistedTargetCostumeChoice);
+  const setTargetCostumeChoice = (v: string) => {
+    persistedTargetCostumeChoice = v;
+    setTargetCostumeChoiceState(v);
+  };
+  const [targetVariantId, setTargetVariantIdState] = useState<string | null>(persistedTargetVariantId);
+  const setTargetVariantId = (v: string | null) => {
+    persistedTargetVariantId = v;
+    setTargetVariantIdState(v);
+  };
+  const [targetLatitude, setTargetLatitudeState] = useState<number>(persistedTargetLatitude);
+  const setTargetLatitude = (v: number) => {
+    persistedTargetLatitude = v;
+    setTargetLatitudeState(v);
+  };
   // 模板姿态快照存模块级 persistedPoseSnapshot（选模板时拍下：
   // 每节点 transform + tracks 深拷贝 + 角色字典键），理由同文件头注释。
 
@@ -445,9 +581,10 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   // 抠图目标节点：直接用画布全局选中的，不再用向导内部的 targetNodeIndex
   const targetNode = (activeSkeleton && selectedNodeId ? activeSkeleton.nodes[selectedNodeId] : null) ?? null;
 
-  // 选中模板：拍姿态快照，创建工作服装，直接进入对位
-  // 不需要"开始对位"按钮：选即开始，直接拖
-  // 不克隆：对位姿态只是抠图取样条件，快照在关闭/完成/换模板时整表恢复
+  // 选中模板（或改目标服装集）：开装配会话——拍姿态快照、定目标服装集、
+  // 直接进入对位。不需要"开始对位"按钮：选即开始，直接拖。
+  // 不克隆：对位姿态只是抠图取样条件，快照在关闭/完成/换模板时整表恢复。
+  // 目标为已有集时先对其 pieces 拍深快照，放弃/换目标时整表还原（不删集）。
   useEffect(() => {
     if (!selectedCharacterId) return;
     const ps = useProjectStore.getState();
@@ -456,19 +593,30 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     if (!sc || !charKey) return;
     const skeleton = sc;
 
-    // 如果已有工作服装且对应当前模板，跳过（避免重复）
-    if (workingCostumeId) {
-      const existing = sc.costumeSets.find((cs) => cs.id === workingCostumeId);
-      if (existing) return;
-      // 否则是重选模板：恢复旧模板姿态，删旧服装（旧服装挂旧角色名下，用快照里的键）
-      const oldCharKey = persistedPoseSnapshot?.charKey;
-      restoreTemplatePose();
-      if (oldCharKey) ps.removeUnifiedCostumeSet(oldCharKey, workingCostumeId);
-    }
+    // 本次想要的目标集：'new' 恒为新建；选定的已有集已被删时回落新建
+    const wantExisting =
+      targetCostumeChoice !== 'new'
+        ? sc.costumeSets.find((cs) => cs.id === targetCostumeChoice) ?? null
+        : null;
 
-    // 拍姿态快照（transform + tracks 深拷贝）
+    // 已有会话且（同角色 + 同目标集）→ 重挂恢复，跳过。
+    // 显式选到会话新建的那套本身也算同目标，不重启。
+    const meta = persistedSessionMeta;
+    if (
+      meta &&
+      meta.charKey === charKey &&
+      workingCostumeId === meta.costumeSetId &&
+      (meta.costumeSetId === wantExisting?.id || (meta.isNewCostumeSet && !wantExisting))
+    ) {
+      return;
+    }
+    // 换角色 / 换目标集：先按丢弃语义结束旧会话（新建集删、已有集还原、姿态恢复）
+    if (meta) endAssemblySession(true);
+
+    // 拍姿态快照（transform + tracks + 角色纬度，深拷贝）
     persistedPoseSnapshot = {
       charKey,
+      latitude: sc.latitude ?? 0,
       nodes: new Map(
         Object.values(skeleton.nodes).map((n) => [
           n.id,
@@ -477,27 +625,117 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
       ),
     };
 
-    // 创建工作服装
-    const costume = ps.addUnifiedCostumeSet(selectedCharacterId, `${sc.name}（装配）`);
-    setWorkingCostumeIdState(costume.id);
-    // 设为当前服装（渲染时应用）
-    ps.updateUnifiedCharacter(charKey, { activeCostumeSetId: costume.id });
+    // 定目标服装集：已有集先拍 pieces 快照；新建沿用现行「X（装配）」
+    let targetId: string;
+    let isNewCostumeSet = false;
+    if (wantExisting) {
+      targetId = wantExisting.id;
+      persistedTargetSnapshot = {
+        charKey,
+        costumeSetId: targetId,
+        pieces: structuredClone(wantExisting.pieces),
+        prevActiveCostumeSetId: sc.activeCostumeSetId,
+      };
+    } else {
+      const costume = ps.addUnifiedCostumeSet(charKey, `${sc.name}（装配）`);
+      targetId = costume.id;
+      isNewCostumeSet = true;
+      persistedTargetSnapshot = null;
+    }
+    persistedSessionMeta = { charKey, costumeSetId: targetId, isNewCostumeSet };
+    setWorkingCostumeIdState(targetId);
+    // 目标集设为生效集（写侧落点口径），角色纬度切到目标纬度（所见即所写层）
+    ps.updateUnifiedCharacter(charKey, {
+      activeCostumeSetId: targetId,
+      ...(targetLatitude !== (sc.latitude ?? 0) ? { latitude: targetLatitude } : {}),
+    });
+    // 写入目标上下文（MaskBrushOverlay 完成时读；含空的写入记录）
+    useEditorStore.getState().setRefAssemblyTarget({
+      characterId: charKey,
+      costumeSetId: targetId,
+      isNewCostumeSet,
+      variantId: targetVariantId,
+      latitude: targetLatitude,
+      writes: [],
+    });
     // 进入操控（画布只显示该角色）
     usePuppetSessionStore.getState().enterPerform(selectedCharacterId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCharacterId]);
+  }, [selectedCharacterId, targetCostumeChoice]);
 
-  // 监听遮罩完成事件，更新进度并自动推进到下一肢体
+  // 写入层 / 目标纬度是活选择：会话中变更只改上下文与角色纬度，不重启会话、
+  // 不丢已抠成果；会话结束时角色纬度随姿态快照恢复到会话前。
+  useEffect(() => {
+    const meta = persistedSessionMeta;
+    if (!meta) return;
+    const es = useEditorStore.getState();
+    const ctx = es.refAssemblyTarget;
+    if (ctx && (ctx.variantId !== targetVariantId || ctx.latitude !== targetLatitude)) {
+      es.setRefAssemblyTarget({ ...ctx, variantId: targetVariantId, latitude: targetLatitude });
+    }
+    const ps = useProjectStore.getState();
+    const ch = ps.unifiedCharacters[meta.charKey];
+    if (ch && (ch.latitude ?? 0) !== targetLatitude) {
+      ps.updateUnifiedCharacter(meta.charKey, { latitude: targetLatitude });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetVariantId, targetLatitude]);
+
+  // 监听遮罩完成事件，按组合更新进度、记入会话写入记录，并自动推进到
+  // 下一个在当前组合下未处理的肢体。组合从最新 store 读（方向 = 写入时刻
+  // 角色根方向，与遮罩写侧落格口径一致；层/纬度 = 目标上下文）。
   useEffect(() => {
     const handler = (e: Event) => {
-      const nodeId = (e as CustomEvent).detail?.nodeId;
+      const detail = (e as CustomEvent).detail as
+        | { nodeId?: string; autoAssignedVariant?: boolean }
+        | undefined;
+      const nodeId = detail?.nodeId;
       if (nodeId) {
-        setProcessedNodes((m) => new Map(m).set(nodeId, 'mask'));
-        // 自动推进到下一个未处理的肢体（更新画布全局选中）
+        const es = useEditorStore.getState();
+        const ctx = es.refAssemblyTarget;
+        const meta = persistedSessionMeta;
+        const chNow = meta ? useProjectStore.getState().unifiedCharacters[meta.charKey] : undefined;
+        const combo: RefAssemblyCombo = {
+          direction: (chNow?.nodes[chNow.rootNodeId]?.transform.variantIndex ?? 6) as DirectionIndex,
+          latitude: ctx?.latitude ?? persistedTargetLatitude,
+          variantId:
+            (ctx?.latitude ?? persistedTargetLatitude) !== 0
+              ? null
+              : (ctx?.variantId ?? persistedTargetVariantId),
+        };
+        const comboKey = refAssemblyComboKey(nodeId, combo);
+        const nextMap = new Map(processedNodesRef.current).set(comboKey, {
+          nodeId,
+          method: 'mask',
+          ...combo,
+        });
+        setProcessedNodes(nextMap);
+        // 记入会话写入记录（节点 × 组合，含顺带指派标记），供确认步展示
+        if (ctx) {
+          const ch = useProjectStore.getState().unifiedCharacters[ctx.characterId];
+          const node = ch?.nodes[nodeId];
+          es.setRefAssemblyTarget({
+            ...ctx,
+            writes: [
+              ...ctx.writes,
+              {
+                nodeId,
+                slotKey: node?.slot?.slotKey ?? nodeId,
+                direction: combo.direction,
+                variantId: combo.variantId,
+                latitude: combo.latitude,
+                autoAssignedVariant: !!detail?.autoAssignedVariant,
+              },
+            ],
+          });
+        }
+        // 自动推进到下一个未处理的肢体（「未处理」按当前组合判；更新画布全局选中）
         const idx = sortedNodes.findIndex((n) => n.id === nodeId);
-        const next = sortedNodes[Math.min(idx + 1, sortedNodes.length - 1)];
-        if (next && next.id !== nodeId) {
-          setSelectedNodeId(next.id);
+        for (let i = idx + 1; i < sortedNodes.length; i++) {
+          if (!nextMap.has(refAssemblyComboKey(sortedNodes[i].id, combo))) {
+            setSelectedNodeId(sortedNodes[i].id);
+            break;
+          }
         }
       }
     };
@@ -535,6 +773,10 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     setSelectedNodeId(newNode.id);
   };
 
+  // 某节点在任一组合下处理过（组合键以 `${nodeId}|` 起头）
+  const hasAnyProcessedCombo = (nodeId: string) =>
+    [...processedNodes.keys()].some((k) => k.startsWith(`${nodeId}|`));
+
   // 找镜像源：按名称匹配 left/right/L/R
   const findMirrorSource = (node: { id: string; name: string }): string | null => {
     const name = node.name.toLowerCase();
@@ -549,23 +791,106 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     if (!mirrorName) return null;
     const src = sortedNodes.find((n) => n.name.toLowerCase() === mirrorName!.toLowerCase());
     // 源节点必须已有精灵（已遮罩或模板自带）
-    if (src && ((src as any).sprite || src.slot || processedNodes.has(src.id))) return src.id;
+    if (src && ((src as any).sprite || src.slot || hasAnyProcessedCombo(src.id))) return src.id;
     return null;
   };
 
   // ---- 抠图方向与精灵解析（与 MaskBrushOverlay 同口径：根节点 variantIndex，缺省南 6） ----
   const wizardDirIndex = (selectedCharacter?.nodes[selectedCharacter.rootNodeId]?.transform.variantIndex ?? 6) as DirectionIndex;
+  // ---- 参考图分槽：当前槽 = 当前目标方向 × 当前目标纬度 ----
+  const currentRefSlotKey = refImageSlotKey(wizardDirIndex, targetLatitude);
+  // 切方向/纬度（含向导外改向，如操控面板切方向）时换图：离开旧槽前先把
+  // 当前显示图归档回旧槽（吸收向导外的换图，如比例垫图），再把当前图换成
+  // 新槽的图（槽空则清空，等用户回步 1 给该槽选图）。首次归属（重挂、或
+  // 向导打开前已设了参考图）只收编进当前槽、不清空。
+  useEffect(() => {
+    const prevKey = persistedRefImageSlotKey;
+    if (prevKey === currentRefSlotKey) return;
+    const es = useEditorStore.getState();
+    if (prevKey === null) {
+      persistedRefImageSlotKey = currentRefSlotKey;
+      const cur = es.referenceImageUrl;
+      if (cur && !persistedRefImageSlots.has(currentRefSlotKey)) {
+        persistedRefImageSlots.set(currentRefSlotKey, cur);
+      }
+      return;
+    }
+    const cur = es.referenceImageUrl;
+    if (cur) persistedRefImageSlots.set(prevKey, cur);
+    else persistedRefImageSlots.delete(prevKey);
+    persistedRefImageSlotKey = currentRefSlotKey;
+    es.setReferenceImageUrl(persistedRefImageSlots.get(currentRefSlotKey) ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentRefSlotKey]);
+  // 槽位总览的行：已有图的纬度 + 当前纬度（当前槽所在行恒显示，其余空行不铺）
+  const refSlotRows = (() => {
+    const lats = new Set<number>();
+    for (const key of persistedRefImageSlots.keys()) lats.add(Number(key.split('|')[1]));
+    lats.add(targetLatitude);
+    return [...lats].sort((a, b) => a - b);
+  })();
+  // 步 1 选图 / SAM 产出：写进当前槽并显示
+  const setRefImageForCurrentSlot = (url: string | null) => {
+    if (url) persistedRefImageSlots.set(currentRefSlotKey, url);
+    else persistedRefImageSlots.delete(currentRefSlotKey);
+    persistedRefImageSlotKey = currentRefSlotKey;
+    setReferenceImageUrl(url);
+  };
   const workingCostume = selectedCharacter?.costumeSets.find((cs) => cs.id === workingCostumeId) ?? null;
-  // 节点在工作服装（优先）或模板槽位中的精灵 ID（SpriteRef 才可解析，与 DressPanel 同口径）
+  // 节点在目标服装集的目标层（优先）或模板槽位同层中的精灵 ID
+  // （SpriteRef 才可解析，与 DressPanel 同口径；读侧认当前写入层，
+  // 进度与派生源看到的都是正在写的那一层的状态）
   const resolveNodeSpriteId = (node: (typeof sortedNodes)[number]): string | null => {
     const key = node.slot?.slotKey ?? node.id;
-    const refCostume = workingCostume?.pieces[key]?.sprites[wizardDirIndex];
-    if (refCostume && 'spriteId' in refCostume) return refCostume.spriteId;
-    const refSlot = node.slot?.sprites?.[wizardDirIndex];
-    if (refSlot && 'spriteId' in refSlot) return refSlot.spriteId;
-    return null;
+    const pickFromPiece = (piece: CostumePiece | undefined): string | null => {
+      if (!piece) return null;
+      const table =
+        targetLatitude !== 0
+          ? piece.latitudeSprites?.[targetLatitude]
+          : targetVariantId
+            ? piece.variantSprites?.[targetVariantId]
+            : piece.sprites;
+      const ref = table?.[wizardDirIndex];
+      return ref && 'spriteId' in ref ? ref.spriteId : null;
+    };
+    return pickFromPiece(workingCostume?.pieces[key]) ?? pickFromPiece(node.slot ?? undefined);
   };
   const targetSpriteId = targetNode ? resolveNodeSpriteId(targetNode) : null;
+  // 当前组合（方向 × 纬度 × 写入层）：进度键、覆盖门、参考图槽都以它为准
+  const currentCombo: RefAssemblyCombo = {
+    direction: wizardDirIndex,
+    latitude: targetLatitude,
+    variantId: targetLatitude !== 0 ? null : targetVariantId,
+  };
+  const variantNameOf = (id: string) =>
+    selectedCharacter?.variantDefs?.find((v) => v.id === id)?.name;
+  // ---- 覆盖门：目标格已有精灵时，写入发起前必须先确认（消灭静默覆盖） ----
+  // 查的格与写侧落格严格同口径：工作服装该件的目标层同格（readPieceLayerSpriteId
+  // 是 applySpriteToPieceLayer 的读侧孪生）。模板槽位同层有图不算占用——
+  // 写侧从不写模板槽位。
+  const targetCellOccupied = (node: (typeof sortedNodes)[number]): boolean => {
+    if (!workingCostume) return false;
+    const piece = workingCostume.pieces[node.slot?.slotKey ?? node.id];
+    if (!piece) return false;
+    return (
+      readPieceLayerSpriteId(piece, wizardDirIndex, {
+        variantId: targetVariantId,
+        latitude: targetLatitude,
+      }) !== null
+    );
+  };
+  const confirmOverwriteIfOccupied = (node: (typeof sortedNodes)[number]): boolean => {
+    if (!targetCellOccupied(node)) return true;
+    return confirm(
+      `「${node.name}」在 ${refAssemblyComboLabel(currentCombo, variantNameOf)} 已有精灵，继续将覆盖它，确定继续？`,
+    );
+  };
+  // 节点在当前组合的进度条目 + 在其它组合处理过的数量（抠图步标记用）
+  const comboProgressOf = (nodeId: string) => {
+    const cur = processedNodes.get(refAssemblyComboKey(nodeId, currentCombo));
+    const total = [...processedNodes.values()].filter((en) => en.nodeId === nodeId).length;
+    return { cur, otherCount: total - (cur ? 1 : 0) };
+  };
   const deriveCandidates = sortedNodes.filter((n) => n.id !== targetNode?.id && resolveNodeSpriteId(n));
 
   // 目标节点变化时，派生源默认预选名称镜像匹配，其次第一个可用源
@@ -585,6 +910,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     if (!srcNode) return;
     const srcSpriteId = resolveNodeSpriteId(srcNode);
     if (!srcSpriteId) return;
+    // 覆盖门：目标格已有精灵时先确认，取消则不派生、不写入
+    if (!confirmOverwriteIfOccupied(targetNode)) return;
     const ps = useProjectStore.getState();
     const derived = ps.deriveSpriteFrom(srcSpriteId, {
       mode,
@@ -593,8 +920,40 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
       name: `${mode === 'mirror' ? '镜像' : '复制'}_${targetNode.name}`,
     });
     if (!derived?.id) return;
-    ps.setUnifiedCostumeSprite(selectedCharacterId, workingCostumeId, targetNode.id, wizardDirIndex, derived.id);
-    setProcessedNodes((m) => new Map(m).set(targetNode.id, mode));
+    // 与遮罩写同一目标层（基础/变体/纬度），并记入会话写入记录
+    const res = ps.setUnifiedCostumeSpriteLayered(
+      selectedCharacterId,
+      workingCostumeId,
+      targetNode.id,
+      wizardDirIndex,
+      derived.id,
+      { variantId: targetVariantId, latitude: targetLatitude },
+    );
+    const es = useEditorStore.getState();
+    const ctx = es.refAssemblyTarget;
+    if (ctx) {
+      es.setRefAssemblyTarget({
+        ...ctx,
+        writes: [
+          ...ctx.writes,
+          {
+            nodeId: targetNode.id,
+            slotKey: targetNode.slot?.slotKey ?? targetNode.id,
+            direction: wizardDirIndex,
+            variantId: targetLatitude !== 0 ? null : targetVariantId,
+            latitude: targetLatitude,
+            autoAssignedVariant: res.autoAssignedVariant,
+          },
+        ],
+      });
+    }
+    setProcessedNodes((m) =>
+      new Map(m).set(refAssemblyComboKey(targetNode.id, currentCombo), {
+        nodeId: targetNode.id,
+        method: mode,
+        ...currentCombo,
+      }),
+    );
   };
 
   // 旋转已抠精灵（绕锚点）：抠图时已按对位姿态转正，此处是事后手动再转，
@@ -619,11 +978,16 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     e.target.value = '';
     if (!file) return;
     const url = URL.createObjectURL(file);
-    setReferenceImageUrl(url);
+    setRefImageForCurrentSlot(url);
     // 确保可见（上次关闭时被隐藏了）
     useEditorStore.getState().setReferenceImageVisible(true);
     setStep('sam');
   };
+
+  // 抠图步目标节点的组合进度（当前组合条目 + 在其它组合处理过的数量）
+  const targetProgress = targetNode
+    ? comboProgressOf(targetNode.id)
+    : { cur: undefined as ProcessedComboEntry | undefined, otherCount: 0 };
 
   return (
     <div className="flex flex-col h-full bg-[#1a1a2e] border-b border-white/10">
@@ -633,8 +997,18 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
           <h2 className="text-sm font-semibold text-gray-200">参考图装配</h2>
           <button
             onClick={() => {
-              // X = 放弃装配：工作服装连同已抠成果一并删除，有成果时先确认防误点
-              if (processedNodes.size > 0 && !confirm('关闭将删除本次装配的工作服装（含已抠出的精灵），确定关闭？')) return;
+              // X = 放弃装配：目标为新建集时整套删除；为已有集时还原到会话
+              // 快照（不删集）。有成果时先确认防误点，文案按目标类型分开。
+              const toExisting = persistedSessionMeta && !persistedSessionMeta.isNewCostumeSet;
+              if (
+                processedNodes.size > 0 &&
+                !confirm(
+                  toExisting
+                    ? '关闭将把目标服装集还原到本次装配开始时的状态（本次写入会回滚），确定关闭？'
+                    : '关闭将删除本次装配的工作服装（含已抠出的精灵），确定关闭？',
+                )
+              )
+                return;
               handleClose(false);
             }}
             className="text-gray-500 hover:text-gray-300"
@@ -669,13 +1043,46 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
         {step === 'upload' && (
           <div className="space-y-3">
             <p className="text-xs text-gray-400">选一张内置参考图，或导入自己的立绘作为抠图底图。</p>
+            {/* 参考图按（方向 × 纬度）分槽：此处选的图只进当前槽；切方向/纬度后回到本步为新槽选图，已选的图按槽保留 */}
+            <div className="space-y-1.5">
+              <div className="text-[11px] text-gray-500">
+                当前槽：{DIRECTION_NAMES[wizardDirIndex]} · {targetLatitude === 0 ? '基础纬度' : `纬度 ${targetLatitude}°`}（参考图按方向 × 纬度分槽）
+              </div>
+              {refSlotRows.map((lat) => (
+                <div key={lat} className="flex items-center gap-1">
+                  <span className="text-[9px] text-gray-500 w-11 shrink-0">
+                    {lat === 0 ? '基础纬度' : `纬度 ${lat}°`}
+                  </span>
+                  <div className="grid grid-cols-8 gap-1 flex-1">
+                    {DIRECTION_DISPLAY_ORDER.map((dir) => {
+                      const key = refImageSlotKey(dir, lat);
+                      const has = persistedRefImageSlots.has(key);
+                      const isCurrent = key === currentRefSlotKey;
+                      return (
+                        <div
+                          key={dir}
+                          title={`${DIRECTION_NAMES[dir]}${has ? '（已有图）' : '（无图）'}${isCurrent ? ' · 当前槽' : ''}`}
+                          className={`text-center text-[9px] py-0.5 rounded border ${
+                            isCurrent
+                              ? 'border-cyan-400 text-cyan-200'
+                              : 'border-transparent'
+                          } ${has ? 'bg-purple-600/40 text-purple-100' : 'bg-white/5 text-gray-600'}`}
+                        >
+                          {DIRECTION_NAMES[dir]}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
             {/* 内置图库 */}
             <div className="grid grid-cols-4 gap-2">
               {BUILT_IN_REFS.map((ref) => (
                 <button
                   key={ref.id}
                   onClick={() => {
-                    setReferenceImageUrl(ref.url);
+                    setRefImageForCurrentSlot(ref.url);
                     useEditorStore.getState().setReferenceImageVisible(true);
                     setStep('sam');
                   }}
@@ -819,7 +1226,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                             }
                           }
                           ctx.putImageData(imgData, 0, 0);
-                          store.setReferenceImageUrl(canvas.toDataURL('image/png'));
+                          // SAM 产出回写当前槽（与回写 referenceImageUrl 同点多写一层槽表）
+                          setRefImageForCurrentSlot(canvas.toDataURL('image/png'));
                           store.clearSAMMask();
                           setSamPreviewUrl(null);
                           setSamPoints([]);
@@ -861,7 +1269,14 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
               <select
                 value={selectedCharacterId ?? ''}
                 onChange={(e) => {
-                  setSelectedCharacterId(e.target.value || null);
+                  const nextId = e.target.value || null;
+                  if (nextId !== selectedCharacterId) {
+                    // 换模板角色：参考图槽是给上一个角色准备的，整表清空
+                    //（连正显示的一张一并回收），当前图随之清空待为新槽选图
+                    clearRefImageSlots(true);
+                    setReferenceImageUrl(null);
+                  }
+                  setSelectedCharacterId(nextId);
                   setProcessedNodes(new Map());
                 }}
                 className="w-full h-8 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
@@ -873,6 +1288,32 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   </option>
                 ))}
               </select>
+            </div>
+            {/* 目标服装集：缺省新建一套（装配）；可选已有集——会话开始对该
+                集 pieces 拍快照，放弃时整表还原（不删集），完成时保留写入 */}
+            <div>
+              <label className="text-xs text-gray-500 block mb-1">目标服装</label>
+              <select
+                value={targetCostumeChoice}
+                onChange={(e) => {
+                  setTargetCostumeChoice(e.target.value);
+                  setProcessedNodes(new Map());
+                }}
+                disabled={!selectedCharacter}
+                className="w-full h-8 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
+              >
+                <option value="new">新建一套（装配）</option>
+                {selectedCharacter?.costumeSets.map((cs) => (
+                  <option key={cs.id} value={cs.id}>
+                    {cs.name}
+                  </option>
+                ))}
+              </select>
+              {targetCostumeChoice !== 'new' && (
+                <p className="text-[10px] text-gray-500 mt-1">
+                  写入已有服装集；放弃装配时该集会还原到本次装配开始时的状态（集本身不删）。
+                </p>
+              )}
             </div>
             {activeSkeleton && selectedCharacter ? (
               <>
@@ -904,9 +1345,14 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                     <option value={5}>西南 (SW)</option>
                     <option value={3}>西北 (NW)</option>
                   </select>
+                  {!persistedRefImageSlots.has(currentRefSlotKey) && (
+                    <p className="text-[10px] text-amber-500 mt-1">
+                      当前方向 × 纬度尚无底图，回「底图」步为该槽选图（已选过的图按槽保留，切回原方向即可见）。
+                    </p>
+                  )}
                 </div>
                 <p className="text-[11px] text-gray-400">
-                  已为「{selectedCharacter?.name}」创建新服装，直接在画布上拖动肢体对位（拖动旋转，Shift+拖动平移）。对位姿态只是抠图的取样条件：抠图时精灵按对位角度自动转正、锚点落在关节上；离开向导后模板姿态自动恢复，不留痕迹。
+                  装配目标服装「{workingCostume?.name ?? '—'}」，直接在画布上拖动肢体对位（拖动旋转，Shift+拖动平移）。对位姿态只是抠图的取样条件：抠图时精灵按对位角度自动转正、锚点落在关节上；离开向导后模板姿态自动恢复，不留痕迹。
                 </p>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-500">底图不透明度</span>
@@ -933,6 +1379,52 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
 
         {step === 'mask' && (
           <div className="space-y-3">
+            {/* 写入目标（活选择）：层与纬度会话中可改，立即作用于后续的
+                遮罩提取与派生写入；解析层序为纬度层整套优先于变体层 */}
+            <div className="p-2 rounded bg-white/5 border border-white/10 space-y-2">
+              <div className="text-[10px] text-gray-500">
+                写入目标服装：{workingCostume?.name ?? '—'}
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 block mb-1">写入层</label>
+                <select
+                  value={targetVariantId ?? ''}
+                  disabled={targetLatitude !== 0}
+                  onChange={(e) => setTargetVariantId(e.target.value || null)}
+                  className="w-full h-7 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200 disabled:opacity-50"
+                >
+                  <option value="">基础层</option>
+                  {(selectedCharacter?.variantDefs ?? []).map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 block mb-1">目标纬度</label>
+                <select
+                  value={targetLatitude}
+                  onChange={(e) => setTargetLatitude(Number(e.target.value))}
+                  className="w-full h-7 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
+                >
+                  <option value={0}>基础纬度（0°）</option>
+                  <option value={45}>45°</option>
+                  <option value={90}>90°</option>
+                  <option value={-45}>−45°</option>
+                  <option value={-90}>−90°</option>
+                </select>
+              </div>
+              {targetLatitude !== 0 ? (
+                <p className="text-[10px] text-amber-500">
+                  纬度层优先于变体层（与解析口径一致）：当前写入只落纬度 {targetLatitude}° 层，写入层选择不生效。角色预览纬度已切到 {targetLatitude}°，离开向导后恢复。
+                </p>
+              ) : targetVariantId ? (
+                <p className="text-[10px] text-gray-500">
+                  写入变体层；被写槽位原先没有任何变体指派时会自动指派为该变体（已有指派不覆盖）。
+                </p>
+              ) : null}
+            </div>
             <p className="text-xs text-gray-400">
               目标肢体（画布上点选）：{targetNode?.name ?? '未选中'}
               {targetNode && (
@@ -955,7 +1447,9 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                     if (!deleteNodeSubtree(activeSkeletonKey!, targetNode.id)) return;
                     setProcessedNodes((m) => {
                       const next = new Map(m);
-                      for (const id of subtreeIds) next.delete(id);
+                      for (const key of [...next.keys()]) {
+                        if (subtreeIds.some((id) => key.startsWith(`${id}|`))) next.delete(key);
+                      }
                       return next;
                     });
                   }}
@@ -1058,6 +1552,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   variant="outline"
                   className="w-full text-[11px]"
                   onClick={() => {
+                    // 覆盖门：目标格已有精灵时先确认，取消则不进入遮罩
+                    if (!confirmOverwriteIfOccupied(targetNode)) return;
                     const store = useEditorStore.getState();
                     store.setMaskNodeId(targetNode.id);
                     store.setEditMode('mask');
@@ -1209,9 +1705,17 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                     </div>
                   </div>
                 )}
-                {processedNodes.get(targetNode.id) && (
+                {targetProgress.cur && (
                   <div className="text-[10px] text-emerald-400">
-                    ✓ 已处理（{processedNodes.get(targetNode.id) === 'mask' ? '遮罩' : processedNodes.get(targetNode.id) === 'copy' ? '复制' : '镜像'}）
+                    ✓ 当前组合已处理（{targetProgress.cur.method === 'mask' ? '遮罩' : targetProgress.cur.method === 'copy' ? '复制' : '镜像'}）
+                    {targetProgress.otherCount > 0 && (
+                      <span className="text-gray-500"> · 另在 {targetProgress.otherCount} 个组合处理过</span>
+                    )}
+                  </div>
+                )}
+                {!targetProgress.cur && targetProgress.otherCount > 0 && (
+                  <div className="text-[10px] text-gray-500">
+                    当前组合未处理（该节点已在其它 {targetProgress.otherCount} 个组合处理过）
                   </div>
                 )}
               </div>
@@ -1235,7 +1739,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 let cleanedSprites = 0;
                 let filledHoles = 0;
                 let skipped = 0;
-                for (const nodeId of processedNodes.keys()) {
+                for (const nodeId of new Set([...processedNodes.values()].map((en) => en.nodeId))) {
                   const node = sortedNodes.find((n) => n.id === nodeId);
                   if (!node) continue;
                   // 与抠图步同一解析口径：工作服装当前方向优先、模板槽位回退。
@@ -1296,31 +1800,68 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
           </div>
         )}
 
-        {step === 'confirm' && (
-          <div className="space-y-3">
-            <p className="text-xs text-gray-400">
-              已处理 {processedNodes.size}/{sortedNodes.length} 个肢体
-            </p>
-            <div className="max-h-48 overflow-y-auto space-y-1">
-              {sortedNodes.map((n) => {
-                const status = processedNodes.get(n.id);
-                return (
-                  <div key={n.id} className="flex items-center gap-2 text-xs px-2 py-1 rounded bg-white/5">
-                    <span className="flex-1 text-gray-300">{n.name}</span>
-                    <span className={status ? 'text-emerald-400' : 'text-gray-600'}>
-                      {status === 'mask' ? '✓ 遮罩' : status === 'mirror' ? '✓ 镜像' : status === 'copy' ? '✓ 复制' : '○ 未处理'}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-            {processedNodes.size < sortedNodes.length && (
-              <div className="text-[11px] text-amber-500">
-                还有 {sortedNodes.length - processedNodes.size} 个肢体未处理，返回抠图步骤继续。
+        {step === 'confirm' && (() => {
+          // 按节点一张清单：行 = 已完成组合（进度）∪ 本会话写入格（目标上下文
+          // writes，会话结束才清，此刻可读），同组合合并一行并标「本会话写入」；
+          // 顺带设了变体指派的写入单独标注。
+          const sessionWrites = refAssemblyTarget?.writes ?? [];
+          const processedNodeCount = sortedNodes.filter((n) =>
+            [...processedNodes.values()].some((en) => en.nodeId === n.id),
+          ).length;
+          return (
+            <div className="space-y-3">
+              <p className="text-xs text-gray-400">
+                已处理 {processedNodeCount}/{sortedNodes.length} 个肢体 · 共 {processedNodes.size} 个组合
+                {sessionWrites.length > 0 && <> · 本会话写入 {sessionWrites.length} 格</>}
+              </p>
+              <div className="max-h-64 overflow-y-auto space-y-1">
+                {sortedNodes.map((n) => {
+                  const entries = [...processedNodes.values()].filter((en) => en.nodeId === n.id);
+                  const writes = sessionWrites.filter((w) => w.nodeId === n.id);
+                  const rowMap = new Map<
+                    string,
+                    { combo: RefAssemblyCombo; method?: string; write?: (typeof writes)[number] }
+                  >();
+                  for (const en of entries) {
+                    rowMap.set(refAssemblyComboKey(n.id, en), { combo: en, method: en.method });
+                  }
+                  for (const w of writes) {
+                    const key = refAssemblyComboKey(n.id, w);
+                    const row = rowMap.get(key);
+                    if (row) row.write = w;
+                    else rowMap.set(key, { combo: w, write: w });
+                  }
+                  const rows = [...rowMap.values()];
+                  return (
+                    <div key={n.id} className="text-xs px-2 py-1 rounded bg-white/5">
+                      <div className="flex items-center gap-2">
+                        <span className="flex-1 text-gray-300">{n.name}</span>
+                        {rows.length === 0 && <span className="text-gray-600">○ 未处理</span>}
+                      </div>
+                      {rows.map((row, i) => (
+                        <div key={i} className="pl-3 text-[11px] text-emerald-400">
+                          ✓ {refAssemblyComboLabel(row.combo, variantNameOf)}
+                          {row.method && (
+                            <>（{row.method === 'mask' ? '遮罩' : row.method === 'copy' ? '复制' : '镜像'}）</>
+                          )}
+                          {row.write && <span className="text-cyan-300"> · 本会话写入</span>}
+                          {row.write?.autoAssignedVariant && (
+                            <span className="text-amber-400"> · 已顺带设为该槽位的变体</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
               </div>
-            )}
-          </div>
-        )}
+              {processedNodeCount < sortedNodes.length && (
+                <div className="text-[11px] text-amber-500">
+                  还有 {sortedNodes.length - processedNodeCount} 个肢体未处理，返回抠图步骤继续。
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* 已抠精灵枢轴重开编辑（弹窗自带确认/取消，直接写全局精灵表） */}
@@ -1349,9 +1890,9 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 // 对位姿态跨 align/mask 两步保留（抠图取样要用），不中途恢复
                 setStep(STEPS[stepIndex + 1].id);
               } else if (stepIndex === STEPS.length - 1) {
-                // 完成：保留工作服装，恢复模板姿态，关向导
-                restoreTemplatePose();
-                setWorkingCostumeIdState(null);
+                // 完成：结束会话保留写入（目标服装集与各层写入原样保留），
+                // 恢复模板姿态与角色纬度，清会话快照与目标上下文，关向导
+                endAssemblySession(false);
                 resetRefWizardStep();
                 onClose();
               }

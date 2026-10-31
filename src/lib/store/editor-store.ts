@@ -26,10 +26,67 @@ import {
   PixelGrid,
   PixelColor,
 } from '../types';
+import type { DirectionIndex } from '../unified-types';
 import { initSAM, setSAMImage as samSetImage, segmentAtPoint as samSegmentAtPoint, segmentWithBox as samSegmentWithBox, disposeSAM as samDispose } from '../sam';
 import { inpaintPixels, samMaskToSelectionMask } from '../inpainting';
 import { applyPixelModifiers, invalidateAnimModifierCache, bakeParamDriverToKeyframes } from '../engine';
 import { modifierRegistry } from '../engine/pixel-modifiers';
+
+/** 参考图装配的一次写入记录（节点 × 层），确认步展示用 */
+export interface RefAssemblyWriteRecord {
+  nodeId: string;
+  slotKey: string;
+  /** 写入方向（写入时刻的角色当前方向，与遮罩/派生落格口径一致） */
+  direction: DirectionIndex;
+  /** 写入的变体层 id；null = 基础层（纬度非 0 时恒为 null——纬度层优先，与解析层序一致） */
+  variantId: string | null;
+  /** 写入纬度：0 = 基础纬度（sprites / variantSprites），非 0 = latitudeSprites[latitude] */
+  latitude: number;
+  /** 本次写入顺带给该槽位设了变体指派（该槽位原先没有任何指派时） */
+  autoAssignedVariant: boolean;
+}
+
+/** 参考图槽键：方向 × 纬度 → 一张底图（向导步 1 分槽选图用） */
+export function refImageSlotKey(direction: number, latitude: number): string {
+  return `${direction}|${latitude}`;
+}
+
+/** 装配进度组合：一个节点在一个（方向 × 纬度 × 写入层）下算一个组合 */
+export interface RefAssemblyCombo {
+  direction: DirectionIndex;
+  latitude: number;
+  /** 写入层变体 id；null = 基础层。纬度非 0 时变体层不生效，键构造时归一为基础 */
+  variantId: string | null;
+}
+
+/**
+ * 进度组合键（纯函数）：节点 × 方向 × 纬度 × 写入层。
+ * 纬度非 0 时变体部分归一为空——与写侧层序一致（纬度层整套优先、层内无变体）。
+ */
+export function refAssemblyComboKey(nodeId: string, combo: RefAssemblyCombo): string {
+  const variantPart = combo.latitude !== 0 ? '' : (combo.variantId ?? '');
+  return `${nodeId}|${combo.direction}|${combo.latitude}|${variantPart}`;
+}
+
+/**
+ * 参考图装配的会话目标上下文：向导进入装配会话时写入、退出时清空。
+ * MaskBrushOverlay 完成提取时读它决定写哪套服装、哪一层；为 null（向导外
+ * 单独用遮罩工具）时走现行口径——当前生效集的基础层、纬度 0。
+ */
+export interface RefAssemblyTarget {
+  /** 目标角色 id（unifiedCharacters 字典键） */
+  characterId: string;
+  /** 目标服装集 id（本会话新建的工作服装，或选定的已有集） */
+  costumeSetId: string;
+  /** true = 本会话新建（放弃时整套删除）；false = 已有集（放弃时按会话快照还原 pieces） */
+  isNewCostumeSet: boolean;
+  /** 写入层变体 id；null = 基础层。纬度非 0 时不生效（纬度层在变体层之外、整套优先） */
+  variantId: string | null;
+  /** 目标纬度（度）：0 = 基础纬度 */
+  latitude: number;
+  /** 本次装配的写入记录（节点 × 层），供确认步展示 */
+  writes: RefAssemblyWriteRecord[];
+}
 
 interface EditorStore extends EditorState {
   setTool: (tool: ToolType) => void;
@@ -190,6 +247,9 @@ interface EditorStore extends EditorState {
   // 参考图装配向导
   refWizardOpen: boolean;
   setRefWizardOpen: (v: boolean) => void;
+  // 参考图装配的会话目标（服装集/变体层/纬度 + 写入记录），向导外恒为 null
+  refAssemblyTarget: RefAssemblyTarget | null;
+  setRefAssemblyTarget: (t: RefAssemblyTarget | null) => void;
   // 左栏页签
   setLeftPanelTab: (t: 'assets' | 'clips' | 'strokes' | 'canvas' | 'global' | 'dcc') => void;
 }
@@ -365,6 +425,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setMaskNodeId: (id) => set({ maskNodeId: id }),
   setChromaKeyColor: (c) => set({ chromaKeyColor: c }),
   setRefWizardOpen: (v) => set({ refWizardOpen: v }),
+  refAssemblyTarget: null as RefAssemblyTarget | null,
+  setRefAssemblyTarget: (t) => set({ refAssemblyTarget: t }),
   setLeftPanelTab: (t) => set({ leftPanelTab: t }),
 
   initSAMModel: async (model?: SAMModelType) => {
