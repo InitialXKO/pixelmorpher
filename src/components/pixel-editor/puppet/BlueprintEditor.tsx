@@ -67,6 +67,10 @@ interface BlueprintEditorProps {
   skeleton?: { nodes: { id: string; name: string }[] } | null;
   /** 新节点 ID 前缀（全局编辑器用：归属到指定部件） */
   idPrefix?: string;
+  /** 全局编辑器语境：为 true 时新节点必须有归属（idPrefix 非空），
+   *  未选中部件时禁用一切加节点入口——无前缀的新节点在拆分时会被整节点扔掉。
+   *  单节点蓝图编辑器不传此项（它自有归属，不受影响）。 */
+  requireIdPrefix?: boolean;
   /** 图语境：'ik-target' = IK 链目标蓝图——图内 transform 节点的
    *  translateX/Y/Z 是 target3D 同空间（原点中心渲染世界），端子/参数标签
    *  带罗盘后缀、Y 按展示空间（上为正）翻转显示（与 Vec3Field 同口径） */
@@ -198,7 +202,7 @@ function BlueprintNodeParams({ selected, updateNode, onExposePort }: {
   return null; // 无 schema 时由调用方渲染通用 UI
 }
 
-export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, character, characterNodes, costumeSets, activeCostumeSetId, slotVariants, spritesTable, spaceContext }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, requireIdPrefix, frameRate = 12, character, characterNodes, costumeSets, activeCostumeSetId, slotVariants, spritesTable, spaceContext }: BlueprintEditorProps) {
   // IK 目标蓝图语境的轴向标注/翻转（仅 transform 节点的 translate* 键）
   const inIkTarget = spaceContext === 'ik-target';
   const inPerformance = spaceContext === 'performance';
@@ -671,7 +675,11 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     });
   }, [graph, onChange]);
 
+  // 全局编辑器语境下未选中部件：无归属可落，一切加节点入口禁用
+  const addBlocked = !!requireIdPrefix && !idPrefix;
+
   const addNode = useCallback(() => {
+    if (addBlocked) return;
     const rawId = `node_${Date.now().toString(36)}`;
     // 全局模式：加前缀归属到指定部件
     const id = idPrefix ? `${idPrefix}__${rawId}` : rawId;
@@ -684,7 +692,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     };
     onChange({ ...graph, nodes: [...graph.nodes, newNode] });
     setSelectedId(id);
-  }, [graph, onChange, addingType, idPrefix]);
+  }, [graph, onChange, addingType, idPrefix, addBlocked]);
 
   // ---- 链预设（甲4）：从模式库插入预设段 / 把选中链打包存库 ----
   const [chainPresetId, setChainPresetId] = useState('');
@@ -695,6 +703,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     [chainEntriesVersion],
   );
   const insertChainPreset = useCallback(() => {
+    // 全局语境未选部件时同样拦：预设段的节点不带部件归属前缀，拆分时无法归属
+    if (addBlocked) return;
     if (!chainPresetId) return;
     const idx = mergedIndex(loadUserEntries());
     const got = chainDefOf(idx, chainPresetId);
@@ -703,7 +713,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     if (!res.ok) { window.alert(`插入失败：${res.error}`); return; }
     onChange(res.graph);
     if (res.insertedIds.length > 0) setSelectedId(res.insertedIds[res.insertedIds.length - 1]!);
-  }, [chainPresetId, graph, onChange]);
+  }, [chainPresetId, graph, onChange, addBlocked]);
 
   const packSelectedChain = useCallback(() => {
     if (!selectedId) return;
@@ -939,9 +949,9 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
         <Button
           size="sm"
           onClick={addNode}
-          disabled={!!idPrefix && !idPrefix}
+          disabled={addBlocked}
           className="h-7 px-2 text-[10px]"
-          title={idPrefix ? `将添加到部件 ${idPrefix}` : '添加节点'}
+          title={addBlocked ? '先选中一个部件再加节点' : idPrefix ? `将添加到部件 ${idPrefix}` : '添加节点'}
         >
           <Plus className="size-3 mr-0.5" />节点
         </Button>
@@ -955,7 +965,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           整理
         </Button>
       </div>
-      {!idPrefix && (
+      {!idPrefix && !requireIdPrefix && (
         <div className="flex gap-1.5 items-center">
           <select
             value={chainPresetId}
@@ -993,6 +1003,11 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
       {idPrefix && (
         <div className="text-[9px] text-gray-500 px-1">
           新节点将归属到部件 <span className="text-cyan-300">{idPrefix}</span>
+        </div>
+      )}
+      {addBlocked && (
+        <div className="text-[9px] text-gray-500 px-1">
+          先选中一个部件再加节点
         </div>
       )}
 

@@ -1266,9 +1266,11 @@ export interface IKChain {
   /** 2bone 极向量目标（原点中心世界空间）；缺省取求解前 FK 的肘位（姿态连续） */
   poleTarget3D?: { x: number; y: number; z: number };
   /**
-   * Optional blueprint driving the target dynamically.
-   * Evaluated each frame; outputs {x, y} or {targetX, targetY}.
-   * If present, overrides the static target. Use for gait/sine/etc.
+   * 目标蓝图：每帧求值，取输出节点的 translateX/translateY/translateZ 作目标
+   * （原点中心世界坐标，与 target3D 同空间）。三轴全量覆盖静态目标——输出
+   * 节点恒输出三轴（未连接的输入取节点参数值、缺省 0）；输出节点不是
+   * transform 时三轴全读作 0、目标即原点。仅编辑器实时求解消费：角色被
+   * 烘焙蓝图接管时随实时 IK 一起失效，且不进导出包。
    */
   targetBlueprint?: import('./blueprint/ir').BlueprintGraph;
   /** 求解器声明：'fabrik' = 强制迭代解；'2bone'（默认）= 按链实际段数自动解析（2 段→2 骨、3 段→3 骨、3 骨+尖端→剥尖端 3 骨），解析不可解与其余长链回落迭代 */

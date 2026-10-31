@@ -2786,6 +2786,10 @@ export function resettleChainOverride(
           const ya = frameYAxisWorld(endWt.worldFrame, dir);
           return {
             ...chain,
+            // 重解是纠正遍、必须赢：一并剥离 targetBlueprint，否则求解时
+            // 蓝图输出会照常覆盖这里冻结出的目标（transposeAngle 只在蓝图
+            // 驱动时追加，剥离后自然不触发）。
+            targetBlueprint: undefined,
             target3D: {
               x: f.points[0].x + ya.x * tipLen,
               y: f.points[0].y + ya.y * tipLen,
@@ -2794,7 +2798,8 @@ export function resettleChainOverride(
           };
         }
       }
-      return { ...chain, target3D: { ...f.points[0] } };
+      // 同上：重解遍剥离目标蓝图，目标只认冻结位
+      return { ...chain, targetBlueprint: undefined, target3D: { ...f.points[0] } };
     }
   }
   return chain;

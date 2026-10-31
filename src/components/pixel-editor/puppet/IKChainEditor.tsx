@@ -415,6 +415,11 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
         const chain = chains.find((c) => c.id === editingTargetChainId);
         if (!chain) return null;
         const graph = chain.targetBlueprint ?? createDefaultTargetBlueprint(chain);
+        // 求解端只读输出节点的 translateX/Y/Z：输出节点不是 transform（或
+        // outputId 缺失/指向不存在）时三轴全读作 0、目标即原点。只提示不
+        // 拦截保存——用户可能正在拼图途中。
+        const outNode = graph.outputId ? graph.nodes.find((n) => n.id === graph.outputId) : undefined;
+        const outputInvalid = !outNode || outNode.type !== 'transform';
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
             <div className="w-[90vw] h-[85vh] bg-[#1a1a1a] rounded-lg flex flex-col overflow-hidden">
@@ -444,6 +449,17 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
                     ×
                   </button>
                 </div>
+              </div>
+              <div className="px-3 py-1.5 border-b border-white/10 text-[11px] leading-relaxed text-gray-400">
+                输出节点的三轴会全量覆盖静态目标：未连接的输入取输出节点的参数值（缺省
+                0），所以哪一轴不想动，也要在输出节点上把该轴设成静态目标的值（用模板新建时已自动播种）。目标蓝图只在编辑器实时求解时生效——角色被烘焙蓝图接管时随实时
+                IK 一起失效，且不进导出包。
+                {outputInvalid && (
+                  <div className="text-red-400 mt-1">
+                    输出节点不是 transform 节点（或未指定输出节点）：求解时目标会被读作原点中心
+                    (0, 0, 0)，链末端会被拉向原点。请把输出节点换成 transform 节点。
+                  </div>
+                )}
               </div>
               <div className="flex-1 overflow-hidden">
                 <BlueprintEditor
