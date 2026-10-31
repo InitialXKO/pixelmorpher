@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import PixelCanvas from '@/components/pixel-editor/PixelCanvas';
+import CanvasToolRail from '@/components/pixel-editor/toolbar/CanvasToolRail';
 import PuppetPanel from '@/components/pixel-editor/PuppetPanel';
 import PuppetAssetPanel from '@/components/pixel-editor/PuppetAssetPanel';
 import StrokePanel from '@/components/pixel-editor/StrokePanel';
@@ -377,7 +378,12 @@ export default function Home() {
                 minSize={30}
                 order={1}
               >
-                <div className="flex flex-col h-full">
+                <div className="flex h-full min-w-0">
+                  {/* 画布左缘工具盘（遮罩对位中与顶栏同等禁用） */}
+                  <div className={isLocked ? 'pointer-events-none opacity-40' : ''}>
+                    <CanvasToolRail />
+                  </div>
+                  <div className="flex flex-col flex-1 min-w-0 h-full">
                   {/* Part Edit Mode banner — only in animation mode */}
                   {editMode === 'sprite_edit' && (
                     <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-500/15 border-b border-cyan-500/30 shrink-0">
@@ -408,6 +414,7 @@ export default function Home() {
                     </div>
                   )}
                   <PixelCanvas />
+                  </div>
                 </div>
               </ResizablePanel>
 

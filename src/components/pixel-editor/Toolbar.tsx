@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Toggle } from '@/components/ui/toggle';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Slider } from '@/components/ui/slider';
@@ -21,7 +20,7 @@ import {
   Save,
   FolderOpen,
 } from 'lucide-react';
-import type { ToolType, BrushStyleType } from '@/lib/types';
+import type { BrushStyleType } from '@/lib/types';
 import { BUILT_IN_BRUSH_PRESETS } from '@/lib/brush-presets';
 import { BRUSH_STYLE_LABELS } from '@/lib/brush-engine';
 import { applyTheme, loadTheme, type ThemeMode } from '@/lib/theme';
@@ -30,7 +29,7 @@ import WorkspaceSwitcher from '@/components/pixel-editor/WorkspaceSwitcher';
 import NewCharacterMenu from '@/components/pixel-editor/NewCharacterMenu';
 
 // Sub-components
-import { TOOL_CONFIG, MAX_RECENT_COLORS } from './toolbar/constants';
+import { MAX_RECENT_COLORS } from './toolbar/constants';
 import BrushPresetThumbnail from './toolbar/BrushPresetThumbnail';
 import BrushStyleParamsEditor from './toolbar/BrushStyleParamsEditor';
 import ComposableStyleEditor from './toolbar/ComposableStyleEditor';
@@ -72,7 +71,6 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
   const tool = useEditorStore((s) => s.tool);
   const brushSize = useEditorStore((s) => s.brushSize);
   const brushColor = useEditorStore((s) => s.brushColor);
-  const setTool = useEditorStore((s) => s.setTool);
   const setBrushSize = useEditorStore((s) => s.setBrushSize);
   const setBrushColor = useEditorStore((s) => s.setBrushColor);
   const setEditMode = useEditorStore((s) => s.setEditMode);
@@ -323,80 +321,6 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
 
       {/* ---- 新建角色（统一入口：全部新建方式 + 对话框唯一宿主） ---- */}
       <NewCharacterMenu />
-
-      <Separator orientation="vertical" className="h-5 bg-white/10" />
-
-      {/* ---- Tool Buttons ---- */}
-      <ToggleGroup
-        type="single"
-        value={tool}
-        onValueChange={(val) => {
-          if (val) {
-            setTool(val as ToolType);
-            const state = useEditorStore.getState();
-
-            // Auto-enter sprite_edit when switching to brush/eraser/fill in non-correction mode.
-            // Only auto-enter when a sprite is already selected; never silently pick the first one.
-            const autoEnterSpriteEdit = (hint: string) => {
-              const projectStore = useProjectStore.getState();
-              const selectedSpriteId = state.selectedSpriteId;
-              const sprite = selectedSpriteId ? projectStore.sprites[selectedSpriteId] : null;
-              if (sprite) {
-                state.enterSpriteEditMode(selectedSpriteId!);
-              } else if (Object.keys(projectStore.sprites).length > 0) {
-                toast({ title: '请先选择精灵', description: hint });
-              }
-            };
-            if ((val === 'brush' || val === 'eraser' || val === 'fill') &&
-                state.editMode !== 'correction' &&
-                state.editMode !== 'sprite_edit') {
-              autoEnterSpriteEdit('在精灵面板中选择一个精灵后再绘画');
-            }
-            // 选区工具的使用场景就是精灵像素编辑：lasso/magic_wand/smart_select 点选时
-            // 有选中精灵则自动进 sprite_edit，无选中精灵则 toast（不静默）。
-            if ((val === 'lasso' || val === 'magic_wand' || val === 'smart_select') &&
-                state.editMode !== 'correction' &&
-                state.editMode !== 'sprite_edit') {
-              autoEnterSpriteEdit('在精灵面板中选择一个精灵后再框选');
-            }
-            // 特征点标注的使用场景也是精灵像素：landmark 点选时自动进 sprite_edit。
-            if (val === 'landmark' &&
-                state.editMode !== 'correction' &&
-                state.editMode !== 'sprite_edit') {
-              autoEnterSpriteEdit('在精灵面板中选择一个精灵后再标注特征点');
-            }
-            // 裁剪在 sprite_edit 里裁当前精灵（改尺寸/扩边），画布上仍裁项目画布：
-            // 有选中精灵时先自动进 sprite_edit，与画笔/选区同一联动。
-            if (val === 'crop' &&
-                state.editMode !== 'correction' &&
-                state.editMode !== 'sprite_edit') {
-              autoEnterSpriteEdit('在精灵面板中选择一个精灵后再裁剪它');
-            }
-          }
-        }}
-        className="gap-0.5 mx-1"
-      >
-        {TOOL_CONFIG.map(({ value, icon, label }) => (
-          <Tooltip key={value}>
-            <TooltipTrigger asChild>
-              <ToggleGroupItem
-                value={value}
-                aria-label={label}
-                className={`h-7 w-7 p-0 data-[state=on]:bg-purple-600/40 data-[state=on]:text-purple-300 data-[state=on]:ring-1 data-[state=on]:ring-purple-500/50 text-gray-400 hover:bg-white/5 hover:text-gray-200 rounded transition-colors ${
-                  value === 'motion_blur_brush' ? 'data-[state=on]:bg-cyan-600/40 data-[state=on]:text-cyan-300 data-[state=on]:ring-cyan-500/50' : ''
-                } ${
-                  value === 'glow_brush' || value === 'particle_brush' || value === 'afterimage_brush' ? 'data-[state=on]:bg-amber-600/40 data-[state=on]:text-amber-300 data-[state=on]:ring-amber-500/50' : ''
-                }`}
-              >
-                {icon}
-              </ToggleGroupItem>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-xs">
-              {label}
-            </TooltipContent>
-          </Tooltip>
-        ))}
-      </ToggleGroup>
 
       <Separator orientation="vertical" className="h-5 bg-white/10" />
 
