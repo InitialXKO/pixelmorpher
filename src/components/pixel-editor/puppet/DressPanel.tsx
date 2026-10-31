@@ -28,9 +28,13 @@ import { Label } from '@/components/ui/label';
 
 const DIRECTIONS: { value: DirectionIndex; label: string }[] = [
   { value: 6, label: '南' },
+  { value: 7, label: '东南' },
   { value: 0, label: '东' },
-  { value: 4, label: '西' },
+  { value: 1, label: '东北' },
   { value: 2, label: '北' },
+  { value: 3, label: '西北' },
+  { value: 4, label: '西' },
+  { value: 5, label: '西南' },
 ];
 
 interface DressPanelProps {
@@ -164,7 +168,7 @@ function MirrorDeriveSection({
 
 /**
  * DressPanel — 穿衣阶段（新模型）。
- * 节点驱动：选角色 → 选服装集 → 选节点 → 给四个方向配精灵。
+ * 节点驱动：选角色 → 选服装集 → 选节点 → 给八个方向配精灵。
  * 写入 Character.sprites 表 + CostumeSet.pieces（SpriteRef），不再用 spriteMap。
  */
 
@@ -700,7 +704,7 @@ export default function DressPanel({
   );
 }
 
-// ---- 四方向精灵编辑器 ----
+// ---- 八方向精灵编辑器 ----
 function DirectionSpriteEditor({
   node,
   sprites,
