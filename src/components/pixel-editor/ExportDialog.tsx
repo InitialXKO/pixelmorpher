@@ -9,6 +9,7 @@ import { buildLive2dModelFromCharacter } from '@/lib/live2d/build-from-character
 import { buildLive2dArchive } from '@/lib/live2d/build-from-model';
 import { allPatternTemplates } from '@/lib/proc-runtime/pattern-library';
 import { allLibraryEntries } from '@/lib/library-entries';
+import { pluginManager } from '@/lib/plugin-manager';
 import type { AnimationClip } from '@/lib/types';
 import { subToPx } from '@/lib/unified-types';
 import GIF from 'gif.js';
@@ -963,6 +964,43 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
     onOpenChange(false);
   }, [onOpenChange, projectName]);
 
+  // ---- Export: Plugin Exporters（插件注册的导出器） ----
+  // 契约（plugin-manager 的 CustomExporterDef）：export(projectData) => Blob，
+  // 这里把当前工程文件对象作为 projectData 传入，返回的 Blob 直接触发下载。
+  const [pluginExportError, setPluginExportError] = useState<string | null>(null);
+  const [pluginExportDone, setPluginExportDone] = useState<string | null>(null);
+  const handlePluginExport = useCallback(
+    (exp: { id: string; name: string; extension: string; export: (projectData: any) => Blob }) => {
+      setPluginExportError(null);
+      setPluginExportDone(null);
+      try {
+        const projectData = useProjectStore.getState().exportProjectFile();
+        const result = exp.export(projectData);
+        if (!(result instanceof Blob)) {
+          setPluginExportError(
+            `插件导出器「${exp.name}」未返回 Blob，无法下载（契约要求 export(projectData) 返回 Blob）`,
+          );
+          return;
+        }
+        const ext = exp.extension.replace(/^\./, '');
+        const url = URL.createObjectURL(result);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${projectName || 'project'}.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        setPluginExportDone(`已用插件导出器「${exp.name}」导出 .${ext} 文件`);
+      } catch (err) {
+        setPluginExportError(
+          `插件导出器「${exp.name}」执行失败: ${(err as Error).message}`,
+        );
+      }
+    },
+    [projectName],
+  );
+
   // ---- Import: Project File (V2.0) ----
   const handleImportProjectFile = useCallback(() => {
     importInputRef.current?.click();
@@ -993,6 +1031,13 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
   const [procCharId, setProcCharId] = useState<string | null>(null);
   const [procExportError, setProcExportError] = useState<string | null>(null);
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
+  // 导出选项（与程序化预览共用同一组 store 选择，改值即重算 procPkg）
+  const exportBakePluginChain = useEditorStore((s) => s.exportBakePluginChain);
+  const exportBakeCorrections = useEditorStore((s) => s.exportBakeCorrections);
+  const exportBakeIk = useEditorStore((s) => s.exportBakeIk);
+  const setExportBakePluginChain = useEditorStore((s) => s.setExportBakePluginChain);
+  const setExportBakeCorrections = useEditorStore((s) => s.setExportBakeCorrections);
+  const setExportBakeIk = useEditorStore((s) => s.setExportBakeIk);
   const procCharacter = useMemo(() => {
     // 依赖订阅值而非 getState：对话框开着时改角色/切选中，包必须跟着刷新
     const chars = Object.values(unifiedCharacters ?? {});
@@ -1012,8 +1057,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       projectExtras: {
         perspectiveForeshorten: useEditorStore.getState().perspectiveForeshorten,
       },
+      bake: { pluginChain: exportBakePluginChain, corrections: exportBakeCorrections, ik: exportBakeIk },
     }) : null),
-    [procCharacter, animationClips, sprites, frameRate, totalFrames, proceduralAnimations, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes],
+    [procCharacter, animationClips, sprites, frameRate, totalFrames, proceduralAnimations, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes, exportBakePluginChain, exportBakeCorrections, exportBakeIk],
   );
   const exportProcRuntime = useCallback(() => {
     if (!procCharacter || !procPkg) return;
@@ -1149,6 +1195,9 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
       </Select>
     </div>
   );
+
+  // 插件导出器（只列所属插件启用中的；启停口径见 plugin-manager 的 getters）
+  const pluginExporters = pluginManager.getCustomExporters();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1574,6 +1623,57 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2">
+                <Label className="text-xs text-gray-400">导出选项</Label>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-gray-500 w-24 shrink-0">插件像素链</span>
+                    <Select value={exportBakePluginChain} onValueChange={(v) => setExportBakePluginChain(v as 'drop' | 'bake' | 'live')}>
+                      <SelectTrigger className="h-8 text-xs bg-white/5 border-white/10 text-gray-300 flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#1a1a2e] border-white/10">
+                        <SelectItem value="drop">不进包</SelectItem>
+                        <SelectItem value="bake">烘焙进包</SelectItem>
+                        <SelectItem value="live">实时执行进包</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-gray-500 w-24 shrink-0">逐帧像素修正</span>
+                    <Select value={exportBakeCorrections} onValueChange={(v) => setExportBakeCorrections(v as 'off' | 'standard' | 'extended')}>
+                      <SelectTrigger className="h-8 text-xs bg-white/5 border-white/10 text-gray-300 flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#1a1a2e] border-white/10">
+                        <SelectItem value="off">不烘焙</SelectItem>
+                        <SelectItem value="standard">现行烘焙</SelectItem>
+                        <SelectItem value="extended">尽力全烘</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-gray-500 w-24 shrink-0">实时 IK</span>
+                    <Select value={exportBakeIk} onValueChange={(v) => setExportBakeIk(v as 'drop' | 'bake')}>
+                      <SelectTrigger className="h-8 text-xs bg-white/5 border-white/10 text-gray-300 flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="bg-[#1a1a2e] border-white/10">
+                        <SelectItem value="drop">不进包</SelectItem>
+                        <SelectItem value="bake">烘焙进包</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="text-[10px] text-gray-600">
+                  程序化预览与导出共用这组选择；改档后下方报告即时重算。
+                </div>
+                {exportBakePluginChain === 'live' && (
+                  <div className="text-[10px] text-amber-400/80">
+                    实时执行：导出包将携带插件代码，并在打开时执行该代码。
+                  </div>
+                )}
+              </div>
               {procPkg && procPkg.warnings.length > 0 && (
                 <div className="rounded-md border border-amber-900/50 bg-amber-950/20 p-3 space-y-1">
                   {procPkg.warnings.map((w, i) => (
@@ -1645,6 +1745,48 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
             </div>
           </TabsContent>
         </Tabs>
+
+        {/* ---- Plugin Exporters ---- */}
+        {pluginExporters.length > 0 && (
+          <div className="space-y-2 mt-4">
+            <Label className="text-xs text-gray-400">插件导出</Label>
+            <div className="space-y-1.5">
+              {pluginExporters.map((exp) => {
+                const ownerId = exp.id.slice(0, exp.id.indexOf(':'));
+                const ownerName =
+                  pluginManager.getPlugin(ownerId)?.manifest.name ?? ownerId;
+                return (
+                  <div
+                    key={exp.id}
+                    className="flex items-center justify-between gap-2 rounded-md border border-white/10 bg-white/5 px-2.5 py-1.5"
+                  >
+                    <span className="text-xs text-gray-300 truncate">
+                      {exp.name}
+                      <span className="text-gray-500">
+                        {' '}
+                        · {ownerName} · .{exp.extension.replace(/^\./, '')}
+                      </span>
+                    </span>
+                    <Button
+                      size="sm"
+                      onClick={() => handlePluginExport(exp)}
+                      className="h-6 px-2 text-[11px] bg-emerald-600 hover:bg-emerald-500 text-white gap-1 shrink-0"
+                    >
+                      <Download className="size-3" />
+                      导出
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+            {pluginExportError && (
+              <p className="text-xs text-red-400">{pluginExportError}</p>
+            )}
+            {pluginExportDone && (
+              <p className="text-xs text-emerald-400">{pluginExportDone}</p>
+            )}
+          </div>
+        )}
 
         <Separator className="bg-white/10" />
 

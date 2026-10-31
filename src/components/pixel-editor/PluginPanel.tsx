@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -27,6 +27,12 @@ export default function PluginPanel() {
   const refreshPlugins = useCallback(() => {
     setPlugins([...pluginManager.getPlugins()]);
   }, []);
+
+  // 挂载时从本机存储恢复已安装插件（刷新后自动重注册）
+  useEffect(() => {
+    pluginManager.restorePersistedPlugins();
+    refreshPlugins();
+  }, [refreshPlugins]);
 
   const handleTogglePlugin = useCallback(
     (id: string) => {
@@ -58,37 +64,40 @@ export default function PluginPanel() {
         try {
           const data = JSON.parse(ev.target?.result as string);
 
-          // Validate manifest
-          if (!data.id || !data.name || !data.version || !data.main) {
-            alert('无效的插件文件：缺少必要的清单字段 (id, name, version, main)');
+          // 校验按真实契约：清单必填只有 id 与 name（version/main
+          // 从不被使用，不再必填）；代码必须是可用的字符串
+          if (!data.id || !data.name) {
+            alert('无效的插件文件：缺少必要的清单字段 (id, name)');
             return;
           }
 
           const manifest: PluginManifest = {
             id: data.id,
             name: data.name,
-            version: data.version,
+            version: data.version || '',
             description: data.description || '',
             author: data.author || 'Unknown',
             main: data.main,
           };
 
-          // Create plugin code from the loaded data
           const pluginCode = data.code || data.pluginCode;
-          if (typeof pluginCode === 'function') {
-            pluginManager.registerPlugin(manifest, pluginCode);
-          } else if (typeof pluginCode === 'string') {
-            // Compile string code to function
-            try {
-              const fn = new Function('api', pluginCode);
-              pluginManager.registerPlugin(manifest, fn as any);
-            } catch (compileErr) {
-              alert(`插件代码编译失败: ${(compileErr as Error).message}`);
+          if (typeof pluginCode === 'string' && pluginCode.trim()) {
+            if (!pluginManager.installPluginFromSource(manifest, pluginCode)) {
+              alert('插件安装失败：代码编译失败，或该 id 的插件已安装');
+              return;
+            }
+          } else if (typeof pluginCode === 'function') {
+            // JSON 解析不出函数，此分支只为编程式调用保留；这类插件不落盘
+            if (!pluginManager.registerPlugin(manifest, pluginCode)) {
+              alert('插件安装失败：该 id 的插件已安装');
               return;
             }
           } else {
-            // Register with empty implementation
-            pluginManager.registerPlugin(manifest, () => ({}));
+            // 没有可用代码就明确拒绝，不注册空实现插件
+            alert(
+              '无效的插件文件：缺少 code 字段（插件代码字符串）。代码须返回 { customModifiers, customExporters, cleanup }',
+            );
+            return;
           }
 
           refreshPlugins();
@@ -104,8 +113,10 @@ export default function PluginPanel() {
     [refreshPlugins],
   );
 
-  const customModifiers = pluginManager.getCustomModifiers();
-  const customExporters = pluginManager.getCustomExporters();
+  // 能力列表含已停用所属插件的条目，逐条按 enabled 标注（缺省口径的
+  // getters 只返回启用中的，见 plugin-manager）
+  const customModifiers = pluginManager.getCustomModifiers({ includeDisabled: true });
+  const customExporters = pluginManager.getCustomExporters({ includeDisabled: true });
 
   return (
     <div className="flex flex-col h-full bg-zinc-950">
@@ -131,6 +142,10 @@ export default function PluginPanel() {
           className="hidden"
         />
       </div>
+      <p className="px-3 py-1.5 text-[9px] leading-relaxed text-zinc-600 border-b border-zinc-800/60">
+        插件文件（JSON）必填 id、name 与 code（代码字符串）；代码须返回{' '}
+        {'{ customModifiers, customExporters, cleanup }'}。像素修改器以蓝图节点形式注册、在蓝图编辑器里选用；导出器在导出窗口的「插件导出」里调用。已安装插件保存在本机，刷新后自动恢复。
+      </p>
 
       {/* Plugin list */}
       <ScrollArea className="flex-1">
@@ -206,12 +221,18 @@ export default function PluginPanel() {
           <div className="text-[9px] text-zinc-600 mb-1">已注册能力</div>
           {customModifiers.length > 0 && (
             <div className="text-[10px] text-zinc-500">
-              修改器: {customModifiers.map((m) => m.name).join(', ')}
+              蓝图节点（像素修改器）:{' '}
+              {customModifiers
+                .map((m) => (m.enabled ? m.name : `${m.name}（已停用）`))
+                .join(', ')}
             </div>
           )}
           {customExporters.length > 0 && (
             <div className="text-[10px] text-zinc-500">
-              导出器: {customExporters.map((e) => e.name).join(', ')}
+              导出器:{' '}
+              {customExporters
+                .map((e) => (e.enabled ? e.name : `${e.name}（已停用）`))
+                .join(', ')}
             </div>
           )}
         </div>
@@ -273,10 +294,10 @@ export default function PluginPanel() {
               {/* Show registered capabilities for this plugin */}
               {(() => {
                 const modifiers = pluginManager
-                  .getCustomModifiers()
+                  .getCustomModifiers({ includeDisabled: true })
                   .filter((m) => m.id.startsWith(detailPlugin.manifest.id + ':'));
                 const exporters = pluginManager
-                  .getCustomExporters()
+                  .getCustomExporters({ includeDisabled: true })
                   .filter((e) => e.id.startsWith(detailPlugin.manifest.id + ':'));
 
                 if (modifiers.length === 0 && exporters.length === 0) return null;
@@ -290,7 +311,8 @@ export default function PluginPanel() {
                           key={m.id}
                           className="text-[10px] text-zinc-400 bg-zinc-800/50 rounded px-2 py-1"
                         >
-                          修改器: {m.name} ({m.params.length} 参数)
+                          像素修改器（蓝图节点）: {m.name} ({m.params.length} 参数)
+                          {m.enabled ? '' : '（已停用）'}
                         </div>
                       ))}
                       {exporters.map((e) => (
@@ -299,6 +321,7 @@ export default function PluginPanel() {
                           className="text-[10px] text-zinc-400 bg-zinc-800/50 rounded px-2 py-1"
                         >
                           导出器: {e.name} (.{e.extension})
+                          {e.enabled ? '' : '（已停用）'}
                         </div>
                       ))}
                     </div>

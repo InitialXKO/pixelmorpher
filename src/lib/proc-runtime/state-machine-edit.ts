@@ -88,6 +88,25 @@ export function addTransitionToSpec(spec: StateMachineSpec): StateMachineSpec {
   return next;
 }
 
+/** 转移排序：播放器按数组顺序首个命中，顺序即优先级。与相邻条目
+ *  交换位置；已到边界时原样返回（内容不变）。只动 transitions 的
+ *  次序，initial 与各条的 from/to/when 不受影响。 */
+export function moveTransitionInSpec(
+  spec: StateMachineSpec,
+  index: number,
+  dir: -1 | 1,
+): StateMachineSpec {
+  const next = cloneSpec(spec);
+  const j = index + dir;
+  if (index < 0 || index >= next.transitions.length || j < 0 || j >= next.transitions.length) {
+    return next;
+  }
+  const t = next.transitions[index];
+  next.transitions[index] = next.transitions[j];
+  next.transitions[j] = t;
+  return next;
+}
+
 export function addConditionToSpec(
   spec: StateMachineSpec,
   transitionIndex: number,
@@ -105,14 +124,18 @@ export interface OfferedPerformance {
   kind: 'performance' | 'tracks' | 'clip';
 }
 
-/** 面板可选的表演目标：作者表演（必进包）+ 轨道（有轨道贡献时才进包）
- *  + 绑定片段（窗内无贡献时导出不生成段表演，导出报告为准）。 */
+/** 面板可选的表演目标：作者表演（已启用的才进包，禁用的不列）+ 轨道
+ *  （有轨道贡献时才进包）+ 绑定片段（窗内无贡献时导出不生成段表演，
+ *  导出报告为准）。 */
 export function listOfferedPerformances(
   character: Character,
   clips: AnimationClip[],
 ): OfferedPerformance[] {
   const out: OfferedPerformance[] = [];
-  for (const p of character.performances ?? []) out.push({ id: p.id, label: p.name, kind: 'performance' });
+  for (const p of character.performances ?? []) {
+    if (p.enabled === false) continue;
+    out.push({ id: p.id, label: p.name, kind: 'performance' });
+  }
   // 与 convert 的轨道表演生成口径一致：任一节点在姿态通道上有关键帧。
   const POSE_CHANNELS = ['angle', 'tilt', 'x', 'y', 'stretch', 'scaleX', 'variantIndex'] as const;
   const hasTracks = Object.values(character.nodes ?? {}).some((n) =>
@@ -128,10 +151,14 @@ export function listOfferedPerformances(
 /** 面板校验（只预警、不拦截；导出时 convert 另有降级 + 点名）：
  *  - initial 不存在或为空；
  *  - 表演状态引用的表演不在可选清单内（已删的表演/片段）；
- *  - 常驻非初始状态没有任何入转移（表演状态经意图进入，不在此列）。 */
+ *  - 表演状态引用的表演已被禁用（disabledPerfIds 区分于已删）；
+ *  - 常驻非初始状态没有任何入转移（表演状态经意图进入，不在此列）。
+ *  入转移按逐目标口径算：一条转移只给它的 to 记入边，from='*' 只
+ *  放宽来源、不给其它状态记入边。 */
 export function validateStateMachineSpec(
   spec: StateMachineSpec,
   validPerfIds: Set<string>,
+  disabledPerfIds?: Set<string>,
 ): string[] {
   const warnings: string[] = [];
   const stateIds = new Set(spec.states.map((s) => s.id));
@@ -140,16 +167,14 @@ export function validateStateMachineSpec(
   }
   const hasIncoming = new Set<string>();
   for (const t of spec.transitions) {
-    if (t.from === '*') {
-      for (const id of stateIds) hasIncoming.add(id);
-    } else {
-      hasIncoming.add(t.to);
-    }
+    hasIncoming.add(t.to);
     if (!stateIds.has(t.to)) warnings.push(`转移目标「${t.to}」不是现有状态`);
     if (t.from !== '*' && !stateIds.has(t.from)) warnings.push(`转移来源「${t.from}」不是现有状态`);
   }
   for (const s of spec.states) {
-    if (s.performanceId && !validPerfIds.has(s.performanceId)) {
+    if (s.performanceId && disabledPerfIds?.has(s.performanceId)) {
+      warnings.push(`表演状态「${s.id}」引用的表演 ${s.performanceId} 已被禁用（导出时不进包、状态降为常驻）`);
+    } else if (s.performanceId && !validPerfIds.has(s.performanceId)) {
       warnings.push(`表演状态「${s.id}」引用的表演 ${s.performanceId} 不在包内（导出时降为常驻并点名）`);
     }
     if (!s.performanceId && s.id !== spec.initial && !hasIncoming.has(s.id)) {

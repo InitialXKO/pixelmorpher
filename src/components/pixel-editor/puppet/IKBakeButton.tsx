@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button';
 import { useProjectStore } from '@/lib/store';
 import type { Character } from '@/lib/unified-types';
 import { ikChainsToBlueprint } from '@/lib/blueprint/ik-bake';
+import { computeWorldTransforms } from '@/lib/unified-render';
 import BlueprintEditor from './BlueprintEditor';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 
@@ -31,32 +32,22 @@ export default function IKBakeButton({ character }: IKBakeButtonProps) {
   const handleBake = useCallback(() => {
     if (!character || chains.length === 0) return;
 
-    // Compute current FK transforms for bone length measurement.
-    // We use a minimal transform map; bone lengths are measured from
-    // the character's rest pose (node.transform + hierarchy).
-    // For simplicity, we compute from the stored node transforms.
-    const transforms = new Map();
-    const computeNode = (nodeId: string, parentX: number, parentY: number, parentAngle: number) => {
-      const node = character.nodes[nodeId];
-      if (!node) return;
-      const angle = parentAngle + (node.transform.angle ?? 0);
-      const x = parentX + (node.transform.x ?? 0);
-      const y = parentY + (node.transform.y ?? 0);
-      // 已是 SubPixel，直接存
-      transforms.set(nodeId, {
-        nodeId,
-        worldX: x,
-        worldY: y,
-        worldAngle: angle,
-      });
-      for (const childId of node.children) {
-        computeNode(childId, x, y, angle);
-      }
+    // 骨长必须按真 FK 测：关节点位经父 frame 复合 + 插槽挂接得出，
+    // 不能拿 node.transform 在父坐标里直加（子 transform 与插槽位不
+    // 一致时就测错）。口径同 IKChainEditor 捕获 FK 肘位：链全禁用的
+    // 克隆上算；另把 ikBlueprint 置空——已有烘焙蓝图时它会接管求值，
+    // 测到的就不是纯 FK 姿态。
+    const fkChar: Character = {
+      ...character,
+      ikChains: (character.ikChains ?? []).map((c) => ({ ...c, enabled: false })),
+      ikBlueprint: null,
     };
-    computeNode(character.rootNodeId, 0, 0, 0);
+    const st = useProjectStore.getState();
+    const transforms = computeWorldTransforms(fkChar, st.currentFrame, st.canvasWidth, st.canvasHeight);
 
     const blueprint = ikChainsToBlueprint(character, transforms as any);
     if (blueprint) {
+      st.pushUndo('烘焙 IK 蓝图');
       updateUnifiedCharacter(character.id, { ikBlueprint: blueprint });
     }
   }, [character, chains.length, updateUnifiedCharacter]);
@@ -69,6 +60,7 @@ export default function IKBakeButton({ character }: IKBakeButtonProps) {
 
   const handleSave = useCallback(() => {
     if (!character || !localGraph) return;
+    useProjectStore.getState().pushUndo('保存 IK 蓝图');
     updateUnifiedCharacter(character.id, { ikBlueprint: localGraph });
     setEditing(false);
     setLocalGraph(null);
@@ -81,6 +73,7 @@ export default function IKBakeButton({ character }: IKBakeButtonProps) {
 
   const handleDelete = useCallback(() => {
     if (!character) return;
+    useProjectStore.getState().pushUndo('删除 IK 蓝图');
     updateUnifiedCharacter(character.id, { ikBlueprint: null });
   }, [character, updateUnifiedCharacter]);
 
@@ -106,28 +99,35 @@ export default function IKBakeButton({ character }: IKBakeButtonProps) {
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={handleBake}
-        disabled={chains.length === 0}
-        className="h-7 text-[11px]"
-        title={chains.length === 0 ? '没有启用的 IK 链' : `烘焙 ${chains.length} 条 IK 链`}
-      >
-        <Flame className="size-3 mr-1" />
-        烘焙 IK
-      </Button>
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleBake}
+          disabled={chains.length === 0}
+          className="h-7 text-[11px]"
+          title={chains.length === 0 ? '没有启用的 IK 链' : `烘焙 ${chains.length} 条 IK 链`}
+        >
+          <Flame className="size-3 mr-1" />
+          烘焙 IK
+        </Button>
+        {hasBaked && (
+          <>
+            <Button size="sm" variant="outline" onClick={handleOpen} className="h-7 text-[11px]">
+              <Pencil className="size-3 mr-1" />
+              编辑 IK 蓝图
+            </Button>
+            <Button size="sm" variant="ghost" onClick={handleDelete} className="h-7 text-[11px] text-red-400">
+              删除
+            </Button>
+          </>
+        )}
+      </div>
       {hasBaked && (
-        <>
-          <Button size="sm" variant="outline" onClick={handleOpen} className="h-7 text-[11px]">
-            <Pencil className="size-3 mr-1" />
-            编辑 IK 蓝图
-          </Button>
-          <Button size="sm" variant="ghost" onClick={handleDelete} className="h-7 text-[11px] text-red-400">
-            删除
-          </Button>
-        </>
+        <p className="text-[10px] leading-snug text-amber-300/80">
+          已烘焙：该角色的 IK 由烘焙蓝图接管，IK 链不再直接求解；删除蓝图后恢复链求解。
+        </p>
       )}
     </div>
   );

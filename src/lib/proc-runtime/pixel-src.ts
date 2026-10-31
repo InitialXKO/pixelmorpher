@@ -1279,15 +1279,34 @@ function evalPixelChain(nodes, outId, ctx) {
     }
     return {};
   }
+  function pluginFnOf(node) {
+    var pf = ctx.plugins;
+    if (!pf) return null;
+    var f = pf[node.type];
+    return typeof f === 'function' ? f : null;
+  }
+  function isPixelTyped(node) {
+    return !!PX_PIXEL_TYPES[node.type] || !!pluginFnOf(node);
+  }
   function evalNode(node) {
     var prm = node.params || {};
     if (prm.enabled === false) {
-      return PX_PIXEL_TYPES[node.type] ? bypassPixels(node) : {};
+      return isPixelTyped(node) ? bypassPixels(node) : {};
     }
     if (node.inputs && Object.prototype.hasOwnProperty.call(node.inputs, 'gate')) {
       if (PN(node, 'gate', 1) < 0.5) {
-        return PX_PIXEL_TYPES[node.type] ? bypassPixels(node) : {};
+        return isPixelTyped(node) ? bypassPixels(node) : {};
       }
+    }
+    var pfn = pluginFnOf(node);
+    if (pfn) {
+      // 插件像素节点（导出「实时执行」档随包携带的源码在模板侧编译
+      // 后经 ctx.plugins 注入）：包内 pixels 是裸网格，与插件
+      // execute 的 (pixels, params) 签名逐位同形，不做值形态转换；
+      // params 传节点参数原表（缺省已在 convert 物化进图）。
+      var pin = rawInput(node, 'pixels');
+      if (!Array.isArray(pin)) return {};
+      return { pixels: pfn(pin, node.params || {}) };
     }
     switch (node.type) {
       case 'sprite_source': return ctx.pixels ? { pixels: ctx.pixels } : {};
@@ -1665,6 +1684,47 @@ function evalPixelChain(nodes, outId, ctx) {
   var rec = nodeValue(outId);
   // 断链（终点无像素输出）：编辑器 screen 以空网格上屏，如实返回 []
   return rec && rec.pixels !== undefined ? rec.pixels : [];
+}
+`;
+
+/**
+ * 插件包内桥源码（纯 JS 字符串，模板与探针共用同一份）：把随包
+ * 携带的插件源码（pkg.plugins 的 { id, code }）编译成像素节点求
+ * 值函数表 { 'plugin_<插件id>_<修改器名>': execute }，供运行时经
+ * evalPixelChain 的 ctx.plugins 注入。逐插件 try/catch：编译或
+ * 初始化失败的插件不进表、其 id 记入 failed（模板据此提示）。
+ * api 传 Proxy 空桩：插件在编辑器里经 createAPI 拿真实接口，包
+ * 内没有工程可操作，初始化阶段的 api 方法一律 no-op 返回
+ * undefined（本桥只取 customModifiers，与编辑器注册口径一致）。
+ */
+export const PLUGIN_BRIDGE_SRC = `
+function buildPluginNodeFns(pluginList) {
+  var fns = {};
+  var failed = [];
+  var stubApi = new Proxy({}, {
+    get: function (_t, prop) {
+      if (typeof prop === 'symbol') return undefined;
+      return function () { return undefined; };
+    },
+  });
+  var list = pluginList || [];
+  for (var i = 0; i < list.length; i++) {
+    var entry = list[i];
+    try {
+      var factory = new Function('api', String(entry && entry.code || ''));
+      var result = factory(stubApi) || {};
+      var mods = result.customModifiers || [];
+      for (var j = 0; j < mods.length; j++) {
+        var m = mods[j];
+        if (m && m.name && typeof m.execute === 'function') {
+          fns['plugin_' + entry.id + '_' + m.name] = m.execute;
+        }
+      }
+    } catch (e) {
+      failed.push(entry && entry.id);
+    }
+  }
+  return { fns: fns, failed: failed };
 }
 `;
 

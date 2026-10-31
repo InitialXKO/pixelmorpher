@@ -23,6 +23,11 @@ export default function GlobalBlueprintEditor({ character }: GlobalBlueprintEdit
   // 合并后的图（本地编辑状态）
   const [mergedGraph, setMergedGraph] = useState<BlueprintGraph | null>(null);
   const [outputMap, setOutputMap] = useState<Map<string, string>>(new Map());
+  // 打开时的快照：合并的部件清单（保存遍历以此为准）、部件顺序
+  // （ui 偏移还原基准）、各部件 followMode（拆分写回通道）
+  const [openPartIds, setOpenPartIds] = useState<string[]>([]);
+  const [openPartOrder, setOpenPartOrder] = useState<string[]>([]);
+  const [followMap, setFollowMap] = useState<Map<string, 'prev' | 'same'>>(new Map());
   // 当前选中的部件：新节点归属到它
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
   // 预览接线：与 PuppetModifierPanel 同一构造（服装/变体解析 + 整角色预览数据）
@@ -43,25 +48,43 @@ export default function GlobalBlueprintEditor({ character }: GlobalBlueprintEdit
     const result = mergeBlueprints(character);
     setMergedGraph(result.graph);
     setOutputMap(result.outputMap);
+    setOpenPartIds(result.partIds);
+    setOpenPartOrder(result.partOrder);
+    setFollowMap(result.followMap);
   }, [character]);
 
   // 关闭（丢弃未保存）
   const handleClose = useCallback(() => {
     setMergedGraph(null);
     setOutputMap(new Map());
+    setOpenPartIds([]);
+    setOpenPartOrder([]);
+    setFollowMap(new Map());
   }, []);
 
   // 保存：拆分回各部件
+  // 遍历以「打开时合并的部件清单」为准：拆回结果里有的写新图，
+  // 在合并图里被删光的部件写 blueprint 清除（否则旧蓝图会原样留着）。
+  // 拆回结果里多出的部件（编辑期间在全局图里给原本无蓝图的部件新建的图）一并写回；
+  // 打开后在别处新增的部件不在清单也不在拆回结果里，不动。
   const handleSave = useCallback(() => {
     if (!character || !mergedGraph) return;
-    const split = splitBlueprints(mergedGraph, character, outputMap);
+    const split = splitBlueprints(mergedGraph, character, outputMap, {
+      partOrder: openPartOrder,
+      followMap,
+    });
     const store = useProjectStore.getState();
-    for (const [puppetNodeId, graph] of split) {
-      store.updateUnifiedNode(character.id, puppetNodeId, { blueprint: graph });
+    store.pushUndo('保存全局蓝图');
+    const targets = new Set<string>([...openPartIds, ...split.keys()]);
+    for (const puppetNodeId of targets) {
+      store.updateUnifiedNode(character.id, puppetNodeId, { blueprint: split.get(puppetNodeId) });
     }
     setMergedGraph(null);
     setOutputMap(new Map());
-  }, [character, mergedGraph, outputMap]);
+    setOpenPartIds([]);
+    setOpenPartOrder([]);
+    setFollowMap(new Map());
+  }, [character, mergedGraph, outputMap, openPartIds, openPartOrder, followMap]);
 
   if (!character) return null;
 
@@ -129,6 +152,7 @@ export default function GlobalBlueprintEditor({ character }: GlobalBlueprintEdit
         onChange={setMergedGraph}
         skeleton={{ nodes: nodeList.map((n) => ({ id: n.id, name: n.name })) }}
         idPrefix={selectedNodeId ?? undefined}
+        requireIdPrefix
         character={character}
         characterNodes={characterNodes}
         costumeSets={costumeSetsNewFormat}

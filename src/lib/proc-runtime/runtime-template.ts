@@ -9,7 +9,7 @@ import type { ProcRuntimePackage } from './convert';
 import { RUNTIME_EVAL_SRC } from './eval-src';
 import { BAKE_SRC } from './bake-src';
 import { DYNAMIC_SRC } from './dynamic-src';
-import { PIXEL_SRC } from './pixel-src';
+import { PIXEL_SRC, PLUGIN_BRIDGE_SRC } from './pixel-src';
 
 export function buildRuntimeHtml(pkg: ProcRuntimePackage): string {
   const json = JSON.stringify(pkg).replace(/</g, '\\u003c');
@@ -18,7 +18,8 @@ export function buildRuntimeHtml(pkg: ProcRuntimePackage): string {
     .split('/*__EVAL__*/').join(RUNTIME_EVAL_SRC)
     .split('/*__BAKE__*/').join(BAKE_SRC)
     .split('/*__DYNAMIC__*/').join(DYNAMIC_SRC)
-    .split('/*__PIXEL__*/').join(PIXEL_SRC);
+    .split('/*__PIXEL__*/').join(PIXEL_SRC)
+    .split('/*__PLUGIN_BRIDGE__*/').join(PLUGIN_BRIDGE_SRC);
 }
 
 const TEMPLATE = `<!DOCTYPE html>
@@ -824,6 +825,7 @@ function glowEntryOf(part, costume) {
 /*__BAKE__*/
 /*__DYNAMIC__*/
 /*__PIXEL__*/
+/*__PLUGIN_BRIDGE__*/
 
 // ---------- 数据（来自运行时包） ----------
 const PAL = EMBEDDED.palettes;
@@ -861,6 +863,11 @@ function applyPaletteSwap(paletteId, swaps) {
 const PAL_NAMES = Object.keys(PAL);
 const palIndex = (name) => Math.max(0, PAL_NAMES.indexOf(name));
 const PARTS = EMBEDDED.parts;
+/** 插件像素节点求值表（导出「实时执行」档随包携带的插件源码在本
+ * 机打开时编译；旧包无 plugins 字段 → 空表，像素链行为不变）。
+ * 加载失败的插件 id 在 PLUGIN_BRIDGE.failed，下方 #warn 一并提示。 */
+const PLUGIN_BRIDGE = buildPluginNodeFns(EMBEDDED.plugins || []);
+const PLUGIN_NODE_FNS = PLUGIN_BRIDGE.fns;
 const COSTUMES = EMBEDDED.costumes;
 const BEHAVIOR_GRAPHS = (EMBEDDED.behavior && EMBEDDED.behavior.graphs) || {};
 const PERFORMANCES = EMBEDDED.performances || [];
@@ -3590,6 +3597,11 @@ document.getElementById('hud').innerHTML =
 if (EMBEDDED.warnings && EMBEDDED.warnings.length) {
   document.getElementById('warn').textContent = '导出提示：\\n' + EMBEDDED.warnings.join('\\n');
 }
+if (PLUGIN_BRIDGE.failed.length) {
+  const warnEl = document.getElementById('warn');
+  const extra = PLUGIN_BRIDGE.failed.map((pid) => '插件 ' + pid + ' 随包代码加载失败，其像素链节点在运行时不生效').join('\\n');
+  warnEl.textContent = (warnEl.textContent ? warnEl.textContent + '\\n' : '导出提示：\\n') + extra;
+}
 
 
 // ---------- 预览工具面板：模式 / 手感 / 按键 / 场景 / 录制 ----------
@@ -4713,6 +4725,7 @@ function frame(now) {
         outGrid = evalPixelChain(pg.nodes, pg.out, {
           pixels: srcGrid, frame: pframe, frameRate: FRAME_RATE,
           nodeState: state.pixelState, statePrefix: job.part.key,
+          plugins: PLUGIN_NODE_FNS,
         });
       } catch (e) { outGrid = null; }
       if (!outGrid) continue;

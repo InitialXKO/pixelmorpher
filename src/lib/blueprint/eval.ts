@@ -2097,6 +2097,14 @@ export function registerEvaluator(type: string, evaluator: NodeEvaluator): void 
   EVALUATORS[type] = evaluator;
 }
 
+/**
+ * 注销求值器（插件卸载用）。注销后该类型从节点面板列表消失；
+ * 已有蓝图里残留的该类型节点在求值时按「无求值器」跳过。
+ */
+export function removeEvaluator(type: string): void {
+  delete EVALUATORS[type];
+}
+
 /** 拓扑排序（Kahn 算法） */
 function topoSort(graph: BlueprintGraph): BlueprintNode[] {
   const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
@@ -2512,6 +2520,11 @@ export function getBlueprintNodeLabel(type: string): string {
  */
 export function registerNodeLabel(type: string, label: string): void {
   BLUEPRINT_NODE_LABELS[type] = label;
+}
+
+/** 注销节点标签（插件卸载用，与 removeEvaluator 配套）。 */
+export function removeNodeLabel(type: string): void {
+  delete BLUEPRINT_NODE_LABELS[type];
 }
 
 // ============================================================

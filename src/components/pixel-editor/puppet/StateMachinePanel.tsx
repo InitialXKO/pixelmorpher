@@ -10,7 +10,7 @@
 // ============================================================
 
 import React, { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import type { Character, StateMachineCondition, StateMachineSpec } from '@/lib/unified-types';
 import { defaultStateMachine } from '@/lib/proc-runtime/convert';
@@ -22,6 +22,7 @@ import {
   addTransitionToSpec,
   deleteStateFromSpec,
   listOfferedPerformances,
+  moveTransitionInSpec,
   renameStateInSpec,
   validateStateMachineSpec,
 } from '@/lib/proc-runtime/state-machine-edit';
@@ -44,7 +45,11 @@ export default function StateMachinePanel({ unifiedCharacters }: { unifiedCharac
   const spec = character.stateMachine ?? null;
   const offered = listOfferedPerformances(character, animationClips);
   const validPerfIds = new Set(offered.map((o) => o.id));
-  const warnings = spec ? validateStateMachineSpec(spec, validPerfIds) : [];
+  // 已禁用的作者表演：不在可选清单内，但与「已删」区分——校验单独预警、
+  // 状态的表演下拉里以「已禁用」占位显示，不冒充已删。
+  const disabledPerfs = (character.performances ?? []).filter((p) => p.enabled === false);
+  const disabledPerfIds = new Set(disabledPerfs.map((p) => p.id));
+  const warnings = spec ? validateStateMachineSpec(spec, validPerfIds, disabledPerfIds) : [];
   // 默认机（与 convert 同一函数；可选清单含全部绑定片段，窗内无贡献的
   // 片段导出时不生成段表演，引用它的状态届时降为常驻并在导出报告里点名）
   const defaultSpec = defaultStateMachine(offered.map((o) => ({ id: o.id })));
@@ -120,7 +125,11 @@ export default function StateMachinePanel({ unifiedCharacters }: { unifiedCharac
                 <Input
                   className="h-6 text-[10px]"
                   value={s.id}
-                  onChange={(e) => commit(renameStateInSpec(spec, s.id, e.target.value.trim()))}
+                  onChange={(e) => {
+                    const v = e.target.value.trim();
+                    if (v === '') { setEditError('状态名不能为空'); return; }
+                    commit(renameStateInSpec(spec, s.id, v));
+                  }}
                 />
                 <select
                   className={selCls}
@@ -146,7 +155,11 @@ export default function StateMachinePanel({ unifiedCharacters }: { unifiedCharac
                     {offered.map((o) => (
                       <option key={o.id} value={o.id}>{o.label}</option>
                     ))}
-                    {!validPerfIds.has(s.performanceId) && (
+                    {disabledPerfIds.has(s.performanceId) ? (
+                      <option value={s.performanceId} disabled>
+                        已禁用：{disabledPerfs.find((p) => p.id === s.performanceId)?.name ?? s.performanceId}
+                      </option>
+                    ) : !validPerfIds.has(s.performanceId) && (
                       <option value={s.performanceId} disabled>已删：{s.performanceId}</option>
                     )}
                   </select>
@@ -187,6 +200,12 @@ export default function StateMachinePanel({ unifiedCharacters }: { unifiedCharac
                     ))}
                   </select>
                   <div className="flex-1" />
+                  <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="上移（顺序即优先级）" disabled={ti === 0} onClick={() => commit(moveTransitionInSpec(spec, ti, -1))}>
+                    <ArrowUp size={12} />
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="下移（顺序即优先级）" disabled={ti === spec.transitions.length - 1} onClick={() => commit(moveTransitionInSpec(spec, ti, 1))}>
+                    <ArrowDown size={12} />
+                  </Button>
                   <Button size="sm" variant="ghost" className="h-6 w-6 p-0" onClick={() => commit({ ...spec, transitions: spec.transitions.filter((_, xi) => xi !== ti) })}>
                     <Trash2 size={12} />
                   </Button>
@@ -232,6 +251,8 @@ export default function StateMachinePanel({ unifiedCharacters }: { unifiedCharac
                       step="any"
                       value={c.value}
                       onChange={(e) => {
+                        // 清空中的空串是未完成输入，不提交（Number('')===0 会把清空误落成 0）
+                        if (e.target.value.trim() === '') return;
                         const v = Number(e.target.value);
                         if (Number.isNaN(v)) return;
                         commit({ ...spec, transitions: spec.transitions.map((x, xi) => (xi === ti ? { ...x, when: x.when.map((y, yi) => (yi === ci ? { ...y, value: v } : y)) } : x)) });

@@ -14,6 +14,7 @@ import { resolveChainTarget3D, ikTargetMirror, subToPx } from '@/lib/unified-typ
 import { computeWorldTransforms } from '@/lib/unified-render';
 import type { Character, IKChain } from '@/lib/unified-types';
 import { Vec3Field } from '../shared/Vec3Field';
+import CommitNumberInput from '../shared/CommitNumberInput';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
 import BlueprintEditor from './BlueprintEditor';
 
@@ -22,7 +23,13 @@ interface IKChainEditorProps {
 }
 
 export default function IKChainEditor({ character }: IKChainEditorProps) {
-  const updateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
+  const rawUpdateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
+  // 本面板全部写操作统一经此：补撤销（同键 1 秒窗合并，逐字/连续
+  // 调整不刷栈）。原实现全程无 pushUndo，改目标/删链都无法撤销。
+  const updateUnifiedCharacter = (id: string, patch: Partial<Character>) => {
+    useProjectStore.getState().pushUndo('编辑 IK 链', 'ikChains');
+    rawUpdateUnifiedCharacter(id, patch);
+  };
   const [rootId, setRootId] = useState<string>('');
   const [endId, setEndId] = useState<string>('');
   const [editingTargetChainId, setEditingTargetChainId] = useState<string | null>(null);
@@ -286,28 +293,28 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
                 <span>目标</span>
                 <label className="flex items-center gap-0.5">
                   X
-                  <input
-                    type="number"
+                  <CommitNumberInput
+                    bare
                     value={Math.round(c.target.x - useProjectStore.getState().canvasWidth / 2)}
-                    onChange={(e) => handleTargetChange(c.id, 'x', Number(e.target.value))}
+                    onCommit={(v) => handleTargetChange(c.id, 'x', v)}
                     className="w-14 px-1 py-0.5 bg-black/50 rounded text-gray-300 text-[10px]"
                   />
                 </label>
                 <label className="flex items-center gap-0.5">
                   Y
-                  <input
-                    type="number"
+                  <CommitNumberInput
+                    bare
                     value={Math.round(c.target.y - useProjectStore.getState().canvasHeight / 2)}
-                    onChange={(e) => handleTargetChange(c.id, 'y', Number(e.target.value))}
+                    onCommit={(v) => handleTargetChange(c.id, 'y', v)}
                     className="w-14 px-1 py-0.5 bg-black/50 rounded text-gray-300 text-[10px]"
                   />
                 </label>
                 <label className="flex items-center gap-0.5" title="末节尖端到轴心的距离">
                   尖端
-                  <input
-                    type="number"
+                  <CommitNumberInput
+                    bare
                     value={Math.round(c.tipLength ?? 0)}
-                    onChange={(e) => handleTipLengthChange(c.id, Number(e.target.value))}
+                    onCommit={(v) => handleTipLengthChange(c.id, v)}
                     className="w-12 px-1 py-0.5 bg-black/50 rounded text-gray-300 text-[10px]"
                   />
                 </label>
@@ -408,6 +415,11 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
         const chain = chains.find((c) => c.id === editingTargetChainId);
         if (!chain) return null;
         const graph = chain.targetBlueprint ?? createDefaultTargetBlueprint(chain);
+        // 求解端只读输出节点的 translateX/Y/Z：输出节点不是 transform（或
+        // outputId 缺失/指向不存在）时三轴全读作 0、目标即原点。只提示不
+        // 拦截保存——用户可能正在拼图途中。
+        const outNode = graph.outputId ? graph.nodes.find((n) => n.id === graph.outputId) : undefined;
+        const outputInvalid = !outNode || outNode.type !== 'transform';
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
             <div className="w-[90vw] h-[85vh] bg-[#1a1a1a] rounded-lg flex flex-col overflow-hidden">
@@ -437,6 +449,17 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
                     ×
                   </button>
                 </div>
+              </div>
+              <div className="px-3 py-1.5 border-b border-white/10 text-[11px] leading-relaxed text-gray-400">
+                输出节点的三轴会全量覆盖静态目标：未连接的输入取输出节点的参数值（缺省
+                0），所以哪一轴不想动，也要在输出节点上把该轴设成静态目标的值（用模板新建时已自动播种）。目标蓝图只在编辑器实时求解时生效——角色被烘焙蓝图接管时随实时
+                IK 一起失效，且不进导出包。
+                {outputInvalid && (
+                  <div className="text-red-400 mt-1">
+                    输出节点不是 transform 节点（或未指定输出节点）：求解时目标会被读作原点中心
+                    (0, 0, 0)，链末端会被拉向原点。请把输出节点换成 transform 节点。
+                  </div>
+                )}
               </div>
               <div className="flex-1 overflow-hidden">
                 <BlueprintEditor

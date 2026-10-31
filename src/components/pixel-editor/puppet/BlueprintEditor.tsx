@@ -38,6 +38,7 @@ function previewBlueprintVars(frame: number, character?: Character | null): Reco
     return {};
   }
 }
+import { behaviorHostVars } from '@/lib/behavior-host';
 import { resolvePreviewSprite, getActiveCostumeSet } from '@/lib/sprite-resolve';
 import { generateRenderPlan, executeRenderPlan, evaluateBlueprintTransforms, canvasToPixels, pickClipStateKeyframes } from '@/lib/unified-render';
 import type { Character } from '@/lib/unified-types';
@@ -66,6 +67,10 @@ interface BlueprintEditorProps {
   skeleton?: { nodes: { id: string; name: string }[] } | null;
   /** 新节点 ID 前缀（全局编辑器用：归属到指定部件） */
   idPrefix?: string;
+  /** 全局编辑器语境：为 true 时新节点必须有归属（idPrefix 非空），
+   *  未选中部件时禁用一切加节点入口——无前缀的新节点在拆分时会被整节点扔掉。
+   *  单节点蓝图编辑器不传此项（它自有归属，不受影响）。 */
+  requireIdPrefix?: boolean;
   /** 图语境：'ik-target' = IK 链目标蓝图——图内 transform 节点的
    *  translateX/Y/Z 是 target3D 同空间（原点中心渲染世界），端子/参数标签
    *  带罗盘后缀、Y 按展示空间（上为正）翻转显示（与 Vec3Field 同口径） */
@@ -197,7 +202,7 @@ function BlueprintNodeParams({ selected, updateNode, onExposePort }: {
   return null; // 无 schema 时由调用方渲染通用 UI
 }
 
-export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, frameRate = 12, character, characterNodes, costumeSets, activeCostumeSetId, slotVariants, spritesTable, spaceContext }: BlueprintEditorProps) {
+export default function BlueprintEditor({ graph, onChange, title, skeleton, idPrefix, requireIdPrefix, frameRate = 12, character, characterNodes, costumeSets, activeCostumeSetId, slotVariants, spritesTable, spaceContext }: BlueprintEditorProps) {
   // IK 目标蓝图语境的轴向标注/翻转（仅 transform 节点的 translate* 键）
   const inIkTarget = spaceContext === 'ik-target';
   const inPerformance = spaceContext === 'performance';
@@ -212,6 +217,18 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
   };
   const flipYFor = (nodeType: string, key: string): boolean =>
     inIkTarget && nodeType === 'transform' && key === 'translateY';
+  // 预览变量：基础拼装（动画变量 + 参数驱动器）之上，行为语境再补喂
+  // 宿主变量——与主画布 evaluateBehaviorTransforms 同一套 behaviorHostVars
+  // 且同为「宿主后盖」的合成顺序（t/phase/moveX/speed01/grounded；
+  // 缺输入轨时 grounded=1、phase 按既有速率推进）。靠宿主变量把关的
+  // 行为图在编辑预览里因此与主画布/包内走同一支。其它语境构成不变。
+  const previewVars = (frame: number): Record<string, number> => {
+    const base = previewBlueprintVars(frame, character);
+    if (inBehavior && character) {
+      return { ...base, ...behaviorHostVars(character, frame, frameRate) };
+    }
+    return base;
+  };
   const neg = (v: number): number => (v === 0 ? 0 : -v);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addingType, setAddingType] = useState<string>('pendulum');
@@ -262,10 +279,10 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           if (octx) {
             const editedId = (graph as any)._nodeId as string | undefined;
             // 其余节点：走渲染器自己的两-pass 求值（animateOthers 关时取第 0 帧，保持"他静态"语义）
-            const bpOverrides = evaluateBlueprintTransforms(character, animateOthers ? previewFrame : 0, frameRate, previewBlueprintVars(animateOthers ? previewFrame : 0, character));
+            const bpOverrides = evaluateBlueprintTransforms(character, animateOthers ? previewFrame : 0, frameRate, previewVars(animateOthers ? previewFrame : 0));
             if (editedId && graph) {
               try {
-                const r = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: previewBlueprintVars(previewFrame, character) } as any);
+                const r = evaluateBlueprint(graph, { frame: previewFrame, frameRate, vars: previewVars(previewFrame) } as any);
                 bpOverrides.set(editedId, {
                   translateX: r.translateX ?? 0, translateY: r.translateY ?? 0, translateZ: r.translateZ ?? 0, rotation: r.rotation ?? 0, tilt: r.tilt ?? 0,
                   scaleX: r.scaleX ?? 1, scaleY: r.scaleY ?? 1, skewX: r.skewX ?? 0, skewY: r.skewY ?? 0,
@@ -319,7 +336,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           const bp = (cn.id === (graph as any)._nodeId) ? graph : cn.blueprint;
           if (bp && (animateOthers || cn.id === (graph as any)._nodeId)) {
             try {
-              const r = evaluateBlueprint(bp, { frame: animateOthers ? frame : 0, frameRate, vars: previewBlueprintVars(animateOthers ? frame : 0, character) } as any);
+              const r = evaluateBlueprint(bp, { frame: animateOthers ? frame : 0, frameRate, vars: previewVars(animateOthers ? frame : 0) } as any);
               t = r;
             } catch {}
           }
@@ -418,7 +435,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           off.width = offW; off.height = offH;
           const octx = off.getContext('2d');
           if (!octx) return undefined;
-          const bpOverrides = evaluateBlueprintTransforms(character, previewFrame, frameRate, previewBlueprintVars(previewFrame, character));
+          const bpOverrides = evaluateBlueprintTransforms(character, previewFrame, frameRate, previewVars(previewFrame));
           const plan = generateRenderPlan({ ...character, blueprint: null }, previewFrame, offW, offH, 'pixel-perfect', frameRate,
             undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
             spritesTable as any, bpOverrides, undefined,
@@ -432,7 +449,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
       const t = evaluateBlueprint(graph, {
         frame: previewFrame,
         frameRate,
-        vars: previewBlueprintVars(previewFrame, character),
+        vars: previewVars(previewFrame),
         ...(isCharGraph ? {
           characterPixels,
           drawToScreen: (cmd: { pixels: import('@/lib/types').PixelGrid }) => { capturedScreenPixels = cmd.pixels; },
@@ -491,7 +508,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
             const out = evaluateNodeOutput(graph, ref.nodeId, {
               frame: previewFrame,
               frameRate,
-              vars: previewBlueprintVars(previewFrame, character),
+              vars: previewVars(previewFrame),
             } as any);
             // out 是该节点的输出 Record，取 pixels 或 output 指定的
             const outVals = out as Record<string, any>;
@@ -658,7 +675,11 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     });
   }, [graph, onChange]);
 
+  // 全局编辑器语境下未选中部件：无归属可落，一切加节点入口禁用
+  const addBlocked = !!requireIdPrefix && !idPrefix;
+
   const addNode = useCallback(() => {
+    if (addBlocked) return;
     const rawId = `node_${Date.now().toString(36)}`;
     // 全局模式：加前缀归属到指定部件
     const id = idPrefix ? `${idPrefix}__${rawId}` : rawId;
@@ -671,7 +692,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     };
     onChange({ ...graph, nodes: [...graph.nodes, newNode] });
     setSelectedId(id);
-  }, [graph, onChange, addingType, idPrefix]);
+  }, [graph, onChange, addingType, idPrefix, addBlocked]);
 
   // ---- 链预设（甲4）：从模式库插入预设段 / 把选中链打包存库 ----
   const [chainPresetId, setChainPresetId] = useState('');
@@ -682,6 +703,8 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     [chainEntriesVersion],
   );
   const insertChainPreset = useCallback(() => {
+    // 全局语境未选部件时同样拦：预设段的节点不带部件归属前缀，拆分时无法归属
+    if (addBlocked) return;
     if (!chainPresetId) return;
     const idx = mergedIndex(loadUserEntries());
     const got = chainDefOf(idx, chainPresetId);
@@ -690,7 +713,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
     if (!res.ok) { window.alert(`插入失败：${res.error}`); return; }
     onChange(res.graph);
     if (res.insertedIds.length > 0) setSelectedId(res.insertedIds[res.insertedIds.length - 1]!);
-  }, [chainPresetId, graph, onChange]);
+  }, [chainPresetId, graph, onChange, addBlocked]);
 
   const packSelectedChain = useCallback(() => {
     if (!selectedId) return;
@@ -926,9 +949,9 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
         <Button
           size="sm"
           onClick={addNode}
-          disabled={!!idPrefix && !idPrefix}
+          disabled={addBlocked}
           className="h-7 px-2 text-[10px]"
-          title={idPrefix ? `将添加到部件 ${idPrefix}` : '添加节点'}
+          title={addBlocked ? '先选中一个部件再加节点' : idPrefix ? `将添加到部件 ${idPrefix}` : '添加节点'}
         >
           <Plus className="size-3 mr-0.5" />节点
         </Button>
@@ -942,7 +965,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           整理
         </Button>
       </div>
-      {!idPrefix && (
+      {!idPrefix && !requireIdPrefix && (
         <div className="flex gap-1.5 items-center">
           <select
             value={chainPresetId}
@@ -980,6 +1003,11 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
       {idPrefix && (
         <div className="text-[9px] text-gray-500 px-1">
           新节点将归属到部件 <span className="text-cyan-300">{idPrefix}</span>
+        </div>
+      )}
+      {addBlocked && (
+        <div className="text-[9px] text-gray-500 px-1">
+          先选中一个部件再加节点
         </div>
       )}
 
@@ -1252,7 +1280,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
               </div>
               {/* 节点输出预览（仅全屏模式） */}
               {isFullscreen && (
-                <NodePreview graph={graph} nodeId={node.id} frame={previewFrame} frameRate={frameRate} characterNodes={characterNodes} />
+                <NodePreview graph={graph} nodeId={node.id} frame={previewFrame} frameRate={frameRate} characterNodes={characterNodes} extraVars={inBehavior && character ? previewVars(previewFrame) : undefined} />
               )}
             </div>
           );
@@ -1506,12 +1534,14 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
 }
 
 /** 单节点输出预览（无播放按钮，同步预览帧） */
-function NodePreview({ graph, nodeId, frame, frameRate, characterNodes }: {
+function NodePreview({ graph, nodeId, frame, frameRate, characterNodes, extraVars }: {
   graph: BlueprintGraph;
   nodeId: string;
   frame: number;
   frameRate: number;
   characterNodes?: Array<{ id: string; spritePixels?: import('@/lib/types').PixelGrid | null }>;
+  /** 调用方拼好的预览变量（行为语境含宿主变量）：后盖基础拼装 */
+  extraVars?: Record<string, number>;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -1522,7 +1552,7 @@ function NodePreview({ graph, nodeId, frame, frameRate, characterNodes }: {
     if (!ctx) return;
     try {
       const out = evaluateNodeOutput(graph, nodeId, {
-        frame, frameRate, vars: previewBlueprintVars(frame),
+        frame, frameRate, vars: { ...previewBlueprintVars(frame), ...(extraVars ?? {}) },
         // sprite_source 从这里取像素
         spritePixels: (() => {
           if (characterNodes) {
@@ -1594,7 +1624,7 @@ function NodePreview({ graph, nodeId, frame, frameRate, characterNodes }: {
         ctx.fillText('∅', 4, 12);
       }
     } catch {}
-  }, [graph, nodeId, frame, frameRate]);
+  }, [graph, nodeId, frame, frameRate, extraVars]);
 
   return (
     <div className="px-1.5 pb-1">

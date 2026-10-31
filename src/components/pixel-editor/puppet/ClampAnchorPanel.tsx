@@ -14,6 +14,7 @@ import { Plus, Trash2, Power, Anchor as AnchorIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useProjectStore } from '@/lib/store';
 import { peekClampFrozen } from '@/lib/clamp-session';
+import CommitNumberInput from '../shared/CommitNumberInput';
 import type { Character, ClampAnchor, ClampPointRef, ClampTrigger } from '@/lib/unified-types';
 
 interface Props {
@@ -24,14 +25,16 @@ const numCls = 'w-14 bg-[#12122a] border border-[#2a2a4a] rounded px-1 py-0.5 te
 const selCls = 'bg-[#12122a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[11px] text-gray-200';
 const txtCls = 'bg-[#12122a] border border-[#2a2a4a] rounded px-1 py-0.5 text-[11px] text-gray-200';
 
+// 提交式数值输入（本地文本 + 失焦/回车提交）：旧实现逐字
+// onChange(parseFloat || 0)，键入 "-"/清空/中间态都会被写成 0。
 function Num({ value, onChange, step = 1 }: { value: number; onChange: (v: number) => void; step?: number }) {
   return (
-    <input
-      type="number"
+    <CommitNumberInput
+      bare
       className={numCls}
       value={Number.isFinite(value) ? value : 0}
       step={step}
-      onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+      onCommit={onChange}
     />
   );
 }
@@ -48,7 +51,10 @@ export default function ClampAnchorPanel({ character }: Props) {
 
   if (!character) return <div className="text-[11px] text-gray-500">未选中角色</div>;
 
-  const save = (next: ClampAnchor[]) => updateUnifiedCharacter(character.id, { clampAnchors: next });
+  const save = (next: ClampAnchor[]) => {
+    useProjectStore.getState().pushUndo('编辑钳制锚定', 'clampAnchors');
+    updateUnifiedCharacter(character.id, { clampAnchors: next });
+  };
   const patch = (id: string, p: Partial<ClampAnchor>) =>
     save(anchors.map((a) => (a.id === id ? { ...a, ...p } : a)));
   const patchPoint = (id: string, point: ClampPointRef) => patch(id, { point });

@@ -7,7 +7,7 @@
 // 烘焙带指纹：驱动/参数变了指纹对不上 → 点名过期，不静默沿用。
 // ============================================================
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import type { Character } from '@/lib/unified-types';
@@ -27,7 +27,13 @@ export default function ChainBakePanel({ character }: { character: Character | n
   const selectedNodeId = useProjectStore((s) => s.selectedNodeId);
   const totalFrames = useProjectStore((s) => s.totalFrames);
   const frameRate = useProjectStore((s) => s.frameRate);
-  const updateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
+  const rawUpdateUnifiedCharacter = useProjectStore((s) => s.updateUnifiedCharacter);
+  // 本面板全部写操作（含子区经 props 拿到的同一函数）统一经此补撤销：
+  // 烘焙/驱动模式/实时参数原先全无 pushUndo，烘错了无法撤销。
+  const updateUnifiedCharacter = useCallback((id: string, patch: Partial<Character>) => {
+    useProjectStore.getState().pushUndo('编辑链摆/布料烘焙', 'chainBakePanel');
+    rawUpdateUnifiedCharacter(id, patch);
+  }, [rawUpdateUnifiedCharacter]);
   const [params, setParams] = useState<ChainBakeParams>(defaultChainBakeParams());
   const [note, setNote] = useState<string>('');
   const [clothCols, setClothCols] = useState(4);

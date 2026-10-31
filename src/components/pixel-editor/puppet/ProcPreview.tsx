@@ -3,7 +3,12 @@
 // ============================================================
 // ProcPreview — 程序化预览
 // 把当前角色经转换器打包成运行时包，用与导出完全相同的运行时模板
-// 在 iframe 里跑：预览所见即导出所得。虚拟输入 = 模板内置控制
+// 在 iframe 里跑：画面与导出同源同算；播放计时口径不同——预览改
+// 墙钟模式按真实时间播（见下方 simMode 处），导出缺省按帧计时，
+// 速度观感会有差别。服装集打开即是角色当前生效的那套（包的
+// defaultCostume 通道，convert 按 activeCostumeSetId 写入）；方向
+// 没有包级初始通道（模板 char.variant 硬编码从 0 起），固定从东
+// （0）起播、在预览内用数字键锁定切换。虚拟输入 = 模板内置控制
 // （A/D 移动、W 跳、方向/服装/表演按钮、自动行走）。
 // 转换 warnings 在下方逐条列出（不静默）。
 // 显示方式四种：面板内嵌（默认）/ 与主渲染同框（iframe 经 portal
@@ -30,7 +35,10 @@ function hashString(s: string): string {
 
 export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: Record<string, Character> }) {
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
-  const character = activePuppetSkeletonId ? (unifiedCharacters[activePuppetSkeletonId] ?? null) : null;
+  // 与导出对话框同口径：未选中（或选中已失效）时回落第一个角色，
+  // 工程里确无任何角色才为空。
+  const allCharacters = Object.values(unifiedCharacters);
+  const character = allCharacters.find((c) => c.id === activePuppetSkeletonId) ?? allCharacters[0] ?? null;
 
   // —— 重建依赖：逐个订阅，任一变化都触发重建（不再走 getState 快照漏订） ——
   const projectSprites = useProjectStore((s) => s.sprites);
@@ -49,6 +57,10 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
   const palettes = useProjectStore((s) => s.palettes);
   const activePaletteId = useProjectStore((s) => s.activePaletteId);
   const perspectiveForeshorten = useEditorStore((s) => s.perspectiveForeshorten);
+  // 导出选项与导出对话框共用同一组 store 选择，任一变化同样触发重建
+  const exportBakePluginChain = useEditorStore((s) => s.exportBakePluginChain);
+  const exportBakeCorrections = useEditorStore((s) => s.exportBakeCorrections);
+  const exportBakeIk = useEditorStore((s) => s.exportBakeIk);
 
   const built = useMemo(() => {
     if (!character) return null;
@@ -61,6 +73,7 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
       libraryEntries: allLibraryEntries(),
       projectData: { proceduralAnimations, globalModifiers, globalBlueprint, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes, canvasWidth, canvasHeight, palettes, activePaletteId },
       projectExtras: { perspectiveForeshorten },
+      bake: { pluginChain: exportBakePluginChain, corrections: exportBakeCorrections, ik: exportBakeIk },
     });
     // 预览是观看宿主：改用墙钟模式按真实时间播。包缺省的 frame 模式
     // 每 rAF tick 恰走一包帧（为录制/回放的确定性而设）——12fps 工程
@@ -69,7 +82,7 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
     pkg.simMode = 'wall';
     const html = buildRuntimeHtml(pkg);
     return { pkg, html, key: hashString(html) };
-  }, [character, projectSprites, animationClips, frameRate, totalFrames, proceduralAnimations, globalModifiers, globalBlueprint, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes, canvasWidth, canvasHeight, perspectiveForeshorten]);
+  }, [character, projectSprites, animationClips, frameRate, totalFrames, proceduralAnimations, globalModifiers, globalBlueprint, canvasModifierTracks, effectTracks, motionBlurStrokes, effectStrokes, canvasWidth, canvasHeight, perspectiveForeshorten, exportBakePluginChain, exportBakeCorrections, exportBakeIk]);
 
   // —— 显示方式 ——
   const dock = useEditorStore((s) => s.procPreviewDock);
@@ -94,7 +107,7 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
     return () => cancelAnimationFrame(raf);
   }, [dock]);
 
-  if (!character) return <p className="text-[10px] text-gray-500">先在左侧选择一个角色。</p>;
+  if (!character) return <p className="text-[10px] text-gray-500">工程里还没有角色。</p>;
   if (!built) return null;
   const { pkg, html, key } = built;
 
@@ -128,8 +141,12 @@ export default function ProcPreview({ unifiedCharacters }: { unifiedCharacters: 
   return (
     <div className="space-y-1.5">
       <p className="text-[9px] text-gray-600 leading-relaxed">
-        与导出共用同一运行时本体。点进画面后：A/D 移动、W 跳、数字键锁方向；
+        画面与导出同源现算（同一运行时本体）。播放计时不同：预览按挂钟走、
+        导出缺省按帧走，速度观感会有差别。服装集打开即是当前生效的那套；
+        方向从东起播、用数字键锁定切换。点进画面后：A/D 移动、W 跳；
         右上可切服装/触发表演/自动行走。
+        插件像素链、逐帧像素修正、实时 IK 三项的进包方式跟随导出选项，
+        与导出共用同一组选择（在导出对话框的程序化运行时页签里改）。
       </p>
       <div className="flex flex-wrap gap-1">
         <button type="button" className={modeBtn(dock === 'panel')} onClick={() => setDock('panel')}>面板</button>

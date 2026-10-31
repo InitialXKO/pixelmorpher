@@ -488,6 +488,11 @@ export function registerNodeSpec(type: string, spec: BlueprintNodeSpec): void {
   BLUEPRINT_NODE_SPECS[type] = spec;
 }
 
+/** 注销节点规格（插件卸载用，与 removeEvaluator 配套）。 */
+export function removeNodeSpec(type: string): void {
+  delete BLUEPRINT_NODE_SPECS[type];
+}
+
 /**
  * 获取所有已注册的节点类型（含动态注册的）。
  * UI 节点面板从这里取列表。

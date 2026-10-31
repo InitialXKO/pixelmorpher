@@ -308,13 +308,20 @@ export default function BehaviorTreePanel({ unifiedCharacters }: { unifiedCharac
       worldVars,
       runtime: {
         intent: (name) => {
-          const ok = offeredIds.has(name);
+          // 与运行时模板的 intent() 同口径：jump 直通；其余按表演的
+          // id / 名称 / 触发名任一命中（模板在包内表演表上查，mock 在
+          // 角色表演 + 可选清单 id 上查同一组键）。
+          const ok = name === 'jump'
+            || (character.performances ?? []).some((p) => p.id === name || p.name === name || p.trigger === name)
+            || offered.some((o) => o.id === name);
           calls.push(`intent(${name}) → ${ok ? '命中' : '未命中'}`);
           return ok;
         },
         setMove: (x) => { calls.push(`setMove(${x})`); },
         setVar: (name, value) => {
-          const ok = !['t', 'phase', 'speed01', 'grounded'].includes(name);
+          // 拒绝名单与运行时模板的 setVar 保留名一致（模板为源）：
+          // t/phase/speed01/grounded/wall/ledge 是身体真相，不接受外部写入。
+          const ok = !['t', 'phase', 'speed01', 'grounded', 'wall', 'ledge'].includes(name);
           calls.push(`setVar(${name}, ${value}) → ${ok ? '模板接受（进变量表）' : '模板拒收（保留名，只留黑板）'}`);
           return ok;
         },
@@ -334,7 +341,7 @@ export default function BehaviorTreePanel({ unifiedCharacters }: { unifiedCharac
       <p className="text-[9px] text-gray-600 leading-relaxed">
         行为树是决策层（大脑），状态机是身体：每 tick 从根重跑，按世界变量决策，只输出意图、移动、写变量。
         树不进运行时包，宿主侧运行；世界变量的名字由宿主定，树只按名字读。
-        写变量会转发运行时并进变量表，状态机条件和行为图随后能读到；保留名 t/phase/speed01/grounded 由模板逐帧计算，不接受外部写入。
+        写变量会转发运行时并进变量表，状态机条件和行为图随后能读到；保留名 t/phase/speed01/grounded/wall/ledge 由模板逐帧计算，不接受外部写入。
       </p>
       <div className="flex items-center gap-2">
         <span className="text-[10px] text-gray-400">

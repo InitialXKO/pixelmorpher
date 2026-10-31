@@ -71,6 +71,15 @@ export default function PuppetPanel() {
     }
   }, [activePuppetSkeletonId]);
 
+  // 换装编辑对象跟随生效集：切角色时重置为该角色的生效集（activeCostumeSetId
+  // 缺省时置 null，DressPanel 回落到第一个服装集，与渲染端的生效集解析一致）。
+  // 同一角色内用户在换装面板手动点选其它集、或点「设为生效」的既有同步
+  // 不受影响，直到下次切角色。
+  useEffect(() => {
+    setSelectedCostumeId(selectedCharacter?.activeCostumeSetId ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePuppetSkeletonId]);
+
   // ---- 画布 → 面板：单向同步选中节点 ----
   // 画布点击节点只写 ProjectStore.selectedNodeId，
   // 这里按当前阶段分发：perform 阶段进 session，其它阶段进本地 rig 状态。
@@ -214,7 +223,6 @@ export default function PuppetPanel() {
                       unifiedCharacters={unifiedCharacters}
                       selectedNodeId={selectedNodeId}
                       selectedNode={selectedNode}
-                      handleSelectNodeWithSync={handleSelectNodeWithSync}
                     />
                   </div>
                 ),

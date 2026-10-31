@@ -81,7 +81,7 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
       <div>
         <Label className="text-[10px] text-gray-500 uppercase tracking-wider">行为蓝图（按节点）</Label>
         <p className="mt-0.5 text-[9px] text-gray-600 leading-relaxed">
-          时间基 = 60fps 帧（time 节点输出帧数）。宿主 vars（用 var 节点读）：
+          时间基 = 秒（time 节点输出秒数；本编辑器预览按 60fps 推进，60 帧 = 1 秒）。宿主 vars（用 var 节点读）：
           t=秒、phase=步态相位圈数（移动约 0.5 圈/s、静止约 0.067 圈/s、腾空 0.3 圈/s）、
           moveX=-1/0/1、speed01、grounded=1/0。跨节点跟随用 nodeRef，读上一帧
           还是同帧由每张图自己的「跟随」开关决定（上一帧 = 纯延迟一帧）。
@@ -198,7 +198,16 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
                 <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1.5" onClick={() => setSelPerfId(selPerfId === perf.id ? null : perf.id)}>
                   {selPerfId === perf.id ? '收起' : '展开'}
                 </Button>
-                <Button size="sm" variant="ghost" className="size-6 text-red-400 hover:text-red-300" onClick={() => patchCharacter({ performances: performances.filter((x) => x.id !== perf.id) }, '删除表演')}>
+                <Button size="sm" variant="ghost" className="size-6 text-red-400 hover:text-red-300" onClick={() => {
+                  // 被状态机引用的表演删前点名受影响状态（消费端导出时会把
+                  // 这些状态降为常驻，删的当下先让用户知情再删）
+                  const referencing = (character.stateMachine?.states ?? []).filter((s) => s.performanceId === perf.id);
+                  if (referencing.length > 0) {
+                    const names = referencing.map((s) => s.id).join('、');
+                    if (!window.confirm(`表演「${perf.name}」正被状态机的状态引用：${names}。删除后这些状态在导出时会降为常驻。仍要删除吗？`)) return;
+                  }
+                  patchCharacter({ performances: performances.filter((x) => x.id !== perf.id) }, '删除表演');
+                }}>
                   <Trash2 className="size-3" />
                 </Button>
               </div>
@@ -347,7 +356,7 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
             <Button size="sm" variant="ghost" className="h-7 text-[11px]" onClick={() => setEditing(null)}>取消</Button>
           </div>
           <p className="text-[9px] text-gray-600">
-            时间基 = 表演时长（time 节点的 t 按帧计，采样时以时长换算）；节点徽标为运行时方言：可求值 / 采样烘焙 / 不支持。
+            时间基 = 秒（time 节点的 t 是表演已播的秒数，从 0 到时长；导出采样时按 t ÷ 时长铺满全程）；节点徽标为运行时方言：可求值 / 采样烘焙 / 不支持。
           </p>
           <BlueprintEditor
             graph={editing.graph}

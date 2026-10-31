@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { NodeTreeItemWrapper } from './NodeTree';
+import CommitNumberInput from '../shared/CommitNumberInput';
 import { collectSubtreeIds, deleteNodeSubtree, findParentNode, ikChainMembership, reparentNode } from '@/lib/node-actions';
 import { planParentSwitch } from '@/lib/parent-switch';
 import PuppetModifierPanel from './PuppetModifierPanel';
@@ -38,8 +38,6 @@ interface RigPanelProps {
   unifiedCharacters: Record<string, Character>;
   selectedNodeId: string | null;
   selectedNode: Node | null;
-  handleSelectNodeWithSync: (nodeId: string | null) => void;
-  /** 隐藏节点树（用左侧共享树），只显示细节 */
 }
 
 /** 关节盘当前有效直径（数据口径与人偶兜底共用 nodeJointDiscDiameter：
@@ -114,7 +112,6 @@ export default function RigPanel({
   unifiedCharacters,
   selectedNodeId,
   selectedNode,
-  handleSelectNodeWithSync,
 }: RigPanelProps) {
   // 骨架用左侧选中的，不再用 prop 传进来的
   const activePuppetSkeletonId = useEditorStore((s) => s.activePuppetSkeletonId);
@@ -134,16 +131,6 @@ export default function RigPanel({
       store.updateUnifiedNode(activePuppetSkeletonId, nodeId, updates);
     },
     [activePuppetSkeletonId]
-  );
-
-  const handleToggleNodeVisibility = useCallback(
-    (nodeId: string) => {
-      if (!selectedSkeletonId) return;
-      const node = selectedCharacter?.nodes[nodeId];
-      if (!node) return;
-      handleUpdateNode(nodeId, { visible: !node.visible });
-    },
-    [selectedSkeletonId, selectedCharacter, handleUpdateNode]
   );
 
   const handleTransposeClone = useCallback((thetaDeg: number) => {
@@ -439,11 +426,10 @@ function RigNodeProperties({
         <div className="flex items-end gap-1.5">
           <div className="flex-1">
             <Label className="text-[10px] text-gray-500">转位克隆（转平面角度°）</Label>
-            <Input
+            <CommitNumberInput
               id="rig-transpose-angle-input"
-              type="number"
               value={transposeAngle}
-              onChange={(e) => setTransposeAngle(Number(e.target.value) || 0)}
+              onCommit={setTransposeAngle}
               className="h-7 text-[11px] bg-[#111128] border-[#1e1e3a] mt-1"
               title="克隆此节点子树，克隆根挂 rotate 变换修改器转此角度（渲染期叠加，事后可调可关）"
             />
@@ -465,64 +451,55 @@ function RigNodeProperties({
         <div className="grid grid-cols-2 gap-1.5 mt-1">
           <div>
             <Label className="text-[9px] text-gray-600">角度°</Label>
-            <Input
-              type="number"
+            <CommitNumberInput
               value={node.transform.angle}
-              onChange={(e) => onUpdate({ transform: { ...node.transform, angle: Number(e.target.value) || 0 } })}
+              onCommit={(v) => onUpdate({ transform: { ...node.transform, angle: v } })}
               className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
             />
           </div>
           <div>
             <Label className="text-[9px] text-gray-600">拉伸</Label>
-            <Input
-              type="number"
+            <CommitNumberInput
               step="0.1"
               value={node.transform.stretch}
-              onChange={(e) => onUpdate({ transform: { ...node.transform, stretch: Number(e.target.value) || 1 } })}
+              onCommit={(v) => onUpdate({ transform: { ...node.transform, stretch: v } })}
               className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
             />
           </div>
           <div>
             <Label className="text-[9px] text-gray-600">缩放 X</Label>
-            <Input
-              type="number"
+            <CommitNumberInput
               step="0.1"
               value={node.transform.scaleX ?? 1}
-              onChange={(e) => onUpdate({ transform: { ...node.transform, scaleX: Number(e.target.value) || 1 } })}
+              onCommit={(v) => onUpdate({ transform: { ...node.transform, scaleX: v } })}
               className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
               title="横向缩放（transform.scaleX）；纵向缩放是「拉伸」"
             />
           </div>
           <div>
             <Label className="text-[9px] text-gray-600">等比缩放</Label>
-            <Input
-              type="number"
+            <CommitNumberInput
               step="0.1"
-              value={(node.transform.scaleX ?? 1) === node.transform.stretch ? node.transform.stretch : ''}
+              value={(node.transform.scaleX ?? 1) === node.transform.stretch ? node.transform.stretch : null}
               placeholder="混合"
-              onChange={(e) => {
-                const v = Number(e.target.value) || 1;
-                onUpdate({ transform: { ...node.transform, scaleX: v, stretch: v } });
-              }}
+              onCommit={(v) => onUpdate({ transform: { ...node.transform, scaleX: v, stretch: v } })}
               className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
               title="同时写横向缩放与拉伸（纵向），保持等比"
             />
           </div>
           <div>
             <Label className="text-[9px] text-gray-600">偏移 X</Label>
-            <Input
-              type="number"
+            <CommitNumberInput
               value={subToPx(node.transform.x)}
-              onChange={(e) => onUpdate({ transform: { ...node.transform, x: pxToSub(Number(e.target.value) || 0) } })}
+              onCommit={(v) => onUpdate({ transform: { ...node.transform, x: pxToSub(v) } })}
               className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
             />
           </div>
           <div>
             <Label className="text-[9px] text-gray-600">偏移 Y</Label>
-            <Input
-              type="number"
+            <CommitNumberInput
               value={subToPx(node.transform.y)}
-              onChange={(e) => onUpdate({ transform: { ...node.transform, y: pxToSub(Number(e.target.value) || 0) } })}
+              onCommit={(v) => onUpdate({ transform: { ...node.transform, y: pxToSub(v) } })}
               className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
             />
           </div>
@@ -599,9 +576,6 @@ function RigNodeProperties({
       {/* 关节 */}
       <div>
         <Label className="text-[10px] text-gray-500 uppercase tracking-wider">关节</Label>
-        <div className="grid grid-cols-2 gap-1.5 mt-1">
-          {/* TODO(migration): crossSectionTop/Bottom moved to CostumePiece.crossSections in new model */}
-        </div>
         {node.attachment?.type === 'socket' && node.attachment.parentSocketId && (
           <>
             <div className="flex items-center gap-2 mt-1.5">
@@ -637,9 +611,10 @@ function RigNodeProperties({
           <Label className="text-[9px] text-gray-600">关节盘颜色</Label>
           <input
             type="color"
-            value={node.slot?.fillColor || '#888888'}
-            onChange={(e) => onUpdate({ slot: node.slot ? { ...node.slot, fillColor: e.target.value } : undefined })}
+            value={node.attachment?.discColor || '#888888'}
+            onChange={(e) => onUpdate({ attachment: { ...node.attachment, discColor: e.target.value } })}
             className="size-6 rounded border border-[#1e1e3a] bg-transparent cursor-pointer"
+            title="自定义盘色（attachment.discColor），优先于精灵在关节处的采样色与服装件兜底色"
           />
         </div>
       </div>
@@ -647,10 +622,9 @@ function RigNodeProperties({
       {/* Z-order */}
       <div>
         <Label className="text-[10px] text-gray-500">层叠顺序 (zIndex)</Label>
-        <Input
-          type="number"
+        <CommitNumberInput
           value={node.zIndex}
-          onChange={(e) => onUpdate({ zIndex: Number(e.target.value) || 0 })}
+          onCommit={(v) => onUpdate({ zIndex: v })}
           className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a] mt-1"
         />
       </div>
@@ -686,20 +660,18 @@ function RigNodeProperties({
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <Label className="text-[9px] text-gray-600">法线角度 °</Label>
-                <Input
-                  type="number"
+                <CommitNumberInput
                   value={node.clipPlane.angleDeg}
-                  onChange={(e) => onUpdate({ clipPlane: { ...node.clipPlane!, angleDeg: Number(e.target.value) || 0 } })}
+                  onCommit={(v) => onUpdate({ clipPlane: { ...node.clipPlane!, angleDeg: v } })}
                   className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
                   title="相对锚点精灵图坐标（x 右 y 下，角度顺时针为正）；保留法线指向的一侧"
                 />
               </div>
               <div>
                 <Label className="text-[9px] text-gray-600">偏移 px</Label>
-                <Input
-                  type="number"
+                <CommitNumberInput
                   value={node.clipPlane.offset}
-                  onChange={(e) => onUpdate({ clipPlane: { ...node.clipPlane!, offset: Number(e.target.value) || 0 } })}
+                  onCommit={(v) => onUpdate({ clipPlane: { ...node.clipPlane!, offset: v } })}
                   className="h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
                   title="裁剪线沿法线距锚点精灵中心的距离（px）"
                 />
@@ -809,21 +781,15 @@ function RigNodeProperties({
                     onChange={(e) => updateSocket({ name: e.target.value })}
                     className="flex-1 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
                   />
-                  <Input
-                    type="number"
+                  <CommitNumberInput
                     value={subToPx(socket.basePosition.x)}
-                    onChange={(e) => {
-                      updateSocket({ basePosition: { ...socket.basePosition, x: pxToSub(Number(e.target.value) || 0) } });
-                    }}
+                    onCommit={(v) => updateSocket({ basePosition: { ...socket.basePosition, x: pxToSub(v) } })}
                     className="w-14 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
                     title="X"
                   />
-                  <Input
-                    type="number"
+                  <CommitNumberInput
                     value={subToPx(socket.basePosition.y)}
-                    onChange={(e) => {
-                      updateSocket({ basePosition: { ...socket.basePosition, y: pxToSub(Number(e.target.value) || 0) } });
-                    }}
+                    onCommit={(v) => updateSocket({ basePosition: { ...socket.basePosition, y: pxToSub(v) } })}
                     className="w-14 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
                     title="Y"
                   />
@@ -854,10 +820,9 @@ function RigNodeProperties({
                 {skinning === 'mesh' && (
                   <div className="flex items-center gap-1.5 text-[10px] pl-1">
                     <Label className="text-[10px] text-gray-500 shrink-0">蒙皮半径</Label>
-                    <Input
-                      type="number"
+                    <CommitNumberInput
                       value={socket.skinRadius ?? 8}
-                      onChange={(e) => updateSocket({ skinRadius: Math.max(1, Number(e.target.value) || 8) })}
+                      onCommit={(v) => updateSocket({ skinRadius: Math.max(1, v) })}
                       className="w-14 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
                       title="影响半径（像素）"
                     />
