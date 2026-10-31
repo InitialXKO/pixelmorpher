@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import PixelCanvas from '@/components/pixel-editor/PixelCanvas';
 import CanvasToolRail from '@/components/pixel-editor/toolbar/CanvasToolRail';
+import { CanvasViewToggles, CanvasZoomDock } from '@/components/pixel-editor/toolbar/CanvasViewOverlays';
 import PuppetPanel from '@/components/pixel-editor/PuppetPanel';
 import PuppetAssetPanel from '@/components/pixel-editor/PuppetAssetPanel';
 import StrokePanel from '@/components/pixel-editor/StrokePanel';
@@ -413,7 +414,14 @@ export default function Home() {
                       </div>
                     </div>
                   )}
-                  <PixelCanvas />
+                  <div className="relative flex-1 min-h-0">
+                    <PixelCanvas />
+                    {/* 画布悬浮视图控制（遮罩对位中与顶栏同等禁用） */}
+                    <div className={isLocked ? 'pointer-events-none opacity-40' : ''}>
+                      <CanvasViewToggles />
+                      <CanvasZoomDock />
+                    </div>
+                  </div>
                   </div>
                 </div>
               </ResizablePanel>

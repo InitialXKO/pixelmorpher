@@ -43,16 +43,7 @@ import {
   EffectBrushControls,
   MoveToolControls,
 } from './toolbar/ToolOptionPanels';
-import {
-  ZoomControls,
-  GridToggle,
-  SkeletonsToggle,
-  ForeshortenToggle,
-  DisplayFxControls,
-  ShowAllCharactersToggle,
-  OnionSkinToggle,
-  PreviewQualitySelect,
-} from './toolbar/ViewControls';
+import { PreviewQualitySelect } from './toolbar/ViewControls';
 import { UndoRedoControls } from './toolbar/UndoRedoControls';
 
 // ============================================================
@@ -540,23 +531,11 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
       {/* ---- Conditional Separator ---- */}
       {(showBrushOptions || isMotionBlurBrush || isEffectBrush || isLassoTool || isMagicWandTool || isMoveTool) && <Separator orientation="vertical" className="h-5 bg-white/10" />}
 
-      {/* ---- View Controls ---- */}
-      <ZoomControls />
-
-      <Separator orientation="vertical" className="h-5 bg-white/10" />
-
-      <GridToggle />
-
-      {/* Hand-drawn Trajectory Hint */}
+      {/* 视图开关与缩放已迁画布悬浮层（CanvasViewOverlays：开关右上、缩放右下）；
+          此处只剩轨迹工具提示（工具语境文案，非视图控制） */}
       {tool === 'trajectory' && (
         <span className="text-[10px] text-purple-400 mx-1">Shift+拖拽 = 手绘轨迹</span>
       )}
-
-      <SkeletonsToggle />
-      <ForeshortenToggle />
-      <DisplayFxControls />
-      <ShowAllCharactersToggle />
-      <OnionSkinToggle />
 
       <Separator orientation="vertical" className="h-5 bg-white/10" />
 
