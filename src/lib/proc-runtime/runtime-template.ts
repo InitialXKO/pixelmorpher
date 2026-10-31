@@ -3972,7 +3972,7 @@ function fxSeg(verts, w0, w1, wdt, rgb, a) {
   ];
   for (const cn of cs) verts.push(cn[0], cn[1], cn[2], cn[3], rgb[0], rgb[1], rgb[2], a, 0);
 }
-function fxW2(px, py) { return [char.x + (px - FXW / 2), charFeetY() + (FXH / 2 - py)]; }
+function fxW2(px, py) { return [char.x + (px - FXW / 2), charOriginY() + (FXH / 2 - py)]; }
 function fxRenderSet(set, frame, verts, occAt) {
   if (!set) return;
   const num = (v, d) => (v === undefined || v === null || !Number.isFinite(Number(v)) ? d : Number(v));
