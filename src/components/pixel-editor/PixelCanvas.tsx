@@ -151,8 +151,13 @@ export default function PixelCanvas() {
         const allCharacters = Object.values(unifiedChars);
         if (allCharacters.length === 0) return;
         // 角色显示互斥：与主渲染同一过滤口径（lib/visible-characters）
-        // 新模型：performCharacterId 直接是 unified Character ID
-        const session = usePuppetSessionStore.getState();
+        // 会话拼齐两处来源：开关/操控角色在 puppet-session，资产面板
+        // 当前角色（activePuppetSkeletonId）在 editor-store——候选链
+        // 解析在过滤函数内，此处只负责把三字段同口径递齐。
+        const session = {
+          ...usePuppetSessionStore.getState(),
+          activeCharacterId: useEditorStore.getState().activePuppetSkeletonId,
+        };
         const characters = filterVisibleCharacters(allCharacters, session);
         for (const character of characters) {
           try {
@@ -253,8 +258,11 @@ export default function PixelCanvas() {
       }
     } else {
       const animationClips = useProjectStore.getState().animationClips;
-      // 角色显示互斥过滤
-      const puppetSession = usePuppetSessionStore.getState();
+      // 角色显示互斥过滤（会话拼齐口径同洋葱皮处：补 editor-store 的当前角色）
+      const puppetSession = {
+        ...usePuppetSessionStore.getState(),
+        activeCharacterId: useEditorStore.getState().activePuppetSkeletonId,
+      };
       // 必须从 store 直接读最新的 characters：闭包里的引用在蓝图挂载后可能还是旧的
       // 在蓝图挂载后可能还是旧引用，导致播放时读不到 blueprint
       const freshStore = useProjectStore.getState();
@@ -379,7 +387,10 @@ export default function PixelCanvas() {
         shouldRender: s.showPuppetSkeleton && charList.length > 0,
         // 骨骼是逐角色画的本体可视化，跟主渲染同一可见集（隐藏角色不漏骨骼）；
         // 下方 activeChar 的附属物（IK 手柄等）仍按 activePuppetSkeletonId 既有口径，不在此列。
-        characters: filterVisibleCharacters(charList, usePuppetSessionStore.getState()), activePuppetSkeletonId: s.activePuppetSkeletonId,
+        characters: filterVisibleCharacters(charList, {
+          ...usePuppetSessionStore.getState(),
+          activeCharacterId: useEditorStore.getState().activePuppetSkeletonId,
+        }), activePuppetSkeletonId: s.activePuppetSkeletonId,
         selectedNodeId: s.selectedNodeId,
         animationClips: useProjectStore.getState().animationClips, sprites: Object.values(useProjectStore.getState().sprites),
       });
