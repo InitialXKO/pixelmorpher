@@ -65,7 +65,7 @@ export function ZoomControls() {
             <ZoomOut className="size-3.5" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">Zoom Out</TooltipContent>
+        <TooltipContent side="top" className="text-xs">Zoom Out</TooltipContent>
       </Tooltip>
 
       <span className="text-[10px] text-gray-500 w-9 text-center font-mono">
@@ -83,7 +83,7 @@ export function ZoomControls() {
             <ZoomIn className="size-3.5" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">Zoom In</TooltipContent>
+        <TooltipContent side="top" className="text-xs">Zoom In</TooltipContent>
       </Tooltip>
 
       <Tooltip>
@@ -97,7 +97,7 @@ export function ZoomControls() {
             <Maximize className="size-3.5" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">Fit to View</TooltipContent>
+        <TooltipContent side="top" className="text-xs">Fit to View</TooltipContent>
       </Tooltip>
     </div>
   );
@@ -120,7 +120,7 @@ export function GridToggle() {
           <Grid3x3 className="size-3.5" />
         </Toggle>
       </TooltipTrigger>
-      <TooltipContent side="bottom" className="text-xs">Toggle Grid</TooltipContent>
+      <TooltipContent side="left" className="text-xs">Toggle Grid</TooltipContent>
     </Tooltip>
   );
 }
@@ -145,7 +145,7 @@ export function SkeletonsToggle() {
           <Bone className="size-3.5" />
         </Toggle>
       </TooltipTrigger>
-      <TooltipContent side="bottom" className="text-xs">显示骨骼（节点标签/IK目标/插槽）</TooltipContent>
+      <TooltipContent side="left" className="text-xs">显示骨骼（节点标签/IK目标/插槽）</TooltipContent>
     </Tooltip>
   );
 }
@@ -178,9 +178,9 @@ export function DisplayFxControls() {
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">显示效果（人偶衣物色区/空气透视）</TooltipContent>
+        <TooltipContent side="left" className="text-xs">显示效果（人偶衣物色区/空气透视）</TooltipContent>
       </Tooltip>
-      <PopoverContent className="w-60 bg-[#1a1a2e] border-white/10 text-gray-200 p-3" side="bottom" align="end">
+      <PopoverContent className="w-60 bg-[#1a1a2e] border-white/10 text-gray-200 p-3" side="left" align="start">
         <div className="space-y-3">
           <div className="text-xs font-medium text-gray-300">人偶衣物色区</div>
           {row('袖口比例', sleeve, setSleeve)}
@@ -213,7 +213,7 @@ export function ForeshortenToggle() {
           <Scaling className="size-3.5" />
         </Toggle>
       </TooltipTrigger>
-      <TooltipContent side="bottom" className="text-xs">透视缩短（精灵沿骨骼方向按投影缩放）</TooltipContent>
+      <TooltipContent side="left" className="text-xs">透视缩短（精灵沿骨骼方向按投影缩放）</TooltipContent>
     </Tooltip>
   );
 }
@@ -236,7 +236,7 @@ export function ShowAllCharactersToggle() {
           <Users className="size-3.5" />
         </Toggle>
       </TooltipTrigger>
-      <TooltipContent side="bottom" className="text-xs">
+      <TooltipContent side="left" className="text-xs">
         {showAllCharacters
             ? '显示全部角色（点击仅显示选中）'
             : '仅显示选中角色（点击显示全部）'}
@@ -279,9 +279,9 @@ export function OnionSkinToggle() {
             </Toggle>
           </PopoverTrigger>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">Onion Skin</TooltipContent>
+        <TooltipContent side="left" className="text-xs">Onion Skin</TooltipContent>
       </Tooltip>
-      <PopoverContent className="w-56 bg-[#1a1a2e] border-white/10 text-gray-200" side="bottom">
+      <PopoverContent className="w-56 bg-[#1a1a2e] border-white/10 text-gray-200" side="left">
         <div className="space-y-3">
           <div className="text-xs font-medium text-gray-300">Onion Skin Settings</div>
           <div className="flex items-center gap-2">

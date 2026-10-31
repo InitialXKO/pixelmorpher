@@ -1155,7 +1155,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
                   e.stopPropagation();
                 }}
               >
-                <span className="text-[10px] font-medium text-gray-200 truncate" title={node.type}>
+                <span className="text-[10px] font-medium text-gray-200 truncate" title={getBlueprintNodeLabel(node.type)}>
                   {getBlueprintNodeLabel(node.type)}
                   {isOutput && <span className="text-[8px] text-emerald-400 ml-1">输出</span>}
                   {inRuntime && (() => {
