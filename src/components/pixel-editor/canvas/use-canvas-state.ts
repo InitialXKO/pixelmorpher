@@ -382,7 +382,10 @@ export function useCanvasState() {
       // 绘制侧 beginPickFrame 与此处读到的必须是同一个对象，拾取戳记
       // 的同一性校验才对得上；未过滤时即原表）。隐藏的角色编号图里
       // 没画、几何兜底也不迭代它——看不见即点不中。
-      const visibleRecord = visibleCharactersRecord(state.unifiedCharacters, usePuppetSessionStore.getState());
+      const visibleRecord = visibleCharactersRecord(state.unifiedCharacters, {
+        ...usePuppetSessionStore.getState(),
+        activeCharacterId: useEditorStore.getState().activePuppetSkeletonId,
+      });
       // 拾取编号图（与主画布同帧绘制的剪影编号）：戳记对上（fresh）
       // 时它是 tier 0 的权威口径——读到节点即视觉最上层，读到背景
       // 即此处没画精灵/关节盘（像素链擦掉的区域点不中）
