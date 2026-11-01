@@ -368,6 +368,90 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     }
     return { out: num(pairs[pairs.length - 1]!.v) };
   },
+  // pattern_cue: 时序编排（pixelfx moves 的 cue 链在蓝图里的落点：
+  // 条目父模式只有调制/相位/跟随三种配合边，时序编排边归蓝图）
+  // params.cues: JSON 数组 [{at, value, hold?, hitstop?, shake?}]
+  //   - at/value：cue 时刻（秒）与阶梯值
+  //   - hold（可选，秒）：value 只在 [at, at+hold) 生效，过期回落到
+  //     更早的 cue（无更早 cue 回 0）；不给 hold = 保持到下一条 cue
+  //   - hitstop/shake（可选）：该 cue 的事件量（命中停顿秒数/震屏
+  //     幅度 px），在事件窗口内经同名输出给出
+  // params.cycleSec: >0 时时间按周期回绕、cue 每圈重复触发；0=不循环
+  // params.pulseWidth: 事件窗口（秒），缺省一帧（1/frameRate）
+  // 输出：
+  //   - value / out（同值）：当前时刻生效 cue 的 value；无 cue 生效时 0
+  //   - pulse：任一 cue 的事件窗口内为 1，其余 0
+  //   - hitstop / shake：事件窗口内最近触发 cue 的事件量，窗口外 0
+  // 帧离散口径：求值器逐帧在 t = frame/frameRate 求值一次，cue 在
+  // 第一个 te >= at 的帧上触发，窗口按 0 <= te - at < pulseWidth
+  // 判定（循环时 te - at 取周期内前向距离）；pulseWidth >= 帧步时
+  // 不漏触发，小于帧步时窗口可能整段落在两帧之间而无输出。
+  // 接法：value 接 dynamic_pattern 节点的同名参数输入（如
+  // glowStrength / rate / arcGrowHz），渲染时经 pattern-sync 的
+  // 接线覆盖逐帧驱动图案参数（与 keyframes 同路）；进包按
+  // dynamic_pattern 的 params 固化、接线不进包（既有口径）。
+  // hitstop/shake 目前蓝图侧无消费端：只负责在命中帧给出设定值，
+  // 消费口待表演线接（勿把程序化 shake 节点当作消费端——那是
+  // 独立的抖动发生器，不读外部 shake 信号）。
+  pattern_cue: (n, i, ctx): Record<string, BlueprintValue> => {
+    const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
+    let raw: unknown = null;
+    try {
+      raw = JSON.parse(String(n.params.cues ?? ''));
+    } catch { /* 损坏的 cues 按空时间线处理 */ }
+    if (!Array.isArray(raw) || raw.length === 0) {
+      // 缺省示例：0s 起值 1；0.5s 跳到 2 并带一次命中事件
+      raw = [
+        { at: 0, value: 1 },
+        { at: 0.5, value: 2, hitstop: 0.08, shake: 3 },
+      ];
+    }
+    const list = (raw as Array<Record<string, unknown>>)
+      .map((c) => ({
+        at: Number(c.at ?? 0),
+        value: Number(c.value ?? 0),
+        hold: c.hold === undefined || c.hold === null ? undefined : Math.max(0, Number(c.hold)),
+        hitstop: Math.max(0, Number(c.hitstop ?? 0)),
+        shake: Math.max(0, Number(c.shake ?? 0)),
+      }))
+      .filter((c) => Number.isFinite(c.at) && Number.isFinite(c.value))
+      .sort((a, b) => a.at - b.at);
+    const zero = { value: num(0), out: num(0), pulse: num(0), hitstop: num(0), shake: num(0) };
+    if (list.length === 0) return zero;
+    const cycleSec = Math.max(0, asNumber(i.cycleSec ?? num(Number(n.params.cycleSec ?? 0))));
+    const pulseWidth = Math.max(0, asNumber(
+      i.pulseWidth ?? num(Number(n.params.pulseWidth ?? (1 / (ctx.frameRate || 12)))),
+    ));
+    // d = 距该 cue 上次触发的时长；不循环且 at 未到时 d < 0（未触发）
+    const dist = (at: number): number => {
+      if (cycleSec > 0) return (((t - at) % cycleSec) + cycleSec) % cycleSec;
+      return t - at;
+    };
+    // 边界容差：t 来自 frame/frameRate 的除法、at/hold 是十进制
+    // 字面量，d 与 hold/pulseWidth 的边界比较须吸收浮点表示误差
+    // （如 0.7-0.5 = 0.1999…98 ≠ 0.2）；1e-9 远小于任何帧步
+    const EPS = 1e-9;
+    // 阶梯值：生效中的 cue（d >= 0 且未过 hold）里 d 最小者
+    let value = 0;
+    let bestD = Infinity;
+    for (const c of list) {
+      const d = dist(c.at);
+      if (d < 0) continue;
+      if (c.hold !== undefined && d >= c.hold - EPS) continue;
+      if (d < bestD) { bestD = d; value = c.value; }
+    }
+    // 事件：窗口内最近触发的 cue 给出 hitstop/shake
+    let pulse = 0;
+    let hitstop = 0;
+    let shake = 0;
+    let bestEventD = Infinity;
+    for (const c of list) {
+      const d = dist(c.at);
+      if (d < 0 || d >= pulseWidth - EPS) continue;
+      if (d < bestEventD) { bestEventD = d; pulse = 1; hitstop = c.hitstop; shake = c.shake; }
+    }
+    return { value: num(value), out: num(value), pulse: num(pulse), hitstop: num(hitstop), shake: num(shake) };
+  },
   waveform: (n, i, ctx): Record<string, BlueprintValue> => {
     const t = asNumber(i.t ?? num(ctxSeconds(ctx)));
     const waveform = String(n.params.waveform ?? 'sine');
@@ -2429,6 +2513,7 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   sin: '正弦',
   waveform: '波形',
   keyframes: '关键帧',
+  pattern_cue: '时序编排',
   cos: '余弦',
   // 缓动
   ease: '缓动',

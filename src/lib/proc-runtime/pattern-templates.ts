@@ -988,6 +988,87 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       w('edge', 5, { at: 0.4 }),
     ], { cycleSec: 3, frames: 16 }),
   },
+  // ---- pixelfx 对照收录（2026-11-01，spikes/pixelfx-survey 精选配方）----
+  // 传送门：同心环 × 噪声破对称 → warp 漩涡畸变 → rotate 吃 $phaseDeg
+  // 整圈旋转（与 swirl-rune 同无缝口径）；focal 环为发光门沿。
+  {
+    id: 'portal-tex', name: '传送门', cluster: '动态',
+    params: [
+      P('gap', '环距', 2.5, 10, 0.5, 4.5), P('warp', '漩涡扭曲', 0, 12, 0.5, 6),
+      P('r', '门环半径', 5, 20, 0.5, 10),
+    ],
+    graph: graph([
+      ...baseIn(1),
+      n('rg', 'rings', undefined, { cx: 0, cy: 0, f: '$gap' }),
+      n('nz', 'noise', undefined, { f: 0.11, seed: 43 }),
+      n('brk', 'remap', { in: 'nz' }, { lo: 0.25, hi: 0.95 }),
+      n('bands', 'mul', { a: 'rg', b: 'brk' }),
+      n('ww', 'warp', { in: 'bands', fx: 'nz', fy: 'nz' }, { amp: '$warp' }),
+      n('rot', 'rotate', { in: 'ww' }, { deg: '$phaseDeg' }),
+      n('body', 'threshold', { in: 'rot' }, { at: 0.4, soft: 0.25 }),
+      n('rim', 'focal', undefined, { mode: 'ring', r: '$r', w: 1.3 }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('body', 3, { at: 0.5 }),
+      w('body', 4, { at: 0.68 }),
+      w('rim', 5, { at: 0.45 }),
+      w('rim', 0, { at: 0.75, ch: 'glint' }),
+    ], { cycleSec: 6, frames: 24 }),
+  },
+  // 毒潭：blob 潭面按 smoke-tex 的双层预移交叉淡化无缝翻卷（相位
+  // 微扫的等价无缝形）；细 blob 阈值成泡、只在潭面内写出；潭面
+  // 高光走 glint 油光。
+  {
+    id: 'toxic-pool-tex', name: '毒潭', cluster: '动态',
+    params: [
+      P('scale', '潭面尺度', 0.03, 0.16, 0.01, 0.07),
+    ],
+    graph: graph([
+      ...baseIn(1),
+      n('bl', 'blob', undefined, { f: '$scale', seed: 53, contrast: 1.2 }),
+      n('ph', 'phase'),
+      n('c05', 'const', undefined, { v: 0.5 }),
+      n('c0', 'const', undefined, { v: 0 }),
+      n('pre', 'warp', { in: 'bl', fx: 'c05', fy: 'c0' }, { amp: 20 }),
+      n('l1', 'warp', { in: 'bl', fx: 'c05', fy: 'ph' }, { amp: 10 }),
+      n('l2', 'warp', { in: 'pre', fx: 'c05', fy: 'ph' }, { amp: 10 }),
+      n('body', 'mix', { a: 'l1', b: 'l2', t: 'ph' }),
+      n('gate', 'threshold', { in: 'body' }, { at: 0.45, soft: 0.1 }),
+      n('bub', 'blob', undefined, { f: 0.3, seed: 59, contrast: 1.6 }),
+      n('bubT', 'threshold', { in: 'bub' }, { at: 0.72, soft: 0.08 }),
+      n('bubIn', 'mul', { a: 'bubT', b: 'gate' }),
+      n('sheen', 'remap', { in: 'body' }, { lo: 0.6, hi: 1, gamma: 1.5, steps: 0 }),
+    ], [
+      w('in', 1, { at: 0.5 }),
+      w('body', 2, { at: 0.42 }),
+      w('body', 3, { at: 0.6 }),
+      w('bubIn', 5, { at: 0.5 }),
+      w('sheen', 0, { at: 0.55, ch: 'glint' }),
+    ], { cycleSec: 3.2, frames: 14 }),
+  },
+  // 霜纹：双层 voronoi 边场织霜蕨、blob 门控斑驳覆盖、blur 柔边，
+  // 静态贴体（冰冻状态的贴图面）。
+  {
+    id: 'frost-tex', name: '霜纹', cluster: '自然',
+    params: [
+      P('scale', '霜蕨大小', 3, 12, 0.5, 6), P('soft', '柔边', 0.4, 3, 0.2, 1.2),
+    ],
+    graph: graph([
+      ...baseIn(2),
+      n('v1', 'voronoi', undefined, { f: '$scale', seed: 61, mode: 'edge' }),
+      n('v2', 'voronoi', undefined, { f: 11, seed: 67, mode: 'edge' }),
+      n('web', 'max', { a: 'v1', b: 'v2' }),
+      n('cov', 'blob', undefined, { f: 0.05, seed: 71, contrast: 1.1 }),
+      n('gate', 'remap', { in: 'cov' }, { lo: 0.3, hi: 0.85 }),
+      n('fr', 'mul', { a: 'web', b: 'gate' }),
+      n('soft', 'blur', { in: 'fr' }, { r: '$soft' }),
+    ], [
+      w('in', 2, { at: 0.5 }),
+      w('soft', 4, { at: 0.35 }),
+      w('soft', 5, { at: 0.6 }),
+      w('soft', 0, { at: 0.78, ch: 'glint' }),
+    ]),
+  },
 ];
 
 /** 实例化：深克隆图 + 参数取默认值（graph.params） */

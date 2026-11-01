@@ -18,6 +18,13 @@ import { subToPx } from '../unified-types';
 import { hexToRgb, lerpColor, dimColor } from './color-utils';
 import { seededRandom, hashString } from './noise';
 import { acquireCanvas, releaseCanvas } from './canvas-pool';
+import {
+  TEXT_POP_FONT_H,
+  measureTextPopUnits,
+  normalizeTextPopEvent,
+  rasterTextPop,
+  textPopEnvelope,
+} from '../text-pop';
 
 export function getTranslateOffset(modifiers: ModifierInstance[]): { x: number; y: number } {
   let x = 0;
@@ -639,6 +646,7 @@ export function renderEffectTrackFrame(
   currentFrame: number,
   _canvasWidth: number,
   _canvasHeight: number,
+  frameRate: number = 12,
 ): void {
   const params = keyframe.params;
 
@@ -735,6 +743,44 @@ export function renderEffectTrackFrame(
         const alpha = Math.pow(1 - t, (1 - decay) * 4 + 1) * 0.1;
         ctx.globalAlpha = alpha;
         ctx.fillRect(-i, 0, _canvasWidth, _canvasHeight);
+      }
+      break;
+    }
+    case 'text_pop': {
+      // 飘字事件：关键帧帧号 = 事件起始帧，params = 事件本体（与其它
+      // 类型「最新关键帧持续生效」不同，本类型逐事件独立播放包络；
+      // 调用方对本类型逐个关键帧调用本函数）。语义与包内 fxRenderSet
+      // 的 text_pop 分支逐式对应，核心函数共用 lib/text-pop.ts。
+      const ev = normalizeTextPopEvent(params);
+      const tSec = (currentFrame - keyframe.frame) / (frameRate || 12);
+      const env = textPopEnvelope(tSec, ev);
+      if (!env.active || !ev.text) break;
+      const fontPixel = ev.scale * env.scaleMul;
+      const wUnits = measureTextPopUnits(ev.text);
+      if (wUnits <= 0) break;
+      // 锚点（画布 px）：char = 画布中心 + 偏移（y 向上，与既有
+      // glow/particle 编辑器渲染「角色在画布中心」的近似口径一致）；
+      // canvas = 画布像素坐标（y 向下，与笔触点同口径）。文字块中心
+      // 落在锚点上，升起 = 向画布上方移动 riseNow。
+      const ax =
+        ev.anchor === 'canvas' ? ev.x : _canvasWidth / 2 + ev.x;
+      const ay =
+        ev.anchor === 'canvas'
+          ? ev.y - env.riseNow
+          : _canvasHeight / 2 - ev.y - env.riseNow;
+      const ox = ax - (wUnits * fontPixel) / 2;
+      const oy = ay - (TEXT_POP_FONT_H * fontPixel) / 2;
+      const [r, g, b] = hexToRgb(ev.color);
+      ctx.globalAlpha = env.alpha;
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      const pxSize = Math.max(1, Math.round(fontPixel));
+      for (const pt of rasterTextPop(ev.text)) {
+        ctx.fillRect(
+          Math.round(ox + pt.x * fontPixel),
+          Math.round(oy + pt.y * fontPixel),
+          pxSize,
+          pxSize,
+        );
       }
       break;
     }

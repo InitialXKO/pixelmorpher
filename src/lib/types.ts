@@ -441,7 +441,9 @@ export type CanvasModifierType =
   | 'pixel_zoom'
   | 'bloom'
   | 'scanlines'
-  | 'canvas_mask';
+  | 'canvas_mask'
+  | 'field_wipe'
+  | 'block_shift';
 
 export interface CanvasModifierParam {
   name: string;
@@ -549,7 +551,7 @@ export interface Track {
 
 // ---- Effect ----
 
-export type EffectType = 'glow' | 'particle' | 'afterimage' | 'pixel_displace' | 'motion_blur';
+export type EffectType = 'glow' | 'particle' | 'afterimage' | 'pixel_displace' | 'motion_blur' | 'text_pop';
 
 export interface EffectKeyframe {
   id: string;
@@ -3226,6 +3228,39 @@ export const CANVAS_MODIFIER_DEFINITIONS: CanvasModifierDefinition[] = [
       ]},
       { name: 'margin', label: '边距', type: 'number', default: 0, min: 0, max: 50, step: 1 },
       { name: 'feather', label: '羽化', type: 'number', default: 0, min: 0, max: 10, step: 1 },
+    ],
+  },
+  {
+    // 场擦除：覆盖场 cov(x,y) 与 progress 比较决定逐像素保留（见
+    // engine/canvas-modifiers.ts 的 fieldWipeCoverage 注释，方向已定死）。
+    // progress 是数值参数，走既有关键帧线性插值——0→1 揭示、1→0 遮蔽。
+    type: 'field_wipe',
+    label: '场擦除',
+    icon: 'Eraser',
+    params: [
+      { name: 'shape', label: '场形', type: 'select', default: 'threshold', options: [
+        { label: '噪声阈值', value: 'threshold' },
+        { label: '百叶', value: 'blinds' },
+        { label: '光圈', value: 'iris' },
+        { label: '菱形', value: 'diamond' },
+      ]},
+      { name: 'progress', label: '进度', type: 'number', default: 1, min: 0, max: 1, step: 0.01 },
+      { name: 'feather', label: '软边', type: 'number', default: 0.02, min: 0, max: 0.2, step: 0.01 },
+      { name: 'seed', label: '种子', type: 'number', default: 7, min: 0, max: 999, step: 1 },
+    ],
+  },
+  {
+    // 块位移：整帧按块网格水平错位（地面震颤/地块翘错）。strength 是
+    // 数值参数、由关键帧包络驱动（起震→回落打 strength 的键即可）。
+    type: 'block_shift',
+    label: '块位移',
+    icon: 'Blocks',
+    params: [
+      { name: 'blockPx', label: '块尺寸(px)', type: 'number', default: 16, min: 4, max: 64, step: 1 },
+      { name: 'ampPx', label: '位移上限(px)', type: 'number', default: 6, min: 0, max: 32, step: 1 },
+      { name: 'rows', label: '作用行带(自底向上,0=全帧)', type: 'number', default: 0, min: 0, max: 64, step: 1 },
+      { name: 'decay', label: '逐行衰减', type: 'number', default: 1, min: 0, max: 1, step: 0.05 },
+      { name: 'strength', label: '强度(关键帧包络)', type: 'number', default: 1, min: 0, max: 1, step: 0.01 },
     ],
   },
 ];

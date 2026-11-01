@@ -22,6 +22,7 @@ import { applyBrushCommandsToGrid } from '../engine/pixel-modifiers';
 import { computeStackOps, rasterizeStackOpsData, STACK_VIEW_ELEVATION_DEG, type StackDrawOp } from '../stack-render';
 import { packMaskBits, unpackMaskBits } from '../sprite-marks';
 import { collectDesiredPatterns, effectivePatternGraph, extractPatternInstances } from '../blueprint/pattern-sync';
+import { characterHasCueEvents } from '../perform-fx';
 import { resolvePerfSlash, graphWithoutSlashNodes } from '../blueprint/slash-sync';
 import { findSlashDef, resolveClipSlash } from '../slash-defs';
 import { rgbaToHexOrNull } from '../engine/utils';
@@ -71,6 +72,11 @@ export interface RuntimeDynamicInstance {
   id: string;
   slot: string;
   params: DynamicPatternParams;
+  /** 有状态模拟标记（D6 流体一期）：params.runtimeSim 为真时由
+   * convert 打上；运行时模板据此把本实例的粒子从闭式 dynSimulate
+   * 分流到持久粒子池（烟雾对流保真层）。缺省无此字段 = 旧行为，
+   * 与包级 chains? 同为可选缺省形态。 */
+  stateSim?: boolean;
   /** 追随段烘焙增量曲线（u = 全程窗进度 0..1 → 增量；运行时空间：
    * da 为弧度、ds 为沿轴缩放倍乘）。导出时由源部件的全程窗轨道样本
    * 按锚定换算逐帧算好（连接点锚死，平移增量按跟随者主轴与臂长换
@@ -605,7 +611,10 @@ function dynFor(
       if (ex.params) params = ex.params;
       else warnings?.push(`模式库：动态实例（效果位 ${x.instance.slot}）引用 ${ref.id}@${ref.version} 展开失败，沿用快照——${ex.errors.join('；')}`);
     }
-    return { id: x.instance.id, slot: x.instance.slot, params };
+    return {
+      id: x.instance.id, slot: x.instance.slot, params,
+      ...(params.runtimeSim ? { stateSim: true } : {}),
+    };
   });
 }
 
@@ -797,6 +806,13 @@ export function convertCharacterToRuntimePackage(
   };
   // 精灵引用解析表：角色自带表 + 工程级全局表（全局优先），与主画布同口径
   const spriteTable: SpriteTable = { ...(character.sprites ?? {}), ...(externalSprites ?? {}) };
+  // 时序编排命中事件（pattern_cue 的 hitstop/shake）：消费在编辑器
+  // 播放层（perform-fx），与蓝图接线同界——接线进包固化、包内无
+  // 事件求值口，且包内播放是状态机场景、没有工程时间轴原点可
+  // 映射 cue 的事件时刻，故不进包；带事件的 cue 在此点名。
+  if (characterHasCueEvents(character)) {
+    warnings.push(`角色「${character.name}」蓝图时序编排含命中事件（定格/震屏）：只在编辑器播放时生效，未进包（与蓝图接线同界）`);
+  }
   // 工程帧率：一切帧↔秒换算的唯一来源（调用方传入；缺省 12 仅兜底）
   const projectFpsTop = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
   const worlds = computeWorldTransforms(character, 0, 512, 512, projectFpsTop);

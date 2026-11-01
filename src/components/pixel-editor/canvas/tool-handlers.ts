@@ -16,6 +16,7 @@ import { computeWorldTransforms, geometryDirectionFromToggle } from '@/lib/unifi
 import { resolvePuppetNodeSprite } from '@/lib/engine/puppet-utils';
 import { spriteLocalPoint } from '@/lib/node-picking';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
+import { bakeCanvasPointsToTrajectory } from '@/lib/motion-guide';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import {
   newMarkId, uniqueMarkName, rectSpecFromCorners, paintedSpecFromCells,
@@ -1542,28 +1543,20 @@ export const nodeTrajectoryHandler: ToolHandler = {
     if (node.parentId && character.nodes[node.parentId]) {
       parentWorldAngle = computeNodeWorldAngle(character, node.parentId);
     }
-    const angleRad = (parentWorldAngle * Math.PI) / 180;
-    const cosA = Math.cos(angleRad), sinA = Math.sin(angleRad);
-
     // 路径采样到帧
     const pathLength = path.length;
     const numSamples = Math.min(totalFrames, Math.max(2, Math.round(pathLength / 3)));
-    const points: { frame: number; x: number; y: number }[] = [];
+    const canvasPts: { x: number; y: number }[] = [];
+    const frames: number[] = [];
     for (let i = 0; i < numSamples; i++) {
       const pathIndex = Math.min(Math.round((i * (pathLength - 1)) / (numSamples - 1)), pathLength - 1);
-      const pt = path[pathIndex];
-      const frame = numSamples === 1 ? 0 : Math.round((i / (numSamples - 1)) * (totalFrames - 1));
-      // 画布增量 → 父节点局部增量（逆旋转）
-      const ddx = pt.x - baseWorld.x;
-      const ddy = pt.y - baseWorld.y;
-      const localDx = ddx * cosA + ddy * sinA;
-      const localDy = -ddx * sinA + ddy * cosA;
-      points.push({
-        frame,
-        x: Math.round(baseX + pxToSub(localDx)),
-        y: Math.round(baseY + pxToSub(localDy)),
-      });
+      canvasPts.push(path[pathIndex]!);
+      frames.push(numSamples === 1 ? 0 : Math.round((i / (numSamples - 1)) * (totalFrames - 1)));
     }
+    // 画布点 → 父级局部轨迹点的换算与制导生成共用同一份（lib/motion-guide）
+    const points = bakeCanvasPointsToTrajectory(canvasPts, {
+      baseX, baseY, baseWorld, parentWorldAngleDeg: parentWorldAngle,
+    }, frames);
 
     store.pushUndo('绘制节点轨迹');
     store.updateUnifiedNode(character.id, node.id, { trajectory: points });

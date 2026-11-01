@@ -18,6 +18,12 @@ function dynHash01(a, b, c, d) {
   h ^= h >>> 13; h = Math.imul(h, 16777619); h ^= h >>> 16;
   return (h >>> 0) / 4294967296;
 }
+function dynHash01N(...ns) {
+  let h = 2166136261;
+  for (let i = 0; i < ns.length; i++) { const n = ns[i]; h ^= (n | 0) + 0x9e3779b9; h = Math.imul(h ^ (h >>> 15), 16777619); }
+  h ^= h >>> 13; h = Math.imul(h, 16777619); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
 function dynSeedOf(s) {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
@@ -291,6 +297,43 @@ function dynArcPoints(params, tSec, endX, endY, hasEnd) {
     }
     return { main: dynArcClip(mainFull, grow), branches: [], dots: dots, alpha: alpha };
   }
+  if (p.arcMode === 'ring') {
+    // 环带孪生（与 arcPointsAt 同式）：main = 圆心哨点；
+    // branches[0] = 后半环（本地 y<0)、branches[1] = 前半环
+    const R = Math.max(4, p.arcLengthPx) * grow;
+    const tilt = Math.max(0.16, Math.min(1, p.arcTilt || 0.35));
+    const cd = Math.cos(dir), sd = Math.sin(dir);
+    const N = 28;
+    const back = [];
+    const front = [];
+    for (let i = 0; i <= N; i++) {
+      const a = Math.PI + (i / N) * Math.PI;
+      const exx = Math.cos(a) * R, eyy = Math.sin(a) * R * tilt;
+      back.push([exx * cd - eyy * sd, exx * sd + eyy * cd, p.arcWidthPx]);
+    }
+    for (let i = 0; i <= N; i++) {
+      const a = (i / N) * Math.PI;
+      const exx = Math.cos(a) * R, eyy = Math.sin(a) * R * tilt;
+      front.push([exx * cd - eyy * sd, exx * sd + eyy * cd, p.arcWidthPx]);
+    }
+    const ringAlpha = p.arcGrowHz > 0 ? alpha * (1 - grow) : alpha;
+    return { main: [[0, 0, p.arcWidthPx]], branches: [back, front], dots: [], alpha: ringAlpha };
+  }
+  if (p.arcMode === 'fan') {
+    // 扇面孪生（与 arcPointsAt 同式）：main = 填充边界
+    // [原点， 弦置换链 A→B, 原点]，w = 径向占比
+    const half = ((p.arcFanDeg || 70) * Math.PI) / 360;
+    const L = Math.max(4, p.arcLengthPx);
+    const ax = Math.cos(dir - half) * L, ay = Math.sin(dir - half) * L;
+    const bx = Math.cos(dir + half) * L, by = Math.sin(dir + half) * L;
+    const chain = dynArcDisplaceLine(ax, ay, bx, by, p.arcDisplace * 2, 4, p.arcSeed, step, 0);
+    const boundary = [[0, 0, 0]];
+    for (const q of chain.pts) {
+      boundary.push([q[0], q[1], Math.max(0, Math.min(1, Math.hypot(q[0], q[1]) / L))]);
+    }
+    boundary.push([0, 0, 0]);
+    return { main: dynArcClip(boundary, grow), branches: [], dots: [], alpha: alpha };
+  }
   const ex = hasEnd ? endX : Math.cos(dir) * p.arcLengthPx;
   const ey = hasEnd ? endY : Math.sin(dir) * p.arcLengthPx;
   const mainLen = Math.hypot(ex, ey);
@@ -424,6 +467,71 @@ function dynOrbitPoints(params, tSec, worldAngleDeg) {
   }
   return out;
 }
+function dynBallisticAt(params, sx, sy, vx, vy, age) {
+  const rise = params.rise, buoy = params.buoy;
+  if (!params.groundEnabled) {
+    return {
+      x: sx + vx * age, y: sy + vy * age - rise * age - 0.5 * buoy * age * age,
+      vx: vx, vy: vy - rise - buoy * age, segVx: vx, segVy: vy,
+      rested: false, landAge: null, landX: 0,
+    };
+  }
+  const GY = params.groundYPx ?? 0;
+  let segT = 0;
+  let x0 = sx, y0 = sy, vx0 = vx, vy0 = vy;
+  let landAge = null, landX = 0;
+  for (let seg = 0; seg < 16; seg++) {
+    const tau = age - segT;
+    const A = -0.5 * buoy, B = vy0 - rise, C = y0 - GY;
+    let hitTau = null, hitVy = 0;
+    if (Math.abs(C) <= 1e-9 && B > 0) {
+      hitTau = 0; hitVy = B;
+    } else if (Math.abs(A) < 1e-12) {
+      if (B > 0) {
+        const t = -C / B;
+        if (t > 1e-6) { hitTau = t; hitVy = B; }
+      }
+    } else {
+      const disc = B * B - 4 * A * C;
+      if (disc >= 0) {
+        const sq = Math.sqrt(disc);
+        const r1 = (-B - sq) / (2 * A), r2 = (-B + sq) / (2 * A);
+        const cand = [Math.min(r1, r2), Math.max(r1, r2)];
+        for (let ci = 0; ci < 2; ci++) {
+          const r = cand[ci];
+          if (r <= 1e-6) continue;
+          const d = B + 2 * A * r;
+          if (d > 0) { hitTau = r; hitVy = d; break; }
+        }
+      }
+    }
+    if (hitTau === null || hitTau > tau) {
+      return {
+        x: x0 + vx0 * tau, y: y0 + vy0 * tau - rise * tau - 0.5 * buoy * tau * tau,
+        vx: vx0, vy: vy0 - rise - buoy * tau, segVx: vx0, segVy: vy0,
+        rested: false, landAge: landAge, landX: landX,
+      };
+    }
+    const xImp = x0 + vx0 * hitTau;
+    if (landAge === null) { landAge = segT + hitTau; landX = xImp; }
+    const vyRef = -hitVy * (params.bounce ?? 0);
+    if ((params.bounce ?? 0) <= 0 || Math.abs(vyRef) < (params.restVelPx ?? 0)) {
+      return { x: xImp, y: GY, vx: 0, vy: 0, segVx: 0, segVy: 0, rested: true, landAge: landAge, landX: landX };
+    }
+    if (hitTau >= tau) {
+      return {
+        x: xImp, y: GY, vx: vx0 * 0.7, vy: vyRef - rise, segVx: vx0 * 0.7, segVy: vyRef,
+        rested: false, landAge: landAge, landX: landX,
+      };
+    }
+    segT += hitTau; x0 = xImp; y0 = GY; vx0 = vx0 * 0.7; vy0 = vyRef;
+  }
+  return { x: x0, y: y0, vx: 0, vy: 0, segVx: 0, segVy: 0, rested: true, landAge: landAge, landX: landX };
+}
+function dynSpinRot(params, age, seedBase, b, k, saltSign, saltPhase) {
+  const sign = dynHash01(seedBase, b, k, saltSign) < 0.5 ? -1 : 1;
+  return (params.particleSpinDeg ?? 0) * age * sign + dynHash01(seedBase, b, k, saltPhase) * 360;
+}
 function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
   const params = inst.params;
   if (!params.emitEnabled || params.rate <= 0 || params.life <= 0) return [];
@@ -431,7 +539,17 @@ function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
   const pts = dynSourcePoints(params, tile, contour);
   if (pts.length === 0) return [];
   const seedBase = dynSeedOf(seedKey + '|' + (inst.id || inst.slot));
-  const lifeFrames = params.life * frameRate;
+  // 与产品侧 dynamic-pattern-sim.ts simulateDynamicParticles 逐式
+  // 镜像（探针 verify-particle-twin-align 全网格对拍）：出生回放
+  // 窗口前扩 extSec = 链/落地派生时程取大；弹道走 dynBallisticAt
+  // （不含 sway），sway 只在主粒子绘制位置叠加（全龄相位、当前
+  // 段发射参数取向）；链粒子无 sway/buoy、alpha 不走后期丢弃；
+  // 落地派生按父首次落地事件整块派生（dynHash01N 变长哈希）。
+  const extSec = Math.max(
+    params.chainEnabled ? (params.chainLife ?? 0) : 0,
+    params.landEmitEnabled ? (params.landEmitDuration ?? 0) : 0,
+  );
+  const lifeFrames = (params.life + extSec) * frameRate;
   const firstBirth = Math.max(0, Math.ceil(frame - lifeFrames));
   const lastBirth = Math.floor(frame);
   // 发射方向绑定：tile.marksDir（名 → 角度，图集期由精灵标记
@@ -444,16 +562,22 @@ function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
   const cap = params.layer === 'both'
     ? Math.max(1, Math.round(params.maxParticles * (layer === 'front' ? params.frontRatio : 1 - params.frontRatio)))
     : params.maxParticles;
+  const envOf = (r) => (r < 0.15 ? r / 0.15 : 1 - (r - 0.15) / 0.85);
+  const groundY = params.groundYPx ?? 0;
   const out = [];
   for (let b = lastBirth; b >= firstBirth; b--) {
-    const amount = dynDeformAt(params, b / frameRate).amount;
+    const tBirth = b / frameRate;
+    const amount = dynDeformAt(params, tBirth).amount;
     const rateNow = params.rate * (1 - params.linkToDeform + params.linkToDeform * amount);
     const expected = rateNow / frameRate;
     let n = Math.floor(expected);
     if (dynHash01(seedBase, b, 991) < expected - n) n++;
     const age = (frame - b) / frameRate;
     const lifeRatio = age / params.life;
-    if (lifeRatio < 0 || lifeRatio >= 1) continue;
+    const parentAlive = lifeRatio >= 0 && lifeRatio < 1;
+    const chainAlive = !!params.chainEnabled && age >= params.life && age - params.life < (params.chainLife ?? 0);
+    const mayLand = !!params.landEmitEnabled && !!params.groundEnabled;
+    if (!parentAlive && !chainAlive && !mayLand) continue;
     for (let k = 0; k < n; k++) {
       if (params.layer !== 'both') {
         if (params.layer !== layer) continue;
@@ -472,7 +596,7 @@ function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
       const cs = Math.cos(spread), sn = Math.sin(spread);
       const rvx = vx * cs - vy * sn, rvy = vx * sn + vy * cs;
       vx = rvx; vy = rvy;
-      // 汇聚模式（与产品侧 dynamic-pattern-sim 同式）
+      // 汇聚模式（与产品侧同式）
       let spawnX = sx, spawnY = sy;
       if (params.emitMode === 'gather') {
         const vlen0 = Math.hypot(vx, vy);
@@ -483,32 +607,117 @@ function dynSimulate(inst, tile, frame, frameRate, layer, seedKey) {
         }
         vx = -vx; vy = -vy;
       }
-      const sway = params.turbulence * Math.sin(age * 3.1 + dynHash01(seedBase, b, k, 41) * Math.PI * 2) * Math.min(1, age);
-      const px = spawnX + vx * age + sway * -vy * 0.14;
-      const py = spawnY + vy * age - params.rise * age - 0.5 * params.buoy * age * age + sway * vx * 0.14;
-      const size = params.sizeStart + (params.sizeEnd - params.sizeStart) * lifeRatio;
-      const env = lifeRatio < 0.15 ? lifeRatio / 0.15 : 1 - (lifeRatio - 0.15) / 0.85;
-      const vlen = Math.hypot(vx, vy);
-      // 图案级全局后期（与产品侧同式）：抖动消散按包络概率掉落
-      // （哈希 61），存活粒子全 alpha 出画；透明度分级量化 alpha
-      if (params.postEnabled && params.postDither) {
-        if (dynHash01(seedBase, b, k, 61) >= env) continue;
-        var postAlpha = params.alpha;
-      } else {
-        var postAlpha = Math.max(0, params.alpha * env);
-        if (params.postEnabled && params.postAlphaLevels >= 2) {
+      const phi = dynHash01(seedBase, b, k, 41) * Math.PI * 2;
+      // ---- 主粒子（cls 0）----
+      let trajMain = null;
+      if (params.groundEnabled && parentAlive) {
+        trajMain = dynBallisticAt(params, spawnX, spawnY, vx, vy, age);
+      }
+      if (parentAlive) {
+        let px, py, velX = vx, velY = vy;
+        if (trajMain) {
+          const sway = params.turbulence * Math.sin(age * 3.1 + phi) * Math.min(1, age);
+          px = trajMain.x + sway * -trajMain.segVy * 0.14;
+          py = trajMain.y + sway * trajMain.segVx * 0.14;
+          velX = trajMain.segVx; velY = trajMain.segVy;
+        } else {
+          const sway = params.turbulence * Math.sin(age * 3.1 + phi) * Math.min(1, age);
+          px = spawnX + vx * age + sway * -vy * 0.14;
+          py = spawnY + vy * age - params.rise * age - 0.5 * params.buoy * age * age + sway * vx * 0.14;
+        }
+        const size = params.sizeStart + (params.sizeEnd - params.sizeStart) * lifeRatio;
+        const env = envOf(lifeRatio);
+        // 图案级全局后期（与产品侧同式）：抖动消散命中时整粒
+        // （含其链/落地派生）一并跳过——continue 在 k 循环层
+        let postAlpha = Math.max(0, params.alpha * env);
+        if (params.postEnabled && params.postDither) {
+          if (dynHash01(seedBase, b, k, 61) >= env) continue;
+          postAlpha = params.alpha;
+        } else if (params.postEnabled && params.postAlphaLevels >= 2) {
           const lv = params.postAlphaLevels;
           postAlpha = Math.round(postAlpha * lv) / lv;
         }
+        const vlen = Math.hypot(velX, velY);
+        out.push({
+          x: px, y: py, size: size, alpha: postAlpha,
+          color: dynPostColorAt(params, dynParticleColorAt(params, lifeRatio)),
+          shape: params.particleShape || 'dot',
+          dirX: vlen > 1e-6 ? velX / vlen : dirX,
+          dirY: vlen > 1e-6 ? velY / vlen : dirY,
+          cls: 0, rot: dynSpinRot(params, age, seedBase, b, k, 71, 72),
+        });
+        if (out.length >= cap) return out;
       }
-      out.push({
-        x: px, y: py, size: size, alpha: postAlpha,
-        color: dynPostColorAt(params, dynParticleColorAt(params, lifeRatio)),
-        shape: params.particleShape || 'dot',
-        dirX: vlen > 1e-6 ? vx / vlen : dirX,
-        dirY: vlen > 1e-6 ? vy / vlen : dirY,
-      });
-      if (out.length >= cap) return out;
+      // ---- 死后链粒子（cls 1）：父死亡弹道状态派生，初速 =
+      // 父死亡速度 ×0.6 再叠加上浮漂移（cvy 已含 −rise），其后
+      // 匀速：无 sway、无 buoy、无后期 alpha 丢弃；颜色走
+      // postColorAt(chainColor)、不走生命坡道 ----
+      let evTraj = null;
+      if (chainAlive) {
+        evTraj = dynBallisticAt(params, spawnX, spawnY, vx, vy, params.life);
+        const age2 = age - params.life;
+        const ratio2 = age2 / (params.chainLife ?? 0);
+        const cvx = evTraj.vx * 0.6;
+        const cvy = evTraj.vy * 0.6 - params.rise;
+        const env2 = envOf(ratio2);
+        const cl = Math.hypot(cvx, cvy);
+        out.push({
+          x: evTraj.x + cvx * age2,
+          y: evTraj.y + cvy * age2,
+          size: params.sizeEnd * (params.chainSizeMul ?? 1) * (1 + 0.5 * ratio2),
+          alpha: Math.max(0, params.alpha * env2),
+          color: dynPostColorAt(params, params.chainColor ?? params.color),
+          shape: 'puff',
+          dirX: cl > 1e-6 ? cvx / cl : 0,
+          dirY: cl > 1e-6 ? cvy / cl : -1,
+          cls: 1, rot: dynSpinRot(params, age2, seedBase, b, k, 73, 74),
+        });
+        if (out.length >= cap) return out;
+      }
+      // ---- 落地派生粒子（cls 2）：父首次落地事件派生，只一代。
+      // 落点取弹道口径（不含 sway）；出生帧窗 [tLand, tLand+
+      // landEmitDuration)、逐帧计数哈希取整（盐 881）、逐粒哈希
+      // （盐 883..886）全走变长 dynHash01N，与产品侧逐式一致 ----
+      if (mayLand) {
+        const lt = parentAlive ? trajMain : (evTraj ?? dynBallisticAt(params, spawnX, spawnY, vx, vy, params.life));
+        if (lt && lt.landAge !== null) {
+          const tLand = tBirth + lt.landAge;
+          const tNow = frame / frameRate;
+          const landLife = params.life * 0.5;
+          if (tNow >= tLand && tNow < tLand + (params.landEmitDuration ?? 0) + landLife) {
+            const fFrom = Math.max(Math.ceil(tLand * frameRate), Math.ceil((tNow - landLife) * frameRate));
+            const fTo = Math.min(frame, Math.ceil((tLand + (params.landEmitDuration ?? 0)) * frameRate) - 1);
+            for (let fL = fFrom; fL <= fTo; fL++) {
+              const expectedL = (params.landEmitRate ?? 0) / frameRate;
+              let nL = Math.floor(expectedL);
+              if (dynHash01N(seedBase, b, k, fL, 881) < expectedL - nL) nL++;
+              const ageL = tNow - fL / frameRate;
+              if (ageL < 0 || ageL >= landLife) continue;
+              for (let j = 0; j < nL; j++) {
+                const vxL = (dynHash01N(seedBase, b, k, fL, j, 883) - 0.5) * 16;
+                const vyL = -(params.landEmitRise ?? 0) * (0.7 + 0.6 * dynHash01N(seedBase, b, k, fL, j, 884));
+                const ratioL = ageL / landLife;
+                const envL = envOf(ratioL);
+                const vl = Math.hypot(vxL, vyL);
+                const lSign = dynHash01N(seedBase, b, k, fL, j, 885) < 0.5 ? -1 : 1;
+                out.push({
+                  x: lt.landX + vxL * ageL,
+                  y: groundY + vyL * ageL - 0.5 * params.buoy * ageL * ageL,
+                  size: params.sizeStart + (params.sizeEnd - params.sizeStart) * ratioL,
+                  alpha: Math.max(0, params.alpha * envL),
+                  color: dynPostColorAt(params, params.landEmitColor ?? params.color),
+                  shape: 'dot',
+                  dirX: vl > 1e-6 ? vxL / vl : 0,
+                  dirY: vl > 1e-6 ? vyL / vl : -1,
+                  cls: 2,
+                  rot: (params.particleSpinDeg ?? 0) * ageL * lSign + dynHash01N(seedBase, b, k, fL, j, 886) * 360,
+                });
+                if (out.length >= cap) return out;
+              }
+            }
+          }
+        }
+      }
     }
   }
   return out;
@@ -872,13 +1081,140 @@ function dynPropagateProc(tree, info) {
   }
   return out;
 }
+// ---- 宿主后处理段孪生：与产品侧 host-fx.ts 的 applyHostFxToRgba /
+// firstHostFxParams 逐式对应（探针 verify-host-fx 逐像素对拍）。
+// 入参 data = RGBA 行优先（行 0 = 图顶）；包内实际应用在部件片元
+// 着色器（runtime-template 的 uHostSide 侧车 + 同式 GLSL），本函
+// 数是该数学的 JS 参照与模板侧解析/校验的共用实现。 ----
+function dynHostFxSeedEff(seed) {
+  return ((seed % 100000) + 100000) % 100000;
+}
+function dynHostFxRgbOf(hex) {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex || '');
+  if (!m) return [122, 79, 208];
+  return [parseInt(m[1].slice(0, 2), 16), parseInt(m[1].slice(2, 4), 16), parseInt(m[1].slice(4, 6), 16)];
+}
+function dynHostFxFirst(list) {
+  for (let i = 0; i < (list || []).length; i++) {
+    const inst = list[i];
+    const p = inst && inst.params;
+    if (p && p.hostFxEnabled && p.hostFxMode && p.hostFxMode !== 'none') return inst;
+  }
+  return null;
+}
+function dynHostFxApply(src, w, h, p, tSec, seed) {
+  const out = new Uint8ClampedArray(src);
+  if (!p || !p.hostFxEnabled || !p.hostFxMode || p.hostFxMode === 'none' || w <= 0 || h <= 0) return out;
+  const mode = p.hostFxMode;
+  const strength = Math.max(0, Math.min(1, p.hostFxStrength || 0));
+  const seedEff = dynHostFxSeedEff(seed);
+  const hc = dynHostFxRgbOf(p.hostFxColor);
+  const hr = hc[0], hg = hc[1], hb = hc[2];
+  const clamp255 = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
+  const pulse = (Math.sin(2 * Math.PI * ((p.hostFxHz || 0) * tSec + (p.hostFxPhase || 0))) + 1) / 2;
+  const progRaw = (p.hostFxHz || 0) * tSec + (p.hostFxPhase || 0);
+  const prog = ((progRaw % 1) + 1) % 1;
+  if (mode === 'tint') {
+    const hLum = (0.2126 * hr + 0.7152 * hg + 0.0722 * hb) / 255;
+    for (let i = 0; i < w * h; i++) {
+      const o = i * 4;
+      if (src[o + 3] <= 0) continue;
+      const lum = (0.2126 * src[o] + 0.7152 * src[o + 1] + 0.0722 * src[o + 2]) / 255;
+      const k = hLum > 0.001 ? lum / hLum : 0;
+      const tr = hLum > 0.001 ? clamp255(hr * k) : hr;
+      const tg = hLum > 0.001 ? clamp255(hg * k) : hg;
+      const tb = hLum > 0.001 ? clamp255(hb * k) : hb;
+      out[o] = src[o] + (tr - src[o]) * strength;
+      out[o + 1] = src[o + 1] + (tg - src[o + 1]) * strength;
+      out[o + 2] = src[o + 2] + (tb - src[o + 2]) * strength;
+    }
+    return out;
+  }
+  if (mode === 'flash') {
+    const k = pulse * strength;
+    if (k <= 0) return out;
+    for (let i = 0; i < w * h; i++) {
+      const o = i * 4;
+      if (src[o + 3] <= 0) continue;
+      out[o] = src[o] + (255 - src[o]) * k;
+      out[o + 1] = src[o + 1] + (255 - src[o + 1]) * k;
+      out[o + 2] = src[o + 2] + (255 - src[o + 2]) * k;
+    }
+    return out;
+  }
+  if (mode === 'slice') {
+    const bandH = 3;
+    for (let y = 0; y < h; y++) {
+      const band = Math.floor(y / bandH);
+      const dir = dynHash01(band, seedEff, 913) < 0.5 ? -1 : 1;
+      const off = Math.round(dir * (p.hostFxSlicePx || 0) * pulse);
+      for (let x = 0; x < w; x++) {
+        const o = (y * w + x) * 4;
+        const clampX = (v) => (v < 0 ? 0 : v >= w ? w - 1 : v);
+        const base = (y * w + clampX(x - off)) * 4;
+        if (src[base + 3] <= 0) { out[o + 3] = 0; continue; }
+        const rSrc = (y * w + clampX(x - off + 1)) * 4;
+        const bSrc = (y * w + clampX(x - off - 1)) * 4;
+        out[o] = src[rSrc];
+        out[o + 1] = src[base + 1];
+        out[o + 2] = src[bSrc + 2];
+        out[o + 3] = src[base + 3];
+      }
+    }
+    return out;
+  }
+  if (mode === 'rows') {
+    for (let y = 0; y < h; y++) {
+      if (y / h < prog) continue;
+      for (let x = 0; x < w; x++) out[(y * w + x) * 4 + 3] = 0;
+    }
+    return out;
+  }
+  if (mode === 'dissolve') {
+    const T = prog * (1 + strength);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const o = (y * w + x) * 4;
+        if (src[o + 3] <= 0) continue;
+        const n = dynHash01(x, y, seedEff);
+        if (n > T) { out[o + 3] = 0; continue; }
+        if (T - n < 0.08) { out[o] = hr; out[o + 1] = hg; out[o + 2] = hb; }
+      }
+    }
+    return out;
+  }
+  if (mode === 'creep') {
+    const edgeY = Math.ceil((1 - prog) * h);
+    for (let y = 0; y < h; y++) {
+      if (y < edgeY) continue;
+      const isEdge = y === edgeY;
+      for (let x = 0; x < w; x++) {
+        const o = (y * w + x) * 4;
+        if (src[o + 3] <= 0) continue;
+        if (isEdge) {
+          out[o] = hr + (255 - hr) * 0.45;
+          out[o + 1] = hg + (255 - hg) * 0.45;
+          out[o + 2] = hb + (255 - hb) * 0.45;
+        } else {
+          const n = dynHash01(x, y, seedEff);
+          const shade = n < 1 / 3 ? 0.55 : n < 2 / 3 ? 0.8 : 1.05;
+          out[o] = clamp255(hr * shade);
+          out[o + 1] = clamp255(hg * shade);
+          out[o + 2] = clamp255(hb * shade);
+        }
+      }
+    }
+    return out;
+  }
+  return out;
+}
 `;
 
 /** 探针用：把 DYNAMIC_SRC 装成可调用对象 */
 export function createDynamicRuntime(): {
   dynDeformAt: (params: never, t: number) => { sx: number; sy: number; amount: number };
   dynContour: (tile: never) => { x: number; y: number; nx: number; ny: number }[];
-  dynSimulate: (inst: never, tile: never, frame: number, frameRate: number, layer: string, seedKey: string) => { x: number; y: number; size: number; alpha: number; color: string; shape: string; dirX: number; dirY: number }[];
+  dynSimulate: (inst: never, tile: never, frame: number, frameRate: number, layer: string, seedKey: string) => { x: number; y: number; size: number; alpha: number; color: string; shape: string; dirX: number; dirY: number; cls: number; rot: number }[];
   dynParticleColorAt: (params: never, lifeRatio: number) => string;
   dynPostColorAt: (params: never, hex: string) => string;
   dynFieldColorAt: (edge: string, mid: string, core: string, heat: number) => [number, number, number];
@@ -893,7 +1229,9 @@ export function createDynamicRuntime(): {
   dynProceduralValue: (cfg: never, frame: number, startFrame?: number, endFrame?: number) => number;
   dynPropagateProc: (tree: never, info: never) => Record<string, { x: number; y: number; rot: number }>;
   dynFormulaValue: (expression: string, f: number, F: number, p: number) => number;
+  dynHostFxApply: (src: Uint8ClampedArray, w: number, h: number, params: never, tSec: number, seed: number) => Uint8ClampedArray;
+  dynHostFxFirst: (list: never[]) => { id: string; params: never } | null;
 } {
-  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynPropagateProc, dynFormulaValue, dynParticleColorAt, dynOrbitPoints, dynPostColorAt, dynFieldColorAt, dynBlobField, dynFlameField, dynEnvSamples };`);
+  const factory = new Function(`${DYNAMIC_SRC}\nreturn { dynDeformAt, dynContour, dynSimulate, dynDisplaceSrcMap, dynNoiseU, dynSpinRadAt, dynArcPoints, dynProceduralValue, dynPropagateProc, dynFormulaValue, dynParticleColorAt, dynOrbitPoints, dynPostColorAt, dynFieldColorAt, dynBlobField, dynFlameField, dynEnvSamples, dynHostFxApply, dynHostFxFirst };`);
   return factory() as never;
 }

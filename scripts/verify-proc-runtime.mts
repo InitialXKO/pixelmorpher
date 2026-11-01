@@ -2672,8 +2672,10 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     && html6.includes('dynArcPoints') && html6.includes('plugC'));
   const { readFileSync: rfs6 } = await import('node:fs');
   const ur6 = rfs6(new URL('../src/lib/unified-render.ts', import.meta.url), 'utf8');
-  check('AD6b 编辑器绘制在位（drawDynamicArcs 双路调用）',
-    ur6.includes('drawDynamicArcs') && (ur6.match(/drawDynamicArcs\(ctx, instruction\)/g) ?? []).length === 2);
+  check('AD6b 编辑器绘制在位（drawDynamicArcs 分层调用：身后 1 + 身前双路 2）',
+    ur6.includes('drawDynamicArcs')
+    && (ur6.match(/drawDynamicArcs\(ctx, instruction, 'back'\)/g) ?? []).length === 1
+    && (ur6.match(/drawDynamicArcs\(ctx, instruction, 'front'\)/g) ?? []).length === 2);
 }
 
 // ---------- AE) D6 一期链摆烘焙：求解器物理 / 烘焙折算 / 指纹 ----------
