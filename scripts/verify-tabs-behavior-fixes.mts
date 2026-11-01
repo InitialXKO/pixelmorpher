@@ -1,5 +1,5 @@
 // 组 2 页签审计修复探针（操控 / 行为 / 状态机面板接线 / 行为树）：
-// - convert 表演段两处点名（残影解析不到槽位、触发名回落 KeyJ）用构造角色对拍；
+// - convert 表演段两处点名（残影解析不到服装槽、触发名回落 KeyJ）用构造角色对拍；
 // - 其余接线（操控武装同步、行为预览喂宿主变量、时间基文案、删表演点名、
 //   行为树 mock 对齐）以源码级断言钉住落点与口径，防回退。
 // 状态机纯函数（排序 / 禁用清单 / 校验逐目标口径）在 verify-state-machine-edit.mts。
@@ -61,7 +61,7 @@ console.log('A) convert 表演段点名（构造对拍）');
   const pkg = convertCharacterToRuntimePackage(char, undefined, {});
   const perfs = (pkg as { performances?: Array<Record<string, unknown>> }).performances ?? [];
   const byId = new Map(perfs.map((p) => [p.id, p]));
-  ok('残影悬空：点名解析不到槽位', pkg.warnings.some((w) => w.includes('残影悬空') && w.includes('残影') && w.includes('解析不到槽位')));
+  ok('残影悬空：点名解析不到槽位', pkg.warnings.some((w) => w.includes('残影悬空') && w.includes('残影') && w.includes('解析不到服装槽')));
   ok('残影悬空：afterimage 不进包', byId.get('p1')?.afterimage === undefined);
   ok('怪触发名：点名回落 KeyJ 且包内 triggerKey 为 KeyJ',
     pkg.warnings.some((w) => w.includes('怪触发名') && w.includes('super-dash') && w.includes('KeyJ'))

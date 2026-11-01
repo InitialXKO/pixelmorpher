@@ -137,7 +137,7 @@ export interface DynamicPatternParams {
   orbitPhase: number;    // 相位（周期数 0..1）
   orbitSize: number;     // 光点直径（px）
   orbitColor: string;    // 光点颜色（#rrggbb）
-  orbitAngleSpace: 'sprite' | 'world'; // sprite = 椭圆随精灵转；world = 椭圆恒对世界（同发光方向基准口径）
+  orbitAngleSpace: 'sprite' | 'world'; // world = 椭圆恒对世界方向（缺省，2026-10-23 立规，与发光方向基准同口径）；sprite = 椭圆跟随精灵旋转
   // 图案级全局后期（Jeff 落地：把蓝图链的色板/抖动能力提为图案
   // 自身的后期——作用于本图案的全部绘制：粒子全程 + 发光/弧线/
   // 环绕的颜色主题化）
@@ -331,7 +331,7 @@ export function defaultDynamicParams(): DynamicPatternParams {
     landEmitEnabled: false, landEmitRate: 24, landEmitDuration: 1.2, landEmitColor: '#ff8a2a', landEmitRise: 26,
     particleSpinDeg: 0,
     orbitEnabled: false, orbitCount: 3, orbitRadiusX: 14, orbitRadiusY: 10, orbitHz: 0.5, orbitPhase: 0,
-    orbitSize: 3, orbitColor: '#aee6ff', orbitAngleSpace: 'sprite',
+    orbitSize: 3, orbitColor: '#aee6ff', orbitAngleSpace: 'world',
     postEnabled: false, postTheme: 'none', postAlphaLevels: 0, postDither: false,
     blobEnabled: false, blobRadius: 16, blobCount: 5, blobSeed: 3, blobHz: 0.8, blobBurn: 0.55, blobAlpha: 0.85,
     blobColorEdge: '#7a1e00', blobColorMid: '#ff5a00', blobColorCore: '#fff3c4',
@@ -385,7 +385,7 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
   if (typeof out.landEmitColor !== 'string') out.landEmitColor = '#ff8a2a';
   out.landEmitRise = Number.isFinite(out.landEmitRise) ? Math.max(0, Math.min(80, out.landEmitRise)) : 26;
   out.particleSpinDeg = Number.isFinite(out.particleSpinDeg) ? Math.max(-720, Math.min(720, out.particleSpinDeg)) : 0;
-  if (out.orbitAngleSpace !== 'world') out.orbitAngleSpace = 'sprite';
+  if (out.orbitAngleSpace !== 'sprite') out.orbitAngleSpace = 'world';
   if (!['none', 'ember', 'frost', 'gameboy', 'dusk', 'mono'].includes(out.postTheme)) out.postTheme = 'none';
   out.postAlphaLevels = Number.isFinite(out.postAlphaLevels) ? Math.max(0, Math.min(8, Math.round(out.postAlphaLevels))) : 0;
   out.blobCount = Number.isFinite(out.blobCount) ? Math.max(2, Math.min(8, Math.round(out.blobCount))) : 5;
@@ -536,8 +536,8 @@ export function particleColorAt(params: DynamicPatternParams, lifeRatio: number)
 /**
  * 环绕光点位置（精灵本地 px，原点 = plug，x 右 y 下）：第 i 点
  * 相位 = orbitPhase + t·orbitHz + i/count（周期数），椭圆参数位。
- * angleSpace='world' 时按 -worldAngleDeg 反转，椭圆恒对世界
- * （调用方传部件当前世界角；缺省 0 = sprite 口径）。
+ * angleSpace 非 'sprite'（含字段缺失，缺省 world）时按 -worldAngleDeg 反转，椭圆恒对世界
+ * （调用方传部件当前世界角；worldAngleDeg 缺省 0 时反转角为 0、与 sprite 口径同值）。
  */
 export function orbitPointsAt(
   params: DynamicPatternParams,
@@ -546,7 +546,7 @@ export function orbitPointsAt(
 ): { x: number; y: number }[] {
   if (!params.orbitEnabled || params.orbitCount <= 0) return [];
   const out: { x: number; y: number }[] = [];
-  const counter = params.orbitAngleSpace === 'world' ? (-worldAngleDeg * Math.PI) / 180 : 0;
+  const counter = params.orbitAngleSpace !== 'sprite' ? (-worldAngleDeg * Math.PI) / 180 : 0;
   const cc = Math.cos(counter), cs = Math.sin(counter);
   for (let i = 0; i < params.orbitCount; i++) {
     const ph = params.orbitPhase + tSec * params.orbitHz + i / params.orbitCount;
