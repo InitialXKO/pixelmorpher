@@ -32,8 +32,8 @@ export default function IKBakeButton({ character }: IKBakeButtonProps) {
   const handleBake = useCallback(() => {
     if (!character || chains.length === 0) return;
 
-    // 骨长必须按真 FK 测：关节点位经父 frame 复合 + 插槽挂接得出，
-    // 不能拿 node.transform 在父坐标里直加（子 transform 与插槽位不
+    // 骨长必须按真 FK 测：关节点位经父 frame 复合 + 槽位挂接得出，
+    // 不能拿 node.transform 在父坐标里直加（子 transform 与槽位位置不
     // 一致时就测错）。口径同 IKChainEditor 捕获 FK 肘位：链全禁用的
     // 克隆上算；另把 ikBlueprint 置空——已有烘焙蓝图时它会接管求值，
     // 测到的就不是纯 FK 姿态。

@@ -11,8 +11,9 @@
 // 全部落空 → 点不中（空地不选任何节点）。排序：编号图命中最先，
 // 其余 tier 优先、tier 内按贴近程度；中键循环按此序轮换候选。
 import {
-  computeWorldTransforms, computeMannequinShapes, resolveNodeSpriteId, socketOffsetTo3D,
+  computeMannequinShapes, resolveNodeSpriteId, socketOffsetTo3D,
 } from './unified-render';
+import { computeEditorWorldTransforms } from './editor-world-transforms';
 import {
   projectToView, pxToSub, subToPx, nodeJointDiscDiameter, computeSpriteEndPoint,
   rotateInViewPlane,
@@ -127,10 +128,13 @@ export function pickNodesAt(
   const centerY = opts.canvasHeight / 2;
 
   for (const character of characters) {
-    const worldTransforms = computeWorldTransforms(
-      character, opts.frame, opts.canvasWidth, opts.canvasHeight,
-      undefined, undefined, undefined, undefined, opts.geometryDirection,
-    );
+    // 与出图同口径的世界变换（钳制/模拟/程序化增量经共用 helper 装配，
+    // 审计 F-20）；编号图不新鲜时的几何 tier 与出图位置一致
+    const worldTransforms = computeEditorWorldTransforms(character, opts.frame, {
+      canvasWidth: opts.canvasWidth,
+      canvasHeight: opts.canvasHeight,
+      geometryDirection: opts.geometryDirection,
+    });
     const rootNode = character.nodes[character.rootNodeId];
     const direction = (rootNode?.transform.variantIndex ?? 0) as DirectionIndex;
     const jointPx = new Map<string, { x: number; y: number; angle: number }>();

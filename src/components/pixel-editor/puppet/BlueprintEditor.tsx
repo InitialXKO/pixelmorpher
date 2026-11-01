@@ -303,7 +303,7 @@ export default function BlueprintEditor({ graph, onChange, title, skeleton, idPr
           return;
         }
         // 无 Character 上下文时的旧兜底路径（自有 BFS，2D 口径）
-        // 整角色模式：层级定位，插头对准插槽
+        // 整角色模式：层级定位，插头对准槽位
         // 背景网格
         ctx.strokeStyle = '#1a1a2e';
         ctx.lineWidth = 1;

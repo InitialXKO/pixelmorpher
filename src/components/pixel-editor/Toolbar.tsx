@@ -2,6 +2,7 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
+import { useAssetStore } from '@/lib/asset-store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -207,26 +208,23 @@ export default function Toolbar({ onExportClick }: ToolbarProps) {
   }, []);
 
   const handleFileChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
+      e.target.value = '';
       if (!file) return;
       if (!file.name.endsWith('.pxm')) {
         toast({ title: '无法加载', description: '请选择 .pxm 工程文件', variant: 'destructive' });
-        e.target.value = '';
         return;
       }
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        try {
-          const json = event.target?.result as string;
-          const projectFile = JSON.parse(json);
-          useProjectStore.getState().importProjectFile(projectFile);
-        } catch {
-          toast({ title: '加载失败', description: '文件损坏或格式不正确', variant: 'destructive' });
-        }
-      };
-      reader.readAsText(file);
-      e.target.value = '';
+      // 与项目主页导入同口径：走 asset-store 的 importProjectFromFile
+      // （新建工程 ID + 落库 + 建条目 + 绑定 currentProjectId）。
+      // 此前这里只调 importProjectFile 把内容灌进 store、不绑 ID，
+      // 「返回主页」时 saveCurrentProject 按旧 ID 落盘，会把导入内容
+      // 覆盖回此前打开的 DB 工程、原数据静默丢失。
+      const meta = await useAssetStore.getState().importProjectFromFile(file);
+      if (!meta) {
+        toast({ title: '加载失败', description: '文件损坏或格式不正确', variant: 'destructive' });
+      }
     },
     [toast],
   );

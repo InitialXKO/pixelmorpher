@@ -5,6 +5,7 @@
 // No ML model required — pure algorithmic approach.
 
 import type { PixelGrid, PixelColor } from './types';
+import { subToPx, type Sprite } from './unified-types';
 import { rgbToHex } from './engine/utils';
 
 /**
@@ -123,6 +124,106 @@ export function inpaintPixels(
   }
 
   return result;
+}
+
+// ============================================================
+// 画布掩码 → 新精灵（选区/SAM 提取的现行落点：全局精灵表）
+// ============================================================
+// Part 退役后，提取的产物是全局精灵表里的新精灵（addSprite +
+// setSpritePixels）。采样与 plug 口径与画布选区提取（use-canvas-state
+// 的 extractSelectionAsPart）逐式一致，保证同一掩码、同一画布在两条
+// 提取路径（手动选区 / SAM 选区）下产出同一精灵：
+//   - 精灵按入参顺序逐个试，画布点 (px,py) 映到精灵局部
+//     (px-(画布宽/2-plugX), py-(画布高/2-plugY))，第一个非透明命中胜出；
+//   - 结果裁到命中包围盒，pivot 取命中像素质心；
+//   - plug 按选区提取同式回算（addSprite 缺省 plug 为中心，
+//     defPivot 即该缺省值）。
+
+export interface MaskExtractedSprite {
+  width: number;
+  height: number;
+  pixels: PixelGrid;
+  /** 新精灵 plug（像素单位，与 addSprite 的 opts.plugX/plugY 同口径） */
+  plugX: number;
+  plugY: number;
+}
+
+export function buildSpriteFromCanvasMask(
+  sprites: readonly Sprite[],
+  canvasWidth: number,
+  canvasHeight: number,
+  mask: ReadonlySet<string>,
+): MaskExtractedSprite | null {
+  if (mask.size === 0) return null;
+  const offsetX = canvasWidth / 2;
+  const offsetY = canvasHeight / 2;
+
+  const selectedPixels: { x: number; y: number; color: string }[] = [];
+  for (const key of mask) {
+    const comma = key.indexOf(',');
+    if (comma < 0) continue;
+    const px = Number(key.slice(0, comma));
+    const py = Number(key.slice(comma + 1));
+    if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+    for (const sprite of sprites) {
+      const pivotX = sprite.plug ? subToPx(sprite.plug.x) : Math.floor(sprite.width / 2);
+      const pivotY = sprite.plug ? subToPx(sprite.plug.y) : Math.floor(sprite.height / 2);
+      const lx = px - (offsetX - pivotX);
+      const ly = py - (offsetY - pivotY);
+      if (lx < 0 || lx >= sprite.width || ly < 0 || ly >= sprite.height) continue;
+      const color = sprite.data[ly]?.[lx];
+      if (color !== null && color !== undefined) {
+        selectedPixels.push({ x: px, y: py, color });
+        break;
+      }
+    }
+  }
+  if (selectedPixels.length === 0) return null;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of selectedPixels) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  const partW = maxX - minX + 1;
+  const partH = maxY - minY + 1;
+
+  const colorMap = new Map<string, string>();
+  for (const p of selectedPixels) colorMap.set(`${p.x},${p.y}`, p.color);
+
+  const pixels: PixelGrid = [];
+  let sumX = 0, sumY = 0, count = 0;
+  for (let y = 0; y < partH; y++) {
+    const row: PixelColor[] = [];
+    for (let x = 0; x < partW; x++) {
+      const color = colorMap.get(`${minX + x},${minY + y}`);
+      if (color) {
+        row.push(color);
+        sumX += x;
+        sumY += y;
+        count++;
+      } else {
+        row.push(null);
+      }
+    }
+    pixels.push(row);
+  }
+  if (count === 0) return null;
+
+  const pivotX = Math.round(sumX / count);
+  const pivotY = Math.round(sumY / count);
+  // addSprite 默认 plug 为中心（px）；选区提取算式里的 defPivot 即此默认值
+  const defPivotX = Math.floor(partW / 2);
+  const defPivotY = Math.floor(partH / 2);
+  return {
+    width: partW,
+    height: partH,
+    pixels,
+    plugX: pivotX + (minX - Math.floor(canvasWidth / 2) + defPivotX - (defPivotX - pivotX)),
+    plugY: pivotY + (minY - Math.floor(canvasHeight / 2) + defPivotY - (defPivotY - pivotY)),
+  };
 }
 
 /**

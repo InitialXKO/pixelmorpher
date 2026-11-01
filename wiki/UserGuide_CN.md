@@ -1,3 +1,5 @@
+> ⚠️ **本文档已过期**（2026-11 全系统审计）：内容基于已退役的旧模型（Part / LiveAdapter 等），与现状多处不符。现行口径以根目录 `README.md` 与 `spikes/system-audit/AUDIT.md` 为准。
+
 # PixelMorpher 用户指南
 
 欢迎使用 PixelMorpher！本指南将带你从零开始了解如何使用 PixelMorpher 创作高质量的像素动画。

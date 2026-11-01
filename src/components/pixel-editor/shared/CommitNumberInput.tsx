@@ -29,6 +29,7 @@ interface CommitNumberInputProps {
   className?: string;
   title?: string;
   placeholder?: string;
+  disabled?: boolean;
 }
 
 const fmt = (v: number | null): string =>
@@ -45,6 +46,7 @@ export default function CommitNumberInput({
   className,
   title,
   placeholder,
+  disabled,
 }: CommitNumberInputProps) {
   const [text, setText] = useState(() => fmt(value));
   const [focused, setFocused] = useState(false);
@@ -92,6 +94,7 @@ export default function CommitNumberInput({
         placeholder={placeholder}
         title={title}
         className={className}
+        disabled={disabled}
         {...handlers}
       />
     );
@@ -108,6 +111,7 @@ export default function CommitNumberInput({
       placeholder={placeholder}
       title={title}
       className={className}
+      disabled={disabled}
       {...handlers}
     />
   );

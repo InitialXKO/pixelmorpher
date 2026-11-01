@@ -83,6 +83,12 @@ export default function AnimationClipPanel() {
       events: structuredClone(clip.events ?? []),
       frameTags: structuredClone(clip.frameTags ?? []),
       hitboxMap: structuredClone(clip.hitboxMap ?? {}),
+      // 刀光与缩略图同为片段数据，一并复制（此前漏带、静默丢失）：
+      // 私有规格深拷贝；slashDefId 是共享定义的活引用，只带 id
+      // （副本与源片段共同引用同一份定义，与绑定语义一致）。
+      slashEffect: clip.slashEffect ? structuredClone(clip.slashEffect) : undefined,
+      slashDefId: clip.slashDefId,
+      thumbnail: clip.thumbnail,
     });
   }, [addAnimationClip, updateAnimationClip]);
 

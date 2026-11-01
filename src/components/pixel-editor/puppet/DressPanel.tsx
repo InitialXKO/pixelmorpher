@@ -21,8 +21,9 @@ import type {
 } from '@/lib/unified-types';
 import {
   createDefaultCostumeSet,
-  createDefaultCostumePiece,
 } from '@/lib/unified-types';
+import { readPieceLayerSpriteId } from '@/lib/store/character-slice';
+import { resolvePieceSprite } from '@/lib/sprite-resolve';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 
@@ -206,7 +207,7 @@ export default function DressPanel({
     [selectedCharacter, selectedNodeId]
   );
 
-  // ---- 通用变体（槽位级） ----
+  // ---- 通用变体（服装槽级） ----
   const variantDefs = selectedCharacter?.variantDefs ?? [];
   // 编辑维度：null = 基础层；否则配图写进该变体的 variantSprites 层
   const [editVariantIdRaw, setEditVariantId] = useState<string | null>(null);
@@ -289,7 +290,7 @@ export default function DressPanel({
     if (!confirm(`删除变体「${def?.name ?? ''}」？全部服装集里的该变体精灵与部位指派将一并清除（基础精灵不受影响）。`)) return;
     const store = useProjectStore.getState();
     store.pushUndo('删除变体');
-    // 清理三处引用：各集 piece 的 variantSprites[id]、槽位指派、定义本身
+    // 清理三处引用：各集 piece 的 variantSprites[id]、服装槽指派、定义本身
     const newCostumeSets = selectedCharacter.costumeSets.map((cs) => {
       let touched = false;
       const pieces: Record<string, CostumeSet['pieces'][string]> = {};
@@ -356,7 +357,7 @@ export default function DressPanel({
     updateUnifiedCharacter(activePuppetSkeletonId, { costumeSets: newCostumeSets });
   };
 
-  /** 槽位变体指派：'' = 基础（删条目） */
+  /** 服装槽变体指派：'' = 基础（删条目） */
   const handleSlotVariantChange = (node: Node, variantId: string) => {
     if (!selectedCharacter || !activePuppetSkeletonId) return;
     const slotKey = node?.slot?.slotKey ?? node.id;
@@ -370,87 +371,72 @@ export default function DressPanel({
 
   const handleSpriteAssign = (nodeId: string, direction: DirectionIndex, spriteId: string | null) => {
     if (!selectedCharacter || !activePuppetSkeletonId || !selectedCostume) return;
+    if (spriteId && !sprites.some((s) => s.id === spriteId)) return;
     const store = useProjectStore.getState();
     store.pushUndo('分配精灵', 'assignSprite');
-
-    const pieces = { ...selectedCostume.pieces };
-    // 用 slotKey（不是 nodeId）——渲染器按 costumeSet.pieces[node.slot.slotKey] 查找
-    const node = selectedCharacter.nodes[nodeId];
-    const slotKey = node?.slot?.slotKey ?? nodeId;
-
-    if (spriteId) {
-      // Sprite 在全局表（sprites prop），直接引用 ID，不复制
-      const sp = sprites.find((s) => s.id === spriteId);
-      if (!sp) return;
-      const key = sp.id ?? spriteId;
-      const piece = pieces[slotKey] ?? createDefaultCostumePiece(slotKey);
-      if (editVariantId) {
-        // 变体层：写入 pieces[slotKey].variantSprites[editVariantId][direction]
-        const layer = { ...(piece.variantSprites?.[editVariantId] ?? {}), [direction]: { spriteId: key } };
-        pieces[slotKey] = {
-          ...piece,
-          variantSprites: { ...piece.variantSprites, [editVariantId]: layer },
-        };
-      } else {
-        // 基础层：写入 pieces[slotKey].sprites[direction] = { spriteId }
-        pieces[slotKey] = {
-          ...piece,
-          sprites: { ...piece.sprites, [direction]: { spriteId: key } },
-        };
-      }
-    } else {
-      // 删除分配（当前编辑层内）
-      const piece = pieces[slotKey];
-      if (piece) {
-        if (editVariantId) {
-          const layer = { ...(piece.variantSprites?.[editVariantId] ?? {}) };
-          delete layer[direction];
-          pieces[slotKey] = {
-            ...piece,
-            variantSprites: { ...piece.variantSprites, [editVariantId]: layer },
-          };
-        } else {
-          const newSprites = { ...piece.sprites };
-          delete newSprites[direction];
-          pieces[slotKey] = { ...piece, sprites: newSprites };
-        }
-      }
-    }
-
-    const newCostumeSets = selectedCharacter.costumeSets.map((cs) =>
-      cs.id === selectedCostume.id ? { ...cs, pieces } : cs
+    // 走分层写入口（与装配/遮罩同一套 applySpriteToPieceLayer：层序、顺带指派
+    // 口径一致）。此前本面板手写拼 sprites/variantSprites，与主口径双实现漂移
+    // （审计 F-16）。面板无纬度编辑维度，纬度恒 0；变体层由 editVariantId 决定。
+    store.setUnifiedCostumeSpriteLayered(
+      activePuppetSkeletonId,
+      selectedCostume.id,
+      nodeId,
+      direction,
+      spriteId,
+      { variantId: editVariantId },
     );
-    updateUnifiedCharacter(activePuppetSkeletonId, {
-      costumeSets: newCostumeSets,
-    });
   };
 
-  /** 当前编辑层（基础/变体）下某节点某方向的精灵 */
-  const getSpriteFor = (nodeId: string, direction: DirectionIndex): Sprite | null => {
+  /** 全局精灵表（sprites prop 数组 → id 表），供共享解析函数查内嵌/引用 */
+  const spritesTable = useMemo(() => {
+    const table: Record<string, Sprite> = {};
+    for (const sp of sprites) if (sp.id) table[sp.id] = sp;
+    return table;
+  }, [sprites]);
+
+  /** 当前编辑层（基础/变体）下某节点某方向的精灵 id：读侧孪生精确读，
+   * 内嵌 Sprite 形态（旧数据）也认（此前手写读不认、面板显示为空而渲染有图） */
+  const getLayerSpriteIdFor = (nodeId: string, direction: DirectionIndex): string | null => {
     if (!selectedCostume || !selectedCharacter) return null;
     const node = selectedCharacter.nodes[nodeId];
     const slotKey = node?.slot?.slotKey ?? nodeId;
     const piece = selectedCostume.pieces[slotKey];
-    const ref = editVariantId
-      ? piece?.variantSprites?.[editVariantId]?.[direction]
-      : piece?.sprites[direction];
-    if (!ref) return null;
-    // SpriteRef → spriteId → 全局精灵表（sprites prop）
-    const spriteId = 'spriteId' in ref ? ref.spriteId : null;
-    if (!spriteId) return null;
-    return sprites.find((s) => s.id === spriteId) ?? null;
+    if (!piece) return null;
+    return readPieceLayerSpriteId(piece, direction, { variantId: editVariantId });
   };
 
-  /** 基础层精灵（变体编辑时显示回落来源用） */
+  /** 当前编辑层下某节点某方向的精灵（精确读本层，不含回落） */
+  const getSpriteFor = (nodeId: string, direction: DirectionIndex): Sprite | null => {
+    const id = getLayerSpriteIdFor(nodeId, direction);
+    return id ? (spritesTable[id] ?? null) : null;
+  };
+
+  /** 当前编辑层渲染回落图：本层无图时按共享解析（变体镜像→基础直达→基础镜像）
+   * 找实际会显示的图；mirror 标记供 UI 区分「镜像回落」与「回落基础」 */
+  const getFallbackSpriteFor = (
+    nodeId: string,
+    direction: DirectionIndex,
+  ): { sprite: Sprite; mirror: boolean } | null => {
+    if (!selectedCostume || !selectedCharacter) return null;
+    if (getLayerSpriteIdFor(nodeId, direction)) return null;
+    const node = selectedCharacter.nodes[nodeId];
+    const slotKey = node?.slot?.slotKey ?? nodeId;
+    const piece = selectedCostume.pieces[slotKey];
+    if (!piece) return null;
+    const resolved = resolvePieceSprite(piece, direction, editVariantId ?? undefined, spritesTable);
+    if (!resolved.sprite) return null;
+    return { sprite: resolved.sprite, mirror: resolved.mirror };
+  };
+
+  /** 基础层精灵（镜像派生源等用）：读侧孪生精确读基础层 */
   const getBaseSpriteFor = (nodeId: string, direction: DirectionIndex): Sprite | null => {
     if (!selectedCostume || !selectedCharacter) return null;
     const node = selectedCharacter.nodes[nodeId];
     const slotKey = node?.slot?.slotKey ?? nodeId;
-    const ref = selectedCostume.pieces[slotKey]?.sprites[direction];
-    if (!ref) return null;
-    const spriteId = 'spriteId' in ref ? ref.spriteId : null;
-    if (!spriteId) return null;
-    return sprites.find((s) => s.id === spriteId) ?? null;
+    const piece = selectedCostume.pieces[slotKey];
+    if (!piece) return null;
+    const id = readPieceLayerSpriteId(piece, direction);
+    return id ? (spritesTable[id] ?? null) : null;
   };
 
   return (
@@ -522,7 +508,7 @@ export default function DressPanel({
         </div>
       )}
 
-      {/* 通用变体（槽位级）：选编辑维度后配图写进变体层；部位指派决定渲染用哪层 */}
+      {/* 通用变体（服装槽级）：选编辑维度后配图写进变体层；部位指派决定渲染用哪层 */}
       {selectedCharacter && (
         <div>
           <div className="flex items-center justify-between">
@@ -655,7 +641,7 @@ export default function DressPanel({
             node={selectedNode}
             sprites={sprites}
             getSpriteFor={getSpriteFor}
-            getBaseSpriteFor={editVariant ? getBaseSpriteFor : undefined}
+            getFallbackSpriteFor={getFallbackSpriteFor}
             layerLabel={editVariant?.name}
             onAssign={(dir, spriteId) => handleSpriteAssign(selectedNode.id, dir, spriteId)}
           />
@@ -709,15 +695,19 @@ function DirectionSpriteEditor({
   node,
   sprites,
   getSpriteFor,
-  getBaseSpriteFor,
+  getFallbackSpriteFor,
   layerLabel,
   onAssign,
 }: {
   node: Node;
   sprites: Sprite[];
   getSpriteFor: (nodeId: string, dir: DirectionIndex) => Sprite | null;
-  /** 变体编辑时传入：显示回落的基础图（半透明） */
-  getBaseSpriteFor?: (nodeId: string, dir: DirectionIndex) => Sprite | null;
+  /** 本层无图时按共享解析找到的实际显示图（半透明显示）：变体回落基础、
+   * 或同层/基础层镜像回落，mirror 标记区分徽标文案 */
+  getFallbackSpriteFor?: (
+    nodeId: string,
+    dir: DirectionIndex,
+  ) => { sprite: Sprite; mirror: boolean } | null;
   /** 当前编辑层名称（变体名）；undefined = 基础层 */
   layerLabel?: string;
   onAssign: (dir: DirectionIndex, spriteId: string | null) => void;
@@ -733,7 +723,7 @@ function DirectionSpriteEditor({
       <div className="grid grid-cols-2 gap-1.5 mt-1.5">
         {DIRECTIONS.map(({ value, label }) => {
           const sprite = getSpriteFor(node.id, value);
-          const baseSprite = !sprite && getBaseSpriteFor ? getBaseSpriteFor(node.id, value) : null;
+          const fallback = !sprite && getFallbackSpriteFor ? getFallbackSpriteFor(node.id, value) : null;
           return (
             <div
               key={value}
@@ -741,8 +731,13 @@ function DirectionSpriteEditor({
             >
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[10px] text-gray-500">{label} ({value})</span>
-                {baseSprite && (
-                  <span className="text-[8px] text-gray-600" title="变体未画此方向，渲染回落此基础图">回落基础</span>
+                {fallback && (
+                  <span
+                    className="text-[8px] text-gray-600"
+                    title={fallback.mirror ? '此方向未配图，渲染按镜像映射回落此图' : '此方向未配图，渲染回落此基础图'}
+                  >
+                    {fallback.mirror ? '镜像回落' : '回落基础'}
+                  </span>
                 )}
                 {sprite && (
                   <X
@@ -757,9 +752,9 @@ function DirectionSpriteEditor({
               >
                 {sprite ? (
                   <SpriteThumb sprite={sprite} size={40} />
-                ) : baseSprite ? (
-                  <div className="opacity-40">
-                    <SpriteThumb sprite={baseSprite} size={40} />
+                ) : fallback ? (
+                  <div className={`opacity-40 ${fallback.mirror ? '-scale-x-100' : ''}`}>
+                    <SpriteThumb sprite={fallback.sprite} size={40} />
                   </div>
                 ) : (
                   <Plus className="size-4 text-gray-700" />

@@ -64,7 +64,7 @@ export interface DynamicPatternParams {
   // 二期（D4）：生成模式 / 生长 / 双锚点 / 细节数
   arcMode: 'arc' | 'vine' | 'stars' | 'beam' | 'glyph' | 'stream' | 'ring' | 'fan'; // 弧线/藤蔓/星座/光束/法阵线绘/流光线（乙7 几何三件并入）/环带/扇面
   arcGrowHz: number;    // 生长循环（次/秒，0 = 恒满长）；周期内先生长后保持
-  arcTarget: string;    // 双锚点：终点锚定的目标部件槽位键（仅弧线模式；空 = 方向+弧长）
+  arcTarget: string;    // 双锚点：终点锚定的目标部件服装槽键（仅弧线模式；空 = 方向+弧长）
   arcOriginMark: string; // 弧线原点绑定的精灵点标记名（空 = 插头）
   arcDetail: number;    // 细节数：藤蔓叶数 / 星座星数 / 法阵刻度数 / 流光点数（0 = 按模式缺省）
   arcGlyphSpinDeg: number; // 法阵旋转速度（度/秒，可负）
@@ -76,7 +76,7 @@ export interface DynamicPatternParams {
   // 本部件就像被源部件拖着、慢半拍跟上（垂饰/披风/头发的次级运动）。
   // 无状态纯函数：任意帧只由源部件在 t 与 t−delay 的位姿决定。
   followEnabled: boolean;
-  followSource: string;   // 源部件槽位键（slotKey）；空 = 未选源、不生效
+  followSource: string;   // 源部件服装槽键（slotKey）；空 = 未选源、不生效
   followDelaySec: number; // 滞后（秒）
   followAmount: number;   // 跟随强度 0..1（1 = 完全按滞后位姿走）
   followRotate: boolean;  // 是否连源部件的旋转滞后一起跟

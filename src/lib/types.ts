@@ -474,7 +474,15 @@ export interface CanvasModifierInstance {
 export interface CanvasModifierKeyframe {
   id: string;
   frame: number;
+  /**
+   * 关键帧参数。现行格式按修改器分键存 paramsByModifier（同轨多个同类型
+   * 修改器各有自己的参数集，扁平袋会互相覆盖差异参数，审计 F-30）。
+   * params 是存量格式：旧工程的关键帧是全轨合并快照（一只扁平袋），
+   * 读取时作为逐修改器的兼容回落层（canvasKeyframeParamsFor），不丢参；
+   * 新建/编辑的关键帧 params 恒为 {}、实参全在 paramsByModifier。
+   */
   params: Record<string, ModifierParamValue>;
+  paramsByModifier?: Record<string, Record<string, ModifierParamValue>>;
 }
 
 export interface CanvasModifierTrack {
@@ -1118,20 +1126,21 @@ export interface Project {
   onionSkinFrames: number;
 
   // ---- LEGACY FIELDS (kept for backward compatibility during migration) ----
-  // These are now stored in AnimationClip, but kept here so existing code
-  // continues to work during the transition. When activeAnimationClipId is set,
-  // the active clip's data takes precedence.
-  /** @deprecated Use activeAnimationClip.tracks instead */
+  /** @deprecated 旧 Track 型轨道，已无消费端（节点轨道见 unified-types 的 NodeTracks） */
   tracks: Track[];
   // 旧工程关键帧（按 spriteId）已退役（2026-10-30）：统一渲染/convert
   // 零消费，矫正已搬到节点 frameCorrections；旧工程该字段载入即丢。
-  /** @deprecated Use activeAnimationClip.effectTracks instead */
+  // ---- 工程级效果轨/笔触（现行唯一编辑面） ----
+  // 效果轨、画布轨与两类笔触的编辑面全程只用工程级字段：时间线编辑、
+  // PixelCanvas 渲染、导出 projectData 都读这里。不存在「片段优先」
+  // 口径（旧注释曾宣称 active 片段数据优先，从未实现）。片段级同名
+  // 字段（AnimationClip.effectTracks 等）是存量数据：旧工程载入迁移
+  // 会把工程级复制进迁移片段、新建片段恒空、无任何编辑界面维护；
+  // convert 进包时逐项比对，片段级与工程级全同判旧迁移双写、不重复
+  // 入包并点名，真不同才作段表演 fx 入包。
   effectTracks: EffectTrack[];
-  /** @deprecated Use activeAnimationClip.canvasModifierTracks instead */
   canvasModifierTracks: CanvasModifierTrack[];
-  /** @deprecated Use activeAnimationClip.motionBlurStrokes instead */
   motionBlurStrokes: MotionBlurStroke[];
-  /** @deprecated Use activeAnimationClip.effectStrokes instead */
   effectStrokes: EffectStroke[];
 
   // ---- Unified Characters (new model, primary source since v3.1) ----

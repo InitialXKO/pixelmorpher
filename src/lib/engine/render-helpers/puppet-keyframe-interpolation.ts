@@ -12,12 +12,13 @@ import { computePartAnimationTransform } from '../animation-dispatch';
 import { evaluateBlueprint } from '../../blueprint/eval';
 import { modifiersToBlueprint } from '../../blueprint/migrate';
 import { buildBlueprintVars, mapStoreAnimationVariables } from '../../unified-animation-resolver';
+import { cubicBezierEaseY } from './bezier-easing';
 
 // hold 等有状态节点的跨帧存储
 const blueprintNodeState = new Map<string, any>();
 let lastFrame = -1;
 
-function interpolateTrack(track: KeyframeTrack<number> | undefined, frame: number, defaultValue: number): number {
+export function interpolateTrack(track: KeyframeTrack<number> | undefined, frame: number, defaultValue: number): number {
   if (!track || track.keyframes.length === 0) return defaultValue;
   const kfs = track.keyframes;
   let prev: typeof kfs[0] | null = null;
@@ -31,6 +32,14 @@ function interpolateTrack(track: KeyframeTrack<number> | undefined, frame: numbe
   const t = (frame - prev.frame) / (next.frame - prev.frame);
   const mode = next.interpolation ?? track.interpolation ?? 'linear';
   if (mode === 'step') return prev.value;
+  if (mode === 'bezier') {
+    // 与主渲染 interpolateTrack 同式同缺省（共用 bezier-easing）：
+    // cp1 取前点 bezierCP1、cp2 取后点 bezierCP2，缺省 ease-in-out。
+    const cp1 = prev.bezierCP1 ?? { x: 0.33, y: 0 };
+    const cp2 = next.bezierCP2 ?? { x: 0.66, y: 1 };
+    const easedY = cubicBezierEaseY(cp1, cp2, t);
+    return prev.value + easedY * (next.value - prev.value);
+  }
   return prev.value + (next.value - prev.value) * t;
 }
 
@@ -69,8 +78,14 @@ function interpolateSingleNode(node: Node, currentFrame: number): InterpolatedNo
   };
 }
 
-/** 轨迹点线性插值（帧 → x/y） */
-function interpolateTrajectoryPoints(
+/**
+ * 轨迹点线性插值（帧 → x/y）。轨迹插值的唯一实现：辅助链（本文件
+ * interpolateSingleNode）与主渲染（unified-render 的
+ * interpolateTransformImpl）共用，两处口径不得分叉。
+ * 语义：点按帧排序；范围外两端 hold 端值；同帧重复点——入段（自
+ * 左侧接近）读第一点、出段读最后一点、恰在该帧取最后一点。
+ */
+export function interpolateTrajectoryPoints(
   points: { frame: number; x: number; y: number }[],
   frame: number,
 ): { x: number; y: number } | null {
@@ -130,7 +145,7 @@ function interpolateCharacterInternal(
       // 合并 node.faceTurn 和转面轨（轨优先）
       const kfFaceTurn = getInterpolatedTrackFaceTurn(node, currentFrame);
       values.faceTurn = kfFaceTurn ?? node.faceTurn;
-      // 合并 node.modifiers 和修饰器组轨（轨优先，同 type 去重）
+      // 合并 node.modifiers 和修改器组轨（轨优先，同 type 去重）
       const kfModifiers = getInterpolatedTrackModifiers(node, currentFrame);
       const nodeMods = node.modifiers ?? [];
       const kfTypes = new Set(kfModifiers.map((m) => m.type));
@@ -315,7 +330,7 @@ export function interpolateNodeKeyframeModifiers(
 }
 
 /**
- * 在两个修饰器组点之间插值（点值 = 修饰器组快照）。
+ * 在两个修改器组点之间插值（点值 = 修改器组快照）。
  */
 export function interpolateModifierPoints(
   prevMods: ModifierInstance[] | null,
@@ -351,7 +366,7 @@ function bracketPoint<T>(points: { frame: number; value: T }[] | undefined, fram
 }
 
 /**
- * 获取某节点在指定帧的插值后修饰器组（读 node.tracks.modifierKeys）。
+ * 获取某节点在指定帧的插值后修改器组（读 node.tracks.modifierKeys）。
  * 供 interpolateCharacterInternal 调用，与 node.modifiers 合并。
  */
 function getInterpolatedTrackModifiers(
@@ -369,9 +384,11 @@ function getInterpolatedTrackModifiers(
 
 /**
  * 获取某节点在指定帧的插值后 faceTurn（读 node.tracks.faceTurnKeys，yaw/pitch 数值 lerp）。
- * 供 interpolateCharacterInternal 调用，与 node.faceTurn 合并（轨优先）。
+ * 供 interpolateCharacterInternal 与主渲染（unified-render）共用：两处都与
+ * node.faceTurn 合并（轨优先），口径唯一。无轨/空轨返回 undefined（回落静态值）；
+ * 区间外经 bracketPoint 钳到最近端点值。
  */
-function getInterpolatedTrackFaceTurn(
+export function getInterpolatedTrackFaceTurn(
   node: Node,
   currentFrame: number,
 ): { yaw: number; pitch: number } | undefined {

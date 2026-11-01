@@ -6,6 +6,8 @@
 // ============================================================
 
 import type { PixelGrid, Sprite, SpriteMark } from './unified-types';
+import { d4MapPoint, d4TransformGrid, resampleGridAffine, type D4Op } from './sprite-transform';
+import { applyAffine, type Affine2D } from './engine/affine';
 
 /** 位打包 base64 字母表（掩码/字节共用，与历史格式一致；
  * 本文件是 pack/unpack 的唯一实现，dynamic-patterns 转出） */
@@ -266,4 +268,266 @@ export function resolveRegionCells(
     }
   }
   return cells;
+}
+
+// ============================================================
+// 标记几何重映射（裁剪/变换/派生与 landmarks 同路，审计 F-32）
+// 此前 resizeSprite/transformSprite 只重映射 landmarks、marks 原样
+// 保留（裁掉边后坐标相对内容漂移）、deriveSpriteFrom 干脆不带 marks。
+// 三个纯函数与既有先例同口径：裁剪平移同 convert 的 shiftMarks、
+// D4 同 bone-axis-guard 的 rotateMark（补齐镜像的角度/分量换算）、
+// 仿射同 affineTransformLandmarks 的几何。
+// ============================================================
+
+/**
+ * 裁剪/改尺寸（内容按 cropOffset 平移、画布变 newW×newH）后的 marks：
+ * 点/矢量/矩形按像素平移 + 新尺寸归一（与 landmarks 的 remapLm 同式）；
+ * 涂画选区逐格平移重打包；圆形在各向异性改尺寸下不再是圆，按旧格心
+ * 判定烘成涂画选区保逐格一致（同 convert shiftMarks）；取色/值/方向
+ * 无位置坐标，不动。位置钳到 [0,1]（同 landmarks 的界外贴边）。
+ */
+export function remapMarksForCrop(
+  marks: SpriteMark[] | undefined,
+  oldW: number, oldH: number,
+  cropOffsetX: number, cropOffsetY: number,
+  newW: number, newH: number,
+): SpriteMark[] | undefined {
+  if (!marks) return undefined;
+  return marks.map((m) => {
+    switch (m.kind) {
+      case 'point':
+        return {
+          ...m,
+          x: clamp01((m.x * oldW + cropOffsetX) / newW),
+          y: clamp01((m.y * oldH + cropOffsetY) / newH),
+        };
+      case 'vector':
+        return {
+          ...m,
+          x: clamp01((m.x * oldW + cropOffsetX) / newW),
+          y: clamp01((m.y * oldH + cropOffsetY) / newH),
+          dx: (m.dx * oldW) / newW,
+          dy: (m.dy * oldH) / newH,
+        };
+      case 'region': {
+        const r = m.region;
+        if (r.by === 'rect') {
+          const x0 = Math.max(0, r.x * oldW + cropOffsetX);
+          const y0 = Math.max(0, r.y * oldH + cropOffsetY);
+          const x1 = Math.min(newW, (r.x + r.w) * oldW + cropOffsetX);
+          const y1 = Math.min(newH, (r.y + r.h) * oldH + cropOffsetY);
+          return {
+            ...m,
+            region: {
+              by: 'rect' as const,
+              x: x0 / newW, y: y0 / newH,
+              w: Math.max(0, x1 - x0) / newW, h: Math.max(0, y1 - y0) / newH,
+            },
+          };
+        }
+        if (r.by === 'circle') {
+          const cells = new Uint8Array(newW * newH);
+          for (let y = 0; y < oldH; y++) {
+            for (let x = 0; x < oldW; x++) {
+              const nx = (x + 0.5) / oldW, ny = (y + 0.5) / oldH;
+              if (Math.hypot(nx - r.cx, ny - r.cy) > r.r) continue;
+              const tx = x + cropOffsetX, ty = y + cropOffsetY;
+              if (tx >= 0 && ty >= 0 && tx < newW && ty < newH) cells[ty * newW + tx] = 1;
+            }
+          }
+          return { ...m, region: paintedSpecFromCells(cells, newW, newH) };
+        }
+        if (r.by === 'painted') {
+          const src = unpackMaskBits(r.mask.bits, r.mask.w * r.mask.h);
+          const cells = new Uint8Array(newW * newH);
+          for (let y = 0; y < r.mask.h; y++) {
+            for (let x = 0; x < r.mask.w; x++) {
+              if (!src[y * r.mask.w + x]) continue;
+              const tx = x + cropOffsetX, ty = y + cropOffsetY;
+              if (tx >= 0 && ty >= 0 && tx < newW && ty < newH) cells[ty * newW + tx] = 1;
+            }
+          }
+          return { ...m, region: paintedSpecFromCells(cells, newW, newH) };
+        }
+        return m; // color 选区与几何无关
+      }
+      default:
+        return m; // value / direction 无位置坐标
+    }
+  });
+}
+
+/** D4 置换下的 marks（与 rotateSpriteD4/transformSprite 的 D4 路同口径） */
+export function transformMarksD4(
+  marks: SpriteMark[] | undefined,
+  op: D4Op,
+  w: number, h: number,
+): SpriteMark[] | undefined {
+  if (!marks) return undefined;
+  const dims = d4MapPoint(op, 0, 0, w, h);
+  const mapPt = (nx: number, ny: number): { x: number; y: number } => {
+    const p = d4MapPoint(op, nx * w, ny * h, w, h);
+    return { x: p.x / dims.w, y: p.y / dims.h };
+  };
+  // 分量线性部分（像素空间作用后按新尺寸归一）
+  const lin = (dx: number, dy: number): { x: number; y: number } => {
+    const ax = dx * w, ay = dy * h;
+    let r: { x: number; y: number };
+    switch (op) {
+      case 'rot90': r = { x: -ay, y: ax }; break;
+      case 'rot270': r = { x: ay, y: -ax }; break;
+      case 'rot180': r = { x: -ax, y: -ay }; break;
+      case 'flipH': r = { x: -ax, y: ay }; break;
+      case 'flipV': r = { x: ax, y: -ay }; break;
+      case 'transpose': r = { x: ay, y: ax }; break;
+      case 'antiTranspose': r = { x: -ay, y: -ax }; break;
+    }
+    return { x: r.x / dims.w, y: r.y / dims.h };
+  };
+  // 方向角（精灵本地视觉角，0=东、顺时针为正、Y 向下）：按反射/旋转
+  // 的角度换算，与分量线性部分同构（逐 op 由单位向量映射验证）
+  const mapAngle = (deg: number): number => {
+    let out: number;
+    switch (op) {
+      case 'rot90': out = deg + 90; break;
+      case 'rot180': out = deg + 180; break;
+      case 'rot270': out = deg + 270; break;
+      case 'flipH': out = 180 - deg; break;
+      case 'flipV': out = -deg; break;
+      case 'transpose': out = 90 - deg; break;
+      case 'antiTranspose': out = 270 - deg; break;
+    }
+    return ((out % 360) + 360) % 360;
+  };
+  return marks.map((m) => {
+    switch (m.kind) {
+      case 'point': {
+        const p = mapPt(m.x, m.y);
+        return { ...m, x: p.x, y: p.y };
+      }
+      case 'vector': {
+        const p = mapPt(m.x, m.y);
+        const d = lin(m.dx, m.dy);
+        return { ...m, x: p.x, y: p.y, dx: d.x, dy: d.y };
+      }
+      case 'direction':
+        return { ...m, angleDeg: mapAngle(m.angleDeg) };
+      case 'region': {
+        const r = m.region;
+        if (r.by === 'rect') {
+          const a = mapPt(r.x, r.y);
+          const b = mapPt(r.x + r.w, r.y + r.h);
+          return {
+            ...m,
+            region: {
+              by: 'rect' as const,
+              x: Math.min(a.x, b.x), y: Math.min(a.y, b.y),
+              w: Math.abs(b.x - a.x), h: Math.abs(b.y - a.y),
+            },
+          };
+        }
+        if (r.by === 'circle') {
+          const c = mapPt(r.cx, r.cy);
+          // r 是归一空间的距离（hypot 对轴交换/翻转不变），原样保留
+          return { ...m, region: { by: 'circle' as const, cx: c.x, cy: c.y, r: r.r } };
+        }
+        if (r.by === 'painted') {
+          const cells = cellsFromPaintedSpec(r, r.mask.w, r.mask.h);
+          const grid: number[][] = [];
+          for (let y = 0; y < r.mask.h; y++) grid.push(Array.from(cells.slice(y * r.mask.w, (y + 1) * r.mask.w)));
+          const rotated = d4TransformGrid(grid, op, 0);
+          const flat = new Uint8Array(rotated.length * (rotated[0]?.length ?? 0));
+          rotated.forEach((row, y) => row.forEach((v, x) => { flat[y * row.length + x] = v; }));
+          return { ...m, region: paintedSpecFromCells(flat, rotated[0]?.length ?? 0, rotated.length) };
+        }
+        return m; // color
+      }
+      default:
+        return m; // value
+    }
+  });
+}
+
+/**
+ * 任意仿射下的 marks（m 为源→目标矩阵，目标原点在 (minX,minY)，
+ * 与 affineTransformLandmarks 同几何）：点/矢量锚点按点映射、贴边钳制；
+ * 矢量分量与方向角按线性部分换算；矩形取四角包围盒（仿射下矩形不保
+ * 矩形，包围盒是近似，注释明示）；圆/涂画先按旧格判定成格、再走与
+ * heightmap 同一重采样（最近邻）烘成涂画选区。
+ */
+export function transformMarksAffine(
+  marks: SpriteMark[] | undefined,
+  mtx: Affine2D,
+  minX: number, minY: number,
+  newW: number, newH: number,
+  oldW: number, oldH: number,
+): SpriteMark[] | undefined {
+  if (!marks) return undefined;
+  const mapPt = (nx: number, ny: number): { x: number; y: number } => {
+    const p = applyAffine(mtx, nx * oldW, ny * oldH);
+    return { x: clamp01((p.x - minX) / newW), y: clamp01((p.y - minY) / newH) };
+  };
+  const linPx = (dxPx: number, dyPx: number): { x: number; y: number } => ({
+    x: mtx.a * dxPx + mtx.c * dyPx,
+    y: mtx.b * dxPx + mtx.d * dyPx,
+  });
+  const resampleCells = (cells: Uint8Array): { by: 'painted'; mask: { w: number; h: number; bits: string } } => {
+    const grid: number[][] = [];
+    for (let y = 0; y < oldH; y++) grid.push(Array.from(cells.slice(y * oldW, (y + 1) * oldW)));
+    const out = resampleGridAffine(grid, mtx, minX, minY, newW, newH, 0);
+    const flat = new Uint8Array(newW * newH);
+    if (out) {
+      out.forEach((row, y) => row.forEach((v, x) => { if (v >= 0.5) flat[y * newW + x] = 1; }));
+    }
+    return paintedSpecFromCells(flat, newW, newH);
+  };
+  return marks.map((mk) => {
+    switch (mk.kind) {
+      case 'point': {
+        const p = mapPt(mk.x, mk.y);
+        return { ...mk, x: p.x, y: p.y };
+      }
+      case 'vector': {
+        const p = mapPt(mk.x, mk.y);
+        const d = linPx(mk.dx * oldW, mk.dy * oldH);
+        return { ...mk, x: p.x, y: p.y, dx: d.x / newW, dy: d.y / newH };
+      }
+      case 'direction': {
+        const rad = (mk.angleDeg * Math.PI) / 180;
+        const v = linPx(Math.cos(rad), Math.sin(rad));
+        if (v.x === 0 && v.y === 0) return mk;
+        const deg = ((Math.atan2(v.y, v.x) * 180) / Math.PI + 360) % 360;
+        return { ...mk, angleDeg: deg };
+      }
+      case 'region': {
+        const r = mk.region;
+        if (r.by === 'rect') {
+          const corners = [
+            mapPt(r.x, r.y), mapPt(r.x + r.w, r.y),
+            mapPt(r.x, r.y + r.h), mapPt(r.x + r.w, r.y + r.h),
+          ];
+          const xs = corners.map((c) => c.x), ys = corners.map((c) => c.y);
+          const x0 = Math.min(...xs), x1 = Math.max(...xs);
+          const y0 = Math.min(...ys), y1 = Math.max(...ys);
+          return { ...mk, region: { by: 'rect' as const, x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
+        }
+        if (r.by === 'circle') {
+          const cells = new Uint8Array(oldW * oldH);
+          for (let y = 0; y < oldH; y++) {
+            for (let x = 0; x < oldW; x++) {
+              const nx = (x + 0.5) / oldW, ny = (y + 0.5) / oldH;
+              if (Math.hypot(nx - r.cx, ny - r.cy) <= r.r) cells[y * oldW + x] = 1;
+            }
+          }
+          return { ...mk, region: resampleCells(cells) };
+        }
+        if (r.by === 'painted') {
+          return { ...mk, region: resampleCells(cellsFromPaintedSpec(r, oldW, oldH)) };
+        }
+        return mk; // color
+      }
+      default:
+        return mk; // value
+    }
+  });
 }

@@ -128,7 +128,7 @@ export function GridToggle() {
 
 
 // ---- Skeletons Toggle ----
-// 切换木偶骨架覆盖层（节点标签、IK目标点、插槽连线等）
+// 切换木偶骨架覆盖层（节点标签、IK目标点、槽位连线等）
 export function SkeletonsToggle() {
   const showPuppetSkeleton = useEditorStore((s) => s.showPuppetSkeleton);
   const togglePuppetSkeleton = useEditorStore((s) => s.togglePuppetSkeleton);
@@ -145,7 +145,7 @@ export function SkeletonsToggle() {
           <Bone className="size-3.5" />
         </Toggle>
       </TooltipTrigger>
-      <TooltipContent side="left" className="text-xs">显示骨骼（节点标签/IK目标/插槽）</TooltipContent>
+      <TooltipContent side="left" className="text-xs">显示骨骼（节点标签/IK目标/槽位）</TooltipContent>
     </Tooltip>
   );
 }

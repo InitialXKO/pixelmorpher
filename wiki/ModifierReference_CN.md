@@ -1,3 +1,5 @@
+> ⚠️ **本文档已过期**（2026-11 全系统审计）：内容基于已退役的旧模型（Part / LiveAdapter 等），与现状多处不符。现行口径以根目录 `README.md` 与 `spikes/system-audit/AUDIT.md` 为准。
+
 # 修改器详解 (Modifier Reference)
 
 修改器是 PixelMorpher 的灵魂。它们可以叠加使用，形成复杂的动画管线。修改器分为两大类：**变换修改器**（Transform Modifiers）和**像素修改器**（Pixel Modifiers）。

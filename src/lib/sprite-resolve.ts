@@ -29,7 +29,7 @@ function resolveEntry(
 /**
  * 服装件分层解析（主渲染与预览的共同实现，禁止另写一份）：
  * 变体直达 → 变体镜像 → 基础直达 → 基础镜像。
- * variantId 来自角色的槽位变体指派（Character.slotVariants[slotKey]）；
+ * variantId 来自角色的服装槽变体指派（Character.slotVariants[slotKey]）；
  * 变体层只需画与基础不同的图，未命中自动回落基础层，变体永不留空洞。
  */
 export function resolvePieceSprite(
@@ -101,7 +101,7 @@ export function resolvePieceSprite(
 }
 
 /**
- * 解析指定槽位、方向的精灵（与主渲染 resolveSprite 同逻辑）
+ * 解析指定服装槽、方向的精灵（与主渲染 resolveSprite 同逻辑）
  */
 export function resolvePreviewSprite(
   slotKey: string | undefined,

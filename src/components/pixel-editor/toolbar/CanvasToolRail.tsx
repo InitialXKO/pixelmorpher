@@ -59,6 +59,13 @@ export default function CanvasToolRail() {
         state.editMode !== 'sprite_edit') {
       autoEnterSpriteEdit('在精灵面板中选择一个精灵后再标注特征点');
     }
+    // 精灵标记同理：mark 的 handler 只在 sprite_edit 内工作，此前漏在
+    // 自动进的枚举外——普通模式点它再点画布静默无反应（审计 F-24）。
+    if (val === 'mark' &&
+        state.editMode !== 'correction' &&
+        state.editMode !== 'sprite_edit') {
+      autoEnterSpriteEdit('在精灵面板中选择一个精灵后再打标记');
+    }
     // 裁剪在 sprite_edit 里裁当前精灵（改尺寸/扩边），画布上仍裁项目画布：
     // 有选中精灵时先自动进 sprite_edit，与画笔/选区同一联动。
     if (val === 'crop' &&

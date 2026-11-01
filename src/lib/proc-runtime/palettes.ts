@@ -1,14 +1,14 @@
-// 程序化运行时：调色板与枚举槽位目录。
+// 程序化运行时：调色板与枚举目录。
 // 出色 = 家族 × 8 档 [描边, 暗, 本, 亮, 高光, 强调, 次强调, 纯白]；
 // 运行时片元只做 (家族, 档位) 查表，rim/glint 强度走哈希门，不出界色。
 
-/** 运行时枚举槽位：LIGHT（邻居占据光照） */
+/** 运行时枚举：LIGHT（邻居占据光照） */
 export const LIGHT = { FLAT: 0, TOP: 1, TOP_LEFT: 2, TOP_RIGHT: 3, BOTTOM: 4, BACK: 5, AMBIENT: 6 } as const;
-/** 运行时枚举槽位：OUTLINE（外环描边方式） */
+/** 运行时枚举：OUTLINE（外环描边方式） */
 export const OUTLINE = { NONE: 0, OUTER: 1, INNER: 2, DROP: 3, TOP_ONLY: 4 } as const;
-/** 运行时枚举槽位：RIM（朝向边缘带） */
+/** 运行时枚举：RIM（朝向边缘带） */
 export const RIM = { NONE: 0, UPPER_LEFT: 1, UPPER_RIGHT: 2, BOTH_SIDES: 3, BOTTOM: 4, FULL: 5, SCAN: 6 } as const;
-/** 运行时枚举槽位：GLINT（候选区点亮方式） */
+/** 运行时枚举：GLINT（候选区点亮方式） */
 export const GLINT = { NONE: 0, CORNER: 1, STAR: 2, EDGE_FLOW: 3 } as const;
 
 export const LIGHT_NAMES = Object.keys(LIGHT);

@@ -82,15 +82,20 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
     [character]
   );
   const activeAnimationClipId = useProjectStore((s) => s.activeAnimationClipId);
+  // 片段口径与主渲染门控严格一致（pickClipStateKeyframes/pickSlashClip）：
+  // 只认激活片段、且归属须等于操控角色——渲染端没有「回落到该角色
+  // 第一个片段」这回事。此前面板自带回落并标注「实际片段（已回落）」，
+  // 但该片段的状态键/刀光在画布上并不生效，属口径分叉，已摘除回落。
   const clip = useMemo(
     () =>
       animationClips.find((c) => c.id === activeAnimationClipId && c.puppetCharacterId === performCharacterId) ??
-      animationClips.find((c) => c.puppetCharacterId === performCharacterId) ??
       null,
     [animationClips, activeAnimationClipId, performCharacterId]
   );
 
-  // 每节点在当前帧的插值姿态（面板读数用，与画布一致）
+  // 每节点在当前帧的插值姿态（面板读数用；轨迹 x/y 与主画布同口径
+  // ——两链共用 interpolateTrajectoryPoints、轨迹盖过轨道；其余通道
+  // 走本辅助链插值，与主画布的逐步口径不完全等同）
   // 从新 store 读 unifiedCharacters，用新签名
   const unifiedCharacter = useProjectStore((s) => s.unifiedCharacters[performCharacterId ?? '']);
   const interpolated = useMemo(() => {
@@ -166,12 +171,12 @@ export default function PerformPanel({ hideNodeList = false }: { hideNodeList?: 
         </span>
       </div>
 
-      {/* ---- 实际使用的片段（时间线选中项不属于操控角色时已回落到该角色的片段） ---- */}
+      {/* ---- 实际使用的片段（与画布门控一致：激活片段不属于操控角色时无片段生效） ---- */}
       {performArmed && character && (
         <p className="text-[9px] text-gray-500 px-0.5 -mt-1.5">
           实际片段：{clip ? clip.name : '（无片段）'}
-          {clip && activeAnimationClipId && clip.id !== activeAnimationClipId && (
-            <span className="text-amber-500/90">（时间线选中的片段不属于当前角色，已回落）</span>
+          {!clip && activeAnimationClipId && (
+            <span className="text-amber-500/90">（时间线选中的片段不属于当前角色，画布上不生效）</span>
           )}
         </p>
       )}

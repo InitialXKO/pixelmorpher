@@ -7,7 +7,7 @@ import { MODIFIER_DEFINITIONS } from '@/lib/types';
 import { SUB_TRACK_HEIGHT, CATEGORY_COLOR_MAP } from './constants';
 
 // ---- Node Modifier-Key Sub-Track Lane ----
-// 为 Node 修饰器组轨（tracks.modifierKeys）显示子轨道
+// 为 Node 修改器组轨（tracks.modifierKeys）显示子轨道
 // 每个 modifier type 一行，显示拥有该 modifier 的轨点及其 param keyframes
 export const NodeKeyframeModifierSubTrackLane = React.memo(function NodeKeyframeModifierSubTrackLane({
   node,
@@ -120,7 +120,7 @@ export const NodeKeyframeModifierSubTrackLane = React.memo(function NodeKeyframe
 });
 
 // ---- Node ParamDriver Sub-Track Lane ----
-// 为修饰器组轨内 modifier 的 paramDrivers 显示子轨道
+// 为修改器组轨内 modifier 的 paramDrivers 显示子轨道
 export const NodeParamDriverSubTrackLane = React.memo(function NodeParamDriverSubTrackLane({
   node,
   characterId,

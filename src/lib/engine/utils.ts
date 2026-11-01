@@ -24,6 +24,10 @@ const ALPHA_THRESHOLD = 10;
  * @returns Hex color string like '#rrggbb' or null if alpha < 10
  */
 export function rgbaToHexOrNull(r: number, g: number, b: number, a: number): string | null {
+  // 任一通道非有限（越界读出的 undefined/NaN）按透明处理——否则
+  // rgbToHex 会拼出含 "NaN" 的坏颜色串（审计域1 E6 的兜底防线，
+  // 主修在各提取点的边界钳制）
+  if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b) || !Number.isFinite(a)) return null;
   if (a < ALPHA_THRESHOLD) return null;
   return rgbToHex(r, g, b);
 }

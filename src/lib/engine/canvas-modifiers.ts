@@ -39,6 +39,19 @@ function numParam(value: ModifierParamValue | undefined, fallback: number): numb
  * 数值参数算出 NaN 后污染整帧（LUT 出黑影、描边光角 NaN）。
  * 与运行时 fxResolveCanvasParams 同口径。
  */
+/**
+ * 取某关键帧对某修改器的参数覆盖层（审计 F-30 的分键口径）：
+ * 现行格式 paramsByModifier[modifierId] 优先；缺失时回落存量扁平袋
+ * params（旧工程关键帧是全轨合并快照，以整袋作每修改器的覆盖层即
+ * 旧语义本身，行为不变、不丢参）。与运行时 fxResolveCanvasParams 同口径。
+ */
+export function canvasKeyframeParamsFor(
+  kf: CanvasModifierKeyframe,
+  modifierId: string,
+): Record<string, ModifierParamValue> {
+  return kf.paramsByModifier?.[modifierId] ?? kf.params ?? {};
+}
+
 export function resolveCanvasModifierParams(
   track: CanvasModifierTrack,
   modifier: CanvasModifierInstance,
@@ -49,8 +62,8 @@ export function resolveCanvasModifierParams(
 
   const first = kfs[0];
   const last = kfs[kfs.length - 1];
-  if (currentFrame <= first.frame) return { ...modifier.params, ...first.params };
-  if (currentFrame >= last.frame) return { ...modifier.params, ...last.params };
+  if (currentFrame <= first.frame) return { ...modifier.params, ...canvasKeyframeParamsFor(first, modifier.id) };
+  if (currentFrame >= last.frame) return { ...modifier.params, ...canvasKeyframeParamsFor(last, modifier.id) };
 
   // Find surrounding keyframes（此处必有 nextKf：currentFrame < last.frame）
   let prevKf = first;
@@ -59,16 +72,18 @@ export function resolveCanvasModifierParams(
     if (kf.frame <= currentFrame) prevKf = kf;
     if (kf.frame > currentFrame && !nextKf) nextKf = kf;
   }
-  if (!nextKf) return { ...modifier.params, ...prevKf.params };
+  if (!nextKf) return { ...modifier.params, ...canvasKeyframeParamsFor(prevKf, modifier.id) };
 
   // Interpolate numeric params（t 钳 [0,1] 并防非有限）
   let t = (currentFrame - prevKf.frame) / (nextKf.frame - prevKf.frame);
   if (!Number.isFinite(t)) t = 0;
   t = Math.min(1, Math.max(0, t));
+  const prevParams = canvasKeyframeParamsFor(prevKf, modifier.id);
+  const nextParams = canvasKeyframeParamsFor(nextKf, modifier.id);
   const result: Record<string, ModifierParamValue> = { ...modifier.params };
-  for (const key of Object.keys(prevKf.params)) {
-    const prevVal = prevKf.params[key];
-    const nextVal = nextKf.params[key];
+  for (const key of Object.keys(prevParams)) {
+    const prevVal = prevParams[key];
+    const nextVal = nextParams[key];
     if (typeof prevVal === 'number' && typeof nextVal === 'number') {
       const v = prevVal + (nextVal - prevVal) * t;
       result[key] = Number.isFinite(v) ? v : (Number.isFinite(prevVal) ? prevVal : nextVal);

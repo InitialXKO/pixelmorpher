@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { registerRenderCallback } from '@/lib/playback-scheduler';
+import { registerProjectThumbnailSource } from '@/lib/project-thumbnail';
 import { drawTileGridToCanvas } from '@/lib/tile-blob-engine';
 import { renderCharacterOnionFrameFromCharacter, geometryDirectionFromToggle } from '@/lib/unified-render';
 import { editorClampContextFor } from '@/lib/clamp-session';
@@ -142,7 +143,11 @@ export default function PixelCanvas() {
     };
     if (s.onionSkinEnabled && s.onionSkinFrames > 0) {
       offCtx.save();
-      offCtx.clearRect(0, 0, s.canvasWidth, s.canvasHeight);
+      // 注意：此处不得 clearRect——离屏每帧靠 width 赋值已复位，且第 0 步
+      // 刚画的参考图就在这张离屏上，清屏会把参考图一并擦掉（审计域2：
+      // 洋葱皮与参考图同开时参考图不显示）。染色也不能直接在 offCtx 上
+      // 用 source-atop（会把参考图等已有内容一并染色），逐帧在池化临时
+      // 画布上合成「鬼影+染色」再贴回（见 drawOnionGhost）。
       const curVersion = s.onionDataVersionRef.current;
       const kfHash = `|tracks:${JSON.stringify(Object.values(useProjectStore.getState().unifiedCharacters).map((c) => Object.values(c.nodes).map((n) => n.tracks ?? null)))}`
         + `|corr:${JSON.stringify(Object.values(useProjectStore.getState().unifiedCharacters).map((c) => Object.values(c.nodes).map((n) => n.frameCorrections ?? null)))}`;
@@ -170,10 +175,39 @@ export default function PixelCanvas() {
               cacheCtx, s.canvasWidth, s.canvasHeight, character,
               frame,
               s.frameRate, s.globalModifiers, s.animationVariables, undefined,
-              geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D)
+              geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D),
+              onionQuality,
             );
           } catch { /* 单个角色渲染失败不影响其它 */ }
         }
+      };
+
+      // 单帧鬼影：缓存未命中先渲染进缓存画布；染色在临时画布上以
+      // source-atop 只染鬼影自身，再以 globalAlpha 贴回离屏（参考图与
+      // 已合成内容不被染色波及）
+      const drawOnionGhost = (frame: number, offset: number, isPrev: boolean) => {
+        const cached = s.onionCacheRef.current.get(frame);
+        if (!cached || cached.version < curVersion || cached.keyframeHash !== kfHash) {
+          // Use canvas pool instead of createElement to reduce GC pressure
+          const cacheCanvas = acquireCanvas(s.canvasWidth, s.canvasHeight);
+          const cacheCtx = cacheCanvas.getContext('2d')!;
+          // 重构后画布只画木偶，nonPuppetParts 死代码已删
+          renderPuppetOnionFrame(cacheCtx, frame);
+          s.onionCacheRef.current.set(frame, { canvas: cacheCanvas, version: curVersion, keyframeHash: kfHash });
+        }
+        const ghost = s.onionCacheRef.current.get(frame)!.canvas;
+        const scratch = acquireCanvas(s.canvasWidth, s.canvasHeight);
+        const scratchCtx = scratch.getContext('2d')!;
+        scratchCtx.drawImage(ghost, 0, 0);
+        scratchCtx.globalCompositeOperation = 'source-atop';
+        scratchCtx.fillStyle = getTintColor(isPrev);
+        scratchCtx.fillRect(0, 0, s.canvasWidth, s.canvasHeight);
+        offCtx.save();
+        offCtx.globalAlpha = Math.max(0.05, 0.25 / offset);
+        offCtx.globalCompositeOperation = 'source-over';
+        offCtx.drawImage(scratch, 0, 0);
+        offCtx.restore();
+        releaseCanvas(scratch);
       };
 
       for (let offset = 1; offset <= s.onionSkinFrames; offset++) {
@@ -181,42 +215,11 @@ export default function PixelCanvas() {
         const nextFrame = currentFrame + offset;
 
         if (prevFrame >= 0) {
-          offCtx.save();
-          offCtx.globalAlpha = Math.max(0.05, 0.25 / offset);
-          offCtx.globalCompositeOperation = 'source-over';
-          const cached = s.onionCacheRef.current.get(prevFrame);
-          if (!cached || cached.version < curVersion || cached.keyframeHash !== kfHash) {
-            // Use canvas pool instead of createElement to reduce GC pressure
-            const cacheCanvas = acquireCanvas(s.canvasWidth, s.canvasHeight);
-            const cacheCtx = cacheCanvas.getContext('2d')!;
-            // 重构后画布只画木偶，nonPuppetParts 死代码已删
-            renderPuppetOnionFrame(cacheCtx, prevFrame);
-            s.onionCacheRef.current.set(prevFrame, { canvas: cacheCanvas, version: curVersion, keyframeHash: kfHash });
-          }
-          offCtx.drawImage(s.onionCacheRef.current.get(prevFrame)!.canvas, 0, 0);
-          offCtx.globalCompositeOperation = 'source-atop';
-          offCtx.fillStyle = getTintColor(true);
-          offCtx.fillRect(0, 0, s.canvasWidth, s.canvasHeight);
-          offCtx.restore();
+          drawOnionGhost(prevFrame, offset, true);
         }
 
         if (nextFrame < useProjectStore.getState().totalFrames) {
-          offCtx.save();
-          offCtx.globalAlpha = Math.max(0.05, 0.25 / offset);
-          offCtx.globalCompositeOperation = 'source-over';
-          const cached = s.onionCacheRef.current.get(nextFrame);
-          if (!cached || cached.version < curVersion || cached.keyframeHash !== kfHash) {
-            const cacheCanvas = acquireCanvas(s.canvasWidth, s.canvasHeight);
-            const cacheCtx = cacheCanvas.getContext('2d')!;
-            // 重构后画布只画木偶，nonPuppetParts 死代码已删
-            renderPuppetOnionFrame(cacheCtx, nextFrame);
-            s.onionCacheRef.current.set(nextFrame, { canvas: cacheCanvas, version: curVersion, keyframeHash: kfHash });
-          }
-          offCtx.drawImage(s.onionCacheRef.current.get(nextFrame)!.canvas, 0, 0);
-          offCtx.globalCompositeOperation = 'source-atop';
-          offCtx.fillStyle = getTintColor(false);
-          offCtx.fillRect(0, 0, s.canvasWidth, s.canvasHeight);
-          offCtx.restore();
+          drawOnionGhost(nextFrame, offset, false);
         }
       }
       offCtx.restore();
@@ -289,7 +292,7 @@ export default function PixelCanvas() {
       try {
         renderUnified(offCtx, s.canvasWidth, s.canvasHeight, Object.values(freshStore.sprites), currentFrame, bgColor,
           s.effectTracks, s.motionBlurStrokes, s.effectStrokes, s.autoMotionBlur, s.autoMotionBlurIntensity,
-          s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, 'high',
+          s.proceduralAnimations, s.canvasModifierTracks, s.frameRate, useEditorStore.getState().previewQuality,
           s.animationVariables, s.globalModifiers, unifiedCharacters, animationClips, true, globalBlueprint,
           freshStore.sprites, s.perspectiveForeshorten, freshStore.activeAnimationClipId,
           geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D),
@@ -327,37 +330,9 @@ export default function PixelCanvas() {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(offscreen, 0, 0, s.canvasWidth, s.canvasHeight, panX, panY, s.canvasWidth * zoom, s.canvasHeight * zoom);
 
-    // 5. Onion skin overlay on main canvas — SKIP during playback to save 50-80% frame time
-    // The offscreen canvas already has the onion skin tinted; we only need this second
-    // pass when we need a separate overlay compositing step (which is for visual quality).
-    // During playback, the first pass (step 1) is sufficient.
-    if (s.onionSkinEnabled && s.onionSkinFrames > 0 && !isPlaying) {
-      if (!s.onionOverlayRef.current) s.onionOverlayRef.current = document.createElement('canvas');
-      const onionCanvas = s.onionOverlayRef.current;
-      onionCanvas.width = s.canvasWidth; onionCanvas.height = s.canvasHeight;
-      const onionCtx = onionCanvas.getContext('2d')!;
-      onionCtx.clearRect(0, 0, s.canvasWidth, s.canvasHeight);
-      for (let offset = 1; offset <= s.onionSkinFrames; offset++) {
-        const prevFrame = currentFrame - offset;
-        const nextFrame = currentFrame + offset;
-        if (prevFrame >= 0) {
-          onionCtx.save(); onionCtx.globalAlpha = Math.max(0.05, 0.3 / offset);
-          const cached = s.onionCacheRef.current.get(prevFrame);
-          if (cached) onionCtx.drawImage(cached.canvas, 0, 0);
-          onionCtx.globalCompositeOperation = 'source-atop'; onionCtx.fillStyle = getTintColor(true);
-          onionCtx.fillRect(0, 0, s.canvasWidth, s.canvasHeight); onionCtx.restore();
-        }
-        if (nextFrame < useProjectStore.getState().totalFrames) {
-          onionCtx.save(); onionCtx.globalAlpha = Math.max(0.05, 0.3 / offset);
-          const cached = s.onionCacheRef.current.get(nextFrame);
-          if (cached) onionCtx.drawImage(cached.canvas, 0, 0);
-          onionCtx.globalCompositeOperation = 'source-atop'; onionCtx.fillStyle = getTintColor(false);
-          onionCtx.fillRect(0, 0, s.canvasWidth, s.canvasHeight); onionCtx.restore();
-        }
-      }
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(onionCanvas, 0, 0, s.canvasWidth, s.canvasHeight, panX, panY, s.canvasWidth * zoom, s.canvasHeight * zoom);
-    }
+    // 5. 洋葱皮只在第 1 步合成进离屏一次。旧实现暂停时还在主画布上把
+    // 同批鬼影再叠一遍（且压在当前帧之上）：暂停态鬼影双倍不透明、
+    // 与播放态观感不一致（审计域2：洋葱皮暂停双绘），已删除第二遍。
 
     // 6-10. Overlays
     if (s.showGrid) renderGridOverlay(rc);
@@ -457,6 +432,9 @@ export default function PixelCanvas() {
   useEffect(() => {
     s.markDirty();
   }, [s.referenceImageUrl, s.referenceImageVisible, s.referenceImageOpacity]);
+
+  // 项目缩略图抓图源：主离屏画布（保存工程时 asset-store 经它生产缩略图）
+  useEffect(() => registerProjectThumbnailSource(() => s.offscreenRef.current), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 覆盖层开关变化时标记重绘（网格/骨骼/轨迹等）
   useEffect(() => {
@@ -762,7 +740,7 @@ export default function PixelCanvas() {
                 if (n) addSocketToNode(menuTarget.characterId, n);
               }}
             >
-              添加插槽
+              添加槽位
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem

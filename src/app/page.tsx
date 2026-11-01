@@ -131,6 +131,16 @@ export default function Home() {
       const projectFile = await loadAutosaveFromOPFS();
       if (projectFile) {
         useProjectStore.getState().importProjectFile(projectFile as any);
+        // 与 openProject 同口径收尾：进编辑器 + 绑定工程 ID。缺这两件
+        // 时恢复内容只漂在 store 里（界面仍停主页），随后打开/新建任一
+        // 工程即被静默冲掉，「返回主页」的保存也无处落。
+        // ID 来源：自动保存文件未记录 DB 工程键（meta 只存时间/大小），
+        // 唯一随内容走的 ID 是工程文件自带的 project.id——import 后
+        // store 的 id 即该值（export/import 往返稳定）。绑它之后，
+        // saveCurrentProject 按该 ID 落 projects 行并补 projectMeta 行，
+        // 恢复成果成为一个真实工程条目而非无主数据。
+        const restoredId = useProjectStore.getState().id;
+        useAssetStore.setState({ currentProjectId: restoredId, showProjectHome: false });
       } else {
         console.error('[autosave] Restore failed: no data loaded from OPFS');
       }

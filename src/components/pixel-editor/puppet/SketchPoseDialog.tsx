@@ -96,7 +96,7 @@ export default function SketchPoseDialog({ open, onClose }: { open: boolean; onC
     renderUnified(
       offCtx, canvasW, canvasH, Object.values(pst.sprites), frame, 'transparent',
       [], [], [], false, 0,
-      pst.proceduralAnimations ?? [], pst.canvasModifierTracks ?? [], frameRate, 'high',
+      pst.proceduralAnimations ?? [], pst.canvasModifierTracks ?? [], frameRate, est.previewQuality,
       pst.animationVariables ?? [], pst.globalModifiers ?? [],
       charsForRender, pst.animationClips, true, pst.globalBlueprint,
       pst.sprites, est.perspectiveForeshorten, pst.activeAnimationClipId,

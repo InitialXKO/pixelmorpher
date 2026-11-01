@@ -184,7 +184,7 @@ function NodeTreeItem({
               新建子节点
             </ContextMenuItem>
             <ContextMenuItem onSelect={() => menuHandlers.onAddSocket(node)}>
-              添加插槽
+              添加槽位
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem

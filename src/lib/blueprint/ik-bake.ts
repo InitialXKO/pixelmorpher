@@ -49,7 +49,10 @@ export function ikChainsToBlueprint(
     if (jointIds.length < 2) continue;
     if (jointIds[0] !== chain.rootNodeId) continue;
 
-    // Measure bone lengths from FK
+    // Measure bone lengths from FK（三维口径：与活求解/烘焙桥的段长
+    // 同式 Math.hypot(seg.x, seg.y, seg.z)——此前只量 XY，链关节在
+    // Z 向有分离时烘焙骨长系统性偏短、末端落点偏离目标。worldZ
+    // 缺失的变换表按 0 兜底，与各处 z ?? 0 的口径一致）
     const lengths: number[] = [];
     for (let i = 0; i < jointIds.length - 1; i++) {
       const t1 = transforms.get(jointIds[i]);
@@ -59,6 +62,7 @@ export function ikChainsToBlueprint(
         Math.hypot(
           subToPx(t2.worldX) - subToPx(t1.worldX),
           subToPx(t2.worldY) - subToPx(t1.worldY),
+          subToPx(t2.worldZ ?? pxToSub(0)) - subToPx(t1.worldZ ?? pxToSub(0)),
         ),
       );
     }

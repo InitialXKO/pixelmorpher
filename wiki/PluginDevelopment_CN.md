@@ -1,3 +1,5 @@
+> ⚠️ **本文档已过期**（2026-11 全系统审计）：内容基于已退役的旧模型（Part / LiveAdapter 等），与现状多处不符。现行口径以根目录 `README.md` 与 `spikes/system-audit/AUDIT.md` 为准。
+
 # 插件开发指南 (Plugin Development Guide)
 
 PixelMorpher 是一个完全开放的平台。你可以通过 JavaScript 编写插件来添加自定义修改器、工具面板或自动化流程。

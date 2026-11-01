@@ -21,7 +21,6 @@ import type {
   StrokeParamDriver,
   Keyframe,
 } from '../types';
-import { sampleWaveformAtFrame } from '../csv-waveform';
 import { hashString } from './noise';
 import { applyInterpolationMode, cubicBezierEasing } from './interpolation';
 

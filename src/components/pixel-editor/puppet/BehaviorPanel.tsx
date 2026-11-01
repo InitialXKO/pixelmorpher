@@ -59,7 +59,7 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
 
   const patchCharacter = (updates: Partial<Character>, undoLabel: string) => {
     const store = useProjectStore.getState();
-    store.pushUndo(undoLabel, 'behavior');
+    store.pushUndo(undoLabel, 'behaviorGraph');
     store.updateUnifiedCharacter(charId, updates);
   };
   const patchPerf = (id: string, p: Partial<ProcPerformance>) => {

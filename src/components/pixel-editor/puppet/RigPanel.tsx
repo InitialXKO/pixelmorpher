@@ -143,7 +143,7 @@ export default function RigPanel({
 
   const handleDeleteNode = useCallback(() => {
     if (!selectedSkeletonId || !selectedNodeId) return;
-    // 与右键菜单共用同一删除口径（node-actions：含只挂插槽的子节点、根节点拒绝、确认文案一致）
+    // 与右键菜单共用同一删除口径（node-actions：含只挂槽位的子节点、根节点拒绝、确认文案一致）
     deleteNodeSubtree(selectedSkeletonId, selectedNodeId);
   }, [selectedSkeletonId, selectedNodeId]);
 
@@ -168,8 +168,8 @@ export default function RigPanel({
       if (!character) return;
       const socket = (selectedNode.sockets ?? []).find((s) => s.id === socketId);
       const attached = Object.values(character.nodes).filter((n) => n.attachment.parentSocketId === socketId);
-      if (attached.length > 0 && !confirm(`删除插槽「${socket?.name ?? socketId}」会 detach ${attached.length} 个子节点（${attached.map((n) => n.name).join('、')}），继续？`)) return;
-      store.pushUndo('删除插槽');
+      if (attached.length > 0 && !confirm(`删除槽位「${socket?.name ?? socketId}」会 detach ${attached.length} 个子节点（${attached.map((n) => n.name).join('、')}），继续？`)) return;
+      store.pushUndo('删除槽位');
       // Remove socket from selected node
       store.updateUnifiedNode(selectedSkeletonId, selectedNodeId, {
         sockets: (selectedNode.sockets ?? []).filter((so) => so.id !== socketId),
@@ -342,9 +342,9 @@ function ParentSwitchSection({
           {candidates.map((p) => (
             <optgroup key={p.id} label={p.id === character.rootNodeId ? `${p.name}（根节点）` : p.name}>
               {(p.sockets ?? []).map((sk) => (
-                <option key={sk.id} value={sk.id}>插槽：{sk.name}</option>
+                <option key={sk.id} value={sk.id}>槽位：{sk.name}</option>
               ))}
-              <option value={`fixed:${p.id}`}>（固定连接，不插槽）</option>
+              <option value={`fixed:${p.id}`}>（固定连接，不用服装槽）</option>
               <option value={`keep:${p.id}`}>（沿用原连接方式）</option>
             </optgroup>
           ))}
@@ -360,7 +360,7 @@ function ParentSwitchSection({
         <div className="mt-1 space-y-0.5">
           {keys.map((k) => (
             <div key={k.frame} className="flex items-center justify-between text-[10px] text-gray-400 bg-[#111128] rounded px-1.5 py-0.5">
-              <span>第 {k.frame} 帧 → {nameOf(k.value.parentId)}{k.value.socketId ? '（插槽）' : k.value.socketId === null ? '（固定）' : ''}</span>
+              <span>第 {k.frame} 帧 → {nameOf(k.value.parentId)}{k.value.socketId ? '（槽位）' : k.value.socketId === null ? '（固定）' : ''}</span>
               <button type="button" className="text-red-400 hover:text-red-300" onClick={() => removeKey(k.frame)}>删除</button>
             </div>
           ))}
@@ -506,10 +506,10 @@ function RigNodeProperties({
         </div>
       </div>
 
-      {/* 连接（父节点 / 插槽） */}
+      {/* 连接（父节点 / 槽位） */}
       {character && !isRoot && (
         <div>
-          <Label className="text-[10px] text-gray-500 uppercase tracking-wider">连接（父节点 / 插槽）</Label>
+          <Label className="text-[10px] text-gray-500 uppercase tracking-wider">连接（父节点 / 槽位）</Label>
           {(() => {
             const currentParent = findParentNode(character.nodes, node);
             const connValue =
@@ -552,15 +552,15 @@ function RigNodeProperties({
                     <optgroup key={p.id} label={p.id === character.rootNodeId ? `${p.name}（根节点）` : p.name}>
                       {(p.sockets ?? []).map((sk) => (
                         <option key={sk.id} value={sk.id}>
-                          插槽：{sk.name}
+                          槽位：{sk.name}
                         </option>
                       ))}
-                      <option value={`fixed:${p.id}`}>（固定连接，不插槽）</option>
+                      <option value={`fixed:${p.id}`}>（固定连接，不用服装槽）</option>
                     </optgroup>
                   ))}
                 </select>
                 <p className="mt-0.5 text-[9px] text-gray-600">
-                  插槽连接的位置由插槽决定，换父级后节点会移到新插槽处
+                  槽位连接的位置由槽位决定，换父级后节点会移到新槽位处
                 </p>
               </>
             );
@@ -752,14 +752,14 @@ function RigNodeProperties({
       <div>
         <div className="flex items-center justify-between">
           <Label className="text-[10px] text-gray-500 uppercase tracking-wider">
-            插槽 ({node.sockets?.length ?? 0})
+            槽位 ({node.sockets?.length ?? 0})
           </Label>
           <Button
             variant="ghost"
             size="icon"
             className="size-5 text-cyan-400 hover:text-cyan-300"
             onClick={onAddSocket}
-            title="添加插槽"
+            title="添加槽位"
           >
             <Plus className="size-3" />
           </Button>
@@ -785,14 +785,21 @@ function RigNodeProperties({
                     value={subToPx(socket.basePosition.x)}
                     onCommit={(v) => updateSocket({ basePosition: { ...socket.basePosition, x: pxToSub(v) } })}
                     className="w-14 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
-                    title="X"
+                    title={socket.offset3D ? '3D 偏移生效中，基准 X 不生效' : 'X'}
+                    disabled={!!socket.offset3D}
                   />
                   <CommitNumberInput
                     value={subToPx(socket.basePosition.y)}
                     onCommit={(v) => updateSocket({ basePosition: { ...socket.basePosition, y: pxToSub(v) } })}
                     className="w-14 h-6 text-[10px] bg-[#111128] border-[#1e1e3a]"
-                    title="Y"
+                    title={socket.offset3D ? '3D 偏移生效中，基准 Y 不生效' : 'Y'}
+                    disabled={!!socket.offset3D}
                   />
+                  {socket.offset3D && (
+                    <span className="text-[9px] text-cyan-500/80 shrink-0" title="渲染以 Socket.offset3D 为准；改/删 3D 偏移在资产面板的插口编辑里">
+                      3D 生效中
+                    </span>
+                  )}
                   <Select
                     value={skinning}
                     onValueChange={(v) => updateSocket({ skinning: v as 'disc' | 'mesh' })}
@@ -847,7 +854,7 @@ function RigNodeProperties({
         </div>
       </div>
 
-      {/* 参数化外观（程序化运行时）：按槽位 × 服装集存；槽位键与换装同一
+      {/* 参数化外观（程序化运行时）：按服装槽 × 服装集存；服装槽键与换装同一
           口径（node.slot.slotKey ?? nodeId）——slot 只由烘焙导入写入，
           手建节点没有 slot 时以 nodeId 为键，两边读写一致 */}
       {character && characterId && (

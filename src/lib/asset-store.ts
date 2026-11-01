@@ -47,7 +47,7 @@ export interface AssetStore {
   duplicateProject: (id: string, newName: string) => Promise<ProjectMeta | null>;
   renameProject: (id: string, newName: string) => Promise<void>;
   exportProjectAsFile: (id: string) => Promise<void>;
-  importProjectFromFile: (file: File) => Promise<void>;
+  importProjectFromFile: (file: File) => Promise<ProjectMeta | null>;
   updateCurrentProjectMeta: () => Promise<void>;
 
   // ---- Layer 3 Actions ----
@@ -206,9 +206,14 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
     await dbPut('projectMeta', duplicate);
 
     // Also copy project data
+    // 注意展开顺序：projectData 自带原工程的顶层 id（落行时写入），
+    // 新 ID 必须放最后覆盖它——写成 { id: duplicate.id, ...projectData }
+    // 会被原 ID 反盖，记录仍落在原工程键下、副本 ID 下无数据行
+    // （openProject 取不到数据只能初始化空白工程）。与
+    // importProjectFromFile 先改 projectData.id 再展开同口径。
     const projectData = await dbGet<Record<string, unknown>>('projects', id);
     if (projectData) {
-      await dbPut('projects', { id: duplicate.id, ...projectData });
+      await dbPut('projects', { ...projectData, id: duplicate.id });
     }
 
     set((s) => ({ projectList: [duplicate, ...s.projectList] }));
@@ -284,8 +289,10 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
         currentProjectId: newId,
         showProjectHome: false,
       }));
+      return meta;
     } catch {
       // Invalid file
+      return null;
     }
   },
 
@@ -297,11 +304,15 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
       const { useProjectStore } = await import('./store');
       const projectStore = useProjectStore.getState();
 
+      // 缩略图在此生产（抓编辑器离屏画布当前帧）；抓不到（编辑器未
+      // 挂载）时保留旧值，不把已有缩略图覆盖为空
+      const { captureProjectThumbnail } = await import('./project-thumbnail');
+      const existing = get().projectList.find((p) => p.id === currentProjectId);
       const updated: ProjectMeta = {
         id: currentProjectId,
         name: (projectStore as any).name || '未命名项目',
         description: '',
-        thumbnail: '',
+        thumbnail: captureProjectThumbnail() || existing?.thumbnail || '',
         updatedAt: Date.now(),
         canvasWidth: projectStore.canvasWidth,
         canvasHeight: projectStore.canvasHeight,
@@ -341,8 +352,18 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
 
     {
       type = 'animation_editing';
-      summary.animPartCount = projectStore.parts.length;
-      summary.animKeyframeCount = projectStore.keyframes.length;
+      // Part 与工程级 keyframes 已退役：部件数取全局精灵表条数，
+      // 关键帧数汇总各角色节点轨道（现行模型无单一对应字段）。
+      summary.animPartCount = Object.keys(projectStore.sprites ?? {}).length;
+      let kfCount = 0;
+      for (const ch of Object.values(projectStore.unifiedCharacters ?? {}) as any[]) {
+        for (const node of Object.values(ch?.nodes ?? {}) as any[]) {
+          for (const track of Object.values(node?.tracks ?? {}) as any[]) {
+            if (Array.isArray(track?.keyframes)) kfCount += track.keyframes.length;
+          }
+        }
+      }
+      summary.animKeyframeCount = kfCount;
     }
 
     summary.type = type;

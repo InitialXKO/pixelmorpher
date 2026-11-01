@@ -50,9 +50,12 @@ export function SmartSelectStatus() {
         <span className="text-[10px] text-gray-500">点击画布初始化 AI 模型</span>
       )}
       {samState.status === 'loading' && (
-        <span className="text-[10px] text-cyan-400">
-          {samState.progress < 30 ? '下载模型中' : samState.progress < 70 ? '加载模型中' : '初始化推理引擎'} {samState.progress}%
-        </span>
+        <>
+          <span className="text-[10px] text-cyan-400">
+            {samState.progress < 30 ? '下载模型中' : samState.progress < 70 ? '加载模型中' : '初始化推理引擎'} {samState.progress}%
+          </span>
+          <span className="text-[10px] text-gray-500">等不及可改用套索/魔棒手动选区</span>
+        </>
       )}
       {samState.status === 'encoding' && (
         <span className="text-[10px] text-cyan-400">图像编码中...</span>
@@ -69,9 +72,9 @@ export function SmartSelectStatus() {
           <button
             className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-600/30 text-cyan-300 hover:bg-cyan-500/40 transition-colors"
             onClick={() => useEditorStore.getState().extractSAMMaskAsPart()}
-            title="提取选区为新Part (Shift+E)"
+            title="提取选区为新精灵 (Shift+E)"
           >
-            提取为Part
+            提取为精灵
           </button>
           <button
             className="text-[10px] px-1.5 py-0.5 rounded bg-gray-600/30 text-gray-300 hover:bg-gray-500/40 transition-colors"
@@ -92,6 +95,7 @@ export function SmartSelectStatus() {
           >
             重试
           </button>
+          <span className="text-[10px] text-gray-500">或改用套索/魔棒手动选区</span>
         </div>
       )}
     </div>

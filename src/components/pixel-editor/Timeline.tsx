@@ -114,11 +114,11 @@ export default function Timeline() {
 
   // ---- Puppet keyframe selection state ----
   const [selectedNodeKeyframeId, setSelectedNodeKeyframeId] = useState<string | null>(null);
-  // 正在编辑的轨道参数驱动器（定位 = 角色 + 节点 + 轨点帧 + 修饰器 + 驱动器）
+  // 正在编辑的轨道参数驱动器（定位 = 角色 + 节点 + 轨点帧 + 修改器 + 驱动器）
   const [editingDriver, setEditingDriver] = useState<{
     nodeId: string; frame: number; modifierId: string; driverId: string;
   } | null>(null);
-  // 正在编辑的轨点修饰器参数（定位 = 角色 + 节点 + 轨点帧 + 修饰器）
+  // 正在编辑的轨点修改器参数（定位 = 角色 + 节点 + 轨点帧 + 修改器）
   const [editingModifier, setEditingModifier] = useState<{
     nodeId: string; frame: number; modifierId: string;
   } | null>(null);
@@ -229,7 +229,7 @@ export default function Timeline() {
     [handleSeekTrackKey, puppetCharacter]
   );
 
-  // 修饰器参数「编辑」：先跳帧+选中（保留旧导航行为），再打开参数编辑器。
+  // 修改器参数「编辑」：先跳帧+选中（保留旧导航行为），再打开参数编辑器。
   // 旧实现只跳帧、把 modifierId 丢掉，编辑器从未存在，菱形标记只是定位入口。
   const handleEditModifierParams = useCallback(
     (nodeId: string, frame: number, modifierId: string) => {
@@ -239,7 +239,7 @@ export default function Timeline() {
     [handleSeekTrackKey, puppetCharacter]
   );
 
-  // 编辑器目标修饰器（store 直读；目标消失则自动关窗）
+  // 编辑器目标修改器（store 直读；目标消失则自动关窗）
   const editingModifierData = useMemo(() => {
     if (!editingModifier || !puppetCharacter) return null;
     const node = puppetCharacter.nodes[editingModifier.nodeId];
@@ -508,12 +508,14 @@ export default function Timeline() {
   // ---- Canvas modifier track handlers ----
   // 加帧时快照该帧各修改器的解析参数（加帧不改变当前画面，之后在面板
   // 里改参即写这一帧的关键帧）；编辑 = 把播放头跳到该帧（面板改参写关键帧）。
+  // 快照按修改器分键（审计 F-30）：旧实现 Object.assign 进一只扁平袋，
+  // 同轨第二个同类型修改器的同名参数会覆盖第一个的快照。
   const handleAddCanvasModifierKeyframe = useCallback((trackId: string, frame: number) => {
     const track = useProjectStore.getState().canvasModifierTracks.find((t) => t.id === trackId);
     if (!track) return;
-    const bag: Record<string, ModifierParamValue> = {};
-    for (const m of track.modifiers) Object.assign(bag, resolveCanvasModifierParams(track, m, frame));
-    addCanvasModifierKeyframe(trackId, frame, bag);
+    const byModifier: Record<string, Record<string, ModifierParamValue>> = {};
+    for (const m of track.modifiers) byModifier[m.id] = resolveCanvasModifierParams(track, m, frame);
+    addCanvasModifierKeyframe(trackId, frame, byModifier);
   }, [addCanvasModifierKeyframe]);
   const handleDeleteCanvasModifierKeyframe = useCallback((trackId: string, keyframeId: string) => { removeCanvasModifierKeyframe(trackId, keyframeId); }, [removeCanvasModifierKeyframe]);
   const handleEditCanvasModifierKeyframe = useCallback((trackId: string, keyframeId: string) => {
@@ -1020,7 +1022,7 @@ function ParamDriverEditorDialog({
   );
 }
 
-/** 轨点修饰器参数编辑器：按修饰器类型定义动态出表单，改完整组写回该帧。
+/** 轨点修改器参数编辑器：按修改器类型定义动态出表单，改完整组写回该帧。
  *  保存与移除各走一次 store 动作（各压一条撤销）；空组写回即删点（setNodeModifierKey 语义）。
  *  路径/复合值参数不在此编辑（只读显示），避免把数组值塞进数字框写坏。 */
 function ModifierParamsEditorDialog({
@@ -1057,7 +1059,7 @@ function ModifierParamsEditorDialog({
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="bg-[#1a1a2e] border-white/10 text-gray-200 max-w-sm">
         <DialogHeader>
-          <DialogTitle className="text-sm text-gray-100">编辑修饰器参数</DialogTitle>
+          <DialogTitle className="text-sm text-gray-100">编辑修改器参数</DialogTitle>
           <DialogDescription className="text-xs text-gray-400">
             {nodeName} · 第 {frame} 帧 · {def?.label ?? mod.type}
             {def ? '' : '（该类型无参数定义，只可开关与移除）'}
@@ -1066,7 +1068,7 @@ function ModifierParamsEditorDialog({
         <div className="space-y-2 py-2">
           <label className="flex items-center gap-2 text-xs text-gray-300">
             <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-            启用修饰器
+            启用修改器
           </label>
           {(def?.params ?? []).map((param) => {
             const raw = params[param.name] ?? param.default;
@@ -1132,7 +1134,7 @@ function ModifierParamsEditorDialog({
           })}
         </div>
         <DialogFooter className="gap-2">
-          <Button variant="ghost" size="sm" className="text-xs text-red-400 hover:text-red-300 mr-auto" onClick={handleRemove}>从该帧移除修饰器</Button>
+          <Button variant="ghost" size="sm" className="text-xs text-red-400 hover:text-red-300 mr-auto" onClick={handleRemove}>从该帧移除修改器</Button>
           <Button variant="ghost" size="sm" className="text-xs text-gray-400 hover:text-gray-200" onClick={onClose}>取消</Button>
           <Button size="sm" className="text-xs bg-purple-600 hover:bg-purple-500 text-white" onClick={handleSave}>保存</Button>
         </DialogFooter>

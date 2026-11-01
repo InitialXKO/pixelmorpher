@@ -216,7 +216,7 @@ export function migrateProjectTimeUnits(
       for (const mod of (node.modifiers ?? []) as Array<{ type?: string; params?: Params }>) {
         migrateModifierTimeUnits(mod, fps);
       }
-      // 修饰器组轨上的修饰器（旧片段关键帧迁入，导入顺序上在本迁移之前）
+      // 修改器组轨上的修改器（旧片段关键帧迁入，导入顺序上在本迁移之前）
       for (const pt of ((node.tracks as any)?.modifierKeys?.keyframes ?? []) as Array<Record<string, any>>) {
         for (const mod of (pt?.value ?? []) as Array<{ type?: string; params?: Params }>) {
           migrateModifierTimeUnits(mod, fps);
@@ -224,7 +224,7 @@ export function migrateProjectTimeUnits(
       }
     }
   }
-  // 注：旧片段关键帧的修饰器已由片段结构迁移并入上面的轨道附件轨，
+  // 注：旧片段关键帧的修改器已由片段结构迁移并入上面的轨道附件轨，
   // clips 参数保留仅为签名兼容，不再单独遍历。
   for (const mod of globalModifiers ?? []) {
     migrateModifierTimeUnits(mod, fps);

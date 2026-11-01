@@ -42,7 +42,7 @@ export type CharacterSlice = {
   splitUnifiedNode: (characterId: string, nodeId: string, childId: string | null, t: number) => { ok: boolean; error?: string; report: string[]; midNodeId?: string };
 
   // ---- Node Track Keys（轨道附件轨与帧级操作；姿态通道点由 writePuppetPoseKeyframe 等直写） ----
-  /** 写修饰器组轨上某帧的点（空数组 = 删点） */
+  /** 写修改器组轨上某帧的点（空数组 = 删点） */
   setNodeModifierKey: (characterId: string, nodeId: string, frame: number, modifiers: import('../unified-types').ModifierInstance[]) => void;
   removeNodeModifierKey: (characterId: string, nodeId: string, frame: number) => void;
   /** 写转面轨上某帧的点 */
@@ -59,7 +59,7 @@ export type CharacterSlice = {
   moveNodeFrameKeys: (characterId: string, nodeId: string, fromFrame: number, toFrame: number) => boolean;
   /** 给某帧全部数值通道点设插值模式覆盖（作用于以该帧结尾的段） */
   setNodeFrameInterpolation: (characterId: string, nodeId: string, frame: number, mode: import('../types').InterpolationMode) => void;
-  // ---- 修饰器组轨内的 ParamDriver（按 节点+帧 定位，旧 keyframes 版在 modifier-slice 不动） ----
+  // ---- 修改器组轨内的 ParamDriver（按 节点+帧 定位，旧 keyframes 版在 modifier-slice 不动） ----
   toggleTrackParamDriver: (characterId: string, nodeId: string, frame: number, modifierId: string, driverId: string) => void;
   updateTrackParamDriver: (characterId: string, nodeId: string, frame: number, modifierId: string, driverId: string, updates: Partial<import('../unified-types').ParamDriver>) => void;
   removeTrackParamDriver: (characterId: string, nodeId: string, frame: number, modifierId: string, driverId: string) => void;
@@ -93,7 +93,7 @@ export type CharacterSlice = {
    * 分层版写精灵（参考图装配的目标层写入）：按 layer 落基础层 / 变体层 / 纬度层，
    * 层序与 resolvePieceSprite 一致——纬度非 0 时只落纬度层（整套优先、层内无变体
    * 分层）；纬度 0 且给了 variantId 时落 variantSprites[variantId]。
-   * 写变体层且该槽位（character.slotVariants）原先没有任何指派时，顺带把指派设为
+   * 写变体层且该服装槽（character.slotVariants）原先没有任何指派时，顺带把指派设为
    * 该变体使装配即生效；已有指派不覆盖。返回是否顺带设了指派。
    */
   setUnifiedCostumeSpriteLayered: (
@@ -186,7 +186,7 @@ export interface AutoAssignWriteFact {
 
 /**
  * 装配会话放弃时顺带指派的回滚（纯函数）：对本会话顺带设过指派的写入记录，
- * 若该槽位当前指派仍等于当时顺带设的变体（没被别处改过），删掉该指派；
+ * 若该服装槽当前指派仍等于当时顺带设的变体（没被别处改过），删掉该指派；
  * 已被改过、或非顺带设的，一律不动。无任何变更时原样返回入参（同一引用）；
  * 删空后返回 undefined（与「从未指派过」的缺省形态一致）。
  */
@@ -215,7 +215,10 @@ function generateId(prefix: string): string {
 
 // ---- 轨道点操作（纯函数，供本 slice 的帧级动作共用） ----
 type AnyTrack = import('../unified-types').KeyframeTrack<any>;
-const ALL_TRACK_KEYS = ['angle', 'tilt', 'x', 'y', 'stretch', 'scaleX', 'variantIndex', 'zIndex', 'modifierKeys', 'faceTurnKeys'] as const;
+// 帧级操作（删/复制/移动/有键判定）覆盖的全部轨道键——须与时间线
+// 车道并集（NodeTrackLane 的 TRACK_KEYS）一致，此前漏 parentKeys：
+// 帧级删/复制/移动带不走父级切换点，车道却仍显示该帧有键。
+const ALL_TRACK_KEYS = ['angle', 'tilt', 'x', 'y', 'stretch', 'scaleX', 'variantIndex', 'zIndex', 'modifierKeys', 'faceTurnKeys', 'parentKeys'] as const;
 
 function upsertPoint(tracks: NodeTracks, key: (typeof ALL_TRACK_KEYS)[number], frame: number, value: unknown): NodeTracks {
   const track = (tracks[key] as AnyTrack | undefined) ?? { keyframes: [], interpolation: 'linear' as const };
@@ -560,7 +563,7 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
   setNodeModifierKey: (characterId, nodeId, frame, modifiers) => {
     const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
     if (!node) return;
-    get().pushUndo('编辑关键帧修饰器');
+    get().pushUndo('编辑关键帧修改器');
     const tracks = modifiers.length > 0
       ? upsertPoint(node.tracks ?? {}, 'modifierKeys', frame, structuredClone(modifiers))
       : removePoint(node.tracks ?? {}, 'modifierKeys', frame);
@@ -570,7 +573,7 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
   removeNodeModifierKey: (characterId, nodeId, frame) => {
     const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
     if (!node) return;
-    get().pushUndo('删除关键帧修饰器');
+    get().pushUndo('删除关键帧修改器');
     get().updateUnifiedNode(characterId, nodeId, { tracks: removePoint(node.tracks ?? {}, 'modifierKeys', frame) });
   },
 
@@ -638,9 +641,12 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
   setNodeFrameInterpolation: (characterId, nodeId, frame, mode) => {
     const node = get().unifiedCharacters[characterId]?.nodes[nodeId];
     if (!node?.tracks) return;
+    get().pushUndo('设置关键帧插值');
     let tracks = node.tracks;
     for (const key of ALL_TRACK_KEYS) {
-      if (key === 'modifierKeys' || key === 'faceTurnKeys') continue;
+      // 非数值点轨不设插值模式：modifierKeys/faceTurnKeys 的点值是
+      // 快照对象、parentKeys 恒 step 取值（parentKeyAt 不读模式）
+      if (key === 'modifierKeys' || key === 'faceTurnKeys' || key === 'parentKeys') continue;
       const track = tracks[key] as AnyTrack | undefined;
       if (!track?.keyframes.some((k) => k.frame === frame)) continue;
       tracks = {
@@ -833,7 +839,7 @@ export const createCharacterSlice: StateCreator<ProjectStore, [], [], CharacterS
       const slotKey = node?.slot?.slotKey ?? nodeId;
       const latitude = layer?.latitude ?? 0;
       const variantId = layer?.variantId ?? null;
-      // 变体层写入且槽位无任何指派时顺带指派（使装配即生效）；已有指派不覆盖。
+      // 变体层写入且服装槽无任何指派时顺带指派（使装配即生效）；已有指派不覆盖。
       // 纬度层与解析层序一致地优先于变体层，故顺带指派只发生在纬度 0 的变体写入。
       let slotVariants = character.slotVariants;
       if (spriteId && latitude === 0 && variantId && slotVariants?.[slotKey] === undefined) {

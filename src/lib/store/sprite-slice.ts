@@ -29,6 +29,7 @@ import {
   darkenPixelGrid,
 } from '../sprite-transform';
 import type { D4Op, SpriteTransformRequest } from '../sprite-transform';
+import { remapMarksForCrop, transformMarksD4, transformMarksAffine } from '../sprite-marks';
 import type { Affine2D } from '../engine/affine';
 import { rgbaToHexOrNull } from '@/lib/engine/utils';
 
@@ -225,6 +226,8 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
             mouth: remapLm(sprite.landmarks.mouth),
           }
         : undefined;
+      // marks 与 landmarks 同路重映射（此前原样保留、坐标相对内容漂移，审计 F-32）
+      const newMarks = remapMarksForCrop(sprite.marks, oldW, oldH, cropOffsetX, cropOffsetY, newWidth, newHeight);
 
       return {
         sprites: {
@@ -237,6 +240,7 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
             plug: { x: pxToSub(newPlugX), y: pxToSub(newPlugY) },
             ...(newHeightmap ? { heightmap: newHeightmap } : {}),
             ...(newLandmarks ? { landmarks: newLandmarks } : {}),
+            ...(newMarks ? { marks: newMarks } : {}),
           },
         },
       };
@@ -274,6 +278,7 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
       const plugAbs = d4MapPoint(d4, plugX, plugY, w, h);
       const newHeightmap = sprite.heightmap ? d4TransformGrid(sprite.heightmap, d4, 0) : undefined;
       const newLandmarks = sprite.landmarks ? d4TransformLandmarks(sprite.landmarks, d4, w, h) : undefined;
+      const newMarks = transformMarksD4(sprite.marks, d4, w, h);
       get().pushUndo('变换精灵');
       markPartDirty(id);
       set((s) => (s.sprites[id] ? {
@@ -287,6 +292,7 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
             plug: { x: pxToSub(plugAbs.x), y: pxToSub(plugAbs.y) },
             ...(newHeightmap ? { heightmap: newHeightmap } : {}),
             ...(newLandmarks ? { landmarks: newLandmarks } : {}),
+            ...(newMarks ? { marks: newMarks } : {}),
           },
         },
       } : s));
@@ -306,6 +312,7 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
     const newLandmarks = sprite.landmarks
       ? affineTransformLandmarks(sprite.landmarks, matrix, baked.minX, baked.minY, baked.width, baked.height, w, h)
       : undefined;
+    const newMarks = transformMarksAffine(sprite.marks, matrix, baked.minX, baked.minY, baked.width, baked.height, w, h);
     get().pushUndo('变换精灵');
     markPartDirty(id);
     set((s) => (s.sprites[id] ? {
@@ -319,6 +326,7 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
           plug: { x: pxToSub(baked.pivotX), y: pxToSub(baked.pivotY) },
           ...(newHeightmap ? { heightmap: newHeightmap } : {}),
           ...(newLandmarks ? { landmarks: newLandmarks } : {}),
+          ...(newMarks ? { marks: newMarks } : {}),
         },
       },
     } : s));
@@ -350,6 +358,11 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
     let newPlugY = plugY;
     let heightmap = src.heightmap?.map((r) => r.slice());
     let landmarks: import('../unified-types').SpriteLandmarks | undefined = cloneLandmarks();
+    // marks 随派生走（此前整表丢失，审计 F-32）：复制=原样深拷贝，
+    // 镜像=按与像素/landmarks 同一变换重映射
+    let marks: import('../unified-types').SpriteMark[] | undefined = src.marks
+      ? src.marks.map((mk) => (mk.kind === 'region' ? { ...mk, region: { ...mk.region } } : { ...mk }))
+      : undefined;
 
     if (opts.mode === 'copy') {
       data = src.data.map((r) => r.slice());
@@ -366,6 +379,7 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
         newPlugY = pa.y;
         heightmap = src.heightmap ? d4TransformGrid(src.heightmap, d4, 0) : undefined;
         landmarks = src.landmarks ? d4TransformLandmarks(src.landmarks, d4, w, h) : undefined;
+        marks = transformMarksD4(src.marks, d4, w, h);
       } else {
         const m = mirrorAxisMatrixAbout(axisDeg, plugX, plugY);
         const srcCanvas = pixelsToCanvas(src.data, w, h);
@@ -383,6 +397,7 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
         landmarks = src.landmarks
           ? affineTransformLandmarks(src.landmarks, m, baked.minX, baked.minY, baked.width, baked.height, w, h)
           : undefined;
+        marks = transformMarksAffine(src.marks, m, baked.minX, baked.minY, baked.width, baked.height, w, h);
       }
     }
 
@@ -399,6 +414,7 @@ export const createSpriteSlice: StateCreator<ProjectStore, [], [], SpriteSlice> 
       plug: { x: pxToSub(newPlugX), y: pxToSub(newPlugY) },
       ...(heightmap ? { heightmap } : {}),
       ...(landmarks ? { landmarks } : {}),
+      ...(marks ? { marks } : {}),
     };
     get().pushUndo(opts.mode === 'mirror' ? '镜像生成精灵' : '复制生成精灵');
     set((s) => ({ sprites: { ...s.sprites, [newId]: sprite } }));

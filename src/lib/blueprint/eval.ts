@@ -185,7 +185,7 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     const set = costumes.find(cs => cs.id === setId);
     if (!set?.pieces) return {};
 
-    // pieces[slot].sprites[direction]，slot 为空时用节点默认槽位
+    // pieces[slot].sprites[direction]，slot 为空时用节点默认服装槽
     // UI 传入时已在边界把 Puppet spriteMap 转成 pieces（nodeId 即 slot）
     const slot = String(n.params.slot ?? (ctx as any).costumeSlot ?? (ctx as any).nodeId ?? '');
     if (!slot) return {};
@@ -207,9 +207,9 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
     return { pixels: pixelsVal(spriteData as import('../types').PixelGrid) };
   },
 
-  // 服装状态：状态蓝图专用，把服装集/槽位变体指令写入 ctx.costumeStateCmds，
+  // 服装状态：状态蓝图专用，把服装集/服装槽变体指令写入 ctx.costumeStateCmds，
   // 由 evaluateCostumeState 在整图求值后组装（求值顺序内后写覆盖先写）。
-  // setId 可接线（string 优先于 params）；slot 给出且 clearVariant 时该槽回基础；
+  // setId 可接线（string 优先于 params）；slot 给出且 clearVariant 时该服装槽回基础；
   // gate<0.5 / enabled=false 时求值器不被调用，天然不生效。
   costume_state: (n, i, ctx): Record<string, BlueprintValue> => {
     const cmds = ((ctx as any).costumeStateCmds ??= []) as Array<{
@@ -2323,7 +2323,7 @@ export function evaluateBlueprint(
   };
 }
 
-/** 状态蓝图组装结果：服装集整覆 + 逐槽变体增量（null = 回基础） */
+/** 状态蓝图组装结果：服装集整覆 + 逐服装槽变体增量（null = 回基础） */
 export interface CostumeStateResult {
   setId?: string;
   slotChanges: Record<string, string | null>;
@@ -2586,6 +2586,17 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   pixel_zoom: '像素缩放',
   particle: '粒子',
   simple_physics: '简单物理',
+  // 补中文标签（此前缺失，菜单与节点头直显英文 id）
+  bump_light: '浮雕光照',
+  face_turn: '转面',
+  local_inflate: '局部膨胀',
+  path_follow: '路径跟随',
+  path_move: '路径移动',
+  screen: '上屏',
+  stroke_emitter: '笔触生成',
+  stroke_source: '笔触引用',
+  trajectory_emitter: '轨迹生成',
+  trajectory_source: '轨迹引用',
 };
 
 export function getBlueprintNodeLabel(type: string): string {

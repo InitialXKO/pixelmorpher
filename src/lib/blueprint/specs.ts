@@ -25,9 +25,13 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
     params: [...Object.keys(defaultDynamicParams()), 'enabled'],
   },
   // 刀光（刀光↔蓝图统一）：表演刀光规格在表演图里的化身，params =
-  // SlashFanSpec 全集（colors 以 __json_colors 存，+/- 暴露即可接线
-  // 覆盖数值参数）；求值由渲染/进包经 slash-sync 从图提取规格后走
-  // 刀光生成器，本节点不产出像素/变换端口
+  // SlashFanSpec 全集（colors 以 __json_colors 存）；规格由进包经
+  // slash-sync 从图提取后走刀光生成器，本节点不产出像素/变换端口。
+  // 接线覆盖的实况：slash-sync 的 applySlashWiring 只在调用方传入
+  // 求值回调时才施加 inputs 覆盖，而生产路径无人传——编辑器主画布
+  // 不渲染表演刀光（表演图求值是导出时采样烘焙，见 BehaviorPanel
+  // 明示），convert 进包传 undefined 按静态规格走。故 +/- 暴露的
+  // 端口当前不改变任何出图/进包结果，接线覆盖仅探针在用。
   slash_fan: {
     inputs: ['t', 'gate'],
     outputs: [],
@@ -46,10 +50,10 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   var: { inputs: [], outputs: ['out'], params: ['name', 'default'] },
   // 精灵源：输出原始像素图（管线起点）
   sprite_source: { inputs: [], outputs: ['pixels'], params: ['spriteId'] },
-  // 服装源：从角色服装集取指定槽位精灵（与 sprite_source 二选一）
-  // setId 可接线（string），slot 为空时用节点所在槽位
+  // 服装源：从角色服装集取指定服装槽精灵（与 sprite_source 二选一）
+  // setId 可接线（string），slot 为空时用节点所在服装槽
   costume: { inputs: ['t', 'setId'], outputs: ['pixels'], params: ['setId', 'slot'] },
-  // 服装状态：状态蓝图专用，输出服装集/槽位变体指令（无像素输出）
+  // 服装状态：状态蓝图专用，输出服装集/服装槽变体指令（无像素输出）
   // setId 可接线（string）；slot+variant 指派变体，slot+clearVariant 回基础
   costume_state: { inputs: ['t', 'setId'], outputs: [], params: ['setId', 'slot', 'variant', 'clearVariant'] },
   // 角色源：输出整角色合成后的像素（管线预渲染，由 ctx.characterPixels 提供）

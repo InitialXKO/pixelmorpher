@@ -23,12 +23,10 @@ import {
   ParamDriver,
   SAMModelType,
   SAMStatus,
-  PixelGrid,
-  PixelColor,
 } from '../types';
-import type { DirectionIndex } from '../unified-types';
+import type { DirectionIndex, Sprite } from '../unified-types';
 import { initSAM, setSAMImage as samSetImage, segmentAtPoint as samSegmentAtPoint, segmentWithBox as samSegmentWithBox, disposeSAM as samDispose } from '../sam';
-import { inpaintPixels, samMaskToSelectionMask } from '../inpainting';
+import { inpaintPixels, samMaskToSelectionMask, buildSpriteFromCanvasMask } from '../inpainting';
 import { applyPixelModifiers, invalidateAnimModifierCache, bakeParamDriverToKeyframes } from '../engine';
 import { modifierRegistry } from '../engine/pixel-modifiers';
 
@@ -42,7 +40,7 @@ export interface RefAssemblyWriteRecord {
   variantId: string | null;
   /** 写入纬度：0 = 基础纬度（sprites / variantSprites），非 0 = latitudeSprites[latitude] */
   latitude: number;
-  /** 本次写入顺带给该槽位设了变体指派（该槽位原先没有任何指派时） */
+  /** 本次写入顺带给该服装槽设了变体指派（该服装槽原先没有任何指派时） */
   autoAssignedVariant: boolean;
 }
 
@@ -503,102 +501,42 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     if (!samState.currentMask || !samState.maskShape) return null;
 
     const projectStore = getProjectStore().getState();
-    let resultPartId: string | null = null;
+    let resultSpriteId: string | null = null;
     projectStore.performBatch('提取SAM选区', () => {
-      const { canvasWidth, canvasHeight, parts } = projectStore;
-    const offsetX = canvasWidth / 2;
-    const offsetY = canvasHeight / 2;
+      const { canvasWidth, canvasHeight } = projectStore;
 
-    if (!samState.currentMask || !samState.maskShape) return null;
-    const canvasMask = samMaskToSelectionMask(
-      samState.currentMask,
-      samState.maskShape,
-      canvasWidth,
-      canvasHeight,
-    );
+      if (!samState.currentMask || !samState.maskShape) return;
+      const canvasMask = samMaskToSelectionMask(
+        samState.currentMask,
+        samState.maskShape,
+        canvasWidth,
+        canvasHeight,
+      );
+      if (canvasMask.size === 0) return;
 
-    if (canvasMask.size === 0) return null;
+      // Part 退役后提取产物 = 全局精灵表新精灵：采样/plug 口径与
+      // 画布选区提取共用 buildSpriteFromCanvasMask（inpainting.ts）。
+      const sprites = Object.values(projectStore.sprites as Record<string, Sprite>)
+        .filter((sp) => !!sp.id);
+      const built = buildSpriteFromCanvasMask(sprites, canvasWidth, canvasHeight, canvasMask);
+      if (!built) return;
 
-    const sorted = [...parts].filter((p) => (p.visible ?? true)).sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0));
-    const selectedPixels: { x: number; y: number; color: string }[] = [];
+      const sprite = projectStore.addSprite('SAM选区', built.width, built.height, {
+        plugX: built.plugX,
+        plugY: built.plugY,
+      });
+      projectStore.setSpritePixels(sprite.id!, built.pixels);
 
-    for (const key of canvasMask) {
-      const [pxStr, pyStr] = key.split(',');
-      const px = parseInt(pxStr, 10);
-      const py = parseInt(pyStr, 10);
+      get().selectPart(sprite.id!);
 
-      for (const part of sorted) {
-        const lx = px - (offsetX - part.pivotX + (part.offsetX || 0));
-        const ly = py - (offsetY - part.pivotY + (part.offsetY || 0));
-        if (lx >= 0 && lx < part.width && ly >= 0 && ly < part.height) {
-          const color = part.pixels[ly]?.[lx];
-          if (color !== null) {
-            selectedPixels.push({ x: px, y: py, color });
-            break;
-          }
-        }
-      }
-    }
+      set((s) => ({
+        samState: { ...s.samState, currentMask: null, maskShape: null, maskBounds: null },
+      }));
 
-    if (selectedPixels.length === 0) return null;
-
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const px of selectedPixels) {
-      minX = Math.min(minX, px.x);
-      minY = Math.min(minY, px.y);
-      maxX = Math.max(maxX, px.x);
-      maxY = Math.max(maxY, px.y);
-    }
-
-    const partW = maxX - minX + 1;
-    const partH = maxY - minY + 1;
-
-    const colorMap = new Map<string, string>();
-    for (const px of selectedPixels) {
-      colorMap.set(`${px.x},${px.y}`, px.color);
-    }
-
-    const pixels: PixelGrid = [];
-    let sumX = 0, sumY = 0, count = 0;
-    for (let y = 0; y < partH; y++) {
-      const row: PixelColor[] = [];
-      for (let x = 0; x < partW; x++) {
-        const key = `${minX + x},${minY + y}`;
-        const color = colorMap.get(key);
-        if (color) {
-          row.push(color);
-          sumX += x;
-          sumY += y;
-          count++;
-        } else {
-          row.push(null);
-        }
-      }
-      pixels.push(row);
-    }
-
-    if (count === 0) return null;
-
-    const pivotX = Math.round(sumX / count);
-    const pivotY = Math.round(sumY / count);
-
-    const part = projectStore.addPart('SAM选区', partW, partH);
-
-    const newPivotX = pivotX + (minX - Math.floor(canvasWidth / 2)) + (part.pivotX - pivotX);
-    const newPivotY = pivotY + (minY - Math.floor(canvasHeight / 2)) + (part.pivotY - pivotY);
-    projectStore.updatePart(part.id, { pivotX: newPivotX, pivotY: newPivotY });
-    projectStore.setPartPixels(part.id, pixels);
-
-    get().selectPart(part.id);
-
-    set((s) => ({
-      samState: { ...s.samState, currentMask: null, maskShape: null, maskBounds: null },
-    }));
-
-    resultPartId = part.id;
+      resultSpriteId = sprite.id!;
     });
 
-    return resultPartId;
+    return resultSpriteId;
   },
 
   enterSpriteEditMode: (spriteId: string) => {
