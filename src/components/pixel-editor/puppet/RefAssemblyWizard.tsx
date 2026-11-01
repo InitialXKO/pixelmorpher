@@ -136,6 +136,16 @@ const BUILT_IN_REFS = [
   { id: 'werewolf-front', label: '狼人·正面', url: '/reference-demos/werewolf-front.webp' },
   { id: 'swordsman-side', label: '剑士·侧面', url: '/reference-demos/swordsman-side.webp' },
   { id: 'angel-front', label: '天使·正面', url: '/reference-demos/angel-front.webp' },
+  { id: 'mage-front', label: '法师·正面', url: '/reference-demos/mage-front.webp' },
+  { id: 'archer-side', label: '弓箭手·侧面', url: '/reference-demos/archer-side.webp' },
+  { id: 'dwarf-front', label: '矮人·正面', url: '/reference-demos/dwarf-front.webp' },
+  { id: 'skeleton-front', label: '骷髅·正面', url: '/reference-demos/skeleton-front.webp' },
+  { id: 'cat-side', label: '猫·侧面', url: '/reference-demos/cat-side.webp' },
+  { id: 'dragon-side', label: '幼龙·侧面', url: '/reference-demos/dragon-side.webp' },
+  { id: 'ninja-side', label: '忍者·侧面', url: '/reference-demos/ninja-side.webp' },
+  { id: 'chibi-front', label: 'Q版勇者·正面', url: '/reference-demos/chibi-front.webp' },
+  { id: 'orc-front', label: '兽人·正面', url: '/reference-demos/orc-front.webp' },
+  { id: 'cyber-front', label: '赛博少女·正面', url: '/reference-demos/cyber-front.webp' },
 ];
 
 // ============================================================
