@@ -12,8 +12,10 @@
 // - 同步是手术式的：只增删改面板节点，保留其 inputs（用户接线）
 //   与 ui、以及图里的一切其他节点（蓝图铁律）。
 // - 接线覆盖：解析时传入求值回调则节点 inputs 里与参数同名的
-//   数值接线覆盖 params、gate<0.5 视作关闭（与图案同口径）；
-//   不传 = 纯静态 params（进包口径）。
+//   数值接线覆盖 params、gate<0.5 视作关闭（与图案同口径）。
+//   生产消费点只有 convert 进包：回调在表演本地 t=0 单点求值
+//   一次（宿主变量取图内 var 缺省、无宿主输入），覆盖固化进
+//   包；时间型接线源取其 t=0 输出。不传回调 = 纯静态 params。
 // - 读侧镜像：数据未落盘同步时（存量未迁移/手改数据），解析把
 //   perf.slashEffect 字段视作虚拟面板节点（面板优先），保证任何
 //   数据形态下读到的都是同一份刀光；落盘同步在 store 的表演编辑
@@ -165,7 +167,7 @@ type EvalNodeOutput = (
 
 /** 接线覆盖：对选定节点 inputs 施加求值覆盖（数值参数 + gate），
  *  口径与图案 extractPatternInstances 一致；无求值回调时按静态
- *  规格原样返回（进包口径）。gate 关闭返回 undefined */
+ *  规格原样返回。gate 关闭返回 undefined */
 function applySlashWiring(
   chosen: PerfSlashCandidate,
   spec: SlashFanSpec,
@@ -205,7 +207,9 @@ function applySlashWiring(
  * 解引用（defs 为角色 slashDefs），再叠接线覆盖；悬空引用一律
  * 无刀光（不回落私有字段冒充，convert 侧点名）。
  * evalNodeOutput 可选：传入则对选中节点施加接线覆盖（数值参数 +
- * gate）；进包不传。
+ * gate）。生产消费点是 convert 进包——传 t=0 单点求值回调（帧
+ * 0、宿主变量取图内 var 缺省），覆盖在导出时固化进包，时间型
+ * 接线源取其 t=0 输出；不传的调用方按静态规格解析。
  */
 export function resolvePerfSlash(
   perf: ProcPerformance,

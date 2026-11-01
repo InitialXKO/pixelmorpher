@@ -24,6 +24,7 @@ import { packMaskBits, unpackMaskBits } from '../sprite-marks';
 import { collectDesiredPatterns, effectivePatternGraph, extractPatternInstances } from '../blueprint/pattern-sync';
 import { characterHasCueEvents } from '../perform-fx';
 import { resolvePerfSlash, graphWithoutSlashNodes, collectPerfSlashCandidates } from '../blueprint/slash-sync';
+import { evaluateNodeOutput } from '../blueprint/eval';
 import { findSlashDef, resolveClipSlash } from '../slash-defs';
 import { rgbaToHexOrNull } from '../engine/utils';
 import { modifiersToBlueprint } from '../blueprint/migrate';
@@ -1553,6 +1554,22 @@ export function convertCharacterToRuntimePackage(
       ...(spec.colors && spec.colors.length >= 2 ? { colors: spec.colors } : {}),
     };
   };
+  /** 刀光接线覆盖的生产求值回调（slash_fan 接线的唯一生产消费
+   *  点）：表演图在导出时于表演本地 t=0 单点求值一次——帧 0、
+   *  宿主变量取图内 var 节点缺省、无宿主输入——覆盖结果固化
+   *  进包；时间型接线源（time/waveform 等）取其 t=0 输出。
+   *  求值失败/源节点不存在返回 null，resolvePerfSlash 按静态
+   *  规格回落（不抛、不影响其余点名）。 */
+  const slashWiringEval = (
+    graph: BlueprintGraph,
+    srcNodeId: string,
+  ): Record<string, unknown> | null => {
+    try {
+      return evaluateNodeOutput(graph, srcNodeId, {
+        frame: 0, frameRate: projectFpsTop, vars: {},
+      }) as Record<string, unknown> | null;
+    } catch { return null; }
+  };
   const behavior: ProcRuntimePackage['behavior'] = { graphs: {} };
   {
     let gi = 0;
@@ -1657,10 +1674,11 @@ export function convertCharacterToRuntimePackage(
       mode: perf.mode,
       mask,
       afterimage: afterSlot ? { part: afterSlot, count: 3, interval: 0.035 } : undefined,
-      // 刀光↔蓝图统一：只从表演图解析（slash_fan 节点，静态 params
-      // 固化；未落盘同步的数据由 slash-sync 读侧镜像兜底）。
-      // 绑定共享定义时解引用活读角色定义（悬空点名、不进包）
-      slash: slashForPkg(resolvePerfSlash(perf, undefined, character.slashDefs), `表演「${perf.name}」`),
+      // 刀光↔蓝图统一：只从表演图解析（slash_fan 节点；未落盘
+      // 同步的数据由 slash-sync 读侧镜像兜底）。绑定共享定义时
+      // 解引用活读角色定义（悬空点名、不进包）；节点接线覆盖经
+      // slashWiringEval 在表演本地 t=0 求值一次后固化进包。
+      slash: slashForPkg(resolvePerfSlash(perf, slashWiringEval, character.slashDefs), `表演「${perf.name}」`),
       graph: { context: 'performance', nodes: graphNodes },
     });
   }

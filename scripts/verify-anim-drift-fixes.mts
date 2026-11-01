@@ -310,7 +310,11 @@ const parentFrames = () => {
   check('F-28 面板文案改为画布口径（不生效）', perform.includes('画布上不生效') && !perform.includes('（时间线选中的片段不属于当前角色，已回落）'));
 
   const specs = readFileSync(join(root, 'src/lib/blueprint/specs.ts'), 'utf8');
-  check('F-27 specs 接线覆盖宣称已改实况', specs.includes('当前不改变任何出图/进包结果'));
+  // 改判（slash_fan 接线消费落地，用户裁定）：F-27 当时把 specs 宣称
+  // 改成「不改变任何出图/进包结果」的实况；现接线已由 convert 在
+  // t=0 真消费，实况再变——断言随之改钉新实况、且旧宣称不得回潮。
+  check('F-27 specs 接线覆盖宣称已改实况', specs.includes('生产消费点是 convert 进包')
+    && !specs.includes('当前不改变任何出图/进包结果'));
 
   const types = readFileSync(join(root, 'src/lib/types.ts'), 'utf8');
   check('F-14 types 注释改为工程级唯一编辑面', types.includes('工程级效果轨/笔触（现行唯一编辑面）') && !types.includes('the active clip\'s data takes precedence'));
