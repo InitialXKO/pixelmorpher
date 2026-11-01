@@ -9,11 +9,7 @@
 // ============================================================
 
 import { create } from 'zustand';
-import type {
-  ProjectMeta,
-  WorkflowSummary,
-  WorkflowType,
-} from './asset-types';
+import type { ProjectMeta } from './asset-types';
 import {
   dbGet,
   dbPut,
@@ -32,9 +28,6 @@ export interface AssetStore {
   projectListLoaded: boolean;
   currentProjectId: string | null;
 
-  // ---- Layer 3: Workflow Assets ----
-  workflowSummary: WorkflowSummary;
-
   // ---- UI State ----
   showProjectHome: boolean;
 
@@ -50,10 +43,6 @@ export interface AssetStore {
   importProjectFromFile: (file: File) => Promise<ProjectMeta | null>;
   updateCurrentProjectMeta: () => Promise<void>;
 
-  // ---- Layer 3 Actions ----
-  updateWorkflowSummary: (summary: Partial<WorkflowSummary>) => void;
-  refreshWorkflowSummary: () => void;
-
   // ---- UI Actions ----
   setShowProjectHome: (show: boolean) => void;
 }
@@ -68,8 +57,6 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
   projectList: [],
   projectListLoaded: false,
   currentProjectId: null,
-
-  workflowSummary: { type: 'none' },
 
   showProjectHome: true, // Start on project home screen
 
@@ -328,46 +315,6 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
     } catch {
       // Silent fail
     }
-  },
-
-  // ============================================================
-  // Layer 3: Workflow Assets Actions
-  // ============================================================
-
-  updateWorkflowSummary: (summary) => {
-    set((s) => ({
-      workflowSummary: { ...s.workflowSummary, ...summary },
-    }));
-  },
-
-  refreshWorkflowSummary: () => {
-    const { useWorkspaceStore } = require('./workspace-store') as { useWorkspaceStore: any };
-    const { useProjectStore } = require('./store') as { useProjectStore: any };
-
-    const workspaceMode = useWorkspaceStore.getState().mode;
-    const projectStore = useProjectStore.getState();
-
-    let type: WorkflowType = 'none';
-    const summary: Partial<WorkflowSummary> = {};
-
-    {
-      type = 'animation_editing';
-      // Part 与工程级 keyframes 已退役：部件数取全局精灵表条数，
-      // 关键帧数汇总各角色节点轨道（现行模型无单一对应字段）。
-      summary.animPartCount = Object.keys(projectStore.sprites ?? {}).length;
-      let kfCount = 0;
-      for (const ch of Object.values(projectStore.unifiedCharacters ?? {}) as any[]) {
-        for (const node of Object.values(ch?.nodes ?? {}) as any[]) {
-          for (const track of Object.values(node?.tracks ?? {}) as any[]) {
-            if (Array.isArray(track?.keyframes)) kfCount += track.keyframes.length;
-          }
-        }
-      }
-      summary.animKeyframeCount = kfCount;
-    }
-
-    summary.type = type;
-    set({ workflowSummary: summary as WorkflowSummary });
   },
 
   // ============================================================

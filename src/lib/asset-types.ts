@@ -26,27 +26,3 @@ export interface ProjectMeta {
   spriteCount: number;
 }
 
-// ============================================================
-// Layer 3: Workflow Assets
-// ============================================================
-
-/** Current workflow context — what the user is actively working on */
-export type WorkflowType = 'tile_creation' | 'map_editing' | 'animation_editing' | 'none';
-
-/** Summary of current workflow assets for the workflow panel */
-export interface WorkflowSummary {
-  type: WorkflowType;
-  /** Tile workflow: step number, material status, tile count */
-  tileStep?: number;
-  tileMaterialAReady?: boolean;
-  tileMaterialBReady?: boolean;
-  tileGeneratedCount?: number;
-  /** Map editing: map name, layer count, dynamic object count */
-  mapName?: string;
-  mapLayerCount?: number;
-  mapDynamicObjectCount?: number;
-  /** Animation editing: part count, keyframe count, skeleton count */
-  animPartCount?: number;
-  animKeyframeCount?: number;
-  animSkeletonCount?: number;
-}
