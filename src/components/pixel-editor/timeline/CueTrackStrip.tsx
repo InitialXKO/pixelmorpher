@@ -39,7 +39,7 @@ export default function CueTrackStrip({ character, totalFrames, currentFrame, fr
 
   const setKeyframes = useCallback((next: KeyframePoint<CueEventValue>[], undoLabel: string) => {
     const store = useProjectStore.getState();
-    store.pushUndo(undoLabel, 'behavior');
+    store.pushUndo(undoLabel, 'cueTrack');
     const track: KeyframeTrack<CueEventValue> = {
       keyframes: [...next].sort((a, b) => a.frame - b.frame),
       interpolation: 'step',

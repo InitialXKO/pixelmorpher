@@ -51,6 +51,8 @@ import {
   trimTransparentEdges,
 } from './engine/pixel-modifiers';
 import { applyPixelDeformAnimations } from './engine/render-helpers/pixel-deform-animations';
+import { interpolateTrajectoryPoints, getInterpolatedTrackFaceTurn } from './engine/render-helpers/puppet-keyframe-interpolation';
+import { cubicBezierEaseY } from './engine/render-helpers/bezier-easing';
 import { resolveKeyframeModifierParams } from './engine/param-driver';
 import {
   applyTextureScroll,
@@ -110,7 +112,7 @@ import {
   type VariableContext,
   getEmptyVariableContext,
 } from './unified-animation-resolver';
-import { resolvePieceSprite } from './sprite-resolve';
+import { resolvePieceSprite, getActiveCostumeSet } from './sprite-resolve';
 import { computeStackOps, rasterizeStackOps, rasterizeStackOpsData, STACK_VIEW_ELEVATION_DEG, type StackBend } from './stack-render';
 
 // ---- World Transform Computation ----
@@ -1268,8 +1270,18 @@ function interpolateTransformImpl(
   const base = node.transform;
 
   // Step 1: Keyframe-driven base transform
-  const kfX = interpolateTrack(node.tracks.x, frame, base.x);
-  const kfY = interpolateTrack(node.tracks.y, frame, base.y);
+  let kfX = interpolateTrack(node.tracks.x, frame, base.x);
+  let kfY = interpolateTrack(node.tracks.y, frame, base.y);
+  // 轨迹盖过轨道：轨迹非空时 x/y 改走轨迹插值（与辅助链共用同一
+  // 函数 interpolateTrajectoryPoints、同一口径）。轨迹点是父级
+  // SubPixel 绝对位（烘焙时已含基准帧位姿），整段替换轨道插值
+  // 结果；其余通道（angle/tilt/…）仍走轨道，下方蓝图/旧修改器
+  // 增量与外层行为/IK/程序化合成段不受影响。
+  const traj = node.trajectory;
+  if (traj && traj.length > 0) {
+    const tp = interpolateTrajectoryPoints(traj, frame);
+    if (tp) { kfX = tp.x; kfY = tp.y; }
+  }
   const kfZ = base.z ?? 0; // 暂无 z 轨道，直接用 base（3D 烘焙写入）；旧数据缺 z 时默 0
   const kfAngle = interpolateTrack(node.tracks.angle, frame, base.angle);
   const kfTilt = interpolateTrack(node.tracks.tilt, frame, base.tilt ?? 0);
@@ -1360,14 +1372,23 @@ function isAnimationModifier(type: string): boolean {
  * Returns the base value if no track or no keyframes.
  *
  * Supports three interpolation modes:
- * - step: hold previous keyframe value until next keyframe
+ * - step: hold previous keyframe value until the next keyframe's frame,
+ *   where the value switches to that keyframe's value
  * - linear: straight-line interpolation between keyframes
  * - bezier: cubic bezier easing with time-parameterized curve
- *   (control points are normalized [0,1]² vectors;
- *    Newton-Raphson iteration finds the bezier parameter s
- *    where Bx(s) = t, then evaluates By(s) for the value fraction)
+ *   (control points are normalized [0,1]² vectors; evaluated through
+ *    the shared bezier-easing module)
+ *
+ * Bracketing is shared with the auxiliary chain
+ * (puppet-keyframe-interpolation): prev = last keyframe at or before
+ * the frame, next = first keyframe after it — so at a keyframe's own
+ * frame every mode yields that keyframe's value (step switches ON the
+ * keyframe frame, not one frame late), and with duplicate frames the
+ * in-segment target is the first duplicate while the exact frame
+ * takes the last duplicate. The segment's mode comes from the
+ * destination keyframe (next.interpolation ?? track.interpolation).
  */
-function interpolateTrack<T extends number>(
+export function interpolateTrack<T extends number>(
   track: KeyframeTrack<T> | undefined,
   frame: number,
   baseValue: T,
@@ -1375,122 +1396,35 @@ function interpolateTrack<T extends number>(
   if (!track || track.keyframes.length === 0) return baseValue;
 
   const kfs = track.keyframes;
+  let prev: (typeof kfs)[number] | null = null;
+  let next: (typeof kfs)[number] | null = null;
+  for (const kf of kfs) {
+    if (kf.frame <= frame) prev = kf;
+    else { next = kf; break; }
+  }
+  if (!prev) return next ? next.value : baseValue;
+  if (!next || prev.frame === next.frame) return prev.value;
 
-  // Before first keyframe: hold first value
-  if (frame <= kfs[0].frame) return kfs[0].value;
+  const t = (frame - prev.frame) / (next.frame - prev.frame);
+  const mode = next.interpolation ?? track.interpolation ?? 'linear';
 
-  // After last keyframe: hold last value
-  if (frame >= kfs[kfs.length - 1].frame) return kfs[kfs.length - 1].value;
+  switch (mode) {
+    case 'step':
+      return prev.value;
 
-  // Find surrounding keyframes
-  for (let i = 0; i < kfs.length - 1; i++) {
-    if (frame >= kfs[i].frame && frame <= kfs[i + 1].frame) {
-      const mode = kfs[i + 1].interpolation ?? track.interpolation;
-
-      switch (mode) {
-        case 'step':
-          return kfs[i].value;
-
-        case 'linear': {
-          const t = (frame - kfs[i].frame) / (kfs[i + 1].frame - kfs[i].frame);
-          return (kfs[i].value + (kfs[i + 1].value - kfs[i].value) * t) as T;
-        }
-
-        case 'bezier': {
-          // Time fraction between the two keyframes
-          const t = (frame - kfs[i].frame) / (kfs[i + 1].frame - kfs[i].frame);
-          const v0 = kfs[i].value;
-          const v1 = kfs[i + 1].value;
-
-          // Normalized control points in [0,1]² space.
-          // Default: ease-in-out (0.33, 0) → (0.66, 1)
-          const cp1 = kfs[i].bezierCP1 ?? { x: 0.33, y: 0 };
-          const cp2 = kfs[i + 1].bezierCP2 ?? { x: 0.66, y: 1 };
-
-          // Evaluate cubic bezier easing.
-          // P0 = (0, 0), P1 = cp1, P2 = cp2, P3 = (1, 1)
-          // Find s such that Bx(s) = t, then return v0 + By(s) * (v1 - v0)
-          const easedT = solveCubicBezierX(cp1.x, cp2.x, t);
-          const easedY = cubicBezierY(cp1.x, cp1.y, cp2.x, cp2.y, easedT);
-
-          return (v0 + easedY * (v1 - v0)) as T;
-        }
-
-        default:
-          return kfs[i].value;
-      }
+    case 'bezier': {
+      // Normalized control points in [0,1]² space.
+      // Default: ease-in-out (0.33, 0) → (0.66, 1)
+      const cp1 = prev.bezierCP1 ?? { x: 0.33, y: 0 };
+      const cp2 = next.bezierCP2 ?? { x: 0.66, y: 1 };
+      const easedY = cubicBezierEaseY(cp1, cp2, t);
+      return (prev.value + easedY * (next.value - prev.value)) as T;
     }
+
+    case 'linear':
+    default:
+      return (prev.value + (next.value - prev.value) * t) as T;
   }
-
-  return baseValue;
-}
-
-// ---- Cubic Bezier Easing ----
-
-/**
- * Evaluate Bx(s) for a cubic bezier with P0=(0,0), P1=(cp1x,?), P2=(cp2x,?), P3=(1,1).
- * Only the x-coordinates of control points matter for Bx.
- */
-function cubicBezierX(cp1x: number, cp2x: number, s: number): number {
-  const ms = 1 - s;
-  return 3 * ms * ms * s * cp1x + 3 * ms * s * s * cp2x + s * s * s;
-}
-
-/**
- * Evaluate By(s) for a cubic bezier with P0=(0,0), P1=(cp1x,cp1y), P2=(cp2x,cp2y), P3=(1,1).
- */
-function cubicBezierY(cp1x: number, cp1y: number, cp2x: number, cp2y: number, s: number): number {
-  const ms = 1 - s;
-  return 3 * ms * ms * s * cp1y + 3 * ms * s * s * cp2y + s * s * s;
-}
-
-/**
- * Evaluate derivative Bx'(s).
- */
-function cubicBezierXDeriv(cp1x: number, cp2x: number, s: number): number {
-  const ms = 1 - s;
-  return 3 * ms * ms * cp1x + 6 * ms * s * (cp2x - cp1x) + 3 * s * s * (1 - cp2x);
-}
-
-/**
- * Solve Bx(s) = t using Newton-Raphson iteration.
- * Falls back to binary search if Newton-Raphson diverges.
- *
- * This is the standard approach used by CSS and most animation systems
- * for time-parameterized cubic bezier easing.
- */
-function solveCubicBezierX(cp1x: number, cp2x: number, t: number): number {
-  // Edge cases
-  if (t <= 0) return 0;
-  if (t >= 1) return 1;
-
-  // Linear case: control points at 1/3 and 2/3 produce approximately linear X
-  if (Math.abs(cp1x - 1 / 3) < 1e-6 && Math.abs(cp2x - 2 / 3) < 1e-6) {
-    return t;
-  }
-
-  // Newton-Raphson iteration (typically converges in 4-8 iterations)
-  let s = t; // Initial guess
-  for (let i = 0; i < 8; i++) {
-    const x = cubicBezierX(cp1x, cp2x, s) - t;
-    const dx = cubicBezierXDeriv(cp1x, cp2x, s);
-    if (Math.abs(dx) < 1e-12) break; // Near-zero derivative, fall back to bisection
-    const sNew = s - x / dx;
-    if (Math.abs(sNew - s) < 1e-8) return sNew; // Converged
-    s = sNew;
-  }
-
-  // If Newton-Raphson didn't converge, use binary search
-  let lo = 0, hi = 1;
-  s = t;
-  for (let i = 0; i < 20; i++) {
-    const x = cubicBezierX(cp1x, cp2x, s);
-    if (Math.abs(x - t) < 1e-8) return s;
-    if (x < t) lo = s; else hi = s;
-    s = (lo + hi) / 2;
-  }
-
-  return s;
 }
 
 // ---- Z-Order Computation ----
@@ -1580,10 +1514,10 @@ function resolveSprite(
       if (spr) return { sprite: spr, mirror: PARAMETRIC_MIRROR_DIRECTIONS.has(direction), spriteId: null };
     }
   }
-  // 只走服装集：node.slot 只定义槽位，不存精灵。
+  // 只走服装集：node.slot 只定义服装槽，不存精灵。
   // 分层解析（纬度→变体→基础）走 sprite-resolve 的共同实现，与蓝图预览逐级一致。
-  // 件键与产品通行口径一致（参数化分支/堆叠回退/convert/写侧同）：有槽位
-  // 定义用 slotKey，无槽位定义的节点（向导/手动加节点、Spine 导入——写侧
+  // 件键与产品通行口径一致（参数化分支/堆叠回退/convert/写侧同）：有服装槽
+  // 定义用 slotKey，无服装槽定义的节点（向导/手动加节点、Spine 导入——写侧
   // 一律以节点 id 为键）回退 node.id。此前本支独缺回退且以 node.slot 存在
   // 为门，无 slot 节点写入的件永远读不到、画布只剩兜底胶囊。
   if (costumeSet) {
@@ -1642,7 +1576,9 @@ export function resolveNodeSpriteId(
 ): string | null {
   const node = character.nodes[nodeId];
   if (!node) return null;
-  const activeCs = (character.costumeSets ?? []).find((cs) => cs.id === character.activeCostumeSetId);
+  // 生效集未设/失效时回落第一集（与 convert、面板、getActiveCostumeSet 同口径，
+  // 此前主渲染此处不回落会整角色无图，审计 F-16）
+  const activeCs = getActiveCostumeSet(character.costumeSets, character.activeCostumeSetId);
   const spriteTable = globalSprites ?? character.sprites ?? {};
   const { spriteId } = resolveSprite(node, direction, activeCs, spriteTable, character.slotVariants?.[node.slot?.slotKey ?? node.id], character.latitude ?? 0);
   return spriteId;
@@ -2091,6 +2027,7 @@ function generateMannequinInstructions(
   instructedNodeIds: ReadonlySet<string>,
   claimedParents: ReadonlySet<string>,
   clothing: { sleeveRatio: number; pantsRatio: number },
+  frame: number,
   faceGuide?: boolean,
   geometryDirection?: DirectionIndex,
 ): MannequinRenderInstruction[] {
@@ -2220,8 +2157,10 @@ function generateMannequinInstructions(
       if (faceGuide) {
         const ax = Math.cos(angleRad), ay = Math.sin(angleRad);
         const fp = node.faceFeatures ?? DEFAULT_FACE_FEATURES;
-        const yaw = node.faceTurn?.yaw ?? 0;
-        const pitch = node.faceTurn?.pitch ?? 0;
+        // 转面与精灵指令同口径：转面轨当前帧插值优先、无轨回落静态值
+        const effFaceTurn = getInterpolatedTrackFaceTurn(node, frame) ?? node.faceTurn;
+        const yaw = effFaceTurn?.yaw ?? 0;
+        const pitch = effFaceTurn?.pitch ?? 0;
         const pts = faceFeaturePoints(fp, yaw, pitch);
         const hw = faceHalfWidths(fp, yaw);
         const rx = -ay, ry = ax;
@@ -2315,7 +2254,7 @@ export function resolveTrackCostumeState(
  * 生效服装状态 = 三层增量叠加：
  *  1) 角色静态字段（activeCostumeSetId / slotVariants，换装面板所设）
  *  2) clip 状态轨道（stateKeyframes：frame ≤ 当前帧的键按帧序应用；
- *     costumeSetId 整覆，slotChanges 逐槽覆、null 删该槽指派）
+ *     costumeSetId 整覆，slotChanges 逐服装槽覆、null 删该服装槽指派）
  *  3) 角色状态蓝图（stateBlueprint 的 costume_state 指令组装结果，同增量语义）
  * 蓝图求值 ctx 的 vars 沿用全仓现状（各蓝图求值路径均传空 vars，var 节点用自身默认值）。
  * 蓝图求值失败时静默回落轨道层结果，不中断渲染。
@@ -2960,6 +2899,66 @@ export function facingYawDeltaRad(facingAngle: number, currentDirection: Directi
   return (((facingAngle - 45 * currentDirection) % 360) * Math.PI) / 180;
 }
 
+export type FacingDirBlend = { dirA: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7; dirB: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7; blend: number };
+
+/**
+ * 连续偏航的方向混合（蒙皮转面 A）：与 generateRenderPlan 内的计算同一
+ * 口径，抽出供出图与覆盖层/拾取的世界变换构造共用。未启用转面、单图
+ * 模式、或混合系数退化为单方向时返回 undefined。
+ */
+export function facingDirBlendOf(character: Character): FacingDirBlend | undefined {
+  if (character.facingAngle === undefined || !character.faceTurnConfig?.enabled) return undefined;
+  if (character.faceTurnConfig.singleImageMode === true) return undefined;
+  // 懒加载避免循环依赖
+  const { facingAngleToBlend } = require('./skin/face-turn') as typeof import('./skin/face-turn');
+  const blend = facingAngleToBlend(character.facingAngle);
+  // blend 为 0 或 1 时退化为单方向（避免双采样开销）
+  if (blend.blend < 1e-6 || blend.blend > 1 - 1e-6) return undefined;
+  return blend;
+}
+
+/**
+ * 程序化增量图（generateRenderPlan 预备段的同一实现，抽出共用）：
+ * 逐节点按与指令构建同一推导解析本次精灵（resolveSprite + 无平面图时
+ * 堆叠替身回落），汇总命中条目为位姿增量。解析朝向与指令构建同值：
+ * dirBlend 时 dirA、否则根 variantIndex。无命中返回 undefined。
+ */
+export function computeFrameProcDeltas(
+  character: Character,
+  frame: number,
+  frameRate: number,
+  proceduralAnimations: ProceduralAnimation[] | undefined,
+  inputs: {
+    spriteTable: Record<string, Sprite>;
+    activeCostumeSet?: import('./unified-types').CostumeSet;
+    slotVariants: Record<string, string>;
+    dirBlend?: FacingDirBlend;
+    variableContext?: VariableContext;
+    blueprintTransforms?: Map<string, BlueprintTransformResult>;
+  },
+): Map<string, ProceduralPoseDelta> | undefined {
+  if (!proceduralAnimations || proceduralAnimations.length === 0) return undefined;
+  const { spriteTable, activeCostumeSet, slotVariants, dirBlend, variableContext, blueprintTransforms } = inputs;
+  const rootNodeForDir = character.nodes[character.rootNodeId];
+  const rootVariant = rootNodeForDir
+    ? interpolateTransform(rootNodeForDir, frame, frameRate, variableContext, blueprintTransforms).variantIndex
+    : (0 as DirectionIndex);
+  const resolveDir = dirBlend ? dirBlend.dirA : rootVariant;
+  const map = new Map<string, ProceduralPoseDelta>();
+  for (const n of Object.values(character.nodes)) {
+    const r = resolveSprite(n, resolveDir, activeCostumeSet, spriteTable, slotVariants[n.slot?.slotKey ?? n.id], character.latitude ?? 0, frame, frameRate);
+    let sid: string | null = r.spriteId;
+    if (!r.sprite) {
+      const piece = activeCostumeSet?.pieces[n.slot?.slotKey ?? n.id];
+      const midId = piece?.stack?.layerSpriteIds[Math.floor(piece.stack.layerSpriteIds.length / 2)];
+      sid = midId ?? null;
+    }
+    const d = computeProceduralPoseDelta(proceduralAnimations, n.id, frame, sid ?? undefined);
+    if (d.dx !== 0 || d.dy !== 0 || d.rotDeg !== 0 || d.scaleMul !== 1) map.set(n.id, d);
+  }
+  return map.size > 0 ? map : undefined;
+}
+
 export function generateRenderPlan(
   character: Character,
   frame: number,
@@ -3019,9 +3018,9 @@ export function generateRenderPlan(
 
   // 生效服装集（用生效状态的集 id，含轨道/蓝图覆盖；原在 Step 1 之后，
   // 因程序化增量图的预备段要按它解析精灵，提前到此，口径不变）
-  const activeCostumeSet = effCostume.costumeSetId
-    ? character.costumeSets.find(cs => cs.id === effCostume.costumeSetId)
-    : undefined;
+  // id 未设或指向已删集时回落第一集（与 convert/面板/getActiveCostumeSet 同口径，
+  // 此前不回落会整角色无图，审计 F-16）
+  const activeCostumeSet = getActiveCostumeSet(character.costumeSets, effCostume.costumeSetId);
 
   // 方向间过渡（蒙皮转面 A）：facingAngle 为连续角度时，计算相邻两方向及混合系数
   // 单图模式（蒙皮转面 C）：不切换精灵，用 faceTurn 的 yaw 模拟转头
@@ -3038,13 +3037,7 @@ export function generateRenderPlan(
       singleImageYaw = Math.max(-1, Math.min(1, a / 180));
       // dirBlend 保持 undefined（单精灵）
     } else {
-      // 懒加载避免循环依赖
-      const { facingAngleToBlend } = require('./skin/face-turn') as typeof import('./skin/face-turn');
-      dirBlend = facingAngleToBlend(character.facingAngle);
-      // blend 为 0 或 1 时退化为单方向（避免双采样开销）
-      if (dirBlend.blend < 1e-6 || dirBlend.blend > 1 - 1e-6) {
-        dirBlend = undefined;
-      }
+      dirBlend = facingDirBlendOf(character);
     }
   }
 
@@ -3056,27 +3049,14 @@ export function generateRenderPlan(
   // 盘都不跟）。解析朝向与指令构建同值：dirBlend 时 dirA、否则根
   // variantIndex（根的 variantIndex 只由其轨道决定、先于世界变换
   // 可知，单独求值一份只读 variantIndex）。无条目时不建图、下游零变化。
-  let procDeltas: Map<string, ProceduralPoseDelta> | undefined;
-  if (proceduralAnimations && proceduralAnimations.length > 0) {
-    const rootNodeForDir = character.nodes[character.rootNodeId];
-    const rootVariant = rootNodeForDir
-      ? interpolateTransform(rootNodeForDir, frame, frameRate, variableContext, blueprintTransforms).variantIndex
-      : (0 as DirectionIndex);
-    const resolveDir = dirBlend ? dirBlend.dirA : rootVariant;
-    const map = new Map<string, ProceduralPoseDelta>();
-    for (const n of Object.values(character.nodes)) {
-      const r = resolveSprite(n, resolveDir, activeCostumeSet, spriteTable, effCostume.slotVariants[n.slot?.slotKey ?? n.id], character.latitude ?? 0, frame, frameRate);
-      let sid: string | null = r.spriteId;
-      if (!r.sprite) {
-        const piece = activeCostumeSet?.pieces[n.slot?.slotKey ?? n.id];
-        const midId = piece?.stack?.layerSpriteIds[Math.floor(piece.stack.layerSpriteIds.length / 2)];
-        sid = midId ?? null;
-      }
-      const d = computeProceduralPoseDelta(proceduralAnimations, n.id, frame, sid ?? undefined);
-      if (d.dx !== 0 || d.dy !== 0 || d.rotDeg !== 0 || d.scaleMul !== 1) map.set(n.id, d);
-    }
-    if (map.size > 0) procDeltas = map;
-  }
+  const procDeltas = computeFrameProcDeltas(character, frame, frameRate, proceduralAnimations, {
+    spriteTable,
+    activeCostumeSet,
+    slotVariants: effCostume.slotVariants,
+    dirBlend,
+    variableContext,
+    blueprintTransforms,
+  });
 
   // Step 1: World transforms (includes blueprint-evaluated modifier contributions)
   // 行为层在 computeWorldTransforms 内统一叠加（出图/点选/覆盖层同源）
@@ -3479,18 +3459,20 @@ export function generateRenderPlan(
       frameRate,
       meshSkin,
       // Face turn（Spine 式伪 3D 转头）：先转面整体，后关节蒙皮局部
-      // TODO: 从 keyframe 插值获取（puppet-keyframe-interpolation.ts 已有 getInterpolatedKeyframeFaceTurn，
-      // 需 computeWorldTransforms 接入 nodeKeyframes）；当前用 node 静态值
-      // 单图模式（C）：singleImageYaw（来自 facingAngle）+ node.faceTurn（微动）叠加
+      // 转面轨优先：faceTurnKeys 当前帧插值（getInterpolatedTrackFaceTurn，
+      // 与时间线/辅助插值路径同函数同合并口径——轨优先、无轨回落静态值）；
+      // 无轨时即 node.faceTurn 静态值（原行为）。
+      // 单图模式（C）：singleImageYaw（来自 facingAngle）+ 生效转面（微动）叠加
       faceTurn: (() => {
-        const base = node.faceTurn ?? { yaw: 0, pitch: 0 };
+        const effective = getInterpolatedTrackFaceTurn(node, frame) ?? node.faceTurn;
+        const base = effective ?? { yaw: 0, pitch: 0 };
         if (singleImageMode && Math.abs(singleImageYaw) > 1e-6) {
           return {
             yaw: Math.max(-1, Math.min(1, singleImageYaw + base.yaw)),
             pitch: base.pitch,
           };
         }
-        return node.faceTurn;
+        return effective;
       })(),
       // t.scaleX 修复：蓝图 scaleX 独立 plumbing，不再平均吃掉
       scaleX: dynResolved.length > 0 ? (worldTf.scaleX ?? 1) * dynSx : worldTf.scaleX,
@@ -3506,7 +3488,7 @@ export function generateRenderPlan(
       skews: (worldTf.skewX || worldTf.skewY) ? [{ skewX: worldTf.skewX ?? 0, skewY: worldTf.skewY ?? 0 }] : undefined,
       // STEP2 合并：plumbing 蓝图给 renderNodeSprite，替代手拼像素链
       blueprint: (node as any).blueprint ?? (node.modifiers?.length ? modifiersToBlueprint(node.modifiers as any) : null),
-      // costume 节点求值用：服装集 + 槽位 + 精灵表（SpriteRef 解析）
+      // costume 节点求值用：服装集 + 服装槽 + 精灵表（SpriteRef 解析）
       costumes: character.costumeSets,
       costumeSlot: node.slot?.slotKey,
       sprites: spriteTable,
@@ -3568,6 +3550,7 @@ export function generateRenderPlan(
         character, worldTransforms, canvasWidth, canvasHeight, currentDirection,
         new Set(nodeInstructions.map((i) => i.nodeId)), claimedParents,
         { sleeveRatio: editorFx?.sleeveRatio ?? 0, pantsRatio: editorFx?.pantsRatio ?? 0 },
+        frame,
         editorFx?.faceGuide ?? false,
         geometryDirection,
       )
@@ -3597,6 +3580,14 @@ export function generateRenderPlan(
   // 由执行端从 discInstructions 单独先行绘制（无视深度、始终被遮挡）。
   const allInstructions: NodeRenderInstruction[] = [...nodeInstructions];
   allInstructions.sort((a, b) => (Math.round(a.zIndex) - Math.round(b.zIndex)) || ((a.authoredZ ?? 0) - (b.authoredZ ?? 0)));
+
+  // 预览画质下传：计划级一个值，落到每条节点指令——renderNodeSprite
+  // 逐指令读 instruction.previewQuality 决定是否跳过昂贵段（置换/
+  // 宿主后处理/发光/残影/身后效果/动态粒子）。编排方未传（导出/
+  // 捕获等路径）时不盖戳，消费端 `?? 'high'` 兜底保持全画质。
+  if (previewQuality !== undefined) {
+    for (const inst of nodeInstructions) inst.previewQuality = previewQuality;
+  }
 
   return {
     nodeInstructions,
@@ -4105,14 +4096,14 @@ function buildGlowOverlay(
   const pulse = glowPulseAt(visualParams, tSec);
   if (pulse <= 0.01 || visualParams.glowStrength <= 0) return null;
   const params = visualParams;
-  const hasWorld = contributors.some((c) => c.glowAngleSpace === 'world');
+  const hasWorld = contributors.some((c) => c.glowAngleSpace !== 'sprite');
   const sig = [
     params.glowColor, params.glowStrength, params.postEnabled ? params.postTheme : '',
     ...contributors.flatMap((c) => [
       c.glowHalo, c.glowMaskSource, c.glowMarkName ?? '', c.glowPick, c.glowTolerance,
       c.glowMask?.w ?? 0, c.glowMask?.h ?? 0, c.glowMask?.bits ?? '',
       c.glowShape ?? 'square', c.glowShapeKernel?.w ?? 0, c.glowShapeKernel?.h ?? 0, c.glowShapeKernel?.bits ?? '',
-      c.glowStarReach ?? 1.2, c.glowFlameReach ?? 1.8, c.glowAngleDeg ?? 270, c.glowAngleSpace ?? 'sprite',
+      c.glowStarReach ?? 1.2, c.glowFlameReach ?? 1.8, c.glowAngleDeg ?? 270, c.glowAngleSpace ?? 'world',
     ]),
     hasWorld ? `W${Math.round(frameAngleDeg / 3)}` : '',
     // 选区来源为精灵标记时，标记几何本身进签名（改标记不改像素也要失效缓存）
@@ -5502,6 +5493,7 @@ function renderPuppetViaUnifiedPipeline(
   editorFx?: { sleeveRatio?: number; pantsRatio?: number; fogStrength?: number; faceGuide?: boolean },
   clampCtxFor?: (character: Character) => ClampContext | undefined,
   simCtxFor?: (character: Character) => SimContext | undefined,
+  previewQuality?: 'low' | 'medium' | 'high',
 ): void {
   const hasGlobalTransform = applyGlobalTransformWrapper(
     ctx, canvasWidth, canvasHeight, globalModifiers, currentFrame, frameRate, globalBlueprint,
@@ -5512,7 +5504,7 @@ function renderPuppetViaUnifiedPipeline(
     const plan = generateRenderPlan(
       unifiedCharacter, currentFrame, canvasWidth, canvasHeight,
       'pixel-perfect', frameRate, unifiedVars,
-      undefined, undefined, undefined, undefined, undefined,
+      undefined, previewQuality, undefined, undefined, undefined,
       undefined, undefined, proceduralAnimations, sprites,
       undefined, perspectiveForeshorten,
       pickClipStateKeyframes(animationClips, activeClipId, unifiedCharacter.id, currentFrame),
@@ -5586,7 +5578,7 @@ export function renderUnified(
       currentFrame, frameRate, globalModifiers, animationVariables,
       canvasModifierTracks, proceduralAnimations, globalBlueprint, sprites,
       perspectiveForeshorten, animationClips, activeClipId, geometryDirection,
-      mannequinFallback, editorFx, clampCtxFor, simCtxFor,
+      mannequinFallback, editorFx, clampCtxFor, simCtxFor, previewQuality,
     );
   }
   if (effectTracks) {
@@ -5687,7 +5679,8 @@ export function renderUnifiedToCanvas(
       ctx, canvasWidth, canvasHeight, unifiedCharacters,
       frame, frameRate, globalModifiers, animationVariables,
       canvasModifierTracks, undefined, undefined, sprites,
-      undefined, animationClips, activeClipId,
+      undefined, animationClips, activeClipId, undefined, undefined,
+      undefined, undefined, undefined, previewQuality,
     );
   }
   if (hasGlobalTransform) ctx.restore();
@@ -5711,6 +5704,7 @@ export function renderCharacterOnionFrameFromCharacter(
   animationVariables?: StoreAnimationVariable[],
   sprites?: Record<string, Sprite>,
   geometryDirection?: DirectionIndex,
+  previewQuality?: 'low' | 'medium' | 'high',
 ): void {
   const unifiedVars = animationVariables?.map(v => ({
     id: v.id, name: v.name, value: v.defaultValue ?? 0, min: 0, max: 100,
@@ -5719,7 +5713,7 @@ export function renderCharacterOnionFrameFromCharacter(
   const plan = generateRenderPlan(
     character, frame, canvasWidth, canvasHeight,
     'pixel-perfect', frameRate, unifiedVars as any,
-    undefined, undefined, undefined, undefined, undefined,
+    undefined, previewQuality, undefined, undefined, undefined,
     undefined, undefined, undefined, sprites,
     undefined, undefined, undefined, geometryDirection,
   );
@@ -5807,11 +5801,9 @@ export function renderSpriteEditUnified(
   ))
     ? resolveKeyframeModifierParams(spriteEditModifiers, currentFrame)
     : spriteEditModifiers;
-  const pixelModTypes = [
-    'color_replace', 'outline', 'dither', 'pixel_displace',
-    'cylinder_rotate', 'sphere_rotate', 'mirror', 'flip', 'pixel_edit',
-  ];
-  const activePixelMods = resolvedMods.filter(m => pixelModTypes.includes(m.type) && m.enabled);
+  // 与主渲染共用 PIXEL_MOD_TYPES 单一清单（此前本地清单漏 'cleanup'：
+  // 精灵编辑视图里 cleanup 修改器静默不生效、木偶画布却生效，审计域2）
+  const activePixelMods = resolvedMods.filter(m => PIXEL_MOD_TYPES.includes(m.type as ModifierType) && m.enabled);
   let pixels: import('./unified-types').PixelGrid;
   let modOffsetX = 0, modOffsetY = 0;
   if (activePixelMods.length > 0) {

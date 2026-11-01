@@ -241,7 +241,7 @@ export function cloneSubtreeTransposed(
     return piecesChanged || nodeOffsets !== set.nodeOffsets ? { ...set, pieces, nodeOffsets } : set;
   });
 
-  // 槽位变体指派跟随新 slotKey
+  // 服装槽变体指派跟随新 slotKey
   let slotVariants = character.slotVariants;
   if (character.slotVariants) {
     let changed = false;
@@ -304,7 +304,7 @@ export function cloneSubtreeTransposed(
 
 /**
  * 剪辑级跟随（纯函数）：给状态关键帧的 slotChanges 补新 slotKey 同值。
- * （关键帧修饰器/转面/姿态自片段统一后都在节点轨道里，随节点克隆自动
+ * （关键帧修改器/转面/姿态自片段统一后都在节点轨道里，随节点克隆自动
  * 跟随，不再有剪辑级关键帧复制。）
  */
 export function cloneClipDataForTranspose<T extends { puppetCharacterId?: string; stateKeyframes?: CostumeStateKeyframe[] }>(

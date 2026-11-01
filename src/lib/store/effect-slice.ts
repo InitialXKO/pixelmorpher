@@ -16,7 +16,7 @@ import {
   createDefaultCanvasModifier,
   getCanvasModifierDef,
 } from '../types';
-import { TEXT_POP_DEFAULT_PARAMS } from '../text-pop';
+import { effectKeyframeDefaultParams } from '../effect-track-params';
 
 export type EffectSlice = {
   addEffectTrack: ProjectStore['addEffectTrack'];
@@ -78,11 +78,11 @@ export const createEffectSlice: StateCreator<ProjectStore, [], [], EffectSlice> 
   addEffectKeyframe: (effectTrackId, frame, params) => {
     get().pushUndo('添加效果关键帧');
     set((s) => {
-      // 飘字关键帧即事件本体：未给 params 时按缺省事件播种，
-      // 否则事件没有任何字段可编辑/可播。
+      // 未给 params 时按轨类型播种全字段缺省（lib/effect-track-params
+      // 参数表，飘字走事件缺省）：否则关键帧 params 恒 {}、没有任何
+      // 字段可编辑、渲染只能走写死回落（审计 F-05）。
       const track = s.effectTracks.find((t) => t.id === effectTrackId);
-      const defaultParams =
-        params ?? (track?.type === 'text_pop' ? { ...TEXT_POP_DEFAULT_PARAMS } : {});
+      const defaultParams = params ?? effectKeyframeDefaultParams(track?.type);
       return {
         effectTracks: s.effectTracks.map((t) => {
           if (t.id !== effectTrackId) return t;
@@ -305,19 +305,32 @@ export const createEffectSlice: StateCreator<ProjectStore, [], [], EffectSlice> 
     }));
   },
 
-  addCanvasModifierKeyframe: (trackId, frame, params) => {
+  addCanvasModifierKeyframe: (trackId, frame, paramsOrByModifier) => {
     get().pushUndo('添加画布修改器关键帧');
+    // 兼容旧调用形态（扁平袋）：分键 map 的每个值都是参数袋（普通对象），
+    // 扁平袋的值是 ModifierParamValue（标量/数组，永不为普通对象），
+    // 据此判形——旧形态按存量扁平袋落盘，读时回落兼容（审计 F-30）
+    const isByModifier = !!paramsOrByModifier
+      && Object.values(paramsOrByModifier).every((v) => !!v && typeof v === 'object' && !Array.isArray(v));
     set((s) => ({
     canvasModifierTracks: s.canvasModifierTracks.map((t) => {
       if (t.id !== trackId) return t;
       if (t.keyframes.some((k) => k.frame === frame)) return t;
       return {
         ...t,
-        keyframes: [...t.keyframes, {
-          id: crypto.randomUUID(),
-          frame,
-          params: params ?? {},
-        }].sort((a, b) => a.frame - b.frame),
+        keyframes: [...t.keyframes, isByModifier
+          ? {
+            id: crypto.randomUUID(),
+            frame,
+            // 参数按修改器分键（审计 F-30）；params 留空袋仅作存量格式占位
+            params: {},
+            paramsByModifier: paramsOrByModifier as Record<string, Record<string, ModifierParamValue>>,
+          }
+          : {
+            id: crypto.randomUUID(),
+            frame,
+            params: (paramsOrByModifier ?? {}) as Record<string, ModifierParamValue>,
+          }].sort((a, b) => a.frame - b.frame),
       };
     }),
     }));
@@ -333,8 +346,13 @@ export const createEffectSlice: StateCreator<ProjectStore, [], [], EffectSlice> 
     }));
   },
 
-  updateCanvasModifierKeyframe: (trackId, keyframeId, params) => {
+  updateCanvasModifierKeyframe: (trackId, keyframeId, modifierIdOrParams, maybeParams) => {
     get().pushUndo('更新画布修改器关键帧');
+    // 双形态：新形态 (modifierId, params) 只写该修改器分键；旧形态
+    // (params) 合并进扁平袋（读时全体回落，语义与旧实现一致，审计 F-30）
+    const legacy = typeof modifierIdOrParams === 'object';
+    const modifierId = legacy ? '' : (modifierIdOrParams as string);
+    const params = (legacy ? modifierIdOrParams : maybeParams) as Record<string, ModifierParamValue>;
     set((s) => ({
     canvasModifierTracks: s.canvasModifierTracks.map((t) => {
       if (t.id !== trackId) return t;
@@ -342,7 +360,16 @@ export const createEffectSlice: StateCreator<ProjectStore, [], [], EffectSlice> 
         ...t,
         keyframes: t.keyframes.map((k) => {
           if (k.id !== keyframeId) return k;
-          return { ...k, params: { ...k.params, ...params } };
+          if (legacy) return { ...k, params: { ...(k.params ?? {}), ...params } };
+          // 只写该修改器自己的分键（审计 F-30）；存量扁平袋关键帧首次编辑
+          // 时把扁平袋按本修改器当前读口径物化为它的分键，其余修改器的
+          // 回落仍走扁平袋、行为不变
+          const byMod = { ...(k.paramsByModifier ?? {}) };
+          byMod[modifierId] = {
+            ...(byMod[modifierId] ?? (k.paramsByModifier ? {} : (k.params ?? {}))),
+            ...params,
+          };
+          return { ...k, paramsByModifier: byMod };
         }),
       };
     }),

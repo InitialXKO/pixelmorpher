@@ -78,8 +78,11 @@ console.log('B) 操控面板：武装同步 + 实际片段可见');
   ok('武装且角色不一致时按新角色重入 enterPerform 同步会话',
     panel.includes('performArmed && character && performCharacterId !== character.id')
     && panel.includes('enterPerform(character.id)'));
-  ok('状态条下显示实际片段名 + 回落标识',
-    panel.includes('实际片段：') && panel.includes('时间线选中的片段不属于当前角色，已回落'));
+  // 口径修订（2026-11 审计 F-28 / D4-B6）：面板回落与渲染门控不一致
+  // 本身就是缺陷——已按渲染侧为准摘除回落，本断言随之改判新口径。
+  ok('状态条下显示实际片段名 + 不属于当前角色时明示画布不生效（无回落）',
+    panel.includes('实际片段：') && panel.includes('时间线选中的片段不属于当前角色，画布上不生效')
+    && !panel.includes('animationClips.find((c) => c.puppetCharacterId === performCharacterId)'));
 }
 
 console.log('C) 行为：预览喂宿主变量 + 时间基文案 + 删表演点名');

@@ -113,7 +113,7 @@ const STEPS: { id: Step; label: string; optional?: boolean }[] = [
 const DIRECTION_NAMES: Record<number, string> = {
   0: '东', 1: '东北', 2: '北', 3: '西北', 4: '西', 5: '西南', 6: '南', 7: '东南',
 };
-// 槽位总览的行内方向顺序：南起顺时针
+// 服装槽总览的行内方向顺序：南起顺时针
 const DIRECTION_DISPLAY_ORDER = [6, 7, 0, 1, 2, 3, 4, 5];
 
 /** 组合的人话写法：方向 · 层（纬度层 / 变体名 / 基础层），确认步与覆盖确认共用 */
@@ -344,7 +344,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     if (discard) {
       // 顺带指派回滚（指派是角色级的，新建/已有集都算）：必须在清目标上下文
       // 前读本会话写入记录——只回滚仍等于当时顺带值的指派，被别处改过的不动。
-      // 不回滚会留窄口子：已有集 pieces 还原后，顺带指派还在、若该槽位本有
+      // 不回滚会留窄口子：已有集 pieces 还原后，顺带指派还在、若该服装槽本有
       // 该变体的旧图就会真显示出来，放弃不等于没发生过。
       const ctx = useEditorStore.getState().refAssemblyTarget;
       if (ctx && ctx.writes.some((w) => w.autoAssignedVariant)) {
@@ -457,8 +457,11 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
       }
       ctx.putImageData(imgData, 0, 0);
       setSamPreviewUrl(canvas.toDataURL('image/png'));
-      store.samState.currentMask = currentMask;
-      store.samState.maskShape = maskShape;
+      // 经 setState 正规写入并通知订阅者——此前直接改 getState() 快照
+      // 字段绕过 zustand set，订阅 samState 的组件不会重渲染
+      useEditorStore.setState((s) => ({
+        samState: { ...s.samState, currentMask, maskShape },
+      }));
     } catch (err) {
       console.error('[SAM] 分割失败:', err);
     }
@@ -746,9 +749,9 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
 
   const handleAddLimb = () => {
     if (!activeSkeleton || !newLimbName.trim()) return;
-    // 父节点有插槽时必须选插槽：不选则 attachment 落成 fixed、节点挂到根下，
+    // 父节点有槽位时必须选槽位：不选则 attachment 落成 fixed、节点挂到根下，
     // 与用户选的父节点毫无关系（addUnifiedNode 按 attachment 推导父级写全挂接）。
-    // 父节点无插槽时走 ensureChildAttachment 自动新建插槽，不再退成同位 fixed。
+    // 父节点无槽位时走 ensureChildAttachment 自动新建槽位，不再退成同位 fixed。
     if (parentNodeForSocket && parentNodeForSocket.sockets.length > 0 && !newLimbSocketId) return;
     const attachment = newLimbSocketId
       ? { type: 'socket' as const, parentSocketId: newLimbSocketId, plug: { x: newLimbPlugX, y: newLimbPlugY } }
@@ -759,8 +762,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     // 的旧角色快照（根本没有新节点），选中的恒是添加前的末位节点
     const newNode = addUnifiedNode(activeSkeletonKey!, newLimbName.trim(), {
       attachment,
-      // 父级显式给：父节点无插槽时 attachment 是 fixed、推导不出父级，
-      // 不给就会挂到根下，与所选父节点无关（同上方强制选插槽的注释）
+      // 父级显式给：父节点无槽位时 attachment 是 fixed、推导不出父级，
+      // 不给就会挂到根下，与所选父节点无关（同上方强制选槽位的注释）
       parentId: newLimbParentId || undefined,
       zIndex: (targetNode?.zIndex ?? 0) + 1,
     });
@@ -822,7 +825,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     es.setReferenceImageUrl(persistedRefImageSlots.get(currentRefSlotKey) ?? null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentRefSlotKey]);
-  // 槽位总览的行：已有图的纬度 + 当前纬度（当前槽所在行恒显示，其余空行不铺）
+  // 服装槽总览的行：已有图的纬度 + 当前纬度（当前槽所在行恒显示，其余空行不铺）
   const refSlotRows = (() => {
     const lats = new Set<number>();
     for (const key of persistedRefImageSlots.keys()) lats.add(Number(key.split('|')[1]));
@@ -837,7 +840,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     setReferenceImageUrl(url);
   };
   const workingCostume = selectedCharacter?.costumeSets.find((cs) => cs.id === workingCostumeId) ?? null;
-  // 节点在目标服装集的目标层（优先）或模板槽位同层中的精灵 ID
+  // 节点在目标服装集的目标层（优先）或模板服装槽同层中的精灵 ID
   // （SpriteRef 才可解析，与 DressPanel 同口径；读侧认当前写入层，
   // 进度与派生源看到的都是正在写的那一层的状态）
   const resolveNodeSpriteId = (node: (typeof sortedNodes)[number]): string | null => {
@@ -866,8 +869,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     selectedCharacter?.variantDefs?.find((v) => v.id === id)?.name;
   // ---- 覆盖门：目标格已有精灵时，写入发起前必须先确认（消灭静默覆盖） ----
   // 查的格与写侧落格严格同口径：工作服装该件的目标层同格（readPieceLayerSpriteId
-  // 是 applySpriteToPieceLayer 的读侧孪生）。模板槽位同层有图不算占用——
-  // 写侧从不写模板槽位。
+  // 是 applySpriteToPieceLayer 的读侧孪生）。模板服装槽同层有图不算占用——
+  // 写侧从不写模板服装槽。
   const targetCellOccupied = (node: (typeof sortedNodes)[number]): boolean => {
     if (!workingCostume) return false;
     const piece = workingCostume.pieces[node.slot?.slotKey ?? node.id];
@@ -903,7 +906,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetNode?.id]);
 
-  // 复制/镜像生成（烘焙式）：生成新精灵并写入工作服装的目标节点槽位
+  // 复制/镜像生成（烘焙式）：生成新精灵并写入工作服装的目标节点服装槽
   const handleDerive = (mode: 'copy' | 'mirror') => {
     if (!targetNode || !deriveSourceId || !selectedCharacterId || !workingCostumeId) return;
     const srcNode = sortedNodes.find((n) => n.id === deriveSourceId);
@@ -1322,7 +1325,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   直接在画布上拖动角色肢体（拖动旋转，Shift+拖动平移）对准底图。
                 </p>
                 {/* 方向选择：直接读写角色当前方向（根节点 variantIndex），
-                    遮罩保存时按同一口径落进该方向的精灵槽位 */}
+                    遮罩保存时按同一口径落进该方向的精灵服装槽 */}
                 <div>
                   <label className="text-xs text-gray-500 block mb-1">对位方向（遮罩将应用于此方向）</label>
                   <select
@@ -1421,7 +1424,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 </p>
               ) : targetVariantId ? (
                 <p className="text-[10px] text-gray-500">
-                  写入变体层；被写槽位原先没有任何变体指派时会自动指派为该变体（已有指派不覆盖）。
+                  写入变体层；被写服装槽原先没有任何变体指派时会自动指派为该变体（已有指派不覆盖）。
                 </p>
               ) : null}
             </div>
@@ -1493,7 +1496,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                       onChange={(e) => setNewLimbSocketId(e.target.value)}
                       className="w-full h-7 px-2 text-xs bg-white/5 border border-white/10 rounded text-gray-200"
                     >
-                      <option value="">选择插槽</option>
+                      <option value="">选择槽位</option>
                       {parentNodeForSocket.sockets.map((s) => (
                         <option key={s.id} value={s.id}>{s.name} ({s.basePosition?.x ?? 0}, {s.basePosition?.y ?? 0})</option>
                       ))}
@@ -1521,10 +1524,10 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                   </>
                 )}
                 {parentNodeForSocket && parentNodeForSocket.sockets.length === 0 && (
-                  <div className="text-[10px] text-amber-500">父节点无插槽，将挂到根节点下（固定连接）</div>
+                  <div className="text-[10px] text-amber-500">父节点无槽位，将挂到根节点下（固定连接）</div>
                 )}
                 {parentNodeForSocket && parentNodeForSocket.sockets.length > 0 && !newLimbSocketId && (
-                  <div className="text-[10px] text-amber-500">父节点有插槽，必须先选一个插槽——不选会挂到根下、与所选父节点无关</div>
+                  <div className="text-[10px] text-amber-500">父节点有槽位，必须先选一个槽位——不选会挂到根下、与所选父节点无关</div>
                 )}
                 {!newLimbParentId && (
                   <div className="text-[10px] text-gray-500">未选父节点时挂到根节点下</div>
@@ -1742,7 +1745,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 for (const nodeId of new Set([...processedNodes.values()].map((en) => en.nodeId))) {
                   const node = sortedNodes.find((n) => n.id === nodeId);
                   if (!node) continue;
-                  // 与抠图步同一解析口径：工作服装当前方向优先、模板槽位回退。
+                  // 与抠图步同一解析口径：工作服装当前方向优先、模板服装槽回退。
                   // 旧实现读 slot.sprites[0]/node.spriteId——抠图成果根本不在那，
                   // 清的是模板自带精灵或直接跳过，本步等于白跑还可能误伤模板。
                   const spriteId = resolveNodeSpriteId(node);
@@ -1846,7 +1849,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                           )}
                           {row.write && <span className="text-cyan-300"> · 本会话写入</span>}
                           {row.write?.autoAssignedVariant && (
-                            <span className="text-amber-400"> · 已顺带设为该槽位的变体</span>
+                            <span className="text-amber-400"> · 已顺带设为该服装槽的变体</span>
                           )}
                         </div>
                       ))}

@@ -64,7 +64,7 @@ export interface DynamicPatternParams {
   // 二期（D4）：生成模式 / 生长 / 双锚点 / 细节数
   arcMode: 'arc' | 'vine' | 'stars' | 'beam' | 'glyph' | 'stream' | 'ring' | 'fan'; // 弧线/藤蔓/星座/光束/法阵线绘/流光线（乙7 几何三件并入）/环带/扇面
   arcGrowHz: number;    // 生长循环（次/秒，0 = 恒满长）；周期内先生长后保持
-  arcTarget: string;    // 双锚点：终点锚定的目标部件槽位键（仅弧线模式；空 = 方向+弧长）
+  arcTarget: string;    // 双锚点：终点锚定的目标部件服装槽键（仅弧线模式；空 = 方向+弧长）
   arcOriginMark: string; // 弧线原点绑定的精灵点标记名（空 = 插头）
   arcDetail: number;    // 细节数：藤蔓叶数 / 星座星数 / 法阵刻度数 / 流光点数（0 = 按模式缺省）
   arcGlyphSpinDeg: number; // 法阵旋转速度（度/秒，可负）
@@ -76,7 +76,7 @@ export interface DynamicPatternParams {
   // 本部件就像被源部件拖着、慢半拍跟上（垂饰/披风/头发的次级运动）。
   // 无状态纯函数：任意帧只由源部件在 t 与 t−delay 的位姿决定。
   followEnabled: boolean;
-  followSource: string;   // 源部件槽位键（slotKey）；空 = 未选源、不生效
+  followSource: string;   // 源部件服装槽键（slotKey）；空 = 未选源、不生效
   followDelaySec: number; // 滞后（秒）
   followAmount: number;   // 跟随强度 0..1（1 = 完全按滞后位姿走）
   followRotate: boolean;  // 是否连源部件的旋转滞后一起跟
@@ -198,7 +198,7 @@ export interface DynamicPatternParams {
   glowFlameReach: number;   // 焰形伸长：焰尖向上可达距离 ÷ 圈宽
   glowAngleDeg: number;     // 辉光主方向（度，屏幕口径 0=东 90=南 180=西 270=北）：
                             // 星形 = 一条星芒的指向、焰形 = 焰尖指向、自定义 = 印章上方指向
-  glowAngleSpace: 'sprite' | 'world'; // 方向基准：sprite = 跟随精灵旋转（缺省）；world = 恒为世界方向
+  glowAngleSpace: 'sprite' | 'world'; // 方向基准：world = 恒为世界方向（缺省，2026-10-23 立规）；sprite = 跟随精灵旋转
   // 宿主后处理段：以部件当前帧像素为输入的后处理（本体即画
   // 布：受击闪/故障切片/传送写回/瓦解/石化面层）。纯函数核
   // 心在 host-fx.ts（applyHostFxToRgba），运行时孪生 =
@@ -343,7 +343,7 @@ export function defaultDynamicParams(): DynamicPatternParams {
     glowPhase: 0, glowHalo: 2, glowMaskSource: 'color', glowPick: '#2ea8ff',
     glowTolerance: 0, glowMask: undefined, glowMarkName: '', glowFollowGroup: 2,
     glowShape: 'square', glowShapeKernel: undefined,
-    glowStarReach: 1.2, glowFlameReach: 1.8, glowAngleDeg: 270, glowAngleSpace: 'sprite',
+    glowStarReach: 1.2, glowFlameReach: 1.8, glowAngleDeg: 270, glowAngleSpace: 'world',
     hostFxEnabled: false, hostFxMode: 'none', hostFxColor: '#7a4fd0',
     hostFxStrength: 0.8, hostFxHz: 1, hostFxSlicePx: 3, hostFxPhase: 0,
   };
@@ -364,7 +364,7 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
     ? Math.max(1, Math.min(3.5, out.glowFlameReach)) : 1.8;
   out.glowAngleDeg = Number.isFinite(out.glowAngleDeg)
     ? ((out.glowAngleDeg % 360) + 360) % 360 : 270;
-  if (out.glowAngleSpace !== 'world') out.glowAngleSpace = 'sprite';
+  if (out.glowAngleSpace !== 'sprite') out.glowAngleSpace = 'world';
   if (typeof out.followSource !== 'string') out.followSource = '';
   if (out.emitMode !== 'gather') out.emitMode = 'out';
   out.gatherRadius = Number.isFinite(out.gatherRadius) ? Math.max(0, Math.min(64, out.gatherRadius)) : 14;
@@ -1366,7 +1366,7 @@ function glowStamp(
   const halo = Math.max(0, Math.min(8, Math.round(params.glowHalo || 0)));
   const shape = params.glowShape ?? 'square';
   const mainDeg = (params.glowAngleDeg ?? 270)
-    - (params.glowAngleSpace === 'world' ? frameAngleDeg : 0);
+    - (params.glowAngleSpace !== 'sprite' ? frameAngleDeg : 0);
   // 印章原生主方向：star 的星芒沿坐标轴（基准 0°），flame/custom 原生向上（基准 270°）
   const phiDeg = shape === 'star' ? mainDeg : mainDeg - 270;
   const phi = (phiDeg * Math.PI) / 180;

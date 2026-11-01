@@ -5,7 +5,7 @@ import { useProjectStore } from './store';
 import { createDefaultSocket, pxToSub, type Attachment, type DirectionIndex, type Node } from './unified-types';
 import { mannequinLimbKind, socketOffsetTo3D } from './unified-render';
 
-/** 收集子树全部节点 id（含根）：后代关系同时认 parentId 与插槽归属
+/** 收集子树全部节点 id（含根）：后代关系同时认 parentId 与槽位归属
  *  （对话框新建的子节点只有 attachment.parentSocketId、没有 parentId） */
 export function collectSubtreeIds(nodes: Record<string, Node>, rootId: string): string[] {
   const ids = new Set<string>([rootId]);
@@ -34,7 +34,7 @@ export function collectSubtreeIds(nodes: Record<string, Node>, rootId: string): 
   return [...ids];
 }
 
-/** 找节点的父节点（parentId 优先，其次插槽归属） */
+/** 找节点的父节点（parentId 优先，其次槽位归属） */
 export function findParentNode(nodes: Record<string, Node>, node: Node): Node | null {
   if (node.parentId && nodes[node.parentId]) return nodes[node.parentId];
   const sockId = node.attachment?.parentSocketId;
@@ -75,11 +75,11 @@ export function deleteNodeSubtree(characterId: string, rootId: string): boolean 
   return true;
 }
 
-/** 子节点的挂接：父节点有插槽 → 挂第一个；没有 → 先在父节点上新建
- * 一个插槽再挂——沿父节点局部 +Y（肢体伸出方向，与肢链插槽同款
+/** 子节点的挂接：父节点有槽位 → 挂第一个；没有 → 先在父节点上新建
+ * 一个槽位再挂——沿父节点局部 +Y（肢体伸出方向，与肢链槽位同款
  * 约定），长度按父节点入段长定：手/脚末端取人偶延伸同口径的比例
  * （臂 ×0.16/0.44、腿 ×0.15/0.45），其余取入段全长，无入段回退 20px。
- * 此前无插槽直接退成同位 fixed：子节点贴在父关节上、段长为零，
+ * 此前无槽位直接退成同位 fixed：子节点贴在父关节上、段长为零，
  * 手/脚的人偶延伸又因「非叶子」被撤，胶囊整个消失（用户实测）。 */
 export function ensureChildAttachment(characterId: string, parent: Node, childName: string): Attachment {
   const store = useProjectStore.getState();
@@ -89,7 +89,7 @@ export function ensureChildAttachment(characterId: string, parent: Node, childNa
   if (firstSocket) {
     return { type: 'socket', parentSocketId: firstSocket.id, plug: { x: 0, y: 0 } };
   }
-  // 父节点入段长 = 它挂在祖父插槽上的那段偏移的长
+  // 父节点入段长 = 它挂在祖父槽位上的那段偏移的长
   let inLenPx = 0;
   if (character && fresh.parentId && fresh.attachment?.type === 'socket' && fresh.attachment.parentSocketId) {
     const grand = character.nodes[fresh.parentId];
@@ -109,7 +109,7 @@ export function ensureChildAttachment(characterId: string, parent: Node, childNa
 }
 
 /** 在父节点下新建子节点（与资产面板添加节点对话框同构造：
- *  挂接走 ensureChildAttachment——无插槽自动新建插槽）。
+ *  挂接走 ensureChildAttachment——无槽位自动新建槽位）。
  *  返回新节点并选中 */
 export function addChildNode(characterId: string, parent: Node): Node | null {
   const store = useProjectStore.getState();
@@ -117,7 +117,7 @@ export function addChildNode(characterId: string, parent: Node): Node | null {
   if (!character) return null;
   const name = `节点_${Object.keys(character.nodes).length + 1}`;
   const attachment = ensureChildAttachment(characterId, parent, name);
-  // 父级必须显式给：不给时 addUnifiedNode 只能按 attachment 推导，无插槽
+  // 父级必须显式给：不给时 addUnifiedNode 只能按 attachment 推导，无槽位
   // 的父节点推导不出、会落到根节点——新节点就成了根的子节点（在树上
   // 表现为与所点节点同级），而不是所点节点的子节点。
   const node = store.addUnifiedNode(characterId, name, { zIndex: 0, attachment, parentId: parent.id });
@@ -144,9 +144,9 @@ export function ikChainMembership(
   return null;
 }
 
-/** 更改节点的父节点与连接插槽：三处写齐——attachment.parentSocketId、
- * 新旧父级的 children 迁移、node.parentId（渲染按 children 遍历 + 在父身上查插槽，
- * 只改 attachment 会留半吊子状态）。socketId 为 null = 固定连接（不插槽）。
+/** 更改节点的父节点与连接槽位：三处写齐——attachment.parentSocketId、
+ * 新旧父级的 children 迁移、node.parentId（渲染按 children 遍历 + 在父身上查槽位，
+ * 只改 attachment 会留半吊子状态）。socketId 为 null = 固定连接（不用槽位）。
  * 根节点拒绝、目标在自身子树内拒绝（防环）。返回是否执行（无变化也算执行成功）。 */
 export function reparentNode(
   characterId: string,
@@ -198,7 +198,7 @@ export function reparentNode(
   return true;
 }
 
-/** 给节点添加一个插槽（构造与 RigPanel handleAddSocket 一致） */
+/** 给节点添加一个槽位（构造与 RigPanel handleAddSocket 一致） */
 export function addSocketToNode(characterId: string, node: Node): void {
   const store = useProjectStore.getState();
   const newSocket = {

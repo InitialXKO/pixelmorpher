@@ -8,7 +8,8 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { useProjectStore } from '@/lib/store';
 import { useEditorStore } from '@/lib/store';
 import { useWorkspaceStore } from '@/lib/workspace-store';
-import { invalidateUnifiedPipelineCache, computeWorldTransforms, geometryDirectionFromToggle } from '@/lib/unified-render';
+import { invalidateUnifiedPipelineCache, geometryDirectionFromToggle } from '@/lib/unified-render';
+import { computeEditorWorldTransforms } from '@/lib/editor-world-transforms';
 import { pickNodesAt } from '@/lib/node-picking';
 import { readPick } from '@/lib/pick-buffer';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
@@ -353,12 +354,13 @@ export function useCanvasState() {
 
   // ---- Compute puppet node world pivot position ----
   // 单位统一：内部全 SubPixel，返回画布像素（调用方按像素用）
-  // 复用主渲染的 computeWorldTransforms（与绘制、命中同源）；此前私有 2D 计算不认 offset3D，
+  // 经共用 helper 按主画布同一上下文构造世界变换（与绘制、命中同源，
+  // 钳制/模拟/程序化增量齐全，审计 F-20）；此前私有 2D 计算不认 offset3D，
   // 3D 角色的枢轴点同样塌到父/根位置
   const computePivotWorldPosition = useCallback(
     (node: Node, character: Character, canvasW: number, canvasH: number): { x: number; y: number } => {
       const state = useProjectStore.getState();
-      const worldTransforms = computeWorldTransforms(character, state.currentFrame, canvasW, canvasH, undefined, undefined, undefined, undefined, geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
+      const worldTransforms = computeEditorWorldTransforms(character, state.currentFrame, { canvasWidth: canvasW, canvasHeight: canvasH, geometryDirection: geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D) });
       const centerX = pxToSub(canvasW / 2);
       const centerY = pxToSub(canvasH / 2);
       // 与主渲染 generateRenderPlan 一致：根节点 variantIndex 为当前朝向

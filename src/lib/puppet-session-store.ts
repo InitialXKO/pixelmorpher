@@ -142,7 +142,7 @@ export const usePuppetSessionStore = create<PuppetSessionState>()((set, get) => 
 
     // 录制“当前可见姿态”：用关键帧插值求出每节点在当前帧的实际值，
     // 而不是 rest pose（perform 阶段拖动只写轨道，不碰 rest pose）。
-    // 姿态写入节点轨道的通道点（渲染的唯一姿态数据源）；同帧的修饰器/
+    // 姿态写入节点轨道的通道点（渲染的唯一姿态数据源）；同帧的修改器/
     // 转面/图层附件点不属于姿态，保持不动。
     const interpolated = interpolateNodeKeyframes(character, frame);
 

@@ -117,12 +117,12 @@ function CanvasModifierBlock({
   const beginDrag = useProjectStore(s => s.beginDrag);
   const endDrag = useProjectStore(s => s.endDrag);
 
-  // 当前帧有关键帧时改参写关键帧（关键帧袋是该帧全部修改器的解析参数
-  // 快照、逐修改器合并覆盖），无关键帧时改基础值。
+  // 当前帧有关键帧时改参写关键帧（写本修改器自己的分键，审计 F-30；
+  // 旧扁平袋下改 B 的同名参数会连带改 A 的读数），无关键帧时改基础值。
   const activeKf = track.keyframes?.find((k) => k.frame === currentFrame);
   const handleParamChange = useCallback(
     (paramName: string, value: ModifierParamValue) => {
-      if (activeKf) updateCanvasModifierKeyframe(trackId, activeKf.id, { [paramName]: value });
+      if (activeKf) updateCanvasModifierKeyframe(trackId, activeKf.id, modifier.id, { [paramName]: value });
       else updateCanvasModifier(trackId, modifier.id, { [paramName]: value });
     },
     [trackId, modifier.id, updateCanvasModifier, updateCanvasModifierKeyframe, activeKf],

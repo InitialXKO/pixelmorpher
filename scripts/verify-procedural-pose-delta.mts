@@ -206,7 +206,7 @@ console.log('D) 源码级断言');
   ok(panel.includes('nodes?.[selectedNodeId]'), '目标节点按「角色实际包含 selectedNodeId」推导（节点 id 全局唯一）');
 
   const eng = readFileSync(new URL('../src/lib/engine/procedural.ts', import.meta.url), 'utf8');
-  ok(eng.includes('export function applyProceduralAnimations'), 'applyProceduralAnimations 本体保留（已无调用方、其修改器查找行为不改）');
+  ok(!eng.includes('export function applyProceduralAnimations'), 'applyProceduralAnimations 本体已删（2026-11 审计清理：旧修改器门控消费路，防误接复活门控）');
   ok(eng.includes('export function computeProceduralPoseDelta'), 'computeProceduralPoseDelta 已导出');
   ok(eng.includes('matchesSprite'), '引擎含精灵通道匹配（resolvedSpriteId）');
   ok(!eng.includes('hasEnabledModifier'), '引擎位姿增量汇总不再有修改器门控（hasEnabledModifier 已删）');

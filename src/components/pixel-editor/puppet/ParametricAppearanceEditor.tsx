@@ -2,10 +2,10 @@
 import { useState } from 'react';
 
 // ============================================================
-// ParametricAppearanceEditor — 槽位参数化外观编辑（Rig 面板内）
+// ParametricAppearanceEditor — 服装槽参数化外观编辑（Rig 面板内）
 // 编辑对象 = 当前服装集 piece.parametric（按服装集存，换集即换外观）。
 // 字段与 proc-runtime 的运行时包同构：形状 / 表面层程序预设 / 调色板 /
-// 四个枚举槽位 / rim·glint 强度。主画布按「参数化优先」消费此数据，
+// 四个枚举（LIGHT / OUTLINE / RIM / GLINT）/ rim·glint 强度。主画布按「参数化优先」消费此数据，
 // 另服务于程序化预览与「程序化运行时包」导出。
 // ============================================================
 
@@ -100,11 +100,11 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
           type="checkbox"
           checked={!!app}
           onChange={(e) => write(e.target.checked ? createDefaultParametricAppearance() : undefined)}
-          title="启用后该槽位在此服装集下进入程序化运行时包"
+          title="启用后该服装槽在此服装集下进入程序化运行时包"
         />
       </div>
       <p className="mt-0.5 text-[9px] text-gray-600">
-        按服装集存（当前：{set.name}）；槽位 {slotKey}。主画布参数化优先，改动即时上画布；同时供程序化预览/导出。
+        按服装集存（当前：{set.name}）；服装槽 {slotKey}。主画布参数化优先，改动即时上画布；同时供程序化预览/导出。
       </p>
       <div className="mt-2">
         <Label className="text-[10px] text-gray-500 uppercase tracking-wider">动态效果（服装件）</Label>
@@ -112,7 +112,7 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
           <DynamicPatternEditor
             instances={piece?.dynamicPatterns ?? []}
             onChange={writeDynamic}
-            hint="挂在当前服装集的这个槽位上，换集即换；与节点挂载按效果位合并：同位替换、关闭压制、不同位叠加。"
+            hint="挂在当前服装集的这个服装槽上，换集即换；与节点挂载按效果位合并：同位替换、关闭压制、不同位叠加。"
             previewGrid={representativeGridForSlot(character, slotKey, spritesRecord)}
             previewMarks={representativeGridForSlotEx(character, slotKey, spritesRecord)?.marks}
             glowRankById={glowRankByInstanceId(
@@ -137,7 +137,7 @@ export default function ParametricAppearanceEditor({ characterId, slotKey }: { c
             </select>
             {mode !== 'generate' && (
               <p className="mt-0.5 text-[9px] text-gray-600">
-                轮廓{mode === 'overlay' ? '与底图' : ''}取自该槽位各方向的精灵（逐方向烘焙）；无精灵时回落独立生成，形状设置不生效。
+                轮廓{mode === 'overlay' ? '与底图' : ''}取自该服装槽各方向的精灵（逐方向烘焙）；无精灵时回落独立生成，形状设置不生效。
                 {mode === 'overlay' && '叠加档下图案类写出不生效，只认 bump 与光照/描边/轮缘光/闪光。'}
                 模式编辑器预览按精灵尺寸矩形近似，真实轮廓看主画布。
               </p>

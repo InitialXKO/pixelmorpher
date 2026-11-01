@@ -67,8 +67,8 @@ export function useBlueprintPreviewData(character: Character | null | undefined)
       }
     }
     return Object.values(character?.nodes ?? {}).map((n: any) => {
-      // 共享解析：与主渲染一致（含 mirrorMap 与槽位变体层）
-      // 件键同主渲染口径：无槽位定义的节点回退节点 id（写侧以节点 id 为键）
+      // 共享解析：与主渲染一致（含 mirrorMap 与服装槽变体层）
+      // 件键同主渲染口径：无服装槽定义的节点回退节点 id（写侧以节点 id 为键）
       const slotKey = n.slot?.slotKey ?? n.id;
       // 预览默认南向（6）；方向由调用方按当前帧定
       const resolved = resolvePreviewSprite(slotKey, 6, activeSet as any, spritesTable as any, character?.slotVariants?.[slotKey]);

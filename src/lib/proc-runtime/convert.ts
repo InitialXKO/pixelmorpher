@@ -14,7 +14,7 @@ import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, Pix
 import type { AnimationClip } from '../types';
 import { buildParametricSprite } from './main-canvas';
 import { subToPx, projectToView, frameYAxisWorld, directionTrig } from '../unified-types';
-import { computeWorldTransforms, computeRestWorldTransforms, stackBendForNode, rotateWorldTransformsForYaw, facingYawDeltaRad, stepClampState, type ClampStateMap } from '../unified-render';
+import { computeWorldTransforms, computeRestWorldTransforms, stackBendForNode, rotateWorldTransformsForYaw, facingYawDeltaRad, stepClampState, resolveEffectiveCostumeState, type ClampStateMap } from '../unified-render';
 import { cloneClampState, steppedClampState } from '../clamp-session';
 import { realtimeChainDefs, sampleReference, type ChainBakeParams } from '../sim/verlet-chain';
 import { resolvePieceSprite } from '../sprite-resolve';
@@ -23,7 +23,7 @@ import { computeStackOps, rasterizeStackOpsData, STACK_VIEW_ELEVATION_DEG, type 
 import { packMaskBits, unpackMaskBits } from '../sprite-marks';
 import { collectDesiredPatterns, effectivePatternGraph, extractPatternInstances } from '../blueprint/pattern-sync';
 import { characterHasCueEvents } from '../perform-fx';
-import { resolvePerfSlash, graphWithoutSlashNodes } from '../blueprint/slash-sync';
+import { resolvePerfSlash, graphWithoutSlashNodes, collectPerfSlashCandidates } from '../blueprint/slash-sync';
 import { findSlashDef, resolveClipSlash } from '../slash-defs';
 import { rgbaToHexOrNull } from '../engine/utils';
 import { modifiersToBlueprint } from '../blueprint/migrate';
@@ -153,10 +153,10 @@ export interface RuntimePart {
    * 当前精灵网格为源求值、结果写回瓦片。仅精灵部件携带（参数化
    * 部件 v1 不带，convert 点名）。逐集换图不换链（链挂节点蓝图）。 */
   pixelGraph?: RuntimePixelGraph;
-  /** 变体替代精灵（缺口 6）：仅当某片段状态轨给该槽指派过变体时才带；
+  /** 变体替代精灵（缺口 6）：仅当某片段状态轨给该服装槽指派过变体时才带；
    * variantId → 该变体解析后的代表精灵（与基础解析不同才收） */
   altSprites?: Record<string, { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] }>;
-  /** 网格蒙皮（缺口 4）：父槽位 skinning='mesh' 时带；parent 为父部件
+  /** 网格蒙皮（缺口 4）：父服装槽 skinning='mesh' 时带；parent 为父部件
    * 键，plugOff 为 attachment.plug 偏移（px，叠加在瓦片 cx/cy 上） */
   skin?: { parent: string; radius: number; curve: 'linear' | 'smoothstep'; plugOff: [number, number] };
   /** 精灵堆叠（默认服装集口径；与默认集不同的集见 costumes[*].__stack）：
@@ -226,9 +226,9 @@ export interface ProcRuntimePackage {
   frameRate: number;
   palettes: Record<string, number[]>;
   /** 工程调色板（DCC管线·调色板页签的用户数据，与上方运行时程序化
-   * 着色用的内置 PALETTES 是两回事）：colors 为逐槽位 hex 或 null，
-   * swappableIndices 是允许运行时换色的槽位。宿主经
-   * procRuntime.setPaletteSwap 按槽位换色（队伍色系统）。旧包无此字段。 */
+   * 着色用的内置 PALETTES 是两回事）：colors 为逐色位 hex 或 null，
+   * swappableIndices 是允许运行时换色的色位。宿主经
+   * procRuntime.setPaletteSwap 按色位换色（队伍色系统）。旧包无此字段。 */
   userPalettes?: Array<{ id: string; name: string; colors: Array<string | null>; swappableIndices: number[]; isDefault?: boolean }>;
   activeUserPaletteId?: string | null;
   parts: RuntimePart[];
@@ -361,7 +361,7 @@ export function buildSimChains(
 /** 精灵表口径：服装件里的精灵引用（SpriteRef）可能指向角色自带表，
  *  也可能指向工程级全局表（装配向导等写入方用全局表）——主画布出图时
  *  用的是全局表。转换器必须拿到同一张表解析，否则引用全部落空、
- *  精灵部件整件不进包（2026-10-23 实测事故：角色 12 个槽位只剩
+ *  精灵部件整件不进包（2026-10-23 实测事故：角色 12 个服装槽只剩
  *  1 个参数化部件进包）。调用方传工程级表，与角色表合并（工程级优先）。 */
 export type SpriteTable = Record<string, import('../unified-types').Sprite>;
 
@@ -402,7 +402,7 @@ function displaySpriteOf(
 }
 
 /**
- * 槽位代表图（编辑器取色/手动标记与运行时发光场共用一个口径）：
+ * 服装槽代表图（编辑器取色/手动标记与运行时发光场共用一个口径）：
  * 参数化外观优先（与主画布同路烘焙），否则取代表方向精灵（东向优先、
  * 缺图按方向序回落）。externalSprites = 工程级全局表（与导出同口径合并）。
  */
@@ -481,7 +481,7 @@ function glowStampSignature(params: DynamicPatternParams): string {
   const reach = shape === 'star' ? (params.glowStarReach ?? 1.2)
     : shape === 'flame' ? (params.glowFlameReach ?? 1.8) : 1;
   return [shape, Math.round(params.glowHalo || 0), params.glowAngleDeg ?? 270,
-    params.glowAngleSpace ?? 'sprite', reach].join('|');
+    params.glowAngleSpace ?? 'world', reach].join('|');
 }
 
 /** 片元重算印章参数（钳制口径与 dynamic-patterns 的 glowStamp 一致） */
@@ -510,17 +510,17 @@ function glowEntryFor(
   const setName = character.costumeSets.find((cs) => cs.id === costumeSetId)?.name ?? costumeSetId ?? '';
   const where = setName ? `（服装集「${setName}」）` : '';
   if (glows.length > 3) {
-    warnings.push(`发光段：槽位 ${slotKey}${where} 有 ${glows.length} 个发光实例，第 4 个起按各自所选的发光组并入运行时包（选区叠加取大、颜色与呼吸参数跟所选组；主画布同口径）`);
+    warnings.push(`发光段：服装槽 ${slotKey}${where} 有 ${glows.length} 个发光实例，第 4 个起按各自所选的发光组并入运行时包（选区叠加取大、颜色与呼吸参数跟所选组；主画布同口径）`);
   }
   const rep = representativeGridForSlotEx(character, slotKey, externalSprites, costumeSetId);
   if (!rep) {
-    warnings.push(`发光段：槽位 ${slotKey}${where} 没有代表图，选区未进运行时包`);
+    warnings.push(`发光段：服装槽 ${slotKey}${where} 没有代表图，选区未进运行时包`);
     return undefined;
   }
   const fields = glows.map((inst, idx) => {
     const gf = glowField(inst.params, rep.grid, 0, rep.marks);
     if (!gf) {
-      warnings.push(`发光段：槽位 ${slotKey}${where} 第 ${idx + 1} 个发光实例选区为空（取色无同色像素或未标记），未进运行时包`);
+      warnings.push(`发光段：服装槽 ${slotKey}${where} 第 ${idx + 1} 个发光实例选区为空（取色无同色像素或未标记），未进运行时包`);
     }
     return gf;
   });
@@ -813,6 +813,61 @@ export function convertCharacterToRuntimePackage(
   if (characterHasCueEvents(character)) {
     warnings.push(`角色「${character.name}」事件轨含定格/震屏关键帧：只在编辑器播放时生效，未进包（与输入轨同界）`);
   }
+  // 转面数据（节点 faceTurn 静态值 / faceTurnKeys 转面轨 / faceTurnConfig
+  // 配置）：编辑器主渲染在消费（unified-render 指令构建 + 五官参照），
+  // proc-runtime 零消费，故不进包；含有效转面数据的角色在此点名。
+  // faceTurnConfig 的覆盖情形：facingAngle 存在时才有效应——enabled
+  // 为真时方向混合/单图模式包内无对应实现；enabled 为假而 facingAngle
+  // 存量时编辑器不转面、包内却按 facingAngle 静态预转，两端朝向不一
+  // （域7-错3），同由本点名覆盖。零值 faceTurn/空轨无视觉效应不点名。
+  // 蒙皮快照弯曲（attachment.skinningSnapshot）同理：编辑器在消费、
+  // convert/模板零引用，含快照的角色在此点名。
+  {
+    const turnItems: string[] = [];
+    let hasSkinningSnapshot = false;
+    for (const n of Object.values(character.nodes ?? {})) {
+      const ft = n.faceTurn;
+      if (ft && (ft.yaw || ft.pitch) && !turnItems.includes('节点转面')) turnItems.push('节点转面');
+      const ftKfs = n.tracks?.faceTurnKeys?.keyframes;
+      if (ftKfs?.some((k) => k.value && (k.value.yaw || k.value.pitch)) && !turnItems.includes('转面轨')) {
+        turnItems.push('转面轨');
+      }
+      if (n.attachment?.skinningSnapshot) hasSkinningSnapshot = true;
+    }
+    if (character.faceTurnConfig && character.facingAngle !== undefined) turnItems.push('转面配置');
+    if (turnItems.length > 0) {
+      warnings.push(`角色「${character.name}」含转面数据（${turnItems.join('、')}）：只在编辑器生效，未进包`);
+    }
+    if (hasSkinningSnapshot) {
+      warnings.push(`角色「${character.name}」含蒙皮快照弯曲：只在编辑器生效，未进包`);
+    }
+  }
+  // 角色级蓝图（整角色后处理：合成后像素图求值）：编辑器每帧在消费
+  // （unified-render 的 renderCharacterWithBlueprint），但包内没有
+  // 「整角色合成图」这一层的图求值通道——包内蓝图求值只有部件级
+  // 像素链与全局变换图，结构上无处承载，故不进包；含节点的角色点名。
+  if (character.blueprint && (character.blueprint.nodes?.length ?? 0) > 0) {
+    warnings.push(`角色「${character.name}」角色级蓝图（整角色后处理）只在编辑器生效，未进包`);
+  }
+  // 输入轨（角色级行为宿主输入）：设计上不进包（包内用真实输入，
+  // 见 unified-types 的字段注释），与事件轨同界——事件轨有点名，
+  // 输入轨有实际关键帧时同样点名，口径一致。
+  {
+    const it = character.inputTracks;
+    const hasInputKeys = !!it && [it.moveX, it.speed01, it.grounded]
+      .some((t) => (t?.keyframes?.length ?? 0) > 0);
+    if (hasInputKeys) {
+      warnings.push(`角色「${character.name}」输入轨含关键帧：只在编辑器播放时生效，未进包（包内用真实输入，与事件轨同界）`);
+    }
+  }
+  // 片段帧标签（frameTags，节拍模板/DCC 写入）：包内段表演只有整段
+  // 循环标记，没有命名子区段的播放语义可承载，标签不进包；含标签
+  // 的片段逐个点名。
+  for (const c of opts?.clips ?? []) {
+    if ((c.frameTags?.length ?? 0) > 0) {
+      warnings.push(`片段「${c.name}」帧标签只在编辑器生效，未进包`);
+    }
+  }
   // 工程帧率：一切帧↔秒换算的唯一来源（调用方传入；缺省 12 仅兜底）
   const projectFpsTop = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;
   const worlds = computeWorldTransforms(character, 0, 512, 512, projectFpsTop);
@@ -834,6 +889,112 @@ export function convertCharacterToRuntimePackage(
   };
   const activeSet = character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId)
     ?? character.costumeSets[0];
+
+  // ---- 状态蓝图进包（服装叠加第三层）：编辑器每帧用
+  // resolveEffectiveCostumeState 求值（静态字段 → 片段状态轨 → 状态
+  // 蓝图；求值 vars 传空、var 节点用自身缺省），输出只是帧号的
+  // 函数，故 convert 在片段窗内逐帧采样同一函数，把三层合成结果
+  // 按相邻帧差分折成段表演的 stateFx 条目（与第二层同一载体、同
+  // 一增量语义：运行时从表演开始时的服装快照出发逐条累计应用，
+  // costume 整覆、slots 逐槽设/删）。采样顺带收集蓝图引入的变体
+  // id 供 altSprites 需求集合并。无片段承载且蓝图确有切换时点名，
+  // 不静默丢弃。 ----
+  const stateBpFxByClip = new Map<string, Array<Record<string, unknown>>>();
+  const stateBpVariantIds = new Map<string, Set<string>>();
+  if (character.stateBlueprint) {
+    const validSets = new Set(character.costumeSets.map((cs) => cs.id));
+    const baseCostume = activeSet?.id;
+    const baseSlots: Record<string, string> = { ...(character.slotVariants ?? {}) };
+    let badBpSetId: string | undefined;
+    const sampleClipFx = (clip: AnimationClip): Array<Record<string, unknown>> => {
+      // 第二层既有口径保留：状态键指向不存在的服装集逐键点名
+      const keySetIds = new Set<string>();
+      for (const k of clip.stateKeyframes ?? []) {
+        if (!k.costumeSetId) continue;
+        keySetIds.add(k.costumeSetId);
+        if (!validSets.has(k.costumeSetId)) {
+          warnings.push(`片段「${clip.name}」状态键指向不存在的服装集 ${k.costumeSetId}，已丢弃`);
+        }
+      }
+      const entries: Array<Record<string, unknown>> = [];
+      let prevCostume = baseCostume;
+      let prevSlots = baseSlots;
+      for (let f = clip.startFrame; f <= clip.endFrame; f++) {
+        const eff = resolveEffectiveCostumeState(character, f, projectFpsTop, clip.stateKeyframes);
+        let costume = eff.costumeSetId ?? baseCostume;
+        if (costume !== undefined && !validSets.has(costume)) {
+          // 不存在的集：保持前帧生效集。轨道来源的坏 id 已在上方
+          // 逐键点名；蓝图来源的在采样外统一点名一次。
+          if (eff.costumeSetId && !keySetIds.has(eff.costumeSetId) && !badBpSetId) {
+            badBpSetId = eff.costumeSetId;
+          }
+          costume = prevCostume;
+        }
+        const slots = eff.slotVariants;
+        const entry: Record<string, unknown> = { t: Math.max(0, (f - clip.startFrame) / projectFpsTop) };
+        if (costume !== undefined && costume !== prevCostume) entry.costume = costume;
+        const slotDiff: Record<string, string | null> = {};
+        for (const sk of new Set([...Object.keys(prevSlots), ...Object.keys(slots)])) {
+          if (slots[sk] === undefined) {
+            if (prevSlots[sk] !== undefined) slotDiff[sk] = null;
+          } else if (slots[sk] !== prevSlots[sk]) {
+            slotDiff[sk] = slots[sk]!;
+          }
+        }
+        if (Object.keys(slotDiff).length > 0) entry.slots = slotDiff;
+        if ('costume' in entry || 'slots' in entry) entries.push(entry);
+        prevCostume = costume;
+        prevSlots = slots;
+      }
+      return entries;
+    };
+    const clipsIn = opts?.clips ?? [];
+    for (const clip of clipsIn) {
+      const entries = sampleClipFx(clip);
+      stateBpFxByClip.set(clip.id, entries);
+      for (const e of entries) {
+        const slots = e.slots as Record<string, string | null> | undefined;
+        if (!slots) continue;
+        for (const [sk, v] of Object.entries(slots)) {
+          if (v === null) continue;
+          if (!stateBpVariantIds.has(sk)) stateBpVariantIds.set(sk, new Set());
+          stateBpVariantIds.get(sk)!.add(v);
+        }
+      }
+    }
+    if (badBpSetId) {
+      warnings.push(`角色「${character.name}」状态蓝图指向不存在的服装集 ${badBpSetId}，已忽略该切换`);
+    }
+    if (clipsIn.length === 0) {
+      // 无片段可承载：按轨道采样块的同一末帧推断口径采样
+      // [0, 末帧]，蓝图确有切换才点名（恒等于基线 = 无可见效果
+      // 丢失，不点名）
+      let maxFrame = Math.max(1, Math.round(opts?.totalFrames ?? 0));
+      if (!opts?.totalFrames) {
+        maxFrame = 1;
+        for (const n of Object.values(character.nodes)) {
+          for (const t of Object.values(n.tracks ?? {})) {
+            for (const kf of t?.keyframes ?? []) if (kf.frame > maxFrame) maxFrame = kf.frame;
+          }
+          for (const p of n.trajectory ?? []) if (p.frame > maxFrame) maxFrame = p.frame;
+        }
+      }
+      let differs = false;
+      for (let f = 0; f <= maxFrame && !differs; f++) {
+        const eff = resolveEffectiveCostumeState(character, f, projectFpsTop, undefined);
+        const costume = eff.costumeSetId ?? baseCostume;
+        if (costume !== undefined && validSets.has(costume) && costume !== baseCostume) differs = true;
+        else {
+          for (const sk of new Set([...Object.keys(baseSlots), ...Object.keys(eff.slotVariants)])) {
+            if (eff.slotVariants[sk] !== baseSlots[sk]) { differs = true; break; }
+          }
+        }
+      }
+      if (differs) {
+        warnings.push(`角色「${character.name}」状态蓝图的服装切换只在编辑器生效（无片段可承载），未进包`);
+      }
+    }
+  }
 
   // ---- 精灵堆叠：摞载荷（全量进包）+ 静止帧合成显示图 ----
   const stackPayloadOf = (piece: CostumePiece | undefined): RuntimeStackPayload | undefined => {
@@ -918,8 +1079,8 @@ export function convertCharacterToRuntimePackage(
     return { w: raster.width, h: raster.height, plug: [pivotX, res.pivotY], data, marks: st.marks };
   };
 
-  // ---- 部件：任一服装集里带 parametric 的槽位 ----
-  // 槽位键与换装同一口径（slot.slotKey ?? nodeId）：手建节点没有 slot
+  // ---- 部件：任一服装集里带 parametric 的服装槽 ----
+  // 服装槽键与换装同一口径（slot.slotKey ?? nodeId）：手建节点没有 slot
   // （slot 只由烘焙导入写入），其 pieces 以 nodeId 为键，必须能反查到节点。
   const slotNode = new Map<string, string>(); // slotKey → nodeId
   for (const node of Object.values(character.nodes)) {
@@ -935,7 +1096,7 @@ export function convertCharacterToRuntimePackage(
   for (const slotKey of parametricSlots) {
     const nodeId = slotNode.get(slotKey);
     const node = nodeId ? character.nodes[nodeId] : undefined;
-    if (!node) { warnings.push(`槽位 ${slotKey} 有参数化外观但无对应节点，已跳过`); continue; }
+    if (!node) { warnings.push(`服装槽 ${slotKey} 有参数化外观但无对应节点，已跳过`); continue; }
     const basePiece = (activeSet?.pieces[slotKey]?.parametric)
       ? activeSet.pieces[slotKey]
       : character.costumeSets.map((cs) => cs.pieces[slotKey]).find((p) => p?.parametric);
@@ -945,7 +1106,7 @@ export function convertCharacterToRuntimePackage(
     const pivot = pivotOf(node.id);
     const baseSprite = baseSpriteFor(baseApp, basePiece, character, slotKey, spriteTable, rootDir as DirectionIndex);
     if ((baseApp.composite ?? 'generate') !== 'generate' && !baseSprite) {
-      warnings.push(`槽位 ${slotKey} 合成方式为 ${baseApp.composite} 但东向无精灵，运行时按独立生成处理`);
+      warnings.push(`服装槽 ${slotKey} 合成方式为 ${baseApp.composite} 但东向无精灵，运行时按独立生成处理`);
     }
     const dyn = dynFor(...graphPatternLists(character, node, activeSet?.id), dynLib, warnings);
     parts.push({
@@ -954,13 +1115,13 @@ export function convertCharacterToRuntimePackage(
       drawLayer: node.drawLayer,
       costumeKeys: [slotKey],
       base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0, baseSprite,
-        expandPkg(baseApp.surfaceGraph, `子图（槽位 ${slotKey}）`)),
+        expandPkg(baseApp.surfaceGraph, `子图（服装槽 ${slotKey}）`)),
       variants: { [rootDir]: {} },
       dynamic: dyn,
       glow: glowEntryFor(character, slotKey, dyn, activeSet?.id, externalSprites, warnings),
     });
   }
-  // ---- 精灵部件：无参数化外观、但任一服装集里有东向精灵的槽位 ----
+  // ---- 精灵部件：无参数化外观、但任一服装集里有东向精灵的服装槽 ----
   const spriteSlots = new Set<string>();
   for (const cs of character.costumeSets) {
     for (const [slotKey, piece] of Object.entries(cs.pieces)) {
@@ -973,7 +1134,7 @@ export function convertCharacterToRuntimePackage(
   for (const slotKey of spriteSlots) {
     const nodeId = slotNode.get(slotKey);
     const node = nodeId ? character.nodes[nodeId] : undefined;
-    if (!node) { warnings.push(`槽位 ${slotKey} 有精灵但无对应节点，已跳过`); continue; }
+    if (!node) { warnings.push(`服装槽 ${slotKey} 有精灵但无对应节点，已跳过`); continue; }
     const sg = stackDisplayOf(activeSet?.pieces[slotKey], nodeId)
       ?? displaySpriteOf(activeSet?.pieces[slotKey], character, slotKey, spriteTable, false, rootDir as DirectionIndex)
       ?? character.costumeSets.map((cs) => stackDisplayOf(cs.pieces[slotKey], nodeId)
@@ -997,12 +1158,12 @@ export function convertCharacterToRuntimePackage(
       glow: glowEntryFor(character, slotKey, dyn, activeSet?.id, externalSprites, warnings),
     });
   }
-  // 动态效果孤儿：挂了动态但槽位既无参数化外观也无精灵 → 不在包内
+  // 动态效果孤儿：挂了动态但服装槽既无参数化外观也无精灵 → 不在包内
   for (const node of Object.values(character.nodes)) {
     const slotKey = node.slot?.slotKey ?? node.id;
     if (parametricSlots.has(slotKey) || spriteSlots.has(slotKey)) continue;
     const hasDyn = collectDesiredPatterns(character, node as never).length > 0;
-    if (hasDyn) warnings.push(`动态效果：槽位 ${slotKey} 既无参数化外观也无精灵，未进运行时包`);
+    if (hasDyn) warnings.push(`动态效果：服装槽 ${slotKey} 既无参数化外观也无精灵，未进运行时包`);
   }
   parts.sort((a, b) => a.sortOrder - b.sortOrder || a.key.localeCompare(b.key));
   // 像素链进包：从节点原始蓝图（normalize 之前）提取 screen 像素
@@ -1185,12 +1346,12 @@ export function convertCharacterToRuntimePackage(
     warnings.push('运行时绘制顺序按节点 zIndex 近似：角色的 directionDrawOrders 未进包（v1）');
   }
 
-  // ---- 服装：每集对每个参数化槽位给覆盖或 null ----
+  // ---- 服装：每集对每个参数化服装槽给覆盖或 null ----
   const costumes: ProcRuntimePackage['costumes'] = {};
   for (const cs of character.costumeSets) {
     const entry: { label: string; [k: string]: unknown } = { label: cs.name };
     const dynMap: Record<string, RuntimeDynamicInstance[]> = {};
-    const glowMap: Record<string, RuntimeGlowEntry> = {};
+    const glowMap: Record<string, RuntimeGlowEntry | null> = {};
     for (const slotKey of parametricSlots) {
       const piece = cs.pieces[slotKey];
       const app = piece?.parametric;
@@ -1198,36 +1359,48 @@ export function convertCharacterToRuntimePackage(
       const node = nodeId ? character.nodes[nodeId] : undefined;
       const dyn = dynFor(...graphPatternLists(character, node, cs.id), dynLib, warnings);
       if (dyn) dynMap[slotKey] = dyn;
+      // 「本集为空」显式标记（与参数化 entry=null 同先例）：该集解析为
+      // 空但默认集有内容时写空值，模板按「键存在」读标记、不回落默认
+      // 集；缺键才表示与默认集相同。动态写 []（模板 || 链下 [] 为真
+      // 值、原样返回），发光写 null（模板 glowEntryOf 按键存在判读）。
+      else if ((parts.find((p) => p.key === slotKey)?.dynamic?.length ?? 0) > 0) dynMap[slotKey] = [];
       const ge = cs.id === activeSet?.id
         ? parts.find((p) => p.key === slotKey)?.glow
         : glowEntryFor(character, slotKey, dyn, cs.id, externalSprites, warnings);
       if (ge) glowMap[slotKey] = ge;
+      else if (parts.find((p) => p.key === slotKey)?.glow) glowMap[slotKey] = null;
       if (!app) { entry[slotKey] = null; continue; }
       const w = nodeId ? worlds.get(nodeId) : undefined;
       const pivot = pivotOf(nodeId);
       entry[slotKey] = appearanceToBase(app, pivot, w?.worldAngle ?? 0, baseSpriteFor(app, piece, character, slotKey, spriteTable, rootDir as DirectionIndex),
-        expandPkg(app.surfaceGraph, `子图（槽位 ${slotKey}，服装集「${cs.name}」）`));
+        expandPkg(app.surfaceGraph, `子图（服装槽 ${slotKey}，服装集「${cs.name}」）`));
     }
     for (const slotKey of spriteSlots) {
       const nodeId = slotNode.get(slotKey);
       const node = nodeId ? character.nodes[nodeId] : undefined;
       const dyn = dynFor(...graphPatternLists(character, node, cs.id), dynLib, warnings);
       if (dyn) dynMap[slotKey] = dyn;
+      else if ((parts.find((p) => p.key === slotKey)?.dynamic?.length ?? 0) > 0) dynMap[slotKey] = [];
       const ge = cs.id === activeSet?.id
         ? parts.find((p) => p.key === slotKey)?.glow
         : glowEntryFor(character, slotKey, dyn, cs.id, externalSprites, warnings);
       if (ge) glowMap[slotKey] = ge;
+      else if (parts.find((p) => p.key === slotKey)?.glow) glowMap[slotKey] = null;
     }
     if (Object.keys(dynMap).length > 0) entry.__dynamic = dynMap;
     if (Object.keys(glowMap).length > 0) entry.__glow = glowMap;
-    // 精灵回落：该集该槽无参数化外观但有精灵 → 模板走直贴图（参数化
-    // 槽位的换装回落与纯精灵部件共用此表）
-    const spriteMap: Record<string, NonNullable<RuntimePartBase['baseSprite']>> = {};
+    // 精灵回落：该集该服装槽无参数化外观但有精灵 → 模板走直贴图（参数化
+    // 服装槽的换装回落与纯精灵部件共用此表）
+    const spriteMap: Record<string, NonNullable<RuntimePartBase['baseSprite']> | null> = {};
     for (const slotKey of new Set([...parametricSlots, ...spriteSlots])) {
       const piece = cs.pieces[slotKey];
       if (piece?.parametric) continue;
       const sg = stackDisplayOf(piece, slotNode.get(slotKey)) ?? displaySpriteOf(piece, character, slotKey, spriteTable, false, rootDir as DirectionIndex);
       if (sg) spriteMap[slotKey] = sg;
+      // 「本集为空」显式标记：非生效集该槽无显示图但默认集有图时写
+      // null，模板按「键存在」读标记置隐藏，不回落默认集的图（生效
+      // 集本身的图就是部件自带图，不需要标记）
+      else if (cs.id !== activeSet?.id && parts.find((p) => p.key === slotKey)?.sprite) spriteMap[slotKey] = null;
     }
     if (Object.keys(spriteMap).length > 0) entry.__sprite = spriteMap;
     // 堆叠旁表：该集此槽的摞与默认口径不同才收（同摞不重复进包）
@@ -1253,7 +1426,7 @@ export function convertCharacterToRuntimePackage(
   // ---- 裁剪面：node.clipPlane → part.clip ----
   // 数据口径：平面定义在锚点精灵图空间（相对图中心、x 右 y 下），
   // convert 只做角度/偏移 → (a, b, c) 的直译（保留 a·x+b·y+c >= 0
-  // 侧），逐帧位姿合成在模板侧。锚点不是部件槽位则点名丢弃。
+  // 侧），逐帧位姿合成在模板侧。锚点不是部件服装槽则点名丢弃。
   for (const part of parts) {
     const node = Object.values(character.nodes).find((n) => n.slot?.slotKey === part.key);
     const cp = node?.clipPlane;
@@ -1261,14 +1434,14 @@ export function convertCharacterToRuntimePackage(
     const anchorNode = character.nodes[cp.anchor];
     const anchorSlot = anchorNode?.slot?.slotKey;
     if (!anchorNode || !anchorSlot || !parts.some((p) => p.key === anchorSlot)) {
-      warnings.push(`裁剪面：节点 ${node.name} 的锚点 ${anchorNode?.name ?? cp.anchor} 不是部件槽位，裁剪未进包`);
+      warnings.push(`裁剪面：节点 ${node.name} 的锚点 ${anchorNode?.name ?? cp.anchor} 不是部件服装槽，裁剪未进包`);
       continue;
     }
     const rad = (cp.angleDeg ?? 0) * Math.PI / 180;
     part.clip = { by: anchorSlot, a: Math.cos(rad), b: Math.sin(rad), c: -(cp.offset ?? 0) };
   }
 
-  // ---- 网格蒙皮回填（缺口 4）：节点 attachment 指向的父槽位
+  // ---- 网格蒙皮回填（缺口 4）：节点 attachment 指向的父服装槽
   // skinning='mesh' → 部件带 skin（父部件键 + 半径/曲线 + plug 偏移）；
   // 运行时逐帧按子/父世界角差对当前瓦片做同编辑器公式的变形。 ----
   for (const part of parts) {
@@ -1290,7 +1463,7 @@ export function convertCharacterToRuntimePackage(
   // 逐个按与代表图同一解析链（变体直达→镜像→基础回落）解析成代表
   // 精灵进 part.altSprites；与基础解析同一张图的跳过。只取生效集的
   // 服装件（运行时覆盖叠在当前集之上，跨集+变体同时切换时变体图仍
-  // 取生效集件——近似，已知会点名在 AUDIT）。 ----
+  // 取生效集件——近似，真的发生跨集+变体同时切换时在下方点名）。 ----
   {
     const needed = new Map<string, Set<string>>();
     for (const c of opts?.clips ?? []) {
@@ -1302,7 +1475,20 @@ export function convertCharacterToRuntimePackage(
         }
       }
     }
+    // 状态蓝图采样引入的变体 id 同为替代图需求（第三层来源，
+    // 见函数前段 stateBpVariantIds 的收集）
+    for (const [slot, vids] of stateBpVariantIds) {
+      if (!needed.has(slot)) needed.set(slot, new Set());
+      for (const v of vids) needed.get(slot)!.add(v);
+    }
     if (needed.size > 0) {
+      // 跨集 + 变体同时切换真的存在时，近似必须让用户看见（点名）
+      const crossSetVariant = (opts?.clips ?? []).some((c) => (c.stateKeyframes ?? []).some((k) =>
+        !!k.costumeSetId && k.costumeSetId !== activeSet?.id
+        && Object.values(k.slotChanges ?? {}).some((v) => v !== null && v !== undefined)));
+      if (crossSetVariant) {
+        warnings.push('变体替代精灵：片段状态轨在切换服装集的同时修改服装槽变体，变体图仍按生效集的服装件解析（近似），跨集切换时的变体图可能与编辑器不一致');
+      }
       const dirOrder: DirectionIndex[] = [rootDir, ...([2, 0, 6, 4, 1, 3, 5, 7] as DirectionIndex[]).filter((d) => d !== rootDir)];
       const resolveWith = (piece: CostumePiece, variantId: string | undefined) => {
         for (const dir of dirOrder) {
@@ -1339,7 +1525,7 @@ export function convertCharacterToRuntimePackage(
     const n = character.nodes[nodeId];
     return n ? (n.slot?.slotKey ?? nodeId) : null;
   };
-  /** 刀光规格进包：锚点必须是包内真实部件（槽位键或节点 id 命中
+  /** 刀光规格进包：锚点必须是包内真实部件（服装槽键或节点 id 命中
    * 部件键），否则点名警告并丢弃——模板侧靠部件位姿定格刀光。 */
   const slashForPkg = (
     spec: import('../slash-fan').SlashFanSpec | undefined,
@@ -1409,7 +1595,10 @@ export function convertCharacterToRuntimePackage(
   // ---- 表演：逐个翻译 ----
   const performances: Array<Record<string, unknown>> = [];
   for (const perf of character.performances ?? []) {
-    if (!perf.enabled) continue;
+    if (!perf.enabled) {
+      warnings.push(`表演「${perf.name}」已禁用，未进包`);
+      continue;
+    }
     const mask: string[] = [];
     const graphNodes: RuntimeGraphNode[] = [];
     let gi = 0;
@@ -1433,10 +1622,23 @@ export function convertCharacterToRuntimePackage(
     }
     const afterSlot = perf.afterimageNodeId ? toSlot(perf.afterimageNodeId) : null;
     if (perf.afterimageNodeId && !afterSlot) {
-      warnings.push(`表演「${perf.name}」：残影部件 ${character.nodes[perf.afterimageNodeId]?.name ?? perf.afterimageNodeId} 解析不到槽位，残影未进包`);
+      warnings.push(`表演「${perf.name}」：残影部件 ${character.nodes[perf.afterimageNodeId]?.name ?? perf.afterimageNodeId} 解析不到服装槽，残影未进包`);
     }
     if (perf.slashDefId && !findSlashDef(character.slashDefs, perf.slashDefId)) {
       warnings.push(`刀光：表演「${perf.name}」引用的共享定义（${perf.slashDefId}）不存在，未进包`);
+    }
+    // 图内引用形态节点的悬空点名：字段为空时悬空只存在于图节点
+    // （__defId 指向不存在的定义，手改图/外部数据），resolvePerfSlash
+    // 对此静默返回无刀光——在此逐个候选点名，与字段悬空同口径。
+    {
+      const named = new Set<string>();
+      for (const cand of collectPerfSlashCandidates(perf)) {
+        if (!cand.refDefId || named.has(cand.refDefId)) continue;
+        named.add(cand.refDefId);
+        if (!findSlashDef(character.slashDefs, cand.refDefId)) {
+          warnings.push(`刀光：表演「${perf.name}」图内引用的共享定义（${cand.refDefId}）不存在，未进包`);
+        }
+      }
     }
     // 触发键映射：已知触发名走映射表、单字母 Key[A-Z] 直通，其余回落
     // KeyJ——回落是静默改键，必须点名（宿主 intent 仍按触发名可用，
@@ -1477,14 +1679,15 @@ export function convertCharacterToRuntimePackage(
   // 时长=窗长/帧率、循环标记随片段），供运行时状态机/宿主按名触发。
   {
     const POSE_CHANNELS = ['angle', 'tilt', 'x', 'y', 'stretch', 'scaleX', 'variantIndex'] as const;
+    // 轨迹同为姿态运动源（采样经 computeWorldTransforms 同源消费、
+    // 轨迹盖过轨道 x/y）：只带轨迹的节点也须开门，否则整个采样块
+    // 被跳过、轨迹进包静默丢失。
     const trackNodes = Object.values(character.nodes).filter((n) =>
-      n.tracks && POSE_CHANNELS.some((ch) => (n.tracks[ch]?.keyframes?.length ?? 0) > 0));
-    // ---- 片段级点名（缺口 5/6）：片段内的状态切换与特效数据不进包 ----
-    for (const c of opts?.clips ?? []) {
-    }
+      (n.tracks && POSE_CHANNELS.some((ch) => (n.tracks[ch]?.keyframes?.length ?? 0) > 0))
+      || (n.trajectory?.length ?? 0) > 0);
   // ---- 片段状态轨（缺口 6）：状态键 → 段表演内的定时状态切换 ----
   // 帧为工程绝对帧，换算为片段本地秒；窗外（起点之前）的键折叠到 0。
-  // costumeSetId 指向不存在的集时点名丢弃；slotChanges 原样带（槽位
+  // costumeSetId 指向不存在的集时点名丢弃；slotChanges 原样带（服装槽
   // 变体在运行时经 altSprites 解析，见 parts 组装后的回填）。
   // 片段级特效数据（缺口 5）：挂段表演 fx，键帧/笔触帧均为工程绝对帧，
   // 运行时以 clip.startFrame + 本地帧求值（与状态轨同一帧口径）。
@@ -1498,7 +1701,18 @@ export function convertCharacterToRuntimePackage(
   };
   const clipFxOf = (clip: AnimationClip) => {
     const fx: Record<string, unknown> = {};
-    if (clip.effectTracks?.length) fx.effectTracks = clip.effectTracks;
+    // 效果轨/笔触与画布轨同款兜底：旧工程迁移把工程级数据复制进
+    // 迁移片段（project-slice 载入迁移），片段级与工程级逐项全同
+    // 必是双写——入包会与工程级 fx 集同帧各画一遍。不入包并点名；
+    // 真不同的片段级数据是用户数据，照常入包。
+    if (clip.effectTracks?.length) {
+      const projFx = opts?.projectData?.effectTracks;
+      if (projFx?.length && stableFxKey(clip.effectTracks) === stableFxKey(projFx)) {
+        warnings.push(`片段「${clip.name}」效果轨与工程级逐项相同（旧迁移双写），未重复入包`);
+      } else {
+        fx.effectTracks = clip.effectTracks;
+      }
+    }
     if (clip.canvasModifierTracks?.length) {
       // 存量已迁移文件兜底：片段画布轨与工程级逐项全同时必是旧迁移
       // 双写（编辑器从来只显示工程级一份），入包会让段表演激活时叠
@@ -1510,11 +1724,30 @@ export function convertCharacterToRuntimePackage(
         fx.canvasTracks = clip.canvasModifierTracks;
       }
     }
-    if (clip.motionBlurStrokes?.length) fx.motionBlurStrokes = clip.motionBlurStrokes;
-    if (clip.effectStrokes?.length) fx.effectStrokes = clip.effectStrokes;
+    if (clip.motionBlurStrokes?.length) {
+      const projStrokes = opts?.projectData?.motionBlurStrokes;
+      if (projStrokes?.length && stableFxKey(clip.motionBlurStrokes) === stableFxKey(projStrokes)) {
+        warnings.push(`片段「${clip.name}」运动模糊笔触与工程级逐项相同（旧迁移双写），未重复入包`);
+      } else {
+        fx.motionBlurStrokes = clip.motionBlurStrokes;
+      }
+    }
+    if (clip.effectStrokes?.length) {
+      const projStrokes = opts?.projectData?.effectStrokes;
+      if (projStrokes?.length && stableFxKey(clip.effectStrokes) === stableFxKey(projStrokes)) {
+        warnings.push(`片段「${clip.name}」效果笔触与工程级逐项相同（旧迁移双写），未重复入包`);
+      } else {
+        fx.effectStrokes = clip.effectStrokes;
+      }
+    }
     return Object.keys(fx).length > 0 ? fx : undefined;
   };
   const stateFxOf = (clip: AnimationClip) => {
+    // 状态蓝图存在时，该片段的 stateFx 已由函数前段逐帧采样三层
+    // 合成结果给出（stateBpFxByClip），与第二层单独折条互斥，
+    // 避免同一切换进两份条目
+    const bpFx = stateBpFxByClip.get(clip.id);
+    if (bpFx) return bpFx.length > 0 ? bpFx : undefined;
     const keys = [...(clip.stateKeyframes ?? [])].sort((a, b) => a.frame - b.frame);
     if (keys.length === 0) return undefined;
     const fx: Array<Record<string, unknown>> = [];
@@ -1847,7 +2080,12 @@ export function convertCharacterToRuntimePackage(
           const arr = samples.get(node.id);
           if (!slot || !arr || arr.length === 0) continue;
           if (!partKeys.has(slot)) {
-            if (warnNodes && trackNodes.includes(node)) warnings.push(`轨道：节点 ${node.name} 不在运行时部件内，其轨道未进包`);
+            if (warnNodes && trackNodes.includes(node)) {
+              const hasTraj = (node.trajectory?.length ?? 0) > 0;
+              const hasTracks = POSE_CHANNELS.some((ch) => (node.tracks?.[ch]?.keyframes?.length ?? 0) > 0);
+              const what = hasTraj && hasTracks ? '轨道与轨迹' : hasTraj ? '轨迹' : '轨道';
+              warnings.push(`轨道：节点 ${node.name} 不在运行时部件内，其${what}未进包`);
+            }
             continue;
           }
           const base = arr[0];
@@ -1881,7 +2119,10 @@ export function convertCharacterToRuntimePackage(
             mask.push(slot);
             graphNodes.push(...nodes);
           } else if (warnNodes && trackNodes.includes(node)) {
-            warnings.push(`轨道：节点 ${node.name} 的轨道采样后无姿态贡献（与静态姿态无差异或仅有不支持通道）`);
+            const hasTraj = (node.trajectory?.length ?? 0) > 0;
+            const hasTracks = POSE_CHANNELS.some((ch) => (node.tracks?.[ch]?.keyframes?.length ?? 0) > 0);
+            const what = hasTraj && hasTracks ? '轨道与轨迹' : hasTraj ? '轨迹' : '轨道';
+            warnings.push(`轨道：节点 ${node.name} 的${what}采样后无姿态贡献（与静态姿态无差异${hasTracks ? '或仅有不支持通道' : ''}）`);
           }
         }
         return { graphNodes, mask };
@@ -2055,6 +2296,7 @@ export function convertCharacterToRuntimePackage(
           for (const t of Object.values(n.tracks)) {
             for (const kf of t?.keyframes ?? []) if (kf.frame > totalFrames) totalFrames = kf.frame;
           }
+          for (const p of n.trajectory ?? []) if (p.frame > totalFrames) totalFrames = p.frame;
         }
       }
       const fullSamples = sampleWindow(0, totalFrames);
@@ -2275,12 +2517,12 @@ export function convertCharacterToRuntimePackage(
     }
   }
 
-  // ---- 堆叠进包口径点名（逐槽：层变换已烘 / 仅静止图回落） ----
+  // ---- 堆叠进包口径点名（逐服装槽：层变换已烘 / 仅静止图回落） ----
   for (const slot of stackPartSlots) {
     if (stackBakedSlots.has(slot)) {
-      warnings.push(`精灵堆叠：槽位 ${slot} 的摞已全量进包（part.stack）；轨道/片段动画的层变换已逐帧烘焙（stackFrames），播放器在这些表演主导时逐层真合成；行为图等其他位姿来源下仍显示第 0 帧静止合成图`);
+      warnings.push(`精灵堆叠：服装槽 ${slot} 的摞已全量进包（part.stack）；轨道/片段动画的层变换已逐帧烘焙（stackFrames），播放器在这些表演主导时逐层真合成；行为图等其他位姿来源下仍显示第 0 帧静止合成图`);
     } else {
-      warnings.push(`精灵堆叠：槽位 ${slot} 的摞已全量进包（part.stack）；播放器位姿为 2D，显示图按第 0 帧静止朝向合成，逐帧 3D 合成不在包内`);
+      warnings.push(`精灵堆叠：服装槽 ${slot} 的摞已全量进包（part.stack）；播放器位姿为 2D，显示图按第 0 帧静止朝向合成，逐帧 3D 合成不在包内`);
     }
   }
 
@@ -2312,10 +2554,10 @@ export function convertCharacterToRuntimePackage(
   // 通道：nodeId 条目直达其节点；只有 spriteId 的条目按挂载关系落
   // 到挂着这个精灵的节点上（精灵目标自动对挂载节点生效，与编辑器
   // 按当前解析精灵逐帧匹配同一裁定）。挂载集合用与瓦片解析同一套
-  // resolvePieceSprite 收集：每个节点在其槽位件上、跨全部服装集与
+  // resolvePieceSprite 收集：每个节点在其服装槽件上、跨全部服装集与
   // 8 个方向能解析出的精灵 id，并含堆叠件的层图 id（堆叠节点在编
   // 辑器里以中间层图为解析精灵）。已知口径差：编辑器按当前方向的
-  // 解析精灵逐帧精确匹配，包内在导出时解析到槽位、该槽位所有方向
+  // 解析精灵逐帧精确匹配，包内在导出时解析到服装槽、该服装槽所有方向
   // 都生效——单方向工程两者一致，多方向且同节点不同方向挂不同精
   // 灵时包内宽于编辑器，本次不改包格式处理这一层。 ----
   const procedural: NonNullable<ProcRuntimePackage['procedural']> = [];

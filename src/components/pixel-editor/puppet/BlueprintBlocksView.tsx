@@ -2,7 +2,7 @@
 
 // ============================================================
 // BlueprintBlocksView — Scratch 风格积木
-// - 拖入槽位的是整个块（递归嵌套），不是名字
+// - 拖入输入口的是整个块（递归嵌套），不是名字
 // - 块文本描述性，输入内联
 // ============================================================
 
@@ -223,7 +223,7 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
               />
             );
           }
-          // 输入槽：已连接则递归渲染源块，否则显示可直接输入数字的槽
+          // 输入口：已连接则递归渲染源块，否则显示可直接输入数字的输入框
           const input = node.inputs[port];
           const srcId = typeof input === 'object' && input !== null && 'nodeId' in input ? (input as any).nodeId : null;
           const srcNode = srcId ? nodeMap.get(srcId) : null;
@@ -298,7 +298,7 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
       </span>
     );
 
-    // 模板中未提及的输入槽（如下 t），单独列出
+    // 模板中未提及的输入口（如下 t），单独列出
     const templatePorts = new Set(
       [...template.matchAll(/\{(\w+)\}/g)].map((m) => m[1])
     );
@@ -420,7 +420,7 @@ export default function BlueprintBlocksView({ graph, onChange }: BlueprintBlocks
     <div className="max-h-[400px] overflow-y-auto pr-1 py-1">
       {selectedSrcId && (
         <div className="sticky top-0 z-10 bg-amber-500/20 border border-amber-500/50 rounded px-2 py-1 mb-1 text-[10px] text-amber-200 flex items-center justify-between">
-          <span>已选中块，点击槽位连接</span>
+          <span>已选中块，点击要连接的输入口</span>
           <button onClick={() => setSelectedSrcId(null)}><X className="size-3" /></button>
         </div>
       )}

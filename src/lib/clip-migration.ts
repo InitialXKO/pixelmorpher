@@ -11,7 +11,7 @@
 // 2) 时间窗：startFrame/endFrame/loop 缺失时由旧 totalFrames（无则工程
 //    总帧数）换算成 [0, totalFrames-1]；旧 frameRate/totalFrames 字段删除
 //    （片段不自带帧率，时长换算只在导出时按工程帧率做一次）。
-// 3) 关键帧迁轨：旧 nodeKeyframes 里只有三类数据是活的——每帧修饰器组
+// 3) 关键帧迁轨：旧 nodeKeyframes 里只有三类数据是活的——每帧修改器组
 //    （按参数在帧间插值）、转面 yaw/pitch、图层 zIndex。它们迁入所属节点
 //    的轨道附件轨：modifierKeys / faceTurnKeys / zIndex。姿态值（角度/位移
 //    等）不迁：渲染从未读过片段里的姿态，姿态一直在 node.tracks 里。

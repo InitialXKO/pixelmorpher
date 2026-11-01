@@ -64,11 +64,11 @@ export default function DynamicPatternEditor({
   instances: DynamicPatternInstance[];
   onChange: (next: DynamicPatternInstance[]) => void;
   hint?: string;
-  /** 当前槽位的代表图（发光段取色/手动标记用；无图时这两项不可用） */
+  /** 当前服装槽的代表图（发光段取色/手动标记用；无图时这两项不可用） */
   previewGrid?: PixelGrid | null;
-  /** 当前槽位代表精灵的标记（发光段「精灵选区标记」来源预览用） */
+  /** 当前服装槽代表精灵的标记（发光段「精灵选区标记」来源预览用） */
   previewMarks?: import('@/lib/unified-types').SpriteMark[];
-  /** 追随段可选的源部件（槽位键 + 显示名）；缺省时源部件退化为文本输入 */
+  /** 追随段可选的源部件（服装槽键 + 显示名）；缺省时源部件退化为文本输入 */
   followSourceOptions?: { key: string; label: string }[];
   /** 双挂载解析后的发光组序（实例 id → 0 起序数）：判「超过第 3 个」用；
    *  挂载方按当前服装集解析传入，缺省按本列表顺序自算 */
@@ -414,7 +414,7 @@ export default function DynamicPatternEditor({
                       value={np(inst).followSource}
                       onChange={(e) => patchParam(inst.id, 'followSource', e.target.value)}
                       className={`${numCls} flex-1 rounded px-1`}
-                      placeholder="源部件槽位键"
+                      placeholder="源部件服装槽键"
                     />
                   )}
                   <label className="flex items-center gap-1 text-[9px] text-gray-500 shrink-0" title="连源部件的旋转滞后一起跟">
@@ -785,7 +785,7 @@ export default function DynamicPatternEditor({
 }
 
 /**
- * 发光选区面板：在槽位代表图上取色（点中哪个颜色就选哪种颜色的全部像素）
+ * 发光选区面板：在服装槽代表图上取色（点中哪个颜色就选哪种颜色的全部像素）
  * 或手动标记（按住拖动刷选区，再点已选格起拖 = 擦除）。选区与渲染同口径：
  * 取色高亮 = glowMaskCells 的实际选区，标记直接存位打包掩码。
  */
@@ -943,7 +943,7 @@ function GlowSelectionPanel({
           </p>
         </>
       ) : (
-        <p className="text-[9px] text-gray-600">当前槽位没有可用的代表图 — 先给这个槽位配上精灵或参数化外观，才能取色/标记。</p>
+        <p className="text-[9px] text-gray-600">当前服装槽没有可用的代表图 — 先给这个服装槽配上精灵或参数化外观，才能取色/标记。</p>
       )}
     </div>
   );

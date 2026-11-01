@@ -25,14 +25,15 @@ import {
   rasterTextPop,
   textPopEnvelope,
 } from '../text-pop';
+import { colorEffectParam, numEffectParam } from '../effect-track-params';
 
 export function getTranslateOffset(modifiers: ModifierInstance[]): { x: number; y: number } {
   let x = 0;
   let y = 0;
   for (const mod of modifiers) {
     if (!mod.enabled || mod.type !== 'translate') continue;
-    x += Number(mod.params.offsetX) || 0;
-    y += Number(mod.params.offsetY) || 0;
+    x += numEffectParam(mod.params, 'offsetX', 0);
+    y += numEffectParam(mod.params, 'offsetY', 0);
   }
   return { x, y };
 }
@@ -115,9 +116,9 @@ export function renderGlowEffect(
   mod: ModifierInstance,
   partCanvas: HTMLCanvasElement,
 ): void {
-  const radius = Number(mod.params.radius) || 3;
+  const radius = numEffectParam(mod.params, 'radius', 3);
   const color = String(mod.params.color) || '#ffff00';
-  const intensity = Number(mod.params.intensity) || 0.5;
+  const intensity = numEffectParam(mod.params, 'intensity', 0.5);
 
   const padding = radius * 2;
   const glowW = partCanvas.width + padding * 2;
@@ -164,11 +165,11 @@ export function renderParticleEffect(
   mod: ModifierInstance,
   currentFrame: number,
 ): void {
-  const rate = Number(mod.params.rate) || 10;
-  const speed = Number(mod.params.speed) || 2;
-  const life = Number(mod.params.life) || 10;
+  const rate = numEffectParam(mod.params, 'rate', 10);
+  const speed = numEffectParam(mod.params, 'speed', 2);
+  const life = numEffectParam(mod.params, 'life', 10);
   const color = String(mod.params.color) || '#ff8800';
-  const gravity = Number(mod.params.gravity) || 0.5;
+  const gravity = numEffectParam(mod.params, 'gravity', 0.5);
 
   const [r, g, b] = hexToRgb(color);
   const baseSeed = hashString(nodeId);
@@ -226,9 +227,9 @@ export function renderAfterimageEffect(
   modifiers: ModifierInstance[],
   partCanvas: HTMLCanvasElement,
 ): void {
-  const count = Number(mod.params.count) || 3;
-  const opacity = Number(mod.params.opacity) || 0.3;
-  const spacing = Number(mod.params.spacing) || 5;
+  const count = numEffectParam(mod.params, 'count', 3);
+  const opacity = numEffectParam(mod.params, 'opacity', 0.3);
+  const spacing = numEffectParam(mod.params, 'spacing', 5);
 
   // Get movement direction from translate modifier
   const { x: dx, y: dy } = getTranslateOffset(modifiers);
@@ -318,8 +319,8 @@ export function renderMotionBlurEffect(
   modifiers: ModifierInstance[],
   partCanvas: HTMLCanvasElement,
 ): void {
-  const length = Number(mod.params.length) || 5;
-  const decay = Number(mod.params.decay) || 0.5;
+  const length = numEffectParam(mod.params, 'length', 5);
+  const decay = numEffectParam(mod.params, 'decay', 0.5);
   const edgesOnly = Boolean(mod.params.edgesOnly);
 
   // Get movement direction from translate modifier
@@ -392,10 +393,10 @@ export function computePhysicsOffset(
   for (const mod of modifiers) {
     if (!mod.enabled || mod.type !== 'simple_physics') continue;
 
-    // M20: Number(undefined) 是 NaN 而非 nullish，?? 永不触发；用 || 做 fallback
-    const gravityAngle = Number(mod.params.gravity) || 90;
-    const elasticity = Number(mod.params.elasticity) || 0.5;
-    const damping = Number(mod.params.damping) || 0.9;
+    // 参数读数与包内 fxNum 同口径（numEffectParam）：仅 undefined/null/非有限回落缺省，0 是合法值不得被 || 吞掉
+    const gravityAngle = numEffectParam(mod.params, 'gravity', 90);
+    const elasticity = numEffectParam(mod.params, 'elasticity', 0.5);
+    const damping = numEffectParam(mod.params, 'damping', 0.9);
 
     // Gravity direction: 0° = right, 90° = down
     const rad = (gravityAngle * Math.PI) / 180;
@@ -654,10 +655,10 @@ export function renderEffectTrackFrame(
 
   switch (effectTrack.type) {
     case 'glow': {
-      // Global glow overlay
-      const radius = Number(params.radius) || 3;
-      const color = String(params.color) || '#ffff00';
-      const intensity = Number(params.intensity) || 0.5;
+      // Global glow overlay（参数读法与包内 num() 同口径：0 原样生效）
+      const radius = numEffectParam(params, 'radius', 3);
+      const color = colorEffectParam(params, 'color', '#ffff00');
+      const intensity = numEffectParam(params, 'intensity', 0.5);
       const [r, g, b] = hexToRgb(color);
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = intensity * 0.3;
@@ -675,12 +676,12 @@ export function renderEffectTrackFrame(
       break;
     }
     case 'particle': {
-      // Global particle emission from center
-      const rate = Number(params.rate) || 10;
-      const speed = Number(params.speed) || 2;
-      const life = Number(params.life) || 10;
-      const color = String(params.color) || '#ff8800';
-      const gravity = Number(params.gravity) || 0.5;
+      // Global particle emission from center（读法同包内 num() 口径）
+      const rate = numEffectParam(params, 'rate', 10);
+      const speed = numEffectParam(params, 'speed', 2);
+      const life = numEffectParam(params, 'life', 10);
+      const color = colorEffectParam(params, 'color', '#ff8800');
+      const gravity = numEffectParam(params, 'gravity', 0.5);
       const [r, g, b] = hexToRgb(color);
       const cx = _canvasWidth / 2;
       const cy = _canvasHeight / 2;
@@ -709,9 +710,9 @@ export function renderEffectTrackFrame(
     }
     case 'afterimage': {
       // Global afterimage is handled at the part level; this is a subtle overlay
-      const count = Number(params.count) || 3;
-      const opacity = Number(params.opacity) || 0.3;
-      const spacing = Number(params.spacing) || 5;
+      const count = numEffectParam(params, 'count', 3);
+      const opacity = numEffectParam(params, 'opacity', 0.3);
+      const spacing = numEffectParam(params, 'spacing', 5);
       ctx.globalAlpha = opacity * 0.15;
       ctx.fillStyle = 'rgba(128, 0, 255, 0.1)';
       for (let i = 1; i <= count; i++) {
@@ -721,8 +722,8 @@ export function renderEffectTrackFrame(
     }
     case 'pixel_displace': {
       // Global pixel displacement - slight wave effect
-      const intensity = Number(params.intensity) || 2;
-      const frequency = Number(params.frequency) || 0.1;
+      const intensity = numEffectParam(params, 'intensity', 2);
+      const frequency = numEffectParam(params, 'frequency', 0.1);
       const timeOffset = currentFrame * frequency * Math.PI * 2;
       ctx.globalAlpha = 0.2;
       ctx.fillStyle = 'rgba(100, 255, 200, 0.05)';
@@ -734,8 +735,8 @@ export function renderEffectTrackFrame(
     }
     case 'motion_blur': {
       // Global motion blur overlay
-      const length = Number(params.length) || 5;
-      const decay = Number(params.decay) || 0.5;
+      const length = numEffectParam(params, 'length', 5);
+      const decay = numEffectParam(params, 'decay', 0.5);
       ctx.globalAlpha = 0.08;
       ctx.fillStyle = 'rgba(200, 200, 255, 0.1)';
       for (let i = 1; i <= length; i++) {

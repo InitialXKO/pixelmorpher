@@ -96,7 +96,9 @@ function SocketCard({ socket, onChange, onRemove, selectedDirection, disabled }:
 
   const handleDirOffsetChange = useCallback(
     (dir: DirectionIndex, axis: 'x' | 'y', value: string) => {
-      const existing = offsets[dir] ?? { x: 0, y: 0 };
+      // 无覆盖时以基准位置为种子（与 handleDirClick 同口径）：首次编辑
+      // 不得把生效偏移从 base 静默跳成 0（审计 F-21/E1）
+      const existing = offsets[dir] ?? { x: socket.x, y: socket.y };
       const newOffset = { ...existing, [axis]: Number(value) || 0 };
       onChange({
         directionOffsets: {
@@ -127,11 +129,13 @@ function SocketCard({ socket, onChange, onRemove, selectedDirection, disabled }:
         return;
       }
       // If no override exists yet, create one seeded from base position
+      // （种子必须等于当前生效偏移：directionOffsets 条目一存在即压过
+      // basePosition，写 {0,0} 会让「仅点开查看」就把子节点移位，审计 F-21/E1）
       if (!offsets[dir]) {
         onChange({
           directionOffsets: {
             ...offsets,
-            [dir]: { x: 0, y: 0 },
+            [dir]: { x: socket.x, y: socket.y },
           },
         });
       }
@@ -189,7 +193,8 @@ function SocketCard({ socket, onChange, onRemove, selectedDirection, disabled }:
           value={socket.x}
           onChange={(e) => handleBaseXChange(e.target.value)}
           className="h-4 text-[8px] bg-[#080818] border-[#1e1e3a] w-12"
-          disabled={disabled}
+          disabled={disabled || !!socket.offset3D}
+          title={socket.offset3D ? '3D 偏移生效中，基准位置不生效' : undefined}
         />
         <Label className="text-[8px] text-gray-600 w-4">Y</Label>
         <Input
@@ -197,8 +202,12 @@ function SocketCard({ socket, onChange, onRemove, selectedDirection, disabled }:
           value={socket.y}
           onChange={(e) => handleBaseYChange(e.target.value)}
           className="h-4 text-[8px] bg-[#080818] border-[#1e1e3a] w-12"
-          disabled={disabled}
+          disabled={disabled || !!socket.offset3D}
+          title={socket.offset3D ? '3D 偏移生效中，基准位置不生效' : undefined}
         />
+        {socket.offset3D && (
+          <span className="text-[8px] text-cyan-500/80">3D 生效中，不生效</span>
+        )}
       </div>
 
       {/* ---- 3D offset ---- */}
@@ -317,7 +326,7 @@ function SocketCard({ socket, onChange, onRemove, selectedDirection, disabled }:
                 <Label className="text-[8px] text-gray-600 w-4">X</Label>
                 <Input
                   type="number"
-                  value={offsets[editingDir]?.x ?? 0}
+                  value={offsets[editingDir]?.x ?? socket.x}
                   onChange={(e) => handleDirOffsetChange(editingDir, 'x', e.target.value)}
                   className="h-4 text-[8px] bg-[#0d0d1a] border-[#1e1e3a] w-12"
                   disabled={disabled}
@@ -325,7 +334,7 @@ function SocketCard({ socket, onChange, onRemove, selectedDirection, disabled }:
                 <Label className="text-[8px] text-gray-600 w-4">Y</Label>
                 <Input
                   type="number"
-                  value={offsets[editingDir]?.y ?? 0}
+                  value={offsets[editingDir]?.y ?? socket.y}
                   onChange={(e) => handleDirOffsetChange(editingDir, 'y', e.target.value)}
                   className="h-4 text-[8px] bg-[#0d0d1a] border-[#1e1e3a] w-12"
                   disabled={disabled}

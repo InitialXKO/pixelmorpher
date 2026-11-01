@@ -43,6 +43,13 @@ export interface RenderContext {
 // 1. Grid overlay
 // ============================================================
 
+/** 网格透明度：随缩放单调淡入——zoom 4 起步为 0、8 及以上为 1。
+ * 旧公式 (zoom-6)/4 在显示门（zoom≥4）内 [4,6) 段为负，globalAlpha
+ * 负值被画布忽略、实际满格显示，且 6 处从 0 重来，非单调（审计域2）。 */
+export function gridAlphaForZoom(zoom: number): number {
+  return Math.max(0, Math.min(1, (zoom - 4) / 4));
+}
+
 export function renderGridOverlay(rc: RenderContext) {
   const { ctx, canvasWidth, canvasHeight, zoom, panX, panY } = rc;
   if (zoom < 4) return;
@@ -50,7 +57,7 @@ export function renderGridOverlay(rc: RenderContext) {
   ctx.save();
   ctx.strokeStyle = '#333333';
   ctx.lineWidth = 1;
-  ctx.globalAlpha = Math.min(1, (zoom - 6) / 4);
+  ctx.globalAlpha = gridAlphaForZoom(zoom);
 
   const startX = panX;
   const startY = panY;

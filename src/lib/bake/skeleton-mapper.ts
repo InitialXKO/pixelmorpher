@@ -702,13 +702,36 @@ export function mapBonesToNodes(
         };
       }
     }
-    // 2D directionOffsets 置零（3D 管线用 offset3D，2D 回退时用零值）
-    for (const pdir of parentPb.directions) {
-      const d = pdir.direction;
-      const off = { x: 0, y: 0 };
-      if (d === 0) socket.basePosition = off;
-      socket.directionOffsets[d] = off;
+    // 2D 偏移按全帧关节差逐方向计算（子关节 − 父关节，全局像素口径：
+    // jointX × cameraHalf 统一跨部件尺度，与裁剪框无关；SubPixel 存储）。
+    // offset3D 存在时渲染走 3D 分层、这些值不参与；joint3D 缺失的骨骼
+    // 数据靠它们对位——此前一律写零，子节点会塌到父关节（审计 F-34/D11）。
+    const offsetFor = (d: DirectionIndex): { x: number; y: number } | null => {
+      const pdir = parentPb.directions.find((pd) => pd.direction === d && (pd.latitude ?? 0) === 0)
+        ?? parentPb.directions.find((pd) => pd.direction === d);
+      if (!pdir) return null;
+      const cdir = pb.directions.find((cd) => cd.direction === d && (cd.latitude ?? 0) === (pdir.latitude ?? 0))
+        ?? pb.directions.find((cd) => cd.direction === d && (cd.latitude ?? 0) === 0)
+        ?? pb.directions.find((cd) => cd.direction === d);
+      if (!cdir) return null;
+      return {
+        x: pxToSub(cdir.jointX * cdir.cameraHalf - pdir.jointX * pdir.cameraHalf),
+        y: pxToSub(cdir.jointY * cdir.cameraHalf - pdir.jointY * pdir.cameraHalf),
+      };
+    };
+    const allDirs = new Set<DirectionIndex>([
+      ...parentPb.directions.map((pd) => pd.direction),
+      ...pb.directions.map((cd) => cd.direction),
+    ]);
+    for (const d of allDirs) {
+      const off = offsetFor(d);
+      if (off) socket.directionOffsets[d] = off;
     }
+    // 基准位置 = 规范方向（6 南）的偏移，缺失时退任意已算方向，再缺失为零
+    socket.basePosition = socket.directionOffsets[6]
+      ?? socket.directionOffsets[0]
+      ?? Object.values(socket.directionOffsets)[0]
+      ?? { x: 0, y: 0 };
     parentNode.sockets.push(socket);
   }
 

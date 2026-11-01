@@ -8,7 +8,8 @@ import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-util
 import type { RenderContext } from './canvas-render-helpers';
 import type { Character, Node } from '@/lib/unified-types';
 import { pxToSub, subToPx, projectToView, rotateInViewPlane, resolveChainTarget3D, applyFrameRotation } from '@/lib/unified-types';
-import { computeWorldTransforms, socketOffsetTo3D, geometryDirectionFromToggle, resolveNodeSpriteId, clampAnchorPoints } from '@/lib/unified-render';
+import { socketOffsetTo3D, geometryDirectionFromToggle, resolveNodeSpriteId, clampAnchorPoints } from '@/lib/unified-render';
+import { computeEditorWorldTransforms } from '@/lib/editor-world-transforms';
 import { peekClampFrozen } from '@/lib/clamp-session';
 import { useProjectStore, useEditorStore } from '@/lib/store';
 import { DEFAULT_FACE_FEATURES, faceFeaturePoints, faceHalfWidths } from '@/lib/face-features';
@@ -39,7 +40,7 @@ export function renderIKTargetHandles(
   if (!chains || chains.length === 0) return;
   const { ctx, zoom, panX, panY } = rc;
   const geoDir = geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D);
-  const worldTransforms = computeWorldTransforms(character, rc.currentFrame, rc.canvasWidth, rc.canvasHeight, undefined, undefined, undefined, undefined, geoDir);
+  const worldTransforms = computeEditorWorldTransforms(character, rc.currentFrame, { canvasWidth: rc.canvasWidth, canvasHeight: rc.canvasHeight, geometryDirection: geoDir });
   ctx.save();
   for (const chain of chains) {
     // 填充/解析按链根关节朝向（target 是该朝向画布平面上的点）；手柄绘制仍按末关节朝向投影
@@ -83,7 +84,7 @@ export function renderClampAnchorGizmos(
   if (!anchors || anchors.length === 0) return;
   const { ctx, zoom, panX, panY } = rc;
   const geoDir = geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D);
-  const worldTransforms = computeWorldTransforms(character, rc.currentFrame, rc.canvasWidth, rc.canvasHeight, undefined, undefined, undefined, undefined, geoDir);
+  const worldTransforms = computeEditorWorldTransforms(character, rc.currentFrame, { canvasWidth: rc.canvasWidth, canvasHeight: rc.canvasHeight, geometryDirection: geoDir });
   const rootDir = geoDir ?? worldTransforms.get(character.rootNodeId)?.variantIndex ?? 6;
   const sprites = useProjectStore.getState().sprites ?? {};
   const frozen = peekClampFrozen(character.id);
@@ -167,7 +168,7 @@ export function renderClipHitboxes(
   if (!shapes || shapes.length === 0) return;
   const { ctx, zoom, panX, panY } = rc;
   const geoDir = geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D);
-  const worldTransforms = computeWorldTransforms(character, rc.currentFrame, rc.canvasWidth, rc.canvasHeight, undefined, undefined, undefined, undefined, geoDir);
+  const worldTransforms = computeEditorWorldTransforms(character, rc.currentFrame, { canvasWidth: rc.canvasWidth, canvasHeight: rc.canvasHeight, geometryDirection: geoDir });
   const rootWt = worldTransforms.get(character.rootNodeId);
   if (!rootWt) return;
   const rootDir = geoDir ?? rootWt.variantIndex ?? 6;
@@ -242,7 +243,7 @@ export function renderFaceGuideOverlay(
   if (!node || (!node.faceFeatures && !node.faceTurn)) return;
   const { ctx, zoom, panX, panY } = rc;
   const geoDir = geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D);
-  const worldTransforms = computeWorldTransforms(character, rc.currentFrame, rc.canvasWidth, rc.canvasHeight, undefined, undefined, undefined, undefined, geoDir);
+  const worldTransforms = computeEditorWorldTransforms(character, rc.currentFrame, { canvasWidth: rc.canvasWidth, canvasHeight: rc.canvasHeight, geometryDirection: geoDir });
   const wt = worldTransforms.get(nodeId);
   if (!wt) return;
   const rootNode = character.nodes[character.rootNodeId];
@@ -325,9 +326,9 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
     }
 
     // Compute world positions recursively (SubPixel units throughout;
-    // 直接复用主渲染的 computeWorldTransforms，保证与主画布完全一致（不再重复造轮子）
+    // 经共用 helper 按主画布同一上下文构造（钳制/模拟/程序化增量齐全），与出图一致
     // 主渲染：3D 世界坐标（原点中心）→ generateRenderPlan 投影到 2D（+画布中心）
-    const worldTransforms = computeWorldTransforms(character, currentFrame, canvasWidth, canvasHeight, undefined, undefined, undefined, undefined, geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D));
+    const worldTransforms = computeEditorWorldTransforms(character, currentFrame, { canvasWidth, canvasHeight, geometryDirection: geometryDirectionFromToggle(useEditorStore.getState().nodeTurn3D) });
     const worldPositions = new Map<string, { x: number; y: number; angle: number }>();
     const centerX = pxToSub(canvasWidth / 2);
     const centerY = pxToSub(canvasHeight / 2);
@@ -355,8 +356,8 @@ export function renderPuppetSkeletonOverlay(rc: RenderContext, params: PuppetSke
       const socket = parentNode?.sockets.find(s => s.id === parentInfo.socketId);
       if (!socket || !parentNode) continue;
 
-      // 插槽点：与渲染器同一口径——socketOffsetTo3D → 视平面旋转 → 投影 + 画布中心
-      // （此前：2D directionOffsets 自算，不认 offset3D，3D 角色下插槽点塌到父节点）
+      // 槽位点：与渲染器同一口径——socketOffsetTo3D → 视平面旋转 → 投影 + 画布中心
+      // （此前：2D directionOffsets 自算，不认 offset3D，3D 角色下槽位点塌到父节点）
       const parentWt = worldTransforms.get(parentInfo.parentId)!; // 与 parentPos 同源，必有
       const s3 = socketOffsetTo3D(socket, parentWt.variantIndex);
       const rotSock = rotateInViewPlane(s3.x, s3.y, s3.z, parentWt.worldAngle, parentWt.variantIndex);

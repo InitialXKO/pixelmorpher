@@ -55,17 +55,19 @@ export const createGlobalModifierSlice: StateCreator<ProjectStore, [], [], Globa
       blendMode: 'add',
     };
 
-    set((s) => ({
-      globalModifiers: [...(s.globalModifiers || []), modifier],
-    }));
+    // 先在本地拼好新列表、一次写入：set 之后再 get() 读到的是已含
+    // 新修改器的列表，蓝图为空分支若在该列表上再追加一遍 modifier，
+    // 新修改器会被计两遍（蓝图里双节点）。本地拼装保证列表与蓝图
+    // 构建吃同一份数据。
+    const nextModifiers = [...(get().globalModifiers || []), modifier];
+    set({ globalModifiers: nextModifiers });
 
     // 手术式同步蓝图
-    const st = get();
     try {
-      const bp = st.globalBlueprint;
+      const bp = get().globalBlueprint;
       const newBp = bp
         ? addModifierNodeToBlueprint(bp, modifier as any)
-        : modifiersToBlueprint([...(st.globalModifiers || []), modifier] as any);
+        : modifiersToBlueprint(nextModifiers as any);
       if (newBp) set({ globalBlueprint: newBp });
     } catch {}
 

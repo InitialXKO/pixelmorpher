@@ -2,7 +2,7 @@
 
 // ============================================================
 // BlueprintTemplateLoader — 蓝图模板加载器
-// 列出可用模板，让用户把槽位映射到实际节点，一键应用
+// 列出可用模板，让用户把模板占位映射到实际节点，一键应用
 // ============================================================
 
 import React, { useState } from 'react';
@@ -126,13 +126,13 @@ export default function BlueprintTemplateLoader({ character }: BlueprintTemplate
     );
   }
 
-  // 槽位映射 UI
+  // 占位映射 UI（模板占位 → 实际节点）
   if (!template) return null;
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <Label className="text-[10px] text-gray-300 font-medium">
-          {template.label} — 映射槽位
+          {template.label} — 映射占位
         </Label>
         <button
           onClick={() => { setSelectedTemplate(null); setSlotMapping({}); }}

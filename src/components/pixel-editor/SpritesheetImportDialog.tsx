@@ -314,6 +314,13 @@ export default function SpritesheetImportDialog({ open, onOpenChange }: Spritesh
         for (let x = 0; x < region.width; x++) {
           const srcX = region.x + x;
           const srcY = region.y + y;
+          // atlas 帧框可越出图界（解析时不钳制）：越界像素按透明处理。
+          // 此前直接按下标读 Uint8ClampedArray 得 undefined，进
+          // rgbaToHexOrNull 生成含 "NaN" 的坏颜色串落盘（审计域1 E6）
+          if (srcX < 0 || srcY < 0 || srcX >= imageData.width || srcY >= imageData.height) {
+            row.push(null);
+            continue;
+          }
           const pixIdx = (srcY * imageData.width + srcX) * 4;
           const r = fullImageData.data[pixIdx];
           const g = fullImageData.data[pixIdx + 1];

@@ -396,17 +396,23 @@ function displaceOfRt(part) {
       // markDirAngleDeg 同口径），未命中用 displaceDeg
       const dirSrc = part.sprite || (part.base && part.base.baseSprite) || null;
       if (p.displaceDirMark && dirSrc && Array.isArray(dirSrc.marks)) {
+        // 种类优先于数组顺序（与编辑器 markDirAngleDeg 同口径，审计
+        // F-32/E5）：先全表找 direction 标记，再全表找 vector 标记；
+        // 旧实现按数组先到先得且首个同名（哪怕 point）即 break，
+        // 同名多类时两端方向可不同
         for (const mk of dirSrc.marks) {
-          if (!mk || mk.name !== p.displaceDirMark) continue;
-          if (mk.kind === 'direction') return { ...p, displaceDeg: ((mk.angleDeg % 360) + 360) % 360 };
-          if (mk.kind === 'vector') {
+          if (mk && mk.name === p.displaceDirMark && mk.kind === 'direction') {
+            return { ...p, displaceDeg: ((mk.angleDeg % 360) + 360) % 360 };
+          }
+        }
+        for (const mk of dirSrc.marks) {
+          if (mk && mk.name === p.displaceDirMark && mk.kind === 'vector') {
             const dx = mk.dx * dirSrc.w, dy = mk.dy * dirSrc.h;
             if (dx !== 0 || dy !== 0) {
               const a = (Math.atan2(dy, dx) * 180) / Math.PI;
               return { ...p, displaceDeg: ((a % 360) + 360) % 360 };
             }
           }
-          break;
         }
       }
       return p;
@@ -832,10 +838,12 @@ function decodeGlowData(b64) {
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
-/** 部件在某服装集下的发光场：集内 __glow 优先，缺省用部件自带（默认集） */
+/** 部件在某服装集下的发光场：集内 __glow 有该槽键（含显式 null =
+ * 「本集为空」标记，convert 写）即以其为准，缺键才回落部件自带（默认集） */
 function glowEntryOf(part, costume) {
   const map = costume && costume.__glow;
-  return (map && map[part.key]) || part.glow || null;
+  if (map && part.key in map) return map[part.key];
+  return part.glow || null;
 }
 // === PURE END ===
 /*__EVAL__*/
@@ -848,8 +856,8 @@ function glowEntryOf(part, costume) {
 const PAL = EMBEDDED.palettes;
 // 工程调色板换色（包内 userPalettes，来自编辑器 DCC管线·调色板页签；
 // 与上方运行时程序化着色的内置 PALETTES 是两回事）：宿主经
-// procRuntime.setPaletteSwap(调色板id, {槽位: 新色}) 指定换色，只对
-// 该板 swappableIndices 内的槽位生效。换色在图集构建时按精确 RGB
+// procRuntime.setPaletteSwap(调色板id, {色位: 新色}) 指定换色，只对
+// 该板 swappableIndices 内的色位生效。换色在图集构建时按精确 RGB
 // 匹配改底图（精灵直贴图），签名并入图集缓存键——改换色即重建图集。
 // 参数化图案瓦片走 PAL 体系，不在此列。
 const USER_PALETTES = EMBEDDED.userPalettes || [];
@@ -950,20 +958,24 @@ function ensureAtlas(gl, variant, costumeName) {
   for (const part of PARTS) {
     const mirrored = variantMirrored(part, variant);
     const centry = costume ? costume[part.key] : undefined;
-    const sgrid = costume && costume.__sprite ? costume.__sprite[part.key] : undefined;
+    // __sprite 有该槽键（含显式 null = 「本集为空」标记）即以其为准，
+    // 缺键才回落部件自带（默认集）图
+    const sprMap = costume && costume.__sprite;
+    const inSprMap = !!(sprMap && (part.key in sprMap));
+    const sgrid = inSprMap ? sprMap[part.key] : undefined;
     let resolved = null, tile = null, spriteGrid = null;
     const altSpr = slotOverrides[part.key] ? (part.altSprites || {})[slotOverrides[part.key]] : undefined;
     if (centry === null && sgrid) {
-      spriteGrid = sgrid; // 参数化槽位在该集回落精灵（与主画布同口径）
+      spriteGrid = sgrid; // 参数化服装槽在该集回落精灵（与主画布同口径）
     } else if (part.spriteKind && !centry) {
-      spriteGrid = sgrid || part.sprite || null;
+      spriteGrid = inSprMap ? sgrid : (sgrid || part.sprite || null);
       if (!spriteGrid) { map.set(part.key, null); continue; }
     } else {
       resolved = resolvePart(part, variant, costume);
       if (resolved.params.hidden) { map.set(part.key, null); continue; }
     }
     if (altSpr) {
-      // 逐槽变体覆盖：精灵部件换图；参数化部件只换底图（外观仍属当前集）
+      // 逐服装槽变体覆盖：精灵部件换图；参数化部件只换底图（外观仍属当前集）
       if (spriteGrid) spriteGrid = altSpr;
       else if (resolved) resolved.baseSprite = altSpr;
     }
@@ -1031,9 +1043,13 @@ function ensureAtlas(gl, variant, costumeName) {
       const mx0 = (t0.w - markSrc.w) / 2, my0 = (t0.h - markSrc.h) / 2;
       marksPx = {};
       marksDir = {};
+      // 种类优先于数组顺序（与编辑器解析层同口径，审计 F-32/E5）：
+      // marksDir 先收 direction、vector 只补空名（旧实现先到先得，
+      // vector 排在 direction 前时方向被顶掉）；marksPx 先收 point
+      // 锚点、vector 锚点只补空名（编辑器按名取点走 point 种类）
       for (const mk of markSrc.marks) {
         if (!mk || typeof mk.name !== 'string') continue;
-        if ((mk.kind === 'point' || mk.kind === 'vector') && !(mk.name in marksPx)) {
+        if (mk.kind === 'point' && !(mk.name in marksPx)) {
           let px = mx0 + mk.x * markSrc.w;
           const py = my0 + mk.y * markSrc.h;
           if (mirrored) px = t0.w - 1 - px;
@@ -1041,6 +1057,15 @@ function ensureAtlas(gl, variant, costumeName) {
         }
         if (mk.kind === 'direction' && !(mk.name in marksDir)) {
           marksDir[mk.name] = ((mk.angleDeg % 360) + 360) % 360;
+        }
+      }
+      for (const mk of markSrc.marks) {
+        if (!mk || typeof mk.name !== 'string') continue;
+        if (mk.kind === 'vector' && !(mk.name in marksPx)) {
+          let px = mx0 + mk.x * markSrc.w;
+          const py = my0 + mk.y * markSrc.h;
+          if (mirrored) px = t0.w - 1 - px;
+          marksPx[mk.name] = [px, py];
         }
         if (mk.kind === 'vector' && !(mk.name in marksDir)) {
           const dx = mk.dx * markSrc.w, dy = mk.dy * markSrc.h;
@@ -1122,8 +1147,8 @@ function ensureAtlas(gl, variant, costumeName) {
   }
   // 团块/火焰场槽（乙8 改造）：跟随口径 = 范围/位置跟、形态不跟
   // （用户定案）——烘焙帧一缩放就是拉伸形态，故图集只预留定尺寸
-  // 槽位（域上限 = 形变 2 倍时的场尺寸），每帧由场作业按当帧
-  // 形变现算场（域参数乘 ds、特征参数自然）重传槽内区。槽位
+  // 场槽（域上限 = 形变 2 倍时的场尺寸），每帧由场作业按当帧
+  // 形变现算场（域参数乘 ds、特征参数自然）重传槽内区。场槽
   // 锚点固定（域上限时的插头位），小域场按锚点偏移写入。
   const fieldSlots = {};
   const FIELD_DS_CAP = 2;
@@ -1853,26 +1878,35 @@ function buildScenery(charX) {
 // 逐像素量（保留系数/块偏移）由 CPU 栅格化进 fxAuxTex、着色器只采样，
 // 与描边掩码同路，保证与编辑器纯函数逐点同值。
 function fxResolveCanvasParams(track, modifier, frame) {
+  // 关键帧对某修改器的参数覆盖层：按修改器分键（paramsByModifier）
+  // 优先、存量扁平袋回落（与编辑器 canvasKeyframeParamsFor 同口径，
+  // 审计 F-30；内联在本函数内——外部探针按函数名截取本段自包含代码）
+  const fxKfParamsFor = (kf, modifierId) => {
+    const byMod = kf.paramsByModifier;
+    if (byMod && byMod[modifierId]) return byMod[modifierId];
+    return kf.params || {};
+  };
   const kfs = [...(track.keyframes || [])].sort((a, b) => a.frame - b.frame);
   if (kfs.length === 0) return modifier.params || {};
   // 区间外保持端点帧（与编辑器 resolveCanvasModifierParams 同口径）；
   // 旧实现首帧之前 prevKf 与 nextKf 同键、t=-Infinity 数值参数出 NaN，
   // 只是被 uniform 写入器 n() 兜住缺省、与编辑器表现不一致。
   const first = kfs[0], last = kfs[kfs.length - 1];
-  if (frame <= first.frame) return { ...(modifier.params || {}), ...(first.params || {}) };
-  if (frame >= last.frame) return { ...(modifier.params || {}), ...(last.params || {}) };
+  if (frame <= first.frame) return { ...(modifier.params || {}), ...fxKfParamsFor(first, modifier.id) };
+  if (frame >= last.frame) return { ...(modifier.params || {}), ...fxKfParamsFor(last, modifier.id) };
   let prevKf = first, nextKf = null;
   for (const kf of kfs) {
     if (kf.frame <= frame) prevKf = kf;
     if (kf.frame > frame && !nextKf) nextKf = kf;
   }
-  if (!nextKf) return { ...(modifier.params || {}), ...(prevKf.params || {}) };
+  if (!nextKf) return { ...(modifier.params || {}), ...fxKfParamsFor(prevKf, modifier.id) };
   let t = (frame - prevKf.frame) / (nextKf.frame - prevKf.frame);
   if (!Number.isFinite(t)) t = 0;
   t = Math.min(1, Math.max(0, t));
   const result = { ...(modifier.params || {}) };
-  for (const key of Object.keys(prevKf.params || {})) {
-    const pv = prevKf.params[key], nv = (nextKf.params || {})[key];
+  const prevParams = fxKfParamsFor(prevKf, modifier.id), nextParams = fxKfParamsFor(nextKf, modifier.id);
+  for (const key of Object.keys(prevParams)) {
+    const pv = prevParams[key], nv = nextParams[key];
     if (typeof pv === 'number' && typeof nv === 'number') {
       const v = pv + (nv - pv) * t;
       result[key] = Number.isFinite(v) ? v : (Number.isFinite(pv) ? pv : nv);
@@ -2138,7 +2172,7 @@ function ensurePostSys() {
  *  偏移 g.y = (py − tile.cy)·dsy（py 为数据行、0 在图顶），再经同一
  *  M=[[c,s],[s,−c]] 到世界——旧实现 gy 写成 (tile.cy − py)，等于把
  *  每块瓦片上下翻转后再摆，描边贴的是镜像剪影（角度镜像）。
- *  刀光/场槽位瓦片同为 R 编码全空，
+ *  刀光/场槽瓦片同为 R 编码全空，
  *  不入掩码（与下述来源差口径一致）。来源差仍在：编辑器以全画布
  *  alpha 为准（含背景与效果笔触），此处以部件瓦片为准——笔触/粒子是
  *  GPU 绘制、无 CPU 栅格数据可印，无法对齐，见 PR 说明。 */
@@ -2345,9 +2379,12 @@ const PART_BY_KEY = new Map(PARTS.map((p) => [p.key, p]));
 function simPartParams(part) {
   const costume = COSTUMES[currentCostume];
   const centry = costume ? costume[part.key] : undefined;
-  const sgrid = costume && costume.__sprite ? costume.__sprite[part.key] : undefined;
+  // 与 ensureAtlas 同口径：__sprite 键存在（含 null 空标记）即为准
+  const sprMap = costume && costume.__sprite;
+  const inSprMap = !!(sprMap && (part.key in sprMap));
+  const sgrid = inSprMap ? sprMap[part.key] : undefined;
   const spriteGrid = (centry === null && sgrid) ? sgrid
-    : (part.spriteKind && !centry) ? (sgrid || part.sprite || null) : null;
+    : (part.spriteKind && !centry) ? (inSprMap ? sgrid : (sgrid || part.sprite || null)) : null;
   if (spriteGrid) return { ...part.base, off: [0, 0] };
   const resolved = resolvePart(part, char.variant, costume);
   return resolved.params.hidden ? null : resolved.params;
@@ -2467,7 +2504,7 @@ function runSimPass(pose, steps) {
 // 横向摆动 turbulence 不入物理（闭式是位置正弦，本段烟类以涡
 // 场平流代之、普通粒子无摆动）；地面线取 params.groundYPx
 // （轨迹升级参数，随 params 进包直读），缺省回落瓦片底边；弹
-// 跳恢复系数取 params.bounce（缺省 0.42），落定阈值
+// 跳恢复系数取 params.bounce（缺省 0.45，与编辑器一致），落定阈值
 // STATE_SIM_REST_VEL；火粒子（非 puff 出生且哈希选中）带额外
 // 上升加速度、龄比过半一次性转为烟。
 const STATE_SIM_H = 1 / 120;
@@ -2551,7 +2588,7 @@ function stateSimStep(pool, inst, tile, pts, h) {
   const groundY = (typeof params.groundYPx === 'number' && isFinite(params.groundYPx))
     ? params.groundYPx : (tile.h - tile.cy - 0.5);
   const bounceK = (typeof params.bounce === 'number' && isFinite(params.bounce))
-    ? Math.max(0, Math.min(1, params.bounce)) : 0.42;
+    ? Math.max(0, Math.min(1, params.bounce)) : 0.45;
   const list = pool.list;
   for (let i = list.length - 1; i >= 0; i--) {
     const p = list[i];
@@ -3509,13 +3546,14 @@ function charBoxH() { return -localGround + 8; }
 let currentCostume = (EMBEDDED.defaultCostume && COSTUMES[EMBEDDED.defaultCostume])
   ? EMBEDDED.defaultCostume
   : Object.keys(COSTUMES)[0] || '';
-/** 逐槽变体覆盖（缺口 6）：片段状态轨在段表演期间写入；图集缓存键含其签名 */
+/** 逐服装槽变体覆盖（缺口 6）：片段状态轨在段表演期间写入；图集缓存键含其签名 */
 let slotOverrides = {};
 function overrideSig() {
   const ks = Object.keys(slotOverrides).sort();
   return ks.map((k) => k + '=' + slotOverrides[k]).join(',');
 }
-/** 动态模式解析（模板侧）：当前服装集的 __dynamic 优先，缺省用部件自带（默认集解析结果） */
+/** 动态模式解析（模板侧）：当前服装集的 __dynamic 优先，缺省用部件自带（默认集解析结果）。
+ * 集内空数组是 convert 写的「本集为空」显式标记（[] 为真值、原样返回，不回落默认集） */
 function dynListFor(part) {
   const entry = COSTUMES[currentCostume];
   const map = entry && entry.__dynamic;
@@ -3523,7 +3561,7 @@ function dynListFor(part) {
 }
 /** 团块/火焰场逐帧栅格（乙8 改造）：按当帧形变现算场（域乘
  * ds、特征自然），颜色过图案级后期，写入槽内尺寸的 RGBA 缓冲
- * （锚点对齐槽位锚点，镜像时水平翻转）。ds 超过槽位上限钳制。 */
+ * （锚点对齐场槽锚点，镜像时水平翻转）。ds 超过场槽上限钳制。 */
 function fieldRasterFor(params, kind, tSec, dsx, dsy, mir, slot) {
   const cap = 2;
   const cdx = Math.max(0.05, Math.min(cap, dsx)), cdy = Math.max(0.05, Math.min(cap, dsy));
@@ -3836,7 +3874,7 @@ window.procRuntime = {
   onEvent: function (cb) { runtimeEventCbs.push(cb); },
   /** 当前生效的片段碰撞盒（见 currentHitboxes） */
   hitboxes: function () { return currentHitboxes(); },
-  /** 工程调色板换色：返回实际生效的换色条数（0 = 板不存在或无可换槽位） */
+  /** 工程调色板换色：返回实际生效的换色条数（0 = 板不存在或无可换色位） */
   setPaletteSwap: function (paletteId, swaps) { return applyPaletteSwap(paletteId, swaps); },
   clearPaletteSwap: function () { paletteSwapState = null; },
   stop: function (nameOrId) { stopPerf(nameOrId); },
@@ -4887,7 +4925,7 @@ function frame(now) {
       }
     }
     // 片段状态轨（缺口 6）：段表演期间按本地时间累计应用状态键——
-    // 从开始时的快照出发，逐键叠加（整覆服装集 + 逐槽变体增删），
+    // 从开始时的快照出发，逐键叠加（整覆服装集 + 逐服装槽变体增删），
     // 索引推进时才重算；表演结束恢复快照（见 restoreFxSnapshot）。
     if (act.perf.stateFx && act.fxSnapshot) {
       let idx = -1;
@@ -5060,7 +5098,7 @@ function frame(now) {
       const grgb = particleRgb(dynPostColorAt(x.params, x.params.glowColor || '#7dd7ff'));
       return [grgb[0], grgb[1], grgb[2], x.params.glowStrength || 0, x.params.glowHz || 0, x.params.glowPhase || 0];
     });
-    const glowSpace = glowInsts.map((x) => (x.params.glowAngleSpace === 'world' ? 1 : 0));
+    const glowSpace = glowInsts.map((x) => (x.params.glowAngleSpace !== 'sprite' ? 1 : 0));
     // 印章参数随图集条目走（导出端按服装集算好：解析形状=选区掩码+参数，片元重算）
     const glowStamps = entry.glowStamps ? entry.glowStamps.map((st) => (st ? [st.shape, st.halo, st.angleDeg, st.reach] : [4, 0, 0, 0])) : undefined;
     // 宿主后处理段：第一个启用实例（dynHostFxFirst，与编辑器
@@ -5098,7 +5136,7 @@ function frame(now) {
     };
     els.push(el);
     elByKey.set(part.key, el);
-    // 团块/火焰场（乙8 改造）：槽位图元贴部件位姿；场内容由
+    // 团块/火焰场（乙8 改造）：场槽图元贴部件位姿；场内容由
     // 场作业逐帧按当帧形变现算重传（范围跟、形态不跟）
     if (state.fieldSlots) {
       const mirNow = variantMirrored(part, char.variant);

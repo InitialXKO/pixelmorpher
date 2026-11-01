@@ -1,9 +1,9 @@
 // ============================================================
 // 蓝图模板：四足奔跑（通用）
 // 不是绑死某个角色的节点，而是定义"奔跑"的动画逻辑。
-// 使用时把模板的槽位（slot）映射到实际节点的 ID。
+// 使用时把模板的占位（slot）映射到实际节点的 ID。
 //
-// 槽位：
+// 占位：
 // - frontLegs: string[]  前腿节点 ID 列表
 // - backLegs: string[]   后腿节点 ID 列表
 // - tail?: string        尾巴节点 ID（可选）
@@ -54,7 +54,7 @@ function nid(p: string): string {
 }
 
 /**
- * 生成四足奔跑蓝图：每个槽位一个图。
+ * 生成四足奔跑蓝图：每个占位一个图。
  * 返回 Map<nodeId, BlueprintGraph>，直接赋给对应节点的 blueprint 字段。
  */
 export function createQuadrupedRunBlueprint(
@@ -155,7 +155,7 @@ export function createQuadrupedRunBlueprint(
   return result;
 }
 
-// ---- 小狗专用预设（槽位映射示例） ----
+// ---- 小狗专用预设（占位映射示例） ----
 
 /**
  * 侧向（朝西）小狗节点定义：复用 DOG_TEMPLATE 的 13 节点结构，

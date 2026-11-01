@@ -839,8 +839,14 @@ export interface Node {
   tracks: NodeTracks;
 
   // ---- Trajectory (node-level motion path, baked from trajectory tool) ----
-  // Points are in the same space as tracks.x/tracks.y (parent-local SubPixel offsets).
-  // When present, renderer interpolates x/y from trajectory instead of tracks.
+  // Points are in the same space as tracks.x/tracks.y (parent-local SubPixel,
+  // absolute pose values — baking already folded the base-frame pose in).
+  // When non-empty, x/y come from trajectory interpolation instead of the
+  // x/y tracks (other channels still use tracks): consumed by the main
+  // renderer (computeWorldTransforms → interpolateTransformImpl) and by
+  // the package sampler in convert, both through the single shared
+  // interpolateTrajectoryPoints (duplicate frames: entering a segment
+  // reads the first point, leaving reads the last, exact frame = last).
   trajectory?: { frame: number; x: number; y: number }[];
 
   // ---- 逐帧像素修正（矫正模式，2026-10-30 自旧工程关键帧搬家）----
@@ -900,7 +906,7 @@ export interface Node {
 /** Animation tracks for a node's transform properties */
 /** 父级切换键值：从该帧起节点改挂到 parentId（空串 = 角色根）。
  *  socketId：undefined = 沿用节点原 attachment；字符串 = 新父级的
- *  该插槽；null = 固定连接（fixedOffset 缺省沿用原 attachment 的） */
+ *  该槽位；null = 固定连接（fixedOffset 缺省沿用原 attachment 的） */
 export interface ParentKeyValue {
   parentId: string;
   socketId?: string | null;
@@ -917,7 +923,7 @@ export interface NodeTracks {
   variantIndex?: KeyframeTrack<number>;
   /** 图层顺序覆盖（step 取值：≤当前帧的最后一点，无点回落 node.zIndex） */
   zIndex?: KeyframeTrack<number>;
-  /** 修饰器组轨：点值 = 该帧的修饰器组快照。点间按参数插值——同 type 逐参数
+  /** 修改器组轨：点值 = 该帧的修改器组快照。点间按参数插值——同 type 逐参数
    *  lerp、只在一侧出现的按强度淡入/淡出（interpolateNodeKeyframeModifiers）。
    *  求值时同 type 覆盖 node.modifiers 的同名项（关键帧优先）。 */
   modifierKeys?: KeyframeTrack<ModifierInstance[]>;
@@ -930,7 +936,7 @@ export interface NodeTracks {
 }
 
 
-// ---- Parametric Appearance（参数化外观：程序化运行时的槽位外观来源） ----
+// ---- Parametric Appearance（参数化外观：程序化运行时的服装槽外观来源） ----
 
 /**
  * pattern 层语言的 mask 原语（烘焙期求值，与运行时 compileTile 的 maskHit 同构）。
@@ -965,8 +971,8 @@ export interface ParametricShapeDef {
 }
 
 /**
- * 参数化外观：挂在 CostumePiece 上（随服装集变化——同一槽位在不同服装集可有
- * 不同的参数化外观，即服装覆盖）。存在 = 该槽在此服装下以参数化形式进入
+ * 参数化外观：挂在 CostumePiece 上（随服装集变化——同一服装槽在不同服装集可有
+ * 不同的参数化外观，即服装覆盖）。存在 = 该服装槽在此服装下以参数化形式进入
  * 程序化运行时包；主渲染管线不消费此字段（仍走 sprites），它服务于程序化
  * 预览与「程序化运行时包」导出。
  */
@@ -1048,7 +1054,7 @@ export interface ParametricAppearance {
   haloWidth?: number;
   /** 调色板家族名（运行时 PALETTES 的键） */
   palette: string;
-  /** 运行时枚举槽位编号（LIGHT / OUTLINE / RIM / GLINT，见 proc-runtime 枚举表） */
+  /** 运行时枚举编号（LIGHT / OUTLINE / RIM / GLINT，见 proc-runtime 枚举表） */
   light: number;
   outline: number;
   rim: number;
@@ -1214,7 +1220,7 @@ export interface CostumePiece {
   /** 精灵堆叠（可选）：有此字段时呈现走堆叠合成（stack-render），
    *  sprites 的方向图只作回落（无 WebGL/导出旧路径）与身份标识 */
   stack?: SpriteStack;
-  /** 参数化外观（可选）：该槽在此服装集下的程序化形式，见 ParametricAppearance */
+  /** 参数化外观（可选）：该服装槽在此服装集下的程序化形式，见 ParametricAppearance */
   parametric?: ParametricAppearance;
   /** 动态模式（服装件挂载：随本服装集生效，与节点挂载双挂载合并） */
   dynamicPatterns?: import('./dynamic-patterns').DynamicPatternInstance[];
@@ -1421,10 +1427,10 @@ export interface Character {
   costumeSets: CostumeSet[];
   activeCostumeSetId?: string;
 
-  // ---- 通用自定义变体（槽位级） ----
-  /** 变体定义（用户命名，如破损/湿透/燃烧）；变体只到槽位级——全身切换是服装集的职责，不在此重复 */
+  // ---- 通用自定义变体（服装槽级） ----
+  /** 变体定义（用户命名，如破损/湿透/燃烧）；变体只到服装槽级——全身切换是服装集的职责，不在此重复 */
   variantDefs?: { id: string; name: string }[];
-  /** 槽位变体指派：slotKey → variantId（无条目 = 基础）。角色级状态，不属于任何服装集，
+  /** 服装槽变体指派：slotKey → variantId（无条目 = 基础）。角色级状态，不属于任何服装集，
    *  故同一部位在任何服装下都处于该变体；精灵本体存各集 piece 的 variantSprites */
   slotVariants?: Record<string, string>;
 
@@ -1441,7 +1447,7 @@ export interface Character {
   // character). Per-node effects stay in node.blueprint. Null = legacy path.
   blueprint?: BlueprintGraph | null;
 
-  /** 状态蓝图：纯状态图（无像素），每帧在服装解析前求值，输出服装集/槽位变体指令
+  /** 状态蓝图：纯状态图（无像素），每帧在服装解析前求值，输出服装集/服装槽变体指令
    *  （costume_state 节点）。生效状态叠加顺序：静态字段 → clip 状态轨道 → 状态蓝图 */
   stateBlueprint?: BlueprintGraph | null;
 
@@ -1502,7 +1508,7 @@ export interface CostumeStateKeyframe {
   frame: number;
   /** 给出时从该帧起整覆生效服装集 id；不给 = 沿用下层/前键的结果 */
   costumeSetId?: string;
-  /** 逐槽增量：variantId = 指派该变体；null = 该槽从此回基础 */
+  /** 逐服装槽增量：variantId = 指派该变体；null = 该服装槽从此回基础 */
   slotChanges?: Record<string, string | null>;
 }
 

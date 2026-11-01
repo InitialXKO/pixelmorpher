@@ -1,3 +1,5 @@
+> ⚠️ **本文档已过期**（2026-11 全系统审计）：内容基于已退役的旧模型（Part / LiveAdapter 等），与现状多处不符。现行口径以根目录 `README.md` 与 `spikes/system-audit/AUDIT.md` 为准。
+
 # 瓦片工作流指南 (Tile Workflow Guide)
 
 瓦片地图模式将 PixelMorpher 变成了一个功能完备的关卡编辑器。它采用了从“原材料”到“逻辑地图”的三步走战略。

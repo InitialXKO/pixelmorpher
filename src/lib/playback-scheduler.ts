@@ -37,6 +37,32 @@ export function registerRenderCallback(cb: RenderCallback): () => void {
   return () => { renderCallbacks.delete(cb); };
 }
 
+/**
+ * 播放推进一步的落帧计算（纯函数，调度器本体与探针共用同一实现）。
+ * 有激活片段时按片段窗 [startFrame, endFrame] 推进：loop 在窗内
+ * 回绕、非 loop 停在末帧不再前进；播放头在窗外时先纳入窗内
+ * （起点取 startFrame、越尾按 loop 口径处理）。无激活片段时按
+ * 工程 totalFrames 回绕（旧口径不变）。
+ */
+export function advancePlaybackFrame(
+  currentFrame: number,
+  framesToAdvance: number,
+  totalFrames: number,
+  clip?: { startFrame: number; endFrame: number; loop: boolean } | null,
+): number {
+  if (clip && clip.endFrame >= clip.startFrame) {
+    const start = clip.startFrame;
+    const end = clip.endFrame;
+    const len = end - start + 1;
+    const next = currentFrame + framesToAdvance;
+    if (next > end) return clip.loop ? start + ((next - start) % len) : end;
+    if (next < start) return start;
+    return next;
+  }
+  const nextFrame = currentFrame + framesToAdvance;
+  return nextFrame >= totalFrames ? nextFrame % totalFrames : nextFrame;
+}
+
 /** Start the unified playback loop */
 export function startPlayback(): void {
   if (isRunning) return;
@@ -66,7 +92,8 @@ export function startPlayback(): void {
       return;
     }
 
-    const { currentFrame, totalFrames, frameRate } = useProjectStore.getState();
+    const state = useProjectStore.getState();
+    const { currentFrame, totalFrames, frameRate } = state;
     const frameDuration = 1000 / frameRate;
     const elapsed = timestamp - lastTimestamp;
 
@@ -74,9 +101,12 @@ export function startPlayback(): void {
       const framesToAdvance = Math.floor(elapsed / frameDuration);
       lastTimestamp += framesToAdvance * frameDuration;
 
-      const nextFrame = currentFrame + framesToAdvance;
-      const newFrame = nextFrame >= totalFrames ? nextFrame % totalFrames : nextFrame;
-      useProjectStore.getState().setCurrentFrame(newFrame);
+      // 激活片段在场时按片段窗/loop 推进（advancePlaybackFrame）
+      const activeClip = state.activeAnimationClipId
+        ? state.animationClips.find((c) => c.id === state.activeAnimationClipId)
+        : undefined;
+      const newFrame = advancePlaybackFrame(currentFrame, framesToAdvance, totalFrames, activeClip);
+      state.setCurrentFrame(newFrame);
 
       // B1: Notify all render callbacks in the SAME rAF tick.
       // This eliminates the ~16ms delay of the old dual-loop approach
@@ -101,7 +131,3 @@ export function stopPlayback(): void {
   }
 }
 
-/** Check if the scheduler is currently running */
-function isPlaybackRunning(): boolean {
-  return isRunning;
-}

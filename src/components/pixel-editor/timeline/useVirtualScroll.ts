@@ -60,7 +60,7 @@ export default function useVirtualScroll(
       for (const node of puppetNodes) {
         // 基础行高
         let height = TRACK_HEIGHT;
-        // 子轨道：统计该节点修饰器组轨的 modifier types、paramDrivers 与转面轨
+        // 子轨道：统计该节点修改器组轨的 modifier types、paramDrivers 与转面轨
         const modTypes = new Set<string>();
         let paramDriverCount = 0;
         for (const pt of node.tracks?.modifierKeys?.keyframes ?? []) {

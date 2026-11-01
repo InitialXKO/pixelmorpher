@@ -239,7 +239,7 @@ export interface PixelGraphExtraction {
  * 从节点原始蓝图提取像素链子图：沿输出 screen 的 pixels 输入边
  * 反向收集祖先节点（含驱动参数的数值子树），逐节点校验支持集，
  * 翻成 PIXEL_SRC 的迷你图格式。图中含 costume/character_source
- * （跨槽位读图）或范围外像素节点（texture_scroll、bump_light、
+ * （跨服装槽读图）或范围外像素节点（texture_scroll、bump_light、
  * pixel_edit 等）时整链不进包并逐条点名——不静默丢弃、不部分
  * 进包造成与编辑器分叉。
  * opts.allowPluginNodes（导出「实时执行」档）：plugin_ 前缀类型

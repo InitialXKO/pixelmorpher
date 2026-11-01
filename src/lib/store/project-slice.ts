@@ -17,6 +17,7 @@ import { syncCharacterPatternBlueprints } from '../blueprint/pattern-sync';
 import { syncCharacterSlashBlueprints, migrateSlashCenterOffsets } from '../blueprint/slash-sync';
 import { migrateClipStructure } from '../clip-migration';
 import { backfillSpriteBirth } from '../sprite-folder';
+import { normalizeSpriteMarks } from '../sprite-marks';
 import { guardProjectBoneAxes } from '../bone-axis-guard';
 
 const defaultProject: Project = {
@@ -98,7 +99,6 @@ export type ProjectSlice = Project & {
   maxUndoLevels: number;
   setMaxUndoLevels: ProjectStore['setMaxUndoLevels'];
   resetProject: ProjectStore['resetProject'];
-  motionAnalysisSplit: ProjectStore['motionAnalysisSplit'];
   // 程序化动画初始状态（actions 在 procedural-slice）
   proceduralAnimations: import('../types').ProceduralAnimation[];
 };
@@ -189,6 +189,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       brushPresets: s.brushPresets,
       maxUndoLevels: s.maxUndoLevels,
       globalModifiers: s.globalModifiers,
+      globalBlueprint: s.globalBlueprint,
       animationVariables: s.animationVariables,
       // Unified Characters (new model, primary source)
       unifiedCharacters: s.unifiedCharacters,
@@ -353,6 +354,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
         onionSkinEnabled: state.onionSkinEnabled,
         onionSkinFrames: state.onionSkinFrames,
         globalModifiers: state.globalModifiers,
+        globalBlueprint: state.globalBlueprint ?? null,
         animationVariables: state.animationVariables,
         // Legacy fields for backward compatibility
         tracks: state.tracks,
@@ -455,8 +457,8 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       }
     }
     // 片段结构迁移（一次性、幂等）：片段归属补绑 + 时间窗换算 + 旧片段
-    // 关键帧里的修饰器/转面/图层数据迁入节点轨道。必须在时间单位迁移
-    // 之前跑——迁入轨道的修饰器还要吃时间换算（其循环已改走轨道）。
+    // 关键帧里的修改器/转面/图层数据迁入节点轨道。必须在时间单位迁移
+    // 之前跑——迁入轨道的修改器还要吃时间换算（其循环已改走轨道）。
     {
       const clipMig = migrateClipStructure(
         animationClips as unknown as Array<Record<string, any>>,
@@ -543,10 +545,21 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
           );
           if (nSnap > 0) dirty = true;
         }
+        // 精灵标记载入规整（与主数据同口径，审计 F-33）：快照内精灵
+        // 的 marks 一并规整，否则撤销回旧快照会带回未规整的标记。
+        const snapSprites = (parsed.sprites ?? {}) as Record<string, import('../unified-types').Sprite>;
+        for (const sp of Object.values(snapSprites) as any[]) {
+          if (sp && Array.isArray(sp.marks)) {
+            const normalized = normalizeSpriteMarks(sp.marks);
+            if (JSON.stringify(normalized) !== JSON.stringify(sp.marks)) {
+              sp.marks = normalized;
+              dirty = true;
+            }
+          }
+        }
         // 骨轴守卫（与主数据同构）：快照内角色一并改轴，快照自带
         // 精灵表时反旋副本写回该表；无表时引用精灵不可达的角色
         // 由守卫中止保持原样（安全方向）。
-        const snapSprites = (parsed.sprites ?? {}) as Record<string, import('../unified-types').Sprite>;
         const ag = guardProjectBoneAxes(parsed.unifiedCharacters, snapSprites);
         if (ag.changed) {
           dirty = true;
@@ -575,6 +588,19 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     const backfilled = backfillSpriteBirth(migratedSprites);
     const finalSprites = backfilled.changed > 0 ? backfilled.sprites : migratedSprites;
 
+    // 精灵标记载入规整（审计 F-33/D5）：normalizeSpriteMarks 此前只有
+    // 写入路径在调、导入路径不调，外部/旧工程的非法 marks（无名、
+    // 数值越界、种类字段不全）原样进表、靠各消费端防御。此处全表
+    // 逐精灵规整：无 marks 的零改动；规整结果与原值不同才换对象
+    // （保住未变精灵的引用同一性，缩略图缓存按对象身份失效）。
+    for (const [sid, sp] of Object.entries(finalSprites) as [string, any][]) {
+      if (!sp || !Array.isArray(sp.marks)) continue;
+      const normalized = normalizeSpriteMarks(sp.marks);
+      if (JSON.stringify(normalized) !== JSON.stringify(sp.marks)) {
+        (finalSprites as any)[sid] = { ...sp, marks: normalized };
+      }
+    }
+
     // 骨轴守卫（读入规范化，一次性、幂等）：静止方向落进水平带
     // 的骨段在数据层改轴（父帧 ±90° 增益 + 偏移反旋 + 精灵 D4
     // 反旋副本），静止几何与绘制逐点不变、IK 两角反解全朝向
@@ -601,6 +627,9 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       description: file.project.description ?? '',
       proceduralAnimations: file.proceduralAnimations || [],
       globalModifiers: file.project.globalModifiers || [],
+      // 文件缺此字段（旧存档）时必须清空，与 globalModifiers 同口径，
+      // 不许残留当前会话的蓝图
+      globalBlueprint: (file.project as any).globalBlueprint ?? null,
       // 与其他字段同口径：文件缺此字段时必须清空，不许残留当前会话的轨
       canvasModifierTracks: file.project.canvasModifierTracks || [],
       animationVariables: file.project.animationVariables || [],
@@ -621,9 +650,8 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
     // Users should re-import from Spine source via SpineImportDialog.
     // unifiedCharacters is the single source of truth since v3.1.
 
-    // Sync legacy fields from the active clip
-    if (activeAnimationClipId) {
-    }
+    // 无「从激活片段同步旧字段」一步：工程级字段就是载入时写进
+    // store 的那份，片段级 fx 字段只是存量数据（见 types.ts 注释）。
   },
 
   registerCustomModifier: (modifier) => set((s) => ({
@@ -647,38 +675,6 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
   })),
 
   setMaxUndoLevels: (n) => set({ maxUndoLevels: Math.max(10, Math.min(200, n)) }),
-
-  motionAnalysisSplit: (frames, options) => {
-    get().pushUndo('运动分析拆分');
-    const { analyzeMotionAndSplit } = require('../motion-analysis');
-    const result = analyzeMotionAndSplit(frames, options?.blockSize, options?.searchRadius, options?.motionThreshold, options?.minRegionSize);
-    const newSpriteIds: string[] = [];
-
-    for (const region of result.regions) {
-      const { x: bx, y: by, width: rw, height: rh } = region.bounds;
-      const spritePixels: any[] = Array.from({ length: rh }, () => Array(rw).fill(null));
-
-      for (const p of region.pixels) {
-        const lx = p.x - bx;
-        const ly = p.y - by;
-        if (ly >= 0 && ly < rh && lx >= 0 && lx < rw) {
-          const refFrame = frames[frames.length - 1];
-          if (p.y < refFrame.length && p.x < refFrame[0].length) {
-            spritePixels[ly][lx] = refFrame[p.y][p.x];
-          }
-        }
-      }
-
-      const sprite = get().addSprite(`精灵_${region.id}`, rw, rh, {
-        plugX: Math.round(region.pivotX - bx),
-        plugY: Math.round(region.pivotY - by),
-      });
-      get().setSpritePixels(sprite.id!, spritePixels);
-      newSpriteIds.push(sprite.id!);
-    }
-
-    return newSpriteIds;
-  },
 
   resetProject: () => {
     const snapshot: HistoryEntry = {
@@ -712,6 +708,7 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       maxUndoLevels: 50,
       _dragActive: false,
       globalModifiers: [],
+      globalBlueprint: null,
     }));
     resetDragState();
   },
@@ -756,20 +753,18 @@ export const createProjectSlice: StateCreator<ProjectStore, [], [], Partial<Proj
       animationClips: newClips,
       activeAnimationClipId: newActiveId,
     });
-    // Sync legacy fields if active clip changed
-    if (newActiveId) {
-    }
+    // 无「同步旧字段」一说：效果轨/笔触的编辑面全程用工程级字段，
+    // 片段级同名字段只是存量数据（见 types.ts 工程级字段注释），
+    // 片段增删改不需要、也不存在向工程级的同步。
   },
 
   updateAnimationClip: (clipId: string, updates: Partial<AnimationClip>) => {
+    get().pushUndo('编辑动画片段', 'updateAnimationClip');
     set((s) => ({
       animationClips: s.animationClips.map(c =>
         c.id === clipId ? { ...c, ...updates, updatedAt: Date.now() } : c
       ),
     }));
-    // Sync legacy fields if this is the active clip
-    if (get().activeAnimationClipId === clipId) {
-    }
   },
 
   setActiveAnimationClip: (clipId: string | null) => {

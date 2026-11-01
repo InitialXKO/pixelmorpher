@@ -42,7 +42,7 @@ export default function InputTracksStrip({ character, totalFrames, currentFrame,
 
   const writeTracks = useCallback((next: NonNullable<Character['inputTracks']>, undoLabel: string) => {
     const store = useProjectStore.getState();
-    store.pushUndo(undoLabel, 'behavior');
+    store.pushUndo(undoLabel, 'inputTrack');
     store.updateUnifiedCharacter(character.id, { inputTracks: next });
   }, [character.id]);
 

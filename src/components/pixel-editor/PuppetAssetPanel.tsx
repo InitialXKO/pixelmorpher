@@ -348,7 +348,7 @@ export default function PuppetAssetPanel() {
     sprites: true,
     clips: true,
   });
-  // 添加节点对话框：选父节点+插槽
+  // 添加节点对话框：选父节点+槽位
   const [addNodeDialog, setAddNodeDialog] = useState<{
     parentNodeId: string;
     socketId: string;
@@ -417,7 +417,7 @@ export default function PuppetAssetPanel() {
       }
     : undefined;
 
-  /** 精灵被服装槽位引用的次数（删除确认用；深走 pieces 统计同 id 字符串） */
+  /** 精灵被服装槽引用的次数（删除确认用；深走 pieces 统计同 id 字符串） */
   const countSpriteRefs = (spriteId: string): number => {
     const deep = (v: unknown): number =>
       v === spriteId
@@ -445,7 +445,7 @@ export default function PuppetAssetPanel() {
     setSectionExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  // ---- 选中节点及其插槽编辑（SocketEditor 接线） ----
+  // ---- 选中节点及其槽位编辑（SocketEditor 接线） ----
   const activeCharacter = activePuppetSkeletonId ? unifiedCharacters[activePuppetSkeletonId] ?? null : null;
   const selectedNode = activeCharacter && selectedNodeId ? activeCharacter.nodes[selectedNodeId] ?? null : null;
 
@@ -497,7 +497,7 @@ export default function PuppetAssetPanel() {
     const attached = Object.values(activeCharacter.nodes).filter(
       (n) => n.attachment?.type === 'socket' && n.attachment.parentSocketId === socketId,
     );
-    if (attached.length > 0 && !confirm(`删除插槽「${socket?.name ?? socketId}」会 detach ${attached.length} 个子节点（${attached.map((n) => n.name).join('、')}），继续？`)) return;
+    if (attached.length > 0 && !confirm(`删除槽位「${socket?.name ?? socketId}」会 detach ${attached.length} 个子节点（${attached.map((n) => n.name).join('、')}），继续？`)) return;
     updateUnifiedNode(activePuppetSkeletonId, selectedNode.id, {
       sockets: selectedNode.sockets.filter((s) => s.id !== socketId),
     });
@@ -756,7 +756,7 @@ export default function PuppetAssetPanel() {
                                       <span className="text-cyan-500">生效中</span>
                                     )}
                                     <span className="text-gray-700">
-                                      {Object.keys(cs.pieces).length} 槽位
+                                      {Object.keys(cs.pieces).length} 个服装槽
                                     </span>
                                   </div>
                                 </ContextMenuTrigger>
@@ -780,7 +780,7 @@ export default function PuppetAssetPanel() {
                                   <ContextMenuItem
                                     className="text-red-400 focus:text-red-300"
                                     onSelect={() => {
-                                      if (confirm(`确定删除服装集「${cs.name}」吗？其 ${Object.keys(cs.pieces).length} 个槽位配置将一并删除。`)) {
+                                      if (confirm(`确定删除服装集「${cs.name}」吗？其 ${Object.keys(cs.pieces).length} 个服装槽配置将一并删除。`)) {
                                         useProjectStore.getState().removeUnifiedCostumeSet(skeletonKey, cs.id);
                                       }
                                     }}
@@ -836,7 +836,7 @@ export default function PuppetAssetPanel() {
                 <>
                   <button
                     className="size-5 flex items-center justify-center text-cyan-400 hover:text-cyan-300"
-                    title="添加节点（选择父节点插槽）"
+                    title="添加节点（选择父节点槽位）"
                     onClick={() => {
                       if (nodes.length === 0) {
                         // 没有节点时直接创建根节点
@@ -846,7 +846,7 @@ export default function PuppetAssetPanel() {
                         setSelectedNodeId(newNode.id);
                         return;
                       }
-                      // 默认选第一个节点的第一个插槽
+                      // 默认选第一个节点的第一个槽位
                       const firstNode = nodes[0];
                       setAddNodeDialog({
                         parentNodeId: firstNode.id,
@@ -936,7 +936,7 @@ export default function PuppetAssetPanel() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-[10px] text-gray-500 block mb-1">插槽</label>
+                    <label className="text-[10px] text-gray-500 block mb-1">槽位</label>
                     <select
                       value={addNodeDialog.socketId}
                       onChange={(e) => setAddNodeDialog({ ...addNodeDialog, socketId: e.target.value })}
@@ -946,7 +946,7 @@ export default function PuppetAssetPanel() {
                         <option key={s.id} value={s.id}>{s.name || s.id.slice(0, 8)}</option>
                       ))}
                       {(parentNode?.sockets ?? []).length === 0 && (
-                        <option value="">（无插槽，将自动新建插槽）</option>
+                        <option value="">（无槽位，将自动新建槽位）</option>
                       )}
                     </select>
                   </div>
@@ -961,8 +961,8 @@ export default function PuppetAssetPanel() {
                       className="px-3 h-7 text-[11px] bg-cyan-600 hover:bg-cyan-500 text-white rounded"
                       onClick={() => {
                         const nodeName = `节点_${nodes.length + 1}`;
-                        // New model: plug → attachment。未选插槽（父节点
-                        // 无插槽）时自动在父节点上新建一个，不再退成同位
+                        // New model: plug → attachment。未选槽位（父节点
+                        // 无槽位）时自动在父节点上新建一个，不再退成同位
                         // fixed（子节点贴在父关节上、段长为零）
                         const attachment = addNodeDialog.socketId
                           ? { type: 'socket' as const, parentSocketId: addNodeDialog.socketId, plug: { x: 0, y: 0 } }
@@ -972,7 +972,7 @@ export default function PuppetAssetPanel() {
                         const newNode = addUnifiedNode(activePuppetSkeletonId!, nodeName, {
                           zIndex: 0,
                           attachment,
-                          // 父级显式给：只靠 attachment 推导时，无插槽的
+                          // 父级显式给：只靠 attachment 推导时，无槽位的
                           // 父节点会让新节点落到根下（与所选父节点同级）
                           parentId: addNodeDialog.parentNodeId,
                         });
@@ -988,11 +988,11 @@ export default function PuppetAssetPanel() {
             );
           })()}
 
-          {/* ---- 选中节点的插槽编辑（SocketEditor） ---- */}
+          {/* ---- 选中节点的槽位编辑（SocketEditor） ---- */}
           {selectedNode && (
             <div className="mt-2 bg-[#080818] rounded border border-[#1e1e3a] p-1.5">
               <div className="text-[9px] text-gray-500 px-0.5 pb-1 truncate">
-                {selectedNode.name} 的插槽
+                {selectedNode.name} 的槽位
               </div>
               <SocketEditor
                 sockets={selectedNode.sockets.map(socketToInfo)}
@@ -1171,7 +1171,7 @@ export default function PuppetAssetPanel() {
                           const refs = countSpriteRefs(sprite.id!);
                           const msg =
                             refs > 0
-                              ? `精灵「${sprite.name}」被 ${refs} 处槽位引用，删除后这些槽位将无图，继续？`
+                              ? `精灵「${sprite.name}」被 ${refs} 处服装槽引用，删除后这些服装槽将无图，继续？`
                               : `确定删除精灵「${sprite.name}」吗？`;
                           if (confirm(msg)) useProjectStore.getState().removeSprite(sprite.id!);
                         }}

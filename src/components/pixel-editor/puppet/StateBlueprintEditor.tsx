@@ -3,7 +3,7 @@
 // ============================================================
 // StateBlueprintEditor — 状态蓝图编辑器
 // 编辑 character.stateBlueprint：纯状态图（无像素），每帧在服装解析前求值，
-// costume_state 节点输出服装集/槽位变体指令（叠加顺序：静态 → clip 轨道 → 状态蓝图）。
+// costume_state 节点输出服装集/服装槽变体指令（叠加顺序：静态 → clip 轨道 → 状态蓝图）。
 // ============================================================
 
 import React, { useState, useCallback } from 'react';
@@ -114,7 +114,7 @@ export default function StateBlueprintEditor({ character }: StateBlueprintEditor
       <div className="text-[9px] text-gray-600 font-mono leading-relaxed bg-[#0a0a1a] rounded p-1.5">
         <div>服装集：{character.costumeSets.map((cs) => `${cs.name}=${cs.id}`).join(' · ') || '（无）'}</div>
         <div>变体：{(character.variantDefs ?? []).map((v) => `${v.name}=${v.id}`).join(' · ') || '（无）'}</div>
-        <div>槽位：{[...slotKeys].join(' · ') || '（无）'}</div>
+        <div>服装槽：{[...slotKeys].join(' · ') || '（无）'}</div>
       </div>
       {graph && (
         <BlueprintEditor

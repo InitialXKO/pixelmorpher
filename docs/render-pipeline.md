@@ -1,3 +1,5 @@
+> ⚠️ **本文档已过期**（2026-11 全系统审计）：内容基于已退役的旧模型（Part / LiveAdapter 等），与现状多处不符。现行口径以根目录 `README.md` 与 `spikes/system-audit/AUDIT.md` 为准。
+
 # 主画布精灵渲染全链条
 
 ## 数据流向
@@ -8,7 +10,7 @@ Character
 │   ├── transform: { x, y, angle, stretch, variantIndex }  // SubPixel
 │   ├── attachment: { type: 'socket'|'fixed', parentSocketId, plug, fixedOffset }
 │   ├── sockets: Socket[]  // basePosition: SubPixel
-│   └── slot: { slotKey }  // 服装槽位定义（无 sprites）
+│   └── slot: { slotKey }  // 服装服装槽定义（无 sprites）
 ├── costumeSets: CostumeSet[]
 │   └── pieces: Record<slotKey, CostumePiece>
 │       └── sprites: Record<DirectionIndex, { spriteId }>
@@ -104,6 +106,6 @@ pivotY = subToPx(sprite.plug.y) + modOffsetY
 ## 关键不变量
 
 1. `socket.basePosition` 恒为 SubPixel（`tool-handlers.ts` 存时 `pxToSub`，`migration-adapter` 同）
-2. `node.slot` 只存槽位定义，`sprites: {}` 为空；精灵只在 `costumeSet.pieces[slotKey].sprites`
+2. `node.slot` 只存服装槽定义，`sprites: {}` 为空；精灵只在 `costumeSet.pieces[slotKey].sprites`
 3. 方向索引：E=0, NE=1, N=2, NW=3, W=4, SW=5, S=6, SE=7（`DirectionWheel` 标准）
 4. 新建角色：正面精灵挂 S(6)+N(2)，侧面挂 E/W/四斜角

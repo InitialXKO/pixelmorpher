@@ -9,11 +9,7 @@
 // ============================================================
 
 import { create } from 'zustand';
-import type {
-  ProjectMeta,
-  WorkflowSummary,
-  WorkflowType,
-} from './asset-types';
+import type { ProjectMeta } from './asset-types';
 import {
   dbGet,
   dbPut,
@@ -32,9 +28,6 @@ export interface AssetStore {
   projectListLoaded: boolean;
   currentProjectId: string | null;
 
-  // ---- Layer 3: Workflow Assets ----
-  workflowSummary: WorkflowSummary;
-
   // ---- UI State ----
   showProjectHome: boolean;
 
@@ -47,12 +40,8 @@ export interface AssetStore {
   duplicateProject: (id: string, newName: string) => Promise<ProjectMeta | null>;
   renameProject: (id: string, newName: string) => Promise<void>;
   exportProjectAsFile: (id: string) => Promise<void>;
-  importProjectFromFile: (file: File) => Promise<void>;
+  importProjectFromFile: (file: File) => Promise<ProjectMeta | null>;
   updateCurrentProjectMeta: () => Promise<void>;
-
-  // ---- Layer 3 Actions ----
-  updateWorkflowSummary: (summary: Partial<WorkflowSummary>) => void;
-  refreshWorkflowSummary: () => void;
 
   // ---- UI Actions ----
   setShowProjectHome: (show: boolean) => void;
@@ -68,8 +57,6 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
   projectList: [],
   projectListLoaded: false,
   currentProjectId: null,
-
-  workflowSummary: { type: 'none' },
 
   showProjectHome: true, // Start on project home screen
 
@@ -206,9 +193,14 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
     await dbPut('projectMeta', duplicate);
 
     // Also copy project data
+    // 注意展开顺序：projectData 自带原工程的顶层 id（落行时写入），
+    // 新 ID 必须放最后覆盖它——写成 { id: duplicate.id, ...projectData }
+    // 会被原 ID 反盖，记录仍落在原工程键下、副本 ID 下无数据行
+    // （openProject 取不到数据只能初始化空白工程）。与
+    // importProjectFromFile 先改 projectData.id 再展开同口径。
     const projectData = await dbGet<Record<string, unknown>>('projects', id);
     if (projectData) {
-      await dbPut('projects', { id: duplicate.id, ...projectData });
+      await dbPut('projects', { ...projectData, id: duplicate.id });
     }
 
     set((s) => ({ projectList: [duplicate, ...s.projectList] }));
@@ -284,8 +276,10 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
         currentProjectId: newId,
         showProjectHome: false,
       }));
+      return meta;
     } catch {
       // Invalid file
+      return null;
     }
   },
 
@@ -297,11 +291,15 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
       const { useProjectStore } = await import('./store');
       const projectStore = useProjectStore.getState();
 
+      // 缩略图在此生产（抓编辑器离屏画布当前帧）；抓不到（编辑器未
+      // 挂载）时保留旧值，不把已有缩略图覆盖为空
+      const { captureProjectThumbnail } = await import('./project-thumbnail');
+      const existing = get().projectList.find((p) => p.id === currentProjectId);
       const updated: ProjectMeta = {
         id: currentProjectId,
         name: (projectStore as any).name || '未命名项目',
         description: '',
-        thumbnail: '',
+        thumbnail: captureProjectThumbnail() || existing?.thumbnail || '',
         updatedAt: Date.now(),
         canvasWidth: projectStore.canvasWidth,
         canvasHeight: projectStore.canvasHeight,
@@ -317,36 +315,6 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
     } catch {
       // Silent fail
     }
-  },
-
-  // ============================================================
-  // Layer 3: Workflow Assets Actions
-  // ============================================================
-
-  updateWorkflowSummary: (summary) => {
-    set((s) => ({
-      workflowSummary: { ...s.workflowSummary, ...summary },
-    }));
-  },
-
-  refreshWorkflowSummary: () => {
-    const { useWorkspaceStore } = require('./workspace-store') as { useWorkspaceStore: any };
-    const { useProjectStore } = require('./store') as { useProjectStore: any };
-
-    const workspaceMode = useWorkspaceStore.getState().mode;
-    const projectStore = useProjectStore.getState();
-
-    let type: WorkflowType = 'none';
-    const summary: Partial<WorkflowSummary> = {};
-
-    {
-      type = 'animation_editing';
-      summary.animPartCount = projectStore.parts.length;
-      summary.animKeyframeCount = projectStore.keyframes.length;
-    }
-
-    summary.type = type;
-    set({ workflowSummary: summary as WorkflowSummary });
   },
 
   // ============================================================

@@ -10,7 +10,9 @@ import { geoRng } from '../noise';
 import { modifierGuard, elapsedSeconds, emptyGrid } from './shared';
 import { inpaintPixels } from '../../inpainting';
 
-/** AI inpainting 后处理：收集空洞并用 Telea 填补（替代简单 edge_copy） */
+/** 空洞填补后处理：收集空洞并用 Telea 填补。holeFill 的值名
+ * 'edge_copy' 是历史标识（存档兼容保留），界面标签已按实际算法
+ * 显示「Telea 填补」——此处走的是 inpaintPixels（Telea），非边缘复制。 */
 function applyAiHoleFill(result: PixelGrid, holeFill: string): void {
   if (holeFill !== 'edge_copy') return;
   const holes = new Set<string>();

@@ -1,5 +1,8 @@
 // ============================================================
 // behavior-host — 主画布的行为宿主变量（纯函数）
+// 此处的「宿主」指喂输入变量的外部应用（行为宿主）；与
+// host-fx 的「宿主像素」（被挂载部件自身的像素）是两个不同
+// 概念，勿混。
 // 行为图的宿主契约与运行时包一致：var 节点读
 // t（秒）/ phase（步态相位，圈数）/ moveX（-1..1）/
 // speed01（0..1）/ grounded（1/0）。
@@ -23,8 +26,8 @@ export interface BehaviorHostVars {
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 /** 采样一条输入轨：首尾外钳制端值；关键帧所在帧即取该帧值
- *  （step 在关键帧帧切换——与 interpolateTrack 在边界帧仍取旧值的
- *  怪癖不同，输入轨按字面语义）；段内按插值模式（step 保持/其余线性） */
+ *  （step 在关键帧帧切换，与主渲染 interpolateTrack 同口径）；
+ *  段内按插值模式（step 保持/其余线性） */
 export function sampleInputTrack(
   track: KeyframeTrack<number> | undefined,
   frame: number,

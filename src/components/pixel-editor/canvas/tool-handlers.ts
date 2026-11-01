@@ -82,7 +82,7 @@ export const selectToolHandler: ToolHandler = {
 // 单一操控模型（不再有 move/manipulate 双模式切换）：
 //   拖动肢体         = 绕轴心旋转
 //   Shift + 拖动     = 移动该节点
-//   Alt + 拖动       = 移动该节点所插入的父节点插槽在父节点中的位置（rig）
+//   Alt + 拖动       = 移动该节点所插入的父节点槽位在父节点中的位置（rig）
 //   Ctrl + 拖动      = 移动该部件枢轴在该部件中的位置
 //   Ctrl + 点击      = 编辑该节点精灵像素
 //   Q / E            = 选中节点 ±15°
@@ -115,7 +115,7 @@ export function writePuppetPoseKeyframe(
   // 键 → 不在当前帧新建，改写到第 0 帧（0 帧有键更新、无键新建）——
   // 拖拽永远有落点。显式打帧入口（时间轴「添加关键帧」）传
   // forceCreate 绕过（永远在指定帧新建）；改骨架的操作（Alt 拖
-  // 插槽）不经此函数、不受管。
+  // 槽位）不经此函数、不受管。
   const mayCreate = opts?.forceCreate === true || usePuppetSessionStore.getState().autoKeyframe;
   const setTrack = (trackName: 'angle' | 'x' | 'y' | 'stretch' | 'scaleX' | 'tilt', value: number) => {
     const existing = node.tracks[trackName];
@@ -261,10 +261,10 @@ export const puppetHandler: ToolHandler = {
     // 自动关键帧不再拦拖拽：开关只管写关键帧时要不要自动新建
     // （writePuppetPoseKeyframe 内部口径），拖拽本身永远可用
 
-    // Alt+拖动：移动该节点所插入的父节点插槽在父节点中的位置（rig 操作，直接改骨架）
+    // Alt+拖动：移动该节点所插入的父节点槽位在父节点中的位置（rig 操作，直接改骨架）
     if (e.altKey) {
       const socketId = node.attachment.parentSocketId;
-      if (!socketId) return; // 根节点无插槽
+      if (!socketId) return; // 根节点无槽位
       const parentNode = node.parentId ? character.nodes[node.parentId] : undefined;
       if (!parentNode) return;
       const socket = parentNode.sockets.find((s) => s.id === socketId);
@@ -385,7 +385,7 @@ export const puppetHandler: ToolHandler = {
       if (Math.sqrt(ddx * ddx + ddy * ddy) < 2) return;
       drag.dragStarted = true;
       useProjectStore.getState().beginDrag(
-        drag.mode === 'rotate' ? '旋转木偶节点' : drag.mode === 'socket' ? '移动父节点插槽' : '移动木偶节点'
+        drag.mode === 'rotate' ? '旋转木偶节点' : drag.mode === 'socket' ? '移动父节点槽位' : '移动木偶节点'
       );
       s.isDrawingRef.current = true;
       s.markDirty();
@@ -432,7 +432,7 @@ export const puppetHandler: ToolHandler = {
         }, variantIndex);
       }
     } else if (drag.mode === 'socket') {
-      // socket：移动父节点插槽在父节点中的位置（rig 操作，直接改骨架）
+      // socket：移动父节点槽位在父节点中的位置（rig 操作，直接改骨架）
       const ddx = px - drag.startX;
       const ddy = py - drag.startY;
       // 逆旋转到父节点局部空间
@@ -1149,12 +1149,34 @@ function renderSpriteEditViewToCanvas(s: CanvasState): HTMLCanvasElement {
 // Smart Select (SAM) Handler
 // ---------------------------------------------------------------------------
 
+/** SAM 非 ready 态点击的反馈（节流 3s，防连点刷屏）：不许静默无反应，
+ *  明确告知未就绪原因并给出降级路径（套索/魔棒手动选区） */
+let lastSAMNotReadyToastAt = 0;
+function notifySAMNotReady(status: string) {
+  const now = Date.now();
+  if (now - lastSAMNotReadyToastAt < 3000) return;
+  lastSAMNotReadyToastAt = now;
+  if (status === 'error') {
+    toast({
+      title: 'AI 选区不可用',
+      description: 'SAM 模型加载失败——点工具栏的「重试」重新加载，或改用套索/魔棒手动选区',
+      variant: 'destructive',
+    });
+  } else {
+    toast({
+      title: 'AI 选区未就绪',
+      description: 'SAM 模型还在加载/处理中，稍候再点；也可改用套索/魔棒手动选区',
+    });
+  }
+}
+
 export const smartSelectHandler: ToolHandler = {
   onMouseDown(s, e, px, py) {
     const currentFrame = s.currentFrameRef.current;
     const editor = s.editorStore.getState(); const { samState } = editor;
     if (samState.status === 'idle') { editor.initSAMModel(samState.model); return; }
-    if (samState.status === 'ready') {
+    if (samState.status !== 'ready') { notifySAMNotReady(samState.status); return; }
+    {
       // 精灵编辑模式：SAM 编码当前精灵编辑视图（所见即所分割），分割后 mask
       // 换算到编辑精灵局部坐标写入选区（复用 inpaint 的 mask→局部换算思路）。
       const inSpriteEdit = s.editMode === 'sprite_edit' && s.selectedPart;

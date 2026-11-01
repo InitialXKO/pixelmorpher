@@ -1,3 +1,5 @@
+> ⚠️ **本文档已过期**（2026-11 全系统审计）：内容基于已退役的旧模型（Part / LiveAdapter 等），与现状多处不符。现行口径以根目录 `README.md` 与 `spikes/system-audit/AUDIT.md` 为准。
+
 # 技术架构详解 (Architecture & Technical Details)
 
 PixelMorpher 采用现代 Web 技术栈构建，旨在在浏览器中提供接近桌面应用的交互体验和渲染性能。

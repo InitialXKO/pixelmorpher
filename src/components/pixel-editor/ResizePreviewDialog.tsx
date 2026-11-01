@@ -17,11 +17,13 @@ import type { PixelGrid, PixelColor } from '@/lib/types';
 import type { Sprite } from '@/lib/unified-types';
 import { subToPx } from '@/lib/unified-types';
 
-/** 精灵轴心（像素单位）：plug 为 1/16 亚像素，无 plug 时默认 0（与 partToSprite 一致） */
+/** 精灵轴心（像素单位）：plug 为 1/16 亚像素；无 plug 时取中心——
+ * 与落库 resizeSprite 的缺省锚（oldW/2、oldH/2）对齐。此前预览取 0，
+ * 无 plug 精灵预览的轴心与实际 resize 后的 plug 位置不一致（审计域1）。 */
 function spritePivot(sprite: Sprite): { x: number; y: number } {
   return {
-    x: sprite.plug ? subToPx(sprite.plug.x) : 0,
-    y: sprite.plug ? subToPx(sprite.plug.y) : 0,
+    x: sprite.plug ? subToPx(sprite.plug.x) : sprite.width / 2,
+    y: sprite.plug ? subToPx(sprite.plug.y) : sprite.height / 2,
   };
 }
 

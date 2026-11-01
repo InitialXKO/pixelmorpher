@@ -203,13 +203,13 @@ export interface ProjectStore extends Omit<Project, 'selectedPuppetNodeId' | 'gl
   toggleCanvasModifier: (trackId: string, modifierId: string) => void;
   toggleCanvasModifierCollapsed: (trackId: string, modifierId: string) => void;
   reorderCanvasModifier: (trackId: string, modifierId: string, newIndex: number) => void;
-  addCanvasModifierKeyframe: (trackId: string, frame: number, params?: Record<string, ModifierParamValue>) => void;
+  /** 第三参双形态：分键 map（值为参数袋，新口径，审计 F-30）或存量扁平
+   * params 袋（值为标量/数组）——slice 内按值形态判形，扁平袋照旧落盘 */
+  addCanvasModifierKeyframe: (trackId: string, frame: number, paramsOrByModifier?: Record<string, Record<string, ModifierParamValue> | ModifierParamValue>) => void;
   removeCanvasModifierKeyframe: (trackId: string, keyframeId: string) => void;
-  updateCanvasModifierKeyframe: (trackId: string, keyframeId: string, params: Record<string, ModifierParamValue>) => void;
+  /** 双形态：(modifierId, params) 只写该修改器分键；(params) 旧形态合并进扁平袋 */
+  updateCanvasModifierKeyframe: (trackId: string, keyframeId: string, modifierIdOrParams: string | Record<string, ModifierParamValue>, params?: Record<string, ModifierParamValue>) => void;
   moveCanvasModifierKeyframe: (trackId: string, keyframeId: string, frame: number) => void;
-
-  // Motion analysis split (PRD 3.1.1)
-  motionAnalysisSplit: (frames: PixelGrid[], options?: { blockSize?: number; searchRadius?: number; motionThreshold?: number; minRegionSize?: number }) => string[];
 
   // M8: Animation variable actions
   addAnimationVariable: (name: string, scope: 'global' | 'part') => AnimationVariable;
