@@ -456,7 +456,7 @@ function dynPostColorAt(params, hex) {
 function dynOrbitPoints(params, tSec, worldAngleDeg) {
   if (!params.orbitEnabled || !(params.orbitCount > 0)) return [];
   const out = [];
-  const counter = params.orbitAngleSpace === 'world' ? (-(worldAngleDeg || 0) * Math.PI) / 180 : 0;
+  const counter = params.orbitAngleSpace !== 'sprite' ? (-(worldAngleDeg || 0) * Math.PI) / 180 : 0;
   const cc = Math.cos(counter), cs = Math.sin(counter);
   for (let i = 0; i < params.orbitCount; i++) {
     const ph = (params.orbitPhase || 0) + tSec * (params.orbitHz || 0) + i / params.orbitCount;

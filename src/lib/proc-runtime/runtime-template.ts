@@ -5333,15 +5333,15 @@ function frame(now) {
             pushParticleQuadShaped(target, a.ctr[0] + gx * c + gy * s, a.ctr[1] + gx * s - gy * c, pt.size, particleRgb(pt.color), pt.alpha, effShape, wdx0 / wl, wdy0 / wl, pt.rot || 0);
           }
         }
-        // 环绕光点（Jeff 落地）：身前层一次；world 基准时先用部件
-        // 旋转的自逆变换把椭圆点预转回本地（变换矩阵 [[c,s],[s,−c]]
+        // 环绕光点（Jeff 落地）：身前层一次；非 sprite 基准（world，含
+        // 字段缺失）时先用部件旋转的自逆变换把椭圆点预转回本地（变换矩阵 [[c,s],[s,−c]]
         // 自逆，预转与放置两次同变换相消，椭圆恒对世界）
         if (inst.params.orbitEnabled) {
           const opts = dynOrbitPoints(inst.params, frameIdx / FRAME_RATE, 0);
           const orgb = particleRgb(dynPostColorAt(inst.params, inst.params.orbitColor || '#aee6ff'));
           for (const q of opts) {
             let qx = q.x * a.dsx, qy = q.y * a.dsy;
-            if (inst.params.orbitAngleSpace === 'world') {
+            if (inst.params.orbitAngleSpace !== 'sprite') {
               const rx = qx * c + qy * s, ry = qx * s - qy * c;
               qx = rx; qy = ry;
             }
