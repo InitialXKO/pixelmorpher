@@ -27,11 +27,12 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   // 刀光（刀光↔蓝图统一）：表演刀光规格在表演图里的化身，params =
   // SlashFanSpec 全集（colors 以 __json_colors 存）；规格由进包经
   // slash-sync 从图提取后走刀光生成器，本节点不产出像素/变换端口。
-  // 接线覆盖的实况：slash-sync 的 applySlashWiring 只在调用方传入
-  // 求值回调时才施加 inputs 覆盖，而生产路径无人传——编辑器主画布
-  // 不渲染表演刀光（表演图求值是导出时采样烘焙，见 BehaviorPanel
-  // 明示），convert 进包传 undefined 按静态规格走。故 +/- 暴露的
-  // 端口当前不改变任何出图/进包结果，接线覆盖仅探针在用。
+  // 接线覆盖的实况：生产消费点是 convert 进包——导出时以表演
+  // 本地 t=0 对接线源单点求值（宿主变量取图内 var 节点缺省）并
+  // 把覆盖固化进包，时间型接线源（time/waveform 等）取其 t=0
+  // 输出。编辑器主画布不渲染表演刀光（表演图是导出时采样烘焙，
+  // 见 BehaviorPanel 明示），故接线覆盖只在进包时生效、编辑器
+  // 内无逐帧消费点；不接线时按静态规格走。
   slash_fan: {
     inputs: ['t', 'gate'],
     outputs: [],

@@ -8,7 +8,8 @@
 //   定义内容绝不复制固化进各 owner。
 // - 表演侧与表演图合成：绑定表演的图面板节点是「引用形态」
 //   （只带 __defId），解引用在 blueprint/slash-sync 的
-//   resolvePerfSlash 里先于接线覆盖发生（见 slash-sync）。
+//   resolvePerfSlash 里先于接线覆盖发生；接线覆盖由 convert
+//   进包时以表演本地 t=0 单点求值消费、固化进包（见 slash-sync）。
 // - 片段侧无图：绑定直接存片段字段 slashDefId，两条消费路
 //   （unified-render 预览、convert 烘焙）都经 resolveClipSlash
 //   解引用，保证同源。
