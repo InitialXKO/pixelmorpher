@@ -806,12 +806,12 @@ export function convertCharacterToRuntimePackage(
   };
   // 精灵引用解析表：角色自带表 + 工程级全局表（全局优先），与主画布同口径
   const spriteTable: SpriteTable = { ...(character.sprites ?? {}), ...(externalSprites ?? {}) };
-  // 时序编排命中事件（pattern_cue 的 hitstop/shake）：消费在编辑器
-  // 播放层（perform-fx），与蓝图接线同界——接线进包固化、包内无
-  // 事件求值口，且包内播放是状态机场景、没有工程时间轴原点可
-  // 映射 cue 的事件时刻，故不进包；带事件的 cue 在此点名。
+  // 事件轨（角色级定格/震屏关键帧）：消费在编辑器播放层
+  // （perform-fx 采样），与输入轨同界——包内播放是状态机驱动的
+  // 交互场景、没有工程时间轴原点可映射事件帧号，故不进包；
+  // 事件轨含有效事件的角色在此点名。
   if (characterHasCueEvents(character)) {
-    warnings.push(`角色「${character.name}」蓝图时序编排含命中事件（定格/震屏）：只在编辑器播放时生效，未进包（与蓝图接线同界）`);
+    warnings.push(`角色「${character.name}」事件轨含定格/震屏关键帧：只在编辑器播放时生效，未进包（与输入轨同界）`);
   }
   // 工程帧率：一切帧↔秒换算的唯一来源（调用方传入；缺省 12 仅兜底）
   const projectFpsTop = opts?.frameRate && opts.frameRate > 0 ? opts.frameRate : 12;

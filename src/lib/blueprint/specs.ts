@@ -69,14 +69,13 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   // keyframes: 参数关键帧插值
   keyframes: { inputs: ['t'], outputs: ['out'], params: ['frames', 'values', 'interpolation'] },
   // pattern_cue: 时序编排——cue 时间线（params.cues 为 JSON 数组
-  // [{at, value, hold?, hitstop?, shake?}]）给出阶梯值与命中事件。
-  // 接法：value 输出接 dynamic_pattern 节点的同名数值参数输入
-  // （如 glowStrength/rate/arcGrowHz），渲染时逐帧驱动图案参数；
-  // pulse/hitstop/shake 为事件输出（命中停顿秒数/震屏 px），
-  // 消费口待表演线接。cycleSec>0 时按周期回绕重复触发。
+  // [{at, value, hold?}]）给出阶梯值与脉冲。接法：value 输出接
+  // dynamic_pattern 节点的同名数值参数输入（如 glowStrength/
+  // rate/arcGrowHz），渲染时逐帧驱动图案参数。定格/震屏事件走
+  // 角色事件轨（cueTrack），不在本节点。cycleSec>0 时按周期回绕。
   pattern_cue: {
     inputs: ['t', 'cycleSec', 'pulseWidth'],
-    outputs: ['value', 'out', 'pulse', 'hitstop', 'shake'],
+    outputs: ['value', 'out', 'pulse'],
     params: ['cues', 'cycleSec', 'pulseWidth'],
   },
   cos: { inputs: ['x'], outputs: ['out'], params: [] },

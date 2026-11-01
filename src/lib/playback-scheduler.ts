@@ -53,8 +53,8 @@ export function startPlayback(): void {
       return;
     }
 
-    // 表演事件消费（pattern_cue 命中定格）：PixelCanvas 渲染时发布
-    // 当前帧的聚合事件，此处在推进前观测——定格期内工程时间不
+    // 表演事件消费（事件轨定格/震屏）：PixelCanvas 渲染时发布
+    // 当前帧的采样事件，此处在推进前观测——定格期内工程时间不
     // 推进（lastTimestamp 跟随本 tick，免得解冻后把冻结时长算进
     // 推进量），但渲染回调照常触发（震屏包络逐 tick 在变）。
     if (performFx.observe(useProjectStore.getState().currentFrame, timestamp)) {

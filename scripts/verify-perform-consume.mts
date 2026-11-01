@@ -1,19 +1,20 @@
 // ============================================================
-// 表演事件消费探针：pattern_cue 的 hitstop/shake 输出在蓝图侧只
-// 给值，消费链 = PixelCanvas 渲染发布聚合事件 → playback-
-// scheduler 推进前观测（定格停工程帧）→ PixelCanvas 平移叠加
-// 震屏偏移。本探针验四段：
-//  1) PerformFxDriver 状态机（合成时钟）：边沿单次触发、定格
-//     时长、跨帧事件窗口只算一记、shake-only 不定格、震屏包络
-//     衰减与 60Hz 方波翻转、陈旧发布不触发、回退重触发；
-//  2) aggregateCueEvents（注入替身求值器）：多角色多 cue 取大、
-//     无 cue 角色零求值（预扫快路径）、替身计数；
-//  3) cueNodeHasEvents / characterHasCueEvents：与求值器同口径
-//     （缺省示例自带事件、纯值 cue 无事件、损坏 JSON 按回落）；
-//  4) convert 点名：带事件 cue 的角色进包时 warnings 含「未进
-//     包」定格/震屏条，无 cue 的角色不点名；
+// 表演事件消费探针：事件来源 = 角色事件轨（Character.cueTrack，
+// 与输入轨同实现路子——关键帧数据挂角色、纯函数逐帧采样、字面
+// 语义：第 F 帧有键 = 第 F 帧触发）。消费链 = PixelCanvas 渲染
+// 发布采样事件 → playback-scheduler 推进前观测（定格停工程
+// 帧）→ PixelCanvas 平移叠加震屏偏移。本探针验五段：
+//  1) PerformFxDriver 状态机（合成时钟）：每帧判别一次、定格
+//     时长、紧邻两帧各有关键帧各算一记（字面语义，无窗口合并）、
+//     shake-only 不定格、震屏包络衰减与 60Hz 方波翻转、陈旧
+//     发布不触发、回退重触发、reset 清空；
+//  2) sampleCueTrack / cueEventsAt：恰帧命中、非键帧为零、多
+//     角色取大、缺轨为零、非法载荷钳零；
+//  3) characterHasCueEvents：事件轨上有无有效事件；
+//  4) convert 点名：事件轨含有效事件的角色进包时 warnings 含
+//     「未进包」定格/震屏条，无事件的角色不点名；
 //  5) 源码接线断言：scheduler 观测/复位、PixelCanvas 发布/
-//     震屏偏移、convert 点名三处接线在位（拆任一处应转红）。
+//     震屏偏移、convert 点名、时间线事件轨条挂载在位。
 // ============================================================
 
 import { readFileSync } from 'node:fs';
@@ -21,12 +22,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   PerformFxDriver,
-  aggregateCueEvents,
-  cueNodeHasEvents,
+  sampleCueTrack,
+  cueEventsAt,
   characterHasCueEvents,
 } from '../src/lib/perform-fx';
-import { num } from '../src/lib/blueprint/ir';
-import { createDefaultCharacter } from '../src/lib/unified-types';
+import { createDefaultCharacter, type CueEventValue, type KeyframeTrack } from '../src/lib/unified-types';
 import { convertCharacterToRuntimePackage } from '../src/lib/proc-runtime/convert';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -61,15 +61,16 @@ function check(name: string, ok: boolean, detail?: string) {
   check('1g 包络随时间衰减', Math.abs(oMid.x) < Math.abs(o0.x) && Math.abs(oMid.x) > 0, `mid=${oMid.x}`);
   check('1h 包络时长（max(250, 200)=250ms）后归零', d.shakeOffset(1250).x === 0 && d.shakeOffset(1250).y === 0);
 
-  // 事件窗口跨两帧（pulseWidth 覆盖帧 11、12）：只算一记
+  // 紧邻两帧各有关键帧：字面语义，各算一记（事件轨无窗口合并）
   d.publish(11, { hitstop: 0.1, shake: 0 });
-  check('1i 新一记命中触发定格', d.observe(11, 2000) === true);
+  check('1i 帧 11 事件触发定格', d.observe(11, 2000) === true);
   d.publish(12, { hitstop: 0.1, shake: 0 });
-  check('1j 窗口次帧不二次触发（定格已满、信号未落）', d.observe(12, 2150) === false && d.observe(12, 2160) === false);
+  check('1j 紧邻帧 12 的事件独立触发（前记定格已满 100ms）', d.observe(12, 2150) === true);
+  check('1j2 帧 12 定格期内同帧不重触发', d.observe(12, 2200) === true && d.observe(12, 2260) === false);
   d.publish(13, { hitstop: 0, shake: 0 });
-  d.observe(13, 2200);
+  d.observe(13, 2300);
   d.publish(14, { hitstop: 0.1, shake: 0 });
-  check('1k 信号落零后的下一记重新触发', d.observe(14, 2300) === true);
+  check('1k 无事件帧之后的下一记重新触发', d.observe(14, 2400) === true);
 
   // shake-only：不定格、只震屏
   const d2 = new PerformFxDriver();
@@ -100,66 +101,61 @@ function check(name: string, ok: boolean, detail?: string) {
   check('1r reset 后定格与震屏皆清', d4.observe(1, 150) === false && d4.shakeOffset(150).x === 0);
 }
 
-// ---------- 2) 聚合（替身求值器） ----------
-function charWithCue(id: string, cueNodeId: string) {
+// ---------- 2) 事件轨采样 ----------
+function cueTrackOf(kfs: { frame: number; value: CueEventValue }[]): KeyframeTrack<CueEventValue> {
+  return { keyframes: kfs, interpolation: 'step' };
+}
+function charWithEvents(id: string, kfs: { frame: number; value: CueEventValue }[]) {
   const ch = createDefaultCharacter(id, id);
-  const rootId = ch.rootNodeId;
-  ch.nodes[rootId]!.blueprint = {
-    version: 1,
-    outputId: '',
-    nodes: [{ id: cueNodeId, type: 'pattern_cue', params: {}, inputs: {} }],
-  } as never;
+  ch.cueTrack = cueTrackOf(kfs);
   return ch;
 }
 {
-  let calls = 0;
-  const stub = (graph: never, nodeId: string) => {
-    calls++;
-    return nodeId === 'cueA'
-      ? { hitstop: num(0.12), shake: num(3) }
-      : { hitstop: num(0.3), shake: num(1) };
-  };
+  const track = cueTrackOf([
+    { frame: 10, value: { hitstop: 0.12, shake: 3 } },
+    { frame: 12, value: { hitstop: 0.3 } },
+  ]);
+  const s10 = sampleCueTrack(track, 10);
+  check('2a 关键帧所在帧采样命中', Math.abs(s10.hitstop - 0.12) < 1e-9 && Math.abs(s10.shake - 3) < 1e-9, JSON.stringify(s10));
+  const s11 = sampleCueTrack(track, 11);
+  check('2b 非关键帧为零（无插值）', s11.hitstop === 0 && s11.shake === 0);
+  const s12 = sampleCueTrack(track, 12);
+  check('2c 只设 hitstop 的键 shake 为零', Math.abs(s12.hitstop - 0.3) < 1e-9 && s12.shake === 0);
+  check('2d 缺轨/空轨为零', sampleCueTrack(undefined, 10).hitstop === 0 && sampleCueTrack(cueTrackOf([]), 10).shake === 0);
+  const bad = sampleCueTrack(cueTrackOf([{ frame: 3, value: { hitstop: -1, shake: Number.NaN } }]), 3);
+  check('2e 非法载荷（负/NaN）钳零', bad.hitstop === 0 && bad.shake === 0);
+
   const rec = {
-    a: charWithCue('a', 'cueA'),
-    b: charWithCue('b', 'cueB'),
+    a: charWithEvents('a', [{ frame: 10, value: { hitstop: 0.12, shake: 3 } }]),
+    b: charWithEvents('b', [{ frame: 10, value: { hitstop: 0.3, shake: 1 } }]),
     c: createDefaultCharacter('c', 'c'),
-  } as never;
-  const agg = aggregateCueEvents(rec, 30, 12, { evaluateNode: stub as never });
-  check('2a 聚合 hitstop 取最大（0.3）', Math.abs(agg.hitstop - 0.3) < 1e-9, `${agg.hitstop}`);
-  check('2b 聚合 shake 取最大（3）', Math.abs(agg.shake - 3) < 1e-9, `${agg.shake}`);
-  check('2c 无 cue 角色零求值（两次调用）', calls === 2, `calls=${calls}`);
-
-  const agg0 = aggregateCueEvents({ c: createDefaultCharacter('c', 'c') } as never, 30, 12, { evaluateNode: stub as never });
-  check('2d 全无 cue 时聚合为零且不求值', agg0.hitstop === 0 && agg0.shake === 0 && calls === 2, `calls=${calls}`);
-
-  const aggNull = aggregateCueEvents(rec, 30, 12, { evaluateNode: (() => null) as never });
-  check('2e 求值返回 null 按无事件', aggNull.hitstop === 0 && aggNull.shake === 0);
+  };
+  const agg = cueEventsAt(rec, 10);
+  check('2f 多角色同帧 hitstop 取最大（0.3）', Math.abs(agg.hitstop - 0.3) < 1e-9, `${agg.hitstop}`);
+  check('2g 多角色同帧 shake 取最大（3）', Math.abs(agg.shake - 3) < 1e-9, `${agg.shake}`);
+  const aggOff = cueEventsAt(rec, 11);
+  check('2h 无键帧聚合为零', aggOff.hitstop === 0 && aggOff.shake === 0);
 }
 
-// ---------- 3) 事件判定（与求值器同口径） ----------
+// ---------- 3) 事件判定（convert 点名口径） ----------
 {
-  const cue = (params: Record<string, unknown>) => ({ type: 'pattern_cue', params });
-  check('3a 带 hitstop 的 cue 有事件', cueNodeHasEvents(cue({ cues: JSON.stringify([{ at: 0.5, value: 2, hitstop: 0.08 }]) })) === true);
-  check('3b 带 shake 的 cue 有事件', cueNodeHasEvents(cue({ cues: JSON.stringify([{ at: 0.5, value: 2, shake: 3 }]) })) === true);
-  check('3c 纯值 cue 无事件', cueNodeHasEvents(cue({ cues: JSON.stringify([{ at: 0, value: 1 }]) })) === false);
-  check('3d cues 缺失回落缺省示例（自带事件）', cueNodeHasEvents(cue({})) === true);
-  check('3e cues 损坏按回落处理（自带事件）', cueNodeHasEvents(cue({ cues: '{oops' })) === true);
-  check('3f 非 cue 节点无事件', cueNodeHasEvents({ type: 'dynamic_pattern', params: {} }) === false);
-  check('3g 角色级判定（带 cue 蓝图）', characterHasCueEvents(charWithCue('x', 'cueX')) === true);
-  check('3h 角色级判定（无蓝图）', characterHasCueEvents(createDefaultCharacter('y', 'y')) === false);
+  check('3a 事件轨带 hitstop 键 → 有事件', characterHasCueEvents(charWithEvents('x', [{ frame: 1, value: { hitstop: 0.08 } }])) === true);
+  check('3b 事件轨带 shake 键 → 有事件', characterHasCueEvents(charWithEvents('x', [{ frame: 1, value: { shake: 3 } }])) === true);
+  check('3c 事件轨键载荷全零 → 无事件', characterHasCueEvents(charWithEvents('x', [{ frame: 1, value: { hitstop: 0, shake: 0 } }])) === false);
+  check('3d 无事件轨 → 无事件', characterHasCueEvents(createDefaultCharacter('y', 'y')) === false);
+  check('3e 空事件轨 → 无事件', characterHasCueEvents(charWithEvents('z', [])) === false);
 }
 
 // ---------- 4) convert 点名 ----------
 {
-  const withCue = charWithCue('w', 'cueW');
-  withCue.nodes[withCue.rootNodeId]!.blueprint!.nodes[0]!.params = {
-    cues: JSON.stringify([{ at: 0.5, value: 2, hitstop: 0.08, shake: 3 }]),
-  } as never;
-  const pkg = convertCharacterToRuntimePackage(withCue);
-  check('4a 带事件 cue 进包时点名未进包', pkg.warnings.some((w) => w.includes('定格/震屏') && w.includes('未进包')),
+  const withEvents = charWithEvents('w', [{ frame: 5, value: { hitstop: 0.08, shake: 3 } }]);
+  const pkg = convertCharacterToRuntimePackage(withEvents);
+  check('4a 事件轨含有效事件进包时点名未进包', pkg.warnings.some((w) => w.includes('定格/震屏') && w.includes('未进包')),
     pkg.warnings.join(' | '));
   const plain = convertCharacterToRuntimePackage(createDefaultCharacter('p', 'p'));
-  check('4b 无 cue 角色不点名', !plain.warnings.some((w) => w.includes('定格/震屏')));
+  check('4b 无事件轨角色不点名', !plain.warnings.some((w) => w.includes('定格/震屏')));
+  const zeroOnly = convertCharacterToRuntimePackage(charWithEvents('q', [{ frame: 5, value: { hitstop: 0 } }]));
+  check('4c 事件轨只有零载荷键不点名', !zeroOnly.warnings.some((w) => w.includes('定格/震屏')));
 }
 
 // ---------- 5) 源码接线断言 ----------
@@ -167,11 +163,15 @@ function charWithCue(id: string, cueNodeId: string) {
   const sched = readFileSync(join(root, 'src/lib/playback-scheduler.ts'), 'utf8');
   const canvas = readFileSync(join(root, 'src/components/pixel-editor/PixelCanvas.tsx'), 'utf8');
   const conv = readFileSync(join(root, 'src/lib/proc-runtime/convert.ts'), 'utf8');
+  const timeline = readFileSync(join(root, 'src/components/pixel-editor/Timeline.tsx'), 'utf8');
+  const types = readFileSync(join(root, 'src/lib/unified-types.ts'), 'utf8');
   check('5a scheduler 推进前观测 performFx.observe', sched.includes('performFx.observe('));
   check('5b scheduler 启动时 performFx.reset', sched.includes('performFx.reset()'));
-  check('5c PixelCanvas 发布聚合事件', canvas.includes('aggregateCueEvents(') && canvas.includes('performFx.publish('));
+  check('5c PixelCanvas 发布事件轨采样', canvas.includes('cueEventsAt(') && canvas.includes('performFx.publish('));
   check('5d PixelCanvas 平移叠加震屏偏移', canvas.includes('performFx.shakeOffset('));
   check('5e convert 以 characterHasCueEvents 点名', conv.includes('characterHasCueEvents(character)'));
+  check('5f 时间线挂载事件轨条 CueTrackStrip', timeline.includes('CueTrackStrip'));
+  check('5g Character 数据含 cueTrack 字段', types.includes('cueTrack?: KeyframeTrack<CueEventValue>'));
 }
 
 console.log(`\nverify-perform-consume: ${passed} 过 / ${failed} 败`);

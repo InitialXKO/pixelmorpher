@@ -4,8 +4,9 @@
 // 覆盖三件事：
 //  1) cue 求值语义：对求值器喂时间序列（frameRate=10，帧步 0.1s），
 //     断言 value 阶梯（含 hold 过期回落、无 cue 生效回 0）、pulse
-//     事件窗口、hitstop/shake 只在窗口内给出、cycleSec 循环回绕
-//     重复触发、缺省示例 cues 的行为。
+//     脉冲窗口、cycleSec 循环回绕重复触发、缺省示例 cues 的行为；
+//     定格/震屏事件已迁角色事件轨：cues 里的旧 hitstop/shake 字段
+//     必须被忽略（输出无此二键、value/pulse 不受影响）。
 //  2) 端到端接线覆盖：pattern_cue.value → dynamic_pattern 节点的
 //     glowStrength 输入，经常渲染同路（resolvePatternsFromGraph +
 //     evaluateNodeOutput 回调，与 unified-render 同口径）解析，
@@ -87,19 +88,17 @@ console.log('[1] cue 求值：阶梯/hold 回落/事件窗口');
   eq('t=0.0 pulse=0', at(0).pulse, 0);
   eq('t=0.2 cue1 触发 value=5', at(2).value, 5);
   eq('t=0.2 pulse=1', at(2).pulse, 1);
-  eq('t=0.2 该 cue 无事件量 hitstop=0', at(2).hitstop, 0);
   eq('t=0.4 窗口内 pulse 仍为 1（d=0.2<0.25）', at(4).pulse, 1);
   eq('t=0.5 cue2 触发 value=9', at(5).value, 9);
-  eq('t=0.5 hitstop=0.12', at(5).hitstop, 0.12);
-  eq('t=0.5 shake=4', at(5).shake, 4);
+  check('t=0.5 输出无 hitstop 键（旧字段已忽略）', at(5).hitstop === undefined);
+  check('t=0.5 输出无 shake 键（旧字段已忽略）', at(5).shake === undefined);
   eq('t=0.6 hold 内 value=9', at(6).value, 9);
   eq('t=0.7 hold 过期回落 cue1 value=5', at(7).value, 5);
-  eq('t=0.7 事件窗口未过 hitstop 仍给出', at(7).hitstop, 0.12);
+  eq('t=0.7 脉冲窗口未过 pulse=1', at(7).pulse, 1);
   eq('t=0.8 事件窗口过 pulse=0', at(8).pulse, 0);
   eq('t=0.8 value=5', at(8).value, 5);
   eq('t=1.0 cue3 触发 value=3', at(10).value, 3);
-  eq('t=1.0 shake=2', at(10).shake, 2);
-  eq('t=1.0 hitstop=0（cue3 未设）', at(10).hitstop, 0);
+  eq('t=1.0 pulse=1', at(10).pulse, 1);
   eq('t=1.3 pulse=0、value 保持 3', at(13).pulse, 0);
   eq('t=1.3 value=3', at(13).value, 3);
   eq('out 别名与 value 同值', at(5).out, 9);
@@ -132,8 +131,7 @@ console.log('[1c] cue 求值：缺省示例与坏数据');
   const at = (f: number) => outAt(g, 'cue1', f);
   eq('无 cues 参数 → 缺省示例 t=0 value=1', at(0).value, 1);
   eq('缺省示例 t=0.5 value=2', at(5).value, 2);
-  eq('缺省示例 t=0.5 hitstop=0.08', at(5).hitstop, 0.08);
-  eq('缺省示例 t=0.5 shake=3', at(5).shake, 3);
+  check('缺省示例输出无 hitstop/shake 键', at(5).hitstop === undefined && at(5).shake === undefined);
   const bad = cueGraph({ cues: '{not json' });
   eq('坏 JSON 回落缺省示例 value=1', outAt(bad, 'cue1', 0).value, 1);
 }
@@ -193,8 +191,10 @@ console.log('[3] 注册：specs/标签/菜单来源');
 {
   check('加节点菜单来源含 pattern_cue', listBlueprintNodeTypes().includes('pattern_cue'));
   eq('中文标签为「时序编排」', getBlueprintNodeLabel('pattern_cue'), '时序编排');
-  check('specs 输出含 value/pulse/hitstop/shake',
-    ['value', 'pulse', 'hitstop', 'shake'].every((p) => getNodeOutputs('pattern_cue').includes(p)));
+  check('specs 输出含 value/out/pulse',
+    ['value', 'out', 'pulse'].every((p) => getNodeOutputs('pattern_cue').includes(p)));
+  check('specs 输出不含 hitstop/shake（事件已迁事件轨）',
+    !getNodeOutputs('pattern_cue').includes('hitstop') && !getNodeOutputs('pattern_cue').includes('shake'));
   check('specs 输入含 t', getNodeInputs('pattern_cue').includes('t'));
   check('specs 参数含 cues/cycleSec/pulseWidth',
     ['cues', 'cycleSec', 'pulseWidth'].every((p) => getNodeParamPorts('pattern_cue').includes(p)));

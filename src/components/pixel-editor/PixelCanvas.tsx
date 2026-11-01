@@ -11,9 +11,8 @@ import { clearJointDiscs, regenerateJointDiscs } from '@/lib/joint-discs';
 import { renderSpriteEditUnified } from '@/lib/unified-render';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { filterVisibleCharacters, visibleCharactersRecord } from '@/lib/visible-characters';
-import { renderUnified, invalidateUnifiedPipelineCache, collectActiveParamDrivers } from '@/lib/unified-render';
-import { aggregateCueEvents, performFx } from '@/lib/perform-fx';
-import { buildVariableContext, mapStoreAnimationVariables } from '@/lib/unified-animation-resolver';
+import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-render';
+import { cueEventsAt, performFx } from '@/lib/perform-fx';
 import { beginPickFrame, endPickFrame } from '@/lib/pick-buffer';
 import { useCanvasState } from './canvas/use-canvas-state';
 import { useCanvasInteraction } from './canvas/use-canvas-interaction';
@@ -275,21 +274,9 @@ export default function PixelCanvas() {
       // 角色显示互斥：主渲染与拾取编号图共用同一份可见集（隐藏的角色
       // 既不画、也不能被点中）；未过滤时原表直传，保拾取戳记同一性。
       const unifiedCharacters = visibleCharactersRecord(useProjectStore.getState().unifiedCharacters, puppetSession);
-      // 表演事件发布：聚合本帧可见角色的 pattern_cue 命中事件
-      // （定格/震屏），供 playback-scheduler 在推进前消费；变量按
-      // 主渲染同口径构建（unified-render 的 variableContext 兜底同式）
-      performFx.publish(currentFrame, aggregateCueEvents(unifiedCharacters ?? {}, currentFrame, s.frameRate, {
-        varsForCharacter: (ch) => {
-          const storeVars = s.animationVariables;
-          if (storeVars && storeVars.length > 0) {
-            const mapped = mapStoreAnimationVariables(storeVars as never);
-            if (mapped && mapped.length > 0) {
-              return buildVariableContext(mapped, currentFrame, collectActiveParamDrivers(ch), s.frameRate).values as Record<string, number>;
-            }
-          }
-          return {};
-        },
-      }));
+      // 表演事件发布：采样本帧可见角色的事件轨（定格/震屏关键帧），
+      // 供 playback-scheduler 在推进前消费（perform-fx 字面语义采样）
+      performFx.publish(currentFrame, cueEventsAt(unifiedCharacters ?? {}, currentFrame));
       const globalBlueprint = useProjectStore.getState().globalBlueprint;
       // 参考图可见时用透明背景，让参考图透出来做底
       const bgColor = (s.referenceImageUrl && s.referenceImageVisible) ? 'transparent' : s.backgroundColor;
