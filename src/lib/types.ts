@@ -2634,7 +2634,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
       ]},
       { name: 'holeFill', label: '空洞填充', type: 'select', default: 'edge_copy', options: [
         { label: '无', value: 'none' },
-        { label: '边缘复制', value: 'edge_copy' },
+        { label: '最近邻复制', value: 'edge_copy' },
         { label: '固定颜色', value: 'fixed_color' },
       ]},
       { name: 'coordinateSystem', label: '坐标系', type: 'select', default: 'local', options: [
@@ -2810,7 +2810,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
       { name: 'smoothSampling', label: '平滑采样', type: 'boolean', default: false },
       { name: 'holeFill', label: '空洞填充', type: 'select', default: 'edge_copy', options: [
         { label: '无', value: 'none' },
-        { label: '边缘复制', value: 'edge_copy' },
+        { label: 'Telea 填补', value: 'edge_copy' },
       ]},
       { name: 'convergeSpeed', label: '收敛速度', type: 'number', default: 0.5, min: 0.01, max: 3, step: 0.01 },
     ],
@@ -2837,7 +2837,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
       { name: 'smoothSampling', label: '平滑采样', type: 'boolean', default: false },
       { name: 'holeFill', label: '空洞填充', type: 'select', default: 'edge_copy', options: [
         { label: '无', value: 'none' },
-        { label: '边缘复制', value: 'edge_copy' },
+        { label: 'Telea 填补', value: 'edge_copy' },
       ]},
       { name: 'convergeSpeed', label: '收敛速度', type: 'number', default: 0.5, min: 0.01, max: 3, step: 0.01 },
     ],
@@ -2864,7 +2864,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
       { name: 'smoothSampling', label: '平滑采样', type: 'boolean', default: false },
       { name: 'holeFill', label: '空洞填充', type: 'select', default: 'edge_copy', options: [
         { label: '无', value: 'none' },
-        { label: '边缘复制', value: 'edge_copy' },
+        { label: 'Telea 填补', value: 'edge_copy' },
       ]},
       { name: 'convergeSpeed', label: '收敛速度', type: 'number', default: 0.5, min: 0.01, max: 3, step: 0.01 },
     ],
@@ -2892,7 +2892,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
       { name: 'smoothSampling', label: '平滑采样', type: 'boolean', default: false },
       { name: 'holeFill', label: '空洞填充', type: 'select', default: 'edge_copy', options: [
         { label: '无', value: 'none' },
-        { label: '边缘复制', value: 'edge_copy' },
+        { label: 'Telea 填补', value: 'edge_copy' },
       ]},
       { name: 'convergeSpeed', label: '收敛速度', type: 'number', default: 0.5, min: 0.01, max: 3, step: 0.01 },
     ],
@@ -2919,7 +2919,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
       { name: 'smoothSampling', label: '平滑采样', type: 'boolean', default: false },
       { name: 'holeFill', label: '空洞填充', type: 'select', default: 'edge_copy', options: [
         { label: '无', value: 'none' },
-        { label: '边缘复制', value: 'edge_copy' },
+        { label: 'Telea 填补', value: 'edge_copy' },
       ]},
       { name: 'convergeSpeed', label: '收敛速度', type: 'number', default: 0.5, min: 0.01, max: 3, step: 0.01 },
     ],
@@ -2947,7 +2947,7 @@ export const MODIFIER_DEFINITIONS: ModifierDefinition[] = [
       { name: 'smoothSampling', label: '平滑采样', type: 'boolean', default: false },
       { name: 'holeFill', label: '空洞填充', type: 'select', default: 'edge_copy', options: [
         { label: '无', value: 'none' },
-        { label: '边缘复制', value: 'edge_copy' },
+        { label: 'Telea 填补', value: 'edge_copy' },
       ]},
       { name: 'convergeSpeed', label: '收敛速度', type: 'number', default: 0.5, min: 0.01, max: 3, step: 0.01 },
     ],

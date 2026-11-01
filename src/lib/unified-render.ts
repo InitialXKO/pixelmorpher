@@ -4096,14 +4096,14 @@ function buildGlowOverlay(
   const pulse = glowPulseAt(visualParams, tSec);
   if (pulse <= 0.01 || visualParams.glowStrength <= 0) return null;
   const params = visualParams;
-  const hasWorld = contributors.some((c) => c.glowAngleSpace === 'world');
+  const hasWorld = contributors.some((c) => c.glowAngleSpace !== 'sprite');
   const sig = [
     params.glowColor, params.glowStrength, params.postEnabled ? params.postTheme : '',
     ...contributors.flatMap((c) => [
       c.glowHalo, c.glowMaskSource, c.glowMarkName ?? '', c.glowPick, c.glowTolerance,
       c.glowMask?.w ?? 0, c.glowMask?.h ?? 0, c.glowMask?.bits ?? '',
       c.glowShape ?? 'square', c.glowShapeKernel?.w ?? 0, c.glowShapeKernel?.h ?? 0, c.glowShapeKernel?.bits ?? '',
-      c.glowStarReach ?? 1.2, c.glowFlameReach ?? 1.8, c.glowAngleDeg ?? 270, c.glowAngleSpace ?? 'sprite',
+      c.glowStarReach ?? 1.2, c.glowFlameReach ?? 1.8, c.glowAngleDeg ?? 270, c.glowAngleSpace ?? 'world',
     ]),
     hasWorld ? `W${Math.round(frameAngleDeg / 3)}` : '',
     // 选区来源为精灵标记时，标记几何本身进签名（改标记不改像素也要失效缓存）

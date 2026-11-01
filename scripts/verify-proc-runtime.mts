@@ -1151,13 +1151,15 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
     ...defaultDynamicParams(), glowEnabled: true, glowMaskSource: 'color', glowPick: '#2ea8ff', emitEnabled: false, ...over,
   } as never, '辉光');
   const shapeCode: Record<string, number> = { square: 0, circle: 1, star: 2, flame: 3 };
+  // 注：glowAngleSpace 缺省已按用户裁定（2026-11-01）由 sprite 翻为 world，
+  // 「精灵基准」两例原先靠缺省取 sprite，现显式钉 'sprite' 以保住精灵基准覆盖。
   const cases: [string, Record<string, unknown>][] = [
-    ['方形/精灵基准', { glowShape: 'square', glowHalo: 2 }],
+    ['方形/精灵基准', { glowShape: 'square', glowHalo: 2, glowAngleSpace: 'sprite' }],
     ['圆形/世界基准', { glowShape: 'circle', glowHalo: 2, glowAngleDeg: 100, glowAngleSpace: 'world' }],
     ['星形/世界基准', { glowShape: 'star', glowHalo: 2, glowStarReach: 2, glowAngleDeg: 45, glowAngleSpace: 'world' }],
     ['焰形/世界基准', { glowShape: 'flame', glowHalo: 3, glowFlameReach: 2.5, glowAngleDeg: 200, glowAngleSpace: 'world' }],
     ['星形/圈宽0/世界基准', { glowShape: 'star', glowHalo: 0, glowAngleSpace: 'world' }],
-    ['焰形/精灵基准', { glowShape: 'flame', glowHalo: 1, glowAngleDeg: 90 }],
+    ['焰形/精灵基准', { glowShape: 'flame', glowHalo: 1, glowAngleDeg: 90, glowAngleSpace: 'sprite' }],
   ];
   let sBad = 0;
   for (const [label, over] of cases) {

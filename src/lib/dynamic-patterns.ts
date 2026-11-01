@@ -198,7 +198,7 @@ export interface DynamicPatternParams {
   glowFlameReach: number;   // 焰形伸长：焰尖向上可达距离 ÷ 圈宽
   glowAngleDeg: number;     // 辉光主方向（度，屏幕口径 0=东 90=南 180=西 270=北）：
                             // 星形 = 一条星芒的指向、焰形 = 焰尖指向、自定义 = 印章上方指向
-  glowAngleSpace: 'sprite' | 'world'; // 方向基准：sprite = 跟随精灵旋转（缺省）；world = 恒为世界方向
+  glowAngleSpace: 'sprite' | 'world'; // 方向基准：world = 恒为世界方向（缺省，2026-10-23 立规）；sprite = 跟随精灵旋转
   // 宿主后处理段：以部件当前帧像素为输入的后处理（本体即画
   // 布：受击闪/故障切片/传送写回/瓦解/石化面层）。纯函数核
   // 心在 host-fx.ts（applyHostFxToRgba），运行时孪生 =
@@ -343,7 +343,7 @@ export function defaultDynamicParams(): DynamicPatternParams {
     glowPhase: 0, glowHalo: 2, glowMaskSource: 'color', glowPick: '#2ea8ff',
     glowTolerance: 0, glowMask: undefined, glowMarkName: '', glowFollowGroup: 2,
     glowShape: 'square', glowShapeKernel: undefined,
-    glowStarReach: 1.2, glowFlameReach: 1.8, glowAngleDeg: 270, glowAngleSpace: 'sprite',
+    glowStarReach: 1.2, glowFlameReach: 1.8, glowAngleDeg: 270, glowAngleSpace: 'world',
     hostFxEnabled: false, hostFxMode: 'none', hostFxColor: '#7a4fd0',
     hostFxStrength: 0.8, hostFxHz: 1, hostFxSlicePx: 3, hostFxPhase: 0,
   };
@@ -364,7 +364,7 @@ export function normalizeDynamicParams(p: DynamicPatternParams): DynamicPatternP
     ? Math.max(1, Math.min(3.5, out.glowFlameReach)) : 1.8;
   out.glowAngleDeg = Number.isFinite(out.glowAngleDeg)
     ? ((out.glowAngleDeg % 360) + 360) % 360 : 270;
-  if (out.glowAngleSpace !== 'world') out.glowAngleSpace = 'sprite';
+  if (out.glowAngleSpace !== 'sprite') out.glowAngleSpace = 'world';
   if (typeof out.followSource !== 'string') out.followSource = '';
   if (out.emitMode !== 'gather') out.emitMode = 'out';
   out.gatherRadius = Number.isFinite(out.gatherRadius) ? Math.max(0, Math.min(64, out.gatherRadius)) : 14;
@@ -1366,7 +1366,7 @@ function glowStamp(
   const halo = Math.max(0, Math.min(8, Math.round(params.glowHalo || 0)));
   const shape = params.glowShape ?? 'square';
   const mainDeg = (params.glowAngleDeg ?? 270)
-    - (params.glowAngleSpace === 'world' ? frameAngleDeg : 0);
+    - (params.glowAngleSpace !== 'sprite' ? frameAngleDeg : 0);
   // 印章原生主方向：star 的星芒沿坐标轴（基准 0°），flame/custom 原生向上（基准 270°）
   const phiDeg = shape === 'star' ? mainDeg : mainDeg - 270;
   const phi = (phiDeg * Math.PI) / 180;

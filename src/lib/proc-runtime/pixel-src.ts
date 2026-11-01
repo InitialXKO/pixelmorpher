@@ -90,60 +90,202 @@ function pxEmptyGrid(h, w) {
   return out;
 }
 function pxInpaint(pixels, mask, radius) {
+  // Telea (2004) fast-marching inpainting — product-side twin lives in
+  // lib/inpainting.ts (inpaintPixels); the two are kept operation-
+  // identical and probe-aligned pixel by pixel.
   var height = pixels.length;
   var width = height > 0 ? pixels[0].length : 0;
   if (width === 0 || height === 0 || mask.size === 0) return pixels;
   var result = pixels.map(function (row) { return row.slice(); });
-  var maskGrid = [];
-  for (var my = 0; my < height; my++) { var mr = []; for (var mx = 0; mx < width; mx++) mr.push(false); maskGrid.push(mr); }
+  var N = width * height;
+  function at(x, y) { return y * width + x; }
+  var KNOWN = 0, OMEGA = 1, BLOCKED = 2;
+  var cls = new Uint8Array(N);
+  var chanR = new Float64Array(N);
+  var chanG = new Float64Array(N);
+  var chanB = new Float64Array(N);
+  var hasColor = new Uint8Array(N);
+  var inMask = new Uint8Array(N);
   mask.forEach(function (key) {
-    var parts = key.split(',').map(Number);
-    var x = parts[0], y = parts[1];
-    if (x >= 0 && x < width && y >= 0 && y < height) maskGrid[y][x] = true;
+    var comma = key.indexOf(',');
+    if (comma < 0) return;
+    var x = Number(key.slice(0, comma));
+    var y = Number(key.slice(comma + 1));
+    if (isFinite(x) && isFinite(y) && Math.floor(x) === x && Math.floor(y) === y && x >= 0 && x < width && y >= 0 && y < height) {
+      inMask[at(x, y)] = 1;
+    }
   });
-  var remaining = new Set(mask);
-  var maxIterations = Math.max(width, height);
-  for (var iteration = 0; iteration < maxIterations && remaining.size > 0; iteration++) {
-    var toFill = [];
-    remaining.forEach(function (key) {
-      var parts = key.split(',').map(Number);
-      var x = parts[0], y = parts[1];
-      if (x < 0 || x >= width || y < 0 || y >= height) return;
-      var totalR = 0, totalG = 0, totalB = 0, totalWeight = 0;
-      var hasNeighbor = false;
-      for (var dy = -radius; dy <= radius; dy++) {
-        for (var dx = -radius; dx <= radius; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          var nx = x + dx, ny = y + dy;
-          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
-          var nColor = result[ny][nx];
-          if (nColor === null || maskGrid[ny][nx]) continue;
-          var dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist > radius) continue;
-          var weight = 1 / (dist * dist + 0.001);
-          totalR += parseInt(nColor.slice(1, 3), 16) * weight;
-          totalG += parseInt(nColor.slice(3, 5), 16) * weight;
-          totalB += parseInt(nColor.slice(5, 7), 16) * weight;
-          totalWeight += weight;
-          hasNeighbor = true;
-        }
-      }
-      if (hasNeighbor && totalWeight > 0) {
-        toFill.push({ x: x, y: y, color: pxRgbToHex(totalR / totalWeight, totalG / totalWeight, totalB / totalWeight) });
-      }
-    });
-    if (toFill.length === 0) break;
-    for (var fi = 0; fi < toFill.length; fi++) {
-      result[toFill[fi].y][toFill[fi].x] = toFill[fi].color;
-      maskGrid[toFill[fi].y][toFill[fi].x] = false;
-      remaining.delete(toFill[fi].x + ',' + toFill[fi].y);
+  for (var yy = 0; yy < height; yy++) {
+    for (var xx = 0; xx < width; xx++) {
+      var ci = at(xx, yy);
+      if (inMask[ci]) { cls[ci] = OMEGA; continue; }
+      var cc = pixels[yy][xx];
+      if (cc === null || cc === '') { cls[ci] = BLOCKED; continue; }
+      cls[ci] = KNOWN;
+      chanR[ci] = parseInt(cc.slice(1, 3), 16);
+      chanG[ci] = parseInt(cc.slice(3, 5), 16);
+      chanB[ci] = parseInt(cc.slice(5, 7), 16);
+      hasColor[ci] = 1;
     }
   }
-  remaining.forEach(function (key) {
-    var parts = key.split(',').map(Number);
-    var x = parts[0], y = parts[1];
-    if (x >= 0 && x < width && y >= 0 && y < height) result[y][x] = null;
-  });
+  var T = new Float64Array(N);
+  for (var ti = 0; ti < N; ti++) T[ti] = Infinity;
+  var accepted = new Uint8Array(N);
+  for (var ki = 0; ki < N; ki++) {
+    if (cls[ki] === KNOWN) { T[ki] = 0; accepted[ki] = 1; }
+  }
+  function solveT(x, y) {
+    var th = Infinity;
+    var tv = Infinity;
+    if (x > 0 && accepted[at(x - 1, y)]) th = T[at(x - 1, y)];
+    if (x < width - 1 && accepted[at(x + 1, y)]) th = Math.min(th, T[at(x + 1, y)]);
+    if (y > 0 && accepted[at(x, y - 1)]) tv = T[at(x, y - 1)];
+    if (y < height - 1 && accepted[at(x, y + 1)]) tv = Math.min(tv, T[at(x, y + 1)]);
+    if (th === Infinity && tv === Infinity) return Infinity;
+    if (th === Infinity) return tv + 1;
+    if (tv === Infinity) return th + 1;
+    var d = Math.abs(th - tv);
+    if (d >= 1) return Math.min(th, tv) + 1;
+    return (th + tv + Math.sqrt(2 - d * d)) / 2;
+  }
+  var heapT = [];
+  var heapI = [];
+  function heapPush(t, i) {
+    heapT.push(t);
+    heapI.push(i);
+    var c = heapT.length - 1;
+    while (c > 0) {
+      var p = (c - 1) >> 1;
+      if (heapT[p] <= heapT[c]) break;
+      var tt = heapT[p]; heapT[p] = heapT[c]; heapT[c] = tt;
+      var ti2 = heapI[p]; heapI[p] = heapI[c]; heapI[c] = ti2;
+      c = p;
+    }
+  }
+  function heapPop() {
+    var topT = heapT[0];
+    var topI = heapI[0];
+    var lt = heapT.pop();
+    var li = heapI.pop();
+    if (heapT.length > 0) {
+      heapT[0] = lt;
+      heapI[0] = li;
+      var c = 0;
+      for (;;) {
+        var l = 2 * c + 1;
+        var r = l + 1;
+        var m = c;
+        if (l < heapT.length && heapT[l] < heapT[m]) m = l;
+        if (r < heapT.length && heapT[r] < heapT[m]) m = r;
+        if (m === c) break;
+        var tt = heapT[m]; heapT[m] = heapT[c]; heapT[c] = tt;
+        var ti2 = heapI[m]; heapI[m] = heapI[c]; heapI[c] = ti2;
+        c = m;
+      }
+    }
+    return [topT, topI];
+  }
+  function relax(x, y) {
+    var i = at(x, y);
+    if (cls[i] !== OMEGA || accepted[i]) return;
+    var t = solveT(x, y);
+    if (t < T[i]) {
+      T[i] = t;
+      heapPush(t, i);
+    }
+  }
+  function gradT(x, y) {
+    var tp = T[at(x, y)];
+    var gx = 0;
+    var gy = 0;
+    var tl = x > 0 && accepted[at(x - 1, y)] ? T[at(x - 1, y)] : Infinity;
+    var tr = x < width - 1 && accepted[at(x + 1, y)] ? T[at(x + 1, y)] : Infinity;
+    if (tl !== Infinity || tr !== Infinity) gx = tl <= tr ? tp - tl : -(tp - tr);
+    var tu = y > 0 && accepted[at(x, y - 1)] ? T[at(x, y - 1)] : Infinity;
+    var td = y < height - 1 && accepted[at(x, y + 1)] ? T[at(x, y + 1)] : Infinity;
+    if (tu !== Infinity || td !== Infinity) gy = tu <= td ? tp - tu : -(tp - td);
+    var len = Math.sqrt(gx * gx + gy * gy);
+    if (len < 1e-12) return [0, 0];
+    return [gx / len, gy / len];
+  }
+  function chanGrad(chan, x, y) {
+    var c = chan[at(x, y)];
+    var gx = 0;
+    var gy = 0;
+    var hl = x > 0 && hasColor[at(x - 1, y)] ? chan[at(x - 1, y)] : NaN;
+    var hr = x < width - 1 && hasColor[at(x + 1, y)] ? chan[at(x + 1, y)] : NaN;
+    if (hl === hl && hr === hr) gx = (hr - hl) / 2;
+    else if (hr === hr) gx = hr - c;
+    else if (hl === hl) gx = c - hl;
+    var hu = y > 0 && hasColor[at(x, y - 1)] ? chan[at(x, y - 1)] : NaN;
+    var hd = y < height - 1 && hasColor[at(x, y + 1)] ? chan[at(x, y + 1)] : NaN;
+    if (hu === hu && hd === hd) gy = (hd - hu) / 2;
+    else if (hd === hd) gy = hd - c;
+    else if (hu === hu) gy = c - hu;
+    return [gx, gy];
+  }
+  function fillPixel(x, y) {
+    var g = gradT(x, y);
+    var gtx = g[0], gty = g[1];
+    var tp = T[at(x, y)];
+    var R = Math.ceil(radius);
+    var sumR = 0, sumG = 0, sumB = 0, sumW = 0;
+    for (var dy = -R; dy <= R; dy++) {
+      for (var dx = -R; dx <= R; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        var qx = x + dx, qy = y + dy;
+        if (qx < 0 || qx >= width || qy < 0 || qy >= height) continue;
+        var qi = at(qx, qy);
+        if (!hasColor[qi]) continue;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > radius) continue;
+        var dir = ((x - qx) * gtx + (y - qy) * gty) / dist;
+        if (dir <= 0) continue;
+        var w = dir * (1 / (dist * dist)) * (1 / (1 + Math.abs(tp - T[qi])));
+        var gr = chanGrad(chanR, qx, qy);
+        var gg = chanGrad(chanG, qx, qy);
+        var gb = chanGrad(chanB, qx, qy);
+        sumR += w * (chanR[qi] + gr[0] * (x - qx) + gr[1] * (y - qy));
+        sumG += w * (chanG[qi] + gg[0] * (x - qx) + gg[1] * (y - qy));
+        sumB += w * (chanB[qi] + gb[0] * (x - qx) + gb[1] * (y - qy));
+        sumW += w;
+      }
+    }
+    if (sumW <= 0) return false;
+    var hex = pxRgbToHex(sumR / sumW, sumG / sumW, sumB / sumW);
+    var i = at(x, y);
+    result[y][x] = hex;
+    chanR[i] = parseInt(hex.slice(1, 3), 16);
+    chanG[i] = parseInt(hex.slice(3, 5), 16);
+    chanB[i] = parseInt(hex.slice(5, 7), 16);
+    hasColor[i] = 1;
+    return true;
+  }
+  for (var sy = 0; sy < height; sy++) {
+    for (var sx = 0; sx < width; sx++) {
+      if (cls[at(sx, sy)] !== OMEGA) continue;
+      relax(sx, sy);
+    }
+  }
+  var filled = new Uint8Array(N);
+  while (heapT.length > 0) {
+    var popped = heapPop();
+    var pt = popped[0], pi = popped[1];
+    if (accepted[pi] || pt !== T[pi]) continue;
+    accepted[pi] = 1;
+    var px = pi % width;
+    var py = Math.floor(pi / width);
+    if (fillPixel(px, py)) filled[pi] = 1;
+    if (px > 0) relax(px - 1, py);
+    if (px < width - 1) relax(px + 1, py);
+    if (py > 0) relax(px, py - 1);
+    if (py < height - 1) relax(px, py + 1);
+  }
+  for (var fi = 0; fi < N; fi++) {
+    if (cls[fi] === OMEGA && !filled[fi]) {
+      result[Math.floor(fi / width)][fi % width] = null;
+    }
+  }
   return result;
 }
 function pxHoleFill(result, holeFill) {

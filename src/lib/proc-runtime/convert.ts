@@ -481,7 +481,7 @@ function glowStampSignature(params: DynamicPatternParams): string {
   const reach = shape === 'star' ? (params.glowStarReach ?? 1.2)
     : shape === 'flame' ? (params.glowFlameReach ?? 1.8) : 1;
   return [shape, Math.round(params.glowHalo || 0), params.glowAngleDeg ?? 270,
-    params.glowAngleSpace ?? 'sprite', reach].join('|');
+    params.glowAngleSpace ?? 'world', reach].join('|');
 }
 
 /** 片元重算印章参数（钳制口径与 dynamic-patterns 的 glowStamp 一致） */

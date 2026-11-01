@@ -5098,7 +5098,7 @@ function frame(now) {
       const grgb = particleRgb(dynPostColorAt(x.params, x.params.glowColor || '#7dd7ff'));
       return [grgb[0], grgb[1], grgb[2], x.params.glowStrength || 0, x.params.glowHz || 0, x.params.glowPhase || 0];
     });
-    const glowSpace = glowInsts.map((x) => (x.params.glowAngleSpace === 'world' ? 1 : 0));
+    const glowSpace = glowInsts.map((x) => (x.params.glowAngleSpace !== 'sprite' ? 1 : 0));
     // 印章参数随图集条目走（导出端按服装集算好：解析形状=选区掩码+参数，片元重算）
     const glowStamps = entry.glowStamps ? entry.glowStamps.map((st) => (st ? [st.shape, st.halo, st.angleDeg, st.reach] : [4, 0, 0, 0])) : undefined;
     // 宿主后处理段：第一个启用实例（dynHostFxFirst，与编辑器

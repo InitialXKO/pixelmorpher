@@ -41,8 +41,8 @@ function getBoundaryColors(pixels: PixelGrid, holes: [number, number][]): string
   return colors;
 }
 
-/** 1. AI 修复（Telea）：用 inpainting 算法智能填补空洞
- * 替代原众数填充的简单平涂，按边界加权平均自然过渡 */
+/** 1. AI 修复（Telea）：快速行进求距离场，逐格以一阶外推填补空洞
+ * （inpaintPixels 即 Telea 2004 原算法，线条/渐变可顺梯度接进空洞） */
 export function patternModeFill(pixels: PixelGrid): PixelGrid {
   const holes = findHoles(pixels);
   if (holes.length === 0) return pixels.map(row => [...row]);
@@ -50,7 +50,7 @@ export function patternModeFill(pixels: PixelGrid): PixelGrid {
   return inpaintPixels(pixels, mask, 3);
 }
 
-/** 2. AI 修复（Telea）：替代原简单最近邻，边界加权平均 */
+/** 2. AI 修复（Telea·大半径）：同 Telea 算法，邻域半径 5（缺省 3） */
 export function patternEdgeExtend(pixels: PixelGrid): PixelGrid {
   const holes = findHoles(pixels);
   if (holes.length === 0) return pixels.map(row => [...row]);
