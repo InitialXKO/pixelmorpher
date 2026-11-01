@@ -133,7 +133,7 @@ console.log('N 组：旧数据补齐与守卫');
 console.log('T 组：组合配方模板 ×13 入库（配方核心段断言）');
 {
   const { DYNAMIC_PATTERN_TEMPLATES, findDynamicTemplate } = await import('../src/lib/dynamic-patterns');
-  check('T1 模板总数 22（原 9 + 新 13）', DYNAMIC_PATTERN_TEMPLATES.length === 22, `实际 ${DYNAMIC_PATTERN_TEMPLATES.length}`);
+  check('T1 模板总数 40（原 9 + Jeff 13 + pixelfx 收录 18）', DYNAMIC_PATTERN_TEMPLATES.length === 40, `实际 ${DYNAMIC_PATTERN_TEMPLATES.length}`);
   const seg = (name: string, fn: (p: DynamicPatternParams) => boolean, label: string) => {
     const t = findDynamicTemplate(name);
     check(`T·${name}：${label}`, !!t && fn(t.params));

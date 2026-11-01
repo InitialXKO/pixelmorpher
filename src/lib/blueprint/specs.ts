@@ -68,6 +68,16 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   waveform: { inputs: ['t'], outputs: ['out'], params: ['waveform', 'amplitude', 'baseValue', 'endValue', 'period', 'phase', 'damping'] },
   // keyframes: 参数关键帧插值
   keyframes: { inputs: ['t'], outputs: ['out'], params: ['frames', 'values', 'interpolation'] },
+  // pattern_cue: 时序编排——cue 时间线（params.cues 为 JSON 数组
+  // [{at, value, hold?}]）给出阶梯值与脉冲。接法：value 输出接
+  // dynamic_pattern 节点的同名数值参数输入（如 glowStrength/
+  // rate/arcGrowHz），渲染时逐帧驱动图案参数。定格/震屏事件走
+  // 角色事件轨（cueTrack），不在本节点。cycleSec>0 时按周期回绕。
+  pattern_cue: {
+    inputs: ['t', 'cycleSec', 'pulseWidth'],
+    outputs: ['value', 'out', 'pulse'],
+    params: ['cues', 'cycleSec', 'pulseWidth'],
+  },
   cos: { inputs: ['x'], outputs: ['out'], params: [] },
 
   // ---- 程序化动画 ----

@@ -790,6 +790,14 @@ function createDefaultTrack<T>(interpolation: InterpolationMode = 'linear'): Key
   return { keyframes: [], interpolation };
 }
 
+/** 事件轨关键帧的载荷：该帧触发的一次性播放事件（缺省/0 = 该项不触发） */
+export interface CueEventValue {
+  /** 定格秒数：触发帧起全场冻结工程时间推进的时长 */
+  hitstop?: number;
+  /** 震屏幅度 px：触发帧起按衰减包络抖动 */
+  shake?: number;
+}
+
 // ---- Node Definition ----
 
 /**
@@ -1464,6 +1472,12 @@ export interface Character {
     speed01?: KeyframeTrack<number>;
     grounded?: KeyframeTrack<number>;
   };
+  /** 事件轨（时间线角色级单轨）：关键帧所在帧触发一次性播放事件
+   *  （hitstop 定格秒数 / shake 震屏幅度 px），由 perform-fx 逐帧
+   *  采样消费（关键帧语义按字面：第 F 帧有键 = 第 F 帧触发，无
+   *  插值）。与输入轨同为编辑器侧数据：不进运行时包（包内播放
+   *  是状态机驱动、没有工程时间轴原点），convert 点名。 */
+  cueTrack?: KeyframeTrack<CueEventValue>;
 
   // ---- Face Turn Config (Spine-style pseudo-3D) ----
   faceTurnConfig?: {

@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { useProjectStore } from '@/lib/store';
 import type { EffectTrack, ModifierParamValue } from '@/lib/types';
+import { TEXT_POP_DEFAULT_PARAMS } from '@/lib/text-pop';
 import { EFFECT_CONFIG } from '../constants';
 
 // ---- Effect Keyframe Edit Dialog ----
@@ -31,8 +32,13 @@ export default function EffectKeyframeEditDialog({
   const keyframe = effectTrack?.keyframes.find((k) => k.id === keyframeId);
 
   const initialParams = useMemo(() => {
-    return keyframe ? { ...keyframe.params } : {};
-  }, [keyframe]);
+    if (!keyframe) return {};
+    // 飘字事件：缺省字段垫底，保证全部事件字段都出现在编辑列表里
+    // （含历史空 params 关键帧）。
+    return effectTrack?.type === 'text_pop'
+      ? { ...TEXT_POP_DEFAULT_PARAMS, ...keyframe.params }
+      : { ...keyframe.params };
+  }, [keyframe, effectTrack?.type]);
 
   const [params, setParams] = useState<Record<string, ModifierParamValue>>(initialParams);
 

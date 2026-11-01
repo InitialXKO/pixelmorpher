@@ -16,6 +16,7 @@ import {
   createDefaultCanvasModifier,
   getCanvasModifierDef,
 } from '../types';
+import { TEXT_POP_DEFAULT_PARAMS } from '../text-pop';
 
 export type EffectSlice = {
   addEffectTrack: ProjectStore['addEffectTrack'];
@@ -77,7 +78,11 @@ export const createEffectSlice: StateCreator<ProjectStore, [], [], EffectSlice> 
   addEffectKeyframe: (effectTrackId, frame, params) => {
     get().pushUndo('添加效果关键帧');
     set((s) => {
-      const defaultParams = params ?? {};
+      // 飘字关键帧即事件本体：未给 params 时按缺省事件播种，
+      // 否则事件没有任何字段可编辑/可播。
+      const track = s.effectTracks.find((t) => t.id === effectTrackId);
+      const defaultParams =
+        params ?? (track?.type === 'text_pop' ? { ...TEXT_POP_DEFAULT_PARAMS } : {});
       return {
         effectTracks: s.effectTracks.map((t) => {
           if (t.id !== effectTrackId) return t;

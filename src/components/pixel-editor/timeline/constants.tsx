@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sun, Sparkles, Ghost, Waves, Wind } from 'lucide-react';
+import { Sun, Sparkles, Ghost, Waves, Wind, Type } from 'lucide-react';
 import type { EffectType } from '@/lib/types';
 
 // ---- Layout Constants ----
@@ -48,6 +48,7 @@ export const EFFECT_CONFIG: Record<EffectType, { icon: React.ReactNode; color: s
   afterimage: { icon: <Ghost className="size-3" />, color: '#a78bfa', label: '残影' },
   pixel_displace: { icon: <Waves className="size-3" />, color: '#34d399', label: '像素置换' },
   motion_blur: { icon: <Wind className="size-3" />, color: '#22d3ee', label: '运动模糊' },
+  text_pop: { icon: <Type className="size-3" />, color: '#f472b6', label: '飘字' },
 };
 
 // ---- Color maps ----

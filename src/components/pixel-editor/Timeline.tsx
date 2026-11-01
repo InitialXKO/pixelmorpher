@@ -25,6 +25,7 @@ import TrackLabelsColumn from './timeline/TrackLabelsColumn';
 import TrackLanesColumn from './timeline/TrackLanesColumn';
 import EffectKeyframeEditDialog from './timeline/dialogs/EffectKeyframeEditDialog';
 import InputTracksStrip from './timeline/InputTracksStrip';
+import CueTrackStrip from './timeline/CueTrackStrip';
 import useVirtualScroll from './timeline/useVirtualScroll';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { interpolateNodeKeyframes } from '@/lib/engine/render-helpers/puppet-keyframe-interpolation';
@@ -384,6 +385,7 @@ export default function Timeline() {
   const rulerScrollRef = useRef<HTMLDivElement>(null);
   const tagStripScrollRef = useRef<HTMLDivElement>(null);
   const inputStripScrollRef = useRef<HTMLDivElement>(null);
+  const cueStripScrollRef = useRef<HTMLDivElement>(null);
 
   // ---- Virtual Scroll ----
   // Part 轨道已删除：tracks 传空数组（原 tracks 恒为空）
@@ -464,6 +466,9 @@ export default function Timeline() {
     }
     if (inputStripScrollRef.current && scrollContainerRef.current) {
       inputStripScrollRef.current.scrollLeft = scrollContainerRef.current.scrollLeft;
+    }
+    if (cueStripScrollRef.current && scrollContainerRef.current) {
+      cueStripScrollRef.current.scrollLeft = scrollContainerRef.current.scrollLeft;
     }
     handleVirtualScroll();
   }, [handleVirtualScroll]);
@@ -681,6 +686,18 @@ export default function Timeline() {
           frameWidth={FRAME_WIDTH}
           timelineWidth={timelineWidth}
           scrollRef={inputStripScrollRef}
+        />
+      )}
+
+      {/* 事件轨（角色级：定格/震屏关键帧，perform-fx 采样消费） */}
+      {puppetCharacter && (
+        <CueTrackStrip
+          character={puppetCharacter}
+          totalFrames={totalFrames}
+          currentFrame={currentFrame}
+          frameWidth={FRAME_WIDTH}
+          timelineWidth={timelineWidth}
+          scrollRef={cueStripScrollRef}
         />
       )}
 

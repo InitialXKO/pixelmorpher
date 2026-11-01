@@ -12,6 +12,7 @@ import { renderSpriteEditUnified } from '@/lib/unified-render';
 import { usePuppetSessionStore } from '@/lib/puppet-session-store';
 import { filterVisibleCharacters, visibleCharactersRecord } from '@/lib/visible-characters';
 import { renderUnified, invalidateUnifiedPipelineCache } from '@/lib/unified-render';
+import { cueEventsAt, performFx } from '@/lib/perform-fx';
 import { beginPickFrame, endPickFrame } from '@/lib/pick-buffer';
 import { useCanvasState } from './canvas/use-canvas-state';
 import { useCanvasInteraction } from './canvas/use-canvas-interaction';
@@ -83,8 +84,11 @@ export default function PixelCanvas() {
 
     const currentFrame = storeCurrentFrame;
     const zoom = s.zoomRef.current;
-    const panX = s.panRef.current.x;
-    const panY = s.panRef.current.y;
+    // 表演事件震屏：偏移只叠加在本帧平移量上（panRef 本身不动，
+    // 场景与覆盖层同读这份 panX/panY，全场一起震）
+    const shakeOff = performFx.shakeOffset(performance.now());
+    const panX = s.panRef.current.x + shakeOff.x;
+    const panY = s.panRef.current.y + shakeOff.y;
 
     const rc = { ctx, canvasWidth: s.canvasWidth, canvasHeight: s.canvasHeight, zoom, panX, panY, currentFrame };
 
@@ -270,6 +274,9 @@ export default function PixelCanvas() {
       // 角色显示互斥：主渲染与拾取编号图共用同一份可见集（隐藏的角色
       // 既不画、也不能被点中）；未过滤时原表直传，保拾取戳记同一性。
       const unifiedCharacters = visibleCharactersRecord(useProjectStore.getState().unifiedCharacters, puppetSession);
+      // 表演事件发布：采样本帧可见角色的事件轨（定格/震屏关键帧），
+      // 供 playback-scheduler 在推进前消费（perform-fx 字面语义采样）
+      performFx.publish(currentFrame, cueEventsAt(unifiedCharacters ?? {}, currentFrame));
       const globalBlueprint = useProjectStore.getState().globalBlueprint;
       // 参考图可见时用透明背景，让参考图透出来做底
       const bgColor = (s.referenceImageUrl && s.referenceImageVisible) ? 'transparent' : s.backgroundColor;

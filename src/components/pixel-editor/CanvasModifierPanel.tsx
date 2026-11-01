@@ -16,6 +16,8 @@ import {
   Sun,
   Grid3x3,
   Circle,
+  Eraser,
+  Blocks,
 } from 'lucide-react';
 
 import { useProjectStore } from '@/lib/store';
@@ -54,6 +56,8 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   Sun,
   Grid3x3,
   Circle,
+  Eraser,
+  Blocks,
 };
 
 function CanvasModifierIcon({ iconName, className }: { iconName: string; className?: string }) {
@@ -71,6 +75,8 @@ const CANVAS_MODIFIER_COLORS: Record<CanvasModifierType, string> = {
   bloom: 'text-yellow-400',
   scanlines: 'text-cyan-400',
   canvas_mask: 'text-teal-400',
+  field_wipe: 'text-violet-400',
+  block_shift: 'text-orange-400',
 };
 
 const CANVAS_MODIFIER_BG: Record<CanvasModifierType, string> = {
@@ -80,6 +86,8 @@ const CANVAS_MODIFIER_BG: Record<CanvasModifierType, string> = {
   bloom: 'bg-yellow-400/10',
   scanlines: 'bg-cyan-400/10',
   canvas_mask: 'bg-teal-400/10',
+  field_wipe: 'bg-violet-400/10',
+  block_shift: 'bg-orange-400/10',
 };
 
 // ---- CanvasModifierBlock ----

@@ -15,6 +15,7 @@
 // ============================================================
 
 import { useProjectStore } from './store';
+import { performFx } from './perform-fx';
 
 type RenderCallback = () => void;
 
@@ -41,12 +42,26 @@ export function startPlayback(): void {
   if (isRunning) return;
   isRunning = true;
   lastTimestamp = 0;
+  performFx.reset();
 
   const loop = (timestamp: number) => {
     if (!isRunning) return;
 
     if (lastTimestamp === 0) {
       lastTimestamp = timestamp;
+      rafHandle = requestAnimationFrame(loop);
+      return;
+    }
+
+    // 表演事件消费（事件轨定格/震屏）：PixelCanvas 渲染时发布
+    // 当前帧的采样事件，此处在推进前观测——定格期内工程时间不
+    // 推进（lastTimestamp 跟随本 tick，免得解冻后把冻结时长算进
+    // 推进量），但渲染回调照常触发（震屏包络逐 tick 在变）。
+    if (performFx.observe(useProjectStore.getState().currentFrame, timestamp)) {
+      lastTimestamp = timestamp;
+      for (const cb of renderCallbacks) {
+        try { cb(); } catch (_) { /* skip failing callbacks */ }
+      }
       rafHandle = requestAnimationFrame(loop);
       return;
     }

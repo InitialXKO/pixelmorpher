@@ -3691,11 +3691,20 @@ export function executeRenderPlan(
   if (plan.effectTracks) {
     for (const effectTrack of plan.effectTracks) {
       if (!effectTrack.visible) continue;
+      if (effectTrack.type === 'text_pop') {
+        // 飘字：每个关键帧是一个独立事件，逐个求值（各自包络）
+        for (const k of effectTrack.keyframes ?? []) {
+          if (k.frame <= currentFrame) {
+            renderEffectTrackFrame(ctx, effectTrack, k, currentFrame, canvasWidth, canvasHeight, plan.frameRate ?? 12);
+          }
+        }
+        continue;
+      }
       const kf = effectTrack.keyframes
         ?.filter((k: any) => k.frame <= currentFrame)
         ?.sort((a: any, b: any) => b.frame - a.frame)[0];
       if (!kf) continue;
-      renderEffectTrackFrame(ctx, effectTrack, kf, currentFrame, canvasWidth, canvasHeight);
+      renderEffectTrackFrame(ctx, effectTrack, kf, currentFrame, canvasWidth, canvasHeight, plan.frameRate ?? 12);
     }
   }
 
@@ -3797,9 +3806,63 @@ function drawDynamicParticles(
       if (p.size <= 0 || p.alpha <= 0) continue;
       const r = Math.max(0.5, p.size / 2);
       const m = /^#([0-9a-fA-F]{6})$/.exec(p.color);
-      const rgb = m
-        ? `${parseInt(m[1].slice(0, 2), 16)},${parseInt(m[1].slice(2, 4), 16)},${parseInt(m[1].slice(4, 6), 16)}`
-        : '255,180,107';
+      const cr = m ? parseInt(m[1].slice(0, 2), 16) : 255;
+      const cg = m ? parseInt(m[1].slice(2, 4), 16) : 180;
+      const cb = m ? parseInt(m[1].slice(4, 6), 16) : 107;
+      const rgb = `${cr},${cg},${cb}`;
+      const pAlpha = Math.min(1, p.alpha);
+      // 自转角（轨迹升级）：rot 在未镜像本地空间，绘制镜像时角度随 x 一起翻
+      const rotRad = (((instruction.mirror ? 180 - p.rot : p.rot) * Math.PI) / 180);
+      if (p.shape === 'puff') {
+        // 烟团：三层同心软盘（半径 size / 0.74size / 0.5size，
+        // alpha 依次 0.25 / 0.45 / 0.7 倍粒子 alpha，由外向内渐实）
+        for (const disc of [[p.size, 0.25], [p.size * 0.74, 0.45], [p.size * 0.5, 0.7]] as const) {
+          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, disc[0]);
+          g.addColorStop(0, `rgba(${rgb},${Math.min(1, p.alpha * disc[1])})`);
+          g.addColorStop(1, `rgba(${rgb},0)`);
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, disc[0], 0, Math.PI * 2);
+          ctx.fill();
+        }
+        continue;
+      }
+      if (p.shape === 'shard') {
+        // 线片：以 rot 为角的线段（长 2×size），主色段 + 近白尖
+        const ca = Math.cos(rotRad), sa = Math.sin(rotRad);
+        const hx = ca * p.size, hy = sa * p.size;
+        const nearWhite = `${Math.round(cr + (255 - cr) * 0.85)},${Math.round(cg + (255 - cg) * 0.85)},${Math.round(cb + (255 - cb) * 0.85)}`;
+        ctx.lineWidth = Math.max(1, p.size * 0.3);
+        ctx.strokeStyle = `rgba(${rgb},${pAlpha})`;
+        ctx.beginPath();
+        ctx.moveTo(p.x - hx, p.y - hy);
+        ctx.lineTo(p.x + hx * 0.2, p.y + hy * 0.2);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(${nearWhite},${pAlpha})`;
+        ctx.beginPath();
+        ctx.moveTo(p.x + hx * 0.2, p.y + hy * 0.2);
+        ctx.lineTo(p.x + hx, p.y + hy);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        continue;
+      }
+      if (p.shape === 'chunk') {
+        // 碎块：以 rot 旋转的菱块，主色面 + 压暗边（乘法压暗）
+        const ca = Math.cos(rotRad), sa = Math.sin(rotRad);
+        const L = Math.max(0.6, p.size * 0.6), S = L * 0.62;
+        const vxOf = (u: number, v: number): [number, number] => [p.x + ca * u - sa * v, p.y + sa * u + ca * v];
+        const dark = `${Math.round(cr * 0.45)},${Math.round(cg * 0.45)},${Math.round(cb * 0.45)}`;
+        for (const [scaleF, fill] of [[1, dark], [0.7, rgb]] as const) {
+          const pts = [vxOf(L * scaleF, 0), vxOf(0, S * scaleF), vxOf(-L * scaleF, 0), vxOf(0, -S * scaleF)];
+          ctx.fillStyle = `rgba(${fill},${pAlpha})`;
+          ctx.beginPath();
+          ctx.moveTo(pts[0]![0], pts[0]![1]);
+          for (let i = 1; i < 4; i++) ctx.lineTo(pts[i]![0], pts[i]![1]);
+          ctx.closePath();
+          ctx.fill();
+        }
+        continue;
+      }
       const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
       grad.addColorStop(0, `rgba(${rgb},${Math.min(1, p.alpha)})`);
       grad.addColorStop(1, `rgba(${rgb},0)`);
@@ -3813,7 +3876,7 @@ function drawDynamicParticles(
         ctx.closePath();
       } else if (p.shape === 'star') {
         for (let i = 0; i < 8; i++) {
-          const a = (i * Math.PI) / 4 - Math.PI / 2;
+          const a = (i * Math.PI) / 4 - Math.PI / 2 + rotRad;
           const rad = i % 2 === 0 ? r : r * 0.38;
           const vx = p.x + Math.cos(a) * rad, vy = p.y + Math.sin(a) * rad;
           if (i === 0) ctx.moveTo(vx, vy); else ctx.lineTo(vx, vy);
@@ -3923,10 +3986,13 @@ function drawDynamicParticles(
 }
 
 /** 动态模式弧线段（D4 一期）：本地坐标（原点 = 枢轴，与粒子同一
- * 变换空间）。先宽线低透明作晕，再细线本体，逐段线宽随点位收细。 */
+ * 变换空间）。先宽线低透明作晕，再细线本体，逐段线宽随点位收细。
+ * layer 分层：只有环带模式用身后层（后半环在精灵前画），其余
+ * 模式只在身前层出图（身后层调用直接空转）。 */
 function drawDynamicArcs(
   ctx: CanvasRenderingContext2D,
   instruction: NodeRenderInstruction,
+  layer: 'back' | 'front',
 ): void {
   const list = instruction.dynamicPatterns;
   if (!list || list.length === 0) return;
@@ -3958,6 +4024,49 @@ function drawDynamicArcs(
         ctx.stroke();
       }
     };
+    if (p.arcMode === 'ring') {
+      // 环带分层：branches[0] = 后半环（身后层）、branches[1] = 前半环
+      // （身前层）；点宽即环带厚度，晕层与本体层同其它模式口径
+      const halfLine = layer === 'back' ? shape.branches[0] : shape.branches[1];
+      if (halfLine) {
+        strokeLine(halfLine, 2.6, 0.22);
+        strokeLine(halfLine, 1, 1);
+      }
+      ctx.restore();
+      return;
+    }
+    if (layer === 'back') { ctx.restore(); return; }
+    if (p.arcMode === 'fan') {
+      // 扇面填充：边界闭合时以径向渐变填充（根部满 alpha、尖端
+      // 0.25），再描整条边界；生长截断未闭合时只描边不填充。
+      // 填充色沿径向渐变与点 w（径向占比）同口径：w=0 在根部、
+      // w=1 在弧边，渐变半径取边界最大径向距离。
+      const pts = shape.main;
+      const closed = pts.length > 2
+        && Math.abs(pts[0].x - pts[pts.length - 1].x) < 1e-6
+        && Math.abs(pts[0].y - pts[pts.length - 1].y) < 1e-6;
+      if (closed) {
+        let rMax = 0;
+        for (const q of pts) rMax = Math.max(rMax, Math.hypot(q.x, q.y));
+        const grad = ctx.createRadialGradient(pts[0].x, pts[0].y, 0, pts[0].x, pts[0].y, Math.max(1, rMax));
+        grad.addColorStop(0, `rgba(${rgb.r},${rgb.g},${rgb.b},${shape.alpha.toFixed(3)})`);
+        grad.addColorStop(1, `rgba(${rgb.r},${rgb.g},${rgb.b},${(shape.alpha * 0.25).toFixed(3)})`);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.lineWidth = Math.max(0.4, p.arcWidthPx);
+      ctx.strokeStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${shape.alpha.toFixed(3)})`;
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
     for (const line of [shape.main, ...shape.branches]) {
       strokeLine(line, 2.6, 0.22);
       strokeLine(line, 1, 1);
@@ -4455,6 +4564,31 @@ function renderNodeSprite(
     }
   }
 
+  // 动态模式宿主后处理段：全部像素加工（列表像素修改器 + 蓝图
+  // 像素链 + 蒙皮弯曲 + 置换）定稿后、成画布前的最后一步——以
+  // 部件当前帧像素为输入做染色/闪刷/切片/逐行显隐/瓦解/面层
+  // 爬升（本体即画布类效果）。放在这里是因为再往后就是
+  // pixelsToCanvas 的栅格化，像素语义到此为止；发光叠加层在
+  // 下方用同一份 effectivePixels 构建，自动与后处理结果对齐。
+  // 多实例只取第一个启用（与置换/残影同口径）。仅启用本段的
+  // 部件走 RGBA 往返，其余部件零开销。
+  if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
+    const hostParamsList = instruction.dynamicPatterns.map((r) => r.instance.params);
+    const { firstHostFxParams, applyHostFxToRgba, pixelGridToRgba, rgbaToPixelGrid, hostFxSeedOf } =
+      require('./host-fx') as typeof import('./host-fx');
+    const hp = firstHostFxParams(hostParamsList);
+    if (hp) {
+      const hostInst = instruction.dynamicPatterns[hostParamsList.indexOf(hp)]!.instance;
+      const rgba = pixelGridToRgba(effectivePixels);
+      if (rgba.w > 0 && rgba.h > 0) {
+        const out = applyHostFxToRgba(
+          rgba.data, rgba.w, rgba.h, hp, frame / frameRate, hostFxSeedOf(hostInst.id),
+        );
+        effectivePixels = rgbaToPixelGrid(out, rgba.w, rgba.h) as PixelGrid;
+      }
+    }
+  }
+
   // Create offscreen canvas from (possibly modified) sprite data
   // 可逆性：分部件尺度差换算。精灵是分部件像素（相机紧→图里大），节点是全局像素，
   // 绘制时按比例缩放对齐。scaleFactor = partCameraHalf / globalCameraHalf（记录的尺度差，可逆）
@@ -4663,8 +4797,10 @@ function renderNodeSprite(
   }
 
   // 动态模式粒子（身后层）：与身后效果同空间，精灵之前绘制
+  // 弧线段身后层同点调用：只有环带模式的后半环在此出图
   if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
     drawDynamicParticles(ctx, instruction, 'back');
+    drawDynamicArcs(ctx, instruction, 'back');
   }
 
   // ========================================================================
@@ -4747,7 +4883,7 @@ function renderNodeSprite(
       }
       if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
         drawDynamicParticles(ctx, instruction, 'front');
-        drawDynamicArcs(ctx, instruction);
+        drawDynamicArcs(ctx, instruction, 'front');
       }
       for (const mod of topEffectMods) {
         renderParticleEffect(ctx, nodeId, sprite, mod as any, frame);
@@ -4771,7 +4907,7 @@ function renderNodeSprite(
     // 动态模式粒子（身前层）+ 弧线段
     if (previewQuality !== 'low' && instruction.dynamicPatterns?.length) {
       drawDynamicParticles(ctx, instruction, 'front');
-      drawDynamicArcs(ctx, instruction);
+      drawDynamicArcs(ctx, instruction, 'front');
     }
 
     // ========================================================================
@@ -5456,11 +5592,20 @@ export function renderUnified(
   if (effectTracks) {
     for (const effectTrack of effectTracks) {
       if (!effectTrack.visible) continue;
+      if (effectTrack.type === 'text_pop') {
+        // 飘字：每个关键帧是一个独立事件，逐个求值（各自包络）
+        for (const k of effectTrack.keyframes ?? []) {
+          if (k.frame <= currentFrame) {
+            renderEffectTrackFrame(ctx, effectTrack, k, currentFrame, canvasWidth, canvasHeight, frameRate);
+          }
+        }
+        continue;
+      }
       const kf = effectTrack.keyframes
         ?.filter((k: any) => k.frame <= currentFrame)
         ?.sort((a: any, b: any) => b.frame - a.frame)[0];
       if (!kf) continue;
-      renderEffectTrackFrame(ctx, effectTrack, kf, currentFrame, canvasWidth, canvasHeight);
+      renderEffectTrackFrame(ctx, effectTrack, kf, currentFrame, canvasWidth, canvasHeight, frameRate);
     }
   }
   if (motionBlurStrokes) {

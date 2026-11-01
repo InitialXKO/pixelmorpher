@@ -333,6 +333,8 @@ export default function DynamicPatternEditor({
                   <option value="beam">光束</option>
                   <option value="glyph">法阵线绘</option>
                   <option value="stream">流光线</option>
+                  <option value="ring">环带</option>
+                  <option value="fan">扇面</option>
                 </select>
               </label>
             )}
@@ -367,6 +369,10 @@ export default function DynamicPatternEditor({
               <input type="checkbox" checked={inst.params.emitEnabled} onChange={(e) => patchParam(inst.id, 'emitEnabled', e.target.checked)} />
               发射段
             </label>
+            <label className="flex items-center gap-1" title="运行时包内本实例改走有状态粒子模拟（D6：烟雾对流保真，seek 后重置重滚）；编辑器预览仍为闭式">
+              <input type="checkbox" checked={np(inst).runtimeSim} onChange={(e) => patchParam(inst.id, 'runtimeSim', e.target.checked)} />
+              有状态模拟
+            </label>
             <label className="flex items-center gap-1">
               <input type="checkbox" checked={np(inst).glowEnabled} onChange={(e) => patchParam(inst.id, 'glowEnabled', e.target.checked)} />
               发光段
@@ -382,7 +388,7 @@ export default function DynamicPatternEditor({
               </label>
             )}
           </div>
-          {(['形变', '发射', '粒子', '环绕', '发光', '弧线', '团块', '火焰', '环境', '后期'] as const).map((section) => (
+          {(['形变', '发射', '粒子', '环绕', '发光', '弧线', '团块', '火焰', '环境', '后期', '本体'] as const).map((section) => (
             <div key={section}>
               <div className="text-[9px] text-gray-600 mt-0.5">{section}</div>
               {section === '形变' && (
@@ -438,13 +444,50 @@ export default function DynamicPatternEditor({
                     value={np(inst).particleShape}
                     onChange={(e) => patchParam(inst.id, 'particleShape', e.target.value)}
                     className={`${selCls} flex-1`}
-                    title="只影响绘制不影响弹道：圆点（径向渐隐）/ 星形 / 菱形 / 流光线（沿运动方向拉长）"
+                    title="只影响绘制不影响弹道：圆点（径向渐隐）/ 星形 / 菱形 / 流光线（沿运动方向拉长）/ 烟团（三层软盘）/ 线片（旋转线段）/ 碎块（旋转菱块）"
                   >
                     <option value="dot">圆点</option>
                     <option value="star">星形</option>
                     <option value="diamond">菱形</option>
                     <option value="line">流光线</option>
+                    <option value="puff">烟团</option>
+                    <option value="shard">线片</option>
+                    <option value="chunk">碎块</option>
                   </select>
+                </div>
+              )}
+              {section === '粒子' && (
+                <div className="flex items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0" title="粒子落到地面线（插头下方所设偏移处）时按弹跳系数反弹；反弹后速度慢于落定速度就停在落点，直到生命结束">
+                    <input type="checkbox" checked={np(inst).groundEnabled} onChange={(e) => patchParam(inst.id, 'groundEnabled', e.target.checked)} />
+                    落地弹跳
+                  </label>
+                </div>
+              )}
+              {section === '粒子' && (
+                <div className="flex items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0" title="主粒子死亡时在死亡位置冒出一团烟（烟团形状），速度取父速度六成并向上漂">
+                    <input type="checkbox" checked={np(inst).chainEnabled} onChange={(e) => patchParam(inst.id, 'chainEnabled', e.target.checked)} />
+                    死后转烟
+                  </label>
+                  {np(inst).chainEnabled && (
+                    <span className="flex items-center gap-1">
+                      <input type="color" value={np(inst).chainColor} onChange={(e) => patchParam(inst.id, 'chainColor', e.target.value)} className="h-5 w-8 bg-transparent" title="烟的颜色" />
+                    </span>
+                  )}
+                </div>
+              )}
+              {section === '粒子' && (
+                <div className="flex items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0" title="主粒子第一次落到地面时，在落点按所设速率冒出一茬短命小粒子（如落地火花/尘星）；需要先开落地弹跳">
+                    <input type="checkbox" checked={np(inst).landEmitEnabled} onChange={(e) => patchParam(inst.id, 'landEmitEnabled', e.target.checked)} />
+                    落地派生
+                  </label>
+                  {np(inst).landEmitEnabled && (
+                    <span className="flex items-center gap-1">
+                      <input type="color" value={np(inst).landEmitColor} onChange={(e) => patchParam(inst.id, 'landEmitColor', e.target.value)} className="h-5 w-8 bg-transparent" title="派生粒子颜色" />
+                    </span>
+                  )}
                 </div>
               )}
               {section === '粒子' && (
@@ -566,6 +609,33 @@ export default function DynamicPatternEditor({
                   )}
                 </div>
               )}
+              {section === '本体' && (
+                <div className="flex items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-[9px] text-gray-500 w-24 shrink-0" title="以部件当前帧像素为输入的后处理（本体即画布）；同部件多个只取第一个启用">
+                    <input type="checkbox" checked={np(inst).hostFxEnabled} onChange={(e) => patchParam(inst.id, 'hostFxEnabled', e.target.checked)} />
+                    本体后处理
+                  </label>
+                  {np(inst).hostFxEnabled && (
+                    <span className="flex items-center gap-1">
+                      <select
+                        value={np(inst).hostFxMode}
+                        onChange={(e) => patchParam(inst.id, 'hostFxMode', e.target.value)}
+                        className={selCls}
+                        title="染色：本体换上宿主色的色相、保留明暗；闪刷：随脉冲向白色闪；切片：行带横移加分色（故障感）；逐行：自上而下逐行出现（传送写回）；瓦解：像素按噪声逐个碎掉又复原；面层：宿主色自底向上爬满本体（石化/冰冻/诅咒）"
+                      >
+                        <option value="none">无</option>
+                        <option value="tint">染色</option>
+                        <option value="flash">闪刷</option>
+                        <option value="slice">切片</option>
+                        <option value="rows">逐行显隐</option>
+                        <option value="dissolve">瓦解</option>
+                        <option value="creep">面层爬升</option>
+                      </select>
+                      <input type="color" value={np(inst).hostFxColor} onChange={(e) => patchParam(inst.id, 'hostFxColor', e.target.value)} className="h-5 w-8 bg-transparent" title="宿主色（染色/瓦解前沿/面层）" />
+                    </span>
+                  )}
+                </div>
+              )}
               {section === '发光' && glowOverflowOf(inst) && (
                 <div className="flex items-center gap-1.5">
                   <span className="text-[9px] text-gray-500 w-24 shrink-0">并入发光组</span>
@@ -624,6 +694,12 @@ export default function DynamicPatternEditor({
                 .filter((d) => !(section === '发光' && d.key === 'glowAngleDeg' && !['star', 'flame', 'custom'].includes(np(inst).glowShape)))
                 .filter((d) => !(section === '发射' && d.key === 'gatherRadius' && np(inst).emitMode !== 'gather'))
                 .filter((d) => !(section === '粒子' && d.key === 'rampMidPos' && !np(inst).rampEnabled))
+                .filter((d) => !(section === '粒子' && !np(inst).groundEnabled
+                  && (d.key === 'groundYPx' || d.key === 'bounce' || d.key === 'restVelPx')))
+                .filter((d) => !(section === '粒子' && !np(inst).chainEnabled
+                  && (d.key === 'chainLife' || d.key === 'chainSizeMul')))
+                .filter((d) => !(section === '粒子' && !np(inst).landEmitEnabled
+                  && (d.key === 'landEmitRate' || d.key === 'landEmitDuration' || d.key === 'landEmitRise')))
                 .filter((d) => !(section === '环绕' && !np(inst).orbitEnabled))
                 .filter((d) => !(section === '后期' && !np(inst).postEnabled))
                 .filter((d) => !(section === '团块' && !np(inst).blobEnabled))
@@ -632,6 +708,10 @@ export default function DynamicPatternEditor({
                 .filter((d) => !(section === '环境' && d.key === 'envRadius' && np(inst).envMode !== 'ripple'))
                 .filter((d) => !(section === '弧线' && d.key === 'arcGlyphSpinDeg' && np(inst).arcMode !== 'glyph'))
                 .filter((d) => !(section === '弧线' && d.key === 'arcFlowHz' && np(inst).arcMode !== 'stream'))
+                .filter((d) => !(section === '弧线' && d.key === 'arcTilt' && np(inst).arcMode !== 'ring'))
+                .filter((d) => !(section === '弧线' && d.key === 'arcFanDeg' && np(inst).arcMode !== 'fan'))
+                .filter((d) => !(section === '本体' && !np(inst).hostFxEnabled))
+                .filter((d) => !(section === '本体' && d.key === 'hostFxSlicePx' && np(inst).hostFxMode !== 'slice'))
                 .map((d) => {
                 const v = np(inst)[d.key] as number;
                 return (

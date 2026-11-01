@@ -635,6 +635,216 @@ function applyCanvasMask(
 }
 
 /**
+ * 场擦除（field_wipe）：覆盖函数与保留系数。
+ *
+ * 坐标口径：像素坐标 (x, y)，原点左上、x 向右、y 向下，x∈[0,W)、y∈[0,H)
+ * （与 ImageData 一致）。覆盖 cov(x,y,W,H) ∈ [0,1)——归一化取帧外角
+ * 距离/哈希值域，使 cov 恒 < 1，于是 progress = 1 时全帧保留。
+ *
+ * 方向定死：像素保留 iff cov < progress。progress 0→1 是「揭示」
+ * （保留集单调扩），1→0 是「遮蔽」；反向不加方向参数、打关键帧即可。
+ * feather > 0 时在 cov = progress 处张开宽 feather（cov 单位）的软带：
+ * keep = clamp((progress − cov)/feather + 0.5, 0, 1)，带外仍是硬判。
+ * 应用方式 = 逐像素 alpha × keep（与 canvas_mask 同路）。
+ *
+ * 四种场形：
+ * - threshold：值噪声场。8px 晶格上的哈希值 + smoothstep 双线性插值；
+ *   哈希是纯整数运算（imul/位移），同种子同场、跨引擎同值。
+ * - blinds：水平条带（带高 16px）。cov 自上而下连续扫：带内 frac 与
+ *   带号拼成 (bandIdx + frac)/bandCount——每带依次被进度吃满。
+ * - iris：中心径向。中心 = 帧中心，cov = 距中心距离 / 帧外角距离，
+ *   中心 cov = 0、进度一起先保留中心。
+ * - diamond：旋转 45° 的 L1 距离（|dx| + |dy|），同上归一化。
+ *
+ * 与运行时模板的 fwCovAt/fwKeepAt 逐式同构（探针 verify-canvas-field
+ * 抽两边纯函数逐点对拍）。
+ */
+function fwHash2(ix: number, iy: number, seed: number): number {
+  let n = (Math.imul(ix, 374761393) + Math.imul(iy, 668265263) + Math.imul(seed | 0, 1442695041)) | 0;
+  n = Math.imul(n ^ (n >>> 13), 1274126177);
+  n ^= n >>> 16;
+  return (n >>> 0) / 4294967296;
+}
+
+const FW_NOISE_CELL = 8;
+
+function fwNoise(x: number, y: number, seed: number): number {
+  const gx = x / FW_NOISE_CELL;
+  const gy = y / FW_NOISE_CELL;
+  const ix = Math.floor(gx);
+  const iy = Math.floor(gy);
+  let fx = gx - ix;
+  let fy = gy - iy;
+  fx = fx * fx * (3 - 2 * fx);
+  fy = fy * fy * (3 - 2 * fy);
+  const v00 = fwHash2(ix, iy, seed);
+  const v10 = fwHash2(ix + 1, iy, seed);
+  const v01 = fwHash2(ix, iy + 1, seed);
+  const v11 = fwHash2(ix + 1, iy + 1, seed);
+  const top = v00 + (v10 - v00) * fx;
+  const bot = v01 + (v11 - v01) * fx;
+  return top + (bot - top) * fy;
+}
+
+export function fieldWipeCoverage(
+  shape: string,
+  x: number,
+  y: number,
+  W: number,
+  H: number,
+  seed: number,
+): number {
+  switch (shape) {
+    case 'blinds': {
+      const band = 16;
+      const bands = Math.max(1, Math.ceil(H / band));
+      const bi = Math.floor(y / band);
+      const frac = (y - bi * band) / band;
+      return Math.min(1, (bi + frac) / bands);
+    }
+    case 'iris': {
+      const cx = (W - 1) / 2;
+      const cy = (H - 1) / 2;
+      const maxD = Math.hypot(W / 2, H / 2) || 1;
+      return Math.min(1, Math.hypot(x - cx, y - cy) / maxD);
+    }
+    case 'diamond': {
+      const cx = (W - 1) / 2;
+      const cy = (H - 1) / 2;
+      const maxL = W / 2 + H / 2 || 1;
+      return Math.min(1, (Math.abs(x - cx) + Math.abs(y - cy)) / maxL);
+    }
+    case 'threshold':
+    default:
+      return fwNoise(x, y, seed);
+  }
+}
+
+export function fieldWipeKeep(
+  shape: string,
+  progress: number,
+  feather: number,
+  seed: number,
+  x: number,
+  y: number,
+  W: number,
+  H: number,
+): number {
+  const cov = fieldWipeCoverage(shape, x, y, W, H, seed);
+  if (feather > 0) {
+    const k = (progress - cov) / feather + 0.5;
+    return k < 0 ? 0 : k > 1 ? 1 : k;
+  }
+  return cov < progress ? 1 : 0;
+}
+
+/**
+ * Apply field wipe canvas modifier: per-pixel alpha scaled by keep.
+ */
+function applyFieldWipe(
+  ctx: CanvasRenderingContext2D,
+  modifier: CanvasModifierInstance,
+  params: Record<string, ModifierParamValue>,
+  canvasWidth: number,
+  canvasHeight: number,
+): void {
+  const shape = String(params.shape) || 'threshold';
+  const progress = numParam(params.progress, 1);
+  const feather = numParam(params.feather, 0.02);
+  const seed = Math.round(numParam(params.seed, 7));
+
+  // progress=1 且无软带时 cov<1 恒成立 → 恒等变换，跳过（与运行时同口径）
+  if (progress >= 1 && feather <= 0) return;
+
+  const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+  const data = imageData.data;
+  for (let y = 0; y < canvasHeight; y++) {
+    for (let x = 0; x < canvasWidth; x++) {
+      const i = (y * canvasWidth + x) * 4;
+      if (data[i + 3] === 0) continue;
+      const keep = fieldWipeKeep(shape, progress, feather, seed, x, y, canvasWidth, canvasHeight);
+      if (keep < 1) data[i + 3] = Math.round(data[i + 3] * keep);
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+/**
+ * 块位移（block_shift）单块水平位移。块以 (bx, brow) 编号：bx = 列号
+ * （自左），brow = 行带号（自底向上）。位移 = 哈希符号 × 取整
+ * (ampPx × strength × decay^brow)——符号由 (bx, brow) 的整数哈希最低位
+ * 定，同块恒同移、|位移| ≤ ampPx（strength/decay 钳 [0,1] 后）。
+ * rows > 0 时只有 brow < rows 的行带受作用（自底向上数），rows = 0 全帧。
+ * decay = 逐行带衰减系数（1 = 不衰减）；回落包络不在此函数内——
+ * 由 strength 参数的关键帧给出（起震 1 → 回落 0 打键即可）。
+ * 与运行时模板的 bsOffsetAt 逐式同构（探针逐块对拍）。
+ */
+export function blockShiftOffsetAt(
+  bx: number,
+  brow: number,
+  ampPx: number,
+  rows: number,
+  decay: number,
+  strength: number,
+): number {
+  if (rows > 0 && brow >= rows) return 0;
+  let h = (Math.imul(bx + 1, 374761393) ^ Math.imul(brow + 1, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  const sign = (h & 1) !== 0 ? 1 : -1;
+  const s = Math.min(1, Math.max(0, strength));
+  const d = Math.min(1, Math.max(0, decay));
+  return sign * Math.round(ampPx * s * Math.pow(d, brow));
+}
+
+/**
+ * Apply block shift canvas modifier.
+ *
+ * 语义是逐像素采样映射：out(x, y) = in(clamp(x − dx(块(x,y)), 0, W−1), y)，
+ * 映射对每个输出像素都有定义——块间不留缝、边缘钳制采样；编辑器用
+ * ImageData 逐像素求值、运行时用着色器偏移采样，两端是同一个映射
+ * （不用 drawImage 分块拷贝：拷贝的落点重叠/留缝取决于绘制顺序，
+ * 两端无法同义，见探针报告）。源取自本帧修改前快照，块间互不串扰。
+ */
+function applyBlockShift(
+  ctx: CanvasRenderingContext2D,
+  modifier: CanvasModifierInstance,
+  params: Record<string, ModifierParamValue>,
+  canvasWidth: number,
+  canvasHeight: number,
+): void {
+  const blockPx = Math.max(1, Math.round(numParam(params.blockPx, 16)));
+  const ampPx = numParam(params.ampPx, 6);
+  const rows = Math.max(0, Math.round(numParam(params.rows, 0)));
+  const decay = numParam(params.decay, 1);
+  const strength = numParam(params.strength, 1);
+
+  if (ampPx === 0 || strength === 0) return;
+
+  const imageData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+  const src = new Uint8ClampedArray(imageData.data);
+  const data = imageData.data;
+  for (let y = 0; y < canvasHeight; y++) {
+    const brow = Math.floor((canvasHeight - 1 - y) / blockPx);
+    for (let x = 0; x < canvasWidth; x++) {
+      const bx = Math.floor(x / blockPx);
+      const dx = blockShiftOffsetAt(bx, brow, ampPx, rows, decay, strength);
+      if (dx === 0) continue;
+      let sx = x - dx;
+      if (sx < 0) sx = 0;
+      else if (sx > canvasWidth - 1) sx = canvasWidth - 1;
+      const si = (y * canvasWidth + sx) * 4;
+      const di = (y * canvasWidth + x) * 4;
+      data[di] = src[si];
+      data[di + 1] = src[si + 1];
+      data[di + 2] = src[si + 2];
+      data[di + 3] = src[si + 3];
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+/**
  * Apply all canvas modifiers from visible+enabled tracks.
  * This is called AFTER all part rendering and effect track rendering.
  */
@@ -674,6 +884,12 @@ export function applyCanvasModifiers(
           break;
         case 'canvas_mask':
           applyCanvasMask(ctx, modifier, params, canvasWidth, canvasHeight);
+          break;
+        case 'field_wipe':
+          applyFieldWipe(ctx, modifier, params, canvasWidth, canvasHeight);
+          break;
+        case 'block_shift':
+          applyBlockShift(ctx, modifier, params, canvasWidth, canvasHeight);
           break;
       }
     }
