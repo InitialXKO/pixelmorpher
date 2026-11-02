@@ -3318,6 +3318,17 @@ function runFallbackPass(pose, dt) {
     const faceF = (char.variant >= 5 && char.variant <= 7) ? -1 : 1;
     if (fbStage === 'none' && fb.walkOk && char.onGround && !char.ledge) fbPhase += Math.PI * dxF * faceF / stride;
     let sink = 0; // 支撑几何反推的身体下沉（行走时）
+    // 滞空先收的那条腿：各链静止脚尖相对链根的沿朝向坐标最小者
+    // （最靠后）；单链时即该链本身。仅 fbStage==='air' 时有意义
+    let airFirstCi = -1;
+    if (fbStage === 'air') {
+      let best = Infinity;
+      fb.chains.forEach((chain, ci) => {
+        const rt = chainRT[ci]; if (!rt) return;
+        const along = (rt.restT[0] - rt.J[0][0]) * faceF;
+        if (along < best) { best = along; airFirstCi = ci; }
+      });
+    }
     const solvedList = [];
     fb.chains.forEach((chain, ci) => {
       const rt = chainRT[ci];
@@ -3328,10 +3339,13 @@ function runFallbackPass(pose, dt) {
       if (jumpW) {
         w = 1;
         if (fbStage === 'air') {
-          // 滞空：上升收脚（目标点向身体收拢上提）、下落伸腿（近全伸
-          // 下探），目标逐帧趋近防跳变
+          // 滞空收腿顺序（用户定）：上升时只收一条腿——沿朝向最靠后
+          // 的那条先收（airFirstCi，循环外按静止几何选定），其余腿保
+          // 持伸展（蹬地拖腿）；开始下落（vy ≤ 0）后其余腿才跟着收
+          // 起，双腿收拢直至落地由吸收段接管。目标逐帧趋近防跳变
           const rel = [restT[0] - J[0][0], restT[1] - J[0][1]];
-          const want = char.vy > -20
+          const tucked = char.vy <= 0 || ci === airFirstCi;
+          const want = tucked
             ? [J[0][0] + rel[0] * 0.55, J[0][1] + rel[1] * 0.55 + rt.segSum * 0.20]
             : [J[0][0] + rel[0] * 0.90, J[0][1] + rel[1] * 1.02];
           const cur = fbAirCur.get(ci) || [...restT];

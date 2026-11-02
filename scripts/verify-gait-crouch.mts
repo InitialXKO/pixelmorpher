@@ -48,5 +48,12 @@ const src = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', 
   check(parseOk && scripts.length > 0, 'B6 生成页脚本可解析');
 }
 
+// ---------- C) 滞空收腿顺序 ----------
+{
+  check(src.includes('const tucked = char.vy <= 0 || ci === airFirstCi;'), 'C1 收腿判据：下落全收 / 上升只收先行腿');
+  check(src.includes('const along = (rt.restT[0] - rt.J[0][0]) * faceF;'), 'C2 先行腿按静止几何沿朝向最靠后选定');
+  check(!src.includes('const want = char.vy > -20'), 'C3 旧口径（vy>-20 双腿同收、深落伸腿）已摘除');
+}
+
 console.log(fails ? `\n✗ ${fails} 项失败` : '\n✓ 全部通过');
 process.exit(fails ? 1 : 0);
