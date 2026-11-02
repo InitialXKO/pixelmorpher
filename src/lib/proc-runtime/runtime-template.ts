@@ -2874,6 +2874,17 @@ const fbSwingFrom = new Map();  // 链序 → 本次摆动段起点脚位（本�
 const fbAirCur = new Map();     // 链序 → 滞空脚目标当前值（本地，向当帧目标趋近）
 let fbTopDir = [1, 0];          // 俯视最近移动方向（单位矢量）
 function fbDipMax() { return Math.max(3, Math.min(9, charBoxH() * 0.13)); }
+// 脚下最近的支撑面 y（与物理落地判定同口径：横向重叠的实体顶面、
+// 不高于脚位者取最高，无实体时为 0 地面）——落地前伸腿的高度依据
+function fbGroundBelowY() {
+  let best = 0;
+  for (const q of solids) {
+    const top = q.y + q.h;
+    const overX = char.x + CHAR_HW * 0.7 > q.x && char.x - CHAR_HW * 0.7 < q.x + q.w;
+    if (overX && top <= char.y + 0.01 && top > best) best = top;
+  }
+  return best;
+}
 function fbJointOf(prm) {
   const c = Math.cos(prm.restRot || 0), s = Math.sin(prm.restRot || 0);
   return [prm.pivot[0] + prm.off[0] * c - prm.off[1] * s, prm.pivot[1] + prm.off[0] * s + prm.off[1] * c];
@@ -3321,6 +3332,10 @@ function runFallbackPass(pose, dt) {
     // 滞空先收的那条腿：各链静止脚尖相对链根的沿朝向坐标最小者
     // （最靠后）；单链时即该链本身。仅 fbStage==='air' 时有意义
     let airFirstCi = -1;
+    // 落地前伸腿（用户定）：下落中按当前落速与脚下高度估算触地
+    // 时间，≤0.15s 时双腿改伸向地面接落地（与物理落地同口径取
+    // 脚下支撑面）；此前双腿保持收拢
+    let airExtend = false;
     if (fbStage === 'air') {
       let best = Infinity;
       fb.chains.forEach((chain, ci) => {
@@ -3328,6 +3343,11 @@ function runFallbackPass(pose, dt) {
         const along = (rt.restT[0] - rt.J[0][0]) * faceF;
         if (along < best) { best = along; airFirstCi = ci; }
       });
+      if (char.vy < 0) {
+        const h = Math.max(0, char.y - fbGroundBelowY());
+        const tHit = (Math.sqrt(char.vy * char.vy + 2 * PHYS.gravity * h) + char.vy) / PHYS.gravity;
+        airExtend = tHit <= 0.15;
+      }
     }
     const solvedList = [];
     fb.chains.forEach((chain, ci) => {
@@ -3342,9 +3362,10 @@ function runFallbackPass(pose, dt) {
           // 滞空收腿顺序（用户定）：上升时只收一条腿——沿朝向最靠后
           // 的那条先收（airFirstCi，循环外按静止几何选定），其余腿保
           // 持伸展（蹬地拖腿）；开始下落（vy ≤ 0）后其余腿才跟着收
-          // 起，双腿收拢直至落地由吸收段接管。目标逐帧趋近防跳变
+          // 起；接近地面（airExtend，预计触地 ≤0.15s）时双腿改伸向
+          // 地面接落地。目标逐帧趋近防跳变
           const rel = [restT[0] - J[0][0], restT[1] - J[0][1]];
-          const tucked = char.vy <= 0 || ci === airFirstCi;
+          const tucked = !airExtend && (char.vy <= 0 || ci === airFirstCi);
           const want = tucked
             ? [J[0][0] + rel[0] * 0.55, J[0][1] + rel[1] * 0.55 + rt.segSum * 0.20]
             : [J[0][0] + rel[0] * 0.90, J[0][1] + rel[1] * 1.02];

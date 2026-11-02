@@ -50,9 +50,11 @@ const src = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', 
 
 // ---------- C) 滞空收腿顺序 ----------
 {
-  check(src.includes('const tucked = char.vy <= 0 || ci === airFirstCi;'), 'C1 收腿判据：下落全收 / 上升只收先行腿');
+  check(src.includes('const tucked = !airExtend && (char.vy <= 0 || ci === airFirstCi);'), 'C1 收腿判据：下落全收 / 上升只收先行腿 / 落地前不收');
   check(src.includes('const along = (rt.restT[0] - rt.J[0][0]) * faceF;'), 'C2 先行腿按静止几何沿朝向最靠后选定');
-  check(!src.includes('const want = char.vy > -20'), 'C3 旧口径（vy>-20 双腿同收、深落伸腿）已摘除');
+  check(!src.includes('const want = char.vy > -20'), 'C3 旧口径（vy>-20 双腿同收、按落速伸腿）已摘除');
+  check(src.includes('function fbGroundBelowY()'), 'C4 脚下支撑面查询存在（与物理落地同口径）');
+  check(src.includes('airExtend = tHit <= 0.15;'), 'C5 伸腿触发：预计触地时间 ≤0.15s（按高度而非落速）');
 }
 
 console.log(fails ? `\n✗ ${fails} 项失败` : '\n✓ 全部通过');
