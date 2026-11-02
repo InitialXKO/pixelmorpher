@@ -1654,13 +1654,14 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] text-gray-500 w-24 shrink-0">实时 IK</span>
-                    <Select value={exportBakeIk} onValueChange={(v) => setExportBakeIk(v as 'drop' | 'bake')}>
+                    <Select value={exportBakeIk} onValueChange={(v) => setExportBakeIk(v as 'drop' | 'bake' | 'live')}>
                       <SelectTrigger className="h-8 text-xs bg-white/5 border-white/10 text-gray-300 flex-1">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="bg-[#1a1a2e] border-white/10">
                         <SelectItem value="drop">不进包</SelectItem>
                         <SelectItem value="bake">烘焙进包</SelectItem>
+                        <SelectItem value="live">实时求解</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1671,6 +1672,11 @@ export default function ExportDialog({ open, onOpenChange }: ExportDialogProps) 
                 {exportBakePluginChain === 'live' && (
                   <div className="text-[10px] text-amber-400/80">
                     实时执行：导出包将携带插件代码，并在打开时执行该代码。
+                  </div>
+                )}
+                {exportBakeIk === 'live' && (
+                  <div className="text-[10px] text-gray-500">
+                    实时求解：IK 链与标记锚定在包内每帧现解；带目标蓝图的链自动回落烘焙导出，逐链结果见导出报告。
                   </div>
                 )}
               </div>

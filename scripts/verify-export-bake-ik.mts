@@ -207,12 +207,14 @@ const pkgBake = convertCharacterToRuntimePackage(charChained, undefined, { ...ba
   ok(store.includes('setExportBakePluginChain') && store.includes('setExportBakeCorrections') && store.includes('setExportBakeIk'),
     '3b editor store 三 setter 在位');
   const conv = readFileSync('src/lib/proc-runtime/convert.ts', 'utf8');
-  ok(conv.includes("bake?: { pluginChain?: 'drop' | 'bake' | 'live'; corrections?: 'off' | 'standard' | 'extended'; ik?: 'drop' | 'bake' }"),
-    '3c convert opts.bake 类型在位');
+  ok(conv.includes("bake?: { pluginChain?: 'drop' | 'bake' | 'live'; corrections?: 'off' | 'standard' | 'extended'; ik?: 'drop' | 'bake' | 'live' }"),
+    '3c convert opts.bake 类型在位（ik 已扩实时求解档）');
   ok(conv.includes("ik: opts?.bake?.ik ?? 'drop'") && conv.includes("pluginChain: opts?.bake?.pluginChain ?? 'drop'") && conv.includes("corrections: opts?.bake?.corrections ?? 'standard'"),
     '3d convert 缺省解析 = 现行行为（drop/standard/drop）');
-  ok(conv.includes("ikChains: bakeOpts.ik === 'bake' ? character.ikChains : []"),
-    '3e 剥离克隆按档保留/剥除 ikChains');
+  ok((conv.split('ikChains: ikChainsForSampling()').length - 1) === 2
+    && conv.includes("bakeOpts.ik === 'bake' ? character.ikChains : []")
+    && conv.includes('ikBakedIds.has(c.id)'),
+    '3e 两处剥离克隆共用 ikChainsForSampling：bake 全保留、live 只留回落链、drop 全剥');
   ok(conv.includes('sampleCanvasW') && conv.includes('opts?.projectData?.canvasWidth ?? 512'),
     '3f bake 档采样画布读 projectData、回落 512');
   const dlg = readFileSync('src/components/pixel-editor/ExportDialog.tsx', 'utf8');
