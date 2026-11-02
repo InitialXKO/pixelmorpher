@@ -10,11 +10,11 @@
 //   曲线合成一条「轨道」表演（add 模式；运行时部件扁平摆放、无父子跟随，
 //   世界增量才能带上父轨道对子孙的带动）；tilt/stretch/scaleX/variantIndex
 //   轨道运行时无对应通道，逐条点名不静默。
-import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, Sprite, SpriteMark, StateMachineSpec } from '../unified-types';
+import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, ProcPerformance, Sprite, SpriteMark, StateMachineSpec } from '../unified-types';
 import type { AnimationClip } from '../types';
 import { buildParametricSprite } from './main-canvas';
 import { subToPx, projectToView, frameYAxisWorld, directionTrig } from '../unified-types';
-import { computeWorldTransforms, computeRestWorldTransforms, stackBendForNode, rotateWorldTransformsForYaw, facingYawDeltaRad, stepClampState, resolveEffectiveCostumeState, type ClampStateMap } from '../unified-render';
+import { computeWorldTransforms, computeRestWorldTransforms, stackBendForNode, rotateWorldTransformsForYaw, facingYawDeltaRad, stepClampState, resolveEffectiveCostumeState, type ClampStateMap, type WorldTransform, type BlueprintTransformResult } from '../unified-render';
 import { cloneClampState, steppedClampState } from '../clamp-session';
 import { realtimeChainDefs, sampleReference, type ChainBakeParams } from '../sim/verlet-chain';
 import { resolvePieceSprite } from '../sprite-resolve';
@@ -24,8 +24,10 @@ import { packMaskBits, unpackMaskBits } from '../sprite-marks';
 import { collectDesiredPatterns, effectivePatternGraph, extractPatternInstances } from '../blueprint/pattern-sync';
 import { characterHasCueEvents } from '../perform-fx';
 import { resolvePerfSlash, graphWithoutSlashNodes, collectPerfSlashCandidates } from '../blueprint/slash-sync';
-import { evaluateNodeOutput } from '../blueprint/eval';
+import { evaluateBlueprint, evaluateNodeOutput } from '../blueprint/eval';
 import { findSlashDef, resolveClipSlash } from '../slash-defs';
+import { normalizeSlashLayerSegs, type SlashFanSpec } from '../slash-fan';
+import { generateTrailFrame, trailFrameLayout, type SlashTrailSample } from '../slash-trail';
 import { rgbaToHexOrNull } from '../engine/utils';
 import { modifiersToBlueprint } from '../blueprint/migrate';
 import { pluginManager } from '../plugin-manager';
@@ -1526,11 +1528,186 @@ export function convertCharacterToRuntimePackage(
     const n = character.nodes[nodeId];
     return n ? (n.slot?.slotKey ?? nodeId) : null;
   };
-  /** 刀光规格进包：锚点必须是包内真实部件（服装槽键或节点 id 命中
-   * 部件键），否则点名警告并丢弃——模板侧靠部件位姿定格刀光。 */
-  const slashForPkg = (
-    spec: import('../slash-fan').SlashFanSpec | undefined,
+  // ---- 刀光轨迹模式：convert 内采样 + 烘焙 ----
+  /** 轨迹采样上下文：刀光所属表演/片段的时间轴来源（二选一） */
+  type SlashTrailCtx =
+    | { perf: ProcPerformance }
+    | { clip: AnimationClip };
+  let slashStripped: Character | undefined;
+  /** 轨迹采样用的剥离克隆（与轨道采样同一配方：剥行为/节点蓝图/
+   *  修改器，IK 按烘焙档保留，避免与包内通道双重施加）；懒建一份共用 */
+  const slashStrippedChar = (): Character => {
+    if (!slashStripped) {
+      slashStripped = {
+        ...character,
+        behaviorGraphs: {},
+        ikChains: bakeOpts.ik === 'bake' ? character.ikChains : [],
+        nodes: Object.fromEntries(Object.values(character.nodes).map((n) => [
+          n.id, { ...n, blueprint: null, modifiers: [] },
+        ])),
+      };
+    }
+    return slashStripped;
+  };
+  /** 世界位姿 → 画布系位（px，画布中心为原点、y 向下）：与主画布
+   *  刀光定格同一投影（projectToView 按当帧根节点朝向、sub→px）；
+   *  中心偏移在样本取差时抵消，不影响锚点本地系结果 */
+  const slashCanvasPoseOf = (
+    wf: Map<string, WorldTransform>,
+    nodeId: string,
+  ): { x: number; y: number; angleDeg: number } | undefined => {
+    const w = wf.get(nodeId);
+    if (!w) return undefined;
+    const dirF = (character.rootNodeId ? wf.get(character.rootNodeId)?.variantIndex : undefined) ?? rootDir;
+    const proj = projectToView(w.worldX, w.worldY, w.worldZ, dirF as DirectionIndex);
+    return { x: subToPx(proj.canvasX), y: subToPx(proj.canvasY), angleDeg: w.worldAngle };
+  };
+  /**
+   * 轨迹采样：在刀光自己的时间窗（durationSec，缺省跟随所属表演
+   * 时长/片段窗）内均匀取 count 个时刻，锚点/尖端世界位换算成
+   * 锚点本地系样本（定格 = 窗首时刻锚点位姿：原点兼朝向）。
+   * 坐标换算：采样在画布系完成（computeWorldTransforms 世界位经
+   * projectToView 投影、单位 px、y 向下，与编辑器同源），本地化
+   * = R(−θ0)·(P − A0)，θ0 为定格时锚点世界角（画布顺时针正）——
+   * 与编辑器 generateTrailFrame 的输入同系；运行时按扇面同一贴
+   * 法（定格位姿旋转 + plug 贴附）消费，镜像由运行时整帧翻转，
+   * 故此处只采未镜像朝向。片段路走绝对帧 FK；表演路基底是剥离
+   * 角色第 0 帧位姿 + 表演图增量（经 blueprintTransforms 通道叠
+   * 加——与 graph-translate 的表演图采样同一求值口径：60fps 时
+   * 钟、逐图一份 nodeState、按样本序顺序求值；增量经 FK 传播到
+   * 子孙，与编辑器世界变换同源，运行时平坦位姿与此的偏差即包内
+   * 位姿烘焙的既有近似，不在刀光侧另行弥合）。
+   */
+  const sampleSlashTrail = (
+    spec: SlashFanSpec,
+    ctx: SlashTrailCtx,
+    count: number,
+  ): SlashTrailSample[] | undefined => {
+    const stripped = slashStrippedChar();
+    const fps = projectFpsTop;
+    // 表演路预备：摘除刀光节点后的表演图 + 逐图求值状态
+    const perfGraphs: { nodeId: string; graph: BlueprintGraph; state: Map<string, any> }[] = [];
+    if ('perf' in ctx) {
+      for (const nodeId of ctx.perf.maskNodeIds ?? []) {
+        const g = ctx.perf.graphs?.[nodeId];
+        if (g) perfGraphs.push({ nodeId, graph: graphWithoutSlashNodes(g), state: new Map() });
+      }
+    }
+    const winFrames = 'clip' in ctx ? ctx.clip.endFrame - ctx.clip.startFrame + 1 : 0;
+    const slashDurSec = spec.durationSec && spec.durationSec > 0
+      ? spec.durationSec
+      : ('clip' in ctx ? winFrames / fps : ctx.perf.duration);
+    if (!(slashDurSec > 0)) return undefined;
+    const spanFrames = 'clip' in ctx ? Math.min(winFrames, slashDurSec * fps) : 0;
+    const tipId = spec.tipNodeId || spec.anchorNodeId;
+    const poses: {
+      a: { x: number; y: number; angleDeg: number };
+      t: { x: number; y: number; angleDeg: number };
+    }[] = [];
+    for (let i = 0; i < count; i++) {
+      const tau = count > 1 ? i / (count - 1) : 0;
+      let wf: Map<string, WorldTransform>;
+      if ('clip' in ctx) {
+        wf = computeWorldTransforms(stripped, ctx.clip.startFrame + tau * spanFrames, 512, 512, fps);
+      } else {
+        const t = tau * slashDurSec;
+        let bpMap: Map<string, BlueprintTransformResult> | undefined;
+        if (perfGraphs.length) {
+          bpMap = new Map();
+          for (const pg of perfGraphs) {
+            try {
+              const r = evaluateBlueprint(pg.graph, {
+                frame: t * 60, frameRate: 60, vars: {}, nodeState: pg.state,
+              });
+              bpMap.set(pg.nodeId, {
+                translateX: r.translateX, translateY: r.translateY, translateZ: r.translateZ,
+                rotation: r.rotation, tilt: r.tilt, scaleX: r.scaleX, scaleY: r.scaleY,
+                skewX: r.skewX, skewY: r.skewY,
+              });
+            } catch { /* 单图求值失败按无增量处理（采样不因此丢整把刀光） */ }
+          }
+        }
+        wf = computeWorldTransforms(stripped, 0, 512, 512, fps, undefined, bpMap);
+      }
+      const a = slashCanvasPoseOf(wf, spec.anchorNodeId);
+      const tp = slashCanvasPoseOf(wf, tipId);
+      if (!a || !tp) return undefined;
+      poses.push({ a, t: tp });
+    }
+    const spawn = poses[0]!.a;
+    const th = (spawn.angleDeg * Math.PI) / 180;
+    const cos = Math.cos(th), sin = Math.sin(th);
+    return poses.map(({ a, t }) => {
+      const loc = (p: { x: number; y: number }) => {
+        const dx = p.x - spawn.x, dy = p.y - spawn.y;
+        return { x: dx * cos + dy * sin, y: -dx * sin + dy * cos };
+      };
+      const la = loc(a), lt = loc(t);
+      return { ax: la.x, ay: la.y, bx: lt.x, by: lt.y };
+    });
+  };
+  /** 轨迹模式进包：尖端校验 → 采样 → 逐帧烘焙 → 帧字节进包。
+   *  编码沿用包内二进制像素的现行机制（发光场数据同路）：原始
+   *  RGBA 字节经 packBytesBase64（无填充 base64）成串、运行时以
+   *  decodeGlowData 同式解码还原——仓库无 PNG 编码器、精灵的
+   *  PixelGrid 字符串阵不适合带 alpha 渐变的整帧，故不另起格式。
+   *  轨迹模式不序列化扇面几何字段（w/h/cx/…/rx/…），帧布局由
+   *  trailFrameLayout 一处给出、全部帧共用同一 w/h/plug。 */
+  const slashTrailForPkg = (
+    spec: SlashFanSpec,
     ownerLabel: string,
+    anchorSlot: string,
+    ctx: SlashTrailCtx | undefined,
+    layerPart: Record<string, unknown>,
+  ): Record<string, unknown> | undefined => {
+    const tipId = spec.tipNodeId || spec.anchorNodeId;
+    const tipNode = character.nodes[tipId];
+    const tipCandidates = tipNode
+      ? [tipNode.slot?.slotKey, tipId].filter((v): v is string => !!v)
+      : [];
+    const tipSlot = tipCandidates.find((k) => parts.some((p) => p.key === k));
+    if (!tipSlot) {
+      warnings.push(`刀光：${ownerLabel} 的尖端节点 ${tipNode?.name ?? tipId} 不是部件，轨迹刀光未进包`);
+      return undefined;
+    }
+    if (!ctx) {
+      warnings.push(`刀光：${ownerLabel} 的轨迹刀光无采样上下文，未进包`);
+      return undefined;
+    }
+    const frameCount = Math.max(2, Math.min(12, Math.round(spec.frameCount || 6)));
+    const perfFrames = 'clip' in ctx
+      ? ctx.clip.endFrame - ctx.clip.startFrame + 1
+      : Math.max(1, Math.round(ctx.perf.duration * projectFpsTop));
+    // 采样点数：帧数与表演帧数取大、钳 2–48（契约口径）
+    const sampleCount = Math.max(2, Math.min(48, Math.max(frameCount, perfFrames)));
+    const samples = sampleSlashTrail(spec, ctx, sampleCount);
+    if (!samples) {
+      warnings.push(`刀光：${ownerLabel} 的轨迹采样失败（锚点/尖端位姿缺失或刀光时长为 0），未进包`);
+      return undefined;
+    }
+    const lay = trailFrameLayout(spec, samples);
+    const frames: string[] = [];
+    for (let fi = 0; fi < frameCount; fi++) {
+      // 烘焙只烘未镜像帧：镜像由运行时按扇面同口径整帧翻转
+      const fr = generateTrailFrame(spec, samples, frameCount > 1 ? fi / (frameCount - 1) : 0.5, false);
+      frames.push(packBytesBase64(fr ? new Uint8Array(fr.data) : new Uint8Array(lay.w * lay.h * 4)));
+    }
+    return {
+      anchor: anchorSlot,
+      durationSec: spec.durationSec ?? 0,
+      frameCount,
+      trailTiles: { w: lay.w, h: lay.h, plugX: lay.plugX, plugY: lay.plugY, frames },
+      ...layerPart,
+    };
+  };
+  /** 刀光规格进包：锚点必须是包内真实部件（服装槽键或节点 id 命中
+   * 部件键），否则点名警告并丢弃——模板侧靠部件位姿定格刀光。
+   * 入参 spec 已是接线覆盖后的规格（表演路经 resolvePerfSlash +
+   * slashWiringEval），扇面序列化与轨迹烘焙都用覆盖后的值。 */
+  const slashForPkg = (
+    spec: SlashFanSpec | undefined,
+    ownerLabel: string,
+    trailCtx?: SlashTrailCtx,
   ): Record<string, unknown> | undefined => {
     if (!spec) return undefined;
     const anchorNode = character.nodes[spec.anchorNodeId];
@@ -1542,6 +1719,14 @@ export function convertCharacterToRuntimePackage(
       warnings.push(`刀光：${ownerLabel} 的锚点节点 ${anchorNode?.name ?? spec.anchorNodeId} 不是部件，未进包`);
       return undefined;
     }
+    // 图层分段：归一化后进包（扇面/轨迹共用）；空分段不落字段
+    const layerSegs = normalizeSlashLayerSegs(spec.layerSegs);
+    const layerPart: Record<string, unknown> = layerSegs.length ? { layerSegs } : {};
+    if (spec.mode === 'trail') {
+      return slashTrailForPkg(spec, ownerLabel, slot, trailCtx, layerPart);
+    }
+    // 头部弧度：钳到 [-1, 1]，非 0 才落字段
+    const headCurve = Math.max(-1, Math.min(1, spec.headCurve ?? 0));
     return {
       anchor: slot,
       durationSec: spec.durationSec ?? 0,
@@ -1551,7 +1736,9 @@ export function convertCharacterToRuntimePackage(
       rx: spec.rx, ry: spec.ry, rotDeg: spec.rotDeg,
       a0Deg: spec.a0Deg, sweepDeg: spec.sweepDeg,
       thick: spec.thick, gammaAng: spec.gammaAng, softRad: spec.softRad,
+      ...(headCurve !== 0 ? { headCurve } : {}),
       ...(spec.colors && spec.colors.length >= 2 ? { colors: spec.colors } : {}),
+      ...layerPart,
     };
   };
   /** 刀光接线覆盖的生产求值回调（slash_fan 接线的唯一生产消费
@@ -1678,7 +1865,7 @@ export function convertCharacterToRuntimePackage(
       // 同步的数据由 slash-sync 读侧镜像兜底）。绑定共享定义时
       // 解引用活读角色定义（悬空点名、不进包）；节点接线覆盖经
       // slashWiringEval 在表演本地 t=0 求值一次后固化进包。
-      slash: slashForPkg(resolvePerfSlash(perf, slashWiringEval, character.slashDefs), `表演「${perf.name}」`),
+      slash: slashForPkg(resolvePerfSlash(perf, slashWiringEval, character.slashDefs), `表演「${perf.name}」`, { perf }),
       graph: { context: 'performance', nodes: graphNodes },
     });
   }
@@ -2462,7 +2649,7 @@ export function convertCharacterToRuntimePackage(
           mode: 'add',
           loop: clip.loop === true,
           mask: seg.mask,
-          slash: slashForPkg(clipSlash, `片段「${clip.name}」`),
+          slash: slashForPkg(clipSlash, `片段「${clip.name}」`, { clip }),
           graph: { context: 'performance', nodes: seg.graphNodes },
           ...(segStackFrames ? { stackFrames: segStackFrames } : {}),
           ...(segSpriteFrames ? { spriteFrames: segSpriteFrames } : {}),
@@ -2507,7 +2694,7 @@ export function convertCharacterToRuntimePackage(
         mode: 'add',
         loop: clip.loop === true,
         mask: [],
-        slash: slashForPkg(clipSlash, `片段「${clip.name}」`),
+        slash: slashForPkg(clipSlash, `片段「${clip.name}」`, { clip }),
         graph: { context: 'performance', nodes: [] },
         ...(slashSpriteFrames ? { spriteFrames: slashSpriteFrames } : {}),
         stateFx: stateFxOf(clip),

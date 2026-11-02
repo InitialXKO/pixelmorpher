@@ -1708,6 +1708,20 @@ export interface MannequinRenderInstruction {
   faceSegs?: { x1: SubPixel; y1: SubPixel; x2: SubPixel; y2: SubPixel }[];
 }
 
+/** 渲染计划里的一份刀光：定格位姿（画布 px）+ 本帧帧序号。
+ *  扇面模式 tile 为空、执行端走 slashFrameCanvas 按 spec 现取；
+ *  轨迹模式 tile 是 generateTrailFrame 现算的帧瓦片（画布与布局），
+ *  执行端直贴、不旋转（轨迹几何已在世界朝向里） */
+export interface SlashFxPlanEntry {
+  spec: import('./slash-fan').SlashFanSpec;
+  frameIdx: number;
+  worldX: number;
+  worldY: number;
+  angleDeg: number;
+  mirror: boolean;
+  tile?: { canvas: HTMLCanvasElement; w: number; h: number; plugX: number; plugY: number };
+}
+
 /** Complete render plan for a frame */
 export interface RenderPlan {
   nodeInstructions: NodeRenderInstruction[];
@@ -1727,15 +1741,11 @@ export interface RenderPlan {
   frameRate?: number;
   /** Character-level blueprint (whole-character post-processing). Null = legacy per-node path. */
   characterBlueprint?: import('./blueprint/ir').BlueprintGraph | null;
-  /** 刀光（椭圆扇）：本帧应绘制的刀光帧与定格位姿（画布 px） */
-  slashFx?: {
-    spec: import('./slash-fan').SlashFanSpec;
-    frameIdx: number;
-    worldX: number;
-    worldY: number;
-    angleDeg: number;
-    mirror: boolean;
-  };
+  /** 刀光前层（椭圆扇/轨迹）：本帧应绘制在角色之上的刀光帧与定格位姿（画布 px） */
+  slashFx?: SlashFxPlanEntry;
+  /** 刀光后层：与 slashFx 同一份刀光、按图层段（slashLayerAt）本帧
+   *  落在后层时进此槽，在全部节点绘制之前执行（同一时刻只进一槽） */
+  slashFxBack?: SlashFxPlanEntry;
   /** 本帧蓝图变量（变量名 → 值）：generateRenderPlan 从 AnimationVariable 求值后注入，
    *  供 executeRenderPlan/renderNodeSprite 的蓝图求值 ctx.vars 使用 */
   blueprintVars?: Record<string, number>;

@@ -17,7 +17,7 @@ import type {
   Node, Character, NodeTransform, Socket, DirectionIndex, SkinningSnapshot,
   SubPixel, Point, Sprite, RotationStrategy, CostumePiece,
   NodeRenderInstruction, DiscRenderInstruction, MannequinRenderInstruction, RenderPlan,
-  KeyframeTrack, KeyframePoint, InterpolationMode,
+  KeyframeTrack, KeyframePoint, InterpolationMode, SlashFxPlanEntry,
   ModifierInstance, GeneratedItem, AnimationVariable, ParamDriver,
   IKChain, Mat3, ParentKeyValue, SpriteStack, ClampAnchor, ClampTrigger,
 } from './unified-types';
@@ -31,7 +31,9 @@ import {
 } from './unified-types';
 import { solveIK2Bone3D, solveIK3Bone3D, solveIK3BoneWithTip3D, solveIKFabrik3D } from './blueprint/ik';
 import { DEFAULT_FACE_FEATURES, faceFeaturePoints, faceHalfWidths } from './face-features';
-import { slashFrameCanvas, slashFrameLayout } from './slash-fan';
+import { slashFrameCanvas, slashFrameLayout, slashLayerAt } from './slash-fan';
+import { generateTrailFrame, type SlashTrailSample } from './slash-trail';
+import { sampleSlashTrail } from './slash-trail-sampling';
 import { resolveClipSlash } from './slash-defs';
 import type { SlashDefinition } from './unified-types';
 import { renderPixelPerfectRotation } from './engine/puppet-utils';
@@ -2959,6 +2961,71 @@ export function computeFrameProcDeltas(
   return map.size > 0 ? map : undefined;
 }
 
+// ---- 刀光轨迹模式的采样/瓦片缓存 ----
+// 采样（窗内最多 48 次世界变换求值）与瓦片生成都比扇面贵，按两级
+// 缓存：样本表挂在角色对象上（WeakMap——store 不可变更新换掉角色
+// 对象即整体失效，位姿轨道/节点改动不会读到旧样本）；瓦片挂在样
+// 本表数组上（新样本表 = 新瓦片缓存）。瓦片键再带帧序号、镜像与
+// 完整规格 JSON（规格任何字段变了都换瓦片，与 slashFrameCanvas
+// 的键法一致）。注意：采样用的变量/蓝图上下文取计划当帧的求值
+// 结果（与扇面定格同源），只改动画变量定义而不动角色对象时样本
+// 可能短暂沿用旧值——与定格位姿的既有口径一致，不另设失效通道。
+const slashTrailSamplesCache = new WeakMap<object, Map<string, SlashTrailSample[] | null>>();
+const slashTrailTileCache = new WeakMap<SlashTrailSample[], Map<string, SlashFxPlanEntry['tile'] | null>>();
+
+function slashTrailTileFor(args: {
+  character: Character;
+  clipId: string;
+  spec: import('./slash-fan').SlashFanSpec;
+  startFrame: number;
+  durFrames: number;
+  frameIdx: number;
+  mirror: boolean;
+  worldTransformsAt: (frame: number) => Map<string, WorldTransform>;
+}): SlashFxPlanEntry['tile'] | null {
+  const { character, clipId, spec, startFrame, durFrames, frameIdx, mirror, worldTransformsAt } = args;
+  let perChar = slashTrailSamplesCache.get(character);
+  if (!perChar) {
+    perChar = new Map();
+    slashTrailSamplesCache.set(character, perChar);
+  }
+  const sampleKey = `${clipId}|${startFrame}|${durFrames}|${spec.anchorNodeId}|${spec.tipNodeId ?? ''}|${spec.frameCount}`;
+  let samples = perChar.get(sampleKey);
+  if (samples === undefined) {
+    samples = sampleSlashTrail({ character, spec, startFrame, durFrames, worldTransformsAt });
+    perChar.set(sampleKey, samples);
+  }
+  if (!samples) return null;
+  let perSamples = slashTrailTileCache.get(samples);
+  if (!perSamples) {
+    perSamples = new Map();
+    slashTrailTileCache.set(samples, perSamples);
+  }
+  const n = Math.max(2, Math.round(spec.frameCount || 6));
+  const idx = Math.min(n - 1, Math.max(0, frameIdx));
+  const tileKey = `${idx}|${mirror ? 1 : 0}|${JSON.stringify(spec)}`;
+  let tile = perSamples.get(tileKey);
+  if (tile === undefined) {
+    tile = null;
+    const frame = generateTrailFrame(spec, samples, n > 1 ? idx / (n - 1) : 0.5, mirror);
+    if (frame && frame.w > 0 && frame.h > 0 && frame.data.length >= frame.w * frame.h * 4) {
+      const c = document.createElement('canvas');
+      c.width = frame.w;
+      c.height = frame.h;
+      const c2d = c.getContext('2d')!;
+      const img = c2d.createImageData(frame.w, frame.h);
+      img.data.set(frame.data.subarray(0, frame.w * frame.h * 4));
+      c2d.putImageData(img, 0, 0);
+      // generateTrailFrame 返回的 plugX 已按生成时的 mirror 翻好；本处瓦片
+      // 的存储约定与扇面一致——存未镜像 plug、绘制时由 drawSlashFxEntry
+      // 按 fx.mirror 翻一次，故这里先翻回去，避免双重镜像。
+      tile = { canvas: c, w: frame.w, h: frame.h, plugX: mirror ? frame.w - frame.plugX : frame.plugX, plugY: frame.plugY };
+    }
+    perSamples.set(tileKey, tile);
+  }
+  return tile;
+}
+
 export function generateRenderPlan(
   character: Character,
   frame: number,
@@ -3509,8 +3576,13 @@ export function generateRenderPlan(
   }
 
   // 刀光：位姿在片段起始帧定格（锚点其后怎么动都不跟随），进度
-  // 按窗内帧走；时长单独设了秒数时先于窗结束
+  // 按窗内帧走；时长单独设了秒数时先于窗结束。本帧按图层段
+  // （slashLayerAt）只进一槽：后层槽在全部节点绘制之前执行、
+  // 前层槽保持最后绘制（无图层段 = 全程前层，与旧行为逐值一致）。
+  // 轨迹模式改为在窗内采样锚点与尖端节点的实际运动生成带（采样
+  // 或尖端缺失 → 无轨迹，不回落扇面）；扇面模式逐值不变。
   let slashFx: RenderPlan['slashFx'];
+  let slashFxBack: RenderPlan['slashFxBack'];
   const slashClipSpec = slashClip ? resolveClipSlash(slashClip, character.slashDefs) : undefined;
   if (slashClip && slashClipSpec && frame >= slashClip.startFrame && frame <= slashClip.endFrame) {
     const spec = slashClipSpec;
@@ -3529,7 +3601,7 @@ export function generateRenderPlan(
       const p = (frame - slashClip.startFrame) / durFrames;
       if (p < 1) {
         const n = Math.max(2, Math.round(spec.frameCount || 6));
-        slashFx = {
+        const entry: SlashFxPlanEntry = {
           spec,
           frameIdx: Math.min(n - 1, Math.floor(p * n)),
           worldX: canvasWidth / 2 + subToPx(proj.canvasX),
@@ -3537,6 +3609,29 @@ export function generateRenderPlan(
           angleDeg: anchorWt.worldAngle,
           mirror: anchorWt.mirror,
         };
+        let placed: SlashFxPlanEntry | undefined = entry;
+        if (spec.mode === 'trail') {
+          const tile = slashTrailTileFor({
+            character,
+            clipId: slashClip.id,
+            spec,
+            startFrame: slashClip.startFrame,
+            durFrames,
+            frameIdx: entry.frameIdx,
+            mirror: entry.mirror,
+            // 采样上下文与定格同源：计划当帧的变量/蓝图求值结果
+            worldTransformsAt: (f) => computeWorldTransforms(
+              character, f, canvasWidth, canvasHeight, frameRate, variableContext, blueprintTransforms,
+              undefined, geometryDirection,
+            ),
+          });
+          if (tile) entry.tile = tile;
+          else placed = undefined;
+        }
+        if (placed) {
+          if (slashLayerAt(spec, p) === 'back') slashFxBack = placed;
+          else slashFx = placed;
+        }
       }
     }
   }
@@ -3606,10 +3701,33 @@ export function generateRenderPlan(
     characterBlueprint: character.blueprint ?? null,
     blueprintVars,
     slashFx,
+    slashFxBack,
   };
 }
 
 // ---- Render Execution ----
+
+/** 绘制一份刀光（前/后层共用）：帧图以有效帧布局的 plug 钉在定格
+ *  位姿处（镜像帧已预翻，其 plug 横坐标 = 帧宽 − plugX，与精灵同
+ *  口径）。扇面按定格角度旋转贴图；轨迹瓦片的几何已在世界朝向里
+ *  生成、不再旋转，只按 plug 平移对齐定格锚点 */
+function drawSlashFxEntry(ctx: CanvasRenderingContext2D, fx: SlashFxPlanEntry): void {
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.translate(fx.worldX, fx.worldY);
+  if (fx.tile) {
+    const t = fx.tile;
+    const plugX = fx.mirror ? t.w - t.plugX : t.plugX;
+    ctx.drawImage(t.canvas, -plugX, -t.plugY);
+  } else {
+    const fc = slashFrameCanvas(fx.spec, fx.frameIdx, fx.mirror);
+    const lay = slashFrameLayout(fx.spec);
+    const plugX = fx.mirror ? lay.w - lay.plugX : lay.plugX;
+    ctx.rotate((fx.angleDeg * Math.PI) / 180);
+    ctx.drawImage(fc, -plugX, -lay.plugY);
+  }
+  ctx.restore();
+}
 
 /**
  * Execute a render plan: draw all sprites and discs to the canvas.
@@ -3640,6 +3758,12 @@ export function executeRenderPlan(
       renderNodeSprite(c, instruction, canvasWidth, canvasHeight, plan.blueprintVars);
     }
   };
+  // 刀光后层：赶在全部节点（与关节盘、人偶、角色蓝图合成）之前
+  // 绘制——角色随后整体盖上，本帧刀光即在角色身后
+  if (plan.slashFxBack) {
+    drawSlashFxEntry(ctx, plan.slashFxBack);
+  }
+
   const useCharBlueprint = !!plan.characterBlueprint;
   if (useCharBlueprint) {
     const ok = renderCharacterWithBlueprint(ctx, plan, canvasWidth, canvasHeight, drawOne);
@@ -3660,20 +3784,9 @@ export function executeRenderPlan(
     }
   }
 
-  // 刀光最后绘制（盖在角色之上）：帧图以有效帧布局的 plug 钉在
-  // 定格位姿处、按定格角度旋转（镜像帧已预翻，其 plug 横坐标
-  // = 帧宽 − plugX，与精灵同口径）
+  // 刀光前层最后绘制（盖在角色之上）
   if (plan.slashFx) {
-    const fx = plan.slashFx;
-    const fc = slashFrameCanvas(fx.spec, fx.frameIdx, fx.mirror);
-    const lay = slashFrameLayout(fx.spec);
-    const plugX = fx.mirror ? lay.w - lay.plugX : lay.plugX;
-    ctx.save();
-    ctx.imageSmoothingEnabled = false;
-    ctx.translate(fx.worldX, fx.worldY);
-    ctx.rotate((fx.angleDeg * Math.PI) / 180);
-    ctx.drawImage(fc, -plugX, -lay.plugY);
-    ctx.restore();
+    drawSlashFxEntry(ctx, plan.slashFx);
   }
 
   // Render effects (overlays, not tied to specific nodes)

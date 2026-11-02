@@ -1,14 +1,19 @@
 'use client';
 
 /**
- * 刀光参数编辑器（椭圆扇形状衰减）：片段与表演共用。
- * 左侧实时预览中间进度的一帧；参数口径与生成器 slash-fan.ts 一致。
+ * 刀光参数编辑器：片段与表演共用。两种生成方式——扇面（椭圆扇
+ * 形状衰减，参数口径与生成器 slash-fan.ts 一致）与轨迹（锚点到
+ * 尖端节点这条线段在窗内扫过的带，slash-trail.ts）。左侧预览中
+ * 间进度的一帧；轨迹预览的样本由宿主面板采样传入（trailSamples），
+ * 无样本时显示占位说明、不画假图。
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import {
   SLASH_PALETTE, SLASH_PRESETS, defaultSlashSpec, generateSlashFrame, slashFrameLayout,
+  normalizeSlashLayerSegs,
   type SlashFanSpec,
 } from '@/lib/slash-fan';
+import { generateTrailFrame, type SlashTrailSample } from '@/lib/slash-trail';
 import type { SlashDefinition } from '@/lib/unified-types';
 
 /** 共享定义绑定（角色级 slashDefs）：挂载点提供数据与写路径。
@@ -34,22 +39,32 @@ interface Props {
   onChange: (next: SlashFanSpec | undefined) => void;
   nodes: { id: string; name: string }[];
   defBinding?: SlashDefBindingProps;
+  /** 轨迹模式预览样本（宿主面板按片段窗/表演时长采样）；缺省/为空
+   *  时轨迹预览显示占位说明 */
+  trailSamples?: SlashTrailSample[] | null;
 }
 
 const numCls = 'h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded px-1 w-full text-gray-200';
 
-export default function SlashEffectEditor({ value, onChange, nodes, defBinding }: Props) {
+export default function SlashEffectEditor({ value, onChange, nodes, defBinding, trailSamples }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // 轨迹预览帧（中间进度）：样本不足或生成为空 → null（占位说明）
+  const trailFrame = useMemo(() => {
+    if (!value || value.mode !== 'trail' || !trailSamples || trailSamples.length < 2) return null;
+    return generateTrailFrame(value, trailSamples, 0.45, false);
+  }, [value, trailSamples]);
 
   useEffect(() => {
     const c = canvasRef.current;
     if (!c || !value) return;
-    const frame = generateSlashFrame(value, 0.45, false);
+    const frame = value.mode === 'trail' ? trailFrame : generateSlashFrame(value, 0.45, false);
+    if (!frame) return;
     c.width = frame.w;
     c.height = frame.h;
     const ctx = c.getContext('2d')!;
     const img = ctx.createImageData(frame.w, frame.h);
-    img.data.set(frame.rgba);
+    img.data.set((frame as { rgba?: Uint8Array }).rgba ?? (frame as { data?: Uint8ClampedArray }).data!);
     ctx.putImageData(img, 0, 0);
     // 锚点（plug）十字标记：中心偏移的视觉参照——扇面随偏移
     // 相对此点平移，白描边 + 红线保证在亮扇面与棋盘格上都可见
@@ -64,7 +79,7 @@ export default function SlashEffectEditor({ value, onChange, nodes, defBinding }
     };
     cross('rgba(255,255,255,0.85)', 3);
     cross('rgba(255,45,85,0.95)', 1);
-  }, [value]);
+  }, [value, trailFrame]);
 
   const boundDef = defBinding?.boundDefId
     ? defBinding.defs.find((d) => d.id === defBinding.boundDefId)
@@ -114,9 +129,20 @@ export default function SlashEffectEditor({ value, onChange, nodes, defBinding }
   }
 
   const set = (patch: Partial<SlashFanSpec>) => onChange({ ...value, ...patch });
-  // 有效帧布局（用户盒 ∪ 几何紧包围盒）：预览画布按此尺寸显示
+  const isTrail = value.mode === 'trail';
+  // 有效帧布局（用户盒 ∪ 几何紧包围盒）：扇面预览画布按此尺寸显示；
+  // 轨迹预览用生成帧自身尺寸（布局由样本导出，在生成器内）
   const lay = slashFrameLayout(value);
-  const pvScale = Math.min(1, 112 / Math.max(lay.w, lay.h));
+  const dispW = isTrail && trailFrame ? trailFrame.w : lay.w;
+  const dispH = isTrail && trailFrame ? trailFrame.h : lay.h;
+  const pvScale = Math.min(1, 112 / Math.max(dispW, dispH));
+  // 图层段：写入前一律过归一化（排序/钳制/合并同层相邻段）；归一
+  // 化后为空 = 删回缺省（不落空数组）
+  const segs = value.layerSegs ?? [];
+  const writeSegs = (next: { until: number; layer: 'front' | 'back' }[]) => {
+    const norm = normalizeSlashLayerSegs(next);
+    set({ layerSegs: norm.length > 0 ? norm : undefined });
+  };
   // 颜色档：未设时显示内置档供编辑，任一改动即落成显式 colors
   const effColors = value.colors && value.colors.length >= 2 ? value.colors : SLASH_PALETTE;
   const setColors = (next: string[] | undefined) => set({ colors: next });
@@ -142,20 +168,31 @@ export default function SlashEffectEditor({ value, onChange, nodes, defBinding }
   return (
     <div className="rounded border border-[#23233a] bg-[#12121f] p-2 space-y-2">
       <div className="flex items-start gap-2">
-        <canvas
-          ref={canvasRef}
-          className="shrink-0 rounded border border-[#1e1e3a]"
-          style={{
-            width: Math.max(8, Math.round(lay.w * pvScale)),
-            height: Math.max(8, Math.round(lay.h * pvScale)),
-            imageRendering: 'pixelated',
-            background: 'repeating-conic-gradient(#191922 0% 25%, #101018 0% 50%) 0 0 / 10px 10px',
-          }}
-          title={`中间进度预览（有效帧 ${lay.w}×${lay.h}）`}
-        />
+        {isTrail && !trailFrame ? (
+          <div
+            className="shrink-0 rounded border border-dashed border-[#2b2b3f] flex items-center justify-center px-2 text-center"
+            style={{ width: 96, height: 96 }}
+          >
+            <span className="text-[9px] text-gray-500 leading-relaxed">
+              设置锚点与尖端节点后显示轨迹预览
+            </span>
+          </div>
+        ) : (
+          <canvas
+            ref={canvasRef}
+            className="shrink-0 rounded border border-[#1e1e3a]"
+            style={{
+              width: Math.max(8, Math.round(dispW * pvScale)),
+              height: Math.max(8, Math.round(dispH * pvScale)),
+              imageRendering: 'pixelated',
+              background: 'repeating-conic-gradient(#191922 0% 25%, #101018 0% 50%) 0 0 / 10px 10px',
+            }}
+            title={`中间进度预览（有效帧 ${dispW}×${dispH}）`}
+          />
+        )}
         <div className="flex-1 space-y-1.5">
           <div className="flex items-center gap-2">
-            <span className="text-[10px] text-amber-200">刀光（椭圆扇）</span>
+            <span className="text-[10px] text-amber-200">刀光</span>
             {!defBinding?.boundDefId && (
               <button
                 type="button"
@@ -176,6 +213,7 @@ export default function SlashEffectEditor({ value, onChange, nodes, defBinding }
               <option key={n.id} value={n.id}>{n.name}</option>
             ))}
           </select>
+          {!isTrail && (
           <div className="flex flex-wrap gap-1">
             {SLASH_PRESETS.map((preset) => (
               <button
@@ -188,8 +226,54 @@ export default function SlashEffectEditor({ value, onChange, nodes, defBinding }
               </button>
             ))}
           </div>
+          )}
         </div>
       </div>
+      <div className="flex items-center gap-1.5">
+        <span className="text-[9px] text-gray-500 shrink-0">生成方式</span>
+        {(['fan', 'trail'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => {
+              if (m === 'fan') set({ mode: 'fan' });
+              else {
+                set({
+                  mode: 'trail',
+                  tipNodeId: value.tipNodeId
+                    ?? nodes.find((n) => n.id !== value.anchorNodeId)?.id
+                    ?? '',
+                });
+              }
+            }}
+            className={`text-[9px] px-1.5 py-0.5 rounded border ${
+              isTrail === (m === 'trail')
+                ? 'border-amber-500/60 text-amber-200'
+                : 'border-[#2b2b3f] text-gray-300 hover:border-amber-500/60'}`}
+            title={m === 'fan'
+              ? '扇面：锚点处按起始角/扫过角生成的椭圆扇'
+              : '轨迹：锚点到尖端节点这条线段在窗内实际扫过的带'}
+          >
+            {m === 'fan' ? '扇面' : '轨迹'}
+          </button>
+        ))}
+      </div>
+      {isTrail && (
+        <div>
+          <div className="text-[9px] text-gray-500">尖端节点（与锚点同为轨迹的两端：锚点是刃根、尖端是刃尖）</div>
+          <select
+            value={value.tipNodeId ?? ''}
+            onChange={(e) => set({ tipNodeId: e.target.value || undefined })}
+            className={numCls}
+            title="轨迹按这两点连成的线段在窗内的运动生成；尖端缺失则不出轨迹"
+          >
+            <option value="">（未选）</option>
+            {nodes.map((n) => (
+              <option key={n.id} value={n.id}>{n.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
       {defBinding && (
         <div className="space-y-1.5 rounded border border-[#1e1e3a] bg-[#0e0e1a] p-1.5">
           <div className="flex items-center gap-1.5">
@@ -282,21 +366,41 @@ export default function SlashEffectEditor({ value, onChange, nodes, defBinding }
         ))}
       </div>
       <div className="grid grid-cols-4 gap-1.5">
-        {num('中心 X', 'cx', 0.5, '椭圆中心相对锚点的偏移 X（px）：改它扇面整体相对锚点平移')}
-        {num('中心 Y', 'cy', 0.5, '椭圆中心相对锚点的偏移 Y（px）：改它扇面整体相对锚点平移')}
-        {num('半轴 X', 'rx', 0.5)}
-        {num('半轴 Y', 'ry', 0.5)}
-        {num('旋转 °', 'rotDeg')}
-        {num('起始 °', 'a0Deg')}
-        {num('扫过 °', 'sweepDeg')}
-        {num('厚度', 'thick', 0.01, '头部处扇形带占半径的比例')}
-        {num('角向收尖', 'gammaAng', 0.05, '越大尾部收得越急')}
-        {num('径向软边', 'softRad', 0.01)}
+        {num('中心 X', 'cx', 0.5, isTrail
+          ? '轨迹帧相对锚点的偏移 X（px）：参与有效帧布局的用户盒定位'
+          : '椭圆中心相对锚点的偏移 X（px）：改它扇面整体相对锚点平移')}
+        {num('中心 Y', 'cy', 0.5, isTrail
+          ? '轨迹帧相对锚点的偏移 Y（px）：参与有效帧布局的用户盒定位'
+          : '椭圆中心相对锚点的偏移 Y（px）：改它扇面整体相对锚点平移')}
+        {!isTrail && num('半轴 X', 'rx', 0.5)}
+        {!isTrail && num('半轴 Y', 'ry', 0.5)}
+        {!isTrail && num('旋转 °', 'rotDeg')}
+        {!isTrail && num('起始 °', 'a0Deg')}
+        {!isTrail && num('扫过 °', 'sweepDeg')}
+        {num('厚度', 'thick', 0.01, isTrail ? '轨迹带的宽度比例' : '头部处扇形带占半径的比例')}
+        {!isTrail && num('角向收尖', 'gammaAng', 0.05, '越大尾部收得越急')}
+        {num(isTrail ? '软边' : '径向软边', 'softRad', 0.01)}
         {num('帧数', 'frameCount', 1)}
         {num('时长 秒', 'durationSec', 0.05, '0 = 跟随表演/片段窗时长')}
-        {num('覆盖宽', 'w', 1, '覆盖盒宽（以锚点为中心）；扇形几何超出时有效帧随几何长大、不裁')}
-        {num('覆盖高', 'h', 1, '覆盖盒高（以锚点为中心）；扇形几何超出时有效帧随几何长大、不裁')}
+        {num('覆盖宽', 'w', 1, '覆盖盒宽（以锚点为中心）；几何超出时有效帧随几何长大、不裁')}
+        {num('覆盖高', 'h', 1, '覆盖盒高（以锚点为中心）；几何超出时有效帧随几何长大、不裁')}
       </div>
+      {!isTrail && (
+        <div className="flex items-center gap-2">
+          <span className="text-[9px] text-gray-500 shrink-0">头部弧度</span>
+          <input
+            type="range"
+            min={-1}
+            max={1}
+            step={0.05}
+            value={value.headCurve ?? 0}
+            onChange={(e) => set({ headCurve: Number(e.target.value) })}
+            className="flex-1 h-4 accent-amber-500"
+            title="头部前沿的弯曲：正值向前凸、负值向内凹、0 为平直"
+          />
+          <span className="text-[9px] text-gray-400 w-8 text-right">{(value.headCurve ?? 0).toFixed(2)}</span>
+        </div>
+      )}
       <div className="space-y-1">
         <div className="flex items-center gap-2">
           <span className="text-[9px] text-gray-500">颜色档（外弧 → 内界）</span>
@@ -349,8 +453,68 @@ export default function SlashEffectEditor({ value, onChange, nodes, defBinding }
           </button>
         </div>
       </div>
+      <div className="space-y-1">
+        <div className="text-[9px] text-gray-500">图层段（按进度分段决定刀光在角色前面还是后面；每段从上一段的截止进度管到本段截止进度）</div>
+        {segs.length === 0 ? (
+          <p className="text-[9px] text-gray-600">全程在前（缺省）</p>
+        ) : (
+          segs.map((s, i) => (
+            <div key={i} className="flex items-center gap-1.5">
+              <span className="text-[9px] text-gray-500 shrink-0">到进度</span>
+              <input
+                type="number"
+                step={0.05}
+                min={0.05}
+                max={1}
+                value={s.until}
+                onChange={(e) => writeSegs(segs.map((x, j) => (j === i ? { ...x, until: Number(e.target.value) || 0 } : x)))}
+                className={`${numCls} w-16 shrink-0`}
+                title="本段的截止进度（0.05–1）"
+              />
+              {(['front', 'back'] as const).map((l) => (
+                <button
+                  key={l}
+                  type="button"
+                  onClick={() => writeSegs(segs.map((x, j) => (j === i ? { ...x, layer: l } : x)))}
+                  className={`text-[9px] px-1.5 py-0.5 rounded border ${
+                    s.layer === l
+                      ? 'border-amber-500/60 text-amber-200'
+                      : 'border-[#2b2b3f] text-gray-300 hover:border-amber-500/60'}`}
+                >
+                  {l === 'front' ? '在前' : '在后'}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => writeSegs(segs.filter((_, j) => j !== i))}
+                className="text-[9px] text-gray-500 hover:text-red-300"
+                title="删此段"
+              >
+                ×
+              </button>
+            </div>
+          ))
+        )}
+        <button
+          type="button"
+          disabled={segs.length > 0 && segs[segs.length - 1]!.until >= 1}
+          onClick={() => {
+            const last = segs[segs.length - 1];
+            writeSegs([...segs, {
+              until: last ? Math.min(1, Math.round((last.until + 0.25) * 100) / 100) : 0.5,
+              layer: last ? (last.layer === 'front' ? 'back' : 'front') : 'back',
+            }]);
+          }}
+          className="text-[9px] px-1.5 py-0.5 rounded border border-[#2b2b3f] text-gray-300 hover:border-amber-500/60 disabled:opacity-30"
+          title="在末尾加一段（层与上一段相反）"
+        >
+          ＋ 加一段
+        </button>
+      </div>
       <p className="text-[9px] text-gray-600">
-        形状：外边界是椭圆弧，内边界随角向位置向尾部收尖；播放时头部先展开、尾部后收走（逆时针时行进方向反过来、头部仍领先）。位姿在开始帧定格锚点（预览红十字），椭圆中心可相对锚点偏移，挥砍的弧线靠起始角/扫过角与锚点当时的角度对齐。
+        {isTrail
+          ? '形状：锚点到尖端节点这条线段在窗内实际扫过的带，轨迹取自两节点在窗内的运动（位姿在开始帧定格观察朝向，预览红十字是定格锚点）；挥砍走到哪、刀光跟到哪，动作改了刀光自动跟随。'
+          : '形状：外边界是椭圆弧，内边界随角向位置向尾部收尖；播放时头部先展开、尾部后收走（逆时针时行进方向反过来、头部仍领先）。位姿在开始帧定格锚点（预览红十字），椭圆中心可相对锚点偏移，挥砍的弧线靠起始角/扫过角与锚点当时的角度对齐。'}
       </p>
     </div>
   );

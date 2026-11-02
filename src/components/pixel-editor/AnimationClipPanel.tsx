@@ -5,9 +5,11 @@ import { AnimationClip } from '@/lib/types';
 import { Plus, Trash2, Film, Settings, ChevronRight, Clock, Tag } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import SlashEffectEditor from './puppet/SlashEffectEditor';
 import { cloneSlashSpec, countSlashDefRefs, findSlashDef } from '@/lib/slash-defs';
+import { computeWorldTransforms } from '@/lib/unified-render';
+import { sampleSlashTrail } from '@/lib/slash-trail-sampling';
 import { BEAT_TEMPLATES } from '@/lib/beat-templates';
 import {
   ContextMenu,
@@ -27,6 +29,9 @@ export default function AnimationClipPanel() {
     updateUnifiedCharacter,
     setActiveAnimationClip,
     applyBeatTemplate,
+    frameRate,
+    canvasWidth,
+    canvasHeight,
   } = useProjectStore();
   const unifiedCharacters = useProjectStore((s) => s.unifiedCharacters);
   const selectedCharacterId = useProjectStore((s) => s.selectedCharacterId);
@@ -91,6 +96,30 @@ export default function AnimationClipPanel() {
       thumbnail: clip.thumbnail,
     });
   }, [addAnimationClip, updateAnimationClip]);
+
+  // 刀光轨迹预览样本：与主画布计划共用同一份采样函数，窗与时长
+  // 口径与 unified-render 的片段刀光计划一致（durationSec 优先于
+  // 窗长）；仅当前片段的生效规格是轨迹模式时采样，其余传 null
+  const slashTrailSamples = useMemo(() => {
+    if (!activeClip) return null;
+    const owner = unifiedCharacters?.[activeClip.puppetCharacterId];
+    if (!owner) return null;
+    const spec = activeClip.slashDefId
+      ? findSlashDef(owner.slashDefs ?? [], activeClip.slashDefId)?.spec
+      : activeClip.slashEffect;
+    if (!spec || spec.mode !== 'trail' || !spec.tipNodeId) return null;
+    const winLen = Math.max(1, activeClip.endFrame - activeClip.startFrame + 1);
+    const durFrames = spec.durationSec && spec.durationSec > 0
+      ? Math.max(1, spec.durationSec * frameRate)
+      : winLen;
+    return sampleSlashTrail({
+      character: owner,
+      spec,
+      startFrame: activeClip.startFrame,
+      durFrames,
+      worldTransformsAt: (f) => computeWorldTransforms(owner, f, canvasWidth, canvasHeight, frameRate),
+    });
+  }, [activeClip, unifiedCharacters, frameRate, canvasWidth, canvasHeight]);
 
   return (
     <div className="flex flex-col h-full bg-[#0e0e1c]">
@@ -355,6 +384,7 @@ export default function AnimationClipPanel() {
                 };
                 return (
                   <SlashEffectEditor
+                    trailSamples={slashTrailSamples}
                     value={activeClip.slashDefId ? boundDef?.spec : activeClip.slashEffect}
                     onChange={(next) => {
                       // 绑定时参数编辑直达定义；未绑定走片段私有字段
