@@ -933,11 +933,19 @@ export function solveChainIKOverrides(
     lengths.push(tipLength);
   }
 
-  // 目标：target3D（按链根朝向填充）+ targetBlueprint 的 XYZ 逐分量覆盖
+  // 目标解析顺序：标记锚定（全量）> targetBlueprint（XYZ 逐分量覆盖）> 静态 target3D
   const dir0 = geometryDirection ?? fkT[0].variantIndex;
   const staticT = resolveChainTarget3D(chain, canvasWidth, canvasHeight, dir0);
   let target: V3 = { ...staticT };
-  if (chain.targetBlueprint) {
+  let anchored = false;
+  if (chain.targetMarkAnchor) {
+    const mp = resolveIKMarkAnchorTarget(character, transforms, chain.targetMarkAnchor);
+    if (mp) {
+      target = { x: mp.x, y: mp.y, z: mp.z };
+      anchored = true;
+    }
+  }
+  if (!anchored && chain.targetBlueprint) {
     try {
       const tbResult = evaluateBlueprint(chain.targetBlueprint, { frame, frameRate, vars: variableContext?.values ?? {} });
       let drove = false;
@@ -2513,6 +2521,24 @@ function clampPixelWorld(
   return cv3(base.x + r.x, base.y + r.y, base.z + r.z);
 }
 
+/**
+ * IK 目标标记锚定解析：节点当前精灵上点标记的世界点（px、原点中心
+ * 世界系，与 IK 目标同空间），与钳制像素点同一解析（clampPixelWorld）。
+ * 精灵表缺省走 store 全局表（与求解端尖端长解析同源）。任一环缺失
+ * （节点/位姿/精灵/标记）→ null，消费端回落蓝图/静态目标。
+ */
+export function resolveIKMarkAnchorTarget(
+  character: Character,
+  transforms: Map<string, WorldTransform>,
+  anchor: { nodeId: string; mark: string },
+  sprites?: Record<string, Sprite>,
+): { x: number; y: number; z: number } | null {
+  // 精灵表走钳制同款口径（clampSpriteTable：显式表 > store 非空表 >
+  // 角色自带表）——store 空表不能遮住角色自带表（无头/导出语境下
+  // store.sprites 恒为空记录，直传会让解析恒落空）。
+  return clampPixelWorld(character, transforms, anchor.nodeId, { mark: anchor.mark }, clampSpriteTable(sprites, character));
+}
+
 /** 指定点解析：返回世界点列（主点在前）与旋转承担节点（主点所在节点） */
 export function clampAnchorPoints(
   character: Character,
@@ -2727,10 +2753,11 @@ export function resettleChainOverride(
           const ya = frameYAxisWorld(endWt.worldFrame, dir);
           return {
             ...chain,
-            // 重解是纠正遍、必须赢：一并剥离 targetBlueprint，否则求解时
-            // 蓝图输出会照常覆盖这里冻结出的目标（transposeAngle 只在蓝图
-            // 驱动时追加，剥离后自然不触发）。
+            // 重解是纠正遍、必须赢：一并剥离 targetBlueprint 与目标标记
+            // 锚定，否则求解时动态目标会照常覆盖这里冻结出的目标
+            // （transposeAngle 只在蓝图驱动时追加，剥离后自然不触发）。
             targetBlueprint: undefined,
+            targetMarkAnchor: undefined,
             target3D: {
               x: f.points[0].x + ya.x * tipLen,
               y: f.points[0].y + ya.y * tipLen,
@@ -2739,8 +2766,8 @@ export function resettleChainOverride(
           };
         }
       }
-      // 同上：重解遍剥离目标蓝图，目标只认冻结位
-      return { ...chain, targetBlueprint: undefined, target3D: { ...f.points[0] } };
+      // 同上：重解遍剥离目标蓝图与标记锚定，目标只认冻结位
+      return { ...chain, targetBlueprint: undefined, targetMarkAnchor: undefined, target3D: { ...f.points[0] } };
     }
   }
   return chain;

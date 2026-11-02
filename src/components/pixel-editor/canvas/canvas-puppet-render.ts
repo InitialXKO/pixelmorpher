@@ -8,7 +8,7 @@ import { computeSpriteEndPoint, spritePivotX, spritePivotY } from './canvas-util
 import type { RenderContext } from './canvas-render-helpers';
 import type { Character, Node } from '@/lib/unified-types';
 import { pxToSub, subToPx, projectToView, rotateInViewPlane, resolveChainTarget3D, applyFrameRotation } from '@/lib/unified-types';
-import { socketOffsetTo3D, geometryDirectionFromToggle, resolveNodeSpriteId, clampAnchorPoints } from '@/lib/unified-render';
+import { socketOffsetTo3D, geometryDirectionFromToggle, resolveNodeSpriteId, clampAnchorPoints, resolveIKMarkAnchorTarget } from '@/lib/unified-render';
 import { computeEditorWorldTransforms } from '@/lib/editor-world-transforms';
 import { peekClampFrozen } from '@/lib/clamp-session';
 import { useProjectStore, useEditorStore } from '@/lib/store';
@@ -45,7 +45,11 @@ export function renderIKTargetHandles(
   for (const chain of chains) {
     // 填充/解析按链根关节朝向（target 是该朝向画布平面上的点）；手柄绘制仍按末关节朝向投影
     const rootDir = geoDir ?? worldTransforms.get(chain.rootNodeId)?.variantIndex ?? 6;
-    const t3 = resolveChainTarget3D(chain, rc.canvasWidth, rc.canvasHeight, rootDir);
+    // 标记锚定生效时手柄画在锚点处（与求解同一解析）；解析不到回落静态目标
+    const anchorPt = chain.targetMarkAnchor
+      ? resolveIKMarkAnchorTarget(character, worldTransforms, chain.targetMarkAnchor)
+      : null;
+    const t3 = anchorPt ?? resolveChainTarget3D(chain, rc.canvasWidth, rc.canvasHeight, rootDir);
     const dir = worldTransforms.get(chain.endNodeId)?.variantIndex ?? 6;
     const proj = projectToView(pxToSub(t3.x), pxToSub(t3.y), pxToSub(t3.z), dir);
     const sx = panX + (rc.canvasWidth / 2 + subToPx(proj.canvasX)) * zoom;
@@ -63,10 +67,10 @@ export function renderIKTargetHandles(
     ctx.moveTo(sx, sy - r - 4); ctx.lineTo(sx, sy - r + 2);
     ctx.moveTo(sx, sy + r - 2); ctx.lineTo(sx, sy + r + 4);
     ctx.stroke();
-    // 链名
+    // 链名（锚定生效时标注锚定的标记名）
     ctx.fillStyle = '#00ff88';
     ctx.font = '10px sans-serif';
-    ctx.fillText(chain.name, sx + r + 6, sy - r - 2);
+    ctx.fillText(anchorPt ? `${chain.name} · 锚@${chain.targetMarkAnchor!.mark}` : chain.name, sx + r + 6, sy - r - 2);
   }
   ctx.restore();
 }

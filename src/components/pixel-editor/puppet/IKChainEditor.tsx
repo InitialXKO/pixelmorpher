@@ -11,8 +11,8 @@ import { Button } from '@/components/ui/button';
 import { useProjectStore } from '@/lib/store';
 import { computeIKChainTip, getIKChainJointIds } from '@/lib/ik-tip';
 import { resolveChainTarget3D, ikTargetMirror, subToPx } from '@/lib/unified-types';
-import { computeWorldTransforms } from '@/lib/unified-render';
-import type { Character, IKChain } from '@/lib/unified-types';
+import { computeWorldTransforms, resolveNodeSpriteId } from '@/lib/unified-render';
+import type { Character, DirectionIndex, IKChain } from '@/lib/unified-types';
 import { Vec3Field } from '../shared/Vec3Field';
 import CommitNumberInput from '../shared/CommitNumberInput';
 import type { BlueprintGraph } from '@/lib/blueprint/ir';
@@ -94,6 +94,44 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
         const { targetBlueprint: _tb, ...rest } = c;
         return rest;
       }),
+    });
+  };
+
+  // ---- 目标标记锚定：节点当前精灵（按节点朝向现解析）上的点标记名列表 ----
+  const spritesTable = useProjectStore((s) => s.sprites);
+  const pointMarksOfNode = (nodeId: string): string[] => {
+    if (!character) return [];
+    const dir = (character.nodes[nodeId]?.transform.variantIndex ?? 6) as DirectionIndex;
+    const spriteId = resolveNodeSpriteId(character, nodeId, dir, spritesTable);
+    const sprite = spriteId
+      ? (spritesTable?.[spriteId] ?? (character.sprites as Record<string, { marks?: { name: string; kind: string }[] }> | undefined)?.[spriteId])
+      : undefined;
+    return (sprite?.marks ?? []).filter((m) => m.kind === 'point').map((m) => m.name);
+  };
+
+  const handleAnchorNode = (chainId: string, nodeId: string) => {
+    if (!character) return;
+    updateUnifiedCharacter(character.id, {
+      ikChains: chains.map((c) => {
+        if (c.id !== chainId) return c;
+        if (!nodeId) {
+          const { targetMarkAnchor: _a, ...rest } = c;
+          return rest;
+        }
+        // 换节点时标记自动取该节点精灵的第一个点标记（无标记则留空、求解端回落）
+        return { ...c, targetMarkAnchor: { nodeId, mark: pointMarksOfNode(nodeId)[0] ?? '' } };
+      }),
+    });
+  };
+
+  const handleAnchorMark = (chainId: string, mark: string) => {
+    if (!character) return;
+    updateUnifiedCharacter(character.id, {
+      ikChains: chains.map((c) =>
+        c.id === chainId && c.targetMarkAnchor
+          ? { ...c, targetMarkAnchor: { ...c.targetMarkAnchor, mark } }
+          : c,
+      ),
     });
   };
 
@@ -258,6 +296,7 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
                 <span className="flex-1 truncate text-gray-300" title={c.name}>
                   {c.name} <span className="text-gray-600">({c.solver})</span>
                   {c.targetBlueprint && <span className="text-purple-400 ml-1">[蓝图驱动]</span>}
+                  {c.targetMarkAnchor && <span className="text-cyan-400 ml-1">[标记锚定]</span>}
                 </span>
                 <button
                   onClick={() => {
@@ -319,6 +358,45 @@ export default function IKChainEditor({ character }: IKChainEditorProps) {
                   />
                 </label>
               </div>
+              {/* 目标标记锚定：目标点跟随某节点当前精灵上的点标记；解析不到时回落蓝图/静态目标 */}
+              <div className="flex items-center gap-1 text-gray-500">
+                <span title="把目标点锚定到某节点当前精灵上的点标记：目标每帧跟随标记位置">锚定</span>
+                <select
+                  value={c.targetMarkAnchor?.nodeId ?? ''}
+                  onChange={(e) => handleAnchorNode(c.id, e.target.value)}
+                  className="flex-1 min-w-0 bg-black/50 border border-white/10 rounded px-1 py-0.5 text-gray-300 text-[10px]"
+                >
+                  <option value="">无（静态/蓝图目标）</option>
+                  {nodes.map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {(n as any).name ?? n.id}
+                    </option>
+                  ))}
+                </select>
+                {c.targetMarkAnchor && (() => {
+                  const marks = pointMarksOfNode(c.targetMarkAnchor.nodeId);
+                  if (marks.length === 0) {
+                    return <span className="text-amber-500">该节点当前精灵没有点标记</span>;
+                  }
+                  return (
+                    <select
+                      value={c.targetMarkAnchor.mark}
+                      onChange={(e) => handleAnchorMark(c.id, e.target.value)}
+                      className="flex-1 min-w-0 bg-black/50 border border-white/10 rounded px-1 py-0.5 text-gray-300 text-[10px]"
+                      title="锚定的点标记"
+                    >
+                      {marks.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  );
+                })()}
+              </div>
+              {c.targetMarkAnchor && pointMarksOfNode(c.targetMarkAnchor.nodeId).length > 0 && (
+                <div className="text-gray-600">
+                  目标点跟随标记「{c.targetMarkAnchor.mark}」；标记解析不到时回落蓝图/静态目标，锚定优先于蓝图。
+                </div>
+              )}
               {/* pole 极向量（仅 2bone 显示）：决定肘的弯曲侧，原点中心世界空间 */}
               {c.solver === '2bone' && (
                 <div className="flex items-center gap-1 text-gray-500">
