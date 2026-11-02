@@ -286,7 +286,10 @@ function variantMirrored(part, variant) {
     if (m2 !== undefined && part.variants && part.variants[m2]) return true;
   }
   if (variant === 6 && part.variants && part.variants[2]) return true;
-  if (variant === 4) return true;
+  // 北（4）与南（0）永不镜像：镜像只为东西侧面对侧复用（与编辑器
+  // DEFAULT_MIRROR_MAP 同口径，南北互镜在视觉上是错的）。此前此处
+  // 有一条「variant === 4 无条件镜像」——那是编辑器编号（4=西）的
+  // 规则串进了运行时编号（4=北），导致北向行走整角色水平翻转。
   return false;
 }
 function resolvePart(part, variantIndex, costume) {
