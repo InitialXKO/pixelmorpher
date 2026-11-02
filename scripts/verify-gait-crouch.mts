@@ -55,6 +55,7 @@ const src = readFileSync(new URL('../src/lib/proc-runtime/runtime-template.ts', 
   check(!src.includes('const want = char.vy > -20'), 'C3 旧口径（vy>-20 双腿同收、按落速伸腿）已摘除');
   check(src.includes('function fbGroundBelowY()'), 'C4 脚下支撑面查询存在（与物理落地同口径）');
   check(src.includes('airExtend = tHit <= 0.15;'), 'C5 伸腿触发：预计触地时间 ≤0.15s（按高度而非落速）');
+  check(src.includes('const kk = Math.min(1, dt / (tucked ? 0.045 : 0.09));'), 'C6 收腿趋近提速一倍（刚收又弹开的成因是收慢了，不是伸腿窗口）');
 }
 
 console.log(fails ? `\n✗ ${fails} 项失败` : '\n✓ 全部通过');

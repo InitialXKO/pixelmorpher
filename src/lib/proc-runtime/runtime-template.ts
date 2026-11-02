@@ -3370,7 +3370,9 @@ function runFallbackPass(pose, dt) {
             ? [J[0][0] + rel[0] * 0.55, J[0][1] + rel[1] * 0.55 + rt.segSum * 0.20]
             : [J[0][0] + rel[0] * 0.90, J[0][1] + rel[1] * 1.02];
           const cur = fbAirCur.get(ci) || [...restT];
-          const kk = Math.min(1, dt / 0.09);
+          // 收腿趋近比伸腿快一倍：收得慢，第二条腿刚收拢就撞上落
+          // 地前伸腿的窗口、看起来立刻弹开（短跳全程短、尤其明显）
+          const kk = Math.min(1, dt / (tucked ? 0.045 : 0.09));
           cur[0] += (want[0] - cur[0]) * kk; cur[1] += (want[1] - cur[1]) * kk;
           fbAirCur.set(ci, cur);
           F = [...cur];
