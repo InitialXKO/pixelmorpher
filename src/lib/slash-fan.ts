@@ -25,11 +25,34 @@
  * 对锚点偏移恒为 0，故存量工程一次性迁移 cx/cy 归零即逐像素
  * 保真（帧尺寸随覆盖盒新定义变化、画面相对锚点不变），标记
  * slashCenterVersion，见 store 导入规范化链。
+ *
+ * 前沿弧度与图层段（2026-11 追加）：headCurve 按带内径向位置 s
+ * 的圆弧剖面 (1 − (2s−1)²) 调整前沿阈值 headEff——正值前沿中段
+ * 后缩、负值外凸，缺省 0 时 headEff = head、与旧行为逐像素一致。
+ * layerSegs 按进度 p 分段指定刀光画在角色前/后（归一化与查询见
+ * normalizeSlashLayerSegs / slashLayerAt；无有效段 = 全程在前），
+ * 绘制分遍由消费端负责。mode = 'trail' 时改走轨迹带生成器
+ * （slash-trail.ts），与本文件共用头尾窗 slashWindow 与调色板。
  */
+
+/** 刀光图层段：按进度 p 分段指定刀光画在角色前（front）还是
+ * 后（back）。until = 该段覆盖到的进度上界（0, 1]；段表经
+ * normalizeSlashLayerSegs 归一化后按 until 升序、末段 until = 1。
+ * 无有效段 = 全程在前。 */
+export interface SlashLayerSeg {
+  until: number;
+  layer: 'front' | 'back';
+}
 
 export interface SlashFanSpec {
   /** 锚点节点 id：刀光在表演/片段开始时定格锚点的位姿（位置+角度），之后不跟随 */
   anchorNodeId: string;
+  /** 生成模式：'fan' / 缺省 = 椭圆扇面；'trail' = 轨迹带——片段窗
+   * 内采样锚点（刃根）与 tipNodeId（刃尖）的运动成带，见
+   * slash-trail.ts */
+  mode?: 'fan' | 'trail';
+  /** 轨迹模式的刃尖节点 id（anchorNodeId 为刃根）；扇面模式不用 */
+  tipNodeId?: string;
   /** 持续秒数；缺省/0 = 跟随所属表演（片段则为片段窗时长） */
   durationSec?: number;
   /** 生成帧数（2–12，默认 6） */
@@ -64,6 +87,14 @@ export interface SlashFanSpec {
   softRad: number;
   /** 颜色档（外弧→内界）；缺省用内置刀光调色板 */
   colors?: string[];
+  /** 扇面前沿弧度 -1..1，缺省 0：正值 = 前沿中段后缩、负值 =
+   * 前沿外凸；偏移量按带内径向位置 s 的圆弧剖面
+   * (1 − (2s−1)²) 分配——带中段最强、内外两边为 0 */
+  headCurve?: number;
+  /** 图层段：按进度 p 分段指定刀光画在角色前/后（见
+   * SlashLayerSeg）；缺省/空 = 全程在前。消费端绘制时按当帧
+   * 图层分两遍夹角色绘制 */
+  layerSegs?: SlashLayerSeg[];
 }
 
 export const SLASH_PALETTE: string[] = [
@@ -97,6 +128,66 @@ function hexToRgb(hex: string): [number, number, number] {
 function smooth01(t: number): number {
   t = t < 0 ? 0 : t > 1 ? 1 : t;
   return t * t * (3 - 2 * t);
+}
+
+/**
+ * 头尾窗：进度 p → 可见段 [tail, head]（头部先展开、尾部后收走）。
+ * 扇面与轨迹带（slash-trail.ts）共用同一节奏，数值不得单边改。
+ */
+export function slashWindow(p: number): { head: number; tail: number } {
+  return {
+    head: 0.14 + 0.86 * smooth01(p / 0.58),
+    tail: smooth01((p - 0.44) / 0.56) * 1.06,
+  };
+}
+
+/**
+ * 调色板解析：规格自带 ≥2 档颜色则用之、否则用内置调色板，
+ * 返回 RGB 三元组列（外弧→内界）。轨迹带生成器共用同一口径。
+ */
+export function slashPaletteRgb(spec: SlashFanSpec): [number, number, number][] {
+  return (spec.colors && spec.colors.length >= 2 ? spec.colors : SLASH_PALETTE).map(hexToRgb);
+}
+
+/**
+ * 图层段归一化：过滤非法项（until 非有限数、layer 非 front/back）、
+ * until 钳到 (0, 1]、按 until 升序、合并相邻同层段（取较大 until）、
+ * 末段 until 不足 1 时拉到 1。空/全非法 → []（= 全程在前）。
+ */
+export function normalizeSlashLayerSegs(
+  segs: readonly SlashLayerSeg[] | undefined | null,
+): SlashLayerSeg[] {
+  if (!segs || segs.length === 0) return [];
+  const cleaned: SlashLayerSeg[] = [];
+  for (const s of segs) {
+    if (!s || typeof s.until !== 'number' || !Number.isFinite(s.until)) continue;
+    if (s.layer !== 'front' && s.layer !== 'back') continue;
+    cleaned.push({ until: Math.min(1, Math.max(1e-6, s.until)), layer: s.layer });
+  }
+  cleaned.sort((a, b) => a.until - b.until);
+  const merged: SlashLayerSeg[] = [];
+  for (const s of cleaned) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.layer === s.layer) prev.until = s.until;
+    else merged.push({ until: s.until, layer: s.layer });
+  }
+  if (merged.length > 0) merged[merged.length - 1]!.until = 1;
+  return merged;
+}
+
+/**
+ * 进度 p 处刀光的图层：无有效图层段 → 'front'；否则取第一个
+ * until >= p 的段的 layer（段表先经 normalizeSlashLayerSegs
+ * 归一化，p 钳 [0, 1]）。
+ */
+export function slashLayerAt(spec: SlashFanSpec, p: number): 'front' | 'back' {
+  const segs = normalizeSlashLayerSegs(spec.layerSegs);
+  if (segs.length === 0) return 'front';
+  const pc = Math.min(1, Math.max(0, p));
+  for (const s of segs) {
+    if (pc <= s.until) return s.layer;
+  }
+  return segs[segs.length - 1]!.layer;
 }
 
 /** 有效帧布局：生成帧的实际尺寸与帧内 plug 坐标（未镜像参照系；
@@ -176,7 +267,7 @@ export function generateSlashFrame(spec: SlashFanSpec, p: number, mirrored = fal
   const outW = lay.w;
   const outH = lay.h;
   const buf = new Uint8Array(outW * outH * 4);
-  const palette = (spec.colors && spec.colors.length >= 2 ? spec.colors : SLASH_PALETTE).map(hexToRgb);
+  const palette = slashPaletteRgb(spec);
 
   // 椭圆中心在帧内 = plug（锚点） + 偏移 (cx, cy)
   const cx = lay.plugX + spec.cx, cy = lay.plugY + spec.cy;
@@ -192,9 +283,9 @@ export function generateSlashFrame(spec: SlashFanSpec, p: number, mirrored = fal
 
   const cosR = Math.cos(-rotRad), sinR = Math.sin(-rotRad);
 
-  // 扫过进度：头部先出，尾部后收
-  const head = 0.14 + 0.86 * smooth01(p / 0.58);
-  const tail = smooth01((p - 0.44) / 0.56) * 1.06;
+  // 扫过进度：头部先出，尾部后收（头尾窗与轨迹带共用同一节奏）
+  const { head, tail } = slashWindow(p);
+  const headCurve = Math.max(-1, Math.min(1, spec.headCurve ?? 0));
   if (head - tail >= 0.018) {
     for (let y = 0; y < outH; y++) {
       for (let x = 0; x < outW; x++) {
@@ -214,9 +305,12 @@ export function generateSlashFrame(spec: SlashFanSpec, p: number, mirrored = fal
         rel = ((rel % TWO_PI) + TWO_PI) % TWO_PI;
         if (rel > sweep) continue;
         const u = rel / sweep;
-        if (u < tail || u > head) continue;
-        // 角向归一化位置：0 = 尾部，1 = 头部
-        const uNorm = (u - tail) / Math.max(0.001, head - tail);
+        // 角向归一化位置：0 = 尾部，1 = 头部。钳到 1：headCurve
+        // 外凸时新增的 u > head 像素按头部取值着色（避免亮度溢
+        // 出）；headCurve = 0 时 u 本就在 [tail, head] 内、钳制
+        // 无副作用。头尾窗判定移到带内 s 算出之后（headEff 需要
+        // s），辉光区仍在 else 分支内按原窗判定。
+        const uNorm = Math.min(1, (u - tail) / Math.max(0.001, head - tail));
         // 角向形状因子：尾部 → 0，头部 → 1（带头部微圆润）
         let A = Math.pow(Math.max(0, uNorm), gammaAng);
         A *= smooth01(0.15 + 0.85 * uNorm);
@@ -229,6 +323,11 @@ export function generateSlashFrame(spec: SlashFanSpec, p: number, mirrored = fal
           // 径向位置 s：0 = 内边界，1 = 外弧
           const s = (rho - inner) / Math.max(0.001, 1 - inner);
           if (s < 0) continue;
+          // 头尾窗（含前沿弧度）：headCurve 按圆弧剖面
+          // (1 − (2s−1)²) 调整前沿——带中段最强、内外两边为 0；
+          // headCurve = 0 时 headEff = head，与旧口径逐像素一致
+          const headEff = head - headCurve * 0.3 * (1 - (2 * s - 1) * (2 * s - 1));
+          if (u < tail || u > headEff) continue;
           // 径向软边（向内收尖）
           const edge = smooth01(s / softRad);
           if (edge < 0.02) continue;
@@ -246,6 +345,8 @@ export function generateSlashFrame(spec: SlashFanSpec, p: number, mirrored = fal
           if (a8 < 6) continue;
           buf[o] = rgb[0]; buf[o + 1] = rgb[1]; buf[o + 2] = rgb[2]; buf[o + 3] = a8;
         } else {
+          // 辉光区无带内 s，前沿弧度不作用于此，按原头尾窗判定
+          if (u < tail || u > head) continue;
           // 外弧外的柔和辉光
           const glow = smooth01(1 - (rho - 1) / 0.28);
           if (glow < 0.04) continue;

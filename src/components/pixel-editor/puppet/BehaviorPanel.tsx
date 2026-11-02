@@ -22,9 +22,76 @@ import { Label } from '@/components/ui/label';
 import BlueprintEditor from './BlueprintEditor';
 import SlashEffectEditor from './SlashEffectEditor';
 import { cloneSlashSpec, countSlashDefRefs, findSlashDef } from '@/lib/slash-defs';
+import { computeWorldTransforms } from '@/lib/unified-render';
+import { evaluateBlueprint } from '@/lib/blueprint/eval';
+import { graphWithoutSlashNodes } from '@/lib/blueprint/slash-sync';
+import { sampleSlashTrail } from '@/lib/slash-trail-sampling';
+import type { SlashFanSpec } from '@/lib/slash-fan';
+import type { SlashTrailSample } from '@/lib/slash-trail';
+import type { ProceduralPoseDelta } from '@/lib/engine/procedural';
 
 const selCls = 'h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded text-gray-300 px-1';
 const numCls = 'h-6 text-[10px] bg-[#111128] border-[#1e1e3a]';
+
+/** 表演刀光轨迹预览采样。表演图在编辑器里没有现成的逐帧世界位姿
+ *  通路（主画布不求值表演，表演只在导出时采样烘焙），故按现行可
+ *  得路径拼：基姿取当前画布帧的世界变换作定格点，表演图增量按
+ *  与进包采样（translatePerformanceGraph）相同的求值口径逐点求
+ *  出（60fps 时间基、frame = 进度 × 时长 × 60、刀光节点先摘除、
+ *  图内有状态节点跨采样点共用一张状态表），经程序化位姿增量通
+ *  道叠进世界变换，再走与片段同一份轨迹采样函数。
+ *  边界：不含包络淡入淡出与接管/加算的混合（与进包采样同处理——
+ *  包络是进包后运行时侧的事）；预览的路径形状按表演图足值求出，
+ *  基姿是当前帧而非某次真实触发的起始帧 */
+function buildPerfTrailSamples(args: {
+  character: Character;
+  perf: ProcPerformance;
+  spec: SlashFanSpec;
+  baseFrame: number;
+  frameRate: number;
+  canvasWidth: number;
+  canvasHeight: number;
+}): SlashTrailSample[] | null {
+  const { character, perf, spec, baseFrame, frameRate, canvasWidth, canvasHeight } = args;
+  if (spec.mode !== 'trail' || !spec.tipNodeId) return null;
+  const durFrames = Math.max(1, Math.round(perf.duration * frameRate));
+  const graphs = new Map<string, BlueprintGraph>();
+  for (const nodeId of perf.maskNodeIds) {
+    const raw = perf.graphs[nodeId];
+    if (!raw) continue;
+    const cleaned = graphWithoutSlashNodes(raw);
+    if (cleaned.nodes.length > 0) graphs.set(nodeId, cleaned);
+  }
+  const states = new Map<string, Map<string, unknown>>();
+  const worldTransformsAt = (f: number) => {
+    const u = Math.min(1, Math.max(0, f / durFrames));
+    let deltas: Map<string, ProceduralPoseDelta> | undefined;
+    if (graphs.size > 0) {
+      const m = new Map<string, ProceduralPoseDelta>();
+      for (const [nodeId, graph] of graphs) {
+        let st = states.get(nodeId);
+        if (!st) { st = new Map(); states.set(nodeId, st); }
+        try {
+          const r = evaluateBlueprint(graph, {
+            frame: u * perf.duration * 60,
+            frameRate: 60,
+            vars: {},
+            nodeState: st as Map<string, any>,
+          });
+          if (r.rotation || r.translateX || r.translateY) {
+            m.set(nodeId, { dx: r.translateX || 0, dy: r.translateY || 0, rotDeg: r.rotation || 0, scaleMul: 1 });
+          }
+        } catch { /* 单图求值失败不拖垮预览：该节点按无增量处理 */ }
+      }
+      if (m.size > 0) deltas = m;
+    }
+    return computeWorldTransforms(
+      character, baseFrame, canvasWidth, canvasHeight, frameRate,
+      undefined, undefined, undefined, undefined, undefined, undefined, deltas,
+    );
+  };
+  return sampleSlashTrail({ character, spec, startFrame: 0, durFrames, worldTransformsAt });
+}
 
 function emptyGraph(): BlueprintGraph {
   return {
@@ -44,6 +111,11 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
   const [editing, setEditing] = useState<{ perfId: string; nodeId: string; graph: BlueprintGraph } | null>(null);
   const [editingBehavior, setEditingBehavior] = useState<{ nodeId: string; graph: BlueprintGraph } | null>(null);
   const animationClips = useProjectStore((s) => s.animationClips);
+  // 表演刀光轨迹预览的基姿与采样口径（当前画布帧定格 + 工程帧率/画布尺寸）
+  const currentFrame = useProjectStore((s) => s.currentFrame);
+  const frameRate = useProjectStore((s) => s.frameRate);
+  const canvasWidth = useProjectStore((s) => s.canvasWidth);
+  const canvasHeight = useProjectStore((s) => s.canvasHeight);
 
   if (!character) {
     return <p className="text-[10px] text-gray-500">先在左侧选择一个角色。</p>;
@@ -239,9 +311,17 @@ export default function BehaviorPanel({ unifiedCharacters }: { unifiedCharacters
                     <div className="col-span-2">
                       {(() => {
                         const boundDef = findSlashDef(slashDefs, perf.slashDefId);
+                        const effSpec = perf.slashDefId ? boundDef?.spec : perf.slashEffect;
+                        const perfTrailSamples = effSpec
+                          ? buildPerfTrailSamples({
+                              character, perf, spec: effSpec,
+                              baseFrame: currentFrame, frameRate, canvasWidth, canvasHeight,
+                            })
+                          : null;
                         return (
                           <SlashEffectEditor
-                            value={perf.slashDefId ? boundDef?.spec : perf.slashEffect}
+                            trailSamples={perfTrailSamples}
+                            value={effSpec}
                             onChange={(next) => {
                               // 绑定时参数编辑直达定义（一处改、处处生效）；未绑定走私有字段
                               if (perf.slashDefId && boundDef) {

@@ -707,6 +707,7 @@ function slashFanFrame(spec, p, mirrored) {
   const cosR = Math.cos(-rotRad), sinR = Math.sin(-rotRad);
   const head = 0.14 + 0.86 * slashSmooth01(p / 0.58);
   const tail = slashSmooth01((p - 0.44) / 0.56) * 1.06;
+  const headCurve = Math.max(-1, Math.min(1, spec.headCurve || 0));
   if (head - tail >= 0.018) {
     for (let y = 0; y < outH; y++) {
       for (let x = 0; x < outW; x++) {
@@ -720,8 +721,11 @@ function slashFanFrame(spec, p, mirrored) {
         rel = ((rel % TWO_PI) + TWO_PI) % TWO_PI;
         if (rel > sweep) continue;
         const u = rel / sweep;
-        if (u < tail || u > head) continue;
-        const uNorm = (u - tail) / Math.max(0.001, head - tail);
+        if (u < tail) continue;
+        // 头部弧度：前沿整形要到径向分支拿到 s 才判定，这里先按
+        // headEff 上界放行（外凸时 head + |headCurve|·0.3）
+        if (u > head + (headCurve < 0 ? -headCurve * 0.3 : 0)) continue;
+        const uNorm = Math.min(1, (u - tail) / Math.max(0.001, head - tail));
         let A = Math.pow(Math.max(0, uNorm), gammaAng);
         A *= slashSmooth01(0.15 + 0.85 * uNorm);
         if (A < 0.004) continue;
@@ -731,6 +735,12 @@ function slashFanFrame(spec, p, mirrored) {
           if (rho < inner - 0.015) continue;
           const s = (rho - inner) / Math.max(0.001, 1 - inner);
           if (s < 0) continue;
+          // 头部前沿弧度（与编辑器同式）：headEff = head −
+          // headCurve·0.3·(1−(2s−1)²)，u 越过 headEff 不画
+          if (headCurve !== 0) {
+            const q = 2 * s - 1;
+            if (u > head - headCurve * 0.3 * (1 - q * q)) continue;
+          }
           const edge = slashSmooth01(s / softRad);
           if (edge < 0.02) continue;
           const radB = Math.pow(Math.min(1, s), 0.75);
@@ -745,6 +755,8 @@ function slashFanFrame(spec, p, mirrored) {
           if (a8 < 6) continue;
           buf[o] = rgb[0]; buf[o + 1] = rgb[1]; buf[o + 2] = rgb[2]; buf[o + 3] = a8;
         } else {
+          // 辉光带无带内 s：弧度剖面在外缘（s=1）归零、headEff=head
+          if (u > head) continue;
           const glow = slashSmooth01(1 - (rho - 1) / 0.28);
           if (glow < 0.04) continue;
           const g = glow * 0.24 * A;
@@ -765,6 +777,37 @@ function slashFanFrame(spec, p, mirrored) {
     }
   }
   return { w: outW, h: outH, plugX: lay.plugX, plugY: lay.plugY, data: buf };
+}
+/** 刀光图层分段查表（编辑器 slash-fan 的 slashLayerAt 孪生，模板
+ * 自备不引编辑器代码）：包内 segs 已由 convert 归一化（升序、
+ * 末段 until=1）；取首个 until > p 的段，无分段/越界 → 'front' */
+function slashLayerAtRt(segs, p) {
+  if (!segs || !segs.length) return 'front';
+  const pc = Math.min(1, Math.max(0, p));
+  for (let i = 0; i < segs.length; i++) {
+    // 与编辑器 slashLayerAt 同口径：p 恰 = until 归本段（(prev.until, until]）
+    if (pc <= segs[i].until) return segs[i].layer === 'back' ? 'back' : 'front';
+  }
+  return segs[segs.length - 1].layer === 'back' ? 'back' : 'front';
+}
+/** 轨迹刀光帧解码：convert 烘焙的帧 = 原始 RGBA 字节的 base64
+ * （与发光场同一编码，decodeGlowData 解码），包内为未镜像原图；
+ * 镜像时整帧水平翻转（与扇面同口径），plug 仍报未镜像布局值、
+ * 由瓦片构建处按 cx 公式换算。返回与 slashFanFrame 同形
+ * {w, h, plugX, plugY, data}，与扇面共用后续瓦片/消费路径 */
+function slashTrailFrameOf(tt, fi, mirrored) {
+  const raw = decodeGlowData(tt.frames[fi] || '');
+  const data = new Uint8Array(tt.w * tt.h * 4);
+  data.set(raw.subarray(0, data.length));
+  if (mirrored) {
+    for (let y = 0; y < tt.h; y++) {
+      for (let x = 0; x < (tt.w >> 1); x++) {
+        const a = (y * tt.w + x) * 4, b = (y * tt.w + (tt.w - 1 - x)) * 4;
+        for (let k = 0; k < 4; k++) { const tmp = data[a + k]; data[a + k] = data[b + k]; data[b + k] = tmp; }
+      }
+    }
+  }
+  return { w: tt.w, h: tt.h, plugX: tt.plugX, plugY: tt.plugY, data: data };
 }
 
 /** 实例打包：24 float —— pos2 size2 rot1 pivotTile2 clipC1 tile4 misc4(family,seed,modes,composite) param4(rimI,glintI,phase,ghost) deform2 clipAB2。裁剪面占 iRotTileC.w（c）与 iDeform.zw（a,b）。发光全套（34 float）已搬侧车数据纹理（packGlowSidecar），顶点属性只剩 7 个：Mesa 等上报上限低于规范保证的环境也能链上，varying 同步腾空。 */
@@ -1100,15 +1143,20 @@ function ensureAtlas(gl, variant, costumeName) {
     }
   }
   // 刀光帧瓦片：按当前朝向（锚点部件镜像与否）现生成 RGBA 帧，
-  // 与部件瓦片同图集（底图纹理承载像素，特效通道 composite=4 直读）
+  // 与部件瓦片同图集（底图纹理承载像素，特效通道 composite=4 直读）。
+  // 轨迹模式（sl.trailTiles）：帧已在 convert 烘焙，解码后与扇面
+  // 帧同形、同路进图集（帧数以包内帧为准）
   for (const perf of PERFORMANCES) {
     const sl = perf.slash;
     if (!sl) continue;
     const anchorPart = PARTS.find((p) => p.key === sl.anchor);
     const mir = anchorPart ? variantMirrored(anchorPart, variant) : false;
-    const n = Math.max(2, Math.min(12, sl.frameCount || 6));
+    const tt = sl.trailTiles && sl.trailTiles.frames && sl.trailTiles.frames.length ? sl.trailTiles : null;
+    const n = tt ? tt.frames.length : Math.max(2, Math.min(12, sl.frameCount || 6));
     for (let fi = 0; fi < n; fi++) {
-      const fr = slashFanFrame(sl, n > 1 ? fi / (n - 1) : 0.5, mir);
+      const fr = tt
+        ? slashTrailFrameOf(tt, fi, mir)
+        : slashFanFrame(sl, n > 1 ? fi / (n - 1) : 0.5, mir);
       const M = 2;
       const tile = {
         w: fr.w + M * 2, h: fr.h + M * 2,
@@ -5564,7 +5612,12 @@ function frame(now) {
     gl.texSubImage2D(gl.TEXTURE_2D, 0, job.place[0], job.place[1], tile.w, tile.h, gl.RGBA, gl.UNSIGNED_BYTE, base);
   }
   // 刀光：表演开始帧定格锚点部件位姿（位置+角度），其后不跟随；
-  // 进度按表演本地时间走，帧图自图集刀光瓦片取（最后绘制、在最上层）
+  // 进度按表演本地时间走，帧图自图集刀光瓦片取。图层分段
+  // （layerSegs，按当帧进度 p 查 slashLayerAtRt）：front 段与无
+  // 分段的元素追加在全部元素之后绘制（最上层，同旧行为）；back
+  // 段的元素先收集、循环后整批插到绘制列表最前（全部部件之下、
+  // 角色身后），多把 back 刀光间保持表演序
+  const slashBackEls = [];
   for (const act of activePerfs) {
     const sl = act.perf.slash;
     if (!sl) continue;
@@ -5582,14 +5635,17 @@ function frame(now) {
     const frames = state.slashTiles ? state.slashTiles[act.perf.id] : null;
     if (!frames || !frames.length) continue;
     const ft = frames[Math.min(frames.length - 1, Math.floor(p * frames.length))];
-    els.push({
+    const slashEl = {
       pos: [act.slashSpawn.pos[0], act.slashSpawn.pos[1]],
       size: [ft.size[0] * 3, ft.size[1] * 3], rot: act.slashSpawn.rot,
       tileCx: ft.tileCx, tileCy: ft.tileCy, tile: ft.tile,
       family: 0, seed: 0, modes: [0, 0, 0, 0], param: [0, 0, 0],
       ghost: false, composite: 4, deform: undefined, glow: [], glowSpace: [], glowStamps: undefined,
-    });
+    };
+    if (slashLayerAtRt(sl.layerSegs, p) === 'back') slashBackEls.push(slashEl);
+    else els.push(slashEl);
   }
+  if (slashBackEls.length) els.splice(0, 0, ...slashBackEls);
   // 残影段（D5）：动态实例驱动的部件快照环。快照在裁剪面与表演
   // 残影都处理完之后取（el 已定稿）；ghosts 排在活 el 之前，
   // 以残影色剪影绘制（ghost 标志，与表演残影同一渲染口径）。

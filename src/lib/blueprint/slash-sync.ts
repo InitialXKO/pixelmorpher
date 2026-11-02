@@ -32,7 +32,7 @@
 
 import type { BlueprintGraph, BlueprintNode } from './ir';
 import type { ProcPerformance, SlashDefinition } from '../unified-types';
-import { defaultSlashSpec, type SlashFanSpec } from '../slash-fan';
+import { defaultSlashSpec, normalizeSlashLayerSegs, type SlashFanSpec } from '../slash-fan';
 import { findSlashDef } from '../slash-defs';
 
 export const SLASH_NODE_TYPE = 'slash_fan';
@@ -61,10 +61,13 @@ export function defIdFromSlashNode(node: BlueprintNode): string | undefined {
 /** 面板规格在图里的节点 id（主人级单例，固定 id 即身份） */
 export const PANEL_SLASH_NODE_ID = 'slashfx';
 
-/** 可被接线覆盖的数值参数（anchorNodeId 是字符串，不走接线） */
+/** 可被接线覆盖的数值参数（anchorNodeId 是字符串，不走接线）。
+ *  结构字段（mode / tipNodeId / layerSegs）不在此列、永不被接线
+ *  覆盖——它们决定生成方式与采样对象，不是可调的数值参数 */
 const NUMERIC_KEYS = [
   'durationSec', 'frameCount', 'w', 'h', 'cx', 'cy', 'dir',
   'rx', 'ry', 'rotDeg', 'a0Deg', 'sweepDeg', 'thick', 'gammaAng', 'softRad',
+  'headCurve',
 ] as const;
 
 /** 规格 → 蓝图节点（新建时 inputs 为空，用户可在图里接线） */
@@ -80,6 +83,14 @@ export function slashNodeForSpec(spec: SlashFanSpec): BlueprintNode {
   // colors 是字符串数组（非标量）：以 __json_colors 存 JSON 串，
   // 解码端还原——保证规格↔节点无损往返（与图案 __json_ 同约定）
   if (spec.colors !== undefined) params.__json_colors = JSON.stringify(spec.colors);
+  // 结构字段（字符串/分段数组）：mode 仅轨迹模式落盘（缺省即
+  // 扇面，与 dir 只落 -1 同约定）；tipNodeId 与 anchorNodeId 同法
+  // 直存字符串；layerSegs 是对象数组、走 __json_layersegs，
+  // 落盘前先归一化（升序/末段 until=1），空分段不落
+  if (spec.mode === 'trail') params.mode = 'trail';
+  if (spec.tipNodeId) params.tipNodeId = spec.tipNodeId;
+  const layerSegs = normalizeSlashLayerSegs(spec.layerSegs);
+  if (layerSegs.length) params.__json_layersegs = JSON.stringify(layerSegs);
   return {
     id: PANEL_SLASH_NODE_ID,
     type: SLASH_NODE_TYPE,
@@ -111,6 +122,20 @@ export function specFromSlashNode(node: BlueprintNode): SlashNodeData | null {
       const arr = JSON.parse(p.__json_colors);
       if (Array.isArray(arr)) spec.colors = arr.filter((c): c is string => typeof c === 'string');
     } catch { /* 损坏的 JSON 参数忽略（回落内置调色板） */ }
+  }
+  // 结构字段读回：mode 只认 'trail'（其余一律扇面、与落盘口径
+  // 对偶）；tipNodeId 非空字符串才带出；layerSegs 读回必过
+  // 归一化（手改图/旧数据里的乱序、越界、非法 layer 在此收口）
+  if (p.mode === 'trail') spec.mode = 'trail';
+  if (typeof p.tipNodeId === 'string' && p.tipNodeId) spec.tipNodeId = p.tipNodeId;
+  if (typeof p.__json_layersegs === 'string') {
+    try {
+      const arr = JSON.parse(p.__json_layersegs);
+      if (Array.isArray(arr)) {
+        const segs = normalizeSlashLayerSegs(arr);
+        if (segs.length) spec.layerSegs = segs;
+      }
+    } catch { /* 损坏的 JSON 参数忽略（无分段、全程 front） */ }
   }
   return { spec, enabled: p.enabled !== false };
 }
