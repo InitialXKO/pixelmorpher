@@ -134,10 +134,10 @@ interface EditorStore extends EditorState {
   // 缺省三值 = 现行行为（插件链不进包 / 像素修正现行烘焙 / 实时 IK 不进包）
   exportBakePluginChain: 'drop' | 'bake' | 'live';
   exportBakeCorrections: 'off' | 'standard' | 'extended';
-  exportBakeIk: 'drop' | 'bake';
+  exportBakeIk: 'drop' | 'bake' | 'live';
   setExportBakePluginChain: (v: 'drop' | 'bake' | 'live') => void;
   setExportBakeCorrections: (v: 'off' | 'standard' | 'extended') => void;
-  setExportBakeIk: (v: 'drop' | 'bake') => void;
+  setExportBakeIk: (v: 'drop' | 'bake' | 'live') => void;
   procPreviewDock: 'panel' | 'main';
   togglePerspectiveForeshorten: () => void;
   setProcPreviewDock: (dock: 'panel' | 'main') => void;

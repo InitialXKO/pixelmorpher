@@ -940,6 +940,7 @@ const COSTUMES = EMBEDDED.costumes;
 const BEHAVIOR_GRAPHS = (EMBEDDED.behavior && EMBEDDED.behavior.graphs) || {};
 const PERFORMANCES = EMBEDDED.performances || [];
 const SIM_CHAINS = EMBEDDED.chains || [];
+const IK_CHAINS = EMBEDDED.ikChains || [];
 const PKG_SIM_MODE = EMBEDDED.simMode || 'frame';
 const PROCEDURAL = EMBEDDED.procedural || [];
 /** 部件父子表（EMBEDDED.skeleton 的 key→parent 映射，惰性建一次）：
@@ -2528,6 +2529,76 @@ function runSimPass(pose, steps) {
     }
   }
 }
+// ---- IK 链实时求解（导出「实时求解」档）：包内 ikChains 给定义
+// （部件键路径 + 静态目标/标记锚定）。本遍位于模拟遍之后、部件落位
+// 之前（pose 定稿后回写，与模拟遍同位）：关节取当前朝向的静止位、
+// 链根按其本帧 pose 位移平移，求解与步态兜底共用 fbSolveChain /
+// fbWriteChain（两骨解析 + 尾段刚性跟随；弯曲侧取静止姿态侧，极向
+// 目标不进包）。目标解析优先序与编辑器同：标记锚定 > 静态目标。
+// 锚定按当前服装/朝向的图集条目现解析（marksN），锚点部件自身的
+// pose（角 + 平移 + 缩放）计入、动态形变/自转不计（与兜底遍同级近
+// 似）；解析不到（无条目/无此标记）回落静态目标。
+const IK_DIR_TRIG = [
+  { cos: 0, sin: 1 }, { cos: -Math.SQRT1_2, sin: Math.SQRT1_2 },
+  { cos: -1, sin: 0 }, { cos: -Math.SQRT1_2, sin: -Math.SQRT1_2 },
+  { cos: 0, sin: -1 }, { cos: Math.SQRT1_2, sin: -Math.SQRT1_2 },
+  { cos: 1, sin: 0 }, { cos: Math.SQRT1_2, sin: Math.SQRT1_2 },
+];
+function runLiveIkPass(pose, state) {
+  if (!IK_CHAINS.length) return;
+  for (const chain of IK_CHAINS) {
+    const keys = chain.keys || [];
+    if (keys.length < 2) continue;
+    const parts = keys.map((k) => PART_BY_KEY.get(k));
+    if (parts.some((p) => !p)) continue;
+    const prms = parts.map((p) => fbParamsOf(p));
+    if (prms.some((p) => !p)) continue;
+    // 目标（角色本地系，y 向上）：锚定现解析、失败回落静态
+    let F = null;
+    if (chain.anchor && state && state.map) {
+      const aPart = PART_BY_KEY.get(chain.anchor.key);
+      const aPrm = aPart ? fbParamsOf(aPart) : null;
+      const aEntry = aPart ? state.map.get(chain.anchor.key) : null;
+      const mk = aEntry && aEntry.marksN ? aEntry.marksN[chain.anchor.mark] : null;
+      if (aPrm && aEntry && aEntry.tile && mk) {
+        const ae = pose[chain.anchor.key] || { a: 0, dy: 0 };
+        const an = { a: (ae.a || 0) + (aPrm.restRot || 0), dx: ae.dx || 0, dy: ae.dy || 0 };
+        const ctr = partCenter(aPrm, an);
+        const local = [mk[0] - aEntry.tile.w / 2, aEntry.tile.h / 2 - mk[1]];
+        const w = anchorPointWorld({ ctr: ctr, rot: an.a, dsx: ae.sx || 1, dsy: ae.sy || 1, local: local });
+        F = [w[0] - char.x, w[1] - charOriginY()];
+      }
+    }
+    if (!F) {
+      if (!chain.target) continue;
+      const tr = IK_DIR_TRIG[char.variant] || IK_DIR_TRIG[6];
+      F = [chain.target[0] * tr.cos + chain.target[2] * tr.sin, -chain.target[1]];
+    }
+    // 静止关节 + 链根随本帧 pose 平移（根部件的角/平移以其 pose 条目为准）
+    const J = prms.map((p) => fbJointOf(p));
+    const re = pose[keys[0]] || { a: 0, dy: 0 };
+    const cRest = partCenter(prms[0], { a: prms[0].restRot || 0, dx: 0, dy: 0 });
+    const cNow = partCenter(prms[0], { a: (re.a || 0) + (prms[0].restRot || 0), dx: re.dx || 0, dy: re.dy || 0 });
+    const ddx = cNow[0] - cRest[0], ddy = cNow[1] - cRest[1];
+    if (ddx !== 0 || ddy !== 0) for (const p of J) { p[0] += ddx; p[1] += ddy; }
+    // 尖端延伸：链自带 tipLength 优先；单骨链无延伸时取末部件脚底
+    // 口径（fbTipExtent），避免零长尾段退化
+    let tip = chain.tipLength > 0 ? chain.tipLength : 0;
+    if (keys.length === 2 && tip <= 0) tip = fbTipExtent(parts[parts.length - 1]);
+    let JJ = J;
+    if (tip > 0) {
+      const a = J[J.length - 2], b = J[J.length - 1];
+      const d = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      JJ = [...J, [b[0] + (b[0] - a[0]) / d * tip, b[1] + (b[1] - a[1]) / d * tip]];
+    }
+    const solved = fbSolveChain(JJ, 0, 0, F, null);
+    if (!solved || !solved.P || solved.P.length < keys.length) continue;
+    const cumA = [];
+    for (let i = 0; i < keys.length - 1; i++) cumA.push(solved.cumA[i] || 0);
+    cumA.push(solved.cumA[solved.cumA.length - 1] || 0);
+    fbWriteChain(pose, keys, { P: solved.P.slice(0, keys.length), cumA: cumA }, 1);
+  }
+}
 // ---- 粒子实时模拟（运行时，D6 流体一期）：convert 给
 // params.runtimeSim 的实例打了 stateSim 标记——本段给这类实例
 // 一份持久粒子池（键 = 部件键|实例 id），绘制遍到达时按 elapsed
@@ -2993,7 +3064,10 @@ function buildFallback() {
     const prm = fbParamsOf(part);
     if (prm) restJ.set(part.key, fbJointOf(prm));
   }
-  const legKeys = PARTS.map((p) => p.key).filter((k) => restJ.has(k) && isLeg(k));
+  // 实时 IK 链占用的部件不进兜底步态识别（链优先，与图驱动腿同例）
+  const liveIkKeys = new Set();
+  for (const c of IK_CHAINS) for (const k of c.keys || []) liveIkKeys.add(k);
+  const legKeys = PARTS.map((p) => p.key).filter((k) => restJ.has(k) && isLeg(k) && !liveIkKeys.has(k));
   const legSet = new Set(legKeys);
   const legChildren = new Map();
   for (const k of legKeys) {
@@ -5021,6 +5095,7 @@ function frame(now) {
     runSimPass(pose, simSteps);
   }
   const state = ensureAtlas(gl, char.variant, currentCostume);
+  runLiveIkPass(pose, state);
   // 追随段进度：与「轨道」表演同一时间轴（全程窗 u ∈ 0..1，两端钳制）
   const tracksPerf = PERFORMANCES.find((p) => p.id === 'tracks');
   const followU = tracksPerf && tracksPerf.duration > 0

@@ -13,7 +13,7 @@
 import type { Character, CostumePiece, DirectionIndex, ParametricAppearance, PixelGrid, ProcPerformance, Sprite, SpriteMark, StateMachineSpec } from '../unified-types';
 import type { AnimationClip } from '../types';
 import { buildParametricSprite } from './main-canvas';
-import { subToPx, projectToView, frameYAxisWorld, directionTrig } from '../unified-types';
+import { subToPx, projectToView, frameYAxisWorld, directionTrig, resolveChainTarget3D } from '../unified-types';
 import { computeWorldTransforms, computeRestWorldTransforms, stackBendForNode, rotateWorldTransformsForYaw, facingYawDeltaRad, stepClampState, resolveEffectiveCostumeState, type ClampStateMap, type WorldTransform, type BlueprintTransformResult } from '../unified-render';
 import { cloneClampState, steppedClampState } from '../clamp-session';
 import { realtimeChainDefs, sampleReference, type ChainBakeParams } from '../sim/verlet-chain';
@@ -212,6 +212,30 @@ export interface RuntimeSimChain {
   baseAngles: number[];
 }
 
+/** 包内实时 IK 链（部件键空间）：导出「实时求解」档由编辑器 IKChain
+ * 筛选映射而来，运行时每帧现解。目标来源只两路——标记锚定（anchor，
+ * 锚点部件当前精灵的点标记）与静态目标（target，编辑器 target3D，
+ * 原点中心世界系 px），锚定解析不到时回落静态（与编辑器同口径）；
+ * 目标蓝图不进包，带蓝图的链在 convert 侧回落烘焙、不出现在此列。 */
+export interface RuntimeIkChain {
+  /** 根部件键 */
+  root: string;
+  /** 末端部件键 */
+  end: string;
+  /** root→end 的部件键路径（含两端，按编辑器父链） */
+  keys: string[];
+  /** 静态目标（编辑器 target3D 原样，[x, y, z]）；旧链无 target3D 时
+   * 由 convert 按编辑器同一口径（resolveChainTarget3D）换算后落此 */
+  target?: [number, number, number];
+  solver: '2bone' | 'fabrik';
+  /** 弯曲方向（仅 ±1 有意义时落） */
+  bendDir?: number;
+  /** 尖端长（px，>0 才落） */
+  tipLength?: number;
+  /** 标记锚定：锚点部件键 + 点标记名 */
+  anchor?: { key: string; mark: string };
+}
+
 export interface ProcRuntimePackage {
   format: 'procedural-pixel-runtime-1';
   characterName: string;
@@ -248,6 +272,9 @@ export interface ProcRuntimePackage {
     graphs: Record<string, RuntimeGraph>;
   };
   performances: Array<Record<string, unknown>>;
+  /** 包内实时 IK 链（导出「实时求解」档筛出、运行时每帧现解；
+   * 无链入选时缺省，包与旧行为一致） */
+  ikChains?: RuntimeIkChain[];
   /** 运行时状态机（作者规格直通或默认机；模板据此编排表演与身体状态） */
   stateMachine?: StateMachineSpec;
   /** 程序化动画（工程级数据经 opts.projectData 传入；仅保留在编辑器内
@@ -772,7 +799,7 @@ function combineTransformGraphs(a: BlueprintGraph, b: BlueprintGraph): Blueprint
 export function convertCharacterToRuntimePackage(
   character: Character,
   externalSprites?: SpriteTable,
-  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number; palettes?: import('../types').Palette[]; activePaletteId?: string | null; scene?: { solids?: Array<{ x: number; y: number; w: number; h: number }> } }; projectExtras?: { perspectiveForeshorten?: boolean }; bake?: { pluginChain?: 'drop' | 'bake' | 'live'; corrections?: 'off' | 'standard' | 'extended'; ik?: 'drop' | 'bake' } },
+  opts?: { frameRate?: number; totalFrames?: number; clips?: AnimationClip[]; patternLibrary?: PatternTemplate[]; libraryEntries?: import('../library-entries').LibraryEntry[]; projectData?: { proceduralAnimations?: import('../types').ProceduralAnimation[]; globalModifiers?: import('../types').GlobalModifier[]; globalBlueprint?: import('../blueprint/ir').BlueprintGraph | null; canvasModifierTracks?: import('../types').CanvasModifierTrack[]; effectTracks?: import('../types').EffectTrack[]; motionBlurStrokes?: import('../types').MotionBlurStroke[]; effectStrokes?: import('../types').EffectStroke[]; canvasWidth?: number; canvasHeight?: number; palettes?: import('../types').Palette[]; activePaletteId?: string | null; scene?: { solids?: Array<{ x: number; y: number; w: number; h: number }> } }; projectExtras?: { perspectiveForeshorten?: boolean }; bake?: { pluginChain?: 'drop' | 'bake' | 'live'; corrections?: 'off' | 'standard' | 'extended'; ik?: 'drop' | 'bake' | 'live' } },
 ): ProcRuntimePackage {
   const warnings: string[] = [];
   // 导出选项（三项「不进包」处理的用户选择）：缺省 = 现行行为——
@@ -1528,6 +1555,108 @@ export function convertCharacterToRuntimePackage(
     const n = character.nodes[nodeId];
     return n ? (n.slot?.slotKey ?? nodeId) : null;
   };
+
+  // ---- IK 链进包筛选（仅「实时求解」档运行；drop/bake 两档不筛、
+  // 不点名、采样保留集走各自原表达式，行为与此前逐位一致） ----
+  // 节点 → 部件键：候选 [slot.slotKey, nodeId] 命中包内 parts 键
+  // （与 slashForPkg 同口径）。
+  const ikPartKeys = new Set(parts.map((p) => p.key));
+  const ikPartKeyOf = (nodeId: string): string | null => {
+    const n = character.nodes[nodeId];
+    if (!n) return null;
+    const candidates = [n.slot?.slotKey, nodeId].filter((v): v is string => !!v);
+    return candidates.find((k) => ikPartKeys.has(k)) ?? null;
+  };
+  // 关节路径：从 end 沿 parentId 走到 root（与 getIKChainJointIds 同
+  // 走法）；走不到 root 返回 []。
+  const ikJointIdsOf = (rootNodeId: string, endNodeId: string): string[] => {
+    const path: string[] = [];
+    let cur: string | undefined = endNodeId;
+    const visited = new Set<string>();
+    while (cur && !visited.has(cur)) {
+      visited.add(cur);
+      path.unshift(cur);
+      if (cur === rootNodeId) break;
+      cur = character.nodes[cur]?.parentId;
+    }
+    return path[0] === rootNodeId ? path : [];
+  };
+  /** live 档筛出的包内链（序列化形态，落包顶层 ikChains） */
+  const ikPkgChains: RuntimeIkChain[] = [];
+  /** live 档回落烘焙的链 id 集：这些链留在采样克隆上烘进位姿；
+   * live 链从克隆摘除（运行时现解，采样再烘即双重施加） */
+  const ikBakedIds = new Set<string>();
+  if (bakeOpts.ik === 'live') {
+    for (const chain of character.ikChains ?? []) {
+      // 禁用链不进 ikChains 也不参与烘焙采样（求解端只解启用链）
+      if (!chain.enabled) continue;
+      const label = chain.name || chain.id;
+      if (chain.targetBlueprint) {
+        ikBakedIds.add(chain.id);
+        warnings.push(`IK：链「${label}」带目标蓝图，目标蓝图不进包，已按烘焙导出`);
+        continue;
+      }
+      const rootKey = ikPartKeyOf(chain.rootNodeId);
+      const endKey = ikPartKeyOf(chain.endNodeId);
+      if (!rootKey || !endKey) {
+        ikBakedIds.add(chain.id);
+        warnings.push(`IK：链「${label}」的根/末端不是包内部件，已按烘焙导出`);
+        continue;
+      }
+      const jointIds = ikJointIdsOf(chain.rootNodeId, chain.endNodeId);
+      const keys: string[] = [];
+      let pathOk = jointIds.length >= 2;
+      if (pathOk) {
+        for (const jid of jointIds) {
+          const k = ikPartKeyOf(jid);
+          if (!k) { pathOk = false; break; }
+          keys.push(k);
+        }
+      }
+      if (!pathOk) {
+        ikBakedIds.add(chain.id);
+        warnings.push(`IK：链「${label}」的关节路径不完整或含非包内部件，已按烘焙导出`);
+        continue;
+      }
+      // 静态目标：target3D 原样；旧链无 target3D 时按编辑器同一口径
+      // 换算（链根朝向 + 工程画布，与烘焙采样同源，保证两档目标一致）
+      const t3 = chain.target3D ?? resolveChainTarget3D(
+        chain,
+        opts?.projectData?.canvasWidth ?? 512,
+        opts?.projectData?.canvasHeight ?? 512,
+        (character.nodes[chain.rootNodeId]?.transform.variantIndex ?? 6) as DirectionIndex,
+      );
+      const pkgChain: RuntimeIkChain = {
+        root: rootKey,
+        end: endKey,
+        keys,
+        target: [t3.x, t3.y, t3.z],
+        solver: chain.solver,
+        ...(chain.bendDir === 1 || chain.bendDir === -1 ? { bendDir: chain.bendDir } : {}),
+        ...((chain.tipLength ?? 0) > 0 ? { tipLength: chain.tipLength } : {}),
+      };
+      if (chain.poleTarget3D) {
+        warnings.push(`IK：链「${label}」的极向量不进包，包内按静止姿态的弯曲侧解算`);
+      }
+      if (chain.targetMarkAnchor) {
+        const anchorKey = ikPartKeyOf(chain.targetMarkAnchor.nodeId);
+        if (anchorKey) {
+          pkgChain.anchor = { key: anchorKey, mark: chain.targetMarkAnchor.mark };
+        } else {
+          // 锚点丢弃只降级该链的目标来源（回落静态，与编辑器解析
+          // 失败回落同义），链本身照常 live
+          warnings.push(`IK：链「${label}」的锚定节点不是包内部件，标记锚定已丢弃，包内按静态目标求解`);
+        }
+      }
+      ikPkgChains.push(pkgChain);
+    }
+  }
+  /** 采样克隆的 IK 保留集：drop 全剥、bake 全保留（原表达式）、
+   * live 只保留回落烘焙链 */
+  const ikChainsForSampling = (): Character['ikChains'] =>
+    bakeOpts.ik === 'live'
+      ? (character.ikChains ?? []).filter((c) => ikBakedIds.has(c.id))
+      : bakeOpts.ik === 'bake' ? character.ikChains : [];
   // ---- 刀光轨迹模式：convert 内采样 + 烘焙 ----
   /** 轨迹采样上下文：刀光所属表演/片段的时间轴来源（二选一） */
   type SlashTrailCtx =
@@ -1535,13 +1664,14 @@ export function convertCharacterToRuntimePackage(
     | { clip: AnimationClip };
   let slashStripped: Character | undefined;
   /** 轨迹采样用的剥离克隆（与轨道采样同一配方：剥行为/节点蓝图/
-   *  修改器，IK 按烘焙档保留，避免与包内通道双重施加）；懒建一份共用 */
+   *  修改器，IK 保留集走 ikChainsForSampling——bake 全保留、live 只
+   *  保留回落链，避免与包内通道双重施加）；懒建一份共用 */
   const slashStrippedChar = (): Character => {
     if (!slashStripped) {
       slashStripped = {
         ...character,
         behaviorGraphs: {},
-        ikChains: bakeOpts.ik === 'bake' ? character.ikChains : [],
+        ikChains: ikChainsForSampling(),
         nodes: Object.fromEntries(Object.values(character.nodes).map((n) => [
           n.id, { ...n, blueprint: null, modifiers: [] },
         ])),
@@ -2132,22 +2262,25 @@ export function convertCharacterToRuntimePackage(
         }
       }
       // 剥离克隆（浅拷贝：只换掉驱动姿态的输入，几何/轨道/层级原样共享）
-      // 实时 IK 烘焙档：保留 ikChains 让采样在 computeWorldTransforms 内
-      // 同源求解（其余剥离项照旧，避免与包内 dyn 通道双重施加）；
+      // IK 保留集走 ikChainsForSampling：烘焙档全保留、让采样在
+      // computeWorldTransforms 内同源求解；实时档只保留回落链（live
+      // 链已进包、运行时现解，留在克隆上烘进位姿即双重施加）；
       // 不进包档（缺省）：剥成 []，与此前行为逐位一致。
       const stripped: Character = {
         ...character,
         behaviorGraphs: {},
-        ikChains: bakeOpts.ik === 'bake' ? character.ikChains : [],
+        ikChains: ikChainsForSampling(),
         nodes: Object.fromEntries(Object.values(character.nodes).map((n) => [
           n.id, { ...n, blueprint: null, modifiers: [] },
         ])),
       };
-      if (bakeOpts.ik === 'bake') {
-        // 烘焙采样不传 variableContext：目标蓝图含变量节点时其输出按
-        // 缺省值求值、逐帧冻结，可能与编辑器实时画面不同，逐链点名。
+      if (bakeOpts.ik !== 'drop') {
+        // 凡经采样烘焙的链（烘焙档全部启用链 + 实时档回落链）：烘焙
+        // 采样不传 variableContext，目标蓝图含变量节点时其输出按缺省
+        // 值求值、逐帧冻结，可能与编辑器实时画面不同，逐链点名。
         for (const ch of character.ikChains ?? []) {
           if (!ch.enabled) continue;
+          if (bakeOpts.ik === 'live' && !ikBakedIds.has(ch.id)) continue;
           if (ch.targetBlueprint?.nodes?.some((n) => n.type === 'var')) {
             warnings.push(`链「${ch.name}」的目标蓝图含变量节点，烘焙按缺省值求值，可能与编辑器实时画面不同`);
           }
@@ -2209,11 +2342,13 @@ export function convertCharacterToRuntimePackage(
         warnings.push('钳制锚定：scene 触发不进采样，运行时按 anchor 点标记对全部固体自动锚定');
       }
       const sampleWindow = (startF: number, D: number) => {
-        // 采样画布：实时 IK 烘焙档按工程画布求解（旧式只存 chain.target
-        // 的链按画布中心换算目标，尺寸不对目标就偏），缺省回落 512；
-        // 不进包档恒为 512，与此前采样逐位一致。
-        const sampleCanvasW = bakeOpts.ik === 'bake' ? (opts?.projectData?.canvasWidth ?? 512) : 512;
-        const sampleCanvasH = bakeOpts.ik === 'bake' ? (opts?.projectData?.canvasHeight ?? 512) : 512;
+        // 采样画布：凡有链经采样烘焙（烘焙档，或实时档有回落链）时
+        // 按工程画布求解（旧式只存 chain.target 的链按画布中心换算
+        // 目标，尺寸不对目标就偏），缺省回落 512；无链烘焙时恒为
+        // 512，与此前采样逐位一致。
+        const ikBakeSampling = bakeOpts.ik === 'bake' || (bakeOpts.ik === 'live' && ikBakedIds.size > 0);
+        const sampleCanvasW = ikBakeSampling ? (opts?.projectData?.canvasWidth ?? 512) : 512;
+        const sampleCanvasH = ikBakeSampling ? (opts?.projectData?.canvasHeight ?? 512) : 512;
         const samples = new Map<string, Array<{ a: number; x: number; y: number; fore: number }>>();
         const stackSamples = new Map<string, Array<StackFrameSample | null>>();
         for (const snId of stackNodes.keys()) stackSamples.set(snId, []);
@@ -2919,6 +3054,7 @@ export function convertCharacterToRuntimePackage(
     defaultCostume: activeSet?.id,
     behavior,
     performances,
+    ikChains: ikPkgChains.length > 0 ? ikPkgChains : undefined,
     stateMachine,
     procedural: procedural.length > 0 ? procedural : undefined,
     globalGraph,
