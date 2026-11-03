@@ -223,7 +223,7 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   check('E10 无 slot 节点（手臂）的参数化件以 nodeId 为键进包', pkg.parts.some((p) => p.key === 'arm'));
   check('E11 无 slot 节点（手臂）的行为图进包', 'arm' in graphs);
   check('E12 无「有参数化外观但无对应节点」误报', !pkg.warnings.some((w) => w.includes('无对应节点')));
-  check('E8 变体：部件带西向(2)空覆盖（走统一镜像）', pkg.parts.some((p) => p.key === 'torso' && p.variants && 2 in p.variants));
+  check('E8 变体：部件带根向空覆盖（编辑器 2 → 运行时编号 4，走统一镜像）', pkg.parts.some((p) => p.key === 'torso' && p.variants && 4 in p.variants));
 
   const empty = convertCharacterToRuntimePackage({
     id: 'e', name: '空', nodes: {}, rootNodeIds: [], costumeSets: [], variants: {},
@@ -1048,10 +1048,10 @@ function makeNode(id: string, name: string, slotKey: string | null, parentId?: s
   } as unknown as Character;
   const pkgHome = convertCharacterToRuntimePackage(chHome);
   const armHome = pkgHome.parts.find((p) => p.key === 'arm');
-  check('Q33 代表精灵取显示方向的图（0 向 10x8/plug(4,2)，不是 2 向小图）且变体键=显示方向',
+  check('Q33 代表精灵取显示方向的图（0 向 10x8/plug(4,2)，不是 2 向小图）且变体键=显示方向的运行时编号（0→2）',
     !!armHome?.sprite && armHome.sprite.w === 10 && armHome.sprite.h === 8
     && armHome.sprite.plug[0] === 4 && armHome.sprite.plug[1] === 2
-    && Object.keys(armHome.variants).join() === '0');
+    && Object.keys(armHome.variants).join() === '2');
   check('Q31 父轨道带动子节点：子节点（无本地轨道）也进掩码且带世界增量曲线',
     !!perfPC && perfPC.mask.includes('hand') && !!handTr
     && Math.abs(endV(handTr.angleFrom) + Math.PI / 2) < 0.01

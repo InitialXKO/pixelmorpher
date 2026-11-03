@@ -139,8 +139,11 @@ export interface RuntimePart {
   costumeKeys: string[];
   base: RuntimePartBase;
   /** 变体覆盖：base 即显示方向（第 0 帧根节点朝向）主形态，标空覆盖使
-   *  对侧方向走统一镜像（同产品 mirrorMap 口径） */
-  variants: Partial<Record<DirectionIndex, Record<string, never>>>;
+   *  对侧方向走统一镜像（同产品 mirrorMap 口径）。键为**运行时方向
+   *  编号**（0南 1东南 2东 3东北 4北 5西北 6西 7西南，由运行时移动
+   *  代码定）＝编辑器 DirectionIndex + 2 (mod 8)；写端在部件组装处
+   *  换算，运行时 variantMirrored/resolveVariantParams 按此查。 */
+  variants: Partial<Record<number, Record<string, never>>>;
   /** 动态模式（默认服装集下的解析结果；换装集见 costumes[*].__dynamic） */
   dynamic?: RuntimeDynamicInstance[];
   /** 发光场（默认服装集；换装集见 costumes[*].__glow） */
@@ -1146,7 +1149,7 @@ export function convertCharacterToRuntimePackage(
       costumeKeys: [slotKey],
       base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0, baseSprite,
         expandPkg(baseApp.surfaceGraph, `子图（服装槽 ${slotKey}）`)),
-      variants: { [rootDir]: {} },
+      variants: { [(rootDir + 2) % 8]: {} }, // 键换算为运行时方向编号（见 RuntimePart.variants 注释）
       dynamic: dyn,
       glow: glowEntryFor(character, slotKey, dyn, activeSet?.id, externalSprites, warnings),
     });
@@ -1181,7 +1184,7 @@ export function convertCharacterToRuntimePackage(
       drawLayer: node.drawLayer,
       costumeKeys: [slotKey],
       base,
-      variants: { [rootDir]: {} },
+      variants: { [(rootDir + 2) % 8]: {} }, // 键换算为运行时方向编号（见 RuntimePart.variants 注释）
       spriteKind: true,
       sprite: sg,
       dynamic: dyn,

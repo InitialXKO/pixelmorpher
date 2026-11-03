@@ -286,7 +286,10 @@ function variantMirrored(part, variant) {
     if (m2 !== undefined && part.variants && part.variants[m2]) return true;
   }
   if (variant === 6 && part.variants && part.variants[2]) return true;
-  if (variant === 4) return true;
+  // 北（4）与南（0）永不镜像：镜像只为东西侧面对侧复用（与编辑器
+  // DEFAULT_MIRROR_MAP 同口径，南北互镜在视觉上是错的）。此前此处
+  // 有一条「variant === 4 无条件镜像」——那是编辑器编号（4=西）的
+  // 规则串进了运行时编号（4=北），导致北向行走整角色水平翻转。
   return false;
 }
 function resolvePart(part, variantIndex, costume) {
@@ -2857,6 +2860,8 @@ let fbPrevX = null, fbPrevPY = null;
 // —— 脚目标驱动的状态 ——
 let fbStage = 'none';    // 跳跃阶段：'none' | 'crouch' | 'air' | 'absorb'
 let fbStageT = 0;        // 当前阶段已持续秒数
+let fbSideDown = false;  // 横版下键（S/↓）当前是否按住（物理侧 updateCharacterSide 每帧回写，位姿侧手动下蹲读）
+let fbHoldCrouch = 0;    // 手动下蹲混合量 0..1（按住下键屈膝下沉，复用跳跃下蹲的钉脚 + bodyOff 通路）
 let fbAirTime = 0;       // 本次连续滞空秒数（坠落落地吸收的触发判据）
 let fbAirRootFrom = 0;   // 离地瞬间的身体过冲量（滞空初期衰减回 0）
 const fbPlants = new Map();     // 链序 → 支撑脚的世界 x（横版：下蹲/支撑/吸收共用）
@@ -2869,6 +2874,17 @@ const fbSwingFrom = new Map();  // 链序 → 本次摆动段起点脚位（本�
 const fbAirCur = new Map();     // 链序 → 滞空脚目标当前值（本地，向当帧目标趋近）
 let fbTopDir = [1, 0];          // 俯视最近移动方向（单位矢量）
 function fbDipMax() { return Math.max(3, Math.min(9, charBoxH() * 0.13)); }
+// 脚下最近的支撑面 y（与物理落地判定同口径：横向重叠的实体顶面、
+// 不高于脚位者取最高，无实体时为 0 地面）——落地前伸腿的高度依据
+function fbGroundBelowY() {
+  let best = 0;
+  for (const q of solids) {
+    const top = q.y + q.h;
+    const overX = char.x + CHAR_HW * 0.7 > q.x && char.x - CHAR_HW * 0.7 < q.x + q.w;
+    if (overX && top <= char.y + 0.01 && top > best) best = top;
+  }
+  return best;
+}
 function fbJointOf(prm) {
   const c = Math.cos(prm.restRot || 0), s = Math.sin(prm.restRot || 0);
   return [prm.pivot[0] + prm.off[0] * c - prm.off[1] * s, prm.pivot[1] + prm.off[0] * s + prm.off[1] * c];
@@ -3268,7 +3284,25 @@ function runFallbackPass(pose, dt) {
       else { const q = Math.max(0, Math.min(1, (fbStageT - 0.06) / 0.12)); bodyOff = -dipA * (1 - q * q * (3 - 2 * q)); }
       jumpW = true;
     }
-  } else if (!side) { fbStage = 'none'; fbAirTime = 0; }
+    // 手动下蹲（横版按住下键）：在地、无跳跃序时屈膝下沉——脚钉当
+    // 前世界位、身体按跳跃下蹲同深度下沉（bodyOff + jumpW 走同一
+    // 钉脚解算）；松开/起跳/离地即让位给阶段机
+    const wantHold = fbStage === 'none' && fbCrouchT <= 0 && char.onGround && !char.ledge && fbSideDown;
+    if (wantHold && fbHoldCrouch <= 0) {
+      fb.chains.forEach((chain, ci) => {
+        if (!chainRT[ci]) return;
+        fbPlants.set(ci, char.x + tipPrevOf(ci)[0]);
+        fbSegPrev.set(ci, 0);
+      });
+    }
+    fbHoldCrouch += ((wantHold ? 1 : 0) - fbHoldCrouch) * Math.min(1, dt / 0.07);
+    if (!wantHold && fbHoldCrouch < 0.01) fbHoldCrouch = 0;
+    if (fbHoldCrouch > 0 && fbStage === 'none') {
+      const q = Math.max(0, Math.min(1, fbHoldCrouch));
+      bodyOff = -fbDipMax() * (1 - (1 - q) * (1 - q));
+      jumpW = true;
+    }
+  } else if (!side) { fbStage = 'none'; fbAirTime = 0; fbHoldCrouch = 0; fbSideDown = false; }
   // ================= 横版：腿链目标与解算 =================
   if (side && (fb.walkOk || fb.jumpOk)) {
     const movingSide = char.onGround && Math.abs(dxF) > 1e-6 && fbStage === 'none';
@@ -3295,6 +3329,26 @@ function runFallbackPass(pose, dt) {
     const faceF = (char.variant >= 5 && char.variant <= 7) ? -1 : 1;
     if (fbStage === 'none' && fb.walkOk && char.onGround && !char.ledge) fbPhase += Math.PI * dxF * faceF / stride;
     let sink = 0; // 支撑几何反推的身体下沉（行走时）
+    // 滞空先收的那条腿：各链静止脚尖相对链根的沿朝向坐标最小者
+    // （最靠后）；单链时即该链本身。仅 fbStage==='air' 时有意义
+    let airFirstCi = -1;
+    // 落地前伸腿（用户定）：下落中按当前落速与脚下高度估算触地
+    // 时间，≤0.15s 时双腿改伸向地面接落地（与物理落地同口径取
+    // 脚下支撑面）；此前双腿保持收拢
+    let airExtend = false;
+    if (fbStage === 'air') {
+      let best = Infinity;
+      fb.chains.forEach((chain, ci) => {
+        const rt = chainRT[ci]; if (!rt) return;
+        const along = (rt.restT[0] - rt.J[0][0]) * faceF;
+        if (along < best) { best = along; airFirstCi = ci; }
+      });
+      if (char.vy < 0) {
+        const h = Math.max(0, char.y - fbGroundBelowY());
+        const tHit = (Math.sqrt(char.vy * char.vy + 2 * PHYS.gravity * h) + char.vy) / PHYS.gravity;
+        airExtend = tHit <= 0.15;
+      }
+    }
     const solvedList = [];
     fb.chains.forEach((chain, ci) => {
       const rt = chainRT[ci];
@@ -3305,14 +3359,20 @@ function runFallbackPass(pose, dt) {
       if (jumpW) {
         w = 1;
         if (fbStage === 'air') {
-          // 滞空：上升收脚（目标点向身体收拢上提）、下落伸腿（近全伸
-          // 下探），目标逐帧趋近防跳变
+          // 滞空收腿顺序（用户定）：上升时只收一条腿——沿朝向最靠后
+          // 的那条先收（airFirstCi，循环外按静止几何选定），其余腿保
+          // 持伸展（蹬地拖腿）；开始下落（vy ≤ 0）后其余腿才跟着收
+          // 起；接近地面（airExtend，预计触地 ≤0.15s）时双腿改伸向
+          // 地面接落地。目标逐帧趋近防跳变
           const rel = [restT[0] - J[0][0], restT[1] - J[0][1]];
-          const want = char.vy > -20
+          const tucked = !airExtend && (char.vy <= 0 || ci === airFirstCi);
+          const want = tucked
             ? [J[0][0] + rel[0] * 0.55, J[0][1] + rel[1] * 0.55 + rt.segSum * 0.20]
             : [J[0][0] + rel[0] * 0.90, J[0][1] + rel[1] * 1.02];
           const cur = fbAirCur.get(ci) || [...restT];
-          const kk = Math.min(1, dt / 0.09);
+          // 收腿趋近比伸腿快一倍：收得慢，第二条腿刚收拢就撞上落
+          // 地前伸腿的窗口、看起来立刻弹开（短跳全程短、尤其明显）
+          const kk = Math.min(1, dt / (tucked ? 0.045 : 0.09));
           cur[0] += (want[0] - cur[0]) * kk; cur[1] += (want[1] - cur[1]) * kk;
           fbAirCur.set(ci, cur);
           F = [...cur];
@@ -3423,10 +3483,11 @@ function runFallbackPass(pose, dt) {
   // 坐标，行程由锚定与步频自然决定；摆动预落点 = D + σ·半扫
   // 程，半扫程 = 0.3·cycTop·|cos(轴向, 行进方向)|（当帧真实几
   // 何的投影、非常数），中途收脚取扫程的 0.35 倍（派生份额）。
-  // 步频全俯视共用一个口径：fbPhase 只按横向平面步态的周期距离
-  // cycTop 推进（纵向走廊同速率，纵横混合期间亦然），不另设纵向
-  // 周期距离——纵向曾自带 cycVert（按投影系数 κ=0.16 单独对齐、
-  // 约 3.9 步/秒），与横向步频不一致，已撤销。
+  // 步频全俯视共用一个相位：fbPhase 按轴分解推进（横向分量按
+  // cycHoriz、纵向分量按 cycTop 折算行进距离），两轴速度比 2:1、
+  // 步长比亦 2:1，周期时间全向一致。不另设纵向周期距离——纵向曾
+  // 自带 cycVert（按投影系数 κ=0.16 单独对齐、约 3.9 步/秒），与横
+  // 向步频不一致，已撤销；本次只补横向折算，纵向口径原样。
   // 主导轴切换：fbTopVertW 平滑过渡、两套解算结果按权重混合，
   // fbPhase 共用同一速率推进、从不重置。
   const movingTop = !side && (Math.abs(dxF) + Math.abs(dyF)) > 1e-6;
@@ -3451,16 +3512,23 @@ function runFallbackPass(pose, dt) {
     // 成死结（实测 cumA 达 4~5 rad），落脚记录再把死结脚尖喂给支
     // 撑段，整腿塌在髋旁出不来（画面实测北向数帧内腿团消失）。
     let stride = Math.max(10, fb.legLen * Math.sin(FB_SWING));
+    // 横向步长：横向速度是纵向的两倍（140 对 70，见 updateCharacterTop），
+    // 步长同步取两倍、周期时间才与纵向/侧视一致——半步长配全速会以
+    // 两倍步频碎步（左右行走小碎步的成因）。可达钳制与纵向共用同一上限。
+    let strideH = 2 * stride;
     for (const rt of chainRT) {
       if (!rt || rt.segSum < 1e-6) continue;
       const relX = rt.restT[0] - rt.J[0][0], relY = rt.restT[1] - rt.J[0][1];
       const perp = Math.abs(relX * fbTopDir[1] - relY * fbTopDir[0]);
       const reach = 0.98 * rt.segSum;
       const half = Math.sqrt(Math.max(0, reach * reach - perp * perp));
-      stride = Math.min(stride, Math.max(10, (2 * half) / FB_STANCE));
+      const cap = Math.max(10, (2 * half) / FB_STANCE);
+      stride = Math.min(stride, cap);
+      strideH = Math.min(strideH, cap);
     }
-    const cycTop = 2 * stride;                  // 周期距离（相位 2π 的行进距离）
-    const stanceTravel = FB_STANCE * cycTop;    // 支撑行程：脚相对身体的后扫全程
+    const cycTop = 2 * stride;                  // 纵向周期距离（相位 2π 的行进距离，用户校准口径不变）
+    const cycHoriz = 2 * strideH;               // 横向周期距离（步长两倍 → 周期时间与纵向一致）
+    const stanceTravel = FB_STANCE * cycHoriz;  // 平面形式的支撑行程：脚相对身体的后扫全程（按横向周期）
     // —— 纵向走廊口径：各链走廊几何 ——
     const corGeoms = chainRT.map((rt) => (rt ? fbCorridorGeom(rt) : null));
     let dCnt = 0;
@@ -3469,7 +3537,9 @@ function runFallbackPass(pose, dt) {
     fbTopVertW += (vertNow - fbTopVertW) * Math.min(1, dt / 0.09);
     if (fbTopVertW > 0.98) { fbTopPlants.clear(); fbSwingFrom.clear(); } // 全纵向期间平面落点状态作废，回横向时就地重落脚
     if (fbTopVertW < 0.02) { fbCorPlants.clear(); fbCorSegPrev.clear(); } // 全横向期间走廊锚定状态作废，回纵向时就地重锚
-    fbPhase += 2 * Math.PI * dist / cycTop;
+    // 相位推进按轴分解：横向分量按 cycHoriz、纵向分量按 cycTop 折算
+    // （两轴速度比 2:1，分解后周期时间全向一致；纵向口径与共用相位不变）
+    fbPhase += 2 * Math.PI * (Math.abs(dxF) / cycHoriz + Math.abs(dyF) / cycTop);
     // 各链当帧相位/段（两套驱动共用）
     const us = [], segs = [];
     fb.chains.forEach((chain, ci) => {
@@ -4070,6 +4140,7 @@ function updateCharacterTop(dt, ix, iy) {
   char.onGround = true; char.wallDir = 0; char.ledge = null;
 }
 function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
+  fbSideDown = !!downHeld;
   if (fbCrouchT > 0 && !char.onGround && !fbCrouchCoyote) { fbCrouchT = 0; } // 下蹲中离地（走下台阶等）→ 取消；土狼跳的倒计时除外（本就在空中）
   const H = charBoxH();
   // —— 抓边中：物理暂停，等爬上/落下 ——
@@ -4091,6 +4162,9 @@ function updateCharacterSide(dt, ix, jumpHeld, downHeld) {
     if (coyoteArm) { coyoteT = 0; coyoteHangT = 0; coyoteArm = false; }
     coyoteT += dt; coyoteHangT += dt;
   } else coyoteArm = false;
+  // 手动下蹲（在地按住下键）：水平输入不生效——不移动、不转面；
+  // 跳跃照常受理（按下跳即转入跳跃预备下蹲倒计时）
+  if (downHeld && char.onGround && fbCrouchT <= 0) ix = 0;
   if (ix !== 0 && !char.lockedVariant) char.variant = ix > 0 ? 2 : 6;
   // —— 水平：先走后堵（实体侧面） ——
   char.wallDir = 0;
