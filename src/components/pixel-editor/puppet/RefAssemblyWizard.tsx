@@ -142,6 +142,10 @@ const BUILT_IN_REFS = [
   { id: 'walker-artillery-side', label: '六足重炮步行车·侧面', url: '/reference-demos/walker-artillery-side.webp' },
   { id: 'walker-scout-side', label: '侦察步行机·侧面', url: '/reference-demos/walker-scout-side.webp' },
   { id: 'walker-missile-side', label: '八足导弹步行车·侧面', url: '/reference-demos/walker-missile-side.webp' },
+  { id: 'walker-aa-side', label: '防空步行平台·侧面', url: '/reference-demos/walker-aa-side.webp' },
+  { id: 'walker-railgun-side', label: '轨道炮步行机·侧面', url: '/reference-demos/walker-railgun-side.webp' },
+  { id: 'walker-engineer-side', label: '工程步行车·侧面', url: '/reference-demos/walker-engineer-side.webp' },
+  { id: 'walker-command-side', label: '指挥步行车·侧面', url: '/reference-demos/walker-command-side.webp' },
   { id: 'werewolf-front', label: '狼人·正面', url: '/reference-demos/werewolf-front.webp' },
   { id: 'swordsman-side', label: '剑士·侧面', url: '/reference-demos/swordsman-side.webp' },
   { id: 'angel-front', label: '天使·正面', url: '/reference-demos/angel-front.webp' },
@@ -156,6 +160,9 @@ const BUILT_IN_REFS = [
   { id: 'orc-front', label: '兽人·正面', url: '/reference-demos/orc-front.webp' },
   { id: 'cyber-front', label: '赛博少女·正面', url: '/reference-demos/cyber-front.webp' },
 ];
+
+// 内置图库分页：每页 8 张（4 列 × 2 行），图库再涨也不把选图步撑长
+const REFS_PER_PAGE = 8;
 
 // ============================================================
 // SAM 点选图：滚轮缩放 + 拖动平移 + 单击点选，三者共存
@@ -491,6 +498,7 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
     persistedStep = s;
     setStepState(s);
   };
+  const [refPage, setRefPage] = useState(0);
   const [showAddLimb, setShowAddLimb] = useState(false);
   const [newLimbName, setNewLimbName] = useState('');
   const [newLimbParentId, setNewLimbParentId] = useState('');
@@ -821,6 +829,8 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
   const wizardDirIndex = (selectedCharacter?.nodes[selectedCharacter.rootNodeId]?.transform.variantIndex ?? 6) as DirectionIndex;
   // ---- 参考图分槽：当前槽 = 当前目标方向 × 当前目标纬度 ----
   const currentRefSlotKey = refImageSlotKey(wizardDirIndex, targetLatitude);
+  const refPageCount = Math.max(1, Math.ceil(BUILT_IN_REFS.length / REFS_PER_PAGE));
+  const refPageSafe = Math.min(refPage, refPageCount - 1);
   // 切方向/纬度（含向导外改向，如操控面板切方向）时换图：离开旧槽前先把
   // 当前显示图归档回旧槽（吸收向导外的换图，如比例垫图），再把当前图换成
   // 新槽的图（槽空则清空，等用户回步 1 给该槽选图）。首次归属（重挂、或
@@ -1098,25 +1108,46 @@ export default function RefAssemblyWizard({ onClose }: { onClose: () => void }) 
                 </div>
               ))}
             </div>
-            {/* 内置图库 */}
-            <div className="grid grid-cols-4 gap-2">
-              {BUILT_IN_REFS.map((ref) => (
-                <button
-                  key={ref.id}
-                  onClick={() => {
-                    setRefImageForCurrentSlot(ref.url);
-                    useEditorStore.getState().setReferenceImageVisible(true);
-                    setStep('sam');
-                  }}
-                  className="group relative aspect-square rounded overflow-hidden border border-white/10 hover:border-purple-500/50 transition-colors"
-                  title={ref.label}
-                >
-                  <img src={ref.url} alt={ref.label} className="w-full h-full object-cover" style={{ imageRendering: 'pixelated' }} />
-                  <div className="absolute bottom-0 inset-x-0 text-[9px] text-center py-0.5 bg-black/60 text-gray-300">
-                    {ref.label}
-                  </div>
-                </button>
-              ))}
+            {/* 内置图库（分页，每页 REFS_PER_PAGE 张） */}
+            <div className="space-y-2">
+              <div className="grid grid-cols-4 gap-2">
+                {BUILT_IN_REFS.slice(refPageSafe * REFS_PER_PAGE, (refPageSafe + 1) * REFS_PER_PAGE).map((ref) => (
+                  <button
+                    key={ref.id}
+                    onClick={() => {
+                      setRefImageForCurrentSlot(ref.url);
+                      useEditorStore.getState().setReferenceImageVisible(true);
+                      setStep('sam');
+                    }}
+                    className="group relative aspect-square rounded overflow-hidden border border-white/10 hover:border-purple-500/50 transition-colors"
+                    title={ref.label}
+                  >
+                    <img src={ref.url} alt={ref.label} className="w-full h-full object-cover" style={{ imageRendering: 'pixelated' }} loading="lazy" />
+                    <div className="absolute bottom-0 inset-x-0 text-[9px] text-center py-0.5 bg-black/60 text-gray-300">
+                      {ref.label}
+                    </div>
+                  </button>
+                ))}
+              </div>
+              {refPageCount > 1 && (
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => setRefPage(Math.max(0, refPageSafe - 1))}
+                    disabled={refPageSafe === 0}
+                    className="text-[10px] px-2 py-1 rounded border border-white/10 text-gray-300 hover:border-purple-500/50 disabled:opacity-40 disabled:hover:border-white/10 transition-colors"
+                  >
+                    上一页
+                  </button>
+                  <span className="text-[10px] text-gray-500">{refPageSafe + 1} / {refPageCount}</span>
+                  <button
+                    onClick={() => setRefPage(Math.min(refPageCount - 1, refPageSafe + 1))}
+                    disabled={refPageSafe >= refPageCount - 1}
+                    className="text-[10px] px-2 py-1 rounded border border-white/10 text-gray-300 hover:border-purple-500/50 disabled:opacity-40 disabled:hover:border-white/10 transition-colors"
+                  >
+                    下一页
+                  </button>
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <div className="flex-1 h-px bg-white/10" />

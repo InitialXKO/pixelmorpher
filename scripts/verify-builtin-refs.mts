@@ -45,5 +45,10 @@ for (const f of files) {
 }
 check('文件数与列表数一致', files.length === entries.length, `文件 ${files.length} / 列表 ${entries.length}`);
 
+// 分页接线（选图步）：每页常量在、列表按页切片渲染、翻页控件在
+check('分页常量 REFS_PER_PAGE 存在', /const REFS_PER_PAGE = \d+;/.test(src));
+check('图库按页切片渲染', src.includes('BUILT_IN_REFS.slice(refPageSafe * REFS_PER_PAGE'));
+check('翻页控件（上一页/下一页/页码）齐备', src.includes('上一页') && src.includes('下一页') && src.includes('{refPageSafe + 1} / {refPageCount}'));
+
 console.log(`\nverify-builtin-refs: ${pass} passed, ${failures.length} failed`);
 if (failures.length > 0) process.exit(1);
