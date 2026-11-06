@@ -142,3 +142,13 @@ export function mechaFamilyArmorHex(family: MechaFamily): string {
   const c = SCHEME_OF[family].armor;
   return '#' + c.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
 }
+
+/** 轮足腿精灵（双足腿的足型变体：同髋插座、同锚点，足部换轮组） */
+export function generateMechaWheelLeg(family: MechaFamily): MechaSpriteData {
+  const scheme = SCHEME_OF[family];
+  const cv = newCanvas(); const hip = { x: 100, y: 16 };
+  const spec = { ...LEG_SPEC[family](scheme), footType: 'wheel' as const };
+  const A = layout(cv, spec, { hip, knee: { x: hip.x + 88, y: hip.y + 204 }, ankle: { x: hip.x - 4, y: hip.y + 390 }, toeX: hip.x + 96 });
+  finishRender(cv, A, fin(family));
+  return cropSprite(cv, hip);
+}

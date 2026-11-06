@@ -172,7 +172,7 @@ const FONT: Record<string, string[]> = {
 };
 
 // ---------- 布局 ----------
-interface LegSpec { topology: 'standard' | 'reverse'; scheme: Scheme; seed: number; bend: number; camo: boolean; wear?: number; frameHeavy?: boolean; shellMode?: boolean; wScale?: number; lift?: number; guardOff?: boolean; detail?: number; ankleShift?: number; cableTint?: RGB; decalKind?: 'num' | 'plate' | 'none'; coreScale?: number; footType?: 'blocks' | 'shoe' | 'claw' | 'pad' }
+interface LegSpec { topology: 'standard' | 'reverse'; scheme: Scheme; seed: number; bend: number; camo: boolean; wear?: number; frameHeavy?: boolean; shellMode?: boolean; wScale?: number; lift?: number; guardOff?: boolean; detail?: number; ankleShift?: number; cableTint?: RGB; decalKind?: 'num' | 'plate' | 'none'; coreScale?: number; footType?: 'blocks' | 'shoe' | 'claw' | 'pad' | 'wheel' }
 interface Anchors {
   plateTint: Map<number, number>; panelLines: Map<number, number[]>;
   boltPts: Pt[]; ventId: number; guardId: number; stripeId: number;
@@ -333,6 +333,22 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     footBlock((ankle.x + toeX) / 2 + 4, 460, toeX - ankle.x + 62, 20, 0.01, 0.3);
     footBlock(toeX - 8, 453, 56, 15, 0.02, 0.45);
     footBlock(ankle.x - 20, 455, 44, 16, 0.03);
+  } else if (ft === 'wheel') {
+    // 轮足（据生成参考）：踝毂整流罩 + 主轮（胎环+毂盘+毂盖）+ 后小轮
+    // + 减震杆（小腿→两毂）+ 后稳定橇；轮底与足底同高（470）
+    footBlock(ankle.x + 10, 416, 64, 34, 0.06); // 踝毂罩：跨踝关节
+    footBlock(ankle.x + 24, 426, 46, 20, 0.45); // 毂臂：踝→主轮毂斜撑
+    { cv.insts.push({ kind: 'disc' }); fillShape(cv, id, discTest(ankle, 13)); id++; }
+    const hubM = { x: ankle.x + 34, y: 426 }, hubR = { x: ankle.x - 44, y: 440 };
+    { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, (x, y) => { const d = Math.hypot(x - hubM.x, y - hubM.y); return d >= 30 && d <= 44 ? [true, (d - 30) / 14, 0.5] : [false, 0, 0]; }); id++; } // 主轮胎环
+    { cv.insts.push({ kind: 'disc' }); fillShape(cv, id, discTest(hubM, 30)); id++; }
+    { cv.insts.push({ kind: 'disc' }); fillShape(cv, id, discTest(hubM, 15)); id++; }
+    { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, (x, y) => { const d = Math.hypot(x - hubR.x, y - hubR.y); return d >= 20 && d <= 30 ? [true, (d - 20) / 10, 0.5] : [false, 0, 0]; }); id++; } // 后轮胎环
+    { cv.insts.push({ kind: 'disc' }); fillShape(cv, id, discTest(hubR, 20)); id++; }
+    { cv.insts.push({ kind: 'disc' }); fillShape(cv, id, discTest(hubR, 9)); id++; }
+    { cv.insts.push({ kind: 'rod' }); fillShape(cv, id, lineTest({ x: ankle.x - 2, y: 372 }, hubM, 4)); id++; } // 减震杆
+    { cv.insts.push({ kind: 'rod' }); fillShape(cv, id, lineTest({ x: ankle.x - 8, y: 388 }, hubR, 3)); id++; }
+    footBlock(ankle.x - 88, 466, 26, 8, 0.08); // 后稳定橇
   } else {
     { // 踝上整流罩：靴筒块（blocks/shoe 共用）
       cv.insts.push({ kind: 'plate' }); const fid = id;
@@ -538,8 +554,8 @@ interface MechaIR {
   volumes: unknown[];
   parts: { id: string; pattern: string; anchors: string[]; params: Record<string, number | string | boolean> }[];
 }
-const FOOT_PATTERN = { blocks: 'footBlocks', shoe: 'footShoe', claw: 'footClaw', pad: 'footPad' } as const;
-const FOOT_TYPE = { footBlocks: 'blocks', footShoe: 'shoe', footClaw: 'claw', footPad: 'pad' } as const;
+const FOOT_PATTERN = { blocks: 'footBlocks', shoe: 'footShoe', claw: 'footClaw', pad: 'footPad', wheel: 'footWheel' } as const;
+const FOOT_TYPE = { footBlocks: 'blocks', footShoe: 'shoe', footClaw: 'claw', footPad: 'pad', footWheel: 'wheel' } as const;
 function legIR(spec: LegSpec): MechaIR {
   const std = spec.topology === 'standard';
   const hip = { x: 170, y: 44 };
