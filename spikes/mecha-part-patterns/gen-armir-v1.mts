@@ -1423,11 +1423,12 @@ function layoutHull(cv: Canvas): Anchors {
 // ---------- armIR：规格 → 锚点 → 部件列（数据） → 通用解释渲染 ----------
 type ArmFrame = 'upper' | 'fore' | 'shoulder' | 'wrist';
 type ArmPart =
-  | { t: 'segCore'; seg: 'upper' | 'fore'; w0: number; w1: number }
+  | { t: 'segCore'; seg: 'upper' | 'fore'; w0: number; w1: number; s0: number; s1: number }
   | { t: 'segPlate'; seg: 'upper' | 'fore'; w0: number; w1: number; s0: number; s1: number; role?: 'stripe' | 'armor2' | 'accent' }
   | { t: 'disc'; at: 'shoulder' | 'elbow' | 'wrist'; r: number }
   | { t: 'block'; frame: ArmFrame; along: number; perp: number; w: number; h: number; angOff?: number; kind?: Kind; cham?: number; bolts?: boolean }
   | { t: 'rod'; seg: 'upper' | 'fore'; perp: number; s0: number; s1: number; r: number }
+  | { t: 'rodLink'; fromSeg: 'upper' | 'fore'; fromS: number; fromPerp: number; toSeg: 'upper' | 'fore'; toS: number; toPerp: number; r: number }
   | { t: 'cable'; seg: 'upper' | 'fore'; perp: number; sag: number; r: number }
   | { t: 'finger'; idx: number; curl: number; len: number }
   | { t: 'insignia'; frame: ArmFrame; along: number; perp: number; kind: number }
@@ -1452,12 +1453,15 @@ function armIR(spec: ArmSpec): ArmIR {
     const n = Math.max(2, Math.round(len / 68));
     for (let k = 0; k < n; k++) parts.push({ t: 'segPlate', seg, w0: w0 + (w1 - w0) * (k / n), w1: w0 + (w1 - w0) * ((k + 1) / n), s0: 0.04 + (0.93 * k) / n, s1: 0.04 + (0.93 * (k + 1)) / n, role: seg === 'fore' && k === 0 && spec.gear.stripe ? 'stripe' : (spec.family === 'powersuit' && seg === 'fore' && k % 2 === 1 ? 'armor2' : undefined) });
   };
-  parts.push({ t: 'segCore', seg: 'upper', w0: 30 * b, w1: 26 * b });
-  parts.push({ t: 'segCore', seg: 'fore', w0: 26 * b, w1: 20 * b });
+  for (const [seg, w0, w1] of [['upper', 30, 26], ['fore', 26, 20]] as const)
+    for (let k = 0; k < 3; k++) parts.push({ t: 'segCore', seg, w0: (w0 + (w1 - w0) * (k / 3)) * b, w1: (w0 + (w1 - w0) * ((k + 1) / 3)) * b, s0: k / 3 + 0.01, s1: (k + 1) / 3 - 0.01 });
   parts.push({ t: 'block', frame: 'shoulder', along: -4, perp: 2, w: 44 * b, h: 36 * b, angOff: 0.15, kind: 'frame' });
+  parts.push({ t: 'block', frame: 'shoulder', along: 2, perp: 27 * b, w: 14 * b, h: 22 * b, kind: 'frame' }, { t: 'block', frame: 'shoulder', along: 2, perp: -27 * b, w: 14 * b, h: 22 * b, kind: 'frame' });
   parts.push({ t: 'disc', at: 'shoulder', r: 15 * b }, { t: 'disc', at: 'shoulder', r: 8.5 * b });
   plates('upper', spec.upperLen, 56 * b, 50 * b);
   if (spec.gear.cable) parts.push({ t: 'cable', seg: 'upper', perp: 29 * b, sag: 7, r: 4.5 });
+  if (spec.gear.piston) { parts.push({ t: 'rodLink', fromSeg: 'upper', fromS: 0.8, fromPerp: 30 * b, toSeg: 'fore', toS: 0.2, toPerp: 28 * b, r: 5 }); parts.push({ t: 'rodLink', fromSeg: 'upper', fromS: 0.88, fromPerp: 30 * b, toSeg: 'fore', toS: 0.3, toPerp: 28 * b, r: 2.8 }); }
+  if (spec.gear.cable) parts.push({ t: 'cable', seg: 'fore', perp: -27 * b, sag: 4, r: 2.5 });
   if (spec.form.elbow === 'ring') { parts.push({ t: 'block', frame: 'fore', along: 0, perp: 0, w: 23 * b, h: 23 * b, kind: 'frame' }); parts.push({ t: 'disc', at: 'elbow', r: 12.5 * b }); parts.push({ t: 'disc', at: 'elbow', r: 7 * b }); }
   else if (spec.form.elbow === 'small') parts.push({ t: 'disc', at: 'elbow', r: 8.5 * b });
   else parts.push({ t: 'disc', at: 'elbow', r: 12.5 * b }, { t: 'disc', at: 'elbow', r: 7 * b });
@@ -1469,8 +1473,9 @@ function armIR(spec: ArmSpec): ArmIR {
   } else plates('fore', spec.foreLen, 58 * b, 43 * b);
   if (spec.gear.piston) parts.push({ t: 'rod', seg: 'fore', perp: 30 * b, s0: 0.4, s1: 0.9, r: 2.8 });
   if (spec.gear.device) { parts.push({ t: 'block', frame: 'fore', along: spec.foreLen * 0.45, perp: -26 * b, w: 20, h: 26, kind: 'frame' }); parts.push({ t: 'block', frame: 'fore', along: spec.foreLen * 0.45, perp: -27 * b, w: 13, h: 18, kind: 'plate' }); parts.push({ t: 'light', frame: 'fore', along: spec.foreLen * 0.45, perp: -30 * b }); }
-  parts.push({ t: 'disc', at: 'wrist', r: 8.5 * b });
+  parts.push({ t: 'disc', at: 'wrist', r: 8.5 * b }, { t: 'disc', at: 'wrist', r: 4.5 * b });
   parts.push({ t: 'block', frame: 'wrist', along: 24, perp: 0, w: 36 * b, h: 26 * b, kind: 'plate', bolts: true });
+  parts.push({ t: 'block', frame: 'wrist', along: 22, perp: 3, w: 24 * b, h: 17 * b, kind: 'plate' }); // 掌背板
   if (spec.hand === 'fist') { for (let k = 0; k < 3; k++) parts.push({ t: 'finger', idx: k, curl: spec.form.fingerCurl + k * 0.05, len: spec.form.fingerLen }); parts.push({ t: 'block', frame: 'wrist', along: 20, perp: -24 * b, w: 11, h: 16, angOff: 0.55, kind: 'plate' }); parts.push({ t: 'block', frame: 'wrist', along: 30, perp: -28 * b, w: 10, h: 13, angOff: 0.85, kind: 'plate' }); }
   else { parts.push({ t: 'block', frame: 'wrist', along: 34, perp: -12, w: 10, h: 22, angOff: 0.3, kind: 'plate' }); parts.push({ t: 'block', frame: 'wrist', along: 34, perp: 12, w: 10, h: 22, angOff: -0.3, kind: 'plate' }); }
   const sh = spec.shell;
@@ -1494,11 +1499,15 @@ function renderArmIR(cv: Canvas, ir: ArmIR, spec: ArmSpec): Anchors {
   const fp = (f: ArmFrame, along: number, perp: number): Pt => { const { o, a, b } = frameOf(f); const fr = segFrame(a, b); return { x: o.x + fr.ux * along + fr.px * perp, y: o.y + fr.uy * along + fr.py * perp }; };
   const fang = (f: ArmFrame) => { const { a, b } = frameOf(f); const fr = segFrame(a, b); return Math.atan2(fr.uy, fr.ux) - Math.PI / 2; };
   for (const p of ir.parts) {
-    if (p.t === 'segCore') { const { a, b } = segOf(p.seg); T.segPlate(a, b, p.w0, p.w1, 0, 1, 0, 'frame'); }
+    if (p.t === 'segCore') { const { a, b } = segOf(p.seg); T.segPlate(a, b, p.w0, p.w1, p.s0, p.s1, 0, 'frame'); }
     else if (p.t === 'segPlate') { const { a, b } = segOf(p.seg); const id = T.segPlate(a, b, p.w0, p.w1, p.s0, p.s1); if (p.role === 'stripe') A.stripeThigh = id; else if (p.role) (A.colorRole ??= new Map()).set(id, p.role); }
     else if (p.t === 'disc') T.addDisc('disc', A0[p.at], p.r);
     else if (p.t === 'block') { const c = fp(p.frame, p.along, p.perp); T.addBlock(p.kind ?? 'plate', c.x, c.y, p.w, p.h, fang(p.frame) + (p.angOff ?? 0), p.cham ?? 0.36, p.bolts ?? false); }
     else if (p.t === 'rod') { const { a, b } = segOf(p.seg); const fr = segFrame(a, b); const q = (s: number): Pt => ({ x: a.x + fr.ux * fr.len * s + fr.px * p.perp, y: a.y + fr.uy * fr.len * s + fr.py * p.perp }); T.addRaw('rod', lineTest(q(p.s0), q(p.s1), p.r)); }
+    else if (p.t === 'rodLink') {
+      const q = (seg: 'upper' | 'fore', s: number, perp: number): Pt => { const { a, b } = segOf(seg); const fr = segFrame(a, b); return { x: a.x + fr.ux * fr.len * s + fr.px * perp, y: a.y + fr.uy * fr.len * s + fr.py * perp }; };
+      T.addRaw('rod', lineTest(q(p.fromSeg, p.fromS, p.fromPerp), q(p.toSeg, p.toS, p.toPerp), p.r));
+    }
     else if (p.t === 'cable') {
       const { a, b } = segOf(p.seg); const fr = segFrame(a, b);
       const q = (s: number, d: number): Pt => ({ x: a.x + fr.ux * fr.len * s + fr.px * d, y: a.y + fr.uy * fr.len * s + fr.py * d });
@@ -1512,6 +1521,7 @@ function renderArmIR(cv: Canvas, ir: ArmIR, spec: ArmSpec): Anchors {
       const fr = segFrame(A0.elbow, A0.wrist);
       const base = { x: A0.palm.x + fr.px * (p.idx - 1) * 13, y: A0.palm.y + fr.uy * 10 };
       const a1 = Math.atan2(fr.uy, fr.ux) - Math.PI / 2 + (p.idx - 1) * 0.09 + p.curl * 0.4;
+      T.addDisc('disc', base, 4.5);
       T.addBlock('plate', base.x + fr.ux * 6, base.y + fr.uy * 6, 10.5, p.len, a1);
       T.addBlock('plate', base.x + fr.ux * (5 + p.len * 0.72) + Math.sin(p.curl) * 3, base.y + fr.uy * (5 + p.len * 0.72), 9.5, p.len * 0.82, a1 + 0.18 + p.curl * 0.3);
     }
