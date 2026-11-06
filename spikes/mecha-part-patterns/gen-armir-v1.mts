@@ -816,7 +816,7 @@ function finishRender(cv: Canvas, A: Anchors, spec: LegSpec) {
       let f = fz * tint * (1 + (mottle - 1) * 0.35);
       if (v < 0.045) f *= 1.13; else if (v > 0.955) f *= 0.8; // 板端平带：上亮下暗
       f = quant(f, 0.045);
-      let base = o % 2 ? S.armor : S.armor2;
+      let base = (spec as LegSpec & { altTone?: boolean }).altTone === false ? S.armor : (o % 2 ? S.armor : S.armor2);
       if (A.blockPlates.has(o)) base = mix(base, S.accent, 0.38);
       // 大腿饰带：首板下缘双条强调色带
       if (o === A.stripeThigh && ((v > 0.8 && v < 0.845) || (v > 0.875 && v < 0.92))) { set(i, ramp(S.accent, 0.98)); continue; }
@@ -912,6 +912,7 @@ function finishRender(cv: Canvas, A: Anchors, spec: LegSpec) {
     if (kind === 0) { for (let dy = -8; dy <= 8; dy++) { const wdt = 8 - Math.abs(dy); for (let dx = -wdt; dx <= wdt; dx++) if (Math.abs(dx) > wdt - 2.4) put(cx + dx, cy + dy); } }
     else if (kind === 1) { for (let d = -8; d <= 8; d++) { put(cx + d, cy); put(cx + d, cy + 1); put(cx, cy + d); put(cx + 1, cy + d); } }
     else if (kind === 2) { for (let dy = 0; dy < 10; dy++) for (let dx = -dy / 2; dx <= dy / 2; dx++) if (Math.abs(dx) > dy / 2 - 1.6 || dy > 7.6) put(cx + Math.round(dx), cy + dy - 5); }
+    else if (kind === 4) { for (let dy = -9; dy <= 9; dy++) for (let dx = -9; dx <= 9; dx++) { const r = Math.hypot(dx, dy); if (r < 1 || r > 10) continue; const th = Math.atan2(dy, dx); const loc = Math.abs(((th / (Math.PI * 2) * 5) % 1 + 1.5) % 1 - 0.5) * 2; const R = 9.2 - 5 * loc; if (Math.abs(r - R) < 1.25) put(cx + dx, cy + dy); } }
     else { for (let r = 0; r < 3; r++) for (let dx = -8; dx <= 8; dx++) { put(cx + dx, cy - 6 + r * 6); put(cx + dx, cy - 5 + r * 6); } }
   }
   // 人形壳涂装条纹：沿小腿壳面斜扫的强调色带（只落小腿壳板）
@@ -1436,7 +1437,7 @@ type ArmPart =
 interface ArmSpec {
   family: string; scheme: Scheme; seed: number; wear: number; camo: boolean;
   root: Pt; upperLen: number; foreLen: number; upperAng: number; elbowBend: number;
-  bulk: number; shell: number; hand: 'fist' | 'claw';
+  bulk: number; shell: number; hand: 'fist' | 'claw'; twoTone: boolean; diag: number;
   form: { shell: 'box' | 'cap'; elbow: 'disc' | 'ring' | 'small'; fore: 'plates' | 'housing' | 'shell'; fingerLen: number; fingerCurl: number };
   gear: { cable: boolean; piston: boolean; device: boolean; stripe: boolean };
 }
@@ -1451,7 +1452,9 @@ function armIR(spec: ArmSpec): ArmIR {
   const b = spec.bulk, parts: ArmPart[] = [];
   const plates = (seg: 'upper' | 'fore', len: number, w0: number, w1: number) => {
     const n = Math.max(2, Math.round(len / 68));
-    for (let k = 0; k < n; k++) parts.push({ t: 'segPlate', seg, w0: w0 + (w1 - w0) * (k / n), w1: w0 + (w1 - w0) * ((k + 1) / n), s0: 0.04 + (0.93 * k) / n, s1: 0.04 + (0.93 * (k + 1)) / n, role: seg === 'fore' && k === 0 && spec.gear.stripe ? 'stripe' : (spec.family === 'powersuit' && seg === 'fore' && k % 2 === 1 ? 'armor2' : undefined) });
+    for (let k = 0; k < n; k++) parts.push({ t: 'segPlate', seg, w0: w0 + (w1 - w0) * (k / n), w1: w0 + (w1 - w0) * ((k + 1) / n), s0: 0.04 + (0.93 * k) / n + 0.008, s1: 0.04 + (0.93 * (k + 1)) / n - 0.008, role: seg === 'fore' && k === 0 && spec.gear.stripe ? 'stripe' : undefined });
+    if (spec.family === 'powersuit' && seg === 'fore') parts.push({ t: 'segPlate', seg, w0: w0 + (w1 - w0) * 0.88, w1: w1, s0: 0.9, s1: 0.985, role: 'armor2' }); // 橙只作腕端带
+    if (spec.family === 'powersuit' && seg === 'upper') parts.push({ t: 'segPlate', seg, w0, w1: w0 + (w1 - w0) * 0.12, s0: 0.015, s1: 0.14, role: 'armor2' }); // 肩下橙带
   };
   for (const [seg, w0, w1] of [['upper', 30, 26], ['fore', 26, 20]] as const)
     for (let k = 0; k < 3; k++) parts.push({ t: 'segCore', seg, w0: (w0 + (w1 - w0) * (k / 3)) * b, w1: (w0 + (w1 - w0) * ((k + 1) / 3)) * b, s0: k / 3 + 0.01, s1: (k + 1) / 3 - 0.01 });
@@ -1463,7 +1466,7 @@ function armIR(spec: ArmSpec): ArmIR {
   if (spec.gear.piston) { parts.push({ t: 'rodLink', fromSeg: 'upper', fromS: 0.8, fromPerp: 30 * b, toSeg: 'fore', toS: 0.2, toPerp: 28 * b, r: 5 }); parts.push({ t: 'rodLink', fromSeg: 'upper', fromS: 0.88, fromPerp: 30 * b, toSeg: 'fore', toS: 0.3, toPerp: 28 * b, r: 2.8 }); }
   if (spec.gear.cable) parts.push({ t: 'cable', seg: 'fore', perp: -27 * b, sag: 4, r: 2.5 });
   if (spec.form.elbow === 'ring') { parts.push({ t: 'block', frame: 'fore', along: 0, perp: 0, w: 23 * b, h: 23 * b, kind: 'frame' }); parts.push({ t: 'disc', at: 'elbow', r: 12.5 * b }); parts.push({ t: 'disc', at: 'elbow', r: 7 * b }); }
-  else if (spec.form.elbow === 'small') parts.push({ t: 'disc', at: 'elbow', r: 8.5 * b });
+  else if (spec.form.elbow === 'small') { parts.push({ t: 'disc', at: 'elbow', r: 8.5 * b }); parts.push({ t: 'block', frame: 'fore', along: -4, perp: 0, w: 30 * b, h: 24 * b, kind: 'plate', cham: 0.5 }); }
   else parts.push({ t: 'disc', at: 'elbow', r: 12.5 * b }, { t: 'disc', at: 'elbow', r: 7 * b });
   parts.push({ t: 'block', frame: 'fore', along: 0, perp: 19 * b, w: 15 * b, h: 24 * b, kind: 'frame' }, { t: 'block', frame: 'fore', along: 0, perp: -19 * b, w: 15 * b, h: 24 * b, kind: 'frame' });
   if (spec.gear.piston) parts.push({ t: 'rod', seg: 'fore', perp: 30 * b, s0: 0.03, s1: 0.45, r: 5 });
@@ -1496,10 +1499,10 @@ function armIR(spec: ArmSpec): ArmIR {
       }
     }
     { // 拇指：基点在掌前下角，两段前指
-      let pos = { x: wrist.x + fr.ux * 25 + fr.px * -19, y: wrist.y + fr.uy * 25 + fr.py * -19 };
+      let pos = { x: wrist.x + fr.ux * 27 + fr.px * -16, y: wrist.y + fr.uy * 27 + fr.py * -16 };
       for (let k = 0; k < 2; k++) {
         const lk = [13, 11][k] * (0.7 + 0.3 * b), wk = [10, 8.5][k] * (0.7 + 0.3 * b);
-        const a = foreAng - 0.85 - 0.3 * k;
+        const a = foreAng - 0.7 - 0.3 * k;
         const cen = { x: pos.x + Math.cos(a) * (lk / 2), y: pos.y + Math.sin(a) * (lk / 2) };
         const cf = toFrame(cen), pf = toFrame(pos);
         parts.push({ t: 'discAt', frame: 'wrist', along: pf.along, perp: pf.perp, r: wk * 0.42 });
@@ -1511,14 +1514,14 @@ function armIR(spec: ArmSpec): ArmIR {
   else { parts.push({ t: 'block', frame: 'wrist', along: 34, perp: -12, w: 10, h: 22, angOff: 0.3, kind: 'plate' }); parts.push({ t: 'block', frame: 'wrist', along: 34, perp: 12, w: 10, h: 22, angOff: -0.3, kind: 'plate' }); }
   const sh = spec.shell;
   if (spec.form.shell === 'cap') {
-    parts.push({ t: 'block', frame: 'shoulder', along: -6, perp: 0, w: 76 * sh, h: 52 * sh, angOff: -0.04, kind: 'plate', cham: 0.62, bolts: true });
+    parts.push({ t: 'block', frame: 'shoulder', along: -2, perp: 0, w: 68 * sh, h: 50 * sh, angOff: -0.04, kind: 'plate', cham: 0.62, bolts: true });
     parts.push({ t: 'block', frame: 'shoulder', along: -30, perp: 0, w: 58 * sh, h: 18 * sh, angOff: -0.03, kind: 'plate', cham: 0.5 });
   } else {
     parts.push({ t: 'block', frame: 'shoulder', along: -8, perp: 0, w: 104 * sh, h: 62 * sh, angOff: -0.05, kind: 'plate', bolts: true });
     parts.push({ t: 'block', frame: 'shoulder', along: -36, perp: 0, w: 84 * sh, h: 22 * sh, angOff: -0.03, kind: 'plate' });
     parts.push({ t: 'block', frame: 'shoulder', along: 6, perp: -42 * sh, w: 28 * sh, h: 44 * sh, angOff: 0.12, kind: 'plate' });
   }
-  parts.push({ t: 'insignia', frame: 'shoulder', along: -10, perp: -4, kind: 0 });
+  parts.push({ t: 'insignia', frame: 'shoulder', along: -10, perp: -4, kind: spec.family === 'olive' ? 4 : spec.family === 'powersuit' ? 1 : 0 });
   return { anchors: { shoulder, elbow, wrist, palm }, parts };
 }
 function renderArmIR(cv: Canvas, ir: ArmIR, spec: ArmSpec): Anchors {
@@ -1553,19 +1556,20 @@ function renderArmIR(cv: Canvas, ir: ArmIR, spec: ArmSpec): Anchors {
     else if (p.t === 'light') A.lightPts.push(fp(p.frame, p.along, p.perp));
   }
   T.finish();
+  { let k = 0; for (const id of [...A.panelDiag.keys()]) { if ((k++ * spec.diag) % 1 >= spec.diag && spec.diag < 1) A.panelDiag.delete(id); } }
   return A;
 }
 {
   const psScheme: Scheme = { armor: [233, 231, 224], armor2: [219, 126, 46], frame: [72, 72, 76], metal: [120, 122, 126], accent: [233, 122, 40], chrome: [200, 202, 206], glow: [255, 205, 120], decal: [40, 40, 44] };
   const base = { wear: 0.3, camo: true, root: { x: 185, y: 66 } };
   const specs: ArmSpec[] = [
-    { ...base, scheme: SCHEMES.olive, family: 'olive', seed: 7, bulk: 1.02, shell: 1.05, hand: 'fist', upperLen: 118, foreLen: 148, upperAng: 0.14, elbowBend: 0.1, gear: { cable: true, piston: true, device: true, stripe: true }, form: { shell: 'box', elbow: 'disc', fore: 'housing', fingerLen: 27, fingerCurl: 0.5 } },
-    { ...base, scheme: SCHEMES.white, family: 'agile', seed: 21, bulk: 0.72, shell: 0.8, hand: 'fist', upperLen: 148, foreLen: 142, upperAng: 0.08, elbowBend: 0.16, gear: { cable: true, piston: false, device: true, stripe: false }, form: { shell: 'cap', elbow: 'ring', fore: 'plates', fingerLen: 37, fingerCurl: 0.13 } },
-    { ...base, scheme: psScheme, family: 'powersuit', seed: 35, bulk: 0.86, shell: 0.9, hand: 'fist', upperLen: 126, foreLen: 118, upperAng: 0.2, elbowBend: 0.07, gear: { cable: false, piston: false, device: false, stripe: true }, form: { shell: 'cap', elbow: 'small', fore: 'shell', fingerLen: 29, fingerCurl: 0.38 } },
+    { ...base, scheme: SCHEMES.olive, family: 'olive', seed: 7, bulk: 1.02, shell: 1.05, hand: 'fist', twoTone: true, diag: 0.5, upperLen: 118, foreLen: 148, upperAng: 0.14, elbowBend: 0.1, gear: { cable: true, piston: true, device: true, stripe: true }, form: { shell: 'box', elbow: 'disc', fore: 'housing', fingerLen: 27, fingerCurl: 0.5 } },
+    { ...base, scheme: SCHEMES.white, family: 'agile', camo: false, seed: 21, bulk: 0.85, shell: 0.8, hand: 'fist', twoTone: true, diag: 0.4, upperLen: 148, foreLen: 142, upperAng: 0.08, elbowBend: 0.16, gear: { cable: true, piston: false, device: true, stripe: false }, form: { shell: 'cap', elbow: 'ring', fore: 'plates', fingerLen: 37, fingerCurl: 0.13 } },
+    { ...base, scheme: psScheme, family: 'powersuit', camo: false, seed: 35, bulk: 0.86, shell: 0.9, hand: 'fist', twoTone: false, diag: 0.25, upperLen: 126, foreLen: 118, upperAng: 0.2, elbowBend: 0.07, gear: { cable: false, piston: false, device: false, stripe: true }, form: { shell: 'cap', elbow: 'small', fore: 'shell', fingerLen: 29, fingerCurl: 0.38 } },
   ];
   for (const sp of specs) {
     const ir = armIR(sp);
-    const cv = newCanvas(); const rA = renderArmIR(cv, ir, sp); finishRender(cv, rA, { topology: 'standard', scheme: sp.scheme, seed: sp.seed, bend: 0, camo: sp.camo, wear: sp.wear, detail: 1 });
+    const cv = newCanvas(); const rA = renderArmIR(cv, ir, sp); finishRender(cv, rA, { topology: 'standard', scheme: sp.scheme, seed: sp.seed, bend: 0, camo: sp.camo, wear: sp.wear, detail: 1, altTone: sp.twoTone } as LegSpec & { altTone?: boolean });
     writeFileSync(OUT + `armir-${sp.family}.png`, encodePNG(W, H, cv.col));
     const js = JSON.stringify(ir, null, 1);
     writeFileSync(OUT + `armir-${sp.family}.json`, js);
