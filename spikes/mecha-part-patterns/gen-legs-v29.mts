@@ -449,7 +449,7 @@ function layout(cv: Canvas, spec: LegSpec): Anchors {
     cv.insts.push({ kind: 'frame' });
     fillShape(cv, id, plateTest(sgm.a, sgm.b, sgm.wA * 0.82, sgm.wB * 0.82, 0, 1, 0, 0, 0, sgm.bulge)); id++;
   }
-  cv.insts.push({ kind: 'frame' }); fillShape(cv, id, lineTest({ x: hip.x, y: hip.y - 6 }, { x: ankle.x, y: ankle.y + 8 }, spec.frameHeavy ? 17 : 13)); id++; // 中心脊线收进结构核内
+  // （v29 删）中心脊线：髋→踝一根直杆斜穿弯曲关节，形态错误；垫底由沿关节链的分段结构核承担
   // 2) 线缆：髋后 → 膝后 → 踝后两段贝塞尔（采样点盖章）
   const backOf = (s: { a: Pt; b: Pt }, t: number, off: number): Pt => {
     const f = segFrame(s.a, s.b);
@@ -670,6 +670,17 @@ function layout(cv: Canvas, spec: LegSpec): Anchors {
     A.numPos = { x: thigh.a.x + f.ux * f.len * 0.68 + f.px * sgn * 16, y: thigh.a.y + f.uy * f.len * 0.68 + f.py * sgn * 16 };
     A.decalKind = spec.decalKind ?? 'num';
     A.numText = A.decalKind === 'num' ? 'M-' + (10 + Math.floor(rnd() * 89)) : '';
+    // 编号按板定位：在大腿首板（stripeThigh）的实际像素里找完整落点（整串字落在一块板内）
+    if (A.numText) {
+      const tw = A.numText.length * 8 - 2, th = 10;
+      let found: Pt | null = null;
+      for (let y = 56; y < 250 && !found; y += 2) for (let x = 96; x < 300 && !found; x += 2) {
+        let ok = true;
+        for (let yy = y; yy < y + th && ok; yy++) for (let xx = x; xx < x + tw && ok; xx++) if (cv.owner[yy * W + xx] !== A.stripeThigh) ok = false;
+        if (ok) found = { x, y };
+      }
+      if (found) A.numPos = found;
+    }
     A.insignia = { pos: { x: A.numPos.x + 4, y: A.numPos.y - 34 }, kind: Math.floor(rnd() * 4) };
     A.lightPts = [{ x: knee.x + (std ? 26 : -26), y: knee.y - 30 }, { x: hip.x - 30, y: hip.y + 34 }];
     if ((spec.detail ?? 1) > 1.1) { // 高细节族：小腿前三灯串（侦察式）
@@ -879,7 +890,7 @@ function render(spec: LegSpec) {
     if (m < 3.4) set(i, A.chevDecal ? ramp(S.decal, 0.98) : ramp(S.accent, 1.02));
   }
   // 贴纸文字与编号
-  const drawText = (anchor: Pt, text: string, scale: number, colr: RGB, center = false) => {
+  const drawText = (anchor: Pt, text: string, scale: number, colr: RGB, center = false, clipId = -1) => {
     const wpx = text.length * 4 * scale - scale;
     let cx0 = Math.round(anchor.x - (center ? wpx / 2 : 0)), cy0 = Math.round(anchor.y);
     for (const ch of text) {
@@ -887,13 +898,13 @@ function render(spec: LegSpec) {
       for (let gy = 0; gy < 5; gy++) for (let gx = 0; gx < 3; gx++) if (g[gy][gx] === '1')
         for (let sy = 0; sy < scale; sy++) for (let sx = 0; sx < scale; sx++) {
           const px = cx0 + gx * scale + sx, py = cy0 + gy * scale + sy;
-          if (px >= 0 && px < W && py >= 0 && py < H && cv.sil[py * W + px]) set(py * W + px, colr);
+          if (px >= 0 && px < W && py >= 0 && py < H && cv.sil[py * W + px] && (clipId < 0 || cv.owner[py * W + px] === clipId)) set(py * W + px, colr);
         }
       cx0 += 4 * scale;
     }
   };
-  drawText(A.decalPos, 'CAUTION', 2, ramp(S.decal, 1.0), true);
-  drawText(A.numPos, A.numText, 2, ramp(S.decal, 0.95));
+  drawText(A.decalPos, 'CAUTION', 2, ramp(S.decal, 1.0), true, A.guardId);
+  drawText(A.numPos, A.numText, 2, ramp(S.decal, 0.95), false, A.stripeThigh);
   // 趾块前端面（主战式）：带框端面板 + 中心栓点，只落在足块像素上
   if (A.toeFace) {
     const F = A.toeFace;
