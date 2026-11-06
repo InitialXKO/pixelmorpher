@@ -193,3 +193,61 @@ export function jetpackCanvas(spec: JetpackSpec): { cv: MechaCanvas; A: Anchors;
   finishRender(cv, A, gearFinish(spec));
   return { cv, A, origin };
 }
+
+// ---------- 武器三件 ----------
+// 模式（据生成武器组参考）：臂炮 = 前臂套筒座 + 粗炮管 + 炮口环 +
+// 侧弹鼓 + 顶部肋杆；导弹荚 = 箱体 + 前脸管口阵列（portArray）；
+// 步枪 = 机匣 + 长枪管 + 弹匣 + 枪托 + 瞄具。原点：臂炮/步枪 =
+// 握持/套筒点，导弹荚 = 底部肩挂点。朝向 +x。
+export type WeaponSpec = GearSpec;
+export type WeaponKind = 'cannon' | 'pod' | 'rifle';
+
+export function renderWeapon(cv: MechaCanvas, spec: WeaponSpec, kind: WeaponKind, origin: Pt): Anchors {
+  const T: Tools = makeLayerTools(cv, spec.seed);
+  const ox = origin.x, oy = origin.y;
+  if (kind === 'cannon') {
+    // 弹鼓（座下侧）→ 套筒座 → 炮管 + 炮口环 → 顶肋杆
+    T.addDisc('disc', { x: ox + 24, y: oy + 20 }, 16);
+    T.addDisc('disc', { x: ox + 24, y: oy + 20 }, 9);
+    T.addBlock('plate', ox + 26, oy, 58, 34, 0, 0.3, true);
+    T.addBlock('frame', ox + 6, oy - 2, 16, 26, 0, 0.3);
+    T.rod({ x: ox + 48, y: oy }, { x: ox + 108, y: oy }, 9);
+    T.addDisc('frame', { x: ox + 110, y: oy }, 12);
+    T.addDisc('frame', { x: ox + 110, y: oy }, 6);
+    T.rod({ x: ox + 50, y: oy - 13 }, { x: ox + 98, y: oy - 13 }, 3);
+    T.rod({ x: ox + 8, y: oy + 14 }, { x: ox - 8, y: oy + 26 }, 2.5); // 供弹缆示意
+    T.A.lightPts.push({ x: ox + 40, y: oy - 10 });
+  } else if (kind === 'pod') {
+    // 箱体 + 朝向观察者的管口脸（与炮口环/弹鼓同为正对读法）：
+    // 外壳框 → 脸板 → portArray 2×3 管口 → 顶盖与侧深条
+    T.addBlock('frame', ox, oy - 26, 74, 58, 0, 0.26, true);
+    T.addBlock('plate', ox - 2, oy - 26, 60, 46, 0, 0.28);
+    T.portArray(ox - 2, oy - 26, 46, 34, 2, 3);
+    T.addBlock('frame', ox - 2, oy - 58, 56, 8, 0, 0.3);
+    T.addBlock('frame', ox + 40, oy - 26, 8, 50, 0, 0.25);
+    T.addBlock('frame', ox - 8, oy + 6, 20, 10, 0, 0.3);
+    T.A.lightPts.push({ x: ox - 28, y: oy - 48 });
+  } else {
+    // 步枪：枪托 → 机匣 → 枪管；弹匣下斜、握把下垂、瞄具在上
+    T.addBlock('plate', ox - 26, oy - 1, 30, 15, 0.1, 0.3);
+    T.addBlock('plate', ox + 8, oy, 44, 17, 0, 0.28, true);
+    T.rod({ x: ox + 28, y: oy - 1 }, { x: ox + 92, y: oy - 1 }, 3.5);
+    T.addDisc('frame', { x: ox + 94, y: oy - 1 }, 5);
+    T.addBlock('frame', ox + 12, oy + 17, 11, 20, 0.28, 0.25); // 弹匣
+    T.addBlock('frame', ox - 12, oy + 13, 9, 16, -0.2, 0.25); // 握把
+    T.rod({ x: ox + 2, y: oy - 10 }, { x: ox + 2, y: oy - 15 }, 2);
+    T.addBlock('plate', ox + 6, oy - 17, 24, 8, 0, 0.35); // 瞄具
+    T.addDisc('disc', { x: ox + 16, y: oy - 17 }, 3.5);
+  }
+  T.finish();
+  return T.A;
+}
+
+/** 武器单独渲染（验收/预览用） */
+export function weaponCanvas(spec: WeaponSpec, kind: WeaponKind): { cv: MechaCanvas; A: Anchors; origin: Pt } {
+  const cv = newCanvas();
+  const origin = kind === 'pod' ? { x: 170, y: 150 } : { x: 90, y: 130 };
+  const A = renderWeapon(cv, spec, kind, origin);
+  finishRender(cv, A, gearFinish(spec));
+  return { cv, A, origin };
+}
