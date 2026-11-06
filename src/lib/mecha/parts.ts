@@ -9,7 +9,7 @@ import {
   armIR, renderArmIR, torsoIR, renderTorsoIR, headIR, renderHeadIR, hullIR, renderHullIR,
 } from './engine';
 import type { Scheme, LegSpec, ArmSpec, TorsoSpec, HeadSpec, HullSpec, MechaCanvas, Pt } from './engine';
-import { renderMultiLeg, renderTrackUnit } from './gear';
+import { renderMultiLeg, renderTrackUnit, renderJetpack } from './gear';
 
 export type MechaFamily = 'olive' | 'agile' | 'powersuit';
 export const MECHA_FAMILIES: { id: MechaFamily; name: string }[] = [
@@ -170,6 +170,16 @@ export function generateMechaTrackUnit(family: MechaFamily): MechaSpriteData {
   const cv = newCanvas(); const origin = { x: 190, y: 26 };
   const spec = { scheme, seed: 11, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family] };
   const A = renderTrackUnit(cv, spec, origin);
+  finishRender(cv, A, fin(family));
+  return cropSprite(cv, origin);
+}
+
+/** 喷射背包精灵（原点=贴背挂载点，箱体在原点后方） */
+export function generateMechaJetpack(family: MechaFamily): MechaSpriteData {
+  const scheme = SCHEME_OF[family];
+  const cv = newCanvas(); const origin = { x: 200, y: 130 };
+  const spec = { scheme, seed: 21, wear: 0.25, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family] };
+  const A = renderJetpack(cv, spec, origin);
   finishRender(cv, A, fin(family));
   return cropSprite(cv, origin);
 }

@@ -150,3 +150,46 @@ export function multiLegCanvas(spec: MultiLegSpec): { cv: MechaCanvas; A: Anchor
   finishRender(cv, A, gearFinish(spec));
   return { cv, A, origin };
 }
+
+// ---------- 喷射背包 ----------
+// 模式（据生成参考）：背箱主体（分面板）+ 后缘燃料罐柱 + 底部双
+// 喷口钟（nozzle，近大远小）+ 顶部后掠小翼（wing）+ 散热栅。
+// 火焰不入图（动态效果，非机体本体）。原点 = 贴背挂载点（箱前
+// 面中心），箱体在原点后方展开。
+export type JetpackSpec = GearSpec;
+
+export function renderJetpack(cv: MechaCanvas, spec: JetpackSpec, origin: Pt): Anchors {
+  const T: Tools = makeLayerTools(cv, spec.seed);
+  const ox = origin.x, oy = origin.y;
+  // 远喷口先画（在后，长钟：起点埋进箱底）
+  T.addBlock('frame', ox - 14, oy + 44, 20, 12, 0, 0.3);
+  T.nozzle({ x: ox - 14, y: oy + 42 }, { x: ox - 16, y: oy + 64 }, 9, 16);
+  // 后缘燃料罐柱 + 罐顶盖
+  T.addBlock('cyl', ox - 56, oy - 2, 21, 86, 0, 0.42);
+  T.addDisc('disc', { x: ox - 56, y: oy - 46 }, 10);
+  // 主箱（大箱 + 上分面板 + 顶盖 + 底框）
+  T.addBlock('plate', ox - 26, oy + 2, 56, 96, 0, 0.3, true);
+  T.addBlock('plate', ox - 28, oy - 28, 42, 32, 0, 0.32);
+  T.addBlock('frame', ox - 26, oy - 50, 50, 10, 0, 0.3);
+  T.addBlock('frame', ox - 28, oy + 38, 44, 16, 0, 0.3);
+  // 近喷口（主，长钟）
+  T.addBlock('frame', ox - 40, oy + 44, 22, 12, 0, 0.3);
+  T.nozzle({ x: ox - 40, y: oy + 42 }, { x: ox - 44, y: oy + 66 }, 10, 18);
+  // 顶部后掠翼（主）+ 下稳定小翼
+  T.wing(ox - 52, oy - 58, 62, 22, 8, -2.62);
+  T.wing(ox - 50, oy + 26, 30, 12, 5, 2.95);
+  // 散热栅 + 信号灯
+  T.grille(ox - 24, oy + 12, 30, 13);
+  T.A.lightPts.push({ x: ox - 6, y: oy - 38 });
+  T.finish();
+  return T.A;
+}
+
+/** 喷射背包单独渲染（验收/预览用） */
+export function jetpackCanvas(spec: JetpackSpec): { cv: MechaCanvas; A: Anchors; origin: Pt } {
+  const cv = newCanvas();
+  const origin = { x: 200, y: 130 };
+  const A = renderJetpack(cv, spec, origin);
+  finishRender(cv, A, gearFinish(spec));
+  return { cv, A, origin };
+}
