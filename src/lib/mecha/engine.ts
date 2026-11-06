@@ -418,45 +418,38 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       const LINE_ANG = -0.40; // 主线：向前上行
       const dir = { x: Math.cos(LINE_ANG), y: Math.sin(LINE_ANG) };
       const nrm = { x: -dir.y, y: dir.x }; // 主线下法线（指向压块内）
-      // 非四边形块：四角各自独立切、顶边带一级台阶——统一 chamfer 的
-      // blockPoly 出来的是四边形，块语言里块从来不是四边形。切口量级
-      // 按参考取块厚的三分之一上下：此前按 0.05–0.24 取，切口只有
-      // 1–6px，块在图上退化成包围矩形（用户指「足块又四边形退化」）
-      const jagPoly = (cx: number, cy: number, len: number, thick: number, ang: number, v: number): Pt[] => {
+      // 块形：切口只开在与邻块冲突的角上（用户定：切口是为不和别的
+      // 块冲突，不是到处乱切）——cuts 按角指定（ft 前上/fb 前下/bt
+      // 后上/bb 后下，单位为块厚比），没邻块压的角保持完整方角；
+      // 此前四角按随机量乱切、且短块上台阶与切口互撞出自交尖刺
+      const jagPoly = (cx: number, cy: number, len: number, thick: number, ang: number, cuts: { ft?: number; fb?: number; bt?: number; bb?: number }): Pt[] => {
         const hl = len / 2, ht = thick / 2;
-        const cFT = thick * (0.30 + (v % 3) * 0.06), cBT = thick * (0.14 + (v % 2) * 0.05);
-        const cFB = thick * (0.20 + (v % 2) * 0.05), cBB = thick * 0.09;
-        const sx = hl * (0.05 + (v % 3) * 0.1), sd0 = thick * 0.16;
-        // 台阶终点必须落在前上切口之前：短块（如压块套，长厚比小）上
-        // 台阶长 + 切口会越过半长、顶边折回自交，角上出一块折叠尖刺
-        let sr = thick * 0.45;
-        const stepEnd = hl - cFT - 2;
-        if (sx + sr > stepEnd) sr = Math.max(0, stepEnd - sx);
-        const sd = sr > 0 ? sd0 : 0;
-        const loc: Pt[] = [
-          { x: -hl, y: -ht + cBT }, { x: -hl + cBT, y: -ht }, { x: sx, y: -ht },
-          { x: sx + sr, y: -ht + sd }, { x: hl - cFT, y: -ht + sd }, { x: hl, y: -ht + sd + cFT * 0.75 },
+        const cFT = thick * (cuts.ft ?? 0), cFB = thick * (cuts.fb ?? 0), cBT = thick * (cuts.bt ?? 0), cBB = thick * (cuts.bb ?? 0);
+        const raw: Pt[] = [
+          { x: -hl, y: -ht + cBT }, { x: -hl + cBT, y: -ht },
+          { x: hl - cFT, y: -ht }, { x: hl, y: -ht + cFT * 0.75 },
           { x: hl - cFB, y: ht }, { x: -hl + cBB, y: ht }, { x: -hl, y: ht - cBB },
         ];
+        const loc = raw.filter((p, i) => i === 0 || p.x !== raw[i - 1].x || p.y !== raw[i - 1].y);
         const c = Math.cos(ang), s = Math.sin(ang);
         return loc.map(p => ({ x: cx + p.x * c - p.y * s, y: cy + p.x * s + p.y * c }));
       };
-      let jagV = 0;
-      const blkF = (cx: number, cy: number, len: number, thick: number, ang: number, tint: number) => {
+      const blkF = (cx: number, cy: number, len: number, thick: number, ang: number, cuts: { ft?: number; fb?: number; bt?: number; bb?: number }, tint: number) => {
         cv.insts.push({ kind: 'foot' }); const bid = id;
-        fillShape(cv, id, polyTest(jagPoly(cx, cy, len, thick, ang, jagV++))); id++;
+        fillShape(cv, id, polyTest(jagPoly(cx, cy, len, thick, ang, cuts))); id++;
         A.plateTint.set(bid, tint); A.panelLines.set(bid, [0.5]);
       };
       // 板类件（压块套/压块/折面）
-      const blkP = (cx: number, cy: number, len: number, thick: number, ang: number, v: number, tint: number, panel = true) => {
+      const blkP = (cx: number, cy: number, len: number, thick: number, ang: number, cuts: { ft?: number; fb?: number; bt?: number; bb?: number }, tint: number, panel = true) => {
         cv.insts.push({ kind: 'plate' }); const bid = id;
-        fillShape(cv, id, polyTest(jagPoly(cx, cy, len, thick, ang, v))); id++;
+        fillShape(cv, id, polyTest(jagPoly(cx, cy, len, thick, ang, cuts))); id++;
         A.plateTint.set(bid, tint); if (panel) A.panelLines.set(bid, [0.5]);
       };
-      // 接地趾：平顶块（顶平、底面坐 GY、逐级下行是标注读数），但
-      // 平顶≠矩形——后缝上端前倾、前上大切角（约块厚 0.38）、前底
-      // 收进，与参考趾块同一块语言；此前借 jagPoly 出图、切口只剩
-      // 1–6px，图上就是矩形（四边形退化的一处）
+      // 接地趾：平顶块（顶平、底面坐 GY、逐级下行是标注读数）。
+      // 后缘上端前倾是相邻趾块相抵的缝（标注读数）；前端斜面是趾帽
+      // 折面（与压块前端窄面同式、两参考每趾都有），不是装饰切口；
+      // 其余角保持完整。此前借 jagPoly 出图、切口只剩 1–6px，图上
+      // 就是矩形（四边形退化的一处）
       const toeG = (x0: number, len: number, thick: number, tint: number) => {
         const ch = thick * 0.38, rc = thick * 0.30, fi = thick * 0.14;
         cv.insts.push({ kind: 'foot' }); const bid = id;
@@ -474,21 +467,19 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       A.toeFace = { x0: Math.round(toe3Front - 0.17 * D), y0: Math.round(GY - 0.34 * D), x1: Math.round(toe3Front - 0.03 * D), y1: Math.round(GY - 0.06 * D) };
       // 叠瓦楔板两块：顶棱向前下行、两块平行；先画，压块随后盖其根。
       // 位置按参考亮棱的落点：棱自压块底边下方露出、前端落在趾顶上
-      blkF(ankle.x + 1.62 * D, ankle.y + 0.02 * D, 0.98 * D * HS, 0.34 * D, 0.48, 0.97);
-      blkF(ankle.x + 2.28 * D, ankle.y + 0.16 * D, 0.92 * D * HS, 0.32 * D, 0.48, 1.04);
+      blkF(ankle.x + 1.62 * D, ankle.y + 0.02 * D, 0.98 * D * HS, 0.34 * D, 0.48, { bt: 0.30, fb: 0.25, bb: 0.20 }, 0.97);
+      blkF(ankle.x + 2.28 * D, ankle.y + 0.16 * D, 0.92 * D * HS, 0.32 * D, 0.48, { bt: 0.25, fb: 0.25 }, 1.04);
       // 跟块：楔块平坐地。顶边两段——靠盘陡升段沿主线（FT→BK），
       // 其后浅段（BK→RT）向后缓降；FT = 顶边触盘点
       const FT = { x: ankle.x - 0.15 * D, y: ankle.y + 0.1 * D };
       {
         const BK = { x: FT.x - dir.x * 0.42 * D, y: FT.y - dir.y * 0.42 * D };
         const RT = { x: BK.x - 0.95 * D * HS, y: BK.y + 0.10 * D };
-        const SM = { x: BK.x + (RT.x - BK.x) * 0.45, y: BK.y + (RT.y - BK.y) * 0.45 };
         cv.insts.push({ kind: 'foot' }); const bid = id;
         fillShape(cv, id, polyTest([
           { x: FT.x - 6, y: FT.y + 9 }, { x: FT.x + 2, y: FT.y }, { x: BK.x + 3, y: BK.y - 2 },
-          { x: SM.x, y: SM.y }, { x: SM.x - 10, y: SM.y + 5 },
-          { x: RT.x + 8, y: RT.y + 2 }, { x: RT.x, y: RT.y + 6 }, { x: RT.x - 2, y: GY - 8 },
-          { x: RT.x - 9, y: GY - 8 }, { x: RT.x - 9, y: GY }, { x: ankle.x - 0.05 * D, y: GY }, { x: FT.x - 3, y: FT.y + 17 },
+          { x: RT.x + 8, y: RT.y + 2 }, { x: RT.x, y: RT.y + 6 }, { x: RT.x - 7, y: GY },
+          { x: ankle.x - 0.05 * D, y: GY }, { x: FT.x - 3, y: FT.y + 17 },
         ])); id++;
         A.plateTint.set(bid, 0.95);
         A.boltPts.push({ x: (BK.x + RT.x) / 2, y: (BK.y + RT.y) / 2 + 12 }); // 跟块面上一颗栓（参考两张都有）
@@ -497,7 +488,7 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       // 长轴沿主线
       {
         const scx = ankle.x + dir.x * 0.62 * D, scy = ankle.y + dir.y * 0.62 * D;
-        blkP(scx, scy, 0.95 * D * HS, 0.58 * D, LINE_ANG, 2, 1.02);
+        blkP(scx, scy, 0.95 * D * HS, 0.58 * D, LINE_ANG, { bt: 0.25, bb: 0.35, fb: 0.20 }, 1.02);
         A.boltPts.push({ x: scx, y: scy });
       }
       // 压块（折板）：顶边贴主线、自盘心沿主线 0.98D 处向前上行，
@@ -505,10 +496,10 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       {
         const slabLen = 1.45 * D * HS, slabThick = 0.8 * D, slabRear = 0.98 * D;
         const mx = ankle.x + dir.x * (slabRear + slabLen / 2), my = ankle.y + dir.y * (slabRear + slabLen / 2);
-        blkP(mx + nrm.x * slabThick / 2, my + nrm.y * slabThick / 2, slabLen, slabThick, LINE_ANG, 1, 0.95, false);
+        blkP(mx + nrm.x * slabThick / 2, my + nrm.y * slabThick / 2, slabLen, slabThick, LINE_ANG, { bb: 0.30, ft: 0.30, fb: 0.15 }, 0.95, false);
         A.boltPts.push({ x: mx - dir.x * slabLen * 0.14 + nrm.x * slabThick * 0.68, y: my - dir.y * slabLen * 0.14 + nrm.y * slabThick * 0.68 }); // 压块面低处一颗栓（参考两张都有）
         const fx = ankle.x + dir.x * (slabRear + slabLen) + nrm.x * (slabThick / 2 + 0.05 * D), fy = ankle.y + dir.y * (slabRear + slabLen) + nrm.y * (slabThick / 2 + 0.05 * D);
-        blkP(fx - dir.x * 0.16 * D, fy - dir.y * 0.16 * D, slabThick * 0.72, 0.3 * D, LINE_ANG + Math.PI / 2, 3, 1.1, false);
+        blkP(fx - dir.x * 0.16 * D, fy - dir.y * 0.16 * D, slabThick * 0.72, 0.3 * D, LINE_ANG + Math.PI / 2, {}, 1.1, false);
       }
     }
   }
