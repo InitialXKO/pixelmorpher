@@ -123,9 +123,25 @@
   {
    "t": "cable",
    "seg": "upper",
-   "perp": 30.6,
-   "sag": 30,
+   "perp": 26.52,
+   "sag": 26,
    "r": 6.5
+  },
+  {
+   "t": "discAt",
+   "frame": "upper",
+   "along": 2.36,
+   "perp": 26.52,
+   "r": 9.5,
+   "kind": "frame"
+  },
+  {
+   "t": "discAt",
+   "frame": "upper",
+   "along": 115.64,
+   "perp": 26.52,
+   "r": 9.5,
+   "kind": "frame"
   },
   {
    "t": "rodLink",
@@ -180,9 +196,25 @@
   {
    "t": "cable",
    "seg": "fore",
-   "perp": 29.580000000000002,
-   "sag": 20,
+   "perp": 25.5,
+   "sag": 17,
    "r": 6
+  },
+  {
+   "t": "discAt",
+   "frame": "fore",
+   "along": 2.96,
+   "perp": 25.5,
+   "r": 9,
+   "kind": "frame"
+  },
+  {
+   "t": "discAt",
+   "frame": "fore",
+   "along": 145.04,
+   "perp": 25.5,
+   "r": 9,
+   "kind": "frame"
   },
   {
    "t": "disc",
