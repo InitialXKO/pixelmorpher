@@ -1426,11 +1426,11 @@ type ArmPart =
   | { t: 'segCore'; seg: 'upper' | 'fore'; w0: number; w1: number; s0: number; s1: number }
   | { t: 'segPlate'; seg: 'upper' | 'fore'; w0: number; w1: number; s0: number; s1: number; role?: 'stripe' | 'armor2' | 'accent' }
   | { t: 'disc'; at: 'shoulder' | 'elbow' | 'wrist'; r: number }
+  | { t: 'discAt'; frame: ArmFrame; along: number; perp: number; r: number }
   | { t: 'block'; frame: ArmFrame; along: number; perp: number; w: number; h: number; angOff?: number; kind?: Kind; cham?: number; bolts?: boolean }
   | { t: 'rod'; seg: 'upper' | 'fore'; perp: number; s0: number; s1: number; r: number }
   | { t: 'rodLink'; fromSeg: 'upper' | 'fore'; fromS: number; fromPerp: number; toSeg: 'upper' | 'fore'; toS: number; toPerp: number; r: number }
   | { t: 'cable'; seg: 'upper' | 'fore'; perp: number; sag: number; r: number }
-  | { t: 'finger'; idx: number; curl: number; len: number }
   | { t: 'insignia'; frame: ArmFrame; along: number; perp: number; kind: number }
   | { t: 'light'; frame: ArmFrame; along: number; perp: number };
 interface ArmSpec {
@@ -1474,9 +1474,40 @@ function armIR(spec: ArmSpec): ArmIR {
   if (spec.gear.piston) parts.push({ t: 'rod', seg: 'fore', perp: 30 * b, s0: 0.4, s1: 0.9, r: 2.8 });
   if (spec.gear.device) { parts.push({ t: 'block', frame: 'fore', along: spec.foreLen * 0.45, perp: -26 * b, w: 20, h: 26, kind: 'frame' }); parts.push({ t: 'block', frame: 'fore', along: spec.foreLen * 0.45, perp: -27 * b, w: 13, h: 18, kind: 'plate' }); parts.push({ t: 'light', frame: 'fore', along: spec.foreLen * 0.45, perp: -30 * b }); }
   parts.push({ t: 'disc', at: 'wrist', r: 8.5 * b }, { t: 'disc', at: 'wrist', r: 4.5 * b });
-  parts.push({ t: 'block', frame: 'wrist', along: 24, perp: 0, w: 36 * b, h: 26 * b, kind: 'plate', bolts: true });
-  parts.push({ t: 'block', frame: 'wrist', along: 22, perp: 3, w: 24 * b, h: 17 * b, kind: 'plate' }); // 掌背板
-  if (spec.hand === 'fist') { for (let k = 0; k < 3; k++) parts.push({ t: 'finger', idx: k, curl: spec.form.fingerCurl + k * 0.05, len: spec.form.fingerLen }); parts.push({ t: 'block', frame: 'wrist', along: 20, perp: -24 * b, w: 11, h: 16, angOff: 0.55, kind: 'plate' }); parts.push({ t: 'block', frame: 'wrist', along: 30, perp: -28 * b, w: 10, h: 13, angOff: 0.85, kind: 'plate' }); }
+  parts.push({ t: 'block', frame: 'wrist', along: 16, perp: 0, w: 36 * b, h: 26 * b, kind: 'plate', bolts: true });
+  parts.push({ t: 'block', frame: 'wrist', along: 13, perp: 3, w: 24 * b, h: 17 * b, kind: 'plate' }); // 掌背板
+  if (spec.hand === 'fist') {
+    // 指链（按 cyber/agile 参考抽取：四指位侧面取三列、每指三段渐细、关节盘、逐节累进卷曲；拇指自掌前下角出、两段前指）
+    const fr = segFrame(elbow, wrist), foreAng = Math.atan2(fr.uy, fr.ux);
+    const fw = 7 + 3.5 * b, L = spec.form.fingerLen, curl = spec.form.fingerCurl;
+    const toFrame = (c: Pt) => ({ along: (c.x - wrist.x) * fr.ux + (c.y - wrist.y) * fr.uy, perp: (c.x - wrist.x) * fr.px + (c.y - wrist.y) * fr.py });
+    parts.push({ t: 'block', frame: 'wrist', along: 29, perp: 0, w: 31 * b, h: 7, kind: 'frame' }); // 指节梁
+    for (let idx = 0; idx < 3; idx++) {
+      let pos = { x: wrist.x + fr.ux * 30 + fr.px * (idx - 1) * 11.5, y: wrist.y + fr.uy * 30 + fr.py * (idx - 1) * 11.5 };
+      const fan = (idx - 1) * 0.04;
+      for (let k = 0; k < 3; k++) {
+        const lk = L * [0.42, 0.33, 0.25][k], wk = fw * [1, 0.84, 0.68][k];
+        const a = foreAng + fan - curl * k;
+        const cen = { x: pos.x + Math.cos(a) * (lk / 2), y: pos.y + Math.sin(a) * (lk / 2) };
+        const cf = toFrame(cen), pf = toFrame(pos);
+        parts.push({ t: 'discAt', frame: 'wrist', along: pf.along, perp: pf.perp, r: wk * 0.42 });
+        parts.push({ t: 'block', frame: 'wrist', along: cf.along, perp: cf.perp, w: wk, h: lk, angOff: a - foreAng, kind: 'plate', cham: 0.3 });
+        pos = { x: pos.x + Math.cos(a) * lk, y: pos.y + Math.sin(a) * lk };
+      }
+    }
+    { // 拇指：基点在掌前下角，两段前指
+      let pos = { x: wrist.x + fr.ux * 25 + fr.px * -19, y: wrist.y + fr.uy * 25 + fr.py * -19 };
+      for (let k = 0; k < 2; k++) {
+        const lk = [13, 11][k] * (0.7 + 0.3 * b), wk = [10, 8.5][k] * (0.7 + 0.3 * b);
+        const a = foreAng - 0.85 - 0.3 * k;
+        const cen = { x: pos.x + Math.cos(a) * (lk / 2), y: pos.y + Math.sin(a) * (lk / 2) };
+        const cf = toFrame(cen), pf = toFrame(pos);
+        parts.push({ t: 'discAt', frame: 'wrist', along: pf.along, perp: pf.perp, r: wk * 0.42 });
+        parts.push({ t: 'block', frame: 'wrist', along: cf.along, perp: cf.perp, w: wk, h: lk, angOff: a - foreAng, kind: 'plate', cham: 0.3 });
+        pos = { x: pos.x + Math.cos(a) * lk, y: pos.y + Math.sin(a) * lk };
+      }
+    }
+  }
   else { parts.push({ t: 'block', frame: 'wrist', along: 34, perp: -12, w: 10, h: 22, angOff: 0.3, kind: 'plate' }); parts.push({ t: 'block', frame: 'wrist', along: 34, perp: 12, w: 10, h: 22, angOff: -0.3, kind: 'plate' }); }
   const sh = spec.shell;
   if (spec.form.shell === 'cap') {
@@ -1502,6 +1533,7 @@ function renderArmIR(cv: Canvas, ir: ArmIR, spec: ArmSpec): Anchors {
     if (p.t === 'segCore') { const { a, b } = segOf(p.seg); T.segPlate(a, b, p.w0, p.w1, p.s0, p.s1, 0, 'frame'); }
     else if (p.t === 'segPlate') { const { a, b } = segOf(p.seg); const id = T.segPlate(a, b, p.w0, p.w1, p.s0, p.s1); if (p.role === 'stripe') A.stripeThigh = id; else if (p.role) (A.colorRole ??= new Map()).set(id, p.role); }
     else if (p.t === 'disc') T.addDisc('disc', A0[p.at], p.r);
+    else if (p.t === 'discAt') { const c = fp(p.frame, p.along, p.perp); T.addDisc('disc', c, p.r); }
     else if (p.t === 'block') { const c = fp(p.frame, p.along, p.perp); T.addBlock(p.kind ?? 'plate', c.x, c.y, p.w, p.h, fang(p.frame) + (p.angOff ?? 0), p.cham ?? 0.36, p.bolts ?? false); }
     else if (p.t === 'rod') { const { a, b } = segOf(p.seg); const fr = segFrame(a, b); const q = (s: number): Pt => ({ x: a.x + fr.ux * fr.len * s + fr.px * p.perp, y: a.y + fr.uy * fr.len * s + fr.py * p.perp }); T.addRaw('rod', lineTest(q(p.s0), q(p.s1), p.r)); }
     else if (p.t === 'rodLink') {
@@ -1517,14 +1549,6 @@ function renderArmIR(cv: Canvas, ir: ArmIR, spec: ArmSpec): Anchors {
       T.addRaw('cable', (x, y) => { let m = 1e9; for (const q2 of pts) m = Math.min(m, Math.hypot(x - q2.x, y - q2.y)); return [m <= p.r, 0, m / p.r]; });
       T.addDisc('cyl', p0, p.r + 1); T.addDisc('cyl', p2, p.r + 1);
     }
-    else if (p.t === 'finger') {
-      const fr = segFrame(A0.elbow, A0.wrist);
-      const base = { x: A0.palm.x + fr.px * (p.idx - 1) * 13, y: A0.palm.y + fr.uy * 10 };
-      const a1 = Math.atan2(fr.uy, fr.ux) - Math.PI / 2 + (p.idx - 1) * 0.09 + p.curl * 0.4;
-      T.addDisc('disc', base, 4.5);
-      T.addBlock('plate', base.x + fr.ux * 6, base.y + fr.uy * 6, 10.5, p.len, a1);
-      T.addBlock('plate', base.x + fr.ux * (5 + p.len * 0.72) + Math.sin(p.curl) * 3, base.y + fr.uy * (5 + p.len * 0.72), 9.5, p.len * 0.82, a1 + 0.18 + p.curl * 0.3);
-    }
     else if (p.t === 'insignia') A.insignia = { pos: fp(p.frame, p.along, p.perp), kind: p.kind };
     else if (p.t === 'light') A.lightPts.push(fp(p.frame, p.along, p.perp));
   }
@@ -1535,9 +1559,9 @@ function renderArmIR(cv: Canvas, ir: ArmIR, spec: ArmSpec): Anchors {
   const psScheme: Scheme = { armor: [233, 231, 224], armor2: [219, 126, 46], frame: [72, 72, 76], metal: [120, 122, 126], accent: [233, 122, 40], chrome: [200, 202, 206], glow: [255, 205, 120], decal: [40, 40, 44] };
   const base = { wear: 0.3, camo: true, root: { x: 185, y: 66 } };
   const specs: ArmSpec[] = [
-    { ...base, scheme: SCHEMES.olive, family: 'olive', seed: 7, bulk: 1.02, shell: 1.05, hand: 'fist', upperLen: 118, foreLen: 148, upperAng: 0.14, elbowBend: 0.1, gear: { cable: true, piston: true, device: true, stripe: true }, form: { shell: 'box', elbow: 'disc', fore: 'housing', fingerLen: 12, fingerCurl: 0.34 } },
-    { ...base, scheme: SCHEMES.white, family: 'agile', seed: 21, bulk: 0.72, shell: 0.8, hand: 'fist', upperLen: 148, foreLen: 142, upperAng: 0.08, elbowBend: 0.16, gear: { cable: true, piston: false, device: true, stripe: false }, form: { shell: 'cap', elbow: 'ring', fore: 'plates', fingerLen: 20, fingerCurl: 0.06 } },
-    { ...base, scheme: psScheme, family: 'powersuit', seed: 35, bulk: 0.86, shell: 0.9, hand: 'fist', upperLen: 126, foreLen: 118, upperAng: 0.2, elbowBend: 0.07, gear: { cable: false, piston: false, device: false, stripe: true }, form: { shell: 'cap', elbow: 'small', fore: 'shell', fingerLen: 15, fingerCurl: 0.18 } },
+    { ...base, scheme: SCHEMES.olive, family: 'olive', seed: 7, bulk: 1.02, shell: 1.05, hand: 'fist', upperLen: 118, foreLen: 148, upperAng: 0.14, elbowBend: 0.1, gear: { cable: true, piston: true, device: true, stripe: true }, form: { shell: 'box', elbow: 'disc', fore: 'housing', fingerLen: 27, fingerCurl: 0.5 } },
+    { ...base, scheme: SCHEMES.white, family: 'agile', seed: 21, bulk: 0.72, shell: 0.8, hand: 'fist', upperLen: 148, foreLen: 142, upperAng: 0.08, elbowBend: 0.16, gear: { cable: true, piston: false, device: true, stripe: false }, form: { shell: 'cap', elbow: 'ring', fore: 'plates', fingerLen: 37, fingerCurl: 0.13 } },
+    { ...base, scheme: psScheme, family: 'powersuit', seed: 35, bulk: 0.86, shell: 0.9, hand: 'fist', upperLen: 126, foreLen: 118, upperAng: 0.2, elbowBend: 0.07, gear: { cable: false, piston: false, device: false, stripe: true }, form: { shell: 'cap', elbow: 'small', fore: 'shell', fingerLen: 29, fingerCurl: 0.38 } },
   ];
   for (const sp of specs) {
     const ir = armIR(sp);
