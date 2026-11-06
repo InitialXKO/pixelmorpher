@@ -1462,7 +1462,7 @@ function armIR(spec: ArmSpec): ArmIR {
   parts.push({ t: 'block', frame: 'shoulder', along: 2, perp: 27 * b, w: 14 * b, h: 22 * b, kind: 'frame' }, { t: 'block', frame: 'shoulder', along: 2, perp: -27 * b, w: 14 * b, h: 22 * b, kind: 'frame' });
   parts.push({ t: 'disc', at: 'shoulder', r: (spec.family === 'olive' ? 19 : 15) * b }, { t: 'disc', at: 'shoulder', r: (spec.family === 'olive' ? 11 : 8.5) * b });
   plates('upper', spec.upperLen, 56 * b, 50 * b);
-  if (spec.gear.cable) { parts.push({ t: 'cable', seg: 'upper', perp: 26 * b, sag: 26, r: 6.5 }); parts.push({ t: 'discAt', frame: 'upper', along: spec.upperLen * 0.02, perp: 26 * b, r: 9.5, kind: 'frame' }); parts.push({ t: 'discAt', frame: 'upper', along: spec.upperLen * 0.98, perp: 26 * b, r: 9.5, kind: 'frame' }); } // 软管两端接口座入壳（与活塞同区成回路）
+  if (spec.gear.cable) { parts.push({ t: 'cable', seg: 'upper', perp: 24 * b, sag: 11, r: 6.5 }); parts.push({ t: 'discAt', frame: 'upper', along: spec.upperLen * 0.02, perp: 24 * b, r: 10.5, kind: 'cyl' }); parts.push({ t: 'discAt', frame: 'upper', along: spec.upperLen * 0.98, perp: 24 * b, r: 10.5, kind: 'cyl' }); } // 软管两端接口座入壳（与活塞同区成回路）
   if (spec.gear.piston) { // 短栈贴关节（cyber 式）：套筒+铬杆只跨肘口，前臂内一节短栈，环节点缀盘
     parts.push({ t: 'rodLink', fromSeg: 'upper', fromS: 0.84, fromPerp: 24 * b, toSeg: 'fore', toS: 0.16, toPerp: 22 * b, r: 4.5 });
     parts.push({ t: 'rodLink', fromSeg: 'upper', fromS: 0.9, fromPerp: 24 * b, toSeg: 'fore', toS: 0.26, toPerp: 22 * b, r: 2.4 });
@@ -1471,7 +1471,7 @@ function armIR(spec: ArmSpec): ArmIR {
     parts.push({ t: 'discAt', frame: 'fore', along: spec.foreLen * 0.05, perp: 24 * b, r: 5 });
     parts.push({ t: 'discAt', frame: 'fore', along: spec.foreLen * 0.24, perp: 24 * b, r: 4.5 });
   }
-  if (spec.gear.cable) { parts.push({ t: 'cable', seg: 'fore', perp: 25 * b, sag: 17, r: 6 }); parts.push({ t: 'discAt', frame: 'fore', along: spec.foreLen * 0.02, perp: 25 * b, r: 9, kind: 'frame' }); parts.push({ t: 'discAt', frame: 'fore', along: spec.foreLen * 0.98, perp: 25 * b, r: 9, kind: 'frame' }); }
+  if (spec.gear.cable) { parts.push({ t: 'cable', seg: 'fore', perp: 23 * b, sag: 9, r: 6 }); parts.push({ t: 'discAt', frame: 'fore', along: spec.foreLen * 0.02, perp: 23 * b, r: 10, kind: 'cyl' }); parts.push({ t: 'discAt', frame: 'fore', along: spec.foreLen * 0.98, perp: 23 * b, r: 10, kind: 'cyl' }); }
   if (spec.form.elbow === 'ring') { parts.push({ t: 'block', frame: 'fore', along: 0, perp: 0, w: 23 * b, h: 23 * b, kind: 'frame' }); parts.push({ t: 'disc', at: 'elbow', r: 12.5 * b }); parts.push({ t: 'disc', at: 'elbow', r: 7 * b }); }
   else if (spec.form.elbow === 'small') { parts.push({ t: 'disc', at: 'elbow', r: 8.5 * b }); parts.push({ t: 'block', frame: 'fore', along: -4, perp: 0, w: 30 * b, h: 24 * b, kind: 'plate', cham: 0.5 }); }
   else parts.push({ t: 'disc', at: 'elbow', r: 12.5 * b }, { t: 'disc', at: 'elbow', r: 7 * b });
