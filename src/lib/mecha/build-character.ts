@@ -32,6 +32,14 @@ export function rgbaToPixelGrid(s: MechaSpriteData): PixelGrid {
   return grid;
 }
 
+/** 节点键 → 部位（近/远两侧共用精灵，预览合成与装配共用此表） */
+export const MECHA_NODE_PARTS: Record<string, MechaPartKey> = {
+  pelvis: 'torso', head: 'head',
+  arm_upper_N: 'armUpper', arm_fore_N: 'armFore',
+  arm_upper_F: 'armUpper', arm_fore_F: 'armFore',
+  leg_N: 'leg', leg_F: 'leg',
+};
+
 export interface MechaCharacterAssembly {
   nodes: Record<string, Node>;
   rootNodeId: string;
@@ -118,13 +126,7 @@ export function assembleMechaCharacter(opts: {
     name: MECHA_FAMILIES.find((f) => f.id === family)?.name ?? family,
     pieces: {},
   };
-  const assign: Record<string, MechaPartKey> = {
-    pelvis: 'torso', head: 'head',
-    arm_upper_N: 'armUpper', arm_fore_N: 'armFore',
-    arm_upper_F: 'armUpper', arm_fore_F: 'armFore',
-    leg_N: 'leg', leg_F: 'leg',
-  };
-  for (const [nodeKey, part] of Object.entries(assign)) {
+  for (const [nodeKey, part] of Object.entries(MECHA_NODE_PARTS)) {
     const piece = pieceOf(nodeKey, part);
     nodes[nodeKey]!.slot = piece;
     costumeSet.pieces[nodes[nodeKey]!.id] = piece;
@@ -144,4 +146,47 @@ export function buildMechaCharacter(opts: {
   const partSet = generateMechaPartSet(opts.family);
   const assembly = assembleMechaCharacter({ ...opts, partSet });
   return { partSet, assembly };
+}
+
+/** createMechaCharacterInStore 需要的 store 表面（与项目 store 同名同签） */
+export interface MechaStoreSurface {
+  canvasWidth: number;
+  canvasHeight: number;
+  addUnifiedCharacter: (name: string, opts?: { skipPlaceholderRoot?: boolean }) => { id: string };
+  addSprite: (name: string, width: number, height: number, opts?: { plugX?: number; plugY?: number }) => { id?: string };
+  setSpritePixels: (id: string, pixels: PixelGrid) => void;
+  updateSprite: (id: string, updates: { origin?: { characterId: string; boneName?: string }; folder?: string }) => void;
+  updateUnifiedCharacter: (id: string, updates: Record<string, unknown>) => void;
+}
+
+/**
+ * 向导的生成动作（唯一实现，组件与校验共用）：建角色 → 五件精灵
+ * 入全局表（带出生标签）→ 组装数据一次写入。
+ */
+export function createMechaCharacterInStore(
+  store: MechaStoreSurface,
+  opts: { name: string; family: MechaFamily },
+): { characterId: string; costumeSetId: string } {
+  const partSet = generateMechaPartSet(opts.family);
+  const character = store.addUnifiedCharacter(opts.name, { skipPlaceholderRoot: true });
+  const spriteIds = {} as Record<MechaPartKey, string>;
+  for (const key of MECHA_PART_KEYS) {
+    const s = partSet[key];
+    const spr = store.addSprite(`${opts.name}_${MECHA_PART_LABELS[key]}`, s.width, s.height, {
+      plugX: Math.round(s.plug.x), plugY: Math.round(s.plug.y),
+    });
+    store.setSpritePixels(spr.id!, rgbaToPixelGrid(s));
+    store.updateSprite(spr.id!, { origin: { characterId: character.id, boneName: key }, folder: '方向/东' });
+    spriteIds[key] = spr.id!;
+  }
+  const assembly = assembleMechaCharacter({
+    characterId: character.id, family: opts.family,
+    canvasSize: { w: store.canvasWidth, h: store.canvasHeight },
+    partSet, spriteIds,
+  });
+  store.updateUnifiedCharacter(character.id, {
+    nodes: assembly.nodes, rootNodeId: assembly.rootNodeId,
+    costumeSets: [assembly.costumeSet], activeCostumeSetId: assembly.costumeSet.id,
+  });
+  return { characterId: character.id, costumeSetId: assembly.costumeSet.id };
 }

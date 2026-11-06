@@ -11,6 +11,7 @@ import {
   FileUp,
   Package,
   Dog,
+  Bot,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -28,6 +29,7 @@ import PuppetCreationWizard from './PuppetCreationWizard';
 import SpineImportDialog from './SpineImportDialog';
 import StrokeBuildWizard from './puppet/StrokeBuildWizard';
 import ThreeBakeDialog from './puppet/ThreeBakeDialog';
+import MechaWizard from './MechaWizard';
 
 /**
  * 统一新建角色入口（工具栏常驻）：全部新建方式收在一处——创建
@@ -48,6 +50,7 @@ export default function NewCharacterMenu() {
   const [strokeWizardOpen, setStrokeWizardOpen] = useState(false);
   const [spineImportOpen, setSpineImportOpen] = useState(false);
   const [threeBakeOpen, setThreeBakeOpen] = useState(false);
+  const [mechaOpen, setMechaOpen] = useState(false);
 
   const openRefAssembly = () => {
     const editor = useEditorStore.getState();
@@ -101,6 +104,9 @@ export default function NewCharacterMenu() {
           <DropdownMenuItem className={itemCls} onClick={() => setStrokeWizardOpen(true)}>
             <PenLine className={iconCls} /> 画火柴人建角
           </DropdownMenuItem>
+          <DropdownMenuItem className={itemCls} onClick={() => setMechaOpen(true)}>
+            <Bot className={iconCls} /> 机甲生成
+          </DropdownMenuItem>
           <DropdownMenuItem className={itemCls} onClick={() => setThreeBakeOpen(true)}>
             <Box className={iconCls} /> 3D 烘焙导入（GLB）
           </DropdownMenuItem>
@@ -122,6 +128,7 @@ export default function NewCharacterMenu() {
       <StrokeBuildWizard open={strokeWizardOpen} onClose={() => setStrokeWizardOpen(false)} />
       <SpineImportDialog open={spineImportOpen} onClose={() => setSpineImportOpen(false)} />
       <ThreeBakeDialog open={threeBakeOpen} onClose={() => setThreeBakeOpen(false)} />
+      <MechaWizard open={mechaOpen} onClose={() => setMechaOpen(false)} />
     </>
   );
 }
