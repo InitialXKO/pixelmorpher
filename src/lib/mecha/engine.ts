@@ -1368,3 +1368,4 @@ function renderHeadIR(cv: MechaCanvas, ir: HeadIR, spec: HeadSpec): Anchors {
 }
 export { SCHEMES, newCanvas, layout, finishRender, legIR, renderIR, makeLayerTools, armIR, renderArmIR, torsoIR, renderTorsoIR, hullIR, renderHullIR, headIR, renderHeadIR };
 export type { Scheme, LegSpec, ArmSpec, TorsoSpec, HullSpec, HeadSpec, Anchors, Pt };
+export { W as MECHA_W, H as MECHA_H };
