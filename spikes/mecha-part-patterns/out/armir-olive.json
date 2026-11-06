@@ -97,12 +97,12 @@
   {
    "t": "disc",
    "at": "shoulder",
-   "r": 15.3
+   "r": 19.38
   },
   {
    "t": "disc",
    "at": "shoulder",
-   "r": 8.67
+   "r": 11.22
   },
   {
    "t": "segPlate",
@@ -123,36 +123,66 @@
   {
    "t": "cable",
    "seg": "upper",
-   "perp": 29.580000000000002,
-   "sag": 7,
+   "perp": 30.6,
+   "sag": 30,
+   "r": 6.5
+  },
+  {
+   "t": "rodLink",
+   "fromSeg": "upper",
+   "fromS": 0.84,
+   "fromPerp": 24.48,
+   "toSeg": "fore",
+   "toS": 0.16,
+   "toPerp": 22.44,
    "r": 4.5
   },
   {
    "t": "rodLink",
    "fromSeg": "upper",
-   "fromS": 0.8,
-   "fromPerp": 30.6,
+   "fromS": 0.9,
+   "fromPerp": 24.48,
    "toSeg": "fore",
-   "toS": 0.2,
-   "toPerp": 28.560000000000002,
+   "toS": 0.26,
+   "toPerp": 22.44,
+   "r": 2.4
+  },
+  {
+   "t": "rod",
+   "seg": "fore",
+   "perp": 24.48,
+   "s0": 0.05,
+   "s1": 0.24,
+   "r": 4
+  },
+  {
+   "t": "rod",
+   "seg": "fore",
+   "perp": 24.48,
+   "s0": 0.24,
+   "s1": 0.36,
+   "r": 2.2
+  },
+  {
+   "t": "discAt",
+   "frame": "fore",
+   "along": 7.4,
+   "perp": 24.48,
    "r": 5
   },
   {
-   "t": "rodLink",
-   "fromSeg": "upper",
-   "fromS": 0.88,
-   "fromPerp": 30.6,
-   "toSeg": "fore",
-   "toS": 0.3,
-   "toPerp": 28.560000000000002,
-   "r": 2.8
+   "t": "discAt",
+   "frame": "fore",
+   "along": 35.519999999999996,
+   "perp": 24.48,
+   "r": 4.5
   },
   {
    "t": "cable",
    "seg": "fore",
-   "perp": -27.54,
-   "sag": 4,
-   "r": 2.5
+   "perp": 29.580000000000002,
+   "sag": 20,
+   "r": 6
   },
   {
    "t": "disc",
@@ -183,14 +213,6 @@
    "kind": "frame"
   },
   {
-   "t": "rod",
-   "seg": "fore",
-   "perp": 30.6,
-   "s0": 0.03,
-   "s1": 0.45,
-   "r": 5
-  },
-  {
    "t": "segPlate",
    "seg": "fore",
    "w0": 57.120000000000005,
@@ -207,14 +229,6 @@
    "w": 44.88,
    "h": 13,
    "kind": "frame"
-  },
-  {
-   "t": "rod",
-   "seg": "fore",
-   "perp": 30.6,
-   "s0": 0.4,
-   "s1": 0.9,
-   "r": 2.8
   },
   {
    "t": "block",

@@ -123,16 +123,16 @@
   {
    "t": "cable",
    "seg": "upper",
-   "perp": 24.65,
-   "sag": 7,
-   "r": 4.5
+   "perp": 25.5,
+   "sag": 30,
+   "r": 6.5
   },
   {
    "t": "cable",
    "seg": "fore",
-   "perp": -22.95,
-   "sag": 4,
-   "r": 2.5
+   "perp": 24.65,
+   "sag": 20,
+   "r": 6
   },
   {
    "t": "block",

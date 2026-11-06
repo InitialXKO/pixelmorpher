@@ -1460,21 +1460,26 @@ function armIR(spec: ArmSpec): ArmIR {
     for (let k = 0; k < 3; k++) parts.push({ t: 'segCore', seg, w0: (w0 + (w1 - w0) * (k / 3)) * b, w1: (w0 + (w1 - w0) * ((k + 1) / 3)) * b, s0: k / 3 + 0.01, s1: (k + 1) / 3 - 0.01 });
   parts.push({ t: 'block', frame: 'shoulder', along: -4, perp: 2, w: 44 * b, h: 36 * b, angOff: 0.15, kind: 'frame' });
   parts.push({ t: 'block', frame: 'shoulder', along: 2, perp: 27 * b, w: 14 * b, h: 22 * b, kind: 'frame' }, { t: 'block', frame: 'shoulder', along: 2, perp: -27 * b, w: 14 * b, h: 22 * b, kind: 'frame' });
-  parts.push({ t: 'disc', at: 'shoulder', r: 15 * b }, { t: 'disc', at: 'shoulder', r: 8.5 * b });
+  parts.push({ t: 'disc', at: 'shoulder', r: (spec.family === 'olive' ? 19 : 15) * b }, { t: 'disc', at: 'shoulder', r: (spec.family === 'olive' ? 11 : 8.5) * b });
   plates('upper', spec.upperLen, 56 * b, 50 * b);
-  if (spec.gear.cable) parts.push({ t: 'cable', seg: 'upper', perp: 29 * b, sag: 7, r: 4.5 });
-  if (spec.gear.piston) { parts.push({ t: 'rodLink', fromSeg: 'upper', fromS: 0.8, fromPerp: 30 * b, toSeg: 'fore', toS: 0.2, toPerp: 28 * b, r: 5 }); parts.push({ t: 'rodLink', fromSeg: 'upper', fromS: 0.88, fromPerp: 30 * b, toSeg: 'fore', toS: 0.3, toPerp: 28 * b, r: 2.8 }); }
-  if (spec.gear.cable) parts.push({ t: 'cable', seg: 'fore', perp: -27 * b, sag: 4, r: 2.5 });
+  if (spec.gear.cable) parts.push({ t: 'cable', seg: 'upper', perp: 30 * b, sag: 30, r: 6.5 }); // 外环粗缆（olive/cyber 式大垂环）
+  if (spec.gear.piston) { // 短栈贴关节（cyber 式）：套筒+铬杆只跨肘口，前臂内一节短栈，环节点缀盘
+    parts.push({ t: 'rodLink', fromSeg: 'upper', fromS: 0.84, fromPerp: 24 * b, toSeg: 'fore', toS: 0.16, toPerp: 22 * b, r: 4.5 });
+    parts.push({ t: 'rodLink', fromSeg: 'upper', fromS: 0.9, fromPerp: 24 * b, toSeg: 'fore', toS: 0.26, toPerp: 22 * b, r: 2.4 });
+    parts.push({ t: 'rod', seg: 'fore', perp: 24 * b, s0: 0.05, s1: 0.24, r: 4 });
+    parts.push({ t: 'rod', seg: 'fore', perp: 24 * b, s0: 0.24, s1: 0.36, r: 2.2 });
+    parts.push({ t: 'discAt', frame: 'fore', along: spec.foreLen * 0.05, perp: 24 * b, r: 5 });
+    parts.push({ t: 'discAt', frame: 'fore', along: spec.foreLen * 0.24, perp: 24 * b, r: 4.5 });
+  }
+  if (spec.gear.cable) parts.push({ t: 'cable', seg: 'fore', perp: 29 * b, sag: 20, r: 6 });
   if (spec.form.elbow === 'ring') { parts.push({ t: 'block', frame: 'fore', along: 0, perp: 0, w: 23 * b, h: 23 * b, kind: 'frame' }); parts.push({ t: 'disc', at: 'elbow', r: 12.5 * b }); parts.push({ t: 'disc', at: 'elbow', r: 7 * b }); }
   else if (spec.form.elbow === 'small') { parts.push({ t: 'disc', at: 'elbow', r: 8.5 * b }); parts.push({ t: 'block', frame: 'fore', along: -4, perp: 0, w: 30 * b, h: 24 * b, kind: 'plate', cham: 0.5 }); }
   else parts.push({ t: 'disc', at: 'elbow', r: 12.5 * b }, { t: 'disc', at: 'elbow', r: 7 * b });
   parts.push({ t: 'block', frame: 'fore', along: 0, perp: 19 * b, w: 15 * b, h: 24 * b, kind: 'frame' }, { t: 'block', frame: 'fore', along: 0, perp: -19 * b, w: 15 * b, h: 24 * b, kind: 'frame' });
-  if (spec.gear.piston) parts.push({ t: 'rod', seg: 'fore', perp: 30 * b, s0: 0.03, s1: 0.45, r: 5 });
   if (spec.form.fore === 'housing') {
     parts.push({ t: 'segPlate', seg: 'fore', w0: 56 * b, w1: 46 * b, s0: 0.03, s1: 0.97, role: spec.gear.stripe ? 'stripe' : undefined });
     parts.push({ t: 'block', frame: 'fore', along: spec.foreLen * 0.3, perp: -27 * b, w: 44 * b, h: 13, kind: 'frame' }); // 顶部导轨座
   } else plates('fore', spec.foreLen, 58 * b, 43 * b);
-  if (spec.gear.piston) parts.push({ t: 'rod', seg: 'fore', perp: 30 * b, s0: 0.4, s1: 0.9, r: 2.8 });
   if (spec.gear.device) { parts.push({ t: 'block', frame: 'fore', along: spec.foreLen * 0.45, perp: -26 * b, w: 20, h: 26, kind: 'frame' }); parts.push({ t: 'block', frame: 'fore', along: spec.foreLen * 0.45, perp: -27 * b, w: 13, h: 18, kind: 'plate' }); parts.push({ t: 'light', frame: 'fore', along: spec.foreLen * 0.45, perp: -30 * b }); }
   parts.push({ t: 'disc', at: 'wrist', r: 8.5 * b }, { t: 'disc', at: 'wrist', r: 4.5 * b });
   parts.push({ t: 'block', frame: 'wrist', along: 16, perp: 0, w: 36 * b, h: 26 * b, kind: 'plate', bolts: true });
