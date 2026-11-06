@@ -1813,16 +1813,17 @@ function renderHeadIR(cv: Canvas, ir: HeadIR, spec: HeadSpec): Anchors {
   const tIR = torsoIR(tSpec), tAnch = tIR.anchors;
   const legNear: LegSpec = { topology: 'standard', scheme: SCHEMES.olive, seed: 11, bend: 22, camo: true, wear: 0.3, wScale: 1.1, lift: 20, detail: 0.65, ankleShift: 12, coreScale: 1.05 };
   const legFar: LegSpec = { topology: 'standard', scheme: SCHEMES.olive, seed: 11, bend: 0, camo: true, wear: 0.3 };
-  const aFarLeg = layout(cv, legFar, { hip: { x: tAnch.hip.x - 16, y: tAnch.hip.y - 2 }, knee: { x: tAnch.hip.x + 10, y: tAnch.hip.y + 130 }, ankle: { x: tAnch.hip.x - 40, y: tAnch.hip.y + 248 }, toeX: tAnch.hip.x + 14 });
+  const aFarLeg = layout(cv, legFar, { hip: { x: tAnch.hip.x - 12, y: tAnch.hip.y - 6 }, knee: { x: tAnch.hip.x - 4, y: tAnch.hip.y + 111 }, ankle: { x: tAnch.hip.x - 50, y: tAnch.hip.y + 237 }, toeX: tAnch.hip.x - 4 }); // 远腿后撤步
   const armBase = { scheme: SCHEMES.olive, family: 'olive', seed: 7, wear: 0.3, camo: true, twoTone: true, diag: 0.5, bulk: 0.68, shell: 0.8, hand: 'fist' as const, gear: { cable: true, piston: true, device: true, stripe: true }, form: { shell: 'box' as const, elbow: 'disc' as const, fore: 'housing' as const, fingerLen: 18, fingerCurl: 0.5 } };
-  const aFarArm = renderArmIR(cv, armIR({ ...armBase, root: { x: tAnch.shoulder.x - 14, y: tAnch.shoulder.y - 3 }, upperLen: 78, foreLen: 98, upperAng: 0.3, elbowBend: 0.22 }), { ...armBase, root: { x: tAnch.shoulder.x - 14, y: tAnch.shoulder.y - 3 }, upperLen: 78, foreLen: 98, upperAng: 0.3, elbowBend: 0.22 });
-  const aNearLeg = layout(cv, legNear, { hip: { x: tAnch.hip.x + 4, y: tAnch.hip.y - 4 }, knee: { x: tAnch.hip.x + 62, y: tAnch.hip.y + 131 }, ankle: { x: tAnch.hip.x + 1, y: tAnch.hip.y + 253 }, toeX: tAnch.hip.x + 67 });
+  const aFarArm = renderArmIR(cv, armIR({ ...armBase, root: { x: tAnch.shoulder.x - 14, y: tAnch.shoulder.y - 3 }, upperLen: 78, foreLen: 98, upperAng: -0.45, elbowBend: 0.25 }), { ...armBase, root: { x: tAnch.shoulder.x - 14, y: tAnch.shoulder.y - 3 }, upperLen: 78, foreLen: 98, upperAng: -0.45, elbowBend: 0.25 });
+  const aNearLeg = layout(cv, legNear, { hip: { x: tAnch.hip.x + 6, y: tAnch.hip.y - 4 }, knee: { x: tAnch.hip.x + 62, y: tAnch.hip.y + 109 }, ankle: { x: tAnch.hip.x + 16, y: tAnch.hip.y + 241 }, toeX: tAnch.hip.x + 74 }); // 近腿前迈步
   const tA = renderTorsoIR(cv, tIR, tSpec);
   const hSpec: HeadSpec = { family: 'olive', twoTone: true, scheme: SCHEMES.olive, seed: 7, wear: 0.3, camo: true, seat: { x: neck.x + 8, y: neck.y - 2 }, w: 62, h: 54, tilt: 0.03, form: { crown: 'angular', eye: 'slit', brow: true, jaw: 'respirator', ear: 'grille', top: 'horn', cheekCable: false } };
   const hA = renderHeadIR(cv, headIR(hSpec), hSpec);
-  const nearSpec: ArmSpec = { ...armBase, root: tAnch.shoulder, upperLen: 78, foreLen: 98, upperAng: 0.14, elbowBend: 0.1 };
+  const nearSpec: ArmSpec = { ...armBase, root: tAnch.shoulder, upperLen: 78, foreLen: 98, upperAng: -0.25, elbowBend: 0.75 };
   const aNearArm = renderArmIR(cv, armIR(nearSpec), nearSpec);
   // Anchors 合并：图以 id 为键合并、数组拼接、单例按归属（徽记/编号归躯干、饰带/贴花归腿）
+  for (const a of [aFarLeg, aFarArm]) for (const [k, v] of a.plateTint) a.plateTint.set(k, (v as number) * 0.72); // 远侧压暗分前后
   const M = tA;
   for (const a of [aFarLeg, aFarArm, aNearLeg, hA, aNearArm]) {
     for (const k of ['plateTint', 'panelLines', 'seamU', 'panelDiag', 'panelTee', 'colorRole'] as const) for (const [kk, vv] of (a as unknown as Record<string, Map<number, never>>)[k]) (M as unknown as Record<string, Map<number, never>>)[k].set(kk, vv);

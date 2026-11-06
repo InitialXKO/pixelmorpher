@@ -1221,7 +1221,7 @@ function blockPolyT(cx: number, cy: number, w: number, h: number, ang: number, c
   }
   return raw.map((q) => ({ x: cx + q.x * ca - q.y * sa, y: cy + q.x * sa + q.y * ca }));
 }
-interface LayerTools { segPlate: (a: Pt, b: Pt, wA: number, wB: number, t0: number, t1: number, gap?: number, kind?: Kind) => number; A: Anchors; addBlock: (kind: Kind, cx: number, cy: number, w: number, h: number, ang?: number, cham?: number, bolts?: boolean) => number; addDisc: (kind: Kind, c: Pt, r: number) => number; addPoly: (pts: Pt[], bolts?: boolean) => number; addRaw: (kind: Kind, test: (x: number, y: number) => [boolean, number, number]) => number; rod: (a: Pt, b: Pt, r: number) => number; grille: (cx: number, cy: number, w: number, h: number) => void; finish: () => void }
+interface LayerTools { segPlate: (a: Pt, b: Pt, wA: number, wB: number, t0: number, t1: number, gap?: number, kind?: Kind) => number; A: Anchors; addBlock: (kind: Kind, cx: number, cy: number, w: number, h: number, ang?: number, cham?: number, bolts?: boolean) => number; addDisc: (kind: Kind, c: Pt, r: number) => number; addPoly: (pts: Pt[], bolts?: boolean) => number; addRaw: (kind: Kind, test: (x: number, y: number) => [boolean, number, number]) => number; rod: (a: Pt, b: Pt, r: number) => number; grille: (cx: number, cy: number, w: number, h: number) => void; glacis: (cx: number, cy: number, w: number, h: number, slope: number) => number; portArray: (cx: number, cy: number, w: number, h: number, cols: number, rows: number) => void; nozzle: (a: Pt, b: Pt, r0: number, r1: number) => void; wing: (cx: number, cy: number, len: number, wRoot: number, wTip: number, ang: number) => number; finish: () => void }
 function makeLayerTools(cv: Canvas, seed: number): LayerTools {
   const rnd = mulberry32(seed);
   let id = 0;
@@ -1246,6 +1246,10 @@ function makeLayerTools(cv: Canvas, seed: number): LayerTools {
   };
   const addDisc = (kind: Kind, c: Pt, r: number): number => { cv.insts.push({ kind }); const myId = id; fillShape(cv, id, discTest(c, r)); id++; A.discs.push({ id: myId, c, r, hv: 0.5 }); return myId; };
   const grille = (cx: number, cy: number, w: number, h: number) => { addBlock('plate', cx, cy, w, h, 0, 0.2); for (let k = 0; k < 3; k++) addBlock('frame', cx, cy - h / 2 + 6 + k * ((h - 8) / 2), w - 4, 4.5, 0, 0.1); };
+  const glacis = (cx: number, cy: number, w: number, h: number, slope: number) => { const pts: Pt[] = [{ x: cx - w / 2, y: cy - h / 2 }, { x: cx + w / 2 - slope, y: cy - h / 2 }, { x: cx + w / 2, y: cy - h / 2 + slope * 0.62 }, { x: cx + w / 2, y: cy + h / 2 - 4 }, { x: cx + w / 2 - 5, y: cy + h / 2 }, { x: cx - w / 2 + 5, y: cy + h / 2 }, { x: cx - w / 2, y: cy + h / 2 - 4 }]; return addPoly(pts); }; // 斜面箱：前上长斜面切角的箱体
+  const portArray = (cx: number, cy: number, w: number, h: number, cols: number, rows: number) => { addBlock('plate', cx, cy, w, h, 0, 0.18); for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { const px = cx - w / 2 + (c + 0.5) * (w / cols), py = cy - h / 2 + (r + 0.5) * (h / rows), rr = Math.min(w / cols, h / rows) * 0.3; addDisc('disc', { x: px, y: py }, rr); addDisc('frame', { x: px, y: py }, rr * 0.55); } }; // 管口阵列：底板 + 网格口（金属环+暗口）
+  const nozzle = (a: Pt, b: Pt, r0: number, r1: number) => { const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy), ux = dx / len, uy = dy / len; addRaw('cyl', (x, y) => { const t = ((x - a.x) * ux + (y - a.y) * uy) / len; if (t < 0 || t > 1) return [false, 0, 0]; const px = a.x + ux * len * t, py = a.y + uy * len * t, d = Math.hypot(x - px, y - py), rr = r0 + (r1 - r0) * t * t; return [d <= rr, t, d / rr]; }); addDisc('frame', b, r1 * 0.78); }; // 钟形喷口：半径沿轴 t² 张开 + 暗口面
+  const wing = (cx: number, cy: number, len: number, wRoot: number, wTip: number, ang: number) => { const c = Math.cos(ang), s = Math.sin(ang), loc: Pt[] = [{ x: -len / 2, y: -wRoot / 2 }, { x: len / 2, y: -wTip / 2 }, { x: len / 2 + wTip * 0.7, y: 0 }, { x: len / 2, y: wTip / 2 }, { x: -len / 2, y: wRoot / 2 }]; return addPoly(loc.map((p) => ({ x: cx + p.x * c - p.y * s, y: cy + p.x * s + p.y * c }))); }; // 翼板：根宽尖细的薄板（厚度走全局边面组）
   const segPlate = (a: Pt, b: Pt, wA: number, wB: number, t0: number, t1: number, gap = 2.5, kind: Kind = 'plate'): number => {
     const jit = (rnd() - 0.5) * 6, rot = (rnd() - 0.5) * 0.1, proud = 1.03 + rnd() * 0.09;
     const f0 = segFrame(a, b), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
@@ -1263,7 +1267,7 @@ function makeLayerTools(cv: Canvas, seed: number): LayerTools {
   const addRaw = (kind: Kind, test: (x: number, y: number) => [boolean, number, number]): number => { cv.insts.push({ kind }); const myId = id; fillShape(cv, id, test); id++; return myId; };
   const rod = (a: Pt, b: Pt, r: number): number => addRaw('cyl', lineTest(a, b, r));
   const finish = () => { for (let i = 0; i < W * H; i++) if (cv.owner[i] >= 0) cv.sil[i] = 1; };
-  return { A, addBlock, addDisc, addPoly, addRaw, rod, grille, finish, segPlate };
+  return { A, addBlock, addDisc, addPoly, addRaw, rod, grille, glacis, portArray, nozzle, wing, finish, segPlate };
 }
 function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
   const T = makeLayerTools(cv, 999); const { A, addBlock, addDisc, grille, finish } = T;
