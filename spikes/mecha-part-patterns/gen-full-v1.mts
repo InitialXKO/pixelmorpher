@@ -351,7 +351,7 @@ const FONT: Record<string, string[]> = {
 };
 
 // ---------- 布局 ----------
-interface LegSpec { noGround?: boolean; topology: 'standard' | 'reverse'; scheme: Scheme; seed: number; bend: number; camo: boolean; wear?: number; frameHeavy?: boolean; shellMode?: boolean; wScale?: number; lift?: number; guardOff?: boolean; detail?: number; ankleShift?: number; cableTint?: RGB; decalKind?: 'num' | 'plate' | 'none'; coreScale?: number; footType?: 'blocks' | 'shoe' | 'claw' | 'pad' }
+interface LegSpec { topology: 'standard' | 'reverse'; scheme: Scheme; seed: number; bend: number; camo: boolean; wear?: number; frameHeavy?: boolean; shellMode?: boolean; wScale?: number; lift?: number; guardOff?: boolean; detail?: number; ankleShift?: number; cableTint?: RGB; decalKind?: 'num' | 'plate' | 'none'; coreScale?: number; footType?: 'blocks' | 'shoe' | 'claw' | 'pad' }
 interface Anchors {
   plateTint: Map<number, number>; panelLines: Map<number, number[]>;
   boltPts: Pt[]; ventId: number; guardId: number; stripeId: number;
@@ -1130,17 +1130,7 @@ function finishRender(cv: Canvas, A: Anchors, spec: LegSpec) {
     const f = 1 - 0.16 * t * (0.6 + 0.4 * vnoise(x / 6, y / 6, spec.seed + 9));
     set(i, ramp(get(i), f));
   }
-  // 接地阴影：脚下半透明椭圆（剪影外落笔，锚定站立感）
-  if (!spec.noGround) {
-    const cxG = (A.discs[2]?.c.x ?? 178) + 36, cyG = 494, rxG = 108, ryG = 13;
-    for (let y = cyG - ryG - 2; y <= cyG + ryG + 2; y++) for (let x = cxG - rxG - 2; x <= cxG + rxG + 2; x++) {
-      if (x < 0 || x >= W || y < 0 || y >= H) continue;
-      const i = y * W + x;
-      if (cv.col[i * 4 + 3] !== 0) continue;
-      const q = ((x - cxG) / rxG) ** 2 + ((y - cyG) / ryG) ** 2;
-      if (q < 1) { cv.col[i * 4] = 6; cv.col[i * 4 + 1] = 10; cv.col[i * 4 + 2] = 12; cv.col[i * 4 + 3] = Math.round(115 * (1 - q) ** 1.5); }
-    }
-  }
+  // （接地阴影已移除：它不是机甲的一部分，属于展示层，不进生成管线——2026-11-06 用户裁定）
   // 描边
   for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
     const i = y * W + x;
@@ -1313,7 +1303,7 @@ function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
 {
   const oliveSpec: LegSpec = { topology: 'standard', scheme: SCHEMES.olive, seed: 11, bend: 22, camo: true, wear: 0.3, wScale: 1.1, lift: 20, detail: 0.65, ankleShift: 12, coreScale: 1.05 };
   const farSpec: LegSpec = { topology: 'standard', scheme: SCHEMES.olive, seed: 11, bend: 0, camo: true, wear: 0.3 };
-  const torsoSpec: LegSpec = { topology: 'standard', scheme: SCHEMES.olive, seed: 11, bend: 0, camo: true, wear: 0.3, detail: 1, noGround: true };
+  const torsoSpec: LegSpec = { topology: 'standard', scheme: SCHEMES.olive, seed: 11, bend: 0, camo: true, wear: 0.3, detail: 1 };
   const farCv = render(farSpec), nearCv = render(oliveSpec);
   const tCv = newCanvas(); const tA = layoutTorso(tCv, torsoSpec); finishRender(tCv, tA, torsoSpec);
   const W2 = 380, H2 = 730;
