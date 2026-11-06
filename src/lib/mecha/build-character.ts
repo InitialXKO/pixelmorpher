@@ -1,24 +1,35 @@
 // ============================================================
 // 机甲角色构建：部位精灵 → 产品真角色数据。
-// 节点树用静态插座（offset3D = 子关节 − 父关节，静止位形）+
-// 姿态角归零，与产品 3D 管线定案同构；精灵插头存关节点。
-// 产出 { nodes, rootNodeId, costumeSet }，精灵由调用方先经
-// store.addSprite + setSpritePixels 建入全局精灵表后把 id 传入。
+//
+// 接线口径（与产品自家笔触建骨 stroke-build 同构，渲染器实测）：
+// - 朝向统一东向（variantIndex 0）。东向投影下：模型 z = 前向
+//   （画布横轴）、模型 y = 纵向、模型 x = 侧深（depth = −x：近侧
+//   取负、远侧取正，深度主导画序，节点 zIndex 只作同深度次键）。
+// - 结构插座（骨盆→头/肩根/髋根、挂载件）：offset3D 写
+//   { x: 侧深, y: 纵, z: 前向 }。
+// - 肢链（臂/腿）：笔触 2D 口径——子插座 basePosition (0, 骨长)、
+//   节点角 = 骨向角（根为绝对角、余为相对父角，θ=atan2(−dx,dy)，
+//   0 = 正下），精灵按规范直姿出图、插头在近端关节。
+// - 每条肢链顺手配一条 2bone IK 链（默认禁用，目标=静止尖端位），
+//   与笔触向导同口径，用户在 IK 面板启用/改目标即可用；导出走
+//   角色 ikChains 既有通道（烘焙/实时档）。
+// 产出 { nodes, rootNodeId, costumeSet, ikChains }，精灵由调用方
+// 先经 store 建入全局精灵表后把 id 传入。
 // ============================================================
 import { createDefaultNode, createDefaultCostumePiece, pxToSub } from '../unified-types';
-import type { Node, CostumeSet, CostumePiece, PixelGrid, DirectionIndex } from '../unified-types';
-import { generateMechaPartSet, generateMechaHull, generateMechaHullBody, generateMechaTurret, generateMechaWheelLeg, generateMechaTrackUnit, generateMechaMultiLeg, generateMechaJetpack, generateMechaWeapon, mechaFamilyArmorHex, MECHA_FAMILIES } from './parts';
+import type { Node, CostumeSet, CostumePiece, PixelGrid, DirectionIndex, IKChain } from '../unified-types';
+import { generateMechaPartSet, generateMechaHull, generateMechaHullBody, generateMechaTurret, generateMechaTrackUnit, generateMechaJetpack, generateMechaWeapon, generateMechaWheelLegParts, generateMechaMultiLegParts, mechaFamilyArmorHex, MECHA_FAMILIES } from './parts';
 import type { MechaChestVariant } from './parts';
 import type { MechaFamily, MechaPartSet, MechaSpriteData } from './parts';
-import type { WeaponKind } from './gear';
 
-export type MechaPartKey = 'leg' | 'armUpper' | 'armFore' | 'torso' | 'head'
-  | 'wheelLeg' | 'trackUnit' | 'jetpack' | 'pod' | 'podPylon' | 'cannon' | 'rifle';
-/** 基础五件（蓝图机甲源与默认装配用） */
+export type MechaPartKey = 'leg' | 'legThigh' | 'legShin' | 'legFoot' | 'armUpper' | 'armFore' | 'armHand' | 'torso' | 'head'
+  | 'wheelThigh' | 'wheelShin' | 'wheelFoot' | 'multiUpper' | 'multiLower' | 'trackUnit' | 'jetpack' | 'pod' | 'podPylon' | 'cannon' | 'rifle';
+/** 基础五件（蓝图机甲源用） */
 export const MECHA_PART_KEYS: MechaPartKey[] = ['leg', 'armUpper', 'armFore', 'torso', 'head'];
 export const MECHA_PART_LABELS: Record<MechaPartKey, string> = {
-  leg: '腿', armUpper: '上臂', armFore: '前臂', torso: '躯干', head: '头',
-  wheelLeg: '轮足腿', trackUnit: '履带底盘', jetpack: '喷射背包', pod: '导弹荚', podPylon: '导弹荚·高架', cannon: '臂炮', rifle: '步枪',
+  leg: '腿', legThigh: '大腿', legShin: '小腿', legFoot: '足', armUpper: '上臂', armFore: '前臂', armHand: '手', torso: '躯干', head: '头',
+  wheelThigh: '轮足大腿', wheelShin: '轮足小腿', wheelFoot: '轮组足', multiUpper: '多足上段', multiLower: '多足下段',
+  trackUnit: '履带底盘', jetpack: '喷射背包', pod: '导弹荚', podPylon: '导弹荚·高架', cannon: '臂炮', rifle: '步枪',
 };
 
 /** 人形构建选项：胸型变体 / 底盘 / 挂载装备（缺省 = 基础双足无装备） */
@@ -35,12 +46,12 @@ export type MechaPodMount = 'rear' | 'pylon' | 'outboard' | 'low';
 export const MECHA_POD_MOUNT_LABELS: Record<MechaPodMount, string> = {
   rear: '后偏肩挂', pylon: '高架背挂', outboard: '外侧肩挂', low: '低位贴胸挂',
 };
-const POD_MOUNT_WIRE: Record<MechaPodMount, { dx: number; dy: number; from: 'shoulder' | 'hip'; z: number }> = {
-  // 荚体原点在底部挂点（高架为撑杆足）；偏移以肩/颈锚点为参照系
-  rear: { dx: -100, dy: -146, from: 'hip', z: 2 },
-  pylon: { dx: -97, dy: -155, from: 'hip', z: -1 },
-  outboard: { dx: 58, dy: 30, from: 'shoulder', z: 4 },
-  low: { dx: 34, dy: 62, from: 'shoulder', z: 3 },
+/** 挂位接线（模型坐标：side 侧深 / down 纵 / fwd 前向；z = 同深度次键） */
+const POD_MOUNT_WIRE: Record<MechaPodMount, { side: number; down: number; fwd: number; z: number }> = {
+  rear: { side: 0, down: -146, fwd: -100, z: 2 },
+  pylon: { side: 0, down: -155, fwd: -97, z: -1 },
+  outboard: { side: -18, down: -161, fwd: 103, z: 4 },
+  low: { side: -10, down: -129, fwd: 79, z: 3 },
 };
 export const MECHA_CHASSIS_LABELS = { biped: '双足', wheel: '轮足', tracks: '履带' } as const;
 
@@ -60,53 +71,113 @@ export function rgbaToPixelGrid(s: MechaSpriteData): PixelGrid {
   return grid;
 }
 
-/** 节点键 → 部位（近/远两侧共用精灵，预览合成与装配共用此表） */
-export const MECHA_NODE_PARTS: Record<string, MechaPartKey> = {
-  pelvis: 'torso', head: 'head',
-  arm_upper_N: 'armUpper', arm_fore_N: 'armFore',
-  arm_upper_F: 'armUpper', arm_fore_F: 'armFore',
-  leg_N: 'leg', leg_F: 'leg',
-};
+/** 精灵最近邻缩放（尺寸设置用；插头同步缩放） */
+export function scaleSpriteData(s: MechaSpriteData, scale: number): MechaSpriteData {
+  if (Math.abs(scale - 1) < 1e-6) return s;
+  const w = Math.max(1, Math.round(s.width * scale)), h = Math.max(1, Math.round(s.height * scale));
+  const rgba = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const sx = Math.min(s.width - 1, Math.floor(x / scale)), sy = Math.min(s.height - 1, Math.floor(y / scale));
+    rgba.set(s.rgba.subarray((sy * s.width + sx) * 4, (sy * s.width + sx) * 4 + 4), (y * w + x) * 4);
+  }
+  return { rgba, width: w, height: h, plug: { x: s.plug.x * scale, y: s.plug.y * scale } };
+}
+
+// ---------- 接线小工具（组装内部共用） ----------
+const SUB = pxToSub;
+type NodeMap = Record<string, Node>;
+
+function mkNode(nodes: NodeMap, cid: string, key: string, name: string, parentKey?: string, angle = 0): Node {
+  const node = createDefaultNode(`node_${cid}_${key}`, name);
+  if (parentKey) node.parentId = nodes[parentKey]!.id;
+  node.transform = { ...node.transform, variantIndex: 0 as DirectionIndex, angle };
+  nodes[key] = node;
+  return node;
+}
+
+function linkChildren(nodes: NodeMap): void {
+  for (const n of Object.values(nodes)) {
+    if (n.parentId) {
+      const parent = Object.values(nodes).find((p) => p.id === n.parentId)!;
+      parent.children = [...parent.children, n.id];
+    }
+  }
+}
+
+/** 结构插座：offset3D = { x: 侧深, y: 纵, z: 前向 }（像素，调用方已乘尺寸） */
+function sock3(nodes: NodeMap, parentKey: string, childKey: string, side: number, down: number, fwd: number): void {
+  const parent = nodes[parentKey]!, node = nodes[childKey]!;
+  const sockId = `sock_${childKey}`;
+  parent.sockets = [...parent.sockets, {
+    id: sockId, name: childKey, basePosition: { x: 0, y: 0 }, directionOffsets: {},
+    offset3D: { x: SUB(side), y: SUB(down), z: SUB(fwd) },
+  }];
+  node.attachment = { type: 'socket', parentSocketId: sockId, plug: { x: 0, y: 0 } } as Node['attachment'];
+}
+
+/** 肢链插座：笔触口径 basePosition (0, 骨长)，无 offset3D */
+function sockLimb(nodes: NodeMap, parentKey: string, childKey: string, lenPx: number): void {
+  const parent = nodes[parentKey]!, node = nodes[childKey]!;
+  const sockId = `sock_${childKey}`;
+  parent.sockets = [...parent.sockets, {
+    id: sockId, name: childKey, basePosition: { x: 0, y: SUB(Math.max(0, lenPx)) }, directionOffsets: {},
+  }];
+  node.attachment = { type: 'socket', parentSocketId: sockId, plug: { x: 0, y: 0 } } as Node['attachment'];
+}
+
+/** 骨向单位向量（设计平面：f 前向 / d 纵；θ 度，0=正下） */
+function dirOf(deg: number): { f: number; d: number } {
+  const t = (deg * Math.PI) / 180;
+  return { f: -Math.sin(t), d: Math.cos(t) };
+}
 
 export interface MechaCharacterAssembly {
   nodes: Record<string, Node>;
   rootNodeId: string;
   costumeSet: CostumeSet;
+  ikChains: IKChain[];
 }
 
-/** 节点键 → 部位键（按构建选项；装配与向导预览共用） */
+function buildCostumeSet(cid: string, suffix: string, name: string, nodes: NodeMap, nodeParts: Record<string, string>, spriteIds: Record<string, string>, fill: string): CostumeSet {
+  const costumeSet: CostumeSet = { id: `costume_${cid}_${suffix}`, name, pieces: {} };
+  for (const [nodeKey, part] of Object.entries(nodeParts)) {
+    if (!nodes[nodeKey] || !spriteIds[part]) continue;
+    const piece: CostumePiece = createDefaultCostumePiece(nodes[nodeKey]!.id, fill);
+    piece.sprites = { 0: { spriteId: spriteIds[part]! } } as typeof piece.sprites;
+    nodes[nodeKey]!.slot = piece;
+    costumeSet.pieces[nodes[nodeKey]!.id] = piece;
+  }
+  return costumeSet;
+}
+
+/** 人形节点→部位映射（装配与向导预览共用，随构建选项变化） */
 export function mechaHumanoidNodeParts(build?: MechaBuildOptions): Record<string, string> {
-  const B: MechaBuildOptions = build ?? {};
-  const chassis = B.chassis ?? 'biped';
+  const B = build ?? {};
+  const wheel = B.chassis === 'wheel';
   const map: Record<string, string> = {
     pelvis: 'torso', head: 'head',
-    arm_upper_N: 'armUpper', arm_fore_N: 'armFore',
-    arm_upper_F: 'armUpper', arm_fore_F: 'armFore',
+    arm_upper_N: 'armUpper', arm_fore_N: 'armFore', arm_hand_N: 'armHand',
+    arm_upper_F: 'armUpper', arm_fore_F: 'armFore', arm_hand_F: 'armHand',
   };
-  if (chassis === 'tracks') map.tracks = 'trackUnit';
-  else { const leg = chassis === 'wheel' ? 'wheelLeg' : 'leg'; map.leg_N = leg; map.leg_F = leg; }
+  if (B.chassis !== 'tracks') {
+    for (const s of ['N', 'F'] as const) {
+      map[`leg_thigh_${s}`] = wheel ? 'wheelThigh' : 'legThigh';
+      map[`leg_shin_${s}`] = wheel ? 'wheelShin' : 'legShin';
+      map[`leg_foot_${s}`] = wheel ? 'wheelFoot' : 'legFoot';
+    }
+  } else {
+    map.tracks = 'trackUnit';
+  }
   if (B.jetpack) map.jetpack = 'jetpack';
   if (B.podMount) map.pod = B.podMount === 'pylon' ? 'podPylon' : 'pod';
   if (B.weapon) map.weapon = B.weapon;
   return map;
 }
+export const MECHA_NODE_PARTS: Record<string, string> = mechaHumanoidNodeParts();
 
-/** 载具节点键 → 部位键（装配与向导预览共用） */
-export function mechaVehicleNodeParts(vehicle: MechaVehicleOptions): Record<string, string> {
-  const map: Record<string, string> = { hull: 'hullBody' };
-  const mob = vehicle.mobility;
-  if (mob === 'tracks') { map.track_N = 'trackUnit'; map.track_F = 'trackUnit'; }
-  else if (mob === 'legs') { map.leg_front = 'leg'; map.leg_rear = 'leg'; }
-  else if (mob === 'quad') { map.quad_fN = 'multiLeg'; map.quad_fF = 'multiLeg'; map.quad_rN = 'multiLeg'; map.quad_rF = 'multiLeg'; }
-  else { for (const k of ['spider_fN', 'spider_mN', 'spider_rN', 'spider_fF', 'spider_mF', 'spider_rF']) map[k] = 'multiLeg'; }
-  if (vehicle.turret) map.turret = 'turret';
-  return map;
-}
+const SIDE_SIGN = { N: -1, F: 1 } as const; // 近侧 x 取负（depth=−x 更大=更靠前）
 
-/**
- * 组装机甲角色数据（纯函数）。spriteIds = 五件精灵在全局表中的 id
- * （近/远两侧共用同一精灵，靠节点位移与绘制序区分）。
- */
+/** 纯组装（精灵 id 由调用方备好后传入）：人形 */
 export function assembleMechaCharacter(opts: {
   characterId: string;
   family: MechaFamily;
@@ -114,127 +185,108 @@ export function assembleMechaCharacter(opts: {
   partSet: MechaPartSet;
   spriteIds: Record<string, string>;
   build?: MechaBuildOptions;
+  scale?: number;
 }): MechaCharacterAssembly {
-  const { characterId: cid, family, canvasSize, partSet, spriteIds } = opts;
-  const B: MechaBuildOptions = opts.build ?? {};
-  const chassis = B.chassis ?? 'biped';
-  const SUB = pxToSub;
-  const nodes: Record<string, Node> = {};
-  const mk = (key: string, name: string, parentKey?: string): Node => {
-    const node = createDefaultNode(`node_${cid}_${key}`, name);
-    if (parentKey) node.parentId = nodes[parentKey]!.id;
-    node.transform = { ...node.transform, variantIndex: 0 as DirectionIndex };
-    nodes[key] = node;
-    return node;
-  };
-  const pelvis = mk('pelvis', '骨盆');
+  const { characterId: cid, canvasSize, partSet: ps } = opts;
+  const B = opts.build ?? {};
+  const sc = opts.scale ?? 1;
+  const S = ps.torsoSockets;
+  const G = ps.geom, R = ps.rest;
+  const nodes: NodeMap = {};
+  const mk = (key: string, name: string, parentKey?: string, angle = 0) => mkNode(nodes, cid, key, name, parentKey, angle);
+
+  mk('pelvis', '骨盆·躯干');
   mk('head', '头', 'pelvis');
-  mk('arm_upper_N', '上臂·近', 'pelvis');
-  mk('arm_fore_N', '前臂·近', 'arm_upper_N');
-  mk('arm_upper_F', '上臂·远', 'pelvis');
-  mk('arm_fore_F', '前臂·远', 'arm_upper_F');
-  if (chassis === 'tracks') mk('tracks', '履带底盘', 'pelvis');
-  else { mk('leg_N', '腿·近', 'pelvis'); mk('leg_F', '腿·远', 'pelvis'); }
-  if (B.jetpack) mk('jetpack', '喷射背包', 'pelvis');
-  if (B.podMount) mk('pod', '导弹荚', 'pelvis');
-  if (B.weapon) mk('weapon', B.weapon === 'cannon' ? '臂炮' : '步枪', 'arm_fore_N');
-  for (const n of Object.values(nodes)) {
-    if (n.parentId) {
-      const parent = Object.values(nodes).find((p) => p.id === n.parentId)!;
-      parent.children = [...parent.children, n.id];
+  for (const s of ['N', 'F'] as const) {
+    const tag = s === 'N' ? '近' : '远';
+    mk(`arm_upper_${s}`, `上臂·${tag}`, 'pelvis', R.armUpper);
+    mk(`arm_fore_${s}`, `前臂·${tag}`, `arm_upper_${s}`, R.armFore);
+    mk(`arm_hand_${s}`, `手·${tag}`, `arm_fore_${s}`, 0);
+    if (B.chassis !== 'tracks') {
+      mk(`leg_thigh_${s}`, `大腿·${tag}`, 'pelvis', R.legThigh);
+      mk(`leg_shin_${s}`, `小腿·${tag}`, `leg_thigh_${s}`, R.legShin);
+      mk(`leg_foot_${s}`, `足·${tag}`, `leg_shin_${s}`, R.legFoot);
     }
   }
-  // 静态插座：offset3D 存子关节相对父关节的静止偏移（全局像素，Y-down）
-  const wire = (parentKey: string, key: string, off: { x: number; y: number }) => {
-    const parent = nodes[parentKey]!, node = nodes[key]!;
-    const sockId = `sock_${parentKey}_${key}`;
-    parent.sockets = [...parent.sockets, {
-      id: sockId, name: key, basePosition: { x: 0, y: 0 }, directionOffsets: {},
-      offset3D: { x: SUB(off.x), y: SUB(off.y), z: 0 },
-    }];
-    node.attachment = { type: 'socket', parentSocketId: sockId, plug: { x: 0, y: 0 } } as Node['attachment'];
-  };
-  const S = partSet.torsoSockets;
-  wire('pelvis', 'head', S.neck);
-  wire('pelvis', 'arm_upper_N', S.shoulder);
-  wire('pelvis', 'arm_upper_F', { x: S.shoulder.x - 34, y: S.shoulder.y - 2 });
-  wire('arm_upper_N', 'arm_fore_N', partSet.elbowOff);
-  wire('arm_upper_F', 'arm_fore_F', partSet.elbowOff);
-  if (chassis === 'tracks') wire('pelvis', 'tracks', { x: S.hip.x, y: S.hip.y + 4 });
-  else {
-    wire('pelvis', 'leg_N', { x: S.hip.x + 10, y: S.hip.y - 2 });
-    wire('pelvis', 'leg_F', { x: S.hip.x - 24, y: S.hip.y - 4 });
+  if (B.chassis === 'tracks') mk('tracks', '履带底盘', 'pelvis');
+  if (B.jetpack) mk('jetpack', '喷射背包', 'pelvis');
+  if (B.podMount) mk('pod', '导弹荚', 'pelvis');
+  if (B.weapon) mk('weapon', B.weapon === 'cannon' ? '臂炮' : '步枪', B.weapon === 'cannon' ? 'arm_fore_N' : 'arm_hand_N');
+  linkChildren(nodes);
+
+  // 结构插座（模型坐标：x 侧深 / y 纵 / z 前向，均 × 尺寸）
+  sock3(nodes, 'pelvis', 'head', 0, S.neck.y * sc, S.neck.x * sc);
+  for (const s of ['N', 'F'] as const) {
+    const sg = SIDE_SIGN[s];
+    sock3(nodes, 'pelvis', `arm_upper_${s}`, sg * 14 * sc, (S.shoulder.y + (s === 'F' ? -2 : 0)) * sc, (S.shoulder.x + (s === 'F' ? -6 : 0)) * sc);
+    sockLimb(nodes, `arm_upper_${s}`, `arm_fore_${s}`, G.upperLen * sc);
+    sockLimb(nodes, `arm_fore_${s}`, `arm_hand_${s}`, G.foreLen * sc);
+    if (B.chassis !== 'tracks') {
+      sock3(nodes, 'pelvis', `leg_thigh_${s}`, sg * 12 * sc, (S.hip.y + (s === 'N' ? -2 : -4)) * sc, (S.hip.x + (s === 'N' ? 10 : 2)) * sc);
+      sockLimb(nodes, `leg_thigh_${s}`, `leg_shin_${s}`, G.thighLen * sc);
+      sockLimb(nodes, `leg_shin_${s}`, `leg_foot_${s}`, G.shinLen * sc);
+    }
   }
-  if (B.jetpack) wire('pelvis', 'jetpack', { x: -72, y: -128 });
-  if (B.podMount) {
-    const w = POD_MOUNT_WIRE[B.podMount];
-    const base = w.from === 'shoulder' ? S.shoulder : S.hip;
-    wire('pelvis', 'pod', { x: base.x + w.dx, y: base.y + w.dy });
-  }
-  if (B.weapon) {
-    // 武器对齐前臂静止方向（节点角为度）：臂炮原点在腕、步枪原点在掌
-    const off = B.weapon === 'cannon' ? partSet.wristOff : partSet.palmOff;
-    wire('arm_fore_N', 'weapon', off);
-    const deg = Math.atan2(off.y, off.x) * 180 / Math.PI;
-    nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: deg };
-  }
-  // 根定位与绘制序（远侧在后、躯干居中、近侧在前）
-  // 根定位：横向居中；纵向保证头部不被画布顶裁（角色总高约 790px，
-  // 头顶在骨盆上方约 316px），矮画布上脚部溢出由用户平移/缩放解决
-  const rootY = Math.max(320, Math.min(canvasSize.h * 0.42, canvasSize.h - 200));
+  if (B.chassis === 'tracks') sock3(nodes, 'pelvis', 'tracks', 0, 4 * sc, 0);
+  if (B.jetpack) sock3(nodes, 'pelvis', 'jetpack', 0, -128 * sc, -72 * sc);
+  if (B.podMount) { const w = POD_MOUNT_WIRE[B.podMount]; sock3(nodes, 'pelvis', 'pod', w.side * sc, w.down * sc, w.fwd * sc); }
+  if (B.weapon === 'cannon') { sockLimb(nodes, 'arm_fore_N', 'weapon', (G.foreLen - 8) * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: 90 }; }
+  if (B.weapon === 'rifle') { sockLimb(nodes, 'arm_hand_N', 'weapon', 10 * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: -(R.armUpper + R.armFore) }; }
+
+  // 根定位（根 x 存画布中心口径，与既有角色一致）
+  const rootY = Math.max(320, Math.min(canvasSize.h * 0.42, 800));
+  const pelvis = nodes.pelvis!;
   pelvis.transform = { ...pelvis.transform, x: SUB(canvasSize.w / 2), y: SUB(rootY) };
-  pelvis.isCore = true; pelvis.zIndex = 1;
-  nodes.head!.zIndex = 2;
-  if (chassis === 'tracks') { nodes.tracks!.zIndex = 0; }
-  else {
-    nodes.leg_N!.zIndex = 4; nodes.leg_N!.side = 'L'; // 近腿压近臂（与已验合成序一致）
-    nodes.leg_F!.zIndex = 0; nodes.leg_F!.side = 'R';
+  pelvis.isCore = true;
+
+  // 画序次键（同深度内）：深度（侧深 x）为主键，zIndex 只作次键
+  const zset: Record<string, number> = { pelvis: 1, head: 2, tracks: 0, jetpack: -1 };
+  for (const s of ['N', 'F'] as const) {
+    const zArm = s === 'N' ? 3 : 0, zLeg = s === 'N' ? 4 : 0;
+    zset[`arm_upper_${s}`] = zArm; zset[`arm_fore_${s}`] = zArm; zset[`arm_hand_${s}`] = zArm;
+    zset[`leg_thigh_${s}`] = zLeg; zset[`leg_shin_${s}`] = zLeg; zset[`leg_foot_${s}`] = zLeg;
+    const sideVal = s === 'N' ? 'L' : 'R';
+    for (const k of [`arm_upper_${s}`, `arm_fore_${s}`, `arm_hand_${s}`, `leg_thigh_${s}`, `leg_shin_${s}`, `leg_foot_${s}`]) {
+      if (nodes[k]) nodes[k]!.side = sideVal as Node['side'];
+    }
   }
-  if (B.jetpack) nodes.jetpack!.zIndex = -1; // 背挂在躯干之后
-  if (B.podMount) nodes.pod!.zIndex = POD_MOUNT_WIRE[B.podMount].z;
-  if (B.weapon) nodes.weapon!.zIndex = 4;
-  nodes.arm_upper_N!.zIndex = 3; nodes.arm_upper_N!.side = 'L';
-  nodes.arm_fore_N!.zIndex = 3; nodes.arm_fore_N!.side = 'L';
-  nodes.arm_upper_F!.zIndex = 0; nodes.arm_upper_F!.side = 'R';
-  nodes.arm_fore_F!.zIndex = 0; nodes.arm_fore_F!.side = 'R';
-  // 服装集：一集 = 本族全套；件按节点 id 键，精灵登记在东向（0），
-  // 西向由默认镜像表回落，其余方向为单向角色的既有空缺（与装配
-  // 向导的逐方向装配同状态）。
-  const fill = mechaFamilyArmorHex(family);
-  const pieceOf = (nodeKey: string, part: string): CostumePiece => {
-    const piece = createDefaultCostumePiece(nodes[nodeKey]!.id, fill);
-    piece.sprites = { 0: { spriteId: spriteIds[part] } } as typeof piece.sprites;
-    return piece;
+  if (B.weapon) zset.weapon = 4;
+  if (B.podMount) zset.pod = POD_MOUNT_WIRE[B.podMount].z;
+  for (const [k, z] of Object.entries(zset)) if (nodes[k]) nodes[k]!.zIndex = z;
+
+  // IK 链（笔触口径顺手配链：2bone、默认禁用、目标=静止尖端位）
+  const ikChains: IKChain[] = [];
+  const mkChain = (key: string, name: string, rootKey: string, endKey: string, tipF: number, tipD: number, sideDepth: number) => {
+    ikChains.push({
+      id: `ik_${cid}_${key}`, name,
+      rootNodeId: nodes[rootKey]!.id, endNodeId: nodes[endKey]!.id,
+      target: { x: canvasSize.w / 2 + tipF, y: rootY + tipD },
+      target3D: { x: sideDepth, y: tipD, z: tipF },
+      solver: '2bone', bendDir: 1, enabled: false,
+    });
   };
-  const costumeSet: CostumeSet = {
-    id: `costume_${cid}_mecha`,
-    name: MECHA_FAMILIES.find((f) => f.id === family)?.name ?? family,
-    pieces: {},
-  };
-  const nodeParts = mechaHumanoidNodeParts(B);
-  for (const [nodeKey, part] of Object.entries(nodeParts)) {
-    const piece = pieceOf(nodeKey, part);
-    nodes[nodeKey]!.slot = piece;
-    costumeSet.pieces[nodes[nodeKey]!.id] = piece;
+  for (const s of ['N', 'F'] as const) {
+    const tag = s === 'N' ? '近' : '远';
+    const shF = (S.shoulder.x + (s === 'F' ? -6 : 0)) * sc, shD = (S.shoulder.y + (s === 'F' ? -2 : 0)) * sc;
+    const d1 = dirOf(R.armUpper), d2 = dirOf(R.armUpper + R.armFore);
+    const elF = shF + d1.f * G.upperLen * sc, elD = shD + d1.d * G.upperLen * sc;
+    const wrF = elF + d2.f * G.foreLen * sc, wrD = elD + d2.d * G.foreLen * sc;
+    mkChain(`arm_${s}`, `手臂·${tag}`, `arm_upper_${s}`, `arm_hand_${s}`, wrF + d2.f * G.foreLen * sc, wrD + d2.d * G.foreLen * sc, SIDE_SIGN[s] * 14 * sc);
+    if (B.chassis !== 'tracks') {
+      const hipF = (S.hip.x + (s === 'N' ? 10 : 2)) * sc, hipD = (S.hip.y + (s === 'N' ? -2 : -4)) * sc;
+      const e1 = dirOf(R.legThigh), e2 = dirOf(R.legThigh + R.legShin), e3 = dirOf(R.legThigh + R.legShin + R.legFoot);
+      const knF = hipF + e1.f * G.thighLen * sc, knD = hipD + e1.d * G.thighLen * sc;
+      const anF = knF + e2.f * G.shinLen * sc, anD = knD + e2.d * G.shinLen * sc;
+      mkChain(`leg_${s}`, `腿·${tag}`, `leg_thigh_${s}`, `leg_foot_${s}`, anF + e3.f * G.shinLen * sc, anD + e3.d * G.shinLen * sc, SIDE_SIGN[s] * 12 * sc);
+    }
   }
+
+  const costumeSet = buildCostumeSet(cid, 'main', '机甲', nodes, mechaHumanoidNodeParts(B), opts.spriteIds, mechaFamilyArmorHex(opts.family));
   const nodesById: Record<string, Node> = {};
   for (const n of Object.values(nodes)) nodesById[n.id] = n;
-  return { nodes: nodesById, rootNodeId: pelvis.id, costumeSet };
+  return { nodes: nodesById, rootNodeId: pelvis.id, costumeSet, ikChains };
 }
 
-/** 一站式：生成部位并组装（精灵 id 由调用方预先建好并传入） */
-export function buildMechaCharacter(opts: {
-  characterId: string;
-  family: MechaFamily;
-  canvasSize: { w: number; h: number };
-  spriteIds: Record<MechaPartKey, string>;
-}): { partSet: MechaPartSet; assembly: MechaCharacterAssembly } {
-  const partSet = generateMechaPartSet(opts.family);
-  const assembly = assembleMechaCharacter({ ...opts, partSet });
-  return { partSet, assembly };
-}
-
-/** createMechaCharacterInStore 需要的 store 表面（与项目 store 同名同签） */
 export interface MechaStoreSurface {
   canvasWidth: number;
   canvasHeight: number;
@@ -245,54 +297,61 @@ export interface MechaStoreSurface {
   updateUnifiedCharacter: (id: string, updates: Record<string, unknown>) => void;
 }
 
-/**
- * 向导的生成动作（唯一实现，组件与校验共用）：建角色 → 五件精灵
- * 入全局表（带出生标签）→ 组装数据一次写入。
- */
-export function createMechaCharacterInStore(
-  store: MechaStoreSurface,
-  opts: { name: string; family: MechaFamily; build?: MechaBuildOptions },
-): { characterId: string; costumeSetId: string } {
-  const B: MechaBuildOptions = opts.build ?? {};
-  const chassis = B.chassis ?? 'biped';
-  const partSet = generateMechaPartSet(opts.family, B.chest);
-  const character = store.addUnifiedCharacter(opts.name, { skipPlaceholderRoot: true });
-  const plan: { key: string; data: MechaSpriteData }[] = [
-    { key: 'torso', data: partSet.torso }, { key: 'head', data: partSet.head },
-    { key: 'armUpper', data: partSet.armUpper }, { key: 'armFore', data: partSet.armFore },
-  ];
-  if (chassis === 'biped') plan.push({ key: 'leg', data: partSet.leg });
-  if (chassis === 'wheel') plan.push({ key: 'wheelLeg', data: generateMechaWheelLeg(opts.family) });
-  if (chassis === 'tracks') plan.push({ key: 'trackUnit', data: generateMechaTrackUnit(opts.family) });
-  if (B.jetpack) plan.push({ key: 'jetpack', data: generateMechaJetpack(opts.family) });
-  if (B.weapon) plan.push({ key: B.weapon, data: generateMechaWeapon(opts.family, B.weapon) });
-  if (B.podMount) { const pk = B.podMount === 'pylon' ? 'podPylon' : 'pod'; plan.push({ key: pk, data: generateMechaWeapon(opts.family, pk) }); }
+function registerSprites(store: MechaStoreSurface, characterId: string, name: string, plan: { key: string; data: MechaSpriteData }[], scale: number): Record<string, string> {
   const spriteIds: Record<string, string> = {};
-  for (const { key, data: s } of plan) {
-    const label = MECHA_PART_LABELS[key as MechaPartKey] ?? key;
-    const spr = store.addSprite(`${opts.name}_${label}`, s.width, s.height, {
+  for (const { key, data } of plan) {
+    const s = scaleSpriteData(data, scale);
+    const spr = store.addSprite(`${name}_${MECHA_PART_LABELS[key as MechaPartKey] ?? key}`, s.width, s.height, {
       plugX: Math.round(s.plug.x), plugY: Math.round(s.plug.y),
     });
     store.setSpritePixels(spr.id!, rgbaToPixelGrid(s));
-    store.updateSprite(spr.id!, { origin: { characterId: character.id, boneName: key }, folder: '方向/东' });
+    store.updateSprite(spr.id!, { origin: { characterId, boneName: key }, folder: '方向/东' });
     spriteIds[key] = spr.id!;
   }
+  return spriteIds;
+}
+
+/** 向导的生成动作：建角色 → 精灵入表 → 组装（含 IK 链）一次写入 */
+export function createMechaCharacterInStore(
+  store: MechaStoreSurface,
+  opts: { name: string; family: MechaFamily; build?: MechaBuildOptions; scale?: number },
+): { characterId: string; costumeSetId: string } {
+  const B = opts.build ?? {};
+  const scale = opts.scale ?? 1;
+  const character = store.addUnifiedCharacter(opts.name, { skipPlaceholderRoot: true });
+  const partSet = generateMechaPartSet(opts.family, B.chest);
+  const plan: { key: string; data: MechaSpriteData }[] = [
+    { key: 'torso', data: partSet.torso }, { key: 'head', data: partSet.head },
+    { key: 'armUpper', data: partSet.armUpper }, { key: 'armFore', data: partSet.armFore }, { key: 'armHand', data: partSet.armHand },
+  ];
+  if (B.chassis === 'tracks') {
+    plan.push({ key: 'trackUnit', data: generateMechaTrackUnit(opts.family) });
+  } else if (B.chassis === 'wheel') {
+    const wp = generateMechaWheelLegParts(opts.family);
+    plan.push({ key: 'wheelThigh', data: wp.thigh }, { key: 'wheelShin', data: wp.shin }, { key: 'wheelFoot', data: wp.foot });
+  } else {
+    plan.push({ key: 'legThigh', data: partSet.legThigh }, { key: 'legShin', data: partSet.legShin }, { key: 'legFoot', data: partSet.legFoot });
+  }
+  if (B.jetpack) plan.push({ key: 'jetpack', data: generateMechaJetpack(opts.family) });
+  if (B.podMount) { const pk = B.podMount === 'pylon' ? 'podPylon' : 'pod'; plan.push({ key: pk, data: generateMechaWeapon(opts.family, pk) }); }
+  if (B.weapon) plan.push({ key: B.weapon, data: generateMechaWeapon(opts.family, B.weapon) });
+  const spriteIds = registerSprites(store, character.id, opts.name, plan, scale);
   const assembly = assembleMechaCharacter({
     characterId: character.id, family: opts.family,
     canvasSize: { w: store.canvasWidth, h: store.canvasHeight },
-    partSet, spriteIds, build: B,
+    partSet, spriteIds, build: B, scale,
   });
   store.updateUnifiedCharacter(character.id, {
-    nodes: assembly.nodes, rootNodeId: assembly.rootNodeId,
+    nodes: assembly.nodes, rootNodeId: assembly.rootNodeId, ikChains: assembly.ikChains,
     costumeSets: [assembly.costumeSet], activeCostumeSetId: assembly.costumeSet.id,
   });
   return { characterId: character.id, costumeSetId: assembly.costumeSet.id };
 }
 
 // ============================================================
-// 载具型角色：车体为根，移动件与炮塔都是真节点。
-// 甲板为原点口径：hullBody 精灵插头 = 甲板，移动件挂甲板下方，
-// 炮塔挂甲板上方转轴点。
+// 载具型角色：车体为根。步行腿走与人形同一条肢链口径（大腿/小腿/
+// 足三节点 + IK 链）；蜘蛛/四足腿两段（髋节点 + 膝下段节点）；
+// 履带/炮塔为结构插座节点。甲板为原点：hullBody 插头 = 甲板。
 // ============================================================
 export interface MechaVehicleOptions {
   hull: 'walker' | 'hauler';
@@ -304,13 +363,38 @@ export const MECHA_VEHICLE_LABELS = {
   mobility: { legs: '步行腿', tracks: '双履带', quad: '四足', spider: '蜘蛛六足' },
 } as const;
 
-/** 载具移动件精灵（walker 系橄榄、hauler 系白色敏捷近似 slate） */
+/** 载具移动件族（walker 系橄榄、hauler 系白色敏捷近似 slate） */
+export function mechaMobilityFamily(hull: 'walker' | 'hauler'): MechaFamily {
+  return hull === 'walker' ? 'olive' : 'agile';
+}
+
+/** 载具移动件整件精灵（兼容旧调用：预览缩略等；装配用分段件） */
 export function generateMechaMobilitySprite(hull: 'walker' | 'hauler', mobility: MechaVehicleOptions['mobility']): MechaSpriteData {
-  const fam: MechaFamily = hull === 'walker' ? 'olive' : 'agile';
+  const fam = mechaMobilityFamily(hull);
   if (mobility === 'tracks') return generateMechaTrackUnit(fam);
-  if (mobility === 'quad') return generateMechaMultiLeg(fam, 'quad');
-  if (mobility === 'spider') return generateMechaMultiLeg(fam, 'spider');
+  if (mobility === 'quad' || mobility === 'spider') {
+    const p = generateMechaMultiLegParts(fam, mobility);
+    return p.upper;
+  }
   return generateMechaPartSet(fam).leg;
+}
+
+/** 载具节点→部位映射（装配与向导预览共用） */
+export function mechaVehicleNodeParts(vehicle: MechaVehicleOptions): Record<string, string> {
+  const map: Record<string, string> = { hull: 'hullBody' };
+  const mob = vehicle.mobility;
+  if (mob === 'tracks') { map.track_N = 'trackUnit'; map.track_F = 'trackUnit'; }
+  else if (mob === 'legs') {
+    for (const s of ['N', 'F'] as const) {
+      map[`leg_thigh_${s}`] = 'legThigh'; map[`leg_shin_${s}`] = 'legShin'; map[`leg_foot_${s}`] = 'legFoot';
+    }
+  } else {
+    const prof = mob === 'quad' ? 'quad' : 'spider';
+    const legs = prof === 'quad' ? ['fN', 'fF', 'rN', 'rF'] : ['fN', 'mN', 'rN', 'fF', 'mF', 'rF'];
+    for (const lg of legs) { map[`${prof}_${lg}`] = 'multiUpper'; map[`${prof}_${lg}_shin`] = 'multiLower'; }
+  }
+  if (vehicle.turret) map.turret = 'turret';
+  return map;
 }
 
 export function assembleMechaVehicle(opts: {
@@ -318,117 +402,146 @@ export function assembleMechaVehicle(opts: {
   canvasSize: { w: number; h: number };
   vehicle: MechaVehicleOptions;
   spriteIds: Record<string, string>;
+  partSet?: MechaPartSet;
+  scale?: number;
 }): MechaCharacterAssembly {
   const { characterId: cid, canvasSize, vehicle: V } = opts;
-  const SUB = pxToSub;
-  const nodes: Record<string, Node> = {};
-  const mk = (key: string, name: string, parentKey?: string): Node => {
-    const node = createDefaultNode(`node_${cid}_${key}`, name);
-    if (parentKey) node.parentId = nodes[parentKey]!.id;
-    node.transform = { ...node.transform, variantIndex: 0 as DirectionIndex };
-    nodes[key] = node;
-    return node;
-  };
-  const hull = mk('hull', V.hull === 'walker' ? '车体·步行' : '车体·运输');
+  const sc = opts.scale ?? 1;
   const mob = V.mobility;
-  if (mob === 'tracks') { mk('track_N', '履带·近', 'hull'); mk('track_F', '履带·远', 'hull'); }
-  else if (mob === 'legs') { mk('leg_front', '腿·前', 'hull'); mk('leg_rear', '腿·后', 'hull'); }
-  else if (mob === 'quad') { mk('quad_fN', '四足·前近', 'hull'); mk('quad_fF', '四足·前远', 'hull'); mk('quad_rN', '四足·后近', 'hull'); mk('quad_rF', '四足·后远', 'hull'); }
-  else { mk('spider_fN', '蛛腿·前近', 'hull'); mk('spider_mN', '蛛腿·中近', 'hull'); mk('spider_rN', '蛛腿·后近', 'hull'); mk('spider_fF', '蛛腿·前远', 'hull'); mk('spider_mF', '蛛腿·中远', 'hull'); mk('spider_rF', '蛛腿·后远', 'hull'); }
-  if (V.turret) mk('turret', V.hull === 'walker' ? '炮塔' : '顶架', 'hull');
-  for (const n of Object.values(nodes)) {
-    if (n.parentId) {
-      const parent = Object.values(nodes).find((p) => p.id === n.parentId)!;
-      parent.children = [...parent.children, n.id];
+  const mobFam = mechaMobilityFamily(V.hull);
+  const nodes: NodeMap = {};
+  const mk = (key: string, name: string, parentKey?: string, angle = 0) => mkNode(nodes, cid, key, name, parentKey, angle);
+
+  mk('hull', V.hull === 'walker' ? '车体·步行' : '车体·运输');
+  const ikChains: IKChain[] = [];
+  // 甲板下沿约 +110（车体底边）：移动件座/髋挂此带
+  if (mob === 'tracks') {
+    mk('track_F', '履带·远', 'hull'); mk('track_N', '履带·近', 'hull');
+    linkChildren(nodes);
+    sock3(nodes, 'hull', 'track_F', 12 * sc, 108 * sc, -14 * sc);
+    sock3(nodes, 'hull', 'track_N', -12 * sc, 112 * sc, 14 * sc);
+    nodes.track_F!.side = 'R'; nodes.track_N!.side = 'L';
+    nodes.track_F!.zIndex = 0; nodes.track_N!.zIndex = 3;
+  } else if (mob === 'legs') {
+    const ps = opts.partSet ?? generateMechaPartSet(mobFam);
+    const G = ps.geom, R = ps.rest;
+    for (const s of ['N', 'F'] as const) {
+      const tag = s === 'N' ? '后' : '前';
+      mk(`leg_thigh_${s}`, `大腿·${tag}`, 'hull', R.legThigh);
+      mk(`leg_shin_${s}`, `小腿·${tag}`, `leg_thigh_${s}`, R.legShin);
+      mk(`leg_foot_${s}`, `足·${tag}`, `leg_shin_${s}`, R.legFoot);
+    }
+    linkChildren(nodes);
+    for (const s of ['N', 'F'] as const) {
+      const sg = SIDE_SIGN[s];
+      sock3(nodes, 'hull', `leg_thigh_${s}`, sg * 12 * sc, 110 * sc, (s === 'N' ? -74 : 74) * sc);
+      sockLimb(nodes, `leg_thigh_${s}`, `leg_shin_${s}`, G.thighLen * sc);
+      sockLimb(nodes, `leg_shin_${s}`, `leg_foot_${s}`, G.shinLen * sc);
+      const z = s === 'N' ? 3 : 0;
+      for (const k of [`leg_thigh_${s}`, `leg_shin_${s}`, `leg_foot_${s}`]) {
+        nodes[k]!.zIndex = z;
+        nodes[k]!.side = (s === 'N' ? 'L' : 'R') as Node['side'];
+      }
+      // IK 链（目标 = 静止足尖，甲板坐标系）
+      const hipF = (s === 'N' ? -74 : 74) * sc, hipD = 110 * sc;
+      const e1 = dirOf(R.legThigh), e2 = dirOf(R.legThigh + R.legShin), e3 = dirOf(R.legThigh + R.legShin + R.legFoot);
+      const knF = hipF + e1.f * G.thighLen * sc, knD = hipD + e1.d * G.thighLen * sc;
+      const anF = knF + e2.f * G.shinLen * sc, anD = knD + e2.d * G.shinLen * sc;
+      ikChains.push({
+        id: `ik_${cid}_leg_${s}`, name: `腿·${s === 'N' ? '后' : '前'}`,
+        rootNodeId: nodes[`leg_thigh_${s}`]!.id, endNodeId: nodes[`leg_foot_${s}`]!.id,
+        target: { x: canvasSize.w / 2 + anF + e3.f * G.shinLen * sc, y: 0 },
+        target3D: { x: sg * 12 * sc, y: anD + e3.d * G.shinLen * sc, z: anF + e3.f * G.shinLen * sc },
+        solver: '2bone', bendDir: 1, enabled: false,
+      });
+    }
+  } else {
+    const prof = mob === 'quad' ? 'quad' : 'spider';
+    const mp = generateMechaMultiLegParts(mobFam, prof);
+    const legs: { key: string; name: string; side: 'N' | 'F'; fwd: number; down: number; fan: number }[] = prof === 'quad'
+      ? [
+        { key: 'quad_fF', name: '四足·前远', side: 'F', fwd: 66, down: 104, fan: 0 },
+        { key: 'quad_rF', name: '四足·后远', side: 'F', fwd: -90, down: 104, fan: 0 },
+        { key: 'quad_fN', name: '四足·前近', side: 'N', fwd: 78, down: 110, fan: 0 },
+        { key: 'quad_rN', name: '四足·后近', side: 'N', fwd: -78, down: 110, fan: 0 },
+      ]
+      : [
+        { key: 'spider_fF', name: '蛛腿·前远', side: 'F', fwd: 62, down: 104, fan: -17 },
+        { key: 'spider_mF', name: '蛛腿·中远', side: 'F', fwd: -8, down: 108, fan: 0 },
+        { key: 'spider_rF', name: '蛛腿·后远', side: 'F', fwd: -86, down: 104, fan: 17 },
+        { key: 'spider_fN', name: '蛛腿·前近', side: 'N', fwd: 74, down: 112, fan: -24 },
+        { key: 'spider_mN', name: '蛛腿·中近', side: 'N', fwd: 0, down: 116, fan: 0 },
+        { key: 'spider_rN', name: '蛛腿·后近', side: 'N', fwd: -74, down: 112, fan: 24 },
+      ];
+    for (const lg of legs) {
+      mk(lg.key, lg.name, 'hull', mp.a1 + lg.fan);
+      mk(`${lg.key}_shin`, `${lg.name}·下段`, lg.key, mp.a2rel);
+    }
+    linkChildren(nodes);
+    for (const lg of legs) {
+      sock3(nodes, 'hull', lg.key, SIDE_SIGN[lg.side] * 12 * sc, lg.down * sc, lg.fwd * sc);
+      sockLimb(nodes, lg.key, `${lg.key}_shin`, mp.l1 * sc);
+      const z = lg.side === 'N' ? 3 : 0;
+      nodes[lg.key]!.zIndex = z;
+      nodes[`${lg.key}_shin`]!.zIndex = z;
+      nodes[lg.key]!.side = (lg.side === 'N' ? 'L' : 'R') as Node['side'];
+      nodes[`${lg.key}_shin`]!.side = (lg.side === 'N' ? 'L' : 'R') as Node['side'];
     }
   }
-  const wire = (key: string, off: { x: number; y: number }, angleDeg = 0) => {
-    const parent = nodes.hull!, node = nodes[key]!;
-    const sockId = `sock_hull_${key}`;
-    parent.sockets = [...parent.sockets, {
-      id: sockId, name: key, basePosition: { x: 0, y: 0 }, directionOffsets: {},
-      offset3D: { x: SUB(off.x), y: SUB(off.y), z: 0 },
-    }];
-    node.attachment = { type: 'socket', parentSocketId: sockId, plug: { x: 0, y: 0 } } as Node['attachment'];
-    if (angleDeg) node.transform = { ...node.transform, angle: angleDeg };
-  };
-  // 甲板下沿约 +110（车体底边）：移动件座/髋挂此带
-  if (mob === 'tracks') { wire('track_F', { x: -14, y: 108 }); wire('track_N', { x: 14, y: 112 }); }
-  else if (mob === 'legs') { wire('leg_rear', { x: -74, y: 110 }); wire('leg_front', { x: 74, y: 110 }); }
-  else if (mob === 'quad') { wire('quad_fF', { x: 66, y: 104 }); wire('quad_rF', { x: -90, y: 104 }); wire('quad_fN', { x: 78, y: 110 }); wire('quad_rN', { x: -78, y: 110 }); }
-  else {
-    wire('spider_fF', { x: 62, y: 104 }, -17); wire('spider_mF', { x: -8, y: 108 }, 0); wire('spider_rF', { x: -86, y: 104 }, 17);
-    wire('spider_fN', { x: 74, y: 112 }, -24); wire('spider_mN', { x: 0, y: 116 }, 0); wire('spider_rN', { x: -74, y: 112 }, 24);
+  if (V.turret) {
+    mk('turret', V.hull === 'walker' ? '炮塔' : '顶架', 'hull');
+    linkChildren(nodes);
+    const t = V.hull === 'walker' ? { down: -18, fwd: -15 } : { down: -17, fwd: -16 };
+    sock3(nodes, 'hull', 'turret', 0, t.down * sc, t.fwd * sc);
+    nodes.turret!.zIndex = 2;
   }
-  if (V.turret) wire('turret', V.hull === 'walker' ? { x: -15, y: -18 } : { x: -16, y: -17 });
-  // 根定位：纵向留移动件下探空间（蜘蛛最深约 deck+102+腿高 240）
+  // 根定位：纵向留移动件下探空间
   const depth = mob === 'spider' ? 350 : mob === 'tracks' ? 235 : 330;
-  const rootY = Math.max(240, Math.min(canvasSize.h * 0.34, canvasSize.h - depth * 0.55));
+  const rootY = Math.max(240, Math.min(canvasSize.h * 0.34, canvasSize.h - depth * 0.55 * sc));
+  const hull = nodes.hull!;
   hull.transform = { ...hull.transform, x: SUB(canvasSize.w / 2), y: SUB(rootY) };
-  hull.isCore = true; hull.zIndex = 1;
-  const zset: Record<string, [number, 'L' | 'R' | undefined]> = {
-    track_F: [0, 'R'], track_N: [2, 'L'],
-    leg_rear: [0, 'R'], leg_front: [3, 'L'],
-    quad_fF: [0, 'R'], quad_rF: [0, 'R'], quad_fN: [3, 'L'], quad_rN: [3, 'L'],
-    spider_fF: [0, 'R'], spider_mF: [0, 'R'], spider_rF: [0, 'R'],
-    spider_fN: [3, 'L'], spider_mN: [3, 'L'], spider_rN: [3, 'L'],
-    turret: [2, undefined],
-  };
-  for (const [k, [z, side]] of Object.entries(zset)) {
-    if (!nodes[k]) continue;
-    nodes[k]!.zIndex = z;
-    if (side) nodes[k]!.side = side;
-  }
-  const fill = mechaFamilyArmorHex(V.hull === 'walker' ? 'olive' : 'agile');
-  const nodeParts = mechaVehicleNodeParts(V);
-  const costumeSet: CostumeSet = {
-    id: `costume_${cid}_vehicle`,
-    name: MECHA_VEHICLE_LABELS.hull[V.hull],
-    pieces: {},
-  };
-  for (const [nodeKey, part] of Object.entries(nodeParts)) {
-    const piece = createDefaultCostumePiece(nodes[nodeKey]!.id, fill);
-    piece.sprites = { 0: { spriteId: opts.spriteIds[part]! } } as typeof piece.sprites;
-    nodes[nodeKey]!.slot = piece;
-    costumeSet.pieces[nodes[nodeKey]!.id] = piece;
-  }
+  hull.isCore = true;
+  hull.zIndex = 1;
+  // 载具步行腿 IK 链的 2D 目标 y 需根纵坐标（上面先占位 0，这里补齐）
+  for (const c of ikChains) c.target.y = rootY + (c.target3D?.y ?? 0);
+
+  const costumeSet = buildCostumeSet(cid, 'vehicle', MECHA_VEHICLE_LABELS.hull[V.hull], nodes, mechaVehicleNodeParts(V), opts.spriteIds, mechaFamilyArmorHex(mobFam));
   const nodesById: Record<string, Node> = {};
   for (const n of Object.values(nodes)) nodesById[n.id] = n;
-  return { nodes: nodesById, rootNodeId: hull.id, costumeSet };
+  return { nodes: nodesById, rootNodeId: hull.id, costumeSet, ikChains };
 }
 
-/** 向导的载具生成动作：车体 + 移动件 + 炮塔精灵入表 → 组装写入 */
+/** 向导的载具生成动作：车体 + 移动件（分段）+ 炮塔精灵入表 → 组装写入 */
 export function createMechaVehicleInStore(
   store: MechaStoreSurface,
-  opts: { name: string; vehicle: MechaVehicleOptions },
+  opts: { name: string; vehicle: MechaVehicleOptions; scale?: number },
 ): { characterId: string; costumeSetId: string } {
   const V = opts.vehicle;
+  const scale = opts.scale ?? 1;
+  const mobFam = mechaMobilityFamily(V.hull);
   const character = store.addUnifiedCharacter(opts.name, { skipPlaceholderRoot: true });
-  const plan: { key: string; label: string; data: MechaSpriteData }[] = [
-    { key: 'hullBody', label: '车体', data: generateMechaHullBody(V.hull) },
-    { key: 'mobility', label: MECHA_VEHICLE_LABELS.mobility[V.mobility], data: generateMechaMobilitySprite(V.hull, V.mobility) },
+  const plan: { key: string; data: MechaSpriteData }[] = [
+    { key: 'hullBody', data: generateMechaHullBody(V.hull) },
   ];
-  if (V.turret) plan.push({ key: 'turret', label: V.hull === 'walker' ? '炮塔' : '顶架', data: generateMechaTurret(V.hull) });
-  const spriteIds: Record<string, string> = {};
-  for (const { key, label, data: s } of plan) {
-    const spr = store.addSprite(`${opts.name}_${label}`, s.width, s.height, {
-      plugX: Math.round(s.plug.x), plugY: Math.round(s.plug.y),
-    });
-    store.setSpritePixels(spr.id!, rgbaToPixelGrid(s));
-    store.updateSprite(spr.id!, { origin: { characterId: character.id, boneName: key }, folder: '方向/东' });
-    spriteIds[key] = spr.id!;
+  let partSet: MechaPartSet | undefined;
+  if (V.mobility === 'tracks') {
+    plan.push({ key: 'trackUnit', data: generateMechaTrackUnit(mobFam) });
+  } else if (V.mobility === 'legs') {
+    partSet = generateMechaPartSet(mobFam);
+    plan.push({ key: 'legThigh', data: partSet.legThigh }, { key: 'legShin', data: partSet.legShin }, { key: 'legFoot', data: partSet.legFoot });
+  } else {
+    const mp = generateMechaMultiLegParts(mobFam, V.mobility);
+    plan.push({ key: 'multiUpper', data: mp.upper }, { key: 'multiLower', data: mp.lower });
   }
-  // 移动件在装配里按用途键引用（trackUnit/leg/multiLeg），与计划键对齐
-  spriteIds.trackUnit = spriteIds.mobility!;
-  spriteIds.leg = spriteIds.mobility!;
-  spriteIds.multiLeg = spriteIds.mobility!;
+  if (V.turret) plan.push({ key: 'turret', data: generateMechaTurret(V.hull) });
+  const spriteIds = registerSprites(store, character.id, opts.name, plan, scale);
   const assembly = assembleMechaVehicle({
     characterId: character.id,
     canvasSize: { w: store.canvasWidth, h: store.canvasHeight },
-    vehicle: V, spriteIds,
+    vehicle: V, spriteIds, partSet, scale,
   });
   store.updateUnifiedCharacter(character.id, {
-    nodes: assembly.nodes, rootNodeId: assembly.rootNodeId,
+    nodes: assembly.nodes, rootNodeId: assembly.rootNodeId, ikChains: assembly.ikChains,
     costumeSets: [assembly.costumeSet], activeCostumeSetId: assembly.costumeSet.id,
   });
   return { characterId: character.id, costumeSetId: assembly.costumeSet.id };

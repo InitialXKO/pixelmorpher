@@ -110,37 +110,53 @@ const MULTI_PROFILES = {
   },
 } as const;
 
-export function renderMultiLeg(cv: MechaCanvas, spec: MultiLegSpec, hip: Pt): Anchors {
+export function renderMultiLeg(cv: MechaCanvas, spec: MultiLegSpec, hip: Pt, pts?: { knee: Pt; ankle: Pt; toe: Pt }, only?: 'upper' | 'lower'): Anchors {
   const T: Tools = makeLayerTools(cv, spec.seed);
   const P = MULTI_PROFILES[spec.profile];
-  const knee = { x: hip.x + P.knee.x, y: hip.y + P.knee.y };
-  const ankle = { x: knee.x + P.ankle.x, y: knee.y + P.ankle.y };
-  const toe = { x: ankle.x + P.toe.x, y: ankle.y + P.toe.y };
+  const knee = pts?.knee ?? { x: hip.x + P.knee.x, y: hip.y + P.knee.y };
+  const ankle = pts?.ankle ?? { x: knee.x + P.ankle.x, y: knee.y + P.ankle.y };
+  const toe = pts?.toe ?? { x: ankle.x + P.toe.x, y: ankle.y + P.toe.y };
   const seg = (a: Pt, b: Pt, wA: number, wB: number) => {
     T.segPlate(a, b, wA, wB, 0.03, 0.52, 2, 'plate');
     T.segPlate(a, b, wA * 0.94, wB, 0.55, 0.97, 2, 'plate');
   };
-  seg(hip, knee, P.w[0], P.w[1]);
-  seg(knee, ankle, P.w[2], P.w[3]);
-  seg(ankle, toe, P.w[4], P.w[5]);
-  // 髋座 + 三关节盘
-  T.addBlock('frame', hip.x - 8, hip.y, 26, 32, 0, 0.3);
-  T.addDisc('disc', hip, P.hipR);
-  T.addDisc('disc', hip, P.hipR * 0.6);
-  T.addDisc('disc', knee, P.kneeR);
-  T.addDisc('disc', ankle, P.ankleR);
-  // 足：小楔块扇（三趾蜘蛛/双趾四足）
-  if (P.toes === 3) {
-    T.addBlock('plate', toe.x, toe.y + 4, 17, 7, 0, 0.3);
-    T.addBlock('plate', toe.x + 11, toe.y + 3, 12, 6, 0.5, 0.3);
-    T.addBlock('plate', toe.x - 11, toe.y + 3, 12, 6, -0.5, 0.3);
-  } else {
-    T.addBlock('plate', toe.x + 4, toe.y + 4, 19, 8, 0.06, 0.3);
-    T.addBlock('plate', toe.x - 9, toe.y + 2, 13, 7, -0.35, 0.3);
+  if (only !== 'lower') {
+    seg(hip, knee, P.w[0], P.w[1]);
+    T.addBlock('frame', hip.x - 8, hip.y, 26, 32, 0, 0.3);
+    T.addDisc('disc', hip, P.hipR);
+    T.addDisc('disc', hip, P.hipR * 0.6);
   }
+  if (only !== 'upper') {
+    seg(knee, ankle, P.w[2], P.w[3]);
+    seg(ankle, toe, P.w[4], P.w[5]);
+    T.addDisc('disc', ankle, P.ankleR);
+    // 足：小楔块扇（三趾蜘蛛/双趾四足）
+    if (P.toes === 3) {
+      T.addBlock('plate', toe.x, toe.y + 4, 17, 7, 0, 0.3);
+      T.addBlock('plate', toe.x + 11, toe.y + 3, 12, 6, 0.5, 0.3);
+      T.addBlock('plate', toe.x - 11, toe.y + 3, 12, 6, -0.5, 0.3);
+    } else {
+      T.addBlock('plate', toe.x + 4, toe.y + 4, 19, 8, 0.06, 0.3);
+      T.addBlock('plate', toe.x - 9, toe.y + 2, 13, 7, -0.35, 0.3);
+    }
+  }
+  T.addDisc('disc', knee, P.kneeR);
   T.finish();
   return T.A;
 }
+
+/** 多足腿几何（轮廓相对点 → 段长与静止角，供分段精灵与节点链接线） */
+export function multiLegGeom(profile: 'spider' | 'quad'): { l1: number; l2: number; a1: number; a2rel: number; toeVec: Pt; a2: number } {
+  const P = MULTI_PROFILES[profile];
+  const p0 = { x: 0, y: 0 }, p1 = P.knee, p2 = { x: P.knee.x + P.ankle.x, y: P.knee.y + P.ankle.y };
+  const toeVec = P.toe;
+  const segAng = (dx: number, dy: number) => (Math.atan2(-dx, dy) * 180) / Math.PI;
+  const a1 = segAng(p1.x - p0.x, p1.y - p0.y);
+  const a2 = segAng(p2.x - p1.x, p2.y - p1.y);
+  return { l1: Math.hypot(p1.x, p1.y), l2: Math.hypot(p2.x - p1.x, p2.y - p1.y), a1, a2rel: a2 - a1, toeVec, a2 };
+}
+
+export { MULTI_PROFILES };
 
 /** 多足腿单独渲染（验收/预览用） */
 export function multiLegCanvas(spec: MultiLegSpec): { cv: MechaCanvas; A: Anchors; origin: Pt } {

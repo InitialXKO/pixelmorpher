@@ -9,7 +9,7 @@ import {
   armIR, renderArmIR, torsoIR, renderTorsoIR, headIR, renderHeadIR, hullIR, renderHullIR,
 } from './engine';
 import type { Scheme, LegSpec, ArmSpec, TorsoSpec, HeadSpec, HullSpec, MechaCanvas, Pt } from './engine';
-import { renderMultiLeg, renderTrackUnit, renderJetpack, renderWeapon, type WeaponKind } from './gear';
+import { renderMultiLeg, multiLegGeom, renderTrackUnit, renderJetpack, renderWeapon, type WeaponKind } from './gear';
 
 export type MechaFamily = 'olive' | 'agile' | 'powersuit';
 export const MECHA_FAMILIES: { id: MechaFamily; name: string }[] = [
@@ -81,10 +81,17 @@ const HEAD_SPEC: Record<MechaFamily, (scheme: Scheme) => HeadSpec> = {
 
 export interface MechaPartSet {
   leg: MechaSpriteData;
+  legThigh: MechaSpriteData;
+  legShin: MechaSpriteData;
+  legFoot: MechaSpriteData;
   armUpper: MechaSpriteData;
   armFore: MechaSpriteData;
+  armHand: MechaSpriteData;
   torso: MechaSpriteData;
   head: MechaSpriteData;
+  /** 肢链几何（规范直姿渲染的段长）与静止节点角（度：链根为绝对角、其余相对父） */
+  geom: { thighLen: number; shinLen: number; upperLen: number; foreLen: number };
+  rest: { armUpper: number; armFore: number; legThigh: number; legShin: number; legFoot: number };
   /** 肘相对肩（前臂节点的挂载偏移） */
   elbowOff: Pt;
   /** 腕/掌相对肘（前臂精灵本地，武器挂载偏移） */
@@ -94,6 +101,76 @@ export interface MechaPartSet {
   torsoSockets: { neck: Pt; shoulder: Pt; hip: Pt };
 }
 
+/** 骨向角（度）：与笔触建骨同口径 θ = atan2(−dx, dy)，0 = 正下 */
+export function segAngDeg(a: Pt, b: Pt): number {
+  return (Math.atan2(-(b.x - a.x), b.y - a.y) * 180) / Math.PI;
+}
+
+function distToSeg(px: number, py: number, a: Pt, b: Pt): number {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const L2 = dx * dx + dy * dy;
+  const t = L2 < 1e-9 ? 0 : Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / L2));
+  return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+}
+
+/** 把一张成品画布按「像素离哪段骨最近」拆成逐段精灵（插头=各段起点）。
+ * jointRadii[i] 给定时：关节 i+1 周围该半径内的像素整归下段（关节盘随下段
+ * 绕自身中心转、弯曲时不裂开）。 */
+export function splitCanvasBySegments(cv: MechaCanvas, joints: Pt[], jointRadii?: number[]): MechaSpriteData[] {
+  const W = 380, H = 540;
+  const bufs: Uint8ClampedArray[] = joints.slice(0, -1).map(() => new Uint8ClampedArray(W * H * 4));
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x;
+    if (cv.col[i * 4 + 3]! === 0) continue;
+    let best = -1;
+    if (jointRadii) {
+      for (let s = 1; s < joints.length - 1; s++) {
+        const r = jointRadii[s - 1] ?? 0;
+        if (r > 0 && Math.hypot(x - joints[s]!.x, y - joints[s]!.y) <= r) { best = s; break; }
+      }
+    }
+    if (best < 0) {
+      best = 0;
+      let bd = Infinity;
+      for (let s = 0; s < joints.length - 1; s++) {
+        const d = distToSeg(x, y, joints[s]!, joints[s + 1]!);
+        if (d < bd) { bd = d; best = s; }
+      }
+    }
+    bufs[best]!.set(cv.col.subarray(i * 4, i * 4 + 4), i * 4);
+  }
+  return bufs.map((buf, s) => {
+    const sub = newCanvas(); sub.col.set(buf);
+    return cropSprite(sub, joints[s]!);
+  });
+}
+
+/** 腿管线：规范直姿渲染一遍，再按骨段拆大腿/小腿/足（整腿图保留供蓝图库） */
+function legPipeline(family: MechaFamily, footType?: LegSpec['footType']): {
+  full: MechaSpriteData; thigh: MechaSpriteData; shin: MechaSpriteData; foot: MechaSpriteData;
+  geom: { thighLen: number; shinLen: number }; rest: { thigh: number; shin: number; foot: number };
+} {
+  const scheme = SCHEME_OF[family];
+  const spec = LEG_SPEC[family](scheme);
+  if (footType) spec.footType = footType;
+  const posed = { hip: { x: 100, y: 16 }, knee: { x: 188, y: 220 }, ankle: { x: 96, y: 406 }, toe: { x: 196, y: 442 } };
+  const L1 = Math.hypot(posed.knee.x - posed.hip.x, posed.knee.y - posed.hip.y);
+  const L2 = Math.hypot(posed.ankle.x - posed.knee.x, posed.ankle.y - posed.knee.y);
+  const k = 390 / (L1 + L2);
+  const tL = L1 * k, sL = L2 * k;
+  const canon = { hip: { x: 190, y: 30 }, knee: { x: 190, y: 30 + tL }, ankle: { x: 190, y: 30 + tL + sL }, toe: { x: 290, y: 30 + tL + sL + 36 } };
+  const cv = newCanvas();
+  const A = layout(cv, spec, { hip: canon.hip, knee: canon.knee, ankle: canon.ankle, toeX: canon.toe.x });
+  finishRender(cv, A, fin(family));
+  const [thigh, shin, foot] = splitCanvasBySegments(cv, [canon.hip, canon.knee, canon.ankle, canon.toe], [37, 24]) as [MechaSpriteData, MechaSpriteData, MechaSpriteData];
+  const aT = segAngDeg(posed.hip, posed.knee), aS = segAngDeg(posed.knee, posed.ankle), aF = segAngDeg(posed.ankle, posed.toe);
+  return {
+    full: cropSprite(cv, canon.hip), thigh, shin, foot,
+    geom: { thighLen: tL, shinLen: sL },
+    rest: { thigh: aT, shin: aS - aT, foot: aF - aS },
+  };
+}
+
 /** 生成一族的全部位精灵（人形：腿/上臂/前臂/躯干/头） */
 export type MechaChestVariant = 'stack' | 'shell' | 'slab' | 'glacis';
 export const MECHA_CHEST_LABELS: Record<MechaChestVariant, string> = { stack: '叠层胸', shell: '壳形胸', slab: '重型板胸', glacis: '斜面胸' };
@@ -101,22 +178,23 @@ export const MECHA_CHEST_LABELS: Record<MechaChestVariant, string> = { stack: '�
 export function generateMechaPartSet(family: MechaFamily, chest?: MechaChestVariant): MechaPartSet {
   const scheme = SCHEME_OF[family];
   const F = fin(family);
-  // 腿（整腿一件，原点=胯关节，验收锚点比例）
-  const legCv = newCanvas(); const hip = { x: 100, y: 16 };
-  const legA = layout(legCv, LEG_SPEC[family](scheme), { hip, knee: { x: hip.x + 88, y: hip.y + 204 }, ankle: { x: hip.x - 4, y: hip.y + 390 }, toeX: hip.x + 96 });
-  finishRender(legCv, legA, F);
-  const leg = cropSprite(legCv, hip);
-  // 臂：按 IR 部件归属拆上臂/前臂
+  // 腿：规范直姿渲染 + 按骨段拆三件（大腿/小腿/足，各自成节点才可动可配 IK）
+  const legP = legPipeline(family);
+  const leg = legP.full;
+  // 臂：规范直姿（角度归零）渲染——上臂按 IR 归属、前臂/手按骨段距离拆
   const armSpec = ARM_SPEC[family](scheme);
   const ir = armIR(armSpec);
-  type ArmPartT = (typeof ir.parts)[number];
+  const canonSpec = { ...armSpec, upperAng: 0, elbowBend: 0 };
+  const irC = armIR(canonSpec);
+  type ArmPartT = (typeof irC.parts)[number];
   const isUpper = (p: ArmPartT) => ((p.t === 'segPlate' || p.t === 'segCore' || p.t === 'cable' || p.t === 'rod') && (p as { seg?: string }).seg === 'upper') || (p.t === 'disc' && p.at === 'shoulder') || (p.t === 'block' && p.frame === 'shoulder') || (p.t === 'discAt' && p.frame === 'upper') || p.t === 'insignia';
-  const cvU = newCanvas(); const AU = renderArmIR(cvU, { anchors: ir.anchors, parts: ir.parts.filter(isUpper) }, armSpec);
+  const cvU = newCanvas(); const AU = renderArmIR(cvU, { anchors: irC.anchors, parts: irC.parts.filter(isUpper) }, canonSpec);
   finishRender(cvU, AU, F);
-  const armUpper = cropSprite(cvU, ir.anchors.shoulder);
-  const cvF = newCanvas(); const AF = renderArmIR(cvF, { anchors: ir.anchors, parts: ir.parts.filter((p) => !isUpper(p)) }, armSpec);
+  const armUpper = cropSprite(cvU, irC.anchors.shoulder);
+  const cvF = newCanvas(); const AF = renderArmIR(cvF, { anchors: irC.anchors, parts: irC.parts.filter((p) => !isUpper(p)) }, canonSpec);
   finishRender(cvF, AF, F);
-  const armFore = cropSprite(cvF, ir.anchors.elbow);
+  const wristC = irC.anchors.wrist;
+  const [armFore, armHand] = splitCanvasBySegments(cvF, [irC.anchors.elbow, wristC, { x: wristC.x, y: wristC.y + 72 }], [15]) as [MechaSpriteData, MechaSpriteData];
   const elbowOff = { x: ir.anchors.elbow.x - ir.anchors.shoulder.x, y: ir.anchors.elbow.y - ir.anchors.shoulder.y };
   const wristOff = { x: ir.anchors.wrist.x - ir.anchors.elbow.x, y: ir.anchors.wrist.y - ir.anchors.elbow.y };
   const palmOff = { x: ir.anchors.palm.x - ir.anchors.elbow.x, y: ir.anchors.palm.y - ir.anchors.elbow.y };
@@ -134,7 +212,15 @@ export function generateMechaPartSet(family: MechaFamily, chest?: MechaChestVari
   const headCv = newCanvas(); const HA = renderHeadIR(headCv, headIR(headSpec), headSpec);
   finishRender(headCv, HA, F);
   const head = cropSprite(headCv, headSpec.seat);
-  return { leg, armUpper, armFore, torso, head, elbowOff, wristOff, palmOff, torsoSockets };
+  return {
+    leg, legThigh: legP.thigh, legShin: legP.shin, legFoot: legP.foot,
+    armUpper, armFore, armHand, torso, head, elbowOff, wristOff, palmOff, torsoSockets,
+    geom: { thighLen: legP.geom.thighLen, shinLen: legP.geom.shinLen, upperLen: armSpec.upperLen, foreLen: armSpec.foreLen },
+    rest: {
+      armUpper: (-armSpec.upperAng * 180) / Math.PI, armFore: (-armSpec.elbowBend * 180) / Math.PI,
+      legThigh: legP.rest.thigh, legShin: legP.rest.shin, legFoot: legP.rest.foot,
+    },
+  };
 }
 
 /** 载具车体精灵（原点=甲板中心），供载具线后续使用 */
@@ -193,6 +279,37 @@ export function generateMechaMultiLeg(family: MechaFamily, profile: 'spider' | '
   const A = renderMultiLeg(cv, spec, hip);
   finishRender(cv, A, fin(family));
   return cropSprite(cv, hip);
+}
+
+/** 轮足分段件（大腿/小腿与常足共用造型、足换轮组）：底盘选轮足时用 */
+export function generateMechaWheelLegParts(family: MechaFamily): { thigh: MechaSpriteData; shin: MechaSpriteData; foot: MechaSpriteData } {
+  const p = legPipeline(family, 'wheel');
+  return { thigh: p.thigh, shin: p.shin, foot: p.foot };
+}
+
+/** 多足腿分段件：上段（髋→膝，髋帧直姿）/下段（膝→踝→趾，膝帧、末段保留相对弯） */
+export function generateMechaMultiLegParts(family: MechaFamily, profile: 'spider' | 'quad'): {
+  upper: MechaSpriteData; lower: MechaSpriteData; l1: number; l2: number; a1: number; a2rel: number;
+} {
+  const scheme = SCHEME_OF[family];
+  const spec = { scheme, seed: 11, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family], profile };
+  const gm = multiLegGeom(profile);
+  // 上段：髋帧，段一竖直向下
+  const hipU = { x: 70, y: 46 };
+  const cvU = newCanvas();
+  const AU = renderMultiLeg(cvU, spec, hipU, { knee: { x: hipU.x, y: hipU.y + gm.l1 }, ankle: { x: hipU.x, y: hipU.y + gm.l1 + gm.l2 }, toe: { x: hipU.x, y: hipU.y + gm.l1 + gm.l2 + 40 } }, 'upper');
+  finishRender(cvU, AU, fin(family));
+  const upper = cropSprite(cvU, hipU);
+  // 下段：膝帧，段二竖直向下、趾段按相对弯旋转进来
+  const kneeO = { x: 70, y: 30 };
+  const ankleL = { x: kneeO.x, y: kneeO.y + gm.l2 };
+  const rad = (-gm.a2 * Math.PI) / 180;
+  const toeL = { x: ankleL.x + gm.toeVec.x * Math.cos(rad) - gm.toeVec.y * Math.sin(rad), y: ankleL.y + gm.toeVec.x * Math.sin(rad) + gm.toeVec.y * Math.cos(rad) };
+  const cvL = newCanvas();
+  const AL = renderMultiLeg(cvL, spec, kneeO, { knee: kneeO, ankle: ankleL, toe: toeL }, 'lower');
+  finishRender(cvL, AL, fin(family));
+  const lower = cropSprite(cvL, kneeO);
+  return { upper, lower, l1: gm.l1, l2: gm.l2, a1: gm.a1, a2rel: gm.a2rel };
 }
 
 /** 履带底盘精灵（原点=座圈顶面中心，躯干/车体挂载点） */

@@ -1,9 +1,11 @@
 'use client';
 // ============================================================
 // 机甲生成向导：人形（选族/胸型/底盘/装备）或载具（车体/机动/
-// 炮塔）→ 整机预览（按将写入的角色数据合成，含节点角）→
-// 生成真角色（节点树 + 服装集 + 全局精灵表，主画布可渲染/
-// 操控、可进运行时包，与手工角色同路径）。
+// 炮塔），可设尺寸（60%–160%）。预览走产品渲染器同一条世界
+// 变换口径（computeWorldTransforms + 投影深度画序），所见即
+// 主画布所得；生成时项目画布按需只扩不缩以适应尺寸。产出是
+// 真角色：三段肢链节点 + 预置 IK 链（默认禁用），主画布可摆
+// 姿势/配 IK、可进运行时包。
 // ============================================================
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot } from 'lucide-react';
@@ -12,17 +14,18 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useProjectStore } from '@/lib/store';
-import { subToPx } from '@/lib/unified-types';
-import type { Node } from '@/lib/unified-types';
+import { projectToView, subToPx } from '@/lib/unified-types';
+import type { Character } from '@/lib/unified-types';
+import { computeWorldTransforms } from '@/lib/unified-render';
 import {
-  generateMechaPartSet, generateMechaWheelLeg, generateMechaTrackUnit,
+  generateMechaPartSet, generateMechaWheelLegParts, generateMechaMultiLegParts, generateMechaTrackUnit,
   generateMechaJetpack, generateMechaWeapon, generateMechaHullBody, generateMechaTurret,
   MECHA_FAMILIES, MECHA_CHEST_LABELS,
 } from '@/lib/mecha/parts';
 import type { MechaFamily, MechaPartSet, MechaSpriteData, MechaChestVariant } from '@/lib/mecha/parts';
 import {
   assembleMechaCharacter, assembleMechaVehicle, createMechaCharacterInStore, createMechaVehicleInStore,
-  generateMechaMobilitySprite, mechaHumanoidNodeParts, mechaVehicleNodeParts,
+  mechaHumanoidNodeParts, mechaVehicleNodeParts, mechaMobilityFamily,
   MECHA_CHASSIS_LABELS, MECHA_VEHICLE_LABELS, MECHA_POD_MOUNT_LABELS,
 } from '@/lib/mecha/build-character';
 import type { MechaBuildOptions, MechaVehicleOptions, MechaPodMount } from '@/lib/mecha/build-character';
@@ -30,9 +33,6 @@ import type { MechaBuildOptions, MechaVehicleOptions, MechaPodMount } from '@/li
 type Mode = 'humanoid' | 'vehicle';
 type Chassis = NonNullable<MechaBuildOptions['chassis']>;
 type WeaponSel = 'none' | 'cannon' | 'rifle';
-
-const HUM_W = 460, HUM_H = 830;
-const VEH_W = 780, VEH_H = 560;
 
 function Chip(props: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
@@ -65,12 +65,15 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   const [hull, setHull] = useState<MechaVehicleOptions['hull']>('walker');
   const [mobility, setMobility] = useState<MechaVehicleOptions['mobility']>('legs');
   const [turret, setTurret] = useState(true);
+  const [sizePct, setSizePct] = useState(100);
   const [name, setName] = useState('机甲-01');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const partSetCache = useRef(new Map<string, MechaPartSet>());
   const spriteCache = useRef(new Map<string, MechaSpriteData>());
+  const bitmapCache = useRef(new Map<string, HTMLCanvasElement>());
+  const scale = sizePct / 100;
 
   const buildOpts = useCallback((): MechaBuildOptions => ({
     chest: chest === 'default' ? undefined : chest,
@@ -82,122 +85,160 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
 
   const vehicleOpts = useCallback((): MechaVehicleOptions => ({ hull, mobility, turret }), [hull, mobility, turret]);
 
-  const gearSprite = useCallback((fam: MechaFamily, part: string): MechaSpriteData => {
+  const getPartSet = useCallback((fam: MechaFamily, chestV?: MechaChestVariant): MechaPartSet => {
+    const key = fam + ':' + (chestV ?? 'default');
+    let ps = partSetCache.current.get(key);
+    if (!ps) { ps = generateMechaPartSet(fam, chestV); partSetCache.current.set(key, ps); }
+    return ps;
+  }, []);
+
+  const gearSprite = useCallback((fam: MechaFamily, part: string): MechaSpriteData | undefined => {
     const key = fam + ':' + part;
     let s = spriteCache.current.get(key);
     if (s) return s;
-    if (part === 'wheelLeg') s = generateMechaWheelLeg(fam);
-    else if (part === 'trackUnit') s = generateMechaTrackUnit(fam);
+    if (part === 'wheelThigh' || part === 'wheelShin' || part === 'wheelFoot') {
+      const wp = generateMechaWheelLegParts(fam);
+      spriteCache.current.set(fam + ':wheelThigh', wp.thigh);
+      spriteCache.current.set(fam + ':wheelShin', wp.shin);
+      spriteCache.current.set(fam + ':wheelFoot', wp.foot);
+      return spriteCache.current.get(key);
+    }
+    if (part === 'trackUnit') s = generateMechaTrackUnit(fam);
     else if (part === 'jetpack') s = generateMechaJetpack(fam);
     else if (part === 'pod') s = generateMechaWeapon(fam, 'pod');
     else if (part === 'podPylon') s = generateMechaWeapon(fam, 'podPylon');
     else if (part === 'cannon') s = generateMechaWeapon(fam, 'cannon');
     else if (part === 'rifle') s = generateMechaWeapon(fam, 'rifle');
-    else throw new Error('unknown gear part ' + part);
+    else return undefined;
     spriteCache.current.set(key, s);
     return s;
   }, []);
 
-  // 预览：只用将写入的角色数据（节点/插座/节点角）+ 部位精灵合成静止姿势
+  const bitmapOf = useCallback((cacheKey: string, s: MechaSpriteData): HTMLCanvasElement => {
+    let c = bitmapCache.current.get(cacheKey);
+    if (!c) {
+      c = document.createElement('canvas');
+      c.width = s.width; c.height = s.height;
+      c.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(s.rgba), s.width, s.height), 0, 0);
+      bitmapCache.current.set(cacheKey, c);
+    }
+    return c;
+  }, []);
+
+  // 预览尺寸随尺寸设置走（画布适应其尺寸）
+  const PW = mode === 'humanoid'
+    ? Math.max(380, Math.min(660, Math.round(470 * scale)))
+    : Math.max(520, Math.min(980, Math.round(800 * scale)));
+  const PH = mode === 'humanoid'
+    ? Math.max(540, Math.min(1000, Math.round(850 * scale)))
+    : Math.max(430, Math.min(820, Math.round(580 * scale)));
+
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const PW = mode === 'humanoid' ? HUM_W : VEH_W;
-    const PH = mode === 'humanoid' ? HUM_H : VEH_H;
     if (canvas.width !== PW) canvas.width = PW;
     if (canvas.height !== PH) canvas.height = PH;
     ctx.clearRect(0, 0, PW, PH);
+    ctx.imageSmoothingEnabled = false;
 
     let assembly: ReturnType<typeof assembleMechaCharacter>;
     let nodeParts: Record<string, string>;
     let spriteFor: (part: string) => MechaSpriteData | undefined;
+    let spriteKeyFor: (part: string) => string;
     if (mode === 'humanoid') {
       const B = buildOpts();
-      const psKey = family + ':' + (B.chest ?? 'default');
-      let ps = partSetCache.current.get(psKey);
-      if (!ps) { ps = generateMechaPartSet(family, B.chest); partSetCache.current.set(psKey, ps); }
+      const ps = getPartSet(family, B.chest);
       assembly = assembleMechaCharacter({
-        characterId: 'preview', family, canvasSize: { w: PW, h: PH },
-        partSet: ps, spriteIds: {}, build: B,
+        characterId: 'preview', family, canvasSize: { w: 1000, h: 1200 },
+        partSet: ps, spriteIds: {}, build: B, scale,
       });
       nodeParts = mechaHumanoidNodeParts(B);
       spriteFor = (part) => {
-        if (part === 'leg') return ps.leg;
-        if (part === 'armUpper') return ps.armUpper;
-        if (part === 'armFore') return ps.armFore;
         if (part === 'torso') return ps.torso;
         if (part === 'head') return ps.head;
+        if (part === 'armUpper') return ps.armUpper;
+        if (part === 'armFore') return ps.armFore;
+        if (part === 'armHand') return ps.armHand;
+        if (part === 'legThigh') return ps.legThigh;
+        if (part === 'legShin') return ps.legShin;
+        if (part === 'legFoot') return ps.legFoot;
         return gearSprite(family, part);
       };
+      spriteKeyFor = (part) => family + ':' + (B.chest ?? 'default') + ':' + part;
     } else {
       const V = vehicleOpts();
+      const mobFam = mechaMobilityFamily(V.hull);
+      const mps = V.mobility === 'legs' ? getPartSet(mobFam) : undefined;
       assembly = assembleMechaVehicle({
-        characterId: 'preview', canvasSize: { w: PW, h: PH }, vehicle: V, spriteIds: {},
+        characterId: 'preview', canvasSize: { w: 1000, h: 1200 }, vehicle: V, spriteIds: {}, partSet: mps, scale,
       });
       nodeParts = mechaVehicleNodeParts(V);
-      const mobKey = 'veh:' + V.hull + ':' + V.mobility;
-      const hullKey = 'veh:' + V.hull + ':body';
-      const turKey = 'veh:' + V.hull + ':turret';
       spriteFor = (part) => {
-        if (part === 'multiLeg' || part === 'trackUnit' || part === 'leg') {
-          let s = spriteCache.current.get(mobKey);
-          if (!s) { s = generateMechaMobilitySprite(V.hull, V.mobility); spriteCache.current.set(mobKey, s); }
-          return s;
-        }
-        if (part === 'hullBody') {
-          let s = spriteCache.current.get(hullKey);
-          if (!s) { s = generateMechaHullBody(V.hull); spriteCache.current.set(hullKey, s); }
-          return s;
-        }
-        if (part === 'turret') {
-          let s = spriteCache.current.get(turKey);
-          if (!s) { s = generateMechaTurret(V.hull); spriteCache.current.set(turKey, s); }
-          return s;
+        if (part === 'hullBody') return gearSprite2('veh:' + V.hull + ':body', () => generateMechaHullBody(V.hull));
+        if (part === 'turret') return gearSprite2('veh:' + V.hull + ':turret', () => generateMechaTurret(V.hull));
+        if (part === 'trackUnit') return gearSprite(mobFam, 'trackUnit');
+        if (part === 'legThigh') return mps?.legThigh;
+        if (part === 'legShin') return mps?.legShin;
+        if (part === 'legFoot') return mps?.legFoot;
+        if (part === 'multiUpper' || part === 'multiLower') {
+          const mp = gearSprite2('veh:' + V.hull + ':' + V.mobility + ':multi', () => {
+            const p = generateMechaMultiLegParts(mobFam, V.mobility as 'quad' | 'spider');
+            spriteCache.current.set('veh:' + V.hull + ':' + V.mobility + ':multiUpper', p.upper);
+            spriteCache.current.set('veh:' + V.hull + ':' + V.mobility + ':multiLower', p.lower);
+            return p.upper;
+          });
+          return part === 'multiUpper' ? mp : spriteCache.current.get('veh:' + V.hull + ':' + V.mobility + ':multiLower');
         }
         return undefined;
       };
+      spriteKeyFor = (part) => 'veh:' + V.hull + ':' + V.mobility + ':' + part;
     }
 
-    const byId = new Map(Object.values(assembly.nodes).map((n) => [n.id, n]));
-    const byKey = new Map(Object.values(assembly.nodes).map((n) => [n.id.replace('node_preview_', ''), n]));
-    const world = new Map<string, { x: number; y: number; a: number }>();
-    const root = byId.get(assembly.rootNodeId)!;
-    world.set(root.id, { x: subToPx(root.transform.x), y: subToPx(root.transform.y), a: root.transform.angle ?? 0 });
-    const place = (n: Node) => {
-      const pw = world.get(n.parentId!)!;
-      const parent = byId.get(n.parentId!)!;
-      const sock = parent.sockets.find((s) => s.id === n.attachment.parentSocketId)!;
-      const ox = subToPx(sock.offset3D!.x), oy = subToPx(sock.offset3D!.y);
-      const rad = pw.a * Math.PI / 180;
-      world.set(n.id, {
-        x: pw.x + ox * Math.cos(rad) - oy * Math.sin(rad),
-        y: pw.y + ox * Math.sin(rad) + oy * Math.cos(rad),
-        a: pw.a + (n.transform.angle ?? 0),
-      });
-      for (const c of n.children) place(byId.get(c)!);
-    };
-    for (const c of root.children) place(byId.get(c)!);
+    function gearSprite2(key: string, gen: () => MechaSpriteData): MechaSpriteData {
+      let s = spriteCache.current.get(key);
+      if (!s) { s = gen(); spriteCache.current.set(key, s); }
+      return s;
+    }
 
-    const ordered = [...byId.values()].sort((a, b) => a.zIndex - b.zIndex);
-    for (const n of ordered) {
-      const key = [...byKey.entries()].find(([, v]) => v === n)?.[0];
-      const part = key ? nodeParts[key] : undefined;
+    // 与主画布同一口径：真世界变换 + 投影（深度主序、zIndex 次序）
+    const character = {
+      id: 'preview', name: 'preview', nodes: assembly.nodes, rootNodeId: assembly.rootNodeId,
+      costumeSets: [assembly.costumeSet], activeCostumeSetId: assembly.costumeSet.id,
+    } as unknown as Character;
+    const wt = computeWorldTransforms(character, 0, PW, PH, 12);
+    const rootT = wt.get(assembly.rootNodeId);
+    if (!rootT) return;
+    const rootProj = projectToView(rootT.worldX, rootT.worldY, rootT.worldZ, 0);
+    const anchorX = PW / 2, anchorY = PH * (mode === 'humanoid' ? 0.40 : 0.30);
+    const items: { part: string; x: number; y: number; a: number; depth: number; z: number }[] = [];
+    for (const n of Object.values(assembly.nodes)) {
+      const key = n.id.replace('node_preview_', '');
+      const part = nodeParts[key];
       if (!part) continue;
-      const s = spriteFor(part);
+      const t = wt.get(n.id);
+      if (!t) continue;
+      const proj = projectToView(t.worldX, t.worldY, t.worldZ, 0);
+      items.push({
+        part,
+        x: anchorX + subToPx(proj.canvasX) - subToPx(rootProj.canvasX),
+        y: anchorY + subToPx(proj.canvasY) - subToPx(rootProj.canvasY),
+        a: t.worldAngle, depth: proj.depth, z: n.zIndex ?? 0,
+      });
+    }
+    items.sort((a, b) => (Math.round(a.depth) - Math.round(b.depth)) || (a.z - b.z));
+    for (const it of items) {
+      const s = spriteFor(it.part);
       if (!s) continue;
-      const off = document.createElement('canvas');
-      off.width = s.width; off.height = s.height;
-      off.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(s.rgba), s.width, s.height), 0, 0);
-      const w0 = world.get(n.id)!;
+      const bmp = bitmapOf(spriteKeyFor(it.part) + ':' + it.part, s);
       ctx.save();
-      ctx.translate(Math.round(w0.x), Math.round(w0.y));
-      if (w0.a) ctx.rotate(w0.a * Math.PI / 180);
-      ctx.drawImage(off, -Math.round(s.plug.x), -Math.round(s.plug.y));
+      ctx.translate(Math.round(it.x), Math.round(it.y));
+      if (it.a) ctx.rotate((it.a * Math.PI) / 180);
+      ctx.drawImage(bmp, -s.plug.x * scale, -s.plug.y * scale, s.width * scale, s.height * scale);
       ctx.restore();
     }
-  }, [mode, family, buildOpts, vehicleOpts, gearSprite]);
+  }, [mode, family, buildOpts, vehicleOpts, gearSprite, getPartSet, bitmapOf, PW, PH, scale]);
 
   useEffect(() => {
     if (!open) return;
@@ -207,19 +248,27 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   }, [open, redraw]);
 
   const handleCreate = () => {
-    const store = useProjectStore.getState();
     const charName = name.trim() || '机甲';
+    // 画布适应尺寸：不够大就只扩不缩，扩完再按新画布生成
+    const needW = Math.ceil((mode === 'humanoid' ? 640 : 1040) * scale);
+    const needH = Math.ceil((mode === 'humanoid' ? 920 : 780) * scale);
+    const st = useProjectStore.getState();
+    let grown = '';
+    if (st.canvasWidth < needW || st.canvasHeight < needH) {
+      const w = Math.max(st.canvasWidth, needW), h = Math.max(st.canvasHeight, needH);
+      st.setCanvasSize(w, h);
+      grown = `；画布已扩至 ${w}×${h} 适应尺寸`;
+    }
+    const store = useProjectStore.getState();
     const { characterId } = mode === 'humanoid'
-      ? createMechaCharacterInStore(store as never, { name: charName, family, build: buildOpts() })
-      : createMechaVehicleInStore(store as never, { name: charName, vehicle: vehicleOpts() });
+      ? createMechaCharacterInStore(store as never, { name: charName, family, build: buildOpts(), scale })
+      : createMechaVehicleInStore(store as never, { name: charName, vehicle: vehicleOpts(), scale });
     const created = useProjectStore.getState().unifiedCharacters[characterId];
     const nNodes = created ? Object.keys(created.nodes).length : 0;
-    setNote(`已生成「${charName}」：${nNodes} 个节点、1 套服装，可直接在主画布摆姿势/换装`);
+    const nChains = created?.ikChains?.length ?? 0;
+    setNote(`已生成「${charName}」：${nNodes} 个节点${nChains ? `、${nChains} 条 IK 链（默认禁用，在 IK 面板启用）` : ''}${grown}`);
     onClose();
   };
-
-  const PW = mode === 'humanoid' ? HUM_W : VEH_W;
-  const PH = mode === 'humanoid' ? HUM_H : VEH_H;
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -238,6 +287,13 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
           <Row label="类型">
             <Chip active={mode === 'humanoid'} onClick={() => setMode('humanoid')}>人形机甲</Chip>
             <Chip active={mode === 'vehicle'} onClick={() => setMode('vehicle')}>载具</Chip>
+          </Row>
+          <Row label="尺寸">
+            <input type="range" min={60} max={160} step={5} value={sizePct}
+              onChange={(e) => setSizePct(Number(e.target.value))}
+              className="w-44 accent-cyan-400" />
+            <span className="text-[11px] text-gray-300">{sizePct}%</span>
+            <span className="text-[11px] text-gray-500">预览与画布随尺寸适应</span>
           </Row>
           {mode === 'humanoid' ? (
             <>
@@ -269,7 +325,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
                 ))}
               </Row>
               <p className="text-[11px] text-gray-400">
-                按模式库生成全套部位并装配成真角色；底盘与装备都是独立节点，可在主画布单独摆动/换装。精灵为侧面东向，西向自动镜像。
+                按模式库生成全套部位并装配成真角色：臂与腿都是三段节点链（上臂/前臂/手、大腿/小腿/足），每条链预置一条 IK 链（默认禁用，在 IK 面板启用即可拖目标）；底盘与装备也是独立节点。精灵为侧面东向，西向自动镜像。
               </p>
             </>
           ) : (
@@ -288,7 +344,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
                 <Chip active={turret} onClick={() => setTurret(!turret)}>{hull === 'walker' ? '炮塔' : '顶架'}</Chip>
               </Row>
               <p className="text-[11px] text-gray-400">
-                车体为根节点，移动件（腿/履带/多足）与炮塔都是独立节点，可单独摆动；蜘蛛腿的扇角是初始姿态，随便改。
+                车体为根节点：步行腿同人形三段链带 IK；蜘蛛/四足腿是两段节点（髋 + 膝下段）可摆；履带与炮塔是独立节点。蜘蛛腿扇角是初始姿态，随便改。
               </p>
             </>
           )}
