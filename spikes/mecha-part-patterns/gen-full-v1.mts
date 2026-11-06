@@ -1246,9 +1246,14 @@ function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
   // 远臂
   addBlock('frame', 190, 126, 30, 70, -0.08); addBlock('plate', 196, 124, 46, 48, -0.06);
   addDisc('disc', { x: 188, y: 160 }, 11);
+  { cv.insts.push({ kind: 'cyl' }); fillShape(cv, id, lineTest({ x: 174, y: 150 }, { x: 176, y: 198 }, 3)); id++; } // 前臂外露液压杆（与腿同语言）
   addBlock('plate', 184, 196, 52, 50, 0.04); addBlock('plate', 184, 240, 32, 26, 0.04);
+  addBlock('plate', 176, 257, 9, 14, 0.08); addBlock('plate', 186, 259, 9, 15, 0.03); addBlock('plate', 196, 257, 9, 13, -0.02); // 分段指
   addBlock('plate', 196, 88, 78, 54, -0.02); addBlock('plate', 194, 62, 66, 22, -0.02);
-  // 躯干组
+  // 躯干组（背部挂载先行：橄榄族火箭舱对，舱体 + 筒口，探出肩线与背后）
+  addBlock('cyl', 110, 40, 64, 26, -0.45); addBlock('cyl', 116, 78, 58, 24, -0.35);
+  addDisc('disc', { x: 82, y: 27 }, 7); addDisc('disc', { x: 78, y: 41 }, 7); addDisc('disc', { x: 90, y: 66 }, 7); addDisc('disc', { x: 86, y: 79 }, 7);
+  addBlock('frame', 128, 84, 56, 84, 0.06);
   addBlock('frame', 112, 104, 64, 104, 0.02);
   const chestMain = addBlock('plate', 196, 128, 156, 96, 0, 0.36, true);
   addBlock('plate', 202, 80, 138, 44, 0);
@@ -1268,34 +1273,39 @@ function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
   }
   addBlock('plate', 156, 272, 76, 36, 0.06);
   addBlock('plate', 242, 274, 58, 44, 0.1);
-  // 头组（配方：盔体 + 眉檐 + 凹座眼 + 肋管颏 + 侧栅 + 鞭天线）
-  addBlock('frame', 224, 64, 24, 18, 0);
-  addBlock('plate', 234, 36, 58, 44, 0.02, 0.42);
-  addBlock('plate', 220, 20, 40, 20, 0.02);
-  grille(214, 38, 27, 25);
-  addBlock('plate', 250, 28, 36, 12, 0.05);
-  addBlock('frame', 250, 39, 32, 10, 0.02);
-  addBlock('plate', 254, 52, 30, 15, 0.1);
-  addBlock('cyl', 258, 62, 26, 11, 0.5);
-  addBlock('plate', 264, 72, 20, 12, 0.2);
-  addBlock('cyl', 204, 12, 5, 22, 0.12, 0.2);
+  // 头组（对账修订：头宽 42≈0.27 倍胸宽、沉入领圈无颈柱；耳盘代侧栅；额角为橄榄变体）
+  addBlock('frame', 238, 68, 46, 14, 0);
+  addBlock('plate', 242, 47, 42, 34, 0.02, 0.42);
+  addBlock('plate', 232, 33, 28, 14, 0.02);
+  addDisc('disc', { x: 224, y: 48 }, 8);
+  addBlock('plate', 254, 38, 28, 9, 0.05);
+  addBlock('frame', 254, 47, 26, 9, 0.02);
+  addBlock('plate', 256, 57, 24, 12, 0.1);
+  addBlock('cyl', 260, 66, 21, 9, 0.5);
+  addBlock('plate', 265, 74, 16, 10, 0.2);
+  addBlock('plate', 261, 29, 13, 6, 0.35);
+  addBlock('cyl', 228, 17, 4, 18, 0.1, 0.2);
   // 近臂
   addDisc('disc', { x: 224, y: 92 }, 13);
   addBlock('frame', 220, 126, 30, 70, 0.1);
   addBlock('plate', 228, 118, 52, 48, 0.1);
   addBlock('plate', 232, 146, 48, 40, 0.08);
-  addDisc('disc', { x: 234, y: 162 }, 12);
-  addBlock('plate', 234, 162, 30, 26, 0.05);
-  addBlock('plate', 224, 196, 60, 56, -0.05, 0.36, true);
-  addBlock('frame', 238, 190, 34, 40, -0.03);
-  addBlock('plate', 224, 240, 36, 28, 0.04);
-  addBlock('plate', 240, 242, 18, 24, 0.04);
+  addBlock('frame', 222, 166, 16, 20, 0.05);
+  addDisc('disc', { x: 234, y: 166 }, 11);
+  { cv.insts.push({ kind: 'cyl' }); fillShape(cv, id, lineTest({ x: 214, y: 150 }, { x: 216, y: 200 }, 3.5)); id++; } // 前臂双液压杆（与腿同语言）
+  { cv.insts.push({ kind: 'cyl' }); fillShape(cv, id, lineTest({ x: 250, y: 152 }, { x: 248, y: 198 }, 3)); id++; }
+  addBlock('plate', 228, 198, 52, 54, -0.04, 0.36, true);
+  addBlock('frame', 240, 192, 30, 36, -0.03);
+  addDisc('disc', { x: 226, y: 228 }, 8);
+  addBlock('plate', 224, 240, 34, 26, 0.04);
+  addBlock('plate', 214, 258, 10, 16, 0.1); addBlock('plate', 226, 260, 10, 17, 0.05); addBlock('plate', 238, 258, 10, 15, 0); // 分段指
+  addBlock('plate', 244, 246, 12, 18, 0.5); // 拇指
   addBlock('plate', 230, 84, 90, 62, -0.03, 0.36, true);
   addBlock('plate', 228, 56, 78, 24, -0.03);
   addBlock('plate', 264, 94, 30, 44, 0.08);
   // 贴花锚：编号归胸主面板、眼与胸灯走信号灯 pass、徽记归胸板
   A.stripeThigh = chestMain; A.numPos = { x: 138, y: 104 }; A.numText = 'M-46';
-  A.lightPts.push({ x: 256, y: 39 }, { x: 252, y: 100 });
+  A.lightPts.push({ x: 258, y: 47 }, { x: 252, y: 100 });
   A.insignia = { pos: { x: 208, y: 120 }, kind: 1 };
   for (let i = 0; i < W * H; i++) if (cv.owner[i] >= 0) cv.sil[i] = 1; // 剪影 = 部件并集（与 layout 同口径）
   return A;
@@ -1324,6 +1334,6 @@ function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
     if (tCv.sil[sy * W + sx] && fin[(y * W2 + x) * 4 + 3]) { const di = (y * W2 + x) * 4; fin[di] *= 0.62; fin[di + 1] *= 0.62; fin[di + 2] *= 0.62; }
   }
   blitCv(tCv.col, 0, 0, 1, 0);
-  writeFileSync(OUT + 'mecha-full-v1.png', encodePNG(W2, H2, fin));
-  console.log('full v1 done');
+  writeFileSync(OUT + 'mecha-full-v2.png', encodePNG(W2, H2, fin));
+  console.log('full v2 done');
 }
