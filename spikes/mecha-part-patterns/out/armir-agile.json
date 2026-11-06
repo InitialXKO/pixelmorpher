@@ -125,46 +125,52 @@
    "seg": "upper",
    "perp": 20.4,
    "sag": 11,
-   "r": 6.5
+   "r": 6.5,
+   "s1": 0.95,
+   "perp1": 13.6
   },
   {
    "t": "discAt",
    "frame": "upper",
    "along": 2.96,
    "perp": 20.4,
-   "r": 10.5,
-   "kind": "cyl"
+   "r": 8.5,
+   "kind": "frame"
   },
   {
-   "t": "discAt",
+   "t": "block",
    "frame": "upper",
-   "along": 145.04,
-   "perp": 20.4,
-   "r": 10.5,
-   "kind": "cyl"
+   "along": 140.6,
+   "perp": 13.6,
+   "w": 14,
+   "h": 17,
+   "kind": "frame"
   },
   {
    "t": "cable",
    "seg": "fore",
    "perp": 19.55,
    "sag": 9,
-   "r": 6
+   "r": 6,
+   "s1": 0.93,
+   "perp1": 8.5
   },
   {
    "t": "discAt",
    "frame": "fore",
    "along": 2.84,
    "perp": 19.55,
-   "r": 10,
-   "kind": "cyl"
+   "r": 8.5,
+   "kind": "frame"
   },
   {
-   "t": "discAt",
+   "t": "block",
    "frame": "fore",
-   "along": 139.16,
-   "perp": 19.55,
-   "r": 10,
-   "kind": "cyl"
+   "along": 132.06,
+   "perp": 8.5,
+   "w": 14,
+   "h": 17,
+   "kind": "frame"
   },
   {
    "t": "block",

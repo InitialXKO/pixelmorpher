@@ -125,23 +125,26 @@
    "seg": "upper",
    "perp": 24.48,
    "sag": 11,
-   "r": 6.5
+   "r": 6.5,
+   "s1": 0.95,
+   "perp1": 16.32
   },
   {
    "t": "discAt",
    "frame": "upper",
    "along": 2.36,
    "perp": 24.48,
-   "r": 10.5,
-   "kind": "cyl"
+   "r": 8.5,
+   "kind": "frame"
   },
   {
-   "t": "discAt",
+   "t": "block",
    "frame": "upper",
-   "along": 115.64,
-   "perp": 24.48,
-   "r": 10.5,
-   "kind": "cyl"
+   "along": 112.1,
+   "perp": 16.32,
+   "w": 14,
+   "h": 17,
+   "kind": "frame"
   },
   {
    "t": "rodLink",
@@ -198,23 +201,26 @@
    "seg": "fore",
    "perp": 23.46,
    "sag": 9,
-   "r": 6
+   "r": 6,
+   "s1": 0.93,
+   "perp1": 10.2
   },
   {
    "t": "discAt",
    "frame": "fore",
    "along": 2.96,
    "perp": 23.46,
-   "r": 10,
-   "kind": "cyl"
+   "r": 8.5,
+   "kind": "frame"
   },
   {
-   "t": "discAt",
+   "t": "block",
    "frame": "fore",
-   "along": 145.04,
-   "perp": 23.46,
-   "r": 10,
-   "kind": "cyl"
+   "along": 137.64000000000001,
+   "perp": 10.2,
+   "w": 14,
+   "h": 17,
+   "kind": "frame"
   },
   {
    "t": "disc",
@@ -258,8 +264,8 @@
    "frame": "fore",
    "along": 44.4,
    "perp": -27.54,
-   "w": 44.88,
-   "h": 13,
+   "w": 13,
+   "h": 44.88,
    "kind": "frame"
   },
   {
