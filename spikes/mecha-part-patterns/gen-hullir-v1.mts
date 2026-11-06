@@ -1706,10 +1706,10 @@ function hullIR(spec: HullSpec): HullIR {
   } else if (F.turret === 'rack') {
     parts.push({ t: 'block', dx: -W * 0.24, dy: -H * 0.02, w: W * 0.08, h: H * 0.14, kind: 'frame' }); // 架柱
     parts.push({ t: 'block', dx: W * 0.08, dy: -H * 0.02, w: W * 0.08, h: H * 0.14, kind: 'frame' });
-    parts.push({ t: 'block', dx: -W * 0.1, dy: -H * 0.12, w: W * 0.44, h: H * 0.14, kind: 'frame' }); // 顶架
+    parts.push({ t: 'block', dx: -W * 0.08, dy: -H * 0.12, w: W * 0.52, h: H * 0.14, kind: 'frame' }); // 顶架
     parts.push({ t: 'block', dx: -W * 0.22, dy: -H * 0.25, w: W * 0.16, h: H * 0.16, kind: 'cyl' }); // 罐
     parts.push({ t: 'block', dx: 0, dy: -H * 0.25, w: W * 0.16, h: H * 0.16, kind: 'cyl' });
-    parts.push({ t: 'block', dx: W * 0.2, dy: -H * 0.23, w: W * 0.14, h: H * 0.2 }); // 箱
+    parts.push({ t: 'block', dx: W * 0.13, dy: -H * 0.23, w: W * 0.14, h: H * 0.2 }); // 箱（坐架上）
   }
   parts.push({ t: 'insignia', dx: W * 0.28, dy: H * 0.52, kind: spec.gear.insignia });
   if (spec.gear.number) parts.push({ t: 'number', dx: -W * 0.3, dy: H * 0.36, text: spec.gear.number });
