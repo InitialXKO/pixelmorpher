@@ -1762,7 +1762,7 @@ interface HeadIR { anchors: Record<'seat' | 'eye' | 'ear' | 'crown', Pt>; parts:
 function headIR(spec: HeadSpec): HeadIR {
   const w = spec.w, h = spec.h, F = spec.form, parts: HeadPart[] = [];
   const chamC = F.crown === 'dome' ? 0.68 : F.crown === 'flat' ? 0.3 : 0.44;
-  parts.push({ t: 'block', dx: 0, dy: h * 0.06, w: w * 1.06, h: h * 0.3, kind: 'frame' }); // 领圈
+  parts.push({ t: 'block', dx: 0, dy: h * 0.1, w: w * 0.54, h: h * 0.18, kind: 'frame' }); // 领圈（颈环，窄于盔体藏在颌下）
   parts.push({ t: 'block', dx: -w * 0.3, dy: -h * 0.52, w: w * 0.32, h: h * 0.64, cham: 0.4 }); // 后颅
   parts.push({ t: 'block', dx: -w * 0.02, dy: -h * 0.52, w: w * 0.92, h: h * 0.8, cham: chamC, bolts: true }); // 盔体（前缘让给面部叠层）
   if (F.crown === 'dome') parts.push({ t: 'block', dx: -w * 0.1, dy: -h * 0.94, w: w * 0.4, h: h * 0.18, ang: -0.06, cham: 0.5 }); // 圆顶小盖
@@ -1775,8 +1775,10 @@ function headIR(spec: HeadSpec): HeadIR {
   else if (F.eye === 'visor') { for (const ex of [0.3, 0.44]) parts.push({ t: 'light', dx: w * ex, dy: -h * 0.5 }); }
   else parts.push({ t: 'light', dx: w * 0.44, dy: -h * 0.5 });
   parts.push({ t: 'block', dx: w * 0.3, dy: -h * 0.27, w: w * 0.4, h: h * 0.26, ang: 0.22 }); // 颊板（斜面承眼座到颌）
-  if (F.jaw === 'respirator') { // 肋管颏：斜管 + 两道肋（动力服颏装置小一号）
+  if (F.jaw === 'respirator') { // 肋管颏：装甲颌板打底 + 管尾接口盘 + 斜管 + 两道肋（动力服颏装置小一号）
     const js = spec.family === 'powersuit' ? 0.7 : 1;
+    parts.push({ t: 'block', dx: w * 0.22, dy: -h * 0.12, w: w * 0.46, h: h * 0.3, ang: 0.1 }); // 颌板（装甲色，管子插在它上面）
+    parts.push({ t: 'disc', dx: w * (0.3 - 0.176 * js), dy: -h * (0.14 + 0.096 * js), r: Math.min(w, h) * 0.11 * js, kind: 'disc' }); // 管尾接口盘
     parts.push({ t: 'block', dx: w * (spec.family === 'powersuit' ? 0.26 : 0.3), dy: -h * 0.14, w: w * 0.4 * js, h: h * 0.15 * js, ang: 0.5, kind: spec.family === 'powersuit' ? 'frame' : 'cyl' });
     parts.push({ t: 'block', dx: w * 0.33, dy: -h * 0.17, w: w * 0.37 * js, h: h * 0.045, ang: 0.5, kind: 'frame' });
     parts.push({ t: 'block', dx: w * 0.28, dy: -h * 0.11, w: w * 0.37 * js, h: h * 0.045, ang: 0.5, kind: 'frame' });
@@ -1807,18 +1809,18 @@ function renderHeadIR(cv: Canvas, ir: HeadIR, spec: HeadSpec): Anchors {
 {
   const cv = newCanvas();
   const neck = { x: 200, y: 70 };
-  const tSpec: TorsoSpec = { family: 'olive', scheme: SCHEMES.olive, seed: 7, wear: 0.3, camo: true, twoTone: true, neck, chestW: 104, chestH: 82, waistH: 15, pelvisH: 50, form: { chest: 'stack', back: 'box', grille: 'side', skirt: 'front' }, gear: { stripe: true, insignia: 4, number: '3' } };
+  const tSpec: TorsoSpec = { family: 'olive', scheme: SCHEMES.olive, seed: 7, wear: 0.3, camo: true, twoTone: true, neck, chestW: 99, chestH: 78, waistH: 15, pelvisH: 48, form: { chest: 'stack', back: 'box', grille: 'side', skirt: 'front' }, gear: { stripe: true, insignia: 4, number: '3' } };
   const tIR = torsoIR(tSpec), tAnch = tIR.anchors;
-  const legNear: LegSpec = { topology: 'standard', scheme: SCHEMES.olive, seed: 11, bend: 22, camo: true, wear: 0.3, wScale: 1.1, lift: 20, detail: 0.35, ankleShift: 12, coreScale: 1.05 };
+  const legNear: LegSpec = { topology: 'standard', scheme: SCHEMES.olive, seed: 11, bend: 22, camo: true, wear: 0.3, wScale: 1.1, lift: 20, detail: 0.65, ankleShift: 12, coreScale: 1.05 };
   const legFar: LegSpec = { topology: 'standard', scheme: SCHEMES.olive, seed: 11, bend: 0, camo: true, wear: 0.3 };
-  const aFarLeg = layout(cv, legFar, { hip: { x: 180, y: tAnch.hip.y - 6 }, knee: { x: 204, y: 336 }, ankle: { x: 166, y: 460 }, toeX: 216 });
-  const armBase = { scheme: SCHEMES.olive, family: 'olive', seed: 7, wear: 0.3, camo: true, twoTone: true, diag: 0.5, bulk: 0.78, shell: 0.8, hand: 'fist' as const, gear: { cable: true, piston: true, device: true, stripe: true }, form: { shell: 'box' as const, elbow: 'disc' as const, fore: 'housing' as const, fingerLen: 21, fingerCurl: 0.5 } };
-  const aFarArm = renderArmIR(cv, armIR({ ...armBase, root: { x: tAnch.shoulder.x - 14, y: tAnch.shoulder.y - 3 }, upperLen: 80, foreLen: 100, upperAng: 0.3, elbowBend: 0.22 }), { ...armBase, root: { x: tAnch.shoulder.x - 14, y: tAnch.shoulder.y - 3 }, upperLen: 80, foreLen: 100, upperAng: 0.3, elbowBend: 0.22 });
-  const aNearLeg = layout(cv, legNear, { hip: { x: 204, y: tAnch.hip.y - 4 }, knee: { x: 242, y: 342 }, ankle: { x: 192, y: 468 }, toeX: 250 });
+  const aFarLeg = layout(cv, legFar, { hip: { x: tAnch.hip.x - 16, y: tAnch.hip.y - 2 }, knee: { x: tAnch.hip.x + 10, y: tAnch.hip.y + 130 }, ankle: { x: tAnch.hip.x - 40, y: tAnch.hip.y + 248 }, toeX: tAnch.hip.x + 14 });
+  const armBase = { scheme: SCHEMES.olive, family: 'olive', seed: 7, wear: 0.3, camo: true, twoTone: true, diag: 0.5, bulk: 0.68, shell: 0.8, hand: 'fist' as const, gear: { cable: true, piston: true, device: true, stripe: true }, form: { shell: 'box' as const, elbow: 'disc' as const, fore: 'housing' as const, fingerLen: 18, fingerCurl: 0.5 } };
+  const aFarArm = renderArmIR(cv, armIR({ ...armBase, root: { x: tAnch.shoulder.x - 14, y: tAnch.shoulder.y - 3 }, upperLen: 78, foreLen: 98, upperAng: 0.3, elbowBend: 0.22 }), { ...armBase, root: { x: tAnch.shoulder.x - 14, y: tAnch.shoulder.y - 3 }, upperLen: 78, foreLen: 98, upperAng: 0.3, elbowBend: 0.22 });
+  const aNearLeg = layout(cv, legNear, { hip: { x: tAnch.hip.x + 4, y: tAnch.hip.y - 4 }, knee: { x: tAnch.hip.x + 62, y: tAnch.hip.y + 131 }, ankle: { x: tAnch.hip.x + 1, y: tAnch.hip.y + 253 }, toeX: tAnch.hip.x + 67 });
   const tA = renderTorsoIR(cv, tIR, tSpec);
   const hSpec: HeadSpec = { family: 'olive', twoTone: true, scheme: SCHEMES.olive, seed: 7, wear: 0.3, camo: true, seat: { x: neck.x + 8, y: neck.y - 2 }, w: 62, h: 54, tilt: 0.03, form: { crown: 'angular', eye: 'slit', brow: true, jaw: 'respirator', ear: 'grille', top: 'horn', cheekCable: false } };
   const hA = renderHeadIR(cv, headIR(hSpec), hSpec);
-  const nearSpec: ArmSpec = { ...armBase, root: tAnch.shoulder, upperLen: 82, foreLen: 103, upperAng: 0.14, elbowBend: 0.1 };
+  const nearSpec: ArmSpec = { ...armBase, root: tAnch.shoulder, upperLen: 78, foreLen: 98, upperAng: 0.14, elbowBend: 0.1 };
   const aNearArm = renderArmIR(cv, armIR(nearSpec), nearSpec);
   // Anchors 合并：图以 id 为键合并、数组拼接、单例按归属（徽记/编号归躯干、饰带/贴花归腿）
   const M = tA;

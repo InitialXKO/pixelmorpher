@@ -1564,7 +1564,7 @@ interface HeadIR { anchors: Record<'seat' | 'eye' | 'ear' | 'crown', Pt>; parts:
 function headIR(spec: HeadSpec): HeadIR {
   const w = spec.w, h = spec.h, F = spec.form, parts: HeadPart[] = [];
   const chamC = F.crown === 'dome' ? 0.68 : F.crown === 'flat' ? 0.3 : 0.44;
-  parts.push({ t: 'block', dx: 0, dy: h * 0.06, w: w * 1.06, h: h * 0.3, kind: 'frame' }); // 领圈
+  parts.push({ t: 'block', dx: 0, dy: h * 0.1, w: w * 0.54, h: h * 0.18, kind: 'frame' }); // 领圈（颈环，窄于盔体藏在颌下）
   parts.push({ t: 'block', dx: -w * 0.3, dy: -h * 0.52, w: w * 0.32, h: h * 0.64, cham: 0.4 }); // 后颅
   parts.push({ t: 'block', dx: -w * 0.02, dy: -h * 0.52, w: w * 0.92, h: h * 0.8, cham: chamC, bolts: true }); // 盔体（前缘让给面部叠层）
   if (F.crown === 'dome') parts.push({ t: 'block', dx: -w * 0.1, dy: -h * 0.94, w: w * 0.4, h: h * 0.18, ang: -0.06, cham: 0.5 }); // 圆顶小盖
@@ -1577,8 +1577,10 @@ function headIR(spec: HeadSpec): HeadIR {
   else if (F.eye === 'visor') { for (const ex of [0.3, 0.44]) parts.push({ t: 'light', dx: w * ex, dy: -h * 0.5 }); }
   else parts.push({ t: 'light', dx: w * 0.44, dy: -h * 0.5 });
   parts.push({ t: 'block', dx: w * 0.3, dy: -h * 0.27, w: w * 0.4, h: h * 0.26, ang: 0.22 }); // 颊板（斜面承眼座到颌）
-  if (F.jaw === 'respirator') { // 肋管颏：斜管 + 两道肋（动力服颏装置小一号）
+  if (F.jaw === 'respirator') { // 肋管颏：装甲颌板打底 + 管尾接口盘 + 斜管 + 两道肋（动力服颏装置小一号）
     const js = spec.family === 'powersuit' ? 0.7 : 1;
+    parts.push({ t: 'block', dx: w * 0.22, dy: -h * 0.12, w: w * 0.46, h: h * 0.3, ang: 0.1 }); // 颌板（装甲色，管子插在它上面）
+    parts.push({ t: 'disc', dx: w * (0.3 - 0.176 * js), dy: -h * (0.14 + 0.096 * js), r: Math.min(w, h) * 0.11 * js, kind: 'disc' }); // 管尾接口盘
     parts.push({ t: 'block', dx: w * (spec.family === 'powersuit' ? 0.26 : 0.3), dy: -h * 0.14, w: w * 0.4 * js, h: h * 0.15 * js, ang: 0.5, kind: spec.family === 'powersuit' ? 'frame' : 'cyl' });
     parts.push({ t: 'block', dx: w * 0.33, dy: -h * 0.17, w: w * 0.37 * js, h: h * 0.045, ang: 0.5, kind: 'frame' });
     parts.push({ t: 'block', dx: w * 0.28, dy: -h * 0.11, w: w * 0.37 * js, h: h * 0.045, ang: 0.5, kind: 'frame' });

@@ -123,28 +123,9 @@
   {
    "t": "cable",
    "seg": "upper",
-   "perp": 24.48,
-   "sag": 11,
-   "r": 6.5,
-   "s1": 0.95,
-   "perp1": 16.32
-  },
-  {
-   "t": "discAt",
-   "frame": "upper",
-   "along": 2.36,
-   "perp": 24.48,
-   "r": 8.5,
-   "kind": "frame"
-  },
-  {
-   "t": "block",
-   "frame": "upper",
-   "along": 112.1,
-   "perp": 16.32,
-   "w": 14,
-   "h": 17,
-   "kind": "frame"
+   "perp": 30.6,
+   "sag": 30,
+   "r": 6.5
   },
   {
    "t": "rodLink",
@@ -199,28 +180,9 @@
   {
    "t": "cable",
    "seg": "fore",
-   "perp": 23.46,
-   "sag": 9,
-   "r": 6,
-   "s1": 0.93,
-   "perp1": 10.2
-  },
-  {
-   "t": "discAt",
-   "frame": "fore",
-   "along": 2.96,
-   "perp": 23.46,
-   "r": 8.5,
-   "kind": "frame"
-  },
-  {
-   "t": "block",
-   "frame": "fore",
-   "along": 137.64000000000001,
-   "perp": 10.2,
-   "w": 14,
-   "h": 17,
-   "kind": "frame"
+   "perp": 29.580000000000002,
+   "sag": 20,
+   "r": 6
   },
   {
    "t": "disc",
@@ -264,8 +226,8 @@
    "frame": "fore",
    "along": 44.4,
    "perp": -27.54,
-   "w": 13,
-   "h": 44.88,
+   "w": 44.88,
+   "h": 13,
    "kind": "frame"
   },
   {
