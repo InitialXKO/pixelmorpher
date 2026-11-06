@@ -92,7 +92,10 @@ export interface MechaPartSet {
 }
 
 /** 生成一族的全部位精灵（人形：腿/上臂/前臂/躯干/头） */
-export function generateMechaPartSet(family: MechaFamily): MechaPartSet {
+export type MechaChestVariant = 'stack' | 'shell' | 'slab' | 'glacis';
+export const MECHA_CHEST_LABELS: Record<MechaChestVariant, string> = { stack: '叠层胸', shell: '壳形胸', slab: '重型板胸', glacis: '斜面胸' };
+
+export function generateMechaPartSet(family: MechaFamily, chest?: MechaChestVariant): MechaPartSet {
   const scheme = SCHEME_OF[family];
   const F = fin(family);
   // 腿（整腿一件，原点=胯关节，验收锚点比例）
@@ -114,6 +117,7 @@ export function generateMechaPartSet(family: MechaFamily): MechaPartSet {
   const elbowOff = { x: ir.anchors.elbow.x - ir.anchors.shoulder.x, y: ir.anchors.elbow.y - ir.anchors.shoulder.y };
   // 躯干（原点=胯心）
   const torsoSpec = TORSO_SPEC[family](scheme);
+  if (chest) torsoSpec.form = { ...torsoSpec.form, chest };
   const torsoIRv = torsoIR(torsoSpec);
   const torsoCv = newCanvas(); const TA = renderTorsoIR(torsoCv, torsoIRv, torsoSpec);
   finishRender(torsoCv, TA, F);
@@ -129,13 +133,35 @@ export function generateMechaPartSet(family: MechaFamily): MechaPartSet {
 }
 
 /** 载具车体精灵（原点=甲板中心），供载具线后续使用 */
+const HULL_SPEC_OF = (kind: 'walker' | 'hauler'): HullSpec => kind === 'walker'
+  ? { family: 'walker', scheme: SCHEMES.olive, seed: 11, wear: 0.35, camo: true, twoTone: true, deck: { x: 190, y: 150 }, hullW: 250, hullH: 130, form: { turret: 'gun', cabin: 'front', skirt: true, modules: 3 }, gear: { insignia: 0, number: 'N-37' } }
+  : { family: 'hauler', scheme: SCHEMES.slate, seed: 23, wear: 0.3, camo: false, twoTone: true, deck: { x: 190, y: 150 }, hullW: 260, hullH: 118, form: { turret: 'rack', cabin: 'mid', skirt: false, modules: 2 }, gear: { insignia: 1, number: 'M-7' } };
+
+const HULL_FIN = { topology: 'standard', seed: 11, bend: 22, wear: 0.3, detail: 0.65 } as const;
+
 export function generateMechaHull(kind: 'walker' | 'hauler'): MechaSpriteData {
-  const spec: HullSpec = kind === 'walker'
-    ? { family: 'walker', scheme: SCHEMES.olive, seed: 11, wear: 0.35, camo: true, twoTone: true, deck: { x: 190, y: 150 }, hullW: 250, hullH: 130, form: { turret: 'gun', cabin: 'front', skirt: true, modules: 3 }, gear: { insignia: 0, number: 'N-37' } }
-    : { family: 'hauler', scheme: SCHEMES.slate, seed: 23, wear: 0.3, camo: false, twoTone: true, deck: { x: 190, y: 150 }, hullW: 260, hullH: 118, form: { turret: 'rack', cabin: 'mid', skirt: false, modules: 2 }, gear: { insignia: 1, number: 'M-7' } };
+  const spec = HULL_SPEC_OF(kind);
   const cv = newCanvas(); const A = renderHullIR(cv, hullIR(spec), spec);
-  finishRender(cv, A, { topology: 'standard', scheme: spec.scheme, seed: 11, bend: 22, camo: spec.camo, wear: 0.3, detail: 0.65, altTone: spec.twoTone } as LegSpec & { altTone?: boolean });
+  finishRender(cv, A, { ...HULL_FIN, scheme: spec.scheme, camo: spec.camo, altTone: spec.twoTone } as LegSpec & { altTone?: boolean });
   return cropSprite(cv, spec.deck);
+}
+
+/** 车体（无炮塔）：载具根节点用，原点=甲板 */
+export function generateMechaHullBody(kind: 'walker' | 'hauler'): MechaSpriteData {
+  const spec: HullSpec = { ...HULL_SPEC_OF(kind), split: 'body' };
+  const cv = newCanvas(); const A = renderHullIR(cv, hullIR(spec), spec);
+  finishRender(cv, A, { ...HULL_FIN, scheme: spec.scheme, camo: spec.camo, altTone: spec.twoTone } as LegSpec & { altTone?: boolean });
+  return cropSprite(cv, spec.deck);
+}
+
+/** 炮塔/顶架（独立件）：载具炮塔节点用，原点=炮塔转轴 */
+export function generateMechaTurret(kind: 'walker' | 'hauler'): MechaSpriteData {
+  const base = HULL_SPEC_OF(kind);
+  const spec: HullSpec = { ...base, split: 'turret' };
+  const cv = newCanvas(); const A = renderHullIR(cv, hullIR(spec), spec);
+  finishRender(cv, A, { ...HULL_FIN, scheme: spec.scheme, camo: spec.camo, altTone: spec.twoTone } as LegSpec & { altTone?: boolean });
+  const pivot = { x: spec.deck.x - spec.hullW * 0.06, y: spec.deck.y - spec.hullH * 0.14 };
+  return cropSprite(cv, pivot);
 }
 
 /** 族主甲色（十六进制，供服装件底色/关节盘生成） */

@@ -1205,7 +1205,7 @@ type TorsoPart =
 interface TorsoSpec {
   family: string; scheme: Scheme; seed: number; wear: number; camo: boolean; twoTone: boolean;
   neck: Pt; chestW: number; chestH: number; waistH: number; pelvisH: number;
-  form: { chest: 'stack' | 'shell' | 'slab'; back: 'box' | 'binder' | 'rack' | 'none'; grille: 'side' | 'front' | 'none'; skirt: 'front' | 'both' | 'none' };
+  form: { chest: 'stack' | 'shell' | 'slab' | 'glacis'; back: 'box' | 'binder' | 'rack' | 'none'; grille: 'side' | 'front' | 'none'; skirt: 'front' | 'both' | 'none' };
   gear: { stripe: boolean; insignia: number; number: string };
 }
 interface TorsoIR { anchors: Record<'neck' | 'shoulder' | 'hip' | 'chestC', Pt>; parts: TorsoPart[] }
@@ -1226,6 +1226,12 @@ function torsoIR(spec: TorsoSpec): TorsoIR {
   } else if (F.chest === 'shell') {
     parts.push({ t: 'block', dx: 0, dy: CH * 0.46, w: W, h: CH * 0.92, cham: 0.52, bolts: true });
     parts.push({ t: 'block', dx: W * 0.08, dy: CH * 0.97, w: W * 0.5, h: CH * 0.18, ang: 0.1, cham: 0.5 }); // 胸尖
+  } else if (F.chest === 'glacis') {
+    // 斜面胸：三段横板逐段前探成阶梯斜面（上收下突；本投影里
+    // 斜面靠阶梯轮廓读，整板旋转只会读成侧倾）
+    parts.push({ t: 'block', dx: -W * 0.06, dy: CH * 0.18, w: W * 0.84, h: CH * 0.3, cham: 0.3 });
+    parts.push({ t: 'block', dx: 0, dy: CH * 0.44, w: W * 0.94, h: CH * 0.3, cham: 0.26, bolts: true });
+    parts.push({ t: 'block', dx: W * 0.05, dy: CH * 0.72, w: W * 0.98, h: CH * 0.34, cham: 0.26 });
   } else { // slab 两段叠（重型参考是上下两块宽板）
     parts.push({ t: 'block', dx: 0, dy: CH * 0.27, w: W * 1.06, h: CH * 0.54, cham: 0.26, bolts: true });
     parts.push({ t: 'block', dx: -W * 0.02, dy: CH * 0.76, w: W * 1.0, h: CH * 0.48, cham: 0.24 });
@@ -1277,10 +1283,11 @@ interface HullSpec {
   deck: Pt; hullW: number; hullH: number;
   form: { turret: 'gun' | 'rack' | 'none'; cabin: 'front' | 'mid'; skirt: boolean; modules: number };
   gear: { insignia: number; number: string };
+  split?: 'body' | 'turret';
 }
 interface HullIR { anchors: Record<'deck' | 'turret' | 'leg' | 'nose', Pt>; parts: HullPart[] }
 function hullIR(spec: HullSpec): HullIR {
-  const W = spec.hullW, H = spec.hullH, F = spec.form, parts: HullPart[] = [];
+  const W = spec.hullW, H = spec.hullH, F = spec.form, parts: HullPart[] = [], tp: HullPart[] = [];
   parts.push({ t: 'block', dx: -W * 0.06, dy: H * 0.34, w: W * 0.94, h: H * 0.62, cham: 0.42, bolts: true }); // 主箱（楔）
   parts.push({ t: 'block', dx: W * 0.3, dy: H * 0.2, w: W * 0.34, h: H * 0.3, cham: 0.4 }); // 前上斜脸
   if (F.skirt) parts.push({ t: 'block', dx: -W * 0.02, dy: H * 0.78, w: W * 0.98, h: H * 0.3, cham: 0.3 }); // 底裙带
@@ -1291,22 +1298,25 @@ function hullIR(spec: HullSpec): HullIR {
   for (let k = 0; k < F.modules; k++) parts.push({ t: 'block', dx: -W * 0.08 - k * W * 0.17, dy: H * 0.32, w: W * 0.14, h: H * 0.3, cham: 0.25 }); // 侧面模块阵列
   parts.push({ t: 'grille', dx: -W * 0.38, dy: H * 0.62, w: W * 0.3, h: H * 0.24 }); // 后侧散热栅
   if (F.turret === 'gun') {
-    parts.push({ t: 'disc', dx: -W * 0.08, dy: -H * 0.02, r: W * 0.11 });
-    parts.push({ t: 'block', dx: -W * 0.06, dy: -H * 0.14, w: W * 0.36, h: H * 0.24, cham: 0.4 }); // 炮塔
-    parts.push({ t: 'block', dx: W * 0.38, dy: -H * 0.16, w: W * 0.62, h: H * 0.09, kind: 'cyl' }); // 主炮
-    parts.push({ t: 'block', dx: W * 0.62, dy: -H * 0.16, w: W * 0.1, h: H * 0.13, kind: 'frame' }); // 炮口制退
+    tp.push({ t: 'disc', dx: -W * 0.08, dy: -H * 0.02, r: W * 0.11 });
+    tp.push({ t: 'block', dx: -W * 0.06, dy: -H * 0.14, w: W * 0.36, h: H * 0.24, cham: 0.4 }); // 炮塔
+    tp.push({ t: 'block', dx: W * 0.38, dy: -H * 0.16, w: W * 0.62, h: H * 0.09, kind: 'cyl' }); // 主炮
+    tp.push({ t: 'block', dx: W * 0.62, dy: -H * 0.16, w: W * 0.1, h: H * 0.13, kind: 'frame' }); // 炮口制退
   } else if (F.turret === 'rack') {
-    parts.push({ t: 'block', dx: -W * 0.24, dy: -H * 0.02, w: W * 0.08, h: H * 0.14, kind: 'frame' }); // 架柱
-    parts.push({ t: 'block', dx: W * 0.08, dy: -H * 0.02, w: W * 0.08, h: H * 0.14, kind: 'frame' });
-    parts.push({ t: 'block', dx: -W * 0.08, dy: -H * 0.12, w: W * 0.52, h: H * 0.14, kind: 'frame' }); // 顶架
-    parts.push({ t: 'block', dx: -W * 0.22, dy: -H * 0.25, w: W * 0.16, h: H * 0.16, kind: 'cyl' }); // 罐
-    parts.push({ t: 'block', dx: 0, dy: -H * 0.25, w: W * 0.16, h: H * 0.16, kind: 'cyl' });
-    parts.push({ t: 'block', dx: W * 0.13, dy: -H * 0.23, w: W * 0.14, h: H * 0.2 }); // 箱（坐架上）
+    tp.push({ t: 'block', dx: -W * 0.24, dy: -H * 0.02, w: W * 0.08, h: H * 0.14, kind: 'frame' }); // 架柱
+    tp.push({ t: 'block', dx: W * 0.08, dy: -H * 0.02, w: W * 0.08, h: H * 0.14, kind: 'frame' });
+    tp.push({ t: 'block', dx: -W * 0.08, dy: -H * 0.12, w: W * 0.52, h: H * 0.14, kind: 'frame' }); // 顶架
+    tp.push({ t: 'block', dx: -W * 0.22, dy: -H * 0.25, w: W * 0.16, h: H * 0.16, kind: 'cyl' }); // 罐
+    tp.push({ t: 'block', dx: 0, dy: -H * 0.25, w: W * 0.16, h: H * 0.16, kind: 'cyl' });
+    tp.push({ t: 'block', dx: W * 0.13, dy: -H * 0.23, w: W * 0.14, h: H * 0.2 }); // 箱（坐架上）
   }
   parts.push({ t: 'insignia', dx: W * 0.28, dy: H * 0.52, kind: spec.gear.insignia });
   if (spec.gear.number) parts.push({ t: 'number', dx: -W * 0.3, dy: H * 0.36, text: spec.gear.number });
   parts.push({ t: 'light', dx: W * 0.44, dy: H * 0.44 });
-  return { anchors: { deck: spec.deck, turret: { x: spec.deck.x - W * 0.06, y: spec.deck.y - H * 0.14 }, leg: { x: spec.deck.x, y: spec.deck.y + H }, nose: { x: spec.deck.x + W * 0.5, y: spec.deck.y + H * 0.3 } }, parts };
+  const anchors = { deck: spec.deck, turret: { x: spec.deck.x - W * 0.06, y: spec.deck.y - H * 0.14 }, leg: { x: spec.deck.x, y: spec.deck.y + H }, nose: { x: spec.deck.x + W * 0.5, y: spec.deck.y + H * 0.3 } };
+  if (spec.split === 'turret') return { anchors, parts: tp };
+  if (spec.split === 'body') return { anchors, parts };
+  return { anchors, parts: [...parts, ...tp] };
 }
 function renderHullIR(cv: MechaCanvas, ir: HullIR, spec: HullSpec): Anchors {
   const T = makeLayerTools(cv, spec.seed);
