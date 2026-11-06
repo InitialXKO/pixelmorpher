@@ -1219,7 +1219,7 @@ function blockPolyT(cx: number, cy: number, w: number, h: number, ang: number, c
   }
   return raw.map((q) => ({ x: cx + q.x * ca - q.y * sa, y: cy + q.x * sa + q.y * ca }));
 }
-interface LayerTools { A: Anchors; addBlock: (kind: Kind, cx: number, cy: number, w: number, h: number, ang?: number, cham?: number, bolts?: boolean) => number; addDisc: (kind: Kind, c: Pt, r: number) => number; addPoly: (pts: Pt[], bolts?: boolean) => number; addRaw: (kind: Kind, test: (x: number, y: number) => [boolean, number, number]) => number; rod: (a: Pt, b: Pt, r: number) => number; grille: (cx: number, cy: number, w: number, h: number) => void; finish: () => void }
+interface LayerTools { segPlate: (a: Pt, b: Pt, wA: number, wB: number, t0: number, t1: number, gap?: number, kind?: Kind) => number; A: Anchors; addBlock: (kind: Kind, cx: number, cy: number, w: number, h: number, ang?: number, cham?: number, bolts?: boolean) => number; addDisc: (kind: Kind, c: Pt, r: number) => number; addPoly: (pts: Pt[], bolts?: boolean) => number; addRaw: (kind: Kind, test: (x: number, y: number) => [boolean, number, number]) => number; rod: (a: Pt, b: Pt, r: number) => number; grille: (cx: number, cy: number, w: number, h: number) => void; finish: () => void }
 function makeLayerTools(cv: Canvas, seed: number): LayerTools {
   const rnd = mulberry32(seed);
   let id = 0;
@@ -1244,11 +1244,24 @@ function makeLayerTools(cv: Canvas, seed: number): LayerTools {
   };
   const addDisc = (kind: Kind, c: Pt, r: number): number => { cv.insts.push({ kind }); const myId = id; fillShape(cv, id, discTest(c, r)); id++; A.discs.push({ id: myId, c, r, hv: 0.5 }); return myId; };
   const grille = (cx: number, cy: number, w: number, h: number) => { addBlock('plate', cx, cy, w, h, 0, 0.2); for (let k = 0; k < 3; k++) addBlock('frame', cx, cy - h / 2 + 6 + k * ((h - 8) / 2), w - 4, 4.5, 0, 0.1); };
+  const segPlate = (a: Pt, b: Pt, wA: number, wB: number, t0: number, t1: number, gap = 2.5, kind: Kind = 'plate'): number => {
+    const jit = (rnd() - 0.5) * 6, rot = (rnd() - 0.5) * 0.1, proud = 1.03 + rnd() * 0.09;
+    const f0 = segFrame(a, b), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    const rp = (p: Pt): Pt => { const dx = p.x - mx, dy = p.y - my; return { x: mx + dx * Math.cos(rot) - dy * Math.sin(rot) + f0.px * jit, y: my + dx * Math.sin(rot) + dy * Math.cos(rot) + f0.py * jit }; };
+    const a2 = rp(a), b2 = rp(b), hw = (wA + wB) / 4;
+    const cham = () => (rnd() < 0.3 ? rnd() * 5 : (0.2 + rnd() * 0.8) * hw * 0.9);
+    const shape: PlateShape = { cTF: cham(), cTB: cham(), cBF: cham(), cBB: cham(), step: rnd() < 0.4 ? (rnd() - 0.5) * 14 : 0, stepPos: 0.3 + rnd() * 0.4 };
+    if (kind === 'plate') { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, plateTest(a2, b2, wA * proud * 1.05, wB * proud * 1.05, Math.max(0, t0 - 0.008), Math.min(1, t1 + 0.008), 0, 0, 0, { f: 0, b: 0 }, shape)); id++; }
+    cv.insts.push({ kind }); const myId = id;
+    fillShape(cv, id, plateTest(a2, b2, wA * proud, wB * proud, t0, t1, gap, 0, 0, { f: 0, b: 0 }, shape)); id++;
+    reg(myId);
+    return myId;
+  };
   const addPoly = (pts: Pt[], bolts = false): number => { cv.insts.push({ kind: 'plate' }); const myId = id; fillShape(cv, id, polyTest(pts)); id++; reg(myId); if (bolts) { const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y); const x0 = Math.min(...xs) + 6, x1 = Math.max(...xs) - 6, y0 = Math.min(...ys) + 6, y1 = Math.max(...ys) - 6; for (const [bx, by] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]] as const) A.boltPts.push({ x: bx, y: by }); } return myId; };
   const addRaw = (kind: Kind, test: (x: number, y: number) => [boolean, number, number]): number => { cv.insts.push({ kind }); const myId = id; fillShape(cv, id, test); id++; return myId; };
   const rod = (a: Pt, b: Pt, r: number): number => addRaw('cyl', lineTest(a, b, r));
   const finish = () => { for (let i = 0; i < W * H; i++) if (cv.owner[i] >= 0) cv.sil[i] = 1; };
-  return { A, addBlock, addDisc, addPoly, addRaw, rod, grille, finish };
+  return { A, addBlock, addDisc, addPoly, addRaw, rod, grille, finish, segPlate };
 }
 function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
   const T = makeLayerTools(cv, 999); const { A, addBlock, addDisc, grille, finish } = T;
