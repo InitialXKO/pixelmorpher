@@ -1,0 +1,233 @@
+{
+ "anchors": {
+  "shoulder": {
+   "x": 185,
+   "y": 66
+  },
+  "elbow": {
+   "x": 198.7770114972623,
+   "y": 203.31057480836756
+  },
+  "wrist": {
+   "x": 236.60359794991376,
+   "y": 325.59364541644516
+  },
+  "palm": {
+   "x": 241.92296166981788,
+   "y": 342.7897022207061
+  }
+ },
+ "parts": [
+  {
+   "t": "segCore",
+   "seg": "upper",
+   "w0": 23.400000000000002,
+   "w1": 20.28
+  },
+  {
+   "t": "segCore",
+   "seg": "fore",
+   "w0": 20.28,
+   "w1": 15.600000000000001
+  },
+  {
+   "t": "block",
+   "frame": "shoulder",
+   "along": -4,
+   "perp": 2,
+   "w": 34.32,
+   "h": 28.080000000000002,
+   "angOff": 0.15,
+   "kind": "frame"
+  },
+  {
+   "t": "disc",
+   "at": "shoulder",
+   "r": 11.700000000000001
+  },
+  {
+   "t": "disc",
+   "at": "shoulder",
+   "r": 6.63
+  },
+  {
+   "t": "segPlate",
+   "seg": "upper",
+   "w0": 43.68,
+   "w1": 41.34,
+   "s0": 0.04,
+   "s1": 0.505
+  },
+  {
+   "t": "segPlate",
+   "seg": "upper",
+   "w0": 41.34,
+   "w1": 39,
+   "s0": 0.505,
+   "s1": 0.9700000000000001
+  },
+  {
+   "t": "cable",
+   "seg": "upper",
+   "perp": 22.62,
+   "sag": 7,
+   "r": 4.5
+  },
+  {
+   "t": "disc",
+   "at": "elbow",
+   "r": 9.75
+  },
+  {
+   "t": "disc",
+   "at": "elbow",
+   "r": 5.46
+  },
+  {
+   "t": "block",
+   "frame": "fore",
+   "along": 0,
+   "perp": 14.82,
+   "w": 11.700000000000001,
+   "h": 18.72,
+   "kind": "frame"
+  },
+  {
+   "t": "block",
+   "frame": "fore",
+   "along": 0,
+   "perp": -14.82,
+   "w": 11.700000000000001,
+   "h": 18.72,
+   "kind": "frame"
+  },
+  {
+   "t": "segPlate",
+   "seg": "fore",
+   "w0": 45.24,
+   "w1": 39.39,
+   "s0": 0.04,
+   "s1": 0.505
+  },
+  {
+   "t": "segPlate",
+   "seg": "fore",
+   "w0": 39.39,
+   "w1": 33.54,
+   "s0": 0.505,
+   "s1": 0.9700000000000001
+  },
+  {
+   "t": "block",
+   "frame": "fore",
+   "along": 57.6,
+   "perp": -20.28,
+   "w": 20,
+   "h": 26,
+   "kind": "frame"
+  },
+  {
+   "t": "block",
+   "frame": "fore",
+   "along": 57.6,
+   "perp": -21.060000000000002,
+   "w": 13,
+   "h": 18,
+   "kind": "plate"
+  },
+  {
+   "t": "light",
+   "frame": "fore",
+   "along": 57.6,
+   "perp": -23.400000000000002
+  },
+  {
+   "t": "disc",
+   "at": "wrist",
+   "r": 6.63
+  },
+  {
+   "t": "block",
+   "frame": "wrist",
+   "along": 24,
+   "perp": 0,
+   "w": 28.080000000000002,
+   "h": 20.28,
+   "kind": "plate",
+   "bolts": true
+  },
+  {
+   "t": "finger",
+   "idx": 0,
+   "curl": 0.1
+  },
+  {
+   "t": "finger",
+   "idx": 1,
+   "curl": 0.15000000000000002
+  },
+  {
+   "t": "finger",
+   "idx": 2,
+   "curl": 0.2
+  },
+  {
+   "t": "block",
+   "frame": "wrist",
+   "along": 20,
+   "perp": -18.72,
+   "w": 11,
+   "h": 16,
+   "angOff": 0.55,
+   "kind": "plate"
+  },
+  {
+   "t": "block",
+   "frame": "wrist",
+   "along": 30,
+   "perp": -21.84,
+   "w": 10,
+   "h": 13,
+   "angOff": 0.85,
+   "kind": "plate"
+  },
+  {
+   "t": "block",
+   "frame": "shoulder",
+   "along": -8,
+   "perp": 0,
+   "w": 81.12,
+   "h": 48.36,
+   "angOff": -0.05,
+   "kind": "plate",
+   "bolts": true
+  },
+  {
+   "t": "block",
+   "frame": "shoulder",
+   "along": -36,
+   "perp": 0,
+   "w": 65.52,
+   "h": 17.16,
+   "angOff": -0.03,
+   "kind": "plate"
+  },
+  {
+   "t": "block",
+   "frame": "shoulder",
+   "along": 6,
+   "perp": -32.76,
+   "w": 21.84,
+   "h": 34.32,
+   "angOff": 0.12,
+   "kind": "plate"
+  },
+  {
+   "t": "insignia",
+   "frame": "shoulder",
+   "along": -10,
+   "perp": -4,
+   "kind": 0
+  }
+ ]
+}
