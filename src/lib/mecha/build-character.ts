@@ -61,6 +61,35 @@ export interface MechaCharacterAssembly {
   costumeSet: CostumeSet;
 }
 
+/** 节点键 → 部位键（按构建选项；装配与向导预览共用） */
+export function mechaHumanoidNodeParts(build?: MechaBuildOptions): Record<string, string> {
+  const B: MechaBuildOptions = build ?? {};
+  const chassis = B.chassis ?? 'biped';
+  const map: Record<string, string> = {
+    pelvis: 'torso', head: 'head',
+    arm_upper_N: 'armUpper', arm_fore_N: 'armFore',
+    arm_upper_F: 'armUpper', arm_fore_F: 'armFore',
+  };
+  if (chassis === 'tracks') map.tracks = 'trackUnit';
+  else { const leg = chassis === 'wheel' ? 'wheelLeg' : 'leg'; map.leg_N = leg; map.leg_F = leg; }
+  if (B.jetpack) map.jetpack = 'jetpack';
+  if (B.shoulderPod) map.pod = 'pod';
+  if (B.weapon) map.weapon = B.weapon;
+  return map;
+}
+
+/** 载具节点键 → 部位键（装配与向导预览共用） */
+export function mechaVehicleNodeParts(vehicle: MechaVehicleOptions): Record<string, string> {
+  const map: Record<string, string> = { hull: 'hullBody' };
+  const mob = vehicle.mobility;
+  if (mob === 'tracks') { map.track_N = 'trackUnit'; map.track_F = 'trackUnit'; }
+  else if (mob === 'legs') { map.leg_front = 'leg'; map.leg_rear = 'leg'; }
+  else if (mob === 'quad') { map.quad_fN = 'multiLeg'; map.quad_fF = 'multiLeg'; map.quad_rN = 'multiLeg'; map.quad_rF = 'multiLeg'; }
+  else { for (const k of ['spider_fN', 'spider_mN', 'spider_rN', 'spider_fF', 'spider_mF', 'spider_rF']) map[k] = 'multiLeg'; }
+  if (vehicle.turret) map.turret = 'turret';
+  return map;
+}
+
 /**
  * 组装机甲角色数据（纯函数）。spriteIds = 五件精灵在全局表中的 id
  * （近/远两侧共用同一精灵，靠节点位移与绘制序区分）。
@@ -165,16 +194,7 @@ export function assembleMechaCharacter(opts: {
     name: MECHA_FAMILIES.find((f) => f.id === family)?.name ?? family,
     pieces: {},
   };
-  const nodeParts: Record<string, string> = {
-    pelvis: 'torso', head: 'head',
-    arm_upper_N: 'armUpper', arm_fore_N: 'armFore',
-    arm_upper_F: 'armUpper', arm_fore_F: 'armFore',
-  };
-  if (chassis === 'tracks') nodeParts.tracks = 'trackUnit';
-  else { nodeParts.leg_N = chassis === 'wheel' ? 'wheelLeg' : 'leg'; nodeParts.leg_F = nodeParts.leg_N; }
-  if (B.jetpack) nodeParts.jetpack = 'jetpack';
-  if (B.shoulderPod) nodeParts.pod = 'pod';
-  if (B.weapon) nodeParts.weapon = B.weapon;
+  const nodeParts = mechaHumanoidNodeParts(B);
   for (const [nodeKey, part] of Object.entries(nodeParts)) {
     const piece = pieceOf(nodeKey, part);
     nodes[nodeKey]!.slot = piece;
@@ -343,12 +363,7 @@ export function assembleMechaVehicle(opts: {
     if (side) nodes[k]!.side = side;
   }
   const fill = mechaFamilyArmorHex(V.hull === 'walker' ? 'olive' : 'agile');
-  const nodeParts: Record<string, string> = { hull: 'hullBody' };
-  if (mob === 'tracks') { nodeParts.track_N = 'trackUnit'; nodeParts.track_F = 'trackUnit'; }
-  else if (mob === 'legs') { nodeParts.leg_front = 'leg'; nodeParts.leg_rear = 'leg'; }
-  else if (mob === 'quad') { nodeParts.quad_fN = 'multiLeg'; nodeParts.quad_fF = 'multiLeg'; nodeParts.quad_rN = 'multiLeg'; nodeParts.quad_rF = 'multiLeg'; }
-  else { for (const k of ['spider_fN', 'spider_mN', 'spider_rN', 'spider_fF', 'spider_mF', 'spider_rF']) nodeParts[k] = 'multiLeg'; }
-  if (V.turret) nodeParts.turret = 'turret';
+  const nodeParts = mechaVehicleNodeParts(V);
   const costumeSet: CostumeSet = {
     id: `costume_${cid}_vehicle`,
     name: MECHA_VEHICLE_LABELS.hull[V.hull],
