@@ -371,24 +371,38 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     { cv.insts.push({ kind: 'rod' }); fillShape(cv, id, lineTest({ x: ankle.x - 8, y: 388 }, hubR, 3)); id++; }
     footBlock(ankle.x - 88, 466, 26, 8, 0.08); // 后稳定橇
   } else {
-    { // 踝上整流罩：靴筒块（blocks/shoe 共用）
-      cv.insts.push({ kind: 'plate' }); const fid = id;
-      fillShape(cv, id, polyTest(blockPoly(ankle.x + 38, 427, 96, 30, 0.12, 0.35))); id++;
-      A.plateTint.set(fid, 0.95); A.panelLines.set(fid, [0.5]);
-    }
-    { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, polyTest(blockPoly((ankle.x + toeX) / 2 + 1, 466, toeX - ankle.x + 70, 12, 0, 0.3))); id++; } // 足底件：只在底部留 2px 鞋底线
-    footBlock(ankle.x - 24, 455, 64, 34, 0.04); // 跟块（顶 438）
+    // 重装/主战足型（blocks，据两张参考高清裁图提取）：跟块 + 两级长板
+    // 趾（顶面逐级下行、底面共一线）+ 脚背斜板（自踝盘上方斜下前方、
+    // 前端压住中趾板）。旧构造的问题：脚背是近水平的横条、趾段是
+    // 一掌一趾两块短块——参考里是两级长板与真斜板。
+    const heavy = (spec.wScale ?? 1) >= 1.3;
     if (ft === 'shoe') {
+      { // 踝上整流罩：靴筒块（shoe 专用，敏捷鞋形另有其式）
+        cv.insts.push({ kind: 'plate' }); const fid = id;
+        fillShape(cv, id, polyTest(blockPoly(ankle.x + 38, 427, 96, 30, 0.12, 0.35))); id++;
+        A.plateTint.set(fid, 0.95); A.panelLines.set(fid, [0.5]);
+      }
+      { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, polyTest(blockPoly((ankle.x + toeX) / 2 + 1, 466, toeX - ankle.x + 70, 12, 0, 0.3))); id++; } // 足底件
+      footBlock(ankle.x - 24, 455, 64, 34, 0.04); // 跟块（顶 438）
       footBlock(ankle.x + 34, 457, 96, 26, -0.045, 0.3); // 鞋身块：微转，顶边略斜
       footBlock(toeX + 6, 461, 62, 18, 0.01, 0.55, 0.55); // 趾帽块：压鞋身前段，前上大切角
-    } else if ((spec.wScale ?? 1) >= 1.3) {
-      footBlock(ankle.x + 36, 456, 76, 35, 0.03); // 前掌大块（顶 438.5）
-      footBlock(toeX + 4, 458, 56, 26, 0.04, 0.5); // 趾块（顶 445，钝厚）
-      A.toeFace = { x0: toeX + 18, y0: 450, x1: toeX + 29, y1: 466 };
     } else {
-      footBlock(ankle.x + 30, 457, 74, 30, 0.03); // 掌块（顶 442）
-      footBlock(toeX - 1, 458, 60, 24, 0.03, 0.5, 0.5); // 趾块（顶 446，钝厚，前上大切角）
-      A.toeFace = { x0: toeX + 15, y0: 451, x1: toeX + 26, y1: 465 };
+      { // 脚背斜板：自踝前上方斜下前方，前端压住中趾板顶面
+        cv.insts.push({ kind: 'plate' }); const fid = id;
+        fillShape(cv, id, polyTest(blockPoly(ankle.x + 30, 428, heavy ? 108 : 100, heavy ? 28 : 26, 0.36, 0.3))); id++;
+        A.plateTint.set(fid, 0.95); A.panelLines.set(fid, [0.5]);
+      }
+      { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, polyTest(blockPoly(ankle.x + 48, 466, 240, 12, 0, 0.3))); id++; } // 足底件：通长一线
+      footBlock(ankle.x - 24, 455, 64, 34, 0.04); // 跟块（顶 438）
+      if (heavy) {
+        footBlock(ankle.x + 56, 458, 100, 24, 0.02); // 中趾长板（顶 446）
+        footBlock(ankle.x + 128, 461, 84, 18, 0.03, 0.55, 0.55); // 前趾长板（顶 452，前上大切角）
+        A.toeFace = { x0: ankle.x + 156, y0: 454, x1: ankle.x + 167, y1: 468 };
+      } else {
+        footBlock(ankle.x + 54, 458, 92, 24, 0.02); // 中趾长板（顶 446）
+        footBlock(ankle.x + 124, 462, 76, 15, 0.03, 0.55, 0.55); // 前趾长板（顶 454.5，明显更薄）
+        A.toeFace = { x0: ankle.x + 148, y0: 456, x1: ankle.x + 159, y1: 468 };
+      }
     }
   }
   // 6) 前护板（多边形盾形，压在小腿前方）：坐标 = (沿轴 t, 离轴距离 off)；无护板族跳过
