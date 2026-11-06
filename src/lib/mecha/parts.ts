@@ -136,3 +136,9 @@ export function generateMechaHull(kind: 'walker' | 'hauler'): MechaSpriteData {
   finishRender(cv, A, { topology: 'standard', scheme: spec.scheme, seed: 11, bend: 22, camo: spec.camo, wear: 0.3, detail: 0.65, altTone: spec.twoTone } as LegSpec & { altTone?: boolean });
   return cropSprite(cv, spec.deck);
 }
+
+/** 族主甲色（十六进制，供服装件底色/关节盘生成） */
+export function mechaFamilyArmorHex(family: MechaFamily): string {
+  const c = SCHEME_OF[family].armor;
+  return '#' + c.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
+}

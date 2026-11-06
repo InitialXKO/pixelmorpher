@@ -636,7 +636,7 @@ function finishRender(cv: MechaCanvas, A: Anchors, spec: LegSpec) {
       if (bevW > 0 && Math.abs(uu - fb2) < 0.028) fz *= 1.15; // 主折线亮棱（主面一侧）
       let f = fz * tint * (1 + (mottle - 1) * 0.35);
       if (v < 0.045) f *= 1.13; else if (v > 0.955) f *= 0.8; // 板端平带：上亮下暗
-      f = quant(f, 0.045);
+      f = quant(f);
       let base = (spec as LegSpec & { altTone?: boolean }).altTone === false ? S.armor : (o % 2 ? S.armor : S.armor2);
       if (A.blockPlates.has(o)) base = mix(base, S.accent, 0.38);
       // 大腿饰带：首板下缘双条强调色带
@@ -719,7 +719,7 @@ function finishRender(cv: MechaCanvas, A: Anchors, spec: LegSpec) {
       const dx = (x - d.c.x) / d.r, dy = (y - d.c.y) / d.r;
       const rr = Math.hypot(dx, dy), ang = Math.atan2(dy, dx);
       const fa = (Math.floor((ang + Math.PI) / (Math.PI / 6)) + 0.5) * (Math.PI / 6) - Math.PI;
-      let c = ramp(mix(S.armor2, S.metal, 0.45), quant(0.86 + 0.42 * (0.45 * Math.cos(fa) - 0.89 * Math.sin(fa)), 0.05));
+      let c = ramp(mix(S.armor2, S.metal, 0.45), quant(0.86 + 0.42 * (0.45 * Math.cos(fa) - 0.89 * Math.sin(fa))));
       if (rr > 0.93) c = ramp(c, 0.78); // 帽缘收边
       set(i, c);
     }
@@ -1367,5 +1367,5 @@ function renderHeadIR(cv: MechaCanvas, ir: HeadIR, spec: HeadSpec): Anchors {
   return A;
 }
 export { SCHEMES, newCanvas, layout, finishRender, legIR, renderIR, makeLayerTools, armIR, renderArmIR, torsoIR, renderTorsoIR, hullIR, renderHullIR, headIR, renderHeadIR };
-export type { Scheme, LegSpec, ArmSpec, TorsoSpec, HullSpec, HeadSpec, Anchors, Pt };
+export type { Scheme, LegSpec, ArmSpec, TorsoSpec, HullSpec, HeadSpec, Anchors, Pt, MechaCanvas };
 export { W as MECHA_W, H as MECHA_H };
