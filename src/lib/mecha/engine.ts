@@ -310,6 +310,10 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     return ids;
   };
   const thighIds = segPlates(thigh);
+  // 膝上盖板：大腿末板越过膝心续盖一段、压住膝盖帽上缘——末板的前下
+  // 切角与隆起收分会在膝盖上方的前侧留一道凹口，盖板把它填平（参考
+  // 图的腿同理：大腿板下端压着膝盘上缘，没有缺口）
+  addPlate(thigh.a, thigh.b, thigh.wB * 1.06, thigh.wB * 1.03, 0.84, 1.07, 2, 6, 10, 'plate', thigh.bulge);
   A.stripeThigh = thighIds[0];
   A.ventId = thighIds[thighIds.length - 1];
   const shinIds = segPlates(shin);
@@ -591,7 +595,7 @@ function legIR(spec: LegSpec): MechaIR {
   if (spec.frameHeavy) parts.push({ id: 'frameBeam', pattern: 'frameBeam', anchors: ['hip', 'knee', 'ankle'], params: {} });
   parts.push(
     { id: 'cables', pattern: 'cableRun', anchors: ['hip', 'knee', 'ankle'], params: {} },
-    { id: 'thigh.plates', pattern: 'segPlates', anchors: ['hip', 'knee'], params: { wA: 110 * ws, wB: 84 * ws, bulgeF: 0.16, bulgeB: 0.05 } },
+    { id: 'thigh.plates', pattern: 'segPlates', anchors: ['hip', 'knee'], params: { wA: 110 * ws, wB: 84 * ws, bulgeF: 0.16, bulgeB: 0.05, shroudTo: 1.07 } },
     { id: 'shin.plates', pattern: 'segPlates', anchors: ['knee', 'ankle'], params: { wA: 100 * ws, wB: 64 * ws, bulgeF: -0.38 * (spec.shinConcave ?? 1), bulgeB: 0.42 * (spec.calfScale ?? 1) } },
     { id: 'foot', pattern: FOOT_PATTERN[spec.footType ?? 'blocks'], anchors: ['ankle', 'toe'], params: {} },
   );
