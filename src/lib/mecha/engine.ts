@@ -388,18 +388,20 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       footBlock(toeX + 6, 461, 62, 18, 0.01, 0.55, 0.55); // 趾帽块：压鞋身前段，前上大切角
     } else {
       { // 脚背斜板：自踝前上方斜下前方，前端压住中趾板顶面
+        // 角度按参考实测：两样本脚背板长轴 ≈ +25°（此前 0.36 rad≈21° 偏平）
         cv.insts.push({ kind: 'plate' }); const fid = id;
-        fillShape(cv, id, polyTest(blockPoly(ankle.x + 30, 428, heavy ? 108 : 100, heavy ? 28 : 26, 0.36, 0.3))); id++;
+        fillShape(cv, id, polyTest(blockPoly(ankle.x + 32, 427, heavy ? 108 : 100, heavy ? 28 : 26, 0.44, 0.3))); id++;
         A.plateTint.set(fid, 0.95); A.panelLines.set(fid, [0.5]);
       }
       { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, polyTest(blockPoly(ankle.x + 48, 466, heavy ? 264 : 240, 12, 0, 0.3))); id++; } // 足底件：通长一线
       { // 跟块：后斜楔——顶边是一条长斜线，自踝下（前高）向后下方收
-        // 薄，带小跟刺；与趾套的前斜顶边构成足两端的镜像斜线对
+        // 薄，带小跟刺；与趾套的前斜顶边构成足两端的镜像斜线对。
+        // 顶斜线角度按参考实测 ≈ −15°（此前落差 12px≈10.6° 偏平）
         cv.insts.push({ kind: 'foot' }); const bid = id;
         const hx = ankle.x, hw2 = heavy ? 80 : 72;
         fillShape(cv, id, polyTest([
-          { x: hx + 14, y: 443 }, { x: hx + 8, y: heavy ? 437 : 439 },
-          { x: hx - hw2 + 16, y: heavy ? 450 : 451 }, { x: hx - hw2 - 4, y: 463 },
+          { x: hx + 14, y: 442 }, { x: hx + 8, y: heavy ? 435 : 437 },
+          { x: hx - hw2 + 18, y: heavy ? 453 : 455 }, { x: hx - hw2 - 4, y: 463 },
           { x: hx - hw2, y: 470 }, { x: hx + 14, y: 470 },
         ])); id++;
         A.plateTint.set(bid, [0.9, 1.0, 1.08][Math.floor(rnd() * 3)]); A.panelLines.set(bid, [0.5]);
@@ -411,19 +413,21 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
         footBlock(ankle.x + 54, 458, 92, 24, 0.02); // 中趾长板（顶 446）
         footBlock(ankle.x + 124, 462, 76, 15, 0.03, 0.55, 0.55); // 前趾长板（顶 454.5）
       }
-      { // 趾套：套在趾板上的楔壳——顶边长斜线向前收尖（与跟块斜线
-        // 镜像），后缘留台阶压住中趾板，趾板下半与竖缝仍露在套外
+      { // 趾套：套在趾板上的楔壳——顶边是一条长斜线，自脚背斜板下沿
+        // （高位）向前下方收尖（与跟块斜线镜像），后缘留台阶压住中趾
+        // 板，趾板下半与竖缝仍露在套外。顶斜线角度按参考实测 ≈ +18°
+        // （此前 13px 落差≈10° 且起点只在趾板顶高，斜线又平又短）
         cv.insts.push({ kind: 'foot' }); const bid = id;
         const tx = ankle.x, e = heavy ? 8 : 0;
         fillShape(cv, id, polyTest([
-          { x: tx + 86 + e, y: heavy ? 441 : 443 }, { x: tx + 158 + e, y: 456 },
-          { x: tx + 168 + e, y: 464 }, { x: tx + 165 + e, y: 469 },
-          { x: tx + 100 + e, y: 469 }, { x: tx + 92 + e, y: 455 },
+          { x: tx + 84 + e, y: heavy ? 436 : 438 }, { x: tx + 158 + e, y: heavy ? 460 : 462 },
+          { x: tx + 168 + e, y: 467 }, { x: tx + 164 + e, y: 470 },
+          { x: tx + 98 + e, y: 470 }, { x: tx + 90 + e, y: 456 },
         ])); id++;
         A.plateTint.set(bid, 1.05); A.panelLines.set(bid, [0.5]);
         A.toeFace = heavy
-          ? { x0: ankle.x + 164, y0: 457, x1: ankle.x + 174, y1: 468 }
-          : { x0: ankle.x + 156, y0: 458, x1: ankle.x + 166, y1: 468 };
+          ? { x0: ankle.x + 162, y0: 459, x1: ankle.x + 172, y1: 469 }
+          : { x0: ankle.x + 154, y0: 460, x1: ankle.x + 164, y1: 469 };
       }
     }
   }
