@@ -116,6 +116,8 @@ export interface MechaLegOverrides {
   lift?: number; coreScale?: number; detail?: number; wear?: number; camo?: boolean;
   shellMode?: boolean; frameHeavy?: boolean; guardOff?: boolean;
   decalKind?: LegSpec['decalKind']; cableTint?: [number, number, number]; seed?: number;
+  /** 膝盖块厚度系数 / 腓肠隆起系数 / 胫骨凹面深度系数（默认 1） */
+  kneeScale?: number; calfScale?: number; shinConcave?: number;
   /** 轮足滚动相位（行程 px，相位帧组内部用，用户覆盖不设） */
   wheelPhase?: number;
 }
@@ -457,11 +459,20 @@ export function generateMechaJetpack(family: MechaFamily, schemeName?: MechaSche
 }
 
 /** 武器精灵（臂炮/导弹荚/步枪；原点语义见 gear 的 renderWeapon） */
-export function generateMechaWeapon(family: MechaFamily, kind: WeaponKind, schemeName?: MechaSchemeName): MechaSpriteData {
+export function generateMechaWeapon(family: MechaFamily, kind: WeaponKind, schemeName?: MechaSchemeName, sizeMul?: { x: number; y: number }): MechaSpriteData {
   const scheme = schemeName ? mechaSchemeByName(schemeName) : SCHEME_OF[family];
   const cv = newCanvas(); const origin = kind === 'pod' ? { x: 170, y: 150 } : kind === 'podPylon' ? { x: 190, y: 330 } : { x: 90, y: 130 };
-  // 手持武器尺寸随持有臂的前臂长折算（基准 = olive 前臂 148）；荚是背挂装备件不随臂
-  const size = kind === 'cannon' || kind === 'rifle' ? ARM_SPEC[family](scheme).foreLen / 148 : 1;
+  // 武器尺寸分两层：族基准（按图库参考量比定——手持武器全长/身高：
+  // 重机甲长炮 ≈0.75、敏捷 ≈0.37、动力服 ≈0.31；基准构造全长臂炮
+  // 181、步枪 207；导弹荚族基准为 1）× 用户倍率 sizeMul（向导
+  // 「武器长/武器粗」，导弹荚同为武器、同一套设置）。
+  const WEAPON_SIZE: Record<MechaFamily, Record<'cannon' | 'rifle', { x: number; y: number }>> = {
+    olive: { cannon: { x: 1.88, y: 1.27 }, rifle: { x: 1.84, y: 1.36 } },
+    agile: { cannon: { x: 1.55, y: 1.05 }, rifle: { x: 1.4, y: 1.12 } },
+    powersuit: { cannon: { x: 1.16, y: 0.91 }, rifle: { x: 1.04, y: 0.96 } },
+  };
+  const base = kind === 'cannon' || kind === 'rifle' ? WEAPON_SIZE[family][kind] : { x: 1, y: 1 };
+  const size = { x: base.x * (sizeMul?.x ?? 1), y: base.y * (sizeMul?.y ?? 1) };
   const spec = { scheme, seed: 31, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family], size };
   const A = renderWeapon(cv, spec, kind, origin);
   finishRender(cv, A, finFor(family, scheme));

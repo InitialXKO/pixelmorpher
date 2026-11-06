@@ -43,6 +43,8 @@ export interface MechaBuildOptions {
   parts?: MechaPartOverrides;
   /** 履带长度（底盘为履带时） */
   trackLen?: number;
+  /** 武器尺寸倍率（长向 x / 厚向 y），作用于全部武器（臂炮/步枪/导弹荚）；缺省 1 */
+  weaponSize?: { x: number; y: number };
 }
 
 /** 导弹荚四挂位（据肩挂不遮头脸四式参考）：后偏/高架/外侧/低位 */
@@ -234,8 +236,12 @@ export function assembleMechaCharacter(opts: {
   if (B.chassis === 'tracks') sock3(nodes, 'pelvis', 'tracks', 0, 4 * sc, 0);
   if (B.jetpack) sock3(nodes, 'pelvis', 'jetpack', 0, -128 * sc, -72 * sc);
   if (B.podMount) { const w = POD_MOUNT_WIRE[B.podMount]; sock3(nodes, 'pelvis', 'pod', w.side * sc, w.down * sc, w.fwd * sc); }
-  if (B.weapon === 'cannon') { sockLimb(nodes, 'arm_fore_N', 'weapon', Math.round(G.foreLen * 0.35) * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: 0 }; } // 臂炮挂点在前臂中段：套筒覆住前臂后半、炮口越过拳端（腕口挂载时套筒全悬在拳外）；节点角 0 = 炮口朝前（装配渲染扫角实测：90 朝下、−90 朝上）
-  if (B.weapon === 'rifle') { sockLimb(nodes, 'arm_hand_N', 'weapon', 10 * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: -(R.armUpper + R.armFore) }; }
+  // 武器朝向铁律：武器固定在肢体坐标系里、随肢体走——臂炮与前臂
+  // 同轴（套筒即前臂的一部分），步枪以固定握角挂在手上；静止垂臂
+  // 时两者都顺臂朝下，抬臂时随臂抬起。禁止用抵消臂角的方式让武器
+  // 脱离肢体朝向（小臂朝下而武器平举朝前是几何不成立的乱改）。
+  if (B.weapon === 'cannon') { sockLimb(nodes, 'arm_fore_N', 'weapon', Math.round(G.foreLen * 0.35) * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: 90 }; } // 挂点在前臂中段：套筒覆住前臂后半、炮口顺臂越过拳端
+  if (B.weapon === 'rifle') { sockLimb(nodes, 'arm_hand_N', 'weapon', 10 * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: 90 }; }
 
   // 根定位（根 x 存画布中心口径，与既有角色一致）
   const rootY = Math.max(320, Math.min(canvasSize.h * 0.42, 800));
@@ -374,8 +380,8 @@ export function createMechaCharacterInStore(
     plan.push({ key: 'legThigh', data: partSet.legThigh }, { key: 'legShin', data: partSet.legShin }, { key: 'legFoot', data: partSet.legFoot });
   }
   if (B.jetpack) plan.push({ key: 'jetpack', data: generateMechaJetpack(opts.family, B.parts?.scheme) });
-  if (B.podMount) { const pk = B.podMount === 'pylon' ? 'podPylon' : 'pod'; plan.push({ key: pk, data: generateMechaWeapon(opts.family, pk, B.parts?.scheme) }); }
-  if (B.weapon) plan.push({ key: B.weapon, data: generateMechaWeapon(opts.family, B.weapon, B.parts?.scheme) });
+  if (B.podMount) { const pk = B.podMount === 'pylon' ? 'podPylon' : 'pod'; plan.push({ key: pk, data: generateMechaWeapon(opts.family, pk, B.parts?.scheme, B.weaponSize) }); }
+  if (B.weapon) plan.push({ key: B.weapon, data: generateMechaWeapon(opts.family, B.weapon, B.parts?.scheme, B.weaponSize) });
   const spriteIds = registerSprites(store, character.id, opts.name, plan, scale);
   const assembly = assembleMechaCharacter({
     characterId: character.id, family: opts.family,

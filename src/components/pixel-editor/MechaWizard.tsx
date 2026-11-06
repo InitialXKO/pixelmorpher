@@ -59,6 +59,7 @@ interface LegCtl {
   footType: string; topology: string; bend: number; wScale: number; ankleShift: number;
   lift: number; coreScale: number; detail: number; wear: number; camo: boolean;
   shellMode: boolean; frameHeavy: boolean; guardOff: boolean; decalKind: string; cableTint: string; seed: number;
+  kneeScale: number; calfScale: number; shinConcave: number;
 }
 interface ArmCtl {
   hand: string; bulk: number; shell: number; upperLen: number; foreLen: number;
@@ -92,6 +93,7 @@ function legDefaults(f: MechaFamily): LegCtl {
     camo: s.camo, shellMode: s.shellMode ?? false, frameHeavy: s.frameHeavy ?? false,
     guardOff: s.guardOff ?? false, decalKind: s.decalKind ?? 'num',
     cableTint: s.cableTint ? rgbToHex(s.cableTint) : '', seed: s.seed,
+    kneeScale: s.kneeScale ?? 1, calfScale: s.calfScale ?? 1, shinConcave: s.shinConcave ?? 1,
   };
 }
 function armDefaults(f: MechaFamily): ArmCtl {
@@ -151,6 +153,9 @@ function buildLegOv(def: LegCtl, cur: LegCtl): MechaLegOverrides | undefined {
   if (cur.decalKind !== def.decalKind) ov.decalKind = cur.decalKind as LegSpec['decalKind'];
   if (cur.cableTint !== def.cableTint && cur.cableTint) ov.cableTint = hexToRgb(cur.cableTint);
   if (cur.seed !== def.seed) ov.seed = cur.seed;
+  if (cur.kneeScale !== def.kneeScale) ov.kneeScale = cur.kneeScale;
+  if (cur.calfScale !== def.calfScale) ov.calfScale = cur.calfScale;
+  if (cur.shinConcave !== def.shinConcave) ov.shinConcave = cur.shinConcave;
   return Object.keys(ov).length ? ov : undefined;
 }
 function buildArmOv(def: ArmCtl, cur: ArmCtl): MechaArmOverrides | undefined {
@@ -315,6 +320,8 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   const [jetpack, setJetpack] = useState(false);
   const [podMount, setPodMount] = useState<MechaPodMount | null>(null);
   const [weapon, setWeapon] = useState<WeaponSel>('none');
+  const [weaponLen, setWeaponLen] = useState(1);
+  const [weaponThick, setWeaponThick] = useState(1);
   const [hull, setHull] = useState<MechaVehicleOptions['hull']>('walker');
   const [mobility, setMobility] = useState<MechaVehicleOptions['mobility']>('legs');
   const [turret, setTurret] = useState(true);
@@ -377,8 +384,9 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
       weapon: weapon === 'none' ? null : weapon,
       parts: Object.keys(parts).length ? parts : undefined,
       trackLen: chassisSel === 'tracks' && trackLen !== 252 ? trackLen : undefined,
+      weaponSize: (weapon !== 'none' || podMount) && (weaponLen !== 1 || weaponThick !== 1) ? { x: weaponLen, y: weaponThick } : undefined,
     };
-  }, [family, scheme, legBox, armBox, torsoBox, headBox, chassisSel, jetpack, podMount, weapon, trackLen]);
+  }, [family, scheme, legBox, armBox, torsoBox, headBox, chassisSel, jetpack, podMount, weapon, trackLen, weaponLen, weaponThick]);
 
   const vehicleOpts = useCallback((): MechaVehicleOptions => {
     const vehSchemeDef: MechaSchemeName = hull === 'walker' ? 'olive' : 'slate';
@@ -403,7 +411,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
     return ps;
   }, []);
 
-  const gearSprite = useCallback((fam: MechaFamily, part: string, ovSig: string, ctx: { scheme?: MechaSchemeName; leg?: MechaLegOverrides; trackLen?: number }): MechaSpriteData | undefined => {
+  const gearSprite = useCallback((fam: MechaFamily, part: string, ovSig: string, ctx: { scheme?: MechaSchemeName; leg?: MechaLegOverrides; trackLen?: number; weaponSize?: { x: number; y: number } }): MechaSpriteData | undefined => {
     const key = fam + ':' + part + ':' + ovSig;
     let s = spriteCache.current.get(key);
     if (s) return s;
@@ -416,10 +424,10 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
     }
     if (part === 'trackUnit') s = generateMechaTrackUnit(fam, { len: ctx.trackLen, scheme: ctx.scheme });
     else if (part === 'jetpack') s = generateMechaJetpack(fam, ctx.scheme);
-    else if (part === 'pod') s = generateMechaWeapon(fam, 'pod', ctx.scheme);
-    else if (part === 'podPylon') s = generateMechaWeapon(fam, 'podPylon', ctx.scheme);
-    else if (part === 'cannon') s = generateMechaWeapon(fam, 'cannon', ctx.scheme);
-    else if (part === 'rifle') s = generateMechaWeapon(fam, 'rifle', ctx.scheme);
+    else if (part === 'pod') s = generateMechaWeapon(fam, 'pod', ctx.scheme, ctx.weaponSize);
+    else if (part === 'podPylon') s = generateMechaWeapon(fam, 'podPylon', ctx.scheme, ctx.weaponSize);
+    else if (part === 'cannon') s = generateMechaWeapon(fam, 'cannon', ctx.scheme, ctx.weaponSize);
+    else if (part === 'rifle') s = generateMechaWeapon(fam, 'rifle', ctx.scheme, ctx.weaponSize);
     else return undefined;
     spriteCache.current.set(key, s);
     return s;
@@ -466,7 +474,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
         partSet: ps, spriteIds: {}, build: B, scale,
       });
       nodeParts = mechaHumanoidNodeParts(B);
-      const gearCtx = { scheme: B.parts?.scheme, leg: B.parts?.leg, trackLen: B.trackLen };
+      const gearCtx = { scheme: B.parts?.scheme, leg: B.parts?.leg, trackLen: B.trackLen, weaponSize: B.weaponSize };
       spriteFor = (part) => {
         if (part === 'torso') return ps.torso;
         if (part === 'head') return ps.head;
@@ -617,6 +625,11 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
         <NumCtl label="膝弯°" value={legCtl.bend} min={0} max={45} step={1} onCommit={(v) => setLeg({ bend: v })} />
         <NumCtl label="腿宽×" value={legCtl.wScale} min={0.6} max={1.6} step={0.05} onCommit={(v) => setLeg({ wScale: v })} />
         <NumCtl label="踝移" value={legCtl.ankleShift} min={-20} max={30} step={1} onCommit={(v) => setLeg({ ankleShift: v })} />
+      </>)}
+      {numRow(<>
+        <NumCtl label="膝盖块×" value={legCtl.kneeScale} min={0.4} max={2} step={0.05} onCommit={(v) => setLeg({ kneeScale: v })} />
+        <NumCtl label="腓肠×" value={legCtl.calfScale} min={0} max={2} step={0.05} onCommit={(v) => setLeg({ calfScale: v })} />
+        <NumCtl label="胫骨凹面×" value={legCtl.shinConcave} min={0} max={1.6} step={0.05} onCommit={(v) => setLeg({ shinConcave: v })} />
       </>)}
       <Adv id="leg" open={advOpen} setOpen={setAdvOpen}>
         {numRow(<>
@@ -886,6 +899,11 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
                   <Chip key={m} active={podMount === m} onClick={() => setPodMount(m)}>{MECHA_POD_MOUNT_LABELS[m]}</Chip>
                 ))}
               </Row>
+              {(weapon !== 'none' || podMount) && numRow(<>
+                <NumCtl label="武器长×" value={weaponLen} min={0.5} max={2} step={0.05} onCommit={setWeaponLen} />
+                <NumCtl label="武器粗×" value={weaponThick} min={0.5} max={2} step={0.05} onCommit={setWeaponThick} />
+                <span className="text-[11px] text-gray-500">臂炮/步枪/导弹荚通用</span>
+              </>)}
               {chassisSel === 'tracks' ? trackLenRow : legSection}
               {armSection}
               {torsoSection}

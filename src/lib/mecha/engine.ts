@@ -172,7 +172,7 @@ const FONT: Record<string, string[]> = {
 };
 
 // ---------- 布局 ----------
-interface LegSpec { topology: 'standard' | 'reverse'; scheme: Scheme; seed: number; bend: number; camo: boolean; wear?: number; frameHeavy?: boolean; shellMode?: boolean; wScale?: number; lift?: number; guardOff?: boolean; detail?: number; ankleShift?: number; cableTint?: RGB; decalKind?: 'num' | 'plate' | 'none'; coreScale?: number; footType?: 'blocks' | 'shoe' | 'claw' | 'pad' | 'wheel'; /** 履带相位帧专用：皮带行程 px，圆盘 pass 按同心最大半径折算转角（其余画布不设、零影响） */ beltPhase?: number; /** 轮足相位帧专用：轮行程 px，毂盘按胎外径折算转角、胎环扇区随之移（仅轮足画布设） */ wheelPhase?: number }
+interface LegSpec { topology: 'standard' | 'reverse'; scheme: Scheme; seed: number; bend: number; camo: boolean; wear?: number; frameHeavy?: boolean; shellMode?: boolean; wScale?: number; lift?: number; guardOff?: boolean; detail?: number; ankleShift?: number; cableTint?: RGB; decalKind?: 'num' | 'plate' | 'none'; coreScale?: number; footType?: 'blocks' | 'shoe' | 'claw' | 'pad' | 'wheel'; /** 膝盖块厚度系数（用户可调，默认 1） */ kneeScale?: number; /** 腓肠隆起系数（用户可调，默认 1） */ calfScale?: number; /** 胫骨凹面深度系数（用户可调，默认 1；0 = 前缘不凹） */ shinConcave?: number; /** 履带相位帧专用：皮带行程 px，圆盘 pass 按同心最大半径折算转角（其余画布不设、零影响） */ beltPhase?: number; /** 轮足相位帧专用：轮行程 px，毂盘按胎外径折算转角、胎环扇区随之移（仅轮足画布设） */ wheelPhase?: number }
 interface Anchors {
   plateTint: Map<number, number>; panelLines: Map<number, number[]>;
   boltPts: Pt[]; ventId: number; guardId: number; stripeId: number;
@@ -196,9 +196,13 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
   const toeX = pre?.toeX ?? ankle.x + 100;
   const ws = spec.wScale ?? 1;
   const thigh = { a: hip, b: knee, wA: 110 * ws, wB: 84 * ws, bulge: { f: 0.16, b: 0.05 } };
-  // 小腿去人形化（用户定）：腓肠（后隆起）大幅夸张、前缘（胫骨侧）
-  // 改凹——人腿是前直后胀的平滑曲线，机甲腿要前凹后凸的机械剖面
-  const shin = { a: knee, b: ankle, wA: 100 * ws, wB: 64 * ws, bulge: { f: -0.38, b: 0.42 } };
+  // 小腿去人形化（用户定）：腓肠（后隆起）夸张、前缘（胫骨侧）改凹
+  // ——人腿是前直后胀的平滑曲线，机甲腿要前凹后凸的机械剖面；
+  // 两者都是用户可调参数（calfScale / shinConcave，默认 1）
+  const shin = { a: knee, b: ankle, wA: 100 * ws, wB: 64 * ws, bulge: { f: -0.38 * (spec.shinConcave ?? 1), b: 0.42 * (spec.calfScale ?? 1) } };
+  // 腓肠表面相对默认（bulge.b = 0.42）的外移量：背侧附件（导轨/
+  // 排气/挂盒/线缆）按它跟随，腓肠参数变化时不埋进也不飘离表面
+  const calfDelta = (t: number) => ((shin.wA + (shin.wB - shin.wA) * t) / 2) * (shin.bulge.b - 0.42) * bumpAt(t, 0.34);
   // 剪影
   const segProf = (t: number) => (1 - 0.13 * Math.exp(-((t / 0.09) ** 2)) - 0.13 * Math.exp(-(((1 - t) / 0.09) ** 2))) * (t > 0.52 ? 0.95 : 1);
   for (const s of [thigh, shin]) markSil(cv, silQuad(s.a, s.b, s.wA, s.wB, 2, { f: s.bulge.f * 0.5, b: s.bulge.b * 0.5 }, segProf)); // 包络隆起减半：原隆起全量是过 claim（板面才是外表面）
@@ -285,7 +289,7 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
   const cablePts: Pt[] = [];
   const sag = (spec.seed % 4) * 3 + (spec.guardOff ? 3 : 0);
   for (let k = 0; k <= 22; k++) cablePts.push(bezier(backOf(thigh, 0.06, 40), backOf(thigh, 0.5, 52 + sag), backOf(thigh, 0.97, 36), k / 22));
-  for (let k = 0; k <= 22; k++) cablePts.push(bezier(backOf(shin, 0.04, 40), backOf(shin, 0.5, 58 + sag * 0.8), backOf(shin, 0.96, 32), k / 22));
+  for (let k = 0; k <= 22; k++) cablePts.push(bezier(backOf(shin, 0.04, 40 + calfDelta(0.04)), backOf(shin, 0.5, 58 + sag * 0.8 + calfDelta(0.5)), backOf(shin, 0.96, 32 + calfDelta(0.96)), k / 22));
   cv.insts.push({ kind: 'cable' });
   fillShape(cv, id, (x, y) => { let m = 1e9; for (const p of cablePts) m = Math.min(m, Math.hypot(x - p.x, y - p.y)); return [m <= 5.5, 0, m / 5.5]; }); id++;
   for (const e of [cablePts[0], cablePts[cablePts.length - 1]]) { cv.insts.push({ kind: 'cyl' }); fillShape(cv, id, discTest(e, 4.5)); id++; } // 线缆端头接头
@@ -421,7 +425,8 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     const C = (along: number, off: number): Pt => ({
       x: knee.x + f.ux * along + f.px * sgn * off, y: knee.y + f.uy * along + f.py * sgn * off,
     });
-    const cap = [C(-36, 26), C(-32, 52), C(2, 59), C(28, 47), C(25, 24)]; // 膝盖帽：前伸加厚（横向夸张，与膝块同向）
+    const ks = spec.kneeScale ?? 1; // 膝盖块系数（用户可调）
+    const cap = [C(-36, 26 * ks), C(-32, 52 * ks), C(2, 59 * ks), C(28, 47 * ks), C(25, 24 * ks)]; // 膝盖帽：前伸厚度随膝盖块系数
     cv.insts.push({ kind: 'plate' }); const capId = id;
     fillShape(cv, id, polyTest(cap)); id++;
     A.plateTint.set(capId, 1.06); A.panelLines.set(capId, [0.55]);
@@ -434,7 +439,7 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     };
     const tf = segFrame(thigh.a, thigh.b); const tsgn = std ? -1 : 1;
     box(thigh.a.x + tf.ux * tf.len * 0.3 + tf.px * tsgn * 44, thigh.a.y + tf.uy * tf.len * 0.3 + tf.py * tsgn * 44, 26, 34);
-    box(shin.a.x + f.ux * f.len * 0.62 - f.px * sgn * 52, shin.a.y + f.uy * f.len * 0.62 - f.py * sgn * 52, 24, 32); // 小腿后挂盒：随腓肠外扩跟出
+    box(shin.a.x + f.ux * f.len * 0.62 - f.px * sgn * (52 + calfDelta(0.62)), shin.a.y + f.uy * f.len * 0.62 - f.py * sgn * (52 + calfDelta(0.62)), 24, 32); // 小腿后挂盒：随腓肠表面跟随
   }
   // 6.6) 中型构件一批：裙板 / 副油缸 / 膝连杆 / 排气管 / 背导轨 / 踝护板 / 提手
   {
@@ -446,13 +451,13 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     const l1 = backOf(thigh, 0.8, 27), l2 = backOf(shin, 0.15, 23);
     cv.insts.push({ kind: 'frame' }); fillShape(cv, id, lineTest(l1, l2, 7)); id++;
     for (const e of [l1, l2]) { cv.insts.push({ kind: 'cyl' }); fillShape(cv, id, discTest(e, 8)); id++; }
-    // 小腿背导轨（贴腓肠表面走：腓肠外扩后离轴距离随新表面跟出）
+    // 小腿背导轨（贴腓肠表面走：离轴距离随腓肠表面跟随）
     cv.insts.push({ kind: 'plate' }); const railId = id;
-    fillShape(cv, id, lineTest(backOf(shin, 0.14, 58), backOf(shin, 0.88, 38), 4.5)); id++;
+    fillShape(cv, id, lineTest(backOf(shin, 0.14, 58 + calfDelta(0.14)), backOf(shin, 0.88, 38 + calfDelta(0.88)), 4.5)); id++;
     A.plateTint.set(railId, 0.95); A.panelLines.set(railId, []);
     // 小腿排气管 ×3（膝后向上短管）
     for (let k = 0; k < 3; k++) {
-      const base = backOf(shin, 0.1 + k * 0.055, 52);
+      const base = backOf(shin, 0.1 + k * 0.055, 52 + calfDelta(0.1 + k * 0.055));
       cv.insts.push({ kind: 'cyl' }); fillShape(cv, id, lineTest(base, { x: base.x - 3, y: base.y - 32 }, 4.2)); id++;
     }
     // 踝前护板
@@ -500,8 +505,8 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
   }
   // 壳体块画在盖帽之后：压住帽缘、关节成簇（v15 画在帽前被帽盖住，等于没加）
   jointBlock(ja(hip, segAng(hip, knee), 30), segAng(hip, knee), 64, 46);
-  jointBlock(ja(knee, segAng(knee, hip), 28), segAng(knee, hip), 68, 56); // 大腿膝盖块：厚度横向夸张（42→56，去人腿的收分感）
-  jointBlock(ja(knee, segAng(knee, ankle), 28), segAng(knee, ankle), 60, 48);
+  jointBlock(ja(knee, segAng(knee, hip), 28), segAng(knee, hip), 68, 56 * (spec.kneeScale ?? 1)); // 大腿膝盖块：厚度由 kneeScale 系数（用户可调，默认 1）
+  jointBlock(ja(knee, segAng(knee, ankle), 28), segAng(knee, ankle), 60, 48 * (spec.kneeScale ?? 1));
   jointBlock(ja(ankle, segAng(ankle, knee), 19), segAng(ankle, knee), 44, 32);
   jointBlock(ja(knee, segAng(knee, hip) + 0.55, 34), segAng(knee, hip) + 0.3, 38, 28);
   jointBlock(ja(hip, segAng(hip, knee) - 0.6, 32), segAng(hip, knee) - 0.3, 36, 26);
@@ -587,7 +592,7 @@ function legIR(spec: LegSpec): MechaIR {
   parts.push(
     { id: 'cables', pattern: 'cableRun', anchors: ['hip', 'knee', 'ankle'], params: {} },
     { id: 'thigh.plates', pattern: 'segPlates', anchors: ['hip', 'knee'], params: { wA: 110 * ws, wB: 84 * ws, bulgeF: 0.16, bulgeB: 0.05 } },
-    { id: 'shin.plates', pattern: 'segPlates', anchors: ['knee', 'ankle'], params: { wA: 100 * ws, wB: 64 * ws, bulgeF: -0.38, bulgeB: 0.42 } },
+    { id: 'shin.plates', pattern: 'segPlates', anchors: ['knee', 'ankle'], params: { wA: 100 * ws, wB: 64 * ws, bulgeF: -0.38 * (spec.shinConcave ?? 1), bulgeB: 0.42 * (spec.calfScale ?? 1) } },
     { id: 'foot', pattern: FOOT_PATTERN[spec.footType ?? 'blocks'], anchors: ['ankle', 'toe'], params: {} },
   );
   if (!spec.guardOff) parts.push({ id: 'guard', pattern: 'guard', anchors: ['knee', 'ankle'], params: {} });
