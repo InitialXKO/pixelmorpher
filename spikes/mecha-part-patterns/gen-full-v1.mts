@@ -1219,8 +1219,9 @@ function blockPolyT(cx: number, cy: number, w: number, h: number, ang: number, c
   }
   return raw.map((q) => ({ x: cx + q.x * ca - q.y * sa, y: cy + q.x * sa + q.y * ca }));
 }
-function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
-  const rnd = mulberry32(999);
+interface LayerTools { A: Anchors; addBlock: (kind: Kind, cx: number, cy: number, w: number, h: number, ang?: number, cham?: number, bolts?: boolean) => number; addDisc: (kind: Kind, c: Pt, r: number) => number; addPoly: (pts: Pt[], bolts?: boolean) => number; addRaw: (kind: Kind, test: (x: number, y: number) => [boolean, number, number]) => number; rod: (a: Pt, b: Pt, r: number) => number; grille: (cx: number, cy: number, w: number, h: number) => void; finish: () => void }
+function makeLayerTools(cv: Canvas, seed: number): LayerTools {
+  const rnd = mulberry32(seed);
   let id = 0;
   const A: Anchors = { plateTint: new Map(), panelLines: new Map(), boltPts: [], ventId: -1, guardId: -1, stripeId: -1, decalPos: { x: 0, y: 0 }, numPos: { x: 0, y: 0 }, numText: '', lightPts: [], discs: [], chevrons: [], seamU: new Map(), insignia: { pos: { x: 0, y: 0 }, kind: 0 }, stripeThigh: -1, blockPlates: new Set(), deviceFrame: null, chevDecal: true, shinIds: new Set(), stripeSegs: [], panelDiag: new Map(), panelTee: new Map(), decalKind: 'num', toeFace: null };
   const tints = [0.78, 0.9, 1.0, 1.1, 1.24];
@@ -1243,10 +1244,18 @@ function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
   };
   const addDisc = (kind: Kind, c: Pt, r: number): number => { cv.insts.push({ kind }); const myId = id; fillShape(cv, id, discTest(c, r)); id++; A.discs.push({ id: myId, c, r, hv: 0.5 }); return myId; };
   const grille = (cx: number, cy: number, w: number, h: number) => { addBlock('plate', cx, cy, w, h, 0, 0.2); for (let k = 0; k < 3; k++) addBlock('frame', cx, cy - h / 2 + 6 + k * ((h - 8) / 2), w - 4, 4.5, 0, 0.1); };
+  const addPoly = (pts: Pt[], bolts = false): number => { cv.insts.push({ kind: 'plate' }); const myId = id; fillShape(cv, id, polyTest(pts)); id++; reg(myId); if (bolts) { const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y); const x0 = Math.min(...xs) + 6, x1 = Math.max(...xs) - 6, y0 = Math.min(...ys) + 6, y1 = Math.max(...ys) - 6; for (const [bx, by] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]] as const) A.boltPts.push({ x: bx, y: by }); } return myId; };
+  const addRaw = (kind: Kind, test: (x: number, y: number) => [boolean, number, number]): number => { cv.insts.push({ kind }); const myId = id; fillShape(cv, id, test); id++; return myId; };
+  const rod = (a: Pt, b: Pt, r: number): number => addRaw('cyl', lineTest(a, b, r));
+  const finish = () => { for (let i = 0; i < W * H; i++) if (cv.owner[i] >= 0) cv.sil[i] = 1; };
+  return { A, addBlock, addDisc, addPoly, addRaw, rod, grille, finish };
+}
+function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
+  const T = makeLayerTools(cv, 999); const { A, addBlock, addDisc, grille, finish } = T;
   // 远臂
   addBlock('frame', 190, 126, 30, 70, -0.08); addBlock('plate', 196, 124, 46, 48, -0.06);
   addDisc('disc', { x: 188, y: 160 }, 11);
-  { cv.insts.push({ kind: 'cyl' }); fillShape(cv, id, lineTest({ x: 174, y: 150 }, { x: 176, y: 198 }, 3)); id++; } // 前臂外露液压杆（与腿同语言）
+  T.rod({ x: 174, y: 150 }, { x: 176, y: 198 }, 3); // 前臂外露液压杆（与腿同语言）
   addBlock('plate', 184, 196, 52, 50, 0.04); addBlock('plate', 184, 240, 32, 26, 0.04);
   addBlock('plate', 176, 257, 9, 14, 0.08); addBlock('plate', 186, 259, 9, 15, 0.03); addBlock('plate', 196, 257, 9, 13, -0.02); // 分段指
   addBlock('plate', 196, 88, 78, 54, -0.02); addBlock('plate', 194, 62, 66, 22, -0.02);
@@ -1268,7 +1277,7 @@ function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
     const p0 = { x: 148, y: 166 }, p1 = { x: 168, y: 208 }, p2 = { x: 218, y: 226 };
     const pts: Pt[] = [];
     for (let s = 0; s <= 22; s++) { const t = s / 22, a = (1 - t) * (1 - t), b = 2 * (1 - t) * t, c = t * t; pts.push({ x: a * p0.x + b * p1.x + c * p2.x, y: a * p0.y + b * p1.y + c * p2.y }); }
-    cv.insts.push({ kind: 'cable' }); fillShape(cv, id, (x, y) => { let m = 1e9; for (const p of pts) m = Math.min(m, Math.hypot(x - p.x, y - p.y)); return [m <= 7, 0, m / 7]; }); id++;
+    T.addRaw('cable', (x, y) => { let m = 1e9; for (const p of pts) m = Math.min(m, Math.hypot(x - p.x, y - p.y)); return [m <= 7, 0, m / 7]; });
     addDisc('cyl', p0, 9); addDisc('cyl', p2, 9);
   }
   addBlock('plate', 156, 272, 76, 36, 0.06);
@@ -1292,8 +1301,8 @@ function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
   addBlock('plate', 232, 146, 48, 40, 0.08);
   addBlock('frame', 222, 166, 16, 20, 0.05);
   addDisc('disc', { x: 234, y: 166 }, 11);
-  { cv.insts.push({ kind: 'cyl' }); fillShape(cv, id, lineTest({ x: 214, y: 150 }, { x: 216, y: 200 }, 3.5)); id++; } // 前臂双液压杆（与腿同语言）
-  { cv.insts.push({ kind: 'cyl' }); fillShape(cv, id, lineTest({ x: 250, y: 152 }, { x: 248, y: 198 }, 3)); id++; }
+  T.rod({ x: 214, y: 150 }, { x: 216, y: 200 }, 3.5); // 前臂双液压杆（与腿同语言）
+  T.rod({ x: 250, y: 152 }, { x: 248, y: 198 }, 3);
   addBlock('plate', 228, 198, 52, 54, -0.04, 0.36, true);
   addBlock('frame', 240, 192, 30, 36, -0.03);
   addDisc('disc', { x: 226, y: 228 }, 8);
@@ -1307,7 +1316,7 @@ function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
   A.stripeThigh = chestMain; A.numPos = { x: 138, y: 104 }; A.numText = 'M-46';
   A.lightPts.push({ x: 258, y: 47 }, { x: 252, y: 100 });
   A.insignia = { pos: { x: 208, y: 120 }, kind: 1 };
-  for (let i = 0; i < W * H; i++) if (cv.owner[i] >= 0) cv.sil[i] = 1; // 剪影 = 部件并集（与 layout 同口径）
+  finish(); // 剪影 = 部件并集（与 layout 同口径）
   return A;
 }
 {
@@ -1336,4 +1345,63 @@ function layoutTorso(cv: Canvas, tspec: LegSpec): Anchors {
   blitCv(tCv.col, 0, 0, 1, 0);
   writeFileSync(OUT + 'mecha-full-v2.png', encodePNG(W2, H2, fin));
   console.log('full v2 done');
+}
+
+// ---------- 载具型（完整管线）：车体组布局（对账③④：英雄挂载放大、侧面模块阵列、标记系统） ----------
+function layoutHull(cv: Canvas): Anchors {
+  const T = makeLayerTools(cv, 1234);
+  const { A, addBlock, addDisc, grille, finish } = T;
+  // 主积：楔箱（前低后高、平底）
+  const hull = T.addPoly([{ x: 62, y: 118 }, { x: 205, y: 108 }, { x: 308, y: 200 }, { x: 294, y: 240 }, { x: 72, y: 240 }], true);
+  addBlock('plate', 168, 102, 196, 24, 0, 0.3); // 顶甲板
+  addBlock('plate', 84, 96, 54, 22, 0.03); // 后甲板件
+  grille(76, 165, 26, 58); // 后侧散热栅
+  // 侧面模块阵列：双舱门 + 侧舱
+  const bayA = addBlock('plate', 122, 184, 84, 46, 0, 0.3, true);
+  addBlock('plate', 220, 188, 88, 42, 0, 0.3, true);
+  addBlock('plate', 282, 192, 42, 36, 0, 0.3);
+  addBlock('frame', 180, 244, 252, 13, 0, 0.15); // 底裙带
+  // 英雄挂载：大炮塔 + 主炮（占顶面大半）
+  addBlock('plate', 150, 78, 94, 34, 0, 0.3, true); // 塔座
+  addBlock('plate', 148, 50, 78, 30, -0.02); // 塔体
+  addBlock('plate', 138, 32, 46, 14, 0); // 塔顶盖
+  addDisc('disc', { x: 178, y: 34 }, 9); // 传感器球
+  addBlock('frame', 198, 42, 16, 12, 0); // 潜望件
+  addBlock('cyl', 116, 14, 4, 26, 0.08, 0.2); // 天线
+  addBlock('plate', 198, 50, 30, 26, -0.05); // 炮盾
+  T.addRaw('cyl', lineTest({ x: 210, y: 50 }, { x: 350, y: 42 }, 7)); // 主炮筒
+  T.addRaw('cyl', lineTest({ x: 298, y: 44 }, { x: 354, y: 41 }, 9.5)); // 炮口制退节
+  // 标记系统：编号归侧舱门 A、徽记归舱门 B 区、车灯走信号灯 pass
+  A.stripeThigh = bayA; A.numPos = { x: 92, y: 170 }; A.numText = 'N-37';
+  A.insignia = { pos: { x: 222, y: 178 }, kind: 0 };
+  A.lightPts.push({ x: 294, y: 224 }, { x: 68, y: 128 });
+  finish();
+  return A;
+}
+{
+  const oliveSpec: LegSpec = { topology: 'standard', scheme: SCHEMES.olive, seed: 11, bend: 22, camo: true, wear: 0.3, wScale: 1.1, lift: 20, detail: 0.65, ankleShift: 12, coreScale: 1.05 };
+  const farSpec: LegSpec = { topology: 'standard', scheme: SCHEMES.olive, seed: 11, bend: 0, camo: true, wear: 0.3 };
+  const hullSpec: LegSpec = { topology: 'standard', scheme: SCHEMES.olive, seed: 23, bend: 0, camo: true, wear: 0.35, detail: 1 };
+  const farCv = render(farSpec), nearCv = render(oliveSpec);
+  const hCv = newCanvas(); const hA = layoutHull(hCv); finishRender(hCv, hA, hullSpec);
+  const W2 = 380, H2 = 730;
+  const fin = new Uint8ClampedArray(W2 * H2 * 4);
+  const blitCv = (src: Uint8ClampedArray, ox: number, oy: number, dark: number, desat: number) => {
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const si = (y * W + x) * 4; if (!src[si + 3]) continue;
+      const tx = x + ox, ty = y + oy; if (tx < 0 || ty < 0 || tx >= W2 || ty >= H2) continue;
+      const di = (ty * W2 + tx) * 4; let r = src[si], g = src[si + 1], b = src[si + 2];
+      const gray = (r + g + b) / 3; r = (r + (gray - r) * desat) * dark; g = (g + (gray - g) * desat) * dark; b = (b + (gray - b) * desat) * dark;
+      fin[di] = r; fin[di + 1] = g; fin[di + 2] = b; fin[di + 3] = src[si + 3];
+    }
+  };
+  blitCv(farCv.col, 40, 196, 0.7, 0.3);
+  blitCv(nearCv.col, 0, 190, 1, 0);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const sx = x - 10, sy = y - 14; if (sx < 0 || sy < 0 || sx >= W || sy >= H) continue;
+    if (hCv.sil[sy * W + sx] && fin[(y * W2 + x) * 4 + 3]) { const di = (y * W2 + x) * 4; fin[di] *= 0.62; fin[di + 1] *= 0.62; fin[di + 2] *= 0.62; }
+  }
+  blitCv(hCv.col, 0, 0, 1, 0);
+  writeFileSync(OUT + 'walker-full-v1.png', encodePNG(W2, H2, fin));
+  console.log('walker full v1 done');
 }
