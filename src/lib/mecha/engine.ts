@@ -172,7 +172,7 @@ const FONT: Record<string, string[]> = {
 };
 
 // ---------- 布局 ----------
-interface LegSpec { topology: 'standard' | 'reverse'; scheme: Scheme; seed: number; bend: number; camo: boolean; wear?: number; frameHeavy?: boolean; shellMode?: boolean; wScale?: number; lift?: number; guardOff?: boolean; detail?: number; ankleShift?: number; cableTint?: RGB; decalKind?: 'num' | 'plate' | 'none'; coreScale?: number; footType?: 'blocks' | 'shoe' | 'claw' | 'pad' | 'wheel' }
+interface LegSpec { topology: 'standard' | 'reverse'; scheme: Scheme; seed: number; bend: number; camo: boolean; wear?: number; frameHeavy?: boolean; shellMode?: boolean; wScale?: number; lift?: number; guardOff?: boolean; detail?: number; ankleShift?: number; cableTint?: RGB; decalKind?: 'num' | 'plate' | 'none'; coreScale?: number; footType?: 'blocks' | 'shoe' | 'claw' | 'pad' | 'wheel'; /** 履带相位帧专用：皮带行程 px，圆盘 pass 按同心最大半径折算转角（其余画布不设、零影响） */ beltPhase?: number }
 interface Anchors {
   plateTint: Map<number, number>; panelLines: Map<number, number[]>;
   boltPts: Pt[]; ventId: number; guardId: number; stripeId: number;
@@ -726,14 +726,25 @@ function finishRender(cv: MechaCanvas, A: Anchors, spec: LegSpec) {
   }
   // （v10 起刻槽/螺栓圈并入下方圆盘配方 pass）
   // 关节盖帽：整面按扇区平坦分面（一块的面）+ 一道毂缝线 + 帽缘收边（无同心环）
+  // 履带相位：同心的一组盘（轮+毂）按最大半径折算同一转角，扇区随之转
+  const beltSpin = new Map<string, number>();
+  if (spec.beltPhase) {
+    const maxR = new Map<string, number>();
+    for (const d of A.discs) {
+      const k = d.c.x.toFixed(1) + ',' + d.c.y.toFixed(1);
+      maxR.set(k, Math.max(maxR.get(k) ?? 0, d.r));
+    }
+    for (const [k, r] of maxR) beltSpin.set(k, spec.beltPhase / r);
+  }
   for (const d of A.discs) {
     const x0 = Math.max(0, Math.floor(d.c.x - d.r)), x1 = Math.min(W - 1, Math.ceil(d.c.x + d.r));
     const y0 = Math.max(0, Math.floor(d.c.y - d.r)), y1 = Math.min(H - 1, Math.ceil(d.c.y + d.r));
+    const spin = beltSpin.get(d.c.x.toFixed(1) + ',' + d.c.y.toFixed(1)) ?? 0;
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
       const i = y * W + x;
       if (cv.owner[i] !== d.id) continue;
       const dx = (x - d.c.x) / d.r, dy = (y - d.c.y) / d.r;
-      const rr = Math.hypot(dx, dy), ang = Math.atan2(dy, dx);
+      const rr = Math.hypot(dx, dy), ang = Math.atan2(dy, dx) + spin;
       const fa = (Math.floor((ang + Math.PI) / (Math.PI / 6)) + 0.5) * (Math.PI / 6) - Math.PI;
       let c = ramp(mix(S.armor2, S.metal, 0.45), quant(0.86 + 0.42 * (0.45 * Math.cos(fa) - 0.89 * Math.sin(fa))));
       if (rr > 0.93) c = ramp(c, 0.78); // 帽缘收边
@@ -1197,8 +1208,9 @@ function renderArmIR(cv: MechaCanvas, ir: ArmIR, spec: ArmSpec): Anchors {
 // ---------- torsoIR：规格 → 锚点 → 部件列 → 通用解释（三段式：胸/窄腰/胯 + 背挂槽） ----------
 type TorsoPart =
   | { t: 'block'; dx: number; dy: number; w: number; h: number; ang?: number; kind?: Kind; cham?: number; bolts?: boolean; role?: 'stripe' | 'armor2' | 'accent' }
+  | { t: 'poly'; pts: [number, number][]; bolts?: boolean; role?: 'armor2' | 'accent' }
   | { t: 'disc'; dx: number; dy: number; r: number; kind?: Kind }
-  | { t: 'grille'; dx: number; dy: number; w: number; h: number }
+  | { t: 'grille'; dx: number; dy: number; w: number; h: number; face?: [number, number, number, number] }
   | { t: 'light'; dx: number; dy: number }
   | { t: 'insignia'; dx: number; dy: number; kind: number }
   | { t: 'number'; dx: number; dy: number; text: string };
@@ -1216,58 +1228,68 @@ function torsoIR(spec: TorsoSpec): TorsoIR {
   if (F.back === 'box') { parts.push({ t: 'block', dx: -W * 0.52, dy: CH * 0.4, w: W * 0.34, h: CH * 0.78, kind: 'frame' }); parts.push({ t: 'grille', dx: -W * 0.52, dy: CH * 0.34, w: W * 0.26, h: CH * 0.4 }); parts.push({ t: 'block', dx: -W * 0.5, dy: CH * 0.86, w: W * 0.3, h: CH * 0.2 }); }
   else if (F.back === 'binder') { parts.push({ t: 'block', dx: -W * 0.55, dy: CH * 0.75, w: W * 0.42, h: CH * 1.5, ang: 0.22, cham: 0.5 }); parts.push({ t: 'block', dx: -W * 0.7, dy: CH * 0.85, w: W * 0.3, h: CH * 1.3, ang: 0.22, cham: 0.5 }); parts.push({ t: 'block', dx: -W * 0.72, dy: CH * 1.42, w: W * 0.2, h: CH * 0.34, ang: 0.22, kind: 'frame' }); }
   else if (F.back === 'rack') { parts.push({ t: 'block', dx: -W * 0.5, dy: CH * 0.3, w: W * 0.22, h: CH * 0.62, kind: 'cyl' }); parts.push({ t: 'block', dx: -W * 0.52, dy: CH * 0.72, w: W * 0.24, h: CH * 0.4, kind: 'frame' }); }
+  // 腰内构先画（居后）：胸主板下延后盖住其前部，只在胸底与胯
+  // 顶之间露出一道——参考的腰是被胸胯夹住的暗缝，不是敞开的舱
+  parts.push({ t: 'block', dx: -W * 0.08, dy: waistY, w: W * 0.62, h: WH * 1.9, kind: 'frame' });
+  parts.push({ t: 'block', dx: W * 0.02, dy: waistY, w: W * 0.2, h: WH * 1.24, kind: 'cyl' });
+  parts.push({ t: 'disc', dx: -W * 0.32, dy: waistY, r: WH * (spec.family === 'powersuit' ? 0.3 : 0.42), kind: 'disc' });
+  if (spec.family === 'agile') { parts.push({ t: 'block', dx: W * 0.3, dy: waistY, w: 9, h: WH * 1.2, kind: 'cyl', role: 'accent' }); parts.push({ t: 'block', dx: -W * 0.26, dy: waistY, w: 9, h: WH * 1.2, kind: 'cyl', role: 'accent' }); }
   // 领圈 + 胸
   parts.push({ t: 'block', dx: 0, dy: 2, w: W * 0.52, h: 16, kind: 'frame' });
   parts.push({ t: 'block', dx: -W * 0.38, dy: CH * 0.16, w: W * 0.3, h: CH * 0.34, kind: 'frame' }); // 肩座
   parts.push({ t: 'disc', dx: W * 0.36, dy: CH * 0.16, r: W * 0.13 }); // 肩关节盘
+  // 胸型四式（2026-11-06 按参考族对照返工定版）：四式的共同骨架
+  // 是参考族共享的胸廓——前缘上收下突（顶前缘 ~0.3W、胸尖
+  // ~0.63W 在 0.8 高度处）、主板下延过胸线压住腰带，四式只在
+  // 板数与面的作法上分家（见各分支）。此前四式前缘齐平竖直、
+  // 胸底与胯之间露空腰舱，与四张参考全不合，已废。
   if (F.chest === 'stack') {
-    // 叠层胸（对步行坦克/重装的分层装甲）：三块厚板像摞起来的
-    // 板摞——每块前后缘都出台阶、板间压深色缝带，顶上一块框件
-    // 盖口；读的是「摞」不是「坡」
-    parts.push({ t: 'block', dx: -W * 0.04, dy: CH * 0.26, w: W * 0.88, h: CH * 0.34, cham: 0.26, bolts: true });
-    parts.push({ t: 'block', dx: W * 0.05, dy: CH * 0.56, w: W, h: CH * 0.34, cham: 0.24 });
-    parts.push({ t: 'block', dx: W * 0.14, dy: CH * 0.86, w: W * 1.12, h: CH * 0.32, cham: 0.22 });
-    parts.push({ t: 'block', dx: W * 0.02, dy: CH * 0.42, w: W * 0.96, h: CH * 0.07, kind: 'frame' });
-    parts.push({ t: 'block', dx: W * 0.11, dy: CH * 0.72, w: W * 1.08, h: CH * 0.07, kind: 'frame' });
-    parts.push({ t: 'block', dx: W * 0.3, dy: CH * 0.86, w: W * 0.07, h: CH * 0.3, kind: 'frame' }); // 底层板竖向分段缝（破横向一统）
+    // 叠层胸（对橄榄主战）：上板（带徽章）+ 中板 + 斜主板三层，
+    // 前缘逐层出台阶（0.30/0.46/0.64W），板间薄缝带是叠压影
+    // 不是黑沟；主板前脸是斜面多边形、下延到 1.06CH 压腰
+    parts.push({ t: 'block', dx: -W * 0.1, dy: CH * 0.2, w: W * 0.8, h: CH * 0.36, cham: 0.26, bolts: true });
+    parts.push({ t: 'block', dx: W * 0.01, dy: CH * 0.395, w: W * 0.9, h: CH * 0.05, kind: 'frame' });
+    parts.push({ t: 'block', dx: -W * 0.02, dy: CH * 0.53, w: W * 0.96, h: CH * 0.28, cham: 0.22 });
+    parts.push({ t: 'block', dx: W * 0.06, dy: CH * 0.685, w: W * 1.0, h: CH * 0.05, kind: 'frame' });
+    parts.push({ t: 'poly', pts: [[-W * 0.48, CH * 0.7], [W * 0.44, CH * 0.7], [W * 0.64, CH * 1.06], [-W * 0.4, CH * 1.1]] });
     parts.push({ t: 'block', dx: -W * 0.08, dy: CH * 0.05, w: W * 0.7, h: CH * 0.13, kind: 'frame', cham: 0.3 });
   } else if (F.chest === 'shell') {
-    // 壳形胸（对敏捷/动力服的整体壳体）：一整块大倒角壳面无横缝，
-    // 下前一枚胸尖收口，轮廓是光滑鼓面而非分板
-    parts.push({ t: 'block', dx: -W * 0.08, dy: CH * 0.1, w: W * 0.58, h: CH * 0.16, cham: 0.42 });
-    parts.push({ t: 'block', dx: W * 0.02, dy: CH * 0.5, w: W, h: CH * 0.9, cham: 0.62, bolts: true });
-    parts.push({ t: 'block', dx: W * 0.15, dy: CH * 0.95, w: W * 0.44, h: CH * 0.2, ang: 0.12, cham: 0.5 }); // 胸尖
+    // 壳形胸（对动力服圆壳/敏捷折面壳）：一整块多边形壳，前脸
+    // 由四段折线逼近凸曲线（顶收→中突→下尖），无横缝无分板；
+    // 动力服读圆、敏捷读折面，靠的是同一条轮廓的段数。配色按
+    // 族再分一刀：动力服橙壳白顶、敏捷白壳下前蓝段（各自参考
+    // 的色块分布，不是同一块壳换个颜色）
+    parts.push({ t: 'poly', pts: [[-W * 0.46, CH * 0.08], [W * 0.08, CH * 0.0], [W * 0.42, CH * 0.14], [W * 0.58, CH * 0.45], [W * 0.6, CH * 0.75], [W * 0.5, CH * 1.05], [-W * 0.38, CH * 1.08], [-W * 0.48, CH * 0.5]], bolts: true, ...(spec.family === 'powersuit' ? { role: 'armor2' as const } : {}) });
+    if (spec.family === 'powersuit') parts.push({ t: 'poly', pts: [[-W * 0.46, CH * 0.08], [W * 0.08, CH * 0.0], [W * 0.42, CH * 0.14], [W * 0.47, CH * 0.3], [-W * 0.28, CH * 0.28], [-W * 0.48, CH * 0.42]] });
+    else if (spec.family === 'agile') parts.push({ t: 'poly', pts: [[W * 0.14, CH * 0.6], [W * 0.6, CH * 0.75], [W * 0.5, CH * 1.05], [W * 0.02, CH * 1.03]], role: 'armor2' });
   } else if (F.chest === 'glacis') {
-    // 斜面胸（对主战参考的前倾斜面装甲）：六段薄板前缘落在同一
-    // 条斜线上、连成连续坡面（上收下突；本投影里斜面靠阶梯轮廓
-    // 读，整板旋转只会读成侧倾）；坡面中上部一块凸起的舱盖板
-    // （参考图斜面上的检修盖），下唇短而收——底缘前高后低，
-    // 读的是「坡」不是「摞」
-    for (let k = 0; k < 6; k++) {
-      parts.push({ t: 'block', dx: -W * 0.15 + k * W * 0.06, dy: CH * (0.125 + 0.145 * k), w: W * (0.74 + 0.05 * k), h: CH * 0.19, cham: 0.16 });
-    }
-    parts.push({ t: 'block', dx: W * 0.02, dy: CH * 0.3, w: W * 0.36, h: CH * 0.22, cham: 0.3, bolts: true }); // 坡面舱盖
-    parts.push({ t: 'block', dx: W * 0.24, dy: CH * 1.0, w: W * 0.34, h: CH * 0.12, ang: 0.15, cham: 0.3 });
-  } else { // slab 重板胸（对重装参考的两块巨板）：两块近乎平脸的
-    // 宽板叠成一面墙，板宽过肩线、倒角极小、深缝分段，顶上一道
-    // 框件压边；下板压进腰带上缘，读的是整块重量
+    // 斜面胸（对敏捷/主战的整坡装甲）：一整块多边形，前脸是
+    // 一条连续斜线（0.30W@顶 → 0.66W@尖），坡面中段一块贴坡
+    // 舱盖（按坡面切线角转），下唇即胸尖、无二段回收
+    parts.push({ t: 'poly', pts: [[-W * 0.48, CH * 0.08], [W * 0.3, CH * 0.08], [W * 0.66, CH * 1.02], [-W * 0.4, CH * 1.08]] });
+    parts.push({ t: 'block', dx: W * 0.44, dy: CH * 0.44, w: W * 0.34, h: CH * 0.09, ang: 1.12, cham: 0.3, bolts: true }); // 坡面舱盖
+  } else { // slab 重板胸（对重装）：上板平脸竖直（重量感来源），
+    // 下板换斜面多边形收到胸尖——参考的重装胸也不是全竖墙，
+    // 下三分之一同样前倾；板缝一道薄带，顶框件压边
     parts.push({ t: 'block', dx: -W * 0.02, dy: CH * 0.03, w: W * 1.04, h: CH * 0.13, kind: 'frame', cham: 0.2 });
-    parts.push({ t: 'block', dx: 0, dy: CH * 0.32, w: W * 1.12, h: CH * 0.56, cham: 0.12, bolts: true });
-    parts.push({ t: 'block', dx: W * 0.02, dy: CH * 0.84, w: W * 1.08, h: CH * 0.5, cham: 0.12, bolts: true });
+    parts.push({ t: 'block', dx: -W * 0.01, dy: CH * 0.31, w: W * 1.06, h: CH * 0.5, cham: 0.12, bolts: true });
+    parts.push({ t: 'block', dx: W * 0.03, dy: CH * 0.575, w: W * 1.02, h: CH * 0.05, kind: 'frame' });
+    parts.push({ t: 'poly', pts: [[-W * 0.47, CH * 0.6], [W * 0.52, CH * 0.6], [W * 0.63, CH * 1.05], [-W * 0.41, CH * 1.09]] });
   }
-  if (F.grille === 'side') parts.push({ t: 'grille', dx: W * 0.18, dy: CH * 0.74, w: W * 0.44, h: CH * 0.3 });
-  else if (F.grille === 'front') parts.push({ t: 'grille', dx: W * 0.3, dy: CH * 0.34, w: W * 0.36, h: CH * 0.34 });
+  // 格栅：参考里在胸的下前斜面上（side = 主板斜面下段，front =
+  // 敏捷壳面中段），横栅条贴面逐级进退，不是正面贴一只箱子
+  const faceSeg: [number, number, number, number] = F.chest === 'slab' ? [W * 0.52, CH * 0.6, W * 0.63, CH * 1.05]
+    : F.chest === 'glacis' ? [W * 0.3, CH * 0.08, W * 0.66, CH * 1.02]
+    : F.chest === 'shell' ? [W * 0.58, CH * 0.45, W * 0.6, CH * 0.75]
+    : [W * 0.44, CH * 0.7, W * 0.64, CH * 1.06];
+  if (F.grille === 'side') parts.push({ t: 'grille', dx: 0, dy: CH * 0.88, w: W * 0.3, h: CH * 0.24, face: faceSeg });
+  else if (F.grille === 'front') parts.push({ t: 'grille', dx: 0, dy: CH * 0.56, w: W * 0.28, h: CH * 0.24, face: faceSeg });
   if (spec.gear.stripe) parts.push({ t: 'block', dx: W * 0.02, dy: CH * 0.94, w: W * 0.9, h: 7, role: 'accent' });
   parts.push({ t: 'insignia', dx: W * 0.16, dy: CH * 0.26, kind: spec.gear.insignia });
-  if (spec.gear.number) parts.push({ t: 'number', dx: W * 0.3, dy: CH * 0.62, text: spec.gear.number });
+  if (spec.gear.number) parts.push({ t: 'number', dx: W * 0.22, dy: CH * 0.52, text: spec.gear.number });
   parts.push({ t: 'light', dx: W * 0.34, dy: CH * 0.16 });
-  // 窄腰（关节带：宽内构 + 中央柱 + 侧盘，与胸胯交叠不断开）
-  parts.push({ t: 'block', dx: -W * 0.04, dy: waistY, w: W * 0.72, h: WH * 1.5, kind: 'frame' });
-  parts.push({ t: 'block', dx: W * 0.06, dy: waistY, w: W * 0.2, h: WH * 1.24, kind: 'cyl' });
-  parts.push({ t: 'disc', dx: -W * 0.32, dy: waistY, r: WH * (spec.family === 'powersuit' ? 0.3 : 0.42), kind: 'disc' });
-  if (spec.family === 'agile') { parts.push({ t: 'block', dx: W * 0.3, dy: waistY, w: 9, h: WH * 1.2, kind: 'cyl', role: 'accent' }); parts.push({ t: 'block', dx: -W * 0.26, dy: waistY, w: 9, h: WH * 1.2, kind: 'cyl', role: 'accent' }); }
-  // 胯 + 裙
-  parts.push({ t: 'block', dx: 0, dy: pelvisY, w: W * 0.88, h: PH * 0.94, cham: 0.32, bolts: true });
+  // 胯 + 裙（胯块上提加高，与腰带交叠、顶缘钻进胸尖之下）
+  parts.push({ t: 'block', dx: 0, dy: pelvisY - PH * 0.09, w: W * 0.88, h: PH * 1.06, cham: 0.32, bolts: true });
   if (spec.gear.stripe) parts.push({ t: 'block', dx: W * 0.05, dy: pelvisY + PH * 0.3, w: W * 0.8, h: 6, role: 'accent' });
   if (F.skirt !== 'none') parts.push({ t: 'block', dx: W * 0.34, dy: pelvisY + PH * 0.05, w: W * 0.34, h: PH * 0.62, ang: 0.12, cham: 0.3 }); // 前裙
   if (F.skirt === 'both') parts.push({ t: 'block', dx: -W * 0.36, dy: pelvisY + PH * 0.18, w: W * 0.3, h: PH * 0.66, ang: -0.1, cham: 0.3 }); // 后裙
@@ -1277,10 +1299,23 @@ function renderTorsoIR(cv: MechaCanvas, ir: TorsoIR, spec: TorsoSpec): Anchors {
   const T = makeLayerTools(cv, spec.seed);
   const { A } = T, o = ir.anchors.neck;
   for (const p of ir.parts) {
-    const cx = o.x + p.dx, cy = o.y + p.dy;
+    const cx = o.x + (p.t === 'poly' ? 0 : p.dx), cy = o.y + (p.t === 'poly' ? 0 : p.dy);
     if (p.t === 'block') { const id = T.addBlock(p.kind ?? 'plate', cx, cy, p.w, p.h, p.ang ?? 0, p.cham ?? 0.36, p.bolts ?? false); if (p.role) (A.colorRole ??= new Map()).set(id, p.role); }
+    else if (p.t === 'poly') { const id = T.addPoly(p.pts.map(([dx, dy]) => ({ x: o.x + dx, y: o.y + dy })), p.bolts ?? false); if (p.role) (A.colorRole ??= new Map()).set(id, p.role); }
     else if (p.t === 'disc') T.addDisc(p.kind ?? 'disc', { x: cx, y: cy }, p.r);
-    else if (p.t === 'grille') T.grille(cx, cy, p.w, p.h);
+    else if (p.t === 'grille') {
+      if (!p.face) T.grille(cx, cy, p.w, p.h);
+      else { // 斜面格栅：横栅条保持水平、右端贴着斜面线逐级进退
+        // （参考的侧通风口就是斜面区里的水平栅条，不是整块转角）
+        const [fx0, fy0, fx1, fy1] = p.face;
+        for (let k = 0; k < 4; k++) {
+          const ly = -p.h / 2 + (k + 0.5) * (p.h / 4);
+          const t = Math.max(0, Math.min(1, (cy + ly - (o.y + fy0)) / (fy1 - fy0)));
+          const fx = o.x + fx0 + (fx1 - fx0) * t;
+          T.addBlock('frame', fx - p.w / 2 - 2, cy + ly, p.w, 4.5, 0, 0.1);
+        }
+      }
+    }
     else if (p.t === 'light') A.lightPts.push({ x: cx, y: cy });
     else if (p.t === 'insignia') A.insignia = { pos: { x: cx, y: cy }, kind: p.kind };
     else if (p.t === 'number') { A.numPos = { x: cx, y: cy }; A.numText = p.text; }

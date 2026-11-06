@@ -12,10 +12,11 @@ export interface GearSpec {
   scheme: Scheme; seed: number; wear: number; camo: boolean; twoTone: boolean;
 }
 
-export function gearFinish(spec: GearSpec): LegSpec & { altTone?: boolean } {
+export function gearFinish(spec: GearSpec & { phase?: number }): LegSpec & { altTone?: boolean } {
   return {
     topology: 'standard', scheme: spec.scheme, seed: 11, bend: 22,
     camo: spec.camo, wear: spec.wear, detail: 0.65, altTone: spec.twoTone,
+    ...(spec.phase ? { beltPhase: spec.phase } : {}),
   } as LegSpec & { altTone?: boolean };
 }
 
@@ -25,37 +26,67 @@ type Tools = ReturnType<typeof makeLayerTools>;
 // 模式（据坦克足参考×2：生成图 + 陆地战舰）：履带环带（链节分段）
 // + 环内负重轮列 + 后驱动轮/前惰轮 + 分段斜面裙甲（glacis）压住
 // 环顶 + 甲板与旋转座圈。原点 = 座圈顶面中心（躯干挂载点）。
-export interface TrackSpec extends GearSpec { len?: number }
+export interface TrackSpec extends GearSpec { len?: number; /** 滚动相位 px（0–16 一圈）：链节沿环移、带纹移、轮盘按行程折角 */ phase?: number }
 
 export function renderTrackUnit(cv: MechaCanvas, spec: TrackSpec, origin: Pt): Anchors {
   const T: Tools = makeLayerTools(cv, spec.seed);
   const len = spec.len ?? 252;
+  const phase = spec.phase ?? 0;
   const R = 33;               // 环带半径
   const band = 15;            // 环带厚
   const cy = origin.y + 74;   // 环心高（原点下方）
   const cx = origin.x;
   const x0 = cx - len / 2 + R, x1 = cx + len / 2 - R; // 直段两端圆心
-  // 履带环带：到直段线段的距离场带环；v 沿长度 → 框件条纹成链节
+  // 履带环带：到直段线段的距离场带环；v 沿长度 → 框件条纹成链节（相位时整纹沿程移）
   T.addRaw('frame', (x, y) => {
     const dx = Math.max(x0 - x, 0, x - x1);
     const dy = y - cy;
     const d = Math.hypot(dx, dy);
     if (d < R - band || d > R) return [false, 0, 0];
-    const along = (x - (cx - len / 2)) / len;
+    const along = (x + phase - (cx - len / 2)) / len;
     return [true, (d - (R - band)) / band, along];
   });
-  // 接地链节垫：沿底直段排小块（链节的承重面）
-  const pads = Math.floor(len / 16);
-  for (let i = 0; i < pads; i++) {
-    const px = cx - len / 2 + 8 + i * 16;
-    T.addBlock('frame', px, cy + R - 3, 13, 7, 0, 0.15);
+  // 链节垫：沿整环弧长排小块（垫心在环内 3px、按切线转角），整环
+  // 恒定计数——相位时整排沿环移位（底边向后、顶边向前，与带纹/轮转
+  // 同向），计数恒定保证后续实例序号不随相位漂移（序号带种子细节）
+  {
+    const capArc = (Math.PI * R) / 2;
+    const straight = x1 - x0;
+    const loop = straight * 2 + capArc * 4;
+    const nPads = Math.ceil(loop / 16);
+    for (let k = 0; k < nPads; k++) {
+      const s = (((8 + k * 16 - phase) % loop) + loop) % loop;
+      let px: number, py: number, tang: number;
+      if (s < capArc) { // 后轮下弧（圆心 x0，角 π→π/2）
+        const phi = Math.PI - s / R;
+        px = x0 + (R - 3) * Math.cos(phi); py = cy + (R - 3) * Math.sin(phi);
+        tang = Math.atan2(-Math.cos(phi), Math.sin(phi));
+      } else if (s < capArc + straight) { // 底直段
+        px = x0 + (s - capArc); py = cy + R - 3; tang = 0;
+      } else if (s < capArc * 2 + straight) { // 前轮下弧（圆心 x1，角 π/2→0）
+        const phi = Math.PI / 2 - (s - capArc - straight) / R;
+        px = x1 + (R - 3) * Math.cos(phi); py = cy + (R - 3) * Math.sin(phi);
+        tang = Math.atan2(-Math.cos(phi), Math.sin(phi));
+      } else if (s < capArc * 3 + straight) { // 前轮上弧（圆心 x1，角 0→−π/2）
+        const phi = -(s - capArc * 2 - straight) / R;
+        px = x1 + (R - 3) * Math.cos(phi); py = cy + (R - 3) * Math.sin(phi);
+        tang = Math.atan2(-Math.cos(phi), Math.sin(phi));
+      } else if (s < capArc * 3 + straight * 2) { // 顶直段（自前向后）
+        px = x1 - (s - capArc * 3 - straight); py = cy - R + 3; tang = Math.PI;
+      } else { // 后轮上弧（圆心 x0，角 −π/2→−π）
+        const phi = -Math.PI / 2 - (s - capArc * 3 - straight * 2) / R;
+        px = x0 + (R - 3) * Math.cos(phi); py = cy + (R - 3) * Math.sin(phi);
+        tang = Math.atan2(-Math.cos(phi), Math.sin(phi));
+      }
+      T.addBlock('frame', px, py, 13, 7, tang, 0.15);
+    }
   }
   // 环内暗色机体（整胶囊填 frame）：轮列与驱动轮坐其上，不再悬空
   T.addRaw('frame', (x, y) => {
     const dx = Math.max(x0 - x, 0, x - x1);
     const d = Math.hypot(dx, y - cy);
     if (d > R - 3) return [false, 0, 0];
-    return [true, d / R, (x - (cx - len / 2)) / len];
+    return [true, d / R, (x + phase - (cx - len / 2)) / len];
   });
   // 负重轮列（环内贴底）+ 轮毂
   const wheels = 6;

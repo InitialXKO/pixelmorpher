@@ -18,7 +18,7 @@
 // ============================================================
 import { createDefaultNode, createDefaultCostumePiece, pxToSub } from '../unified-types';
 import type { Node, CostumeSet, CostumePiece, PixelGrid, DirectionIndex, IKChain } from '../unified-types';
-import { generateMechaPartSet, generateMechaHull, generateMechaHullBody, generateMechaTurret, generateMechaTrackUnit, generateMechaJetpack, generateMechaWeapon, generateMechaWheelLegParts, generateMechaMultiLegParts, mechaFamilyArmorHex, MECHA_FAMILIES } from './parts';
+import { generateMechaPartSet, generateMechaHull, generateMechaHullBody, generateMechaTurret, generateMechaTrackUnit, generateMechaTrackUnitPhases, MECHA_TRACK_DRIVE_STEP, generateMechaJetpack, generateMechaWeapon, generateMechaWheelLegParts, generateMechaMultiLegParts, mechaFamilyArmorHex, MECHA_FAMILIES } from './parts';
 import type { MechaChestVariant } from './parts';
 import type { MechaFamily, MechaPartSet, MechaSpriteData, MechaPartOverrides, MechaHullOverrides, MechaLegOverrides, MechaSchemeName } from './parts';
 
@@ -297,13 +297,13 @@ export interface MechaStoreSurface {
   addUnifiedCharacter: (name: string, opts?: { skipPlaceholderRoot?: boolean }) => { id: string };
   addSprite: (name: string, width: number, height: number, opts?: { plugX?: number; plugY?: number }) => { id?: string };
   setSpritePixels: (id: string, pixels: PixelGrid) => void;
-  updateSprite: (id: string, updates: { origin?: { characterId: string; boneName?: string }; folder?: string }) => void;
+  updateSprite: (id: string, updates: { origin?: { characterId: string; boneName?: string }; folder?: string; drive?: { step: number; frameSpriteIds: string[] } }) => void;
   updateUnifiedCharacter: (id: string, updates: Record<string, unknown>) => void;
 }
 
-function registerSprites(store: MechaStoreSurface, characterId: string, name: string, plan: { key: string; data: MechaSpriteData }[], scale: number): Record<string, string> {
+function registerSprites(store: MechaStoreSurface, characterId: string, name: string, plan: { key: string; data: MechaSpriteData; drivePhases?: MechaSpriteData[] }[], scale: number): Record<string, string> {
   const spriteIds: Record<string, string> = {};
-  for (const { key, data } of plan) {
+  for (const { key, data, drivePhases } of plan) {
     const s = scaleSpriteData(data, scale);
     const spr = store.addSprite(`${name}_${MECHA_PART_LABELS[key as MechaPartKey] ?? key}`, s.width, s.height, {
       plugX: Math.round(s.plug.x), plugY: Math.round(s.plug.y),
@@ -311,6 +311,21 @@ function registerSprites(store: MechaStoreSurface, characterId: string, name: st
     store.setSpritePixels(spr.id!, rgbaToPixelGrid(s));
     store.updateSprite(spr.id!, { origin: { characterId, boneName: key }, folder: '方向/东' });
     spriteIds[key] = spr.id!;
+    // 驱动相位帧（履带滚动）：第 0 帧即本体，其余帧另注册并挂到本体
+    // drive 上（帧几何随本体同批缩放，step 同步按 scale 折算）
+    if (drivePhases && drivePhases.length > 1) {
+      const frameIds: string[] = [];
+      for (let fi = 1; fi < drivePhases.length; fi++) {
+        const fd = scaleSpriteData(drivePhases[fi]!, scale);
+        const fs = store.addSprite(`${name}_${MECHA_PART_LABELS[key as MechaPartKey] ?? key}·滚动${fi}`, fd.width, fd.height, {
+          plugX: Math.round(fd.plug.x), plugY: Math.round(fd.plug.y),
+        });
+        store.setSpritePixels(fs.id!, rgbaToPixelGrid(fd));
+        store.updateSprite(fs.id!, { origin: { characterId, boneName: key }, folder: '方向/东' });
+        frameIds.push(fs.id!);
+      }
+      store.updateSprite(spr.id!, { drive: { step: Math.max(1, Math.round(MECHA_TRACK_DRIVE_STEP * scale)), frameSpriteIds: frameIds } });
+    }
   }
   return spriteIds;
 }
@@ -324,12 +339,16 @@ export function createMechaCharacterInStore(
   const scale = opts.scale ?? 1;
   const character = store.addUnifiedCharacter(opts.name, { skipPlaceholderRoot: true });
   const partSet = generateMechaPartSet(opts.family, B.chest, B.parts);
-  const plan: { key: string; data: MechaSpriteData }[] = [
+  const plan: { key: string; data: MechaSpriteData; drivePhases?: MechaSpriteData[] }[] = [
     { key: 'torso', data: partSet.torso }, { key: 'head', data: partSet.head },
     { key: 'armUpper', data: partSet.armUpper }, { key: 'armFore', data: partSet.armFore }, { key: 'armHand', data: partSet.armHand },
   ];
   if (B.chassis === 'tracks') {
-    plan.push({ key: 'trackUnit', data: generateMechaTrackUnit(opts.family, { len: B.trackLen, scheme: B.parts?.scheme }) });
+    plan.push({
+      key: 'trackUnit',
+      data: generateMechaTrackUnit(opts.family, { len: B.trackLen, scheme: B.parts?.scheme }),
+      drivePhases: generateMechaTrackUnitPhases(opts.family, { len: B.trackLen, scheme: B.parts?.scheme }),
+    });
   } else if (B.chassis === 'wheel') {
     const wp = generateMechaWheelLegParts(opts.family, B.parts?.leg, B.parts?.scheme);
     plan.push({ key: 'wheelThigh', data: wp.thigh }, { key: 'wheelShin', data: wp.shin }, { key: 'wheelFoot', data: wp.foot });
@@ -529,12 +548,16 @@ export function createMechaVehicleInStore(
   const scale = opts.scale ?? 1;
   const mobFam = mechaMobilityFamily(V.hull);
   const character = store.addUnifiedCharacter(opts.name, { skipPlaceholderRoot: true });
-  const plan: { key: string; data: MechaSpriteData }[] = [
+  const plan: { key: string; data: MechaSpriteData; drivePhases?: MechaSpriteData[] }[] = [
     { key: 'hullBody', data: generateMechaHullBody(V.hull, V.parts?.hull, V.parts?.scheme) },
   ];
   let partSet: MechaPartSet | undefined;
   if (V.mobility === 'tracks') {
-    plan.push({ key: 'trackUnit', data: generateMechaTrackUnit(mobFam, { len: V.parts?.trackLen, scheme: V.parts?.scheme }) });
+    plan.push({
+      key: 'trackUnit',
+      data: generateMechaTrackUnit(mobFam, { len: V.parts?.trackLen, scheme: V.parts?.scheme }),
+      drivePhases: generateMechaTrackUnitPhases(mobFam, { len: V.parts?.trackLen, scheme: V.parts?.scheme }),
+    });
   } else if (V.mobility === 'legs') {
     partSet = generateMechaPartSet(mobFam, undefined, { scheme: V.parts?.scheme, leg: V.parts?.leg });
     plan.push({ key: 'legThigh', data: partSet.legThigh }, { key: 'legShin', data: partSet.legShin }, { key: 'legFoot', data: partSet.legFoot });

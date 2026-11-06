@@ -98,8 +98,8 @@ const ARM_SPEC: Record<MechaFamily, (scheme: Scheme) => ArmSpec> = {
 
 const TORSO_SPEC: Record<MechaFamily, (scheme: Scheme) => TorsoSpec> = {
   olive: (s) => ({ family: 'olive', scheme: s, seed: 7, wear: 0.3, camo: true, twoTone: true, neck: { x: 120, y: 16 }, chestW: 150, chestH: 118, waistH: 22, pelvisH: 72, form: { chest: 'stack', back: 'box', grille: 'side', skirt: 'front' }, gear: { stripe: true, insignia: 4, number: '3' } }),
-  agile: (s) => ({ family: 'agile', scheme: s, seed: 21, wear: 0.15, camo: false, twoTone: true, neck: { x: 120, y: 16 }, chestW: 128, chestH: 128, waistH: 42, pelvisH: 66, form: { chest: 'shell', back: 'binder', grille: 'front', skirt: 'both' }, gear: { stripe: false, insignia: 0, number: '' } }),
-  powersuit: (s) => ({ family: 'powersuit', scheme: s, seed: 49, wear: 0.15, camo: false, twoTone: false, neck: { x: 120, y: 16 }, chestW: 118, chestH: 110, waistH: 30, pelvisH: 62, form: { chest: 'shell', back: 'rack', grille: 'none', skirt: 'front' }, gear: { stripe: false, insignia: 1, number: '' } }),
+  agile: (s) => ({ family: 'agile', scheme: s, seed: 21, wear: 0.15, camo: false, twoTone: true, neck: { x: 120, y: 16 }, chestW: 128, chestH: 128, waistH: 26, pelvisH: 66, form: { chest: 'shell', back: 'binder', grille: 'front', skirt: 'both' }, gear: { stripe: false, insignia: 0, number: '' } }),
+  powersuit: (s) => ({ family: 'powersuit', scheme: s, seed: 49, wear: 0.15, camo: false, twoTone: false, neck: { x: 120, y: 16 }, chestW: 118, chestH: 110, waistH: 24, pelvisH: 62, form: { chest: 'shell', back: 'rack', grille: 'none', skirt: 'front' }, gear: { stripe: false, insignia: 1, number: '' } }),
 };
 
 const HEAD_SPEC: Record<MechaFamily, (scheme: Scheme) => HeadSpec> = {
@@ -419,13 +419,21 @@ export function generateMechaMultiLegParts(family: MechaFamily, profile: 'spider
 }
 
 /** 履带底盘精灵（原点=座圈顶面中心，躯干/车体挂载点） */
-export function generateMechaTrackUnit(family: MechaFamily, ov?: { len?: number; scheme?: MechaSchemeName }): MechaSpriteData {
+export function generateMechaTrackUnit(family: MechaFamily, ov?: { len?: number; scheme?: MechaSchemeName; phase?: number }): MechaSpriteData {
   const scheme = ov?.scheme ? mechaSchemeByName(ov.scheme) : SCHEME_OF[family];
   const cv = newCanvas(); const origin = { x: 190, y: 26 };
-  const spec = { scheme, seed: 11, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family], len: ov?.len };
+  const spec = { scheme, seed: 11, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family], len: ov?.len, phase: ov?.phase };
   const A = renderTrackUnit(cv, spec, origin);
-  finishRender(cv, A, finFor(family, scheme));
+  const F = finFor(family, scheme);
+  if (ov?.phase) F.beltPhase = ov.phase;
+  finishRender(cv, A, F);
   return cropSprite(cv, origin);
+}
+
+/** 履带滚动相位帧组：一圈链节距 16px 内 4 帧（相位 0/4/8/12），进包后由运行时按累计位移选帧 */
+export const MECHA_TRACK_DRIVE_STEP = 4;
+export function generateMechaTrackUnitPhases(family: MechaFamily, ov?: { len?: number; scheme?: MechaSchemeName }): MechaSpriteData[] {
+  return [0, 4, 8, 12].map((phase) => generateMechaTrackUnit(family, { ...ov, phase }));
 }
 
 /** 喷射背包精灵（原点=贴背挂载点，箱体在原点后方） */

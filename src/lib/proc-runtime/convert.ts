@@ -155,6 +155,10 @@ export interface RuntimePart {
   spriteKind?: boolean;
   /** 精灵部件在默认服装集下的显示方向精灵网格（逐集见 costumes[*].__sprite） */
   sprite?: { w: number; h: number; plug: [number, number]; data: (string | null)[][]; marks?: import('../unified-types').SpriteMark[] };
+  /** 驱动帧（履带滚动等地面驱动件）：sprite 为相位第 0 帧，frames 为
+   * 其余相位帧（同 sprite 形状）；模板按角色累计朝向位移每 step px
+   * 推进一帧（总帧数 = frames.length + 1，循环）。仅精灵部件携带。 */
+  drive?: { step: number; frames: { w: number; h: number; plug: [number, number]; data: (string | null)[][] }[] };
   /** 像素链（节点蓝图 screen 像素子图的迷你图）：模板逐帧以部件
    * 当前精灵网格为源求值、结果写回瓦片。仅精灵部件携带（参数化
    * 部件 v1 不带，convert 点名）。逐集换图不换链（链挂节点蓝图）。 */
@@ -1178,6 +1182,32 @@ export function convertCharacterToRuntimePackage(
     const base = appearanceToBase(createDefaultParametricAppearance(), pivot, w?.worldAngle ?? 0);
     base.size = [sg.w, sg.h];
     const dyn = dynFor(...graphPatternLists(character, node, activeSet?.id), dynLib, warnings);
+    // 驱动帧（履带滚动等）：基础精灵带 drive 时把相位帧一并进包
+    let drive: RuntimePart['drive'];
+    {
+      const candPieces = [activeSet?.pieces[slotKey], ...character.costumeSets.map((cs) => cs.pieces[slotKey])];
+      const dirOrder: DirectionIndex[] = [rootDir as DirectionIndex, ...([2, 0, 6, 4, 1, 3, 5, 7] as DirectionIndex[]).filter((d) => d !== rootDir)];
+      outer: for (const cp of candPieces) {
+        if (!cp) continue;
+        for (const dir of dirOrder) {
+          const r = resolvePieceSprite(cp, dir, character.slotVariants?.[slotKey], spriteTable, character.latitude ?? 0);
+          const drv = r.sprite?.drive;
+          if (!drv || !drv.frameSpriteIds?.length) continue;
+          const frames: NonNullable<RuntimePart['drive']>['frames'] = [];
+          let ok = true;
+          for (const fid of drv.frameSpriteIds) {
+            const fs = spriteTable[fid];
+            if (!fs) { ok = false; break; }
+            frames.push({
+              w: fs.width, h: fs.height,
+              plug: fs.plug ? [subToPx(fs.plug.x), subToPx(fs.plug.y)] : [fs.width / 2, fs.height / 2],
+              data: fs.data,
+            });
+          }
+          if (ok && frames.length) { drive = { step: Math.max(1, Math.round(drv.step || 4)), frames }; break outer; }
+        }
+      }
+    }
     parts.push({
       key: slotKey,
       sortOrder: node.zIndex,
@@ -1187,6 +1217,7 @@ export function convertCharacterToRuntimePackage(
       variants: { [(rootDir + 2) % 8]: {} }, // 键换算为运行时方向编号（见 RuntimePart.variants 注释）
       spriteKind: true,
       sprite: sg,
+      ...(drive ? { drive } : {}),
       dynamic: dyn,
       glow: glowEntryFor(character, slotKey, dyn, activeSet?.id, externalSprites, warnings),
     });
