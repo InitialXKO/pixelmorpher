@@ -87,6 +87,9 @@ export interface MechaPartSet {
   head: MechaSpriteData;
   /** 肘相对肩（前臂节点的挂载偏移） */
   elbowOff: Pt;
+  /** 腕/掌相对肘（前臂精灵本地，武器挂载偏移） */
+  wristOff: Pt;
+  palmOff: Pt;
   /** 躯干插座（相对胯心=躯干精灵原点） */
   torsoSockets: { neck: Pt; shoulder: Pt; hip: Pt };
 }
@@ -115,6 +118,8 @@ export function generateMechaPartSet(family: MechaFamily, chest?: MechaChestVari
   finishRender(cvF, AF, F);
   const armFore = cropSprite(cvF, ir.anchors.elbow);
   const elbowOff = { x: ir.anchors.elbow.x - ir.anchors.shoulder.x, y: ir.anchors.elbow.y - ir.anchors.shoulder.y };
+  const wristOff = { x: ir.anchors.wrist.x - ir.anchors.elbow.x, y: ir.anchors.wrist.y - ir.anchors.elbow.y };
+  const palmOff = { x: ir.anchors.palm.x - ir.anchors.elbow.x, y: ir.anchors.palm.y - ir.anchors.elbow.y };
   // 躯干（原点=胯心）
   const torsoSpec = TORSO_SPEC[family](scheme);
   if (chest) torsoSpec.form = { ...torsoSpec.form, chest };
@@ -129,7 +134,7 @@ export function generateMechaPartSet(family: MechaFamily, chest?: MechaChestVari
   const headCv = newCanvas(); const HA = renderHeadIR(headCv, headIR(headSpec), headSpec);
   finishRender(headCv, HA, F);
   const head = cropSprite(headCv, headSpec.seat);
-  return { leg, armUpper, armFore, torso, head, elbowOff, torsoSockets };
+  return { leg, armUpper, armFore, torso, head, elbowOff, wristOff, palmOff, torsoSockets };
 }
 
 /** 载具车体精灵（原点=甲板中心），供载具线后续使用 */
