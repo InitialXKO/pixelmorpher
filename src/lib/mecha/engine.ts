@@ -392,16 +392,38 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
         fillShape(cv, id, polyTest(blockPoly(ankle.x + 30, 428, heavy ? 108 : 100, heavy ? 28 : 26, 0.36, 0.3))); id++;
         A.plateTint.set(fid, 0.95); A.panelLines.set(fid, [0.5]);
       }
-      { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, polyTest(blockPoly(ankle.x + 48, 466, 240, 12, 0, 0.3))); id++; } // 足底件：通长一线
-      footBlock(ankle.x - 24, 455, 64, 34, 0.04); // 跟块（顶 438）
+      { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, polyTest(blockPoly(ankle.x + 48, 466, heavy ? 264 : 240, 12, 0, 0.3))); id++; } // 足底件：通长一线
+      { // 跟块：后斜楔——顶边是一条长斜线，自踝下（前高）向后下方收
+        // 薄，带小跟刺；与趾套的前斜顶边构成足两端的镜像斜线对
+        cv.insts.push({ kind: 'foot' }); const bid = id;
+        const hx = ankle.x, hw2 = heavy ? 80 : 72;
+        fillShape(cv, id, polyTest([
+          { x: hx + 14, y: 443 }, { x: hx + 8, y: heavy ? 437 : 439 },
+          { x: hx - hw2 + 16, y: heavy ? 450 : 451 }, { x: hx - hw2 - 4, y: 463 },
+          { x: hx - hw2, y: 470 }, { x: hx + 14, y: 470 },
+        ])); id++;
+        A.plateTint.set(bid, [0.9, 1.0, 1.08][Math.floor(rnd() * 3)]); A.panelLines.set(bid, [0.5]);
+      }
       if (heavy) {
         footBlock(ankle.x + 56, 458, 100, 24, 0.02); // 中趾长板（顶 446）
-        footBlock(ankle.x + 128, 461, 84, 18, 0.03, 0.55, 0.55); // 前趾长板（顶 452，前上大切角）
-        A.toeFace = { x0: ankle.x + 156, y0: 454, x1: ankle.x + 167, y1: 468 };
+        footBlock(ankle.x + 128, 461, 84, 18, 0.03, 0.55, 0.55); // 前趾长板（顶 452）
       } else {
         footBlock(ankle.x + 54, 458, 92, 24, 0.02); // 中趾长板（顶 446）
-        footBlock(ankle.x + 124, 462, 76, 15, 0.03, 0.55, 0.55); // 前趾长板（顶 454.5，明显更薄）
-        A.toeFace = { x0: ankle.x + 148, y0: 456, x1: ankle.x + 159, y1: 468 };
+        footBlock(ankle.x + 124, 462, 76, 15, 0.03, 0.55, 0.55); // 前趾长板（顶 454.5）
+      }
+      { // 趾套：套在趾板上的楔壳——顶边长斜线向前收尖（与跟块斜线
+        // 镜像），后缘留台阶压住中趾板，趾板下半与竖缝仍露在套外
+        cv.insts.push({ kind: 'foot' }); const bid = id;
+        const tx = ankle.x, e = heavy ? 8 : 0;
+        fillShape(cv, id, polyTest([
+          { x: tx + 86 + e, y: heavy ? 441 : 443 }, { x: tx + 158 + e, y: 456 },
+          { x: tx + 168 + e, y: 464 }, { x: tx + 165 + e, y: 469 },
+          { x: tx + 100 + e, y: 469 }, { x: tx + 92 + e, y: 455 },
+        ])); id++;
+        A.plateTint.set(bid, 1.05); A.panelLines.set(bid, [0.5]);
+        A.toeFace = heavy
+          ? { x0: ankle.x + 164, y0: 457, x1: ankle.x + 174, y1: 468 }
+          : { x0: ankle.x + 156, y0: 458, x1: ankle.x + 166, y1: 468 };
       }
     }
   }
