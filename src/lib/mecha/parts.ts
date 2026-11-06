@@ -9,6 +9,7 @@ import {
   armIR, renderArmIR, torsoIR, renderTorsoIR, headIR, renderHeadIR, hullIR, renderHullIR,
 } from './engine';
 import type { Scheme, LegSpec, ArmSpec, TorsoSpec, HeadSpec, HullSpec, MechaCanvas, Pt } from './engine';
+import { renderMultiLeg, renderTrackUnit } from './gear';
 
 export type MechaFamily = 'olive' | 'agile' | 'powersuit';
 export const MECHA_FAMILIES: { id: MechaFamily; name: string }[] = [
@@ -151,4 +152,24 @@ export function generateMechaWheelLeg(family: MechaFamily): MechaSpriteData {
   const A = layout(cv, spec, { hip, knee: { x: hip.x + 88, y: hip.y + 204 }, ankle: { x: hip.x - 4, y: hip.y + 390 }, toeX: hip.x + 96 });
   finishRender(cv, A, fin(family));
   return cropSprite(cv, hip);
+}
+
+/** 多足腿精灵（蜘蛛/四足，原点=髋插座） */
+export function generateMechaMultiLeg(family: MechaFamily, profile: 'spider' | 'quad'): MechaSpriteData {
+  const scheme = SCHEME_OF[family];
+  const cv = newCanvas(); const hip = { x: 56, y: 64 };
+  const spec = { scheme, seed: 11, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family], profile };
+  const A = renderMultiLeg(cv, spec, hip);
+  finishRender(cv, A, fin(family));
+  return cropSprite(cv, hip);
+}
+
+/** 履带底盘精灵（原点=座圈顶面中心，躯干/车体挂载点） */
+export function generateMechaTrackUnit(family: MechaFamily): MechaSpriteData {
+  const scheme = SCHEME_OF[family];
+  const cv = newCanvas(); const origin = { x: 190, y: 26 };
+  const spec = { scheme, seed: 11, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family] };
+  const A = renderTrackUnit(cv, spec, origin);
+  finishRender(cv, A, fin(family));
+  return cropSprite(cv, origin);
 }

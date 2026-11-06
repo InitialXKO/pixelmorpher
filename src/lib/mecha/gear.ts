@@ -92,3 +92,61 @@ export function trackCanvas(spec: TrackSpec): { cv: MechaCanvas; A: Anchors; ori
 
 export { SCHEMES };
 
+
+// ---------- 多足腿（蜘蛛/四足共用一个三段腿模式，轮廓参数分家） ----------
+// 模式（据蜘蛛 boss + 四足机甲两参考）：三段腿——粗段起身、细段下探、
+// 末段近竖直到小楔足；关节全用盘（髋鼓盘/膝盘/踝盘）。蜘蛛 = 膝上拱
+// （膝高于髋），四足 = 反关节之字（膝前探、踝后收、末段前伸）。
+export interface MultiLegSpec extends GearSpec { profile: 'spider' | 'quad' }
+
+const MULTI_PROFILES = {
+  spider: {
+    knee: { x: 84, y: -30 }, ankle: { x: 26, y: 126 }, toe: { x: 4, y: 92 },
+    w: [30, 24, 17, 13, 11, 8] as const, hipR: 16, kneeR: 10, ankleR: 8, toes: 3,
+  },
+  quad: {
+    knee: { x: 66, y: 78 }, ankle: { x: -44, y: 52 }, toe: { x: 30, y: 96 },
+    w: [34, 26, 22, 16, 13, 10] as const, hipR: 15, kneeR: 12, ankleR: 9, toes: 2,
+  },
+} as const;
+
+export function renderMultiLeg(cv: MechaCanvas, spec: MultiLegSpec, hip: Pt): Anchors {
+  const T: Tools = makeLayerTools(cv, spec.seed);
+  const P = MULTI_PROFILES[spec.profile];
+  const knee = { x: hip.x + P.knee.x, y: hip.y + P.knee.y };
+  const ankle = { x: knee.x + P.ankle.x, y: knee.y + P.ankle.y };
+  const toe = { x: ankle.x + P.toe.x, y: ankle.y + P.toe.y };
+  const seg = (a: Pt, b: Pt, wA: number, wB: number) => {
+    T.segPlate(a, b, wA, wB, 0.03, 0.52, 2, 'plate');
+    T.segPlate(a, b, wA * 0.94, wB, 0.55, 0.97, 2, 'plate');
+  };
+  seg(hip, knee, P.w[0], P.w[1]);
+  seg(knee, ankle, P.w[2], P.w[3]);
+  seg(ankle, toe, P.w[4], P.w[5]);
+  // 髋座 + 三关节盘
+  T.addBlock('frame', hip.x - 8, hip.y, 26, 32, 0, 0.3);
+  T.addDisc('disc', hip, P.hipR);
+  T.addDisc('disc', hip, P.hipR * 0.6);
+  T.addDisc('disc', knee, P.kneeR);
+  T.addDisc('disc', ankle, P.ankleR);
+  // 足：小楔块扇（三趾蜘蛛/双趾四足）
+  if (P.toes === 3) {
+    T.addBlock('plate', toe.x, toe.y + 4, 17, 7, 0, 0.3);
+    T.addBlock('plate', toe.x + 11, toe.y + 3, 12, 6, 0.5, 0.3);
+    T.addBlock('plate', toe.x - 11, toe.y + 3, 12, 6, -0.5, 0.3);
+  } else {
+    T.addBlock('plate', toe.x + 4, toe.y + 4, 19, 8, 0.06, 0.3);
+    T.addBlock('plate', toe.x - 9, toe.y + 2, 13, 7, -0.35, 0.3);
+  }
+  T.finish();
+  return T.A;
+}
+
+/** 多足腿单独渲染（验收/预览用） */
+export function multiLegCanvas(spec: MultiLegSpec): { cv: MechaCanvas; A: Anchors; origin: Pt } {
+  const cv = newCanvas();
+  const origin = { x: 56, y: 64 };
+  const A = renderMultiLeg(cv, spec, origin);
+  finishRender(cv, A, gearFinish(spec));
+  return { cv, A, origin };
+}
