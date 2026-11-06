@@ -1,8 +1,9 @@
 'use client';
 // ============================================================
 // 机甲生成向导：人形（选族/胸型/底盘/装备）或载具（车体/机动/
-// 炮塔），可设尺寸（60%–160%）。预览走产品渲染器同一条世界
-// 变换口径（computeWorldTransforms + 投影深度画序），所见即
+// 炮塔），按整机身高（32–512 px）设尺寸：基准高由预览装配实测
+// （精灵包围盒），scale = 输入身高 / 基准高。预览走产品渲染器
+// 同一条世界变换口径（computeWorldTransforms + 投影深度画序），所见即
 // 主画布所得；生成时项目画布按需只扩不缩以适应尺寸。产出是
 // 真角色：三段肢链节点 + 预置 IK 链（默认禁用），主画布可摆
 // 姿势/配 IK、可进运行时包。
@@ -65,7 +66,10 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   const [hull, setHull] = useState<MechaVehicleOptions['hull']>('walker');
   const [mobility, setMobility] = useState<MechaVehicleOptions['mobility']>('legs');
   const [turret, setTurret] = useState(true);
-  const [sizePct, setSizePct] = useState(100);
+  const [heightPx, setHeightPx] = useState(512);
+  const [heightText, setHeightText] = useState('512');
+  // 当前配置在 scale=1 时的实测总高（预览装配量得，按配置签名缓存）
+  const [baseCal, setBaseCal] = useState<{ sig: string; h: number } | null>(null);
   const [name, setName] = useState('机甲-01');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
@@ -73,7 +77,11 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   const partSetCache = useRef(new Map<string, MechaPartSet>());
   const spriteCache = useRef(new Map<string, MechaSpriteData>());
   const bitmapCache = useRef(new Map<string, HTMLCanvasElement>());
-  const scale = sizePct / 100;
+  const sig = mode === 'humanoid'
+    ? ['h', family, chest, chassis, jetpack, podMount ?? '-', weapon].join(':')
+    : ['v', hull, mobility, turret].join(':');
+  // 基准高未量得前先按自然尺寸预览，量得后按 输入身高/基准高 缩放
+  const scale = baseCal && baseCal.sig === sig ? heightPx / baseCal.h : 1;
 
   const buildOpts = useCallback((): MechaBuildOptions => ({
     chest: chest === 'default' ? undefined : chest,
@@ -127,11 +135,11 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
 
   // 预览尺寸随尺寸设置走（画布适应其尺寸）
   const PW = mode === 'humanoid'
-    ? Math.max(380, Math.min(660, Math.round(470 * scale)))
-    : Math.max(520, Math.min(980, Math.round(800 * scale)));
+    ? Math.max(220, Math.min(660, Math.round(470 * scale)))
+    : Math.max(260, Math.min(980, Math.round(800 * scale)));
   const PH = mode === 'humanoid'
-    ? Math.max(540, Math.min(1000, Math.round(850 * scale)))
-    : Math.max(430, Math.min(820, Math.round(580 * scale)));
+    ? Math.max(220, Math.min(1000, Math.round(850 * scale)))
+    : Math.max(200, Math.min(820, Math.round(580 * scale)));
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -228,6 +236,23 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
       });
     }
     items.sort((a, b) => (Math.round(a.depth) - Math.round(b.depth)) || (a.z - b.z));
+    // 量整机总高：只在该配置首轮（scale=1）量一次——绘制包围盒高即
+    // 基准高；小缩放下亚像素量化误差会被放大，故量得后不再覆写
+    if (!baseCal || baseCal.sig !== sig) {
+      let mnY = Infinity, mxY = -Infinity;
+      for (const it of items) {
+        const s = spriteFor(it.part);
+        if (!s) continue;
+        const a = (it.a * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a);
+        for (const [ox, oy] of [[0, 0], [s.width, 0], [0, s.height], [s.width, s.height]] as const) {
+          const lx = (ox - s.plug.x) * scale, ly = (oy - s.plug.y) * scale;
+          const ry = it.y + lx * sin + ly * cos;
+          if (ry < mnY) mnY = ry;
+          if (ry > mxY) mxY = ry;
+        }
+      }
+      if (mxY > mnY) setBaseCal({ sig, h: Math.round((mxY - mnY) / scale) });
+    }
     for (const it of items) {
       const s = spriteFor(it.part);
       if (!s) continue;
@@ -238,7 +263,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
       ctx.drawImage(bmp, -s.plug.x * scale, -s.plug.y * scale, s.width * scale, s.height * scale);
       ctx.restore();
     }
-  }, [mode, family, buildOpts, vehicleOpts, gearSprite, getPartSet, bitmapOf, PW, PH, scale]);
+  }, [mode, family, buildOpts, vehicleOpts, gearSprite, getPartSet, bitmapOf, PW, PH, scale, sig, baseCal]);
 
   useEffect(() => {
     if (!open) return;
@@ -288,12 +313,17 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
             <Chip active={mode === 'humanoid'} onClick={() => setMode('humanoid')}>人形机甲</Chip>
             <Chip active={mode === 'vehicle'} onClick={() => setMode('vehicle')}>载具</Chip>
           </Row>
-          <Row label="尺寸">
-            <input type="range" min={60} max={160} step={5} value={sizePct}
-              onChange={(e) => setSizePct(Number(e.target.value))}
-              className="w-44 accent-cyan-400" />
-            <span className="text-[11px] text-gray-300">{sizePct}%</span>
-            <span className="text-[11px] text-gray-500">预览与画布随尺寸适应</span>
+          <Row label="身高">
+            <Input type="number" min={32} max={512} step={1} value={heightText}
+              onChange={(e) => {
+                setHeightText(e.target.value);
+                const n = Number(e.target.value);
+                if (e.target.value !== '' && Number.isFinite(n)) setHeightPx(Math.max(32, Math.min(512, Math.round(n))));
+              }}
+              onBlur={() => setHeightText(String(heightPx))}
+              className="h-7 w-20 text-[12px] bg-[#0d0d1a] border-[#1e1e3a] text-gray-200" />
+            <span className="text-[11px] text-gray-300">px</span>
+            <span className="text-[11px] text-gray-500">整机总高 32–512，预览与生成画布随之适应</span>
           </Row>
           {mode === 'humanoid' ? (
             <>
