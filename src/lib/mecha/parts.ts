@@ -68,7 +68,7 @@ function fin(family: MechaFamily): LegSpec & { altTone?: boolean } {
 /** 收尾规格：族基线 + 稀疏覆盖（只覆写给出的字段，无覆盖时与 fin() 逐值一致） */
 function finFor(family: MechaFamily, scheme: Scheme, ov?: {
   wear?: number; camo?: boolean; seed?: number; detail?: number; shellMode?: boolean;
-  cableTint?: [number, number, number]; decalKind?: LegSpec['decalKind']; twoTone?: boolean;
+  cableTint?: [number, number, number]; decalKind?: LegSpec['decalKind']; twoTone?: boolean; wheelPhase?: number;
 }): LegSpec & { altTone?: boolean } {
   const F = fin(family);
   F.scheme = scheme;
@@ -77,6 +77,7 @@ function finFor(family: MechaFamily, scheme: Scheme, ov?: {
   if (ov.camo !== undefined) F.camo = ov.camo;
   if (ov.seed !== undefined) F.seed = ov.seed;
   if (ov.detail !== undefined) F.detail = ov.detail;
+  if (ov.wheelPhase !== undefined) F.wheelPhase = ov.wheelPhase;
   if (ov.shellMode !== undefined) F.shellMode = ov.shellMode;
   if (ov.cableTint !== undefined) F.cableTint = ov.cableTint;
   if (ov.decalKind !== undefined) F.decalKind = ov.decalKind;
@@ -115,6 +116,8 @@ export interface MechaLegOverrides {
   lift?: number; coreScale?: number; detail?: number; wear?: number; camo?: boolean;
   shellMode?: boolean; frameHeavy?: boolean; guardOff?: boolean;
   decalKind?: LegSpec['decalKind']; cableTint?: [number, number, number]; seed?: number;
+  /** 轮足滚动相位（行程 px，相位帧组内部用，用户覆盖不设） */
+  wheelPhase?: number;
 }
 export interface MechaArmOverrides {
   hand?: ArmSpec['hand']; bulk?: number; shell?: number;
@@ -430,10 +433,17 @@ export function generateMechaTrackUnit(family: MechaFamily, ov?: { len?: number;
   return cropSprite(cv, origin);
 }
 
-/** 履带滚动相位帧组：一圈链节距 16px 内 4 帧（相位 0/4/8/12），进包后由运行时按累计位移选帧 */
-export const MECHA_TRACK_DRIVE_STEP = 4;
+/** 履带滚动相位帧组：一圈链节距 16px 内 3 帧（相位 0/16/3/32/3，步距浮点保周期整除），进包后由运行时按累计位移选帧 */
+export const MECHA_TRACK_DRIVE_STEP = 16 / 3;
 export function generateMechaTrackUnitPhases(family: MechaFamily, ov?: { len?: number; scheme?: MechaSchemeName }): MechaSpriteData[] {
-  return [0, 4, 8, 12].map((phase) => generateMechaTrackUnit(family, { ...ov, phase }));
+  return [0, 16 / 3, 32 / 3].map((phase) => generateMechaTrackUnit(family, { ...ov, phase }));
+}
+
+/** 轮足滚动相位帧组：轮图样 12 扇区旋转对称，一扇区（主轮行程 ≈23px）内取 3 帧
+ *  （行程 0/8/16，步距 8、周期 24），每腿三段各一份——哪段真含轮像素由建角侧比对决定挂不挂 drive */
+export const MECHA_WHEEL_DRIVE_STEP = 8;
+export function generateMechaWheelLegPhases(family: MechaFamily, ov?: MechaLegOverrides, schemeName?: MechaSchemeName): { thigh: MechaSpriteData; shin: MechaSpriteData; foot: MechaSpriteData }[] {
+  return [0, 8, 16].map((wheelPhase) => generateMechaWheelLegParts(family, { ...(ov ?? {}), wheelPhase }, schemeName));
 }
 
 /** 喷射背包精灵（原点=贴背挂载点，箱体在原点后方） */

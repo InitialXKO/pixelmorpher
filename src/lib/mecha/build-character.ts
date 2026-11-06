@@ -18,7 +18,7 @@
 // ============================================================
 import { createDefaultNode, createDefaultCostumePiece, pxToSub } from '../unified-types';
 import type { Node, CostumeSet, CostumePiece, PixelGrid, DirectionIndex, IKChain } from '../unified-types';
-import { generateMechaPartSet, generateMechaHull, generateMechaHullBody, generateMechaTurret, generateMechaTrackUnit, generateMechaTrackUnitPhases, MECHA_TRACK_DRIVE_STEP, generateMechaJetpack, generateMechaWeapon, generateMechaWheelLegParts, generateMechaMultiLegParts, mechaFamilyArmorHex, MECHA_FAMILIES } from './parts';
+import { generateMechaPartSet, generateMechaHull, generateMechaHullBody, generateMechaTurret, generateMechaTrackUnit, generateMechaTrackUnitPhases, MECHA_TRACK_DRIVE_STEP, generateMechaJetpack, generateMechaWeapon, generateMechaWheelLegParts, generateMechaWheelLegPhases, MECHA_WHEEL_DRIVE_STEP, generateMechaMultiLegParts, mechaFamilyArmorHex, MECHA_FAMILIES } from './parts';
 import type { MechaChestVariant } from './parts';
 import type { MechaFamily, MechaPartSet, MechaSpriteData, MechaPartOverrides, MechaHullOverrides, MechaLegOverrides, MechaSchemeName } from './parts';
 
@@ -301,9 +301,18 @@ export interface MechaStoreSurface {
   updateUnifiedCharacter: (id: string, updates: Record<string, unknown>) => void;
 }
 
-function registerSprites(store: MechaStoreSurface, characterId: string, name: string, plan: { key: string; data: MechaSpriteData; drivePhases?: MechaSpriteData[] }[], scale: number): Record<string, string> {
+/** 精灵像素指纹（判断相位帧与第 0 帧是否真有差异：无差异的段不挂 drive） */
+function spriteFingerprint(d: MechaSpriteData): string {
+  let h = 2166136261 >>> 0;
+  const mix = (n: number) => { h ^= n & 0xff; h = Math.imul(h, 16777619); };
+  mix(d.width); mix(d.height);
+  for (let i = 0; i < d.rgba.length; i++) mix(d.rgba[i]!);
+  return d.width + 'x' + d.height + ':' + (h >>> 0).toString(16);
+}
+
+function registerSprites(store: MechaStoreSurface, characterId: string, name: string, plan: { key: string; data: MechaSpriteData; drivePhases?: MechaSpriteData[]; driveStep?: number }[], scale: number): Record<string, string> {
   const spriteIds: Record<string, string> = {};
-  for (const { key, data, drivePhases } of plan) {
+  for (const { key, data, drivePhases, driveStep } of plan) {
     const s = scaleSpriteData(data, scale);
     const spr = store.addSprite(`${name}_${MECHA_PART_LABELS[key as MechaPartKey] ?? key}`, s.width, s.height, {
       plugX: Math.round(s.plug.x), plugY: Math.round(s.plug.y),
@@ -324,7 +333,7 @@ function registerSprites(store: MechaStoreSurface, characterId: string, name: st
         store.updateSprite(fs.id!, { origin: { characterId, boneName: key }, folder: '方向/东' });
         frameIds.push(fs.id!);
       }
-      store.updateSprite(spr.id!, { drive: { step: Math.max(1, Math.round(MECHA_TRACK_DRIVE_STEP * scale)), frameSpriteIds: frameIds } });
+      store.updateSprite(spr.id!, { drive: { step: Math.max(0.5, (driveStep ?? MECHA_TRACK_DRIVE_STEP) * scale), frameSpriteIds: frameIds } });
     }
   }
   return spriteIds;
@@ -339,7 +348,7 @@ export function createMechaCharacterInStore(
   const scale = opts.scale ?? 1;
   const character = store.addUnifiedCharacter(opts.name, { skipPlaceholderRoot: true });
   const partSet = generateMechaPartSet(opts.family, B.chest, B.parts);
-  const plan: { key: string; data: MechaSpriteData; drivePhases?: MechaSpriteData[] }[] = [
+  const plan: { key: string; data: MechaSpriteData; drivePhases?: MechaSpriteData[]; driveStep?: number }[] = [
     { key: 'torso', data: partSet.torso }, { key: 'head', data: partSet.head },
     { key: 'armUpper', data: partSet.armUpper }, { key: 'armFore', data: partSet.armFore }, { key: 'armHand', data: partSet.armHand },
   ];
@@ -350,8 +359,17 @@ export function createMechaCharacterInStore(
       drivePhases: generateMechaTrackUnitPhases(opts.family, { len: B.trackLen, scheme: B.parts?.scheme }),
     });
   } else if (B.chassis === 'wheel') {
-    const wp = generateMechaWheelLegParts(opts.family, B.parts?.leg, B.parts?.scheme);
-    plan.push({ key: 'wheelThigh', data: wp.thigh }, { key: 'wheelShin', data: wp.shin }, { key: 'wheelFoot', data: wp.foot });
+    // 轮足：三相位帧组建角——逐段比对相位差异，真含滚动像素的段才挂 drive
+    const triples = generateMechaWheelLegPhases(opts.family, B.parts?.leg, B.parts?.scheme);
+    const segKeys = [['wheelThigh', 'thigh'], ['wheelShin', 'shin'], ['wheelFoot', 'foot']] as const;
+    for (const [key, seg] of segKeys) {
+      const frames = triples.map((t) => t[seg]);
+      const fp0 = spriteFingerprint(frames[0]!);
+      const rolls = frames.some((f) => spriteFingerprint(f) !== fp0);
+      plan.push(rolls
+        ? { key, data: frames[0]!, drivePhases: frames, driveStep: MECHA_WHEEL_DRIVE_STEP }
+        : { key, data: frames[0]! });
+    }
   } else {
     plan.push({ key: 'legThigh', data: partSet.legThigh }, { key: 'legShin', data: partSet.legShin }, { key: 'legFoot', data: partSet.legFoot });
   }

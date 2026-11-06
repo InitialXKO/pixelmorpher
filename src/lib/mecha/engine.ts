@@ -132,12 +132,12 @@ function polyTest(pts: Pt[]) { // 多边形（护板/趾块）：局部坐标取
     return [inside, ((x - x0) / (x1 - x0)) * 2 - 1, (y - y0) / (y1 - y0)];
   };
 }
-function discTest(c: Pt, r: number) {
+function discTest(c: Pt, r: number, rot = 0) {
   return (x: number, y: number): [boolean, number, number] => {
     const dx = x - c.x, dy = y - c.y;
     const d = Math.hypot(dx, dy);
-    // 12 边形刻面外形：平边在 0.966r、棱角在 r（scout/MBT 的盖帽不是正圆）
-    const seg = ((Math.atan2(dy, dx) + Math.PI) % (Math.PI / 6));
+    // 12 边形刻面外形：平边在 0.966r、棱角在 r（scout/MBT 的盖帽不是正圆）；rot 转刻面取向（轮毂用）
+    const seg = ((Math.atan2(dy, dx) + rot + Math.PI) % (Math.PI / 6));
     const fr = r * (Math.cos(Math.PI / 12) / Math.cos(seg - Math.PI / 12));
     return [d <= fr, dx / r, d / r];
   };
@@ -172,7 +172,7 @@ const FONT: Record<string, string[]> = {
 };
 
 // ---------- 布局 ----------
-interface LegSpec { topology: 'standard' | 'reverse'; scheme: Scheme; seed: number; bend: number; camo: boolean; wear?: number; frameHeavy?: boolean; shellMode?: boolean; wScale?: number; lift?: number; guardOff?: boolean; detail?: number; ankleShift?: number; cableTint?: RGB; decalKind?: 'num' | 'plate' | 'none'; coreScale?: number; footType?: 'blocks' | 'shoe' | 'claw' | 'pad' | 'wheel'; /** 履带相位帧专用：皮带行程 px，圆盘 pass 按同心最大半径折算转角（其余画布不设、零影响） */ beltPhase?: number }
+interface LegSpec { topology: 'standard' | 'reverse'; scheme: Scheme; seed: number; bend: number; camo: boolean; wear?: number; frameHeavy?: boolean; shellMode?: boolean; wScale?: number; lift?: number; guardOff?: boolean; detail?: number; ankleShift?: number; cableTint?: RGB; decalKind?: 'num' | 'plate' | 'none'; coreScale?: number; footType?: 'blocks' | 'shoe' | 'claw' | 'pad' | 'wheel'; /** 履带相位帧专用：皮带行程 px，圆盘 pass 按同心最大半径折算转角（其余画布不设、零影响） */ beltPhase?: number; /** 轮足相位帧专用：轮行程 px，毂盘按胎外径折算转角、胎环扇区随之移（仅轮足画布设） */ wheelPhase?: number }
 interface Anchors {
   plateTint: Map<number, number>; panelLines: Map<number, number[]>;
   boltPts: Pt[]; ventId: number; guardId: number; stripeId: number;
@@ -184,6 +184,8 @@ interface Anchors {
   deviceFrame: { c: Pt; ux: number; uy: number; px: number; py: number } | null; chevDecal: boolean;
   shinIds: Set<number>; stripeSegs: [Pt, Pt][];
   panelDiag: Map<number, number>; panelTee: Map<number, number>; decalKind: string; toeFace: { x0: number; y0: number; x1: number; y1: number } | null; colorRole?: Map<number, string>;
+  /** 轮足毂心 + 胎外径（圆盘 pass 按胎外径折算毂盘转角用；仅轮足布局登记） */
+  wheelHubs?: { c: Pt; r: number }[];
 }
 function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle: Pt; toeX: number }): Anchors {
   const rnd = mulberry32(spec.seed);
@@ -340,12 +342,21 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     footBlock(ankle.x + 24, 426, 46, 20, 0.45); // 毂臂：踝→主轮毂斜撑
     { cv.insts.push({ kind: 'disc' }); fillShape(cv, id, discTest(ankle, 13)); id++; }
     const hubM = { x: ankle.x + 34, y: 426 }, hubR = { x: ankle.x - 44, y: 440 };
-    { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, (x, y) => { const d = Math.hypot(x - hubM.x, y - hubM.y); return d >= 30 && d <= 44 ? [true, (d - 30) / 14, 0.5] : [false, 0, 0]; }); id++; } // 主轮胎环
-    { cv.insts.push({ kind: 'disc' }); fillShape(cv, id, discTest(hubM, 30)); id++; }
-    { cv.insts.push({ kind: 'disc' }); fillShape(cv, id, discTest(hubM, 15)); id++; }
-    { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, (x, y) => { const d = Math.hypot(x - hubR.x, y - hubR.y); return d >= 20 && d <= 30 ? [true, (d - 20) / 10, 0.5] : [false, 0, 0]; }); id++; } // 后轮胎环
-    { cv.insts.push({ kind: 'disc' }); fillShape(cv, id, discTest(hubR, 20)); id++; }
-    { cv.insts.push({ kind: 'disc' }); fillShape(cv, id, discTest(hubR, 9)); id++; }
+    // 滚动相位：轮图样是 12 扇区旋转对称（有限群一圈只有 12 个等价位），
+    // 转角按胎外径折算（行程/半径）；胎环扇区分带与毂盘刻面同相位转
+    const spinM = (spec.wheelPhase ?? 0) / 44, spinR = (spec.wheelPhase ?? 0) / 30;
+    const ringV = (x: number, y: number, c: Pt, spin: number) => {
+      const a = Math.atan2(y - c.y, x - c.x) + spin;
+      const sec = Math.floor((((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / 6));
+      return sec % 2 === 0 ? 0.36 : 0.64;
+    };
+    (A.wheelHubs ??= []).push({ c: hubM, r: 44 }, { c: hubR, r: 30 });
+    { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, (x, y) => { const d = Math.hypot(x - hubM.x, y - hubM.y); return d >= 30 && d <= 44 ? [true, (d - 30) / 14, ringV(x, y, hubM, spinM)] : [false, 0, 0]; }); id++; } // 主轮胎环
+    { cv.insts.push({ kind: 'disc' }); const did = id; fillShape(cv, id, discTest(hubM, 30, spinM)); A.discs.push({ id: did, c: hubM, r: 30, hv: A.discs.length % 3 }); id++; }
+    { cv.insts.push({ kind: 'disc' }); const did = id; fillShape(cv, id, discTest(hubM, 15, spinM)); A.discs.push({ id: did, c: hubM, r: 15, hv: A.discs.length % 3 }); id++; }
+    { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, (x, y) => { const d = Math.hypot(x - hubR.x, y - hubR.y); return d >= 20 && d <= 30 ? [true, (d - 20) / 10, ringV(x, y, hubR, spinR)] : [false, 0, 0]; }); id++; } // 后轮胎环
+    { cv.insts.push({ kind: 'disc' }); const did = id; fillShape(cv, id, discTest(hubR, 20, spinR)); A.discs.push({ id: did, c: hubR, r: 20, hv: A.discs.length % 3 }); id++; }
+    { cv.insts.push({ kind: 'disc' }); const did = id; fillShape(cv, id, discTest(hubR, 9, spinR)); A.discs.push({ id: did, c: hubR, r: 9, hv: A.discs.length % 3 }); id++; }
     { cv.insts.push({ kind: 'rod' }); fillShape(cv, id, lineTest({ x: ankle.x - 2, y: 372 }, hubM, 4)); id++; } // 减震杆
     { cv.insts.push({ kind: 'rod' }); fillShape(cv, id, lineTest({ x: ankle.x - 8, y: 388 }, hubR, 3)); id++; }
     footBlock(ankle.x - 88, 466, 26, 8, 0.08); // 后稳定橇
@@ -736,10 +747,15 @@ function finishRender(cv: MechaCanvas, A: Anchors, spec: LegSpec) {
     }
     for (const [k, r] of maxR) beltSpin.set(k, spec.beltPhase / r);
   }
+  // 轮足相位：毂盘按登记的胎外径折算转角（不是毂盘自身半径——毂随胎转）
+  const wheelSpin = new Map<string, number>();
+  if (spec.wheelPhase && A.wheelHubs) {
+    for (const h of A.wheelHubs) wheelSpin.set(h.c.x.toFixed(1) + ',' + h.c.y.toFixed(1), spec.wheelPhase / h.r);
+  }
   for (const d of A.discs) {
     const x0 = Math.max(0, Math.floor(d.c.x - d.r)), x1 = Math.min(W - 1, Math.ceil(d.c.x + d.r));
     const y0 = Math.max(0, Math.floor(d.c.y - d.r)), y1 = Math.min(H - 1, Math.ceil(d.c.y + d.r));
-    const spin = beltSpin.get(d.c.x.toFixed(1) + ',' + d.c.y.toFixed(1)) ?? 0;
+    const spin = wheelSpin.get(d.c.x.toFixed(1) + ',' + d.c.y.toFixed(1)) ?? beltSpin.get(d.c.x.toFixed(1) + ',' + d.c.y.toFixed(1)) ?? 0;
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
       const i = y * W + x;
       if (cv.owner[i] !== d.id) continue;

@@ -1204,7 +1204,7 @@ export function convertCharacterToRuntimePackage(
               data: fs.data,
             });
           }
-          if (ok && frames.length) { drive = { step: Math.max(1, Math.round(drv.step || 4)), frames }; break outer; }
+          if (ok && frames.length) { drive = { step: Math.max(0.5, drv.step || 4), frames }; break outer; }
         }
       }
     }
