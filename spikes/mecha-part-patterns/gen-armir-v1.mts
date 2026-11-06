@@ -1490,11 +1490,13 @@ function armIR(spec: ArmSpec): ArmIR {
     const fw = 7 + 3.5 * b, L = spec.form.fingerLen, curl = spec.form.fingerCurl;
     const toFrame = (c: Pt) => ({ along: (c.x - wrist.x) * fr.ux + (c.y - wrist.y) * fr.uy, perp: (c.x - wrist.x) * fr.px + (c.y - wrist.y) * fr.py });
     parts.push({ t: 'block', frame: 'wrist', along: 29, perp: 0, w: 31 * b, h: 7, kind: 'frame' }); // 指节梁
-    for (let idx = 0; idx < 3; idx++) {
-      let pos = { x: wrist.x + fr.ux * 30 + fr.px * (idx - 1) * 11.5, y: wrist.y + fr.uy * 30 + fr.py * (idx - 1) * 11.5 };
-      const fan = (idx - 1) * 0.04;
+    parts.push({ t: 'block', frame: 'wrist', along: 24, perp: -10, w: 25 * b, h: 20, angOff: -0.35, kind: 'plate' }); // 鱼际丘：与掌体、指根三方交叠
+    for (let idx = 0; idx < 3; idx++) { // 指根成弧（中指最前最长）、根部相接、张开靠扇角不靠根缝
+      const baseAlong = [28.5, 31, 28.5][idx], lenMul = [0.92, 1, 0.86][idx];
+      let pos = { x: wrist.x + fr.ux * baseAlong + fr.px * (idx - 1) * fw * 0.92, y: wrist.y + fr.uy * baseAlong + fr.py * (idx - 1) * fw * 0.92 };
+      const fan = (idx - 1) * 0.025;
       for (let k = 0; k < 3; k++) {
-        const lk = L * [0.42, 0.33, 0.25][k], wk = fw * [1, 0.84, 0.68][k];
+        const lk = L * lenMul * [0.42, 0.33, 0.25][k], wk = fw * [1, 1.02, 0.94][idx] * [1, 0.84, 0.68][k];
         const a = foreAng + fan - curl * k;
         const cen = { x: pos.x + Math.cos(a) * (lk / 2), y: pos.y + Math.sin(a) * (lk / 2) };
         const cf = toFrame(cen), pf = toFrame(pos);
@@ -1503,14 +1505,14 @@ function armIR(spec: ArmSpec): ArmIR {
         pos = { x: pos.x + Math.cos(a) * lk, y: pos.y + Math.sin(a) * lk };
       }
     }
-    { // 拇指：基点在掌前下角，两段前指
-      let pos = { x: wrist.x + fr.ux * 27 + fr.px * -16, y: wrist.y + fr.uy * 27 + fr.py * -16 };
+    { // 拇指：根植鱼际丘内，两段前指、卷向与四指同向
+      let pos = { x: wrist.x + fr.ux * 24 + fr.px * -11, y: wrist.y + fr.uy * 24 + fr.py * -11 };
       for (let k = 0; k < 2; k++) {
-        const lk = [13, 11][k] * (0.7 + 0.3 * b), wk = [10, 8.5][k] * (0.7 + 0.3 * b);
-        const a = foreAng - 0.7 - 0.3 * k;
+        const lk = [14.5, 12][k] * (0.7 + 0.3 * b), wk = [10.5, 9][k] * (0.7 + 0.3 * b);
+        const a = foreAng - 0.38 - 0.32 * k;
         const cen = { x: pos.x + Math.cos(a) * (lk / 2), y: pos.y + Math.sin(a) * (lk / 2) };
         const cf = toFrame(cen), pf = toFrame(pos);
-        parts.push({ t: 'discAt', frame: 'wrist', along: pf.along, perp: pf.perp, r: wk * 0.42 });
+        parts.push({ t: 'discAt', frame: 'wrist', along: pf.along, perp: pf.perp, r: wk * 0.5 });
         parts.push({ t: 'block', frame: 'wrist', along: cf.along, perp: cf.perp, w: wk, h: lk, angOff: a - foreAng, kind: 'plate', cham: 0.3 });
         pos = { x: pos.x + Math.cos(a) * lk, y: pos.y + Math.sin(a) * lk };
       }
@@ -1534,7 +1536,7 @@ function renderArmIR(cv: Canvas, ir: ArmIR, spec: ArmSpec): Anchors {
   const { A } = T;
   const A0 = ir.anchors;
   const segOf = (seg: 'upper' | 'fore') => seg === 'upper' ? { a: A0.shoulder, b: A0.elbow } : { a: A0.elbow, b: A0.wrist };
-  const frameOf = (f: ArmFrame) => f === 'upper' || f === 'shoulder' ? { o: A0.shoulder, a: A0.shoulder, b: A0.elbow } : { o: A0.wrist, a: A0.elbow, b: A0.wrist };
+  const frameOf = (f: ArmFrame) => f === 'upper' || f === 'shoulder' ? { o: A0.shoulder, a: A0.shoulder, b: A0.elbow } : f === 'fore' ? { o: A0.elbow, a: A0.elbow, b: A0.wrist } : { o: A0.wrist, a: A0.elbow, b: A0.wrist };
   const fp = (f: ArmFrame, along: number, perp: number): Pt => { const { o, a, b } = frameOf(f); const fr = segFrame(a, b); return { x: o.x + fr.ux * along + fr.px * perp, y: o.y + fr.uy * along + fr.py * perp }; };
   const fang = (f: ArmFrame) => { const { a, b } = frameOf(f); const fr = segFrame(a, b); return Math.atan2(fr.uy, fr.ux) - Math.PI / 2; };
   for (const p of ir.parts) {
