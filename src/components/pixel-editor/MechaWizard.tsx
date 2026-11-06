@@ -23,9 +23,9 @@ import type { MechaFamily, MechaPartSet, MechaSpriteData, MechaChestVariant } fr
 import {
   assembleMechaCharacter, assembleMechaVehicle, createMechaCharacterInStore, createMechaVehicleInStore,
   generateMechaMobilitySprite, mechaHumanoidNodeParts, mechaVehicleNodeParts,
-  MECHA_CHASSIS_LABELS, MECHA_VEHICLE_LABELS,
+  MECHA_CHASSIS_LABELS, MECHA_VEHICLE_LABELS, MECHA_POD_MOUNT_LABELS,
 } from '@/lib/mecha/build-character';
-import type { MechaBuildOptions, MechaVehicleOptions } from '@/lib/mecha/build-character';
+import type { MechaBuildOptions, MechaVehicleOptions, MechaPodMount } from '@/lib/mecha/build-character';
 
 type Mode = 'humanoid' | 'vehicle';
 type Chassis = NonNullable<MechaBuildOptions['chassis']>;
@@ -60,7 +60,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   const [chest, setChest] = useState<MechaChestVariant | 'default'>('default');
   const [chassis, setChassis] = useState<Chassis>('biped');
   const [jetpack, setJetpack] = useState(false);
-  const [pod, setPod] = useState(false);
+  const [podMount, setPodMount] = useState<MechaPodMount | null>(null);
   const [weapon, setWeapon] = useState<WeaponSel>('none');
   const [hull, setHull] = useState<MechaVehicleOptions['hull']>('walker');
   const [mobility, setMobility] = useState<MechaVehicleOptions['mobility']>('legs');
@@ -76,9 +76,9 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
     chest: chest === 'default' ? undefined : chest,
     chassis,
     jetpack,
-    shoulderPod: pod,
+    podMount,
     weapon: weapon === 'none' ? null : weapon,
-  }), [chest, chassis, jetpack, pod, weapon]);
+  }), [chest, chassis, jetpack, podMount, weapon]);
 
   const vehicleOpts = useCallback((): MechaVehicleOptions => ({ hull, mobility, turret }), [hull, mobility, turret]);
 
@@ -90,6 +90,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
     else if (part === 'trackUnit') s = generateMechaTrackUnit(fam);
     else if (part === 'jetpack') s = generateMechaJetpack(fam);
     else if (part === 'pod') s = generateMechaWeapon(fam, 'pod');
+    else if (part === 'podPylon') s = generateMechaWeapon(fam, 'podPylon');
     else if (part === 'cannon') s = generateMechaWeapon(fam, 'cannon');
     else if (part === 'rifle') s = generateMechaWeapon(fam, 'rifle');
     else throw new Error('unknown gear part ' + part);
@@ -258,9 +259,14 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
               </Row>
               <Row label="装备">
                 <Chip active={jetpack} onClick={() => setJetpack(!jetpack)}>喷射背包</Chip>
-                <Chip active={pod} onClick={() => setPod(!pod)}>导弹荚（背挂）</Chip>
                 <Chip active={weapon === 'cannon'} onClick={() => setWeapon(weapon === 'cannon' ? 'none' : 'cannon')}>臂炮</Chip>
                 <Chip active={weapon === 'rifle'} onClick={() => setWeapon(weapon === 'rifle' ? 'none' : 'rifle')}>步枪</Chip>
+              </Row>
+              <Row label="导弹荚">
+                <Chip active={podMount === null} onClick={() => setPodMount(null)}>无</Chip>
+                {(Object.keys(MECHA_POD_MOUNT_LABELS) as MechaPodMount[]).map((m) => (
+                  <Chip key={m} active={podMount === m} onClick={() => setPodMount(m)}>{MECHA_POD_MOUNT_LABELS[m]}</Chip>
+                ))}
               </Row>
               <p className="text-[11px] text-gray-400">
                 按模式库生成全套部位并装配成真角色；底盘与装备都是独立节点，可在主画布单独摆动/换装。精灵为侧面东向，西向自动镜像。

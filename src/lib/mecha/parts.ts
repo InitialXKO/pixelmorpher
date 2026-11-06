@@ -218,7 +218,7 @@ export function generateMechaJetpack(family: MechaFamily): MechaSpriteData {
 /** 武器精灵（臂炮/导弹荚/步枪；原点语义见 gear 的 renderWeapon） */
 export function generateMechaWeapon(family: MechaFamily, kind: WeaponKind): MechaSpriteData {
   const scheme = SCHEME_OF[family];
-  const cv = newCanvas(); const origin = kind === 'pod' ? { x: 170, y: 150 } : { x: 90, y: 130 };
+  const cv = newCanvas(); const origin = kind === 'pod' ? { x: 170, y: 150 } : kind === 'podPylon' ? { x: 190, y: 330 } : { x: 90, y: 130 };
   const spec = { scheme, seed: 31, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family] };
   const A = renderWeapon(cv, spec, kind, origin);
   finishRender(cv, A, fin(family));

@@ -13,12 +13,12 @@ import type { MechaFamily, MechaPartSet, MechaSpriteData } from './parts';
 import type { WeaponKind } from './gear';
 
 export type MechaPartKey = 'leg' | 'armUpper' | 'armFore' | 'torso' | 'head'
-  | 'wheelLeg' | 'trackUnit' | 'jetpack' | 'pod' | 'cannon' | 'rifle';
+  | 'wheelLeg' | 'trackUnit' | 'jetpack' | 'pod' | 'podPylon' | 'cannon' | 'rifle';
 /** 基础五件（蓝图机甲源与默认装配用） */
 export const MECHA_PART_KEYS: MechaPartKey[] = ['leg', 'armUpper', 'armFore', 'torso', 'head'];
 export const MECHA_PART_LABELS: Record<MechaPartKey, string> = {
   leg: '腿', armUpper: '上臂', armFore: '前臂', torso: '躯干', head: '头',
-  wheelLeg: '轮足腿', trackUnit: '履带底盘', jetpack: '喷射背包', pod: '导弹荚', cannon: '臂炮', rifle: '步枪',
+  wheelLeg: '轮足腿', trackUnit: '履带底盘', jetpack: '喷射背包', pod: '导弹荚', podPylon: '导弹荚·高架', cannon: '臂炮', rifle: '步枪',
 };
 
 /** 人形构建选项：胸型变体 / 底盘 / 挂载装备（缺省 = 基础双足无装备） */
@@ -26,9 +26,22 @@ export interface MechaBuildOptions {
   chest?: MechaChestVariant;
   chassis?: 'biped' | 'wheel' | 'tracks';
   jetpack?: boolean;
-  weapon?: Exclude<WeaponKind, 'pod'> | null;
-  shoulderPod?: boolean;
+  weapon?: 'cannon' | 'rifle' | null;
+  podMount?: MechaPodMount | null;
 }
+
+/** 导弹荚四挂位（据肩挂不遮头脸四式参考）：后偏/高架/外侧/低位 */
+export type MechaPodMount = 'rear' | 'pylon' | 'outboard' | 'low';
+export const MECHA_POD_MOUNT_LABELS: Record<MechaPodMount, string> = {
+  rear: '后偏肩挂', pylon: '高架背挂', outboard: '外侧肩挂', low: '低位贴胸挂',
+};
+const POD_MOUNT_WIRE: Record<MechaPodMount, { dx: number; dy: number; from: 'shoulder' | 'hip'; z: number }> = {
+  // 荚体原点在底部挂点（高架为撑杆足）；偏移以肩/颈锚点为参照系
+  rear: { dx: -100, dy: -146, from: 'hip', z: 2 },
+  pylon: { dx: -97, dy: -155, from: 'hip', z: -1 },
+  outboard: { dx: 58, dy: 30, from: 'shoulder', z: 4 },
+  low: { dx: 34, dy: 62, from: 'shoulder', z: 3 },
+};
 export const MECHA_CHASSIS_LABELS = { biped: '双足', wheel: '轮足', tracks: '履带' } as const;
 
 /** 引擎 RGBA → 产品像素格（十六进制色串，透明为 null） */
@@ -73,7 +86,7 @@ export function mechaHumanoidNodeParts(build?: MechaBuildOptions): Record<string
   if (chassis === 'tracks') map.tracks = 'trackUnit';
   else { const leg = chassis === 'wheel' ? 'wheelLeg' : 'leg'; map.leg_N = leg; map.leg_F = leg; }
   if (B.jetpack) map.jetpack = 'jetpack';
-  if (B.shoulderPod) map.pod = 'pod';
+  if (B.podMount) map.pod = B.podMount === 'pylon' ? 'podPylon' : 'pod';
   if (B.weapon) map.weapon = B.weapon;
   return map;
 }
@@ -123,7 +136,7 @@ export function assembleMechaCharacter(opts: {
   if (chassis === 'tracks') mk('tracks', '履带底盘', 'pelvis');
   else { mk('leg_N', '腿·近', 'pelvis'); mk('leg_F', '腿·远', 'pelvis'); }
   if (B.jetpack) mk('jetpack', '喷射背包', 'pelvis');
-  if (B.shoulderPod) mk('pod', '导弹荚·肩', 'pelvis');
+  if (B.podMount) mk('pod', '导弹荚', 'pelvis');
   if (B.weapon) mk('weapon', B.weapon === 'cannon' ? '臂炮' : '步枪', 'arm_fore_N');
   for (const n of Object.values(nodes)) {
     if (n.parentId) {
@@ -153,7 +166,11 @@ export function assembleMechaCharacter(opts: {
     wire('pelvis', 'leg_F', { x: S.hip.x - 24, y: S.hip.y - 4 });
   }
   if (B.jetpack) wire('pelvis', 'jetpack', { x: -72, y: -128 });
-  if (B.shoulderPod) wire('pelvis', 'pod', { x: -52, y: -160 });
+  if (B.podMount) {
+    const w = POD_MOUNT_WIRE[B.podMount];
+    const base = w.from === 'shoulder' ? S.shoulder : S.hip;
+    wire('pelvis', 'pod', { x: base.x + w.dx, y: base.y + w.dy });
+  }
   if (B.weapon) {
     // 武器对齐前臂静止方向（节点角为度）：臂炮原点在腕、步枪原点在掌
     const off = B.weapon === 'cannon' ? partSet.wristOff : partSet.palmOff;
@@ -174,7 +191,7 @@ export function assembleMechaCharacter(opts: {
     nodes.leg_F!.zIndex = 0; nodes.leg_F!.side = 'R';
   }
   if (B.jetpack) nodes.jetpack!.zIndex = -1; // 背挂在躯干之后
-  if (B.shoulderPod) nodes.pod!.zIndex = 0; // 背挂：在躯干后、背包前
+  if (B.podMount) nodes.pod!.zIndex = POD_MOUNT_WIRE[B.podMount].z;
   if (B.weapon) nodes.weapon!.zIndex = 4;
   nodes.arm_upper_N!.zIndex = 3; nodes.arm_upper_N!.side = 'L';
   nodes.arm_fore_N!.zIndex = 3; nodes.arm_fore_N!.side = 'L';
@@ -249,7 +266,7 @@ export function createMechaCharacterInStore(
   if (chassis === 'tracks') plan.push({ key: 'trackUnit', data: generateMechaTrackUnit(opts.family) });
   if (B.jetpack) plan.push({ key: 'jetpack', data: generateMechaJetpack(opts.family) });
   if (B.weapon) plan.push({ key: B.weapon, data: generateMechaWeapon(opts.family, B.weapon) });
-  if (B.shoulderPod) plan.push({ key: 'pod', data: generateMechaWeapon(opts.family, 'pod') });
+  if (B.podMount) { const pk = B.podMount === 'pylon' ? 'podPylon' : 'pod'; plan.push({ key: pk, data: generateMechaWeapon(opts.family, pk) }); }
   const spriteIds: Record<string, string> = {};
   for (const { key, data: s } of plan) {
     const label = MECHA_PART_LABELS[key as MechaPartKey] ?? key;
