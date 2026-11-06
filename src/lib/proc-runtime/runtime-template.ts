@@ -3188,6 +3188,10 @@ function buildFallback() {
     legLen: lens.length ? lens.reduce((a, b) => a + b, 0) / lens.length : 24,
     walkOk: walkChains.length >= 2 && !walkPerf && !legGraphDriven,
     jumpOk: walkChains.length >= 2 && !jumpPerf && !legGraphDriven,
+    // 滚动链（轮足）：链上任一部件带 drive 即是（轮足的小腿/足带
+    // 相位帧；双足件无 drive、履带件不在腿链里）。滚动链平地不
+    // 抬脚，见 runFallbackPass 内侧视/俯视两处口径。
+    wheel: walkChains.map((c) => c.keys.some((k) => { const p = PARTS.find((pp) => pp.key === k); return !!(p && p.drive); })),
   };
   if (walkChains.length < 2) {
     const msg = '播放器兜底动作：未识别到成对的腿部骨骼（按骨骼名/父子链匹配失败），行走/跳跃兜底均不生效';
@@ -3424,6 +3428,17 @@ function runFallbackPass(pose, dt) {
         }
       } else if (fbWalkW > 0.003) {
         w = fbWalkW;
+        if (fb.wheel[ci]) {
+          // 轮足滚动（用户定：轮足只有越障才会抬起）：平地移动脚
+          // 目标恒钉静止接触位、腿保持静止几何，滚动由部件 drive
+          // 帧承担，脚掌不做步态俯仰；抬脚只发生在跳跃段（越障/
+          // 滞空，走上面的 jumpW 分支，本分支不进摆动段）。
+          F = [restT[0], restT[1]];
+          footDelta = n >= 3 ? 0 : null;
+          fbSegPrev.set(ci, 0);
+          solvedList.push({ chain, rt, F, footDelta, w, walk: true });
+          return;
+        }
         let u = ((fbPhase + chain.phase) / (2 * Math.PI)) % 1;
         if (u < 0) u += 1;
         const seg = u < FB_STANCE ? 0 : 1;
@@ -3601,7 +3616,7 @@ function runFallbackPass(pose, dt) {
         const rt = chainRT[ci]; if (!rt) return;
         const li = (rt.J[0][0] - cx) * latX + (rt.J[0][1] - cy) * latY;
         den += Math.abs(li);
-        num += (segs[ci] === 0 ? 1 : -1) * li;
+        num += ((segs[ci] === 0 || fb.wheel[ci]) ? 1 : -1) * li;
       });
       const m = den > 1e-6 ? num / den : 0;
       const wV = fbTopVertW;
@@ -3624,7 +3639,10 @@ function runFallbackPass(pose, dt) {
       let solved = null;
       if (fbTopVertW < 0.999) {
         let F;
-        if (seg === 0) {
+        if (fb.wheel[ci]) {
+          // 轮链（俯视平面）：脚目标恒钉静止平面位，不落脚不摆动
+          F = [restT[0], restT[1]];
+        } else if (seg === 0) {
           if (fbSegPrev.get(ci) !== 0 || !fbTopPlants.has(ci)) {
             const tp = tipPrevOf(ci);
             fbTopPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 就地落脚（世界平面位）
@@ -3657,7 +3675,7 @@ function runFallbackPass(pose, dt) {
           F = [from[0] + (endX - from[0]) * sm + px * bow,
                from[1] + (endY - from[1]) * sm + py * bow];
         }
-        fbSegPrev.set(ci, seg);
+        fbSegPrev.set(ci, fb.wheel[ci] ? 0 : seg);
         solved = fbSolveChain(J, rt.tipExt, 0, F, null);
       }
       if (fbTopVertW > 0.001 && corGeoms[ci]) {
@@ -3682,7 +3700,9 @@ function runFallbackPass(pose, dt) {
           return (p[0] - char.x - J[0][0]) * g.ux + (p[1] - charOriginY() - J[0][1]) * g.uy;
         };
         let q;
-        if (seg === 0) {
+        if (fb.wheel[ci]) {
+          q = g.D; // 轮链（俯视走廊）：沿轴坐标恒在静止位，不锚定不收脚
+        } else if (seg === 0) {
           if (corPrev !== 0 || !fbCorPlants.has(ci)) {
             const tp = tipPrevOf(ci);
             fbCorPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 就地锚定（世界平面位）
