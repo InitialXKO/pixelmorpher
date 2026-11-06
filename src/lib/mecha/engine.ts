@@ -274,6 +274,17 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       return best;
     }); id++;
   }
+  // 踝关节内构衬底：盘后/盘下衬暗内构两块（壳块沿小腿轴 + 盘下块），
+  // 在一切段板/足块/关节件之前画，只在盘缘外的缺口里露出——参考里
+  // 踝盘四周衬暗内构、不露背景（旧版盘后一圈与盘下凹口采样全是背景）
+  {
+    const aAng = Math.atan2(ankle.y - knee.y, ankle.x - knee.x);
+    const clipGround = (poly: Pt[]) => { const t = polyTest(poly); return (x: number, y: number): [boolean, number, number] => (y <= 469 ? t(x, y) : [false, 0, 0]); };
+    cv.insts.push({ kind: 'frame' });
+    fillShape(cv, id, clipGround(blockPoly(ankle.x - 6, ankle.y + 4, 74, 64, aAng, 0.3))); id++;
+    cv.insts.push({ kind: 'frame' });
+    fillShape(cv, id, clipGround(blockPoly(ankle.x + 8, ankle.y + 25, 62, 18, 0.1, 0.3))); id++;
+  }
   // 框梁（仅框主导族）：窄板挂在露出的框梁上，段侧缘带归框梁（按段规格定宽，与甲板同源）
   if (spec.frameHeavy) for (const sgm of [thigh, shin]) {
     cv.insts.push({ kind: 'frame' });
@@ -502,6 +513,21 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     fillShape(cv, id, polyTest(pts)); id++;
     A.plateTint.set(A.guardId, 1.05);
     A.panelLines.set(A.guardId, [0.52, 0.79]);
+    // 压块套连胫骨套（用户定）：护板下端到踝前压块套之间一条连带，
+    // 贴小腿前表面下行、压住套的上缘——两套相连成一个套系，小腿前
+    // 轮廓在连带处收进，凹轮廓由此形成（套心与足节同式：主线 -0.40、0.62·50）
+    {
+      const dirL = { x: Math.cos(-0.40), y: Math.sin(-0.40) }, nrmL = { x: -dirL.y, y: dirL.x };
+      const sc = { x: ankle.x + dirL.x * 31, y: ankle.y + dirL.y * 31 };
+      const band: Pt[] = [
+        C(0.90, hwAt(0.90) * 0.34), C(0.995, hwAt(0.995) * 0.30),
+        { x: sc.x + nrmL.x * 2 + dirL.x * 8, y: sc.y + nrmL.y * 2 + dirL.y * 8 },
+        { x: sc.x - nrmL.x * 14, y: sc.y - nrmL.y * 14 },
+      ];
+      cv.insts.push({ kind: 'guard' });
+      fillShape(cv, id, polyTest(band)); id++;
+      A.plateTint.set(id - 1, 0.92);
+    }
     A.decalPos = C(0.8, hwAt(0.8) * 0.44);
     { const df = segFrame(shin.a, shin.b); const dc = C(0.72, hwAt(0.72) * 0.6); A.deviceFrame = { c: dc, ux: df.ux, uy: df.uy, px: df.px, py: df.py }; }
     A.chevDecal = rnd() < 0.55;
