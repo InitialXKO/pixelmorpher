@@ -426,7 +426,13 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
         const hl = len / 2, ht = thick / 2;
         const cFT = thick * (0.30 + (v % 3) * 0.06), cBT = thick * (0.14 + (v % 2) * 0.05);
         const cFB = thick * (0.20 + (v % 2) * 0.05), cBB = thick * 0.09;
-        const sx = hl * (0.05 + (v % 3) * 0.1), sd = thick * 0.16, sr = thick * 0.45;
+        const sx = hl * (0.05 + (v % 3) * 0.1), sd0 = thick * 0.16;
+        // 台阶终点必须落在前上切口之前：短块（如压块套，长厚比小）上
+        // 台阶长 + 切口会越过半长、顶边折回自交，角上出一块折叠尖刺
+        let sr = thick * 0.45;
+        const stepEnd = hl - cFT - 2;
+        if (sx + sr > stepEnd) sr = Math.max(0, stepEnd - sx);
+        const sd = sr > 0 ? sd0 : 0;
         const loc: Pt[] = [
           { x: -hl, y: -ht + cBT }, { x: -hl + cBT, y: -ht }, { x: sx, y: -ht },
           { x: sx + sr, y: -ht + sd }, { x: hl - cFT, y: -ht + sd }, { x: hl, y: -ht + sd + cFT * 0.75 },
@@ -481,8 +487,8 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
         fillShape(cv, id, polyTest([
           { x: FT.x - 6, y: FT.y + 9 }, { x: FT.x + 2, y: FT.y }, { x: BK.x + 3, y: BK.y - 2 },
           { x: SM.x, y: SM.y }, { x: SM.x - 10, y: SM.y + 5 },
-          { x: RT.x + 8, y: RT.y + 2 }, { x: RT.x, y: RT.y + 6 }, { x: RT.x - 2, y: GY - 18 },
-          { x: RT.x - 10, y: GY - 18 }, { x: RT.x - 11, y: GY }, { x: ankle.x - 0.05 * D, y: GY }, { x: FT.x - 3, y: FT.y + 17 },
+          { x: RT.x + 8, y: RT.y + 2 }, { x: RT.x, y: RT.y + 6 }, { x: RT.x - 2, y: GY - 8 },
+          { x: RT.x - 9, y: GY - 8 }, { x: RT.x - 9, y: GY }, { x: ankle.x - 0.05 * D, y: GY }, { x: FT.x - 3, y: FT.y + 17 },
         ])); id++;
         A.plateTint.set(bid, 0.95);
         A.boltPts.push({ x: (BK.x + RT.x) / 2, y: (BK.y + RT.y) / 2 + 12 }); // 跟块面上一颗栓（参考两张都有）
