@@ -20,7 +20,7 @@ import { createDefaultNode, createDefaultCostumePiece, pxToSub } from '../unifie
 import type { Node, CostumeSet, CostumePiece, PixelGrid, DirectionIndex, IKChain } from '../unified-types';
 import { generateMechaPartSet, generateMechaHull, generateMechaHullBody, generateMechaTurret, generateMechaTrackUnit, generateMechaJetpack, generateMechaWeapon, generateMechaWheelLegParts, generateMechaMultiLegParts, mechaFamilyArmorHex, MECHA_FAMILIES } from './parts';
 import type { MechaChestVariant } from './parts';
-import type { MechaFamily, MechaPartSet, MechaSpriteData } from './parts';
+import type { MechaFamily, MechaPartSet, MechaSpriteData, MechaPartOverrides, MechaHullOverrides, MechaLegOverrides, MechaSchemeName } from './parts';
 
 export type MechaPartKey = 'leg' | 'legThigh' | 'legShin' | 'legFoot' | 'armUpper' | 'armFore' | 'armHand' | 'torso' | 'head'
   | 'wheelThigh' | 'wheelShin' | 'wheelFoot' | 'multiUpper' | 'multiLower' | 'trackUnit' | 'jetpack' | 'pod' | 'podPylon' | 'cannon' | 'rifle';
@@ -39,6 +39,10 @@ export interface MechaBuildOptions {
   jetpack?: boolean;
   weapon?: 'cannon' | 'rifle' | null;
   podMount?: MechaPodMount | null;
+  /** 部件覆盖（配色/足型/拓扑/各部件变体与参数，稀疏：只写改过的） */
+  parts?: MechaPartOverrides;
+  /** 履带长度（底盘为履带时） */
+  trackLen?: number;
 }
 
 /** 导弹荚四挂位（据肩挂不遮头脸四式参考）：后偏/高架/外侧/低位 */
@@ -281,7 +285,7 @@ export function assembleMechaCharacter(opts: {
     }
   }
 
-  const costumeSet = buildCostumeSet(cid, 'main', '机甲', nodes, mechaHumanoidNodeParts(B), opts.spriteIds, mechaFamilyArmorHex(opts.family));
+  const costumeSet = buildCostumeSet(cid, 'main', '机甲', nodes, mechaHumanoidNodeParts(B), opts.spriteIds, mechaFamilyArmorHex(opts.family, B.parts?.scheme));
   const nodesById: Record<string, Node> = {};
   for (const n of Object.values(nodes)) nodesById[n.id] = n;
   return { nodes: nodesById, rootNodeId: pelvis.id, costumeSet, ikChains };
@@ -319,22 +323,22 @@ export function createMechaCharacterInStore(
   const B = opts.build ?? {};
   const scale = opts.scale ?? 1;
   const character = store.addUnifiedCharacter(opts.name, { skipPlaceholderRoot: true });
-  const partSet = generateMechaPartSet(opts.family, B.chest);
+  const partSet = generateMechaPartSet(opts.family, B.chest, B.parts);
   const plan: { key: string; data: MechaSpriteData }[] = [
     { key: 'torso', data: partSet.torso }, { key: 'head', data: partSet.head },
     { key: 'armUpper', data: partSet.armUpper }, { key: 'armFore', data: partSet.armFore }, { key: 'armHand', data: partSet.armHand },
   ];
   if (B.chassis === 'tracks') {
-    plan.push({ key: 'trackUnit', data: generateMechaTrackUnit(opts.family) });
+    plan.push({ key: 'trackUnit', data: generateMechaTrackUnit(opts.family, { len: B.trackLen, scheme: B.parts?.scheme }) });
   } else if (B.chassis === 'wheel') {
-    const wp = generateMechaWheelLegParts(opts.family);
+    const wp = generateMechaWheelLegParts(opts.family, B.parts?.leg, B.parts?.scheme);
     plan.push({ key: 'wheelThigh', data: wp.thigh }, { key: 'wheelShin', data: wp.shin }, { key: 'wheelFoot', data: wp.foot });
   } else {
     plan.push({ key: 'legThigh', data: partSet.legThigh }, { key: 'legShin', data: partSet.legShin }, { key: 'legFoot', data: partSet.legFoot });
   }
-  if (B.jetpack) plan.push({ key: 'jetpack', data: generateMechaJetpack(opts.family) });
-  if (B.podMount) { const pk = B.podMount === 'pylon' ? 'podPylon' : 'pod'; plan.push({ key: pk, data: generateMechaWeapon(opts.family, pk) }); }
-  if (B.weapon) plan.push({ key: B.weapon, data: generateMechaWeapon(opts.family, B.weapon) });
+  if (B.jetpack) plan.push({ key: 'jetpack', data: generateMechaJetpack(opts.family, B.parts?.scheme) });
+  if (B.podMount) { const pk = B.podMount === 'pylon' ? 'podPylon' : 'pod'; plan.push({ key: pk, data: generateMechaWeapon(opts.family, pk, B.parts?.scheme) }); }
+  if (B.weapon) plan.push({ key: B.weapon, data: generateMechaWeapon(opts.family, B.weapon, B.parts?.scheme) });
   const spriteIds = registerSprites(store, character.id, opts.name, plan, scale);
   const assembly = assembleMechaCharacter({
     characterId: character.id, family: opts.family,
@@ -357,6 +361,8 @@ export interface MechaVehicleOptions {
   hull: 'walker' | 'hauler';
   mobility: 'legs' | 'tracks' | 'quad' | 'spider';
   turret: boolean;
+  /** 部件覆盖（配色/车体变体与参数/步行腿覆盖/履带长，稀疏） */
+  parts?: { scheme?: MechaSchemeName; hull?: MechaHullOverrides; leg?: MechaLegOverrides; trackLen?: number };
 }
 export const MECHA_VEHICLE_LABELS = {
   hull: { walker: '步行载具', hauler: '运输载具' },
@@ -409,6 +415,8 @@ export function assembleMechaVehicle(opts: {
   const sc = opts.scale ?? 1;
   const mob = V.mobility;
   const mobFam = mechaMobilityFamily(V.hull);
+  // 车高覆盖时，移动件/炮塔的纵向挂点按车高比同步（挂点都是甲板下沿带）
+  const hR = (V.parts?.hull?.hullH ?? (V.hull === 'walker' ? 130 : 118)) / (V.hull === 'walker' ? 130 : 118);
   const nodes: NodeMap = {};
   const mk = (key: string, name: string, parentKey?: string, angle = 0) => mkNode(nodes, cid, key, name, parentKey, angle);
 
@@ -418,8 +426,8 @@ export function assembleMechaVehicle(opts: {
   if (mob === 'tracks') {
     mk('track_F', '履带·远', 'hull'); mk('track_N', '履带·近', 'hull');
     linkChildren(nodes);
-    sock3(nodes, 'hull', 'track_F', 12 * sc, 108 * sc, -14 * sc);
-    sock3(nodes, 'hull', 'track_N', -12 * sc, 112 * sc, 14 * sc);
+    sock3(nodes, 'hull', 'track_F', 12 * sc, 108 * hR * sc, -14 * sc);
+    sock3(nodes, 'hull', 'track_N', -12 * sc, 112 * hR * sc, 14 * sc);
     nodes.track_F!.side = 'R'; nodes.track_N!.side = 'L';
     nodes.track_F!.zIndex = 0; nodes.track_N!.zIndex = 3;
   } else if (mob === 'legs') {
@@ -434,7 +442,7 @@ export function assembleMechaVehicle(opts: {
     linkChildren(nodes);
     for (const s of ['N', 'F'] as const) {
       const sg = SIDE_SIGN[s];
-      sock3(nodes, 'hull', `leg_thigh_${s}`, sg * 12 * sc, 110 * sc, (s === 'N' ? -74 : 74) * sc);
+      sock3(nodes, 'hull', `leg_thigh_${s}`, sg * 12 * sc, 110 * hR * sc, (s === 'N' ? -74 : 74) * sc);
       sockLimb(nodes, `leg_thigh_${s}`, `leg_shin_${s}`, G.thighLen * sc);
       sockLimb(nodes, `leg_shin_${s}`, `leg_foot_${s}`, G.shinLen * sc);
       const z = s === 'N' ? 3 : 0;
@@ -443,7 +451,7 @@ export function assembleMechaVehicle(opts: {
         nodes[k]!.side = (s === 'N' ? 'L' : 'R') as Node['side'];
       }
       // IK 链（目标 = 静止足尖，甲板坐标系）
-      const hipF = (s === 'N' ? -74 : 74) * sc, hipD = 110 * sc;
+      const hipF = (s === 'N' ? -74 : 74) * sc, hipD = 110 * hR * sc;
       const e1 = dirOf(R.legThigh), e2 = dirOf(R.legThigh + R.legShin), e3 = dirOf(R.legThigh + R.legShin + R.legFoot);
       const knF = hipF + e1.f * G.thighLen * sc, knD = hipD + e1.d * G.thighLen * sc;
       const anF = knF + e2.f * G.shinLen * sc, anD = knD + e2.d * G.shinLen * sc;
@@ -479,7 +487,7 @@ export function assembleMechaVehicle(opts: {
     }
     linkChildren(nodes);
     for (const lg of legs) {
-      sock3(nodes, 'hull', lg.key, SIDE_SIGN[lg.side] * 12 * sc, lg.down * sc, lg.fwd * sc);
+      sock3(nodes, 'hull', lg.key, SIDE_SIGN[lg.side] * 12 * sc, lg.down * hR * sc, lg.fwd * sc);
       sockLimb(nodes, lg.key, `${lg.key}_shin`, mp.l1 * sc);
       const z = lg.side === 'N' ? 3 : 0;
       nodes[lg.key]!.zIndex = z;
@@ -489,10 +497,11 @@ export function assembleMechaVehicle(opts: {
     }
   }
   if (V.turret) {
-    mk('turret', V.hull === 'walker' ? '炮塔' : '顶架', 'hull');
+    const turretForm = V.parts?.hull?.form?.turret ?? (V.hull === 'walker' ? 'gun' : 'rack');
+    mk('turret', turretForm === 'rack' ? '顶架' : '炮塔', 'hull');
     linkChildren(nodes);
     const t = V.hull === 'walker' ? { down: -18, fwd: -15 } : { down: -17, fwd: -16 };
-    sock3(nodes, 'hull', 'turret', 0, t.down * sc, t.fwd * sc);
+    sock3(nodes, 'hull', 'turret', 0, t.down * hR * sc, t.fwd * sc);
     nodes.turret!.zIndex = 2;
   }
   // 根定位：纵向留移动件下探空间
@@ -505,7 +514,7 @@ export function assembleMechaVehicle(opts: {
   // 载具步行腿 IK 链的 2D 目标 y 需根纵坐标（上面先占位 0，这里补齐）
   for (const c of ikChains) c.target.y = rootY + (c.target3D?.y ?? 0);
 
-  const costumeSet = buildCostumeSet(cid, 'vehicle', MECHA_VEHICLE_LABELS.hull[V.hull], nodes, mechaVehicleNodeParts(V), opts.spriteIds, mechaFamilyArmorHex(mobFam));
+  const costumeSet = buildCostumeSet(cid, 'vehicle', MECHA_VEHICLE_LABELS.hull[V.hull], nodes, mechaVehicleNodeParts(V), opts.spriteIds, mechaFamilyArmorHex(mobFam, V.parts?.scheme));
   const nodesById: Record<string, Node> = {};
   for (const n of Object.values(nodes)) nodesById[n.id] = n;
   return { nodes: nodesById, rootNodeId: hull.id, costumeSet, ikChains };
@@ -521,19 +530,19 @@ export function createMechaVehicleInStore(
   const mobFam = mechaMobilityFamily(V.hull);
   const character = store.addUnifiedCharacter(opts.name, { skipPlaceholderRoot: true });
   const plan: { key: string; data: MechaSpriteData }[] = [
-    { key: 'hullBody', data: generateMechaHullBody(V.hull) },
+    { key: 'hullBody', data: generateMechaHullBody(V.hull, V.parts?.hull, V.parts?.scheme) },
   ];
   let partSet: MechaPartSet | undefined;
   if (V.mobility === 'tracks') {
-    plan.push({ key: 'trackUnit', data: generateMechaTrackUnit(mobFam) });
+    plan.push({ key: 'trackUnit', data: generateMechaTrackUnit(mobFam, { len: V.parts?.trackLen, scheme: V.parts?.scheme }) });
   } else if (V.mobility === 'legs') {
-    partSet = generateMechaPartSet(mobFam);
+    partSet = generateMechaPartSet(mobFam, undefined, { scheme: V.parts?.scheme, leg: V.parts?.leg });
     plan.push({ key: 'legThigh', data: partSet.legThigh }, { key: 'legShin', data: partSet.legShin }, { key: 'legFoot', data: partSet.legFoot });
   } else {
-    const mp = generateMechaMultiLegParts(mobFam, V.mobility);
+    const mp = generateMechaMultiLegParts(mobFam, V.mobility, V.parts?.scheme);
     plan.push({ key: 'multiUpper', data: mp.upper }, { key: 'multiLower', data: mp.lower });
   }
-  if (V.turret) plan.push({ key: 'turret', data: generateMechaTurret(V.hull) });
+  if (V.turret) plan.push({ key: 'turret', data: generateMechaTurret(V.hull, V.parts?.hull, V.parts?.scheme) });
   const spriteIds = registerSprites(store, character.id, opts.name, plan, scale);
   const assembly = assembleMechaVehicle({
     characterId: character.id,

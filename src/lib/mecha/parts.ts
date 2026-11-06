@@ -26,6 +26,16 @@ const SCHEME_OF: Record<MechaFamily, Scheme> = { olive: SCHEMES.olive, agile: SC
 const CAMO_OF: Record<MechaFamily, boolean> = { olive: true, agile: false, powersuit: false };
 const TWOTONE_OF: Record<MechaFamily, boolean> = { olive: true, agile: true, powersuit: false };
 
+/** 配色名（共 6 套：引擎 SCHEMES 五套 + 动力服一套），可整机另选、与族解绑 */
+export type MechaSchemeName = 'olive' | 'white' | 'desert' | 'slate' | 'rust' | 'powersuit';
+export const MECHA_SCHEME_LABELS: Record<MechaSchemeName, string> = {
+  olive: '橄榄绿', white: '敏捷白', desert: '沙漠黄', slate: '石板灰', rust: '锈红', powersuit: '橙白',
+};
+export const MECHA_FAMILY_SCHEME: Record<MechaFamily, MechaSchemeName> = { olive: 'olive', agile: 'white', powersuit: 'powersuit' };
+export function mechaSchemeByName(name: MechaSchemeName): Scheme {
+  return name === 'powersuit' ? psScheme : SCHEMES[name];
+}
+
 export interface MechaSpriteData {
   width: number;
   height: number;
@@ -55,6 +65,25 @@ function fin(family: MechaFamily): LegSpec & { altTone?: boolean } {
   } as LegSpec & { altTone?: boolean };
 }
 
+/** 收尾规格：族基线 + 稀疏覆盖（只覆写给出的字段，无覆盖时与 fin() 逐值一致） */
+function finFor(family: MechaFamily, scheme: Scheme, ov?: {
+  wear?: number; camo?: boolean; seed?: number; detail?: number; shellMode?: boolean;
+  cableTint?: [number, number, number]; decalKind?: LegSpec['decalKind']; twoTone?: boolean;
+}): LegSpec & { altTone?: boolean } {
+  const F = fin(family);
+  F.scheme = scheme;
+  if (!ov) return F;
+  if (ov.wear !== undefined) F.wear = ov.wear;
+  if (ov.camo !== undefined) F.camo = ov.camo;
+  if (ov.seed !== undefined) F.seed = ov.seed;
+  if (ov.detail !== undefined) F.detail = ov.detail;
+  if (ov.shellMode !== undefined) F.shellMode = ov.shellMode;
+  if (ov.cableTint !== undefined) F.cableTint = ov.cableTint;
+  if (ov.decalKind !== undefined) F.decalKind = ov.decalKind;
+  if (ov.twoTone !== undefined) F.altTone = ov.twoTone;
+  return F;
+}
+
 const LEG_SPEC: Record<MechaFamily, (scheme: Scheme) => LegSpec> = {
   olive: (s) => ({ topology: 'standard', scheme: s, seed: 11, bend: 22, camo: true, wear: 0.3, wScale: 1.1, lift: 20, detail: 0.65, ankleShift: 12, coreScale: 1.05 }),
   agile: (s) => ({ topology: 'standard', scheme: s, seed: 21, bend: 18, camo: false, wear: 0.15, wScale: 0.92, lift: 20, detail: 0.65, ankleShift: 8, coreScale: 1, footType: 'shoe' }),
@@ -78,6 +107,47 @@ const HEAD_SPEC: Record<MechaFamily, (scheme: Scheme) => HeadSpec> = {
   agile: (s) => ({ family: 'agile', twoTone: true, scheme: s, seed: 21, wear: 0.15, camo: false, seat: { x: 80, y: 120 }, w: 92, h: 92, tilt: 0.02, form: { crown: 'angular', eye: 'slit', brow: true, jaw: 'block', ear: 'plate', top: 'vfin', cheekCable: false } }),
   powersuit: (s) => ({ family: 'powersuit', twoTone: false, scheme: s, seed: 49, wear: 0.15, camo: false, seat: { x: 80, y: 120 }, w: 100, h: 88, tilt: 0, form: { crown: 'dome', eye: 'visor', brow: false, jaw: 'respirator', ear: 'plate', top: 'none', cheekCable: false } }),
 };
+
+// ---------- 部件覆盖（稀疏：只写改过的字段，其余走族预设） ----------
+export interface MechaLegOverrides {
+  topology?: LegSpec['topology']; footType?: LegSpec['footType'];
+  bend?: number; wScale?: number; ankleShift?: number;
+  lift?: number; coreScale?: number; detail?: number; wear?: number; camo?: boolean;
+  shellMode?: boolean; frameHeavy?: boolean; guardOff?: boolean;
+  decalKind?: LegSpec['decalKind']; cableTint?: [number, number, number]; seed?: number;
+}
+export interface MechaArmOverrides {
+  hand?: ArmSpec['hand']; bulk?: number; shell?: number;
+  upperLen?: number; foreLen?: number; upperAng?: number; elbowBend?: number; diag?: number;
+  form?: Partial<ArmSpec['form']>; gear?: Partial<ArmSpec['gear']>;
+  twoTone?: boolean; wear?: number; camo?: boolean; seed?: number;
+}
+export interface MechaTorsoOverrides {
+  chestW?: number; chestH?: number; waistH?: number; pelvisH?: number;
+  form?: Partial<TorsoSpec['form']>; gear?: Partial<TorsoSpec['gear']>;
+  twoTone?: boolean; wear?: number; camo?: boolean; seed?: number;
+}
+export interface MechaHeadOverrides {
+  w?: number; h?: number; tilt?: number;
+  form?: Partial<HeadSpec['form']>;
+  twoTone?: boolean; wear?: number; camo?: boolean; seed?: number;
+}
+export interface MechaPartOverrides {
+  scheme?: MechaSchemeName;
+  leg?: MechaLegOverrides; arm?: MechaArmOverrides; torso?: MechaTorsoOverrides; head?: MechaHeadOverrides;
+}
+/** 车体覆盖（载具） */
+export interface MechaHullOverrides {
+  hullW?: number; hullH?: number;
+  form?: Partial<HullSpec['form']>; gear?: Partial<HullSpec['gear']>;
+  twoTone?: boolean; wear?: number; camo?: boolean; seed?: number;
+}
+/** 族预设规格（向导控件默认值与差分基准） */
+export function mechaLegSpecOf(family: MechaFamily): LegSpec { return LEG_SPEC[family](SCHEME_OF[family]); }
+export function mechaArmSpecOf(family: MechaFamily): ArmSpec { return ARM_SPEC[family](SCHEME_OF[family]); }
+export function mechaTorsoSpecOf(family: MechaFamily): TorsoSpec { return TORSO_SPEC[family](SCHEME_OF[family]); }
+export function mechaHeadSpecOf(family: MechaFamily): HeadSpec { return HEAD_SPEC[family](SCHEME_OF[family]); }
+export function mechaHullSpecOf(kind: 'walker' | 'hauler'): HullSpec { return HULL_SPEC_OF(kind); }
 
 export interface MechaPartSet {
   leg: MechaSpriteData;
@@ -146,12 +216,12 @@ export function splitCanvasBySegments(cv: MechaCanvas, joints: Pt[], jointRadii?
 }
 
 /** 腿管线：规范直姿渲染一遍，再按骨段拆大腿/小腿/足（整腿图保留供蓝图库） */
-function legPipeline(family: MechaFamily, footType?: LegSpec['footType']): {
+function legPipeline(family: MechaFamily, footType?: LegSpec['footType'], ov?: MechaLegOverrides, schemeName?: MechaSchemeName): {
   full: MechaSpriteData; thigh: MechaSpriteData; shin: MechaSpriteData; foot: MechaSpriteData;
   geom: { thighLen: number; shinLen: number }; rest: { thigh: number; shin: number; foot: number };
 } {
-  const scheme = SCHEME_OF[family];
-  const spec = LEG_SPEC[family](scheme);
+  const scheme = schemeName ? mechaSchemeByName(schemeName) : SCHEME_OF[family];
+  const spec: LegSpec = { ...LEG_SPEC[family](scheme), ...(ov ?? {}) };
   if (footType) spec.footType = footType;
   const posed = { hip: { x: 100, y: 16 }, knee: { x: 188, y: 220 }, ankle: { x: 96, y: 406 }, toe: { x: 196, y: 442 } };
   const L1 = Math.hypot(posed.knee.x - posed.hip.x, posed.knee.y - posed.hip.y);
@@ -161,7 +231,7 @@ function legPipeline(family: MechaFamily, footType?: LegSpec['footType']): {
   const canon = { hip: { x: 190, y: 30 }, knee: { x: 190, y: 30 + tL }, ankle: { x: 190, y: 30 + tL + sL }, toe: { x: 290, y: 30 + tL + sL + 36 } };
   const cv = newCanvas();
   const A = layout(cv, spec, { hip: canon.hip, knee: canon.knee, ankle: canon.ankle, toeX: canon.toe.x });
-  finishRender(cv, A, fin(family));
+  finishRender(cv, A, finFor(family, scheme, ov));
   const [thigh, shin, foot] = splitCanvasBySegments(cv, [canon.hip, canon.knee, canon.ankle, canon.toe], [37, 24]) as [MechaSpriteData, MechaSpriteData, MechaSpriteData];
   const aT = segAngDeg(posed.hip, posed.knee), aS = segAngDeg(posed.knee, posed.ankle), aF = segAngDeg(posed.ankle, posed.toe);
   return {
@@ -175,42 +245,61 @@ function legPipeline(family: MechaFamily, footType?: LegSpec['footType']): {
 export type MechaChestVariant = 'stack' | 'shell' | 'slab' | 'glacis';
 export const MECHA_CHEST_LABELS: Record<MechaChestVariant, string> = { stack: '叠层胸', shell: '壳形胸', slab: '重型板胸', glacis: '斜面胸' };
 
-export function generateMechaPartSet(family: MechaFamily, chest?: MechaChestVariant): MechaPartSet {
-  const scheme = SCHEME_OF[family];
-  const F = fin(family);
+export function generateMechaPartSet(family: MechaFamily, chest?: MechaChestVariant, ov?: MechaPartOverrides): MechaPartSet {
+  const scheme = ov?.scheme ? mechaSchemeByName(ov.scheme) : SCHEME_OF[family];
+  const FArm = finFor(family, scheme, ov?.arm);
+  const FTorso = finFor(family, scheme, ov?.torso);
+  const FHead = finFor(family, scheme, ov?.head);
   // 腿：规范直姿渲染 + 按骨段拆三件（大腿/小腿/足，各自成节点才可动可配 IK）
-  const legP = legPipeline(family);
+  const legP = legPipeline(family, undefined, ov?.leg, ov?.scheme);
   const leg = legP.full;
   // 臂：规范直姿（角度归零）渲染——上臂按 IR 归属、前臂/手按骨段距离拆
-  const armSpec = ARM_SPEC[family](scheme);
+  const armBase = ARM_SPEC[family](scheme);
+  const armOv = ov?.arm;
+  const armSpec: ArmSpec = {
+    ...armBase, ...(armOv ?? {}),
+    form: { ...armBase.form, ...(armOv?.form ?? {}) },
+    gear: { ...armBase.gear, ...(armOv?.gear ?? {}) },
+  };
   const ir = armIR(armSpec);
   const canonSpec = { ...armSpec, upperAng: 0, elbowBend: 0 };
   const irC = armIR(canonSpec);
   type ArmPartT = (typeof irC.parts)[number];
   const isUpper = (p: ArmPartT) => ((p.t === 'segPlate' || p.t === 'segCore' || p.t === 'cable' || p.t === 'rod') && (p as { seg?: string }).seg === 'upper') || (p.t === 'disc' && p.at === 'shoulder') || (p.t === 'block' && p.frame === 'shoulder') || (p.t === 'discAt' && p.frame === 'upper') || p.t === 'insignia';
   const cvU = newCanvas(); const AU = renderArmIR(cvU, { anchors: irC.anchors, parts: irC.parts.filter(isUpper) }, canonSpec);
-  finishRender(cvU, AU, F);
+  finishRender(cvU, AU, FArm);
   const armUpper = cropSprite(cvU, irC.anchors.shoulder);
   const cvF = newCanvas(); const AF = renderArmIR(cvF, { anchors: irC.anchors, parts: irC.parts.filter((p) => !isUpper(p)) }, canonSpec);
-  finishRender(cvF, AF, F);
+  finishRender(cvF, AF, FArm);
   const wristC = irC.anchors.wrist;
   const [armFore, armHand] = splitCanvasBySegments(cvF, [irC.anchors.elbow, wristC, { x: wristC.x, y: wristC.y + 72 }], [15]) as [MechaSpriteData, MechaSpriteData];
   const elbowOff = { x: ir.anchors.elbow.x - ir.anchors.shoulder.x, y: ir.anchors.elbow.y - ir.anchors.shoulder.y };
   const wristOff = { x: ir.anchors.wrist.x - ir.anchors.elbow.x, y: ir.anchors.wrist.y - ir.anchors.elbow.y };
   const palmOff = { x: ir.anchors.palm.x - ir.anchors.elbow.x, y: ir.anchors.palm.y - ir.anchors.elbow.y };
   // 躯干（原点=胯心）
-  const torsoSpec = TORSO_SPEC[family](scheme);
+  const torsoBase = TORSO_SPEC[family](scheme);
+  const torsoOv = ov?.torso;
+  const torsoSpec: TorsoSpec = {
+    ...torsoBase, ...(torsoOv ?? {}),
+    form: { ...torsoBase.form, ...(torsoOv?.form ?? {}) },
+    gear: { ...torsoBase.gear, ...(torsoOv?.gear ?? {}) },
+  };
   if (chest) torsoSpec.form = { ...torsoSpec.form, chest };
   const torsoIRv = torsoIR(torsoSpec);
   const torsoCv = newCanvas(); const TA = renderTorsoIR(torsoCv, torsoIRv, torsoSpec);
-  finishRender(torsoCv, TA, F);
+  finishRender(torsoCv, TA, FTorso);
   const torso = cropSprite(torsoCv, torsoIRv.anchors.hip);
   const rel = (p: Pt) => ({ x: p.x - torsoIRv.anchors.hip.x, y: p.y - torsoIRv.anchors.hip.y });
   const torsoSockets = { neck: rel(torsoIRv.anchors.neck), shoulder: rel(torsoIRv.anchors.shoulder), hip: rel(torsoIRv.anchors.hip) };
   // 头（原点=颈座）
-  const headSpec = HEAD_SPEC[family](scheme);
+  const headBase = HEAD_SPEC[family](scheme);
+  const headOv = ov?.head;
+  const headSpec: HeadSpec = {
+    ...headBase, ...(headOv ?? {}),
+    form: { ...headBase.form, ...(headOv?.form ?? {}) },
+  };
   const headCv = newCanvas(); const HA = renderHeadIR(headCv, headIR(headSpec), headSpec);
-  finishRender(headCv, HA, F);
+  finishRender(headCv, HA, FHead);
   const head = cropSprite(headCv, headSpec.seat);
   return {
     leg, legThigh: legP.thigh, legShin: legP.shin, legFoot: legP.foot,
@@ -230,34 +319,51 @@ const HULL_SPEC_OF = (kind: 'walker' | 'hauler'): HullSpec => kind === 'walker'
 
 const HULL_FIN = { topology: 'standard', seed: 11, bend: 22, wear: 0.3, detail: 0.65 } as const;
 
-export function generateMechaHull(kind: 'walker' | 'hauler'): MechaSpriteData {
-  const spec = HULL_SPEC_OF(kind);
+function hullSpecWithOv(kind: 'walker' | 'hauler', ov?: MechaHullOverrides, schemeName?: MechaSchemeName): HullSpec {
+  const base = HULL_SPEC_OF(kind);
+  const spec: HullSpec = {
+    ...base, ...(ov ?? {}),
+    form: { ...base.form, ...(ov?.form ?? {}) },
+    gear: { ...base.gear, ...(ov?.gear ?? {}) },
+  };
+  if (schemeName) spec.scheme = mechaSchemeByName(schemeName);
+  return spec;
+}
+function hullFin(spec: HullSpec, ov?: MechaHullOverrides): LegSpec & { altTone?: boolean } {
+  return {
+    ...HULL_FIN, scheme: spec.scheme, camo: spec.camo, altTone: spec.twoTone,
+    ...(ov?.wear !== undefined ? { wear: ov.wear } : {}),
+    ...(ov?.seed !== undefined ? { seed: ov.seed } : {}),
+  } as LegSpec & { altTone?: boolean };
+}
+
+export function generateMechaHull(kind: 'walker' | 'hauler', ov?: MechaHullOverrides, schemeName?: MechaSchemeName): MechaSpriteData {
+  const spec = hullSpecWithOv(kind, ov, schemeName);
   const cv = newCanvas(); const A = renderHullIR(cv, hullIR(spec), spec);
-  finishRender(cv, A, { ...HULL_FIN, scheme: spec.scheme, camo: spec.camo, altTone: spec.twoTone } as LegSpec & { altTone?: boolean });
+  finishRender(cv, A, hullFin(spec, ov));
   return cropSprite(cv, spec.deck);
 }
 
 /** 车体（无炮塔）：载具根节点用，原点=甲板 */
-export function generateMechaHullBody(kind: 'walker' | 'hauler'): MechaSpriteData {
-  const spec: HullSpec = { ...HULL_SPEC_OF(kind), split: 'body' };
+export function generateMechaHullBody(kind: 'walker' | 'hauler', ov?: MechaHullOverrides, schemeName?: MechaSchemeName): MechaSpriteData {
+  const spec: HullSpec = { ...hullSpecWithOv(kind, ov, schemeName), split: 'body' };
   const cv = newCanvas(); const A = renderHullIR(cv, hullIR(spec), spec);
-  finishRender(cv, A, { ...HULL_FIN, scheme: spec.scheme, camo: spec.camo, altTone: spec.twoTone } as LegSpec & { altTone?: boolean });
+  finishRender(cv, A, hullFin(spec, ov));
   return cropSprite(cv, spec.deck);
 }
 
 /** 炮塔/顶架（独立件）：载具炮塔节点用，原点=炮塔转轴 */
-export function generateMechaTurret(kind: 'walker' | 'hauler'): MechaSpriteData {
-  const base = HULL_SPEC_OF(kind);
-  const spec: HullSpec = { ...base, split: 'turret' };
+export function generateMechaTurret(kind: 'walker' | 'hauler', ov?: MechaHullOverrides, schemeName?: MechaSchemeName): MechaSpriteData {
+  const spec: HullSpec = { ...hullSpecWithOv(kind, ov, schemeName), split: 'turret' };
   const cv = newCanvas(); const A = renderHullIR(cv, hullIR(spec), spec);
-  finishRender(cv, A, { ...HULL_FIN, scheme: spec.scheme, camo: spec.camo, altTone: spec.twoTone } as LegSpec & { altTone?: boolean });
+  finishRender(cv, A, hullFin(spec, ov));
   const pivot = { x: spec.deck.x - spec.hullW * 0.06, y: spec.deck.y - spec.hullH * 0.14 };
   return cropSprite(cv, pivot);
 }
 
-/** 族主甲色（十六进制，供服装件底色/关节盘生成） */
-export function mechaFamilyArmorHex(family: MechaFamily): string {
-  const c = SCHEME_OF[family].armor;
+/** 族主甲色（十六进制，供服装件底色/关节盘生成）；配色覆盖时跟配色走 */
+export function mechaFamilyArmorHex(family: MechaFamily, schemeName?: MechaSchemeName): string {
+  const c = (schemeName ? mechaSchemeByName(schemeName) : SCHEME_OF[family]).armor;
   return '#' + c.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
 }
 
@@ -272,33 +378,33 @@ export function generateMechaWheelLeg(family: MechaFamily): MechaSpriteData {
 }
 
 /** 多足腿精灵（蜘蛛/四足，原点=髋插座） */
-export function generateMechaMultiLeg(family: MechaFamily, profile: 'spider' | 'quad'): MechaSpriteData {
-  const scheme = SCHEME_OF[family];
+export function generateMechaMultiLeg(family: MechaFamily, profile: 'spider' | 'quad', schemeName?: MechaSchemeName): MechaSpriteData {
+  const scheme = schemeName ? mechaSchemeByName(schemeName) : SCHEME_OF[family];
   const cv = newCanvas(); const hip = { x: 56, y: 64 };
   const spec = { scheme, seed: 11, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family], profile };
   const A = renderMultiLeg(cv, spec, hip);
-  finishRender(cv, A, fin(family));
+  finishRender(cv, A, finFor(family, scheme));
   return cropSprite(cv, hip);
 }
 
 /** 轮足分段件（大腿/小腿与常足共用造型、足换轮组）：底盘选轮足时用 */
-export function generateMechaWheelLegParts(family: MechaFamily): { thigh: MechaSpriteData; shin: MechaSpriteData; foot: MechaSpriteData } {
-  const p = legPipeline(family, 'wheel');
+export function generateMechaWheelLegParts(family: MechaFamily, ov?: MechaLegOverrides, schemeName?: MechaSchemeName): { thigh: MechaSpriteData; shin: MechaSpriteData; foot: MechaSpriteData } {
+  const p = legPipeline(family, 'wheel', ov, schemeName);
   return { thigh: p.thigh, shin: p.shin, foot: p.foot };
 }
 
 /** 多足腿分段件：上段（髋→膝，髋帧直姿）/下段（膝→踝→趾，膝帧、末段保留相对弯） */
-export function generateMechaMultiLegParts(family: MechaFamily, profile: 'spider' | 'quad'): {
+export function generateMechaMultiLegParts(family: MechaFamily, profile: 'spider' | 'quad', schemeName?: MechaSchemeName): {
   upper: MechaSpriteData; lower: MechaSpriteData; l1: number; l2: number; a1: number; a2rel: number;
 } {
-  const scheme = SCHEME_OF[family];
+  const scheme = schemeName ? mechaSchemeByName(schemeName) : SCHEME_OF[family];
   const spec = { scheme, seed: 11, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family], profile };
   const gm = multiLegGeom(profile);
   // 上段：髋帧，段一竖直向下
   const hipU = { x: 70, y: 46 };
   const cvU = newCanvas();
   const AU = renderMultiLeg(cvU, spec, hipU, { knee: { x: hipU.x, y: hipU.y + gm.l1 }, ankle: { x: hipU.x, y: hipU.y + gm.l1 + gm.l2 }, toe: { x: hipU.x, y: hipU.y + gm.l1 + gm.l2 + 40 } }, 'upper');
-  finishRender(cvU, AU, fin(family));
+  finishRender(cvU, AU, finFor(family, scheme));
   const upper = cropSprite(cvU, hipU);
   // 下段：膝帧，段二竖直向下、趾段按相对弯旋转进来
   const kneeO = { x: 70, y: 30 };
@@ -307,38 +413,38 @@ export function generateMechaMultiLegParts(family: MechaFamily, profile: 'spider
   const toeL = { x: ankleL.x + gm.toeVec.x * Math.cos(rad) - gm.toeVec.y * Math.sin(rad), y: ankleL.y + gm.toeVec.x * Math.sin(rad) + gm.toeVec.y * Math.cos(rad) };
   const cvL = newCanvas();
   const AL = renderMultiLeg(cvL, spec, kneeO, { knee: kneeO, ankle: ankleL, toe: toeL }, 'lower');
-  finishRender(cvL, AL, fin(family));
+  finishRender(cvL, AL, finFor(family, scheme));
   const lower = cropSprite(cvL, kneeO);
   return { upper, lower, l1: gm.l1, l2: gm.l2, a1: gm.a1, a2rel: gm.a2rel };
 }
 
 /** 履带底盘精灵（原点=座圈顶面中心，躯干/车体挂载点） */
-export function generateMechaTrackUnit(family: MechaFamily): MechaSpriteData {
-  const scheme = SCHEME_OF[family];
+export function generateMechaTrackUnit(family: MechaFamily, ov?: { len?: number; scheme?: MechaSchemeName }): MechaSpriteData {
+  const scheme = ov?.scheme ? mechaSchemeByName(ov.scheme) : SCHEME_OF[family];
   const cv = newCanvas(); const origin = { x: 190, y: 26 };
-  const spec = { scheme, seed: 11, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family] };
+  const spec = { scheme, seed: 11, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family], len: ov?.len };
   const A = renderTrackUnit(cv, spec, origin);
-  finishRender(cv, A, fin(family));
+  finishRender(cv, A, finFor(family, scheme));
   return cropSprite(cv, origin);
 }
 
 /** 喷射背包精灵（原点=贴背挂载点，箱体在原点后方） */
-export function generateMechaJetpack(family: MechaFamily): MechaSpriteData {
-  const scheme = SCHEME_OF[family];
+export function generateMechaJetpack(family: MechaFamily, schemeName?: MechaSchemeName): MechaSpriteData {
+  const scheme = schemeName ? mechaSchemeByName(schemeName) : SCHEME_OF[family];
   const cv = newCanvas(); const origin = { x: 200, y: 130 };
   const spec = { scheme, seed: 21, wear: 0.25, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family] };
   const A = renderJetpack(cv, spec, origin);
-  finishRender(cv, A, fin(family));
+  finishRender(cv, A, finFor(family, scheme));
   return cropSprite(cv, origin);
 }
 
 /** 武器精灵（臂炮/导弹荚/步枪；原点语义见 gear 的 renderWeapon） */
-export function generateMechaWeapon(family: MechaFamily, kind: WeaponKind): MechaSpriteData {
-  const scheme = SCHEME_OF[family];
+export function generateMechaWeapon(family: MechaFamily, kind: WeaponKind, schemeName?: MechaSchemeName): MechaSpriteData {
+  const scheme = schemeName ? mechaSchemeByName(schemeName) : SCHEME_OF[family];
   const cv = newCanvas(); const origin = kind === 'pod' ? { x: 170, y: 150 } : kind === 'podPylon' ? { x: 190, y: 330 } : { x: 90, y: 130 };
   const spec = { scheme, seed: 31, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family] };
   const A = renderWeapon(cv, spec, kind, origin);
-  finishRender(cv, A, fin(family));
+  finishRender(cv, A, finFor(family, scheme));
   return cropSprite(cv, origin);
 }
 

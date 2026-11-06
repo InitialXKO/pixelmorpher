@@ -1221,20 +1221,39 @@ function torsoIR(spec: TorsoSpec): TorsoIR {
   parts.push({ t: 'block', dx: -W * 0.38, dy: CH * 0.16, w: W * 0.3, h: CH * 0.34, kind: 'frame' }); // 肩座
   parts.push({ t: 'disc', dx: W * 0.36, dy: CH * 0.16, r: W * 0.13 }); // 肩关节盘
   if (F.chest === 'stack') {
-    parts.push({ t: 'block', dx: W * 0.02, dy: CH * 0.3, w: W, h: CH * 0.56, cham: 0.34, bolts: true });
-    parts.push({ t: 'block', dx: -W * 0.02, dy: CH * 0.76, w: W * 0.92, h: CH * 0.48, cham: 0.3 });
+    // 叠层胸（对步行坦克/重装的分层装甲）：三块厚板像摞起来的
+    // 板摞——每块前后缘都出台阶、板间压深色缝带，顶上一块框件
+    // 盖口；读的是「摞」不是「坡」
+    parts.push({ t: 'block', dx: -W * 0.04, dy: CH * 0.26, w: W * 0.88, h: CH * 0.34, cham: 0.26, bolts: true });
+    parts.push({ t: 'block', dx: W * 0.05, dy: CH * 0.56, w: W, h: CH * 0.34, cham: 0.24 });
+    parts.push({ t: 'block', dx: W * 0.14, dy: CH * 0.86, w: W * 1.12, h: CH * 0.32, cham: 0.22 });
+    parts.push({ t: 'block', dx: W * 0.02, dy: CH * 0.42, w: W * 0.96, h: CH * 0.07, kind: 'frame' });
+    parts.push({ t: 'block', dx: W * 0.11, dy: CH * 0.72, w: W * 1.08, h: CH * 0.07, kind: 'frame' });
+    parts.push({ t: 'block', dx: W * 0.3, dy: CH * 0.86, w: W * 0.07, h: CH * 0.3, kind: 'frame' }); // 底层板竖向分段缝（破横向一统）
+    parts.push({ t: 'block', dx: -W * 0.08, dy: CH * 0.05, w: W * 0.7, h: CH * 0.13, kind: 'frame', cham: 0.3 });
   } else if (F.chest === 'shell') {
-    parts.push({ t: 'block', dx: 0, dy: CH * 0.46, w: W, h: CH * 0.92, cham: 0.52, bolts: true });
-    parts.push({ t: 'block', dx: W * 0.08, dy: CH * 0.97, w: W * 0.5, h: CH * 0.18, ang: 0.1, cham: 0.5 }); // 胸尖
+    // 壳形胸（对敏捷/动力服的整体壳体）：一整块大倒角壳面无横缝，
+    // 下前一枚胸尖收口，轮廓是光滑鼓面而非分板
+    parts.push({ t: 'block', dx: -W * 0.08, dy: CH * 0.1, w: W * 0.58, h: CH * 0.16, cham: 0.42 });
+    parts.push({ t: 'block', dx: W * 0.02, dy: CH * 0.5, w: W, h: CH * 0.9, cham: 0.62, bolts: true });
+    parts.push({ t: 'block', dx: W * 0.15, dy: CH * 0.95, w: W * 0.44, h: CH * 0.2, ang: 0.12, cham: 0.5 }); // 胸尖
   } else if (F.chest === 'glacis') {
-    // 斜面胸：三段横板逐段前探成阶梯斜面（上收下突；本投影里
-    // 斜面靠阶梯轮廓读，整板旋转只会读成侧倾）
-    parts.push({ t: 'block', dx: -W * 0.06, dy: CH * 0.18, w: W * 0.84, h: CH * 0.3, cham: 0.3 });
-    parts.push({ t: 'block', dx: 0, dy: CH * 0.44, w: W * 0.94, h: CH * 0.3, cham: 0.26, bolts: true });
-    parts.push({ t: 'block', dx: W * 0.05, dy: CH * 0.72, w: W * 0.98, h: CH * 0.34, cham: 0.26 });
-  } else { // slab 两段叠（重型参考是上下两块宽板）
-    parts.push({ t: 'block', dx: 0, dy: CH * 0.27, w: W * 1.06, h: CH * 0.54, cham: 0.26, bolts: true });
-    parts.push({ t: 'block', dx: -W * 0.02, dy: CH * 0.76, w: W * 1.0, h: CH * 0.48, cham: 0.24 });
+    // 斜面胸（对主战参考的前倾斜面装甲）：六段薄板前缘落在同一
+    // 条斜线上、连成连续坡面（上收下突；本投影里斜面靠阶梯轮廓
+    // 读，整板旋转只会读成侧倾）；坡面中上部一块凸起的舱盖板
+    // （参考图斜面上的检修盖），下唇短而收——底缘前高后低，
+    // 读的是「坡」不是「摞」
+    for (let k = 0; k < 6; k++) {
+      parts.push({ t: 'block', dx: -W * 0.15 + k * W * 0.06, dy: CH * (0.125 + 0.145 * k), w: W * (0.74 + 0.05 * k), h: CH * 0.19, cham: 0.16 });
+    }
+    parts.push({ t: 'block', dx: W * 0.02, dy: CH * 0.3, w: W * 0.36, h: CH * 0.22, cham: 0.3, bolts: true }); // 坡面舱盖
+    parts.push({ t: 'block', dx: W * 0.24, dy: CH * 1.0, w: W * 0.34, h: CH * 0.12, ang: 0.15, cham: 0.3 });
+  } else { // slab 重板胸（对重装参考的两块巨板）：两块近乎平脸的
+    // 宽板叠成一面墙，板宽过肩线、倒角极小、深缝分段，顶上一道
+    // 框件压边；下板压进腰带上缘，读的是整块重量
+    parts.push({ t: 'block', dx: -W * 0.02, dy: CH * 0.03, w: W * 1.04, h: CH * 0.13, kind: 'frame', cham: 0.2 });
+    parts.push({ t: 'block', dx: 0, dy: CH * 0.32, w: W * 1.12, h: CH * 0.56, cham: 0.12, bolts: true });
+    parts.push({ t: 'block', dx: W * 0.02, dy: CH * 0.84, w: W * 1.08, h: CH * 0.5, cham: 0.12, bolts: true });
   }
   if (F.grille === 'side') parts.push({ t: 'grille', dx: W * 0.18, dy: CH * 0.74, w: W * 0.44, h: CH * 0.3 });
   else if (F.grille === 'front') parts.push({ t: 'grille', dx: W * 0.3, dy: CH * 0.34, w: W * 0.36, h: CH * 0.34 });
