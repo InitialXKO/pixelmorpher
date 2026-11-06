@@ -1,0 +1,217 @@
+{
+ "version": 1,
+ "archetype": "humanoid",
+ "scheme": "olive",
+ "seed": 11,
+ "style": {
+  "wear": 0.3,
+  "camo": true,
+  "decalKind": "num",
+  "lift": 20
+ },
+ "rig": {
+  "topology": "standard",
+  "shellMode": false,
+  "wScale": 1.1
+ },
+ "canvas": {
+  "w": 380,
+  "h": 540,
+  "groundY": 470
+ },
+ "anchors": {
+  "hip": {
+   "x": 170,
+   "y": 44
+  },
+  "knee": {
+   "x": 258,
+   "y": 248
+  },
+  "ankle": {
+   "x": 166,
+   "y": 434
+  },
+  "toe": {
+   "x": 266,
+   "y": 470
+  }
+ },
+ "volumes": [
+  {
+   "kind": "seg",
+   "a": "hip",
+   "b": "knee",
+   "wA": 121.00000000000001,
+   "wB": 92.4
+  },
+  {
+   "kind": "seg",
+   "a": "knee",
+   "b": "ankle",
+   "wA": 103.4,
+   "wB": 70.4
+  },
+  {
+   "kind": "disc",
+   "c": "hip",
+   "r": 36
+  },
+  {
+   "kind": "disc",
+   "c": "knee",
+   "r": 34
+  },
+  {
+   "kind": "disc",
+   "c": "ankle",
+   "r": 21
+  }
+ ],
+ "parts": [
+  {
+   "id": "core",
+   "pattern": "core",
+   "anchors": [
+    "hip",
+    "knee",
+    "ankle"
+   ],
+   "params": {
+    "coreScale": 1.05
+   }
+  },
+  {
+   "id": "cables",
+   "pattern": "cableRun",
+   "anchors": [
+    "hip",
+    "knee",
+    "ankle"
+   ],
+   "params": {}
+  },
+  {
+   "id": "thigh.plates",
+   "pattern": "segPlates",
+   "anchors": [
+    "hip",
+    "knee"
+   ],
+   "params": {
+    "wA": 121.00000000000001,
+    "wB": 92.4,
+    "bulgeF": 0.16,
+    "bulgeB": 0.05
+   }
+  },
+  {
+   "id": "shin.plates",
+   "pattern": "segPlates",
+   "anchors": [
+    "knee",
+    "ankle"
+   ],
+   "params": {
+    "wA": 103.4,
+    "wB": 70.4,
+    "bulgeF": 0.05,
+    "bulgeB": 0.2
+   }
+  },
+  {
+   "id": "foot",
+   "pattern": "footBlocks",
+   "anchors": [
+    "ankle",
+    "toe"
+   ],
+   "params": {}
+  },
+  {
+   "id": "guard",
+   "pattern": "guard",
+   "anchors": [
+    "knee",
+    "ankle"
+   ],
+   "params": {}
+  },
+  {
+   "id": "kneeCapBox",
+   "pattern": "kneeCapBox",
+   "anchors": [
+    "knee"
+   ],
+   "params": {}
+  },
+  {
+   "id": "detailSet",
+   "pattern": "detailSet",
+   "anchors": [
+    "hip",
+    "knee",
+    "ankle"
+   ],
+   "params": {
+    "level": 0.65
+   }
+  },
+  {
+   "id": "pistons",
+   "pattern": "pistonPair",
+   "anchors": [
+    "hip",
+    "knee",
+    "ankle"
+   ],
+   "params": {}
+  },
+  {
+   "id": "hip.joint",
+   "pattern": "jointCluster",
+   "anchors": [
+    "hip"
+   ],
+   "params": {
+    "r": 30
+   }
+  },
+  {
+   "id": "knee.joint",
+   "pattern": "jointCluster",
+   "anchors": [
+    "knee"
+   ],
+   "params": {
+    "r": 28
+   }
+  },
+  {
+   "id": "ankle.joint",
+   "pattern": "jointCluster",
+   "anchors": [
+    "ankle"
+   ],
+   "params": {
+    "r": 18
+   }
+  },
+  {
+   "id": "bellows",
+   "pattern": "bellows",
+   "anchors": [
+    "knee"
+   ],
+   "params": {}
+  },
+  {
+   "id": "decals",
+   "pattern": "decals",
+   "anchors": [],
+   "params": {
+    "decalKind": "num"
+   }
+  }
+ ]
+}

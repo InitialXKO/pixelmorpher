@@ -711,3 +711,15 @@ IR.md 落定：MechaIR = archetype/scheme/seed/style + anchors 命名锚点表 +
 模式分两执行期：布局期产部件、渲染期（贴纸/磨损）按锚与归属工作。附 LegSpec
 全字段映射表与橄榄腿实例（锚点实算值）。下一步：生成器迁移（layout 拆产 IR /
 执行 IR 两半，六变体逐像素对账）。
+
+### 三之三十、生成器 IR 迁移（2026-11-06，gen-ir-v1）
+
+新文件 gen-ir-v1.mts（v29 代码基）：render 改道 legIR(spec)→MechaIR→renderIR，
+layout 加 pre 锚点参数（IR 锚点优先）、render 拆 finishRender。viewOf 从 IR 单点
+重建执行视图：配色按名查表、frameHeavy/guardOff/detail/footType/coreScale 全部
+从 parts 实例列读回。验收：六变体与 v29 原图 cmp 逐字节全同；pairs/formation 因
+render 改道自动经 IR。消费路径探针：橄榄 IR 落 JSON → 删 guard 实例 + scheme 改
+desert → 回读渲染，护板消失且配色变（图 ir-probe-noguard-desert.png）；附带现象：
+删实例后布局种子流消费序变、编号数字随之变（M-46→M-34），是种子流固有性质。
+IR JSON 两份落 out/（ir-olive/ir-slate 本轮仅落 olive——探针块只写了 olive，slate
+未落盘，下轮补正）。下一步：新部位入庫（躯干组/头组先行，锚点表扩颈/肩）。

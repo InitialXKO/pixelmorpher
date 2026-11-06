@@ -91,21 +91,21 @@ disc(knee,34) + disc(ankle,21) + seg（足， 38→30)。
   "canvas": { "w": 380, "h": 540, "groundY": 470 },
   "anchors": {
     "hip":   { "x": 170, "y": 44 },
-    "knee":  { "x": 250, "y": 248 },
-    "ankle": { "x": 168, "y": 434 },
-    "toe":   { "x": 268, "y": 470 }
+    "knee":  { "x": 258, "y": 248 },
+    "ankle": { "x": 166, "y": 434 },
+    "toe":   { "x": 266, "y": 470 }
   },
   "volumes": [
-    { "kind": "seg", "a": "hip", "b": "knee", "wA": 110, "wB": 84, "bulgeF": 0.08, "bulgeB": 0.025 },
-    { "kind": "seg", "a": "knee", "b": "ankle", "wA": 94, "wB": 64, "bulgeF": 0.025, "bulgeB": 0.1 },
+    { "kind": "seg", "a": "hip", "b": "knee", "wA": 121, "wB": 92, "bulgeF": 0.08, "bulgeB": 0.025 },
+    { "kind": "seg", "a": "knee", "b": "ankle", "wA": 103, "wB": 70, "bulgeF": 0.025, "bulgeB": 0.1 },
     { "kind": "disc", "c": "hip", "r": 36 }, { "kind": "disc", "c": "knee", "r": 34 },
     { "kind": "disc", "c": "ankle", "r": 21 }
   ],
   "parts": [
     { "id": "core", "pattern": "core", "anchors": ["hip", "knee", "ankle"], "params": { "coreScale": 1 } },
     { "id": "cables", "pattern": "cableRun", "anchors": ["hip", "knee", "ankle"], "params": {} },
-    { "id": "thigh.plates", "pattern": "segPlates", "anchors": ["hip", "knee"], "params": { "wA": 110, "wB": 84, "bulgeF": 0.16, "bulgeB": 0.05 } },
-    { "id": "shin.plates", "pattern": "segPlates", "anchors": ["knee", "ankle"], "params": { "wA": 94, "wB": 64, "bulgeF": 0.05, "bulgeB": 0.2 } },
+    { "id": "thigh.plates", "pattern": "segPlates", "anchors": ["hip", "knee"], "params": { "wA": 121, "wB": 92, "bulgeF": 0.16, "bulgeB": 0.05 } },
+    { "id": "shin.plates", "pattern": "segPlates", "anchors": ["knee", "ankle"], "params": { "wA": 103, "wB": 70, "bulgeF": 0.05, "bulgeB": 0.2 } },
     { "id": "foot", "pattern": "footBlocks", "anchors": ["ankle", "toe"], "params": { "family": "heavy" } },
     { "id": "guard", "pattern": "guard", "anchors": ["knee", "ankle"], "params": {} },
     { "id": "thigh.joint", "pattern": "jointCluster", "anchors": ["hip"], "params": { "r": 30 } },
