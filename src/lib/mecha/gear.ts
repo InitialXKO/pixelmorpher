@@ -10,6 +10,8 @@ import type { Scheme, LegSpec, MechaCanvas, Pt, Anchors } from './engine';
 
 export interface GearSpec {
   scheme: Scheme; seed: number; wear: number; camo: boolean; twoTone: boolean;
+  /** 武器尺寸系数（按持有臂的前臂长折算，见 renderWeapon）；缺省 1 */
+  size?: number;
 }
 
 export function gearFinish(spec: GearSpec & { phase?: number }): LegSpec & { altTone?: boolean } {
@@ -252,18 +254,20 @@ export type WeaponKind = 'cannon' | 'pod' | 'rifle' | 'podPylon';
 export function renderWeapon(cv: MechaCanvas, spec: WeaponSpec, kind: WeaponKind, origin: Pt): Anchors {
   const T: Tools = makeLayerTools(cv, spec.seed);
   const ox = origin.x, oy = origin.y;
+  const u = spec.size ?? 1; // 尺寸系数：全部尺寸/偏移按 u 缩放（原点不动）
   if (kind === 'cannon') {
-    // 弹鼓（座下侧）→ 套筒座 → 炮管 + 炮口环 → 顶肋杆
-    T.addDisc('disc', { x: ox + 24, y: oy + 20 }, 16);
-    T.addDisc('disc', { x: ox + 24, y: oy + 20 }, 9);
-    T.addBlock('plate', ox + 26, oy, 58, 34, 0, 0.3, true);
-    T.addBlock('frame', ox + 6, oy - 2, 16, 26, 0, 0.3);
-    T.rod({ x: ox + 48, y: oy }, { x: ox + 108, y: oy }, 9);
-    T.addDisc('frame', { x: ox + 110, y: oy }, 12);
-    T.addDisc('frame', { x: ox + 110, y: oy }, 6);
-    T.rod({ x: ox + 50, y: oy - 13 }, { x: ox + 98, y: oy - 13 }, 3);
-    T.rod({ x: ox + 8, y: oy + 14 }, { x: ox - 8, y: oy + 26 }, 2.5); // 供弹缆示意
-    T.A.lightPts.push({ x: ox + 40, y: oy - 10 });
+    // 臂炮（比例定版：总长 ≈ 前臂长×1.2、套筒厚 ≈ 前臂宽量级，不再是
+    // 腕口的小套筒）：弹鼓（座下侧）→ 套筒座 → 粗炮管 + 炮口环 → 顶肋杆
+    T.addDisc('disc', { x: ox + 30 * u, y: oy + 26 * u }, 21 * u);
+    T.addDisc('disc', { x: ox + 30 * u, y: oy + 26 * u }, 12 * u);
+    T.addBlock('plate', ox + 34 * u, oy, 80 * u, 44 * u, 0, 0.3, true);
+    T.addBlock('frame', ox + 8 * u, oy - 2 * u, 20 * u, 32 * u, 0, 0.3);
+    T.rod({ x: ox + 66 * u, y: oy }, { x: ox + 150 * u, y: oy }, 12 * u);
+    T.addDisc('frame', { x: ox + 152 * u, y: oy }, 16 * u);
+    T.addDisc('frame', { x: ox + 152 * u, y: oy }, 8 * u);
+    T.rod({ x: ox + 68 * u, y: oy - 17 * u }, { x: ox + 136 * u, y: oy - 17 * u }, 4 * u);
+    T.rod({ x: ox + 10 * u, y: oy + 18 * u }, { x: ox - 10 * u, y: oy + 32 * u }, 3 * u); // 供弹缆示意
+    T.A.lightPts.push({ x: ox + 52 * u, y: oy - 13 * u });
   } else if (kind === 'pod' || kind === 'podPylon') {
     // 荚体：外壳框 → 脸板 → portArray 2×3 管口 → 顶盖与侧深条
     const drawPodBox = (cx: number, cy: number) => {
@@ -285,16 +289,17 @@ export function renderWeapon(cv: MechaCanvas, spec: WeaponSpec, kind: WeaponKind
       drawPodBox(ox - 40, oy - 148);
     }
   } else {
-    // 步枪：枪托 → 机匣 → 枪管；弹匣下斜、握把下垂、瞄具在上
-    T.addBlock('plate', ox - 26, oy - 1, 30, 15, 0.1, 0.3);
-    T.addBlock('plate', ox + 8, oy, 44, 17, 0, 0.28, true);
-    T.rod({ x: ox + 28, y: oy - 1 }, { x: ox + 92, y: oy - 1 }, 3.5);
-    T.addDisc('frame', { x: ox + 94, y: oy - 1 }, 5);
-    T.addBlock('frame', ox + 12, oy + 17, 11, 20, 0.28, 0.25); // 弹匣
-    T.addBlock('frame', ox - 12, oy + 13, 9, 16, -0.2, 0.25); // 握把
-    T.rod({ x: ox + 2, y: oy - 10 }, { x: ox + 2, y: oy - 15 }, 2);
-    T.addBlock('plate', ox + 6, oy - 17, 24, 8, 0, 0.35); // 瞄具
-    T.addDisc('disc', { x: ox + 16, y: oy - 17 }, 3.5);
+    // 步枪（比例定版：总长 ≈ 上臂+前臂的八成、机匣厚实，不再是细铁丝）：
+    // 枪托 → 机匣 → 枪管；弹匣下斜、握把下垂、瞄具在上
+    T.addBlock('plate', ox - 40 * u, oy - 1 * u, 38 * u, 21 * u, 0.1, 0.3);
+    T.addBlock('plate', ox + 10 * u, oy, 58 * u, 25 * u, 0, 0.28, true);
+    T.rod({ x: ox + 36 * u, y: oy - 1 * u }, { x: ox + 138 * u, y: oy - 1 * u }, 5.5 * u);
+    T.addDisc('frame', { x: ox + 141 * u, y: oy - 1 * u }, 7 * u);
+    T.addBlock('frame', ox + 16 * u, oy + 23 * u, 14 * u, 27 * u, 0.28, 0.25); // 弹匣
+    T.addBlock('frame', ox - 16 * u, oy + 17 * u, 11 * u, 21 * u, -0.2, 0.25); // 握把
+    T.rod({ x: ox + 2 * u, y: oy - 14 * u }, { x: ox + 2 * u, y: oy - 20 * u }, 2.5 * u);
+    T.addBlock('plate', ox + 8 * u, oy - 23 * u, 30 * u, 10 * u, 0, 0.35); // 瞄具
+    T.addDisc('disc', { x: ox + 20 * u, y: oy - 23 * u }, 4.5 * u);
   }
   T.finish();
   return T.A;

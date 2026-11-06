@@ -460,7 +460,9 @@ export function generateMechaJetpack(family: MechaFamily, schemeName?: MechaSche
 export function generateMechaWeapon(family: MechaFamily, kind: WeaponKind, schemeName?: MechaSchemeName): MechaSpriteData {
   const scheme = schemeName ? mechaSchemeByName(schemeName) : SCHEME_OF[family];
   const cv = newCanvas(); const origin = kind === 'pod' ? { x: 170, y: 150 } : kind === 'podPylon' ? { x: 190, y: 330 } : { x: 90, y: 130 };
-  const spec = { scheme, seed: 31, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family] };
+  // 手持武器尺寸随持有臂的前臂长折算（基准 = olive 前臂 148）；荚是背挂装备件不随臂
+  const size = kind === 'cannon' || kind === 'rifle' ? ARM_SPEC[family](scheme).foreLen / 148 : 1;
+  const spec = { scheme, seed: 31, wear: 0.3, camo: CAMO_OF[family], twoTone: TWOTONE_OF[family], size };
   const A = renderWeapon(cv, spec, kind, origin);
   finishRender(cv, A, finFor(family, scheme));
   return cropSprite(cv, origin);

@@ -234,7 +234,7 @@ export function assembleMechaCharacter(opts: {
   if (B.chassis === 'tracks') sock3(nodes, 'pelvis', 'tracks', 0, 4 * sc, 0);
   if (B.jetpack) sock3(nodes, 'pelvis', 'jetpack', 0, -128 * sc, -72 * sc);
   if (B.podMount) { const w = POD_MOUNT_WIRE[B.podMount]; sock3(nodes, 'pelvis', 'pod', w.side * sc, w.down * sc, w.fwd * sc); }
-  if (B.weapon === 'cannon') { sockLimb(nodes, 'arm_fore_N', 'weapon', (G.foreLen - 8) * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: 90 }; }
+  if (B.weapon === 'cannon') { sockLimb(nodes, 'arm_fore_N', 'weapon', Math.round(G.foreLen * 0.35) * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: 0 }; } // 臂炮挂点在前臂中段：套筒覆住前臂后半、炮口越过拳端（腕口挂载时套筒全悬在拳外）；节点角 0 = 炮口朝前（装配渲染扫角实测：90 朝下、−90 朝上）
   if (B.weapon === 'rifle') { sockLimb(nodes, 'arm_hand_N', 'weapon', 10 * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: -(R.armUpper + R.armFore) }; }
 
   // 根定位（根 x 存画布中心口径，与既有角色一致）
