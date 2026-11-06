@@ -1563,29 +1563,32 @@ interface HeadSpec {
 interface HeadIR { anchors: Record<'seat' | 'eye' | 'ear' | 'crown', Pt>; parts: HeadPart[] }
 function headIR(spec: HeadSpec): HeadIR {
   const w = spec.w, h = spec.h, F = spec.form, parts: HeadPart[] = [];
-  const chamC = F.crown === 'dome' ? 0.58 : F.crown === 'flat' ? 0.3 : 0.44;
+  const chamC = F.crown === 'dome' ? 0.68 : F.crown === 'flat' ? 0.3 : 0.44;
   parts.push({ t: 'block', dx: 0, dy: h * 0.06, w: w * 1.06, h: h * 0.3, kind: 'frame' }); // 领圈
   parts.push({ t: 'block', dx: -w * 0.3, dy: -h * 0.52, w: w * 0.32, h: h * 0.64, cham: 0.4 }); // 后颅
   parts.push({ t: 'block', dx: -w * 0.02, dy: -h * 0.52, w: w * 0.92, h: h * 0.8, cham: chamC, bolts: true }); // 盔体（前缘让给面部叠层）
-  parts.push({ t: 'block', dx: -w * 0.14, dy: -h * 0.9, w: w * 0.56, h: h * 0.24, ang: -0.1, cham: 0.4 }); // 顶盖
-  if (F.brow) parts.push({ t: 'block', dx: w * 0.36, dy: -h * 0.68, w: w * 0.5, h: h * 0.15, ang: 0.1 }); // 眉檐压眼
+  if (F.crown === 'dome') parts.push({ t: 'block', dx: -w * 0.1, dy: -h * 0.94, w: w * 0.4, h: h * 0.18, ang: -0.06, cham: 0.5 }); // 圆顶小盖
+  else parts.push({ t: 'block', dx: -w * 0.14, dy: -h * 0.9, w: w * 0.56, h: h * 0.24, ang: -0.1, cham: 0.4 }); // 顶盖
+  if (F.brow) parts.push({ t: 'block', dx: w * 0.36, dy: -h * 0.68, w: w * 0.44, h: h * 0.15, ang: 0.1 }); // 眉檐压眼
   const eyeW = F.eye === 'visor' ? 0.56 : F.eye === 'dot' ? 0.24 : 0.34;
-  parts.push({ t: 'block', dx: w * 0.38, dy: -h * 0.5, w: w * eyeW, h: h * (F.eye === 'visor' ? 0.26 : 0.15), kind: 'frame' }); // 暗脸凹座（短、前置）
+  parts.push({ t: 'block', dx: w * (F.eye === 'visor' ? 0.3 : 0.38), dy: -h * 0.5, w: w * eyeW, h: h * (F.eye === 'visor' ? 0.2 : 0.15), kind: 'frame' }); // 暗脸凹座（短、前置）
+  if (F.eye === 'visor') parts.push({ t: 'block', dx: w * 0.32, dy: -h * 0.7, w: w * 0.48, h: h * 0.1 }); // 面罩上沿框
   if (F.eye === 'slit') { for (const ex of [0.33, 0.37, 0.41, 0.45, 0.49]) parts.push({ t: 'light', dx: w * ex, dy: -h * 0.5 }); } // 缝眼：五点叠成连续缝
-  else if (F.eye === 'visor') { for (const ex of [0.36, 0.5]) parts.push({ t: 'light', dx: w * ex, dy: -h * 0.5 }); }
+  else if (F.eye === 'visor') { for (const ex of [0.3, 0.44]) parts.push({ t: 'light', dx: w * ex, dy: -h * 0.5 }); }
   else parts.push({ t: 'light', dx: w * 0.44, dy: -h * 0.5 });
   parts.push({ t: 'block', dx: w * 0.3, dy: -h * 0.27, w: w * 0.4, h: h * 0.26, ang: 0.22 }); // 颊板（斜面承眼座到颌）
-  if (F.jaw === 'respirator') { // 肋管颏：斜管 + 两道肋
-    parts.push({ t: 'block', dx: w * 0.3, dy: -h * 0.17, w: w * 0.44, h: h * 0.17, ang: 0.5, kind: 'cyl' });
-    parts.push({ t: 'block', dx: w * 0.33, dy: -h * 0.2, w: w * 0.4, h: h * 0.045, ang: 0.5, kind: 'frame' });
-    parts.push({ t: 'block', dx: w * 0.28, dy: -h * 0.13, w: w * 0.4, h: h * 0.045, ang: 0.5, kind: 'frame' });
+  if (F.jaw === 'respirator') { // 肋管颏：斜管 + 两道肋（动力服颏装置小一号）
+    const js = spec.family === 'powersuit' ? 0.7 : 1;
+    parts.push({ t: 'block', dx: w * (spec.family === 'powersuit' ? 0.26 : 0.3), dy: -h * 0.14, w: w * 0.4 * js, h: h * 0.15 * js, ang: 0.5, kind: spec.family === 'powersuit' ? 'frame' : 'cyl' });
+    parts.push({ t: 'block', dx: w * 0.33, dy: -h * 0.17, w: w * 0.37 * js, h: h * 0.045, ang: 0.5, kind: 'frame' });
+    parts.push({ t: 'block', dx: w * 0.28, dy: -h * 0.11, w: w * 0.37 * js, h: h * 0.045, ang: 0.5, kind: 'frame' });
   } else if (F.jaw === 'block') parts.push({ t: 'block', dx: w * 0.27, dy: -h * 0.13, w: w * 0.4, h: h * 0.19, ang: 0.16 }); // 颌块后缩
   else parts.push({ t: 'block', dx: w * 0.25, dy: -h * 0.11, w: w * 0.34, h: h * 0.13, ang: 0.14 });
   if (F.ear === 'disc') { parts.push({ t: 'disc', dx: -w * 0.16, dy: -h * 0.48, r: w * 0.11 }); parts.push({ t: 'disc', dx: -w * 0.16, dy: -h * 0.48, r: w * 0.06 }); }
   else if (F.ear === 'grille') { parts.push({ t: 'grille', dx: -w * 0.07, dy: -h * 0.48, w: w * 0.36, h: h * 0.38 }); parts.push({ t: 'disc', dx: -w * 0.07, dy: -h * 0.48, r: w * 0.08 }); }
   else parts.push({ t: 'block', dx: -w * 0.08, dy: -h * 0.48, w: w * 0.3, h: h * 0.4, cham: 0.3 });
   if (F.top === 'horn') parts.push({ t: 'block', dx: w * 0.42, dy: -h * 0.9, w: w * 0.38, h: h * 0.1, ang: 0.25 });
-  else if (F.top === 'vfin') { parts.push({ t: 'block', dx: w * 0.18, dy: -h * 1.14, w: w * 0.36, h: h * 0.1, ang: -0.5 }); parts.push({ t: 'block', dx: -w * 0.04, dy: -h * 1.08, w: w * 0.32, h: h * 0.09, ang: -0.66 }); }
+  else if (F.top === 'vfin') { parts.push({ t: 'block', dx: w * 0.2, dy: -h * 1.22, w: w * 0.46, h: h * 0.11, ang: -0.52 }); parts.push({ t: 'block', dx: -w * 0.02, dy: -h * 1.14, w: w * 0.4, h: h * 0.1, ang: -0.68 }); }
   else if (F.top === 'antenna') { parts.push({ t: 'block', dx: -w * 0.18, dy: -h * 1.14, w: w * 0.035, h: h * 0.55, kind: 'cyl' }); parts.push({ t: 'disc', dx: -w * 0.18, dy: -h * 1.42, r: w * 0.04 }); parts.push({ t: 'block', dx: -w * 0.3, dy: -h * 1.05, w: w * 0.03, h: h * 0.3, kind: 'cyl' }); parts.push({ t: 'block', dx: w * 0.14, dy: -h * 0.96, w: w * 0.2, h: h * 0.12 }); }
   return { anchors: { seat: spec.seat, eye: { x: spec.seat.x + w * 0.4, y: spec.seat.y - h * 0.5 }, ear: { x: spec.seat.x - w * 0.06, y: spec.seat.y - h * 0.48 }, crown: { x: spec.seat.x, y: spec.seat.y - h } }, parts };
 }
@@ -1608,8 +1611,8 @@ function renderHeadIR(cv: Canvas, ir: HeadIR, spec: HeadSpec): Anchors {
   const specs: HeadSpec[] = [
     { family: 'olive', twoTone: true, scheme: SCHEMES.olive, seed: 7, wear: 0.3, camo: true, seat, w: 96, h: 84, tilt: 0.03, form: { crown: 'angular', eye: 'slit', brow: true, jaw: 'respirator', ear: 'grille', top: 'horn', cheekCable: false } },
     { family: 'agile', twoTone: true, scheme: SCHEMES.white, seed: 21, wear: 0.15, camo: false, seat, w: 92, h: 92, tilt: 0.02, form: { crown: 'angular', eye: 'slit', brow: true, jaw: 'block', ear: 'plate', top: 'vfin', cheekCable: false } },
-    { family: 'heavy', twoTone: true, scheme: SCHEMES.slate, seed: 35, wear: 0.4, camo: false, seat, w: 94, h: 72, tilt: 0.04, form: { crown: 'flat', eye: 'dot', brow: true, jaw: 'block', ear: 'disc', top: 'antenna', cheekCable: false } },
-    { family: 'powersuit', twoTone: false, scheme: psScheme, seed: 49, wear: 0.15, camo: false, seat, w: 100, h: 88, tilt: 0, form: { crown: 'dome', eye: 'visor', brow: false, jaw: 'small', ear: 'disc', top: 'none', cheekCable: false } },
+    { family: 'heavy', twoTone: true, scheme: SCHEMES.slate, seed: 35, wear: 0.4, camo: false, seat, w: 94, h: 72, tilt: 0.04, form: { crown: 'flat', eye: 'slit', brow: true, jaw: 'block', ear: 'disc', top: 'antenna', cheekCable: false } },
+    { family: 'powersuit', twoTone: false, scheme: psScheme, seed: 49, wear: 0.15, camo: false, seat, w: 100, h: 88, tilt: 0, form: { crown: 'dome', eye: 'visor', brow: false, jaw: 'respirator', ear: 'plate', top: 'none', cheekCable: false } },
   ];
   for (const sp of specs) {
     const ir = headIR(sp);
