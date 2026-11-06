@@ -419,12 +419,14 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       const dir = { x: Math.cos(LINE_ANG), y: Math.sin(LINE_ANG) };
       const nrm = { x: -dir.y, y: dir.x }; // 主线下法线（指向压块内）
       // 非四边形块：四角各自独立切、顶边带一级台阶——统一 chamfer 的
-      // blockPoly 出来的是四边形，块语言里块从来不是四边形
+      // blockPoly 出来的是四边形，块语言里块从来不是四边形。切口量级
+      // 按参考取块厚的三分之一上下：此前按 0.05–0.24 取，切口只有
+      // 1–6px，块在图上退化成包围矩形（用户指「足块又四边形退化」）
       const jagPoly = (cx: number, cy: number, len: number, thick: number, ang: number, v: number): Pt[] => {
         const hl = len / 2, ht = thick / 2;
-        const cFT = thick * (0.15 + (v % 3) * 0.045), cBT = thick * (0.07 + (v % 2) * 0.03);
-        const cFB = thick * (0.11 + (v % 2) * 0.04), cBB = thick * 0.05;
-        const sx = hl * (0.1 + (v % 3) * 0.12), sd = thick * 0.11, sr = thick * 0.3;
+        const cFT = thick * (0.30 + (v % 3) * 0.06), cBT = thick * (0.14 + (v % 2) * 0.05);
+        const cFB = thick * (0.20 + (v % 2) * 0.05), cBB = thick * 0.09;
+        const sx = hl * (0.05 + (v % 3) * 0.1), sd = thick * 0.16, sr = thick * 0.45;
         const loc: Pt[] = [
           { x: -hl, y: -ht + cBT }, { x: -hl + cBT, y: -ht }, { x: sx, y: -ht },
           { x: sx + sr, y: -ht + sd }, { x: hl - cFT, y: -ht + sd }, { x: hl, y: -ht + sd + cFT * 0.75 },
@@ -445,9 +447,19 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
         fillShape(cv, id, polyTest(jagPoly(cx, cy, len, thick, ang, v))); id++;
         A.plateTint.set(bid, tint); if (panel) A.panelLines.set(bid, [0.5]);
       };
-      // 接地趾：平顶块，x0 起、底面坐 GY、顶随 thick 逐级下行
+      // 接地趾：平顶块（顶平、底面坐 GY、逐级下行是标注读数），但
+      // 平顶≠矩形——后缝上端前倾、前上大切角（约块厚 0.38）、前底
+      // 收进，与参考趾块同一块语言；此前借 jagPoly 出图、切口只剩
+      // 1–6px，图上就是矩形（四边形退化的一处）
       const toeG = (x0: number, len: number, thick: number, tint: number) => {
-        blkF(x0 + len / 2, GY - thick / 2, len, thick, 0, tint);
+        const ch = thick * 0.38, rc = thick * 0.30, fi = thick * 0.14;
+        cv.insts.push({ kind: 'foot' }); const bid = id;
+        fillShape(cv, id, polyTest([
+          { x: x0 + rc * 0.4, y: GY }, { x: x0 + len - fi, y: GY },
+          { x: x0 + len, y: GY - thick + ch }, { x: x0 + len - ch, y: GY - thick },
+          { x: x0 + rc, y: GY - thick }, { x: x0, y: GY - thick + rc },
+        ])); id++;
+        A.plateTint.set(bid, tint); A.panelLines.set(bid, [0.5]);
       };
       toeG(ankle.x + 0.52 * D, 0.98 * D * HS, 0.52 * D, 1.02);
       toeG(ankle.x + 1.44 * D, 0.86 * D * HS, 0.46 * D, 0.93);
@@ -464,11 +476,13 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       {
         const BK = { x: FT.x - dir.x * 0.42 * D, y: FT.y - dir.y * 0.42 * D };
         const RT = { x: BK.x - 0.95 * D * HS, y: BK.y + 0.10 * D };
+        const SM = { x: BK.x + (RT.x - BK.x) * 0.45, y: BK.y + (RT.y - BK.y) * 0.45 };
         cv.insts.push({ kind: 'foot' }); const bid = id;
         fillShape(cv, id, polyTest([
           { x: FT.x - 6, y: FT.y + 9 }, { x: FT.x + 2, y: FT.y }, { x: BK.x + 3, y: BK.y - 2 },
-          { x: RT.x + 8, y: RT.y - 3 }, { x: RT.x, y: RT.y + 3 }, { x: RT.x - 0.08 * D, y: GY - 13 },
-          { x: RT.x - 0.12 * D, y: GY }, { x: ankle.x - 0.05 * D, y: GY }, { x: FT.x - 3, y: FT.y + 17 },
+          { x: SM.x, y: SM.y }, { x: SM.x - 10, y: SM.y + 5 },
+          { x: RT.x + 8, y: RT.y + 2 }, { x: RT.x, y: RT.y + 6 }, { x: RT.x - 2, y: GY - 18 },
+          { x: RT.x - 10, y: GY - 18 }, { x: RT.x - 11, y: GY }, { x: ankle.x - 0.05 * D, y: GY }, { x: FT.x - 3, y: FT.y + 17 },
         ])); id++;
         A.plateTint.set(bid, 0.95);
         A.boltPts.push({ x: (BK.x + RT.x) / 2, y: (BK.y + RT.y) / 2 + 12 }); // 跟块面上一颗栓（参考两张都有）
