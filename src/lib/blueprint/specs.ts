@@ -60,6 +60,9 @@ export const BLUEPRINT_NODE_SPECS: Record<string, BlueprintNodeSpec> = {
   // 角色源：输出整角色合成后的像素（管线预渲染，由 ctx.characterPixels 提供）
   // 角色蓝图专用：character_source → 后处理链 → screen
   character_source: { inputs: [], outputs: ['pixels'], params: [] },
+  // 机甲源：模式库程序化机甲部件（part/family 参数选部位与族，
+  // 生成走机甲引擎并缓存）；像素链起点，与精灵源/服装源同族
+  mecha_source: { inputs: [], outputs: ['pixels'], params: ['part', 'family'] },
 
   // ---- 数学 ----
   add: { inputs: ['a', 'b'], outputs: ['out'], params: [] },

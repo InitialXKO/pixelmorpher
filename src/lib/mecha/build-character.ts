@@ -7,7 +7,7 @@
 // ============================================================
 import { createDefaultNode, createDefaultCostumePiece, pxToSub } from '../unified-types';
 import type { Node, CostumeSet, CostumePiece, PixelGrid, DirectionIndex } from '../unified-types';
-import { generateMechaPartSet, mechaFamilyArmorHex, MECHA_FAMILIES } from './parts';
+import { generateMechaPartSet, generateMechaHull, mechaFamilyArmorHex, MECHA_FAMILIES } from './parts';
 import type { MechaFamily, MechaPartSet, MechaSpriteData } from './parts';
 
 export type MechaPartKey = 'leg' | 'armUpper' | 'armFore' | 'torso' | 'head';
@@ -189,4 +189,28 @@ export function createMechaCharacterInStore(
     costumeSets: [assembly.costumeSet], activeCostumeSetId: assembly.costumeSet.id,
   });
   return { characterId: character.id, costumeSetId: assembly.costumeSet.id };
+}
+
+// ---- 蓝图机甲源节点的像素供给（生成是秒级重活，按 族:部位 缓存） ----
+const mechaPartSetCache = new Map<MechaFamily, MechaPartSet>();
+const mechaGridCache = new Map<string, PixelGrid>();
+
+/** 按族+部位取像素格；part 可为五件之一或 hullWalker/hullHauler */
+export function getMechaPartGrid(family: string, part: string): PixelGrid | null {
+  const key = family + ':' + part;
+  const hit = mechaGridCache.get(key);
+  if (hit) return hit;
+  let data: MechaSpriteData | null = null;
+  if (part === 'hullWalker') data = generateMechaHull('walker');
+  else if (part === 'hullHauler') data = generateMechaHull('hauler');
+  else if ((MECHA_PART_KEYS as string[]).includes(part)) {
+    const fam = (MECHA_FAMILIES.some((f) => f.id === family) ? family : 'olive') as MechaFamily;
+    let ps = mechaPartSetCache.get(fam);
+    if (!ps) { ps = generateMechaPartSet(fam); mechaPartSetCache.set(fam, ps); }
+    data = ps[part as MechaPartKey];
+  }
+  if (!data) return null;
+  const grid = rgbaToPixelGrid(data);
+  mechaGridCache.set(key, grid);
+  return grid;
 }
