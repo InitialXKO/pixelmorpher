@@ -284,6 +284,11 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     fillShape(cv, id, clipGround(blockPoly(ankle.x - 6, ankle.y + 4, 74, 64, aAng, 0.3))); id++;
     cv.insts.push({ kind: 'frame' });
     fillShape(cv, id, clipGround(blockPoly(ankle.x + 8, ankle.y + 25, 62, 18, 0.1, 0.3))); id++;
+    // 内构向前上延一块，衬住压块后上方的凹口：旧版此处只有小腿板
+    // 衬边的一角探进背景凹口成孤立暗三角（用户指压块套右上角的
+    // 「怪东西」），衬满后同为暗框色、三角融进衬底
+    cv.insts.push({ kind: 'frame' });
+    fillShape(cv, id, clipGround(blockPoly(ankle.x + 40, ankle.y - 22, 64, 44, -0.40, 0.3))); id++;
   }
   // 框梁（仅框主导族）：窄板挂在露出的框梁上，段侧缘带归框梁（按段规格定宽，与甲板同源）
   if (spec.frameHeavy) for (const sgm of [thigh, shin]) {
@@ -465,10 +470,23 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       const toe3Front = ankle.x + 2.24 * D + 0.80 * D * HS;
       toeG(ankle.x + 2.24 * D, 0.80 * D * HS, 0.40 * D, 1.07);
       A.toeFace = { x0: Math.round(toe3Front - 0.17 * D), y0: Math.round(GY - 0.34 * D), x1: Math.round(toe3Front - 0.03 * D), y1: Math.round(GY - 0.06 * D) };
-      // 叠瓦楔板两块：顶棱向前下行、两块平行；先画，压块随后盖其根。
-      // 位置按参考亮棱的落点：棱自压块底边下方露出、前端落在趾顶上
-      blkF(ankle.x + 1.62 * D, ankle.y + 0.02 * D, 0.98 * D * HS, 0.34 * D, 0.48, { bt: 0.30, fb: 0.25, bb: 0.20 }, 0.97);
-      blkF(ankle.x + 2.28 * D, ankle.y + 0.16 * D, 0.92 * D * HS, 0.32 * D, 0.48, { bt: 0.25, fb: 0.25 }, 1.04);
+      // 叠瓦楔板：横排、// 排列、楔形（用户连定）——两块近水平薄板
+      // 沿趾顶阶梯成一横排；缝为 / 向（上端在前、下端在后）；每块
+      // 是楔形：顶边沿排下行、底边近平贴趾顶，厚度自根部向前收薄
+      // （水平薄板若上下平行就把楔形丢了）。叠瓦次序：前板先画、
+      // 后板尖压前板根——后板底边在前板顶上露出收薄的下表面
+      const wX0 = ankle.x + 1.05 * D, wy0 = ankle.y + 0.02 * D, wLean = 0.16 * D;
+      const wTop = (s: number) => wy0 + (s - wX0) * 0.10;
+      const wedge = (s0: number, s1: number, bRear: number, bFront: number, tint: number) => {
+        cv.insts.push({ kind: 'foot' }); const bid = id;
+        fillShape(cv, id, polyTest([
+          { x: s0, y: wTop(s0) }, { x: s1, y: wTop(s1) },
+          { x: s1 - wLean, y: bFront }, { x: s0 - wLean, y: bRear },
+        ])); id++;
+        A.plateTint.set(bid, tint);
+      };
+      wedge(ankle.x + 1.96 * D, ankle.x + 2.80 * D, GY - 0.46 * D, GY - 0.43 * D, 1.05); // 前板（先画）
+      wedge(wX0, ankle.x + 2.08 * D, GY - 0.52 * D, GY - 0.528 * D, 0.94); // 后板（尖压前板根）
       // 跟块：楔块平坐地。顶边两段——靠盘陡升段沿主线（FT→BK），
       // 其后浅段（BK→RT）向后缓降；FT = 顶边触盘点
       const FT = { x: ankle.x - 0.15 * D, y: ankle.y + 0.1 * D };
