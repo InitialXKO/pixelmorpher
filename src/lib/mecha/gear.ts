@@ -251,57 +251,83 @@ export function jetpackCanvas(spec: JetpackSpec): { cv: MechaCanvas; A: Anchors;
 export type WeaponSpec = GearSpec;
 export type WeaponKind = 'cannon' | 'pod' | 'rifle' | 'podPylon';
 
+/** 武器模式（模式库「武器」条目）：构造 = 单位坐标步序数据（声明），
+ *  renderWeapon 只做解释（步序 × 尺寸系数落笔）。坐标语义：x 沿长向、
+ *  y 沿厚向，落笔时 x·ux / y·uy；原点语义见各 kind 注释 */
+type WeaponBlockKind = 'disc' | 'plate' | 'frame';
+type WeaponStep =
+  | { t: 'disc'; kind: WeaponBlockKind; x: number; y: number; r: number }
+  | { t: 'block'; kind: WeaponBlockKind; x: number; y: number; w: number; h: number; ang?: number; cham?: number; bolts?: boolean }
+  | { t: 'rod'; x0: number; y0: number; x1: number; y1: number; r: number }
+  | { t: 'ports'; x: number; y: number; w: number; h: number; cols: number; rows: number }
+  | { t: 'light'; x: number; y: number }
+  | { t: 'podBox'; x: number; y: number };
+/** 导弹荚体（pod/podPylon 共用子构造）：外壳框 → 脸板 → 管口阵列 → 顶盖与侧深条 */
+const POD_BOX_STEPS: WeaponStep[] = [
+  { t: 'block', kind: 'frame', x: 0, y: 0, w: 74, h: 58, cham: 0.26, bolts: true },
+  { t: 'block', kind: 'plate', x: -2, y: 0, w: 60, h: 46, cham: 0.28 },
+  { t: 'ports', x: -2, y: 0, w: 46, h: 34, cols: 2, rows: 3 },
+  { t: 'block', kind: 'frame', x: -2, y: -32, w: 56, h: 8, cham: 0.3 },
+  { t: 'block', kind: 'frame', x: 40, y: 0, w: 8, h: 50, cham: 0.25 },
+  { t: 'light', x: -28, y: -22 },
+];
+export const WEAPON_PROFILES: Record<WeaponKind, WeaponStep[]> = {
+  // 臂炮：弹鼓（座下侧）→ 套筒座 → 粗炮管 + 炮口环 → 顶肋杆。原点 = 套筒点
+  cannon: [
+    { t: 'disc', kind: 'disc', x: 30, y: 26, r: 21 },
+    { t: 'disc', kind: 'disc', x: 30, y: 26, r: 12 },
+    { t: 'block', kind: 'plate', x: 34, y: 0, w: 80, h: 44, cham: 0.3, bolts: true },
+    { t: 'block', kind: 'frame', x: 8, y: -2, w: 20, h: 32, cham: 0.3 },
+    { t: 'rod', x0: 66, y0: 0, x1: 150, y1: 0, r: 12 },
+    { t: 'disc', kind: 'frame', x: 152, y: 0, r: 16 },
+    { t: 'disc', kind: 'frame', x: 152, y: 0, r: 8 },
+    { t: 'rod', x0: 68, y0: -17, x1: 136, y1: -17, r: 4 },
+    { t: 'rod', x0: 10, y0: 18, x1: -10, y1: 32, r: 3 }, // 供弹缆示意
+    { t: 'light', x: 52, y: -13 },
+  ],
+  // 导弹荚：荚体 + 座下挂块。原点 = 底部肩挂点。尺寸系数与手持武器同一套用户设置
+  pod: [
+    { t: 'podBox', x: 0, y: -26 },
+    { t: 'block', kind: 'frame', x: -8, y: 6, w: 20, h: 10, cham: 0.3 },
+  ],
+  // 高架荚：双撑杆自原点（背挂足）斜撑，荚体在后上方
+  podPylon: [
+    { t: 'rod', x0: -4, y0: 0, x1: -54, y1: -116, r: 4.5 },
+    { t: 'rod', x0: 14, y0: -6, x1: -28, y1: -118, r: 3.5 },
+    { t: 'block', kind: 'frame', x: 2, y: -4, w: 22, h: 12, cham: 0.3 },
+    { t: 'podBox', x: -40, y: -148 },
+  ],
+  // 步枪：枪托 → 机匣 → 长枪管；弹匣下斜、握把下垂、瞄具在上。原点 = 握持点
+  rifle: [
+    { t: 'block', kind: 'plate', x: -40, y: -1, w: 38, h: 21, ang: 0.1, cham: 0.3 },
+    { t: 'block', kind: 'plate', x: 10, y: 0, w: 58, h: 25, cham: 0.28, bolts: true },
+    { t: 'rod', x0: 36, y0: -1, x1: 138, y1: -1, r: 5.5 },
+    { t: 'disc', kind: 'frame', x: 141, y: -1, r: 7 },
+    { t: 'block', kind: 'frame', x: 16, y: 23, w: 14, h: 27, ang: 0.28, cham: 0.25 }, // 弹匣
+    { t: 'block', kind: 'frame', x: -16, y: 17, w: 11, h: 21, ang: -0.2, cham: 0.25 }, // 握把
+    { t: 'rod', x0: 2, y0: -14, x1: 2, y1: -20, r: 2.5 },
+    { t: 'block', kind: 'plate', x: 8, y: -23, w: 30, h: 10, cham: 0.35 }, // 瞄具
+    { t: 'disc', kind: 'disc', x: 20, y: -23, r: 4.5 },
+  ],
+};
+
 export function renderWeapon(cv: MechaCanvas, spec: WeaponSpec, kind: WeaponKind, origin: Pt): Anchors {
   const T: Tools = makeLayerTools(cv, spec.seed);
   const ox = origin.x, oy = origin.y;
   // 尺寸系数：长向/厚向分开（原点不动）。量比据图库参考实测——
   // 手持武器全长/身高：重机甲长炮 ≈0.75、敏捷 ≈0.37、动力服 ≈0.31
   const ux = spec.size?.x ?? 1, uy = spec.size?.y ?? 1;
-  if (kind === 'cannon') {
-    // 臂炮：弹鼓（座下侧）→ 套筒座 → 粗炮管 + 炮口环 → 顶肋杆
-    T.addDisc('disc', { x: ox + 30 * ux, y: oy + 26 * uy }, 21 * uy);
-    T.addDisc('disc', { x: ox + 30 * ux, y: oy + 26 * uy }, 12 * uy);
-    T.addBlock('plate', ox + 34 * ux, oy, 80 * ux, 44 * uy, 0, 0.3, true);
-    T.addBlock('frame', ox + 8 * ux, oy - 2 * uy, 20 * ux, 32 * uy, 0, 0.3);
-    T.rod({ x: ox + 66 * ux, y: oy }, { x: ox + 150 * ux, y: oy }, 12 * uy);
-    T.addDisc('frame', { x: ox + 152 * ux, y: oy }, 16 * uy);
-    T.addDisc('frame', { x: ox + 152 * ux, y: oy }, 8 * uy);
-    T.rod({ x: ox + 68 * ux, y: oy - 17 * uy }, { x: ox + 136 * ux, y: oy - 17 * uy }, 4 * uy);
-    T.rod({ x: ox + 10 * ux, y: oy + 18 * uy }, { x: ox - 10 * ux, y: oy + 32 * uy }, 3 * uy); // 供弹缆示意
-    T.A.lightPts.push({ x: ox + 52 * ux, y: oy - 13 * uy });
-  } else if (kind === 'pod' || kind === 'podPylon') {
-    // 导弹荚同为武器：尺寸系数（长/厚）与手持武器同一套用户设置
-    // 荚体：外壳框 → 脸板 → portArray 2×3 管口 → 顶盖与侧深条
-    const drawPodBox = (cx: number, cy: number) => {
-      T.addBlock('frame', cx, cy, 74 * ux, 58 * uy, 0, 0.26, true);
-      T.addBlock('plate', cx - 2 * ux, cy, 60 * ux, 46 * uy, 0, 0.28);
-      T.portArray(cx - 2 * ux, cy, 46 * ux, 34 * uy, 2, 3);
-      T.addBlock('frame', cx - 2 * ux, cy - 32 * uy, 56 * ux, 8 * uy, 0, 0.3);
-      T.addBlock('frame', cx + 40 * ux, cy, 8 * ux, 50 * uy, 0, 0.25);
-      T.A.lightPts.push({ x: cx - 28 * ux, y: cy - 22 * uy });
-    };
-    if (kind === 'pod') {
-      drawPodBox(ox, oy - 26 * uy);
-      T.addBlock('frame', ox - 8 * ux, oy + 6 * uy, 20 * ux, 10 * uy, 0, 0.3);
-    } else {
-      // 高架：双撑杆从原点（背挂足）斜撑到荚体底部，荚体在后上方
-      T.rod({ x: ox - 4 * ux, y: oy }, { x: ox - 54 * ux, y: oy - 116 * uy }, 4.5 * uy);
-      T.rod({ x: ox + 14 * ux, y: oy - 6 * uy }, { x: ox - 28 * ux, y: oy - 118 * uy }, 3.5 * uy);
-      T.addBlock('frame', ox + 2 * ux, oy - 4 * uy, 22 * ux, 12 * uy, 0, 0.3);
-      drawPodBox(ox - 40 * ux, oy - 148 * uy);
+  const run = (steps: WeaponStep[], bx: number, by: number) => {
+    for (const s of steps) {
+      if (s.t === 'disc') T.addDisc(s.kind, { x: bx + s.x * ux, y: by + s.y * uy }, s.r * uy);
+      else if (s.t === 'block') T.addBlock(s.kind, bx + s.x * ux, by + s.y * uy, s.w * ux, s.h * uy, s.ang ?? 0, s.cham ?? 0.36, s.bolts ?? false);
+      else if (s.t === 'rod') T.rod({ x: bx + s.x0 * ux, y: by + s.y0 * uy }, { x: bx + s.x1 * ux, y: by + s.y1 * uy }, s.r * uy);
+      else if (s.t === 'ports') T.portArray(bx + s.x * ux, by + s.y * uy, s.w * ux, s.h * uy, s.cols, s.rows);
+      else if (s.t === 'light') T.A.lightPts.push({ x: bx + s.x * ux, y: by + s.y * uy });
+      else run(POD_BOX_STEPS, bx + s.x * ux, by + s.y * uy); // podBox 子构造
     }
-  } else {
-    // 步枪：枪托 → 机匣 → 长枪管；弹匣下斜、握把下垂、瞄具在上
-    T.addBlock('plate', ox - 40 * ux, oy - 1 * uy, 38 * ux, 21 * uy, 0.1, 0.3);
-    T.addBlock('plate', ox + 10 * ux, oy, 58 * ux, 25 * uy, 0, 0.28, true);
-    T.rod({ x: ox + 36 * ux, y: oy - 1 * uy }, { x: ox + 138 * ux, y: oy - 1 * uy }, 5.5 * uy);
-    T.addDisc('frame', { x: ox + 141 * ux, y: oy - 1 * uy }, 7 * uy);
-    T.addBlock('frame', ox + 16 * ux, oy + 23 * uy, 14 * ux, 27 * uy, 0.28, 0.25); // 弹匣
-    T.addBlock('frame', ox - 16 * ux, oy + 17 * uy, 11 * ux, 21 * uy, -0.2, 0.25); // 握把
-    T.rod({ x: ox + 2 * ux, y: oy - 14 * uy }, { x: ox + 2 * ux, y: oy - 20 * uy }, 2.5 * uy);
-    T.addBlock('plate', ox + 8 * ux, oy - 23 * uy, 30 * ux, 10 * uy, 0, 0.35); // 瞄具
-    T.addDisc('disc', { x: ox + 20 * ux, y: oy - 23 * uy }, 4.5 * uy);
-  }
+  };
+  run(WEAPON_PROFILES[kind], ox, oy);
   T.finish();
   return T.A;
 }

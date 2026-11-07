@@ -132,6 +132,23 @@ function polyTest(pts: Pt[]) { // 多边形（护板/趾块）：局部坐标取
     return [inside, ((x - x0) / (x1 - x0)) * 2 - 1, (y - y0) / (y1 - y0)];
   };
 }
+// 高光棱模式登记（多边形件）：polyTest 的 (u,v) 是包围盒场——
+// 刻线唇（v=lv 的横线、唇在其下 0.017）与竖缝唇（u=su 的竖线、
+// 唇在其前 0.034）都是包围盒内的直线，端点由包围盒直接换算
+function polyLip(A: Anchors, bid: number, pts: Pt[], lv: number) {
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const yl = y0 + (lv + 0.017) * (y1 - y0);
+  (A.ridges ??= []).push({ inst: bid, pts: [{ x: x0, y: yl }, { x: x1, y: yl }], tone: 1.17 });
+  (A.ridgeMode ??= new Set()).add(bid);
+}
+function polySeamLip(A: Anchors, bid: number, pts: Pt[], su: number) {
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const xl = x0 + (((su - 0.034) + 1) / 2) * (x1 - x0);
+  (A.ridges ??= []).push({ inst: bid, pts: [{ x: xl, y: y0 }, { x: xl, y: y1 }], tone: 1.15 });
+  (A.ridgeMode ??= new Set()).add(bid);
+}
 function discTest(c: Pt, r: number, rot = 0) {
   return (x: number, y: number): [boolean, number, number] => {
     const dx = x - c.x, dy = y - c.y;
@@ -172,7 +189,7 @@ const FONT: Record<string, string[]> = {
 };
 
 // ---------- 布局 ----------
-interface LegSpec { topology: 'standard' | 'reverse'; scheme: Scheme; seed: number; bend: number; camo: boolean; wear?: number; frameHeavy?: boolean; shellMode?: boolean; wScale?: number; lift?: number; guardOff?: boolean; detail?: number; ankleShift?: number; cableTint?: RGB; decalKind?: 'num' | 'plate' | 'none'; coreScale?: number; footType?: 'blocks' | 'shoe' | 'claw' | 'pad' | 'wheel'; /** 膝盖块厚度系数（用户可调，默认 1） */ kneeScale?: number; /** 腓肠隆起系数（用户可调，默认 1） */ calfScale?: number; /** 胫骨凹面深度系数（用户可调，默认 1；0 = 前缘不凹） */ shinConcave?: number; /** 履带相位帧专用：皮带行程 px，圆盘 pass 按同心最大半径折算转角（其余画布不设、零影响） */ beltPhase?: number; /** 轮足相位帧专用：轮行程 px，毂盘按胎外径折算转角、胎环扇区随之移（仅轮足画布设） */ wheelPhase?: number }
+interface LegSpec { topology: 'standard' | 'reverse'; scheme: Scheme; seed: number; bend: number; camo: boolean; wear?: number; frameHeavy?: boolean; shellMode?: boolean; wScale?: number; lift?: number; guardOff?: boolean; detail?: number; ankleShift?: number; cableTint?: RGB; decalKind?: 'num' | 'plate' | 'none'; coreScale?: number; footType?: 'blocks' | 'shoe' | 'claw' | 'pad' | 'wheel'; /** 膝盖块厚度系数（用户可调，默认 1） */ kneeScale?: number; /** 腓肠隆起系数（用户可调，默认 1） */ calfScale?: number; /** 胫骨凹面深度系数（用户可调，默认 1；0 = 前缘不凹） */ shinConcave?: number; /** 履带相位帧专用：皮带行程 px，圆盘 pass 按同心最大半径折算转角（其余画布不设、零影响） */ beltPhase?: number; /** 轮足相位帧专用：轮行程 px，毂盘按胎外径折算转角、胎环扇区随之移（仅轮足画布设） */ wheelPhase?: number; /** 高光棱模式开关（模式库「高光棱」条目）：默认开；关时棱线 pass 不画、面着色公式对登记件保持跳过（无第二实现） */ ridges?: boolean; /** 料厚比（模式库「料厚」条目）：件端料厚 = 件厚 × 此比，默认 0.16 */ thickRatio?: number }
 interface Anchors {
   plateTint: Map<number, number>; panelLines: Map<number, number[]>;
   boltPts: Pt[]; ventId: number; guardId: number; stripeId: number;
@@ -184,6 +201,13 @@ interface Anchors {
   deviceFrame: { c: Pt; ux: number; uy: number; px: number; py: number } | null; chevDecal: boolean;
   shinIds: Set<number>; stripeSegs: [Pt, Pt][];
   panelDiag: Map<number, number>; panelTee: Map<number, number>; decalKind: string; toeFace: { x0: number; y0: number; x1: number; y1: number } | null; colorRole?: Map<number, string>;
+  /** 高光棱模式（模式库「高光棱」条目）：一切高光棱在此登记、由
+   * 着色层单一 pass 在件自身像素上画。pts=棱线折线；tone=提亮
+   * 倍率；faceW/faceTone=棱线前侧的料厚面（模式库「料厚」条目，
+   * 宽+平色差，可选）；登记过的件进 ridgeMode，其面着色公式内
+   * 的旧棱线项跳过。开关在规格层（LegSpec.ridges） */
+  ridges?: { inst: number; pts: Pt[]; tone: number; faceW?: number; faceDx?: number; faceDy?: number; faceTone?: number }[];
+  ridgeMode?: Set<number>;
   /** 轮足毂心 + 胎外径（圆盘 pass 按胎外径折算毂盘转角用；仅轮足布局登记） */
   wheelHubs?: { c: Pt; r: number }[];
 }
@@ -249,6 +273,36 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     if ((spec as LegSpec).shellMode && rnd() < 0.45) A.blockPlates.add(myId); // 人形壳：色块板
     if (rnd() < 0.3) A.panelDiag.set(myId, (rnd() - 0.5) * 0.9); // 斜面板线（错位网络）
     if (rnd() < 0.35) A.panelTee.set(myId, -0.5 + rnd()); // T 型接头竖线位置
+    // 高光棱模式登记（kind=plate）：折棱、刻线唇、竖缝唇全部改走
+    // 模式 pass——采样点与 plateTest 的 (u,v) 场同式，保证棱贴面走
+    if (kind === 'plate') {
+      const fr = segFrame(a2, b2);
+      const hwAt = (t: number, front: boolean) => {
+        const baseHW = (wA * proud + (wB * proud - wA * proud) * t) / 2;
+        return front ? baseHW * (1 + bulge.f * bumpAt(t, 0.38)) : baseHW * (1 + bulge.b * bumpAt(t, 0.34));
+      };
+      const ptAt = (t: number, dd: number): Pt => {
+        const local = (t - t0) / (t1 - t0);
+        let dC = 0;
+        if (shape && shape.step !== 0) { const sp = shape.stepPos; dC = local >= sp ? shape.step : local > sp - 0.05 ? (shape.step * (local - (sp - 0.05))) / 0.05 : 0; }
+        return { x: a2.x + fr.ux * t * fr.len + fr.px * (dd + dC), y: a2.y + fr.uy * t * fr.len + fr.py * (dd + dC) };
+      };
+      const lineAtU = (uu: number, l0: number, l1: number): Pt[] => {
+        const pts: Pt[] = [];
+        for (let k = 0; k <= 4; k++) { const local = l0 + (l1 - l0) * k / 4, t = t0 + local * (t1 - t0); pts.push(ptAt(t, uu * hwAt(t, uu < 0))); }
+        return pts;
+      };
+      (A.ridgeMode ??= new Set()).add(myId);
+      const h2 = (((myId * 40503 + 7) >>> 0) % 100) / 100, h3 = (((myId * 2246822519) >>> 0) % 100) / 100;
+      if (h3 >= 0.3) (A.ridges ??= []).push({ inst: myId, pts: lineAtU(0.15 + h2 * 0.5, 0.05, 0.95), tone: 1.15 }); // 主折线亮棱
+      const dg = A.panelDiag.get(myId) ?? 0;
+      for (const lv of lines) { // 刻线下唇受光
+        const tF = t0 + (lv + dg * -1 * 0.45 + 0.017) * (t1 - t0), tB = t0 + (lv + dg * 1 * 0.45 + 0.017) * (t1 - t0);
+        (A.ridges ??= []).push({ inst: myId, pts: [ptAt(tF, -hwAt(tF, true) * 0.97), ptAt(tB, hwAt(tB, false) * 0.97)], tone: 1.17 });
+      }
+      const su = A.seamU.get(myId); // 竖缝前侧受光唇
+      if (su !== undefined) (A.ridges ??= []).push({ inst: myId, pts: lineAtU(su - 0.034, 0.14, 0.86), tone: 1.15 });
+    }
     // 铆钉点：沿板两侧缘（跟随抖动后的板框）
     const f = segFrame(a2, b2);
     for (const vv of [0.14, 0.5, 0.86]) for (const ss of [-0.8, 0.8]) {
@@ -275,21 +329,22 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       return best;
     }); id++;
   }
-  // 踝关节内构衬底：盘后/盘下衬暗内构两块（壳块沿小腿轴 + 盘下块），
-  // 在一切段板/足块/关节件之前画，只在盘缘外的缺口里露出——参考里
-  // 踝盘四周衬暗内构、不露背景（旧版盘后一圈与盘下凹口采样全是背景）
+  // 模式「关节内构衬底」（模式库 L1）：关节盘四周衬暗内构、凹口不
+  // 露背景。在一切段板/足块/关节件之前画，只在盘缘外的缺口里露
+  // 出。块表 = [相对盘心偏移, 宽, 高, 角]：壳块沿小腿轴、盘下块、
+  // 前上延块（衬住压块后上方凹口——旧版此处只有小腿板衬边一角探
+  // 进背景成孤立暗三角，衬满后同为暗框色、三角融进衬底）。
+  // 现状：踝已执行；膝/髋待按本模式补（清册现状列明记）
   {
     const aAng = Math.atan2(ankle.y - knee.y, ankle.x - knee.x);
     const clipGround = (poly: Pt[]) => { const t = polyTest(poly); return (x: number, y: number): [boolean, number, number] => (y <= 469 ? t(x, y) : [false, 0, 0]); };
-    cv.insts.push({ kind: 'frame' });
-    fillShape(cv, id, clipGround(blockPoly(ankle.x - 6, ankle.y + 4, 74, 64, aAng, 0.3))); id++;
-    cv.insts.push({ kind: 'frame' });
-    fillShape(cv, id, clipGround(blockPoly(ankle.x + 8, ankle.y + 25, 62, 18, 0.1, 0.3))); id++;
-    // 内构向前上延一块，衬住压块后上方的凹口：旧版此处只有小腿板
-    // 衬边的一角探进背景凹口成孤立暗三角（用户指压块套右上角的
-    // 「怪东西」），衬满后同为暗框色、三角融进衬底
-    cv.insts.push({ kind: 'frame' });
-    fillShape(cv, id, clipGround(blockPoly(ankle.x + 40, ankle.y - 22, 64, 44, -0.40, 0.3))); id++;
+    const BACKING: [number, number, number, number, number][] = [
+      [-6, 4, 74, 64, aAng], [8, 25, 62, 18, 0.1], [40, -22, 64, 44, -0.40],
+    ];
+    for (const [dx, dy, w, h, ang] of BACKING) {
+      cv.insts.push({ kind: 'frame' });
+      fillShape(cv, id, clipGround(blockPoly(ankle.x + dx, ankle.y + dy, w, h, ang, 0.3))); id++;
+    }
   }
   // 框梁（仅框主导族）：窄板挂在露出的框梁上，段侧缘带归框梁（按段规格定宽，与甲板同源）
   if (spec.frameHeavy) for (const sgm of [thigh, shin]) {
@@ -327,17 +382,21 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     return ids;
   };
   const thighIds = segPlates(thigh);
-  // 膝上盖板：只盖前侧的一条板（前缘贴大腿板前表面、后缘收到轴线
-  // 前）——缺口只在膝前上方；旧版整宽盖板后半截在膝后探出成一块与
-  // 关节无关的亮楔（对照参考：膝后是暗的关节凹口）
+  // 模式「膝上盖板」（模式库 L1）：段板组单板特例——只盖前侧的一
+  // 条板，末端越过膝心续盖，填平末板切角在膝前上方留的凹口；后半
+  // 不设（对照参考：膝后是暗的关节凹口）。参数：沿段 t 0.84→1.07、
+  // 前缘贴大腿板前表面 +3、后缘收到轴线前 6
   {
-    const frontOff = (t: number) => ((thigh.wA + (thigh.wB - thigh.wA) * t) / 2) * (1 + thigh.bulge.f * bumpAt(t, 0.38)) + 3;
+    const CAP = { t0: 0.84, t1: 1.07, backIn: 6, proud: 3 };
+    const frontOff = (t: number) => ((thigh.wA + (thigh.wB - thigh.wA) * t) / 2) * (1 + thigh.bulge.f * bumpAt(t, 0.38)) + CAP.proud;
     cv.insts.push({ kind: 'plate' }); const sid = id;
-    fillShape(cv, id, polyTest([
-      backOf(thigh, 0.84, -frontOff(0.84)), backOf(thigh, 1.07, -frontOff(1.07)),
-      backOf(thigh, 1.07, -6), backOf(thigh, 0.84, -6),
-    ])); id++;
+    const capPts = [
+      backOf(thigh, CAP.t0, -frontOff(CAP.t0)), backOf(thigh, CAP.t1, -frontOff(CAP.t1)),
+      backOf(thigh, CAP.t1, -CAP.backIn), backOf(thigh, CAP.t0, -CAP.backIn),
+    ];
+    fillShape(cv, id, polyTest(capPts)); id++;
     A.plateTint.set(sid, 1.0); A.panelLines.set(sid, [0.5]);
+    polyLip(A, sid, capPts, 0.5);
   }
   A.stripeThigh = thighIds[0];
   A.ventId = thighIds[thighIds.length - 1];
@@ -363,10 +422,12 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
   // 5) 脚：跟块/掌块/趾块（切角块组，与全图同一套块语言）
   const footBlock = (cx: number, cy: number, w: number, h: number, ang: number, cham = 0.38, seam?: number) => {
     cv.insts.push({ kind: 'foot' }); const bid = id;
-    fillShape(cv, id, polyTest(blockPoly(cx, cy, w, h, ang, cham))); id++;
+    const bp = blockPoly(cx, cy, w, h, ang, cham);
+    fillShape(cv, id, polyTest(bp)); id++;
     A.plateTint.set(bid, [0.9, 1.0, 1.08][Math.floor(rnd() * 3)]);
     A.panelLines.set(bid, [0.5]);
-    if (seam !== undefined) A.seamU.set(bid, seam); // 趾帽竖缝
+    polyLip(A, bid, bp, 0.5);
+    if (seam !== undefined) { A.seamU.set(bid, seam); polySeamLip(A, bid, bp, seam); } // 趾帽竖缝
   };
   // 足（v29 四型，全由有厚度的块组成；底面标高 470，块顶分级下行、块间叠压相接）
   const ft = spec.footType ?? 'blocks';
@@ -416,8 +477,10 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     if (ft === 'shoe') {
       { // 踝上整流罩：靴筒块（shoe 专用，敏捷鞋形另有其式）
         cv.insts.push({ kind: 'plate' }); const fid = id;
-        fillShape(cv, id, polyTest(blockPoly(ankle.x + 38, 427, 96, 30, 0.12, 0.35))); id++;
+        const fp = blockPoly(ankle.x + 38, 427, 96, 30, 0.12, 0.35);
+        fillShape(cv, id, polyTest(fp)); id++;
         A.plateTint.set(fid, 0.95); A.panelLines.set(fid, [0.5]);
+        polyLip(A, fid, fp, 0.5);
       }
       { cv.insts.push({ kind: 'frame' }); fillShape(cv, id, polyTest(blockPoly((ankle.x + toeX) / 2 + 1, 466, toeX - ankle.x + 70, 12, 0, 0.3))); id++; } // 足底件
       footBlock(ankle.x - 24, 455, 64, 34, 0.04); // 跟块（顶 438）
@@ -454,14 +517,18 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       };
       const blkF = (cx: number, cy: number, len: number, thick: number, ang: number, cuts: { ft?: number; fb?: number; bt?: number; bb?: number }, tint: number) => {
         cv.insts.push({ kind: 'foot' }); const bid = id;
-        fillShape(cv, id, polyTest(jagPoly(cx, cy, len, thick, ang, cuts))); id++;
+        const pts = jagPoly(cx, cy, len, thick, ang, cuts);
+        fillShape(cv, id, polyTest(pts)); id++;
         A.plateTint.set(bid, tint); A.panelLines.set(bid, [0.5]);
+        polyLip(A, bid, pts, 0.5);
       };
       // 板类件（压块套/压块/折面）
       const blkP = (cx: number, cy: number, len: number, thick: number, ang: number, cuts: { ft?: number; fb?: number; bt?: number; bb?: number }, tint: number, panel = true) => {
         cv.insts.push({ kind: 'plate' }); const bid = id;
-        fillShape(cv, id, polyTest(jagPoly(cx, cy, len, thick, ang, cuts))); id++;
+        const pts = jagPoly(cx, cy, len, thick, ang, cuts);
+        fillShape(cv, id, polyTest(pts)); id++;
         A.plateTint.set(bid, tint); if (panel) A.panelLines.set(bid, [0.5]);
+        if (panel) polyLip(A, bid, pts, 0.5);
       };
       // 接地趾：平顶块（顶平、底面坐 GY、逐级下行是标注读数）。
       // 后缘上端前倾是相邻趾块相抵的缝（标注读数）；前端斜面是趾帽
@@ -471,35 +538,48 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       const toeG = (x0: number, len: number, thick: number, tint: number) => {
         const ch = thick * 0.38, rc = thick * 0.30, fi = thick * 0.14;
         cv.insts.push({ kind: 'foot' }); const bid = id;
-        fillShape(cv, id, polyTest([
+        const tp = [
           { x: x0 + rc * 0.4, y: GY }, { x: x0 + len - fi, y: GY },
           { x: x0 + len, y: GY - thick + ch }, { x: x0 + len - ch, y: GY - thick },
           { x: x0 + rc, y: GY - thick }, { x: x0, y: GY - thick + rc },
-        ])); id++;
+        ];
+        fillShape(cv, id, polyTest(tp)); id++;
         A.plateTint.set(bid, tint); A.panelLines.set(bid, [0.5]);
+        polyLip(A, bid, tp, 0.5);
       };
       toeG(ankle.x + 0.52 * D, 0.98 * D * HS, 0.52 * D, 1.02);
       toeG(ankle.x + 1.44 * D, 0.86 * D * HS, 0.46 * D, 0.93);
       const toe3Front = ankle.x + 2.24 * D + 0.80 * D * HS;
       toeG(ankle.x + 2.24 * D, 0.80 * D * HS, 0.40 * D, 1.07);
       A.toeFace = { x0: Math.round(toe3Front - 0.17 * D), y0: Math.round(GY - 0.34 * D), x1: Math.round(toe3Front - 0.03 * D), y1: Math.round(GY - 0.06 * D) };
-      // 叠瓦楔板：横排、// 排列、楔形（用户连定）——两块近水平薄板
-      // 沿趾顶阶梯成一横排；缝为 / 向（上端在前、下端在后）；每块
-      // 是楔形：顶边沿排下行、底边近平贴趾顶，厚度自根部向前收薄
-      // （水平薄板若上下平行就把楔形丢了）。叠瓦次序：前板先画、
-      // 后板尖压前板根——后板底边在前板顶上露出收薄的下表面
-      const wX0 = ankle.x + 1.05 * D, wy0 = ankle.y + 0.02 * D, wLean = 0.16 * D;
-      const wTop = (s: number) => wy0 + (s - wX0) * 0.10;
-      const wedge = (s0: number, s1: number, bRear: number, bFront: number, tint: number) => {
+      // 模式「叠瓦楔板」（模式库 L1·足型子构造，用户连定）：横排、
+      // // 排列、楔形——两块近水平薄板沿趾顶阶梯成一横排；缝为
+      // / 向（上端在前、下端在后）；每块是楔形：顶边沿排下行、底
+      // 边贴趾顶阶梯落级，厚度自根部向前收薄（水平薄板若上下平
+      // 行就把楔形丢了）。叠瓦次序：前板先画、后板尖压前板根。
+      // 参数（×D）：排首 1.05、排高 0.02、缝斜 lean 0.16、顶边斜率 0.10
+      const WEDGE = { x0: 1.05, y0: 0.02, lean: 0.16, slope: 0.10 };
+      const wX0 = ankle.x + WEDGE.x0 * D, wy0 = ankle.y + WEDGE.y0 * D, wLean = WEDGE.lean * D;
+      const wTop = (s: number) => wy0 + (s - wX0) * WEDGE.slope;
+      // 底边贴趾顶阶梯：板跨两个趾顶时底边在趾界处落一级——底边
+      // 拉平就跨着台阶悬空（前板曾以平底悬在第三趾上方成挂板）
+      const wedge = (s0: number, s1: number, bottom: Pt[], tint: number) => {
         cv.insts.push({ kind: 'foot' }); const bid = id;
         fillShape(cv, id, polyTest([
           { x: s0, y: wTop(s0) }, { x: s1, y: wTop(s1) },
-          { x: s1 - wLean, y: bFront }, { x: s0 - wLean, y: bRear },
+          ...bottom.slice().reverse(),
         ])); id++;
         A.plateTint.set(bid, tint);
       };
-      wedge(ankle.x + 1.96 * D, ankle.x + 2.80 * D, GY - 0.46 * D, GY - 0.43 * D, 1.05); // 前板（先画）
-      wedge(wX0, ankle.x + 2.08 * D, GY - 0.52 * D, GY - 0.528 * D, 0.94); // 后板（尖压前板根）
+      const toe2x = ankle.x + 1.42 * D, toe3x = ankle.x + 2.24 * D; // 趾界（toeG 起点）
+      wedge(ankle.x + 1.96 * D, ankle.x + 2.80 * D, [ // 前板（先画）：趾2顶→趾3顶
+        { x: ankle.x + 1.96 * D - wLean, y: GY - 0.46 * D }, { x: toe3x, y: GY - 0.46 * D },
+        { x: toe3x, y: GY - 0.40 * D }, { x: ankle.x + 2.80 * D - wLean, y: GY - 0.40 * D },
+      ], 1.05);
+      wedge(wX0, ankle.x + 2.08 * D, [ // 后板（尖压前板根）：趾1顶→趾2顶
+        { x: wX0 - wLean, y: GY - 0.52 * D }, { x: toe2x, y: GY - 0.52 * D },
+        { x: toe2x, y: GY - 0.46 * D }, { x: ankle.x + 2.08 * D - wLean, y: GY - 0.46 * D },
+      ], 0.94);
       // 跟块：楔块平坐地。顶边两段——靠盘陡升段沿主线（FT→BK），
       // 其后浅段（BK→RT）向后缓降；FT = 顶边触盘点
       const FT = { x: ankle.x - 0.15 * D, y: ankle.y + 0.1 * D };
@@ -515,32 +595,35 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
         A.plateTint.set(bid, 0.95);
         A.boltPts.push({ x: (BK.x + RT.x) / 2, y: (BK.y + RT.y) / 2 + 12 }); // 跟块面上一颗栓（参考两张都有）
       }
-      // 压块套：主线在盘对面的落点——套心在盘心沿主线 0.62D 处，
-      // 长轴沿主线
+      // 模式「压块总成」（模式库 L1·足型子构造）：一条主线
+      // （LINE_ANG，标注定版）贯穿跟块陡升段—盘心—压块顶边；踝前
+      // 小套环是主线在盘对面的落点（套心 = 盘心沿主线 0.62D）；
+      // 压块顶边贴主线、自 0.98D 处向前上行、主面一块，前端料厚
+      // 以高光棱表示（模式库「料厚」条目，非独立件）
       {
         const scx = ankle.x + dir.x * 0.62 * D, scy = ankle.y + dir.y * 0.62 * D;
         blkP(scx, scy, 0.95 * D * HS, 0.58 * D, LINE_ANG, { bt: 0.25, bb: 0.35, fb: 0.20 }, 1.02);
         A.boltPts.push({ x: scx, y: scy });
       }
-      // 压块（折板）：顶边贴主线、自盘心沿主线 0.98D 处向前上行，
-      // 主面一块；前端窄面是垂直主线的一块亮面，压住主面前端成折
       {
         const slabLen = 1.45 * D * HS, slabThick = 0.8 * D, slabRear = 0.98 * D;
         const mx = ankle.x + dir.x * (slabRear + slabLen / 2), my = ankle.y + dir.y * (slabRear + slabLen / 2);
         const slabCx = mx + nrm.x * slabThick / 2, slabCy = my + nrm.y * slabThick / 2;
+        const slabId = id;
         blkP(slabCx, slabCy, slabLen, slabThick, LINE_ANG, { bb: 0.30, ft: 0.30, fb: 0.15 }, 0.95, false);
         A.boltPts.push({ x: mx - dir.x * slabLen * 0.14 + nrm.x * slabThick * 0.68, y: my - dir.y * slabLen * 0.14 + nrm.y * slabThick * 0.68 }); // 压块面低处一颗栓（参考两张都有）
-        // 前端是压块自身的厚度（用户定：是个厚度、不是个块）：
-        // 沿压块前端边、向内一个料厚宽的端面带，与压块同轮廓——
-        // 顶/底边即压块自身的边，不出轮廓、无独立外形
+        // 前端料厚以高光棱表示（用户定：厚度是画高光棱表示的、
+        // 不是个块）：棱线离前端边一个料厚、与前端边平行，登记给
+        // 着色层在压块自身像素上画——棱线提亮、线至边间平色差
         {
           const hl = slabLen / 2, ht = slabThick / 2, cA = Math.cos(LINE_ANG), sA = Math.sin(LINE_ANG);
           const rot = (lx: number, ly: number): Pt => ({ x: slabCx + lx * cA - ly * sA, y: slabCy + lx * sA + ly * cA });
-          const fT = rot(hl, -ht + slabThick * 0.30 * 0.75), fB = rot(hl - slabThick * 0.15, ht);
-          const w = slabThick * 0.16; // 料厚
-          cv.insts.push({ kind: 'plate' }); const bid = id;
-          fillShape(cv, id, polyTest([fT, fB, { x: fB.x - dir.x * w, y: fB.y - dir.y * w }, { x: fT.x - dir.x * w, y: fT.y - dir.y * w }])); id++;
-          A.plateTint.set(bid, 1.12);
+          const fT0 = rot(hl, -ht + slabThick * 0.30 * 0.75), fB0 = rot(hl - slabThick * 0.15, ht);
+          const w = slabThick * (spec.thickRatio ?? 0.16); // 料厚（模式库「料厚」条目参数）
+          const rA = { x: fT0.x + (fB0.x - fT0.x) * 0.06 - dir.x * w, y: fT0.y + (fB0.y - fT0.y) * 0.06 - dir.y * w };
+          const rB = { x: fT0.x + (fB0.x - fT0.x) * 0.94 - dir.x * w, y: fT0.y + (fB0.y - fT0.y) * 0.94 - dir.y * w };
+          (A.ridges ??= []).push({ inst: slabId, pts: [rA, rB], tone: 1.30, faceW: w, faceDx: dir.x, faceDy: dir.y, faceTone: 0.95 });
+          (A.ridgeMode ??= new Set()).add(slabId);
         }
       }
     }
@@ -566,9 +649,11 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     fillShape(cv, id, polyTest(pts)); id++;
     A.plateTint.set(A.guardId, 1.05);
     A.panelLines.set(A.guardId, [0.52, 0.79]);
-    // 压块套连胫骨套（用户定）：护板下端到踝前压块套之间一条连带，
-    // 贴小腿前表面下行、压住套的上缘——两套相连成一个套系，小腿前
-    // 轮廓在连带处收进，凹轮廓由此形成（套心与足节同式：主线 -0.40、0.62·50）
+    polyLip(A, A.guardId, pts, 0.52); polyLip(A, A.guardId, pts, 0.79);
+    // 模式「套系连带」（模式库 L1·护板子构造，用户定）：护板下端
+    // 到踝前压块套之间一条连带，贴小腿前表面下行、压住套的上
+    // 缘——两套相连成一个套系，小腿前轮廓在连带处收进，凹轮廓
+    // 由此形成（套心与压块总成同式：主线 -0.40、盘心沿主线 0.62·50）
     {
       const dirL = { x: Math.cos(-0.40), y: Math.sin(-0.40) }, nrmL = { x: -dirL.y, y: dirL.x };
       const sc = { x: ankle.x + dirL.x * 31, y: ankle.y + dirL.y * 31 };
@@ -605,6 +690,7 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     cv.insts.push({ kind: 'plate' }); const capId = id;
     fillShape(cv, id, polyTest(cap)); id++;
     A.plateTint.set(capId, 1.06); A.panelLines.set(capId, [0.55]);
+    polyLip(A, capId, cap, 0.55);
     // 大腿前小盒 + 小腿后挂盒
     const box = (cx: number, cy: number, w: number, h: number) => {
       cv.insts.push({ kind: 'plate' }); const bid = id;
@@ -637,8 +723,10 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     }
     // 踝前护板
     cv.insts.push({ kind: 'plate' }); const agId = id;
-    fillShape(cv, id, polyTest([{ x: ankle.x + 16, y: 402 }, { x: ankle.x + 36, y: 412 }, { x: ankle.x + 37, y: 442 }, { x: ankle.x + 25, y: 458 }, { x: ankle.x + 13, y: 434 }])); id++;
+    const agPts = [{ x: ankle.x + 16, y: 402 }, { x: ankle.x + 36, y: 412 }, { x: ankle.x + 37, y: 442 }, { x: ankle.x + 25, y: 458 }, { x: ankle.x + 13, y: 434 }];
+    fillShape(cv, id, polyTest(agPts)); id++;
     A.plateTint.set(agId, 1.0); A.panelLines.set(agId, [0.5]);
+    polyLip(A, agId, agPts, 0.5);
     // 提手：大腿下板正面 Π 形（两脚 + 横杆，金属色）
     const hf = segFrame(thigh.a, thigh.b); const hsgn = std ? -1 : 1;
     const H = (t: number, off: number): Pt => ({ x: thigh.a.x + hf.ux * hf.len * t + hf.px * hsgn * off, y: thigh.a.y + hf.uy * hf.len * t + hf.py * hsgn * off });
@@ -849,7 +937,7 @@ function finishRender(cv: MechaCanvas, A: Anchors, spec: LegSpec) {
       let fz = uu < fb1 ? tBack : uu < fb2 ? tMain : uu < fb2 + bevW ? tBev : tEdge;
       if (spec.shellMode) fz = 1 + (fz - 1) * 0.75; // 人形壳面间对比略柔
       if (h1 > 0.45 && v > 0.52 + 0.28 * uu) fz *= 0.9; // 斜折面
-      if (bevW > 0 && Math.abs(uu - fb2) < 0.028) fz *= 1.15; // 主折线亮棱（主面一侧）
+      if (bevW > 0 && Math.abs(uu - fb2) < 0.028 && !A.ridgeMode?.has(o)) fz *= 1.15; // 主折线亮棱（登记过高光棱模式的件跳过，走模式 pass）
       let f = fz * tint * (1 + (mottle - 1) * 0.35);
       if (v < 0.045) f *= 1.13; else if (v > 0.955) f *= 0.8; // 板端平带：上亮下暗
       f = quant(f);
@@ -867,14 +955,14 @@ function finishRender(cv: MechaCanvas, A: Anchors, spec: LegSpec) {
       for (const lv of A.panelLines.get(o) ?? []) {
         const lvE = dg ? lv + dg * u * 0.45 : lv;
         if (Math.abs(v - lvE) < 0.011) c = ramp(base, f * 0.58);
-        else if (Math.abs(v - lvE - 0.017) < 0.008) c = ramp(base, f * 1.17); // 刻线下唇受光
+        else if (Math.abs(v - lvE - 0.017) < 0.008 && !A.ridgeMode?.has(o)) c = ramp(base, f * 1.17); // 刻线下唇受光（登记件走模式 pass）
       }
       const tee = A.panelTee.get(o);
       if (tee !== undefined && Math.abs(u - tee) < 0.02 && v > 0.18 && v < 0.82) c = ramp(base, f * 0.58); // T 接头
       const su = A.seamU.get(o);
       if (su !== undefined && v > 0.12 && v < 0.88) {
         if (Math.abs(u - su) < 0.02) c = ramp(base, f * 0.58);
-        else if (Math.abs(u - su + 0.034) < 0.009) c = ramp(base, f * 1.15); // 竖缝前侧受光唇
+        else if (Math.abs(u - su + 0.034) < 0.009 && !A.ridgeMode?.has(o)) c = ramp(base, f * 1.15); // 竖缝前侧受光唇（登记件走模式 pass）
       }
       // 警示纹在细节段按线段距离盖章（见下方 chevrons），此处不处理
       // 鞋底纹：脚底横向刻槽
@@ -1102,6 +1190,27 @@ function finishRender(cv: MechaCanvas, A: Anchors, spec: LegSpec) {
     else if (cv.owner[i + 1] !== o) set(i, ramp(cur, 1.12));
     else if (cv.owner[i - 1] !== o) set(i, ramp(cur, 0.8));
   }
+  // 高光棱模式（单一实现）：登记的棱线在件自身像素上提亮；
+  // 带 faceW 的棱线另给前侧料厚面一档平色差。不登记的件不走此路；
+  // spec.ridges=false 时整表不画（公式旧路对登记件仍跳过，不复活第二实现）
+  for (const r of spec.ridges === false ? [] : A.ridges ?? []) {
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      if (cv.owner[i] !== r.inst) continue;
+      let dMin = 1e9, qFace = -1;
+      for (let s = 0; s + 1 < r.pts.length; s++) {
+        const ax = r.pts[s].x, ay = r.pts[s].y, bx = r.pts[s + 1].x, by = r.pts[s + 1].y;
+        const ex = bx - ax, ey = by - ay, L2 = ex * ex + ey * ey || 1;
+        let tt = ((x - ax) * ex + (y - ay) * ey) / L2; tt = Math.max(0, Math.min(1, tt));
+        const dxp = x - (ax + ex * tt), dyp = y - (ay + ey * tt);
+        const d = Math.hypot(dxp, dyp);
+        if (d < dMin) dMin = d;
+        if (s === 0 && r.faceW) qFace = (x - ax) * (r.faceDx ?? 0) + (y - ay) * (r.faceDy ?? 0);
+      }
+      if (dMin <= 0.9) set(i, ramp(get(i), r.tone));
+      else if (r.faceW && qFace > 0.9 && qFace <= r.faceW) set(i, ramp(get(i), r.faceTone ?? 0.95));
+    }
+  }
   // 凹陷暗影：板压板处接缝下方落影（盖过棱线提亮）、第二行余影、关节盘窝影
   for (let y = 2; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
     const i = y * W + x, o = cv.owner[i];
@@ -1232,11 +1341,17 @@ function makeLayerTools(cv: MechaCanvas, seed: number): LayerTools {
     if (rnd() < 0.3) A.panelDiag.set(myId, (rnd() - 0.5) * 0.9);
     if (rnd() < 0.35) A.panelTee.set(myId, 0.1 + rnd() * 0.8);
   };
+  // 高光棱模式登记（多边形件）：reg 定的刻线/竖缝，其唇改走模式 pass
+  const regPolyRidges = (myId: number, pts: Pt[]) => {
+    for (const lv of A.panelLines.get(myId) ?? []) polyLip(A, myId, pts, lv);
+    const su = A.seamU.get(myId); if (su !== undefined) polySeamLip(A, myId, pts, su);
+  };
   const addBlock = (kind: Kind, cx: number, cy: number, w: number, h: number, ang = 0, cham = 0.36, bolts = false): number => {
     cv.insts.push({ kind }); const myId = id;
-    const t = polyTest(blockPolyT(cx, cy, w, h, ang, cham, myId + 2000));
+    const bp = blockPolyT(cx, cy, w, h, ang, cham, myId + 2000);
+    const t = polyTest(bp);
     fillShape(cv, id, t); id++;
-    if (kind === 'plate') reg(myId);
+    if (kind === 'plate') { reg(myId); regPolyRidges(myId, bp); }
     if (bolts) for (const [bx, by] of [[cx - w / 2 + 6, cy - h / 2 + 6], [cx + w / 2 - 6, cy - h / 2 + 6], [cx - w / 2 + 6, cy + h / 2 - 6], [cx + w / 2 - 6, cy + h / 2 - 6]] as const) A.boltPts.push({ x: bx, y: by });
     return myId;
   };
@@ -1257,9 +1372,36 @@ function makeLayerTools(cv: MechaCanvas, seed: number): LayerTools {
     cv.insts.push({ kind }); const myId = id;
     fillShape(cv, id, plateTest(a2, b2, wA * proud, wB * proud, t0, t1, gap, 0, 0, { f: 0, b: 0 }, shape)); id++;
     reg(myId);
+    // 高光棱模式登记（段板件）：折棱/刻线唇/竖缝唇走模式 pass，
+    // 采样与 plateTest 的 (u,v) 场同式（本工具 bulge 恒 0）
+    if (kind === 'plate' || kind === 'foot') {
+      const fr = segFrame(a2, b2);
+      const hwAt = (t: number) => (wA * proud + (wB * proud - wA * proud) * t) / 2;
+      const ptAt = (t: number, dd: number): Pt => {
+        const local = (t - t0) / (t1 - t0);
+        let dC = 0;
+        if (shape && shape.step !== 0) { const sp = shape.stepPos; dC = local >= sp ? shape.step : local > sp - 0.05 ? (shape.step * (local - (sp - 0.05))) / 0.05 : 0; }
+        return { x: a2.x + fr.ux * t * fr.len + fr.px * (dd + dC), y: a2.y + fr.uy * t * fr.len + fr.py * (dd + dC) };
+      };
+      const lineAtU = (uu: number, l0: number, l1: number): Pt[] => {
+        const pts: Pt[] = [];
+        for (let k = 0; k <= 4; k++) { const local = l0 + (l1 - l0) * k / 4, t = t0 + local * (t1 - t0); pts.push(ptAt(t, uu * hwAt(t))); }
+        return pts;
+      };
+      (A.ridgeMode ??= new Set()).add(myId);
+      const h2 = (((myId * 40503 + 7) >>> 0) % 100) / 100, h3 = (((myId * 2246822519) >>> 0) % 100) / 100;
+      if (h3 >= 0.3) (A.ridges ??= []).push({ inst: myId, pts: lineAtU(0.15 + h2 * 0.5, 0.05, 0.95), tone: 1.15 });
+      const dg = A.panelDiag.get(myId) ?? 0;
+      for (const lv of A.panelLines.get(myId) ?? []) {
+        const tF = t0 + (lv + dg * -1 * 0.45 + 0.017) * (t1 - t0), tB = t0 + (lv + dg * 1 * 0.45 + 0.017) * (t1 - t0);
+        (A.ridges ??= []).push({ inst: myId, pts: [ptAt(tF, -hwAt(tF) * 0.97), ptAt(tB, hwAt(tB) * 0.97)], tone: 1.17 });
+      }
+      const su = A.seamU.get(myId);
+      if (su !== undefined) (A.ridges ??= []).push({ inst: myId, pts: lineAtU(su - 0.034, 0.14, 0.86), tone: 1.15 });
+    }
     return myId;
   };
-  const addPoly = (pts: Pt[], bolts = false): number => { cv.insts.push({ kind: 'plate' }); const myId = id; fillShape(cv, id, polyTest(pts)); id++; reg(myId); if (bolts) { const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y); const x0 = Math.min(...xs) + 6, x1 = Math.max(...xs) - 6, y0 = Math.min(...ys) + 6, y1 = Math.max(...ys) - 6; for (const [bx, by] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]] as const) A.boltPts.push({ x: bx, y: by }); } return myId; };
+  const addPoly = (pts: Pt[], bolts = false): number => { cv.insts.push({ kind: 'plate' }); const myId = id; fillShape(cv, id, polyTest(pts)); id++; reg(myId); regPolyRidges(myId, pts); if (bolts) { const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y); const x0 = Math.min(...xs) + 6, x1 = Math.max(...xs) - 6, y0 = Math.min(...ys) + 6, y1 = Math.max(...ys) - 6; for (const [bx, by] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]] as const) A.boltPts.push({ x: bx, y: by }); } return myId; };
   const addRaw = (kind: Kind, test: (x: number, y: number) => [boolean, number, number]): number => { cv.insts.push({ kind }); const myId = id; fillShape(cv, id, test); id++; return myId; };
   const rod = (a: Pt, b: Pt, r: number): number => addRaw('cyl', lineTest(a, b, r));
   const finish = () => { for (let i = 0; i < W * H; i++) if (cv.owner[i] >= 0) cv.sil[i] = 1; };
