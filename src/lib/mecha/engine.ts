@@ -529,8 +529,6 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
         const mx = ankle.x + dir.x * (slabRear + slabLen / 2), my = ankle.y + dir.y * (slabRear + slabLen / 2);
         blkP(mx + nrm.x * slabThick / 2, my + nrm.y * slabThick / 2, slabLen, slabThick, LINE_ANG, { bb: 0.30, ft: 0.30, fb: 0.15 }, 0.95, false);
         A.boltPts.push({ x: mx - dir.x * slabLen * 0.14 + nrm.x * slabThick * 0.68, y: my - dir.y * slabLen * 0.14 + nrm.y * slabThick * 0.68 }); // 压块面低处一颗栓（参考两张都有）
-        const fx = ankle.x + dir.x * (slabRear + slabLen) + nrm.x * (slabThick / 2 + 0.05 * D), fy = ankle.y + dir.y * (slabRear + slabLen) + nrm.y * (slabThick / 2 + 0.05 * D);
-        blkP(fx - dir.x * 0.16 * D, fy - dir.y * 0.16 * D, slabThick * 0.72, 0.3 * D, LINE_ANG + Math.PI / 2, {}, 1.1, false);
       }
     }
   }
