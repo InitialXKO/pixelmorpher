@@ -465,7 +465,7 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       };
       // 接地趾：平顶块（顶平、底面坐 GY、逐级下行是标注读数）。
       // 后缘上端前倾是相邻趾块相抵的缝（标注读数）；前端斜面是趾帽
-      // 折面（与压块前端窄面同式、两参考每趾都有），不是装饰切口；
+      // 折面（两参考每趾都有），不是装饰切口；
       // 其余角保持完整。此前借 jagPoly 出图、切口只剩 1–6px，图上
       // 就是矩形（四边形退化的一处）
       const toeG = (x0: number, len: number, thick: number, tint: number) => {
@@ -527,8 +527,21 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
       {
         const slabLen = 1.45 * D * HS, slabThick = 0.8 * D, slabRear = 0.98 * D;
         const mx = ankle.x + dir.x * (slabRear + slabLen / 2), my = ankle.y + dir.y * (slabRear + slabLen / 2);
-        blkP(mx + nrm.x * slabThick / 2, my + nrm.y * slabThick / 2, slabLen, slabThick, LINE_ANG, { bb: 0.30, ft: 0.30, fb: 0.15 }, 0.95, false);
+        const slabCx = mx + nrm.x * slabThick / 2, slabCy = my + nrm.y * slabThick / 2;
+        blkP(slabCx, slabCy, slabLen, slabThick, LINE_ANG, { bb: 0.30, ft: 0.30, fb: 0.15 }, 0.95, false);
         A.boltPts.push({ x: mx - dir.x * slabLen * 0.14 + nrm.x * slabThick * 0.68, y: my - dir.y * slabLen * 0.14 + nrm.y * slabThick * 0.68 }); // 压块面低处一颗栓（参考两张都有）
+        // 前端是压块自身的厚度（用户定：是个厚度、不是个块）：
+        // 沿压块前端边、向内一个料厚宽的端面带，与压块同轮廓——
+        // 顶/底边即压块自身的边，不出轮廓、无独立外形
+        {
+          const hl = slabLen / 2, ht = slabThick / 2, cA = Math.cos(LINE_ANG), sA = Math.sin(LINE_ANG);
+          const rot = (lx: number, ly: number): Pt => ({ x: slabCx + lx * cA - ly * sA, y: slabCy + lx * sA + ly * cA });
+          const fT = rot(hl, -ht + slabThick * 0.30 * 0.75), fB = rot(hl - slabThick * 0.15, ht);
+          const w = slabThick * 0.16; // 料厚
+          cv.insts.push({ kind: 'plate' }); const bid = id;
+          fillShape(cv, id, polyTest([fT, fB, { x: fB.x - dir.x * w, y: fB.y - dir.y * w }, { x: fT.x - dir.x * w, y: fT.y - dir.y * w }])); id++;
+          A.plateTint.set(bid, 1.12);
+        }
       }
     }
   }
