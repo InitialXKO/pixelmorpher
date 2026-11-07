@@ -219,7 +219,7 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
   };
   let id = 0;
   const A: Anchors = { plateTint: new Map(), panelLines: new Map(), boltPts: [], ventId: -1, guardId: -1, stripeId: -1, decalPos: { x: 0, y: 0 }, numPos: { x: 0, y: 0 }, numText: '', lightPts: [], discs: [], chevrons: [], seamU: new Map(), insignia: { pos: { x: 0, y: 0 }, kind: 0 }, stripeThigh: -1, blockPlates: new Set(), deviceFrame: null, chevDecal: true, shinIds: new Set(), stripeSegs: [], panelDiag: new Map(), panelTee: new Map(), decalKind: 'num', toeFace: null, colorRole: new Map() };
-  const addPlate = (a: Pt, b: Pt, wA: number, wB: number, t0: number, t1: number, gap: number, cutA: number, cutB: number, kind: Kind = 'plate', bulge: Bulge = { f: 0, b: 0 }) => {
+  const addPlate = (a: Pt, b: Pt, wA: number, wB: number, t0: number, t1: number, gap: number, cutA: number, cutB: number, kind: Kind = 'plate', bulge: Bulge = { f: 0, b: 0 }, clipFn?: (x: number, y: number) => boolean) => {
     // 独立成廓：每块板绕自身中心微转 + 横移 + 出边，轮廓在接缝处出天然台阶
     const js = (spec.shellMode ? 0.4 : 1) * (kind === 'foot' ? 0.5 : 1);
     const jit = (rnd() - 0.5) * 6.4 * js, rot = (rnd() - 0.5) * 0.11 * js, proud = 1 + (0.02 + rnd() * 0.1) * js;
@@ -233,12 +233,13 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     const hwAvg = (wA + wB) / 4, shScale = kind === 'foot' ? 0.5 : 1;
     const cham = () => (rnd() < 0.3 ? rnd() * 5 : (0.2 + rnd() * 0.8) * hwAvg * 0.9) * shScale;
     const shape: PlateShape = { cTF: cham(), cTB: cham(), cBF: cham(), cBB: cham(), step: rnd() < 0.4 ? (rnd() - 0.5) * 14 : 0, stepPos: 0.3 + rnd() * 0.4 };
+    const wrapClip = (t: (x: number, y: number) => [boolean, number, number]) => clipFn ? (x: number, y: number): [boolean, number, number] => { const r = t(x, y); return r[0] && !clipFn(x, y) ? r : [false, 0, 0] as [boolean, number, number]; } : t;
     if (kind === 'plate') { // 板衬边：同形宽 ×1.05 的框垫片，属板组件
       cv.insts.push({ kind: 'frame' });
-      fillShape(cv, id, plateTest(a2, b2, wA * proud * 1.05, wB * proud * 1.05, Math.max(0, t0 - 0.008), Math.min(1, t1 + 0.008), 0, cutA, cutB, bulge, shape)); id++;
+      fillShape(cv, id, wrapClip(plateTest(a2, b2, wA * proud * 1.05, wB * proud * 1.05, Math.max(0, t0 - 0.008), Math.min(1, t1 + 0.008), 0, cutA, cutB, bulge, shape))); id++;
     }
     cv.insts.push({ kind }); const myId = id;
-    fillShape(cv, id, plateTest(a2, b2, wA * proud, wB * proud, t0, t1, gap, cutA, cutB, bulge, shape)); id++;
+    fillShape(cv, id, wrapClip(plateTest(a2, b2, wA * proud, wB * proud, t0, t1, gap, cutA, cutB, bulge, shape))); id++;
     A.plateTint.set(myId, [0.78, 0.9, 1.0, 1.1, 1.24][Math.floor(rnd() * 5)]);
     const lines: number[] = []; const dtl = spec.detail ?? 1;
     const n = dtl < 0.7 ? (rnd() < 0.55 ? 0 : 1) : dtl > 1.1 ? 2 + Math.floor(rnd() * 2) : 1 + Math.floor(rnd() * 2);
@@ -312,7 +313,7 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
   // 3) 段板：种子不等分 2–3 块，每块独立宽缩放/收分/切角/间隙
   const fw = spec.frameHeavy ? 0.68 : 1;
   const fg = spec.shellMode ? 1.4 : spec.frameHeavy ? 8.5 : 5;
-  const segPlates = (seg: { a: Pt; b: Pt; wA: number; wB: number; bulge: Bulge }): number[] => {
+  const segPlates = (seg: { a: Pt; b: Pt; wA: number; wB: number; bulge: Bulge }, clipFn?: (x: number, y: number) => boolean): number[] => {
     const n = spec.shellMode ? 2 : (rnd() < 0.35 ? 3 : 2);
     const cuts: number[] = [0.006];
     if (n === 2) cuts.push(0.3 + rnd() * 0.38);
@@ -321,7 +322,7 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
     const ids: number[] = [];
     for (let k = 0; k < n; k++) {
       const sA = (0.97 + rnd() * 0.28) * fw, sB = (0.97 + rnd() * 0.28) * fw; // 逐块独立宽与收分（v29 宽度分布整体上移，保形态扩）
-      ids.push(addPlate(seg.a, seg.b, seg.wA * sA, seg.wB * sB, cuts[k], cuts[k + 1], fg * (0.6 + rnd() * 1.1), rnd() * 24, rnd() * 24, 'plate', seg.bulge));
+      ids.push(addPlate(seg.a, seg.b, seg.wA * sA, seg.wB * sB, cuts[k], cuts[k + 1], fg * (0.6 + rnd() * 1.1), rnd() * 24, rnd() * 24, 'plate', seg.bulge, clipFn));
     }
     return ids;
   };
@@ -340,7 +341,19 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
   }
   A.stripeThigh = thighIds[0];
   A.ventId = thighIds[thighIds.length - 1];
-  const shinIds = segPlates(shin);
+  // 小腿板止于压块套靠指尖一侧的端边：套整体是斜的、该端是一条边，
+  // 板角越过这条边就成了挂在边上的孤角。按套的局部坐标盒裁小腿板
+  // （含衬边）——盒内其余位置本就被压块/连带盖住、裁掉不可见，
+  // 只有越界的角被收回（套的几何与 §5 同一数据：D=50、主线 -0.40）
+  const shinClip = (x: number, y: number): boolean => {
+    const D = 50, HS = (spec.wScale ?? 1) >= 1.3 ? 1.12 : 1, LA = -0.40;
+    const dx = Math.cos(LA), dy = Math.sin(LA), nx = -dy, ny = dx;
+    const scx = ankle.x + dx * 0.62 * D, scy = ankle.y + dy * 0.62 * D;
+    const u = dx * (x - scx) + dy * (y - scy), v = nx * (x - scx) + ny * (y - scy);
+    const hl = 0.95 * D * HS / 2, ht = 0.58 * D / 2;
+    return u > hl - 4 && u < hl + 30 && v > -ht - 18 && v < ht + 18;
+  };
+  const shinIds = segPlates(shin, shinClip);
   A.shinIds = new Set(shinIds);
   if (spec.shellMode) {
     const sf = segFrame(shin.a, shin.b); const sgn2 = std ? -1 : 1;
