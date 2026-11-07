@@ -16,6 +16,7 @@ import { evalExpression } from '../expression-parser';
 import type { ModifierParamValue, PartAnimationModifier } from '../types';
 import { solveIK2Bone, solveIKFabrik } from './ik';
 import { rotatePseudo3D } from '../unified-types';
+import { getMechaPartGrid } from '../mecha/build-character';
 
 /**
  * Cubic-bezier 缓动求值（借鉴 keyframe-engine）。
@@ -153,6 +154,16 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // 精灵源：从 eval 上下文取原始像素图（由渲染管线传入）
   sprite_source: (_n, _i, ctx): Record<string, BlueprintValue> => {
     const grid = (ctx as any).spritePixels;
+    if (!grid) return {};
+    return { pixels: pixelsVal(grid) };
+  },
+
+  // 机甲源：模式库程序化机甲部件（PR #88 落地）。part 选部位
+  // （leg/armUpper/armFore/torso/head/hullWalker/hullHauler），
+  // family 选族（olive/agile/powersuit，车体忽略）；像素格由
+  // getMechaPartGrid 按 族:部位 缓存，求值只读缓存。
+  mecha_source: (n): Record<string, BlueprintValue> => {
+    const grid = getMechaPartGrid(String(n.params.family ?? 'olive'), String(n.params.part ?? 'leg'));
     if (!grid) return {};
     return { pixels: pixelsVal(grid) };
   },
@@ -2497,6 +2508,7 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   costume: '服装源',
   costume_state: '服装状态',
   character_source: '角色源',
+  mecha_source: '机甲源',
   // 数学
   add: '加',
   sub: '减',

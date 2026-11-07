@@ -1197,6 +1197,25 @@ function ensureAtlas(gl, variant, costumeName) {
       }
     }
   }
+  // 驱动帧（履带滚动）：带 drive 的精灵部件把相位帧（第 1 帧起）
+  // 烘成瓦片入图集，条目键带 #drive<fi>，打包时折进部件条目的
+  // driveFrames（与 #corr 同路）；第 0 帧即部件本体瓦片，折叠时
+  // 回填。当前服装集该槽图与部件自带图不同（换装覆盖/显式为空）
+  // 时不跟驱动（驱动帧只对自带图成立）
+  for (const part of PARTS) {
+    if (!part.spriteKind || !part.drive || !part.drive.frames || !part.drive.frames.length) continue;
+    const csGrid = costume && costume.__sprite ? costume.__sprite[part.key] : undefined;
+    if (csGrid !== undefined && (!part.sprite || !csGrid || csGrid.w !== part.sprite.w || csGrid.h !== part.sprite.h || gridHashOf(csGrid) !== gridHashOf(part.sprite))) continue;
+    const mirrored = variantMirrored(part, variant);
+    for (let fi = 1; fi <= part.drive.frames.length; fi++) {
+      const grid = part.drive.frames[fi - 1];
+      const key = [part.key, variant, costumeName, 'D', fi, grid.w, grid.h, grid.plug.join(','), gridHashOf(grid), mirrored ? 'M' : ''].join('|');
+      let tile = tileCache.get(key);
+      if (!tile) { tile = spriteTileOf(grid, mirrored); tileCache.set(key, tile); }
+      tiles.push(tile);
+      entries.push([part.key + '#drive' + fi, tile, { params: { ...part.base, off: [0, 0] }, composite: 'sprite', halo: 0, baseSprite: null }, mirrored, grid, null, 0]);
+    }
+  }
   // 团块/火焰场槽（乙8 改造）：跟随口径 = 范围/位置跟、形态不跟
   // （用户定案）——烘焙帧一缩放就是拉伸形态，故图集只预留定尺寸
   // 场槽（域上限 = 形变 2 倍时的场尺寸），每帧由场作业按当帧
@@ -1231,18 +1250,23 @@ function ensureAtlas(gl, variant, costumeName) {
     });
   }
   const palMapAtlas = paletteSwapMap();
-  const pack = packAtlas(tiles, 256);
+  // 图集宽：缺省 256；有瓦片更宽时按最宽瓦片放大（打包/行跨度/纹理
+  // 尺寸同用此宽；着色器按 texelFetch 整数坐标取样，不依赖归一化宽度）
+  let AW = 256;
+  for (const t of tiles) if (t.w > AW) AW = t.w;
+  const pack = packAtlas(tiles, AW);
   const height = pack.height;
   const slashTiles = {};
   const animFrameMap = {};
   const corrFrameMap = {};
-  const data = new Uint8Array(256 * height * 4);
-  const baseData = new Uint8Array(256 * height * 4);
-  const glowData = new Uint8Array(256 * height * 4);
+  const driveFrameMap = {};
+  const data = new Uint8Array(AW * height * 4);
+  const baseData = new Uint8Array(AW * height * 4);
+  const glowData = new Uint8Array(AW * height * 4);
   tiles.forEach((tile, i) => {
     const ax = pack.placements[i][0], ay = pack.placements[i][1];
     for (let j = 0; j < tile.h; j++) {
-      data.set(tile.data.subarray(j * tile.w * 4, (j + 1) * tile.w * 4), ((ay + j) * 256 + ax) * 4);
+      data.set(tile.data.subarray(j * tile.w * 4, (j + 1) * tile.w * 4), ((ay + j) * AW + ax) * 4);
     }
     // 底图（overlay 底色 / 精灵直贴图）：与档位瓦片同格对齐（镜像时列翻转）。
     // 行序须随瓦片族：精灵瓦片是产品行序（自上而下）→ 同序写入；
@@ -1274,7 +1298,7 @@ function ensureAtlas(gl, variant, costumeName) {
             const to = palMapAtlas.get((rgb[0] << 16) | (rgb[1] << 8) | rgb[2]);
             if (to !== undefined) rgb = [(to >> 16) & 255, (to >> 8) & 255, to & 255];
           }
-          const o = ((ay + j) * 256 + ax + ii) * 4;
+          const o = ((ay + j) * AW + ax + ii) * 4;
           baseData[o] = rgb[0]; baseData[o + 1] = rgb[1]; baseData[o + 2] = rgb[2]; baseData[o + 3] = 255;
         }
       }
@@ -1305,7 +1329,7 @@ function ensureAtlas(gl, variant, costumeName) {
           const src3 = (sy * gw + sx) * 3;
           const v0 = gd[src3] || 0, v1 = gd[src3 + 1] || 0, v2 = gd[src3 + 2] || 0;
           if (!v0 && !v1 && !v2) continue;
-          const o = ((ay + j) * 256 + ax + ii) * 4;
+          const o = ((ay + j) * AW + ax + ii) * 4;
           glowData[o] = v0; glowData[o + 1] = v1; glowData[o + 2] = v2; glowData[o + 3] = 255;
         }
       }
@@ -1313,7 +1337,7 @@ function ensureAtlas(gl, variant, costumeName) {
     if (resolved.composite === 'slashfx') {
       const fr = entries[i][4];
       for (let j = 0; j < fr.h; j++) {
-        baseData.set(fr.data.subarray(j * fr.w * 4, (j + 1) * fr.w * 4), ((ay + 2 + j) * 256 + ax + 2) * 4);
+        baseData.set(fr.data.subarray(j * fr.w * 4, (j + 1) * fr.w * 4), ((ay + 2 + j) * AW + ax + 2) * 4);
       }
       const key = entries[i][0];
       if (key.startsWith('field:')) {
@@ -1333,7 +1357,15 @@ function ensureAtlas(gl, variant, costumeName) {
     const ekey = entries[i][0];
     const corrPos = ekey.indexOf('#corr');
     const animPos = ekey.indexOf('#anim');
-    if (corrPos >= 0) {
+    const drivePos = ekey.indexOf('#drive');
+    if (drivePos >= 0) {
+      // 驱动相位帧：不单独成条目，挂到部件条目的 driveFrames
+      // （键 = 相位帧号，第 0 帧在折叠后由本体瓦片回填）
+      const bk = ekey.slice(0, drivePos);
+      const fi = Number(ekey.slice(drivePos + 6));
+      const rec = (driveFrameMap[bk] = driveFrameMap[bk] || {});
+      rec[fi] = { tile: tile, place: [ax, ay] };
+    } else if (corrPos >= 0) {
       // 逐帧修正替代瓦片：不单独成条目，挂到部件条目的 corrFrames
       // （键 "<perfId>:<本地帧>"；绘制时按 corrPick 选帧）
       const bk = ekey.slice(0, corrPos);
@@ -1362,22 +1394,29 @@ function ensureAtlas(gl, variant, costumeName) {
     const baseEntry = map.get(bk);
     if (baseEntry) baseEntry.corrFrames = corrFrameMap[bk];
   }
+  for (const bk in driveFrameMap) {
+    const baseEntry = map.get(bk);
+    if (baseEntry) {
+      baseEntry.driveFrames = driveFrameMap[bk];
+      baseEntry.driveFrames[0] = { tile: baseEntry.tile, place: baseEntry.place };
+    }
+  }
   if (atlasState && atlasState.tex) gl.deleteTexture(atlasState.tex);
   if (atlasState && atlasState.baseTex) gl.deleteTexture(atlasState.baseTex);
   if (atlasState && atlasState.glowTex) gl.deleteTexture(atlasState.glowTex);
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, AW, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   const baseTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, baseTex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, baseData);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, AW, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, baseData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   const glowTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, glowTex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, AW, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   atlasState = { variant: variant, costumeName: costumeName, osig: osig, palSig: palSig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles, fieldSlots: fieldSlots };
@@ -3149,6 +3188,10 @@ function buildFallback() {
     legLen: lens.length ? lens.reduce((a, b) => a + b, 0) / lens.length : 24,
     walkOk: walkChains.length >= 2 && !walkPerf && !legGraphDriven,
     jumpOk: walkChains.length >= 2 && !jumpPerf && !legGraphDriven,
+    // 滚动链（轮足）：链上任一部件带 drive 即是（轮足的小腿/足带
+    // 相位帧；双足件无 drive、履带件不在腿链里）。滚动链平地不
+    // 抬脚，见 runFallbackPass 内侧视/俯视两处口径。
+    wheel: walkChains.map((c) => c.keys.some((k) => { const p = PARTS.find((pp) => pp.key === k); return !!(p && p.drive); })),
   };
   if (walkChains.length < 2) {
     const msg = '播放器兜底动作：未识别到成对的腿部骨骼（按骨骼名/父子链匹配失败），行走/跳跃兜底均不生效';
@@ -3385,6 +3428,17 @@ function runFallbackPass(pose, dt) {
         }
       } else if (fbWalkW > 0.003) {
         w = fbWalkW;
+        if (fb.wheel[ci]) {
+          // 轮足滚动（用户定：轮足只有越障才会抬起）：平地移动脚
+          // 目标恒钉静止接触位、腿保持静止几何，滚动由部件 drive
+          // 帧承担，脚掌不做步态俯仰；抬脚只发生在跳跃段（越障/
+          // 滞空，走上面的 jumpW 分支，本分支不进摆动段）。
+          F = [restT[0], restT[1]];
+          footDelta = n >= 3 ? 0 : null;
+          fbSegPrev.set(ci, 0);
+          solvedList.push({ chain, rt, F, footDelta, w, walk: true });
+          return;
+        }
         let u = ((fbPhase + chain.phase) / (2 * Math.PI)) % 1;
         if (u < 0) u += 1;
         const seg = u < FB_STANCE ? 0 : 1;
@@ -3562,7 +3616,7 @@ function runFallbackPass(pose, dt) {
         const rt = chainRT[ci]; if (!rt) return;
         const li = (rt.J[0][0] - cx) * latX + (rt.J[0][1] - cy) * latY;
         den += Math.abs(li);
-        num += (segs[ci] === 0 ? 1 : -1) * li;
+        num += ((segs[ci] === 0 || fb.wheel[ci]) ? 1 : -1) * li;
       });
       const m = den > 1e-6 ? num / den : 0;
       const wV = fbTopVertW;
@@ -3585,7 +3639,10 @@ function runFallbackPass(pose, dt) {
       let solved = null;
       if (fbTopVertW < 0.999) {
         let F;
-        if (seg === 0) {
+        if (fb.wheel[ci]) {
+          // 轮链（俯视平面）：脚目标恒钉静止平面位，不落脚不摆动
+          F = [restT[0], restT[1]];
+        } else if (seg === 0) {
           if (fbSegPrev.get(ci) !== 0 || !fbTopPlants.has(ci)) {
             const tp = tipPrevOf(ci);
             fbTopPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 就地落脚（世界平面位）
@@ -3618,7 +3675,7 @@ function runFallbackPass(pose, dt) {
           F = [from[0] + (endX - from[0]) * sm + px * bow,
                from[1] + (endY - from[1]) * sm + py * bow];
         }
-        fbSegPrev.set(ci, seg);
+        fbSegPrev.set(ci, fb.wheel[ci] ? 0 : seg);
         solved = fbSolveChain(J, rt.tipExt, 0, F, null);
       }
       if (fbTopVertW > 0.001 && corGeoms[ci]) {
@@ -3643,7 +3700,9 @@ function runFallbackPass(pose, dt) {
           return (p[0] - char.x - J[0][0]) * g.ux + (p[1] - charOriginY() - J[0][1]) * g.uy;
         };
         let q;
-        if (seg === 0) {
+        if (fb.wheel[ci]) {
+          q = g.D; // 轮链（俯视走廊）：沿轴坐标恒在静止位，不锚定不收脚
+        } else if (seg === 0) {
           if (corPrev !== 0 || !fbCorPlants.has(ci)) {
             const tp = tipPrevOf(ci);
             fbCorPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 就地锚定（世界平面位）
@@ -4947,6 +5006,8 @@ function fxRenderSet(set, frame, verts, occAt) {
 }
 
 let recPendingFrame = null;
+/** 驱动帧朝向单位矢量（运行时方向编号 0南起顺时针，(x, 平面y)，y 向南为正） */
+const DRIVE_FACING = [[0, 1], [0.7071, 0.7071], [1, 0], [0.7071, -0.7071], [0, -1], [-0.7071, -0.7071], [-1, 0], [-0.7071, 0.7071]];
 function frame(now) {
   // ---------- 玩家时钟（D6 乙路裁决 6）：时钟只有一个入口——本
   // 函数头的 dt 与随后的 elapsed += dt，下游全部时间从 elapsed
@@ -5174,6 +5235,15 @@ function frame(now) {
   const tracksPerf = PERFORMANCES.find((p) => p.id === 'tracks');
   const followU = tracksPerf && tracksPerf.duration > 0
     ? Math.min(1, Math.max(0, elapsed / tracksPerf.duration)) : -1;
+  // 驱动帧（履带滚动）：根位置增量投影到当前朝向、累计为地面行程，
+  // 部件绘制时按行程选相位帧。按增量记账：一帧内多次绘制只有
+  // 第一次消费增量，总和与调用次数无关
+  if (char._drvX === undefined) { char._drvX = char.x; char._drvY = char.py || 0; char._drvAcc = 0; }
+  {
+    const fv = DRIVE_FACING[char.variant || 0] || [1, 0];
+    char._drvAcc += (char.x - char._drvX) * fv[0] + ((char.py || 0) - char._drvY) * fv[1];
+    char._drvX = char.x; char._drvY = char.py || 0;
+  }
   const sorted = sortParts(PARTS, char.variant);
   const els = [];
   const elByKey = new Map();
@@ -5202,6 +5272,16 @@ function frame(now) {
         di = Math.min(entry.disp.steps - 1, Math.floor(fr * entry.disp.steps));
       }
       const v = entry.animFrames[fi + ',' + di];
+      if (v) { tile = v.tile; place = v.place; }
+    }
+    // 驱动帧（履带滚动）：按累计地面行程选相位瓦片（盖过表面动画
+    // 帧、让位于逐帧修正——修正是定点补画，语义在最上层）
+    if (part.drive && entry.driveFrames) {
+      const total = (part.drive.frames ? part.drive.frames.length : 0) + 1;
+      const step = part.drive.step || 4;
+      let fi = Math.floor((char._drvAcc || 0) / step) % total;
+      if (fi < 0) fi += total;
+      const v = entry.driveFrames[fi];
       if (v) { tile = v.tile; place = v.place; }
     }
     // 逐帧像素修正（矫正烘焙）：主导表演在本帧有替代图 → 换瓦片
