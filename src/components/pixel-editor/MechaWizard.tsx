@@ -983,7 +983,13 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   useEffect(() => {
     if (!open) return;
     setBusy(true);
-    const t = setTimeout(() => { redraw(); setBusy(false); }, 30);
+    const t = setTimeout(() => {
+      // redraw 里任何一处抛错都不能把 busy 钉死（曾报：生成中常驻、
+      // 生成按钮永久灰）：错误写进提示区，busy 必须复位
+      try { redraw(); }
+      catch (e) { setNote('预览出错：' + (e as Error).message); }
+      finally { setBusy(false); }
+    }, 30);
     return () => clearTimeout(t);
   }, [open, redraw]);
 
@@ -1000,9 +1006,15 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
       grown = `；画布已扩至 ${w}×${h} 适应尺寸`;
     }
     const store = useProjectStore.getState();
-    const { characterId } = mode === 'humanoid'
-      ? createMechaCharacterInStore(store as never, { name: charName, family, build: buildOpts(), scale })
-      : createMechaVehicleInStore(store as never, { name: charName, vehicle: vehicleOpts(), scale });
+    let characterId: string;
+    try {
+      ({ characterId } = mode === 'humanoid'
+        ? createMechaCharacterInStore(store as never, { name: charName, family, build: buildOpts(), scale })
+        : createMechaVehicleInStore(store as never, { name: charName, vehicle: vehicleOpts(), scale }));
+    } catch (e) {
+      setNote('生成出错：' + (e as Error).message);
+      return;
+    }
     const created = useProjectStore.getState().unifiedCharacters[characterId];
     const nNodes = created ? Object.keys(created.nodes).length : 0;
     const nChains = created?.ikChains?.length ?? 0;
