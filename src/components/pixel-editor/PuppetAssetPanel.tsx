@@ -394,8 +394,10 @@ export default function PuppetAssetPanel() {
         onCustomTranspose: (node) => {
           setSelectedNodeId(node.id);
           const el = document.getElementById('rig-transpose-angle-input') as HTMLInputElement | null;
-          el?.focus();
-          el?.select();
+          if (el) {
+            el.focus();
+            // 该输入是 type=number，不支持选区：select() 会抛 InvalidStateError，只聚焦不全选
+          }
         },
         onToggleVisibility: (node) => {
           const target = unifiedCharacters[activePuppetSkeletonId]?.nodes[node.id];

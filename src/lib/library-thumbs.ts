@@ -385,6 +385,58 @@ export function faceThumbRGBA(p: FaceFeatureParams, size = 48): RGBAImage {
   return { w, h, data: data as Uint8ClampedArray<ArrayBuffer> };
 }
 
+// ---------------- 机甲 / 着色缩略图 ----------------
+
+import { defOf, finishDefOf, type LibraryEntry, type LibraryIndex } from './library-entries';
+import { expandFinishDef, renderEntryDef, renderMechaDef } from './mecha/entry-render';
+import type { MechaSpriteData } from './mecha/parts';
+
+/** 精灵等比装入 size×size 画布（居中、透明底）→ RGBAImage */
+function fitSpriteRGBA(s: MechaSpriteData, size: number): RGBAImage {
+  const data = new Uint8ClampedArray(size * size * 4);
+  const k = Math.min(size / s.width, size / s.height);
+  const dw = Math.max(1, Math.round(s.width * k)), dh = Math.max(1, Math.round(s.height * k));
+  const ox = Math.floor((size - dw) / 2), oy = Math.floor((size - dh) / 2);
+  for (let y = 0; y < dh; y++) {
+    for (let x = 0; x < dw; x++) {
+      const sx = Math.min(s.width - 1, Math.floor(x / k)), sy = Math.min(s.height - 1, Math.floor(y / k));
+      const si = (sy * s.width + sx) * 4, di = ((oy + y) * size + ox + x) * 4;
+      data[di] = s.rgba[si]!; data[di + 1] = s.rgba[si + 1]!; data[di + 2] = s.rgba[si + 2]!; data[di + 3] = s.rgba[si + 3]!;
+    }
+  }
+  return { w: size, h: size, data: data as Uint8ClampedArray<ArrayBuffer> };
+}
+
+/** 机甲条目缩略图：按条目真出图，取面积最大的输出装入画布 */
+export function mechaThumbRGBA(index: LibraryIndex, entry: LibraryEntry, size = 72): RGBAImage | null {
+  try {
+    const found = defOf(index, entry.id);
+    if (!found || !('kind' in found.def) || found.def.kind !== 'mecha') return null;
+    const outs = renderEntryDef(index, found.def);
+    let best: MechaSpriteData | null = null;
+    for (const s of Object.values(outs)) {
+      if (!best || s.width * s.height > best.width * best.height) best = s;
+    }
+    return best ? fitSpriteRGBA(best, size) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 着色条目缩略图：样例 = 头组·橄榄裸规格 + 本条目展开的着色 */
+export function finishThumbRGBA(index: LibraryIndex, entry: LibraryEntry, size = 72): RGBAImage | null {
+  try {
+    const got = finishDefOf(index, entry.id);
+    if (!got) return null;
+    const finOv = expandFinishDef(index, got.def);
+    const outs = renderMechaDef(
+      { kind: 'mecha', form: 'gen', gen: 'head', family: 'olive' }, finOv);
+    return outs.head ? fitSpriteRGBA(outs.head, size) : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------- 编码与缓存（浏览器侧） ----------------
 
 const thumbCache = new Map<string, string>();

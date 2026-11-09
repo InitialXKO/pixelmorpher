@@ -1197,6 +1197,25 @@ function ensureAtlas(gl, variant, costumeName) {
       }
     }
   }
+  // 驱动帧（履带滚动）：带 drive 的精灵部件把相位帧（第 1 帧起）
+  // 烘成瓦片入图集，条目键带 #drive<fi>，打包时折进部件条目的
+  // driveFrames（与 #corr 同路）；第 0 帧即部件本体瓦片，折叠时
+  // 回填。当前服装集该槽图与部件自带图不同（换装覆盖/显式为空）
+  // 时不跟驱动（驱动帧只对自带图成立）
+  for (const part of PARTS) {
+    if (!part.spriteKind || !part.drive || !part.drive.frames || !part.drive.frames.length) continue;
+    const csGrid = costume && costume.__sprite ? costume.__sprite[part.key] : undefined;
+    if (csGrid !== undefined && (!part.sprite || !csGrid || csGrid.w !== part.sprite.w || csGrid.h !== part.sprite.h || gridHashOf(csGrid) !== gridHashOf(part.sprite))) continue;
+    const mirrored = variantMirrored(part, variant);
+    for (let fi = 1; fi <= part.drive.frames.length; fi++) {
+      const grid = part.drive.frames[fi - 1];
+      const key = [part.key, variant, costumeName, 'D', fi, grid.w, grid.h, grid.plug.join(','), gridHashOf(grid), mirrored ? 'M' : ''].join('|');
+      let tile = tileCache.get(key);
+      if (!tile) { tile = spriteTileOf(grid, mirrored); tileCache.set(key, tile); }
+      tiles.push(tile);
+      entries.push([part.key + '#drive' + fi, tile, { params: { ...part.base, off: [0, 0] }, composite: 'sprite', halo: 0, baseSprite: null }, mirrored, grid, null, 0]);
+    }
+  }
   // 团块/火焰场槽（乙8 改造）：跟随口径 = 范围/位置跟、形态不跟
   // （用户定案）——烘焙帧一缩放就是拉伸形态，故图集只预留定尺寸
   // 场槽（域上限 = 形变 2 倍时的场尺寸），每帧由场作业按当帧
@@ -1231,18 +1250,23 @@ function ensureAtlas(gl, variant, costumeName) {
     });
   }
   const palMapAtlas = paletteSwapMap();
-  const pack = packAtlas(tiles, 256);
+  // 图集宽：缺省 256；有瓦片更宽时按最宽瓦片放大（打包/行跨度/纹理
+  // 尺寸同用此宽；着色器按 texelFetch 整数坐标取样，不依赖归一化宽度）
+  let AW = 256;
+  for (const t of tiles) if (t.w > AW) AW = t.w;
+  const pack = packAtlas(tiles, AW);
   const height = pack.height;
   const slashTiles = {};
   const animFrameMap = {};
   const corrFrameMap = {};
-  const data = new Uint8Array(256 * height * 4);
-  const baseData = new Uint8Array(256 * height * 4);
-  const glowData = new Uint8Array(256 * height * 4);
+  const driveFrameMap = {};
+  const data = new Uint8Array(AW * height * 4);
+  const baseData = new Uint8Array(AW * height * 4);
+  const glowData = new Uint8Array(AW * height * 4);
   tiles.forEach((tile, i) => {
     const ax = pack.placements[i][0], ay = pack.placements[i][1];
     for (let j = 0; j < tile.h; j++) {
-      data.set(tile.data.subarray(j * tile.w * 4, (j + 1) * tile.w * 4), ((ay + j) * 256 + ax) * 4);
+      data.set(tile.data.subarray(j * tile.w * 4, (j + 1) * tile.w * 4), ((ay + j) * AW + ax) * 4);
     }
     // 底图（overlay 底色 / 精灵直贴图）：与档位瓦片同格对齐（镜像时列翻转）。
     // 行序须随瓦片族：精灵瓦片是产品行序（自上而下）→ 同序写入；
@@ -1274,7 +1298,7 @@ function ensureAtlas(gl, variant, costumeName) {
             const to = palMapAtlas.get((rgb[0] << 16) | (rgb[1] << 8) | rgb[2]);
             if (to !== undefined) rgb = [(to >> 16) & 255, (to >> 8) & 255, to & 255];
           }
-          const o = ((ay + j) * 256 + ax + ii) * 4;
+          const o = ((ay + j) * AW + ax + ii) * 4;
           baseData[o] = rgb[0]; baseData[o + 1] = rgb[1]; baseData[o + 2] = rgb[2]; baseData[o + 3] = 255;
         }
       }
@@ -1305,7 +1329,7 @@ function ensureAtlas(gl, variant, costumeName) {
           const src3 = (sy * gw + sx) * 3;
           const v0 = gd[src3] || 0, v1 = gd[src3 + 1] || 0, v2 = gd[src3 + 2] || 0;
           if (!v0 && !v1 && !v2) continue;
-          const o = ((ay + j) * 256 + ax + ii) * 4;
+          const o = ((ay + j) * AW + ax + ii) * 4;
           glowData[o] = v0; glowData[o + 1] = v1; glowData[o + 2] = v2; glowData[o + 3] = 255;
         }
       }
@@ -1313,7 +1337,7 @@ function ensureAtlas(gl, variant, costumeName) {
     if (resolved.composite === 'slashfx') {
       const fr = entries[i][4];
       for (let j = 0; j < fr.h; j++) {
-        baseData.set(fr.data.subarray(j * fr.w * 4, (j + 1) * fr.w * 4), ((ay + 2 + j) * 256 + ax + 2) * 4);
+        baseData.set(fr.data.subarray(j * fr.w * 4, (j + 1) * fr.w * 4), ((ay + 2 + j) * AW + ax + 2) * 4);
       }
       const key = entries[i][0];
       if (key.startsWith('field:')) {
@@ -1333,7 +1357,15 @@ function ensureAtlas(gl, variant, costumeName) {
     const ekey = entries[i][0];
     const corrPos = ekey.indexOf('#corr');
     const animPos = ekey.indexOf('#anim');
-    if (corrPos >= 0) {
+    const drivePos = ekey.indexOf('#drive');
+    if (drivePos >= 0) {
+      // 驱动相位帧：不单独成条目，挂到部件条目的 driveFrames
+      // （键 = 相位帧号，第 0 帧在折叠后由本体瓦片回填）
+      const bk = ekey.slice(0, drivePos);
+      const fi = Number(ekey.slice(drivePos + 6));
+      const rec = (driveFrameMap[bk] = driveFrameMap[bk] || {});
+      rec[fi] = { tile: tile, place: [ax, ay] };
+    } else if (corrPos >= 0) {
       // 逐帧修正替代瓦片：不单独成条目，挂到部件条目的 corrFrames
       // （键 "<perfId>:<本地帧>"；绘制时按 corrPick 选帧）
       const bk = ekey.slice(0, corrPos);
@@ -1362,22 +1394,29 @@ function ensureAtlas(gl, variant, costumeName) {
     const baseEntry = map.get(bk);
     if (baseEntry) baseEntry.corrFrames = corrFrameMap[bk];
   }
+  for (const bk in driveFrameMap) {
+    const baseEntry = map.get(bk);
+    if (baseEntry) {
+      baseEntry.driveFrames = driveFrameMap[bk];
+      baseEntry.driveFrames[0] = { tile: baseEntry.tile, place: baseEntry.place };
+    }
+  }
   if (atlasState && atlasState.tex) gl.deleteTexture(atlasState.tex);
   if (atlasState && atlasState.baseTex) gl.deleteTexture(atlasState.baseTex);
   if (atlasState && atlasState.glowTex) gl.deleteTexture(atlasState.glowTex);
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, AW, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   const baseTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, baseTex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, baseData);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, AW, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, baseData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   const glowTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, glowTex);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, AW, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, glowData);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   atlasState = { variant: variant, costumeName: costumeName, osig: osig, palSig: palSig, tex: tex, baseTex: baseTex, glowTex: glowTex, map: map, slashTiles: slashTiles, fieldSlots: fieldSlots };
@@ -3067,6 +3106,23 @@ function fbFootPitch(u, f) {
   const s = (u - FB_STANCE) / (1 - FB_STANCE);
   return f * 0.12 * Math.sin(Math.PI * Math.min(1, s * 1.15)); // 摆动：收脚尖防绊、落前回平
 }
+/** 步态分组（腿序）：侧 × 位 → 波组。侧优先读链根名的侧记
+ * （左/右/近/远/L/R），无记按根 x 排序序号奇偶兜底；位 = 该侧
+ * 内按根 x 的名次。组号 = (位 + 侧) % 2：双足退化为左右反相、
+ * 四足为对角、六足为交替三角、八足为交替四分组。旧口径（质心
+ * 前后 XOR 左右）只有前后一刀、无位次：六足前腿必然错边、八
+ * 足在远侧张开的排布下整侧同相，故废弃（双足两链单独保留旧
+ * 的按序反相，与历史行为逐值一致）。 */
+function fbAssignGaitGroups(g, nameOf) {
+  const rankCtr = [0, 0];
+  g.forEach((c, i) => {
+    const nm = nameOf(c.keys[0]).toLowerCase();
+    c.side = /_l$|_left|left|左|近|near/.test(nm) ? 0 : /_r$|_right|right|右|远|far/.test(nm) ? 1 : (i % 2);
+    c.rank = rankCtr[c.side]++;
+    c.group = g.length === 2 ? i : (c.rank + c.side) % 2;
+    c.phase = Math.PI * c.group;
+  });
+}
 function buildFallback() {
   const skel = new Map();
   for (const s of EMBEDDED.skeleton || []) skel.set(s.key, s);
@@ -3122,19 +3178,12 @@ function buildFallback() {
   }
   // 配相位：全部腿链同属一步态组——配对不要求同父（真实人形
   // 骨骼双腿常分挂左右髋骨 hip_L/hip_R，同父成组会把分髋双腿
-  // 各自落单丢弃、误报未识别）。两条按左右对位反相、四条及
-  // 以上按对角（前 XOR 左），规则与原同父组内一致。
+  // 各自落单丢弃、误报未识别）。分组规则见 fbAssignGaitGroups。
   const walkChains = [];
   if (allChains.length >= 2) {
     const g = [...allChains].sort((a, b) => restJ.get(a.keys[0])[0] - restJ.get(b.keys[0])[0]);
-    const cx = g.reduce((s, c) => s + restJ.get(c.keys[0])[0], 0) / g.length;
-    g.forEach((c, i) => {
-      const nm = nameOf(c.keys[0]).toLowerCase();
-      const leftBit = /_l$|_left|left|左/.test(nm) ? 0 : /_r$|_right|right|右/.test(nm) ? 1 : (i % 2);
-      if (g.length === 2) c.phase = Math.PI * i; // 两足：按序直接对位反相
-      else c.phase = Math.PI * (((restJ.get(c.keys[0])[0] < cx ? 1 : 0) + leftBit) % 2);
-      walkChains.push(c);
-    });
+    fbAssignGaitGroups(g, nameOf);
+    for (const c of g) walkChains.push(c);
   }
   const legRole = new Map();
   for (const c of allChains) c.keys.forEach((k, d) => legRole.set(k, { depth: d, n: c.keys.length }));
@@ -3149,7 +3198,15 @@ function buildFallback() {
     legLen: lens.length ? lens.reduce((a, b) => a + b, 0) / lens.length : 24,
     walkOk: walkChains.length >= 2 && !walkPerf && !legGraphDriven,
     jumpOk: walkChains.length >= 2 && !jumpPerf && !legGraphDriven,
+    // 滚动链（轮足）：链上任一部件带 drive 即是（轮足的小腿/足带
+    // 相位帧；双足件无 drive、履带件不在腿链里）。滚动链平地不
+    // 抬脚，见 runFallbackPass 内侧视/俯视两处口径。
+    wheel: walkChains.map((c) => c.keys.some((k) => { const p = PARTS.find((pp) => pp.key === k); return !!(p && p.drive); })),
   };
+  // 多腿状态机驱动的成员集（非滚动链 ≥6 条时启用，见 fbMultiGaitTick；
+  // 波组在 tick 内按档位现算，滚动链不入集、仍走原滚动口径）
+  const mCount = walkChains.reduce((n, c, ci) => n + (fb.wheel[ci] ? 0 : 1), 0);
+  fb.multiSet = mCount >= 6 ? new Set(walkChains.map((c, ci) => ci).filter((ci) => !fb.wheel[ci])) : null;
   if (walkChains.length < 2) {
     const msg = '播放器兜底动作：未识别到成对的腿部骨骼（按骨骼名/父子链匹配失败），行走/跳跃兜底均不生效';
     console.warn(msg);
@@ -3159,6 +3216,207 @@ function buildFallback() {
   return fb;
 }
 function ensureFB() { if (!FB) FB = buildFallback(); return FB; }
+// —— 多腿状态机步态（一期：蜘蛛/多足）——
+// 与螃蟹步态（CrabGait）同构的逐腿状态机，替代多腿组的时间表配相：
+// 每条腿一条记录（着地锚 anchorX / 摆动 from→to、via、s、本腿时长），
+// 两波组由 fbAssignGaitGroups 按（位+侧）分好；组轮转——他组全
+// 着地、本组全着地、且本组有腿的需求（锚滞后于落点目标）过阈才
+// 整组起步，组内按位次 ripple 错开；需求太小的腿本轮不起步（距
+// 离否决）。摆动求值过 SmoothStep、轨迹走过 via 的二次 Bezier
+// （控制点 Q = 2·via − ½(from+to)，中点精确穿 via），s 到 1 精
+// 确吸附落点。二期（螃蟹）补齐档位层：档位由实测速度比导出，同
+// 时决定分组形状（Creep 4 波对角对 / Walk·Run 2 波 / Sprint 仅
+// 每侧末位腿有组）与摆动时长系数；落点下达前过 InOrder 方位角
+// 钳制（不许越过同侧相邻腿、间隔 9°，邻居摆动中看其 to、着地
+// 看 tip）；进 Sprint 那一刻无组腿被置豁免——脱离轮转自由迈步、
+// 不作钳制参考，迈出首步清零。
+const fbMLegs = new Map();  // 链序 → 逐腿记录
+let fbMGroup = 0;           // 组轮转游标（组号，换档后按现行组表解释）
+let fbMPace = 1;            // 当前档位 0 Creep / 1 Walk / 2 Run / 3 Sprint
+const FB_ML_TRIG = 0.55;    // 起步需求阈（× stride，落点目标口径）
+const FB_ML_RIPPLE = 0.12;  // 组内起步错开（× 本腿时长 / 起步序位）
+const FB_ML_ORDER = 9 * Math.PI / 180; // InOrder 相邻腿方位角最小间隔
+function fbMLegState(ci, anchorX) {
+  let st = fbMLegs.get(ci);
+  if (!st) { st = { swing: false, anchorX, dev: 0, exempt: false, stanceT: 0, fromW: 0, fromY: 0, toW: 0, toY: 0, qx: 0, qy: 0, s: 0, dur: 0.3 }; fbMLegs.set(ci, st); }
+  return st;
+}
+/** 档位：实测速度 / 腿长标尺（包内无控制器命令档，由速度比导出）。 */
+function fbMLPaceOf(spd, legLen) {
+  const r = spd / Math.max(60, legLen);
+  return r < 0.45 ? 0 : r < 1.1 ? 1 : r < 2.0 ? 2 : 3;
+}
+/** 波组号（随档变形）：Creep=(位+2·侧)%4 四波对角对；Walk/Run=
+ * (位+侧)%2 两波；Sprint 仅每侧末位腿有组（组号=侧），余 −1 无组。 */
+function fbMLGroupOf(chain, pace, maxRank) {
+  if (pace === 0) return ((chain.rank || 0) + 2 * (chain.side || 0)) % 4;
+  if (pace === 3) return (chain.rank || 0) === maxRank ? (chain.side || 0) : -1;
+  return chain.group || 0;
+}
+/** InOrder 钳制（侧视投影）：落点绕根质心的方位角不得越过同侧相
+ * 邻腿（后邻 +9°、前邻 −9°，两界交叠取中点），钳后按原半径重组
+ * 取 x（与原版同式：角度被钳、半径不动），y 仍落回地面线。不可
+ * 沿射线交地面线求 x——角接近水平时交点飞出可达域（实测落点被
+ * 拖出数百 px）。参考点：摆动邻居看其 to（与原版同）；着地邻居
+ * 看其当前落点目标而非 live 尖端——原版 3D 径向布局里着地尖端
+ * 恒在自身角区内、与目标同价，侧视投影下着地尖端沿地面全程扫
+ * 掠、方位角频繁越界，拿它作参考钳制会常态误绑并把落点拖偏。
+ * 豁免腿不作参考。返回钳后的本地落点 x。 */
+function fbMLClampOrder(ci, chainRT, C, txLocal, tyLocal, faceF, frontReach) {
+  const fb = ensureFB();
+  const chain = fb.chains[ci];
+  let a = Math.atan2(tyLocal - C[1], txLocal - C[0]);
+  let lo = -Infinity, hi = Infinity, aLo = 0, aHi = 0;
+  for (const nci of fb.multiSet) {
+    if (nci === ci) continue;
+    const nc = fb.chains[nci];
+    if ((nc.side || 0) !== (chain.side || 0)) continue;
+    const dr = (nc.rank || 0) - (chain.rank || 0);
+    if (dr !== -1 && dr !== 1) continue;
+    const nst = fbMLegs.get(nci);
+    if (nst && nst.exempt) continue;
+    const nrt = chainRT[nci]; if (!nrt) continue;
+    const rp = nst && nst.swing ? [nst.toW - char.x, nst.toY] : [nrt.J[0][0] + faceF * frontReach, nrt.restT[1]];
+    const aN = Math.atan2(rp[1] - C[1], rp[0] - C[0]);
+    if (dr === -1) { lo = aN + FB_ML_ORDER; aLo = aN; }
+    else { hi = aN - FB_ML_ORDER; aHi = aN; }
+  }
+  if (lo === -Infinity && hi === Infinity) return txLocal;
+  if (lo > hi) a = (aLo + aHi) / 2;
+  else a = Math.max(lo, Math.min(hi, a));
+  const r = Math.hypot(txLocal - C[0], tyLocal - C[1]);
+  return C[0] + r * Math.cos(a);
+}
+/** 单腿起步：落点过 InOrder 钳制后构造 via/时长/ripple 初值。
+ * 豁免标志不在此清零——它由 tick 按当前档位逐帧重算（见下）。 */
+function fbMLLaunch(ci, chainRT, C, stride, lift, faceF, frontReach, dur, order) {
+  const fb = ensureFB();
+  const rt = chainRT[ci], st = fbMLegs.get(ci);
+  const tp = fbTipPrev.get(ci) || rt.restT;
+  st.swing = true;
+  st.fromW = char.x + tp[0]; st.fromY = tp[1];
+  const txLocal = fbMLClampOrder(ci, chainRT, C, rt.J[0][0] + faceF * frontReach, rt.restT[1], faceF, frontReach);
+  st.toW = char.x + txLocal; st.toY = rt.restT[1];
+  const stepF = Math.max(0.35, Math.min(1, Math.abs(st.toW - st.fromW) / Math.max(stride, 1)));
+  const viaX = (st.fromW + st.toW) / 2, viaY = Math.max(st.fromY, st.toY) + lift * stepF;
+  st.qx = 2 * viaX - (st.fromW + st.toW) / 2;
+  st.qy = 2 * viaY - (st.fromY + st.toY) / 2;
+  st.dur = dur;
+  st.s = -order * FB_ML_RIPPLE;
+}
+function fbMultiGaitTick(dt, chainRT, stride, lift, faceF, frontReach, dxF) {
+  const fb = ensureFB();
+  const targets = new Map();
+  let sink = 0;
+  const spd = Math.abs(dxF) / Math.max(dt, 1e-4);
+  const txOf = (rt) => rt.J[0][0] + faceF * frontReach;
+  // 1) 推进摆动、落地吸附
+  for (const ci of fb.multiSet) {
+    const rt = chainRT[ci]; if (!rt) continue;
+    const st = fbMLegState(ci, fbPlants.has(ci) ? fbPlants.get(ci) : char.x + rt.restT[0]);
+    if (!st.swing) continue;
+    st.s += dt / st.dur;
+    if (st.s >= 1) {
+      st.swing = false; st.anchorX = st.toW; st.stanceT = 0;
+      fbPlants.set(ci, st.anchorX);
+    }
+  }
+  // 2) 档位与轮转：档位随速度比（Sprint 档无组腿豁免）；逐腿
+  // 需求 = 锚滞后于落点目标；豁免腿脱离轮转自由起步；其余按现行
+  // 档位组表从游标起逐组查就绪（组外有组腿全着地 + 本组全着地 +
+  // 需求过阈），整组起步（需求 ≤2px 的腿距离否决、本轮留守）
+  const pace = fbMLPaceOf(spd, fb.legLen);
+  let maxRank = 0;
+  for (const ci of fb.multiSet) maxRank = Math.max(maxRank, fb.chains[ci].rank || 0);
+  // 豁免按档位逐帧重算：Sprint 档内无组腿恒豁免、离档自动回组。
+  // 原版是「进档置位、首步清零」的事件语义，但本包的组归属同样由
+  // 档位逐帧导出——若豁免只置一次，无组腿首步后既不在任何组、
+  // 也不再豁免，将永远无人驱动（探针实测其需求偏差涨到 7501、
+  // 其余腿独走）。故档位在 Sprint 期间豁免持续成立，是唯一自洽
+  // 的读法；此处与原版事件语义的出入已在交付报告中向用户明示。
+  for (const ci of fb.multiSet) {
+    const rt0 = chainRT[ci]; if (!rt0) continue;
+    const st0 = fbMLegState(ci, fbPlants.has(ci) ? fbPlants.get(ci) : char.x + rt0.restT[0]);
+    st0.exempt = pace === 3 && fbMLGroupOf(fb.chains[ci], 3, maxRank) < 0;
+  }
+  fbMPace = pace;
+  const durBase = Math.max(0.12, Math.min(0.6, 1.2 * stride / Math.max(spd, 40)))
+    * (pace === 0 ? 1.35 : pace === 2 ? 0.76 : pace === 3 ? 0.7 : 1);
+  const C = [0, 0]; let cn = 0;
+  for (const ci of fb.multiSet) { const rt = chainRT[ci]; if (rt) { C[0] += rt.J[0][0]; C[1] += rt.J[0][1]; cn++; } }
+  if (cn) { C[0] /= cn; C[1] /= cn; }
+  if (char.onGround && !char.ledge) {
+    for (const ci of fb.multiSet) {
+      const rt = chainRT[ci]; if (!rt) continue;
+      const st = fbMLegState(ci, fbPlants.has(ci) ? fbPlants.get(ci) : char.x + rt.restT[0]);
+      if (!st.swing) { st.dev = faceF * ((char.x + txOf(rt)) - st.anchorX); st.stanceT += dt; }
+    }
+    const isSwing = (ci) => { const st = fbMLegs.get(ci); return !!(st && st.swing); };
+    // 豁免腿自由起步，但须先撑够最小支撑时长：需求在落地瞬间即约
+    // 等于摆动期身体行程、恒过阈，只看需求会同帧再起步、永不支
+    // 撑（有组腿靠轮转强制支撑，豁免腿靠此条）。阈取上次摆动时
+    // 长的 0.8 倍，冲刺下支撑占比仍约四成半。
+    for (const ci of fb.multiSet) {
+      const st = fbMLegs.get(ci);
+      if (st && st.exempt && !st.swing && st.dev > FB_ML_TRIG * stride && st.stanceT >= st.dur * 0.8 && chainRT[ci])
+        fbMLLaunch(ci, chainRT, C, stride, lift, faceF, frontReach, durBase, 0);
+    }
+    const gmap = new Map();
+    for (const ci of fb.multiSet) {
+      const st = fbMLegs.get(ci);
+      if (st && st.exempt) continue;
+      const gid = fbMLGroupOf(fb.chains[ci], pace, maxRank);
+      if (gid < 0) continue;
+      if (!gmap.has(gid)) gmap.set(gid, []);
+      gmap.get(gid).push(ci);
+    }
+    const gids = [...gmap.keys()].sort((a, b) => a - b);
+    if (gids.length) {
+      const inGroup = new Set([...gmap.values()].flat());
+      const startIdx = Math.max(0, gids.indexOf(fbMGroup));
+      for (let k = 0; k < gids.length; k++) {
+        const gid = gids[(startIdx + k) % gids.length];
+        const g = gmap.get(gid);
+        const othersSwing = [...inGroup].some((ci) => !g.includes(ci) && isSwing(ci));
+        if (othersSwing || g.some(isSwing)) continue;
+        let maxDev = 0;
+        for (const ci of g) { const st = fbMLegs.get(ci); if (st && st.dev > maxDev) maxDev = st.dev; }
+        if (maxDev <= FB_ML_TRIG * stride) continue;
+        const launching = g.filter((ci) => chainRT[ci] && (fbMLegs.get(ci)?.dev ?? 0) > 2)
+          .sort((a, b) => (fb.chains[a].rank || 0) - (fb.chains[b].rank || 0));
+        launching.forEach((ci, order) => fbMLLaunch(ci, chainRT, C, stride, lift, faceF, frontReach, durBase, order));
+        fbMGroup = gids[(startIdx + k + 1) % gids.length];
+        break;
+      }
+    }
+  }
+  // 3) 逐腿目标：摆动走 Bezier、着地钉锚（+ 支撑几何下沉，与时间表同式）
+  for (const ci of fb.multiSet) {
+    const rt = chainRT[ci]; if (!rt) continue;
+    const st = fbMLegState(ci, fbPlants.has(ci) ? fbPlants.get(ci) : char.x + rt.restT[0]);
+    const n = rt.J.length;
+    if (st.swing) {
+      let F;
+      if (st.s <= 0) F = [st.fromW - char.x, st.fromY];
+      else {
+        const s = Math.min(1, st.s), e = s * s * (3 - 2 * s), u = 1 - e;
+        F = [u * u * st.fromW + 2 * u * e * st.qx + e * e * st.toW - char.x,
+             u * u * st.fromY + 2 * u * e * st.qy + e * e * st.toY];
+      }
+      const su = Math.max(0, Math.min(1, st.s));
+      targets.set(ci, { F, footDelta: n >= 3 ? fbFootPitch(FB_STANCE + su * (1 - FB_STANCE), faceF) : null, seg: 1 });
+    } else {
+      const F = [st.anchorX - char.x, rt.restT[1]];
+      if (rt.segSum > 1e-6) {
+        const horiz = Math.min(Math.abs(F[0] - rt.J[0][0]), rt.segSum * 0.95);
+        const dropNeed = (rt.J[0][1] - rt.restT[1]) - Math.sqrt(Math.max(rt.segSum * rt.segSum - horiz * horiz, Math.pow(rt.segSum * 0.3, 2)));
+        if (dropNeed > sink) sink = dropNeed;
+      }
+      targets.set(ci, { F, footDelta: n >= 3 ? 0 : null, seg: 0 });
+    }
+  }
+  return { targets, sink };
+}
 /** 土狼窗判据：非跳跃离地后 PHYS.coyote 秒内仍可起跳（物理侧
  * updateCharacterSide 与跳跃请求共用同一口径） */
 function coyoteOkNow() { return !char.onGround && !airByJump && coyoteT <= PHYS.coyote; }
@@ -3328,7 +3586,11 @@ function runFallbackPass(pose, dt) {
     // 位移推进，左行时 u 逆行且落点落到行进后方（曾实测只有右行对）。
     const faceF = (char.variant >= 5 && char.variant <= 7) ? -1 : 1;
     if (fbStage === 'none' && fb.walkOk && char.onGround && !char.ledge) fbPhase += Math.PI * dxF * faceF / stride;
-    let sink = 0; // 支撑几何反推的身体下沉（行走时）
+    // 多腿状态机（蜘蛛/多足 ≥6 链）：先于逐链循环整组推进/起步，
+    // 产出本帧逐腿目标；跳跃段（jumpW）仍优先、本 tick 不与其争。
+    const mlTick = (fb.multiSet && fbStage === 'none' && fbWalkW > 0.003)
+      ? fbMultiGaitTick(dt, chainRT, stride, lift, faceF, frontReach, dxF) : null;
+    let sink = mlTick ? mlTick.sink : 0; // 支撑几何反推的身体下沉（行走时）
     // 滞空先收的那条腿：各链静止脚尖相对链根的沿朝向坐标最小者
     // （最靠后）；单链时即该链本身。仅 fbStage==='air' 时有意义
     let airFirstCi = -1;
@@ -3385,6 +3647,25 @@ function runFallbackPass(pose, dt) {
         }
       } else if (fbWalkW > 0.003) {
         w = fbWalkW;
+        if (mlTick && mlTick.targets.has(ci)) {
+          // 多腿状态机目标（摆动 Bezier / 着地钉锚，tick 已整组推进）
+          const mt = mlTick.targets.get(ci);
+          F = mt.F; footDelta = mt.footDelta;
+          fbSegPrev.set(ci, mt.seg);
+          solvedList.push({ chain, rt, F, footDelta, w, walk: true });
+          return;
+        }
+        if (fb.wheel[ci]) {
+          // 轮足滚动（用户定：轮足只有越障才会抬起）：平地移动脚
+          // 目标恒钉静止接触位、腿保持静止几何，滚动由部件 drive
+          // 帧承担，脚掌不做步态俯仰；抬脚只发生在跳跃段（越障/
+          // 滞空，走上面的 jumpW 分支，本分支不进摆动段）。
+          F = [restT[0], restT[1]];
+          footDelta = n >= 3 ? 0 : null;
+          fbSegPrev.set(ci, 0);
+          solvedList.push({ chain, rt, F, footDelta, w, walk: true });
+          return;
+        }
         let u = ((fbPhase + chain.phase) / (2 * Math.PI)) % 1;
         if (u < 0) u += 1;
         const seg = u < FB_STANCE ? 0 : 1;
@@ -3562,7 +3843,7 @@ function runFallbackPass(pose, dt) {
         const rt = chainRT[ci]; if (!rt) return;
         const li = (rt.J[0][0] - cx) * latX + (rt.J[0][1] - cy) * latY;
         den += Math.abs(li);
-        num += (segs[ci] === 0 ? 1 : -1) * li;
+        num += ((segs[ci] === 0 || fb.wheel[ci]) ? 1 : -1) * li;
       });
       const m = den > 1e-6 ? num / den : 0;
       const wV = fbTopVertW;
@@ -3585,7 +3866,10 @@ function runFallbackPass(pose, dt) {
       let solved = null;
       if (fbTopVertW < 0.999) {
         let F;
-        if (seg === 0) {
+        if (fb.wheel[ci]) {
+          // 轮链（俯视平面）：脚目标恒钉静止平面位，不落脚不摆动
+          F = [restT[0], restT[1]];
+        } else if (seg === 0) {
           if (fbSegPrev.get(ci) !== 0 || !fbTopPlants.has(ci)) {
             const tp = tipPrevOf(ci);
             fbTopPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 就地落脚（世界平面位）
@@ -3618,7 +3902,7 @@ function runFallbackPass(pose, dt) {
           F = [from[0] + (endX - from[0]) * sm + px * bow,
                from[1] + (endY - from[1]) * sm + py * bow];
         }
-        fbSegPrev.set(ci, seg);
+        fbSegPrev.set(ci, fb.wheel[ci] ? 0 : seg);
         solved = fbSolveChain(J, rt.tipExt, 0, F, null);
       }
       if (fbTopVertW > 0.001 && corGeoms[ci]) {
@@ -3643,7 +3927,9 @@ function runFallbackPass(pose, dt) {
           return (p[0] - char.x - J[0][0]) * g.ux + (p[1] - charOriginY() - J[0][1]) * g.uy;
         };
         let q;
-        if (seg === 0) {
+        if (fb.wheel[ci]) {
+          q = g.D; // 轮链（俯视走廊）：沿轴坐标恒在静止位，不锚定不收脚
+        } else if (seg === 0) {
           if (corPrev !== 0 || !fbCorPlants.has(ci)) {
             const tp = tipPrevOf(ci);
             fbCorPlants.set(ci, [char.x + tp[0], charOriginY() + tp[1]]); // 就地锚定（世界平面位）
@@ -4947,6 +5233,8 @@ function fxRenderSet(set, frame, verts, occAt) {
 }
 
 let recPendingFrame = null;
+/** 驱动帧朝向单位矢量（运行时方向编号 0南起顺时针，(x, 平面y)，y 向南为正） */
+const DRIVE_FACING = [[0, 1], [0.7071, 0.7071], [1, 0], [0.7071, -0.7071], [0, -1], [-0.7071, -0.7071], [-1, 0], [-0.7071, 0.7071]];
 function frame(now) {
   // ---------- 玩家时钟（D6 乙路裁决 6）：时钟只有一个入口——本
   // 函数头的 dt 与随后的 elapsed += dt，下游全部时间从 elapsed
@@ -5174,6 +5462,15 @@ function frame(now) {
   const tracksPerf = PERFORMANCES.find((p) => p.id === 'tracks');
   const followU = tracksPerf && tracksPerf.duration > 0
     ? Math.min(1, Math.max(0, elapsed / tracksPerf.duration)) : -1;
+  // 驱动帧（履带滚动）：根位置增量投影到当前朝向、累计为地面行程，
+  // 部件绘制时按行程选相位帧。按增量记账：一帧内多次绘制只有
+  // 第一次消费增量，总和与调用次数无关
+  if (char._drvX === undefined) { char._drvX = char.x; char._drvY = char.py || 0; char._drvAcc = 0; }
+  {
+    const fv = DRIVE_FACING[char.variant || 0] || [1, 0];
+    char._drvAcc += (char.x - char._drvX) * fv[0] + ((char.py || 0) - char._drvY) * fv[1];
+    char._drvX = char.x; char._drvY = char.py || 0;
+  }
   const sorted = sortParts(PARTS, char.variant);
   const els = [];
   const elByKey = new Map();
@@ -5202,6 +5499,16 @@ function frame(now) {
         di = Math.min(entry.disp.steps - 1, Math.floor(fr * entry.disp.steps));
       }
       const v = entry.animFrames[fi + ',' + di];
+      if (v) { tile = v.tile; place = v.place; }
+    }
+    // 驱动帧（履带滚动）：按累计地面行程选相位瓦片（盖过表面动画
+    // 帧、让位于逐帧修正——修正是定点补画，语义在最上层）
+    if (part.drive && entry.driveFrames) {
+      const total = (part.drive.frames ? part.drive.frames.length : 0) + 1;
+      const step = part.drive.step || 4;
+      let fi = Math.floor((char._drvAcc || 0) / step) % total;
+      if (fi < 0) fi += total;
+      const v = entry.driveFrames[fi];
       if (v) { tile = v.tile; place = v.place; }
     }
     // 逐帧像素修正（矫正烘焙）：主导表演在本帧有替代图 → 换瓦片

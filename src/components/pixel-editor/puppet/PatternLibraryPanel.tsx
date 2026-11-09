@@ -17,7 +17,8 @@ import {
   type DynChildRef, type EntryDef, type LibraryEntry, type SurfaceEntryDef,
 } from '@/lib/library-entries';
 import { expandDynamicEntry } from '@/lib/dynamic-expand';
-import { cachedThumb, dynamicPosterRGBA, faceThumbRGBA, samplePreviewCharacter, surfaceThumbRGBA } from '@/lib/library-thumbs';
+import { renderEntryDef } from '@/lib/mecha/entry-render';
+import { cachedThumb, dynamicPosterRGBA, faceThumbRGBA, finishThumbRGBA, mechaThumbRGBA, rgbaToDataUrl, samplePreviewCharacter, surfaceThumbRGBA } from '@/lib/library-thumbs';
 import { convertCharacterToRuntimePackage } from '@/lib/proc-runtime/convert';
 import { buildRuntimeHtml } from '@/lib/proc-runtime/runtime-template';
 import type { Character } from '@/lib/unified-types';
@@ -42,7 +43,7 @@ export default function PatternLibraryPanel({
   onChanged?: () => void;
 }) {
   const [userEntries, setUserEntries] = useState<LibraryEntry[]>(() => loadUserEntries());
-  const [kindFilter, setKindFilter] = useState<'all' | 'dynamic' | 'surface' | 'chain' | 'face'>('all');
+  const [kindFilter, setKindFilter] = useState<'all' | 'dynamic' | 'surface' | 'chain' | 'face' | 'mecha' | 'finish'>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   /** 正在编辑的草稿（工作副本；保存才落 withDraft） */
   const [draftWork, setDraftWork] = useState<{ entryId: string; def: DynamicEntryDef } | null>(null);
@@ -147,6 +148,8 @@ export default function PatternLibraryPanel({
             <option value="surface">表面</option>
             <option value="chain">链</option>
             <option value="face">脸型</option>
+            <option value="mecha">机甲</option>
+            <option value="finish">着色</option>
           </select>
           <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2" onClick={() => createEntry('leaf')}>新建动态叶子</Button>
           <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2" onClick={() => createEntry('parent')}>新建动态父模式</Button>
@@ -165,11 +168,11 @@ export default function PatternLibraryPanel({
                 >
                   <div className="flex items-center gap-1.5 mb-0.5">
                     <EntryThumb entry={e} index={libraryIndexOf(all)} size={30} />
-                    <span className="text-[8px] text-gray-600">{e.kind === 'dynamic' ? '定格图' : e.kind === 'chain' ? '链段' : e.kind === 'face' ? '点位' : '烘焙图'}</span>
+                    <span className="text-[8px] text-gray-600">{e.kind === 'dynamic' ? '定格图' : e.kind === 'chain' ? '链段' : e.kind === 'face' ? '点位' : e.kind === 'mecha' ? '部件图' : e.kind === 'finish' ? '着色样' : '烘焙图'}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] text-gray-200 flex-1 truncate">{e.name}</span>
-                    <span className="text-[8px] text-gray-500">{e.kind === 'dynamic' ? '动态' : e.kind === 'chain' ? '链' : e.kind === 'face' ? '脸型' : '表面'}</span>
+                    <span className="text-[8px] text-gray-500">{e.kind === 'dynamic' ? '动态' : e.kind === 'chain' ? '链' : e.kind === 'face' ? '脸型' : e.kind === 'mecha' ? '机甲' : e.kind === 'finish' ? '着色' : '表面'}</span>
                     {e.builtin && <span className="text-[8px] text-gray-600">内置</span>}
                   </div>
                   <div className="text-[8px] text-gray-500">
@@ -186,7 +189,7 @@ export default function PatternLibraryPanel({
               <>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[11px] text-gray-100">{selected.name}</span>
-                  <span className="text-[9px] text-gray-500">{selected.id} · {selected.kind === 'dynamic' ? '动态' : selected.kind === 'chain' ? '链' : selected.kind === 'face' ? '脸型' : '表面'} · {selected.cluster}</span>
+                  <span className="text-[9px] text-gray-500">{selected.id} · {selected.kind === 'dynamic' ? '动态' : selected.kind === 'chain' ? '链' : selected.kind === 'face' ? '脸型' : selected.kind === 'mecha' ? '机甲' : selected.kind === 'finish' ? '着色' : '表面'} · {selected.cluster}</span>
                   <div className="flex-1" />
                   {!selected.builtin && selected.kind === 'dynamic' && !draftWork && (
                     <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5 text-cyan-300"
@@ -235,7 +238,11 @@ export default function PatternLibraryPanel({
                       ? <p className="text-[9px] text-gray-600 leading-relaxed">像素链预设段：在节点蓝图里「插入」整段使用，或在修改器面板落成参数预设（持续型）。插入后的链进包真跑。</p>
                       : selected.kind === 'face'
                         ? <p className="text-[9px] text-gray-600 leading-relaxed">五官点位参数组（相对头部框的比例）。应用与编辑在头部节点的「转面」面板里：选预设套用、在预览上拖点改比例、可另存为新脸型。</p>
-                        : <p className="text-[9px] text-gray-600 leading-relaxed">标准瓦片烘焙图；实际部件形状不同，图案按同一图生成。</p>}
+                        : selected.kind === 'mecha'
+                          ? <p className="text-[9px] text-gray-600 leading-relaxed">机甲构造模式：生成器 + 变体选择（+钉版引用的着色）。规格编辑在机甲向导里：改参后存为条目，在此治理版本与引用。</p>
+                          : selected.kind === 'finish'
+                            ? <p className="text-[9px] text-gray-600 leading-relaxed">着色：算子条目是着色层的一道工序（高光棱、做旧等），组合条目钉版引用算子拼成一套着色。左图样例 = 头组·橄榄套用本条目着色。</p>
+                            : <p className="text-[9px] text-gray-600 leading-relaxed">标准瓦片烘焙图；实际部件形状不同，图案按同一图生成。</p>}
                 </div>
                 {selected.kind === 'dynamic' && (
                   <EntryLivePreview entry={selected} allEntries={all} />
@@ -277,6 +284,72 @@ export default function PatternLibraryPanel({
                       {rows.map(([k, v]) => (
                         <p key={k} className="text-[9px] text-gray-400">{k} <span className="text-gray-600">{v.toFixed(2)}</span></p>
                       ))}
+                    </div>
+                  );
+                })()}
+                {selected.kind === 'mecha' && (() => {
+                  const found = defOf(libraryIndexOf(all), selected.id);
+                  const def = found && 'kind' in found.def && found.def.kind === 'mecha' ? found.def : undefined;
+                  if (!def || !found) return null;
+                  const GEN_LABEL: Record<string, string> = {
+                    leg: '腿组合', arm: '臂组合', torso: '躯干组', head: '头组', hand: '手型',
+                    hull: '车体组', multileg: '多足腿', track: '履带', wheel: '轮足', jetpack: '喷射背包', weapon: '武器',
+                  };
+                  return (
+                    <div className="space-y-1.5">
+                      <Label className="text-[9px] text-gray-600">机甲模式（v{found.version}）</Label>
+                      {def.form === 'gen' ? (
+                        <>
+                          <p className="text-[9px] text-gray-400">
+                            {GEN_LABEL[def.gen] ?? def.gen} · 族 {def.family}
+                            {def.scheme ? ` · 配色 ${def.scheme}` : ''}
+                            {def.profile ? ` · ${def.profile === 'spider' ? '蜘蛛' : '四足'}` : ''}
+                            {def.hullKind ? ` · ${def.hullKind === 'walker' ? '步行' : '运输'}` : ''}
+                            {def.weaponKind ? ` · ${def.weaponKind}` : ''}
+                          </p>
+                          {def.finish && (
+                            <p className="text-[9px] text-gray-400">着色 <span className="text-gray-600">{nameOf(def.finish.split('@')[0]!)}（{def.finish}）</span></p>
+                          )}
+                          {(def.overrides || def.hullOverrides) && (
+                            <p className="text-[9px] text-gray-500">变体覆盖：{JSON.stringify(def.gen === 'hull' ? def.hullOverrides : def.overrides)}</p>
+                          )}
+                        </>
+                      ) : (
+                        def.parts.map((pt, i) => (
+                          <p key={i} className="text-[9px] text-gray-400">
+                            {nameOf(pt.entry)} <span className="text-gray-600">v{pt.version}{pt.as ? ` → ${pt.as}` : ''}{pt.ov ? ` · 覆写 ${Object.keys(pt.ov).join('/')}` : ''}</span>
+                          </p>
+                        ))
+                      )}
+                      <MechaOutputsPreview entry={selected} index={libraryIndexOf(all)} />
+                    </div>
+                  );
+                })()}
+                {selected.kind === 'finish' && (() => {
+                  const found = defOf(libraryIndexOf(all), selected.id);
+                  const def = found && 'kind' in found.def && found.def.kind === 'finish' ? found.def : undefined;
+                  if (!def || !found) return null;
+                  const PASS_LABEL: Record<string, string> = {
+                    ridges: '高光棱', thickness: '料厚', wear: '做旧', camo: '迷彩', facets: '分面着色',
+                    shell: '壳面', stamps: '盖章', panel: '面板线', cables: '线缆着色',
+                  };
+                  const fmtParams = (p: Record<string, unknown>) => Object.entries(p)
+                    .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(',') : String(v)}`).join(' ');
+                  return (
+                    <div className="space-y-1">
+                      <Label className="text-[9px] text-gray-600">着色（v{found.version}）</Label>
+                      {def.form === 'pass' ? (
+                        <p className="text-[9px] text-gray-400">
+                          算子 · {PASS_LABEL[def.pass] ?? def.pass}
+                          <span className="text-gray-600"> {fmtParams(def.params as Record<string, unknown>)}</span>
+                        </p>
+                      ) : (
+                        def.parts.map((pt, i) => (
+                          <p key={i} className="text-[9px] text-gray-400">
+                            {nameOf(pt.entry)} <span className="text-gray-600">v{pt.version}{pt.params ? ` · ${fmtParams(pt.params as Record<string, unknown>)}` : ''}</span>
+                          </p>
+                        ))
+                      )}
                     </div>
                   );
                 })()}
@@ -351,6 +424,39 @@ export default function PatternLibraryPanel({
   );
 }
 
+/** 机甲条目输出预览：按条目真出图，全部命名输出逐张列出 */
+function MechaOutputsPreview({ entry, index }: {
+  entry: LibraryEntry;
+  index: ReturnType<typeof libraryIndexOf>;
+}) {
+  const imgs = React.useMemo(() => {
+    const found = defOf(index, entry.id);
+    if (!found || !('kind' in found.def) || found.def.kind !== 'mecha') return [];
+    try {
+      const outs = renderEntryDef(index, found.def);
+      return Object.entries(outs).map(([name, s]) => ({
+        name,
+        url: rgbaToDataUrl({ w: s.width, h: s.height, data: s.rgba as Uint8ClampedArray<ArrayBuffer> }),
+      }));
+    } catch {
+      return [];
+    }
+  }, [entry, index]);
+  if (imgs.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {imgs.map((im) => (
+        <div key={im.name} className="text-center">
+          {im.url
+            ? <img src={im.url} alt="" className="max-h-28 rounded bg-[#14142a]" style={{ imageRendering: 'pixelated' }} />
+            : <div className="h-16 w-16 rounded bg-[#14142a]" />}
+          <div className="text-[8px] text-gray-500 mt-0.5">{im.name}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** 条目缩略图：表面=烘焙图、动态=定格图（按 id@最新版缓存） */
 function EntryThumb({ entry, index, size }: {
   entry: LibraryEntry;
@@ -358,6 +464,12 @@ function EntryThumb({ entry, index, size }: {
   size: number;
 }) {
   const url = React.useMemo(() => {
+    if (entry.kind === 'mecha') {
+      return cachedThumb(`mecha:${entry.id}@${entry.latest}`, () => mechaThumbRGBA(index, entry, size));
+    }
+    if (entry.kind === 'finish') {
+      return cachedThumb(`finish:${entry.id}@${entry.latest}`, () => finishThumbRGBA(index, entry, size));
+    }
     if (entry.kind === 'face') {
       const found = defOf(index, entry.id);
       if (!found || !('kind' in found.def) || found.def.kind !== 'face') return undefined;

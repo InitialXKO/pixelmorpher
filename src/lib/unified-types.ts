@@ -353,6 +353,10 @@ export interface Sprite {
   heightmap?: number[][];        // Optional: hand-painted heightmap for bump_light
   landmarks?: SpriteLandmarks;   // Optional: 手动标注的特征点（眼/鼻/嘴），用于蒙皮转面
   marks?: SpriteMark[];          // Optional: 命名语义标记（点/选区/值/方向/矢量），消费端按名引用
+  /** 驱动帧（履带滚动等地面驱动件）：本精灵为相位第 0 帧，frameSpriteIds
+   * 为其余相位帧精灵（同几何、同插头口径）；step = 每帧对应的地面位移 px。
+   * convert 进包为 part.drive，运行时按角色累计朝向位移选帧。 */
+  drive?: { step: number; frameSpriteIds: string[] };
   folder?: string;               // Optional: 归档文件夹（路径式，如「方向/南」=出生方向）；无 = 未分方向
   origin?: { characterId: string; boneName?: string }; // Optional: 出生标签（烘焙时写入，复用不追加——Q1 定案）
   /** 分部件相机半宽（归一化单位），用于渲染时换算到全局尺度（可逆性：记录尺度差） */
@@ -641,6 +645,7 @@ export interface NodeTransform {
   stretch: number;              // Y-axis stretch factor (0.5 ~ 2.0)
   variantIndex: DirectionIndex; // Direction variant index (0-7)
   scaleX?: number;               // X-axis scale factor (blueprint t.scaleX, default 1)
+  mirrorX?: boolean;             // 节点镜像：本节点起的子树绘制镜像翻转（与方向镜像同一通道，XOR 叠加）；整肢翻转（如后腿）挂在链根节点
   skewX?: number;               // Skew X in degrees (blueprint t.skewX, default 0)
   skewY?: number;               // Skew Y in degrees (blueprint t.skewY, default 0)
 }

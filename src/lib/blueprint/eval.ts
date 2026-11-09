@@ -16,6 +16,7 @@ import { evalExpression } from '../expression-parser';
 import type { ModifierParamValue, PartAnimationModifier } from '../types';
 import { solveIK2Bone, solveIKFabrik } from './ik';
 import { rotatePseudo3D } from '../unified-types';
+import { getMechaEntryGrid, getMechaPartGrid } from '../mecha/build-character';
 
 /**
  * Cubic-bezier 缓动求值（借鉴 keyframe-engine）。
@@ -153,6 +154,41 @@ export const EVALUATORS: Record<string, NodeEvaluator> = {
   // 精灵源：从 eval 上下文取原始像素图（由渲染管线传入）
   sprite_source: (_n, _i, ctx): Record<string, BlueprintValue> => {
     const grid = (ctx as any).spritePixels;
+    if (!grid) return {};
+    return { pixels: pixelsVal(grid) };
+  },
+
+  // 机甲源：模式库程序化机甲部件。与向导同权，两条路：
+  // (1) entry 引用模式库机甲条目（'id@版本'）+ output 选输出
+  // （组合条目输出名形如 leg.thigh）——变体/着色/组合全走条目；
+  // (2) 裸参数：part 选部位全集（分段/轮足/多足/履带/背包/
+  // 武器/车体及拆分）、family 选族、scheme 选配色、profile
+  // 选多足型面、overrides 是覆盖 JSON（与条目同一套覆盖类型）。
+  // 像素格按签名缓存，求值只读缓存。
+  mecha_source: (n): Record<string, BlueprintValue> => {
+    const entryRef = String(n.params.entry ?? '').trim();
+    if (entryRef) {
+      const grid = getMechaEntryGrid(entryRef, String(n.params.output ?? '') || undefined);
+      return grid ? { pixels: pixelsVal(grid) } : {};
+    }
+    let overrides: import('../mecha/build-character').MechaSourceOptions['overrides'];
+    const ovRaw = String(n.params.overrides ?? '').trim();
+    if (ovRaw) {
+      try {
+        const v = JSON.parse(ovRaw) as unknown;
+        if (v && typeof v === 'object') overrides = v as typeof overrides;
+      } catch { /* 覆盖 JSON 写错 = 无覆盖（不拖垮整图求值） */ }
+    }
+    const schemeRaw = String(n.params.scheme ?? '').trim();
+    const profileRaw = String(n.params.profile ?? '').trim();
+    const surfaceRaw = String(n.params.surface ?? '').trim();
+    const grid = getMechaPartGrid(
+      String(n.params.family ?? 'olive'), String(n.params.part ?? 'leg'), {
+        scheme: schemeRaw ? schemeRaw as import('../mecha/parts').MechaSchemeName : undefined,
+        profile: profileRaw === 'quad' || profileRaw === 'spider' ? profileRaw : undefined,
+        overrides,
+        surface: surfaceRaw || undefined,
+      });
     if (!grid) return {};
     return { pixels: pixelsVal(grid) };
   },
@@ -2497,6 +2533,7 @@ export const BLUEPRINT_NODE_LABELS: Record<string, string> = {
   costume: '服装源',
   costume_state: '服装状态',
   character_source: '角色源',
+  mecha_source: '机甲源',
   // 数学
   add: '加',
   sub: '减',

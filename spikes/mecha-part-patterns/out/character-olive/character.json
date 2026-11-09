@@ -1,0 +1,136 @@
+{
+ "name": "olive-mecha-01",
+ "model": "node-costume",
+ "note": "spike 规格：节点树 + 服装件（精灵+插头），姿势由节点角驱动，与画布无关",
+ "nodes": [
+  {
+   "id": "pelvis",
+   "parent": null,
+   "at": {
+    "x": 0,
+    "y": 0
+   },
+   "piece": "torso"
+  },
+  {
+   "id": "neck",
+   "parent": "pelvis",
+   "at": {
+    "x": 0,
+    "y": -212
+   },
+   "piece": "head"
+  },
+  {
+   "id": "shoulder.N",
+   "parent": "pelvis",
+   "at": {
+    "x": 45,
+    "y": -190.76
+   },
+   "piece": "arm-upper"
+  },
+  {
+   "id": "elbow.N",
+   "parent": "shoulder.N",
+   "at": {
+    "x": 7.07575276457446,
+    "y": 117.78766371235409
+   },
+   "piece": "arm-fore"
+  },
+  {
+   "id": "shoulder.F",
+   "parent": "pelvis",
+   "at": {
+    "x": 11,
+    "y": -192.76
+   },
+   "piece": "arm-upper"
+  },
+  {
+   "id": "elbow.F",
+   "parent": "shoulder.F",
+   "at": {
+    "x": 7.07575276457446,
+    "y": 117.78766371235409
+   },
+   "piece": "arm-fore"
+  },
+  {
+   "id": "hip.N",
+   "parent": "pelvis",
+   "at": {
+    "x": 10,
+    "y": -2
+   },
+   "piece": "leg"
+  },
+  {
+   "id": "hip.F",
+   "parent": "pelvis",
+   "at": {
+    "x": -24,
+    "y": -4
+   },
+   "piece": "leg"
+  }
+ ],
+ "sprites": {
+  "leg": {
+   "file": "leg.png",
+   "w": 201,
+   "h": 473,
+   "plug": {
+    "x": 60,
+    "y": 16
+   }
+  },
+  "arm-upper": {
+   "file": "arm-upper.png",
+   "w": 117,
+   "h": 165,
+   "plug": {
+    "x": 57,
+    "y": 40
+   }
+  },
+  "arm-fore": {
+   "file": "arm-fore.png",
+   "w": 94,
+   "h": 221,
+   "plug": {
+    "x": 41.07575276457446,
+    "y": 17.78766371235409
+   }
+  },
+  "torso": {
+   "file": "torso.png",
+   "w": 182,
+   "h": 216,
+   "plug": {
+    "x": 104,
+    "y": 218
+   }
+  },
+  "head": {
+   "file": "head.png",
+   "w": 106,
+   "h": 104,
+   "plug": {
+    "x": 45,
+    "y": 87
+   }
+  }
+ },
+ "poses": {
+  "stand": {},
+  "stride": {
+   "hip.N": 0.3,
+   "hip.F": -0.22,
+   "elbow.N": -0.6,
+   "shoulder.N": -0.15,
+   "neck": 0.08
+  }
+ }
+}
