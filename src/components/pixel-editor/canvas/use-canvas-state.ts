@@ -139,6 +139,9 @@ export function useCanvasState() {
     });
     const unsub2 = useEditorStore.subscribe((state, prevState) => {
       if (state.playState !== prevState.playState) playStateRef.current = state.playState;
+      // 当前角色切换必须标脏：画布互斥显示按它过滤，不标脏就得拖一下
+      // 才肯重绘（资产面板切角色、向导生成后激活都走这条）
+      if (state.activePuppetSkeletonId !== prevState.activePuppetSkeletonId) dirtyRef.current = true;
       if (state.zoom !== prevState.zoom || state.panX !== prevState.panX || state.panY !== prevState.panY) {
         zoomRef.current = state.zoom;
         panRef.current = { x: state.panX, y: state.panY };

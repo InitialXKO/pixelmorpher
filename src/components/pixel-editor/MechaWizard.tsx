@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useProjectStore } from '@/lib/store';
+import { useEditorStore } from '@/lib/store/editor-store';
 import { projectToView, subToPx, pxToSub } from '@/lib/unified-types';
 import type { Character, Sprite } from '@/lib/unified-types';
 import { computeWorldTransforms, renderCharacterOnionFrameFromCharacter } from '@/lib/unified-render';
@@ -995,7 +996,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
       finally { setBusy(false); }
     }, 30);
     return () => clearTimeout(t);
-  }, [open, sig]);
+  }, [open, sig, PW, PH]);
 
   const handleCreate = () => {
     const charName = name.trim() || '机甲';
@@ -1019,6 +1020,9 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
       setNote('生成出错：' + (e as Error).message);
       return;
     }
+    // 激活新角色：画布互斥显示只认当前角色，不激活则生成完看不见
+    // （参考装配向导生成后同样有这一步）
+    useEditorStore.getState().setActivePuppetSkeletonId(characterId);
     const created = useProjectStore.getState().unifiedCharacters[characterId];
     const nNodes = created ? Object.keys(created.nodes).length : 0;
     const nChains = created?.ikChains?.length ?? 0;
