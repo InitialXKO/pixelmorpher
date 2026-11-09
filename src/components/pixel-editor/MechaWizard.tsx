@@ -27,23 +27,43 @@ import {
   generateMechaJetpack, generateMechaWeapon, generateMechaHullBody, generateMechaTurret,
   MECHA_FAMILIES, MECHA_CHEST_LABELS, MECHA_SCHEME_LABELS, MECHA_FAMILY_SCHEME,
   mechaLegSpecOf, mechaArmSpecOf, mechaTorsoSpecOf, mechaHeadSpecOf, mechaHullSpecOf,
+  resolveProportions, MECHA_VEHICLE_PROPORTION_DEFAULTS,
+  WEAPON_PRESETS, WEAPON_AXIS_OPTIONS,
 } from '@/lib/mecha/parts';
 import type {
-  MechaFamily, MechaPartSet, MechaSpriteData, MechaSchemeName, MechaPartOverrides,
+  MechaFamily, MechaPartSet, MechaSpriteData, MechaSchemeName, MechaPartOverrides, MechaProportions, MechaProportionsFull, WeaponCombo, WeaponClass,
   MechaLegOverrides, MechaArmOverrides, MechaTorsoOverrides, MechaHeadOverrides, MechaHullOverrides,
 } from '@/lib/mecha/parts';
-import type { LegSpec, ArmSpec, TorsoSpec, HeadSpec, HullSpec } from '@/lib/mecha/engine';
+import type { LegSpec, ArmSpec, TorsoSpec, TorsoProfile, HeadSpec, HullSpec, BlockShapeParams } from '@/lib/mecha/engine';
+import { torsoProfileOf } from '@/lib/mecha/engine';
 import {
   assembleMechaCharacter, assembleMechaVehicle, createMechaCharacterInStore, createMechaVehicleInStore,
-  mechaHumanoidNodeParts, mechaVehicleNodeParts, mechaMobilityFamily,
+  mechaHumanoidNodeParts, mechaVehicleNodeParts, mechaMobilityFamily, mechaVehicleScheme,
   MECHA_VEHICLE_LABELS, MECHA_POD_MOUNT_LABELS,
 } from '@/lib/mecha/build-character';
 import type { MechaBuildOptions, MechaVehicleOptions, MechaPodMount } from '@/lib/mecha/build-character';
+import {
+  BUILTIN_ENTRIES, libraryIndexOf, loadUserEntries, mechaDefOf, parseRefId, saveUserEntries,
+  type LibraryEntry, type MechaEntryDef, type MechaGenDef,
+} from '@/lib/library-entries';
+import { applyComboOv, expandFinishDef } from '@/lib/mecha/entry-render';
+import { finishDefOf, surfaceDefOf } from '@/lib/library-entries';
+import { applySurface, type SurfaceChoice } from '@/lib/mecha/surface';
+import type { MechaFinishOv } from '@/lib/mecha/parts';
 
 type Mode = 'humanoid' | 'vehicle';
-type WeaponSel = 'none' | 'cannon' | 'rifle';
+type WeaponSel = string; // 'none' 或武器预设 id（WEAPON_PRESETS）
 
 const DEG = 180 / Math.PI;
+
+/** 表面材质候选（工业类表面条目，第一期：武器 / 车体） */
+const SURFACE_CHIPS: { ref: string; label: string }[] = [
+  { ref: 'mech-pro@1', label: '精密机甲板' },
+  { ref: 'vent-pro@1', label: '重型散热板' },
+  { ref: 'carbon@1', label: '碳纤维' },
+  { ref: 'steel@1', label: '工业钢板' },
+  { ref: 'armor@1', label: '装甲钢板' },
+];
 const RAD = Math.PI / 180;
 const r1 = (v: number) => Math.round(v * 10) / 10;
 function hexToRgb(hex: string): [number, number, number] {
@@ -60,32 +80,42 @@ interface LegCtl {
   lift: number; coreScale: number; detail: number; wear: number; camo: boolean;
   shellMode: boolean; frameHeavy: boolean; guardOff: boolean; decalKind: string; cableTint: string; seed: number;
   kneeScale: number; calfScale: number; shinConcave: number;
+  standSplay: number; standReach: number;
 }
 interface ArmCtl {
   hand: string; bulk: number; shell: number; upperLen: number; foreLen: number;
   upperAngDeg: number; elbowBendDeg: number; diag: number;
   formShell: string; formElbow: string; formFore: string; fingerLen: number; fingerCurl: number;
   gearCable: boolean; gearPiston: boolean; gearDevice: boolean; gearStripe: boolean;
+  insKind: number; insAlong: number; insPerp: number; // 徽章模式参数（种类 −1=无 + 肩框落点），用户定
   twoTone: boolean; wear: number; camo: boolean; seed: number;
+  bsCham: number; bsVarLo: number; bsVarHi: number; bsStep: number;
 }
 interface TorsoCtl {
   chestW: number; chestH: number; waistH: number; pelvisH: number;
+  profTop: number; profFold: number; profFoldY: number; profBase: number; profDivY: number;
+  intakeDx: number; intakeDy: number; intakeShareW: number; intakeShareH: number; boxDx: number; boxDy: number;
+  intakeOrient: string; intakeTrim: boolean;
+  keelPlate: boolean; keelReach: number; ventFuse: boolean; neckStruts: boolean;
   formChest: string; formBack: string; formGrille: string; formSkirt: string;
-  gearStripe: boolean; gearInsignia: number; gearNumber: string;
+  gearStripe: boolean; gearInsignia: number; gearNumber: string; insX: number; insY: number; // 徽章落点（模式参数，用户定）
   twoTone: boolean; wear: number; camo: boolean; seed: number;
+  bsCham: number; bsVarLo: number; bsVarHi: number; bsStep: number;
 }
 interface HeadCtl {
   w: number; h: number; tiltDeg: number;
   formCrown: string; formEye: string; formBrow: boolean; formJaw: string; formEar: string; formTop: string; formCheek: boolean;
   twoTone: boolean; wear: number; camo: boolean; seed: number;
+  bsCham: number; bsVarLo: number; bsVarHi: number; bsStep: number;
 }
 interface HullCtl {
   hullW: number; hullH: number; formTurret: string; formCabin: string; formSkirt: boolean; formModules: number;
-  gearInsignia: number; gearNumber: string; twoTone: boolean; wear: number; camo: boolean; seed: number;
+  gearInsignia: number; gearNumber: string; insX: number; insY: number; twoTone: boolean; wear: number; camo: boolean; seed: number;
+  sagCables: boolean; sidePod: boolean;
+  bsCham: number; bsVarLo: number; bsVarHi: number; bsStep: number;
 }
 
-function legDefaults(f: MechaFamily): LegCtl {
-  const s = mechaLegSpecOf(f);
+function legCtlFromSpec(s: LegSpec): LegCtl {
   return {
     footType: s.footType ?? 'blocks', topology: s.topology, bend: s.bend,
     wScale: s.wScale ?? 1, ankleShift: s.ankleShift ?? 10, lift: s.lift ?? 0,
@@ -94,45 +124,103 @@ function legDefaults(f: MechaFamily): LegCtl {
     guardOff: s.guardOff ?? false, decalKind: s.decalKind ?? 'num',
     cableTint: s.cableTint ? rgbToHex(s.cableTint) : '', seed: s.seed,
     kneeScale: s.kneeScale ?? 1, calfScale: s.calfScale ?? 1, shinConcave: s.shinConcave ?? 1,
+    standSplay: s.standSplay ?? 0.23, standReach: s.standReach ?? 0.93,
   };
 }
-function armDefaults(f: MechaFamily): ArmCtl {
-  const s = mechaArmSpecOf(f);
+function armCtlFromSpec(s: ArmSpec): ArmCtl {
   return {
     hand: s.hand, bulk: s.bulk, shell: s.shell, upperLen: s.upperLen, foreLen: s.foreLen,
     upperAngDeg: r1(s.upperAng * DEG), elbowBendDeg: r1(s.elbowBend * DEG), diag: s.diag,
     formShell: s.form.shell, formElbow: s.form.elbow, formFore: s.form.fore,
     fingerLen: s.form.fingerLen, fingerCurl: s.form.fingerCurl,
     gearCable: s.gear.cable, gearPiston: s.gear.piston, gearDevice: s.gear.device, gearStripe: s.gear.stripe,
+    insKind: s.insignia?.kind ?? -1, insAlong: s.insignia?.along ?? -10, insPerp: s.insignia?.perp ?? -4,
     twoTone: s.twoTone, wear: s.wear, camo: s.camo, seed: s.seed,
+    bsCham: s.blockShape?.chamFloor ?? 0.3, bsVarLo: s.blockShape?.varLo ?? 0.3, bsVarHi: s.blockShape?.varHi ?? 1.8, bsStep: s.blockShape?.stepP ?? 0.45,
   };
 }
-function torsoDefaults(f: MechaFamily): TorsoCtl {
-  const s = mechaTorsoSpecOf(f);
+function torsoCtlFromSpec(s: TorsoSpec): TorsoCtl {
+  const P = torsoProfileOf(s), r2 = (v: number) => Math.round(v * 100) / 100;
   return {
     chestW: s.chestW, chestH: s.chestH, waistH: s.waistH, pelvisH: s.pelvisH,
+    profTop: r2(P.top), profFold: r2(P.fold), profFoldY: r2(P.foldY), profBase: r2(P.base), profDivY: r2(P.divY),
+    intakeDx: s.intakeDepth?.[0] ?? 0.08, intakeDy: s.intakeDepth?.[1] ?? 0.08, intakeShareW: s.intakeShare?.[0] ?? 0.92, intakeShareH: s.intakeShare?.[1] ?? 0.75,
+    boxDx: s.boxDepth?.[0] ?? 0.92, boxDy: s.boxDepth?.[1] ?? 0.7,
+    intakeOrient: s.intakeOrient ?? 'flat', intakeTrim: s.intakeTrim !== false,
+    keelPlate: s.keelPlate !== false, keelReach: s.keelReach ?? 0.32, ventFuse: s.ventFuse !== false, neckStruts: s.neckStruts === true,
     formChest: s.form.chest, formBack: s.form.back, formGrille: s.form.grille, formSkirt: s.form.skirt,
     gearStripe: s.gear.stripe, gearInsignia: s.gear.insignia, gearNumber: s.gear.number,
+    insX: r2(s.insigniaPos?.[0] ?? 0.16), insY: r2(s.insigniaPos?.[1] ?? 0.26),
     twoTone: s.twoTone, wear: s.wear, camo: s.camo, seed: s.seed,
+    bsCham: s.blockShape?.chamFloor ?? 0.3, bsVarLo: s.blockShape?.varLo ?? 0.3, bsVarHi: s.blockShape?.varHi ?? 1.8, bsStep: s.blockShape?.stepP ?? 0.45,
   };
 }
-function headDefaults(f: MechaFamily): HeadCtl {
-  const s = mechaHeadSpecOf(f);
+function headCtlFromSpec(s: HeadSpec): HeadCtl {
   return {
     w: s.w, h: s.h, tiltDeg: r1(s.tilt * DEG),
     formCrown: s.form.crown, formEye: s.form.eye, formBrow: s.form.brow, formJaw: s.form.jaw,
     formEar: s.form.ear, formTop: s.form.top, formCheek: s.form.cheekCable,
     twoTone: s.twoTone, wear: s.wear, camo: s.camo, seed: s.seed,
+    bsCham: s.blockShape?.chamFloor ?? 0.3, bsVarLo: s.blockShape?.varLo ?? 0.3, bsVarHi: s.blockShape?.varHi ?? 1.8, bsStep: s.blockShape?.stepP ?? 0.45,
   };
 }
-function hullDefaults(kind: 'walker' | 'hauler'): HullCtl {
-  const s = mechaHullSpecOf(kind);
+function hullCtlFromSpec(s: HullSpec): HullCtl {
   return {
     hullW: s.hullW, hullH: s.hullH, formTurret: s.form.turret, formCabin: s.form.cabin,
     formSkirt: s.form.skirt, formModules: s.form.modules,
     gearInsignia: s.gear.insignia, gearNumber: s.gear.number,
+    insX: Math.round((s.insigniaPos?.[0] ?? 0) * 100) / 100, insY: Math.round((s.insigniaPos?.[1] ?? 0) * 100) / 100,
+    sagCables: s.sagCables === true, sidePod: s.sidePod === true,
     twoTone: s.twoTone, wear: s.wear, camo: s.camo, seed: s.seed,
+    bsCham: s.blockShape?.chamFloor ?? 0.3, bsVarLo: s.blockShape?.varLo ?? 0.3, bsVarHi: s.blockShape?.varHi ?? 1.8, bsStep: s.blockShape?.stepP ?? 0.45,
   };
+}
+
+const legDefaults = (f: MechaFamily): LegCtl => legCtlFromSpec(mechaLegSpecOf(f));
+const armDefaults = (f: MechaFamily): ArmCtl => armCtlFromSpec(mechaArmSpecOf(f));
+const torsoDefaults = (f: MechaFamily): TorsoCtl => torsoCtlFromSpec(mechaTorsoSpecOf(f));
+const headDefaults = (f: MechaFamily): HeadCtl => headCtlFromSpec(mechaHeadSpecOf(f));
+const hullDefaults = (kind: 'walker' | 'hauler'): HullCtl => hullCtlFromSpec(mechaHullSpecOf(kind));
+
+/** 条目 def 的覆盖并回规格再投影成控件值（与生成侧同一合并口径） */
+const legCtlFromMerged = (f: MechaFamily, ov?: MechaLegOverrides): LegCtl =>
+  legCtlFromSpec({ ...mechaLegSpecOf(f), ...(ov ?? {}) });
+const armCtlFromMerged = (f: MechaFamily, ov?: MechaArmOverrides): ArmCtl => {
+  const b = mechaArmSpecOf(f);
+  return armCtlFromSpec({ ...b, ...(ov ?? {}), blockShape: { ...(b.blockShape ?? { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }), ...(ov?.blockShape ?? {}) }, form: { ...b.form, ...(ov?.form ?? {}) }, gear: { ...b.gear, ...(ov?.gear ?? {}) } });
+};
+const torsoCtlFromMerged = (f: MechaFamily, ov?: MechaTorsoOverrides): TorsoCtl => {
+  const b = mechaTorsoSpecOf(f);
+  return torsoCtlFromSpec({ ...b, ...(ov ?? {}), blockShape: { ...(b.blockShape ?? { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }), ...(ov?.blockShape ?? {}) }, form: { ...b.form, ...(ov?.form ?? {}) }, gear: { ...b.gear, ...(ov?.gear ?? {}) }, profile: { ...(b.profile ?? {}), ...(ov?.profile ?? {}) } });
+};
+const headCtlFromMerged = (f: MechaFamily, ov?: MechaHeadOverrides): HeadCtl => {
+  const b = mechaHeadSpecOf(f);
+  return headCtlFromSpec({ ...b, ...(ov ?? {}), blockShape: { ...(b.blockShape ?? { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }), ...(ov?.blockShape ?? {}) }, form: { ...b.form, ...(ov?.form ?? {}) } });
+};
+const hullCtlFromMerged = (kind: 'walker' | 'hauler', ov?: MechaHullOverrides): HullCtl => {
+  const b = mechaHullSpecOf(kind);
+  return hullCtlFromSpec({ ...b, ...(ov ?? {}), blockShape: { ...(b.blockShape ?? { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }), ...(ov?.blockShape ?? {}) }, form: { ...b.form, ...(ov?.form ?? {}) }, gear: { ...b.gear, ...(ov?.gear ?? {}) } });
+};
+
+/** 着色展开值 → 部件覆盖通道（只取有值的字段；与条目调用口同一口径） */
+function finLegChannels(fin: MechaFinishOv): MechaLegOverrides {
+  const o: Record<string, unknown> = {};
+  if (fin.wear !== undefined) o.wear = fin.wear;
+  if (fin.camo !== undefined) o.camo = fin.camo;
+  if (fin.detail !== undefined) o.detail = fin.detail;
+  if (fin.shellMode !== undefined) o.shellMode = fin.shellMode;
+  if (fin.ridges !== undefined) o.ridges = fin.ridges;
+  if (fin.thickRatio !== undefined) o.thickRatio = fin.thickRatio;
+  if (fin.decalKind !== undefined) o.decalKind = fin.decalKind;
+  if (fin.cableTint !== undefined) o.cableTint = fin.cableTint;
+  return o as MechaLegOverrides;
+}
+function finCommonChannels(fin: MechaFinishOv): { wear?: number; camo?: boolean; twoTone?: boolean } {
+  const o: { wear?: number; camo?: boolean; twoTone?: boolean } = {};
+  if (fin.wear !== undefined) o.wear = fin.wear;
+  if (fin.camo !== undefined) o.camo = fin.camo;
+  if (fin.twoTone !== undefined) o.twoTone = fin.twoTone;
+  return o;
 }
 
 function buildLegOv(def: LegCtl, cur: LegCtl): MechaLegOverrides | undefined {
@@ -156,6 +244,8 @@ function buildLegOv(def: LegCtl, cur: LegCtl): MechaLegOverrides | undefined {
   if (cur.kneeScale !== def.kneeScale) ov.kneeScale = cur.kneeScale;
   if (cur.calfScale !== def.calfScale) ov.calfScale = cur.calfScale;
   if (cur.shinConcave !== def.shinConcave) ov.shinConcave = cur.shinConcave;
+  if (cur.standSplay !== def.standSplay) ov.standSplay = cur.standSplay;
+  if (cur.standReach !== def.standReach) ov.standReach = cur.standReach;
   return Object.keys(ov).length ? ov : undefined;
 }
 function buildArmOv(def: ArmCtl, cur: ArmCtl): MechaArmOverrides | undefined {
@@ -181,10 +271,17 @@ function buildArmOv(def: ArmCtl, cur: ArmCtl): MechaArmOverrides | undefined {
   if (cur.gearDevice !== def.gearDevice) gear.device = cur.gearDevice;
   if (cur.gearStripe !== def.gearStripe) gear.stripe = cur.gearStripe;
   if (Object.keys(gear).length) ov.gear = gear;
+  if (cur.insKind !== def.insKind || cur.insAlong !== def.insAlong || cur.insPerp !== def.insPerp) ov.insignia = cur.insKind < 0 ? undefined : { kind: cur.insKind, along: cur.insAlong, perp: cur.insPerp };
   if (cur.twoTone !== def.twoTone) ov.twoTone = cur.twoTone;
   if (cur.wear !== def.wear) ov.wear = cur.wear;
   if (cur.camo !== def.camo) ov.camo = cur.camo;
   if (cur.seed !== def.seed) ov.seed = cur.seed;
+  const bs: Partial<BlockShapeParams> = {};
+  if (cur.bsCham !== def.bsCham) bs.chamFloor = cur.bsCham;
+  if (cur.bsVarLo !== def.bsVarLo) bs.varLo = cur.bsVarLo;
+  if (cur.bsVarHi !== def.bsVarHi) bs.varHi = cur.bsVarHi;
+  if (cur.bsStep !== def.bsStep) bs.stepP = cur.bsStep;
+  if (Object.keys(bs).length) ov.blockShape = bs;
   return Object.keys(ov).length ? ov : undefined;
 }
 function buildTorsoOv(def: TorsoCtl, cur: TorsoCtl): MechaTorsoOverrides | undefined {
@@ -192,6 +289,15 @@ function buildTorsoOv(def: TorsoCtl, cur: TorsoCtl): MechaTorsoOverrides | undef
   if (cur.chestW !== def.chestW) ov.chestW = cur.chestW;
   if (cur.chestH !== def.chestH) ov.chestH = cur.chestH;
   if (cur.waistH !== def.waistH) ov.waistH = cur.waistH;
+  if (cur.intakeDx !== def.intakeDx || cur.intakeDy !== def.intakeDy) ov.intakeDepth = [cur.intakeDx, cur.intakeDy];
+  if (cur.boxDx !== def.boxDx || cur.boxDy !== def.boxDy) ov.boxDepth = [cur.boxDx, cur.boxDy];
+  if (cur.intakeShareW !== def.intakeShareW || cur.intakeShareH !== def.intakeShareH) ov.intakeShare = [cur.intakeShareW, cur.intakeShareH];
+  if (cur.intakeOrient !== def.intakeOrient) ov.intakeOrient = cur.intakeOrient as 'keel' | 'flat';
+  if (cur.intakeTrim !== def.intakeTrim) ov.intakeTrim = cur.intakeTrim;
+  if (cur.keelPlate !== def.keelPlate) ov.keelPlate = cur.keelPlate;
+  if (cur.neckStruts !== def.neckStruts) ov.neckStruts = cur.neckStruts;
+  if (cur.keelReach !== def.keelReach) ov.keelReach = cur.keelReach;
+  if (cur.ventFuse !== def.ventFuse) ov.ventFuse = cur.ventFuse;
   if (cur.pelvisH !== def.pelvisH) ov.pelvisH = cur.pelvisH;
   const form: Partial<TorsoSpec['form']> = {};
   if (cur.formChest !== def.formChest) form.chest = cur.formChest as TorsoSpec['form']['chest'];
@@ -204,10 +310,24 @@ function buildTorsoOv(def: TorsoCtl, cur: TorsoCtl): MechaTorsoOverrides | undef
   if (cur.gearInsignia !== def.gearInsignia) gear.insignia = cur.gearInsignia;
   if (cur.gearNumber !== def.gearNumber) gear.number = cur.gearNumber;
   if (Object.keys(gear).length) ov.gear = gear;
+  if (cur.insX !== def.insX || cur.insY !== def.insY) ov.insigniaPos = [cur.insX, cur.insY];
   if (cur.twoTone !== def.twoTone) ov.twoTone = cur.twoTone;
   if (cur.wear !== def.wear) ov.wear = cur.wear;
   if (cur.camo !== def.camo) ov.camo = cur.camo;
+  const profile: Partial<TorsoProfile> = {};
+  if (cur.profTop !== def.profTop) profile.top = cur.profTop;
+  if (cur.profFold !== def.profFold) profile.fold = cur.profFold;
+  if (cur.profFoldY !== def.profFoldY) profile.foldY = cur.profFoldY;
+  if (cur.profBase !== def.profBase) profile.base = cur.profBase;
+  if (cur.profDivY !== def.profDivY) profile.divY = cur.profDivY;
+  if (Object.keys(profile).length) ov.profile = profile;
   if (cur.seed !== def.seed) ov.seed = cur.seed;
+  const bs: Partial<BlockShapeParams> = {};
+  if (cur.bsCham !== def.bsCham) bs.chamFloor = cur.bsCham;
+  if (cur.bsVarLo !== def.bsVarLo) bs.varLo = cur.bsVarLo;
+  if (cur.bsVarHi !== def.bsVarHi) bs.varHi = cur.bsVarHi;
+  if (cur.bsStep !== def.bsStep) bs.stepP = cur.bsStep;
+  if (Object.keys(bs).length) ov.blockShape = bs;
   return Object.keys(ov).length ? ov : undefined;
 }
 function buildHeadOv(def: HeadCtl, cur: HeadCtl): MechaHeadOverrides | undefined {
@@ -228,6 +348,12 @@ function buildHeadOv(def: HeadCtl, cur: HeadCtl): MechaHeadOverrides | undefined
   if (cur.wear !== def.wear) ov.wear = cur.wear;
   if (cur.camo !== def.camo) ov.camo = cur.camo;
   if (cur.seed !== def.seed) ov.seed = cur.seed;
+  const bs: Partial<BlockShapeParams> = {};
+  if (cur.bsCham !== def.bsCham) bs.chamFloor = cur.bsCham;
+  if (cur.bsVarLo !== def.bsVarLo) bs.varLo = cur.bsVarLo;
+  if (cur.bsVarHi !== def.bsVarHi) bs.varHi = cur.bsVarHi;
+  if (cur.bsStep !== def.bsStep) bs.stepP = cur.bsStep;
+  if (Object.keys(bs).length) ov.blockShape = bs;
   return Object.keys(ov).length ? ov : undefined;
 }
 function buildHullOv(def: HullCtl, cur: HullCtl): MechaHullOverrides | undefined {
@@ -244,10 +370,19 @@ function buildHullOv(def: HullCtl, cur: HullCtl): MechaHullOverrides | undefined
   if (cur.gearInsignia !== def.gearInsignia) gear.insignia = cur.gearInsignia;
   if (cur.gearNumber !== def.gearNumber) gear.number = cur.gearNumber;
   if (Object.keys(gear).length) ov.gear = gear;
+  if (cur.insX !== def.insX || cur.insY !== def.insY) ov.insigniaPos = [cur.insX, cur.insY];
+  if (cur.sagCables !== def.sagCables) ov.sagCables = cur.sagCables;
+  if (cur.sidePod !== def.sidePod) ov.sidePod = cur.sidePod;
   if (cur.twoTone !== def.twoTone) ov.twoTone = cur.twoTone;
   if (cur.wear !== def.wear) ov.wear = cur.wear;
   if (cur.camo !== def.camo) ov.camo = cur.camo;
   if (cur.seed !== def.seed) ov.seed = cur.seed;
+  const bs: Partial<BlockShapeParams> = {};
+  if (cur.bsCham !== def.bsCham) bs.chamFloor = cur.bsCham;
+  if (cur.bsVarLo !== def.bsVarLo) bs.varLo = cur.bsVarLo;
+  if (cur.bsVarHi !== def.bsVarHi) bs.varHi = cur.bsVarHi;
+  if (cur.bsStep !== def.bsStep) bs.stepP = cur.bsStep;
+  if (Object.keys(bs).length) ov.blockShape = bs;
   return Object.keys(ov).length ? ov : undefined;
 }
 
@@ -322,6 +457,10 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   const [weapon, setWeapon] = useState<WeaponSel>('none');
   const [weaponLen, setWeaponLen] = useState(1);
   const [weaponThick, setWeaponThick] = useState(1);
+  // 武器组合覆盖（部件轴差量）：换预设时清空，部件选择只记改过的轴
+  const [weaponComboOv, setWeaponComboOv] = useState<Partial<WeaponCombo>>({});
+  const [podRows, setPodRows] = useState(3);
+  const pickWeapon = (id: WeaponSel) => { setWeapon((w) => (w === id ? 'none' : id)); setWeaponComboOv({}); };
   const [hull, setHull] = useState<MechaVehicleOptions['hull']>('walker');
   const [mobility, setMobility] = useState<MechaVehicleOptions['mobility']>('legs');
   const [turret, setTurret] = useState(true);
@@ -333,7 +472,44 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [scheme, setScheme] = useState<MechaSchemeName>('olive');
+  // 模式库接线：条目（内置+我的）与着色选择（引用串，钉版）
+  const [userEntries, setUserEntries] = useState<LibraryEntry[]>(() => loadUserEntries());
+  const libEntries = [...BUILTIN_ENTRIES, ...userEntries];
+  const [finishRef, setFinishRef] = useState('finish-olive@1');
+  /** 套用条目时压住一次「切族重置」副作用（哨兵，见下方两个 effect） */
+  const guardApply = useRef(false);
+  const renderTick = useRef(0);
+  const guardTick = useRef(-10);
+  useEffect(() => { renderTick.current += 1; if (guardApply.current && renderTick.current - guardTick.current > 1) guardApply.current = false; });
+  useEffect(() => { if (open) setUserEntries(loadUserEntries()); }, [open ]);
+  const finOv = (() => {
+    const fr = parseRefId(finishRef);
+    const got = finishDefOf(libraryIndexOf(libEntries), fr.id, fr.version);
+    return got ? expandFinishDef(libraryIndexOf(libEntries), got.def) : undefined;
+  })();
+  // 表面材质（全部部件）：条目引用 + 解析后的烘焙选择
+  const [surfaceRef, setSurfaceRef] = useState('');
+  const surfChoice: SurfaceChoice | undefined = (() => {
+    if (!surfaceRef) return undefined;
+    const sr = parseRefId(surfaceRef);
+    const got = surfaceDefOf(libraryIndexOf(libEntries), sr.id, sr.version);
+    if (!got) return undefined;
+    const params: Record<string, number> = {};
+    for (const p of got.def.params) params[p.key] = p.def;
+    return { template: sr.id, params };
+  })();
   const [trackLen, setTrackLen] = useState(252);
+  /** 部件集贴表面材质（克隆后贴，不动 getPartSet 的缓存原件） */
+  const surfacedPartSet = (ps: MechaPartSet): MechaPartSet => {
+    if (!surfChoice) return ps;
+    const out = {} as Record<string, MechaSpriteData>;
+    for (const [k, v] of Object.entries(ps)) {
+      const c = { ...(v as MechaSpriteData), rgba: new Uint8ClampedArray((v as MechaSpriteData).rgba) };
+      applySurface(c, surfChoice);
+      out[k] = c;
+    }
+    return out as MechaPartSet;
+  };
   const [advOpen, setAdvOpen] = useState<Record<string, boolean>>({});
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const partSetCache = useRef(new Map<string, MechaPartSet>());
@@ -345,6 +521,11 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   const [torsoBox, setTorsoBox] = useState(() => ({ def: torsoDefaults('olive'), cur: torsoDefaults('olive') }));
   const [headBox, setHeadBox] = useState(() => ({ def: headDefaults('olive'), cur: headDefaults('olive') }));
   const [hullBox, setHullBox] = useState(() => ({ def: hullDefaults('walker'), cur: hullDefaults('walker') }));
+  // 整机比例（部位间比例倍率组）：默认是族据参考实测反定的值，用户改动以差量进构建选项
+  const [propBox, setPropBox] = useState(() => ({ def: resolveProportions('olive'), cur: resolveProportions('olive') }));
+  const [vehPropBox, setVehPropBox] = useState(() => ({ def: MECHA_VEHICLE_PROPORTION_DEFAULTS.walker, cur: { ...MECHA_VEHICLE_PROPORTION_DEFAULTS.walker } }));
+  const setProp = (patch: Partial<MechaProportionsFull>) => setPropBox((b) => ({ def: b.def, cur: { ...b.cur, ...patch } }));
+  const setVehProp = (patch: Partial<{ leg: number; hullH: number }>) => setVehPropBox((b) => ({ def: b.def, cur: { ...b.cur, ...patch } }));
   const legCtl = legBox.cur, armCtl = armBox.cur, torsoCtl = torsoBox.cur, headCtl = headBox.cur, hullCtl = hullBox.cur;
   const setLeg = (patch: Partial<LegCtl>) => setLegBox((b) => ({ def: b.def, cur: { ...b.cur, ...patch } }));
   const setArm = (patch: Partial<ArmCtl>) => setArmBox((b) => ({ def: b.def, cur: { ...b.cur, ...patch } }));
@@ -354,14 +535,18 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
 
   // 切模式/族/车型/机动时，相关控件回到对应预设
   useEffect(() => {
+    if (guardApply.current) { guardApply.current = false; return; }
+    setFinishRef(mode === 'humanoid' ? `finish-${family}@1` : 'finish-olive@1');
     if (mode === 'humanoid') {
       setScheme(MECHA_FAMILY_SCHEME[family]);
       const l = legDefaults(family); setLegBox({ def: l, cur: { ...l } });
       const a = armDefaults(family); setArmBox({ def: a, cur: { ...a } });
       const t = torsoDefaults(family); setTorsoBox({ def: t, cur: { ...t } });
       const h = headDefaults(family); setHeadBox({ def: h, cur: { ...h } });
+      const pr = resolveProportions(family); setPropBox({ def: pr, cur: { ...pr } });
     } else {
       const hc = hullDefaults(hull); setHullBox({ def: hc, cur: { ...hc } });
+      const vp = MECHA_VEHICLE_PROPORTION_DEFAULTS[hull]; setVehPropBox({ def: vp, cur: { ...vp } });
       setScheme(hull === 'walker' ? 'olive' : 'slate');
       setTurret(true);
       if (mobility === 'legs') {
@@ -374,35 +559,199 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   const buildOpts = useCallback((): MechaBuildOptions => {
     const parts: MechaPartOverrides = {};
     if (scheme !== MECHA_FAMILY_SCHEME[family]) parts.scheme = scheme;
-    const lo = buildLegOv(legBox.def, legBox.cur); if (lo) parts.leg = lo;
-    const ao = buildArmOv(armBox.def, armBox.cur); if (ao) parts.arm = ao;
-    const to = buildTorsoOv(torsoBox.def, torsoBox.cur); if (to) parts.torso = to;
-    const ho = buildHeadOv(headBox.def, headBox.cur); if (ho) parts.head = ho;
+    const lo = buildLegOv(legBox.def, legBox.cur);
+    const ao = buildArmOv(armBox.def, armBox.cur);
+    const to = buildTorsoOv(torsoBox.def, torsoBox.cur);
+    const ho = buildHeadOv(headBox.def, headBox.cur);
+    if (finOv) {
+      // 着色打底（族基线之上、部件显式修改之下），与条目调用口同口径
+      const legM = { ...finLegChannels(finOv), ...(lo ?? {}) };
+      if (Object.keys(legM).length) parts.leg = legM;
+      const armM = { ...finCommonChannels(finOv), ...(ao ?? {}) };
+      if (Object.keys(armM).length) parts.arm = armM;
+      const torsoM = { ...finCommonChannels(finOv), ...(to ?? {}) };
+      if (Object.keys(torsoM).length) parts.torso = torsoM;
+      const headM = { ...finCommonChannels(finOv), ...(ho ?? {}) };
+      if (Object.keys(headM).length) parts.head = headM;
+    } else {
+      if (lo) parts.leg = lo;
+      if (ao) parts.arm = ao;
+      if (to) parts.torso = to;
+      if (ho) parts.head = ho;
+    }
+    const propDiff: MechaProportions = {};
+    for (const k of ['head', 'torsoW', 'torsoH', 'arm', 'leg'] as const) if (propBox.cur[k] !== propBox.def[k]) propDiff[k] = propBox.cur[k];
     return {
       chassis: chassisSel === 'tracks' ? 'tracks' : legBox.cur.footType === 'wheel' ? 'wheel' : 'biped',
       jetpack, podMount,
       weapon: weapon === 'none' ? null : weapon,
+      weaponCombo: weapon !== 'none' && Object.keys(weaponComboOv).length ? weaponComboOv : undefined,
+      podCombo: podMount && podRows !== 3 ? { rows: podRows } : undefined,
       parts: Object.keys(parts).length ? parts : undefined,
       trackLen: chassisSel === 'tracks' && trackLen !== 252 ? trackLen : undefined,
       weaponSize: (weapon !== 'none' || podMount) && (weaponLen !== 1 || weaponThick !== 1) ? { x: weaponLen, y: weaponThick } : undefined,
+      proportions: Object.keys(propDiff).length ? propDiff : undefined,
+      surface: surfChoice,
     };
-  }, [family, scheme, legBox, armBox, torsoBox, headBox, chassisSel, jetpack, podMount, weapon, trackLen, weaponLen, weaponThick]);
+  }, [family, scheme, legBox, armBox, torsoBox, headBox, chassisSel, jetpack, podMount, weapon, weaponComboOv, podRows, trackLen, weaponLen, weaponThick, finOv, propBox, surfChoice]);
 
   const vehicleOpts = useCallback((): MechaVehicleOptions => {
     const vehSchemeDef: MechaSchemeName = hull === 'walker' ? 'olive' : 'slate';
-    const hullOv = buildHullOv(hullBox.def, hullBox.cur);
-    const legOv = mobility === 'legs' ? buildLegOv(legBox.def, legBox.cur) : undefined;
+    const hullOv0 = buildHullOv(hullBox.def, hullBox.cur);
+    const legOv0 = mobility === 'legs' ? buildLegOv(legBox.def, legBox.cur) : undefined;
+    const hullOv = finOv ? { ...finCommonChannels(finOv), ...(hullOv0 ?? {}) } : hullOv0;
+    const legOv = finOv && mobility === 'legs' ? { ...finLegChannels(finOv), ...(legOv0 ?? {}) } : legOv0;
     const trackOv = mobility === 'tracks' && trackLen !== 252 ? trackLen : undefined;
-    const has = scheme !== vehSchemeDef || hullOv || legOv || trackOv !== undefined;
+    const vehProp: { leg?: number; hullH?: number } = {};
+    if (vehPropBox.cur.leg !== vehPropBox.def.leg) vehProp.leg = vehPropBox.cur.leg;
+    if (vehPropBox.cur.hullH !== vehPropBox.def.hullH) vehProp.hullH = vehPropBox.cur.hullH;
+    const hasProp = Object.keys(vehProp).length > 0;
+    const has = scheme !== vehSchemeDef || hullOv || legOv || trackOv !== undefined || hasProp;
     return {
-      hull, mobility, turret,
-      parts: has ? { scheme: scheme !== vehSchemeDef ? scheme : undefined, hull: hullOv, leg: legOv, trackLen: trackOv } : undefined,
+      hull, mobility, turret, surface: surfChoice,
+      parts: has ? { scheme: scheme !== vehSchemeDef ? scheme : undefined, hull: hullOv, leg: legOv, trackLen: trackOv, proportions: hasProp ? vehProp : undefined } : undefined,
     };
-  }, [hull, mobility, turret, scheme, hullBox, legBox, trackLen]);
+  }, [hull, mobility, turret, scheme, hullBox, legBox, trackLen, finOv, vehPropBox, surfChoice]);
 
   const sig = mode === 'humanoid' ? 'h:' + JSON.stringify(buildOpts()) : 'v:' + JSON.stringify(vehicleOpts());
   // 基准高未量得前先按自然尺寸预览，量得后按 输入身高/基准高 缩放
   const scale = baseCal && baseCal.sig === sig ? heightPx / baseCal.h : 1;
+
+  // ---- 模式库套用：条目 def → 向导控件状态（组合递归展开） ----
+  const applyGenDef = (def: MechaGenDef) => {
+    if (def.finish) setFinishRef(def.finish);
+    if (def.surface) setSurfaceRef(def.surface);
+    switch (def.gen) {
+      case 'leg': case 'arm': case 'torso': case 'head': case 'hand': {
+        setMode('humanoid');
+        setFamily(def.family);
+        if (def.scheme) setScheme(def.scheme);
+        const fam = def.family;
+        if (def.gen === 'leg') setLegBox({ def: legDefaults(fam), cur: legCtlFromMerged(fam, def.overrides?.leg) });
+        if (def.gen === 'arm' || def.gen === 'hand') setArmBox({ def: armDefaults(fam), cur: armCtlFromMerged(fam, def.overrides?.arm) });
+        if (def.gen === 'torso') setTorsoBox({ def: torsoDefaults(fam), cur: torsoCtlFromMerged(fam, def.overrides?.torso) });
+        if (def.gen === 'head') setHeadBox({ def: headDefaults(fam), cur: headCtlFromMerged(fam, def.overrides?.head) });
+        break;
+      }
+      case 'wheel': {
+        setMode('humanoid');
+        setFamily(def.family);
+        if (def.scheme) setScheme(def.scheme);
+        const cur = legCtlFromMerged(def.family, def.overrides?.leg);
+        cur.footType = 'wheel';
+        setLegBox({ def: legDefaults(def.family), cur });
+        setChassisSel('biped');
+        break;
+      }
+      case 'jetpack':
+        setMode('humanoid'); setFamily(def.family);
+        if (def.scheme) setScheme(def.scheme);
+        setJetpack(true);
+        break;
+      case 'weapon': {
+        setMode('humanoid'); setFamily(def.family);
+        if (def.scheme) setScheme(def.scheme);
+        if (def.weaponKind === 'cannon' || def.weaponKind === 'rifle') setWeapon(def.weaponKind);
+        else if (def.weaponKind === 'pod') setPodMount('rear');
+        else if (def.weaponKind === 'podPylon') setPodMount('pylon');
+        break;
+      }
+      case 'hull': {
+        setMode('vehicle');
+        const kind = def.hullKind ?? 'walker';
+        setHull(kind);
+        if (def.scheme) setScheme(def.scheme);
+        setHullBox({ def: hullDefaults(kind), cur: hullCtlFromMerged(kind, def.hullOverrides) });
+        break;
+      }
+      case 'multileg':
+        setMode('vehicle'); setMobility(def.profile ?? 'spider');
+        if (def.scheme) setScheme(def.scheme);
+        break;
+      case 'track':
+        setMode('vehicle'); setMobility('tracks');
+        if (def.scheme) setScheme(def.scheme);
+        break;
+    }
+  };
+  const applyEntryById = (id: string) => {
+    const entry = libEntries.find((e) => e.id === id);
+    if (!entry) return;
+    const idx = libraryIndexOf(libEntries);
+    const got = mechaDefOf(idx, entry.id, entry.latest);
+    if (!got) return;
+    guardApply.current = true;
+    guardTick.current = renderTick.current;
+    const walk = (def: MechaEntryDef, seen: ReadonlySet<string>) => {
+      if (def.form === 'gen') { applyGenDef(def); return; }
+      for (const part of def.parts) {
+        const key = `${part.entry}@${part.version}`;
+        if (seen.has(key)) continue;
+        const child = mechaDefOf(idx, part.entry, part.version);
+        if (!child) continue;
+        const childDef = part.ov && child.def.form === 'gen' ? applyComboOv(child.def, part.ov) : child.def;
+        walk(childDef, new Set([...seen, key]));
+      }
+    };
+    walk(got.def, new Set([`${entry.id}@${got.version}`]));
+    setNote(`已套用条目「${entry.name}」`);
+  };
+
+  // ---- 存为条目：当前控件状态 → gen 式 def（部件）/ combo（整机） ----
+  const pushUserEntry = (e: LibraryEntry) => {
+    setUserEntries((prev) => {
+      const next = [...prev, e];
+      saveUserEntries(next);
+      return next;
+    });
+  };
+  const mkMechaEntry = (entryName: string, def: MechaEntryDef): LibraryEntry => ({
+    id: `user-mecha-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e5)}`,
+    kind: 'mecha', name: entryName, cluster: '机甲', latest: 1, versions: { 1: def },
+  });
+  const currentPartDefs = (): { label: string; as: string; def: MechaGenDef }[] => {
+    const schemeOv = scheme !== (mode === 'humanoid' ? MECHA_FAMILY_SCHEME[family] : hull === 'walker' ? 'olive' : 'slate') ? scheme : undefined;
+    if (mode === 'humanoid') {
+      const out: { label: string; as: string; def: MechaGenDef }[] = [];
+      const lo = buildLegOv(legBox.def, legBox.cur);
+      out.push({ label: '腿', as: 'leg', def: { kind: 'mecha', form: 'gen', gen: 'leg', family, scheme: schemeOv, finish: finishRef, surface: surfaceRef || undefined, overrides: lo ? { leg: lo } : undefined } });
+      const ao = buildArmOv(armBox.def, armBox.cur);
+      out.push({ label: '臂', as: 'arm', def: { kind: 'mecha', form: 'gen', gen: 'arm', family, scheme: schemeOv, finish: finishRef, surface: surfaceRef || undefined, overrides: ao ? { arm: ao } : undefined } });
+      const to = buildTorsoOv(torsoBox.def, torsoBox.cur);
+      out.push({ label: '躯干', as: 'torso', def: { kind: 'mecha', form: 'gen', gen: 'torso', family, scheme: schemeOv, finish: finishRef, surface: surfaceRef || undefined, overrides: to ? { torso: to } : undefined } });
+      const ho = buildHeadOv(headBox.def, headBox.cur);
+      out.push({ label: '头', as: 'head', def: { kind: 'mecha', form: 'gen', gen: 'head', family, scheme: schemeOv, finish: finishRef, surface: surfaceRef || undefined, overrides: ho ? { head: ho } : undefined } });
+      return out;
+    }
+    const mobFam = mechaMobilityFamily(hull);
+    const out: { label: string; as: string; def: MechaGenDef }[] = [];
+    const huo = buildHullOv(hullBox.def, hullBox.cur);
+    out.push({ label: '车体', as: 'hull', def: { kind: 'mecha', form: 'gen', gen: 'hull', family: 'olive', hullKind: hull, scheme: schemeOv, finish: finishRef, surface: surfaceRef || undefined, hullOverrides: huo } });
+    if (mobility === 'legs') {
+      const lo = buildLegOv(legBox.def, legBox.cur);
+      out.push({ label: '步行腿', as: 'legs', def: { kind: 'mecha', form: 'gen', gen: 'leg', family: mobFam, scheme: schemeOv ?? mechaVehicleScheme(hull), finish: finishRef, surface: surfaceRef || undefined, overrides: lo ? { leg: lo } : undefined } });
+    } else if (mobility === 'tracks') {
+      out.push({ label: '履带', as: 'legs', def: { kind: 'mecha', form: 'gen', gen: 'track', family: mobFam, scheme: schemeOv ?? mechaVehicleScheme(hull), finish: finishRef, surface: surfaceRef || undefined } });
+    } else {
+      out.push({ label: mobility === 'spider' ? '蜘蛛腿' : '四足腿', as: 'legs', def: { kind: 'mecha', form: 'gen', gen: 'multileg', family: mobFam, profile: mobility, scheme: schemeOv ?? mechaVehicleScheme(hull), finish: finishRef, surface: surfaceRef || undefined } });
+    }
+    return out;
+  };
+  const savePartsAsEntries = () => {
+    const base = name.trim() || '机甲';
+    for (const pd of currentPartDefs()) pushUserEntry(mkMechaEntry(`${base}·${pd.label}`, pd.def));
+    setNote('部件已存入模式库（在模式库管理里可见）');
+  };
+  const saveMachineAsEntry = () => {
+    const base = name.trim() || '机甲';
+    const parts = currentPartDefs().map((pd) => {
+      const e = mkMechaEntry(`${base}·${pd.label}`, pd.def);
+      pushUserEntry(e);
+      return { entry: e.id, version: 1, as: pd.as };
+    });
+    pushUserEntry(mkMechaEntry(`${base}·整机`, { kind: 'mecha', form: 'combo', parts }));
+    setNote('整机已存入模式库（组合条目 + 各部件条目）');
+  };
 
   const getPartSet = useCallback((fam: MechaFamily, ov?: MechaPartOverrides): MechaPartSet => {
     const key = fam + ':' + JSON.stringify(ov ?? null);
@@ -411,7 +760,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
     return ps;
   }, []);
 
-  const gearSprite = useCallback((fam: MechaFamily, part: string, ovSig: string, ctx: { scheme?: MechaSchemeName; leg?: MechaLegOverrides; trackLen?: number; weaponSize?: { x: number; y: number } }): MechaSpriteData | undefined => {
+  const gearSprite = useCallback((fam: MechaFamily, part: string, ovSig: string, ctx: { scheme?: MechaSchemeName; leg?: MechaLegOverrides; trackLen?: number; weaponSize?: { x: number; y: number }; finOv?: MechaFinishOv; surf?: SurfaceChoice }): MechaSpriteData | undefined => {
     const key = fam + ':' + part + ':' + ovSig;
     let s = spriteCache.current.get(key);
     if (s) return s;
@@ -422,13 +771,14 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
       spriteCache.current.set(fam + ':wheelFoot:' + ovSig, wp.foot);
       return spriteCache.current.get(key);
     }
-    if (part === 'trackUnit') s = generateMechaTrackUnit(fam, { len: ctx.trackLen, scheme: ctx.scheme });
-    else if (part === 'jetpack') s = generateMechaJetpack(fam, ctx.scheme);
-    else if (part === 'pod') s = generateMechaWeapon(fam, 'pod', ctx.scheme, ctx.weaponSize);
-    else if (part === 'podPylon') s = generateMechaWeapon(fam, 'podPylon', ctx.scheme, ctx.weaponSize);
-    else if (part === 'cannon') s = generateMechaWeapon(fam, 'cannon', ctx.scheme, ctx.weaponSize);
-    else if (part === 'rifle') s = generateMechaWeapon(fam, 'rifle', ctx.scheme, ctx.weaponSize);
+    if (part === 'trackUnit') s = generateMechaTrackUnit(fam, { len: ctx.trackLen, scheme: ctx.scheme, ...ctx.finOv });
+    else if (part === 'jetpack') s = generateMechaJetpack(fam, ctx.scheme, ctx.finOv);
+    else if (part === 'pod') s = generateMechaWeapon(fam, 'pod', ctx.scheme, ctx.weaponSize, ctx.finOv);
+    else if (part === 'podPylon') s = generateMechaWeapon(fam, 'podPylon', ctx.scheme, ctx.weaponSize, ctx.finOv);
+    else if (part === 'cannon') s = generateMechaWeapon(fam, 'cannon', ctx.scheme, ctx.weaponSize, ctx.finOv);
+    else if (part === 'rifle') s = generateMechaWeapon(fam, 'rifle', ctx.scheme, ctx.weaponSize, ctx.finOv);
     else return undefined;
+    if (ctx.surf) applySurface(s, ctx.surf);
     spriteCache.current.set(key, s);
     return s;
   }, []);
@@ -468,13 +818,13 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
     let spriteKeyFor: (part: string) => string;
     if (mode === 'humanoid') {
       const B = buildOpts();
-      const ps = getPartSet(family, B.parts);
+      const ps = surfacedPartSet(getPartSet(family, B.parts));
       assembly = assembleMechaCharacter({
         characterId: 'preview', family, canvasSize: { w: 1000, h: 1200 },
         partSet: ps, spriteIds: {}, build: B, scale,
       });
       nodeParts = mechaHumanoidNodeParts(B);
-      const gearCtx = { scheme: B.parts?.scheme, leg: B.parts?.leg, trackLen: B.trackLen, weaponSize: B.weaponSize };
+      const gearCtx = { scheme: B.parts?.scheme, leg: B.parts?.leg, trackLen: B.trackLen, weaponSize: B.weaponSize, finOv, surf: surfChoice };
       spriteFor = (part) => {
         if (part === 'torso') return ps.torso;
         if (part === 'head') return ps.head;
@@ -490,27 +840,30 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
     } else {
       const V = vehicleOpts();
       const mobFam = mechaMobilityFamily(V.hull);
-      const mps = V.mobility === 'legs' ? getPartSet(mobFam, { scheme: V.parts?.scheme, leg: V.parts?.leg }) : undefined;
+      const mps = V.mobility === 'legs' ? surfacedPartSet((() => { const k = sig + ':vehps'; let c = partSetCache.current.get(k); if (!c) { c = generateMechaPartSet(mobFam, undefined, { scheme: V.parts?.scheme ?? mechaVehicleScheme(V.hull), leg: { ...(V.parts?.leg ?? {}), hipBeam: true, wScale: V.parts?.leg?.wScale ?? 0.62 } }, { leg: (V.parts?.proportions?.leg ?? PARTSET_STYLE[V.hull].proportions.leg) * (V.hull === 'walker' ? 0.78 : 1) }); partSetCache.current.set(k, c); } return c; })()) : undefined;
       assembly = assembleMechaVehicle({
         characterId: 'preview', canvasSize: { w: 1000, h: 1200 }, vehicle: V, spriteIds: {}, partSet: mps, scale,
       });
       nodeParts = mechaVehicleNodeParts(V);
-      const gearCtx = { scheme: V.parts?.scheme, leg: V.parts?.leg, trackLen: V.parts?.trackLen };
+      const gearCtx = { scheme: V.parts?.scheme ?? mechaVehicleScheme(V.hull), leg: V.parts?.leg, trackLen: V.parts?.trackLen, finOv, surf: surfChoice };
       spriteFor = (part) => {
-        if (part === 'hullBody') return gearSprite2(sig + ':body', () => generateMechaHullBody(V.hull, V.parts?.hull, V.parts?.scheme));
-        if (part === 'turret') return gearSprite2(sig + ':turret', () => generateMechaTurret(V.hull, V.parts?.hull, V.parts?.scheme));
+        if (part === 'hullBody') return gearSprite2(sig + ':body', () => { const d = generateMechaHullBody(V.hull, V.parts?.hull, V.parts?.scheme); if (surfChoice) applySurface(d, surfChoice); return d; });
+        if (part === 'turret') return gearSprite2(sig + ':turret', () => { const d = generateMechaTurret(V.hull, V.parts?.hull, V.parts?.scheme); if (surfChoice) applySurface(d, surfChoice); return d; });
         if (part === 'trackUnit') return gearSprite(mobFam, 'trackUnit', sig, gearCtx);
+        if (part === 'hipBeam') return mps?.hipBeam;
         if (part === 'legThigh') return mps?.legThigh;
         if (part === 'legShin') return mps?.legShin;
         if (part === 'legFoot') return mps?.legFoot;
-        if (part === 'multiUpper' || part === 'multiLower') {
+        if (part === 'multiUpper' || part === 'multiMid' || part === 'multiFoot') {
           const mp = gearSprite2(sig + ':multi', () => {
-            const p = generateMechaMultiLegParts(mobFam, V.mobility as 'quad' | 'spider', V.parts?.scheme);
+            const p = generateMechaMultiLegParts(mobFam, V.mobility as 'quad' | 'spider', V.parts?.scheme ?? mechaVehicleScheme(V.hull), finOv);
+            if (surfChoice) for (const d of Object.values(p)) applySurface(d as MechaSpriteData, surfChoice);
             spriteCache.current.set(sig + ':multiUpper', p.upper);
-            spriteCache.current.set(sig + ':multiLower', p.lower);
+            spriteCache.current.set(sig + ':multiMid', p.mid);
+            spriteCache.current.set(sig + ':multiFoot', p.foot);
             return p.upper;
           });
-          return part === 'multiUpper' ? mp : spriteCache.current.get(sig + ':multiLower');
+          return part === 'multiUpper' ? mp : spriteCache.current.get(sig + ':multi' + part.slice(5));
         }
         return undefined;
       };
@@ -689,6 +1042,12 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
         <NumCtl label="卷曲" value={armCtl.fingerCurl} min={0} max={1} step={0.05} onCommit={(v) => setArm({ fingerCurl: v })} />
       </>)}
       <Adv id="arm" open={advOpen} setOpen={setAdvOpen}>
+        <Row label="块形">
+          <NumCtl label="切角下限" value={armCtl.bsCham} min={0} max={0.6} step={0.05} onCommit={(v) => setArm({ bsCham: v })} />
+          <NumCtl label="分布下" value={armCtl.bsVarLo} min={0} max={1} step={0.05} onCommit={(v) => setArm({ bsVarLo: v })} />
+          <NumCtl label="分布上" value={armCtl.bsVarHi} min={0.5} max={3} step={0.1} onCommit={(v) => setArm({ bsVarHi: v })} />
+          <NumCtl label="台阶率" value={armCtl.bsStep} min={0} max={1} step={0.05} onCommit={(v) => setArm({ bsStep: v })} />
+        </Row>
         {numRow(<>
           <NumCtl label="壳比×" value={armCtl.shell} min={0.5} max={1.5} step={0.05} onCommit={(v) => setArm({ shell: v })} />
           <NumCtl label="上臂角°" value={armCtl.upperAngDeg} min={-30} max={30} step={1} onCommit={(v) => setArm({ upperAngDeg: v })} />
@@ -702,6 +1061,9 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
           <Chip active={armCtl.gearPiston} onClick={() => setArm({ gearPiston: !armCtl.gearPiston })}>活塞</Chip>
           <Chip active={armCtl.gearDevice} onClick={() => setArm({ gearDevice: !armCtl.gearDevice })}>装置</Chip>
           <Chip active={armCtl.gearStripe} onClick={() => setArm({ gearStripe: !armCtl.gearStripe })}>条纹</Chip>
+          <NumCtl label="徽记" value={armCtl.insKind} min={-1} max={4} step={1} onCommit={(v) => setArm({ insKind: v })} />
+          <NumCtl label="徽记沿" value={armCtl.insAlong} min={-60} max={60} step={1} onCommit={(v) => setArm({ insAlong: v })} />
+          <NumCtl label="徽记垂" value={armCtl.insPerp} min={-60} max={60} step={1} onCommit={(v) => setArm({ insPerp: v })} />
         </Row>
         <Row label="修饰">
           <Chip active={armCtl.twoTone} onClick={() => setArm({ twoTone: !armCtl.twoTone })}>双色调</Chip>
@@ -737,12 +1099,44 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
         <NumCtl label="胸宽" value={torsoCtl.chestW} min={80} max={220} step={1} onCommit={(v) => setTorso({ chestW: v })} />
         <NumCtl label="胸高" value={torsoCtl.chestH} min={60} max={200} step={1} onCommit={(v) => setTorso({ chestH: v })} />
         <NumCtl label="腰高" value={torsoCtl.waistH} min={0} max={80} step={1} onCommit={(v) => setTorso({ waistH: v })} />
+        <NumCtl label="口深·横" value={torsoCtl.intakeDx} min={0} max={0.5} step={0.01} onCommit={(v) => setTorso({ intakeDx: v })} />
+        <NumCtl label="口深·纵" value={torsoCtl.intakeDy} min={0} max={0.5} step={0.01} onCommit={(v) => setTorso({ intakeDy: v })} />
+        <NumCtl label="盒深·沿上边" value={torsoCtl.boxDx} min={0} max={1.5} step={0.01} onCommit={(v) => setTorso({ boxDx: v })} />
+        <NumCtl label="盒深·沿左边" value={torsoCtl.boxDy} min={0} max={1.5} step={0.01} onCommit={(v) => setTorso({ boxDy: v })} />
+        <NumCtl label="口份额·宽" value={torsoCtl.intakeShareW} min={0.3} max={1} step={0.01} onCommit={(v) => setTorso({ intakeShareW: v })} />
+        <NumCtl label="口份额·高" value={torsoCtl.intakeShareH} min={0.3} max={1} step={0.01} onCommit={(v) => setTorso({ intakeShareH: v })} />
         <NumCtl label="胯高" value={torsoCtl.pelvisH} min={30} max={120} step={1} onCommit={(v) => setTorso({ pelvisH: v })} />
       </>)}
+      <Row label="进气口模式">
+        <Chip active={torsoCtl.intakeOrient === 'keel'} onClick={() => setTorso({ intakeOrient: 'keel' })}>龙骨定向</Chip>
+        <Chip active={torsoCtl.intakeOrient === 'flat'} onClick={() => setTorso({ intakeOrient: 'flat' })}>固定框斜</Chip>
+        <Chip active={torsoCtl.intakeTrim} onClick={() => setTorso({ intakeTrim: !torsoCtl.intakeTrim })}>附属件</Chip>
+      </Row>
+      <Row label="龙骨突组合">
+        <Chip active={torsoCtl.keelPlate} onClick={() => setTorso({ keelPlate: !torsoCtl.keelPlate })}>龙骨突</Chip>
+        <NumCtl label="前伸" value={torsoCtl.keelReach} min={0.1} max={0.6} step={0.01} onCommit={(v) => setTorso({ keelReach: v })} />
+        <Chip active={torsoCtl.ventFuse} onClick={() => setTorso({ ventFuse: !torsoCtl.ventFuse })}>前楔并体</Chip>
+        <Chip active={torsoCtl.neckStruts} onClick={() => setTorso({ neckStruts: !torsoCtl.neckStruts })}>颈部斜撑管道</Chip>
+      </Row>
       <Adv id="torso" open={advOpen} setOpen={setAdvOpen}>
+        <Row label="块形">
+          <NumCtl label="切角下限" value={torsoCtl.bsCham} min={0} max={0.6} step={0.05} onCommit={(v) => setTorso({ bsCham: v })} />
+          <NumCtl label="分布下" value={torsoCtl.bsVarLo} min={0} max={1} step={0.05} onCommit={(v) => setTorso({ bsVarLo: v })} />
+          <NumCtl label="分布上" value={torsoCtl.bsVarHi} min={0.5} max={3} step={0.1} onCommit={(v) => setTorso({ bsVarHi: v })} />
+          <NumCtl label="台阶率" value={torsoCtl.bsStep} min={0} max={1} step={0.05} onCommit={(v) => setTorso({ bsStep: v })} />
+        </Row>
+        <Row label="前缘">
+          <NumCtl label="顶前" value={torsoCtl.profTop} min={0} max={0.7} step={0.01} onCommit={(v) => setTorso({ profTop: v })} />
+          <NumCtl label="折点" value={torsoCtl.profFold} min={0.3} max={0.85} step={0.01} onCommit={(v) => setTorso({ profFold: v })} />
+          <NumCtl label="折高" value={torsoCtl.profFoldY} min={0.2} max={0.9} step={0.01} onCommit={(v) => setTorso({ profFoldY: v })} />
+          <NumCtl label="底收" value={torsoCtl.profBase} min={0.2} max={0.7} step={0.01} onCommit={(v) => setTorso({ profBase: v })} />
+          <NumCtl label="主分" value={torsoCtl.profDivY} min={0.2} max={0.8} step={0.01} onCommit={(v) => setTorso({ profDivY: v })} />
+        </Row>
         <Row label="标记">
           <Chip active={torsoCtl.gearStripe} onClick={() => setTorso({ gearStripe: !torsoCtl.gearStripe })}>条纹</Chip>
           <NumCtl label="徽记" value={torsoCtl.gearInsignia} min={0} max={9} step={1} onCommit={(v) => setTorso({ gearInsignia: v })} />
+          <NumCtl label="徽记横" value={torsoCtl.insX} min={-0.5} max={1} step={0.01} onCommit={(v) => setTorso({ insX: v })} />
+          <NumCtl label="徽记纵" value={torsoCtl.insY} min={0} max={1.1} step={0.01} onCommit={(v) => setTorso({ insY: v })} />
           <label className="flex items-center gap-1 text-[11px] text-gray-400">
             编号
             <Input value={torsoCtl.gearNumber} onChange={(e) => setTorso({ gearNumber: e.target.value })}
@@ -772,12 +1166,12 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
         ))}
       </Row>
       <Row label="颌部">
-        {([['block', '颌块'], ['respirator', '呼吸器'], ['small', '小颌']] as const).map(([v, l]) => (
+        {([['block', '颌块'], ['respirator', '呼吸器'], ['breather', '小呼吸器'], ['small', '小颌']] as const).map(([v, l]) => (
           <Chip key={v} active={headCtl.formJaw === v} onClick={() => setHead({ formJaw: v })}>{l}</Chip>
         ))}
       </Row>
       <Row label="耳部">
-        {([['disc', '耳盘'], ['grille', '耳栅'], ['plate', '耳板']] as const).map(([v, l]) => (
+        {([['disc', '耳盘'], ['grille', '耳栅'], ['plate', '耳板'], ['sensor', '传感器'], ['plateStripe', '板+短划'], ['earcover', '圆耳罩']] as const).map(([v, l]) => (
           <Chip key={v} active={headCtl.formEar === v} onClick={() => setHead({ formEar: v })}>{l}</Chip>
         ))}
       </Row>
@@ -794,6 +1188,12 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
         <NumCtl label="倾角°" value={headCtl.tiltDeg} min={-17} max={17} step={1} onCommit={(v) => setHead({ tiltDeg: v })} />
       </>)}
       <Adv id="head" open={advOpen} setOpen={setAdvOpen}>
+        <Row label="块形">
+          <NumCtl label="切角下限" value={headCtl.bsCham} min={0} max={0.6} step={0.05} onCommit={(v) => setHead({ bsCham: v })} />
+          <NumCtl label="分布下" value={headCtl.bsVarLo} min={0} max={1} step={0.05} onCommit={(v) => setHead({ bsVarLo: v })} />
+          <NumCtl label="分布上" value={headCtl.bsVarHi} min={0.5} max={3} step={0.1} onCommit={(v) => setHead({ bsVarHi: v })} />
+          <NumCtl label="台阶率" value={headCtl.bsStep} min={0} max={1} step={0.05} onCommit={(v) => setHead({ bsStep: v })} />
+        </Row>
         <Row label="修饰">
           <Chip active={headCtl.twoTone} onClick={() => setHead({ twoTone: !headCtl.twoTone })}>双色调</Chip>
           <Chip active={headCtl.camo} onClick={() => setHead({ camo: !headCtl.camo })}>迷彩</Chip>
@@ -810,6 +1210,8 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
         <Chip active={hullCtl.formCabin === 'front'} onClick={() => setHullCtl({ formCabin: 'front' })}>前舱</Chip>
         <Chip active={hullCtl.formCabin === 'mid'} onClick={() => setHullCtl({ formCabin: 'mid' })}>中舱</Chip>
         <Chip active={hullCtl.formSkirt} onClick={() => setHullCtl({ formSkirt: !hullCtl.formSkirt })}>裙带</Chip>
+        <Chip active={hullCtl.sagCables} onClick={() => setHullCtl({ sagCables: !hullCtl.sagCables })}>腹下线束</Chip>
+        <Chip active={hullCtl.sidePod} onClick={() => setHullCtl({ sidePod: !hullCtl.sidePod })}>侧挂设备舱</Chip>
       </Row>
       {numRow(<>
         <NumCtl label="车宽" value={hullCtl.hullW} min={150} max={400} step={1} onCommit={(v) => setHullCtl({ hullW: v })} />
@@ -817,8 +1219,16 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
         <NumCtl label="模块数" value={hullCtl.formModules} min={0} max={5} step={1} onCommit={(v) => setHullCtl({ formModules: v })} />
       </>)}
       <Adv id="hull" open={advOpen} setOpen={setAdvOpen}>
+        <Row label="块形">
+          <NumCtl label="切角下限" value={hullCtl.bsCham} min={0} max={0.6} step={0.05} onCommit={(v) => setHullCtl({ bsCham: v })} />
+          <NumCtl label="分布下" value={hullCtl.bsVarLo} min={0} max={1} step={0.05} onCommit={(v) => setHullCtl({ bsVarLo: v })} />
+          <NumCtl label="分布上" value={hullCtl.bsVarHi} min={0.5} max={3} step={0.1} onCommit={(v) => setHullCtl({ bsVarHi: v })} />
+          <NumCtl label="台阶率" value={hullCtl.bsStep} min={0} max={1} step={0.05} onCommit={(v) => setHullCtl({ bsStep: v })} />
+        </Row>
         <Row label="标记">
           <NumCtl label="徽记" value={hullCtl.gearInsignia} min={0} max={9} step={1} onCommit={(v) => setHullCtl({ gearInsignia: v })} />
+          <NumCtl label="徽记横" value={hullCtl.insX} min={-0.6} max={1} step={0.01} onCommit={(v) => setHullCtl({ insX: v })} />
+          <NumCtl label="徽记纵" value={hullCtl.insY} min={0} max={1.1} step={0.01} onCommit={(v) => setHullCtl({ insY: v })} />
           <label className="flex items-center gap-1 text-[11px] text-gray-400">
             编号
             <Input value={hullCtl.gearNumber} onChange={(e) => setHullCtl({ gearNumber: e.target.value })}
@@ -871,10 +1281,51 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
             <span className="text-[11px] text-gray-300">px</span>
             <span className="text-[11px] text-gray-500">整机总高 32–512，预览与生成画布随之适应</span>
           </Row>
+          <Row label="整机比例">
+            {mode === 'humanoid' ? (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <NumCtl label="头部" value={propBox.cur.head} min={0.6} max={1.5} step={0.02} onCommit={(v) => setProp({ head: v })} />
+                <NumCtl label="躯干宽" value={propBox.cur.torsoW} min={0.6} max={1.5} step={0.02} onCommit={(v) => setProp({ torsoW: v })} />
+                <NumCtl label="躯干高" value={propBox.cur.torsoH} min={0.6} max={1.5} step={0.02} onCommit={(v) => setProp({ torsoH: v })} />
+                <NumCtl label="臂长" value={propBox.cur.arm} min={0.6} max={1.5} step={0.02} onCommit={(v) => setProp({ arm: v })} />
+                <NumCtl label="腿长" value={propBox.cur.leg} min={0.6} max={1.5} step={0.02} onCommit={(v) => setProp({ leg: v })} />
+                <span className="text-[11px] text-gray-500">部位间比例倍率，默认已按参考图实测占比定</span>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <NumCtl label="腿长" value={vehPropBox.cur.leg} min={0.5} max={1.4} step={0.02} onCommit={(v) => setVehProp({ leg: v })} />
+                <NumCtl label="车高" value={vehPropBox.cur.hullH} min={0.6} max={1.6} step={0.02} onCommit={(v) => setVehProp({ hullH: v })} />
+                <span className="text-[11px] text-gray-500">车体与腿的相对比例，默认已按参考图实测占比定</span>
+              </div>
+            )}
+          </Row>
           <Row label="配色">
             {(Object.keys(MECHA_SCHEME_LABELS) as MechaSchemeName[]).map((s) => (
               <Chip key={s} active={scheme === s} onClick={() => setScheme(s)}>{MECHA_SCHEME_LABELS[s]}</Chip>
             ))}
+          </Row>
+          <Row label="模式库">
+            <select value="" onChange={(e) => { if (e.target.value) applyEntryById(e.target.value); }}
+              className="h-7 max-w-[220px] text-[12px] bg-[#0d0d1a] border border-[#1e1e3a] rounded text-gray-200 px-1">
+              <option value="">套用条目…</option>
+              {libEntries.filter((e) => e.kind === 'mecha').map((e) => (
+                <option key={e.id} value={e.id}>{e.name}{e.builtin ? '' : '（我的）'}</option>
+              ))}
+            </select>
+            <Button size="sm" variant="ghost" className="h-7 text-[11px] px-2" onClick={savePartsAsEntries}>存部件为条目</Button>
+            <Button size="sm" variant="ghost" className="h-7 text-[11px] px-2" onClick={saveMachineAsEntry}>存为整机条目</Button>
+          </Row>
+          <Row label="着色">
+            <select value={finishRef} onChange={(e) => setFinishRef(e.target.value)}
+              className="h-7 max-w-[220px] text-[12px] bg-[#0d0d1a] border border-[#1e1e3a] rounded text-gray-200 px-1">
+              {(() => {
+                const opts = libEntries.filter((e) => e.kind === 'finish')
+                  .map((e) => ({ v: `${e.id}@${e.latest}`, n: e.name }));
+                if (!opts.some((o) => o.v === finishRef)) opts.unshift({ v: finishRef, n: finishRef });
+                return opts.map((o) => <option key={o.v} value={o.v}>{o.n}</option>);
+              })()}
+            </select>
+            <span className="text-[11px] text-gray-500">着色是独立一层：算子组合成套，整机共用一套</span>
           </Row>
           {mode === 'humanoid' ? (
             <>
@@ -890,20 +1341,68 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
               </Row>
               <Row label="装备">
                 <Chip active={jetpack} onClick={() => setJetpack(!jetpack)}>喷射背包</Chip>
-                <Chip active={weapon === 'cannon'} onClick={() => setWeapon(weapon === 'cannon' ? 'none' : 'cannon')}>臂炮</Chip>
-                <Chip active={weapon === 'rifle'} onClick={() => setWeapon(weapon === 'rifle' ? 'none' : 'rifle')}>步枪</Chip>
               </Row>
+              {(['hot', 'scifi', 'cold'] as WeaponClass[]).map((cls) => (
+                <Row key={cls} label={cls === 'hot' ? '武器·热' : cls === 'scifi' ? '武器·科幻' : '武器·冷'}>
+                  {Object.entries(WEAPON_PRESETS).filter(([, p]) => p.combo.cls === cls && p.mount !== 'pod').map(([id, p]) => (
+                    <Chip key={id} active={weapon === id} onClick={() => pickWeapon(id)}>{p.label}</Chip>
+                  ))}
+                </Row>
+              ))}
+              {weapon !== 'none' && (() => {
+                const eff: WeaponCombo = { ...WEAPON_PRESETS[weapon]!.combo, ...weaponComboOv };
+                const axisSel = (axis: 'body' | 'effector' | 'feed' | 'sight' | 'grip', label: string) => (
+                  <label key={axis} className="flex items-center gap-1 text-[11px] text-gray-400">
+                    {label}
+                    <select value={eff[axis]} onChange={(e) => setWeaponComboOv((o) => ({ ...o, [axis]: e.target.value }))}
+                      className="h-6 text-[11px] bg-[#0d0d1a] border border-[#1e1e3a] rounded text-gray-200 px-1">
+                      {WEAPON_AXIS_OPTIONS[axis][eff.cls].map((o) => (<option key={o.id} value={o.id}>{o.label}</option>))}
+                    </select>
+                  </label>
+                );
+                const tog = (key: 'ring' | 'rail' | 'cable' | 'lamp' | 'glow', label: string) => (
+                  <Chip key={key} active={!!eff[key]} onClick={() => setWeaponComboOv((o) => ({ ...o, [key]: !eff[key] }))}>{label}</Chip>
+                );
+                return (
+                  <>
+                    <Row label="武器部件">
+                      {axisSel('body', '主体')}
+                      {axisSel('effector', '作用段')}
+                      {axisSel('feed', '供能')}
+                      {axisSel('sight', '瞄具')}
+                      {axisSel('grip', '握持')}
+                    </Row>
+                    <Row label="武器附属">
+                      {tog('ring', '色环')}
+                      {tog('rail', '导轨')}
+                      {tog('cable', '缆')}
+                      {tog('lamp', '光点')}
+                      {tog('glow', '发光')}
+                      <NumCtl label="段长" value={eff.len ?? 110} min={30} max={220} step={2} onCommit={(v) => setWeaponComboOv((o) => ({ ...o, len: v }))} />
+                      <NumCtl label="口径×" value={eff.bore ?? 1} min={0.6} max={1.8} step={0.05} onCommit={(v) => setWeaponComboOv((o) => ({ ...o, bore: v }))} />
+                    </Row>
+                  </>
+                );
+              })()}
               <Row label="导弹荚">
                 <Chip active={podMount === null} onClick={() => setPodMount(null)}>无</Chip>
                 {(Object.keys(MECHA_POD_MOUNT_LABELS) as MechaPodMount[]).map((m) => (
                   <Chip key={m} active={podMount === m} onClick={() => setPodMount(m)}>{MECHA_POD_MOUNT_LABELS[m]}</Chip>
                 ))}
+                {podMount && <NumCtl label="弹列" value={podRows} min={1} max={6} step={1} onCommit={setPodRows} />}
               </Row>
               {(weapon !== 'none' || podMount) && numRow(<>
                 <NumCtl label="武器长×" value={weaponLen} min={0.5} max={2} step={0.05} onCommit={setWeaponLen} />
                 <NumCtl label="武器粗×" value={weaponThick} min={0.5} max={2} step={0.05} onCommit={setWeaponThick} />
-                <span className="text-[11px] text-gray-500">臂炮/步枪/导弹荚通用</span>
+                <span className="text-[11px] text-gray-500">全部武器通用</span>
               </>)}
+              <Row label="表面材质">
+                <Chip active={surfaceRef === ''} onClick={() => setSurfaceRef('')}>无</Chip>
+                {SURFACE_CHIPS.map((c) => (
+                  <Chip key={c.ref} active={surfaceRef === c.ref} onClick={() => setSurfaceRef(c.ref)}>{c.label}</Chip>
+                ))}
+                <span className="text-[11px] text-gray-500">全部部件</span>
+              </Row>
               {chassisSel === 'tracks' ? trackLenRow : legSection}
               {armSection}
               {torsoSection}
@@ -919,6 +1418,13 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
                   <Chip key={h} active={hull === h} onClick={() => setHull(h)}>{MECHA_VEHICLE_LABELS.hull[h]}</Chip>
                 ))}
               </Row>
+              <Row label="表面材质">
+                <Chip active={surfaceRef === ''} onClick={() => setSurfaceRef('')}>无</Chip>
+                {SURFACE_CHIPS.map((c) => (
+                  <Chip key={c.ref} active={surfaceRef === c.ref} onClick={() => setSurfaceRef(c.ref)}>{c.label}</Chip>
+                ))}
+                <span className="text-[11px] text-gray-500">全部部件</span>
+              </Row>
               <Row label="机动">
                 {(Object.keys(MECHA_VEHICLE_LABELS.mobility) as MechaVehicleOptions['mobility'][]).map((m) => (
                   <Chip key={m} active={mobility === m} onClick={() => setMobility(m)}>{MECHA_VEHICLE_LABELS.mobility[m]}</Chip>
@@ -931,6 +1437,12 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
               </Row>
               {hullSection}
               {mobility === 'legs' ? legSection : mobility === 'tracks' ? trackLenRow : null}
+              {mobility === 'legs' && (
+                <Row label="支架腿组">
+                  <NumCtl label="张开" value={legCtl.standSplay} min={0} max={0.4} step={0.01} onCommit={(v) => setLegCtl({ standSplay: v })} />
+                  <NumCtl label="够达" value={legCtl.standReach} min={0.7} max={0.98} step={0.01} onCommit={(v) => setLegCtl({ standReach: v })} />
+                </Row>
+              )}
               <p className="text-[11px] text-gray-400">
                 车体为根节点：步行腿同人形三段链带 IK（腿的型式与参数在下方「腿」里调）；蜘蛛/四足腿是两段节点（髋 + 膝下段）可摆；履带与炮塔是独立节点。改车高时移动件挂点按比例跟随。
               </p>

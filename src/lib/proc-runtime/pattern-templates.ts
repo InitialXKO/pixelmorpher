@@ -196,26 +196,111 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
   },
   {
     id: 'cylinder', name: '圆柱', cluster: '着色',
-    params: [P('k', '曲率', 0.6, 2.4, 0.1, 1.2)],
+    // 五调子档位梯（与运行时调色板同序）：4 高光、3 亮面、
+    // 2 中间调、1 暗面、0 明暗分界（最暗）——相邻调子只差
+    // 一档、边界处以亮面带柔接，不跳档；反光是暗面里抬到
+    // 中间调的一条带（在场内）；自投影就是暗面、不另成调
+    params: [
+      P('k', '曲率', 0.6, 2.4, 0.1, 1.2),
+      P('off', '高光偏移', -0.6, 0.6, 0.05, 0), P('rf', '反光', 0, 1, 0.05, 0),
+      P('tm', '明暗分界', 0, 1, 0.05, 1),
+    ],
     graph: graph([
-      n('cylF', 'cyl', undefined, { k: '$k' }),
+      n('cylF', 'cyl', undefined, { k: '$k', off: '$off', rf: '$rf' }),
+      // 明暗分界线（最暗）：读无反光的同参剖面（反光带的外
+      // 缘穿过等值线会造出第二条假分界），场值下行穿中低值
+      // 的窄带 × 向暗侧（+x）渐变门，盖 0 档
+      n('cylT', 'cyl', undefined, { k: '$k', off: '$off' }),
+      n('tmB', 'levelBand', { in: 'cylT' }, { level: 0.3, w: 0.06 }),
+      n('gx', 'grad', undefined, { axis: 'x' }),
+      n('tmK', 'const', undefined, { v: '$tm' }),
+      n('tmT', 'mul', { a: 'tmB', b: 'gx' }),
+      n('tmG', 'mul', { a: 'tmT', b: 'tmK' }),
+      // 亮面柔接带：高光与中间调之间的一档（读无反光剖面）
+      n('blB', 'levelBand', { in: 'cylT' }, { level: 0.66, w: 0.13 }),
     ], [
-      { from: 'cylF', slot: 0, bump: { hi: 5, mid: 3, lo: 1 } },
+      { from: 'cylF', slot: 0, bump: { hi: 4, mid: 2, lo: 1 } },
+      w('blB', 3, { at: 0.45 }),
+      w('tmG', 0, { at: 0.35 }),
     ]),
   },
   {
     id: 'barrel', name: '木桶', cluster: '着色',
     params: [
       P('hoops', '箍数', 1, 4, 1, 2), P('staves', '板条数', 4, 12, 1, 7),
+      P('off', '高光偏移', -0.6, 0.6, 0.05, 0), P('rf', '反光', 0, 1, 0.05, 0),
+      P('tm', '明暗分界', 0, 1, 0.05, 1),
     ],
     graph: graph([
-      n('cylF', 'cyl', undefined, { k: 1.1 }),
+      n('cylF', 'cyl', undefined, { k: 1.1, off: '$off', rf: '$rf' }),
       n('hoop', 'stripes', undefined, { axis: 'y', f: 9, duty: 0.16 }),
       n('stave', 'stripes', undefined, { axis: 'x', f: 6, duty: 0.08 }),
+      // 明暗分界（最暗 0 档）：同圆柱（读无反光剖面），写
+      // 在箍之前——箍不被盖；自投影就是暗面、不另写
+      n('cylT', 'cyl', undefined, { k: 1.1, off: '$off' }),
+      n('tmB', 'levelBand', { in: 'cylT' }, { level: 0.3, w: 0.06 }),
+      n('gx', 'grad', undefined, { axis: 'x' }),
+      n('tmK', 'const', undefined, { v: '$tm' }),
+      n('tmT', 'mul', { a: 'tmB', b: 'gx' }),
+      n('tmG', 'mul', { a: 'tmT', b: 'tmK' }),
+      // 亮面柔接带：高光与中间调之间的一档（读无反光剖面）
+      n('blB', 'levelBand', { in: 'cylT' }, { level: 0.66, w: 0.13 }),
     ], [
-      { from: 'cylF', slot: 0, bump: { hi: 4, mid: 3, lo: 2 } },
+      { from: 'cylF', slot: 0, bump: { hi: 4, mid: 2, lo: 1 } },
       w('stave', 2, { at: 0.5 }),
+      w('blB', 3, { at: 0.45 }),
+      w('tmG', 0, { at: 0.35 }),
       w('hoop', 6, { at: 0.5 }),
+    ]),
+  },
+  {
+    id: 'sphere', name: '球', cluster: '着色',
+    // 五调子档位梯同圆柱：4 高光、3 亮面、2 中间调、1 暗
+    // 面、0 明暗分界（最暗，绕亮核整环），相邻只差一档、
+    // 以亮面带柔接；反光在场内（下半球暗部中段的一条抬起
+    // 带，不贴分界线、不贴球缘）；自投影就是暗面本身
+    params: [
+      P('k', '曲率', 0.6, 2.4, 0.1, 1.2),
+      P('off', '高光偏移', -0.5, 0.5, 0.05, -0.22), P('r', '半径', 0.3, 0.5, 0.01, 0.5),
+      P('rf', '反光', 0, 1, 0.05, 0),
+      P('tm', '明暗分界', 0, 1, 0.05, 1),
+    ],
+    graph: graph([
+      n('sphF', 'sph', undefined, { k: '$k', ox: '$off', oy: '$off', r: '$r', rf: '$rf' }),
+      // 明暗分界线（最暗）：读无反光的同参球面，场值中低
+      // 等值环（绕亮核整环）
+      n('sphT', 'sph', undefined, { k: '$k', ox: '$off', oy: '$off', r: '$r' }),
+      n('tmB', 'levelBand', { in: 'sphT' }, { level: 0.3, w: 0.06 }),
+      n('tmK', 'const', undefined, { v: '$tm' }),
+      n('tmG', 'mul', { a: 'tmB', b: 'tmK' }),
+      n('blB', 'levelBand', { in: 'sphT' }, { level: 0.66, w: 0.13 }),
+    ], [
+      { from: 'sphF', slot: 0, bump: { hi: 4, mid: 2, lo: 1 } },
+      w('blB', 3, { at: 0.45 }),
+      w('tmG', 0, { at: 0.35 }),
+    ]),
+  },
+  {
+    id: 'dome', name: '半球', cluster: '着色',
+    params: [
+      P('k', '曲率', 0.6, 2.4, 0.1, 1.1),
+      P('off', '高光偏移', -0.5, 0.5, 0.05, -0.25), P('r', '半径', 0.3, 0.5, 0.01, 0.46),
+      P('rf', '反光', 0, 1, 0.05, 0.5),
+      P('tm', '明暗分界', 0, 1, 0.05, 1),
+    ],
+    graph: graph([
+      n('sphF', 'sph', undefined, { k: '$k', ox: '$off', oy: '$off', r: '$r', rf: '$rf' }),
+      // 明暗分界（最暗整环，读无反光球面）：同球；自投影
+      // 就是暗面、不另写
+      n('sphT', 'sph', undefined, { k: '$k', ox: '$off', oy: '$off', r: '$r' }),
+      n('tmB', 'levelBand', { in: 'sphT' }, { level: 0.3, w: 0.06 }),
+      n('tmK', 'const', undefined, { v: '$tm' }),
+      n('tmG', 'mul', { a: 'tmB', b: 'tmK' }),
+      n('blB', 'levelBand', { in: 'sphT' }, { level: 0.66, w: 0.13 }),
+    ], [
+      { from: 'sphF', slot: 0, bump: { hi: 4, mid: 2, lo: 1 } },
+      w('blB', 3, { at: 0.45 }),
+      w('tmG', 0, { at: 0.35 }),
     ]),
   },
   {
@@ -265,13 +350,11 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
   {
     id: 'steel', name: '工业钢板', cluster: '工业',
     params: [
-      P('cw', '板宽', 18, 40, 2, 28), P('wear', '磨损', 0, 1, 0.05, 0.45),
+      P('wear', '磨损', 0, 1, 0.05, 0.45),
       P('rust', '锈斑', 0, 1, 0.05, 0.3),
     ],
     graph: graph([
       ...baseIn(2),
-      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 11 }),
-      n('cs', 'cellShape', undefined, { kind: 'bevelRect', gap: 0.7, bevel: 1.5 }),
       n('bl', 'blob', undefined, { f: 0.09, seed: 12, contrast: 1.1 }),
       n('rustG0', 'threshold', { in: 'bl' }, { at: 0.62, soft: 0.05 }),
       n('rustG', 'mul', { a: 'rustG0', b: 'rustK' }),
@@ -280,13 +363,10 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       n('scrG0', 'threshold', { in: 'scr' }, { at: 0.78 }),
       n('scrG', 'mul', { a: 'scrG0', b: 'wearK' }),
       n('wearK', 'const', undefined, { v: '$wear' }),
-      n('edge', 'levelBand', { in: 'rep' }, { level: 0, w: 0.9 }),
     ], [
       w('in', 2, { at: 0.5 }),
-      w('rep', 3, { at: 0 }),
       w('rustG', 1, { at: 0.3 }),
       w('scrG', 4, { at: 0.3 }),
-      w('edge', 0, { at: 0.5 }),
     ]),
   },
   {
@@ -513,16 +593,33 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
   // 场节点；单独应用时也有可读的写出。
   // ==========================================================
   {
-    id: 'part-rivets', name: '构件·铆钉阵', cluster: '构件',
-    outputs: { main: 'rep' },
-    params: [P('cw', '钉距', 10, 30, 1, 16), P('gap', '钉间隙', 0, 9, 0.1, 5.5)],
+    id: 'part-rivets', name: '构件·铆钉（沿边）', cluster: '构件',
+    outputs: { main: 'rivG' },
+    params: [P('cw', '钉距', 10, 30, 1, 16), P('gap', '边距', 2, 9, 0.1, 5.5)],
     graph: graph([
       ...baseIn(2),
-      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 21 }),
-      n('cs', 'cellShape', undefined, { kind: 'circle', gap: '$gap' }),
+      // 铆钉打在所贴表面的边界处：距边 gap 的等距环带 × 双
+      // 向条纹的交点——钉沿边走、距由 cw 定，不再固定阵列。
+      // 钉头调用半球模式的受光分级：交点场做成高/中两级台阶
+      // （窄条纹为钉顶高光、宽条纹为肩），写出 bump 按半球
+      // 档位梯（4 高光/2 中间调/1 暗面）出钉头明暗，不平涂
+      n('sd', 'dist'),
+      n('ring', 'levelBand', { in: 'sd' }, { level: '$gap', w: 2.4 }),
+      n('sx', 'stripes', undefined, { axis: 'x', f: '$cw', duty: 0.16 }),
+      n('sy', 'stripes', undefined, { axis: 'y', f: '$cw', duty: 0.16 }),
+      n('core', 'max', { a: 'sx', b: 'sy' }),
+      n('sx2', 'stripes', undefined, { axis: 'x', f: '$cw', duty: 0.34, ph: -0.09 }),
+      n('sy2', 'stripes', undefined, { axis: 'y', f: '$cw', duty: 0.34, ph: -0.09 }),
+      n('sh', 'max', { a: 'sx2', b: 'sy2' }),
+      n('coreK', 'const', undefined, { v: 0.65 }),
+      n('shK', 'const', undefined, { v: 0.35 }),
+      n('coreG', 'mul', { a: 'core', b: 'coreK' }),
+      n('shG', 'mul', { a: 'sh', b: 'shK' }),
+      n('cross', 'add', { a: 'coreG', b: 'shG' }),
+      n('rivG', 'mul', { a: 'ring', b: 'cross' }),
     ], [
       w('in', 2, { at: 0.5 }),
-      w('rep', 0, { bump: { hi: 5, mid: 3, lo: 2 } }),
+      w('rivG', 0, { bump: { hi: 4, mid: 2, lo: 1 } }),
     ]),
   },
   {
@@ -631,12 +728,10 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
   {
     id: 'armor', name: '装甲钢板', cluster: '工业',
     params: [
-      P('cw', '板宽', 18, 44, 2, 30), P('rust', '锈量', 0, 1, 0.05, 0.35),
+      P('rust', '锈量', 0, 1, 0.05, 0.35),
     ],
     graph: graph([
       ...baseIn(2),
-      n('rep', 'repeat', { in: 'cs' }, { cw: '$cw', ch: '$cw', alt: 0, seed: 11 }),
-      n('cs', 'cellShape', undefined, { kind: 'bevelRect', gap: 0.7, bevel: 1.5 }),
       n('riv', 'ref', undefined, { ref: 'part-rivets', cw: 18 }),
       n('wear', 'ref', undefined, { ref: 'part-wear' }),
       n('blob', 'ref', undefined, { ref: 'part-blob', seed: 7, f: 0.09 }),
@@ -645,27 +740,34 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
       n('rustK', 'const', undefined, { v: '$rust' }),
     ], [
       w('in', 2, { at: 0.5 }),
-      w('rep', 3, { at: 0 }),
-      w('riv', 0, { bump: { hi: 5, mid: 3, lo: 2 } }),
+      w('riv', 0, { bump: { hi: 4, mid: 2, lo: 1 } }),
       w('rustG', 1, { at: 0.3 }),
       w('wear', 4, { at: 0.35 }),
     ]),
   },
   {
     id: 'mech-pro', name: '精密机甲板', cluster: '工业',
-    params: [P('grain', '颗粒感', 0, 0.4, 0.02, 0.16)],
+    params: [P('grain', '颗粒感', 0, 0.4, 0.02, 0.06)],
     graph: graph([
       ...baseIn(2),
-      n('lines', 'ref', undefined, { ref: 'part-panel', cw: 24 }),
       n('riv', 'ref', undefined, { ref: 'part-rivets', cw: 16, gap: 5.2 }),
+      // 颗粒只写边角、不写表面内部（用户立）：颗粒场的两端
+      // 尾部各取一带（峰亮一档/谷暗一档，明暗对冲），再乘边
+      // 界邻近掩码——只有靠边一带出颗粒，面内保持干净
       n('gr', 'ref', undefined, { ref: 'part-grain', seed: 8 }),
-      n('grG', 'mul', { a: 'gr', b: 'grK' }),
+      n('grB', 'levelBand', { in: 'gr' }, { level: 0.93, w: 0.14 }),
+      n('grD', 'levelBand', { in: 'gr' }, { level: 0.07, w: 0.14 }),
+      n('em', 'edgeProx', undefined, { w: 6 }),
+      n('grB0', 'mul', { a: 'grB', b: 'grK' }),
+      n('grD0', 'mul', { a: 'grD', b: 'grK' }),
+      n('grBG', 'mul', { a: 'grB0', b: 'em' }),
+      n('grDG', 'mul', { a: 'grD0', b: 'em' }),
       n('grK', 'const', undefined, { v: '$grain' }),
     ], [
       w('in', 2, { at: 0.5 }),
-      w('lines', 0, { at: 0.15 }),
-      w('riv', 5, { at: 0.35 }),
-      w('grG', 3, { at: 0.1 }),
+      w('riv', 5, { bump: { hi: 4, mid: 2, lo: 1 } }),
+      w('grBG', 3, { at: 0.03 }),
+      w('grDG', 1, { at: 0.03 }),
     ]),
   },
   {
@@ -834,12 +936,10 @@ export const PATTERN_TEMPLATES: PatternTemplate[] = [
     graph: graph([
       ...baseIn(2),
       n('holes', 'ref', undefined, { ref: 'part-holes', cw: '$cw' }),
-      n('lines', 'ref', undefined, { ref: 'part-panel', cw: 30 }),
     ], [
       w('in', 2, { at: 0.5 }),
       w('holes', 3, { at: 0 }),
       w('holes', 0, { bump: { hi: 2, mid: 3, lo: 5 } }),
-      w('lines', 4, { at: 0.3 }),
     ]),
   },
   {

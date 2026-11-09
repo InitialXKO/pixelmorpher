@@ -80,11 +80,83 @@ export interface FaceEntryDef {
   params: import('./face-features').FaceFeatureParams;
 }
 
-export type EntryDef = SurfaceEntryDef | DynamicEntryDef | ChainEntryDef | FaceEntryDef;
+/**
+ * 机甲条目定义。模式与算子可以无限组合，机甲条目同样两式：
+ * gen 式 = 生成器 + 规格选择（gen 定部位/装备；family/scheme 定族
+ * 与配色；overrides = 变体槽选择与数值参数的稀疏覆盖，与向导同一
+ * 套覆盖类型，空 = 族预设全量）；combo 式 = 钉版引用其他机甲条目
+ * 组合（可嵌组合），每件可带 as 命名与 def 覆写（覆写即派生变体）。
+ * 调用 = 按 def 出精灵（mecha/entry-render），输出按名取。
+ */
+export interface MechaGenDef {
+  kind: 'mecha';
+  form: 'gen';
+  gen: 'leg' | 'arm' | 'torso' | 'head' | 'hand' | 'hull' | 'multileg' | 'track' | 'wheel' | 'jetpack' | 'weapon';
+  family: import('./mecha/parts').MechaFamily;
+  scheme?: import('./mecha/parts').MechaSchemeName;
+  profile?: 'spider' | 'quad';
+  hullKind?: 'walker' | 'hauler';
+  weaponKind?: import('./mecha/gear').WeaponKind;
+  /** 着色条目引用（'id@版本'）：着色是独立模式，机甲条目钉版引用 */
+  finish?: string;
+  /** 表面材质条目引用（'id@版本'，表面模板）：作用于该 def 的全部输出 */
+  surface?: string;
+  /** 表面模板参数覆写（键 = 模板参数 key） */
+  surfaceParams?: Record<string, number>;
+  overrides?: import('./mecha/parts').MechaPartOverrides;
+  hullOverrides?: import('./mecha/parts').MechaHullOverrides;
+}
+export interface MechaComboPart {
+  entry: string;
+  version: number;
+  /** 输出命名前缀（同名输出靠它区分，如 armL/armR） */
+  as?: string;
+  /** 对子条目 def 的覆写（派生变体：换配色/换着色/改规格） */
+  ov?: Partial<Pick<MechaGenDef, 'scheme' | 'finish' | 'surface' | 'surfaceParams' | 'overrides' | 'hullOverrides'>>;
+}
+export interface MechaComboDef {
+  kind: 'mecha';
+  form: 'combo';
+  parts: MechaComboPart[];
+}
+export type MechaEntryDef = MechaGenDef | MechaComboDef;
+
+/**
+ * 着色条目定义。分层要分清：高光棱、料厚、做旧、迷彩、分面、壳
+ * 面、盖章、面板线、线缆着色是着色层的算子（单一 pass + 自带参
+ * 数），不是模式；模式是把算子组合起来的着色组合（combo 式）：
+ * 钉版引用算子条目并给各自的参数覆写。展开（entry-render）产出
+ * 现行扁平着色参数，生成器零改动——与动态父模式展开同一纪律。
+ */
+export type FinishPass =
+  | 'ridges' | 'thickness' | 'wear' | 'camo' | 'facets'
+  | 'shell' | 'stamps' | 'panel' | 'cables' | 'intake' | 'wedges' | 'seam';
+export interface FinishPassParams {
+  amount?: number; enabled?: boolean; ratio?: number; twoTone?: boolean;
+  detail?: number; decalKind?: 'num' | 'plate' | 'none';
+  tint?: [number, number, number];
+  rim?: number; pitch?: number; peak?: number; fall?: number; accentSlats?: boolean;
+  topTone?: number; topGrad?: number;
+  density?: number;
+}
+export interface FinishPassDef {
+  kind: 'finish';
+  form: 'pass';
+  pass: FinishPass;
+  params: FinishPassParams;
+}
+export interface FinishComboDef {
+  kind: 'finish';
+  form: 'combo';
+  parts: { entry: string; version: number; params?: FinishPassParams }[];
+}
+export type FinishEntryDef = FinishPassDef | FinishComboDef;
+
+export type EntryDef = SurfaceEntryDef | DynamicEntryDef | ChainEntryDef | FaceEntryDef | MechaEntryDef | FinishEntryDef;
 
 export interface LibraryEntry {
   id: string;
-  kind: 'surface' | 'dynamic' | 'chain' | 'face';
+  kind: 'surface' | 'dynamic' | 'chain' | 'face' | 'mecha' | 'finish';
   name: string;
   cluster: string;
   versions: Record<number, EntryDef>;
@@ -563,6 +635,167 @@ function buildBuiltinEntries(): LibraryEntry[] {
   out.push(...buildBuiltinChainEntries());
   // 脸型条目：五官点位参数预设（在转面面板应用到头部节点）
   out.push(...buildBuiltinFaceEntries());
+  // 着色条目：着色本身是模式（收尾参数集），自族基线抽出登记，
+  // 被机甲条目钉版引用——改着色发新版，引用方显式升级才跟随。
+  out.push(...buildBuiltinFinishEntries());
+  // 机甲条目：构造模式入产品库（研究线模式的正式登记处）。
+  // 族预设即 v1：def 只钉生成器与族，变体槽缺省走族预设全量；
+  // 蜘蛛多足腿的参考本体是石板灰机器，配色在 def 里钉 slate。
+  out.push(...buildBuiltinMechaEntries());
+  return out;
+}
+
+function finishPassEntry(id: string, name: string, pass: FinishPass, params: FinishPassParams): LibraryEntry {
+  return {
+    id, kind: 'finish', name, cluster: '着色', builtin: true, latest: 1,
+    versions: { 1: { kind: 'finish', form: 'pass', pass, params } satisfies FinishPassDef },
+  };
+}
+
+function finishComboEntry(
+  id: string, name: string,
+  parts: { entry: string; params?: FinishPassParams }[],
+): LibraryEntry {
+  return {
+    id, kind: 'finish', name, cluster: '着色', builtin: true, latest: 1,
+    versions: {
+      1: {
+        kind: 'finish', form: 'combo',
+        parts: parts.map((p) => ({ entry: p.entry, version: 1, params: p.params })),
+      } satisfies FinishComboDef,
+    },
+  };
+}
+
+function buildBuiltinFinishEntries(): LibraryEntry[] {
+  return [
+    // 着色算子（单一 pass 各一份条目；参数是该算子自己的量）
+    finishPassEntry('fpass-ridges', '高光棱', 'ridges', { enabled: true }),
+    finishPassEntry('fpass-seam', '缝', 'seam', { enabled: true }),
+    finishPassEntry('fpass-thickness', '料厚', 'thickness', { ratio: 0.32 }),
+    finishPassEntry('fpass-intake', '进气口', 'intake', { topTone: 1.42, topGrad: 0.12, rim: 0.1, pitch: 7, peak: 0.75, fall: 0.22, accentSlats: false }),
+    finishPassEntry('fpass-wear', '做旧', 'wear', { amount: 0.3 }),
+    finishPassEntry('fpass-camo', '迷彩', 'camo', { enabled: true }),
+    finishPassEntry('fpass-facets', '分面着色', 'facets', { twoTone: true }),
+    finishPassEntry('fpass-shell', '壳面', 'shell', { enabled: true }),
+    finishPassEntry('fpass-stamps', '盖章', 'stamps', { decalKind: 'num' }),
+    finishPassEntry('fpass-panel', '面板线', 'panel', { detail: 0.65 }),
+    finishPassEntry('fpass-wedges', '异形楔拼块', 'wedges', { density: 1 }),
+    finishPassEntry('fpass-cables', '线缆着色', 'cables', {}),
+    // 着色组合（族基线 = 一组子模式 + 各自参数覆写）
+    finishComboEntry('finish-olive', '着色组合·战损橄榄', [
+      { entry: 'fpass-ridges' }, { entry: 'fpass-seam' }, { entry: 'fpass-thickness' }, { entry: 'fpass-intake' }, { entry: 'fpass-intake' }, { entry: 'fpass-intake' },
+      { entry: 'fpass-wear', params: { amount: 0.3 } },
+      { entry: 'fpass-camo', params: { enabled: true } },
+      { entry: 'fpass-facets', params: { twoTone: true } },
+      { entry: 'fpass-wedges', params: { density: 1 } },
+    ]),
+    finishComboEntry('finish-agile', '着色组合·洁净敏捷', [
+      { entry: 'fpass-ridges' }, { entry: 'fpass-seam' }, { entry: 'fpass-thickness' },
+      { entry: 'fpass-wear', params: { amount: 0.15 } },
+      { entry: 'fpass-camo', params: { enabled: false } },
+      { entry: 'fpass-facets', params: { twoTone: true } },
+      { entry: 'fpass-wedges', params: { density: 1 } },
+    ]),
+    finishComboEntry('finish-powersuit', '着色组合·动力服', [
+      { entry: 'fpass-ridges' }, { entry: 'fpass-seam' }, { entry: 'fpass-thickness' },
+      { entry: 'fpass-wear', params: { amount: 0.15 } },
+      { entry: 'fpass-camo', params: { enabled: false } },
+      { entry: 'fpass-facets', params: { twoTone: false } },
+      { entry: 'fpass-wedges', params: { density: 1 } },
+    ]),
+  ];
+}
+
+function mechaEntry(id: string, name: string, def: MechaEntryDef): LibraryEntry {
+  return {
+    id, kind: 'mecha', name, cluster: '机甲', builtin: true, latest: 1,
+    versions: { 1: def },
+  };
+}
+
+function buildBuiltinMechaEntries(): LibraryEntry[] {
+  const out: LibraryEntry[] = [];
+  const FAMS = [
+    ['olive', '橄榄'], ['agile', '敏捷'], ['powersuit', '动力服'],
+  ] as const;
+  const WEAPONS = [
+    ['cannon', '臂炮'], ['pod', '导弹荚'], ['rifle', '步枪'], ['podPylon', '高架荚'],
+  ] as const;
+  for (const [fam, label] of FAMS) {
+    out.push(mechaEntry(`mecha-leg-${fam}`, `腿组合·${label}`, { kind: 'mecha', form: 'gen', gen: 'leg', family: fam, finish: `finish-${fam}@1` }));
+    out.push(mechaEntry(`mecha-arm-${fam}`, `臂组合·${label}`, { kind: 'mecha', form: 'gen', gen: 'arm', family: fam, finish: `finish-${fam}@1` }));
+    out.push(mechaEntry(`mecha-torso-${fam}`, `躯干组·${label}`, { kind: 'mecha', form: 'gen', gen: 'torso', family: fam, finish: `finish-${fam}@1` }));
+    out.push(mechaEntry(`mecha-head-${fam}`, `头组·${label}`, { kind: 'mecha', form: 'gen', gen: 'head', family: fam, finish: `finish-${fam}@1` }));
+    out.push(mechaEntry(`mecha-hand-${fam}`, `手型·${label}`, { kind: 'mecha', form: 'gen', gen: 'hand', family: fam, finish: `finish-${fam}@1` }));
+    out.push(mechaEntry(`mecha-track-${fam}`, `履带·${label}`, { kind: 'mecha', form: 'gen', gen: 'track', family: fam, finish: `finish-${fam}@1` }));
+    out.push(mechaEntry(`mecha-wheel-${fam}`, `轮足·${label}`, { kind: 'mecha', form: 'gen', gen: 'wheel', family: fam, finish: `finish-${fam}@1` }));
+    out.push(mechaEntry(`mecha-jetpack-${fam}`, `喷射背包·${label}`, { kind: 'mecha', form: 'gen', gen: 'jetpack', family: fam, finish: `finish-${fam}@1` }));
+    for (const [wk, wl] of WEAPONS) {
+      out.push(mechaEntry(`mecha-weapon-${wk}-${fam}`, `${wl}·${label}`, { kind: 'mecha', form: 'gen', gen: 'weapon', family: fam, weaponKind: wk, finish: `finish-${fam}@1` }));
+    }
+  }
+  out.push(mechaEntry('mecha-hull-walker', '车体组·步行', { kind: 'mecha', form: 'gen', gen: 'hull', family: 'olive', hullKind: 'walker', finish: 'finish-olive@1' }));
+  out.push(mechaEntry('mecha-hull-hauler', '车体组·运输', { kind: 'mecha', form: 'gen', gen: 'hull', family: 'olive', hullKind: 'hauler', finish: 'finish-olive@1' }));
+  out.push(mechaEntry('mecha-multileg-spider', '多足腿·蜘蛛', { kind: 'mecha', form: 'gen', gen: 'multileg', family: 'olive', scheme: 'slate', profile: 'spider', finish: 'finish-olive@1' }));
+  out.push(mechaEntry('mecha-multileg-quad', '多足腿·四足', { kind: 'mecha', form: 'gen', gen: 'multileg', family: 'olive', profile: 'quad', finish: 'finish-olive@1' }));
+  // 躯干构造模式（2026-11-07 四样本标注提取）：模式本体是参数，
+  // 条目钉版持有、躯干生成器经 profile/waistH 覆盖消费——不是
+  // 写在生成器里的数字。套用即把该模式的参数装到当前躯干上
+  out.push(mechaEntry('mpat-torso-fold', '躯干模式·前缘折点', { kind: 'mecha', form: 'gen', gen: 'torso', family: 'olive', finish: 'finish-olive@1', overrides: { torso: { profile: { top: 0.30, fold: 0.50, foldY: 0.55, base: 0.42 } } } }));
+  out.push(mechaEntry('mpat-torso-waist', '躯干模式·腰独立成段', { kind: 'mecha', form: 'gen', gen: 'torso', family: 'olive', finish: 'finish-olive@1', overrides: { torso: { waistH: 34 } } }));
+  out.push(mechaEntry('mpat-torso-division', '躯干模式·胸内主横分', { kind: 'mecha', form: 'gen', gen: 'torso', family: 'olive', finish: 'finish-olive@1', overrides: { torso: { profile: { divY: 0.50 } } } }));
+  // 进气口·三面盒（立体绘制模式）：构造只做斜框分区，量分三组、
+  // 各有校准出处——进深 intakeDepth [0.08, 0.08]（浅盒分区量，两
+  // 样本口面板框带剖面约 8%）；口份额 intakeShare [0.92, 0.75]
+  // （口占装口面，标注实测宽 0.91–0.93 / 高 0.71–0.79，与进深无
+  // 关）；框斜与装口面倍率是站点朝向量、在各生成器调用点给。着
+  // 色组合（模式主体）在 fpass-intake：顶面倍率、口内子模式
+  out.push(mechaEntry('mpat-intake', '进气口·三面盒', { kind: 'mecha', form: 'gen', gen: 'torso', family: 'olive', finish: 'finish-olive@1', overrides: { torso: { intakeDepth: [0.08, 0.08], boxDepth: [0.92, 0.7], intakeShare: [0.92, 0.75], intakeOrient: 'keel', intakeTrim: true }, head: { intakeDepth: [0.08, 0.08], intakeShare: [0.92, 0.75] } }, hullOverrides: { intakeDepth: [0.08, 0.08], intakeShare: [0.92, 0.75] } }));
+  // 龙骨突·散热口组合（模式组合：散热口盒 + 龙骨突 + 前楔并体
+  // 三者同行——龙骨突按因果定案从盒的实际角点生长造剪影、前
+  // 伸量 keelReach 由本条目持有；前楔并体 ventFuse 把盒左侧面
+  // 与楔拱前楔并成同一表面。盒本体参数同 mpat-intake）
+  out.push(mechaEntry('mpat-keelvent', '龙骨突·散热口组合', { kind: 'mecha', form: 'gen', gen: 'torso', family: 'olive', finish: 'finish-olive@1', overrides: { torso: { intakeDepth: [0.08, 0.08], boxDepth: [0.92, 0.7], intakeShare: [0.92, 0.75], intakeOrient: 'keel', intakeTrim: true, keelPlate: true, keelReach: 0.32, ventFuse: true } } }));
+  // —— 铁巢样本四模式（2026-11-09 拆 DAG 落库）：垂缆 → 髋梁 →
+  // 支架腿组 → 侧挂舱，依赖序即落库序。垂缆本体 = 线缆模式在
+  // 两锚间悬垂成兜；侧挂舱 = 盒子模式 + 垂缆的组合条目；支架
+  // 腿组 = 髋梁 + 撑链对的装配模式（参数经部件集 stand 流通到
+  // assembleMechaVehicle 的双骨解算）
+  out.push(mechaEntry('mpat-sagcable', '垂缆线束·腹下成束', { kind: 'mecha', form: 'gen', gen: 'hull', family: 'olive', hullKind: 'walker', finish: 'finish-olive@1', hullOverrides: { sagCables: true } }));
+  out.push(mechaEntry('mpat-hipbeam', '髋梁横轴·梁端双盘', { kind: 'mecha', form: 'gen', gen: 'leg', family: 'olive', finish: 'finish-olive@1', overrides: { leg: { hipBeam: true } } }));
+  out.push(mechaEntry('mpat-standgroup', '支架腿组·双组倒V', { kind: 'mecha', form: 'gen', gen: 'leg', family: 'olive', finish: 'finish-olive@1', overrides: { leg: { hipBeam: true, standSplay: 0.23, standReach: 0.93 } } }));
+  out.push(mechaEntry('mpat-sidepod', '侧挂设备舱·盒+垂缆', { kind: 'mecha', form: 'gen', gen: 'hull', family: 'olive', hullKind: 'hauler', finish: 'finish-olive@1', hullOverrides: { sidePod: true } }));
+  // 块形·非四边形（2026-11-06 v14 定版，跨部位：块的逐角切角逐角独立
+  // 抽 + 侧边台阶 + 切角下限；研究库 G1 索引行指向的 L0 blockPoly 在产
+  // 品侧的条目本体——工厂预设同值钉住，覆盖可调）
+  out.push(mechaEntry('mpat-blockshape', '块形·非四边形', { kind: 'mecha', form: 'gen', gen: 'torso', family: 'olive', finish: 'finish-olive@1', overrides: { torso: { blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 } }, head: { blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 } }, arm: { blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 } } }, hullOverrides: { blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 } } }));
+  // 整机组合（组合式条目：模式之上再组合——人形 = 头+躯干+臂+腿，
+  // 载具 = 车体 + 行走方式；子条目钉版引用，输出以 as 前缀区分）
+  const combo = (id: string, name: string, parts: MechaComboDef['parts']): LibraryEntry => ({
+    id, kind: 'mecha', name, cluster: '机甲', builtin: true, latest: 1,
+    versions: { 1: { kind: 'mecha', form: 'combo', parts } satisfies MechaComboDef },
+  });
+  for (const [fam, label] of FAMS) {
+    out.push(combo(`mecha-humanoid-${fam}`, `人形整机·${label}`, [
+      { entry: `mecha-head-${fam}`, version: 1, as: 'head' },
+      { entry: `mecha-torso-${fam}`, version: 1, as: 'torso' },
+      { entry: `mecha-arm-${fam}`, version: 1, as: 'arm' },
+      { entry: `mecha-leg-${fam}`, version: 1, as: 'leg' },
+    ]));
+  }
+  out.push(combo('mecha-vehicle-spider', '载具整机·步行蜘蛛', [
+    { entry: 'mecha-hull-walker', version: 1, as: 'hull' },
+    { entry: 'mecha-multileg-spider', version: 1, as: 'legs' },
+  ]));
+  out.push(combo('mecha-vehicle-quad', '载具整机·步行四足', [
+    { entry: 'mecha-hull-walker', version: 1, as: 'hull' },
+    { entry: 'mecha-multileg-quad', version: 1, as: 'legs' },
+  ]));
+  out.push(combo('mecha-vehicle-hauler-track', '载具整机·运输履带', [
+    { entry: 'mecha-hull-hauler', version: 1, as: 'hull' },
+    { entry: 'mecha-track-olive', version: 1, as: 'legs' },
+  ]));
   return out;
 }
 
@@ -730,6 +963,13 @@ export function refsOfDef(def: EntryDef): { id: string; version?: number }[] {
     if (def.kind === 'leaf') return [];
     if (def.kind === 'chain') return [];
     if (def.kind === 'face') return [];
+    if (def.kind === 'finish') {
+      return def.form === 'combo' ? def.parts.map((p) => ({ id: p.entry, version: p.version })) : [];
+    }
+    if (def.kind === 'mecha') {
+      if (def.form === 'combo') return def.parts.map((p) => ({ id: p.entry, version: p.version }));
+      return def.finish ? [parseRefId(def.finish)] : [];
+    }
     return def.children.map((c) => ({ id: c.entry, version: c.version }));
   }
   const out: { id: string; version?: number }[] = [];
@@ -903,4 +1143,43 @@ export function faceDefOf(
   const got = defOf(index, id, version);
   if (!got || !('kind' in got.def) || got.def.kind !== 'face') return undefined;
   return { def: got.def, version: got.version };
+}
+
+/** 全部机甲条目（内置 + 用户） */
+export function mechaEntriesOf(entries: readonly LibraryEntry[]): LibraryEntry[] {
+  return entries.filter((e) => e.kind === 'mecha');
+}
+
+/** 取机甲条目某版本的定义（非机甲条目/无此版本返回 undefined） */
+export function mechaDefOf(
+  index: LibraryIndex, id: string, version?: number,
+): { def: MechaEntryDef; version: number } | undefined {
+  const got = defOf(index, id, version);
+  if (!got || !('kind' in got.def) || got.def.kind !== 'mecha') return undefined;
+  return { def: got.def, version: got.version };
+}
+
+/** 全部着色条目（内置 + 用户） */
+export function finishEntriesOf(entries: readonly LibraryEntry[]): LibraryEntry[] {
+  return entries.filter((e) => e.kind === 'finish');
+}
+
+/** 取着色条目某版本的定义（非着色条目/无此版本返回 undefined） */
+export function finishDefOf(
+  index: LibraryIndex, id: string, version?: number,
+): { def: FinishEntryDef; version: number } | undefined {
+  const got = defOf(index, id, version);
+  if (!got || !('kind' in got.def) || got.def.kind !== 'finish') return undefined;
+  return { def: got.def, version: got.version };
+}
+
+export function surfaceDefOf(
+  index: LibraryIndex, id: string, version?: number,
+): { def: SurfaceEntryDef; version: number } | undefined {
+  // 表面条目的 kind 在条目本体上（def 不带 kind），与 finish 的
+  // def.kind 口径不同——按条目 kind 判
+  const e = index.get(id);
+  if (!e || e.kind !== 'surface') return undefined;
+  const got = defOf(index, id, version);
+  return got ? { def: got.def as SurfaceEntryDef, version: got.version } : undefined;
 }

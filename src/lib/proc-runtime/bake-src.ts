@@ -247,9 +247,42 @@ function compileSurfaceGraph(graph, shape, phase) {
         return Math.max(0, Math.min(1, gv));
       }
       case 'cyl': {
-        // 对称柱面渐变：中心 1、两侧 0（cos 曲线）
+        // 柱面渐变：峰位由 off 定（0 = 正中对称、负 = 偏前，
+        // 与引擎管/桶的偏前高光同口径），cos 曲线；
+        // rf = 远侧下缘反光（0 = 无）：远侧缘带另行抬起
         var cu = base.u01 * 2 - 1;
-        return Math.pow(Math.max(0, Math.cos(cu * Math.PI / 2)), Math.max(0.1, P(node, 'k', 1)));
+        var coff = P(node, 'off', 0);
+        var cvv = Math.pow(Math.max(0, Math.cos((cu - coff) * Math.PI / 2)), Math.max(0.1, P(node, 'k', 1)));
+        var crf = P(node, 'rf', 0);
+        if (crf > 0) {
+          // 反光是暗部里的一条带：与高光一样不紧贴明暗分界
+          // 线——交界与反光之间隔着暗面、反光与边缘之间也留
+          // 一线暗面。带位按峰→暗侧边缘的归一程（0.82 起、
+          // 0.93 后收）
+          var cs = (cu - coff) / Math.max(0.2, 1 - coff);
+          var cbell = Math.max(0, Math.min(1, (cs - 0.82) / 0.07)) * (1 - Math.max(0, Math.min(1, (cs - 0.93) / 0.06)));
+          cvv = Math.max(cvv, crf * cbell * 0.62);
+        }
+        return cvv;
+      }
+      case 'sph': {
+        // 球面场：距心径向落下（cos 曲线），峰位由 (ox, oy)
+        // 偏向光侧；轮廓仍是几何圆（r = 半径、u01 单位，
+        // 0.5 = 内切），界外 0；rf = 下缘反光（0 = 无）
+        var sx = base.u01 * 2 - 1, sy = base.v01 * 2 - 1;
+        var sox = P(node, 'ox', 0), soy = P(node, 'oy', 0);
+        var srr = Math.max(0.05, P(node, 'r', 0.5)) * 2;
+        if (Math.hypot(sx, sy) / srr >= 1) return 0;
+        var sdd = Math.hypot(sx - sox, sy - soy) / srr;
+        var svv = Math.pow(Math.max(0, Math.cos(Math.min(1, sdd) * Math.PI / 2)), Math.max(0.1, P(node, 'k', 1)));
+        var srf = P(node, 'rf', 0);
+        if (srf > 0) {
+          // 反光带同理不贴分界线、不贴球缘：落在下半球暗部
+          // 的中段（sy 0.3 起、0.66 后收）
+          var sbel = Math.max(0, Math.min(1, (sy - 0.3) / 0.2)) * (1 - Math.max(0, Math.min(1, (sy - 0.66) / 0.2)));
+          svv = Math.max(svv, srf * sbel * 0.95 * (sdd < 0.98 ? 1 : 0));
+        }
+        return svv;
       }
       case 'rings': {
         var rcx = P(node, 'cx', 0), rcy = P(node, 'cy', 0);
