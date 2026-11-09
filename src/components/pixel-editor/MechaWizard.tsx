@@ -922,7 +922,19 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
         }
         if (mxY > mnY) setBaseCal({ sig, h: mxY - mnY + 1 });
       }
-      ctx.drawImage(off, Math.round(PW / 2 - OW / 2), Math.round(PH * 0.30 - OH / 2));
+      // 贴回按根锚点定位（与旧手绘口径同一落点：根落在 PW/2, PH·0.30）：
+      // 离屏内容的位置由渲染计划的世界坐标决定（中心相对），整幅固定
+      // 偏移贴回会把车身大半贴到预览框外——根在离屏里的实际落点由
+      // 世界变换 + 投影算出，不假设内容居中
+      const wt = computeWorldTransforms(character, 0, OW, OH, 12, undefined, undefined, undefined, 6);
+      const rootT = wt.get(assembly.rootNodeId);
+      if (rootT) {
+        const rp = projectToView(rootT.worldX, rootT.worldY, rootT.worldZ, 6);
+        const rootSX = OW / 2 + subToPx(rp.canvasX), rootSY = OH / 2 + subToPx(rp.canvasY);
+        ctx.drawImage(off, Math.round(PW / 2 - rootSX), Math.round(PH * 0.30 - rootSY));
+      } else {
+        ctx.drawImage(off, Math.round(PW / 2 - OW / 2), Math.round(PH * 0.30 - OH / 2));
+      }
       return;
     }
 

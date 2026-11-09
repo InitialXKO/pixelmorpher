@@ -264,10 +264,13 @@ export function assembleMechaCharacter(opts: {
   if (B.weapon && weaponMountOf(B.weapon) === 'forearm') { sockLimb(nodes, 'arm_fore_N', 'weapon', Math.round(G.foreLen * 0.35) * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: 90 }; } // 挂点在前臂中段：套筒覆住前臂后半、炮口顺臂越过拳端
   if (B.weapon && weaponMountOf(B.weapon) === 'hand') { sockLimb(nodes, 'arm_hand_N', 'weapon', 10 * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: 90 }; }
 
-  // 根定位（根 x 存画布中心口径，与既有角色一致）
+  // 根定位：渲染计划的世界坐标以画布中心为原点（worldX/Y = 中心 +
+  // 投影），根须存中心相对值——目标落点 (画布宽/2, rootY) 对应
+  // x=0（深度中立）、y=rootY−画布高/2、z=0。此前写绝对像素等于
+  // 把中心又加一遍，角色整体沉出画布（编辑器里生成完看不见的根源）
   const rootY = Math.max(320, Math.min(canvasSize.h * 0.42, 800));
   const pelvis = nodes.pelvis!;
-  pelvis.transform = { ...pelvis.transform, x: SUB(canvasSize.w / 2), y: SUB(rootY) };
+  pelvis.transform = { ...pelvis.transform, x: 0, y: SUB(rootY - canvasSize.h / 2), z: 0 };
   pelvis.isCore = true;
 
   // 画序次键（同深度内）：深度（侧深 x）为主键，zIndex 只作次键
@@ -674,7 +677,7 @@ export function assembleMechaVehicle(opts: {
   const depth = mob === 'spider' ? 350 : mob === 'tracks' ? 235 : 330;
   const rootY = Math.max(240, Math.min(canvasSize.h * 0.34, canvasSize.h - depth * 0.55 * sc));
   const hull = nodes.hull!;
-  hull.transform = { ...hull.transform, x: SUB(canvasSize.w / 2), y: SUB(rootY) };
+  hull.transform = { ...hull.transform, x: 0, y: SUB(rootY - canvasSize.h / 2), z: 0 };
   hull.isCore = true;
   hull.zIndex = 1;
   // 载具步行腿 IK 链的 2D 目标 y 需根纵坐标（上面先占位 0，这里补齐）
