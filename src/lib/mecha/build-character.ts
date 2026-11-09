@@ -597,7 +597,10 @@ export function assembleMechaVehicle(opts: {
         rootNodeId: nodes[`${st.key}_thigh`]!.id, endNodeId: nodes[`${st.key}_foot`]!.id,
         target: { x: canvasSize.w / 2 + footF + e3.f * footReach, y: 0 },
         target3D: { x: sg * 12 * sc, y: footD + e3.d * footReach, z: footF + e3.f * footReach },
-        solver: '2bone', bendDir: st.ss, enabled: false,
+        // bendDir 口径从求解器：+1 = 膝向 FK 肘位一侧弯（四撑静止膝均向外
+        // 弓、即 FK 侧），-1 会把极点镜到对侧、动目标时膝翻穿腿面；
+        // 与人形 mkChain、多足链同取 1（旧值 st.ss 把斜撑符号混作弯曲符号）
+        solver: '2bone', bendDir: 1, enabled: false,
       });
     }
     if (ps.hipBeam) for (const [k, gz] of [['hipbeam_F', 74], ['hipbeam_R', -74]] as const) {
