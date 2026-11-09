@@ -990,17 +990,9 @@ function layout(cv: MechaCanvas, spec: LegSpec, pre?: { hip: Pt; knee: Pt; ankle
   // 6.5) 膝盖帽 + 杂物小盒（参考图的构件密度主要来自这类小件）
   {
     const f = segFrame(shin.a, shin.b); const sgn = std ? -1 : 1;
-    const C = (along: number, off: number): Pt => ({
-      x: knee.x + f.ux * along + f.px * sgn * off, y: knee.y + f.uy * along + f.py * sgn * off,
-    });
-    const ks = spec.kneeScale ?? 1; // 膝盖块系数（用户可调）
-    // 膝盖帽：上沿收短（膝上已有盖板）、整体前移——盘心与盘面上半露
-    // 出深色（参考：帽只压在盘面前缘，盘心是外露的深色圆盘）
-    const cap = [C(-26, 32 * ks), C(-22, 58 * ks), C(2, 65 * ks), C(28, 53 * ks), C(25, 30 * ks)]; // 膝盖帽：前伸厚度随膝盖块系数
-    cv.insts.push({ kind: 'plate' }); const capId = id;
-    fillShape(cv, id, polyTest(cap)); id++;
-    A.plateTint.set(capId, 1.06); A.panelLines.set(capId, [0.55]);
-    polyLip(A, capId, cap, 0.55);
+    // 膝盖帽已撤（用户定：膝盖只有前楔块——楔拱前扇区那块，见下方
+    // 楔块段；帽与前楔同压盘面前缘、双块并存是残留，膝盖块系数
+    // kneeScale 由前楔单独承载）
     // 大腿前小盒 + 小腿后挂盒
     const box = (cx: number, cy: number, w: number, h: number) => {
       cv.insts.push({ kind: 'plate' }); const bid = id;

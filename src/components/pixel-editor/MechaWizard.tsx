@@ -19,9 +19,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useProjectStore } from '@/lib/store';
-import { projectToView, subToPx } from '@/lib/unified-types';
-import type { Character } from '@/lib/unified-types';
-import { computeWorldTransforms } from '@/lib/unified-render';
+import { projectToView, subToPx, pxToSub } from '@/lib/unified-types';
+import type { Character, Sprite } from '@/lib/unified-types';
+import { computeWorldTransforms, renderCharacterOnionFrameFromCharacter } from '@/lib/unified-render';
 import {
   generateMechaPartSet, generateMechaWheelLegParts, generateMechaMultiLegParts, generateMechaTrackUnit,
   generateMechaJetpack, generateMechaWeapon, generateMechaHullBody, generateMechaTurret,
@@ -38,8 +38,9 @@ import type { LegSpec, ArmSpec, TorsoSpec, TorsoProfile, HeadSpec, HullSpec, Blo
 import { torsoProfileOf } from '@/lib/mecha/engine';
 import {
   assembleMechaCharacter, assembleMechaVehicle, createMechaCharacterInStore, createMechaVehicleInStore,
-  mechaHumanoidNodeParts, mechaVehicleNodeParts, mechaMobilityFamily, mechaVehicleScheme,
+  mechaHumanoidNodeParts, mechaVehicleNodeParts, mechaMobilityFamily, mechaVehicleScheme, vehLegMul,
   MECHA_VEHICLE_LABELS, MECHA_POD_MOUNT_LABELS,
+  rgbaToPixelGrid,
 } from '@/lib/mecha/build-character';
 import type { MechaBuildOptions, MechaVehicleOptions, MechaPodMount } from '@/lib/mecha/build-character';
 import {
@@ -502,13 +503,19 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   /** 部件集贴表面材质（克隆后贴，不动 getPartSet 的缓存原件） */
   const surfacedPartSet = (ps: MechaPartSet): MechaPartSet => {
     if (!surfChoice) return ps;
-    const out = {} as Record<string, MechaSpriteData>;
-    for (const [k, v] of Object.entries(ps)) {
-      const c = { ...(v as MechaSpriteData), rgba: new Uint8ClampedArray((v as MechaSpriteData).rgba) };
+    // 只克隆精灵字段贴材质；geom/rest/stand/挂点等非精灵字段原样带过
+    // （此前整表 Object.entries 硬当精灵克隆，非精灵字段被塞进空 rgba、
+    // 靠展开兜底才没坏数据，类型也对不上）
+    const SPRITE_KEYS = ['leg', 'legThigh', 'legShin', 'legFoot', 'hipBeam', 'armUpper', 'armFore', 'armHand', 'torso', 'head'] as const;
+    const out: MechaPartSet = { ...ps };
+    for (const k of SPRITE_KEYS) {
+      const v = ps[k];
+      if (!v) continue;
+      const c: MechaSpriteData = { ...v, rgba: new Uint8ClampedArray(v.rgba) };
       applySurface(c, surfChoice);
       out[k] = c;
     }
-    return out as MechaPartSet;
+    return out;
   };
   const [advOpen, setAdvOpen] = useState<Record<string, boolean>>({});
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -813,6 +820,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
     ctx.imageSmoothingEnabled = false;
 
     let assembly: ReturnType<typeof assembleMechaCharacter>;
+    let vehicleTable: Record<string, Sprite> | null = null;
     let nodeParts: Record<string, string>;
     let spriteFor: (part: string) => MechaSpriteData | undefined;
     let spriteKeyFor: (part: string) => string;
@@ -840,10 +848,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
     } else {
       const V = vehicleOpts();
       const mobFam = mechaMobilityFamily(V.hull);
-      const mps = V.mobility === 'legs' ? surfacedPartSet((() => { const k = sig + ':vehps'; let c = partSetCache.current.get(k); if (!c) { c = generateMechaPartSet(mobFam, undefined, { scheme: V.parts?.scheme ?? mechaVehicleScheme(V.hull), leg: { ...(V.parts?.leg ?? {}), hipBeam: true, wScale: V.parts?.leg?.wScale ?? 0.62 } }, { leg: (V.parts?.proportions?.leg ?? PARTSET_STYLE[V.hull].proportions.leg) * (V.hull === 'walker' ? 0.78 : 1) }); partSetCache.current.set(k, c); } return c; })()) : undefined;
-      assembly = assembleMechaVehicle({
-        characterId: 'preview', canvasSize: { w: 1000, h: 1200 }, vehicle: V, spriteIds: {}, partSet: mps, scale,
-      });
+      const mps = V.mobility === 'legs' ? surfacedPartSet((() => { const k = sig + ':vehps'; let c = partSetCache.current.get(k); if (!c) { c = generateMechaPartSet(mobFam, undefined, { scheme: V.parts?.scheme ?? mechaVehicleScheme(V.hull), leg: { ...(V.parts?.leg ?? {}), hipBeam: true, wScale: V.parts?.leg?.wScale ?? 0.62 } }, { leg: vehLegMul(V) }); partSetCache.current.set(k, c); } return c; })()) : undefined;
       nodeParts = mechaVehicleNodeParts(V);
       const gearCtx = { scheme: V.parts?.scheme ?? mechaVehicleScheme(V.hull), leg: V.parts?.leg, trackLen: V.parts?.trackLen, finOv, surf: surfChoice };
       spriteFor = (part) => {
@@ -868,12 +873,56 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
         return undefined;
       };
       spriteKeyFor = (part) => sig + ':' + part;
+      // 真渲染精灵表：部件位图 → Sprite 记录（data 网格 + 插头亚像素），
+      // 装配带真 spriteIds，预览走与主画布同一渲染器（见下方载具绘制段）
+      {
+        const table: Record<string, Sprite> = {};
+        const ids: Record<string, string> = {};
+        for (const part of new Set(Object.values(nodeParts))) {
+          const d = spriteFor(part);
+          if (!d) continue;
+          const id = 'pvw_' + part;
+          const grid = rgbaToPixelGrid(d);
+          table[id] = { id, name: part, width: d.width, height: d.height, plug: { x: pxToSub(d.plug.x), y: pxToSub(d.plug.y) }, data: grid };
+          ids[part] = id;
+        }
+        vehicleTable = table;
+        assembly = assembleMechaVehicle({
+          characterId: 'preview', canvasSize: { w: 1000, h: 1200 }, vehicle: V, spriteIds: ids, partSet: mps, scale,
+        });
+      }
     }
 
     function gearSprite2(key: string, gen: () => MechaSpriteData): MechaSpriteData {
       let s = spriteCache.current.get(key);
       if (!s) { s = gen(); spriteCache.current.set(key, s); }
       return s;
+    }
+
+    if (mode === 'vehicle' && vehicleTable) {
+      // 载具预览走产品渲染器（南向）：手拼「按 worldAngle 旋转位图」不是
+      // 产品口径——帧语义下会把足底画歪（曾报：足底没贴合地面）。离屏按
+      // 模型画布渲染，再以根节点锚点贴回预览画布；总高按离屏内容包围盒量。
+      const character = {
+        id: 'preview', name: 'preview', nodes: assembly.nodes, rootNodeId: assembly.rootNodeId,
+        costumeSets: [assembly.costumeSet], activeCostumeSetId: assembly.costumeSet.id,
+      } as unknown as Character;
+      const OW = 1000, OH = 2400;
+      const off = document.createElement('canvas');
+      off.width = OW; off.height = OH;
+      const octx = off.getContext('2d');
+      if (!octx) return;
+      renderCharacterOnionFrameFromCharacter(octx, OW, OH, character, 0, 12, undefined, undefined, vehicleTable, 6);
+      if (!baseCal || baseCal.sig !== sig) {
+        const img = octx.getImageData(0, 0, OW, OH).data;
+        let mnY = Infinity, mxY = -Infinity;
+        for (let i = 3; i < img.length; i += 4) {
+          if (img[i]! > 0) { const y = Math.floor(i / 4 / OW); if (y < mnY) mnY = y; if (y > mxY) mxY = y; }
+        }
+        if (mxY > mnY) setBaseCal({ sig, h: mxY - mnY + 1 });
+      }
+      ctx.drawImage(off, Math.round(PW / 2 - OW / 2), Math.round(PH * 0.30 - OH / 2));
+      return;
     }
 
     // 与主画布同一口径：真世界变换 + 投影（深度主序、zIndex 次序）
@@ -1439,8 +1488,8 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
               {mobility === 'legs' ? legSection : mobility === 'tracks' ? trackLenRow : null}
               {mobility === 'legs' && (
                 <Row label="支架腿组">
-                  <NumCtl label="张开" value={legCtl.standSplay} min={0} max={0.4} step={0.01} onCommit={(v) => setLegCtl({ standSplay: v })} />
-                  <NumCtl label="够达" value={legCtl.standReach} min={0.7} max={0.98} step={0.01} onCommit={(v) => setLegCtl({ standReach: v })} />
+                  <NumCtl label="张开" value={legCtl.standSplay} min={0} max={0.4} step={0.01} onCommit={(v) => setLeg({ standSplay: v })} />
+                  <NumCtl label="够达" value={legCtl.standReach} min={0.7} max={0.98} step={0.01} onCommit={(v) => setLeg({ standReach: v })} />
                 </Row>
               )}
               <p className="text-[11px] text-gray-400">

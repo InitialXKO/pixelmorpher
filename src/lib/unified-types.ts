@@ -645,6 +645,7 @@ export interface NodeTransform {
   stretch: number;              // Y-axis stretch factor (0.5 ~ 2.0)
   variantIndex: DirectionIndex; // Direction variant index (0-7)
   scaleX?: number;               // X-axis scale factor (blueprint t.scaleX, default 1)
+  mirrorX?: boolean;             // 节点镜像：本节点起的子树绘制镜像翻转（与方向镜像同一通道，XOR 叠加）；整肢翻转（如后腿）挂在链根节点
   skewX?: number;               // Skew X in degrees (blueprint t.skewX, default 0)
   skewY?: number;               // Skew Y in degrees (blueprint t.skewY, default 0)
 }

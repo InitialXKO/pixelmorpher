@@ -245,7 +245,7 @@ export interface MechaPartSet {
   head: MechaSpriteData;
   /** 肢链几何（规范直姿渲染的段长）与静止节点角（度：链根为绝对角、其余相对父） */
   geom: { thighLen: number; shinLen: number; upperLen: number; foreLen: number };
-  rest: { armUpper: number; armFore: number; legThigh: number; legShin: number; legFoot: number };
+  rest: { armUpper: number; armFore: number; legThigh: number; legShin: number; legFoot: number; legToeAbs: number };
   /** 肘相对肩（前臂节点的挂载偏移） */
   elbowOff: Pt;
   /** 腕/掌相对肘（前臂精灵本地，武器挂载偏移） */
@@ -302,7 +302,7 @@ export function splitCanvasBySegments(cv: MechaCanvas, joints: Pt[], jointRadii?
 /** 腿管线：规范直姿渲染一遍，再按骨段拆大腿/小腿/足（整腿图保留供蓝图库） */
 function legPipeline(family: MechaFamily, footType?: LegSpec['footType'], ov?: MechaLegOverrides, schemeName?: MechaSchemeName, lenMul = 1): {
   full: MechaSpriteData; thigh: MechaSpriteData; shin: MechaSpriteData; foot: MechaSpriteData;
-  geom: { thighLen: number; shinLen: number }; rest: { thigh: number; shin: number; foot: number };
+  geom: { thighLen: number; shinLen: number }; rest: { thigh: number; shin: number; foot: number }; toeAbs: number;
 } {
   const scheme = schemeName ? mechaSchemeByName(schemeName) : SCHEME_OF[family];
   const spec: LegSpec = { ...LEG_SPEC[family](scheme), ...(ov ?? {}) };
@@ -323,10 +323,17 @@ function legPipeline(family: MechaFamily, footType?: LegSpec['footType'], ov?: M
   finishRender(cv, A, finFor(family, scheme, ov));
   const [thigh, shin, foot] = splitCanvasBySegments(cv, [canon.hip, canon.knee, canon.ankle, canon.toe], [37, 24]) as [MechaSpriteData, MechaSpriteData, MechaSpriteData];
   const aT = segAngDeg(posed.hip, posed.knee), aS = segAngDeg(posed.knee, posed.ankle), aF = segAngDeg(posed.ankle, posed.toe);
+  // 规范趾向：足位图是规范姿的轴对齐裁切，趾向（踝→趾，aFc）已经画进
+  // 位图里——足节点角是「位图旋转量」不是趾向：平足时足节点世界角必须
+  // 为 0，静止足角 = (目标趾向 − 规范趾向) − 小腿绝对角。此前直接拿趾向
+  // 当节点角（foot: aF − aS），足被多转一个 aFc（≈−70°），只在节点转向
+  // 开（世界角恒 0）时看不出来，缺省呈现下足底必然俯着。
+  const aFc = segAngDeg(canon.ankle, canon.toe);
   return {
     full: cropSprite(cv, canon.hip), thigh, shin, foot,
     geom: { thighLen: tL, shinLen: sL },
-    rest: { thigh: aT, shin: aS - aT, foot: aF - aS },
+    rest: { thigh: aT, shin: aS - aT, foot: (aF - aFc) - aS },
+    toeAbs: aFc,
   };
 }
 
@@ -416,7 +423,7 @@ export function generateMechaPartSet(family: MechaFamily, chest?: MechaChestVari
     geom: { thighLen: legP.geom.thighLen, shinLen: legP.geom.shinLen, upperLen: armSpec.upperLen, foreLen: armSpec.foreLen },
     rest: {
       armUpper: (-armSpec.upperAng * 180) / Math.PI, armFore: (-armSpec.elbowBend * 180) / Math.PI,
-      legThigh: legP.rest.thigh, legShin: legP.rest.shin, legFoot: legP.rest.foot,
+      legThigh: legP.rest.thigh, legShin: legP.rest.shin, legFoot: legP.rest.foot, legToeAbs: legP.toeAbs,
     },
   };
 }

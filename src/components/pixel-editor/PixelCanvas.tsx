@@ -558,8 +558,11 @@ export default function PixelCanvas() {
 
   const focusInputById = (id: string) => {
     const el = document.getElementById(id) as HTMLInputElement | null;
-    el?.focus();
-    el?.select();
+    if (!el) return;
+    el.focus();
+    // type=number 等不支持选区的输入调用 select() 会抛 InvalidStateError
+    // （Chrome 的 select 内部走 setSelectionRange），只对文本类选全
+    if (el.type === 'text' || el.type === 'search' || el.type === 'url' || el.type === 'tel' || el.type === 'password') el.select();
   };
 
   const zoomBy = (factor: number) => {

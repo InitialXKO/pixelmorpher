@@ -25,7 +25,7 @@ const weaponMountOf = (presetId?: string | null): 'forearm' | 'hand' => (presetI
 const weaponSlotKey = (presetId?: string | null): 'cannon' | 'rifle' => weaponMountOf(presetId) === 'forearm' ? 'cannon' : 'rifle';
 
 /** 载具比例生效值（用户值 ?? 载具默认）：腿长倍率与车体覆盖（含车高倍率） */
-const vehLegMul = (V: MechaVehicleOptions): number => V.parts?.proportions?.leg ?? MECHA_VEHICLE_PROPORTION_DEFAULTS[V.hull].leg;
+export const vehLegMul = (V: MechaVehicleOptions): number => V.parts?.proportions?.leg ?? MECHA_VEHICLE_PROPORTION_DEFAULTS[V.hull].leg;
 const vehHullOv = (V: MechaVehicleOptions): MechaHullOverrides => ({
   ...(V.parts?.hull ?? {}),
   hullHMul: (V.parts?.hull?.hullHMul ?? 1) * (V.parts?.proportions?.hullH ?? MECHA_VEHICLE_PROPORTION_DEFAULTS[V.hull].hullH),
@@ -305,7 +305,7 @@ export function assembleMechaCharacter(opts: {
     mkChain(`arm_${s}`, `手臂·${tag}`, `arm_upper_${s}`, `arm_hand_${s}`, wrF + d2.f * G.foreLen * sc, wrD + d2.d * G.foreLen * sc, SIDE_SIGN[s] * 14 * sc);
     if (B.chassis !== 'tracks') {
       const hipF = (S.hip.x + (s === 'N' ? 10 : 2)) * sc, hipD = (S.hip.y + (s === 'N' ? -2 : -4)) * sc;
-      const e1 = dirOf(R.legThigh), e2 = dirOf(R.legThigh + R.legShin), e3 = dirOf(R.legThigh + R.legShin + R.legFoot);
+      const e1 = dirOf(R.legThigh), e2 = dirOf(R.legThigh + R.legShin), e3 = dirOf(R.legThigh + R.legShin + R.legFoot + R.legToeAbs); // e3 是趾向（几何方向）：足节点角是位图旋转口径，趾向须再加规范趾向
       const knF = hipF + e1.f * G.thighLen * sc, knD = hipD + e1.d * G.thighLen * sc;
       const anF = knF + e2.f * G.shinLen * sc, anD = knD + e2.d * G.shinLen * sc;
       mkChain(`leg_${s}`, `腿·${tag}`, `leg_thigh_${s}`, `leg_foot_${s}`, anF + e3.f * G.shinLen * sc, anD + e3.d * G.shinLen * sc, SIDE_SIGN[s] * 12 * sc);
@@ -534,7 +534,11 @@ export function assembleMechaVehicle(opts: {
     const reach = Math.min((ps.stand?.reach ?? 0.94) * LT, LT * 0.98);
     const drop = Math.sqrt(Math.max(100, reach * reach - splayPx * splayPx));
     const hipD = 110 * hR * sc;
-    const footAbsF = ps.rest.legThigh + ps.rest.legShin + ps.rest.legFoot; // 足向（静止模板绝对角）：足锚在地面上，朝向固定——四撑同一足向，不镜像
+    // 足的两笔账分开：节点世界角是位图旋转（静止模板下 = 0，平足），
+    // 趾向是踝→趾的几何方向（节点角之和 + 规范趾向），只供 IK 目标。
+    // 朝向由所在组定——前组朝前、后组朝后（用户定），不随撑链斜撑方向变
+    const footRotF = ps.rest.legThigh + ps.rest.legShin + ps.rest.legFoot;
+    const toeAbsF = footRotF + ps.rest.legToeAbs;
     const DEG = 180 / Math.PI;
     // 双骨解算：髋在原点、落足点 (f, d)、膝向 kneeSign 侧外张 →
     // 大腿/小腿绝对角（dirOf 口径：0 = 正下）
@@ -560,11 +564,15 @@ export function assembleMechaVehicle(opts: {
       { key: 'legc', name: '后组·后撑', gz: -74, ss: -1, side: 'N' as const },
       { key: 'legd', name: '后组·前撑', gz: -74, ss: 1, side: 'F' as const },
     ];
-    const solved = struts.map((st) => ({ st, ...solve(st.ss * splayPx, drop, st.ss), footAbs: footAbsF }));
+    const solved = struts.map((st) => ({ st, ...solve(st.ss * splayPx, drop, st.ss), footAbs: st.gz > 0 ? toeAbsF : -toeAbsF }));
     for (const sv of solved) {
       mk(`${sv.st.key}_thigh`, `大腿·${sv.st.name}`, 'hull', sv.thigh);
       mk(`${sv.st.key}_shin`, `小腿·${sv.st.name}`, `${sv.st.key}_thigh`, sv.shin - sv.thigh);
-      mk(`${sv.st.key}_foot`, `足·${sv.st.name}`, `${sv.st.key}_shin`, sv.footAbs - sv.shin);
+      // 足节点角前后组同式（footRotF − shin，位图旋转口径）；后组的「朝后」不靠节点角、靠整腿镜像（见下）
+      mk(`${sv.st.key}_foot`, `足·${sv.st.name}`, `${sv.st.key}_shin`, footRotF - sv.shin);
+      // 后组整腿翻转：镜像标记挂大腿根节点，子树（小腿/足）经世界镜像继承——
+      // 腿是手性装配（腓肠朝后、胫骨前凹、趾朝前），后腿整体翻过来才自洽（用户定：节点级镜像，不镜像精灵像素）
+      if (sv.st.gz < 0) { const th = nodes[`${sv.st.key}_thigh`]!; th.transform = { ...th.transform, mirrorX: true }; }
     }
     if (ps.hipBeam) { mk('hipbeam_F', '髋梁·前组', 'hull', 0); mk('hipbeam_R', '髋梁·后组', 'hull', 0); }
     linkChildren(nodes);

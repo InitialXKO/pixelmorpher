@@ -587,7 +587,7 @@ export function computeWorldTransforms(
     worldFrame: rootFrame,
     worldStretch: rootDelta ? rootInterpolated.stretch * rootDelta.scaleMul : rootInterpolated.stretch,
     variantIndex: rootInterpolated.variantIndex,
-    mirror: false,
+    mirror: rootInterpolated.mirrorX ?? false,
     scaleX: rootDelta && rootDelta.scaleMul !== 1 ? (rootInterpolated.scaleX ?? 1) * rootDelta.scaleMul : rootInterpolated.scaleX,
     skewX: rootInterpolated.skewX,
     skewY: rootInterpolated.skewY,
@@ -1172,6 +1172,9 @@ function computeChildTransforms(
       }
     }
 
+    // 节点自身镜像标记：在方向镜像之外再翻一次（XOR），子树经 parentWorld.mirror 继承
+    if (childInterpolated.mirrorX) childMirror = !childMirror;
+
     const childWorld: WorldTransform = {
       nodeId: childId,
       worldX: childWorldX,
@@ -1314,6 +1317,7 @@ function interpolateTransformImpl(
       skewX: (base.skewX ?? 0) + bpT.skewX,
       skewY: (base.skewY ?? 0) + bpT.skewY,
       variantIndex: kfVariant,
+      mirrorX: base.mirrorX ?? false,
     };
   }
 
@@ -1337,6 +1341,7 @@ function interpolateTransformImpl(
       skewX: base.skewX,
       skewY: base.skewY,
       variantIndex: kfVariant,
+      mirrorX: base.mirrorX ?? false,
     };
   }
 
@@ -1351,6 +1356,7 @@ function interpolateTransformImpl(
     skewX: base.skewX,
     skewY: base.skewY,
     variantIndex: kfVariant,
+    mirrorX: base.mirrorX ?? false,
   };
 }
 
