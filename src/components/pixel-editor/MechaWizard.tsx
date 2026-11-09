@@ -470,6 +470,9 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   const [heightText, setHeightText] = useState('512');
   // 当前配置在 scale=1 时的实测总高（预览装配量得，按配置签名缓存）
   const [baseCal, setBaseCal] = useState<{ sig: string; h: number } | null>(null);
+  // 载具预览离屏内容包围盒（按 sig 缓存，与 baseCal 同一次扫描产出）：
+  // 贴回预览画布按它整体入框，保证整车不被画布边缘裁切
+  const vehBBoxRef = useRef<{ sig: string; x0: number; y0: number; x1: number; y1: number } | null>(null);
   const [name, setName] = useState('机甲-01');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
@@ -916,22 +919,30 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
       renderCharacterOnionFrameFromCharacter(octx, OW, OH, character, 0, 12, undefined, undefined, vehicleTable, 6);
       if (!baseCal || baseCal.sig !== sig) {
         const img = octx.getImageData(0, 0, OW, OH).data;
-        let mnY = Infinity, mxY = -Infinity;
+        let mnX = Infinity, mxX = -Infinity, mnY = Infinity, mxY = -Infinity;
         for (let i = 3; i < img.length; i += 4) {
-          if (img[i]! > 0) { const y = Math.floor(i / 4 / OW); if (y < mnY) mnY = y; if (y > mxY) mxY = y; }
+          if (img[i]! > 0) {
+            const px = i / 4, x = px % OW, y = Math.floor(px / OW);
+            if (x < mnX) mnX = x; if (x > mxX) mxX = x;
+            if (y < mnY) mnY = y; if (y > mxY) mxY = y;
+          }
         }
-        if (mxY > mnY) setBaseCal({ sig, h: mxY - mnY + 1 });
+        if (mxY > mnY) {
+          vehBBoxRef.current = { sig, x0: mnX, y0: mnY, x1: mxX, y1: mxY };
+          setBaseCal({ sig, h: mxY - mnY + 1 });
+        }
       }
-      // 贴回按根锚点定位（与旧手绘口径同一落点：根落在 PW/2, PH·0.30）：
-      // 离屏内容的位置由渲染计划的世界坐标决定（中心相对），整幅固定
-      // 偏移贴回会把车身大半贴到预览框外——根在离屏里的实际落点由
-      // 世界变换 + 投影算出，不假设内容居中
-      const wt = computeWorldTransforms(character, 0, OW, OH, 12, undefined, undefined, undefined, 6);
-      const rootT = wt.get(assembly.rootNodeId);
-      if (rootT) {
-        const rp = projectToView(rootT.worldX, rootT.worldY, rootT.worldZ, 6);
-        const rootSX = OW / 2 + subToPx(rp.canvasX), rootSY = OH / 2 + subToPx(rp.canvasY);
-        ctx.drawImage(off, Math.round(PW / 2 - rootSX), Math.round(PH * 0.30 - rootSY));
+      // 贴回按内容包围盒整体入框：整车必须完整落在预览画布内。按根
+      // 锚点固定落点时，根下方的腿随够达伸长会沉出画布下缘（实测缺省
+      // 档位足已贴到最后一行、够达拉满必裁）。包围盒横向居中、纵向底
+      // 对齐留 8px；放不下时等比缩小，任何参数下都不裁。
+      const bb = vehBBoxRef.current;
+      if (bb && bb.sig === sig) {
+        const bw = bb.x1 - bb.x0 + 1, bh = bb.y1 - bb.y0 + 1, M = 8;
+        const k = Math.min(1, (PW - 2 * M) / bw, (PH - 2 * M) / bh);
+        const dw = Math.round(bw * k), dh = Math.round(bh * k);
+        const dx = Math.round((PW - dw) / 2), dy = Math.round(PH - M - dh);
+        ctx.drawImage(off, bb.x0, bb.y0, bw, bh, dx, dy, dw, dh);
       } else {
         ctx.drawImage(off, Math.round(PW / 2 - OW / 2), Math.round(PH * 0.30 - OH / 2));
       }
