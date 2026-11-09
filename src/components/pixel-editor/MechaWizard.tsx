@@ -12,7 +12,7 @@
 // 向导只把改过的字段拼成稀疏覆盖传给构建层，没改的部件与族
 // 预设逐值一致。切族/车型时全部件控件回到该预设。
 // ============================================================
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -483,14 +483,14 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   const guardTick = useRef(-10);
   useEffect(() => { renderTick.current += 1; if (guardApply.current && renderTick.current - guardTick.current > 1) guardApply.current = false; });
   useEffect(() => { if (open) setUserEntries(loadUserEntries()); }, [open ]);
-  const finOv = (() => {
+  const finOv = useMemo(() => {
     const fr = parseRefId(finishRef);
     const got = finishDefOf(libraryIndexOf(libEntries), fr.id, fr.version);
     return got ? expandFinishDef(libraryIndexOf(libEntries), got.def) : undefined;
-  })();
+  }, [finishRef, libEntries]);
   // 表面材质（全部部件）：条目引用 + 解析后的烘焙选择
   const [surfaceRef, setSurfaceRef] = useState('');
-  const surfChoice: SurfaceChoice | undefined = (() => {
+  const surfChoice: SurfaceChoice | undefined = useMemo(() => {
     if (!surfaceRef) return undefined;
     const sr = parseRefId(surfaceRef);
     const got = surfaceDefOf(libraryIndexOf(libEntries), sr.id, sr.version);
@@ -498,7 +498,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
     const params: Record<string, number> = {};
     for (const p of got.def.params) params[p.key] = p.def;
     return { template: sr.id, params };
-  })();
+  }, [surfaceRef, libEntries]);
   const [trackLen, setTrackLen] = useState(252);
   /** 部件集贴表面材质（克隆后贴，不动 getPartSet 的缓存原件） */
   const surfacedPartSet = (ps: MechaPartSet): MechaPartSet => {
@@ -980,18 +980,22 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
     }
   }, [mode, family, buildOpts, vehicleOpts, gearSprite, getPartSet, bitmapOf, PW, PH, scale, sig, baseCal]);
 
+  const redrawRef = useRef(redraw);
+  redrawRef.current = redraw;
   useEffect(() => {
     if (!open) return;
     setBusy(true);
     const t = setTimeout(() => {
       // redraw 里任何一处抛错都不能把 busy 钉死（曾报：生成中常驻、
-      // 生成按钮永久灰）：错误写进提示区，busy 必须复位
-      try { redraw(); }
+      // 生成按钮永久灰）：错误写进提示区，busy 必须复位。
+      // 定时器只挂 open/sig、绘制走 ref——redraw 身份变化不得清掉
+      // 待触发的定时器（finOv 曾每渲染换新对象，把定时器活活饿死）。
+      try { redrawRef.current(); }
       catch (e) { setNote('预览出错：' + (e as Error).message); }
       finally { setBusy(false); }
     }, 30);
     return () => clearTimeout(t);
-  }, [open, redraw]);
+  }, [open, sig]);
 
   const handleCreate = () => {
     const charName = name.trim() || '机甲';
