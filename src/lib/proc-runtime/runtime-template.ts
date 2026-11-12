@@ -259,8 +259,24 @@ function mirrorParams(p) {
   if (p.pivot) out.pivot = [-p.pivot[0], p.pivot[1]];
   if (p.off) out.off = [-p.off[0], p.off[1]];
   if (p.angle !== undefined) out.angle = -p.angle;
+  // restRot 是部件的实际静止转角（落位/绘制/解算全经它，见
+  // partCenter 的调用方组装 an.a = pose.a + restRot）：整体镜像
+  // 必须同翻符号。此前只翻 angle（现行参数集无此字段、等于没
+  // 翻），带静止转角的部件（腿/臂）在镜像向保持原朝向转角——
+  // 落位翻了、转角没翻，整骨架不是刚体镜像（西行实测腿部拧结、
+  // 足穿地）。
+  if (p.restRot !== undefined) out.restRot = -p.restRot;
   if (p.poly) out.poly = p.poly.map(([x, y]) => [-x, y]);
   return out;
+}
+/** 精灵部件的合成落位参数（base + off 清零，与图集条目组装同
+ * 式）：镜像变体时必须与参数化部件同口径过 mirrorParams——只翻
+ * 瓦片像素、落位（pivot/restRot）留在原朝向，等于精灵各自在原
+ * 地变向而非骨架整体变向（西行实测）。图集条目（主/校正/驱动）
+ * 与 simPartParams 共用此式，保证绘制与解算几何逐值一致。 */
+function spriteBaseParams(part, variant) {
+  const p = { ...part.base, off: [0, 0] };
+  return variantMirrored(part, variant) ? mirrorParams(p) : p;
 }
 function resolveVariantParams(part, variant) {
   if (part.variants && part.variants[variant]) return part.variants[variant];
@@ -1030,7 +1046,7 @@ function ensureAtlas(gl, variant, costumeName) {
     // 帧循环按 elapsed 选步（见 animFrames 组装与帧循环取瓦片处）
     let tileList = null, anim = null;
     if (spriteGrid) {
-      resolved = { params: { ...part.base, off: [0, 0] }, composite: 'sprite', halo: 0, baseSprite: null };
+      resolved = { params: spriteBaseParams(part, variant), composite: 'sprite', halo: 0, baseSprite: null };
       const key = [part.key, variant, costumeName, 'S', spriteGrid.w, spriteGrid.h, spriteGrid.plug.join(','), gridHashOf(spriteGrid), mirrored ? 'M' : ''].join('|');
       tile = tileCache.get(key);
       if (!tile) { tile = spriteTileOf(spriteGrid, mirrored); tileCache.set(key, tile); }
@@ -1193,7 +1209,7 @@ function ensureAtlas(gl, variant, costumeName) {
         let tile = tileCache.get(key);
         if (!tile) { tile = spriteTileOf(grid, mirrored); tileCache.set(key, tile); }
         tiles.push(tile);
-        entries.push([sk + '#corr' + perf.id + ':' + lf, tile, { params: { ...part.base, off: [0, 0] }, composite: 'sprite', halo: 0, baseSprite: null }, mirrored, grid, null, 0]);
+        entries.push([sk + '#corr' + perf.id + ':' + lf, tile, { params: spriteBaseParams(part, variant), composite: 'sprite', halo: 0, baseSprite: null }, mirrored, grid, null, 0]);
       }
     }
   }
@@ -1213,7 +1229,7 @@ function ensureAtlas(gl, variant, costumeName) {
       let tile = tileCache.get(key);
       if (!tile) { tile = spriteTileOf(grid, mirrored); tileCache.set(key, tile); }
       tiles.push(tile);
-      entries.push([part.key + '#drive' + fi, tile, { params: { ...part.base, off: [0, 0] }, composite: 'sprite', halo: 0, baseSprite: null }, mirrored, grid, null, 0]);
+      entries.push([part.key + '#drive' + fi, tile, { params: spriteBaseParams(part, variant), composite: 'sprite', halo: 0, baseSprite: null }, mirrored, grid, null, 0]);
     }
   }
   // 团块/火焰场槽（乙8 改造）：跟随口径 = 范围/位置跟、形态不跟
@@ -2476,7 +2492,7 @@ function simPartParams(part) {
   const sgrid = inSprMap ? sprMap[part.key] : undefined;
   const spriteGrid = (centry === null && sgrid) ? sgrid
     : (part.spriteKind && !centry) ? (inSprMap ? sgrid : (sgrid || part.sprite || null)) : null;
-  if (spriteGrid) return { ...part.base, off: [0, 0] };
+  if (spriteGrid) return spriteBaseParams(part, char.variant);
   const resolved = resolvePart(part, char.variant, costume);
   return resolved.params.hidden ? null : resolved.params;
 }
@@ -2878,6 +2894,7 @@ function stateSimParticlesFor(a, inst, elapsed) {
 // 然产生）；跳跃四段（下蹲脚钉地折膝 → 蹬伸过冲 → 滞空收/伸
 // 腿 → 落地浅沉吸收）共用同一套脚目标与解算。
 const FB_CROUCH_DUR = 0.20;   // 跳跃预备总时长（s）：下蹲 0.13 + 蹬伸 0.07（物理倒计时与起跳顺延共用）
+const FB_TUCK_STAGGER = 0.12; // 滞空收腿错峰间隔（s）：最靠后腿先收、其余腿滞空满此时长即跟收（见 air 支）
 const FB_EXT_U = 0.65;        // 蹬伸段在预备进度中的起点（0.13/0.20）
 const FB_STANCE = 0.6;        // 步态周期中支撑段占比（摆动段 0.4）
 const FB_SWING = 0.38;        // 步长推导用等效摆幅（rad）：stride = 2·腿长·sin(摆幅)
@@ -2912,7 +2929,12 @@ const fbSegPrev = new Map();    // 链序 → 上帧所处段（0 支撑 / 1 摆
 const fbSwingFrom = new Map();  // 链序 → 本次摆动段起点脚位（本地）
 const fbAirCur = new Map();     // 链序 → 滞空脚目标当前值（本地，向当帧目标趋近）
 let fbTopDir = [1, 0];          // 俯视最近移动方向（单位矢量）
-function fbDipMax() { return Math.max(3, Math.min(9, charBoxH() * 0.13)); }
+// 下蹲行程（身体下沉深度）：由腿长派生——下蹲是腿的折叠，行程
+// 资源是腿长本身。旧式 = 包围高 ×0.13 且硬顶 9：长腿角色（实测
+// 腿长 220）也只沉 9 ≈ 腿长的 4%，行程不足（用户指认）。现取腿
+// 长的 0.30（真人屈膝下蹲髋降约腿长三成），下限 5 保小角色可读；
+// 蹬伸过冲另有可达域钳制、吸收段取 0.6 倍，均随此式缩放。
+function fbDipMax() { return Math.max(5, ensureFB().legLen * 0.30); }
 // 脚下最近的支撑面 y（与物理落地判定同口径：横向重叠的实体顶面、
 // 不高于脚位者取最高，无实体时为 0 地面）——落地前伸腿的高度依据
 function fbGroundBelowY() {
@@ -3621,13 +3643,15 @@ function runFallbackPass(pose, dt) {
       if (jumpW) {
         w = 1;
         if (fbStage === 'air') {
-          // 滞空收腿顺序（用户定）：上升时只收一条腿——沿朝向最靠后
-          // 的那条先收（airFirstCi，循环外按静止几何选定），其余腿保
-          // 持伸展（蹬地拖腿）；开始下落（vy ≤ 0）后其余腿才跟着收
-          // 起；接近地面（airExtend，预计触地 ≤0.15s）时双腿改伸向
-          // 地面接落地。目标逐帧趋近防跳变
+          // 滞空收腿顺序（用户定）：沿朝向最靠后的那条先收
+          // （airFirstCi，循环外按静止几何选定），其余腿错峰跟收；
+          // 接近地面（airExtend，预计触地 ≤0.15s）时双腿改伸向地
+          // 面接落地。目标逐帧趋近防跳变。错峰间隔 = FB_TUCK_STAGGER
+          // 定时（下落 vy ≤ 0 亦可提前触发）：旧口径其余腿须等下落
+          // 才收，间隔 ≈ 上升全程（350/720 ≈ 0.49s，实测半收差
+          // 0.33s），第二腿刚收拢即撞落地伸腿窗——用户指认间隔过久
           const rel = [restT[0] - J[0][0], restT[1] - J[0][1]];
-          const tucked = !airExtend && (char.vy <= 0 || ci === airFirstCi);
+          const tucked = !airExtend && (char.vy <= 0 || ci === airFirstCi || fbStageT >= FB_TUCK_STAGGER);
           const want = tucked
             ? [J[0][0] + rel[0] * 0.55, J[0][1] + rel[1] * 0.55 + rt.segSum * 0.20]
             : [J[0][0] + rel[0] * 0.90, J[0][1] + rel[1] * 1.02];
@@ -3764,11 +3788,12 @@ function runFallbackPass(pose, dt) {
   // 坐标，行程由锚定与步频自然决定；摆动预落点 = D + σ·半扫
   // 程，半扫程 = 0.3·cycTop·|cos(轴向, 行进方向)|（当帧真实几
   // 何的投影、非常数），中途收脚取扫程的 0.35 倍（派生份额）。
-  // 步频全俯视共用一个相位：fbPhase 按轴分解推进（横向分量按
-  // cycHoriz、纵向分量按 cycTop 折算行进距离），两轴速度比 2:1、
-  // 步长比亦 2:1，周期时间全向一致。不另设纵向周期距离——纵向曾
-  // 自带 cycVert（按投影系数 κ=0.16 单独对齐、约 3.9 步/秒），与横
-  // 向步频不一致，已撤销；本次只补横向折算，纵向口径原样。
+  // 步频全俯视共用一个相位：fbPhase 按行进方向归一推进（位移
+  // 速率 ÷ 该方向自然速度 × 纵向基准步频，见相位推进处）——全
+  // 向同频且与步长 cap 无关。不另设纵向周期距离——纵向曾自带
+  // cycVert（按投影系数 κ=0.16 单独对齐、约 3.9 步/秒），与横向
+  // 步频不一致，已撤销。此前一版「按轴分解求和」在斜向双轴同
+  // 时计入（√2 倍频）、且 cap 压塌 cyc 时步频随之暴涨，已废。
   // 主导轴切换：fbTopVertW 平滑过渡、两套解算结果按权重混合，
   // fbPhase 共用同一速率推进、从不重置。
   const movingTop = !side && (Math.abs(dxF) + Math.abs(dyF)) > 1e-6;
@@ -3795,17 +3820,26 @@ function runFallbackPass(pose, dt) {
     let stride = Math.max(10, fb.legLen * Math.sin(FB_SWING));
     // 横向步长：横向速度是纵向的两倍（140 对 70，见 updateCharacterTop），
     // 步长同步取两倍、周期时间才与纵向/侧视一致——半步长配全速会以
-    // 两倍步频碎步（左右行走小碎步的成因）。可达钳制与纵向共用同一上限。
+    // 两倍步频碎步（左右行走小碎步的成因）。
     let strideH = 2 * stride;
     for (const rt of chainRT) {
       if (!rt || rt.segSum < 1e-6) continue;
       const relX = rt.restT[0] - rt.J[0][0], relY = rt.restT[1] - rt.J[0][1];
-      const perp = Math.abs(relX * fbTopDir[1] - relY * fbTopDir[0]);
       const reach = 0.98 * rt.segSum;
-      const half = Math.sqrt(Math.max(0, reach * reach - perp * perp));
-      const cap = Math.max(10, (2 * half) / FB_STANCE);
-      stride = Math.min(stride, cap);
-      strideH = Math.min(strideH, cap);
+      // 纵向步长上限：垂距只取脚家位的横向（x）偏距——正面/背面
+      // 图的站宽口径，与当前行进方向无关。旧式按当帧平滑方向量
+      // 垂距、且纵/横共用同一 cap：横行时侧面图里脚的垂距 ≈ 腿长
+      // ≈ 可达半径，cap 恒触底 10，纵向周期距离随之被压塌、步频
+      // 随方向漂移（实测横行 7 步/秒 vs 纵行 0.43 步/秒）。
+      const halfV = Math.sqrt(Math.max(0, reach * reach - relX * relX));
+      stride = Math.min(stride, Math.max(10, (2 * halfV) / FB_STANCE));
+      // 横向步长上限：与侧视步态同式——视角内腿垂距（根→静止脚
+      // 的 y 距）配下沉预算的可达横距（hCap 同构），侧面图里脚
+      // 垂挂不再让上限触底，横向步幅回到侧视等值。
+      const drop = rt.J[0][1] - rt.restT[1];
+      const budget = Math.max(2, Math.min(8, rt.segSum * 0.08));
+      const hCap = Math.sqrt(Math.max(9, rt.segSum * rt.segSum - Math.pow(Math.max(0, drop - budget), 2)));
+      strideH = Math.min(strideH, Math.max(10, hCap / FB_STANCE));
     }
     const cycTop = 2 * stride;                  // 纵向周期距离（相位 2π 的行进距离，用户校准口径不变）
     const cycHoriz = 2 * strideH;               // 横向周期距离（步长两倍 → 周期时间与纵向一致）
@@ -3818,9 +3852,22 @@ function runFallbackPass(pose, dt) {
     fbTopVertW += (vertNow - fbTopVertW) * Math.min(1, dt / 0.09);
     if (fbTopVertW > 0.98) { fbTopPlants.clear(); fbSwingFrom.clear(); } // 全纵向期间平面落点状态作废，回横向时就地重落脚
     if (fbTopVertW < 0.02) { fbCorPlants.clear(); fbCorSegPrev.clear(); } // 全横向期间走廊锚定状态作废，回纵向时就地重锚
-    // 相位推进按轴分解：横向分量按 cycHoriz、纵向分量按 cycTop 折算
-    // （两轴速度比 2:1，分解后周期时间全向一致；纵向口径与共用相位不变）
-    fbPhase += 2 * Math.PI * (Math.abs(dxF) / cycHoriz + Math.abs(dyF) / cycTop);
+    // 相位推进按行进方向归一：步频 = 位移速率 ÷ 该方向的自然速
+    // 度 × 纵向基准步频（纵速/cycTop），全向同频、与各 cap 的取
+    // 值无关（cap 只塑脚轨迹、不再漏进步频）。旧式按轴分解求和：
+    // 斜向两轴同时计入，步频为纵向的 √2 倍（实测斜向 0.61 vs 纵
+    // 向 0.43）；且 cyc 被 cap 压塌时步频随之暴涨。纯纵向代入与
+    // 旧式逐值一致、纯横向在步长比 2:1 未被 cap 压动时亦然。
+    // 自然速度须按输入方向取值：先由位移经轴速比反推输入方向
+    // （纵速减半使位移方向比输入方向更偏横，直接拿位移方向查
+    // 椭圆速度会把斜向步频压低约 14%，实测 0.37 vs 0.43）。
+    const dMag = Math.hypot(dxF, dyF);
+    if (dMag > 1e-9) {
+      const ux = dxF / PHYS.speed, uy = dyF / (PHYS.speed * 0.5);
+      const ul = Math.hypot(ux, uy) || 1;
+      const spDir = Math.hypot(PHYS.speed * ux / ul, PHYS.speed * 0.5 * uy / ul);
+      fbPhase += 2 * Math.PI * (PHYS.speed * 0.5 / cycTop) * (dMag / Math.max(spDir, 1e-6));
+    }
     // 各链当帧相位/段（两套驱动共用）
     const us = [], segs = [];
     fb.chains.forEach((chain, ci) => {
