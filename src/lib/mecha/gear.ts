@@ -5,7 +5,7 @@
 // 每件以挂载点为本地原点出图，验收流程与部位件相同：先单独
 // 出图对照参考，合格后才进角色构建。
 // ============================================================
-import { newCanvas, finishRender, makeLayerTools, SCHEMES, regSeam } from './engine';
+import { newCanvas, finishRender, makeLayerTools, SCHEMES, regSeam, capsuleBandTest, capsuleFillTest } from './engine';
 import { arcPointsAt, defaultDynamicParams } from '../dynamic-patterns';
 import type { Scheme, LegSpec, MechaCanvas, Pt, Anchors, BlockShapeParams } from './engine';
 
@@ -17,10 +17,59 @@ export interface GearSpec {
   blockShape?: BlockShapeParams;
 }
 
+/** 椭圆截面（扫掠算子的参数） */
+export interface SweepSec { x: number; y: number; rx: number; ry: number }
+/** 椭圆扫掠连接面算子（形状）：相邻两截面之间连接面的覆盖与曲面
+ * 参数。点在面内 ⟺ 截面族各盘的最小 q ≤ 1（粗采样 + 黄金细化逼到
+ * 轮廓本身）；可见面取朝端面一侧的交点；u = sin(θ) 剖面绕轴值、
+ * v = 轴向参数 w 本人。构造侧只给两截面——配方只此一份 */
+export function sweepSectionTest(a: SweepSec, b: SweepSec) {
+  return (x: number, y: number): [boolean, number, number] => {
+    const q = (w: number) => {
+      const cxw = a.x + (b.x - a.x) * w, cyw = a.y + (b.y - a.y) * w;
+      const rxw = a.rx + (b.rx - a.rx) * w, ryw = a.ry + (b.ry - a.ry) * w;
+      const dx = (x - cxw) / rxw, dy = (y - cyw) / ryw;
+      return dx * dx + dy * dy;
+    };
+    let bw = 0, bq = q(0);
+    for (let i = 1; i <= 12; i++) { const wi = i / 12, qi = q(wi); if (qi < bq) { bq = qi; bw = wi; } }
+    {
+      let lo = Math.max(0, bw - 1 / 12), hi = Math.min(1, bw + 1 / 12);
+      for (let it = 0; it < 6; it++) { const m1 = lo + (hi - lo) * 0.382, m2 = lo + (hi - lo) * 0.618; if (q(m1) < q(m2)) hi = m2; else lo = m1; }
+      const wm = (lo + hi) / 2, qm = q(wm);
+      if (qm < bq) { bq = qm; bw = wm; }
+    }
+    if (bq > 1.05) return [false, 0, 0];
+    let w = 1;
+    if (q(1) > 1) {
+      let lo = bw, hi = 1;
+      for (let it = 0; it < 10; it++) { const mid = (lo + hi) / 2; if (q(mid) > 1) hi = mid; else lo = mid; }
+      w = (lo + hi) / 2;
+    }
+    const cxw = a.x + (b.x - a.x) * w, cyw = a.y + (b.y - a.y) * w;
+    const rxw = a.rx + (b.rx - a.rx) * w, ryw = a.ry + (b.ry - a.ry) * w;
+    const th = Math.atan2((y - cyw) / ryw, (x - cxw) / rxw);
+    return [true, Math.sin(th), w];
+  };
+}
+
+/** 收尾共通档（标准档）：全族共用的收尾缺省（着色算子的缺省
+ * 参数面）。每族的实际取值在各族着色条目的 def.base 里（条目
+ * 数据），装配路 fin() 查条目合并——族别差异只在条目，不在此表。
+ * 此表是唯一一份：parts.ts 的 fin() 与本文件的 gearFinish 共用，
+ * 不许再手抄第二份（gearFinish 曾手抄 seed/bend/detail 三值且漏
+ * darkRim/blackGap，单独渲染的装备预览因此缺暗沿与黑隙）。 */
+export const FIN_STD: Partial<LegSpec> & { altTone?: boolean; footAlt?: boolean } = {
+  topology: 'standard', seed: 11, bend: 22, wear: 0.3, detail: 0.65,
+  darkRim: 0.22, // 暗沿基线（模式库「暗沿」算子缺省量；条目可覆写）
+  blackGap: 0.7, // 黑隙基线（模式库「黑隙」算子缺省量；条目可覆写）
+  seamScale: 1, altTone: false, footAlt: false,
+};
+
 export function gearFinish(spec: GearSpec & { phase?: number }): LegSpec & { altTone?: boolean } {
   return {
-    topology: 'standard', scheme: spec.scheme, seed: 11, bend: 22,
-    camo: spec.camo, wear: spec.wear, detail: 0.65, altTone: spec.twoTone,
+    ...FIN_STD, scheme: spec.scheme, seed: spec.seed,
+    camo: spec.camo, wear: spec.wear, altTone: spec.twoTone,
     ...(spec.phase ? { beltPhase: spec.phase } : {}),
   } as LegSpec & { altTone?: boolean };
 }
@@ -31,26 +80,38 @@ type Tools = ReturnType<typeof makeLayerTools>;
 // 模式（据坦克足参考×2：生成图 + 陆地战舰）：履带环带（链节分段）
 // + 环内负重轮列 + 后驱动轮/前惰轮 + 分段斜面裙甲（glacis）压住
 // 环顶 + 甲板与旋转座圈。原点 = 座圈顶面中心（躯干挂载点）。
-export interface TrackSpec extends GearSpec { len?: number; /** 滚动相位 px（0–16 一圈）：链节沿环移、带纹移、轮盘按行程折角 */ phase?: number }
+/** 履带单元画布原点（parts 的 generateMechaTrackUnit 与此处单独画布共用一份——旧时两处各存一份手抄） */
+export const TRACK_ORIGIN = { x: 190, y: 26 };
+/** 座圈心在履带原点下方的距离：装配时骨盆原点对齐座圈心，挂位由此派生（build-character） */
+export const TRACK_SEAT_Y = 5;
+/** 喷射背包画布原点（同上，两处共用一份） */
+export const JETPACK_ORIGIN = { x: 200, y: 130 };
+
+export interface TrackSpec extends GearSpec {
+  len?: number;
+  /** 滚动相位 px（0–16 一圈）：链节沿环移、带纹移、轮盘按行程折角 */
+  phase?: number;
+  /** 环带半径（缺省 33） */ radius?: number;
+  /** 环带厚（缺省 15） */ band?: number;
+  /** 环心下沉：环心在原点下方的距离（缺省 74） */ drop?: number;
+  /** 负重轮数（缺省 6） */ wheels?: number;
+  /** 裙甲高（缺省 17，前段 +1） */ skirtH?: number;
+  /** 甲板宽占全长比（缺省 0.52） */ deckW?: number;
+  /** 甲板高（缺省 14) */ deckH?: number;
+  /** 座圈宽×高（缺省 46×9） */ seat?: { w: number; h: number };
+}
 
 export function renderTrackUnit(cv: MechaCanvas, spec: TrackSpec, origin: Pt): Anchors {
   const T: Tools = makeLayerTools(cv, spec.seed, spec.blockShape);
   const len = spec.len ?? 252;
   const phase = spec.phase ?? 0;
-  const R = 33;               // 环带半径
-  const band = 15;            // 环带厚
-  const cy = origin.y + 74;   // 环心高（原点下方）
+  const R = spec.radius ?? 33;   // 环带半径
+  const band = spec.band ?? 15;  // 环带厚
+  const cy = origin.y + (spec.drop ?? 74);   // 环心高（原点下方）
   const cx = origin.x;
   const x0 = cx - len / 2 + R, x1 = cx + len / 2 - R; // 直段两端圆心
-  // 履带环带：到直段线段的距离场带环；v 沿长度 → 框件条纹成链节（相位时整纹沿程移）
-  T.addRaw('frame', (x, y) => {
-    const dx = Math.max(x0 - x, 0, x - x1);
-    const dy = y - cy;
-    const d = Math.hypot(dx, dy);
-    if (d < R - band || d > R) return [false, 0, 0];
-    const along = (x + phase - (cx - len / 2)) / len;
-    return [true, (d - (R - band)) / band, along];
-  });
+  // 履带环带：胶囊距带环（算子 capsuleBandTest）；v 沿长度 → 框件条纹成链节（相位时整纹沿程移）
+  T.addRaw('frame', capsuleBandTest(x0, x1, cy, R, band, cx, len, phase));
   // 链节垫：沿整环弧长排小块（垫心在环内 3px、按切线转角），整环
   // 恒定计数——相位时整排沿环移位（底边向后、顶边向前，与带纹/轮转
   // 同向），计数恒定保证后续实例序号不随相位漂移（序号带种子细节）
@@ -86,15 +147,10 @@ export function renderTrackUnit(cv: MechaCanvas, spec: TrackSpec, origin: Pt): A
       T.addBlock('frame', px, py, 13, 7, tang, 0.15);
     }
   }
-  // 环内暗色机体（整胶囊填 frame）：轮列与驱动轮坐其上，不再悬空
-  T.addRaw('frame', (x, y) => {
-    const dx = Math.max(x0 - x, 0, x - x1);
-    const d = Math.hypot(dx, y - cy);
-    if (d > R - 3) return [false, 0, 0];
-    return [true, d / R, (x + phase - (cx - len / 2)) / len];
-  });
+  // 环内暗色机体（胶囊实填，算子 capsuleFillTest）：轮列与驱动轮坐其上，不再悬空
+  T.addRaw('frame', capsuleFillTest(x0, x1, cy, R - 3, R, cx, len, phase));
   // 负重轮列（环内贴底）+ 轮毂（关节盘模式：外盘+毂盘，毂比按原半径折算、出图不变）
-  const wheels = 6;
+  const wheels = spec.wheels ?? 6;
   for (let i = 0; i < wheels; i++) {
     const wx = x0 + 6 + (x1 - x0 - 12) * (i / (wheels - 1));
     T.jointDisc({ x: wx, y: cy + R - band - 5 }, 13, 5.5 / 13);
@@ -104,12 +160,13 @@ export function renderTrackUnit(cv: MechaCanvas, spec: TrackSpec, origin: Pt): A
   T.jointDisc({ x: x1, y: cy }, R - 10, 7 / (R - 10));
   // 分段斜面裙甲（glacis）：三段压住环顶，前段坡更长
   const skirtY = cy - R + 3; // 裙甲压入环顶 7px，不留悬空缝
-  T.glacis(cx - len * 0.31, skirtY, len * 0.34, 17, 12);
-  T.glacis(cx + len * 0.02, skirtY, len * 0.3, 17, 12);
-  T.glacis(cx + len * 0.33, skirtY - 1, len * 0.28, 18, 20);
-  // 甲板 + 座圈
-  T.addBlock('plate', cx, origin.y + 16, len * 0.52, 14, 0, 0.25, true);
-  T.addBlock('frame', cx, origin.y + 5, 46, 9, 0, 0.2);
+  const skH = spec.skirtH ?? 17;
+  T.glacis(cx - len * 0.31, skirtY, len * 0.34, skH, 12);
+  T.glacis(cx + len * 0.02, skirtY, len * 0.3, skH, 12);
+  T.glacis(cx + len * 0.33, skirtY - 1, len * 0.28, skH + 1, 20);
+  // 甲板 + 座圈（座圈心纵位 = TRACK_SEAT_Y，装配挂位由它派生）
+  T.addBlock('plate', cx, origin.y + 16, len * (spec.deckW ?? 0.52), spec.deckH ?? 14, 0, 0.25, true);
+  T.addBlock('frame', cx, origin.y + TRACK_SEAT_Y, spec.seat?.w ?? 46, spec.seat?.h ?? 9, 0, 0.2);
   T.finish();
   return T.A;
 }
@@ -117,7 +174,7 @@ export function renderTrackUnit(cv: MechaCanvas, spec: TrackSpec, origin: Pt): A
 /** 履带底盘单独渲染（验收/预览用）：返回引擎画布 */
 export function trackCanvas(spec: TrackSpec): { cv: MechaCanvas; A: Anchors; origin: Pt } {
   const cv = newCanvas();
-  const origin = { x: 190, y: 26 };
+  const origin = { ...TRACK_ORIGIN };
   const A = renderTrackUnit(cv, spec, origin);
   finishRender(cv, A, gearFinish(spec));
   return { cv, A, origin };
@@ -317,8 +374,11 @@ export function multiLegCanvas(spec: MultiLegSpec): { cv: MechaCanvas; A: Anchor
 }
 
 // ---------- 喷射背包 ----------
-// 模式（据生成参考）：背箱主体（分面板）+ 后缘燃料罐柱 + 底部双
-// 喷口钟（nozzle，近大远小）+ 顶部后掠小翼（wing）+ 散热栅。
+// 模式（据参考三样本横读，2026-11-10 整机轮）：背部单元是成套的
+// 大件——主箱（分面板 + 散热栅）+ 双长筒推进器（自箱底垂落、
+// 筒身带箍环、底端喷口钟）+ 后掠翼组（上小鳍 + 主翼向后下扫）
+// + 后缘燃料罐柱。纵向总跨按族经 size 给：敏捷参考约 46% 身高、
+// 主战约 37%。旧版只有小箱 + 短喷口（约 18%），读作小背包。
 // 火焰不入图（动态效果，非机体本体）。原点 = 贴背挂载点（箱前
 // 面中心），箱体在原点后方展开。
 export type JetpackSpec = GearSpec;
@@ -326,26 +386,33 @@ export type JetpackSpec = GearSpec;
 export function renderJetpack(cv: MechaCanvas, spec: JetpackSpec, origin: Pt): Anchors {
   const T: Tools = makeLayerTools(cv, spec.seed, spec.blockShape);
   const ox = origin.x, oy = origin.y;
-  // 远喷口先画（在后，长钟：起点埋进箱底）
-  T.addBlock('frame', ox - 14, oy + 44, 20, 12, 0, 0.3);
-  T.nozzle({ x: ox - 14, y: oy + 42 }, { x: ox - 16, y: oy + 64 }, 9, 16);
+  const W = spec.size?.x ?? 1, S = spec.size?.y ?? 1;
+  // 远推进器先画（在后）：长筒自箱底垂落（装甲色板身 + 暗箍环）+ 底喷口钟
+  T.addBlock('plate', ox - 62 * W, oy + 95 * S, 17 * W, 150 * S, 0, 0.45);
+  T.addBlock('frame', ox - 62 * W, oy + 40 * S, 21 * W, 10 * S, 0, 0.3);
+  T.addBlock('frame', ox - 62 * W, oy + 118 * S, 20 * W, 8 * S, 0, 0.3);
+  T.nozzle({ x: ox - 62 * W, y: oy + 166 * S }, { x: ox - 63 * W, y: oy + 190 * S }, 8 * W, 12.5 * W);
   // 后缘燃料罐柱 + 罐顶盖
-  T.addBlock('cyl', ox - 56, oy - 2, 21, 86, 0, 0.42);
-  T.addDisc('disc', { x: ox - 56, y: oy - 46 }, 10);
+  T.addBlock('cyl', ox - 58 * W, oy - 2 * S, 21 * W, 86 * S, 0, 0.42);
+  T.addDisc('disc', { x: ox - 58 * W, y: oy - 46 * S }, 10 * W);
   // 主箱（大箱 + 上分面板 + 顶盖 + 底框）
-  T.addBlock('plate', ox - 26, oy + 2, 56, 96, 0, 0.3, true);
-  T.addBlock('plate', ox - 28, oy - 28, 42, 32, 0, 0.32);
-  T.addBlock('frame', ox - 26, oy - 50, 50, 10, 0, 0.3);
-  T.addBlock('frame', ox - 28, oy + 38, 44, 16, 0, 0.3);
-  // 近喷口（主，长钟）
-  T.addBlock('frame', ox - 40, oy + 44, 22, 12, 0, 0.3);
-  T.nozzle({ x: ox - 40, y: oy + 42 }, { x: ox - 44, y: oy + 66 }, 10, 18);
-  // 顶部后掠翼（主）+ 下稳定小翼
-  T.wing(ox - 52, oy - 58, 62, 22, 8, -2.62);
-  T.wing(ox - 50, oy + 26, 30, 12, 5, 2.95);
-  // 散热栅 + 信号灯
-  T.flatGrille(ox - 24, oy + 12, 30, 13); // 背箱面是平面：平口不起盒
-  T.A.lightPts.push({ x: ox - 6, y: oy - 38 });
+  T.addBlock('plate', ox - 26 * W, oy + 6 * S, 56 * W, 118 * S, 0, 0.3, true);
+  T.addBlock('plate', ox - 28 * W, oy - 34 * S, 42 * W, 36 * S, 0, 0.32);
+  T.addBlock('frame', ox - 26 * W, oy - 58 * S, 50 * W, 10 * S, 0, 0.3);
+  T.addBlock('frame', ox - 28 * W, oy + 52 * S, 44 * W, 16 * S, 0, 0.3);
+  // 近推进器（主）：更粗更长，喷口钟收底
+  T.addBlock('plate', ox - 36 * W, oy + 105 * S, 19 * W, 165 * S, 0, 0.45);
+  T.addBlock('frame', ox - 36 * W, oy + 48 * S, 23 * W, 10 * S, 0, 0.3);
+  T.addBlock('frame', ox - 36 * W, oy + 128 * S, 22 * W, 8 * S, 0, 0.3);
+  T.nozzle({ x: ox - 36 * W, y: oy + 182 * S }, { x: ox - 38 * W, y: oy + 206 * S }, 9 * W, 13 * W);
+  // 翼组：顶部小鳍（后上掠）+ 主翼（根贴箱顶后缘、向后下约 42° 长扫）+ 下稳定翼
+  T.wing(ox - 52 * W, oy - 58 * S, 62 * W, 22 * S, 8, -2.62);
+  T.wing(ox - 55 * W, oy + 2 * S, 105 * W, 52 * S, 10, 2.38);
+  T.wing(ox - 58 * W, oy + 66 * S, 44 * W, 14 * S, 6, 2.55);
+  // 顶提手 + 散热栅 + 信号灯
+  T.addBlock('frame', ox - 30 * W, oy - 68 * S, 26 * W, 7 * S, 0, 0.3);
+  T.flatGrille(ox - 24 * W, oy + 14 * S, 30 * W, 15 * S); // 背箱面是平面：平口不起盒
+  T.A.lightPts.push({ x: ox - 6 * W, y: oy - 44 * S });
   T.finish();
   return T.A;
 }
@@ -353,7 +420,7 @@ export function renderJetpack(cv: MechaCanvas, spec: JetpackSpec, origin: Pt): A
 /** 喷射背包单独渲染（验收/预览用） */
 export function jetpackCanvas(spec: JetpackSpec): { cv: MechaCanvas; A: Anchors; origin: Pt } {
   const cv = newCanvas();
-  const origin = { x: 200, y: 130 };
+  const origin = { ...JETPACK_ORIGIN };
   const A = renderJetpack(cv, spec, origin);
   finishRender(cv, A, gearFinish(spec));
   return { cv, A, origin };
@@ -382,11 +449,38 @@ type WeaponStep =
   | { t: 'ports'; x: number; y: number; w: number; h: number; cols: number; rows: number }
   | { t: 'light'; x: number; y: number }
   | { t: 'arc'; x0: number; y0: number; x1: number; y1: number; seed: number }
-  | { t: 'podBox'; x: number; y: number; rows?: number };
+  | { t: 'podBox'; x: number; y: number; rows?: number; open?: boolean };
 /** 导弹荚体（组合制的荚主体）：侧面构图（据主战侧挂荚）——
  * 外壳框 + 开放框内横置弹列（弹体杆 + 弹头 + 尾翼）+ 顶轨。
  * 弹列数是参数（rows），3 列时与旧写死表逐项一致 */
-function podBoxSteps(rows: number): WeaponStep[] {
+function podBoxSteps(rows: number, open = false): WeaponStep[] {
+  const H = 42 + (rows - 3) * 11;
+  if (open) {
+    // 全露式（z3 见证，与闭合式并列为荚的变体槽）：厚框 + 暗腔 + 弹列
+    // 全露——弹身钢灰、弹尖亮钢、尖后强调色环带、尾鳍簇在框内后端。
+    // 框壁厚 7（≈荚高 0.16），弹尖收在框口之内、不探出。
+    const steps: WeaponStep[] = [
+      { t: 'block', kind: 'plate', x: 0, y: 0, w: 86, h: H, cham: 0.22, bolts: true },
+      { t: 'block', kind: 'frame', x: -2, y: 0, w: 76, h: H - 10, cham: 0.18 },
+    ];
+    for (let i = 0; i < rows; i++) {
+      const y = (i - (rows - 1) / 2) * 11;
+      steps.push(
+        { t: 'poly', pts: [[-32, y - 4.2], [20, y - 4.2], [20, y + 4.2], [-32, y + 4.2]], role: 'steel', tint: 2.2 },
+        { t: 'poly', pts: [[15, y - 4.2], [19, y - 4.2], [19, y + 4.2], [15, y + 4.2]], role: 'accent' },
+        { t: 'poly', pts: [[20, y - 4.2], [27, y - 2.4], [34, y], [27, y + 2.4], [20, y + 4.2]], role: 'steel', tint: 2.6 },
+        { t: 'poly', pts: [[-32, y - 1.5], [-24, y - 8], [-21, y - 1.5]], role: 'steel', tint: 1.5 },
+        { t: 'poly', pts: [[-32, y + 1.5], [-24, y + 8], [-21, y + 1.5]], role: 'steel', tint: 1.5 },
+      );
+    }
+    steps.push(
+      { t: 'block', kind: 'plate', x: 0, y: -(H / 2 - 3.5), w: 86, h: 7, cham: 0.3, role: 'armor' },
+      { t: 'block', kind: 'plate', x: 0, y: H / 2 - 3.5, w: 86, h: 7, cham: 0.3, role: 'armor' },
+      { t: 'block', kind: 'plate', x: -39.5, y: 0, w: 7, h: H, cham: 0.3, role: 'armor' },
+      { t: 'block', kind: 'plate', x: 39.5, y: 0, w: 7, h: H, cham: 0.3, role: 'armor' },
+    );
+    return steps;
+  }
   const steps: WeaponStep[] = [
     { t: 'block', kind: 'plate', x: 0, y: 0, w: 86, h: 42 + (rows - 3) * 11, cham: 0.22, bolts: true },
     { t: 'block', kind: 'frame', x: -1, y: 0, w: 79, h: 35 + (rows - 3) * 11, cham: 0.2 },
@@ -394,12 +488,16 @@ function podBoxSteps(rows: number): WeaponStep[] {
   for (let i = 0; i < rows; i++) {
     const y = (i - (rows - 1) / 2) * 11;
     steps.push(
-      { t: 'rod', x0: -34, y0: y, x1: 12, y1: y, r: 5.5 },
-      { t: 'poly', pts: [[11, y - 5], [25, y], [11, y + 5]], role: 'steel' },
-      { t: 'poly', pts: [[-39, y - 1.5], [-27, y - 9.5], [-25, y - 1.5]], role: 'steel' },
-      { t: 'poly', pts: [[-39, y + 1.5], [-27, y + 9.5], [-25, y + 1.5]], role: 'steel' },
+      { t: 'rod', x0: -8, y0: y, x1: 38, y1: y, r: 5.5 },
+      { t: 'poly', pts: [[37, y - 5], [51, y], [37, y + 5]], role: 'steel' },
+      { t: 'poly', pts: [[-13, y - 1.5], [-1, y - 9.5], [1, y - 1.5]], role: 'steel' },
+      { t: 'poly', pts: [[-13, y + 1.5], [-1, y + 9.5], [1, y + 1.5]], role: 'steel' },
     );
   }
+  // 侧面是闭合面板（参考三式皆然：s2 箱身+前脸探尖、主战圆柱荚、
+  // 载具箱），弹身不外露——副色面板盖住弹身，只留弹颈与弹尖在
+  // 箱体前缘之外探出，深色框边露在面板四周成嵌板读法
+  steps.push({ t: 'block', kind: 'plate', x: -4, y: 0, w: 68, h: 31 + (rows - 3) * 11, cham: 0.2, role: 'armor2' });
   steps.push(
     { t: 'block', kind: 'frame', x: 0, y: -25 - (rows - 3) * 5.5, w: 72, h: 7, cham: 0.3 },
     { t: 'block', kind: 'plate', x: -24, y: -31 - (rows - 3) * 5.5, w: 9, h: 5, cham: 0.25 },
@@ -426,6 +524,7 @@ export interface WeaponCombo {
   sight: string;     // 瞄具：low/tall/mast/ringSight/none
   grip: string;      // 握持：stockGrip/stock/handle/sleeve/shoulder/pylon/gripGuard/gripDisc/gripLong/gripEmitter/none
   rows?: number;     // 荚弹列数（body=pod）
+  podOpen?: boolean; // 荚式（body=pod）：true = 全露开放框式（z3 见证）；缺省 = 闭合面板式（S 轮三式见证）——变体槽两式并存
   len?: number;      // 作用段长度（单位坐标）
   bore?: number;     // 口径/刃宽倍率
   ring?: boolean;    // 附属：强调色环
@@ -452,7 +551,8 @@ const CY = (x0: number, y0: number, x1: number, y1: number, r: number): WeaponSt
 function wBodySteps(c: WeaponCombo, L: WLayout): WeaponStep[] {
   switch (c.body) {
     case 'sleeve': return [B('plate', 22, 0, 56, 38, { cham: 0.3, bolts: true }), B('plate', 17, -13.5, 42, 12, { cham: 0.3 }), B('plate', 0, -2, 15, 26, { cham: 0.3, role: 'armor' })];
-    case 'long': return [B('plate', 2, 0, 54, 19, { cham: 0.28, bolts: true, role: 'armor' })];
+    // 长机匣走钢色系（可读性裁定，s3 见证）：族色机匣贴身即隐，钢色与任何族甲都分得开——此式即步枪的长匣形，色随形走
+    case 'long': return [B('plate', 2, 0, 54, 19, { cham: 0.28, bolts: true, role: 'steel' })];
     case 'short': return [B('plate', 8, 0, 36, 24, { cham: 0.3, bolts: true })];
     case 'core': return [B('plate', 16, 0, 46, 32, { cham: 0.3, bolts: true }), D('frame', 16, 0, 15.5), D('disc', 16, 0, 11.5, c.glow ? 'accent' : undefined)];
     case 'chamber': return [B('plate', 18, 0, 56, 44, { cham: 0.28, bolts: true }), D('frame', 14, 0, 17.5), D('disc', 14, 0, 12.5, c.glow ? 'accent' : undefined)];
@@ -467,7 +567,8 @@ function wEffectorSteps(c: WeaponCombo, L: WLayout): WeaponStep[] {
     case 'cannonBarrel': return [R(f - 6, y0, f + len, y0, 11 * bore), ...ringStep, B('plate', f + len * 0.865, y0, len * 0.16, 27 * bore, { cham: 0.25, role: 'armor' }), B('frame', f + len - 1, y0, 13, 26 * bore, { cham: 0.18 }), B('frame', f + len + 5.5, y0, 5, 21 * bore, { cham: 0.2 })];
     case 'barrel': return [R(f - 4, y0, f + len, y0, 6 * bore), ...ringStep, B('frame', f + len, y0, 7, 15 * bore, { cham: 0.2 })];
     case 'brakeBarrel': return [R(f - 4, y0, f + len, y0, 6.5 * bore), B('frame', f + len - 2, y0, 15, 16 * bore, { cham: 0.2 }), { t: 'ports', x: f + len - 2, y: y0, w: 12, h: 12 * bore, cols: 3, rows: 2 }];
-    case 'slimBarrel': return [B('plate', f + len * 0.10, y0, len * 0.20, 12 * bore, { cham: 0.25 }), R(f + 5, y0, f + len, y0, 3.8 * bore), R(f + len, y0, f + len + 12, y0, 2.1 * bore), B('frame', f + len + 1, y0, 5, 9 * bore, { cham: 0.2 })];
+    // 细管改管组（可读性裁定，z1 双杆见证）：主杆加粗 + 下副杆（导气管）与主杆成组，单根 5px 细线在整机图里不成读法
+    case 'slimBarrel': return [B('plate', f + len * 0.10, y0, len * 0.20, 12 * bore, { cham: 0.25 }), R(f + 5, y0, f + len, y0, 4.6 * bore), R(f + len * 0.30, y0 + 5.4 * bore, f + len * 0.97, y0 + 5.4 * bore, 1.7 * bore), R(f + len, y0, f + len + 12, y0, 2.5 * bore), B('frame', f + len + 1, y0, 5, 10.5 * bore, { cham: 0.2 })];
     case 'twinBarrel': return [R(f - 2, y0 - 7 * bore, f + len, y0 - 7 * bore, 5 * bore), R(f - 2, y0 + 7 * bore, f + len, y0 + 7 * bore, 5 * bore), B('frame', f + len + 1, y0 - 7 * bore, 5, 12 * bore, { cham: 0.2 }), B('frame', f + len + 1, y0 + 7 * bore, 5, 12 * bore, { cham: 0.2 })];
     case 'coil': {
       const steps: WeaponStep[] = [R(f - 2, y0 - 7 * bore, f + len, y0 - 7 * bore, 3), R(f - 2, y0 + 7 * bore, f + len, y0 + 7 * bore, 3)];
@@ -478,11 +579,12 @@ function wEffectorSteps(c: WeaponCombo, L: WLayout): WeaponStep[] {
     }
     case 'emitter': return [R(f - 2, y0, f + len * 0.74, y0, 8.5 * bore), B('frame', f + len * 0.87, y0 - 10.5 * bore, len * 0.26, 10 * bore, { ang: -0.07, cham: 0.25 }), B('frame', f + len * 0.87, y0 + 10.5 * bore, len * 0.26, 10 * bore, { ang: 0.07, cham: 0.25 }), ...(c.glow ? [{ t: 'light', x: f + len * 0.88, y: y0 } as WeaponStep, { t: 'arc', x0: f + len, y0: y0 - 10 * bore, x1: f + len, y1: y0 + 10 * bore, seed: 7 } as WeaponStep] : [])];
     case 'beamTube': return [R(f - 2, y0, f + len, y0, 6.5 * bore), B('frame', f + 5, y0, 7, 17 * bore, { cham: 0.2 }), { t: 'poly', pts: [[f + len - 4, y0 - 5 * bore], [f + len + 9, y0 - 10.5 * bore], [f + len + 12, y0], [f + len + 9, y0 + 10.5 * bore], [f + len - 4, y0 + 5 * bore]] }, ...(c.glow ? [{ t: 'light', x: f + len + 3, y: y0 } as WeaponStep] : [])];
-    case 'blade': return [{ t: 'poly', pts: [[2, -6.2 * bore], [len * 0.84, -6.2 * bore], [len, 1.5 * bore], [len * 0.94, 6.2 * bore], [2, 6.2 * bore]], role: 'steel' }, B('frame', f + len * 0.47, y0, len * 0.76, 1.7, { cham: 0.2 })];
-    case 'curvedBlade': return [{ t: 'poly', pts: [[2, -6.5 * bore], [len * 0.35, -7.2 * bore], [len * 0.72, -6.6 * bore], [len, -10 * bore], [len * 0.9, 0.5 * bore], [len * 0.6, 6.6 * bore], [len * 0.3, 7.8 * bore], [2, 6.8 * bore]], role: 'steel' }];
+    // 刃宽定版：刃身全宽/刃长 ≈ 0.17（z4 大剑读数 0.16–0.18）；旧半宽 6.2·bore 只 0.10、细形被描边吃满几乎全黑
+    case 'blade': return [{ t: 'poly', pts: [[2, -10.2 * bore], [len * 0.84, -10.2 * bore], [len, 1.5 * bore], [len * 0.94, 10.2 * bore], [2, 10.2 * bore]], role: 'steel' }, B('frame', f + len * 0.47, y0, len * 0.76, 1.7, { cham: 0.2 })];
+    case 'curvedBlade': return [{ t: 'poly', pts: [[2, -10.3 * bore], [len * 0.35, -11.4 * bore], [len * 0.72, -10.4 * bore], [len, -15.8 * bore], [len * 0.9, 0.8 * bore], [len * 0.6, 10.4 * bore], [len * 0.3, 12.3 * bore], [2, 10.7 * bore]], role: 'steel' }];
     case 'serrated': {
-      const steps: WeaponStep[] = [{ t: 'poly', pts: [[2, -6.2 * bore], [len * 0.8, -4.3 * bore], [len, 0], [len * 0.8, 4.3 * bore], [2, 6.2 * bore]], role: 'steel' }];
-      for (const t of [0.25, 0.45, 0.65]) steps.push(B('plate', len * t, -7.2 * bore, 7, 3.6, { ang: 0.5, cham: 0.2 }));
+      const steps: WeaponStep[] = [{ t: 'poly', pts: [[2, -10.2 * bore], [len * 0.8, -7 * bore], [len, 0], [len * 0.8, 7 * bore], [2, 10.2 * bore]], role: 'steel' }];
+      for (const t of [0.25, 0.45, 0.65]) steps.push(B('plate', len * t, -11 * bore, 7, 3.6, { ang: 0.5, cham: 0.2 }));
       return steps;
     }
     case 'axe': return [B('frame', 7, 0, 15, 13.5, { cham: 0.25 }), { t: 'poly', pts: [[4, -5 * bore], [len * 0.5, -23 * bore], [len * 0.95, -16 * bore], [len * 1.05, 0], [len * 0.9, 13 * bore], [len * 0.45, 18 * bore], [4, 5 * bore], [len * 0.3, 0]], role: 'steel' }, { t: 'poly', pts: [[4, -6], [-14, -11], [2, 2]], role: 'steel' }];
@@ -531,7 +633,7 @@ function wFeedSteps(c: WeaponCombo, L: WLayout, phase: 'pre' | 'main'): WeaponSt
   if (c.feed === 'drum') return phase === 'pre' ? wDrumSteps(L) : [];
   if (phase === 'pre') return [];
   switch (c.feed) {
-    case 'mag': return [B('frame', L.cx + 12, L.bot + 11, 10, 26, { ang: 0.35, cham: 0.25 })];
+    case 'mag': return [B('frame', L.cx + 12, L.bot + 11, 10, 26, { ang: 0.35, cham: 0.25 }), B('plate', L.cx + 7.5, L.bot + 23.5, 11, 3.5, { ang: 0.35, cham: 0.2 })]; // 肋纹箱身 + 底板 = 弹匣读法
     case 'magBig': return [B('frame', L.cx + 10, L.bot + 15, 12.5, 36, { ang: 0.3, cham: 0.25 })];
     case 'belt': return [R(L.rear - 2, L.bot - 2, L.rear - 15, L.bot + 5, 3), B('frame', L.rear - 17, L.bot + 4, 27, 17, { cham: 0.25 })];
     case 'cell': return [B('frame', L.cx - 2, L.bot + 14, 18, 28, { cham: 0.2 }), B('plate', L.cx - 2, L.bot + 5.5, 13, 6, { cham: 0.2, role: c.glow ? 'accent' : 'armor2' }), B('plate', L.cx - 2, L.bot + 14, 13, 6, { cham: 0.2, role: c.glow ? 'accent' : 'armor2' }), B('plate', L.cx - 2, L.bot + 22.5, 13, 6, { cham: 0.2, role: c.glow ? 'accent' : 'armor2' })];
@@ -547,12 +649,15 @@ function wFeedSteps(c: WeaponCombo, L: WLayout, phase: 'pre' | 'main'): WeaponSt
 function wGripSteps(c: WeaponCombo, phase: 'pre' | 'post'): WeaponStep[] {
   const L = WBODY_LAYOUT[c.body] ?? WBODY_LAYOUT.none!;
   if (phase === 'pre') {
-    if (c.grip === 'stock' || c.grip === 'stockGrip') return [B('plate', L.rear - 8, 0, 36, 15, { ang: 0.06, cham: 0.3, role: 'armor' })];
+    if (c.grip === 'stock') return [B('plate', L.rear - 8, 0, 36, 15, { ang: 0.06, cham: 0.3, role: 'armor' })];
+    if (c.grip === 'stockGrip') return [B('plate', L.rear - 8, 0, 36, 15, { ang: 0.06, cham: 0.3, role: c.body === 'long' ? 'steel' : 'armor' })]; // 枪托随机匣系：长匣步枪走钢色
     if (c.grip === 'frameStock') return [R(L.rear - 2, -5, L.rear - 36, -11, 2.6), R(L.rear - 2, 7, L.rear - 36, 13, 2.6), B('plate', L.rear - 39, 1, 7, 27, { cham: 0.25 })];
     return [];
   }
   switch (c.grip) {
-    case 'handle': case 'stockGrip': case 'frameStock': return [B('frame', L.cx - 16, L.bot + 6, 10.5, 20, { ang: -0.25, cham: 0.25 })];
+    case 'handle': case 'frameStock': return [B('frame', L.cx - 16, L.bot + 6, 10.5, 20, { ang: -0.25, cham: 0.25 })];
+    // 枪托握把独立成形：与弹匣（frame 肋纹箱、前倾）异形——板式深色握把、更小、后倾；旧式与弹匣共用同一 frame 箱步，两件读作同形黑箱并立（z1：匣大而弯、把短而斜）。色走 frame 深色（s3 的握把读法），与钢色机匣和肋纹弹匣靠形与纹再分
+    case 'stockGrip': return [B('plate', L.cx - 15, L.bot + 5, 9, 17, { ang: -0.38, cham: 0.3, role: 'frame' })];
     case 'gripGuard': return [R(-27, 0, 0, 0, 5), B('frame', -8, 0, 2.2, 11.5, { cham: 0.2 }), B('frame', -15, 0, 2.2, 11.5, { cham: 0.2 }), B('frame', -22, 0, 2.2, 11.5, { cham: 0.2 }), B('frame', 0, 0, 4.5, 27, { cham: 0.3 }), D('disc', -30, 0, 6.5)];
     case 'gripDisc': return [R(-27, 0, 0, 0, 5), B('plate', 0, 0, 6.5, 30, { cham: 0.25 }), D('disc', 0, 0, 4.5), D('disc', -30, 0, 6.5)];
     case 'gripLong': return [R(-94, 0, 0, 0, 6), B('frame', -20, 0, 5, 12.5, { cham: 0.2 }), B('plate', -48, 0, 7, 13.5, { cham: 0.3 }), B('frame', -76, 0, 5, 12.5, { cham: 0.2 }), D('disc', -97, 0, 7.5), { t: 'poly', pts: [[-101, -3.4], [-112, 0], [-101, 3.4]], role: 'steel' }];
@@ -562,7 +667,8 @@ function wGripSteps(c: WeaponCombo, phase: 'pre' | 'post'): WeaponStep[] {
 }
 function wSightSteps(c: WeaponCombo, L: WLayout): WeaponStep[] {
   switch (c.sight) {
-    case 'low': return [R(L.cx + 2, L.top - 1.5, L.cx + 2, L.top - 5.5, 2), B('plate', L.cx + 8, L.top - 8.5, 24, 7, { cham: 0.35, role: 'armor' }), D('disc', L.cx + 18, L.top - 8.5, 3.2)];
+    // 低瞄双柱贴顶：柱根扎进机匣顶内（旧单柱起于 L.top−1.5、仅靠杆径勉强搭边，渲染里读作悬空）；双柱即 z1 的双环贴顶读法。镜筒色随宿主：长匣（钢色系步枪）走 steel、套筒炮走 armor
+    case 'low': return [R(L.cx + 1, L.top + 2, L.cx + 1, L.top - 5.5, 2), R(L.cx + 13, L.top + 2, L.cx + 13, L.top - 5.5, 2), B('plate', L.cx + 8, L.top - 8.5, 24, 7, { cham: 0.35, role: c.body === 'long' ? 'steel' : 'armor' }), D('disc', L.cx + 18, L.top - 8.5, 3.2)];
     case 'tall': return [R(L.cx + 2, L.top - 2, L.cx + 2, L.top - 11, 2.2), B('plate', L.cx + 9, L.top - 15, 27, 9, { cham: 0.35, role: 'armor' }), D('disc', L.cx + 20, L.top - 15, 3.6)];
     case 'mast': return [R(L.cx - 14, L.top, L.cx - 14, L.top - 29, 1.8), { t: 'ball', x: L.cx - 14, y: L.top - 32, r: 3.6, ...(c.glow ? { role: 'accent' as WeaponRole } : {}) }, ...(c.glow ? [{ t: 'light', x: L.cx - 14, y: L.top - 32 } as WeaponStep] : [])];
     case 'ringSight': return [R(L.cx + 4, L.top - 1, L.cx + 4, L.top - 6, 2), B('frame', L.cx + 4, L.top - 11, 11, 13, { cham: 0.2 }), ...(c.glow ? [B('plate', L.cx + 4, L.top - 11, 6, 7.5, { cham: 0.2, role: 'accent' }), { t: 'light', x: L.cx + 4, y: L.top - 11 } as WeaponStep] : [])];
@@ -573,7 +679,8 @@ function wRailCableSteps(c: WeaponCombo, L: WLayout): WeaponStep[] {
   const steps: WeaponStep[] = [];
   const len = c.len ?? 110;
   if (c.rail) {
-    if (c.body === 'long' || c.body === 'short') steps.push(B('plate', L.front + len * 0.36, L.y0 + 6.5, len * 0.66, 5, { cham: 0.2, role: 'armor2' }));
+    // 长/短枪身的「导轨」是护木：与机匣同体同色、只覆管程后半——旧式 armor2 浅色长板（0.66 管程）压在管下读作外来木板，参考无此物（z1 护木与机匣同色系；长匣现走钢色，护木随机匣）
+    if (c.body === 'long' || c.body === 'short') steps.push(B('plate', L.front + len * 0.28, L.y0 + 6.5, len * 0.52, 5, { cham: 0.2, role: c.body === 'long' ? 'steel' : 'armor' }));
     else if (c.cls !== 'cold') {
       steps.push(R(L.front, L.top + 3, L.front + len * 0.847, L.top + 3, 1.8));
       for (let tx = L.front + 5; tx < L.front + len * 0.82; tx += 10) steps.push(B('plate', tx, L.top + 2.5, 5, 4.5, { cham: 0.2 }));
@@ -586,8 +693,8 @@ function wRailCableSteps(c: WeaponCombo, L: WLayout): WeaponStep[] {
 export function weaponComboSteps(c: WeaponCombo): WeaponStep[] {
   if (c.body === 'pod') {
     const rows = c.rows ?? 3;
-    if (c.grip === 'pylon') return [B('frame', 0, 2, 34, 11, { cham: 0.3 }), R(-16, -2, -52, -112, 4.5), R(16, -2, -20, -112, 4.5), D('frame', -34, -57, 6.5), D('frame', -2, -57, 6.5), { t: 'podBox', x: -36, y: -142, rows }];
-    return [{ t: 'podBox', x: 0, y: -26, rows }, B('frame', -8, 2, 20, 12, { cham: 0.3 })];
+    if (c.grip === 'pylon') return [B('frame', 0, 2, 34, 11, { cham: 0.3 }), R(-16, -2, -52, -112, 4.5), R(16, -2, -20, -112, 4.5), D('frame', -34, -57, 6.5), D('frame', -2, -57, 6.5), { t: 'podBox', x: -36, y: -142, rows, open: c.podOpen }];
+    return [{ t: 'podBox', x: 0, y: -26, rows, open: c.podOpen }, B('frame', -8, 2, 20, 12, { cham: 0.3 })];
   }
   const L = WBODY_LAYOUT[c.body] ?? WBODY_LAYOUT.none!;
   return [
@@ -603,9 +710,10 @@ export function weaponComboSteps(c: WeaponCombo): WeaponStep[] {
 
 export interface WeaponPreset { label: string; mount: 'forearm' | 'hand' | 'pod'; combo: WeaponCombo }
 export const WEAPON_PRESETS: Record<string, WeaponPreset> = {
-  cannon: { label: '臂炮', mount: 'forearm', combo: { cls: 'hot', body: 'sleeve', effector: 'cannonBarrel', feed: 'drum', sight: 'none', grip: 'sleeve', len: 118, bore: 1, ring: true, rail: true, cable: true, lamp: true } },
+  cannon: { label: '臂炮', mount: 'forearm', combo: { cls: 'hot', body: 'sleeve', effector: 'cannonBarrel', feed: 'drum', sight: 'low', grip: 'sleeve', len: 118, bore: 1, ring: true, cable: true, lamp: true } },
   rifle: { label: '步枪', mount: 'hand', combo: { cls: 'hot', body: 'long', effector: 'slimBarrel', feed: 'mag', sight: 'low', grip: 'stockGrip', len: 113, bore: 1, rail: true } },
   pod: { label: '导弹荚', mount: 'pod', combo: { cls: 'hot', body: 'pod', effector: 'none', feed: 'none', sight: 'none', grip: 'shoulder', rows: 3 } },
+  podOpen: { label: '导弹荚·全露', mount: 'pod', combo: { cls: 'hot', body: 'pod', effector: 'none', feed: 'none', sight: 'none', grip: 'shoulder', rows: 3, podOpen: true } },
   podPylon: { label: '导弹荚·高架', mount: 'pod', combo: { cls: 'hot', body: 'pod', effector: 'none', feed: 'none', sight: 'none', grip: 'pylon', rows: 3 } },
   beamRifle: { label: '光束步枪', mount: 'hand', combo: { cls: 'scifi', body: 'core', effector: 'beamTube', feed: 'cell', sight: 'ringSight', grip: 'frameStock', len: 96, bore: 1, glow: true } },
   plasmaCannon: { label: '电浆炮', mount: 'forearm', combo: { cls: 'scifi', body: 'chamber', effector: 'emitter', feed: 'tankTwin', sight: 'none', grip: 'sleeve', len: 88, bore: 1.45, glow: true, cable: true } },
@@ -678,43 +786,7 @@ export function renderWeaponCombo(cv: MechaCanvas, spec: WeaponSpec, combo: Weap
         };
         for (let k = 0; k + 1 < secs.length; k++) {
           const a = secs[k]!, b = secs[k + 1]!;
-          const id = T.addRaw('sweep', (x, y) => {
-            const q = (w: number) => {
-              const cxw = a.x + (b.x - a.x) * w, cyw = a.y + (b.y - a.y) * w;
-              const rxw = a.rx + (b.rx - a.rx) * w, ryw = a.ry + (b.ry - a.ry) * w;
-              const dx = (x - cxw) / rxw, dy = (y - cyw) / ryw;
-              return dx * dx + dy * dy;
-            };
-            // 连接面 = 截面族各盘的并集；点在面内 ⟺ 族内最小 q ≤ 1
-            // （截面不嵌套，单看首截面会漏掉靠后端截面的侧翼）
-            let bw = 0, bq = q(0);
-            for (let i = 1; i <= 12; i++) { const wi = i / 12, qi = q(wi); if (qi < bq) { bq = qi; bw = wi; } }
-            // 粗采样只给近似最小：真切点（轮廓上 q=1 处）多在样本
-            // 之间，不细化轮廓会被啃成虚线、着色盖不住椭圆轮廓；
-            // 黄金细化 + 小容差把覆盖推到轮廓本身
-            {
-              let lo = Math.max(0, bw - 1 / 12), hi = Math.min(1, bw + 1 / 12);
-              for (let it = 0; it < 6; it++) { const m1 = lo + (hi - lo) * 0.382, m2 = lo + (hi - lo) * 0.618; if (q(m1) < q(m2)) hi = m2; else lo = m1; }
-              const wm = (lo + hi) / 2, qm = q(wm);
-              if (qm < bq) { bq = qm; bw = wm; }
-            }
-            if (bq > 1.05) return [false, 0, 0];
-            // 可见面取朝端面一侧的交点：自最近截面向段尾二分 q 回 1 处
-            let w = 1;
-            if (q(1) > 1) {
-              let lo = bw, hi = 1;
-              for (let it = 0; it < 10; it++) { const mid = (lo + hi) / 2; if (q(mid) > 1) hi = mid; else lo = mid; }
-              w = (lo + hi) / 2;
-            }
-            const cxw = a.x + (b.x - a.x) * w, cyw = a.y + (b.y - a.y) * w;
-            const rxw = a.rx + (b.rx - a.rx) * w, ryw = a.ry + (b.ry - a.ry) * w;
-            const th = Math.atan2((y - cyw) / ryw, (x - cxw) / rxw);
-            // v = 曲面轴向参数 w 本人：箍只落在段界的可见弧上。
-            // 不许按 |1−q(端截面)| 报箍——那会把底面/中间椭圆的整圈
-            // 轮廓（连同埋在下一段里的右弧）在壁面内描成完整的环，
-            // 着色盖不住构造椭圆的轮廓（实测教训）
-            return [true, Math.sin(th), w];
-          });
+          const id = T.addRaw('sweep', sweepSectionTest(a, b));
           if (s.role) (T.A.colorRole ??= new Map()).set(id, s.role);
           // 箍与纵缝登记给缝模式（regSeam：沟与沟内受光壁的
           // 高光由缝 pass 统一画、缝外无亮带）——桶面着色与解
@@ -751,7 +823,7 @@ export function renderWeaponCombo(cv: MechaCanvas, spec: WeaponSpec, combo: Weap
         const put = (pts: { x: number; y: number; w: number }[], mul: number) => { for (const q of pts) { const id = T.addDisc('disc', { x: bx + (s.x0 + q.x) * ux, y: by + (s.y0 + q.y) * uy }, Math.max(0.7, q.w * mul) * uy); (T.A.colorRole ??= new Map()).set(id, 'accent'); } };
         put(shape.main, 0.9); for (const br of shape.branches) put(br, 0.55);
       }
-      else run(podBoxSteps(s.rows ?? 3), bx + s.x * ux, by + s.y * uy); // podBox 子构造
+      else run(podBoxSteps(s.rows ?? 3, s.open), bx + s.x * ux, by + s.y * uy); // podBox 子构造
     }
   };
   run(weaponComboSteps(combo), ox, oy);

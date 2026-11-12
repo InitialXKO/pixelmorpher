@@ -14,6 +14,7 @@ import {
   type DynamicPatternParams,
 } from './dynamic-patterns';
 import { PATTERN_TEMPLATES, type PatternParamDef, type PatternTemplate } from './proc-runtime/pattern-templates';
+import { HEAD_GEOM } from './mecha/head-geom';
 import type { SurfaceGraph } from './unified-types';
 
 export type DynParamKey = keyof DynamicPatternParams;
@@ -99,12 +100,18 @@ export interface MechaGenDef {
   weaponKind?: import('./mecha/gear').WeaponKind;
   /** 着色条目引用（'id@版本'）：着色是独立模式，机甲条目钉版引用 */
   finish?: string;
+  /** 面部条目引用（'id@版本'）：面部模式组合，仅 gen 'head' 消费，展开为头部覆盖打底 */
+  face?: string;
   /** 表面材质条目引用（'id@版本'，表面模板）：作用于该 def 的全部输出 */
   surface?: string;
   /** 表面模板参数覆写（键 = 模板参数 key） */
   surfaceParams?: Record<string, number>;
   overrides?: import('./mecha/parts').MechaPartOverrides;
   hullOverrides?: import('./mecha/parts').MechaHullOverrides;
+  /** 族规格基线（仅族部件条目带，按 gen 一份）：该族该部件的
+   * 出厂规格——parts 的规格装配经 baselineOf 读它，是规格的唯
+   * 一数据源（代码侧不再有工厂表） */
+  spec?: import('./mecha/parts').MechaPartBaselines;
 }
 export interface MechaComboPart {
   entry: string;
@@ -112,7 +119,7 @@ export interface MechaComboPart {
   /** 输出命名前缀（同名输出靠它区分，如 armL/armR） */
   as?: string;
   /** 对子条目 def 的覆写（派生变体：换配色/换着色/改规格） */
-  ov?: Partial<Pick<MechaGenDef, 'scheme' | 'finish' | 'surface' | 'surfaceParams' | 'overrides' | 'hullOverrides'>>;
+  ov?: Partial<Pick<MechaGenDef, 'scheme' | 'finish' | 'face' | 'surface' | 'surfaceParams' | 'overrides' | 'hullOverrides'>>;
 }
 export interface MechaComboDef {
   kind: 'mecha';
@@ -122,41 +129,124 @@ export interface MechaComboDef {
 export type MechaEntryDef = MechaGenDef | MechaComboDef;
 
 /**
- * 着色条目定义。分层要分清：高光棱、料厚、做旧、迷彩、分面、壳
- * 面、盖章、面板线、线缆着色是着色层的算子（单一 pass + 自带参
- * 数），不是模式；模式是把算子组合起来的着色组合（combo 式）：
- * 钉版引用算子条目并给各自的参数覆写。展开（entry-render）产出
- * 现行扁平着色参数，生成器零改动——与动态父模式展开同一纪律。
+ * 着色模式定义（分类纪律 2026-11-11 定版）：条目只有模式；算子
+ * 是模式 DAG 的叶子节点，通用的，只按本质区分、不按用途分、
+ * 没有家族，不单独成条目、不立 kind。高光棱、料
+ * 厚、做旧、迷彩、分面、壳面、盖章、面板线、线缆着色、进气口、
+ * 栓框/栓芯/毂槽/毂框等都是着色算子（叶子，执行在着色管线的
+ * STEP_OPS 注册表）；着色模式的 def 直接写叶子步列——
+ * 每步只引用算子并给本模式的覆写参数（可省），算子缺省参数
+ * 在注册表里一份。展开（entry-render）照步产出现行扁平着色
+ * 参数，生成器零改动。
+ * kind 'shading' 是家族名（着色）；旧 kind 'finish' 是管线名
+ * 冒充分类、旧 pass 条目是把叶子升格成条目，均已废除。
  */
 export type FinishPass =
   | 'ridges' | 'thickness' | 'wear' | 'camo' | 'facets'
-  | 'shell' | 'stamps' | 'panel' | 'cables' | 'intake' | 'wedges' | 'seam';
+  | 'shell' | 'stamps' | 'panel' | 'cables' | 'intake' | 'seam'
+  | 'outline' | 'darkrim' | 'blackgap' | 'boltframe' | 'boltcore' | 'hubgroove' | 'hubframe';
 export interface FinishPassParams {
   amount?: number; enabled?: boolean; ratio?: number; twoTone?: boolean;
   detail?: number; decalKind?: 'num' | 'plate' | 'none';
   tint?: [number, number, number];
   rim?: number; pitch?: number; peak?: number; fall?: number; accentSlats?: boolean;
   topTone?: number; topGrad?: number;
+  /** 叶面明度倍率 / 叶面基色向 armor2 掺混（缺省 1/0 = 校准原值） */
+  slatTone?: number; slatBlue?: number;
   density?: number;
+  /** 栓框形（算子轮四样本横读）：square 方框 / ring 环框 / none 无框——与栓芯自由组合成栓的各式 */
+  frameShape?: 'square' | 'ring' | 'none';
+  /** 栓芯式：dark 暗点 / dome 半球 */
+  coreForm?: 'dark' | 'dome';
+  /** 毂框形：square 方框轮廓（毂槽走 enabled 开关） */
+  hubShape?: 'square';
 }
-export interface FinishPassDef {
-  kind: 'finish';
-  form: 'pass';
-  pass: FinishPass;
-  params: FinishPassParams;
-}
+/** 着色模式：叶子步列——步引用统一词表里的任何算子（见 StepOp）
+ * 并给本模式的覆写参数（可省）；算子缺省参数在注册表
+ * （entry-render 的 STEP_OP_DEFAULTS）里一份，与表面图节点引用
+ * surface-ops 算子的形态一致。展开到底由算子执行 */
 export interface FinishComboDef {
-  kind: 'finish';
+  kind: 'shading';
   form: 'combo';
-  parts: { entry: string; version: number; params?: FinishPassParams }[];
+  steps: { op: StepOp; params?: StepParams }[];
+  /** 族收尾基线（仅族着色条目带）：步列展开之外的基线字段
+   * （缝宽档/足副色/进气叶面调/栓毂组合）——parts.fin() 的数据
+   * 源，与步列同属本条目、不是第二数据源 */
+  base?: import('./mecha/parts').MechaFinishBase;
 }
-export type FinishEntryDef = FinishPassDef | FinishComboDef;
+export type FinishEntryDef = FinishComboDef;
 
-export type EntryDef = SurfaceEntryDef | DynamicEntryDef | ChainEntryDef | FaceEntryDef | MechaEntryDef | FinishEntryDef;
+/**
+ * 面部模式定义（分类纪律 2026-11-11 定版）：算子是通用的叶子，
+ * 只按本质区分（轮廓/着色/动态/表面/其他本质），不按用途分、
+ * 没有家族；任何模式都可以引用任何算子作叶子。下面这组算子
+ * 各管一条面部耦合边，执行在 entry-render 的 STEP_OPS 注册表
+ * 与生成器内（眼座派生、角度继承、沿边带、收尾点都在算子内，
+ * 不在条目里）；面部模式的 def 直接写叶子步列（步只引用算子
+ * 并给覆写参数），即一族的面部数据分配。展开产出头部覆盖。
+ *
+ * 这组算子的本质：降式/檐座/颊单元/颌式/顶附属是轮廓叶子
+ * （产出几何），发光/平行线组/随形带/点色/刻面档是着色叶子
+ * （在既有几何上作画）——本质只活在算子定义处（注册表旁的
+ * STEP_OP_ESSENCE），不进条目 kind。旧 op 式「算子条目」与
+ * contour/shading 两个算子 kind 均已废除。
+ */
+export type ContourOp = 'descent' | 'seat' | 'cheek' | 'jaw' | 'top';
+export type ShadingOp = 'glow' | 'lines' | 'band' | 'tip' | 'facet';
+export type FaceOp = ContourOp | ShadingOp;
+export interface FaceOpParams {
+  /** 降式：冠形与后脑阶 */
+  crown?: 'dome' | 'flat' | 'angular'; shellStep?: boolean;
+  /** 檐座：眉檐有无/式与座高（座位由生成器的眼座算子按檐下缘派生） */
+  brow?: boolean; browForm?: 'crest'; seatH?: number;
+  /** 发光：眼式、缝眼终点与轮廓峰位（峰偏前、向后收尾的单光体；
+   * 等亮缝不是参考的画法） */
+  eye?: 'slit' | 'dot' | 'visor'; slitEnd?: number; glowPeak?: number;
+  /** 平行线组：壳缝/颊线开关（角度由算子从宿主读，参数不带角度）；
+   * seamScale = 全部板界缝的宽度倍率（缝算子的族档位） */
+  shellSeams?: boolean; cheekLines?: boolean; seamScale?: number;
+  /** 随形带：冠带漆色与脸侧带（路径由算子派生） */
+  crownBand?: 'accent'; faceStripe?: boolean;
+  /** 颊单元：侧件式（单占） */
+  ear?: 'disc' | 'grille' | 'plate' | 'sensor' | 'plateStripe' | 'earcover'; cheekCable?: boolean;
+  /** 太阳穴件（第二侧件位）：'disc' = 小圆盘，与颊件分槽 */
+  temple?: 'disc';
+  /** 颌式；tubeSeg = 吻面横管走分节算子（环沟）；descent = 降式
+   * 算子的站位数据（吻板点列由它算出） */
+  jaw?: 'block' | 'respirator' | 'small' | 'breather' | 'plate'; tubeSeg?: boolean;
+  descent?: { top: [number, number]; descent: [number, number]; under: [number, number]; inset: number; rise: number };
+  /** 顶附属（至多一式）；topSeg = 附属走分节算子（天线珠节/鳍刻节） */
+  top?: 'horn' | 'vfin' | 'antenna' | 'none'; topSeg?: boolean; /** 眉鳍合一（组合模式）：主鳍根部成檐、眼座由鳍派生 */ finBrow?: boolean;
+  /** 点色：颏尖点色开关（点位由算子从收尾点派生） */
+  chinTip?: boolean; /** 点色大小倍率（档位：1 = 小点、约 2 = 占颏整段） */ tipScale?: number;
+  /** 刻面档：twoTone 是头部刻面的实效开关（头部覆盖的 twoTone
+   * 经 finFor 驱动 FHead.altTone，着色覆盖显式给值时优先于规格
+   * 基线——取值以实测渲染与标注为准，不抄 HEAD_SPEC 的同名字段） */
+  twoTone?: boolean; altTone?: boolean;
+}
+/** 步算子全集：步列模式（着色/面部）的叶子词表只有这一份——
+ * 任何步列模式都可以引用任何算子作叶子；算子的区分只有本质
+ * （注册表 STEP_OP_ESSENCE），与它写进哪份覆盖无关 */
+export type StepOp = FinishPass | FaceOp;
+/** 步参数：着色参数面与面部参数面的字段并集（算子只读自己的
+ * 字段） */
+export type StepParams = FinishPassParams & FaceOpParams;
+
+/** 面部模式：叶子步列——步引用统一词表里的任何算子并给本模式
+ * 的覆写参数（可省）；算子缺省参数在注册表（entry-render 的
+ * STEP_OP_DEFAULTS）里一份。展开到底由算子执行 */
+export interface FaceComboDef {
+  kind: 'faceop';
+  form: 'combo';
+  steps: { op: StepOp; params?: StepParams }[];
+}
+export type FaceOpEntryDef = FaceComboDef;
+
+export type EntryDef = SurfaceEntryDef | DynamicEntryDef | ChainEntryDef | FaceEntryDef | MechaEntryDef | FinishEntryDef | FaceOpEntryDef;
 
 export interface LibraryEntry {
   id: string;
-  kind: 'surface' | 'dynamic' | 'chain' | 'face' | 'mecha' | 'finish';
+  kind: 'surface' | 'dynamic' | 'chain' | 'face' | 'mecha' | 'faceop' | 'shading';
   name: string;
   cluster: string;
   versions: Record<number, EntryDef>;
@@ -638,6 +728,8 @@ function buildBuiltinEntries(): LibraryEntry[] {
   // 着色条目：着色本身是模式（收尾参数集），自族基线抽出登记，
   // 被机甲条目钉版引用——改着色发新版，引用方显式升级才跟随。
   out.push(...buildBuiltinFinishEntries());
+  // 面部条目：面部模式 DAG（算子 + 族组合），被头条目钉版引用。
+  out.push(...buildBuiltinFaceOpEntries());
   // 机甲条目：构造模式入产品库（研究线模式的正式登记处）。
   // 族预设即 v1：def 只钉生成器与族，变体槽缺省走族预设全量；
   // 蜘蛛多足腿的参考本体是石板灰机器，配色在 def 里钉 slate。
@@ -645,65 +737,124 @@ function buildBuiltinEntries(): LibraryEntry[] {
   return out;
 }
 
-function finishPassEntry(id: string, name: string, pass: FinishPass, params: FinishPassParams): LibraryEntry {
+function finishComboEntry(
+  id: string, name: string,
+  steps: { op: StepOp; params?: StepParams }[],
+  base?: import('./mecha/parts').MechaFinishBase,
+): LibraryEntry {
   return {
-    id, kind: 'finish', name, cluster: '着色', builtin: true, latest: 1,
-    versions: { 1: { kind: 'finish', form: 'pass', pass, params } satisfies FinishPassDef },
+    id, kind: 'shading', name, cluster: '着色', builtin: true, latest: 1,
+    versions: { 1: { kind: 'shading', form: 'combo', steps, base } satisfies FinishComboDef },
   };
 }
 
-function finishComboEntry(
+function faceComboEntry(
   id: string, name: string,
-  parts: { entry: string; params?: FinishPassParams }[],
+  steps: { op: StepOp; params?: StepParams }[],
 ): LibraryEntry {
   return {
-    id, kind: 'finish', name, cluster: '着色', builtin: true, latest: 1,
-    versions: {
-      1: {
-        kind: 'finish', form: 'combo',
-        parts: parts.map((p) => ({ entry: p.entry, version: 1, params: p.params })),
-      } satisfies FinishComboDef,
-    },
+    id, kind: 'faceop', name, cluster: '面部', builtin: true, latest: 1,
+    versions: { 1: { kind: 'faceop', form: 'combo', steps } satisfies FaceComboDef },
   };
+}
+
+function buildBuiltinFaceOpEntries(): LibraryEntry[] {
+  // 面部模式 = 叶子步列在四台可读脸上的数据分配（ann-face3 提取；
+  // 步只引用算子并给本模式的覆写参数，缺省在注册表 STEP_OP_DEFAULTS）
+  return [
+    faceComboEntry('face-olive', '面部组合·主战', [
+      { op: 'descent', params: { crown: 'dome' } },
+      { op: 'seat', params: { brow: true, seatH: 0.11 } },
+      { op: 'glow', params: { eye: 'slit', slitEnd: 0.4, glowPeak: 0.7 } },
+      { op: 'lines', params: { shellSeams: false, cheekLines: false, seamScale: 1.3 } },
+      { op: 'band', params: { faceStripe: false } },
+      { op: 'cheek', params: { ear: 'grille', cheekCable: false } },
+      { op: 'jaw', params: { jaw: 'respirator', tubeSeg: true, descent: { top: [0.36, 0.02], descent: [0.12, 0.22], under: [-0.08, 0.14], inset: 0.28, rise: 0.34 } } },
+      { op: 'top', params: { top: 'horn' } },
+      { op: 'tip', params: { chinTip: true } },
+      { op: 'facet', params: { twoTone: true } },
+    ]),
+    faceComboEntry('face-agile', '面部组合·敏捷', [
+      { op: 'descent', params: { crown: 'dome', shellStep: true } },
+      { op: 'seat', params: { brow: true, browForm: 'crest', seatH: 0.08 } },
+      { op: 'glow', params: { eye: 'slit', slitEnd: 0.4, glowPeak: 0.45 } },
+      { op: 'lines', params: { shellSeams: true, cheekLines: true, seamScale: 0.55 } },
+      { op: 'band', params: { faceStripe: false } },
+      { op: 'cheek', params: { ear: 'sensor', cheekCable: false, temple: 'disc' } },
+      { op: 'jaw', params: { jaw: 'plate' } },
+      { op: 'top', params: { top: 'vfin' } },
+      { op: 'tip', params: { chinTip: true } },
+      { op: 'facet', params: { twoTone: true } },
+    ]),
+    faceComboEntry('face-powersuit', '面部组合·动力服', [
+      { op: 'descent', params: { crown: 'dome' } },
+      { op: 'seat', params: { brow: false } },
+      { op: 'glow', params: { eye: 'visor' } },
+      { op: 'lines', params: { shellSeams: false, cheekLines: false, seamScale: 0.75 } },
+      { op: 'band', params: { faceStripe: true, crownBand: 'accent' } },
+      { op: 'cheek', params: { ear: 'earcover' } },
+      { op: 'jaw', params: { jaw: 'breather' } },
+      { op: 'top', params: { top: 'none' } },
+      { op: 'tip', params: { chinTip: false } },
+      { op: 'facet', params: { twoTone: false } },
+    ]),
+    faceComboEntry('face-heavy', '面部组合·重型', [
+      { op: 'descent', params: { crown: 'dome' } },
+      { op: 'seat', params: { brow: true, seatH: 0.11 } },
+      { op: 'glow', params: { eye: 'slit', glowPeak: 0.68 } },
+      { op: 'lines', params: { shellSeams: false, cheekLines: false, seamScale: 1.35 } },
+      { op: 'band', params: { faceStripe: false } },
+      { op: 'cheek', params: { ear: 'plateStripe', cheekCable: false } },
+      { op: 'jaw', params: { jaw: 'block' } },
+      { op: 'top', params: { top: 'antenna', topSeg: true } },
+      { op: 'tip', params: { chinTip: true } },
+      { op: 'facet', params: { twoTone: false } },
+    ]),
+  ];
 }
 
 function buildBuiltinFinishEntries(): LibraryEntry[] {
+  // 着色模式 = 叶子步列：步只引用算子并给本模式的覆写参数（可省，
+  // 缺省在注册表 STEP_OP_DEFAULTS）；族基线是整机的着色数据分配。
+  // 轮廓组合 = 只有轮廓三叶子的着色模式
   return [
-    // 着色算子（单一 pass 各一份条目；参数是该算子自己的量）
-    finishPassEntry('fpass-ridges', '高光棱', 'ridges', { enabled: true }),
-    finishPassEntry('fpass-seam', '缝', 'seam', { enabled: true }),
-    finishPassEntry('fpass-thickness', '料厚', 'thickness', { ratio: 0.32 }),
-    finishPassEntry('fpass-intake', '进气口', 'intake', { topTone: 1.42, topGrad: 0.12, rim: 0.1, pitch: 7, peak: 0.75, fall: 0.22, accentSlats: false }),
-    finishPassEntry('fpass-wear', '做旧', 'wear', { amount: 0.3 }),
-    finishPassEntry('fpass-camo', '迷彩', 'camo', { enabled: true }),
-    finishPassEntry('fpass-facets', '分面着色', 'facets', { twoTone: true }),
-    finishPassEntry('fpass-shell', '壳面', 'shell', { enabled: true }),
-    finishPassEntry('fpass-stamps', '盖章', 'stamps', { decalKind: 'num' }),
-    finishPassEntry('fpass-panel', '面板线', 'panel', { detail: 0.65 }),
-    finishPassEntry('fpass-wedges', '异形楔拼块', 'wedges', { density: 1 }),
-    finishPassEntry('fpass-cables', '线缆着色', 'cables', {}),
-    // 着色组合（族基线 = 一组子模式 + 各自参数覆写）
+    finishComboEntry('finish-contour', '轮廓组合', [
+      { op: 'outline' }, { op: 'darkrim' }, { op: 'ridges' },
+    ]),
     finishComboEntry('finish-olive', '着色组合·战损橄榄', [
-      { entry: 'fpass-ridges' }, { entry: 'fpass-seam' }, { entry: 'fpass-thickness' }, { entry: 'fpass-intake' }, { entry: 'fpass-intake' }, { entry: 'fpass-intake' },
-      { entry: 'fpass-wear', params: { amount: 0.3 } },
-      { entry: 'fpass-camo', params: { enabled: true } },
-      { entry: 'fpass-facets', params: { twoTone: true } },
-      { entry: 'fpass-wedges', params: { density: 1 } },
-    ]),
+      { op: 'ridges' }, { op: 'outline' }, { op: 'darkrim' }, { op: 'blackgap' }, { op: 'seam' }, { op: 'thickness' },
+      { op: 'intake', params: { accentSlats: true } },
+      { op: 'wear', params: { amount: 0.3 } },
+      { op: 'camo', params: { enabled: true } },
+      { op: 'facets', params: { twoTone: true } },
+      { op: 'boltframe', params: { frameShape: 'square' } },
+      { op: 'boltcore', params: { coreForm: 'dark' } },
+      { op: 'hubgroove', params: { enabled: true } },
+    ], { // 族收尾基线：叶面暖调（叶片向 armor2 掺 0.45 取暖）；栓/毂 = 方框+暗芯+毂槽；缝宽粗沟 1.3
+      intake: { slatTone: 1.1, slatBlue: 0.45 }, boltFrame: 'square', boltCore: 'dark', hubGroove: true, seamScale: 1.3,
+    }),
     finishComboEntry('finish-agile', '着色组合·洁净敏捷', [
-      { entry: 'fpass-ridges' }, { entry: 'fpass-seam' }, { entry: 'fpass-thickness' },
-      { entry: 'fpass-wear', params: { amount: 0.15 } },
-      { entry: 'fpass-camo', params: { enabled: false } },
-      { entry: 'fpass-facets', params: { twoTone: true } },
-      { entry: 'fpass-wedges', params: { density: 1 } },
-    ]),
+      { op: 'ridges' }, { op: 'outline' }, { op: 'darkrim' }, { op: 'blackgap' }, { op: 'seam' }, { op: 'thickness' },
+      { op: 'wear', params: { amount: 0.15 } },
+      { op: 'camo', params: { enabled: false } },
+      { op: 'facets', params: { twoTone: true } },
+      { op: 'boltframe', params: { frameShape: 'square' } },
+      { op: 'boltcore', params: { coreForm: 'dark' } },
+      { op: 'hubframe' },
+    ], { // 族收尾基线：叶面蓝灰（向 armor2 掺混 + 提亮）；栓/毂 = 方框+暗芯+毂框；缝宽细线 0.55
+      intake: { slatTone: 1.7, slatBlue: 0.5 }, boltFrame: 'square', boltCore: 'dark', hubFrame: 'square', seamScale: 0.55,
+    }),
     finishComboEntry('finish-powersuit', '着色组合·动力服', [
-      { entry: 'fpass-ridges' }, { entry: 'fpass-seam' }, { entry: 'fpass-thickness' },
-      { entry: 'fpass-wear', params: { amount: 0.15 } },
-      { entry: 'fpass-camo', params: { enabled: false } },
-      { entry: 'fpass-facets', params: { twoTone: false } },
-      { entry: 'fpass-wedges', params: { density: 1 } },
-    ]),
+      { op: 'ridges' }, { op: 'outline' }, { op: 'darkrim' }, { op: 'blackgap' }, { op: 'seam' }, { op: 'thickness' },
+      { op: 'wear', params: { amount: 0.15 } },
+      { op: 'camo', params: { enabled: false } },
+      { op: 'facets', params: { twoTone: false } },
+      { op: 'boltframe', params: { frameShape: 'ring' } },
+      { op: 'boltcore', params: { coreForm: 'dark' } },
+      { op: 'hubframe' },
+    ], { // 族收尾基线：栓/毂 = 环框+暗芯+毂框；缝宽中档 0.75；足走副色橙（余族足随主体装甲色）
+      boltFrame: 'ring', boltCore: 'dark', hubFrame: 'square', seamScale: 0.75, footAlt: true,
+    }),
   ];
 }
 
@@ -714,27 +865,64 @@ function mechaEntry(id: string, name: string, def: MechaEntryDef): LibraryEntry 
   };
 }
 
+/** 族规格基线（条目数据）：每族每部件一份出厂规格，由族部件
+ * 条目持有（def.spec），parts 经 baselineOf 读取——这是规格的
+ * 唯一数据源。块形标准档在此写字面量（与 mpat-blockshape 同值） */
+const PART_SPEC: {
+  leg: Record<import('./mecha/parts').MechaFamily, import('./mecha/parts').MechaLegBaseline>;
+  arm: Record<import('./mecha/parts').MechaFamily, import('./mecha/parts').MechaArmBaseline>;
+  torso: Record<import('./mecha/parts').MechaFamily, import('./mecha/parts').MechaTorsoBaseline>;
+  head: Record<import('./mecha/parts').MechaFamily, import('./mecha/parts').MechaHeadBaseline>;
+} = {
+  leg: {
+    olive: { topology: 'standard', seed: 11, decalKind: 'plate', bend: 22, camo: false, wear: 0.3, wScale: 0.76, shinWRatio: 0.853, taperThigh: 0.85, taperShin: 0.68, lift: 20, detail: 0.65, ankleShift: 12, coreScale: 1.05, mechSlim: true, altTone: false, shinPiston: true },
+    agile: { topology: 'standard', seed: 21, decalKind: 'plate', bend: 18, camo: false, wear: 0.15, wScale: 0.69, shinWRatio: 0.894, taperThigh: 0.64, taperShin: 0.6, guardOff: true, shinConcave: 0, lift: 20, detail: 0.65, ankleShift: 8, coreScale: 1, footType: 'shoe', panelSparse: true, shinBand: true, shinInset: true, mechSlim: true, altTone: false },
+    powersuit: { topology: 'standard', seed: 49, decalKind: 'plate', bend: 16, camo: false, wear: 0.15, wScale: 0.75, shinWRatio: 0.917, taperThigh: 0.75, taperShin: 0.65, lift: 20, detail: 0.65, ankleShift: 6, coreScale: 1, footType: 'pad', shinPanel: true, mechSlim: true, altTone: false },
+  },
+  arm: {
+    olive: { family: 'olive', seed: 7, wear: 0.3, camo: false, diag: 0.5, blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }, root: { x: 70, y: 40 }, bulk: 1.02, shell: 1.05, upperLen: 118, foreLen: 138, upperAng: 0.06, elbowBend: 0, hand: 'fist', gear: { cable: false, piston: true, device: true, stripe: false }, foreBand: { perp: -3, w: 9, along: 0.47, len: 0.37, role: 'accent' }, shoulderDisc: [19, 11], form: { shell: 'box', elbow: 'disc', fore: 'housing', fingerLen: 30, fingerCurl: 0.45 }, insignia: { kind: 4, along: -10, perp: -4 }, twoTone: false },
+    agile: { family: 'agile', seed: 21, wear: 0.15, camo: false, diag: 0.4, blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }, root: { x: 70, y: 40 }, bulk: 0.85, shell: 0.88, upperLen: 118, foreLen: 144, upperAng: 0.06, elbowBend: 0, hand: 'fist', gear: { cable: false, piston: false, device: false, stripe: false }, foreBand: { perp: -8, w: 19, along: 0.5, len: 0.55, role: 'accent' }, shellRole: 'armor', shoulderPanel: 'window', form: { shell: 'cap', elbow: 'ring', fore: 'plates', fingerLen: 30, fingerCurl: 0.5 }, insignia: { kind: 0, along: -10, perp: -4 }, twoTone: true, altTone: false },
+    powersuit: { family: 'powersuit', seed: 35, wear: 0.15, camo: false, diag: 0.25, blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }, root: { x: 70, y: 40 }, bulk: 0.86, shell: 1.0, upperLen: 112, foreLen: 120, upperAng: 0.06, elbowBend: 0, hand: 'fist', gear: { cable: false, piston: false, device: false, stripe: true }, shellRole: 'armor2', shoulderPanel: 'slots', foreTipBand: true, foreStripes: 2, upperRootStripes: 3, form: { shell: 'cap', elbow: 'disc', fore: 'shell', fingerLen: 28, fingerCurl: 0.45 }, insignia: { kind: 1, along: -10, perp: -4 }, twoTone: false },
+  },
+  torso: {
+    olive: { family: 'olive', seed: 7, wear: 0.3, camo: false, twoTone: false, blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }, neck: { x: 120, y: 16 }, intakeDepth: [0.08, 0.08], boxDepth: [0.92, 0.7], intakeShare: [0.92, 0.75], intakeTrim: true, keelPlate: true, keelReach: 0.32, ventFuse: true, insigniaPos: [0.16, 0.26], waistForm: 'hose', hoseTubes: 2, hoseR: 0.2, pelvisInset: true, chestW: 150, chestH: 118, waistH: 25, pelvisH: 72, form: { chest: 'stack', back: 'box', grille: 'side', skirt: 'front' }, gear: { stripe: false, insignia: 0, number: '3' } },
+    agile: { family: 'agile', seed: 21, wear: 0.15, camo: false, twoTone: true, altTone: false, blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }, neck: { x: 120, y: 16 }, intakeDepth: [0.08, 0.08], boxDepth: [0.92, 0.7], intakeShare: [0.92, 0.75], intakeOrient: 'keel', intakeTrim: true, keelPlate: true, keelReach: 0.32, ventFuse: true, insigniaPos: [0.16, 0.26], waistForm: 'plates', waistDisc: [0.35, 0.42], skirtShrink: 0.72, pelvisPlate: true, shellMid: [-0.065, 0.15, 0.03], shellSeg: true, chestW: 128, chestH: 128, waistH: 36, pelvisH: 66, form: { chest: 'shell', back: 'binder', grille: 'front', skirt: 'both' }, gear: { stripe: false, insignia: 0, number: '' } },
+    powersuit: { family: 'powersuit', seed: 49, wear: 0.15, camo: false, twoTone: false, blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }, neck: { x: 120, y: 16 }, intakeDepth: [0.08, 0.08], boxDepth: [0.92, 0.7], intakeShare: [0.92, 0.75], intakeTrim: true, keelPlate: true, keelReach: 0.32, ventFuse: true, insigniaPos: [0.16, 0.26], neckStruts: true, waistForm: 'rings', waistDisc: [0, 0.3], pelvisForm: 'shell', chestStripes: 3, chestVent: true, shellCap: true, chestW: 118, chestH: 110, waistH: 34, pelvisH: 62, form: { chest: 'shell', back: 'rack', grille: 'none', skirt: 'front' }, gear: { stripe: false, insignia: 1, number: '' } },
+  },
+  head: {
+    olive: { family: 'olive', twoTone: false, altTone: false, seed: 7, wear: 0.3, camo: false, blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }, intakeDepth: [0.08, 0.08], intakeShare: [0.92, 0.75], seat: { x: 80, y: 120 }, w: 96, h: 84, tilt: 0.03, seatH: 0.11, slitEnd: 0.361, glowPeak: 0.7, hornGeom: { witness: 'mecha-side：顶角', len: 0.28, wRoot: 0.06, wTip: 0.010, ang: -0.20 }, tubeSeg: true, seamScale: 1.3, stackSeams: true, chinTip: true, witness: { faceDescent: 'mecha-side：吻板降式' }, faceDescent: { top: [0.36, 0.02], descent: [0.13, 0.19], under: [-0.09, 0.11], inset: 0.28, rise: 0.30 }, form: { crown: 'dome', eye: 'slit', brow: true, jaw: 'respirator', ear: 'grille', top: 'horn', cheekCable: false } },
+    agile: { family: 'agile', twoTone: true, altTone: false, seed: 21, wear: 0.15, camo: false, blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }, intakeDepth: [0.08, 0.08], intakeShare: [0.92, 0.75], seat: { x: 80, y: 165 }, w: 92, h: 92, tilt: 0.02, seatH: 0.10, seatW: 0.36, slitEnd: 0.40, glowPeak: 0.45, seamScale: 0.55, stackSeams: true, templeDisc: true, templeBolt: true, jawAng: 0.22, domeFlat: 0.92, finBrow: true, finBaseGeom: { witness: 'mecha-agile-side：座站位（轮十三：前探占比 0.37→正样 0.26、along 收回；座深收 0.24→0.21、尖止于眼高）', arc: 0.48, sink: 0.047, along: 0.17, drop: 0.21 }, finGeom: { main: { witness: 'mecha-agile-side：主鳍（轮十三：后伏角 34°→43°、长/核高 1.07→0.80）', len: 0.79, wRoot: 0.14, wTip: 0.014, ang: -2.43 }, rear: { witness: 'mecha-agile-side：后鳍（轮十三：同向收角、长比 0.60 不变）', len: 0.47, ang: -1.96 } }, witness: { fairingPts: 'mecha-agile-side：整流罩' }, fairingPts: [[-0.32, -0.06], [-0.04, 0.005], [0.06, -0.21], [-0.28, -0.27], [-0.34, -0.16]], shellStep: true, shellSeams: true, cheekLines: true, chinTip: true, fairingTone: 'armor', geom: { base: HEAD_GEOM.base.map((g, i) => (i === 1 || i === 2 ? { ...g, role: 'armor' as const } : g)), shellStep: { ...HEAD_GEOM.shellStep, role: 'armor' as const }, cheek: { ...HEAD_GEOM.cheek, role: 'armor' as const }, cheekPlate: { ...HEAD_GEOM.cheekPlate, role: 'armor' as const }, cheekPlateF: { ...HEAD_GEOM.cheekPlateF, role: 'armor' as const }, cheekNotch: [{ witness: 'mecha-agile-side：颊面短横凹线（轮十三 S7；轮十四随颊前缘斜收退位缩短、夹在竖缝与前缘之间）', dx: 0.28, dy: 0.40, len: 0.03, thick: 0.016, ang: 0 }], jawPlate: { ...HEAD_GEOM.jawPlate, role: 'armor' as const }, maskPlate: { ...HEAD_GEOM.maskPlate, role: 'armor' as const }, dome: { ...HEAD_GEOM.dome, roleMain: 'armor' as const, roleBand: 'armor' as const } }, form: { crown: 'dome', eye: 'slit', brow: true, jaw: 'plate', ear: 'sensor', top: 'vfin', cheekCable: false } },
+    powersuit: { family: 'powersuit', twoTone: false, altTone: false, seed: 49, wear: 0.15, camo: false, blockShape: { chamFloor: 0.3, varLo: 0.3, varHi: 1.8, stepP: 0.45 }, intakeDepth: [0.08, 0.08], intakeShare: [0.92, 0.75], seat: { x: 80, y: 120 }, w: 100, h: 88, tilt: 0, seamScale: 0.75, stackSeams: true, crownBand: 'accent', domeFlat: 0.85, domeApex: 0.82, echoSecond: [0.262, 0.238], chinTipScale: 1.8, faceStripe: true, witness: { visorPts: 'powersuit-side：面甲板', breatherPts: 'powersuit-side：呼吸器颌板', echoSecond: 'powersuit-side：双回声（ann-g1/k4/图池三见证）' }, visorPts: [[-0.28, 0.01], [0.1, 0.01], [0.15, 0.08], [0.1, 0.15], [-0.28, 0.15]], breatherPts: [[0.05, -0.22], [0.40, -0.22], [0.46, -0.10], [0.40, -0.005], [0.10, -0.005]], form: { crown: 'dome', eye: 'visor', brow: false, jaw: 'breather', ear: 'earcover', top: 'none', cheekCable: false } },
+  },
+};
+
+/** 喷射背包族尺寸基线（jetpack 条目的 def.spec 数据源） */
+const JETPACK_SIZE: Record<import('./mecha/parts').MechaFamily, { x: number; y: number }> = {
+  agile: { x: 1.1, y: 1.35 }, olive: { x: 1, y: 1.1 }, powersuit: { x: 0.9, y: 0.9 },
+};
+
 function buildBuiltinMechaEntries(): LibraryEntry[] {
   const out: LibraryEntry[] = [];
   const FAMS = [
     ['olive', '橄榄'], ['agile', '敏捷'], ['powersuit', '动力服'],
   ] as const;
   const WEAPONS = [
-    ['cannon', '臂炮'], ['pod', '导弹荚'], ['rifle', '步枪'], ['podPylon', '高架荚'],
+    ['cannon', '臂炮'], ['pod', '导弹荚'], ['rifle', '步枪'], ['podPylon', '高架荚'], ['podOpen', '全露荚'],
   ] as const;
   for (const [fam, label] of FAMS) {
-    out.push(mechaEntry(`mecha-leg-${fam}`, `腿组合·${label}`, { kind: 'mecha', form: 'gen', gen: 'leg', family: fam, finish: `finish-${fam}@1` }));
-    out.push(mechaEntry(`mecha-arm-${fam}`, `臂组合·${label}`, { kind: 'mecha', form: 'gen', gen: 'arm', family: fam, finish: `finish-${fam}@1` }));
-    out.push(mechaEntry(`mecha-torso-${fam}`, `躯干组·${label}`, { kind: 'mecha', form: 'gen', gen: 'torso', family: fam, finish: `finish-${fam}@1` }));
-    out.push(mechaEntry(`mecha-head-${fam}`, `头组·${label}`, { kind: 'mecha', form: 'gen', gen: 'head', family: fam, finish: `finish-${fam}@1` }));
+    out.push(mechaEntry(`mecha-leg-${fam}`, `腿组合·${label}`, { kind: 'mecha', form: 'gen', gen: 'leg', family: fam, finish: `finish-${fam}@1`, spec: { leg: PART_SPEC.leg[fam] } }));
+    out.push(mechaEntry(`mecha-arm-${fam}`, `臂组合·${label}`, { kind: 'mecha', form: 'gen', gen: 'arm', family: fam, finish: `finish-${fam}@1`, spec: { arm: PART_SPEC.arm[fam] } }));
+    out.push(mechaEntry(`mecha-torso-${fam}`, `躯干组·${label}`, { kind: 'mecha', form: 'gen', gen: 'torso', family: fam, finish: `finish-${fam}@1`, spec: { torso: PART_SPEC.torso[fam] } }));
+    out.push(mechaEntry(`mecha-head-${fam}`, `头组·${label}`, { kind: 'mecha', form: 'gen', gen: 'head', family: fam, finish: `finish-${fam}@1`, face: `face-${fam}@1`, spec: { head: PART_SPEC.head[fam] } }));
     out.push(mechaEntry(`mecha-hand-${fam}`, `手型·${label}`, { kind: 'mecha', form: 'gen', gen: 'hand', family: fam, finish: `finish-${fam}@1` }));
     out.push(mechaEntry(`mecha-track-${fam}`, `履带·${label}`, { kind: 'mecha', form: 'gen', gen: 'track', family: fam, finish: `finish-${fam}@1` }));
     out.push(mechaEntry(`mecha-wheel-${fam}`, `轮足·${label}`, { kind: 'mecha', form: 'gen', gen: 'wheel', family: fam, finish: `finish-${fam}@1` }));
-    out.push(mechaEntry(`mecha-jetpack-${fam}`, `喷射背包·${label}`, { kind: 'mecha', form: 'gen', gen: 'jetpack', family: fam, finish: `finish-${fam}@1` }));
+    out.push(mechaEntry(`mecha-jetpack-${fam}`, `喷射背包·${label}`, { kind: 'mecha', form: 'gen', gen: 'jetpack', family: fam, finish: `finish-${fam}@1`, spec: { jetpack: { size: JETPACK_SIZE[fam] } } }));
     for (const [wk, wl] of WEAPONS) {
       out.push(mechaEntry(`mecha-weapon-${wk}-${fam}`, `${wl}·${label}`, { kind: 'mecha', form: 'gen', gen: 'weapon', family: fam, weaponKind: wk, finish: `finish-${fam}@1` }));
     }
   }
+  out.push(mechaEntry('mecha-head-agile-finbrow', '头组·敏捷眉鳍', { kind: 'mecha', form: 'gen', gen: 'head', family: 'agile', finish: 'finish-agile@1', face: 'face-agile@1', overrides: { head: { finBrow: true, topSeg: false, seat: { x: 80, y: 120 }, finGeom: { main: { witness: 'ann-h2/g3：眉鳍主鳍', len: 0.82, wRoot: 0.21, wTip: 0.014, ang: -2.06 }, rear: { witness: 'ann-h2/g3：眉鳍后鳍', len: 0.49, ang: -1.62 } }, finBaseGeom: { witness: 'ann-h2/g3：眉鳍座站位', drop: 0.28, arc: 0.65, sink: 0.145 } } } })); // 眉鳍合一（组合模式 ann-h2/g3）：鳍植于座、座前端出檐、眼座挂座前缘；鳍面在两样本里光素，故关刻节；厚根鳍配深座走 finBaseGeom 数据；座锚点由穹弧派生（arc/sink 按本式旧根位 (0.30,−0.70) 反解）、双鳍同根同植于锚点 S（一座共用）；seat 钉回 120（本式鳍短不裁画布，与默认敏捷的下移 seat 无关）
   out.push(mechaEntry('mecha-hull-walker', '车体组·步行', { kind: 'mecha', form: 'gen', gen: 'hull', family: 'olive', hullKind: 'walker', finish: 'finish-olive@1' }));
   out.push(mechaEntry('mecha-hull-hauler', '车体组·运输', { kind: 'mecha', form: 'gen', gen: 'hull', family: 'olive', hullKind: 'hauler', finish: 'finish-olive@1' }));
   out.push(mechaEntry('mecha-multileg-spider', '多足腿·蜘蛛', { kind: 'mecha', form: 'gen', gen: 'multileg', family: 'olive', scheme: 'slate', profile: 'spider', finish: 'finish-olive@1' }));
@@ -750,7 +938,7 @@ function buildBuiltinMechaEntries(): LibraryEntry[] {
   // 样本口面板框带剖面约 8%）；口份额 intakeShare [0.92, 0.75]
   // （口占装口面，标注实测宽 0.91–0.93 / 高 0.71–0.79，与进深无
   // 关）；框斜与装口面倍率是站点朝向量、在各生成器调用点给。着
-  // 色组合（模式主体）在 fpass-intake：顶面倍率、口内子模式
+  // 色组合（模式主体）在着色模式的 intake 叶子步：顶面倍率、口内子模式
   out.push(mechaEntry('mpat-intake', '进气口·三面盒', { kind: 'mecha', form: 'gen', gen: 'torso', family: 'olive', finish: 'finish-olive@1', overrides: { torso: { intakeDepth: [0.08, 0.08], boxDepth: [0.92, 0.7], intakeShare: [0.92, 0.75], intakeOrient: 'keel', intakeTrim: true }, head: { intakeDepth: [0.08, 0.08], intakeShare: [0.92, 0.75] } }, hullOverrides: { intakeDepth: [0.08, 0.08], intakeShare: [0.92, 0.75] } }));
   // 龙骨突·散热口组合（模式组合：散热口盒 + 龙骨突 + 前楔并体
   // 三者同行——龙骨突按因果定案从盒的实际角点生长造剪影、前
@@ -795,6 +983,40 @@ function buildBuiltinMechaEntries(): LibraryEntry[] {
   out.push(combo('mecha-vehicle-hauler-track', '载具整机·运输履带', [
     { entry: 'mecha-hull-hauler', version: 1, as: 'hull' },
     { entry: 'mecha-track-olive', version: 1, as: 'legs' },
+  ]));
+  // 组合批入册（2026-11-10 迭代新口径）：参考只作提取源，产品侧
+  // 以模式的不同组合造不同的机甲——以下五条是走产品装配路径验
+  // 过的跨族组合（族机构是库的验证样本，不是拟合目标）。组合只
+  // 写部件选择与数据覆写，生成器不因此长任何分支
+  out.push(combo('mecha-humanoid-heavy', '人形整机·重型', [
+    { entry: 'mecha-head-olive', version: 1, as: 'head', ov: { scheme: 'slate', face: 'face-heavy@1', overrides: { head: { w: 88, h: 77, chinTip: true, antGeom: { len: 0.78, lean: 0.30 }, form: { crown: 'dome', eye: 'slit', brow: true, jaw: 'block', ear: 'plateStripe', top: 'antenna', cheekCable: false } } } } },
+    { entry: 'mecha-torso-olive', version: 1, as: 'torso', ov: { scheme: 'slate', overrides: { torso: { chestW: 168, form: { chest: 'slab', back: 'box', grille: 'side', skirt: 'front' }, waistForm: 'hose', hoseTubes: 1 } } } },
+    { entry: 'mecha-arm-olive', version: 1, as: 'arm', ov: { scheme: 'slate' } },
+    { entry: 'mecha-leg-olive', version: 1, as: 'leg', ov: { scheme: 'slate', overrides: { leg: { shinPiston: true, camo: false } } } },
+  ]));
+  out.push(combo('mecha-humanoid-olive-shell', '人形整机·壳型主战', [
+    { entry: 'mecha-head-olive', version: 1, as: 'head', ov: { overrides: { head: { form: { crown: 'dome', eye: 'visor', brow: false, jaw: 'breather', ear: 'earcover', top: 'none', cheekCable: false }, faceStripe: true } } } },
+    { entry: 'mecha-torso-olive', version: 1, as: 'torso', ov: { overrides: { torso: { form: { chest: 'shell', back: 'rack', grille: 'none', skirt: 'front' }, shellCap: true, chestStripes: 3, chestVent: true, waistForm: 'hose', hoseTubes: 2 } } } },
+    { entry: 'mecha-arm-olive', version: 1, as: 'arm' },
+    { entry: 'mecha-leg-olive', version: 1, as: 'leg' },
+  ]));
+  out.push(combo('mecha-humanoid-agile-mech', '人形整机·械型敏捷', [
+    { entry: 'mecha-head-agile', version: 1, as: 'head', ov: { overrides: { head: { form: { crown: 'dome', eye: 'slit', brow: true, jaw: 'respirator', ear: 'grille', top: 'horn', cheekCable: false }, chinTip: true } } } },
+    { entry: 'mecha-torso-agile', version: 1, as: 'torso', ov: { overrides: { torso: { form: { chest: 'stack', back: 'box', grille: 'side', skirt: 'front' }, waistForm: 'hose', hoseTubes: 2 } } } },
+    { entry: 'mecha-arm-agile', version: 1, as: 'arm' },
+    { entry: 'mecha-leg-agile', version: 1, as: 'leg' },
+  ]));
+  out.push(combo('mecha-humanoid-ps-blade', '人形整机·刃型动力服', [
+    { entry: 'mecha-head-powersuit', version: 1, as: 'head', ov: { scheme: 'white', overrides: { head: { form: { crown: 'dome', eye: 'slit', brow: true, jaw: 'block', ear: 'sensor', top: 'vfin', cheekCable: false }, shellStep: true, shellSeams: true, cheekLines: true, chinTip: true, slitEnd: 0.4 } } } },
+    { entry: 'mecha-torso-powersuit', version: 1, as: 'torso', ov: { scheme: 'white', overrides: { torso: { form: { chest: 'shell', back: 'binder', grille: 'front', skirt: 'both' }, waistForm: 'plates', shellSeg: true, shellMid: [-0.065, 0.15, 0.03] } } } },
+    { entry: 'mecha-arm-powersuit', version: 1, as: 'arm', ov: { scheme: 'white' } },
+    { entry: 'mecha-leg-powersuit', version: 1, as: 'leg', ov: { scheme: 'white' } },
+  ]));
+  out.push(combo('mecha-humanoid-agile-beast', '人形整机·兽足敏捷', [
+    { entry: 'mecha-head-agile', version: 1, as: 'head', ov: { overrides: { head: { collarSeg: true } } } }, // 兽头颈环（分节算子）：图池原兽头与新狼头两样本的颈都是环列
+    { entry: 'mecha-torso-agile', version: 1, as: 'torso' },
+    { entry: 'mecha-arm-agile', version: 1, as: 'arm' },
+    { entry: 'mecha-leg-agile', version: 1, as: 'leg', ov: { overrides: { leg: { topology: 'reverse', footType: 'claw', bend: 26 } } } },
   ]));
   return out;
 }
@@ -963,12 +1185,14 @@ export function refsOfDef(def: EntryDef): { id: string; version?: number }[] {
     if (def.kind === 'leaf') return [];
     if (def.kind === 'chain') return [];
     if (def.kind === 'face') return [];
-    if (def.kind === 'finish') {
-      return def.form === 'combo' ? def.parts.map((p) => ({ id: p.entry, version: p.version })) : [];
-    }
+    if (def.kind === 'faceop') return [];
+    if (def.kind === 'shading') return [];
     if (def.kind === 'mecha') {
       if (def.form === 'combo') return def.parts.map((p) => ({ id: p.entry, version: p.version }));
-      return def.finish ? [parseRefId(def.finish)] : [];
+      return [
+        ...(def.finish ? [parseRefId(def.finish)] : []),
+        ...(def.face ? [parseRefId(def.face)] : []),
+      ];
     }
     return def.children.map((c) => ({ id: c.entry, version: c.version }));
   }
@@ -1159,17 +1383,26 @@ export function mechaDefOf(
   return { def: got.def, version: got.version };
 }
 
-/** 全部着色条目（内置 + 用户） */
+/** 全部着色模式条目（内置 + 用户） */
 export function finishEntriesOf(entries: readonly LibraryEntry[]): LibraryEntry[] {
-  return entries.filter((e) => e.kind === 'finish');
+  return entries.filter((e) => e.kind === 'shading');
 }
 
-/** 取着色条目某版本的定义（非着色条目/无此版本返回 undefined） */
+/** 取着色模式某版本的定义（非着色模式/无此版本返回 undefined） */
 export function finishDefOf(
   index: LibraryIndex, id: string, version?: number,
 ): { def: FinishEntryDef; version: number } | undefined {
   const got = defOf(index, id, version);
-  if (!got || !('kind' in got.def) || got.def.kind !== 'finish') return undefined;
+  if (!got || !('kind' in got.def) || got.def.kind !== 'shading') return undefined;
+  return { def: got.def, version: got.version };
+}
+
+/** 取面部模式某版本的定义（非面部模式/无此版本返回 undefined） */
+export function faceOpDefOf(
+  index: LibraryIndex, id: string, version?: number,
+): { def: FaceOpEntryDef; version: number } | undefined {
+  const got = defOf(index, id, version);
+  if (!got || !('kind' in got.def) || got.def.kind !== 'faceop') return undefined;
   return { def: got.def, version: got.version };
 }
 
