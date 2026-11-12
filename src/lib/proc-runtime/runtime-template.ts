@@ -978,8 +978,18 @@ const globalGraphState = new Map();
  * 旧包无此字段时回落 60。时间本身走连续钟 elapsed，不重置。 */
 const FRAME_RATE = EMBEDDED.frameRate || 60;
 // 绘制顺序：按部件 sortOrder（= 产品节点 zIndex）稳定排序
-function sortParts(parts) {
-  return parts.slice().sort((a, b) => (a.sortOrder - b.sortOrder) || (a.key < b.key ? -1 : 1));
+// 画序与编辑器 Step 6 同口径：投影深度为主键（part.depths[variant]，
+// convert 按编辑器同式导出）、节点 zIndex（sortOrder）为次键。只按
+// zIndex 排会把深度与 zIndex 序不一致的部件对画反（近侧臂深度大于
+// 近侧腿、编辑器臂在腿前，旧包内按 3<4 成腿遮臂）。depths 缺失
+// （旧包/无世界位姿部件）时回落 zIndex 旧序。
+function sortParts(parts, variant) {
+  return parts.slice().sort((a, b) => {
+    const da = a.depths ? a.depths[variant] : undefined;
+    const db = b.depths ? b.depths[variant] : undefined;
+    if (da !== undefined && db !== undefined && da !== db) return da - db;
+    return (a.sortOrder - b.sortOrder) || (a.key < b.key ? -1 : 1);
+  });
 }
 // 局部地面（角色原点坐标系）：所有部件最低点再下压 4px（运行时坐标 y 向上）。
 // 世界地面固定在 y=0；角色原点世界高度 = -localGround（脚落地面）。
