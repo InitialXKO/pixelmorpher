@@ -133,6 +133,15 @@ export interface RuntimeGlowStamp {
 export interface RuntimePart {
   key: string;
   sortOrder: number;
+  /** 编辑器画序深度（下标 = 运行时方向编号 0..7，亚像素取整，与
+   *  编辑器 Step 6 排序首键同值：projectToView(节点世界位姿).depth
+   *  取整）。编辑器画序 = 深度为主键、zIndex 为次键；此前包内只有
+   *  sortOrder（= zIndex 次键），两者序不一致的部件对在包内被画反
+   *  （实测近侧臂深度 224 > 近侧腿 192，编辑器臂在腿前、包内按
+   *  zIndex 3<4 成腿遮臂）。镜像方向取其镜像源方向的深度（刚体
+   *  镜像保序，判定与运行时 variantMirrored 同口径）。节点无世界
+   *  位姿时缺省，运行时回落 sortOrder 旧序。 */
+  depths?: number[];
   /** 节点遮挡层名：随包播放器现行画序不读，但属包的对外数据面
    * （用户端可按层名做自己的排序/分组），保留原样进包 */
   drawLayer: string;
@@ -924,6 +933,32 @@ export function convertCharacterToRuntimePackage(
     const proj = projectToView(w.worldX, w.worldY, w.worldZ, rootDir as DirectionIndex);
     return [subToPx(proj.canvasX), -subToPx(proj.canvasY)];
   };
+  // 画序深度（RuntimePart.depths）：与 pivotOf 同源世界位姿，按各
+  // 运行时方向对应的编辑器方向投影取深度。镜像方向（运行时
+  // variantMirrored 判真者）取镜像源方向的深度——刚体镜像保序。
+  const DEPTH_MIRROR_SRC: Record<number, number> = { 1: 7, 7: 1, 3: 5, 5: 3 };
+  const DEPTH_DIAG_MAIN: Record<number, number> = { 1: 2, 3: 4, 5: 4, 7: 6 };
+  const depthsOf = (nodeId: string | undefined, variantKeys: ReadonlySet<number>): number[] | undefined => {
+    const w = nodeId ? worlds.get(nodeId) : undefined;
+    if (!w) return undefined;
+    const raw = (v: number) => Math.round(projectToView(w.worldX, w.worldY, w.worldZ, ((v + 6) % 8) as DirectionIndex).depth);
+    const mirrorSrc = (v: number): number | undefined => {
+      if (variantKeys.has(v)) return undefined;
+      const m = DEPTH_MIRROR_SRC[v];
+      if (m !== undefined && variantKeys.has(m)) return m;
+      const main = DEPTH_DIAG_MAIN[v];
+      if (main !== undefined) {
+        if (variantKeys.has(main)) return undefined;
+        const m2 = DEPTH_MIRROR_SRC[main];
+        if (m2 !== undefined && variantKeys.has(m2)) return m2;
+      }
+      if (v === 6 && variantKeys.has(2)) return 2;
+      return undefined;
+    };
+    const out: number[] = [];
+    for (let v = 0; v < 8; v++) out.push(raw(mirrorSrc(v) ?? v));
+    return out;
+  };
   const activeSet = character.costumeSets.find((cs) => cs.id === character.activeCostumeSetId)
     ?? character.costumeSets[0];
 
@@ -1149,6 +1184,7 @@ export function convertCharacterToRuntimePackage(
     parts.push({
       key: slotKey,
       sortOrder: node.zIndex,
+      depths: depthsOf(node.id, new Set([(rootDir + 2) % 8])),
       drawLayer: node.drawLayer,
       costumeKeys: [slotKey],
       base: appearanceToBase(baseApp, pivot, w?.worldAngle ?? 0, baseSprite,
@@ -1211,6 +1247,7 @@ export function convertCharacterToRuntimePackage(
     parts.push({
       key: slotKey,
       sortOrder: node.zIndex,
+      depths: depthsOf(node.id, new Set([(rootDir + 2) % 8])),
       drawLayer: node.drawLayer,
       costumeKeys: [slotKey],
       base,
