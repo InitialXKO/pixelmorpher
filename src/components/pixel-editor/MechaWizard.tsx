@@ -45,7 +45,7 @@ import {
 } from '@/lib/mecha/build-character';
 import type { MechaBuildOptions, MechaVehicleOptions, MechaPodMount } from '@/lib/mecha/build-character';
 import {
-  BUILTIN_ENTRIES, libraryIndexOf, loadUserEntries, mechaDefOf, parseRefId, saveUserEntries,
+  BUILTIN_ENTRIES, finishEntriesOf, libraryIndexOf, loadUserEntries, mechaDefOf, parseRefId, saveUserEntries,
   type LibraryEntry, type MechaEntryDef, type MechaGenDef,
 } from '@/lib/library-entries';
 import { applyComboOv, expandFinishDef } from '@/lib/mecha/entry-render';
@@ -490,7 +490,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
   const finOv = useMemo(() => {
     const fr = parseRefId(finishRef);
     const got = finishDefOf(libraryIndexOf(libEntries), fr.id, fr.version);
-    return got ? expandFinishDef(libraryIndexOf(libEntries), got.def) : undefined;
+    return got ? expandFinishDef(got.def) : undefined;
   }, [finishRef, libEntries]);
   // 表面材质（全部部件）：条目引用 + 解析后的烘焙选择
   const [surfaceRef, setSurfaceRef] = useState('');
@@ -591,7 +591,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
       if (ho) parts.head = ho;
     }
     const propDiff: MechaProportions = {};
-    for (const k of ['head', 'torsoW', 'torsoH', 'arm', 'leg'] as const) if (propBox.cur[k] !== propBox.def[k]) propDiff[k] = propBox.cur[k];
+    for (const k of ['head', 'torsoW', 'torsoH', 'arm', 'leg', 'legSplit'] as const) if (propBox.cur[k] !== propBox.def[k]) propDiff[k] = propBox.cur[k];
     return {
       chassis: chassisSel === 'tracks' ? 'tracks' : legBox.cur.footType === 'wheel' ? 'wheel' : 'biped',
       jetpack, podMount,
@@ -1381,6 +1381,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
                 <NumCtl label="躯干高" value={propBox.cur.torsoH} min={0.6} max={1.5} step={0.02} onCommit={(v) => setProp({ torsoH: v })} />
                 <NumCtl label="臂长" value={propBox.cur.arm} min={0.6} max={1.5} step={0.02} onCommit={(v) => setProp({ arm: v })} />
                 <NumCtl label="腿长" value={propBox.cur.leg} min={0.6} max={1.5} step={0.02} onCommit={(v) => setProp({ leg: v })} />
+                <NumCtl label="小腿占比" value={propBox.cur.legSplit} min={0.35} max={0.7} step={0.01} onCommit={(v) => setProp({ legSplit: v })} />
                 <span className="text-[11px] text-gray-500">部位间比例倍率，默认已按参考图实测占比定</span>
               </div>
             ) : (
@@ -1411,7 +1412,7 @@ export default function MechaWizard({ open, onClose }: { open: boolean; onClose:
             <select value={finishRef} onChange={(e) => setFinishRef(e.target.value)}
               className="h-7 max-w-[220px] text-[12px] bg-[#0d0d1a] border border-[#1e1e3a] rounded text-gray-200 px-1">
               {(() => {
-                const opts = libEntries.filter((e) => e.kind === 'finish')
+                const opts = finishEntriesOf(libEntries)
                   .map((e) => ({ v: `${e.id}@${e.latest}`, n: e.name }));
                 if (!opts.some((o) => o.v === finishRef)) opts.unshift({ v: finishRef, n: finishRef });
                 return opts.map((o) => <option key={o.v} value={o.v}>{o.n}</option>);

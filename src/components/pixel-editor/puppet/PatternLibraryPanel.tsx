@@ -11,7 +11,7 @@
 
 import React, { useMemo, useState } from 'react';
 import {
-  BUILTIN_ENTRIES, defOf, deleteVersion, entryDeleteBlockers, libraryIndexOf, loadUserEntries,
+  BUILTIN_ENTRIES, defOf, deleteVersion, entryDeleteBlockers, finishDefOf, libraryIndexOf, loadUserEntries,
   publishDraft, reverseIndex, saveUserEntries, versionPinned, withDraft,
   type CoordinationEdge, type DynamicEntryDef, type DynamicParentDef,
   type DynChildRef, type EntryDef, type LibraryEntry, type SurfaceEntryDef,
@@ -36,6 +36,33 @@ const numCls = 'h-6 text-[10px] bg-[#111128] border-[#1e1e3a]';
 
 const isDynDef = (d: EntryDef): d is DynamicEntryDef => 'kind' in d;
 
+/** 条目的库内分类（筛选与标签的唯一出处）：条目只有模式，按家
+ * 族分；算子是各模式 DAG 的叶子节点，不成条目、不在此分类 */
+function entryClass(e: LibraryEntry): string {
+  switch (e.kind) {
+    case 'dynamic': return '动态';
+    case 'surface': return '表面';
+    case 'chain': return '链';
+    case 'face': return '脸型';
+    case 'mecha': return '机甲';
+    case 'shading': return '着色';
+    case 'faceop': return '面部';
+  }
+}
+
+/** 缩略图类型小标（按条目出图方式） */
+function entryThumbKind(e: LibraryEntry): string {
+  switch (e.kind) {
+    case 'dynamic': return '定格图';
+    case 'chain': return '链段';
+    case 'face': return '点位';
+    case 'mecha': return '部件图';
+    case 'shading': return '着色样';
+    case 'faceop': return '面部样';
+    case 'surface': return '烘焙图';
+  }
+}
+
 export default function PatternLibraryPanel({
   onClose, onChanged,
 }: {
@@ -43,7 +70,7 @@ export default function PatternLibraryPanel({
   onChanged?: () => void;
 }) {
   const [userEntries, setUserEntries] = useState<LibraryEntry[]>(() => loadUserEntries());
-  const [kindFilter, setKindFilter] = useState<'all' | 'dynamic' | 'surface' | 'chain' | 'face' | 'mecha' | 'finish'>('all');
+  const [kindFilter, setKindFilter] = useState<'all' | '动态' | '表面' | '链' | '脸型' | '机甲' | '着色' | '面部'>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   /** 正在编辑的草稿（工作副本；保存才落 withDraft） */
   const [draftWork, setDraftWork] = useState<{ entryId: string; def: DynamicEntryDef } | null>(null);
@@ -130,7 +157,7 @@ export default function PatternLibraryPanel({
   };
 
   const dynEntries = all.filter((e) => e.kind === 'dynamic');
-  const filtered = all.filter((e) => kindFilter === 'all' || e.kind === kindFilter);
+  const filtered = all.filter((e) => kindFilter === 'all' || entryClass(e) === kindFilter);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
@@ -144,12 +171,13 @@ export default function PatternLibraryPanel({
           <div className="flex-1" />
           <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value as typeof kindFilter)} className="h-6 text-[10px] bg-[#111128] border border-[#1e1e3a] rounded text-gray-300 w-24">
             <option value="all">全部</option>
-            <option value="dynamic">动态</option>
-            <option value="surface">表面</option>
-            <option value="chain">链</option>
-            <option value="face">脸型</option>
-            <option value="mecha">机甲</option>
-            <option value="finish">着色</option>
+            <option value="动态">动态</option>
+            <option value="表面">表面</option>
+            <option value="链">链</option>
+            <option value="脸型">脸型</option>
+            <option value="机甲">机甲</option>
+            <option value="着色">着色</option>
+            <option value="面部">面部</option>
           </select>
           <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2" onClick={() => createEntry('leaf')}>新建动态叶子</Button>
           <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2" onClick={() => createEntry('parent')}>新建动态父模式</Button>
@@ -168,11 +196,11 @@ export default function PatternLibraryPanel({
                 >
                   <div className="flex items-center gap-1.5 mb-0.5">
                     <EntryThumb entry={e} index={libraryIndexOf(all)} size={30} />
-                    <span className="text-[8px] text-gray-600">{e.kind === 'dynamic' ? '定格图' : e.kind === 'chain' ? '链段' : e.kind === 'face' ? '点位' : e.kind === 'mecha' ? '部件图' : e.kind === 'finish' ? '着色样' : '烘焙图'}</span>
+                    <span className="text-[8px] text-gray-600">{entryThumbKind(e)}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] text-gray-200 flex-1 truncate">{e.name}</span>
-                    <span className="text-[8px] text-gray-500">{e.kind === 'dynamic' ? '动态' : e.kind === 'chain' ? '链' : e.kind === 'face' ? '脸型' : e.kind === 'mecha' ? '机甲' : e.kind === 'finish' ? '着色' : '表面'}</span>
+                    <span className="text-[8px] text-gray-500">{entryClass(e)}</span>
                     {e.builtin && <span className="text-[8px] text-gray-600">内置</span>}
                   </div>
                   <div className="text-[8px] text-gray-500">
@@ -189,7 +217,7 @@ export default function PatternLibraryPanel({
               <>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[11px] text-gray-100">{selected.name}</span>
-                  <span className="text-[9px] text-gray-500">{selected.id} · {selected.kind === 'dynamic' ? '动态' : selected.kind === 'chain' ? '链' : selected.kind === 'face' ? '脸型' : selected.kind === 'mecha' ? '机甲' : selected.kind === 'finish' ? '着色' : '表面'} · {selected.cluster}</span>
+                  <span className="text-[9px] text-gray-500">{selected.id} · {entryClass(selected)} · {selected.cluster}</span>
                   <div className="flex-1" />
                   {!selected.builtin && selected.kind === 'dynamic' && !draftWork && (
                     <Button size="sm" variant="ghost" className="h-5 text-[9px] px-1.5 text-cyan-300"
@@ -240,8 +268,8 @@ export default function PatternLibraryPanel({
                         ? <p className="text-[9px] text-gray-600 leading-relaxed">五官点位参数组（相对头部框的比例）。应用与编辑在头部节点的「转面」面板里：选预设套用、在预览上拖点改比例、可另存为新脸型。</p>
                         : selected.kind === 'mecha'
                           ? <p className="text-[9px] text-gray-600 leading-relaxed">机甲构造模式：生成器 + 变体选择（+钉版引用的着色）。规格编辑在机甲向导里：改参后存为条目，在此治理版本与引用。</p>
-                          : selected.kind === 'finish'
-                            ? <p className="text-[9px] text-gray-600 leading-relaxed">着色：算子条目是着色层的一道工序（高光棱、做旧等），组合条目钉版引用算子拼成一套着色。左图样例 = 头组·橄榄套用本条目着色。</p>
+                          : finishDefOf(libraryIndexOf(all), selected.id)
+                            ? <p className="text-[9px] text-gray-600 leading-relaxed">着色模式：一列着色算子（叶子，如高光棱、做旧）各带参数，展开到底由算子执行。左图样例 = 头组·橄榄套用本模式着色。</p>
                             : <p className="text-[9px] text-gray-600 leading-relaxed">标准瓦片烘焙图；实际部件形状不同，图案按同一图生成。</p>}
                 </div>
                 {selected.kind === 'dynamic' && (
@@ -325,31 +353,29 @@ export default function PatternLibraryPanel({
                     </div>
                   );
                 })()}
-                {selected.kind === 'finish' && (() => {
-                  const found = defOf(libraryIndexOf(all), selected.id);
-                  const def = found && 'kind' in found.def && found.def.kind === 'finish' ? found.def : undefined;
+                {finishDefOf(libraryIndexOf(all), selected.id) && (() => {
+                  const found = finishDefOf(libraryIndexOf(all), selected.id);
+                  const def = found?.def;
                   if (!def || !found) return null;
-                  const PASS_LABEL: Record<string, string> = {
+                  const STEP_LABEL: Record<string, string> = {
                     ridges: '高光棱', thickness: '料厚', wear: '做旧', camo: '迷彩', facets: '分面着色',
                     shell: '壳面', stamps: '盖章', panel: '面板线', cables: '线缆着色',
+                    outline: '描边链', darkrim: '暗沿', blackgap: '黑隙', seam: '缝', intake: '进气口',
+                    wedges: '异形楔拼块', boltframe: '栓框', boltcore: '栓芯', hubgroove: '毂槽', hubframe: '毂框',
+                    descent: '降式', seat: '檐座', glow: '发光', lines: '平行线组', band: '随形带',
+                    cheek: '颊单元', jaw: '颌式', top: '顶附属', tip: '点色', facet: '刻面档',
                   };
                   const fmtParams = (p: Record<string, unknown>) => Object.entries(p)
                     .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(',') : String(v)}`).join(' ');
                   return (
                     <div className="space-y-1">
-                      <Label className="text-[9px] text-gray-600">着色（v{found.version}）</Label>
-                      {def.form === 'pass' ? (
-                        <p className="text-[9px] text-gray-400">
-                          算子 · {PASS_LABEL[def.pass] ?? def.pass}
-                          <span className="text-gray-600"> {fmtParams(def.params as Record<string, unknown>)}</span>
+                      <Label className="text-[9px] text-gray-600">着色步列（v{found.version}，每步是一个算子叶子）</Label>
+                      {def.steps.map((s, i) => (
+                        <p key={i} className="text-[9px] text-gray-400">
+                          {STEP_LABEL[s.op] ?? s.op}
+                          {s.params && <span className="text-gray-600"> {fmtParams(s.params as Record<string, unknown>)}</span>}
                         </p>
-                      ) : (
-                        def.parts.map((pt, i) => (
-                          <p key={i} className="text-[9px] text-gray-400">
-                            {nameOf(pt.entry)} <span className="text-gray-600">v{pt.version}{pt.params ? ` · ${fmtParams(pt.params as Record<string, unknown>)}` : ''}</span>
-                          </p>
-                        ))
-                      )}
+                      ))}
                     </div>
                   );
                 })()}
@@ -467,8 +493,8 @@ function EntryThumb({ entry, index, size }: {
     if (entry.kind === 'mecha') {
       return cachedThumb(`mecha:${entry.id}@${entry.latest}`, () => mechaThumbRGBA(index, entry, size));
     }
-    if (entry.kind === 'finish') {
-      return cachedThumb(`finish:${entry.id}@${entry.latest}`, () => finishThumbRGBA(index, entry, size));
+    if (finishDefOf(index, entry.id)) {
+      return cachedThumb(`shading:${entry.id}@${entry.latest}`, () => finishThumbRGBA(index, entry, size));
     }
     if (entry.kind === 'face') {
       const found = defOf(index, entry.id);

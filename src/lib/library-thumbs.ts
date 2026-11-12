@@ -428,7 +428,7 @@ export function finishThumbRGBA(index: LibraryIndex, entry: LibraryEntry, size =
   try {
     const got = finishDefOf(index, entry.id);
     if (!got) return null;
-    const finOv = expandFinishDef(index, got.def);
+    const finOv = expandFinishDef(got.def);
     const outs = renderMechaDef(
       { kind: 'mecha', form: 'gen', gen: 'head', family: 'olive' }, finOv);
     return outs.head ? fitSpriteRGBA(outs.head, size) : null;

@@ -60,8 +60,12 @@ function expandSegments(
     errors.push(`模式库：「${id}@${version}」是机甲条目，不能当动态模式展开`);
     return undefined;
   }
-  if (def.kind === 'finish') {
-    errors.push(`模式库：「${id}@${version}」是着色条目，不能当动态模式展开`);
+  if (def.kind === 'faceop') {
+    errors.push(`模式库：「${id}@${version}」是面部条目，不能当动态模式展开`);
+    return undefined;
+  }
+  if (def.kind === 'shading') {
+    errors.push(`模式库：「${id}@${version}」是着色模式条目，不能当动态模式展开`);
     return undefined;
   }
   if (def.kind === 'leaf') {

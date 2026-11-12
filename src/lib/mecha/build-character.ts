@@ -62,6 +62,12 @@ export interface MechaBuildOptions {
   trackLen?: number;
   /** 武器尺寸倍率（长向 x / 厚向 y），作用于全部武器（臂炮/步枪/导弹荚）；缺省 1 */
   weaponSize?: { x: number; y: number };
+  /** 站姿（体态关系层，非尺寸）：缺省按族态度给（见 STANCE_DEFAULTS）；
+   * false = 零姿势（双腿同式直挂、旧行为）。字段：spread = 双踝前后
+   * 错开（近腿向前、远腿向后，单位 px 未缩放）、drop = 落胯（双踝目标
+   * 上提、膝因此弯，承重腿直、松弛腿弯得深）、elbow = 肘自然微屈
+   * （度）、headPitch = 头微俯（度） */
+  stance?: Partial<MechaStance> | false;
   /** 整机比例（部位间比例倍率组；缺省走族默认 MECHA_PROPORTION_DEFAULTS） */
   proportions?: import('./parts').MechaProportions;
   /** 表面材质（模板 + 参数）：作用于全部部件 */
@@ -73,12 +79,22 @@ export type MechaPodMount = 'rear' | 'pylon' | 'outboard' | 'low';
 export const MECHA_POD_MOUNT_LABELS: Record<MechaPodMount, string> = {
   rear: '后偏肩挂', pylon: '高架背挂', outboard: '外侧肩挂', low: '低位贴胸挂',
 };
-/** 挂位接线（模型坐标：side 侧深 / down 纵 / fwd 前向；z = 同深度次键） */
-const POD_MOUNT_WIRE: Record<MechaPodMount, { side: number; down: number; fwd: number; z: number }> = {
-  rear: { side: 0, down: -146, fwd: -100, z: 2 },
-  pylon: { side: 0, down: -155, fwd: -97, z: -1 },
-  outboard: { side: -18, down: -161, fwd: 103, z: 4 },
-  low: { side: -10, down: -129, fwd: 79, z: 3 },
+/** 荚挂位接线（模型坐标：side 侧深 / down 纵 / fwd 前向；z = 同深度次键）
+ * 荚挂位（挂式自身的定义量）：纵位 = 肩锚 S.shoulder.y + downOff（族
+ * 间身高差全在纵向，此项必须随躯干走）；后挂前向 = −（躯干宽 − plug.x）
+ * + fwdOff（基量是躯干精灵的跨度数据，三族 116/74/74）；前挂（outboard/
+ * low）的前向是挂式定义常量——试过以 plug.x 派生：敏捷（plug.x 120）被
+ * 推远脱开胸前（装配图验），而旧常量 103/79 在 olive/敏捷装配图里都贴
+ * 合（三族躯干的前后向跨度近恒、差异在纵向，前挂偏移无随族变化的
+ * 上游量可派生，与 side 同类）；side 是侧向投影常量。旧表纵位也是绝对
+ * 数（down −129..−161）才是真冻结，现已地标化。偏移以 olive 标定
+ * （shoulder −159.5 / 宽−plug.x 116），后挂与前挂均经三族装配图定案
+ * （2026-11-12）。 */
+const POD_MOUNT_WIRE: Record<MechaPodMount, { side: number; downOff: number; fwdBase: 'back' | 'fixed'; fwdOff: number; z: number }> = {
+  rear: { side: 0, downOff: 13.5, fwdBase: 'back', fwdOff: 4, z: 2 },
+  pylon: { side: 0, downOff: 4.5, fwdBase: 'back', fwdOff: 7, z: -1 },
+  outboard: { side: -18, downOff: -1.5, fwdBase: 'fixed', fwdOff: 103, z: 4 },
+  low: { side: -10, downOff: 30.5, fwdBase: 'fixed', fwdOff: 79, z: 3 },
 };
 export const MECHA_CHASSIS_LABELS = { biped: '双足', wheel: '轮足', tracks: '履带' } as const;
 
@@ -152,6 +168,17 @@ function sockLimb(nodes: NodeMap, parentKey: string, childKey: string, lenPx: nu
   node.attachment = { type: 'socket', parentSocketId: sockId, plug: { x: 0, y: 0 } } as Node['attachment'];
 }
 
+/** 站姿参数（体态关系层）：四条跨样本关系——双足错开落地（spread）、
+ * 陈列近直（slack：落足深度由腿全长反推，髋踝距 = 全长×(1−slack)，
+ * 近腿近直承重、远腿 slack ×1.6 稍松）、肘微屈（elbow）、头微俯
+ * （headPitch）。族间只有强度差（变体），关系同一套 */
+export interface MechaStance { spread: number; slack: number; elbow: number; headPitch: number }
+export const STANCE_DEFAULTS: Record<MechaFamily, MechaStance> = {
+  agile: { spread: 44, slack: 0.006, elbow: 9, headPitch: 5 },
+  olive: { spread: 48, slack: 0.007, elbow: 7, headPitch: 2.5 },
+  powersuit: { spread: 40, slack: 0.006, elbow: 8, headPitch: 3.5 },
+};
+
 /** 骨向单位向量（设计平面：f 前向 / d 纵；θ 度，0=正下） */
 function dirOf(deg: number): { f: number; d: number } {
   const t = (deg * Math.PI) / 180;
@@ -204,6 +231,14 @@ export const MECHA_NODE_PARTS: Record<string, string> = mechaHumanoidNodeParts()
 
 const SIDE_SIGN = { N: -1, F: 1 } as const; // 近侧 x 取负（depth=−x 更大=更靠前）
 
+/** 背包后挂比（关系量）：后挂深度 =（躯干宽 − plug.x）× 此比，olive
+ * 校准（116 → 旧位 −72）。基量取躯干精灵自身的跨度数据：先试过以
+ * plug.x 为基（5e832bc 的 0.7423），敏捷（plug.x 120）后挂被推远、
+ * 装配图里荚体脱开躯干背——改以宽−plug.x 为基后三族装配图均贴合
+ * （2026-11-12 装配图定案）。上挂不用比值：包顶对齐颈线是地标等式
+ * （挂位 = 颈锚 + 包自身 plug.y），见装配处。 */
+const JETPACK_MOUNT_BACK = 0.6923;
+
 /** 纯组装（精灵 id 由调用方备好后传入）：人形 */
 export function assembleMechaCharacter(opts: {
   characterId: string;
@@ -213,6 +248,8 @@ export function assembleMechaCharacter(opts: {
   spriteIds: Record<string, string>;
   build?: MechaBuildOptions;
   scale?: number;
+  /** 背包精灵的 plug（调用方已生成背包时传；缺省在装配内按同输入生成取 plug——背包挂位派生要用它） */
+  jetpackPlug?: { x: number; y: number };
 }): MechaCharacterAssembly {
   const { characterId: cid, canvasSize, partSet: ps } = opts;
   const B = opts.build ?? {};
@@ -222,17 +259,50 @@ export function assembleMechaCharacter(opts: {
   const nodes: NodeMap = {};
   const mk = (key: string, name: string, parentKey?: string, angle = 0) => mkNode(nodes, cid, key, name, parentKey, angle);
 
+  // 站姿（体态关系层）：缺省开（族强度见 STANCE_DEFAULTS），B.stance 覆盖/false 关。
+  // 腿按双骨解算到错开的落足点：近腿向前落、近直承重；远腿向后落、距短弯深
+  // 松弛；双足同深（同一地面）。足总角守恒 → 足保持平（足俯定案口径）。
+  const ST = B.stance === false ? null : { ...STANCE_DEFAULTS[opts.family], ...(B.stance ?? {}) };
+  const legPose = (s: 'N' | 'F') => {
+    const hipF = (S.hip.x + (s === 'N' ? 10 : 2)) * sc, hipD = (S.hip.y + (s === 'N' ? -2 : -4)) * sc;
+    const e1 = dirOf(R.legThigh), e2 = dirOf(R.legThigh + R.legShin);
+    const knF = hipF + e1.f * G.thighLen * sc, knD = hipD + e1.d * G.thighLen * sc;
+    const anF = knF + e2.f * G.shinLen * sc, anD = knD + e2.d * G.shinLen * sc;
+    if (!ST) return { thigh: R.legThigh, shin: R.legShin, foot: R.legFoot, knF, knD, anF, anD };
+    const L1 = G.thighLen * sc, L2 = G.shinLen * sc;
+    let dx = (s === 'N' ? ST.spread : -ST.spread * 0.65) * sc;
+    // 落足深度由腿全长反推（陈列近直）：旧式以静止踝位（屈膝构图、
+    // 髋踝距仅全长约 0.89）为锚再抬 drop，解算必然深屈（约 55°），
+    // 与本站姿注释自述的「近直承重」矛盾——改锚全长
+    const reach = (L1 + L2) * (1 - (s === 'N' ? ST.slack : ST.slack * 1.6));
+    let dy = Math.sqrt(Math.max(1, reach * reach - dx * dx));
+    let dist = Math.hypot(dx, dy);
+    const maxD = (L1 + L2) * 0.999;
+    if (dist > maxD) { const k = maxD / dist; dx *= k; dy *= k; dist = maxD; }
+    const base = (Math.atan2(-dx, dy) * 180) / Math.PI;
+    const alpha = (Math.acos(Math.min(1, Math.max(-1, (L1 * L1 + dist * dist - L2 * L2) / (2 * L1 * dist)))) * 180) / Math.PI;
+    const thA = base + alpha, thB = base - alpha;
+    const kneeF = (a: number) => hipF + dirOf(a).f * L1;
+    const thighAbs = ps.legReverse ? (kneeF(thA) < kneeF(thB) ? thA : thB) : (kneeF(thA) > kneeF(thB) ? thA : thB); // 标准型膝向前；反拓扑膝向后（极向随腿拓扑，此前写死向前、反腿被解算回人形膝）
+    const kn2F = hipF + dirOf(thighAbs).f * L1, kn2D = hipD + dirOf(thighAbs).d * L1;
+    const shinAbs = (Math.atan2(-(hipF + dx - kn2F), hipD + dy - kn2D) * 180) / Math.PI;
+    const total = R.legThigh + R.legShin + R.legFoot;
+    return { thigh: thighAbs, shin: shinAbs - thighAbs, foot: total - shinAbs, knF: kn2F, knD: kn2D, anF: hipF + dx, anD: hipD + dy };
+  };
+  const poseL = { N: legPose('N'), F: legPose('F') };
+  const armPose = ST ? { upper: R.armUpper + 2.5, fore: R.armFore - ST.elbow } : { upper: R.armUpper, fore: R.armFore };
+
   mk('pelvis', '骨盆·躯干');
-  mk('head', '头', 'pelvis');
+  mk('head', '头', 'pelvis', ST ? -ST.headPitch : 0);
   for (const s of ['N', 'F'] as const) {
     const tag = s === 'N' ? '近' : '远';
-    mk(`arm_upper_${s}`, `上臂·${tag}`, 'pelvis', R.armUpper);
-    mk(`arm_fore_${s}`, `前臂·${tag}`, `arm_upper_${s}`, R.armFore);
+    mk(`arm_upper_${s}`, `上臂·${tag}`, 'pelvis', armPose.upper);
+    mk(`arm_fore_${s}`, `前臂·${tag}`, `arm_upper_${s}`, armPose.fore);
     mk(`arm_hand_${s}`, `手·${tag}`, `arm_fore_${s}`, 0);
     if (B.chassis !== 'tracks') {
-      mk(`leg_thigh_${s}`, `大腿·${tag}`, 'pelvis', R.legThigh);
-      mk(`leg_shin_${s}`, `小腿·${tag}`, `leg_thigh_${s}`, R.legShin);
-      mk(`leg_foot_${s}`, `足·${tag}`, `leg_shin_${s}`, R.legFoot);
+      mk(`leg_thigh_${s}`, `大腿·${tag}`, 'pelvis', poseL[s].thigh);
+      mk(`leg_shin_${s}`, `小腿·${tag}`, `leg_thigh_${s}`, poseL[s].shin);
+      mk(`leg_foot_${s}`, `足·${tag}`, `leg_shin_${s}`, poseL[s].foot);
     }
   }
   if (B.chassis === 'tracks') mk('tracks', '履带底盘', 'pelvis');
@@ -254,15 +324,27 @@ export function assembleMechaCharacter(opts: {
       sockLimb(nodes, `leg_shin_${s}`, `leg_foot_${s}`, G.shinLen * sc);
     }
   }
-  if (B.chassis === 'tracks') sock3(nodes, 'pelvis', 'tracks', 0, 4 * sc, 0);
-  if (B.jetpack) sock3(nodes, 'pelvis', 'jetpack', 0, -128 * sc, -72 * sc);
-  if (B.podMount) { const w = POD_MOUNT_WIRE[B.podMount]; sock3(nodes, 'pelvis', 'pod', w.side * sc, w.down * sc, w.fwd * sc); }
+  // 履带挂位：履带原点即座圈顶面挂载点（generateMechaTrackUnit 的定义），骨盆原点对齐它——旧式 down 4 是无出处的压入量
+  if (B.chassis === 'tracks') sock3(nodes, 'pelvis', 'tracks', 0, 0, 0);
+  if (B.jetpack) {
+    // 背包挂位派生：上挂 = 包顶对齐颈线（挂位 = 颈锚 S.neck.y + 包自身 plug.y，地标等式、无标定常数）；后挂 = 躯干后背距（宽 − plug.x）× JETPACK_MOUNT_BACK
+    const jp = opts.jetpackPlug ?? generateMechaJetpack(opts.family, B.parts?.scheme).plug;
+    sock3(nodes, 'pelvis', 'jetpack', 0, (S.neck.y + jp.y) * sc, -(ps.torso.width - ps.torso.plug.x) * JETPACK_MOUNT_BACK * sc);
+  }
+  if (B.podMount) { const w = POD_MOUNT_WIRE[B.podMount]; const fwd = (w.fwdBase === 'back' ? -(ps.torso.width - ps.torso.plug.x) : 0) + w.fwdOff; sock3(nodes, 'pelvis', 'pod', w.side * sc, (S.shoulder.y + w.downOff) * sc, fwd * sc); }
   // 武器朝向铁律：武器固定在肢体坐标系里、随肢体走——臂炮与前臂
   // 同轴（套筒即前臂的一部分），步枪以固定握角挂在手上；静止垂臂
   // 时两者都顺臂朝下，抬臂时随臂抬起。禁止用抵消臂角的方式让武器
   // 脱离肢体朝向（小臂朝下而武器平举朝前是几何不成立的乱改）。
   if (B.weapon && weaponMountOf(B.weapon) === 'forearm') { sockLimb(nodes, 'arm_fore_N', 'weapon', Math.round(G.foreLen * 0.35) * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: 90 }; } // 挂点在前臂中段：套筒覆住前臂后半、炮口顺臂越过拳端
-  if (B.weapon && weaponMountOf(B.weapon) === 'hand') { sockLimb(nodes, 'arm_hand_N', 'weapon', 10 * sc); nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: 90 }; }
+  if (B.weapon && weaponMountOf(B.weapon) === 'hand') {
+    // 握点 = 掌心：由部件集的臂锚派生——(palmOff − wristOff) 在前臂轴（wristOff 向）上的投影（三族恒 18.0，即 ARM_GEOM.palmOff 的构造值）；部件集算了 palmOff 自注「武器挂载偏移」却一直无人消费、装配写死 10，握点离掌心差 8 单位
+    const pw = { x: ps.palmOff.x - ps.wristOff.x, y: ps.palmOff.y - ps.wristOff.y };
+    const wl = Math.hypot(ps.wristOff.x, ps.wristOff.y) || 1;
+    const palmReach = (pw.x * ps.wristOff.x + pw.y * ps.wristOff.y) / wl;
+    sockLimb(nodes, 'arm_hand_N', 'weapon', Math.round(palmReach) * sc);
+    nodes.weapon!.transform = { ...nodes.weapon!.transform, angle: 90 };
+  }
 
   // 根定位：渲染计划的世界坐标以画布中心为原点（worldX/Y = 中心 +
   // 投影），根须存中心相对值——目标落点 (画布宽/2, rootY) 对应
@@ -302,16 +384,14 @@ export function assembleMechaCharacter(opts: {
   for (const s of ['N', 'F'] as const) {
     const tag = s === 'N' ? '近' : '远';
     const shF = (S.shoulder.x + (s === 'F' ? -6 : 0)) * sc, shD = (S.shoulder.y + (s === 'F' ? -2 : 0)) * sc;
-    const d1 = dirOf(R.armUpper), d2 = dirOf(R.armUpper + R.armFore);
+    const d1 = dirOf(armPose.upper), d2 = dirOf(armPose.upper + armPose.fore);
     const elF = shF + d1.f * G.upperLen * sc, elD = shD + d1.d * G.upperLen * sc;
     const wrF = elF + d2.f * G.foreLen * sc, wrD = elD + d2.d * G.foreLen * sc;
     mkChain(`arm_${s}`, `手臂·${tag}`, `arm_upper_${s}`, `arm_hand_${s}`, wrF + d2.f * G.foreLen * sc, wrD + d2.d * G.foreLen * sc, SIDE_SIGN[s] * 14 * sc);
     if (B.chassis !== 'tracks') {
-      const hipF = (S.hip.x + (s === 'N' ? 10 : 2)) * sc, hipD = (S.hip.y + (s === 'N' ? -2 : -4)) * sc;
-      const e1 = dirOf(R.legThigh), e2 = dirOf(R.legThigh + R.legShin), e3 = dirOf(R.legThigh + R.legShin + R.legFoot + R.legToeAbs); // e3 是趾向（几何方向）：足节点角是位图旋转口径，趾向须再加规范趾向
-      const knF = hipF + e1.f * G.thighLen * sc, knD = hipD + e1.d * G.thighLen * sc;
-      const anF = knF + e2.f * G.shinLen * sc, anD = knD + e2.d * G.shinLen * sc;
-      mkChain(`leg_${s}`, `腿·${tag}`, `leg_thigh_${s}`, `leg_foot_${s}`, anF + e3.f * G.shinLen * sc, anD + e3.d * G.shinLen * sc, SIDE_SIGN[s] * 12 * sc);
+      const P = poseL[s];
+      const e3 = dirOf(P.thigh + P.shin + P.foot + R.legToeAbs); // e3 是趾向（几何方向）：足节点角是位图旋转口径，趾向须再加规范趾向；站姿下总角守恒、e3 与静止同值
+      mkChain(`leg_${s}`, `腿·${tag}`, `leg_thigh_${s}`, `leg_foot_${s}`, P.anF + e3.f * G.shinLen * sc, P.anD + e3.d * G.shinLen * sc, SIDE_SIGN[s] * 12 * sc);
     }
   }
 
@@ -429,6 +509,7 @@ export function createMechaCharacterInStore(
     characterId: character.id, family: opts.family,
     canvasSize: { w: store.canvasWidth, h: store.canvasHeight },
     partSet, spriteIds, build: B, scale,
+    jetpackPlug: plan.find((p) => p.key === 'jetpack')?.data.plug,
   });
   store.updateUnifiedCharacter(character.id, {
     nodes: assembly.nodes, rootNodeId: assembly.rootNodeId, ikChains: assembly.ikChains,
